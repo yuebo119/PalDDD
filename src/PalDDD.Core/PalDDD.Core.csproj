@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.Core</RootNamespace>
+    <!-- Core exposes compact framework primitives; XML docs and selected framework-design warnings are tracked at project scope. -->
+    <NoWarn>$(NoWarn);CS1591;CA1040;CA1000;CA1711;CA2225;CA1030;CA1305;CA1308;CA1508;CA1822</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ByteAether.Ulid" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PalDDD.Core.Tests"/>
+    <InternalsVisibleTo Include="PalDDD.DependencyInjection"/>
+  </ItemGroup>
+</Project>

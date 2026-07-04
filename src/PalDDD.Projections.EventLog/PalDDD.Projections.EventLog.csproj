@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\PalDDD.EventLog\PalDDD.EventLog.csproj" />
+    <ProjectReference Include="..\PalDDD.Projections\PalDDD.Projections.csproj" />
+    <ProjectReference Include="..\PalDDD.Serialization\PalDDD.Serialization.csproj" />
+  </ItemGroup>
+
+</Project>

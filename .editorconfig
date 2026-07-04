@@ -1,0 +1,38 @@
+# ═══════════════════════════════════════════════════════════════
+# .editorconfig — Pal.DDD IDE 诊断显式配置
+# ═══════════════════════════════════════════════════════════════
+# 框架库策略：不强制编辑器样式偏好。IDE 规则全量设为 none。
+# 编译器警告（CS*/CA*）仍由 Directory.Build.props 的 TreatWarningsAsErrors 强制。
+# ═══════════════════════════════════════════════════════════════
+
+root = true
+
+[*]
+indent_style = space
+indent_size = 4
+end_of_line = crlf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.{cs,csproj,props,targets}]
+indent_size = 4
+
+[*.{xml,config,json,yml,yaml}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.{cs,csx}]
+# 全部 IDE 规则设为 none —— 框架不强制编辑器样式偏好
+dotnet_diagnostic.IDE.severity = none
+
+# SourceGen 排除
+[src/PalDDD.Core.SourceGen/*.cs]
+dotnet_diagnostic.IDE0130.severity = none
+dotnet_diagnostic.IDE0160.severity = none
+
+# samples/ 排除
+[samples/**/*.cs]
+dotnet_diagnostic.S3903.severity = none

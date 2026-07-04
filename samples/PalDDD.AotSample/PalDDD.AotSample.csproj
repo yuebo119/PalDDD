@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PalDDD.AotSample</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <NoWarn>$(NoWarn);CA1303</NoWarn>
+    <NoWarn>$(NoWarn);S3903</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Serialization\PalDDD.Serialization.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
+  </ItemGroup>
+
+</Project>

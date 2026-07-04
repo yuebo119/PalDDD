@@ -1,0 +1,4 @@
+﻿{
+  StatusCode: 500,
+  Body: {"type":"https://www.rfc-editor.org/rfc/rfc9110#section-15.6.1","title":"Internal Server Error","status":500}
+}

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+<!-- ASP.NET Core 集成测试 — ExceptionMiddleware -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.CQRS\PalDDD.CQRS.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Hosting.AspNetCore\PalDDD.Hosting.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Messaging\PalDDD.Messaging.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="Verify.TUnit" />
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

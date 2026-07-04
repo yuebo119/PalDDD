@@ -1,0 +1,20 @@
+<Project>
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <!-- 测试项目不需要 AOT 兼容性 -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <!-- 测试项目不需要生成文档 -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- MTP (Microsoft.Testing.Platform) 模式 — TUnit dotnet test 集成所需（仅测试项目） -->
+    <IsTestingPlatformApplication Condition="'$(IsTestProject)' == 'true'">true</IsTestingPlatformApplication>
+    <TestingPlatformDotnetTestSupport Condition="'$(IsTestProject)' == 'true'">true</TestingPlatformDotnetTestSupport>
+    <UseTestingPlatformProtocol Condition="'$(IsTestProject)' == 'true'">true</UseTestingPlatformProtocol>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- 抑制测试特定规则：CA1515 (类型应为 internal), CA1707 (标识符不应含下划线), CA2000 (ServiceProvider 由 GC 清理) -->
+    <NoWarn>$(NoWarn);CA1515;CA1707;CA1711;CA1508;CA1812;CA2000;CA2007;CA1034;CA2263</NoWarn>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,1028 @@
+# PalDDD.CQRS
+class PalDDD.CQRS.Dispatcher
+  ctor(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory)
+  method System.Threading.Tasks.ValueTask<System.Object> ExecutePipelineAsync(System.IServiceProvider services, PalDDD.CQRS.IBaseRequest request, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<TResponse> QueryAsync(PalDDD.CQRS.IQuery<TResponse> q, System.Threading.CancellationToken ct)
+  method System.Void Register()
+  method System.Void Register(System.Type requestType, System.Type handlerType, System.Type responseType, PalDDD.CQRS.RequestExecutor executor)
+  method System.Threading.Tasks.ValueTask SendAsync(PalDDD.CQRS.ICommand cmd, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<TResponse> SendAsync(PalDDD.CQRS.ICommand<TResponse> cmd, System.Threading.CancellationToken ct)
+class PalDDD.CQRS.HandlerNotFoundException
+  ctor()
+  ctor(System.String message)
+  ctor(System.String message, System.Exception innerException)
+  ctor(System.Type requestType)
+  property System.Type RequestType
+interface PalDDD.CQRS.IBaseRequest
+interface PalDDD.CQRS.ICommand
+interface PalDDD.CQRS.ICommandHandler<TCommand, TResponse>
+  method System.Threading.Tasks.ValueTask<TResponse> HandleAsync(TCommand command, System.Threading.CancellationToken ct)
+interface PalDDD.CQRS.ICommand<TResponse>
+interface PalDDD.CQRS.IHandler
+  method System.Threading.Tasks.ValueTask<System.Object> HandleAsync(PalDDD.CQRS.IBaseRequest request, System.Threading.CancellationToken ct)
+interface PalDDD.CQRS.IPipelineBehavior
+  property System.Type RequestType
+  property System.Type ResponseType
+  method System.Threading.Tasks.ValueTask<System.Object> HandleAsync(PalDDD.CQRS.IBaseRequest request, System.Threading.CancellationToken ct, System.Func<System.Threading.Tasks.ValueTask<System.Object>> next)
+interface PalDDD.CQRS.IPipelineBehavior<TRequest, TResponse>
+  method System.Threading.Tasks.ValueTask<TResponse> HandleAsync(TRequest request, System.Threading.CancellationToken ct, System.Func<System.Threading.Tasks.ValueTask<TResponse>> next)
+interface PalDDD.CQRS.IQueryHandler<TQuery, TResult>
+  method System.Threading.Tasks.ValueTask<TResult> HandleAsync(TQuery query, System.Threading.CancellationToken ct)
+interface PalDDD.CQRS.IQuery<TResponse>
+interface PalDDD.CQRS.IRequest<TResponse>
+class PalDDD.CQRS.PalValidationException
+  ctor()
+  ctor(System.Collections.Immutable.ImmutableArray<PalDDD.Core.PalValidationError> errors)
+  ctor(System.String message)
+  ctor(System.String message, System.Exception inner)
+  ctor(System.String property, System.String message)
+  property System.Collections.Immutable.ImmutableArray<PalDDD.Core.PalValidationError> Errors
+class PalDDD.CQRS.RequestExecutor
+  ctor(System.Object object, System.IntPtr method)
+  method System.IAsyncResult BeginInvoke(System.IServiceProvider services, PalDDD.CQRS.IBaseRequest request, System.Threading.CancellationToken ct, System.AsyncCallback callback, System.Object object)
+  method System.Threading.Tasks.ValueTask<System.Object> EndInvoke(System.IAsyncResult result)
+  method System.Threading.Tasks.ValueTask<System.Object> Invoke(System.IServiceProvider services, PalDDD.CQRS.IBaseRequest request, System.Threading.CancellationToken ct)
+
+# PalDDD.Core
+class PalDDD.Core.AggregateNameAttribute
+  ctor(System.String name)
+  property System.String Name
+class PalDDD.Core.AggregateRoot<TId>
+class PalDDD.Core.BoundedContextAttribute
+  ctor(System.String name)
+  property System.String Name
+struct PalDDD.Core.Deleted
+  ctor(System.Boolean Value)
+  property System.Boolean Value
+  method System.Void Deconstruct(System.Boolean& Value)
+  method System.Boolean Equals(PalDDD.Core.Deleted other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+struct PalDDD.Core.DeletedTime
+  ctor(System.Nullable<System.DateTimeOffset> Value)
+  property System.Nullable<System.DateTimeOffset> Value
+  method System.Void Deconstruct(System.Nullable`1[[System.DateTimeOffset, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]& Value)
+  method System.Boolean Equals(PalDDD.Core.DeletedTime other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method PalDDD.Core.DeletedTime Now()
+  method System.String ToString()
+static class PalDDD.Core.Diagnostics.PalActivitySource
+  method System.Diagnostics.Activity StartCommandDispatch(System.String commandName, System.String handlerName)
+  method System.Diagnostics.Activity StartEventDispatch(System.String eventName)
+  method System.Diagnostics.Activity StartEventLogAppend(System.String streamName, System.Int32 eventCount)
+  method System.Diagnostics.Activity StartEventLogReadAll(System.Int64 fromPosition)
+  method System.Diagnostics.Activity StartEventLogReadStream(System.String streamName, System.Int64 fromVersion)
+  method System.Diagnostics.Activity StartEventReplayRead(System.String sourceName, System.String eventName, System.String messageType)
+  method System.Diagnostics.Activity StartIdempotencyExecute(System.String operationName, System.String key)
+  method System.Diagnostics.Activity StartInboxProcess(System.String consumerName, System.String messageId)
+  method System.Diagnostics.Activity StartOutboxProcess(System.Int32 batchSize)
+  method System.Diagnostics.Activity StartProjectionRebuild(System.String projectionName, System.String sourceName)
+  method System.Diagnostics.Activity StartSagaTransition(System.String sagaType, System.String fromState, System.String toState)
+static class PalDDD.Core.Diagnostics.PalMetrics
+class PalDDD.Core.DomainCapabilityAttribute
+  ctor(System.String name)
+  property System.String Name
+class PalDDD.Core.DomainEvent
+  property ByteAether.Ulid.Ulid EventId
+  property System.DateTimeOffset OccurredOn
+struct PalDDD.Core.DomainEventEnumerable
+  ctor(PalDDD.Core.DomainEvent head)
+  method PalDDD.Core.DomainEventEnumerator GetEnumerator()
+struct PalDDD.Core.DomainEventEnumerator
+  property PalDDD.Core.DomainEvent Current
+  method System.Boolean MoveNext()
+class PalDDD.Core.Entity
+  property System.Boolean HasDomainEvents
+  method System.Void ClearDomainEvents()
+  method PalDDD.Core.DomainEventEnumerable DomainEvents()
+class PalDDD.Core.Entity<TId>
+  property TId Id
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.Boolean IsTransient()
+  method System.String ToString()
+class PalDDD.Core.GenerateEnumAttribute
+  ctor()
+class PalDDD.Core.GenerateIdAttribute
+  ctor(System.Type idType)
+  property System.Type IdType
+class PalDDD.Core.GenerateMessageAttribute
+  ctor()
+  property System.String Name
+  property System.Int32 SchemaVersion
+interface PalDDD.Core.IDomainEvent
+  property System.String EventName
+interface PalDDD.Core.IPalIdentity<TKey>
+  property TKey Value
+interface PalDDD.Core.IPalValidator<T>
+  method PalDDD.Core.PalValidationResult Validate(T instance)
+interface PalDDD.Core.ISpecification<T>
+  method PalDDD.Core.ISpecification<T> And(PalDDD.Core.ISpecification<T> other)
+  method System.Boolean IsSatisfiedBy(T entity)
+  method PalDDD.Core.ISpecification<T> Not()
+  method PalDDD.Core.ISpecification<T> Or(PalDDD.Core.ISpecification<T> other)
+  method System.Linq.Expressions.Expression<System.Func<T, System.Boolean>> ToExpression()
+interface PalDDD.Core.IValueObject
+interface PalDDD.Core.Identity.IPalIdGenerator
+  method ByteAether.Ulid.Ulid NewId()
+  method ByteAether.Ulid.Ulid NewId(System.DateTimeOffset timestamp)
+interface PalDDD.Core.Logging.IPalLogger<T>
+  method System.Void Debug(System.String message)
+  method System.Void Error(System.Exception ex, System.String message)
+  method System.Void Information(System.String message)
+  method System.Boolean IsEnabled(Microsoft.Extensions.Logging.LogLevel level)
+  method System.Void Warning(System.String message)
+class PalDDD.Core.Logging.NullPalLogger<T>
+  method System.Void Debug(System.String message)
+  method System.Void Error(System.Exception ex, System.String message)
+  method System.Void Information(System.String message)
+  method System.Boolean IsEnabled(Microsoft.Extensions.Logging.LogLevel level)
+  method System.Void Warning(System.String message)
+struct PalDDD.Core.PalValidationError
+  ctor(System.String PropertyName, System.String Message)
+  property System.String Message
+  property System.String PropertyName
+  method System.Void Deconstruct(System.String& PropertyName, System.String& Message)
+  method System.Boolean Equals(PalDDD.Core.PalValidationError other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+struct PalDDD.Core.PalValidationResult
+  property System.Collections.Immutable.ImmutableArray<PalDDD.Core.PalValidationError> Errors
+  property System.Boolean IsValid
+  method System.Boolean Equals(PalDDD.Core.PalValidationResult other)
+  method System.Boolean Equals(System.Object obj)
+  method PalDDD.Core.PalValidationResult Failed(System.Collections.Immutable.ImmutableArray<PalDDD.Core.PalValidationError> errors)
+  method PalDDD.Core.PalValidationResult Failed(System.String property, System.String message)
+  method System.Int32 GetHashCode()
+  method PalDDD.Core.PalValidationResult Success()
+class PalDDD.Core.ProcessManagerAttribute
+  ctor(System.String name)
+  property System.String Name
+interface PalDDD.Core.Repository.IUnitOfWork
+  method System.Threading.Tasks.ValueTask BeginTransactionAsync(System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask CommitAsync(System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask RollbackAsync(System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(System.Threading.CancellationToken ct)
+static class PalDDD.Core.Repository.UnitOfWorkExtensions
+  method System.Threading.Tasks.ValueTask ExecuteInTransactionAsync(PalDDD.Core.Repository.IUnitOfWork uow, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> work, System.Threading.CancellationToken ct)
+struct PalDDD.Core.RowVersion
+  ctor(System.Int32 Value)
+  property System.Int32 Value
+  method System.Void Deconstruct(System.Int32& Value)
+  method System.Boolean Equals(PalDDD.Core.RowVersion other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method PalDDD.Core.RowVersion Next()
+  method System.String ToString()
+class PalDDD.Core.SmartEnum<TSelf, TValue>
+  property System.Collections.Generic.IReadOnlyCollection<TSelf> All
+  property System.String Name
+  property TValue Value
+  method System.Boolean Equals(System.Object obj)
+  method System.Boolean Equals(TSelf other)
+  method TSelf FromValue(TValue value)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Boolean TryFromValue(TValue value, TSelf& result)
+static class PalDDD.Core.Spec<T>
+  property PalDDD.Core.ISpecification<T> All
+  property PalDDD.Core.ISpecification<T> None
+  method PalDDD.Core.ISpecification<T> Where(System.Linq.Expressions.Expression<System.Func<T, System.Boolean>> predicate)
+struct PalDDD.Core.Unit
+  method System.Boolean Equals(PalDDD.Core.Unit other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+struct PalDDD.Core.UpdateTime
+  ctor(System.DateTimeOffset Value)
+  property System.DateTimeOffset Value
+  method System.Void Deconstruct(System.DateTimeOffset& Value)
+  method System.Boolean Equals(PalDDD.Core.UpdateTime other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method PalDDD.Core.UpdateTime Now()
+  method System.String ToString()
+struct PalDDD.Core.ValueObject<T>
+  ctor(T value)
+  property T Value
+  method System.Boolean Equals(PalDDD.Core.ValueObject<T> other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.String ToString(System.String format, System.IFormatProvider formatProvider)
+  method System.Boolean TryFormat(System.Span<System.Byte> utf8Destination, System.Int32& bytesWritten, System.ReadOnlySpan<System.Char> format, System.IFormatProvider provider)
+
+# PalDDD.Core
+class PalDDD.Core.AggregateNameAttribute
+  ctor(System.String name)
+  property System.String Name
+class PalDDD.Core.AggregateRoot<TId>
+class PalDDD.Core.BoundedContextAttribute
+  ctor(System.String name)
+  property System.String Name
+struct PalDDD.Core.Deleted
+  ctor(System.Boolean Value)
+  property System.Boolean Value
+  method System.Void Deconstruct(System.Boolean& Value)
+  method System.Boolean Equals(PalDDD.Core.Deleted other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+struct PalDDD.Core.DeletedTime
+  ctor(System.Nullable<System.DateTimeOffset> Value)
+  property System.Nullable<System.DateTimeOffset> Value
+  method System.Void Deconstruct(System.Nullable`1[[System.DateTimeOffset, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]& Value)
+  method System.Boolean Equals(PalDDD.Core.DeletedTime other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method PalDDD.Core.DeletedTime Now()
+  method System.String ToString()
+static class PalDDD.Core.Diagnostics.PalActivitySource
+  method System.Diagnostics.Activity StartCommandDispatch(System.String commandName, System.String handlerName)
+  method System.Diagnostics.Activity StartEventDispatch(System.String eventName)
+  method System.Diagnostics.Activity StartEventLogAppend(System.String streamName, System.Int32 eventCount)
+  method System.Diagnostics.Activity StartEventLogReadAll(System.Int64 fromPosition)
+  method System.Diagnostics.Activity StartEventLogReadStream(System.String streamName, System.Int64 fromVersion)
+  method System.Diagnostics.Activity StartEventReplayRead(System.String sourceName, System.String eventName, System.String messageType)
+  method System.Diagnostics.Activity StartIdempotencyExecute(System.String operationName, System.String key)
+  method System.Diagnostics.Activity StartInboxProcess(System.String consumerName, System.String messageId)
+  method System.Diagnostics.Activity StartOutboxProcess(System.Int32 batchSize)
+  method System.Diagnostics.Activity StartProjectionRebuild(System.String projectionName, System.String sourceName)
+  method System.Diagnostics.Activity StartSagaTransition(System.String sagaType, System.String fromState, System.String toState)
+static class PalDDD.Core.Diagnostics.PalMetrics
+class PalDDD.Core.DomainCapabilityAttribute
+  ctor(System.String name)
+  property System.String Name
+class PalDDD.Core.DomainEvent
+  property ByteAether.Ulid.Ulid EventId
+  property System.DateTimeOffset OccurredOn
+struct PalDDD.Core.DomainEventEnumerable
+  ctor(PalDDD.Core.DomainEvent head)
+  method PalDDD.Core.DomainEventEnumerator GetEnumerator()
+struct PalDDD.Core.DomainEventEnumerator
+  property PalDDD.Core.DomainEvent Current
+  method System.Boolean MoveNext()
+class PalDDD.Core.Entity
+  property System.Boolean HasDomainEvents
+  method System.Void ClearDomainEvents()
+  method PalDDD.Core.DomainEventEnumerable DomainEvents()
+class PalDDD.Core.Entity<TId>
+  property TId Id
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.Boolean IsTransient()
+  method System.String ToString()
+class PalDDD.Core.GenerateEnumAttribute
+  ctor()
+class PalDDD.Core.GenerateIdAttribute
+  ctor(System.Type idType)
+  property System.Type IdType
+class PalDDD.Core.GenerateMessageAttribute
+  ctor()
+  property System.String Name
+  property System.Int32 SchemaVersion
+interface PalDDD.Core.IDomainEvent
+  property System.String EventName
+interface PalDDD.Core.IPalIdentity<TKey>
+  property TKey Value
+interface PalDDD.Core.IPalValidator<T>
+  method PalDDD.Core.PalValidationResult Validate(T instance)
+interface PalDDD.Core.ISpecification<T>
+  method PalDDD.Core.ISpecification<T> And(PalDDD.Core.ISpecification<T> other)
+  method System.Boolean IsSatisfiedBy(T entity)
+  method PalDDD.Core.ISpecification<T> Not()
+  method PalDDD.Core.ISpecification<T> Or(PalDDD.Core.ISpecification<T> other)
+  method System.Linq.Expressions.Expression<System.Func<T, System.Boolean>> ToExpression()
+interface PalDDD.Core.IValueObject
+interface PalDDD.Core.Identity.IPalIdGenerator
+  method ByteAether.Ulid.Ulid NewId()
+  method ByteAether.Ulid.Ulid NewId(System.DateTimeOffset timestamp)
+interface PalDDD.Core.Logging.IPalLogger<T>
+  method System.Void Debug(System.String message)
+  method System.Void Error(System.Exception ex, System.String message)
+  method System.Void Information(System.String message)
+  method System.Boolean IsEnabled(Microsoft.Extensions.Logging.LogLevel level)
+  method System.Void Warning(System.String message)
+class PalDDD.Core.Logging.NullPalLogger<T>
+  method System.Void Debug(System.String message)
+  method System.Void Error(System.Exception ex, System.String message)
+  method System.Void Information(System.String message)
+  method System.Boolean IsEnabled(Microsoft.Extensions.Logging.LogLevel level)
+  method System.Void Warning(System.String message)
+struct PalDDD.Core.PalValidationError
+  ctor(System.String PropertyName, System.String Message)
+  property System.String Message
+  property System.String PropertyName
+  method System.Void Deconstruct(System.String& PropertyName, System.String& Message)
+  method System.Boolean Equals(PalDDD.Core.PalValidationError other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+struct PalDDD.Core.PalValidationResult
+  property System.Collections.Immutable.ImmutableArray<PalDDD.Core.PalValidationError> Errors
+  property System.Boolean IsValid
+  method System.Boolean Equals(PalDDD.Core.PalValidationResult other)
+  method System.Boolean Equals(System.Object obj)
+  method PalDDD.Core.PalValidationResult Failed(System.Collections.Immutable.ImmutableArray<PalDDD.Core.PalValidationError> errors)
+  method PalDDD.Core.PalValidationResult Failed(System.String property, System.String message)
+  method System.Int32 GetHashCode()
+  method PalDDD.Core.PalValidationResult Success()
+class PalDDD.Core.ProcessManagerAttribute
+  ctor(System.String name)
+  property System.String Name
+interface PalDDD.Core.Repository.IUnitOfWork
+  method System.Threading.Tasks.ValueTask BeginTransactionAsync(System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask CommitAsync(System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask RollbackAsync(System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(System.Threading.CancellationToken ct)
+static class PalDDD.Core.Repository.UnitOfWorkExtensions
+  method System.Threading.Tasks.ValueTask ExecuteInTransactionAsync(PalDDD.Core.Repository.IUnitOfWork uow, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> work, System.Threading.CancellationToken ct)
+struct PalDDD.Core.RowVersion
+  ctor(System.Int32 Value)
+  property System.Int32 Value
+  method System.Void Deconstruct(System.Int32& Value)
+  method System.Boolean Equals(PalDDD.Core.RowVersion other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method PalDDD.Core.RowVersion Next()
+  method System.String ToString()
+class PalDDD.Core.SmartEnum<TSelf, TValue>
+  property System.Collections.Generic.IReadOnlyCollection<TSelf> All
+  property System.String Name
+  property TValue Value
+  method System.Boolean Equals(System.Object obj)
+  method System.Boolean Equals(TSelf other)
+  method TSelf FromValue(TValue value)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.Boolean TryFromValue(TValue value, TSelf& result)
+static class PalDDD.Core.Spec<T>
+  property PalDDD.Core.ISpecification<T> All
+  property PalDDD.Core.ISpecification<T> None
+  method PalDDD.Core.ISpecification<T> Where(System.Linq.Expressions.Expression<System.Func<T, System.Boolean>> predicate)
+struct PalDDD.Core.Unit
+  method System.Boolean Equals(PalDDD.Core.Unit other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+struct PalDDD.Core.UpdateTime
+  ctor(System.DateTimeOffset Value)
+  property System.DateTimeOffset Value
+  method System.Void Deconstruct(System.DateTimeOffset& Value)
+  method System.Boolean Equals(PalDDD.Core.UpdateTime other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method PalDDD.Core.UpdateTime Now()
+  method System.String ToString()
+struct PalDDD.Core.ValueObject<T>
+  ctor(T value)
+  property T Value
+  method System.Boolean Equals(PalDDD.Core.ValueObject<T> other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+  method System.String ToString(System.String format, System.IFormatProvider formatProvider)
+  method System.Boolean TryFormat(System.Span<System.Byte> utf8Destination, System.Int32& bytesWritten, System.ReadOnlySpan<System.Char> format, System.IFormatProvider provider)
+
+# PalDDD.DependencyInjection
+static class PalDDD.DependencyInjection.ServiceRegistration
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalCommandHandler(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalCoreStack(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalDDD(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalEventHandler(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalFullStack(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalIdentity(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalLogging(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalPipelineBehaviors(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalQueryHandler(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+
+# PalDDD.EventLog
+struct PalDDD.EventLog.AppendEventsResult
+  ctor(System.String StreamName, System.Int64 FirstStreamVersion, System.Int64 LastStreamVersion, System.Int64 FirstGlobalPosition, System.Int64 LastGlobalPosition)
+  property System.Int64 FirstGlobalPosition
+  property System.Int64 FirstStreamVersion
+  property System.Int64 LastGlobalPosition
+  property System.Int64 LastStreamVersion
+  property System.String StreamName
+  method System.Void Deconstruct(System.String& StreamName, System.Int64& FirstStreamVersion, System.Int64& LastStreamVersion, System.Int64& FirstGlobalPosition, System.Int64& LastGlobalPosition)
+  method System.Boolean Equals(PalDDD.EventLog.AppendEventsResult other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.EventLog.EventAuditMetadata
+  ctor(System.String actorId, System.String reason, System.Nullable<ByteAether.Ulid.Ulid> correlationId, System.Nullable<ByteAether.Ulid.Ulid> causationId, System.String traceParent, System.String traceState)
+  property System.String ActorId
+  property System.Nullable<ByteAether.Ulid.Ulid> CausationId
+  property System.Nullable<ByteAether.Ulid.Ulid> CorrelationId
+  property PalDDD.EventLog.EventAuditMetadata Empty
+  property System.String Reason
+  property System.String TraceParent
+  property System.String TraceState
+  method PalDDD.EventLog.EventAuditMetadata <Clone>$()
+  method PalDDD.EventLog.EventAuditMetadata Capture(System.String actorId, System.String reason, System.Nullable<ByteAether.Ulid.Ulid> correlationId, System.Nullable<ByteAether.Ulid.Ulid> causationId)
+  method System.Boolean Equals(PalDDD.EventLog.EventAuditMetadata other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.EventLog.EventData
+  ctor(ByteAether.Ulid.Ulid eventId, System.String eventName, System.Int32 schemaVersion, System.String contentType, System.ReadOnlyMemory<System.Byte> payload, System.ReadOnlyMemory<System.Byte> metadata, PalDDD.EventLog.EventAuditMetadata audit)
+  property PalDDD.EventLog.EventAuditMetadata Audit
+  property System.String ContentType
+  property ByteAether.Ulid.Ulid EventId
+  property System.String EventName
+  property System.ReadOnlyMemory<System.Byte> Metadata
+  property System.ReadOnlyMemory<System.Byte> Payload
+  property System.Int32 SchemaVersion
+class PalDDD.EventLog.EventStreamConcurrencyException
+  ctor()
+  ctor(System.String message)
+  ctor(System.String message, System.Exception innerException)
+  ctor(System.String streamName, PalDDD.EventLog.ExpectedStreamVersion expectedVersion, System.Int64 actualVersion)
+  property System.Int64 ActualVersion
+  property PalDDD.EventLog.ExpectedStreamVersion ExpectedVersion
+  property System.String StreamName
+struct PalDDD.EventLog.ExpectedStreamVersion
+  property PalDDD.EventLog.ExpectedStreamVersion Any
+  property PalDDD.EventLog.ExpectedStreamVersion NoStream
+  property PalDDD.EventLog.ExpectedStreamVersion StreamExists
+  property System.Int64 Version
+  method System.Boolean Equals(PalDDD.EventLog.ExpectedStreamVersion other)
+  method System.Boolean Equals(System.Object obj)
+  method PalDDD.EventLog.ExpectedStreamVersion Exact(System.Int64 version)
+  method System.Int32 GetHashCode()
+  method System.Boolean Matches(System.Int64 actualVersion)
+  method System.String ToString()
+interface PalDDD.EventLog.IEventLog
+  method System.Threading.Tasks.ValueTask<PalDDD.EventLog.AppendEventsResult> AppendAsync(System.String streamName, PalDDD.EventLog.ExpectedStreamVersion expectedVersion, System.Collections.Generic.IReadOnlyList<PalDDD.EventLog.EventData> events, System.Threading.CancellationToken cancellationToken)
+  method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadAllAsync(System.Int64 fromPosition, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
+  method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadStreamAsync(System.String streamName, System.Int64 fromVersion, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
+class PalDDD.EventLog.InMemoryEventLog
+  ctor(System.TimeProvider timeProvider)
+  method System.Threading.Tasks.ValueTask<PalDDD.EventLog.AppendEventsResult> AppendAsync(System.String streamName, PalDDD.EventLog.ExpectedStreamVersion expectedVersion, System.Collections.Generic.IReadOnlyList<PalDDD.EventLog.EventData> events, System.Threading.CancellationToken cancellationToken)
+  method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadAllAsync(System.Int64 fromPosition, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
+  method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadStreamAsync(System.String streamName, System.Int64 fromVersion, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
+class PalDDD.EventLog.RecordedEvent
+  property PalDDD.EventLog.EventAuditMetadata Audit
+  property System.String ContentType
+  property ByteAether.Ulid.Ulid EventId
+  property System.String EventName
+  property System.Int64 GlobalPosition
+  property System.ReadOnlyMemory<System.Byte> Metadata
+  property System.ReadOnlyMemory<System.Byte> Payload
+  property System.DateTimeOffset RecordedAt
+  property System.Int32 SchemaVersion
+  property System.String StreamName
+  property System.Int64 StreamVersion
+  method PalDDD.EventLog.RecordedEvent Rehydrate(System.String streamName, System.Int64 streamVersion, System.Int64 globalPosition, System.DateTimeOffset recordedAt, ByteAether.Ulid.Ulid eventId, System.String eventName, System.Int32 schemaVersion, System.String contentType, System.ReadOnlyMemory<System.Byte> payload, System.ReadOnlyMemory<System.Byte> metadata, PalDDD.EventLog.EventAuditMetadata audit)
+
+# PalDDD.Idempotency
+interface PalDDD.Idempotency.IIdempotencyStore
+  method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyRecord> GetAsync(System.String operationName, System.String key, System.DateTimeOffset now, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Idempotency.IdempotencyRecord record, System.ReadOnlyMemory<System.Byte> responsePayload, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Idempotency.IdempotencyRecord record, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyRecord> TryStartAsync(System.String operationName, System.String key, System.DateTimeOffset now, PalDDD.Idempotency.IdempotencyPolicy policy, System.Threading.CancellationToken ct)
+enum PalDDD.Idempotency.IdempotencyExecutionStatus
+class PalDDD.Idempotency.IdempotencyExecution<TResult>
+  ctor(PalDDD.Idempotency.IdempotencyExecutionStatus Status, TResult Result)
+  property TResult Result
+  property PalDDD.Idempotency.IdempotencyExecutionStatus Status
+  method PalDDD.Idempotency.IdempotencyExecution<TResult> <Clone>$()
+  method System.Void Deconstruct(PalDDD.Idempotency.IdempotencyExecutionStatus& Status, TResult& Result)
+  method System.Boolean Equals(PalDDD.Idempotency.IdempotencyExecution<TResult> other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.Idempotency.IdempotencyPolicy
+  ctor()
+  property PalDDD.Idempotency.IdempotencyPolicy Default
+  property System.TimeSpan ProcessingTimeout
+  property System.TimeSpan Retention
+  method PalDDD.Idempotency.IdempotencyPolicy <Clone>$()
+  method System.Boolean Equals(PalDDD.Idempotency.IdempotencyPolicy other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.Idempotency.IdempotencyProcessor
+  ctor(PalDDD.Idempotency.IIdempotencyStore store, System.TimeProvider timeProvider)
+  method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyExecution<TResult>> ExecuteAsync(System.String operationName, System.String key, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<TResult>> handler, System.Func<TResult, System.ReadOnlyMemory<System.Byte>> serializeResult, System.Func<System.ReadOnlyMemory<System.Byte>, TResult> deserializeResult, PalDDD.Idempotency.IdempotencyPolicy policy, System.Threading.CancellationToken cancellationToken)
+class PalDDD.Idempotency.IdempotencyRecord
+  ctor(System.String operationName, System.String key, PalDDD.Idempotency.IdempotencyRecordStatus status, System.DateTimeOffset lockedUntil, System.DateTimeOffset expiresAt, System.DateTimeOffset updatedAt)
+  property System.String Error
+  property System.DateTimeOffset ExpiresAt
+  property System.String Key
+  property System.DateTimeOffset LockedUntil
+  property System.String OperationName
+  property System.Nullable<System.ReadOnlyMemory<System.Byte>> ResponsePayload
+  property PalDDD.Idempotency.IdempotencyRecordStatus Status
+  property System.DateTimeOffset UpdatedAt
+  method System.Void MarkCompleted(System.ReadOnlyMemory<System.Byte> responsePayload, System.DateTimeOffset completedAt)
+  method System.Void MarkFailed(System.String error, System.DateTimeOffset failedAt)
+  method System.Void MarkProcessing(System.DateTimeOffset lockedUntil, System.DateTimeOffset expiresAt, System.DateTimeOffset updatedAt)
+enum PalDDD.Idempotency.IdempotencyRecordStatus
+class PalDDD.Idempotency.InMemoryIdempotencyStore
+  ctor()
+  method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyRecord> GetAsync(System.String operationName, System.String key, System.DateTimeOffset now, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Idempotency.IdempotencyRecord record, System.ReadOnlyMemory<System.Byte> responsePayload, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Idempotency.IdempotencyRecord record, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyRecord> TryStartAsync(System.String operationName, System.String key, System.DateTimeOffset now, PalDDD.Idempotency.IdempotencyPolicy policy, System.Threading.CancellationToken ct)
+
+# PalDDD.Messaging
+class PalDDD.Messaging.DomainEventDispatcherOptions
+  ctor()
+  property System.Int32 MaxIterations
+interface PalDDD.Messaging.IDomainEventDispatcher
+  method System.Threading.Tasks.ValueTask DispatchAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Core.DomainEvent> events, System.Threading.CancellationToken ct)
+interface PalDDD.Messaging.IEventHandler
+  property System.Type EventType
+  method System.Threading.Tasks.ValueTask HandleAsync(PalDDD.Core.DomainEvent event, System.Threading.CancellationToken ct)
+interface PalDDD.Messaging.IEventHandler<TEvent>
+  method System.Threading.Tasks.ValueTask HandleAsync(TEvent event, System.Threading.CancellationToken ct)
+interface PalDDD.Messaging.IMessageBroker
+  method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask PublishAsync(TMessage message, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
+class PalDDD.Messaging.MessageBrokerBase
+  method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask PublishAsync(TMessage message, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
+struct PalDDD.Messaging.MessagePublishContext
+  ctor(System.Nullable<ByteAether.Ulid.Ulid> CorrelationId, System.Nullable<ByteAether.Ulid.Ulid> CausationId, System.String TraceParent, System.String TraceState)
+  property System.Nullable<ByteAether.Ulid.Ulid> CausationId
+  property System.Nullable<ByteAether.Ulid.Ulid> CorrelationId
+  property PalDDD.Messaging.MessagePublishContext Empty
+  property System.String TraceParent
+  property System.String TraceState
+  method System.Void Deconstruct(System.Nullable`1[[ByteAether.Ulid.Ulid, ByteAether.Ulid, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]& CorrelationId, System.Nullable`1[[ByteAether.Ulid.Ulid, ByteAether.Ulid, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]& CausationId, System.String& TraceParent, System.String& TraceState)
+  method System.Boolean Equals(PalDDD.Messaging.MessagePublishContext other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.Messaging.NullMessageBroker
+  ctor(PalDDD.Core.Logging.IPalLogger<PalDDD.Messaging.NullMessageBroker> logger)
+
+# PalDDD.Projections
+interface PalDDD.Projections.IEventReplaySource<TMessage>
+  method System.Collections.Generic.IAsyncEnumerable<PalDDD.Projections.ReplayEvent<TMessage>> ReadAsync(System.String sourceName, System.Threading.CancellationToken ct)
+interface PalDDD.Projections.IProjectionCheckpointStore
+  method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionCheckpoint> GetAsync(System.String projectionName, System.String sourceName, System.String position, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask ResetAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionCheckpoint> TryStartAsync(System.String projectionName, System.String sourceName, System.String position, System.DateTimeOffset startedAt, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
+interface PalDDD.Projections.IProjectionHandler<TMessage>
+  property System.String ProjectionName
+  method System.Threading.Tasks.ValueTask ProjectAsync(TMessage message, PalDDD.Projections.ProjectionContext context, System.Threading.CancellationToken ct)
+class PalDDD.Projections.InMemoryProjectionCheckpointStore
+  ctor()
+  method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionCheckpoint> GetAsync(System.String projectionName, System.String sourceName, System.String position, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask ResetAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionCheckpoint> TryStartAsync(System.String projectionName, System.String sourceName, System.String position, System.DateTimeOffset startedAt, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
+class PalDDD.Projections.ProjectionCheckpoint
+  ctor(System.String projectionName, System.String sourceName, System.String position, PalDDD.Projections.ProjectionCheckpointStatus status, System.DateTimeOffset updatedAt)
+  property System.String Error
+  property System.DateTimeOffset LeaseUntil
+  property System.String Position
+  property System.String ProjectionName
+  property System.Int64 Revision
+  property System.String SourceName
+  property PalDDD.Projections.ProjectionCheckpointStatus Status
+  property System.DateTimeOffset UpdatedAt
+  method System.Void MarkCompleted(System.DateTimeOffset completedAt)
+  method System.Void MarkFailed(System.String error, System.DateTimeOffset failedAt)
+  method System.Void MarkProcessing(System.DateTimeOffset startedAt, System.TimeSpan processingTimeout)
+  method PalDDD.Projections.ProjectionCheckpoint Rehydrate(System.String projectionName, System.String sourceName, System.String position, PalDDD.Projections.ProjectionCheckpointStatus status, System.DateTimeOffset updatedAt, System.DateTimeOffset leaseUntil, System.Int64 revision, System.String error)
+enum PalDDD.Projections.ProjectionCheckpointStatus
+struct PalDDD.Projections.ProjectionContext
+  ctor(System.String sourceName, System.String position, System.DateTimeOffset occurredAt)
+  ctor(System.String sourceName, System.String position, System.DateTimeOffset occurredAt, PalDDD.Projections.ReplayAuditMetadata audit)
+  property PalDDD.Projections.ReplayAuditMetadata Audit
+  property System.DateTimeOffset OccurredAt
+  property System.String Position
+  property System.String SourceName
+  method System.Boolean Equals(PalDDD.Projections.ProjectionContext other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.Projections.ProjectionProcessor<TMessage>
+  ctor(PalDDD.Projections.IProjectionHandler<TMessage> handler, PalDDD.Projections.IProjectionCheckpointStore checkpointStore, System.TimeProvider timeProvider, System.TimeSpan processingTimeout)
+  method System.Threading.Tasks.ValueTask<System.Boolean> ProcessAsync(TMessage message, PalDDD.Projections.ProjectionContext context, System.Threading.CancellationToken ct)
+class PalDDD.Projections.ProjectionRebuilder<TMessage>
+  ctor(System.String projectionName, System.String sourceName, PalDDD.Projections.IEventReplaySource<TMessage> replaySource, PalDDD.Projections.IProjectionCheckpointStore checkpointStore, PalDDD.Projections.ProjectionProcessor<TMessage> processor)
+  method System.Threading.Tasks.ValueTask<System.Int32> RebuildAsync(System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> ReplayAsync(System.Threading.CancellationToken ct)
+struct PalDDD.Projections.ReplayAuditMetadata
+  ctor(System.String ActorId, System.String Reason, System.Nullable<System.Guid> CorrelationId, System.Nullable<System.Guid> CausationId, System.String TraceParent, System.String TraceState)
+  property System.String ActorId
+  property System.Nullable<System.Guid> CausationId
+  property System.Nullable<System.Guid> CorrelationId
+  property PalDDD.Projections.ReplayAuditMetadata Empty
+  property System.String Reason
+  property System.String TraceParent
+  property System.String TraceState
+  method System.Void Deconstruct(System.String& ActorId, System.String& Reason, System.Nullable`1[[System.Guid, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]& CorrelationId, System.Nullable`1[[System.Guid, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]& CausationId, System.String& TraceParent, System.String& TraceState)
+  method System.Boolean Equals(PalDDD.Projections.ReplayAuditMetadata other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+struct PalDDD.Projections.ReplayEvent<TMessage>
+  ctor(System.String sourceName, System.String position, System.DateTimeOffset occurredAt, TMessage message)
+  ctor(System.String sourceName, System.String position, System.DateTimeOffset occurredAt, TMessage message, PalDDD.Projections.ReplayAuditMetadata audit)
+  property PalDDD.Projections.ReplayAuditMetadata Audit
+  property TMessage Message
+  property System.DateTimeOffset OccurredAt
+  property System.String Position
+  property System.String SourceName
+  method System.Boolean Equals(PalDDD.Projections.ReplayEvent<TMessage> other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+
+# PalDDD.Projections.EventLog
+class PalDDD.Projections.EventLog.EventLogReplaySource<TMessage>
+  ctor(PalDDD.EventLog.IEventLog eventLog, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.MessageDescriptor descriptor)
+  method System.Collections.Generic.IAsyncEnumerable<PalDDD.Projections.ReplayEvent<TMessage>> ReadAsync(System.String sourceName, System.Threading.CancellationToken ct)
+class PalDDD.Projections.EventLog.EventReplayException
+  ctor()
+  ctor(System.String message)
+  ctor(System.String message, System.Exception innerException)
+static class PalDDD.Projections.EventLog.EventStreamJsonLines
+  method System.Threading.Tasks.ValueTask ExportAsync(System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> events, System.IO.Stream output, System.Threading.CancellationToken ct)
+  method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.EventData> ImportAsync(System.IO.Stream input, System.Threading.CancellationToken ct)
+
+# PalDDD.Serialization
+static class PalDDD.Serialization.ContentTypes
+interface PalDDD.Serialization.IMessageCatalog
+  property System.Collections.Generic.IReadOnlyList<PalDDD.Serialization.MessageDescriptor> Descriptors
+  method PalDDD.Serialization.MessageDescriptor Find(System.String name)
+  method PalDDD.Serialization.MessageDescriptor Find(System.String name, System.Int32 schemaVersion)
+  method PalDDD.Serialization.MessageDescriptor Find(System.Type type)
+interface PalDDD.Serialization.IMessageSerializer
+  property System.String ContentType
+  method System.Object Deserialize(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor)
+  method TMessage Deserialize(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor)
+  method System.ReadOnlyMemory<System.Byte> Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor)
+  method System.ReadOnlyMemory<System.Byte> Serialize(TMessage message, PalDDD.Serialization.MessageDescriptor descriptor)
+class PalDDD.Serialization.Json.JsonLinesEventReader
+  ctor()
+  method System.Collections.Generic.IReadOnlyList<TMessage> DeserializeAll(System.ReadOnlyMemory<System.Byte> payload, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage> typeInfo)
+class PalDDD.Serialization.Json.JsonLinesEventWriter
+  ctor()
+  method System.ReadOnlyMemory<System.Byte> SerializeLine(TMessage message, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage> typeInfo)
+class PalDDD.Serialization.Json.JsonMessageSerializer
+  ctor(PalDDD.Serialization.IMessageCatalog messageCatalog)
+  ctor(PalDDD.Serialization.IMessageCatalog messageCatalog, System.Text.Json.JsonSerializerOptions options)
+  property System.String ContentType
+  method System.Object Deserialize(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor)
+  method TMessage Deserialize(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor)
+  method System.ReadOnlyMemory<System.Byte> Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor)
+  method System.ReadOnlyMemory<System.Byte> Serialize(TMessage message, PalDDD.Serialization.MessageDescriptor descriptor)
+static class PalDDD.Serialization.Json.ServiceCollectionExtensions
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalJsonSerialization(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Action<PalDDD.Serialization.MessageCatalogBuilder> configureCatalog)
+class PalDDD.Serialization.MessageCatalog
+  property System.Collections.Generic.IReadOnlyList<PalDDD.Serialization.MessageDescriptor> Descriptors
+  property PalDDD.Serialization.MessageCatalog Empty
+  method PalDDD.Serialization.MessageDescriptor Find(System.String name)
+  method PalDDD.Serialization.MessageDescriptor Find(System.String name, System.Int32 schemaVersion)
+  method PalDDD.Serialization.MessageDescriptor Find(System.Type type)
+class PalDDD.Serialization.MessageCatalogBuilder
+  ctor()
+  method PalDDD.Serialization.MessageCatalogBuilder Add(PalDDD.Serialization.MessageDescriptor descriptor)
+  method PalDDD.Serialization.MessageDescriptor Add(System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage> jsonTypeInfo, System.String name, System.Int32 schemaVersion, System.String contentType)
+  method PalDDD.Serialization.MessageCatalog Build()
+class PalDDD.Serialization.MessageDescriptor
+  ctor(System.String name, System.Type clrType, System.Text.Json.Serialization.Metadata.JsonTypeInfo jsonTypeInfo, System.Int32 schemaVersion, System.String contentType)
+  property System.Type ClrType
+  property System.String ContentType
+  property System.Text.Json.Serialization.Metadata.JsonTypeInfo JsonTypeInfo
+  property System.String Name
+  property System.Collections.Generic.EqualityComparer<PalDDD.Serialization.MessageDescriptor> NameAndVersionComparer
+  property System.Int32 SchemaVersion
+  method PalDDD.Serialization.MessageDescriptor Create(System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage> jsonTypeInfo, System.String name, System.Int32 schemaVersion, System.String contentType)
+  method System.Boolean Equals(PalDDD.Serialization.MessageDescriptor other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+
+# PalDDD.Serialization.Evolution
+class PalDDD.Serialization.Evolution.MessageContractManifest
+  property System.Collections.Generic.IReadOnlyList<PalDDD.Serialization.MessageDescriptor> Descriptors
+  property System.Collections.Generic.IReadOnlyList<PalDDD.Serialization.Evolution.MessageEvolutionPathRequirement> EvolutionRequirements
+  method PalDDD.Serialization.Evolution.MessageContractManifest Create(PalDDD.Serialization.IMessageCatalog catalog)
+class PalDDD.Serialization.Evolution.MessageContractVerificationBuilder
+  ctor()
+  method PalDDD.Serialization.Evolution.MessageContractVerificationBuilder Add(PalDDD.Serialization.MessageDescriptor sourceDescriptor, PalDDD.Serialization.MessageDescriptor targetDescriptor, System.Func<TSource, TTarget> convert)
+  method PalDDD.Serialization.Evolution.MessageContractVerificationBuilder Add(System.Text.Json.Serialization.Metadata.JsonTypeInfo<TSource> sourceJsonTypeInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TTarget> targetJsonTypeInfo, System.Func<TSource, TTarget> convert, System.String name, System.Int32 sourceSchemaVersion, System.Int32 targetSchemaVersion, System.String contentType)
+class PalDDD.Serialization.Evolution.MessageEvolutionBuilder
+  ctor()
+  method PalDDD.Serialization.Evolution.MessageEvolutionBuilder Add(PalDDD.Serialization.Evolution.MessageUpgradeStep step)
+  method PalDDD.Serialization.Evolution.MessageEvolutionBuilder Add(PalDDD.Serialization.MessageDescriptor sourceDescriptor, PalDDD.Serialization.MessageDescriptor targetDescriptor, System.Func<TSource, TTarget> convert)
+  method PalDDD.Serialization.Evolution.MessageEvolutionPipeline Build()
+class PalDDD.Serialization.Evolution.MessageEvolutionException
+  ctor()
+  ctor(System.String message)
+  ctor(System.String message, System.Exception innerException)
+class PalDDD.Serialization.Evolution.MessageEvolutionPathRequirement
+  ctor(PalDDD.Serialization.MessageDescriptor sourceDescriptor, PalDDD.Serialization.MessageDescriptor targetDescriptor)
+  property PalDDD.Serialization.MessageDescriptor SourceDescriptor
+  property PalDDD.Serialization.MessageDescriptor TargetDescriptor
+  method PalDDD.Serialization.Evolution.MessageEvolutionPathRequirement <Clone>$()
+  method System.Boolean Equals(PalDDD.Serialization.Evolution.MessageEvolutionPathRequirement other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.Serialization.Evolution.MessageEvolutionPipeline
+  method System.Object Upgrade(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor sourceDescriptor, PalDDD.Serialization.MessageDescriptor targetDescriptor, PalDDD.Serialization.IMessageSerializer serializer)
+  method System.Void ValidatePath(PalDDD.Serialization.MessageDescriptor sourceDescriptor, PalDDD.Serialization.MessageDescriptor targetDescriptor)
+class PalDDD.Serialization.Evolution.MessageUpgradeStep
+  ctor(PalDDD.Serialization.MessageDescriptor sourceDescriptor, PalDDD.Serialization.MessageDescriptor targetDescriptor, System.Func<System.Object, System.Object> convert)
+  property PalDDD.Serialization.MessageDescriptor SourceDescriptor
+  property PalDDD.Serialization.MessageDescriptor TargetDescriptor
+  method System.Object Convert(System.Object message)
+class PalDDD.Serialization.Evolution.PalPlatformVerificationError
+  ctor(PalDDD.Serialization.Evolution.MessageEvolutionPathRequirement requirement, System.Exception exception)
+  property System.Exception Exception
+  property PalDDD.Serialization.Evolution.MessageEvolutionPathRequirement Requirement
+  method PalDDD.Serialization.Evolution.PalPlatformVerificationError <Clone>$()
+  method System.Boolean Equals(PalDDD.Serialization.Evolution.PalPlatformVerificationError other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.Serialization.Evolution.PalPlatformVerificationException
+  ctor()
+  ctor(System.Collections.Generic.IReadOnlyList<PalDDD.Serialization.Evolution.PalPlatformVerificationError> errors)
+  ctor(System.String message)
+  ctor(System.String message, System.Exception innerException)
+  property System.Collections.Generic.IReadOnlyList<PalDDD.Serialization.Evolution.PalPlatformVerificationError> Errors
+class PalDDD.Serialization.Evolution.PalPlatformVerifier
+  ctor()
+  method System.Void ValidateMessageContractManifest(PalDDD.Serialization.Evolution.MessageEvolutionPipeline pipeline, PalDDD.Serialization.Evolution.MessageContractManifest manifest)
+  method System.Void ValidateMessageEvolutionPaths(PalDDD.Serialization.Evolution.MessageEvolutionPipeline pipeline, System.Collections.Generic.IEnumerable<PalDDD.Serialization.Evolution.MessageEvolutionPathRequirement> requirements)
+static class PalDDD.Serialization.Evolution.ServiceCollectionExtensions
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalMessageContractVerification(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Action<PalDDD.Serialization.Evolution.MessageContractVerificationBuilder> configure)
+
+# PalDDD.Transactions
+class PalDDD.Transactions.ChildSagaStep<TChildState, TInput, TOutput>
+  ctor(System.String key, System.Func<PalDDD.Transactions.SagaState, TInput> inputSelector, System.Func<TChildState, TOutput> outputSelector, System.Action<PalDDD.Transactions.SagaState, TOutput> outputApplier, System.Func<PalDDD.Transactions.SagaState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> compensate)
+  property PalDDD.Transactions.StepDispatchKind DispatchKind
+enum PalDDD.Transactions.CompensationPolicy
+class PalDDD.Transactions.DefaultSagaManager
+  ctor()
+  method System.Threading.Tasks.ValueTask<TChildState> ExecuteChildSagaAsync(PalDDD.Transactions.Saga<TChildState> childSaga, TChildState childState, System.Object triggerEvent, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.SagaState>> GetInterruptedSagasAsync(System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask ResumeAsync(ByteAether.Ulid.Ulid sagaId, TDecision decision, System.Threading.CancellationToken ct)
+class PalDDD.Transactions.DynamicStep
+  ctor(System.String key, System.Func<PalDDD.Transactions.SagaState, System.String> router, System.Func<PalDDD.Transactions.SagaState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> compensate)
+  property PalDDD.Transactions.StepDispatchKind DispatchKind
+class PalDDD.Transactions.ExponentialBackoffPolicy
+  ctor(System.Nullable<System.TimeSpan> maxDelay, System.Boolean withJitter, System.Int32 exponentCap)
+  method System.TimeSpan ComputeDelay(System.Int32 attempt)
+struct PalDDD.Transactions.FanOutResult<TResult>
+  ctor(System.Collections.Generic.IReadOnlyList<TResult> Completed, System.Collections.Generic.IReadOnlyList<System.ValueTuple<TResult, System.Exception>> Failed)
+  property System.Boolean AllSucceeded
+  property System.Collections.Generic.IReadOnlyList<TResult> Completed
+  property System.Collections.Generic.IReadOnlyList<System.ValueTuple<TResult, System.Exception>> Failed
+  method System.Void Deconstruct(IReadOnlyList`1& Completed, IReadOnlyList`1& Failed)
+  method System.Boolean Equals(PalDDD.Transactions.FanOutResult<TResult> other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.Transactions.FanOutStep<TItem, TResult>
+  ctor(System.String key, System.Func<PalDDD.Transactions.SagaState, System.Collections.Generic.IReadOnlyList<TItem>> selector, System.Func<TItem, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<TResult>> executor, System.Func<PalDDD.Transactions.SagaState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> compensate, System.Nullable<System.TimeSpan> timeout)
+  property PalDDD.Transactions.StepDispatchKind DispatchKind
+  property System.Int32 MaxConcurrency
+  property System.Nullable<System.TimeSpan> PerItemTimeout
+class PalDDD.Transactions.FixedBackoffPolicy
+  ctor(System.TimeSpan delay)
+  method System.TimeSpan ComputeDelay(System.Int32 attempt)
+interface PalDDD.Transactions.IInboxStore
+  method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Transactions.InboxMessage message, System.String failureReason, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.InboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<PalDDD.Transactions.InboxMessage> TryStartProcessingAsync(System.String consumerName, System.String messageId, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
+interface PalDDD.Transactions.IPalOutboxStore
+  method System.Void AddMessage(PalDDD.Transactions.OutboxMessage message)
+  method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> GetPendingMessagesAsync(System.Int32 batchSize, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> LeasePendingMessagesAsync(System.Int32 batchSize, System.String owner, System.TimeSpan leaseDuration, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
+  method System.Void MarkDead(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt)
+  method System.Void MarkProcessed(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt)
+  method System.Void ReleaseForRetry(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt)
+  method System.Threading.Tasks.ValueTask<System.Int32> RequeueDeadAsync(ByteAether.Ulid.Ulid messageId, System.DateTimeOffset nextAttemptAt, System.String retriedBy, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(System.Threading.CancellationToken ct)
+interface PalDDD.Transactions.IRetryBackoffPolicy
+  method System.TimeSpan ComputeDelay(System.Int32 attempt)
+interface PalDDD.Transactions.ISagaEventSink
+  method System.Threading.Tasks.ValueTask EmitAsync(T sagaEvent, System.Threading.CancellationToken ct)
+interface PalDDD.Transactions.ISagaManager
+  method System.Threading.Tasks.ValueTask<TChildState> ExecuteChildSagaAsync(PalDDD.Transactions.Saga<TChildState> childSaga, TChildState childState, System.Object triggerEvent, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.SagaState>> GetInterruptedSagasAsync(System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask ResumeAsync(ByteAether.Ulid.Ulid sagaId, TDecision decision, System.Threading.CancellationToken ct)
+interface PalDDD.Transactions.ISagaStateStore<TState>
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetActiveSagasAsync(System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<TState> GetByIdAsync(ByteAether.Ulid.Ulid sagaId, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseActiveSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(TState state, System.Threading.CancellationToken ct)
+class PalDDD.Transactions.InMemoryInboxStore
+  ctor()
+  method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Transactions.InboxMessage message, System.String failureReason, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.InboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<PalDDD.Transactions.InboxMessage> TryStartProcessingAsync(System.String consumerName, System.String messageId, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
+class PalDDD.Transactions.InMemoryOutboxStore
+  ctor(System.TimeProvider timeProvider)
+  method System.Void AddMessage(PalDDD.Transactions.OutboxMessage message)
+  method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> GetPendingMessagesAsync(System.Int32 batchSize, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> LeasePendingMessagesAsync(System.Int32 batchSize, System.String owner, System.TimeSpan leaseDuration, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
+  method System.Void MarkDead(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt)
+  method System.Void MarkProcessed(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt)
+  method System.Void ReleaseForRetry(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt)
+  method System.Threading.Tasks.ValueTask<System.Int32> RequeueDeadAsync(ByteAether.Ulid.Ulid messageId, System.DateTimeOffset nextAttemptAt, System.String retriedBy, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(System.Threading.CancellationToken ct)
+class PalDDD.Transactions.InMemorySagaStateStore<TState>
+  ctor()
+  method System.Void Add(TState state)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetActiveSagasAsync(System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<TState> GetByIdAsync(ByteAether.Ulid.Ulid sagaId, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseActiveSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(TState state, System.Threading.CancellationToken ct)
+class PalDDD.Transactions.InboxMessage
+  ctor()
+  property System.Int32 Attempts
+  property System.String ConsumerName
+  property System.Int64 Id
+  property System.String LastError
+  property System.String MessageId
+  property System.Nullable<System.DateTimeOffset> ProcessedAt
+  property System.Nullable<System.DateTimeOffset> ProcessingStartedAt
+  property System.DateTimeOffset ReceivedAt
+  property PalDDD.Transactions.InboxStatus Status
+class PalDDD.Transactions.InboxOptions
+  ctor()
+  property System.String DefaultConsumerName
+  property System.TimeSpan ProcessingTimeout
+class PalDDD.Transactions.InboxProcessor
+  ctor(PalDDD.Transactions.IInboxStore store, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.InboxOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.InboxProcessor> logger, System.TimeProvider timeProvider)
+  method System.Threading.Tasks.ValueTask<System.Boolean> TryProcessAsync(System.String consumerName, System.String messageId, System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, TMessage message, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Boolean> TryProcessAsync(System.String messageId, System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, TMessage message, System.Threading.CancellationToken ct)
+enum PalDDD.Transactions.InboxStatus
+class PalDDD.Transactions.InterruptStep
+  ctor(System.String key, System.String interruptReason, System.Type decisionType)
+  property System.Type DecisionType
+  property PalDDD.Transactions.StepDispatchKind DispatchKind
+  property System.String InterruptReason
+class PalDDD.Transactions.OutboxBatchProcessor
+  ctor(PalDDD.Transactions.IPalOutboxStore store, PalDDD.Messaging.IMessageBroker broker, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.OutboxOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.OutboxBatchProcessor> logger, System.TimeProvider timeProvider)
+  method System.Threading.Tasks.ValueTask ProcessBatchAsync(System.Threading.CancellationToken ct)
+class PalDDD.Transactions.OutboxMessage
+  ctor()
+  property System.Nullable<ByteAether.Ulid.Ulid> CausationId
+  property System.String ContentType
+  property System.Nullable<ByteAether.Ulid.Ulid> CorrelationId
+  property System.DateTimeOffset CreatedAt
+  property System.String Error
+  property ByteAether.Ulid.Ulid Id
+  property System.String LockedBy
+  property System.Nullable<System.DateTimeOffset> LockedUntil
+  property System.Nullable<System.DateTimeOffset> NextAttemptAt
+  property System.Byte[] Payload
+  property System.Nullable<System.DateTimeOffset> ProcessedAt
+  property System.Int32 RetryCount
+  property System.Int32 SchemaVersion
+  property PalDDD.Transactions.OutboxStatus Status
+  property System.String TraceParent
+  property System.String TraceState
+  property System.String Type
+class PalDDD.Transactions.OutboxOptions
+  ctor()
+  property System.Int32 BatchSize
+  property System.TimeSpan LeaseDuration
+  property System.String LeaseOwner
+  property System.Int32 MaxRetryCount
+  property System.TimeSpan MaxRetryDelay
+  property System.TimeSpan PollInterval
+  property PalDDD.Transactions.IRetryBackoffPolicy RetryBackoffPolicy
+class PalDDD.Transactions.OutboxProcessor
+  ctor(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.OutboxOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.OutboxProcessor> logger, System.Nullable<System.TimeSpan> pollInterval)
+enum PalDDD.Transactions.OutboxStatus
+class PalDDD.Transactions.PeriodicBackgroundProcessor
+  method System.Void Dispose()
+struct PalDDD.Transactions.SagaCompensationStarted
+  ctor(ByteAether.Ulid.Ulid SagaId, System.String StepKey)
+  property ByteAether.Ulid.Ulid SagaId
+  property System.String StepKey
+  method System.Void Deconstruct(ByteAether.Ulid.Ulid& SagaId, System.String& StepKey)
+  method System.Boolean Equals(PalDDD.Transactions.SagaCompensationStarted other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.Transactions.SagaExecutionObserver
+  ctor(PalDDD.Transactions.ISagaEventSink sink)
+  property PalDDD.Transactions.SagaExecutionObserver Current
+  method System.Void Dispose()
+  method System.Threading.Tasks.ValueTask OnCompensationStarted(ByteAether.Ulid.Ulid sagaId, System.String stepKey, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask OnStatusChanged(ByteAether.Ulid.Ulid sagaId, PalDDD.Transactions.SagaStatus oldStatus, PalDDD.Transactions.SagaStatus newStatus, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask OnStepCompleted(ByteAether.Ulid.Ulid sagaId, System.String stepKey, System.TimeSpan duration, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask OnStepFailed(ByteAether.Ulid.Ulid sagaId, System.String stepKey, System.Exception error, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask OnStepStarted(ByteAether.Ulid.Ulid sagaId, System.String stepKey, System.Threading.CancellationToken ct)
+static class PalDDD.Transactions.SagaExtensions
+  method System.Void WhenChild(PalDDD.Transactions.Saga<TState> saga, System.String state, PalDDD.Transactions.ChildSagaStep<TChildState, TInput, TOutput> step)
+  method System.Void WhenChild(PalDDD.Transactions.Saga<TState> saga, System.String state, PalDDD.Transactions.ChildSagaStep<TChildState, TInput, TOutput> step)
+  method System.Void WhenDynamic(PalDDD.Transactions.Saga<TState> saga, System.String state, PalDDD.Transactions.DynamicStep step)
+  method System.Void WhenDynamic(PalDDD.Transactions.Saga<TState> saga, System.String state, PalDDD.Transactions.DynamicStep step)
+  method System.Void WhenFanOut(PalDDD.Transactions.Saga<TState> saga, System.String state, PalDDD.Transactions.FanOutStep<TItem, TResult> step)
+  method System.Void WhenFanOut(PalDDD.Transactions.Saga<TState> saga, System.String state, PalDDD.Transactions.FanOutStep<TItem, TResult> step)
+  method System.Void WhenInterrupt(PalDDD.Transactions.Saga<TState> saga, System.String state, PalDDD.Transactions.InterruptStep step)
+  method System.Void WhenInterrupt(PalDDD.Transactions.Saga<TState> saga, System.String state, PalDDD.Transactions.InterruptStep step)
+class PalDDD.Transactions.SagaProcessorOptions
+  ctor()
+  property System.TimeSpan LeaseDuration
+  property System.String LeaseOwner
+  property System.TimeSpan PollInterval
+  property System.Int32 TimeoutScanBatchSize
+class PalDDD.Transactions.SagaProcessor<TState>
+  ctor(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.SagaProcessorOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.SagaProcessor<TState>> logger, System.Nullable<System.TimeSpan> pollInterval)
+class PalDDD.Transactions.SagaState
+  property System.Nullable<System.DateTimeOffset> CompletedAt
+  property System.DateTimeOffset CreatedAt
+  property System.String CurrentState
+  property System.String Error
+  property System.Nullable<System.DateTimeOffset> ErrorAt
+  property System.Collections.ObjectModel.Collection<System.String> ExecutedStepKeys
+  property System.String InterruptReason
+  property System.String LeasedBy
+  property System.Nullable<System.DateTimeOffset> LeasedUntil
+  property ByteAether.Ulid.Ulid SagaId
+  property PalDDD.Transactions.SagaStatus Status
+  property System.Collections.Generic.Dictionary<System.String, System.DateTimeOffset> StepStartedAt
+  property System.Int32 Version
+enum PalDDD.Transactions.SagaStatus
+struct PalDDD.Transactions.SagaStatusChanged
+  ctor(ByteAether.Ulid.Ulid SagaId, PalDDD.Transactions.SagaStatus OldStatus, PalDDD.Transactions.SagaStatus NewStatus)
+  property PalDDD.Transactions.SagaStatus NewStatus
+  property PalDDD.Transactions.SagaStatus OldStatus
+  property ByteAether.Ulid.Ulid SagaId
+  method System.Void Deconstruct(ByteAether.Ulid.Ulid& SagaId, PalDDD.Transactions.SagaStatus& OldStatus, PalDDD.Transactions.SagaStatus& NewStatus)
+  method System.Boolean Equals(PalDDD.Transactions.SagaStatusChanged other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.Transactions.SagaStep
+  ctor(System.String name, System.Func<PalDDD.Transactions.SagaState, System.Object, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<PalDDD.Transactions.SagaState>> execute, System.Func<PalDDD.Transactions.SagaState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> compensate, System.Nullable<System.TimeSpan> timeout)
+  property System.Func<PalDDD.Transactions.SagaState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> CompensateAsync
+  property PalDDD.Transactions.StepDispatchKind DispatchKind
+  property System.Func<PalDDD.Transactions.SagaState, System.Object, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<PalDDD.Transactions.SagaState>> ExecuteAsync
+  property System.String Name
+  property System.Nullable<System.TimeSpan> Timeout
+struct PalDDD.Transactions.SagaStepCompleted
+  ctor(ByteAether.Ulid.Ulid SagaId, System.String StepKey, System.TimeSpan Duration)
+  property System.TimeSpan Duration
+  property ByteAether.Ulid.Ulid SagaId
+  property System.String StepKey
+  method System.Void Deconstruct(ByteAether.Ulid.Ulid& SagaId, System.String& StepKey, System.TimeSpan& Duration)
+  method System.Boolean Equals(PalDDD.Transactions.SagaStepCompleted other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+struct PalDDD.Transactions.SagaStepFailed
+  ctor(ByteAether.Ulid.Ulid SagaId, System.String StepKey, System.String ErrorMessage)
+  property System.String ErrorMessage
+  property ByteAether.Ulid.Ulid SagaId
+  property System.String StepKey
+  method System.Void Deconstruct(ByteAether.Ulid.Ulid& SagaId, System.String& StepKey, System.String& ErrorMessage)
+  method System.Boolean Equals(PalDDD.Transactions.SagaStepFailed other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+struct PalDDD.Transactions.SagaStepStarted
+  ctor(ByteAether.Ulid.Ulid SagaId, System.String StepKey)
+  property ByteAether.Ulid.Ulid SagaId
+  property System.String StepKey
+  method System.Void Deconstruct(ByteAether.Ulid.Ulid& SagaId, System.String& StepKey)
+  method System.Boolean Equals(PalDDD.Transactions.SagaStepStarted other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.Transactions.SagaTimeoutProcessor<TState>
+  ctor(PalDDD.Transactions.ISagaStateStore<TState> store, PalDDD.Transactions.Saga<TState> orchestrator, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.SagaTimeoutProcessor<TState>> logger, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.SagaProcessorOptions> options, System.TimeProvider timeProvider)
+  method System.Threading.Tasks.ValueTask CheckTimeoutsAsync(System.Threading.CancellationToken ct)
+class PalDDD.Transactions.Saga<TState>
+  property PalDDD.Transactions.CompensationPolicy CompensationPolicy
+  property System.Int32 MaxRetries
+  property PalDDD.Transactions.IRetryBackoffPolicy RetryBackoffPolicy
+  property System.TimeSpan RetryDelay
+  property PalDDD.Transactions.ISagaManager SagaManager
+  method System.Threading.Tasks.ValueTask CompensateAsync(TState state, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<TState> HandleEventAsync(TState current, System.Object event, System.Threading.CancellationToken ct)
+  method System.Boolean IsTimedOut(TState state, System.DateTimeOffset now, System.Collections.Generic.IReadOnlyList`1[[PalDDD.Transactions.SagaStep, PalDDD.Transactions, Version=2.0.0.0, Culture=neutral, PublicKeyToken=null]]& timedOutSteps)
+  method System.Threading.Tasks.ValueTask<TState> ProcessEventAsync(TState current, System.Object event, System.Threading.CancellationToken ct)
+static class PalDDD.Transactions.ServiceCollectionExtensions
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalInbox(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOutbox(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalSaga(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+enum PalDDD.Transactions.StepDispatchKind
+

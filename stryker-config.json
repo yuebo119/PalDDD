@@ -1,0 +1,20 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-net/master/src/stryker/stryker-config.json",
+  "solution-path": "PalDDD.slnx",
+  "project": "PalDDD.Core",
+  "reporters": ["html", "progress", "dashboard"],
+  "thresholds": {
+    "high": 80,
+    "low": 60,
+    "break": 50
+  },
+  "mutate": [
+    "src/**/*.cs",
+    "!**/obj/**",
+    "!**/bin/**",
+    "!**/*.Generated.cs"
+  ],
+  "ignore-methods": ["ToString", "GetHashCode", "Equals"],
+  "concurrency": 4,
+  "coverage-analysis": "perTest"
+}

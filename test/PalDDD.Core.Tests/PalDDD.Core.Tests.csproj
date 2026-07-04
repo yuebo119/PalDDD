@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+<!-- Core 层测试 — 实体/值对象/SmartEnum/源生成器 -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalDDD.Serialization\PalDDD.Serialization.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.CQRS\PalDDD.CQRS.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.DependencyInjection\PalDDD.DependencyInjection.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.EventLog\PalDDD.EventLog.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Idempotency\PalDDD.Idempotency.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Messaging\PalDDD.Messaging.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Projections\PalDDD.Projections.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Projections.EventLog\PalDDD.Projections.EventLog.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Serialization.Evolution\PalDDD.Serialization.Evolution.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
+    <ProjectReference Include="..\PalDDD.Testing\PalDDD.Testing.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Core.SourceGen\PalDDD.Core.SourceGen.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="FsCheck" />
+    <PackageReference Include="TUnit.FsCheck" />
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

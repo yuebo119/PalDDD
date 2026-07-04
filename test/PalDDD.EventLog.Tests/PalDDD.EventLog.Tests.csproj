@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+<!-- EventLog 测试 — 内存/EF Core/位置分配器 -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.EventLog.EFCore\PalDDD.EventLog.EFCore.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.EventLog\PalDDD.EventLog.csproj" />
+    <ProjectReference Include="..\PalDDD.Testing\PalDDD.Testing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.DependencyInjection</RootNamespace>
+    <NoWarn>$(NoWarn);CA1812;IL3058</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\PalDDD.Messaging\PalDDD.Messaging.csproj" />
+    <ProjectReference Include="..\PalDDD.CQRS\PalDDD.CQRS.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ZLogger" />
+    </ItemGroup>
+
+  <ItemGroup><Using Include="PalDDD.CQRS" Alias="CQRS"/><Using Include="PalDDD.Core" Alias="Core"/><Using Include="PalDDD.Messaging" Alias="Message"/></ItemGroup>
+</Project>

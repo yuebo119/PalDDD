@@ -1,0 +1,85 @@
+<Project>
+
+<!-- 中央包管理 — 统一 NuGet 版本（.NET 11 Preview 5） -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- 源码生成器（仅编译时，不传递到用户项目） -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.3.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.3.0" />
+    <!-- 仓储层依赖 (EF Core 11 Preview 5) — 多数据库 Provider -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="11.0.0-preview.5.26302.115" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="11.0.0-preview.5.26302.115" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="11.0.0-preview.5.26302.115" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="11.0.0-preview.5.26302.115" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="11.0.0-preview.5.26302.115" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="11.0.0-preview.5.26302.115" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="11.0.0-preview.5.26302.115" />
+    <PackageVersion Include="Pomelo.EntityFrameworkCore.MySql" Version="11.0.0-preview.5.26302.115" />
+    <!-- DI 扩展依赖 (.NET 11 Preview 5) — 这些包在 net11.0 下自动可用，csproj 中不再显式引用 -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="11.0.0-preview.5.26302.115" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="11.0.0-preview.5.26302.115" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0-preview.5.26302.115" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="11.0.0-preview.5.26302.115" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="11.0.0-preview.5.26302.115" />
+    <!-- ZLogger — 零分配结构化日志（构建于 M.E.Logging 之上） -->
+    <PackageVersion Include="ZLogger" Version="2.5.10" />
+    <!-- ByteAether.Ulid — 时间排序唯一标识符（AOT 兼容 · RFC 9562 合规） -->
+    <PackageVersion Include="ByteAether.Ulid" Version="1.0.0" />
+    <!-- Dapper 适配器 — SQLite / PostgreSQL / MySQL（AOT 兼容） -->
+    <PackageVersion Include="Dapper" Version="2.1.79" />
+    <PackageVersion Include="Dapper.AOT" Version="1.0.52" />
+    <!-- MemoryPack 二进制序列化（AOT 兼容） -->
+    <PackageVersion Include="MemoryPack" Version="1.21.4" />
+    <!-- Dapper.FluentMap 已移除 — 改用 Dapper.DefaultTypeMap.MatchNamesWithUnderscores -->
+    <!-- SqlKata 已移除 — 改用 DapperDbType 枚举分发 SQL 方言，零依赖 -->
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.0.1" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="11.0.0-preview.5.26302.115" />
+    <!-- SQLite 引擎（传递依赖显式固定，确保构建可重现） -->
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+    <PackageVersion Include="SQLitePCLRaw.core" Version="3.0.3" />
+    <PackageVersion Include="Npgsql" Version="10.0.3" />
+    <PackageVersion Include="MySqlConnector" Version="2.6.1" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="11.0.0-preview.5.26302.115" />
+    <!-- 消息代理适配器（可选） -->
+    <PackageVersion Include="RabbitMQ.Client" Version="7.2.1" />
+    <PackageVersion Include="Confluent.Kafka" Version="2.15.0" />
+    <!-- 测试基础设施 — TUnit（源生成器测试框架 · MTP） -->
+    <PackageVersion Include="TUnit" Version="1.58.0" />
+    <PackageVersion Include="coverlet.collector" Version="10.0.1" />
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+    <!-- 属性测试 — FsCheck + TUnit 集成 -->
+    <PackageVersion Include="FsCheck" Version="3.3.3" />
+    <PackageVersion Include="TUnit.FsCheck" Version="1.58.0" />
+    <!-- 快照测试 — Verify + TUnit 集成 -->
+    <PackageVersion Include="Verify.TUnit" Version="31.20.0" />
+    <!-- 集成测试 — Testcontainers -->
+    <PackageVersion Include="Testcontainers.Kafka" Version="4.12.0" />
+    <PackageVersion Include="Testcontainers.RabbitMq" Version="4.12.0" />
+
+    <!-- 传递依赖版本覆盖 — System 包最新版本 -->
+    <PackageVersion Include="System.Collections.Immutable" Version="10.0.9" />
+    <PackageVersion Include="System.Threading.RateLimiting" Version="10.0.9" />
+    <PackageVersion Include="System.Buffers" Version="4.6.1" />
+    <PackageVersion Include="System.Memory" Version="4.6.3" />
+    <PackageVersion Include="System.Numerics.Vectors" Version="4.6.1" />
+    <PackageVersion Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" />
+    <PackageVersion Include="System.Text.Encoding.CodePages" Version="10.0.9" />
+    <PackageVersion Include="System.Threading.Tasks.Extensions" Version="4.6.3" />
+    <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.NETCore.Platforms" Version="7.0.4" />
+    <!-- 传递依赖版本固定 — 覆盖过时的传递依赖 -->
+    <PackageVersion Include="System.Reflection.Metadata" Version="10.0.9" />
+    <PackageVersion Include="System.CodeDom" Version="10.0.9" />
+    <PackageVersion Include="System.Management" Version="10.0.9" />
+    <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
+    <!-- Humanizer.Core 2.8.26→3.0.10 (主版本升级，由 Dapper 后续升级时处理) -->
+    <PackageVersion Include="Humanizer.Core" Version="3.0.10" />
+    <!-- 原生压缩绑定 — LZ4 / ZStandard / OpenZL (Cysharp) -->
+    <PackageVersion Include="NativeCompressions" Version="0.6.1" />
+    <PackageVersion Include="NativeCompressions.OpenZL" Version="0.6.1" />
+  </ItemGroup>
+</Project>

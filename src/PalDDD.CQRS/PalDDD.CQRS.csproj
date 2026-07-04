@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.CQRS</RootNamespace>
+    <NoWarn>$(NoWarn);CS1591;CA1040;CA1068;CA1716;CA1033;CA2007;CA1508</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    </ItemGroup>
+
+  <ItemGroup><InternalsVisibleTo Include="PalDDD.DependencyInjection"/><InternalsVisibleTo Include="PalDDD.CQRS.Tests"/></ItemGroup>
+  <ItemGroup><Using Include="PalDDD.Core" Alias="Core"/></ItemGroup>
+</Project>

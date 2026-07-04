@@ -1,0 +1,5 @@
+﻿{
+  StatusCode: 400,
+  ContentType: application/json; charset=utf-8,
+  Body: {"type":"https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1","title":"Validation Failed","status":400,"errors":[{"property":"Email","message":"Email is required."},{"property":"Age","message":"Age must be \u003E= 18."}]}
+}

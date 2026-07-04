@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.Compression.Native</RootNamespace>
+    <Description>Pal.DDD 压缩抽象层的原生绑定适配器 — 通过 NativeCompressions 提供 LZ4 / ZStandard / OpenZL 压缩支持。依赖原生二进制，不可 AOT。</Description>
+    <NoWarn>$(NoWarn);CA1812;CA1716</NoWarn>
+    <!-- 原生二进制绑定不支持 AOT -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PalDDD.Compression\PalDDD.Compression.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NativeCompressions" />
+    <PackageReference Include="NativeCompressions.OpenZL" />
+  </ItemGroup>
+
+</Project>
