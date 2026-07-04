@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.Dapper</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <Description>Pal.DDD Dapper 持久化适配器（✅ AOT + Dapper.AOT SG 分析器就绪）— 含 Transaction/EventLog/Projection/Repository</Description>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
+    <NoWarn>$(NoWarn);CA1001;CA2007;CA1062;CA2100;CA2000;CA1849;CA2016;CS1591;CS1573;IL3058;DAP005</NoWarn>
+    <!-- Dapper.AOT SG：启用拦截器预览命名空间。
+         当前不全局 [module:DapperAot]——SQLite TEXT 列存储 Guid/DateTimeOffset 依赖运行时 SqlMapper.TypeHandler，
+         Dapper.AOT SG 物化代码不查阅 TypeHandler，全局启用会破坏 SQLite 路径。
+         保留分析器诊断 + InterceptorsPreviewNamespaces，待 Dapper.AOT RowFactory 自定义类型映射成熟后逐方法启用。 -->
+    <InterceptorsPreviewNamespaces>$(InterceptorsPreviewNamespaces);Dapper.AOT</InterceptorsPreviewNamespaces>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" />
+    <PackageReference Include="Dapper.AOT" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="MySqlConnector" />
+    <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\PalDDD.Transactions\PalDDD.Transactions.csproj" />
+    <ProjectReference Include="..\PalDDD.EventLog\PalDDD.EventLog.csproj" />
+    <ProjectReference Include="..\PalDDD.Projections\PalDDD.Projections.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.Messaging</RootNamespace>
+    <NoWarn>$(NoWarn);CS1591;CA1711;CA1716;CA1033;CA2007</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\PalDDD.Serialization\PalDDD.Serialization.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    </ItemGroup>
+
+  <ItemGroup><InternalsVisibleTo Include="PalDDD.DependencyInjection"/><InternalsVisibleTo Include="PalDDD.Messaging.Tests"/></ItemGroup>
+  <ItemGroup><Using Include="PalDDD.Core" Alias="Core"/></ItemGroup>
+</Project>

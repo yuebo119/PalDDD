@@ -1,0 +1,77 @@
+# ─────────────────────────────────────────────────────────────
+# 🎯 Pal.DDD .gitignore — 全面覆盖 .NET + AOT + IDE + CI
+# ─────────────────────────────────────────────────────────────
+
+## ── .NET 构建产物 ──
+bin/
+obj/
+*.nupkg
+*.snupkg
+*.nuget.props
+*.nuget.targets
+**/packages/
+
+## ── Native AOT / 发布产物 ──
+**/publish/
+*.aotprofile
+*.aotdetails
+
+## ── IDE / 编辑器 ──
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.userprefs
+*.csproj.user
+*.DotSettings
+*.DotSettings.user
+*sln.docstates
+~$*
+
+## ── 测试 / 覆盖率 ──
+**/TestResults/
+*.coverage
+*.coveragexml
+*.opencover.xml
+BenchmarkDotNet.Artifacts/
+**/BenchmarkDotNet.Artifacts/
+
+## ── 诊断 / 日志 ──
+*.log
+*.etl
+*.etw
+*.heapsnapshot
+*.diagsession
+*.trace
+**/TraceResults/
+
+## ── OS 元数据 ──
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+*.lnk
+
+## ── AI 工具产物（不入库）──
+.serena/
+.claude/
+.codex/
+.githooks/
+repomix-output.md
+**/repomix-output.md
+tmp/
+/.ai
+/.agents
+.depwire/
+.zcode/
+
+## ── 编辑器临时文件 ──
+*~
+*.swp
+*.swo
+*.bak
+*.tmp
+# Cortex MCP metadata
+.cortex/
+nul

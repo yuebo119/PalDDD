@@ -1,0 +1,88 @@
+<Solution>
+<!-- Pal.DDD — Clean Architecture -->
+
+    <Folder Name="/src/Domain/">
+      <Project Path="src/PalDDD.Analyzers/PalDDD.Analyzers.csproj" />
+      <Project Path="src/PalDDD.Analyzers.CodeFixes/PalDDD.Analyzers.CodeFixes.csproj" />
+      <Project Path="src/PalDDD.Core.SourceGen/PalDDD.Core.SourceGen.csproj" />
+      <Project Path="src/PalDDD.Core/PalDDD.Core.csproj" />
+    </Folder>
+  <Folder Name="/src/" />
+    <Folder Name="/src/App-Abstractions/">
+      <Project Path="src/PalDDD.Serialization/PalDDD.Serialization.csproj" />
+      <Project Path="src/PalDDD.Messaging/PalDDD.Messaging.csproj" />
+      <Project Path="src/PalDDD.Compression/PalDDD.Compression.csproj" />
+      <Project Path="src/PalDDD.Compression.Native/PalDDD.Compression.Native.csproj" />
+    </Folder>
+    <Folder Name="/src/App-Core/">
+      <Project Path="src/PalDDD.CQRS/PalDDD.CQRS.csproj" />
+      <Project Path="src/PalDDD.EventLog/PalDDD.EventLog.csproj" />
+      <Project Path="src/PalDDD.Idempotency/PalDDD.Idempotency.csproj" />
+      <Project Path="src/PalDDD.Projections/PalDDD.Projections.csproj" />
+      <Project Path="src/PalDDD.Transactions/PalDDD.Transactions.csproj" />
+    </Folder>
+    <Folder Name="/src/Infra-Dapper/">
+      <Project Path="src/PalDDD.Dapper/PalDDD.Dapper.csproj" />
+    </Folder>
+    <Folder Name="/src/Infra-Dapper/PostgreSql/">
+      <Project Path="src/PalDDD.Dapper.PostgreSql/PalDDD.Dapper.PostgreSql.csproj" />
+    </Folder>
+    <Folder Name="/src/Infra-Dapper/MySql/">
+      <Project Path="src/PalDDD.Dapper.MySql/PalDDD.Dapper.MySql.csproj" />
+    </Folder>
+    <Folder Name="/src/Infra-Dapper/Sqlite/">
+      <Project Path="src/PalDDD.Dapper.Sqlite/PalDDD.Dapper.Sqlite.csproj" />
+    </Folder>
+    <Folder Name="/src/Infra-EFCore/">
+      <Project Path="src/PalDDD.EventLog.EFCore/PalDDD.EventLog.EFCore.csproj" />
+      <Project Path="src/PalDDD.Idempotency.EFCore/PalDDD.Idempotency.EFCore.csproj" />
+      <Project Path="src/PalDDD.Projections.EFCore/PalDDD.Projections.EFCore.csproj" />
+      <Project Path="src/PalDDD.Repository.EFCore/PalDDD.Repository.EFCore.csproj" />
+      <Project Path="src/PalDDD.Transactions.EFCore/PalDDD.Transactions.EFCore.csproj" />
+    </Folder>
+    <Folder Name="/src/Infra-Serialization/">
+      <Project Path="src/PalDDD.Projections.EventLog/PalDDD.Projections.EventLog.csproj" />
+      <Project Path="src/PalDDD.Serialization.Evolution/PalDDD.Serialization.Evolution.csproj" />
+      <Project Path="src/PalDDD.Serialization.MemoryPack/PalDDD.Serialization.MemoryPack.csproj" />
+    </Folder>
+    <Folder Name="/src/Infra-Messaging/">
+      <Project Path="src/PalDDD.Messaging.Kafka/PalDDD.Messaging.Kafka.csproj" />
+      <Project Path="src/PalDDD.Messaging.RabbitMQ/PalDDD.Messaging.RabbitMQ.csproj" />
+    </Folder>
+    <Folder Name="/src/Hosting/">
+      <Project Path="src/PalDDD.DependencyInjection/PalDDD.DependencyInjection.csproj" />
+      <Project Path="src/PalDDD.Hosting.AspNetCore/PalDDD.Hosting.AspNetCore.csproj" />
+    </Folder>
+
+    <Folder Name="/src/Metapackages/">
+      <Project Path="src/PalDDD.Prompts/PalDDD.Prompts.csproj" />
+    </Folder>
+
+  <Folder Name="/test/">
+    <Project Path="test/PalDDD.Core.Abstractions.Tests/PalDDD.Core.Abstractions.Tests.csproj" />
+    <Project Path="test/PalDDD.Analyzers.Tests/PalDDD.Analyzers.Tests.csproj" />
+    <Project Path="test/PalDDD.Core.Tests/PalDDD.Core.Tests.csproj" />
+    <Project Path="test/PalDDD.CQRS.Tests/PalDDD.CQRS.Tests.csproj" />
+    <Project Path="test/PalDDD.DependencyInjection.Tests/PalDDD.DependencyInjection.Tests.csproj" />
+    <Project Path="test/PalDDD.EventLog.Tests/PalDDD.EventLog.Tests.csproj" />
+    <Project Path="test/PalDDD.Integration.Tests/PalDDD.Integration.Tests.csproj" />
+    <Project Path="test/PalDDD.Hosting.AspNetCore.Tests/PalDDD.Hosting.AspNetCore.Tests.csproj" />
+    <Project Path="test/PalDDD.Messaging.Integration.Tests/PalDDD.Messaging.Integration.Tests.csproj" />
+    <Project Path="test/PalDDD.Messaging.Tests/PalDDD.Messaging.Tests.csproj" />
+    <Project Path="test/PalDDD.Projections.EventLog.Tests/PalDDD.Projections.EventLog.Tests.csproj" />
+    <Project Path="test/PalDDD.Repository.EFCore.Tests/PalDDD.Repository.EFCore.Tests.csproj" />
+    <Project Path="test/PalDDD.Serialization.Tests/PalDDD.Serialization.Tests.csproj" />
+    <Project Path="test/PalDDD.Testing/PalDDD.Testing.csproj" />
+    <Project Path="test/PalDDD.Transactions.Tests/PalDDD.Transactions.Tests.csproj" />
+  </Folder>
+
+  <Folder Name="/bench/">
+    <Project Path="bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj" />
+  </Folder>
+
+  <Folder Name="/samples/">
+    <Project Path="samples/PalDDD.AotSample/PalDDD.AotSample.csproj" />
+    <Project Path="samples/PalDDD.ECommerce/PalDDD.ECommerce.csproj" />
+    <Project Path="samples/PalDDD.MinimalApi/PalDDD.MinimalApi.csproj" />
+  </Folder>
+</Solution>

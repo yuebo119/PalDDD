@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+<!-- 序列化测试 — MessageCatalog/JsonSerializer -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalDDD.Serialization\PalDDD.Serialization.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Serialization.MemoryPack\PalDDD.Serialization.MemoryPack.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MemoryPack" />
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

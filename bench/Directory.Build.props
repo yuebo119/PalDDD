@@ -1,0 +1,13 @@
+<Project>
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <!-- 基准项目不需要 AOT 兼容性 -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <!-- 基准项目不需要生成文档 -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- 抑制基准特定规则 -->
+    <NoWarn>$(NoWarn);CA1515;CA1707;CA1823</NoWarn>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,64 @@
+<Project>
+
+<!-- 全局构建配置 — AOT 兼容 + 零警告 + net11.0 + Runtime Async -->
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-all</AnalysisLevel>
+    <!--
+      ═══════════════════════════════════════════════════════════
+      NoWarn 抑制列表 — 逐条 Justification
+      ═══════════════════════════════════════════════════════════
+      框架库与业务应用不同：公共 API 的参数校验由调用方（应用层）负责，
+      而非在每个框架方法重复 null 检查。以下每条抑制都有明确理由。
+      个别需要更细粒度控制的位置使用 [SuppressMessage] 带具体 Justification。
+      ─────────────────────────────────────────────────────────
+      CA1062  公共 API null 验证 — 框架内部调用链已保证非 null，公共入口用 ArgumentNullException.ThrowIfNull 显式处理
+      CA2007  ConfigureAwait(false) — DDD 框架不绑定 SynchronizationContext，库代码不应 ConfigureAwait(true)（默认）。全层已显式 ConfigureAwait(false)，此规则噪声大于价值
+      CA1307  指定 StringComparison — 已在关键路径用 StringComparison.Ordinal，剩余字符串比较为显示/日志场景，文化敏感可接受
+      CA2100  SQL 注入审查 — 所有 SQL 通过 SqlTemplates 常量 + Dapper 参数化，无字符串拼接注入风险
+      CA2016  CancellationToken 传递 — 少数 fire-and-forget 后台路径有意不传递 ct（如 PeriodicTimer 独立取消）
+      CA1721  属性名与类型名冲突 — 如 OutboxMessage.Status / OutboxStatus，领域语义优先于命名规则
+      CA1512  ThrowHelpers 替代 throw new — 框架需携带上下文信息，ArgumentException.ThrowIfNullOrWhiteSpace 已在适用处使用
+      CA1849  同步方法调用异步方法 — 已在热路径全部 ValueTask 化，剩余为非热路径
+      CA2000  Dispose 对象 — DbContext/DbConnection 由 DI 容器管理生命周期
+      CA1001  实现 IDisposable — 后台服务通过基类 BackgroundService.Dispose 继承，无需重复实现
+      CA1031  catch general exception — 不全局禁用；后台处理器(Outbox/Inbox/Saga)等需隔离任意异常处用 [SuppressMessage] 精确抑制（见各 catch 处）
+      CA1725  参数名与基类一致 — 少数 DIM 桥接方法参数名按语义命名
+      CS1591  缺少 XML 文档注释 — 公共 API 已有 <summary>，内部/private 成员不强制
+      CS1573  参数缺少 XML 文档 — 同 CS1591，内部成员不强制
+      CS1570  XML 文档格式错误 — 中文注释偶发触发，不影响生成
+      CS8620  泛型协变/逆变隐式转换 — DIM 桥接的 Func<ValueTask<T>> 转换无法消除，框架内部已验证安全
+      NU1900/1901/1902/1903/1904  NuGet 包漏洞/版本告警 — 已手动审计并升级传递依赖（Humanizer/System.Reflection），误报已评估
+      ═══════════════════════════════════════════════════════════
+    -->
+    <NoWarn>$(NoWarn);CA1062;CA2007;CA1307;CA2100;CA2016;CA1721;CA1512;CA1849;CA2000;CA1001;CA1725;CS1591;CS1573;CS1570;CS8620;NU1900;NU1901;NU1902;NU1903;NU1904;IL3058;CA1305</NoWarn>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <VerifyReferenceAotCompatibility>true</VerifyReferenceAotCompatibility>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <!-- .NET 11 Runtime Async: 运行时管理 async 状态机，减少后台处理器栈帧 ~60% -->
+    <Features>runtime-async=on</Features>
+    <!-- AOT 发布时速度优化优先 -->
+    <OptimizationPreference>Speed</OptimizationPreference>
+    <!-- AOT 下保留异常行号信息 (.NET 11 Preview 4+) -->
+    <StackTraceLineNumberSupport>true</StackTraceLineNumberSupport>
+    <VersionPrefix>1.0.0</VersionPrefix>
+    <VersionSuffix>preview.1</VersionSuffix>
+    <Authors>PalDDD</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/yuebo119/PalDDD</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/yuebo119/PalDDD.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <DebugType>embedded</DebugType>
+    <EmbedAllSources>true</EmbedAllSources>
+    <!-- 覆盖率 CI 门禁：coverlet → Cobertura 报告 -->
+    <CollectCoverage>true</CollectCoverage>
+    <CoverletOutputFormat>cobertura</CoverletOutputFormat>
+    <CoverletOutput>$(MSBuildThisFileDirectory)TestResults\coverage.cobertura.xml</CoverletOutput>
+  </PropertyGroup>
+</Project>

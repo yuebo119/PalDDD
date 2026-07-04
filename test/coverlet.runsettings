@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <!-- ═══════════════════════════════════════════════════════════════
+       覆盖率收集配置 — coverlet XPlat Code Coverage
+       ═══════════════════════════════════════════════════════════════
+       用法：dotnet test --collect:"XPlat Code Coverage" --settings coverlet.runsettings
+       阈值建议（CI 门禁）：
+         领域层（PalDDD.Core）≥ 90%
+         应用层（CQRS/Transactions/EventLog/Idempotency/Projections）≥ 85%
+         基础设施层（EFCore/Dapper 适配器）≥ 70%
+       ═══════════════════════════════════════════════════════════════ -->
+  <DataCollectionRunSettings>
+    <Collectors>
+      <XPlatCodeCoverage>
+        <Format>cobertura,opencover</Format>
+        <Exclude>[*.Tests]*,[*.Testing]*,[*.Benchmarks]*,[*.Sample]*,[*.Analyzers]*,[*.SourceGen]*</Exclude>
+        <ExcludeByFile>**/*.Generated.cs,**/obj/**,**/bin/**</ExcludeByFile>
+        <ExcludeByAttribute>Obsolete,GeneratedCodeAttribute,CompilerGeneratedAttribute</ExcludeByAttribute>
+        <SkipAutoProps>true</SkipAutoProps>
+      </XPlatCodeCoverage>
+    </Collectors>
+  </DataCollectionRunSettings>
+</RunSettings>

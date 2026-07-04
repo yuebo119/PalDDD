@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.Transactions</RootNamespace>
+    <NoWarn>$(NoWarn);CS1591;CA2007</NoWarn>
+    <!-- Saga 子系统使用 MakeGenericType/Activator.CreateInstance 进行非泛型调度，
+         已通过 [RequiresDynamicCode]/[RequiresUnreferencedCode] 精确标注反射路径。
+         显式声明不兼容 AOT 以与同等反射使用项目保持一致。 -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\PalDDD.Messaging\PalDDD.Messaging.csproj" />
+    <ProjectReference Include="..\PalDDD.Serialization\PalDDD.Serialization.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PalDDD.Transactions.Tests" />
+  </ItemGroup>
+
+  <ItemGroup><Using Include="PalDDD.Core" Alias="Core"/><Using Include="PalDDD.Messaging" Alias="Messaging"/><Using Include="PalDDD.Serialization" Alias="Serialization"/></ItemGroup>
+</Project>

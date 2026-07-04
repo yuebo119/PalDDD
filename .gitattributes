@@ -1,0 +1,16 @@
+# 默认所有文本文件自动规范化行尾符（签入为 CRLF，Windows 标准）
+* text=auto eol=crlf
+
+# 明确二进制文件，不做行尾符转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.snupkg binary
+*.nupkg binary
+*.dll binary
+*.exe binary
+*.pdb binary

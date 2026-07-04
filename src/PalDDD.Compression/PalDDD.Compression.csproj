@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.Compression</RootNamespace>
+    <Description>Pal.DDD 统一压缩抽象层 — ICompressor / ICompressionProvider / CompressionAlgorithm。提供 Brotli / GZip / Deflate 的 System.IO.Compression 适配器，AOT 安全。</Description>
+    <NoWarn>$(NoWarn);CA1812;CA1716</NoWarn>
+  </PropertyGroup>
+
+</Project>

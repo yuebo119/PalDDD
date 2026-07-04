@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+<!-- 仓储测试 — UnitOfWork/拦截器 -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Messaging\PalDDD.Messaging.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Repository.EFCore\PalDDD.Repository.EFCore.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

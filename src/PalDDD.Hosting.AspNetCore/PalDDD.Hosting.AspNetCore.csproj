@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.Hosting.AspNetCore</RootNamespace>
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
+    <NoWarn>$(NoWarn);CS1591;CA1812;CA2007</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\PalDDD.CQRS\PalDDD.CQRS.csproj" />
+    <ProjectReference Include="..\PalDDD.Messaging\PalDDD.Messaging.csproj" />
+    <ProjectReference Include="..\PalDDD.Transactions\PalDDD.Transactions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup><InternalsVisibleTo Include="PalDDD.Hosting.AspNetCore.Tests"/></ItemGroup>
+  <ItemGroup><Using Include="PalDDD.Core" Alias="Core"/><Using Include="PalDDD.CQRS" Alias="CQRS"/><Using Include="PalDDD.Core.Diagnostics" Alias="Diagnostics"/><Using Include="PalDDD.Messaging" Alias="Message"/><Using Include="PalDDD.Transactions" Alias="Transactions"/></ItemGroup>
+</Project>

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);CA1034;CA1822;CA2007</NoWarn>
+    <RunAnalyzersDuringBuild>false</RunAnalyzersDuringBuild>
+    <!-- Benchmarks 不需要 AOT -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.CQRS\PalDDD.CQRS.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Serialization\PalDDD.Serialization.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Messaging\PalDDD.Messaging.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.EventLog\PalDDD.EventLog.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Dapper\PalDDD.Dapper.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Dapper.PostgreSql\PalDDD.Dapper.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Dapper.Sqlite\PalDDD.Dapper.Sqlite.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+  </ItemGroup>
+
+</Project>

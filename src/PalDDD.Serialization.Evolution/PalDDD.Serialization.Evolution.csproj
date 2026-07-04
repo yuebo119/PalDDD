@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.Serialization.Evolution</RootNamespace>
+    <NoWarn>$(NoWarn);CS1591;CA2007</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PalDDD.Serialization\PalDDD.Serialization.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    </ItemGroup>
+
+</Project>

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.Projections</RootNamespace>
+    <NoWarn>$(NoWarn);CS1591;CA2007</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
+  </ItemGroup>
+
+</Project>

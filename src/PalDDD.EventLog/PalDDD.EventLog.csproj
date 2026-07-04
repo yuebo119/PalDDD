@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup><InternalsVisibleTo Include="PalDDD.EventLog.EFCore"/><InternalsVisibleTo Include="PalDDD.Dapper"/></ItemGroup>
+</Project>

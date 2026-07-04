@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+<!-- 集成测试桶 — EF Core 适配器/Dapper Store/Idempotency/Projections/Evolution 端到端验证 -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Idempotency.EFCore\PalDDD.Idempotency.EFCore.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Idempotency\PalDDD.Idempotency.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Projections.EFCore\PalDDD.Projections.EFCore.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Projections\PalDDD.Projections.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Serialization\PalDDD.Serialization.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Serialization.Evolution\PalDDD.Serialization.Evolution.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Transactions.EFCore\PalDDD.Transactions.EFCore.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Dapper\PalDDD.Dapper.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Dapper.PostgreSql\PalDDD.Dapper.PostgreSql.csproj" />
+    <ProjectReference Include="..\PalDDD.Testing\PalDDD.Testing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

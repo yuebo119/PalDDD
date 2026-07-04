@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+<!-- DI 测试 — 服务注册/架构边界 -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalDDD.DependencyInjection\PalDDD.DependencyInjection.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Serialization\PalDDD.Serialization.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+
+</Project>

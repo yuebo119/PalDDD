@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.Serialization</RootNamespace>
+    <Description>Pal.DDD 序列化抽象包 — IMessageSerializer / MessageDescriptor / IMessageCatalog / ContentTypes。零基础设施依赖，AOT 安全。</Description>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+</Project>

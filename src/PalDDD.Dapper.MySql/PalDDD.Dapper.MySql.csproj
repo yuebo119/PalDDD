@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.Dapper.MySql</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <Description>Pal.DDD MySQL 增强扩展包（✅ AOT）</Description>
+    <NoWarn>$(NoWarn);IL3058</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MySqlConnector" />
+    <ProjectReference Include="..\PalDDD.Dapper\PalDDD.Dapper.csproj" />
+  </ItemGroup>
+
+</Project>
