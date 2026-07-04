@@ -31,6 +31,7 @@ obj/
 
 ## ── 测试 / 覆盖率 ──
 **/TestResults/
+test-results/
 *.coverage
 *.coveragexml
 *.opencover.xml
@@ -75,3 +76,5 @@ tmp/
 # Cortex MCP metadata
 .cortex/
 nul
+test-file.txt
+stryker-config.json
