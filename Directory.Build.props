@@ -49,7 +49,7 @@
     <VersionPrefix>1.0.0</VersionPrefix>
     <VersionSuffix>preview.1</VersionSuffix>
     <Authors>PalDDD</Authors>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/yuebo119/PalDDD</PackageProjectUrl>
     <RepositoryUrl>https://github.com/yuebo119/PalDDD.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
