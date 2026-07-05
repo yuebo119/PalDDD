@@ -18,19 +18,30 @@ Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox
 
 ---
 
-## 设计原则
+## 核心价值
 
-### 拒绝过度抽象
+### DDD 战术模式完整落地
+
+Entity / AggregateRoot / DomainEvent / ValueObject / SmartEnum / Specification / Saga / EventLog / Projection 全覆盖，且无过度抽象——不做 `IRepository<T>`、不定义 `IIntegrationEvent`、不实施装配扫描。
 
 DbContext *是* 工作单元+仓储。DomainEvent *是* 集成事件。`AddPalCommandHandler<T>` 替代装配扫描。框架不应发明概念来包装已有概念——它应该消除重复，而非增加间接层。
 
 ### AOT 作为一等公民
 
-`IsAotCompatible=true` 在核心层和 Dapper 适配层强制执行。源码生成器处理类型发现，FrozenDictionary 替代字典查找，DIM 桥接消除 MakeGenericType 反射路径。非 AOT 安全的第三方依赖（EF Core、Kafka、RabbitMQ）被隔离在显式声明 `IsAotCompatible=false` 的适配器项目中。AOT 不是附加功能——它是启动延迟、内存占用和部署安全性的架构决策。
+DIM 桥接消除反射、源码生成器注册类型、FrozenDictionary 替代字典查找、非 AOT 项目三属性（`IsAotCompatible` / `IsTrimmable` / `VerifyReferenceAotCompatibility`）透明化。
+
+`IsAotCompatible=true` 在核心层和 Dapper 适配层强制执行。非 AOT 安全的第三方依赖（EF Core、Kafka、RabbitMQ）被隔离在显式声明 `IsAotCompatible=false` 的适配器项目中。AOT 不是附加功能——它是启动延迟、内存占用和部署安全性的架构决策。
+
+### 性能契约工程化
+
+- **零分配快速路径**：`ValueTask` + `IsCompletedSuccessfully` 同步完成零堆分配
+- **零闭包管道**：`PipelineStateMachine` 替代闭包链，每次请求仅 ~40B
+- **零拷贝读取**：`RehydrateFromBytes` 引用赋值消除 2 次 `ToArray`
+- **ref struct 枚举器**：`DomainEventEnumerable` 单链表 O(1) 追加，foreach 零分配
 
 ### 架构约束编译时执行
 
-15 条 Roslyn 分析器规则在编译阶段检查领域模型的合规性。DomainEvent 未声明 sealed → 编译错误。ProcessManager 缺少 `[BoundedContext]` → 编译错误。消息契约命名不符合 lowercase-kebab 规范 → 编译警告。约束不依赖文档纪律或 Code Review 记忆——编译器替代了这两者。
+15 条 Roslyn 分析器规则（PDDD001-015）在编译阶段检查领域模型的合规性。DomainEvent 未声明 sealed → 编译错误。ProcessManager 缺少 `[BoundedContext]` → 编译错误。消息契约命名不符合 lowercase-kebab 规范 → 编译警告。约束不依赖文档纪律或 Code Review 记忆——编译器替代了这两者。
 
 ---
 
