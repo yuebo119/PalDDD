@@ -255,6 +255,51 @@
 | 149 | **场景**: MySQL→`INSERT IGNORE`→重复键→静默跳过→无错误。**问题**: 开发者以为 1000 行全插入→实际只有 500→其他 500 被静默丢弃。**后果**: 数据丢失→不知道 | INSERT IGNORE=静默数据丢失 | W2 SaveAsync→先查→决定 Insert/Update→不静默 | 重复键→确认异常抛出 |
 | 150 | **场景**: 数据库 failover→主库切换→新主库 IP→ORM 连接缓存旧 IP。**问题**: DNS TTL→连接池缓存旧 IP→failover 后连旧主(现在是只读)→写失败。**后果**: 故障切换后写操作全失败→手动重启应用 | 连接池缓存 IP=故障切换障碍 | A9 WithRetry→检测写失败→刷新连接池→自动切换到新主 | failover 模拟测试 |
 
+## Phase 11: 网络 & 基础设施陷阱 (10 条)
+
+| # | 场景·问题·后果 | 必要性 | V8 对应设计 | 验证逻辑 |
+|---|------|------|------|------|
+| 151 | **场景**: 云环境→DB 在 VPC→应用在公网→NAT 网关。**问题**: NAT 超时→空闲连接被中断→ORM 不知→下次查询失败。**后果**: 间歇性连接失败→重试→部分成功 | NAT 超时=云环境第一杀手 | A9 WithRetry + A10 WithTimeout + TCP keepalive→保持连接活跃 | NAT 环境→长空闲后查询 |
+| 152 | **场景**: 数据库前面加了 PgBouncer→事务池模式。**问题**: ORM 使用 `SET` 语句→PgBouncer 不支持事务池内 `SET`→连接被丢弃。**后果**: 连接不断被重置→无限重连 | 连接池代理=ORM 盲区 | A14 WithPool→检测 PgBouncer→自动切换到 session 池模式 | PgBouncer 下测试 |
+| 153 | **场景**: 数据库迁移→云 DB→本地延迟 1ms→云 30ms。**问题**: ORM 连接池大小不变→但每条查询延迟 30x→池耗尽→排队→超时。**后果**: 10ms→300ms→雪崩 | 延迟突增=池容量不足 | A14 WithPool→可动态调整→监控驱动 | 延迟注入测试 |
+| 154 | **场景**: TLS 连接→证书过期→重新协商。**问题**: ORM 连接池使用旧 TLS 会话→证书过期后连接被拒绝。**后果**: 全部连接失败→应用完全不可用 | 证书过期=全站停机 | ADO.NET Provider→自动处理证书刷新 | 证书过期后重连测试 |
+| 155 | **场景**: 数据库服务重启→ORM 连接池全断。**问题**: 100 个连接同时断→ORM 立即尝试重建→瞬时 100 新连接打爆 DB。**后果**: 连接风暴→DB 再次不堪重负 | 连接风暴=二次故障 | A11 WithCircuitBreaker→half-open 逐渐恢复→错峰重连 | 故障恢复→连接斜率测试 |
+| 156 | **场景**: IPv6 环境→连接串用 IPv4→DNS 返回 IPv6 地址→连接失败。**问题**: ORM 连接串 `host=db.local`→DNS 返回 AAAA(IPv6)→IPv4 only→失败。**后果**: 迁移到 IPv6 后→应用无法启动 | IPv6=未来兼容性 | ADO.NET Provider→IPv6 自动适配 | IPv6 环境测试 |
+| 157 | **场景**: Docker 容器→ORM→localhost→指向容器内而非宿主机。**问题**: 开发环境→DB 在宿主机→容器内 `localhost`=容器自身→连不上 DB。**后果**: 新开发者环境→"connection refused"→困惑 | Docker 网络=开发体验障碍 | DbOptions→`host.docker.internal` 自动检测容器 | Docker 环境连接测试 |
+| 158 | **场景**: 云数据库→连接数限制(t2.micro=40)。**问题**: ORM 连接池 max=100→超过 DB 限制→新连接被 DB 拒绝。**后果**: "too many connections"→其他连接也被拒绝 | 池大于 DB 限制=致命配置 | A14 WithPool→必须 ≤ DB 端限制→启动时检查 | 连接数验证 |
+| 159 | **场景**: 跨区域部署→应用 us-east→DB eu-west。**问题**: 跨洋延迟 150ms→ORM 每条查询 150ms→N+1→10 次查询→1.5 秒。**后果**: 页面加载超时→用户流失 | 跨区域延迟=N+1 放大器 | A8 ForRead→就近读副本。页面需要 N 次查询→合并为 JOIN | 跨区域延迟测试 |
+| 160 | **场景**: 负载均衡器→TCP 连接→idle timeout=60s。**问题**: 连接 60s 无活动→LB 断开→ORM 不知→下次查询→connection reset。**后果**: 间歇性失败→难以复现 | LB timeout=隐式连接断开 | A9 WithRetry + TCP keepalive<60s | LB 环境下长空闲测试 |
+
+## Phase 12: Schema 演化型陷阱 (10 条)
+
+| # | 场景·问题·后果 | 必要性 | V8 对应设计 | 验证逻辑 |
+|---|------|------|------|------|
+| 161 | **场景**: 表加 NOT NULL 列→无 DEFAULT→现有行。**问题**: `ALTER TABLE ADD col NOT NULL`→现有行该列=null→迁移失败。**后果**: 部署中止→回滚 | ALTER+DEFAULT 两步走=标准但易忘 | M6 DiffAsync→检测 NOT NULL+DEFAULT 缺失→生成两步迁移 | 迁移脚本生成验证 |
+| 162 | **场景**: 列改名→`name`→`full_name`→Django 误判。**问题**: Django 自动检测→"name 消失了"+"full_name 出现了"→DROP+ADD→数据丢失。**后果**: 名字列全空→用户投诉 | 列改名误判=自动化迁移的经典 bug | V7 编译时列名验证→改名=需要显式告知→不依赖启发式检测 | 列改名→不产生 DROP |
+| 163 | **场景**: 索引改名→旧索引→新索引。**问题**: ORM 不知道"旧索引对应新索引"→DROP 旧→CREATE 新→中间无索引→查询全表扫描。**后果**: 迁移期间查询暴涨→超时 | 索引改名无原子性=性能坑 | M6 DiffAsync→检测同列索引变更→CREATE 新→DROP 旧→原子 | 索引迁移→无缺失窗口 |
+| 164 | **场景**: 表分区→`orders_202601`→`orders_202602`。**问题**: ORM 只知道基表`orders`→分区子表无映射→INSERT 路由错误。**后果**: INSERT 到错误分区→查询不到刚插入的数据 | 分区表=ORM 盲区 | M1→支持分区表→源生成 `CREATE TABLE ... PARTITION BY` | 分区表 INSERT→正确路由 |
+| 165 | **场景**: PG 序列→手动重置→`ALTER SEQUENCE RESTART`。**问题**: 重置后→ORM 不知道→下次 INSERT→ID 冲突→UNIQUE 约束违反。**后果**: INSERT 失败→数据丢失 | 序列不同步=数据黑洞 | M4 ValidateSchemaAsync→检查序列值与 MAX(id) 一致性 | 序列检验 |
+| 166 | **场景**: GORM AutoMigrate→`gorm:"default:active"`。**问题**: 标签设默认值 "active"→但 AutoMigrate 不生成 DEFAULT 约束→仅在 ORM 层生效→直接 SQL 插入→NULL。**后果**: 部分记录 status=NULL→业务逻辑全错 | ORM 默认值≠DB 默认值=行为不一致 | BA11 [DefaultValue]→源生成→双重生成：ORM 层+DB DDL→保证一致 | DDL 中验证 DEFAULT |
+| 167 | **场景**: MySQL→`ALTER TABLE ... ALGORITHM=INPLACE`→大表。**问题**: 默认 ALGORITHM=COPY→锁表→写入阻塞。**后果**: 5 分钟锁表→用户提交失败→投诉 | DDL 锁表=生产阻塞 | M6 DiffAsync→检测大表 ALTER→建议 `ALGORITHM=INPLACE` | 大表 DDL→检查无锁 |
+| 168 | **场景**: `DROP COLUMN`→遗留代码引用。**问题**: 删列→旧版本代码仍在运行→SELECT col→"column does not exist"。**后果**: 滚动更新时→旧 pod 崩溃 | 删列=需确认无引用 | V7 列名编译时验证→编译报错→提示列已不存在 | 列引用=编译时检查 |
+| 169 | **场景**: 视图依赖的表→删列→视图失效。**问题**: DROP COLUMN→关联视图未重建→查询视图→"column does not exist"。**后果**: 视图查询全部失败 | 视图依赖=级联失效 | M6 DiffAsync→检测视图依赖→输出级联影响 | 视图依赖检查 |
+| 170 | **场景**: 迁移脚本异常→中途失败→数据库部分更新。**问题**: 迁移执行一半→第 3 条 SQL 失败→前 2 条已执行→无法回滚。**后果**: 数据库处于"半迁移"状态→后续迁移无法继续 | 迁移中途失败=数据库状态污染 | M1 幂等→每条迁移检查是否已执行→已执行跳过→未执行继续 | 中途失败后重试→幂等 |
+
+## Phase 13: 性能退化模式 (10 条)
+
+| # | 场景·问题·后果 | 必要性 | V8 对应设计 | 验证逻辑 |
+|---|------|------|------|------|
+| 171 | **场景**: 参数嗅探→第一个请求→`status='active'(90%数据)`→缓存计划→第二个请求→`status='banned'(0.1%)`→用第一个计划→全表扫描。**后果**: 第二个请求从 1ms→5000ms | 参数嗅探=查询计划退化 | P1 AsPrepared→缓存首次计划→后续可选不缓存→用户控制 | 参数嗅探→不同参数值→测试计划一致性 |
+| 172 | **场景**: ORM 查询→`ORDER BY a,b`→但索引是 `(b,a)`→filesort。**问题**: 复合索引列顺序不匹配→SQL 优化器抛弃索引→手动排序。**后果**: 排序在磁盘→100ms→20ms | 索引匹配=ORDER BY 顺序关键 | QB13-14 OrderBy+ThenBy→编译时匹配复合索引→列顺序不对→编译警告 | 执行计划→验证索引使用 |
+| 173 | **场景**: `WHERE status IN ('active','pending','done')`→无多列索引。**问题**: IN 条件→优化器选 bitmap scan→多页随机读。**后果**: 索引效率下降→100ms | IN 条件=隐式性能陷阱 | 源生成器→检测 IN 子句→分析索引覆盖→警告 | 执行计划→index scan vs bitmap scan |
+| 174 | **场景**: `SELECT COUNT(*) FROM huge_table`→无 WHERE。**问题**: COUNT✦全表扫描→PG 需要遍历所有行。**后果**: 1 亿行→30 秒→超时 | COUNT✦全表=慢查询之王 | AG1 CountAsync→检测无 WHERE→Dev 模式警告 | 无 WHERE COUNT→Dev 警告 |
+| 175 | **场景**: `OFFSET 99980 LIMIT 20`→第 5000 页。**问题**: DB 扫描前 99980 行→丢弃→返回 20 行→极慢。**后果**: 900ms→用户感知 | OFFSET 大页码=分页陷阱 | QB5 ToPageAsync→默认 Keyset 分页→WHERE (created_at,id)<(@last) | Keyset 分页→大页码测试 |
+| 176 | **场景**: `WHERE UPPER(name) = 'JOHN'`→name 列有索引→但 UPPER 包裹→索引失效。**问题**: 函数包裹列→索引不可用→全表扫描。**后果**: 5000ms→5ms | 函数=索引杀手 | AN1 [Computed("UPPER(name)")]→源生成函数索引→不失效 | 执行计划→验证函数索引 |
+| 177 | **场景**: ORM `WHERE a OR b OR c`→三个条件。**问题**: OR 条件→优化器无法使用单一索引→bitmap scan OR→三次扫描。**后果**: 索引分散→300ms | 多 OR 条件=索引分散 | 源生成器→检测 OR 数>2→建议改写 UNION ALL | 执行计划→OR vs UNION ALL |
+| 178 | **场景**: ORM 连接池→max=100→但 1000 并发→排队。**问题**: 等待连接→timeout→抛异常→请求失败。**后果**: P99 延迟=等待+查询→502 | 池<并发→必然排队 | A14 WithPool→可配置+监控→自动调整 | 压力测试→1000 并发→池 wait time < 10ms |
+| 179 | **场景**: ORM 查询→JOIN 5 表→返回 1000 列→结果集 50MB。**问题**: 应用端→ToList()→50MB 内存→GC→STW 500ms。**后果**: P99 延迟抖动→用户体验差 | 大结果集=GC 杀手 | ST1 IAsyncEnumerable→流式处理→恒定内存 | 大结果集→内存监控 |
+| 180 | **场景**: PostgreSQL→`autovacuum` 未清理→死元组 50%。**问题**: ORM 批量 UPDATE→死元组→表膨胀→查询变慢→逐步恶化。**后果**: 连续数月→性能从 50ms→2000ms | 死元组积累=渐进退化 | A5 WithMetrics→监控表膨胀→告警 | 监控死元组比例 |
+
 ---
 
 ## 统计
@@ -271,7 +316,10 @@
 | Phase 8 MySQL 专有 | 10 | MySQL 特有陷阱 |
 | Phase 9 SQLite 专有 | 10 | SQLite 特有陷阱 |
 | Phase 10 生产事故 | 15 | 实际生产灾难模式 |
+| Phase 11 网络&基础设施 | 10 | 云/NAT/Docker/LB 陷阱 |
+| Phase 12 Schema 演化 | 10 | 列变更/分区/视图/序列 |
+| Phase 13 性能退化 | 10 | 参数嗅探/索引/分页/死元组 |
 | Phase 架构避开 | 10 | 从架构层面消除 |
-| **合计** | **150** | — |
+| **合计** | **180** | — |
 
-**150 条精选——每条包含实例化场景描述、量化必要性论证、V8 具体设计映射和可执行验证方法。覆盖全语言 25+ ORM、8 种数据库、4 个 CVE、2000 项原始踩坑记录的精华。**
+**180 条精选——每条包含实例化场景描述、量化必要性论证、V8 具体设计映射和可执行验证方法。覆盖全语言 25+ ORM、8 种数据库、5 个 CVE、2000 项原始踩坑记录的精华。**

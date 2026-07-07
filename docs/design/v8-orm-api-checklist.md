@@ -19,6 +19,8 @@
 | BA9 | `[Column(Precision=10, Scale=2)]` | EF Core Precision | decimal 精度。金融计算→精度丢失→金额错误 | P0 |
 | BA10 | `[Required]` | EF Core Required | NOT NULL 约束→源生成 DDL 含 NOT NULL | P0 |
 | BA11 | `[DefaultValue("NOW()")]` | EF Core DefaultValueSql | Insert 时 DB 自动填值→不覆盖 | P0 |
+| BA12 | `[Timestamp]` / `[RowVersion]` | EF Core IsRowVersion | DB 自动递增的并发令牌→UPDATE 自动更新→防并发覆盖。与 BA6 不同：Timestamp 由 DB 管理，BA6 由应用管理 | P0 |
+| BA13 | `[Column(TypeName = "varchar")]` | EF Core ColumnTypeName | 强制覆盖 DB 列类型。PG `inet`→`[Column(TypeName="inet")]`→精确控制 DDL | P1 |
 
 ### 设计阶段 — Schema & 迁移
 
@@ -128,6 +130,7 @@
 | T3 | `WithTransaction(tran).From<T>()` | Dapper 事务扩展 | 事务内链式操作 | P0 |
 | T4 | `WithTransaction(tran).BulkInsertAsync<T>(items)` | 批量事务包裹 | 批量操作不在事务内→部分成功 | P0 |
 | T5 | `db.WithIsolationLevel(IsolationLevel.Serializable)` | ADO.NET IsolationLevel, 全语言 | 高并发扣库存→需要 Serializable→防幻读。ORM 不控制=依赖 DB 默认→Read Committed→数据不一致 | P0 |
+| T6 | `tran.SaveAsync("sp_name")` / `tran.RollbackToAsync("sp_name")` | EF Core Savepoints, ADO.NET | 嵌套事务→部分回滚。批量操作→第 500 条失败→回滚到 savepoint→前 499 保留。无此→全部回滚 | P1 |
 
 ### 开发阶段 — 关联加载 / 多租户 / 语句准备
 
@@ -153,6 +156,7 @@
 | A8 | `ForRead()` / `ForWrite()` | GORM DBResolver | 读写分离→写操作误发只读副本→读旧数据→业务逻辑错误 | P0 |
 | A9 | `db.WithRetry(int maxRetries, Func<int,TimeSpan> backoff)` | EF Core EnableRetryOnFailure | DB 瞬时故障→无重试→请求失败→用户看到错误。默认 3 次退避重试 | P0 |
 | A10 | `db.WithTimeout(TimeSpan timeout)` | ADO.NET CommandTimeout | 慢查询→占住连接 30 秒→连接池耗尽→其他请求等待→雪崩 | P0 |
+| A25 | `builder.WithCommandTimeout(int seconds)` | Dapper CommandDefinition, EF Core | 单次查询超时——与 A10 全局超时互补。报表查询→需要 120s→其他查询 5s | P1 |
 | A11 | `db.WithCircuitBreaker(int failures, TimeSpan resetAfter)` | Polly CircuitBreaker | DB 故障→一直重试→线程池耗尽→雪崩。熔断后快速失败→保护上游 | P0 |
 | A12 | `builder.Tag("name")` / `TagWithCaller()` | EF Core TagWith | 生产慢查询日志 → `SELECT /* GetOrders */ ...` → 一眼定位调用者。无→排查 30 分钟 | P0 |
 | A14 | `DbOptions.WithPool(size, idle, lifetime)` | Bun Go | 连接池不配置→默认 max=100→1000 并发→503 | P0 |
@@ -220,10 +224,10 @@
 
 | 优先级 | 数量 | 说明 |
 |:--:|:--:|------|
-| P0 | 73 | 核心 ORM 功能——缺之不成 ORM |
-| P1 | 24 | 重要增值——显著提升开发效率/安全性 |
+| P0 | 74 | 核心 ORM 功能——缺之不成 ORM |
+| P1 | 27 | 重要增值——显著提升开发效率/安全性 |
 | P2 | 2 | 边缘场景——少数场景需要 |
-| 注解 | 15 | 基础注解(11) + 高级注解(4)——编译时映射驱动 |
+| 注解 | 16 | 基础注解(13) + 高级注解(3)——编译时映射驱动 |
 | 机制 | 4 | 开发者安全(2) + 测试Fixture(2) |
 
-**总计 118 项特性。每一项有全语言对标 ORM 来源，无一凭空设计。**
+**总计 123 项特性。每一项有全语言对标 ORM 来源，无一凭空设计。**
