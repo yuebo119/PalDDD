@@ -365,6 +365,26 @@
 | 229 | **场景**: ORM→多副本→每副本独立连接池→各自监控→合并指标。**问题**: 副本 A OK→副本 B 耗尽→整体指标还 OK→看不到局部问题。**后果**: 局部故障→扩散→才发现 | 聚合掩盖局部=盲区 | A4 WithMetrics→per-instance labels→Prometheus 可区分 | 每副本独立指标 |
 | 230 | **场景**: 慢查询→EXPLAIN→使用 seq scan→应走 index scan→应用不知。**问题**: 查询计划退化→应用无感知→持续慢。**后果**: 用户投诉→才发现查询计划变了 | 查询计划漂移=性能退化 | A13 DryRun→定期抽样→EXPLAIN→对比基线→偏差→告警 | 计划对比→告警 |
 
+## Phase 17: Async & Task 陷阱 (15 条)
+
+| # | 场景·问题·后果 | 必要性 | V8 对应设计 | 验证逻辑 |
+|---|------|------|------|------|
+| 231 | **场景**: `async Task Foo()`→ORM `QueryAsync()`→忘记 `await`。**问题**: 编译器不报错→返回 `Task<List<T>>` 而非 `List<T>`→后续代码用 `.Count`→编译通过→运行时 NullRef。**后果**: 生产崩溃→排查 1 小时→发现忘 await | 忘 await=最隐蔽的 async bug | 所有 API 返回 `ValueTask<T>`→未 await→编译器警告 CS4014→TreatWarningsAsErrors | 编译时拦截 |
+| 232 | **场景**: ASP.NET→`async` action→ORM `QueryAsync()`→不 `ConfigureAwait(false)`。**问题**: 同步上下文捕获→UI 线程阻塞→请求排队。**后果**: 高并发→线程池饥饿→全站慢 | 丢失 ConfigureAwait=ASP.NET 经典坑 | DataSession→库代码→默认 `.ConfigureAwait(false)`→无同步上下文依赖 | 测试中验证无 SynchronizationContext |
+| 233 | **场景**: `Task.WhenAll`→并发 100 查询→同一连接→"connection already in state Executing"。**问题**: Dapper #919—同一连接不能并发执行→抛异常。**后果**: 并发查询失败→回退串行→慢 100x | 连接并发限制=async 瓶颈 | DataSession→每次 `using new`→独立连接→并发安全 | 并发 100 查询→验证通过 |
+| 234 | **场景**: ORM 查询→`CancellationToken`→超时→不传→永远不取消。**问题**: 调用方传了 CancellationToken→ORM 不尊重→请求已超时→查询仍执行→浪费资源。**后果**: 超时无效→连接池耗尽 | CancellationToken 链路断裂=资源泄漏 | 所有 API 统一 `CancellationToken` 参数→全链路传递 | 超时→查询取消 |
+| 235 | **场景**: `IAsyncEnumerable<T>`→`await foreach`→中途抛异常→未释放连接。**问题**: 流式查询→异常→`DisposeAsync` 不调用→连接泄漏。**后果**: 连接池满→新请求失败 | IAsyncEnumerable 异常=连接泄漏 | ST1→`IAsyncEnumerable<T>` 实现 `IAsyncDisposable`→finally 释放连接 | 异常→连接释放 |
+| 236 | **场景**: `ValueTask`→重复 await→"Already consumed"。**问题**: ORM 返回 `ValueTask<T>`→调用方 `await` 两次→`InvalidOperationException`。**后果**: 运行时崩溃 | ValueTask 重复 await=陷阱 | 所有 API 返回 `ValueTask`→文档+分析器→检测重复 await | 分析器规则 |
+| 237 | **场景**: `async void`→ORM 操作→异常逃逸。**问题**: `async void Foo()`→调用 ORM→异常→无法捕获→进程崩溃。**后果**: 服务意外终止 | async void=进程杀手 | 所有 API 返回 `Task`/`ValueTask`→禁止 `async void` | 分析器禁止 |
+| 238 | **场景**: `Task.Run(()=>ORM.QueryAsync())`→独立线程。**问题**: 在线程池线程中执行→不共享 SynchronizationContext→连接的异步 Opening 可能失败。**后果**: 间歇性连接错误 | Task.Run=隐藏陷阱 | DataSession→线程安全→任何线程可安全使用 | 多线程测试 |
+| 239 | **场景**: 高并发→1000 个并发 `QueryAsync`→线程池饥饿。**问题**: 所有线程等待数据库响应→无线程处理新请求→请求排队→超时。**后果**: 线程池饥饿→全站 503 | 真异步 vs 假异步=线程池差异 | 所有 IO→真异步→`async/await`→不占线程→线程池不饥饿 | 1000 并发→线程数<50 |
+| 240 | **场景**: `Task.Delay(100)`+`QueryAsync()`→模拟超时→实际查询未取消。**问题**: Task.Delay 超时→但 ORM 查询继续执行→占用连接→浪费。**后果**: 超时无效→资源泄漏 | 超时不取消=假超时 | CancellationToken→传递给 DbCommand→真正取消 | 超时→验证查询中断 |
+| 241 | **场景**: `Parallel.ForEach`+ORM 查询→100 并发→连接池爆。**问题**: 并行线程→每线程一个连接→连接池不够→等待→超时。**后果**: 超时→操作失败 | 并行=连接池压力 | B1 BulkInsert/Query→单连接→批处理→不爆池 | 并发控制→SemaphoreSlim |
+| 242 | **场景**: `async` lambda→`Continuation`→线程切换→TransactionScope 丢失。**问题**: `TransactionScope` 依赖 `AsyncLocal`→async 线程切换→context 丢失→事务不起作用。**后果**: 事务不生效→数据不一致 | TransactionScope+async=互斥 | T1-T4 显式事务→不依赖 TransactionScope→async 安全 | 异步事务测试 |
+| 243 | **场景**: ORM→`ValueTask`→同步完成→不分配 Task。**问题**: 缓存命中→同步返回→0 分配→快→不用 `ValueTask` 则每次分配 Task→GC 压力。**后果**: 高频场景→GC 频繁→延迟抖动 | ValueTask 优化=高频场景必需 | 所有 API 返回 `ValueTask`→快速路径零分配 | GC 分配测试 |
+| 244 | **场景**: `ConfigureAwait(false)`→丢失→在 UI 线程访问结果→死锁。**问题**: WPF/WinForms→`.Result` 阻塞 UI 线程→异步操作等待 UI 线程→死锁。**后果**: UI 冻结→应用无响应 | UI 死锁=经典 async 陷阱 | 库代码→默认 `.ConfigureAwait(false)`→不捕获 UI 上下文 | UI 应用测试 |
+| 245 | **场景**: `SemaphoreSlim(1,1)`→保护异步 ORM 操作→异步锁。**问题**: SemaphoreSlim 可重入→同一线程可多次进入→嵌套 ORM 操作→死锁。**后果**: 请求永不返回 | 异步锁可重入=隐蔽死锁 | DataSession→每次 using new→无共享状态→不需要锁 | 嵌套操作→验证无死锁 |
+
 ---
 
 ## 统计
@@ -387,7 +407,8 @@
 | Phase 14 并发&锁 | 20 | 死锁/锁升级/write skew/序列化冲突 |
 | Phase 15 导入导出 | 15 | CSV/ETL/精度/死锁/Blob |
 | Phase 16 诊断&可观测 | 15 | 指标/日志/告警/追踪/健康检查 |
+| Phase 17 Async&Task | 15 | ConfigureAwait/ValueTask/CancellationToken/死锁 |
 | Phase 架构避开 | 10 | 从架构层面消除 |
-| **合计** | **230** | — |
+| **合计** | **245** | — |
 
-**230 条精选。覆盖全语言 25+ ORM、8 种数据库、5 个 CVE、2000 项原始踩坑记录。**
+**245 条精选。覆盖全语言 25+ ORM、8 种数据库、5 个 CVE、2000 项原始踩坑记录。**
