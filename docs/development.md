@@ -19,7 +19,7 @@ dotnet --info
 ```bash
 dotnet restore PalDDD.slnx
 dotnet build PalDDD.slnx --no-restore
-dotnet test PalDDD.slnx --no-restore -e "TESTINGPLATFORM_COMMANDLINE_VERSION=2"
+dotnet test PalDDD.slnx --no-restore
 dotnet run --project samples/PalDDD.AotSample/PalDDD.AotSample.csproj
 ```
 
@@ -42,16 +42,16 @@ dotnet list PalDDD.slnx package --outdated
 任何生产代码改动至少运行：
 
 ```bash
-dotnet test PalDDD.slnx --no-restore -e "TESTINGPLATFORM_COMMANDLINE_VERSION=2"
+dotnet test PalDDD.slnx --no-restore
 dotnet build PalDDD.slnx --no-restore
 ```
 
-> ⚠️ `.NET 11 Preview 5 SDK` 的 `dotnet test` 与 `Microsoft.Testing.Platform` 2.x 存在协议版本不兼容。必须附加 `-e "TESTINGPLATFORM_COMMANDLINE_VERSION=2"` 环境变量才能正常发现并运行测试。此问题预计在后续 SDK Preview 中修复，届时可移除该标志。
+> MTP 原生模式已通过 `global.json` 的 `test.runner=Microsoft.Testing.Platform` 启用，`dotnet test` 无需额外参数即可发现并运行测试。
 
 公共 API 快照由 `PalDDD.Core.Tests` 覆盖。新增或调整核心包 public API 后，先确认变更合理，再更新快照：
 
 ```bash
-PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests/PalDDD.Core.Tests.csproj --no-restore -e "TESTINGPLATFORM_COMMANDLINE_VERSION=2"
+PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests/PalDDD.Core.Tests.csproj --no-restore
 ```
 
 ### Stryker 突变测试
@@ -91,8 +91,8 @@ jobs:
         with:
           dotnet-version: '11.0.x'
       - run: dotnet restore PalDDD.slnx
-      - run: dotnet test test/PalDDD.Messaging.Integration.Tests --filter "Category=Integration" -e "TESTINGPLATFORM_COMMANDLINE_VERSION=2"
-      - run: dotnet test test/PalDDD.Integration.Tests --filter "Category=Integration" -e "TESTINGPLATFORM_COMMANDLINE_VERSION=2"
+      - run: dotnet test test/PalDDD.Messaging.Integration.Tests --filter "Category=Integration"
+      - run: dotnet test test/PalDDD.Integration.Tests --filter "Category=Integration"
 ```
 
 要点：
@@ -100,7 +100,7 @@ jobs:
 - Testcontainers 自动拉起容器并暴露随机端口，无需预置 service container；仅需 runner 支持 Docker daemon。
 - Windows runner 不支持 Testcontainers，集成测试 CI 必须在 `ubuntu-latest` 上运行。
 - 单元测试（不依赖 Docker）仍可跨平台运行，可拆为独立 job 在 PR 触发；集成测试建议 nightly / 合并到 main 时触发以缩短 PR 周转。
-- 本地预跑：`docker info` 确保 Docker Desktop 已启动，再执行 `dotnet test --filter "Category=Integration" -e "TESTINGPLATFORM_COMMANDLINE_VERSION=2"`。
+- 本地预跑：`docker info` 确保 Docker Desktop 已启动，再执行 `dotnet test --filter "Category=Integration"`。
 
 修改 package 或 restore assets 后先运行：
 

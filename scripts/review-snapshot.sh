@@ -59,7 +59,7 @@ echo "OperationCanceledException 引用数: $OCE_FILTER"
 echo ""
 
 echo "── 测试状态（需手动运行 dotnet test 获取精确通过/失败数）──"
-echo "命令: dotnet test PalDDD.slnx --no-build --nologo -e \"TESTINGPLATFORM_COMMANDLINE_VERSION=2\""
+echo "命令: dotnet test PalDDD.slnx --no-build --nologo"
 echo ""
 
 echo "═══ 快照结束 — 粘贴以上内容到评审报告首行 ═══"

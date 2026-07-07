@@ -212,7 +212,7 @@ echo "════════════════════════�
 echo ""
 
 if [ "$FAIL" -eq 0 ]; then
-	    TEST_OUTPUT=$(dotnet test PalDDD.slnx --no-restore --no-build -e "TESTINGPLATFORM_COMMANDLINE_VERSION=2" 2>&1) || true
+	    TEST_OUTPUT=$(dotnet test PalDDD.slnx --no-restore --no-build 2>&1) || true
     # 双语兼容：检查 "失败:     0" 或 "Failed:     0"
     if echo "$TEST_OUTPUT" | grep -qE "(失败|Failed):\s+0"; then
         echo -e "${GREEN}✅ dotnet test 零失败${NC}"

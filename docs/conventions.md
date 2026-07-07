@@ -773,10 +773,10 @@ var body = Expression.AndAlso(
 dotnet build PalDDD.slnx
 
 # 2. 测试（零失败）
-dotnet test PalDDD.slnx --no-restore -e "TESTINGPLATFORM_COMMANDLINE_VERSION=2"
+dotnet test PalDDD.slnx --no-restore
 
 # 3. 公共 API 变更时更新快照（filter 需在 -- 之后传递给 MTP）
-PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests -e "TESTINGPLATFORM_COMMANDLINE_VERSION=2" -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
+PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
 
 # 4. 规范验证脚本（秒级）
 bash scripts/verify-conventions.sh
@@ -789,11 +789,11 @@ bash scripts/verify-conventions.sh
 **硬性规则**（违反导致 `dotnet test` 发现零测试或构建冲突）：
 
 1. **禁止引用 `Microsoft.NET.Test.Sdk`** — VSTest 的入口包，与 TUnit 自带的 MTP 冲突。测试项目只引用 `TUnit`（+ 可选 `TUnit.FsCheck` / `coverlet.collector`）。MTP 运行器 + MSBuild 集成由 TUnit 传递依赖自动引入，无需显式引用。
-2. **`dotnet test` 必须带 `-e "TESTINGPLATFORM_COMMANDLINE_VERSION=2"`** — .NET 11 Preview 5 SDK 的 `dotnet test` 桥接默认走 MTP 协议 v1，而 MTP 2.x 需要 v2。不加此环境变量会打印帮助文本并返回 exit code 5（零测试发现）。此为 SDK 过渡期问题，非 TUnit 缺陷；后续 SDK 修复协议协商后可移除。
+2. **`global.json` 必须配 `test.runner=Microsoft.Testing.Platform`** — 这是 .NET 10+ SDK 启用 MTP 原生 `dotnet test` 的官方开关。配好后 `dotnet test` **无需任何额外参数**即可发现并运行测试。本仓库 `global.json` 已配置，勿删除该节点。
 3. **MTP 参数在 `--` 之后** — `dotnet test` 的 `--filter`、`--treenode-filter` 等 MTP 参数需放在 `--` 分隔符后，构建参数在前。
 4. **测试项目属性**（`test/Directory.Build.props` 已条件化设置，勿在单项目重复）：`IsTestProject=true` 时自动启用 `IsTestingPlatformApplication` / `TestingPlatformDotnetTestSupport` / `UseTestingPlatformProtocol`。共享工具库（如 `PalDDD.Testing`，`IsTestProject` 未设）不受影响。
 
-**替代运行方式**（不经 SDK 桥接，无需 `-e`）：
+**替代运行方式**（不经 SDK 桥接）：
 - 直接执行：`./test/{Project}/bin/Debug/net11.0/{Project}.exe`
 - 单项目：`dotnet run --project test/{Project}`
 
@@ -801,6 +801,8 @@ bash scripts/verify-conventions.sh
 ```bash
 grep -rn 'Microsoft\.NET\.Test\.Sdk' --include='*.csproj' --include='*.props' . | grep -v obj/  # 应为空
 ```
+
+> ⚠️ **历史教训**：曾误判 `dotnet test` 需要 `-e "TESTINGPLATFORM_COMMANDLINE_VERSION=2"` 环境变量，实为 `global.json` runner 未生效时的表象。诊断时若同时改动多个变量（csproj + MSBuild 属性 + 环境变量），无法归因真正的修复因子。任何"修复"采纳前必须做反向验证（见 §14 诊断三步骤）。
 
 ---
 
@@ -927,6 +929,53 @@ grep -rn 'Microsoft\.NET\.Test\.Sdk' --include='*.csproj' --include='*.props' . 
 ### 13.5 评审模板与报告格式
 
 评审报告必须使用 `docs/review/REVIEW_TEMPLATE.md`（v2 8 段结构）。任务清单必须使用 `docs/review/ACTION_ITEMS_TEMPLATE.md`（危害 × 复杂度双维度格式）。
+
+---
+
+## 14. 诊断三步骤（排查配置/环境类问题 · 强制）
+
+> **来源**：TUnit/MTP `-e` 误判案例（详见 §10.6 历史教训）。三次检查都未发现"多余的环境变量被当作必要修复"，根因是缺少可操作的验证检查点。以下三步是**排查配置、环境、构建、测试运行器类问题时的强制流程**，任何"修复"在采纳前必须走完 S1→S2→S3。
+
+### 14.1 S1 — 基线快照
+
+任何修改**之前**，先记录当前状态的可验证数据（不凭记忆，不只看日志）：
+
+```bash
+# 排查前记录：exit code + 通过/失败数 + 耗时
+dotnet test <target> 2>&1 | tail -5 > /tmp/baseline.txt; echo "exit=$?" >> /tmp/baseline.txt
+```
+
+没有基线，就无法区分"本来就坏的"与"我改坏的"。
+
+### 14.2 S2 — 单变量隔离
+
+一次只改一个变量，改完立即测试并记录。**禁止 2+ 变量同时改动后直接测试**——多变量修改后通过，无法归因真正的修复因子。
+
+```
+✅ 改 A → 测试 → 记录 → 改 B → 测试 → 记录
+❌ 改 A + B + C → 一次测试通过 → 归因模糊（TUnit 案例正是此错）
+```
+
+### 14.3 S3 — 反向验证（最关键）
+
+任何疑似修复因子在最终采纳前，**必须做一次反转**：移除该因子，确认结果退化回基线。若移除后不退化，该因子**不是必要的**，必须丢弃，不得写入文档/规则。
+
+```
+✅ 加 X → 通过 → 移除 X → 退化到基线 → X 必要 → 采纳
+✅ 加 X → 通过 → 移除 X → 仍然通过 → X 多余 → 丢弃
+❌ 加 X → 通过 → 直接采纳（TUnit 案例：-e 被当作必要，实为多余）
+```
+
+### 14.4 结论标注
+
+写入文档/记忆前，对每个因子标注归因结论：
+
+| 因子 | 反向验证结果 | 结论 |
+|------|------|------|
+| `global.json test.runner=MTP` | 移除后退化 | ✅ 必要 |
+| `-e TESTINGPLATFORM_COMMANDLINE_VERSION` | 移除后仍通过 | ❌ 多余，丢弃 |
+
+**违反后果**：把"恰好在工作"的因子当成"必要修复"写入规范，误导后续所有排查。三方一致（代码-文档-注释）的前提是结论本身正确。
 
 ---
 
