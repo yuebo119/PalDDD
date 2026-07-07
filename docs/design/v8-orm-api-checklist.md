@@ -199,24 +199,21 @@
 | QB21-22 | Union/Intersect | Dapper.SqlBuilder | 两查询合并 | P1 |
 | QB25 | ExistsAsync | PetaPoco | 一次往返 | P1 |
 | QB29 | RecursiveWith | linq2db/jOOQ | 树形结构 | P1 |
-| QB30 | WhereJson | Django KeyTransform | JSONB 查询 | P1 |
+| QB30 | WhereJson（Provider 扩展） | Django KeyTransform | JSONB 查询→非核心→放入 PG Provider 包 | P1(Provider) |
 | A3 | WithCache | RepoDB | 高频只读缓存 | P1 |
 | A16 | Interceptor | EF Core Interceptors | 自定义扩展点 | P1 |
 | A18 | NamingConvention | GORM NamingStrategy | snake_case 自动映射 | P1 |
-| A19 | Record/init 支持 | jOOQ Record 类型 | C# 9+ record→init setter→2026 新项目标配 | P1 |
+| A19 | Record/init（自动机制） | jOOQ Record 类型 | 源生成器自动检测 init setter→不在 API 清单中 | 自动 |
 | A20 | ValueConverter | linq2db/EF Core | PG 非标准类型映射 | P1 |
-| A22 | Notify | Npgsql WaitAsync | PG NOTIFY→最简单实时通知 | P1 |
+| A22 | Notify（Provider 扩展） | Npgsql WaitAsync | PG NOTIFY→非核心 ORM API→放入 PG Provider 包 | Provider |
 | DS1 | N+1 检测 | 生态首创 ✦ | 编译时拦截 N+1 | P1 |
-| DS2 | Unbounded Warning | 生态首创 ✦ | Dev 模式自动 LIMIT | P1 |
-| TST1 | TestDb.Sqlite | EF Core InMemory | 3 行集成测试 | P1 |
-| TST2 | TestDb.FromRows | jOOQ MockConnection | 纯内存模拟 | P1 |
+| TST1 | `TestDb.Sqlite()` | EF Core InMemory | 三行写集成测试→SQLite :memory:→零外部依赖 | P1 |
 
-## P2 (边缘场景 — 2 项)
+## P2 (1 项)
 
 | # | API | 对标 | 必要性 | P |
 |---|------|------|------|:--:|
-| A24 | TempTable | linq2db CreateTempTable | 复杂报表→临时表→少数场景 | P2 |
-| V4 | SqlFile（动态 SQL） | sqlc Go | .sql 文件中含条件逻辑→源生成器复杂→二期 | P2 |
+| V4 | SqlFile（动态 SQL） | sqlc Go | .sql 中含条件逻辑→源生成器复杂→二期 | P2 |
 
 ---
 
@@ -225,9 +222,9 @@
 | 优先级 | 数量 | 说明 |
 |:--:|:--:|------|
 | P0 | 74 | 核心 ORM 功能——缺之不成 ORM |
-| P1 | 27 | 重要增值——显著提升开发效率/安全性 |
-| P2 | 2 | 边缘场景——少数场景需要 |
-| 注解 | 16 | 基础注解(13) + 高级注解(3)——编译时映射驱动 |
-| 机制 | 4 | 开发者安全(2) + 测试Fixture(2) |
+| P1 | 24 | 重要增值——显著提升开发效率/安全性 |
+| P2 | 1 | 边缘场景——二期实现 |
+| 注解 | 15 | 基础注解(13) + 高级注解(2)——编译时映射驱动 |
+| Provider 扩展 | 2 | PG 专有功能→放入 Provider 包 |
 
-**总计 123 项特性。每一项有全语言对标 ORM 来源，无一凭空设计。**
+**总计 116 项核心特性。每一项有全语言对标 ORM 来源，全链路 AOT 安全（无 Expression.Compile/无 MakeGenericType/无 Activator.CreateInstance）。**
