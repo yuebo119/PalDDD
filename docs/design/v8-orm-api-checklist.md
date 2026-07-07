@@ -157,6 +157,7 @@
 | A9 | `db.WithRetry(int maxRetries, Func<int,TimeSpan> backoff)` | EF Core EnableRetryOnFailure | DB 瞬时故障→无重试→请求失败→用户看到错误。默认 3 次退避重试 | P0 |
 | A10 | `db.WithTimeout(TimeSpan timeout)` | ADO.NET CommandTimeout | 慢查询→占住连接 30 秒→连接池耗尽→其他请求等待→雪崩 | P0 |
 | A25 | `builder.WithCommandTimeout(int seconds)` | Dapper CommandDefinition, EF Core | 单次查询超时——与 A10 全局超时互补。报表查询→需要 120s→其他查询 5s | P1 |
+| A26 | `db.GetRawConnection()` → `DbConnection` | 生态兼容 | 逃生舱——第三方工具(Dapper/BulkWriter)需要原生连接→不破坏 AOT 安全(仅暴露已有对象) | P1 |
 | A11 | `db.WithCircuitBreaker(int failures, TimeSpan resetAfter)` | Polly CircuitBreaker | DB 故障→一直重试→线程池耗尽→雪崩。熔断后快速失败→保护上游 | P0 |
 | A12 | `builder.Tag("name")` / `TagWithCaller()` | EF Core TagWith | 生产慢查询日志 → `SELECT /* GetOrders */ ...` → 一眼定位调用者。无→排查 30 分钟 | P0 |
 | A14 | `DbOptions.WithPool(size, idle, lifetime)` | Bun Go | 连接池不配置→默认 max=100→1000 并发→503 | P0 |
@@ -222,7 +223,7 @@
 | 优先级 | 数量 | 说明 |
 |:--:|:--:|------|
 | P0 | 74 | 核心 ORM 功能——缺之不成 ORM |
-| P1 | 24 | 重要增值——显著提升开发效率/安全性 |
+| P1 | 25 | 重要增值——显著提升开发效率/安全性 |
 | P2 | 1 | 边缘场景——二期实现 |
 | 注解 | 15 | 基础注解(13) + 高级注解(2)——编译时映射驱动 |
 | Provider 扩展 | 2 | PG 专有功能→放入 Provider 包 |
