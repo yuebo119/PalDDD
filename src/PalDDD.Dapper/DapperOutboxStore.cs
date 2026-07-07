@@ -93,7 +93,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // 直接使用 Dapper.QueryAsync<OutboxMessage> 走 Dapper.AOT 拦截器路径。
         var messages = await conn.QueryAsync<OutboxMessage>(
             SqlTemplates.OutboxSelectPending,
-            new { status = OutboxStatus.Pending.ToString(), now, maxRetryCount, n = batchSize }, _transaction).ConfigureAwait(false);
+            new { status = OutboxStatus.Pending.ToString(), now = DapperAotInitializer.ToSqliteParameter(now), maxRetryCount, n = batchSize }, _transaction).ConfigureAwait(false);
         return messages.AsList();
     }
 
@@ -124,19 +124,19 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         {
             var msgs = await conn.QueryAsync<OutboxMessage>(
                 SqlTemplates.OutboxLeaseUpdate + $"({leaseSubSql}) RETURNING *",
-                new { owner, until, now, maxRetryCount, n = batchSize }, _transaction).ConfigureAwait(false);
+                new { owner, until = DapperAotInitializer.ToSqliteParameter(until), now = DapperAotInitializer.ToSqliteParameter(now), maxRetryCount, n = batchSize }, _transaction).ConfigureAwait(false);
             return msgs.AsList();
         }
         else
         {
             await conn.ExecuteAsync(
                 SqlTemplates.OutboxLeaseUpdate + $"({leaseSubSql})",
-                new { owner, until, now, maxRetryCount, n = batchSize }, _transaction).ConfigureAwait(false);
+                new { owner, until = DapperAotInitializer.ToSqliteParameter(until), now = DapperAotInitializer.ToSqliteParameter(now), maxRetryCount, n = batchSize }, _transaction).ConfigureAwait(false);
 
             // 🔴 P0 修复：按租约标识回读，不重新评估子查询
             var msgs = await conn.QueryAsync<OutboxMessage>(
                 SqlTemplates.OutboxSelectByLease,
-                new { owner, until }, _transaction).ConfigureAwait(false);
+                new { owner, until = DapperAotInitializer.ToSqliteParameter(until) }, _transaction).ConfigureAwait(false);
             return msgs.AsList();
         }
     }
@@ -145,7 +145,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     {
         var c = EnsureOpen();
         c.Execute(SqlTemplates.OutboxInsert,
-            new { message.Id, message.Type, message.Payload, message.ContentType, message.SchemaVersion, CreatedAt = _timeProvider.GetUtcNow() }, _transaction);
+            new { Id = DapperAotInitializer.ToSqliteParameter(message.Id), message.Type, message.Payload, message.ContentType, message.SchemaVersion, CreatedAt = DapperAotInitializer.ToSqliteParameter(_timeProvider.GetUtcNow()) }, _transaction);
     }
 
     /// <summary>批量添加消息 — 自动选择数据库最优批量路径</summary>
@@ -164,21 +164,21 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     {
         var c = EnsureOpen();
         c.Execute(SqlTemplates.OutboxMarkProcessed,
-            new { at = processedAt, id = message.Id }, _transaction);
+            new { at = DapperAotInitializer.ToSqliteParameter(processedAt), id = DapperAotInitializer.ToSqliteParameter(message.Id) }, _transaction);
     }
 
     public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
     {
         var c = EnsureOpen();
         c.Execute(SqlTemplates.OutboxMarkDead,
-            new { reason = failureReason, at = deadAt, id = message.Id }, _transaction);
+            new { reason = failureReason, at = DapperAotInitializer.ToSqliteParameter(deadAt), id = DapperAotInitializer.ToSqliteParameter(message.Id) }, _transaction);
     }
 
     public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
     {
         var c = EnsureOpen();
         c.Execute(SqlTemplates.OutboxReleaseForRetry,
-            new { reason = failureReason, next = nextAttemptAt, id = message.Id }, _transaction);
+            new { reason = failureReason, next = DapperAotInitializer.ToSqliteParameter(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(message.Id) }, _transaction);
     }
 
     public async ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)
@@ -189,7 +189,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
         return await conn.ExecuteAsync(
             SqlTemplates.OutboxRequeueDead,
-            new { audit, next = nextAttemptAt, id = messageId }, _transaction).ConfigureAwait(false);
+            new { audit, next = DapperAotInitializer.ToSqliteParameter(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(messageId) }, _transaction).ConfigureAwait(false);
     }
 
     public ValueTask<int> SaveChangesAsync(CancellationToken ct) => ValueTask.FromResult(0);

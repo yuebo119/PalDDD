@@ -61,8 +61,8 @@ public static class SqliteServiceCollectionExtensions
         services.AddSingleton(connection);
         services.AddSingleton<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<SqliteConnection>());
 
-        // 🔧 注册 SQLite TypeHandler — 运行时 Dapper TEXT→Guid/DateTimeOffset 映射
-        SqliteRowFactory.RegisterTypeHandlers();
+        // ✅ SQLite TypeHandler 已通过 [ModuleInitializer] + [module:DapperAot] 在 DapperAotInitializer.cs 注册
+        // 不再需要运行时 RegisterTypeHandlers() 调用
 
         return services;
     }

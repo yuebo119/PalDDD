@@ -89,7 +89,7 @@ public sealed class DapperEventLog : IEventLog
             var evt = events[i];
             var pos = await _connection.QuerySingleAsync<long>(sql, new
             {
-                EventId = evt.EventId,
+                EventId = DapperAotInitializer.ToSqliteParameter(evt.EventId),
                 EventName = evt.EventName,
                 StreamName = streamName,
                 StreamVersion = version++,
@@ -97,7 +97,7 @@ public sealed class DapperEventLog : IEventLog
                 ContentType = evt.ContentType,
                 Payload = evt.Payload.ToArray(),
                 Metadata = evt.Metadata.ToArray(),
-                RecordedAt = now,
+                RecordedAt = DapperAotInitializer.ToSqliteParameter(now),
                 ActorId = (string?)null,
                 Reason = (string?)null
             }, _transaction).ConfigureAwait(false);

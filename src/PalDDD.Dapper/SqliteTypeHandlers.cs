@@ -1,16 +1,15 @@
 // ─────────────────────────────────────────────────────────────
-// 🔧 SQLite 类型处理器 — Dapper 运行时 TypeHandler
+// 🔧 SQLite 类型处理器 — Dapper.AOT 编译时 TypeHandler
 // ─────────────────────────────────────────────────────────────
 // 💡 为什么需要？
-//   ｜ SQLite 的 TEXT 列返回 string，无法直接 cast 为 Guid/DateTimeOffset。
-//   ｜ Dapper Store 适配器使用运行时 Dapper（非 AOT 拦截），
-//   ｜ 运行时 Dapper 查阅 TypeHandlerCache<T> 调用这些处理器完成转换。
-//   ｜ 生产环境 PG/MySQL 使用原生 uuid/timestamptz 类型，无需 TypeHandler。
+//   ｜ SQLite 的 TEXT 列返回 string，无法直接 cast 为 Ulid/Guid/DateTimeOffset。
+//   ｜ 通过 Dapper.SqlMapper.TypeHandler<T> 继承，Dapper.AOT 拦截器编译时发现
+//   ｜ 并直接生成调用代码（零 IL.Emit，NativeAOT 安全）。
 //
 // ✅ AOT 安全性：
-//   ✅ Dapper Store 适配器层依赖 DbConnection 运行时注入，不参与 AOT 发布
+//   ✅ DapperAotInitializer.cs 通过 [module:DapperAot] + [ModuleInitializer] 注册
 //   ✅ sealed class，无虚分派
-//   ✅ 不依赖反射
+//   ✅ 零反射——全部 switch/Parse 等编译期可分析的路径
 //
 // 📐 DDD 位置：基础设施层 — Dapper SQLite 特定，不影响领域/应用层。
 // ─────────────────────────────────────────────────────────────

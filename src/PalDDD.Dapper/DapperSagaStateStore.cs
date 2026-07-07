@@ -73,17 +73,17 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         var now = TimeProvider.System.GetUtcNow();
         var until = now.Add(leaseDuration);
         await _connection.ExecuteAsync(
-            new CommandDefinition(SqlTemplates.SagaLeaseActive, new { owner, until, now, n = batchSize }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+            new CommandDefinition(SqlTemplates.SagaLeaseActive, new { owner, until = DapperAotInitializer.ToSqliteParameter(until), now = DapperAotInitializer.ToSqliteParameter(now), n = batchSize }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
 
         var rows = await _connection.QueryAsync<SagaStateRow>(
-            new CommandDefinition(SqlTemplates.SagaSelectByLease, new { owner, until }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+            new CommandDefinition(SqlTemplates.SagaSelectByLease, new { owner, until = DapperAotInitializer.ToSqliteParameter(until) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
         return rows.Select(Materialize).ToList();
     }
 
     public async ValueTask<TState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
     {
         var row = await _connection.QuerySingleOrDefaultAsync<SagaStateRow>(
-            new CommandDefinition(SqlTemplates.SagaById, new { id = sagaId }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+            new CommandDefinition(SqlTemplates.SagaById, new { id = DapperAotInitializer.ToSqliteParameter(sagaId) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
         return row is null ? null : Materialize(row);
     }
 
@@ -103,13 +103,13 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
                     {
                         cs = state.CurrentState,
                         st = (int)state.Status,
-                        ca = state.CompletedAt,
+                        ca = state.CompletedAt.HasValue ? DapperAotInitializer.ToSqliteParameter(state.CompletedAt.Value) : null,
                         err = state.Error,
-                        ea = state.ErrorAt,
+                        ea = state.ErrorAt.HasValue ? DapperAotInitializer.ToSqliteParameter(state.ErrorAt.Value) : null,
                         data = sagaData,
                         leasedBy = state.LeasedBy,
-                        leasedUntil = state.LeasedUntil,
-                        id = state.SagaId,
+                        leasedUntil = state.LeasedUntil.HasValue ? DapperAotInitializer.ToSqliteParameter(state.LeasedUntil.Value) : null,
+                        id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
                         v = state.Version
                     },
                     _transaction,
@@ -124,16 +124,16 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
                 SqlTemplates.SagaInsert,
                 new
                 {
-                    id = state.SagaId,
+                    id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
                     cs = state.CurrentState,
                     st = (int)state.Status,
-                    ca = state.CreatedAt,
-                    completedAt = state.CompletedAt,
+                    ca = DapperAotInitializer.ToSqliteParameter(state.CreatedAt),
+                    completedAt = state.CompletedAt.HasValue ? DapperAotInitializer.ToSqliteParameter(state.CompletedAt.Value) : null,
                     err = state.Error,
-                    ea = state.ErrorAt,
+                    ea = state.ErrorAt.HasValue ? DapperAotInitializer.ToSqliteParameter(state.ErrorAt.Value) : null,
                     data = sagaData,
                     leasedBy = state.LeasedBy,
-                    leasedUntil = state.LeasedUntil
+                    leasedUntil = state.LeasedUntil.HasValue ? DapperAotInitializer.ToSqliteParameter(state.LeasedUntil.Value) : null
                 },
                 _transaction,
                 cancellationToken: ct)).ConfigureAwait(false);

@@ -208,7 +208,13 @@ public static class DapperBulkCopy
         {
             var values = extractor(item);
             for (int i = 0; i < cols.Length; i++)
-                parameters[i].Value = values[i] is PalUlid ulid ? ulid.ToString() : values[i] ?? DBNull.Value;
+                parameters[i].Value = values[i] switch
+                {
+                    PalUlid ulid => DapperAotInitializer.ToSqliteParameter(ulid),
+                    Guid guid => DapperAotInitializer.ToSqliteParameter(guid),
+                    DateTimeOffset dto => DapperAotInitializer.ToSqliteParameter(dto),
+                    _ => values[i] ?? DBNull.Value
+                };
             count += await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
 

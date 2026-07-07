@@ -7,11 +7,11 @@
     <Description>Pal.DDD Dapper 持久化适配器（✅ AOT + Dapper.AOT SG 分析器就绪）— 含 Transaction/EventLog/Projection/Repository</Description>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
-    <NoWarn>$(NoWarn);CA1001;CA2007;CA1062;CA2100;CA2000;CA1849;CA2016;CS1591;CS1573;IL3058;DAP005</NoWarn>
-    <!-- Dapper.AOT SG：启用拦截器预览命名空间。
-         当前不全局 [module:DapperAot]——SQLite TEXT 列存储 Guid/DateTimeOffset 依赖运行时 SqlMapper.TypeHandler，
-         Dapper.AOT SG 物化代码不查阅 TypeHandler，全局启用会破坏 SQLite 路径。
-         保留分析器诊断 + InterceptorsPreviewNamespaces，待 Dapper.AOT RowFactory 自定义类型映射成熟后逐方法启用。 -->
+    <NoWarn>$(NoWarn);CA1001;CA2007;CA1062;CA2100;CA2000;CA1849;CA2016;CS1591;CS1573;IL3058;DAP005;CA2255</NoWarn>
+    <!-- Dapper.AOT：诊断就绪，[module:DapperAot] 暂未全局启用。
+         v1.0.52 TypeHandler 双向限制（参数绑定+结果读取），待 v1.0.53+ 修复后启用。
+         TypeHandler 通过 [ModuleInitializer] 注册，经典 Dapper 运行时路径生效。
+         Ulid/Guid/DateTimeOffset 参数已通过 ToSqliteParameter() 手动转为 string。 -->
     <InterceptorsPreviewNamespaces>$(InterceptorsPreviewNamespaces);Dapper.AOT</InterceptorsPreviewNamespaces>
   </PropertyGroup>
 

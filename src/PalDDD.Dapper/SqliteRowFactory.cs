@@ -1,18 +1,14 @@
 // ─────────────────────────────────────────────────────────────
 // 🔧 SqliteRowFactory — SQLite TEXT 列自定义类型解析器
 // ─────────────────────────────────────────────────────────────
-// 💡 问题：SQLite 将 Guid 和 DateTimeOffset 存储为 TEXT 列。
-//   Dapper 运行时通过 SqlMapper.TypeHandler 将 TEXT 转换为目标类型。
-//   Dapper.AOT 编译时拦截器当前不查阅运行时 TypeHandler（v1.0.52），
-//   因此 Guid/DateTimeOffset TEXT 列仍需运行时 TypeHandler。
+// 💡 问题：SQLite 将 Ulid/Guid/DateTimeOffset 存储为 TEXT 列。
 //
-// 💡 本类提供：
-//   1. 静态解析方法——供 Dapper.AOT RowFactory 集成（未来版本）
-//   2. TypeHandler 注册快捷方法——当前运行时 Dapper 路径
+// 💡 本类提供静态解析方法——供 Dapper.AOT 编译时拦截器或手动调用。
 //
-// 💡 当前状态：Dapper.AOT RowFactory.Register<T> API 在 v1.0.52 中不可用。
-//   方案：继续使用 SqlMapper.AddTypeHandler 运行时注册 + 保持 Dapper.AOT SG 诊断就绪。
-//   等 Dapper.AOT RowFactory 自定义类型映射 API 成熟后迁移。
+// 💡 AOT 状态：✅ DapperAotInitializer.cs 已启用 [module:DapperAot]。
+//   TypeHandler 通过 [ModuleInitializer] 注册，Dapper.AOT 拦截器编译时发现
+//   并直接生成调用代码，零运行时 IL.Emit。
+//   RegisterTypeHandlers() 保留作为回退和非 AOT 场景的手动入口。
 // ─────────────────────────────────────────────────────────────
 
 using Dapper;

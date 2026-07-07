@@ -53,7 +53,7 @@ public sealed class DapperInboxStore : IInboxStore
     {
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         var insertedId = await c.QuerySingleOrDefaultAsync<long?>(_dialect.InboxInsert,
-            new { c = consumerName, m = messageId, now }, _transaction).ConfigureAwait(false);
+            new { c = consumerName, m = messageId, now = DapperAotInitializer.ToSqliteParameter(now) }, _transaction).ConfigureAwait(false);
         if (insertedId.HasValue)
         {
             return new InboxMessage
@@ -81,7 +81,7 @@ public sealed class DapperInboxStore : IInboxStore
 
             var rows = await c.ExecuteAsync(
                 SqlTemplates.InboxStartProcessing,
-                new { now, id = existing.Id }, _transaction).ConfigureAwait(false);
+                new { now = DapperAotInitializer.ToSqliteParameter(now), id = existing.Id }, _transaction).ConfigureAwait(false);
             if (rows == 0) return null;
 
             existing.Status = InboxStatus.Processing;
@@ -93,7 +93,7 @@ public sealed class DapperInboxStore : IInboxStore
     }
 
     public ValueTask MarkProcessedAsync(InboxMessage message, DateTimeOffset processedAt, CancellationToken ct)
-    { var c = EnsureOpen(); c.Execute(SqlTemplates.InboxMarkProcessed, new { at = processedAt, id = message.Id }, _transaction); return ValueTask.CompletedTask; }
+    { var c = EnsureOpen(); c.Execute(SqlTemplates.InboxMarkProcessed, new { at = DapperAotInitializer.ToSqliteParameter(processedAt), id = message.Id }, _transaction); return ValueTask.CompletedTask; }
 
     public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
     { var c = EnsureOpen(); c.Execute(SqlTemplates.InboxMarkFailed, new { err = failureReason, id = message.Id }, _transaction); return ValueTask.CompletedTask; }

@@ -61,7 +61,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         var inserted = await connection.ExecuteAsync(
             new CommandDefinition(
                 _insertSql,
-                new { projectionName, sourceName, position, status = ProjectionCheckpointStatus.Processing, startedAt, leaseUntil },
+                new { projectionName, sourceName, position, status = ProjectionCheckpointStatus.Processing, startedAt = DapperAotInitializer.ToSqliteParameter(startedAt), leaseUntil = DapperAotInitializer.ToSqliteParameter(leaseUntil) },
                 _transaction,
                 cancellationToken: ct)).ConfigureAwait(false);
         if (inserted == 1)
@@ -91,8 +91,8 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                     projectionName,
                     sourceName,
                     position,
-                    startedAt,
-                    leaseUntil,
+                    startedAt = DapperAotInitializer.ToSqliteParameter(startedAt),
+                    leaseUntil = DapperAotInitializer.ToSqliteParameter(leaseUntil),
                     revision = existing.Revision
                 },
                 _transaction,
@@ -120,7 +120,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                     checkpoint.ProjectionName,
                     checkpoint.SourceName,
                     checkpoint.Position,
-                    completedAt,
+                    completedAt = DapperAotInitializer.ToSqliteParameter(completedAt),
                     checkpoint.Revision
                 },
                 _transaction,
@@ -146,7 +146,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                     checkpoint.ProjectionName,
                     checkpoint.SourceName,
                     checkpoint.Position,
-                    failedAt,
+                    failedAt = DapperAotInitializer.ToSqliteParameter(failedAt),
                     error = failureReason,
                     checkpoint.Revision
                 },
