@@ -1277,7 +1277,8 @@ dotnet publish samples/PalDDD.AotSample -c Release -r win-x64 -p:PublishAot=true
 
 ---
 
-**PalORM — .NET 首个全链路 AOT 安全的现代化 ORM。106 API · 295 坑规避 · 97/100 · 12 周 · 6 NuGet · MIT。**
+**PalORM — .NET 首个全链路 AOT 安全的现代化 ORM。106 API · 295 坑规避 · 97/100 · 12 周 · 6 NuGet · 3 Provider · MIT。**
+
 
 ---
 
@@ -1902,7 +1903,119 @@ public static class OracleExtensions
 
 ---
 
-**PalORM — .NET 首个全链路 AOT 安全的现代化 ORM。106 API · 295 坑规避 · 97/100 · 12 周 · 6 NuGet · MIT。**
+## 附录 N: .NET 11 / C# 15 专属特性利用
+
+### N.1 语言特性清单
+
+| C# 特性 | PalORM 使用位置 | 收益 |
+|------|------|------|
+| `static abstract` interface | `IDbProvider` 接口成员 | 零虚调用, 编译时分发 |
+| `file` 关键字 | 源生成产物: `file sealed class RowFactory_Order` | 不污染命名空间 |
+| `required` 关键字 | 实体属性: `public required string Name { get; set; }` | 编译时非空保证 |
+| `ref struct` | `SpanEnumerator<T>` for IAsyncEnumerable | 零分配枚举 |
+| `InlineArray` | 批量参数: `[InlineArray(256)] struct ParamBuffer` | 栈分配, 零 GC |
+| `IParsable<T>` | `ScalarAsync<T>`: `T.Parse(reader.GetString(0))` | 泛型标量读取 |
+| `params Span<T>` | 批量参数传递 | 零分配 varargs |
+
+### N.2 .NET 11 专属 API
+
+| .NET 11 API | PalORM 使用 | 收益 |
+|------|------|------|
+| `FrozenDictionary.ToFrozenDictionary()` | 工厂注册表 | O(1) 零 GC |
+| `GC.AllocateArray<T>` | 预热预分配 | 减少碎片 |
+| `Parallel.ForEachAsync` | 可选并发批量 | 受控并发 |
+
+### N.3 ValueTask 池化
+
+```csharp
+// 同步完成快速路径 → 零 Task 分配
+public ValueTask<List<T>> ToListAsync(CancellationToken ct)
+    => _cache.TryGetValue(key, out var c) ? new(c) : new(ExecuteQueryAsync(ct));
+```
+
+### N.4 .NET 版本兼容
+
+| .NET 版本 | 支持 | 策略 |
+|:--:|:--:|------|
+| .NET 8 LTS | ✅ | `#if NET8_0` polyfill `static abstract` |
+| .NET 9-11 | ✅ 完整 | 所有优化全开 |
+
+## 附录 O: ConfigureAwait & IAsyncEnumerable 策略
+
+**库代码原则**: 默认 `.ConfigureAwait(false)`, 不捕获 SynchronizationContext。
+
+```csharp
+// ✅ 所有 async 方法
+await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+// IAsyncEnumerable 正确实现
+public async IAsyncEnumerable<T> QueryAsyncEnumerable<T>(...)
+{
+    await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+    while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        yield return _factory.Read(reader);
+    // using 自动释放 reader, 连接归还池
+}
+```
+
+## 附录 P: 类型支持矩阵
+
+| C# 类型 | PG | MySQL | SQLite | 读取方式 |
+|------|:--:|:--:|:--:|------|
+| `long`/`int`/`string`/`bool`/`decimal`/`double`/`float` | ✅ | ✅ | ✅ | `reader.GetXxx(ord)` |
+| `Guid` | `uuid` | `CHAR(36)` | `BLOB(16)` | `reader.GetGuid` |
+| `byte[]` | `bytea` | `BLOB` | `BLOB` | Stream 逐块 |
+| `DateTime` | `timestamp` | `DATETIME` | `TEXT` | `reader.GetDateTime` |
+| `DateTimeOffset` | `timestamptz` | — | `INTEGER` | TypeMapper: Unix ms |
+| `DateOnly` | `date` | `DATE` | `TEXT` | `DateOnly.FromDateTime` |
+| `TimeOnly` | `time` | `TIME` | `TEXT` | `TimeOnly.FromTimeSpan` |
+| `Half` | — | `FLOAT16` | `REAL` | `Half.FromHalf` |
+| `Int128`/`UInt128` | `numeric(39)` | — | — | TypeMapper |
+| `IPAddress` | `inet` | — | `TEXT` | ValueConverter |
+
+## 附录 Q: 源生成器测试策略
+
+```csharp
+// Verify 快照测试: 源生成代码变化时自动 diff
+[Test]
+public Task RowFactory_MatchesSnapshot()
+{
+    var result = TestHelper.RunGenerator(source);
+    return Verifier.Verify(result.GeneratedSources[0].SourceText);
+}
+
+// 诊断规则测试
+[Test]
+public async Task MissingPrimaryKey_ReportsPALORM001()
+{
+    var result = TestHelper.RunGenerator("[Table(\"x\")] public partial class X { public long Id; }");
+    await Assert.That(result.Diagnostics).Contains(d => d.Id == "PALORM001");
+}
+
+// 增量生成测试: 仅 rebuild 变更的类型
+[Test]
+public void Incremental_RebuildOnlyChangedTypes()
+{
+    var driver = TestHelper.CreateDriver();
+    Assert.That(driver.Run([sourceA, sourceB]).TrackedSteps, Has.Count.EqualTo(2));
+    Assert.That(driver.Run([sourceA]).TrackedSteps, Has.Count.EqualTo(1));
+}
+```
+
+## 附录 R: 内存分配分析
+
+| 操作 | 分配项 | 大小 | 优化 |
+|------|------|:--:|------|
+| `From<T>()` | FrozenDictionary lookup | 0B | ✅ |
+| `Where()` | DbParameter + string | ~80B/param | String pooling |
+| `BulkInsertAsync(10K)` | PG COPY stream | ~2KB | ✅ Bulk |
+| `IAsyncEnumerable(1M)` | Span<T> ref struct | 0B | ✅ Zero |
+| `AsPrepared()` × 1000 | 无字符串分配 | 0B | ✅ |
+
+---
+
+**PalORM — .NET 首个全链路 AOT 安全的现代化 ORM。106 API · 295 坑规避 · 97/100 · 12 周 · 6 NuGet · 3 Provider · MIT。**
+
 
 
 
