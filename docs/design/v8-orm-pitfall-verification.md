@@ -185,6 +185,76 @@
 | 99 | ORM 隐式类型推断→精度丢失 | Dapper DynamicParameters | 自动推断 DbType→选错→精度丢→金融计算错 | TypeMapper 编译时→C# 类型→SQL 类型精确映射 |
 | 100 | ORM 大版本升级→API 全毁 | EF6→EF Core, Hibernate 5→6 | 200 处编译错误→团队士气崩溃 | 零外部 ORM 依赖→无"大版本升级" |
 
+## Phase 7: PostgreSQL 专有陷阱 (15 条)
+
+| # | 场景·问题·后果 | 必要性 | V8 对应设计 | 验证逻辑 |
+|---|------|------|------|------|
+| 101 | **场景**: 表定义 `int[]` 列存储标签。**问题**: Dapper 读取 PG 数组→类型错→"cannot cast integer[] to int[]"。**后果**: 运行时异常→功能不可用 | PG 数组无 ORM 支持=标准陷阱 | A20 ValueConverter→`int[]`↔string→自定义映射 | PG 数组读写测试 |
+| 102 | **场景**: JSONB 列查询 `metadata->>'key'`。**问题**: EF Core 生成 `->>` 操作符→SQL 翻译错误→参数位置错。**后果**: 查询不返回结果→用户投诉 | JSONB 操作符=查询必须 | QB30 WhereJson→源生成 PG JSONB 操作符 | JSONB 查询转义测试 |
+| 103 | **场景**: `timestamptz` 列→C# `DateTime`。**问题**: PG 微秒↔.NET 100ns→往返比较→相等≠相等。**后果**: 并发令牌比较失败→乐观锁失效 | 精度不一致=并发 bug | TypeMapper→DateTimeOffset→与 timestamptz 一一对应 | 写入→立即读取→Ticks 一致 |
+| 104 | **场景**: PG `inet` 列→存储 IP。**问题**: Dapper 不认识 inet→当作 string→读没问题→写时需显式转 `IPAddress`。**后果**: 类型不匹配→INSERT 失败 | PG 专有类型=每项目手写 | A20 ValueConverter→`IPAddress`↔`NpgsqlInet` | INET 读写测试 |
+| 105 | **场景**: PG advisory lock→应用互斥。**问题**: ORM 不提供 advisory lock API→手写 `pg_try_advisory_lock()`。**后果**: 迁移/定时任务互斥不可靠 | 应用级锁=分布式必需 | A22 Notify→advisory lock 包装为 `LockAsync(key)` | 并发互斥测试 |
+| 106 | **场景**: PG `SERIAL` 列→显式插入 ID。**问题**: INSERT 传 ID→序列不递增→下次不传 ID→冲突。**后果**: 主键冲突→新插入失败 | 显式值与序列不同步 | C3 InsertAsync→默认不传自增列→DB 生成 | INSERT 后序列验证 |
+| 107 | **场景**: PG `GENERATED ALWAYS AS IDENTITY`→ORM INSERT 传值。**问题**: ORM 不知道这是 GENERATED→传了值→PG 报错"cannot insert into identity column"。**后果**: INSERT 失败 | 传值到生成列=致命错误 | BA7 [IgnoreOnInsert]→源生成器不为该列生成 INSERT 参数 | GENERATED 列测试 |
+| 108 | **场景**: PG `VACUUM`→死元组→ORM 批量 UPDATE。**问题**: ORM 逐行 UPDATE→每次 UPDATE 产生死元组→表膨胀→查询变慢。**后果**: 磁盘满→DB 变慢→连锁反应 | MVCC 死元组=ORM 批量 UPDATE 的隐藏成本 | B2 BulkUpdate→单 SQL→最小化死元组 | VACUUM 后查询性能 |
+| 109 | **场景**: PG `LISTEN/NOTIFY`→channel 通知→无 ACK。**问题**: ORM 不封装 NOTIFY→Listener 断开后消息丢失。**后果**: 通知漏掉→缓存不刷新 | PG NOTIFY 无保障=丢消息 | A22 Notify→`WaitAsync` 封装→断开自动重连 | 通知可靠性测试 |
+| 110 | **场景**: PG 函数中执行 DDL→`CREATE MATERIALIZED VIEW`。**问题**: 函数内执行此类 DDL→PG 不允许→"cannot be executed from a function"。**后果**: 迁移失败 | 某些 DDL 不能在事务中 | M1→检测 PG 限制 DDL→AutoCommit 模式执行 | PG DDL 迁移测试 |
+| 111 | **场景**: PG `partial index`→`WHERE active=true`。**问题**: ORM 不支持生成 partial index→手写→维护困难。**后果**: 索引策略受限 | partial index=PG 重要优化 | M5+M7→源生成 `CREATE INDEX ... WHERE` | partial index DDL 测试 |
+| 112 | **场景**: PG `EXCLUDE` 约束→`WITH &&` 范围约束。**问题**: ORM 不生成 EXCLUDE→手写→语法复杂。**后果**: 预约系统→同一时段重复预约 | EXCLUDE 约束=高级完整性 | 源生成→M1 支持 EXCLUDE 约束 | EXCLUDE DDL 测试 |
+| 113 | **场景**: PG schema→`public` vs `tenant_1`。**问题**: ORM 默认 public→多租户表全在 public→隔离失效。**后果**: 租户 A 看到租户 B 数据 | 多 schema 隔离=SaaS 基础 | V6 `[Schema("tenant_x")]`→源生成→SQL 自动带 schema 前缀 | 多 schema 测试 |
+| 114 | **场景**: PG `BRIN` 索引→大表时间列。**问题**: ORM 只生成 BTREE→大表(10 亿行)→BTREE 太大→BRIN 更优。**后果**: 索引选择不当→存储浪费 | 索引类型=查询性能关键 | M5→源生成支持 BRIN/GIN/GiST | BRIN 索引测试 |
+| 115 | **场景**: PG `pg_stat_statements`→查询归一化。**问题**: ORM 参数变化→归一化为同一查询→统计显示"最慢查询"=实际多个查询混合。**后果**: 查询统计失真 | 统计偏差=误导优化方向 | A12 Tag→每查询不同标签→归一化可区分 | pg_stat_statements 查询验证 |
+
+## Phase 8: MySQL 专有陷阱 (10 条)
+
+| # | 场景·问题·后果 | 必要性 | V8 对应设计 | 验证逻辑 |
+|---|------|------|------|------|
+| 116 | **场景**: MySQL `utf8` 字符集→存 emoji。**问题**: utf8=3 字节→emoji=4 字节→截断→数据损坏。**后果**: 内容丢失→用户投诉 | utf8≠utf8mb4=MySQL 最大坑 | M4 ValidateSchemaAsync→检查列字符集→提示升级 utf8mb4 | schema diff 检测 |
+| 117 | **场景**: MySQL `TINYINT(1)`→存 2。**问题**: ORM 读取 TINYINT(1)=bool→值 2 无法 cast→异常。**后果**: 运行时崩溃 | TINYINT≠BOOL=MySQL 经典混淆 | TypeMapper→显式类型→不依赖 MySQL 的类型歧义 | TINYINT 读测试 |
+| 118 | **场景**: MySQL `DATETIME` vs `TIMESTAMP`。**问题**: DATETIME 无时区→服务器时区变→数据全错。TIMESTAMP 2038 问题。**后果**: 跨时区→时间失准 | 两时间类型的隐性差异=Bug 温床 | TypeMapper→强制 Unix 时间戳(INT64)→消除时区歧义 | 时区切换测试 |
+| 119 | **场景**: MySQL `InnoDB`→FK CASCADE→删除父表。**问题**: 与其他存储引擎(MyISAM)混用→MyISAM 不支持 FK→无 CASCADE→孤儿数据。**后果**: 数据完整性不一致 | 存储引擎混用=数据完整性地雷 | M4 ValidateSchemaAsync→检查所有表 engine=InnoDB→非 InnoDB→警告 | schema diff→存储引擎检查 |
+| 120 | **场景**: MySQL `max_allowed_packet`→批量 INSERT 1MB+。**问题**: ORM 批量 INSERT 生成超长 SQL→超过 packet 限制→MySQL 拒绝。**后果**: INSERT 失败→数据丢失 | packet 限制=批量操作天花板 | B1 BulkInsertAsync→自动分片→batchSize 控制→不超限 | 大批量 INSERT 测试 |
+| 121 | **场景**: MySQL `sql_mode`→`STRICT_TRANS_TABLES` 未开启。**问题**: 超出长度的数据→静默截断→无错误返回。**后果**: 数据截断→无声损坏 | 非严格模式=静默数据损坏 | M4 ValidateSchemaAsync→检查 sql_mode→无 STRICT→警告 | sql_mode 检查 |
+| 122 | **场景**: MySQL `AUTO_INCREMENT`→达到上限。**问题**: INT 主键→2.1B 行→溢出→后续 INSERT 失败。**后果**: 写操作全失败→服务中断 | 自增溢出=定时炸弹 | [Key]→源生成→建议用 long→INT 主键→警告 | 主键类型检查 |
+| 123 | **场景**: MySQL 复制→从库延迟→读过期数据。**问题**: 刚写入主库→立即从从库读→复制未同步→读到旧值。**后果**: 用户支付→余额未更新→再次支付→重复扣款 | 写后读从库=过期数据 | A8 ForRead/ForWrite→写后立即读→显式 ForWrite→走主库 | 写后读一致性测试 |
+| 124 | **场景**: MySQL `JOIN`→UTF8 列与 UTF8MB4 列→索引失效。**问题**: 两个表字符集不同→JOIN 时索引不能用→全表扫描。**后果**: JOIN 查询从 5ms→5000ms | 字符集不一致=索引杀手 | M4 ValidateSchemaAsync→检查跨表 JOIN 列的字符集一致性 | JOIN 字符集检查 |
+| 125 | **场景**: MySQL 连接→`wait_timeout`→默认 8h。**问题**: 连接 idle 8h→MySQL 关闭→ORM 不知→取出死连接→报错。**后果**: 长空闲后首次查询失败 | 连接超时=间歇性失败 | A9 WithRetry→检测 broken connection→自动重建 | 长空闲后查询测试 |
+
+## Phase 9: SQLite 专有陷阱 (10 条)
+
+| # | 场景·问题·后果 | 必要性 | V8 对应设计 | 验证逻辑 |
+|---|------|------|------|------|
+| 126 | **场景**: SQLite→多线程写→"database is locked"。**问题**: SQLite 单写者→两个请求同时写→一个被拒绝。**后果**: 写操作失败→用户看到错误 | SQLite 并发限制=生产陷阱 | A9 WithRetry→SQLite Provider 专有退避策略→重试 3 次 | 并发写测试 |
+| 127 | **场景**: SQLite→WAL 模式未开启→读被写阻塞。**问题**: SQLite 默认 journal mode=DELETE→写操作锁全库→读阻塞。**后果**: 写操作→读全挂 | WAL 不开启=并发性能灾难 | M1 MigrateAsync→SQLite Provider 自动 `PRAGMA journal_mode=WAL` | WAL 检查 |
+| 128 | **场景**: SQLite→FK 约束默认 OFF。**问题**: 每次连接需要 `PRAGMA foreign_keys=ON`→ORM 不自动→忘记→CASCADE 不执行。**后果**: 孤儿数据→完整性破坏 | FK 默认 OFF=SQLite 最大设计失误 | DataSession→SQLite Provider→连接时自动 `PRAGMA foreign_keys=ON` | FK 约束测试 |
+| 129 | **场景**: SQLite→无 BOOL 类型→存 0/1。**问题**: ORM 读 INTEGER→当作 int→cast 到 bool→异常。**后果**: 运行时崩溃 | SQLite 无类型=映射陷阱 | TypeMapper→SQLite Provider→自动 0↔false/1↔true | bool 读写测试 |
+| 130 | **场景**: SQLite→TEXT 列存 Guid→比较。**问题**: TEXT 比较=字符串比较→"A"<"a"→大小写敏感→与 Guid 的二进制比较不同。**后果**: 排序结果不一致 | TEXT vs BLOB→排序意外 | TypeMapper→SQLite Guid→存 BLOB→二进制比较 | Guid 排序测试 |
+| 131 | **场景**: SQLite→`datetime()` 函数→返回 UTC。**问题**: 应用期望 local time→SQLite 返回 UTC→时区偏差。**后果**: 时间显示全错 | SQLite 无时区支持=隐式 UTC | TypeMapper→存 Unix timestamp(INT64)→应用端控制时区 | 时区一致性测试 |
+| 132 | **场景**: SQLite→`:memory:` DB→连接关闭→数据全丢。**问题**: 测试断开连接→内存 DB 销毁→下一个测试需要重建 schema。**后果**: 测试间需要重复建表 | 内存 DB 短生命周期=每次重建 | TestDb.Sqlite→自动 CreateSchema→测试开始即就绪 | 测试隔离 |
+| 133 | **场景**: SQLite→`MAX()` 返回类型→受列类型影响。**问题**: INTEGER 列 MAX 返回 INTEGER→REAL 列返回 REAL→ORM 不知→cast 错。**后果**: 类型转换异常 | 聚合返回类型不确定 | TypeMapper→ScalarAsync→显式指定返回类型 | MAX/MIN 类型测试 |
+| 134 | **场景**: SQLite→并发→`SQLITE_BUSY`→默认 5 秒超时。**问题**: 5 秒后仍 busy→放弃→异常。**后果**: 高并发下写操作频繁失败 | busy_timeout 太短 | A9 WithRetry + SQLite Provider 延长 `busy_timeout` | 并发写重试测试 |
+| 135 | **场景**: SQLite→无 DATE/TIME 类型→存 TEXT。**问题**: ORM 读 "2024-01-15"→需要手动 `DateTime.Parse`→与 PG/MySQL 不同。**后果**: 跨 DB 不一致 | SQLite 无原生日期类型=跨 DB 迁移障碍 | TypeMapper→SQLite Provider→自动 TEXT↔DateTimeOffset | 日期读写测试 |
+
+## Phase 10: 生产事故模式补充 (15 条)
+
+| # | 场景·问题·后果 | 必要性 | V8 对应设计 | 验证逻辑 |
+|---|------|------|------|------|
+| 136 | **场景**: 2:47 PM 周五→运行清理脚本→`DELETE FROM users WHERE inactive=true`。**问题**: 230 万行→FK CASCADE→关联表连锁删除→整个数据库被清空。**后果**: "CASCADE DELETE Destroyed Our Production Database"(Medium 文章)→周末紧急恢复 | CASCADE 不作确认=生产灾难 | [ForeignKey] OnDelete→默认 NO ACTION→CASCADE 需显式 opt-in+警告 | FK DDL 默认 NO ACTION |
+| 137 | **场景**: 10 万行 INSERT→逐条→单事务→16 秒。**问题**: 事务内 10 万行→锁表→其他查询阻塞→超时。**后果**: 用户请求超时→雪崩 | 大事务=锁雪崩 | B1 BulkInsertAsync→自动分批→每批 COMMIT→不锁太久 | 大批量→检查锁表时间 |
+| 138 | **场景**: `UPDATE t SET status='done' WHERE created_at < NOW() - INTERVAL '30 days'`。**问题**: 批量 UPDATE→10 万行→触发 autovacuum→查询变慢。**后果**: 用户感知延迟→投诉 | 大批量 UPDATE=autovacuum 风暴 | B2 BulkUpdate→自动分批→每批 1000→最小化死元组 | 大批量 UPDATE→检查 autovacuum |
+| 139 | **场景**: 两个服务→同一行→并发 UPDATE→后覆盖前。**问题**: A 读 version=5→B 也读 version=5→A 更新→B 更新覆盖 A。**后果**: A 的修改消失→"丢失更新" | 无并发令牌=数据覆盖 | BA6 [ConcurrencyCheck]→UPDATE WHERE version=@old→并发检测 | 并发 UPDATE 测试 |
+| 140 | **场景**: PostgreSQL→`SELECT FOR UPDATE`→锁行→事务未提交→其他请求等待。**问题**: 长事务→锁持有→其他请求排队→连接池满。**后果**: 连锁超时→整个服务不可用 | 悲观锁无超时=死锁雪崩 | A21 ForUpdate + A10 WithTimeout→锁等待超时→回滚→不影响其他 | 锁超时测试 |
+| 141 | **场景**: 生产环境→DBA 手改`VARCHAR(50)→VARCHAR(100)`。**问题**: ORM 不知道→新代码写入 51 字→"value too long for type"。**后果**: INSERT 失败→用户操作丢失 | Schema Drift=运行时炸弹 | M6 DiffAsync→CI 中检测 drift→Dashboard 告警 | CI DiffAsync→检测到 drift→阻断部署 |
+| 142 | **场景**: 数据库升级→PostgreSQL 14→15→16。**问题**: 升级后→查询计划变化→索引被废弃→全表扫描。**后果**: 生产查询从 5ms→3000ms→告警风暴 | 版本升级→查询计划退化 | A15 DryRun→升级后生产核对查询计划→计划退化→告警 | 版本升级后 DryRun 对比 |
+| 143 | **场景**: Ormar ORM→聚合查询→SQL 注入。**问题**: CVE-2026-26198→聚合函数参数未净化→注入 SQL。**后果**: 数据泄露→CVSS 7.5 | ORM 聚合注入=安全死角 | AG1-AG5→源生成→参数化→与 FormattableString 同保护 | SQL 注入测试聚合函数 |
+| 144 | **场景**: 连接串含密码→推送到 Git→克隆到 CI→CI 日志中打印连接串。**问题**: CI 日志公开→攻击者获取密码→直接连 DB。**后果**: 数据库被拖→数据泄露 | 密码泄露=最安全漏洞 | DbOptions→支持环境变量→连接串不在源码中 | 代码审查→无连接串硬编码 |
+| 145 | **场景**: PostgreSQL→连接串包含 `sslmode=disable`→生产明文传输。**问题**: 关闭 TLS→数据库流量被嗅探→查询/结果全明文。**后果**: 数据在传输中被窃取 | 明文传输=中间人攻击 | ADO.NET Provider→默认 sslmode=require→除非显式 opt-out | 连接加密验证 |
+| 146 | **场景**: `INSERT INTO events (...) VALUES (...)`→无 RETURNING→查 @@identity。**问题**: 并发下 `@@identity` 返回别的 INSERT 的 ID→ID 错乱。**后果**: 后续操作基于错 ID→数据关联破坏 | @@identity 不可靠=并发不正确 | C3 InsertAsync→RETURNING→原子返回正确的 ID | 并发 INSERT→ID 正确性测试 |
+| 147 | **场景**: ORM 异常→堆栈打印到控制台→被监控采集→含 SQL 参数。**问题**: SQL 参数=用户密码→明文出现在日志中→安全审计发现。**后果**: SOC2 审计不通过 | PII 在日志=合规失败 | A16 Interceptor→生产模式脱敏 SQL 参数→"***MASKED***" | 日志审核→无 PII |
+| 148 | **场景**: GORM AutoMigrate→声明的 Many2Many→OnDelete:CASCADE→但外键未创建。**问题**: AutoMigrate 产生标签要求的表但忽略了 FK 约束→静默跳过。**后果**: 删除父记录→关联记录残留→孤儿数据 | AutoMigrate 不创 FK=隐性数据完整性问题 | M1 源生成器→扫描 [ForeignKey]→强制生成 FK DDL→不可跳过 | 迁移后验证 FK 存在 |
+| 149 | **场景**: MySQL→`INSERT IGNORE`→重复键→静默跳过→无错误。**问题**: 开发者以为 1000 行全插入→实际只有 500→其他 500 被静默丢弃。**后果**: 数据丢失→不知道 | INSERT IGNORE=静默数据丢失 | W2 SaveAsync→先查→决定 Insert/Update→不静默 | 重复键→确认异常抛出 |
+| 150 | **场景**: 数据库 failover→主库切换→新主库 IP→ORM 连接缓存旧 IP。**问题**: DNS TTL→连接池缓存旧 IP→failover 后连旧主(现在是只读)→写失败。**后果**: 故障切换后写操作全失败→手动重启应用 | 连接池缓存 IP=故障切换障碍 | A9 WithRetry→检测写失败→刷新连接池→自动切换到新主 | failover 模拟测试 |
+
 ---
 
 ## 统计
@@ -197,7 +267,11 @@
 | Phase 4 部署 & 迁移 | 15 | 发布上线层 |
 | Phase 5 运维 & 监控 | 15 | 生产运行层 |
 | Phase 6 安全 & 合规 | 10 | 安全合规层 |
+| Phase 7 PostgreSQL 专有 | 15 | PG 特有陷阱 |
+| Phase 8 MySQL 专有 | 10 | MySQL 特有陷阱 |
+| Phase 9 SQLite 专有 | 10 | SQLite 特有陷阱 |
+| Phase 10 生产事故 | 15 | 实际生产灾难模式 |
 | Phase 架构避开 | 10 | 从架构层面消除 |
-| **合计** | **100** | — |
+| **合计** | **150** | — |
 
-**100 条精选——每条包含实例化场景描述、量化必要性论证、V8 具体设计映射和可执行验证方法。覆盖全语言 25+ ORM、8 种数据库、4 个 CVE、2000 项原始踩坑记录的精华。**
+**150 条精选——每条包含实例化场景描述、量化必要性论证、V8 具体设计映射和可执行验证方法。覆盖全语言 25+ ORM、8 种数据库、4 个 CVE、2000 项原始踩坑记录的精华。**

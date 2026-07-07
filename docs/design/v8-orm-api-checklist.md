@@ -4,6 +4,22 @@
 
 ## P0 (必须实现 — 62 项)
 
+### 基础注解（所有 ORM 的根基）
+
+| # | 注解 | 对标 ORM | 必要性论证 | P |
+|---|------|------|------|:--:|
+| BA1 | `[Table("name")]` | EF Core, GORM, Prisma, jOOQ, 全语言 | 实体类↔表名映射。无此→类名当表名→snake_case 无法工作 | P0 |
+| BA2 | `[Column("name")]` | EF Core, GORM, Prisma, jOOQ, 全语言 | 属性↔列名映射。无此→属性名当列名→与 DB 命名冲突 | P0 |
+| BA3 | `[Key]` | EF Core, GORM, Prisma, jOOQ, 全语言 | 主键标识。无此→CRUD 无法生成 WHERE 子句 | P0 |
+| BA4 | `[NotMapped]` | EF Core, GORM, 全语言 | 排除非 DB 属性→不参与查询/DDL 生成 | P0 |
+| BA5 | `[ForeignKey]` + `OnDelete` | EF Core, GORM, Prisma | FK 约束 + CASCADE/NO ACTION 控制。CASCADE DELETE 毁库(M2.3M 行)→默认 NO ACTION | P0 |
+| BA6 | `[ConcurrencyCheck]` | EF Core IsConcurrencyToken | 乐观锁版本号→UPDATE WHERE version=@old→防并发覆盖 | P0 |
+| BA7 | `[IgnoreOnInsert]` | EF Core DatabaseGenerated | DB 生成列(created_at default NOW())→Insert 时排除 | P0 |
+| BA8 | `[Column(Length=128)]` | EF Core MaxLength | Schema 生成→VARCHAR(128)。无→默认长度→截断→数据丢失 | P0 |
+| BA9 | `[Column(Precision=10, Scale=2)]` | EF Core Precision | decimal 精度。金融计算→精度丢失→金额错误 | P0 |
+| BA10 | `[Required]` | EF Core Required | NOT NULL 约束→源生成 DDL 含 NOT NULL | P0 |
+| BA11 | `[DefaultValue("NOW()")]` | EF Core DefaultValueSql | Insert 时 DB 自动填值→不覆盖 | P0 |
+
 ### 设计阶段 — Schema & 迁移
 
 | # | API | 对标 ORM | 必要性论证 | P |
@@ -70,6 +86,22 @@
 | D3 | `QuerySingleAsync<T>(FormattableString sql)` | Dapper | 同上 | P0 |
 | D4 | `ScalarAsync<T>(FormattableString sql)` | Dapper ExecuteScalar | 聚合函数/单值查询 | P0 |
 
+### 开发阶段 — 聚合便捷方法
+
+| # | API | 对标 ORM | 必要性论证 | P |
+|---|------|------|------|:--:|
+| AG1 | `CountAsync<T>(FormattableString sql)` → `long` | EF Core CountAsync, 全语言 | 最常用聚合。写 `SELECT COUNT(*)` 手写→多行→易忘参数 | P1 |
+| AG2 | `SumAsync<T>(Expression<Func<T,object>>)` → `decimal` | EF Core SumAsync | 金额求和→手写→精度易错 | P1 |
+| AG3 | `MaxAsync<T>(Expression<Func<T,object>>)` → `TResult` | EF Core MaxAsync | 范围查询→手写 CAST→易错 | P1 |
+| AG4 | `MinAsync<T>(Expression<Func<T,object>>)` → `TResult` | EF Core MinAsync | 同上 | P1 |
+| AG5 | `AvgAsync<T>(Expression<Func<T,object>>)` → `double` | EF Core AverageAsync | 平均值→手写→小数精度 | P1 |
+
+### 开发阶段 — 流式查询
+
+| # | API | 对标 ORM | 必要性论证 | P |
+|---|------|------|------|:--:|
+| ST1 | `QueryAsyncEnumerable<T>(FormattableString sql)` → `IAsyncEnumerable<T>` | Dapper buffered:false, EF Core AsAsyncEnumerable | 100 万行结果→ToList()→OOM。流式逐行处理→内存恒定 | P1 |
+
 ### 开发阶段 — CRUD
 
 | # | API | 对标 ORM | 必要性论证 | P |
@@ -95,6 +127,7 @@
 | T2 | `CommitAsync()` / `RollbackAsync()` | ADO.NET 标配 | 同上 | P0 |
 | T3 | `WithTransaction(tran).From<T>()` | Dapper 事务扩展 | 事务内链式操作 | P0 |
 | T4 | `WithTransaction(tran).BulkInsertAsync<T>(items)` | 批量事务包裹 | 批量操作不在事务内→部分成功 | P0 |
+| T5 | `db.WithIsolationLevel(IsolationLevel.Serializable)` | ADO.NET IsolationLevel, 全语言 | 高并发扣库存→需要 Serializable→防幻读。ORM 不控制=依赖 DB 默认→Read Committed→数据不一致 | P0 |
 
 ### 开发阶段 — 关联加载 / 多租户 / 语句准备
 
@@ -140,7 +173,6 @@
 | AN3 | `[CompositeKey(nameof(a), nameof(b))]` | EF Core HasKey 复合键 | 真实 schema 60% 有复合主键。单列 [Key] 不够 | P0 |
 | AN4 | `[SoftDelete]` | GORM gorm.Model, EF Core QueryFilter | 需要时才 opt-in。GORM 教训:默认软删→Delete 不真删→磁盘满 | P0 |
 | AN5 | `[Column(StoreAs = StoreAs.Int32)]` / `[Column(StoreAs = StoreAs.String)]` | 自创（基于 EF Core HasConversion 模式） | enum→DB 存 int 还是 string→编译时确定→不会运行时不对 | P0 |
-| AN6 | `[Column(DefaultExpression = "NOW()")]` | EF Core DatabaseGenerated | Insert 时 DB 自动填 created_at→ORM 不传该列→不覆盖默认值 | P0 |
 
 ### 开发者安全 & 测试
 
@@ -179,7 +211,7 @@
 
 | # | API | 对标 | 必要性 | P |
 |---|------|------|------|:--:|
-| A22 | TempTable | linq2db CreateTempTable | 复杂报表→临时表→少数场景 | P2 |
+| A24 | TempTable | linq2db CreateTempTable | 复杂报表→临时表→少数场景 | P2 |
 | V4 | SqlFile（动态 SQL） | sqlc Go | .sql 文件中含条件逻辑→源生成器复杂→二期 | P2 |
 
 ---
@@ -188,8 +220,10 @@
 
 | 优先级 | 数量 | 说明 |
 |:--:|:--:|------|
-| P0 | 62 | 核心 ORM 功能——缺之不成 ORM |
-| P1 | 18 | 重要增值——显著提升开发效率/安全性 |
+| P0 | 73 | 核心 ORM 功能——缺之不成 ORM |
+| P1 | 24 | 重要增值——显著提升开发效率/安全性 |
 | P2 | 2 | 边缘场景——少数场景需要 |
+| 注解 | 15 | 基础注解(11) + 高级注解(4)——编译时映射驱动 |
+| 机制 | 4 | 开发者安全(2) + 测试Fixture(2) |
 
-**总计 82 项 API + 16 项注解/机制 = 98 项特性。每一项有全语言对标 ORM 来源，无一凭空设计。**
+**总计 118 项特性。每一项有全语言对标 ORM 来源，无一凭空设计。**
