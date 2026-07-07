@@ -849,4 +849,437 @@ PalORM.Testing       → PalORM.Core, PalORM.Sqlite
 
 ---
 
+## 十、完整 AOT 安全证明 (逐类详细)
+
+### 10.1 源生成器产物级别
+
+```
+Level 0 (BCL 根保留):
+  System.Private.CoreLib:
+    FormattableString → 所有使用 $"" 的应用自动保留
+    System.Data.Common → ADO.NET 核心
+    System.Collections.Frozen → 泛型特化自动保留
+  ✅ 无需任何额外配置
+
+Level 1 (源生成器产物):
+  RowFactory<T>.Read(DbDataReader) → 编译时生成, 零反射
+  CommandFactory<T>.Bind(T entity) → 编译时生成, 零反射
+  TypeMapper<T>.FromProvider/ToProvider → 编译时生成, 零反射
+  Registry → FrozenDictionary 编译时填充
+  ✅ 全部在 obj/ 中, 不依赖运行时反射
+
+Level 2 (泛型特化):
+  DataSession<TProvider> → 每个 Provider 独立特化
+  QueryBuilder<T> → 每个 T 独立特化
+  ✅ JIT 编译时完成, 无运行时开销
+```
+
+### 10.2 与 Dapper.AOT 逐功能对比
+
+| Dapper.AOT 功能 | Dapper.AOT 支持度 | PalORM 方案 | PalORM 优势 |
+|------|:--:|------|------|
+| Query<T>(sql, anonymous) | ✅ 拦截 | FormattableString | 编译时参数提取, 无匿名类型 |
+| Query<T>(sql, DynamicParameters) | ❌ 不拦截 | 无 DynamicParameters | 完全不依赖运行时参数字典 |
+| TypeHandler (SqlMapper.AddTypeHandler) | ❌ 生成器不读取 | TypeMapper 编译时生成 | 零运行时注册, 100% AOT 安全 |
+| private/internal 类型 | ❌ 编译期不可见 | 源生成器可通过 InternalsVisibleTo | 编译时发现, 编译时报错 |
+| RowFactory.Register<T> | ❌ v1.0.52 不可用 | 源生成器内置 | 内置支持, 无需 API |
+| 全局 [module: DapperAot] | ✅ 支持 | 源生成器自动 | 无需全局注解 |
+| 多 Provider | ✅ 支持 | IDbProvider static abstract | C# 11 特性, 零虚调用 |
+
+### 10.3 AOT 编译验证检查点
+
+```bash
+# 检查点 1: 编译通过, 零警告
+dotnet build PalORM.Core -c Release -p:IsAotCompatible=true
+# 预期: 0 Error(s), 0 Warning(s)
+
+# 检查点 2: 不在 NoWarn 中抑制任何 AOT 相关警告
+grep -r 'IL305\|IL3050\|IL3058\|IL2026' src/PalORM.Core/
+# 预期: 零匹配 (不出现这些抑制)
+
+# 检查点 3: 源生成器产物不含反射调用
+grep -r 'Type.GetType\|Activator.CreateInstance\|MakeGenericType\|Expression.Compile' obj/
+# 预期: 零匹配
+
+# 检查点 4: AOT 发布成功
+dotnet publish test/PalORM.AotTest -c Release -r win-x64 -p:PublishAot=true
+# 预期: 零错误, 可执行文件 < 15MB
+```
+
+---
+
+## 十一、扩展 API 参考 (完整的 XML 文档签名)
+
+### 查询构建器完整签名
+
+```csharp
+/// <summary>创建类型安全的查询构建器。表名从 [Table] 注解或类名推断。</summary>
+/// <typeparam name="T">标注 [Table] 的实体类型, 必须实现 IRowFactory&lt;T&gt; (源生成)</typeparam>
+QueryBuilder<T> From<T>() where T : class, IRowFactory<T>, new();
+
+/// <summary>追加 AND 条件。参数从 FormattableString 编译时提取, 运行时绑定为 DbParameter。</summary>
+/// <example>db.From&lt;Order&gt;().Where($"status = {OrderStatus.Pending}").ToListAsync()</example>
+QueryBuilder<T> Where(FormattableString clause);
+
+/// <summary>追加 OR 条件</summary>
+QueryBuilder<T> OrWhere(FormattableString clause);
+
+/// <summary>IN 子句: WHERE col IN (v1, v2, ...)。参数数量动态展开, 每批最多 500 个</summary>
+QueryBuilder<T> WhereIn<TValue>(Expression<Func<T, TValue>> member, IEnumerable<TValue> values);
+
+/// <summary>排序: 从 Expression 编译时提取列名</summary>
+QueryBuilder<T> OrderBy<TKey>(Expression<Func<T, TKey>> member, bool descending = false);
+
+/// <summary>精确选列, 避免 SELECT * 带来大字段传输</summary>
+QueryBuilder<T> Select(params Expression<Func<T, object?>>[] members);
+
+/// <summary>内连接: ON 条件使用 FormattableString 参数化</summary>
+QueryBuilder<T> InnerJoin<TJoin>(FormattableString onClause) where TJoin : class, IRowFactory<TJoin>, new();
+
+/// <summary>执行查询, 返回列表。使用 DbDataReader 逐行读取, RowFactory 物化</summary>
+ValueTask<List<T>> ToListAsync(CancellationToken ct = default);
+
+/// <summary>执行查询, 返回第一条。空集抛出 InvalidOperationException</summary>
+ValueTask<T> FirstAsync(CancellationToken ct = default);
+
+/// <summary>执行查询, 返回第一条或 default</summary>
+ValueTask<T?> FirstOrDefaultAsync(CancellationToken ct = default);
+
+/// <summary>分页查询。默认使用 Keyset 分页 (WHERE (col) < (@lastVal)), 
+/// 避免大 OFFSET 的性能退化。返回数据行和总行数 (同一事务内 COUNT)。</summary>
+ValueTask<(List<T> Rows, long Total)> ToPageAsync(int page, int pageSize, CancellationToken ct = default);
+
+/// <summary>生成 SQL 预览, 不执行数据库查询。调试辅助</summary>
+DryRunResult AsDryRun();
+
+/// <summary>追加 SQL 注释标签, 方便在生产慢查询日志中定位调用者</summary>
+QueryBuilder<T> Tag(string name);
+
+/// <summary>自动注入调用者信息: 文件名.方法名:行号</summary>
+QueryBuilder<T> TagWithCaller([CallerMemberName] string member = "", 
+    [CallerFilePath] string file = "", [CallerLineNumber] int line = 0);
+```
+
+### CRUD 完整签名
+
+```csharp
+/// <summary>按主键查询。复合主键传匿名对象: new { Key1 = 1, Key2 = 2 }</summary>
+ValueTask<T?> GetAsync<T>(object key, CancellationToken ct = default) where T : class, IRowFactory<T>, new();
+
+/// <summary>查询全表。自动附加 LIMIT 1000 (Dev 模式警告无 LIMIT)。生产慎用</summary>
+ValueTask<List<T>> GetAllAsync<T>(CancellationToken ct = default) where T : class, IRowFactory<T>, new();
+
+/// <summary>插入。源生成 INSERT 语句 + RETURNING 子句。返回带自增 ID 的实体</summary>
+ValueTask<T> InsertAsync<T>(T entity, CancellationToken ct = default) where T : class, IRowFactory<T>, new();
+
+/// <summary>更新。源生成 UPDATE 语句, WHERE 由 [Key] 注解生成。支持并发令牌</summary>
+ValueTask<int> UpdateAsync<T>(T entity, CancellationToken ct = default) where T : class, IRowFactory<T>, new();
+
+/// <summary>删除。源生成 DELETE 语句, WHERE 由 [Key] 注解生成</summary>
+ValueTask<int> DeleteAsync<T>(object key, CancellationToken ct = default) where T : class, IRowFactory<T>, new();
+
+/// <summary>部分更新。仅传入需要修改的列 (匿名对象)</summary>
+ValueTask<int> UpdateColumnsAsync<T>(object key, object columns, CancellationToken ct = default) where T : class, IRowFactory<T>, new();
+
+/// <summary>InsertOrUpdate。先 SELECT 检 key 存在性, 决定 INSERT 或 UPDATE</summary>
+ValueTask<T> SaveAsync<T>(T entity, CancellationToken ct = default) where T : class, IRowFactory<T>, new();
+```
+
+### 批量操作完整签名
+
+```csharp
+/// <summary>批量插入。自动分批(batchSize 默认 1000)。Provider 优化:
+/// PG: Binary COPY, MySQL: Bulk Loader, SQLite: batch INSERT</summary>
+ValueTask<long> BulkInsertAsync<T>(IEnumerable<T> entities, int? batchSize = null, CancellationToken ct = default) where T : class, IRowFactory<T>, new();
+
+/// <summary>批量更新。按主键匹配。自动分批</summary>
+ValueTask<long> BulkUpdateAsync<T>(IEnumerable<T> entities, CancellationToken ct = default) where T : class, IRowFactory<T>, new();
+
+/// <summary>批量 Upsert。INSERT ON CONFLICT (PG) / INSERT IGNORE (MySQL) / INSERT OR REPLACE (SQLite)</summary>
+ValueTask<long> BulkMergeAsync<T>(IEnumerable<T> entities, CancellationToken ct = default) where T : class, IRowFactory<T>, new();
+
+/// <summary>批量删除。按主键列表</summary>
+ValueTask<long> BulkDeleteAsync<T>(IEnumerable<object> keys, CancellationToken ct = default) where T : class, IRowFactory<T>, new();
+```
+
+### 事务 & 高级完整签名
+
+```csharp
+/// <summary>开启事务, 指定隔离级别</summary>
+ValueTask<DbTransaction> BeginTransactionAsync(IsolationLevel level = IsolationLevel.ReadCommitted, CancellationToken ct = default);
+
+/// <summary>事务内保存点。PG/MySQL/SQLite 均支持</summary>
+ValueTask SaveAsync(DbTransaction tran, string savepointName, CancellationToken ct = default);
+
+/// <summary>回滚到保存点</summary>
+ValueTask RollbackToAsync(DbTransaction tran, string savepointName, CancellationToken ct = default);
+
+/// <summary>全局查询过滤。标注 [SoftDelete] 的实体自动附加 WHERE deleted_at IS NULL</summary>
+DataSession<TProvider> WithFilter<T>(Expression<Func<T, bool>> predicate);
+
+/// <summary>查询缓存。ConcurrentDictionary 本地缓存, TTL 过期自动失效</summary>
+QueryBuilder<T> WithCache(string cacheKey, TimeSpan? ttl = null);
+
+/// <summary>结构化日志。ILogger<T> 注入, LoggerMessage 源生成</summary>
+QueryBuilder<T> WithTracing();
+
+/// <summary>OpenTelemetry 指标: palorm_queries_total, palorm_query_duration_seconds</summary>
+QueryBuilder<T> WithMetrics(string queryName);
+
+/// <summary>存储过程。参数绑定 + 结果映射</summary>
+StoredProcBuilder StoredProc(string name);
+
+/// <summary>悲观锁: SELECT ... FOR UPDATE</summary>
+QueryBuilder<T> ForUpdate(bool skipLocked = false);
+
+/// <summary>健康检查: SELECT 1, 返回延迟和状态</summary>
+ValueTask<HealthResult> HealthCheckAsync(CancellationToken ct = default);
+```
+
+---
+
+## 十二、扩展 Pitfall 防御矩阵 (100 条详述)
+
+从 295 条中选取 100 条最具代表性的陷阱, 逐一说明 PalORM 防御策略:
+
+### Schema & 迁移陷阱 (10 条)
+| # | 陷阱 | PalORM 防御 | 验证 |
+|---|------|------|------|
+| 1 | GORM AutoMigrate 静默删列 | M6 DiffAsync 先看变更清单, DROP COLUMN 红色高亮 | CI 中 diff→人审 |
+| 2 | EF Core 迁移合并冲突 | M1 注解驱动, 不生成迁移文件, 无合并冲突 | 无迁移文件目录 |
+| 3 | GORM 不创 FK 约束 | M1 源生成器扫描 [ForeignKey]→强制生成 FK DDL | 迁移后验证 FK 存在 |
+| 4 | Prisma 多副本竞态 | M1 advisory lock, 只有一个副本执行 | 并发迁移测试 |
+| 5 | Django 误判列改名 DROP+ADD | V7 编译时列名验证, 改名需显式告知 | 列改名不产生 DROP |
+| 6 | Prisma drift 无恢复 | M5 DiffAsync→CI 中检测→阻断部署 | CI DiffAsync |
+| 7 | 大表加 NOT NULL 列无 DEFAULT | M6 DiffAsync→检测→生成两步迁移 | 迁移脚本验证 |
+| 8 | 索引改名无原子性 | M6 DiffAsync→CREATE 新→DROP 旧→原子 | 索引迁移验证 |
+| 9 | 序列不同步 | M4 ValidateSchema→检查序列 vs MAX(id) | 序列检验 |
+| 10 | 视图依赖级联失效 | M6 DiffAsync→检测视图依赖→输出级联影响 | 视图依赖检查 |
+
+### 查询 & 性能陷阱 (20 条)
+| # | 陷阱 | PalORM 防御 | 验证 |
+|---|------|------|------|
+| 11 | N+1 查询 | Dev 模式编译时检测循环中 From<T>() | 源生成器检测 |
+| 12 | 参数嗅探 | P1 AsPrepared→可选不缓存计划 | 不同参数值测试 |
+| 13 | OFFSET 大页码 | QB5 Keyset→WHERE id>@lastId | 第 5000 页测试 |
+| 14 | SELECT * 大字段 | QB12 Select(e=>new{e.Id,e.Name}) 精确选列 | 执行计划验证 |
+| 15 | 函数索引失效 | AN1 [Computed("UPPER(name)")]→源生成函数索引 | 执行计划验证 |
+| 16 | OR 条件多索引分散 | 源生成器检测 OR>2→建议 UNION ALL | 执行计划对比 |
+| 17 | GORM Preload 无条件 | R1 Include 显式→默认不加载 | 默认不加载关联 |
+| 18 | COUNT(*) 全表扫描 | AG1 CountAsync→Dev 模式检测无 WHERE→警告 | 无 WHERE 检查 |
+| 19 | 死元组积累 | A5 WithMetrics→监控表膨胀→告警 | 死元组比例监控 |
+| 20 | 大结果集 OOM | ST1 IAsyncEnumerable→流式→恒定内存 | 100 万行→内存<20MB |
+| 21-30 | (窗口函数/CTE/SplitQuery/Bulk/预编译) | 对应 QB20-22/B1/ST1/P1 | 执行计划验证 |
+
+### 类型 & 数据完整陷阱 (15 条)
+| # | 陷阱 | PalORM 防御 | 验证 |
+|---|------|------|------|
+| 31 | Dapper DateTime Kind=Unspecified | TypeMapper 强制 DateTimeOffset | 读写一致性 |
+| 32 | Dapper DateTime 精度丢失 | TypeMapper 指定 DbType.DateTime2 | 精度测试 |
+| 33 | CASCADE DELETE 230 万行 | [ForeignKey] 默认 NO ACTION | FK DDL 验证 |
+| 34 | GORM 零值不更新 | UpdateAsync 不跳过零值 | 零值测试 |
+| 35 | Dapper JOIN 列映射错 | QB15-17 源生成列别名 | 别名验证 |
+| 36 | enum 值越界 | [Column(StoreAs=String)] 容忍未知值 | 越界测试 |
+| 37 | MySQL utf8≠utf8mb4 | M3 ValidateSchema→检查字符集 | charset 检查 |
+| 38 | SQLite FK 默认 OFF | SQLite Provider 自动 PRAGMA foreign_keys=ON | FK 约束测试 |
+| 39 | bool→SQLite INTEGER 映射 | TypeMapper SQLite Provider 自动 0/1↔bool | 读写测试 |
+| 40 | decimal 精度偏差 | BA9 [Column(Precision,Scale)] 编译时强制 | 100 万次往返 0 误差 |
+| 41-45 | (timestamp/Guid/TINYINT/ARRAY/INET) | TypeMapper/ValueConverter 编译时映射 | 类型测试 |
+
+### 并发 & 锁陷阱 (15 条)
+| # | 陷阱 | PalORM 防御 | 验证 |
+|---|------|------|------|
+| 46 | 乐观锁丢失更新 | BA6 [ConcurrencyCheck] UPDATE WHERE version=@old | 并发测试 |
+| 47 | 悲观锁死锁 | A21 ForUpdate+A10 WithTimeout→5s 超时→回滚 | 死锁测试 |
+| 48 | 热点行串行 | A21 ForUpdate(skipLocked:true) | 并发 1000 测试 |
+| 49 | write skew | T5 SERIALIZABLE→消除 | 并发写测试 |
+| 50 | 序列化失败不重试 | A9 WithRetry 检测 40001→重试 | 高并发测试 |
+| 51 | MySQL gap lock | T5 READ COMMITTED→无 gap lock | 插入不阻塞 |
+| 52 | 锁升级表锁 | B1 分批→每批<阈值→无升级 | 大批量测试 |
+| 53 | advisory lock 孤儿 | A22 Notify→连接断开→自动释放 | 连接断开测试 |
+| 54 | 连接池耗尽 | A9 WithRetry+A10 Timeout+A11 CB | 压力测试 |
+| 55-60 | (SKIP LOCKED/死锁重试/DistributedLock/InsertIgnore) | 对应 API 测试 | 并发测试 |
+
+### 安全 & 合规陷阱 (15 条)
+| # | 陷阱 | PalORM 防御 | 验证 |
+|---|------|------|------|
+| 61 | SQL 注入 (ORDER BY) | A14 Raw→白名单校验 | SQL 注入测试 |
+| 62 | ORM Leak 漏洞 | FormattableString→用户输入不为列名 | 渗透测试 |
+| 63 | MikroORM CVE-2026-34220 | 源生成器→SQL 编译时生成 | 审计 |
+| 64 | Hibernate CVE-2026-0603 | ID 值始终 @p0 参数化 | 审计 |
+| 65 | PII 在日志 | TM3 [SensitiveData]→日志脱敏 | 日志审核 |
+| 66 | 连接串硬编码 | DbOptions→环境变量/KeyVault | 代码审查 |
+| 67 | mass assignment | 不做实体绑定, DTO 分离 | API 测试 |
+| 68 | GDPR 导出含他数据 | Select 精确列→不加载关联 | 导出审核 |
+| 69 | PCI 信用卡明文 | TM3→自动掩码 | 日志审核 |
+| 70 | SOX 审计无记录 | A16 Interceptor→审计日志完整 | 审计验证 |
+| 71-75 | (密码轮换/HIPAA/TLS/内部注入/备份加密) | 对应配置/Provider | 安全审查 |
+
+### 分布式 & 运维陷阱 (15 条)
+| # | 陷阱 | PalORM 防御 | 验证 |
+|---|------|------|------|
+| 76 | Outbox 双写非原子 | T4 事务内先 INSERT outbox→提交→processor 发送 | 故障模拟 |
+| 77 | Saga 补偿失败 | T6 Savepoint 部分回滚+重试 | 补偿测试 |
+| 78 | 消息重复消费 | S1 Inbox→UNIQUE(message_id)→幂等 | 重复消息测试 |
+| 79 | CDC 顺序不一致 | A4 WithTracing→时序记录→可追溯 | CDC 测试 |
+| 80 | CorrelationId 断裂 | A4→自动继承 Activity.Current→span 关联 | Jaeger 验证 |
+| 81 | 连接池碎片 | A12 WithPool→连接串模板归一化 | 池监控 |
+| 82 | LB timeout 连接断开 | A9 WithRetry+TCP keepalive | 长空闲测试 |
+| 83 | PgBouncer 事务池 SET 问题 | A12 WithPool→检测 PgBouncer→session 模式 | PgBouncer 测试 |
+| 84 | 证书过期全站停 | ADO.NET Provider 自动处理证书刷新 | 证书过期测试 |
+| 85-90 | (failover/blue-green/canary/rollback/CI/CD/Docker) | 对应 M1/M5/A9 文档 | 集成测试 |
+
+### 架构层面 (10 条)
+| # | 陷阱 | PalORM 防御 | 验证 |
+|---|------|------|------|
+| 91 | Stateful Session | 🚫 DataSession using-scoped 无状态 | 无 ISession API |
+| 92 | Lazy Loading | 🚫 R1-R2 Include 显式加载 | 无 virtual 属性 |
+| 93 | Change Tracker | 🚫 不做状态追踪 | 无 DetectChanges |
+| 94 | Assembly Scanning | 🚫 注解驱动→编译时已知 | 无 Scan 方法 |
+| 95 | TPH/TPT/STI | 🚫 不做继承映射 | 无 Discriminator |
+| 96 | Implicit Preload | 🚫 Include 显式→默认不加载 | 默认无关联 |
+| 97 | Dynamic SQL 拼接 | 🚫 FormattableString 默认参数化 | 无 String.Format |
+| 98 | Global Mutable State | 🚫 DbOptions 实例配置 | 无 Static |
+| 99 | ORM 隐式类型推断 | 🚫 TypeMapper 编译时→C#→SQL 精确映射 | 类型测试 |
+| 100 | ORM 大版本升级 | 🚫 零外部依赖→无升级概念 | NuGet 仅 BCL |
+
+---
+
+## 十三、PalDDD 完整迁移指南
+
+### 13.1 迁移前准备
+
+```bash
+# 1. 添加 PalORM NuGet 包
+dotnet add src/PalDDD.Dapper package PalORM.Core
+dotnet add src/PalDDD.Dapper package PalORM.SourceGen
+dotnet add src/PalDDD.Dapper package PalORM.Sqlite
+dotnet add src/PalDDD.Dapper package PalORM.PostgreSql
+dotnet add src/PalDDD.Dapper package PalORM.MySql
+
+# 2. 移除 Dapper 依赖
+dotnet remove src/PalDDD.Dapper package Dapper
+dotnet remove src/PalDDD.Dapper package Dapper.AOT
+
+# 3. 编译验证 (可能有很多编译错误, 正常)
+dotnet build src/PalDDD.Dapper
+```
+
+### 13.2 迁移模式 (逐文件)
+
+**文件 1: DapperEventLog.cs**
+
+```diff
+- using Dapper;
++ using PalORM;
+
+- private readonly DbConnection _connection;
+- private readonly DapperDbType _dbType;
++ private readonly DbOptions _options;
+
+- public DapperEventLog(DbConnection connection, DbTransaction? transaction, DapperDbType dbType, TimeProvider? clock = null)
++ public EventLogStore(DbOptions options, TimeProvider? clock = null)
+
+- private async ValueTask EnsureOpenAsync(CancellationToken ct)
+- {
+-     if (_connection.State != ConnectionState.Open)
+-         await _connection.OpenAsync(ct);
+- }
++ // 不需要 — DataSession 构造时自动 Open
+
+- await EnsureOpenAsync(ct);
+- var current = await _connection.QuerySingleOrDefaultAsync<long?>(
+-     EventLogSql.SelectMaxVersion, new { streamName = stream }, _transaction);
++ using var db = await DataSession<SqliteProvider>.CreateAsync(_options, ct);
++ var current = await db.From<EventLogRow>()
++     .Where($"stream_name = {stream}")
++     .ScalarAsync<long?>($"SELECT MAX(stream_version) FROM events WHERE stream_name = {stream}", ct);
+
+- await _connection.ExecuteAsync(sql, new { e.Id, e.EventName, stream, ... }, _transaction, ct);
++ await db.ExecuteAsync($"INSERT INTO events (...) VALUES ({e.Id}, {e.EventName}, {stream}, ...)", ct);
+
+- var pos = await _connection.QuerySingleAsync<long>(sql, new { streamName = stream, fromVersion = from });
++ var pos = await db.ScalarAsync<long>($"SELECT global_position FROM events WHERE stream_name = {stream} AND stream_version = {from}", ct);
+
+- var rows = await _connection.QueryAsync<EventLogRow>(sql, new { streamName = stream, from = fromVersion });
++ var rows = await db.From<EventLogRow>()
++     .Where($"stream_name = {stream}")
++     .Where($"stream_version >= {fromVersion}")
++     .OrderBy(e => e.GlobalPosition)
++     .ToListAsync(ct);
+```
+
+**文件 2: DapperUnitOfWork.cs → 删除 (DataSession 替代)**
+
+```diff
+- public sealed class DapperUnitOfWork : IUnitOfWork
+- {
+-     private readonly DbConnection _connection;
+-     private DbTransaction? _transaction;
+-     // ... 80 行
+- }
++ // DataSession<T> 已经提供事务管理, 不需要包装类
++ // var db = await DataSession<SqliteProvider>.CreateAsync(options, ct);
++ // using var tran = await db.BeginTransactionAsync(ct);
++ // ... 操作 ...
++ // await tran.CommitAsync(ct);
+```
+
+### 13.3 迁移后验证
+
+```bash
+# 1. 编译
+dotnet build PalDDD.slnx  # 期望: 0 Error, 0 Warning
+
+# 2. 单元测试
+dotnet test test/PalDDD.Core.Tests
+dotnet test test/PalDDD.Dapper.Tests  # 迁移后的 PalORM 版本
+
+# 3. 集成测试
+dotnet test test/PalDDD.Integration.Tests
+# 期望: 62 个 Dapper 集成测试全部通过 (PalORM 版本)
+
+# 4. 性能对比
+dotnet run -c Release --project bench/PalDDD.Benchmarks
+# 期望: PalORM 性能不低于 Dapper (差异 <5%)
+
+# 5. AOT 验证
+dotnet publish samples/PalDDD.AotSample -c Release -r win-x64 -p:PublishAot=true
+# 期望: 零错误, 可执行
+```
+
+---
+
+## 十四、全部 NuGet 包版本策略
+
+```xml
+<!-- PalORM.Core.csproj -->
+<PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <Version>1.0.0</Version>
+    <Description>PalORM — .NET 首个全链路 AOT 安全的现代化微 ORM</Description>
+    <PackageTags>ORM;AOT;NativeAOT;micro-ORM;PostgreSQL;MySQL;SQLite;source-generator</PackageTags>
+</PropertyGroup>
+```
+
+版本策略: `Major.Minor.Patch` — Major 随 .NET 主要版本, Minor 随功能增量, Patch 随修复。
+
+---
+
+## 十五、许可证 & 社区
+
+- **许可证**: MIT (与 PalDDD 一致)
+- **源码托管**: GitHub (pal-ddd/palorm)
+- **文档站**: palorm.dev
+- **NuGet**: PalORM.Core, PalORM.SourceGen, PalORM.PostgreSql, PalORM.MySql, PalORM.Sqlite, PalORM.Testing
+
+---
+
+**PalORM — .NET 首个全链路 AOT 安全的现代化 ORM。106 API · 295 坑规避 · 97/100 综合评分 · 12 周实现 · 6 NuGet 包 · MIT 开源。**
+
+
+---
+
 **PalORM — .NET 首个全链路 AOT 安全的现代化 ORM。106 API · 295 坑规避 · 97/100 综合评分 · 12 周实现 · 3 个 Provider · 6 个 NuGet 包。**
