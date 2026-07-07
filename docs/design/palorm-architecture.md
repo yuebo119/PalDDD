@@ -1279,6 +1279,430 @@ dotnet publish samples/PalDDD.AotSample -c Release -r win-x64 -p:PublishAot=true
 
 **PalORM — .NET 首个全链路 AOT 安全的现代化 ORM。106 API · 295 坑规避 · 97/100 综合评分 · 12 周实现 · 6 NuGet 包 · MIT 开源。**
 
+---
+
+## 附录 A: 基准测试方法论
+
+### A.1 BenchmarkDotNet 配置
+
+```csharp
+[SimpleJob(RuntimeMoniker.Net110, baseline: true)]
+[MemoryDiagnoser]
+[Orderer(SummaryOrderPolicy.FastestToSlowest)]
+public class PalORMBenchmarks
+{
+    private DbOptions _pgOptions;
+    private DbOptions _sqliteOptions;
+
+    [GlobalSetup]
+    public async Task Setup()
+    {
+        _sqliteOptions = new DbOptions { ConnectionString = "Data Source=:memory:" };
+        using var db = await DataSession<SqliteProvider>.CreateAsync(_sqliteOptions);
+        await db.MigrateAsync();
+        // 预置 10000 行测试数据
+        var orders = Enumerable.Range(1, 10000).Select(i => new Order { Id = i, Status = "Pending", Total = i * 10.0m });
+        await db.BulkInsertAsync(orders);
+    }
+
+    [Benchmark(Baseline = true)]
+    public async Task<List<Order>> Dapper_Query_1000()
+    {
+        using var conn = new SqliteConnection("Data Source=:memory:");
+        return (await conn.QueryAsync<Order>("SELECT * FROM orders WHERE Status = @s LIMIT 1000", new { s = "Pending" })).ToList();
+    }
+
+    [Benchmark]
+    public async Task<List<Order>> PalORM_Query_1000()
+    {
+        using var db = await DataSession<SqliteProvider>.CreateAsync(_sqliteOptions);
+        return await db.From<Order>().Where($"Status = {"Pending"}").ToListAsync();
+    }
+
+    [Benchmark]
+    public async Task PalORM_BulkInsert_10000()
+    {
+        using var db = await DataSession<SqliteProvider>.CreateAsync(_sqliteOptions);
+        var orders = Enumerable.Range(20001, 10000).Select(i => new Order { Id = i, Status = "New" });
+        await db.BulkInsertAsync(orders, batchSize: 1000);
+    }
+
+    // ... 共 20 场景
+}
+```
+
+### A.2 测试环境规范
+
+| 参数 | 值 |
+|------|------|
+| 基准机器 | Intel i7-13700K, 32GB DDR5, NVMe SSD |
+| OS | Windows 11 Pro 23H2 |
+| .NET SDK | 11.0.100 |
+| DB (PG) | PostgreSQL 16, localhost, shared_buffers=2GB |
+| DB (MySQL) | MySQL 8.4, localhost |
+| DB (SQLite) | :memory: mode, WAL enabled |
+| 预热 | 10 iterations × 1000 ops |
+| 测量 | 50 iterations × 1000 ops |
+
+### A.3 预期结果矩阵
+
+| 场景 | Dapper | EF Core 10 | linq2db 6 | PalORM | PalORM/Dapper |
+|------|:--:|:--:|:--:|:--:|:--:|
+| Query 1 row | 0.8μs | 2.1μs | 1.2μs | 0.85μs | 1.06x |
+| Query 1000 rows | 45μs | 120μs | 68μs | 45μs | 1.00x |
+| Query 10000 rows | 480μs | 1.4ms | 750μs | 430μs | 0.90x ✅ |
+| Insert 1 row | 1.2μs | 3.5μs | 1.8μs | 1.2μs | 1.00x |
+| Insert 10000 (batch) | — | 850ms | 320ms | 280ms | 0.88x ✅ |
+| Insert 10000 (PG COPY) | — | — | 180ms | 150ms | 0.83x ✅ |
+| Update 1 row | 1.1μs | 2.8μs | 1.6μs | 1.1μs | 1.00x |
+| Update 10000 (batch) | — | 620ms | 410ms | 330ms | 0.80x ✅ |
+| 5-table JOIN (Split) | — | 8.2ms | 6.5ms | 1.6ms | 0.20x ✅ |
+| OFFSET page 5000 | 890ms | 920ms | 880ms | 0.9ms | 0.001x ✅ |
+| IAsyncEnumerable 1M | 340ms | — | 410ms | 340ms | 1.00x |
+| Prepared 1000x | 45ms | 38ms | 42ms | 22ms | 0.50x ✅ |
+
+---
+
+## 附录 B: 错误处理模式
+
+### B.1 异常层次结构
+
+```csharp
+public class PalORMException : Exception { /* base */ }
+public class ConcurrencyConflictException : PalORMException { /* version mismatch */ }
+public class ConnectionFailedException : PalORMException { /* connect retry exhausted */ }
+public class MigrationFailedException : PalORMException { /* migration error */ }
+public class ValidationFailedException : PalORMException { /* schema mismatch */ }
+public class QueryTimeoutException : PalORMException { /* timeout */ }
+public class CircuitBreakerOpenException : PalORMException { /* circuit open */ }
+```
+
+### B.2 错误处理最佳实践
+
+```csharp
+// 模式 1: 重试 transient 错误
+try
+{
+    var orders = await db.From<Order>().Where(...).ToListAsync(ct);
+}
+catch (ConnectionFailedException) { /* logged, circuit breaker opened */ }
+catch (QueryTimeoutException) { /* logged, client retries */ }
+
+// 模式 2: 乐观并发冲突处理
+try
+{
+    await db.UpdateAsync(order, ct);
+}
+catch (ConcurrencyConflictException)
+{
+    // 重新加载最新版本, 合并变更, 重试
+    var latest = await db.GetAsync<Order>(order.Id, ct);
+    latest.Status = order.Status; // 合并
+    await db.UpdateAsync(latest, ct);
+}
+
+// 模式 3: 迁移失败回滚
+try
+{
+    await db.MigrateAsync(targetVersion: 5, ct);
+}
+catch (MigrationFailedException ex)
+{
+    _logger.LogError(ex, "Migration to v5 failed, rolling back");
+    await db.MigrateAsync(targetVersion: 4, ct); // 回滚到上一个版本
+}
+```
+
+---
+
+## 附录 C: 从各 ORM 迁移指南
+
+### C.1 从 Dapper 迁移 (最平滑)
+
+| Dapper 模式 | PalORM 等价 |
+|------|------|
+| `conn.QueryAsync<T>(sql, new { id })` | `db.QueryAsync<T>($"SELECT ... WHERE Id = {id}")` |
+| `conn.QueryFirstAsync<T>(sql, param)` | `db.QueryFirstAsync<T>($"...")` |
+| `conn.ExecuteAsync(sql, param)` | `db.ExecuteAsync($"...")` |
+| `conn.QuerySingleAsync<T>(sql, param)` | `db.QuerySingleAsync<T>($"...")` |
+| `conn.QueryMultipleAsync(sql, param)` | `db.QueryMultipleAsync($"...")` |
+| `new CommandDefinition(sql, params, transaction, timeout, ct)` | `db.From<T>().Where(...).ToListAsync(ct)` |
+| `SqlMapper.AddTypeHandler(new MyHandler())` | 删除 —— TypeMapper 编译时生成 |
+| `DefaultTypeMap.MatchNamesWithUnderscores = true` | 删除 —— NamingConvention.SnakeCase |
+| `[module: DapperAot]` | 删除 —— 源生成器自动 |
+
+### C.2 从 EF Core 迁移
+
+| EF Core 模式 | PalORM 等价 |
+|------|------|
+| `context.Orders.Where(o => o.Status == s).ToListAsync()` | `db.From<Order>().Where($"Status = {s}").ToListAsync()` |
+| `context.Orders.Include(o => o.Items).ToListAsync()` | `db.From<Order>().Include<OrderItem>(...)` |
+| `context.SaveChangesAsync()` | `await db.UpdateAsync(entity)` — 显式 |
+| `context.Database.MigrateAsync()` | `await db.MigrateAsync()` |
+| `[Table("Orders")]` / `[Column("Status")]` | 完全相同 — 注解兼容 |
+| `[Key]` / `[Required]` / `[MaxLength]` | 完全相同 — 注解兼容 |
+| `[DatabaseGenerated(DatabaseGeneratedOption.Identity)]` | `[IgnoreOnInsert]` |
+| `[ConcurrencyCheck]` / `[Timestamp]` | 完全相同 — 注解兼容 |
+| `[Owned]` / `OwnsOne()` | `[OwnedJson]` |
+
+### C.3 从 linq2db 迁移
+
+| linq2db 模式 | PalORM 等价 |
+|------|------|
+| `db.FromSql<Order>($"SELECT * FROM Orders WHERE Id = {id}")` | `db.QueryAsync<Order>($"SELECT * FROM Orders WHERE Id = {id}")` |
+| `db.GetTable<Order>().Where(o => o.Status == s)` | `db.From<Order>().Where($"Status = {s}")` |
+| `new DataOptions().UsePostgreSQL(cs)` | `DataSession<PostgreSqlProvider>.CreateAsync(options)` |
+| `db.BulkCopy(options, items)` | `db.BulkInsertAsync(items)` |
+
+---
+
+## 附录 D: 测试策略
+
+### D.1 测试金字塔
+
+```
+         ╱  E2E Tests (1%)  ╲       — Docker Compose PostgreSQL + MySQL
+        ╱ Integration (15%)  ╲       — SQLite :memory: (fast, CI-safe)
+       ╱  Unit Tests (70%)   ╲       — Mock DbConnection / InMemory
+      ╱ Source Gen Tests (14%)╲       — Verify generated code
+     ╱─────────────────────────╲
+```
+
+### D.2 源生成器测试模式
+
+```csharp
+[Test]
+public async Task RowFactory_GeneratesCorrectReader()
+{
+    // Arrange: 模拟源生成器输入
+    var source = """
+        using PalORM;
+        [Table("orders")]
+        public partial class Order {
+            [Key] public long Id { get; set; }
+            [Column("status")] public string Status { get; set; }
+        }
+        """;
+
+    // Act: 运行源生成器
+    var result = await TestHelper.RunGeneratorAsync<PalORMGenerator>(source);
+
+    // Assert: 生成的代码编译通过 + 语义正确
+    await Assert.That(result.Compilation).HasNoErrors();
+    await Assert.That(result.GeneratedSources).HasCount(5); // RowFactory + CommandFactory + TypeMapper + Migration + Registry
+    await Assert.That(result.GeneratedSources[0].SourceText.ToString()).Contains("r.GetInt64(0)");
+    await Assert.That(result.GeneratedSources[0].SourceText.ToString()).Contains("r.GetString(1)");
+}
+```
+
+### D.3 集成测试模式
+
+```csharp
+public sealed class OrderStoreTests
+{
+    private DbOptions _options;
+
+    [Before(Test)]
+    public async Task Initialize()
+    {
+        _options = new DbOptions { ConnectionString = "Data Source=:memory:" };
+        using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
+        await db.MigrateAsync();
+    }
+
+    [Test]
+    public async Task InsertAndQuery_ReturnsCorrectOrder()
+    {
+        using var db = await DataSession<SqliteProvider>.CreateAsync(_options);
+        var order = new Order { Status = "Pending", Total = 99.99m };
+        var inserted = await db.InsertAsync(order);
+        var retrieved = await db.GetAsync<Order>(inserted.Id);
+        
+        await Assert.That(retrieved).IsNotNull();
+        await Assert.That(retrieved!.Status).IsEqualTo("Pending");
+        await Assert.That(retrieved.Total).IsEqualTo(99.99m);
+    }
+
+    [Test]
+    public async Task ConcurrentUpdate_ThrowsConcurrencyConflict()
+    {
+        using var db1 = await DataSession<SqliteProvider>.CreateAsync(_options);
+        using var db2 = await DataSession<SqliteProvider>.CreateAsync(_options);
+        
+        var order = await db1.InsertAsync(new Order { Status = "Pending" });
+        var copy = await db2.GetAsync<Order>(order.Id);
+        
+        await db1.UpdateAsync(order); // 第一次成功
+        await Assert.ThrowsAsync<ConcurrencyConflictException>(() => db2.UpdateAsync(copy!)); // 冲突
+    }
+}
+```
+
+---
+
+## 附录 E: 分布式部署模式
+
+### E.1 读写分离
+
+```csharp
+// 配置
+var writeOptions = new DbOptions { ConnectionString = "Host=master.db.local" };
+var readOptions = new DbOptions { ConnectionString = "Host=replica.db.local" };
+
+// 写操作
+using var writeDb = await DataSession<PostgreSqlProvider>.CreateAsync(writeOptions, ct);
+await writeDb.InsertAsync(newOrder, ct);
+
+// 读操作 (可容忍复制延迟)
+using var readDb = await DataSession<PostgreSqlProvider>.CreateAsync(readOptions, ct);
+var orders = await readDb.From<Order>().Where(...).ToListAsync(ct);
+```
+
+### E.2 多租户 (Schema-per-tenant)
+
+```csharp
+// 配置
+var tenantOptions = new Dictionary<string, DbOptions>
+{
+    ["tenant_a"] = new() { ConnectionString = "Host=db.local;SearchPath=tenant_a" },
+    ["tenant_b"] = new() { ConnectionString = "Host=db.local;SearchPath=tenant_b" },
+};
+
+// 使用
+var db = tenantOptions[tenantId];
+using var session = await DataSession<PostgreSqlProvider>.CreateAsync(db, ct);
+var orders = await session.From<Order>().Where(...).ToListAsync(ct);
+// 自动在 tenant_a.orders 或 tenant_b.orders 中查询
+```
+
+### E.3 水平分片
+
+```csharp
+// 配置
+var shardMap = new Dictionary<int, DbOptions>
+{
+    [0] = new() { ConnectionString = "Host=shard0.db.local" },
+    [1] = new() { ConnectionString = "Host=shard1.db.local" },
+};
+
+// 使用
+int shardKey = order.Id % 2;
+using var db = await DataSession<PostgreSqlProvider>.CreateAsync(shardMap[shardKey], ct);
+await db.InsertAsync(order, ct);
+```
+
+---
+
+## 附录 F: 安全最佳实践
+
+### F.1 连接串保护
+
+```csharp
+// ❌ 错误: 硬编码
+var options = new DbOptions { ConnectionString = "Host=db;Username=admin;Password=secret123" };
+
+// ✅ 正确: 环境变量
+var options = new DbOptions { ConnectionString = Environment.GetEnvironmentVariable("DB_CONNECTION_STRING")! };
+
+// ✅ 正确: Azure KeyVault
+var client = new SecretClient(new Uri("https://myvault.vault.azure.net/"), new DefaultAzureCredential());
+var cs = (await client.GetSecretAsync("DbConnectionString")).Value.Value;
+var options = new DbOptions { ConnectionString = cs };
+
+// ✅ 正确: 运行时密码提供者 (轮换支持)
+var options = new DbOptions { PasswordProvider = new AwsSecretsManagerPasswordProvider("prod/db/password") };
+```
+
+### F.2 敏感数据脱敏
+
+```csharp
+[Table("users")]
+public partial class User
+{
+    [Key] public long Id { get; set; }
+    public string Name { get; set; }
+    
+    [SensitiveData]  // ← ORM 日志中自动脱敏
+    public string Email { get; set; }
+    
+    [SensitiveData]
+    public string PhoneNumber { get; set; }
+    
+    [SensitiveData(mask: "****")]  // ← 完全隐藏
+    public string Ssn { get; set; }
+}
+
+// 日志输出: INSERT INTO users (name, email, phone_number, ssn) VALUES ('John', '***MASKED***', '***MASKED***', '****')
+```
+
+### F.3 SQL 注入防护保证
+
+```csharp
+// ✅ 安全: FormattableString 自动参数化
+var name = "O'Brien"; // SQL 注入尝试
+db.From<User>().Where($"Name = {name}");  // → WHERE Name = @p0, @p0 = "O'Brien" ✓
+
+// ✅ 安全: 列名从 Expression 编译时提取
+db.From<User>().OrderBy(u => u.Name);  // → ORDER BY "name" ✓
+
+// ⚠️ 需要白名单: 动态 ORDER BY 列名 (无法参数化)
+var allowed = new HashSet<string> { "name", "email", "created_at" };
+if (!allowed.Contains(userInput)) throw new ArgumentException("Invalid column");
+db.From<User>().Raw($"ORDER BY {userInput}");  // 经过白名单验证 ✓
+```
+
+---
+
+## 附录 G: 版本兼容矩阵
+
+| PalORM | .NET | C# | Npgsql | MySqlConnector | M.D.Sqlite | 支持状态 |
+|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| 1.0 | 11.0 | 15 | ≥ 8.0 | ≥ 2.3 | ≥ 8.0 | 当前 |
+| 1.1 | 11.0 | 15 | ≥ 8.1 | ≥ 2.4 | ≥ 8.1 | 计划 |
+| 2.0 | 12.0 | 16 | ≥ 9.0 | ≥ 3.0 | ≥ 9.0 | 未来 |
+
+**语义化版本**: Major.Minor.Patch。Major 变更 = 破坏性 API 变更; Minor = 新功能; Patch = 修复。
+
+---
+
+## 附录 H: 贡献指南
+
+### H.1 添加新 Provider
+
+```csharp
+// 1. 实现 IDbProvider
+public sealed class OracleProvider : IDbProvider
+{
+    public static string Name => "Oracle";
+    public static char ParameterPrefix => ':';
+    public static SqlDialect Dialect => SqlDialect.PostgreSql; // Oracle 语法最接近 PG
+    public static DbConnection CreateConnection(string cs) => new OracleConnection(cs);
+}
+
+// 2. 添加 Provider 特定扩展 (如需要)
+public static class OracleExtensions
+{
+    public static QueryBuilder<T> WhereOracleHint<T>(this QueryBuilder<T> builder, string hint) { ... }
+}
+
+// 3. 注册 NuGet 包: PalORM.Oracle
+// 4. 提交 PR with: Provider impl + 集成测试 + 文档
+```
+
+### H.2 代码规范
+
+- 使用 C# 15 最新特性 (如有)
+- 所有公共 API 必须有 XML 文档注释
+- 源生成器产物必须 `#pragma warning disable`
+- 测试覆盖率目标: 行覆盖 ≥ 90%, 分支覆盖 ≥ 80%
+- 性能关键路径必须有 BenchmarkDotNet 基准
+- AOT 兼容性: 每次 PR 必须通过 `dotnet publish -p:PublishAot=true`
+
+---
+
+**PalORM — .NET 首个全链路 AOT 安全的现代化 ORM。106 API · 295 坑规避 · 97/100 · 12 周 · 6 NuGet · MIT。**
+
+
 
 ---
 
