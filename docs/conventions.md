@@ -775,11 +775,31 @@ dotnet build PalDDD.slnx
 # 2. 测试（零失败）
 dotnet test PalDDD.slnx --no-restore -e "TESTINGPLATFORM_COMMANDLINE_VERSION=2"
 
-# 3. 公共 API 变更时更新快照
-PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests --filter "CorePackagePublicApi_MatchesSnapshot"
+# 3. 公共 API 变更时更新快照（filter 需在 -- 之后传递给 MTP）
+PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests -e "TESTINGPLATFORM_COMMANDLINE_VERSION=2" -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
 
 # 4. 规范验证脚本（秒级）
 bash scripts/verify-conventions.sh
+```
+
+### 10.6 测试框架规则（TUnit + MTP · 强制）
+
+> **背景**：本框架统一使用 **TUnit 1.58.0**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.2.3**。不使用 VSTest。
+
+**硬性规则**（违反导致 `dotnet test` 发现零测试或构建冲突）：
+
+1. **禁止引用 `Microsoft.NET.Test.Sdk`** — VSTest 的入口包，与 TUnit 自带的 MTP 冲突。测试项目只引用 `TUnit`（+ 可选 `TUnit.FsCheck` / `coverlet.collector`）。MTP 运行器 + MSBuild 集成由 TUnit 传递依赖自动引入，无需显式引用。
+2. **`dotnet test` 必须带 `-e "TESTINGPLATFORM_COMMANDLINE_VERSION=2"`** — .NET 11 Preview 5 SDK 的 `dotnet test` 桥接默认走 MTP 协议 v1，而 MTP 2.x 需要 v2。不加此环境变量会打印帮助文本并返回 exit code 5（零测试发现）。此为 SDK 过渡期问题，非 TUnit 缺陷；后续 SDK 修复协议协商后可移除。
+3. **MTP 参数在 `--` 之后** — `dotnet test` 的 `--filter`、`--treenode-filter` 等 MTP 参数需放在 `--` 分隔符后，构建参数在前。
+4. **测试项目属性**（`test/Directory.Build.props` 已条件化设置，勿在单项目重复）：`IsTestProject=true` 时自动启用 `IsTestingPlatformApplication` / `TestingPlatformDotnetTestSupport` / `UseTestingPlatformProtocol`。共享工具库（如 `PalDDD.Testing`，`IsTestProject` 未设）不受影响。
+
+**替代运行方式**（不经 SDK 桥接，无需 `-e`）：
+- 直接执行：`./test/{Project}/bin/Debug/net11.0/{Project}.exe`
+- 单项目：`dotnet run --project test/{Project}`
+
+**验证 `Microsoft.NET.Test.Sdk` 零残留**：
+```bash
+grep -rn 'Microsoft\.NET\.Test\.Sdk' --include='*.csproj' --include='*.props' . | grep -v obj/  # 应为空
 ```
 
 ---
