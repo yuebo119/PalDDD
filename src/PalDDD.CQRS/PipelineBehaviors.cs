@@ -20,6 +20,10 @@ namespace PalDDD.CQRS;
 //      无验证失败时零堆分配。这是比 FluentValidation 更轻量的设计。
 //    - LoggingBehavior 使用 IPalLogger<T> 门面，底层由 ZLogger 提供
 //      零分配 UTF8 结构化日志。仅在 _logger.IsEnabled(LogLevel.Debug) 时才记录。
+//    - LoggingBehavior 的有意义日志采用字符串插值而非 LoggerMessage 源生成：
+//      日志经 IPalLogger<T> 门面发出，门面刻意隐藏底层 ILogger（见 IPalLogger.cs 设计原则），
+//      与 LoggerMessage.Define 所需的 ILogger 入参不兼容；且插值仅在 IsEnabled(Debug) 门控后执行，
+//      生产路径零分配。改为 LoggerMessage 会泄漏门面抽象、增加复杂度，故保持现状（YAGNI）。
 //
 // 3. 可扩展性：用户可以通过实现 IPipelineBehavior<TRequest,TResponse>
 //    添加自定义行为（如事务、缓存、限流），无需修改框架代码。

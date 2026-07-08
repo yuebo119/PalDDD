@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    📦 PalDDD.Base — 基础聚合元包（仅 PackageReference，无源码）
+    从 nupkgs/PalDDD.Base.1.0.0-preview.1.nupkg 的 .nuspec 还原，
+    保证 git clone 后可从源码重建元包（修复 OBS-068）。
+
+    所有依赖均设 PrivateAssets="build;analyzers"，等价于 nuspec 的
+    exclude="Build,Analyzers"：元包仅聚合运行时依赖，不向消费方传递
+    build/analyzer 资产。
+
+    本地重建：先发布/恢复所依赖的 PalDDD.* preview 包，再
+    dotnet pack src/PalDDD.Base/PalDDD.Base.csproj
+  -->
+  <PropertyGroup>
+    <Description>Pal.DDD 基础元包 — 最小编程模型：领域基元 + 序列化 + 压缩 + 源生成 + 编译时分析器。零外部依赖，AOT 安全。</Description>
+    <PackageTags>DDD;Entity;ValueObject;DomainEvent;Specification;AOT;.NET11;Foundation</PackageTags>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="PalDDD.Analyzers.CodeFixes" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Analyzers" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Compression" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Core.SourceGen" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Core" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Serialization" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="ByteAether.Ulid" Version="1.0.0" PrivateAssets="build;analyzers" />
+  </ItemGroup>
+
+</Project>

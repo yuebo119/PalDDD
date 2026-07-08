@@ -225,7 +225,7 @@ src/                         30 源项目 · Clean Architecture
 ├── Infra-EFCore/            EF Core
 ├── Infra-Messaging/         Kafka · RabbitMQ
 ├── Hosting/                 DI · AspNetCore
-└── Metapackages/            Base · Extension · Prompts
+└── Metapackages/            Base · Extension · Prompts   # Base/Extension=聚合元包(仅 PackageReference，无源码)；Prompts=内容元包
 
 test/                        15 测试项目（TUnit）
 bench/                       BenchmarkDotNet 性能基准

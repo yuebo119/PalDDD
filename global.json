@@ -6,5 +6,6 @@
   },
   "test": {
     "runner": "Microsoft.Testing.Platform"
-  }
+  },
+  "_comment": "ITM-060：当前锁定 .NET 11 SDK Preview（allowPrerelease）。待 .NET 11 GA 后切换至稳定版 SDK 并重新评估 TargetFramework/Preview 包版本。"
 }

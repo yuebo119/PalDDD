@@ -116,7 +116,7 @@ internal sealed class PalOutboxHealthCheck : IHealthCheck
             await _store.GetPendingMessagesAsync(1, Transactions.IPalOutboxStore.DefaultMaxRetryCount, cancellationToken);
             return HealthCheckResult.Healthy("发件箱存储可用（DB 查询成功）");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return HealthCheckResult.Unhealthy("发件箱存储不可用", ex);
         }

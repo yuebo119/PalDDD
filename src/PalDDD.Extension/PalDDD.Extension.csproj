@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    📦 PalDDD.Extension — 扩展聚合元包（仅 PackageReference，无源码）
+    从 nupkgs/PalDDD.Extension.1.0.0-preview.1.nupkg 的 .nuspec 还原，
+    保证 git clone 后可从源码重建元包（修复 OBS-068）。
+
+    所有依赖均设 PrivateAssets="build;analyzers"，等价于 nuspec 的
+    exclude="Build,Analyzers"：元包仅聚合运行时依赖，不向消费方传递
+    build/analyzer 资产。
+
+    本地重建：先发布/恢复所依赖的 PalDDD.* preview 包，再
+    dotnet pack src/PalDDD.Extension/PalDDD.Extension.csproj
+  -->
+  <PropertyGroup>
+    <Description>Pal.DDD 扩展元包 — 全量 DDD 能力：CQRS + 事件日志 + 幂等 + 投影 + 消息 + 事务 + DI 装配。全 AOT 兼容。</Description>
+    <PackageTags>DDD;CQRS;EventSourcing;Outbox;Inbox;Saga;Projections;Idempotency;AOT;.NET11;FullStack</PackageTags>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="PalDDD.CQRS" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.DependencyInjection" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.EventLog" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Idempotency" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Messaging" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Projections.EventLog" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Projections" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Transactions" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="ByteAether.Ulid" Version="1.0.0" PrivateAssets="build;analyzers" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0-preview.5.26302.115" PrivateAssets="build;analyzers" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="11.0.0-preview.5.26302.115" PrivateAssets="build;analyzers" />
+    <PackageReference Include="ZLogger" Version="2.5.10" PrivateAssets="build;analyzers" />
+  </ItemGroup>
+
+</Project>
