@@ -1,0 +1,169 @@
+using System.Diagnostics.CodeAnalysis;
+using ByteAether.Ulid;
+using PalORM;
+using PalDDD.PalORM.Models;
+using PalDDD.Transactions;
+
+namespace PalDDD.PalORM.Stores;
+
+/// <summary>
+/// Outbox Store 的 PalORM 实现 —— 双泛型核心基类。
+/// <para>
+/// 由各方言包（PalDDD.PalORM.Sqlite 等）派生具体类固化 <typeparamref name="TProvider"/>，
+/// 如 <c>SqliteOutboxStore : PalOrmOutboxStore&lt;SqliteProvider&gt;</c>。
+/// </para>
+/// <para><b>设计要点</b>：
+/// <list type="bullet">
+/// <item>单 Scoped <see cref="DataSession{TProvider}"/> 共享 —— 事务经 UnitOfWork.BeginTransactionAsync 后自动传播（CreateCommand 附加 GetActiveTransaction）。</item>
+/// <item>GetPending 走 QueryAsync&lt;T&gt;（FormattableString 自动参数化）；Lease 必须<b>降级手写 SQL</b>（QueryBuilder UPDATE 拒绝子查询+RETURNING 整行）。</item>
+/// <item>AddMessagesAsync 批量走 BulkInsertAsync（三方言最优路径）。</item>
+/// <item>[ConcurrencyCheck]RetryCount 在 UpdateAsync 路径自动加并发谓词；ReleaseForRetry 走手写 SQL 避免 [ConcurrencyCheck] 干扰原子自增。</item>
+/// </list>
+/// </para>
+/// </summary>
+/// <typeparam name="TProvider">数据库 Provider 类型（编译时常量分发）。</typeparam>
+public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
+    where TProvider : IDbProvider
+{
+    /// <summary>共享的 Scoped 数据库会话（事务自动传播源）。</summary>
+    [SuppressMessage("Performance", "CA1051:Do not declare visible instance fields",
+        Justification = "框架库基类 —— 派生类（方言包中间类）需直接访问 Session 以扩展方言特有能力。")]
+    protected readonly DataSession<TProvider> Session;
+
+    /// <summary>时间提供者（用于 created_at/processed_at 应用层赋值）。</summary>
+    [SuppressMessage("Performance", "CA1051:Do not declare visible instance fields",
+        Justification = "框架库基类 —— 派生类需访问 Clock 以统一时间源。")]
+    protected readonly TimeProvider Clock;
+
+    /// <summary>构造 Outbox Store。</summary>
+    public PalOrmOutboxStore(DataSession<TProvider> session, TimeProvider? clock = null)
+    {
+        Session = session;
+        Clock = clock ?? TimeProvider.System;
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(
+        int batchSize, int maxRetryCount, CancellationToken ct)
+    {
+        var now = Clock.GetUtcNow();
+        // FormattableString 自动参数化（防 SQL 注入）；IS NULL/OR 条件整体括号包裹。
+        // 注意：QueryAsync<T> 按列声明序号映射 —— SELECT * 与实体属性顺序对齐。
+        var rows = await Session.QueryAsync<OutboxMessageRow>(
+            $"SELECT * FROM outbox_messages WHERE status = {(int)OutboxStatus.Pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}",
+            ct);
+        return rows.Select(r => r.ToDomain()).ToList();
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
+        int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
+    {
+        var now = Clock.GetUtcNow();
+        var until = now + leaseDuration;
+        var pending = (int)OutboxStatus.Pending;
+
+        // 核心原子租约 SQL —— 必须 QueryAsync/ExecuteAsync（QueryBuilder UPDATE 拒绝子查询+LIMIT+RETURNING 整行）
+        // 方言分支：PG/SQLite 走 RETURNING 单语句；MySQL 走 UPDATE + SELECT 两步。
+        if (TProvider.SupportsReturningClause)
+        {
+            var rows = await Session.QueryAsync<OutboxMessageRow>(
+                $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}) RETURNING *",
+                ct);
+            return rows.Select(r => r.ToDomain()).ToList();
+        }
+        else
+        {
+            // MySQL 路径：两步（UPDATE + 按 lease 标识回读，避免重跑子查询的 P0 bug）
+            await Session.ExecuteAsync(
+                $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize})",
+                ct);
+            var rows = await Session.QueryAsync<OutboxMessageRow>(
+                $"SELECT * FROM outbox_messages WHERE locked_by = {owner} AND locked_until = {until} ORDER BY created_at",
+                ct);
+            return rows.Select(r => r.ToDomain()).ToList();
+        }
+    }
+
+    /// <inheritdoc />
+    public void AddMessage(OutboxMessage message)
+    {
+        // InsertAsync 对 [Key(AutoIncrement=false)] 的 Ulid 主键不回填 —— 实体已带 Id。
+        // created_at 由领域对象在构造时赋值（init-only，Store 不覆盖；与 Dapper 实现的差异：
+        //   Dapper 旧版会覆盖 CreatedAt 为 Clock.Now，PalORM 版本尊重调用方传入值）。
+        var row = OutboxMessageRow.FromDomain(message);
+        Session.InsertAsync(row, default).AsTask().GetAwaiter().GetResult();
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
+    {
+        if (messages.Count == 0) return 0;
+        var rows = messages.Select(OutboxMessageRow.FromDomain).ToList();
+        // BulkInsertAsync 自动选方言最优路径（PG COPY / MySQL BulkCopy / SQLite 多值 INSERT）
+        return (int)await Session.BulkInsertAsync(rows, batchSize: 1000, ct: default);
+    }
+
+    /// <inheritdoc />
+    public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
+    {
+        // UpdateAsync 经 [ConcurrencyCheck]RetryCount 自动加 WHERE retry_count=@orig
+        // 失败抛 ConcurrencyConflictException —— 调用方（OutboxProcessor）应捕获并视为已处理
+        message.Status = OutboxStatus.Processed;
+        message.ProcessedAt = processedAt;
+        message.Error = null;
+        message.NextAttemptAt = null;
+        message.LockedBy = null;
+        message.LockedUntil = null;
+        var row = OutboxMessageRow.FromDomain(message);
+        Session.UpdateAsync(row, default).AsTask().GetAwaiter().GetResult();
+    }
+
+    /// <inheritdoc />
+    public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
+    {
+        message.Status = OutboxStatus.Dead;
+        message.Error = failureReason;
+        message.ProcessedAt = deadAt;
+        message.NextAttemptAt = null;
+        message.LockedBy = null;
+        message.LockedUntil = null;
+        var row = OutboxMessageRow.FromDomain(message);
+        Session.UpdateAsync(row, default).AsTask().GetAwaiter().GetResult();
+    }
+
+    /// <inheritdoc />
+    public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
+    {
+        // 手写 SQL 路径：原子自增 retry_count（避免读-改-写竞态）
+        // 不走 UpdateAsync —— 避免 [ConcurrencyCheck] 干扰原子自增语义
+        message.Status = OutboxStatus.Pending;
+        message.Error = failureReason;
+        message.NextAttemptAt = nextAttemptAt;
+        message.RetryCount += 1;
+        message.LockedBy = null;
+        message.LockedUntil = null;
+        Session.ExecuteAsync(
+            $"UPDATE outbox_messages SET status = {(int)OutboxStatus.Pending}, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {message.Id.ToString()}",
+            default).AsTask().GetAwaiter().GetResult();
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<int> RequeueDeadAsync(Ulid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)
+    {
+        var now = Clock.GetUtcNow();
+        var audit = $"requeued by {retriedBy} at {now:O}";
+        // 条件 UPDATE：status='Dead' 守卫防止重复重投；返回受影响行数用于幂等判断
+        return await Session.ExecuteAsync(
+            $"UPDATE outbox_messages SET status = {(int)OutboxStatus.Pending}, processed_at = NULL, error = {audit}, next_attempt_at = {nextAttemptAt}, locked_by = NULL, locked_until = NULL WHERE id = {messageId.ToString()} AND status = {(int)OutboxStatus.Dead}",
+            ct);
+    }
+
+    /// <inheritdoc />
+    public ValueTask<int> SaveChangesAsync(CancellationToken ct)
+    {
+        // 即时执行模式（与 Dapper 实现一致）—— 无 ChangeTracker
+        // 事务边界由 UnitOfWork.BeginTransactionAsync/CommitAsync 控制
+        return new ValueTask<int>(0);
+    }
+}

@@ -24,8 +24,8 @@ namespace PalDDD.PalORM.Models;
 [Table("Events")]
 public sealed partial class EventLogRow
 {
-    /// <summary>全局位置（Hi/Lo 预分配，非自增；应用层 EventLogPositionReserver 分配）。</summary>
-    [Key(AutoIncrement = false)]
+    /// <summary>全局位置（DB 自增 —— PG/SQLite 经 RETURNING 回填，MySQL 经 LAST_INSERT_ID 回填）。</summary>
+    [Key(AutoIncrement = true)]
     [Column("GlobalPosition")]
     public long GlobalPosition { get; set; }
 
