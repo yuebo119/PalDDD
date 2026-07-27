@@ -27,6 +27,12 @@
     <Folder Name="/src/Infra-PalORM/Sqlite/">
       <Project Path="src/PalDDD.PalORM.Sqlite/PalDDD.PalORM.Sqlite.csproj" />
     </Folder>
+    <Folder Name="/src/Infra-PalORM/PostgreSql/">
+      <Project Path="src/PalDDD.PalORM.PostgreSql/PalDDD.PalORM.PostgreSql.csproj" />
+    </Folder>
+    <Folder Name="/src/Infra-PalORM/MySql/">
+      <Project Path="src/PalDDD.PalORM.MySql/PalDDD.PalORM.MySql.csproj" />
+    </Folder>
     <Folder Name="/src/Infra-Dapper/">
       <Project Path="src/PalDDD.Dapper/PalDDD.Dapper.csproj" />
     </Folder>

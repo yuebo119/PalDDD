@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    PalDDD.PalORM.MySql — MySQL 方言包（固化 MySqlProvider）
+    ════════════════════════════════════════════════════════════
+    定位：固化 PalORM.MySql 的 MySqlProvider 类型。
+    MySQL 不支持 RETURNING 子句 —— TProvider.SupportsReturningClause=false（两步 UPDATE+SELECT 路径）。
+    BulkInsert 走 MySqlBulkCopy（local_infile=ON 时）或多值 INSERT（OFF 时自动回退）。
+  -->
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.PalORM.MySql</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <Description>Pal.DDD PalORM MySQL 适配包（AOT + 源生成 + BulkCopy/多值 INSERT）</Description>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CA2007</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="PalORM.MySql" />
+    <PackageReference Include="PalORM.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PalDDD.PalORM\PalDDD.PalORM.csproj" />
+  </ItemGroup>
+
+</Project>

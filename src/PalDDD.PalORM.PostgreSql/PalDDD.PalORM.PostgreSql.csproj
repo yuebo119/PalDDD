@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    PalDDD.PalORM.PostgreSql — PostgreSQL 方言包（固化 PostgreSqlProvider）
+    ════════════════════════════════════════════════════════════
+    定位：固化 PalORM.PostgreSql 的 PostgreSqlProvider 类型，为 DI 容器提供单参数开放泛型类。
+    PG 支持 RETURNING 子句 —— TProvider.SupportsReturningClause=true（单语句原子租约路径）。
+
+    本包当前仅含 Store 中间固化类 + DI 扩展。
+    方言特有能力（LISTEN/NOTIFY、JsonbExtensions、Auditor、SoftDelete、Sharding、ReadWriteRouter）
+    将逐步从 PalDDD.Dapper.PostgreSql 迁移（后续 PR）。
+  -->
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.PalORM.PostgreSql</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <Description>Pal.DDD PalORM PostgreSQL 适配包（AOT + 源生成 + RETURNING/COPY）</Description>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CA2007</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="PalORM.PostgreSql" />
+    <PackageReference Include="PalORM.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PalDDD.PalORM\PalDDD.PalORM.csproj" />
+  </ItemGroup>
+
+</Project>
