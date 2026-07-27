@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    PalDDD.PalORM.Sqlite — SQLite 方言包（固化 SqliteProvider）
+    ════════════════════════════════════════════════════════════
+    定位：固化 PalORM.Sqlite 的 SqliteProvider 类型，为 DI 容器提供单参数开放泛型类。
+    PalORM 的 IDbProvider 是纯 static abstract 接口（无实例成员），与 DI 容器"实例注入"
+    语义不兼容 —— 必须通过方言包提供具体中间类（如 SqliteOutboxStore : PalOrmOutboxStore<SqliteProvider>）。
+
+    本包同时包含 SQLite 特有能力（FTS5/JSON1/PRAGMA 优化），迁移自 PalDDD.Dapper.Sqlite。
+  -->
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.PalORM.Sqlite</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <Description>Pal.DDD PalORM SQLite 适配包（AOT + 源生成 + FTS5/JSON1 扩展）</Description>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CA2007</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- PalORM SQLite Provider + 核心 -->
+    <PackageReference Include="PalORM.Sqlite" />
+    <PackageReference Include="PalORM.Core" />
+    <!-- Microsoft.Extensions.DependencyInjection.Abstractions 在 net11.0 下自动可用，无需显式引用 -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PalDDD.PalORM\PalDDD.PalORM.csproj" />
+  </ItemGroup>
+
+</Project>

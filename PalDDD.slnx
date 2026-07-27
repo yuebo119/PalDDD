@@ -24,6 +24,9 @@
     <Folder Name="/src/Infra-PalORM/">
       <Project Path="src/PalDDD.PalORM/PalDDD.PalORM.csproj" />
     </Folder>
+    <Folder Name="/src/Infra-PalORM/Sqlite/">
+      <Project Path="src/PalDDD.PalORM.Sqlite/PalDDD.PalORM.Sqlite.csproj" />
+    </Folder>
     <Folder Name="/src/Infra-Dapper/">
       <Project Path="src/PalDDD.Dapper/PalDDD.Dapper.csproj" />
     </Folder>
