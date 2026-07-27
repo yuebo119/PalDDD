@@ -85,11 +85,12 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         }
 
         // INSERT 冲突（记录已存在）—— 回查现有记录决定返回语义
+        // 显式列序：与 InboxMessageRow 属性声明序对齐（QueryFirstAsync 按序号映射）
         InboxMessageRow? existing;
         try
         {
             existing = await Session.QueryFirstAsync<InboxMessageRow>(
-                $"SELECT * FROM inbox_messages WHERE consumer_name = {consumerName} AND message_id = {messageId}",
+                $"SELECT id, message_id, consumer_name, status, received_at, processed_at, processing_started_at, attempts, last_error FROM inbox_messages WHERE consumer_name = {consumerName} AND message_id = {messageId}",
                 ct);
         }
         catch (InvalidOperationException)
@@ -110,41 +111,41 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
             return null;
         }
 
-        // 超时或 Failed —— 尝试抢占（原子条件 UPDATE：status<>'Processed' 守卫）
-        // 走 UpdateAsync（[ConcurrencyCheck]Attempts 自动加并发谓词）
+        // 超时或 Failed —— 尝试抢占（手写 SQL，避免 [ConcurrencyCheck] 干扰）
+        // status<>'Processed' 守卫；attempts 原子自增
+        var leaseAffected = await Session.ExecuteAsync(
+            $"UPDATE inbox_messages SET status = {statusProcessing}, attempts = attempts + 1, processing_started_at = {now}, last_error = NULL WHERE id = {existing.Id} AND status <> {(int)InboxStatus.Processed}",
+            ct);
+        if (leaseAffected == 0) return null;
+
         existing.Status = statusProcessing;
         existing.Attempts += 1;
         existing.ProcessingStartedAt = now;
         existing.LastError = null;
-        try
-        {
-            await Session.UpdateAsync(existing, ct);
-        }
-        catch (ConcurrencyConflictException)
-        {
-            // 并发抢占失败 —— 返回 null
-            return null;
-        }
-
         return existing.ToDomain();
     }
 
     /// <inheritdoc />
     public async ValueTask MarkProcessedAsync(InboxMessage message, DateTimeOffset processedAt, CancellationToken ct)
     {
+        // 手写 SQL（不走 UpdateAsync）—— 避免 [ConcurrencyCheck]attempts 干扰并发场景
+        // WHERE status='Processing' 守卫，防止重复标记（与 Dapper 实现一致）
         message.Status = InboxStatus.Processed;
         message.ProcessedAt = processedAt;
-        var row = InboxMessageRow.FromDomain(message);
-        // UpdateAsync 自动加 WHERE attempts=@orig（[ConcurrencyCheck]）
-        await Session.UpdateAsync(row, ct);
+        await Session.ExecuteAsync(
+            $"UPDATE inbox_messages SET status = {(int)InboxStatus.Processed}, processed_at = {processedAt} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing}",
+            ct);
     }
 
     /// <inheritdoc />
     public async ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
     {
+        // 手写 SQL（不走 UpdateAsync）—— 避免 [ConcurrencyCheck]attempts 在并发场景抛异常
+        // WHERE status='Processing' 守卫，防止覆盖已 Processed 的记录（与 Dapper 实现一致）
         message.Status = InboxStatus.Failed;
         message.LastError = failureReason;
-        var row = InboxMessageRow.FromDomain(message);
-        await Session.UpdateAsync(row, ct);
+        await Session.ExecuteAsync(
+            $"UPDATE inbox_messages SET status = {(int)InboxStatus.Failed}, last_error = {failureReason} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing}",
+            ct);
     }
 }

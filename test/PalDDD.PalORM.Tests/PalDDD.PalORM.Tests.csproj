@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    PalDDD.PalORM.Tests — PalORM 适配层集成测试桶
+    ════════════════════════════════════════════════════════════
+    迁移自 DapperStoreTests.cs（41 测试）+ DapperUnitOfWorkTests.cs（10 测试）+ IdempotencyEfCoreTests.cs（6 测试）。
+    新增真并发测试（填补现有 ORM 共同盲区）。
+
+    与 DapperStoreTests 的关键差异：
+    - 无 [Before(Class)] 全局静态状态（PalORM 无 TypeHandler/MatchNamesWithUnderscores 污染）
+    - SQL 命名参数 $id → FormattableString {id} 位置插值
+    - ReadScalarAsync → session.ScalarAsync
+    - ExecuteNonQueryAsync → session.ExecuteAsync
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <NoWarn>$(NoWarn);CS1591;CA2007;CA1303</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalDDD.PalORM.Sqlite\PalDDD.PalORM.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.PalORM\PalDDD.PalORM.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.EventLog\PalDDD.EventLog.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Projections\PalDDD.Projections.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Idempotency\PalDDD.Idempotency.csproj" />
+    <ProjectReference Include="..\PalDDD.Testing\PalDDD.Testing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

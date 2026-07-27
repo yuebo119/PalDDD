@@ -86,6 +86,7 @@
     <Project Path="test/PalDDD.Serialization.Tests/PalDDD.Serialization.Tests.csproj" />
     <Project Path="test/PalDDD.Testing/PalDDD.Testing.csproj" />
     <Project Path="test/PalDDD.Transactions.Tests/PalDDD.Transactions.Tests.csproj" />
+    <Project Path="test/PalDDD.PalORM.Tests/PalDDD.PalORM.Tests.csproj" />
   </Folder>
 
   <Folder Name="/bench/">
