@@ -81,3 +81,6 @@ stryker-config.json
 /.codebuddy
 /.codebuddy
 /nupkgs
+
+# PalOrmSample 运行时临时数据库
+palddd-palorm-sample.db
