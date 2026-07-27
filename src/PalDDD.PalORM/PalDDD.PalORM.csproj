@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    PalDDD.PalORM — PalORM 适配核心层
+    ════════════════════════════════════════════════════════════
+    定位：吸取 Dapper + EFCore 双方经验，用 PalORM 源生成 ORM 实现五大基础设施 Store。
+    与 PalDDD.Dapper/PalDDD.EntityFrameworkCore 平级独立，三轨并行。
+    核心：DataSession<TProvider> 编译期特化（方言分发）+ [ConcurrencyCheck] 声明式乐观锁
+         + [TenantAware] 编译期多租户 + 真 Native AOT（源生成替代反射）。
+    此项目只含双泛型基类（如 PalOrmSagaStateStore<TProvider,TState>），
+    由各方言包（PalDDD.PalORM.Sqlite 等）提供具体固化中间类供 DI 注册。
+  -->
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.PalORM</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <Description>Pal.DDD PalORM 持久化适配核心层（真 AOT + 源生成 + 编译期方言特化）— 含 7 Store + UnitOfWork</Description>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
+    <!--
+      PalORM 源生成器作为 analyzer 传递，自身无 IL3058 风险。
+      所有 SQL 经源生成 RowFactory/CommandFactory，零反射、零 IL.Emit。
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- PalORM 核心（运行时） -->
+    <PackageReference Include="PalORM.Core" />
+    <!-- PalORM 源生成器（analyzer，编译期生成 RowFactory/CommandFactory）。
+         注意：PalORM 各 Provider 包（PalORM.Sqlite 等）以 exclude="Build,Analyzers" 引用 Core，
+         不传递 SourceGen —— 必须在此显式引用才能触发 Row DTO 源生成。 -->
+    <PackageReference Include="PalORM.SourceGen">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>compile; analyzers; build</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- PalDDD 抽象层 — 7 Store 接口所在项目 -->
+    <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\PalDDD.Transactions\PalDDD.Transactions.csproj" />
+    <ProjectReference Include="..\PalDDD.EventLog\PalDDD.EventLog.csproj" />
+    <ProjectReference Include="..\PalDDD.Projections\PalDDD.Projections.csproj" />
+    <ProjectReference Include="..\PalDDD.Idempotency\PalDDD.Idempotency.csproj" />
+  </ItemGroup>
+
+</Project>
