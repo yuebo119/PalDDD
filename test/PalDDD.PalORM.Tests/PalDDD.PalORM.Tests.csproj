@@ -17,11 +17,13 @@
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <NoWarn>$(NoWarn);CS1591;CA2007;CA1303</NoWarn>
+    <NoWarn>$(NoWarn);CS1591;CA2007;CA1303;CA1822</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\PalDDD.PalORM.Sqlite\PalDDD.PalORM.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.PalORM.PostgreSql\PalDDD.PalORM.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.PalORM.MySql\PalDDD.PalORM.MySql.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.PalORM\PalDDD.PalORM.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.EventLog\PalDDD.EventLog.csproj" />
@@ -32,6 +34,8 @@
 
   <ItemGroup>
     <PackageReference Include="TUnit" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Testcontainers.MySql" />
     <PackageReference Include="coverlet.collector">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

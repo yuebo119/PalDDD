@@ -65,6 +65,8 @@
     <!-- 集成测试 — Testcontainers -->
     <PackageVersion Include="Testcontainers.Kafka" Version="4.12.0" />
     <PackageVersion Include="Testcontainers.RabbitMq" Version="4.12.0" />
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.12.0" />
+    <PackageVersion Include="Testcontainers.MySql" Version="4.12.0" />
 
     <!-- 传递依赖版本覆盖 — System 包最新版本 -->
     <PackageVersion Include="System.Collections.Immutable" Version="10.0.9" />
