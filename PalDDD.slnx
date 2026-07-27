@@ -86,9 +86,10 @@
     <Project Path="bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj" />
   </Folder>
 
-  <Folder Name="/samples/">
-    <Project Path="samples/PalDDD.AotSample/PalDDD.AotSample.csproj" />
-    <Project Path="samples/PalDDD.ECommerce/PalDDD.ECommerce.csproj" />
-    <Project Path="samples/PalDDD.MinimalApi/PalDDD.MinimalApi.csproj" />
-  </Folder>
+    <Folder Name="/samples/">
+      <Project Path="samples/PalDDD.AotSample/PalDDD.AotSample.csproj" />
+      <Project Path="samples/PalDDD.PalOrmSample/PalDDD.PalOrmSample.csproj" />
+      <Project Path="samples/PalDDD.ECommerce/PalDDD.ECommerce.csproj" />
+      <Project Path="samples/PalDDD.MinimalApi/PalDDD.MinimalApi.csproj" />
+    </Folder>
 </Solution>

@@ -14,14 +14,13 @@ namespace PalDDD.PalORM.Stores;
 /// </para>
 /// <para><b>设计要点</b>：
 /// <list type="bullet">
-/// <item>单 Scoped <see cref="DataSession{TProvider}"/> 共享 —— 事务经 UnitOfWork.BeginTransactionAsync 后自动传播（CreateCommand 附加 GetActiveTransaction）。</item>
+/// <item>单 Scoped <see cref="DataSession{TProvider}"/> 共享 —— 事务经 UnitOfWork.BeginTransactionAsync 后自动传播。</item>
 /// <item>GetPending 走 QueryAsync&lt;T&gt;（FormattableString 自动参数化）；Lease 必须<b>降级手写 SQL</b>（QueryBuilder UPDATE 拒绝子查询+RETURNING 整行）。</item>
-/// <item>AddMessagesAsync 批量走 BulkInsertAsync（三方言最优路径）。</item>
+/// <item>SQL 显式列出列名（按 <see cref="OutboxMessageRow"/> 属性声明序对齐，避免 PalORM ColumnOrderValidator 列序错位）。</item>
 /// <item>[ConcurrencyCheck]RetryCount 在 UpdateAsync 路径自动加并发谓词；ReleaseForRetry 走手写 SQL 避免 [ConcurrencyCheck] 干扰原子自增。</item>
 /// </list>
 /// </para>
 /// </summary>
-/// <typeparam name="TProvider">数据库 Provider 类型（编译时常量分发）。</typeparam>
 public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
     where TProvider : IDbProvider
 {
@@ -47,10 +46,9 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         int batchSize, int maxRetryCount, CancellationToken ct)
     {
         var now = Clock.GetUtcNow();
-        // FormattableString 自动参数化（防 SQL 注入）；IS NULL/OR 条件整体括号包裹。
-        // 注意：QueryAsync<T> 按列声明序号映射 —— SELECT * 与实体属性顺序对齐。
+        // 列名内联到 SQL 字面量（PalORM 要求 FormattableString 类型，字符串拼接会退化为 string）
         var rows = await Session.QueryAsync<OutboxMessageRow>(
-            $"SELECT * FROM outbox_messages WHERE status = {(int)OutboxStatus.Pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}",
+            $"SELECT id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state FROM outbox_messages WHERE status = {(int)OutboxStatus.Pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}",
             ct);
         return rows.Select(r => r.ToDomain()).ToList();
     }
@@ -68,7 +66,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         if (TProvider.SupportsReturningClause)
         {
             var rows = await Session.QueryAsync<OutboxMessageRow>(
-                $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}) RETURNING *",
+                $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}) RETURNING id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state",
                 ct);
             return rows.Select(r => r.ToDomain()).ToList();
         }
@@ -79,7 +77,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
                 $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize})",
                 ct);
             var rows = await Session.QueryAsync<OutboxMessageRow>(
-                $"SELECT * FROM outbox_messages WHERE locked_by = {owner} AND locked_until = {until} ORDER BY created_at",
+                $"SELECT id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state FROM outbox_messages WHERE locked_by = {owner} AND locked_until = {until} ORDER BY created_at",
                 ct);
             return rows.Select(r => r.ToDomain()).ToList();
         }
@@ -89,8 +87,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
     public void AddMessage(OutboxMessage message)
     {
         // InsertAsync 对 [Key(AutoIncrement=false)] 的 Ulid 主键不回填 —— 实体已带 Id。
-        // created_at 由领域对象在构造时赋值（init-only，Store 不覆盖；与 Dapper 实现的差异：
-        //   Dapper 旧版会覆盖 CreatedAt 为 Clock.Now，PalORM 版本尊重调用方传入值）。
+        // created_at 由领域对象在构造时赋值（init-only，Store 不覆盖）。
         var row = OutboxMessageRow.FromDomain(message);
         Session.InsertAsync(row, default).AsTask().GetAwaiter().GetResult();
     }

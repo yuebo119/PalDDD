@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    PalDDD.PalOrmSample — AOT 真实发布验证
+    ════════════════════════════════════════════════════════════
+    目标：用 dotnet publish -r win-x64 /p:PublishAot=true 验证 PalDDD.PalORM 全链路 AOT 兼容。
+    通过：编译期 0 警告 + 运行时 PASSED 输出。
+    失败：任一 IL3058/IL2026 警告（TreatWarningsAsErrors）直接 error。
+
+    覆盖：
+    - 7 Store 端到端 CRUD（Outbox/Inbox/Saga/EventLog/Projection/Idempotency + UnitOfWork）
+    - 多租户隔离（如启用 [TenantAware]）
+    - 事务回滚验证
+    - Saga JSON 全状态快照往返（STJ source-gen）
+    - PalORM 跨程序集 registry merge（Row DTO 注册）
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PalDDD.PalOrmSample</RootNamespace>
+    <AssemblyName>PalDDD.PalOrmSample</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <!-- AOT 发布时速度优先 -->
+    <OptimizationPreference>Speed</OptimizationPreference>
+    <StackTraceLineNumberSupport>true</StackTraceLineNumberSupport>
+    <!-- Sample 是诊断入口（非生产代码）：允许 Console.WriteLine 硬编码字符串 -->
+    <NoWarn>$(NoWarn);CA1303</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalDDD.PalORM.Sqlite\PalDDD.PalORM.Sqlite.csproj" />
+  </ItemGroup>
+
+</Project>
