@@ -65,11 +65,14 @@ dotnet add package PalDDD.Base
 # 扩展层：CQRS + EventLog + Outbox/Inbox/Saga + Projections + DI 装配
 dotnet add package PalDDD.Extension
 
-# Dapper 持久化 — AOT 兼容
+# PalORM 持久化 — 真 AOT（源生成 + 编译期 SQL），吸取 Dapper+EFCore 经验的第三条路（推荐）
+dotnet add package PalDDD.PalORM.Sqlite       # 或 PalORM.PostgreSql / PalORM.MySql
+
+# Dapper 持久化 — 经典手写 SQL 路径（维护中，逐步迁移到 PalORM）
 dotnet add package PalDDD.Dapper
 dotnet add package PalDDD.Dapper.PostgreSql
 
-# EF Core 持久化 — 功能完整，复杂查询场景
+# EF Core 持久化 — 功能完整，复杂查询场景（需要 Migration/LINQ/ChangeTracker）
 dotnet add package PalDDD.EntityFrameworkCore
 
 # 消息代理 — 可选，InMemory 实现覆盖全部接口
@@ -167,8 +170,9 @@ await dispatcher.SendAsync(new SubmitOrder(new OrderId(), "Customer", 100m));
 ### 持久化适配器
 | 适配器 | AOT | 数据库 | 覆盖范围 |
 |--------|:--:|:--:|------|
-| PalDDD.Dapper | ✅ | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / UnitOfWork |
-| PalDDD.EntityFrameworkCore | ❌ | PG / MySQL / SQLite | 同上 + Hi/Lo 位置分配器 |
+| **PalDDD.PalORM** | ✅ **真 AOT** | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / **Idempotency** / UnitOfWork（源生成 + 编译期 SQL，[详见适配层文档](docs/palorm-adapter.md)） |
+| PalDDD.Dapper | ⚠️ 假象 | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / UnitOfWork（`[module:DapperAot]` 实际禁用，靠 NoWarn IL3058 声明兼容） |
+| PalDDD.EntityFrameworkCore | ❌ | PG / MySQL / SQLite | 同上 + Hi/Lo 位置分配器（反射重，`IsAotCompatible=false`） |
 
 ### 数据库方言扩展
 | 方言 | 特有能力 |
@@ -185,12 +189,13 @@ await dispatcher.SendAsync(new SubmitOrder(new OrderId(), "Customer", 100m));
 |----|:--:|------|
 | PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` 全局继承 |
 | PalDDD.CQRS · EventLog · Messaging · Transactions · Projections · DI | ✅ | 同上 |
-| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ | Dapper.AOT 源生成器接入 |
+| **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **真 AOT** | 源生成 RowFactory/CommandFactory，`PublishAot=true` 验证通过（[PalOrmSample](samples/PalDDD.PalOrmSample/)） |
+| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ⚠️ 假象 | Dapper.AOT `[module:DapperAot]` 实际禁用，靠 `<NoWarn>IL3058</NoWarn>` 声明兼容（详见 [PalORM 适配层文档](docs/palorm-adapter.md)） |
 | PalDDD.EntityFrameworkCore | ❌ | EF Core 运行时限制 |
 | PalDDD.Messaging.Kafka · RabbitMQ | ❌ | Confluent.Kafka / RabbitMQ.Client 限制 |
 | PalDDD.Hosting.AspNetCore | ❌ | FrameworkReference 限制 |
 
-详见 [AOT 指南](docs/aot.md)。
+详见 [AOT 指南](docs/aot.md) 和 [PalORM 适配层文档](docs/palorm-adapter.md)。
 
 ---
 
