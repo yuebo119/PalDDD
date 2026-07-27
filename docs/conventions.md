@@ -558,10 +558,14 @@ public sealed class SagaKeyValidationTests { ... }
 | 变更类型 | 必须同步的文档 |
 |---------|--------------|
 | 公共 API 签名变更 | `README.md`·`docs/usage.md`·`docs/tutorial.md` |
-| 新增/删除项目 | `README.md`·`docs/architecture.md`·`PalDDD.slnx` 分层描述 |
-| AOT 配置变更 | `docs/aot.md` |
-| 性能契约变更 | `docs/performance.md`·`docs/conventions.md` §12 |
-| 验证命令变更 | `docs/development.md` |
+| 新增/删除项目 | `README.md`·`docs/architecture.md`·`docs/release.md` §2 包清单·`PalDDD.slnx` 分层描述 |
+| AOT 配置变更 | `docs/aot.md`·`docs/pitfalls.md` §3 AOT 陷阱 |
+| 性能契约变更 | `docs/performance.md`·`docs/conventions.md` §12·`docs/testing.md` §3.2 性能基准矩阵 |
+| 验证命令变更 | `docs/development.md`·`docs/testing.md` §10 提交前必检清单·`docs/release.md` §4 发布前验证清单 |
+| 新增测试约定 | `docs/conventions.md` §5·`docs/testing.md` |
+| 新增/修改包发布范围 | `docs/release.md` §2 发布清单 |
+| 新增踩坑/陷阱 | `docs/pitfalls.md`·`CHANGELOG.md` `[Unreleased]` |
+| 版本号升级 | `Directory.Build.props`·`README.md` badge·`CHANGELOG.md`·git tag（详见 `docs/release.md` §1） |
 
 **同步原则**：代码、文档、注释三方一致。变更后 `grep` 旧事实值确认零残留。
 
