@@ -17,7 +17,7 @@
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <NoWarn>$(NoWarn);CS1591;CA2007;CA1303;CA1822</NoWarn>
+    <NoWarn>$(NoWarn);CS1591;CA2007;CA1303;CA1822;CA1031</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

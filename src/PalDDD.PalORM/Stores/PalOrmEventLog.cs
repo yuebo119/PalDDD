@@ -45,7 +45,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
     {
         // 步骤 1：乐观并发检查 —— 读当前最大 StreamVersion
         var currentMax = await Session.ScalarAsync<long?>(
-            $"SELECT MAX(StreamVersion) FROM Events WHERE StreamName = {streamName}",
+            $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
             cancellationToken);
         var currentVersion = currentMax ?? -1;
         if (!expectedVersion.Matches(currentVersion))
@@ -96,7 +96,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         // 注意：FormattableString 无法插值 maxCount=int.MaxValue（会被插值为参数），SQL 层面 LIMIT 兼容
         // 使用流式 QueryAsyncEnumerable —— 恒定内存读取（重要：超长事件流场景）
         await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(
-            $"SELECT * FROM Events WHERE StreamName = {streamName} AND StreamVersion >= {fromVersion} ORDER BY StreamVersion",
+            $"SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason FROM events WHERE stream_name = {streamName} AND stream_version >= {fromVersion} ORDER BY stream_version",
             cancellationToken))
         {
             yield return ToRecorded(row, streamName);
@@ -110,7 +110,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(
-            $"SELECT * FROM Events WHERE GlobalPosition >= {fromPosition} ORDER BY GlobalPosition",
+            $"SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason FROM events WHERE global_position >= {fromPosition} ORDER BY global_position",
             cancellationToken))
         {
             yield return ToRecorded(row, row.StreamName);

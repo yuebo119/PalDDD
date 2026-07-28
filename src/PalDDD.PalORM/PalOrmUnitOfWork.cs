@@ -50,22 +50,25 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
     public async ValueTask CommitAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_transaction is null) return;  // 无活动事务，幂等 no-op
+        if (_transaction is null) return;
 
         await _transaction.CommitAsync(ct);
         await _transaction.DisposeAsync();
         _transaction = null;
+        // 清除 DataSession 内部的事务引用（PalORM 要求 Commit/Rollback 后显式清空）
+        _session.UseTransaction(null);
     }
 
     /// <inheritdoc />
     public async ValueTask RollbackAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_transaction is null) return;  // 无活动事务，幂等 no-op
+        if (_transaction is null) return;
 
         await _transaction.RollbackAsync(ct);
         await _transaction.DisposeAsync();
         _transaction = null;
+        _session.UseTransaction(null);
     }
 
     /// <inheritdoc />
@@ -73,15 +76,15 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
     {
         if (_disposed) return;
         _disposed = true;
-        GC.SuppressFinalize(this);  // CA1816: IAsyncDisposable 模式要求
+        GC.SuppressFinalize(this);
 
-        // 未提交的事务自动回滚（与 DapperUnitOfWork.DisposeAsync 一致）
         if (_transaction is not null)
         {
             try { await _transaction.RollbackAsync(); }
             catch (InvalidOperationException) { /* 事务已提交/回滚 */ }
             await _transaction.DisposeAsync();
             _transaction = null;
+            _session.UseTransaction(null);
         }
     }
 }

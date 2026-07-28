@@ -33,7 +33,7 @@ public sealed class MultiDialectFixture : IAsyncDisposable
     /// <summary>创建 PostgreSQL 会话（启动 Testcontainers 容器）。</summary>
     public async Task<DataSession<PostgreSqlProvider>> CreatePostgreSqlAsync(CancellationToken ct = default)
     {
-        _pg = new PostgreSqlBuilder("postgres:17-alpine")
+        _pg = new PostgreSqlBuilder("postgres:latest")
             .WithDatabase("palddd_test")
             .WithUsername("test")
             .WithPassword("test")
@@ -49,7 +49,7 @@ public sealed class MultiDialectFixture : IAsyncDisposable
     /// <summary>创建 MySQL 会话（启动 Testcontainers 容器）。</summary>
     public async Task<DataSession<MySqlProvider>> CreateMySqlAsync(CancellationToken ct = default)
     {
-        _mySql = new MySqlBuilder("mysql:8.4")
+        _mySql = new MySqlBuilder("mysql:latest")
             .WithDatabase("palddd_test")
             .WithUsername("test")
             .WithPassword("test")
