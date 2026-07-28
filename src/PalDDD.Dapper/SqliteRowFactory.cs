@@ -18,10 +18,10 @@ using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Dapper;
 
-/// <summary>SQLite Dapper.AOT RowFactory — 将 TEXT 列映射到 Guid/Ulid/DateTimeOffset。</summary>
+/// <summary>SQLite Dapper RowFactory — 将 TEXT 列映射到 Guid/Ulid/DateTimeOffset。</summary>
 /// <remarks>
-/// 启用条件：项目引用 Dapper.AOT + 启用 InterceptorsPreviewNamespaces。<br/>
-/// 当前 4 个 Dapper 项目已满足条件，此 RowFactory 解除 SQLite TypeHandler 依赖。
+/// ⚠️ AOT 状态：[module:DapperAot] 当前未启用——经典 Dapper 运行时路径生效，非 NativeAOT 兼容。<br/>
+/// PalORM 适配层（PalDDD.PalORM）提供真 AOT 替代路径。
 /// </remarks>
 public static class SqliteRowFactory
 {

@@ -125,13 +125,12 @@ public static class PostgreSqlJsonb
 
     // ── 内部：标识符转义（防止 SQL 注入）──
 
+    /// <summary>
+    /// PostgreSQL 标识符转义 —— 加外层双引号 + 内部双引号翻倍（P3-1 修复）。
+    /// 仅适用于已知可信标识符（列名/表名硬编码）。用户输入必须先白名单校验。
+    /// </summary>
     private static string Escape(string identifier)
-    {
-        // PostgreSQL 标识符用双引号转义，字面值单引号转义已在上层处理
-        return identifier.Contains('"') || identifier.Contains('\'')
-            ? identifier.Replace("\"", "\"\"")
-            : identifier;
-    }
+        => $"\"{identifier.Replace("\"", "\"\"")}\"";
 
     /// <summary>
     /// JSON 值转义 —— 防止 JSON 注入（P0-FIX-5）。

@@ -148,7 +148,12 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         {{limitClause}}
         """;
 
-    /// <summary>配置发件箱消息实体</summary>
+    /// <summary>配置发件箱消息实体。</summary>
+    /// <remarks>
+    /// ⚠️ <b>派生类注意（P3-4）</b>：重写 <c>OnModelCreating</c> 时必须调用
+    /// <c>base.OnModelCreating(modelBuilder)</c>，否则 <c>RetryCount.IsConcurrencyToken()</c>
+    /// 等配置会静默失效。参考 <c>EventLogDbContext.OnModelCreating</c> 的调用模式。
+    /// </remarks>
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         ArgumentNullException.ThrowIfNull(modelBuilder);

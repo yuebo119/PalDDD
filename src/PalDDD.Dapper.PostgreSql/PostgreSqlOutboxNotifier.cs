@@ -61,6 +61,10 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
     // OutboxBatchProcessor 本身会处理所有 pending 消息，一次批处理足以覆盖多次 NOTIFY。
     private readonly SemaphoreSlim _processGate = new(1, 1);
 
+    // P2-1 修复 (2026-07-28): 自通知节流——避免高积压场景的 NOTIFY 风暴
+    private DateTimeOffset _lastSelfNotify = DateTimeOffset.MinValue;
+    private readonly TimeSpan _pollInterval = TimeSpan.FromSeconds(30);
+
     /// <summary>释放 SemaphoreSlim</summary>
     public override void Dispose()
     {
@@ -156,25 +160,29 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
 
             // 🔴 P1 修复 (2026-07-28): 批处理完成后主动发送一次 NOTIFY 自唤醒。
             // 必要性：消息可能在批处理执行期间（_processGate 被占用，新的 NOTIFY 被 TryEnter(0) 丢弃）
-            // 或者在批处理刚结束、监听线程尚未重新进入 conn.WaitAsync() 之前被插入。
-            // 两种情况下，原始数据库触发器发出的 NOTIFY 都可能被错过：
-            //   - WaitAsync 未在阻塞期间接收到的 NOTIFY（已读取但未消费的会丢失）；
-            //   - 信号量丢弃并发的 Task 触发后，新插入的消息只能等下一个外部 NOTIFY。
-            // 通过此处主动自通知，唤醒主循环重新进入 WaitAsync，
-            // 即使期间有新消息也能在下一个批处理周期被取出，保证 at-least-once 语义。
-            // 失败可忽略——最坏情况下次外部 NOTIFY 仍会触发；不影响正确性。
-            try
+            // 或在批处理刚结束、监听线程尚未重新进入 conn.WaitAsync() 之前被插入。
+            // 通过此处主动自通知，唤醒主循环重新进入 WaitAsync，保证 at-least-once 语义。
+            //
+            // P2-1 修复 (2026-07-28): 用时间戳节流避免高积压场景的 NOTIFY 风暴——
+            // 距上次自通知不足 _pollInterval 则跳过（此时 PeriodicTimer 会兜底触发）。
+            // 失败可忽略——最坏情况下次外部 NOTIFY 或 PeriodicTimer 仍会触发；不影响正确性。
+            var now = DateTimeOffset.UtcNow;
+            if (now - _lastSelfNotify >= _pollInterval)
             {
-                await using var conn = _dataSource.CreateConnection();
-                if (conn.State != System.Data.ConnectionState.Open)
-                    await conn.OpenAsync(ct).ConfigureAwait(false);
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = $"NOTIFY {_channelName}";
-                await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            }
-            catch
-            {
-                // 自唤醒失败不影响主流程；外部 NOTIFY 或下次插入仍会触发。
+                _lastSelfNotify = now;
+                try
+                {
+                    await using var conn = _dataSource.CreateConnection();
+                    if (conn.State != System.Data.ConnectionState.Open)
+                        await conn.OpenAsync(ct).ConfigureAwait(false);
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = $"NOTIFY {_channelName}";
+                    await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // 自唤醒失败不影响主流程；外部 NOTIFY 或下次插入仍会触发。
+                }
             }
         }
     }

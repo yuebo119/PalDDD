@@ -310,6 +310,9 @@ public abstract class EventLogDbContext(
             }
 
             // SQLite: Microsoft.Data.Sqlite.SqliteException 消息包含 "UNIQUE constraint"
+            // ⚠️ 已知局限（P3-3）：字符串匹配可能误判未来某 provider 的非唯一约束错误。
+            // 命中概率极低（消息文本需恰好含 "UNIQUE constraint"），且与既有实现对齐。
+            // 若未来 SQLite 驱动暴露结构化错误码，应改为精确匹配。
             var message = inner.Message;
             if (!string.IsNullOrEmpty(message)
                 && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
