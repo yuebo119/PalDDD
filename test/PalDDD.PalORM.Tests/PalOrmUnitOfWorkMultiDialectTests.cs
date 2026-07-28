@@ -16,49 +16,49 @@ public class PalOrmUnitOfWorkMultiDialectTests
 {
     [Test]
     public async Task UoW_Sqlite_Commit_PersistsChanges()
-        => await Test_Commit_PersistsChanges(await new MultiDialectFixture().CreateSqliteAsync());
+        => await Test_Commit_PersistsChanges(await MultiDialectFixture.CreateSqliteAsync());
 
     [Test]
     public async Task UoW_PostgreSql_Commit_PersistsChanges()
-        => await Test_Commit_PersistsChanges(await new MultiDialectFixture().CreatePostgreSqlAsync());
+        => await Test_Commit_PersistsChanges(await MultiDialectFixture.CreatePostgreSqlAsync());
 
     [Test]
     public async Task UoW_MySql_Commit_PersistsChanges()
-        => await Test_Commit_PersistsChanges(await new MultiDialectFixture().CreateMySqlAsync());
+        => await Test_Commit_PersistsChanges(await MultiDialectFixture.CreateMySqlAsync());
 
-    private static async Task Test_Commit_PersistsChanges<TProvider>(DataSession<TProvider> session)
+    private static async Task Test_Commit_PersistsChanges<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        await using var uow = new PalOrmUnitOfWork<TProvider>(session);
+        await using var uow = new PalOrmUnitOfWork<TProvider>(ts.Session);
         await uow.BeginTransactionAsync();
-        await session.ExecuteAsync($"INSERT INTO outbox_messages (id, type, payload, content_type, schema_version, status, retry_count, created_at) VALUES ({ByteAether.Ulid.Ulid.New().ToString()}, {"tx.commit"}, {"[]"}, {"application/json"}, {1}, {0}, {0}, {DateTimeOffset.UtcNow})", default);
+        await ts.Session.ExecuteAsync($"INSERT INTO outbox_messages (id, type, payload, content_type, schema_version, status, retry_count, created_at) VALUES ({ByteAether.Ulid.Ulid.New().ToString()}, {"tx.commit"}, {"[]"}, {"application/json"}, {1}, {0}, {0}, {DateTimeOffset.UtcNow})", default);
         await uow.CommitAsync();
 
-        var count = await session.ScalarAsync<long>($"SELECT COUNT(*) FROM outbox_messages");
+        var count = await ts.Session.ScalarAsync<long>($"SELECT COUNT(*) FROM outbox_messages");
         await Assert.That(count).IsEqualTo(1L);
     }
 
     [Test]
     public async Task UoW_Sqlite_Rollback_DiscardsChanges()
-        => await Test_Rollback_DiscardsChanges(await new MultiDialectFixture().CreateSqliteAsync());
+        => await Test_Rollback_DiscardsChanges(await MultiDialectFixture.CreateSqliteAsync());
 
     [Test]
     public async Task UoW_PostgreSql_Rollback_DiscardsChanges()
-        => await Test_Rollback_DiscardsChanges(await new MultiDialectFixture().CreatePostgreSqlAsync());
+        => await Test_Rollback_DiscardsChanges(await MultiDialectFixture.CreatePostgreSqlAsync());
 
     [Test]
     public async Task UoW_MySql_Rollback_DiscardsChanges()
-        => await Test_Rollback_DiscardsChanges(await new MultiDialectFixture().CreateMySqlAsync());
+        => await Test_Rollback_DiscardsChanges(await MultiDialectFixture.CreateMySqlAsync());
 
-    private static async Task Test_Rollback_DiscardsChanges<TProvider>(DataSession<TProvider> session)
+    private static async Task Test_Rollback_DiscardsChanges<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        await using var uow = new PalOrmUnitOfWork<TProvider>(session);
+        await using var uow = new PalOrmUnitOfWork<TProvider>(ts.Session);
         await uow.BeginTransactionAsync();
-        await session.ExecuteAsync($"INSERT INTO outbox_messages (id, type, payload, content_type, schema_version, status, retry_count, created_at) VALUES ({ByteAether.Ulid.Ulid.New().ToString()}, {"tx.rollback"}, {"[]"}, {"application/json"}, {1}, {0}, {0}, {DateTimeOffset.UtcNow})", default);
+        await ts.Session.ExecuteAsync($"INSERT INTO outbox_messages (id, type, payload, content_type, schema_version, status, retry_count, created_at) VALUES ({ByteAether.Ulid.Ulid.New().ToString()}, {"tx.rollback"}, {"[]"}, {"application/json"}, {1}, {0}, {0}, {DateTimeOffset.UtcNow})", default);
         await uow.RollbackAsync();
 
-        var count = await session.ScalarAsync<long>($"SELECT COUNT(*) FROM outbox_messages");
+        var count = await ts.Session.ScalarAsync<long>($"SELECT COUNT(*) FROM outbox_messages");
         await Assert.That(count).IsEqualTo(0L);
     }
 }

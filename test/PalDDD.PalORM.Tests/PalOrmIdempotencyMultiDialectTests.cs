@@ -17,20 +17,20 @@ public class PalOrmIdempotencyMultiDialectTests
 {
     [Test]
     public async Task Idempotency_Sqlite_TryStart_ThenMarkCompleted()
-        => await Test_TryStart_ThenMarkCompleted(await new MultiDialectFixture().CreateSqliteAsync());
+        => await Test_TryStart_ThenMarkCompleted(await MultiDialectFixture.CreateSqliteAsync());
 
     [Test]
     public async Task Idempotency_PostgreSql_TryStart_ThenMarkCompleted()
-        => await Test_TryStart_ThenMarkCompleted(await new MultiDialectFixture().CreatePostgreSqlAsync());
+        => await Test_TryStart_ThenMarkCompleted(await MultiDialectFixture.CreatePostgreSqlAsync());
 
     [Test]
     public async Task Idempotency_MySql_TryStart_ThenMarkCompleted()
-        => await Test_TryStart_ThenMarkCompleted(await new MultiDialectFixture().CreateMySqlAsync());
+        => await Test_TryStart_ThenMarkCompleted(await MultiDialectFixture.CreateMySqlAsync());
 
-    private static async Task Test_TryStart_ThenMarkCompleted<TProvider>(DataSession<TProvider> session)
+    private static async Task Test_TryStart_ThenMarkCompleted<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        var store = new PalOrmIdempotencyStore<TProvider>(session);
+        var store = new PalOrmIdempotencyStore<TProvider>(ts.Session);
         var now = DateTimeOffset.UtcNow;
         var record = await store.TryStartAsync("op", "key", now, IdempotencyPolicy.Default, default);
         await Assert.That(record).IsNotNull();
@@ -46,20 +46,20 @@ public class PalOrmIdempotencyMultiDialectTests
 
     [Test]
     public async Task Idempotency_Sqlite_Duplicate_ReturnsCompleted()
-        => await Test_Duplicate_ReturnsCompleted(await new MultiDialectFixture().CreateSqliteAsync());
+        => await Test_Duplicate_ReturnsCompleted(await MultiDialectFixture.CreateSqliteAsync());
 
     [Test]
     public async Task Idempotency_PostgreSql_Duplicate_ReturnsCompleted()
-        => await Test_Duplicate_ReturnsCompleted(await new MultiDialectFixture().CreatePostgreSqlAsync());
+        => await Test_Duplicate_ReturnsCompleted(await MultiDialectFixture.CreatePostgreSqlAsync());
 
     [Test]
     public async Task Idempotency_MySql_Duplicate_ReturnsCompleted()
-        => await Test_Duplicate_ReturnsCompleted(await new MultiDialectFixture().CreateMySqlAsync());
+        => await Test_Duplicate_ReturnsCompleted(await MultiDialectFixture.CreateMySqlAsync());
 
-    private static async Task Test_Duplicate_ReturnsCompleted<TProvider>(DataSession<TProvider> session)
+    private static async Task Test_Duplicate_ReturnsCompleted<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        var store = new PalOrmIdempotencyStore<TProvider>(session);
+        var store = new PalOrmIdempotencyStore<TProvider>(ts.Session);
         var now = DateTimeOffset.UtcNow;
         var r1 = await store.TryStartAsync("op", "key", now, IdempotencyPolicy.Default, default);
         await store.MarkCompletedAsync(r1!, System.Text.Encoding.UTF8.GetBytes("ok"), now.AddSeconds(1), default);
@@ -72,20 +72,20 @@ public class PalOrmIdempotencyMultiDialectTests
 
     [Test]
     public async Task Idempotency_Sqlite_LeaseActive_ReturnsNull()
-        => await Test_LeaseActive_ReturnsNull(await new MultiDialectFixture().CreateSqliteAsync());
+        => await Test_LeaseActive_ReturnsNull(await MultiDialectFixture.CreateSqliteAsync());
 
     [Test]
     public async Task Idempotency_PostgreSql_LeaseActive_ReturnsNull()
-        => await Test_LeaseActive_ReturnsNull(await new MultiDialectFixture().CreatePostgreSqlAsync());
+        => await Test_LeaseActive_ReturnsNull(await MultiDialectFixture.CreatePostgreSqlAsync());
 
     [Test]
     public async Task Idempotency_MySql_LeaseActive_ReturnsNull()
-        => await Test_LeaseActive_ReturnsNull(await new MultiDialectFixture().CreateMySqlAsync());
+        => await Test_LeaseActive_ReturnsNull(await MultiDialectFixture.CreateMySqlAsync());
 
-    private static async Task Test_LeaseActive_ReturnsNull<TProvider>(DataSession<TProvider> session)
+    private static async Task Test_LeaseActive_ReturnsNull<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        var store = new PalOrmIdempotencyStore<TProvider>(session);
+        var store = new PalOrmIdempotencyStore<TProvider>(ts.Session);
         var now = DateTimeOffset.UtcNow;
         await store.TryStartAsync("op", "key", now, IdempotencyPolicy.Default, default);
 

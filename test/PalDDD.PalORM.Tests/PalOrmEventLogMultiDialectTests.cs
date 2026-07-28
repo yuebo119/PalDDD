@@ -17,20 +17,20 @@ public class PalOrmEventLogMultiDialectTests
 {
     [Test]
     public async Task EventLog_Sqlite_AppendNoStream_ThenReadStream()
-        => await Test_AppendNoStream_ThenReadStream(await new MultiDialectFixture().CreateSqliteAsync());
+        => await Test_AppendNoStream_ThenReadStream(await MultiDialectFixture.CreateSqliteAsync());
 
     [Test]
     public async Task EventLog_PostgreSql_AppendNoStream_ThenReadStream()
-        => await Test_AppendNoStream_ThenReadStream(await new MultiDialectFixture().CreatePostgreSqlAsync());
+        => await Test_AppendNoStream_ThenReadStream(await MultiDialectFixture.CreatePostgreSqlAsync());
 
     [Test]
     public async Task EventLog_MySql_AppendNoStream_ThenReadStream()
-        => await Test_AppendNoStream_ThenReadStream(await new MultiDialectFixture().CreateMySqlAsync());
+        => await Test_AppendNoStream_ThenReadStream(await MultiDialectFixture.CreateMySqlAsync());
 
-    private static async Task Test_AppendNoStream_ThenReadStream<TProvider>(DataSession<TProvider> session)
+    private static async Task Test_AppendNoStream_ThenReadStream<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        var log = new PalOrmEventLog<TProvider>(session);
+        var log = new PalOrmEventLog<TProvider>(ts.Session);
         var events = new[] { MultiDialectTestData.CreateEventData("event.v1") };
 
         var result = await log.AppendAsync("stream-1", ExpectedStreamVersion.NoStream, events, default);
@@ -46,20 +46,20 @@ public class PalOrmEventLogMultiDialectTests
 
     [Test]
     public async Task EventLog_Sqlite_AppendMultiple_SequentialVersions()
-        => await Test_AppendMultiple_SequentialVersions(await new MultiDialectFixture().CreateSqliteAsync());
+        => await Test_AppendMultiple_SequentialVersions(await MultiDialectFixture.CreateSqliteAsync());
 
     [Test]
     public async Task EventLog_PostgreSql_AppendMultiple_SequentialVersions()
-        => await Test_AppendMultiple_SequentialVersions(await new MultiDialectFixture().CreatePostgreSqlAsync());
+        => await Test_AppendMultiple_SequentialVersions(await MultiDialectFixture.CreatePostgreSqlAsync());
 
     [Test]
     public async Task EventLog_MySql_AppendMultiple_SequentialVersions()
-        => await Test_AppendMultiple_SequentialVersions(await new MultiDialectFixture().CreateMySqlAsync());
+        => await Test_AppendMultiple_SequentialVersions(await MultiDialectFixture.CreateMySqlAsync());
 
-    private static async Task Test_AppendMultiple_SequentialVersions<TProvider>(DataSession<TProvider> session)
+    private static async Task Test_AppendMultiple_SequentialVersions<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        var log = new PalOrmEventLog<TProvider>(session);
+        var log = new PalOrmEventLog<TProvider>(ts.Session);
         var events = new[]
         {
             MultiDialectTestData.CreateEventData("event.a"),
@@ -81,20 +81,20 @@ public class PalOrmEventLogMultiDialectTests
 
     [Test]
     public async Task EventLog_Sqlite_ReadAll_GlobalOrder()
-        => await Test_ReadAll_GlobalOrder(await new MultiDialectFixture().CreateSqliteAsync());
+        => await Test_ReadAll_GlobalOrder(await MultiDialectFixture.CreateSqliteAsync());
 
     [Test]
     public async Task EventLog_PostgreSql_ReadAll_GlobalOrder()
-        => await Test_ReadAll_GlobalOrder(await new MultiDialectFixture().CreatePostgreSqlAsync());
+        => await Test_ReadAll_GlobalOrder(await MultiDialectFixture.CreatePostgreSqlAsync());
 
     [Test]
     public async Task EventLog_MySql_ReadAll_GlobalOrder()
-        => await Test_ReadAll_GlobalOrder(await new MultiDialectFixture().CreateMySqlAsync());
+        => await Test_ReadAll_GlobalOrder(await MultiDialectFixture.CreateMySqlAsync());
 
-    private static async Task Test_ReadAll_GlobalOrder<TProvider>(DataSession<TProvider> session)
+    private static async Task Test_ReadAll_GlobalOrder<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        var log = new PalOrmEventLog<TProvider>(session);
+        var log = new PalOrmEventLog<TProvider>(ts.Session);
         await log.AppendAsync("s1", ExpectedStreamVersion.NoStream, [MultiDialectTestData.CreateEventData("s1.e1")], default);
         await log.AppendAsync("s2", ExpectedStreamVersion.NoStream, [MultiDialectTestData.CreateEventData("s2.e1")], default);
 

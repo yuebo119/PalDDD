@@ -20,22 +20,22 @@ public class PalOrmInboxMultiDialectTests
     [Test]
     public async Task Inbox_Sqlite_TryStartProcessing_FirstAttempt()
         => await Test_TryStartProcessing_FirstAttempt(
-            await new MultiDialectFixture().CreateSqliteAsync());
+            await MultiDialectFixture.CreateSqliteAsync());
 
     [Test]
     public async Task Inbox_PostgreSql_TryStartProcessing_FirstAttempt()
         => await Test_TryStartProcessing_FirstAttempt(
-            await new MultiDialectFixture().CreatePostgreSqlAsync());
+            await MultiDialectFixture.CreatePostgreSqlAsync());
 
     [Test]
     public async Task Inbox_MySql_TryStartProcessing_FirstAttempt()
         => await Test_TryStartProcessing_FirstAttempt(
-            await new MultiDialectFixture().CreateMySqlAsync());
+            await MultiDialectFixture.CreateMySqlAsync());
 
     private static async Task Test_TryStartProcessing_FirstAttempt<TProvider>(
-        DataSession<TProvider> session) where TProvider : IDbProvider
+        TestSession<TProvider> ts) where TProvider : IDbProvider
     {
-        var store = new PalOrmInboxStore<TProvider>(session);
+        var store = new PalOrmInboxStore<TProvider>(ts.Session);
         var now = DateTimeOffset.UtcNow;
         var msg = await store.TryStartProcessingAsync("consumer-1", "msg-1", now, TimeSpan.FromMinutes(5), default);
         await Assert.That(msg).IsNotNull();
@@ -45,20 +45,20 @@ public class PalOrmInboxMultiDialectTests
 
     [Test]
     public async Task Inbox_Sqlite_TryStartProcessing_Duplicate()
-        => await Test_TryStartProcessing_Duplicate(await new MultiDialectFixture().CreateSqliteAsync());
+        => await Test_TryStartProcessing_Duplicate(await MultiDialectFixture.CreateSqliteAsync());
 
     [Test]
     public async Task Inbox_PostgreSql_TryStartProcessing_Duplicate()
-        => await Test_TryStartProcessing_Duplicate(await new MultiDialectFixture().CreatePostgreSqlAsync());
+        => await Test_TryStartProcessing_Duplicate(await MultiDialectFixture.CreatePostgreSqlAsync());
 
     [Test]
     public async Task Inbox_MySql_TryStartProcessing_Duplicate()
-        => await Test_TryStartProcessing_Duplicate(await new MultiDialectFixture().CreateMySqlAsync());
+        => await Test_TryStartProcessing_Duplicate(await MultiDialectFixture.CreateMySqlAsync());
 
     private static async Task Test_TryStartProcessing_Duplicate<TProvider>(
-        DataSession<TProvider> session) where TProvider : IDbProvider
+        TestSession<TProvider> ts) where TProvider : IDbProvider
     {
-        var store = new PalOrmInboxStore<TProvider>(session);
+        var store = new PalOrmInboxStore<TProvider>(ts.Session);
         var now = DateTimeOffset.UtcNow;
 
         var first = await store.TryStartProcessingAsync("consumer-1", "msg-1", now, TimeSpan.FromMinutes(5), default);
@@ -71,20 +71,20 @@ public class PalOrmInboxMultiDialectTests
 
     [Test]
     public async Task Inbox_Sqlite_MarkFailed_ThenRetry()
-        => await Test_MarkFailed_ThenRetry(await new MultiDialectFixture().CreateSqliteAsync());
+        => await Test_MarkFailed_ThenRetry(await MultiDialectFixture.CreateSqliteAsync());
 
     [Test]
     public async Task Inbox_PostgreSql_MarkFailed_ThenRetry()
-        => await Test_MarkFailed_ThenRetry(await new MultiDialectFixture().CreatePostgreSqlAsync());
+        => await Test_MarkFailed_ThenRetry(await MultiDialectFixture.CreatePostgreSqlAsync());
 
     [Test]
     public async Task Inbox_MySql_MarkFailed_ThenRetry()
-        => await Test_MarkFailed_ThenRetry(await new MultiDialectFixture().CreateMySqlAsync());
+        => await Test_MarkFailed_ThenRetry(await MultiDialectFixture.CreateMySqlAsync());
 
     private static async Task Test_MarkFailed_ThenRetry<TProvider>(
-        DataSession<TProvider> session) where TProvider : IDbProvider
+        TestSession<TProvider> ts) where TProvider : IDbProvider
     {
-        var store = new PalOrmInboxStore<TProvider>(session);
+        var store = new PalOrmInboxStore<TProvider>(ts.Session);
         var now = DateTimeOffset.UtcNow;
 
         var msg = await store.TryStartProcessingAsync("consumer-1", "msg-1", now, TimeSpan.FromMinutes(5), default);

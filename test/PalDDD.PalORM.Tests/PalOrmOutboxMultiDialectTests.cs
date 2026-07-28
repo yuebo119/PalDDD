@@ -31,9 +31,8 @@ public class PalOrmOutboxMultiDialectTests
     [Test]
     public async Task Outbox_Sqlite_AddMessage_ThenGetPending()
     {
-        await using var fixture = new MultiDialectFixture();
-        await using var session = await fixture.CreateSqliteAsync();
-        var store = new SqliteOutboxStore(session);
+        await using var session = await MultiDialectFixture.CreateSqliteAsync();
+        var store = new SqliteOutboxStore(session.Session);
 
         var msg = CreateMessage("sqlite.event");
         store.AddMessage(msg);
@@ -46,9 +45,8 @@ public class PalOrmOutboxMultiDialectTests
     [Test]
     public async Task Outbox_Sqlite_LeasePending_AtomicAcquisition()
     {
-        await using var fixture = new MultiDialectFixture();
-        await using var session = await fixture.CreateSqliteAsync();
-        var store = new SqliteOutboxStore(session);
+        await using var session = await MultiDialectFixture.CreateSqliteAsync();
+        var store = new SqliteOutboxStore(session.Session);
         store.AddMessage(CreateMessage("sqlite.lease"));
 
         var leased = await store.LeasePendingMessagesAsync(10, "w1", TimeSpan.FromMinutes(5), 10, default);
@@ -62,9 +60,8 @@ public class PalOrmOutboxMultiDialectTests
     [Test]
     public async Task Outbox_Sqlite_MarkProcessed()
     {
-        await using var fixture = new MultiDialectFixture();
-        await using var session = await fixture.CreateSqliteAsync();
-        var store = new SqliteOutboxStore(session);
+        await using var session = await MultiDialectFixture.CreateSqliteAsync();
+        var store = new SqliteOutboxStore(session.Session);
         var msg = CreateMessage("sqlite.processed");
         store.AddMessage(msg);
         store.MarkProcessed(msg, DateTimeOffset.UtcNow);
@@ -78,9 +75,8 @@ public class PalOrmOutboxMultiDialectTests
     [Test]
     public async Task Outbox_PostgreSql_AddMessage_ThenGetPending()
     {
-        await using var fixture = new MultiDialectFixture();
-        await using var session = await fixture.CreatePostgreSqlAsync();
-        var store = new PostgreSqlOutboxStore(session);
+        await using var session = await MultiDialectFixture.CreatePostgreSqlAsync();
+        var store = new PostgreSqlOutboxStore(session.Session);
 
         var msg = CreateMessage("pg.event");
         store.AddMessage(msg);
@@ -94,9 +90,8 @@ public class PalOrmOutboxMultiDialectTests
     public async Task Outbox_PostgreSql_LeasePending_AtomicAcquisition_Returning()
     {
         // PG 走 RETURNING 单语句路径 —— 验证 SupportsReturningClause=true 分支
-        await using var fixture = new MultiDialectFixture();
-        await using var session = await fixture.CreatePostgreSqlAsync();
-        var store = new PostgreSqlOutboxStore(session);
+        await using var session = await MultiDialectFixture.CreatePostgreSqlAsync();
+        var store = new PostgreSqlOutboxStore(session.Session);
         store.AddMessage(CreateMessage("pg.lease"));
 
         var leased = await store.LeasePendingMessagesAsync(10, "w1", TimeSpan.FromMinutes(5), 10, default);
@@ -109,9 +104,8 @@ public class PalOrmOutboxMultiDialectTests
     [Test]
     public async Task Outbox_PostgreSql_MarkProcessed()
     {
-        await using var fixture = new MultiDialectFixture();
-        await using var session = await fixture.CreatePostgreSqlAsync();
-        var store = new PostgreSqlOutboxStore(session);
+        await using var session = await MultiDialectFixture.CreatePostgreSqlAsync();
+        var store = new PostgreSqlOutboxStore(session.Session);
         var msg = CreateMessage("pg.processed");
         store.AddMessage(msg);
         store.MarkProcessed(msg, DateTimeOffset.UtcNow);
@@ -125,9 +119,8 @@ public class PalOrmOutboxMultiDialectTests
     [Test]
     public async Task Outbox_MySql_AddMessage_ThenGetPending()
     {
-        await using var fixture = new MultiDialectFixture();
-        await using var session = await fixture.CreateMySqlAsync();
-        var store = new MySqlOutboxStore(session);
+        await using var session = await MultiDialectFixture.CreateMySqlAsync();
+        var store = new MySqlOutboxStore(session.Session);
 
         var msg = CreateMessage("mysql.event");
         store.AddMessage(msg);
@@ -141,9 +134,8 @@ public class PalOrmOutboxMultiDialectTests
     public async Task Outbox_MySql_LeasePending_TwoStepAcquisition()
     {
         // MySQL 走两步 UPDATE + SELECT 路径（无 RETURNING）—— 验证 SupportsReturningClause=false 分支
-        await using var fixture = new MultiDialectFixture();
-        await using var session = await fixture.CreateMySqlAsync();
-        var store = new MySqlOutboxStore(session);
+        await using var session = await MultiDialectFixture.CreateMySqlAsync();
+        var store = new MySqlOutboxStore(session.Session);
         store.AddMessage(CreateMessage("mysql.lease"));
 
         var leased = await store.LeasePendingMessagesAsync(10, "w1", TimeSpan.FromMinutes(5), 10, default);
@@ -156,9 +148,8 @@ public class PalOrmOutboxMultiDialectTests
     [Test]
     public async Task Outbox_MySql_MarkProcessed()
     {
-        await using var fixture = new MultiDialectFixture();
-        await using var session = await fixture.CreateMySqlAsync();
-        var store = new MySqlOutboxStore(session);
+        await using var session = await MultiDialectFixture.CreateMySqlAsync();
+        var store = new MySqlOutboxStore(session.Session);
         var msg = CreateMessage("mysql.processed");
         store.AddMessage(msg);
         store.MarkProcessed(msg, DateTimeOffset.UtcNow);

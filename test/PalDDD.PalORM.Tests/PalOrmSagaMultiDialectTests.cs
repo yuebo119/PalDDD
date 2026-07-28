@@ -24,20 +24,20 @@ public class PalOrmSagaMultiDialectTests
 
     [Test]
     public async Task Saga_Sqlite_InsertNew_ThenGetById()
-        => await Test_InsertNew_ThenGetById(await new MultiDialectFixture().CreateSqliteAsync());
+        => await Test_InsertNew_ThenGetById(await MultiDialectFixture.CreateSqliteAsync());
 
     [Test]
     public async Task Saga_PostgreSql_InsertNew_ThenGetById()
-        => await Test_InsertNew_ThenGetById(await new MultiDialectFixture().CreatePostgreSqlAsync());
+        => await Test_InsertNew_ThenGetById(await MultiDialectFixture.CreatePostgreSqlAsync());
 
     [Test]
     public async Task Saga_MySql_InsertNew_ThenGetById()
-        => await Test_InsertNew_ThenGetById(await new MultiDialectFixture().CreateMySqlAsync());
+        => await Test_InsertNew_ThenGetById(await MultiDialectFixture.CreateMySqlAsync());
 
-    private static async Task Test_InsertNew_ThenGetById<TProvider>(DataSession<TProvider> session)
+    private static async Task Test_InsertNew_ThenGetById<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        var store = new PalOrmSagaStateStore<TProvider, TestSagaState>(session);
+        var store = new PalOrmSagaStateStore<TProvider, TestSagaState>(ts.Session);
         var state = new TestSagaState { CustomerId = "cust-1", CurrentState = "Started" };
 
         await store.SaveChangesAsync(state, default);
@@ -53,20 +53,20 @@ public class PalOrmSagaMultiDialectTests
 
     [Test]
     public async Task Saga_Sqlite_GetActiveSagas_ReturnsOnlyActive()
-        => await Test_GetActiveSagas(await new MultiDialectFixture().CreateSqliteAsync());
+        => await Test_GetActiveSagas(await MultiDialectFixture.CreateSqliteAsync());
 
     [Test]
     public async Task Saga_PostgreSql_GetActiveSagas_ReturnsOnlyActive()
-        => await Test_GetActiveSagas(await new MultiDialectFixture().CreatePostgreSqlAsync());
+        => await Test_GetActiveSagas(await MultiDialectFixture.CreatePostgreSqlAsync());
 
     [Test]
     public async Task Saga_MySql_GetActiveSagas_ReturnsOnlyActive()
-        => await Test_GetActiveSagas(await new MultiDialectFixture().CreateMySqlAsync());
+        => await Test_GetActiveSagas(await MultiDialectFixture.CreateMySqlAsync());
 
-    private static async Task Test_GetActiveSagas<TProvider>(DataSession<TProvider> session)
+    private static async Task Test_GetActiveSagas<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        var store = new PalOrmSagaStateStore<TProvider, TestSagaState>(session);
+        var store = new PalOrmSagaStateStore<TProvider, TestSagaState>(ts.Session);
         var active = new TestSagaState { CurrentState = "Active" };
         var completed = new TestSagaState { CurrentState = "Done", Status = SagaStatus.Completed };
 
@@ -81,20 +81,20 @@ public class PalOrmSagaMultiDialectTests
 
     [Test]
     public async Task Saga_Sqlite_LeaseActiveSagas()
-        => await Test_LeaseActiveSagas(await new MultiDialectFixture().CreateSqliteAsync());
+        => await Test_LeaseActiveSagas(await MultiDialectFixture.CreateSqliteAsync());
 
     [Test]
     public async Task Saga_PostgreSql_LeaseActiveSagas()
-        => await Test_LeaseActiveSagas(await new MultiDialectFixture().CreatePostgreSqlAsync());
+        => await Test_LeaseActiveSagas(await MultiDialectFixture.CreatePostgreSqlAsync());
 
     [Test]
     public async Task Saga_MySql_LeaseActiveSagas()
-        => await Test_LeaseActiveSagas(await new MultiDialectFixture().CreateMySqlAsync());
+        => await Test_LeaseActiveSagas(await MultiDialectFixture.CreateMySqlAsync());
 
-    private static async Task Test_LeaseActiveSagas<TProvider>(DataSession<TProvider> session)
+    private static async Task Test_LeaseActiveSagas<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        var store = new PalOrmSagaStateStore<TProvider, TestSagaState>(session);
+        var store = new PalOrmSagaStateStore<TProvider, TestSagaState>(ts.Session);
         await store.SaveChangesAsync(new TestSagaState { CurrentState = "Active" }, default);
 
         var leased = await store.LeaseActiveSagasAsync("worker-1", TimeSpan.FromMinutes(5), 10, default);
