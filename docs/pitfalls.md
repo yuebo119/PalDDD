@@ -21,6 +21,7 @@
 7. [DDD/Clean Architecture 陷阱](#七dddclean-architecture-陷阱)
 8. [诊断 & 可观测性](#八诊断--可观测性)
 9. [DDD 项目实战新增](#九ddd-项目实战新增)
+10. [PalORM 适配层踩坑](#十palorm-适配层踩坑-2026-07-28)
 
 ---
 
@@ -209,3 +210,50 @@
 3. **每条带状态**：✅ 已修复 / ⚠️ 部分实现 / 🚫 架构层面避开。
 4. **真源单一**：架构决策见 `architecture.md`，决策依据见 `decisions/NNN-*.md`，缺陷历史见 `docs/review/action-items-*.md`。
 5. **本文件与 conventions.md §10 同步**：API 约束变更需同时更新两处。
+
+---
+
+## 十、PalORM 适配层踩坑（2026-07-28）
+
+> 17 次提交、96 测试（SQLite + PG + MySQL 三方言全绿）的实施过程中发现的真实问题。适用于任何源生成 ORM 适配 / 多方言 SQL / AOT 验证场景。
+
+### 源生成器约束（编译期发现）
+
+| # | 踩坑 | 根因 | 修复 | 状态 |
+|---|------|------|------|:---:|
+| PALORM-SG1 | PalORM.SourceGen analyzer 不触发 Row DTO 生成 | Provider 包用 `exclude="Build,Analyzers"` 引用 Core，不传递 SourceGen | 消费项目显式 `<PackageReference Include="PalORM.SourceGen">` | ✅ |
+| PALORM-SG2 | `byte[]` 属性被 PALORM016 拒绝 | byte[] 不在白名单（IArrayTypeSymbol 拒绝） | `[Converter(typeof(ByteArrayBase64Converter))]` 转 Base64 string | ✅ |
+| PALORM-SG3 | `[ConcurrencyCheck]` DateTimeOffset 属性被 PALORM012 拒绝 | 源生成器 emit `++` 自增，仅支持 int/long | Inbox 改用 `Attempts`（int 计数器）替代 `ProcessingStartedAt`（DateTimeOffset） | ✅ |
+| PALORM-SG4 | 复合主键实体被 PALORM019 拒绝 | 源生成器 BindDelete 单 key 语义无法表达 | Projection/Idempotency 不注册实体，全程 `GetRawConnection()` + `DbDataReader` 手动映射 | ✅ |
+| PALORM-SG5 | `[Key]` 非 int/long 属性 PALORM022 报错 | Ulid 主键不支持自增回填 | `[Key(AutoIncrement = false)]` 显式声明应用层赋值 | ✅ |
+
+### 运行时约束（运行时发现）
+
+| # | 踩坑 | 根因 | 修复 | 状态 |
+|---|------|------|------|:---:|
+| PALORM-RT1 | `SELECT *` 列序错位（error 混入 created_at 位） | ColumnOrderValidator 按 DTO 属性声明序映射，DDL 列序不同 | 显式列名 `SELECT id, type, ...` 按 DTO 声明序排列 | ✅ |
+| PALORM-RT2 | 未注册实体 `QueryFirstAsync<T>` 返回空对象（不抛异常） | QueryFirstAsync 对未注册类型走默认构造 | 复合主键表改用 `GetRawConnection().CreateCommand()` + `DbDataReader` 手动映射 | ✅ |
+| PALORM-RT3 | Commit/Rollback 后 `ObjectDisposedException` | DataSession 内部 OperationState 仍持有已释放事务引用 | `CommitAsync`/`RollbackAsync` 后显式 `session.UseTransaction(null)` | ✅ |
+| PALORM-RT4 | 同一 DataSession 多 worker 并发抛"already has active operation" | AsyncLocal 门禁禁止重叠 await | 并发测试每 worker 创建独立 DataSession（共享文件型 SQLite） | ✅ |
+| PALORM-RT5 | `QueryFirstAsync<long?>` 编译失败 | 泛型约束 `T : class`，不接受值类型 | 标量查询用 `ScalarAsync<T>` 替代 | ✅ |
+
+### MySQL 方言特有约束
+
+| # | 踩坑 | 根因 | 修复 | 状态 |
+|---|------|------|------|:---:|
+| MYSQL1 | `INSERT INTO t (key, ...) VALUES (...)` 语法错误 | `key` 是 MySQL 保留字 | 列名改为 `idempotency_key`（从根源消除，不用反引号转义） | ✅ |
+| MYSQL2 | `UPDATE...WHERE id IN (SELECT...LIMIT n)` 报错 | MySQL 不支持 IN 谓词内嵌 LIMIT 子查询 | 改用 `UPDATE t JOIN (SELECT id FROM ... LIMIT n) AS sub ON t.id = sub.id SET ...` | ✅ |
+| MYSQL3 | PG 的 `"Events"`（PascalCase 带引号）与手写 SQL 不匹配 | PG 折叠无引号标识符为小写；PalORM 手写 SQL 的 FormattableString 不加引号 | EventLog 列名从 PascalCase 统一改为 snake_case（三方言一致） | ✅ |
+
+### C# 语言约束
+
+| # | 踩坑 | 根因 | 修复 | 状态 |
+|---|------|------|------|:---:|
+| CSHARP1 | `$"SELECT " + const + $" FROM ..."` 编译失败 | C# 把 `$"" + $""` 推断为 string 而非 FormattableString | 所有 SQL 写在单一 `$"..."` 字面量内 | ✅ |
+| CSHARP2 | `JsonTypeInfo<T>` 找不到命名空间 | 类型在 `System.Text.Json.Serialization.Metadata` 子命名空间 | 显式 `using System.Text.Json.Serialization.Metadata;` | ✅ |
+
+### 安全教训
+
+| # | 踩坑 | 根因 | 修复 | 状态 |
+|---|------|------|------|:---:|
+| SEC1 | 数据库连接串（含真实 IP + 用户名密码）硬编码到测试代码 | 快速验证时直接写入了远程数据库连接串默认值 | 改用 `Environment.GetEnvironmentVariable` + 缺失时 throw；git 历史 filter-branch 清除 + GC prune | ✅ |
