@@ -13,6 +13,7 @@ using TUnit.Assertions.Extensions;
 namespace PalDDD.PalORM.Tests;
 
 /// <summary>Projection Store 跨方言测试 —— 验证复合主键表 + revision 乐观锁。</summary>
+[TUnit.Core.NotInParallel("palorm-multidialect")]
 public class PalOrmProjectionMultiDialectTests
 {
     [Test]

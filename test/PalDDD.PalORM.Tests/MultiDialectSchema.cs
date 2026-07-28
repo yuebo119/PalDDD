@@ -26,7 +26,7 @@ public static class MultiDialectSchema
         "CREATE TABLE events (global_position INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, event_name TEXT NOT NULL, stream_name TEXT NOT NULL, stream_version INTEGER NOT NULL, schema_version INTEGER NOT NULL DEFAULT 1, content_type TEXT NOT NULL DEFAULT 'application/json', payload TEXT NOT NULL, metadata TEXT, recorded_at TEXT NOT NULL, actor_id TEXT, reason TEXT)",
         "CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version)",
         "CREATE TABLE projection_checkpoints (projection_name TEXT NOT NULL, source_name TEXT NOT NULL, position TEXT NOT NULL, status INTEGER NOT NULL, updated_at TEXT NOT NULL, lease_until TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, error TEXT, PRIMARY KEY (projection_name, source_name, position))",
-        "CREATE TABLE idempotency_records (operation_name TEXT NOT NULL, key TEXT NOT NULL, status INTEGER NOT NULL, locked_until TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL, response_payload TEXT, error TEXT, PRIMARY KEY (operation_name, key))",
+        "CREATE TABLE idempotency_records (operation_name TEXT NOT NULL, idempotency_key TEXT NOT NULL, status INTEGER NOT NULL, locked_until TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL, response_payload TEXT, error TEXT, PRIMARY KEY (operation_name, idempotency_key))",
     ];
 
     /// <summary>PostgreSQL 建表 SQL（原生类型；表名+列名全小写，与 PalORM 手写 SQL 一致）。
@@ -41,7 +41,7 @@ public static class MultiDialectSchema
         """CREATE TABLE events (global_position BIGSERIAL PRIMARY KEY, event_id TEXT NOT NULL, event_name TEXT NOT NULL, stream_name TEXT NOT NULL, stream_version BIGINT NOT NULL, schema_version INTEGER NOT NULL DEFAULT 1, content_type TEXT NOT NULL DEFAULT 'application/json', payload TEXT NOT NULL, metadata TEXT, recorded_at TIMESTAMPTZ NOT NULL, actor_id TEXT, reason TEXT)""",
         """CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version)""",
         """CREATE TABLE projection_checkpoints (projection_name TEXT NOT NULL, source_name TEXT NOT NULL, position TEXT NOT NULL, status INTEGER NOT NULL, updated_at TIMESTAMPTZ NOT NULL, lease_until TIMESTAMPTZ NOT NULL, revision BIGINT NOT NULL DEFAULT 0, error TEXT, PRIMARY KEY (projection_name, source_name, position))""",
-        """CREATE TABLE idempotency_records (operation_name TEXT NOT NULL, key TEXT NOT NULL, status INTEGER NOT NULL, locked_until TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, response_payload TEXT, error TEXT, PRIMARY KEY (operation_name, key))""",
+        """CREATE TABLE idempotency_records (operation_name TEXT NOT NULL, idempotency_key TEXT NOT NULL, status INTEGER NOT NULL, locked_until TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, response_payload TEXT, error TEXT, PRIMARY KEY (operation_name, idempotency_key))""",
     ];
 
     /// <summary>MySQL 建表 SQL（VARCHAR/BIGINT，AUTO_INCREMENT）。</summary>
@@ -54,7 +54,7 @@ public static class MultiDialectSchema
         "CREATE TABLE events (global_position BIGINT AUTO_INCREMENT PRIMARY KEY, event_id VARCHAR(32) NOT NULL, event_name VARCHAR(255) NOT NULL, stream_name VARCHAR(255) NOT NULL, stream_version BIGINT NOT NULL, schema_version INT NOT NULL DEFAULT 1, content_type VARCHAR(64) NOT NULL DEFAULT 'application/json', payload TEXT NOT NULL, metadata TEXT NULL, recorded_at DATETIME(6) NOT NULL, actor_id VARCHAR(128) NULL, reason VARCHAR(255) NULL)",
         "CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version)",
         "CREATE TABLE projection_checkpoints (projection_name VARCHAR(128) NOT NULL, source_name VARCHAR(128) NOT NULL, position VARCHAR(255) NOT NULL, status INT NOT NULL, updated_at DATETIME(6) NOT NULL, lease_until DATETIME(6) NOT NULL, revision BIGINT NOT NULL DEFAULT 0, error TEXT NULL, PRIMARY KEY (projection_name, source_name, position))",
-        "CREATE TABLE idempotency_records (operation_name VARCHAR(128) NOT NULL, `key` VARCHAR(255) NOT NULL, status INT NOT NULL, locked_until DATETIME(6) NOT NULL, expires_at DATETIME(6) NOT NULL, updated_at DATETIME(6) NOT NULL, response_payload TEXT NULL, error TEXT NULL, PRIMARY KEY (operation_name, `key`))",
+        "CREATE TABLE idempotency_records (operation_name VARCHAR(128) NOT NULL, idempotency_key VARCHAR(255) NOT NULL, status INT NOT NULL, locked_until DATETIME(6) NOT NULL, expires_at DATETIME(6) NOT NULL, updated_at DATETIME(6) NOT NULL, response_payload TEXT NULL, error TEXT NULL, PRIMARY KEY (operation_name, idempotency_key))",
     ];
 
     /// <summary>按 PalORM SqlDialect 枚举获取对应 DDL。</summary>

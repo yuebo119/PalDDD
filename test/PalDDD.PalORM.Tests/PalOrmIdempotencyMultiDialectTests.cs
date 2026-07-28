@@ -13,6 +13,7 @@ using TUnit.Assertions.Extensions;
 namespace PalDDD.PalORM.Tests;
 
 /// <summary>Idempotency Store 跨方言测试 —— 验证复合主键表 + ResponsePayload 回放。</summary>
+[TUnit.Core.NotInParallel("palorm-multidialect")]
 public class PalOrmIdempotencyMultiDialectTests
 {
     [Test]

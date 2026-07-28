@@ -110,7 +110,7 @@ public static class PalOrmStoreFixture
             updated_at       TEXT NOT NULL,
             response_payload TEXT,
             error            TEXT,
-            PRIMARY KEY (operation_name, key)
+            PRIMARY KEY (operation_name, idempotency_key)
         );
         CREATE INDEX idx_idempotency_expires ON idempotency_records(expires_at);
         """;
@@ -130,7 +130,7 @@ public static class PalOrmStoreFixture
         await session.ExecuteAsync($"CREATE TABLE events (global_position INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, event_name TEXT NOT NULL, stream_name TEXT NOT NULL, stream_version INTEGER NOT NULL, schema_version INTEGER NOT NULL DEFAULT 1, content_type TEXT NOT NULL DEFAULT 'application/json', payload TEXT NOT NULL, metadata TEXT, recorded_at TEXT NOT NULL, actor_id TEXT, reason TEXT)", ct);
         await session.ExecuteAsync($"CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version)", ct);
         await session.ExecuteAsync($"CREATE TABLE projection_checkpoints (projection_name TEXT NOT NULL, source_name TEXT NOT NULL, position TEXT NOT NULL, status INTEGER NOT NULL, updated_at TEXT NOT NULL, lease_until TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, error TEXT, PRIMARY KEY (projection_name, source_name, position))", ct);
-        await session.ExecuteAsync($"CREATE TABLE idempotency_records (operation_name TEXT NOT NULL, key TEXT NOT NULL, status INTEGER NOT NULL, locked_until TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL, response_payload TEXT, error TEXT, PRIMARY KEY (operation_name, key))", ct);
+        await session.ExecuteAsync($"CREATE TABLE idempotency_records (operation_name TEXT NOT NULL, idempotency_key TEXT NOT NULL, status INTEGER NOT NULL, locked_until TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL, response_payload TEXT, error TEXT, PRIMARY KEY (operation_name, idempotency_key))", ct);
         return session;
     }
 }

@@ -15,6 +15,7 @@ namespace PalDDD.PalORM.Tests;
 /// <summary>
 /// Inbox Store 跨方言测试 —— 验证 PG/SQLite ON CONFLICT vs MySQL INSERT IGNORE 方言分叉。
 /// </summary>
+[TUnit.Core.NotInParallel("palorm-multidialect")]
 public class PalOrmInboxMultiDialectTests
 {
     [Test]

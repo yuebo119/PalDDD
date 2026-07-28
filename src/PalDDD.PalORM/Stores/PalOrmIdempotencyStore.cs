@@ -28,7 +28,7 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
     {
         // 复合主键表未注册实体 —— 用 GetRawConnection + 手动 reader（QueryFirstAsync 对未注册类型返回空对象）
         await using var cmd = Session.GetRawConnection().CreateCommand();
-        cmd.CommandText = "SELECT operation_name, key, status, locked_until, expires_at, updated_at, response_payload, error FROM idempotency_records WHERE operation_name = @p0 AND key = @p1";
+        cmd.CommandText = "SELECT operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error FROM idempotency_records WHERE operation_name = @p0 AND idempotency_key = @p1";
         AddParam(cmd, "@p0", operationName);
         AddParam(cmd, "@p1", key);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -65,8 +65,8 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         var statusProcessing = (int)IdempotencyRecordStatus.Processing;
 
         var affected = TProvider.SupportsReturningClause
-            ? await Session.ExecuteAsync($"INSERT INTO idempotency_records (operation_name, key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL) ON CONFLICT DO NOTHING", ct)
-            : await Session.ExecuteAsync($"INSERT IGNORE INTO idempotency_records (operation_name, key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL)", ct);
+            ? await Session.ExecuteAsync($"INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL) ON CONFLICT DO NOTHING", ct)
+            : await Session.ExecuteAsync($"INSERT IGNORE INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL)", ct);
 
         if (affected > 0)
         {
@@ -85,7 +85,7 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
 
         var expectedUpdatedAt = existing.UpdatedAt;
         affected = await Session.ExecuteAsync(
-            $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL WHERE operation_name = {operationName} AND key = {key} AND updated_at = {expectedUpdatedAt} AND status <> {(int)IdempotencyRecordStatus.Completed}",
+            $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL WHERE operation_name = {operationName} AND idempotency_key = {key} AND updated_at = {expectedUpdatedAt} AND status <> {(int)IdempotencyRecordStatus.Completed}",
             ct);
         if (affected == 0) return null;
 
@@ -101,7 +101,7 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         var statusCompleted = (int)IdempotencyRecordStatus.Completed;
         var payloadBase64 = Convert.ToBase64String(responsePayload.ToArray());
         await Session.ExecuteAsync(
-            $"UPDATE idempotency_records SET status = {statusCompleted}, updated_at = {completedAt}, response_payload = {payloadBase64}, error = NULL WHERE operation_name = {record.OperationName} AND key = {record.Key} AND updated_at = {expectedUpdatedAt}",
+            $"UPDATE idempotency_records SET status = {statusCompleted}, updated_at = {completedAt}, response_payload = {payloadBase64}, error = NULL WHERE operation_name = {record.OperationName} AND idempotency_key = {record.Key} AND updated_at = {expectedUpdatedAt}",
             ct);
         record.MarkCompleted(responsePayload, completedAt);
     }
@@ -114,7 +114,7 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         var statusFailed = (int)IdempotencyRecordStatus.Failed;
         var statusCompleted = (int)IdempotencyRecordStatus.Completed;
         await Session.ExecuteAsync(
-            $"UPDATE idempotency_records SET status = {statusFailed}, updated_at = {failedAt}, error = {failureReason} WHERE operation_name = {record.OperationName} AND key = {record.Key} AND updated_at = {expectedUpdatedAt} AND status <> {statusCompleted}",
+            $"UPDATE idempotency_records SET status = {statusFailed}, updated_at = {failedAt}, error = {failureReason} WHERE operation_name = {record.OperationName} AND idempotency_key = {record.Key} AND updated_at = {expectedUpdatedAt} AND status <> {statusCompleted}",
             ct);
         record.MarkFailed(failureReason, failedAt);
     }

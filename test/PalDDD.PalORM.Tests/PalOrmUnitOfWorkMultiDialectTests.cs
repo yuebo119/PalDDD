@@ -12,6 +12,7 @@ using TUnit.Assertions.Extensions;
 namespace PalDDD.PalORM.Tests;
 
 /// <summary>UnitOfWork 跨方言测试 —— 验证三方言的事务 Commit/Rollback。</summary>
+[TUnit.Core.NotInParallel("palorm-multidialect")]
 public class PalOrmUnitOfWorkMultiDialectTests
 {
     [Test]

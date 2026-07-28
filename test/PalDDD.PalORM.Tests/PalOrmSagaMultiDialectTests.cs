@@ -15,6 +15,7 @@ using TUnit.Assertions.Extensions;
 namespace PalDDD.PalORM.Tests;
 
 /// <summary>Saga Store 跨方言测试 —— 验证 saga_data JSON 列 + version 乐观锁。</summary>
+[TUnit.Core.NotInParallel("palorm-multidialect")]
 public class PalOrmSagaMultiDialectTests
 {
     private sealed class TestSagaState : SagaState

@@ -31,7 +31,7 @@ public class PalOrmConcurrencyTests
         await session.ExecuteAsync($"CREATE TABLE IF NOT EXISTS inbox_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL, consumer_name TEXT NOT NULL, status INTEGER NOT NULL DEFAULT 0, received_at TEXT NOT NULL, processing_started_at TEXT, processed_at TEXT, attempts INTEGER NOT NULL DEFAULT 1, last_error TEXT)", ct);
         await session.ExecuteAsync($"CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_unique ON inbox_messages(consumer_name, message_id)", ct);
         await session.ExecuteAsync($"CREATE TABLE IF NOT EXISTS projection_checkpoints (projection_name TEXT NOT NULL, source_name TEXT NOT NULL, position TEXT NOT NULL, status INTEGER NOT NULL, updated_at TEXT NOT NULL, lease_until TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, error TEXT, PRIMARY KEY (projection_name, source_name, position))", ct);
-        await session.ExecuteAsync($"CREATE TABLE IF NOT EXISTS idempotency_records (operation_name TEXT NOT NULL, key TEXT NOT NULL, status INTEGER NOT NULL, locked_until TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL, response_payload TEXT, error TEXT, PRIMARY KEY (operation_name, key))", ct);
+        await session.ExecuteAsync($"CREATE TABLE IF NOT EXISTS idempotency_records (operation_name TEXT NOT NULL, idempotency_key TEXT NOT NULL, status INTEGER NOT NULL, locked_until TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL, response_payload TEXT, error TEXT, PRIMARY KEY (operation_name, idempotency_key))", ct);
     }
 
     /// <summary>

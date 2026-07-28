@@ -13,6 +13,7 @@ using TUnit.Assertions.Extensions;
 namespace PalDDD.PalORM.Tests;
 
 /// <summary>EventLog Store 跨方言测试 —— 验证 PascalCase 列 + GlobalPosition 自增 + StreamVersion 乐观并发。</summary>
+[TUnit.Core.NotInParallel("palorm-multidialect")]
 public class PalOrmEventLogMultiDialectTests
 {
     [Test]

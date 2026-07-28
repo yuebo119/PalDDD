@@ -59,10 +59,22 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         var now = DateTimeOffset.UtcNow;
         var until = now + leaseDuration;
 
-        // Saga 租约：UPDATE 子查询（无 RETURNING 路径 —— 与 Dapper 实现一致，不分支）
-        await Session.ExecuteAsync(
-            $"UPDATE saga_states SET leased_by = {owner}, leased_until = {until} WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status = {(int)SagaStatus.Active} AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize})",
-            ct);
+        // Saga 租约：UPDATE 子查询
+        // MySQL 不支持 UPDATE...WHERE id IN (SELECT...LIMIT) —— 用 JOIN 替代
+        if (TProvider.SupportsReturningClause)
+        {
+            // PG/SQLite 路径
+            await Session.ExecuteAsync(
+                $"UPDATE saga_states SET leased_by = {owner}, leased_until = {until} WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status = {(int)SagaStatus.Active} AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize})",
+                ct);
+        }
+        else
+        {
+            // MySQL 特化路径：JOIN 子查询
+            await Session.ExecuteAsync(
+                $"UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status = {(int)SagaStatus.Active} AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize}) AS sub ON t.saga_id = sub.saga_id SET t.leased_by = {owner}, t.leased_until = {until}",
+                ct);
+        }
 
         // 按 lease 标识回读（手动 reader）
         await using var cmd = Session.GetRawConnection().CreateCommand();

@@ -24,6 +24,7 @@ namespace PalDDD.PalORM.Tests;
 /// </para>
 /// <para><b>前置条件</b>：Docker 运行（PG/MySQL 经 Testcontainers 启动）。</para>
 /// </summary>
+[TUnit.Core.NotInParallel("palorm-multidialect")]
 public class PalOrmOutboxMultiDialectTests
 {
     // ─── SQLite ────────────────────────────────────────────────
