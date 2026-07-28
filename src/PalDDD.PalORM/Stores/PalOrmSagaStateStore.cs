@@ -33,12 +33,17 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
     protected readonly DataSession<TProvider> Session;
 
     private readonly JsonTypeInfo<TState>? _jsonTypeInfo;
+    private readonly TimeProvider _clock;
 
     /// <summary>构造 Saga Store。</summary>
-    public PalOrmSagaStateStore(DataSession<TProvider> session, JsonTypeInfo<TState>? jsonTypeInfo = null)
+    /// <param name="session">Scoped 数据库会话。</param>
+    /// <param name="jsonTypeInfo">可选 STJ 源生成上下文。</param>
+    /// <param name="clock">可选时间提供者（默认 System）；用于租约时间一致性（P1-8 修复）。</param>
+    public PalOrmSagaStateStore(DataSession<TProvider> session, JsonTypeInfo<TState>? jsonTypeInfo = null, TimeProvider? clock = null)
     {
         Session = session;
         _jsonTypeInfo = jsonTypeInfo;
+        _clock = clock ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -56,7 +61,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
     public async ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
         string owner, TimeSpan leaseDuration, int batchSize, CancellationToken ct)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _clock.GetUtcNow();  // P1-8：用注入的 Clock 替代硬编码 UtcNow
         var until = now + leaseDuration;
 
         // Saga 租约：UPDATE 子查询

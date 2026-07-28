@@ -124,8 +124,8 @@ public sealed partial class OutboxMessageRow
         LockedBy = LockedBy,
         LockedUntil = LockedUntil,
         Error = Error,
-        CorrelationId = CorrelationId is null ? null : Ulid.Parse(CorrelationId),
-        CausationId = CausationId is null ? null : Ulid.Parse(CausationId),
+        CorrelationId = TryParseUlid(CorrelationId),
+        CausationId = TryParseUlid(CausationId),
         TraceParent = TraceParent,
         TraceState = TraceState,
     };
@@ -151,4 +151,8 @@ public sealed partial class OutboxMessageRow
         TraceParent = m.TraceParent,
         TraceState = m.TraceState,
     };
+
+    /// <summary>安全解析 Ulid 字符串 —— 脏数据返回 null 而非抛异常（P0-6 修复）。</summary>
+    private static Ulid? TryParseUlid(string? value)
+        => value is not null && Ulid.TryParse(value, null, out var ulid) ? ulid : null;
 }

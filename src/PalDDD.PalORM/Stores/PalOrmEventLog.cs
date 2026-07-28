@@ -10,8 +10,9 @@ namespace PalDDD.PalORM.Stores;
 /// <summary>
 /// EventLog Store 的 PalORM 实现 —— 双泛型核心基类。
 /// <para>
-/// <b>EventLog 特殊契约</b>：表列名为 <b>PascalCase</b>（与 Outbox/Inbox/Saga 的 snake_case 不同），
-/// 因 Dapper 与 EFCore 双实现历史一致采用 PascalCase —— PalORM 版本通过 <see cref="EventLogRow"/> 显式 <c>[Column]</c> 保留此契约。
+/// <b>EventLog 表名+列名</b>：统一 snake_case（与其他表一致；原 Dapper/EFCore 用 PascalCase，
+/// 但 PalORM 手写 SQL 的 FormattableString 不加引号——PG 折叠无引号标识符为小写，导致不匹配。
+/// v4 实施修正：统一改为 snake_case）。
 /// </para>
 /// <para>
 /// <b>GlobalPosition 分配</b>：<c>[Key(AutoIncrement=true)]</c> —— Dapper 风格（DB 自增 + RETURNING），

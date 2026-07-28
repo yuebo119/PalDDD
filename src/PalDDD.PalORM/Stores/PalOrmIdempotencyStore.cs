@@ -11,6 +11,12 @@ namespace PalDDD.PalORM.Stores;
 /// <b>复合主键限制</b>：表 <c>idempotency_records</c> 是两列复合主键 —— PALORM019 拒绝实体注册。
 /// <see cref="GetAsync"/> 用 <see cref="DbDataReader"/> 手动映射（QueryFirstAsync 对未注册类型返回空对象）。
 /// </para>
+/// <para>
+/// ⚠️ <b>已知限制（P0-4）</b>：<see cref="GetAsync"/> 通过 <c>GetRawConnection().CreateCommand()</c>
+/// 创建的 DbCommand 不自动 enlist 活动事务（PalORM 的 ExecuteAsync 路径才会自动 enlist）。
+/// 只读路径在大多数场景正确（读已提交），但事务内脏读检查不可靠。
+/// 待 PalORM 提供 <c>Session.CreateCommand(FormattableString)</c> 公开 API 后迁移。
+/// </para>
 /// </summary>
 public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
     where TProvider : IDbProvider
