@@ -93,6 +93,19 @@ public static class EventStreamJsonLines
         json.WriteBase64String("payload", evt.Payload.Span);
         if (evt.Metadata.Length > 0)
             json.WriteBase64String("metadata", evt.Metadata.Span);
+        // P1 修复：审计与追踪元数据（原版完全丢失，备份/迁移往返后审计链断）
+        if (!string.IsNullOrEmpty(evt.Audit.ActorId))
+            json.WriteString("actorId", evt.Audit.ActorId);
+        if (!string.IsNullOrEmpty(evt.Audit.Reason))
+            json.WriteString("reason", evt.Audit.Reason);
+        if (evt.Audit.CorrelationId is not null)
+            json.WriteString("correlationId", evt.Audit.CorrelationId.Value.ToString());
+        if (evt.Audit.CausationId is not null)
+            json.WriteString("causationId", evt.Audit.CausationId.Value.ToString());
+        if (!string.IsNullOrEmpty(evt.Audit.TraceParent))
+            json.WriteString("traceParent", evt.Audit.TraceParent);
+        if (!string.IsNullOrEmpty(evt.Audit.TraceState))
+            json.WriteString("traceState", evt.Audit.TraceState);
         json.WriteEndObject();
         json.Flush();
 
@@ -110,13 +123,31 @@ public static class EventStreamJsonLines
             ? m.GetBytesFromBase64()
             : ReadOnlyMemory<byte>.Empty;
 
+        // P1 修复：读回审计与追踪元数据
+        var actorId = root.TryGetProperty("actorId", out var a) ? a.GetString() : null;
+        var reason = root.TryGetProperty("reason", out var r) ? r.GetString() : null;
+        PalUlid? correlationId = null;
+        if (root.TryGetProperty("correlationId", out var c) && c.GetString() is string cs)
+            correlationId = PalUlid.Parse(cs);
+        PalUlid? causationId = null;
+        if (root.TryGetProperty("causationId", out var cau) && cau.GetString() is string caus)
+            causationId = PalUlid.Parse(caus);
+        var traceParent = root.TryGetProperty("traceParent", out var tp) ? tp.GetString() : null;
+        var traceState = root.TryGetProperty("traceState", out var ts) ? ts.GetString() : null;
+
+        var audit = string.IsNullOrEmpty(actorId) && string.IsNullOrEmpty(reason)
+            && correlationId is null && causationId is null
+            && string.IsNullOrEmpty(traceParent) && string.IsNullOrEmpty(traceState)
+            ? EventAuditMetadata.Empty
+            : new EventAuditMetadata(actorId, reason, correlationId, causationId, traceParent, traceState);
+
         return new EventData(
-            PalUlid.Parse(root.GetProperty("eventId").GetString()!),  // P0-FIX-1: EventId 是 Ulid 不是 Guid
+            PalUlid.Parse(root.GetProperty("eventId").GetString()!),
             root.GetProperty("eventName").GetString()!,
             root.GetProperty("schemaVersion").GetInt32(),
             root.GetProperty("contentType").GetString()!,
             root.GetProperty("payload").GetBytesFromBase64(),
             metadata,
-            EventAuditMetadata.Empty);
+            audit);
     }
 }

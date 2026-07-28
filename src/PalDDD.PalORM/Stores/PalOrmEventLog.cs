@@ -59,6 +59,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
 #pragma warning disable PALORM005 // 事件溯源语义要求循环 INSERT，非 N+1 反模式
         var now = _clock.GetUtcNow();
         long firstGlobalPos = 0;
+        long lastGlobalPos = 0;  // P1 修复：循环内每次更新，不用推导
         for (var i = 0; i < events.Count; i++)
         {
             var e = events[i];
@@ -80,12 +81,13 @@ public class PalOrmEventLog<TProvider> : IEventLog
             // InsertAsync 对自增主键自动回填 GlobalPosition（PG/SQLite 经 RETURNING，MySQL 经 LAST_INSERT_ID）
             var inserted = await Session.InsertAsync(row, cancellationToken);
             if (i == 0) firstGlobalPos = inserted.GlobalPosition;
+            lastGlobalPos = inserted.GlobalPosition;  // P1 修复：不用算术推导（并发下 GlobalPosition 非连续）
         }
 #pragma warning restore PALORM005
 
         var firstStreamVersion = currentVersion + 1;
         var lastStreamVersion = currentVersion + events.Count;
-        var lastGlobalPos = firstGlobalPos + events.Count - 1;
+        // lastGlobalPos 已在循环内每次更新（不再用 firstGlobalPos + count - 1 推导）
         return new AppendEventsResult(streamName, firstStreamVersion, lastStreamVersion, firstGlobalPos, lastGlobalPos);
     }
 

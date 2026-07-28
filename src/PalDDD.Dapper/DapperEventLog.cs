@@ -65,11 +65,12 @@ public sealed class DapperEventLog : IEventLog
         ArgumentNullException.ThrowIfNull(events);
         if (events.Count == 0) throw new ArgumentException("至少需要一个事件。", nameof(events));
 
-        // 1. 乐观并发检查
+        // 1. 乐观并发检查（P0-2 修复：原 expectedVersion.Matches 返回值被丢弃）
         var currentVersion = await _connection.QuerySingleOrDefaultAsync<long?>(
             EventLogSql.MaxVersion,
             new { name = streamName }, _transaction).ConfigureAwait(false);
-        expectedVersion.Matches(currentVersion ?? -1);
+        if (!expectedVersion.Matches(currentVersion ?? -1))
+            throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion ?? -1);
 
         // 2. 批量插入事件 — 根据数据库类型选择返回 ID 语法
         var version = (currentVersion ?? -1) + 1;

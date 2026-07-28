@@ -148,7 +148,11 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             new { Id = DapperAotInitializer.ToSqliteParameter(message.Id), message.Type, message.Payload, message.ContentType, message.SchemaVersion, CreatedAt = DapperAotInitializer.ToSqliteParameter(_timeProvider.GetUtcNow()) }, _transaction);
     }
 
-    /// <summary>批量添加消息 — 自动选择数据库最优批量路径</summary>
+    /// <summary>批量添加消息 — 自动选择数据库最优批量路径。
+    /// <para>⚠️ <b>已知限制（P1）</b>：批量插入不参与 UnitOfWork 外部事务（BulkCopy 各方言自管事务）。
+    /// 如需事务原子性，使用单条 <see cref="AddMessage"/>。后续可扩展 BulkInsertAsync 传 transaction 参数。
+    /// </para>
+    /// </summary>
     public async ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
     {
         if (messages.Count == 0) return 0;

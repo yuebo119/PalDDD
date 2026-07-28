@@ -152,7 +152,13 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         LeasedUntil = reader.IsDBNull(10) ? null : reader.GetDateTime(10),
     };
 
-    /// <summary>SagaStateRow → TState（JSON 反序列化 + 元数据覆盖）。</summary>
+    /// <summary>SagaStateRow → TState（JSON 反序列化 + 元数据覆盖）。
+    /// <para>⚠️ <b>已知限制</b>：当 <c>_jsonTypeInfo</c> 为 null 时走 <c>new TState()</c>，
+    /// <c>SagaId</c> 和 <c>CreatedAt</c> 是 init-only 属性无法在运行时覆盖——得到随机新值。
+    /// 调用方必须注入 jsonTypeInfo 确保 SagaId 往返一致性。
+    /// （领域类型 SagaState.SagaId/CreatedAt 是 init-only，设计上不可变。）
+    /// </para>
+    /// </summary>
     private TState Materialize(SagaStateRow row)
     {
         TState state;

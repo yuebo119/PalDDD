@@ -145,20 +145,20 @@ public sealed class DapperStoreTests
             );
 
             CREATE TABLE events (
-                GlobalPosition INTEGER PRIMARY KEY AUTOINCREMENT,
-                EventId        TEXT NOT NULL,
-                EventName      TEXT NOT NULL,
-                StreamName     TEXT NOT NULL,
-                StreamVersion  INTEGER NOT NULL,
-                SchemaVersion  INTEGER NOT NULL DEFAULT 1,
-                ContentType    TEXT NOT NULL DEFAULT 'application/json',
-                Payload        BLOB NOT NULL,
-                Metadata       BLOB,
-                RecordedAt     TEXT NOT NULL,
-                ActorId        TEXT,
-                Reason         TEXT
+                global_position INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id        TEXT NOT NULL,
+                event_name      TEXT NOT NULL,
+                stream_name     TEXT NOT NULL,
+                stream_version  INTEGER NOT NULL,
+                schema_version  INTEGER NOT NULL DEFAULT 1,
+                content_type    TEXT NOT NULL DEFAULT 'application/json',
+                payload         BLOB NOT NULL,
+                metadata        BLOB,
+                recorded_at     TEXT NOT NULL,
+                actor_id        TEXT,
+                reason          TEXT
             );
-            CREATE UNIQUE INDEX idx_events_stream ON events(StreamName, StreamVersion);
+            CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
 
             CREATE TABLE projection_checkpoints (
                 projection_name TEXT NOT NULL,
@@ -870,7 +870,7 @@ public sealed class DapperStoreTests
             cancellationToken);
 
         var recordedAt = await ReadScalarAsync<DateTimeOffset>(
-            "SELECT RecordedAt FROM events WHERE StreamName=$stream",
+            "SELECT recorded_at FROM events WHERE stream_name=$stream",
             ("$stream", "test-stream"));
         await Assert.That(recordedAt).IsEqualTo(now);
     }
