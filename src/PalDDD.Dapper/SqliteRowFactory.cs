@@ -3,13 +3,13 @@
 // ─────────────────────────────────────────────────────────────
 // 💡 问题：SQLite 将 Ulid/Guid/DateTimeOffset 存储为 TEXT 列。
 //
-// 💡 本类提供静态解析方法——供 Dapper.AOT 编译时拦截器或手动调用。
+// 💡 本类提供静态解析方法——供手动调用或经典 Dapper 路径使用。
 //
-// 💡 AOT 状态：✅ DapperAotInitializer.cs 已启用 [module:DapperAot]。
-//   TypeHandler 通过 [ModuleInitializer] 注册，Dapper.AOT 拦截器编译时发现
-//   并直接生成调用代码，零运行时 IL.Emit。
-//   RegisterTypeHandlers() 保留作为回退和非 AOT 场景的手动入口。
-// ─────────────────────────────────────────────────────────────
+// ⚠️ AOT 状态：[module:DapperAot] 当前未启用（DapperAotInitializer.cs:21 注释禁用）。
+//   TypeHandler 通过 [ModuleInitializer] 注册，经典 Dapper 运行时路径生效。
+//   QueryAsync<T> 走 IL.Emit 反射物化，NativeAOT 发布会失败。
+//   PalORM 适配层（PalDDD.PalORM）提供真 AOT 路径替代。
+// ─────────────────────────────────────────────────────────────────────
 
 using Dapper;
 using System.Data;

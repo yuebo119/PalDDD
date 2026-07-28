@@ -45,12 +45,18 @@ public sealed class InboxProcessor
     }
 
     /// <summary>尝试处理消息 — 已处理则返回 false（幂等保证）</summary>
-    public async ValueTask<bool> TryProcessAsync<TMessage>(
+    /// <remarks>
+    /// 🔴 P1 性能修复 (2026-07-28): 此重载只是转发到带 consumerName 的重载。
+    /// 原实现用 <c>async + await</c> 会让编译器为这个零逻辑的转发方法生成一个
+    /// 完整的异步状态机（分配一个 <c>AsyncTaskMethodBuilder&lt;bool&gt;</c> + 状态字段），
+    /// 在高频消费路径上产生无谓的分配压力。改为直接返回底层 ValueTask 即可跳过该状态机。
+    /// </remarks>
+    public ValueTask<bool> TryProcessAsync<TMessage>(
         string messageId,
         Func<TMessage, CancellationToken, ValueTask> handler,
         TMessage message,
         CancellationToken ct = default)
-        => await TryProcessAsync(_options.CurrentValue.DefaultConsumerName, messageId, handler, message, ct);
+        => TryProcessAsync(_options.CurrentValue.DefaultConsumerName, messageId, handler, message, ct);
 
     /// <summary>尝试处理消息 — 以消费者名称隔离幂等记录。</summary>
     public async ValueTask<bool> TryProcessAsync<TMessage>(

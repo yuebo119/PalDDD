@@ -4,6 +4,7 @@
 using PalDDD.EventLog;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Projections.EventLog;
 
@@ -110,7 +111,7 @@ public static class EventStreamJsonLines
             : ReadOnlyMemory<byte>.Empty;
 
         return new EventData(
-            root.GetProperty("eventId").GetGuid(),
+            PalUlid.Parse(root.GetProperty("eventId").GetString()!),  // P0-FIX-1: EventId 是 Ulid 不是 Guid
             root.GetProperty("eventName").GetString()!,
             root.GetProperty("schemaVersion").GetInt32(),
             root.GetProperty("contentType").GetString()!,

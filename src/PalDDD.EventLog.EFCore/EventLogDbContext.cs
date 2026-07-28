@@ -207,8 +207,15 @@ public abstract class EventLogDbContext(
         {
             await SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException ex)
         {
+            // 🔴 P1 修复 (2026-07-28): 仅当异常来源于唯一约束冲突时才视为流并发冲突
+            // （(StreamName,StreamVersion) 或 EventId 唯一索引）。
+            // 其它 DbUpdateException（外键约束、CHECK 约束、字段过长、空值违约等）
+            // 是真实的数据错误，必须原样向上传播，否则会掩盖真实错误并误导重试策略。
+            if (!IsUniqueConstraintViolation(ex))
+                throw;
+
             DetachAddedEvents();
             var currentVersion = await GetActualStreamVersionAsync(streamName, cancellationToken).ConfigureAwait(false);
             throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion);
@@ -255,5 +262,62 @@ public abstract class EventLogDbContext(
             if (entry.State == EntityState.Added)
                 entry.State = EntityState.Detached;
         }
+    }
+
+    /// <summary>
+    /// 判定 <see cref="DbUpdateException"/> 内部异常是否为唯一约束冲突。<br/>
+    /// 覆盖支持的主要 provider：
+    /// <list type="bullet">
+    ///   <item>PostgreSQL: <c>PostgresException.SqlState == "23505"</c>（unique_violation）</item>
+    ///   <item>MySQL: <c>MySqlException.Number == 1062</c>（ER_DUP_ENTRY，兼容 1586）</item>
+    ///   <item>SQL Server: <c>SqlException.Number == 2601 / 2627</c>（unique index / constraint）</item>
+    ///   <item>SQLite: 异常消息包含 <c>"UNIQUE constraint"</c></item>
+    /// </list>
+    /// 此处不直接引用任何 provider 包，避免 EventLog.EFCore 对具体 provider 的硬依赖；
+    /// 而是通过反射鸭子类型读取属性，保证可移植性。
+    /// </summary>
+    /// <param name="exception">EF Core 抛出的 DbUpdateException。</param>
+    /// <returns>内部异常是唯一约束冲突时返回 true；否则 false。</returns>
+    private static bool IsUniqueConstraintViolation(DbUpdateException exception)
+    {
+        for (var inner = exception.InnerException; inner is not null; inner = inner.InnerException)
+        {
+            var type = inner.GetType();
+            var typeName = type.Name;
+
+            // PostgreSQL: Npgsql.PostgresException.SqlState == "23505"
+            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
+                && type.GetProperty("SqlState")?.GetValue(inner) is string sqlState
+                && sqlState == "23505")
+            {
+                return true;
+            }
+
+            // MySQL: MySqlException.Number == 1062（ER_DUP_ENTRY）或 1586
+            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int mysqlNumber
+                && (mysqlNumber == 1062 || mysqlNumber == 1586))
+            {
+                return true;
+            }
+
+            // SQL Server: SqlException.Number == 2601 (unique index) 或 2627 (unique constraint / PK)
+            if (typeName.Equals("SqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int sqlServerNumber
+                && (sqlServerNumber == 2601 || sqlServerNumber == 2627))
+            {
+                return true;
+            }
+
+            // SQLite: Microsoft.Data.Sqlite.SqliteException 消息包含 "UNIQUE constraint"
+            var message = inner.Message;
+            if (!string.IsNullOrEmpty(message)
+                && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

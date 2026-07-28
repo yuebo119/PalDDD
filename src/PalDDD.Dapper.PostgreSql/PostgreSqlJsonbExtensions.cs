@@ -46,12 +46,12 @@ public static class PostgreSqlJsonb
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Include(string column, string key, string value)
-        => $"{Escape(column)} @> '{{\"{Escape(key)}\":\"{Escape(value)}\"}}'::jsonb";
+        => $"{Escape(column)} @> '{{\"{Escape(key)}\":\"{EscapeJsonValue(value)}\"}}'::jsonb";
 
     /// <summary>生成 JSONB 被包含条件（ &lt;@ ）</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string IncludedBy(string column, string key, string value)
-        => $"'{{\"{Escape(key)}\":\"{Escape(value)}\"}}'::jsonb <@ {Escape(column)}";
+        => $"'{{\"{Escape(key)}\":\"{EscapeJsonValue(value)}\"}}'::jsonb <@ {Escape(column)}";
 
     // ── 键存在操作符 ──
 
@@ -132,4 +132,13 @@ public static class PostgreSqlJsonb
             ? identifier.Replace("\"", "\"\"")
             : identifier;
     }
+
+    /// <summary>
+    /// JSON 值转义 —— 防止 JSON 注入（P0-FIX-5）。
+    /// 转义规则：反斜杠 → \\，双引号 → \"，控制字符 → \uXXXX。
+    /// 不做此转义时，攻击者可注入额外 JSON 键绕过条件。
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static string EscapeJsonValue(string value)
+        => System.Text.Json.JsonEncodedText.Encode(value).ToString();
 }

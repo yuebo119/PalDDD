@@ -20,6 +20,11 @@ namespace PalDDD.Core;
 /// 通过单链表存储：_head 指向第一个事件，_tail 指向最后一个事件。<br/>
 /// 性能特性：追加 O(1)，清空 O(1)，遍历 O(n)，无额外堆分配。
 /// </para>
+/// <para>
+/// ⚠️ <b>线程安全</b>：instances are not thread-safe; one aggregate per concurrency context。<br/>
+/// 领域事件的链表节点（<c>_head</c>/<c>_tail</c>）未做同步保护，跨线程共享同一聚合实例会出现竞态。<br/>
+/// 推荐每个并发上下文（请求/事务/工作单元）持有独立的聚合实例，跨边界传递时通过值拷贝或新加载。
+/// </para>
 /// </summary>
 public abstract class Entity
 {

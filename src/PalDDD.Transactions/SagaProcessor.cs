@@ -133,6 +133,14 @@ TState>
                 sagaState.LeasedUntil = null;
                 await _store.SaveChangesAsync(sagaState, ct);
             }
+            else
+            {
+                // P0-FIX-3: 非超时 Saga 也必须释放租约 —— 否则超时检测平均延迟 = LeaseDuration（2 分钟）
+                // 而非 PollInterval（30 秒），多实例下该 Saga 对其他实例不可见
+                sagaState.LeasedBy = null;
+                sagaState.LeasedUntil = null;
+                await _store.SaveChangesAsync(sagaState, ct);
+            }
         }
     }
 }

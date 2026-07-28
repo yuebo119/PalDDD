@@ -37,6 +37,14 @@ public sealed class EventLogPositionReserver
     private bool _initialized;
     private readonly Lock _lock = new();
 
+    // 🔴 P1 修复 (2026-07-28): DbContext 非线程安全。
+    // 即使 ReserveAsync 的快路径用 _lock 保护了进程内 chunk 缓存，
+    // 当缓存耗尽时多个调用线程可能同时进入 AllocateNewChunkAsync，
+    // 对同一个注入的 EventLogDbContext 并发执行 SaveChangesAsync / SingleOrDefaultAsync，
+    // 导致 ChangeTracker / DbContext 内部状态损坏。
+    // 用 SemaphoreSlim 串行化所有数据库访问。
+    private readonly SemaphoreSlim _dbSemaphore = new(1, 1);
+
     /// <summary>使用指定的区块大小创建预留器。</summary>
     /// <param name="chunkSize">每次持久化分配的位置数量。值越大数据库往返越少，但崩溃时潜在间隙也越多。</param>
     public EventLogPositionReserver(int chunkSize = 100)
@@ -83,51 +91,60 @@ public sealed class EventLogPositionReserver
         int count,
         CancellationToken cancellationToken)
     {
-        const int maxRetries = 5;
-        for (var attempt = 0; attempt < maxRetries; attempt++)
+        // 🔴 P1 修复 (2026-07-28): DbContext 非线程安全 —— 串行化数据库访问。
+        await _dbSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            var allocator = await context.GlobalPositionAllocators
-                .SingleOrDefaultAsync(a => a.Id == EventLogGlobalPositionAllocator.SingletonId, cancellationToken)
-                .ConfigureAwait(false);
-
-            if (allocator is null)
+            const int maxRetries = 5;
+            for (var attempt = 0; attempt < maxRetries; attempt++)
             {
-                allocator = EventLogGlobalPositionAllocator.Create();
-                context.GlobalPositionAllocators.Add(allocator);
+                var allocator = await context.GlobalPositionAllocators
+                    .SingleOrDefaultAsync(a => a.Id == EventLogGlobalPositionAllocator.SingletonId, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (allocator is null)
+                {
+                    allocator = EventLogGlobalPositionAllocator.Create();
+                    context.GlobalPositionAllocators.Add(allocator);
+                }
+
+                // Chunk must be large enough for this request.
+                var chunkSize = Math.Max(count, _chunkSize);
+                var first = allocator.AllocateChunk(chunkSize);
+
+                try
+                {
+                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (DbUpdateConcurrencyException)
+                {
+                    // CAS 失败（Revision 不匹配）—— 另一个进程同时分配了区块。重试。
+                    context.Entry(allocator).State = EntityState.Detached;
+                    continue;
+                }
+                catch (DbUpdateException)
+                {
+                    // 主键冲突 —— 另一个进程先插入了分配器行。重试。
+                    context.Entry(allocator).State = EntityState.Detached;
+                    continue;
+                }
+
+                lock (_lock)
+                {
+                    _lo = first + count;
+                    _hi = first + chunkSize;
+                    _initialized = true;
+                }
+
+                return first;
             }
 
-            // Chunk must be large enough for this request.
-            var chunkSize = Math.Max(count, _chunkSize);
-            var first = allocator.AllocateChunk(chunkSize);
-
-            try
-            {
-                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                // CAS 失败（Revision 不匹配）—— 另一个进程同时分配了区块。重试。
-                context.Entry(allocator).State = EntityState.Detached;
-                continue;
-            }
-            catch (DbUpdateException)
-            {
-                // 主键冲突 —— 另一个进程先插入了分配器行。重试。
-                context.Entry(allocator).State = EntityState.Detached;
-                continue;
-            }
-
-            lock (_lock)
-            {
-                _lo = first + count;
-                _hi = first + chunkSize;
-                _initialized = true;
-            }
-
-            return first;
+            throw new InvalidOperationException(
+                $"Failed to allocate a global position chunk after {maxRetries} optimistic concurrency retries.");
         }
-
-        throw new InvalidOperationException(
-            $"Failed to allocate a global position chunk after {maxRetries} optimistic concurrency retries.");
+        finally
+        {
+            _dbSemaphore.Release();
+        }
     }
 }

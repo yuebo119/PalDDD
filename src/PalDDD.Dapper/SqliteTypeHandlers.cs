@@ -1,15 +1,13 @@
 // ─────────────────────────────────────────────────────────────
-// 🔧 SQLite 类型处理器 — Dapper.AOT 编译时 TypeHandler
+// 🔧 SQLite 类型处理器 — Dapper TypeHandler
 // ─────────────────────────────────────────────────────────────
 // 💡 为什么需要？
 //   ｜ SQLite 的 TEXT 列返回 string，无法直接 cast 为 Ulid/Guid/DateTimeOffset。
-//   ｜ 通过 Dapper.SqlMapper.TypeHandler<T> 继承，Dapper.AOT 拦截器编译时发现
-//   ｜ 并直接生成调用代码（零 IL.Emit，NativeAOT 安全）。
+//   ｜ 通过 Dapper.SqlMapper.TypeHandler<T> 继承，经典 Dapper 运行时路径注册。
 //
-// ✅ AOT 安全性：
-//   ✅ DapperAotInitializer.cs 通过 [module:DapperAot] + [ModuleInitializer] 注册
-//   ✅ sealed class，无虚分派
-//   ✅ 零反射——全部 switch/Parse 等编译期可分析的路径
+// ⚠️ AOT 状态：[module:DapperAot] 当前未启用（DapperAotInitializer.cs:21 注释禁用）。
+//   TypeHandler 通过 [ModuleInitializer] 注册，经典 Dapper IL.Emit 反射物化路径生效。
+//   NativeAOT 发布时会运行时失败——PalORM 适配层（PalDDD.PalORM）提供真 AOT 替代。
 //
 // 📐 DDD 位置：基础设施层 — Dapper SQLite 特定，不影响领域/应用层。
 // ─────────────────────────────────────────────────────────────

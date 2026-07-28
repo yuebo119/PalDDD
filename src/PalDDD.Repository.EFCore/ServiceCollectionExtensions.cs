@@ -24,6 +24,18 @@ public static class ServiceCollectionExtensions
     /// 若接入异构存储（如独立 Dapper outbox 或跨库），必须自行保证同事务或两阶段提交，
     /// 否则原子性声明失效。
     /// </para>
+    /// <para>
+    /// ⚠️ <b>拦截器注册（P0-FIX-4）</b>：此方法仅注册服务到 DI 容器。
+    /// <b>调用方必须在 DbContext.OnConfiguring/OnModelCreating 中显式启用拦截器</b>：
+    /// <code>
+    /// optionsBuilder.UseApplicationServiceProvider(serviceProvider);
+    /// </code>
+    /// 或在 <c>AddDbContext</c> 时传：
+    /// <code>
+    /// builder.AddInterceptors(sp.GetRequiredService&lt;OutboxDomainEventInterceptor&gt;());
+    /// </code>
+    /// 否则拦截器不会执行，领域事件不会进入发件箱（静默丢失）。
+    /// </para>
     /// </remarks>
     public static IServiceCollection AddPalOutboxUnitOfWork<TContext>(this IServiceCollection services)
         where TContext : DbContext
@@ -33,5 +45,20 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IUnitOfWork, UnitOfWork<TContext>>();
         services.TryAddScoped<OutboxDomainEventInterceptor>();
         return services;
+    }
+
+    /// <summary>
+    /// 在 <see cref="DbContextOptionsBuilder"/> 上注册 Outbox 领域事件拦截器。
+    /// <para>用法：<c>services.AddDbContext&lt;MyDb&gt;((sp, opts) =&gt; opts.UseSqlite(cs).UsePalOutboxInterceptor(sp));</c></para>
+    /// </summary>
+    public static DbContextOptionsBuilder UsePalOutboxInterceptor(
+        this DbContextOptionsBuilder optionsBuilder,
+        IServiceProvider serviceProvider)
+    {
+        ArgumentNullException.ThrowIfNull(optionsBuilder);
+        ArgumentNullException.ThrowIfNull(serviceProvider);
+
+        optionsBuilder.AddInterceptors(serviceProvider.GetRequiredService<OutboxDomainEventInterceptor>());
+        return optionsBuilder;
     }
 }

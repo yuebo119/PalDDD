@@ -37,12 +37,15 @@ public interface IPalOutboxStore
     ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages);
 
     /// <summary>标记消息发布成功。</summary>
+    /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。</remarks>
     void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt);
 
     /// <summary>标记消息不可恢复。</summary>
+    /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。</remarks>
     void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt);
 
     /// <summary>释放租约并等待下次重试。</summary>
+    /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。</remarks>
     void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt);
 
     /// <summary>

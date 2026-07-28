@@ -1,7 +1,8 @@
 // ─────────────────────────────────────────────────────────────
 // 📦 MemoryPackMessageSerializer — MemoryPack 二进制序列化器
 // ─────────────────────────────────────────────────────────────
-// AOT 安全：MemoryPack 内置 source generator，零反射。
+// AOT 限制：非泛型 Serialize(object) 路径走反射，NativeAOT 下不可用；
+//          泛型 API 才是 AOT 友好路径。
 // 与 JsonMessageSerializer 并行，通过 DI 切换。
 // ─────────────────────────────────────────────────────────────
 

@@ -167,6 +167,12 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
             e.Property(x => x.LockedBy).HasMaxLength(256);
             e.Property(x => x.Payload).IsRequired();
             e.Property(x => x.Error).HasMaxLength(2048);
+
+            // 🔴 P1 修复 (2026-07-28): RetryCount 作为并发令牌，与 PalORM 的 [ConcurrencyCheck]RetryCount 对齐。
+            // OutboxMessage 领域类型无 Version 字段，使用 RetryCount（int，PALORM012 兼容）作为乐观并发版本号。
+            // 当两个 processor 同时拉取并 lease 同一条消息时，SaveChangesAsync 第二次提交会因 RetryCount 不匹配
+            // 抛出 DbUpdateConcurrencyException，从而避免重复处理。
+            e.Property(x => x.RetryCount).IsConcurrencyToken();
         });
     }
 }
