@@ -28,7 +28,7 @@ public static class MultiDialectFixture
     public static async Task<TestSession<PostgreSqlProvider>> CreatePostgreSqlAsync(CancellationToken ct = default)
     {
         var cs = Environment.GetEnvironmentVariable("PALORM_PG_CONNECTION")
-            ?? "ENV_PG_NOT_SET";
+            ?? throw new InvalidOperationException("环境变量 PALORM_PG_CONNECTION 未设置");
         var session = await DataSession<PostgreSqlProvider>.CreateAsync(DbOptions.Development(cs), ct);
         await CleanAllTablesAsync(session, ct);
         await ApplySchemaAsync(session, MultiDialectSchema.PostgreSql, ct);
@@ -38,7 +38,7 @@ public static class MultiDialectFixture
     public static async Task<TestSession<MySqlProvider>> CreateMySqlAsync(CancellationToken ct = default)
     {
         var cs = Environment.GetEnvironmentVariable("PALORM_MYSQL_CONNECTION")
-            ?? "ENV_MYSQL_NOT_SET";
+            ?? throw new InvalidOperationException("环境变量 PALORM_MYSQL_CONNECTION 未设置");
         var session = await DataSession<MySqlProvider>.CreateAsync(DbOptions.Development(cs), ct);
         await CleanAllTablesAsync(session, ct);
         await ApplySchemaAsync(session, MultiDialectSchema.MySql, ct);
