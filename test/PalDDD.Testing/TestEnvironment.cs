@@ -38,6 +38,14 @@ public static class TestEnvironment
         int.TryParse(Environment.GetEnvironmentVariable("PALDDD_TEST_RABBIT_PORT"), out var p)
             ? p : _config.RabbitMq?.Port ?? 5672;
 
+    /// <summary>RabbitMQ 用户名（环境变量 PALDDD_TEST_RABBIT_USER 覆盖）。</summary>
+    public static string RabbitMqUsername =>
+        Environment.GetEnvironmentVariable("PALDDD_TEST_RABBIT_USER") ?? _config.RabbitMq?.Username ?? "guest";
+
+    /// <summary>RabbitMQ 密码（环境变量 PALDDD_TEST_RABBIT_PASS 覆盖）。</summary>
+    public static string RabbitMqPassword =>
+        Environment.GetEnvironmentVariable("PALDDD_TEST_RABBIT_PASS") ?? _config.RabbitMq?.Password ?? "guest";
+
     // ── 默认值（Testcontainers 本地启动时使用）──
     private const string DefaultPg = "Host=localhost;Port=5432;Username=test;Password=test;Database=palddd_test";
     private const string DefaultMySql = "Server=localhost;Port=3306;UserID=root;Password=test;Database=palddd_test";
@@ -64,7 +72,9 @@ public static class TestEnvironment
                     RabbitMq = env.TryGetProperty("RabbitMq", out var r) ? new()
                     {
                         Host = r.TryGetProperty("Host", out var h) ? h.GetString() : null,
-                        Port = r.TryGetProperty("Port", out var p) && p.TryGetInt32(out var port) ? port : 5672
+                        Port = r.TryGetProperty("Port", out var p) && p.TryGetInt32(out var port) ? port : 5672,
+                        Username = r.TryGetProperty("Username", out var u) ? u.GetString() : null,
+                        Password = r.TryGetProperty("Password", out var pw) ? pw.GetString() : null
                     } : null
                 };
             }
@@ -110,5 +120,7 @@ public static class TestEnvironment
     {
         public string? Host { get; init; }
         public int Port { get; init; } = 5672;
+        public string? Username { get; init; }
+        public string? Password { get; init; }
     }
 }

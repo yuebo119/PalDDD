@@ -118,8 +118,8 @@ public sealed class BrokerFixture : IAsyncDisposable
         {
             HostName = host,
             Port = port,
-            UserName = "guest",
-            Password = "guest",
+            UserName = TestEnvironment.RabbitMqUsername,
+            Password = TestEnvironment.RabbitMqPassword,
             AutomaticRecoveryEnabled = false
         };
         var connection = await factory.CreateConnectionAsync();
