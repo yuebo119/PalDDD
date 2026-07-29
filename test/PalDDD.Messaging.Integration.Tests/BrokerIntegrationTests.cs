@@ -93,7 +93,7 @@ public sealed class BrokerFixture : IAsyncDisposable
         {
             BootstrapServers = bootstrap,
             GroupId = $"paldd-test-{Guid.NewGuid():N}",
-            AutoOffsetReset = Confluent.Kafka.AutoOffsetReset.Latest,  // Latest 避免读历史积压消息
+            AutoOffsetReset = Confluent.Kafka.AutoOffsetReset.Earliest,  // Earliest 确保 consumer join 后能读到已发消息
             AllowAutoCreateTopics = true
         };
         var broker = new KafkaBroker(producerConfig, consumerConfig,
@@ -197,15 +197,33 @@ public sealed class BrokerIntegrationTests
         var kafka = Fixture.CreateKafkaBroker(logger);
         await using var broker = kafka.Item1;
         var tag = Guid.NewGuid().ToString("N")[..8];
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handlerEntered = false;
 
         var sub = await broker.SubscribeAsync<TestMessage>(async (msg, ct) =>
         {
-            if (msg.Name == $"kafka-cancel-{tag}") entered.TrySetResult();
-            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            // 第一条消息作为 warmup 确认 consumer ready
+            if (msg.Name == $"kafka-ready-{tag}")
+            {
+                ready.TrySetResult();
+                return;
+            }
+            // 第二条消息触发 cancel handler 测试
+            if (msg.Name == $"kafka-cancel-{tag}" && !handlerEntered)
+            {
+                handlerEntered = true;
+                entered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            }
         }, cancellationToken);
 
-        await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
+        // 先发 warmup 消息确认 consumer ready
+        await broker.PublishAsync(new TestMessage($"kafka-ready-{tag}"), cancellationToken);
+        // 等待 consumer 确认 ready（证明 join group 完成 + 消费链路通）
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
+
+        // consumer 已 ready，再发测试消息
         await broker.PublishAsync(new TestMessage($"kafka-cancel-{tag}"), cancellationToken);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
         await sub.DisposeAsync();
