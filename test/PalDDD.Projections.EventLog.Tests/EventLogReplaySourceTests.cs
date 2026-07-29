@@ -168,8 +168,10 @@ public sealed class EventLogReplaySourceTests
 
         await Assert.That(replayEvent.Audit.ActorId).IsEqualTo("user-123");
         await Assert.That(replayEvent.Audit.Reason).IsEqualTo("rebuild order projection");
-        await Assert.That(replayEvent.Audit.CorrelationId).IsEqualTo(Guid.Parse("ae9ce6d5-1263-43a0-a7f2-263f15d57e64"));
-        await Assert.That(replayEvent.Audit.CausationId).IsEqualTo(Guid.Parse("9ea92652-d96f-4700-8d99-a92a6beb87d7"));
+        // CorrelationId/CausationId 现为 PalUlid?（与 EventAuditMetadata 对齐，P3-003）；
+        // Guid 字面量经 Ulid.op_Implicit(Guid)→Ulid 隐式转换比较
+        await Assert.That(replayEvent.Audit.CorrelationId).IsEqualTo((ByteAether.Ulid.Ulid)Guid.Parse("ae9ce6d5-1263-43a0-a7f2-263f15d57e64"));
+        await Assert.That(replayEvent.Audit.CausationId).IsEqualTo((ByteAether.Ulid.Ulid)Guid.Parse("9ea92652-d96f-4700-8d99-a92a6beb87d7"));
         await Assert.That(replayEvent.Audit.TraceParent).IsEqualTo("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01");
         await Assert.That(replayEvent.Audit.TraceState).IsEqualTo("tenant=ordering");
     }

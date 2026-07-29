@@ -7,6 +7,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
+    <!-- ByteAether.Ulid：ReplayAuditMetadata.CorrelationId/CausationId 类型对齐 EventAuditMetadata（P3-003） -->
+    <PackageReference Include="ByteAether.Ulid" />
   </ItemGroup>
 
 </Project>

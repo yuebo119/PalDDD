@@ -95,7 +95,7 @@ DDD 项目分层（对照 conventions §4.2 解决方案分层）：
 
 | 包 ID | 项目路径 | 公开发布 |
 |-------|---------|:------:|
-| `PalDDD.EntityFrameworkCore` | `src/PalDDD.EntityFrameworkCore/` | ✅ |
+| `PalDDD.EntityFrameworkCore` | ~~`src/PalDDD.EntityFrameworkCore/`~~（空目录已删除，见 OBS-068） | ⚠️ 仅旧 preview.1 nupkg |
 | `PalDDD.Repository.EFCore` | `src/PalDDD.Repository.EFCore/` | ✅ |
 | `PalDDD.Transactions.EFCore` | `src/PalDDD.Transactions.EFCore/` | ✅ |
 | `PalDDD.EventLog.EFCore` | `src/PalDDD.EventLog.EFCore/` | ✅ |

@@ -13,8 +13,10 @@ PalDDD 同时维护三套 ORM 适配层，按场景选择：
 | 适配层 | 定位 | 何时选 | AOT |
 |---|---|---|---|
 | **PalDDD.Dapper** | 手写 SQL + Dapper.AOT 声明（但 `[module:DapperAot]` 实际禁用，靠 NoWarn 假装兼容） | 维护遗留，逐步弃用 | ⚠️ 假象（NoWarn IL3058） |
-| **PalDDD.EntityFrameworkCore** | 全功能 + EF Core 11 + 反射重 | 需要 Migration / LINQ / ChangeTracker | ❌ 全员 `IsAotCompatible=false` |
+| ~~`PalDDD.EntityFrameworkCore`~~ | ~~全功能 + EF Core 11 + 反射重~~ | ~~需要 Migration / LINQ / ChangeTracker~~ | ~~❌ 全员 `IsAotCompatible=false`~~ |
 | **PalDDD.PalORM** | PalORM 源生成 + 编译期 SQL + 真 AOT | AOT 发布 / 高性能 / 编译期类型安全 | ✅ **真 AOT**（`PublishAot=true` 验证） |
+
+> **注**：`PalDDD.EntityFrameworkCore` 适配层源码未入库（`src/PalDDD.EntityFrameworkCore/` 空目录已删除，见 OBS-068），仅 `nupkgs/` 有旧版 preview.1 包。当前推荐使用 PalDDD.PalORM。
 
 ---
 
