@@ -126,26 +126,16 @@ public sealed class MemoryPackSerializerTests
     }
 
     [Test]
-    public async Task Deserialize_EmptyPayload_ReturnsDefaultOrThrows()
+    public async Task Deserialize_EmptyPayload_ThrowsMemoryPackException()
     {
         var serializer = CreateSerializer();
-        var empty = ReadOnlySpan<byte>.Empty;
+        var emptyBytes = Array.Empty<byte>();
         var descriptor = new MessageDescriptor("test.msg.v1", typeof(MemoryPackTestMessage),
             TestJsonContext.Default.MemoryPackTestMessage, 1);
 
-        // MemoryPack 对空 payload 的行为：可能返回 default 或抛异常
-        // 两种情况均可接受——框架调用方应在反序列化前检查 payload 长度
-        try
-        {
-            var result = serializer.Deserialize(empty, descriptor);
-            // 返回 null/default 是可接受的
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            // MemoryPack 抛序列化异常也是可接受的
-        }
-
-        await Task.CompletedTask; // 保持 async Task 签名
+        // MemoryPack 对空 payload 应抛序列化异常（而非静默返回 default）。
+        // 框架调用方应在反序列化前检查 payload 长度，但序列化器本身也应拒绝无效输入。
+        await Assert.That(() => serializer.Deserialize(emptyBytes, descriptor)).ThrowsException();
     }
 
     // ═══════════════════════════════════════════════════════════════

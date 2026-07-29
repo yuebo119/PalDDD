@@ -1077,9 +1077,8 @@ internal sealed partial class DapperStoreJsonContext : JsonSerializerContext;
 
 
 // ═══════════════════════════════════════════════════════════════
-// Dapper SQLite 类型处理器（已移除）
+// Dapper SQLite 类型处理器（运行时路径必需）
 // ─────────────────────────────────────────────────────────────────
-// Dapper.AOT 编译时拦截器直接调用 SqliteDataReader.GetDateTimeOffset() 等强类型方法，
-// 不查阅运行时 TypeHandler。Microsoft.Data.Sqlite 原生支持 DateTimeOffset↔TEXT 和 Guid↔TEXT
-// （连接字符串加 BinaryGuid=False），无需运行时 TypeHandler。
-// Saga/Inbox 通过的测试是此结论的铁证。
+// 生产 Store 标注 [DapperAot(false)]，走运行时 Dapper 路径。
+// SQLite TEXT 列需要运行时 TypeHandler 转换 DateTimeOffset/Guid/Ulid（见 ClassInitialize 注册）。
+// ClassCleanup 调用 SqlMapper.ResetTypeHandlers() 清理全局状态。
