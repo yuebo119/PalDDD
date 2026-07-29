@@ -39,9 +39,10 @@ public sealed class EventLogTests
     {
         using var listener = new RecordingActivityListener();
         var log = new InMemoryEventLog();
+        var streamName = $"activity-test-{Guid.NewGuid():N}";
 
         var result = await log.AppendAsync(
-            "ordering-order-1",
+            streamName,
             ExpectedStreamVersion.NoStream,
             [
                 CreateEvent("orders.order-submitted.v1", "one"),
@@ -52,9 +53,9 @@ public sealed class EventLogTests
         await Assert.That(listener.StoppedActivities.Any(a => a.OperationName == "EventLog Append")).IsTrue();
         var activity = listener.StoppedActivities.First(a =>
             a.OperationName == "EventLog Append" &&
-            string.Equals(a.GetTagItem("pal.eventlog.stream") as string, "ordering-order-1", StringComparison.Ordinal));
+            string.Equals(a.GetTagItem("pal.eventlog.stream") as string, streamName, StringComparison.Ordinal));
         await Assert.That(result.FirstStreamVersion).IsEqualTo(0);
-        await Assert.That(activity.GetTagItem("pal.eventlog.stream")).IsEqualTo("ordering-order-1");
+        await Assert.That(activity.GetTagItem("pal.eventlog.stream")).IsEqualTo(streamName);
         await Assert.That(activity.GetTagItem("pal.eventlog.event_count")).IsEqualTo(2);
         await Assert.That(activity.GetTagItem("pal.eventlog.first_stream_version")).IsEqualTo(0L);
         await Assert.That(activity.GetTagItem("pal.eventlog.last_stream_version")).IsEqualTo(1L);

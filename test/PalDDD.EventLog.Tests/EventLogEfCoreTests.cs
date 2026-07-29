@@ -190,10 +190,11 @@ public sealed class EventLogEfCoreTests
     {
         using var activityListener = new RecordingActivityListener();
         using var meterListener = new RecordingMeterListener("paldd.eventlog.appended");
+        var streamName = $"ef-activity-test-{Guid.NewGuid():N}";
 
         await using var db = new TestEventLogDbContext(CreateOptions());
         await db.AppendAsync(
-            "ordering-order-1",
+            streamName,
             ExpectedStreamVersion.NoStream,
             [
                 CreateEvent(PalUlid.New(Guid.Parse("a0000000-0000-0000-0000-000000000001")), "orders.order-submitted.v1", "one"),
@@ -204,8 +205,8 @@ public sealed class EventLogEfCoreTests
         await Assert.That(activityListener.StoppedActivities.Any(a => a.OperationName == "EventLog Append")).IsTrue();
         var activity = activityListener.StoppedActivities.First(a =>
             a.OperationName == "EventLog Append" &&
-            string.Equals(a.GetTagItem("pal.eventlog.stream") as string, "ordering-order-1", StringComparison.Ordinal));
-        await Assert.That(activity.GetTagItem("pal.eventlog.stream")).IsEqualTo("ordering-order-1");
+            string.Equals(a.GetTagItem("pal.eventlog.stream") as string, streamName, StringComparison.Ordinal));
+        await Assert.That(activity.GetTagItem("pal.eventlog.stream")).IsEqualTo(streamName);
         await Assert.That(activity.GetTagItem("pal.eventlog.event_count")).IsEqualTo(2);
         await Assert.That(activity.GetTagItem("pal.eventlog.first_global_position")).IsEqualTo(0L);
         await Assert.That(activity.GetTagItem("pal.eventlog.last_global_position")).IsEqualTo(1L);

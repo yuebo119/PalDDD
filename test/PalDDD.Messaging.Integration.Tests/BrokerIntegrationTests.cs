@@ -305,15 +305,32 @@ public sealed class BrokerIntegrationTests
         var rabbit = await Fixture.CreateRabbitMqBrokerAsync(logger);
         await using var broker = rabbit.Item1;
         var tag = Guid.NewGuid().ToString("N")[..8];
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handlerEntered = false;
 
         var sub = await broker.SubscribeAsync<TestMessage>(async (msg, ct) =>
         {
-            if (msg.Name == $"rmq-cancel-{tag}") entered.TrySetResult();
-            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            // warmup 消息确认 consumer ready
+            if (msg.Name == $"rmq-ready-{tag}")
+            {
+                ready.TrySetResult();
+                return;
+            }
+            // 测试消息触发 cancel handler
+            if (msg.Name == $"rmq-cancel-{tag}" && !handlerEntered)
+            {
+                handlerEntered = true;
+                entered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            }
         }, cancellationToken);
 
-        await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+        // 先发 warmup 确认 consumer 链路通畅
+        await broker.PublishAsync(new TestMessage($"rmq-ready-{tag}"), cancellationToken);
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
+
+        // consumer 已 ready，发测试消息
         await broker.PublishAsync(new TestMessage($"rmq-cancel-{tag}"), cancellationToken);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
         await sub.DisposeAsync();
