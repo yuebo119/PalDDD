@@ -88,3 +88,6 @@ palddd-palorm-sample.db
 # 测试环境本地配置（含连接串/密码，不入 git）
 appsettings.test.local.json
 test/*/appsettings.json
+
+# AI 质量系统独立 git 仓库（不在 PalDDD 仓库中跟踪）
+.ai/
