@@ -31,6 +31,9 @@ public sealed class DomainEventDispatcherOptions
 /// 通过 <see cref="IEventHandler.EventType"/> 属性（DIM 编译时常量）构建处理器映射，<br/>
 /// 完全消除 <c>MakeGenericType</c> 运行时反射——100% Native AOT 兼容。<br/>
 /// 循环事件检测时记录 Warning 日志以便诊断。
+/// <para><b>派发语义</b>：本 dispatcher 仅处理传入的初始事件集合，不自动收集 handler 执行期间新产生的领域事件。
+/// 链式事件（handler 产生新事件）应由外层应用层负责——典型模式是 aggregate.Apply → 收集事件 → SaveChanges → 调用 DispatchAsync。
+/// 这样保证事务边界清晰，避免 dispatcher 内部无限递归。</para>
 /// </remarks>
 internal sealed class IterativeDomainEventDispatcher : IDomainEventDispatcher
 {

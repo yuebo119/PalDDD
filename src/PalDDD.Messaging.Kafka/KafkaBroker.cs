@@ -121,8 +121,11 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                     }
                     catch (ConsumeException ex)
                     {
-                        _logger.Error(ex, $"Kafka consume failed: {topic} @ {_consumerConfig.GroupId}");
-                        break; // 不可恢复的消费错误
+                        // 消费错误（消息格式损坏、反序列化失败等）：记录错误后继续消费下一条，
+                        // 不终止整个订阅（ITM-008）。与 RabbitMQ nack+requeue 模式对齐。
+                        // 若为分区末尾/短暂网络抖动，Consume 会自动重试或等待新消息。
+                        _logger.Error(ex, $"Kafka consume error on {topic} @ {_consumerConfig.GroupId}, continuing consumption");
+                        continue;
                     }
 
                     try

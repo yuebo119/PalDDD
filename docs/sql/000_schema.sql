@@ -80,4 +80,33 @@ CREATE TABLE events (
 CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
 CREATE INDEX idx_events_global ON events(global_position);
 
+-- ── Idempotency 幂等记录表（P3-010 补充）──
+CREATE TABLE idempotency_records (
+    operation_name    TEXT    NOT NULL,
+    key               TEXT    NOT NULL,
+    status            INTEGER NOT NULL DEFAULT 0,  -- 0:Started 1:Completed 2:Failed
+    locked_until      TIMESTAMP,
+    expires_at        TIMESTAMP NOT NULL,
+    updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    response_payload  TEXT,                         -- 成功响应快照（Base64 for PalORM）
+    error             TEXT
+);
+
+CREATE UNIQUE INDEX idx_idempotency_unique ON idempotency_records(operation_name, key);
+CREATE INDEX idx_idempotency_expires ON idempotency_records(expires_at);
+
+-- ── Projection Checkpoint 投影检查点表（P3-010 补充）──
+CREATE TABLE projection_checkpoints (
+    projection_name   TEXT    NOT NULL,
+    source_name       TEXT    NOT NULL,
+    position          TEXT    NOT NULL DEFAULT '',  -- 流位置（ULID/数字，按 source 类型）
+    status            INTEGER NOT NULL DEFAULT 0,   -- 0:Idle 1:Processing 2:Completed 3:Failed
+    updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    lease_until       TIMESTAMP,
+    revision          INTEGER NOT NULL DEFAULT 0,   -- 乐观并发控制令牌
+    error             TEXT
+);
+
+CREATE UNIQUE INDEX idx_checkpoint_unique ON projection_checkpoints(projection_name, source_name);
+
 -- ── SQL Server 用户：请使用 EF Core 适配器 + DbContext.OnModelCreating ──
