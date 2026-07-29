@@ -6,18 +6,52 @@ public sealed class ArchitectureBoundaryTests
 {
     private static readonly string Root = FindRepositoryRoot();
 
+    /// <summary>Core/App 层项目不得引用基础设施实现包。
+    /// 动态扫描 src/ 下所有 Core/App 层项目 csproj，禁止引用 Infra 实现包。
+    /// Core/App 层定义：非 Infra 适配器、非工具链的领域/应用层项目。
+    /// 避免硬编码项目列表导致新增项目时守护失效。</summary>
     [Test]
-    [Arguments("src/PalDDD.CQRS/PalDDD.CQRS.csproj", "PalDDD.Messaging")]
-    [Arguments("src/PalDDD.Serialization/PalDDD.Serialization.csproj", "PalDDD.Core")]
-    [Arguments("src/PalDDD.Transactions/PalDDD.Transactions.csproj", "Microsoft.EntityFrameworkCore")]
-    [Arguments("src/PalDDD.Projections/PalDDD.Projections.csproj", "Microsoft.EntityFrameworkCore")]
-    [Arguments("src/PalDDD.Idempotency/PalDDD.Idempotency.csproj", "Microsoft.EntityFrameworkCore")]
-    public async Task CoreAndBrokerProjects_DoNotReferenceInfrastructureImplementations(string projectPath, string forbiddenReference)
+    public async Task CoreAndBrokerProjects_DoNotReferenceInfrastructureImplementations()
     {
-        var fullPath = Path.Combine(Root, projectPath);
-        var project = File.ReadAllText(fullPath);
+        // Infra 适配器层和工具链项目（允许引用 Infra 包）
+        var infraProjects = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "PalDDD.Core.SourceGen", "PalDDD.Analyzers", "PalDDD.Analyzers.CodeFixes",
+            "PalDDD.Transactions.EFCore", "PalDDD.EventLog.EFCore", "PalDDD.Repository.EFCore",
+            "PalDDD.Projections.EFCore", "PalDDD.Idempotency.EFCore",
+            "PalDDD.Dapper", "PalDDD.Dapper.PostgreSql", "PalDDD.Dapper.MySql", "PalDDD.Dapper.Sqlite",
+            "PalDDD.PalORM", "PalDDD.PalORM.PostgreSql", "PalDDD.PalORM.MySql", "PalDDD.PalORM.Sqlite",
+            "PalDDD.Messaging.Kafka", "PalDDD.Messaging.RabbitMQ",
+            "PalDDD.Hosting.AspNetCore", "PalDDD.Compression.Native",
+            "PalDDD.Serialization.MemoryPack", "PalDDD.Serialization.Evolution",
+            "PalDDD.Extension", "PalDDD.Base", "PalDDD.Prompts"
+        };
 
-        await Assert.That(project).DoesNotContain(forbiddenReference);
+        var forbiddenRefs = new[] { "Microsoft.EntityFrameworkCore", "PalDDD.Dapper", "Npgsql", "PalORM" };
+
+        var srcCsprojs = Directory.EnumerateFiles(
+            Path.Combine(Root, "src"),
+            "*.csproj",
+            SearchOption.AllDirectories);
+
+        var violations = new List<string>();
+        foreach (var csprojPath in srcCsprojs)
+        {
+            var projectName = Path.GetFileNameWithoutExtension(csprojPath);
+            if (infraProjects.Contains(projectName))
+                continue;
+
+            var csproj = File.ReadAllText(csprojPath);
+            // 排除 InternalsVisibleTo 行（程序集可见性声明，非项目/包引用）
+            var relevant = Regex.Replace(csproj, @"<InternalsVisibleTo\b[^>]*/>", "");
+            foreach (var forbidden in forbiddenRefs)
+            {
+                if (relevant.Contains(forbidden, StringComparison.Ordinal))
+                    violations.Add($"{projectName} 引用了禁止的 Infra 包 '{forbidden}'");
+            }
+        }
+
+        await Assert.That(violations).IsEmpty();
     }
 
     [Test]
@@ -347,6 +381,7 @@ public sealed class ArchitectureBoundaryTests
     /// <summary>
     /// Domain 层 / App 层源码不包含基础设施关键字。
     /// 确保领域逻辑不泄漏 DbContext、SQL 连接、消息代理等基础设施关注点。
+    /// 注释过滤用正则去除 // 行内注释和 /// XML 文档注释，避免尾随注释中的关键字导致误报。
     /// </summary>
     [Test]
     [Arguments("src/PalDDD.Core", "DbContext")]
@@ -378,20 +413,11 @@ public sealed class ArchitectureBoundaryTests
         foreach (var file in files)
         {
             var source = File.ReadAllText(file);
-            // 排除注释行（// 和 /* */）中的引用——这些是文档性质的，不代表代码依赖
-            var relevantLines = string.Join('\n', source.Split('\n')
-                .Where(line =>
-                {
-                    var trimmed = line.TrimStart();
-                    // 排除所有注释行和 XML 文档注释
-                    if (trimmed.StartsWith("//", StringComparison.Ordinal) || trimmed.Contains("///"))
-                        return false;
-                    if (trimmed.StartsWith('*') || trimmed.StartsWith("/*", StringComparison.Ordinal))
-                        return false;
-                    return true;
-                }));
+            // 用正则精确去除注释：整行注释（// 开头）、XML 文档注释（///）、块注释行（* 或 /* 开头）、行内尾随注释
+            var codeOnly = Regex.Replace(source, @"//.*$", "", RegexOptions.Multiline); // 去除行内和整行 // 注释
+            codeOnly = Regex.Replace(codeOnly, @"/\*.*?\*/", "", RegexOptions.Singleline); // 去除 /* */ 块注释
 
-            if (relevantLines.Contains(keyword, StringComparison.Ordinal))
+            if (codeOnly.Contains(keyword, StringComparison.Ordinal))
             {
                 Assert.Fail(
                     $"文件 {Path.GetRelativePath(Root, file)} 包含禁止的基础设施关键字 '{keyword}'。" +
@@ -533,21 +559,47 @@ public sealed class ArchitectureBoundaryTests
     // P1-3: 测试分层守护 — 防止测试耦合基础设施实现
     // ═══════════════════════════════════════════════════════════════
 
-    /// <summary>Domain/App 层测试项目不得引用基础设施实现项目</summary>
+    /// <summary>Domain/App 层测试项目不得引用基础设施实现项目。
+    /// 动态扫描 test/ 下所有测试项目 csproj，禁止引用 Infra 实现包。
+    /// Domain/App 层测试定义：不含 Integration/PalORM/Messaging.Integration 的测试项目。
+    /// 避免硬编码项目列表导致新增测试项目时守护失效。</summary>
     [Test]
-    [Arguments("test/PalDDD.Core.Tests/PalDDD.Core.Tests.csproj")]
-    [Arguments("test/PalDDD.CQRS.Tests/PalDDD.CQRS.Tests.csproj")]
-    [Arguments("test/PalDDD.Core.Abstractions.Tests/PalDDD.Core.Abstractions.Tests.csproj")]
-    public async Task DomainTests_DoNotReferenceInfrastructureImplementations(string testProjectPath)
+    public async Task DomainTests_DoNotReferenceInfrastructureImplementations()
     {
-        var csproj = ReadSource(testProjectPath);
+        // Infra 测试项目（允许引用 Infra 实现）
+        var infraTestProjects = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "PalDDD.Integration.Tests", "PalDDD.PalORM.Tests",
+            "PalDDD.Messaging.Integration.Tests", "PalDDD.Repository.EFCore.Tests",
+            "PalDDD.EventLog.Tests", "PalDDD.Projections.EventLog.Tests"
+        };
 
-        await Assert.That(csproj).DoesNotContain("PalDDD.Repository.EFCore");
-        await Assert.That(csproj).DoesNotContain("PalDDD.Dapper");
-        await Assert.That(csproj).DoesNotContain("PalDDD.Messaging.Kafka");
-        await Assert.That(csproj).DoesNotContain("PalDDD.Messaging.RabbitMQ");
-        await Assert.That(csproj).DoesNotContain("PalDDD.Transactions.EFCore");
-        await Assert.That(csproj).DoesNotContain("PalDDD.Dapper");
+        var forbiddenRefs = new[] {
+            "PalDDD.Repository.EFCore", "PalDDD.Dapper", "PalDDD.Messaging.Kafka",
+            "PalDDD.Messaging.RabbitMQ", "PalDDD.Transactions.EFCore"
+        };
+
+        var testCsprojs = Directory.EnumerateFiles(
+            Path.Combine(Root, "test"),
+            "*.csproj",
+            SearchOption.AllDirectories);
+
+        var violations = new List<string>();
+        foreach (var csprojPath in testCsprojs)
+        {
+            var projectName = Path.GetFileNameWithoutExtension(csprojPath);
+            if (infraTestProjects.Contains(projectName))
+                continue;
+
+            var csproj = File.ReadAllText(csprojPath);
+            foreach (var forbidden in forbiddenRefs)
+            {
+                if (csproj.Contains(forbidden, StringComparison.Ordinal))
+                    violations.Add($"{projectName} 引用了禁止的 Infra 包 '{forbidden}'");
+            }
+        }
+
+        await Assert.That(violations).IsEmpty();
     }
 
     /// <summary>Domain 层测试不得直接实例化基础设施 DbContext</summary>
@@ -568,21 +620,57 @@ public sealed class ArchitectureBoundaryTests
         }
     }
 
-    /// <summary>BackgroundService 子类必须有对应生命周期测试</summary>
+    /// <summary>BackgroundService 子类必须有对应生命周期测试。
+    /// 动态扫描 src/ 中 Domain/App 层继承 BackgroundService 的具体类，断言 test/ 中有对应测试文件。
+    /// 排除：Infra 适配器层（Dapper/PalORM/EFCore/Kafka/RabbitMQ）、抽象基类。</summary>
     [Test]
     public async Task BackgroundServices_HaveLifecycleTests()
     {
-        // 扫描 src 中的 BackgroundService 子类，断言 test 中有对应测试文件
-        var backgroundServices = new[] { "OutboxProcessor", "SagaProcessor" };
-        foreach (var serviceName in backgroundServices)
+        // Infra 适配器层目录（其中的 BackgroundService 不要求独立测试）
+        var infraDirs = new[] { "PalDDD.Dapper", "PalDDD.PalORM", ".EFCore", "PalDDD.Messaging", "PalDDD.Compression" };
+
+        // 抽象基类（不是具体服务，不要求独立测试文件）
+        var abstractBaseClasses = new HashSet<string>(StringComparer.Ordinal)
         {
-            var hasTest = Directory.EnumerateFiles(
-                Path.Combine(Root, "test"),
-                "*.cs",
-                SearchOption.AllDirectories)
-                .Any(f => Path.GetFileName(f).Contains($"{serviceName}Tests", StringComparison.Ordinal));
-            await Assert.That(hasTest).IsTrue();
+            "PeriodicBackgroundProcessor" // 抽象基类，子类 OutboxProcessor/SagaProcessor 才是被测对象
+        };
+
+        var srcFiles = Directory.EnumerateFiles(
+            Path.Combine(Root, "src"),
+            "*.cs",
+            SearchOption.AllDirectories)
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                     && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
+                     && !infraDirs.Any(d => f.Contains(d, StringComparison.Ordinal)));
+
+        var testFiles = Directory.EnumerateFiles(
+            Path.Combine(Root, "test"),
+            "*.cs",
+            SearchOption.AllDirectories)
+            .ToList();
+
+        var missing = new List<string>();
+        foreach (var file in srcFiles)
+        {
+            var source = File.ReadAllText(file);
+            // 匹配 sealed class Xxx : BackgroundService 或 sealed class Xxx : PeriodicBackgroundProcessor
+            // 只匹配 sealed（具体类），排除 abstract 基类
+            var classMatches = Regex.Matches(source, @"sealed\s+class\s+(\w+)\s*:\s*(?:BackgroundService|PeriodicBackgroundProcessor)");
+            foreach (Match m in classMatches)
+            {
+                var className = m.Groups[1].Value;
+                if (abstractBaseClasses.Contains(className))
+                    continue;
+
+                var hasTest = testFiles.Any(f =>
+                    Path.GetFileName(f).Equals($"{className}Tests.cs", StringComparison.Ordinal) ||
+                    Path.GetFileName(f).Contains($"{className}Test", StringComparison.Ordinal));
+                if (!hasTest)
+                    missing.Add(className);
+            }
         }
+
+        await Assert.That(missing).IsEmpty();
     }
 
     private static string ReadSource(string relativePath)
