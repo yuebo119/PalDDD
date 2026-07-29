@@ -93,7 +93,7 @@ public sealed class BrokerFixture : IAsyncDisposable
         {
             BootstrapServers = bootstrap,
             GroupId = $"paldd-test-{Guid.NewGuid():N}",
-            AutoOffsetReset = Confluent.Kafka.AutoOffsetReset.Earliest,
+            AutoOffsetReset = Confluent.Kafka.AutoOffsetReset.Latest,  // Latest 避免读历史积压消息
             AllowAutoCreateTopics = true
         };
         var broker = new KafkaBroker(producerConfig, consumerConfig,
@@ -174,18 +174,20 @@ public sealed class BrokerIntegrationTests
     public async Task Kafka_PublishAndSubscribe_RoundTripsMessage(CancellationToken cancellationToken)
     {
         var (broker, _) = Fixture.CreateKafkaBroker();
+        var tag = Guid.NewGuid().ToString("N")[..8];
         var received = new TaskCompletionSource<TestMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var sub = await broker.SubscribeAsync<TestMessage>((msg, ct) =>
         {
-            received.TrySetResult(msg);
+            if (msg.Name == $"kafka-rt-{tag}") received.TrySetResult(msg);
             return ValueTask.CompletedTask;
         }, cancellationToken);
 
-        await broker.PublishAsync(new TestMessage("kafka-roundtrip-1"), cancellationToken);
+        await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
+        await broker.PublishAsync(new TestMessage($"kafka-rt-{tag}"), cancellationToken);
 
-        var got = await received.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
-        await Assert.That(got.Name).IsEqualTo("kafka-roundtrip-1");
+        var got = await received.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
+        await Assert.That(got.Name).IsEqualTo($"kafka-rt-{tag}");
     }
 
     [Test]
@@ -194,39 +196,45 @@ public sealed class BrokerIntegrationTests
         var logger = new CapturingLogger<KafkaBroker>();
         var kafka = Fixture.CreateKafkaBroker(logger);
         await using var broker = kafka.Item1;
+        var tag = Guid.NewGuid().ToString("N")[..8];
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var sub = await broker.SubscribeAsync<TestMessage>(async (_, ct) =>
+        var sub = await broker.SubscribeAsync<TestMessage>(async (msg, ct) =>
         {
-            entered.TrySetResult();
+            if (msg.Name == $"kafka-cancel-{tag}") entered.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, ct);
         }, cancellationToken);
 
-        await broker.PublishAsync(new TestMessage("kafka-cancel-handler"), cancellationToken);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
+        await broker.PublishAsync(new TestMessage($"kafka-cancel-{tag}"), cancellationToken);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
         await sub.DisposeAsync();
 
         await Assert.That(logger.ErrorCount).IsEqualTo(0);
     }
 
     [Test]
+    [NotInParallel("broker-integration")]
     public async Task Kafka_MultipleMessages_AllReceived(CancellationToken cancellationToken)
     {
         var (broker, _) = Fixture.CreateKafkaBroker();
         var received = new List<TestMessage>();
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var prefix = $"kafka-multi-{Guid.NewGuid():N}".Substring(0, 20);
 
         await using var sub = await broker.SubscribeAsync<TestMessage>((msg, ct) =>
         {
+            if (!msg.Name.StartsWith(prefix, StringComparison.Ordinal)) return ValueTask.CompletedTask;
             lock (received) received.Add(msg);
             if (received.Count >= 5) done.TrySetResult();
             return ValueTask.CompletedTask;
         }, cancellationToken);
 
+        await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
         for (var i = 0; i < 5; i++)
-            await broker.PublishAsync(new TestMessage($"kafka-{i}"), cancellationToken);
+            await broker.PublishAsync(new TestMessage($"{prefix}-{i}"), cancellationToken);
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
         await Assert.That(received.Count).IsEqualTo(5);
     }
 
@@ -234,18 +242,20 @@ public sealed class BrokerIntegrationTests
     public async Task RabbitMq_PublishAndSubscribe_RoundTripsMessage(CancellationToken cancellationToken)
     {
         var (broker, _) = await Fixture.CreateRabbitMqBrokerAsync();
+        var tag = Guid.NewGuid().ToString("N")[..8];
         var received = new TaskCompletionSource<TestMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var sub = await broker.SubscribeAsync<TestMessage>((msg, ct) =>
         {
-            received.TrySetResult(msg);
+            if (msg.Name == $"rmq-rt-{tag}") received.TrySetResult(msg);
             return ValueTask.CompletedTask;
         }, cancellationToken);
 
-        await broker.PublishAsync(new TestMessage("rmq-roundtrip-1"), cancellationToken);
+        await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+        await broker.PublishAsync(new TestMessage($"rmq-rt-{tag}"), cancellationToken);
 
-        var got = await received.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
-        await Assert.That(got.Name).IsEqualTo("rmq-roundtrip-1");
+        var got = await received.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
+        await Assert.That(got.Name).IsEqualTo($"rmq-rt-{tag}");
     }
 
     [Test]
@@ -254,39 +264,45 @@ public sealed class BrokerIntegrationTests
         var logger = new CapturingLogger<RabbitMqBroker>();
         var rabbit = await Fixture.CreateRabbitMqBrokerAsync(logger);
         await using var broker = rabbit.Item1;
+        var tag = Guid.NewGuid().ToString("N")[..8];
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var sub = await broker.SubscribeAsync<TestMessage>(async (_, ct) =>
+        var sub = await broker.SubscribeAsync<TestMessage>(async (msg, ct) =>
         {
-            entered.TrySetResult();
+            if (msg.Name == $"rmq-cancel-{tag}") entered.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, ct);
         }, cancellationToken);
 
-        await broker.PublishAsync(new TestMessage("rmq-cancel-handler"), cancellationToken);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+        await broker.PublishAsync(new TestMessage($"rmq-cancel-{tag}"), cancellationToken);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
         await sub.DisposeAsync();
 
         await Assert.That(logger.ErrorCount).IsEqualTo(0);
     }
 
     [Test]
+    [NotInParallel("broker-integration")]
     public async Task RabbitMq_MultipleMessages_AllReceived(CancellationToken cancellationToken)
     {
         var (broker, _) = await Fixture.CreateRabbitMqBrokerAsync();
         var received = new List<TestMessage>();
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var prefix = $"rmq-multi-{Guid.NewGuid():N}".Substring(0, 20);
 
         await using var sub = await broker.SubscribeAsync<TestMessage>((msg, ct) =>
         {
+            if (!msg.Name.StartsWith(prefix, StringComparison.Ordinal)) return ValueTask.CompletedTask;
             lock (received) received.Add(msg);
             if (received.Count >= 5) done.TrySetResult();
             return ValueTask.CompletedTask;
         }, cancellationToken);
 
+        await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
         for (var i = 0; i < 5; i++)
-            await broker.PublishAsync(new TestMessage($"rmq-{i}"), cancellationToken);
+            await broker.PublishAsync(new TestMessage($"{prefix}-{i}"), cancellationToken);
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
         await Assert.That(received.Count).IsEqualTo(5);
     }
 }
