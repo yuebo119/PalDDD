@@ -31,12 +31,35 @@ public sealed class BrokerFixture : IAsyncDisposable
     private KafkaContainer? _kafka;
     private RabbitMqContainer? _rabbitMq;
     private readonly CatalogAndSerializer _catalogAndSerializer = CreateCatalogAndSerializer();
-    private bool _initialized;
 
+    // 远程连接字段（环境变量设置时使用，跳过 Testcontainers）
+    private string? _remoteKafkaBootstrap;
+    private string? _remoteRabbitHost;
+    private int _remoteRabbitPort;
     public async ValueTask InitializeAsync()
     {
-        if (_initialized) return;
-        _initialized = true;
+        // 不用 _initialized guard —— TUnit ClassDataSource 可能在 [Before(Test)] 之前
+        // 就调了一次 InitializeAsync（此时 Testcontainers catch 设 DockerAvailable=false）。
+        // 每次都检测远程环境变量，确保后续 [Before(Test)] 调用时能覆盖。
+
+        // 优先用环境变量连接远程 Kafka/RabbitMQ
+        var remoteKafka = Environment.GetEnvironmentVariable("PALDDD_KAFKA_BOOTSTRAP");
+        var remoteRabbit = Environment.GetEnvironmentVariable("PALDDD_RABBITMQ_HOST");
+
+        if (!string.IsNullOrEmpty(remoteKafka) && !string.IsNullOrEmpty(remoteRabbit))
+        {
+            _remoteKafkaBootstrap = remoteKafka;
+            _remoteRabbitHost = remoteRabbit;
+            _remoteRabbitPort = int.TryParse(Environment.GetEnvironmentVariable("PALDDD_RABBITMQ_PORT"), out var p) ? p : 5672;
+            DockerAvailable = true;
+            return;
+        }
+
+        // 远程不可用且 Testcontainers 已尝试过 → 不重试
+        if (DockerAvailable || _triedTestcontainers) return;
+        _triedTestcontainers = true;
+
+        // 尝试 Testcontainers（本地 Docker）
         try
         {
             _kafka = new KafkaBuilder("confluentinc/cp-kafka:7.9.0").Build();
@@ -53,19 +76,22 @@ public sealed class BrokerFixture : IAsyncDisposable
         }
     }
 
+    private bool _triedTestcontainers;
+
     public (KafkaBroker, JsonMessageSerializer) CreateKafkaBroker()
         => CreateKafkaBroker(NullPalLogger<KafkaBroker>.Instance);
 
     public (KafkaBroker, JsonMessageSerializer) CreateKafkaBroker(IPalLogger<KafkaBroker> logger)
     {
+        var bootstrap = _remoteKafkaBootstrap ?? _kafka!.GetBootstrapAddress();
         var producerConfig = new Confluent.Kafka.ProducerConfig
         {
-            BootstrapServers = _kafka!.GetBootstrapAddress(),
+            BootstrapServers = bootstrap,
             AllowAutoCreateTopics = true
         };
         var consumerConfig = new Confluent.Kafka.ConsumerConfig
         {
-            BootstrapServers = _kafka!.GetBootstrapAddress(),
+            BootstrapServers = bootstrap,
             GroupId = $"paldd-test-{Guid.NewGuid():N}",
             AutoOffsetReset = Confluent.Kafka.AutoOffsetReset.Earliest,
             AllowAutoCreateTopics = true
@@ -82,10 +108,12 @@ public sealed class BrokerFixture : IAsyncDisposable
 
     public async ValueTask<(RabbitMqBroker, JsonMessageSerializer)> CreateRabbitMqBrokerAsync(IPalLogger<RabbitMqBroker> logger)
     {
+        var host = _remoteRabbitHost ?? _rabbitMq!.Hostname;
+        var port = _remoteRabbitHost is not null ? _remoteRabbitPort : _rabbitMq!.GetMappedPublicPort(5672);
         var factory = new ConnectionFactory
         {
-            HostName = _rabbitMq!.Hostname,
-            Port = _rabbitMq!.GetMappedPublicPort(5672),
+            HostName = host,
+            Port = port,
             UserName = "guest",
             Password = "guest",
             AutomaticRecoveryEnabled = false
