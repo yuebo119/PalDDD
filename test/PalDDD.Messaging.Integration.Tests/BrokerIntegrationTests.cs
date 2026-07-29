@@ -5,6 +5,7 @@ using PalDDD.Messaging.RabbitMQ;
 using PalDDD.Serialization;
 using PalDDD.Serialization.Json;
 using RabbitMQ.Client;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Testcontainers.Kafka;
 using Testcontainers.RabbitMq;
@@ -40,17 +41,38 @@ public sealed class BrokerFixture : IAsyncDisposable
     {
         // 不用 _initialized guard —— TUnit ClassDataSource 可能在 [Before(Test)] 之前
         // 就调了一次 InitializeAsync（此时 Testcontainers catch 设 DockerAvailable=false）。
-        // 每次都检测远程环境变量，确保后续 [Before(Test)] 调用时能覆盖。
+        // 每次都检测远程配置，确保后续 [Before(Test)] 调用时能覆盖。
 
-        // 优先用环境变量连接远程 Kafka/RabbitMQ
-        var remoteKafka = Environment.GetEnvironmentVariable("PALDDD_KAFKA_BOOTSTRAP");
-        var remoteRabbit = Environment.GetEnvironmentVariable("PALDDD_RABBITMQ_HOST");
+        // 优先从 appsettings.json 读取远程配置（不依赖环境变量，dotnet test 子进程可读）
+        string? remoteKafka = null;
+        string? remoteRabbit = null;
+        try
+        {
+            var json = JsonDocument.Parse(File.ReadAllText("appsettings.json"));
+            if (json.RootElement.TryGetProperty("PalDDD", out var cfg))
+            {
+                if (cfg.TryGetProperty("Kafka", out var k) && k.TryGetProperty("BootstrapServers", out var bs))
+                    remoteKafka = bs.GetString();
+                if (cfg.TryGetProperty("RabbitMq", out var r))
+                {
+                    remoteRabbit = r.TryGetProperty("Host", out var h) ? h.GetString() : null;
+                    _remoteRabbitPort = r.TryGetProperty("Port", out var p) ? p.GetInt32() : 5672;
+                }
+            }
+        }
+#pragma warning disable CA1031 // appsettings.json 可能不存在，回退到环境变量/Testcontainers
+        catch { /* appsettings.json 不存在或格式错误 → 走环境变量/Testcontainers 回退 */ }
+#pragma warning restore CA1031
+
+        // 回退到环境变量
+        remoteKafka ??= Environment.GetEnvironmentVariable("PALDDD_KAFKA_BOOTSTRAP");
+        remoteRabbit ??= Environment.GetEnvironmentVariable("PALDDD_RABBITMQ_HOST");
 
         if (!string.IsNullOrEmpty(remoteKafka) && !string.IsNullOrEmpty(remoteRabbit))
         {
             _remoteKafkaBootstrap = remoteKafka;
             _remoteRabbitHost = remoteRabbit;
-            _remoteRabbitPort = int.TryParse(Environment.GetEnvironmentVariable("PALDDD_RABBITMQ_PORT"), out var p) ? p : 5672;
+            _remoteRabbitPort = int.TryParse(Environment.GetEnvironmentVariable("PALDDD_RABBITMQ_PORT"), out var p) ? p : _remoteRabbitPort;
             DockerAvailable = true;
             return;
         }
