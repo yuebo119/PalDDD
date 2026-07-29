@@ -160,6 +160,7 @@ public static class PostgreSqlReportHelper
     // ── PostgreSQL COPY 导出（最快，二进制格式）──
 
     /// <summary>使用 COPY TO STDOUT 导出 CSV（最快方式）</summary>
+    /// <param name="tableOrQuery">表名或 SELECT 查询。⚠️ 直接插入 COPY 语句——必须为编译期常量或受信任来源，禁止传入用户输入（COPY 语法要求完整 SQL，无法参数化）。</param>
     public static async Task<long> CopyToCsvAsync(
         NpgsqlDataSource dataSource,
         string tableOrQuery,

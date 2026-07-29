@@ -84,7 +84,7 @@ public static class SqliteFts
 
     /// <summary>全文搜索 MATCH 子句：fts MATCH 'keywords'</summary>
     /// <param name="index">FTS5 索引名</param>
-    /// <param name="query">FTS5 查询语法（支持 AND/OR/NOT、短语、前缀*）</param>
+    /// <param name="query">FTS5 查询语法（支持 AND/OR/NOT、短语、前缀*）。⚠️ 仅做单引号翻倍转义，不拦截 FTS5 查询操作符（AND/OR/NOT/NEAR）；若 query 来自用户输入，调用方须自行校验或白名单限制。</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Match(string index, string query)
         => $"{Escape(index)} MATCH '{EscapeFts(query)}'";

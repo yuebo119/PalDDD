@@ -3,7 +3,6 @@
 // ─────────────────────────────────────────────────────────────
 // AOT 安全性：
 //   ✅ Add(NpgsqlParameter[]) — 显式参数，零反射，完全 AOT 安全。
-//   ⚠️ Add(sql, object) — 便捷重载使用反射，AOT 下需 [DynamicallyAccessedMembers]。
 //
 // 性能对比：
 //   传统 ADO.NET 逐条执行：N 条 SQL → N 次网络往返
@@ -66,7 +65,7 @@ public sealed class PostgreSqlPipeline : IAsyncDisposable
         if (_batch.BatchCommands.Count == 0) return 0;
 
         await _connection.OpenAsync(ct).ConfigureAwait(false);
-        var reader = await _batch.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        await using var reader = await _batch.ExecuteReaderAsync(ct).ConfigureAwait(false);
         int total = 0;
 
         do

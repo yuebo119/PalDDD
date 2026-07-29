@@ -138,7 +138,10 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             }
             catch (OperationCanceledException)
             {
-                // 正常取消
+                // 取消（关停或超时）：重新入队让其他消费者或重连后重新投递。
+                // 不留 unacked —— 否则消息会滞留直到 channel 关闭才 redeliver（ITM-006）。
+                _logger.Warning($"Handling {typeof(TMessage).Name} message was canceled, requeueing: {queueName}");
+                await _channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: true);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

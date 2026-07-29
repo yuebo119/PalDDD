@@ -24,6 +24,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Dapper;
+using System.Data;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
@@ -56,7 +57,8 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
 
-        var rows = await _connection.QueryAsync<SagaStateRow>(
+        var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var rows = await conn.QueryAsync<SagaStateRow>(
             new CommandDefinition(SqlTemplates.SagaActive, new { n = batchSize }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
         return rows.Select(Materialize).ToList();
     }
@@ -70,19 +72,21 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
 
+        var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
         var now = TimeProvider.System.GetUtcNow();
         var until = now.Add(leaseDuration);
-        await _connection.ExecuteAsync(
+        await conn.ExecuteAsync(
             new CommandDefinition(SqlTemplates.SagaLeaseActive, new { owner, until = DapperAotInitializer.ToSqliteParameter(until), now = DapperAotInitializer.ToSqliteParameter(now), n = batchSize }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
 
-        var rows = await _connection.QueryAsync<SagaStateRow>(
+        var rows = await conn.QueryAsync<SagaStateRow>(
             new CommandDefinition(SqlTemplates.SagaSelectByLease, new { owner, until = DapperAotInitializer.ToSqliteParameter(until) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
         return rows.Select(Materialize).ToList();
     }
 
     public async ValueTask<TState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
     {
-        var row = await _connection.QuerySingleOrDefaultAsync<SagaStateRow>(
+        var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var row = await conn.QuerySingleOrDefaultAsync<SagaStateRow>(
             new CommandDefinition(SqlTemplates.SagaById, new { id = DapperAotInitializer.ToSqliteParameter(sagaId) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
         return row is null ? null : Materialize(row);
     }
@@ -94,9 +98,10 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
 
         var existing = await GetByIdAsync(state.SagaId, ct).ConfigureAwait(false);
         var sagaData = SerializeState(state);
+        var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
         if (existing is not null)
         {
-            var rows = await _connection.ExecuteAsync(
+            var rows = await conn.ExecuteAsync(
                 new CommandDefinition(
                     SqlTemplates.SagaUpdate,
                     new
@@ -119,7 +124,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
             return rows;
         }
 
-        var inserted = await _connection.ExecuteAsync(
+        var inserted = await conn.ExecuteAsync(
             new CommandDefinition(
                 SqlTemplates.SagaInsert,
                 new
@@ -142,6 +147,18 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
 
     private string? SerializeState(TState state)
         => _jsonTypeInfo is null ? null : JsonSerializer.Serialize(state, _jsonTypeInfo);
+
+    /// <summary>
+    /// 确保数据库连接已打开（异步版本，避免线程池阻塞）。
+    /// 连接生命周期由 DI 容器管理的 Scoped DbConnection 控制，此处不负责关闭。
+    /// 与 DapperOutboxStore/DapperInboxStore/DapperEventLog/DapperProjectionCheckpointStore 保持一致。
+    /// </summary>
+    private async ValueTask<DbConnection> EnsureOpenAsync(CancellationToken ct = default)
+    {
+        var conn = _connection;
+        if (conn.State != ConnectionState.Open) await conn.OpenAsync(ct).ConfigureAwait(false);
+        return conn;
+    }
 
     private TState Materialize(SagaStateRow row)
     {

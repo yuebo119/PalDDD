@@ -54,8 +54,9 @@ public abstract class InboxDbContext(
                 await SaveChangesAsync(ct);
                 return record;
             }
-            catch (DbUpdateException)
+            catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
             {
+                // 唯一约束冲突（(ConsumerName,MessageId) 已存在）—— 幂等路径：分离并重查。
                 Entry(record).State = EntityState.Detached;
                 record = await InboxMessages.SingleAsync(
                     x => x.ConsumerName == consumerName && x.MessageId == messageId, ct);
@@ -151,5 +152,54 @@ public abstract class InboxDbContext(
             Entry(message).State = EntityState.Detached;
             _logger?.Warning($"Inbox: terminal state for message {message.MessageId} (consumer {message.ConsumerName}) was overwritten by a concurrent processor; the record is detached without persisting the local terminal state.");
         }
+    }
+
+    /// <summary>
+    /// 判断 DbUpdateException 是否由唯一约束冲突引起（(ConsumerName,MessageId) 重复插入）。
+    /// <para>通过反射鸭子类型读取 provider 异常属性，避免对具体 provider 包的硬依赖。
+    /// 与 EventLogDbContext.IsUniqueConstraintViolation 实现对齐（ITM-003）。</para>
+    /// <para>非唯一约束的 DbUpdateException（字段长度溢出/null/连接断开等）不被捕获，原样向上传播。</para>
+    /// </summary>
+    private static bool IsUniqueConstraintViolation(DbUpdateException exception)
+    {
+        for (var inner = exception.InnerException; inner is not null; inner = inner.InnerException)
+        {
+            var type = inner.GetType();
+            var typeName = type.Name;
+
+            // PostgreSQL: Npgsql.PostgresException.SqlState == "23505"
+            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
+                && type.GetProperty("SqlState")?.GetValue(inner) is string sqlState
+                && sqlState == "23505")
+            {
+                return true;
+            }
+
+            // MySQL: MySqlException.Number == 1062（ER_DUP_ENTRY）或 1586
+            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int mysqlNumber
+                && (mysqlNumber == 1062 || mysqlNumber == 1586))
+            {
+                return true;
+            }
+
+            // SQL Server: SqlException.Number == 2601 (unique index) 或 2627 (unique constraint / PK)
+            if (typeName.Equals("SqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int sqlServerNumber
+                && (sqlServerNumber == 2601 || sqlServerNumber == 2627))
+            {
+                return true;
+            }
+
+            // SQLite: SqliteException 消息包含 "UNIQUE constraint"
+            var message = inner.Message;
+            if (!string.IsNullOrEmpty(message)
+                && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

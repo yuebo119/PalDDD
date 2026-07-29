@@ -10,7 +10,7 @@ namespace PalDDD.PalORM.Models;
 /// <list type="bullet">
 /// <item>主键：Id 为 long 自增（DB 生成）—— PalORM 自增回填自动写入此属性（Row DTO 用 set，领域类型 InboxMessage.Id 保持 init）。</item>
 /// <item>枚举存储：统一 int（与 Outbox/Saga 一致）。</item>
-/// <item>乐观锁：<see cref="ProcessingStartedAt"/> 标 <see cref="ConcurrencyCheckAttribute"/>（与 EFCore InboxDbContext.ProcessingStartedAt 并发令牌等价），替代手写 WHERE processing_started_at=@orig。</item>
+/// <item>乐观锁：<see cref="Attempts"/> 标 <see cref="ConcurrencyCheckAttribute"/>（int 自增令牌，每次 UPDATE 自增）。PalORM [ConcurrencyCheck] 仅支持 int/long 自增，不支持 DateTimeOffset 时间戳。<see cref="ProcessingStartedAt"/> 用于僵尸 Processing 检测，非乐观锁。</item>
 /// <item>唯一约束：(consumer_name, message_id) —— 靠建表 DDL 的 UNIQUE INDEX 保证，与 PalORM 实体注册无关。</item>
 /// </list>
 /// </para>

@@ -120,6 +120,15 @@ TState>
                     sagaState.CurrentState = "Compensated";
                     PalMetrics.SagaCompensated.Add(1);
                 }
+                catch (OperationCanceledException)
+                {
+                    // 外部取消：仍释放租约避免该 Saga 对其他实例不可见（ITM-010），
+                    // 然后重新抛出让上层感知关停信号。租约释放用独立 CT（不响应本次取消）。
+                    sagaState.LeasedBy = null;
+                    sagaState.LeasedUntil = null;
+                    await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
+                    throw;
+                }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     _logger.Error(ex, $"Saga {sagaState.SagaId} compensation failed");
