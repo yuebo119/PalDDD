@@ -90,7 +90,33 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _timeProvider = timeProvider ?? TimeProvider.System;
         _channelName = channelName ?? throw new ArgumentNullException(nameof(channelName));
+        ValidateChannelName(_channelName);
     }
+
+    /// <summary>
+    /// 校验 LISTEN/NOTIFY 通道名为合法 PostgreSQL 标识符。
+    /// LISTEN/NOTIFY 通道名不可参数化（Npgsql 协议限制），必须字符串拼接，
+    /// 故需在入口处做白名单校验防止 SQL 注入（与 PostgreSqlAuditor.QuoteIdentifier 同级防护）。
+    /// </summary>
+    private static void ValidateChannelName(string channelName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(channelName, nameof(channelName));
+        if (!IsIdentifierStart(channelName[0]))
+            throw new ArgumentException(
+                "PostgreSQL LISTEN/NOTIFY 通道名必须以字母或下划线开头。", nameof(channelName));
+        for (int i = 1; i < channelName.Length; i++)
+        {
+            if (!IsIdentifierPart(channelName[i]))
+                throw new ArgumentException(
+                    "PostgreSQL LISTEN/NOTIFY 通道名只能包含字母、数字或下划线。", nameof(channelName));
+        }
+    }
+
+    private static bool IsIdentifierStart(char c)
+        => c is '_' or >= 'A' and <= 'Z' or >= 'a' and <= 'z';
+
+    private static bool IsIdentifierPart(char c)
+        => IsIdentifierStart(c) || c is >= '0' and <= '9';
 
     [SuppressMessage("Design", "CA1031:Do not catch general exception",
         Justification = "LISTEN/NOTIFY 监听循环必须隔离任意异常以支持断线重连退避；OperationCanceledException 已由前一 catch 分支处理。")]

@@ -1,6 +1,6 @@
 #!/bin/bash
 # 发布到 origin/main — 单次干净提交
-set -e
+set -euo pipefail
 name="${1:-publish}"
 msg="${2:-Pal.DDD release}"
 branch="publish-$(date +%Y%m%d-%H%M%S)"

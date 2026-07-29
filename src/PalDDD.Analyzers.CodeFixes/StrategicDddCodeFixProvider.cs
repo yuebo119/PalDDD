@@ -74,7 +74,7 @@ public sealed class AddVersionSuffixCodeFix : CodeFixProvider
         var schemaVersion = int.Parse(versionText, CultureInfo.InvariantCulture);
 
         // 找到 Name 参数
-        if (!TryGetNamedArgument(attr, "Name", out var nameArg) || nameArg.Expression is not LiteralExpressionSyntax literal)
+        if (!CodeFixHelpers.TryGetNamedArgument(attr, "Name", out var nameArg) || nameArg.Expression is not LiteralExpressionSyntax literal)
             return;
 
         context.RegisterCodeFix(
@@ -101,22 +101,6 @@ public sealed class AddVersionSuffixCodeFix : CodeFixProvider
         editor.ReplaceNode(literal, SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression,
             SyntaxFactory.Literal(newValue)));
         return editor.GetChangedDocument();
-    }
-
-    private static bool TryGetNamedArgument(
-        AttributeSyntax attr, string name, out AttributeArgumentSyntax argument)
-    {
-        if (attr.ArgumentList is null) { argument = null!; return false; }
-        foreach (var arg in attr.ArgumentList.Arguments)
-        {
-            if (arg.NameEquals?.Name.Identifier.Text == name)
-            {
-                argument = arg;
-                return true;
-            }
-        }
-        argument = null!;
-        return false;
     }
 }
 

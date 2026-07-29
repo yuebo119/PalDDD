@@ -14,7 +14,7 @@ namespace PalDDD.Core.SourceGen;
 /// <remarks>
 /// 生成代码通过调用 <c>RegisterValues([Field1, Field2, ...])</c> 在静态构造函数中注入编译时已知的值。<br/>
 /// 运行时零反射——所有字段名在编译时已确定。<br/>
-/// 用法：<c>[PalGenerateEnum] public partial class OrderStatus : SmartEnum&lt;OrderStatus, string&gt; { ... }</c>
+/// 用法：<c>[GenerateEnum] public partial class OrderStatus : SmartEnum&lt;OrderStatus, string&gt; { ... }</c>
 /// </remarks>
 [Generator(LanguageNames.CSharp)]
 public sealed class EnumGenerator : IIncrementalGenerator
@@ -31,7 +31,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        // 步骤 1：收集所有标记了 [PalGenerateEnum] 的 partial class 及其静态字段
+        // 步骤 1：收集所有标记了 [GenerateEnum] 的 partial class 及其静态字段
         var candidates = context.SyntaxProvider.ForAttributeWithMetadataName(
             AttrName,
             predicate: static (node, _) =>

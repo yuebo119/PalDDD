@@ -80,15 +80,23 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
             tasks[i] = Task.Run(async () =>
             {
                 await semaphore.WaitAsync(ct).ConfigureAwait(false);
+                using var cts = PerItemTimeout.HasValue
+                    ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                    : null;
                 try
                 {
-                    using var cts = PerItemTimeout.HasValue
-                        ? CancellationTokenSource.CreateLinkedTokenSource(ct)
-                        : null;
                     if (cts is not null)
                         cts.CancelAfter(PerItemTimeout!.Value);
                     var token = cts?.Token ?? ct;
                     results[idx] = await _executor(item, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cts is not null && cts.IsCancellationRequested && !ct.IsCancellationRequested)
+                {
+                    // PerItemTimeout 触发的超时（linked CTS 取消，但外部 ct 未取消）：
+                    // 转为失败而非静默丢弃——调用方需感知子任务超时（ITM-001）。
+                    lock (errors)
+                        errors.Add((default, new TimeoutException(
+                            $"FanOut 子任务 [{idx}] 超过 PerItemTimeout {PerItemTimeout!.Value.TotalMilliseconds}ms")));
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
