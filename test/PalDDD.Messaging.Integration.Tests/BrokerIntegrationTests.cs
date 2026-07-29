@@ -4,6 +4,7 @@ using PalDDD.Messaging.Kafka;
 using PalDDD.Messaging.RabbitMQ;
 using PalDDD.Serialization;
 using PalDDD.Serialization.Json;
+using PalDDD.Testing;
 using RabbitMQ.Client;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -39,63 +40,44 @@ public sealed class BrokerFixture : IAsyncDisposable
     private int _remoteRabbitPort;
     public async ValueTask InitializeAsync()
     {
-        // 不用 _initialized guard —— TUnit ClassDataSource 可能在 [Before(Test)] 之前
-        // 就调了一次 InitializeAsync（此时 Testcontainers catch 设 DockerAvailable=false）。
-        // 每次都检测远程配置，确保后续 [Before(Test)] 调用时能覆盖。
+        // 统一配置：环境变量 > appsettings.test*.json > Testcontainers（默认）
+        // CI 环境（无 appsettings.test*.json）→ Testcontainers 自动启动容器
+        // 本地开发 → appsettings.test.local.json 配置远程连接
 
-        // 优先从 appsettings.json 读取远程配置（不依赖环境变量，dotnet test 子进程可读）
-        string? remoteKafka = null;
-        string? remoteRabbit = null;
-        try
+        var kafkaBootstrap = TestEnvironment.KafkaBootstrapServers;
+        var rabbitHost = TestEnvironment.RabbitMqHost;
+
+        // 如果配置指向 localhost（默认值/Testcontainers 模式），尝试用 Testcontainers 启动
+        if (kafkaBootstrap.Contains("localhost") && rabbitHost.Contains("localhost"))
         {
-            var json = JsonDocument.Parse(File.ReadAllText("appsettings.json"));
-            if (json.RootElement.TryGetProperty("PalDDD", out var cfg))
+            if (DockerAvailable || _triedTestcontainers) return;
+            _triedTestcontainers = true;
+            try
             {
-                if (cfg.TryGetProperty("Kafka", out var k) && k.TryGetProperty("BootstrapServers", out var bs))
-                    remoteKafka = bs.GetString();
-                if (cfg.TryGetProperty("RabbitMq", out var r))
-                {
-                    remoteRabbit = r.TryGetProperty("Host", out var h) ? h.GetString() : null;
-                    _remoteRabbitPort = r.TryGetProperty("Port", out var p) ? p.GetInt32() : 5672;
-                }
+                _kafka = new KafkaBuilder("confluentinc/cp-kafka:7.9.0").Build();
+                await _kafka.StartAsync();
+                _rabbitMq = new RabbitMqBuilder("rabbitmq:4.1.0-alpine").Build();
+                await _rabbitMq.StartAsync();
+                _remoteKafkaBootstrap = _kafka.GetBootstrapAddress();
+                _remoteRabbitHost = _rabbitMq!.Hostname;
+                _remoteRabbitPort = _rabbitMq!.GetMappedPublicPort(5672);
+                DockerAvailable = true;
+                return;
+            }
+#pragma warning disable CA1031 // Intentionally broad: detect Docker presence
+            catch
+#pragma warning restore CA1031
+            {
+                DockerAvailable = false;
+                return;
             }
         }
-#pragma warning disable CA1031 // appsettings.json 可能不存在，回退到环境变量/Testcontainers
-        catch { /* appsettings.json 不存在或格式错误 → 走环境变量/Testcontainers 回退 */ }
-#pragma warning restore CA1031
 
-        // 回退到环境变量
-        remoteKafka ??= Environment.GetEnvironmentVariable("PALDDD_KAFKA_BOOTSTRAP");
-        remoteRabbit ??= Environment.GetEnvironmentVariable("PALDDD_RABBITMQ_HOST");
-
-        if (!string.IsNullOrEmpty(remoteKafka) && !string.IsNullOrEmpty(remoteRabbit))
-        {
-            _remoteKafkaBootstrap = remoteKafka;
-            _remoteRabbitHost = remoteRabbit;
-            _remoteRabbitPort = int.TryParse(Environment.GetEnvironmentVariable("PALDDD_RABBITMQ_PORT"), out var p) ? p : _remoteRabbitPort;
-            DockerAvailable = true;
-            return;
-        }
-
-        // 远程不可用且 Testcontainers 已尝试过 → 不重试
-        if (DockerAvailable || _triedTestcontainers) return;
-        _triedTestcontainers = true;
-
-        // 尝试 Testcontainers（本地 Docker）
-        try
-        {
-            _kafka = new KafkaBuilder("confluentinc/cp-kafka:7.9.0").Build();
-            await _kafka.StartAsync();
-            _rabbitMq = new RabbitMqBuilder("rabbitmq:4.1.0-alpine").Build();
-            await _rabbitMq.StartAsync();
-            DockerAvailable = true;
-        }
-#pragma warning disable CA1031 // Intentionally broad: detect Docker presence, propagate specific failures through test.
-        catch
-#pragma warning restore CA1031
-        {
-            DockerAvailable = false;
-        }
+        // 远程配置（非 localhost）→ 直接用配置的连接串
+        _remoteKafkaBootstrap = kafkaBootstrap;
+        _remoteRabbitHost = rabbitHost;
+        _remoteRabbitPort = TestEnvironment.RabbitMqPort;
+        DockerAvailable = true;
     }
 
     private bool _triedTestcontainers;

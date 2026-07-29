@@ -84,3 +84,7 @@ stryker-config.json
 
 # PalOrmSample 运行时临时数据库
 palddd-palorm-sample.db
+
+# 测试环境本地配置（含连接串/密码，不入 git）
+appsettings.test.local.json
+test/*/appsettings.json

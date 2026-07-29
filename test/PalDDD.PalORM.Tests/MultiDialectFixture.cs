@@ -4,6 +4,7 @@ using PalORM;
 using PalORM.MySql;
 using PalORM.PostgreSql;
 using PalORM.Sqlite;
+using PalDDD.Testing;
 
 namespace PalDDD.PalORM.Tests;
 
@@ -27,7 +28,7 @@ public static class MultiDialectFixture
 
     public static async Task<TestSession<PostgreSqlProvider>> CreatePostgreSqlAsync(CancellationToken ct = default)
     {
-        var cs = ReadConnectionString("PostgreSql");
+        var cs = TestEnvironment.PostgreSqlConnectionString;
         var session = await DataSession<PostgreSqlProvider>.CreateAsync(DbOptions.Development(cs), ct);
         await CleanAllTablesAsync(session, ct);
         await ApplySchemaAsync(session, MultiDialectSchema.PostgreSql, ct);
@@ -36,34 +37,11 @@ public static class MultiDialectFixture
 
     public static async Task<TestSession<MySqlProvider>> CreateMySqlAsync(CancellationToken ct = default)
     {
-        var cs = ReadConnectionString("MySql");
+        var cs = TestEnvironment.MySqlConnectionString;
         var session = await DataSession<MySqlProvider>.CreateAsync(DbOptions.Development(cs), ct);
         await CleanAllTablesAsync(session, ct);
         await ApplySchemaAsync(session, MultiDialectSchema.MySql, ct);
         return new TestSession<MySqlProvider>(session);
-    }
-
-    /// <summary>读取连接串：appsettings.json > 环境变量（与 Messaging.Integration 同模式）。</summary>
-    private static string ReadConnectionString(string key)
-    {
-        // 优先 appsettings.json
-        try
-        {
-            var json = System.Text.Json.JsonDocument.Parse(File.ReadAllText("appsettings.json"));
-            if (json.RootElement.TryGetProperty("PalORM", out var cfg) && cfg.TryGetProperty(key, out var cs))
-                return cs.GetString()!;
-        }
-        catch { /* 回退到环境变量 */ }
-
-        // 回退到环境变量
-        var envKey = key switch
-        {
-            "PostgreSql" => "PALORM_PG_CONNECTION",
-            "MySql" => "PALORM_MYSQL_CONNECTION",
-            _ => throw new InvalidOperationException($"未知连接串 key: {key}")
-        };
-        return Environment.GetEnvironmentVariable(envKey)
-            ?? throw new InvalidOperationException($"无法读取 {key} 连接串（appsettings.json 和环境变量 {envKey} 均未设置）");
     }
 
     private static async Task ApplySchemaAsync<TProvider>(DataSession<TProvider> session, string[] ddls, CancellationToken ct)
