@@ -44,14 +44,14 @@ public sealed class IdempotencyProcessor
         policy ??= IdempotencyPolicy.Default;
         using var activity = PalActivitySource.StartIdempotencyExecute(operationName, key);
         var now = _timeProvider.GetUtcNow();
-        var existing = await _store.GetAsync(operationName, key, now, cancellationToken);
+        var existing = await _store.GetAsync(operationName, key, now, cancellationToken).ConfigureAwait(false);
         if (existing is not null && !CanStartNewExecution(existing, now))
             return SetActivityResult(activity, GetExistingResult(existing, deserializeResult));
 
-        var record = await _store.TryStartAsync(operationName, key, now, policy, cancellationToken);
+        var record = await _store.TryStartAsync(operationName, key, now, policy, cancellationToken).ConfigureAwait(false);
         if (record is null)
         {
-            existing = await _store.GetAsync(operationName, key, _timeProvider.GetUtcNow(), cancellationToken);
+            existing = await _store.GetAsync(operationName, key, _timeProvider.GetUtcNow(), cancellationToken).ConfigureAwait(false);
             return SetActivityResult(activity, existing is null
                 ? new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Skipped, default)
                 : GetExistingResult(existing, deserializeResult));
@@ -59,13 +59,13 @@ public sealed class IdempotencyProcessor
 
         try
         {
-            var result = await handler(cancellationToken);
-            await _store.MarkCompletedAsync(record, serializeResult(result), _timeProvider.GetUtcNow(), cancellationToken);
+            var result = await handler(cancellationToken).ConfigureAwait(false);
+            await _store.MarkCompletedAsync(record, serializeResult(result), _timeProvider.GetUtcNow(), cancellationToken).ConfigureAwait(false);
             return SetActivityResult(activity, new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Executed, result));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await _store.MarkFailedAsync(record, ex.Message, _timeProvider.GetUtcNow(), cancellationToken);
+            await _store.MarkFailedAsync(record, ex.Message, _timeProvider.GetUtcNow(), cancellationToken).ConfigureAwait(false);
             activity?.SetTag("pal.idempotency.result", "failed");
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             PalMetrics.IdempotencyFailed.Add(1);

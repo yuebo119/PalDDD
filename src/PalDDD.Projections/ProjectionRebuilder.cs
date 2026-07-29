@@ -47,9 +47,9 @@ public sealed class ProjectionRebuilder<TMessage>
 
         try
         {
-            await _checkpointStore.ResetAsync(_projectionName, _sourceName, ct);
+            await _checkpointStore.ResetAsync(_projectionName, _sourceName, ct).ConfigureAwait(false);
 
-            return await ReplayCoreAsync(activity, ct);
+            return await ReplayCoreAsync(activity, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -74,7 +74,7 @@ public sealed class ProjectionRebuilder<TMessage>
 
         try
         {
-            return await ReplayCoreAsync(activity, ct);
+            return await ReplayCoreAsync(activity, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -99,7 +99,7 @@ public sealed class ProjectionRebuilder<TMessage>
                 replayEvent.OccurredAt,
                 replayEvent.Audit);
 
-            if (await _processor.ProcessAsync(replayEvent.Message, context, ct))
+            if (await _processor.ProcessAsync(replayEvent.Message, context, ct).ConfigureAwait(false))
                 checked { processed++; }
         }
 

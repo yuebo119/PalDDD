@@ -44,20 +44,20 @@ public sealed class ProjectionProcessor<TMessage>
             context.Position,
             _timeProvider.GetUtcNow(),
             _processingTimeout,
-            ct);
+            ct).ConfigureAwait(false);
 
         if (checkpoint is null)
             return false;
 
         try
         {
-            await _handler.ProjectAsync(message, context, ct);
-            await _checkpointStore.MarkCompletedAsync(checkpoint, _timeProvider.GetUtcNow(), ct);
+            await _handler.ProjectAsync(message, context, ct).ConfigureAwait(false);
+            await _checkpointStore.MarkCompletedAsync(checkpoint, _timeProvider.GetUtcNow(), ct).ConfigureAwait(false);
             return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await _checkpointStore.MarkFailedAsync(checkpoint, ex.Message, _timeProvider.GetUtcNow(), ct);
+            await _checkpointStore.MarkFailedAsync(checkpoint, ex.Message, _timeProvider.GetUtcNow(), ct).ConfigureAwait(false);
             throw;
         }
     }

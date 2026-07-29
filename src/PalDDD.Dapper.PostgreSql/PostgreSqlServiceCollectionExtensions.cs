@@ -104,6 +104,7 @@ public static class PostgreSqlServiceCollectionExtensions
                 sp.GetRequiredService<NpgsqlDataSource>(),
                 sp.GetRequiredService<IServiceScopeFactory>(),
                 sp.GetRequiredService<IPalLogger<PostgreSqlOutboxNotifier>>(),
+                sp.GetService<TimeProvider>(),
                 channelName));
 
         return services;

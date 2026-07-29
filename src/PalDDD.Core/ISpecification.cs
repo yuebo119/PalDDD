@@ -207,6 +207,8 @@ public static class Spec<T>
     public static ISpecification<T> None => new ExpressionSpecification<T>(_ => false);
 }
 
+[UnconditionalSuppressMessage("AOT", "IL3050:Members annotated with RequiresDynamicCodeAttribute may require dynamic code",
+    Justification = "ExpressionSpecification 是规约模式的内存评估实现，仅用于非 AOT 场景的内存筛选。AOT 场景应通过 ToExpression() 将表达式传递给 EF Core 等查询提供者，由它们在数据库端执行。生产代码不通过 IsSatisfiedBy 做内存评估。")]
 internal sealed class ExpressionSpecification<T> : ISpecification<T>
 {
     private readonly Expression<Func<T, bool>> _expression;

@@ -53,6 +53,7 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
     private readonly string _channelName;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IPalLogger<PostgreSqlOutboxNotifier> _logger;
+    private readonly TimeProvider _timeProvider;
     private int _reconnectAttempts;
 
     // 🟡 P1 修复 (2026-06-21): SemaphoreSlim 背压控制
@@ -76,15 +77,18 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
     /// <param name="scopeFactory">用于创建 Scoped OutboxBatchProcessor</param>
     /// <param name="channelName">PostgreSQL 通知通道名（默认 "outbox_channel"）</param>
     /// <param name="logger">日志</param>
+    /// <param name="timeProvider">时间提供者（测试可注入 FakeTimeProvider）</param>
     public PostgreSqlOutboxNotifier(
         NpgsqlDataSource dataSource,
         IServiceScopeFactory scopeFactory,
         IPalLogger<PostgreSqlOutboxNotifier> logger,
+        TimeProvider? timeProvider = null,
         string channelName = "outbox_channel")
     {
         _dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _channelName = channelName ?? throw new ArgumentNullException(nameof(channelName));
     }
 
@@ -166,7 +170,7 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
             // P2-1 修复 (2026-07-28): 用时间戳节流避免高积压场景的 NOTIFY 风暴——
             // 距上次自通知不足 _pollInterval 则跳过（此时 PeriodicTimer 会兜底触发）。
             // 失败可忽略——最坏情况下次外部 NOTIFY 或 PeriodicTimer 仍会触发；不影响正确性。
-            var now = DateTimeOffset.UtcNow;
+            var now = _timeProvider.GetUtcNow();
             if (now - _lastSelfNotify >= _pollInterval)
             {
                 _lastSelfNotify = now;
