@@ -102,7 +102,7 @@ public sealed class EventLogPositionReserverTests
     }
 
     [Test]
-    public async Task ReserveAsync_ConcurrentRequestsFromSameReserver_NoDuplicatePositions(CancellationToken cancellationToken)
+    public async Task ReserveAsync_SequentialRequestsFromSameReserver_NoDuplicatePositions(CancellationToken cancellationToken)
     {
         // 单个 reserver（单进程模型）按顺序服务多个 DbContext，
         // 绝不能分发重复的位置。进程内锁序列化快速路径分配；

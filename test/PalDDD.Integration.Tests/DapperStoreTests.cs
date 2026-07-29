@@ -29,10 +29,11 @@ using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Integration.Tests;
 
-/// <summary>Dapper 测试集合 — 序列化执行避免全局静态状态竞态</summary>
+/// <summary>Dapper 测试集合 — 序列化执行避免全局静态状态竞态（ClassCleanup 调 ResetTypeHandlers 清理全局状态）。
+/// 注：TUnit 无 xUnit 的 [Collection] 概念，全局状态隔离靠 ClassInitialize/ClassCleanup 的静态生命周期保证。</summary>
 public sealed class DapperStoreTests
 {
-    private DbConnection _conn = new SqliteConnection("Data Source=:memory:");
+    private DbConnection _conn = null!;
     private const DapperDbType _dbType = DapperDbType.Sqlite;
     private static bool s_previousUnderscoreSetting;
 

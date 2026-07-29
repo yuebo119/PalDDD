@@ -159,7 +159,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _channel.DisposeAsync();
-        _connection.Dispose();
+        await _connection.DisposeAsync();
     }
 
     private sealed class AsyncSubscription(Func<Task> unsubscribe) : IAsyncDisposable

@@ -511,7 +511,9 @@ public sealed class StrategicDddAnalyzerTests
             """;
 
         var result = await ApplyCodeFixAsync(source, "PDDD008");
+        // 验证新串出现且旧未限定名在 GenerateMessage 中被替换（非追加）
         await Assert.That(result).Contains("\"ordering.order-submitted.v1\"");
+        await Assert.That(result.Contains("Name = \"order-submitted.v1\"")).IsFalse();
     }
 
     [Test]

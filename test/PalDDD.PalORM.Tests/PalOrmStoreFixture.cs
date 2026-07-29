@@ -103,7 +103,7 @@ public static class PalOrmStoreFixture
 
         CREATE TABLE idempotency_records (
             operation_name   TEXT NOT NULL,
-            key              TEXT NOT NULL,
+            idempotency_key  TEXT NOT NULL,
             status           INTEGER NOT NULL,
             locked_until     TEXT NOT NULL,
             expires_at       TEXT NOT NULL,

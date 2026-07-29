@@ -89,36 +89,36 @@ public sealed class DimBridgeTests
 public sealed class RequestInterfaceTests
 {
     [Test]
-    public async Task Command_ImplementsIRequest()
+    public async Task Command_ImplementsIRequestOfGuid()
     {
-        IRequest<Guid> cmd = new CreateOrderCommand("Test", 100m);
-        await Assert.That(cmd).IsNotNull();
+        // 反射验证接口契约（比 IsNotNull 恒真断言更有意义——验证继承关系而非对象非空）
+        var implements = typeof(CreateOrderCommand).GetInterfaces()
+            .Contains(typeof(IRequest<Guid>));
+        await Assert.That(implements).IsTrue();
     }
 
     [Test]
-    public async Task Query_ImplementsIRequest()
+    public async Task Query_ImplementsIRequestOfString()
     {
-        IRequest<string> q = new GetOrderQuery(Guid.NewGuid());
-        await Assert.That(q).IsNotNull();
+        var implements = typeof(GetOrderQuery).GetInterfaces()
+            .Contains(typeof(IRequest<string>));
+        await Assert.That(implements).IsTrue();
     }
 
     [Test]
     public async Task ICommand_ImplementsIRequestOfUnit()
     {
-        IRequest<Unit> cmd = new DeleteOrderCommand(Guid.NewGuid());
-        await Assert.That(cmd).IsNotNull();
+        var implements = typeof(DeleteOrderCommand).GetInterfaces()
+            .Contains(typeof(IRequest<Unit>));
+        await Assert.That(implements).IsTrue();
     }
 
     [Test]
     public async Task AllRequests_ImplementIBaseRequest()
     {
-        IBaseRequest cmd = new CreateOrderCommand("X", 0);
-        IBaseRequest q = new GetOrderQuery(Guid.NewGuid());
-        IBaseRequest voidCmd = new DeleteOrderCommand(Guid.NewGuid());
-
-        await Assert.That(cmd).IsNotNull();
-        await Assert.That(q).IsNotNull();
-        await Assert.That(voidCmd).IsNotNull();
+        await Assert.That(typeof(CreateOrderCommand).GetInterfaces().Contains(typeof(IBaseRequest))).IsTrue();
+        await Assert.That(typeof(GetOrderQuery).GetInterfaces().Contains(typeof(IBaseRequest))).IsTrue();
+        await Assert.That(typeof(DeleteOrderCommand).GetInterfaces().Contains(typeof(IBaseRequest))).IsTrue();
     }
 }
 
@@ -381,6 +381,48 @@ public sealed class PipelineBehaviorTests
         var behavior = (CountingBehavior<CreateOrderCommand, Guid>)behaviorObj!;
         await Assert.That(behavior.BeforeCount).IsEqualTo(1);
         await Assert.That(behavior.AfterCount).IsEqualTo(1);
+    }
+
+    /// <summary>记录执行顺序的管道行为（用于验证多 behavior 嵌套顺序）</summary>
+    public sealed class OrderingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
+        where TRequest : IRequest<TResponse>
+    {
+        private readonly string _name;
+        private readonly IList<string> _log;
+        public OrderingBehavior(string name, IList<string> log) { _name = name; _log = log; }
+
+        public async ValueTask<TResponse> HandleAsync(TRequest request, CancellationToken ct, Func<ValueTask<TResponse>> next)
+        {
+            ArgumentNullException.ThrowIfNull(next);
+            _log.Add($"{_name}.Before");
+            var result = await next();
+            _log.Add($"{_name}.After");
+            return result;
+        }
+    }
+
+    [Test]
+    public async Task Dispatcher_MultiplePipelineBehaviors_NestedInRegistrationOrder()
+    {
+        var log = new List<string>();
+        var services = new ServiceCollection();
+        services.AddSingleton<CreateOrderHandler>();
+        // 按注册顺序：Outer 先注册（外层），Inner 后注册（内层）
+        services.AddSingleton<IPipelineBehavior<CreateOrderCommand, Guid>>(_ => new OrderingBehavior<CreateOrderCommand, Guid>("Outer", log));
+        services.AddSingleton<IPipelineBehavior<CreateOrderCommand, Guid>>(_ => new OrderingBehavior<CreateOrderCommand, Guid>("Inner", log));
+        var sp = services.BuildServiceProvider();
+
+        var dispatcher = new Dispatcher(sp.GetRequiredService<IServiceScopeFactory>());
+        dispatcher.Register<CreateOrderCommand, Guid, CreateOrderHandler>();
+
+        await dispatcher.SendAsync(new CreateOrderCommand("Test", 100m));
+
+        // 验证嵌套顺序：Outer.Before → Inner.Before → handler → Inner.After → Outer.After（洋葱模型）
+        await Assert.That(log.Count).IsEqualTo(4);
+        await Assert.That(log[0]).IsEqualTo("Outer.Before");
+        await Assert.That(log[1]).IsEqualTo("Inner.Before");
+        await Assert.That(log[2]).IsEqualTo("Inner.After");
+        await Assert.That(log[3]).IsEqualTo("Outer.After");
     }
 
     [Test]
