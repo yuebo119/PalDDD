@@ -124,9 +124,17 @@ TState>
                 {
                     // 外部取消：仍释放租约避免该 Saga 对其他实例不可见（ITM-010），
                     // 然后重新抛出让上层感知关停信号。租约释放用独立 CT（不响应本次取消）。
+                    // SaveChanges 失败不掩盖原始 OCE —— 关停时 DB 连接可能已断。
                     sagaState.LeasedBy = null;
                     sagaState.LeasedUntil = null;
-                    await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
+                    try
+                    {
+                        await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (Exception releaseEx) when (releaseEx is not OperationCanceledException)
+                    {
+                        _logger.Error(releaseEx, $"Saga {sagaState.SagaId} lease release failed during cancellation; lease will expire by LeaseDuration");
+                    }
                     throw;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)

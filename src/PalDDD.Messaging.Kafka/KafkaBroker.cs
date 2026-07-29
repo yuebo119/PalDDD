@@ -125,6 +125,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                         // 不终止整个订阅（ITM-008）。与 RabbitMQ nack+requeue 模式对齐。
                         // 若为分区末尾/短暂网络抖动，Consume 会自动重试或等待新消息。
                         _logger.Error(ex, $"Kafka consume error on {topic} @ {_consumerConfig.GroupId}, continuing consumption");
+                        // 退避防止边缘场景（如 topic 不存在）的 CPU 空转。
+                        // Consume 本身通常阻塞等待，但某些持续错误会立即返回。
+                        await Task.Delay(TimeSpan.FromSeconds(1), cts.Token).ConfigureAwait(false);
                         continue;
                     }
 
