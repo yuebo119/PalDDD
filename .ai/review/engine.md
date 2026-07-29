@@ -82,11 +82,11 @@
 
 **资源流卡**：这个 Create 后抛异常的路径，资源谁释放？Saga 租约的所有权转移点明确吗（leased_by/leased_until + idx_saga_lease）？CTS 有 using 吗？枚举器被放弃时 Outbox DbContext scope 会释放吗？Commit/Rollback 后是否清除了 DataSession 事务引用（PalORM UseTransaction(null) ITM-批次5）？
 
-**并发流卡**：Dispatcher.Freeze() 后还有运行时 Add 吗（ITM-027）？两个 Volatile 字段的发布顺序读方真的依赖吗？SagaState.CurrentState 含 `|` 字符吗（ITM-001）？Saga 租约是否在所有路径（超时/非超时）都释放（ITM-031）？DataSession 是否被多 worker 共享（PalORM AsyncLocal 门禁）？
+**并发流卡**：Dispatcher.Freeze() 后还有运行时 Add 吗（ITM-027）？两个 Volatile 字段的发布顺序读方真的依赖吗？SagaState.CurrentState 含 `|` 字符吗（ITM-001）？Saga 租约是否在所有路径（超时/非超时）都释放（ITM-031）？DataSession 是否被多 worker 共享（PalORM AsyncLocal 门禁）？**每个 if/else/switch 分支是否都释放了该路径持有的资源（SPD-3）**？**返回值是否被静默丢弃（SPD-2）**？
 
 **错误流卡**：这个 catch(Exception) 的 OCE 过滤在哪（三种合规形态都查过了吗——`when(ex is not OCE)` / 前置 catch(OCE){throw;} / 后台处理器 [SuppressMessage] + 具体理由）？清理异常挂 Data 还是覆盖了主异常？这个取消与关停取消可区分吗（ITM-030）？DbUpdateException catch 是否区分了唯一约束冲突与其他错误（ITM-036）？
 
-**AOT 流卡**：这个新 API 走反射/MakeGeneric/Expression.Compile 了吗（_expression.Compile() 实例调用也算，PDDD-G8 真实命中）？STJ 调用传 JsonTypeInfo 了吗？这个项目该是 AOT 核心层（true）还是适配器层（false）？这个 IsAotCompatible=true 的项目是否有 NoWarn IL3058 抑制（Dapper P0-5 同型）？注释声称的 AOT 状态与代码实际是否一致（PD14：与既有实现对齐 ≠ 新 bug）？
+**AOT 流卡**：这个新 API 走反射/MakeGeneric/Expression.Compile 了吗（_expression.Compile() 实例调用也算，PDDD-G8 真实命中）？STJ 调用传 JsonTypeInfo 了吗？这个项目该是 AOT 核心层（true）还是适配器层（false）？这个 IsAotCompatible=true 的项目是否有 NoWarn IL3058 抑制（Dapper P0-5 同型）？注释声称的 AOT 状态与代码实际是否一致（PD14 + SPD-5）？源生成器改动后是否清了 obj/bin（铁律 #13）？
 
 **生成语义流卡**：MessageCatalog 键集改动，三处（注册表/快照/启动期校验）同步了吗？GenerateId/GenerateEnum 改动后 PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS 走了吗？新增消息类型按 5 步流程（conventions §10.5）了吗？PDDD001-015 战略约束满足吗？
 

@@ -9,7 +9,7 @@
 
 ---
 
-## I. AI 协作 6 条铁律（不可违反）
+## I. AI 协作 14 条铁律（不可违反）
 
 | # | 铁律 | 违反后果 |
 |---|------|---------|
@@ -19,6 +19,14 @@
 | 4 | **新增 .cs 文件前必查 conventions §4.9 决策矩阵**（找不到匹配行=禁止创建） | 文件错位 / 引入被禁模式（Helpers/Utils/Manager/IRepository\<T\>） |
 | 5 | **Core 层禁 DbContext/SqlConnection/HttpClient**（ArchitectureBoundaryTests 强制） | 编译期 FAIL |
 | 6 | **`catch (Exception)` 必带 `when (ex is not OperationCanceledException)` 过滤**（conventions §10.3） | ITM-030 同型缺陷（3 处复发：PeriodicBackgroundProcessor / ExceptionMiddleware / HealthCheck） |
+| 7 | **清空远程共享数据库前必须确认连接串指向测试库**（XII.2 #7） | 并行 DROP/CREATE 竞争或清空生产数据 |
+| 8 | **永不删除 `.ai/` 目录**（XII.2 #8） | 失去全部项目约束（门禁/review/误判库/缺陷登记） |
+| 9 | **不留占位符代码**（TODO/placeholder/NotImplementedException，XII.3 #7） | 半成品进测试掩盖真问题 |
+| 10 | **引入新依赖前验证存在且版本有效**（XII.3 #8） | 运行时空对象 / 编译失败 |
+| 11 | **长会话每完成里程碑自动 commit**（XII.3 #9） | 上下文丢失导致返工 |
+| 12 | **复杂功能先输出签名让用户确认**（XII.3 #10） | 200 行错误方向 |
+| 13 | **源生成器改动后清 obj/bin**（XII.3 #11） | 增量构建复用旧 emit |
+| 14 | **跨方言测试串行化**（XII.3 #12） | 共享数据库并行 DROP/CREATE 竞争 |
 
 ### 构建验证时机
 
@@ -382,3 +390,70 @@ CodeFix 提供：PDDD008 / PDDD010 / PDDD013 / PDDD015。
 | 教训 | 详情 | 反模式 |
 |------|------|------|
 | **数据库连接串不可硬编码到测试代码** | 快速验证时直接写入远程数据库连接串默认值 → git 历史 filter-branch 清除 + GC prune。改用环境变量 + 缺失时 throw | ❌ 在代码中写 `?? "Host=192.168...;Password=..."` 默认值 |
+
+---
+
+## XII. AI 编码行为准则增强（从工程实践独立沉淀 · 2026-07-29）
+
+> 以下规则来自 PalORM 适配层实施 + 全项目三轮四系统审查中 AI 的真实失误模式。
+> 每条规则独立自含，不引用任何外部文件。与全局配置互不依赖、互不引用。
+
+### XII.1 AI 结构性偏差 — PalDDD 场景化清单（6 条 · 写/审代码强制对照）
+
+> AI 训练数据 85% 是 happy path，PalDDD 的事务/租约/并发场景全部依赖错误路径覆盖。
+> 以下偏差在本次实施中全部真实发生过（附 ITM/commit 追溯）。
+
+| 编号 | 偏差 | PalDDD 具体案例 | 强制要求 |
+|------|------|----------------|---------|
+| SPD-1 | **只测顺序不测真并发** | Outbox 租约原测试只顺序两次 Lease 验第二次为空——Task.WhenAll 多 worker 并发未覆盖 | 新增 Store 必须有至少 1 个 Task.WhenAll 并发测试 |
+| SPD-2 | **返回值被静默丢弃** | `DapperEventLog.AppendAsync` 中 `expectedVersion.Matches()` 返回值未检查（ITM-P0-2, `57ed3fa`）——乐观并发控制完全失效 | 任何 bool/ValueTask 返回值必须检查或显式丢弃（`_ = expr`） |
+| SPD-3 | **只覆盖部分路径** | `SagaProcessor.CheckTimeoutsAsync` 只在超时分支清空租约，非超时分支跳过——租约泄漏 2 分钟（ITM-031, `e892da8`） | if/else/switch 每个分支必须检查"资源是否在该路径释放" |
+| SPD-4 | **三方一致遗漏** | EventLogSql 改 snake_case 后 DapperStoreTests DDL 未同步（`57ed3fa`）——编译过但运行时列名不匹配 | 改 SQL 列名 → 同步改 DDL + 测试 DDL + ORM Row DTO [Column] |
+| SPD-5 | **注释与代码矛盾** | `[module:DapperAot]` 注释禁用但 SqliteRowFactory 声称"已启用"（`e892da8`）——误导后续维护者 | 修改代码行为时必须同步修改相关注释（文件头/类摘要/XML doc） |
+| SPD-6 | **设计契约误判为 bug** | `OutboxMessage.Status` Dapper=string（`'Pending'`）/ EFCore=int（`0`）看似不一致——实际是双实现的历史契约，业务已围绕建立 | 改动前必须问"这个看似 bug 的行为是否是设计意图/生产契约？"不确定则问用户 |
+
+### XII.2 破坏性操作黑名单 — PalDDD 扩展（2 条 · 追加到 I 章铁律）
+
+> 通用黑名单（`rm -rf` / `git push --force` / `DROP TABLE` / PR 合并等）此处不重复。
+> 以下 2 条是 PalDDD 项目特有的破坏性场景。
+
+| # | 操作 | 后果 | 执行规则 |
+|---|------|------|---------|
+| 7 | **清空远程共享数据库** | `CleanAllTablesAsync` 在 PG/MySQL `palorm_bench` 上 `DROP TABLE`——多测试并行时竞争，且连错库会清空生产数据 | 必须用户确认连接串指向测试库；跨方言测试必须 `[NotInParallel]` |
+| 8 | **删除 `.ai/` 目录** | `.ai/` 是 AI 质量系统自包含目录——删除 = 失去全部项目约束（PDDD-G 门禁、七流 review 引擎、误判库 PD1-PD14、ITM 缺陷登记） | 永远不要删除；重构可改内容但不可删目录 |
+
+### XII.3 Agentic 工程规则 — PalDDD 场景化（6 条 · 追加到 I/IV 章）
+
+> 以下规则在 PalORM 适配层实施中全部被实践验证。
+
+| # | 规则 | PalDDD 案例 | 违反后果 |
+|---|------|------------|---------|
+| 7 | **不留占位符代码** | `_Placeholder.cs` 在 Row DTO 就绪后立即删除（`22c950b`） | 占位符进测试会掩盖真问题 |
+| 8 | **引入新依赖前必须验证存在且版本有效** | PalORM.SourceGen 是独立 analyzer 包，Provider 包不传递——不验证就运行时空对象（`22c950b`） | `dotnet list package` / 查 NuGet.org，不凭记忆声称 |
+| 9 | **长会话每完成一个里程碑自动 commit** | PalORM 适配层 23 次提交，每完成一个 Store 就 commit | 防上下文丢失/窗口压缩导致返工 |
+| 10 | **实现复杂功能前先输出接口签名让用户确认** | PalORM 先设计 6 个 Row DTO → 用户确认 → 再实现 7 Store | 阻断"200 行错误方向" |
+| 11 | **源生成器改动后必须清 obj/bin** | 改 EventLogRow `[Column]` 后不清 obj/bin → 源生成器用旧 emit → 运行时空对象 | `rm -rf src/*/obj src/*/bin` + 全量 build |
+| 12 | **跨方言测试串行化** | PG/MySQL 共享远程数据库 `palorm_bench`，并行 DROP/CREATE 竞争 | `[NotInParallel("palorm-multidialect")]` 或用唯一表名隔离 |
+
+### XII.4 重构防护 — PalDDD 场景化（3 条 · 新增 IV.7 节）
+
+> AI 在重构中有特定认知盲区。以下 3 条从 PalDDD 实施中验证。
+
+| # | 规则 | PalDDD 案例 | 检查方式 |
+|---|------|------------|---------|
+| IV.7.1 | **bug-like 行为可能是生产契约** | `OutboxMessage.Status` Dapper=string / EFCore=int 不一致——看似 bug 但业务已围绕建立 | 改动前问用户"这是设计意图还是 bug？" |
+| IV.7.2 | **跨文件依赖是崩溃边界** | EventLogRow 改 `[Column]` → EventLogStore SQL → DDL → 测试 DDL → appsettings.test.json 5 处联动 | 发现自己在级联修改 3+ 文件时立即停，拆分提交 |
+| IV.7.3 | **Debug 时必须看最近改动** | EventLogSql snake_case 改动后测试失败 → 不看 `git diff HEAD~3` 就猜不到 DDL 未同步 | debug 第一步 `git log --since="2 hours ago"` + `git diff HEAD~3` |
+
+### XII.5 代码价值判定 — 框架库特化（1 条 · 新增 V.5 节）
+
+> PalDDD 是框架库（30+ NuGet 包），public API 零内部引用是**常态而非死代码信号**。
+
+**删除前必须交叉验证 6 项**（全部无保留证据方可建议删除）：
+
+1. **区分代码性质**：应用代码（无消费方≈死代码）vs 框架库（API 面向外部使用者，早期无内部消费方是常态）
+2. **文档交叉验证**：grep `docs/` 是否将该 API 列为特性/能力
+3. **Roadmap 演化**：查 docs/design/ 的"未来计划"章节
+4. **Git 演进**：`git log --oneline -- <path>` 查 feat 提交链
+5. **测试覆盖**：是否有专门测试文件
+6. **NuGet 包验证**：查 `nupkgs/` 或 NuGet.org 是否已发布——已发布的 public API 不可随意删（消费者可能已在用）
