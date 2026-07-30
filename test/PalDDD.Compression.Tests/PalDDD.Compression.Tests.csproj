@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\PalDDD.Compression\PalDDD.Compression.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Compression.Native\PalDDD.Compression.Native.csproj" />
     <ProjectReference Include="..\PalDDD.Testing\PalDDD.Testing.csproj" />
   </ItemGroup>
 

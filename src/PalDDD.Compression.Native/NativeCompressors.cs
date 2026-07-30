@@ -17,7 +17,10 @@ internal sealed class LZ4Compressor : ICompressor
     {
         if (data.IsEmpty) return Array.Empty<byte>();
 
-        var maxSize = LZ4.GetMaxCompressedLength(data.Length);
+        // 显式转 UIntPtr：NativeCompressions 0.6.1 的 LZ4.GetMaxCompressedLength(int)
+        // 在 .NET 11 Preview 下因 int→UIntPtr 隐式转换触发重载解析 bug 导致栈溢出。
+        // 直接用 UIntPtr 重载绕过包装层的递归。
+        var maxSize = LZ4.GetMaxCompressedLength((nuint)data.Length);
         var destination = new byte[maxSize];
 
         var options = LZ4CompressionOptions.Default with
@@ -55,7 +58,7 @@ internal sealed class ZStandardCompressor : ICompressor
     {
         if (data.IsEmpty) return Array.Empty<byte>();
 
-        var maxSize = Zstandard.GetMaxCompressedLength(data.Length);
+        var maxSize = Zstandard.GetMaxCompressedLength((nuint)data.Length);
         var destination = new byte[maxSize];
 
         var options = ZstandardCompressionOptions.Default with
@@ -100,7 +103,7 @@ internal sealed class OpenZLCompressor : ICompressor
 
         // OpenZL 当前使用 Zstandard 作为底层实现，
         // 后续 NativeCompressions 版本会提供专用的 OpenZL API。
-        var maxSize = Zstandard.GetMaxCompressedLength(data.Length);
+        var maxSize = Zstandard.GetMaxCompressedLength((nuint)data.Length);
         var destination = new byte[maxSize];
 
         var options = ZstandardCompressionOptions.Default with
