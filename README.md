@@ -384,7 +384,46 @@ services.AddPalSaga<OrderSaga, OrderSagaState>();  // InMemorySagaStateStore
 var dispatcher = services.BuildServiceProvider().GetRequiredService<Dispatcher>();
 ```
 
-### 8. 消息版本演化：V1→V2 自动升级（框架内置）
+### 8. Bounded Context 隔离：编译期标记 + 分析器强制
+
+PalDDD 用 `[BoundedContext]` 标记聚合根归属，PDDD010 分析器强制 ProcessManager/Saga 必须声明所属上下文——防止跨领域边界的非法引用。
+
+```csharp
+// ✅ 聚合根标注 BoundedContext — 分析器知道它属于哪个领域
+[BoundedContext("ordering")]
+public sealed class Order : AggregateRoot<OrderId> { ... }
+
+[BoundedContext("inventory")]
+public sealed class StockItem : AggregateRoot<StockItemId> { ... }
+
+// ✅ ProcessManager 必须标注 BoundedContext — PDDD010 编译错误
+[BoundedContext("ordering")]
+public sealed class OrderingSaga : Saga<OrderingState> { ... }
+
+// ❌ 忘记标注 — 编译直接报错
+public sealed class OrderingSaga : Saga<OrderingState> { ... }  // PDDD010
+```
+
+### 9. 多租户：编译期注入租户过滤，零运行时开销
+
+PalORM 的 `[TenantAware]` 在编译期生成租户列过滤逻辑——SQL 自动带 `WHERE tenant_id = @tenantId`，不需要运行时拦截器。
+
+```csharp
+// Row DTO 标注 [TenantAware] — 源生成器自动生成租户过滤 SQL
+public sealed class OrderRow
+{
+    [Column("id")] public PalUlid Id { get; init; }
+    [Column("customer_name")] public string CustomerName { get; init; }
+    [TenantAware]  // ← 编译期注入：所有 SQL 自动加 tenant_id 条件
+    [Column("tenant_id")] public string TenantId { get; init; }
+}
+
+// 运行时自动过滤 — 业务代码无感知
+var orders = await outboxStore.GetPendingMessagesAsync(...);
+// 生成的 SQL: SELECT ... FROM outbox_messages WHERE tenant_id = @tenantId AND status = 'Pending'
+```
+
+### 10. 消息版本演化：V1→V2 自动升级（框架内置）
 
 大多数 DDD 框架不内置消息版本演化。PalDDD 的 `[GenerateMessage]` + Upcaster 管线让版本迁移成为编译期检查 + 运行时自动转换。
 
@@ -408,7 +447,54 @@ services.AddPalMessageContractVerification(builder => builder
 // 启动时自动验证契约完整性 — 缺少升级路径直接报错（Fail Fast）
 ```
 
-### 9. 可观测性：内建 OpenTelemetry，零配置
+### 11. EventLog 事件溯源：命名流 + 乐观并发 + 全局单调递增
+
+EventLog 提供事件溯源的核心存储——命名流（Named Stream）+ 乐观并发版本控制 + 全局位置分配器保证事件有序。
+
+```csharp
+// 注册 EventLog
+services.AddPalOrmPostgreSql(connectionString);
+// EventLog 自动可用：PalOrmEventLog<PostgreSqlProvider>
+
+// 追加事件（乐观并发 — expectedVersion 冲突时抛 ConcurrencyException）
+await eventLog.AppendAsync("order-01HXY...", expectedVersion: 3, new[]
+{
+    new EventData(OrderCreatedJsonTypeInfo, messageId, payload)
+}, ct);
+
+// 读取事件流
+var events = await eventLog.ReadAsync("order-01HXY...", ct);
+
+// 全局单调递增位置 — 用于 Projection 断点续传
+var position = await eventLog.ReadAllAsync(checkpoint, ct);
+// 每条事件携带全局递增 Position → Projection 只需记录最后处理的位置
+```
+
+### 12. Projection 断点续传：从 EventLog 全量重放重建读模型
+
+Projection 从 EventLog 消费事件、更新读模型，断点持久化保证重启后从中断处继续——独立于存储适配器。
+
+```csharp
+// 注册 Projection（Checkpoint 断点存储 + 后台处理器）
+services.AddPalOrmPostgreSql(connectionString);
+services.AddPalProjection<OrderProjection>();
+
+// Projection 实现 — 消费事件、更新读模型
+public sealed class OrderProjection : IProjection<OrderCreated>
+{
+    public ValueTask HandleAsync(OrderCreated evt, CancellationToken ct)
+    {
+        // 更新读模型（物化视图 / 缓存 / 搜索索引）
+        return _readStore.UpsertAsync(evt.OrderId, new OrderView(evt.Name, evt.Amount), ct);
+    }
+}
+
+// 全量重放 — 从头重建读模型（不停机恢复）
+await projectionRebuilder.RebuildAsync(ct);
+// → 从 Position=0 开始重放全部事件 → Checkpoint 自动更新 → 中断后可断点续传
+```
+
+### 13. 可观测性：内建 OpenTelemetry，零配置
 
 PalDDD 在所有关键路径内置了 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（24 个计数器）——不需要手写埋点。
 
@@ -427,7 +513,7 @@ services.AddOpenTelemetry()
 // 零手写埋点 — 命令分发延迟、Outbox 积压量、Saga 补偿次数全部自动上报
 ```
 
-### 10. 渐进式迁移：从 MediatR 逐步引入
+### 14. 渐进式迁移：从 MediatR 逐步引入
 
 PalDDD 的每个 NuGet 包独立可装——不需要一次性重写项目。
 
