@@ -24,6 +24,13 @@ jobs:
           dotnet-version: '11.0.x'
           include-prerelease: true
 
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/Directory.Packages.props', '**/Directory.Build.props') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
       - name: Restore
         run: dotnet restore PalDDD.slnx
 
@@ -34,8 +41,15 @@ jobs:
         run: dotnet test PalDDD.slnx --no-build -c Release --verbosity normal
         env:
           # CI 环境：Testcontainers 自动启动 PG/MySQL/Kafka/RabbitMQ
-          # 不设置连接串 → TestEnvironment 走默认 localhost → Testcontainers 启动
           PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS: '0'
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: '**/TestResults/**'
+          if-no-files-found: ignore
 
       - name: AI system self-check + gate
         run: |
@@ -54,6 +68,13 @@ jobs:
         with:
           dotnet-version: '11.0.x'
           include-prerelease: true
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/Directory.Packages.props', '**/Directory.Build.props') }}
+          restore-keys: ${{ runner.os }}-nuget-
 
       - name: Restore
         run: dotnet restore samples/PalDDD.PalOrmSample/PalDDD.PalOrmSample.csproj

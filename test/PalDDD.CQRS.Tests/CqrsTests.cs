@@ -439,3 +439,49 @@ public sealed class PipelineBehaviorTests
         await Assert.That(behaviors.First()).IsTypeOf<CountingBehavior<CreateOrderCommand, Guid>>();
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// ⚡ CQRS 分配契约测试 — Dispatcher.SendAsync 热路径分配上限
+// ═══════════════════════════════════════════════════════════════
+
+public sealed class CqrsAllocationContractTests
+{
+    private const int Iterations = 5_000;
+
+    private static long MeasureAllocation(Action action)
+    {
+        action();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < Iterations; i++) action();
+        return GC.GetAllocatedBytesForCurrentThread() - before;
+    }
+
+    [Test]
+    public async Task Dispatcher_QueryAsync_NoHandlerOverhead_BaselineAllocation()
+    {
+        var services = new ServiceCollection();
+        services.AddTransient<SimpleQueryHandler>();
+        var sp = services.BuildServiceProvider();
+        var dispatcher = new Dispatcher(sp.GetRequiredService<IServiceScopeFactory>());
+        dispatcher.Register<SimpleQuery, string, SimpleQueryHandler>();
+
+        var query = new SimpleQuery();
+        var bytesPerCall = MeasureAllocation(() =>
+        {
+            dispatcher.QueryAsync<string>(query, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        }) / Iterations;
+
+        // 每次调用的分配应在合理范围内（ValueTask + scope 创建）
+        await Assert.That(bytesPerCall).IsLessThan(500);
+    }
+
+    // 最小 handler，避免业务逻辑分配干扰
+    public sealed record SimpleQuery : IQuery<string>;
+    public sealed class SimpleQueryHandler : IQueryHandler<SimpleQuery, string>
+    {
+        public ValueTask<string> HandleAsync(SimpleQuery query, CancellationToken ct) => new("ok");
+    }
+}
