@@ -384,6 +384,71 @@ services.AddPalSaga<OrderSaga, OrderSagaState>();  // InMemorySagaStateStore
 var dispatcher = services.BuildServiceProvider().GetRequiredService<Dispatcher>();
 ```
 
+### 8. 消息版本演化：V1→V2 自动升级（框架内置）
+
+大多数 DDD 框架不内置消息版本演化。PalDDD 的 `[GenerateMessage]` + Upcaster 管线让版本迁移成为编译期检查 + 运行时自动转换。
+
+```csharp
+// V1 消息（旧版消费者仍在用）
+[GenerateMessage(Name = "ordering.order-created.v1")]
+public sealed record OrderCreatedV1(PalUlid OrderId, string Name, decimal Amount)
+    : DomainEvent, IDomainEvent;
+
+// V2 消息（新增字段 ShippingAddress）
+[GenerateMessage(Name = "ordering.order-created.v2")]
+public sealed record OrderCreatedV2(PalUlid OrderId, string Name, decimal Amount, string ShippingAddress)
+    : DomainEvent, IDomainEvent;
+
+// 注册 Upcaster — V1 自动升级为 V2，消费者只处理 V2
+services.AddPalMessageContractVerification(builder => builder
+    .FromV1<OrderCreatedV1>()
+    .ToV2<OrderCreatedV2>(v1 => new OrderCreatedV2(v1.OrderId, v1.Name, v1.Amount, "default-address"))
+    .Build());
+
+// 启动时自动验证契约完整性 — 缺少升级路径直接报错（Fail Fast）
+```
+
+### 9. 可观测性：内建 OpenTelemetry，零配置
+
+PalDDD 在所有关键路径内置了 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（24 个计数器）——不需要手写埋点。
+
+```csharp
+// 框架自动埋点：
+// - Dispatcher.SendAsync → Activity "PalDDD.CQRS.Dispatch"
+// - OutboxProcessor → Counter "palddd.outbox.processed" / "palddd.outbox.failed"
+// - SagaProcessor → Activity "PalDDD.Saga.Execute" + "PalDDD.Saga.Compensate"
+// - IdempotencyProcessor → Counter "palddd.idempotency.hit" / "palddd.idempotency.miss"
+
+// 你的 OpenTelemetry 配置只需引用 Activity Source：
+services.AddOpenTelemetry()
+    .WithTracing(t => t.AddSource("PalDDD"))      // 自动捕获全部 PalDDD Activity
+    .WithMetrics(m => m.AddMeter("PalDDD"));       // 自动捕获全部 PalDDD Metrics
+
+// 零手写埋点 — 命令分发延迟、Outbox 积压量、Saga 补偿次数全部自动上报
+```
+
+### 10. 渐进式迁移：从 MediatR 逐步引入
+
+PalDDD 的每个 NuGet 包独立可装——不需要一次性重写项目。
+
+```csharp
+// 第 1 步：只引入领域基元（替换手写 Entity / ValueObject）
+// dotnet add package PalDDD.Core
+public sealed class Order : AggregateRoot<OrderId> { ... }  // 替换手写 Entity 基类
+
+// 第 2 步：引入 CQRS 分发（替换 MediatR）
+// dotnet add package PalDDD.CQRS
+services.AddPalCommandHandler<CreateOrder, OrderId, CreateOrderHandler>();
+// MediatR 的 IRequest → PalDDD 的 ICommand
+// MediatR 的 IRequestHandler → PalDDD 的 ICommandHandler
+
+// 第 3 步：按需加 Outbox / Saga / Projection
+// dotnet add package PalDDD.Transactions
+services.AddPalOutbox();  // MediatR 没有的能力
+
+// 逐步迁移：老代码继续用 MediatR，新功能用 PalDDD，两者共存无冲突
+```
+
 ---
 
 ## 功能矩阵
