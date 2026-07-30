@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <IsPackable>false</IsPackable>
     <Description>Pal.DDD AI 提示模板 — 聚合根/领域事件/命令处理器/查询处理器/投影处理器/Saga 编排器/值对象的代码生成模板</Description>
     <PackageTags>DDD;AI;prompts;code-generation;templates</PackageTags>
     <IncludeBuildOutput>false</IncludeBuildOutput>
