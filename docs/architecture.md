@@ -1,6 +1,6 @@
 # 架构说明
 
-Pal.DDD 采用小型、显式、AOT 友好的 Clean Architecture 分层架构。30 个源项目按依赖方向从 Core 到 Infrastructure/Adapters 逐层排列。项目不是应用框架，而是一组可组合的 DDD/CQRS/消息/事务基础设施库。
+Pal.DDD 采用小型、显式、AOT 友好的 Clean Architecture 分层架构。36 个源项目按依赖方向从 Core 到 Infrastructure/Adapters 逐层排列。项目不是应用框架，而是一组可组合的 DDD/CQRS/消息/事务基础设施库。
 
 ## 分层边界
 

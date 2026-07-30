@@ -152,11 +152,21 @@ Pal.DDD 当前做法：
 - Projection rebuild ActivitySource instrumentation 使用静态 `PalActivitySource`，不依赖 OpenTelemetry runtime package。
 - Schema Evolution 使用已注册 `JsonTypeInfo` 和显式 converter，不启用反射 fallback。
 
-## Dapper 适配层 IL3058 抑制
+## PalORM 适配层 — 推荐 AOT 路径（真 AOT）
 
-Dapper 适配项目使用项目级 IL3058 抑制（`<NoWarn>$(NoWarn);IL3058</NoWarn>`），把 Dapper 的动态能力边界限制在外圈 adapter。`Dapper.AOT` 1.0.52 已接入 ``PalDDD.Dapper`、`PalDDD.Dapper.MySql`、`PalDDD.Dapper.PostgreSql` 和 `PalDDD.Dapper.Sqlite` 四个 Dapper 项目：项目文件显式引用包并启用 `<InterceptorsPreviewNamespaces>...;Dapper.AOT</InterceptorsPreviewNamespaces>`，保留分析器诊断。
+PalORM 是面向 Native AOT 的 .NET 11 微 ORM，通过源生成器在编译期生成 RowFactory/CommandFactory，零反射、零 IL.Emit。
 
-当前不全局启用 `[module:DapperAot]`。SQLite TEXT 列上的 `Guid` / `DateTimeOffset` 兼容性仍需按具体查询路径验证，EventLog 和 Projection checkpoint 读取路径使用 DTO 物化并通过集成测试覆盖。待 Dapper.AOT RowFactory 自定义类型映射成熟后，再逐方法启用预编译物化。
+- **PalDDD.PalORM**：核心层，7 Store + UnitOfWork，`IsAotCompatible=true`，`PublishAot=true` 验证通过。
+- **PalDDD.PalORM.Sqlite / PostgreSql / MySql**：方言包，固化 Provider 类型供 DI 注册，`IsAotCompatible=true`。
+- 底层依赖 PalORM 5.1.0（`PalORM.Core` + `PalORM.SourceGen` + 方言 Provider）。
+
+PalORM 是推荐的持久化路径——完整链路 Native AOT 支持，取代 Dapper 的反射路径。
+
+## Dapper 适配层 — ⚠️ AOT 假象（逐步弃用）
+
+Dapper 适配项目使用项目级 IL3058 抑制（`<NoWarn>$(NoWarn);IL3058</NoWarn>`），把 Dapper 的动态能力边界限制在外圈 adapter。但 `[module:DapperAot]` 当前未全局启用——Dapper 的 AOT 兼容是声明层面的，实际运行时仍走反射路径。
+
+**结论**：Dapper 适配层的 AOT 兼容是假象（NoWarn IL3058 声明），不适用于 Native AOT 发布。推荐使用 PalORM 替代。
 
 所有库代码的 await 调用（143+ 处）均使用 `ConfigureAwait(false)`。所有时间获取（44+ 处）通过 `TimeProvider` 而非 `DateTimeOffset.UtcNow`。
 

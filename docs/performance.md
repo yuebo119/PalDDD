@@ -27,7 +27,7 @@
 | 替代性能烟测 | `dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj -- --smoke` | 通过；输出 4 组 Stopwatch + GC 分配数据 |
 | Native AOT 发布 | `dotnet publish samples/PalDDD.AotSample/PalDDD.AotSample.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishAot=true` | 通过 |
 | 全解决方案构建 | `dotnet build PalDDD.slnx --no-restore` | 通过；0 warning / 0 error |
-| 全解决方案测试 | `dotnet test PalDDD.slnx --no-restore` | 通过；745 passed / 2 failed / 6 skipped |
+| 全解决方案测试 | `dotnet test PalDDD.slnx --no-restore` | 通过；869 passed / 2 failed / 6 skipped |
 
 ## 已有 BenchmarkDotNet 产物
 

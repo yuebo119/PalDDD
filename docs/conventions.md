@@ -292,14 +292,14 @@ Pal.DDD/
 ├── Directory.Packages.props   # 中央包管理（CPM）
 ├── global.json                # SDK 版本锁定
 ├── PalDDD.slnx                # 解决方案（按层分 Folder）
-├── src/                       # 30 个源项目，Clean Architecture 分层
+├── src/                       # 36 个源项目，Clean Architecture 分层
 │   ├── PalDDD.Core/           # 领域层
 │   ├── PalDDD.Serialization/  # 应用抽象层
 │   ├── PalDDD.CQRS/           # 应用核心层
 │   ├── PalDDD.Dapper/            # Dapper 基础设施层（事务+事件日志+投影+仓储）
 │   ├── PalDDD.*.EFCore/       # EF Core 基础设施层
 │   └── PalDDD.Prompts/        # AI 提示模板
-├── test/                      # 14 个测试项目（1:1 映射 src，不含共享基础设施 PalDDD.Testing）
+├── test/                      # 16 个测试项目（1:1 映射 src，不含共享基础设施 PalDDD.Testing）
 ├── bench/                     # BenchmarkDotNet 基准
 ├── samples/                   # AOT / ECommerce / MinimalApi 示例
 └── docs/                      # 架构 / 使用 / 教程 / ADR / 评审
@@ -333,7 +333,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-07-02 全量验证）：370 源文件·30 项目·0 违规。子目录仅 2 个例外（§4.7）。
+**合规状态**（2026-07-02 全量验证）：200 源文件·36 项目·0 违规。子目录仅 2 个例外（§4.7）。
 
 ### 4.4 csproj 极简
 
@@ -361,12 +361,12 @@ csproj 只写 `<Project Sdk>` + `<PackageReference Include="..." />`（无 Versi
 
 | 规则 | 详情 |
 |------|------|
-| **默认扁平** | 所有 `.cs` 文件在项目根目录。28/30 项目遵循。 |
+| **默认扁平** | 所有 `.cs` 文件在项目根目录。34/36 项目遵循。 |
 | **例外 1** | `AspNetCore/` 子目录 — ASP.NET 中间件（`ExceptionMiddleware.cs`）和端点映射（`EndpointExtensions.cs`·`HealthCheckExtensions.cs`）因涉及 `RequestDelegate`/`IApplicationBuilder` 类型，与纯 DI 注册分离 |
 | **例外 2** | `.pal/prompts/` — AI 提示模板（8 个 `.prompt.md` 文件），非源码文件 |
 | **禁止** | `Properties/`·`Models/`·`Services/`·`Helpers/`·`Utils/` 等子目录。新增子目录须在本表注册 |
 
-**合规状态**：30 项目仅 2 个例外目录（均为已注册）。0 违规。
+**合规状态**：36 项目仅 2 个例外目录（均为已注册）。0 违规。
 
 ### 4.8 项目结构自检清单
 
@@ -512,7 +512,7 @@ public sealed class SagaKeyValidationTests { ... }
 
 ### 5.7 架构边界测试
 
-`ArchitectureBoundaryTests.cs`（25+ 测试方法）将 ADR 和 Clean Architecture 落地为可执行断言：
+`ArchitectureBoundaryTests.cs`（33 个测试方法）将 ADR 和 Clean Architecture 落地为可执行断言：
 
 - 项目引用禁令矩阵（`[Theory]` + InlineData）
 - 源码内容关键字禁令（扫描 `.cs`，过滤注释行）

@@ -32,9 +32,9 @@
 ```xml
 <!-- Directory.Build.props（唯一版本源） -->
 <PropertyGroup>
-    <VersionPrefix>1.0.0</VersionPrefix>
-    <VersionSuffix>preview.1</VersionSuffix>
-    <!-- 最终 Version = 1.0.0-preview.1 -->
+    <VersionPrefix>1.1.0</VersionPrefix>
+    <VersionSuffix></VersionSuffix>
+    <!-- 最终 Version = 1.1.0 -->
 </PropertyGroup>
 ```
 
@@ -111,6 +111,25 @@ DDD 项目分层（对照 conventions §4.2 解决方案分层）：
 | `PalDDD.Dapper.Sqlite` | `src/PalDDD.Dapper.Sqlite/` | ✅ |
 | `PalDDD.Dapper.MySql` | `src/PalDDD.Dapper.MySql/` | ✅ |
 
+#### Infra-PalORM 层（真 AOT，推荐）
+
+| 包 ID | 项目路径 | 公开发布 |
+|-------|---------|:------:|
+| `PalDDD.PalORM` | `src/PalDDD.PalORM/` | ✅ |
+| `PalDDD.PalORM.PostgreSql` | `src/PalDDD.PalORM.PostgreSql/` | ✅ |
+| `PalDDD.PalORM.MySql` | `src/PalDDD.PalORM.MySql/` | ✅ |
+| `PalDDD.PalORM.Sqlite` | `src/PalDDD.PalORM.Sqlite/` | ✅ |
+
+#### PalORM 第三方依赖（独立项目，非 PalDDD src）
+
+| 包 ID | NuGet 版本 | 说明 |
+|-------|:--:|------|
+| `PalORM.Core` | 5.1.0 | PalORM 引擎核心 |
+| `PalORM.SourceGen` | 5.1.0 | PalORM 源生成器 |
+| `PalORM.PostgreSql` | 5.1.0 | PG 方言 Provider |
+| `PalORM.MySql` | 5.1.0 | MySQL 方言 Provider |
+| `PalORM.Sqlite` | 5.1.0 | SQLite 方言 Provider |
+
 #### Infra-Messaging 层（非 AOT 适配器）
 
 | 包 ID | 项目路径 | 公开发布 |
@@ -156,7 +175,7 @@ DDD 项目分层（对照 conventions §4.2 解决方案分层）：
 
 | 项目 | 当前 NuGet 残留 | 禁止原因 | 处置 |
 |------|:--:|------|------|
-| `PalDDD.EntityFrameworkCore` | 1.0.0-preview.1（已 Unlist） | 源码未入库（OBS-068），被 PalORM 替代 | 永不打包，NuGet 旧包保持 Unlist |
+| `PalDDD.EntityFrameworkCore` | 1.1.0（已 Unlist） | 源码未入库（OBS-068），被 PalORM 替代 | 永不打包，NuGet 旧包保持 Unlist |
 | `PalDDD.Prompts` | 1.1.0 | AI 代码生成模板，非运行时库 | `<IsPackable>false>`，NuGet 包 Unlist |
 | `PalDDD.Testing` | 1.1.0（已 Unlist） | 测试基础设施，仅项目内部用 | `<IsPackable=false>`，NuGet 包保持 Unlist |
 | `PalORM.Testing` | 5.0.0（已 Unlist） | PalORM 测试基础设施 | NuGet 包保持 Unlist |
@@ -259,7 +278,7 @@ unzip -p /tmp/release-preview/PalDDD.Core.*.nupkg '*.nuspec' | grep -E "<(id|ver
 
 **必须字段**：
 - `<id>` 正确（如 `PalDDD.Core`）
-- `<version>` 与 `Directory.Build.props` 一致（如 `1.0.0-preview.1`）
+- `<version>` 与 `Directory.Build.props` 一致（如 `1.1.0`）
 - `<projectUrl>` 指向 `https://github.com/yuebo119/PalDDD`
 - `<repository url=... commit=.../>` 含 commit hash（证明 SourceLink 生效）
 - `<releaseNotes>` 指向 CHANGELOG.md
@@ -282,9 +301,9 @@ git log -1 --format="%h %s"
 # 2. 确认版本号已更新到目标版本
 grep -E "VersionPrefix|VersionSuffix" Directory.Build.props
 
-# 3. 打 tag（tag 名格式：v + 版本号，如 v1.0.0-preview.1）
-git tag v1.0.0-preview.1
-git push origin v1.0.0-preview.1
+# 3. 打 tag（tag 名格式：v + 版本号，如 v1.1.0）
+git tag v1.1.0
+git push origin v1.1.0
 
 # 4. 观察 Actions 运行
 # https://github.com/yuebo119/PalDDD/actions/workflows/release.yml
@@ -381,7 +400,7 @@ gh run list --workflow=release.yml --limit 1
 
 访问 https://github.com/yuebo119/PalDDD/releases：
 
-- ✅ Release 标题 = tag 名（如 `v1.0.0-preview.1`）
+- ✅ Release 标题 = tag 名（如 `v1.1.0`）
 - ✅ Body 来自 CHANGELOG.md
 - ✅ Assets 含全部 nupkg 文件
 
@@ -390,8 +409,8 @@ gh run list --workflow=release.yml --limit 1
 ```bash
 mkdir /tmp/palddd-consumer-test && cd /tmp/palddd-consumer-test
 dotnet new console
-dotnet add package PalDDD.Base --version 1.0.0-preview.1
-dotnet add package PalDDD.Extension --version 1.0.0-preview.1
+dotnet add package PalDDD.Base --version 1.1.0
+dotnet add package PalDDD.Extension --version 1.1.0
 dotnet restore
 dotnet build   # 应成功，无警告
 ```
@@ -428,20 +447,20 @@ dotnet build   # 应成功，无警告
 
 ```bash
 # 删本地+远程旧 tag
-git tag -d v1.0.0-preview.1
-git push origin :refs/tags/v1.0.0-preview.1
+git tag -d v1.1.0
+git push origin :refs/tags/v1.1.0
 
 # 在最新 main 上重打
 git checkout main && git pull origin main
-git tag v1.0.0-preview.1
-git push origin v1.0.0-preview.1
+git tag v1.1.0
+git push origin v1.1.0
 ```
 
 ---
 
 ## 九、发布实践教训
 
-> ⚠️ **首次发布待补**：DDD 项目当前未实际发布过（v1.0.0-preview.1 待发）。
+> ⚠️ **首次发布待补**：DDD 项目已发布 1.1.0 正式版到 NuGet.org（35 个 PalDDD 包 + 5 个 PalORM 包）。
 > 首次实际发布后，在此章节补充实测教训（参考 ORM 项目 `docs/发布规范.md` §9 的 9 条 v5.0.0 教训）。
 
 预期可能踩的坑（基于 ORM 项目经验预判）：
@@ -474,7 +493,7 @@ dotnet build PalDDD.slnx --no-incremental
 dotnet test PalDDD.slnx --no-restore --no-build
 
 # 3. 升版本（同一次提交）
-# 编辑 Directory.Build.props: <VersionSuffix>preview.1</VersionSuffix> → preview.2
+# 编辑 Directory.Build.props: <VersionSuffix></VersionSuffix> → preview.2
 # 编辑 README.md badge
 # 编辑 CHANGELOG.md
 git add Directory.Build.props README.md CHANGELOG.md
@@ -488,7 +507,7 @@ git commit -m "功能：xxx + 升版本 preview.2"
 
 ```bash
 # 移除 VersionSuffix，升 VersionPatch
-# <VersionPrefix>1.0.0</VersionPrefix> → 1.0.1
+# <VersionPrefix>1.1.0</VersionPrefix> → 1.0.1
 # 删除 <VersionSuffix>preview.N</VersionSuffix>
 ```
 

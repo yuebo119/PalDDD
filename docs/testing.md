@@ -57,7 +57,7 @@
                           └────────────────────┘
 ```
 
-### 测试项目清单（15 个）
+### 测试项目清单（16 个）
 
 | 项目 | 类型 | 职责 |
 |------|------|------|
@@ -66,15 +66,16 @@
 | `PalDDD.CQRS.Tests` | 单元 | Dispatcher/PipelineStateMachine/CommandHandler/QueryHandler |
 | `PalDDD.Transactions.Tests` | 单元 + 集成 | Saga/Outbox/Inbox + 租约锁 + 补偿链 + 死信重投递 |
 | `PalDDD.EventLog.Tests` | 单元 | IEventLog 实现 + RecordedEvent 零拷贝 |
-| `PalDDD.Idempotency.Tests` | 单元 | IIdempotencyStore + IdempotencyProcessor |
 | `PalDDD.Projections.EventLog.Tests` | 单元 | EventLog 投影源 + 断点续传 |
 | `PalDDD.Messaging.Tests` | 单元 | IMessageBroker InMemory 实现 + MessageCatalog |
 | `PalDDD.Serialization.Tests` | 单元 | IMessageSerializer + MessageEvolutionPipeline + SchemaVersion |
 | `PalDDD.DependencyInjection.Tests` | 单元 | **ArchitectureBoundaryTests 33 方法机械守护** + DI 注册规范 |
 | `PalDDD.Repository.EFCore.Tests` | 集成 | UnitOfWork + OutboxDomainEventInterceptor Scoped |
 | `PalDDD.Hosting.AspNetCore.Tests` | 集成 | ExceptionMiddleware + AspNetCore 中间件链 |
-| `PalDDD.Integration.Tests` | 集成 | Testcontainers 真库（PG/MySQL/SQLite）+ OutboxDbContext 全链路 |
+| `PalDDD.Integration.Tests` | 集成 | Testcontainers 真库（PG/MySQL/SQLite）+ OutboxDbContext 全链路 + Idempotency |
 | `PalDDD.Messaging.Integration.Tests` | 集成 | Testcontainers 真库（RabbitMQ/Kafka）+ Broker 抽象对称 |
+| `PalDDD.PalORM.Tests` | 集成 | PalORM 7 Store + 跨方言（SQLite/PG/MySQL）+ 并发竞争 |
+| `PalDDD.Compression.Tests` | 单元 + 集成 | 系统压缩器往返（Brotli/GZip/Deflate）+ Native（LZ4/ZStandard） |
 | `PalDDD.Analyzers.Tests` | 单元 | PDDD001-015 编译期诊断负向测试 |
 
 **共享基建**：`PalDDD.Testing`（非测试项目，提供 FakeTimeProvider/RecordingActivityListener/RecordingMeterListener/FixedOptionsMonitor）

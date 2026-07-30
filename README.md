@@ -10,7 +10,7 @@
 
 ---
 
-Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox 的租约锁并发与死信恢复、Saga 的补偿编排与超时检测——标准化为 35 个独立 NuGet 包。不做 `IRepository<T>`、不定义 `IIntegrationEvent`、不实施装配扫描。业务代码保持纯 C#，框架只提供基础设施。
+Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox 的租约锁并发与死信恢复、Saga 的补偿编排与超时检测——标准化为 40 个独立 NuGet 包。不做 `IRepository<T>`、不定义 `IIntegrationEvent`、不实施装配扫描。业务代码保持纯 C#，框架只提供基础设施。
 
 开箱即用：**零反射命令分发 · 租约锁并发 Outbox · 自动补偿 Saga · 不可变 EventLog · 断点续传 Projection · 编译时 DDD 合规检查。**
 
@@ -119,7 +119,7 @@ InMemory 实现覆盖全部抽象接口，单元测试和原型开发无需外�
 
 ---
 
-## NuGet 包清单（35 个）
+## NuGet 包清单（40 个）
 
 | 包 | 版本 | 说明 |
 |------|:--:|------|
@@ -254,7 +254,7 @@ await dispatcher.SendAsync(new SubmitOrder(new OrderId(), "Customer", 100m));
 |--------|:--:|:--:|------|
 | **PalDDD.PalORM** | ✅ **真 AOT** | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / **Idempotency** / UnitOfWork（源生成 + 编译期 SQL，[详见适配层文档](docs/palorm-adapter.md)） |
 | PalDDD.Dapper | ⚠️ 假象 | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / UnitOfWork（`[module:DapperAot]` 实际禁用，靠 NoWarn IL3058 声明兼容） |
-| PalDDD.EntityFrameworkCore | ❌ | PG / MySQL / SQLite | 同上 + Hi/Lo 位置分配器（反射重，`IsAotCompatible=false`） |
+| ~~PalDDD.EntityFrameworkCore~~ | ❌ | ~~PG / MySQL / SQLite~~ | ~~已废弃，源码未入库（OBS-068），被 PalORM 替代~~ |
 
 ### 数据库方言扩展
 | 方言 | 特有能力 |
@@ -273,7 +273,7 @@ await dispatcher.SendAsync(new SubmitOrder(new OrderId(), "Customer", 100m));
 | PalDDD.CQRS · EventLog · Messaging · Transactions · Projections · DI | ✅ | 同上 |
 | **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **真 AOT** | 源生成 RowFactory/CommandFactory，`PublishAot=true` 验证通过（[PalOrmSample](samples/PalDDD.PalOrmSample/)） |
 | PalDDD.Dapper + PostgreSql / MySql / Sqlite | ⚠️ 假象 | Dapper.AOT `[module:DapperAot]` 实际禁用，靠 `<NoWarn>IL3058</NoWarn>` 声明兼容（详见 [PalORM 适配层文档](docs/palorm-adapter.md)） |
-| PalDDD.EntityFrameworkCore | ❌ | EF Core 运行时限制 |
+| ~~PalDDD.EntityFrameworkCore~~ | ❌ | ~~已废弃~~ |
 | PalDDD.Messaging.Kafka · RabbitMQ | ❌ | Confluent.Kafka / RabbitMQ.Client 限制 |
 | PalDDD.Hosting.AspNetCore | ❌ | FrameworkReference 限制 |
 
@@ -304,7 +304,7 @@ dotnet run --configuration Release --project bench/PalDDD.Benchmarks -- --smoke
 ## 项目结构
 
 ```
-src/                         30 源项目 · Clean Architecture
+src/                         36 源项目 · Clean Architecture
 ├── Domain/                  Core · SourceGen · Analyzers
 ├── App-Abstractions/        Serialization · Messaging · Compression
 ├── App-Core/                CQRS · EventLog · Idempotency · Projections · Transactions
@@ -314,7 +314,7 @@ src/                         30 源项目 · Clean Architecture
 ├── Hosting/                 DI · AspNetCore
 └── Metapackages/            Base · Extension · Prompts   # Base/Extension=聚合元包(仅 PackageReference，无源码)；Prompts=内容元包
 
-test/                        15 测试项目（TUnit）
+test/                        16 测试项目（TUnit）
 bench/                       BenchmarkDotNet 性能基准
 samples/                     AOT / ECommerce / MinimalApi 示例
 docs/                        架构 · 使用指南 · 教程 · ADR
@@ -383,7 +383,7 @@ MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Servi
 不支持 .NET 8/9/10（单目标 net11.0）。Saga 的 ChildSaga 和 DynamicStep 依赖 `MakeGenericType`，在 AOT 发布时不可用（标注了 `[RequiresDynamicCode]`）。不含内置的 EventStore 快照机制——需要快照策略的项目需要自行实现。
 
 **生产环境有谁在用？**
-Pal.DDD 处于 v1.0.0-preview 阶段，尚未公开发布 NuGet 包。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 750+ 用例。欢迎在非生产环境中试用并反馈。
+Pal.DDD 当前版本 v1.1.0，已发布到 NuGet.org。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 869 用例。欢迎在非生产环境中试用并反馈。
 
 ---
 
