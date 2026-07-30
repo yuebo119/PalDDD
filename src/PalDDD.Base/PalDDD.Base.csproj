@@ -13,6 +13,7 @@
     dotnet pack src/PalDDD.Base/PalDDD.Base.csproj
   -->
   <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <Description>Pal.DDD 基础元包 — 最小编程模型：领域基元 + 序列化 + 压缩 + 源生成 + 编译时分析器。零外部依赖，AOT 安全。</Description>
     <PackageTags>DDD;Entity;ValueObject;DomainEvent;Specification;AOT;.NET11;Foundation</PackageTags>
     <IncludeBuildOutput>false</IncludeBuildOutput>
@@ -21,12 +22,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="PalDDD.Analyzers.CodeFixes" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Analyzers" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Compression" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Core.SourceGen" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Core" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Serialization" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Analyzers.CodeFixes" Version="1.1.0" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Analyzers" Version="1.1.0" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Compression" Version="1.1.0" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Core.SourceGen" Version="1.1.0" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Core" Version="1.1.0" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Serialization" Version="1.1.0" PrivateAssets="build;analyzers" />
     <PackageReference Include="ByteAether.Ulid" Version="1.0.0" PrivateAssets="build;analyzers" />
   </ItemGroup>
 
