@@ -175,26 +175,34 @@ public sealed class BrokerIntegrationTests
     }
 
     [Test]
+    [NotInParallel("broker-integration")]
     public async Task Kafka_PublishAndSubscribe_RoundTripsMessage(CancellationToken cancellationToken)
     {
         var (broker, _) = Fixture.CreateKafkaBroker();
         var tag = Guid.NewGuid().ToString("N")[..8];
         var received = new TaskCompletionSource<TestMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var consumerReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var sub = await broker.SubscribeAsync<TestMessage>((msg, ct) =>
         {
+            consumerReady.TrySetResult(); // handler 首次回调 = consumer join group + 消费链路通
             if (msg.Name == $"kafka-rt-{tag}") received.TrySetResult(msg);
             return ValueTask.CompletedTask;
         }, cancellationToken);
 
-        await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
+        // 先发 warmup，等 handler 确认 consumer ready
+        await broker.PublishAsync(new TestMessage($"kafka-ready-{tag}"), cancellationToken);
+        await consumerReady.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+
+        // consumer ready 后再发测试消息
         await broker.PublishAsync(new TestMessage($"kafka-rt-{tag}"), cancellationToken);
 
-        var got = await received.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
+        var got = await received.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
         await Assert.That(got.Name).IsEqualTo($"kafka-rt-{tag}");
     }
 
     [Test]
+    [NotInParallel("broker-integration")]
     public async Task Kafka_HandlerCancellation_DoesNotLogHandlerFailure(CancellationToken cancellationToken)
     {
         var logger = new CapturingLogger<KafkaBroker>();
@@ -207,13 +215,13 @@ public sealed class BrokerIntegrationTests
 
         var sub = await broker.SubscribeAsync<TestMessage>(async (msg, ct) =>
         {
-            // 第一条消息作为 warmup 确认 consumer ready
+            // 第一条消息：consumer 已 join group，确认消费链路通
             if (msg.Name == $"kafka-ready-{tag}")
             {
                 ready.TrySetResult();
                 return;
             }
-            // 第二条消息触发 cancel handler 测试
+            // 第二条消息：触发 cancel handler 测试
             if (msg.Name == $"kafka-cancel-{tag}" && !handlerEntered)
             {
                 handlerEntered = true;
@@ -222,14 +230,13 @@ public sealed class BrokerIntegrationTests
             }
         }, cancellationToken);
 
-        // 先发 warmup 消息确认 consumer ready
+        // 先发 warmup，等 handler 确认 consumer ready
         await broker.PublishAsync(new TestMessage($"kafka-ready-{tag}"), cancellationToken);
-        // 等待 consumer 确认 ready（证明 join group 完成 + 消费链路通）
-        await ready.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
 
-        // consumer 已 ready，再发测试消息
+        // consumer ready 后再发 cancel 测试消息
         await broker.PublishAsync(new TestMessage($"kafka-cancel-{tag}"), cancellationToken);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
         await sub.DisposeAsync();
 
         await Assert.That(logger.ErrorCount).IsEqualTo(0);
@@ -243,20 +250,25 @@ public sealed class BrokerIntegrationTests
         var received = new List<TestMessage>();
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var prefix = $"kafka-multi-{Guid.NewGuid():N}".Substring(0, 20);
+        var consumerReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var sub = await broker.SubscribeAsync<TestMessage>((msg, ct) =>
         {
+            consumerReady.TrySetResult(); // handler 首次回调 = 消费链路通
             if (!msg.Name.StartsWith(prefix, StringComparison.Ordinal)) return ValueTask.CompletedTask;
             lock (received) received.Add(msg);
             if (received.Count >= 5) done.TrySetResult();
             return ValueTask.CompletedTask;
         }, cancellationToken);
 
-        await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
+        // 先发 warmup，等 handler 确认 consumer ready
+        await broker.PublishAsync(new TestMessage($"kafka-ready-{prefix}"), cancellationToken);
+        await consumerReady.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+
         for (var i = 0; i < 5; i++)
             await broker.PublishAsync(new TestMessage($"{prefix}-{i}"), cancellationToken);
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
         await Assert.That(received.Count).IsEqualTo(5);
     }
 
