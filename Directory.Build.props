@@ -46,7 +46,7 @@
     <OptimizationPreference>Speed</OptimizationPreference>
     <!-- AOT 下保留异常行号信息 (.NET 11 Preview 4+) -->
     <StackTraceLineNumberSupport>true</StackTraceLineNumberSupport>
-    <VersionPrefix>1.0.0</VersionPrefix>
+    <VersionPrefix>1.1.0</VersionPrefix>
     <VersionSuffix></VersionSuffix>
     <Authors>PalDDD</Authors>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
