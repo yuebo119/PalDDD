@@ -13,6 +13,7 @@
     dotnet pack src/PalDDD.Extension/PalDDD.Extension.csproj
   -->
   <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <Description>Pal.DDD 扩展元包 — 全量 DDD 能力：CQRS + 事件日志 + 幂等 + 投影 + 消息 + 事务 + DI 装配。全 AOT 兼容。</Description>
     <PackageTags>DDD;CQRS;EventSourcing;Outbox;Inbox;Saga;Projections;Idempotency;AOT;.NET11;FullStack</PackageTags>
     <IncludeBuildOutput>false</IncludeBuildOutput>
@@ -21,14 +22,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="PalDDD.CQRS" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.DependencyInjection" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.EventLog" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Idempotency" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Messaging" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Projections.EventLog" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Projections" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Transactions" Version="1.0.0-preview.1" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.CQRS" Version="1.1.0" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.DependencyInjection" Version="1.1.0" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.EventLog" Version="1.1.0" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Idempotency" Version="1.1.0" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Messaging" Version="1.1.0" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Projections.EventLog" Version="1.1.0" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Projections" Version="1.1.0" PrivateAssets="build;analyzers" />
+    <PackageReference Include="PalDDD.Transactions" Version="1.1.0" PrivateAssets="build;analyzers" />
     <PackageReference Include="ByteAether.Ulid" Version="1.0.0" PrivateAssets="build;analyzers" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0-preview.5.26302.115" PrivateAssets="build;analyzers" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="11.0.0-preview.5.26302.115" PrivateAssets="build;analyzers" />
