@@ -2,7 +2,7 @@
 
 **面向 .NET 11 的 DDD/CQRS/Event Sourcing 基础设施框架 —— 零运行时反射、Native AOT 链路完整、无过度抽象。**
 
-[![NuGet](https://img.shields.io/badge/nuget-v1.0.0--preview.1-blue)](https://www.nuget.org/packages/PalDDD.Base)
+[![NuGet](https://img.shields.io/badge/nuget-v1.1.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)
 [![CI](https://img.shields.io/badge/build-0_errors_0_warnings-brightgreen)]()
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_Dapper-green)](docs/aot.md)
@@ -10,7 +10,7 @@
 
 ---
 
-Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox 的租约锁并发与死信恢复、Saga 的补偿编排与超时检测——标准化为 30 个独立 NuGet 包。不做 `IRepository<T>`、不定义 `IIntegrationEvent`、不实施装配扫描。业务代码保持纯 C#，框架只提供基础设施。
+Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox 的租约锁并发与死信恢复、Saga 的补偿编排与超时检测——标准化为 35 个独立 NuGet 包。不做 `IRepository<T>`、不定义 `IIntegrationEvent`、不实施装配扫描。业务代码保持纯 C#，框架只提供基础设施。
 
 开箱即用：**零反射命令分发 · 租约锁并发 Outbox · 自动补偿 Saga · 不可变 EventLog · 断点续传 Projection · 编译时 DDD 合规检查。**
 
@@ -58,29 +58,64 @@ DIM 桥接消除反射、源码生成器注册类型、FrozenDictionary 替代�
 
 ## 安装
 
-```bash
-# 基础层：领域基元 + 序列化 + 压缩 + 编译时分析器
-dotnet add package PalDDD.Base
+### 方式一：元包（推荐快速上手）
 
-# 扩展层：CQRS + EventLog + Outbox/Inbox/Saga + Projections + DI 装配
+```xml
+<!-- L1 基础元包：领域核心 + 序列化 + 压缩 + 源生成 + 编译期分析器 -->
+<PackageReference Include="PalDDD.Base" />
+
+<!-- L2 全量元包：CQRS + 事件日志 + 幂等 + 投影 + 消息 + 事务 + DI -->
+<PackageReference Include="PalDDD.Extension" />
+
+<!-- 按需选一个持久化适配器 -->
+<PackageReference Include="PalDDD.PalORM.Sqlite" />  <!-- 或 PostgreSql / MySql / Dapper -->
+```
+
+### 方式二：按需引用（精确控制依赖）
+
+```xml
+<!-- 只要领域核心 -->
+<PackageReference Include="PalDDD.Core" />
+
+<!-- 加 CQRS -->
+<PackageReference Include="PalDDD.CQRS" />
+
+<!-- 加 Outbox/Saga 事务 -->
+<PackageReference Include="PalDDD.Transactions" />
+<PackageReference Include="PalDDD.Transactions.EFCore" />
+
+<!-- 加 Kafka 消息 -->
+<PackageReference Include="PalDDD.Messaging.Kafka" />
+```
+
+### CLI 安装
+
+```bash
+# 元包方式
+dotnet add package PalDDD.Base
 dotnet add package PalDDD.Extension
 
-# PalORM 持久化 — 真 AOT（源生成 + 编译期 SQL），吸取 Dapper+EFCore 经验的第三条路（推荐）
-dotnet add package PalDDD.PalORM.Sqlite       # 或 PalORM.PostgreSql / PalORM.MySql
+# PalORM 持久化 — 真 AOT（源生成 + 编译期 SQL，推荐）
+dotnet add package PalDDD.PalORM.Sqlite          # 或 PostgreSql / MySql
 
-# Dapper 持久化 — 经典手写 SQL 路径（维护中，逐步迁移到 PalORM）
-dotnet add package PalDDD.Dapper
+# Dapper 持久化 — 经典手写 SQL（维护中，逐步迁移到 PalORM）
 dotnet add package PalDDD.Dapper.PostgreSql
 
-# EF Core 持久化 — 功能完整，复杂查询场景（需要 Migration/LINQ/ChangeTracker）
-dotnet add package PalDDD.EntityFrameworkCore
-
-# 消息代理 — 可选，InMemory 实现覆盖全部接口
+# 消息代理
 dotnet add package PalDDD.Messaging.Kafka
 dotnet add package PalDDD.Messaging.RabbitMQ
 ```
 
 InMemory 实现覆盖全部抽象接口，单元测试和原型开发无需外部依赖。
+
+### 场景推荐
+
+| 场景 | 推荐引用 |
+|------|---------|
+| 学习 / 原型 | Base + Extension + PalORM.Sqlite |
+| 生产微服务 | Core + CQRS + Transactions + Transactions.EFCore + PalORM.PostgreSql + Messaging.Kafka |
+| 只用领域模型 | Core + Serialization |
+| 简单 CRUD API | Core + CQRS + Repository.EFCore + Hosting.AspNetCore |
 
 ---
 
