@@ -1,5 +1,7 @@
 # Pal.DDD
 
+[English](README.en.md) | **中文**
+
 **面向 .NET 11 的 DDD/CQRS/Event Sourcing 基础设施框架 —— 零运行时反射、Native AOT 链路完整、无过度抽象。**
 
 [![NuGet](https://img.shields.io/badge/nuget-v1.1.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
