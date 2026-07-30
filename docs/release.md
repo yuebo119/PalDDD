@@ -139,6 +139,7 @@ DDD 项目分层（对照 conventions §4.2 解决方案分层）：
 |-------|---------|:------:|
 | `PalDDD.Analyzers` | `src/PalDDD.Analyzers/` | ✅ |
 | `PalDDD.Analyzers.CodeFixes` | `src/PalDDD.Analyzers.CodeFixes/` | ✅ |
+| `PalDDD.Core.SourceGen` | `src/PalDDD.Core.SourceGen/` | ✅（analyzer 包，通过 Base 元包传递） |
 
 #### Metapackages（元包，只含 PackageReference）
 
@@ -146,14 +147,26 @@ DDD 项目分层（对照 conventions §4.2 解决方案分层）：
 |-------|---------|:------:|
 | `PalDDD.Base` | `src/PalDDD.Base/` | ✅（领域+序列化+压缩+分析器 组合） |
 | `PalDDD.Extension` | `src/PalDDD.Extension/` | ✅（CQRS+EventLog+Outbox+Saga+Projection+DI 组合） |
-| `PalDDD.Prompts` | `src/PalDDD.Prompts/` | ✅（含 `.pal/prompts/` 8 个 AI 模板） |
+| `PalDDD.Prompts` | `src/PalDDD.Prompts/` | ❌ AI 模板，非运行时库（见 §2.2） |
 
-### 2.2 不公开发布的项目
+### 2.2 禁止打包的项目（❌ 永不发布到 NuGet）
 
-| 项目 | 原因 | 处置 |
-|------|------|------|
-| `PalDDD.Core.SourceGen` | 编译期源生成器，作为 Analyzer 引用，不独立消费 | `<IsPackable>true</IsPackable>`（需随主包分发，PrivateAssets=all） |
-| `test/PalDDD.Testing` | 内部测试工具库，仅项目内测试使用 | `<IsPackable>false</IsPackable>`（待显式声明） |
+以下项目**严禁打包发布**。它们不是运行时库，用户不应 `PackageReference` 引用。
+必须在 csproj 中设 `<IsPackable>false</IsPackable>`。
+
+| 项目 | 当前 NuGet 残留 | 禁止原因 | 处置 |
+|------|:--:|------|------|
+| `PalDDD.EntityFrameworkCore` | 1.0.0-preview.1（已 Unlist） | 源码未入库（OBS-068），被 PalORM 替代 | 永不打包，NuGet 旧包保持 Unlist |
+| `PalDDD.Prompts` | 1.1.0 | AI 代码生成模板，非运行时库 | `<IsPackable>false>`，NuGet 包 Unlist |
+| `PalDDD.Testing` | 1.1.0（已 Unlist） | 测试基础设施，仅项目内部用 | `<IsPackable=false>`，NuGet 包保持 Unlist |
+| `PalORM.Testing` | 5.0.0（已 Unlist） | PalORM 测试基础设施 | NuGet 包保持 Unlist |
+| `PalDDD.AotSample` | 未发布 | CI AOT 验证示例 | `<IsPackable=false>` |
+| `PalDDD.ECommerce` | 未发布 | 电商场景示例代码 | `<IsPackable=false>` |
+
+**判定规则**：以下三类项目永不打包——
+1. **示例项目**（samples/）：AotSample / ECommerce / PalOrmSample / MinimalApi
+2. **测试基础设施**（test/ 共享层）：Testing
+3. **非运行时工具**：Prompts（AI 模板）、EntityFrameworkCore（废弃空壳）
 
 ### 2.3 包公开发布的判定标准
 
