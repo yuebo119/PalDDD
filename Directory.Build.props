@@ -35,7 +35,7 @@
       NU1900/1901/1902/1903/1904  NuGet 包漏洞/版本告警 — 已手动审计并升级传递依赖（Humanizer/System.Reflection），误报已评估
       ═══════════════════════════════════════════════════════════
     -->
-    <NoWarn>$(NoWarn);CA1062;CA2007;CA1307;CA2100;CA2016;CA1721;CA1512;CA1849;CA2000;CA1001;CA1725;CS1591;CS1573;CS1570;CS8620;NU1900;NU1901;NU1902;NU1903;NU1904;IL3058;CA1305</NoWarn>
+    <NoWarn>$(NoWarn);CA1062;CA2007;CA1307;CA2100;CA2016;CA1721;CA1512;CA1849;CA2000;CA1001;CA1725;CS1591;CS1573;CS1570;CS8620;NU1900;NU1901;NU1902;NU1903;NU1904;NU5104;IL3058;CA1305</NoWarn>
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
     <VerifyReferenceAotCompatibility>true</VerifyReferenceAotCompatibility>
@@ -47,7 +47,7 @@
     <!-- AOT 下保留异常行号信息 (.NET 11 Preview 4+) -->
     <StackTraceLineNumberSupport>true</StackTraceLineNumberSupport>
     <VersionPrefix>1.0.0</VersionPrefix>
-    <VersionSuffix>preview.1</VersionSuffix>
+    <VersionSuffix></VersionSuffix>
     <Authors>PalDDD</Authors>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/yuebo119/PalDDD</PackageProjectUrl>
