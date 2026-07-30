@@ -173,20 +173,40 @@ InMemory 实现覆盖全部抽象接口，单元测试和原型开发无需外�
 ```csharp
 using PalDDD.Core;
 
-[GenerateId(typeof(PalUlid))] public readonly partial record struct OrderId;
+// 强类型 ID — 编译期生成，零反射
+[GenerateId(typeof(PalUlid))]
+public readonly partial record struct OrderId;
 
+// 聚合根 — 单链表事件存储，线程安全
 public sealed class Order : AggregateRoot<OrderId>
 {
-    public void Submit(string name, decimal amount)
-        => RaiseEvent(new OrderSubmitted(Id.Value, name, amount));
+    public string CustomerName { get; private set; } = "";
+    public decimal Amount { get; private set; }
+
+    public static Order Create(string name, decimal amount)
+    {
+        var order = new Order();
+        order.RaiseEvent(new OrderCreated(order.Id, name, amount));
+        return order;
+    }
+
+    public void Cancel(string reason)
+        => RaiseEvent(new OrderCancelled(Id, reason));
 }
 
-[GenerateMessage(Name = "ordering.order-submitted.v1")]
-public sealed record OrderSubmitted(
-    PalUlid OrderId, string Name, decimal Amount
-) : DomainEvent, IDomainEvent
+// 领域事件 — sealed record + [GenerateMessage] 源生成注册
+[GenerateMessage(Name = "ordering.order-created.v1")]
+public sealed record OrderCreated(PalUlid OrderId, string Name, decimal Amount)
+    : DomainEvent, IDomainEvent
 {
-    static string IDomainEvent.EventName => "ordering.order-submitted.v1";
+    static string IDomainEvent.EventName => "ordering.order-created.v1";
+}
+
+[GenerateMessage(Name = "ordering.order-cancelled.v1")]
+public sealed record OrderCancelled(PalUlid OrderId, string Reason)
+    : DomainEvent, IDomainEvent
+{
+    static string IDomainEvent.EventName => "ordering.order-cancelled.v1";
 }
 ```
 
@@ -195,29 +215,112 @@ public sealed record OrderSubmitted(
 ```csharp
 using PalDDD.CQRS;
 
-public sealed record SubmitOrder(OrderId Id, string Name, decimal Amount) : ICommand;
+public sealed record CreateOrder(string Name, decimal Amount) : ICommand<OrderId>;
 
-public sealed class SubmitOrderHandler : ICommandHandler<SubmitOrder, Unit>
+public sealed class CreateOrderHandler(IUnitOfWork uow) : ICommandHandler<CreateOrder, OrderId>
 {
-    public async ValueTask<Unit> HandleAsync(SubmitOrder cmd, CancellationToken ct)
+    public async ValueTask<OrderId> HandleAsync(CreateOrder cmd, CancellationToken ct)
     {
-        var order = new Order();
-        order.Submit(cmd.Name, cmd.Amount);
-        return Unit.Value;
+        var order = Order.Create(cmd.Name, cmd.Amount);
+        await uow.SaveChangesAsync(ct);  // 事务提交 + Outbox 原子写入
+        return order.Id;
     }
 }
 ```
 
-### 注册与分发
+### DI 注册与分发
 
 ```csharp
+// 1. 注册核心栈（Dispatcher + Pipeline + 序列化 + 分析器）
 services.AddPalCoreStack();
-services.AddPalCommandHandler<SubmitOrder, Unit, SubmitOrderHandler>();
-services.AddPalOrmSqlite(connectionString);  // PalORM（推荐，真 AOT）
+
+// 2. 注册命令处理器（编译时类型常量，无装配扫描）
+services.AddPalCommandHandler<CreateOrder, OrderId, CreateOrderHandler>();
+
+// 3. 选持久化适配器（推荐 PalORM，真 AOT）
+services.AddPalOrmSqlite(connectionString);    // 或 PostgreSql / MySql
+
+// 4. 注册 Outbox（事务内原子写入消息行 + 后台轮询发布）
 services.AddPalOutbox();
 
+// 5. 分发命令
 var dispatcher = provider.GetRequiredService<Dispatcher>();
-await dispatcher.SendAsync(new SubmitOrder(new OrderId(), "Customer", 100m));
+var orderId = await dispatcher.SendAsync(new CreateOrder("Alice", 99.9m));
+```
+
+---
+
+## 最佳实践
+
+### 1. 聚合根：用工厂方法 + RaiseEvent，不直接构造
+
+```csharp
+// ✅ 工厂方法内部 RaiseEvent — 保证事件链完整
+public static Order Create(string name, decimal amount)
+{
+    var order = new Order();
+    order.RaiseEvent(new OrderCreated(order.Id, name, amount));
+    return order;
+}
+
+// ❌ 直接 new + 属性赋值 — 绕过事件溯源，丢失审计
+var order = new Order { CustomerName = name, Amount = amount };
+```
+
+### 2. 消息命名：lowercase-kebab + 语义版本
+
+```csharp
+// ✅ 消息名遵循 lowercase-kebab + .vN 后缀
+[GenerateMessage(Name = "ordering.order-created.v1")]
+
+// ❌ PascalCase 或无版本后缀 — 分析器 PDDD006 会警告
+[GenerateMessage(Name = "OrderCreated")]
+```
+
+### 3. 持久化选型：PalORM 优先（真 AOT）
+
+```csharp
+// ✅ PalORM — 编译期 SQL 生成，PublishAot 验证通过
+services.AddPalOrmPostgreSql(connectionString);
+
+// ⚠️ Dapper — 运行时反射，AOT 假象（逐步弃用）
+services.AddPalDapper(DapperDbType.PostgreSql, connectionString);
+
+// ✅ EF Core — 需要 Migration / LINQ / ChangeTracker 的场景
+services.AddPalOutboxUnitOfWork<OutboxDbContext>();
+```
+
+### 4. Outbox + Inbox：保证消息可靠投递
+
+```csharp
+// 命令处理器内：事务提交时原子写入 Outbox 消息行
+public async ValueTask HandleAsync(CreateOrder cmd, CancellationToken ct)
+{
+    var order = Order.Create(cmd.Name, cmd.Amount);
+    await uow.SaveChangesAsync(ct);  // DB 事务 + Outbox 原子写入
+    // OutboxProcessor 后台轮询 → IMessageBroker.PublishAsync
+}
+
+// 消费侧：Inbox 保证幂等
+services.AddPalInbox();  // (ConsumerName, MessageId) 复合唯一约束 → 防重复处理
+```
+
+### 5. 测试：InMemory 实现零外部依赖
+
+```csharp
+// 单元测试无需数据库/Kafka — InMemory 实现覆盖全部接口
+var services = new ServiceCollection();
+services.AddPalCoreStack();
+services.AddPalOutbox();  // InMemoryOutboxStore 自动注册
+// 直接测 Dispatcher / Outbox / Saga 逻辑
+```
+
+### 6. 源生成器：改 Row DTO 后必须清 obj/bin
+
+```bash
+# 改 PalORM Row DTO 的 [Column] 后，源生成器用旧缓存 → 运行时空对象
+rm -rf src/*/obj src/*/bin test/*/obj test/*/bin
+dotnet build  # 重新触发源生成
 ```
 
 ---
