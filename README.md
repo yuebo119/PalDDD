@@ -95,10 +95,10 @@ DIM 桥接消除反射、源码生成器注册类型、FrozenDictionary 替代�
 dotnet add package PalDDD.Base
 dotnet add package PalDDD.Extension
 
-# PalORM 持久化 — 真 AOT（源生成 + 编译期 SQL，推荐）
+# PalORM 持久化 — 推荐，完整链路 Native AOT（源生成 + 编译期 SQL，零反射）
 dotnet add package PalDDD.PalORM.Sqlite          # 或 PostgreSql / MySql
 
-# Dapper 持久化 — 经典手写 SQL（维护中，逐步迁移到 PalORM）
+# Dapper 持久化 — 经典手写 SQL（⚠️ 不支持 AOT，逐步弃用）
 dotnet add package PalDDD.Dapper.PostgreSql
 
 # 消息代理
