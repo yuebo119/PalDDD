@@ -119,6 +119,48 @@ InMemory 实现覆盖全部抽象接口，单元测试和原型开发无需外�
 
 ---
 
+## NuGet 包清单（35 个）
+
+| 包 | 版本 | 说明 |
+|------|:--:|------|
+| **PalDDD.Base** | 1.1.0 | L1 元包：Core + Serialization + Compression + SourceGen + Analyzers |
+| **PalDDD.Extension** | 1.1.0 | L2 元包：CQRS + EventLog + Idempotency + Projections + Messaging + Transactions + DI |
+| **PalDDD.Core** | 1.1.0 | 领域核心：AggregateRoot / Entity / ValueObject / SmartEnum / DomainEvent / Specification |
+| **PalDDD.Serialization** | 1.1.0 | 序列化抽象：IMessageSerializer / MessageCatalog / MessageDescriptor |
+| **PalDDD.Serialization.Evolution** | 1.1.0 | 消息版本演化：Upcaster / Contract 验证 |
+| **PalDDD.Serialization.MemoryPack** | 1.1.0 | MemoryPack 二进制序列化（零反射、AOT） |
+| **PalDDD.Compression** | 1.1.0 | 压缩抽象：Brotli / GZip / Deflate（AOT 安全） |
+| **PalDDD.Compression.Native** | 1.1.0 | 原生压缩：LZ4 / ZStandard（P/Invoke，不可 AOT） |
+| **PalDDD.Core.SourceGen** | 1.1.0 | 源生成器：IdentityGenerator / EnumGenerator / MessageRegistryGenerator |
+| **PalDDD.Analyzers** | 1.1.0 | Roslyn 分析器：PDDD001-015 编译期 DDD 治理诊断 |
+| **PalDDD.Analyzers.CodeFixes** | 1.1.0 | 代码修复：PDDD008/010/013/015 |
+| **PalDDD.CQRS** | 1.1.0 | 命令查询职责分离：Dispatcher / Pipeline / Validation / Logging |
+| **PalDDD.EventLog** | 1.1.0 | 事件日志抽象：InMemoryEventLog + 乐观并发 |
+| **PalDDD.EventLog.EFCore** | 1.1.0 | EF Core 事件日志：EventLogDbContext + 全局位分配器 |
+| **PalDDD.Idempotency** | 1.1.0 | 幂等性抽象：IdempotencyProcessor + InMemoryStore |
+| **PalDDD.Idempotency.EFCore** | 1.1.0 | EF Core 幂等记录：IdempotencyDbContext |
+| **PalDDD.Projections** | 1.1.0 | 投影抽象：ProjectionProcessor + Checkpoint + Replay |
+| **PalDDD.Projections.EFCore** | 1.1.0 | EF Core 投影检查点：ProjectionCheckpointDbContext |
+| **PalDDD.Projections.EventLog** | 1.1.0 | EventLog 回放源：从事件流重建读模型 |
+| **PalDDD.Messaging** | 1.1.0 | 消息总线抽象：MessageBrokerBase + DomainEventDispatcher |
+| **PalDDD.Messaging.Kafka** | 1.1.0 | Kafka 适配：基于 Confluent.Kafka 2.x |
+| **PalDDD.Messaging.RabbitMQ** | 1.1.0 | RabbitMQ 适配：基于 RabbitMQ.Client 7.x |
+| **PalDDD.Transactions** | 1.1.0 | 事务/Saga：Outbox/Inbox 抽象 + InMemoryStore + 后台处理器 |
+| **PalDDD.Transactions.EFCore** | 1.1.0 | EF Core 事务：Outbox/Inbox/SagaState DbContext |
+| **PalDDD.DependencyInjection** | 1.1.0 | DI 注册入口：ServiceRegistration + AddPal 统一扩展 |
+| **PalDDD.Repository.EFCore** | 1.1.0 | EF Core 仓储：UnitOfWork + DomainEvent 拦截器 |
+| **PalDDD.Hosting.AspNetCore** | 1.1.0 | ASP.NET Core 集成：异常中间件 + 健康检查 + Minimal API 端点 |
+| **PalDDD.PalORM** | 1.1.0 | PalORM 持久化核心：7 Store + UnitOfWork（真 AOT + 源生成） |
+| **PalDDD.PalORM.PostgreSql** | 1.1.0 | PalORM PostgreSQL 方言：RETURNING / COPY |
+| **PalDDD.PalORM.MySql** | 1.1.0 | PalORM MySQL 方言：BulkCopy / 多值 INSERT |
+| **PalDDD.PalORM.Sqlite** | 1.1.0 | PalORM SQLite 方言：FTS5 / JSON1 |
+| **PalDDD.Dapper** | 1.1.0 | Dapper 持久化适配器（⚠️ AOT 假象，逐步弃用） |
+| **PalDDD.Dapper.PostgreSql** | 1.1.0 | Dapper PostgreSQL 增强：审计 / JSONB / 分片 / 软删除 |
+| **PalDDD.Dapper.MySql** | 1.1.0 | Dapper MySQL 增强 |
+| **PalDDD.Dapper.Sqlite** | 1.1.0 | Dapper SQLite 增强：TypeHandler / RowFactory / FTS5 |
+
+---
+
 ## 快速开始
 
 ### 领域模型
