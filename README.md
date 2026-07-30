@@ -252,75 +252,136 @@ var orderId = await dispatcher.SendAsync(new CreateOrder("Alice", 99.9m));
 
 ## 最佳实践
 
-### 1. 聚合根：用工厂方法 + RaiseEvent，不直接构造
+> 以下实践突出 Pal.DDD 的核心优势：**零反射 AOT、编译时治理、租约锁并发、源生成器 ID**。
+
+### 1. 强类型 ID：编译期生成，零反射，AOT 安全
+
+Pal.DDD 用源生成器在编译期生成 `From` / `New` / `Parse` / `JsonConverter` / `TypeConverter`——运行时零反射。
 
 ```csharp
-// ✅ 工厂方法内部 RaiseEvent — 保证事件链完整
-public static Order Create(string name, decimal amount)
-{
-    var order = new Order();
-    order.RaiseEvent(new OrderCreated(order.Id, name, amount));
-    return order;
-}
+// ✅ [GenerateId] 触发 IdentityGenerator 源生成器
+// 编译期生成 ISpanParsable + JsonConverter + TypeConverter
+[GenerateId(typeof(PalUlid))]      // Ulid（推荐，全序性）
+public readonly partial record struct OrderId;
 
-// ❌ 直接 new + 属性赋值 — 绕过事件溯源，丢失审计
-var order = new Order { CustomerName = name, Amount = amount };
+[GenerateId(typeof(Guid))]          // Guid
+public readonly partial record struct CustomerId;
+
+[GenerateId(typeof(int))]           // int（数据库自增）
+public readonly partial record struct OrderNumber;
+
+// 使用：编译期生成的方法直接可用
+var id = OrderId.New();              // Ulid/Guid 自动生成
+var parsed = OrderId.Parse("01HXY...", null);
+var fromDb = OrderId.From(someUlid);
 ```
 
-### 2. 消息命名：lowercase-kebab + 语义版本
+### 2. 编译时 DDD 治理：15 条分析器自动检查
+
+Pal.DDD 不依赖 Code Review 记忆——15 条 Roslyn 分析器（PDDD001-015）在编译阶段拦截不合规代码。
 
 ```csharp
-// ✅ 消息名遵循 lowercase-kebab + .vN 后缀
+// ✅ DomainEvent 必须 sealed — PDDD001 编译错误
+public sealed record OrderCreated(...) : DomainEvent, IDomainEvent;
+
+// ❌ 忘记 sealed — 编译直接报错
+public record OrderCreated(...) : DomainEvent, IDomainEvent;  // PDDD001
+
+// ✅ 消息名 lowercase-kebab + .vN — PDDD006 编译警告
 [GenerateMessage(Name = "ordering.order-created.v1")]
 
-// ❌ PascalCase 或无版本后缀 — 分析器 PDDD006 会警告
-[GenerateMessage(Name = "OrderCreated")]
+// ✅ ProcessManager 标注 [BoundedContext] — PDDD010 编译错误
+[BoundedContext("ordering")]
+public sealed class OrderingProcessManager : Saga<OrderingState> { ... }
 ```
 
-### 3. 持久化选型：PalORM 优先（真 AOT）
+### 3. 租约锁并发 Outbox：多实例无重复投递
+
+Outbox 用数据库行级租约锁（`LockedBy` + `LockedUntil`）实现多实例并发发布——无需分布式锁，消息零丢失零重复。
 
 ```csharp
-// ✅ PalORM — 编译期 SQL 生成，PublishAot 验证通过
+// 注册：Outbox + 后台处理器自动轮询
 services.AddPalOrmPostgreSql(connectionString);
+services.AddPalOutbox();
 
-// ⚠️ Dapper — 运行时反射，AOT 假象（逐步弃用）
-services.AddPalDapper(DapperDbType.PostgreSql, connectionString);
-
-// ✅ EF Core — 需要 Migration / LINQ / ChangeTracker 的场景
-services.AddPalOutboxUnitOfWork<OutboxDbContext>();
-```
-
-### 4. Outbox + Inbox：保证消息可靠投递
-
-```csharp
-// 命令处理器内：事务提交时原子写入 Outbox 消息行
-public async ValueTask HandleAsync(CreateOrder cmd, CancellationToken ct)
+// 命令处理器内：SaveChangesAsync 时原子写入 Outbox 消息行
+// → DB 事务提交 → OutboxProcessor 后台抢租约发布 → IMessageBroker.PublishAsync
+public async ValueTask<OrderId> HandleAsync(CreateOrder cmd, CancellationToken ct)
 {
     var order = Order.Create(cmd.Name, cmd.Amount);
-    await uow.SaveChangesAsync(ct);  // DB 事务 + Outbox 原子写入
-    // OutboxProcessor 后台轮询 → IMessageBroker.PublishAsync
+    await uow.SaveChangesAsync(ct);  // 事务 + Outbox 原子写入
+    return order.Id;                 // 消息保证至少一次投递
 }
 
-// 消费侧：Inbox 保证幂等
-services.AddPalInbox();  // (ConsumerName, MessageId) 复合唯一约束 → 防重复处理
+// 消费侧幂等：Inbox 防重复处理
+services.AddPalInbox();  // (ConsumerName, MessageId) 复合唯一约束
 ```
 
-### 5. 测试：InMemory 实现零外部依赖
+### 4. Native AOT 完整链路：PalORM 源生成 SQL
+
+PalORM 在编译期生成 RowFactory / CommandFactory——SQL 在编译时确定，运行时零反射、零 `IL.Emit`。`PublishAot=true` 验证通过。
 
 ```csharp
-// 单元测试无需数据库/Kafka — InMemory 实现覆盖全部接口
-var services = new ServiceCollection();
-services.AddPalCoreStack();
-services.AddPalOutbox();  // InMemoryOutboxStore 自动注册
-// 直接测 Dispatcher / Outbox / Saga 逻辑
+// ✅ PalORM — 编译期 SQL 生成，真 AOT
+services.AddPalOrmPostgreSql(connectionString);
+// → INSERT ... ON CONFLICT DO NOTHING RETURNING id（PG 单语句原子租约）
+// → COPY 批量写入
+// → 源生成器自动生成 Row DTO 物化代码
+
+// ⚠️ Dapper — AOT 假象（[module:DapperAot] 实际禁用，NoWarn IL3058）
+// 仅用于维护已有 Dapper 代码，新项目用 PalORM
 ```
 
-### 6. 源生成器：改 Row DTO 后必须清 obj/bin
+### 5. Saga 补偿编排：显式状态机 + 超时检测
 
-```bash
-# 改 PalORM Row DTO 的 [Column] 后，源生成器用旧缓存 → 运行时空对象
-rm -rf src/*/obj src/*/bin test/*/obj test/*/bin
-dotnet build  # 重新触发源生成
+Saga 用显式状态/事件转换注册 + FrozenDictionary 查找——不依赖反射，AOT 安全。支持三种补偿策略和超时自动检测。
+
+```csharp
+public sealed class OrderSaga : Saga<OrderSagaState>
+{
+    protected override void Configure(SagaStep<OrderSagaState> steps)
+    {
+        steps.On<PaymentCompleted>(s => s.State with { Paid = true })
+             .On<InventoryReserved>((s, e) => s with { Reserved = true })
+             .WithCompensation<ReleaseInventory>()     // Backward 补偿
+             .WithTimeout(TimeSpan.FromMinutes(30));    // 超时自动触发补偿
+    }
+}
+
+// DI 注册
+services.AddPalSaga<OrderSaga, OrderSagaState>();
+// → SagaProcessor 后台轮询 + SagaTimeoutDetector 超时扫描
+```
+
+### 6. 零分配热路径：性能契约工程化
+
+核心路径的零分配不是注释声称——用 `GC.GetAllocatedBytesForCurrentThread` 运行时断言验证。
+
+```csharp
+// ✅ DomainEvent foreach — ref struct 枚举器，零堆分配
+foreach (var e in aggregate.Root.GetEvents())  // DomainEventEnumerable: ref struct
+    await handler(e, ct);
+
+// ✅ FrozenDictionary 查找 — O(1) 零反射
+var status = OrderStatus.FromValue("pending");  // 编译期生成的 FrozenDictionary
+
+// AllocationContractTests 验证（非声称）：
+// RaiseEvent < 130B/iter | foreach < 100B | FrozenDictionary < 100B
+```
+
+### 7. InMemory 测试：零外部依赖覆盖全链路
+
+所有抽象接口都有 InMemory 实现——单元测试不需要数据库 / Kafka / RabbitMQ。
+
+```csharp
+var services = new ServiceCollection();
+services.AddPalCoreStack();
+services.AddPalOutbox();     // InMemoryOutboxStore
+services.AddPalInbox();      // InMemoryInboxStore
+services.AddPalSaga<OrderSaga, OrderSagaState>();  // InMemorySagaStateStore
+
+// 直接测：命令分发 → 事件 → Outbox → Saga 补偿，全程无外部依赖
+var dispatcher = services.BuildServiceProvider().GetRequiredService<Dispatcher>();
 ```
 
 ---
