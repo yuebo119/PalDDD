@@ -5,7 +5,7 @@
 [![NuGet](https://img.shields.io/badge/nuget-v1.1.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)
 [![CI](https://img.shields.io/badge/build-0_errors_0_warnings-brightgreen)]()
-[![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_Dapper-green)](docs/aot.md)
+[![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
 
 ---
@@ -30,7 +30,7 @@ DbContext *是* 工作单元+仓储。DomainEvent *是* 集成事件。`AddPalCo
 
 DIM 桥接消除反射、源码生成器注册类型、FrozenDictionary 替代字典查找、非 AOT 项目三属性（`IsAotCompatible` / `IsTrimmable` / `VerifyReferenceAotCompatibility`）透明化。
 
-`IsAotCompatible=true` 在核心层和 Dapper 适配层强制执行。非 AOT 安全的第三方依赖（EF Core、Kafka、RabbitMQ）被隔离在显式声明 `IsAotCompatible=false` 的适配器项目中。AOT 不是附加功能——它是启动延迟、内存占用和部署安全性的架构决策。
+`IsAotCompatible=true` 在核心层和 PalORM 适配层强制执行。PalORM 通过源生成器在编译期生成 RowFactory/CommandFactory，实现完整链路 Native AOT。非 AOT 安全的第三方依赖（EF Core、Kafka、RabbitMQ）被隔离在显式声明 `IsAotCompatible=false` 的适配器项目中。AOT 不是附加功能——它是启动延迟、内存占用和部署安全性的架构决策。
 
 ### 性能契约工程化
 
@@ -213,7 +213,7 @@ public sealed class SubmitOrderHandler : ICommandHandler<SubmitOrder, Unit>
 ```csharp
 services.AddPalCoreStack();
 services.AddPalCommandHandler<SubmitOrder, Unit, SubmitOrderHandler>();
-services.AddPalDapper(DapperDbType.PostgreSql, connectionString);
+services.AddPalOrmSqlite(connectionString);  // PalORM（推荐，真 AOT）
 services.AddPalOutbox();
 
 var dispatcher = provider.GetRequiredService<Dispatcher>();
@@ -305,18 +305,19 @@ dotnet run --configuration Release --project bench/PalDDD.Benchmarks -- --smoke
 
 ```
 src/                         36 源项目 · Clean Architecture
-├── Domain/                  Core · SourceGen · Analyzers
-├── App-Abstractions/        Serialization · Messaging · Compression
-├── App-Core/                CQRS · EventLog · Idempotency · Projections · Transactions
-├── Infra-Dapper/            Dapper · PostgreSql · MySql · Sqlite
-├── Infra-EFCore/            EF Core
+├── Domain/                  Core · SourceGen · Analyzers · Analyzers.CodeFixes
+├── App-Abstractions/        Serialization · Serialization.Evolution · Messaging · Compression · Compression.Native
+├── App-Core/                CQRS · EventLog · EventLog.EFCore · Idempotency · Idempotency.EFCore · Projections · Projections.EFCore · Projections.EventLog · Transactions · Transactions.EFCore
+├── Infra-PalORM/            PalORM（真 AOT）· PalORM.Sqlite · PalORM.PostgreSql · PalORM.MySql  ← 推荐
+├── Infra-Dapper/            Dapper · PostgreSql · MySql · Sqlite（⚠️ 逐步弃用）
+├── Infra-Repository/        Repository.EFCore
 ├── Infra-Messaging/         Kafka · RabbitMQ
-├── Hosting/                 DI · AspNetCore
-└── Metapackages/            Base · Extension · Prompts   # Base/Extension=聚合元包(仅 PackageReference，无源码)；Prompts=内容元包
+├── Hosting/                 DependencyInjection · AspNetCore
+└── Metapackages/            Base · Extension（聚合元包，仅 PackageReference，无源码）
 
-test/                        16 测试项目（TUnit）
+test/                        16 测试项目（TUnit）· 869 测试
 bench/                       BenchmarkDotNet 性能基准
-samples/                     AOT / ECommerce / MinimalApi 示例
+samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi
 docs/                        架构 · 使用指南 · 教程 · ADR
 ```
 
@@ -331,15 +332,15 @@ flowchart TB
     Serialization --> Messaging
     Core --> Messaging
     Messaging --> Transactions
-    CQRS --> DI[Messaging + DI]
+    CQRS --> DI[DI + Hosting]
     Messaging --> DI
-    Transactions --> Dapper
-    EventLog --> Dapper
-    Projections --> Dapper
-    Transactions --> EF[EF Core]
-    Dapper --> PG[PostgreSql]
-    Dapper --> MySQL
-    Dapper --> SQLite
+    Transactions --> PalORM["PalORM（真 AOT）"]
+    EventLog --> PalORM
+    Projections --> PalORM
+    Transactions --> Dapper["Dapper（弃用）"]
+    PalORM --> PG[PostgreSql]
+    PalORM --> MySQL
+    PalORM --> SQLite
 ```
 
 
@@ -368,7 +369,7 @@ MediatR 是进程内命令分发器。Pal.DDD 内置与之等价的 Dispatcher +
 MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Service Bus/Amazon SQS）。Pal.DDD 的 Outbox 通过 `IMessageBroker` 抽象适配任意 Broker——你可以注入 MassTransit、Raw RabbitMQ、Kafka 或 InMemory 实现。框架不绑定传输。
 
 **和 EF Core 什么关系？共存还是替代？**
-共存。Pal.DDD 不替代 EF Core——两者解决不同层次的问题。EF Core 负责对象-关系映射和查询；Pal.DDD 负责 DDD 战术模式（Entity、DomainEvent、CQRS 分发、Outbox 投递、Saga 编排）。Pal.DDD 提供 Dapper 和 EF Core 两套持久化适配器，选型取决于你的 AOT 需求和查询复杂度。
+共存。Pal.DDD 不替代 EF Core——两者解决不同层次的问题。EF Core 负责对象-关系映射和查询；Pal.DDD 负责 DDD 战术模式（Entity、DomainEvent、CQRS 分发、Outbox 投递、Saga 编排）。Pal.DDD 提供 PalORM（推荐，真 AOT）、Dapper（逐步弃用）和 EF Core 三套持久化适配器，选型取决于你的 AOT 需求和查询复杂度。
 
 **可以用在现有项目中吗？渐进式引入？**
 可以。Pal.DDD 的每个 NuGet 包独立可安装。你可以从 `PalDDD.Base`（领域基元）开始，在现有的 Service 层旁边逐步引入 CQRS Dispatcher，再按需添加 Outbox 或 Saga。不需要一次性重写整个项目。
@@ -376,8 +377,8 @@ MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Servi
 **为什么要单目标 net11.0？**
 依赖 .NET 11 的静态特性（JsonSerializerContext 源生成增强、Runtime Async 状态机优化、新 AOT 分析器），多目标在技术上不可行。详见 [ADR-005](docs/decisions/005-net11-single-target.md)。
 
-**Dapper 和 EF Core 怎么选？**
-如果需要 Native AOT 部署（微服务、CLI 工具、边缘计算）→ 选 Dapper。如果需要复杂查询（多表 Join、GroupBy、投影）、已有 EF Core 迁移代码或 DbContext 生态 → 选 EF Core。两者可以在同一个项目中混用——例如 Dapper 做写路径（Outbox/Saga），EF Core 做读路径（Projection）。
+**Dapper 和 PalORM 怎么选？**
+如果需要 Native AOT 部署（微服务、CLI 工具、边缘计算）→ 选 **PalORM**（推荐，源生成 + 编译期 SQL，真 AOT）。如果维护已有 Dapper 手写 SQL 代码 → 选 Dapper（⚠️ AOT 假象，逐步弃用）。EF Core 适配器用于 Repository/Outbox/Inbox/Saga 的 DbContext 场景。三者可以在同一个项目中混用——例如 PalORM 做写路径（Outbox/Saga），EF Core 做读路径（Projection）。
 
 **有哪些已知限制？**
 不支持 .NET 8/9/10（单目标 net11.0）。Saga 的 ChildSaga 和 DynamicStep 依赖 `MakeGenericType`，在 AOT 发布时不可用（标注了 `[RequiresDynamicCode]`）。不含内置的 EventStore 快照机制——需要快照策略的项目需要自行实现。
