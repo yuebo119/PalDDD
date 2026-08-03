@@ -9,6 +9,7 @@ using PalDDD.Core.Logging;
 using PalDDD.DependencyInjection.Logging;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using ZLogger;
 
 namespace PalDDD.DependencyInjection;
@@ -52,17 +53,83 @@ public static class ServiceRegistration
     public static IServiceCollection AddPalFullStack(this IServiceCollection services)
         => services.AddPalCoreStack();
 
-    /// <summary>添加常用管道行为（验证 + 日志）</summary>
+    /// <summary>添加常用管道行为（验证 + 日志）— 开放泛型注册（仅 JIT/非 AOT 场景）</summary>
     /// <remarks>
     /// 注册两个开放泛型管道行为：<br/>
     /// - <see cref="CQRS.ValidationBehavior{TRequest,TResponse}"/>：自动调用所有 IPalValidator<br/>
     /// - <see cref="CQRS.LoggingBehavior{TRequest,TResponse}"/>：编译时日志记录
+    /// <para>
+    /// ⚠️ <b>Native AOT 限制</b>：开放泛型注册在 AOT 下对<b>值类型响应</b>（Unit/int/Guid 等）抛
+    /// <c>AotCannotCreateGenericValueType</c>（DI CallSiteFactory 硬校验，无配置可关）。<br/>
+    /// <b>AOT 场景请使用</b>：闭合注册版 <c>AddPalPipelineBehaviors&lt;TRequest, TResponse&gt;()</c>
+    /// 或 <c>AddPalCommandHandler&lt;,&gt;()</c> / <c>AddPalQueryHandler&lt;,&gt;()</c>（内部自动闭合注册）。
+    /// </para>
+    /// <para><b>互斥语义</b>：与闭合注册版先到先得——若服务集合已存在闭合
+    /// <c>IPipelineBehavior&lt;,&gt;</c> 注册（AddPalCommandHandler/AddPalQueryHandler 自动注册），本方法跳过注册，
+    /// 避免两种注册叠加导致 behavior 重复执行（验证/日志各跑两次）。</para>
     /// </remarks>
     public static IServiceCollection AddPalPipelineBehaviors(this IServiceCollection services)
     {
+        ThrowIfAotNotSupported();
+        // 互斥：闭合注册已存在（AddPalCommandHandler/AddPalQueryHandler 已自动闭合注册）时跳过开放版——
+        // 避免 GetServices<IPipelineBehavior<T,R>>() 叠加出 4 个 behavior（验证/日志重复执行）。
+        if (HasClosedGenericPipelineBehaviors(services)) return services;
         services.AddScoped(typeof(CQRS.IPipelineBehavior<,>), typeof(CQRS.ValidationBehavior<,>));
         services.AddScoped(typeof(CQRS.IPipelineBehavior<,>), typeof(CQRS.LoggingBehavior<,>));
         return services;
+    }
+
+    /// <summary>添加常用管道行为（验证 + 日志）— 闭合泛型注册（AOT 安全，值类型响应可用）</summary>
+    /// <remarks>
+    /// 与开放版 <c>AddPalPipelineBehaviors()</c> 的区别：<br/>
+    /// - <b>闭合注册</b>（本方法）：注册 <c>IPipelineBehavior&lt;TRequest,TResponse&gt;</c> 的闭合实现，<br/>
+    ///   DI 走 <c>TryCreateExact</c> 路径——闭合类型在编译期可见，native code 已生成，<br/>
+    ///   <b>不经值类型校验</b>（AotCannotCreateGenericValueType 只发生在开放泛型解析路径）。<br/>
+    /// - <b>开放注册</b>（<c>AddPalPipelineBehaviors()</c>）：运行时开放泛型解析，AOT 下值类型响应抛异常。
+    /// <para><b>推荐用法</b>：AOT 场景用 <see cref="AddPalCommandHandler{TCommand, TResponse, THandler}"/> /
+    /// <see cref="AddPalQueryHandler{TQuery, TResponse, THandler}"/>（内部自动调用本方法闭合注册），
+    /// 或为每个命令/查询显式调用本方法。</para>
+    /// <para><b>互斥语义</b>：与开放版先到先得——若服务集合已存在开放泛型
+    /// <c>IPipelineBehavior&lt;,&gt;</c> 注册（旧代码显式调用开放版），本方法跳过注册，
+    /// 避免两种注册叠加导致 behavior 重复执行。</para>
+    /// </remarks>
+    /// <typeparam name="TRequest">请求类型</typeparam>
+    /// <typeparam name="TResponse">响应类型（值类型如 Unit 也可，AOT 安全）</typeparam>
+    public static IServiceCollection AddPalPipelineBehaviors<TRequest, TResponse>(this IServiceCollection services)
+        where TRequest : CQRS.IRequest<TResponse>
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        // 互斥：开放泛型注册已存在时跳过闭合注册（先到先得）——
+        // 避免 GetServices<IPipelineBehavior<T,R>>() 叠加出 4 个 behavior（验证/日志重复执行）。
+        if (HasOpenGenericPipelineBehaviors(services)) return services;
+
+        // TryAddEnumerable：闭合类型注册去重，多次调用不重复注册
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<CQRS.IPipelineBehavior<TRequest, TResponse>, CQRS.ValidationBehavior<TRequest, TResponse>>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<CQRS.IPipelineBehavior<TRequest, TResponse>, CQRS.LoggingBehavior<TRequest, TResponse>>());
+        return services;
+    }
+
+    /// <summary>是否已注册开放泛型管道行为（<c>IPipelineBehavior&lt;,&gt;</c> 开放定义）</summary>
+    private static bool HasOpenGenericPipelineBehaviors(IServiceCollection services)
+        => services.Any(sd => sd.ServiceType == typeof(CQRS.IPipelineBehavior<,>));
+
+    /// <summary>是否已注册任何闭合管道行为（<c>IPipelineBehavior&lt;,&gt;</c> 闭合实例，排除开放泛型定义）</summary>
+    private static bool HasClosedGenericPipelineBehaviors(IServiceCollection services)
+        => services.Any(sd => sd.ServiceType.IsGenericType
+                              && !sd.ServiceType.IsGenericTypeDefinition
+                              && sd.ServiceType.GetGenericTypeDefinition() == typeof(CQRS.IPipelineBehavior<,>));
+
+    /// <summary>Native AOT 检测 — 开放泛型注册在 AOT 下对值类型响应不可用，提前给出清晰错误。</summary>
+    /// <exception cref="NotSupportedException">Native AOT 发布时抛出，提示使用闭合注册。</exception>
+    private static void ThrowIfAotNotSupported()
+    {
+        if (!RuntimeFeature.IsDynamicCodeSupported)
+        {
+            throw new NotSupportedException(
+                "AddPalPipelineBehaviors()（开放泛型注册）在 Native AOT 下对值类型响应（Unit/int/Guid）不可用——" +
+                "DI CallSiteFactory 会抛 AotCannotCreateGenericValueType。请改用闭合注册：" +
+                "AddPalPipelineBehaviors<TRequest, TResponse>() 或 AddPalCommandHandler<TCommand, TResponse, THandler>() / AddPalQueryHandler<TQuery, TResponse, THandler>()（内部自动闭合注册）。");
+        }
     }
 
     /// <summary>注册 ZLogger + IPalLogger&lt;T&gt; 日志门面。</summary>
@@ -100,6 +167,8 @@ public static class ServiceRegistration
     {
         services.TryAddScoped<THandler>();
         services.TryAddScoped<CQRS.ICommandHandler<TCommand, TResponse>, THandler>();
+        // 闭合注册内置管道行为（AOT 安全——值类型响应如 Unit 不触发 AotCannotCreateGenericValueType）
+        services.AddPalPipelineBehaviors<TCommand, TResponse>();
         // 注册标记：typeof(TCommand) 和 typeof(THandler) 均为编译时常量
         services.AddSingleton(new HandlerMarker(
             requestType: typeof(TCommand),
@@ -122,6 +191,8 @@ public static class ServiceRegistration
     {
         services.TryAddScoped<THandler>();
         services.TryAddScoped<CQRS.IQueryHandler<TQuery, TResponse>, THandler>();
+        // 闭合注册内置管道行为（AOT 安全——值类型响应如 int/Guid 不触发 AotCannotCreateGenericValueType）
+        services.AddPalPipelineBehaviors<TQuery, TResponse>();
         services.AddSingleton(new HandlerMarker(
             requestType: typeof(TQuery),
             handlerType: typeof(THandler),
