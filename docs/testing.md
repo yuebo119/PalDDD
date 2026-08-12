@@ -48,7 +48,7 @@
                   ┌──────────────────┐│ ┌──────────────────────┐
                   │ Architecture     ││ │ Core/CQRS/Transactions│
                   │ BoundaryTests    ││ │  单元功能正确性        │
-                  │ 33 方法 472 断言  ││ │ AggregateRoot/Saga/Outbox│
+                  │ 33 方法 85 断言  ││ │ AggregateRoot/Saga/Outbox│
                   └──────────────────┘│ └──────────────────────┘
                                      ╱
                           ┌────────────────────┐

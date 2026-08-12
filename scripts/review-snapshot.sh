@@ -38,7 +38,7 @@ echo "测试文件数: $TEST_FILES"
 echo ""
 
 echo "── 架构守护 ──"
-ARCH_TESTS=$(grep -cE "\[Fact\]|\[Theory\]" test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs 2>/dev/null || echo "?")
+ARCH_TESTS=$(grep -cE "\[Test\]" test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs 2>/dev/null || echo "?")
 PDDD_RULES=$(grep -rohE "PDDD0[0-9]+" src/PalDDD.Analyzers/ --include="*.cs" 2>/dev/null | grep -v obj | sort -u | wc -l | tr -d ' ')
 echo "架构边界测试用例数: $ARCH_TESTS"
 echo "PDDD 诊断规则数: $PDDD_RULES"
