@@ -3,6 +3,8 @@
 // 全部使用 InMemory 实现，无需数据库
 // ─────────────────────────────────────────────────────────────
 using BenchmarkDotNet.Attributes;
+using Microsoft.Extensions.DependencyInjection;
+using PalDDD.Compression;
 using PalDDD.EventLog;
 using PalDDD.Transactions;
 using PalDDD.Dapper;
@@ -206,4 +208,42 @@ public class ConfigurationBenchmarks
         var conn = DapperConfiguration.Create(DapperDbType.Sqlite, "Data Source=:memory:");
         return conn.GetType().Name;
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 压缩基准 — Brotli span 直压 / GZip Stream 对比（16KB 典型消息负载）
+// ═══════════════════════════════════════════════════════════
+[MemoryDiagnoser]
+[ShortRunJob]
+public class CompressionBenchmarks
+{
+    private ICompressor _brotli = null!;
+    private ICompressor _gzip = null!;
+    private byte[] _payload = null!;
+    private ReadOnlyMemory<byte> _brotliCompressed;
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        var services = new ServiceCollection();
+        services.AddPalCompression();
+        var provider = services.BuildServiceProvider().GetRequiredService<ICompressionProvider>();
+        _brotli = provider.GetCompressor(CompressionAlgorithm.Brotli);
+        _gzip = provider.GetCompressor(CompressionAlgorithm.GZip);
+
+        _payload = new byte[16 * 1024];
+        for (int i = 0; i < _payload.Length; i++)
+            _payload[i] = (byte)(i * 7 % 256);
+
+        _brotliCompressed = _brotli.Compress(_payload);
+    }
+
+    [Benchmark(Baseline = true)]
+    public ReadOnlyMemory<byte> Brotli_Compress_16KB() => _brotli.Compress(_payload);
+
+    [Benchmark]
+    public byte[] Brotli_Decompress_16KB() => _brotli.Decompress(_brotliCompressed.Span);
+
+    [Benchmark]
+    public ReadOnlyMemory<byte> GZip_Compress_16KB() => _gzip.Compress(_payload);
 }

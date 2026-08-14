@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.IO.Compression;
 
 namespace PalDDD.Compression;
@@ -7,7 +8,7 @@ namespace PalDDD.Compression;
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>
-/// Brotli 压缩器 — 基于 System.IO.Compression.BrotliStream。
+/// Brotli 压缩器 — 基于 BrotliEncoder/BrotliDecoder span 原语，无 Stream 包装分配。
 /// </summary>
 internal sealed class BrotliCompressor : ICompressor
 {
@@ -17,27 +18,43 @@ internal sealed class BrotliCompressor : ICompressor
     {
         if (data.IsEmpty) return Array.Empty<byte>();
 
-        using var output = new MemoryStream();
-        var quality = MapLevelToQuality(level);
-
-        using (var encoder = new BrotliStream(output, new BrotliCompressionOptions { Quality = quality }))
+        // GetMaxCompressedLength 给出最坏上界，一次 TryCompress 完成，免 MemoryStream/BrotliStream 分配
+        int maxLength = BrotliEncoder.GetMaxCompressedLength(data.Length);
+        byte[] rented = ArrayPool<byte>.Shared.Rent(maxLength);
+        try
         {
-            encoder.Write(data);
+            if (!BrotliEncoder.TryCompress(data, rented, out int bytesWritten, MapLevelToQuality(level), 22))
+                throw new InvalidOperationException("Brotli 压缩失败：目标缓冲区不足。");
+            return rented.AsSpan(0, bytesWritten).ToArray();
         }
-
-        return output.ToArray();
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     public byte[] Decompress(ReadOnlySpan<byte> compressed)
     {
         if (compressed.IsEmpty) return [];
 
-        using var input = new MemoryStream(compressed.ToArray());
-        using var output = new MemoryStream();
-        using var decoder = new BrotliStream(input, CompressionMode.Decompress);
+        // span 直解：免输入 ToArray 拷贝，输出走增长缓冲，无 MemoryStream 分配
+        using var decoder = new BrotliDecoder();
+        var buffer = new ArrayBufferWriter<byte>();
+        var source = compressed;
 
-        decoder.CopyTo(output);
-        return output.ToArray();
+        while (true)
+        {
+            Span<byte> destination = buffer.GetSpan(Math.Max(4096, source.Length * 2));
+            OperationStatus status = decoder.Decompress(source, destination, out int bytesConsumed, out int bytesWritten);
+            buffer.Advance(bytesWritten);
+            source = source.Slice(bytesConsumed);
+
+            if (status == OperationStatus.Done) break;
+            if (status == OperationStatus.DestinationTooSmall) continue;
+            throw new InvalidDataException($"Brotli 解压失败：{status}");
+        }
+
+        return buffer.WrittenSpan.ToArray();
     }
 
     private static int MapLevelToQuality(CompressionLevel level) => level switch

@@ -73,6 +73,34 @@ public sealed class SystemCompressionTests
     }
 
     [Test]
+    public async Task GZip_RoundTrip_EmptyInput_PreservesEmpty()
+    {
+        // .NET 11 起 DeflateStream/GZipStream 空载荷也会写格式头尾，
+        // 压缩器入口的空载荷早退必须保持"空进空出"契约不被破坏。
+        var compressor = CreateProvider().GetCompressor(CompressionAlgorithm.GZip);
+        var data = Array.Empty<byte>();
+
+        var compressed = compressor.Compress(data);
+        var decompressed = compressor.Decompress(compressed.Span);
+
+        await Assert.That(compressed.IsEmpty).IsTrue();
+        await Assert.That(decompressed).IsEquivalentTo(data);
+    }
+
+    [Test]
+    public async Task Deflate_RoundTrip_EmptyInput_PreservesEmpty()
+    {
+        var compressor = CreateProvider().GetCompressor(CompressionAlgorithm.Deflate);
+        var data = Array.Empty<byte>();
+
+        var compressed = compressor.Compress(data);
+        var decompressed = compressor.Decompress(compressed.Span);
+
+        await Assert.That(compressed.IsEmpty).IsTrue();
+        await Assert.That(decompressed).IsEquivalentTo(data);
+    }
+
+    [Test]
     public async Task GZip_RoundTrip_LargeInput_PreservesData()
     {
         var compressor = CreateProvider().GetCompressor(CompressionAlgorithm.GZip);
