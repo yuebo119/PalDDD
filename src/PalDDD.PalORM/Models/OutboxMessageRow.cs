@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using ByteAether.Ulid;
 using PalDDD.PalORM.Converters;
 using PalORM;
@@ -154,5 +155,5 @@ public sealed partial class OutboxMessageRow
 
     /// <summary>安全解析 Ulid 字符串 —— 脏数据返回 null 而非抛异常（P0-6 修复）。</summary>
     private static Ulid? TryParseUlid(string? value)
-        => value is not null && Ulid.TryParse(value, null, out var ulid) ? ulid : null;
+        => value is not null && Ulid.TryParse(value, CultureInfo.InvariantCulture, out var ulid) ? ulid : (Ulid?)null;
 }

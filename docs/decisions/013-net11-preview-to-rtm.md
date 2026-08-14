@@ -38,4 +38,4 @@ Preview API 可能在 RTM 前发生破坏性变更，需有迁移预案。
 
 ## 不动
 
-当前维持 Preview 7 锁定（2026-08-14 自 Preview 5 升级，NuGet 包版本同步对齐 preview.7；ByteAether.Ulid 因 1.4.0 破坏性变更维持 1.0.0），待 RTM 后按本 ADR 执行升级。
+当前维持 Preview 7 锁定（2026-08-14 自 Preview 5 升级，NuGet 包版本同步对齐 preview.7；ByteAether.Ulid 同步迁移至 1.4.0，适配新增的 string 隐式转换与可空注解），待 RTM 后按本 ADR 执行升级。

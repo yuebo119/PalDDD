@@ -83,7 +83,7 @@ public static class EventStreamJsonLines
         using var json = new Utf8JsonWriter(buffer);
 
         json.WriteStartObject();
-        json.WriteString("eventId", evt.EventId);
+        json.WriteString("eventId", evt.EventId.ToString());
         json.WriteString("eventName", evt.EventName);
         json.WriteString("streamName", evt.StreamName);
         json.WriteNumber("streamVersion", evt.StreamVersion);

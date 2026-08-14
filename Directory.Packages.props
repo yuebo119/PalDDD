@@ -28,7 +28,7 @@
     <!-- ZLogger — 零分配结构化日志（构建于 M.E.Logging 之上） -->
     <PackageVersion Include="ZLogger" Version="2.5.10" />
     <!-- ByteAether.Ulid — 时间排序唯一标识符（AOT 兼容 · RFC 9562 合规） -->
-    <PackageVersion Include="ByteAether.Ulid" Version="1.0.0" />
+    <PackageVersion Include="ByteAether.Ulid" Version="1.4.0" />
     <!-- Dapper 适配器 — SQLite / PostgreSQL / MySQL（AOT 兼容） -->
     <PackageVersion Include="Dapper" Version="2.1.79" />
     <PackageVersion Include="Dapper.AOT" Version="1.0.52" />
