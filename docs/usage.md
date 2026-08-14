@@ -122,6 +122,8 @@ services.AddPalPipelineBehaviors();
 
 验证失败时会抛出 `PalValidationException`。
 
+> ⚠️ **AOT 注意**：无类型参数重载 `AddPalPipelineBehaviors()` 是开放泛型注册，Native AOT 下值类型响应（`Unit`/`int`/`Guid`）会触发 `AotCannotCreateGenericValueType`。AOT 应用请改用 `AddPalCommandHandler<T...>()` / `AddPalQueryHandler<T...>()`（内部自动闭合注册管道行为），或显式闭合注册 `AddPalPipelineBehaviors<TRequest, TResponse>()`。两种注册先到先得、互斥——旧代码同时调用两者时解析结果收敛为 2 个 behavior，不会重复执行。详见 [aot.md](aot.md)。
+
 ## 显式事务边界
 
 CQRS 包不依赖 repository，也不隐式开启数据库事务。需要事务的命令 handler 应直接表达一致性需求：

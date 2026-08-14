@@ -13,6 +13,8 @@
     <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Serialization\PalDDD.Serialization.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.CQRS\PalDDD.CQRS.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.DependencyInjection\PalDDD.DependencyInjection.csproj" />
   </ItemGroup>
 
 </Project>

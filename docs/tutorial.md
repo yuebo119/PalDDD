@@ -952,7 +952,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 // ── Pal.DDD 核心 ──
 builder.Services.AddPalDDD();
-builder.Services.AddPalPipelineBehaviors();
+builder.Services.AddPalPipelineBehaviors(); // JIT 场景开放注册；AOT 场景改用 AddPalCommandHandler<T...>()/AddPalQueryHandler<T...>()（自动闭合注册）。两者互斥先到先得，不会叠加重复执行
 
 // ── 序列化 ──
 builder.Services.AddPalJsonSerialization(catalog =>
