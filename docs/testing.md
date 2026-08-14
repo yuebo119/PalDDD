@@ -100,7 +100,7 @@
 
 ```json
 {
-  "sdk": { "version": "11.0.100-preview.5.26302.115", "rollForward": "latestMajor", "allowPrerelease": true },
+  "sdk": { "version": "11.0.100-preview.7.26381.103", "rollForward": "latestMajor", "allowPrerelease": true },
   "test": { "runner": "Microsoft.Testing.Platform" }
 }
 ```

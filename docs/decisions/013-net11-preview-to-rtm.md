@@ -6,7 +6,7 @@
 
 ## 背景
 
-`global.json` 锁定 `.NET 11 Preview 5` + `rollForward:latestMajor` + `allowPrerelease:true`。框架库依赖 .NET 11 Preview 特性：
+`global.json` 锁定 `.NET 11 Preview 7`（2026-08 自 Preview 5 升级）+ `rollForward:latestMajor` + `allowPrerelease:true`。框架库依赖 .NET 11 Preview 特性：
 
 - `JsonSerializerContext` 源生成增强
 - 新 AOT 分析器（`VerifyReferenceAotCompatibility`）
@@ -38,4 +38,4 @@ Preview API 可能在 RTM 前发生破坏性变更，需有迁移预案。
 
 ## 不动
 
-当前维持 Preview 5 锁定，待 RTM 后执行升级。
+当前维持 Preview 7 锁定（2026-08-14 自 Preview 5 升级，NuGet 包版本同步对齐 preview.7；ByteAether.Ulid 因 1.4.0 破坏性变更维持 1.0.0），待 RTM 后按本 ADR 执行升级。

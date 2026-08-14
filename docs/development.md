@@ -4,7 +4,7 @@
 
 ## 环境要求
 
-- .NET SDK 11.0.x (Preview 5+)
+- .NET SDK 11.0.x (Preview 7+)
 - Windows / PowerShell 可直接使用本文命令
 - NuGet 源默认使用 `https://api.nuget.org/v3/index.json`
 

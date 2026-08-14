@@ -1,11 +1,11 @@
 {
   "sdk": {
-    "version": "11.0.100-preview.5.26302.115",
+    "version": "11.0.100-preview.7.26381.103",
     "rollForward": "latestMajor",
     "allowPrerelease": true
   },
   "test": {
     "runner": "Microsoft.Testing.Platform"
   },
-  "_comment": "ITM-060：当前锁定 .NET 11 SDK Preview（allowPrerelease）。待 .NET 11 GA 后切换至稳定版 SDK 并重新评估 TargetFramework/Preview 包版本。"
+  "_comment": "ITM-060：当前锁定 .NET 11 SDK Preview 7（allowPrerelease，与包版本一致）。待 .NET 11 GA 后切换至稳定版 SDK 并重新评估 TargetFramework/Preview 包版本。"
 }
