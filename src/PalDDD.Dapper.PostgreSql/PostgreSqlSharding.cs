@@ -204,8 +204,24 @@ public static class ShardedTableName
     public static string[] All(string baseTable, int shardCount)
         => Enumerable.Range(0, shardCount).Select(i => For(baseTable, i)).ToArray();
 
-    /// <summary>创建分片表（复制基础表结构）</summary>
+    /// <summary>
+    /// 创建分片表（复制基础表结构）。
+    /// <para>P2 修复：baseTable 进入可执行 DDL 前做标识符白名单校验
+    /// （与 PostgreSqlAuditor.QuoteIdentifier 同型——此前完全裸拼）。</para>
+    /// </summary>
     public static string CreateShardedTableDdl(string baseTable, int shardCount)
-        => string.Join(";\n", Enumerable.Range(0, shardCount)
+    {
+        ValidateIdentifier(baseTable);
+        return string.Join(";\n", Enumerable.Range(0, shardCount)
             .Select(i => $"CREATE TABLE IF NOT EXISTS {For(baseTable, i)} (LIKE {baseTable} INCLUDING ALL)"));
+    }
+
+    /// <summary>标识符白名单校验（字母数字下划线 + 点，防 DDL 注入）。</summary>
+    private static void ValidateIdentifier(string identifier)
+    {
+        if (string.IsNullOrWhiteSpace(identifier)
+            || !System.Text.RegularExpressions.Regex.IsMatch(identifier, @"^[A-Za-z_][A-Za-z0-9_.]*$"))
+            throw new ArgumentException(
+                $"表名 '{identifier}' 含非法字符——仅允许字母数字下划线与点（标识符白名单）。", nameof(identifier));
+    }
 }

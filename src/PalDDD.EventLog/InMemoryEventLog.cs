@@ -48,6 +48,9 @@ public sealed class InMemoryEventLog : IEventLog
             EnsureExpectedVersion(streamName, expectedVersion, actualVersion);
 
             var firstStreamVersion = stream.Count;
+            // 📐 P3 定案（语义声明）：InMemory 的 GlobalPosition 从 0 连续分配，EFCore 版走
+            // Hi/Lo 预分配（起始值非 0 且块内连续）——两版 position 语义不对齐是刻意的：
+            // InMemory 是测试替身，position 断言只应在同一实现内比较（跨实现比较无意义）。
             var firstGlobalPosition = _global.Count;
             var now = _timeProvider.GetUtcNow();
 

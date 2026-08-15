@@ -118,6 +118,8 @@ public static class PostgreSqlReadWriteRouterExtensions
 
         var router = new PostgreSqlReadWriteRouter(writer, reader);
         services.AddSingleton(router);
+        // 双重注册（router 持有 + 独立注入）经实测无害：NpgsqlDataSource.DisposeAsync 幂等
+        // （2026-08-15 file-based app 探针：二次/三次释放均不抛），容器重复释放安全。
         services.AddSingleton(writer); // 主库可直接注入
 
         return services;

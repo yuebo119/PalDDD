@@ -65,7 +65,8 @@ public static class DapperBulkCopy
         string tableName,
         string[] columns,
         IReadOnlyList<T> items,
-        Func<T, object[]> valueExtractor)
+        Func<T, object[]> valueExtractor,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(conn);
         ArgumentNullException.ThrowIfNull(columns);
@@ -81,9 +82,9 @@ public static class DapperBulkCopy
         // 💡 switch 表达式按 DapperDbType 枚举分发 — 编译时已知值，零反射
         return dbType switch
         {
-            DapperDbType.PostgreSql => await PgCopyAsync(conn, tableName, columns, items, valueExtractor).ConfigureAwait(false),
-            DapperDbType.MySql => await MySqlBulkAsync(conn, tableName, columns, items, valueExtractor).ConfigureAwait(false),
-            DapperDbType.Sqlite => await SqliteBatchAsync(conn, tableName, columns, items, valueExtractor).ConfigureAwait(false),
+            DapperDbType.PostgreSql => await PgCopyAsync(conn, tableName, columns, items, valueExtractor, ct).ConfigureAwait(false),
+            DapperDbType.MySql => await MySqlBulkAsync(conn, tableName, columns, items, valueExtractor, ct).ConfigureAwait(false),
+            DapperDbType.Sqlite => await SqliteBatchAsync(conn, tableName, columns, items, valueExtractor, ct).ConfigureAwait(false),
             _ => throw new NotSupportedException($"数据库类型 {dbType} 不支持批量导入。")
         };
     }
@@ -97,14 +98,14 @@ public static class DapperBulkCopy
     /// </summary>
     private static async Task<int> PgCopyAsync<T>(
         DbConnection conn, string table, string[] cols,
-        IReadOnlyList<T> items, Func<T, object[]> extractor)
+        IReadOnlyList<T> items, Func<T, object[]> extractor, CancellationToken ct)
     {
         var pgConn = (NpgsqlConnection)conn;
         var colList = string.Join(", ", cols);
         var copySql = $"COPY {table} ({colList}) FROM STDIN (FORMAT BINARY)";
 
         // BeginBinaryImportAsync — Npgsql 10.x 标准 COPY API
-        await using var writer = await pgConn.BeginBinaryImportAsync(copySql).ConfigureAwait(false);
+        await using var writer = await pgConn.BeginBinaryImportAsync(copySql, ct).ConfigureAwait(false);
 
         foreach (var item in items)
         {
@@ -128,7 +129,7 @@ public static class DapperBulkCopy
     /// </summary>
     private static async Task<int> MySqlBulkAsync<T>(
         DbConnection conn, string table, string[] cols,
-        IReadOnlyList<T> items, Func<T, object[]> extractor)
+        IReadOnlyList<T> items, Func<T, object[]> extractor, CancellationToken ct)
     {
         var myConn = (MySqlConnection)conn;
 
@@ -156,7 +157,7 @@ public static class DapperBulkCopy
             bulkCopy.ColumnMappings.Add(new MySqlBulkCopyColumnMapping(Array.IndexOf(cols, col), col));
 
         // WriteToServerAsync — 真正执行批量导入
-        var result = await bulkCopy.WriteToServerAsync(dt).ConfigureAwait(false);
+        var result = await bulkCopy.WriteToServerAsync(dt, ct).ConfigureAwait(false);
 
         // 🛡️ 检查 Warnings — MySQL BulkCopy 可能因类型不兼容而静默截断数据
         // 例如：字符串超过列长度被截断、数值溢出被强制转换
@@ -181,7 +182,7 @@ public static class DapperBulkCopy
     /// </summary>
     private static async Task<int> SqliteBatchAsync<T>(
         DbConnection conn, string table, string[] cols,
-        IReadOnlyList<T> items, Func<T, object[]> extractor)
+        IReadOnlyList<T> items, Func<T, object[]> extractor, CancellationToken ct)
     {
         // 构建参数化 INSERT SQL：INSERT INTO t (c1,c2) VALUES (@c1,@c2)
         var placeholders = string.Join(", ", cols.Select(c => $"@{c}"));
@@ -215,7 +216,7 @@ public static class DapperBulkCopy
                     DateTimeOffset dto => DapperAotInitializer.ToSqliteParameter(dto),
                     _ => values[i] ?? DBNull.Value
                 };
-            count += await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            count += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
         await tx.CommitAsync().ConfigureAwait(false);

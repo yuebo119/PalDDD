@@ -12,6 +12,11 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
 {
     private readonly Lock _lock = new();
     private readonly Dictionary<PalUlid, TState> _states = [];
+    private readonly TimeProvider _timeProvider;
+
+    /// <summary>构造内存存储（P3 修复：可选 clock 注入，默认 System——测试可冻结时间）。</summary>
+    public InMemorySagaStateStore(TimeProvider? timeProvider = null)
+        => _timeProvider = timeProvider ?? TimeProvider.System;
 
     /// <inheritdoc/>
     public ValueTask<IReadOnlyList<TState>> GetActiveSagasAsync(int batchSize, CancellationToken ct)
@@ -39,7 +44,7 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
 
-        var now = TimeProvider.System.GetUtcNow();
+        var now = _timeProvider.GetUtcNow();
         var leasedUntil = now.Add(leaseDuration);
         lock (_lock)
         {

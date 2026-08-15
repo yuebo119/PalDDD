@@ -92,8 +92,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // 🟡 P1 修复 (2026-06-21): 替换 SqlKata.QueryFactory.GetAsync 为纯 Dapper SQL
         // 直接使用 Dapper.QueryAsync<OutboxMessage> 走 Dapper.AOT 拦截器路径。
         var messages = await conn.QueryAsync<OutboxMessage>(
-            SqlTemplates.OutboxSelectPending,
-            new { status = OutboxStatus.Pending.ToString(), now = DapperAotInitializer.ToSqliteParameter(now), maxRetryCount, n = batchSize }, _transaction).ConfigureAwait(false);
+            new CommandDefinition(
+                SqlTemplates.OutboxSelectPending,
+                new { status = OutboxStatus.Pending.ToString(), now = DapperAotInitializer.ToSqliteParameter(now), maxRetryCount, n = batchSize },
+                _transaction, cancellationToken: ct)).ConfigureAwait(false);
         return messages.AsList();
     }
 
@@ -123,20 +125,26 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         if (_dialect.SupportsOutboxReturning)
         {
             var msgs = await conn.QueryAsync<OutboxMessage>(
-                SqlTemplates.OutboxLeaseUpdate + $"({leaseSubSql}) RETURNING *",
-                new { owner, until = DapperAotInitializer.ToSqliteParameter(until), now = DapperAotInitializer.ToSqliteParameter(now), maxRetryCount, n = batchSize }, _transaction).ConfigureAwait(false);
+                new CommandDefinition(
+                    SqlTemplates.OutboxLeaseUpdate + $"({leaseSubSql}) RETURNING *",
+                    new { owner, until = DapperAotInitializer.ToSqliteParameter(until), now = DapperAotInitializer.ToSqliteParameter(now), maxRetryCount, n = batchSize },
+                    _transaction, cancellationToken: ct)).ConfigureAwait(false);
             return msgs.AsList();
         }
         else
         {
             await conn.ExecuteAsync(
-                SqlTemplates.OutboxLeaseUpdate + $"({leaseSubSql})",
-                new { owner, until = DapperAotInitializer.ToSqliteParameter(until), now = DapperAotInitializer.ToSqliteParameter(now), maxRetryCount, n = batchSize }, _transaction).ConfigureAwait(false);
+                new CommandDefinition(
+                    SqlTemplates.OutboxLeaseUpdate + $"({leaseSubSql})",
+                    new { owner, until = DapperAotInitializer.ToSqliteParameter(until), now = DapperAotInitializer.ToSqliteParameter(now), maxRetryCount, n = batchSize },
+                    _transaction, cancellationToken: ct)).ConfigureAwait(false);
 
             // 🔴 P0 修复：按租约标识回读，不重新评估子查询
             var msgs = await conn.QueryAsync<OutboxMessage>(
-                SqlTemplates.OutboxSelectByLease,
-                new { owner, until = DapperAotInitializer.ToSqliteParameter(until) }, _transaction).ConfigureAwait(false);
+                new CommandDefinition(
+                    SqlTemplates.OutboxSelectByLease,
+                    new { owner, until = DapperAotInitializer.ToSqliteParameter(until) },
+                    _transaction, cancellationToken: ct)).ConfigureAwait(false);
             return msgs.AsList();
         }
     }

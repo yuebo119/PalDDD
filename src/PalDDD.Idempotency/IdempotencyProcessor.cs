@@ -65,7 +65,7 @@ public sealed class IdempotencyProcessor
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await _store.MarkFailedAsync(record, ex.Message, _timeProvider.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+            await _store.MarkFailedAsync(record, ex.Message, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
             activity?.SetTag("pal.idempotency.result", "failed");
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             PalMetrics.IdempotencyFailed.Add(1);

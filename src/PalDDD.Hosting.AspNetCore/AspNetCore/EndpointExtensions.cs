@@ -25,9 +25,19 @@ public static class EndpointExtensions
 
         return endpoints.MapPost(pattern, async context =>
         {
-            var cmd = await context.Request.ReadFromJsonAsync(
-                commandJsonTypeInfo,
-                context.RequestAborted);
+            TCommand? cmd;
+            try
+            {
+                cmd = await context.Request.ReadFromJsonAsync(
+                    commandJsonTypeInfo,
+                    context.RequestAborted);
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                // P3 修复：畸形 JSON 是用户输入错误 → 400 而非未捕获 500
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                return;
+            }
             if (cmd is null)
             {
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -55,9 +65,19 @@ public static class EndpointExtensions
 
         return endpoints.MapPost(pattern, async context =>
         {
-            var cmd = await context.Request.ReadFromJsonAsync(
-                commandJsonTypeInfo,
-                context.RequestAborted);
+            TCommand? cmd;
+            try
+            {
+                cmd = await context.Request.ReadFromJsonAsync(
+                    commandJsonTypeInfo,
+                    context.RequestAborted);
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                // P3 修复：畸形 JSON 是用户输入错误 → 400 而非未捕获 500
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                return;
+            }
             if (cmd is null)
             {
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;

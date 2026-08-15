@@ -43,14 +43,19 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
 
     /// <param name="transaction">可选共享事务（用于 UnitOfWork 模式）</param>
     /// <param name="jsonTypeInfo">可选 STJ source-generated type info；传入后持久化完整 <typeparamref name="TState"/> 快照。</param>
+    private readonly TimeProvider _timeProvider;
+
     public DapperSagaStateStore(
         DbConnection connection,
         DbTransaction? transaction = null,
-        JsonTypeInfo<TState>? jsonTypeInfo = null)
+        JsonTypeInfo<TState>? jsonTypeInfo = null,
+        TimeProvider? timeProvider = null)
     {
         _connection = connection ?? throw new ArgumentNullException(nameof(connection));
         _transaction = transaction;
         _jsonTypeInfo = jsonTypeInfo;
+        // P3 修复（时钟双轨清零）：可选注入，默认 System——与 PalOrmSagaStateStore 对齐
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async ValueTask<IReadOnlyList<TState>> GetActiveSagasAsync(int batchSize, CancellationToken ct)
@@ -73,7 +78,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
 
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
-        var now = TimeProvider.System.GetUtcNow();
+        var now = _timeProvider.GetUtcNow();
         var until = now.Add(leaseDuration);
         await conn.ExecuteAsync(
             new CommandDefinition(SqlTemplates.SagaLeaseActive, new { owner, until = DapperAotInitializer.ToSqliteParameter(until), now = DapperAotInitializer.ToSqliteParameter(now), n = batchSize }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
@@ -124,25 +129,82 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
             return rows;
         }
 
-        var inserted = await conn.ExecuteAsync(
-            new CommandDefinition(
-                SqlTemplates.SagaInsert,
-                new
-                {
-                    id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
-                    cs = state.CurrentState,
-                    st = (int)state.Status,
-                    ca = DapperAotInitializer.ToSqliteParameter(state.CreatedAt),
-                    completedAt = state.CompletedAt.HasValue ? DapperAotInitializer.ToSqliteParameter(state.CompletedAt.Value) : null,
-                    err = state.Error,
-                    ea = state.ErrorAt.HasValue ? DapperAotInitializer.ToSqliteParameter(state.ErrorAt.Value) : null,
-                    data = sagaData,
-                    leasedBy = state.LeasedBy,
-                    leasedUntil = state.LeasedUntil.HasValue ? DapperAotInitializer.ToSqliteParameter(state.LeasedUntil.Value) : null
-                },
-                _transaction,
-                cancellationToken: ct)).ConfigureAwait(false);
+        int inserted;
+        try
+        {
+            inserted = await conn.ExecuteAsync(
+                new CommandDefinition(
+                    SqlTemplates.SagaInsert,
+                    new
+                    {
+                        id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
+                        cs = state.CurrentState,
+                        st = (int)state.Status,
+                        ca = DapperAotInitializer.ToSqliteParameter(state.CreatedAt),
+                        completedAt = state.CompletedAt.HasValue ? DapperAotInitializer.ToSqliteParameter(state.CompletedAt.Value) : null,
+                        err = state.Error,
+                        ea = state.ErrorAt.HasValue ? DapperAotInitializer.ToSqliteParameter(state.ErrorAt.Value) : null,
+                        data = sagaData,
+                        leasedBy = state.LeasedBy,
+                        leasedUntil = state.LeasedUntil.HasValue ? DapperAotInitializer.ToSqliteParameter(state.LeasedUntil.Value) : null
+                    },
+                    _transaction,
+                    cancellationToken: ct)).ConfigureAwait(false);
+        }
+        catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            // P2 修复：并发插入同一新 Saga 的 TOCTOU 兜底——唯一约束冲突转换为
+            // 语义化并发异常（而非原始 provider 异常），调用方重读后走 UPDATE 路径即可
+            throw new InvalidOperationException(
+                $"Saga {state.SagaId} 被并发实例同时创建（主键冲突）——请重新加载后以 UPDATE 保存。", ex);
+        }
         return inserted;
+    }
+
+    /// <summary>
+    /// INSERT 路径的并发插入兜底（P2 修复）：两个并发 SaveChangesAsync 保存同一新 Saga
+    /// 都判 existing==null 都走 INSERT 时，第二个撞 saga_id 主键抛原始 provider 异常。
+    /// 此处捕获唯一约束冲突并转换为带 SagaId 的语义化异常，调用方可区分"并发冲突"与"数据错误"。
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075:This",
+        Justification = "Provider 异常鸭子类型判定（与 DapperEventLog 同型）。裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级，不崩溃）。")]
+    private static bool IsUniqueConstraintViolation(Exception exception)
+    {
+        for (var inner = exception; inner is not null; inner = inner.InnerException)
+        {
+            var type = inner.GetType();
+            var typeName = type.Name;
+
+            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
+                && type.GetProperty("SqlState")?.GetValue(inner) is string sqlState
+                && sqlState == "23505")
+            {
+                return true;
+            }
+
+            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int mysqlNumber
+                && (mysqlNumber == 1062 || mysqlNumber == 1586))
+            {
+                return true;
+            }
+
+            if (typeName.Equals("SqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int sqlServerNumber
+                && (sqlServerNumber == 2601 || sqlServerNumber == 2627))
+            {
+                return true;
+            }
+
+            var message = inner.Message;
+            if (!string.IsNullOrEmpty(message)
+                && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private string? SerializeState(TState state)

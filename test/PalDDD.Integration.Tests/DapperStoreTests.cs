@@ -157,7 +157,11 @@ public sealed class DapperStoreTests
                 metadata        BLOB,
                 recorded_at     TEXT NOT NULL,
                 actor_id        TEXT,
-                reason          TEXT
+                reason          TEXT,
+                correlation_id  TEXT,
+                causation_id    TEXT,
+                trace_parent    TEXT,
+                trace_state     TEXT
             );
             CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
 

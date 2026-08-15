@@ -136,3 +136,34 @@
 - **需环境实证（~4 项）**：ValueObject 接口模式匹配装箱（benchmark 实证）、ToSqliteParameter 跨方言 PG 绑定（PG 实测）、PostgreSqlPipeline RecordsAffected 实际值（PG 实测）、MultiHost Port=0 语义（Npgsql 文档核实）。
 - **P3 顺手修清单**：TimeProvider 硬编码 ×4、TryAdd 静默 ×4、DapperOutbox/Inbox ct 缺传（CommandDefinition）×2、其余注释漂移 ×5、CheckpointRow 死代码（须按框架库五步验证后处置）。
 
+
+---
+
+## 第四轮（同日晚）— 第二次全量复审修复（第二轮评审发现）
+
+### [x] 已修复（第四轮，约 40 项）
+
+**P1×3**：SagaCompleted 指标 !=→==（FanOut/ChildSaga 两处）；MemoryPack TryAddSingleton→AddSingleton（兑现"替换"文档语义）；幂等终态 MarkX×2 实现补 affected 守卫（PalORM Idempotency + PalORM ProjectionCheckpoint——PD17 姊妹同步）。
+
+**修复覆盖残留×3（PD17 首案）**：HandleEventAsync 补 DispatchKind 守卫（ITM-069 只修了 ProcessEventAsync）；Dapper EventLog 审计 4 列补齐（INSERT 参数硬编码 null 的真实缺陷比初审更深——actor/reason 也从未持久化）；PalORM ProjectionCheckpoint MarkX affected 守卫。
+
+**探针实证升级×1**：sharedCache 连接串裸形式 SQLite Error 14 打不开（file-based app 实证）→ file::memory:?cache=shared URI 形式。
+
+**取消语义×6**：Idempotency/Inbox/Projection 三处理器 MarkFailed 改 CancellationToken.None；DapperInbox Mark×2 异步化+真传 ct；DapperOutbox 4 处 CommandDefinition ct；DapperBulkCopy 全链 ct。
+
+**并发守卫×5**：PalORM Outbox ReleaseForRetry 租约守卫（先捕获 owner 再置空）；OutboxNotifier gate 泄漏+Dispose 竞态；DapperSaga INSERT TOCTOU 转语义化异常；RabbitMQ ACK 安全包装；MySql Obsolete 路径 Singleton→Scoped。
+
+**安全×3**：解压炸弹守卫×6（System+Native 全部解压器 8MB 上限）；Sharding DDL 标识符白名单；SoftDelete Escape 补包裹（测试断言同步全引号形态）。
+
+**时钟双轨清零×5**：LoggingBehavior/DapperSaga/InMemorySaga/SagaState/SagaStateDbContext 全部可注入；G17 附注正则精化（虚方法默认值豁免）→ 零残留。
+
+**API/生成器×5**：PalORM 三方言 DbOptions 生产入口；EnumGenerator PALENUM002 隔层继承诊断（对称 PALENUM001）；Endpoint 畸形 JSON→400；MySqlPerformanceOptimizer 幂等开连接；SequentialAccess+GetValues 矛盾消除。
+
+**文档契约×4**：OpenZL 前向兼容声明；DapperEventLog 事务契约声明；InMemory position 语义声明；LoggingBehavior/SqliteSCE 注释漂移修复。
+
+**测试同步×3**：Integration 测试 schema 补审计列；SoftDelete 断言全引号；PublicApiSnapshot 刷新（PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1）。
+
+### 第四轮教训
+
+- PublicApiSnapshot 是 API 变更的第一道反馈（ctor 加参立即红）——刷新后必须检视 diff 确认变更是有意的。
+- 测试 schema 与生产 DDL 的同步是审计列变更的必查项（DapperStoreTests 自带 CREATE TABLE）。

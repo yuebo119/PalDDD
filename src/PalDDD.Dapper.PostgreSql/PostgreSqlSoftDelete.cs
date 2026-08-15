@@ -77,5 +77,9 @@ public static class PostgreSqlSoftDelete
     public static string AddColumn(string table, string column = DefaultColumn)
         => $"ALTER TABLE {Escape(table)} ADD COLUMN IF NOT EXISTS {Escape(column)} TIMESTAMPTZ";
 
-    private static string Escape(string s) => s.Contains('"') ? s.Replace("\"", "\"\"") : s;
+    /// <summary>
+    /// 标识符转义 —— 双引号包裹 + 内部双引号翻倍（P2 修复：与 PostgreSqlJsonb.Escape
+    /// 统一为标识符语义。此前只翻倍不包裹——含大写/关键字的标识符生成语法错误或歧义）。
+    /// </summary>
+    private static string Escape(string s) => $"\"{(s.Contains('"') ? s.Replace("\"", "\"\"") : s)}\"";
 }

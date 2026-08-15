@@ -92,18 +92,23 @@ public sealed class DapperInboxStore : IInboxStore
         return null;
     }
 
-    public ValueTask MarkProcessedAsync(InboxMessage message, DateTimeOffset processedAt, CancellationToken ct)
-    { var c = EnsureOpen(); c.Execute(SqlTemplates.InboxMarkProcessed, new { at = DapperAotInitializer.ToSqliteParameter(processedAt), id = message.Id }, _transaction); return ValueTask.CompletedTask; }
-
-    public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
-    { var c = EnsureOpen(); c.Execute(SqlTemplates.InboxMarkFailed, new { err = failureReason, id = message.Id }, _transaction); return ValueTask.CompletedTask; }
-
-    /// <summary>确保连接已打开（同步版本），连接生命周期由 DI 容器管理</summary>
-    private DbConnection EnsureOpen()
+    // P2 修复：Mark 系列从同步 IO（EnsureOpen + Execute）改为异步路径并真正传递 ct——
+    // 此前签名带 ct 但体内零使用，取消后 SQL 仍执行至自然完成
+    public async ValueTask MarkProcessedAsync(InboxMessage message, DateTimeOffset processedAt, CancellationToken ct)
     {
-        var c = _connection;
-        if (c.State != ConnectionState.Open) { c.Open(); }
-        return c;
+        var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        await c.ExecuteAsync(
+            SqlTemplates.InboxMarkProcessed,
+            new { at = DapperAotInitializer.ToSqliteParameter(processedAt), id = message.Id }, _transaction).ConfigureAwait(false);
+    }
+
+    public async ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+        var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        await c.ExecuteAsync(
+            SqlTemplates.InboxMarkFailed,
+            new { err = failureReason, id = message.Id }, _transaction).ConfigureAwait(false);
     }
 
     /// <summary>确保连接已打开（异步版本），避免线程池阻塞</summary>

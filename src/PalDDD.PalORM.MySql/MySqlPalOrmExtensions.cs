@@ -27,6 +27,7 @@ public static class MySqlPalOrmExtensions
     public static IServiceCollection AddPalOrmMySql(
         this IServiceCollection services,
         string connectionString,
+        DbOptions? options = null,
         TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -34,7 +35,7 @@ public static class MySqlPalOrmExtensions
 
         services.AddScoped(sp =>
         {
-            var opts = DbOptions.Development(connectionString);
+            var opts = options ?? DbOptions.Development(connectionString);
             return DataSession<MySqlProvider>.CreateAsync(opts, default).GetAwaiter().GetResult();
         });
 

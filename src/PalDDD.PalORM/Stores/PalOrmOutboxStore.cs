@@ -135,14 +135,21 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
     {
         // 手写 SQL 路径：原子自增 retry_count（避免读-改-写竞态）
         // 不走 UpdateAsync —— 避免 [ConcurrencyCheck] 干扰原子自增语义
+        // P2 修复：补租约守卫——原 WHERE 仅按 id，租约过期被其他 worker 抢占后，
+        // 原 worker 的失败释放会清掉新 worker 的锁并误增 retry_count。
+        // 守卫 locked_by = 本次持有者（先捕获再置空；无持有者时按租约仍存活限定）。
+        var leaseOwner = message.LockedBy;
         message.Status = OutboxStatus.Pending;
         message.Error = failureReason;
         message.NextAttemptAt = nextAttemptAt;
         message.RetryCount += 1;
         message.LockedBy = null;
         message.LockedUntil = null;
+        var leaseGuard = leaseOwner is null
+            ? "locked_until IS NOT NULL"
+            : $"locked_by = {leaseOwner}";
         Session.ExecuteAsync(
-            $"UPDATE outbox_messages SET status = {(int)OutboxStatus.Pending}, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {message.Id.ToString()}",
+            $"UPDATE outbox_messages SET status = {(int)OutboxStatus.Pending}, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {message.Id.ToString()} AND ({leaseGuard})",
             default).AsTask().GetAwaiter().GetResult();
     }
 

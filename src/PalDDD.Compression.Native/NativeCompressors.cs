@@ -2,6 +2,13 @@ using NativeCompressions;
 
 namespace PalDDD.Compression;
 
+/// <summary>解压炸弹防护（P2 修复）：压缩输入体积上限——超限拒绝解压，防 OOM。</summary>
+internal static class DecompressionGuard
+{
+    /// <summary>压缩输入安全上限（8MB）——合法消息负载压缩后极少超过此量级。</summary>
+    internal const int MaxCompressedInputBytes = 8 * 1024 * 1024;
+}
+
 // ─────────────────────────────────────────────────────────────
 // ⚙️ LZ4Compressor / ZStandardCompressor / OpenZLCompressor — 原生压缩器
 // ─────────────────────────────────────────────────────────────
@@ -35,6 +42,10 @@ internal sealed class LZ4Compressor : ICompressor
     public byte[] Decompress(ReadOnlySpan<byte> compressed)
     {
         if (compressed.IsEmpty) return Array.Empty<byte>();
+        // P2 修复（解压炸弹防护）：超限输入拒绝解压——恶意/损坏数据可膨胀千倍致 OOM
+        if (compressed.Length > DecompressionGuard.MaxCompressedInputBytes)
+            throw new System.IO.InvalidDataException(
+                $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
         return LZ4.Decompress(compressed);
     }
 
@@ -73,6 +84,10 @@ internal sealed class ZStandardCompressor : ICompressor
     public byte[] Decompress(ReadOnlySpan<byte> compressed)
     {
         if (compressed.IsEmpty) return Array.Empty<byte>();
+        // P2 修复（解压炸弹防护）：超限输入拒绝解压——恶意/损坏数据可膨胀千倍致 OOM
+        if (compressed.Length > DecompressionGuard.MaxCompressedInputBytes)
+            throw new System.IO.InvalidDataException(
+                $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
         return Zstandard.Decompress(compressed);
     }
 
@@ -95,7 +110,10 @@ internal sealed class ZStandardCompressor : ICompressor
 /// </remarks>
 internal sealed class OpenZLCompressor : ICompressor
 {
-    public CompressionAlgorithm Algorithm => CompressionAlgorithm.OpenZL;
+    public CompressionAlgorithm // P2 定案（前向兼容声明）：本实现输出/输入为 Zstandard 字节格式，算法标识 OpenZL
+        // 是历史命名。若未来接入"真 OpenZL"实现，旧数据的算法标识与字节格式不匹配
+        // 将导致解压失败——持久化侧应同时记录格式版本。
+        Algorithm => CompressionAlgorithm.OpenZL;
 
     public ReadOnlyMemory<byte> Compress(ReadOnlySpan<byte> data, CompressionLevel level = CompressionLevel.Balanced)
     {
@@ -118,6 +136,10 @@ internal sealed class OpenZLCompressor : ICompressor
     public byte[] Decompress(ReadOnlySpan<byte> compressed)
     {
         if (compressed.IsEmpty) return Array.Empty<byte>();
+        // P2 修复（解压炸弹防护）：超限输入拒绝解压——恶意/损坏数据可膨胀千倍致 OOM
+        if (compressed.Length > DecompressionGuard.MaxCompressedInputBytes)
+            throw new System.IO.InvalidDataException(
+                $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
         return Zstandard.Decompress(compressed);
     }
 

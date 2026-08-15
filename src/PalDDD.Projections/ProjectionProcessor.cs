@@ -57,7 +57,7 @@ public sealed class ProjectionProcessor<TMessage>
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await _checkpointStore.MarkFailedAsync(checkpoint, ex.Message, _timeProvider.GetUtcNow(), ct).ConfigureAwait(false);
+            await _checkpointStore.MarkFailedAsync(checkpoint, ex.Message, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
             throw;
         }
     }

@@ -127,13 +127,14 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 {
                     await handler((TMessage)message, ea.CancellationToken);
                     // 手动确认 — 仅在处理成功后 ACK
-                    await _channel.BasicAckAsync(ea.DeliveryTag, multiple: false);
+                    // P3 修复：ACK 与 Nack 同样加保护——channel 已关时异常逃逸进消费者回调
+                    await TryAckSafeAsync(ea.DeliveryTag, queueName);
                 }
                 else
                 {
                     // 反序列化返回 null — 消息无法处理，不重试
                     _logger.Warning($"Deserializing {typeof(TMessage).Name} returned null, discarding message: {queueName}");
-                    await _channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: false);
+                    await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName);
                 }
             }
             catch (OperationCanceledException)
@@ -180,6 +181,22 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.Warning($"BasicNack failed (channel closed?): {queueName}, deliveryTag={deliveryTag}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// ACK 的安全包装——与 TryNackSafeAsync 同型（P3 修复：成功路径 channel 已关时
+    /// BasicAckAsync 抛异常同样会逃逸进消费者回调）。
+    /// </summary>
+    private async Task TryAckSafeAsync(ulong deliveryTag, string queueName)
+    {
+        try
+        {
+            await _channel.BasicAckAsync(deliveryTag, multiple: false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.Warning($"BasicAck failed (channel closed?): {queueName}, deliveryTag={deliveryTag}: {ex.Message}");
         }
     }
 

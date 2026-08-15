@@ -66,26 +66,32 @@ internal sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavio
 /// <summary>日志管道行为 — IPalLogger 门面日志记录</summary>
 /// <remarks>
 /// 记录命令/查询的执行时间和结果。<br/>
-/// 注册方式：<c>services.AddSingleton(typeof(IPipelineBehavior&lt;,&gt;), typeof(LoggingBehavior&lt;,&gt;))</c>
+/// 注册方式：<c>services.AddScoped(typeof(IPipelineBehavior&lt;,&gt;), typeof(LoggingBehavior&lt;,&gt;))</c>（P3 修复：与 ServiceRegistration 实际注册对齐）
 /// </remarks>
 [SuppressMessage("Design", "CA1031", Justification = "需记录任意 handler 失败后重新抛出，cancel 不记录。")]
 internal sealed class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
 {
     private readonly IPalLogger<LoggingBehavior<TRequest, TResponse>> _logger;
+    private readonly TimeProvider _timeProvider;
 
-    public LoggingBehavior(IPalLogger<LoggingBehavior<TRequest, TResponse>> logger) => _logger = logger;
+    // P3 修复（时钟双轨清零）：可选注入，默认 System——测试可传 FakeTimeProvider
+    public LoggingBehavior(IPalLogger<LoggingBehavior<TRequest, TResponse>> logger, TimeProvider? timeProvider = null)
+    {
+        _logger = logger;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public async ValueTask<TResponse> HandleAsync(TRequest request, CancellationToken ct, Func<ValueTask<TResponse>> next)
     {
         if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
             _logger.Debug($"Command {typeof(TRequest).Name}: dispatching");
 
-        var start = TimeProvider.System.GetTimestamp();
+        var start = _timeProvider.GetTimestamp();
         try
         {
             var result = await next();
-            var elapsed = TimeProvider.System.GetElapsedTime(start).TotalMilliseconds;
+            var elapsed = _timeProvider.GetElapsedTime(start).TotalMilliseconds;
 
             if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
                 _logger.Debug($"Command {typeof(TRequest).Name}: completed in {elapsed:F2}ms");
@@ -94,7 +100,7 @@ internal sealed class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<T
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            var elapsed = TimeProvider.System.GetElapsedTime(start).TotalMilliseconds;
+            var elapsed = _timeProvider.GetElapsedTime(start).TotalMilliseconds;
             _logger.Error(ex, $"Command {typeof(TRequest).Name}: failed after {elapsed:F2}ms");
             throw;
         }

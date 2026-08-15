@@ -33,7 +33,19 @@ public abstract class SagaState
     }
 
     /// <summary>创建时间</summary>
-    public DateTimeOffset CreatedAt { get; init; } = TimeProvider.System.GetUtcNow();
+    public DateTimeOffset CreatedAt { get; init; } = TimeProvider.GetUtcNow();
+
+    /// <summary>
+    /// 框架级时间提供者（P3 修复：时钟双轨清零）——与 DomainEvent/OutboxMessage 同模式：
+    /// internal AsyncLocal，测试经 InternalsVisibleTo 注入 FakeTimeProvider。
+    /// </summary>
+    internal static TimeProvider TimeProvider
+    {
+        get => s_timeProvider.Value ?? System.TimeProvider.System;
+        set => s_timeProvider.Value = value ?? throw new ArgumentNullException(nameof(value));
+    }
+
+    private static readonly AsyncLocal<TimeProvider?> s_timeProvider = new();
 
     /// <summary>完成时间</summary>
     public DateTimeOffset? CompletedAt { get; set; }

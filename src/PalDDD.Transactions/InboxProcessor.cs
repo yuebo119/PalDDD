@@ -100,7 +100,7 @@ public sealed class InboxProcessor
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await _store.MarkFailedAsync(record, ex.Message, ct);
+            await _store.MarkFailedAsync(record, ex.Message, CancellationToken.None);
             activity?.SetTag("pal.inbox.result", "failed");
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             PalMetrics.InboxFailed.Add(1);

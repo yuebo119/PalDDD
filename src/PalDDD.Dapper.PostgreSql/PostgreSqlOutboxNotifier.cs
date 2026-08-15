@@ -151,7 +151,10 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
                     _logger.Debug($"PostgreSQL NOTIFY received on channel '{_channelName}'");
                     if (await _processGate.WaitAsync(0, stoppingToken).ConfigureAwait(false))
                     {
-                        _ = Task.Run(() => FireBatchProcessAsync(stoppingToken), stoppingToken);
+                        // P2 修复：Task.Run 不再传 stoppingToken——传入时若调度前取消，
+                        // 任务不执行、已获取的 gate 永不释放。去掉 token 后任务必然运行，
+                        // 由 FireBatchProcessAsync 内部协作取消 + finally 兜底释放。
+                        _ = Task.Run(() => FireBatchProcessAsync(stoppingToken));
                     }
                 }
             }
@@ -186,7 +189,10 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
         }
         finally
         {
-            _processGate.Release();
+            // P2 修复：Dispose 已释放 gate 时 in-flight 批处理的 Release 会抛
+            // ObjectDisposedException 且无人观察——吞掉（停机路径，gate 已无意义）
+            try { _processGate.Release(); }
+            catch (ObjectDisposedException) { }
 
             // 🔴 P1 修复 (2026-07-28): 批处理完成后主动发送一次 NOTIFY 自唤醒。
             // 必要性：消息可能在批处理执行期间（_processGate 被占用，新的 NOTIFY 被 TryEnter(0) 丢弃）

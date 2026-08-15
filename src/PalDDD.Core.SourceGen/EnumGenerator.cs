@@ -29,6 +29,14 @@ public sealed class EnumGenerator : IIncrementalGenerator
         DiagnosticSeverity.Warning,
         isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor NotDirectInheritanceError = new(
+        "PALENUM002",
+        "GenerateEnum requires direct SmartEnum inheritance",
+        "Type '{0}' is marked with [GenerateEnum] but does not directly inherit SmartEnum<TSelf, TValue> (found '{1}'). GenerateEnum only supports direct inheritance.",
+        "PalDDD.EnumGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         // 步骤 1：收集所有标记了 [GenerateEnum] 的 partial class 及其静态字段
@@ -44,7 +52,18 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // 从基类 SmartEnum<TSelf, TValue> 提取 TValue
                 var baseType = classSymbol.BaseType;
                 if (baseType is not INamedTypeSymbol { TypeArguments.Length: 2 } namedBase)
-                    return null;
+                {
+                    // P2 修复：隔层继承不再静默跳过——报 PALENUM002（与 PALENUM001 对称）
+                    return new EnumGenInfo(
+                        Namespace: classSymbol.ContainingNamespace?.ToDisplayString() ?? "_",
+                        TypeName: classSymbol.Name,
+                        ValueType: baseType?.ToDisplayString() ?? "?",
+                        Fields: [],
+                        HasFields: false,
+                        DiagnosticId: "PALENUM002",
+                        DiagnosticMessage: $"Type '{classSymbol.Name}' is marked with [GenerateEnum] but does not directly inherit SmartEnum<TSelf, TValue> (found '{baseType?.ToDisplayString() ?? "none"}').",
+                        Location: context.TargetNode.GetLocation());
+                }
 
                 var valueType = namedBase.TypeArguments[1];
 
@@ -94,6 +113,16 @@ public sealed class EnumGenerator : IIncrementalGenerator
         // 步骤 2：有字段时生成，无字段时报告警告
         context.RegisterSourceOutput(candidates, static (spc, info) =>
         {
+            if (info!.DiagnosticId is not null)
+            {
+                // P2 修复：隔层继承报 PALENUM002（Error 级）
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    NotDirectInheritanceError,
+                    info.Location ?? Location.None,
+                    info.TypeName,
+                    info.ValueType));
+                return;
+            }
             if (!info!.HasFields)
             {
                 // 报告警告而非静默跳过
@@ -140,5 +169,8 @@ partial class {{info.TypeName}}
         string TypeName,
         string ValueType,
         ImmutableArray<string> Fields,
-        bool HasFields = true);
+        bool HasFields = true,
+        string? DiagnosticId = null,
+        string? DiagnosticMessage = null,
+        Location? Location = null);
 }

@@ -36,6 +36,12 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
     /// <summary>Saga 状态表</summary>
     public DbSet<TState> SagaStates => Set<TState>();
 
+    /// <summary>
+    /// 当前 UTC 时间（P3 修复：时钟双轨清零）——虚方法模式与 OutboxDbContext.GetUtcNow 对齐，
+    /// 测试子类可覆写注入 FakeTimeProvider。
+    /// </summary>
+    protected virtual DateTimeOffset GetUtcNow() => TimeProvider.System.GetUtcNow();
+
     /// <inheritdoc/>
     public async ValueTask<IReadOnlyList<TState>> GetActiveSagasAsync(int batchSize, CancellationToken ct)
     {
@@ -58,7 +64,7 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
 
-        var now = TimeProvider.System.GetUtcNow();
+        var now = GetUtcNow();
         var leasedUntil = now.Add(leaseDuration);
         var states = await SagaStates
             .Where(s => s.Status == SagaStatus.Active

@@ -3,6 +3,13 @@ using System.IO.Compression;
 
 namespace PalDDD.Compression;
 
+/// <summary>解压炸弹防护（P2 修复）：压缩输入体积上限——超限拒绝解压，防 OOM。</summary>
+internal static class DecompressionGuard
+{
+    /// <summary>压缩输入安全上限（8MB）——合法消息负载压缩后极少超过此量级。</summary>
+    internal const int MaxCompressedInputBytes = 8 * 1024 * 1024;
+}
+
 // ─────────────────────────────────────────────────────────────
 // ⚙️ BrotliCompressor / GZipCompressor / DeflateCompressor — 内置压缩器
 // ─────────────────────────────────────────────────────────────
@@ -36,6 +43,10 @@ internal sealed class BrotliCompressor : ICompressor
     public byte[] Decompress(ReadOnlySpan<byte> compressed)
     {
         if (compressed.IsEmpty) return [];
+        // P2 修复（解压炸弹防护）：超限输入拒绝解压——恶意/损坏数据可膨胀千倍致 OOM
+        if (compressed.Length > DecompressionGuard.MaxCompressedInputBytes)
+            throw new InvalidDataException(
+                $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
 
         // span 直解：免输入 ToArray 拷贝，输出走增长缓冲，无 MemoryStream 分配
         using var decoder = new BrotliDecoder();
@@ -91,6 +102,10 @@ internal sealed class GZipCompressor : ICompressor
     public byte[] Decompress(ReadOnlySpan<byte> compressed)
     {
         if (compressed.IsEmpty) return [];
+        // P2 修复（解压炸弹防护）：超限输入拒绝解压——恶意/损坏数据可膨胀千倍致 OOM
+        if (compressed.Length > DecompressionGuard.MaxCompressedInputBytes)
+            throw new InvalidDataException(
+                $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
 
         using var input = new MemoryStream(compressed.ToArray());
         using var output = new MemoryStream();
@@ -134,6 +149,10 @@ internal sealed class DeflateCompressor : ICompressor
     public byte[] Decompress(ReadOnlySpan<byte> compressed)
     {
         if (compressed.IsEmpty) return [];
+        // P2 修复（解压炸弹防护）：超限输入拒绝解压——恶意/损坏数据可膨胀千倍致 OOM
+        if (compressed.Length > DecompressionGuard.MaxCompressedInputBytes)
+            throw new InvalidDataException(
+                $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
 
         using var input = new MemoryStream(compressed.ToArray());
         using var output = new MemoryStream();

@@ -39,6 +39,7 @@ public static class SqlitePalOrmExtensions
     public static IServiceCollection AddPalOrmSqlite(
         this IServiceCollection services,
         string connectionString,
+        DbOptions? options = null,
         TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -47,7 +48,7 @@ public static class SqlitePalOrmExtensions
         // Scoped DataSession（同步阻塞创建，仅在请求起始）
         services.AddScoped(sp =>
         {
-            var opts = DbOptions.Development(connectionString);
+            var opts = options ?? DbOptions.Development(connectionString);
             return DataSession<SqliteProvider>.CreateAsync(opts, default).GetAwaiter().GetResult();
         });
 

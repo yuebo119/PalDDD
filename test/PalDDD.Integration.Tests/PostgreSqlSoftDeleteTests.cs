@@ -10,6 +10,6 @@ public sealed class PostgreSqlSoftDeleteTests
         var sql = PostgreSqlSoftDelete.Delete("outbox_messages", "id=@id");
 
         await Assert.That(sql).IsEqualTo(
-            "UPDATE outbox_messages SET deleted_at = NOW() WHERE id=@id AND deleted_at IS NULL");
+            "UPDATE \"outbox_messages\" SET \"deleted_at\" = NOW() WHERE id=@id AND \"deleted_at\" IS NULL");
     }
 }

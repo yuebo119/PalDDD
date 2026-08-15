@@ -47,7 +47,7 @@ public static class PostgreSqlReportHelper
         foreach (var p in parameters) cmd.Parameters.Add(p);
 
         await using var reader = await cmd.ExecuteReaderAsync(
-            CommandBehavior.SequentialAccess, ct);
+            CommandBehavior.Default, ct);
         await using var writer = new StreamWriter(outputPath, false, Encoding.UTF8);
 
         // 写入 CSV 头
@@ -94,7 +94,7 @@ public static class PostgreSqlReportHelper
         foreach (var p in parameters) cmd.Parameters.Add(p);
 
         await using var reader = await cmd.ExecuteReaderAsync(
-            CommandBehavior.SequentialAccess, ct);
+            CommandBehavior.Default, ct);
         await using var stream = new FileStream(outputPath, FileMode.Create, FileAccess.Write);
         await using var jsonWriter = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = false });
 
@@ -144,7 +144,7 @@ public static class PostgreSqlReportHelper
         foreach (var p in parameters) cmd.Parameters.Add(p);
 
         await using var reader = await cmd.ExecuteReaderAsync(
-            CommandBehavior.SequentialAccess, ct);
+            CommandBehavior.Default, ct);
 
         long rowCount = 0;
         while (await reader.ReadAsync(ct))

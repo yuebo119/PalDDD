@@ -92,7 +92,7 @@ public static class MySqlServiceCollectionExtensions
         if (applyOptimization)
             MySqlPerformanceOptimizer.Optimize(connection);
 
-        services.AddSingleton(connection);
+        services.AddScoped(_ => connection); // P3 修复：Obsolete 路径同样改 Scoped（MySqlConnection 非线程安全）
         services.AddSingleton<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<MySqlConnection>());
 
         return services;

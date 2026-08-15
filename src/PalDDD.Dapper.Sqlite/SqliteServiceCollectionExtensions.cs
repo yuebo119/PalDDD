@@ -35,10 +35,8 @@ public enum SqliteOptimizeLevel
 public static class SqliteServiceCollectionExtensions
 {
     /// <summary>
-    /// 注册 SQLite 连接（Singleton）并应用性能优化。
-    /// 需要配合 AddPalDapperTransactions 注册 Dapper Store。
-    /// <summary>
-    /// 注册 SQLite 连接和优化配置。
+    /// 注册 SQLite 连接并应用性能优化（生命周期按连接串自动选择，P2 修复后）：
+    /// :memory: → Singleton（连接关闭数据即销毁）；文件模式 → Scoped（非线程安全）。
     /// </summary>
     /// <param name="connectionString">SQLite 连接字符串</param>
     /// <param name="optimize">优化级别（默认 Production — WAL + 性能 PRAGMA）</param>
@@ -84,13 +82,17 @@ public static class SqliteServiceCollectionExtensions
     /// 注册 SQLite 内存数据库（测试用）。
     /// Data Source=:memory: — 连接关闭后数据销毁。
     /// </summary>
-    /// <param name="sharedCache">是否使用共享缓存（跨连接保持数据）</param>
+    /// <param name="sharedCache">
+    /// 是否使用共享缓存（跨连接保持数据）。P2 探针实证修复：共享形式必须用
+    /// <c>file::memory:?cache=shared</c> URI 语法——裸形式 <c>:memory:?cache=shared</c>
+    /// 会被当普通文件名（Windows 上 ? 非法），Open 直接抛 SQLite Error 14。
+    /// </param>
     public static IServiceCollection AddPalSqliteInMemory(
         this IServiceCollection services,
         bool sharedCache = false)
     {
         var cs = sharedCache
-            ? "Data Source=:memory:?cache=shared"
+            ? "Data Source=file::memory:?cache=shared"
             : "Data Source=:memory:";
 
         return AddPalSqlite(services, cs, SqliteOptimizeLevel.InMemory);

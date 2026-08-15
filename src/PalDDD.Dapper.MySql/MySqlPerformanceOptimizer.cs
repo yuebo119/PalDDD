@@ -41,7 +41,7 @@ public static class MySqlPerformanceOptimizer
     /// <param name="connection">MySQL 连接（方法内部会打开连接）</param>
     public static void Optimize(MySqlConnection connection)
     {
-        connection.Open();
+        if (connection.State != System.Data.ConnectionState.Open) connection.Open(); // P3 修复：幂等开连接
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = """
@@ -59,7 +59,7 @@ public static class MySqlPerformanceOptimizer
     /// <param name="connection">MySQL 连接</param>
     public static void SetUtf8mb4(MySqlConnection connection)
     {
-        connection.Open();
+        if (connection.State != System.Data.ConnectionState.Open) connection.Open(); // P3 修复：幂等开连接
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci";
         cmd.ExecuteNonQuery();

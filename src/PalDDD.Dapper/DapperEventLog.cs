@@ -65,6 +65,10 @@ public sealed class DapperEventLog : IEventLog
         ArgumentNullException.ThrowIfNull(events);
         if (events.Count == 0) throw new ArgumentException("至少需要一个事件。", nameof(events));
 
+        // 📐 事务契约（P2 定案声明）：批量追加的原子性由调用方事务保证——传入
+        // _transaction 则整批可回滚；未传时中途失败会留下前半批（部分写入）。
+        // EFCore 版在内部事务中自动回滚，Dapper 版依赖外部 UoW（两版契约差异是
+        // Dapper 连接由调用方持有的设计结果——与 PalORM 版一致）。
         // 1. 乐观并发检查（P0-2 修复：原 expectedVersion.Matches 返回值被丢弃）
         var currentVersion = await _connection.QuerySingleOrDefaultAsync<long?>(
             EventLogSql.MaxVersion,
@@ -102,8 +106,14 @@ public sealed class DapperEventLog : IEventLog
                     Payload = evt.Payload.ToArray(),
                     Metadata = evt.Metadata.ToArray(),
                     RecordedAt = DapperAotInitializer.ToSqliteParameter(now),
-                    ActorId = (string?)null,
-                    Reason = (string?)null
+                    // 修复覆盖残留：此前硬编码 null——actor/reason 也从未真正持久化过；
+                    // 现按 EventData.Audit 全量映射 6 字段（对齐 PalORM/EFCore）
+                    ActorId = evt.Audit.ActorId,
+                    Reason = evt.Audit.Reason,
+                    CorrelationId = evt.Audit.CorrelationId?.ToString(),
+                    CausationId = evt.Audit.CausationId?.ToString(),
+                    TraceParent = evt.Audit.TraceParent,
+                    TraceState = evt.Audit.TraceState
                 }, _transaction).ConfigureAwait(false);
             }
             catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
@@ -213,6 +223,12 @@ public sealed class DapperEventLog : IEventLog
         public DateTimeOffset RecordedAt { get; set; }
         public string? ActorId { get; set; }
         public string? Reason { get; set; }
+        // 修复覆盖残留（对齐 PalORM/EFCore 审计 6 字段）：此前 Dapper 路径只持久化 2 字段，
+        // 追踪链（correlation/causation/trace）在 Dapper 存储上断，导出/备份往返丢字段
+        public string? CorrelationId { get; set; }
+        public string? CausationId { get; set; }
+        public string? TraceParent { get; set; }
+        public string? TraceState { get; set; }
 
         public RecordedEvent ToRecordedEvent()
             => RecordedEvent.RehydrateFromBytes(
@@ -220,7 +236,17 @@ public sealed class DapperEventLog : IEventLog
                 EventId, EventName, SchemaVersion, ContentType,
                 Payload, Metadata,
                 string.IsNullOrEmpty(ActorId) && string.IsNullOrEmpty(Reason)
+                    && string.IsNullOrEmpty(CorrelationId) && string.IsNullOrEmpty(CausationId)
+                    && string.IsNullOrEmpty(TraceParent) && string.IsNullOrEmpty(TraceState)
                     ? EventAuditMetadata.Empty
-                    : new EventAuditMetadata(ActorId, Reason, null, null, null, null));
+                    : new EventAuditMetadata(ActorId, Reason,
+                        ParseUlid(CorrelationId), ParseUlid(CausationId),
+                        TraceParent, TraceState));
+
+        /// <summary>安全解析 Ulid 字符串 —— 脏数据返回 null（与 PalORM 版 P0-6 同风格）。</summary>
+        private static PalUlid? ParseUlid(string? value)
+            => value is not null && PalUlid.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var ulid)
+                ? ulid
+                : (PalUlid?)null;
     }
 }

@@ -87,10 +87,13 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
     {
         var expectedRevision = checkpoint.Revision;
         var statusCompleted = (int)ProjectionCheckpointStatus.Completed;
-        await Session.ExecuteAsync(
+        var affected = await Session.ExecuteAsync(
             $"UPDATE projection_checkpoints SET status = {statusCompleted}, updated_at = {completedAt}, revision = revision + 1, error = NULL WHERE projection_name = {checkpoint.ProjectionName} AND source_name = {checkpoint.SourceName} AND position = {checkpoint.Position} AND revision = {expectedRevision}",
             ct);
-        checkpoint.MarkCompleted(completedAt);
+        // 修复覆盖残留：对齐 Dapper 版同方法（rows>0 才变更本地对象）——
+        // 乐观锁冲突时 DB 未变，不假装落库成功
+        if (affected > 0)
+            checkpoint.MarkCompleted(completedAt);
     }
 
     /// <inheritdoc />
@@ -99,10 +102,11 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         var expectedRevision = checkpoint.Revision;
         var statusFailed = (int)ProjectionCheckpointStatus.Failed;
         var statusCompleted = (int)ProjectionCheckpointStatus.Completed;
-        await Session.ExecuteAsync(
+        var affected = await Session.ExecuteAsync(
             $"UPDATE projection_checkpoints SET status = {statusFailed}, updated_at = {failedAt}, revision = revision + 1, error = {failureReason} WHERE projection_name = {checkpoint.ProjectionName} AND source_name = {checkpoint.SourceName} AND position = {checkpoint.Position} AND revision = {expectedRevision} AND status <> {statusCompleted}",
             ct);
-        checkpoint.MarkFailed(failureReason, failedAt);
+        if (affected > 0)
+            checkpoint.MarkFailed(failureReason, failedAt);
     }
 
     /// <inheritdoc />

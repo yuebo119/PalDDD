@@ -340,7 +340,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
                     throw aggEx;
                 }
 
-                if (!wasCompleted && current.Status != SagaStatus.Completed)
+                // P1-1 修复：与 Normal 路径（result.Status == Completed）对齐——此前 `!=`
+                // 使 FanOut/ChildSaga 在"未完成"时计数、真正完成时不计数，指标语义反向
+                if (!wasCompleted && current.Status == SagaStatus.Completed)
                     PalMetrics.SagaCompleted.Add(1);
 
                 RecordExecutedStep(current, current, stepKey, startedAt);
@@ -424,7 +426,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 // Apply child output back to parent
                 childStep.ApplyOutput(current, finalChildState);
 
-                if (!wasCompleted && current.Status != SagaStatus.Completed)
+                // P1-1 修复：与 Normal 路径（result.Status == Completed）对齐——此前 `!=`
+                // 使 FanOut/ChildSaga 在"未完成"时计数、真正完成时不计数，指标语义反向
+                if (!wasCompleted && current.Status == SagaStatus.Completed)
                     PalMetrics.SagaCompleted.Add(1);
 
                 RecordExecutedStep(current, current, stepKey, startedAt);
@@ -621,7 +625,15 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
         var stepKey = MakeKey(current.CurrentState, @event.GetType());
         var match = FindStep(current, stepKey);
-        return match is null ? current : (TState)await match.Value.Step.ExecuteAsync(current, @event, ct).ConfigureAwait(false);
+        if (match is null) return current;
+
+        // 修复覆盖残留（ITM-069 只守卫了 ProcessEventAsync 路由路径）：本入口同样
+        // 不支持特殊步骤（FanOut/ChildSaga/Interrupt/Dynamic 的 execute 为 null! 契约）
+        if (match.Value.Step.DispatchKind != StepDispatchKind.Normal)
+            throw new InvalidOperationException(
+                $"HandleEventAsync 命中步骤 '{match.Value.Key}' 是 {match.Value.Step.DispatchKind} 类型，仅支持在编排器 When(...) 注册的普通步骤上直接事件处理；特殊步骤须走 ProcessEventAsync。");
+
+        return (TState)await match.Value.Step.ExecuteAsync(current, @event, ct).ConfigureAwait(false);
     }
 
     /// <summary>查找匹配步骤（不执行），返回实际命中的注册键。</summary>
