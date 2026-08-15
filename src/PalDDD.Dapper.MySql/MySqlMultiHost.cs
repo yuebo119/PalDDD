@@ -51,7 +51,20 @@ public static class MySqlMultiHost
         var primaryBuilder = new MySqlConnectionStringBuilder(primaryConnectionString);
         var standbyBuilder = new MySqlConnectionStringBuilder(standbyConnectionString);
 
-        // 合并主机列表
+        // P2 定案（failover 参数丢弃）：MySQL 连接串的 Port/User/Password/Database
+        // 对主机列表内所有节点统一生效——standby 与 primary 不一致时无法表达，
+        // 静默丢弃会导致故障转移后连接失败。此处快速失败并说明约束。
+        if (standbyBuilder.Port != primaryBuilder.Port
+            || !string.Equals(standbyBuilder.UserID, primaryBuilder.UserID, StringComparison.Ordinal)
+            || !string.Equals(standbyBuilder.Password, primaryBuilder.Password, StringComparison.Ordinal)
+            || !string.Equals(standbyBuilder.Database, primaryBuilder.Database, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "standby 与 primary 的 Port/User/Password/Database 必须一致：MySQL 连接串的这些参数对主机列表内全部节点统一生效，"
+                + "差异无法表达且会被静默丢弃（故障转移后必然连接失败）。请为两节点配置相同账号/端口/库，或使用自定义多主机扩展。");
+        }
+
+        // 合并主机列表（凭据/端口/库已验证一致，取 primary 的即可）
         primaryBuilder.Server = $"{primaryBuilder.Server},{standbyBuilder.Server}";
 
         // 故障转移模式：默认先连第一个，失败再试后续

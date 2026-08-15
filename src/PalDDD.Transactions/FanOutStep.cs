@@ -70,6 +70,9 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
 
         using var semaphore = new SemaphoreSlim(MaxConcurrency);
         var results = new TResult?[items.Count];
+        // P2 定案（可空结果过滤）：以完成标记收集而非非空过滤——TResult 为可空引用类型
+        // 且子任务合法返回 null 时，旧实现把成功结果误判丢弃（Completed 少计）。
+        var completedFlags = new bool[items.Count];
         List<(TResult?, Exception)> errors = [];
         var tasks = new Task[items.Count];
 
@@ -89,6 +92,7 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
                         cts.CancelAfter(PerItemTimeout!.Value);
                     var token = cts?.Token ?? ct;
                     results[idx] = await _executor(item, token).ConfigureAwait(false);
+                    completedFlags[idx] = true;
                 }
                 catch (OperationCanceledException) when (cts is not null && cts.IsCancellationRequested && !ct.IsCancellationRequested)
                 {
@@ -112,8 +116,15 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
 
+        var completed = new List<TResult?>(items.Count);
+        for (int i = 0; i < results.Length; i++)
+        {
+            if (completedFlags[i])
+                completed.Add(results[i]);
+        }
+
         return new FanOutResult<TResult>(
-            results.Where(r => r is not null).Select(r => r!).ToArray(),
+            completed.ToArray(),
             errors.AsReadOnly());
     }
 

@@ -138,16 +138,19 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             }
             catch (OperationCanceledException)
             {
-                // 取消（关停或超时）：重新入队让其他消费者或重连后重新投递。
-                // 不留 unacked —— 否则消息会滞留直到 channel 关闭才 redeliver（ITM-006）。
-                _logger.Warning($"Handling {typeof(TMessage).Name} message was canceled, requeueing: {queueName}");
-                await TryNackSafeAsync(ea.DeliveryTag, requeue: true, queueName);
+                // P2 定案（匿名队列 requeue 语义）：本 Broker 的队列为 exclusive+autoDelete——
+                // 连接关闭即删除，"重连后重新投递"不可能；OCE 多发生在关停路径，队列将随连接消亡。
+                // requeue:false 显式弃置并留日志（true 会在存活连接上形成自我热循环）。
+                _logger.Warning($"Handling {typeof(TMessage).Name} message was canceled during shutdown, discarding: {queueName}");
+                await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.Error(ex, $"Failed to handle {typeof(TMessage).Name} message: {queueName}");
-                // 处理失败 — 重新入队（requeue: true），让其他消费者重试
-                await TryNackSafeAsync(ea.DeliveryTag, requeue: true, queueName);
+                _logger.Error(ex, $"Failed to handle {typeof(TMessage).Name} message, discarding (anonymous queue): {queueName}");
+                // P2 定案：exclusive 队列的消费者只有本连接——requeue:true 会立即重投给自己，
+                // 持续失败时形成无退避热循环。与 Kafka 路径 ITM-008 对齐：记录后弃置（at-most-once）。
+                // 需要失败重试语义的应用应使用持久队列 + DLX，由自身的 Broker 配置承载。
+                await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName);
             }
         };
 

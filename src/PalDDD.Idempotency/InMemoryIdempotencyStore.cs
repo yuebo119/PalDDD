@@ -29,6 +29,10 @@ public sealed class InMemoryIdempotencyStore : IIdempotencyStore
 
             if (record.ExpiresAt <= now)
             {
+                // 📐 P2 定案（实现分叉声明）：InMemory 版在读路径即时清除过期记录——
+                // 内存字典没有 GC 任务，读时顺带清理是唯一的回收时机；
+                // EFCore 版刻意不在读路径删（清理是后台 GC 任务的职责，避免读事务副作用）。
+                // 两版对外语义一致：过期记录对调用方不可见。
                 _records.Remove(recordKey);
                 return ValueTask.FromResult<IdempotencyRecord?>(null);
             }

@@ -56,14 +56,13 @@ public static class PostgreSqlMultiHost
         var standbyBuilder = new NpgsqlConnectionStringBuilder(standbyConnectionString);
         if (standbyBuilder.Host is not null)
         {
-            builder.ConnectionStringBuilder.Host += $",{standbyBuilder.Host}";
-            if (standbyBuilder.Port != 5432)
-            {
-                // 如果备机端口不同，追加端口
-                var currentPorts = builder.ConnectionStringBuilder.Port;
-                if (currentPorts != standbyBuilder.Port)
-                    builder.ConnectionStringBuilder.Port = 0; // 0 = 使用 Host 内嵌端口
-            }
+            // 实证修正（Npgsql 10.0.3 实测）：Port=0 的赋值直接抛 ArgumentOutOfRangeException，
+            // 旧注释"0 = 使用 Host 内嵌端口"不成立。Npgsql 的共享 Port 只对未内嵌端口的主机生效，
+            // 备机端口不同时正确做法是把端口编码进该主机的 Host 条目（Host 条目支持 host:port 语法）。
+            var standbyHost = standbyBuilder.Port != 5432
+                ? $"{standbyBuilder.Host}:{standbyBuilder.Port}"
+                : standbyBuilder.Host;
+            builder.ConnectionStringBuilder.Host += $",{standbyHost}";
         }
 
         builder.ConnectionStringBuilder.TargetSessionAttributes = "primary";

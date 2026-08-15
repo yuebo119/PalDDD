@@ -22,6 +22,12 @@ public static class SqlitePalOrmExtensions
     /// UnitOfWork.BeginTransactionAsync 后 CreateCommand 自动附加 GetActiveTransaction。
     /// </para>
     /// <para>
+    /// ⚠️ <b>与 Dapper 适配器的 outbox status 编码互斥（P2 定案声明）</b>：
+    /// PalORM 版 outbox_messages.status 存 <b>int 枚举值</b>，Dapper 版存<b>字符串字面量</b>
+    /// （'Pending' 等）——同一物理表两者编码互斥，<b>禁止对同一数据库同时注册
+    /// PalORM 与 Dapper 的 Outbox 实现</b>（互相读不到对方状态）。选型后全程使用同一适配器族。
+    /// </para>
+    /// <para>
     /// <b>DI 工厂 sync-over-async</b>：<see cref="DataSession{TProvider}"/>.<c>CreateAsync</c> 是异步方法，
     /// DI 工厂是同步的 —— 用 <c>GetAwaiter().GetResult()</c> 同步阻塞。仅在 Scoped 解析时执行（请求起始），
     /// 非热路径；如未来死锁可改为 <c>Task.Run().Result</c> 或建议 PalORM 提供 IDataSessionFactory。

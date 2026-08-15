@@ -16,6 +16,12 @@ namespace PalDDD.Projections.EventLog;
 //   ｜ 导出：EventLog.ReadAllAsync() → JSON Lines 文件（备份/迁移/分析）
 //   ｜ 导入：JSON Lines 文件 → EventData[] → IEventLog.AppendAsync()（恢复/迁移）
 //   ｜ 内存峰值 O(1) — 流式处理，不整批加载，百万事件不 OOM
+//
+// 📐 导入语义（P2 定案，设计意图声明）：
+//   ｜ 导入即重建——streamName/streamVersion/globalPosition 仅随导出记录（溯源），
+//   ｜ 导入侧刻意丢弃：目标流的边界与版本由 AppendAsync 的乐观并发重新分配，
+//   ｜ GlobalPosition 由目标库自增生成本次序。跨库迁移不会（也不应）保留
+//   ｜ 源库的全局位置。需要按流恢复时，按导出文件分组后逐流 Append。
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>事件流 JSON Lines 导入导出工具</summary>

@@ -114,6 +114,14 @@ public sealed class EventLogReplaySource<TMessage> : IEventReplaySource<TMessage
             audit.TraceParent,
             audit.TraceState);
 
+    /// <summary>
+    /// 校验流内事件与本回放源的 descriptor 契约一致。
+    /// <para>📐 设计约束（P2 定案，刻意行为）：本回放源要求<b>每流单事件类型</b>——
+    /// 投影重建需要固定的 EventName+SchemaVersion+ContentType 契约来反序列化。
+    /// 异构事件流（一个聚合流内多事件类型）会在第一个不匹配事件处抛
+    /// <see cref="EventReplayException"/>。需要回放异构流时，按 EventName
+    /// 预过滤后为每种事件类型创建独立的回放源。</para>
+    /// </summary>
     private void EnsureContractMatches(RecordedEvent recorded)
     {
         if (!StringComparer.Ordinal.Equals(recorded.EventName, _descriptor.Name))

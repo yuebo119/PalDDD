@@ -72,4 +72,20 @@ public sealed partial class EventLogRow
     /// <summary>操作原因（审计；nullable）。</summary>
     [Column("reason")]
     public string? Reason { get; set; }
+
+    /// <summary>关联 ID（审计；Ulid → 26 字符字符串，nullable。P2 定案：补齐持久化，与 EFCore 版对齐）。</summary>
+    [Column("correlation_id")]
+    public string? CorrelationId { get; set; }
+
+    /// <summary>因果 ID（审计；Ulid → 26 字符字符串，nullable）。</summary>
+    [Column("causation_id")]
+    public string? CausationId { get; set; }
+
+    /// <summary>W3C traceparent（审计；nullable）。</summary>
+    [Column("trace_parent")]
+    public string? TraceParent { get; set; }
+
+    /// <summary>W3C tracestate（审计；nullable）。</summary>
+    [Column("trace_state")]
+    public string? TraceState { get; set; }
 }

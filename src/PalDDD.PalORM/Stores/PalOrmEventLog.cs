@@ -77,6 +77,11 @@ public class PalOrmEventLog<TProvider> : IEventLog
                 RecordedAt = now,
                 ActorId = e.Audit.ActorId,
                 Reason = e.Audit.Reason,
+                // P2 定案：审计 4 字段补齐持久化（此前仅 EFCore 版持久化，PalORM 版导出时追踪链断）
+                CorrelationId = e.Audit.CorrelationId?.ToString(),
+                CausationId = e.Audit.CausationId?.ToString(),
+                TraceParent = e.Audit.TraceParent,
+                TraceState = e.Audit.TraceState,
             };
             // InsertAsync 对自增主键自动回填 GlobalPosition（PG/SQLite 经 RETURNING，MySQL 经 LAST_INSERT_ID）
             var inserted = await Session.InsertAsync(row, cancellationToken);
@@ -99,7 +104,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         // 注意：FormattableString 无法插值 maxCount=int.MaxValue（会被插值为参数），SQL 层面 LIMIT 兼容
         // 使用流式 QueryAsyncEnumerable —— 恒定内存读取（重要：超长事件流场景）
         await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(
-            $"SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason FROM events WHERE stream_name = {streamName} AND stream_version >= {fromVersion} ORDER BY stream_version",
+            $"SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE stream_name = {streamName} AND stream_version >= {fromVersion} ORDER BY stream_version",
             cancellationToken))
         {
             yield return ToRecorded(row, streamName);
@@ -113,7 +118,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(
-            $"SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason FROM events WHERE global_position >= {fromPosition} ORDER BY global_position",
+            $"SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE global_position >= {fromPosition} ORDER BY global_position",
             cancellationToken))
         {
             yield return ToRecorded(row, row.StreamName);
@@ -124,14 +129,24 @@ public class PalOrmEventLog<TProvider> : IEventLog
     /// <summary>EventLogRow → RecordedEvent 领域类型（零拷贝路径，payload/metadata 直接引用 byte[]）。</summary>
     private static RecordedEvent ToRecorded(EventLogRow row, string streamName)
     {
-        // EventAuditMetadata：ActorId+Reason 都空 → Empty；否则构造（其他 4 字段当前未持久化，传 null）
+        // P2 定案：审计 6 字段全量还原（此前 4 个追踪字段回填 null，备份/迁移往返后追踪链断）
         var audit = string.IsNullOrEmpty(row.ActorId) && string.IsNullOrEmpty(row.Reason)
+            && string.IsNullOrEmpty(row.CorrelationId) && string.IsNullOrEmpty(row.CausationId)
+            && string.IsNullOrEmpty(row.TraceParent) && string.IsNullOrEmpty(row.TraceState)
             ? EventAuditMetadata.Empty
-            : new EventAuditMetadata(row.ActorId, row.Reason, null, null, null, null);
+            : new EventAuditMetadata(row.ActorId, row.Reason,
+                ParseUlid(row.CorrelationId), ParseUlid(row.CausationId),
+                row.TraceParent, row.TraceState);
 
         return RecordedEvent.Rehydrate(
             streamName, row.StreamVersion, row.GlobalPosition, row.RecordedAt,
             row.EventId, row.EventName, row.SchemaVersion, row.ContentType,
             row.Payload, row.Metadata, audit);
     }
+
+    /// <summary>安全解析 Ulid 字符串 —— 脏数据返回 null 而非抛异常（与 OutboxMessageRow P0-6 同风格）。</summary>
+    private static Ulid? ParseUlid(string? value)
+        => value is not null && Ulid.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var ulid)
+            ? ulid
+            : (Ulid?)null;
 }

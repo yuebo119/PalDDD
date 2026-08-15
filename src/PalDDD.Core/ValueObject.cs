@@ -77,12 +77,25 @@ public readonly record struct ValueObject<T> : IValueObject, IUtf8SpanFormattabl
     public bool TryFormat(Span<byte> utf8Destination, out int bytesWritten,
         ReadOnlySpan<char> format, IFormatProvider? provider)
     {
-        // 委托给底层数值类型的 IUtf8SpanFormattable
-        if (Value is IUtf8SpanFormattable formattable)
-            return formattable.TryFormat(utf8Destination, out bytesWritten, format, provider);
+        // 装箱修复（benchmark 实证旧实现每次调用分配 24B——接口 is-匹配对 struct 装箱）：
+        // INumberBase<T> 已含 ISpanFormattable，受约束调用经 JIT 静态分派零装箱，
+        // 先格式化到栈上 UTF16 缓冲再经 Utf8.FromUtf16 转码，全程零堆分配。
+        Span<char> utf16 = stackalloc char[128];
+        if (!Value.TryFormat(utf16, out int charsWritten, format, provider))
+        {
+            bytesWritten = 0;
+            return false;
+        }
 
-        bytesWritten = 0;
-        return false;
+        var status = System.Text.Unicode.Utf8.FromUtf16(utf16[..charsWritten], utf8Destination,
+            out _, out bytesWritten);
+        if (status != System.Buffers.OperationStatus.Done)
+        {
+            // 保持 .NET TryFormat 契约：失败时不报告部分写入（与原 IUtf8SpanFormattable 直写行为一致）
+            bytesWritten = 0;
+            return false;
+        }
+        return true;
     }
 
     /// <inheritdoc/>

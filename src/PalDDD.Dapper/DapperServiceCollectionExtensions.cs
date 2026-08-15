@@ -54,6 +54,13 @@ public static class DapperServiceCollectionExtensions
     /// 注册 Dapper 适配器层所有服务。<br/>
     /// 包括：数据库连接（Scoped）、数据库类型枚举（Singleton）、
     /// Outbox/Inbox/Saga 的 Dapper 实现（Scoped）。
+    /// <para>
+    /// ⚠️ <b>与 PalORM 适配器的 outbox status 编码互斥（P2 定案声明）</b>：
+    /// Dapper 版 outbox_messages.status 存<b>字符串字面量</b>（'Pending' 等），
+    /// PalORM 版存 <b>int 枚举值</b>——同一物理表两者编码互斥，<b>禁止对同一数据库
+    /// 同时注册 Dapper 与 PalORM 的 Outbox 实现</b>（互相读不到对方状态）。
+    /// 选型后应全程使用同一适配器族。
+    /// </para>
     /// </summary>
     /// <param name="services">DI 服务集合</param>
     /// <param name="type">数据库类型（Sqlite / PostgreSql / MySql）</param>

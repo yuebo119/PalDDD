@@ -113,6 +113,25 @@
 
 ### [ ] 剩余待排期（需设计决策或环境实证）
 
+### [x] 第三轮（同日）— 设计决策 10 项 + 环境实证 4 项全部处置
+
+| 决策/实证 | 定案 | 落点 |
+|---|---|---|
+| RabbitMQ 匿名队列 requeue 语义 | requeue:false + 如实日志（exclusive 队列 requeue:true 是自我热循环且"重连重投"不可能；与 Kafka ITM-008 对齐） | RabbitMqBroker.cs |
+| MySqlMultiHost failover 凭据丢弃 | 构造期校验 Port/User/Password/Database 一致，不一致快速失败（MySQL 连接串对这些参数全节点统一生效，差异无法表达） | MySqlMultiHost.cs |
+| outbox status 两适配器编码互斥 | 文档级声明：两侧 DI 入口标注"禁止同库同时注册" | DapperServiceCollectionExtensions.cs / SqlitePalOrmExtensions.cs |
+| PalORM 审计字段持久化 | 实现：EventLogRow +4 列（correlation/causation/trace_parent/trace_state）+ INSERT/SELECT/ToRecorded 全链路 + 三方言 DDL + 000_schema.sql | EventLogRow.cs / PalOrmEventLog.cs / MultiDialectSchema.cs / 000_schema.sql |
+| 导入流字段丢弃 | 设计意图声明：导入即重建（目标流边界/版本由 AppendAsync 重分配） | EventStreamJsonLines.cs 头注释 |
+| 单类型流约定 | 设计约束声明：投影回放要求每流单契约，异构流需按 EventName 分组预过滤 | EventLogReplaySource.cs |
+| FanOut 可空结果过滤 | 以完成标记收集替代非空过滤（TResult 可空时成功 null 结果不再误判丢弃） | FanOutStep.cs |
+| OutboxMessage TimeProvider 双轨 | 镜像 DomainEvent 的 internal AsyncLocal TimeProvider 模式（测试可注入） | OutboxMessage.cs |
+| 幂等读路径分叉 | 实现差异声明：InMemory 读时清理 vs EFCore 后台 GC（对外语义一致） | InMemoryIdempotencyStore.cs |
+| Saga 跨方言 SKIP LOCKED | ADR-017：维持乐观并发+冲突重试，SQLite 不支持+复杂度收益比不成立；给出重评触发条件 | docs/decisions/017-saga-lease-concurrency.md |
+| **实证** ValueObject 装箱 | benchmark 实锤 24B/次 → 修复为受约束 UTF16 调用+FromUtf16 转码 → 0B/次（S3 反向验证：改前 24B、改后 0B；契约测试守住失败路径） | ValueObject.cs |
+| **实证** MultiHost Port=0 | Npgsql 10.0.3 实测 Port=0 赋值直接抛 ArgumentOutOfRange（旧注释错误）→ 修复为备机端口编码进 Host 条目（host:port 语法实测支持） | PostgreSqlMultiHost.cs |
+| **实证** ToSqliteParameter PG 绑定 | 分析定性：依赖驱动 unknown-OID 推断，PG 实测待集成测试基建（与 Pipeline 同批） | 待 PG 集成测试 |
+| **实证** Pipeline RecordsAffected | 修复已按 Npgsql 文档语义落地（ITM-068），实际值待 PG 实测 | 待 PG 集成测试 |
+
 - **需设计决策（~10 项）**：RabbitMQ 匿名队列 requeue 语义（消息随队列消失 vs DLX）、MySqlMultiHost failover 凭据/端口丢弃、PalORM/Dapper outbox status 编码互斥（int vs string）、PalORM 审计字段持久化（已声明 gap）、EventStreamJsonLines 导入丢弃流字段（疑刻意）、EventLogReplaySource 单类型流约定、FanOutStep 可空结果过滤、OutboxMessage TimeProvider 双轨、InMemoryIdempotencyStore 读路径删除分叉、Saga 跨方言 SKIP LOCKED（需 ADR）。
 - **需环境实证（~4 项）**：ValueObject 接口模式匹配装箱（benchmark 实证）、ToSqliteParameter 跨方言 PG 绑定（PG 实测）、PostgreSqlPipeline RecordsAffected 实际值（PG 实测）、MultiHost Port=0 语义（Npgsql 文档核实）。
 - **P3 顺手修清单**：TimeProvider 硬编码 ×4、TryAdd 静默 ×4、DapperOutbox/Inbox ct 缺传（CommandDefinition）×2、其余注释漂移 ×5、CheckpointRow 死代码（须按框架库五步验证后处置）。

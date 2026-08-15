@@ -74,7 +74,11 @@ CREATE TABLE events (
     metadata        BLOB,
     recorded_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     actor_id        TEXT,
-    reason          TEXT
+    reason          TEXT,
+    correlation_id  TEXT,   -- 审计：关联 Ulid（26 字符）
+    causation_id    TEXT,   -- 审计：因果 Ulid（26 字符）
+    trace_parent    TEXT,   -- 审计：W3C traceparent
+    trace_state     TEXT    -- 审计：W3C tracestate
 );
 
 CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
