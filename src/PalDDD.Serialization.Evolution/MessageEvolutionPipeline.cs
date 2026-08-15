@@ -17,6 +17,16 @@ public sealed class MessageEvolutionPipeline
     {
         ArgumentNullException.ThrowIfNull(steps);
 
+        // P2 修复：构造期校验升级链严格递增——v1→v2 与 v2→v1 之类的回环注册
+        // 会让 Upgrade/ValidatePath 的 while 循环无限乒乓（挂死而非异常）
+        foreach (var step in steps)
+        {
+            if (step.TargetDescriptor.SchemaVersion <= step.SourceDescriptor.SchemaVersion)
+                throw new MessageEvolutionException(
+                    $"升级步骤 {step.SourceDescriptor.Name} v{step.SourceDescriptor.SchemaVersion}→v{step.TargetDescriptor.SchemaVersion} "
+                    + "必须严格递增：回环/退化注册会导致升级死循环。");
+        }
+
         _steps = steps.ToFrozenDictionary(
             step => new Key(step.SourceDescriptor.Name, step.SourceDescriptor.SchemaVersion));
     }

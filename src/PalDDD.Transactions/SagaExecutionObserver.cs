@@ -20,6 +20,9 @@ namespace PalDDD.Transactions;
 public sealed class SagaExecutionObserver : IDisposable
 {
     private readonly ISagaEventSink? _sink;
+    // P2 修复：嵌套 Observer 场景——保存外层实例，Dispose 时恢复而非清空
+    // （此前内层 Dispose 把 _current 置 null，外层注册随之丢失）
+    private readonly SagaExecutionObserver? _previous;
     private static readonly AsyncLocal<SagaExecutionObserver?> _current = new();
 
     /// <summary>当前异步上下文中的 Observer。</summary>
@@ -31,6 +34,7 @@ public sealed class SagaExecutionObserver : IDisposable
     public SagaExecutionObserver(ISagaEventSink? sink = null)
     {
         _sink = sink;
+        _previous = _current.Value;
         _current.Value = this;
     }
 
@@ -69,8 +73,8 @@ public sealed class SagaExecutionObserver : IDisposable
             await _sink.EmitAsync(new SagaStatusChanged(sagaId, oldStatus, newStatus), ct).ConfigureAwait(false);
     }
 
-    /// <summary>释放 Observer，从当前上下文移除。</summary>
-    public void Dispose() => _current.Value = null;
+    /// <summary>释放 Observer，恢复外层 Observer（如有）。</summary>
+    public void Dispose() => _current.Value = _previous;
 }
 
 // ─────────────────────────────────────────────────────────────

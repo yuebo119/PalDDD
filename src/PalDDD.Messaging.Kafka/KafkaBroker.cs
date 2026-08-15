@@ -26,6 +26,8 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
     private readonly ConsumerConfig _consumerConfig;
     private readonly IPalLogger<KafkaBroker> _logger;
     private readonly List<IAsyncDisposable> _consumers = [];
+    // P2 修复：_consumers 的并发 Add（多线程 SubscribeAsync）与 DisposeAsync 遍历需互斥
+    private readonly object _consumersLock = new();
 
     public KafkaBroker(
         ProducerConfig producerConfig,
@@ -166,14 +168,23 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             }
         }, cts.Token);
 
-        var subscription = new KafkaSubscription(cts, consumeTask);
-        _consumers.Add(subscription);
+        var subscription = new KafkaSubscription(cts, consumeTask, consumer);
+        lock (_consumersLock)
+        {
+            _consumers.Add(subscription);
+        }
         return new ValueTask<IAsyncDisposable>(subscription);
     }
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var c in _consumers) await c.DisposeAsync();
+        IAsyncDisposable[] snapshot;
+        lock (_consumersLock)
+        {
+            snapshot = [.. _consumers];
+            _consumers.Clear();
+        }
+        foreach (var c in snapshot) await c.DisposeAsync();
         _producer.Dispose();
     }
 
@@ -182,12 +193,14 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
     {
         private readonly CancellationTokenSource _cts;
         private readonly Task _consumeTask;
+        private readonly IConsumer<string, byte[]> _consumer;
         private int _disposed;
 
-        public KafkaSubscription(CancellationTokenSource cts, Task consumeTask)
+        public KafkaSubscription(CancellationTokenSource cts, Task consumeTask, IConsumer<string, byte[]> consumer)
         {
             _cts = cts;
             _consumeTask = consumeTask;
+            _consumer = consumer;
         }
 
         /// <summary>后台消费 Task — 可用于健康检查和异常观测</summary>
@@ -215,6 +228,10 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             }
             finally
             {
+                // P2 修复：若取消发生在 Task.Run 委托开始执行前，委托内 finally
+                // （consumer.Close + Dispose）不会执行——此处兜底释放 consumer
+                // （Confluent.Kafka Dispose 幂等，与委托内 finally 双重释放安全）。
+                _consumer.Dispose();
                 _cts.Dispose();
             }
         }

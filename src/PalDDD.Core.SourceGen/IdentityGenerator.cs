@@ -25,9 +25,28 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 var attrData = context.Attributes[0];
                 var sourceType = (INamedTypeSymbol)attrData.ConstructorArguments[0].Value!;
 
+                // P2 修复：嵌套类型——ContainingNamespace 不含类型层级，生成物需按
+                // ContainingType 链包 partial 声明；否则 namespace 级平铺的同名类型
+                // 与用户声明的嵌套 partial 不合并（Outer.Inner 得不到 IPalIdentity 实现）。
+                var containingDeclarations = new List<string>();
+                var containingNames = new List<string>();
+                for (var t = structSymbol.ContainingType; t is not null; t = t.ContainingType)
+                {
+                    var kind = t.IsRecord
+                        ? (t.TypeKind == TypeKind.Struct ? "partial record struct" : "partial record")
+                        : t.TypeKind == TypeKind.Struct ? "partial struct" : "partial class";
+                    var arity = t.Arity > 0
+                        ? $"<{string.Join(", ", t.TypeParameters.Select(p => p.Name))}>"
+                        : "";
+                    containingDeclarations.Insert(0, $"{kind} {t.Name}{arity}");
+                    containingNames.Insert(0, t.Name);
+                }
+
                 return new IdGenInfo(
                     structSymbol.ContainingNamespace?.ToDisplayString() ?? "_",
                     structSymbol.Name,
+                    [.. containingDeclarations],
+                    [.. containingNames],
                     sourceType.ToDisplayString() switch
                     {
                         "System.Guid" => "Guid",
@@ -64,6 +83,18 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         var name = info.TypeName;
         var srcType = info.SourceType;
 
+        // P2 修复：嵌套类型——转换器类保持命名空间级，引用需带类型链限定名；
+        // struct 本体按 ContainingType 链包 partial 声明（零嵌套时 open/close 为空，输出与旧版一致）
+        var fullName = info.ContainingNames.Length > 0
+            ? string.Join(".", info.ContainingNames) + "." + name
+            : name;
+        var open = info.ContainingDeclarations.Length > 0
+            ? "\n" + string.Join("\n", info.ContainingDeclarations.Select(d => $"{d}\n{{")) + "\n"
+            : "";
+        var close = info.ContainingDeclarations.Length > 0
+            ? "\n" + string.Join("\n", info.ContainingDeclarations.Select(_ => "}")) + "\n"
+            : "";
+
         var ulidUsing = srcType == "Ulid" ? "\r\nusing PalUlid = ByteAether.Ulid.Ulid;" : "";
 
         return $$"""
@@ -76,8 +107,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using PalDDD.Core;{{ulidUsing}}
 
-namespace {{ns}};
-
+namespace {{ns}};{{open}}
 [TypeConverter(typeof({{name}}TypeConverter))]
 [JsonConverter(typeof({{name}}JsonConverter))]
 public readonly partial record struct {{name}} : IPalIdentity<{{srcType}}>, ISpanParsable<{{name}}>
@@ -108,22 +138,22 @@ public readonly partial record struct {{name}} : IPalIdentity<{{srcType}}>, ISpa
 {{TryParseSpanBody(srcType)}}
     }
 {{(info.IsNumeric ? NumericOperators(name, srcType) : "")}}
-}
+}{{close}}
 
-internal sealed class {{name}}JsonConverter : JsonConverter<{{name}}>
+internal sealed class {{fullName}}JsonConverter : JsonConverter<{{fullName}}>
 {
-    public override {{name}} Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    public override {{fullName}} Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-{{JsonReadBody(srcType, name)}}
+{{JsonReadBody(srcType, fullName)}}
     }
 
-    public override void Write(Utf8JsonWriter writer, {{name}} value, JsonSerializerOptions options)
+    public override void Write(Utf8JsonWriter writer, {{fullName}} value, JsonSerializerOptions options)
     {
 {{JsonWriteBody(srcType)}}
     }
 }
 
-internal sealed class {{name}}TypeConverter : TypeConverter
+internal sealed class {{fullName}}TypeConverter : TypeConverter
 {
     public override bool CanConvertFrom(ITypeDescriptorContext? context, Type sourceType)
         => sourceType == typeof(string) || sourceType == typeof({{srcType}});
@@ -131,8 +161,8 @@ internal sealed class {{name}}TypeConverter : TypeConverter
     public override object? ConvertFrom(ITypeDescriptorContext? context, CultureInfo? culture, object value)
         => value switch
         {
-            string s when {{name}}.TryParse(s, out var parsed) => parsed,
-            {{srcType}} v => {{name}}.From(v),
+            string s when {{fullName}}.TryParse(s, out var parsed) => parsed,
+            {{srcType}} v => {{fullName}}.From(v),
             _ => throw new NotSupportedException()
         };
 }
@@ -199,5 +229,11 @@ internal sealed class {{name}}TypeConverter : TypeConverter
     public static {{name}} operator --({{name}} value) => new() { Value = ({{srcType}})(value.Value - 1) };
 """;
 
-    private sealed record IdGenInfo(string Namespace, string TypeName, string SourceType, bool IsNumeric);
+    private sealed record IdGenInfo(
+        string Namespace,
+        string TypeName,
+        string[] ContainingDeclarations,
+        string[] ContainingNames,
+        string SourceType,
+        bool IsNumeric);
 }

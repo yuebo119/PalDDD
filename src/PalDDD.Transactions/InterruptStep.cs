@@ -37,6 +37,9 @@ public sealed class InterruptStep : SagaStep
     public InterruptStep(string key, string interruptReason, Type decisionType)
         : base(key, execute: null!, compensate: null)
     {
+        // P3 修复：入参校验（此前 null 延迟到使用点 NRE）
+        ArgumentException.ThrowIfNullOrWhiteSpace(interruptReason);
+        ArgumentNullException.ThrowIfNull(decisionType);
         InterruptReason = interruptReason;
         DecisionType = decisionType;
     }

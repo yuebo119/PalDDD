@@ -49,6 +49,9 @@ public class SagaStep
         Func<SagaState, CancellationToken, ValueTask>? compensate = null,
         TimeSpan? timeout = null)
     {
+        // P3 修复：name 入参校验。execute 不校验——FanOut/Child/Dynamic/Interrupt
+        // 特殊步骤按既有契约传 null!（防御在 Saga 路由的 DispatchKind 守卫，ITM-069）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
         Name = name;
         ExecuteAsync = execute;
         CompensateAsync = compensate;

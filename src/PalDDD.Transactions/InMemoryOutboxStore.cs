@@ -91,12 +91,17 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
     public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
     {
         ArgumentNullException.ThrowIfNull(message);
-        message.ProcessedAt = processedAt;
-        message.Status = OutboxStatus.Processed;
-        message.Error = null;
-        message.NextAttemptAt = null;
-        message.LockedBy = null;
-        message.LockedUntil = null;
+        // P2 修复：三个状态变更方法与同文件其余 7 个方法对齐持锁，
+        // 不再依赖字段书写顺序这一隐式契约保证可见性
+        lock (_lock)
+        {
+            message.ProcessedAt = processedAt;
+            message.Status = OutboxStatus.Processed;
+            message.Error = null;
+            message.NextAttemptAt = null;
+            message.LockedBy = null;
+            message.LockedUntil = null;
+        }
     }
 
     /// <inheritdoc/>
@@ -104,12 +109,15 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
-        message.ProcessedAt = deadAt;
-        message.Status = OutboxStatus.Dead;
-        message.Error = failureReason;
-        message.NextAttemptAt = null;
-        message.LockedBy = null;
-        message.LockedUntil = null;
+        lock (_lock)
+        {
+            message.ProcessedAt = deadAt;
+            message.Status = OutboxStatus.Dead;
+            message.Error = failureReason;
+            message.NextAttemptAt = null;
+            message.LockedBy = null;
+            message.LockedUntil = null;
+        }
     }
 
     /// <inheritdoc/>
@@ -117,13 +125,16 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
-        message.RetryCount++;
-        message.Status = OutboxStatus.Pending;
-        message.ProcessedAt = null;
-        message.Error = failureReason;
-        message.NextAttemptAt = nextAttemptAt;
-        message.LockedBy = null;
-        message.LockedUntil = null;
+        lock (_lock)
+        {
+            message.RetryCount++;
+            message.Status = OutboxStatus.Pending;
+            message.ProcessedAt = null;
+            message.Error = failureReason;
+            message.NextAttemptAt = nextAttemptAt;
+            message.LockedBy = null;
+            message.LockedUntil = null;
+        }
     }
 
     /// <inheritdoc/>

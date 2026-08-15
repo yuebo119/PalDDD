@@ -10,7 +10,7 @@ namespace PalDDD.Repository.EFCore;
 // 💡 工作流程：
 //   1. SavingChanges 时扫描 ChangeTracker 中所有 Entity 实例
 //   2. 收集 HasDomainEvents 的实体中的所有领域事件
-//   3. 序列化后通过 IPalOutboxStore.AddMessagesAsync 批量写入 outbox_messages 表
+//   3. 序列化后通过 IPalOutboxStore.AddMessage 逐条写入 outbox_messages 表
 //   4. SaveChanges 成功后清除实体的领域事件（ClearDomainEvents）
 //   5. 所有操作在同一个 SaveChanges 事务中——保证事件与业务数据的原子性
 //

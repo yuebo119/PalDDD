@@ -111,7 +111,11 @@ public static class SqlitePerformanceOptimizer
         cmd.CommandText = "SELECT sqlite_version(), sqlite_source_id()";
         await using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
         if (await reader.ReadAsync())
-            return $"SQLite {reader.GetString(0)} — {reader.GetString(1)[..20]}...";
+        {
+            // P3 修复：source_id 短于 20 字符时切片越界
+            var sourceId = reader.GetString(1);
+            return $"SQLite {reader.GetString(0)} — {(sourceId.Length <= 20 ? sourceId : sourceId[..20])}...";
+        }
         return "Unknown";
     }
 }

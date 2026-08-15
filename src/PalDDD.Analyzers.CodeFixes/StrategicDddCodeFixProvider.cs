@@ -294,16 +294,4 @@ public sealed class MatchEventNameCodeFix : CodeFixProvider
             SyntaxFactory.Literal(messageName)));
         return editor.GetChangedDocument();
     }
-
-    private static string? GetNamedArgumentValue(AttributeSyntax attr, string name)
-    {
-        if (attr.ArgumentList is null) return null;
-        foreach (var arg in attr.ArgumentList.Arguments)
-        {
-            if (arg.NameEquals?.Name.Identifier.Text == name
-                && arg.Expression is LiteralExpressionSyntax lit)
-                return lit.Token.ValueText;
-        }
-        return null;
-    }
 }

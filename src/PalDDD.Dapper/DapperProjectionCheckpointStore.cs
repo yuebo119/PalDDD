@@ -112,7 +112,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
-        await connection.ExecuteAsync(
+        var rows = await connection.ExecuteAsync(
             new CommandDefinition(
                 MarkCompleted,
                 new
@@ -125,7 +125,10 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                 },
                 _transaction,
                 cancellationToken: ct)).ConfigureAwait(false);
-        checkpoint.MarkCompleted(completedAt);
+        // P2 修复：乐观并发（WHERE revision=@Revision）冲突时 rows=0，DB 状态未变——
+        // 不再无条件变更本地对象，避免调用方误以为落库成功（对齐 EFCore 版 detach 语义）
+        if (rows > 0)
+            checkpoint.MarkCompleted(completedAt);
     }
 
     public async ValueTask MarkFailedAsync(
@@ -138,7 +141,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
 
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
-        await connection.ExecuteAsync(
+        var rows = await connection.ExecuteAsync(
             new CommandDefinition(
                 MarkFailed,
                 new
@@ -152,7 +155,9 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                 },
                 _transaction,
                 cancellationToken: ct)).ConfigureAwait(false);
-        checkpoint.MarkFailed(failureReason, failedAt);
+        // P2 修复：同 MarkCompletedAsync——并发冲突（rows=0）时不变更本地对象
+        if (rows > 0)
+            checkpoint.MarkFailed(failureReason, failedAt);
     }
 
     public async ValueTask ResetAsync(
@@ -170,13 +175,6 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                 new { projectionName, sourceName },
                 _transaction,
                 cancellationToken: ct)).ConfigureAwait(false);
-    }
-
-    private DbConnection EnsureOpen()
-    {
-        var connection = _connection;
-        if (connection.State != ConnectionState.Open) connection.Open();
-        return connection;
     }
 
     private async ValueTask<DbConnection> EnsureOpenAsync(CancellationToken ct = default)

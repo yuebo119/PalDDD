@@ -78,7 +78,8 @@ internal sealed class IterativeDomainEventDispatcher : IDomainEventDispatcher
 
         if (queue.Count > 0)
             throw new InvalidOperationException(
-                $"Domain event dispatch exceeded max iterations ({maxIterations}). Possible infinite event loop.");
+                $"Domain event dispatch exceeded MaxIterations ({maxIterations}): initial batch size {events.Count} 超过上限"
+                + "（事件循环防护由 EventId 去重承担——Handler 不产生新入队事件，此上限约束的是初始批量大小）。");
     }
 
     /// <summary>O(1) 字典查找 → DIM 桥接调用 —— 零反射，完全 AOT 安全</summary>

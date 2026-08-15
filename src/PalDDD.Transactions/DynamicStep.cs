@@ -35,6 +35,8 @@ public sealed class DynamicStep : SagaStep
         Func<SagaState, CancellationToken, ValueTask>? compensate = null)
         : base(key, execute: null!, compensate)
     {
+        // P3 修复：入参校验（此前 null 延迟到 Route 调用点 NRE）
+        ArgumentNullException.ThrowIfNull(router);
         _router = router;
     }
 

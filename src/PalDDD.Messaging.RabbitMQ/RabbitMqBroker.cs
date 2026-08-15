@@ -141,13 +141,13 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 // 取消（关停或超时）：重新入队让其他消费者或重连后重新投递。
                 // 不留 unacked —— 否则消息会滞留直到 channel 关闭才 redeliver（ITM-006）。
                 _logger.Warning($"Handling {typeof(TMessage).Name} message was canceled, requeueing: {queueName}");
-                await _channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: true);
+                await TryNackSafeAsync(ea.DeliveryTag, requeue: true, queueName);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.Error(ex, $"Failed to handle {typeof(TMessage).Name} message: {queueName}");
                 // 处理失败 — 重新入队（requeue: true），让其他消费者重试
-                await _channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: true);
+                await TryNackSafeAsync(ea.DeliveryTag, requeue: true, queueName);
             }
         };
 
@@ -158,8 +158,26 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        // P2 修复（所有权契约）：IConnection 由调用方创建并注入——可能被多个 Channel/Broker
+        // 共享，本 Broker 无权释放（越权释放会断掉其他使用方）。仅释放本 Broker 独占使用的
+        // Channel；连接的生命周期由创建者管理。
         await _channel.DisposeAsync();
-        await _connection.DisposeAsync();
+    }
+
+    /// <summary>
+    /// Nack 的安全包装——channel 已关/连接断时 BasicNackAsync 自身会抛异常，
+    /// 若从 ReceivedAsync 事件处理器逃逸会中断消费者（P2 修复）。
+    /// </summary>
+    private async Task TryNackSafeAsync(ulong deliveryTag, bool requeue, string queueName)
+    {
+        try
+        {
+            await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: requeue);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.Warning($"BasicNack failed (channel closed?): {queueName}, deliveryTag={deliveryTag}: {ex.Message}");
+        }
     }
 
     private sealed class AsyncSubscription(Func<Task> unsubscribe) : IAsyncDisposable

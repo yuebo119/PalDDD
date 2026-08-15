@@ -88,7 +88,32 @@
 
 ---
 
-## 待排期（本轮不修，后续批次）
+## 第二轮（同日追加）— P2/P3 机械可修项
 
-- **P2 × 34**：三套 EventLog 异常转换契约统一、乐观并发 UPDATE 后不验 affected（3 处）、RabbitMQ requeue 到匿名队列/Dispose 越权、SQLite 文件模式 Singleton 线程安全、MessageEvolutionPipeline 无环检测、InMemoryOutboxStore 三个方法无锁、KafkaBroker _consumers 无锁、MySqlMultiHost failover 参数丢弃、SagaExecutionObserver AsyncLocal 嵌套、PalORM 审计字段未持久化、SqliteRowFactory default 静默等。其中约 12 项需设计决策或 DB 环境验证。
-- **P3 × 77**：死代码 3、注释漂移 6、TimeProvider 硬编码 4、TryAdd 静默 4、ct 缺传 6 等——建议随下次触碰对应文件时顺手修。
+### [x] 已修复（第二轮，14 项）
+
+| 修复 | 文件 |
+|---|---|
+| InMemoryOutboxStore 三个状态方法补锁 | src/PalDDD.Transactions/InMemoryOutboxStore.cs |
+| SagaExecutionObserver 嵌套恢复外层注册 | src/PalDDD.Transactions/SagaExecutionObserver.cs |
+| KafkaBroker _consumers 锁 + 订阅句柄兜底释放 consumer（Task.Run 未启动泄漏窗口） | src/PalDDD.Messaging.Kafka/KafkaBroker.cs |
+| RabbitMQ Nack 安全包装（channel 已关不逃逸）+ Dispose 所有权契约（仅释放独占 Channel） | src/PalDDD.Messaging.RabbitMQ/RabbitMqBroker.cs |
+| SQLite 文件模式改 Scoped（:memory: 保持 Singleton） | src/PalDDD.Dapper.Sqlite/SqliteServiceCollectionExtensions.cs |
+| ProjectionCheckpointDbContext catch 收窄到唯一约束（第四处 ITM-003 同型） | src/PalDDD.Projections.EFCore/ProjectionCheckpointDbContext.cs |
+| DapperProjectionCheckpointStore 乐观并发 rows=0 不再变更本地对象（两处） | src/PalDDD.Dapper/DapperProjectionCheckpointStore.cs |
+| DapperEventLog 并发冲突转 EventStreamConcurrencyException（DbException 鸭子判定，IL2075 安全降级） | src/PalDDD.Dapper/DapperEventLog.cs |
+| MessageEvolutionPipeline 构造期严格递增校验（防回环死循环） | src/PalDDD.Serialization.Evolution/MessageEvolutionPipeline.cs |
+| DomainEventDispatcher 超限错误消息改为如实描述（批量上限而非"事件循环"） | src/PalDDD.Messaging/DomainEventDispatcher.cs |
+| PostgreSqlSharding GetShard 越界显式报错 | src/PalDDD.Dapper.PostgreSql/PostgreSqlSharding.cs |
+| SqlitePerformanceOptimizer source_id 切片越界守卫 | src/PalDDD.Dapper.Sqlite/SqlitePerformanceOptimizer.cs |
+| IdentityGenerator 嵌套类型按 ContainingType 链包 partial（零嵌套输出不变） | src/PalDDD.Core.SourceGen/IdentityGenerator.cs |
+| 死代码 ×2（GetNamedArgumentValue/同步 EnsureOpen）+ 注释漂移 ×1 + 入参校验 ×3（SagaStep name/InterruptStep/DynamicStep） | 各对应文件 |
+
+**第二轮教训（误判库候选）**：SagaStep 基类构造对 execute 加 null 校验会误伤四类特殊步骤的既有 null! 契约（FanOut/Child/Dynamic/Interrupt），测试 4 失败后回退——特殊步骤防御应只在路由 DispatchKind 守卫（ITM-069 已做）。
+
+### [ ] 剩余待排期（需设计决策或环境实证）
+
+- **需设计决策（~10 项）**：RabbitMQ 匿名队列 requeue 语义（消息随队列消失 vs DLX）、MySqlMultiHost failover 凭据/端口丢弃、PalORM/Dapper outbox status 编码互斥（int vs string）、PalORM 审计字段持久化（已声明 gap）、EventStreamJsonLines 导入丢弃流字段（疑刻意）、EventLogReplaySource 单类型流约定、FanOutStep 可空结果过滤、OutboxMessage TimeProvider 双轨、InMemoryIdempotencyStore 读路径删除分叉、Saga 跨方言 SKIP LOCKED（需 ADR）。
+- **需环境实证（~4 项）**：ValueObject 接口模式匹配装箱（benchmark 实证）、ToSqliteParameter 跨方言 PG 绑定（PG 实测）、PostgreSqlPipeline RecordsAffected 实际值（PG 实测）、MultiHost Port=0 语义（Npgsql 文档核实）。
+- **P3 顺手修清单**：TimeProvider 硬编码 ×4、TryAdd 静默 ×4、DapperOutbox/Inbox ct 缺传（CommandDefinition）×2、其余注释漂移 ×5、CheckpointRow 死代码（须按框架库五步验证后处置）。
+

@@ -169,12 +169,18 @@ public sealed class ShardedDataSourceManager : IAsyncDisposable
         }
     }
 
-    /// <summary>根据分片 ID 获取对应数据源</summary>
-    public NpgsqlDataSource GetShard(int shardId) => _shards[shardId];
+    /// <summary>根据分片 ID 获取对应数据源（P3 修复：越界显式报错而非 IndexOutOfRange）</summary>
+    public NpgsqlDataSource GetShard(int shardId)
+    {
+        if ((uint)shardId >= (uint)_shards.Length)
+            throw new ArgumentOutOfRangeException(nameof(shardId), shardId,
+                $"分片 ID 超出范围 [0, {_shards.Length - 1}]——strategy.ShardCount 与管理器分片数不一致。");
+        return _shards[shardId];
+    }
 
     /// <summary>根据分片键和策略获取对应数据源</summary>
     public NpgsqlDataSource GetShard(IShardingStrategy strategy, Guid key)
-        => _shards[strategy.GetShardId(key)];
+        => GetShard(strategy.GetShardId(key));
 
     /// <summary>获取所有分片数据源</summary>
     public IReadOnlyList<NpgsqlDataSource> AllShards => _shards;

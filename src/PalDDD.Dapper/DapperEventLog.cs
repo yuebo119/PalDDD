@@ -88,20 +88,30 @@ public sealed class DapperEventLog : IEventLog
         for (int i = 0; i < events.Count; i++)
         {
             var evt = events[i];
-            var pos = await _connection.QuerySingleAsync<long>(sql, new
+            long pos;
+            try
             {
-                EventId = DapperAotInitializer.ToSqliteParameter(evt.EventId),
-                EventName = evt.EventName,
-                StreamName = streamName,
-                StreamVersion = version++,
-                SchemaVersion = evt.SchemaVersion,
-                ContentType = evt.ContentType,
-                Payload = evt.Payload.ToArray(),
-                Metadata = evt.Metadata.ToArray(),
-                RecordedAt = DapperAotInitializer.ToSqliteParameter(now),
-                ActorId = (string?)null,
-                Reason = (string?)null
-            }, _transaction).ConfigureAwait(false);
+                pos = await _connection.QuerySingleAsync<long>(sql, new
+                {
+                    EventId = DapperAotInitializer.ToSqliteParameter(evt.EventId),
+                    EventName = evt.EventName,
+                    StreamName = streamName,
+                    StreamVersion = version++,
+                    SchemaVersion = evt.SchemaVersion,
+                    ContentType = evt.ContentType,
+                    Payload = evt.Payload.ToArray(),
+                    Metadata = evt.Metadata.ToArray(),
+                    RecordedAt = DapperAotInitializer.ToSqliteParameter(now),
+                    ActorId = (string?)null,
+                    Reason = (string?)null
+                }, _transaction).ConfigureAwait(false);
+            }
+            catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
+            {
+                // P2 修复：TOCTOU 窗口（预检查后并发写入）由 idx_events_stream 唯一索引兜底，
+                // 此处转换为统一并发异常（对齐 EFCore 版契约），调用方可用统一类型处理冲突
+                throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion ?? -1);
+            }
 
             if (i == 0) firstGlobalPos = pos;
         }
@@ -132,6 +142,55 @@ public sealed class DapperEventLog : IEventLog
 
         foreach (var row in rows)
             yield return row.ToRecordedEvent();
+    }
+
+    /// <summary>
+    /// 判定 DbException 是否为唯一约束冲突（跨 provider 鸭子类型，P2 修复引入）。
+    /// <para>与 EFCore 侧 EventLogDbContext 的实现对齐（ITM-003 同型，作用于原生 DbException）。</para>
+    /// </summary>
+    [UnconditionalSuppressMessage("Trimming", "IL2075:This",
+        Justification = "Provider 异常鸭子类型判定（与 EFCore 侧同型）。裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级，不崩溃），并发冲突仅失去统一异常类型。")]
+    private static bool IsUniqueConstraintViolation(System.Data.Common.DbException exception)
+    {
+        for (var inner = (Exception)exception; inner is not null; inner = inner.InnerException)
+        {
+            var type = inner.GetType();
+            var typeName = type.Name;
+
+            // PostgreSQL: Npgsql.PostgresException.SqlState == "23505"
+            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
+                && type.GetProperty("SqlState")?.GetValue(inner) is string sqlState
+                && sqlState == "23505")
+            {
+                return true;
+            }
+
+            // MySQL: MySqlException.Number == 1062（ER_DUP_ENTRY）或 1586
+            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int mysqlNumber
+                && (mysqlNumber == 1062 || mysqlNumber == 1586))
+            {
+                return true;
+            }
+
+            // SQL Server: SqlException.Number == 2601 或 2627
+            if (typeName.Equals("SqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int sqlServerNumber
+                && (sqlServerNumber == 2601 || sqlServerNumber == 2627))
+            {
+                return true;
+            }
+
+            // SQLite: 消息包含 "UNIQUE constraint"
+            var message = inner.Message;
+            if (!string.IsNullOrEmpty(message)
+                && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

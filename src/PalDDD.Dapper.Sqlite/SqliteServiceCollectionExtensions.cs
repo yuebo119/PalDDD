@@ -43,9 +43,9 @@ public static class SqliteServiceCollectionExtensions
     /// <param name="connectionString">SQLite 连接字符串</param>
     /// <param name="optimize">优化级别（默认 Production — WAL + 性能 PRAGMA）</param>
     /// <remarks>
-    /// ⚠️ SQLite 连接注册为 <b>Singleton</b>（与核心 Dapper 层的 Scoped 策略不同）。<br/>
-    /// 原因：SQLite :memory: 数据库连接关闭后数据即销毁，因此必须在应用生命周期内保持同一连接。<br/>
-    /// 若使用文件模式且需要 Scoped 生命周期，请直接使用 <c>AddPalDapperTransactions(DapperDbType.Sqlite, connStr)</c>。<br/>
+    /// 生命周期按连接串自动选择（P2 修复）：<br/>
+    /// · <c>:memory:</c> → <b>Singleton</b>（连接关闭后数据即销毁，必须保持单连接）；<br/>
+    /// · 文件模式 → <b>Scoped</b>（SqliteConnection 非线程安全，Singleton 在并发请求下属未定义行为）。<br/>
     /// 不建议同时调用 <c>AddPalSqlite</c> 和 <c>AddPalDapperTransactions</c>——两者都注册 <c>DbConnection</c>。
     /// </remarks>
     public static IServiceCollection AddPalSqlite(
@@ -55,11 +55,24 @@ public static class SqliteServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        var connection = new SqliteConnection(connectionString);
-        ApplyOptimization(connection, optimize);
-
-        services.AddSingleton(connection);
-        services.AddSingleton<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<SqliteConnection>());
+        if (connectionString.Contains(":memory:", StringComparison.OrdinalIgnoreCase))
+        {
+            var connection = new SqliteConnection(connectionString);
+            ApplyOptimization(connection, optimize);
+            services.AddSingleton(connection);
+            services.AddSingleton<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<SqliteConnection>());
+        }
+        else
+        {
+            // P2 修复：文件模式改 Scoped——每 scope 独立连接（PRAGMA 逐连接生效，工厂内应用）
+            services.AddScoped<SqliteConnection>(_ =>
+            {
+                var c = new SqliteConnection(connectionString);
+                ApplyOptimization(c, optimize);
+                return c;
+            });
+            services.AddScoped<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<SqliteConnection>());
+        }
 
         // ✅ SQLite TypeHandler 已通过 [ModuleInitializer] + [module:DapperAot] 在 DapperAotInitializer.cs 注册
         // 不再需要运行时 RegisterTypeHandlers() 调用
