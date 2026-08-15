@@ -135,7 +135,9 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
             await SaveChangesAsync(ct);
             return record;
         }
-        catch (DbUpdateException)
+        // ITM-065：仅唯一约束冲突返回 null（语义=他人已持有）；连接故障/超时等其他
+        // DbUpdateException 必须上抛，否则基础设施故障被误判为幂等冲突，错误路径放大为请求丢失。
+        catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
         {
             Entry(record).State = EntityState.Detached;
             return null;
@@ -166,6 +168,54 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
     {
         if (Entry(record).State == EntityState.Detached)
             IdempotencyRecords.Attach(record);
+    }
+
+    /// <summary>
+    /// 判定 DbUpdateException 是否为唯一约束冲突（跨 provider 鸭子类型）。
+    /// <para>与 EventLogDbContext/InboxDbContext 的实现对齐（ITM-003 同型，ITM-065 引入第三处）。</para>
+    /// </summary>
+    private static bool IsUniqueConstraintViolation(DbUpdateException exception)
+    {
+        for (var inner = exception.InnerException; inner is not null; inner = inner.InnerException)
+        {
+            var type = inner.GetType();
+            var typeName = type.Name;
+
+            // PostgreSQL: Npgsql.PostgresException.SqlState == "23505"
+            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
+                && type.GetProperty("SqlState")?.GetValue(inner) is string sqlState
+                && sqlState == "23505")
+            {
+                return true;
+            }
+
+            // MySQL: MySqlException.Number == 1062（ER_DUP_ENTRY）或 1586
+            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int mysqlNumber
+                && (mysqlNumber == 1062 || mysqlNumber == 1586))
+            {
+                return true;
+            }
+
+            // SQL Server: SqlException.Number == 2601 (unique index) 或 2627 (unique constraint / PK)
+            if (typeName.Equals("SqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int sqlServerNumber
+                && (sqlServerNumber == 2601 || sqlServerNumber == 2627))
+            {
+                return true;
+            }
+
+            // SQLite: Microsoft.Data.Sqlite.SqliteException 消息包含 "UNIQUE constraint"
+            // ⚠️ 已知局限（P3-3）：字符串匹配可能误判未来某 provider 的非唯一约束错误。
+            var message = inner.Message;
+            if (!string.IsNullOrEmpty(message)
+                && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private async ValueTask SaveTerminalStateAsync(IdempotencyRecord record, CancellationToken ct)

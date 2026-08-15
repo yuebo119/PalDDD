@@ -81,7 +81,20 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         }
 
         var existing = await GetAsync(operationName, key, now, ct);
-        if (existing is null) return null;
+
+        // ITM-064：INSERT 冲突已证明记录存在；GetAsync 返回 null 只可能是记录已过期
+        // （GetAsync 对 ExpiresAt <= now 返回 null）。过期记录必须重新获取租约
+        // （对齐 EFCore 版 TryReuseRecordAsync 复用语义），否则该 key 在 GC 清理前永久被拒。
+        if (existing is null)
+        {
+            affected = await Session.ExecuteAsync(
+                $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL WHERE operation_name = {operationName} AND idempotency_key = {key} AND expires_at <= {now}",
+                ct);
+            if (affected == 0) return null;
+
+            return new IdempotencyRecord(operationName, key,
+                IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now);
+        }
 
         if (existing.Status == IdempotencyRecordStatus.Completed)
             return existing;
