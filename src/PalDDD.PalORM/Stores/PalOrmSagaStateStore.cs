@@ -116,7 +116,11 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
             return 1;
         }
 
-        var expectedVersion = existing.Version;
+        // P2 修复（乐观锁快照）：expectedVersion 取调用方加载时的 state.Version（内存快照），
+        // 而非本次新读的 existing.Version（DB 最新快照）——后者使"加载后被他人改过"的窗口
+        // 检测失效（本次读到的已是 bump 后版本，比较恒过，退化为最后写者胜）。
+        // 与 EFCore 版 Version concurrency token（内存快照比对）语义对齐。
+        var expectedVersion = state.Version;
         var affected = await Session.ExecuteAsync(
             $"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {state.Error}, error_at = {state.ErrorAt}, saga_data = {jsonData}, leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}",
             ct);

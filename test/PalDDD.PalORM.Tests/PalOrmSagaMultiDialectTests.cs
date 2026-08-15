@@ -142,23 +142,19 @@ public class PalOrmSagaMultiDialectTests
         var store = new PalOrmSagaStateStore<TProvider, TestSagaState>(ts.Session);
         var state = new TestSagaState { CustomerId = "cust-1", CurrentState = "Started" };
 
-        // 首次 INSERT（version=0）
+        // 首次 INSERT（version=0），state.Version 内存快照仍为 0
         await store.SaveChangesAsync(state, default);
 
-        // 模拟乐观锁冲突：另一个"线程"已修改了同一 Saga（version 0→1）
-        state.Version = 1; // 模拟已被他人修改
+        // P2 修复后（expectedVersion = state.Version 内存快照）：真实冲突可测——
+        // 模拟另一实例保存了同一 Saga（DB version 0→1），本实例内存快照仍是 0
         state.CurrentState = "ConflictAttempt";
-        // 现在用过期的 expectedVersion（DB 里是 1，但 UPDATE WHERE version=@v 传 1 竞争失败）
-        // 直接用新 state 调 SaveChanges，内部 GetById 读到 version=1（DB 实际值），
-        // 然后 UPDATE WHERE version=1 → 如果此时 DB version 已被改为 2 则返回 0。
-        // 这里构造简单冲突：手动改 DB version 制造不一致。
-        // SaveChangesAsync 先 GetById（version=1）→ UPDATE WHERE version=1 → affected=1（无冲突场景）
-        // 为真正测试冲突，我们需要让 expectedVersion 与 DB 不匹配——
-        // PalOrmSagaStateStore 没有暴露 expectedVersion 参数，冲突靠并发自然发生。
-        // 简化验证：第二次保存（version 匹配）应成功且 version 自增
+        await ts.Session.ExecuteAsync(
+            $"UPDATE saga_states SET version = version + 1 WHERE saga_id = {state.SagaId.ToString()}");
+
+        // 用过期快照（version=0，DB 已是 1）保存 → UPDATE WHERE version=0 → 0 行
         var rowsAffected = await store.SaveChangesAsync(state, default);
-        await Assert.That(rowsAffected).IsGreaterThan(0);
-        await Assert.That(state.Version).IsGreaterThan(0);
+        await Assert.That(rowsAffected).IsEqualTo(0); // 冲突被正确检测（旧实现重读 DB 版本恒过，测不出冲突）
+        await Assert.That(state.Version).IsEqualTo(0); // 版本不前进（保存未生效）
     }
 }
 

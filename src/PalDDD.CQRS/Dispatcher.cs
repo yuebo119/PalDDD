@@ -107,7 +107,9 @@ public sealed class Dispatcher
         ArgumentNullException.ThrowIfNull(cmd);
 
         var result = await ExecutePipelineAsync(cmd.GetType(), cmd, ct);
-        return (TResponse)result!;
+        return result is null
+                ? throw new InvalidOperationException($"Handler for {cmd.GetType().Name} returned null for non-nullable {typeof(TResponse).Name}.")
+                : (TResponse)result;
     }
 
     /// <summary>执行查询</summary>
@@ -116,7 +118,9 @@ public sealed class Dispatcher
         ArgumentNullException.ThrowIfNull(q);
 
         var result = await ExecutePipelineAsync(q.GetType(), q, ct);
-        return (TResponse)result!;
+        return result is null
+                ? throw new InvalidOperationException($"Handler for {q.GetType().Name} returned null for non-nullable {typeof(TResponse).Name}.")
+                : (TResponse)result;
     }
 
     /// <summary>执行完整的管道链：行为1 → 行为2 → ... → Handler</summary>

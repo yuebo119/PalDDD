@@ -167,3 +167,14 @@
 
 - PublicApiSnapshot 是 API 变更的第一道反馈（ctor 加参立即红）——刷新后必须检视 diff 确认变更是有意的。
 - 测试 schema 与生产 DDL 的同步是审计列变更的必查项（DapperStoreTests 自带 CREATE TABLE）。
+
+### [x] 第五轮（同日末）— 遗留清零（PD18 + 6 项）
+
+| 修复 | 落点 |
+|---|---|
+| PD18 入库：PalORM FormattableString 字符串变量插值被参数化（AND (@p) 恒假）——SQL 片段必须字面量分支写死（ReleaseForRetry 探针三连定位的根因） | .ai/review/known-false-positives.md + V7 口径 18 |
+| PalOrmSagaStateStore 乐观锁快照：expectedVersion 改用 state.Version（内存快照）而非 existing.Version（DB 最新）——修复"加载后被他人改过"窗口检测失效（与 EFCore concurrency token 对齐） | PalOrmSagaStateStore.cs |
+| EnumGenerator 嵌套类型：镜像 IdentityGenerator 的 ContainingType 链包裹修复（零嵌套输出不变）+ PALENUM002 哨兵携带链参数 | EnumGenerator.cs |
+| SagaProcessor 单条失败隔离：foreach 包 try-catch，失败 Saga 记录后继续（租约靠 LeaseDuration 兜底），OCE 仍上抛 | SagaProcessor.cs |
+| IdentityGenerator 脆弱匹配：ToDisplayString 去 global:: 前缀后匹配（P3） | IdentityGenerator.cs |
+| Dispatcher unbox null 守卫：handler 返回 null 且 TResponse 值类型时抛明确异常而非 NRE（2 处） | Dispatcher.cs |

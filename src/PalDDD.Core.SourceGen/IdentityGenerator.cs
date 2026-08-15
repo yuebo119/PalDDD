@@ -47,7 +47,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                     structSymbol.Name,
                     [.. containingDeclarations],
                     [.. containingNames],
-                    sourceType.ToDisplayString() switch
+                    sourceType.ToDisplayString().Replace("global::", "") switch
                     {
                         "System.Guid" => "Guid",
                         "int" => "int",

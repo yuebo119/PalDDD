@@ -105,6 +105,10 @@ TState>
 
         foreach (var sagaState in activeSagas)
         {
+            // P3 修复：单条 Saga 处理失败不中断剩余——否则后续 Saga 的租约需等
+            // LeaseDuration 自然过期才对其他实例可见（与批处理整体失败同害）
+            try
+            {
             if (_orchestrator.IsTimedOut(sagaState, now, out var timedOutSteps))
             {
                 foreach (var step in timedOutSteps)
@@ -157,6 +161,16 @@ TState>
                 sagaState.LeasedBy = null;
                 sagaState.LeasedUntil = null;
                 await _store.SaveChangesAsync(sagaState, ct);
+            }
+            }
+            catch (OperationCanceledException)
+            {
+                throw; // 关停信号仍向上传播
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // 租约靠 LeaseDuration 兜底过期；记录后继续处理下一条
+                _logger.Error(ex, $"Saga {sagaState.SagaId} timeout check failed; lease will expire by LeaseDuration");
             }
         }
     }
