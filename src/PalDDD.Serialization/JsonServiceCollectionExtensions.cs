@@ -22,7 +22,9 @@ public static class ServiceCollectionExtensions
             configureCatalog?.Invoke(builder);
             return builder.Build();
         });
-        services.TryAddSingleton<IMessageSerializer, JsonMessageSerializer>();
+        // P2 修复（对称）：MemoryPack 已改 AddSingleton（替换语义），Json 也同步——
+        // 双向"后者覆盖前者"承诺成立（此前先 MemoryPack 后 Json 时 Json 静默不生效）
+        services.AddSingleton<IMessageSerializer, JsonMessageSerializer>();
         return services;
     }
 }

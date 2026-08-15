@@ -83,7 +83,14 @@ public sealed class DapperInboxStore : IInboxStore
 
             var rows = await c.ExecuteAsync(
                 SqlTemplates.InboxStartProcessing,
-                new { now = ToTimeParam(now), id = existing.Id }, _transaction).ConfigureAwait(false);
+                new
+                {
+                    now = ToTimeParam(now),
+                    id = existing.Id,
+                    // P1 修复（超时接管）：cutoff = now - processingTimeout——超时前的 Processing
+                    // 记录可被抢占，刚开始的不可（CAS 由 processing_started_at 原子更新保证）
+                    cutoff = ToTimeParam(now - processingTimeout)
+                }, _transaction).ConfigureAwait(false);
             if (rows == 0) return null;
 
             existing.Status = InboxStatus.Processing;

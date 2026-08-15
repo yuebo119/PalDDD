@@ -63,7 +63,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         var inserted = await connection.ExecuteAsync(
             new CommandDefinition(
                 _insertSql,
-                new { projectionName, sourceName, position, status = ProjectionCheckpointStatus.Processing, startedAt = DapperAotInitializer.ToSqliteParameter(startedAt), leaseUntil = DapperAotInitializer.ToSqliteParameter(leaseUntil) },
+                new { projectionName, sourceName, position, status = ProjectionCheckpointStatus.Processing, startedAt = ToTimeParam(startedAt), leaseUntil = ToTimeParam(leaseUntil) },
                 _transaction,
                 cancellationToken: ct)).ConfigureAwait(false);
         if (inserted == 1)
@@ -93,8 +93,8 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                     projectionName,
                     sourceName,
                     position,
-                    startedAt = DapperAotInitializer.ToSqliteParameter(startedAt),
-                    leaseUntil = DapperAotInitializer.ToSqliteParameter(leaseUntil),
+                    startedAt = ToTimeParam(startedAt),
+                    leaseUntil = ToTimeParam(leaseUntil),
                     revision = existing.Revision
                 },
                 _transaction,
@@ -122,7 +122,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                     checkpoint.ProjectionName,
                     checkpoint.SourceName,
                     checkpoint.Position,
-                    completedAt = DapperAotInitializer.ToSqliteParameter(completedAt),
+                    completedAt = ToTimeParam(completedAt),
                     checkpoint.Revision
                 },
                 _transaction,
@@ -151,7 +151,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                     checkpoint.ProjectionName,
                     checkpoint.SourceName,
                     checkpoint.Position,
-                    failedAt = DapperAotInitializer.ToSqliteParameter(failedAt),
+                    failedAt = ToTimeParam(failedAt),
                     error = failureReason,
                     checkpoint.Revision
                 },
@@ -178,6 +178,12 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                 _transaction,
                 cancellationToken: ct)).ConfigureAwait(false);
     }
+
+    /// <summary>P2 修复（ToMySqlParameter 接线补齐）：按方言选择时间参数格式。</summary>
+    private object ToTimeParam(DateTimeOffset value)
+        => _dbType == DapperDbType.MySql
+            ? DapperAotInitializer.ToMySqlParameter(value)
+            : DapperAotInitializer.ToSqliteParameter(value);
 
     private async ValueTask<DbConnection> EnsureOpenAsync(CancellationToken ct = default)
     {

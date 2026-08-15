@@ -88,6 +88,10 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         var fullName = info.ContainingNames.Length > 0
             ? string.Join(".", info.ContainingNames) + "." + name
             : name;
+        // P1 修复（五轮评审）：C# 类声明名不允许含点——转换器类名用下划线连接
+        var converterName = info.ContainingNames.Length > 0
+            ? string.Join("_", info.ContainingNames) + "_" + name
+            : name;
         var open = info.ContainingDeclarations.Length > 0
             ? "\n" + string.Join("\n", info.ContainingDeclarations.Select(d => $"{d}\n{{")) + "\n"
             : "";
@@ -108,8 +112,8 @@ using System.Text.Json.Serialization;
 using PalDDD.Core;{{ulidUsing}}
 
 namespace {{ns}};{{open}}
-[TypeConverter(typeof({{name}}TypeConverter))]
-[JsonConverter(typeof({{name}}JsonConverter))]
+[TypeConverter(typeof({{converterName}}TypeConverter))]
+[JsonConverter(typeof({{converterName}}JsonConverter))]
 public readonly partial record struct {{name}} : IPalIdentity<{{srcType}}>, ISpanParsable<{{name}}>
 {
     public {{srcType}} Value { get; init; }
@@ -140,7 +144,7 @@ public readonly partial record struct {{name}} : IPalIdentity<{{srcType}}>, ISpa
 {{(info.IsNumeric ? NumericOperators(name, srcType) : "")}}
 }{{close}}
 
-internal sealed class {{fullName}}JsonConverter : JsonConverter<{{fullName}}>
+internal sealed class {{converterName}}JsonConverter : JsonConverter<{{fullName}}>
 {
     public override {{fullName}} Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
@@ -153,7 +157,7 @@ internal sealed class {{fullName}}JsonConverter : JsonConverter<{{fullName}}>
     }
 }
 
-internal sealed class {{fullName}}TypeConverter : TypeConverter
+internal sealed class {{converterName}}TypeConverter : TypeConverter
 {
     public override bool CanConvertFrom(ITypeDescriptorContext? context, Type sourceType)
         => sourceType == typeof(string) || sourceType == typeof({{srcType}});

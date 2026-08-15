@@ -44,12 +44,12 @@ public static class PostgreSqlJsonb
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Include(string column, string key, string value)
-        => $"{Escape(column)} @> '{{\"{EscapeJsonValue(key)}\":\"{EscapeSqlLiteral(EscapeJsonValue(value))}\"}}'::jsonb";
+        => $"{Escape(column)} @> '{{\"{EscapeSqlLiteral(EscapeJsonValue(key))}\":\"{EscapeSqlLiteral(EscapeJsonValue(value))}\"}}'::jsonb";
 
     /// <summary>生成 JSONB 被包含条件（ &lt;@ ），转义策略同 <see cref="Include"/>。</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string IncludedBy(string column, string key, string value)
-        => $"'{{\"{EscapeJsonValue(key)}\":\"{EscapeSqlLiteral(EscapeJsonValue(value))}\"}}'::jsonb <@ {Escape(column)}";
+        => $"'{{\"{EscapeSqlLiteral(EscapeJsonValue(key))}\":\"{EscapeSqlLiteral(EscapeJsonValue(value))}\"}}'::jsonb <@ {Escape(column)}";
 
     // ── 键存在操作符 ──
 

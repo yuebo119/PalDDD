@@ -121,13 +121,15 @@ public static class SqlTemplates
     /// <summary>
     /// 开始处理消息 — 状态改为 Processing，尝试次数 +1。<br/>
     /// 💡 原子操作：UPDATE 在同一个 SQL 中完成状态变更和计数递增。
+    /// <para>
+    /// P1 修复（五轮评审，第七轮 CAS 反弹终结）：用<b>条件守卫</b>替代硬排他——
+    /// 允许抢占已超时的 Processing 记录（消费者崩溃后的僵尸恢复），同时防止并发双处理。
+    /// 机制：UPDATE 原子性保证第一个 worker 的 processing_started_at=@now 生效后，
+    /// 第二个 worker 的超时条件立即失效（新 timestamp 不满足 < @cutoff）。
+    /// </para>
     /// </summary>
     public const string InboxStartProcessing =
-        "UPDATE inbox_messages SET status='Processing',attempts=attempts+1,processing_started_at=@now WHERE id=@id AND status<>'Processed' AND status<>'Processing'";
-    // P2 修复（僵尸接管 CAS）：原 WHERE 仅排除 Processed——两个并发消费者同见"Processing 已超时"
-    // 都会 rows=1 并返回非 null，同一消息并发双处理。加 status<>'Processing' 守卫：
-    // 第一个抢到后第二个 UPDATE 0 行返回 null。超时接管（stuck Processing 重置）由调用方
-    // 先显式 MarkFailed 释放后再 TryStart 达成。
+        "UPDATE inbox_messages SET status='Processing',attempts=attempts+1,processing_started_at=@now WHERE id=@id AND (status='Pending' OR (status='Processing' AND processing_started_at<@cutoff) OR status='Failed')";
 
     /// <summary>标记消息处理成功</summary>
     public const string InboxMarkProcessed =

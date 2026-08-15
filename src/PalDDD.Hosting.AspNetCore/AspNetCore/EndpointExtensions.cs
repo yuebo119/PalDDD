@@ -38,6 +38,12 @@ public static class EndpointExtensions
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
                 return;
             }
+            catch (PalDDD.CQRS.PalValidationException)
+            {
+                // P2 修复：验证失败异常映射 400（框架意图与实现一致化）
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                return;
+            }
             if (cmd is null)
             {
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -75,6 +81,12 @@ public static class EndpointExtensions
             catch (System.Text.Json.JsonException)
             {
                 // P3 修复：畸形 JSON 是用户输入错误 → 400 而非未捕获 500
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                return;
+            }
+            catch (PalDDD.CQRS.PalValidationException)
+            {
+                // P2 修复：验证失败异常映射 400（框架意图与实现一致化）
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
                 return;
             }

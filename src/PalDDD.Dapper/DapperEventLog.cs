@@ -122,9 +122,12 @@ public sealed class DapperEventLog : IEventLog
                 // P2 修复：TOCTOU 窗口（预检查后并发写入）由唯一索引兜底，转换为统一并发异常。
                 // EventId 冲突误译防护（对齐 EFCore 版）：版本仍满足期望说明是 EventId 唯一
                 // 索引撞（重复事件 ID），原样上抛而非转并发异常
-                if (expectedVersion.Matches(currentVersion ?? -1))
+                // P2 修复（stale version）：冲突后重查实际版本再分类——预检查快照可能已陈旧
+                var actualVersion = await _connection.QuerySingleOrDefaultAsync<long?>(
+                    EventLogSql.MaxVersion, new { name = streamName }, _transaction).ConfigureAwait(false);
+                if (expectedVersion.Matches(actualVersion ?? -1))
                     throw;
-                throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion ?? -1);
+                throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);
             }
 
             if (i == 0) firstGlobalPos = pos;

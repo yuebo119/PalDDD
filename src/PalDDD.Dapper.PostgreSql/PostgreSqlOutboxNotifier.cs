@@ -166,7 +166,10 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
             {
                 _logger.Error(ex, "PostgreSQL NOTIFY connection lost, reconnecting...");
                 // 指数退避：1s → 2s → 4s → 8s → 最大 30s
-                var delay = Math.Min(30_000, 1_000 * (int)Math.Pow(2, _reconnectAttempts));
+                // P1 修复（五轮评审溢出）：Math.Pow(2, attempts) 在 attempts≥31 时 int 溢出为负
+                // → Task.Delay 抛 ArgumentOutOfRange → 逃出全部 catch → 服务永久死亡。
+                // 改用 double 计算再 Math.Min 封顶，杜绝中间溢出。
+                var delay = (int)Math.Min(30_000, 1_000 * Math.Pow(2, Math.Min(_reconnectAttempts, 30)));
                 _reconnectAttempts++;
                 // P3 修复：catch 体内的 Task.Delay 若因停机取消，OCE 从 catch 块逃逸绕过
                 // 同级 OCE catch——包 try 使退避期间的取消静默退出循环（外层 while 条件已含 token 判定）
