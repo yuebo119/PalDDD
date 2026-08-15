@@ -40,7 +40,6 @@ public sealed class EnumGenerator : IIncrementalGenerator
             transform: static (context, ct) =>
             {
                 var classSymbol = (INamedTypeSymbol)context.TargetSymbol;
-                var classDecl = (ClassDeclarationSyntax)context.TargetNode;
 
                 // 从基类 SmartEnum<TSelf, TValue> 提取 TValue
                 var baseType = classSymbol.BaseType;
@@ -49,16 +48,25 @@ public sealed class EnumGenerator : IIncrementalGenerator
 
                 var valueType = namedBase.TypeArguments[1];
 
-                // 编译时 walk 语法树：收集所有 public static readonly 字段名
+                // 编译时 walk 语法树：收集所有 partial 声明中的 public/internal static 字段
+                // ITM-070：字段可能拆分在多个 partial 文件——用 Symbol 的全部声明引用遍历，
+                // 而非仅 TargetNode（带 attribute 的那个声明），否则跨文件字段被遗漏，
+                // 触发 PALENUM001 且不生成注册代码。
                 var fields = ImmutableArray.CreateBuilder<string>();
-                foreach (var member in classDecl.Members)
+                foreach (var reference in classSymbol.DeclaringSyntaxReferences)
                 {
-                    if (member is FieldDeclarationSyntax fds
-                        && fds.Modifiers.Any(SyntaxKind.StaticKeyword)
-                        && (fds.Modifiers.Any(SyntaxKind.PublicKeyword) || fds.Modifiers.Any(SyntaxKind.InternalKeyword)))
+                    if (reference.GetSyntax(ct) is not ClassDeclarationSyntax partialDecl)
+                        continue;
+
+                    foreach (var member in partialDecl.Members)
                     {
-                        foreach (var variable in fds.Declaration.Variables)
-                            fields.Add(variable.Identifier.Text);
+                        if (member is FieldDeclarationSyntax fds
+                            && fds.Modifiers.Any(SyntaxKind.StaticKeyword)
+                            && (fds.Modifiers.Any(SyntaxKind.PublicKeyword) || fds.Modifiers.Any(SyntaxKind.InternalKeyword)))
+                        {
+                            foreach (var variable in fds.Declaration.Variables)
+                                fields.Add(variable.Identifier.Text);
+                        }
                     }
                 }
 

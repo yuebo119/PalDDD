@@ -73,7 +73,20 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
             state.LeasedUntil = leasedUntil;
         }
 
-        await SaveChangesAsync(ct);
+        try
+        {
+            await SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // ITM-066：多实例同批租约互撞（Version 令牌）。SaveChanges 是原子操作，
+            // 抛出即本轮无任何写入——视为"未获取租约"返回空，下轮重试，
+            // 避免整轮 tick 失败退化为撞租约轮盘。跨方言 FOR UPDATE SKIP LOCKED
+            // 单语句原子租约改造（SQLite 不支持）需后续 ADR。
+            foreach (var state in states)
+                Entry(state).State = EntityState.Detached;
+            return [];
+        }
         return states;
     }
 

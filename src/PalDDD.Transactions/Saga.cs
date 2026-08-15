@@ -557,6 +557,12 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // 使用 HandleEventAsync 的查找逻辑，但走的是当前状态+事件类型的匹配
         var (matchedKey, matchedStep) = (targetKey, routedStep);
 
+        // ITM-069：特殊步骤（FanOut/Interrupt/Dynamic/ChildSaga）的 execute 为 null!，
+        // 直接路由分发会 NRE 且错误信息不指向真实原因。显式拒绝并给出可定位的错误。
+        if (matchedStep.DispatchKind != StepDispatchKind.Normal)
+            throw new InvalidOperationException(
+                $"DynamicStep 路由目标 '{matchedKey}' 是 {matchedStep.DispatchKind} 类型步骤，不支持事件路由分发；路由目标必须是普通步骤。");
+
         List<Exception> failures = [];
         for (int attempt = 0; attempt <= MaxRetries; attempt++)
         {

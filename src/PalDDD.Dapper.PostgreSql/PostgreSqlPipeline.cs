@@ -70,8 +70,12 @@ public sealed class PostgreSqlPipeline : IAsyncDisposable
 
         do
         {
-            while (await reader.ReadAsync(ct))
-                total++;
+            // 排空当前结果集（读循环不可省略——未读完不能 NextResult）
+            while (await reader.ReadAsync(ct)) { }
+            // ITM-068：UPDATE/INSERT 类命令无结果行，受影响行数在 RecordsAffected；
+            // SELECT 类为 -1（不参与计数）。此前按结果集行数统计，写命令恒返回 0。
+            if (reader.RecordsAffected >= 0)
+                total += reader.RecordsAffected;
         }
         while (await reader.NextResultAsync(ct).ConfigureAwait(false));
 

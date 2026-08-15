@@ -74,11 +74,16 @@ public static class PostgreSqlMultiHost
     }
 
     /// <summary>
-    /// 注册支持读写分离的 NpgsqlDataSource。
-    /// 写操作走 primary，读操作走 replicas（负载均衡轮询）。
+    /// 注册多主机、主库亲和的 NpgsqlDataSource（ITM-067 语义修正）。
+    /// <para>
+    /// 全部流量（含读）走 primary：多主机合并仅用于主库发现与故障转移（TargetSessionAttributes=primary）。
+    /// ⚠️ 此方法<b>不做读写分离</b>——写操作路由到只读副本会导致失败，故数据源必须主库亲和。
+    /// 真正的读写分离（写走 primary、读负载均衡 replicas）请用
+    /// <see cref="PostgreSqlReadWriteRouterExtensions.AddPalReadWriteRouter"/>（双 DataSource 方案）。
+    /// </para>
     /// </summary>
     /// <param name="primaryConnectionString">主库连接串</param>
-    /// <param name="replicaConnectionStrings">只读副本连接串列表</param>
+    /// <param name="replicaConnectionStrings">只读副本连接串列表（用于主库发现/故障转移合并）</param>
     /// <param name="applicationName">PGAPPNAME 应用名</param>
     public static IServiceCollection AddPalNpgsqlDataSourceWithReadWriteSplit(
         this IServiceCollection services,
@@ -106,7 +111,8 @@ public static class PostgreSqlMultiHost
         {
             builder.ConnectionStringBuilder.Host += "," + string.Join(",", hosts);
             builder.ConnectionStringBuilder.LoadBalanceHosts = true;
-            builder.ConnectionStringBuilder.TargetSessionAttributes = "any";
+            // ITM-067：必须 primary 亲和——"any" 会把写操作负载均衡到只读副本导致写失败
+            builder.ConnectionStringBuilder.TargetSessionAttributes = "primary";
         }
 
         builder.ConnectionStringBuilder.ApplicationName = applicationName;
