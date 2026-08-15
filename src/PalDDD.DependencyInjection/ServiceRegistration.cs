@@ -29,7 +29,8 @@ public static class ServiceRegistration
         services.TryAddSingleton<Message.DomainEventDispatcherOptions>();
 
         services.TryAddSingleton<HandlerCollector>();
-        services.AddHostedService<HandlerRegistrar>();
+        // P3 修复：TryAddEnumerable 防重——AddPalDDD 双调不双 Registrar
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, HandlerRegistrar>());
 
         return services;
     }

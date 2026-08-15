@@ -13,7 +13,7 @@
 //   });
 //
 //   // LISTEN/NOTIFY 实时通知（可选）：
-//   services.AddPalPostgreSqlOutboxNotifier(connectionString);
+//   services.AddPalPostgreSqlOutboxNotifier("pal_outbox_notify");
 //
 // 架构说明：
 //   此扩展包不修改任何核心抽象或接口。

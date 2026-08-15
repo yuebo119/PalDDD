@@ -80,7 +80,9 @@ public sealed class DefaultSagaManager : ISagaManager
         var method = sagaType.GetMethod(
             "ProcessEventAsync",
             BindingFlags.Public | BindingFlags.Instance);
-        var genericMethod = method!.MakeGenericMethod(stateType);
+        var genericMethod = (method ?? throw new InvalidOperationException(
+            $"Saga type '{sagaType.Name}' does not have a public ProcessEventAsync method. Ensure it inherits Saga<TState>."))
+            .MakeGenericMethod(stateType);
 
         // Invoke: returns boxed ValueTask<TState>
         var boxedValueTask = genericMethod.Invoke(childSaga, [childState, triggerEvent, ct])!;

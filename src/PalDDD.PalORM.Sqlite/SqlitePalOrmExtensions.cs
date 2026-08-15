@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using PalDDD.Core.Repository;
 using PalDDD.EventLog;
 using PalDDD.Idempotency;
@@ -55,11 +56,11 @@ public static class SqlitePalOrmExtensions
         // 时间提供者（默认 System）
         if (clock is not null)
         {
-            services.AddSingleton(clock);
+            services.TryAddSingleton(clock); // P3 修复：TryAdd
         }
         else
         {
-            services.AddSingleton(TimeProvider.System);
+            services.TryAddSingleton(TimeProvider.System); // P3 修复：TryAdd——用户先注册的 TimeProvider 不被覆盖
         }
 
         // 7 Store + UnitOfWork（全部 Scoped，共享同一 DataSession）

@@ -2,7 +2,14 @@ using NativeCompressions;
 
 namespace PalDDD.Compression;
 
-/// <summary>解压炸弹防护（P2 修复）：压缩输入体积上限——超限拒绝解压，防 OOM。</summary>
+/// <summary>
+/// 解压炸弹防护（P2 修复）：压缩输入体积上限——超限拒绝解压，防 OOM。
+/// <para>⚠️ <b>已知限制（六轮评审声明）</b>：LZ4/ZStandard/OpenZL 的原生库 API 为一次性
+/// 全量分配——输出上限检查在 Decompress 返回后执行，恶意载荷可能在检查生效前触发
+/// 超大分配（LZ4 膨胀比约 255:1、Zstd 更高）。输入 8MB 上限是最有效的防线；
+/// 需要流式输出检查的场景请使用 SystemCompressor（Brotli/GZip/Deflate 均为逐块检查）。
+/// 此限制受外部库 API 设计约束，无法在适配层修复。</para>
+/// </summary>
 internal static class DecompressionGuard
 {
     /// <summary>压缩输入安全上限（8MB）——合法消息负载压缩后极少超过此量级。</summary>

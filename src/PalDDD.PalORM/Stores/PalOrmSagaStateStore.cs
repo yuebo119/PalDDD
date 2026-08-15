@@ -85,7 +85,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         await using var cmd = Session.GetRawConnection().CreateCommand();
         cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE leased_by = @p0 AND leased_until = @p1 ORDER BY created_at";
         AddParam(cmd, "@p0", owner);
-        AddParam(cmd, "@p1", until);
+        AddParam(cmd, "@p1", until.ToString("O")); // P2 修复：统一 ISO 8601 字符串（与 PalORM 参数化路径一致）
         return await ReadSagasAsync(cmd, ct);
     }
 

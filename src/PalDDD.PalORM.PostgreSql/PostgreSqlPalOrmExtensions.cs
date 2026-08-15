@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using PalDDD.Core.Repository;
 using PalDDD.EventLog;
 using PalDDD.Idempotency;
