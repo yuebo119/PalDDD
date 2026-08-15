@@ -120,7 +120,11 @@ public sealed class OutboxDomainEventInterceptor(
             var descriptor = _messageCatalog.Find(evt.GetType())
                 ?? throw new InvalidOperationException(
                     $"Domain event '{evt.GetType().FullName}' is not registered in MessageCatalog.");
-            var payload = _serializer.Serialize(evt, descriptor);
+            var payload = _serializer.Serialize((object)evt, descriptor);
+            // P1 修复（七轮评审）：evt 静态类型是 abstract DomainEvent——泛型重载
+            // Serialize<DomainEvent>(evt, descriptor) 绑定基类 JsonTypeInfo 与派生 descriptor
+            // 不匹配（InvalidCastException）。显式 (object) 强转走非泛型 Serialize(object, descriptor)
+            // 用派生 JsonTypeInfo，与读侧（KafkaBroker/RabbitMqBroker 用 object 声明）对称。
             var msg = new Transactions.OutboxMessage
             {
                 Type = descriptor.Name,

@@ -126,7 +126,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         {
             var msgs = await conn.QueryAsync<OutboxMessage>(
                 new CommandDefinition(
-                    SqlTemplates.OutboxLeaseUpdate + $"({leaseSubSql}) RETURNING *",
+                    SqlTemplates.OutboxLeaseUpdate + $"({leaseSubSql} FOR UPDATE SKIP LOCKED) RETURNING *",
                     new { owner, until = ToTimeParam(until), now = ToTimeParam(now), maxRetryCount, n = batchSize },
                     _transaction, cancellationToken: ct)).ConfigureAwait(false);
             return msgs.AsList();
@@ -152,9 +152,21 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     public void AddMessage(OutboxMessage message)
     {
         var c = EnsureOpen();
-        // P3 修复：尊重实体 CreatedAt（与 InMemory/EF 对齐）
+        // P2 修复（七轮评审）：补 correlation/causation/trace 4 列——此前模板加了列但参数对象未传
         c.Execute(SqlTemplates.OutboxInsert,
-            new { Id = DapperAotInitializer.ToSqliteParameter(message.Id), message.Type, message.Payload, message.ContentType, message.SchemaVersion, CreatedAt = ToTimeParam(_timeProvider.GetUtcNow()) }, _transaction); // 设计意图（测试固化）：store 时钟优先——测试通过注入 store TimeProvider 控制 created_at
+            new
+            {
+                Id = DapperAotInitializer.ToSqliteParameter(message.Id),
+                message.Type,
+                message.Payload,
+                message.ContentType,
+                message.SchemaVersion,
+                CreatedAt = ToTimeParam(_timeProvider.GetUtcNow()),
+                CorrelationId = message.CorrelationId?.ToString(),
+                CausationId = message.CausationId?.ToString(),
+                message.TraceParent,
+                message.TraceState
+            }, _transaction);
     }
 
     /// <summary>批量添加消息 — 自动选择数据库最优批量路径。

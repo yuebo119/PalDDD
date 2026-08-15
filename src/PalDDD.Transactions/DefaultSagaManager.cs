@@ -76,16 +76,17 @@ public sealed class DefaultSagaManager : ISagaManager
         var sagaType = childSaga.GetType();
 
         // Resolve ProcessEventAsync(TState, object, CancellationToken) on the saga type
-        // Use open generic typeof(Saga<>) to avoid CS0310 constraint violation
+        // P1 修复（七轮评审）：ProcessEventAsync 是非泛型方法（Saga.cs:181 签名
+        // ProcessEventAsync(TState, object, CancellationToken)）——MakeGenericMethod 对非泛型
+        // MethodInfo 必抛 ArgumentException。直接调用即可。
         var method = sagaType.GetMethod(
             "ProcessEventAsync",
-            BindingFlags.Public | BindingFlags.Instance);
-        var genericMethod = (method ?? throw new InvalidOperationException(
-            $"Saga type '{sagaType.Name}' does not have a public ProcessEventAsync method. Ensure it inherits Saga<TState>."))
-            .MakeGenericMethod(stateType);
+            BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException(
+                $"Saga type '{sagaType.Name}' does not have a public ProcessEventAsync method. Ensure it inherits Saga<TState>.");
 
-        // Invoke: returns boxed ValueTask<TState>
-        var boxedValueTask = genericMethod.Invoke(childSaga, [childState, triggerEvent, ct])!;
+        // Invoke: returns boxed ValueTask<TState>（非泛型方法直接 Invoke）
+        var boxedValueTask = method.Invoke(childSaga, [childState, triggerEvent, ct])!;
 
         // Use AsTask() to get Task<TState>, then await and upcast
         var valueTaskType = typeof(ValueTask<>).MakeGenericType(stateType);

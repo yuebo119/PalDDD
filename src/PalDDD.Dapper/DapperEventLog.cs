@@ -106,7 +106,7 @@ public sealed class DapperEventLog : IEventLog
                     ContentType = evt.ContentType,
                     Payload = evt.Payload.ToArray(),
                     Metadata = evt.Metadata.ToArray(),
-                    RecordedAt = DapperAotInitializer.ToSqliteParameter(now),
+                    RecordedAt = ToTimeParam(now),
                     // 修复覆盖残留：此前硬编码 null——actor/reason 也从未真正持久化过；
                     // 现按 EventData.Audit 全量映射 6 字段（对齐 PalORM/EFCore）
                     ActorId = evt.Audit.ActorId,
@@ -124,7 +124,7 @@ public sealed class DapperEventLog : IEventLog
                 // 索引撞（重复事件 ID），原样上抛而非转并发异常
                 // P2 修复（stale version）：冲突后重查实际版本再分类——预检查快照可能已陈旧
                 var actualVersion = await _connection.QuerySingleOrDefaultAsync<long?>(
-                    new CommandDefinition(EventLogSql.MaxVersion, new { name = streamName }, _transaction,
+                    new CommandDefinition(EventLogSql.MaxVersion, new { name = streamName }, null,
                         cancellationToken: cancellationToken)).ConfigureAwait(false);
                 if (expectedVersion.Matches(actualVersion ?? -1))
                     throw;
@@ -162,6 +162,12 @@ public sealed class DapperEventLog : IEventLog
         foreach (var row in rows)
             yield return row.ToRecordedEvent();
     }
+
+    /// <summary>P2 修复（七轮评审）：按方言选择时间参数格式——对齐 Outbox/Inbox/Checkpoint 三 Store。</summary>
+    private object ToTimeParam(DateTimeOffset value)
+        => _dbType == DapperDbType.MySql
+            ? DapperAotInitializer.ToMySqlParameter(value)
+            : DapperAotInitializer.ToSqliteParameter(value);
 
     /// <summary>
     /// 判定 DbException 是否为唯一约束冲突（跨 provider 鸭子类型，P2 修复引入）。

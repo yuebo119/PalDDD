@@ -52,7 +52,7 @@ public static class SqlTemplates
     ///   ｜ <c>OutboxMessage.Id</c> 在构造时已经 <c>Guid.NewGuid()</c>，直接传入即可。
     /// </summary>
     public const string OutboxInsert =
-        "INSERT INTO outbox_messages (id,type,payload,content_type,schema_version,status,created_at) VALUES (@Id,@Type,@Payload,@ContentType,@SchemaVersion,'Pending',@CreatedAt)";
+        "INSERT INTO outbox_messages (id,type,payload,content_type,schema_version,status,created_at, correlation_id, causation_id, trace_parent, trace_state) VALUES (@Id,@Type,@Payload,@ContentType,@SchemaVersion,'Pending',@CreatedAt, @CorrelationId, @CausationId, @TraceParent, @TraceState)";
 
     /// <summary>
     /// 标记消息为"已处理"。<br/>

@@ -95,6 +95,7 @@ public static class MySqlServiceCollectionExtensions
         // P2 真修（三轮评审发现此前假修）：闭包共享同一 MySqlConnection 实例，线程安全未修。
         // Scoped 工厂按连接串为每个 scope 创建新连接。
         var cs = connection.ConnectionString;
+        connection.Dispose(); // P2 修复：Optimize 内部 Open 的连接及时释放（防启动期泄漏）
         services.AddScoped(_ => new MySqlConnector.MySqlConnection(cs));
         // P2 修复（captive dependency）：移除 singleton→scoped 桥接——root 单例捕获 scoped
         // MySqlConnection 导致全进程共享一条非线程安全连接。DbConnection 需要者应从 scope 内

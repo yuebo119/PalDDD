@@ -77,6 +77,11 @@ public sealed class SqliteDateTimeOffsetTypeHandler : SqlMapper.TypeHandler<Date
         {
             string s => DateTimeOffset.Parse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
             DateTimeOffset d => d,
+            // P1 修复（七轮评审）：Npgsql timestamptz / MySqlConnector DATETIME 的
+            // GetValue 返回 DateTime——此 handler 经 [ModuleInitializer] 全局注册，
+            // Dapper 对注册类型把原始盒装值直接喂给 Parse。缺 DateTime 分支时
+            // PG/MySQL 读路径全部 InvalidCastException。
+            DateTime dt => new DateTimeOffset(dt, TimeSpan.Zero),
             _ => throw new InvalidCastException($"Cannot convert {value.GetType()} to DateTimeOffset")
         };
     }

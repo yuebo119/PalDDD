@@ -111,12 +111,32 @@ public static class DapperBulkCopy
         {
             await writer.StartRowAsync().ConfigureAwait(false);      // 开始新行
             foreach (var val in extractor(item))
-                await writer.WriteAsync(val, NpgsqlTypes.NpgsqlDbType.Unknown).ConfigureAwait(false); // 写入每个列值
+            {
+                // P1 修复（七轮评审）：Ulid/DateTimeOffset 无 Npgsql 原生映射——
+                // Unknown 类型写入 raw 对象时抛类型解析异常。与 SQLite 路径对称做类型转换。
+                var converted = ConvertForNpgsql(val);
+                await writer.WriteAsync(converted.value, converted.type).ConfigureAwait(false);
+            }
         }
 
         // CompleteAsync — 发送 COPY 结束标记，返回成功写入的行数
         var rowsWritten = await writer.CompleteAsync().ConfigureAwait(false);
         return (int)rowsWritten;
+    }
+
+    /// <summary>
+    /// P1 修复：Ulid/DateTimeOffset 转 Npgsql 原生类型——raw 对象 + Unknown
+    /// 在 COPY BINARY 下无法推断类型。转换策略与 Dapper TypeHandler 一致。
+    /// </summary>
+    private static (object? value, NpgsqlTypes.NpgsqlDbType type) ConvertForNpgsql(object? val)
+    {
+        return val switch
+        {
+            null => (null, NpgsqlTypes.NpgsqlDbType.Unknown),
+            ByteAether.Ulid.Ulid ulid => (ulid.ToString(), NpgsqlTypes.NpgsqlDbType.Text),
+            DateTimeOffset dto => (dto, NpgsqlTypes.NpgsqlDbType.TimestampTz),
+            _ => (val, NpgsqlTypes.NpgsqlDbType.Unknown),
+        };
     }
 
     // ─────────── MySQL MySqlBulkCopy ───────────

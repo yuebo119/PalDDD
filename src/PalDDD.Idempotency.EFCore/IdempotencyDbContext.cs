@@ -226,6 +226,10 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         }
         catch (DbUpdateConcurrencyException)
         {
+            // P2 文档声明（七轮评审）：终态写入的并发冲突静默吞掉（Detach 后返回）——
+            // 语义：另一并发执行者已写入终态（Completed 或 Failed），本方操作已实际完成，
+            // 只是终态标记被抢先。at-least-once 语义下这是可接受的（操作本身幂等）。
+            // 调用方收到 Executed 返回值——DB 终态可能是另一节点写入的 Completed 或 Failed。
             Entry(record).State = EntityState.Detached;
         }
     }
