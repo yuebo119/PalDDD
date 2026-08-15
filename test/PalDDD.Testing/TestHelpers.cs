@@ -166,6 +166,9 @@ public sealed class FakeTimeProvider : TimeProvider
             if (timer.DueTime <= threshold)
                 expired.Add(timer);
         }
+        // P2 修复（十轮·盲区评审）：按 DueTime 升序触发——对齐真实 Timer 的到期序语义，
+        // 此前按注册序触发，后注册但先到期的计时器会晚于后到期者执行
+        expired.Sort(static (a, b) => a.DueTime.CompareTo(b.DueTime));
 
         // 移除到期计时器
         foreach (var t in expired)

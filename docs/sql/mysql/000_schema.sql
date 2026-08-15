@@ -74,15 +74,15 @@ CREATE TABLE events (
 -- P3 修复（九轮评审）：补齐通用脚本已有而方言脚本缺失的两张表
 -- ── Idempotency 幂等记录表 ──
 CREATE TABLE idempotency_records (
-    operation_name    VARCHAR(255) NOT NULL,
-    `key`             VARCHAR(255) NOT NULL,
+    operation_name    VARCHAR(128) NOT NULL,
+    idempotency_key   VARCHAR(255) NOT NULL,
     status            INT NOT NULL DEFAULT 0,
-    locked_until      DATETIME(6),
+    locked_until      DATETIME(6) NOT NULL,
     expires_at        DATETIME(6) NOT NULL,
     updated_at        DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     response_payload  TEXT,
     error             TEXT,
-    UNIQUE INDEX idx_idempotency_unique (operation_name, `key`),
+    PRIMARY KEY (operation_name, idempotency_key),
     INDEX idx_idempotency_expires (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

@@ -114,6 +114,51 @@ public sealed class SagaEfCoreConcurrencyTests
             .Throws<InvalidOperationException>();
     }
 
+    [Test]
+    public async Task ResumeAsync_DecisionTriggersSecondInterrupt_SucceedsAndKeepsNewEntry(CancellationToken ct)
+    {
+        // P3 回归（十轮修正）：多阶段 HITL——决策处理再次触发 InterruptStep 时返回的也是
+        // AwaitingHumanDecision 状态（InterruptStep 不改 CurrentState，全程停留在 "Initial"）。
+        // 路由缺失检查曾仅凭状态判别，会把合法二次中断误判为"未注册处理路由"。
+        // 正确判别依据是条目身份：二次中断会注册新条目对象。
+        var manager = new DefaultSagaManager();
+        var saga = new TwoStageHitlSaga { SagaManager = manager };
+        var state = new HitlSagaState();
+
+        await saga.ProcessEventAsync(state, new KickoffEvent(), ct);
+        await Assert.That(state.Status).IsEqualTo(SagaStatus.AwaitingHumanDecision);
+        await Assert.That(state.InterruptReason).IsEqualTo("first-stage");
+
+        // 第一决策触发第二阶段中断——ResumeAsync 正常返回（不抛路由缺失误报），
+        // 新中断原因就位（证明新条目已注册而非路由缺失）
+        await manager.ResumeAsync(state.SagaId, new ApproveDecision(Approved: true), ct);
+        await Assert.That(state.Status).IsEqualTo(SagaStatus.AwaitingHumanDecision);
+        await Assert.That(state.InterruptReason).IsEqualTo("second-stage");
+
+        // 第二决策完成整个流程
+        await manager.ResumeAsync(state.SagaId, new FinalDecision(), ct);
+        await Assert.That(state.Status).IsEqualTo(SagaStatus.Completed);
+    }
+
+    [Test]
+    public async Task ResumeAsync_DecisionRouteMissing_ThrowsAndKeepsEntry(CancellationToken ct)
+    {
+        // 路由缺失（未注册该决策类型的 When）——可见失败，条目保留可重试
+        var manager = new DefaultSagaManager();
+        var saga = new HitlTestSaga { SagaManager = manager };
+        var state = new HitlSagaState();
+
+        await saga.ProcessEventAsync(state, new KickoffEvent(), ct);
+
+        await Assert.That(async () =>
+            await manager.ResumeAsync(state.SagaId, new UnknownDecision(), ct))
+            .Throws<InvalidOperationException>();
+
+        // 条目保留——用正确决策类型仍可恢复
+        await manager.ResumeAsync(state.SagaId, new ApproveDecision(Approved: true), ct);
+        await Assert.That(state.Status).IsEqualTo(SagaStatus.Completed);
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // 测试装置
     // ═══════════════════════════════════════════════════════════════
@@ -147,6 +192,33 @@ public sealed class SagaEfCoreConcurrencyTests
                 {
                     var decision = (ApproveDecision)e;
                     s.CurrentState = decision.Approved ? "Approved" : "Rejected";
+                    s.Status = SagaStatus.Completed;
+                    return new ValueTask<SagaState>(s);
+                }));
+        }
+    }
+
+    // ── 多阶段 HITL 测试装置（十轮修正）──
+
+    private sealed record FinalDecision;
+
+    private sealed record UnknownDecision;
+
+    private sealed class TwoStageHitlSaga : Saga<HitlSagaState>
+    {
+        public TwoStageHitlSaga()
+        {
+            // InterruptStep 不改 CurrentState——三步全部注册在 "Initial"（按事件类型区分路由）
+            When<KickoffEvent>("Initial",
+                new InterruptStep("first-stage-interrupt", "first-stage", typeof(ApproveDecision)));
+            // 第一决策触发第二阶段中断
+            When<ApproveDecision>("Initial", new InterruptStep(
+                "second-stage-interrupt", "second-stage", typeof(FinalDecision)));
+            // 第二决策完成流程
+            When<FinalDecision>("Initial", new SagaStep("finish",
+                execute: static (s, e, ct) =>
+                {
+                    s.CurrentState = "Done";
                     s.Status = SagaStatus.Completed;
                     return new ValueTask<SagaState>(s);
                 }));

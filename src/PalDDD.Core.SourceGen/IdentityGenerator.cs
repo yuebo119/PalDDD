@@ -332,8 +332,10 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
     {
         // P3 修复（八轮评审）：数组字段默认引用相等破坏增量管线缓存（每次编译新数组实例
         // → 引用不等 → 缓存恒 miss）——逐元素比较实现值等价，镜像 MessageRegistryGenerator
-        // 的 LocationInfo value-equatable 范式。Location/DiagnosticId 不参与相等：
-        // 诊断分支本身不产出缓存内容。
+        // 的 LocationInfo value-equatable 范式。
+        // P3 修复（十轮）：DiagnosticId 纳入相等——诊断也是输出，PALID001/PALID002 两态
+        // 翻转而其余字段相等时，排除会使 IDE 增量编译回放过期诊断（Location 仍不参与：
+        // 同一节点的位置随编辑漂移，参与相等会造成缓存 miss）。
         public bool Equals(IdGenInfo? other) =>
             other is not null
             && Namespace == other.Namespace
@@ -341,7 +343,8 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
             && ContainingDeclarations.SequenceEqual(other.ContainingDeclarations)
             && ContainingNames.SequenceEqual(other.ContainingNames)
             && SourceType == other.SourceType
-            && IsNumeric == other.IsNumeric;
+            && IsNumeric == other.IsNumeric
+            && DiagnosticId == other.DiagnosticId;
 
         public override int GetHashCode()
         {
@@ -354,6 +357,7 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
                 foreach (var containingName in ContainingNames) hash = hash * 31 + containingName.GetHashCode();
                 hash = hash * 31 + SourceType.GetHashCode();
                 hash = hash * 31 + IsNumeric.GetHashCode();
+                hash = hash * 31 + (DiagnosticId?.GetHashCode() ?? 0);
                 return hash;
             }
         }

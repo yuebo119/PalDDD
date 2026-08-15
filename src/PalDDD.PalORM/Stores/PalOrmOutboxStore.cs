@@ -152,26 +152,25 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         var leaseOwner = message.LockedBy;
         var statusPending = (int)OutboxStatus.Pending;
         var id = message.Id.ToString();
-        // P3 修复（九轮）：SQL 先行、内存同步后置——守卫拦截（租约被抢占，affected=0）时
-        // 内存对象保持抢占前的真实状态，与 Dapper/EFCore 版"入参不被修改"契约三方一致。
-        if (leaseOwner is null)
-        {
-            Session.ExecuteAsync(
+        // P3 修复（九轮→十轮修正）：SQL 先行且按受影响行数门控内存同步——守卫拦截
+        // （租约被抢占，affected=0）时内存对象保持抢占前的真实状态，与 Dapper/EFCore 版
+        // "入参不被修改"契约三方一致（镜像 PalOrmIdempotencyStore 的 affected>0 模式）。
+        var affected = leaseOwner is null
+            ? Session.ExecuteAsync(
                 $"UPDATE outbox_messages SET status = {statusPending}, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND (locked_by IS NULL)",
-                default).AsTask().GetAwaiter().GetResult();
-        }
-        else
-        {
-            Session.ExecuteAsync(
+                default).AsTask().GetAwaiter().GetResult()
+            : Session.ExecuteAsync(
                 $"UPDATE outbox_messages SET status = {statusPending}, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND (locked_by IS NULL OR locked_by = {leaseOwner})",
                 default).AsTask().GetAwaiter().GetResult();
+        if (affected > 0)
+        {
+            message.Status = OutboxStatus.Pending;
+            message.Error = failureReason;
+            message.NextAttemptAt = nextAttemptAt;
+            message.RetryCount += 1;
+            message.LockedBy = null;
+            message.LockedUntil = null;
         }
-        message.Status = OutboxStatus.Pending;
-        message.Error = failureReason;
-        message.NextAttemptAt = nextAttemptAt;
-        message.RetryCount += 1;
-        message.LockedBy = null;
-        message.LockedUntil = null;
     }
 
     /// <inheritdoc />

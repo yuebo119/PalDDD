@@ -634,7 +634,7 @@ src/                         36 源项目 · Clean Architecture
 
 test/                        16 测试项目（TUnit）· 869 测试
 bench/                       BenchmarkDotNet 性能基准
-samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi
+samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi · AotSample
 docs/                        架构 · 使用指南 · 教程 · ADR
 ```
 

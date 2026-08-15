@@ -31,7 +31,7 @@ public static class Program
         app.MapQuery<GetOrderQry, OrderDto?>("/orders/{id}", ctx => new GetOrderQry(new OrderId(Guid.Parse((string)ctx.Request.RouteValues["id"]!))), AppJsonContext.Default.OrderDto);
         app.MapGet("/", () => Results.Ok(new { App = "Pal.DDD Minimal API", Routes = new[] { "POST /orders", "POST /orders/{id}/items", "GET /orders/{id}", "GET /health" } }));
 
-        Console.WriteLine("🚀 Pal.DDD Minimal API → http://localhost:5000");
+        Console.WriteLine("🚀 Pal.DDD Minimal API 已启动（实际监听地址见 launchSettings.json 或下方 ASP.NET 日志）");
         app.Run();
     }
 }

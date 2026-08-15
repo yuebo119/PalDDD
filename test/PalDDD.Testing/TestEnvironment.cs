@@ -81,6 +81,7 @@ public static class TestEnvironment
         }
         catch (JsonException) { /* 配置文件格式错误 → 用默认值 */ }
         catch (IOException) { /* 配置文件读取错误 → 用默认值 */ }
+        catch (UnauthorizedAccessException) { /* P3 修复（十轮）：受限账户文件访问拒绝 → 用默认值（File.ReadAllText 可抛，不继承 IOException，此前会以 TypeInitializationException 逃逸） */ }
 
         return new();
     }

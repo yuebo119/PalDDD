@@ -9,7 +9,8 @@ using PalDDD.Transactions;
 using PalORM;
 using PalORM.Sqlite;
 
-// 步骤 1：建表（手工 DDL，与 DapperStoreTests.cs:92-178 一致）
+// 步骤 1：建表（手工 DDL，与 PalORM.Tests/MultiDialectSchema.cs 一致：枚举列存 int、payload TEXT。
+// 注意：Dapper 栈的 docs/sql DDL 用字符串枚举/BLOB——两栈 DDL 不兼容，迁移见 docs/palorm-adapter.md §6）
 const string DbPath = "palddd-palorm-sample.db";
 if (File.Exists(DbPath)) File.Delete(DbPath);
 

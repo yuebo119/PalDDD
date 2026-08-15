@@ -88,18 +88,20 @@ CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
 CREATE INDEX idx_events_global ON events(global_position);
 
 -- ── Idempotency 幂等记录表（P3-010 补充）──
+-- P2 修复（十轮）：列名 key → idempotency_key、唯一索引 → 复合主键——对齐
+-- PalOrmIdempotencyStore 全部 DML 与测试 schema（此前按本脚本部署首条 DML 即报列不存在）
 CREATE TABLE idempotency_records (
     operation_name    TEXT    NOT NULL,
-    key               TEXT    NOT NULL,
+    idempotency_key   TEXT    NOT NULL,
     status            INTEGER NOT NULL DEFAULT 0,  -- 0:Started 1:Completed 2:Failed
-    locked_until      TIMESTAMP,
+    locked_until      TIMESTAMP NOT NULL,
     expires_at        TIMESTAMP NOT NULL,
     updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     response_payload  TEXT,                         -- 成功响应快照（Base64 for PalORM）
-    error             TEXT
+    error             TEXT,
+    PRIMARY KEY (operation_name, idempotency_key)
 );
 
-CREATE UNIQUE INDEX idx_idempotency_unique ON idempotency_records(operation_name, key);
 CREATE INDEX idx_idempotency_expires ON idempotency_records(expires_at);
 
 -- ── Projection Checkpoint 投影检查点表（P3-010 补充）──

@@ -78,15 +78,15 @@ CREATE INDEX idx_events_global ON events(global_position);
 -- ── Idempotency 幂等记录表 ──
 CREATE TABLE idempotency_records (
     operation_name    TEXT NOT NULL,
-    key               TEXT NOT NULL,
+    idempotency_key   TEXT NOT NULL,
     status            INTEGER NOT NULL DEFAULT 0,
-    locked_until      TEXT,
+    locked_until      TEXT NOT NULL,
     expires_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
     response_payload  TEXT,
-    error             TEXT
+    error             TEXT,
+    PRIMARY KEY (operation_name, idempotency_key)
 );
-CREATE UNIQUE INDEX idx_idempotency_unique ON idempotency_records(operation_name, key);
 CREATE INDEX idx_idempotency_expires ON idempotency_records(expires_at);
 
 -- ── Projection Checkpoint 投影检查点表（三列复合主键，对齐代码 DML）──

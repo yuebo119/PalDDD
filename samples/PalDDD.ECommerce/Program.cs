@@ -141,7 +141,7 @@ internal static class ECommerceApp
 
         Console.WriteLine("\n── Outbox 租约发布 ──");
         var outbox = new InMemoryOutboxStore();
-        outbox.AddMessage(new OutboxMessage { Type = "ordering.confirmed.v1", Payload = [1, 2, 3], ContentType = "json", SchemaVersion = 1 });
+        outbox.AddMessage(new OutboxMessage { Type = "ordering.confirmed.v1", Payload = [1, 2, 3], ContentType = "application/json", SchemaVersion = 1 });
         var msgs = await outbox.LeasePendingMessagesAsync(10, "ecom", TimeSpan.FromMinutes(2), new OutboxOptions().MaxRetryCount, default);
         outbox.MarkProcessed(msgs[0], DateTimeOffset.UtcNow);
         Console.WriteLine($"  待发布: {msgs.Count}, 状态: {msgs[0].Status}");

@@ -55,12 +55,18 @@ public sealed class DefaultSagaManager : ISagaManager
         // P2 修复（八轮）：SetDecision 后重新派发——把中断恢复接回执行管线
         var resumedState = await entry.ResumeDispatch(decision, ct).ConfigureAwait(false);
 
-        // P3 修复（九轮）：派发后状态仍是 AwaitingHumanDecision 说明 Saga 未注册该决策
-        // 类型的 When 路由——决策被静默丢弃。可见失败并保留条目，兑现"要么投递要么
-        // 可见失败"的契约（派发抛异常时同样保留条目，语义一致）。
+        // P3 修复（九轮→十轮修正）：状态 Alone 无法区分"路由缺失"与"合法二次中断"
+        // （多阶段 HITL 的决策触发下一个 InterruptStep 同样返回 AwaitingHumanDecision）——
+        // 用条目身份判别：二次中断会 RegisterInterrupted 以新条目对象替换字典项，
+        // 路由缺失则条目原样未动。路由缺失时可见失败并保留条目，兑现"要么投递
+        // 要么可见失败"契约；二次中断则保留新条目供下一次决策到达。
         if (resumedState.Status == SagaStatus.AwaitingHumanDecision)
-            throw new InvalidOperationException(
-                $"Saga {sagaId} 未注册决策类型 {decision.GetType().Name} 的处理路由（缺少对应 When 注册）——决策未被消费。");
+        {
+            if (_interrupted.TryGetValue(sagaId, out var currentEntry) && ReferenceEquals(currentEntry, entry))
+                throw new InvalidOperationException(
+                    $"Saga {sagaId} 未注册决策类型 {decision.GetType().Name} 的处理路由（缺少对应 When 注册）——决策未被消费。");
+            return; // 合法二次中断：新条目已就位，本次恢复视为成功
+        }
 
         // 恢复成功后移除条目（此前 _interrupted 只增不减，内存泄漏）
         _interrupted.TryRemove(sagaId, out _);

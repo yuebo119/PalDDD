@@ -94,7 +94,8 @@ public sealed class InMemoryStoreTests
     public async Task InMemoryOutboxStore_WithInjectedTimeProvider_LeaseExpiryIsDeterministic(CancellationToken cancellationToken)
     {
         // 注入 FakeTimeProvider 验证租约过期时序可控——与 OutboxBatchProcessor 的时间抽象对齐
-        var fakeTime = new FakeTimeProvider(DateTimeOffset.Parse("2026-06-25T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        // P3 修复（十轮）：改用共享库 FakeTimeProvider（此前文件内私有同名类遮蔽共享实现）
+        var fakeTime = new PalDDD.Testing.FakeTimeProvider(DateTimeOffset.Parse("2026-06-25T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
         var store = new InMemoryOutboxStore(fakeTime);
         var msg = new OutboxMessage { Type = "test", Payload = [1], ContentType = "application/json", SchemaVersion = 1 };
         store.AddMessage(msg);
@@ -104,24 +105,14 @@ public sealed class InMemoryStoreTests
         await Assert.That(leased).Count().IsEqualTo(1);
 
         // t=1min：租约未过期，无法重新获取
-        fakeTime.AdvanceTo(DateTimeOffset.Parse("2026-06-25T00:01:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        fakeTime.Set(DateTimeOffset.Parse("2026-06-25T00:01:00Z", System.Globalization.CultureInfo.InvariantCulture));
         var beforeExpiry = await store.GetPendingMessagesAsync(10, 10, cancellationToken);
         await Assert.That(beforeExpiry).IsEmpty();
 
         // t=3min：租约已过期，可重新获取
-        fakeTime.AdvanceTo(DateTimeOffset.Parse("2026-06-25T00:03:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        fakeTime.Set(DateTimeOffset.Parse("2026-06-25T00:03:00Z", System.Globalization.CultureInfo.InvariantCulture));
         var afterExpiry = await store.GetPendingMessagesAsync(10, 10, cancellationToken);
         await Assert.That(afterExpiry).Count().IsEqualTo(1);
-    }
-
-    /// <summary>轻量 fake TimeProvider — 测试中控制时间推进，验证租约过期时序</summary>
-    private sealed class FakeTimeProvider(DateTimeOffset start) : TimeProvider
-    {
-        private DateTimeOffset _now = start;
-
-        public override DateTimeOffset GetUtcNow() => _now;
-
-        public void AdvanceTo(DateTimeOffset now) => _now = now;
     }
 
     [Test]
