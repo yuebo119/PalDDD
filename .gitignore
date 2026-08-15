@@ -40,6 +40,8 @@ BenchmarkDotNet.Artifacts/
 
 ## ── 诊断 / 日志 ──
 *.log
+# GitHub Actions 运行器日志（手动下载的排查产物，不入库）
+job_logs.txt
 *.etl
 *.etw
 *.heapsnapshot
