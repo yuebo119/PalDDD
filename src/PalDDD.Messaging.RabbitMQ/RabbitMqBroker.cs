@@ -61,7 +61,16 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         // P3 修复：声明只做一次（幂等但每发布多一次 AMQP 往返）
         if (_declaredExchanges.TryAdd(exchange, 0))
         {
-            await _channel.ExchangeDeclareAsync(exchange, ExchangeType.Fanout, durable: true, cancellationToken: ct);
+            // P2 修复：声明失败回滚占位——否则瞬时故障后该 exchange 永不再声明，后续发布 404
+            try
+            {
+                await _channel.ExchangeDeclareAsync(exchange, ExchangeType.Fanout, durable: true, cancellationToken: ct);
+            }
+            catch
+            {
+                _declaredExchanges.TryRemove(new KeyValuePair<string, byte>(exchange, 0));
+                throw;
+            }
         }
 
         var body = Serializer.Serialize(message, descriptor);

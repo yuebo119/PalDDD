@@ -51,7 +51,8 @@ public sealed class EnumGenerator : IIncrementalGenerator
 
                 // 从基类 SmartEnum<TSelf, TValue> 提取 TValue
                 var baseType = classSymbol.BaseType;
-                if (baseType is not INamedTypeSymbol { TypeArguments.Length: 2 } namedBase)
+                if (baseType is not INamedTypeSymbol { TypeArguments.Length: 2 } namedBase
+                    || namedBase.OriginalDefinition.ToDisplayString() != "PalDDD.Core.SmartEnum<TSelf, TValue>")
                 {
                     // P2 修复：隔层继承不再静默跳过——报 PALENUM002（与 PALENUM001 对称）
                     return new EnumGenInfo(
@@ -151,7 +152,9 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 return;
             }
             spc.AddSource(
-                $"{info!.Namespace}.{info.TypeName}.g.cs",
+                (info!.ContainingDeclarations.Length > 0
+                    ? $"{info.Namespace}.{string.Join("_", info.ContainingDeclarations.Select(d => d.Split(' ').Last()))}_{info.TypeName}.g.cs"
+                    : $"{info.Namespace}.{info.TypeName}.g.cs"),
                 GenerateEnumCode(info));
         });
     }

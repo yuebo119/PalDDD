@@ -64,7 +64,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         context.RegisterSourceOutput(candidates, static (spc, info) =>
         {
             var src = GenerateIdentityCode(info);
-            spc.AddSource($"{info.Namespace}.{info.TypeName}.g.cs", src);
+            spc.AddSource($"{info.Namespace}.{string.Join("_", info.ContainingNames)}_{info.TypeName}.g.cs", src);
         });
     }
 

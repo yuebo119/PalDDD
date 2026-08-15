@@ -68,15 +68,15 @@ public static class SqliteFts
             content_rowid='{rowidColumn}'
         );
 
-        CREATE TRIGGER IF NOT EXISTS {indexName}_ai AFTER INSERT ON {Escape(sourceTable)} BEGIN
+        CREATE TRIGGER IF NOT EXISTS {SanitizeTriggerName(indexName)}_ai AFTER INSERT ON {Escape(sourceTable)} BEGIN
             INSERT INTO {Escape(indexName)}(rowid, {col1}, {col2}) VALUES (NEW.{rowidColumn}, NEW.{col1}, NEW.{col2});
         END;
 
-        CREATE TRIGGER IF NOT EXISTS {indexName}_ad AFTER DELETE ON {Escape(sourceTable)} BEGIN
+        CREATE TRIGGER IF NOT EXISTS {SanitizeTriggerName(indexName)}_ad AFTER DELETE ON {Escape(sourceTable)} BEGIN
             INSERT INTO {Escape(indexName)}({Escape(indexName)}, rowid, {col1}, {col2}) VALUES('delete', OLD.{rowidColumn}, OLD.{col1}, OLD.{col2});
         END;
 
-        CREATE TRIGGER IF NOT EXISTS {indexName}_au AFTER UPDATE ON {Escape(sourceTable)} BEGIN
+        CREATE TRIGGER IF NOT EXISTS {SanitizeTriggerName(indexName)}_au AFTER UPDATE ON {Escape(sourceTable)} BEGIN
             INSERT INTO {Escape(indexName)}({Escape(indexName)}, rowid, {col1}, {col2}) VALUES('delete', OLD.{rowidColumn}, OLD.{col1}, OLD.{col2});
             INSERT INTO {Escape(indexName)}(rowid, {col1}, {col2}) VALUES (NEW.{rowidColumn}, NEW.{col1}, NEW.{col2});
         END;
@@ -129,6 +129,13 @@ public static class SqliteFts
     // EscapeLiteral（单引号翻倍）。此前 content='...' 在单引号字面量内用双引号转义——上下文错配。
     private static string Escape(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
     private static string EscapeLiteral(string s) => s.Replace("'", "''");
+
+    /// <summary>P3 修复：触发器名只允许字母数字下划线（SQLite 标识符约束）——非标识符字符剔除。</summary>
+    private static string SanitizeTriggerName(string s)
+    {
+        var chars = s.Where(char.IsLetterOrDigit).ToArray();
+        return chars.Length > 0 ? new string(chars) : "fts";
+    }
 
     private static string EscapeFts(string s) => s.Replace("'", "''");
 }

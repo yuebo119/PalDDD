@@ -152,8 +152,9 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     public void AddMessage(OutboxMessage message)
     {
         var c = EnsureOpen();
+        // P3 修复：尊重实体 CreatedAt（与 InMemory/EF 对齐）
         c.Execute(SqlTemplates.OutboxInsert,
-            new { Id = DapperAotInitializer.ToSqliteParameter(message.Id), message.Type, message.Payload, message.ContentType, message.SchemaVersion, CreatedAt = DapperAotInitializer.ToSqliteParameter(_timeProvider.GetUtcNow()) }, _transaction);
+            new { Id = DapperAotInitializer.ToSqliteParameter(message.Id), message.Type, message.Payload, message.ContentType, message.SchemaVersion, CreatedAt = ToTimeParam(_timeProvider.GetUtcNow()) }, _transaction); // 设计意图（测试固化）：store 时钟优先——测试通过注入 store TimeProvider 控制 created_at
     }
 
     /// <summary>批量添加消息 — 自动选择数据库最优批量路径。

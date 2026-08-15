@@ -71,8 +71,8 @@ public sealed class DapperEventLog : IEventLog
         // Dapper 连接由调用方持有的设计结果——与 PalORM 版一致）。
         // 1. 乐观并发检查（P0-2 修复：原 expectedVersion.Matches 返回值被丢弃）
         var currentVersion = await _connection.QuerySingleOrDefaultAsync<long?>(
-            EventLogSql.MaxVersion,
-            new { name = streamName }, _transaction).ConfigureAwait(false);
+            new CommandDefinition(EventLogSql.MaxVersion,
+                new { name = streamName }, _transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
         if (!expectedVersion.Matches(currentVersion ?? -1))
             throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion ?? -1);
 
@@ -96,7 +96,7 @@ public sealed class DapperEventLog : IEventLog
             long pos;
             try
             {
-                pos = await _connection.QuerySingleAsync<long>(sql, new
+                pos = await _connection.QuerySingleAsync<long>(new CommandDefinition(sql, new
                 {
                     EventId = DapperAotInitializer.ToSqliteParameter(evt.EventId),
                     EventName = evt.EventName,
@@ -115,7 +115,7 @@ public sealed class DapperEventLog : IEventLog
                     CausationId = evt.Audit.CausationId?.ToString(),
                     TraceParent = evt.Audit.TraceParent,
                     TraceState = evt.Audit.TraceState
-                }, _transaction).ConfigureAwait(false);
+                }, _transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
             }
             catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
             {
@@ -124,7 +124,8 @@ public sealed class DapperEventLog : IEventLog
                 // 索引撞（重复事件 ID），原样上抛而非转并发异常
                 // P2 修复（stale version）：冲突后重查实际版本再分类——预检查快照可能已陈旧
                 var actualVersion = await _connection.QuerySingleOrDefaultAsync<long?>(
-                    EventLogSql.MaxVersion, new { name = streamName }, _transaction).ConfigureAwait(false);
+                    new CommandDefinition(EventLogSql.MaxVersion, new { name = streamName }, _transaction,
+                        cancellationToken: cancellationToken)).ConfigureAwait(false);
                 if (expectedVersion.Matches(actualVersion ?? -1))
                     throw;
                 throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);

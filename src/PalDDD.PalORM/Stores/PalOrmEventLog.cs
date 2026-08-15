@@ -107,8 +107,8 @@ public class PalOrmEventLog<TProvider> : IEventLog
             $"SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE stream_name = {streamName} AND stream_version >= {fromVersion} ORDER BY stream_version",
             cancellationToken))
         {
+            if (--maxCount < 0) yield break; // P3 修复：先减后判（maxCount=0 时零产出，对齐 EFCore ThrowIfLessThan(1)）
             yield return ToRecorded(row, streamName);
-            if (--maxCount <= 0) yield break;
         }
     }
 
