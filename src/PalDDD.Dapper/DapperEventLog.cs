@@ -140,7 +140,12 @@ public sealed class DapperEventLog : IEventLog
                 {
                     // 重查失败（如 PG aborted 事务）——放弃分类，走原始异常上抛
                 }
-                if (requerySucceeded && !expectedVersion.Matches(actualVersion ?? -1))
+                // P3 修复（九轮）：批内前序 INSERT 已推进 MaxVersion（同事务可见），失败事件
+                // 的赋值版本（version-1）未落库——无外部写入者的基线是 version-2；外部并发
+                // 写入者只会落在我们的失败点位或更高（>= version-1）。据此分类：命中基线说明
+                // 是批内 EventId 重复，原样上抛原始异常；超出基线说明存在并发写入者，转统一
+                // 并发异常。
+                if (requerySucceeded && (actualVersion ?? -1) >= version - 1)
                     throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);
                 throw;
             }

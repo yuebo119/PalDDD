@@ -283,16 +283,16 @@ var fromDb = OrderId.From(someUlid);
 Pal.DDD does not rely on Code Review memory — 15 Roslyn analyzers (PDDD001-015) intercept non-compliant code during compilation.
 
 ```csharp
-// ✅ DomainEvent must be sealed — PDDD001 compile error
+// ✅ DomainEvent must be sealed — PDDD012 compile error
 public sealed record OrderCreated(...) : DomainEvent, IDomainEvent;
 
 // ❌ Forgot sealed — direct compile error
-public record OrderCreated(...) : DomainEvent, IDomainEvent;  // PDDD001
+public record OrderCreated(...) : DomainEvent, IDomainEvent;  // PDDD012
 
-// ✅ Message name lowercase-kebab + .vN — PDDD006 compile warning
+// ✅ Message name lowercase-kebab + .vN — PDDD009 compile warning
 [GenerateMessage(Name = "ordering.order-created.v1")]
 
-// ✅ ProcessManager annotated with [BoundedContext] — PDDD010 compile error
+// ✅ ProcessManager annotated with [BoundedContext] — PDDD003 compile error
 [BoundedContext("ordering")]
 public sealed class OrderingProcessManager : Saga<OrderingState> { ... }
 ```

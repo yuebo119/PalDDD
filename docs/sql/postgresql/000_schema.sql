@@ -70,3 +70,32 @@ CREATE TABLE events (
 );
 CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
 CREATE INDEX idx_events_global ON events(global_position);
+
+-- P3 修复（九轮评审）：补齐通用脚本已有而方言脚本缺失的两张表
+-- ── Idempotency 幂等记录表 ──
+CREATE TABLE idempotency_records (
+    operation_name    TEXT    NOT NULL,
+    key               TEXT    NOT NULL,
+    status            INTEGER NOT NULL DEFAULT 0,  -- 0:Started 1:Completed 2:Failed
+    locked_until      TIMESTAMPTZ,
+    expires_at        TIMESTAMPTZ NOT NULL,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    response_payload  TEXT,
+    error             TEXT
+);
+CREATE UNIQUE INDEX idx_idempotency_unique ON idempotency_records(operation_name, key);
+CREATE INDEX idx_idempotency_expires ON idempotency_records(expires_at);
+
+-- ── Projection Checkpoint 投影检查点表（三列复合主键，对齐代码 DML）──
+CREATE TABLE projection_checkpoints (
+    projection_name   TEXT    NOT NULL,
+    source_name       TEXT    NOT NULL,
+    position          TEXT    NOT NULL,
+    status            INTEGER NOT NULL DEFAULT 0,  -- 0:Idle 1:Processing 2:Completed 3:Failed
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    lease_until       TIMESTAMPTZ,
+    revision          INTEGER NOT NULL DEFAULT 0,
+    error             TEXT,
+    PRIMARY KEY (projection_name, source_name, position)
+);
+CREATE INDEX idx_checkpoint_status ON projection_checkpoints(projection_name, source_name, status);

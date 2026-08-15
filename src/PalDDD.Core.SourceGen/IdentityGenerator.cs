@@ -24,16 +24,45 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    // P3 修复（九轮评审）：非 partial record struct 声明从"静默跳过"改为编译期诊断——
+    // 静默让错误延迟到使用点 CS0117（无指向性），与 PALENUM003 的反馈哲学对齐
+    private static readonly DiagnosticDescriptor NonPartialRecordStructDeclaration = new(
+        "PALID002",
+        "GenerateId target must be a partial record struct",
+        "Type '{0}' uses [GenerateId] but is not declared as a partial record struct. Declare it as 'partial record struct' so the generator can merge generated members.",
+        "PalDDD.IdentityGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var candidates = context.SyntaxProvider.ForAttributeWithMetadataName(
             AttributeName,
-            predicate: static (node, _) => IsPartialRecordStruct(node),
+            predicate: static (node, _) => IsStructKindDeclaration(node),
             transform: static (context, ct) =>
             {
                 var structSymbol = (INamedTypeSymbol)context.TargetSymbol;
                 var attrData = context.Attributes[0];
                 var sourceType = (INamedTypeSymbol)attrData.ConstructorArguments[0].Value!;
+
+                // P3 修复（九轮评审）：非 partial record struct 声明报 PALID002——
+                // 生成物恒为 partial record struct，普通 struct / 非 partial 声明无法合并
+                var isPartialRecordStruct = structSymbol.IsRecord
+                    && structSymbol.DeclaringSyntaxReferences.Any(static r =>
+                        r.GetSyntax() is TypeDeclarationSyntax d
+                        && d.Modifiers.Any(static m => m.IsKind(SyntaxKind.PartialKeyword)));
+                if (!isPartialRecordStruct)
+                {
+                    return new IdGenInfo(
+                        Namespace: null,
+                        TypeName: structSymbol.Name,
+                        ContainingDeclarations: [],
+                        ContainingNames: [],
+                        SourceType: sourceType.ToDisplayString(),
+                        IsNumeric: false,
+                        DiagnosticId: "PALID002",
+                        Location: context.TargetNode.GetLocation());
+                }
 
                 // P2 修复：嵌套类型——ContainingNamespace 不含类型层级，生成物需按
                 // ContainingType 链包 partial 声明；否则 namespace 级平铺的同名类型
@@ -98,12 +127,23 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         {
             if (info.DiagnosticId is not null)
             {
-                // P3 修复（八轮评审）：PALID001——非白名单 IdType 编译期报错，不生成代码
-                spc.ReportDiagnostic(Diagnostic.Create(
-                    UnsupportedIdSourceType,
-                    info.Location ?? Location.None,
-                    info.TypeName,
-                    info.SourceType));
+                // 诊断分派（九轮）：PALID001=源类型白名单外；PALID002=声明形式非 partial record struct
+                if (info.DiagnosticId == "PALID002")
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        NonPartialRecordStructDeclaration,
+                        info.Location ?? Location.None,
+                        info.TypeName));
+                }
+                else
+                {
+                    // P3 修复（八轮评审）：PALID001——非白名单 IdType 编译期报错，不生成代码
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        UnsupportedIdSourceType,
+                        info.Location ?? Location.None,
+                        info.TypeName,
+                        info.SourceType));
+                }
                 return;
             }
 
@@ -114,12 +154,12 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         });
     }
 
-    // P3 修复（八轮评审）：emit 恒为 partial record struct——普通 partial struct 声明
-    // 与生成物不合并（平行类型），移除 StructDeclarationSyntax 分支只接受 record struct
-    private static bool IsPartialRecordStruct(SyntaxNode node)
-        => node is RecordDeclarationSyntax r
-           && r.ClassOrStructKeyword.IsKind(SyntaxKind.StructKeyword)
-           && r.Modifiers.Any(SyntaxKind.PartialKeyword);
+    // P3 修复（九轮评审）：predicate 放宽到全部 struct 类声明（普通 struct + record struct），
+    // 非 partial record struct 由 transform 报 PALID002——静默跳过让错误延迟到使用点 CS0117
+    private static bool IsStructKindDeclaration(SyntaxNode node)
+        => node is StructDeclarationSyntax
+           || (node is RecordDeclarationSyntax r
+               && r.ClassOrStructKeyword.IsKind(SyntaxKind.StructKeyword));
 
     private static string GenerateIdentityCode(IdGenInfo info)
     {

@@ -145,6 +145,15 @@ git diff --check
 
 `Name` 只允许小写字母、数字、`.` 和 `-`。不要使用 CLR 类型名、空白、下划线、大写或路径分隔符作为 wire name；source generator 会用 `PALMSG004` 快速失败。`Name` 还必须以 `.v{SchemaVersion}` 结尾，例如 `orders.order-submitted.v2` 必须声明 `SchemaVersion = 2`，否则报告 `PALMSG005`。
 
+**源生成器诊断 ID 汇总**（PDDD001-015 属 Roslyn 分析器，此处登记三大 source generator 的诊断系列）：
+
+| 系列 | 生成器 | ID | 含义 |
+|---|---|---|---|
+| PALMSG | MessageRegistryGenerator | PALMSG001-005 | wire name 字符集/格式/版本后缀/schema 版本一致性 |
+| PALID | IdentityGenerator | PALID001 | [GenerateId] 源类型白名单外（Guid/Ulid/int/long/string） |
+| PALID | IdentityGenerator | PALID002 | 目标声明非 `partial record struct`（无法与生成物合并） |
+| PALENUM | EnumGenerator | PALENUM001-003 | SmartEnum 基类校验、字段声明约束、record 声明不支持 |
+
 示例：
 
 ```csharp

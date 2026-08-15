@@ -22,7 +22,8 @@ namespace PalDDD.Core;
 /// 而非生成恒失败的 TryParse。
 /// </para>
 /// <para>📐 目标声明必须是 <c>partial record struct</c>——生成物为
-/// <c>partial record struct</c>，普通 <c>partial struct</c> 与之不合并。</para>
+/// <c>partial record struct</c>，普通 <c>partial struct</c> 与之不合并，
+/// 编译期报 PALID002 诊断（九轮评审补充）。</para>
 /// </summary>
 [AttributeUsage(AttributeTargets.Struct)]
 public sealed class GenerateIdAttribute(Type idType) : Attribute

@@ -80,6 +80,27 @@ public sealed class ValueObjectTests
     }
 
     [Test]
+    public async Task TryFormat_LongFormat_ExceedsStackBuffer_FallsBackToHeapPath()
+    {
+        // P3 回归（九轮）：D200 填充到 200 字符 > 内部 128 字符栈缓冲——
+        // 回退 ToString 堆路径后仍应成功（"false 仅因目标缓冲不足"契约），
+        // 而非因内部缓冲不足恒失败
+        var vo = new ValueObject<int>(42);
+        Span<byte> bigDestination = stackalloc byte[256];
+
+        var success = vo.TryFormat(bigDestination, out var bytesWritten, "D200", null);
+
+        await Assert.That(success).IsTrue();
+        await Assert.That(bytesWritten).IsEqualTo(200);
+
+        // 同格式 + 不足目标 → false 且零部分写入
+        Span<byte> smallDestination = stackalloc byte[64];
+        var smallSuccess = vo.TryFormat(smallDestination, out var smallWritten, "D200", null);
+        await Assert.That(smallSuccess).IsFalse();
+        await Assert.That(smallWritten).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task TryFormat_Int_DestinationTooSmall_ReturnsFalse()
     {
         var vo = new ValueObject<int>(12345);

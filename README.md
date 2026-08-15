@@ -283,16 +283,16 @@ var fromDb = OrderId.From(someUlid);
 Pal.DDD 不依赖 Code Review 记忆——15 条 Roslyn 分析器（PDDD001-015）在编译阶段拦截不合规代码。
 
 ```csharp
-// ✅ DomainEvent 必须 sealed — PDDD001 编译错误
+// ✅ DomainEvent 必须 sealed — PDDD012 编译错误
 public sealed record OrderCreated(...) : DomainEvent, IDomainEvent;
 
 // ❌ 忘记 sealed — 编译直接报错
-public record OrderCreated(...) : DomainEvent, IDomainEvent;  // PDDD001
+public record OrderCreated(...) : DomainEvent, IDomainEvent;  // PDDD012
 
-// ✅ 消息名 lowercase-kebab + .vN — PDDD006 编译警告
+// ✅ 消息名 lowercase-kebab + .vN — PDDD009 编译警告
 [GenerateMessage(Name = "ordering.order-created.v1")]
 
-// ✅ ProcessManager 标注 [BoundedContext] — PDDD010 编译错误
+// ✅ ProcessManager 标注 [BoundedContext] — PDDD003 编译错误
 [BoundedContext("ordering")]
 public sealed class OrderingProcessManager : Saga<OrderingState> { ... }
 ```

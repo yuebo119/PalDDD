@@ -53,7 +53,14 @@ public sealed class DefaultSagaManager : ISagaManager
         entry.SetDecision(decision);
 
         // P2 修复（八轮）：SetDecision 后重新派发——把中断恢复接回执行管线
-        await entry.ResumeDispatch(decision, ct).ConfigureAwait(false);
+        var resumedState = await entry.ResumeDispatch(decision, ct).ConfigureAwait(false);
+
+        // P3 修复（九轮）：派发后状态仍是 AwaitingHumanDecision 说明 Saga 未注册该决策
+        // 类型的 When 路由——决策被静默丢弃。可见失败并保留条目，兑现"要么投递要么
+        // 可见失败"的契约（派发抛异常时同样保留条目，语义一致）。
+        if (resumedState.Status == SagaStatus.AwaitingHumanDecision)
+            throw new InvalidOperationException(
+                $"Saga {sagaId} 未注册决策类型 {decision.GetType().Name} 的处理路由（缺少对应 When 注册）——决策未被消费。");
 
         // 恢复成功后移除条目（此前 _interrupted 只增不减，内存泄漏）
         _interrupted.TryRemove(sagaId, out _);

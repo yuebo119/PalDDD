@@ -90,7 +90,10 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     /// 时会用 <c>LockedBy = null</c> 覆盖新持有者的租约；守卫下被抢占时影响 0 行，不覆盖。<br/>
     /// RetryCount 递增与状态变更在同一 SQL 内原子完成，不再依赖后续 <c>SaveChangesAsync</c>；
     /// 入参 <paramref name="message"/> 不再被修改——若其为 ChangeTracker 跟踪实体，同步改内存
-    /// 会在后续 SaveChangesAsync 因 RetryCount 并发令牌失配抛出假冲突。
+    /// 会在后续 SaveChangesAsync 因 RetryCount 并发令牌失配抛出假冲突。<br/>
+    /// ⚠️ <b>Provider 约束（九轮评审声明）</b>：<c>ExecuteUpdate</c> 需要关系型 provider
+    /// （SQLite/PG/MySQL/SqlServer 等）；EF InMemory/Cosmos 不支持，本方法会抛
+    /// <see cref="InvalidOperationException"/>——非关系型测试场景请用 Dapper/PalORM/InMemory 适配器。
     /// </remarks>
     public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
     {

@@ -48,6 +48,9 @@ public abstract class Entity
         //    仅清 Next 不够——tail 本身就是该实例时追加点与被追加点重合。
         // ② 追加前清引用：ClearDomainEvents 后复用旧实例时，残留 Next 会让幽灵事件复活；
         //    中链实例复用会截断其后事件（同实例重复发布属调用方误用，防御性取新链位置）。
+        // ⚠️ 跨实体共享限制（九轮评审声明）：事件实例是节点本身——把已在实体 A 链中的事件
+        //    Raise 给实体 B 会清掉其 Next，A 的链从此断为 [该事件]，后续事件静默不可达。
+        //    事件不可跨聚合共享；确需同一事实传播给多个聚合时请各自 Raise 新实例。
         if (ReferenceEquals(_tail, @event)) return;
         @event.Next = null;
         if (_head is null) { _head = _tail = @event; }

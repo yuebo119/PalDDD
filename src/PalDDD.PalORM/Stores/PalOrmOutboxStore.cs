@@ -150,14 +150,10 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // FormattableString 会把字符串变量参数化（AND (@p) 恒假，UPDATE 0 行，
         // file-based app 探针定位）。
         var leaseOwner = message.LockedBy;
-        message.Status = OutboxStatus.Pending;
-        message.Error = failureReason;
-        message.NextAttemptAt = nextAttemptAt;
-        message.RetryCount += 1;
-        message.LockedBy = null;
-        message.LockedUntil = null;
         var statusPending = (int)OutboxStatus.Pending;
         var id = message.Id.ToString();
+        // P3 修复（九轮）：SQL 先行、内存同步后置——守卫拦截（租约被抢占，affected=0）时
+        // 内存对象保持抢占前的真实状态，与 Dapper/EFCore 版"入参不被修改"契约三方一致。
         if (leaseOwner is null)
         {
             Session.ExecuteAsync(
@@ -170,6 +166,12 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
                 $"UPDATE outbox_messages SET status = {statusPending}, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND (locked_by IS NULL OR locked_by = {leaseOwner})",
                 default).AsTask().GetAwaiter().GetResult();
         }
+        message.Status = OutboxStatus.Pending;
+        message.Error = failureReason;
+        message.NextAttemptAt = nextAttemptAt;
+        message.RetryCount += 1;
+        message.LockedBy = null;
+        message.LockedUntil = null;
     }
 
     /// <inheritdoc />

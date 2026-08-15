@@ -1,18 +1,17 @@
 -- ============================================================
--- Pal.DDD 数据库建表脚本（通用 ANSI SQL）
+-- Pal.DDD 数据库建表脚本（通用 ANSI 参考模板）
 -- ============================================================
 -- 使用说明：
---   1. 根据数据库类型选择对应的注释块
---   2. PostgreSQL 用户：直接执行此脚本
---   3. SQLite/MySQL 用户：按注释调整语法
---   4. Dapper 适配器 + Dapper.AOT SG 已自动处理列名映射
+--   1. 本文件是跨方言参考模板（AUTOINCREMENT/TIMESTAMP 为示意语法，非任一方言可直接执行）
+--   2. 实际部署请使用 docs/sql/{postgresql,mysql,sqlite}/000_schema.sql 方言脚本
+--   3. Dapper 适配器 + Dapper.AOT SG 已自动处理列名映射
 -- ============================================================
 
 -- ── Outbox 发件箱消息表 ──
 CREATE TABLE outbox_messages (
     id              TEXT    PRIMARY KEY,   -- Ulid 26 字符（代码侧始终显式提供，非自增）；MySQL: CHAR(26)
     type            TEXT    NOT NULL,
-    payload         TEXT    NOT NULL,
+    payload         BLOB    NOT NULL,  -- 代码侧 byte[]；PG: BYTEA / MySQL: MEDIUMBLOB / SQLite: BLOB
     content_type    TEXT    NOT NULL DEFAULT 'application/json',
     schema_version  INTEGER NOT NULL DEFAULT 1,
     status          TEXT    NOT NULL DEFAULT 'Pending',  -- Pending | Processing | Processed | Dead
@@ -104,17 +103,21 @@ CREATE UNIQUE INDEX idx_idempotency_unique ON idempotency_records(operation_name
 CREATE INDEX idx_idempotency_expires ON idempotency_records(expires_at);
 
 -- ── Projection Checkpoint 投影检查点表（P3-010 补充）──
+-- P2 修复（九轮评审）：主键改为 (projection_name, source_name, position) 三列复合——
+-- 代码侧全部 DML 以三列为键（DapperProjectionCheckpointStore），此前两列唯一索引
+-- 会让同 (projection,source) 的第二个 position 被 ON CONFLICT 静默吞掉（位置互相覆盖）。
 CREATE TABLE projection_checkpoints (
     projection_name   TEXT    NOT NULL,
     source_name       TEXT    NOT NULL,
-    position          TEXT    NOT NULL DEFAULT '',  -- 流位置（ULID/数字，按 source 类型）
+    position          TEXT    NOT NULL,             -- 流位置（ULID/数字，按 source 类型；复合主键成员，无默认值）
     status            INTEGER NOT NULL DEFAULT 0,   -- 0:Idle 1:Processing 2:Completed 3:Failed
     updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     lease_until       TIMESTAMP,
     revision          INTEGER NOT NULL DEFAULT 0,   -- 乐观并发控制令牌
-    error             TEXT
+    error             TEXT,
+    PRIMARY KEY (projection_name, source_name, position)
 );
 
-CREATE UNIQUE INDEX idx_checkpoint_unique ON projection_checkpoints(projection_name, source_name);
+CREATE INDEX idx_checkpoint_status ON projection_checkpoints(projection_name, source_name, status);
 
 -- ── SQL Server 用户：请使用 EF Core 适配器 + DbContext.OnModelCreating ──

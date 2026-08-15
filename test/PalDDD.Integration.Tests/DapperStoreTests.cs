@@ -929,6 +929,34 @@ public sealed class DapperStoreTests
     }
 
     [Test]
+    public async Task EventLog_AppendAsync_BatchDuplicateEventId_ThrowsOriginalNotConcurrency(CancellationToken cancellationToken)
+    {
+        // P3 回归（九轮）：批内两条事件共享 EventId 时，冲突重查的分类基线是"本批已写入的
+        // 最高版本"（version-2）——误用 expectedVersion 会把批内重复误报为并发冲突。
+        // 前提：event_id 需唯一索引才会违约（默认 DDL 只约束 stream+version；生产可加此强化）。
+        await using (var indexCommand = _conn.CreateCommand())
+        {
+            indexCommand.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id)";
+            await indexCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var log = new DapperEventLog(_conn, null, _dbType);
+        var duplicated = PalUlid.New();
+        var events = new List<EventData>
+        {
+            new(duplicated, "test.event.v1", 1, "application/json",
+                "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty),
+            new(duplicated, "test.event.v1", 1, "application/json",
+                "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty)
+        };
+
+        // 断言：抛原始唯一约束 DbException，而非 EventStreamConcurrencyException
+        await Assert.That(async () => await log.AppendAsync(
+            "dup-stream", ExpectedStreamVersion.NoStream, events, cancellationToken))
+            .Throws<System.Data.Common.DbException>();
+    }
+
+    [Test]
     public async Task EventLog_ReadStreamAsync(CancellationToken cancellationToken)
     {
         var log = new DapperEventLog(_conn, null, _dbType);

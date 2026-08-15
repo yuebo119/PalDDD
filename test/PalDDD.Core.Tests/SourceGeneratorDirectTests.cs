@@ -176,9 +176,10 @@ public sealed class SourceGeneratorDirectTests
     }
 
     [Test]
-    public async Task IdentityGenerator_PlainStructDeclaration_DoesNotGenerate()
+    public async Task IdentityGenerator_PlainStructDeclaration_ReportsPalid002()
     {
-        // emit 恒为 partial record struct——普通 partial struct 不匹配（不合并，避免平行类型）
+        // P3（九轮）：普通 partial struct 挂 [GenerateId] 报 PALID002——静默跳过让错误
+        // 延迟到使用点 CS0117（无指向性）；诊断后不生成代码
         var result = RunIdentityGenerator(
             """
             using PalDDD.Core;
@@ -190,7 +191,8 @@ public sealed class SourceGeneratorDirectTests
             public readonly partial struct TestPlainStructId;
             """);
 
-        await Assert.That(result.Diagnostics).IsEmpty();
+        await Assert.That(result.Diagnostics).HasSingleItem();
+        await Assert.That(result.Diagnostics[0].Id).IsEqualTo("PALID002");
         var generatedCount = result.Compilation.SyntaxTrees.Count(t => t.FilePath.EndsWith(".g.cs", StringComparison.Ordinal));
         await Assert.That(generatedCount).IsEqualTo(0);
     }

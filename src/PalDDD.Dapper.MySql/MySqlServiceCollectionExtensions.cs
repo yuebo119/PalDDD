@@ -123,6 +123,12 @@ public static class MySqlServiceCollectionExtensions
     {
         AddPalMySql(services, connectionString);
 
+        // P2 修复（九轮评审）：DapperSagaStateStore 开放泛型由容器构造，DapperDbType 参数
+        // 依赖容器注入——此前未注册落到构造默认值 Sqlite，Legacy 路径 Saga 的 10 处时间
+        // 参数按 SQLite "O" 格式发送（重新引入 session tz 依赖行为）。Outbox/Inbox 显式
+        // 传 DapperDbType.MySql 不受影响，唯 Saga 中招。
+        services.AddSingleton(typeof(DapperDbType), _ => DapperDbType.MySql);
+
         services.AddScoped<IPalOutboxStore>(sp =>
         {
             var conn = sp.GetRequiredService<MySqlConnection>();
