@@ -154,6 +154,86 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(generatedCount).IsEqualTo(0);
     }
 
+    // ── 八轮评审 P3：白名单诊断 / record struct-only / 全局命名空间 / record 声明诊断 ──
+
+    [Test]
+    public async Task IdentityGenerator_UnsupportedSourceType_ReportsPalid001()
+    {
+        // decimal 不在白名单（Guid/Ulid/int/long/string）——编译期报 PALID001 而非生成恒失败 TryParse
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            [GenerateId(typeof(decimal))]
+            public readonly partial record struct TestDecimalId;
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALID001")).IsTrue();
+        var generatedCount = result.Compilation.SyntaxTrees.Count(t => t.FilePath.EndsWith(".g.cs", StringComparison.Ordinal));
+        await Assert.That(generatedCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task IdentityGenerator_PlainStructDeclaration_DoesNotGenerate()
+    {
+        // emit 恒为 partial record struct——普通 partial struct 不匹配（不合并，避免平行类型）
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+            using System;
+
+            namespace TestDomain;
+
+            [GenerateId(typeof(Guid))]
+            public readonly partial struct TestPlainStructId;
+            """);
+
+        await Assert.That(result.Diagnostics).IsEmpty();
+        var generatedCount = result.Compilation.SyntaxTrees.Count(t => t.FilePath.EndsWith(".g.cs", StringComparison.Ordinal));
+        await Assert.That(generatedCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task IdentityGenerator_GlobalNamespace_GeneratesWithoutNamespaceDeclaration()
+    {
+        // 全局命名空间：不再产出 "namespace _;"（旧 fallback 使生成物落入 _ 命名空间不合并）
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+            using System;
+
+            [GenerateId(typeof(Guid))]
+            public readonly partial record struct TestGlobalId;
+            """);
+
+        await Assert.That(result.Diagnostics).IsEmpty();
+        var source = GetGeneratedSource(result, "TestGlobalId.g.cs");
+        await Assert.That(source).DoesNotContain("namespace _;");
+        await Assert.That(source).DoesNotContain("namespace TestGlobalId");
+        await Assert.That(source).Contains("public readonly partial record struct TestGlobalId");
+    }
+
+    [Test]
+    public async Task EnumGenerator_RecordDeclaration_ReportsPalenum003()
+    {
+        // record 声明此前被 predicate 静默跳过——现在报 PALENUM003 引导改用 class
+        var result = RunEnumGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            [GenerateEnum]
+            public partial record OrderStatusRecord : SmartEnum<OrderStatusRecord, string>
+            {
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALENUM003")).IsTrue();
+    }
+
     // ── 辅助方法（参照 MessageRegistryGeneratorTests 的模式）──
 
     private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics) RunEnumGenerator(string source)

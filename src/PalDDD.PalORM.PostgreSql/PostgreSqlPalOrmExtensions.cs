@@ -41,7 +41,17 @@ public static class PostgreSqlPalOrmExtensions
             return DataSession<PostgreSqlProvider>.CreateAsync(opts, default).GetAwaiter().GetResult();
         });
 
-        services.AddSingleton(clock ?? TimeProvider.System);
+        // P2 修复（八轮评审）：改 TryAddSingleton 对齐 Sqlite 版（SqlitePalOrmExtensions）——
+        // AddSingleton(clock ?? System) 会覆盖用户先注册的 TimeProvider（如测试注入
+        // FakeTimeProvider），时钟覆盖导致租约/审计时间失真；TryAdd 保用户注册优先。
+        if (clock is not null)
+        {
+            services.TryAddSingleton(clock);
+        }
+        else
+        {
+            services.TryAddSingleton(TimeProvider.System);
+        }
 
         services.AddScoped<IPalOutboxStore, PostgreSqlOutboxStore>();
         services.AddScoped<IInboxStore, PostgreSqlInboxStore>();

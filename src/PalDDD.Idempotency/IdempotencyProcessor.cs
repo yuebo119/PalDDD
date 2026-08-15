@@ -60,7 +60,9 @@ public sealed class IdempotencyProcessor
         try
         {
             var result = await handler(cancellationToken).ConfigureAwait(false);
-            await _store.MarkCompletedAsync(record, serializeResult(result), _timeProvider.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+            // P2 修复（八轮评审）：副作用已发生后状态标记尽力持久化，不被请求级取消
+            // （对齐下方 MarkFailedAsync 的 None——取消丢失完成标记会让重放重复执行副作用）。
+            await _store.MarkCompletedAsync(record, serializeResult(result), _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
             return SetActivityResult(activity, new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Executed, result));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

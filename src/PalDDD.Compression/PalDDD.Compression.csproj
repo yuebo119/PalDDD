@@ -3,6 +3,9 @@
   <PropertyGroup>
     <RootNamespace>PalDDD.Compression</RootNamespace>
     <Description>Pal.DDD 统一压缩抽象层 — ICompressor / ICompressionProvider / CompressionAlgorithm。提供 Brotli / GZip / Deflate 的 System.IO.Compression 适配器，AOT 安全。</Description>
+    <!-- Justification（八轮评审 P3 注明）：
+         CA1812 — internal 压缩器由 DI 容器动态实例化（TryAddEnumerable），分析器看不到调用点
+         CA1716 — GZip/Deflate 等算法名与系统类型名刻意同名，属领域术语而非遮蔽冲突 -->
     <NoWarn>$(NoWarn);CA1812;CA1716</NoWarn>
   </PropertyGroup>
 

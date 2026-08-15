@@ -178,32 +178,42 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     {
         if (messages.Count == 0) return 0;
         var conn = await EnsureOpenAsync().ConfigureAwait(false);
+        // P2 修复（八轮评审 PD17）：批量路径补 correlation/causation/trace 4 追踪列——
+        // 单条路径 AddMessage（七轮）已补，批量漏列导致追踪链在批量写入时丢失；
+        // extractor 末 4 项与单条 AddMessage 的参数语义逐一对齐。
         return await DapperBulkCopy.BulkInsertAsync(
             conn, _dbType, "outbox_messages",
-            ["id", "type", "payload", "content_type", "schema_version", "status", "created_at"],
+            ["id", "type", "payload", "content_type", "schema_version", "status", "created_at", "correlation_id", "causation_id", "trace_parent", "trace_state"],
             messages,
-            m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, OutboxStatus.Pending.ToString(), _timeProvider.GetUtcNow()]);
+            m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, OutboxStatus.Pending.ToString(), _timeProvider.GetUtcNow(),
+                m.CorrelationId?.ToString(), m.CausationId?.ToString(), m.TraceParent, m.TraceState]);
     }
 
     public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
     {
         var c = EnsureOpen();
+        // P1 修复（八轮评审）：时间参数统一走 ToTimeParam——ToSqliteParameter 产出 "O" string，
+        // PG 下 timestamptz 列收 text 参数无比较/赋值运算符（详见 ToTimeParam 的 PG 分支注释）
         c.Execute(SqlTemplates.OutboxMarkProcessed,
-            new { at = DapperAotInitializer.ToSqliteParameter(processedAt), id = DapperAotInitializer.ToSqliteParameter(message.Id) }, _transaction);
+            new { at = ToTimeParam(processedAt), id = DapperAotInitializer.ToSqliteParameter(message.Id) }, _transaction);
     }
 
     public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
     {
         var c = EnsureOpen();
         c.Execute(SqlTemplates.OutboxMarkDead,
-            new { reason = failureReason, at = DapperAotInitializer.ToSqliteParameter(deadAt), id = DapperAotInitializer.ToSqliteParameter(message.Id) }, _transaction);
+            new { reason = failureReason, at = ToTimeParam(deadAt), id = DapperAotInitializer.ToSqliteParameter(message.Id) }, _transaction); // P1 修复（八轮评审）：时间参数走 ToTimeParam
     }
 
     public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
     {
         var c = EnsureOpen();
+        // P2 修复（八轮评审）：补租约守卫（对齐 PalORM 版 PalOrmOutboxStore）——租约过期被其他 worker
+        // 抢占后，原 worker 的失败释放不再清掉新 worker 的锁并误增 retry_count；被他人持有时
+        // affected=0。owner 取调用时快照 message.LockedBy（string? 直传，调用方 OutboxBatchProcessor
+        // 在租约回读后未清空该字段）。
         c.Execute(SqlTemplates.OutboxReleaseForRetry,
-            new { reason = failureReason, next = DapperAotInitializer.ToSqliteParameter(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(message.Id) }, _transaction);
+            new { reason = failureReason, next = ToTimeParam(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy }, _transaction);
     }
 
     public async ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)
@@ -212,9 +222,13 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         var now = _timeProvider.GetUtcNow();
         var audit = $"requeued by {retriedBy} at {now:O}";
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        // P3 修复（八轮评审）：ExecuteAsync 改 CommandDefinition 传 ct——原重载不接收取消令牌，
+        // 取消信号在 RequeueDead 执行阶段不可传递；EnsureOpenAsync(ct) 此前已传。
         return await conn.ExecuteAsync(
-            SqlTemplates.OutboxRequeueDead,
-            new { audit, next = DapperAotInitializer.ToSqliteParameter(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(messageId) }, _transaction).ConfigureAwait(false);
+            new CommandDefinition(
+                SqlTemplates.OutboxRequeueDead,
+                new { audit, next = ToTimeParam(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(messageId) },
+                _transaction, cancellationToken: ct)).ConfigureAwait(false);
     }
 
     public ValueTask<int> SaveChangesAsync(CancellationToken ct) => ValueTask.FromResult(0);
@@ -234,19 +248,26 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     /// 确保数据库连接已打开（异步版本，避免线程池阻塞）。
     /// 连接生命周期由 DI 容器管理的 Scoped DbConnection 控制，此处不负责关闭。
     /// </summary>
-    /// <summary>
-        /// P2 修复（四轮评审 ToMySqlParameter 接线）：按方言选择时间参数格式——
-        /// MySQL DATETIME(6) 列与带偏移 "O" 格式比较依赖 session tz，统一无偏移 UTC。
-        /// </summary>
-        private object ToTimeParam(DateTimeOffset value)
-            => _dbType == DapperDbType.MySql
-                ? DapperAotInitializer.ToMySqlParameter(value)
-                : DapperAotInitializer.ToSqliteParameter(value);
-
-        private async ValueTask<DbConnection> EnsureOpenAsync(CancellationToken ct = default)
+    private async ValueTask<DbConnection> EnsureOpenAsync(CancellationToken ct = default)
     {
         var conn = _connection;
         if (conn.State != ConnectionState.Open) await conn.OpenAsync(ct).ConfigureAwait(false);
         return conn;
     }
+
+    // P3 修复（八轮评审）：XML doc 错位修复——ToTimeParam 的 summary 此前叠放在 EnsureOpenAsync
+    // 的 summary 之后，导致 EnsureOpenAsync 出现两段 <summary>、ToTimeParam 反而无 doc。
+    /// <summary>
+    /// P2 修复（四轮评审 ToMySqlParameter 接线）：按方言选择时间参数格式——
+    /// MySQL DATETIME(6) 列与带偏移 "O" 格式比较依赖 session tz，统一无偏移 UTC。
+    /// </summary>
+    private object ToTimeParam(DateTimeOffset value)
+        => _dbType switch
+        {
+            // P1 修复（八轮评审）：Npgsql 原生映射 DateTimeOffset→timestamptz；"O" string 按 text OID 发送，
+            // timestamptz <= text 无比较运算符，WHERE 必炸（此前 PG 走默认分支产 "O" string）
+            DapperDbType.PostgreSql => value,
+            DapperDbType.MySql => DapperAotInitializer.ToMySqlParameter(value),
+            _ => DapperAotInitializer.ToSqliteParameter(value),
+        };
 }

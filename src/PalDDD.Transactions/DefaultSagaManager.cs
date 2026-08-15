@@ -4,7 +4,9 @@
 //
 // 💡 职责：提供 ISagaManager 的最小可行实现。
 //   ｜ 用户可注入自定义实现替换默认行为。
-//   ｜ 中断恢复：暂存决策信息于内存字典，供 ISagaManager.ResumeAsync 使用。
+//   ｜ 中断恢复：暂存决策 + 恢复派发闭包于内存字典，ResumeAsync 以决策为事件
+//   ｜ 重新进入 Saga.ProcessEventAsync 执行管线（P2 修复·八轮——此前仅暂存决策，
+//   ｜ 无人消费，恢复链路断裂）。
 //   ｜ 子 Saga 执行：直接调用 childSaga.ProcessEventAsync。
 // ─────────────────────────────────────────────────────────────
 
@@ -19,7 +21,10 @@ namespace PalDDD.Transactions;
 /// ISagaManager 默认实现——提供中断恢复和子 Saga 执行的最小可行实现。
 /// </summary>
 /// <remarks>
-/// 中断恢复使用内存字典暂存状态。生产环境应替换为持久化实现。
+/// 中断恢复使用内存字典暂存决策与恢复派发闭包。<see cref="ResumeAsync{TDecision}"/>
+/// 以决策为事件重新进入 Saga 的 <c>ProcessEventAsync</c> 管线，成功后移除条目；
+/// 未知 SagaId 或二次恢复抛 <see cref="InvalidOperationException"/>（不再静默丢弃决策）。
+/// 生产环境应替换为持久化实现（重启后内存条目丢失）。<br/>
 /// 子 Saga 执行直接委托给子编排器的 ProcessEventAsync。
 /// </remarks>
 public sealed class DefaultSagaManager : ISagaManager
@@ -28,15 +33,30 @@ public sealed class DefaultSagaManager : ISagaManager
     private readonly ConcurrentDictionary<PalUlid, InterruptedSagaEntry> _interrupted = [];
 
     /// <inheritdoc/>
-    public ValueTask ResumeAsync<TDecision>(
+    /// <remarks>
+    /// 默认实现：以决策为事件重新派发到中断时的 Saga 执行管线
+    /// （<c>ProcessEventAsync</c>，含重试/补偿）。派发成功后移除中断条目；
+    /// 派发抛异常时保留条目，可再次调用恢复。未注册的 SagaId 抛
+    /// <see cref="InvalidOperationException"/>——决策要么被投递、要么可见地失败，
+    /// 不静默丢弃（P2 修复·八轮：此前仅暂存决策且条目只增不减）。
+    /// </remarks>
+    public async ValueTask ResumeAsync<TDecision>(
         PalUlid sagaId, TDecision decision, CancellationToken ct)
         where TDecision : notnull
     {
-        if (_interrupted.TryGetValue(sagaId, out var entry))
-        {
-            entry.SetDecision(decision);
-        }
-        return ValueTask.CompletedTask;
+        ArgumentNullException.ThrowIfNull(decision);
+
+        if (!_interrupted.TryGetValue(sagaId, out var entry))
+            throw new InvalidOperationException(
+                $"Saga {sagaId} 无已注册的中断条目——可能从未中断、已恢复成功，或进程重启丢失内存状态。");
+
+        entry.SetDecision(decision);
+
+        // P2 修复（八轮）：SetDecision 后重新派发——把中断恢复接回执行管线
+        await entry.ResumeDispatch(decision, ct).ConfigureAwait(false);
+
+        // 恢复成功后移除条目（此前 _interrupted 只增不减，内存泄漏）
+        _interrupted.TryRemove(sagaId, out _);
     }
 
     /// <inheritdoc/>
@@ -88,8 +108,21 @@ public sealed class DefaultSagaManager : ISagaManager
         // Invoke: returns boxed ValueTask<TState>（非泛型方法直接 Invoke）
         var boxedValueTask = method.Invoke(childSaga, [childState, triggerEvent, ct])!;
 
-        // Use AsTask() to get Task<TState>, then await and upcast
-        var valueTaskType = typeof(ValueTask<>).MakeGenericType(stateType);
+        return await UnboxAndAwaitValueTaskAsync(boxedValueTask, method.ReturnType, stateType).ConfigureAwait(false);
+    }
+
+    /// <summary>拆箱并 await 反射调用的 ValueTask&lt;TState&gt;，返回 SagaState 结果。</summary>
+    [RequiresDynamicCode("Uses MakeGenericType to construct ValueTask<TState> when reflection return type is not pre-constructed; not compatible with native AOT.")]
+    private static async ValueTask<SagaState> UnboxAndAwaitValueTaskAsync(
+        object boxedValueTask, Type? methodReturnType, Type stateType)
+    {
+        // P3 修复（八轮评审）：优先直接使用 method.ReturnType（已是构造完的 ValueTask<T>）——
+        // MakeGenericType(stateType) 在方法实际声明类型与运行时 stateType 不一致时
+        // （如 saga 类型继承链上的隐藏/协变场景）会构造出错误类型导致 AsTask 绑定失败
+        var valueTaskType = methodReturnType is { IsConstructedGenericType: true } constructed
+            && constructed.GetGenericTypeDefinition() == typeof(ValueTask<>)
+                ? constructed
+                : typeof(ValueTask<>).MakeGenericType(stateType);
         var asTaskMethod = valueTaskType.GetMethod("AsTask", BindingFlags.Public | BindingFlags.Instance)!;
         var task = (Task)asTaskMethod.Invoke(boxedValueTask, null)!;
         await task.ConfigureAwait(false);
@@ -101,24 +134,18 @@ public sealed class DefaultSagaManager : ISagaManager
     }
 
     /// <summary>注册一个中断的 Saga——由 InterruptStep 执行时调用。</summary>
-    internal void RegisterInterrupted(PalUlid sagaId, string reason, Type decisionType)
+    /// <param name="resumeDispatch">
+    /// 恢复派发委托——以人工决策为事件重新进入该 Saga 的 ProcessEventAsync 管线，
+    /// 由 <see cref="ResumeAsync{TDecision}"/> 在决策到达时调用。
+    /// </param>
+    internal void RegisterInterrupted(
+        PalUlid sagaId,
+        string reason,
+        Type decisionType,
+        Func<object, CancellationToken, ValueTask<SagaState>> resumeDispatch)
     {
-        _interrupted[sagaId] = new InterruptedSagaEntry(sagaId, reason, decisionType);
-    }
-
-    /// <summary>尝试获取中断条目的决策——由 Saga 恢复流程使用。</summary>
-    internal bool TryGetDecision<TDecision>(PalUlid sagaId, out TDecision? decision)
-        where TDecision : notnull
-    {
-        if (_interrupted.TryGetValue(sagaId, out var entry)
-            && entry.Decision is TDecision d)
-        {
-            decision = d;
-            _interrupted.TryRemove(sagaId, out _);
-            return true;
-        }
-        decision = default;
-        return false;
+        ArgumentNullException.ThrowIfNull(resumeDispatch);
+        _interrupted[sagaId] = new InterruptedSagaEntry(sagaId, reason, decisionType, resumeDispatch);
     }
 
     private sealed class InterruptedSagaEntry
@@ -128,11 +155,19 @@ public sealed class DefaultSagaManager : ISagaManager
         public Type DecisionType { get; }
         public object? Decision { get; private set; }
 
-        public InterruptedSagaEntry(PalUlid sagaId, string reason, Type decisionType)
+        /// <summary>恢复派发委托——以决策为事件重新进入 ProcessEventAsync（见 RegisterInterrupted）。</summary>
+        public Func<object, CancellationToken, ValueTask<SagaState>> ResumeDispatch { get; }
+
+        public InterruptedSagaEntry(
+            PalUlid sagaId,
+            string reason,
+            Type decisionType,
+            Func<object, CancellationToken, ValueTask<SagaState>> resumeDispatch)
         {
             SagaId = sagaId;
             Reason = reason;
             DecisionType = decisionType;
+            ResumeDispatch = resumeDispatch;
         }
 
         public void SetDecision(object decision) => Decision = decision;

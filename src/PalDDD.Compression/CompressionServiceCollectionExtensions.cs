@@ -19,6 +19,9 @@ public static class CompressionServiceCollectionExtensions
     /// <returns>服务集合（支持链式调用）。</returns>
     public static IServiceCollection AddPalCompression(this IServiceCollection services)
     {
+        // P3 修复（八轮评审）：补 null 防护——对齐 AddPalJsonSerialization 等 DI 扩展
+        ArgumentNullException.ThrowIfNull(services);
+
         // 注册压缩提供器（单例）
         services.TryAddSingleton<ICompressionProvider, CompressionProvider>();
 

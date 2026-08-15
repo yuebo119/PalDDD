@@ -166,4 +166,19 @@ public sealed class EntityEqualitySemanticsTests
         await Assert.That(str).Contains("Customer");
         await Assert.That(str).Contains(id.ToString());
     }
+
+    [Test]
+    public async Task TransientEntity_EqualsItself_ReturnsTrue()
+    {
+        // P1 回归（八轮评审）：Equals 自反性契约——瞬时实体的 Id 判等短路曾让
+        // e.Equals(e) 返回 false（HashSet.Contains(自身) 找不到自己）
+        var entity = new Customer(Guid.Empty, "Transient");
+        var same = entity; // 引用同一实例（直接 entity==entity 会触发 CS1718 编译诊断）
+
+        await Assert.That(entity.Equals((object)entity)).IsTrue();
+        await Assert.That(entity == same).IsTrue();
+
+        var set = new HashSet<Customer> { entity };
+        await Assert.That(set.Contains(entity)).IsTrue();
+    }
 }

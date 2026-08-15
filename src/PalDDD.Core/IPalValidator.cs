@@ -39,7 +39,10 @@ public readonly struct PalValidationResult : IEquatable<PalValidationResult>
     public static PalValidationResult Failed(string property, string message)
         => new(false, ImmutableArray.Create(new PalValidationError(property, message)));
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// 相等比较——<b>仅按 <see cref="IsValid"/> 判等，不比较 <see cref="Errors"/> 集合</b>
+    /// （八轮评审声明：避免逐元素比较错误集合的分配与语义歧义）。
+    /// </summary>
     public bool Equals(PalValidationResult other) => IsValid == other.IsValid;
 
     /// <inheritdoc/>

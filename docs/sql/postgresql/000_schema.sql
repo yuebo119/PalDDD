@@ -1,6 +1,6 @@
 -- PostgreSQL 建表脚本（DDD Clean Architecture 适配）
 CREATE TABLE outbox_messages (
-    id              BIGSERIAL PRIMARY KEY,
+    id              TEXT PRIMARY KEY,  -- Ulid 26 字符（代码侧始终显式提供，非自增）
     type            TEXT NOT NULL,
     payload         BYTEA NOT NULL,
     content_type    TEXT NOT NULL DEFAULT 'application/json',
@@ -13,8 +13,8 @@ CREATE TABLE outbox_messages (
     next_attempt_at TIMESTAMPTZ,
     locked_by       TEXT,
     locked_until    TIMESTAMPTZ,
-    correlation_id  UUID,
-    causation_id    UUID,
+    correlation_id  TEXT,   -- 审计：关联 Ulid（26 字符，非 UUID 格式）
+    causation_id    TEXT,   -- 审计：因果 Ulid（26 字符，非 UUID 格式）
     trace_parent    TEXT,
     trace_state     TEXT
 );
@@ -35,7 +35,7 @@ CREATE TABLE inbox_messages (
 CREATE UNIQUE INDEX idx_inbox_unique ON inbox_messages(consumer_name, message_id);
 
 CREATE TABLE saga_states (
-    saga_id       UUID PRIMARY KEY,
+    saga_id       TEXT PRIMARY KEY,  -- Ulid 26 字符（代码传字符串，非 UUID 格式）
     current_state TEXT NOT NULL,
     status        INTEGER NOT NULL DEFAULT 0,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -62,7 +62,11 @@ CREATE TABLE events (
     metadata        BYTEA,
     recorded_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     actor_id        TEXT,
-    reason          TEXT
+    reason          TEXT,
+    correlation_id  TEXT,   -- 审计：关联 Ulid（26 字符，非 UUID 格式）
+    causation_id    TEXT,   -- 审计：因果 Ulid（26 字符，非 UUID 格式）
+    trace_parent    TEXT,   -- 审计：W3C traceparent
+    trace_state     TEXT    -- 审计：W3C tracestate
 );
 CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
 CREATE INDEX idx_events_global ON events(global_position);

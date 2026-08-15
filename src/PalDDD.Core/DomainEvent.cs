@@ -65,10 +65,12 @@ public abstract class DomainEvent
     ///    应在应用层通过 OutboxProcessor/InboxProcessor 的 TimeProvider 参数注入，
     ///    而非修改领域事件的时间戳生成。<br/>
     /// 4. <b>线程安全</b>：AsyncLocal 按执行上下文隔离，无需同步原语。<br/>
-    /// 5. <b>流动边界</b>：AsyncLocal 沿异步执行上下文流动（await/ContinueWith 自动传播）。
-    ///    在 <c>Task.Run</c> 不捕获当前上下文的边界场景可能不流动，但当前框架使用场景
-    ///    （聚合方法内构造 DomainEvent）均在调用方上下文内完成，不受此限制。
-    /// </para>
+/// 5. <b>流动边界</b>：AsyncLocal 沿 ExecutionContext 流动——await/ContinueWith/<c>Task.Run</c>
+///    均会捕获并流动 ExecutionContext（<c>Task.Run</c> 也会流动，旧注释此处表述有误）。
+///    真正不流动的是显式抑制/绕过上下文的 API：<c>ExecutionContext.SuppressFlow()</c>、
+///    <c>ThreadPool.UnsafeQueueUserWorkItem</c> 等 Unsafe 系。当前框架使用场景
+///    （聚合方法内构造 DomainEvent）均在调用方上下文内完成，不受此限制。
+/// </para>
     /// </summary>
     internal static TimeProvider TimeProvider
     {

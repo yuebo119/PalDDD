@@ -32,6 +32,15 @@ public interface IMessageBroker
 
     /// <summary>异步订阅消息 — 完全异步，零 Task.Run，零死锁风险</summary>
     ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(Func<TMessage, CancellationToken, ValueTask> handler, CancellationToken ct = default);
+
+    /// <summary>异步订阅消息（含消费上下文）— 从消息头还原 correlation/causation/traceparent/tracestate。</summary>
+    /// <remarks>
+    /// 默认实现（DIM）适配到无 context 的重载，context 恒为 null；KafkaBroker/RabbitMqBroker
+    /// 覆写此成员以提供从消息头提取的真实 <see cref="MessageConsumeContext"/>（八轮评审：补追踪头消费端断链）。
+    /// </remarks>
+    ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
+        Func<TMessage, MessageConsumeContext?, CancellationToken, ValueTask> handler, CancellationToken ct = default)
+        => SubscribeAsync<TMessage>((message, _, token) => handler(message, null, token), ct);
 }
 
 /// <summary>

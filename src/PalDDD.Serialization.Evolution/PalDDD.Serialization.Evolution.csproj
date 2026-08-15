@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.Serialization.Evolution</RootNamespace>
-    <NoWarn>$(NoWarn);CS1591;CA2007</NoWarn>
+    <!-- 八轮评审 P3：CS1591/CA2007 已在 Directory.Build.props 全局 NoWarn，删除项目级冗余 -->
   </PropertyGroup>
 
   <ItemGroup>

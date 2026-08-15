@@ -209,6 +209,8 @@ Repository 层不再提供 `IRepository<TAggregate,TKey>` 或 `RepositoryBase`�
 
 Outbox 发布时使用 `OutboxMessage.Id` 作为 broker message id，并通过 `MessagePublishContext` 传播 correlation、causation、`traceparent` 和 `tracestate`。直接调用 `IMessageBroker.PublishAsync<TMessage>()` 时 broker 生成新的 message id；需要幂等、分区或跨上下文追踪语义的生产路径应优先经过 Outbox。
 
+消费侧通过 `IMessageBroker.SubscribeAsync<TMessage>` 的 `MessageConsumeContext` 重载从消息头还原 correlation、causation、`traceparent` 和 `tracestate`：KafkaBroker 从消息头提取，RabbitMQ 的 correlation 兜底读 BasicProperties.CorrelationId；无任何追踪头的消息 context 为 null。读写两侧头键名（`traceparent`/`tracestate`/`x-correlation-id`/`x-causation-id`）共用 `MessageConsumeContext.HeaderNames` 常量保证一致；旧的无 context 重载委托适配到新重载，零破坏。
+
 事件 schema 演进不通过孤立的 `IUpcaster<TFrom,TTo>` 占位接口表达。`PalDDD.Serialization.Evolution` 提供完整执行链：旧 wire descriptor -> source-generated deserializer -> explicit converter -> current message descriptor。它不要求 payload 实现 marker interface，也不暴露未接入运行时路径的 upcaster 占位。
 
 ## 面向未来的 DDD 基础设施

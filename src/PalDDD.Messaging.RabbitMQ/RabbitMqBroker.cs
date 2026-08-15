@@ -25,8 +25,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     private readonly IConnection _connection;
     private readonly IChannel _channel;
     private readonly IPalLogger<RabbitMqBroker> _logger;
-    // P3 修复：已声明的 exchange 集合——声明幂等但避免每发布一次 AMQP 往返
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _declaredExchanges = new();
+    // P2 修复（八轮评审）：exchange 声明任务缓存——声明幂等但避免每发布一次 AMQP 往返；
+    // 任务化后并发发布者 await 同一声明，消除"声明飞行中直接 publish → 404 关 channel"竞态。
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Task> _exchangeDeclarations = new();
 
     public RabbitMqBroker(
         IConnection connection,
@@ -58,19 +59,22 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         ArgumentOutOfRangeException.ThrowIfEqual(messageId, default);
 
         var exchange = descriptor.Name;
-        // P3 修复：声明只做一次（幂等但每发布多一次 AMQP 往返）
-        if (_declaredExchanges.TryAdd(exchange, 0))
+        // P2 修复（八轮评审）：声明任务化——首个发布者 GetOrAdd 占位声明 Task，并发发布者
+        // await 同一任务，杜绝"声明飞行中他人直接 publish → exchange 不存在 404 → channel 被服务端关闭"。
+        var declaration = _exchangeDeclarations.GetOrAdd(
+            exchange,
+            static (name, state) => state.Channel.ExchangeDeclareAsync(
+                name, ExchangeType.Fanout, durable: true, cancellationToken: state.Ct),
+            (Channel: _channel, Ct: ct));
+        try
         {
-            // P2 修复：声明失败回滚占位——否则瞬时故障后该 exchange 永不再声明，后续发布 404
-            try
-            {
-                await _channel.ExchangeDeclareAsync(exchange, ExchangeType.Fanout, durable: true, cancellationToken: ct);
-            }
-            catch
-            {
-                _declaredExchanges.TryRemove(new KeyValuePair<string, byte>(exchange, 0));
-                throw;
-            }
+            await declaration;
+        }
+        catch
+        {
+            // P2 修复：声明失败回滚占位——仅当字典中仍是本失败任务时移除（不误删他人重试的新任务），下次发布重新声明
+            _exchangeDeclarations.TryRemove(new KeyValuePair<string, Task>(exchange, declaration));
+            throw;
         }
 
         var body = Serializer.Serialize(message, descriptor);
@@ -101,10 +105,11 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
 
     private static Dictionary<string, object?> CreateHeaders(MessagePublishContext context)
     {
+        // P2 修复（八轮评审）：键名与消费端 MessageConsumeContext.FromHeaders 共用常量，锁读写两侧一致
         var headers = new Dictionary<string, object?>(StringComparer.Ordinal);
-        AddHeader(headers, "traceparent", context.TraceParent);
-        AddHeader(headers, "tracestate", context.TraceState);
-        AddHeader(headers, "x-causation-id", context.CausationId?.ToString());
+        AddHeader(headers, MessageConsumeContext.HeaderNames.TraceParent, context.TraceParent);
+        AddHeader(headers, MessageConsumeContext.HeaderNames.TraceState, context.TraceState);
+        AddHeader(headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString());
         return headers;
     }
 
@@ -114,13 +119,20 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             headers.Add(name, Encoding.UTF8.GetBytes(value));
     }
 
-    /// <summary>异步订阅消息 — 完全原生异步，零 Task.Run</summary>
+    /// <summary>异步订阅消息 — 适配到带消费上下文的重载（context 恒为 null，零破坏）</summary>
+    public override ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
+        Func<TMessage, CancellationToken, ValueTask> handler, CancellationToken ct = default)
+        // P2 修复（八轮评审）：旧重载委托适配新重载
+        => SubscribeAsync<TMessage>((message, _, token) => handler(message, token), ct);
+
+    /// <summary>异步订阅消息（含消费上下文）— 完全原生异步，零 Task.Run</summary>
     /// <remarks>
     /// 所有操作（声明 Exchange/Queue、绑定、开始消费）均为原生异步。<br/>
-    /// 调用方使用 <c>await using var sub = await broker.SubscribeAsync&lt;T&gt;(handler);</c>
+    /// 调用方使用 <c>await using var sub = await broker.SubscribeAsync&lt;T&gt;(handler);</c><br/>
+    /// 消息未携带任何追踪头时 context 为 null。
     /// </remarks>
     public override async ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
-        Func<TMessage, CancellationToken, ValueTask> handler, CancellationToken ct = default)
+        Func<TMessage, MessageConsumeContext?, CancellationToken, ValueTask> handler, CancellationToken ct = default)
     {
         var descriptor = MessageCatalog.Find(typeof(TMessage))
             ?? throw new InvalidOperationException(
@@ -140,7 +152,11 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 var message = Serializer.Deserialize(ea.Body.Span, descriptor);
                 if (message is not null)
                 {
-                    await handler((TMessage)message, ea.CancellationToken);
+                    // P2 修复（八轮评审）：消费端还原追踪头——写侧 CreateHeaders 的镜像，
+                    // correlation 兜底读 BasicProperties.CorrelationId（写侧未写 x-correlation-id 头）
+                    var consumeContext = MessageConsumeContext.FromHeaders(
+                        ea.BasicProperties.Headers, ea.BasicProperties.CorrelationId);
+                    await handler((TMessage)message, consumeContext, ea.CancellationToken);
                     // 手动确认 — 仅在处理成功后 ACK
                     // P3 修复：ACK 与 Nack 同样加保护——channel 已关时异常逃逸进消费者回调
                     await TryAckSafeAsync(ea.DeliveryTag, queueName);
@@ -172,7 +188,19 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
 
         var consumerTag = await _channel.BasicConsumeAsync(queueName, autoAck: false, consumer, cancellationToken: ct);
 
-        return new AsyncSubscription(() => _channel.BasicCancelAsync(consumerTag));
+        // P3 修复（八轮评审）：channel 已关/连接断时 BasicCancelAsync 抛 AlreadyClosed 类异常——
+        // 订阅释放不应被关停路径异常中断，记 Warning 吞掉（对齐 TryAckSafeAsync 模式）。
+        return new AsyncSubscription(async () =>
+        {
+            try
+            {
+                await _channel.BasicCancelAsync(consumerTag);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.Warning($"BasicCancel failed during unsubscribe (channel closed?): {queueName}, consumerTag={consumerTag}: {ex.Message}");
+            }
+        });
     }
 
     public async ValueTask DisposeAsync()

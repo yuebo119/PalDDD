@@ -55,6 +55,11 @@ public static class SqliteServiceCollectionExtensions
 
         if (connectionString.Contains(":memory:", StringComparison.OrdinalIgnoreCase))
         {
+            // ⚠️ 线程安全契约（八轮评审 P3 补强声明，不加 SemaphoreSlim 串行化——包装连接改动面大）：
+            // :memory: 必须 Singleton（连接关闭数据即销毁），但 SqliteConnection 非线程安全——
+            // 并发 scope 共享此 Singleton 连接属未定义行为（SQLite Error 5 "database is locked" /
+            // 交叉读写损坏）。契约：调用方必须串行访问（单线程应用 / 逐个 await 的测试）；
+            // 需要并发时改用文件模式（Scoped 连接隔离）或 AddPalSqliteInMemory(sharedCache: true)。
             var connection = new SqliteConnection(connectionString);
             ApplyOptimization(connection, optimize);
             services.AddSingleton(connection);

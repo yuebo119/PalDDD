@@ -90,9 +90,10 @@ public static class PostgreSqlJsonb
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractTextByPath(string column, params string[] path)
     {
-        // P2 修复（四轮评审：六轮 EscapeLiteral 引入的语法错误）：PG path 数组格式为
-        // '{a,b}'——元素不带单引号；对元素内的单引号做转义即可
-        var p = string.Join(",", path.Select(k => k.Replace("'", "\\")));
+        // P3 修复（八轮评审）：path 元素内单引号改 SQL 标准翻倍（对齐同文件 EscapeLiteral）——
+        // 此前 Replace("'","\\") 的反斜杠转义在 standard_conforming_strings=on（PG 默认）下不生效，
+        // 含单引号的 path 元素会提前终止字符串字面量。PG path 数组格式为 '{a,b}'（元素不带外层引号）。
+        var p = string.Join(",", path.Select(k => k.Replace("'", "''")));
         return $"{Escape(column)} #>> '{{{p}}}'";
     }
 
@@ -100,9 +101,10 @@ public static class PostgreSqlJsonb
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractJsonByPath(string column, params string[] path)
     {
-        // P2 修复（四轮评审：六轮 EscapeLiteral 引入的语法错误）：PG path 数组格式为
-        // '{a,b}'——元素不带单引号；对元素内的单引号做转义即可
-        var p = string.Join(",", path.Select(k => k.Replace("'", "\\")));
+        // P3 修复（八轮评审）：path 元素内单引号改 SQL 标准翻倍（对齐同文件 EscapeLiteral）——
+        // 此前 Replace("'","\\") 的反斜杠转义在 standard_conforming_strings=on（PG 默认）下不生效，
+        // 含单引号的 path 元素会提前终止字符串字面量。PG path 数组格式为 '{a,b}'（元素不带外层引号）。
+        var p = string.Join(",", path.Select(k => k.Replace("'", "''")));
         return $"{Escape(column)} #> '{{{p}}}'";
     }
 

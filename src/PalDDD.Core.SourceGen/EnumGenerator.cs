@@ -37,17 +37,46 @@ public sealed class EnumGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    // P3 修复（八轮评审）：record 声明此前被 predicate 静默跳过（attribute 挂着但零生成）——
+    // 仿 PALENUM002 模式报 PALENUM003 引导改用 class
+    private static readonly DiagnosticDescriptor RecordNotSupportedError = new(
+        "PALENUM003",
+        "GenerateEnum does not support record declarations",
+        "Type '{0}' is a record declaration marked with [GenerateEnum]. GenerateEnum only supports partial class declarations; change 'record' to 'class'.",
+        "PalDDD.EnumGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         // 步骤 1：收集所有标记了 [GenerateEnum] 的 partial class 及其静态字段
+        // P3 修复（八轮评审）：predicate 同时匹配 record 声明（Class target 含 record class），
+        // 由 transform 报 PALENUM003——此前静默跳过，用户无反馈
         var candidates = context.SyntaxProvider.ForAttributeWithMetadataName(
             AttrName,
             predicate: static (node, _) =>
-                node is ClassDeclarationSyntax c
-                && c.Modifiers.Any(SyntaxKind.PartialKeyword),
+                node is TypeDeclarationSyntax t
+                && t.Modifiers.Any(SyntaxKind.PartialKeyword),
             transform: static (context, ct) =>
             {
                 var classSymbol = (INamedTypeSymbol)context.TargetSymbol;
+
+                // P3 修复（八轮评审）：record 声明（GenerateEnumAttribute 的 Class target
+                // 覆盖 record class）不支持——SmartEnum 的静态字段注册依赖 class 语义
+                if (classSymbol.IsRecord && classSymbol.TypeKind == TypeKind.Class)
+                {
+                    return new EnumGenInfo(
+                        Namespace: GetNamespaceName(classSymbol),
+                        TypeName: classSymbol.Name,
+                        ContainingDeclarations: [],
+                        ContainingNames: [],
+                        ValueType: classSymbol.BaseType?.ToDisplayString() ?? "?",
+                        Fields: [],
+                        HasFields: false,
+                        DiagnosticId: "PALENUM003",
+                        DiagnosticMessage: $"Type '{classSymbol.Name}' is a record declaration marked with [GenerateEnum]; change 'record' to 'class'.",
+                        Location: context.TargetNode.GetLocation());
+                }
 
                 // 从基类 SmartEnum<TSelf, TValue> 提取 TValue
                 var baseType = classSymbol.BaseType;
@@ -56,9 +85,10 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 {
                     // P2 修复：隔层继承不再静默跳过——报 PALENUM002（与 PALENUM001 对称）
                     return new EnumGenInfo(
-                        Namespace: classSymbol.ContainingNamespace?.ToDisplayString() ?? "_",
+                        Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
+                        ContainingNames: [],
                         ValueType: baseType?.ToDisplayString() ?? "?",
                         Fields: [],
                         HasFields: false,
@@ -73,6 +103,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // 类型层级，生成物需按 ContainingType 链包 partial 声明，否则 namespace 级
                 // 平铺的同名类型与用户声明的嵌套 partial 不合并（平行类型）。
                 var containingDeclarations = new List<string>();
+                var containingNames = new List<string>();
                 for (var t = classSymbol.ContainingType; t is not null; t = t.ContainingType)
                 {
                     var kind = t.IsRecord
@@ -82,6 +113,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         ? $"<{string.Join(", ", t.TypeParameters.Select(pr => pr.Name))}>"
                         : "";
                     containingDeclarations.Insert(0, $"{kind} {t.Name}{arity}");
+                    containingNames.Insert(0, t.Name);
                 }
 
                 // 编译时 walk 语法树：收集所有 partial 声明中的 public/internal static 字段
@@ -110,20 +142,22 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 {
                     // 有 [GenerateEnum] 但无静态字段 — 返回空字段信息以触发警告
                     return new EnumGenInfo(
-                        Namespace: classSymbol.ContainingNamespace?.ToDisplayString() ?? "_",
+                        Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
+                        ContainingNames: [],
                         ValueType: valueType.ToDisplayString(),
                         Fields: [],
                         HasFields: false);
                 }
 
                 return new EnumGenInfo(
-                    Namespace: classSymbol.ContainingNamespace?.ToDisplayString() ?? "_",
-                    TypeName: classSymbol.Name,
-                    ContainingDeclarations: [.. containingDeclarations],
-                    ValueType: valueType.ToDisplayString(),
-                    Fields: fields.ToImmutable(),
+                    GetNamespaceName(classSymbol),
+                    classSymbol.Name,
+                    [.. containingDeclarations],
+                    [.. containingNames],
+                    valueType.ToDisplayString(),
+                    fields.ToImmutable(),
                     HasFields: true);
             })
             .WithTrackingName("EnumGenerator_Candidates")
@@ -135,8 +169,14 @@ public sealed class EnumGenerator : IIncrementalGenerator
             if (info!.DiagnosticId is not null)
             {
                 // P2 修复：隔层继承报 PALENUM002（Error 级）
+                // P3 修复（八轮评审）：record 声明报 PALENUM003——按 DiagnosticId 分派
+                var descriptor = info.DiagnosticId switch
+                {
+                    "PALENUM003" => RecordNotSupportedError,
+                    _ => NotDirectInheritanceError,
+                };
                 spc.ReportDiagnostic(Diagnostic.Create(
-                    NotDirectInheritanceError,
+                    descriptor,
                     info.Location ?? Location.None,
                     info.TypeName,
                     info.ValueType));
@@ -151,13 +191,24 @@ public sealed class EnumGenerator : IIncrementalGenerator
                     info.TypeName));
                 return;
             }
+            // P3 修复（八轮评审）：hint 名的嵌套类型链改用 ContainingNames（纯类型名）——
+            // 原 ContainingDeclarations.Split(' ').Last() 对泛型嵌套类型产出含 "<T>"
+            // 的非法字符（如 "Outer<int>"），与 IdentityGenerator 风格对齐；
+            // 全局命名空间（Namespace == null）用 "_" 仅作 hint 名保底
             spc.AddSource(
                 (info!.ContainingDeclarations.Length > 0
-                    ? $"{info.Namespace}.{string.Join("_", info.ContainingDeclarations.Select(d => d.Split(' ').Last()))}_{info.TypeName}.g.cs"
-                    : $"{info.Namespace}.{info.TypeName}.g.cs"),
+                    ? $"{info.Namespace ?? "_"}.{string.Join("_", info.ContainingNames)}_{info.TypeName}.g.cs"
+                    : $"{info.Namespace ?? "_"}.{info.TypeName}.g.cs"),
                 GenerateEnumCode(info));
         });
     }
+
+    // P3 修复（八轮评审）：全局命名空间不再 fallback "_"——旧值产出 "namespace _;"
+    // 使生成物落入 _ 命名空间与用户类型不合并；返回 null 由 emit 侧条件包裹
+    private static string? GetNamespaceName(INamedTypeSymbol symbol)
+        => symbol.ContainingNamespace is { IsGlobalNamespace: false } ns
+            ? ns.ToDisplayString()
+            : null;
 
     /// <summary>生成硬编码字段引用的静态构造函数——零反射，100% AOT 兼容</summary>
     private static string GenerateEnumCode(EnumGenInfo info)
@@ -172,11 +223,15 @@ public sealed class EnumGenerator : IIncrementalGenerator
             ? "\n" + string.Join("\n", info.ContainingDeclarations.Select(_ => "}")) + "\n"
             : "";
 
+        // P3 修复（八轮评审）：全局命名空间（Namespace == null）不生成 namespace 声明——
+        // 旧 fallback "_" 产出 "namespace _;" 使生成物落入 _ 命名空间与用户类型不合并
+        var nsDecl = info.Namespace is null ? "" : $"namespace {info.Namespace};\n";
+
         return $$"""
 // <auto-generated/>
 using System.Runtime.CompilerServices;
 
-namespace {{info.Namespace}};{{open}}
+{{nsDecl}}{{open}}
 partial class {{info.TypeName}}
 {
     /// <summary>编译时值注册——所有字段引用均为硬编码，零反射，完全 AOT 兼容</summary>
@@ -192,13 +247,55 @@ partial class {{info.TypeName}}
     }
 
     private sealed record EnumGenInfo(
-        string Namespace,
+        string? Namespace,
         string TypeName,
         string[] ContainingDeclarations,
+        string[] ContainingNames,
         string ValueType,
         ImmutableArray<string> Fields,
         bool HasFields = true,
         string? DiagnosticId = null,
         string? DiagnosticMessage = null,
-        Location? Location = null);
+        Location? Location = null)
+    {
+        // P3 修复（八轮评审）：数组/ImmutableArray 字段默认引用相等破坏增量管线缓存
+        // （每次编译新实例 → 缓存恒 miss）——逐元素比较实现值等价，镜像
+        // MessageRegistryGenerator.LocationInfo 的 value-equatable 范式。
+        // DiagnosticId/DiagnosticMessage/Location 不参与相等：诊断分支不产出缓存内容。
+        public bool Equals(EnumGenInfo? other) =>
+            other is not null
+            && Namespace == other.Namespace
+            && TypeName == other.TypeName
+            && ContainingDeclarations.SequenceEqual(other.ContainingDeclarations)
+            && ContainingNames.SequenceEqual(other.ContainingNames)
+            && ValueType == other.ValueType
+            && FieldsEqual(Fields, other.Fields)
+            && HasFields == other.HasFields;
+
+        // 手写逐元素循环：避免 SequenceEqual 扩展方法在 ImmutableArray 与
+        // System.Linq.ImmutableArrayExtensions 之间的绑定歧义（后者可能退化为引用比较）
+        private static bool FieldsEqual(ImmutableArray<string> left, ImmutableArray<string> right)
+        {
+            if (left.Length != right.Length) return false;
+            for (var i = 0; i < left.Length; i++)
+                if (left[i] != right[i]) return false;
+            return true;
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hash = 17;
+                hash = hash * 31 + (Namespace?.GetHashCode() ?? 0);
+                hash = hash * 31 + TypeName.GetHashCode();
+                foreach (var declaration in ContainingDeclarations) hash = hash * 31 + declaration.GetHashCode();
+                foreach (var containingName in ContainingNames) hash = hash * 31 + containingName.GetHashCode();
+                hash = hash * 31 + ValueType.GetHashCode();
+                foreach (var field in Fields) hash = hash * 31 + field.GetHashCode();
+                hash = hash * 31 + HasFields.GetHashCode();
+                return hash;
+            }
+        }
+    }
 }

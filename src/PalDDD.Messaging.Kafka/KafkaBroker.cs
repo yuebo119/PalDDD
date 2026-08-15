@@ -73,11 +73,12 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
 
     private static Headers CreateHeaders(MessagePublishContext context)
     {
+        // P2 修复（八轮评审）：键名与消费端 MessageConsumeContext.FromHeaders 共用常量，锁读写两侧一致
         var headers = new Headers();
-        AddHeader(headers, "traceparent", context.TraceParent);
-        AddHeader(headers, "tracestate", context.TraceState);
-        AddHeader(headers, "x-correlation-id", context.CorrelationId?.ToString());
-        AddHeader(headers, "x-causation-id", context.CausationId?.ToString());
+        AddHeader(headers, MessageConsumeContext.HeaderNames.TraceParent, context.TraceParent);
+        AddHeader(headers, MessageConsumeContext.HeaderNames.TraceState, context.TraceState);
+        AddHeader(headers, MessageConsumeContext.HeaderNames.CorrelationId, context.CorrelationId?.ToString());
+        AddHeader(headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString());
         return headers;
     }
 
@@ -87,14 +88,21 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             headers.Add(name, Encoding.UTF8.GetBytes(value));
     }
 
-    /// <summary>异步订阅消息 — 后台线程运行阻塞式消费循环</summary>
+    /// <summary>异步订阅消息 — 适配到带消费上下文的重载（context 恒为 null，零破坏）</summary>
+    public override ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
+        Func<TMessage, CancellationToken, ValueTask> handler, CancellationToken ct = default)
+        // P2 修复（八轮评审）：旧重载委托适配新重载
+        => SubscribeAsync<TMessage>((message, _, token) => handler(message, token), ct);
+
+    /// <summary>异步订阅消息（含消费上下文）— 后台线程运行阻塞式消费循环</summary>
     /// <remarks>
     /// Confluent.Kafka 的 Consume 为同步阻塞 API，消费循环必须运行在后台线程。<br/>
     /// 这不是 sync-over-async 反模式——这是与阻塞 IO 库交互的正确方式。<br/>
-    /// Task 引用被保存，异常通过日志和 <see cref="KafkaSubscription.ConsumeTask"/> 可观测。
+    /// Task 引用被保存，异常通过日志和 <see cref="KafkaSubscription.ConsumeTask"/> 可观测。<br/>
+    /// 消息未携带任何追踪头时 context 为 null。
     /// </remarks>
     public override ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
-        Func<TMessage, CancellationToken, ValueTask> handler, CancellationToken ct = default)
+        Func<TMessage, MessageConsumeContext?, CancellationToken, ValueTask> handler, CancellationToken ct = default)
     {
         var descriptor = MessageCatalog.Find(typeof(TMessage))
             ?? throw new InvalidOperationException(
@@ -140,7 +148,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                         var message = Serializer.Deserialize(result.Message.Value, descriptor);
                         if (message is not null)
                         {
-                            await handler((TMessage)message, cts.Token);
+                            // P2 修复（八轮评审）：消费端还原追踪头——写侧 CreateHeaders 的镜像
+                            var consumeContext = MessageConsumeContext.FromHeaders(ToHeaderMap(result.Message.Headers));
+                            await handler((TMessage)message, consumeContext, cts.Token);
                         }
                         else
                         {
@@ -176,6 +186,21 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             _consumers.Add(subscription);
         }
         return new ValueTask<IAsyncDisposable>(subscription);
+    }
+
+    /// <summary>
+    /// Confluent.Kafka Headers（Key/Value 结构集合）转字典视图——
+    /// 供 <see cref="MessageConsumeContext.FromHeaders"/> 统一提取（重复键后者覆盖）。
+    /// </summary>
+    private static Dictionary<string, object?>? ToHeaderMap(Headers? headers)
+    {
+        if (headers is null || headers.Count == 0)
+            return null;
+
+        Dictionary<string, object?> map = new(StringComparer.Ordinal);
+        foreach (var header in headers)
+            map[header.Key] = header.GetValueBytes(); // IHeader API：Key + GetValueBytes()（无 Value 属性）
+        return map;
     }
 
     public async ValueTask DisposeAsync()

@@ -20,6 +20,9 @@ public static class NativeCompressionServiceCollectionExtensions
     /// <returns>服务集合（支持链式调用）。</returns>
     public static IServiceCollection AddPalCompressionNative(this IServiceCollection services)
     {
+        // P3 修复（八轮评审）：补 null 防护——对齐 AddPalCompression
+        ArgumentNullException.ThrowIfNull(services);
+
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ICompressor, LZ4Compressor>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ICompressor, ZStandardCompressor>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ICompressor, OpenZLCompressor>());

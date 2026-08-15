@@ -109,6 +109,9 @@ TState>
             // LeaseDuration 自然过期才对其他实例可见（与批处理整体失败同害）
             try
             {
+            // P3 修复（八轮）：补偿指标移到持久化成功后再计——提前计数会在
+            // 保存失败/0 行时重复累加（下一 tick 重做补偿再 +1）
+            var compensationSucceeded = false;
             if (_orchestrator.IsTimedOut(sagaState, now, out var timedOutSteps))
             {
                 foreach (var step in timedOutSteps)
@@ -122,7 +125,7 @@ TState>
                     sagaState.Status = SagaStatus.Compensated;
                     sagaState.CompletedAt = now;
                     sagaState.CurrentState = "Compensated";
-                    PalMetrics.SagaCompensated.Add(1);
+                    compensationSucceeded = true;
                 }
                 catch (OperationCanceledException)
                 {
@@ -152,9 +155,19 @@ TState>
 
                 sagaState.LeasedBy = null;
                 sagaState.LeasedUntil = null;
-                // P2 修复（取消路径对称）：租约释放是终态写入，不响应取消（与 141 行 OCE 路径
+                // P2 修复（取消路径对称）：租约释放是终态写入，不响应取消（与上方 OCE 路径
                 // 的 CancellationToken.None 对齐）——此前正常路径用 ct，OCE 传播时租约滞留
-                await _store.SaveChangesAsync(sagaState, CancellationToken.None);
+                var compensatedSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None);
+                if (compensatedSaved == 0)
+                {
+                    // P3 修复（八轮）：0 行 = 乐观锁冲突（他实例已写同一 Saga）——
+                    // 补偿结果未落库，本实例的内存快照作废，记 Warning 供排查双写
+                    _logger.Warning($"Saga {sagaState.SagaId} compensated state save affected 0 rows (optimistic concurrency conflict); another instance may have written");
+                }
+                else if (compensationSucceeded)
+                {
+                    PalMetrics.SagaCompensated.Add(1);
+                }
             }
             else
             {
@@ -163,7 +176,13 @@ TState>
                 sagaState.LeasedBy = null;
                 sagaState.LeasedUntil = null;
                 // P2 修复（取消路径对称）：同上——终态写入不响应取消
-                await _store.SaveChangesAsync(sagaState, CancellationToken.None);
+                var releaseSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None);
+                if (releaseSaved == 0)
+                {
+                    // P3 修复（八轮）：0 行 = 乐观锁冲突——租约释放未落库（LeaseDuration 到期兜底），
+                    // 记 Warning 与补偿路径对齐
+                    _logger.Warning($"Saga {sagaState.SagaId} lease release save affected 0 rows (optimistic concurrency conflict); lease will expire by LeaseDuration");
+                }
             }
             }
             catch (OperationCanceledException)

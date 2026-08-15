@@ -108,6 +108,35 @@ public sealed class ValueObjectTests
     }
 
     [Test]
+    public async Task TryFormat_WithFormat_ProducesFormattedUtf8()
+    {
+        // 八轮评审 P3：format 参数正确传递——"X4" 格式 255 → "00FF"（4 字节 UTF8）
+        var vo = new ValueObject<int>(255);
+        Span<byte> destination = stackalloc byte[16];
+
+        var success = vo.TryFormat(destination, out var bytesWritten, "X4", null);
+
+        await Assert.That(success).IsTrue();
+        await Assert.That(bytesWritten).IsEqualTo(4);
+        await Assert.That(System.Text.Encoding.UTF8.GetString(destination[..bytesWritten]))
+            .IsEqualTo("00FF");
+    }
+
+    [Test]
+    public async Task TryFormat_FormattedDestinationTooSmall_ReturnsFalseWithoutPartialWrite()
+    {
+        // 八轮评审 P3 契约：返回 false 仅因 utf8Destination 不足——格式化后内容超目标时
+        // 拒绝且不报告部分写入（bytesWritten == 0）
+        var vo = new ValueObject<int>(255);
+        Span<byte> destination = stackalloc byte[2]; // "X4" 输出 4 字节，2 字节不够
+
+        var success = vo.TryFormat(destination, out var bytesWritten, "X4", null);
+
+        await Assert.That(success).IsFalse();
+        await Assert.That(bytesWritten).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task ToString_WithFormat_UsesUnderlyingTypeFormat()
     {
         var vo = new ValueObject<int>(255);

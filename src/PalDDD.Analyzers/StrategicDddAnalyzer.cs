@@ -520,51 +520,57 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
         string propertyName,
         CancellationToken cancellationToken)
     {
-        foreach (var member in type.GetMembers(propertyName))
+        // P3 修复（八轮评审）：GetMembers 仅返回本类型声明成员（不含继承）——
+        // EventName 声明在基类（含 static abstract 继承链，如 GenerateMessage 契约的
+        // 基类事件）时原实现查不到，误报 NameMismatch。沿 BaseType 链逐层查找。
+        for (var current = type; current is not null; current = current.BaseType)
         {
-            if (member is not IPropertySymbol property
-                || !property.IsStatic
-                || property.Type.SpecialType != SpecialType.System_String)
+            foreach (var member in current.GetMembers(propertyName))
             {
-                continue;
-            }
-
-            foreach (var syntaxReference in property.DeclaringSyntaxReferences)
-            {
-                var syntax = syntaxReference.GetSyntax(cancellationToken);
-                if (syntax is not PropertyDeclarationSyntax declaration)
-                    continue;
-
-                if (declaration.ExpressionBody?.Expression is LiteralExpressionSyntax expressionLiteral)
-                    return (expressionLiteral.Token.Value as string, expressionLiteral.GetLocation());
-
-                if (declaration.Initializer?.Value is LiteralExpressionSyntax initializerLiteral)
-                    return (initializerLiteral.Token.Value as string, initializerLiteral.GetLocation());
-
-                foreach (var accessor in declaration.AccessorList?.Accessors ?? [])
+                if (member is not IPropertySymbol property
+                    || !property.IsStatic
+                    || property.Type.SpecialType != SpecialType.System_String)
                 {
-                    if (!accessor.IsKind(SyntaxKind.GetAccessorDeclaration))
-                        continue;
-
-                    if (accessor.ExpressionBody?.Expression is LiteralExpressionSyntax getterLiteral)
-                        return (getterLiteral.Token.Value as string, getterLiteral.GetLocation());
-
-                    if (accessor.Body is null)
-                        continue;
-
-                    foreach (var statement in accessor.Body.Statements)
-                    {
-                        if (statement is ReturnStatementSyntax
-                            {
-                                Expression: LiteralExpressionSyntax returnLiteral
-                            })
-                        {
-                            return (returnLiteral.Token.Value as string, returnLiteral.GetLocation());
-                        }
-                    }
+                    continue;
                 }
 
-                return (null, declaration.GetLocation());
+                foreach (var syntaxReference in property.DeclaringSyntaxReferences)
+                {
+                    var syntax = syntaxReference.GetSyntax(cancellationToken);
+                    if (syntax is not PropertyDeclarationSyntax declaration)
+                        continue;
+
+                    if (declaration.ExpressionBody?.Expression is LiteralExpressionSyntax expressionLiteral)
+                        return (expressionLiteral.Token.Value as string, expressionLiteral.GetLocation());
+
+                    if (declaration.Initializer?.Value is LiteralExpressionSyntax initializerLiteral)
+                        return (initializerLiteral.Token.Value as string, initializerLiteral.GetLocation());
+
+                    foreach (var accessor in declaration.AccessorList?.Accessors ?? [])
+                    {
+                        if (!accessor.IsKind(SyntaxKind.GetAccessorDeclaration))
+                            continue;
+
+                        if (accessor.ExpressionBody?.Expression is LiteralExpressionSyntax getterLiteral)
+                            return (getterLiteral.Token.Value as string, getterLiteral.GetLocation());
+
+                        if (accessor.Body is null)
+                            continue;
+
+                        foreach (var statement in accessor.Body.Statements)
+                        {
+                            if (statement is ReturnStatementSyntax
+                                {
+                                    Expression: LiteralExpressionSyntax returnLiteral
+                                })
+                            {
+                                return (returnLiteral.Token.Value as string, returnLiteral.GetLocation());
+                            }
+                        }
+                    }
+
+                    return (null, declaration.GetLocation());
+                }
             }
         }
 

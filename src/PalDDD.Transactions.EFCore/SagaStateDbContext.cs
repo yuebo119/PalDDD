@@ -105,6 +105,40 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
     async ValueTask<int> ISagaStateStore<TState>.SaveChangesAsync(TState state, CancellationToken ct)
         => await SaveChangesAsync(ct);
 
+    /// <summary>
+    /// P2 修复（八轮评审）：<see cref="SagaState.Version"/> 并发令牌此前从不递增——
+    /// EF 用 original value 生成 <c>WHERE Version=orig</c>，而 orig 永不前进 → 恒匹配，
+    /// <see cref="DbUpdateConcurrencyException"/> 保护不可达（乐观锁失效）。
+    /// 此处对 Modified 状态的 Saga 实体在提交前递增 current value：EF 把新值写入 SET、
+    /// 原值留在 WHERE，成功后内存与 DB 同步 +1——对齐 DapperSagaStateStore（SQL 内
+    /// version=version+1）与 PalOrmSagaStateStore（UPDATE 后 state.Version++）。
+    /// ⚠️ 递增必须在提交前：提交后递增会使 SET 不含 Version（DB 不前进）而内存前进，
+    /// 下一次保存 WHERE 永不匹配。租约路径（只改 LeasedBy/LeasedUntil）同样经此
+    /// 递增受益——并发租约互撞现在会真实抛并发异常，由 LeaseActiveSagasAsync 捕获降级。
+    /// </summary>
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        BumpVersionOnModifiedSagaStates();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    /// <inheritdoc cref="SaveChanges(bool)"/>
+    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        BumpVersionOnModifiedSagaStates();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    /// <summary>提交前递增所有 Modified 状态 Saga 实体的 Version（见 <see cref="SaveChanges(bool)"/> 注释）。</summary>
+    private void BumpVersionOnModifiedSagaStates()
+    {
+        foreach (var entry in ChangeTracker.Entries<TState>())
+        {
+            if (entry.State == EntityState.Modified)
+                entry.Property(static s => s.Version).CurrentValue++;
+        }
+    }
+
     /// <summary>配置 Saga 状态实体规则</summary>
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -113,6 +147,9 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
         modelBuilder.Entity<TState>(e =>
         {
             e.HasKey(x => x.SagaId);
+            // P2 修复（八轮评审·集群 T 新发现）：Ulid 主键需显式转换——关系型 provider 无
+            // Ulid 原生映射，缺转换时 SaveChanges 抛"无法映射类型"（对齐 OutboxDbContext.Id 模式）
+            e.Property(x => x.SagaId).HasConversion(v => v.ToString(), v => PalUlid.Parse(v));
             e.HasIndex(x => new { x.Status, x.CurrentState });
             e.HasIndex(x => new { x.Status, x.LeasedUntil, x.CreatedAt });
             e.Property(x => x.CurrentState).HasMaxLength(256);

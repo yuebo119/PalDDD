@@ -15,6 +15,14 @@ namespace PalDDD.Core;
 /// <summary>
 /// 标记强类型 ID 生成目标 —— 源码生成器据此生成 Identity 结构体。
 /// <para>💡 使用示例：<c>[GenerateId(typeof(Guid))] public partial record struct UserId;</c></para>
+/// <para>
+/// 📐 <b>IdType 白名单（八轮评审补充）</b>：仅支持
+/// <see cref="Guid"/>、ByteAether.Ulid.Ulid、int (Int32)、long (Int64)、string。
+/// 白名单外类型在编译期报 PALID001 诊断（IdentityGenerator），
+/// 而非生成恒失败的 TryParse。
+/// </para>
+/// <para>📐 目标声明必须是 <c>partial record struct</c>——生成物为
+/// <c>partial record struct</c>，普通 <c>partial struct</c> 与之不合并。</para>
 /// </summary>
 [AttributeUsage(AttributeTargets.Struct)]
 public sealed class GenerateIdAttribute(Type idType) : Attribute
@@ -67,7 +75,10 @@ public sealed class BoundedContextAttribute(string name) : Attribute
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
 public sealed class DomainCapabilityAttribute(string name) : Attribute
 {
-    public string Name { get; } = name;
+    // P3 修复（八轮评审）：补 blank 校验——对齐 BoundedContextAttribute/AggregateNameAttribute
+    public string Name { get; } = string.IsNullOrWhiteSpace(name)
+        ? throw new ArgumentException("Name cannot be blank", nameof(name))
+        : name;
 }
 
 /// <summary>
@@ -83,7 +94,10 @@ public sealed class DomainCapabilityAttribute(string name) : Attribute
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
 public sealed class ProcessManagerAttribute(string name) : Attribute
 {
-    public string Name { get; } = name;
+    // P3 修复（八轮评审）：补 blank 校验——对齐 BoundedContextAttribute/AggregateNameAttribute
+    public string Name { get; } = string.IsNullOrWhiteSpace(name)
+        ? throw new ArgumentException("Name cannot be blank", nameof(name))
+        : name;
 }
 
 /// <summary>

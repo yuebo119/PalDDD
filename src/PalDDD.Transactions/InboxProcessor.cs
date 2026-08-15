@@ -92,7 +92,10 @@ public sealed class InboxProcessor
         try
         {
             await handler(message, ct);
-            await _store.MarkProcessedAsync(record, _timeProvider.GetUtcNow(), ct);
+            // P2 修复（八轮评审）：副作用（handler）已发生后，完成标记不应随请求级 ct 取消——
+            // 取消会导致 Processing 记录滞留，租约/超时到期后同一消息被双重执行
+            // （对齐下方 MarkFailedAsync 的 CancellationToken.None）
+            await _store.MarkProcessedAsync(record, _timeProvider.GetUtcNow(), CancellationToken.None);
             activity?.SetTag("pal.inbox.result", "processed");
             PalMetrics.InboxProcessed.Add(1);
             _logger.Information($"Inbox: message {messageId} processed successfully");

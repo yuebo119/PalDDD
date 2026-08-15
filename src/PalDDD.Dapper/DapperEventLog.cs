@@ -123,12 +123,26 @@ public sealed class DapperEventLog : IEventLog
                 // EventId 冲突误译防护（对齐 EFCore 版）：版本仍满足期望说明是 EventId 唯一
                 // 索引撞（重复事件 ID），原样上抛而非转并发异常
                 // P2 修复（stale version）：冲突后重查实际版本再分类——预检查快照可能已陈旧
-                var actualVersion = await _connection.QuerySingleOrDefaultAsync<long?>(
-                    new CommandDefinition(EventLogSql.MaxVersion, new { name = streamName }, null,
-                        cancellationToken: cancellationToken)).ConfigureAwait(false);
-                if (expectedVersion.Matches(actualVersion ?? -1))
-                    throw;
-                throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);
+                // P1 修复（八轮评审）：重查必须挂接 _transaction——Microsoft.Data.Sqlite 要求
+                // 命令挂接连接的活动事务（传 null 在 UoW 事务内抛 InvalidOperationException，
+                // 吞掉本应转换的并发异常）。PG 事务 aborted（25P02）下同事务重查自身会抛——
+                // 无法分类时保守上抛原始冲突异常（外层事务将回滚，不会产生误判）。
+                long? actualVersion = null;
+                var requerySucceeded = false;
+                try
+                {
+                    actualVersion = await _connection.QuerySingleOrDefaultAsync<long?>(
+                        new CommandDefinition(EventLogSql.MaxVersion, new { name = streamName }, _transaction,
+                            cancellationToken: cancellationToken)).ConfigureAwait(false);
+                    requerySucceeded = true;
+                }
+                catch (System.Data.Common.DbException)
+                {
+                    // 重查失败（如 PG aborted 事务）——放弃分类，走原始异常上抛
+                }
+                if (requerySucceeded && !expectedVersion.Matches(actualVersion ?? -1))
+                    throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);
+                throw;
             }
 
             if (i == 0) firstGlobalPos = pos;
@@ -165,9 +179,15 @@ public sealed class DapperEventLog : IEventLog
 
     /// <summary>P2 修复（七轮评审）：按方言选择时间参数格式——对齐 Outbox/Inbox/Checkpoint 三 Store。</summary>
     private object ToTimeParam(DateTimeOffset value)
-        => _dbType == DapperDbType.MySql
-            ? DapperAotInitializer.ToMySqlParameter(value)
-            : DapperAotInitializer.ToSqliteParameter(value);
+        => _dbType switch
+        {
+            DapperDbType.MySql => DapperAotInitializer.ToMySqlParameter(value),
+            // P1 修复（八轮评审）：PG 传原生 DateTimeOffset——Npgsql 映射 timestamptz；
+            // "O" 格式 string 按 text OID 发送，PG 8.3+ 的 timestamptz <= text 无比较
+            // 运算符（隐式转换已移除），WHERE 比较上下文必炸 42883
+            DapperDbType.PostgreSql => value,
+            _ => DapperAotInitializer.ToSqliteParameter(value)
+        };
 
     /// <summary>
     /// 判定 DbException 是否为唯一约束冲突（跨 provider 鸭子类型，P2 修复引入）。

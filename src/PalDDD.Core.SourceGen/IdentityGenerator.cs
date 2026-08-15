@@ -14,11 +14,21 @@ public sealed class IdentityGenerator : IIncrementalGenerator
 {
     private const string AttributeName = "PalDDD.Core.GenerateIdAttribute";
 
+    // P3 修复（八轮评审）：非白名单 IdType 从"生成永不成功的 TryParse"改为编译期诊断，
+    // 仿 MessageRegistryGenerator/EnumGenerator 的 PALMSG/PALENUM 诊断模式
+    private static readonly DiagnosticDescriptor UnsupportedIdSourceType = new(
+        "PALID001",
+        "GenerateId source type is not supported",
+        "Type '{0}' uses [GenerateId] with unsupported source type '{1}'. Supported source types: System.Guid, ByteAether.Ulid.Ulid, int (Int32), long (Int64), string.",
+        "PalDDD.IdentityGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var candidates = context.SyntaxProvider.ForAttributeWithMetadataName(
             AttributeName,
-            predicate: static (node, _) => IsPartialStruct(node),
+            predicate: static (node, _) => IsPartialRecordStruct(node),
             transform: static (context, ct) =>
             {
                 var structSymbol = (INamedTypeSymbol)context.TargetSymbol;
@@ -42,20 +52,43 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                     containingNames.Insert(0, t.Name);
                 }
 
+                // P3 修复（八轮评审）：全局命名空间不再 fallback "_"——旧值产出
+                // "namespace _;" 使生成物落入 _ 命名空间，与用户的全局类型不合并；
+                // null 时 emit 侧不生成 namespace 声明
+                var namespaceName = structSymbol.ContainingNamespace is { IsGlobalNamespace: false } containingNs
+                    ? containingNs.ToDisplayString()
+                    : null;
+
+                // P3 修复（八轮评审）：白名单外 IdType 报 PALID001——原实现静默生成
+                // "result = default; return false;" 的恒失败 TryParse，用户无编译期反馈
+                var normalizedSourceType = sourceType.ToDisplayString().Replace("global::", "") switch
+                {
+                    "System.Guid" => "Guid",
+                    "int" => "int",
+                    "long" => "long",
+                    "string" => "string",
+                    "ByteAether.Ulid" => "Ulid",
+                    _ => null
+                };
+                if (normalizedSourceType is null)
+                {
+                    return new IdGenInfo(
+                        Namespace: namespaceName,
+                        TypeName: structSymbol.Name,
+                        ContainingDeclarations: [.. containingDeclarations],
+                        ContainingNames: [.. containingNames],
+                        SourceType: sourceType.ToDisplayString(),
+                        IsNumeric: false,
+                        DiagnosticId: "PALID001",
+                        Location: context.TargetNode.GetLocation());
+                }
+
                 return new IdGenInfo(
-                    structSymbol.ContainingNamespace?.ToDisplayString() ?? "_",
+                    namespaceName,
                     structSymbol.Name,
                     [.. containingDeclarations],
                     [.. containingNames],
-                    sourceType.ToDisplayString().Replace("global::", "") switch
-                    {
-                        "System.Guid" => "Guid",
-                        "int" => "int",
-                        "long" => "long",
-                        "string" => "string",
-                        "ByteAether.Ulid" => "Ulid",
-                        _ => sourceType.Name
-                    },
+                    normalizedSourceType,
                     sourceType.Name is "Int32" or "Int64" && sourceType.ContainingNamespace?.ToDisplayString() == "System");
             })
             .WithTrackingName("IdentityGenerator_Candidates")
@@ -63,23 +96,33 @@ public sealed class IdentityGenerator : IIncrementalGenerator
 
         context.RegisterSourceOutput(candidates, static (spc, info) =>
         {
+            if (info.DiagnosticId is not null)
+            {
+                // P3 修复（八轮评审）：PALID001——非白名单 IdType 编译期报错，不生成代码
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    UnsupportedIdSourceType,
+                    info.Location ?? Location.None,
+                    info.TypeName,
+                    info.SourceType));
+                return;
+            }
+
             var src = GenerateIdentityCode(info);
-            spc.AddSource($"{info.Namespace}.{string.Join("_", info.ContainingNames)}_{info.TypeName}.g.cs", src);
+            // P3 修复（八轮评审）：全局命名空间（Namespace == null）用 "_" 仅作 hint 名保底，
+            // 生成代码本身不再含 namespace 声明
+            spc.AddSource($"{info.Namespace ?? "_"}.{string.Join("_", info.ContainingNames)}_{info.TypeName}.g.cs", src);
         });
     }
 
-    private static bool IsPartialStruct(SyntaxNode node)
-        => node switch
-        {
-            StructDeclarationSyntax s => s.Modifiers.Any(SyntaxKind.PartialKeyword),
-            RecordDeclarationSyntax r => r.ClassOrStructKeyword.IsKind(SyntaxKind.StructKeyword)
-                                         && r.Modifiers.Any(SyntaxKind.PartialKeyword),
-            _ => false
-        };
+    // P3 修复（八轮评审）：emit 恒为 partial record struct——普通 partial struct 声明
+    // 与生成物不合并（平行类型），移除 StructDeclarationSyntax 分支只接受 record struct
+    private static bool IsPartialRecordStruct(SyntaxNode node)
+        => node is RecordDeclarationSyntax r
+           && r.ClassOrStructKeyword.IsKind(SyntaxKind.StructKeyword)
+           && r.Modifiers.Any(SyntaxKind.PartialKeyword);
 
     private static string GenerateIdentityCode(IdGenInfo info)
     {
-        var ns = info.Namespace;
         var name = info.TypeName;
         var srcType = info.SourceType;
 
@@ -101,6 +144,10 @@ public sealed class IdentityGenerator : IIncrementalGenerator
 
         var ulidUsing = srcType == "Ulid" ? "\r\nusing PalUlid = ByteAether.Ulid.Ulid;" : "";
 
+        // P3 修复（八轮评审）：全局命名空间（Namespace == null）不生成 namespace 声明——
+        // 旧 fallback "_" 产出 "namespace _;" 使生成物落入 _ 命名空间与用户类型不合并
+        var nsDecl = info.Namespace is null ? "" : $"namespace {info.Namespace};\n";
+
         return $$"""
 // <auto-generated/>
 #nullable enable
@@ -111,7 +158,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using PalDDD.Core;{{ulidUsing}}
 
-namespace {{ns}};{{open}}
+{{nsDecl}}{{open}}
 [TypeConverter(typeof({{converterName}}TypeConverter))]
 [JsonConverter(typeof({{converterName}}JsonConverter))]
 public readonly partial record struct {{name}} : IPalIdentity<{{srcType}}>, ISpanParsable<{{name}}>
@@ -234,10 +281,41 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
 """;
 
     private sealed record IdGenInfo(
-        string Namespace,
+        string? Namespace,
         string TypeName,
         string[] ContainingDeclarations,
         string[] ContainingNames,
         string SourceType,
-        bool IsNumeric);
+        bool IsNumeric,
+        string? DiagnosticId = null,
+        Location? Location = null)
+    {
+        // P3 修复（八轮评审）：数组字段默认引用相等破坏增量管线缓存（每次编译新数组实例
+        // → 引用不等 → 缓存恒 miss）——逐元素比较实现值等价，镜像 MessageRegistryGenerator
+        // 的 LocationInfo value-equatable 范式。Location/DiagnosticId 不参与相等：
+        // 诊断分支本身不产出缓存内容。
+        public bool Equals(IdGenInfo? other) =>
+            other is not null
+            && Namespace == other.Namespace
+            && TypeName == other.TypeName
+            && ContainingDeclarations.SequenceEqual(other.ContainingDeclarations)
+            && ContainingNames.SequenceEqual(other.ContainingNames)
+            && SourceType == other.SourceType
+            && IsNumeric == other.IsNumeric;
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hash = 17;
+                hash = hash * 31 + (Namespace?.GetHashCode() ?? 0);
+                hash = hash * 31 + TypeName.GetHashCode();
+                foreach (var declaration in ContainingDeclarations) hash = hash * 31 + declaration.GetHashCode();
+                foreach (var containingName in ContainingNames) hash = hash * 31 + containingName.GetHashCode();
+                hash = hash * 31 + SourceType.GetHashCode();
+                hash = hash * 31 + IsNumeric.GetHashCode();
+                return hash;
+            }
+        }
+    }
 }

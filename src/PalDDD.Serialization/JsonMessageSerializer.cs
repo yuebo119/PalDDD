@@ -22,6 +22,9 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     private readonly JsonSerializerOptions? _options;
 
     // ThreadLocal Writer 池 — 每线程最多缓存一个 Utf8JsonWriter 和 ArrayBufferWriter
+    // 权衡（八轮评审 P3）：过大数据（如 MB 级 payload）后 TLS 持峰值容量不缩——
+    // ArrayBufferWriter 内部缓冲按历史峰值保留，线程退出才回收；线程池长驻线程
+    // 数 × 峰值容量即最坏驻留。可接受（消息负载量级有界），如需回收改 ArrayPool 租借。
     [ThreadStatic]
     private static Utf8JsonWriter? _tlsWriter;
 
@@ -63,6 +66,15 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     public string ContentType => ContentTypes.Json;
 
     /// <inheritdoc />
+    /// <remarks>
+    /// 📐 <b>options 路径忽略 descriptor（八轮评审声明）</b>：构造时传入了
+    /// <see cref="JsonSerializerOptions"/> 的情况下，本方法走
+    /// <c>options.GetTypeInfo&lt;TMessage&gt;()</c> 强类型路径，<paramref name="descriptor"/>
+    /// 参数不参与序列化。调用方必须保证传入的 options 与 catalog 注册
+    /// <see cref="MessageDescriptor.JsonTypeInfo"/> 时所用的是同一实例/同源配置——
+    /// 否则泛型路径（options 源）与非泛型路径（descriptor 源）的类型绑定分叉，
+    /// 可能产出不同 JSON 形状。此不同源无法在序列化器内廉价检测，属调用方契约。
+    /// </remarks>
     public ReadOnlyMemory<byte> Serialize<TMessage>(TMessage message, MessageDescriptor? descriptor = null)
     {
         descriptor ??= _messageCatalog.Find(typeof(TMessage))

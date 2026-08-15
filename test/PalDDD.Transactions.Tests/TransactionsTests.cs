@@ -997,7 +997,9 @@ public sealed class SagaTimeoutProcessorTests
             => ValueTask.FromResult<OrderSagaState?>(null);
 
         public ValueTask<int> SaveChangesAsync(OrderSagaState state, CancellationToken ct)
-            => ValueTask.FromResult(0);
+            // P3 对齐（八轮）：返回受影响行数语义——录制替身模拟"保存成功"返回 1，
+            // 返回 0 会被 SagaProcessor 解释为乐观锁冲突（只记 Warning、跳过指标）
+            => ValueTask.FromResult(1);
     }
 
     private sealed class TimedOutSaga : Saga<OrderSagaState>

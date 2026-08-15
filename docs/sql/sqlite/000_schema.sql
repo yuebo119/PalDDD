@@ -3,7 +3,7 @@ PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
 CREATE TABLE outbox_messages (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    id              TEXT PRIMARY KEY,  -- Ulid 26 字符（代码侧始终显式提供，非自增）
     type            TEXT NOT NULL,
     payload         BLOB NOT NULL,
     content_type    TEXT NOT NULL DEFAULT 'application/json',
@@ -65,7 +65,11 @@ CREATE TABLE events (
     metadata        BLOB,
     recorded_at     TEXT NOT NULL DEFAULT (datetime('now')),
     actor_id        TEXT,
-    reason          TEXT
+    reason          TEXT,
+    correlation_id  TEXT,   -- 审计：关联 Ulid（26 字符）
+    causation_id    TEXT,   -- 审计：因果 Ulid（26 字符）
+    trace_parent    TEXT,   -- 审计：W3C traceparent
+    trace_state     TEXT    -- 审计：W3C tracestate
 );
 CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
 CREATE INDEX idx_events_global ON events(global_position);

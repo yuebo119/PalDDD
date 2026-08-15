@@ -135,6 +135,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
     internal void When(string state, Type eventType, SagaStep step)
     {
         var key = MakeKey(state, eventType);
+        // P3 修复（八轮）：重复注册同 key 时先移除旧步骤再追加——否则 _stepsInOrder
+        // 残留已作废步骤（补偿/超时扫描会执行它），且顺序列表与 _stepsByKey 不一致
+        _stepsInOrder.RemoveAll(existing => existing.Key == key);
         _stepsByKey[key] = step;             // O(1) 查找
         _stepsInOrder.Add((key, step));       // 保持补偿顺序
         _frozen = null;
@@ -148,6 +151,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
     protected internal void When(string state, SagaStep step)
     {
         var key = MakeKey(state, null);
+        // P3 修复（八轮）：同上——重复注册同 key 时移除旧步骤，避免补偿/超时执行作废步骤
+        _stepsInOrder.RemoveAll(existing => existing.Key == key);
         _stepsByKey[key] = step;             // O(1) 查找
         _stepsInOrder.Add((key, step));       // 保持补偿顺序
         _frozen = null;
@@ -522,7 +527,16 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
         // 注册到 DefaultSagaManager（如果可用）
         if (SagaManager is DefaultSagaManager defaultManager)
-            defaultManager.RegisterInterrupted(current.SagaId, step.InterruptReason, step.DecisionType);
+        {
+            // P2 修复（八轮）：注册时捕获恢复派发闭包——ResumeAsync 到达决策时以决策为
+            // 事件重新进入 ProcessEventAsync 管线。此前仅暂存决策且无人消费（恢复链路断裂）
+            defaultManager.RegisterInterrupted(
+                current.SagaId,
+                step.InterruptReason,
+                step.DecisionType,
+                async (decision, dispatchCt) =>
+                    await ProcessEventAsync(current, decision, dispatchCt).ConfigureAwait(false));
+        }
 
         // Emit status change via observer (fire-and-forget in sync context)
         if (observer is not null)

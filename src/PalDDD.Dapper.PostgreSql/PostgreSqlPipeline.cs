@@ -27,6 +27,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Npgsql;
+using System.Data;
 using System.Data.Common;
 
 namespace PalDDD.Dapper.PostgreSql;
@@ -64,7 +65,10 @@ public sealed class PostgreSqlPipeline : IAsyncDisposable
     {
         if (_batch.BatchCommands.Count == 0) return 0;
 
-        await _connection.OpenAsync(ct).ConfigureAwait(false);
+        // P3 修复（八轮评审）：幂等守卫——连接已打开时跳过 OpenAsync（对已 Open 连接重复
+        // Open 抛 InvalidOperationException；调用方复用共享连接时本管道不强制拥有开连接职责）
+        if (_connection.State != ConnectionState.Open)
+            await _connection.OpenAsync(ct).ConfigureAwait(false);
         await using var reader = await _batch.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         // 排空全部结果集（读循环不可省略——未读完不能 NextResult）

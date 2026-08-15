@@ -3,6 +3,9 @@
   <PropertyGroup>
     <RootNamespace>PalDDD.Compression.Native</RootNamespace>
     <Description>Pal.DDD 压缩抽象层的原生绑定适配器 — 通过 NativeCompressions 提供 LZ4 / ZStandard / OpenZL 压缩支持。依赖原生二进制，不可 AOT。</Description>
+    <!-- Justification（八轮评审 P3 注明）：
+         CA1812 — internal 压缩器由 DI 容器动态实例化（TryAddEnumerable），分析器看不到调用点
+         CA1716 — GZip/Deflate 等算法名与系统类型名刻意同名，属领域术语而非遮蔽冲突 -->
     <NoWarn>$(NoWarn);CA1812;CA1716</NoWarn>
     <!-- 原生二进制绑定不支持 AOT -->
     <IsAotCompatible>false</IsAotCompatible>
@@ -16,7 +19,8 @@
 
   <ItemGroup>
     <PackageReference Include="NativeCompressions" />
-    <PackageReference Include="NativeCompressions.OpenZL" />
+    <!-- 八轮评审 P3：NativeCompressions.OpenZL 引用已移除——NativeCompressors.cs 中
+         OpenZLCompressor 实际经 Zstandard API 实现（零使用 OpenZL 包），包引用为死依赖 -->
   </ItemGroup>
 
 </Project>

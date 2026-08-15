@@ -96,6 +96,12 @@ public sealed class InMemoryIdempotencyStore : IIdempotencyStore
 
         lock (_lock)
         {
+            // P3 修复（八轮评审）：所有权/终态守卫——IdempotencyRecord 无 Revision 字段，以状态机
+            // 守卫替代：仅字典当前实例且 Processing（本租约持有中）可标记，Completed 终态不可
+            // 翻转为 Failed、Failed 待 TryStartAsync 回收；过期清除/替换后的旧引用同样不生效。
+            if (!IsCurrentLeaseHolder(record))
+                return ValueTask.CompletedTask;
+
             record.MarkCompleted(responsePayload, completedAt);
         }
 
@@ -114,10 +120,26 @@ public sealed class InMemoryIdempotencyStore : IIdempotencyStore
 
         lock (_lock)
         {
+            // P3 修复（八轮评审）：所有权/终态守卫——同 MarkCompletedAsync（Completed 终态不可翻转为 Failed）
+            if (!IsCurrentLeaseHolder(record))
+                return ValueTask.CompletedTask;
+
             record.MarkFailed(failureReason, failedAt);
         }
 
         return ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// 判定传入 record 是否仍为字典当前持有的活跃租约实例
+    /// （引用一致 + Processing 状态；须在 <see cref="_lock"/> 内调用）。
+    /// </summary>
+    private bool IsCurrentLeaseHolder(IdempotencyRecord record)
+    {
+        var key = new Key(record.OperationName, record.Key);
+        return _records.TryGetValue(key, out var current)
+            && ReferenceEquals(current, record)
+            && current.Status == IdempotencyRecordStatus.Processing;
     }
 
     private static void ValidateKeyParts(string operationName, string key)

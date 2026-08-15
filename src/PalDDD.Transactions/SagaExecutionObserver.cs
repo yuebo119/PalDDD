@@ -17,6 +17,34 @@ using PalUlid = ByteAether.Ulid.Ulid;
 namespace PalDDD.Transactions;
 
 /// <summary>Saga 执行观察器——在 Saga 生命周期各节点发射事件。</summary>
+/// <remarks>
+/// <para>
+/// ⚠️ <b>接线说明（P3·八轮评审）</b>：Observer 通过 <see cref="AsyncLocal{T}"/> 沿异步调用链向下传播，
+/// <b>不是 DI 组件</b>——框架不会自动创建它，须在 Saga 执行入口手动包裹
+/// （<see cref="Saga{TState}.ProcessEventAsync"/> 读取 <see cref="Current"/>）。
+/// 因此本框架不提供 <c>TryAddSingleton</c> 便捷注册——注册一个 <see cref="ISagaEventSink"/>
+/// 到 DI 并不会让事件自动流向它。标准用法：
+/// <code>
+///   // 1. 实现 Sink（示例：转发到日志/指标）
+///   sealed class MetricsSink(TimeProvider clock) : ISagaEventSink
+///   {
+///       public ValueTask EmitAsync&lt;T&gt;(T sagaEvent, CancellationToken ct)
+///       {
+///           _logger.Information($"saga event: {sagaEvent}"); // 转发到注入的 IPalLogger
+///           return ValueTask.CompletedTask;
+///       }
+///   }
+///
+///   // 2. 在 Saga 执行作用域入口创建 Observer（AsyncLocal 自动传播到所有异步子步骤）
+///   using var _ = new SagaExecutionObserver(new MetricsSink(TimeProvider.System));
+///   await saga.ProcessEventAsync(state, evt, ct);
+/// </code>
+/// </para>
+/// <para>
+/// 兼容无 Sink 场景（构造参数为 null 时所有事件静默跳过）；
+/// 事件类型为 readonly record struct（零分配、值语义）。
+/// </para>
+/// </remarks>
 public sealed class SagaExecutionObserver : IDisposable
 {
     private readonly ISagaEventSink? _sink;

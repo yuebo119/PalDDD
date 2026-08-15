@@ -3,15 +3,20 @@ using System.IO.Compression;
 
 namespace PalDDD.Compression;
 
-/// <summary>解压炸弹防护（P2 修复）：压缩输入体积上限——超限拒绝解压，防 OOM。</summary>
-internal static class DecompressionGuard
+/// <summary>
+/// 解压炸弹防护（P2 修复）：压缩输入体积上限——超限拒绝解压，防 OOM。
+/// <para>📐 <b>跨程序集单一事实源（八轮评审 P3）</b>：上限常量为 public——
+/// PalDDD.Compression.Native 的同名防护引用本类（此前两副本各自维护，存在漂移风险）。
+/// <see cref="CopyWithLimit"/> 仍为 internal（仅 System 压缩器内部使用）。</para>
+/// </summary>
+public static class DecompressionGuard
 {
     /// <summary>压缩输入安全上限（8MB）——合法消息负载压缩后极少超过此量级。</summary>
-    internal const int MaxCompressedInputBytes = 8 * 1024 * 1024;
+    public const int MaxCompressedInputBytes = 8 * 1024 * 1024;
 
     /// <summary>解压输出安全上限（64MB）——gzip 最大膨胀比约 1032:1，8MB 输入理论上可
     /// 膨胀至 8GB；64MB 覆盖合法消息负载解压后的量级，超限抛 IOException 防炸内存。</summary>
-    internal const int MaxOutputBytes = 64 * 1024 * 1024;
+    public const int MaxOutputBytes = 64 * 1024 * 1024;
 
     /// <summary>带上限的流拷贝——超限抛 IOException（防高膨胀率炸弹）。</summary>
     internal static void CopyWithLimit(Stream source, MemoryStream destination)

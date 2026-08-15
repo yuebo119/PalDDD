@@ -41,21 +41,31 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
     private readonly DbTransaction? _transaction;
     private readonly JsonTypeInfo<TState>? _jsonTypeInfo;
 
+    /// <summary>
+    /// 数据库方言（P2 修复·八轮）——时间参数按方言格式化（见 <see cref="ToTimeParam"/>）。
+    /// 默认 Sqlite，保持既有直接构造调用方（测试等）行为不变；
+    /// DI（AddPalDapperTransactions）注册了 DapperDbType 单例，容器构造时注入真实方言。
+    /// </summary>
+    private readonly DapperDbType _dbType;
+
     /// <param name="transaction">可选共享事务（用于 UnitOfWork 模式）</param>
     /// <param name="jsonTypeInfo">可选 STJ source-generated type info；传入后持久化完整 <typeparamref name="TState"/> 快照。</param>
+    /// <param name="dbType">数据库方言——决定时间参数绑定格式（默认 Sqlite，见 <see cref="ToTimeParam"/>）。</param>
     private readonly TimeProvider _timeProvider;
 
     public DapperSagaStateStore(
         DbConnection connection,
         DbTransaction? transaction = null,
         JsonTypeInfo<TState>? jsonTypeInfo = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        DapperDbType dbType = DapperDbType.Sqlite)
     {
         _connection = connection ?? throw new ArgumentNullException(nameof(connection));
         _transaction = transaction;
         _jsonTypeInfo = jsonTypeInfo;
         // P3 修复（时钟双轨清零）：可选注入，默认 System——与 PalOrmSagaStateStore 对齐
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _dbType = dbType;
     }
 
     public async ValueTask<IReadOnlyList<TState>> GetActiveSagasAsync(int batchSize, CancellationToken ct)
@@ -81,10 +91,10 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         var now = _timeProvider.GetUtcNow();
         var until = now.Add(leaseDuration);
         await conn.ExecuteAsync(
-            new CommandDefinition(SqlTemplates.SagaLeaseActive, new { owner, until = DapperAotInitializer.ToSqliteParameter(until), now = DapperAotInitializer.ToSqliteParameter(now), n = batchSize }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+            new CommandDefinition(SqlTemplates.SagaLeaseActive, new { owner, until = ToTimeParam(until), now = ToTimeParam(now), n = batchSize }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
 
         var rows = await conn.QueryAsync<SagaStateRow>(
-            new CommandDefinition(SqlTemplates.SagaSelectByLease, new { owner, until = DapperAotInitializer.ToSqliteParameter(until) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+            new CommandDefinition(SqlTemplates.SagaSelectByLease, new { owner, until = ToTimeParam(until) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
         return rows.Select(Materialize).ToList();
     }
 
@@ -113,12 +123,12 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
                     {
                         cs = state.CurrentState,
                         st = (int)state.Status,
-                        ca = state.CompletedAt.HasValue ? DapperAotInitializer.ToSqliteParameter(state.CompletedAt.Value) : null,
+                        ca = state.CompletedAt.HasValue ? ToTimeParam(state.CompletedAt.Value) : null,
                         err = state.Error,
-                        ea = state.ErrorAt.HasValue ? DapperAotInitializer.ToSqliteParameter(state.ErrorAt.Value) : null,
+                        ea = state.ErrorAt.HasValue ? ToTimeParam(state.ErrorAt.Value) : null,
                         data = sagaData,
                         leasedBy = state.LeasedBy,
-                        leasedUntil = state.LeasedUntil.HasValue ? DapperAotInitializer.ToSqliteParameter(state.LeasedUntil.Value) : null,
+                        leasedUntil = state.LeasedUntil.HasValue ? ToTimeParam(state.LeasedUntil.Value) : null,
                         id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
                         v = state.Version
                     },
@@ -140,13 +150,13 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
                         id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
                         cs = state.CurrentState,
                         st = (int)state.Status,
-                        ca = DapperAotInitializer.ToSqliteParameter(state.CreatedAt),
-                        completedAt = state.CompletedAt.HasValue ? DapperAotInitializer.ToSqliteParameter(state.CompletedAt.Value) : null,
+                        ca = ToTimeParam(state.CreatedAt),
+                        completedAt = state.CompletedAt.HasValue ? ToTimeParam(state.CompletedAt.Value) : null,
                         err = state.Error,
-                        ea = state.ErrorAt.HasValue ? DapperAotInitializer.ToSqliteParameter(state.ErrorAt.Value) : null,
+                        ea = state.ErrorAt.HasValue ? ToTimeParam(state.ErrorAt.Value) : null,
                         data = sagaData,
                         leasedBy = state.LeasedBy,
-                        leasedUntil = state.LeasedUntil.HasValue ? DapperAotInitializer.ToSqliteParameter(state.LeasedUntil.Value) : null
+                        leasedUntil = state.LeasedUntil.HasValue ? ToTimeParam(state.LeasedUntil.Value) : null
                     },
                     _transaction,
                     cancellationToken: ct)).ConfigureAwait(false);
@@ -209,6 +219,20 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
 
     private string? SerializeState(TState state)
         => _jsonTypeInfo is null ? null : JsonSerializer.Serialize(state, _jsonTypeInfo);
+
+    /// <summary>
+    /// P2 修复（八轮评审）：按方言选择时间参数格式（与 DapperOutboxStore.ToTimeParam 同型统一）——
+    /// MySQL：DATETIME(6) 列与带偏移 "O" 格式比较依赖 session tz，统一无偏移 UTC；
+    /// PG：原生 <see cref="DateTimeOffset"/> 参数——Npgsql 映射 timestamptz，"O" 格式 string
+    /// 按 text OID 发送，timestamptz 与 text 间无比较运算符，租约 WHERE 必炸；
+    /// Sqlite：维持 "O" 格式 string（既有行为）。
+    /// </summary>
+    private object ToTimeParam(DateTimeOffset value) => _dbType switch
+    {
+        DapperDbType.MySql => DapperAotInitializer.ToMySqlParameter(value),
+        DapperDbType.PostgreSql => value,
+        _ => DapperAotInitializer.ToSqliteParameter(value)
+    };
 
     /// <summary>
     /// 确保数据库连接已打开（异步版本，避免线程池阻塞）。

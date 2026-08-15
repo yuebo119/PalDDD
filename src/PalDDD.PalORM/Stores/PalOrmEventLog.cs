@@ -101,6 +101,8 @@ public class PalOrmEventLog<TProvider> : IEventLog
         string streamName, long fromVersion = 0, int maxCount = int.MaxValue,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        // P3 修复（八轮评审）：补参数守卫，严格对齐 EFCore 版（EventLogDbContext ThrowIfLessThan(maxCount, 1)）
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
         // 注意：FormattableString 无法插值 maxCount=int.MaxValue（会被插值为参数），SQL 层面 LIMIT 兼容
         // 使用流式 QueryAsyncEnumerable —— 恒定内存读取（重要：超长事件流场景）
         await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(
@@ -117,12 +119,15 @@ public class PalOrmEventLog<TProvider> : IEventLog
         long fromPosition = 0, int maxCount = int.MaxValue,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        // P3 修复（八轮评审）：补参数守卫（对齐 EFCore 版）+ 先判后产出——原"产出 1 条后再判"
+        // 在 maxCount=0 时会多产出 1 条；结构与 ReadStreamAsync 统一。
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
         await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(
             $"SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE global_position >= {fromPosition} ORDER BY global_position",
             cancellationToken))
         {
+            if (--maxCount < 0) yield break; // P3 修复（八轮评审）：先减后判——对齐 ReadStreamAsync 结构
             yield return ToRecorded(row, row.StreamName);
-            if (--maxCount <= 0) yield break;
         }
     }
 

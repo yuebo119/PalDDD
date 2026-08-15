@@ -231,4 +231,54 @@ public sealed class DomainEventEnumerableTests
         foreach (var _ in order.DomainEvents()) count++;
         await Assert.That(count).IsEqualTo(1);
     }
+
+    [Test]
+    public async Task AppendEvent_SameInstanceTwice_IdempotentNoLoop()
+    {
+        // P3 回归（八轮评审）：尾节点同实例重复 Raise 曾产生 e.Next = e 自引用环（枚举死循环）
+        // ——契约：幂等跳过，链上只出现一次
+        var host = new EventHostEntity();
+        var evt = new OrderCompleted(Guid.NewGuid());
+        host.AppendEvent(evt);
+        host.AppendEvent(evt);
+
+        var count = 0;
+        foreach (var _ in host.DomainEvents()) count++;
+        await Assert.That(count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task AppendEvent_MidChainInstanceReRaise_Terminates()
+    {
+        // P3 回归（八轮评审）：中链实例复用（a,b 后再 Raise a）会截断其后事件——
+        // 锁定"必须可终止"（历史 bug 是自引用环死循环），截断语义见 RaiseEvent 注释②
+        var host = new EventHostEntity();
+        var first = new OrderCompleted(Guid.NewGuid());
+        var second = new OrderCancelled(Guid.NewGuid(), "reason");
+        host.AppendEvent(first);
+        host.AppendEvent(second);
+        host.AppendEvent(first);
+
+        var count = 0;
+        foreach (var _ in host.DomainEvents()) count++;
+        await Assert.That(count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task AppendEvent_AfterClear_ReusedInstance_NoGhostEvents()
+    {
+        // P3 回归（八轮评审）：Clear 后重新 Raise 旧实例，残留 Next 曾让已清除的幽灵事件复活
+        var host = new EventHostEntity();
+        var first = new OrderCompleted(Guid.NewGuid());
+        var second = new OrderCancelled(Guid.NewGuid(), "reason");
+        host.AppendEvent(first);
+        host.AppendEvent(second);
+        host.ClearDomainEvents();
+
+        host.AppendEvent(first); // 复用链上残留 Next 的旧实例
+
+        var count = 0;
+        foreach (var _ in host.DomainEvents()) count++;
+        await Assert.That(count).IsEqualTo(1);
+    }
 }

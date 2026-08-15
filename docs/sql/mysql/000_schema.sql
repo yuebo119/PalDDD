@@ -1,6 +1,6 @@
 -- MySQL 建表脚本（InnoDB 引擎）
 CREATE TABLE outbox_messages (
-    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    id              CHAR(26) PRIMARY KEY,  -- Ulid 26 字符（代码侧始终显式提供，非自增）
     type            TEXT NOT NULL,
     payload         MEDIUMBLOB NOT NULL,
     content_type    VARCHAR(255) NOT NULL DEFAULT 'application/json',
@@ -13,8 +13,8 @@ CREATE TABLE outbox_messages (
     next_attempt_at DATETIME(3),
     locked_by       VARCHAR(255),
     locked_until    DATETIME(3),
-    correlation_id  CHAR(36),
-    causation_id    CHAR(36),
+    correlation_id  CHAR(26),  -- 审计：关联 Ulid（26 字符）
+    causation_id    CHAR(26),  -- 审计：因果 Ulid（26 字符）
     trace_parent    VARCHAR(255),
     trace_state     VARCHAR(255),
     INDEX idx_outbox_status (status, next_attempt_at, locked_until),
@@ -35,7 +35,7 @@ CREATE TABLE inbox_messages (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE saga_states (
-    saga_id       CHAR(36) PRIMARY KEY,
+    saga_id       CHAR(26) PRIMARY KEY,  -- Ulid 26 字符
     current_state TEXT NOT NULL,
     status        INT NOT NULL DEFAULT 0,
     created_at    DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -63,6 +63,10 @@ CREATE TABLE events (
     recorded_at     DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     actor_id        VARCHAR(255),
     reason          VARCHAR(255),
+    correlation_id  CHAR(26),   -- 审计：关联 Ulid（26 字符）
+    causation_id    CHAR(26),   -- 审计：因果 Ulid（26 字符）
+    trace_parent    VARCHAR(255),
+    trace_state     VARCHAR(255),
     UNIQUE INDEX idx_events_stream (stream_name, stream_version),
     INDEX idx_events_global (global_position)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

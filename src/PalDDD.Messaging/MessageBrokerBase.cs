@@ -63,4 +63,11 @@ public abstract class MessageBrokerBase : IMessageBroker
     /// <summary>异步订阅消息 — 子类实现传输核心。</summary>
     public abstract ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
         Func<TMessage, CancellationToken, ValueTask> handler, CancellationToken ct = default);
+
+    /// <summary>
+    /// 异步订阅消息（含消费上下文）— 子类实现传输核心。<br/>
+    /// 消息未携带任何追踪头时 context 为 null；无 context 的旧重载默认适配到此重载（零破坏）。
+    /// </summary>
+    public abstract ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
+        Func<TMessage, MessageConsumeContext?, CancellationToken, ValueTask> handler, CancellationToken ct = default);
 }

@@ -120,13 +120,18 @@ public sealed class DapperInboxStore : IInboxStore
             new { err = failureReason, id = message.Id }, _transaction).ConfigureAwait(false);
     }
 
-    /// <summary>确保连接已打开（异步版本），避免线程池阻塞</summary>
     /// <summary>P2 修复（ToMySqlParameter 接线）：按方言选择时间参数格式。</summary>
     private object ToTimeParam(DateTimeOffset value)
-        => _dbType == DapperDbType.MySql
-            ? DapperAotInitializer.ToMySqlParameter(value)
-            : DapperAotInitializer.ToSqliteParameter(value);
+        => _dbType switch
+        {
+            DapperDbType.MySql => DapperAotInitializer.ToMySqlParameter(value),
+            // P1 修复（八轮评审）：PG 传原生 DateTimeOffset——Npgsql 映射 timestamptz；
+            // "O" string 按 text OID 发送，timestamptz <= text 无比较运算符，WHERE 必炸 42883
+            DapperDbType.PostgreSql => value,
+            _ => DapperAotInitializer.ToSqliteParameter(value)
+        };
 
+    /// <summary>确保连接已打开（异步版本），避免线程池阻塞</summary>
     private async ValueTask<DbConnection> EnsureOpenAsync(CancellationToken ct = default)
     {
         var c = _connection;

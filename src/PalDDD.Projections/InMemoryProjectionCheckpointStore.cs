@@ -79,6 +79,13 @@ public sealed class InMemoryProjectionCheckpointStore : IProjectionCheckpointSto
 
         lock (_lock)
         {
+            // P3 修复（八轮评审）：所有权/终态守卫——本存储共享同一实例（Revision 数值比对恒等，
+            // 等价守卫为引用一致 + 状态机）：字典中非同一实例（Reset 后遗留旧引用）、或已离开
+            // Processing（Completed 终态不可翻转；Failed 待 TryStartAsync 回收）时，被抢占者的
+            // 标记不生效，静默返回。
+            if (!IsCurrentLeaseHolder(checkpoint))
+                return ValueTask.CompletedTask;
+
             checkpoint.MarkCompleted(completedAt);
         }
 
@@ -97,10 +104,26 @@ public sealed class InMemoryProjectionCheckpointStore : IProjectionCheckpointSto
 
         lock (_lock)
         {
+            // P3 修复（八轮评审）：所有权/终态守卫——同 MarkCompletedAsync（Completed 终态不可翻转为 Failed）
+            if (!IsCurrentLeaseHolder(checkpoint))
+                return ValueTask.CompletedTask;
+
             checkpoint.MarkFailed(failureReason, failedAt);
         }
 
         return ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// 判定传入 checkpoint 是否仍为字典当前持有的活跃租约实例
+    /// （引用一致 + Processing 状态；须在 <see cref="_lock"/> 内调用）。
+    /// </summary>
+    private bool IsCurrentLeaseHolder(ProjectionCheckpoint checkpoint)
+    {
+        var key = new Key(checkpoint.ProjectionName, checkpoint.SourceName, checkpoint.Position);
+        return _checkpoints.TryGetValue(key, out var current)
+            && ReferenceEquals(current, checkpoint)
+            && current.Status == ProjectionCheckpointStatus.Processing;
     }
 
     public ValueTask ResetAsync(

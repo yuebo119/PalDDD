@@ -181,9 +181,14 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
 
     /// <summary>P2 修复（ToMySqlParameter 接线补齐）：按方言选择时间参数格式。</summary>
     private object ToTimeParam(DateTimeOffset value)
-        => _dbType == DapperDbType.MySql
-            ? DapperAotInitializer.ToMySqlParameter(value)
-            : DapperAotInitializer.ToSqliteParameter(value);
+        => _dbType switch
+        {
+            DapperDbType.MySql => DapperAotInitializer.ToMySqlParameter(value),
+            // P1 修复（八轮评审）：PG 传原生 DateTimeOffset——Npgsql 映射 timestamptz；
+            // "O" string 按 text OID 发送，timestamptz <= text 无比较运算符，WHERE 必炸 42883
+            DapperDbType.PostgreSql => value,
+            _ => DapperAotInitializer.ToSqliteParameter(value)
+        };
 
     private async ValueTask<DbConnection> EnsureOpenAsync(CancellationToken ct = default)
     {

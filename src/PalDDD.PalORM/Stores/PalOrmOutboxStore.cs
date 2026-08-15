@@ -74,6 +74,14 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         {
             // MySQL 路径：不支持 UPDATE...WHERE id IN (SELECT...LIMIT)。
             // 用 JOIN 子查询替代（MySQL 特化）+ 按 lease 标识回读（两步避免重跑子查询 P0 bug）
+            //
+            // ⚠️ 已知限制（八轮评审 P3，声明不修）：回读按 (locked_by, locked_until) 匹配——同一 owner
+            // 在同一 tick（until 完全相等，如 FakeTimeProvider 冻结时间）发起两次租约时，第二次回读
+            // 会混入第一次已锁定的批次。生产触发条件近乎为零（DATETIME(6) 微秒精度 + 单 owner 串行租约）；
+            // PG/SQLite 走 RETURNING 单语句天然免疫。候选 id 预取方案需要 IN 列表参数化——PalORM 的
+            // FormattableString 路径每个格式参数只绑一个 DbParameter（BindFormattableParameters），
+            // WhereIn 仅存在于 QueryBuilder 实体路径（无法表达此 UPDATE+JOIN 手写 SQL），改动面大，
+            // 待 PalORM 支持 IN 参数化后与 Saga 路径统一修。
             await Session.ExecuteAsync(
                 $"UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}) AS sub ON t.id = sub.id SET t.locked_by = {owner}, t.locked_until = {until}",
                 ct);

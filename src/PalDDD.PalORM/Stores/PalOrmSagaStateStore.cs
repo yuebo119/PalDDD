@@ -49,6 +49,9 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
     /// <inheritdoc />
     public async ValueTask<IReadOnlyList<TState>> GetActiveSagasAsync(int batchSize, CancellationToken ct)
     {
+        // P3 修复（八轮）：与 Dapper/EFCore 姊妹实现对齐——batchSize 非正直接拒绝
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+
         // SagaStateRow 未注册 —— 用 GetRawConnection + 手动 reader
         await using var cmd = Session.GetRawConnection().CreateCommand();
         cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE status = @p0 ORDER BY created_at LIMIT @p1";
@@ -61,6 +64,9 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
     public async ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
         string owner, TimeSpan leaseDuration, int batchSize, CancellationToken ct)
     {
+        // P3 修复（八轮）：与 Dapper/EFCore 姊妹实现对齐——batchSize 非正直接拒绝
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+
         var now = _clock.GetUtcNow();  // P1-8：用注入的 Clock 替代硬编码 UtcNow
         var until = now + leaseDuration;
 
@@ -82,6 +88,11 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         }
 
         // 按 lease 标识回读（手动 reader）
+        // ⚠️ 已知限制（八轮评审 P3，声明不修）：MySQL 两步路径回读按 (leased_by, leased_until) 匹配——
+        // 同一 owner 在同一 tick（until 完全相等，如 FakeTimeProvider 冻结时间）发起两次租约时，
+        // 第二次回读会混入第一次已锁定的批次。生产触发条件近乎为零（DATETIME(6) 微秒精度 + 单 owner
+        // 串行租约）；PG/SQLite 走单语句 UPDATE 天然免疫。候选 id 预取需 IN 列表参数化，PalORM 的
+        // FormattableString 路径不支持（详见 PalOrmOutboxStore.LeasePendingMessagesAsync 同款声明）。
         await using var cmd = Session.GetRawConnection().CreateCommand();
         cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE leased_by = @p0 AND leased_until = @p1 ORDER BY created_at";
         AddParam(cmd, "@p0", owner);
@@ -110,9 +121,20 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
 
         if (existing is null)
         {
-            await Session.ExecuteAsync(
-                $"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString()}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {state.Error}, {state.ErrorAt}, {state.Version}, {jsonData}, {state.LeasedBy}, {state.LeasedUntil})",
-                ct);
+            // P2 修复（八轮）：并发插入同一新 Saga 的 TOCTOU 兜底（与 DapperSagaStateStore 对齐）——
+            // PalORM Session.ExecuteAsync 直透底层 provider 异常（DataSession.Query.cs 无包装），
+            // 唯一约束冲突转换为语义化并发异常，调用方重读后走 UPDATE 路径即可
+            try
+            {
+                await Session.ExecuteAsync(
+                    $"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString()}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {state.Error}, {state.ErrorAt}, {state.Version}, {jsonData}, {state.LeasedBy}, {state.LeasedUntil})",
+                    ct);
+            }
+            catch (DbException ex) when (IsUniqueConstraintViolation(ex))
+            {
+                throw new InvalidOperationException(
+                    $"Saga {state.SagaId} 被并发实例同时创建（主键冲突）——请重新加载后以 UPDATE 保存。", ex);
+            }
             return 1;
         }
 
@@ -190,6 +212,53 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         p.ParameterName = name;
         p.Value = value;
         cmd.Parameters.Add(p);
+    }
+
+    /// <summary>
+    /// INSERT 路径的并发插入兜底（P2 修复·八轮）：两个并发 SaveChangesAsync 保存同一新 Saga
+    /// 都判 existing==null 都走 INSERT 时，第二个撞 saga_id 主键抛原始 provider 异常。
+    /// 此处捕获唯一约束冲突并转换为带 SagaId 的语义化异常，调用方可区分"并发冲突"与"数据错误"
+    /// （与 DapperSagaStateStore.IsUniqueConstraintViolation 同型）。
+    /// </summary>
+    [UnconditionalSuppressMessage("Trimming", "IL2075:This",
+        Justification = "Provider 异常鸭子类型判定。裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级，不崩溃）。")]
+    private static bool IsUniqueConstraintViolation(Exception exception)
+    {
+        for (var inner = exception; inner is not null; inner = inner.InnerException)
+        {
+            var type = inner.GetType();
+            var typeName = type.Name;
+
+            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
+                && type.GetProperty("SqlState")?.GetValue(inner) is string sqlState
+                && sqlState == "23505")
+            {
+                return true;
+            }
+
+            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int mysqlNumber
+                && (mysqlNumber == 1062 || mysqlNumber == 1586))
+            {
+                return true;
+            }
+
+            if (typeName.Equals("SqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int sqlServerNumber
+                && (sqlServerNumber == 2601 || sqlServerNumber == 2627))
+            {
+                return true;
+            }
+
+            var message = inner.Message;
+            if (!string.IsNullOrEmpty(message)
+                && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>临时 SagaStateRow（内部用，不注册为实体）。</summary>

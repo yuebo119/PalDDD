@@ -52,7 +52,9 @@ public sealed class ProjectionProcessor<TMessage>
         try
         {
             await _handler.ProjectAsync(message, context, ct).ConfigureAwait(false);
-            await _checkpointStore.MarkCompletedAsync(checkpoint, _timeProvider.GetUtcNow(), ct).ConfigureAwait(false);
+            // P2 修复（八轮评审）：副作用已发生后 checkpoint 标记尽力持久化，不被请求级取消
+            // （对齐下方 MarkFailedAsync 的 None——取消丢失完成标记会导致同一位置重放）。
+            await _checkpointStore.MarkCompletedAsync(checkpoint, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
             return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

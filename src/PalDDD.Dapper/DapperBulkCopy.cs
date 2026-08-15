@@ -13,7 +13,7 @@
 //   ｜ 调用者不需要知道底层数据库——只需传入列名和值提取函数。
 //
 // ✅ AOT 安全性：
-//   ✅ Func<T, object[]> 委托模式 — 值提取由调用者 lambda 完成，零反射
+//   ✅ Func<T, object?[]> 委托模式 — 值提取由调用者 lambda 完成，零反射
 //   ✅ switch/Compiler 类型分发 — C# 编译时类型匹配，零 MakeGenericType
 //   ✅ 列名数组 + 函数指针 — 零 PropertyInfo.GetValue()
 //
@@ -56,7 +56,10 @@ public static class DapperBulkCopy
     /// <param name="tableName">目标表名</param>
     /// <param name="columns">列名列表（顺序必须与值提取函数一致）</param>
     /// <param name="items">实体列表</param>
-    /// <param name="valueExtractor">每行值提取函数：item → object[]，调用者 lambda 完成，零反射</param>
+    /// <param name="valueExtractor">每行值提取函数：item → object?[]，调用者 lambda 完成，零反射。
+    /// P2 修复（八轮评审，配套批量追踪列）：元素类型放宽为可空——null 由各方言路径归一为 SQL NULL
+    /// （SQLite/MySQL 显式 ?? DBNull.Value，PG COPY 走 NpgsqlDbType.Unknown）；Func 协变保证
+    /// 既有 object[] 返回的 lambda 兼容。</param>
     /// <returns>成功插入的行数</returns>
     /// <exception cref="NotSupportedException">不支持的数据库类型</exception>
     public static async ValueTask<int> BulkInsertAsync<T>(
@@ -65,7 +68,7 @@ public static class DapperBulkCopy
         string tableName,
         string[] columns,
         IReadOnlyList<T> items,
-        Func<T, object[]> valueExtractor,
+        Func<T, object?[]> valueExtractor,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(conn);
@@ -98,7 +101,7 @@ public static class DapperBulkCopy
     /// </summary>
     private static async Task<int> PgCopyAsync<T>(
         DbConnection conn, string table, string[] cols,
-        IReadOnlyList<T> items, Func<T, object[]> extractor, CancellationToken ct)
+        IReadOnlyList<T> items, Func<T, object?[]> extractor, CancellationToken ct)
     {
         var pgConn = (NpgsqlConnection)conn;
         var colList = string.Join(", ", cols);
@@ -149,7 +152,7 @@ public static class DapperBulkCopy
     /// </summary>
     private static async Task<int> MySqlBulkAsync<T>(
         DbConnection conn, string table, string[] cols,
-        IReadOnlyList<T> items, Func<T, object[]> extractor, CancellationToken ct)
+        IReadOnlyList<T> items, Func<T, object?[]> extractor, CancellationToken ct)
     {
         var myConn = (MySqlConnection)conn;
 
@@ -162,8 +165,10 @@ public static class DapperBulkCopy
         {
             var row = dt.NewRow();
             var values = extractor(item);
+            // P2 修复（八轮评审）：套用 ConvertForMySql——DataTable 对未知类型（Ulid/DateTimeOffset）
+            // 静默 ToString() 是区域性依赖的静默损坏（本地化时间分隔符/Ulid 表示漂移），显式转换消除。
             for (int i = 0; i < cols.Length; i++)
-                row[i] = values[i] ?? DBNull.Value;   // null 值转为 DBNull（SQL NULL）
+                row[i] = ConvertForMySql(values[i]) ?? DBNull.Value;   // null 值转为 DBNull（SQL NULL）
             dt.Rows.Add(row);
         }
 
@@ -191,6 +196,21 @@ public static class DapperBulkCopy
         return result.RowsInserted;
     }
 
+    /// <summary>
+    /// P2 修复（八轮评审）：Ulid/DateTimeOffset 转 MySQL 原生可映射类型——
+    /// DataTable 对未知类型静默 ToString() 是区域性依赖的静默损坏（本地化时间分隔符/
+    /// DateTimeOffset 表示漂移），与 ConvertForNpgsql 对称显式转换：
+    /// Ulid→string（char(36) 文本列），DateTimeOffset→UtcDateTime（DATETIME(6) 原生支持，
+    /// 统一 UTC 语义与 DapperAotInitializer.ToMySqlParameter 一致）。
+    /// </summary>
+    private static object? ConvertForMySql(object? val)
+        => val switch
+        {
+            ByteAether.Ulid.Ulid ulid => ulid.ToString(),
+            DateTimeOffset dto => dto.UtcDateTime,
+            _ => val,
+        };
+
     // ─────────── SQLite 事务批量 INSERT ───────────
 
     /// <summary>
@@ -202,7 +222,7 @@ public static class DapperBulkCopy
     /// </summary>
     private static async Task<int> SqliteBatchAsync<T>(
         DbConnection conn, string table, string[] cols,
-        IReadOnlyList<T> items, Func<T, object[]> extractor, CancellationToken ct)
+        IReadOnlyList<T> items, Func<T, object?[]> extractor, CancellationToken ct)
     {
         // 构建参数化 INSERT SQL：INSERT INTO t (c1,c2) VALUES (@c1,@c2)
         var placeholders = string.Join(", ", cols.Select(c => $"@{c}"));

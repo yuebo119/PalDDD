@@ -44,6 +44,9 @@ public sealed class JsonLinesEventWriter
     }
 
     // ── ThreadLocal 池化（复用 Phase A2 机制）──
+    // 权衡（八轮评审 P3）：过大数据（如 MB 级事件行）后 TLS 持峰值容量不缩——
+    // ArrayBufferWriter 内部缓冲按历史峰值保留，线程退出才回收；线程池长驻线程
+    // 数 × 峰值容量即最坏驻留。可接受（事件行负载量级有界），如需回收改 ArrayPool 租借。
 
     [ThreadStatic]
     private static System.Text.Json.Utf8JsonWriter? _tlsWriter;

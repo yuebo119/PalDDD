@@ -70,10 +70,13 @@ public static class SqlTemplates
 
     /// <summary>
     /// 释放租约并等待下次重试。<br/>
-    /// 💡 <c>retry_count+1</c> 原子递增——当重试次数达到 10 时不再出现在 Pending 列表中。
+    /// 💡 <c>retry_count+1</c> 原子递增——当重试次数达到 10 时不再出现在 Pending 列表中。<br/>
+    /// P2 修复（八轮评审）：WHERE 补租约守卫 <c>AND (locked_by IS NULL OR locked_by=@owner)</c>——
+    /// 租约过期被其他 worker 抢占后，原 worker 的失败释放会清掉新 worker 的锁并误增 retry_count；
+    /// 被他人持有时 affected=0（语义对齐 PalORM 版 PalOrmOutboxStore，仅防"他人持有"）。
     /// </summary>
     public const string OutboxReleaseForRetry =
-        "UPDATE outbox_messages SET status='Pending',error=@reason,next_attempt_at=@next,retry_count=retry_count+1,locked_by=NULL,locked_until=NULL WHERE id=@id";
+        "UPDATE outbox_messages SET status='Pending',error=@reason,next_attempt_at=@next,retry_count=retry_count+1,locked_by=NULL,locked_until=NULL WHERE id=@id AND (locked_by IS NULL OR locked_by=@owner)";
 
     /// <summary>
     /// 将死信消息重置为 Pending（ops 重投递入口）。<br/>

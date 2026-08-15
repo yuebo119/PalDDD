@@ -81,13 +81,20 @@ public readonly record struct ValueObject<T> : IValueObject, IUtf8SpanFormattabl
         // INumberBase<T> 已含 ISpanFormattable，受约束调用经 JIT 静态分派零装箱，
         // 先格式化到栈上 UTF16 缓冲再经 Utf8.FromUtf16 转码，全程零堆分配。
         Span<char> utf16 = stackalloc char[128];
-        if (!Value.TryFormat(utf16, out int charsWritten, format, provider))
-        {
-            bytesWritten = 0;
-            return false;
-        }
+        if (Value.TryFormat(utf16, out int charsWritten, format, provider))
+            return WriteUtf8(utf16[..charsWritten], utf8Destination, out bytesWritten);
 
-        var status = System.Text.Unicode.Utf8.FromUtf16(utf16[..charsWritten], utf8Destination,
+        // P3 修复（八轮评审）：utf16 中间缓冲不足（如超长格式输出）时回退 ToString 堆路径
+        // ——保证"返回 false 仅因 utf8Destination 不足"的 TryFormat 契约，而非因内部
+        // 128 字符缓冲不足而误报失败。（span 不能跨分支存入同一局部——ref 安全分析
+        // CS8352，故两条路径各自直达转码辅助方法。）
+        return WriteUtf8(Value.ToString(format.IsEmpty ? null : format.ToString(), provider),
+            utf8Destination, out bytesWritten);
+    }
+
+    private static bool WriteUtf8(ReadOnlySpan<char> source, Span<byte> destination, out int bytesWritten)
+    {
+        var status = System.Text.Unicode.Utf8.FromUtf16(source, destination,
             out _, out bytesWritten);
         if (status != System.Buffers.OperationStatus.Done)
         {

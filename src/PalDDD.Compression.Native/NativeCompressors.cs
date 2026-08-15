@@ -2,26 +2,17 @@ using NativeCompressions;
 
 namespace PalDDD.Compression;
 
-/// <summary>
-/// 解压炸弹防护（P2 修复）：压缩输入体积上限——超限拒绝解压，防 OOM。
-/// <para>⚠️ <b>已知限制（六轮评审声明）</b>：LZ4/ZStandard/OpenZL 的原生库 API 为一次性
-/// 全量分配——输出上限检查在 Decompress 返回后执行，恶意载荷可能在检查生效前触发
-/// 超大分配（LZ4 膨胀比约 255:1、Zstd 更高）。输入 8MB 上限是最有效的防线；
-/// 需要流式输出检查的场景请使用 SystemCompressor（Brotli/GZip/Deflate 均为逐块检查）。
-/// 此限制受外部库 API 设计约束，无法在适配层修复。</para>
-/// </summary>
-internal static class DecompressionGuard
-{
-    /// <summary>压缩输入安全上限（8MB）——合法消息负载压缩后极少超过此量级。</summary>
-    internal const int MaxCompressedInputBytes = 8 * 1024 * 1024;
-
-    /// <summary>解压输出安全上限（64MB，对齐 System 版）——超限抛 IOException。</summary>
-    internal const int MaxDecompressedOutputBytes = 64 * 1024 * 1024;
-}
-
 // ─────────────────────────────────────────────────────────────
 // ⚙️ LZ4Compressor / ZStandardCompressor / OpenZLCompressor — 原生压缩器
 // ─────────────────────────────────────────────────────────────
+// 解压炸弹防护常量（八轮评审 P3 单一事实源）：本程序集直接引用 PalDDD.Compression 的
+// public DecompressionGuard 常量（此前存在双副本，MaxOutputBytes/MaxDecompressedOutputBytes
+// 命名与值需人工对齐，有漂移风险）。
+// ⚠️ 已知限制（六轮评审声明）：LZ4/ZStandard/OpenZL 的原生库 API 为一次性
+// 全量分配——输出上限检查在 Decompress 返回后执行，恶意载荷可能在检查生效前触发
+// 超大分配（LZ4 膨胀比约 255:1、Zstd 更高）。输入 8MB 上限是最有效的防线；
+// 需要流式输出检查的场景请使用 SystemCompressor（Brotli/GZip/Deflate 均为逐块检查）。
+// 此限制受外部库 API 设计约束，无法在适配层修复。
 
 /// <summary>
 /// LZ4 压缩器 — 基于 NativeCompressions (Cysharp) 的原生绑定。
@@ -57,7 +48,7 @@ internal sealed class LZ4Compressor : ICompressor
             throw new System.IO.InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
         var result = LZ4.Decompress(compressed);
-        if (result.Length > DecompressionGuard.MaxDecompressedOutputBytes)
+        if (result.Length > DecompressionGuard.MaxOutputBytes)
             throw new System.IO.InvalidDataException($"解压输出 {result.Length:N0} 字节超过安全上限（疑似解压炸弹）。");
         return result;
     }
@@ -102,7 +93,7 @@ internal sealed class ZStandardCompressor : ICompressor
             throw new System.IO.InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
         var result = Zstandard.Decompress(compressed);
-        if (result.Length > DecompressionGuard.MaxDecompressedOutputBytes)
+        if (result.Length > DecompressionGuard.MaxOutputBytes)
             throw new System.IO.InvalidDataException($"解压输出 {result.Length:N0} 字节超过安全上限（疑似解压炸弹）。");
         return result;
     }
@@ -157,7 +148,7 @@ internal sealed class OpenZLCompressor : ICompressor
             throw new System.IO.InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
         var result = Zstandard.Decompress(compressed);
-        if (result.Length > DecompressionGuard.MaxDecompressedOutputBytes)
+        if (result.Length > DecompressionGuard.MaxOutputBytes)
             throw new System.IO.InvalidDataException($"解压输出 {result.Length:N0} 字节超过安全上限（疑似解压炸弹）。");
         return result;
     }

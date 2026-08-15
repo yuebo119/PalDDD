@@ -3,7 +3,7 @@
   <PropertyGroup>
     <RootNamespace>PalDDD.Serialization</RootNamespace>
     <Description>Pal.DDD 序列化抽象包 — IMessageSerializer / MessageDescriptor / IMessageCatalog / ContentTypes。零基础设施依赖，AOT 安全。</Description>
-    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!-- 八轮评审 P3：CS1591 已在 Directory.Build.props 全局 NoWarn，删除项目级冗余 -->
   </PropertyGroup>
 
 </Project>

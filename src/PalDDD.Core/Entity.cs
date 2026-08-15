@@ -43,6 +43,13 @@ public abstract class Entity
     protected void RaiseEvent(DomainEvent @event)
     {
         ArgumentNullException.ThrowIfNull(@event);
+        // P3 修复（八轮评审）：单链表完整性防御——
+        // ① 尾节点即同一实例时幂等跳过：否则 tail.Next = tail 形成自引用环（枚举死循环），
+        //    仅清 Next 不够——tail 本身就是该实例时追加点与被追加点重合。
+        // ② 追加前清引用：ClearDomainEvents 后复用旧实例时，残留 Next 会让幽灵事件复活；
+        //    中链实例复用会截断其后事件（同实例重复发布属调用方误用，防御性取新链位置）。
+        if (ReferenceEquals(_tail, @event)) return;
+        @event.Next = null;
         if (_head is null) { _head = _tail = @event; }
         else { _tail!.Next = @event; _tail = @event; }
     }
@@ -92,6 +99,11 @@ public abstract class Entity<TId> : Entity
     /// </summary>
     public override bool Equals(object? obj)
     {
+        // P1 修复（八轮评审）：Equals 自反性契约（x.Equals(x) 必须为 true）——
+        // 瞬时实体的 Id 判等短路会让 e.Equals(e) 返回 false，放入 HashSet 后
+        // Contains(同一实例) 找不到自身。引用相等先行短路，与 GetHashCode 的
+        // "瞬态以引用相等性为准" 设计声明对齐。
+        if (ReferenceEquals(this, obj)) return true;
         if (obj is not Entity<TId> other || GetType() != other.GetType()) return false;
         if (IsTransient() || other.IsTransient()) return false;
         return EqualityComparer<TId>.Default.Equals(Id, other.Id);

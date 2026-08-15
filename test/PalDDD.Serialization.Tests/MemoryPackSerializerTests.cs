@@ -52,7 +52,8 @@ public sealed class MemoryPackSerializerTests
         var serializer = CreateSerializer();
         var catalog = serializer.ContentType; // trigger build
         var descriptor = new MessageDescriptor("test.msg.v1", typeof(MemoryPackTestMessage),
-            TestJsonContext.Default.MemoryPackTestMessage, 1);
+            TestJsonContext.Default.MemoryPackTestMessage, 1,
+            contentType: ContentTypes.MemoryPack);
         var original = new MemoryPackTestMessage("world", 7, 50.0m);
 
         var bytes = serializer.Serialize((object)original, descriptor);
@@ -110,7 +111,8 @@ public sealed class MemoryPackSerializerTests
     {
         var serializer = CreateSerializer();
         var descriptor = new MessageDescriptor("test.msg.v1", typeof(MemoryPackTestMessage),
-            TestJsonContext.Default.MemoryPackTestMessage, 1);
+            TestJsonContext.Default.MemoryPackTestMessage, 1,
+            contentType: ContentTypes.MemoryPack);
 
         await Assert.That(() =>
             serializer.Serialize((object)null!, descriptor)).Throws<ArgumentNullException>();
@@ -131,7 +133,8 @@ public sealed class MemoryPackSerializerTests
         var serializer = CreateSerializer();
         var emptyBytes = Array.Empty<byte>();
         var descriptor = new MessageDescriptor("test.msg.v1", typeof(MemoryPackTestMessage),
-            TestJsonContext.Default.MemoryPackTestMessage, 1);
+            TestJsonContext.Default.MemoryPackTestMessage, 1,
+            contentType: ContentTypes.MemoryPack);
 
         // MemoryPack 对空 payload 应抛序列化异常（而非静默返回 default）。
         // 框架调用方应在反序列化前检查 payload 长度，但序列化器本身也应拒绝无效输入。
@@ -149,7 +152,8 @@ public sealed class MemoryPackSerializerTests
         services.AddPalMemoryPackSerialization(catalog =>
         {
             catalog.Add(new MessageDescriptor("test.msg.v1", typeof(MemoryPackTestMessage),
-                TestJsonContext.Default.MemoryPackTestMessage, 1));
+                TestJsonContext.Default.MemoryPackTestMessage, 1,
+                contentType: ContentTypes.MemoryPack));
         });
 
         var provider = services.BuildServiceProvider();
@@ -165,7 +169,8 @@ public sealed class MemoryPackSerializerTests
         services.AddPalMemoryPackSerialization(catalog =>
         {
             catalog.Add(new MessageDescriptor("test.msg.v1", typeof(MemoryPackTestMessage),
-                TestJsonContext.Default.MemoryPackTestMessage, 1));
+                TestJsonContext.Default.MemoryPackTestMessage, 1,
+                contentType: ContentTypes.MemoryPack));
         });
 
         var provider = services.BuildServiceProvider();
@@ -198,7 +203,8 @@ public sealed class MemoryPackSerializerTests
     {
         var serializer = CreateSerializer();
         var descriptor = new MessageDescriptor("test.value.v1", typeof(MemoryPackValueMessage),
-            TestJsonContext.Default.MemoryPackValueMessage, 1);
+            TestJsonContext.Default.MemoryPackValueMessage, 1,
+            contentType: ContentTypes.MemoryPack);
         var original = new MemoryPackValueMessage(42, new DateTimeOffset(2026, 6, 1, 12, 0, 0, TimeSpan.Zero));
 
         var bytes = serializer.Serialize((object)original, descriptor);
@@ -231,5 +237,47 @@ public sealed class MemoryPackSerializerTests
         await Assert.That(result.Id).IsEqualTo(original.Id);
         await Assert.That(result.Count).IsEqualTo(original.Count);
         await Assert.That(result.Amount).IsEqualTo(original.Amount);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ContentType 断链防护（八轮评审 P2）——错误 ContentType 的 descriptor 必须入口拒绝
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public async Task Serialize_NonGeneric_JsonContentTypeDescriptor_ThrowsInvalidOperationException()
+    {
+        var serializer = CreateSerializer();
+        // 故意不传 contentType —— 沿用 Json 默认值，模拟注册时漏传的断链场景
+        var jsonDescriptor = new MessageDescriptor("test.msg.v1", typeof(MemoryPackTestMessage),
+            TestJsonContext.Default.MemoryPackTestMessage, 1);
+        var original = new MemoryPackTestMessage("x", 1, 2m);
+
+        await Assert.That(() =>
+            serializer.Serialize((object)original, jsonDescriptor)).Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task Deserialize_NonGeneric_JsonContentTypeDescriptor_ThrowsInvalidOperationException()
+    {
+        var serializer = CreateSerializer();
+        var jsonDescriptor = new MessageDescriptor("test.msg.v1", typeof(MemoryPackTestMessage),
+            TestJsonContext.Default.MemoryPackTestMessage, 1);
+        var payload = new byte[] { 1, 2, 3 };
+
+        await Assert.That(() =>
+            serializer.Deserialize(payload.AsSpan(), jsonDescriptor)).Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task Serialize_Generic_JsonContentTypeDescriptor_ThrowsInvalidOperationException()
+    {
+        var serializer = CreateSerializer();
+        var jsonDescriptor = new MessageDescriptor("test.msg.v1", typeof(MemoryPackTestMessage),
+            TestJsonContext.Default.MemoryPackTestMessage, 1);
+        var original = new MemoryPackTestMessage("x", 1, 2m);
+
+        // 泛型路径 descriptor 非 null 时同样校验
+        await Assert.That(() =>
+            serializer.Serialize(original, jsonDescriptor)).Throws<InvalidOperationException>();
     }
 }

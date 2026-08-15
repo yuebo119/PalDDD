@@ -20,6 +20,13 @@ namespace PalDDD.Serialization.MemoryPack;
 /// 📐 与 JsonMessageSerializer 互斥注册（均为 IMessageSerializer Singleton）。
 /// 💡 泛型路径使用 <c>MemoryPackSerializer.Serialize&lt;T&gt;()</c>，编译时类型安全。
 /// 💡 非泛型路径使用 <c>MemoryPackSerializer.Serialize(value.GetType())</c> + descriptor 回退。
+/// <para>
+/// 📐 <b>契约（八轮评审 P2 修复）</b>：传入非 null <see cref="MessageDescriptor"/> 时，
+/// 其 <c>ContentType</c> 必须为 <see cref="ContentTypes.MemoryPack"/>，否则抛
+/// <see cref="InvalidOperationException"/>——ContentType 断链（如沿用 Json 默认值）会让
+/// 消费方按错误格式解析 payload，入口显式校验将失败提前到序列化时刻。
+/// 注册 descriptor 时需显式传 <c>contentType: ContentTypes.MemoryPack</c>。
+/// </para>
 /// </remarks>
 public sealed class MemoryPackMessageSerializer : IMessageSerializer
 {
@@ -33,6 +40,10 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
     /// <inheritdoc />
     public ReadOnlyMemory<byte> Serialize<TMessage>(TMessage message, MessageDescriptor? descriptor = null)
     {
+        // P3 修复（八轮评审）：泛型路径 descriptor 可选——非 null 时校验 ContentType 断链
+        if (descriptor is not null)
+            ValidateDescriptorContentType(descriptor);
+
         return MemoryPackSerializer.Serialize(message);
     }
 
@@ -41,11 +52,17 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentNullException.ThrowIfNull(descriptor);
+        // P3 修复（八轮评审）：ContentType 断链入口校验（详见类 remarks 契约说明）
+        ValidateDescriptorContentType(descriptor);
 
-        // 使用运行时类型序列化——MemoryPack 内部查找注册的 Formatter
-        var bytes = MemoryPackSerializer.Serialize(message.GetType(), message);
+        // 使用运行时类型序列化——MemoryPack 的多态序列化依赖运行时类型的 Formatter
+        var runtimeType = message.GetType();
+        var bytes = MemoryPackSerializer.Serialize(runtimeType, message);
+        // P3 修复（八轮评审）：错误消息改报实际尝试的运行时类型（原报 descriptor.ClrType，
+        // 多态场景下与真实序列化类型不一致，误导排查）
         return bytes ?? throw new InvalidOperationException(
-            $"MemoryPack serialization failed for type '{descriptor.ClrType.FullName}'. " +
+            $"MemoryPack serialization failed for runtime type '{runtimeType.FullName}' " +
+            $"(descriptor CLR type '{descriptor.ClrType.FullName}'). " +
             "Ensure the type is registered with [MemoryPackable] and a MemoryPack generator.");
     }
 
@@ -53,6 +70,8 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
     public object? Deserialize(ReadOnlySpan<byte> payload, MessageDescriptor descriptor)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
+        // P3 修复（八轮评审）：ContentType 断链入口校验
+        ValidateDescriptorContentType(descriptor);
 
         return MemoryPackSerializer.Deserialize(descriptor.ClrType, payload);
     }
@@ -61,6 +80,26 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
     [return: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.NonPublicConstructors)]
     public TMessage? Deserialize<TMessage>(ReadOnlySpan<byte> payload, MessageDescriptor descriptor)
     {
+        // P3 修复（八轮评审）：泛型路径 descriptor 未参与反序列化，但非 null 时仍校验
+        // ContentType 断链（调用方传入错误 descriptor 应尽早暴露）
+        if (descriptor is not null)
+            ValidateDescriptorContentType(descriptor);
+
         return MemoryPackSerializer.Deserialize<TMessage>(payload);
+    }
+
+    /// <summary>
+    /// 校验 descriptor 的 ContentType 与本序列化器匹配——不匹配时抛
+    /// <see cref="InvalidOperationException"/>，将"注册时漏传 contentType"的断链
+    /// 失败从"消费方解析失败"提前到"序列化入口"。
+    /// </summary>
+    private static void ValidateDescriptorContentType(MessageDescriptor descriptor)
+    {
+        if (descriptor.ContentType != ContentTypes.MemoryPack)
+            throw new InvalidOperationException(
+                $"MessageDescriptor '{descriptor.Name}' was registered with ContentType " +
+                $"'{descriptor.ContentType}', but MemoryPackMessageSerializer requires " +
+                $"'{ContentTypes.MemoryPack}'. Pass contentType: ContentTypes.MemoryPack " +
+                "when creating the MessageDescriptor.");
     }
 }

@@ -84,21 +84,32 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
 
     /// <inheritdoc/>
     /// <remarks>
-    /// RetryCount 在此方法内递增，确保与状态变更在同一 SaveChangesAsync 中原子持久化。
-    /// 调用方（OutboxBatchProcessor）无需单独维护 RetryCount——存储保证计数与状态一致。
+    /// P2 修复（八轮评审）：改用 <c>ExecuteUpdate</c> 生成带守卫的单条 UPDATE——
+    /// <c>WHERE Id == id AND (LockedBy IS NULL OR LockedBy == 原持有者)</c>（原持有者从入参捕获）。
+    /// 此前的"内存修改 + 后续 SaveChangesAsync"模式在租约被抢占（过期后他实例已 re-lease）
+    /// 时会用 <c>LockedBy = null</c> 覆盖新持有者的租约；守卫下被抢占时影响 0 行，不覆盖。<br/>
+    /// RetryCount 递增与状态变更在同一 SQL 内原子完成，不再依赖后续 <c>SaveChangesAsync</c>；
+    /// 入参 <paramref name="message"/> 不再被修改——若其为 ChangeTracker 跟踪实体，同步改内存
+    /// 会在后续 SaveChangesAsync 因 RetryCount 并发令牌失配抛出假冲突。
     /// </remarks>
     public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
 
-        message.RetryCount++;
-        message.Status = OutboxStatus.Pending;
-        message.ProcessedAt = null;
-        message.Error = failureReason;
-        message.NextAttemptAt = nextAttemptAt;
-        message.LockedBy = null;
-        message.LockedUntil = null;
+        var originalOwner = message.LockedBy;
+
+        OutboxMessages
+            .Where(m => m.Id == message.Id
+                && (m.LockedBy == null || m.LockedBy == originalOwner))
+            .ExecuteUpdate(s => s
+                .SetProperty(m => m.RetryCount, m => m.RetryCount + 1)
+                .SetProperty(m => m.Status, OutboxStatus.Pending)
+                .SetProperty(m => m.ProcessedAt, (DateTimeOffset?)null)
+                .SetProperty(m => m.Error, failureReason)
+                .SetProperty(m => m.NextAttemptAt, nextAttemptAt)
+                .SetProperty(m => m.LockedBy, (string?)null)
+                .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null));
     }
 
     /// <inheritdoc/>

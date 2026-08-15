@@ -86,7 +86,17 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
 
         AttachIfDetached(checkpoint);
         checkpoint.MarkCompleted(completedAt);
-        await SaveChangesAsync(ct);
+        try
+        {
+            await SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // P2 修复（八轮评审）：Revision 并发令牌冲突 = 租约已被其他工作器回收，被抢占者的
+            // 标记不生效——Detach 清理跟踪状态后静默返回，不掩盖原始业务异常、不中止回放
+            // （对齐上方 TryStartAsync 的既有捕获模式）。
+            Entry(checkpoint).State = EntityState.Detached;
+        }
     }
 
     /// <inheritdoc/>
@@ -101,7 +111,17 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
 
         AttachIfDetached(checkpoint);
         checkpoint.MarkFailed(failureReason, failedAt);
-        await SaveChangesAsync(ct);
+        try
+        {
+            await SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // P2 修复（八轮评审）：Revision 并发令牌冲突 = 租约已被其他工作器回收，被抢占者的
+            // 失败标记不生效——Detach 清理跟踪状态后静默返回，不掩盖原始业务异常、不中止回放
+            // （对齐上方 TryStartAsync 的既有捕获模式）。
+            Entry(checkpoint).State = EntityState.Detached;
+        }
     }
 
     /// <inheritdoc/>

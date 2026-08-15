@@ -77,8 +77,9 @@ public sealed class ChildSagaStep<TChildState, TInput, TOutput> : SagaStep, IInt
     /// <inheritdoc/>
     void IInternalChildSagaStep.ApplyOutput(SagaState parentState, SagaState childState)
     {
-        var output = _outputSelector((TChildState)childState);
-        if (_outputApplier is not null)
-            _outputApplier(parentState, output);
+        // P3 修复（八轮）：无应用器时跳过 outputSelector 求值——输出仅提取不被消费，
+        // 用户选择器可能抛异常或依赖未初始化的子状态字段（惰性求值语义）
+        if (_outputApplier is null) return;
+        _outputApplier(parentState, _outputSelector((TChildState)childState));
     }
 }

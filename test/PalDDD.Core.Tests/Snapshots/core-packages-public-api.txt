@@ -544,12 +544,23 @@ interface PalDDD.Messaging.IMessageBroker
   method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask PublishAsync(TMessage message, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
 class PalDDD.Messaging.MessageBrokerBase
   method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask PublishAsync(TMessage message, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
+class PalDDD.Messaging.MessageConsumeContext
+  ctor(System.String correlationId, System.String causationId, System.String traceParent, System.String traceState, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> headers)
+  property System.String CausationId
+  property System.String CorrelationId
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Headers
+  property System.String TraceParent
+  property System.String TraceState
+  method PalDDD.Messaging.MessageConsumeContext FromHeaders(System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<System.String, System.Object>> headers, System.String correlationId)
+static class PalDDD.Messaging.MessageConsumeContext+HeaderNames
 struct PalDDD.Messaging.MessagePublishContext
   ctor(System.Nullable<ByteAether.Ulid.Ulid> CorrelationId, System.Nullable<ByteAether.Ulid.Ulid> CausationId, System.String TraceParent, System.String TraceState)
   property System.Nullable<ByteAether.Ulid.Ulid> CausationId

@@ -61,6 +61,10 @@ public static class ServiceCollectionExtensions
         services.AddOptions<SagaProcessorOptions>()
             .Validate(static options => options.PollInterval > TimeSpan.Zero, "Saga poll interval must be greater than zero.")
             .Validate(static options => options.TimeoutScanBatchSize > 0, "Saga timeout scan batch size must be greater than zero.")
+            // P3 修复（八轮）：补租约参数校验——LeaseDuration<=0 会让租约永不过期/立即过期，
+            // LeaseOwner 为空则租约无法归属（与 AddPalOutbox 的校验集对齐）
+            .Validate(static options => options.LeaseDuration > TimeSpan.Zero, "Saga lease duration must be greater than zero.")
+            .Validate(static options => !string.IsNullOrWhiteSpace(options.LeaseOwner), "Saga lease owner is required.")
             .ValidateOnStart();
         services.TryAddSingleton<TOrchestrator>();
         services.TryAddSingleton<Saga<TState>>(sp => sp.GetRequiredService<TOrchestrator>());

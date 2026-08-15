@@ -74,7 +74,17 @@ public static class MySqlServiceCollectionExtensions
         string connectionString)
     {
         AddPalMySqlDataSource(services, connectionString);
-        return DapperServiceCollectionExtensions.AddPalDapperTransactions(services, DapperDbType.MySql, connectionString);
+        DapperServiceCollectionExtensions.AddPalDapperTransactions(services, DapperDbType.MySql, connectionString);
+
+        // P3 修复（八轮评审）：Store 连接改从注册的 MySqlDataSource 取——AddPalDapperTransactions 的
+        // DbConnection 工厂是 new MySqlConnection(cs)（走连接串全局池），而 ApplySessionOptimization 的
+        // SET SESSION 打在 MySqlDataSource 私有池上，优化完全打不到 Store 实际使用的连接。
+        // 此处覆盖 DbConnection 注册（MS DI 后注册胜出），Store 统一从 DataSource 池取连接，
+        // 会话优化随池内物理连接复用传导到 Store。
+        services.AddScoped<System.Data.Common.DbConnection>(sp =>
+            sp.GetRequiredService<System.Data.Common.DbDataSource>().CreateConnection());
+
+        return services;
     }
 
     // ── Legacy（旧 API 兼容）──
@@ -106,7 +116,7 @@ public static class MySqlServiceCollectionExtensions
     }
 
     /// <summary>注册 MySQL 连接 + Dapper Store（一键注册）</summary>
-    [System.Obsolete("请使用 AddPalMySqlDataSourceWithStores 以获得自动连接池管理、健康检查和 OpenTelemetry 追踪。")]
+    [System.Obsolete("请使用 AddPalMySqlDataSourceWithStores 以获得自动连接池管理、健康检查和 OpenTelemetry 追踪。八轮评审已补齐 ISagaStateStore 注册，与新路径的 Store 三件套（Outbox/Inbox/Saga）差异已消除，仅剩连接管理模式不同。")]
     public static IServiceCollection AddPalMySqlWithStores(
         this IServiceCollection services,
         string connectionString)
@@ -124,6 +134,12 @@ public static class MySqlServiceCollectionExtensions
             var conn = sp.GetRequiredService<MySqlConnection>();
             return new DapperInboxStore(conn, DapperDbType.MySql);
         });
+
+        // P3 修复（八轮评审）：补注册 ISagaStateStore（对齐新路径 AddPalDapperTransactions 的
+        // Outbox/Inbox/Saga 三件套）——此前 Legacy 一键注册只含 Outbox+Inbox，消费方解析
+        // ISagaStateStore<TState> 直接抛解析失败。DapperSagaStateStore 构造的其余参数均有
+        // 默认值，仅需 Scoped DbConnection（上方 AddPalMySql 已注册）。
+        services.AddScoped(typeof(ISagaStateStore<>), typeof(DapperSagaStateStore<>));
 
         return services;
     }

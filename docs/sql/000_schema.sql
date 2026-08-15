@@ -10,7 +10,7 @@
 
 -- ── Outbox 发件箱消息表 ──
 CREATE TABLE outbox_messages (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,  -- PG: BIGSERIAL / MySQL: BIGINT AUTO_INCREMENT
+    id              TEXT    PRIMARY KEY,   -- Ulid 26 字符（代码侧始终显式提供，非自增）；MySQL: CHAR(26)
     type            TEXT    NOT NULL,
     payload         TEXT    NOT NULL,
     content_type    TEXT    NOT NULL DEFAULT 'application/json',
@@ -22,7 +22,11 @@ CREATE TABLE outbox_messages (
     processed_at    TIMESTAMP,
     next_attempt_at TIMESTAMP,
     locked_by       TEXT,
-    locked_until    TIMESTAMP
+    locked_until    TIMESTAMP,
+    correlation_id  TEXT,   -- 审计：关联 Ulid（26 字符）
+    causation_id    TEXT,   -- 审计：因果 Ulid（26 字符）
+    trace_parent    TEXT,   -- 审计：W3C traceparent
+    trace_state     TEXT    -- 审计：W3C tracestate
 );
 
 CREATE INDEX idx_outbox_status ON outbox_messages(status, next_attempt_at, locked_until);
@@ -45,7 +49,7 @@ CREATE UNIQUE INDEX idx_inbox_unique ON inbox_messages(consumer_name, message_id
 
 -- ── Saga 状态持久化表 ──
 CREATE TABLE saga_states (
-    saga_id       UUID    PRIMARY KEY,  -- PG: UUID / SQLite: TEXT / MySQL: CHAR(36)
+    saga_id       TEXT    PRIMARY KEY,  -- Ulid 26 字符（代码传字符串，非 UUID）；MySQL: CHAR(26)
     current_state TEXT    NOT NULL,
     status        INTEGER NOT NULL DEFAULT 0,  -- 0:Active 1:Completed 2:Compensated 3:CompensationFailed 4:DeadLettered
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

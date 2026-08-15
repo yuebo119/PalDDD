@@ -141,10 +141,14 @@ public static class ServiceRegistration
         where TEvent : Core.DomainEvent
         where THandler : class, Message.IEventHandler<TEvent>
     {
+        // P3 修复（八轮评审）：三个注册统一 TryAdd 防重语义——对齐同文件 AddPalCommandHandler/
+        // AddPalQueryHandler 的 TryAddScoped；此前 AddScoped 工厂在重复调用 AddPalEventHandler 时
+        // 向容器注入重复注册（非泛型 IEventHandler 聚合枚举出重复实例）。TryAdd 工厂形式保留
+        // "转发到 THandler 具体注册"的解析语义，仅消除重复注入。
         services.TryAddScoped<THandler>();
-        services.AddScoped<Message.IEventHandler<TEvent>>(sp => sp.GetRequiredService<THandler>());
+        services.TryAddScoped<Message.IEventHandler<TEvent>>(sp => sp.GetRequiredService<THandler>());
         // 注册到非泛型接口以便 IterativeDomainEventDispatcher 通过 IEnumerable<IEventHandler> 聚合
-        services.AddScoped<Message.IEventHandler>(sp => sp.GetRequiredService<THandler>());
+        services.TryAddScoped<Message.IEventHandler>(sp => sp.GetRequiredService<THandler>());
         return services;
     }
 }
