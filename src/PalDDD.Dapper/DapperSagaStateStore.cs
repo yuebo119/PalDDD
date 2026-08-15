@@ -90,8 +90,11 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
         var now = _timeProvider.GetUtcNow();
         var until = now.Add(leaseDuration);
+        // P1 修复（十一轮·实测发现）：MySQL 不支持 UPDATE ... WHERE id IN (SELECT ... LIMIT)——
+        // JOIN 形态替代（对齐 PalORM 版）；SQLite/PG 支持子查询内 LIMIT 保持原状
+        var leaseSql = _dbType == DapperDbType.MySql ? SqlTemplates.SagaLeaseActiveMySql : SqlTemplates.SagaLeaseActive;
         await conn.ExecuteAsync(
-            new CommandDefinition(SqlTemplates.SagaLeaseActive, new { owner, until = ToTimeParam(until), now = ToTimeParam(now), n = batchSize }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+            new CommandDefinition(leaseSql, new { owner, until = ToTimeParam(until), now = ToTimeParam(now), n = batchSize }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
 
         var rows = await conn.QueryAsync<SagaStateRow>(
             new CommandDefinition(SqlTemplates.SagaSelectByLease, new { owner, until = ToTimeParam(until) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
@@ -118,7 +121,8 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         {
             var rows = await conn.ExecuteAsync(
                 new CommandDefinition(
-                    SqlTemplates.SagaUpdate,
+                    // P1 修复（十一轮·实测发现）：PG 的 saga_data JSONB 列需显式 CAST（text→jsonb 无赋值转换）
+                    _dbType == DapperDbType.PostgreSql ? SqlTemplates.SagaUpdatePG : SqlTemplates.SagaUpdate,
                     new
                     {
                         cs = state.CurrentState,
@@ -144,7 +148,8 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         {
             inserted = await conn.ExecuteAsync(
                 new CommandDefinition(
-                    SqlTemplates.SagaInsert,
+                    // P1 修复（十一轮·实测发现）：PG 的 saga_data JSONB 列需显式 CAST（text→jsonb 无赋值转换）
+                    _dbType == DapperDbType.PostgreSql ? SqlTemplates.SagaInsertPG : SqlTemplates.SagaInsert,
                     new
                     {
                         id = DapperAotInitializer.ToSqliteParameter(state.SagaId),

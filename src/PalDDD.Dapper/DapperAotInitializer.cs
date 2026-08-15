@@ -33,6 +33,11 @@ internal static class DapperAotInitializer
         SqlMapper.AddTypeHandler(new SqliteUlidTypeHandler());
         SqlMapper.AddTypeHandler(new SqliteGuidTypeHandler());
         SqlMapper.AddTypeHandler(new SqliteDateTimeOffsetTypeHandler());
+        // P2 修复（十一轮·实测发现）：snake_case 列名 → PascalCase 属性映射是 Store 层
+        // 正确性的必要全局状态，此前只在 DI 注册路径（DapperServiceCollectionExtensions）
+        // 与测试夹具设置——绕过 DI 直连构造（公共构造签名显式支持）时字符串列静默映射为空。
+        // 与 TypeHandler 同级放 ModuleInitializer，直连构造自足；DI/测试路径重复设置幂等。
+        global::Dapper.DefaultTypeMap.MatchNamesWithUnderscores = true;
     }
 
     /// <summary>将 Ulid 转为 string，适配 SQLite TEXT 列参数绑定。</summary>

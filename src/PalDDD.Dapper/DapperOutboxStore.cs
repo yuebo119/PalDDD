@@ -133,9 +133,14 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         }
         else
         {
+            // P1 修复（十一轮·实测发现）：MySQL 不支持 UPDATE ... WHERE id IN (SELECT ... LIMIT)
+            // （真实库实测报 1235）——JOIN 形态替代（对齐 PalORM 版）；SQLite 支持子查询内 LIMIT 保持原状
+            var leaseSql = _dbType == DapperDbType.MySql
+                ? SqlTemplates.OutboxLeaseUpdateMySql
+                : SqlTemplates.OutboxLeaseUpdate + $"({leaseSubSql})";
             await conn.ExecuteAsync(
                 new CommandDefinition(
-                    SqlTemplates.OutboxLeaseUpdate + $"({leaseSubSql})",
+                    leaseSql,
                     new { owner, until = ToTimeParam(until), now = ToTimeParam(now), maxRetryCount, n = batchSize },
                     _transaction, cancellationToken: ct)).ConfigureAwait(false);
 

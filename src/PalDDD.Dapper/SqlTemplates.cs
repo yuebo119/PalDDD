@@ -91,6 +91,18 @@ public static class SqlTemplates
     public const string OutboxLeaseUpdate =
         "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN ";
 
+    /// <summary>
+    /// MySQL 专用原子租约获取 — JOIN 形态。<br/>
+    /// P1 修复（十一轮·实测发现）：MySQL 不支持 UPDATE ... WHERE id IN (SELECT ... LIMIT)
+    /// （真实库实测报 1235 "doesn't yet support 'LIMIT &amp; IN/ALL/ANY/SOME subquery'"）——
+    /// 与 PalORM 版（PalOrmOutboxStore MySQL 分支）同款 JOIN 替代，PD17 姊妹同步。
+    /// </summary>
+    public const string OutboxLeaseUpdateMySql =
+        "UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status='Pending' AND retry_count<@maxRetryCount"
+        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
+        + " AND (locked_until IS NULL OR locked_until<=@now)"
+        + " ORDER BY created_at LIMIT @n) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until";
+
     /// <summary>按 ID 批量查询（用于 PG RETURING * 替代路径）</summary>
     public const string OutboxSelectById =
         "SELECT * FROM outbox_messages WHERE id IN ";
@@ -189,6 +201,14 @@ public static class SqlTemplates
     public const string SagaLeaseActive =
         "UPDATE saga_states SET leased_by=@owner, leased_until=@until WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status = 0 AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n)";
 
+    /// <summary>
+    /// MySQL 专用 Saga 租约获取 — JOIN 形态。<br/>
+    /// P1 修复（十一轮·实测发现）：同 OutboxLeaseUpdateMySql——MySQL 禁止 IN 子查询内 LIMIT，
+    /// 与 PalORM 版（PalOrmSagaStateStore MySQL 分支）同款 JOIN 替代，PD17 姊妹同步。
+    /// </summary>
+    public const string SagaLeaseActiveMySql =
+        "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status = 0 AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until";
+
     /// <summary>按本次租约回读刚获取的 Saga。</summary>
     public const string SagaSelectByLease =
         "SELECT * FROM saga_states WHERE leased_by=@owner AND leased_until=@until";
@@ -207,4 +227,16 @@ public static class SqlTemplates
     /// <summary>插入新的 Saga 状态</summary>
     public const string SagaInsert =
         "INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,@data,@leasedBy,@leasedUntil)";
+
+    /// <summary>
+    /// PG 专用 Saga 插入 — saga_data 显式 CAST 为 jsonb。<br/>
+    /// P1 修复（十一轮·实测发现）：Npgsql 将 string 参数按 text OID 发送，PG 的
+    /// text→jsonb 无赋值转换（42804），实测 INSERT 直接报错。
+    /// </summary>
+    public const string SagaInsertPG =
+        "INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,CAST(@data AS jsonb),@leasedBy,@leasedUntil)";
+
+    /// <summary>PG 专用 Saga 更新 — saga_data 同 SagaInsertPG 的 jsonb CAST。</summary>
+    public const string SagaUpdatePG =
+        "UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=CAST(@data AS jsonb),leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v";
 }
