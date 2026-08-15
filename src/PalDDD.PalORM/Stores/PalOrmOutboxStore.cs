@@ -137,7 +137,10 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // 不走 UpdateAsync —— 避免 [ConcurrencyCheck] 干扰原子自增语义
         // P2 修复：补租约守卫——原 WHERE 仅按 id，租约过期被其他 worker 抢占后，
         // 原 worker 的失败释放会清掉新 worker 的锁并误增 retry_count。
-        // 守卫 locked_by = 本次持有者（先捕获再置空；无持有者时按租约仍存活限定）。
+        // 守卫语义：仅防"他人持有"——locked_by IS NULL（未租约/已释放）放行。
+        // ⚠️ 实证教训：守卫必须以字面量分支写进 SQL，不能经变量插值——PalORM 的
+        // FormattableString 会把字符串变量参数化（AND (@p) 恒假，UPDATE 0 行，
+        // file-based app 探针定位）。
         var leaseOwner = message.LockedBy;
         message.Status = OutboxStatus.Pending;
         message.Error = failureReason;
@@ -145,12 +148,20 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         message.RetryCount += 1;
         message.LockedBy = null;
         message.LockedUntil = null;
-        var leaseGuard = leaseOwner is null
-            ? "locked_until IS NOT NULL"
-            : $"locked_by = {leaseOwner}";
-        Session.ExecuteAsync(
-            $"UPDATE outbox_messages SET status = {(int)OutboxStatus.Pending}, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {message.Id.ToString()} AND ({leaseGuard})",
-            default).AsTask().GetAwaiter().GetResult();
+        var statusPending = (int)OutboxStatus.Pending;
+        var id = message.Id.ToString();
+        if (leaseOwner is null)
+        {
+            Session.ExecuteAsync(
+                $"UPDATE outbox_messages SET status = {statusPending}, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND (locked_by IS NULL)",
+                default).AsTask().GetAwaiter().GetResult();
+        }
+        else
+        {
+            Session.ExecuteAsync(
+                $"UPDATE outbox_messages SET status = {statusPending}, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND (locked_by IS NULL OR locked_by = {leaseOwner})",
+                default).AsTask().GetAwaiter().GetResult();
+        }
     }
 
     /// <inheritdoc />
