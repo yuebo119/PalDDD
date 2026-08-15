@@ -30,11 +30,17 @@ internal static class EventLogSql
     public const string InsertSqlite =
         "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason) VALUES (@EventId, @EventName, @StreamName, @StreamVersion, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason); SELECT last_insert_rowid();";
 
-    /// <summary>按流名和版本读取事件</summary>
+    /// <summary>
+    /// 按流名和版本读取事件。<br/>
+    /// 💡 LIMIT @max 由调用方传入 maxCount（ITM-063：此前参数被静默忽略）。
+    /// </summary>
     public const string ReadStream =
-        "SELECT * FROM events WHERE stream_name = @name AND stream_version >= @from ORDER BY stream_version";
+        "SELECT * FROM events WHERE stream_name = @name AND stream_version >= @from ORDER BY stream_version LIMIT @max";
 
-    /// <summary>按全局位置读取所有事件</summary>
+    /// <summary>
+    /// 按全局位置读取所有事件。<br/>
+    /// 💡 LIMIT @max 由调用方传入 maxCount（ITM-063：此前参数被静默忽略）。
+    /// </summary>
     public const string ReadAll =
-        "SELECT * FROM events WHERE global_position >= @from ORDER BY global_position";
+        "SELECT * FROM events WHERE global_position >= @from ORDER BY global_position LIMIT @max";
 }

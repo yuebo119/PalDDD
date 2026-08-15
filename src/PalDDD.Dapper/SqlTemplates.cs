@@ -144,9 +144,14 @@ public static class SqlTemplates
     public const string InboxInsertPG =
         "INSERT INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,'Processing',@now,@now,1) ON CONFLICT (consumer_name,message_id) DO NOTHING RETURNING id";
 
-    /// <summary>MySQL conflict-safe INSERT 语法</summary>
+    /// <summary>
+    /// MySQL conflict-safe INSERT 语法。<br/>
+    /// 💡 <c>WHERE ROW_COUNT() &gt; 0</c> 守卫（ITM-061）：INSERT IGNORE 被唯一约束忽略时
+    /// ROW_COUNT()=0，SELECT 不返回行 → 调用方正确走"已存在"分支；否则 LAST_INSERT_ID()
+    /// 会返回 0 或同连接上一条 INSERT 的陈旧自增 ID，伪造 Processing 记录破坏幂等。
+    /// </summary>
     public const string InboxInsertMySql =
-        "INSERT IGNORE INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,'Processing',@now,@now,1); SELECT LAST_INSERT_ID();";
+        "INSERT IGNORE INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,'Processing',@now,@now,1); SELECT LAST_INSERT_ID() WHERE ROW_COUNT() > 0;";
 
     /// <summary>
     /// SQLite conflict-safe INSERT 语法。<br/>

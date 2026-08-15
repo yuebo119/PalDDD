@@ -46,25 +46,25 @@ public static class PostgreSqlJsonb
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Include(string column, string key, string value)
-        => $"{Escape(column)} @> '{{\"{Escape(key)}\":\"{EscapeJsonValue(value)}\"}}'::jsonb";
+        => $"{Escape(column)} @> '{{\"{EscapeJsonValue(key)}\":\"{EscapeJsonValue(value)}\"}}'::jsonb";
 
     /// <summary>生成 JSONB 被包含条件（ &lt;@ ）</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string IncludedBy(string column, string key, string value)
-        => $"'{{\"{Escape(key)}\":\"{EscapeJsonValue(value)}\"}}'::jsonb <@ {Escape(column)}";
+        => $"'{{\"{EscapeJsonValue(key)}\":\"{EscapeJsonValue(value)}\"}}'::jsonb <@ {Escape(column)}";
 
     // ── 键存在操作符 ──
 
     /// <summary>检查 JSONB 中是否存在指定键：payload ? 'Key'</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string HasKey(string column, string key)
-        => $"{Escape(column)} ? '{Escape(key)}'";
+        => $"{Escape(column)} ? '{EscapeLiteral(key)}'";
 
     /// <summary>检查 JSONB 中是否存在任意指定键：payload ?| array['K1','K2']</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string HasAnyKey(string column, params string[] keys)
     {
-        var list = string.Join(",", keys.Select(k => $"'{Escape(k)}'"));
+        var list = string.Join(",", keys.Select(k => $"'{EscapeLiteral(k)}'"));
         return $"{Escape(column)} ?| array[{list}]";
     }
 
@@ -72,7 +72,7 @@ public static class PostgreSqlJsonb
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string HasAllKeys(string column, params string[] keys)
     {
-        var list = string.Join(",", keys.Select(k => $"'{Escape(k)}'"));
+        var list = string.Join(",", keys.Select(k => $"'{EscapeLiteral(k)}'"));
         return $"{Escape(column)} ?& array[{list}]";
     }
 
@@ -81,18 +81,18 @@ public static class PostgreSqlJsonb
     /// <summary>提取 JSONB 字段文本值：payload ->> 'Key'</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractText(string column, string key)
-        => $"{Escape(column)} ->> '{Escape(key)}'";
+        => $"{Escape(column)} ->> '{EscapeLiteral(key)}'";
 
     /// <summary>提取 JSONB 字段 JSON 值：payload -> 'Key'</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractJson(string column, string key)
-        => $"{Escape(column)} -> '{Escape(key)}'";
+        => $"{Escape(column)} -> '{EscapeLiteral(key)}'";
 
     /// <summary>路径提取文本：payload #>> '{path,to,key}'</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractTextByPath(string column, params string[] path)
     {
-        var p = string.Join(",", path.Select(k => $"'{Escape(k)}'"));
+        var p = string.Join(",", path.Select(k => $"'{EscapeLiteral(k)}'"));
         return $"{Escape(column)} #>> '{{{p}}}'";
     }
 
@@ -100,7 +100,7 @@ public static class PostgreSqlJsonb
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractJsonByPath(string column, params string[] path)
     {
-        var p = string.Join(",", path.Select(k => $"'{Escape(k)}'"));
+        var p = string.Join(",", path.Select(k => $"'{EscapeLiteral(k)}'"));
         return $"{Escape(column)} #> '{{{p}}}'";
     }
 
@@ -128,9 +128,18 @@ public static class PostgreSqlJsonb
     /// <summary>
     /// PostgreSQL 标识符转义 —— 加外层双引号 + 内部双引号翻倍（P3-1 修复）。
     /// 仅适用于已知可信标识符（列名/表名硬编码）。用户输入必须先白名单校验。
+    /// ⚠️ 仅用于标识符位置（列名/表名/索引名）；字符串字面量内文用 <see cref="EscapeLiteral"/>，
+    /// JSON 键值用 <see cref="EscapeJsonValue"/>（ITM-062：三种语义不得混用）。
     /// </summary>
     private static string Escape(string identifier)
         => $"\"{identifier.Replace("\"", "\"\"")}\"";
+
+    /// <summary>
+    /// 单引号字符串字面量内文转义 —— 单引号翻倍，不添加外层引号（模板已提供）。
+    /// 用于 JSONB 键存在/提取操作符的 'Key' 位置（ITM-062）。
+    /// </summary>
+    private static string EscapeLiteral(string value)
+        => value.Replace("'", "''");
 
     /// <summary>
     /// JSON 值转义 —— 防止 JSON 注入（P0-FIX-5）。

@@ -117,7 +117,7 @@ public sealed class DapperEventLog : IEventLog
         // 💡 RecordedEvent 的构造函数是 internal 且属性只读，Dapper 运行时无法直接物化。
         // 通过 EventLogRow DTO（public 无参构造 + public setters）读取，再映射到 RecordedEvent。
         var rows = await _connection.QueryAsync<EventLogRow>(
-            new CommandDefinition(EventLogSql.ReadStream, new { name = streamName, from = fromVersion }, _transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
+            new CommandDefinition(EventLogSql.ReadStream, new { name = streamName, from = fromVersion, max = maxCount }, _transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
 
         foreach (var row in rows)
             yield return row.ToRecordedEvent();
@@ -128,7 +128,7 @@ public sealed class DapperEventLog : IEventLog
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var rows = await _connection.QueryAsync<EventLogRow>(
-            new CommandDefinition(EventLogSql.ReadAll, new { from = fromPosition }, _transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
+            new CommandDefinition(EventLogSql.ReadAll, new { from = fromPosition, max = maxCount }, _transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
 
         foreach (var row in rows)
             yield return row.ToRecordedEvent();
