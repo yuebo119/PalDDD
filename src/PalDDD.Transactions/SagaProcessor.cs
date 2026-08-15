@@ -152,7 +152,9 @@ TState>
 
                 sagaState.LeasedBy = null;
                 sagaState.LeasedUntil = null;
-                await _store.SaveChangesAsync(sagaState, ct);
+                // P2 修复（取消路径对称）：租约释放是终态写入，不响应取消（与 141 行 OCE 路径
+                // 的 CancellationToken.None 对齐）——此前正常路径用 ct，OCE 传播时租约滞留
+                await _store.SaveChangesAsync(sagaState, CancellationToken.None);
             }
             else
             {
@@ -160,7 +162,8 @@ TState>
                 // 而非 PollInterval（30 秒），多实例下该 Saga 对其他实例不可见
                 sagaState.LeasedBy = null;
                 sagaState.LeasedUntil = null;
-                await _store.SaveChangesAsync(sagaState, ct);
+                // P2 修复（取消路径对称）：同上——终态写入不响应取消
+                await _store.SaveChangesAsync(sagaState, CancellationToken.None);
             }
             }
             catch (OperationCanceledException)

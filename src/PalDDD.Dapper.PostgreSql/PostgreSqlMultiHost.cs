@@ -103,7 +103,9 @@ public static class PostgreSqlMultiHost
         foreach (var cs in replicaConnectionStrings)
         {
             var sb = new NpgsqlConnectionStringBuilder(cs);
-            if (sb.Host is not null) hosts.Add(sb.Host);
+            // PD17 姊妹统一：端口编码进 Host 条目（与 Failover 方法 62-64 行实证修正对齐）
+            if (sb.Host is not null)
+                hosts.Add(sb.Port != 5432 ? $"{sb.Host}:{sb.Port}" : sb.Host);
         }
 
         if (hosts.Count > 0)

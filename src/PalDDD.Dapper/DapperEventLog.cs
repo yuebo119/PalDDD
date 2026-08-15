@@ -118,8 +118,11 @@ public sealed class DapperEventLog : IEventLog
             }
             catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
             {
-                // P2 修复：TOCTOU 窗口（预检查后并发写入）由 idx_events_stream 唯一索引兜底，
-                // 此处转换为统一并发异常（对齐 EFCore 版契约），调用方可用统一类型处理冲突
+                // P2 修复：TOCTOU 窗口（预检查后并发写入）由唯一索引兜底，转换为统一并发异常。
+                // EventId 冲突误译防护（对齐 EFCore 版）：版本仍满足期望说明是 EventId 唯一
+                // 索引撞（重复事件 ID），原样上抛而非转并发异常
+                if (expectedVersion.Matches(currentVersion ?? -1))
+                    throw;
                 throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion ?? -1);
             }
 

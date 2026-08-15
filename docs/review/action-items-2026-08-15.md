@@ -178,3 +178,17 @@
 | SagaProcessor 单条失败隔离：foreach 包 try-catch，失败 Saga 记录后继续（租约靠 LeaseDuration 兜底），OCE 仍上抛 | SagaProcessor.cs |
 | IdentityGenerator 脆弱匹配：ToDisplayString 去 global:: 前缀后匹配（P3） | IdentityGenerator.cs |
 | Dispatcher unbox null 守卫：handler 返回 null 且 TResponse 值类型时抛明确异常而非 NRE（2 处） | Dispatcher.cs |
+
+### [x] 第六轮（同日末）— 第三次全量评审修复
+
+**P1×2**：JSONB Include/IncludedBy 单引号注入面（值路径补 EscapeSqlLiteral 双重转义）；OutboxDomainEventInterceptor 补 sync SavingChanges/SavedChanges/SaveChangesFailed 三覆写（sync SaveChanges 不再静默丢事件）。
+
+**降级修复×1**：Pipeline RecordsAffected 多结果集循环内累加重复计数 → 排空后读一次聚合值。
+
+**P2×12**：指标反弹定案（注释修正 + FanOut 语义声明）；FTS Escape 拆标识符/字面量两语义；PG 三姊妹 host:port 编码（MultiHost/ReadWriteRouter/Extensions 统一）；MemoryPack catalog 与 serializer 替换语义对称；SagaProcessor 租约释放取消路径对称（终态写入不响应取消）；IUnitOfWork 回滚改 None；EventId 冲突误译防护（EFCore+Dapper 用 Matches 判断版本仍满足则原样上抛）；零拷贝真化（IVT 补 PalORM + RehydrateFromBytes）；MySQL legacy 真修（Scoped 工厂按连接串创建新连接）；解压输出上限 64MB（System CopyWithLimit + Native 后置校验）；Inbox 僵尸接管 CAS（status<>'Processing' 守卫）；ToMySqlParameter 无偏移 UTC 格式。
+
+**P3×4**：Notifier catch 内 Delay OCE 逃逸；RabbitMQ exchange 声明缓存；PalOrmUnitOfWork Dispose 回滚扩 DbException；FanOutStep MaxConcurrency 下界校验。
+
+**裁决×1**：RequeueDead retry_count 保留（既有测试固化 + PD14 对齐）——运维干预 API 语义定案。
+
+**系统**：PD19 入库（修条件表达式前验证变量全部写入点）；V7 口径 27 模式。

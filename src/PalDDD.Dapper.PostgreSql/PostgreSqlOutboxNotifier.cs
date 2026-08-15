@@ -168,7 +168,10 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
                 // 指数退避：1s → 2s → 4s → 8s → 最大 30s
                 var delay = Math.Min(30_000, 1_000 * (int)Math.Pow(2, _reconnectAttempts));
                 _reconnectAttempts++;
-                await Task.Delay(TimeSpan.FromMilliseconds(delay), stoppingToken).ConfigureAwait(false);
+                // P3 修复：catch 体内的 Task.Delay 若因停机取消，OCE 从 catch 块逃逸绕过
+                // 同级 OCE catch——包 try 使退避期间的取消静默退出循环（外层 while 条件已含 token 判定）
+                try { await Task.Delay(TimeSpan.FromMilliseconds(delay), stoppingToken).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
             }
         }
     }

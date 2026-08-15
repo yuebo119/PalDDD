@@ -25,6 +25,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     private readonly IConnection _connection;
     private readonly IChannel _channel;
     private readonly IPalLogger<RabbitMqBroker> _logger;
+    // P3 修复：已声明的 exchange 集合——声明幂等但避免每发布一次 AMQP 往返
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _declaredExchanges = new();
 
     public RabbitMqBroker(
         IConnection connection,
@@ -56,7 +58,11 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         ArgumentOutOfRangeException.ThrowIfEqual(messageId, default);
 
         var exchange = descriptor.Name;
-        await _channel.ExchangeDeclareAsync(exchange, ExchangeType.Fanout, durable: true, cancellationToken: ct);
+        // P3 修复：声明只做一次（幂等但每发布多一次 AMQP 往返）
+        if (_declaredExchanges.TryAdd(exchange, 0))
+        {
+            await _channel.ExchangeDeclareAsync(exchange, ExchangeType.Fanout, durable: true, cancellationToken: ct);
+        }
 
         var body = Serializer.Serialize(message, descriptor);
         await _channel.BasicPublishAsync(

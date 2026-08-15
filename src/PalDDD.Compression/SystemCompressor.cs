@@ -8,6 +8,25 @@ internal static class DecompressionGuard
 {
     /// <summary>压缩输入安全上限（8MB）——合法消息负载压缩后极少超过此量级。</summary>
     internal const int MaxCompressedInputBytes = 8 * 1024 * 1024;
+
+    /// <summary>解压输出安全上限（64MB）——gzip 最大膨胀比约 1032:1，8MB 输入理论上可
+    /// 膨胀至 8GB；64MB 覆盖合法消息负载解压后的量级，超限抛 IOException 防炸内存。</summary>
+    internal const int MaxOutputBytes = 64 * 1024 * 1024;
+
+    /// <summary>带上限的流拷贝——超限抛 IOException（防高膨胀率炸弹）。</summary>
+    internal static void CopyWithLimit(Stream source, MemoryStream destination)
+    {
+        var buffer = new byte[81920];
+        long total = 0;
+        int read;
+        while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            total += read;
+            if (total > MaxOutputBytes)
+                throw new IOException($"解压输出超过安全上限 {MaxOutputBytes:N0} 字节（疑似解压炸弹）。");
+            destination.Write(buffer, 0, read);
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -111,7 +130,7 @@ internal sealed class GZipCompressor : ICompressor
         using var output = new MemoryStream();
         using var gzip = new GZipStream(input, CompressionMode.Decompress);
 
-        gzip.CopyTo(output);
+        DecompressionGuard.CopyWithLimit(gzip, output); // P2 修复：输出上限防膨胀炸弹
         return output.ToArray();
     }
 
@@ -158,7 +177,7 @@ internal sealed class DeflateCompressor : ICompressor
         using var output = new MemoryStream();
         using var deflate = new DeflateStream(input, CompressionMode.Decompress);
 
-        deflate.CopyTo(output);
+        DecompressionGuard.CopyWithLimit(deflate, output); // P2 修复：输出上限防膨胀炸弹
         return output.ToArray();
     }
 

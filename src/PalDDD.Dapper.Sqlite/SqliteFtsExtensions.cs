@@ -45,7 +45,7 @@ public static class SqliteFts
         CREATE VIRTUAL TABLE IF NOT EXISTS {Escape(indexName)} USING fts5(
             type,
             payload,
-            content='{Escape(sourceTable)}',
+            content='{EscapeLiteral(sourceTable)}',
             content_rowid='id'
         );
 
@@ -70,7 +70,7 @@ public static class SqliteFts
         CREATE VIRTUAL TABLE IF NOT EXISTS {Escape(indexName)} USING fts5(
             event_name,
             payload,
-            content='{Escape(sourceTable)}',
+            content='{EscapeLiteral(sourceTable)}',
             content_rowid='global_position'
         );
 
@@ -123,7 +123,10 @@ public static class SqliteFts
 
     // ── 辅助 ──
 
-    private static string Escape(string s) => s.Replace("\"", "\"\"");
+    // P2 修复（转义语义拆分）：标识符用双引号包裹（本方法）；单引号字面量内文用
+    // EscapeLiteral（单引号翻倍）。此前 content='...' 在单引号字面量内用双引号转义——上下文错配。
+    private static string Escape(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
+    private static string EscapeLiteral(string s) => s.Replace("'", "''");
 
     private static string EscapeFts(string s) => s.Replace("'", "''");
 }

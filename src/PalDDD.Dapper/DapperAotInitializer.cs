@@ -43,4 +43,12 @@ internal static class DapperAotInitializer
 
     /// <summary>将 DateTimeOffset 转为 string，适配 SQLite TEXT 列参数绑定。</summary>
     public static object ToSqliteParameter(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// MySQL 方言时间参数（P2 修复）：DATETIME(6) 列与带时区偏移的 "O" 格式比较依赖
+    /// session tz 换算（8.0.19+ 才支持偏移字面量），非 UTC session 时租约判定漂移——
+    /// 统一用无偏移 UTC "yyyy-MM-dd HH:mm:ss.ffffff"。
+    /// </summary>
+    public static object ToMySqlParameter(DateTimeOffset value)
+        => value.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.ffffff", CultureInfo.InvariantCulture);
 }

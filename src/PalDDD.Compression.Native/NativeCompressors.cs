@@ -7,6 +7,9 @@ internal static class DecompressionGuard
 {
     /// <summary>压缩输入安全上限（8MB）——合法消息负载压缩后极少超过此量级。</summary>
     internal const int MaxCompressedInputBytes = 8 * 1024 * 1024;
+
+    /// <summary>解压输出安全上限（64MB，对齐 System 版）——超限抛 IOException。</summary>
+    internal const int MaxDecompressedOutputBytes = 64 * 1024 * 1024;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -46,7 +49,10 @@ internal sealed class LZ4Compressor : ICompressor
         if (compressed.Length > DecompressionGuard.MaxCompressedInputBytes)
             throw new System.IO.InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
-        return LZ4.Decompress(compressed);
+        var result = LZ4.Decompress(compressed);
+        if (result.Length > DecompressionGuard.MaxDecompressedOutputBytes)
+            throw new System.IO.InvalidDataException($"解压输出 {result.Length:N0} 字节超过安全上限（疑似解压炸弹）。");
+        return result;
     }
 
     private static int MapLevel(CompressionLevel level) => level switch
@@ -88,7 +94,10 @@ internal sealed class ZStandardCompressor : ICompressor
         if (compressed.Length > DecompressionGuard.MaxCompressedInputBytes)
             throw new System.IO.InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
-        return Zstandard.Decompress(compressed);
+        var result = Zstandard.Decompress(compressed);
+        if (result.Length > DecompressionGuard.MaxDecompressedOutputBytes)
+            throw new System.IO.InvalidDataException($"解压输出 {result.Length:N0} 字节超过安全上限（疑似解压炸弹）。");
+        return result;
     }
 
     private static int MapLevel(CompressionLevel level) => level switch
@@ -140,7 +149,10 @@ internal sealed class OpenZLCompressor : ICompressor
         if (compressed.Length > DecompressionGuard.MaxCompressedInputBytes)
             throw new System.IO.InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
-        return Zstandard.Decompress(compressed);
+        var result = Zstandard.Decompress(compressed);
+        if (result.Length > DecompressionGuard.MaxDecompressedOutputBytes)
+            throw new System.IO.InvalidDataException($"解压输出 {result.Length:N0} 字节超过安全上限（疑似解压炸弹）。");
+        return result;
     }
 
     private static int MapLevel(CompressionLevel level) => level switch

@@ -146,8 +146,14 @@ public static class PostgreSqlServiceCollectionExtensions
         NpgsqlDataSource? reader = null;
         if (readerConnectionStrings.Length > 0)
         {
+            // PD17 姊妹统一：端口编码进 Host 条目（非 5432 副本端口不丢弃）
             var hosts = readerConnectionStrings.Select(cs =>
-                new NpgsqlConnectionStringBuilder(cs).Host ?? "").Where(h => h.Length > 0);
+            {
+                var sb = new NpgsqlConnectionStringBuilder(cs);
+                return sb.Host is null || sb.Host.Length == 0
+                    ? ""
+                    : (sb.Port != 5432 ? $"{sb.Host}:{sb.Port}" : sb.Host);
+            }).Where(h => h.Length > 0);
             var readerCs = new NpgsqlConnectionStringBuilder(writerConnectionString)
             {
                 Host = string.Join(",", hosts),

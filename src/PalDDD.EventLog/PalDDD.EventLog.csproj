@@ -4,5 +4,5 @@
     <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
   </ItemGroup>
 
-  <ItemGroup><InternalsVisibleTo Include="PalDDD.EventLog.EFCore"/><InternalsVisibleTo Include="PalDDD.Dapper"/></ItemGroup>
+  <ItemGroup><InternalsVisibleTo Include="PalDDD.EventLog.EFCore"/><InternalsVisibleTo Include="PalDDD.Dapper"/><InternalsVisibleTo Include="PalDDD.PalORM"/></ItemGroup>
 </Project>

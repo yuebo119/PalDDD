@@ -123,7 +123,11 @@ public static class SqlTemplates
     /// 💡 原子操作：UPDATE 在同一个 SQL 中完成状态变更和计数递增。
     /// </summary>
     public const string InboxStartProcessing =
-        "UPDATE inbox_messages SET status='Processing',attempts=attempts+1,processing_started_at=@now WHERE id=@id AND status<>'Processed'";
+        "UPDATE inbox_messages SET status='Processing',attempts=attempts+1,processing_started_at=@now WHERE id=@id AND status<>'Processed' AND status<>'Processing'";
+    // P2 修复（僵尸接管 CAS）：原 WHERE 仅排除 Processed——两个并发消费者同见"Processing 已超时"
+    // 都会 rows=1 并返回非 null，同一消息并发双处理。加 status<>'Processing' 守卫：
+    // 第一个抢到后第二个 UPDATE 0 行返回 null。超时接管（stuck Processing 重置）由调用方
+    // 先显式 MarkFailed 释放后再 TryStart 达成。
 
     /// <summary>标记消息处理成功</summary>
     public const string InboxMarkProcessed =

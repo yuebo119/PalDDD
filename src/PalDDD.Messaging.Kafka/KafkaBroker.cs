@@ -123,8 +123,10 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                     }
                     catch (ConsumeException ex)
                     {
-                        // 消费错误（消息格式损坏、反序列化失败等）：记录错误后继续消费下一条，
-                        // 不终止整个订阅（ITM-008）。与 RabbitMQ nack+requeue 模式对齐。
+                        // 消费错误：记录后继续下一条（ITM-008）。
+                        // ⚠️ 投递语义声明（三轮评审纠偏）：EnableAutoCommit 默认 true——失败消息
+                        // 的 offset 照常自动提交，本路径为 at-most-once（消息丢失），不是重投。
+                        // 与 RabbitMQ 的 nack 路径语义不同（那条是 requeue:false 显式弃置）。
                         // 若为分区末尾/短暂网络抖动，Consume 会自动重试或等待新消息。
                         _logger.Error(ex, $"Kafka consume error on {topic} @ {_consumerConfig.GroupId}, continuing consumption");
                         // 退避防止边缘场景（如 topic 不存在）的 CPU 空转。

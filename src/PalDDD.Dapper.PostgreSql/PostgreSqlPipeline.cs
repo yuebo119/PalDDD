@@ -59,27 +59,24 @@ public sealed class PostgreSqlPipeline : IAsyncDisposable
     // ── 执行 ──
 
     /// <summary>执行管道中所有命令（单次网络往返）</summary>
-    /// <returns>受影响总行数</returns>
+    /// <returns>受影响总行数（跨全部语句聚合，Npgsql 文档语义）</returns>
     public async Task<int> ExecuteAsync(CancellationToken ct = default)
     {
         if (_batch.BatchCommands.Count == 0) return 0;
 
         await _connection.OpenAsync(ct).ConfigureAwait(false);
         await using var reader = await _batch.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        int total = 0;
 
-        do
+        // 排空全部结果集（读循环不可省略——未读完不能 NextResult）
+        while (await reader.ReadAsync(ct)) { }
+        while (await reader.NextResultAsync(ct).ConfigureAwait(false))
         {
-            // 排空当前结果集（读循环不可省略——未读完不能 NextResult）
             while (await reader.ReadAsync(ct)) { }
-            // ITM-068：UPDATE/INSERT 类命令无结果行，受影响行数在 RecordsAffected；
-            // SELECT 类为 -1（不参与计数）。此前按结果集行数统计，写命令恒返回 0。
-            if (reader.RecordsAffected >= 0)
-                total += reader.RecordsAffected;
         }
-        while (await reader.NextResultAsync(ct).ConfigureAwait(false));
 
-        return total;
+        // 三轮评审修正：Npgsql 的 RecordsAffected 是跨全部语句的聚合值——
+        // 不得在多结果集循环内累加（重复计数）。排空后读一次即总受影响行数。
+        return reader.RecordsAffected >= 0 ? reader.RecordsAffected : 0;
     }
 
     /// <summary>清空已添加的命令，重用管道</summary>

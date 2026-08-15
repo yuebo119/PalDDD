@@ -56,6 +56,21 @@ public sealed class OutboxDomainEventInterceptor(
     }
 
     /// <inheritdoc />
+    /// <para>P1 修复：sync SaveChanges() 路径——此前只覆写 async 版，应用调 sync 版时
+    /// 领域事件静默不写 Outbox 且不清理。本覆写与 async 版逻辑一致。</para>
+    public override InterceptionResult<int> SavingChanges(
+        DbContextEventData eventData,
+        InterceptionResult<int> result)
+    {
+        ArgumentNullException.ThrowIfNull(eventData);
+
+        _pending.Clear();
+        DomainEventCollector.Collect(eventData.Context, _pending);
+        WriteEventsToOutbox(_pending);
+        return base.SavingChanges(eventData, result);
+    }
+
+    /// <inheritdoc />
     public override async ValueTask<int> SavedChangesAsync(
         SaveChangesCompletedEventData eventData,
         int result,
@@ -69,12 +84,33 @@ public sealed class OutboxDomainEventInterceptor(
     }
 
     /// <inheritdoc />
+    /// <para>P1 修复：sync SaveChanges() 成功路径的事件清理（与 async 版对齐）。</para>
+    public override int SavedChanges(SaveChangesCompletedEventData eventData, int result)
+    {
+        ArgumentNullException.ThrowIfNull(eventData);
+
+        DomainEventCollector.Clear(eventData.Context);
+        _pending.Clear();
+        return base.SavedChanges(eventData, result);
+    }
+
+    /// <inheritdoc />
     public override async Task SaveChangesFailedAsync(DbContextErrorEventData eventData, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(eventData);
 
         _pending.Clear();
         await base.SaveChangesFailedAsync(eventData, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    /// <para>P1 修复：sync SaveChanges() 失败路径（与 async 版对齐）。</para>
+    public override void SaveChangesFailed(DbContextErrorEventData eventData)
+    {
+        ArgumentNullException.ThrowIfNull(eventData);
+
+        _pending.Clear();
+        base.SaveChangesFailed(eventData);
     }
 
     private void WriteEventsToOutbox(IReadOnlyList<Core.DomainEvent> events)

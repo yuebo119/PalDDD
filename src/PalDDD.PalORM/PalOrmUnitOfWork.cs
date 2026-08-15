@@ -81,7 +81,7 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
         if (_transaction is not null)
         {
             try { await _transaction.RollbackAsync(); }
-            catch (InvalidOperationException) { /* 事务已提交/回滚 */ }
+            catch (Exception ex) when (ex is InvalidOperationException or System.Data.Common.DbException) { /* 事务已提交/回滚 */ }
             await _transaction.DisposeAsync();
             _transaction = null;
             _session.UseTransaction(null);

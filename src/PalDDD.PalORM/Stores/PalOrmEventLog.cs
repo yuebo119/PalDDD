@@ -138,7 +138,9 @@ public class PalOrmEventLog<TProvider> : IEventLog
                 ParseUlid(row.CorrelationId), ParseUlid(row.CausationId),
                 row.TraceParent, row.TraceState);
 
-        return RecordedEvent.Rehydrate(
+        // P2 修复（零拷贝真化）：Rehydrate 会 ToArray 复制 payload/metadata；
+        // InternalsVisibleTo 补 PalORM 后走 RehydrateFromBytes（真零拷贝，与 EFCore/StoredEvent 同路径）
+        return RecordedEvent.RehydrateFromBytes(
             streamName, row.StreamVersion, row.GlobalPosition, row.RecordedAt,
             row.EventId, row.EventName, row.SchemaVersion, row.ContentType,
             row.Payload, row.Metadata, audit);

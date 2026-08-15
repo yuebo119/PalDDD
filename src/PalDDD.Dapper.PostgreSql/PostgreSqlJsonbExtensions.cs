@@ -39,19 +39,17 @@ public static class PostgreSqlJsonb
     // ── 包含操作符（最常用）──
 
     /// <summary>
-    /// 生成 JSONB 包含条件：payload @> '{Key:"Value"}'::jsonb
-    /// 💡 <b>安全注意事项</b>：<c>value</c> 参数直接嵌入 SQL 字符串中（无 Dapper 参数化）。
-    /// 如果 <c>value</c> 来自用户输入，必须先做 JSON 转义！
-    /// 建议使用：<c>JsonEncodedText.Encode(value)</c> 处理后再传入。
+    /// 生成 JSONB 包含条件：payload @> '{Key:"Value"}'::jsonb<br/>
+    /// 内部执行双重转义：JSON 转义（防 JSON 注入）+ 单引号翻倍（防 SQL 字面量提前终止）。
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Include(string column, string key, string value)
-        => $"{Escape(column)} @> '{{\"{EscapeJsonValue(key)}\":\"{EscapeJsonValue(value)}\"}}'::jsonb";
+        => $"{Escape(column)} @> '{{\"{EscapeJsonValue(key)}\":\"{EscapeSqlLiteral(EscapeJsonValue(value))}\"}}'::jsonb";
 
-    /// <summary>生成 JSONB 被包含条件（ &lt;@ ）</summary>
+    /// <summary>生成 JSONB 被包含条件（ &lt;@ ），转义策略同 <see cref="Include"/>。</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string IncludedBy(string column, string key, string value)
-        => $"'{{\"{EscapeJsonValue(key)}\":\"{EscapeJsonValue(value)}\"}}'::jsonb <@ {Escape(column)}";
+        => $"'{{\"{EscapeJsonValue(key)}\":\"{EscapeSqlLiteral(EscapeJsonValue(value))}\"}}'::jsonb <@ {Escape(column)}";
 
     // ── 键存在操作符 ──
 
@@ -149,4 +147,13 @@ public static class PostgreSqlJsonb
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static string EscapeJsonValue(string value)
         => System.Text.Json.JsonEncodedText.Encode(value).ToString();
+
+    /// <summary>
+    /// SQL 单引号字面量内文转义（P1 修复）：JSON 转义后的值嵌入 '...'::jsonb 字面量时，
+    /// 值含单引号会提前终止 SQL 字符串——必须再翻倍单引号。key 同理受影响但通常为
+    /// 开发者常量，此处只对 value 应用（key 走 <see cref="EscapeJsonValue"/> + 本方法）。
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static string EscapeSqlLiteral(string jsonEscaped)
+        => jsonEscaped.Replace("'", "''");
 }

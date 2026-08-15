@@ -146,7 +146,10 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
         {
             var msg = _messages.FirstOrDefault(m => m.Id == messageId && m.Status == OutboxStatus.Dead);
             if (msg is null) return ValueTask.FromResult(0);
-            // retry_count 保留失败历史，不重置
+            // 📐 P2 定案（三轮评审裁决）：retry_count 保留失败历史不重置（既有测试固化 +
+            // PalORM 版 PD14 对齐）。语义：RequeueDeadAsync 是运维干预 API——重排后
+            // GetPendingMessagesAsync 的 RetryCount < maxRetryCount 过滤仍生效，调用方
+            // （运维工具）需确保 maxRetryCount > 消息当前 RetryCount 才能被拾取。
             msg.Status = OutboxStatus.Pending;
             msg.ProcessedAt = null;
             msg.Error = $"requeued by {retriedBy} at {now:O}";

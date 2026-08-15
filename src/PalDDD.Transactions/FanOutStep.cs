@@ -68,6 +68,7 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
         if (items.Count == 0)
             return new([], Array.Empty<(TResult?, Exception)>());
 
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxConcurrency); // P3 修复：0 时全部子任务挂起
         using var semaphore = new SemaphoreSlim(MaxConcurrency);
         var results = new TResult?[items.Count];
         // P2 定案（可空结果过滤）：以完成标记收集而非非空过滤——TResult 为可空引用类型

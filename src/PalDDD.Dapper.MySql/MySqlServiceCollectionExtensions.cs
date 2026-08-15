@@ -92,7 +92,10 @@ public static class MySqlServiceCollectionExtensions
         if (applyOptimization)
             MySqlPerformanceOptimizer.Optimize(connection);
 
-        services.AddScoped(_ => connection); // P3 修复：Obsolete 路径同样改 Scoped（MySqlConnection 非线程安全）
+        // P2 真修（三轮评审发现此前假修）：闭包共享同一 MySqlConnection 实例，线程安全未修。
+        // Scoped 工厂按连接串为每个 scope 创建新连接。
+        var cs = connection.ConnectionString;
+        services.AddScoped(_ => new MySqlConnector.MySqlConnection(cs));
         services.AddSingleton<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<MySqlConnection>());
 
         return services;

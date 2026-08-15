@@ -23,7 +23,10 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.TryAddSingleton<IMessageCatalog>(_ =>
+        // P2 修复（目录对称）：serializer 用 AddSingleton（替换语义）而 catalog 用 TryAdd
+        // ——先 Json 后 MemoryPack 时序列化器换了但 catalog 还是 Json 扩展注册的旧目录，
+        // 两个配置回调中后者被静默丢弃。目录与序列化器同为替换语义（后注册者生效）。
+        services.AddSingleton<IMessageCatalog>(_ =>
         {
             var builder = new MessageCatalogBuilder();
             configureCatalog?.Invoke(builder);

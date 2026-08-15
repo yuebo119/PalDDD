@@ -340,8 +340,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
                     throw aggEx;
                 }
 
-                // P1-1 修复：与 Normal 路径（result.Status == Completed）对齐——此前 `!=`
-                // 使 FanOut/ChildSaga 在"未完成"时计数、真正完成时不计数，指标语义反向
+                // 指标修正（三轮评审反弹终结）：FanOut/ChildSaga 步骤不写 Status——
+                // saga 完成由用户回调（如 ApplyOutput 设 Completed）或后续步骤决定。
+                // 与 Normal 路径同判 current.Status == Completed：用户回调设置了完成态
+                // 则计数；FanOutStep 从不写 Status 时本指标不触发是正确行为。
                 if (!wasCompleted && current.Status == SagaStatus.Completed)
                     PalMetrics.SagaCompleted.Add(1);
 
@@ -426,8 +428,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 // Apply child output back to parent
                 childStep.ApplyOutput(current, finalChildState);
 
-                // P1-1 修复：与 Normal 路径（result.Status == Completed）对齐——此前 `!=`
-                // 使 FanOut/ChildSaga 在"未完成"时计数、真正完成时不计数，指标语义反向
+                // 指标修正（三轮评审反弹终结）：FanOut/ChildSaga 步骤不写 Status——
+                // saga 完成由用户回调（如 ApplyOutput 设 Completed）或后续步骤决定。
+                // 与 Normal 路径同判 current.Status == Completed：用户回调设置了完成态
+                // 则计数；FanOutStep 从不写 Status 时本指标不触发是正确行为。
                 if (!wasCompleted && current.Status == SagaStatus.Completed)
                     PalMetrics.SagaCompleted.Add(1);
 

@@ -57,7 +57,7 @@ public static class UnitOfWorkExtensions
         }
         catch (Exception original)
         {
-            try { await uow.RollbackAsync(ct).ConfigureAwait(false); }
+            try { await uow.RollbackAsync(CancellationToken.None).ConfigureAwait(false); }
             catch (Exception rollbackEx)
             {
                 throw new AggregateException(

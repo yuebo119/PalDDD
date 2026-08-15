@@ -99,7 +99,9 @@ public static class PostgreSqlReadWriteRouterExtensions
             foreach (var cs in replicaConnectionStrings)
             {
                 var sb = new NpgsqlConnectionStringBuilder(cs);
-                if (sb.Host is not null) hosts.Add(sb.Host);
+                // PD17 姊妹统一：端口编码进 Host 条目
+                if (sb.Host is not null)
+                    hosts.Add(sb.Port != 5432 ? $"{sb.Host}:{sb.Port}" : sb.Host);
             }
 
             if (hosts.Count > 0)

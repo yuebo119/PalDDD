@@ -218,6 +218,11 @@ public abstract class EventLogDbContext(
 
             DetachAddedEvents();
             var currentVersion = await GetActualStreamVersionAsync(streamName, cancellationToken).ConfigureAwait(false);
+            // P2 修复（EventId 冲突误译）：版本仍满足期望说明不是流版本冲突
+            // 而是 EventId 唯一索引撞——重复事件 ID 是数据错误，原样上抛（转并发异常会让
+            // 盲目重试的调用方无限循环）
+            if (expectedVersion.Matches(currentVersion))
+                throw;
             throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion);
         }
 
