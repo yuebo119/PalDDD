@@ -45,6 +45,9 @@ public static class PostgreSqlPalOrmExtensions
         services.AddScoped<IPalOutboxStore, PostgreSqlOutboxStore>();
         services.AddScoped<IInboxStore, PostgreSqlInboxStore>();
         services.AddScoped(typeof(ISagaStateStore<>), typeof(PostgreSqlSagaStateStore<>));
+        // ⚠️ Saga Data 陷阱（四轮评审 P2）：此注册的 jsonTypeInfo 恒为 null——用户自定义 TState
+        // 字段不持久化（saga_data 列写 NULL）。需要 Saga 快照持久化的应用应手动注册
+        // ISagaStateStore<TState> 并传入 JsonTypeInfo<TState>。
         services.AddScoped<IEventLog, PostgreSqlEventLog>();
         services.AddScoped<IProjectionCheckpointStore, PostgreSqlProjectionCheckpointStore>();
         services.AddScoped<IIdempotencyStore, PostgreSqlIdempotencyStore>();

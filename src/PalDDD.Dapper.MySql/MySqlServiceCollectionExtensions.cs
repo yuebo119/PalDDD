@@ -96,7 +96,10 @@ public static class MySqlServiceCollectionExtensions
         // Scoped 工厂按连接串为每个 scope 创建新连接。
         var cs = connection.ConnectionString;
         services.AddScoped(_ => new MySqlConnector.MySqlConnection(cs));
-        services.AddSingleton<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<MySqlConnection>());
+        // P2 修复（captive dependency）：移除 singleton→scoped 桥接——root 单例捕获 scoped
+        // MySqlConnection 导致全进程共享一条非线程安全连接。DbConnection 需要者应从 scope 内
+        // 解析 MySqlConnection（C# 无法转型桥接泛型注册，改注册工厂供 Scoped 消费方使用）
+        services.AddScoped<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<MySqlConnection>());
 
         return services;
     }

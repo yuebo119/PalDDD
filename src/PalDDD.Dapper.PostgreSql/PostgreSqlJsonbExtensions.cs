@@ -90,7 +90,9 @@ public static class PostgreSqlJsonb
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractTextByPath(string column, params string[] path)
     {
-        var p = string.Join(",", path.Select(k => $"'{EscapeLiteral(k)}'"));
+        // P2 修复（四轮评审：六轮 EscapeLiteral 引入的语法错误）：PG path 数组格式为
+        // '{a,b}'——元素不带单引号；对元素内的单引号做转义即可
+        var p = string.Join(",", path.Select(k => k.Replace("'", "\\")));
         return $"{Escape(column)} #>> '{{{p}}}'";
     }
 
@@ -98,7 +100,9 @@ public static class PostgreSqlJsonb
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractJsonByPath(string column, params string[] path)
     {
-        var p = string.Join(",", path.Select(k => $"'{EscapeLiteral(k)}'"));
+        // P2 修复（四轮评审：六轮 EscapeLiteral 引入的语法错误）：PG path 数组格式为
+        // '{a,b}'——元素不带单引号；对元素内的单引号做转义即可
+        var p = string.Join(",", path.Select(k => k.Replace("'", "\\")));
         return $"{Escape(column)} #> '{{{p}}}'";
     }
 

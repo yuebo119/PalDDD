@@ -36,6 +36,7 @@ public sealed class DapperInboxStore : IInboxStore
 {
     private readonly DbConnection _connection;
     private readonly DapperSqlDialect _dialect;
+    private readonly DapperDbType _dbType;
     private readonly DbTransaction? _transaction;
 
     /// <param name="transaction">可选共享事务（用于 UnitOfWork 模式）</param>
@@ -44,6 +45,7 @@ public sealed class DapperInboxStore : IInboxStore
         ArgumentNullException.ThrowIfNull(connection);
         _connection = connection;
         _dialect = DapperSqlDialect.For(dbType);
+        _dbType = dbType;
         _transaction = transaction;
     }
 
@@ -53,7 +55,7 @@ public sealed class DapperInboxStore : IInboxStore
     {
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         var insertedId = await c.QuerySingleOrDefaultAsync<long?>(_dialect.InboxInsert,
-            new { c = consumerName, m = messageId, now = DapperAotInitializer.ToSqliteParameter(now) }, _transaction).ConfigureAwait(false);
+            new { c = consumerName, m = messageId, now = ToTimeParam(now) }, _transaction).ConfigureAwait(false);
         if (insertedId.HasValue)
         {
             return new InboxMessage
@@ -81,7 +83,7 @@ public sealed class DapperInboxStore : IInboxStore
 
             var rows = await c.ExecuteAsync(
                 SqlTemplates.InboxStartProcessing,
-                new { now = DapperAotInitializer.ToSqliteParameter(now), id = existing.Id }, _transaction).ConfigureAwait(false);
+                new { now = ToTimeParam(now), id = existing.Id }, _transaction).ConfigureAwait(false);
             if (rows == 0) return null;
 
             existing.Status = InboxStatus.Processing;
@@ -99,7 +101,7 @@ public sealed class DapperInboxStore : IInboxStore
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         await c.ExecuteAsync(
             SqlTemplates.InboxMarkProcessed,
-            new { at = DapperAotInitializer.ToSqliteParameter(processedAt), id = message.Id }, _transaction).ConfigureAwait(false);
+            new { at = ToTimeParam(processedAt), id = message.Id }, _transaction).ConfigureAwait(false);
     }
 
     public async ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
@@ -112,6 +114,12 @@ public sealed class DapperInboxStore : IInboxStore
     }
 
     /// <summary>确保连接已打开（异步版本），避免线程池阻塞</summary>
+    /// <summary>P2 修复（ToMySqlParameter 接线）：按方言选择时间参数格式。</summary>
+    private object ToTimeParam(DateTimeOffset value)
+        => _dbType == DapperDbType.MySql
+            ? DapperAotInitializer.ToMySqlParameter(value)
+            : DapperAotInitializer.ToSqliteParameter(value);
+
     private async ValueTask<DbConnection> EnsureOpenAsync(CancellationToken ct = default)
     {
         var c = _connection;

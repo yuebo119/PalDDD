@@ -89,6 +89,7 @@ public sealed class DapperEventLog : IEventLog
         };
 
         long firstGlobalPos = 0;
+        long lastGlobalPos = 0; // P1 修复（四轮评审）：循环内跟踪，替代算术推导
         for (int i = 0; i < events.Count; i++)
         {
             var evt = events[i];
@@ -127,10 +128,11 @@ public sealed class DapperEventLog : IEventLog
             }
 
             if (i == 0) firstGlobalPos = pos;
+            lastGlobalPos = pos; // P1 修复（四轮评审，PD17）：循环内每次更新，不用算术推导（并发下 GlobalPosition 非连续）——对齐 PalORM 版同方法
         }
 
         return new AppendEventsResult(
-            streamName, firstVersion, version - 1, firstGlobalPos, firstGlobalPos + events.Count - 1);
+            streamName, firstVersion, version - 1, firstGlobalPos, lastGlobalPos);
     }
 
     public async IAsyncEnumerable<RecordedEvent> ReadStreamAsync(

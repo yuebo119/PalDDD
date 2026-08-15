@@ -112,9 +112,11 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         }
 
         // 超时或 Failed —— 尝试抢占（手写 SQL，避免 [ConcurrencyCheck] 干扰）
-        // status<>'Processed' 守卫；attempts 原子自增
+        // P1 修复（四轮评审，PD17）：补 status<>'Processing' CAS 守卫——此前仅排除 Processed，
+        // 两个并发消费者同见"Processing 已超时"均 rows=1 均返回非 null，同一消息并发双处理。
+        // 与 Dapper 版 SqlTemplates.InboxStartProcessing 对称（六轮已修 Dapper 侧，此处遗漏）。
         var leaseAffected = await Session.ExecuteAsync(
-            $"UPDATE inbox_messages SET status = {statusProcessing}, attempts = attempts + 1, processing_started_at = {now}, last_error = NULL WHERE id = {existing.Id} AND status <> {(int)InboxStatus.Processed}",
+            $"UPDATE inbox_messages SET status = {statusProcessing}, attempts = attempts + 1, processing_started_at = {now}, last_error = NULL WHERE id = {existing.Id} AND status <> {(int)InboxStatus.Processed} AND status <> {statusProcessing}",
             ct);
         if (leaseAffected == 0) return null;
 

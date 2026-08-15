@@ -94,7 +94,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         var messages = await conn.QueryAsync<OutboxMessage>(
             new CommandDefinition(
                 SqlTemplates.OutboxSelectPending,
-                new { status = OutboxStatus.Pending.ToString(), now = DapperAotInitializer.ToSqliteParameter(now), maxRetryCount, n = batchSize },
+                new { status = OutboxStatus.Pending.ToString(), now = ToTimeParam(now), maxRetryCount, n = batchSize },
                 _transaction, cancellationToken: ct)).ConfigureAwait(false);
         return messages.AsList();
     }
@@ -127,7 +127,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             var msgs = await conn.QueryAsync<OutboxMessage>(
                 new CommandDefinition(
                     SqlTemplates.OutboxLeaseUpdate + $"({leaseSubSql}) RETURNING *",
-                    new { owner, until = DapperAotInitializer.ToSqliteParameter(until), now = DapperAotInitializer.ToSqliteParameter(now), maxRetryCount, n = batchSize },
+                    new { owner, until = ToTimeParam(until), now = ToTimeParam(now), maxRetryCount, n = batchSize },
                     _transaction, cancellationToken: ct)).ConfigureAwait(false);
             return msgs.AsList();
         }
@@ -136,14 +136,14 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             await conn.ExecuteAsync(
                 new CommandDefinition(
                     SqlTemplates.OutboxLeaseUpdate + $"({leaseSubSql})",
-                    new { owner, until = DapperAotInitializer.ToSqliteParameter(until), now = DapperAotInitializer.ToSqliteParameter(now), maxRetryCount, n = batchSize },
+                    new { owner, until = ToTimeParam(until), now = ToTimeParam(now), maxRetryCount, n = batchSize },
                     _transaction, cancellationToken: ct)).ConfigureAwait(false);
 
             // 🔴 P0 修复：按租约标识回读，不重新评估子查询
             var msgs = await conn.QueryAsync<OutboxMessage>(
                 new CommandDefinition(
                     SqlTemplates.OutboxSelectByLease,
-                    new { owner, until = DapperAotInitializer.ToSqliteParameter(until) },
+                    new { owner, until = ToTimeParam(until) },
                     _transaction, cancellationToken: ct)).ConfigureAwait(false);
             return msgs.AsList();
         }
@@ -221,7 +221,16 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     /// 确保数据库连接已打开（异步版本，避免线程池阻塞）。
     /// 连接生命周期由 DI 容器管理的 Scoped DbConnection 控制，此处不负责关闭。
     /// </summary>
-    private async ValueTask<DbConnection> EnsureOpenAsync(CancellationToken ct = default)
+    /// <summary>
+        /// P2 修复（四轮评审 ToMySqlParameter 接线）：按方言选择时间参数格式——
+        /// MySQL DATETIME(6) 列与带偏移 "O" 格式比较依赖 session tz，统一无偏移 UTC。
+        /// </summary>
+        private object ToTimeParam(DateTimeOffset value)
+            => _dbType == DapperDbType.MySql
+                ? DapperAotInitializer.ToMySqlParameter(value)
+                : DapperAotInitializer.ToSqliteParameter(value);
+
+        private async ValueTask<DbConnection> EnsureOpenAsync(CancellationToken ct = default)
     {
         var conn = _connection;
         if (conn.State != ConnectionState.Open) await conn.OpenAsync(ct).ConfigureAwait(false);

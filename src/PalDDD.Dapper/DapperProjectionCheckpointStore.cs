@@ -15,6 +15,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
     private readonly DbConnection _connection;
     private readonly DbTransaction? _transaction;
     private readonly string _insertSql;
+    private readonly DapperDbType _dbType;
 
     /// <param name="transaction">可选共享事务（用于 UnitOfWork 模式）。</param>
     public DapperProjectionCheckpointStore(
@@ -26,6 +27,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         _connection = connection;
         _transaction = transaction;
         _insertSql = dbType == DapperDbType.MySql ? InsertMySql : InsertDefault;
+        _dbType = dbType;
     }
 
     public async ValueTask<ProjectionCheckpoint?> GetAsync(

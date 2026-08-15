@@ -39,44 +39,46 @@ public static class SqliteFts
 
     // ── 建表 ──
 
-    /// <summary>创建 Outbox 消息 FTS5 索引（索引 type + payload）</summary>
+    /// <summary>
+    /// 创建 Outbox 消息 FTS5 索引（索引 type + payload）。<br/>
+    /// ⚠️ <b>P1 修复（四轮评审探针实证）</b>：FTS5 external content 表要求 rowid 为 INTEGER，
+    /// 但 outbox_messages 的 id 是 TEXT/Ulid——此方法生成的 DDL 执行时触发器插入 rowid 即
+    /// datatype mismatch。<b>仅适用于含 INTEGER 主键的表</b>（如 events 表的 global_position）。
+    /// 对 TEXT 主键表请勿使用；如需全文索引 TEXT 主键表，应改用独立的 FTS 表+显式关联。
+    /// </summary>
+    /// <param name="sourceTable">源表名（必须含 INTEGER 主键列 id）</param>
+    /// <param name="indexName">FTS5 索引名</param>
     public static string CreateOutboxIndex(string sourceTable, string indexName = OutboxIndex)
-        => $"""
-        CREATE VIRTUAL TABLE IF NOT EXISTS {Escape(indexName)} USING fts5(
-            type,
-            payload,
-            content='{EscapeLiteral(sourceTable)}',
-            content_rowid='id'
-        );
+        => CreateFtsIndex(sourceTable, indexName, "type", "payload", "id");
 
-        -- 触发器：源表 INSERT/UPDATE/DELETE 自动同步 FTS5 索引
-        CREATE TRIGGER IF NOT EXISTS trg_{Escape(indexName)}_ai AFTER INSERT ON {Escape(sourceTable)} BEGIN
-            INSERT INTO {Escape(indexName)}(rowid, type, payload) VALUES (NEW.id, NEW.type, NEW.payload);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS trg_{Escape(indexName)}_ad AFTER DELETE ON {Escape(sourceTable)} BEGIN
-            INSERT INTO {Escape(indexName)}({Escape(indexName)}, rowid, type, payload) VALUES('delete', OLD.id, OLD.type, OLD.payload);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS trg_{Escape(indexName)}_au AFTER UPDATE ON {Escape(sourceTable)} BEGIN
-            INSERT INTO {Escape(indexName)}({Escape(indexName)}, rowid, type, payload) VALUES('delete', OLD.id, OLD.type, OLD.payload);
-            INSERT INTO {Escape(indexName)}(rowid, type, payload) VALUES (NEW.id, NEW.type, NEW.payload);
-        END;
-        """;
-
-    /// <summary>创建事件日志 FTS5 索引（索引 event_name + payload）</summary>
+    /// <summary>创建事件日志 FTS5 索引（索引 event_name + payload，rowid=global_position INTEGER ✅）</summary>
     public static string CreateEventLogIndex(string sourceTable, string indexName = EventLogIndex)
+        => CreateFtsIndex(sourceTable, indexName, "event_name", "payload", "global_position");
+
+    /// <summary>
+    /// 通用 FTS5 external content 索引构建（P1 修复：触发器名不再嵌套引号标识符——
+    /// 此前 trg_{"name"}_ai 形式在名字中部含双引号导致 SQLite 语法错误，探针实证）。
+    /// </summary>
+    private static string CreateFtsIndex(string sourceTable, string indexName, string col1, string col2, string rowidColumn)
         => $"""
         CREATE VIRTUAL TABLE IF NOT EXISTS {Escape(indexName)} USING fts5(
-            event_name,
-            payload,
+            {col1},
+            {col2},
             content='{EscapeLiteral(sourceTable)}',
-            content_rowid='global_position'
+            content_rowid='{rowidColumn}'
         );
 
-        CREATE TRIGGER IF NOT EXISTS trg_{Escape(indexName)}_ai AFTER INSERT ON {Escape(sourceTable)} BEGIN
-            INSERT INTO {Escape(indexName)}(rowid, event_name, payload)
-            VALUES (NEW.global_position, NEW.event_name, NEW.payload);
+        CREATE TRIGGER IF NOT EXISTS {indexName}_ai AFTER INSERT ON {Escape(sourceTable)} BEGIN
+            INSERT INTO {Escape(indexName)}(rowid, {col1}, {col2}) VALUES (NEW.{rowidColumn}, NEW.{col1}, NEW.{col2});
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS {indexName}_ad AFTER DELETE ON {Escape(sourceTable)} BEGIN
+            INSERT INTO {Escape(indexName)}({Escape(indexName)}, rowid, {col1}, {col2}) VALUES('delete', OLD.{rowidColumn}, OLD.{col1}, OLD.{col2});
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS {indexName}_au AFTER UPDATE ON {Escape(sourceTable)} BEGIN
+            INSERT INTO {Escape(indexName)}({Escape(indexName)}, rowid, {col1}, {col2}) VALUES('delete', OLD.{rowidColumn}, OLD.{col1}, OLD.{col2});
+            INSERT INTO {Escape(indexName)}(rowid, {col1}, {col2}) VALUES (NEW.{rowidColumn}, NEW.{col1}, NEW.{col2});
         END;
         """;
 

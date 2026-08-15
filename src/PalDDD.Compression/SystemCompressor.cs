@@ -71,13 +71,20 @@ internal sealed class BrotliCompressor : ICompressor
         using var decoder = new BrotliDecoder();
         var buffer = new ArrayBufferWriter<byte>();
         var source = compressed;
+        long totalWritten = 0;
 
         while (true)
         {
             Span<byte> destination = buffer.GetSpan(Math.Max(4096, source.Length * 2));
             OperationStatus status = decoder.Decompress(source, destination, out int bytesConsumed, out int bytesWritten);
             buffer.Advance(bytesWritten);
+            totalWritten += bytesWritten;
             source = source.Slice(bytesConsumed);
+
+            // P1 修复（四轮评审）：Brotli 路径补输出上限——与 GZip/Deflate 的 CopyWithLimit
+            // 对称（此前六轮修复遗漏此分支，PD17 命中）
+            if (totalWritten > DecompressionGuard.MaxOutputBytes)
+                throw new IOException($"Brotli 解压输出超过安全上限 {DecompressionGuard.MaxOutputBytes:N0} 字节（疑似解压炸弹）。");
 
             if (status == OperationStatus.Done) break;
             if (status == OperationStatus.DestinationTooSmall) continue;

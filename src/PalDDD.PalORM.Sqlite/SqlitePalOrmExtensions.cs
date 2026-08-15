@@ -66,6 +66,9 @@ public static class SqlitePalOrmExtensions
         services.AddScoped<IPalOutboxStore, SqliteOutboxStore>();
         services.AddScoped<IInboxStore, SqliteInboxStore>();
         services.AddScoped(typeof(ISagaStateStore<>), typeof(SqliteSagaStateStore<>));
+        // ⚠️ Saga Data 陷阱（四轮评审 P2）：此注册的 jsonTypeInfo 恒为 null——用户自定义 TState
+        // 字段不持久化（saga_data 列写 NULL）。需要 Saga 快照持久化的应用应手动注册
+        // ISagaStateStore<TState> 并传入 JsonTypeInfo<TState>。
         services.AddScoped<IEventLog, SqliteEventLog>();
         services.AddScoped<IProjectionCheckpointStore, SqliteProjectionCheckpointStore>();
         services.AddScoped<IIdempotencyStore, SqliteIdempotencyStore>();
