@@ -114,11 +114,17 @@ public static class SqliteServiceCollectionExtensions
         // P2/P3 修复（十七轮）：改消费 SqlitePerformanceOptimizer 常量——消除魔法切片偏移
         // （原 sql["PRAGMA journal_mode=WAL;\n".Length..] 与 GetPragma 输出硬耦合，
         // 与 Optimizer.ApplyAsync 同款改造，双消费方单一来源）
+        // P3 修复（二十一轮）：WAL 确认声明落地——读 PRAGMA 返回值比对 "wal"，
+        // 失配抛异常（与 Optimizer.ApplyAsync 同款语义，同步路径版本）。
         if (level is SqliteOptimizeLevel.Production or SqliteOptimizeLevel.Light)
         {
             using var walCmd = connection.CreateCommand();
             walCmd.CommandText = SqlitePerformanceOptimizer.WalPragma;
-            walCmd.ExecuteNonQuery();
+            var walResult = walCmd.ExecuteScalar();
+            if (!string.Equals(walResult?.ToString(), "wal", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    $"PRAGMA journal_mode=WAL 未生效（返回 {walResult?.ToString() ?? "<null>"}）——"
+                    + "目标卷可能不支持 WAL（网络盘/只读卷）；WAL 依赖的并发读写语义不会成立。");
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = level == SqliteOptimizeLevel.Production

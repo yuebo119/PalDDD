@@ -55,33 +55,39 @@ public static class PostgreSqlAuditor
     /// <summary>为标准表创建审计触发器（INSERT/UPDATE/DELETE 全记录）</summary>
     public static string CreateAuditTrigger(string tableName, string pkColumn = "id")
     {
-        QuoteIdentifier(tableName, nameof(tableName));
-        QuoteIdentifier(pkColumn, nameof(pkColumn));
+        // P3 修复（二十一轮）：DDL 标识符位置（ON 表名 / NEW.列名 / 函数名 / 触发器名）
+        // 改消费 QuoteIdentifier 返回的双引号包裹标识符——此前 bare/EscapeLiteral 混用：
+        // 表名走单引号翻倍语义（标识符位置错配，含大写/关键字时 fold 或语法错误），
+        // 函数名/触发器名裸拼接（含大写时 CREATE 与 DROP 的 fold 语义不一致）。
+        var quotedTable = QuoteIdentifier(tableName, nameof(tableName));
+        var quotedPk = QuoteIdentifier(pkColumn, nameof(pkColumn));
+        var funcName = QuoteIdentifier($"audit_{tableName}", nameof(tableName));
+        var triggerName = QuoteIdentifier($"trg_audit_{tableName}", nameof(tableName));
 
         return $"""
-        CREATE OR REPLACE FUNCTION audit_{EscapeLiteral(tableName)}() RETURNS TRIGGER AS $$
+        CREATE OR REPLACE FUNCTION {funcName}() RETURNS TRIGGER AS $$
         BEGIN
             IF TG_OP = 'INSERT' THEN
                 INSERT INTO audit_log(table_name, row_id, operation, new_data)
-                VALUES ('{EscapeLiteral(tableName)}', NEW.{EscapeLiteral(pkColumn)}::TEXT, 'INSERT', row_to_json(NEW)::jsonb);
+                VALUES ('{EscapeLiteral(tableName)}', NEW.{quotedPk}::TEXT, 'INSERT', row_to_json(NEW)::jsonb);
                 RETURN NEW;
             ELSIF TG_OP = 'UPDATE' THEN
                 INSERT INTO audit_log(table_name, row_id, operation, old_data, new_data)
-                VALUES ('{EscapeLiteral(tableName)}', NEW.{EscapeLiteral(pkColumn)}::TEXT, 'UPDATE',
+                VALUES ('{EscapeLiteral(tableName)}', NEW.{quotedPk}::TEXT, 'UPDATE',
                         row_to_json(OLD)::jsonb, row_to_json(NEW)::jsonb);
                 RETURN NEW;
             ELSIF TG_OP = 'DELETE' THEN
                 INSERT INTO audit_log(table_name, row_id, operation, old_data)
-                VALUES ('{EscapeLiteral(tableName)}', OLD.{EscapeLiteral(pkColumn)}::TEXT, 'DELETE', row_to_json(OLD)::jsonb);
+                VALUES ('{EscapeLiteral(tableName)}', OLD.{quotedPk}::TEXT, 'DELETE', row_to_json(OLD)::jsonb);
                 RETURN OLD;
             END IF;
         END;
         $$ LANGUAGE plpgsql;
 
-        DROP TRIGGER IF EXISTS trg_audit_{EscapeLiteral(tableName)} ON {EscapeLiteral(tableName)};
-        CREATE TRIGGER trg_audit_{EscapeLiteral(tableName)}
-            AFTER INSERT OR UPDATE OR DELETE ON {EscapeLiteral(tableName)}
-            FOR EACH ROW EXECUTE FUNCTION audit_{EscapeLiteral(tableName)}();
+        DROP TRIGGER IF EXISTS {triggerName} ON {quotedTable};
+        CREATE TRIGGER {triggerName}
+            AFTER INSERT OR UPDATE OR DELETE ON {quotedTable}
+            FOR EACH ROW EXECUTE FUNCTION {funcName}();
         """;
     }
 
@@ -92,7 +98,8 @@ public static class PostgreSqlAuditor
     public static string AppendAuditLog(string tableName, string rowId, string operation,
         string? oldDataJson = null, string? newDataJson = null, string? changedBy = null)
     {
-        QuoteIdentifier(tableName, nameof(tableName));
+        // P3 修复（二十一轮）：表名在本语句处于单引号字面量位置（VALUES 值）——仅消费校验，丢弃包裹返回值
+        _ = QuoteIdentifier(tableName, nameof(tableName));
 
         return $"""
         INSERT INTO audit_log (table_name, row_id, operation, old_data, new_data, changed_by)
@@ -105,7 +112,8 @@ public static class PostgreSqlAuditor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string AuditHistory(string tableName, string rowId)
     {
-        QuoteIdentifier(tableName, nameof(tableName));
+        // P3 修复（二十一轮）：表名在本语句处于单引号字面量位置（WHERE 比较值）——仅消费校验，丢弃包裹返回值
+        _ = QuoteIdentifier(tableName, nameof(tableName));
 
         return $"SELECT * FROM audit_log WHERE table_name = '{EscapeLiteral(tableName)}' AND row_id = '{EscapeLiteral(rowId)}' ORDER BY changed_at DESC";
     }
@@ -126,9 +134,13 @@ public static class PostgreSqlAuditor
     /// <summary>
     /// 校验并引用 SQL 标识符（表名/列名）。<br/>
     /// 只允许字母、数字、下划线，必须以下划线或字母开头。<br/>
-    /// 验证通过后用双引号包裹。
+    /// 验证通过后用双引号包裹并返回。<br/>
+    /// P3 修复（二十一轮）：此前返回 void——doc 声称"验证通过后用双引号包裹"但从未包裹，
+    /// 调用点在标识符位置只能退回 EscapeLiteral（字面量语义）。现返回真包裹的标识符，
+    /// DDL 标识符位置消费返回值；字面量位置的调用点（AppendAuditLog/AuditHistory 的表名）
+    /// 仅消费校验、显式丢弃返回值。
     /// </summary>
-    private static void QuoteIdentifier(string identifier, string paramName)
+    private static string QuoteIdentifier(string identifier, string paramName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(identifier, paramName);
 
@@ -138,6 +150,9 @@ public static class PostgreSqlAuditor
         for (int i = 1; i < identifier.Length; i++)
             if (!IsIdentifierPart(identifier[i]))
                 throw new ArgumentException("SQL 标识符只能包含字母、数字或下划线。", paramName);
+
+        // 字符集校验已排除双引号，直接包裹即可（无翻倍必要）
+        return $"\"{identifier}\"";
     }
 
     /// <summary>

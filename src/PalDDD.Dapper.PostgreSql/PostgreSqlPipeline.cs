@@ -20,8 +20,8 @@
 //
 // 使用示例：
 //   // AOT 安全方式（推荐）
-//   await using var pipe = new PostgreSqlPipeline(conn).ConfigureAwait(false);
-//   pipe.Add("UPDATE outbox SET status='Pending' WHERE id=@id",
+//   await using var pipe = new PostgreSqlPipeline(conn);   // P3 修复（二十一轮）：删 .ConfigureAwait(false)——
+//   pipe.Add("UPDATE outbox SET status='Pending' WHERE id=@id",   // await using 的构造表达式非 Task，该调用不合法
 //            new NpgsqlParameter("@id", 42));
 //   await pipe.ExecuteAsync().ConfigureAwait(false);
 // ─────────────────────────────────────────────────────────────

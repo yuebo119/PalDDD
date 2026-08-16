@@ -80,7 +80,9 @@ public static class DapperBulkCopy
 
         if (items.Count == 0) return 0;
 
-        EnsureOpen(conn);
+        // P3 修复（二十一轮）：EnsureOpen → EnsureOpenAsync——同步 Open 在 UI 线程/受限
+        // 同步上下文下阻塞，且 CancellationToken 无法传导（取消要等 Open 完成后才生效）。
+        await EnsureOpenAsync(conn, ct).ConfigureAwait(false);
 
         // 💡 switch 表达式按 DapperDbType 枚举分发 — 编译时已知值，零反射
         return dbType switch
@@ -155,6 +157,18 @@ public static class DapperBulkCopy
         IReadOnlyList<T> items, Func<T, object?[]> extractor, CancellationToken ct)
     {
         var myConn = (MySqlConnection)conn;
+
+        // P3 修复（二十一轮）：AllowLoadLocalInfile 前提从注释升级为运行时检测——
+        // MySqlBulkCopy 走 LOAD DATA LOCAL INFILE 协议，MySqlConnector 连接串缺
+        // AllowLoadLocalInfile=true 时 WriteToServerAsync 抛晦涩的协议异常（或静默零行）。
+        // 不自动开启（该选项涉及服务端 local_infile 权限面，须由调用方显式决策）。
+        // 检测放在 MySQL 批量路径入口而非 AddPalMySqlDataSource DI 入口——前提仅批量路径
+        // 需要，DI 入口抛异常会误伤不使用 bulk copy 的应用启动。
+        if (!new MySqlConnectionStringBuilder(myConn.ConnectionString).AllowLoadLocalInfile)
+            throw new InvalidOperationException(
+                "MySQL 批量导入要求连接字符串包含 'AllowLoadLocalInfile=True'（MySqlBulkCopy 走 LOAD DATA LOCAL INFILE 协议）。" +
+                "请在构造 MySqlConnection/MySqlDataSource 的连接串中显式添加该选项，并确认 MySQL 服务端 local_infile=1。" +
+                "本库不自动开启该选项——它扩大服务端可访问的文件面，须由调用方显式决策。");
 
         // 构建 DataTable — MySqlBulkCopy 的唯一数据源格式
         // 注意：DataTable 在现代 .NET（net6.0+）中已 AOT 兼容
@@ -304,9 +318,11 @@ public static class DapperBulkCopy
         => IsIdentifierStart(c) || c is >= '0' and <= '9';
 
     /// <summary>确保连接已打开（幂等操作）</summary>
-    private static void EnsureOpen(DbConnection conn)
+    /// <remarks>P3 修复（二十一轮）：EnsureOpen 同步版改异步——OpenAsync(ct) 传导取消令牌，
+    /// 避免同步 Open 阻塞与取消延迟生效。</remarks>
+    private static async Task EnsureOpenAsync(DbConnection conn, CancellationToken ct)
     {
         if (conn.State != ConnectionState.Open)
-            conn.Open();
+            await conn.OpenAsync(ct).ConfigureAwait(false);
     }
 }

@@ -162,6 +162,9 @@ public sealed class DapperEventLog : IEventLog
         string streamName, long fromVersion = 0, int maxCount = int.MaxValue,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        // P3 修复（二十一轮）：补 fromVersion 非负守卫（对齐 EFCore/PalORM 版 ThrowIfLessThan(fromVersion, 0)）
+        ArgumentOutOfRangeException.ThrowIfLessThan(fromVersion, 0);
+
         // 💡 RecordedEvent 的构造函数是 internal 且属性只读，Dapper 运行时无法直接物化。
         // 通过 EventLogRow DTO（public 无参构造 + public setters）读取，再映射到 RecordedEvent。
         var rows = await _connection.QueryAsync<EventLogRow>(
@@ -175,6 +178,9 @@ public sealed class DapperEventLog : IEventLog
         long fromPosition = 0, int maxCount = int.MaxValue,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        // P3 修复（二十一轮）：补 fromPosition 非负守卫（对齐 EFCore/PalORM 版 ThrowIfLessThan(fromPosition, 0)）
+        ArgumentOutOfRangeException.ThrowIfLessThan(fromPosition, 0);
+
         var rows = await _connection.QueryAsync<EventLogRow>(
             new CommandDefinition(EventLogSql.ReadAll, new { from = fromPosition, max = maxCount }, _transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
 

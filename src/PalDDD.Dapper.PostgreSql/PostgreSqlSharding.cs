@@ -157,9 +157,16 @@ public sealed class ShardedDataSourceManager : IAsyncDisposable
 
     public int ShardCount => _shards.Length;
 
-    /// <param name="connectionStrings">每个分片的连接字符串（索引对应分片 ID）</param>
+    /// <param name="connectionStrings">每个分片的连接字符串（索引对应分片 ID，不得为空数组）</param>
+    /// <exception cref="ArgumentException">connectionStrings 为 null 或空数组</exception>
     public ShardedDataSourceManager(string[] connectionStrings, string applicationName = "Pal.DDD-Shard")
     {
+        // P3 修复（二十一轮）：拒绝空数组——此前空数组可构造成功，失败延迟到首次
+        // GetShard 时才暴露（且 GetShard 的越界报错对空数组输出 "[-1]" 范围，误导排障）。
+        ArgumentNullException.ThrowIfNull(connectionStrings);
+        if (connectionStrings.Length == 0)
+            throw new ArgumentException("connectionStrings 不得为空数组——至少需要一个分片连接串。", nameof(connectionStrings));
+
         _shards = new NpgsqlDataSource[connectionStrings.Length];
         for (int i = 0; i < connectionStrings.Length; i++)
         {

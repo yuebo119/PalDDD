@@ -191,9 +191,26 @@ public sealed class AddProjectionContextPrefixCodeFix : CodeFixProvider
         var typeDecl = node.FirstAncestorOrSelf<TypeDeclarationSyntax>();
         if (typeDecl is null) return;
 
-        var boundedContextAttr = typeDecl.AttributeLists
-            .SelectMany(al => al.Attributes)
-            .FirstOrDefault(a => a.Name.ToString().Contains("BoundedContext"));
+        // P3 修复（二十一轮）：attribute 识别改符号级——原 a.Name.ToString().Contains(
+        // "BoundedContext") 文本匹配对 using 别名（[BC]）漏识别（fix 不注册）、对含
+        // 同名后缀的其他 attribute 误识别；改 GetSymbolInfo 解析 attribute 构造器符号
+        // 后按 ContainingType 的命名空间 + MetadataName 匹配（镜像 analyzer 的
+        // MetadataNameEquals 语义）
+        var semanticModel = await context.Document.GetSemanticModelAsync(context.CancellationToken).ConfigureAwait(false);
+        if (semanticModel is null) return;
+
+        AttributeSyntax? boundedContextAttr = null;
+        foreach (var attribute in typeDecl.AttributeLists.SelectMany(al => al.Attributes))
+        {
+            if (semanticModel.GetSymbolInfo(attribute, context.CancellationToken).Symbol is not IMethodSymbol ctor)
+                continue;
+            if (ctor.ContainingType is { MetadataName: "BoundedContextAttribute" } attrType
+                && attrType.ContainingNamespace?.ToDisplayString() == "PalDDD.Core")
+            {
+                boundedContextAttr = attribute;
+                break;
+            }
+        }
         if (boundedContextAttr?.ArgumentList?.Arguments.FirstOrDefault()?.Expression is not LiteralExpressionSyntax ctxLiteral)
             return;
 
@@ -223,6 +240,25 @@ public sealed class AddProjectionContextPrefixCodeFix : CodeFixProvider
                 return exprLiteral;
             if (prop.Initializer?.Value is LiteralExpressionSyntax initLiteral)
                 return initLiteral;
+            // P3 修复（二十一轮）：镜像 analyzer TryGetProjectionName 的四形式——getter
+            // 表达式体 / getter 语句体 return 字面量此前查不到（诊断照报但 fix 不注册，
+            // 用户无法快速修复）；补 accessor 遍历后四种声明形式均可自动补前缀
+            foreach (var accessor in prop.AccessorList?.Accessors ?? [])
+            {
+                if (!accessor.IsKind(SyntaxKind.GetAccessorDeclaration))
+                    continue;
+
+                if (accessor.ExpressionBody?.Expression is LiteralExpressionSyntax getterLiteral)
+                    return getterLiteral;
+                if (accessor.Body is null)
+                    continue;
+
+                foreach (var statement in accessor.Body.Statements)
+                {
+                    if (statement is ReturnStatementSyntax { Expression: LiteralExpressionSyntax returnLiteral })
+                        return returnLiteral;
+                }
+            }
         }
         return null;
     }
@@ -267,8 +303,15 @@ public sealed class MatchEventNameCodeFix : CodeFixProvider
         var diagnosticSpan = diagnostic.Location.SourceSpan;
         var node = root.FindNode(diagnosticSpan);
 
-        // 找到 EventName 属性中的字符串字面量
-        var literal = node.DescendantNodesAndSelf()
+        // 找到 EventName 属性声明中的字符串字面量
+        // P3 修复（二十一轮）：诊断定位回退到类型声明（EventName 声明缺失/不可解析）时，
+        // 原实现取类型内第一个字符串字面量——可能是 [BoundedContext]/[GenerateMessage]
+        // 的参数或无关成员的字面量，fix 会改写无辜字符串；仅在定位点确实落在
+        // EventName 属性声明内时才注册 fix
+        if (node.FirstAncestorOrSelf<PropertyDeclarationSyntax>() is not { Identifier.Text: "EventName" } eventNameDecl)
+            return;
+
+        var literal = eventNameDecl.DescendantNodes()
             .OfType<LiteralExpressionSyntax>()
             .FirstOrDefault(l => l.IsKind(SyntaxKind.StringLiteralExpression));
         if (literal is null) return;

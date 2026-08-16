@@ -87,6 +87,12 @@ public static class PostgreSqlJsonb
         => $"{Escape(column)} -> '{EscapeLiteral(key)}'";
 
     /// <summary>路径提取文本：payload #>> '{path,to,key}'</summary>
+    /// <param name="path">
+    /// 路径段数组。⚠️ 每段不得含逗号（P3·二十一轮 doc 声明）——PG path 数组格式为
+    /// <c>'{a,b}'</c>（逗号分隔、元素不带外层引号），元素内逗号会被解释为数组分隔符，
+    /// 静默查错嵌套位置；同理不得含花括号 <c>{ }</c>（数组字面量定界符）。
+    /// 含逗号/花括号的键请改用原生参数化 SQL。段内单引号已按 SQL 标准翻倍处理（八轮修复）。
+    /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractTextByPath(string column, params string[] path)
     {
@@ -98,6 +104,10 @@ public static class PostgreSqlJsonb
     }
 
     /// <summary>路径提取 JSON：payload #> '{path,to,key}'</summary>
+    /// <param name="path">
+    /// 路径段数组（同 <see cref="ExtractTextByPath"/> 的 path 约束：每段不得含逗号/花括号——
+    /// P3·二十一轮 doc 声明，元素内逗号是 PG path 数组分隔符，静默拆段查错位置）。
+    /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractJsonByPath(string column, params string[] path)
     {

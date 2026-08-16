@@ -39,13 +39,16 @@ public static class SqliteRowFactory
     {
         if (reader.IsDBNull(ordinal)) return default;
         var value = reader.GetValue(ordinal);
+        // P3 修复（二十一轮）：未知类型兜底从静默 return default 改抛 InvalidCastException——
+        // 对齐 SqliteTypeHandlers.Parse 语义（类型失配是数据契约错误，静默 default(Ulid)
+        // 会把脏值伪装成合法 Ulid 往下游传）。
         return value switch
         {
             PalUlid u => u,
             string s => PalUlid.Parse(s),
             byte[] b when b.Length == 16 => PalUlid.New(new ReadOnlySpan<byte>(b)),
             Guid g => PalUlid.New(g),
-            _ => default
+            _ => throw new InvalidCastException($"Cannot convert {value.GetType()} to Ulid")
         };
     }
 
@@ -54,12 +57,13 @@ public static class SqliteRowFactory
     {
         if (reader.IsDBNull(ordinal)) return Guid.Empty;
         var value = reader.GetValue(ordinal);
+        // P3 修复（二十一轮）：同 ParseUlid——静默 Guid.Empty 改抛（空 Guid 与合法值无法区分）
         return value switch
         {
             Guid g => g,
             string s => Guid.Parse(s),
             byte[] bytes => new Guid(bytes),
-            _ => Guid.Empty
+            _ => throw new InvalidCastException($"Cannot convert {value.GetType()} to Guid")
         };
     }
 
@@ -68,12 +72,13 @@ public static class SqliteRowFactory
     {
         if (reader.IsDBNull(ordinal)) return default;
         var value = reader.GetValue(ordinal);
+        // P3 修复（二十一轮）：同 ParseUlid——静默 default(DateTimeOffset)（0001-01-01）改抛
         return value switch
         {
             DateTimeOffset dto => dto,
             DateTime dt => new DateTimeOffset(dt, TimeSpan.Zero),
             string s => DateTimeOffset.Parse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal),
-            _ => default
+            _ => throw new InvalidCastException($"Cannot convert {value.GetType()} to DateTimeOffset")
         };
     }
 }

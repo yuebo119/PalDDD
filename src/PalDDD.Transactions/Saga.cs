@@ -576,10 +576,11 @@ public abstract class Saga<TState> where TState : SagaState, new()
         {
             // P2 修复（八轮）：注册时捕获恢复派发闭包——ResumeAsync 到达决策时以决策为
             // 事件重新进入 ProcessEventAsync 管线。此前仅暂存决策且无人消费（恢复链路断裂）
+            // P3 修复（二十一轮）：不再传 step.DecisionType——RegisterInterrupted 已删除该
+            // 参数（下游字段只写不读的死状态，详见其注释）
             defaultManager.RegisterInterrupted(
                 current.SagaId,
                 step.InterruptReason,
-                step.DecisionType,
                 async (decision, dispatchCt) =>
                     await ProcessEventAsync(current, decision, dispatchCt).ConfigureAwait(false));
         }

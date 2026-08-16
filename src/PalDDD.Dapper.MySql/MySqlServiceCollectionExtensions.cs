@@ -34,7 +34,13 @@ public static class MySqlServiceCollectionExtensions
     ///   - 自动连接池管理 + 健康检查<br/>
     ///   - ILoggerFactory 日志集成<br/>
     ///   - OpenTelemetry 追踪（自动记录 SQL 执行）<br/>
-    ///   - DbDataSource 标准接口（.NET 7+ 通用抽象）
+    ///   - DbDataSource 标准接口（.NET 7+ 通用抽象）<br/>
+    /// ⚠️ <b>会话泄漏权衡（applyOptimization=true 时）</b>：连接串被显式追加
+    /// <c>ConnectionReset=false</c>（连接串键 "Reset Connections"）（否则 MySqlConnector 默认 ResetConnections=true，
+    /// 池取连接时会话已重置，SET SESSION 优化随归池即丢）。代价是同一 DataSource 池内的
+    /// 物理连接共享会话设置——优化参数对所有使用方生效，应用方自行执行的 SET SESSION
+    /// 变更同样会跨 scope 泄漏到池内其他使用方。若不能接受，传 applyOptimization=false
+    /// 并改在 MySQL 服务端（my.cnf）全局配置。
     /// </summary>
     /// <param name="connectionString">MySQL 连接字符串</param>
     /// <param name="applyOptimization">是否应用 InnoDB 性能优化（默认 true）</param>
@@ -44,6 +50,18 @@ public static class MySqlServiceCollectionExtensions
         bool applyOptimization = true)
     {
         ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(connectionString);
+
+        // P2 修复（二十一轮）：SET SESSION 传导前提——MySqlConnector 默认 ResetConnections=true，
+        // 从池中取出的连接会话已被重置（CHARACTER_SET_RESULTS / SQL_MODE 等恢复服务端默认），
+        // ApplySessionOptimization 打出的会话级优化随连接归池即丢，"首个连接上设置、后续复用连接
+        // 继承"的原假设不成立。此处显式关闭池会话重置，使会话设置在同一 DataSource 池的物理
+        // 连接上持久化——恰好是想要的传导语义（见上方 summary 的会话泄漏权衡声明）。
+        if (applyOptimization)
+            connectionString = new MySqlConnectionStringBuilder(connectionString)
+            {
+                ConnectionReset = false  // P2 修正（二十一轮主线程）：builder 属性真名是 ConnectionReset（连接串键 "Reset Connections" 的 C# 映射）
+            }.ConnectionString;
 
         var builder = new MySqlDataSourceBuilder(connectionString);
 
@@ -52,8 +70,8 @@ public static class MySqlServiceCollectionExtensions
 
         if (applyOptimization)
         {
-            // 在第一个从池中创建的连接上应用会话级性能优化
-            // SET SESSION 设置会随连接返回池而持久化（后续复用的连接也继承这些设置）
+            // 在第一个从池中创建的连接上应用会话级性能优化。
+            // 仅在 ResetConnections=false（上方已追加）时持久化到池内物理连接。
             ApplySessionOptimization(dataSource);
         }
 
@@ -79,8 +97,10 @@ public static class MySqlServiceCollectionExtensions
         // P3 修复（八轮评审）：Store 连接改从注册的 MySqlDataSource 取——AddPalDapperTransactions 的
         // DbConnection 工厂是 new MySqlConnection(cs)（走连接串全局池），而 ApplySessionOptimization 的
         // SET SESSION 打在 MySqlDataSource 私有池上，优化完全打不到 Store 实际使用的连接。
-        // 此处覆盖 DbConnection 注册（MS DI 后注册胜出），Store 统一从 DataSource 池取连接，
-        // 会话优化随池内物理连接复用传导到 Store。
+        // 此处覆盖 DbConnection 注册（MS DI 后注册胜出），Store 统一从 DataSource 池取连接。
+        // P2 勘正（二十一轮）：会话优化传导到 Store 的前提是池不重置会话——MySqlConnector 默认
+        // ResetConnections=true 会把该假设打掉，AddPalMySqlDataSource 现已在 applyOptimization=true
+        // 时显式设 Reset Connections=false（见其 summary 的会话泄漏权衡），传导语义方成立。
         services.AddScoped<System.Data.Common.DbConnection>(sp =>
             sp.GetRequiredService<System.Data.Common.DbDataSource>().CreateConnection());
 
@@ -182,7 +202,10 @@ public static class MySqlServiceCollectionExtensions
 
     /// <summary>
     /// 在从池中获取的第一个连接上应用会话级 InnoDB 性能优化。<br/>
-    /// 注意：SET SESSION 设置会随连接返回池而持久化，后续从同一物理连接派生的会话继承这些设置。<br/>
+    /// ⚠️ 传导前提（P2 勘正·二十一轮）：MySqlConnector 默认 Reset Connections=true——从池中
+    /// 取出的连接会话已被重置，SET SESSION 设置随连接归池即丢，并不会被后续会话继承。
+    /// 调用方（AddPalMySqlDataSource）已显式设 Reset Connections=false 使设置持久化到池内
+    /// 物理连接；直接调用本方法且未关闭会话重置时，优化在下一次取连接时即失效。<br/>
     /// 对于生产环境多连接场景，建议在 MySQL 服务端配置（my.cnf）中全局设置这些参数。
     /// </summary>
     private static void ApplySessionOptimization(MySqlDataSource dataSource)

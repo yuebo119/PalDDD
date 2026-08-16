@@ -15,6 +15,12 @@ namespace PalDDD.Transactions;
     Justification = "Outbox 需在继续处理批次前标记任意 broker 或序列化器失败，需捕获 Exception 基类。")]
 public sealed class OutboxBatchProcessor
 {
+    // P1 修复（二十一轮）：失败原因入库截断上限——Error 列上限 2048（OutboxDbContext），超长
+    // ex.Message 让 MarkDead/ReleaseForRetry 本身失败：ReleaseForRetry 路径 ExecuteUpdate 抛
+    // 截断异常中止整批（后续消息饿死）；MarkDead 路径毒实体滞留 ChangeTracker 使同批 MarkProcessed
+    // 全回滚（无限重发永不死信）。对齐 InboxProcessor.MaxFailureReasonLength（十七轮姊妹修复）。
+    internal const int MaxFailureReasonLength = 2000;
+
     private readonly IPalOutboxStore _store;
     private readonly Messaging.IMessageBroker _broker;
     private readonly Serialization.IMessageSerializer _serializer;
@@ -107,14 +113,18 @@ public sealed class OutboxBatchProcessor
                 // 确保计数与状态原子一致（P0 修复：消除增量-持久化窗口）。
                 // 退避延迟由 IRetryBackoffPolicy 计算（默认指数 2^n，上限 64s，可选抖动）。
                 var nextAttemptAt = now + options.RetryBackoffPolicy.ComputeDelay(msg.RetryCount + 1);
+                // P1 修复（二十一轮）：入库前截断（日志行保留完整消息）——机理见类头常量注释
+                var failureReason = ex.Message.Length <= MaxFailureReasonLength
+                    ? ex.Message
+                    : ex.Message[..MaxFailureReasonLength];
                 if (msg.RetryCount + 1 >= options.MaxRetryCount)
                 {
-                    _store.MarkDead(msg, ex.Message, now);
+                    _store.MarkDead(msg, failureReason, now);
                     checked { dead++; }
                 }
                 else
                 {
-                    _store.ReleaseForRetry(msg, ex.Message, nextAttemptAt);
+                    _store.ReleaseForRetry(msg, failureReason, nextAttemptAt);
                     checked { retried++; }
                 }
                 _logger.Warning($"Outbox: message {msg.Id} processing failed at retry {msg.RetryCount + 1}: {ex.Message}");

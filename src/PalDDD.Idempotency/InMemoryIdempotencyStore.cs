@@ -64,8 +64,22 @@ public sealed class InMemoryIdempotencyStore : IIdempotencyStore
                 else if (existing.Status == IdempotencyRecordStatus.Failed
                     || (existing.Status == IdempotencyRecordStatus.Processing && existing.LockedUntil <= now))
                 {
-                    existing.MarkProcessing(now.Add(policy.ProcessingTimeout), now.Add(policy.Retention), now);
-                    return ValueTask.FromResult<IdempotencyRecord?>(existing);
+                    // P3 修复（二十一轮）：抢占复用实例 → 新实例隔离（镜像 InMemoryProjectionCheckpointStore
+                    // 十七轮修法）——原路径对 existing 直接 MarkProcessing 后返回同一引用，被抢占的
+                    // 旧持有者仍持同一实例，其 MarkCompletedAsync/MarkFailedAsync 可通过
+                    // ReferenceEquals 守卫（守卫对"同一实例"恒放行，抢占失效）。改为：构造后继实例
+                    // （拷贝 OperationName/Key，Processing + 新租约/保留窗口；新实例的 Error/ResponsePayload
+                    // 天然为 null，等价 MarkProcessing 重置语义）+ 字典替换——旧引用自此不再是字典当前
+                    // 持有者，其标记被 IsCurrentLeaseHolder 守卫静默忽略（对齐 EFCore 版隔离语义）。
+                    var successor = new IdempotencyRecord(
+                        existing.OperationName,
+                        existing.Key,
+                        IdempotencyRecordStatus.Processing,
+                        now.Add(policy.ProcessingTimeout),
+                        now.Add(policy.Retention),
+                        now);
+                    _records[recordKey] = successor;
+                    return ValueTask.FromResult<IdempotencyRecord?>(successor);
                 }
                 else
                 {
@@ -98,7 +112,9 @@ public sealed class InMemoryIdempotencyStore : IIdempotencyStore
         {
             // P3 修复（八轮评审）：所有权/终态守卫——IdempotencyRecord 无 Revision 字段，以状态机
             // 守卫替代：仅字典当前实例且 Processing（本租约持有中）可标记，Completed 终态不可
-            // 翻转为 Failed、Failed 待 TryStartAsync 回收；过期清除/替换后的旧引用同样不生效。
+            // 翻转为 Failed、Failed 待 TryStartAsync 回收；过期清除/替换后的旧引用同样不生效
+            // （二十一轮起另含被 TryStartAsync 抢占的僵尸/失败旧持有者——抢占时已换新实例，
+            // 见其注释）。
             if (!IsCurrentLeaseHolder(record))
                 return ValueTask.CompletedTask;
 

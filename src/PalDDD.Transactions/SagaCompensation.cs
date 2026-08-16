@@ -114,6 +114,12 @@ internal sealed class SagaCompensation<TState>
             }
             catch (Exception ex)
             {
+                // P3 修复（二十一轮）：指标语义 doc 声明——SagaCompensationFailed 在补偿动作
+                // 抛异常的瞬间计数，度量的是"补偿动作失败发生"（每个失败步骤 +1，一次聚合
+                // 可多次计数），不是"失败结果已持久化/已保存"。刻意不与 SagaProcessor 的
+                // 状态保存链耦合（不在保存成功后再计数）：本执行器无从感知调用方的持久化
+                // 语义，动作发生即记账才能覆盖"保存前进程崩溃"的窗口；如需"已落盘的补偿
+                // 失败数"应在保存链路另行计数。
                 PalMetrics.SagaCompensationFailed.Add(1);
                 (failures ??= []).Add(ex);
             }

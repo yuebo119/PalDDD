@@ -218,6 +218,35 @@ public sealed class EventLogEfCoreTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
 
+    // P1 回归（二十一轮）：关系型 provider（SQLite in-memory）——StoredEvent 三个 Ulid 属性
+    // 曾无 value converter，ctx.Model 即抛"无法映射 Ulid"（InMemory-only 测试网掩盖）。
+    // 本测试堵盲区：模型构建 + 追加 + 读回全链在关系型 provider 下走通。
+    private static DbContextOptions<TestEventLogDbContext> CreateSqliteOptions()
+        => new DbContextOptionsBuilder<TestEventLogDbContext>()
+            .UseSqlite($"DataSource=file:mem{Guid.NewGuid():N}?mode=memory&cache=shared")
+            .Options;
+
+    [Test]
+    public async Task AppendAndReadAsync_OnRelationalProvider_WorksEndToEnd()
+    {
+        var options = CreateSqliteOptions();
+        await using (var writer = new TestEventLogDbContext(options))
+        {
+            await writer.Database.EnsureCreatedAsync();
+            await writer.AppendAsync(
+                "ordering-relational-1",
+                ExpectedStreamVersion.NoStream,
+                [CreateEvent(PalUlid.New(), "orders.order-submitted.v1", "relational-payload")]);
+        }
+
+        await using var reader = new TestEventLogDbContext(options);
+        var events = new List<RecordedEvent>();
+        await foreach (var e in reader.ReadStreamAsync("ordering-relational-1"))
+            events.Add(e);
+        await Assert.That(events.Count).IsEqualTo(1);
+        await Assert.That(events[0].EventName).IsEqualTo("orders.order-submitted.v1");
+    }
+
     private static EventData CreateEvent(PalUlid eventId, string name, string payload)
         => new(
             eventId,

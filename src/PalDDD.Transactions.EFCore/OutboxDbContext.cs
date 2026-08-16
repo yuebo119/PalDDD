@@ -76,7 +76,9 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
 
         message.ProcessedAt = deadAt;
         message.Status = OutboxStatus.Dead;
-        message.Error = failureReason;
+        // P1 修复（二十一轮）：存储层兜底截断——Error 列 HasMaxLength(2048)，超长让 SaveChanges
+        // 抛截断异常且毒实体滞留 ChangeTracker（对齐 InboxDbContext.MarkFailedAsync 十七轮防御）
+        message.Error = failureReason.Length > 2040 ? failureReason[..2040] : failureReason;
         message.NextAttemptAt = null;
         message.LockedBy = null;
         message.LockedUntil = null;

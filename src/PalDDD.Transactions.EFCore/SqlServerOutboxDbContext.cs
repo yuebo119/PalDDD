@@ -6,7 +6,13 @@ namespace PalDDD.Transactions;
 public abstract class SqlServerOutboxDbContext(DbContextOptions options) : OutboxDbContext(options)
 {
     /// <inheritdoc />
-    protected override string GetNowSql() => "SYSUTCDATETIME()";
+    /// <remarks>
+    /// P1 修复（二十一轮）：SYSDATETIMEOFFSET()（datetimeoffset）——原 SYSUTCDATETIME() 返回
+    /// datetime2，与 datetimeoffset 列（DateTimeOffset 映射）比较时按类型优先级隐式转换
+    /// 附加服务器本地偏移：服务器 tz≠UTC 时同 PG naive 时间戳一样产生租约漂移 [推断]。
+    /// datetimeoffset 间比较按 UTC 瞬时值，与服务器时区无关。
+    /// </remarks>
+    protected override string GetNowSql() => "SYSDATETIMEOFFSET()";
 
     /// <inheritdoc/>
     public override async ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(

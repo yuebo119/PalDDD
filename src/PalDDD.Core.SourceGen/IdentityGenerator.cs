@@ -46,6 +46,18 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    // P2 修复（二十一轮）：同一类型的多个 partial 声明均挂 [GenerateId]——
+    // ForAttributeWithMetadataName 每声明触发一次 transform，两个 candidate 算出
+    // 相同 hint，AddSource 同 hint 第二次调用抛 ArgumentException 使整个生成器
+    // 崩溃（连带丢失本生成器全部生成物）。重复声明报 PALID004，仅首个声明生成代码。
+    private static readonly DiagnosticDescriptor DuplicatePartialDeclaration = new(
+        "PALID004",
+        "GenerateId attribute declared on multiple partial declarations",
+        "Type '{0}' has [GenerateId] applied to multiple partial declarations. Apply the attribute to only one partial declaration.",
+        "PalDDD.IdentityGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var candidates = context.SyntaxProvider.ForAttributeWithMetadataName(
@@ -149,47 +161,73 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                     [.. containingDeclarations],
                     [.. containingNames],
                     normalizedSourceType,
-                    sourceType.Name is "Int32" or "Int64" && sourceType.ContainingNamespace?.ToDisplayString() == "System");
+                    sourceType.Name is "Int32" or "Int64" && sourceType.ContainingNamespace?.ToDisplayString() == "System",
+                    // P2 修复（二十一轮）：携带定位供 PALID004（重复 partial 声明）指示
+                    // 重复挂 attribute 的具体声明——不参与相等（位置随编辑漂移）
+                    Location: context.TargetNode.GetLocation());
             })
             .WithTrackingName("IdentityGenerator_Candidates")
             .Where(static info => info is not null)!;
 
-        context.RegisterSourceOutput(candidates, static (spc, info) =>
+        // P2 修复（二十一轮）：双 partial 声明崩溃——同一类型的两个 partial 声明均挂
+        // [GenerateId] 时 ForAttributeWithMetadataName 每声明触发一次 transform，两个
+        // candidate 计算出相同 hint，AddSource 同 hint 第二次调用抛 ArgumentException
+        // 使整个生成器崩溃。方案分支：评审建议闭包 HashSet，但 RegisterSourceOutput
+        // 回调在后续增量 pass 会对"值变化而 hint 不变"的条目重入（如 SourceType 从
+        // Guid 改 int），跨 pass 残留的 HashSet 会误报 PALID004 并漏生成代码；改用
+        // Collect() 后在单次回调内局部去重——去重状态只存在于一次调用内，无跨 pass 污染。
+        context.RegisterSourceOutput(candidates.Collect(), static (spc, infos) =>
         {
-            if (info.DiagnosticId is not null)
+            var seenHints = new HashSet<string>();
+            foreach (var info in infos)
             {
-                // 诊断分派（九轮）：PALID001=源类型白名单外；PALID002=声明形式非 partial record struct
-                // P3 修复（十七轮）：PALID003=泛型声明（自身或包含类型）暂不支持
-                switch (info.DiagnosticId)
+                if (info.DiagnosticId is not null)
                 {
-                    case "PALID002":
-                        spc.ReportDiagnostic(Diagnostic.Create(
-                            NonPartialRecordStructDeclaration,
-                            info.Location ?? Location.None,
-                            info.TypeName));
-                        break;
-                    case "PALID003":
-                        spc.ReportDiagnostic(Diagnostic.Create(
-                            GenericDeclarationNotSupported,
-                            info.Location ?? Location.None,
-                            info.TypeName));
-                        break;
-                    default:
-                        // P3 修复（八轮评审）：PALID001——非白名单 IdType 编译期报错，不生成代码
-                        spc.ReportDiagnostic(Diagnostic.Create(
-                            UnsupportedIdSourceType,
-                            info.Location ?? Location.None,
-                            info.TypeName,
-                            info.SourceType));
-                        break;
+                    // 诊断分派（九轮）：PALID001=源类型白名单外；PALID002=声明形式非 partial record struct
+                    // P3 修复（十七轮）：PALID003=泛型声明（自身或包含类型）暂不支持
+                    switch (info.DiagnosticId)
+                    {
+                        case "PALID002":
+                            spc.ReportDiagnostic(Diagnostic.Create(
+                                NonPartialRecordStructDeclaration,
+                                info.Location ?? Location.None,
+                                info.TypeName));
+                            break;
+                        case "PALID003":
+                            spc.ReportDiagnostic(Diagnostic.Create(
+                                GenericDeclarationNotSupported,
+                                info.Location ?? Location.None,
+                                info.TypeName));
+                            break;
+                        default:
+                            // P3 修复（八轮评审）：PALID001——非白名单 IdType 编译期报错，不生成代码
+                            spc.ReportDiagnostic(Diagnostic.Create(
+                                UnsupportedIdSourceType,
+                                info.Location ?? Location.None,
+                                info.TypeName,
+                                info.SourceType));
+                            break;
+                    }
+                    continue;
                 }
-                return;
-            }
 
-            var src = GenerateIdentityCode(info);
-            // P3 修复（八轮评审）：全局命名空间（Namespace == null）用 "_" 仅作 hint 名保底，
-            // 生成代码本身不再含 namespace 声明
-            spc.AddSource($"{info.Namespace ?? "_"}.{string.Join("_", info.ContainingNames)}_{info.TypeName}.g.cs", src);
+                var src = GenerateIdentityCode(info);
+                // P3 修复（八轮评审）：全局命名空间（Namespace == null）用 "_" 仅作 hint 名保底，
+                // 生成代码本身不再含 namespace 声明
+                var hint = $"{info.Namespace ?? "_"}.{string.Join("_", info.ContainingNames)}_{info.TypeName}.g.cs";
+                if (!seenHints.Add(hint))
+                {
+                    // P2 修复（二十一轮）：重复 [GenerateId] 声明——仅首个声明生成代码，
+                    // 其余报 PALID004 而非让 AddSource 抛 ArgumentException 崩溃
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        DuplicatePartialDeclaration,
+                        info.Location ?? Location.None,
+                        info.TypeName));
+                    continue;
+                }
+
+                spc.AddSource(hint, src);
+            }
         });
     }
 

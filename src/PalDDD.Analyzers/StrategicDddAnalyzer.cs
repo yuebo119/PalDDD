@@ -201,7 +201,12 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
             return;
 
         var boundedContext = TryGetAttribute(type, BoundedContextAttributeName);
-        if (IsDomainModelType(type) && boundedContext is null)
+        // P2 修复（二十一轮）：PDDD001 存在性检查沿基类链——[BoundedContext].Inherited=true
+        // （运行时反射对派生类可见），仅查直接声明时基类挂 attribute 的派生领域模型误报；
+        // 链上最近声明同时供 PDDD008/013/014 的 contextName 提取（PDDD002 仍只验直接声明，
+        // 派生类不重复报命名错误）
+        var chainBoundedContext = TryGetAttributeAlongBaseChain(type, BoundedContextAttributeName);
+        if (IsDomainModelType(type) && chainBoundedContext is null)
         {
             context.ReportDiagnostic(Diagnostic.Create(
                 MissingBoundedContext,
@@ -262,9 +267,11 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        if (boundedContext is not null && generateMessage is not null)
+        // P2 修复（二十一轮）：PDDD008 的 contextName 沿基类链取最近声明——派生事件
+        // 继承基类 [BoundedContext] 时消息名前缀校验照常生效（原直接声明判 null 直接跳过）
+        if (chainBoundedContext is not null && generateMessage is not null)
         {
-            var contextName = TryGetStringConstructorArgument(boundedContext);
+            var contextName = TryGetStringConstructorArgument(chainBoundedContext);
             var messageName = TryGetNamedStringArgument(generateMessage, "Name");
             var schemaVersion = TryGetNamedIntArgument(generateMessage, "SchemaVersion") ?? 1;
             if (schemaVersion < 1)
@@ -333,7 +340,8 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
                     name ?? string.Empty));
             }
 
-            var contextName = boundedContext is null ? null : TryGetStringConstructorArgument(boundedContext);
+            // P2 修复（二十一轮）：PDDD014 的 contextName 沿基类链取最近声明
+            var contextName = chainBoundedContext is null ? null : TryGetStringConstructorArgument(chainBoundedContext);
             if (IsStableName(name)
                 && IsStableName(contextName)
                 && !BelongsToBoundedContext(name!, contextName!))
@@ -351,7 +359,10 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
             // P2 修复（十七轮）：[BoundedContext] 沿基类链查找——GetAttributes 仅返回本类型
             // 直接声明的 attribute，而该 attribute 的 AttributeUsage.Inherited=true（未显式
             // 设置，默认继承），运行时反射在派生类可见基类声明；仅查直接声明会误报 PDDD004。
-            if (!type.IsSealed || !HasAttributeAlongBaseChain(type, BoundedContextAttributeName))
+            // P3 修复（二十一轮）：abstract 投影基类不再报 sealed 缺失——sealed 与 abstract
+            // 互斥（组合声明非法），shape 由最终 sealed 派生类消解（镜像 IsDomainEventType
+            // 的 abstract 排除）；上下文缺失仍在 abstract 上可消解，保持链检查。
+            if ((!type.IsSealed && !type.IsAbstract) || !HasAttributeAlongBaseChain(type, BoundedContextAttributeName))
             {
                 context.ReportDiagnostic(Diagnostic.Create(
                     InvalidProjectionHandlerShape,
@@ -368,7 +379,8 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
                     projectionName.Name ?? string.Empty));
             }
 
-            var contextName = boundedContext is null ? null : TryGetStringConstructorArgument(boundedContext);
+            // P2 修复（二十一轮）：PDDD013 的 contextName 沿基类链取最近声明
+            var contextName = chainBoundedContext is null ? null : TryGetStringConstructorArgument(chainBoundedContext);
             if (IsStableName(projectionName.Name)
                 && IsStableName(contextName)
                 && !BelongsToBoundedContext(projectionName.Name!, contextName!))
@@ -391,9 +403,14 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
            || InheritsFrom(type, AggregateRootName)
            || ImplementsInterface(type, DomainEventInterfaceName);
 
+    // P3 修复（二十一轮）：abstract 事件基类排除——PDDD005（缺 [GenerateMessage]）与
+    // PDDD012（未 sealed）在 abstract 上不可消解（sealed 与 abstract 互斥、契约由
+    // 最终 sealed 派生类声明），原实现误报；IsDomainModelType 不变（PDDD001 的
+    // abstract 基类由基类链查找消解，见 chainBoundedContext）
     private static bool IsDomainEventType(INamedTypeSymbol type)
-        => InheritsFrom(type, DomainEventName)
-           || ImplementsInterface(type, DomainEventInterfaceName);
+        => !type.IsAbstract
+           && (InheritsFrom(type, DomainEventName)
+               || ImplementsInterface(type, DomainEventInterfaceName));
 
     private static bool InheritsFrom(INamedTypeSymbol type, string metadataName)
     {
@@ -455,6 +472,24 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    // P2 修复（二十一轮）：沿 BaseType 链取最近声明的 attribute 实例——派生类未直接
+    // 声明时继承基类值（AttributeUsage.Inherited=true），多级链取离派生类最近的声明
+    // （镜像运行时 Attribute.GetCustomAttribute 的"最近声明胜出"语义）。供 PDDD001
+    // 存在性判断与 PDDD008/013/014 的 contextName 提取使用。
+    private static AttributeData? TryGetAttributeAlongBaseChain(INamedTypeSymbol type, string metadataName)
+    {
+        for (var current = type; current is not null; current = current.BaseType)
+        {
+            foreach (var attribute in current.GetAttributes())
+            {
+                if (attribute.AttributeClass is not null && MetadataNameEquals(attribute.AttributeClass, metadataName))
+                    return attribute;
+            }
+        }
+
+        return null;
     }
 
     private static int? TryGetNamedIntArgument(AttributeData attribute, string name)
@@ -557,56 +592,80 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
         // 基类事件）时原实现查不到，误报 NameMismatch。沿 BaseType 链逐层查找。
         for (var current = type; current is not null; current = current.BaseType)
         {
-            foreach (var member in current.GetMembers(propertyName))
-            {
-                if (member is not IPropertySymbol property
-                    || !property.IsStatic
-                    || property.Type.SpecialType != SpecialType.System_String)
-                {
-                    continue;
-                }
+            if (TryGetLiteralFromTypeMembers(current, propertyName, cancellationToken) is { } fromBase)
+                return fromBase;
+        }
 
-                foreach (var syntaxReference in property.DeclaringSyntaxReferences)
-                {
-                    var syntax = syntaxReference.GetSyntax(cancellationToken);
-                    if (syntax is not PropertyDeclarationSyntax declaration)
-                        continue;
-
-                    if (declaration.ExpressionBody?.Expression is LiteralExpressionSyntax expressionLiteral)
-                        return (expressionLiteral.Token.Value as string, expressionLiteral.GetLocation());
-
-                    if (declaration.Initializer?.Value is LiteralExpressionSyntax initializerLiteral)
-                        return (initializerLiteral.Token.Value as string, initializerLiteral.GetLocation());
-
-                    foreach (var accessor in declaration.AccessorList?.Accessors ?? [])
-                    {
-                        if (!accessor.IsKind(SyntaxKind.GetAccessorDeclaration))
-                            continue;
-
-                        if (accessor.ExpressionBody?.Expression is LiteralExpressionSyntax getterLiteral)
-                            return (getterLiteral.Token.Value as string, getterLiteral.GetLocation());
-
-                        if (accessor.Body is null)
-                            continue;
-
-                        foreach (var statement in accessor.Body.Statements)
-                        {
-                            if (statement is ReturnStatementSyntax
-                                {
-                                    Expression: LiteralExpressionSyntax returnLiteral
-                                })
-                            {
-                                return (returnLiteral.Token.Value as string, returnLiteral.GetLocation());
-                            }
-                        }
-                    }
-
-                    return (null, declaration.GetLocation());
-                }
-            }
+        // P3 修复（二十一轮）：接口默认实现（static virtual 成员带默认体）——类未重写
+        // EventName 时声明语法挂在接口上，BaseType 链查不到，原实现误报 PDDD015；
+        // 补 AllInterfaces 遍历（IDomainEvent 的 static abstract 声明来自元数据引用、
+        // 无 DeclaringSyntaxReferences，自动跳过）
+        foreach (var @interface in type.AllInterfaces)
+        {
+            if (TryGetLiteralFromTypeMembers(@interface, propertyName, cancellationToken) is { } fromInterface)
+                return fromInterface;
         }
 
         return (null, null);
+    }
+
+    // P3 修复（二十一轮）：从 TryGetStaticStringProperty 提取的单类型扫描——
+    // 返回 null 表示该类型无可识别声明（继续沿链/接口查找），非 null 表示找到
+    // （含"找到声明但非字面量"的 (null, location) 形态，调用方据此停止查找）
+    private static (string? Name, Location? Location)? TryGetLiteralFromTypeMembers(
+        INamedTypeSymbol type,
+        string propertyName,
+        CancellationToken cancellationToken)
+    {
+        foreach (var member in type.GetMembers(propertyName))
+        {
+            if (member is not IPropertySymbol property
+                || !property.IsStatic
+                || property.Type.SpecialType != SpecialType.System_String)
+            {
+                continue;
+            }
+
+            foreach (var syntaxReference in property.DeclaringSyntaxReferences)
+            {
+                var syntax = syntaxReference.GetSyntax(cancellationToken);
+                if (syntax is not PropertyDeclarationSyntax declaration)
+                    continue;
+
+                if (declaration.ExpressionBody?.Expression is LiteralExpressionSyntax expressionLiteral)
+                    return (expressionLiteral.Token.Value as string, expressionLiteral.GetLocation());
+
+                if (declaration.Initializer?.Value is LiteralExpressionSyntax initializerLiteral)
+                    return (initializerLiteral.Token.Value as string, initializerLiteral.GetLocation());
+
+                foreach (var accessor in declaration.AccessorList?.Accessors ?? [])
+                {
+                    if (!accessor.IsKind(SyntaxKind.GetAccessorDeclaration))
+                        continue;
+
+                    if (accessor.ExpressionBody?.Expression is LiteralExpressionSyntax getterLiteral)
+                        return (getterLiteral.Token.Value as string, getterLiteral.GetLocation());
+
+                    if (accessor.Body is null)
+                        continue;
+
+                    foreach (var statement in accessor.Body.Statements)
+                    {
+                        if (statement is ReturnStatementSyntax
+                        {
+                            Expression: LiteralExpressionSyntax returnLiteral
+                        })
+                        {
+                            return (returnLiteral.Token.Value as string, returnLiteral.GetLocation());
+                        }
+                    }
+                }
+
+                return (null, declaration.GetLocation());
+            }
+        }
+
+        return null;
     }
 
     private static bool MetadataNameEquals(INamedTypeSymbol type, string metadataName)

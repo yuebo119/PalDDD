@@ -6,7 +6,13 @@ namespace PalDDD.Transactions;
 public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : OutboxDbContext(options)
 {
     /// <inheritdoc />
-    protected override string GetNowSql() => "NOW() AT TIME ZONE 'UTC'";
+    /// <remarks>
+    /// P1 修复（二十一轮）：直接用 NOW()（timestamptz）——原 "NOW() AT TIME ZONE 'UTC'" 返回
+    /// naive timestamp，与 timestamptz 列比较时 PG 按 session TimeZone 解释 naive 侧：
+    /// session tz≠UTC 时消息资格迟滞 N 小时 + 租约早 N 小时过期 → 他实例重租 → 重复发布。
+    /// Docker 官方镜像默认 UTC 掩盖；timestamptz 的绝对值语义与 session tz 无关。
+    /// </remarks>
+    protected override string GetNowSql() => "NOW()";
 
     /// <inheritdoc />
     /// <remarks>PG 使用双引号引用标识符以区分大小写。</remarks>

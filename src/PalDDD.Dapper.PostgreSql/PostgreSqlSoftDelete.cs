@@ -54,9 +54,18 @@ public static class PostgreSqlSoftDelete
         => $"UPDATE {Escape(table)} SET {Escape(column)} = NULL WHERE {whereClause}";
 
     /// <summary>生成硬删除历史数据（清理超过 N 天的已删除行）</summary>
+    /// <exception cref="ArgumentOutOfRangeException">olderThanDays 不在 1–365 范围</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Purge(string table, int olderThanDays, string column = DefaultColumn)
-        => $"DELETE FROM {Escape(table)} WHERE {Escape(column)} IS NOT NULL AND {Escape(column)} < NOW() - INTERVAL '{olderThanDays} days'";
+    {
+        // P3 修复（二十一轮）：补 1–365 天校验——对齐 PostgreSqlAuditor.PurgeOldAuditLogs；
+        // 此前 0/负数直接生成 NOW() - INTERVAL '0 days' 全表硬删除已软删行的语句。
+        if (olderThanDays is < 1 or > 365)
+            throw new ArgumentOutOfRangeException(nameof(olderThanDays), olderThanDays,
+                "清理天数必须在 1 到 365 之间。");
+
+        return $"DELETE FROM {Escape(table)} WHERE {Escape(column)} IS NOT NULL AND {Escape(column)} < NOW() - INTERVAL '{olderThanDays} days'";
+    }
 
     /// <summary>生成活跃行过滤器（WHERE deleted_at IS NULL）</summary>
     /// <param name="alias">可选的表别名（如 "m"）</param>

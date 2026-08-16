@@ -250,8 +250,10 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
                 return true;
             }
 
+            // P2 修复（二十一轮）：补 SqliteException 类型限定（镜像 InboxDbContext 十七轮修复，PD17）——裸消息匹配误判非唯一约束异常
             var message = inner.Message;
-            if (!string.IsNullOrEmpty(message)
+            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(message)
                 && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
             {
                 return true;

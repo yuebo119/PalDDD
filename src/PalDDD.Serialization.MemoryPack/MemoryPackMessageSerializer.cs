@@ -77,8 +77,12 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
     }
 
     /// <inheritdoc />
-    [return: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.NonPublicConstructors)]
-    public TMessage? Deserialize<TMessage>(ReadOnlySpan<byte> payload, MessageDescriptor descriptor)
+    // P3 修复（二十一轮）：DAM 标注位置勘正——[return: DynamicallyAccessedMembers] 标注在
+    // 返回值上无效（返回的 TMessage? 实例不作为反射目标，trimmer 对返回值不追踪成员保留），
+    // 移到类型参数声明：TMessage 流入 MemoryPack 的运行时 Formatter 解析路径，其构造函数
+    // 成员须被 trimmer 保留，意图声明在泛型参数上才被 ILLink 消费。
+    public TMessage? Deserialize<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.NonPublicConstructors)] TMessage>(
+        ReadOnlySpan<byte> payload, MessageDescriptor descriptor)
     {
         // P3 修复（八轮评审）：泛型路径 descriptor 未参与反序列化，但非 null 时仍校验
         // ContentType 断链（调用方传入错误 descriptor 应尽早暴露）

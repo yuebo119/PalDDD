@@ -103,16 +103,26 @@ public sealed class InMemoryEventLog : IEventLog
         }
 
         var read = 0;
-        foreach (var @event in snapshot)
+        // P3 修复（二十一轮）：metrics 尾部语句移入 finally——迭代器被消费方提前 Dispose
+        //（await foreach 中 break/抛异常）时循环后语句不执行，已产出事件的计数丢失；
+        // finally 在迭代器任何退出路径（正常走完/早退 Dispose/异常）都会执行，
+        // 且先于上方 using activity 的 Dispose（SetTag 先于 Activity 结束生效）。
+        // 注意：C# 迭代器中 try/finally 含 yield 合法（try/catch 含 yield 不合法）。
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            yield return @event;
-            checked { read++; }
-            await Task.Yield();
+            foreach (var @event in snapshot)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return @event;
+                checked { read++; }
+                await Task.Yield();
+            }
         }
-
-        activity?.SetTag("pal.eventlog.read_count", read);
-        PalMetrics.EventLogRead.Add(read);
+        finally
+        {
+            activity?.SetTag("pal.eventlog.read_count", read);
+            PalMetrics.EventLogRead.Add(read);
+        }
     }
 
     /// <inheritdoc />
@@ -132,16 +142,26 @@ public sealed class InMemoryEventLog : IEventLog
         }
 
         var read = 0;
-        foreach (var @event in snapshot)
+        // P3 修复（二十一轮）：metrics 尾部语句移入 finally——迭代器被消费方提前 Dispose
+        //（await foreach 中 break/抛异常）时循环后语句不执行，已产出事件的计数丢失；
+        // finally 在迭代器任何退出路径（正常走完/早退 Dispose/异常）都会执行，
+        // 且先于上方 using activity 的 Dispose（SetTag 先于 Activity 结束生效）。
+        // 注意：C# 迭代器中 try/finally 含 yield 合法（try/catch 含 yield 不合法）。
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            yield return @event;
-            checked { read++; }
-            await Task.Yield();
+            foreach (var @event in snapshot)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return @event;
+                checked { read++; }
+                await Task.Yield();
+            }
         }
-
-        activity?.SetTag("pal.eventlog.read_count", read);
-        PalMetrics.EventLogRead.Add(read);
+        finally
+        {
+            activity?.SetTag("pal.eventlog.read_count", read);
+            PalMetrics.EventLogRead.Add(read);
+        }
     }
 
     private List<RecordedEvent> GetOrCreateStream(string streamName)

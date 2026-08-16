@@ -47,25 +47,35 @@ public sealed class EventLogReplaySource<TMessage> : IEventReplaySource<TMessage
         using var activity = PalActivitySource.StartEventReplayRead(sourceName, _descriptor.Name, GetTypeName(typeof(TMessage)));
         var read = 0;
 
-        await foreach (var recorded in _eventLog.ReadStreamAsync(sourceName, cancellationToken: ct).ConfigureAwait(false))
+        // P3 修复（二十一轮）：metrics 尾部语句移入 finally——迭代器被消费方提前 Dispose
+        //（await foreach 中 break/抛异常）时循环后语句不执行，已回放事件的计数丢失；
+        // finally 在迭代器任何退出路径（正常走完/早退 Dispose/异常，含 CreateReplayEvent
+        // 抛 EventReplayException 的路径——该路径 RecordReplayFailure 已先行记账
+        // ReplayFailed）都会执行，且先于上方 using activity 的 Dispose。
+        try
         {
-            ReplayEvent<TMessage> replayEvent;
-            try
+            await foreach (var recorded in _eventLog.ReadStreamAsync(sourceName, cancellationToken: ct).ConfigureAwait(false))
             {
-                replayEvent = CreateReplayEvent(recorded);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                RecordReplayFailure(activity, read, ex);
-                throw;
-            }
+                ReplayEvent<TMessage> replayEvent;
+                try
+                {
+                    replayEvent = CreateReplayEvent(recorded);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    RecordReplayFailure(activity, read, ex);
+                    throw;
+                }
 
-            yield return replayEvent;
-            checked { read++; }
+                yield return replayEvent;
+                checked { read++; }
+            }
         }
-
-        activity?.SetTag("pal.replay.read_count", read);
-        PalMetrics.ReplayRead.Add(read);
+        finally
+        {
+            activity?.SetTag("pal.replay.read_count", read);
+            PalMetrics.ReplayRead.Add(read);
+        }
     }
 
     private ReplayEvent<TMessage> CreateReplayEvent(RecordedEvent recorded)

@@ -30,6 +30,8 @@ public static class SqlitePerformanceOptimizer
     /// <summary>
     /// WAL 模式 PRAGMA（P2/P3 修复·十七轮拆出常量）——需单独执行以确认切换成功
     /// （journal_mode 是库级持久属性，返回结果行确认实际模式），消费方据此与其余 PRAGMA 分离执行。
+    /// P3 修复（二十一轮）：消费方（ApplyAsync / SqliteServiceCollectionExtensions.ApplyOptimization）
+    /// 现以 ExecuteScalar 读取返回值并比对 "wal"，失配抛 InvalidOperationException——确认声明落地。
     /// </summary>
     public const string WalPragma = "PRAGMA journal_mode=WAL";
 
@@ -103,11 +105,18 @@ public static class SqlitePerformanceOptimizer
         // WAL 模式需单独执行确认切换成功，其余 PRAGMA 批量执行
         // P2/P3 修复（十七轮）：改消费 WalPragma/RestPragma 常量——消除魔法切片偏移
         // （原 sql["PRAGMA journal_mode=WAL;\n".Length..] 依赖前缀字面量与 GetPragma 输出硬耦合）
+        // P3 修复（二十一轮）：WAL 确认声明落地——PRAGMA journal_mode 返回实际生效模式，
+        // 改 ExecuteScalarAsync 读返回值比对 "wal"，失配（如文件在只读卷/网络盘不支持 WAL）
+        // 抛异常而非静默继续以 DELETE 模式运行（并发读写承诺无声失效）。
         if (level is SqliteOptimizeLevel.Production or SqliteOptimizeLevel.Light)
         {
             using var walCmd = connection.CreateCommand();
             walCmd.CommandText = WalPragma;
-            await walCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            var walResult = await walCmd.ExecuteScalarAsync().ConfigureAwait(false);
+            if (!string.Equals(walResult?.ToString(), "wal", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    $"PRAGMA journal_mode=WAL 未生效（返回 {walResult?.ToString() ?? "<null>"}）——"
+                    + "目标卷可能不支持 WAL（网络盘/只读卷）；WAL 依赖的并发读写语义不会成立。");
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = level == SqliteOptimizeLevel.Production ? ProductionRestPragma : LightRestPragma;

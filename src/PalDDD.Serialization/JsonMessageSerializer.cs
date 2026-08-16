@@ -76,7 +76,13 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     /// 参数不参与序列化。调用方必须保证传入的 options 与 catalog 注册
     /// <see cref="MessageDescriptor.JsonTypeInfo"/> 时所用的是同一实例/同源配置——
     /// 否则泛型路径（options 源）与非泛型路径（descriptor 源）的类型绑定分叉，
-    /// 可能产出不同 JSON 形状。此不同源无法在序列化器内廉价检测，属调用方契约。
+    /// 可能产出不同 JSON 形状。此不同源无法在序列化器内廉价检测，属调用方契约。<br/>
+    /// 📐 <b>options 路径仍要求类型在 catalog 注册（P3 修复·二十一轮 remark 勘正）</b>：
+    /// 未显式传 <paramref name="descriptor"/> 时，catalog 查找（含未注册即抛）发生在
+    /// options 路径分派<b>之前</b>——这是框架统一注册约定（所有消息类型进
+    /// <see cref="IMessageCatalog"/>），descriptor 先于 options 查找用于两条路径的
+    /// 行为一致性校验：未注册类型无论走哪条路径都在入口处以同一错误暴露，
+    /// 而非 options 路径静默放行、descriptor 路径抛错的分叉行为。
     /// </remarks>
     public ReadOnlyMemory<byte> Serialize<TMessage>(TMessage message, MessageDescriptor? descriptor = null)
     {

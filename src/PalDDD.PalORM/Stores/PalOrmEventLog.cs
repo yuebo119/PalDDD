@@ -50,6 +50,12 @@ public class PalOrmEventLog<TProvider> : IEventLog
         ArgumentException.ThrowIfNullOrWhiteSpace(streamName);
         ArgumentNullException.ThrowIfNull(events);
         if (events.Count == 0) throw new ArgumentException("至少需要一个事件。", nameof(events));
+        // P3 修复（二十一轮）：补取消前置检查（对齐 EFCore 版 AppendAsync 的
+        // ThrowIfCancellationRequested）——乐观并发 SELECT MAX 前先响应已取消令牌。
+        // 契约差异声明：EFCore 版另有 foreach 元素级 ThrowIfNull(@event)，本版不加——
+        // null 元素在循环内解引用（e.EventId）即抛 NullReferenceException，失败点相同
+        // 仅异常类型不同；逐元素预检与解引用失败对契约影响无差，省一次遍历。
+        cancellationToken.ThrowIfCancellationRequested();
 
         // 步骤 1：乐观并发检查 —— 读当前最大 StreamVersion
         var currentMax = await Session.ScalarAsync<long?>(
@@ -109,6 +115,8 @@ public class PalOrmEventLog<TProvider> : IEventLog
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         // P3 修复（八轮评审）：补参数守卫，严格对齐 EFCore 版（EventLogDbContext ThrowIfLessThan(maxCount, 1)）
+        // P3 修复（二十一轮）：补 fromVersion 非负守卫（对齐 EFCore 版 ThrowIfLessThan(fromVersion, 0)）
+        ArgumentOutOfRangeException.ThrowIfLessThan(fromVersion, 0);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
         // 注意：FormattableString 无法插值 maxCount=int.MaxValue（会被插值为参数），SQL 层面 LIMIT 兼容
         // 使用流式 QueryAsyncEnumerable —— 恒定内存读取（重要：超长事件流场景）
@@ -128,6 +136,8 @@ public class PalOrmEventLog<TProvider> : IEventLog
     {
         // P3 修复（八轮评审）：补参数守卫（对齐 EFCore 版）+ 先判后产出——原"产出 1 条后再判"
         // 在 maxCount=0 时会多产出 1 条；结构与 ReadStreamAsync 统一。
+        // P3 修复（二十一轮）：补 fromPosition 非负守卫（对齐 EFCore 版 ThrowIfLessThan(fromPosition, 0)）
+        ArgumentOutOfRangeException.ThrowIfLessThan(fromPosition, 0);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
         await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(
             $"SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE global_position >= {fromPosition} ORDER BY global_position",

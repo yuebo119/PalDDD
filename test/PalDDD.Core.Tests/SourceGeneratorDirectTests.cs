@@ -276,6 +276,69 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(result.Diagnostics.Any(d => d.Id == "PALENUM003")).IsTrue();
     }
 
+    // ── 二十一轮 P2：双 partial 声明不再崩溃（PALID004/PALENUM005）──
+
+    [Test]
+    public async Task IdentityGenerator_DuplicatePartialDeclarations_ReportsPalid004_AndDoesNotCrash()
+    {
+        // 同一类型两个 partial 声明均挂 [GenerateId]：ForAttributeWithMetadataName 每声明
+        // 触发一次 transform，两个 candidate 的 hint 相同——修复前 AddSource 同 hint 第二次
+        // 调用抛 ArgumentException 使整个生成器崩溃；修复后报 PALID004 且仅首个声明生成代码
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+            using System;
+
+            namespace TestDomain;
+
+            [GenerateId(typeof(Guid))]
+            public readonly partial record struct DupId
+            {
+                public int Extra1 => 1;
+            }
+
+            [GenerateId(typeof(Guid))]
+            public readonly partial record struct DupId
+            {
+                public int Extra2 => 2;
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALID004")).IsTrue();
+        // 去重后恰好一份生成物（GetGeneratedSource 内部 Single 会因重复 hint 抛异常）
+        var source = GetGeneratedSource(result, "DupId.g.cs");
+        await Assert.That(source).Contains("public readonly partial record struct DupId");
+    }
+
+    [Test]
+    public async Task EnumGenerator_DuplicatePartialDeclarations_ReportsPalenum005_AndDoesNotCrash()
+    {
+        // 镜像 IdentityGenerator 双 partial 场景——修复前同 hint AddSource 崩溃，
+        // 修复后报 PALENUM005 且仅首个声明生成代码（字段跨 partial 合并收集）
+        var result = RunEnumGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            [GenerateEnum]
+            public partial class DupStatus : SmartEnum<DupStatus, string>
+            {
+                public static readonly DupStatus A = new("a", "A");
+            }
+
+            [GenerateEnum]
+            public partial class DupStatus : SmartEnum<DupStatus, string>
+            {
+                public static readonly DupStatus B = new("b", "B");
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALENUM005")).IsTrue();
+        var source = GetGeneratedSource(result, "DupStatus.g.cs");
+        await Assert.That(source).Contains("RegisterValues");
+    }
+
     // ── 辅助方法（参照 MessageRegistryGeneratorTests 的模式）──
 
     private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics) RunEnumGenerator(string source)

@@ -1,7 +1,7 @@
 # PalDDD.PalORM 适配层 — 设计与迁移指南
 
-> **版本**：v5.1（2026-07-30）
-> **状态**：核心层 + SQLite 方言包已落地，AOT 验证通过
+> **版本**：v5.2（2026-08-16，二十一轮评审勘正：EventLog 列名/乐观锁列描述、补方言包与 SagaSnapshot 章节）
+> **状态**：核心层 + 三方言包（SQLite/PostgreSQL/MySQL）已落地，AOT 验证通过
 > **定位**：吸取 Dapper + EFCore 双方经验的第三条 ORM 适配路
 
 ---
@@ -26,7 +26,7 @@ PalDDD 同时维护三套 ORM 适配层，按场景选择：
 
 与 PalDDD.Dapper 兼容（迁移成本最低）。**不使用** `WithNamingConvention`（PalORM 该选项不参与列名生成，仅供手写 SQL 调用），每属性显式 `[Column("snake_case")]`。
 
-**EventLog 例外**：保留 PascalCase 列名（Dapper + EFCore 双实现历史一致）。
+**EventLog 亦无例外**：`EventLogRow` 全列 snake_case（`global_position`/`stream_name`/`stream_version` 等，逐属性 `[Column]` 固化）。旧文档声称"EventLog 保留 PascalCase 列名（Dapper + EFCore 双实现历史一致）"与实现不符（二十一轮勘正）。
 
 ### 决策 2：枚举存储 — 统一 int
 
@@ -69,7 +69,7 @@ PALORM012 约束：`[ConcurrencyCheck]` 仅支持非 nullable int/long（源生�
 | **Outbox** | `id` (Ulid string) | `[ConcurrencyCheck]retry_count` | LeasePending 的 `UPDATE...WHERE id IN (SELECT...LIMIT n) RETURNING *` |
 | **Inbox** | `id` (long 自增) | `[ConcurrencyCheck]attempts` | 三方言 INSERT 分叉（`ON CONFLICT` vs `INSERT IGNORE`） |
 | **Saga** | `saga_id` (Ulid string) | 手写 `WHERE version=@expected` | 开放泛型 JSON 无法 `[OwnedJson]` |
-| **EventLog** | `GlobalPosition` (long 自增) | `[ConcurrencyCheck]revision` | 循环 INSERT（事件溯源语义） |
+| **EventLog** | `global_position` (long 自增) | `[ConcurrencyCheck]stream_version` | 循环 INSERT（事件溯源语义） |
 | **UnitOfWork** | — | 包装 `BeginTransactionAsync` | — |
 
 ### B 级：纯手写 SQL（2 Store，复合主键）
@@ -94,6 +94,33 @@ services.AddPalDapperTransactions(DapperDbType.Sqlite, connectionString);
 // 切换为 PalORM（一行替换）
 services.AddPalOrmSqlite(connectionString);
 ```
+
+### 4.1 方言包矩阵（SQLite / PostgreSQL / MySQL）
+
+三方言包同构（7 中间固化类 + DI 扩展），方言差异由 `TProvider.SupportsReturningClause` 等编译期属性分支（决策 5）：
+
+| 方言包 | DI 入口 | 方言特性 |
+|---|---|---|
+| `PalDDD.PalORM.Sqlite` | `AddPalOrmSqlite(services, cs, options?, clock?)` | 嵌入式基准路径，AOT 验证载体 |
+| `PalDDD.PalORM.PostgreSql` | `AddPalOrmPostgreSql(services, cs, options?, clock?)` | 支持 RETURNING —— Outbox LeasePending / Inbox TryStart 单语句原子路径（无两步回读）；BulkInsert 走 Npgsql Binary COPY |
+| `PalDDD.PalORM.MySql` | `AddPalOrmMySql(services, cs, options?, clock?)` | 不支持 RETURNING（两步 UPDATE+SELECT）；BulkInsert 检测 `local_infile` 系统变量自动选 BulkCopy 或多值 INSERT |
+
+### 4.2 Saga 快照持久化注册（saga_data 列）— 必读
+
+三方言的一键注册中，`ISagaStateStore<>` 开放泛型（如 `PostgreSqlSagaStateStore<>`）无 `JsonTypeInfo` 传入通道——`jsonTypeInfo` 恒 null。
+
+> ⚠️ **不调用 SagaSnapshot 便捷注册则 saga_data 不持久化（重启丢业务字段）**——TState 业务字段不落库，仅框架字段存活。须在对应 `AddPalOrmXxx` 之后调用（依赖其 DataSession 注册）：
+
+```csharp
+services.AddPalOrmPostgreSql(connectionString);
+// 覆盖开放泛型（MS DI 具体泛型优先），闭包传入 JsonTypeInfo
+services.AddPalOrmPostgreSqlSagaSnapshot<OrderSagaState>(
+    OrderSagaStateContext.Default.OrderSagaState);
+// MySQL: services.AddPalOrmMySqlSagaSnapshot<TState>(jsonTypeInfo)
+// SQLite: services.AddPalOrmSqliteSagaSnapshot<TState>(jsonTypeInfo)
+```
+
+（Dapper 侧同款陷阱见 `MySqlServiceCollectionExtensions.AddPalMySqlSagaSnapshot` 与 `DapperServiceCollectionExtensions.AddPalDapperSagaSnapshot`。）
 
 ---
 
@@ -188,6 +215,8 @@ ALTER TABLE outbox_messages MODIFY COLUMN payload TEXT;
 
 - `src/PalDDD.PalORM/` — 核心层（7 Store + UnitOfWork + 3 Row DTO + 2 Converter）
 - `src/PalDDD.PalORM.Sqlite/` — SQLite 方言包（7 中间固化类 + DI 扩展）
+- `src/PalDDD.PalORM.PostgreSql/` — PostgreSQL 方言包（同构，RETURNING + Binary COPY）
+- `src/PalDDD.PalORM.MySql/` — MySQL 方言包（同构，无 RETURNING + local_infile 自适应 BulkInsert）
 - `samples/PalDDD.PalOrmSample/` — AOT 验证（真实 PublishAot + 运行时 CRUD）
 
 ### 关键类型
@@ -202,4 +231,7 @@ ALTER TABLE outbox_messages MODIFY COLUMN payload TEXT;
 
 ### DI 入口
 
-- `SqlitePalOrmExtensions.AddPalOrmSqlite(services, connectionString, clock?)`
+- `SqlitePalOrmExtensions.AddPalOrmSqlite(services, connectionString, options?, clock?)`
+- `PostgreSqlPalOrmExtensions.AddPalOrmPostgreSql(services, connectionString, options?, clock?)`
+- `MySqlPalOrmExtensions.AddPalOrmMySql(services, connectionString, options?, clock?)`
+- 各方言包的 Saga 快照注册：`AddPalOrmSqliteSagaSnapshot<TState>` / `AddPalOrmPostgreSqlSagaSnapshot<TState>` / `AddPalOrmMySqlSagaSnapshot<TState>`（不调用则 saga_data 不持久化，见 4.2）

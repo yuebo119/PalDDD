@@ -89,7 +89,9 @@ public sealed partial class OutboxMessageRow
     [Column("error")]
     public string? Error { get; set; }
 
-    // 审计追踪列（当前 Dapper 实现未持久化，但表结构保留；PalORM 版本可选启用）
+    // 审计追踪列（三方均持久化——Dapper / EFCore / PalORM 适配层均读写以下四列；
+    // P3 勘正（二十一轮）：旧注释“当前 Dapper 实现未持久化”已过时）
+    // ── CorrelationId/CausationId/TraceParent/TraceState 与领域类型 OutboxMessage 一一映射 ──
 
     /// <summary>关联 ID（nullable Ulid → string）。</summary>
     [Column("correlation_id")]

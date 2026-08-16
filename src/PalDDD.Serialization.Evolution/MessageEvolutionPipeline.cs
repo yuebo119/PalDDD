@@ -29,6 +29,25 @@ public sealed class MessageEvolutionPipeline
 
         _steps = steps.ToFrozenDictionary(
             step => new Key(step.SourceDescriptor.Name, step.SourceDescriptor.SchemaVersion));
+
+        // P3 修复（二十一轮）：相邻步 ClrType 衔接校验（构造期 fail-fast）——升级链按
+        // (Name, SourceSchemaVersion) 键衔接，相邻两步 A→B 要求 A.TargetDescriptor.ClrType
+        // 与 B.SourceDescriptor.ClrType 一致：断裂链（同版本由不同 CLR 类型接棒）此前仅在
+        // Upgrade 执行期以 Convert 内的 InvalidCastException（或静默错误转换）暴露。
+        // _steps 字典内信息已充分（后继步可按 A 的 target 键查得），构造期即校验；
+        // 末步（target 无后继）不参与本检查。
+        foreach (var step in _steps.Values)
+        {
+            var targetKey = new Key(step.TargetDescriptor.Name, step.TargetDescriptor.SchemaVersion);
+            if (_steps.TryGetValue(targetKey, out var next)
+                && next.SourceDescriptor.ClrType != step.TargetDescriptor.ClrType)
+            {
+                throw new MessageEvolutionException(
+                    $"Message evolution chain broken: name '{targetKey.Name}' version {targetKey.SchemaVersion} "
+                    + $"is produced as CLR type '{GetTypeName(step.TargetDescriptor.ClrType)}' "
+                    + $"but consumed by the next step as '{GetTypeName(next.SourceDescriptor.ClrType)}'.");
+            }
+        }
     }
 
     public object? Upgrade(
@@ -102,6 +121,8 @@ public sealed class MessageEvolutionPipeline
         if (sourceDescriptor.SchemaVersion > targetDescriptor.SchemaVersion)
             throw new InvalidOperationException("Cannot evolve a message from a newer schema version to an older version.");
     }
+
+    private static string GetTypeName(Type type) => type.FullName ?? type.Name;
 
     private readonly record struct Key(string Name, int SchemaVersion);
 }

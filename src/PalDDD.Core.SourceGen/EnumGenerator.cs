@@ -60,6 +60,17 @@ public sealed class EnumGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    // P2 修复（二十一轮）：镜像 IdentityGenerator PALID004——同一类型的多个 partial
+    // 声明均挂 [GenerateEnum] 时两个 candidate 的 hint 相同，AddSource 同 hint 第二次
+    // 调用抛 ArgumentException 使整个生成器崩溃。重复声明报 PALENUM005，仅首个声明生成代码。
+    private static readonly DiagnosticDescriptor DuplicatePartialDeclaration = new(
+        "PALENUM005",
+        "GenerateEnum attribute declared on multiple partial declarations",
+        "Type '{0}' has [GenerateEnum] applied to multiple partial declarations. Apply the attribute to only one partial declaration.",
+        "PalDDD.EnumGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         // 步骤 1：收集所有标记了 [GenerateEnum] 的 partial class 及其静态字段
@@ -170,6 +181,8 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 if (fields.Count == 0)
                 {
                     // 有 [GenerateEnum] 但无静态字段 — 返回空字段信息以触发警告
+                    // P3 修复（二十一轮）：携带定位——原 Location.None 使 PALENUM001 无处
+                    // 指示（IDE 无 squiggle、SARIF 无精确位置）；不参与相等（位置随编辑漂移）
                     return new EnumGenInfo(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
@@ -177,7 +190,8 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         ContainingNames: [],
                         ValueType: valueType.ToDisplayString(),
                         Fields: [],
-                        HasFields: false);
+                        HasFields: false,
+                        Location: context.TargetNode.GetLocation());
                 }
 
                 return new EnumGenInfo(
@@ -187,50 +201,69 @@ public sealed class EnumGenerator : IIncrementalGenerator
                     [.. containingNames],
                     valueType.ToDisplayString(),
                     fields.ToImmutable(),
-                    HasFields: true);
+                    HasFields: true,
+                    // P2 修复（二十一轮）：携带定位供 PALENUM005（重复 partial 声明）指示
+                    // 重复挂 attribute 的具体声明——不参与相等（位置随编辑漂移）
+                    Location: context.TargetNode.GetLocation());
             })
             .WithTrackingName("EnumGenerator_Candidates")
             .Where(static info => info is not null)!;
 
         // 步骤 2：有字段时生成，无字段时报告警告
-        context.RegisterSourceOutput(candidates, static (spc, info) =>
+        // P2 修复（二十一轮）：双 partial 声明崩溃——Collect 后单次回调内去重（方案分支
+        // 说明见 IdentityGenerator 同名修复：闭包 HashSet 跨增量 pass 残留会误报）
+        context.RegisterSourceOutput(candidates.Collect(), static (spc, infos) =>
         {
-            if (info!.DiagnosticId is not null)
+            var seenHints = new HashSet<string>();
+            foreach (var info in infos)
             {
-                // P2 修复：隔层继承报 PALENUM002（Error 级）
-                // P3 修复（八轮评审）：record 声明报 PALENUM003——按 DiagnosticId 分派
-                // P3 修复（十七轮）：泛型声明报 PALENUM004
-                var descriptor = info.DiagnosticId switch
+                if (info.DiagnosticId is not null)
                 {
-                    "PALENUM003" => RecordNotSupportedError,
-                    "PALENUM004" => GenericDeclarationNotSupported,
-                    _ => NotDirectInheritanceError,
-                };
-                spc.ReportDiagnostic(Diagnostic.Create(
-                    descriptor,
-                    info.Location ?? Location.None,
-                    info.TypeName,
-                    info.ValueType));
-                return;
-            }
-            if (!info!.HasFields)
-            {
-                // 报告警告而非静默跳过
-                spc.ReportDiagnostic(Diagnostic.Create(
-                    NoFieldsWarning,
-                    Location.None,
-                    info.TypeName));
-                return;
-            }
-            // P3 修复（八轮评审）：hint 名的嵌套类型链改用 ContainingNames（纯类型名）——
-            // 原 ContainingDeclarations.Split(' ').Last() 对泛型嵌套类型产出含 "<T>"
-            // 的非法字符（如 "Outer<int>"），与 IdentityGenerator 风格对齐；
-            // 全局命名空间（Namespace == null）用 "_" 仅作 hint 名保底
-            spc.AddSource(
-                (info!.ContainingDeclarations.Length > 0
+                    // P2 修复：隔层继承报 PALENUM002（Error 级）
+                    // P3 修复（八轮评审）：record 声明报 PALENUM003——按 DiagnosticId 分派
+                    // P3 修复（十七轮）：泛型声明报 PALENUM004
+                    var descriptor = info.DiagnosticId switch
+                    {
+                        "PALENUM003" => RecordNotSupportedError,
+                        "PALENUM004" => GenericDeclarationNotSupported,
+                        _ => NotDirectInheritanceError,
+                    };
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        descriptor,
+                        info.Location ?? Location.None,
+                        info.TypeName,
+                        info.ValueType));
+                    continue;
+                }
+                if (!info.HasFields)
+                {
+                    // 报告警告而非静默跳过
+                    // P3 修复（二十一轮）：PALENUM001 用 transform 携带的定位（原 Location.None）
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        NoFieldsWarning,
+                        info.Location ?? Location.None,
+                        info.TypeName));
+                    continue;
+                }
+                // P3 修复（八轮评审）：hint 名的嵌套类型链改用 ContainingNames（纯类型名）——
+                // 原 ContainingDeclarations.Split(' ').Last() 对泛型嵌套类型产出含 "<T>"
+                // 的非法字符（如 "Outer<int>"），与 IdentityGenerator 风格对齐；
+                // 全局命名空间（Namespace == null）用 "_" 仅作 hint 名保底
+                var hint = info.ContainingDeclarations.Length > 0
                     ? $"{info.Namespace ?? "_"}.{string.Join("_", info.ContainingNames)}_{info.TypeName}.g.cs"
-                    : $"{info.Namespace ?? "_"}.{info.TypeName}.g.cs"),
-                GenerateEnumCode(info));
+                    : $"{info.Namespace ?? "_"}.{info.TypeName}.g.cs";
+                if (!seenHints.Add(hint))
+                {
+                    // P2 修复（二十一轮）：重复 [GenerateEnum] 声明——仅首个声明生成代码，
+                    // 其余报 PALENUM005 而非让 AddSource 抛 ArgumentException 崩溃
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        DuplicatePartialDeclaration,
+                        info.Location ?? Location.None,
+                        info.TypeName));
+                    continue;
+                }
+                spc.AddSource(hint, GenerateEnumCode(info));
+            }
         });
     }
 

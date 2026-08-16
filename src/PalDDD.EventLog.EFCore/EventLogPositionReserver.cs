@@ -15,6 +15,15 @@ namespace PalDDD.EventLog;
 /// </summary>
 /// <remarks>
 /// <para>
+/// ⚠️ <b>生命周期前提（P3·二十一轮明示）</b>："单例"是<b>注入前提</b>而非默认事实——
+/// <see cref="EventLogDbContext"/> 构造默认 <c>positionReserver ?? new EventLogPositionReserver()</c>，
+/// 而 DbContext 按 Scoped 解析，<b>默认路径下每个 Scoped 上下文各持一个独立预留器</b>：
+/// chunk 缓存不跨 scope 共享，每 scope 首次追加都要走一次分配器行往返（Hi/Lo 收益退化为
+/// 单上下文批内），且进程内 chunk 取块次数 = scope 数（间隙随 scope 数放大，正确性不受影响）。
+/// 要兑现类头声明的"1/N 追加触及分配器行"收益，<b>必须以单例注入</b>：
+/// 预留器构造为单例传入各上下文（内部 <c>_lock</c>/<c>_dbSemaphore</c> 已保证跨上下文线程安全）。
+/// </para>
+/// <para>
 /// 这消除了旧设计中每次 <c>AppendAsync</c> 都需要在 <c>Serializable</c>
 /// 事务内读取和更新单个分配器行所带来的全局序列化瓶颈。当区块大小为 N 时，
 /// 只有 1/N 的追加操作触及分配器行；其余操作从进程内缓存分配位置，

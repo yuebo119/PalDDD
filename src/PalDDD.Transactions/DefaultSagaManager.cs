@@ -38,7 +38,11 @@ public sealed class DefaultSagaManager : ISagaManager
     /// （<c>ProcessEventAsync</c>，含重试/补偿）。派发成功后移除中断条目；
     /// 派发抛异常时保留条目，可再次调用恢复。未注册的 SagaId 抛
     /// <see cref="InvalidOperationException"/>——决策要么被投递、要么可见地失败，
-    /// 不静默丢弃（P2 修复·八轮：此前仅暂存决策且条目只增不减）。
+    /// 不静默丢弃（P2 修复·八轮：此前仅暂存决策且条目只增不减）。<br/>
+    /// 📐 <b>并发语义（P3 声明·二十一轮）</b>：本实现非线程安全——同一 sagaId 的多次
+    /// 决策/恢复调用之间无互斥（ResumeDispatch 直接进入 Saga 管线，条目移除按 KVP 身份
+    /// 仅防误删，不防并发重入）。同一 sagaId 的决策必须由调用方串行投递（先等上一次
+    /// ResumeAsync 完成再投递下一决策）；跨 sagaId 并发恢复安全。
     /// </remarks>
     public async ValueTask ResumeAsync<TDecision>(
         PalUlid sagaId, TDecision decision, CancellationToken ct)
@@ -155,37 +159,38 @@ public sealed class DefaultSagaManager : ISagaManager
     /// 恢复派发委托——以人工决策为事件重新进入该 Saga 的 ProcessEventAsync 管线，
     /// 由 <see cref="ResumeAsync{TDecision}"/> 在决策到达时调用。
     /// </param>
+    // P3 修复（二十一轮）：删除 decisionType 参数与 InterruptedSagaEntry.DecisionType 字段——
+    // 字段只写不读（死状态）。原拟"由 GetInterruptedSagasAsync 消费"，但接口契约返回
+    // IReadOnlyList<SagaState>，无法携带 DecisionType（改公共接口超出 P3 范围）；
+    // 期望的决策类型仍可由调用方经 InterruptStep.DecisionType（公共 DSL 元数据）获知。
     internal void RegisterInterrupted(
         PalUlid sagaId,
         string reason,
-        Type decisionType,
         Func<object, CancellationToken, ValueTask<SagaState>> resumeDispatch)
     {
         ArgumentNullException.ThrowIfNull(resumeDispatch);
-        _interrupted[sagaId] = new InterruptedSagaEntry(sagaId, reason, decisionType, resumeDispatch);
+        _interrupted[sagaId] = new InterruptedSagaEntry(sagaId, reason, resumeDispatch);
     }
 
     private sealed class InterruptedSagaEntry
     {
         public PalUlid SagaId { get; }
         public string Reason { get; }
-        public Type DecisionType { get; }
 
         /// <summary>恢复派发委托——以决策为事件重新进入 ProcessEventAsync（见 RegisterInterrupted）。</summary>
         public Func<object, CancellationToken, ValueTask<SagaState>> ResumeDispatch { get; }
 
         // P3 修复（十七轮）：删除 Decision 属性与 SetDecision 方法——决策经 ResumeDispatch
         // 参数直接传递，属性只写不读（死状态）
+        // P3 修复（二十一轮）：再删 DecisionType 属性——同理只写不读（见 RegisterInterrupted 注释）
 
         public InterruptedSagaEntry(
             PalUlid sagaId,
             string reason,
-            Type decisionType,
             Func<object, CancellationToken, ValueTask<SagaState>> resumeDispatch)
         {
             SagaId = sagaId;
             Reason = reason;
-            DecisionType = decisionType;
             ResumeDispatch = resumeDispatch;
         }
     }

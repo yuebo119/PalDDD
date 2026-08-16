@@ -166,14 +166,56 @@ public sealed partial class MessageEvolutionTests
         pipeline.ValidatePath(v1Descriptor, v3Descriptor);
     }
 
+    [Test]
+    public async Task Build_WhenAdjacentStepsHaveMismatchedClrTypes_ThrowsAtConstruction()
+    {
+        // P3 回归（二十一轮）：断裂链（v2 由不同 CLR 类型接棒）须在构造期（启动期）抛
+        // MessageEvolutionException——此前仅延迟到 Upgrade 执行期 Convert 的 InvalidCastException
+        var v1Descriptor = MessageDescriptor.Create(
+            EvolutionTestJsonContext.Default.OrderSubmittedV1,
+            "order-submitted",
+            schemaVersion: 1);
+        var v2Descriptor = MessageDescriptor.Create(
+            EvolutionTestJsonContext.Default.OrderSubmittedV2,
+            "order-submitted",
+            schemaVersion: 2);
+        // 另一 v2 类型：单步各自合法（同名 + 版本递增 + ClrType 与转换器泛型一致），
+        // 但相邻衔接断裂——前步产出 OrderSubmittedV2，后步消费 OrderSubmittedV2Alt
+        var altV2Descriptor = MessageDescriptor.Create(
+            EvolutionTestJsonContext.Default.OrderSubmittedV2Alt,
+            "order-submitted",
+            schemaVersion: 2);
+        var v3Descriptor = MessageDescriptor.Create(
+            EvolutionTestJsonContext.Default.OrderSubmittedV3,
+            "order-submitted",
+            schemaVersion: 3);
+
+        var exception = await Assert.That(() => new MessageEvolutionBuilder()
+            .Add<OrderSubmittedV1, OrderSubmittedV2>(
+                v1Descriptor,
+                v2Descriptor,
+                old => new OrderSubmittedV2(old.OrderId, 0m))
+            .Add<OrderSubmittedV2Alt, OrderSubmittedV3>(
+                altV2Descriptor,
+                v3Descriptor,
+                old => new OrderSubmittedV3(old.OrderId, 0m, "new"))
+            .Build()).Throws<MessageEvolutionException>();
+
+        await Assert.That(exception!.Message).Contains("order-submitted");
+        await Assert.That(exception!.Message.ToUpperInvariant()).Contains("BROKEN");
+    }
+
     private sealed record OrderSubmittedV1(Guid OrderId);
 
     private sealed record OrderSubmittedV2(Guid OrderId, decimal Amount);
+
+    private sealed record OrderSubmittedV2Alt(Guid OrderId, decimal Amount);
 
     private sealed record OrderSubmittedV3(Guid OrderId, decimal Amount, string Status);
 
     [JsonSerializable(typeof(OrderSubmittedV1))]
     [JsonSerializable(typeof(OrderSubmittedV2))]
+    [JsonSerializable(typeof(OrderSubmittedV2Alt))]
     [JsonSerializable(typeof(OrderSubmittedV3))]
     private sealed partial class EvolutionTestJsonContext : JsonSerializerContext;
 }

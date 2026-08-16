@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using PalDDD.Core.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.EventLog;
 
@@ -157,6 +158,12 @@ public abstract class EventLogDbContext(
         {
             e.HasKey(x => x.GlobalPosition);
             e.Property(x => x.GlobalPosition).ValueGeneratedNever();
+            // P1 修复（二十一轮）：Ulid 属性需显式转换——关系型 provider 无 Ulid 原生映射，
+            // 缺转换时 ctx.Model 即抛"无法映射类型"（探针实证关系型完全不可用；InMemory-only
+            // 测试网掩盖）。对齐 OutboxDbContext.Id / SagaStateDbContext.SagaId 姊妹模式。
+            e.Property(x => x.EventId).HasConversion(v => v.ToString(), v => PalUlid.Parse(v));
+            e.Property(x => x.CorrelationId).HasConversion(v => v.HasValue ? v.Value.ToString() : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
+            e.Property(x => x.CausationId).HasConversion(v => v.HasValue ? v.Value.ToString() : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
             e.Property(x => x.StreamName).HasMaxLength(512);
             e.Property(x => x.EventName).HasMaxLength(256);
             e.Property(x => x.ContentType).HasMaxLength(128);
@@ -315,11 +322,12 @@ public abstract class EventLogDbContext(
             }
 
             // SQLite: Microsoft.Data.Sqlite.SqliteException 消息包含 "UNIQUE constraint"
-            // ⚠️ 已知局限（P3-3）：字符串匹配可能误判未来某 provider 的非唯一约束错误。
-            // 命中概率极低（消息文本需恰好含 "UNIQUE constraint"），且与既有实现对齐。
-            // 若未来 SQLite 驱动暴露结构化错误码，应改为精确匹配。
+            // P2 修复（二十一轮）：补 SqliteException 类型限定——裸消息匹配会把文案恰好含该词组的
+            // 非唯一约束异常误判（在 AppendAsync 主路径被误转 EventStreamConcurrencyException 诱导重试）。
+            // 镜像 InboxDbContext 十七轮修复（PD17 姊妹同步）；局限声明中的字符串匹配风险由此收窄。
             var message = inner.Message;
-            if (!string.IsNullOrEmpty(message)
+            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(message)
                 && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
             {
                 return true;

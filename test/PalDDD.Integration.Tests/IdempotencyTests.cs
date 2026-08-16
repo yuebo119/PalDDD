@@ -303,6 +303,39 @@ public sealed class IdempotencyTests
         await Assert.That(calls).IsEqualTo(2);
     }
 
+    [Test]
+    public async Task InMemoryStore_TryStartAsync_PreemptsZombieAndOldHolderMarkIgnored()
+    {
+        // P3 回归（二十一轮）：InMemory 幂等存储的僵尸/失败抢占路径现返回新实例（引用隔离对齐
+        // InMemoryProjectionCheckpointStore 十七轮语义）——被抢占旧实例的 MarkCompletedAsync
+        // 必须被 ReferenceEquals 守卫静默忽略（镜像 ProjectionTests 同名形态）
+        var store = new InMemoryIdempotencyStore();
+        var now = DateTimeOffset.Parse("2026-08-16T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var policy = new IdempotencyPolicy
+        {
+            ProcessingTimeout = TimeSpan.FromMinutes(5),
+            Retention = TimeSpan.FromHours(1)
+        };
+
+        // 行为断言（弱断言棘轮约束：新测试禁 IsNotNull 守卫式）——状态即非空证明
+        var first = await store.TryStartAsync("CreateOrder", "cmd-1", now, policy);
+        await Assert.That(first!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+
+        // 租约未过期——同键不可重入
+        var stillAlive = await store.TryStartAsync("CreateOrder", "cmd-1", now.AddMinutes(1), policy);
+        await Assert.That(stillAlive).IsNull();
+
+        // 租约过期——僵尸被抢占，返回新实例（非旧引用复用）
+        var preempted = await store.TryStartAsync("CreateOrder", "cmd-1", now.AddMinutes(6), policy);
+        await Assert.That(preempted!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+        await Assert.That(preempted).IsNotSameReferenceAs(first);
+
+        // 被抢占旧实例的 Mark 必须被守卫忽略——新持有者仍为 Processing
+        await store.MarkCompletedAsync(first!, new byte[] { 1, 2, 3 }, now.AddMinutes(7));
+        var current = await store.GetAsync("CreateOrder", "cmd-1", now.AddMinutes(7));
+        await Assert.That(current!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+    }
+
     private static ReadOnlyMemory<byte> Serialize(string value)
         => Encoding.UTF8.GetBytes(value);
 

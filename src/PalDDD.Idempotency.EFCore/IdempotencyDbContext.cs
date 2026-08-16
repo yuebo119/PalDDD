@@ -206,9 +206,11 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
             }
 
             // SQLite: Microsoft.Data.Sqlite.SqliteException 消息包含 "UNIQUE constraint"
-            // ⚠️ 已知局限（P3-3）：字符串匹配可能误判未来某 provider 的非唯一约束错误。
+            // P2 修复（二十一轮）：补 SqliteException 类型限定（镜像 InboxDbContext 十七轮修复，PD17）——
+            // 裸消息匹配在 TryCreateRecordAsync 主路径误判为幂等冲突返回 null 是请求丢失语义（ITM-065 要防的）
             var message = inner.Message;
-            if (!string.IsNullOrEmpty(message)
+            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(message)
                 && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
             {
                 return true;

@@ -43,13 +43,13 @@ public static class SqliteJson
     /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Extract(string column, string key)
-        => $"json_extract({Escape(column)}, '$.{Escape(key)}')";
+        => $"json_extract({EscapeIdentifier(column)}, '$.{EscapeLiteral(key)}')";
 
     /// <summary>提取嵌套 JSON 路径：json_extract(col, '$.a.b.c')</summary>
     /// <param name="path">路径段数组（每段不得含点号——同 <see cref="Extract"/> 的 key 约束，点号是分隔符）。</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractPath(string column, params string[] path)
-        => $"json_extract({Escape(column)}, '$.{string.Join('.', path.Select(Escape))}')";
+        => $"json_extract({EscapeIdentifier(column)}, '$.{string.Join('.', path.Select(EscapeLiteral))}')";
 
     // ── 类型检查 ──
 
@@ -57,12 +57,12 @@ public static class SqliteJson
     /// <param name="key">JSON 键名（同 <see cref="Extract"/> 的 key 约束：不得含点号）。</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Type(string column, string key)
-        => $"json_type({Escape(column)}, '$.{Escape(key)}')";
+        => $"json_type({EscapeIdentifier(column)}, '$.{EscapeLiteral(key)}')";
 
     /// <summary>验证 JSON 有效性：json_valid(col) → 1/0</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string IsValid(string column)
-        => $"json_valid({Escape(column)})";
+        => $"json_valid({EscapeIdentifier(column)})";
 
     /// <summary>检查键是否存在：json_type(col, '$.key') IS NOT NULL</summary>
     /// <param name="key">JSON 键名（同 <see cref="Extract"/> 的 key 约束：不得含点号）。</param>
@@ -75,12 +75,12 @@ public static class SqliteJson
     /// <summary>JSON 数组长度：json_array_length(col)</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ArrayLength(string column)
-        => $"json_array_length({Escape(column)})";
+        => $"json_array_length({EscapeIdentifier(column)})";
 
     /// <summary>创建 JSON 数组：json_array('a','b','c')</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Array(params string[] values)
-        => $"json_array({string.Join(',', values.Select(v => $"'{Escape(v)}'"))})";
+        => $"json_array({string.Join(',', values.Select(v => $"'{EscapeLiteral(v)}'"))})";
 
     /// <summary>创建 JSON 对象：json_object('k1','v1','k2','v2')</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -91,8 +91,8 @@ public static class SqliteJson
         var parts = new string[keyValuePairs.Length];
         for (int i = 0; i < keyValuePairs.Length; i += 2)
         {
-            parts[i] = $"'{Escape(keyValuePairs[i])}'";
-            parts[i + 1] = $"'{Escape(keyValuePairs[i + 1])}'";
+            parts[i] = $"'{EscapeLiteral(keyValuePairs[i])}'";
+            parts[i + 1] = $"'{EscapeLiteral(keyValuePairs[i + 1])}'";
         }
         return $"json_object({string.Join(',', parts)})";
     }
@@ -102,21 +102,28 @@ public static class SqliteJson
     /// <summary>展开 JSON 数组为行：json_each(col) → key/value/type/...</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Each(string column)
-        => $"json_each({Escape(column)})";
+        => $"json_each({EscapeIdentifier(column)})";
 
     /// <summary>递归展开 JSON 树：json_tree(col) → key/value/type/path</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Tree(string column)
-        => $"json_tree({Escape(column)})";
+        => $"json_tree({EscapeIdentifier(column)})";
 
     // ── 常用于 Outbox/Saga 查询的快捷方法 ──
 
     /// <summary>按 Outbox 消息类型过滤（payload JSON 中 Type 字段）</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string OutboxByType(string messageType)
-        => $"{Extract("payload", "Type")} = '{Escape(messageType)}'";
+        => $"{Extract("payload", "Type")} = '{EscapeLiteral(messageType)}'";
 
     // ── 内部 ──
 
-    private static string Escape(string s) => s.Replace("'", "''");
+    // P2/P3 修复（二十一轮·转义语义拆分，对齐 SqliteFtsExtensions.Escape:130）：
+    // 此前 Escape（单引号翻倍）被同时用于标识符位置与值位置——标识符位置的 column
+    // 应双引号包裹（SQLite 标识符引用语法），单引号翻倍对列名既不引用也挡不住注入。
+    // 现拆为：EscapeIdentifier 管标识符（column 参数），EscapeLiteral 管单引号
+    // 字面量内文（key/path 段、Array/BuildObject 的 JSON 键值、OutboxByType 比较值）。
+    private static string EscapeIdentifier(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
+
+    private static string EscapeLiteral(string s) => s.Replace("'", "''");
 }
