@@ -632,7 +632,7 @@ src/                         36 源项目 · Clean Architecture
 ├── Hosting/                 DependencyInjection · AspNetCore
 └── Metapackages/            Base · Extension（聚合元包，仅 PackageReference，无源码）
 
-test/                        16 测试项目（TUnit）· 934 测试
+test/                        16 测试项目（TUnit）· 933 测试
 bench/                       BenchmarkDotNet 性能基准
 samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi · AotSample
 docs/                        架构 · 使用指南 · 教程 · ADR
