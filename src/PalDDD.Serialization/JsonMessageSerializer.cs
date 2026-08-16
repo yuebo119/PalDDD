@@ -2,6 +2,7 @@
 // 📝 JsonMessageSerializer — JSON 序列化实现（JsonTypeInfo 强类型）
 // ─────────────────────────────────────────────────────────────
 using System.Buffers;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 
 namespace PalDDD.Serialization.Json;
@@ -120,7 +121,8 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     }
 
     /// <inheritdoc />
-    public TMessage? Deserialize<TMessage>(ReadOnlySpan<byte> payload, MessageDescriptor descriptor)
+    public TMessage? Deserialize<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.NonPublicConstructors)] TMessage>(
+        ReadOnlySpan<byte> payload, MessageDescriptor descriptor)  // P3（二十三轮）：对齐接口 DAM 标注（IL2095）
     {
         ArgumentNullException.ThrowIfNull(descriptor);
 

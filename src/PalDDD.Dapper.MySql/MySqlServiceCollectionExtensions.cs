@@ -61,6 +61,9 @@ public static class MySqlServiceCollectionExtensions
             connectionString = new MySqlConnectionStringBuilder(connectionString)
             {
                 ConnectionReset = false  // P2 修正（二十一轮主线程）：builder 属性真名是 ConnectionReset（连接串键 "Reset Connections" 的 C# 映射）
+                // P3 声明（二十三轮验证轮）：① 显式 applyOptimization=true 时覆盖用户连接串中的
+                // 显式 Reset Connections 设置（强意图优先）；② ApplySessionOptimization 失败被吞时
+                // 连接串已带 ConnectionReset=false——"优化未打上、泄漏代价照付"的次序权衡已接受
             }.ConnectionString;
 
         var builder = new MySqlDataSourceBuilder(connectionString);

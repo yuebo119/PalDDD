@@ -827,10 +827,10 @@ public sealed class StrategicDddAnalyzerTests
     // 原实现取类型内第一个字符串字面量（此处是 [BoundedContext("ordering")] 的参数，
     // fix 会把上下文名改写成消息名）；修复后不注册 fix
     // 注：EventName 为 IDomainEvent 的 static abstract 成员，缺失时源码报 CS0535——
-    // PDDD015 在独立探针（等价编译选项）下触发，但在 testhost TPA 环境下诊断集合
-    // 存在差异（主线程验证：dotnet run 探针报 PDDD015 / dotnet test 不报）。
-    // 改为泛化负向断言：目标类型上至少一个 PDDD 诊断存在（非空洞），且对全部诊断
-    // 均无 fix 注册——负向语义（缺失 EventName 时 fix 不得注册）不依赖特定诊断 ID。
+    // 分析器在错误符号编译上照常运行，PDDD015 定位回退 type.Locations[0]。
+    // 二十三轮验证轮勘正：独立探针与 dotnet test 均报 PDDD015（此前"环境差异"注释
+    // 与实证相反）；泛化负向断言（不锁诊断 ID）保留——对全部 PDDD 诊断无 fix 注册，
+    // 非空洞保证由 Count>0 显式断言承担。
     [Test]
     public async Task MissingEventNameDeclaration_DoesNotRegisterCodeFix()
     {
