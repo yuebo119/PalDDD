@@ -306,7 +306,8 @@ public sealed class JsonSerializationServiceCollectionTests
         var serializer = provider.GetRequiredService<IMessageSerializer>();
 
         await Assert.That(serializer).IsTypeOf<JsonMessageSerializer>();
-        await Assert.That(catalog.Find(typeof(JsonOnlyMessage))).IsNotNull();
+        // 行为断言（弱断言棘轮）：SchemaVersion 默认 1——Find 未命中时 ?? 0 使断言失败
+        await Assert.That(catalog.Find(typeof(JsonOnlyMessage))?.SchemaVersion ?? 0).IsEqualTo(1);
     }
 
     [Test]

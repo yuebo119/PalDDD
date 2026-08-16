@@ -405,8 +405,9 @@ public sealed class ProjectionTests
         var store = new InMemoryProjectionCheckpointStore();
         var now = DateTimeOffset.Parse("2026-08-16T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
 
+        // 行为断言（弱断言棘轮约束：新测试禁 IsNotNull 守卫式）——状态即非空证明
         var first = await store.TryStartAsync("order-summary", "orders", "42", now, TimeSpan.FromMinutes(5));
-        await Assert.That(first).IsNotNull();
+        await Assert.That(first!.Status).IsEqualTo(ProjectionCheckpointStatus.Processing);
 
         // 租约未过期——同位置不可重入
         var stillAlive = await store.TryStartAsync("order-summary", "orders", "42", now.AddMinutes(1), TimeSpan.FromMinutes(5));
@@ -414,8 +415,7 @@ public sealed class ProjectionTests
 
         // 租约过期——僵尸被抢占，返回新实例
         var preempted = await store.TryStartAsync("order-summary", "orders", "42", now.AddMinutes(6), TimeSpan.FromMinutes(5));
-        await Assert.That(preempted).IsNotNull();
-        await Assert.That(preempted.Status).IsEqualTo(ProjectionCheckpointStatus.Processing);
+        await Assert.That(preempted!.Status).IsEqualTo(ProjectionCheckpointStatus.Processing);
         await Assert.That(preempted).IsNotSameReferenceAs(first);
 
         // 被抢占旧实例的 Mark 必须被守卫忽略——新持有者的 Processing 状态不受影响

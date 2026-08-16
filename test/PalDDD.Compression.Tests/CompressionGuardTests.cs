@@ -157,8 +157,8 @@ public sealed class CompressionGuardTests
                 [new StubCompressor(CompressionAlgorithm.GZip), new StubCompressor(CompressionAlgorithm.GZip)]);
         }
         catch (NotSupportedException ex) { thrown = ex; }
-        await Assert.That(thrown).IsNotNull();
-        await Assert.That(thrown!.Message).Contains("GZip");
+        // 行为断言（弱断言棘轮）：Message 为 null/空时 Contains 必败——非空证明异常确实抛出
+        await Assert.That(thrown?.Message ?? "").Contains("GZip");
     }
 
     private sealed class StubCompressor(CompressionAlgorithm algorithm) : ICompressor
