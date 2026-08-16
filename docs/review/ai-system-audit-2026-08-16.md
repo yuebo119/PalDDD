@@ -65,3 +65,16 @@
 7. **可发现性**：根 README 增 `.ai` 系统一节（独立仓库、获取方式、CI 降级）。
 8. **卫生**：history 归位/补档、七流顺序统一、README 系统计数统一。
 9. **回归网**：给 no-op 门补"变异探针"式负向自检（坏脚本/坏 SQL 必须让 V16/#13 红）——防再犯。
+
+---
+
+## 六、修复轮状态（2026-08-16 完成）
+
+> 全部 9 项优化清单已执行完毕（[x]）。关键返工与证据：
+> - **#13 no-op 门**：修复了双重缺陷（循环缩进在 raise 之后永不可达 + 家族正则 `\$` 匹配字面 $）——合成坏 SQL 红测输出 `InboxInsertMySql: missing guard`，真库复跑 22 项通过。
+> - **V16 no-op 门**：重写为 `if ! bash -n`——坏脚本红测 `FAIL V16`，移除后 16/16 绿。
+> - **安装链路 v2**：安装器以自身所在 `.ai` 为源复制现行系统；临时目录安装红测产出完整系统（lessons 35KB + tech-debt 19.5KB + 全 prompts/scripts）；幂等守卫覆盖 AGENTS.md/.ai/scripts/.github 四落点；system-template 快照同步刷新；INSTALL.md 重写。
+> - **test prompt**：结果格式示例改为 test-gate 真实八类输出并注明机械子集口径。
+> - **脚本级**：verify-action-items 根发现、tech-debt #3 bin 过滤、test-gate T-DEF-4 计数（实测 2 个）、probe-template Windows 路径（生成 Include="C:\ai\... 实测）、review-snapshot AOT 8/14 口径、gate perl 硬门 + G11 sed 钳制 + G17b 入 WARNED、doc D1 非空、assertion 参数解析、tech-debt #19 可移植正则、allow/WARN 汇总透明化（20 PASS / 2 ALLOW / 0 FAIL）、dialect SKIP 语义注明。
+> - **文档漂移**：14 项全部清零（README/engine/prompt/lessons/test/gate 提示词、KFP 速版补 PD27-29、verify-ai V7/V8、metrics、perspective-stats、根 README 新增 .ai 系统一节、history 归档归位）。
+> - **终验**：verify-ai 16/16 · tech-debt 20P/2A/0F · gate 22/22（提交后）· doc-consistency 10/10 · test-gate · assertion 173 · verify-action-items 11/0 · review-snapshot AOT 口径 8/14。

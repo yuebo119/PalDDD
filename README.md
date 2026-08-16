@@ -695,6 +695,12 @@ flowchart TB
     PalORM --> SQLite
 ```
 
+## AI 质量系统（.ai）
+
+- ① `.ai/` 是独立 git 仓库（本仓库 .gitignore 有意排除，clone 不含）。
+- ② 获取：本仓库维护或向 .ai 独立仓库拉取；安装路径见 `.ai/system-template/INSTALL.md`（v2：以现行 .ai 为源）。
+- ③ CI 在无 .ai 时自动降级为根 scripts/gate-check.sh（G1-G3 快速门禁）。
+- ④ 本地运行入口：`bash .ai/scripts/verify-ai-system.sh` / `gate-check.sh` / `tech-debt-scan.sh`（22 类）。
 
 ---
 

@@ -3,6 +3,12 @@
 
 set -euo pipefail
 
+# 自审计 A3 修复：位置无关仓库根发现——此前 [ -e ]/git grep 均相对当前目录，
+# 从子目录运行会把真实存在的路径误报 FAIL（与其他脚本的 _ai_root_find 同款）
+_ai_root_find() { local d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; while [ "$d" != "/" ] && [ ! -f "$d/PalDDD.slnx" ]; do d="$(dirname "$d")"; done; printf '%s' "$d"; }
+ROOT="$(_ai_root_find)"
+cd "$ROOT"
+
 if [ $# -ne 1 ]; then
     printf '用法：bash scripts/verify-action-items.sh <action-items-file>\n' >&2
     exit 2

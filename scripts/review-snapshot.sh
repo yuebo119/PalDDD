@@ -47,9 +47,13 @@ echo "PDDD 诊断规则数: $PDDD_RULES"
 echo ""
 
 echo "── AOT 配置 ──"
-AOT_TRUE=$(grep -rl "IsAotCompatible.*true" src/ --include="*.csproj" 2>/dev/null | grep -v obj | wc -l | tr -d ' ')
-AOT_FALSE=$(grep -rl "IsAotCompatible.*false" src/ --include="*.csproj" 2>/dev/null | grep -v obj | wc -l | tr -d ' ')
-echo "IsAotCompatible=true 项目: $AOT_TRUE"
+# 自审计 A7 修复：只匹配属性行（<IsAotCompatible>…</IsAotCompatible>），
+# 避免 Description 散文（如 Extension 的"IsAotCompatible=false 说明"）污染计数；
+# true 侧注明口径——仅显式声明 true 的项目（8 个 Dapper/PalORM），
+# 其余 14 个核心项目经 Directory.Build.props 全局 true 继承。
+AOT_TRUE=$(grep -rlE '^\s*<IsAotCompatible>true</IsAotCompatible>' src/ --include="*.csproj" 2>/dev/null | grep -v obj | wc -l | tr -d ' ')
+AOT_FALSE=$(grep -rlE '^\s*<IsAotCompatible>false</IsAotCompatible>' src/ --include="*.csproj" 2>/dev/null | grep -v obj | wc -l | tr -d ' ')
+echo "IsAotCompatible=true 项目（显式声明口径）: $AOT_TRUE"
 echo "IsAotCompatible=false 项目: $AOT_FALSE"
 echo ""
 
