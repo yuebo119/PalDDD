@@ -69,6 +69,14 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
 #pragma warning restore EF1003
         }
 
+        // P2 修复（十八轮验证轮 F3）：租约改 ExecuteSqlRaw 后，FromSqlRaw 物化的跟踪实体
+        // 残留 Modified 脏状态（LockedBy/LockedUntil 内存值未经 SaveChanges 落库）——
+        // 后续调用方 SaveChangesAsync 会带着脏状态写入：与 ReleaseForRetry 的 ExecuteUpdate
+        // （RetryCount 已在 DB +1）叠加时 RetryCount 并发令牌失配，DbUpdateConcurrencyException
+        // 使同批后续消息的 Mark* 一并回滚（EF SaveChanges 整批原子）→ 重复发布。
+        // AcceptAllChanges 把跟踪状态归位 Unchanged（DB 已是租约真值，内存近似值仅守卫快照用）。
+        ChangeTracker.AcceptAllChanges();
+
         await transaction.CommitAsync(ct).ConfigureAwait(false);
         return messages;
     }

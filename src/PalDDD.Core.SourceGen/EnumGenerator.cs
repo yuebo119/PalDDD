@@ -305,7 +305,10 @@ partial class {{info.TypeName}}
         // （每次编译新实例 → 缓存恒 miss）——逐元素比较实现值等价，镜像
         // MessageRegistryGenerator.LocationInfo 的 value-equatable 范式。
         // P3 修复（十七轮）：DiagnosticMessage 死字段已删——诊断消息由 descriptor 统一
-        // 承载，payload 从不消费该字段。DiagnosticId/Location 不参与相等：诊断分支不产出缓存内容。
+        // 承载，payload 从不消费该字段。
+        // P3 修复（十八轮验证轮 A）：DiagnosticId 纳入相等——ReportDiagnostic 也是管线输出，
+        // PALENUM002/003/004 翻转而其余字段相等时缓存命中会残留 IDE 僵尸诊断
+        // （镜像 IdGenInfo 十轮修法；Location 仍不参与：位置随编辑漂移，参与会造成缓存 miss）。
         public bool Equals(EnumGenInfo? other) =>
             other is not null
             && Namespace == other.Namespace
@@ -314,7 +317,8 @@ partial class {{info.TypeName}}
             && ContainingNames.SequenceEqual(other.ContainingNames)
             && ValueType == other.ValueType
             && FieldsEqual(Fields, other.Fields)
-            && HasFields == other.HasFields;
+            && HasFields == other.HasFields
+            && DiagnosticId == other.DiagnosticId;
 
         // 手写逐元素循环：避免 SequenceEqual 扩展方法在 ImmutableArray 与
         // System.Linq.ImmutableArrayExtensions 之间的绑定歧义（后者可能退化为引用比较）
@@ -338,6 +342,7 @@ partial class {{info.TypeName}}
                 hash = hash * 31 + ValueType.GetHashCode();
                 foreach (var field in Fields) hash = hash * 31 + field.GetHashCode();
                 hash = hash * 31 + HasFields.GetHashCode();
+                hash = hash * 31 + (DiagnosticId?.GetHashCode() ?? 0);
                 return hash;
             }
         }

@@ -145,4 +145,26 @@ public sealed class CompressionGuardTests
         // Native 版输出检查在 Decompress 返回后 → InvalidDataException（已知限制：先分配后检查）
         await Assert.That(() => compressor.Decompress(compressed.Span)).Throws<InvalidDataException>();
     }
+
+    [Test]
+    public async Task CompressionProvider_DuplicateAlgorithm_ThrowsWithAlgorithmName()
+    {
+        // P4 回归（十八轮验证轮）：重复算法注册快速失败且异常含算法名
+        NotSupportedException? thrown = null;
+        try
+        {
+            _ = new CompressionProvider(
+                [new StubCompressor(CompressionAlgorithm.GZip), new StubCompressor(CompressionAlgorithm.GZip)]);
+        }
+        catch (NotSupportedException ex) { thrown = ex; }
+        await Assert.That(thrown).IsNotNull();
+        await Assert.That(thrown!.Message).Contains("GZip");
+    }
+
+    private sealed class StubCompressor(CompressionAlgorithm algorithm) : ICompressor
+    {
+        public CompressionAlgorithm Algorithm => algorithm;
+        public ReadOnlyMemory<byte> Compress(ReadOnlySpan<byte> data, CompressionLevel level = CompressionLevel.Balanced) => Array.Empty<byte>();
+        public byte[] Decompress(ReadOnlySpan<byte> compressed) => [];
+    }
 }

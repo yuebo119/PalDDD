@@ -8,8 +8,10 @@ namespace PalDDD.Compression;
 
 /// <summary>
 /// 默认压缩提供器 — 从 DI 容器收集所有已注册的 <see cref="ICompressor"/>。
+/// P3（十八轮验证轮）：internal → public——直接构造（不经 DI）是合法用法，
+/// 且重复算法检测的快速失败契约需要消费方可测。
 /// </summary>
-internal sealed class CompressionProvider : ICompressionProvider
+public sealed class CompressionProvider : ICompressionProvider
 {
     private readonly FrozenDictionary<CompressionAlgorithm, ICompressor> _compressors;
 

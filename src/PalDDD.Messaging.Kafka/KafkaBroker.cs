@@ -181,7 +181,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             // P3 修复（十七轮）：非关停 OCE 空洞——外层 token 未取消却收到 OCE（语义不明，
             // 如链路 token 深层触发）时，此前 when 分支与 not-OCE 分支均不匹配，
             // 异常逃逸致 Task 静默 fault。终止而非 continue：OCE 语义不明时继续消费
-            // 可能违背取消意图，终止更安全（终止状态经 ConsumeTask 可观测，运维可介入）。
+            // 可能违背取消意图，终止更安全（终止经 Error 日志可观测（捕获后 Task 以 RanToCompletion 完成，与正常关停不可凭状态区分——十八轮验证轮 V3 勘正），运维可介入）。
             catch (OperationCanceledException ex)
             {
                 _logger.Error(ex, $"Kafka consume loop terminated by non-shutdown cancellation: {topic} @ {_consumerConfig.GroupId}");

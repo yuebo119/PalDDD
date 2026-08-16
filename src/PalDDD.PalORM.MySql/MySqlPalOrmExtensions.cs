@@ -88,9 +88,12 @@ public static class MySqlPalOrmExtensions
         ArgumentNullException.ThrowIfNull(jsonTypeInfo);
 
         services.AddScoped(typeof(ISagaStateStore<TState>), sp =>
+            // P3 修复（十八轮验证轮 F1）：解析容器 TimeProvider——开放泛型 DI 路径会注入容器注册的
+            // TimeProvider（如 FakeTimeProvider），便捷注册此前回落 System 使租约/时间断言漂移
             new MySqlSagaStateStore<TState>(
                 sp.GetRequiredService<DataSession<MySqlProvider>>(),
-                jsonTypeInfo));
+                jsonTypeInfo,
+                sp.GetService<TimeProvider>()));
 
         return services;
     }

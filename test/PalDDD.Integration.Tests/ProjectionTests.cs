@@ -397,6 +397,33 @@ public sealed class ProjectionTests
         }
     }
 
+    [Test]
+    public async Task InMemoryCheckpoint_TryStartAsync_PreemptsZombieAndOldHolderMarkIgnored()
+    {
+        // P3 回归（十八轮验证轮 V3）：InMemory 僵尸路径现返回新实例（引用隔离对齐 EFCore
+        // Revision 语义）——被抢占旧实例的 MarkCompletedAsync 必须被静默忽略
+        var store = new InMemoryProjectionCheckpointStore();
+        var now = DateTimeOffset.Parse("2026-08-16T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+
+        var first = await store.TryStartAsync("order-summary", "orders", "42", now, TimeSpan.FromMinutes(5));
+        await Assert.That(first).IsNotNull();
+
+        // 租约未过期——同位置不可重入
+        var stillAlive = await store.TryStartAsync("order-summary", "orders", "42", now.AddMinutes(1), TimeSpan.FromMinutes(5));
+        await Assert.That(stillAlive).IsNull();
+
+        // 租约过期——僵尸被抢占，返回新实例
+        var preempted = await store.TryStartAsync("order-summary", "orders", "42", now.AddMinutes(6), TimeSpan.FromMinutes(5));
+        await Assert.That(preempted).IsNotNull();
+        await Assert.That(preempted.Status).IsEqualTo(ProjectionCheckpointStatus.Processing);
+        await Assert.That(preempted).IsNotSameReferenceAs(first);
+
+        // 被抢占旧实例的 Mark 必须被守卫忽略——新持有者的 Processing 状态不受影响
+        await store.MarkCompletedAsync(first!, now.AddMinutes(7));
+        var current = await store.GetAsync("order-summary", "orders", "42");
+        await Assert.That(current!.Status).IsEqualTo(ProjectionCheckpointStatus.Processing);
+    }
+
     private sealed class InMemoryReplaySource<TMessage>(IReadOnlyList<ReplayEvent<TMessage>> events)
         : IEventReplaySource<TMessage>
     {

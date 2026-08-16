@@ -168,6 +168,22 @@ public sealed class ServiceRegistrationTests
         await Assert.That(pipelineDescriptors.Count).IsEqualTo(2);
     }
 
+    [Test]
+    public async Task AddPalPipelineBehaviors_DoubleCall_DoesNotDuplicateRegistrations()
+    {
+        // P3 回归（十八轮验证轮 D）：哨兵防重——双调后管道注册仍为 2（不翻倍）
+        var services = new ServiceCollection();
+        services.AddPalPipelineBehaviors();
+        services.AddPalPipelineBehaviors();
+
+        var pipelineDescriptors = services
+            .Where(sd => sd.ServiceType.IsGenericType
+                         && sd.ServiceType.GetGenericTypeDefinition() == typeof(IPipelineBehavior<,>))
+            .ToList();
+
+        await Assert.That(pipelineDescriptors.Count).IsEqualTo(2);
+    }
+
     /// <summary>TryAdd 语义 — 重复调用 AddPalDDD 不引发注册冲突</summary>
     [Test]
     public async Task AddPalDDD_Idempotent_DoubleRegistrationDoesNotThrow()

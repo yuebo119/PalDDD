@@ -33,8 +33,9 @@ public sealed class PostgreSqlSagaStateStore<TState> : PalOrmSagaStateStore<Post
     where TState : SagaState, new()
 {
     public PostgreSqlSagaStateStore(DataSession<PostgreSqlProvider> session,
-        System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState>? jsonTypeInfo = null)
-        : base(session, jsonTypeInfo) { }
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState>? jsonTypeInfo = null,
+        TimeProvider? clock = null)
+        : base(session, jsonTypeInfo, clock) { }  // P3（十八轮验证轮 F1）：透传 clock——便捷注册解析容器 TimeProvider
 }
 
 /// <summary>PostgreSQL 方言 EventLog Store。</summary>

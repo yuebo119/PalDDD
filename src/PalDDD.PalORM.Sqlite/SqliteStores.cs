@@ -34,8 +34,9 @@ public sealed class SqliteSagaStateStore<TState> : PalOrmSagaStateStore<SqlitePr
     where TState : SagaState, new()
 {
     public SqliteSagaStateStore(DataSession<SqliteProvider> session,
-        System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState>? jsonTypeInfo = null)
-        : base(session, jsonTypeInfo) { }
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState>? jsonTypeInfo = null,
+        TimeProvider? clock = null)
+        : base(session, jsonTypeInfo, clock) { }  // P3（十八轮验证轮 F1）：透传 clock——便捷注册解析容器 TimeProvider
 }
 
 /// <summary>SQLite 方言 EventLog Store。</summary>
