@@ -70,12 +70,27 @@ public static class EventStreamJsonLines
     {
         using var reader = new StreamReader(input, leaveOpen: true);
 
+        var lineNumber = 0L;
         while (await reader.ReadLineAsync(ct).ConfigureAwait(false) is { } line)
         {
+            lineNumber++; // 空行也计入——行号须对齐文件物理行，坏行才定位得准
             if (string.IsNullOrWhiteSpace(line))
                 continue;
 
-            var evt = DeserializeEventLine(line);
+            EventData? evt;
+            try
+            {
+                evt = DeserializeEventLine(line);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // P3 修复（十七轮）：坏行异常（JsonException / Ulid 格式错等）原样上抛无行号，
+                // 大文件排障需逐行二分定位——转 EventReplayException 带行号与原始异常
+                // （对齐 EventLogReplaySource 反序列化失败转 EventReplayException 的模式）
+                throw new EventReplayException(
+                    $"Event import failed at line {lineNumber}: line is not a valid exported event record.", ex);
+            }
+
             if (evt is not null)
                 yield return evt;
         }

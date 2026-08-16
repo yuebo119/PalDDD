@@ -68,6 +68,11 @@ public static class PostgreSqlSoftDelete
     }
 
     /// <summary>生成部分索引创建脚本（仅索引活跃行）</summary>
+    /// <param name="indexedColumns">
+    /// 索引列表达式（不带括号，如 <c>"created_at"</c> 或 <c>"created_at, id"</c>）。
+    /// ⚠️ 此参数是 SQL 片段，调用方必须只传入受信任模板（值会直接进入可执行 SQL——
+    /// 表达式索引的函数名/运算符同样可被注入），用户输入不得拼接进此字符串。
+    /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string CreatePartialIndex(string table, string indexName, string indexedColumns, string column = DefaultColumn)
         => $"CREATE INDEX IF NOT EXISTS {Escape(indexName)} ON {Escape(table)} ({indexedColumns}) WHERE {Escape(column)} IS NULL";

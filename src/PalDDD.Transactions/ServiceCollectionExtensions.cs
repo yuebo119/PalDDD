@@ -21,6 +21,9 @@ public static class ServiceCollectionExtensions
             .Validate(static options => options.PollInterval > TimeSpan.Zero, "Outbox poll interval must be greater than zero.")
             .Validate(static options => options.MaxRetryCount > 0, "Outbox max retry count must be greater than zero.")
             .Validate(static options => options.MaxRetryDelay > TimeSpan.Zero, "Outbox max retry delay must be greater than zero.")
+            // P3 修复（十七轮）：补 LeaseOwner 校验（对齐 AddPalSaga 侧）——LeaseOwner 为空时
+            // 租约无法归属多实例中的节点，LockedBy 写入空白使租约抢占判断失效
+            .Validate(static options => !string.IsNullOrWhiteSpace(options.LeaseOwner), "Outbox lease owner is required.")
             .ValidateOnStart();
         services.TryAddScoped<OutboxBatchProcessor>();
         services.AddHostedService<OutboxProcessor>();

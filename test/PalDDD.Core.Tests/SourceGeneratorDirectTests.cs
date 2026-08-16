@@ -119,6 +119,46 @@ public sealed class SourceGeneratorDirectTests
     }
 
     [Test]
+    public async Task IdentityGenerator_UlidType_GeneratesWithoutPalid001()
+    {
+        // P1 回归（十七轮）：白名单 case 曾写 "ByteAether.Ulid" 而 ToDisplayString() 返回
+        // "ByteAether.Ulid.Ulid"——[GenerateId(typeof(Ulid))] 恒报 PALID001（框架主推类型不可用）
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+            using ByteAether.Ulid;
+
+            namespace TestDomain;
+
+            [GenerateId(typeof(Ulid))]
+            public readonly partial record struct TestUlidId;
+            """);
+
+        await Assert.That(result.Diagnostics).IsEmpty();
+        var source = GetGeneratedSource(result, "TestUlidId.g.cs");
+        await Assert.That(source).Contains("Ulid.New()");
+    }
+
+    [Test]
+    public async Task IdentityGenerator_LongType_GeneratesWithoutPalid001()
+    {
+        // P1 回归（十七轮）附：long 白名单十六轮零覆盖（靠巧合通过）——锁定
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            [GenerateId(typeof(long))]
+            public readonly partial record struct TestLongId;
+            """);
+
+        await Assert.That(result.Diagnostics).IsEmpty();
+        var source = GetGeneratedSource(result, "TestLongId.g.cs");
+        await Assert.That(source).Contains("operator");
+    }
+
+    [Test]
     public async Task IdentityGenerator_StringType_GeneratesNullGuard()
     {
         var result = RunIdentityGenerator(
@@ -278,6 +318,8 @@ public sealed class SourceGeneratorDirectTests
         }
 
         yield return MetadataReference.CreateFromFile(typeof(GenerateMessageAttribute).Assembly.Location);
+        // P1 回归（十七轮）：[GenerateId(typeof(Ulid))] 测试需要 ByteAether.Ulid 程序集引用
+        yield return MetadataReference.CreateFromFile(typeof(ByteAether.Ulid.Ulid).Assembly.Location);
     }
 
     // ── Generator 代理（从编译后的 DLL 加载，避免 analyzer 引用问题）──

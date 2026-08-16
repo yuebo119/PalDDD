@@ -26,7 +26,8 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
     public async ValueTask<ProjectionCheckpoint?> GetAsync(
         string projectionName, string sourceName, string position, CancellationToken ct = default)
     {
-        // CheckpointRow 未注册为实体（复合主键 PALORM019 拒绝）—— 用 GetRawConnection + 手动 reader
+        // 复合主键表全程手写 SQL —— GetRawConnection + 手动 reader（QueryFirstAsync 对未注册类型返回空对象）
+        // P2/P3 修复（十七轮）：修正矛盾注释——CheckpointRow 投影 DTO 已删除（Models 死代码，Store 从未使用）
         await using var cmd = Session.GetRawConnection().CreateCommand();
         cmd.CommandText = "SELECT projection_name, source_name, position, status, updated_at, lease_until, revision, error FROM projection_checkpoints WHERE projection_name = @p0 AND source_name = @p1 AND position = @p2";
         AddParam(cmd, "@p0", projectionName);

@@ -92,7 +92,15 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         var until = now.Add(leaseDuration);
         // P1 修复（十一轮·实测发现）：MySQL 不支持 UPDATE ... WHERE id IN (SELECT ... LIMIT)——
         // JOIN 形态替代（对齐 PalORM 版）；SQLite/PG 支持子查询内 LIMIT 保持原状
-        var leaseSql = _dbType == DapperDbType.MySql ? SqlTemplates.SagaLeaseActiveMySql : SqlTemplates.SagaLeaseActive;
+        // P2/P3 修复（十七轮）：PG 分支改用 SKIP LOCKED 变体——与 DapperOutboxStore 租约 PG 路径
+        // 同款（多 worker 并发租约跳过彼此锁定的行，而非阻塞后拿到空批次）；
+        // MySQL READ COMMITTED 两步窗口由 SagaUpdate 的 version 乐观锁兜底；SQLite 单写者无影响
+        var leaseSql = _dbType switch
+        {
+            DapperDbType.PostgreSql => SqlTemplates.SagaLeaseActivePG,
+            DapperDbType.MySql => SqlTemplates.SagaLeaseActiveMySql,
+            _ => SqlTemplates.SagaLeaseActive
+        };
         await conn.ExecuteAsync(
             new CommandDefinition(leaseSql, new { owner, until = ToTimeParam(until), now = ToTimeParam(now), n = batchSize }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
 
@@ -231,6 +239,11 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
     /// PG：原生 <see cref="DateTimeOffset"/> 参数——Npgsql 映射 timestamptz，"O" 格式 string
     /// 按 text OID 发送，timestamptz 与 text 间无比较运算符，租约 WHERE 必炸；
     /// Sqlite：维持 "O" 格式 string（既有行为）。
+    /// <para>
+    /// P2/P3 修复（十七轮）：返回 <c>object</c>（DateTimeOffset 装箱一次）是刻意的收口防线——
+    /// 强类型返回会诱导调用方绕过本方法自行格式化，方言错配（PG text OID / MySQL session tz）
+    /// 将重新进入；五 Store 同款声明（Outbox/Inbox/Saga/EventLog/Checkpoint）。装箱开销相对 SQL 执行成本可忽略。
+    /// </para>
     /// </summary>
     private object ToTimeParam(DateTimeOffset value) => _dbType switch
     {

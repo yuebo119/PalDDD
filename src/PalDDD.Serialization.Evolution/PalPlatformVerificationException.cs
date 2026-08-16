@@ -42,8 +42,9 @@ public sealed class PalPlatformVerificationException : InvalidOperationException
     public PalPlatformVerificationException(IReadOnlyList<PalPlatformVerificationError> errors)
         : base(CreateMessage(errors))
     {
-        ArgumentNullException.ThrowIfNull(errors);
-
+        // P3 修复（十七轮）：null 校验收敛——base 调用的 <see cref="CreateMessage"/>
+        // 先于构造体执行且已含 ThrowIfNull，构造体到达此处时 errors 必非 null，
+        // 此前的重复 ThrowIfNull 为不可达死代码，删除（单一校验点）。
         if (errors.Count == 0)
             throw new ArgumentException("Platform verification exception requires at least one error.", nameof(errors));
 
@@ -55,7 +56,7 @@ public sealed class PalPlatformVerificationException : InvalidOperationException
 
     private static string CreateMessage(IReadOnlyList<PalPlatformVerificationError> errors)
     {
-        ArgumentNullException.ThrowIfNull(errors);
+        ArgumentNullException.ThrowIfNull(errors); // 唯一 null 校验点（base 参数求值先于构造体执行）
 
         return $"Pal platform verification failed with {errors.Count} error(s).";
     }

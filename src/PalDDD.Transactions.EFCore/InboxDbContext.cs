@@ -20,6 +20,10 @@ public abstract class InboxDbContext(
     DbContextOptions options,
     IPalLogger<InboxDbContext>? logger = null) : DbContext(options), IInboxStore
 {
+    // P3 修复（十七轮）：失败原因入库截断上限（对齐 InboxProcessor.MaxFailureReasonLength）
+    // ——LastError 列上限 2048（见 OnModelCreating），调用方未截断时存储层兜底
+    private const int MaxFailureReasonLength = 2000;
+
     private readonly IPalLogger<InboxDbContext>? _logger = logger;
 
     /// <summary>收件箱消息表</summary>
@@ -57,9 +61,15 @@ public abstract class InboxDbContext(
             catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
             {
                 // 唯一约束冲突（(ConsumerName,MessageId) 已存在）—— 幂等路径：分离并重查。
+                // P2/P3 修复（十七轮）：回查改 SingleOrDefaultAsync + null→return null（对齐 PalORM 版）——
+                // 冲突行由并发消费者插入，但其事务可能尚未提交（如 MySQL REPEATABLE READ 快照下
+                // 本事务不可见），SingleAsync 此处会抛 InvalidOperationException 掩盖幂等语义；
+                // 查不到按"他人正在处理"处理，返回 null 让调用方走重投递。
                 Entry(record).State = EntityState.Detached;
-                record = await InboxMessages.SingleAsync(
+                record = await InboxMessages.SingleOrDefaultAsync(
                     x => x.ConsumerName == consumerName && x.MessageId == messageId, ct);
+                if (record is null)
+                    return null;
             }
         }
 
@@ -106,6 +116,12 @@ public abstract class InboxDbContext(
     async ValueTask IInboxStore.MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(message);
+        ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+
+        // P3 修复（十七轮）：入库前截断到 2000——超出 LastError 列上限的失败原因会让
+        // 终态保存本身抛 DbUpdateException，掩盖原始处理失败（存储层兜底防御）
+        if (failureReason.Length > MaxFailureReasonLength)
+            failureReason = failureReason[..MaxFailureReasonLength];
 
         AttachIfDetached(message);
         message.Status = InboxStatus.Failed;
@@ -192,8 +208,12 @@ public abstract class InboxDbContext(
             }
 
             // SQLite: SqliteException 消息包含 "UNIQUE constraint"
+            // P3 修复（十七轮）：补 typeName 前置——原兜底无类型约束，任意 provider 的
+            // 异常消息恰好含 "UNIQUE constraint" 文案（如自定义异常/ORM 透传）会被
+            // 误判为幂等冲突走重查路径；限定 SqliteException 后其余 provider 原样传播
             var message = inner.Message;
-            if (!string.IsNullOrEmpty(message)
+            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(message)
                 && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
             {
                 return true;

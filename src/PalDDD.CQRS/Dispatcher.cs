@@ -36,7 +36,11 @@ public sealed class Dispatcher
     private FrozenDictionary<Type, HandlerEntry>? _frozen;
     private readonly Lock _freezeLock = new();
 
-    internal bool IsFrozen => _frozen is not null;
+    // P3 修复（十七轮）：_frozen 的无锁读点改用 Volatile.Read（对齐 SmartEnum 的
+    // Volatile.Read 模式）——引用赋值虽原子，但弱内存模型下 Freeze() 写入对
+    // 并发读取线程的可见顺序无保证；Register 的 ObjectDisposedException 守卫与
+    // Send/Query 的快路径读都可能读到过期 null。发布写入用 Volatile.Write。
+    internal bool IsFrozen => Volatile.Read(ref _frozen) is not null;
 
     /// <summary>冻结注册表 — 转换字典为不可变只读格式，注册完成后调用。</summary>
     internal void Freeze() => GetFrozenEntries();
@@ -44,12 +48,14 @@ public sealed class Dispatcher
     /// <summary>获取当前只读注册表 — 冻结后返回 <see cref="FrozenDictionary"/>，线程安全</summary>
     private FrozenDictionary<Type, HandlerEntry> GetFrozenEntries()
     {
-        if (_frozen is { } f) return f;
+        var frozen = Volatile.Read(ref _frozen);
+        if (frozen is { } f) return f;
 
         lock (_freezeLock)
         {
+            // lock 内已有全屏障——二次检查普通读即可
             if (_frozen is { } f2) return f2;
-            _frozen = _entries.ToFrozenDictionary();
+            Volatile.Write(ref _frozen, _entries.ToFrozenDictionary());
             _entries = null!;
             return _frozen;
         }
@@ -77,7 +83,7 @@ public sealed class Dispatcher
         ArgumentNullException.ThrowIfNull(handlerType);
         ArgumentNullException.ThrowIfNull(responseType);
         ArgumentNullException.ThrowIfNull(executor);
-        ObjectDisposedException.ThrowIf(_frozen is not null, this);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _frozen) is not null, this);
 
         _entries[requestType] = new HandlerEntry(handlerType, responseType, executor);
     }

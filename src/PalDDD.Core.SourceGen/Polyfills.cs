@@ -5,26 +5,6 @@ namespace System.Runtime.CompilerServices
     { }
 }
 
-namespace System
-{
-    internal readonly struct Index : IEquatable<Index>
-    {
-        private readonly int _value;
-
-        public Index(int value, bool fromEnd = false)
-        { _value = fromEnd ? ~value : value; }
-
-        public int Value => _value < 0 ? ~_value : _value;
-        public bool IsFromEnd => _value < 0;
-
-        public int GetOffset(int length) => IsFromEnd ? length + _value : _value;
-
-        public bool Equals(Index other) => _value == other._value;
-
-        public override bool Equals(object obj) => obj is Index index && Equals(index);
-
-        public override int GetHashCode() => _value;
-
-        public static implicit operator Index(int value) => new(value);
-    }
-}
+// P3 修复（十七轮）：删除 System.Index polyfill 死代码——已 grep 确认三个生成器
+// （Identity/Enum/MessageRegistry）的生成模板均未使用 ^ 索引或 Range 语法
+// （[.. x] 为 C# 12 集合表达式 spread，不依赖 Index/Range），polyfill 无消费方。

@@ -16,7 +16,20 @@ internal sealed class CompressionProvider : ICompressionProvider
     public CompressionProvider(IEnumerable<ICompressor> compressors)
     {
         ArgumentNullException.ThrowIfNull(compressors);
-        _compressors = compressors.ToFrozenDictionary(c => c.Algorithm);
+
+        // P3 修复（十七轮）：构造期重复算法检测——ToFrozenDictionary 对重复键抛出的
+        // ArgumentException 不含算法名，排障困难；单遍 TryAdd 同时完成检测与构建，
+        // 重复注册抛 NotSupportedException 带算法名，配置错误在启动期即定位
+        Dictionary<CompressionAlgorithm, ICompressor> map = [];
+        foreach (var compressor in compressors)
+        {
+            if (!map.TryAdd(compressor.Algorithm, compressor))
+                throw new NotSupportedException(
+                    $"Multiple compressors registered for algorithm '{compressor.Algorithm}'; " +
+                    $"ensure only one compressor per algorithm is registered via DI.");
+        }
+
+        _compressors = map.ToFrozenDictionary();
     }
 
     /// <inheritdoc />

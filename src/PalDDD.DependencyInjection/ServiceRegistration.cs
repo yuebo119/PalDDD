@@ -61,6 +61,15 @@ public static class ServiceRegistration
     /// </remarks>
     public static IServiceCollection AddPalPipelineBehaviors(this IServiceCollection services)
     {
+        // P3 修复（十七轮）：哨兵防重——AddPalCoreStack/AddPalFullStack 与用户显式
+        // AddPalPipelineBehaviors 双调时，原两条 AddScoped 无条件追加，Validation/
+        // LoggingBehavior 各注册两次，Dispatcher 聚合管道重复执行（验证跑两遍、日志
+        // 记两份）。marker 已注册则直接返回（TryAdd 单例哨兵，对齐 AddPalDDD 的
+        // HandlerRegistrar TryAddEnumerable 防重模式）。
+        if (services.Any(static d => d.ServiceType == typeof(PalPipelineBehaviorsMarker)))
+            return services;
+
+        services.TryAddSingleton<PalPipelineBehaviorsMarker>();
         services.AddScoped(typeof(CQRS.IPipelineBehavior<,>), typeof(CQRS.ValidationBehavior<,>));
         services.AddScoped(typeof(CQRS.IPipelineBehavior<,>), typeof(CQRS.LoggingBehavior<,>));
         return services;
@@ -141,14 +150,16 @@ public static class ServiceRegistration
         where TEvent : Core.DomainEvent
         where THandler : class, Message.IEventHandler<TEvent>
     {
-        // P3 修复（八轮评审）：三个注册统一 TryAdd 防重语义——对齐同文件 AddPalCommandHandler/
-        // AddPalQueryHandler 的 TryAddScoped；此前 AddScoped 工厂在重复调用 AddPalEventHandler 时
-        // 向容器注入重复注册（非泛型 IEventHandler 聚合枚举出重复实例）。TryAdd 工厂形式保留
-        // "转发到 THandler 具体注册"的解析语义，仅消除重复注入。
+        // P3 修复（八轮评审）→ P1 修正（十七轮）：八轮把三个注册统一 TryAddScoped 防重，
+        // 但 TryAdd 按 ServiceType 去重——同事件第二个不同 THandler 的接口注册被静默吞掉
+        // （运行探针实证 GetServices<IEventHandler<T>> 只剩首个 handler，破坏注释自述的
+        // IEnumerable 聚合语义；PD19 变体：修复时未枚举多 handler 场景）。
+        // 正确形态：接口注册用 TryAddEnumerable（按 ServiceType+ImplementationType 对去重——
+        // 同 handler 双调仍防重、不同 handler 均保留）；具体注册保持 TryAddScoped。
         services.TryAddScoped<THandler>();
-        services.TryAddScoped<Message.IEventHandler<TEvent>>(sp => sp.GetRequiredService<THandler>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<Message.IEventHandler<TEvent>, THandler>());
         // 注册到非泛型接口以便 IterativeDomainEventDispatcher 通过 IEnumerable<IEventHandler> 聚合
-        services.TryAddScoped<Message.IEventHandler>(sp => sp.GetRequiredService<THandler>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<Message.IEventHandler, THandler>());
         return services;
     }
 }
@@ -156,6 +167,12 @@ public static class ServiceRegistration
 // ═══════════════════════════════════════════════════════════════
 // 内部类型：Handler 标记收集器 + 启动注册器
 // ═══════════════════════════════════════════════════════════════
+
+// P3 修复（十七轮）：AddPalPipelineBehaviors 防重哨兵——注册进容器即表示管道行为
+// 已添加，二次调用直接短路（见 AddPalPipelineBehaviors）
+internal sealed class PalPipelineBehaviorsMarker
+{
+}
 
 /// <summary>Handler 类型映射标记 — 启动时由 HandlerRegistrar 消费</summary>
 internal sealed class HandlerMarker

@@ -54,8 +54,11 @@ public sealed class DapperInboxStore : IInboxStore
         TimeSpan processingTimeout, CancellationToken ct)
     {
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
-        var insertedId = await c.QuerySingleOrDefaultAsync<long?>(_dialect.InboxInsert,
-            new { c = consumerName, m = messageId, now = ToTimeParam(now) }, _transaction).ConfigureAwait(false);
+        // P2/P3 修复（十七轮）：全部查询/执行改 CommandDefinition 传递 ct（对齐 DapperOutboxStore.RequeueDeadAsync 模式）——
+        // 原重载不接收取消令牌，取消信号只在 EnsureOpenAsync 阶段可传递，SQL 执行阶段不可取消
+        var insertedId = await c.QuerySingleOrDefaultAsync<long?>(
+            new CommandDefinition(_dialect.InboxInsert,
+                new { c = consumerName, m = messageId, now = ToTimeParam(now) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
         if (insertedId.HasValue)
         {
             return new InboxMessage
@@ -71,8 +74,8 @@ public sealed class DapperInboxStore : IInboxStore
         }
 
         var existing = await c.QuerySingleOrDefaultAsync<InboxMessage>(
-            SqlTemplates.InboxSelect,
-            new { c = consumerName, m = messageId }, _transaction).ConfigureAwait(false);
+            new CommandDefinition(SqlTemplates.InboxSelect,
+                new { c = consumerName, m = messageId }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
 
         if (existing is not null)
         {
@@ -82,15 +85,15 @@ public sealed class DapperInboxStore : IInboxStore
                 && (now - existing.ProcessingStartedAt.Value) < processingTimeout) return null;
 
             var rows = await c.ExecuteAsync(
-                SqlTemplates.InboxStartProcessing,
-                new
-                {
-                    now = ToTimeParam(now),
-                    id = existing.Id,
-                    // P1 修复（超时接管）：cutoff = now - processingTimeout——超时前的 Processing
-                    // 记录可被抢占，刚开始的不可（CAS 由 processing_started_at 原子更新保证）
-                    cutoff = ToTimeParam(now - processingTimeout)
-                }, _transaction).ConfigureAwait(false);
+                new CommandDefinition(SqlTemplates.InboxStartProcessing,
+                    new
+                    {
+                        now = ToTimeParam(now),
+                        id = existing.Id,
+                        // P1 修复（超时接管）：cutoff = now - processingTimeout——超时前的 Processing
+                        // 记录可被抢占，刚开始的不可（CAS 由 processing_started_at 原子更新保证）
+                        cutoff = ToTimeParam(now - processingTimeout)
+                    }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
             if (rows == 0) return null;
 
             existing.Status = InboxStatus.Processing;
@@ -106,21 +109,30 @@ public sealed class DapperInboxStore : IInboxStore
     public async ValueTask MarkProcessedAsync(InboxMessage message, DateTimeOffset processedAt, CancellationToken ct)
     {
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        // P2/P3 修复（十七轮）：CommandDefinition 传 ct（见 TryStartProcessingAsync 同款注释）
         await c.ExecuteAsync(
-            SqlTemplates.InboxMarkProcessed,
-            new { at = ToTimeParam(processedAt), id = message.Id }, _transaction).ConfigureAwait(false);
+            new CommandDefinition(SqlTemplates.InboxMarkProcessed,
+                new { at = ToTimeParam(processedAt), id = message.Id }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
     }
 
     public async ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        // P2/P3 修复（十七轮）：CommandDefinition 传 ct（见 TryStartProcessingAsync 同款注释）
         await c.ExecuteAsync(
-            SqlTemplates.InboxMarkFailed,
-            new { err = failureReason, id = message.Id }, _transaction).ConfigureAwait(false);
+            new CommandDefinition(SqlTemplates.InboxMarkFailed,
+                new { err = failureReason, id = message.Id }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
     }
 
-    /// <summary>P2 修复（ToMySqlParameter 接线）：按方言选择时间参数格式。</summary>
+    /// <summary>
+    /// P2 修复（ToMySqlParameter 接线）：按方言选择时间参数格式。
+    /// <para>
+    /// P2/P3 修复（十七轮）：返回 <c>object</c>（DateTimeOffset 装箱一次）是刻意的收口防线——
+    /// 强类型返回会诱导调用方绕过本方法自行格式化，方言错配（PG text OID / MySQL session tz）
+    /// 将重新进入；五 Store 同款声明（Outbox/Inbox/Saga/EventLog/Checkpoint）。装箱开销相对 SQL 执行成本可忽略。
+    /// </para>
+    /// </summary>
     private object ToTimeParam(DateTimeOffset value)
         => _dbType switch
         {

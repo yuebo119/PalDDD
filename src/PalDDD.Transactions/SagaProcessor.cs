@@ -34,7 +34,9 @@ TState> : PeriodicBackgroundProcessor
         IOptionsMonitor<SagaProcessorOptions> options,
         IPalLogger<SagaProcessor<TState>> logger,
         TimeSpan? pollInterval = null)
-        : base(scopeFactory, pollInterval ?? options.CurrentValue.PollInterval)
+        // P3 修复（十七轮）：options 空守卫前移到 base 实参——原实参 pollInterval 为 null 时
+        // 先在 options.CurrentValue 解引用 NRE，构造体内的 ThrowIfNull 永不可达（对齐 OutboxProcessor）
+        : base(scopeFactory, pollInterval ?? (options ?? throw new ArgumentNullException(nameof(options))).CurrentValue.PollInterval)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
@@ -107,83 +109,85 @@ TState>
         {
             // P3 修复：单条 Saga 处理失败不中断剩余——否则后续 Saga 的租约需等
             // LeaseDuration 自然过期才对其他实例可见（与批处理整体失败同害）
+            // P3 修复（十七轮）：try 块体整体补一层缩进（原块体与 try 关键字同列，
+            // 纯格式修复，无行为变更）
             try
             {
-            // P3 修复（八轮）：补偿指标移到持久化成功后再计——提前计数会在
-            // 保存失败/0 行时重复累加（下一 tick 重做补偿再 +1）
-            var compensationSucceeded = false;
-            if (_orchestrator.IsTimedOut(sagaState, now, out var timedOutSteps))
-            {
-                foreach (var step in timedOutSteps)
+                // P3 修复（八轮）：补偿指标移到持久化成功后再计——提前计数会在
+                // 保存失败/0 行时重复累加（下一 tick 重做补偿再 +1）
+                var compensationSucceeded = false;
+                if (_orchestrator.IsTimedOut(sagaState, now, out var timedOutSteps))
                 {
-                    _logger.Warning($"Saga {sagaState.SagaId} timed out at state {sagaState.CurrentState}, step {step.Name}. Compensating...");
-                }
+                    foreach (var step in timedOutSteps)
+                    {
+                        _logger.Warning($"Saga {sagaState.SagaId} timed out at state {sagaState.CurrentState}, step {step.Name}. Compensating...");
+                    }
 
-                try
-                {
-                    await _orchestrator.CompensateAsync(sagaState, ct);
-                    sagaState.Status = SagaStatus.Compensated;
-                    sagaState.CompletedAt = now;
-                    sagaState.CurrentState = "Compensated";
-                    compensationSucceeded = true;
-                }
-                catch (OperationCanceledException)
-                {
-                    // 外部取消：仍释放租约避免该 Saga 对其他实例不可见（ITM-010），
-                    // 然后重新抛出让上层感知关停信号。租约释放用独立 CT（不响应本次取消）。
-                    // SaveChanges 失败不掩盖原始 OCE —— 关停时 DB 连接可能已断。
-                    sagaState.LeasedBy = null;
-                    sagaState.LeasedUntil = null;
                     try
                     {
-                        await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
+                        await _orchestrator.CompensateAsync(sagaState, ct);
+                        sagaState.Status = SagaStatus.Compensated;
+                        sagaState.CompletedAt = now;
+                        sagaState.CurrentState = "Compensated";
+                        compensationSucceeded = true;
                     }
-                    catch (Exception releaseEx) when (releaseEx is not OperationCanceledException)
+                    catch (OperationCanceledException)
                     {
-                        _logger.Error(releaseEx, $"Saga {sagaState.SagaId} lease release failed during cancellation; lease will expire by LeaseDuration");
+                        // 外部取消：仍释放租约避免该 Saga 对其他实例不可见（ITM-010），
+                        // 然后重新抛出让上层感知关停信号。租约释放用独立 CT（不响应本次取消）。
+                        // SaveChanges 失败不掩盖原始 OCE —— 关停时 DB 连接可能已断。
+                        sagaState.LeasedBy = null;
+                        sagaState.LeasedUntil = null;
+                        try
+                        {
+                            await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
+                        }
+                        catch (Exception releaseEx) when (releaseEx is not OperationCanceledException)
+                        {
+                            _logger.Error(releaseEx, $"Saga {sagaState.SagaId} lease release failed during cancellation; lease will expire by LeaseDuration");
+                        }
+                        throw;
                     }
-                    throw;
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    _logger.Error(ex, $"Saga {sagaState.SagaId} compensation failed");
-                    sagaState.Error = ex.Message;
-                    sagaState.CurrentState = "CompensationFailed";
-                    sagaState.Status = SagaStatus.CompensationFailed;
-                    sagaState.ErrorAt = now;
-                }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger.Error(ex, $"Saga {sagaState.SagaId} compensation failed");
+                        sagaState.Error = ex.Message;
+                        sagaState.CurrentState = "CompensationFailed";
+                        sagaState.Status = SagaStatus.CompensationFailed;
+                        sagaState.ErrorAt = now;
+                    }
 
-                sagaState.LeasedBy = null;
-                sagaState.LeasedUntil = null;
-                // P2 修复（取消路径对称）：租约释放是终态写入，不响应取消（与上方 OCE 路径
-                // 的 CancellationToken.None 对齐）——此前正常路径用 ct，OCE 传播时租约滞留
-                var compensatedSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None);
-                if (compensatedSaved == 0)
-                {
-                    // P3 修复（八轮）：0 行 = 乐观锁冲突（他实例已写同一 Saga）——
-                    // 补偿结果未落库，本实例的内存快照作废，记 Warning 供排查双写
-                    _logger.Warning($"Saga {sagaState.SagaId} compensated state save affected 0 rows (optimistic concurrency conflict); another instance may have written");
+                    sagaState.LeasedBy = null;
+                    sagaState.LeasedUntil = null;
+                    // P2 修复（取消路径对称）：租约释放是终态写入，不响应取消（与上方 OCE 路径
+                    // 的 CancellationToken.None 对齐）——此前正常路径用 ct，OCE 传播时租约滞留
+                    var compensatedSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None);
+                    if (compensatedSaved == 0)
+                    {
+                        // P3 修复（八轮）：0 行 = 乐观锁冲突（他实例已写同一 Saga）——
+                        // 补偿结果未落库，本实例的内存快照作废，记 Warning 供排查双写
+                        _logger.Warning($"Saga {sagaState.SagaId} compensated state save affected 0 rows (optimistic concurrency conflict); another instance may have written");
+                    }
+                    else if (compensationSucceeded)
+                    {
+                        PalMetrics.SagaCompensated.Add(1);
+                    }
                 }
-                else if (compensationSucceeded)
+                else
                 {
-                    PalMetrics.SagaCompensated.Add(1);
+                    // P0-FIX-3: 非超时 Saga 也必须释放租约 —— 否则超时检测平均延迟 = LeaseDuration（2 分钟）
+                    // 而非 PollInterval（30 秒），多实例下该 Saga 对其他实例不可见
+                    sagaState.LeasedBy = null;
+                    sagaState.LeasedUntil = null;
+                    // P2 修复（取消路径对称）：同上——终态写入不响应取消
+                    var releaseSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None);
+                    if (releaseSaved == 0)
+                    {
+                        // P3 修复（八轮）：0 行 = 乐观锁冲突——租约释放未落库（LeaseDuration 到期兜底），
+                        // 记 Warning 与补偿路径对齐
+                        _logger.Warning($"Saga {sagaState.SagaId} lease release save affected 0 rows (optimistic concurrency conflict); lease will expire by LeaseDuration");
+                    }
                 }
-            }
-            else
-            {
-                // P0-FIX-3: 非超时 Saga 也必须释放租约 —— 否则超时检测平均延迟 = LeaseDuration（2 分钟）
-                // 而非 PollInterval（30 秒），多实例下该 Saga 对其他实例不可见
-                sagaState.LeasedBy = null;
-                sagaState.LeasedUntil = null;
-                // P2 修复（取消路径对称）：同上——终态写入不响应取消
-                var releaseSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None);
-                if (releaseSaved == 0)
-                {
-                    // P3 修复（八轮）：0 行 = 乐观锁冲突——租约释放未落库（LeaseDuration 到期兜底），
-                    // 记 Warning 与补偿路径对齐
-                    _logger.Warning($"Saga {sagaState.SagaId} lease release save affected 0 rows (optimistic concurrency conflict); lease will expire by LeaseDuration");
-                }
-            }
             }
             catch (OperationCanceledException)
             {

@@ -16,14 +16,16 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.TryAddSingleton<IMessageCatalog>(_ =>
+        // P1 修复（十七轮）：catalog 改 AddSingleton 兑现双向"后者覆盖前者"承诺——
+        // 此前 TryAdd 使 MemoryPack→Json 注册顺序下 catalog 留在 MemoryPack 版而
+        // 序列化器换成 Json，Json 侧 configureCatalog 被静默丢弃（运行时远端抛
+        // "not registered"）。与 MemoryPack 侧目录对称（双侧均为替换语义）。
+        services.AddSingleton<IMessageCatalog>(_ =>
         {
             var builder = new MessageCatalogBuilder();
             configureCatalog?.Invoke(builder);
             return builder.Build();
         });
-        // P2 修复（对称）：MemoryPack 已改 AddSingleton（替换语义），Json 也同步——
-        // 双向"后者覆盖前者"承诺成立（此前先 MemoryPack 后 Json 时 Json 静默不生效）
         services.AddSingleton<IMessageSerializer, JsonMessageSerializer>();
         return services;
     }

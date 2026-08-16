@@ -160,6 +160,71 @@ public sealed class StrategicDddAnalyzerTests
         await Assert.That(diagnostics.Any(d => d.Id == "PDDD005")).IsTrue();
     }
 
+    // P2 修复（十七轮）测试：interface : IDomainEvent 不再误报——
+    // [BoundedContext]/[GenerateMessage] 均 AttributeTargets.Class，interface 无法消解诊断
+    [Test]
+    public async Task InterfaceImplementingDomainEvent_DoesNotReportDiagnostics()
+    {
+        var diagnostics = await AnalyzeAsync(
+            """
+            using PalDDD.Core;
+
+            public interface IOrderEvent : IDomainEvent
+            {
+            }
+            """);
+
+        // 修复前：ImplementsInterface 判为领域事件类型，误报 PDDD001 + PDDD005
+        await Assert.That(diagnostics.Any(d => d.Id.StartsWith("PDDD", StringComparison.Ordinal))).IsFalse();
+    }
+
+    // P2 修复（十七轮）测试：ProjectionName 与 [BoundedContext] 均声明在基类——
+    // TryGetProjectionName 沿 BaseType 链查找（PDDD007 不误报）+
+    // [BoundedContext].Inherited=true 沿基类链查找（PDDD004 不误报）
+    [Test]
+    public async Task ProjectionHandlerInheritingProjectionNameAndBoundedContext_DoesNotReportOnDerived()
+    {
+        var diagnostics = await AnalyzeAsync(
+            """
+            using System.Threading;
+            using System.Threading.Tasks;
+            using PalDDD.Core;
+            using PalDDD.Projections;
+
+            namespace PalDDD.Projections;
+
+            public interface IProjectionHandler<in TMessage>
+            {
+                string ProjectionName { get; }
+                ValueTask ProjectAsync(TMessage message, CancellationToken ct = default);
+            }
+
+            public sealed record OrderSubmitted;
+
+            [BoundedContext("ordering")]
+            public abstract class ProjectionBase : IProjectionHandler<OrderSubmitted>
+            {
+                public string ProjectionName => "ordering.order-summary";
+                public abstract ValueTask ProjectAsync(OrderSubmitted message, CancellationToken ct = default);
+            }
+
+            public sealed class OrderSummaryProjection : ProjectionBase
+            {
+                public override ValueTask ProjectAsync(OrderSubmitted message, CancellationToken ct = default)
+                    => ValueTask.CompletedTask;
+            }
+            """);
+
+        // 基类自身 ProjectionName 为合法字面量、上下文匹配——源码中任何 PDDD007
+        // 只能来自派生类（基类链缺失时 Name=null 的误报），修复后应零出现
+        await Assert.That(diagnostics.Any(d => d.Id == "PDDD007")).IsFalse();
+        // 基类 abstract 非 sealed 自身仍报 PDDD004（既有行为，不在本轮范围）——
+        // 仅断言派生类 OrderSummaryProjection 不因继承路径额外误报
+        await Assert.That(diagnostics.Any(d =>
+            d.Id == "PDDD004"
+            && d.ToString().Contains("OrderSummaryProjection", StringComparison.Ordinal))).IsFalse();
+    }
+
     [Test]
     public async Task UnsealedDomainEvent_ReportsDiagnostic()
     {

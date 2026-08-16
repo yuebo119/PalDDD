@@ -27,26 +27,42 @@ namespace PalDDD.Dapper.Sqlite;
 /// <summary>SQLite 生产级性能优化器</summary>
 public static class SqlitePerformanceOptimizer
 {
+    /// <summary>
+    /// WAL 模式 PRAGMA（P2/P3 修复·十七轮拆出常量）——需单独执行以确认切换成功
+    /// （journal_mode 是库级持久属性，返回结果行确认实际模式），消费方据此与其余 PRAGMA 分离执行。
+    /// </summary>
+    public const string WalPragma = "PRAGMA journal_mode=WAL";
+
+    /// <summary>
+    /// Production 级别除 WAL 外的其余 PRAGMA（P2/P3 修复·十七轮拆出常量）——
+    /// 消费方先单执行 <see cref="WalPragma"/> 再批量执行本串，消除魔法切片偏移。
+    /// </summary>
+    public const string ProductionRestPragma = """
+        PRAGMA synchronous=NORMAL;
+        PRAGMA cache_size=-20000;
+        PRAGMA busy_timeout=5000;
+        PRAGMA foreign_keys=ON;
+        PRAGMA temp_store=MEMORY;
+        PRAGMA mmap_size=268435456;
+        PRAGMA journal_size_limit=67108864;
+        """;
+
+    /// <summary>
+    /// Light 级别除 WAL 外的其余 PRAGMA（P2/P3 修复·十七轮拆出常量，同 <see cref="ProductionRestPragma"/>）。
+    /// </summary>
+    public const string LightRestPragma = """
+        PRAGMA synchronous=NORMAL;
+        PRAGMA cache_size=-8000;
+        PRAGMA busy_timeout=3000;
+        PRAGMA foreign_keys=ON;
+        """;
+
     /// <summary>获取指定优化级别的 PRAGMA SQL（单一来源——SqliteServiceCollectionExtensions 复用）。</summary>
     public static string GetPragma(SqliteOptimizeLevel level) => level switch
     {
-        SqliteOptimizeLevel.Production => """
-            PRAGMA journal_mode=WAL;
-            PRAGMA synchronous=NORMAL;
-            PRAGMA cache_size=-20000;
-            PRAGMA busy_timeout=5000;
-            PRAGMA foreign_keys=ON;
-            PRAGMA temp_store=MEMORY;
-            PRAGMA mmap_size=268435456;
-            PRAGMA journal_size_limit=67108864;
-            """,
-        SqliteOptimizeLevel.Light => """
-            PRAGMA journal_mode=WAL;
-            PRAGMA synchronous=NORMAL;
-            PRAGMA cache_size=-8000;
-            PRAGMA busy_timeout=3000;
-            PRAGMA foreign_keys=ON;
-            """,
+        // P2/P3 修复（十七轮）：WAL + 其余 PRAGMA 常量拼接（输出与拆分前逐语句等价）
+        SqliteOptimizeLevel.Production => WalPragma + ";\n" + ProductionRestPragma,
+        SqliteOptimizeLevel.Light => WalPragma + ";\n" + LightRestPragma,
         SqliteOptimizeLevel.InMemory => """
             PRAGMA journal_mode=MEMORY;
             PRAGMA synchronous=OFF;
@@ -85,14 +101,16 @@ public static class SqlitePerformanceOptimizer
         if (sql.Length == 0) return;
 
         // WAL 模式需单独执行确认切换成功，其余 PRAGMA 批量执行
+        // P2/P3 修复（十七轮）：改消费 WalPragma/RestPragma 常量——消除魔法切片偏移
+        // （原 sql["PRAGMA journal_mode=WAL;\n".Length..] 依赖前缀字面量与 GetPragma 输出硬耦合）
         if (level is SqliteOptimizeLevel.Production or SqliteOptimizeLevel.Light)
         {
             using var walCmd = connection.CreateCommand();
-            walCmd.CommandText = "PRAGMA journal_mode=WAL";
+            walCmd.CommandText = WalPragma;
             await walCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
 
             using var cmd = connection.CreateCommand();
-            cmd.CommandText = sql["PRAGMA journal_mode=WAL;\n".Length..];
+            cmd.CommandText = level == SqliteOptimizeLevel.Production ? ProductionRestPragma : LightRestPragma;
             await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
         else

@@ -192,7 +192,12 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeNamedType(SymbolAnalysisContext context)
     {
         var type = (INamedTypeSymbol)context.Symbol;
-        if (type.TypeKind is not (TypeKind.Class or TypeKind.Struct or TypeKind.Interface))
+        // P2 修复（十七轮）：interface 直接跳过——[BoundedContext]/[GenerateMessage] 均为
+        // AttributeTargets.Class，interface 上无法出现；而 IDomainEvent 可被 interface 继承
+        // （interface IFoo : IDomainEvent），原实现经 ImplementsInterface 判为领域事件类型，
+        // 误报 PDDD001/PDDD005（PDDD012 已有 Class 专属条件不受影响）。
+        // Class 专属契约诊断在 interface 上无法消解，整体短路。
+        if (type.TypeKind is not (TypeKind.Class or TypeKind.Struct))
             return;
 
         var boundedContext = TryGetAttribute(type, BoundedContextAttributeName);
@@ -343,7 +348,10 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
 
         if (ImplementsGenericInterface(type, ProjectionHandlerInterfaceName))
         {
-            if (!type.IsSealed || boundedContext is null)
+            // P2 修复（十七轮）：[BoundedContext] 沿基类链查找——GetAttributes 仅返回本类型
+            // 直接声明的 attribute，而该 attribute 的 AttributeUsage.Inherited=true（未显式
+            // 设置，默认继承），运行时反射在派生类可见基类声明；仅查直接声明会误报 PDDD004。
+            if (!type.IsSealed || !HasAttributeAlongBaseChain(type, BoundedContextAttributeName))
             {
                 context.ReportDiagnostic(Diagnostic.Create(
                     InvalidProjectionHandlerShape,
@@ -431,6 +439,24 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
         return null;
     }
 
+    // P2 修复（十七轮）：GetAttributes 不含继承（AttributeUsage.Inherited=true 的 attribute
+    // 在运行时反射对派生类可见，编译符号模型不可见）——沿 BaseType 链查找存在性，
+    // 与运行时反射语义对齐。仅用于 shape 检查的存在性判断；具体参数提取（如
+    // TryGetStringConstructorArgument）仍走直接声明路径，避免派生类重复报 PDDD002。
+    private static bool HasAttributeAlongBaseChain(INamedTypeSymbol type, string metadataName)
+    {
+        for (var current = type; current is not null; current = current.BaseType)
+        {
+            foreach (var attribute in current.GetAttributes())
+            {
+                if (attribute.AttributeClass is not null && MetadataNameEquals(attribute.AttributeClass, metadataName))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
     private static int? TryGetNamedIntArgument(AttributeData attribute, string name)
     {
         foreach (var argument in attribute.NamedArguments)
@@ -465,50 +491,56 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
         INamedTypeSymbol type,
         CancellationToken cancellationToken)
     {
-        foreach (var member in type.GetMembers("ProjectionName"))
+        // P2 修复（十七轮）：GetMembers 仅返回本类型声明成员（不含继承）——
+        // ProjectionName 声明在投影基类（统一命名模板）时原实现查不到，误报
+        // PDDD007。沿 BaseType 链逐层查找（镜像 TryGetStaticStringProperty 的八轮修复）。
+        for (var current = type; current is not null; current = current.BaseType)
         {
-            if (member is not IPropertySymbol property
-                || property.Type.SpecialType != SpecialType.System_String)
+            foreach (var member in current.GetMembers("ProjectionName"))
             {
-                continue;
-            }
-
-            foreach (var syntaxReference in property.DeclaringSyntaxReferences)
-            {
-                var syntax = syntaxReference.GetSyntax(cancellationToken);
-                if (syntax is not PropertyDeclarationSyntax declaration)
-                    continue;
-
-                if (declaration.ExpressionBody?.Expression is LiteralExpressionSyntax expressionLiteral)
-                    return (expressionLiteral.Token.Value as string, expressionLiteral.GetLocation());
-
-                if (declaration.Initializer?.Value is LiteralExpressionSyntax initializerLiteral)
-                    return (initializerLiteral.Token.Value as string, initializerLiteral.GetLocation());
-
-                foreach (var accessor in declaration.AccessorList?.Accessors ?? [])
+                if (member is not IPropertySymbol property
+                    || property.Type.SpecialType != SpecialType.System_String)
                 {
-                    if (!accessor.IsKind(SyntaxKind.GetAccessorDeclaration))
-                        continue;
-
-                    if (accessor.ExpressionBody?.Expression is LiteralExpressionSyntax getterLiteral)
-                        return (getterLiteral.Token.Value as string, getterLiteral.GetLocation());
-
-                    if (accessor.Body is null)
-                        continue;
-
-                    foreach (var statement in accessor.Body.Statements)
-                    {
-                        if (statement is ReturnStatementSyntax
-                            {
-                                Expression: LiteralExpressionSyntax returnLiteral
-                            })
-                        {
-                            return (returnLiteral.Token.Value as string, returnLiteral.GetLocation());
-                        }
-                    }
+                    continue;
                 }
 
-                return (null, declaration.GetLocation());
+                foreach (var syntaxReference in property.DeclaringSyntaxReferences)
+                {
+                    var syntax = syntaxReference.GetSyntax(cancellationToken);
+                    if (syntax is not PropertyDeclarationSyntax declaration)
+                        continue;
+
+                    if (declaration.ExpressionBody?.Expression is LiteralExpressionSyntax expressionLiteral)
+                        return (expressionLiteral.Token.Value as string, expressionLiteral.GetLocation());
+
+                    if (declaration.Initializer?.Value is LiteralExpressionSyntax initializerLiteral)
+                        return (initializerLiteral.Token.Value as string, initializerLiteral.GetLocation());
+
+                    foreach (var accessor in declaration.AccessorList?.Accessors ?? [])
+                    {
+                        if (!accessor.IsKind(SyntaxKind.GetAccessorDeclaration))
+                            continue;
+
+                        if (accessor.ExpressionBody?.Expression is LiteralExpressionSyntax getterLiteral)
+                            return (getterLiteral.Token.Value as string, getterLiteral.GetLocation());
+
+                        if (accessor.Body is null)
+                            continue;
+
+                        foreach (var statement in accessor.Body.Statements)
+                        {
+                            if (statement is ReturnStatementSyntax
+                                {
+                                    Expression: LiteralExpressionSyntax returnLiteral
+                                })
+                            {
+                                return (returnLiteral.Token.Value as string, returnLiteral.GetLocation());
+                            }
+                        }
+                    }
+
+                    return (null, declaration.GetLocation());
+                }
             }
         }
 

@@ -103,4 +103,38 @@ public static class DapperServiceCollectionExtensions
 
         return services;
     }
+
+    /// <summary>
+    /// P2/P3 修复（十七轮）：为 Saga 快照持久化（saga_data 列）提供便捷注册。<br/>
+    /// <see cref="AddPalDapperTransactions"/> 的开放泛型注册 <c>DapperSagaStateStore&lt;&gt;</c>
+    /// 无 <c>JsonTypeInfo</c> 传入通道——jsonTypeInfo 恒 null，用户自定义 TState 的业务字段
+    /// 不持久化（saga_data 列写 NULL，重启即丢，仅恢复 SagaId/状态等元数据列）。<br/>
+    /// 此方法以<b>具体泛型</b>注册覆盖开放泛型（MS DI 具体泛型优先于开放泛型解析），
+    /// 闭包构造传入 <paramref name="jsonTypeInfo"/>（STJ source-generated）。
+    /// <para>
+    /// ⚠️ <b>不调用此方法则 saga_data 不持久化（重启丢业务字段）</b>——开放泛型默认注册无通道传入
+    /// JsonTypeInfo，这是 PalDDD.Dapper/PalORM 双适配器的共同已知限制（PD17 修复为便捷方法暴露）。
+    /// </para>
+    /// </summary>
+    /// <typeparam name="TState">Saga 状态类型（须有无参构造）。</typeparam>
+    /// <param name="services">DI 服务集合。</param>
+    /// <param name="jsonTypeInfo">STJ source-generated 序列化元数据（<c>[JsonSerializable(typeof(TState))]</c> 产出）。</param>
+    public static IServiceCollection AddPalDapperSagaSnapshot<TState>(
+        this IServiceCollection services,
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState> jsonTypeInfo)
+        where TState : SagaState, new()
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(jsonTypeInfo);
+
+        services.AddScoped(typeof(ISagaStateStore<TState>), sp =>
+            new DapperSagaStateStore<TState>(
+                sp.GetRequiredService<DbConnection>(),
+                transaction: null,
+                jsonTypeInfo: jsonTypeInfo,
+                timeProvider: sp.GetService<TimeProvider>(),
+                dbType: sp.GetRequiredService<DapperDbType>()));
+
+        return services;
+    }
 }

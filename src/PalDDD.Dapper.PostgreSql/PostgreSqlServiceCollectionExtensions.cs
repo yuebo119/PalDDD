@@ -55,7 +55,12 @@ public static class PostgreSqlServiceCollectionExtensions
 
         var builder = new NpgsqlDataSourceBuilder(connectionString);
         builder.ConnectionStringBuilder.ApplicationName = applicationName;
-        services.AddSingleton(builder.Build());
+        var dataSource = builder.Build();
+        services.AddSingleton(dataSource);
+        // P2/P3 修复（十七轮）：补 DbDataSource 抽象注册（镜像 MySql 版 AddPalMySqlDataSource）——
+        // NpgsqlDataSource 本身是 DbDataSource 子类，但只注册具体类型时
+        // GetRequiredService<DbDataSource> 解析失败；WithStores 的连接工厂依赖此抽象注册。
+        services.AddSingleton<System.Data.Common.DbDataSource>(dataSource);
 
         return services;
     }
@@ -77,7 +82,35 @@ public static class PostgreSqlServiceCollectionExtensions
         var builder = new NpgsqlDataSourceBuilder(connectionString);
         builder.ConnectionStringBuilder.ApplicationName = applicationName;
         configure(builder);
-        services.AddSingleton(builder.Build());
+        var dataSource = builder.Build();
+        services.AddSingleton(dataSource);
+        // P2/P3 修复（十七轮）：补 DbDataSource 抽象注册（同上重载，供 WithStores 连接工厂解析）
+        services.AddSingleton<System.Data.Common.DbDataSource>(dataSource);
+
+        return services;
+    }
+
+    /// <summary>
+    /// 注册 NpgsqlDataSource + Dapper Store（一键注册：连接 + Outbox + Inbox + Saga）。<br/>
+    /// P2/P3 修复（十七轮 · PD17 方言维度）：镜像 MySQL 版 <c>AddPalMySqlDataSourceWithStores</c>——
+    /// 此前 PG 无等价入口，用户只能 <c>AddPalNpgsqlDataSource</c> + <c>AddPalDapperTransactions</c>
+    /// 组合，而后者注册的 <c>DbConnection</c> 工厂是 <c>new NpgsqlConnection(cs)</c>
+    /// （走连接串全局池），完全绕过 NpgsqlDataSource 私有池——PGAPPNAME 应用名、
+    /// 自定义 TypeHandler、连接池调优对 Store 全部不生效。此处覆盖 <c>DbConnection</c> 注册
+    /// （MS DI 后注册胜出），Store 统一从 DataSource 池取连接。
+    /// </summary>
+    public static IServiceCollection AddPalNpgsqlDataSourceWithStores(
+        this IServiceCollection services,
+        string connectionString,
+        string applicationName = "Pal.DDD")
+    {
+        AddPalNpgsqlDataSource(services, connectionString, applicationName);
+        DapperServiceCollectionExtensions.AddPalDapperTransactions(services, DapperDbType.PostgreSql, connectionString);
+
+        // 覆盖 AddPalDapperTransactions 的 new NpgsqlConnection(cs) 默认工厂——
+        // Store 连接改从注册的 NpgsqlDataSource 取（方言维度对齐 MySQL 版 84-85 行同款修复）
+        services.AddScoped<System.Data.Common.DbConnection>(sp =>
+            sp.GetRequiredService<System.Data.Common.DbDataSource>().CreateConnection());
 
         return services;
     }
@@ -137,6 +170,13 @@ public static class PostgreSqlServiceCollectionExtensions
     /// 注册 PostgreSQL 读写分离路由器。<br/>
     /// 写操作自动路由到主库，读操作负载均衡分发到只读副本。
     /// </summary>
+    /// <remarks>
+    /// P2/P3 修复（十七轮）：读写分离存在双入口（本方法与
+    /// <see cref="PostgreSqlReadWriteRouterExtensions.AddPalReadWriteRouter"/>）——
+    /// 后者为推荐入口：Writer/Reader 各自 ApplicationName 后缀（-Writer/-Reader，监控可区分）、
+    /// Reader 走 LoadBalanceHosts 负载均衡、并做副本凭据一致性校验（PD17）；本方法三项均缺。
+    /// </remarks>
+    [System.Obsolete("读写分离请使用 PostgreSqlReadWriteRouterExtensions.AddPalReadWriteRouter（Writer/Reader 应用名后缀区分 + 负载均衡 + 副本凭据校验）。本入口保留仅为既有调用方兼容。")]
     public static IServiceCollection AddPalPostgreSqlReadWriteRouter(
         this IServiceCollection services,
         string writerConnectionString,

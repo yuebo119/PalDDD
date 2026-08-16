@@ -265,6 +265,11 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     /// <summary>
     /// P2 修复（四轮评审 ToMySqlParameter 接线）：按方言选择时间参数格式——
     /// MySQL DATETIME(6) 列与带偏移 "O" 格式比较依赖 session tz，统一无偏移 UTC。
+    /// <para>
+    /// P2/P3 修复（十七轮）：返回 <c>object</c>（DateTimeOffset 装箱一次）是刻意的收口防线——
+    /// 强类型返回会诱导调用方绕过本方法自行格式化，方言错配（PG text OID / MySQL session tz）
+    /// 将重新进入；五 Store 同款声明（Outbox/Inbox/Saga/EventLog/Checkpoint）。装箱开销相对 SQL 执行成本可忽略。
+    /// </para>
     /// </summary>
     private object ToTimeParam(DateTimeOffset value)
         => _dbType switch

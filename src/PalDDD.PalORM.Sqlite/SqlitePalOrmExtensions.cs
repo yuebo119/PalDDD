@@ -54,13 +54,16 @@ public static class SqlitePalOrmExtensions
         });
 
         // 时间提供者（默认 System）
+        // P2/P3 修复（十七轮）：clock 显式实参分支改 AddSingleton 覆盖——显式传参=强意图，
+        // TryAdd 会在容器已有 TimeProvider 时静默丢弃显式实参（调用方以为时钟生效实则沿用旧注册）；
+        // 仅未传 clock 时保持 TryAdd（不覆盖用户先注册的 TimeProvider，八轮评审 P2 语义不变）。
         if (clock is not null)
         {
-            services.TryAddSingleton(clock); // P3 修复：TryAdd
+            services.AddSingleton(clock);
         }
         else
         {
-            services.TryAddSingleton(TimeProvider.System); // P3 修复：TryAdd——用户先注册的 TimeProvider 不被覆盖
+            services.TryAddSingleton(TimeProvider.System); // TryAdd——用户先注册的 TimeProvider 不被覆盖
         }
 
         // 7 Store + UnitOfWork（全部 Scoped，共享同一 DataSession）
@@ -68,12 +71,38 @@ public static class SqlitePalOrmExtensions
         services.AddScoped<IInboxStore, SqliteInboxStore>();
         services.AddScoped(typeof(ISagaStateStore<>), typeof(SqliteSagaStateStore<>));
         // ⚠️ Saga Data 陷阱（四轮评审 P2）：此注册的 jsonTypeInfo 恒为 null——用户自定义 TState
-        // 字段不持久化（saga_data 列写 NULL）。需要 Saga 快照持久化的应用应手动注册
-        // ISagaStateStore<TState> 并传入 JsonTypeInfo<TState>。
+        // 字段不持久化（saga_data 列写 NULL，重启丢业务字段）。
+        // P2/P3 修复（十七轮）：便捷注册 AddPalOrmSqliteSagaSnapshot<TState> 已提供——
+        // 以具体泛型覆盖开放泛型并闭包传入 JsonTypeInfo，需 Saga 快照时调用。
         services.AddScoped<IEventLog, SqliteEventLog>();
         services.AddScoped<IProjectionCheckpointStore, SqliteProjectionCheckpointStore>();
         services.AddScoped<IIdempotencyStore, SqliteIdempotencyStore>();
         services.AddScoped<IUnitOfWork, SqlitePalOrmUnitOfWork>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// P2/P3 修复（十七轮）：Saga 快照持久化（saga_data 列）便捷注册。
+    /// <see cref="AddPalOrmSqlite"/> 的开放泛型注册 <c>SqliteSagaStateStore&lt;&gt;</c> 无
+    /// <c>JsonTypeInfo</c> 传入通道——jsonTypeInfo 恒 null，TState 业务字段不持久化。
+    /// 此方法以具体泛型注册覆盖开放泛型（MS DI 具体泛型优先），闭包构造传入
+    /// <paramref name="jsonTypeInfo"/>。
+    /// <para>⚠️ <b>不调用则 saga_data 不持久化（重启丢业务字段）</b>——须在
+    /// <see cref="AddPalOrmSqlite"/> 之后调用（依赖其 DataSession 注册）。</para>
+    /// </summary>
+    public static IServiceCollection AddPalOrmSqliteSagaSnapshot<TState>(
+        this IServiceCollection services,
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState> jsonTypeInfo)
+        where TState : SagaState, new()
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(jsonTypeInfo);
+
+        services.AddScoped(typeof(ISagaStateStore<TState>), sp =>
+            new SqliteSagaStateStore<TState>(
+                sp.GetRequiredService<DataSession<SqliteProvider>>(),
+                jsonTypeInfo));
 
         return services;
     }

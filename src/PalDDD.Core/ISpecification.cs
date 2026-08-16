@@ -201,10 +201,13 @@ public static class Spec<T>
         => new ExpressionSpecification<T>(predicate);
 
     /// <summary>始终满足的规约（恒真）</summary>
-    public static ISpecification<T> All => new ExpressionSpecification<T>(_ => true);
+    // P3 修复（十七轮）：static readonly 缓存（属性只初始化一次）——原实现每次访问
+    // 都 new ExpressionSpecification 并 Compile 恒真 lambda，规约常在查询组合中
+    // 高频访问（如 And(All) 兜底），造成重复分配与编译开销
+    public static ISpecification<T> All { get; } = new ExpressionSpecification<T>(_ => true);
 
     /// <summary>始终不满足的规约（恒假）</summary>
-    public static ISpecification<T> None => new ExpressionSpecification<T>(_ => false);
+    public static ISpecification<T> None { get; } = new ExpressionSpecification<T>(_ => false);
 }
 
 [UnconditionalSuppressMessage("AOT", "IL3050:Members annotated with RequiresDynamicCodeAttribute may require dynamic code",

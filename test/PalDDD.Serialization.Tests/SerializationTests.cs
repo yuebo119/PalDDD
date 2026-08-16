@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using PalDDD.Serialization.Json;
+using PalDDD.Serialization.MemoryPack;
 using System.Text.Json.Serialization;
 
 namespace PalDDD.Serialization.Tests;
@@ -13,7 +14,13 @@ namespace PalDDD.Serialization.Tests;
 [JsonSerializable(typeof(MemoryPackValueMessage))]
 [JsonSerializable(typeof(MemoryPackV1Message))]
 [JsonSerializable(typeof(MemoryPackV2Message))]
+[JsonSerializable(typeof(JsonOnlyMessage))]  // P1 回归（十七轮）：仅 Json 侧注册的消息
 internal sealed partial class TestJsonContext : JsonSerializerContext;
+
+[JsonSerializable(typeof(JsonOnlyMessage))]
+internal sealed partial class JsonOnlyMessageJsonContext : JsonSerializerContext;
+
+public sealed record JsonOnlyMessage(string Payload);
 
 public sealed record TestMessage(string Id, int Count);
 public sealed record UnregisteredMessage(string Id);
@@ -283,6 +290,25 @@ public sealed class JsonMessageSerializerGetTypeInfoTests
 
 public sealed class JsonSerializationServiceCollectionTests
 {
+    [Test]
+    public async Task AddPalJsonSerialization_AfterMemoryPack_CatalogIsReplacedByJson()
+    {
+        // P1 回归（十七轮）：Json 侧 catalog 曾用 TryAdd——MemoryPack→Json 注册顺序下
+        // 序列化器换成 Json 但 catalog 留在 MemoryPack 版（Json 的 configureCatalog 被静默
+        // 丢弃）。修复后双向"后者覆盖前者"：catalog 应能找到仅 Json 侧注册的消息。
+        var services = new ServiceCollection();
+        services.AddPalMemoryPackSerialization();
+        services.AddPalJsonSerialization(b =>
+            b.Add(Serialization.Tests.JsonOnlyMessageJsonContext.Default.JsonOnlyMessage));
+
+        using var provider = services.BuildServiceProvider();
+        var catalog = provider.GetRequiredService<IMessageCatalog>();
+        var serializer = provider.GetRequiredService<IMessageSerializer>();
+
+        await Assert.That(serializer).IsTypeOf<JsonMessageSerializer>();
+        await Assert.That(catalog.Find(typeof(JsonOnlyMessage))).IsNotNull();
+    }
+
     [Test]
     public async Task AddPalJsonSerialization_RegistersMessageSerializer()
     {

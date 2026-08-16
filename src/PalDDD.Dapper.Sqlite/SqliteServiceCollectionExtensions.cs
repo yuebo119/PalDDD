@@ -111,14 +111,19 @@ public static class SqliteServiceCollectionExtensions
         if (sql.Length == 0) return;
 
         // WAL 模式需单独执行确认切换成功，其余 PRAGMA 批量执行
+        // P2/P3 修复（十七轮）：改消费 SqlitePerformanceOptimizer 常量——消除魔法切片偏移
+        // （原 sql["PRAGMA journal_mode=WAL;\n".Length..] 与 GetPragma 输出硬耦合，
+        // 与 Optimizer.ApplyAsync 同款改造，双消费方单一来源）
         if (level is SqliteOptimizeLevel.Production or SqliteOptimizeLevel.Light)
         {
             using var walCmd = connection.CreateCommand();
-            walCmd.CommandText = "PRAGMA journal_mode=WAL";
+            walCmd.CommandText = SqlitePerformanceOptimizer.WalPragma;
             walCmd.ExecuteNonQuery();
 
             using var cmd = connection.CreateCommand();
-            cmd.CommandText = sql["PRAGMA journal_mode=WAL;\n".Length..];
+            cmd.CommandText = level == SqliteOptimizeLevel.Production
+                ? SqlitePerformanceOptimizer.ProductionRestPragma
+                : SqlitePerformanceOptimizer.LightRestPragma;
             cmd.ExecuteNonQuery();
         }
         else

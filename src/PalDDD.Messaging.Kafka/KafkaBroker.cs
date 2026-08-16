@@ -113,6 +113,16 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
 
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
+        // P3 修复（十七轮）：登记先行——先创建订阅占位并登记进 _consumers，再启动消费循环。
+        // 原顺序 Task.Run 先于登记：循环若在登记前已终止（如订阅后 token 预取消即抛 OCE），
+        // DisposeAsync 的 snapshot 不含此订阅 → consumer 无人释放。占位后任何时点的
+        // DisposeAsync 都能触达本订阅（DisposeAsync 容忍 _consumeTask 尚未 Set 的窗口）。
+        var subscription = new KafkaSubscription(cts, consumer);
+        lock (_consumersLock)
+        {
+            _consumers.Add(subscription);
+        }
+
         // 保存 Task 引用，用于等待完成和错误观测
         var consumeTask = Task.Run(async () =>
         {
@@ -168,6 +178,14 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             {
                 // 正常取消
             }
+            // P3 修复（十七轮）：非关停 OCE 空洞——外层 token 未取消却收到 OCE（语义不明，
+            // 如链路 token 深层触发）时，此前 when 分支与 not-OCE 分支均不匹配，
+            // 异常逃逸致 Task 静默 fault。终止而非 continue：OCE 语义不明时继续消费
+            // 可能违背取消意图，终止更安全（终止状态经 ConsumeTask 可观测，运维可介入）。
+            catch (OperationCanceledException ex)
+            {
+                _logger.Error(ex, $"Kafka consume loop terminated by non-shutdown cancellation: {topic} @ {_consumerConfig.GroupId}");
+            }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // 兜底：记录未被内层捕获的异常
@@ -180,11 +198,10 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             }
         }, cts.Token);
 
-        var subscription = new KafkaSubscription(cts, consumeTask, consumer);
-        lock (_consumersLock)
-        {
-            _consumers.Add(subscription);
-        }
+        // P3 修复（十七轮）：登记先行的回填——循环启动后注入 Task 引用
+        // （Set 前若被 Dispose，DisposeAsync 走 null 窗口路径：cts 已取消，
+        // 委托侧 finally 释放 consumer + 兜底 Dispose 幂等，无泄漏）
+        subscription.SetConsumeTask(consumeTask);
         return new ValueTask<IAsyncDisposable>(subscription);
     }
 
@@ -219,19 +236,28 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
     private sealed class KafkaSubscription : IAsyncDisposable
     {
         private readonly CancellationTokenSource _cts;
-        private readonly Task _consumeTask;
         private readonly IConsumer<string, byte[]> _consumer;
+        // P3 修复（十七轮）：登记先行模式——构造时不持有 Task（循环尚未启动），
+        // 由 SetConsumeTask 后置注入；Volatile 读写保证跨线程可见性（引用写原子）
+        private Task? _consumeTask;
         private int _disposed;
 
-        public KafkaSubscription(CancellationTokenSource cts, Task consumeTask, IConsumer<string, byte[]> consumer)
+        public KafkaSubscription(CancellationTokenSource cts, IConsumer<string, byte[]> consumer)
         {
             _cts = cts;
-            _consumeTask = consumeTask;
             _consumer = consumer;
         }
 
-        /// <summary>后台消费 Task — 可用于健康检查和异常观测</summary>
-        public Task ConsumeTask => _consumeTask;
+        /// <summary>后台消费 Task — 可用于健康检查和异常观测。
+        /// 登记与循环启动之间存在极小窗口，期间为 null（登记先行的顺序权衡）。</summary>
+        public Task? ConsumeTask => Volatile.Read(ref _consumeTask);
+
+        /// <summary>后置注入消费循环 Task（登记先行模式）——登记完成后由 SubscribeAsync 调用一次。</summary>
+        public void SetConsumeTask(Task consumeTask)
+        {
+            ArgumentNullException.ThrowIfNull(consumeTask);
+            Volatile.Write(ref _consumeTask, consumeTask);
+        }
 
         public async ValueTask DisposeAsync()
         {
@@ -241,8 +267,13 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             await _cts.CancelAsync();
             try
             {
-                // 等待后台消费循环真正退出（而非盲猜延时）
-                await _consumeTask;
+                // 等待后台消费循环真正退出（而非盲猜延时）。
+                // P3 修复（十七轮）· 登记先行窗口：登记与 SetConsumeTask 之间被 Dispose
+                // 时为 null——此时循环未启动或刚启动，cts 已请求取消，委托侧 finally
+                // 会释放 consumer，下方 finally 兜底 Dispose 幂等，无泄漏。
+                var consumeTask = Volatile.Read(ref _consumeTask);
+                if (consumeTask is not null)
+                    await consumeTask;
             }
             catch (OperationCanceledException)
             {

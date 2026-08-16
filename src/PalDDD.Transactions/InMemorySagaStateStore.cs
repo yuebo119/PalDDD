@@ -83,7 +83,18 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
     }
 
     /// <inheritdoc/>
-    /// <remarks>内存模式 — 状态修改直接作用于引用，此方法为 no-op。</remarks>
+    /// <remarks>
+    /// P3 修复（十七轮）：返回值对齐 <see cref="ISagaStateStore{TState}.SaveChangesAsync"/>
+    /// 契约——已跟踪（<see cref="Add"/> 或租约后存在于内部字典）返回 1，未跟踪返回 0。
+    /// 原恒返回 0 使调用方的"0 行 = 乐观锁冲突"告警路径（SagaProcessor）在内存模式下
+    /// 每次保存都误触发。
+    /// </remarks>
     public ValueTask<int> SaveChangesAsync(TState state, CancellationToken ct)
-        => ValueTask.FromResult(0);
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        lock (_lock)
+        {
+            return ValueTask.FromResult(_states.ContainsKey(state.SagaId) ? 1 : 0);
+        }
+    }
 }

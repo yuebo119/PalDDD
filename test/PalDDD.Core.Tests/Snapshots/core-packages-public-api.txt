@@ -804,7 +804,7 @@ struct PalDDD.Transactions.FanOutResult<TResult>
   method System.Int32 GetHashCode()
   method System.String ToString()
 class PalDDD.Transactions.FanOutStep<TItem, TResult>
-  ctor(System.String key, System.Func<PalDDD.Transactions.SagaState, System.Collections.Generic.IReadOnlyList<TItem>> selector, System.Func<TItem, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<TResult>> executor, System.Func<PalDDD.Transactions.SagaState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> compensate, System.Nullable<System.TimeSpan> timeout)
+  ctor(System.String key, System.Func<PalDDD.Transactions.SagaState, System.Collections.Generic.IReadOnlyList<TItem>> selector, System.Func<TItem, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<TResult>> executor, System.Func<PalDDD.Transactions.SagaState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> compensate, System.Nullable<System.TimeSpan> timeout, System.Int32 maxConcurrency)
   property PalDDD.Transactions.StepDispatchKind DispatchKind
   property System.Int32 MaxConcurrency
   property System.Nullable<System.TimeSpan> PerItemTimeout

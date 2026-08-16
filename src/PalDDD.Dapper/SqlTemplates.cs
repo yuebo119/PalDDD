@@ -73,10 +73,13 @@ public static class SqlTemplates
     /// 💡 <c>retry_count+1</c> 原子递增——当重试次数达到 10 时不再出现在 Pending 列表中。<br/>
     /// P2 修复（八轮评审）：WHERE 补租约守卫 <c>AND (locked_by IS NULL OR locked_by=@owner)</c>——
     /// 租约过期被其他 worker 抢占后，原 worker 的失败释放会清掉新 worker 的锁并误增 retry_count；
-    /// 被他人持有时 affected=0（语义对齐 PalORM 版 PalOrmOutboxStore，仅防"他人持有"）。
+    /// 被他人持有时 affected=0（语义对齐 PalORM 版 PalOrmOutboxStore，仅防"他人持有"）。<br/>
+    /// P2/P3 修复（十七轮）：补 <c>processed_at=NULL</c>——对齐 EFCore 版 ReleaseForRetry 与
+    /// <see cref="OutboxRequeueDead"/> 语义：消息重回 Pending 后 processed_at 应清除，
+    /// 否则残留上次处理的完成时间（监控/报表误判"已处理又 Pending"）。
     /// </summary>
     public const string OutboxReleaseForRetry =
-        "UPDATE outbox_messages SET status='Pending',error=@reason,next_attempt_at=@next,retry_count=retry_count+1,locked_by=NULL,locked_until=NULL WHERE id=@id AND (locked_by IS NULL OR locked_by=@owner)";
+        "UPDATE outbox_messages SET status='Pending',processed_at=NULL,error=@reason,next_attempt_at=@next,retry_count=retry_count+1,locked_by=NULL,locked_until=NULL WHERE id=@id AND (locked_by IS NULL OR locked_by=@owner)";
 
     /// <summary>
     /// 将死信消息重置为 Pending（ops 重投递入口）。<br/>
@@ -197,14 +200,33 @@ public static class SqlTemplates
     public const string SagaActive =
         "SELECT * FROM saga_states WHERE status = 0 ORDER BY created_at LIMIT @n";
 
-    /// <summary>租约获取活跃 Saga，避免多 worker 重复处理。</summary>
+    /// <summary>
+    /// 租约获取活跃 Saga，避免多 worker 重复处理。<br/>
+    /// P2/P3 修复（十七轮）：方言语义声明——
+    /// MySQL 变体见 <see cref="SagaLeaseActiveMySql"/>（JOIN 形态；READ COMMITTED 下
+    /// UPDATE 与租约回读两步之间存在抢占窗口，由 SagaUpdate 的 version 乐观锁兜底）；
+    /// SQLite 单写者（库级串行）无并发抢占，直接使用本模板；
+    /// PG 变体见 <see cref="SagaLeaseActivePG"/>（SKIP LOCKED 消除锁竞争）。
+    /// </summary>
     public const string SagaLeaseActive =
         "UPDATE saga_states SET leased_by=@owner, leased_until=@until WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status = 0 AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n)";
 
     /// <summary>
+    /// PG 专用 Saga 租约获取 — 子查询行锁 <c>FOR UPDATE SKIP LOCKED</c>。<br/>
+    /// P2/P3 修复（十七轮）：与 Outbox PG 路径（DapperOutboxStore.cs 的
+    /// <c>OutboxLeaseUpdate + "({leaseSubSql} FOR UPDATE SKIP LOCKED)"</c>）同款——
+    /// 多 worker 并发租约时，子查询锁定行互相跳过而非阻塞等待，
+    /// 各自拿到不相交的 Saga 批次。注意 PG 的 locking clause 位于 LIMIT 之后。
+    /// </summary>
+    public const string SagaLeaseActivePG =
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status = 0 AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)";
+
+    /// <summary>
     /// MySQL 专用 Saga 租约获取 — JOIN 形态。<br/>
     /// P1 修复（十一轮·实测发现）：同 OutboxLeaseUpdateMySql——MySQL 禁止 IN 子查询内 LIMIT，
-    /// 与 PalORM 版（PalOrmSagaStateStore MySQL 分支）同款 JOIN 替代，PD17 姊妹同步。
+    /// 与 PalORM 版（PalOrmSagaStateStore MySQL 分支）同款 JOIN 替代，PD17 姊妹同步。<br/>
+    /// ⚠️ READ COMMITTED 隔离下 UPDATE 与租约回读两步之间存在抢占窗口（无 SKIP LOCKED 等价物），
+    /// 由 <see cref="SagaUpdate"/> 的 version 乐观锁兜底——并发覆盖在保存时检测。
     /// </summary>
     public const string SagaLeaseActiveMySql =
         "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status = 0 AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until";

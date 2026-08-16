@@ -24,7 +24,9 @@ public sealed class EnumGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor NoFieldsWarning = new(
         "PALENUM001",
         "Generated enum has no static fields to register",
-        "Type '{0}' is marked with [GenerateEnum] but has no public static readonly fields. Add at least one field or remove the attribute.",
+        // P3 修复（十七轮）：文案对齐实际收集逻辑——字段收集只要求 public/internal static
+        // （不要求 readonly），原文案 "static readonly" 与实现不符
+        "Type '{0}' is marked with [GenerateEnum] but has no public static fields. Add at least one field or remove the attribute.",
         "PalDDD.EnumGeneration",
         DiagnosticSeverity.Warning,
         isEnabledByDefault: true);
@@ -47,6 +49,17 @@ public sealed class EnumGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    // P3 修复（十七轮）：泛型声明（自身带类型参数或嵌套于泛型包含类型）生成坏代码——
+    // 生成物以裸名声明 partial class（与用户泛型声明同名冲突），且 [ModuleInitializer]
+    // 不允许位于泛型类型成员。编译期报 PALENUM004 引导移出泛型声明，不生成坏代码。
+    private static readonly DiagnosticDescriptor GenericDeclarationNotSupported = new(
+        "PALENUM004",
+        "GenerateEnum does not support generic declarations",
+        "Type '{0}' is marked with [GenerateEnum] within a generic declaration. Generic smart enums are not supported; move the target out of the generic type or remove its type parameters.",
+        "PalDDD.EnumGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         // 步骤 1：收集所有标记了 [GenerateEnum] 的 partial class 及其静态字段
@@ -63,6 +76,8 @@ public sealed class EnumGenerator : IIncrementalGenerator
 
                 // P3 修复（八轮评审）：record 声明（GenerateEnumAttribute 的 Class target
                 // 覆盖 record class）不支持——SmartEnum 的静态字段注册依赖 class 语义
+                // P3 修复（十七轮）：DiagnosticMessage 死字段已删——诊断消息由 descriptor
+                // 统一承载（RegisterSourceOutput 按 DiagnosticId 分派），payload 不再携带
                 if (classSymbol.IsRecord && classSymbol.TypeKind == TypeKind.Class)
                 {
                     return new EnumGenInfo(
@@ -74,7 +89,22 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         Fields: [],
                         HasFields: false,
                         DiagnosticId: "PALENUM003",
-                        DiagnosticMessage: $"Type '{classSymbol.Name}' is a record declaration marked with [GenerateEnum]; change 'record' to 'class'.",
+                        Location: context.TargetNode.GetLocation());
+                }
+
+                // P3 修复（十七轮）：泛型声明（自身带类型参数或嵌套于泛型包含类型）暂不支持
+                // （见 GenericDeclarationNotSupported 注释）——编译期报 PALENUM004
+                if (classSymbol.Arity > 0 || IsWithinGenericContainingType(classSymbol))
+                {
+                    return new EnumGenInfo(
+                        Namespace: GetNamespaceName(classSymbol),
+                        TypeName: classSymbol.Name,
+                        ContainingDeclarations: [],
+                        ContainingNames: [],
+                        ValueType: classSymbol.BaseType?.ToDisplayString() ?? "?",
+                        Fields: [],
+                        HasFields: false,
+                        DiagnosticId: "PALENUM004",
                         Location: context.TargetNode.GetLocation());
                 }
 
@@ -93,7 +123,6 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         Fields: [],
                         HasFields: false,
                         DiagnosticId: "PALENUM002",
-                        DiagnosticMessage: $"Type '{classSymbol.Name}' is marked with [GenerateEnum] but does not directly inherit SmartEnum<TSelf, TValue> (found '{baseType?.ToDisplayString() ?? "none"}').",
                         Location: context.TargetNode.GetLocation());
                 }
 
@@ -170,9 +199,11 @@ public sealed class EnumGenerator : IIncrementalGenerator
             {
                 // P2 修复：隔层继承报 PALENUM002（Error 级）
                 // P3 修复（八轮评审）：record 声明报 PALENUM003——按 DiagnosticId 分派
+                // P3 修复（十七轮）：泛型声明报 PALENUM004
                 var descriptor = info.DiagnosticId switch
                 {
                     "PALENUM003" => RecordNotSupportedError,
+                    "PALENUM004" => GenericDeclarationNotSupported,
                     _ => NotDirectInheritanceError,
                 };
                 spc.ReportDiagnostic(Diagnostic.Create(
@@ -209,6 +240,19 @@ public sealed class EnumGenerator : IIncrementalGenerator
         => symbol.ContainingNamespace is { IsGlobalNamespace: false } ns
             ? ns.ToDisplayString()
             : null;
+
+    // P3 修复（十七轮）：沿 ContainingType 链检测泛型包含类型——
+    // [ModuleInitializer] 不允许位于泛型类型成员，生成物必然编译失败
+    private static bool IsWithinGenericContainingType(INamedTypeSymbol symbol)
+    {
+        for (var t = symbol.ContainingType; t is not null; t = t.ContainingType)
+        {
+            if (t.Arity > 0)
+                return true;
+        }
+
+        return false;
+    }
 
     /// <summary>生成硬编码字段引用的静态构造函数——零反射，100% AOT 兼容</summary>
     private static string GenerateEnumCode(EnumGenInfo info)
@@ -255,13 +299,13 @@ partial class {{info.TypeName}}
         ImmutableArray<string> Fields,
         bool HasFields = true,
         string? DiagnosticId = null,
-        string? DiagnosticMessage = null,
         Location? Location = null)
     {
         // P3 修复（八轮评审）：数组/ImmutableArray 字段默认引用相等破坏增量管线缓存
         // （每次编译新实例 → 缓存恒 miss）——逐元素比较实现值等价，镜像
         // MessageRegistryGenerator.LocationInfo 的 value-equatable 范式。
-        // DiagnosticId/DiagnosticMessage/Location 不参与相等：诊断分支不产出缓存内容。
+        // P3 修复（十七轮）：DiagnosticMessage 死字段已删——诊断消息由 descriptor 统一
+        // 承载，payload 从不消费该字段。DiagnosticId/Location 不参与相等：诊断分支不产出缓存内容。
         public bool Equals(EnumGenInfo? other) =>
             other is not null
             && Namespace == other.Namespace

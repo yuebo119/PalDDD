@@ -96,9 +96,13 @@ public static class PostgreSqlReadWriteRouterExtensions
         if (replicaConnectionStrings is { Length: > 0 })
         {
             List<string> hosts = [];
+            var primaryCsBuilder = new NpgsqlConnectionStringBuilder(primaryConnectionString);
             foreach (var cs in replicaConnectionStrings)
             {
                 var sb = new NpgsqlConnectionStringBuilder(cs);
+                // P2/P3 修复（十七轮 · 镜像 MySQL failover 校验）：reader 连接串以主库串为基线仅追加 Host——
+                // 副本凭据/库名与主库不一致时被静默丢弃，此处快速失败（复用 PostgreSqlMultiHost 校验）
+                PostgreSqlMultiHost.ThrowIfCredentialsMismatch(primaryCsBuilder, sb, "replica");
                 // PD17 姊妹统一：端口编码进 Host 条目
                 if (sb.Host is not null)
                     hosts.Add(sb.Port != 5432 ? $"{sb.Host}:{sb.Port}" : sb.Host);

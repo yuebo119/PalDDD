@@ -108,7 +108,13 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
     /// <summary>
     /// Saga 管理器——提供中断恢复和子 Saga 执行能力。<br/>
-    /// 可由 DI 注入或手动设置。若为 null，ChildSagaStep 和恢复流程将不可用。
+    /// 可由 DI 注入或手动设置。若为 null，ChildSagaStep 和恢复流程将不可用。<br/>
+    /// ⚠️ <b>中断后果（P3 声明·十七轮）</b>：<see cref="InterruptStep"/> 执行时若本属性为 null
+    /// （或非 <see cref="DefaultSagaManager"/> 类型），中断条目无处注册——该 Saga 状态已被置为
+    /// <see cref="SagaStatus.AwaitingHumanDecision"/> 且无人能消费后续人工决策，
+    /// 将<b>永久滞留</b>在中断态（无超时检测兜底：IsTimedOut 只扫描 StepStartedAt 超时，
+    /// 中断态步骤已记录开始时间，需步骤自身配置 Timeout 才会被超时补偿）。
+    /// 使用 Interrupt 步骤前必须设置本属性。
     /// </summary>
     public ISagaManager? SagaManager { get; set; }
 
@@ -301,7 +307,20 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 if (observer is not null)
                     await observer.OnStepFailed(current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
 
-                await CompensateExecutedStepsAsync(current, stepKey, step, ct).ConfigureAwait(false);
+                // P3 修复（十七轮）：补偿自身抛出会替换原步骤失败异常向上传播，步骤根因
+                // （failures）丢失——catch 后把补偿异常并入 failures 抛出，外层
+                // AggregateException 同时携带步骤失败与补偿失败
+                try
+                {
+                    await CompensateExecutedStepsAsync(current, stepKey, step, ct).ConfigureAwait(false);
+                }
+                catch (Exception compensationEx) when (compensationEx is not OperationCanceledException)
+                {
+                    failures.Add(compensationEx);
+                    throw new AggregateException(
+                        $"Saga step '{stepKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}) and compensation also failed. See inner exceptions.",
+                        failures);
+                }
                 throw new AggregateException(
                     $"Saga step '{stepKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}). See inner exceptions for each attempt.",
                     failures);
@@ -375,7 +394,19 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 if (observer is not null)
                     await observer.OnStepFailed(current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
 
-                await CompensateExecutedStepsAsync(current, stepKey, step, ct).ConfigureAwait(false);
+                // P3 修复（十七轮）：补偿失败嵌套（见 ExecuteNormalStepAsync 同名修复注释）——
+                // 补偿异常并入 failures 抛出，不吞 FanOut 步骤根因
+                try
+                {
+                    await CompensateExecutedStepsAsync(current, stepKey, step, ct).ConfigureAwait(false);
+                }
+                catch (Exception compensationEx) when (compensationEx is not OperationCanceledException)
+                {
+                    failures.Add(compensationEx);
+                    throw new AggregateException(
+                        $"FanOut step '{stepKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}) and compensation also failed. See inner exceptions.",
+                        failures);
+                }
                 throw new AggregateException(
                     $"FanOut step '{stepKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}). See inner exceptions.",
                     failures);
@@ -463,7 +494,19 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 if (observer is not null)
                     await observer.OnStepFailed(current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
 
-                await CompensateExecutedStepsAsync(current, stepKey, step, ct).ConfigureAwait(false);
+                // P3 修复（十七轮）：补偿失败嵌套（见 ExecuteNormalStepAsync 同名修复注释）——
+                // 补偿异常并入 failures 抛出，不吞 ChildSaga 步骤根因
+                try
+                {
+                    await CompensateExecutedStepsAsync(current, stepKey, step, ct).ConfigureAwait(false);
+                }
+                catch (Exception compensationEx) when (compensationEx is not OperationCanceledException)
+                {
+                    failures.Add(compensationEx);
+                    throw new AggregateException(
+                        $"ChildSaga step '{stepKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}) and compensation also failed. See inner exceptions.",
+                        failures);
+                }
                 throw new AggregateException(
                     $"ChildSaga step '{stepKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}). See inner exceptions.",
                     failures);
@@ -526,6 +569,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
         RecordExecutedStep(current, current, stepKey, startedAt);
 
         // 注册到 DefaultSagaManager（如果可用）
+        // P3 声明（十七轮）：SagaManager 为 null 或非 DefaultSagaManager 时本块整体跳过——
+        // 上方已把状态置为 AwaitingHumanDecision，但中断条目无处注册，人工决策无人消费，
+        // saga 永久滞留中断态（详见 SagaManager 属性 XML doc 的后果声明）
         if (SagaManager is DefaultSagaManager defaultManager)
         {
             // P2 修复（八轮）：注册时捕获恢复派发闭包——ResumeAsync 到达决策时以决策为
@@ -622,7 +668,19 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 if (observer is not null)
                     await observer.OnStepFailed(current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
 
-                await CompensateExecutedStepsAsync(current, matchedKey, matchedStep, ct).ConfigureAwait(false);
+                // P3 修复（十七轮）：补偿失败嵌套（见 ExecuteNormalStepAsync 同名修复注释）——
+                // 补偿异常并入 failures 抛出，不吞 Dynamic 路由步骤根因
+                try
+                {
+                    await CompensateExecutedStepsAsync(current, matchedKey, matchedStep, ct).ConfigureAwait(false);
+                }
+                catch (Exception compensationEx) when (compensationEx is not OperationCanceledException)
+                {
+                    failures.Add(compensationEx);
+                    throw new AggregateException(
+                        $"Dynamic step '{stepKey}' routed to '{matchedKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}) and compensation also failed. See inner exceptions.",
+                        failures);
+                }
                 throw new AggregateException(
                     $"Dynamic step '{stepKey}' routed to '{matchedKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}). See inner exceptions.",
                     failures);

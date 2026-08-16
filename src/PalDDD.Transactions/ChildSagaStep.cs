@@ -67,8 +67,8 @@ public sealed class ChildSagaStep<TChildState, TInput, TOutput> : SagaStep, IInt
     /// <summary>从父 Saga 状态提取输入。</summary>
     internal TInput ExtractInput(SagaState parentState) => _inputSelector(parentState);
 
-    /// <summary>从子 Saga 状态提取输出。</summary>
-    internal TOutput ExtractOutput(TChildState childState) => _outputSelector(childState);
+    // P3 修复（十七轮）：删除 internal ExtractOutput 死方法——grep 全仓确认零调用方；
+    // 输出提取在 ApplyOutput 内联完成（含八轮的 outputApplier 为 null 时跳过求值语义）
 
     /// <inheritdoc/>
     object? IInternalChildSagaStep.ExtractInput(SagaState parentState)

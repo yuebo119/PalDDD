@@ -41,5 +41,12 @@ public sealed class DynamicStep : SagaStep
     }
 
     /// <summary>路由到下一步骤 key。</summary>
+    /// <remarks>
+    /// P3 声明（十七轮）：返回值必须是与 <see cref="Saga{TState}"/> 注册键完全一致的
+    /// 字符串——普通步骤 key 格式为 <c>"State|EventName"</c>（事件精确匹配）或
+    /// <c>"State"</c>（通配）；key 事件段只含类型名（不含命名空间），同名事件类型的
+    /// 碰撞限制见 <c>SagaKey</c> 的 XML doc。路由目标必须是普通步骤（特殊步骤会被
+    /// 编排器显式拒绝），未注册的 key 视为未匹配（状态不变）。
+    /// </remarks>
     internal string Route(SagaState state) => _router(state);
 }

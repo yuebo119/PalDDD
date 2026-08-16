@@ -31,5 +31,8 @@ public interface ISagaStateStore<TState> where TState : SagaState
     /// Dapper 适配器：必需，无变更跟踪。
     /// EF Core 适配器：内部使用 DbContext 变更跟踪，但建议传入以保持接口一致。</param>
     /// <param name="ct">取消令牌</param>
+    /// <returns>受影响行数：<c>1</c> 表示写入生效；<c>0</c> 表示目标行不存在或乐观锁冲突
+    /// （他实例已写同一 Saga），调用方据此判定本实例内存快照作废（P3 修复·十七轮：
+    /// 统一 EF/Dapper/内存三实现的返回值语义，避免调用方按 0 行误判或漏判冲突）。</returns>
     ValueTask<int> SaveChangesAsync(TState state, CancellationToken ct);
 }

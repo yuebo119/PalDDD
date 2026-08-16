@@ -89,7 +89,9 @@ public sealed class ServiceRegistrationTests
         var firstViaInterface = firstScope.ServiceProvider.GetRequiredService<IEventHandler<TestDomainEvent>>();
         var second = secondScope.ServiceProvider.GetRequiredService<TestDomainEventHandler>();
 
-        await Assert.That(first).IsSameReferenceAs(firstViaInterface);
+        // 十七轮契约变更：TryAddEnumerable 实现类型描述符（多 handler 聚合必需）不再
+        // "转发到具体注册"——接口与具体解析是同 scope 内两个同类型实例（MS.DI 标准行为）
+        await Assert.That(firstViaInterface).IsTypeOf<TestDomainEventHandler>();
         await Assert.That(first).IsNotSameReferenceAs(second);
     }
 
@@ -105,7 +107,9 @@ public sealed class ServiceRegistrationTests
         var genericHandler = scope.ServiceProvider.GetRequiredService<IEventHandler<TestDomainEvent>>();
         var nonGenericHandler = scope.ServiceProvider.GetRequiredService<IEventHandler>();
 
-        await Assert.That(genericHandler).IsSameReferenceAs(nonGenericHandler);
+        // 十七轮契约变更：同上——两接口各自经实现类型描述符解析（同类型不同实例）
+        await Assert.That(genericHandler).IsTypeOf<TestDomainEventHandler>();
+        await Assert.That(nonGenericHandler).IsTypeOf<TestDomainEventHandler>();
     }
 
     /// <summary>AddPalCommandHandler 注册 Handler + 接口（作用域）</summary>
@@ -184,6 +188,35 @@ public sealed class ServiceRegistrationTests
     private sealed class TestDomainEventHandler : IEventHandler<TestDomainEvent>
     {
         public ValueTask HandleAsync(TestDomainEvent @event, CancellationToken ct) => ValueTask.CompletedTask;
+    }
+
+    private sealed class AnotherDomainEventHandler : IEventHandler<TestDomainEvent>
+    {
+        public ValueTask HandleAsync(TestDomainEvent @event, CancellationToken ct) => ValueTask.CompletedTask;
+    }
+
+    [Test]
+    public async Task AddPalEventHandler_MultipleHandlersForSameEvent_AllResolved()
+    {
+        // P1 回归（十七轮）：八轮 TryAddScoped 防重曾把同事件第二个不同 handler 的接口注册
+        // 静默吞掉（GetServices 只剩首个）——TryAddEnumerable 按 ServiceType+ImplementationType
+        // 对去重后，多 handler 聚合恢复且同 handler 双调仍防重
+        var services = new ServiceCollection();
+        services.AddPalEventHandler<TestDomainEvent, TestDomainEventHandler>();
+        services.AddPalEventHandler<TestDomainEvent, AnotherDomainEventHandler>();
+        // 同 handler 双调——防重仍应生效（各接口只 1 份）
+        services.AddPalEventHandler<TestDomainEvent, TestDomainEventHandler>();
+
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        var genericHandlers = scope.ServiceProvider.GetServices<IEventHandler<TestDomainEvent>>().ToList();
+        var nonGenericHandlers = scope.ServiceProvider.GetServices<IEventHandler>().ToList();
+
+        await Assert.That(genericHandlers.Count).IsEqualTo(2);
+        await Assert.That(nonGenericHandlers.Count(h => h is IEventHandler<TestDomainEvent>)).IsEqualTo(2);
+        // 具体类型双调防重
+        await Assert.That(scope.ServiceProvider.GetServices<TestDomainEventHandler>().Count()).IsEqualTo(1);
     }
 
     private sealed class TestCommand : ICommand<string>;

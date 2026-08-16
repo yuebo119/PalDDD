@@ -34,6 +34,18 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    // P3 修复（十七轮）：泛型声明（自身带类型参数或嵌套于泛型包含类型）生成坏代码——
+    // 生成物中 namespace 级 TypeConverter/JsonConverter 以裸名引用嵌套 ID（泛型外层
+    // 无类型参数可用，typeof(Outer.Foo) 编译失败）；自身泛型时生成物裸名声明与用户
+    // partial record struct Foo<T> 同名冲突。编译期报 PALID003 引导移出泛型声明。
+    private static readonly DiagnosticDescriptor GenericDeclarationNotSupported = new(
+        "PALID003",
+        "GenerateId does not support generic declarations",
+        "Type '{0}' uses [GenerateId] within a generic declaration. Generic identities are not supported; move the target out of the generic type or remove its type parameters.",
+        "PalDDD.IdentityGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var candidates = context.SyntaxProvider.ForAttributeWithMetadataName(
@@ -64,6 +76,21 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                         Location: context.TargetNode.GetLocation());
                 }
 
+                // P3 修复（十七轮）：泛型声明（自身带类型参数或嵌套于泛型包含类型）暂不支持
+                // （见 GenericDeclarationNotSupported 注释）——编译期报 PALID003，不生成坏代码
+                if (structSymbol.Arity > 0 || IsWithinGenericContainingType(structSymbol))
+                {
+                    return new IdGenInfo(
+                        Namespace: null,
+                        TypeName: structSymbol.Name,
+                        ContainingDeclarations: [],
+                        ContainingNames: [],
+                        SourceType: sourceType.ToDisplayString(),
+                        IsNumeric: false,
+                        DiagnosticId: "PALID003",
+                        Location: context.TargetNode.GetLocation());
+                }
+
                 // P2 修复：嵌套类型——ContainingNamespace 不含类型层级，生成物需按
                 // ContainingType 链包 partial 声明；否则 namespace 级平铺的同名类型
                 // 与用户声明的嵌套 partial 不合并（Outer.Inner 得不到 IPalIdentity 实现）。
@@ -90,13 +117,17 @@ public sealed class IdentityGenerator : IIncrementalGenerator
 
                 // P3 修复（八轮评审）：白名单外 IdType 报 PALID001——原实现静默生成
                 // "result = default; return false;" 的恒失败 TryParse，用户无编译期反馈
+                // P1 修复（十七轮）：Ulid case 此前写 "ByteAether.Ulid" 永不匹配——ToDisplayString()
+                // 返回 "ByteAether.Ulid.Ulid"（命名空间 ByteAether.Ulid + 类型名 Ulid），
+                // [GenerateId(typeof(Ulid))] 恒报 PALID001（诊断消息声称支持的正是它拒绝的类型）。
+                // 编译探针实证；十六轮未发现因测试零 Ulid/long 用例。
                 var normalizedSourceType = sourceType.ToDisplayString().Replace("global::", "") switch
                 {
                     "System.Guid" => "Guid",
                     "int" => "int",
                     "long" => "long",
                     "string" => "string",
-                    "ByteAether.Ulid" => "Ulid",
+                    "ByteAether.Ulid.Ulid" => "Ulid",
                     _ => null
                 };
                 if (normalizedSourceType is null)
@@ -128,21 +159,29 @@ public sealed class IdentityGenerator : IIncrementalGenerator
             if (info.DiagnosticId is not null)
             {
                 // 诊断分派（九轮）：PALID001=源类型白名单外；PALID002=声明形式非 partial record struct
-                if (info.DiagnosticId == "PALID002")
+                // P3 修复（十七轮）：PALID003=泛型声明（自身或包含类型）暂不支持
+                switch (info.DiagnosticId)
                 {
-                    spc.ReportDiagnostic(Diagnostic.Create(
-                        NonPartialRecordStructDeclaration,
-                        info.Location ?? Location.None,
-                        info.TypeName));
-                }
-                else
-                {
-                    // P3 修复（八轮评审）：PALID001——非白名单 IdType 编译期报错，不生成代码
-                    spc.ReportDiagnostic(Diagnostic.Create(
-                        UnsupportedIdSourceType,
-                        info.Location ?? Location.None,
-                        info.TypeName,
-                        info.SourceType));
+                    case "PALID002":
+                        spc.ReportDiagnostic(Diagnostic.Create(
+                            NonPartialRecordStructDeclaration,
+                            info.Location ?? Location.None,
+                            info.TypeName));
+                        break;
+                    case "PALID003":
+                        spc.ReportDiagnostic(Diagnostic.Create(
+                            GenericDeclarationNotSupported,
+                            info.Location ?? Location.None,
+                            info.TypeName));
+                        break;
+                    default:
+                        // P3 修复（八轮评审）：PALID001——非白名单 IdType 编译期报错，不生成代码
+                        spc.ReportDiagnostic(Diagnostic.Create(
+                            UnsupportedIdSourceType,
+                            info.Location ?? Location.None,
+                            info.TypeName,
+                            info.SourceType));
+                        break;
                 }
                 return;
             }
@@ -160,6 +199,19 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         => node is StructDeclarationSyntax
            || (node is RecordDeclarationSyntax r
                && r.ClassOrStructKeyword.IsKind(SyntaxKind.StructKeyword));
+
+    // P3 修复（十七轮）：沿 ContainingType 链检测泛型包含类型——
+    // 生成物的 namespace 级 converter 无法以裸名引用泛型外层内的嵌套 ID
+    private static bool IsWithinGenericContainingType(INamedTypeSymbol symbol)
+    {
+        for (var t = symbol.ContainingType; t is not null; t = t.ContainingType)
+        {
+            if (t.Arity > 0)
+                return true;
+        }
+
+        return false;
+    }
 
     private static string GenerateIdentityCode(IdGenInfo info)
     {

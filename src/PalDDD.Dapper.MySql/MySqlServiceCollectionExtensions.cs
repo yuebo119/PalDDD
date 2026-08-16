@@ -150,6 +150,34 @@ public static class MySqlServiceCollectionExtensions
         return services;
     }
 
+    /// <summary>
+    /// P2/P3 修复（十七轮）：Legacy 路径（<see cref="AddPalMySqlWithStores"/>）的 Saga 快照便捷注册——
+    /// 与 <c>DapperServiceCollectionExtensions.AddPalDapperSagaSnapshot</c> 同款问题：Legacy 开放泛型注册
+    /// <c>DapperSagaStateStore&lt;&gt;</c> 的 jsonTypeInfo 恒 null，saga_data 列写 NULL（重启丢业务字段）。
+    /// 此方法以具体泛型注册覆盖开放泛型，闭包构造传入 JsonTypeInfo；
+    /// dbType 显式 <see cref="DapperDbType.MySql"/>（与 Legacy 路径 Outbox/Inbox 显式传参一致，
+    /// 不依赖容器的 DapperDbType 单例）。<br/>
+    /// ⚠️ <b>不调用则 saga_data 不持久化（重启丢业务字段）</b>。
+    /// </summary>
+    public static IServiceCollection AddPalMySqlSagaSnapshot<TState>(
+        this IServiceCollection services,
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState> jsonTypeInfo)
+        where TState : SagaState, new()
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(jsonTypeInfo);
+
+        services.AddScoped(typeof(ISagaStateStore<TState>), sp =>
+            new DapperSagaStateStore<TState>(
+                sp.GetRequiredService<System.Data.Common.DbConnection>(),
+                transaction: null,
+                jsonTypeInfo: jsonTypeInfo,
+                timeProvider: sp.GetService<TimeProvider>(),
+                dbType: DapperDbType.MySql));
+
+        return services;
+    }
+
     // ── 内部辅助 ──
 
     /// <summary>

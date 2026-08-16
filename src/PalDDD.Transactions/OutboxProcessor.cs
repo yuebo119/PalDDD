@@ -32,7 +32,9 @@ public sealed class OutboxProcessor : PeriodicBackgroundProcessor
         IOptionsMonitor<OutboxOptions> options,
         IPalLogger<OutboxProcessor> logger,
         TimeSpan? pollInterval = null)
-        : base(scopeFactory, pollInterval ?? options.CurrentValue.PollInterval)
+        // P3 修复（十七轮）：options 空守卫前移到 base 实参——原实参 pollInterval 为 null 时
+        // 先在 options.CurrentValue 解引用 NRE，构造体内的 ThrowIfNull 永不可达
+        : base(scopeFactory, pollInterval ?? (options ?? throw new ArgumentNullException(nameof(options))).CurrentValue.PollInterval)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);

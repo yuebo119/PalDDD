@@ -50,9 +50,10 @@ public sealed class DefaultSagaManager : ISagaManager
             throw new InvalidOperationException(
                 $"Saga {sagaId} 无已注册的中断条目——可能从未中断、已恢复成功，或进程重启丢失内存状态。");
 
-        entry.SetDecision(decision);
+        // P3 修复（十七轮）：删除 entry.SetDecision(decision) 调用与 Decision 属性——
+        // ResumeDispatch 委托直接以参数接收决策，Decision 只写不读（死状态）
 
-        // P2 修复（八轮）：SetDecision 后重新派发——把中断恢复接回执行管线
+        // P2 修复（八轮）：重新派发——把中断恢复接回执行管线
         var resumedState = await entry.ResumeDispatch(decision, ct).ConfigureAwait(false);
 
         // P3 修复（九轮→十轮修正）：状态 Alone 无法区分"路由缺失"与"合法二次中断"
@@ -69,7 +70,10 @@ public sealed class DefaultSagaManager : ISagaManager
         }
 
         // 恢复成功后移除条目（此前 _interrupted 只增不减，内存泄漏）
-        _interrupted.TryRemove(sagaId, out _);
+        // P3 修复（十七轮）：KVP 身份形式 TryRemove——按 key 移除在并发场景会误删：
+        // resume 期间同一 sagaId 发生新中断注册（RegisterInterrupted 以新条目替换字典项）
+        // 时，按 key 移除删掉的是新条目；KVP 重载仅当字典中仍是本条目时才移除
+        _interrupted.TryRemove(new KeyValuePair<PalUlid, InterruptedSagaEntry>(sagaId, entry));
     }
 
     /// <inheritdoc/>
@@ -166,10 +170,12 @@ public sealed class DefaultSagaManager : ISagaManager
         public PalUlid SagaId { get; }
         public string Reason { get; }
         public Type DecisionType { get; }
-        public object? Decision { get; private set; }
 
         /// <summary>恢复派发委托——以决策为事件重新进入 ProcessEventAsync（见 RegisterInterrupted）。</summary>
         public Func<object, CancellationToken, ValueTask<SagaState>> ResumeDispatch { get; }
+
+        // P3 修复（十七轮）：删除 Decision 属性与 SetDecision 方法——决策经 ResumeDispatch
+        // 参数直接传递，属性只写不读（死状态）
 
         public InterruptedSagaEntry(
             PalUlid sagaId,
@@ -182,7 +188,5 @@ public sealed class DefaultSagaManager : ISagaManager
             DecisionType = decisionType;
             ResumeDispatch = resumeDispatch;
         }
-
-        public void SetDecision(object decision) => Decision = decision;
     }
 }

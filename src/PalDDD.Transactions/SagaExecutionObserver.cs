@@ -81,10 +81,26 @@ public sealed class SagaExecutionObserver : IDisposable
     }
 
     /// <summary>步骤执行失败。</summary>
+    /// <remarks>
+    /// P3 修复（十七轮）：<see cref="SagaStepFailed.ErrorMessage"/> 递归下钻
+    /// <see cref="Exception.InnerException"/> 取最内层真实消息——重试链的
+    /// AggregateException、反射派发的 TargetInvocationException（如 DefaultSagaManager
+    /// 的子 Saga 非泛型反射 Invoke）外层 Message 是 "One or more errors occurred"
+    /// 之类聚合文案，观测端无从定位根因。
+    /// </remarks>
     public async ValueTask OnStepFailed(PalUlid sagaId, string stepKey, Exception error, CancellationToken ct)
     {
         if (_sink is not null)
-            await _sink.EmitAsync(new SagaStepFailed(sagaId, stepKey, error.Message), ct).ConfigureAwait(false);
+            await _sink.EmitAsync(new SagaStepFailed(sagaId, stepKey, GetRootMessage(error)), ct).ConfigureAwait(false);
+    }
+
+    /// <summary>取最内层异常的 Message（无 InnerException 时返回自身 Message）。</summary>
+    private static string GetRootMessage(Exception error)
+    {
+        var current = error;
+        while (current.InnerException is not null)
+            current = current.InnerException;
+        return current.Message;
     }
 
     /// <summary>补偿开始。</summary>

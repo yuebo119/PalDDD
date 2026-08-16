@@ -23,6 +23,10 @@ namespace PalDDD.Transactions;
     Justification = "Inbox 需在重新抛出前标记任意用户 handler 失败，需捕获 Exception 基类。")]
 public sealed class InboxProcessor
 {
+    // P3 修复（十七轮）：失败原因入库截断上限——LastError 列上限 2048，调用方传入
+    // 超长 ex.Message 会让终态保存本身失败（对齐 InboxDbContext.MarkFailedAsync 防御）
+    internal const int MaxFailureReasonLength = 2000;
+
     private readonly IInboxStore _store;
     private readonly IPalLogger<InboxProcessor> _logger;
     private readonly TimeProvider _timeProvider;
@@ -103,7 +107,12 @@ public sealed class InboxProcessor
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await _store.MarkFailedAsync(record, ex.Message, CancellationToken.None);
+            // P3 修复（十七轮）：ex.Message 截断到 2000 再入库——长异常消息（含大 payload
+            // 的序列化错误等）超出 LastError 列上限会让终态保存本身失败，掩盖原始 handler 失败
+            var failureReason = ex.Message.Length <= MaxFailureReasonLength
+                ? ex.Message
+                : ex.Message[..MaxFailureReasonLength];
+            await _store.MarkFailedAsync(record, failureReason, CancellationToken.None);
             activity?.SetTag("pal.inbox.result", "failed");
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             PalMetrics.InboxFailed.Add(1);

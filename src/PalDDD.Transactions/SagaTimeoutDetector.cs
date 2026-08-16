@@ -59,12 +59,21 @@ internal sealed class SagaTimeoutDetector<TState>
 
 /// <summary>Saga key 工具——"state|EventType" 格式的解析。Saga 与 SagaTimeoutDetector 共用。</summary>
 /// <remarks>
-/// 💡 <b>分隔符约束：</b>key 使用 <c>|</c> 作为 state 与 eventType 的分隔符。
+/// 💡 <b>key 格式（P3 声明·十七轮）</b>：事件精确匹配 key 为 <c>"State|EventName"</c>（如
+/// <c>"Approved|OrderCreated"</c>）；通配步骤 key 仅为 <c>"State"</c>（无事件段）。
 /// <para>
 /// ⚠️ <b>运行时校验：</b><see cref="Make"/> 在 state 包含 <c>|</c> 时抛出 <see cref="ArgumentException"/>，
 /// 因为含 <c>|</c> 的状态名会破坏 <see cref="ExtractState"/> 的状态名还原逻辑。
 /// 实际场景中状态名通常为 PascalCase 或 kebab-case，不会出现此字符。
 /// <see cref="SagaState.CurrentState"/> 的 setter 同样执行此校验。
+/// </para>
+/// <para>
+/// ⚠️ <b>同名碰撞限制（P3 声明·十七轮）</b>：key 的事件段只取
+/// <see cref="Type"/> 的 <c>Name</c>（不含命名空间）——同状态、不同命名空间的同名事件类型
+/// （如 <c>V1.OrderCreated</c> 与 <c>V2.OrderCreated</c>）生成相同 key，后注册者
+/// 覆盖前者（<see cref="Saga{TState}"/> 的 When 重复 key 覆盖语义）；同理通配 key
+/// <c>"State"</c> 与名为 <c>"State"</c> 的另一状态通配注册天然同 key。避免在不同
+/// 命名空间使用同名事件类型驱动同一状态转换。
 /// </para>
 /// </remarks>
 internal static class SagaKey

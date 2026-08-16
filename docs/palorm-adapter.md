@@ -76,7 +76,7 @@ PALORM012 约束：`[ConcurrencyCheck]` 仅支持非 nullable int/long（源生�
 
 | Store | 复合主键 | 实现 |
 |---|---|---|
-| **Projection** | `(projection_name, source_name, position)` | `ExecuteAsync` + `QueryFirstAsync<CheckpointRow>` |
+| **Projection** | `(projection_name, source_name, position)` | `ExecuteAsync` + 手动 `DbDataReader` 列序映射 |
 | **Idempotency** | `(operation_name, key)` | 同上 |
 
 ---
@@ -186,7 +186,7 @@ ALTER TABLE outbox_messages MODIFY COLUMN payload TEXT;
 
 ### 源码
 
-- `src/PalDDD.PalORM/` — 核心层（7 Store + UnitOfWork + 6 Row DTO + 2 Converter）
+- `src/PalDDD.PalORM/` — 核心层（7 Store + UnitOfWork + 3 Row DTO + 2 Converter）
 - `src/PalDDD.PalORM.Sqlite/` — SQLite 方言包（7 中间固化类 + DI 扩展）
 - `samples/PalDDD.PalOrmSample/` — AOT 验证（真实 PublishAot + 运行时 CRUD）
 

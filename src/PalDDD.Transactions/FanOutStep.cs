@@ -25,6 +25,14 @@ internal interface IInternalFanOutStep
 /// </summary>
 /// <typeparam name="TItem">子任务输入项类型</typeparam>
 /// <typeparam name="TResult">子任务输出类型</typeparam>
+/// <remarks>
+/// ⚠️ <b>结果消费契约（P3 声明·十七轮）</b>：<see cref="FanOutResult{TResult}.Completed"/>
+/// 集合<b>仅由 executor 副作用消费</b>——编排器（<see cref="Saga{TState}"/> 的 FanOut
+/// 分发路径）只检查 <see cref="FanOutResult{TResult}.AllSucceeded"/> 决定成败/补偿，
+/// 不会读取 Completed 内容，也不会把它写回 <see cref="SagaState"/>。子任务结果需要
+/// 留存时，executor 必须在自身逻辑内写入状态（副作用）；无 outputApplier 之类的
+/// 自动回传通道。
+/// </remarks>
 public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
     where TItem : notnull
 {
@@ -48,16 +56,24 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
     /// <param name="executor">每个子任务的执行逻辑</param>
     /// <param name="compensate">补偿动作（可选）</param>
     /// <param name="timeout">整体步骤超时（可选）</param>
+    /// <param name="maxConcurrency">最大并发数；0（默认）表示使用 CPU 核心数，负数抛 <see cref="ArgumentOutOfRangeException"/></param>
     public FanOutStep(
         string key,
         Func<SagaState, IReadOnlyList<TItem>> selector,
         Func<TItem, CancellationToken, ValueTask<TResult>> executor,
         Func<SagaState, CancellationToken, ValueTask>? compensate = null,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        int maxConcurrency = 0)
         : base(key, execute: null!, compensate, timeout)
     {
         _selector = selector;
         _executor = executor;
+        // P3 修复（十七轮）：MaxConcurrency 校验上移构造函数——原 ThrowIfNegativeOrZero
+        // 在 ExecuteFanOutAsync 内，非法值延迟到运行时首跳才爆；构造参数路径即时失败。
+        // 0 保持"默认核数"语义（与 init 属性默认值一致）；init 初始化器路径仍由
+        // 执行时校验兜底（init 赋值发生在构造之后，构造无法拦截）
+        ArgumentOutOfRangeException.ThrowIfNegative(maxConcurrency);
+        MaxConcurrency = maxConcurrency > 0 ? maxConcurrency : Environment.ProcessorCount;
     }
 
     /// <summary>执行 Fan-out：并行分发所有子任务，收集完成项与失败项。</summary>
@@ -68,7 +84,9 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
         if (items.Count == 0)
             return new([], Array.Empty<(TResult?, Exception)>());
 
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxConcurrency); // P3 修复：0 时全部子任务挂起
+        // P3 修复：0 时全部子任务挂起（P3·十七轮：构造参数路径已前置校验，
+        // 此处兜底对象初始化器直接设 MaxConcurrency <= 0 的路径）
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxConcurrency);
         using var semaphore = new SemaphoreSlim(MaxConcurrency);
         var results = new TResult?[items.Count];
         // P2 定案（可空结果过滤）：以完成标记收集而非非空过滤——TResult 为可空引用类型

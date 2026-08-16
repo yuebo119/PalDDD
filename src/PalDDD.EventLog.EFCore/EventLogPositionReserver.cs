@@ -28,6 +28,16 @@ namespace PalDDD.EventLog;
 /// GlobalPosition 值单调递增但可能存在间隙（进程崩溃时区块末尾的未用位置）。
 /// ReadAll 使用 <c>&gt;= fromPosition</c> 过滤，因此间隙不影响正确性。
 /// </para>
+/// <para>
+/// ⚠️ <b>回滚窗口（P2/P3 修复·十七轮声明）</b>：调用方事务回滚时，本预留器的进程内
+/// <c>_lo/_hi</c> 游标<b>不回退</b>——
+/// (a) 区块推进已随 <c>SaveChangesAsync</c> 提交而事件 INSERT 被回滚：已预留位置成为永久间隙
+/// （无正确性影响，ReadAll 的 <c>&gt;=</c> 过滤兼容）；
+/// (b) 调用方以显式事务包裹追加（allocator 推进与事件 INSERT 一同回滚）：进程内游标超前于
+/// 持久化的 allocator 状态，进程存活期间继续分配高位（仅扩大间隙），但<b>重启后</b>从 DB
+/// allocator 重新取块可能落在本进程先前已成功提交批次用过的位置区间——依赖 events 表
+/// 唯一约束兜底报错（Hi/Lo 固有权衡，非缺陷修复项）。
+/// </para>
 /// </remarks>
 public sealed class EventLogPositionReserver
 {

@@ -25,6 +25,9 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     // 权衡（八轮评审 P3）：过大数据（如 MB 级 payload）后 TLS 持峰值容量不缩——
     // ArrayBufferWriter 内部缓冲按历史峰值保留，线程退出才回收；线程池长驻线程
     // 数 × 峰值容量即最坏驻留。可接受（消息负载量级有界），如需回收改 ArrayPool 租借。
+    // P3 修复（十七轮）· 并存声明：本池与 JsonLinesEventWriter 的 ThreadStatic 池
+    // 是两套独立实现（两套池并存，每线程最坏 2×(writer+buffer) 峰值驻留）——
+    // 合并需抽出公共 Writer 池抽象，现权衡保留两套。
     [ThreadStatic]
     private static Utf8JsonWriter? _tlsWriter;
 

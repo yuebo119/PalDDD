@@ -36,11 +36,17 @@ public static class SqliteJson
     // ── 提取操作（最常用）──
 
     /// <summary>提取 JSON 字段值：json_extract(col, '$.key')</summary>
+    /// <param name="key">
+    /// JSON 键名。⚠️ 不得含点号（<c>.</c>）——JSON 路径语法中点号是层级分隔符，
+    /// 键名本身含点（如 <c>"a.b"</c>）会被解释为嵌套路径 <c>$.a.b</c>，静默查错位置。
+    /// 含点号的键请改用 <see cref="ExtractPath"/> 的引号转义形式或原生 SQL。
+    /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Extract(string column, string key)
         => $"json_extract({Escape(column)}, '$.{Escape(key)}')";
 
     /// <summary>提取嵌套 JSON 路径：json_extract(col, '$.a.b.c')</summary>
+    /// <param name="path">路径段数组（每段不得含点号——同 <see cref="Extract"/> 的 key 约束，点号是分隔符）。</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractPath(string column, params string[] path)
         => $"json_extract({Escape(column)}, '$.{string.Join('.', path.Select(Escape))}')";
@@ -48,6 +54,7 @@ public static class SqliteJson
     // ── 类型检查 ──
 
     /// <summary>获取 JSON 字段类型：json_type(col, '$.key') → 'text'/'integer'/...</summary>
+    /// <param name="key">JSON 键名（同 <see cref="Extract"/> 的 key 约束：不得含点号）。</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Type(string column, string key)
         => $"json_type({Escape(column)}, '$.{Escape(key)}')";
@@ -58,6 +65,7 @@ public static class SqliteJson
         => $"json_valid({Escape(column)})";
 
     /// <summary>检查键是否存在：json_type(col, '$.key') IS NOT NULL</summary>
+    /// <param name="key">JSON 键名（同 <see cref="Extract"/> 的 key 约束：不得含点号）。</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string HasKey(string column, string key)
         => $"{Type(column, key)} IS NOT NULL";

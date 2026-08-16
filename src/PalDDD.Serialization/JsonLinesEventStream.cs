@@ -47,6 +47,9 @@ public sealed class JsonLinesEventWriter
     // 权衡（八轮评审 P3）：过大数据（如 MB 级事件行）后 TLS 持峰值容量不缩——
     // ArrayBufferWriter 内部缓冲按历史峰值保留，线程退出才回收；线程池长驻线程
     // 数 × 峰值容量即最坏驻留。可接受（事件行负载量级有界），如需回收改 ArrayPool 租借。
+    // P3 修复（十七轮）· 并存声明：本池与 JsonMessageSerializer 的 ThreadStatic 池
+    // 是两套独立实现（两套池并存，每线程最坏 2×(writer+buffer) 峰值驻留）——
+    // 合并需抽出公共 Writer 池抽象，现权衡保留两套。
 
     [ThreadStatic]
     private static System.Text.Json.Utf8JsonWriter? _tlsWriter;
@@ -98,6 +101,11 @@ public sealed class JsonLinesEventReader
     /// <param name="payload">UTF-8 JSON Lines 数据，事件间以 \n 分隔</param>
     /// <param name="typeInfo">源生成的强类型 metadata</param>
     /// <returns>反序列化后的事件列表</returns>
+    /// <remarks>
+    /// P3 修复（十七轮）· 契约声明：行内容为 JSON <c>null</c> 字面量时<b>静默跳过</b>
+    /// （<c>Deserialize</c> 返回 null 不入结果，不抛错、不产生占位项）；空行
+    /// （连续 \n）同样跳过。调用方不应依赖 null 行产生任何可观察效应。
+    /// </remarks>
     public IReadOnlyList<TMessage> DeserializeAll<TMessage>(
         ReadOnlyMemory<byte> payload,
         System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage> typeInfo)

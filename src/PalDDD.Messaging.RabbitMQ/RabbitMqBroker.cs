@@ -61,11 +61,15 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         var exchange = descriptor.Name;
         // P2 修复（八轮评审）：声明任务化——首个发布者 GetOrAdd 占位声明 Task，并发发布者
         // await 同一任务，杜绝"声明飞行中他人直接 publish → exchange 不存在 404 → channel 被服务端关闭"。
+        // P3 修复（十七轮）：声明任务不连坐——原 lambda 透传首个发布者的 ct，其取消使缓存的
+        // 声明任务进入 Canceled，并发 await 同一声明的其他发布者（自身 ct 未取消）被 OCE 连坐。
+        // 声明幂等无业务副作用，改用 CancellationToken.None 使声明独立于单个发布者的生命周期；
+        // 发布取消语义由下方 BasicPublishAsync(ct) 独立承担。
         var declaration = _exchangeDeclarations.GetOrAdd(
             exchange,
-            static (name, state) => state.Channel.ExchangeDeclareAsync(
-                name, ExchangeType.Fanout, durable: true, cancellationToken: state.Ct),
-            (Channel: _channel, Ct: ct));
+            static (name, channel) => channel.ExchangeDeclareAsync(
+                name, ExchangeType.Fanout, durable: true, cancellationToken: CancellationToken.None),
+            _channel);
         try
         {
             await declaration;

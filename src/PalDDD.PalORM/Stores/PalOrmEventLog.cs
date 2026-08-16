@@ -44,6 +44,13 @@ public class PalOrmEventLog<TProvider> : IEventLog
         string streamName, ExpectedStreamVersion expectedVersion,
         IReadOnlyList<EventData> events, CancellationToken cancellationToken = default)
     {
+        // P2/P3 修复（十七轮）：补三重入参守卫——镜像 EFCore 版 EventLogDbContext 与
+        // Dapper 版 DapperEventLog.AppendAsync 同款（三方一致），空流名/空事件列表
+        // 此前会静默产出空结果或污染 events 表（空流名写入无主事件行）
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamName);
+        ArgumentNullException.ThrowIfNull(events);
+        if (events.Count == 0) throw new ArgumentException("至少需要一个事件。", nameof(events));
+
         // 步骤 1：乐观并发检查 —— 读当前最大 StreamVersion
         var currentMax = await Session.ScalarAsync<long?>(
             $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",

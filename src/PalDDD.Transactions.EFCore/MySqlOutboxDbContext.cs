@@ -20,6 +20,24 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// P2/P3 修复（十七轮）：租约 SET 侧改 DB 时钟——读侧条件已用 <see cref="GetNowSql()"/>
+    /// （UTC_TIMESTAMP()，DB 时钟），原 SET 侧 <c>until = GetUtcNow().Add(leaseDuration)</c>
+    /// 取应用时钟：应用与 DB 时钟漂移时写入的租约会"立即过期"（应用慢）或"超长滞留"
+    /// （应用快），且与读侧判定不同源。UPDATE 内联
+    /// <c>DATE_ADD(UTC_TIMESTAMP(), INTERVAL {1} SECOND)</c>（{1}=租约秒数参数）与读侧同源。
+    /// <para>
+    /// 行锁由 SELECT ... FOR UPDATE SKIP LOCKED 持有，无需 SaveChangesAsync 的 RetryCount
+    /// 并发令牌；内存对象同步应用时钟近似值供调用方快照（ReleaseForRetry 守卫依赖
+    /// LockedBy），持久化真值以 DB 时钟为准——调用方后续 Mark* 路径都会覆盖这些字段。
+    /// </para>
+    /// <para>
+    /// P3 修复（十七轮）：租约路径不调用 SaveChangesAsync（EF 乐观令牌管线），
+    /// <see cref="DbUpdateConcurrencyException"/> 在此不可达，无需 SagaStateDbContext
+    /// 式的并发冲突降级 catch——并发互斥由 FOR UPDATE SKIP LOCKED 行锁结构性保证
+    /// （他实例跳过已锁行，不产生租约冲突）。
+    /// </para>
+    /// </remarks>
     public override async ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
         int batchSize,
         string owner,
@@ -27,7 +45,6 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
         int maxRetryCount,
         CancellationToken ct)
     {
-        var until = GetUtcNow().Add(leaseDuration);
         await using var transaction = await Database.BeginTransactionAsync(ct).ConfigureAwait(false);
         var messages = await OutboxMessages
             .FromSqlRaw(
@@ -35,13 +52,23 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
             .ToListAsync(ct)
             .ConfigureAwait(false);
 
+        // SET 侧 DB 时钟（见 remarks）；租约秒数向上取整避免亚秒租约被 ROUND 掉
+        var leaseSeconds = (int)Math.Ceiling(leaseDuration.TotalSeconds);
+        var untilApprox = GetUtcNow().Add(leaseDuration);
         foreach (var msg in messages)
         {
             msg.LockedBy = owner;
-            msg.LockedUntil = until;
+            msg.LockedUntil = untilApprox;
+            // EF1003 豁免说明（十七轮）：{0}/{1}/{2} 是 FromSqlRaw 参数占位符（值全部参数化），
+            // GetNowSql() 为代码内字面量常量（UTC_TIMESTAMP()，PD12 框架边界）——无用户输入拼接
+#pragma warning disable EF1003
+            await Database.ExecuteSqlRawAsync(
+                "UPDATE OutboxMessages SET LockedBy = {0}, LockedUntil = DATE_ADD("
+                    + GetNowSql() + ", INTERVAL {1} SECOND) WHERE Id = {2}",
+                owner, leaseSeconds, msg.Id.ToString()).ConfigureAwait(false);
+#pragma warning restore EF1003
         }
 
-        await SaveChangesAsync(ct).ConfigureAwait(false);
         await transaction.CommitAsync(ct).ConfigureAwait(false);
         return messages;
     }

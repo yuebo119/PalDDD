@@ -153,14 +153,20 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         var statusPending = (int)OutboxStatus.Pending;
         var id = message.Id.ToString();
         // P3 修复（九轮→十轮修正）：SQL 先行且按受影响行数门控内存同步——守卫拦截
-        // （租约被抢占，affected=0）时内存对象保持抢占前的真实状态，与 Dapper/EFCore 版
-        // "入参不被修改"契约三方一致（镜像 PalOrmIdempotencyStore 的 affected>0 模式）。
+        // （租约被抢占，affected=0）时内存对象保持抢占前的真实状态（镜像
+        // PalOrmIdempotencyStore 的 affected>0 模式）。
+        // P2/P3 修复（十七轮·注释收敛）：成功时同步内存（affected>0 修改入参字段）为 PalORM 特有——
+        // Dapper/EFCore 版 ReleaseForRetry 不修改入参对象；本版守卫拒绝时零变异，
+        // 成功时同步内存与 DB 终态一致（调用方后续读取入参即见真实状态）。
+        // P2/P3 修复（十七轮）：UPDATE 补 processed_at = NULL——对齐 EFCore/Dapper 版
+        // ReleaseForRetry 与 RequeueDeadAsync 语义（消息重回 Pending 后清除上次完成时间，
+        // 防止监控/报表误判），三方统一。
         var affected = leaseOwner is null
             ? Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusPending}, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND (locked_by IS NULL)",
+                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND (locked_by IS NULL)",
                 default).AsTask().GetAwaiter().GetResult()
             : Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusPending}, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND (locked_by IS NULL OR locked_by = {leaseOwner})",
+                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND (locked_by IS NULL OR locked_by = {leaseOwner})",
                 default).AsTask().GetAwaiter().GetResult();
         if (affected > 0)
         {
@@ -170,6 +176,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
             message.RetryCount += 1;
             message.LockedBy = null;
             message.LockedUntil = null;
+            message.ProcessedAt = null; // P2/P3 修复（十七轮）：内存同步 DB 语义（processed_at 清 NULL）
         }
     }
 
