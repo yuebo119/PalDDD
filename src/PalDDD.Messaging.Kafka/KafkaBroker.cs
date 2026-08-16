@@ -27,7 +27,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
     private readonly IPalLogger<KafkaBroker> _logger;
     private readonly List<IAsyncDisposable> _consumers = [];
     // P2 修复：_consumers 的并发 Add（多线程 SubscribeAsync）与 DisposeAsync 遍历需互斥
-    private readonly object _consumersLock = new();
+    // 优化（二十四轮 OP-2）：object → System.Threading.Lock——全仓最后一个 object 锁，
+    // Lock 有 JIT 专用锁内联优化（与其余 8 处模式统一）
+    private readonly Lock _consumersLock = new();
 
     public KafkaBroker(
         ProducerConfig producerConfig,

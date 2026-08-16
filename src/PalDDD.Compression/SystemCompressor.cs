@@ -21,15 +21,24 @@ public static class DecompressionGuard
     /// <summary>带上限的流拷贝——超限抛 IOException（防高膨胀率炸弹）。</summary>
     internal static void CopyWithLimit(Stream source, MemoryStream destination)
     {
-        var buffer = new byte[81920];
-        long total = 0;
-        int read;
-        while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
+        // 优化（二十四轮特性扫描 OP-1）：80KB 拷贝缓冲池化——GZip/Deflate 解压共用此路径，
+        // 每次调用省 ~80KB 堆分配（Brotli 走 span 原语无需本方法）。模式对齐同文件 Compress 的 Rent/Return。
+        var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(81920);
+        try
         {
-            total += read;
-            if (total > MaxOutputBytes)
-                throw new IOException($"解压输出超过安全上限 {MaxOutputBytes:N0} 字节（疑似解压炸弹）。");
-            destination.Write(buffer, 0, read);
+            long total = 0;
+            int read;
+            while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                total += read;
+                if (total > MaxOutputBytes)
+                    throw new IOException($"解压输出超过安全上限 {MaxOutputBytes:N0} 字节（疑似解压炸弹）。");
+                destination.Write(buffer, 0, read);
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 }

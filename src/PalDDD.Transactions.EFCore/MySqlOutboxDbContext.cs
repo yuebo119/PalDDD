@@ -14,8 +14,11 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
         int maxRetryCount,
         CancellationToken ct)
     {
+        // 优化（二十四轮 OP-5）：可组合 FromSql——分页由 EF 生成（删手工 LIMIT）
         return await OutboxMessages
-            .FromSqlRaw(BuildPendingSql("LIMIT {0}"), batchSize, maxRetryCount)
+            .FromSqlRaw(BuildPendingSql(), maxRetryCount)
+            .OrderBy(m => m.CreatedAt)
+            .Take(batchSize)
             .ToListAsync(ct);
     }
 
@@ -57,8 +60,22 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
 
         await using var transaction = await Database.BeginTransactionAsync(ct).ConfigureAwait(false);
         var messages = await OutboxMessages
+            // 租约查询不可组合（FOR UPDATE SKIP LOCKED 行锁必须在子查询内 LIMIT 前锁定）——
+            // 二十四轮 OP-5 收窄 BuildPendingSql 后此处方言专属全量内联。
+            // EF1002 豁免：{{0}}/{{1}} 是 FromSqlRaw 参数占位符（值全部参数化），
+            // GetNowSql() 为代码内字面量常量（UTC_TIMESTAMP()，PD12 框架边界）——无用户输入拼接
+#pragma warning disable EF1002
             .FromSqlRaw(
-                BuildPendingSql("LIMIT {0} FOR UPDATE SKIP LOCKED"), batchSize, maxRetryCount)
+                $$"""
+                SELECT * FROM OutboxMessages
+                WHERE Status = 0 AND RetryCount < {{0}}
+                  AND (NextAttemptAt IS NULL OR NextAttemptAt <= {{GetNowSql()}})
+                  AND (LockedUntil IS NULL OR LockedUntil <= {{GetNowSql()}})
+                ORDER BY CreatedAt
+                LIMIT {{1}} FOR UPDATE SKIP LOCKED
+                """,
+                maxRetryCount, batchSize)
+#pragma warning restore EF1002
             .ToListAsync(ct)
             .ConfigureAwait(false);
 

@@ -20,12 +20,12 @@ public abstract class SqlServerOutboxDbContext(DbContextOptions options) : Outbo
         int maxRetryCount,
         CancellationToken ct)
     {
+        // 优化（二十四轮 OP-5）：可组合 FromSql——分页由 EF SqlServer provider 生成
+        // （正确放置 OFFSET…FETCH）。手工分页曾引发八轮 P1（TOP 位置非法）——整类缺陷面消灭
         return await OutboxMessages
-            // P1 修复（八轮评审）：T-SQL 的 TOP 只能位于 SELECT 与列列表之间，不能出现在
-            // ORDER BY 之后（BuildPendingSql 把 limitClause 追加在 ORDER BY 后）——此前
-            // 生成 "ORDER BY CreatedAt TOP(@p0)" 运行必抛语法异常。OFFSET…FETCH 是
-            // T-SQL 2012+ 中合法位于 ORDER BY 之后的限行语法。
-            .FromSqlRaw(BuildPendingSql("OFFSET 0 ROWS FETCH NEXT {0} ROWS ONLY"), batchSize, maxRetryCount)
+            .FromSqlRaw(BuildPendingSql(), maxRetryCount)
+            .OrderBy(m => m.CreatedAt)
+            .Take(batchSize)
             .ToListAsync(ct);
     }
 

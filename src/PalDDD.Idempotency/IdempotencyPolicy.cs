@@ -4,34 +4,31 @@ public sealed record IdempotencyPolicy
 {
     public static IdempotencyPolicy Default { get; } = new();
 
-    private TimeSpan _processingTimeout = TimeSpan.FromMinutes(5);
-
     /// <summary>处理租约超时 — 必须为正（ITM-118 起 init 校验）。</summary>
     public TimeSpan ProcessingTimeout
     {
-        get => _processingTimeout;
+        get;
         init
         {
             // ITM-118 修复：负值/零校验——原 init 自动属性无校验，负超时使租约即刻过期
             //（僵尸抢占语义失效）；TimeSpan 不实现 INumberBase，用 LessThanOrEqual 显式比较
             ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(value, TimeSpan.Zero);
-            _processingTimeout = value;
+            // 优化（二十四轮 OP-3）：C# 14 field 关键字——删私有后备字段，属性自包含
+            field = value;
         }
-    }
-
-    private TimeSpan _retention = TimeSpan.FromHours(24);
+    } = TimeSpan.FromMinutes(5);
 
     /// <summary>幂等保留窗口 — 必须为正（ITM-118 起 init 校验）。</summary>
     public TimeSpan Retention
     {
-        get => _retention;
+        get;
         init
         {
             // ITM-118 修复：负值/零校验——负保留窗口使记录即刻过期，去重失效
             ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(value, TimeSpan.Zero);
-            _retention = value;
+            field = value;
         }
-    }
+    } = TimeSpan.FromHours(24);
 
     // ITM-118 声明（Retention >= ProcessingTimeout 倒挂校验降级为注释声明）：
     // 跨字段不变式未在属性 setter 强制——init 赋值顺序不定（任一 setter 先执行时另一

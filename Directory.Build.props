@@ -41,7 +41,11 @@
     <IsTrimmable>true</IsTrimmable>
     <VerifyReferenceAotCompatibility>true</VerifyReferenceAotCompatibility>
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
-    <!-- .NET 11 Runtime Async: 运行时管理 async 状态机，减少后台处理器栈帧 ~60% -->
+    <!-- .NET 11 Runtime Async: 运行时管理 async 状态机，减少后台处理器栈帧 ~60%
+         ⚠️ 与 ConfigureAwait 的交互（二十四轮特性扫描 OPP-B2）：官方 .NET 11 runtime 文档建议
+         "少用 ConfigureAwait(false) 与 AsyncLocal → 开销更低"——本库全层 ~210 处 ConfigureAwait(false)
+         会稀释 runtime-async 收益 [推断·幅度未测]。保留理由：库可能被非 runtime-async 宿主引用，
+         全层 CA 是防御性正确。GA 后用 bench/OutboxThroughputBench 对比再定去留。 -->
     <Features>runtime-async=on</Features>
     <!-- AOT 发布时速度优化优先 -->
     <OptimizationPreference>Speed</OptimizationPreference>

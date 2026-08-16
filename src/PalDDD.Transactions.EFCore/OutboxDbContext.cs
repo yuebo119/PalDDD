@@ -156,17 +156,15 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     protected virtual string GetNowSql() => "CURRENT_TIMESTAMP";
 
     /// <summary>
-    /// 构建待处理消息的公共 WHERE + ORDER + LIMIT 模板。<br/>
-    /// 💡 派生 provider 子类可使用此模板减少重复，仅需提供自己的 <see cref="GetNowSql"/>。
+    /// 构建待处理消息的公共 WHERE 模板（无分页——排序/限行由 EF 可组合 LINQ 生成）。<br/>
+    /// 💡 优化（二十四轮 OP-5）：手工 LIMIT/TOP/OFFSET 分页曾引发十七轮 P1（T-SQL TOP 位置
+    /// 非法）——改为 FromSqlRaw + OrderBy + Take 让 EF provider 生成各方言分页，消灭整类缺陷面。
     /// </summary>
-    /// <param name="limitClause">LIMIT 语法（如 "LIMIT {0}" 或 "TOP({0})"）</param>
-    protected virtual string BuildPendingSql(string limitClause) => $$"""
+    protected virtual string BuildPendingSql() => $$"""
         SELECT * FROM OutboxMessages
-        WHERE Status = 0 AND RetryCount < {1}
+        WHERE Status = 0 AND RetryCount < {0}
           AND (NextAttemptAt IS NULL OR NextAttemptAt <= {{GetNowSql()}})
           AND (LockedUntil IS NULL OR LockedUntil <= {{GetNowSql()}})
-        ORDER BY CreatedAt
-        {{limitClause}}
         """;
 
     /// <summary>配置发件箱消息实体。</summary>

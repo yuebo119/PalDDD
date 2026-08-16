@@ -15,14 +15,12 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
     protected override string GetNowSql() => "NOW()";
 
     /// <inheritdoc />
-    /// <remarks>PG 使用双引号引用标识符以区分大小写。</remarks>
-    protected override string BuildPendingSql(string limitClause) => $$"""
+    /// <remarks>PG 使用双引号引用标识符以区分大小写（WHERE-only——分页由可组合 LINQ 生成，二十四轮 OP-5）。</remarks>
+    protected override string BuildPendingSql() => $$"""
         SELECT * FROM "OutboxMessages"
-        WHERE "Status" = 0 AND "RetryCount" < {1}
+        WHERE "Status" = 0 AND "RetryCount" < {0}
           AND ("NextAttemptAt" IS NULL OR "NextAttemptAt" <= {{GetNowSql()}})
           AND ("LockedUntil" IS NULL OR "LockedUntil" <= {{GetNowSql()}})
-        ORDER BY "CreatedAt"
-        {{limitClause}}
         """;
 
     /// <inheritdoc/>
@@ -31,8 +29,11 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
         int maxRetryCount,
         CancellationToken ct)
     {
+        // 优化（二十四轮 OP-5）：可组合 FromSql——OrderBy/Take 由 EF 生成 PG LIMIT
         return await OutboxMessages
-            .FromSqlRaw(BuildPendingSql("LIMIT {0}"), batchSize, maxRetryCount)
+            .FromSqlRaw(BuildPendingSql(), maxRetryCount)
+            .OrderBy(m => m.CreatedAt)
+            .Take(batchSize)
             .ToListAsync(ct);
     }
 
