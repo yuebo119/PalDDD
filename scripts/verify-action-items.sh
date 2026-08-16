@@ -37,6 +37,9 @@ is_prose_token() {
     [[ "$1" =~ $prose_chars ]] && return 0
     # 纯十六进制 commit hash（7-40 位，无字母 o-z 混入）
     [[ "$1" =~ ^[0-9a-f]{7,40}$ ]] && return 0
+    # 2026-08-16 二轮优化：`File.cs:NN` 行号引用与 `--flag` 命令行开关不是源码标识符
+    [[ "$1" =~ :[0-9]+$ ]] && return 0
+    [[ "$1" == --* ]] && return 0
     # 含 / 但既无文件扩展名也不以已知目录开头（如 "Xxx/Yyy" 方法对）→ 散文
     if [[ "$1" == */* ]] \
        && [[ ! "$1" =~ \.(cs|csproj|slnx|md|sh|yml|yaml|props|targets|json|xml|sql)$ ]] \
