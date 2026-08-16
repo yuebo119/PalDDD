@@ -1,5 +1,6 @@
 using PalDDD.Core.Logging;
 using PalDDD.Serialization;
+using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using System.Diagnostics.CodeAnalysis;
@@ -28,6 +29,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     // P2 修复（八轮评审）：exchange 声明任务缓存——声明幂等但避免每发布一次 AMQP 往返；
     // 任务化后并发发布者 await 同一声明，消除"声明飞行中直接 publish → 404 关 channel"竞态。
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Task> _exchangeDeclarations = new();
+    // 优化（二十五轮 R-1）：exchange 名的 CachedString 缓存（UTF-8 字节表示，免每发布编码分配）
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, CachedString> _cachedExchanges = new();
 
     public RabbitMqBroker(
         IConnection connection,
@@ -82,15 +85,20 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         }
 
         var body = Serializer.Serialize(message, descriptor);
+        // 优化（二十五轮 R-1）：CachedString 重载——缓存 exchange 名的 UTF-8 字节表示
+        // （免每发布 string→bytes 编码分配；XML 证实 BasicPublishAsync(CachedString,...) 存在）
+        var cachedExchange = _cachedExchanges.GetOrAdd(exchange, static name => new CachedString(name));
         await _channel.BasicPublishAsync(
-            exchange: exchange,
-            routingKey: "",
+            exchange: cachedExchange,
+            routingKey: CachedString.Empty,
             mandatory: false,
             basicProperties: CreateProperties(descriptor, messageId, context),
             body: body,
             cancellationToken: ct);
 
-        _logger.Debug($"Published message {descriptor.ClrType.Name} to exchange {exchange}");
+        // 优化（二十五轮 Z-1）：同 KafkaBroker——Debug 级门控免白做插值
+        if (_logger.IsEnabled(LogLevel.Debug))
+            _logger.Debug($"Published message {descriptor.ClrType.Name} to exchange {exchange}");
     }
 
     private static BasicProperties CreateProperties(

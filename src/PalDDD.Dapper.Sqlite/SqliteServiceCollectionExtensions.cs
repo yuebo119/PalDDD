@@ -53,6 +53,10 @@ public static class SqliteServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // 优化（二十五轮 B3）：foreign_keys 移入连接串——驱动层每物理连接首开自动发送
+        // （比 PRAGMA 批每 scope 重跑可靠；PRAGMA 批已移除该行）
+        var csb = new SqliteConnectionStringBuilder(connectionString) { ForeignKeys = true };
+        connectionString = csb.ConnectionString;
         var isMemory = IsMemoryDataSource(new SqliteConnectionStringBuilder(connectionString).DataSource);
         if (isMemory)
         {

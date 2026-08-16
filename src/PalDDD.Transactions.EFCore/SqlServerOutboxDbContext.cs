@@ -22,10 +22,13 @@ public abstract class SqlServerOutboxDbContext(DbContextOptions options) : Outbo
     {
         // 优化（二十四轮 OP-5）：可组合 FromSql——分页由 EF SqlServer provider 生成
         // （正确放置 OFFSET…FETCH）。手工分页曾引发八轮 P1（TOP 位置非法）——整类缺陷面消灭
+        // 优化（二十五轮 API 扫描 EF-3）：AsNoTracking——只读契约（接口 doc 保证不进
+        // Mark*+SaveChanges）；违反契约的突变将静默丢失
         return await OutboxMessages
             .FromSqlRaw(BuildPendingSql(), maxRetryCount)
             .OrderBy(m => m.CreatedAt)
             .Take(batchSize)
+            .AsNoTracking()
             .ToListAsync(ct);
     }
 

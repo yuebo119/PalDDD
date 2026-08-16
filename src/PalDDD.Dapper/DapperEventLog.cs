@@ -70,7 +70,7 @@ public sealed class DapperEventLog : IEventLog
         // EFCore 版在内部事务中自动回滚，Dapper 版依赖外部 UoW（两版契约差异是
         // Dapper 连接由调用方持有的设计结果——与 PalORM 版一致）。
         // 1. 乐观并发检查（P0-2 修复：原 expectedVersion.Matches 返回值被丢弃）
-        var currentVersion = await _connection.QuerySingleOrDefaultAsync<long?>(
+        var currentVersion = await _connection.QueryFirstOrDefaultAsync<long?>(
             new CommandDefinition(EventLogSql.MaxVersion,
                 new { name = streamName }, _transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
         if (!expectedVersion.Matches(currentVersion ?? -1))
@@ -131,7 +131,7 @@ public sealed class DapperEventLog : IEventLog
                 var requerySucceeded = false;
                 try
                 {
-                    actualVersion = await _connection.QuerySingleOrDefaultAsync<long?>(
+                    actualVersion = await _connection.QueryFirstOrDefaultAsync<long?>(
                         new CommandDefinition(EventLogSql.MaxVersion, new { name = streamName }, _transaction,
                             cancellationToken: cancellationToken)).ConfigureAwait(false);
                     requerySucceeded = true;

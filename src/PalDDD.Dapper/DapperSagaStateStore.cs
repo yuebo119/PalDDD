@@ -112,7 +112,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
     public async ValueTask<TState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
     {
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
-        var row = await conn.QuerySingleOrDefaultAsync<SagaStateRow>(
+        var row = await conn.QueryFirstOrDefaultAsync<SagaStateRow>(
             new CommandDefinition(SqlTemplates.SagaById, new { id = DapperAotInitializer.ToSqliteParameter(sagaId) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
         return row is null ? null : Materialize(row);
     }

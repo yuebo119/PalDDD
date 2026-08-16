@@ -2,13 +2,16 @@
 // 🚀 DapperAotInitializer — SQLite TypeHandler 注册（AOT 就绪诊断）
 // ═══════════════════════════════════════════════════════════════
 // 💡 设计说明：
-//   ｜ Dapper.AOT v1.0.52 存在 TypeHandler 双向限制：
-//   ｜   • 参数绑定 (SetValue): 直传原始 Ulid/DateTimeOffset → SqliteParameter.Bind 失败
-//   ｜   • 结果读取 (Parse): RowFactory.GetValue<T> 无法将 string 转为 Ulid
-//   ｜ 因此 [module:DapperAot] 暂不全局启用——保留在文件注释中供未来版本使用。
+//   ｜ 优化（二十五轮 API 扫描 A5）勘正：旧注释称"Dapper.AOT v1.0.52 存在 TypeHandler
+//   ｜   双向限制，待 v1.0.53+ 修复后启用"——XML 核实 1.0.52 已含完整双向面：
+//   ｜   Dapper.TypeHandler<T>.SetValue(DbParameter, T) / Parse(DbParameter) +
+//   ｜   TypeHandlerAttribute<,>（Dapper.AOT 1.0.52 net8.0 XML 证实），API 前提成立，
+//   ｜   "等上游修复"不成立。
+//   ｜ 真实障碍：本文件注册的三个 handler 继承经典 SqlMapper.TypeHandler<T>——
+//   ｜   Parse(object) 装箱签名，未对齐 AOT 侧 Dapper.TypeHandler<T> 抽象。
+//   ｜ 启用前置：迁移三个 handler 基类 + 全量回归 + NativeAOT 发布实测（迁移列为后续项）。
 //   ｜ 当前通过 [ModuleInitializer] 注册 TypeHandler，经典 Dapper 运行时路径生效。
 //   ｜ Dapper 查询参数中的 Ulid/Guid/DateTimeOffset 已通过 ToSqliteParameter() 手动转为 string。
-//   ｜ 待 Dapper.AOT v1.0.53+ 修复 TypeHandler 双向支持后，取消注释 [module:DapperAot]。
 // ═══════════════════════════════════════════════════════════════
 
 using System.Runtime.CompilerServices;
@@ -17,7 +20,8 @@ using System.Diagnostics.CodeAnalysis;
 using Dapper;
 using PalUlid = ByteAether.Ulid.Ulid;
 
-// 🔧 待 Dapper.AOT v1.0.53+ 修复 TypeHandler 双向支持后启用
+// 🔧 待三个 handler 迁移至 Dapper.TypeHandler<T>（AOT 侧抽象，Parse(DbParameter) 非装箱签名）
+//    + 全量回归 + NativeAOT 发布实测后启用（二十五轮 API 扫描 A5 勘正，见上）
 // [module: DapperAot]
 
 namespace PalDDD.Dapper;

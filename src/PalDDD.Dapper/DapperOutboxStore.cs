@@ -67,6 +67,12 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     private readonly DbTransaction? _transaction;
     private readonly TimeProvider _timeProvider;
 
+    // 优化（二十五轮 API 扫描 A-4）：status 列的 'Pending' 值固定为编译期常量——
+    // OutboxStatus.Pending.ToString() 每次调用都做枚举名格式化并分配新字符串（热路径：
+    // 轮询查询与批量插入逐行执行）；该值同时是 DB 持久化契约（SqlTemplates 各 SQL 内联的
+    // status='Pending'），字面量固定不随 C# 标识符重命名漂移。
+    private const string StatusPending = "Pending";
+
     /// <param name="transaction">可选共享事务（用于 UnitOfWork 模式）</param>
     public DapperOutboxStore(
         DbConnection connection,
@@ -94,7 +100,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         var messages = await conn.QueryAsync<OutboxMessage>(
             new CommandDefinition(
                 SqlTemplates.OutboxSelectPending,
-                new { status = OutboxStatus.Pending.ToString(), now = ToTimeParam(now), maxRetryCount, n = batchSize },
+                new { status = StatusPending, now = ToTimeParam(now), maxRetryCount, n = batchSize },
                 _transaction, cancellationToken: ct)).ConfigureAwait(false);
         return messages.AsList();
     }
@@ -104,15 +110,6 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     {
         var now = _timeProvider.GetUtcNow();
         var until = now.Add(leaseDuration);
-
-        // 🔴 P0 修复：参数化 lease 子查询，消除 SQL 注入 + 格式不一致
-        //    原实现用字符串插值 now:O 拼接 SQL，与参数化写入格式可能不一致导致比较错配。
-        //    改为 @now/@n 参数化，与 OutboxSelectPending 风格一致。
-        var leaseSubSql =
-            "SELECT id FROM outbox_messages WHERE status='Pending' AND retry_count<@maxRetryCount" +
-            " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)" +
-            " AND (locked_until IS NULL OR locked_until<=@now)" +
-            " ORDER BY created_at LIMIT @n";
 
         // ⚡ 跨数据库 UPDATE + RETURN 语法
         //    PG：UPDATE ... RETURNING * — 单次 SQL 原子租约获取 + 回读
@@ -126,7 +123,11 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         {
             var msgs = await conn.QueryAsync<OutboxMessage>(
                 new CommandDefinition(
-                    SqlTemplates.OutboxLeaseUpdate + $"({leaseSubSql} FOR UPDATE SKIP LOCKED) RETURNING *",
+                    // 优化（二十五轮 API 扫描 A-3）：原运行时插值 OutboxLeaseUpdate + $"({leaseSubSql}
+                    // FOR UPDATE SKIP LOCKED) RETURNING *" 改为 SqlTemplates 预拼完整常量
+                    // OutboxLeaseUpdatePG——消除每次租约的字符串拼接分配，且 SQL 文本稳定，
+                    // 可被 Npgsql MaxAutoPrepare 自动预备（PG 数据源侧已默认启用）。
+                    SqlTemplates.OutboxLeaseUpdatePG,
                     new { owner, until = ToTimeParam(until), now = ToTimeParam(now), maxRetryCount, n = batchSize },
                     _transaction, cancellationToken: ct)).ConfigureAwait(false);
             return msgs.AsList();
@@ -135,9 +136,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         {
             // P1 修复（十一轮·实测发现）：MySQL 不支持 UPDATE ... WHERE id IN (SELECT ... LIMIT)
             // （真实库实测报 1235）——JOIN 形态替代（对齐 PalORM 版）；SQLite 支持子查询内 LIMIT 保持原状
+            // 优化（二十五轮 API 扫描 A-3）：SQLite 路径同步常量化（原 OutboxLeaseUpdate + $"({leaseSubSql})"）
             var leaseSql = _dbType == DapperDbType.MySql
                 ? SqlTemplates.OutboxLeaseUpdateMySql
-                : SqlTemplates.OutboxLeaseUpdate + $"({leaseSubSql})";
+                : SqlTemplates.OutboxLeaseUpdateSqlite;
             await conn.ExecuteAsync(
                 new CommandDefinition(
                     leaseSql,
@@ -196,7 +198,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             conn, _dbType, "outbox_messages",
             ["id", "type", "payload", "content_type", "schema_version", "status", "created_at", "correlation_id", "causation_id", "trace_parent", "trace_state"],
             messages,
-            m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, OutboxStatus.Pending.ToString(), _timeProvider.GetUtcNow(),
+            m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, StatusPending, _timeProvider.GetUtcNow(),
                 m.CorrelationId?.ToString(), m.CausationId?.ToString(), m.TraceParent, m.TraceState]);
     }
 

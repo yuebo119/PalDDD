@@ -59,7 +59,7 @@ public sealed class DapperInboxStore : IInboxStore
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // P2/P3 修复（十七轮）：全部查询/执行改 CommandDefinition 传递 ct（对齐 DapperOutboxStore.RequeueDeadAsync 模式）——
         // 原重载不接收取消令牌，取消信号只在 EnsureOpenAsync 阶段可传递，SQL 执行阶段不可取消
-        var insertedId = await c.QuerySingleOrDefaultAsync<long?>(
+        var insertedId = await c.QueryFirstOrDefaultAsync<long?>(
             new CommandDefinition(_dialect.InboxInsert,
                 new { c = consumerName, m = messageId, now = ToTimeParam(now) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
         if (insertedId.HasValue)
@@ -76,7 +76,7 @@ public sealed class DapperInboxStore : IInboxStore
             };
         }
 
-        var existing = await c.QuerySingleOrDefaultAsync<InboxMessage>(
+        var existing = await c.QueryFirstOrDefaultAsync<InboxMessage>(
             new CommandDefinition(SqlTemplates.InboxSelect,
                 new { c = consumerName, m = messageId }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
 

@@ -9,7 +9,8 @@
 //   synchronous=NORMAL        — 关键帧同步（非 FULL），写入快 2x
 //   cache_size=-20000         — 缓存 20MB（负数=KB），减少磁盘 I/O
 //   busy_timeout=5000         — 等待锁超时 5 秒（代替立即 SQLITE_BUSY）
-//   foreign_keys=ON           — 强制外键约束
+//   foreign_keys — 优化（二十五轮 B3）移至连接串 "Foreign Keys=True"（驱动层每物理连接
+//                 首开必发，比每 scope PRAGMA 重跑可靠且省一条；learn.microsoft.com 关键字证实）
 //   temp_store=MEMORY         — 临时表存内存
 //   mmap_size=268435456       — 256MB 内存映射（零拷贝读取）
 //
@@ -43,7 +44,6 @@ public static class SqlitePerformanceOptimizer
         PRAGMA synchronous=NORMAL;
         PRAGMA cache_size=-20000;
         PRAGMA busy_timeout=5000;
-        PRAGMA foreign_keys=ON;
         PRAGMA temp_store=MEMORY;
         PRAGMA mmap_size=268435456;
         PRAGMA journal_size_limit=67108864;
@@ -56,7 +56,6 @@ public static class SqlitePerformanceOptimizer
         PRAGMA synchronous=NORMAL;
         PRAGMA cache_size=-8000;
         PRAGMA busy_timeout=3000;
-        PRAGMA foreign_keys=ON;
         """;
 
     /// <summary>获取指定优化级别的 PRAGMA SQL（单一来源——SqliteServiceCollectionExtensions 复用）。</summary>

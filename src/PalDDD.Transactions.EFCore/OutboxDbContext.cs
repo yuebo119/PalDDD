@@ -26,7 +26,10 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     {
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
-        await OutboxMessages.AddRangeAsync(messages);
+        // 优化（二十五轮 API 扫描 EF-10）：AddRangeAsync 仅对依赖异步值生成（HiLo/Sequence）
+        // 的主键必要——OutboxMessage 主键 Ulid 预设（HasConversion 字符串存储，无 DB 生成），
+        // 同步 AddRange 免逐实体 async 状态机开销。
+        OutboxMessages.AddRange(messages);
         return await SaveChangesAsync();
     }
 
@@ -37,7 +40,12 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         CancellationToken ct)
     {
         var now = GetUtcNow();
+        // 优化（二十五轮 API 扫描 EF-1）：AsNoTracking 跳过 ChangeTracker 物化（免快照 +
+        // 身份解析开销）。只读契约（IPalOutboxStore.GetPendingMessagesAsync doc：
+        // "只用于观测/健康检查，不获取租约"，保证不进 Mark*+SaveChanges）；
+        // 违反契约的突变将静默丢失（非跟踪实体不经 SaveChangesAsync 持久化）。
         return await OutboxMessages
+            .AsNoTracking()
             .Where(m => m.Status == OutboxStatus.Pending
                 && m.RetryCount < maxRetryCount
                 && (m.NextAttemptAt == null || m.NextAttemptAt <= now)

@@ -428,7 +428,23 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
     private static string JsonReadBody(string srcType, string name) => srcType switch
     {
         "Guid" => $"        return {name}.From(reader.GetGuid());",
-        "Ulid" => $"        return {name}.From(PalUlid.Parse(reader.GetString() ?? throw new JsonException(\"Ulid identity JSON value cannot be null.\"), CultureInfo.InvariantCulture));",
+        // 优化（二十五轮 API 扫描 B2）：读路径原为 GetString()（必然堆分配）+ Parse(string)——
+        // 非转义字符串（绝大多数）直接 reader.ValueSpan（UTF-8 原始切片）TryParse 零分配；
+        // 转义字符串回退 GetString()+Parse(string)。token 守卫保留原 JsonException-for-null
+        // 语义（ValueSpan/ValueIsEscaped 仅对 String/PropertyName token 有效，Null token 原靠
+        // GetString() 返 null 触发 JsonException，不守卫会退化成 InvalidOperationException）。
+        // TryParse(ReadOnlySpan<byte>, IFormatProvider?, out Ulid) 已在 ByteAether.Ulid 1.4.0
+        // net10 XML 证实。Read 无显式 TokenType 分支——S.T.J converter 契约保证 reader 位于
+        // 本类型的 JSON 值 token 上，坏 JSON 不会进入本方法。
+        "Ulid" => $"""
+                if (reader.TokenType != JsonTokenType.String)
+                    throw new JsonException("Ulid identity JSON value cannot be null.");
+                if (reader.ValueIsEscaped)
+                    return {name}.From(PalUlid.Parse(reader.GetString()!, CultureInfo.InvariantCulture));
+                if (PalUlid.TryParse(reader.ValueSpan, null, out var ulid))
+                    return {name}.From(ulid);
+                throw new JsonException("Ulid identity JSON value is not a valid Ulid.");
+        """,
         "int" => $"        return {name}.From(reader.GetInt32());",
         "long" => $"        return {name}.From(reader.GetInt64());",
         "string" => $"        return {name}.From(reader.GetString() ?? throw new JsonException(\"String identity JSON value cannot be null.\"));",
@@ -438,7 +454,19 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
     private static string JsonWriteBody(string srcType) => srcType switch
     {
         "Guid" => "        writer.WriteStringValue(value.Value);",
-        "Ulid" => "        writer.WriteStringValue(value.Value.ToString());",
+        // 优化（二十五轮 API 扫描 B1）：Ulid 写路径原为 value.Value.ToString()——每写一个 Id
+        // 堆分配一个 26 字符字符串；Ulid 恒 26 字符（Crockford Base32），stackalloc 栈缓冲
+        // TryFormat 后以 span 直接写出，零堆分配。TryFormat(Span<char>, out int,
+        // ReadOnlySpan<char>, IFormatProvider) 已在 ByteAether.Ulid 1.4.0 net10 XML 证实；
+        // 本生成器 netstandard2.0 仅 emit 文本，模板引用的 API 在用户项目（引用 Ulid 包）
+        // 编译时解析——SourceGen 项目无需引用 Ulid。else 为防御回退（理论不可达）。
+        "Ulid" => """
+                Span<char> buffer = stackalloc char[26];
+                if (value.Value.TryFormat(buffer, out int written, default, null))
+                    writer.WriteStringValue(buffer[..written]);
+                else
+                    writer.WriteStringValue(value.Value.ToString()); // 理论不可达（26 字符恒足够）——防御回退
+        """,
         "int" => "        writer.WriteNumberValue(value.Value);",
         "long" => "        writer.WriteNumberValue(value.Value);",
         "string" => "        writer.WriteStringValue(value.Value);",

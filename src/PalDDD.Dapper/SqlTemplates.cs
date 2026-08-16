@@ -106,6 +106,37 @@ public static class SqlTemplates
         + " AND (locked_until IS NULL OR locked_until<=@now)"
         + " ORDER BY created_at LIMIT @n) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until";
 
+    /// <summary>
+    /// PG 专用原子租约获取 — 单语句 UPDATE ... RETURNING *（子查询 FOR UPDATE SKIP LOCKED）。<br/>
+    /// 优化（二十五轮 API 扫描 A-3）：预拼完整编译期常量——原实现为 DapperOutboxStore 运行时插值
+    /// <c>OutboxLeaseUpdate + $"({leaseSubSql} FOR UPDATE SKIP LOCKED) RETURNING *"</c>，
+    /// 每次租约分配一次字符串拼接，且文本每次重建与 Npgsql 自动预备（MaxAutoPrepare）的
+    /// 固定模板假设相悖；此处子查询字面量整体内联，参数占位符
+    /// @owner/@until/@maxRetryCount/@now/@n 保持不变。<br/>
+    /// 🔴 P0 修复（历史）：子查询内时间值参数化（@now/@n），非字符串插值——插值格式与
+    /// 参数化写入格式不一致会导致比较错配。与 <see cref="SagaLeaseActivePG"/> 同款
+    /// SKIP LOCKED 语义：多 worker 并发租约互相跳过已锁行而非阻塞。
+    /// </summary>
+    public const string OutboxLeaseUpdatePG =
+        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN "
+        + "(SELECT id FROM outbox_messages WHERE status='Pending' AND retry_count<@maxRetryCount"
+        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
+        + " AND (locked_until IS NULL OR locked_until<=@now)"
+        + " ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
+
+    /// <summary>
+    /// SQLite（及非 PG/MySQL 方言）原子租约获取 — IN 子查询形态（SQLite 支持子查询内 LIMIT）。<br/>
+    /// 优化（二十五轮 API 扫描 A-3）：预拼完整编译期常量——原实现为运行时插值
+    /// <c>OutboxLeaseUpdate + $"({leaseSubSql})"</c>，与 PG 路径同因常量化；
+    /// 产物与原拼接逐字一致（无 locking clause——SQLite 单写者库级串行，无并发抢占）。
+    /// </summary>
+    public const string OutboxLeaseUpdateSqlite =
+        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN "
+        + "(SELECT id FROM outbox_messages WHERE status='Pending' AND retry_count<@maxRetryCount"
+        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
+        + " AND (locked_until IS NULL OR locked_until<=@now)"
+        + " ORDER BY created_at LIMIT @n)";
+
     /// <summary>按 ID 批量查询（用于 PG RETURING * 替代路径）</summary>
     public const string OutboxSelectById =
         "SELECT * FROM outbox_messages WHERE id IN ";
@@ -223,8 +254,7 @@ public static class SqlTemplates
 
     /// <summary>
     /// PG 专用 Saga 租约获取 — 子查询行锁 <c>FOR UPDATE SKIP LOCKED</c>。<br/>
-    /// P2/P3 修复（十七轮）：与 Outbox PG 路径（DapperOutboxStore.cs 的
-    /// <c>OutboxLeaseUpdate + "({leaseSubSql} FOR UPDATE SKIP LOCKED)"</c>）同款——
+    /// P2/P3 修复（十七轮）：与 Outbox PG 路径（<see cref="OutboxLeaseUpdatePG"/>）同款——
     /// 多 worker 并发租约时，子查询锁定行互相跳过而非阻塞等待，
     /// 各自拿到不相交的 Saga 批次。注意 PG 的 locking clause 位于 LIMIT 之后。
     /// </summary>

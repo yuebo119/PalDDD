@@ -9,7 +9,10 @@
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
     <NoWarn>$(NoWarn);CA1001;CA2007;CA1062;CA2100;CA2000;CA1849;CA2016;CS1591;CS1573;IL3058;DAP005;CA2255</NoWarn>
     <!-- Dapper.AOT：诊断就绪，[module:DapperAot] 暂未全局启用。
-         v1.0.52 TypeHandler 双向限制（参数绑定+结果读取），待 v1.0.53+ 修复后启用。
+         优化（二十五轮 API 扫描 A5）勘正：旧注释"v1.0.52 TypeHandler 双向限制，待 v1.0.53+ 修复"有误——
+         1.0.52 已含完整双向面（Dapper.TypeHandler<T>.SetValue(DbParameter,T)/Parse(DbParameter) +
+         TypeHandlerAttribute<,>）；真实障碍是三个 handler 继承经典 SqlMapper.TypeHandler<T>
+         （Parse(object) 装箱签名）未对齐 AOT 侧抽象，启用需迁移基类 + 全量回归 + NativeAOT 发布实测。
          TypeHandler 通过 [ModuleInitializer] 注册，经典 Dapper 运行时路径生效。
          Ulid/Guid/DateTimeOffset 参数已通过 ToSqliteParameter() 手动转为 string。 -->
     <InterceptorsPreviewNamespaces>$(InterceptorsPreviewNamespaces);Dapper.AOT</InterceptorsPreviewNamespaces>

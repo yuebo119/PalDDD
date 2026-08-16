@@ -38,7 +38,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
     {
         ValidateKeyParts(projectionName, sourceName, position);
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
-        return await connection.QuerySingleOrDefaultAsync<ProjectionCheckpointRow>(
+        return await connection.QueryFirstOrDefaultAsync<ProjectionCheckpointRow>(
             new CommandDefinition(
                 SelectOne,
                 new { projectionName, sourceName, position },
@@ -293,7 +293,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         """;
 
     [SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes",
-        Justification = "Dapper 运行时通过反射实例化此 DTO 用于 QuerySingleOrDefaultAsync<ProjectionCheckpointRow> 物化。")]
+        Justification = "Dapper 运行时通过反射实例化此 DTO 用于 QueryFirstOrDefaultAsync<ProjectionCheckpointRow> 物化。")]
     private sealed class ProjectionCheckpointRow
     {
         public string ProjectionName { get; set; } = "";

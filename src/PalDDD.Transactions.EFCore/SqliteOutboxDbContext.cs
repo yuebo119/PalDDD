@@ -21,7 +21,10 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
         CancellationToken ct)
     {
         var now = GetUtcNow();
+        // 优化（二十五轮 API 扫描 EF-5）：AsNoTracking——只读契约（接口 doc 保证不进
+        // Mark*+SaveChanges）；违反契约的突变将静默丢失
         return await OutboxMessages
+            .AsNoTracking()
             .Where(m => m.Status == OutboxStatus.Pending && m.RetryCount < maxRetryCount)
             .Where(m => m.NextAttemptAt == null || m.NextAttemptAt <= now)
             .Where(m => m.LockedUntil == null || m.LockedUntil <= now)
@@ -40,7 +43,17 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
     {
         var now = GetUtcNow();
         var until = now.Add(leaseDuration);
-        var messages = await GetPendingMessagesAsync(batchSize, maxRetryCount, ct);
+        // 优化（二十五轮 API 扫描 EF-5 配套）：租约不再复用 GetPendingMessagesAsync——
+        // 其 AsNoTracking 化后，"SELECT → 内存改 → SaveChanges"三步租约（ITM-004，
+        // 见类头 remarks）的突变将静默丢失（SaveChangesAsync 无跟踪条目 = 0 行写入，
+        // RetryCount 令牌兜底也随之失效）。此处内联同条件跟踪查询，租约/兜底语义不变。
+        var messages = await OutboxMessages
+            .Where(m => m.Status == OutboxStatus.Pending && m.RetryCount < maxRetryCount)
+            .Where(m => m.NextAttemptAt == null || m.NextAttemptAt <= now)
+            .Where(m => m.LockedUntil == null || m.LockedUntil <= now)
+            .OrderBy(m => m.CreatedAt)
+            .Take(batchSize)
+            .ToListAsync(ct);
 
         foreach (var msg in messages)
         {

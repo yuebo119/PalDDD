@@ -1,4 +1,5 @@
 using Confluent.Kafka;
+using Microsoft.Extensions.Logging;
 using PalDDD.Core.Logging;
 using PalDDD.Serialization;
 using System.Diagnostics.CodeAnalysis;
@@ -70,7 +71,10 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             Headers = CreateHeaders(context)
         }, ct);
 
-        _logger.Debug($"Published {descriptor.ClrType.Name} to Kafka topic {descriptor.Name}, key={key}");
+        // 优化（二十五轮 Z-1）：Debug 级门控——AddPalLogging 最低 Information，无门控时
+        // 每消息的字符串插值（类型名+topic+key 的 Ulid.ToString）全部白做
+        if (_logger.IsEnabled(LogLevel.Debug))
+            _logger.Debug($"Published {descriptor.ClrType.Name} to Kafka topic {descriptor.Name}, key={key}");
     }
 
     private static Headers CreateHeaders(MessagePublishContext context)

@@ -55,6 +55,13 @@ public static class PostgreSqlServiceCollectionExtensions
 
         var builder = new NpgsqlDataSourceBuilder(connectionString);
         builder.ConnectionStringBuilder.ApplicationName = applicationName;
+        // 优化（二十五轮 API 扫描 B-1）：MaxAutoPrepare=20——固定模板 SQL（SqlTemplates 全系：
+        // Outbox/Inbox/Saga 的 SELECT/UPDATE/INSERT）同一文本执行 ≥5 次后 Npgsql 自动 PREPARE，
+        // 省去每次执行的 parse/plan 开销（连接级 LRU，值域 0-295，20 覆盖框架模板数并留余量）。
+        // ⚠️ 与 PostgreSqlJsonbExtensions 的动态拼接 SQL 互斥：其 SQL 文本随 key/path 参数变化，
+        // 反复进出 LRU 会把固定模板逐出（预备失效反而变慢）——启用 Jsonb 动态查询的场景
+        // 请改用带 configure 回调的重载显式设回 0（文档已声明互斥）。
+        builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
         var dataSource = builder.Build();
         services.AddSingleton(dataSource);
         // P2/P3 修复（十七轮）：补 DbDataSource 抽象注册（镜像 MySql 版 AddPalMySqlDataSource）——
@@ -85,6 +92,9 @@ public static class PostgreSqlServiceCollectionExtensions
 
         var builder = new NpgsqlDataSourceBuilder(connectionString);
         builder.ConnectionStringBuilder.ApplicationName = applicationName;
+        // 优化（二十五轮 API 扫描 B-1）：MaxAutoPrepare=20（固定模板 SQL ≥5 次执行自动预备，
+        // 详见基础重载注释；含 Jsonb 动态 SQL 互斥声明）。置于 configure 之前——用户回调可按需覆盖。
+        builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
         configure(builder);
         var dataSource = builder.Build();
         services.AddSingleton(dataSource);
@@ -188,7 +198,11 @@ public static class PostgreSqlServiceCollectionExtensions
         string writerConnectionString,
         string[] readerConnectionStrings)
     {
-        var writer = new NpgsqlDataSourceBuilder(writerConnectionString).Build();
+        // 优化（二十五轮 API 扫描 B-1）：writer/reader 双数据源均补 MaxAutoPrepare=20
+        // （固定模板 SQL ≥5 次执行自动预备，详见 AddPalNpgsqlDataSource 基础重载注释）
+        var writerBuilder = new NpgsqlDataSourceBuilder(writerConnectionString);
+        writerBuilder.ConnectionStringBuilder.MaxAutoPrepare = 20;
+        var writer = writerBuilder.Build();
         NpgsqlDataSource? reader = null;
         if (readerConnectionStrings.Length > 0)
         {
@@ -206,7 +220,10 @@ public static class PostgreSqlServiceCollectionExtensions
                 LoadBalanceHosts = true,
                 TargetSessionAttributes = "any"
             }.ConnectionString;
-            reader = new NpgsqlDataSourceBuilder(readerCs).Build();
+            var readerBuilder = new NpgsqlDataSourceBuilder(readerCs);
+            // 优化（二十五轮 API 扫描 B-1）：读副本走负载均衡，同 writer 启用自动预备（见上方注释）
+            readerBuilder.ConnectionStringBuilder.MaxAutoPrepare = 20;
+            reader = readerBuilder.Build();
         }
         services.AddSingleton(new PostgreSqlReadWriteRouter(writer, reader));
         return services;

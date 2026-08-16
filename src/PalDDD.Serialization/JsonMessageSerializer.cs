@@ -100,7 +100,9 @@ public sealed class JsonMessageSerializer : IMessageSerializer
 
         // 默认路径：通过 descriptor 的 JsonTypeInfo 强制转换（引用类型无额外开销）
         var legacyInfo = (System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage>)descriptor.JsonTypeInfo;
-        return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(message, legacyInfo);
+        // 优化（二十五轮 C1）：接线已存在的 SerializePooled（ThreadStatic 池化 writer+buffer）——
+        // 此前默认路径绕过池化走 SerializeToUtf8Bytes 每次分配；同 typeInfo 同输出字节
+        return SerializePooled(message, legacyInfo);
     }
 
     /// <inheritdoc />

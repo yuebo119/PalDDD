@@ -30,10 +30,13 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
         CancellationToken ct)
     {
         // 优化（二十四轮 OP-5）：可组合 FromSql——OrderBy/Take 由 EF 生成 PG LIMIT
+        // 优化（二十五轮 API 扫描 EF-2）：AsNoTracking——只读契约（接口 doc 保证不进
+        // Mark*+SaveChanges）；违反契约的突变将静默丢失
         return await OutboxMessages
             .FromSqlRaw(BuildPendingSql(), maxRetryCount)
             .OrderBy(m => m.CreatedAt)
             .Take(batchSize)
+            .AsNoTracking()
             .ToListAsync(ct);
     }
 

@@ -185,6 +185,11 @@ public sealed class ShardedDataSourceManager : IAsyncDisposable
             {
                 var builder = new NpgsqlDataSourceBuilder(connectionStrings[i]);
                 builder.ConnectionStringBuilder.ApplicationName = $"{applicationName}-{i}";
+                // 优化（二十五轮 API 扫描 B-1）：MaxAutoPrepare=20——固定模板 SQL（SqlTemplates 全系）
+                // 同一文本执行 ≥5 次后 Npgsql 自动 PREPARE，省去每次执行的 parse/plan 开销（连接级 LRU）。
+                // ⚠️ 与 PostgreSqlJsonbExtensions 的动态拼接 SQL 互斥（动态 SQL 反复进出 LRU 会把
+                // 固定模板逐出）——启用 Jsonb 动态查询的场景请自行构建分片数据源（文档已声明互斥）。
+                builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
                 _shards[i] = builder.Build();
             }
         }

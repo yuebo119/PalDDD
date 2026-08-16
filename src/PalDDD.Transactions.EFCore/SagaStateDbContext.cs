@@ -47,7 +47,11 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
 
+        // 优化（二十五轮 API 扫描 EF-6）：AsNoTracking——只读契约（SagaProcessor 走
+        // LeaseActiveSagasAsync 独立租约路径，本查询仅观测，保证不进 Mark*+SaveChanges）；
+        // 违反契约的突变将静默丢失（非跟踪实体不经 SaveChangesAsync 持久化）。
         return await SagaStates
+            .AsNoTracking()
             .Where(s => s.Status == SagaStatus.Active)
             .OrderBy(s => s.CreatedAt)
             .Take(batchSize)

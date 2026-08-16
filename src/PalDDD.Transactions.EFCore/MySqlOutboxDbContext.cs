@@ -15,30 +15,47 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
         CancellationToken ct)
     {
         // 优化（二十四轮 OP-5）：可组合 FromSql——分页由 EF 生成（删手工 LIMIT）
+        // 优化（二十五轮 API 扫描 EF-4）：AsNoTracking——只读契约（接口 doc 保证不进
+        // Mark*+SaveChanges）；违反契约的突变将静默丢失
         return await OutboxMessages
             .FromSqlRaw(BuildPendingSql(), maxRetryCount)
             .OrderBy(m => m.CreatedAt)
             .Take(batchSize)
+            .AsNoTracking()
             .ToListAsync(ct);
     }
 
     /// <inheritdoc/>
     /// <remarks>
-    /// P2/P3 修复（十七轮）：租约 SET 侧改 DB 时钟——读侧条件已用 <see cref="GetNowSql()"/>
-    /// （UTC_TIMESTAMP()，DB 时钟），原 SET 侧 <c>until = GetUtcNow().Add(leaseDuration)</c>
-    /// 取应用时钟：应用与 DB 时钟漂移时写入的租约会"立即过期"（应用慢）或"超长滞留"
-    /// （应用快），且与读侧判定不同源。UPDATE 内联
-    /// <c>DATE_ADD(UTC_TIMESTAMP(), INTERVAL {1} SECOND)</c>（{1}=租约秒数参数）与读侧同源。
+    /// 优化（二十五轮 API 扫描 EF-7）：PalORM 同款两步法替代"SELECT FOR UPDATE SKIP LOCKED →
+    /// 逐行 ExecuteSqlRawAsync UPDATE"的 N+1 往返——步骤 1 单条 JOIN-UPDATE 原子锁定批次
+    /// （FOR UPDATE SKIP LOCKED 行锁保留在 JOIN 子查询内，多实例互斥语义不变），
+    /// 步骤 2 按精确租约标识回读。两步合计固定 2 次数据库往返，与批次大小无关（原为 1+N）。
     /// <para>
-    /// 行锁由 SELECT ... FOR UPDATE SKIP LOCKED 持有，无需 SaveChangesAsync 的 RetryCount
-    /// 并发令牌；内存对象同步应用时钟近似值供调用方快照（ReleaseForRetry 守卫依赖
-    /// LockedBy），持久化真值以 DB 时钟为准——调用方后续 Mark* 路径都会覆盖这些字段。
+    /// 时钟语义（对齐 PalOrmOutboxStore MySQL 路径）：now/until 全部为应用侧 DateTimeOffset 参数——
+    /// 单一时钟源后，二十一轮修复的"MySQL 版读侧 DB 时钟 + SET 侧应用时钟混用"漂移问题不复存在。
+    /// SET 侧放弃 DB 时钟 DATE_ADD(UTC_TIMESTAMP())：其写入的精确值应用侧不知道，
+    /// 回读 <c>WHERE LockedUntil = DATE_ADD(...)</c> 因微秒差无法精确匹配；
+    /// 统一 <c>@until</c> 参数（MySqlConnector 映射 DATETIME(6)，ToTimeParam 方言分派已证此路径）
+    /// 以应用时钟一致性换精确回读（PalORM 同款取舍）。
     /// </para>
     /// <para>
-    /// P3 修复（十七轮）：租约路径不调用 SaveChangesAsync（EF 乐观令牌管线），
-    /// <see cref="DbUpdateConcurrencyException"/> 在此不可达，无需 SagaStateDbContext
-    /// 式的并发冲突降级 catch——并发互斥由 FOR UPDATE SKIP LOCKED 行锁结构性保证
-    /// （他实例跳过已锁行，不产生租约冲突）。
+    /// ⚠️ 已知限制（八轮评审 P3，对齐 PalORM :78-84 声明不修）：回读按 (LockedBy, LockedUntil)
+    /// 匹配——同一 owner 在同一 tick（until 完全相等，如 FakeTimeProvider 冻结时间）发起两次租约时，
+    /// 第二次回读会混入第一次已锁定的批次。生产触发条件近乎为零（DATETIME(6) 微秒精度 +
+    /// 单 owner 串行租约）；PG/SqlServer 走 RETURNING/OUTPUT 单语句天然免疫。
+    /// </para>
+    /// <para>
+    /// 回读物化保持跟踪（与 PG/SqlServer 租约路径同因）：调用方 OutboxBatchProcessor 的
+    /// MarkProcessed/MarkDead 是内存突变 + SaveChangesAsync 持久化（仅 ReleaseForRetry 十七轮
+    /// 改为 ExecuteUpdate），依赖 ChangeTracker——AsNoTracking 会使 Mark* 突变静默丢失
+    /// （消息永留租约态 → 租约过期重租 → 重复发布）。AcceptAllChanges 不再需要：旧路径
+    /// FromSqlRaw 物化后内存改 LockedBy/LockedUntil 产生 Modified 脏状态需归位；
+    /// 两步法回读值即 DB 真值，物化即 Unchanged。
+    /// </para>
+    /// <para>
+    /// 事务边界（对齐 PalORM）：两条语句自动提交，无显式事务——JOIN-UPDATE 单语句原子，
+    /// 回读按精确租约标识 (owner, until) 过滤，不依赖与 UPDATE 的快照隔离。
     /// </para>
     /// </remarks>
     public override async ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
@@ -48,63 +65,56 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
         int maxRetryCount,
         CancellationToken ct)
     {
-        // ITM-167 修复：leaseSeconds 边界守卫——leaseDuration 非正时租约秒数非正
+        // ITM-167 修复：leaseDuration 边界守卫——leaseDuration 非正时租约秒数非正
         // （立即过期/永不过期语义错乱）；TotalSeconds 超过 int.MaxValue 时
-        // (int)Math.Ceiling 在 unchecked 下回绕为负值，写入 INTERVAL 负数秒。Options 层
-        // 已校验正数，此处是 Store 直调路径的防御性 fail-fast（与 Options 层校验不重复，
+        // until = now.Add(leaseDuration) 的秒数语义溢出。Options 层已校验正数，
+        // 此处是 Store 直调路径的防御性 fail-fast（与 Options 层校验不重复，
         // 各自覆盖 DI 启动期与运行时直调两类入口）。
         if (leaseDuration <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration must be greater than zero.");
         if (leaseDuration.TotalSeconds > int.MaxValue)
-            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for MySQL DATE_ADD.");
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for the lease LockedUntil value.");
 
-        await using var transaction = await Database.BeginTransactionAsync(ct).ConfigureAwait(false);
-        var messages = await OutboxMessages
-            // 租约查询不可组合（FOR UPDATE SKIP LOCKED 行锁必须在子查询内 LIMIT 前锁定）——
-            // 二十四轮 OP-5 收窄 BuildPendingSql 后此处方言专属全量内联。
-            // EF1002 豁免：{{0}}/{{1}} 是 FromSqlRaw 参数占位符（值全部参数化），
-            // GetNowSql() 为代码内字面量常量（UTC_TIMESTAMP()，PD12 框架边界）——无用户输入拼接
-#pragma warning disable EF1002
-            .FromSqlRaw(
-                $$"""
-                SELECT * FROM OutboxMessages
-                WHERE Status = 0 AND RetryCount < {{0}}
-                  AND (NextAttemptAt IS NULL OR NextAttemptAt <= {{GetNowSql()}})
-                  AND (LockedUntil IS NULL OR LockedUntil <= {{GetNowSql()}})
-                ORDER BY CreatedAt
-                LIMIT {{1}} FOR UPDATE SKIP LOCKED
-                """,
-                maxRetryCount, batchSize)
-#pragma warning restore EF1002
-            .ToListAsync(ct)
-            .ConfigureAwait(false);
+        var now = GetUtcNow();
+        var until = now.Add(leaseDuration);
 
-        // SET 侧 DB 时钟（见 remarks）；租约秒数向上取整避免亚秒租约被 ROUND 掉
-        var leaseSeconds = (int)Math.Ceiling(leaseDuration.TotalSeconds);
-        var untilApprox = GetUtcNow().Add(leaseDuration);
-        foreach (var msg in messages)
-        {
-            msg.LockedBy = owner;
-            msg.LockedUntil = untilApprox;
-            // EF1003 豁免说明（十七轮）：{0}/{1}/{2} 是 FromSqlRaw 参数占位符（值全部参数化），
-            // GetNowSql() 为代码内字面量常量（UTC_TIMESTAMP()，PD12 框架边界）——无用户输入拼接
+        // 步骤 1（EF-7）：单条 JOIN-UPDATE 原子租约——原 SELECT 版的 FOR UPDATE SKIP LOCKED
+        // 行锁移入 JOIN 子查询（MySQL 8.0+ 派生表锁语义），多实例互斥不变。
+        // ⚠️ 占位符修正（二十五轮顺带）：旧版 $$"""...{{0}}...""" 中 {{0}} 是 C# 插值
+        // （int 0 求值内联，非 FromSqlRaw 参数占位符）——生成 "RetryCount < 0"（恒假）+
+        // "LIMIT 1"，maxRetryCount/batchSize 参数被忽略、租约恒空。本版用非插值 raw string，
+        // {N} 为字面占位符（值全部参数化，无用户输入拼接——EF1003 豁免同旧版模式）。
 #pragma warning disable EF1003
-            await Database.ExecuteSqlRawAsync(
-                "UPDATE OutboxMessages SET LockedBy = {0}, LockedUntil = DATE_ADD("
-                    + GetNowSql() + ", INTERVAL {1} SECOND) WHERE Id = {2}",
-                owner, leaseSeconds, msg.Id.ToString()).ConfigureAwait(false);
+        // 注意：带 ct 必须走 (sql, IEnumerable<object>, ct) 重载——params 版会把 ct 装箱进
+        // SQL 参数数组（取消语义静默失效）
+        await Database.ExecuteSqlRawAsync(
+            """
+            UPDATE OutboxMessages t
+            JOIN (
+                SELECT id FROM OutboxMessages
+                WHERE Status = 0 AND RetryCount < {0}
+                  AND (NextAttemptAt IS NULL OR NextAttemptAt <= {1})
+                  AND (LockedUntil IS NULL OR LockedUntil <= {1})
+                ORDER BY CreatedAt
+                LIMIT {2} FOR UPDATE SKIP LOCKED
+            ) AS sub ON t.id = sub.id
+            SET t.LockedBy = {3}, t.LockedUntil = {4}
+            """,
+            new object[] { maxRetryCount, now, batchSize, owner, until }, ct).ConfigureAwait(false);
 #pragma warning restore EF1003
-        }
 
-        // P2 修复（十八轮验证轮 F3）：租约改 ExecuteSqlRaw 后，FromSqlRaw 物化的跟踪实体
-        // 残留 Modified 脏状态（LockedBy/LockedUntil 内存值未经 SaveChanges 落库）——
-        // 后续调用方 SaveChangesAsync 会带着脏状态写入：与 ReleaseForRetry 的 ExecuteUpdate
-        // （RetryCount 已在 DB +1）叠加时 RetryCount 并发令牌失配，DbUpdateConcurrencyException
-        // 使同批后续消息的 Mark* 一并回滚（EF SaveChanges 整批原子）→ 重复发布。
-        // AcceptAllChanges 把跟踪状态归位 Unchanged（DB 已是租约真值，内存近似值仅守卫快照用）。
-        ChangeTracker.AcceptAllChanges();
-
-        await transaction.CommitAsync(ct).ConfigureAwait(false);
-        return messages;
+        // 步骤 2：按精确租约标识 (owner, until) 回读——跟踪物化（Mark* 语义所需，见 remarks）；
+        // {0}/{1} 为 FromSqlRaw 字面参数占位符（值全部参数化，无用户输入拼接——EF1002 豁免）
+#pragma warning disable EF1002
+        return await OutboxMessages
+            .FromSqlRaw(
+                """
+                SELECT * FROM OutboxMessages
+                WHERE LockedBy = {0} AND LockedUntil = {1}
+                ORDER BY CreatedAt
+                """,
+                owner, until)
+            .ToListAsync(ct).ConfigureAwait(false);
+#pragma warning restore EF1002
     }
 }
