@@ -16,21 +16,30 @@ echo "=== Pal.DDD CI Coverage ==="
 
 # 1. 构建
 echo ">> Building..."
-dotnet build PalDDD.slnx --nologe -v q
+dotnet build PalDDD.slnx --nologo -v q
 
 # 2. 测试 + 覆盖率收集
+# MTP 手写协议：一次一个测试项目 + MTP 原生 --coverage；
+# 旧写法（slnx 批量 + --collect:"XPlat Code Coverage"）触发 VSTest 握手 exit 5
+# （2026-08-16 终验轮 B-2 实测复现）。PalDDD.Testing 为支持库非测试项目。
 echo ">> Running tests with coverage..."
-dotnet test PalDDD.slnx \
-    --nologo \
-    --no-build \
-    -v q \
-    --collect:"XPlat Code Coverage" \
-    --results-directory TestResults
+mkdir -p TestResults
+for csproj in $(find test -name '*.csproj' ! -name 'PalDDD.Testing.csproj' | sort); do
+  name="$(basename "$csproj" .csproj)"
+  echo ">> $name"
+  dotnet test "$csproj" \
+      --nologo \
+      --no-build \
+      -v q \
+      --coverage \
+      --coverage-output "TestResults/coverage.$name.cobertura.xml" \
+      --coverage-output-format cobertura
+done
 
 # 3. 合并报告
 echo ">> Merging coverage reports..."
 dotnet tool run reportgenerator \
-    -reports:TestResults/**/coverage.cobertura.xml \
+    -reports:TestResults/coverage.*.cobertura.xml \
     -targetdir:TestResults/coverage-report \
     -reporttypes:Html
 

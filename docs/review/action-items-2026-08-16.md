@@ -3,7 +3,7 @@
 > 来源：AI 质量系统全量运行（四系统 + 4 片地毯式评审，198 文件 / 23151 行，基线 commit 4e5437f（git log 可查））。
 > 定级采用 **危害 × 复杂度** 双维度（模板见 docs/review/ACTION_ITEMS_TEMPLATE.md）。
 > 本轮为分析轮产出：P2×6（5 项亲验定稿 + 1 项待探针）、P3 约 60 项。P0/P1 零。
-> **修复轮状态（2026-08-16 完成）**：全部 54 项已修复/处置（[x]）。P2 六项主线程亲修 + ITM-076 双连接 MySQL 探针实证（5 轮未复现双处理，version 乐观锁兜底确认）；P3 四族并行子代理修复。验证：dotnet build 0 警告 0 错误、16 测试项目 955 测试全绿（新增回归测试 9 项：位置保留器 2 + SourceGen 1 + SagaState 2 + Saga 并发 1 + 分析器 3）、方言探针 40/40 复跑通过、gate 21/22（G22 为脏树检查，提交后即清除）、tech-debt 17/17。验证轮敌对审查见文末附注（五、验证轮收口）。
+> **修复轮状态（2026-08-16 完成）**：全部 54 项已修复/处置（[x]）。P2 六项主线程亲修 + ITM-076 双连接 MySQL 探针实证（5 轮未复现双处理，version 乐观锁兜底确认）；P3 四族并行子代理修复。验证：dotnet build 0 警告 0 错误、16 测试项目 955 测试全绿（新增回归测试 9 项：位置保留器 2 + SourceGen 1 + SagaState 2 + Saga 并发 1 + 分析器 3）、方言探针 40/40 复跑通过、gate 21/22（G22 为脏树检查，提交后即清除）、tech-debt 17/17、断言棘轮 173/173。验证轮与终验轮记录见文末（五、验证轮收口 + 六、终验轮收口；终验轮盲区发现 P1×1 + P2×2 + P3×3 已全修）。
 
 ---
 
@@ -324,3 +324,24 @@
 | V-7 | ITM-072（SaveChanges 返回 1/0 + 条件 detach）与 ITM-101 行为变更 | 复查确认符合契约语义（0=目标行不存在或乐观锁冲突）；受影响测试项目全绿 |
 
 > 验证轮方法论结论：修复者视角存在系统性盲区（54 项修复中 6 项需返工）——「修复轮后必须验证轮」协议再次生效。
+
+---
+
+## 六、终验轮收口（修复后第二轮验证，2026-08-16）
+
+> 按协议「验证轮有发现 → 再修复 → 再验证」，上轮 V-1..V-7 返工后执行终验轮。
+> 终验子代理通道三连中断（无产出），按会话纪律主线程接管亲验。V-1..V-7 逐项确认全部落实
+> （证据行号见上表处置列）；终验盲区（构建/CI/配置层）发现 6 项，全部修复并经机械轴复跑验证。
+
+| # | 发现（主线程亲验，含触发路径） | 严重级 | 处置 |
+|---|------|:--:|------|
+| B-1 | `.github/workflows/ci.yml` 测试步骤 `dotnet test PalDDD.slnx` 批量运行 MTP 项目——实测（Compression+CQRS 双项目）exit 5 handshake 失败，CI 每次必红；同文件 AI 自检步骤引用 `.ai/scripts/*`，而 `.ai/` 被 .gitignore 第 95 行整体忽略（`git ls-files .ai` 为空），fresh checkout 该步骤必然 "No such file or directory" | **P1** | 测试步骤改逐项目循环（MTP 手写协议注释 + PalDDD.Testing 排除）；AI 步骤改条件执行——本地装有 .ai 跑全量自检，否则显式 SKIP 并退化为根 scripts/gate-check.sh（G1-G3 快速门禁） |
+| B-2 | ci-coverage.sh（19 行）拼写 --nologe——实测 `dotnet build --nologe` 报 MSB1001 未知开关，`set -e` 下覆盖率管线第一步即死；且 `--collect:"XPlat Code Coverage"` 实测（单项目）同样触发 VSTest 握手 exit 5，与 MTP 不兼容 | **P2** | 改 `--nologo`；覆盖率改 MTP 原生 `--coverage --coverage-output-format cobertura` 逐项目收集（Compression.Tests 实测 30/30 通过 + cobertura 产物生成），reportgenerator glob 同步改 `TestResults/coverage.*.cobertura.xml` |
+| B-3 | scripts/verify-conventions.sh（215 行）full 模式 `dotnet test PalDDD.slnx` 批量测试——同 B-1 机制必失败，"零失败"永远不可达；scripts/review-snapshot.sh（64 行）向评审员建议同一条必失败命令 | **P2** | verify-conventions 改逐项目循环（任一失败置 FAIL）；review-snapshot 建议命令改为逐项目表述 |
+| B-4 | README.md（635 行）测试计数 "933 测试" 与实测 955（16 项目全绿）不符 | P3 | 更新为 955 |
+| B-5 | CHANGELOG.md（5 行）"当前版本 VersionPrefix=1.0.0/preview.1" 与 Directory.Build.props 实际 `1.1.0` + 空 suffix 矛盾 | P3 | 更新为 1.1.0 / VersionSuffix 空 |
+| B-6 | scripts/publish-main.sh（11 行）收尾 `git checkout master`——仓库无本地 master 分支（仅 main/master-archive），push 成功后脚本 set -e 退出 1 | P3 | 记录原分支（空则回退 main），发布后切回原分支再删孤儿分支 |
+
+> 终验轮方法论结论：**验证轮必须换轴**——前两轮全盯 src/test 修复 diff，零发现的表象下
+> 配置/CI 层仍藏着一个 P1（CI 全线红）。本轮把「盲区补扫」从形式改为固定新轴
+> （构建/CI/配置层），机械轴无法覆盖"命令只在 CI 环境才执行"的缺陷类型。

@@ -38,7 +38,14 @@ jobs:
         run: dotnet build PalDDD.slnx --no-restore -c Release
 
       - name: Test (unit + integration)
-        run: dotnet test PalDDD.slnx --no-build -c Release --verbosity normal
+        # MTP 手写协议：dotnet test 一次只跑一个测试项目（多项目/--collect 批量触发
+        # VSTest 握手 → exit 5，本地已实测复现）；PalDDD.Testing 为支持库非测试项目
+        run: |
+          set -euo pipefail
+          for csproj in $(find test -name '*.csproj' ! -name 'PalDDD.Testing.csproj' | sort); do
+            echo "== Testing: $csproj =="
+            dotnet test "$csproj" --no-build -c Release --verbosity minimal
+          done
         env:
           # CI 环境：Testcontainers 自动启动 PG/MySQL/Kafka/RabbitMQ
           PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS: '0'
@@ -53,8 +60,16 @@ jobs:
 
       - name: AI system self-check + gate
         run: |
-          bash .ai/scripts/verify-ai-system.sh
-          bash .ai/scripts/gate-check.sh --allow-dirty
+          # .ai/ 是独立 git 仓库（.gitignore 第 95 行），fresh checkout 不存在——
+          # 本地装有 .ai 才跑全量自检，否则退化为根目录快速门禁（G1-G3），
+          # 避免 CI 在无 .ai 的仓库上必然失败（终验轮 B-1 实锤）
+          if [ -d .ai/scripts ]; then
+            bash .ai/scripts/verify-ai-system.sh
+            bash .ai/scripts/gate-check.sh --allow-dirty
+          else
+            echo "SKIP .ai self-check: .ai 质量系统未随仓库分发"
+            bash scripts/gate-check.sh
+          fi
 
   aot-verify:
     runs-on: ubuntu-latest

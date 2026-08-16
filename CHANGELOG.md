@@ -2,7 +2,7 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-> **当前版本**：`VersionPrefix=1.0.0` / `VersionSuffix=preview.1`（见 `Directory.Build.props`）
+> **当前版本**：`VersionPrefix=1.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）
 > **发布规范**：见 [`docs/release.md`](docs/release.md)
 
 ---

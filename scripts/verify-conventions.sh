@@ -212,13 +212,19 @@ echo "════════════════════════�
 echo ""
 
 if [ "$FAIL" -eq 0 ]; then
-	    TEST_OUTPUT=$(dotnet test PalDDD.slnx --no-restore --no-build 2>&1) || true
-    # 双语兼容：检查 "失败:     0" 或 "Failed:     0"
-    if echo "$TEST_OUTPUT" | grep -qE "(失败|Failed):\s+0"; then
-        echo -e "${GREEN}✅ dotnet test 零失败${NC}"
+    # MTP 手写协议：一次只跑一个测试项目（slnx 批量触发 VSTest 握手 exit 5，
+    # 2026-08-16 终验轮 B-3 实测复现）；PalDDD.Testing 为支持库非测试项目
+    TEST_FAIL=0
+    for csproj in $(find test -name '*.csproj' ! -name 'PalDDD.Testing.csproj' | sort); do
+        echo "  测试: $csproj"
+        if ! dotnet test "$csproj" --no-restore --no-build >/dev/null 2>&1; then
+            echo -e "${RED}❌ $csproj 测试失败${NC}"
+            TEST_FAIL=1
+        fi
+    done
+    if [ "$TEST_FAIL" -eq 0 ]; then
+        echo -e "${GREEN}✅ dotnet test 零失败（全部测试项目逐个执行）${NC}"
     else
-        echo -e "${RED}❌ dotnet test 有失败${NC}"
-        echo "$TEST_OUTPUT" | tail -10
         FAIL=1
     fi
 fi
