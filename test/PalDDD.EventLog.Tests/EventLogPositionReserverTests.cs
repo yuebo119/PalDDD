@@ -156,10 +156,10 @@ public sealed class EventLogPositionReserverTests
             new Microsoft.Data.Sqlite.SqliteException("SQLite Error 19: 'UNIQUE constraint failed'", 19));
         var reserver = new EventLogPositionReserver(chunkSize: 10);
 
-        // 先捕获异常再断言消息（TUnit 链式 WithMessage 是方法，不能直接跟在 Throws 后）
+        // 先捕获异常再断言消息（TUnit 链式 WithMessage 是方法，不能直接跟在 Throws 后）；
+        // 不做 IsNotNull 弱断言——ThrowsAsync 成功即已证明异常非空
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => reserver.ReserveAsync(db, count: 1, cancellationToken).AsTask());
-        await Assert.That(exception).IsNotNull();
         await Assert.That(exception!.Message).Contains("optimistic concurrency retries");
     }
 
