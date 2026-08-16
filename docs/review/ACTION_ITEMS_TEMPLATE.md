@@ -1,6 +1,6 @@
 # 任务清单模板
 
-> 基于专业审计报告（`docs/review/professional-audit-2026-06-30.md`）的优先级改革。
+> 基于专业审计报告（`docs/review/audit-2026-06-30.md`——元审计 R4 勘正：原引 professional-audit-2026-06-30.md 不存在）的优先级改革。
 > 替代旧 P1/P2/P3 单维度分类，采用 **危害 × 复杂度** 双维度判定。
 
 ---

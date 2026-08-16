@@ -462,8 +462,13 @@ csproj 只写 `<Project Sdk>` + `<PackageReference Include="..." />`（无 Versi
 | `Services/` 目录 | 模糊词——应用服务 = CQRS Handler | 放入 CQRS 项目 |
 | `*Manager.cs` | 模糊词——DDD 中无 Manager 概念 | 改为聚合根或领域服务 |
 | `AssemblyInfo.cs` | 已废弃——内容已移入 csproj | 直接编辑 csproj |
-| `GlobalUsings.cs` | 已废弃——内容已移入 csproj | 直接编辑 csproj |
+| `GlobalUsings.cs` | 已废弃——内容已移入 csproj | 直接编辑项目根 csproj |
 | `Properties/` 子目录 | 已废弃 | 文件放项目根目录 |
+
+## 5. 测试规范
+
+<!-- P3 修复（系统元审计 S7）：§5 父标题缺失——目录声明 5. 测试规范但正文 5.1-5.7 悬挂在 §4 之下，
+     engine/gate 声称的"14 章"结构破缺。 -->
 
 ### 5.1 项目命名
 

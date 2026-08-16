@@ -18,7 +18,10 @@
 #   O1 报 5  → 实际可改 0（全为 ToFrozenDictionary 构建器/外部 API 传入）
 # ═══════════════════════════════════════════════════════════════
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# 位置无关仓库根发现（元审计脚本#1-3/GAP31 修复）：向上查找含 PalDDD.slnx 的目录——
+# 同一文件在根 scripts/ 与 .ai/scripts/ 均可直接运行，杜绝搬移后 cd 层数不匹配的整体 no-op
+_ai_root_find() { local d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; while [ "$d" != "/" ] && [ ! -f "$d/PalDDD.slnx" ]; do d="$(dirname "$d")"; done; printf '%s' "$d"; }
+ROOT="$(_ai_root_find)"
 SRC="$ROOT/src"
 
 # 计数辅助：grep -c 无匹配返回 exit 1，set -e 下需兜底

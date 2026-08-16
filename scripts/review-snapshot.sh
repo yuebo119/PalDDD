@@ -13,8 +13,10 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# 位置无关仓库根发现（元审计脚本#1-3/GAP31 修复）：向上查找含 PalDDD.slnx 的目录——
+# 同一文件在根 scripts/ 与 .ai/scripts/ 均可直接运行，杜绝搬移后 cd 层数不匹配的整体 no-op
+_ai_root_find() { local d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; while [ "$d" != "/" ] && [ ! -f "$d/PalDDD.slnx" ]; do d="$(dirname "$d")"; done; printf '%s' "$d"; }
+ROOT="$(_ai_root_find)"
 cd "$ROOT"
 
 echo "═══ 评审基线快照 ═══"

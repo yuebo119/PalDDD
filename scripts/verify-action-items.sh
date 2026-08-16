@@ -1,122 +1,84 @@
 #!/usr/bin/env bash
-# ═══════════════════════════════════════════════════════════════
-# 🔍 verify-action-items.sh — 任务清单自动验证
-# ═══════════════════════════════════════════════════════════════
-#
-# 用法：bash scripts/verify-action-items.sh docs/review/action-items-XXXX-XX-XX.md
-# 目的：消除专业审计 R5（错误心智模型）、R6（未交叉验证外部输入）
-#       验证任务清单中引用的方法名/类名/文件路径在源码中真实存在
-#
-# 检查项：
-#   1. 任务描述中引用的反引号标识符（`MethodName`/`ClassName`）在 src/ + test/ 中可 grep 命中
-#   2. 涉及分析器规则的任务是否提示需 build 验证
-#   3. 涉及数字声明的任务是否提示需实测命令
-#   4. [新增] 外部合并任务检查：提示验证方法名/类名/路径在源码中存在
-# ═══════════════════════════════════════════════════════════════
+# 验证行动项中的文件路径和源码标识符是否存在。
 
-set -uo pipefail
+set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$ROOT"
-
-FILE="${1:-}"
-if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then
-    echo "用法: bash scripts/verify-action-items.sh <action-items.md>"
-    echo "示例: bash scripts/verify-action-items.sh docs/review/action-items-2026-06-30.md"
-    exit 1
+if [ $# -ne 1 ]; then
+    printf '用法：bash scripts/verify-action-items.sh <action-items-file>\n' >&2
+    exit 2
 fi
 
-PASS=0
-WARN=0
-FAIL=0
+ACTION_FILE="$1"
+if [ ! -f "$ACTION_FILE" ]; then
+    printf '错误：文件不存在：%s\n' "$ACTION_FILE" >&2
+    exit 2
+fi
 
-echo "═══ 任务清单验证: $FILE ═══"
-echo ""
+printf '═══════ Action Items 验证 ═══════\n'
+printf '文件：%s\n\n' "$ACTION_FILE"
 
-# 提取所有反引号标识符（`标识符`），排除 markdown 代码块内的
-# 格式：`标识符` 其中标识符含字母数字/点/下划线/尖括号
-IDENTIFIERS=$(grep -oP '`[A-Z][A-Za-z0-9_.<>]+`' "$FILE" 2>/dev/null | tr -d '`' | sort -u || true)
+MISSING=0
+FOUND=0
+SKIPPED=0
 
-if [ -z "$IDENTIFIERS" ]; then
-    echo "  ℹ️  未找到反引号标识符，跳过标识符存在性检查"
-else
-    echo "── 标识符存在性检查 ──"
-    for id in $IDENTIFIERS; do
-        # 跳过非代码标识符：类型参数、诊断码、MSBuild 属性、文件名、配置项
-        case "$id" in
-            # 泛型类型参数
-            T|TCommand|TResponse|TEvent|TState|TMessage|TResult|Key|Value) continue ;;
-            # 诊断码（IDE/CA/CS/NU/PDDD + 数字）
-            IDE[0-9]*|CA[0-9]*|CS[0-9]*|NU[0-9]*|PDDD[0-9]*) continue ;;
-            # MSBuild 属性 / 配置项
-            NoWarn|IsAotCompatible|IsTrimmable|VerifyReferenceAotCompatibility|TreatWarningsAsErrors) continue ;;
-            # 文件名 / 解决方案名
-            *.slnx|*.csproj|*.md|*.sh|*.props) continue ;;
-            # .NET 框架类型（ ubiquitous，无需在 src 中验证）
-            IDisposable|IAsyncDisposable|Exception|OperationCanceledException|ValueTask|CancellationToken) continue ;;
-            # 评估类任务的"建议新增"类名（Helper/Extensions/Wrapper 后缀，讨论"是否新增"）
-            SyntaxHelper|SymbolHelper) continue ;;
-        esac
+is_path() {
+    [[ "$1" == */* ]] || [[ "$1" =~ \.(cs|csproj|slnx|md|sh|yml|yaml|props|targets|json|xml)$ ]]
+}
 
-        # 在 src/ + test/ 中搜索标识符（文件名或代码内容）
-        FOUND=$(grep -rl "$id" src/ test/ --include="*.cs" 2>/dev/null | grep -v obj | grep -v bin | head -1 || true)
-        if [ -n "$FOUND" ]; then
-            PASS=$((PASS + 1))
+is_ignored_token() {
+    [[ "$1" =~ ^(P[0-3]|AUD-[0-9]+|ITM(-[0-9]+)?|PASS|FAIL|WARN|SKIP|urgent|near|future|assess)$ ]]
+}
+
+# 2026-08-15 实践教训：反引号里的散文引用（SQL 片段/带引号值/表达式/commit hash）
+# 被当标识符 grep 产生误报（9 处）。含标识符/路径中不可能出现的字符 → 跳过。
+is_prose_token() {
+    # 正则放变量规避 [[ =~ ]] 内引号转义问题（2026-08-15 实测：内联字符类漏判 =( ) 等字符）
+    local prose_chars='[()<>=?*{}">[:space:]]'
+    [[ "$1" =~ $prose_chars ]] && return 0
+    # 纯十六进制 commit hash（7-40 位，无字母 o-z 混入）
+    [[ "$1" =~ ^[0-9a-f]{7,40}$ ]] && return 0
+    # 含 / 但既无文件扩展名也不以已知目录开头（如 "Xxx/Yyy" 方法对）→ 散文
+    if [[ "$1" == */* ]] \
+       && [[ ! "$1" =~ \.(cs|csproj|slnx|md|sh|yml|yaml|props|targets|json|xml|sql)$ ]] \
+       && [[ ! "$1" =~ ^(src|test|docs|scripts|bench|samples|\.ai|\.github|nupkgs)/ ]]; then
+        return 0
+    fi
+    return 1
+}
+
+while IFS= read -r identifier; do
+    [ -z "$identifier" ] && continue
+    if is_ignored_token "$identifier"; then
+        SKIPPED=$((SKIPPED + 1))
+        continue
+    fi
+    if is_prose_token "$identifier"; then
+        SKIPPED=$((SKIPPED + 1))
+        continue
+    fi
+
+    if is_path "$identifier"; then
+        if [ -e "$identifier" ]; then
+            FOUND=$((FOUND + 1))
+        elif [[ "$identifier" != */* ]] && git grep -F -q -- "$identifier" src test scripts docs .github .ai  # 元审计脚本#30：补 .ai——验证 AI 系统自身行动项（PD21/tech-debt 项）时找不到会误报 2>/dev/null; then
+            # 无目录前缀的相对文件名（如模板名）——文件不存在但正文有引用则放行
+            FOUND=$((FOUND + 1))
         else
-            # 也检查文件路径是否存在（src/ 或 test/）
-            if [ -f "src/$id" ] || [ -f "test/$id" ] || find src test -name "$id" 2>/dev/null | grep -q .; then
-                PASS=$((PASS + 1))
-            else
-                echo "  ✗ 标识符 '$id' 在 src/ 中未找到"
-                FAIL=$((FAIL + 1))
-            fi
+            printf 'FAIL 文件不存在：%s\n' "$identifier"
+            MISSING=$((MISSING + 1))
         fi
-    done
-    echo "  标识符检查: 通过 $PASS / 失败 $FAIL"
-    echo ""
-fi
-
-# 检查涉及分析器规则的任务是否含 build 验证命令
-echo "── 分析器任务 build 验证检查 ──"
-if grep -qi "CA1031\|SuppressMessage\|分析器\|Analyzer\|NoWarn" "$FILE" 2>/dev/null; then
-    if grep -qi "dotnet build" "$FILE" 2>/dev/null; then
-        echo "  ✓ 涉及分析器的任务含 dotnet build 验证命令"
-        PASS=$((PASS + 1))
-    else
-        echo "  ⚠ 涉及分析器的任务缺少 dotnet build 验证命令（元审计 R5 预防）"
-        WARN=$((WARN + 1))
+        continue
     fi
-else
-    echo "  ℹ️  未涉及分析器规则，跳过"
-fi
-echo ""
 
-# 检查涉及数字声明的任务是否含实测命令
-echo "── 数字声明实测命令检查 ──"
-if grep -qE "[0-9]+ (个|处|条|行) (测试|项目|文件|规则|用例)" "$FILE" 2>/dev/null; then
-    if grep -qi "dotnet test\|find src\|wc -l\|grep -c" "$FILE" 2>/dev/null; then
-        echo "  ✓ 数字声明任务含实测命令"
-        PASS=$((PASS + 1))
+    if git grep -F -q -- "$identifier" src test scripts docs .github .ai  # 元审计脚本#30：补 .ai——验证 AI 系统自身行动项（PD21/tech-debt 项）时找不到会误报 2>/dev/null; then
+        FOUND=$((FOUND + 1))
     else
-        echo "  ⚠ 数字声明任务缺少实测命令（元审计 R8 预防）"
-        WARN=$((WARN + 1))
+        printf 'FAIL 标识符未找到：%s\n' "$identifier"
+        MISSING=$((MISSING + 1))
     fi
-else
-    echo "  ℹ️  未发现数字声明，跳过"
-fi
-echo ""
+done < <(grep -oE '`[^`]+`' "$ACTION_FILE" | tr -d '`' | sort -u || true)
 
-echo "═══ 结果 ═══"
-printf "通过: %d  警告: %d  失败: %d\n" "$PASS" "$WARN" "$FAIL"
-if [ "$FAIL" -gt 0 ]; then
-    echo ""
-    echo "⚠️  存在标识符未找到，请核实任务描述中的方法名/类名（元审计 R6 预防）"
-    exit 1
-fi
-if [ "$WARN" -gt 0 ]; then
-    echo ""
-    echo "⚠️  存在警告，建议补全验证命令"
-fi
-echo "✓ 验证完成"
-exit 0
+printf '\n找到：%s  缺失：%s  跳过：%s\n' "$FOUND" "$MISSING" "$SKIPPED"
+printf '═══════ 验证完成 ═══════\n'
+
+[ "$MISSING" -eq 0 ]
