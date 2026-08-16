@@ -114,7 +114,10 @@ public static class PostgreSqlReadWriteRouterExtensions
                     throw new ArgumentException(
                         $"Replica connection string '{cs}' has no Host. Each replica must specify a Host.",
                         nameof(replicaConnectionStrings));
-                hosts.Add(sb.Port != 5432 ? $"{sb.Host}:{sb.Port}" : sb.Host);
+                // ITM-132 修复：primary Port≠5432 时，未编码的副本 Host 会继承 reader 连接串共享 Port
+                // （Npgsql 的 Port 只对未内嵌端口的主机生效），读流量/故障转移落到错误实例——
+                // 统一经 EncodeHostEntry 编码：primary Port≠5432 时全部 Host 显式 host:port（含显式 5432）。
+                hosts.Add(PostgreSqlMultiHost.EncodeHostEntry(sb, primaryCsBuilder.Port));
             }
 
             if (hosts.Count > 0)

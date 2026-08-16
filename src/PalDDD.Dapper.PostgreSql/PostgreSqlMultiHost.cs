@@ -51,22 +51,21 @@ public static class PostgreSqlMultiHost
 
         // 多主机连接串：Host 逗号分隔，TargetSessionAttributes 控制
         var builder = new NpgsqlDataSourceBuilder(primaryConnectionString);
+        var primaryBuilder = new NpgsqlConnectionStringBuilder(primaryConnectionString);
 
         // 追加备机到 Host 列表
         var standbyBuilder = new NpgsqlConnectionStringBuilder(standbyConnectionString);
         // P2/P3 修复（十七轮 · 镜像 MySqlMultiHost.AddPalMySqlDataSourceWithFailover）：快速失败校验——
         // Npgsql 连接串的 Username/Password/Database 对主机列表内所有节点统一生效，
         // 备机串与主库不一致时差异无法表达且被静默丢弃（故障转移后必然连接失败/连错库）。
-        // Port 不校验：已编码进 Host 条目（host:port 语法，见下方实证修正注释）。
-        ThrowIfCredentialsMismatch(new NpgsqlConnectionStringBuilder(primaryConnectionString), standbyBuilder, "standby");
+        // Port 不校验：已编码进 Host 条目（host:port 语法，见 EncodeHostEntry 注释）。
+        ThrowIfCredentialsMismatch(primaryBuilder, standbyBuilder, "standby");
         if (standbyBuilder.Host is not null)
         {
-            // 实证修正（Npgsql 10.0.3 实测）：Port=0 的赋值直接抛 ArgumentOutOfRangeException，
-            // 旧注释"0 = 使用 Host 内嵌端口"不成立。Npgsql 的共享 Port 只对未内嵌端口的主机生效，
-            // 备机端口不同时正确做法是把端口编码进该主机的 Host 条目（Host 条目支持 host:port 语法）。
-            var standbyHost = standbyBuilder.Port != 5432
-                ? $"{standbyBuilder.Host}:{standbyBuilder.Port}"
-                : standbyBuilder.Host;
+            // ITM-132 修复：primary Port≠5432 时，未编码的备机 Host 会继承连接串共享 Port
+            // （Npgsql 的 Port 只对未内嵌端口的主机生效），导致备机被连到主库端口——
+            // 统一经 EncodeHostEntry 编码：primary Port≠5432 时全部 Host 显式 host:port（含显式 5432）。
+            var standbyHost = EncodeHostEntry(standbyBuilder, primaryBuilder.Port);
             // ITM-110 修复：拼接规范化——主串无 Host 时原 `Host += ",{standbyHost}"` 产生
             // 前导逗号（",pg2"），Npgsql 解析出空主机条目；改为空则直接赋值
             var primaryHost = builder.ConnectionStringBuilder.Host;
@@ -125,9 +124,11 @@ public static class PostgreSqlMultiHost
             // P2/P3 修复（十七轮 · 镜像 MySQL failover 校验）：副本凭据与主库不一致时快速失败——
             // 合并方式只保留 Host 条目，Username/Password/Database 差异被静默丢弃
             ThrowIfCredentialsMismatch(primaryCsBuilder, sb, "replica");
-            // PD17 姊妹统一：端口编码进 Host 条目（与 Failover 方法 62-64 行实证修正对齐）
+            // ITM-132 修复：primary Port≠5432 时，未编码的副本 Host 会继承连接串共享 Port
+            // （Npgsql 的 Port 只对未内嵌端口的主机生效），读流量/故障转移落到错误实例——
+            // 统一经 EncodeHostEntry 编码：primary Port≠5432 时全部 Host 显式 host:port（含显式 5432）。
             if (sb.Host is not null)
-                hosts.Add(sb.Port != 5432 ? $"{sb.Host}:{sb.Port}" : sb.Host);
+                hosts.Add(EncodeHostEntry(sb, primaryCsBuilder.Port));
         }
 
         if (hosts.Count > 0)
@@ -191,5 +192,31 @@ public static class PostgreSqlMultiHost
                 + "多主机合并只保留 Host 条目（端口经 host:port 内嵌），凭据/库名差异无法表达且会被静默丢弃"
                 + "（故障转移后必然连接失败或连错库）。请为节点配置相同账号与库，或使用 AddPalNpgsqlDataSourceMultiHost 自定义完整连接串。");
         }
+    }
+
+    /// <summary>
+    /// ITM-132 修复（端口编码纯函数）：将副本/备机 Host 条目编码为 host:port。
+    /// <para>
+    /// Npgsql 的共享 Port 只对<b>未内嵌端口</b>的主机生效：当主库 Port 非 5432 时，
+    /// 未编码的副本/备机 Host 会错误继承主库 Port（读流量/故障转移落到错误实例）。
+    /// 因此 <paramref name="primaryPort"/> != 5432 时必须对全部 Host 显式编码（含显式 5432）；
+    /// <paramref name="primaryPort"/> == 5432 时仅对非 5432 端口的 Host 编码
+    /// （未编码 Host 继承 5432 语义正确）。
+    /// </para>
+    /// </summary>
+    /// <param name="hostBuilder">副本/备机连接串（读取其 Host/Port）。</param>
+    /// <param name="primaryPort">主库连接串 Port（决定是否强制全部显式编码）。</param>
+    /// <returns>可直接拼接进多主机 Host 列表的条目（如 <c>pg2:5433</c>、<c>pg2:5432</c> 或 <c>pg2</c>）。</returns>
+    internal static string EncodeHostEntry(NpgsqlConnectionStringBuilder hostBuilder, int primaryPort)
+    {
+        ArgumentNullException.ThrowIfNull(hostBuilder);
+
+        var host = hostBuilder.Host;
+        if (string.IsNullOrWhiteSpace(host))
+            throw new ArgumentException("多主机合并的每个节点都必须显式指定 Host。", nameof(hostBuilder));
+
+        return primaryPort != 5432 || hostBuilder.Port != 5432
+            ? $"{host}:{hostBuilder.Port}"
+            : host;
     }
 }

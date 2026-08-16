@@ -269,6 +269,12 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // 原 ContainingDeclarations.Split(' ').Last() 对泛型嵌套类型产出含 "<T>"
                 // 的非法字符（如 "Outer<int>"），与 IdentityGenerator 风格对齐；
                 // 全局命名空间（Namespace == null）用 "_" 仅作 hint 名保底
+                // ITM-168 声明（hint 下划线碰撞·病态命名）：hint 以 "_" 连接嵌套类型名，
+                // 理论上 A_B.C 与 A.B_C 这类含下划线的类型名会产生相同 hint（AddSource
+                // 重复 hint 抛 ArgumentException）。该碰撞仅存在于病态命名（类型名含下划线
+                // 且跨层级组合歧义）；常规命名约定（PascalCase 无下划线）不受影响。若未来
+                // 需要容纳此类命名，可改用转义（如 "__" 表示字面下划线）或改 hint 为类型
+                // 元数据全名哈希。
                 var hint = info.ContainingDeclarations.Length > 0
                     ? $"{info.Namespace ?? "_"}.{string.Join("_", info.ContainingNames)}_{info.TypeName}.g.cs"
                     : $"{info.Namespace ?? "_"}.{info.TypeName}.g.cs";

@@ -74,7 +74,7 @@ public sealed class UnitOfWorkTests
     }
 
     [Test]
-    public async Task ExecuteInTransactionAsync_RollsBackOnFailure(CancellationToken cancellationToken)
+    public async Task ExecuteInTransactionAsync_WhenWorkThrows_DoesNotCallSaveChanges(CancellationToken cancellationToken)
     {
         var options = CreateOptions();
         await using (var context = new TestDbContext(options))

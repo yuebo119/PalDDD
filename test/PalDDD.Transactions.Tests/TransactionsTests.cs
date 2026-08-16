@@ -1204,26 +1204,19 @@ public sealed class SagaTests
         // 涓嶅簲鎶涘嚭寮傚父
     }
 
-    /// <summary>楠岃瘉 ProcessEventAsync 琛ュ伩鎵€鏈夊凡鎵ц姝ラ锛堣€岄潪浠呭綋鍓嶆楠わ級</summary>
+    /// <summary>验证 ProcessEventAsync 补偿所有已执行步骤（而非仅当前步骤）</summary>
     [Test]
     public async Task ProcessEventAsync_CompensatesAllExecutedSteps()
     {
-        var saga = new OrderFulfillmentSaga();
-        var state = new OrderSagaState();
-
-        // 鎵嬪姩妯℃嫙宸叉墽琛屾楠わ細Validated 鍜?Paid
-        state.ExecutedStepKeys.Add("Initial|OrderPlacedSagaEvent");
-        state.ExecutedStepKeys.Add("Validated|PaymentProcessedEvent");
-        state.CurrentState = "Paid";
-
-        // 绗笁涓楠や細澶辫触锛團ailingStep锛?
+        // 第三个步骤会失败（FailingStep）
         var failingSaga = new FailingSaga();
         var failingState = new OrderSagaState();
+        // 手动模拟已执行步骤：Validated 和 Paid
         failingState.ExecutedStepKeys.Add("Initial|OrderPlacedSagaEvent");
         failingState.ExecutedStepKeys.Add("Validated|PaymentProcessedEvent");
         failingState.CurrentState = "Paid";
 
-        // 楠岃瘉澶辫触鏃朵細琛ュ伩宸叉墽琛屾楠わ紝涓旀姏鍑?AggregateException 鍖呭惈鎵€鏈夐噸璇曞け璐?
+        // 验证失败时会补偿已执行步骤，且抛 AggregateException 包含所有重试失败
         var aggEx = await Assert.That(async () =>
         {
             await failingSaga.ProcessEventAsync(failingState, new OrderPlacedSagaEvent { OrderId = Guid.NewGuid(), Amount = 100 });
@@ -1232,8 +1225,14 @@ public sealed class SagaTests
         {
             await Assert.That(ex).IsTypeOf<InvalidOperationException>();
         }
-    }
 
+        // 补偿覆盖全部已执行步骤 + 失败步骤，且按 Backward 策略逆序执行
+        await Assert.That(failingState.CurrentState).IsEqualTo("Compensated_Validate");
+        await Assert.That(failingSaga.CompensationLog).Count().IsEqualTo(3);
+        await Assert.That(failingSaga.CompensationLog[0]).IsEqualTo("FailingStep");
+        await Assert.That(failingSaga.CompensationLog[1]).IsEqualTo("ProcessPayment");
+        await Assert.That(failingSaga.CompensationLog[2]).IsEqualTo("ValidateOrder");
+    }
     [Test]
     public async Task ProcessEventAsync_RecordsSagaCompletedMetric()
     {
@@ -1258,6 +1257,8 @@ public sealed class SagaTests
 
     private sealed class FailingSaga : Saga<OrderSagaState>
     {
+        public List<string> CompensationLog { get; } = [];
+
         public FailingSaga()
         {
             When("Initial", typeof(OrderPlacedSagaEvent), new SagaStep(
@@ -1269,6 +1270,7 @@ public sealed class SagaTests
                 },
                 compensate: (state, ct) =>
                 {
+                    CompensationLog.Add("ValidateOrder");
                     state.CurrentState = "Compensated_Validate";
                     return ValueTask.CompletedTask;
                 }));
@@ -1282,6 +1284,7 @@ public sealed class SagaTests
                 },
                 compensate: (state, ct) =>
                 {
+                    CompensationLog.Add("ProcessPayment");
                     state.CurrentState = "Compensated_Payment";
                     return ValueTask.CompletedTask;
                 }));
@@ -1291,6 +1294,7 @@ public sealed class SagaTests
                 (state, evt, ct) => throw new InvalidOperationException("Step failed"),
                 compensate: (state, ct) =>
                 {
+                    CompensationLog.Add("FailingStep");
                     state.CurrentState = "Compensated_Failing";
                     return ValueTask.CompletedTask;
                 }));

@@ -521,7 +521,7 @@ public sealed class SagaKeyValidationTests { ... }
 
 - 项目引用禁令矩阵（`[Theory]` + InlineData）
 - 源码内容关键字禁令（扫描 `.cs`，过滤注释行）
-- 设计决策守护（如断言 `IRepository.cs` 不存在）
+- 设计决策守护（如 `RepositoryLayer_DoesNotExposeGenericRepositoryAbstraction` 断言 `RepositoryBase.cs` 不存在且 `IUnitOfWork.cs` 不含 `IRepository<`）
 - 配置守护（断言 AOT 属性值）
 - 测试自身质量守护（断言每个 BackgroundService 有对应 *Tests.cs）
 
@@ -793,11 +793,11 @@ bash scripts/verify-conventions.sh
 
 ### 10.6 测试框架规则（TUnit + MTP · 强制）
 
-> **背景**：本框架统一使用 **TUnit 1.58.0**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.2.3**。不使用 VSTest。
+> **背景**：本框架统一使用 **TUnit 1.65.0**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.2.3**。不使用 VSTest。
 
 **硬性规则**（违反导致 `dotnet test` 发现零测试或构建冲突）：
 
-1. **禁止引用 `Microsoft.NET.Test.Sdk`** — VSTest 的入口包，与 TUnit 自带的 MTP 冲突。测试项目只引用 `TUnit`（+ 可选 `TUnit.FsCheck` / `coverlet.collector`）。MTP 运行器 + MSBuild 集成由 TUnit 传递依赖自动引入，无需显式引用。
+1. **禁止引用 `Microsoft.NET.Test.Sdk`** — VSTest 的入口包，与 TUnit 自带的 MTP 冲突。测试项目只引用 `TUnit`（+ 可选 `TUnit.FsCheck`）。覆盖率走 MTP 原生 `--coverage`（见 ci-coverage.sh），不得再引用 coverlet.collector（`--collect` 触发 VSTest 握手 exit 5，已实测弃用）。MTP 运行器 + MSBuild 集成由 TUnit 传递依赖自动引入，无需显式引用。
 2. **`global.json` 必须配 `test.runner=Microsoft.Testing.Platform`** — 这是 .NET 10+ SDK 启用 MTP 原生 `dotnet test` 的官方开关。配好后 `dotnet test` **无需任何额外参数**即可发现并运行测试。本仓库 `global.json` 已配置，勿删除该节点。
 3. **MTP 参数在 `--` 之后** — `dotnet test` 的 `--filter`、`--treenode-filter` 等 MTP 参数需放在 `--` 分隔符后，构建参数在前。
 4. **测试项目属性**（`test/Directory.Build.props` 已条件化设置，勿在单项目重复）：`IsTestProject=true` 时自动启用 `IsTestingPlatformApplication` / `TestingPlatformDotnetTestSupport` / `UseTestingPlatformProtocol`。共享工具库（如 `PalDDD.Testing`，`IsTestProject` 未设）不受影响。
@@ -997,8 +997,8 @@ dotnet test <target> 2>&1 | tail -5 > /tmp/baseline.txt; echo "exit=$?" >> /tmp/
 | 依赖方向 | ArchitectureBoundaryTests 项目引用矩阵 | CI |
 | DDD 命名 | StrategicDddAnalyzer PDDD001-015 | 编译期 |
 | 零警告 | TreatWarningsAsErrors | 编译期 |
-| 测试覆盖 | coverlet ≥80% 行覆盖 | CI |
-| 突变测试 | Stryker ≥50% 突变分数 | CI（PR 时） |
+| 测试覆盖 | MTP 原生 `--coverage`（Cobertura 合并，阈值见 ci-coverage.sh） | CI |
+| 断言强度 | `assertion-strength-check.sh` 棘轮 | CI（PR 时） |
 | 公共 API 快照 | PublicApiSnapshotTests | CI |
 | AI 模板约束 | `.pal/prompts/` 六段结构 | 人工 |
 | AI 编码约束 | Trellis spec 注入 + `scripts/verify-conventions.sh` | 会话 + pre-commit |

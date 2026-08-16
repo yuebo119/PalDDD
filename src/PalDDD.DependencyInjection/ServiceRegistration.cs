@@ -101,6 +101,13 @@ public static class ServiceRegistration
     /// <typeparam name="TCommand">命令类型</typeparam>
     /// <typeparam name="TResponse">响应类型</typeparam>
     /// <typeparam name="THandler">处理器类型</typeparam>
+    /// <remarks>
+    /// ITM-167 声明：命令处理器注册刻意使用 <c>TryAddScoped</c>（而非 <c>TryAddEnumerable</c>）——
+    /// CQRS 命令/查询按请求类型单一处理器（Dispatcher 按具体 THandler 解析），同一请求的第二个
+    /// 不同 THandler 属配置错误；TryAddScoped 保首注册胜出（确定性）。事件处理器
+    /// （<see cref="AddPalEventHandler{TEvent,THandler}"/>）语义不同：同一事件允许多个 Handler，
+    /// 故用 TryAddEnumerable 按 ServiceType+ImplementationType 对去重。
+    /// </remarks>
     public static IServiceCollection AddPalCommandHandler<TCommand, TResponse,
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors
             | DynamicallyAccessedMemberTypes.Interfaces)]
@@ -123,6 +130,11 @@ public static class ServiceRegistration
     /// <typeparam name="TQuery">查询类型</typeparam>
     /// <typeparam name="TResponse">响应类型</typeparam>
     /// <typeparam name="THandler">处理器类型</typeparam>
+    /// <remarks>
+    /// ITM-167 声明：同 <see cref="AddPalCommandHandler{TCommand,TResponse,THandler}"/>——
+    /// 查询处理器按请求类型单一处理器，TryAddScoped 保首注册胜出；多处理器聚合语义
+    /// 请用事件处理器注册（TryAddEnumerable）。
+    /// </remarks>
     public static IServiceCollection AddPalQueryHandler<TQuery, TResponse,
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors
             | DynamicallyAccessedMemberTypes.Interfaces)]

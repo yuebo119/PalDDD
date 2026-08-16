@@ -64,8 +64,11 @@ public sealed class EventLogEfCoreTests
 
         await Assert.That(first.FirstGlobalPosition).IsEqualTo(0);
         await Assert.That(second.FirstGlobalPosition).IsEqualTo(1);
-        await Assert.That(events.Select(e => e.StreamName)).IsEquivalentTo(DefaultStreamNames);
-        await Assert.That(events.Select(e => e.GlobalPosition)).IsEquivalentTo(DefaultPositions);
+        await Assert.That(events).Count().IsEqualTo(2);
+        await Assert.That(events[0].StreamName).IsEqualTo(DefaultStreamNames[0]);
+        await Assert.That(events[1].StreamName).IsEqualTo(DefaultStreamNames[1]);
+        await Assert.That(events[0].GlobalPosition).IsEqualTo(DefaultPositions[0]);
+        await Assert.That(events[1].GlobalPosition).IsEqualTo(DefaultPositions[1]);
     }
 
     [Test]

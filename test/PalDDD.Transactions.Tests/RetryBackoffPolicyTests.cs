@@ -99,6 +99,22 @@ public sealed class RetryBackoffPolicyTests
         await Assert.That(() => new ExponentialBackoffPolicy(exponentCap: invalidCap)).Throws<ArgumentOutOfRangeException>();
     }
 
+    [Test]
+    [Arguments(-1)]
+    [Arguments(-100)]
+    public async Task Exponential_NegativeMaxDelay_Throws(int seconds)
+    {
+        await Assert.That(() => new ExponentialBackoffPolicy(maxDelay: TimeSpan.FromSeconds(seconds)))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task Exponential_ZeroMaxDelay_Allowed()
+    {
+        var policy = new ExponentialBackoffPolicy(maxDelay: TimeSpan.Zero);
+        await Assert.That(policy.ComputeDelay(1)).IsEqualTo(TimeSpan.Zero);
+    }
+
     // ── FixedBackoffPolicy ────────────────────────────────────
 
     [Test]

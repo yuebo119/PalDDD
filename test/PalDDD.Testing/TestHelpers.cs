@@ -190,6 +190,7 @@ public sealed class FakeTimeProvider : TimeProvider
 
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
+        // P3 声明：period 有意忽略——FakeTimer 仅支持一次性到期语义（Saga/Outbox 测试场景不需要周期计时器）。
         var timer = new FakeTimer(callback, state, _now + dueTime);
         _timers.Add(timer);
         return timer;

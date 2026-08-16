@@ -174,9 +174,10 @@ InMemory 实现覆盖全部抽象接口，单元测试和原型开发无需外�
 
 ```csharp
 using PalDDD.Core;
+using ByteAether.Ulid;   // 框架源码内部别名 PalUlid = ByteAether.Ulid.Ulid，示例统一用真实类型
 
 // 强类型 ID — 编译期生成，零反射
-[GenerateId(typeof(PalUlid))]
+[GenerateId(typeof(Ulid))]
 public readonly partial record struct OrderId;
 
 // 聚合根 — 单链表事件存储，线程安全
@@ -198,14 +199,14 @@ public sealed class Order : AggregateRoot<OrderId>
 
 // 领域事件 — sealed record + [GenerateMessage] 源生成注册
 [GenerateMessage(Name = "ordering.order-created.v1")]
-public sealed record OrderCreated(PalUlid OrderId, string Name, decimal Amount)
+public sealed record OrderCreated(Ulid OrderId, string Name, decimal Amount)
     : DomainEvent, IDomainEvent
 {
     static string IDomainEvent.EventName => "ordering.order-created.v1";
 }
 
 [GenerateMessage(Name = "ordering.order-cancelled.v1")]
-public sealed record OrderCancelled(PalUlid OrderId, string Reason)
+public sealed record OrderCancelled(Ulid OrderId, string Reason)
     : DomainEvent, IDomainEvent
 {
     static string IDomainEvent.EventName => "ordering.order-cancelled.v1";
@@ -261,9 +262,11 @@ var orderId = await dispatcher.SendAsync(new CreateOrder("Alice", 99.9m));
 Pal.DDD 用源生成器在编译期生成 `From` / `New` / `Parse` / `JsonConverter` / `TypeConverter`——运行时零反射。
 
 ```csharp
+using ByteAether.Ulid;   // 框架源码内部别名 PalUlid = ByteAether.Ulid.Ulid，示例统一用真实类型
+
 // ✅ [GenerateId] 触发 IdentityGenerator 源生成器
 // 编译期生成 ISpanParsable + JsonConverter + TypeConverter
-[GenerateId(typeof(PalUlid))]      // Ulid（推荐，全序性）
+[GenerateId(typeof(Ulid))]         // Ulid（推荐，全序性）
 public readonly partial record struct OrderId;
 
 [GenerateId(typeof(Guid))]          // Guid
@@ -275,6 +278,7 @@ public readonly partial record struct OrderNumber;
 // 使用：编译期生成的方法直接可用
 var id = OrderId.New();              // Ulid/Guid 自动生成
 var parsed = OrderId.Parse("01HXY...", null);
+var someUlid = Ulid.New();           // 与 [GenerateId(typeof(Ulid))] 对应的底层类型
 var fromDb = OrderId.From(someUlid);
 ```
 
@@ -341,17 +345,27 @@ Saga 用显式状态/事件转换注册 + FrozenDictionary 查找——不依赖
 ```csharp
 public sealed class OrderSaga : Saga<OrderSagaState>
 {
-    protected override void Configure(SagaStep<OrderSagaState> steps)
+    public OrderSaga()
     {
-        steps.On<PaymentCompleted>(s => s.State with { Paid = true })
-             .On<InventoryReserved>((s, e) => s with { Reserved = true })
-             .WithCompensation<ReleaseInventory>()     // Backward 补偿
-             .WithTimeout(TimeSpan.FromMinutes(30));    // 超时自动触发补偿
+        // 构造器内 When 注册状态转换（真实 API；无 Configure 方法）
+        When<PaymentCompleted>("Initial", new SagaStep(
+            "CompletePayment",
+            execute: (state, evt, ct) =>
+            {
+                state.CurrentState = "Paid";
+                return ValueTask.FromResult(state);
+            },
+            compensate: (state, ct) =>
+            {
+                state.CurrentState = "Compensated_CompletePayment";
+                return ValueTask.CompletedTask;
+            },
+            timeout: TimeSpan.FromMinutes(30)));    // 超时自动触发补偿
     }
 }
 
-// DI 注册
-services.AddPalSaga<OrderSaga, OrderSagaState>();
+// DI 注册（泛型顺序：TState, TOrchestrator）
+services.AddPalSaga<OrderSagaState, OrderSaga>();
 // → SagaProcessor 后台轮询 + SagaTimeoutDetector 超时扫描
 ```
 
@@ -360,12 +374,23 @@ services.AddPalSaga<OrderSaga, OrderSagaState>();
 核心路径的零分配不是注释声称——用 `GC.GetAllocatedBytesForCurrentThread` 运行时断言验证。
 
 ```csharp
+using PalDDD.Core;
+
 // ✅ DomainEvent foreach — ref struct 枚举器，零堆分配
 foreach (var e in aggregate.Root.GetEvents())  // DomainEventEnumerable: ref struct
     await handler(e, ct);
 
 // ✅ FrozenDictionary 查找 — O(1) 零反射
-var status = OrderStatus.FromValue("pending");  // 编译期生成的 FrozenDictionary
+[GenerateEnum]
+public sealed partial class OrderStatus : SmartEnum<OrderStatus, string>
+{
+    public static readonly OrderStatus Pending = new("pending", "待处理");
+    public static readonly OrderStatus Shipped = new("shipped", "已发货");
+    public static readonly OrderStatus Delivered = new("delivered", "已送达");
+    private OrderStatus(string value, string displayName) : base(value, displayName) { }
+}
+
+var status = OrderStatus.FromValue("pending");  // TValue=string，FromValue 实参为 string
 
 // AllocationContractTests 验证（非声称）：
 // RaiseEvent < 130B/iter | foreach < 100B | FrozenDictionary < 100B
@@ -380,7 +405,7 @@ var services = new ServiceCollection();
 services.AddPalCoreStack();
 services.AddPalOutbox();     // InMemoryOutboxStore
 services.AddPalInbox();      // InMemoryInboxStore
-services.AddPalSaga<OrderSaga, OrderSagaState>();  // InMemorySagaStateStore
+services.AddPalSaga<OrderSagaState, OrderSaga>();  // InMemorySagaStateStore
 
 // 直接测：命令分发 → 事件 → Outbox → Saga 补偿，全程无外部依赖
 var dispatcher = services.BuildServiceProvider().GetRequiredService<Dispatcher>();
@@ -411,10 +436,12 @@ public sealed class OrderingSaga : Saga<OrderingState> { ... }  // PDDD010
 PalORM 的 `[TenantAware]` 在编译期生成租户列过滤逻辑——SQL 自动带 `WHERE tenant_id = @tenantId`，不需要运行时拦截器。
 
 ```csharp
+using ByteAether.Ulid;
+
 // Row DTO 标注 [TenantAware] — 源生成器自动生成租户过滤 SQL
 public sealed class OrderRow
 {
-    [Column("id")] public PalUlid Id { get; init; }
+    [Column("id")] public Ulid Id { get; init; }
     [Column("customer_name")] public string CustomerName { get; init; }
     [TenantAware]  // ← 编译期注入：所有 SQL 自动加 tenant_id 条件
     [Column("tenant_id")] public string TenantId { get; init; }
@@ -430,14 +457,16 @@ var orders = await outboxStore.GetPendingMessagesAsync(...);
 大多数 DDD 框架不内置消息版本演化。PalDDD 的 `[GenerateMessage]` + Upcaster 管线让版本迁移成为编译期检查 + 运行时自动转换。
 
 ```csharp
+using ByteAether.Ulid;
+
 // V1 消息（旧版消费者仍在用）
 [GenerateMessage(Name = "ordering.order-created.v1")]
-public sealed record OrderCreatedV1(PalUlid OrderId, string Name, decimal Amount)
+public sealed record OrderCreatedV1(Ulid OrderId, string Name, decimal Amount)
     : DomainEvent, IDomainEvent;
 
 // V2 消息（新增字段 ShippingAddress）
 [GenerateMessage(Name = "ordering.order-created.v2")]
-public sealed record OrderCreatedV2(PalUlid OrderId, string Name, decimal Amount, string ShippingAddress)
+public sealed record OrderCreatedV2(Ulid OrderId, string Name, decimal Amount, string ShippingAddress)
     : DomainEvent, IDomainEvent;
 
 // 注册 Upcaster — V1 自动升级为 V2，消费者只处理 V2
@@ -477,14 +506,18 @@ var position = await eventLog.ReadAllAsync(checkpoint, ct);
 Projection 从 EventLog 消费事件、更新读模型，断点持久化保证重启后从中断处继续——独立于存储适配器。
 
 ```csharp
-// 注册 Projection（Checkpoint 断点存储 + 后台处理器）
-services.AddPalOrmPostgreSql(connectionString);
-services.AddPalProjection<OrderProjection>();
+using PalDDD.Projections;
 
-// Projection 实现 — 消费事件、更新读模型
-public sealed class OrderProjection : IProjection<OrderCreated>
+// 注册 Projection 处理器（IProjectionCheckpointStore 由持久化适配器注册）
+services.AddPalOrmPostgreSql(connectionString);
+services.AddScoped<IProjectionHandler<OrderCreated>, OrderProjection>();
+
+// Projection 实现 — 消费事件、更新读模型（真实 API：IProjectionHandler<T>.ProjectAsync）
+public sealed class OrderProjection : IProjectionHandler<OrderCreated>
 {
-    public ValueTask HandleAsync(OrderCreated evt, CancellationToken ct)
+    public string ProjectionName => "ordering.order-view";
+
+    public ValueTask ProjectAsync(OrderCreated evt, ProjectionContext context, CancellationToken ct = default)
     {
         // 更新读模型（物化视图 / 缓存 / 搜索索引）
         return _readStore.UpsertAsync(evt.OrderId, new OrderView(evt.Name, evt.Amount), ct);
@@ -498,7 +531,7 @@ await projectionRebuilder.RebuildAsync(ct);
 
 ### 13. 可观测性：内建 OpenTelemetry，零配置
 
-PalDDD 在所有关键路径内置了 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（24 个计数器）——不需要手写埋点。
+PalDDD 在所有关键路径内置了 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（27 个计数器）——不需要手写埋点。
 
 ```csharp
 // 框架自动埋点：
@@ -548,7 +581,7 @@ services.AddPalOutbox();  // MediatR 没有的能力
 | DomainEvent | 不可变 sealed record，静态 `EventName` 契约，`[GenerateMessage]` 源生成注册 |
 | ValueObject / SmartEnum | 强类型 ID（Ulid 推荐），FrozenDictionary O(1) 查找 |
 | ISpecification | ExpressionVisitor 参数替换组合 And/Or/Not，与 EF Core LINQ 完全兼容 |
-| 诊断 | 内建 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（24 个计数器） |
+| 诊断 | 内建 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（27 个计数器） |
 
 ### CQRS
 | 组件 | 实现策略 |
@@ -587,9 +620,10 @@ services.AddPalOutbox();  // MediatR 没有的能力
 | 层 | 状态 | 说明 |
 |----|:--:|------|
 | PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` 全局继承 |
-| PalDDD.CQRS · EventLog · Messaging · Transactions · Projections · DI | ✅ | 同上 |
+| PalDDD.CQRS · EventLog · Messaging · Projections · DI | ✅ | 同上 |
 | **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **真 AOT** | 源生成 RowFactory/CommandFactory，`PublishAot=true` 验证通过（[PalOrmSample](samples/PalDDD.PalOrmSample/)） |
 | PalDDD.Dapper + PostgreSql / MySql / Sqlite | ⚠️ 假象 | Dapper.AOT `[module:DapperAot]` 实际禁用，靠 `<NoWarn>IL3058</NoWarn>` 声明兼容（详见 [PalORM 适配层文档](docs/palorm-adapter.md)） |
+| PalDDD.Transactions | ❌ | Saga 反射特例（`IsAotCompatible=false`，见 csproj） |
 | ~~PalDDD.EntityFrameworkCore~~ | ❌ | ~~已废弃~~ |
 | PalDDD.Messaging.Kafka · RabbitMQ | ❌ | Confluent.Kafka / RabbitMQ.Client 限制 |
 | PalDDD.Hosting.AspNetCore | ❌ | FrameworkReference 限制 |
@@ -621,24 +655,25 @@ dotnet run --configuration Release --project bench/PalDDD.Benchmarks -- --smoke
 ## 项目结构
 
 ```
-src/                         36 源项目 · Clean Architecture
+src/                         36 源项目 · Clean Architecture（Folder 与 PalDDD.slnx 一致）
 ├── Domain/                  Core · SourceGen · Analyzers · Analyzers.CodeFixes
-├── App-Abstractions/        Serialization · Serialization.Evolution · Messaging · Compression · Compression.Native
-├── App-Core/                CQRS · EventLog · EventLog.EFCore · Idempotency · Idempotency.EFCore · Projections · Projections.EFCore · Projections.EventLog · Transactions · Transactions.EFCore
+├── App-Abstractions/        Serialization · Messaging · Compression · Compression.Native
+├── App-Core/                CQRS · EventLog · Idempotency · Projections · Transactions
 ├── Infra-PalORM/            PalORM（真 AOT）· PalORM.Sqlite · PalORM.PostgreSql · PalORM.MySql  ← 推荐
-├── Infra-Dapper/            Dapper · PostgreSql · MySql · Sqlite（⚠️ 逐步弃用）
-├── Infra-Repository/        Repository.EFCore
-├── Infra-Messaging/         Kafka · RabbitMQ
-├── Hosting/                 DependencyInjection · AspNetCore
-└── Metapackages/            Base · Extension（聚合元包，仅 PackageReference，无源码）
+├── Infra-Dapper/            Dapper · Dapper.PostgreSql · Dapper.MySql · Dapper.Sqlite（⚠️ 逐步弃用）
+├── Infra-EFCore/            EventLog.EFCore · Idempotency.EFCore · Projections.EFCore · Repository.EFCore · Transactions.EFCore
+├── Infra-Serialization/     Projections.EventLog · Serialization.Evolution · Serialization.MemoryPack
+├── Infra-Messaging/         Messaging.Kafka · Messaging.RabbitMQ
+├── Hosting/                 DependencyInjection · Hosting.AspNetCore
+└── Metapackages/            Base · Extension · Prompts（Prompts 非包，IsPackable=false）
 
-test/                        16 测试项目（TUnit）· 955 测试
+test/                        16 测试项目（TUnit）· 972 测试
 bench/                       BenchmarkDotNet 性能基准
 samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi · AotSample
 docs/                        架构 · 使用指南 · 教程 · ADR
 ```
 
-依赖方向：Domain → App → Infra → Hosting。每个 src/ 项目对应一个独立 NuGet 包。
+依赖方向：Domain → App → Infra → Hosting。每个 src/ 项目对应一个独立 NuGet 包（Prompts 除外，`IsPackable=false`）。
 
 ```mermaid
 flowchart TB
@@ -673,7 +708,7 @@ flowchart TB
 | [工程规范](docs/conventions.md) | 命名、文件组织、DI、AOT |
 | [AOT 指南](docs/aot.md) | Native AOT 规则与检查清单 |
 | [性能记录](docs/performance.md) | 基准测试数据 |
-| [架构决策](docs/decisions/) | 16 份 ADR |
+| [架构决策](docs/decisions/) | 17 份 ADR |
 
 ---
 
@@ -701,7 +736,7 @@ MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Servi
 不支持 .NET 8/9/10（单目标 net11.0）。Saga 的 ChildSaga 和 DynamicStep 依赖 `MakeGenericType`，在 AOT 发布时不可用（标注了 `[RequiresDynamicCode]`）。不含内置的 EventStore 快照机制——需要快照策略的项目需要自行实现。
 
 **生产环境有谁在用？**
-Pal.DDD 当前版本 v1.1.0，已发布到 NuGet.org。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 869 用例。欢迎在非生产环境中试用并反馈。
+Pal.DDD 当前版本 v1.1.0 未发布（Unreleased；仓库 tag 仅 v1.0.0-preview.1）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 972 用例。欢迎在非生产环境中试用并反馈。
 
 ---
 

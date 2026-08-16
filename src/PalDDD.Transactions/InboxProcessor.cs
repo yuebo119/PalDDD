@@ -73,6 +73,10 @@ public sealed class InboxProcessor
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerName);
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
         ArgumentNullException.ThrowIfNull(handler);
+        // ITM-167 修复：补 message null 守卫——引用类型 TMessage 传 null 时 handler
+        // 内部才解引用（或经序列化路径），失败点远离入口且与 value type TMessage 的
+        // 行为不对称；入口显式守卫（值类型 TMessage 装箱检查，恒非 null 零开销）。
+        ArgumentNullException.ThrowIfNull(message);
 
         var options = _options.CurrentValue;
         var now = _timeProvider.GetUtcNow();

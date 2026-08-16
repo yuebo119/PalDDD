@@ -35,11 +35,18 @@ public static class DapperConfiguration
     /// <returns>数据库连接</returns>
     /// <exception cref="ArgumentOutOfRangeException">未注册的数据库类型</exception>
     public static DbConnection Create(DapperDbType type, string connectionString)
-        => type switch
+    {
+        // ITM-165 修复：补连接串守卫——空/空白连接串在 SqliteConnection/NpgsqlConnection/
+        // MySqlConnection 构造时各自抛 provider 专属异常（或延迟到 Open），失败点与异常类型
+        // 三方不一致；入口统一 ArgumentException 对齐框架其余工厂。
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+
+        return type switch
         {
             DapperDbType.Sqlite => new Microsoft.Data.Sqlite.SqliteConnection(connectionString),
             DapperDbType.PostgreSql => new Npgsql.NpgsqlConnection(connectionString),
             DapperDbType.MySql => new MySqlConnector.MySqlConnection(connectionString),
             _ => throw new ArgumentOutOfRangeException(nameof(type)),
         };
+    }
 }

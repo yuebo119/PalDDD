@@ -1,18 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    PalDDD.PalOrmSample — AOT 真实发布验证
+    PalDDD.PalOrmSample — PalORM Sqlite AOT 发布验证
     ════════════════════════════════════════════════════════════
-    目标：用 dotnet publish -r win-x64 /p:PublishAot=true 验证 PalDDD.PalORM 全链路 AOT 兼容。
+    目标：用 dotnet publish -r win-x64 /p:PublishAot=true 验证 PalDDD.PalORM Sqlite
+          适配器的 Outbox + UnitOfWork 路径 AOT 兼容。
     通过：编译期 0 警告 + 运行时 PASSED 输出。
-    失败：任一 IL3058/IL2026 警告（TreatWarningsAsErrors）直接 error。
+    失败：任一 IL2026 警告（TreatWarningsAsErrors）直接 error；
+          IL3058 引用兼容警告已在本项目 NoWarn 做项目级抑制（ITM-161），不参与失败判定。
 
-    覆盖：
-    - 7 Store 端到端 CRUD（Outbox/Inbox/Saga/EventLog/Projection/Idempotency + UnitOfWork）
-    - 多租户隔离（如启用 [TenantAware]）
-    - 事务回滚验证
-    - Saga JSON 全状态快照往返（STJ source-gen）
-    - PalORM 跨程序集 registry merge（Row DTO 注册）
+    实际覆盖（与 Program.cs 保持一致，不夸大）：
+    - Outbox CRUD（AddMessage / GetPendingMessagesAsync / MarkProcessed）
+    - SqlitePalOrmUnitOfWork commit / rollback（SQLite 实库）
+    未覆盖：Inbox / Saga / EventLog / Projection / Idempotency 等其余 Store。
   -->
 
   <PropertyGroup>
@@ -20,7 +20,10 @@
     <RootNamespace>PalDDD.PalOrmSample</RootNamespace>
     <AssemblyName>PalDDD.PalOrmSample</AssemblyName>
     <IsPackable>false</IsPackable>
-    <PublishAot>true</PublishAot>
+    <!-- ITM-157：不在 csproj 固定 PublishAot=true——那会让 dotnet build 直接触发
+         IL3058 引用兼容检查（Microsoft.Data.Sqlite/Transactions/SQLitePCLRaw 非全 AOT），
+         导致 build 0/0 无法达成。AOT 验证按注释使用
+         dotnet publish -r win-x64 /p:PublishAot=true 进行。 -->
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
@@ -29,7 +32,9 @@
     <OptimizationPreference>Speed</OptimizationPreference>
     <StackTraceLineNumberSupport>true</StackTraceLineNumberSupport>
     <!-- Sample 是诊断入口（非生产代码）：允许 Console.WriteLine 硬编码字符串 -->
-    <NoWarn>$(NoWarn);CA1303</NoWarn>
+    <!-- ITM-161：全局 IL3058 已移除；本示例 build 阶段 IsAotCompatible=true 触发引用兼容检查，
+         被引用的 Microsoft.Data.Sqlite/Transactions/SQLitePCLRaw 非全 AOT，保留项目级抑制（AOT 验证走 publish） -->
+    <NoWarn>$(NoWarn);CA1303;IL3058</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

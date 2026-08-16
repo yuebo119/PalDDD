@@ -53,7 +53,8 @@ public static class SqliteServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        if (IsMemoryDataSource(new SqliteConnectionStringBuilder(connectionString).DataSource))
+        var isMemory = IsMemoryDataSource(new SqliteConnectionStringBuilder(connectionString).DataSource);
+        if (isMemory)
         {
             // ⚠️ 线程安全契约（八轮评审 P3 补强声明，不加 SemaphoreSlim 串行化——包装连接改动面大）：
             // :memory: 必须 Singleton（连接关闭数据即销毁），但 SqliteConnection 非线程安全——
@@ -61,7 +62,7 @@ public static class SqliteServiceCollectionExtensions
             // 交叉读写损坏）。契约：调用方必须串行访问（单线程应用 / 逐个 await 的测试）；
             // 需要并发时改用文件模式（Scoped 连接隔离）或 AddPalSqliteInMemory(sharedCache: true)。
             var connection = new SqliteConnection(connectionString);
-            ApplyOptimization(connection, optimize);
+            ApplyOptimization(connection, optimize, isMemory);
             services.AddSingleton(connection);
             services.AddSingleton<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<SqliteConnection>());
         }
@@ -71,7 +72,7 @@ public static class SqliteServiceCollectionExtensions
             services.AddScoped<SqliteConnection>(_ =>
             {
                 var c = new SqliteConnection(connectionString);
-                ApplyOptimization(c, optimize);
+                ApplyOptimization(c, optimize, isMemory);
                 return c;
             });
             services.AddScoped<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<SqliteConnection>());
@@ -103,11 +104,19 @@ public static class SqliteServiceCollectionExtensions
         return AddPalSqlite(services, cs, SqliteOptimizeLevel.InMemory);
     }
 
-    private static void ApplyOptimization(SqliteConnection connection, SqliteOptimizeLevel level)
+    private static void ApplyOptimization(SqliteConnection connection, SqliteOptimizeLevel level, bool isMemory)
     {
         connection.Open();
 
-        var sql = SqlitePerformanceOptimizer.GetPragma(level);
+        // ITM-135 修复：内存数据源跳过 WAL 确认并降级为 InMemory 级 pragma——
+        // :memory: 上 PRAGMA journal_mode=WAL 恒返回 "memory"（无法切换 WAL），
+        // 默认 Production 的 WAL 确认会在注册启动时误抛 InvalidOperationException。
+        // None 级别保持原语义（明确要求不优化时不注入任何 pragma）。
+        var effectiveLevel = isMemory && level is (SqliteOptimizeLevel.Production or SqliteOptimizeLevel.Light)
+            ? SqliteOptimizeLevel.InMemory
+            : level;
+
+        var sql = SqlitePerformanceOptimizer.GetPragma(effectiveLevel);
         if (sql.Length == 0) return;
 
         // WAL 模式需单独执行确认切换成功，其余 PRAGMA 批量执行
@@ -116,7 +125,7 @@ public static class SqliteServiceCollectionExtensions
         // 与 Optimizer.ApplyAsync 同款改造，双消费方单一来源）
         // P3 修复（二十一轮）：WAL 确认声明落地——读 PRAGMA 返回值比对 "wal"，
         // 失配抛异常（与 Optimizer.ApplyAsync 同款语义，同步路径版本）。
-        if (level is SqliteOptimizeLevel.Production or SqliteOptimizeLevel.Light)
+        if (!isMemory && effectiveLevel is (SqliteOptimizeLevel.Production or SqliteOptimizeLevel.Light))
         {
             using var walCmd = connection.CreateCommand();
             walCmd.CommandText = SqlitePerformanceOptimizer.WalPragma;

@@ -7,7 +7,6 @@ using PalUlid = ByteAether.Ulid.Ulid;
 
 public sealed class EventLogTests
 {
-    private static readonly long[] DefaultPositions = [0, 1];
     private static readonly string[] OrderEventNames = ["orders.order-submitted.v1", "orders.order-paid.v1"];
     private static readonly string[] DefaultStreamNames = ["ordering-order-1", "billing-payment-1"];
     [Test]
@@ -117,8 +116,11 @@ public sealed class EventLogTests
 
         var events = await ReadAllAsync(log.ReadStreamAsync("ordering-order-1", cancellationToken: cancellationToken));
 
-        await Assert.That(events.Select(e => e.StreamVersion)).IsEquivalentTo(DefaultPositions);
-        await Assert.That(events.Select(e => e.EventName)).IsEquivalentTo(OrderEventNames);
+        await Assert.That(events).Count().IsEqualTo(2);
+        await Assert.That(events[0].StreamVersion).IsEqualTo(0);
+        await Assert.That(events[1].StreamVersion).IsEqualTo(1);
+        await Assert.That(events[0].EventName).IsEqualTo(OrderEventNames[0]);
+        await Assert.That(events[1].EventName).IsEqualTo(OrderEventNames[1]);
     }
 
     [Test]
@@ -167,8 +169,11 @@ public sealed class EventLogTests
 
         var events = await ReadAllAsync(log.ReadAllAsync(cancellationToken: cancellationToken));
 
-        await Assert.That(events.Select(e => e.GlobalPosition)).IsEquivalentTo(DefaultPositions);
-        await Assert.That(events.Select(e => e.StreamName)).IsEquivalentTo(DefaultStreamNames);
+        await Assert.That(events).Count().IsEqualTo(2);
+        await Assert.That(events[0].GlobalPosition).IsEqualTo(0);
+        await Assert.That(events[1].GlobalPosition).IsEqualTo(1);
+        await Assert.That(events[0].StreamName).IsEqualTo(DefaultStreamNames[0]);
+        await Assert.That(events[1].StreamName).IsEqualTo(DefaultStreamNames[1]);
     }
 
     [Test]

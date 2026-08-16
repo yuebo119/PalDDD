@@ -21,10 +21,6 @@
     <PackageReference Include="TUnit" />
     <PackageReference Include="Testcontainers.Kafka" />
     <PackageReference Include="Testcontainers.RabbitMq" />
-    <PackageReference Include="coverlet.collector">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
   </ItemGroup>
 
 </Project>

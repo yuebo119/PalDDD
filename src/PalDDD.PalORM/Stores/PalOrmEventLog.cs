@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using ByteAether.Ulid;
 using PalORM;
+using PalDDD.Core.Diagnostics;
 using PalDDD.EventLog;
 using PalDDD.PalORM.Models;
 
@@ -149,6 +150,8 @@ public class PalOrmEventLog<TProvider> : IEventLog
         string streamName, long fromVersion = 0, int maxCount = int.MaxValue,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        // ITM-163 修复：补 streamName 空白守卫（对齐 EventLogDbContext/InMemoryEventLog 同款）
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamName);
         // P3 修复（八轮评审）：补参数守卫，严格对齐 EFCore 版（EventLogDbContext ThrowIfLessThan(maxCount, 1)）
         // P3 修复（二十一轮）：补 fromVersion 非负守卫（对齐 EFCore 版 ThrowIfLessThan(fromVersion, 0)）
         ArgumentOutOfRangeException.ThrowIfLessThan(fromVersion, 0);
@@ -164,11 +167,26 @@ public class PalOrmEventLog<TProvider> : IEventLog
             "SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE stream_name = {0} AND stream_version >= {1} ORDER BY stream_version"
                 + (maxCount != int.MaxValue ? $" LIMIT {maxCount}" : string.Empty),
             streamName, fromVersion);
-        // 使用流式 QueryAsyncEnumerable —— 恒定内存读取（重要：超长事件流场景）
-        await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(readStreamSql, cancellationToken))
+        using var activity = PalActivitySource.StartEventLogReadStream(streamName, fromVersion);
+        var read = 0;
+        // ITM-167 修复：补 metrics（对齐 EventLogDbContext/InMemoryEventLog）并置入 finally——
+        // 迭代器被消费方提前 Dispose（await foreach 中 break/抛异常）时尾部语句不执行，
+        // finally 在任何退出路径都会记录已产出计数（对齐 InMemoryEventLog 二十一轮）；
+        // 计数在 yield 前（对齐 InMemoryEventLog ITM-120）。
+        try
         {
-            if (--maxCount < 0) yield break; // P3 修复：先减后判（maxCount=0 时零产出，对齐 EFCore ThrowIfLessThan(1)）
-            yield return ToRecorded(row, streamName);
+            // 使用流式 QueryAsyncEnumerable —— 恒定内存读取（重要：超长事件流场景）
+            await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(readStreamSql, cancellationToken))
+            {
+                if (--maxCount < 0) yield break; // P3 修复：先减后判（maxCount=0 时零产出，对齐 EFCore ThrowIfLessThan(1)）
+                checked { read++; }
+                yield return ToRecorded(row, streamName);
+            }
+        }
+        finally
+        {
+            activity?.SetTag("pal.eventlog.read_count", read);
+            PalMetrics.EventLogRead.Add(read);
         }
     }
 
@@ -187,10 +205,23 @@ public class PalOrmEventLog<TProvider> : IEventLog
             "SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE global_position >= {0} ORDER BY global_position"
                 + (maxCount != int.MaxValue ? $" LIMIT {maxCount}" : string.Empty),
             fromPosition);
-        await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(readAllSql, cancellationToken))
+        using var activity = PalActivitySource.StartEventLogReadAll(fromPosition);
+        var read = 0;
+        // ITM-167 修复：补 metrics 并置入 finally + yield 前计数（同 ReadStreamAsync，
+        // 对齐 EventLogDbContext/InMemoryEventLog）。
+        try
         {
-            if (--maxCount < 0) yield break; // P3 修复（八轮评审）：先减后判——对齐 ReadStreamAsync 结构
-            yield return ToRecorded(row, row.StreamName);
+            await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(readAllSql, cancellationToken))
+            {
+                if (--maxCount < 0) yield break; // P3 修复（八轮评审）：先减后判——对齐 ReadStreamAsync 结构
+                checked { read++; }
+                yield return ToRecorded(row, row.StreamName);
+            }
+        }
+        finally
+        {
+            activity?.SetTag("pal.eventlog.read_count", read);
+            PalMetrics.EventLogRead.Add(read);
         }
     }
 
@@ -224,6 +255,13 @@ public class PalOrmEventLog<TProvider> : IEventLog
     /// 判定 DbException 是否为唯一约束冲突（ITM-075：跨 provider 鸭子类型，与
     /// PalOrmSagaStateStore.IsUniqueConstraintViolation / DapperEventLog / EFCore 侧同型）。
     /// </summary>
+    /// <remarks>
+    /// ITM-167 裁剪降级声明：本方法通过反射鸭子类型读取 provider 异常属性
+    /// （PostgresException.SqlState / MySqlException.Number / SqlException.Number）。在裁剪
+    /// （trimmed/AOT）发布下，GetProperty 可能因元数据被裁而返回 null——判定安全降级为 false，
+    /// 原始 provider 异常原样上抛（并发冲突仅失去统一 EventStreamConcurrencyException 翻译，
+    /// 不会崩溃、不会误判；调用方重试契约退化为检查原始异常）。
+    /// </remarks>
     [UnconditionalSuppressMessage("Trimming", "IL2075:This",
         Justification = "Provider 异常鸭子类型判定。裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级，不崩溃）。")]
     private static bool IsUniqueConstraintViolation(DbException exception)

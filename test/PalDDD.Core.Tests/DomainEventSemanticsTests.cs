@@ -116,11 +116,17 @@ public sealed class DomainEventSemanticsTests
         await Assert.That(evt.EventId).IsNotEqualTo(default(PalUlid));
         await Assert.That(evt.OccurredOn <= DateTimeOffset.UtcNow).IsTrue();
 
-        // 验证 init 语义 — 无法通过反射赋值（除非绕过编译器）
+        // 验证 init 语义 — init setter 在反射中 CanWrite=true（setter 存在但仅限 init 期），
+        // 且编译后元数据中保留 setter（GetSetMethod 非 null）
         var eventIdProp = typeof(DomainEvent).GetProperty(nameof(DomainEvent.EventId));
         await Assert.That(eventIdProp).IsNotNull();
-        // init setter 存在但外部不可赋值
-        await Assert.That(eventIdProp!.GetSetMethod(nonPublic: true) is not null).IsTrue();
+        await Assert.That(eventIdProp!.CanWrite).IsTrue();
+        await Assert.That(eventIdProp.GetSetMethod(nonPublic: true) is not null).IsTrue();
+
+        var occurredOnProp = typeof(DomainEvent).GetProperty(nameof(DomainEvent.OccurredOn));
+        await Assert.That(occurredOnProp).IsNotNull();
+        await Assert.That(occurredOnProp!.CanWrite).IsTrue();
+        await Assert.That(occurredOnProp.GetSetMethod(nonPublic: true) is not null).IsTrue();
     }
 
     [Test]

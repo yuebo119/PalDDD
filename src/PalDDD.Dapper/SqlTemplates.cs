@@ -153,7 +153,11 @@ public static class SqlTemplates
     /// </para>
     /// </summary>
     public const string InboxStartProcessing =
-        "UPDATE inbox_messages SET status='Processing',attempts=attempts+1,processing_started_at=@now WHERE id=@id AND (status='Pending' OR (status='Processing' AND processing_started_at<@cutoff) OR status='Failed')";
+        // ITM-168 修复：补 last_error=NULL——抢占超时/失败记录重入 Processing 时应清除
+        // 旧失败原因（对齐 InMemoryInboxStore successor 重置 LastError、EFCore 版
+        // LastError=null、PalORM 版 last_error = NULL 三姊妹语义）；Dapper 原 SQL 未清，
+        // DB 侧重试成功前仍残留上次错误，监控/审计误读。
+        "UPDATE inbox_messages SET status='Processing',attempts=attempts+1,processing_started_at=@now,last_error=NULL WHERE id=@id AND (status='Pending' OR (status='Processing' AND processing_started_at<@cutoff) OR status='Failed')";
 
     /// <summary>标记消息处理成功</summary>
     public const string InboxMarkProcessed =
@@ -237,9 +241,14 @@ public static class SqlTemplates
     public const string SagaLeaseActiveMySql =
         "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status = 0 AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until";
 
-    /// <summary>按本次租约回读刚获取的 Saga。</summary>
+    /// <summary>
+    /// 按本次租约回读刚获取的 Saga。<br/>
+    /// ITM-134 修复：补 <c>AND status = 0</c>（Active）守卫——对齐 PalORM 回读语义
+    /// （<c>PalOrmSagaStateStore.LeaseActiveSagasAsync</c> 回读同样带 status=Active 守卫）：
+    /// 租约 UPDATE 后行被处理方标记终态（Completed/Compensated 等）时，Dapper worker 不再领回终态 Saga。
+    /// </summary>
     public const string SagaSelectByLease =
-        "SELECT * FROM saga_states WHERE leased_by=@owner AND leased_until=@until";
+        "SELECT * FROM saga_states WHERE leased_by=@owner AND leased_until=@until AND status = 0";
 
     /// <summary>按 SagaId 查找指定 Saga</summary>
     public const string SagaById =

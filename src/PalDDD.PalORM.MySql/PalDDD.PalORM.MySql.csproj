@@ -14,7 +14,7 @@
     <IsTrimmable>true</IsTrimmable>
     <Description>Pal.DDD PalORM MySQL 适配包（AOT + 源生成 + BulkCopy/多值 INSERT）</Description>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);CS1591;CS1573;CA2007</NoWarn>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CA2007;IL3058</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

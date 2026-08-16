@@ -53,6 +53,9 @@ public sealed class DapperInboxStore : IInboxStore
         string consumerName, string messageId, DateTimeOffset now,
         TimeSpan processingTimeout, CancellationToken ct)
     {
+        // ITM-163 修复：补空白守卫（对齐 InMemoryInboxStore 同款）
+        ArgumentException.ThrowIfNullOrWhiteSpace(consumerName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // P2/P3 修复（十七轮）：全部查询/执行改 CommandDefinition 传递 ct（对齐 DapperOutboxStore.RequeueDeadAsync 模式）——
         // 原重载不接收取消令牌，取消信号只在 EnsureOpenAsync 阶段可传递，SQL 执行阶段不可取消
@@ -96,8 +99,14 @@ public sealed class DapperInboxStore : IInboxStore
                     }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
             if (rows == 0) return null;
 
+            // ITM-168 修复：抢占后本地字段同步 DB 真值——原实现只改 Status/Attempts，
+            // ProcessingStartedAt 仍为旧值、LastError 残留旧失败原因（SQL 现已同步清
+            // last_error），调用方与监控看到的本地对象陈旧失真（对齐 InMemory successor
+            // 与 EFCore/PalORM 抢占路径）。
             existing.Status = InboxStatus.Processing;
             existing.Attempts++;
+            existing.ProcessingStartedAt = now;
+            existing.LastError = null;
             return existing;
         }
 
@@ -108,6 +117,8 @@ public sealed class DapperInboxStore : IInboxStore
     // 此前签名带 ct 但体内零使用，取消后 SQL 仍执行至自然完成
     public async ValueTask MarkProcessedAsync(InboxMessage message, DateTimeOffset processedAt, CancellationToken ct)
     {
+        // ITM-163 修复：补 message null 守卫（对齐 InMemoryInboxStore/InboxDbContext 同款）
+        ArgumentNullException.ThrowIfNull(message);
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // P2/P3 修复（十七轮）：CommandDefinition 传 ct（见 TryStartProcessingAsync 同款注释）
         await c.ExecuteAsync(
@@ -117,6 +128,8 @@ public sealed class DapperInboxStore : IInboxStore
 
     public async ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
     {
+        // ITM-163 修复：补 message null 守卫（failureReason 空白守卫已存在）
+        ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // P2/P3 修复（十七轮）：CommandDefinition 传 ct（见 TryStartProcessingAsync 同款注释）

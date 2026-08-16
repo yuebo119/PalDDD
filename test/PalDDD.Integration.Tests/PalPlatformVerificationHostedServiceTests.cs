@@ -35,7 +35,8 @@ public sealed partial class PalPlatformVerificationHostedServiceTests
         await Assert.That(hostedServices).Count().IsEqualTo(1);
         var hostedService = hostedServices[0];
 
-        await hostedService.StartAsync(cancellationToken);
+        await Assert.That(async () =>
+            await hostedService.StartAsync(cancellationToken)).ThrowsNothing();
     }
 
     [Test]

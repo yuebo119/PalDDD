@@ -47,15 +47,23 @@ internal sealed class IterativeDomainEventDispatcher : IDomainEventDispatcher
         DomainEventDispatcherOptions? options = null,
         IPalLogger<IterativeDomainEventDispatcher>? logger = null)
     {
+        ArgumentNullException.ThrowIfNull(handlers);
+
         _handlers = handlers
             .GroupBy(h => h.EventType)
             .ToFrozenDictionary(g => g.Key, g => g.ToImmutableArray());
         _options = options ?? new DomainEventDispatcherOptions();
+        // ITM-166 修复：MaxIterations 非正数会在下方循环中形成 0 次迭代或负循环
+        // （for 条件恒 false/语义错乱），事件静默不派发——入口 fail-fast。
+        if (_options.MaxIterations <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "DomainEventDispatcherOptions.MaxIterations must be greater than zero.");
         _logger = logger;
     }
 
     public async ValueTask DispatchAsync(IReadOnlyList<Core.DomainEvent> events, CancellationToken ct = default)
     {
+        // ITM-166 修复：补 events null 守卫（空集合语义保留）。
+        ArgumentNullException.ThrowIfNull(events);
         if (events.Count == 0) return;
 
         var queue = new Queue<Core.DomainEvent>(events);

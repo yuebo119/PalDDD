@@ -57,6 +57,10 @@ public sealed class ExponentialBackoffPolicy : IRetryBackoffPolicy
         int exponentCap = 6)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(exponentCap, 1);
+        // ITM-137 修复：负 maxDelay 会让 nextAttemptAt 落在过去、退避失效成紧循环；
+        // 零合法（立即重试语义）。对齐 FixedBackoffPolicy 的非负守卫。
+        if (maxDelay is { } value && value < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(maxDelay), value, "MaxDelay must be non-negative.");
         _maxDelay = maxDelay ?? TimeSpan.FromSeconds(64);
         _withJitter = withJitter;
         _exponentCap = exponentCap;

@@ -10,6 +10,12 @@ namespace PalDDD.Transactions;
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>发件箱发布器运行时选项。</summary>
+/// <remarks>
+/// ITM-166 声明：<see cref="LeaseDuration"/> 与 <see cref="LeaseOwner"/> 的集中校验在
+/// <c>ServiceCollectionExtensions.AddPalOutbox</c> 的 <c>AddOptions&lt;OutboxOptions&gt;().Validate(...)</c>
+/// 启动期执行（<c>ValidateOnStart</c>）；Store 层因此不重复校验租约参数，直接信任 Options 已约束。
+/// 直接 <c>new OutboxOptions()</c> 并绕过 DI 传给 Store 时不受该校验保护（默认值合法）。
+/// </remarks>
 public sealed class OutboxOptions
 {
     public int BatchSize { get; set; } = 100;
@@ -51,6 +57,11 @@ public sealed class InboxOptions
 }
 
 /// <summary>Saga 超时处理器运行时选项。</summary>
+/// <remarks>
+/// ITM-166 声明：<see cref="LeaseDuration"/> 与 <see cref="LeaseOwner"/> 的集中校验在
+/// <c>ServiceCollectionExtensions.AddPalSaga</c> 的 <c>AddOptions&lt;SagaProcessorOptions&gt;().Validate(...)</c>
+/// 启动期执行；Store 层不重复校验租约参数。绕过 DI 直构时不受该校验保护（默认值合法）。
+/// </remarks>
 public sealed class SagaProcessorOptions
 {
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(30);

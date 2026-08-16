@@ -36,6 +36,10 @@ public sealed class PostgreSqlSagaStateStore<TState> : PalOrmSagaStateStore<Post
         System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState>? jsonTypeInfo = null,
         TimeProvider? clock = null)
         : base(session, jsonTypeInfo, clock) { }  // P3（十八轮验证轮 F1）：透传 clock——便捷注册解析容器 TimeProvider
+
+    // ITM-127 修复：PG saga_data 为 jsonb 列，text 参数无隐式赋值转换（42804）——
+    // 基类 INSERT/UPDATE 对快照参数加 CAST(... AS jsonb)（对齐 Dapper SagaInsertPG/SagaUpdatePG）
+    protected override bool RequiresJsonbCast => true;
 }
 
 /// <summary>PostgreSQL 方言 EventLog Store。</summary>

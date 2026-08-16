@@ -20,10 +20,6 @@
     <PackageReference Include="TUnit.FsCheck" />
     <!-- 注：SagaEfCoreConcurrencyTests 已迁至 PalDDD.Integration.Tests（域测试项目
          禁止引用 Infra 实现包——ArchitectureBoundaryTests.DomainTests 强制） -->
-    <PackageReference Include="coverlet.collector">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
   </ItemGroup>
 
 </Project>

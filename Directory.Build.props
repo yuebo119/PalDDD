@@ -19,6 +19,7 @@
       CA1062  公共 API null 验证 — 框架内部调用链已保证非 null，公共入口用 ArgumentNullException.ThrowIfNull 显式处理
       CA2007  ConfigureAwait(false) — DDD 框架不绑定 SynchronizationContext，库代码不应 ConfigureAwait(true)（默认）。全层已显式 ConfigureAwait(false)，此规则噪声大于价值
       CA1307  指定 StringComparison — 已在关键路径用 StringComparison.Ordinal，剩余字符串比较为显示/日志场景，文化敏感可接受
+      CA1305  指定 IFormatProvider — Ulid.Parse 在 EFCore/Dapper/PalORM/Projections 多项目用于解析持久化标识符，标识符格式与区域设置无关；逐处传递 InvariantCulture 的收益低于噪声（ITM-161 实测全解决方案 build 需要此抑制）
       CA2100  SQL 注入审查 — 所有 SQL 通过 SqlTemplates 常量 + Dapper 参数化，无字符串拼接注入风险
       CA2016  CancellationToken 传递 — 少数 fire-and-forget 后台路径有意不传递 ct（如 PeriodicTimer 独立取消）
       CA1721  属性名与类型名冲突 — 如 OutboxMessage.Status / OutboxStatus，领域语义优先于命名规则
@@ -35,7 +36,7 @@
       NU1900/1901/1902/1903/1904  NuGet 包漏洞/版本告警 — 已手动审计并升级传递依赖（Humanizer/System.Reflection），误报已评估
       ═══════════════════════════════════════════════════════════
     -->
-    <NoWarn>$(NoWarn);CA1062;CA2007;CA1307;CA2100;CA2016;CA1721;CA1512;CA1849;CA2000;CA1001;CA1725;CS1591;CS1573;CS1570;CS8620;NU1900;NU1901;NU1902;NU1903;NU1904;NU5104;IL3058;CA1305</NoWarn>
+    <NoWarn>$(NoWarn);CA1062;CA2007;CA1307;CA1305;CA2100;CA2016;CA1721;CA1512;CA1849;CA2000;CA1001;CA1725;CS1591;CS1573;CS1570;CS8620;NU1900;NU1901;NU1902;NU1903;NU1904</NoWarn>
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
     <VerifyReferenceAotCompatibility>true</VerifyReferenceAotCompatibility>
@@ -56,9 +57,5 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <DebugType>embedded</DebugType>
     <EmbedAllSources>true</EmbedAllSources>
-    <!-- 覆盖率 CI 门禁：coverlet → Cobertura 报告 -->
-    <CollectCoverage>true</CollectCoverage>
-    <CoverletOutputFormat>cobertura</CoverletOutputFormat>
-    <CoverletOutput>$(MSBuildThisFileDirectory)TestResults\coverage.cobertura.xml</CoverletOutput>
   </PropertyGroup>
 </Project>

@@ -5,7 +5,8 @@
     <RootNamespace>PalDDD.AotSample</RootNamespace>
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
-    <NoWarn>$(NoWarn);CA1303</NoWarn>
+    <!-- ITM-161：全局 IL3058 已移除；本示例 AOT 编译但引用非 AOT 的 Transactions（Saga 反射特例），保留项目级抑制 -->
+    <NoWarn>$(NoWarn);CA1303;IL3058</NoWarn>
     <NoWarn>$(NoWarn);S3903</NoWarn>
   </PropertyGroup>
 

@@ -1,6 +1,9 @@
-// PalDDD.PalOrmSample — AOT 真实发布验证入口
+// PalDDD.PalOrmSample — PalORM Sqlite AOT 发布验证入口
 // ════════════════════════════════════════════════════════════
-// 用 dotnet publish -r win-x64 /p:PublishAot=true 验证 PalDDD.PalORM 全链路 AOT 兼容。
+// 实际覆盖（与 csproj 注释一致，不夸大）：
+//   - Outbox CRUD（AddMessage / GetPendingMessagesAsync / MarkProcessed）
+//   - SqlitePalOrmUnitOfWork commit / rollback（SQLite 实库）
+// 用 dotnet publish -r win-x64 /p:PublishAot=true 验证上述路径 AOT 兼容。
 // 通过：编译期 0 警告 + 运行时 PASSED 输出。
 
 using ByteAether.Ulid;

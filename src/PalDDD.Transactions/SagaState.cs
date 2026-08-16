@@ -24,6 +24,10 @@ public abstract class SagaState
         get => _currentState;
         set
         {
+            // ITM-168 修复：补 null 守卫——原 value.Contains 对 null 抛 NRE，
+            // 失败点与异常类型（NullReferenceException）均不符合框架公共 setter 惯例。
+            // 仅拒绝 null，空串语义保持原样（空状态名由业务层自行约束）。
+            ArgumentNullException.ThrowIfNull(value);
             if (value.Contains('|'))
                 throw new ArgumentException(
                     $"Saga 状态名不能包含 '|' 字符（当前值：\"{value}\"），因为 '|' 用作 key 分隔符。请使用 PascalCase 或 kebab-case。",

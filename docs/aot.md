@@ -164,7 +164,7 @@ PalORM 是推荐的持久化路径——完整链路 Native AOT 支持，取代 
 
 ## Dapper 适配层 — ⚠️ AOT 假象（逐步弃用）
 
-Dapper 适配项目使用项目级 IL3058 抑制（`<NoWarn>$(NoWarn);IL3058</NoWarn>`），把 Dapper 的动态能力边界限制在外圈 adapter。但 `[module:DapperAot]` 当前未全局启用——Dapper 的 AOT 兼容是声明层面的，实际运行时仍走反射路径。
+Dapper 适配项目使用项目级 IL3058 抑制（`<NoWarn>$(NoWarn);IL3058</NoWarn>`），把 Dapper 的动态能力边界限制在外圈 adapter（全局 `Directory.Build.props` 的 NoWarn 已移除 IL3058，ITM-161）。但 `[module:DapperAot]` 当前未全局启用——Dapper 的 AOT 兼容是声明层面的，实际运行时仍走反射路径。
 
 **结论**：Dapper 适配层的 AOT 兼容是假象（NoWarn IL3058 声明），不适用于 Native AOT 发布。推荐使用 PalORM 替代。
 

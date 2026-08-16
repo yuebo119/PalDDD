@@ -50,6 +50,8 @@ namespace PalDDD.MinimalApi
     {
         public ValueTask<Unit> HandleAsync(AddItemCmd c, CancellationToken ct)
         {
+            // 示例从简：订单不存在时 Get! 会 NRE → 全局异常中间件 500。
+            // 生产代码应改为：r.Get 判 null 并抛领域 NotFound 异常（映射 404）或返回失败结果。
             r.Get(c.OrderId)!.AddItem(c.Name, c.Qty, c.Price); return ValueTask.FromResult(new Unit());
         }
     }

@@ -1,16 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    📦 PalDDD.Base — 基础聚合元包（仅 PackageReference，无源码）
-    从 nupkgs/PalDDD.Base.1.0.0-preview.1.nupkg 的 .nuspec 还原，
-    保证 git clone 后可从源码重建元包（修复 OBS-068）。
+    📦 PalDDD.Base — 基础聚合元包（仅依赖聚合，无源码）
+    ITM-128 修复：①加入 PalDDD.slnx（发布完整性——元包必须被 CI build/pack 覆盖）；
+    ②PalDDD.* 依赖改为 ProjectReference——dotnet pack 自动生成 1.1.0 nuspec 依赖，
+      本地 build 不再要求 NuGet 上已发布同名包（旧 PackageReference 1.1.0 在发布前必然 restore 失败）。
 
     所有依赖均设 PrivateAssets="build;analyzers"，等价于 nuspec 的
     exclude="Build,Analyzers"：元包仅聚合运行时依赖，不向消费方传递
     build/analyzer 资产。
 
-    本地重建：先发布/恢复所依赖的 PalDDD.* preview 包，再
-    dotnet pack src/PalDDD.Base/PalDDD.Base.csproj
+    本地重建：dotnet pack src/PalDDD.Base/PalDDD.Base.csproj
   -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
@@ -18,17 +18,20 @@
     <PackageTags>DDD;Entity;ValueObject;DomainEvent;Specification;AOT;.NET11;Foundation</PackageTags>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);NU5128</NoWarn>
+    <NoWarn>$(NoWarn);NU5128;IL3058</NoWarn>
+    <!-- IL3058 项目级抑制（ITM-128/161 配套）：元包聚合 Analyzers/SourceGen 编译期资产
+         （PrivateAssets=build;analyzers，不进运行时），其程序集非 AOT 构建触发的引用告警
+         与元包运行时无涉。 -->
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="PalDDD.Analyzers.CodeFixes" Version="1.1.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Analyzers" Version="1.1.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Compression" Version="1.1.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Core.SourceGen" Version="1.1.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Core" Version="1.1.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Serialization" Version="1.1.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="ByteAether.Ulid" Version="1.0.0" PrivateAssets="build;analyzers" />
+    <ProjectReference Include="..\PalDDD.Analyzers.CodeFixes\PalDDD.Analyzers.CodeFixes.csproj" PrivateAssets="build;analyzers" />
+    <ProjectReference Include="..\PalDDD.Analyzers\PalDDD.Analyzers.csproj" PrivateAssets="build;analyzers" />
+    <ProjectReference Include="..\PalDDD.Compression\PalDDD.Compression.csproj" PrivateAssets="build;analyzers" />
+    <ProjectReference Include="..\PalDDD.Core.SourceGen\PalDDD.Core.SourceGen.csproj" PrivateAssets="build;analyzers" />
+    <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" PrivateAssets="build;analyzers" />
+    <ProjectReference Include="..\PalDDD.Serialization\PalDDD.Serialization.csproj" PrivateAssets="build;analyzers" />
+    <PackageReference Include="ByteAether.Ulid" Version="1.4.0" PrivateAssets="build;analyzers" />
   </ItemGroup>
 
 </Project>

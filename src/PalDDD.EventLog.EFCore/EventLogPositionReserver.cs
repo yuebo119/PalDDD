@@ -87,6 +87,10 @@ public sealed class EventLogPositionReserver
         long? cached;
         lock (_lock)
         {
+            // ITM-166 声明（理论不可达）：_lo + count 在 long.MaxValue 附近可能溢出。
+            // 实际不可达：_lo 由 DB 分配器行的 NextGlobalPosition 单调递增而来，
+            // 达到 long.MaxValue 前需要追加 2^63 个事件（以 1M events/s 计约 29 万年）。
+            // 若未来把 GlobalPosition 迁移为 32 位或分配器可外部改写，需在此加 checked。
             if (_initialized && _lo + count <= _hi)
             {
                 cached = _lo;
@@ -150,6 +154,9 @@ public sealed class EventLogPositionReserver
 
                 lock (_lock)
                 {
+                    // ITM-166 声明（理论不可达）：first + count / first + chunkSize 的
+                    // long 溢出同 ReserveAsync 快路径声明——需 DB allocator 推进到
+                    // long.MaxValue 附近，实际不可达；若未来分配器行可手工改写，需 checked。
                     _lo = first + count;
                     _hi = first + chunkSize;
                     _initialized = true;

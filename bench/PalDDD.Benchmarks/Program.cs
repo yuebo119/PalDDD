@@ -28,6 +28,8 @@ internal static class SmokeBenchmarks
         });
     }
 
+    // 口径（ITM-171）：以下计时/分配均为 Iterations 次调用的总量；
+    // 单次调用 = 总量 / Iterations（下方输出同时给出 ns/op 与 B/op）。
     private static void Measure<T>(string name, Func<T> action)
     {
         GC.Collect();
@@ -41,7 +43,10 @@ internal static class SmokeBenchmarks
         stopwatch.Stop();
         var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - startBytes;
 
-        Console.WriteLine($"{name}: {stopwatch.Elapsed.TotalMilliseconds:N2} ms, {allocatedBytes:N0} B allocated");
+        var totalMs = stopwatch.Elapsed.TotalMilliseconds;
+        Console.WriteLine(
+            $"{name}: {totalMs:N2} ms / {Iterations:N0} = {totalMs / Iterations * 1_000_000:N2} ns/op, " +
+            $"{allocatedBytes:N0} B / {Iterations:N0} = {allocatedBytes / (double)Iterations:F3} B/op");
     }
 
     private static void MeasureAction(string name, Action action)
@@ -57,7 +62,10 @@ internal static class SmokeBenchmarks
         stopwatch.Stop();
         var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - startBytes;
 
-        Console.WriteLine($"{name}: {stopwatch.Elapsed.TotalMilliseconds:N2} ms, {allocatedBytes:N0} B allocated");
+        var totalMs = stopwatch.Elapsed.TotalMilliseconds;
+        Console.WriteLine(
+            $"{name}: {totalMs:N2} ms / {Iterations:N0} = {totalMs / Iterations * 1_000_000:N2} ns/op, " +
+            $"{allocatedBytes:N0} B / {Iterations:N0} = {allocatedBytes / (double)Iterations:F3} B/op");
     }
 
     private sealed class SmokeStatus : SmartEnum<SmokeStatus, string>

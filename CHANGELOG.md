@@ -3,6 +3,7 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
 > **当前版本**：`VersionPrefix=1.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）
+> **发布状态**：**1.1.0 未发布（Unreleased）**——仓库 tag 仅 `v1.0.0-preview.1`，无 `[1.1.0]` 段；发布 1.1.0 时在同一次提交内补 `[1.1.0]` 段 + `v1.1.0` tag。
 > **发布规范**：见 [`docs/release.md`](docs/release.md)
 
 ---
@@ -21,7 +22,7 @@
 ## [1.0.0-preview.1] — 2026-07-08
 
 > 首次预览版。面向 .NET 11 的 DDD/CQRS/Event Sourcing 基础设施框架。
-> 30 个独立 NuGet 包，覆盖 Entity/AggregateRoot/DomainEvent/Saga/Outbox/Inbox/Projection/EventLog 完整 DDD 战术模式。
+> 35 个 PalDDD 打包项目（PalDDD.Prompts 非包，`IsPackable=false`）+ 5 个 PalORM 依赖包单列，覆盖 Entity/AggregateRoot/DomainEvent/Saga/Outbox/Inbox/Projection/EventLog 完整 DDD 战术模式。
 
 ### 核心能力
 
@@ -33,32 +34,34 @@
 - **Inbox 幂等**：UNIQUE(message_id) 约束 + PG ON CONFLICT RETURNING 单语句
 - **Projection**：断点续传 + EventLog 投影源
 - **多 Broker**：IMessageBroker 抽象 + InMemory/Kafka/RabbitMQ 三实现（对称行为）
-- **双持久化**：Dapper（AOT 兼容）+ EF Core（功能完整）
+- **双持久化**：Dapper（声明层 AOT 兼容、运行时反射，见 aot.md）+ EF Core（功能完整）
 - **序列化**：JsonMessageSerializer（ThreadStatic 池化）+ MemoryPack 适配 + MessageEvolutionPipeline
 - **战略 DDD 编译期治理**：PDDD001-015（15 条 Roslyn 分析器规则）+ 4 个 CodeFix
 
-### 包清单（30 个公开发布包）
+### 包清单（35 个 PalDDD 打包项目；PalDDD.Prompts 非包，另 5 个 PalORM 依赖包单列）
 
 | 层 | 包 | 数量 |
 |----|----|:----:|
-| Domain | PalDDD.Core | 1 |
-| App-Abstractions | PalDDD.Serialization / Serialization.Evolution | 2 |
-| App-Core | PalDDD.CQRS / EventLog / Transactions / Idempotency / Projections / Messaging / Compression | 7 |
-| Infra-EFCore | PalDDD.EntityFrameworkCore / Repository.EFCore / Transactions.EFCore / EventLog.EFCore / Idempotency.EFCore / Projections.EFCore | 6 |
-| Infra-Dapper | PalDDD.Dapper / Dapper.PostgreSql / Dapper.Sqlite / Dapper.MySql | 4 |
+| Domain | PalDDD.Core / Core.SourceGen / Analyzers / Analyzers.CodeFixes | 4 |
+| App-Abstractions | PalDDD.Serialization / Messaging / Compression / Compression.Native | 4 |
+| App-Core | PalDDD.CQRS / EventLog / Transactions / Idempotency / Projections | 5 |
+| Infra-PalORM | PalDDD.PalORM / PalORM.Sqlite / PalORM.PostgreSql / PalORM.MySql | 4 |
+| Infra-Dapper | PalDDD.Dapper / Dapper.PostgreSql / Dapper.MySql / Dapper.Sqlite | 4 |
+| Infra-EFCore | PalDDD.EventLog.EFCore / Idempotency.EFCore / Projections.EFCore / Repository.EFCore / Transactions.EFCore | 5 |
+| Infra-Serialization | PalDDD.Projections.EventLog / Serialization.Evolution / Serialization.MemoryPack | 3 |
 | Infra-Messaging | PalDDD.Messaging.Kafka / Messaging.RabbitMQ | 2 |
-| Infra-Other | PalDDD.Compression.Native / Serialization.MemoryPack / Projections.EventLog | 3 |
 | Hosting | PalDDD.Hosting.AspNetCore / DependencyInjection | 2 |
-| Analyzers | PalDDD.Analyzers / Analyzers.CodeFixes | 2 |
-| Metapackages | PalDDD.Base / Extension / Prompts | 3 |
+| Metapackages | PalDDD.Base / Extension（Prompts 非包，`IsPackable=false`） | 2 |
+
+> PalORM 依赖包 5 个单列：PalORM.Core / PalORM.SourceGen / PalORM.PostgreSql / PalORM.MySql / PalORM.Sqlite（版本见 `Directory.Packages.props`）。
 
 ### 工程基线
 
 - **AOT 分层**：核心层 7 项目 `IsAotCompatible=true`（Core/Serialization/CQRS/EventLog/Idempotency/Projections/Messaging），适配器层 14 项目显式 `false`（EF Core/Kafka/RabbitMQ/MemoryPack/Transactions 等）
 - **零反射红线**：MakeGenericType/Activator.CreateInstance/Assembly.GetTypes/Type.GetType(string) 全禁（ArchitectureBoundaryTests 33 方法机械守护）
-- **测试框架**：TUnit 1.58.0 + MTP（禁 Microsoft.NET.Test.Sdk）
-- **质量保障**：TreatWarningsAsErrors + AnalysisLevel=latest-all + 21 条 NoWarn 逐条 Justification + coverlet Cobertura 覆盖率门禁 + Stryker 突变测试（high=80/low=60/break=50）
-- **规范文档**：conventions.md（1000 行 14 章）+ architecture.md（18 决策）+ 16 ADR + aot.md + performance.md + tutorial.md
+- **测试框架**：TUnit 1.65.0 + MTP（禁 Microsoft.NET.Test.Sdk）
+- **质量保障**：TreatWarningsAsErrors + AnalysisLevel=latest-all + 21 条 NoWarn 逐条 Justification + MTP 原生 --coverage 覆盖率门禁 + assertion-strength-check 断言强度门禁（替代 Stryker：Stryker 不支持 TUnit/MTP）
+- **规范文档**：conventions.md（1000 行 14 章）+ architecture.md（18 决策）+ 17 ADR + aot.md + performance.md + tutorial.md
 
 ### 已知限制
 

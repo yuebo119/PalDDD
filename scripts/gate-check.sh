@@ -23,7 +23,21 @@ find "$SRC" -name "*.cs" -not -path "*/obj/*" -not -path "*/bin/*" -not -path "*
 done | wc -l > /tmp/g2_count.txt
 check "G2 文件头" "$(cat /tmp/g2_count.txt 2>/dev/null | tr -d ' ' || echo 0)" "0"
 
-check "G3 文件命名" "0" "0"
+# ITM-172 修复：G3 由硬编码 "0" "0" 恒过改为真实检查——
+# src/ 下 .cs 文件名只允许 [A-Za-z0-9._-]（PascalCase 命名约定，排除 bin/obj）
+g3_bad=$(find "$SRC" -name "*.cs" -not -path "*/obj/*" -not -path "*/bin/*" \
+  | while read -r f; do
+      n=$(basename "$f")
+      case "$n" in
+        *[!A-Za-z0-9._-]*) echo "$f";;
+      esac
+    done | wc -l | tr -d ' ')
+check "G3 文件命名" "$g3_bad" "0"
 
 echo "═══ $PASS/$FAIL ═══"
-[ "$FAIL" -gt 0 ] && exit 1
+# ITM-172 修复：原 `[ "$FAIL" -gt 0 ] && exit 1` 在 FAIL=0 时 AND-list 返回 1，
+# 导致"全绿却退出码 1"（CI 回退门禁必挂）——显式 if 修正
+if [ "$FAIL" -gt 0 ]; then
+    exit 1
+fi
+exit 0

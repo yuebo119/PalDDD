@@ -178,7 +178,8 @@ public sealed class BrokerIntegrationTests
     [NotInParallel("broker-integration")]
     public async Task Kafka_PublishAndSubscribe_RoundTripsMessage(CancellationToken cancellationToken)
     {
-        var (broker, _) = Fixture.CreateKafkaBroker();
+        var created = Fixture.CreateKafkaBroker();
+        await using var broker = created.Item1;
         var tag = Guid.NewGuid().ToString("N")[..8];
         var received = new TaskCompletionSource<TestMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
         var consumerReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -246,7 +247,8 @@ public sealed class BrokerIntegrationTests
     [NotInParallel("broker-integration")]
     public async Task Kafka_MultipleMessages_AllReceived(CancellationToken cancellationToken)
     {
-        var (broker, _) = Fixture.CreateKafkaBroker();
+        var created = Fixture.CreateKafkaBroker();
+        await using var broker = created.Item1;
         var received = new List<TestMessage>();
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var prefix = $"kafka-multi-{Guid.NewGuid():N}".Substring(0, 20);
@@ -275,7 +277,8 @@ public sealed class BrokerIntegrationTests
     [Test]
     public async Task RabbitMq_PublishAndSubscribe_RoundTripsMessage(CancellationToken cancellationToken)
     {
-        var (broker, _) = await Fixture.CreateRabbitMqBrokerAsync();
+        var created = await Fixture.CreateRabbitMqBrokerAsync();
+        await using var broker = created.Item1;
         var tag = Guid.NewGuid().ToString("N")[..8];
         var received = new TaskCompletionSource<TestMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -336,7 +339,8 @@ public sealed class BrokerIntegrationTests
     [NotInParallel("broker-integration")]
     public async Task RabbitMq_MultipleMessages_AllReceived(CancellationToken cancellationToken)
     {
-        var (broker, _) = await Fixture.CreateRabbitMqBrokerAsync();
+        var created = await Fixture.CreateRabbitMqBrokerAsync();
+        await using var broker = created.Item1;
         var received = new List<TestMessage>();
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var prefix = $"rmq-multi-{Guid.NewGuid():N}".Substring(0, 20);

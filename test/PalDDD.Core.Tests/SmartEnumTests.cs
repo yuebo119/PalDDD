@@ -80,7 +80,7 @@ public sealed class SmartEnumTests
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // 并发安全性测试 — Interlocked.CompareExchange + Volatile.Read
+    // 并发读取测试 — 初始化后 FrozenDictionary 读操作线程安全
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>多线程并发读取 All 属性 — 初始化后 FrozenDictionary 是不可变的</summary>
@@ -105,7 +105,7 @@ public sealed class SmartEnumTests
 
         await Task.WhenAll(tasks);
 
-        // 所有线程读取的结果应一致（3 个值，相同引用）
+        // 所有线程读取的结果应一致（3 个值）
         foreach (var resultList in results)
         {
             foreach (var all in resultList)

@@ -18,20 +18,23 @@ public sealed class EventLogPositionReserverTests
     [Test]
     public async Task ReserveAsync_WithinChunk_DoesNotHitDatabase(CancellationToken cancellationToken)
     {
-        await using var db = new TestEventLogDbContext(CreateOptions());
+        await using var db = new CountingSaveEventLogDbContext(CreateCountingOptions());
         var reserver = new EventLogPositionReserver(chunkSize: 100);
 
         // 第一次调用：初始化分配器（1 次 DB 往返读取 + 1 次保存）。
         var first = await reserver.ReserveAsync(db, count: 1, cancellationToken);
         await Assert.That(first).IsEqualTo(0);
+        await Assert.That(db.SaveChangesCount).IsEqualTo(1);
 
-        // 第二次调用：在同一 chunk 内，应为纯内存操作。
+        // 第二次调用：在同一 chunk 内，应为纯内存操作——SaveChanges 计数保持不变。
         var second = await reserver.ReserveAsync(db, count: 1, cancellationToken);
         await Assert.That(second).IsEqualTo(1);
+        await Assert.That(db.SaveChangesCount).IsEqualTo(1);
 
         // 第三次调用：仍在 chunk 内。
         var third = await reserver.ReserveAsync(db, count: 3, cancellationToken);
         await Assert.That(third).IsEqualTo(2);
+        await Assert.That(db.SaveChangesCount).IsEqualTo(1);
     }
 
     [Test]
@@ -125,8 +128,9 @@ public sealed class EventLogPositionReserverTests
         // 全部 100 个位置必须唯一（无竞态条件导致的重复）。
         await Assert.That(positions.Distinct().Count()).IsEqualTo(100);
         // 位置必须从 0 开始连续（顺序单线程分配）。
+        // chunkSize=50：100 次预留恰好耗尽两个 chunk，最大位置为 99。
         await Assert.That(positions.Min()).IsEqualTo(0);
-        await Assert.That(positions.Max() < 200).IsTrue();
+        await Assert.That(positions.Max() < 100).IsTrue();
     }
 
     [Test]
@@ -168,6 +172,11 @@ public sealed class EventLogPositionReserverTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
 
+    private static DbContextOptions<CountingSaveEventLogDbContext> CreateCountingOptions()
+        => new DbContextOptionsBuilder<CountingSaveEventLogDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
     private static DbContextOptions<ThrowingSaveEventLogDbContext> CreateThrowingOptions()
         => new DbContextOptionsBuilder<ThrowingSaveEventLogDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
@@ -175,6 +184,25 @@ public sealed class EventLogPositionReserverTests
 
     private sealed class TestEventLogDbContext(DbContextOptions<TestEventLogDbContext> options)
         : EventLogDbContext(options);
+
+    /// <summary>计数 SaveChanges 调用——用作 DB 触碰探针：快路径不应触发任何写库。</summary>
+    private sealed class CountingSaveEventLogDbContext(DbContextOptions<CountingSaveEventLogDbContext> options)
+        : EventLogDbContext(options)
+    {
+        public int SaveChangesCount { get; private set; }
+
+        public override int SaveChanges()
+        {
+            SaveChangesCount++;
+            return base.SaveChanges();
+        }
+
+        public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+        {
+            SaveChangesCount++;
+            return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        }
+    }
 
     /// <summary>SaveChanges 恒抛 DbUpdateException（内层为注入的假 provider 异常）——用于验证 catch 窄化。</summary>
     private sealed class ThrowingSaveEventLogDbContext : EventLogDbContext

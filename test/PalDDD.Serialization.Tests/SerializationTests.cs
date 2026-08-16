@@ -118,16 +118,16 @@ public sealed class JsonMessageSerializerTests
     }
 
     [Test]
-    public async Task RoundTrip_WithGenericDeserialize_DoesNotBoxValueType()
+    public async Task RoundTrip_WithGenericDeserialize_ValueType_ReturnsEqualMessage()
     {
         var descriptor = MessageDescriptor.Create(
-            TestJsonContext.Default.TestMessage,
-            name: "test-message-generic");
+            TestJsonContext.Default.ValueMessage,
+            name: "test-message-generic-value");
         var serializer = new JsonMessageSerializer(MessageCatalog.Empty);
-        var message = new TestMessage("order-1", 3);
+        var message = new ValueMessage(Sequence: 3, Timestamp: 1700000000L);
 
         var payload = serializer.Serialize(message, descriptor);
-        var result = serializer.Deserialize<TestMessage>(payload.Span, descriptor);
+        var result = serializer.Deserialize<ValueMessage>(payload.Span, descriptor);
 
         await Assert.That(result).IsEqualTo(message);
     }

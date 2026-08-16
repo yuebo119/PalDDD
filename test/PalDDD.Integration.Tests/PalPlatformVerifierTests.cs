@@ -41,7 +41,8 @@ public sealed partial class PalPlatformVerifierTests
             new MessageEvolutionPathRequirement(invoiceV1Descriptor, invoiceV2Descriptor),
         };
 
-        new PalPlatformVerifier().ValidateMessageEvolutionPaths(pipeline, requirements);
+        await Assert.That(() =>
+            new PalPlatformVerifier().ValidateMessageEvolutionPaths(pipeline, requirements)).ThrowsNothing();
     }
 
     [Test]

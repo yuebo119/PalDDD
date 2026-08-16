@@ -174,9 +174,10 @@ InMemory implementations cover all abstract interfaces, so unit tests and protot
 
 ```csharp
 using PalDDD.Core;
+using ByteAether.Ulid;   // Framework source alias is PalUlid = ByteAether.Ulid.Ulid; examples use the real type
 
 // Strongly-typed ID — generated at compile time, zero reflection
-[GenerateId(typeof(PalUlid))]
+[GenerateId(typeof(Ulid))]
 public readonly partial record struct OrderId;
 
 // Aggregate root — singly-linked-list event storage, thread-safe
@@ -198,14 +199,14 @@ public sealed class Order : AggregateRoot<OrderId>
 
 // Domain event — sealed record + [GenerateMessage] source-generated registration
 [GenerateMessage(Name = "ordering.order-created.v1")]
-public sealed record OrderCreated(PalUlid OrderId, string Name, decimal Amount)
+public sealed record OrderCreated(Ulid OrderId, string Name, decimal Amount)
     : DomainEvent, IDomainEvent
 {
     static string IDomainEvent.EventName => "ordering.order-created.v1";
 }
 
 [GenerateMessage(Name = "ordering.order-cancelled.v1")]
-public sealed record OrderCancelled(PalUlid OrderId, string Reason)
+public sealed record OrderCancelled(Ulid OrderId, string Reason)
     : DomainEvent, IDomainEvent
 {
     static string IDomainEvent.EventName => "ordering.order-cancelled.v1";
@@ -261,9 +262,11 @@ var orderId = await dispatcher.SendAsync(new CreateOrder("Alice", 99.9m));
 Pal.DDD uses a source generator to produce `From` / `New` / `Parse` / `JsonConverter` / `TypeConverter` at compile time — zero reflection at runtime.
 
 ```csharp
+using ByteAether.Ulid;   // Framework source alias is PalUlid = ByteAether.Ulid.Ulid; examples use the real type
+
 // ✅ [GenerateId] triggers the IdentityGenerator source generator
 // Generates ISpanParsable + JsonConverter + TypeConverter at compile time
-[GenerateId(typeof(PalUlid))]      // Ulid (recommended, totally ordered)
+[GenerateId(typeof(Ulid))]         // Ulid (recommended, totally ordered)
 public readonly partial record struct OrderId;
 
 [GenerateId(typeof(Guid))]          // Guid
@@ -275,6 +278,7 @@ public readonly partial record struct OrderNumber;
 // Usage: compile-time-generated methods are directly available
 var id = OrderId.New();              // Ulid/Guid auto-generated
 var parsed = OrderId.Parse("01HXY...", null);
+var someUlid = Ulid.New();           // Underlying type matching [GenerateId(typeof(Ulid))]
 var fromDb = OrderId.From(someUlid);
 ```
 
@@ -341,17 +345,27 @@ Saga uses explicit state/event transition registration + FrozenDictionary lookup
 ```csharp
 public sealed class OrderSaga : Saga<OrderSagaState>
 {
-    protected override void Configure(SagaStep<OrderSagaState> steps)
+    public OrderSaga()
     {
-        steps.On<PaymentCompleted>(s => s.State with { Paid = true })
-             .On<InventoryReserved>((s, e) => s with { Reserved = true })
-             .WithCompensation<ReleaseInventory>()     // Backward compensation
-             .WithTimeout(TimeSpan.FromMinutes(30));    // Timeout auto-triggers compensation
+        // Register state transitions in the constructor via When (real API; there is no Configure method)
+        When<PaymentCompleted>("Initial", new SagaStep(
+            "CompletePayment",
+            execute: (state, evt, ct) =>
+            {
+                state.CurrentState = "Paid";
+                return ValueTask.FromResult(state);
+            },
+            compensate: (state, ct) =>
+            {
+                state.CurrentState = "Compensated_CompletePayment";
+                return ValueTask.CompletedTask;
+            },
+            timeout: TimeSpan.FromMinutes(30)));    // Timeout auto-triggers compensation
     }
 }
 
-// DI registration
-services.AddPalSaga<OrderSaga, OrderSagaState>();
+// DI registration (generic order: TState, TOrchestrator)
+services.AddPalSaga<OrderSagaState, OrderSaga>();
 // → SagaProcessor background polling + SagaTimeoutDetector timeout scanning
 ```
 
@@ -360,12 +374,23 @@ services.AddPalSaga<OrderSaga, OrderSagaState>();
 Zero allocation on the core path is not a comment claim — it is verified at runtime with `GC.GetAllocatedBytesForCurrentThread` assertions.
 
 ```csharp
+using PalDDD.Core;
+
 // ✅ DomainEvent foreach — ref struct enumerator, zero heap allocation
 foreach (var e in aggregate.Root.GetEvents())  // DomainEventEnumerable: ref struct
     await handler(e, ct);
 
 // ✅ FrozenDictionary lookup — O(1) zero reflection
-var status = OrderStatus.FromValue("pending");  // Compile-time-generated FrozenDictionary
+[GenerateEnum]
+public sealed partial class OrderStatus : SmartEnum<OrderStatus, string>
+{
+    public static readonly OrderStatus Pending = new("pending", "待处理");
+    public static readonly OrderStatus Shipped = new("shipped", "已发货");
+    public static readonly OrderStatus Delivered = new("delivered", "已送达");
+    private OrderStatus(string value, string displayName) : base(value, displayName) { }
+}
+
+var status = OrderStatus.FromValue("pending");  // TValue=string, so FromValue's argument type is string
 
 // AllocationContractTests verify (not claim):
 // RaiseEvent < 130B/iter | foreach < 100B | FrozenDictionary < 100B
@@ -380,7 +405,7 @@ var services = new ServiceCollection();
 services.AddPalCoreStack();
 services.AddPalOutbox();     // InMemoryOutboxStore
 services.AddPalInbox();      // InMemoryInboxStore
-services.AddPalSaga<OrderSaga, OrderSagaState>();  // InMemorySagaStateStore
+services.AddPalSaga<OrderSagaState, OrderSaga>();  // InMemorySagaStateStore
 
 // Test directly: command dispatch → events → Outbox → Saga compensation, all with no external dependencies
 var dispatcher = services.BuildServiceProvider().GetRequiredService<Dispatcher>();
@@ -411,10 +436,12 @@ public sealed class OrderingSaga : Saga<OrderingState> { ... }  // PDDD010
 PalORM's `[TenantAware]` generates tenant column filter logic at compile time — SQL automatically includes `WHERE tenant_id = @tenantId`, requiring no runtime interceptor.
 
 ```csharp
+using ByteAether.Ulid;
+
 // Row DTO annotated with [TenantAware] — source generator auto-generates tenant filter SQL
 public sealed class OrderRow
 {
-    [Column("id")] public PalUlid Id { get; init; }
+    [Column("id")] public Ulid Id { get; init; }
     [Column("customer_name")] public string CustomerName { get; init; }
     [TenantAware]  // ← Compile-time injection: all SQL automatically adds tenant_id condition
     [Column("tenant_id")] public string TenantId { get; init; }
@@ -430,14 +457,16 @@ var orders = await outboxStore.GetPendingMessagesAsync(...);
 Most DDD frameworks do not ship built-in message version evolution. PalDDD's `[GenerateMessage]` + Upcaster pipeline makes version migration a compile-time check + runtime automatic conversion.
 
 ```csharp
+using ByteAether.Ulid;
+
 // V1 message (legacy consumers still using it)
 [GenerateMessage(Name = "ordering.order-created.v1")]
-public sealed record OrderCreatedV1(PalUlid OrderId, string Name, decimal Amount)
+public sealed record OrderCreatedV1(Ulid OrderId, string Name, decimal Amount)
     : DomainEvent, IDomainEvent;
 
 // V2 message (added ShippingAddress field)
 [GenerateMessage(Name = "ordering.order-created.v2")]
-public sealed record OrderCreatedV2(PalUlid OrderId, string Name, decimal Amount, string ShippingAddress)
+public sealed record OrderCreatedV2(Ulid OrderId, string Name, decimal Amount, string ShippingAddress)
     : DomainEvent, IDomainEvent;
 
 // Register Upcaster — V1 auto-upgrades to V2, consumers only handle V2
@@ -477,14 +506,18 @@ var position = await eventLog.ReadAllAsync(checkpoint, ct);
 Projections consume events from EventLog and update read models; checkpoint persistence guarantees resumption from the interruption point after a restart — independent of the storage adapter.
 
 ```csharp
-// Register Projection (Checkpoint persistence + background processor)
-services.AddPalOrmPostgreSql(connectionString);
-services.AddPalProjection<OrderProjection>();
+using PalDDD.Projections;
 
-// Projection implementation — consumes events, updates read models
-public sealed class OrderProjection : IProjection<OrderCreated>
+// Register the projection handler (IProjectionCheckpointStore is registered by the persistence adapter)
+services.AddPalOrmPostgreSql(connectionString);
+services.AddScoped<IProjectionHandler<OrderCreated>, OrderProjection>();
+
+// Projection implementation — consumes events, updates read models (real API: IProjectionHandler<T>.ProjectAsync)
+public sealed class OrderProjection : IProjectionHandler<OrderCreated>
 {
-    public ValueTask HandleAsync(OrderCreated evt, CancellationToken ct)
+    public string ProjectionName => "ordering.order-view";
+
+    public ValueTask ProjectAsync(OrderCreated evt, ProjectionContext context, CancellationToken ct = default)
     {
         // Update the read model (materialized view / cache / search index)
         return _readStore.UpsertAsync(evt.OrderId, new OrderView(evt.Name, evt.Amount), ct);
@@ -498,7 +531,7 @@ await projectionRebuilder.RebuildAsync(ct);
 
 ### 13. Observability: Built-In OpenTelemetry, Zero Configuration
 
-PalDDD ships `PalActivitySource` (11 Start methods) + `PalMetrics` (24 counters) built into all critical paths — no manual instrumentation needed.
+PalDDD ships `PalActivitySource` (11 Start methods) + `PalMetrics` (27 counters) built into all critical paths — no manual instrumentation needed.
 
 ```csharp
 // Framework auto-instrumentation:
@@ -548,7 +581,7 @@ services.AddPalOutbox();  // A capability MediatR lacks
 | DomainEvent | Immutable sealed record, static `EventName` contract, `[GenerateMessage]` source-generated registration |
 | ValueObject / SmartEnum | Strongly-typed IDs (Ulid recommended), FrozenDictionary O(1) lookup |
 | ISpecification | ExpressionVisitor parameter substitution composes And/Or/Not, fully compatible with EF Core LINQ |
-| Diagnostics | Built-in `PalActivitySource` (11 Start methods) + `PalMetrics` (24 counters) |
+| Diagnostics | Built-in `PalActivitySource` (11 Start methods) + `PalMetrics` (27 counters) |
 
 ### CQRS
 | Component | Implementation Strategy |
@@ -587,9 +620,10 @@ services.AddPalOutbox();  // A capability MediatR lacks
 | Layer | Status | Description |
 |----|:--:|------|
 | PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` globally inherited |
-| PalDDD.CQRS · EventLog · Messaging · Transactions · Projections · DI | ✅ | Same as above |
+| PalDDD.CQRS · EventLog · Messaging · Projections · DI | ✅ | Same as above |
 | **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **True AOT** | Source-generated RowFactory/CommandFactory, `PublishAot=true` verification passed ([PalOrmSample](samples/PalDDD.PalOrmSample/)) |
 | PalDDD.Dapper + PostgreSql / MySql / Sqlite | ⚠️ Facade | Dapper.AOT `[module:DapperAot]` actually disabled, relies on `<NoWarn>IL3058</NoWarn>` to declare compatibility (see [PalORM adapter docs](docs/palorm-adapter.md)) |
+| PalDDD.Transactions | ❌ | Saga reflection exception (`IsAotCompatible=false`, see csproj) |
 | ~~PalDDD.EntityFrameworkCore~~ | ❌ | ~~Deprecated~~ |
 | PalDDD.Messaging.Kafka · RabbitMQ | ❌ | Confluent.Kafka / RabbitMQ.Client limitations |
 | PalDDD.Hosting.AspNetCore | ❌ | FrameworkReference limitations |
@@ -621,24 +655,25 @@ For full data and the BenchmarkDotNet historical baseline, see [Performance Reco
 ## Project Structure
 
 ```
-src/                         36 source projects · Clean Architecture
+src/                         36 source projects · Clean Architecture (folders match PalDDD.slnx)
 ├── Domain/                  Core · SourceGen · Analyzers · Analyzers.CodeFixes
-├── App-Abstractions/        Serialization · Serialization.Evolution · Messaging · Compression · Compression.Native
-├── App-Core/                CQRS · EventLog · EventLog.EFCore · Idempotency · Idempotency.EFCore · Projections · Projections.EFCore · Projections.EventLog · Transactions · Transactions.EFCore
+├── App-Abstractions/        Serialization · Messaging · Compression · Compression.Native
+├── App-Core/                CQRS · EventLog · Idempotency · Projections · Transactions
 ├── Infra-PalORM/            PalORM (true AOT) · PalORM.Sqlite · PalORM.PostgreSql · PalORM.MySql  ← recommended
-├── Infra-Dapper/            Dapper · PostgreSql · MySql · Sqlite (⚠️ being deprecated)
-├── Infra-Repository/        Repository.EFCore
-├── Infra-Messaging/         Kafka · RabbitMQ
-├── Hosting/                 DependencyInjection · AspNetCore
-└── Metapackages/            Base · Extension (aggregation metapackages, PackageReference only, no source)
+├── Infra-Dapper/            Dapper · Dapper.PostgreSql · Dapper.MySql · Dapper.Sqlite (⚠️ being deprecated)
+├── Infra-EFCore/            EventLog.EFCore · Idempotency.EFCore · Projections.EFCore · Repository.EFCore · Transactions.EFCore
+├── Infra-Serialization/     Projections.EventLog · Serialization.Evolution · Serialization.MemoryPack
+├── Infra-Messaging/         Messaging.Kafka · Messaging.RabbitMQ
+├── Hosting/                 DependencyInjection · Hosting.AspNetCore
+└── Metapackages/            Base · Extension · Prompts (Prompts is not a package, IsPackable=false)
 
-test/                        16 test projects (TUnit) · 869 tests
+test/                        16 test projects (TUnit) · 972 tests
 bench/                       BenchmarkDotNet performance benchmarks
-samples/                     PalOrmSample (AOT verification) · ECommerce · MinimalApi
+samples/                     PalOrmSample (AOT verification) · ECommerce · MinimalApi · AotSample
 docs/                        Architecture · Usage guide · Tutorial · ADR
 ```
 
-Dependency direction: Domain → App → Infra → Hosting. Each src/ project corresponds to an independent NuGet package.
+Dependency direction: Domain → App → Infra → Hosting. Each src/ project corresponds to an independent NuGet package (except Prompts, `IsPackable=false`).
 
 ```mermaid
 flowchart TB
@@ -673,7 +708,7 @@ flowchart TB
 | [Engineering Conventions](docs/conventions.md) | Naming, file organization, DI, AOT |
 | [AOT Guide](docs/aot.md) | Native AOT rules and checklist |
 | [Performance Records](docs/performance.md) | Benchmark data |
-| [Architecture Decisions](docs/decisions/) | 16 ADRs |
+| [Architecture Decisions](docs/decisions/) | 17 ADRs |
 
 ---
 
@@ -701,7 +736,7 @@ If you need Native AOT deployment (microservices, CLI tools, edge computing) →
 Does not support .NET 8/9/10 (single target net11.0). Saga's ChildSaga and DynamicStep rely on `MakeGenericType`, which is unavailable in AOT publishing (annotated with `[RequiresDynamicCode]`). No built-in EventStore snapshot mechanism — projects that need a snapshot strategy must implement it themselves.
 
 **Who is using it in production?**
-Pal.DDD is currently at version v1.1.0 and has been published to NuGet.org. The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with test coverage of 869 cases. You are welcome to try it in non-production environments and provide feedback.
+Pal.DDD is currently at version v1.1.0, which is unreleased (Unreleased; the only repository tag is v1.0.0-preview.1). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with test coverage of 972 cases. You are welcome to try it in non-production environments and provide feedback.
 
 ---
 

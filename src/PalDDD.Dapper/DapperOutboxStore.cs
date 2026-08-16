@@ -160,6 +160,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
 
     public void AddMessage(OutboxMessage message)
     {
+        ArgumentNullException.ThrowIfNull(message);
         var c = EnsureOpen();
         // P2 修复（七轮评审）：补 correlation/causation/trace 4 列——此前模板加了列但参数对象未传
         c.Execute(SqlTemplates.OutboxInsert,
@@ -185,6 +186,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     /// </summary>
     public async ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
     {
+        ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
         var conn = await EnsureOpenAsync().ConfigureAwait(false);
         // P2 修复（八轮评审 PD17）：批量路径补 correlation/causation/trace 4 追踪列——
@@ -200,29 +202,53 @@ public sealed class DapperOutboxStore : IPalOutboxStore
 
     public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
     {
+        ArgumentNullException.ThrowIfNull(message);
         var c = EnsureOpen();
         // P1 修复（八轮评审）：时间参数统一走 ToTimeParam——ToSqliteParameter 产出 "O" string，
         // PG 下 timestamptz 列收 text 参数无比较/赋值运算符（详见 ToTimeParam 的 PG 分支注释）
         c.Execute(SqlTemplates.OutboxMarkProcessed,
             new { at = ToTimeParam(processedAt), id = DapperAotInitializer.ToSqliteParameter(message.Id) }, _transaction);
+        // ITM-130 修复：SQL 清除 DB 租约列后同步入参——调用方读入参不应再见陈旧持有者
+        // （对齐 EFCore/PalORM/InMemory 三姊妹的对象字段语义）
+        message.LockedBy = null;
+        message.LockedUntil = null;
     }
 
     public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
     {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         var c = EnsureOpen();
         c.Execute(SqlTemplates.OutboxMarkDead,
             new { reason = failureReason, at = ToTimeParam(deadAt), id = DapperAotInitializer.ToSqliteParameter(message.Id) }, _transaction); // P1 修复（八轮评审）：时间参数走 ToTimeParam
+        // ITM-130 修复：SQL 清除 DB 租约列后同步入参（对齐 EFCore/PalORM/InMemory 三姊妹）
+        message.LockedBy = null;
+        message.LockedUntil = null;
     }
 
     public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
     {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         var c = EnsureOpen();
         // P2 修复（八轮评审）：补租约守卫（对齐 PalORM 版 PalOrmOutboxStore）——租约过期被其他 worker
         // 抢占后，原 worker 的失败释放不再清掉新 worker 的锁并误增 retry_count；被他人持有时
         // affected=0。owner 取调用时快照 message.LockedBy（string? 直传，调用方 OutboxBatchProcessor
         // 在租约回读后未清空该字段）。
-        c.Execute(SqlTemplates.OutboxReleaseForRetry,
+        var affected = c.Execute(SqlTemplates.OutboxReleaseForRetry,
             new { reason = failureReason, next = ToTimeParam(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy }, _transaction);
+        // ITM-130 修复：SQL 成功（affected>0）后同步入参到 DB 终态（对齐 PalORM ReleaseForRetry
+        // 成功路径）；守卫拒绝（affected=0，租约已被他人持有）时零变异——保持 PalORM 零变异语义。
+        if (affected > 0)
+        {
+            message.Status = OutboxStatus.Pending;
+            message.Error = failureReason;
+            message.NextAttemptAt = nextAttemptAt;
+            message.RetryCount += 1;
+            message.LockedBy = null;
+            message.LockedUntil = null;
+            message.ProcessedAt = null;
+        }
     }
 
     public async ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)

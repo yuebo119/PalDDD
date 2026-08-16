@@ -37,7 +37,7 @@ public sealed class OrderCancelled(Guid orderId, string reason) : DomainEvent
 public sealed class EntityTests
 {
     [Test]
-    public async Task NewEntity_IsTransient()
+    public async Task NewEntity_WithExplicitId_IsNotTransient()
     {
         var order = new Order(Guid.NewGuid(), "Test");
         await Assert.That(order.IsTransient()).IsFalse();

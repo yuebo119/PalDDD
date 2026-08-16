@@ -36,7 +36,11 @@ for csproj in $(find test -name '*.csproj' ! -name 'PalDDD.Testing.csproj' | sor
       --coverage-output-format cobertura
 done
 
-# 3. 合并报告
+# 3. 恢复本地工具清单（固定 ReportGenerator 版本，见 .config/dotnet-tools.json）
+echo ">> Restoring local tools..."
+dotnet tool restore
+
+# 4. 合并报告
 echo ">> Merging coverage reports..."
 dotnet tool run reportgenerator \
     -reports:TestResults/coverage.*.cobertura.xml \

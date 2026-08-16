@@ -88,7 +88,7 @@
 
 | 维度 | DDD 约定 |
 |------|---------|
-| **测试框架** | TUnit 1.58.0 + MTP（Microsoft.Testing.Platform） |
+| **测试框架** | TUnit 1.65.0 + MTP（Microsoft.Testing.Platform） |
 | **断言库** | TUnit.Assertions（Fluent 链式） |
 | **属性测试** | TUnit.FsCheck（属性驱动） |
 | **快照测试** | Verify.TUnit 31.20.0（预留，目前 PublicApiSnapshot 自实现） |
@@ -410,7 +410,7 @@ dotnet run --project bench/PalDDD.Benchmarks -- --smoke | tee /tmp/after.txt
 | `ci.yml` Build & Test | 每次 push/PR | 构建 + 单元 + 集成（Testcontainers）+ 质量门禁 |
 | `ci.yml` AOT | 每次 push/PR | AOT 核心层 publish -p:PublishAot=true |
 | `perf-gate.yml`（待实施） | 每周日 + `[perf]` PR | Smoke 基线 + 回归检测 |
-| `stryker.yml`（待实施） | 每月 + `[mutation]` PR | 突变测试 high=80/low=60/break=50 |
+| `assertion-strength-check.sh` | 每次 PR/本地 | 断言强度棘轮（替代 Stryker；Stryker 不支持 TUnit/MTP） |
 
 ### Testcontainers CI 要求
 
@@ -467,7 +467,7 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 | `bench/PalDDD.Benchmarks/FrameworkBenchmarks.cs` | 领域核心基准 |
 | `bench/PalDDD.Benchmarks/InfraBenchmarks.cs` | 基础设施基准 |
 | `scripts/verify-conventions.sh` | 规范验证脚本（三模式） |
-| `test/PalDDD.Core.Tests/stryker-config.json` | 突变测试配置（如存在） |
+| `.ai/scripts/assertion-strength-check.sh` | 断言强度检查脚本（替代 Stryker） |
 
 ---
 

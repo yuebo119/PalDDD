@@ -4,7 +4,7 @@
 >
 > **本文件不是 ORM 302 项陷阱的复制**——ORM 项目（QueryBuilder/ChangeTracker/Schema 迁移/Provider 方言）的踩坑与 DDD 无关。本文件聚焦 DDD 项目实际涉及的领域：事件驱动、最终一致性、分布式事务、Async 异步、AOT 分层、消息序列化、Saga 补偿链。
 >
-> **真源**：`docs/architecture.md`（18 项架构决策）+ `docs/decisions/001-016`（16 ADR）+ `docs/review/action-items-*.md`（ITM 历史缺陷）+ `conventions.md` §10/§12/§14
+> **真源**：`docs/architecture.md`（18 项架构决策）+ `docs/decisions/001-017`（17 ADR）+ `docs/review/action-items-*.md`（ITM 历史缺陷）+ `conventions.md` §10/§12/§14
 >
 > **状态标记**: ✅ 已修复/已实现 · ⚠️ 部分实现 · 🚫 架构层面避开
 

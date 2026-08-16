@@ -44,24 +44,48 @@ public static class PostgreSqlJsonb
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Include(string column, string key, string value)
-        => $"{Escape(column)} @> '{{\"{EscapeSqlLiteral(EscapeJsonValue(key))}\":\"{EscapeSqlLiteral(EscapeJsonValue(value))}\"}}'::jsonb";
+    {
+        // ITM-167 修复：补 null/空白守卫——缺守卫时 null 列名/键值进入转义
+        // 生成畸形 SQL 片段，失败延迟到服务端执行期。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        return $"{Escape(column)} @> '{{\"{EscapeSqlLiteral(EscapeJsonValue(key))}\":\"{EscapeSqlLiteral(EscapeJsonValue(value))}\"}}'::jsonb";
+    }
 
     /// <summary>生成 JSONB 被包含条件（ &lt;@ ），转义策略同 <see cref="Include"/>。</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string IncludedBy(string column, string key, string value)
-        => $"'{{\"{EscapeSqlLiteral(EscapeJsonValue(key))}\":\"{EscapeSqlLiteral(EscapeJsonValue(value))}\"}}'::jsonb <@ {Escape(column)}";
+    {
+        // ITM-167 修复：补 null/空白守卫（同 Include）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        return $"'{{\"{EscapeSqlLiteral(EscapeJsonValue(key))}\":\"{EscapeSqlLiteral(EscapeJsonValue(value))}\"}}'::jsonb <@ {Escape(column)}";
+    }
 
     // ── 键存在操作符 ──
 
     /// <summary>检查 JSONB 中是否存在指定键：payload ? 'Key'</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string HasKey(string column, string key)
-        => $"{Escape(column)} ? '{EscapeLiteral(key)}'";
+    {
+        // ITM-167 修复：补 null/空白守卫（同 Include）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        return $"{Escape(column)} ? '{EscapeLiteral(key)}'";
+    }
 
     /// <summary>检查 JSONB 中是否存在任意指定键：payload ?| array['K1','K2']</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string HasAnyKey(string column, params string[] keys)
     {
+        // ITM-167 修复：补 null/空白守卫（keys 数组及每个元素）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        ArgumentNullException.ThrowIfNull(keys);
+        foreach (var k in keys)
+            ArgumentException.ThrowIfNullOrWhiteSpace(k);
+
         var list = string.Join(",", keys.Select(k => $"'{EscapeLiteral(k)}'"));
         return $"{Escape(column)} ?| array[{list}]";
     }
@@ -70,6 +94,12 @@ public static class PostgreSqlJsonb
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string HasAllKeys(string column, params string[] keys)
     {
+        // ITM-167 修复：补 null/空白守卫（同 HasAnyKey）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        ArgumentNullException.ThrowIfNull(keys);
+        foreach (var k in keys)
+            ArgumentException.ThrowIfNullOrWhiteSpace(k);
+
         var list = string.Join(",", keys.Select(k => $"'{EscapeLiteral(k)}'"));
         return $"{Escape(column)} ?& array[{list}]";
     }
@@ -79,12 +109,22 @@ public static class PostgreSqlJsonb
     /// <summary>提取 JSONB 字段文本值：payload ->> 'Key'</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractText(string column, string key)
-        => $"{Escape(column)} ->> '{EscapeLiteral(key)}'";
+    {
+        // ITM-167 修复：补 null/空白守卫（同 Include）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        return $"{Escape(column)} ->> '{EscapeLiteral(key)}'";
+    }
 
     /// <summary>提取 JSONB 字段 JSON 值：payload -> 'Key'</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractJson(string column, string key)
-        => $"{Escape(column)} -> '{EscapeLiteral(key)}'";
+    {
+        // ITM-167 修复：补 null/空白守卫（同 ExtractText）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        return $"{Escape(column)} -> '{EscapeLiteral(key)}'";
+    }
 
     /// <summary>路径提取文本：payload #>> '{path,to,key}'</summary>
     /// <param name="path">
@@ -96,6 +136,12 @@ public static class PostgreSqlJsonb
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractTextByPath(string column, params string[] path)
     {
+        // ITM-167 修复：补 null/空白守卫（column 与 path 数组及每个元素）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        ArgumentNullException.ThrowIfNull(path);
+        foreach (var segment in path)
+            ArgumentException.ThrowIfNullOrWhiteSpace(segment);
+
         // P3 修复（八轮评审）：path 元素内单引号改 SQL 标准翻倍（对齐同文件 EscapeLiteral）——
         // 此前 Replace("'","\\") 的反斜杠转义在 standard_conforming_strings=on（PG 默认）下不生效，
         // 含单引号的 path 元素会提前终止字符串字面量。PG path 数组格式为 '{a,b}'（元素不带外层引号）。
@@ -111,6 +157,12 @@ public static class PostgreSqlJsonb
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractJsonByPath(string column, params string[] path)
     {
+        // ITM-167 修复：补 null/空白守卫（同 ExtractTextByPath）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        ArgumentNullException.ThrowIfNull(path);
+        foreach (var segment in path)
+            ArgumentException.ThrowIfNullOrWhiteSpace(segment);
+
         // P3 修复（八轮评审）：path 元素内单引号改 SQL 标准翻倍（对齐同文件 EscapeLiteral）——
         // 此前 Replace("'","\\") 的反斜杠转义在 standard_conforming_strings=on（PG 默认）下不生效，
         // 含单引号的 path 元素会提前终止字符串字面量。PG path 数组格式为 '{a,b}'（元素不带外层引号）。
@@ -135,7 +187,13 @@ public static class PostgreSqlJsonb
 
     /// <summary>生成索引友好的 JSONB GIN 索引 SQL</summary>
     public static string CreateGinIndex(string table, string column, string indexName)
-        => $"CREATE INDEX IF NOT EXISTS {Escape(indexName)} ON {Escape(table)} USING GIN ({Escape(column)} jsonb_path_ops)";
+    {
+        // ITM-167 修复：补 null/空白守卫（同 Include——DDL 标识符更需入口校验）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(table);
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        ArgumentException.ThrowIfNullOrWhiteSpace(indexName);
+        return $"CREATE INDEX IF NOT EXISTS {Escape(indexName)} ON {Escape(table)} USING GIN ({Escape(column)} jsonb_path_ops)";
+    }
 
     // ── 内部：标识符转义（防止 SQL 注入）──
 

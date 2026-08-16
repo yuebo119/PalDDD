@@ -1,3 +1,6 @@
+using System.Data;
+using System.Data.Common;
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.Data.Sqlite;
 using PalDDD.Dapper;
 
@@ -124,5 +127,122 @@ public sealed class DapperUnitOfWorkTests
         // BeginTransactionAsync 应自动打开连接
         await Assert.That(conn.State).IsEqualTo(System.Data.ConnectionState.Open);
         await Assert.That(uow.Transaction).IsNotNull();
+    }
+
+    // ───────────────────────────────────────────────────────────
+    // ITM-131/ITM-165 回归测试 — 失败路径事务清理 + Dispose 后 Begin 守卫
+    // 用轻量 fake DbTransaction 子类模拟 Commit/Rollback 抛异常（不引入 Moq）。
+    // ───────────────────────────────────────────────────────────
+
+    [Test]
+    public async Task BeginTransactionAsync_AfterDispose_Throws()
+    {
+        var uow = new DapperUnitOfWork(_connection);
+        await uow.DisposeAsync();
+
+        await Assert.That(async () => await uow.BeginTransactionAsync()).Throws<ObjectDisposedException>();
+    }
+
+    [Test]
+    public async Task CommitAsync_WhenCommitThrows_DisposesAndClearsTransaction()
+    {
+        var tx = new ThrowingDbTransaction();
+        await using var conn = new ThrowingDbConnection(tx);
+        var uow = new DapperUnitOfWork(conn);
+        await uow.BeginTransactionAsync();
+
+        await Assert.That(async () => await uow.CommitAsync()).Throws<InvalidOperationException>();
+
+        // ITM-131：Commit 失败后事务引用必须清空且已 Dispose，否则 DisposeAsync 会二次回滚覆盖根因
+        await Assert.That(uow.Transaction).IsNull();
+        await Assert.That(tx.DisposeAsyncCallCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task RollbackAsync_WhenRollbackThrows_DisposesAndClearsTransaction()
+    {
+        var tx = new ThrowingDbTransaction();
+        await using var conn = new ThrowingDbConnection(tx);
+        var uow = new DapperUnitOfWork(conn);
+        await uow.BeginTransactionAsync();
+
+        await Assert.That(async () => await uow.RollbackAsync()).Throws<InvalidOperationException>();
+
+        // ITM-131：Rollback 失败后事务引用必须清空且已 Dispose
+        await Assert.That(uow.Transaction).IsNull();
+        await Assert.That(tx.DisposeAsyncCallCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task DisposeAsync_WhenRollbackThrows_IsIdempotentAndDisposes()
+    {
+        var tx = new ThrowingDbTransaction();
+        await using var conn = new ThrowingDbConnection(tx);
+        var uow = new DapperUnitOfWork(conn);
+        await uow.BeginTransactionAsync();
+
+        // ITM-131：DisposeAsync 过滤已失效事务的 Rollback 异常，不应外抛
+        await uow.DisposeAsync();
+
+        await Assert.That(uow.Transaction).IsNull();
+        await Assert.That(tx.RollbackAsyncCallCount).IsEqualTo(1);
+        await Assert.That(tx.DisposeAsyncCallCount).IsEqualTo(1);
+
+        // _disposed 已置位：二次 Dispose 不再触碰事务（可重入）
+        await uow.DisposeAsync();
+        await Assert.That(tx.RollbackAsyncCallCount).IsEqualTo(1);
+        await Assert.That(tx.DisposeAsyncCallCount).IsEqualTo(1);
+    }
+
+    private sealed class ThrowingDbConnection : DbConnection
+    {
+        private readonly DbTransaction _transaction;
+
+        public ThrowingDbConnection(DbTransaction transaction) => _transaction = transaction;
+
+        [AllowNull]
+        public override string ConnectionString
+        {
+            get => "";
+            set => _ = value;
+        }
+        public override string Database => "fake";
+        public override string DataSource => "fake";
+        public override string ServerVersion => "0";
+        public override ConnectionState State => ConnectionState.Open;
+
+        public override void ChangeDatabase(string databaseName) { }
+        public override void Close() { }
+        public override void Open() { }
+
+        protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel) => _transaction;
+        protected override DbCommand CreateDbCommand() => throw new NotSupportedException();
+    }
+
+    private sealed class ThrowingDbTransaction : DbTransaction
+    {
+        public int RollbackAsyncCallCount { get; private set; }
+        public int DisposeAsyncCallCount { get; private set; }
+
+        public override IsolationLevel IsolationLevel => IsolationLevel.Unspecified;
+        protected override DbConnection DbConnection => null!;
+
+        public override void Commit() => throw new InvalidOperationException("Commit failed");
+        public override void Rollback() => throw new InvalidOperationException("Rollback failed");
+
+        public override Task CommitAsync(CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("Commit failed");
+
+        public override Task RollbackAsync(CancellationToken cancellationToken = default)
+        {
+            RollbackAsyncCallCount++;
+            throw new InvalidOperationException("Rollback failed");
+        }
+
+        public override ValueTask DisposeAsync()
+        {
+            DisposeAsyncCallCount++;
+            return base.DisposeAsync();
+        }
     }
 }

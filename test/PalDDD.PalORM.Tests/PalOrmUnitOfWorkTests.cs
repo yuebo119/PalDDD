@@ -17,8 +17,13 @@ public class PalOrmUnitOfWorkTests
         await using var session = await PalOrmStoreFixture.CreateAsync();
         await using var uow = new SqlitePalOrmUnitOfWork(session);
         await uow.BeginTransactionAsync();
-        // PalORM DataSession 内部维护事务状态 —— 通过执行任意 SQL 验证不抛
-        await Assert.That(async () => await session.ExecuteAsync($"SELECT 1")).ThrowsNothing();
+
+        // 写入必须落在事务内：回滚后数据不存在，才证明 BeginTransactionAsync 真正创建了事务。
+        await session.ExecuteAsync($"INSERT INTO outbox_messages (id, type, payload, created_at) VALUES ({"begin-tx"}, {"tx.begin"}, {"[]"}, {DateTimeOffset.UtcNow})");
+        await uow.RollbackAsync();
+
+        var count = await session.ScalarAsync<long>($"SELECT COUNT(*) FROM outbox_messages");
+        await Assert.That(count).IsEqualTo(0L);
     }
 
     [Test]

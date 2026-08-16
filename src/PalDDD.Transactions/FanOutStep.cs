@@ -42,8 +42,23 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
     /// <inheritdoc/>
     public override StepDispatchKind DispatchKind => StepDispatchKind.FanOut;
 
-    /// <summary>最大并发数 — 默认等于 CPU 核心数</summary>
-    public int MaxConcurrency { get; init; } = Environment.ProcessorCount;
+    private int _maxConcurrency = Environment.ProcessorCount;
+
+    /// <summary>最大并发数 — 默认等于 CPU 核心数。0 表示使用默认核数；负值抛 <see cref="ArgumentOutOfRangeException"/>。</summary>
+    /// <remarks>
+    /// ITM-166 修复：init 赋值路径前置校验——对象初始化器 <c>new FanOutStep(...) { MaxConcurrency = -1 }</c>
+    /// 在构造完成后赋值，原先只由 ExecuteFanOutAsync 运行时兜底（失败延迟到执行期）；
+    /// init setter 在赋值点即时抛错，与构造函数参数路径同语义。
+    /// </remarks>
+    public int MaxConcurrency
+    {
+        get => _maxConcurrency;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(value);
+            _maxConcurrency = value > 0 ? value : Environment.ProcessorCount;
+        }
+    }
 
     /// <summary>每个子任务的超时时间（可选）</summary>
     public TimeSpan? PerItemTimeout { get; init; }
@@ -70,8 +85,9 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
         _executor = executor;
         // P3 修复（十七轮）：MaxConcurrency 校验上移构造函数——原 ThrowIfNegativeOrZero
         // 在 ExecuteFanOutAsync 内，非法值延迟到运行时首跳才爆；构造参数路径即时失败。
-        // 0 保持"默认核数"语义（与 init 属性默认值一致）；init 初始化器路径仍由
-        // 执行时校验兜底（init 赋值发生在构造之后，构造无法拦截）
+        // 0 保持"默认核数"语义（与 init 属性默认值一致）。
+        // ITM-166 修复：init 初始化器路径同步由 MaxConcurrency.init setter 前置校验
+        // （见属性声明），执行时校验仅作纵深防御保留。
         ArgumentOutOfRangeException.ThrowIfNegative(maxConcurrency);
         MaxConcurrency = maxConcurrency > 0 ? maxConcurrency : Environment.ProcessorCount;
     }

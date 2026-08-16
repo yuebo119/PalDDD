@@ -111,13 +111,20 @@ public sealed class StrategicMetadataAttributeTests
         await Assert.That(attr.IdType).IsEqualTo(typeof(Guid));
     }
 
-    /// <summary>GenerateEnumAttribute 无参构造函数 — 纯标记属性</summary>
+    /// <summary>GenerateEnumAttribute 无参构造函数 — 纯标记属性（Class 目标、单次标注、无状态成员）</summary>
     [Test]
     public async Task GenerateEnumAttribute_IsMarkerAttribute()
     {
-        var attr = new GenerateEnumAttribute();
+        var usage = typeof(GenerateEnumAttribute).GetCustomAttribute<AttributeUsageAttribute>()!;
 
-        await Assert.That(attr).IsNotNull();
+        await Assert.That(usage.ValidOn).IsEqualTo(AttributeTargets.Class);
+        await Assert.That(usage.AllowMultiple).IsFalse();
+        await Assert.That(typeof(GenerateEnumAttribute)
+            .GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            .Where(f => f.DeclaringType == typeof(GenerateEnumAttribute)).Count()).IsEqualTo(0);
+        await Assert.That(typeof(GenerateEnumAttribute)
+            .GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            .Where(p => p.DeclaringType == typeof(GenerateEnumAttribute)).Count()).IsEqualTo(0);
     }
 
     private static bool GetAllowMultiple<T>() where T : Attribute

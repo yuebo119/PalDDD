@@ -32,10 +32,6 @@
     <PackageReference Include="TUnit" />
     <PackageReference Include="FsCheck" />
     <PackageReference Include="TUnit.FsCheck" />
-    <PackageReference Include="coverlet.collector">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
   </ItemGroup>
 
 </Project>

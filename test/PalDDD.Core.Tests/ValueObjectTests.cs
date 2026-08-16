@@ -3,13 +3,6 @@ namespace PalDDD.Core.Tests;
 public sealed class ValueObjectTests
 {
     [Test]
-    public async Task ValueObject_StoresValue()
-    {
-        var vo = new ValueObject<int>(42);
-        await Assert.That(vo.Value).IsEqualTo(42);
-    }
-
-    [Test]
     public async Task ValueObject_PreservesValueExactly()
     {
         // ValueObject<T> 不做隐式值域约束 —— 值域约束由派生类型自行实现。

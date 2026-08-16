@@ -28,7 +28,10 @@ public class OutboxThroughputBenchmarks
     private InMemoryOutboxStore _store = null!;
     private const int BatchSize = 100;
 
-    [GlobalSetup]
+    // ITM-152 修复：每次迭代重建 InMemory store 并重新灌入 100 条待处理消息。
+    // 原 [GlobalSetup] 只在首个迭代灌一次，LeasePending/LeaseAndMarkAll 首个迭代
+    // 即全部租走/处理，后续迭代空转测不到真实吞吐。
+    [IterationSetup]
     public void Setup()
     {
         _store = new InMemoryOutboxStore();
@@ -41,6 +44,13 @@ public class OutboxThroughputBenchmarks
                 ContentType = "application/json"
             });
         }
+    }
+
+    [IterationCleanup]
+    public void Cleanup()
+    {
+        // 每次迭代结束丢弃 store，避免跨迭代状态泄漏（双保险，IterationSetup 亦会重建）
+        _store = null!;
     }
 
     [Benchmark(Baseline = true)]
@@ -85,11 +95,24 @@ public class EventLogBenchmarks
     private InMemoryEventLog _log = null!;
     private static readonly EventAuditMetadata _audit = EventAuditMetadata.Empty;
     private const string Stream = "order-123";
+    private const int SeedCount = 100;
 
     [GlobalSetup]
     public void Setup()
     {
         _log = new InMemoryEventLog();
+
+        // ITM-153 修复：种子 100 条事件——原 Setup 空流使 ReadStream_Forward 空枚举，
+        // 基准测的是"空流迭代器开销"而非真实读取路径。
+        for (var i = 0; i < SeedCount; i++)
+        {
+            _log.AppendAsync(
+                Stream,
+                ExpectedStreamVersion.Any,
+                [new EventData(Guid.NewGuid(), "OrderCreated", 1, "application/json",
+                    "{}"u8.ToArray(), ReadOnlyMemory<byte>.Empty, _audit)],
+                default).AsTask().GetAwaiter().GetResult();
+        }
     }
 
     [Benchmark]

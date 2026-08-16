@@ -20,10 +20,6 @@
     <!-- P1 回归（二十一轮）：关系型 provider 测试（堵 InMemory 掩盖 Ulid 映射缺陷的盲区） -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="TUnit" />
-    <PackageReference Include="coverlet.collector">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
   </ItemGroup>
 
 </Project>

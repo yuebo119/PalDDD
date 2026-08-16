@@ -48,6 +48,13 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// ITM-167 声明（非泛型路径）：本重载以 <c>MemoryPackSerializer.Serialize(runtimeType, message)</c>
+    /// 运行时类型查找 Formatter——非 AOT 友好路径。在裁剪/NAOT 发布下，运行时类型若未在
+    /// 源码生成器静态注册（[MemoryPackable]），序列化会抛 <see cref="InvalidOperationException"/>
+    /// 或 MissingFormatterException（安全失败，不静默降级）。AOT 场景必须走泛型
+    /// <see cref="Serialize{TMessage}"/> 路径（编译时类型安全）。错误消息见下方运行时类型提示。
+    /// </remarks>
     public ReadOnlyMemory<byte> Serialize(object message, MessageDescriptor descriptor)
     {
         ArgumentNullException.ThrowIfNull(message);
@@ -67,6 +74,12 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// ITM-167 声明（非泛型路径）：本重载以 <c>MemoryPackSerializer.Deserialize(descriptor.ClrType, payload)</c>
+    /// 运行时类型查找 Formatter——同 <see cref="Serialize(object, MessageDescriptor)"/> 的
+    /// 裁剪/NAOT 降级声明：运行时类型未静态注册时安全失败（抛异常），AOT 场景走泛型
+    /// <see cref="Deserialize{TMessage}"/> 路径。
+    /// </remarks>
     public object? Deserialize(ReadOnlySpan<byte> payload, MessageDescriptor descriptor)
     {
         ArgumentNullException.ThrowIfNull(descriptor);

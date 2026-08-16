@@ -25,6 +25,9 @@ public static class SagaExtensions
         where TItem : notnull
     {
         ArgumentNullException.ThrowIfNull(saga);
+        // ITM-166 修复：补 step 空守卫——null step 在此前经 saga.When 内部解引用
+        // （DispatchKind/key）才抛 NRE，失败点远离用户传入点；入口显式守卫。
+        ArgumentNullException.ThrowIfNull(step);
         saga.When(state, step);
     }
 
@@ -37,6 +40,8 @@ public static class SagaExtensions
         where TItem : notnull
     {
         ArgumentNullException.ThrowIfNull(saga);
+        // ITM-166 修复：补 step 空守卫（同非事件精确匹配版本）。
+        ArgumentNullException.ThrowIfNull(step);
         saga.When(state, typeof(TEvent), step);
     }
 
@@ -55,6 +60,9 @@ public static class SagaExtensions
         where TOutput : notnull
     {
         ArgumentNullException.ThrowIfNull(saga);
+        // ITM-166 修复：补 step 空守卫——null step 在此前经 saga.When 内部解引用
+        // （DispatchKind/key）才抛 NRE，失败点远离用户传入点；入口显式守卫。
+        ArgumentNullException.ThrowIfNull(step);
         saga.When(state, step);
     }
 
@@ -69,6 +77,8 @@ public static class SagaExtensions
         where TOutput : notnull
     {
         ArgumentNullException.ThrowIfNull(saga);
+        // ITM-166 修复：补 step 空守卫（同非事件精确匹配版本）。
+        ArgumentNullException.ThrowIfNull(step);
         saga.When(state, typeof(TEvent), step);
     }
 
@@ -84,6 +94,9 @@ public static class SagaExtensions
         where TState : SagaState, new()
     {
         ArgumentNullException.ThrowIfNull(saga);
+        // ITM-166 修复：补 step 空守卫——null step 在此前经 saga.When 内部解引用
+        // （DispatchKind/key）才抛 NRE，失败点远离用户传入点；入口显式守卫。
+        ArgumentNullException.ThrowIfNull(step);
         saga.When(state, step);
     }
 
@@ -95,6 +108,8 @@ public static class SagaExtensions
         where TState : SagaState, new()
     {
         ArgumentNullException.ThrowIfNull(saga);
+        // ITM-166 修复：补 step 空守卫（同非事件精确匹配版本）。
+        ArgumentNullException.ThrowIfNull(step);
         saga.When(state, typeof(TEvent), step);
     }
 
@@ -110,6 +125,9 @@ public static class SagaExtensions
         where TState : SagaState, new()
     {
         ArgumentNullException.ThrowIfNull(saga);
+        // ITM-166 修复：补 step 空守卫——null step 在此前经 saga.When 内部解引用
+        // （DispatchKind/key）才抛 NRE，失败点远离用户传入点；入口显式守卫。
+        ArgumentNullException.ThrowIfNull(step);
         saga.When(state, step);
     }
 
@@ -121,6 +139,8 @@ public static class SagaExtensions
         where TState : SagaState, new()
     {
         ArgumentNullException.ThrowIfNull(saga);
+        // ITM-166 修复：补 step 空守卫（同非事件精确匹配版本）。
+        ArgumentNullException.ThrowIfNull(step);
         saga.When(state, typeof(TEvent), step);
     }
 }

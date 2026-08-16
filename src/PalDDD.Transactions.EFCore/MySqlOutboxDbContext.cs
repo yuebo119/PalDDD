@@ -45,6 +45,16 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
         int maxRetryCount,
         CancellationToken ct)
     {
+        // ITM-167 修复：leaseSeconds 边界守卫——leaseDuration 非正时租约秒数非正
+        // （立即过期/永不过期语义错乱）；TotalSeconds 超过 int.MaxValue 时
+        // (int)Math.Ceiling 在 unchecked 下回绕为负值，写入 INTERVAL 负数秒。Options 层
+        // 已校验正数，此处是 Store 直调路径的防御性 fail-fast（与 Options 层校验不重复，
+        // 各自覆盖 DI 启动期与运行时直调两类入口）。
+        if (leaseDuration <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration must be greater than zero.");
+        if (leaseDuration.TotalSeconds > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for MySQL DATE_ADD.");
+
         await using var transaction = await Database.BeginTransactionAsync(ct).ConfigureAwait(false);
         var messages = await OutboxMessages
             .FromSqlRaw(

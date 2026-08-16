@@ -263,9 +263,8 @@ public class SagaRetryAndCompensationTests
     [Test]
     public async Task StepWithoutCompensation_SkippedOnRollback()
     {
-        var saga = new TestSaga();
-        saga.PublicWhenWithoutCompensation("Initial", "NoCompensate");
-        saga.PublicWhen("NoCompensate", "Fail", shouldFail: true);
+        var compensationLog = new List<string>();
+        var saga = new ExecutedStepWithoutCompensationSaga(compensationLog);
 
         var state = new TestSagaState { CurrentState = "Initial" };
         state = await saga.ProcessEventAsync(state, new object());
@@ -274,8 +273,10 @@ public class SagaRetryAndCompensationTests
         await Assert.That(async () =>
             await saga.ProcessEventAsync(state, new object())).Throws<AggregateException>();
 
-        // 补偿后状态应包含 compensated 标记
-        await Assert.That(state.CurrentState).Contains("compensated");
+        // 无补偿步骤必须被跳过：仅失败步骤 Fail 被补偿
+        await Assert.That(compensationLog).Count().IsEqualTo(1);
+        await Assert.That(compensationLog[0]).IsEqualTo("compensate:Fail");
+        await Assert.That(state.CurrentState).IsEqualTo("Fail-compensated");
     }
 }
 
@@ -587,6 +588,34 @@ internal sealed class EventSpecificCompensationSaga : Saga<TestSagaState>
             compensate: (_, _) =>
             {
                 _log.Add("compensate:Fail");
+                return ValueTask.CompletedTask;
+            }));
+    }
+}
+
+/// <summary>已执行步骤无补偿 Saga — 验证回滚时跳过无补偿步骤、仅补偿有补偿的失败步骤。</summary>
+internal sealed class ExecutedStepWithoutCompensationSaga : Saga<TestSagaState>
+{
+    private readonly List<string> _log;
+
+    public ExecutedStepWithoutCompensationSaga(List<string> compensationLog)
+    {
+        MaxRetries = 0;
+        _log = compensationLog;
+
+        When("Initial", new SagaStep("NoCompensate",
+            execute: (s, _, _) =>
+            {
+                s.CurrentState = "NoCompensate";
+                return ValueTask.FromResult(s);
+            }));
+
+        When("NoCompensate", new SagaStep("Fail",
+            execute: (_, _, _) => throw new InvalidOperationException("Step failed"),
+            compensate: (s, _) =>
+            {
+                _log.Add("compensate:Fail");
+                s.CurrentState = "Fail-compensated";
                 return ValueTask.CompletedTask;
             }));
     }

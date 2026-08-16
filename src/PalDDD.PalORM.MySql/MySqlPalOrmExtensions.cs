@@ -21,6 +21,12 @@ public static class MySqlPalOrmExtensions
 {
     /// <summary>
     /// 注册 PalORM MySQL 适配包。
+    /// <para>
+    /// <b>DI 工厂 sync-over-async（ITM-166 声明）</b>：<see cref="DataSession{TProvider}"/>.<c>CreateAsync</c>
+    /// 是异步方法，DI 工厂是同步的——用 <c>GetAwaiter().GetResult()</c> 同步阻塞。仅在 Scoped
+    /// 解析时执行（请求起始），非热路径；与 SQLite/PG 版 PalOrmExtensions 同款声明，如未来
+    /// 死锁可改为 <c>Task.Run().Result</c> 或建议 PalORM 提供 IDataSessionFactory。
+    /// </para>
     /// </summary>
     /// <param name="services">DI 容器。</param>
     /// <param name="connectionString">MySQL 连接串（如 "Server=localhost;User Id=user;Password=pass;Database=mydb"）。</param>

@@ -55,7 +55,6 @@
     <PackageVersion Include="Confluent.Kafka" Version="2.15.0" />
     <!-- 测试基础设施 — TUnit（源生成器测试框架 · MTP） -->
     <PackageVersion Include="TUnit" Version="1.65.0" />
-    <PackageVersion Include="coverlet.collector" Version="10.0.1" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <!-- 属性测试 — FsCheck + TUnit 集成 -->
     <PackageVersion Include="FsCheck" Version="3.3.4" />

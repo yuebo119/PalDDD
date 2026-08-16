@@ -30,6 +30,8 @@ git push origin main            # 推送 GitHub
 git checkout dev                # 切回 dev
 ```
 
+> **发布一律经 PR/人工合并，仓库无强推脚本**（`scripts/publish-main.sh` 已删除）。
+
 ## 强制规则
 
 1. ❌ 禁止 `git push origin main --force`（会覆盖远程历史）

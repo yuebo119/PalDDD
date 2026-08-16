@@ -65,17 +65,17 @@ public static class MultiDialectFixture
         foreach (var table in tables)
         {
             await using var cmd = conn.CreateCommand();
-            // 先删 INDEX（部分方言不支持 IF EXISTS on index），再删表
+            // 先删表（索引随表删除）；残留索引在下一循环兜底清理
             cmd.CommandText = $"DROP TABLE IF EXISTS {table}";
             await cmd.ExecuteNonQueryAsync(ct);
         }
-        // 删除可能残留的索引
+        // 删除可能残留的索引（表删除后索引通常已随表删除，此循环为方言差异兜底）
         var indexes = new[] { "idx_inbox_unique", "idx_events_stream", "idx_outbox_status", "idx_projection_checkpoints_status", "idx_idempotency_expires" };
         foreach (var idx in indexes)
         {
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = $"DROP INDEX IF EXISTS {idx}";
-            try { await cmd.ExecuteNonQueryAsync(ct); } catch { /* 某些方言不支持 IF EXISTS on index */ }
+            try { await cmd.ExecuteNonQueryAsync(ct); } catch { /* 某些方言不支持 IF EXISTS on index：忽略并继续 */ }
         }
     }
 }

@@ -26,6 +26,8 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
     public async ValueTask<ProjectionCheckpoint?> GetAsync(
         string projectionName, string sourceName, string position, CancellationToken ct = default)
     {
+        // ITM-163 修复：补 key 空白守卫（对齐 DapperProjectionCheckpointStore/InMemoryProjectionCheckpointStore）
+        ValidateKeyParts(projectionName, sourceName, position);
         // 复合主键表全程手写 SQL —— GetRawConnection + 手动 reader（QueryFirstAsync 对未注册类型返回空对象）
         // P2/P3 修复（十七轮）：修正矛盾注释——CheckpointRow 投影 DTO 已删除（Models 死代码，Store 从未使用）
         await using var cmd = Session.GetRawConnection().CreateCommand();
@@ -50,6 +52,12 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         string projectionName, string sourceName, string position,
         DateTimeOffset startedAt, TimeSpan processingTimeout, CancellationToken ct = default)
     {
+        // ITM-163 修复：补 key 空白守卫（对齐 DapperProjectionCheckpointStore/InMemoryProjectionCheckpointStore）
+        ValidateKeyParts(projectionName, sourceName, position);
+        // ITM-133 修复：processingTimeout 必须非负（对齐 DapperProjectionCheckpointStore ITM-107 同款）——
+        // 负值使 leaseUntil = startedAt + timeout < startedAt，僵尸抢占语义失效
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
         var leaseUntil = startedAt + processingTimeout;
         var statusProcessing = (int)ProjectionCheckpointStatus.Processing;
 
@@ -86,6 +94,8 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
     /// <inheritdoc />
     public async ValueTask MarkCompletedAsync(ProjectionCheckpoint checkpoint, DateTimeOffset completedAt, CancellationToken ct = default)
     {
+        // ITM-163 修复：补 checkpoint null 守卫（对齐 DapperProjectionCheckpointStore/InMemoryProjectionCheckpointStore）
+        ArgumentNullException.ThrowIfNull(checkpoint);
         var expectedRevision = checkpoint.Revision;
         var statusCompleted = (int)ProjectionCheckpointStatus.Completed;
         var affected = await Session.ExecuteAsync(
@@ -100,6 +110,9 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
     /// <inheritdoc />
     public async ValueTask MarkFailedAsync(ProjectionCheckpoint checkpoint, string failureReason, DateTimeOffset failedAt, CancellationToken ct = default)
     {
+        // ITM-163 修复：补 checkpoint null + failureReason 空白守卫（对齐 DapperProjectionCheckpointStore/InMemoryProjectionCheckpointStore）
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         var expectedRevision = checkpoint.Revision;
         var statusFailed = (int)ProjectionCheckpointStatus.Failed;
         var statusCompleted = (int)ProjectionCheckpointStatus.Completed;
@@ -113,6 +126,9 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
     /// <inheritdoc />
     public async ValueTask ResetAsync(string projectionName, string sourceName, CancellationToken ct = default)
     {
+        // ITM-163 修复：补 names 空白守卫（对齐 DapperProjectionCheckpointStore/InMemoryProjectionCheckpointStore）
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
         await Session.ExecuteAsync(
             $"DELETE FROM projection_checkpoints WHERE projection_name = {projectionName} AND source_name = {sourceName}",
             ct);
@@ -124,5 +140,12 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         p.ParameterName = name;
         p.Value = value;
         cmd.Parameters.Add(p);
+    }
+
+    private static void ValidateKeyParts(string projectionName, string sourceName, string position)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(position);
     }
 }

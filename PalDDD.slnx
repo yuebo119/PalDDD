@@ -67,6 +67,8 @@
     </Folder>
 
     <Folder Name="/src/Metapackages/">
+      <Project Path="src/PalDDD.Base/PalDDD.Base.csproj" />
+      <Project Path="src/PalDDD.Extension/PalDDD.Extension.csproj" />
       <Project Path="src/PalDDD.Prompts/PalDDD.Prompts.csproj" />
     </Folder>
 

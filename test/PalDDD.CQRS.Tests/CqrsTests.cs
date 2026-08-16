@@ -32,8 +32,13 @@ public sealed class GetOrderHandler : IQueryHandler<GetOrderQuery, string>
 
 public sealed class DeleteOrderHandler : ICommandHandler<DeleteOrderCommand, Unit>
 {
+    public int HandleCount { get; private set; }
+
     public ValueTask<Unit> HandleAsync(DeleteOrderCommand command, CancellationToken ct)
-        => ValueTask.FromResult(new Unit());
+    {
+        HandleCount++;
+        return ValueTask.FromResult(new Unit());
+    }
 }
 
 public sealed class CancellableHandler : ICommandHandler<CreateOrderCommand, Guid>
@@ -209,6 +214,9 @@ public sealed class DispatcherTests
         dispatcher.Register<DeleteOrderCommand, Unit, DeleteOrderHandler>();
 
         await dispatcher.SendAsync(new DeleteOrderCommand(Guid.NewGuid()));
+
+        var handler = sp.GetRequiredService<DeleteOrderHandler>();
+        await Assert.That(handler.HandleCount).IsEqualTo(1);
     }
 
     [Test]
@@ -433,10 +441,18 @@ public sealed class PipelineBehaviorTests
         services.AddSingleton(typeof(IPipelineBehavior<,>), typeof(CountingBehavior<,>));
         var sp = services.BuildServiceProvider();
 
-        var behaviors = sp.GetServices(typeof(IPipelineBehavior<CreateOrderCommand, Guid>));
+        var behaviors = sp.GetServices(typeof(IPipelineBehavior<CreateOrderCommand, Guid>)).ToArray();
         await Assert.That(behaviors).IsNotEmpty();
 
-        await Assert.That(behaviors.First()).IsTypeOf<CountingBehavior<CreateOrderCommand, Guid>>();
+        var behavior = (IPipelineBehavior)behaviors[0]!;
+        var cmd = new CreateOrderCommand("Test", 100m);
+        var result = await behavior.HandleAsync(cmd, CancellationToken.None,
+            () => new ValueTask<object?>(Guid.NewGuid()));
+
+        await Assert.That(result).IsTypeOf<Guid>();
+        var typed = (CountingBehavior<CreateOrderCommand, Guid>)behaviors[0]!;
+        await Assert.That(typed.BeforeCount).IsEqualTo(1);
+        await Assert.That(typed.AfterCount).IsEqualTo(1);
     }
 }
 

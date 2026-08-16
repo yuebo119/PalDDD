@@ -59,6 +59,11 @@ public sealed class ChildSagaStep<TChildState, TInput, TOutput> : SagaStep, IInt
         Func<SagaState, CancellationToken, ValueTask>? compensate = null)
         : base(key, execute: null!, compensate)
     {
+        // ITM-166 修复：补 selector 空守卫——原输入/输出选择器在 ExtractInput/
+        // ApplyOutput 首次调用时才抛 NRE，失败点远离构造参数；入口显式守卫。
+        ArgumentNullException.ThrowIfNull(inputSelector);
+        ArgumentNullException.ThrowIfNull(outputSelector);
+
         _inputSelector = inputSelector;
         _outputSelector = outputSelector;
         _outputApplier = outputApplier;

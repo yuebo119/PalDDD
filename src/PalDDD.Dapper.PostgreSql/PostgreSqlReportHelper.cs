@@ -40,6 +40,13 @@ public static class PostgreSqlReportHelper
         string outputPath,
         CancellationToken ct = default)
     {
+        // ITM-167 修复：补 null/空白守卫——缺守卫时 dataSource.CreateConnection()
+        // 或 new NpgsqlCommand(null) 的失败点远离本入口，参数错误被 provider 异常掩盖。
+        ArgumentNullException.ThrowIfNull(dataSource);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sql);
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
+
         await using var conn = dataSource.CreateConnection();
         await conn.OpenAsync(ct).ConfigureAwait(false);
 
@@ -89,6 +96,12 @@ public static class PostgreSqlReportHelper
         string outputPath,
         CancellationToken ct = default)
     {
+        // ITM-167 修复：补 null/空白守卫（同 ExportCsvAsync）。
+        ArgumentNullException.ThrowIfNull(dataSource);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sql);
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
+
         await using var conn = dataSource.CreateConnection();
         await conn.OpenAsync(ct).ConfigureAwait(false);
 
@@ -139,6 +152,12 @@ public static class PostgreSqlReportHelper
         Func<NpgsqlDataReader, CancellationToken, ValueTask<bool>> rowHandler,
         CancellationToken ct = default)
     {
+        // ITM-167 修复：补 null/空白守卫（同 ExportCsvAsync；rowHandler 为调用方委托）。
+        ArgumentNullException.ThrowIfNull(dataSource);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sql);
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentNullException.ThrowIfNull(rowHandler);
+
         await using var conn = dataSource.CreateConnection();
         await conn.OpenAsync(ct).ConfigureAwait(false);
 
@@ -169,10 +188,17 @@ public static class PostgreSqlReportHelper
         string outputPath,
         CancellationToken ct = default)
     {
+        // ITM-167 修复：补 null/空白守卫（同 ExportCsvAsync）。
+        ArgumentNullException.ThrowIfNull(dataSource);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tableOrQuery);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
+
         await using var conn = dataSource.CreateConnection();
         await conn.OpenAsync(ct).ConfigureAwait(false);
 
-        using var writer = new StreamWriter(outputPath, false, Encoding.UTF8);
+        // ITM-167 声明（COPY 受信边界）：tableOrQuery 直接插入 COPY 语句，无法参数化——
+        // 必须为编译期常量或受信任来源；用户输入必须先经白名单校验，禁止传入本方法。
+        await using var writer = new StreamWriter(outputPath, false, Encoding.UTF8);
         await using var reader = await conn.BeginTextExportAsync(
             $"COPY ({tableOrQuery}) TO STDOUT WITH (FORMAT CSV, HEADER)", ct).ConfigureAwait(false);
 
@@ -182,6 +208,9 @@ public static class PostgreSqlReportHelper
         while ((charsRead = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
             await writer.WriteAsync(buffer, 0, charsRead).ConfigureAwait(false);
 
+        // ITM-167 修复：StreamWriter 改 await using + 显式异步 Flush——
+        // 原同步 using/Dispose 在释放时同步 flush 阻塞线程（同步释放路径）。
+        await writer.FlushAsync().ConfigureAwait(false);
         return 0; // COPY TO 不返回行数
     }
 

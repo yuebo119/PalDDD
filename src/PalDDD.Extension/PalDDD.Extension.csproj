@@ -1,38 +1,44 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    📦 PalDDD.Extension — 扩展聚合元包（仅 PackageReference，无源码）
-    从 nupkgs/PalDDD.Extension.1.0.0-preview.1.nupkg 的 .nuspec 还原，
-    保证 git clone 后可从源码重建元包（修复 OBS-068）。
+    📦 PalDDD.Extension — 扩展聚合元包（仅依赖聚合，无源码）
+    ITM-128 修复：①加入 PalDDD.slnx（发布完整性——元包必须被 CI build/pack 覆盖）；
+    ②PalDDD.* 依赖改为 ProjectReference——dotnet pack 自动生成 1.1.0 nuspec 依赖，
+      本地 build 不再要求 NuGet 上已发布同名包；③外部依赖版本对齐中央版本源
+      （ByteAether.Ulid 1.4.0 / Microsoft.Extensions.* preview.7）。
 
     所有依赖均设 PrivateAssets="build;analyzers"，等价于 nuspec 的
     exclude="Build,Analyzers"：元包仅聚合运行时依赖，不向消费方传递
     build/analyzer 资产。
 
-    本地重建：先发布/恢复所依赖的 PalDDD.* preview 包，再
-    dotnet pack src/PalDDD.Extension/PalDDD.Extension.csproj
+    本地重建：dotnet pack src/PalDDD.Extension/PalDDD.Extension.csproj
   -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
-    <Description>Pal.DDD 扩展元包 — 全量 DDD 能力：CQRS + 事件日志 + 幂等 + 投影 + 消息 + 事务 + DI 装配。全 AOT 兼容。</Description>
+    <Description>Pal.DDD 扩展元包 — 全量 DDD 能力：CQRS + 事件日志 + 幂等 + 投影 + 消息 + 事务 + DI 装配。AOT：除 Transactions（Saga 反射特例，IsAotCompatible=false）外全兼容。</Description>
     <PackageTags>DDD;CQRS;EventSourcing;Outbox;Inbox;Saga;Projections;Idempotency;AOT;.NET11;FullStack</PackageTags>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);NU5128</NoWarn>
+    <NoWarn>$(NoWarn);NU5128;IL3058;NU5104</NoWarn>
+    <!-- NU5104 项目级抑制（ITM-161 配套）：.NET 11 Preview 生态下 1.1.0 元包必然依赖
+         Microsoft.Extensions.* 11.0.0-preview.7（唯一可用线），稳定包引预览依赖是生态事实
+         而非发布失误；全局 NoWarn 已按 ITM-161 收敛，此处是唯一需要的 pack 级例外。 -->
+    <!-- IL3058 项目级抑制（ITM-128/161 配套）：元包聚合的 Transactions 显式非 AOT
+         （Saga 反射），其编译期/运行期资产按设计传入；元包自身无源码无运行时。 -->
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="PalDDD.CQRS" Version="1.1.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.DependencyInjection" Version="1.1.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.EventLog" Version="1.1.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Idempotency" Version="1.1.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Messaging" Version="1.1.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Projections.EventLog" Version="1.1.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Projections" Version="1.1.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="PalDDD.Transactions" Version="1.1.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="ByteAether.Ulid" Version="1.0.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0-preview.5.26302.115" PrivateAssets="build;analyzers" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="11.0.0-preview.5.26302.115" PrivateAssets="build;analyzers" />
+    <ProjectReference Include="..\PalDDD.CQRS\PalDDD.CQRS.csproj" PrivateAssets="build;analyzers" />
+    <ProjectReference Include="..\PalDDD.DependencyInjection\PalDDD.DependencyInjection.csproj" PrivateAssets="build;analyzers" />
+    <ProjectReference Include="..\PalDDD.EventLog\PalDDD.EventLog.csproj" PrivateAssets="build;analyzers" />
+    <ProjectReference Include="..\PalDDD.Idempotency\PalDDD.Idempotency.csproj" PrivateAssets="build;analyzers" />
+    <ProjectReference Include="..\PalDDD.Messaging\PalDDD.Messaging.csproj" PrivateAssets="build;analyzers" />
+    <ProjectReference Include="..\PalDDD.Projections.EventLog\PalDDD.Projections.EventLog.csproj" PrivateAssets="build;analyzers" />
+    <ProjectReference Include="..\PalDDD.Projections\PalDDD.Projections.csproj" PrivateAssets="build;analyzers" />
+    <ProjectReference Include="..\PalDDD.Transactions\PalDDD.Transactions.csproj" PrivateAssets="build;analyzers" />
+    <PackageReference Include="ByteAether.Ulid" Version="1.4.0" PrivateAssets="build;analyzers" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0-preview.7.26381.103" PrivateAssets="build;analyzers" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="11.0.0-preview.7.26381.103" PrivateAssets="build;analyzers" />
     <PackageReference Include="ZLogger" Version="2.5.10" PrivateAssets="build;analyzers" />
   </ItemGroup>
 

@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 using Microsoft.EntityFrameworkCore;
 using PalDDD.Core.Diagnostics;
+using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using PalUlid = ByteAether.Ulid.Ulid;
@@ -98,23 +99,33 @@ public abstract class EventLogDbContext(
         using var activity = PalActivitySource.StartEventLogReadStream(streamName, fromVersion);
 
         var read = 0;
-        var query = Events
-            .AsNoTracking()
-            .Where(e => e.StreamName == streamName && e.StreamVersion >= fromVersion)
-            .OrderBy(e => e.StreamVersion)
-            .Take(maxCount)
-            .AsAsyncEnumerable()
-            .WithCancellation(cancellationToken)
-            .ConfigureAwait(false);
-
-        await foreach (var @event in query)
+        // ITM-167 修复：metrics 尾部语句移入 finally——迭代器被消费方提前 Dispose
+        //（await foreach 中 break/抛异常）时循环后语句不执行，已产出事件的计数丢失；
+        // finally 在迭代器任何退出路径都会执行（对齐 InMemoryEventLog 二十一轮），
+        // 且先于上方 using activity 的 Dispose（SetTag 先于 Activity 结束生效）。
+        // 计数同样改为 yield 前（对齐 InMemoryEventLog ITM-120）。
+        try
         {
-            yield return @event.ToRecordedEvent();
-            checked { read++; }
-        }
+            var query = Events
+                .AsNoTracking()
+                .Where(e => e.StreamName == streamName && e.StreamVersion >= fromVersion)
+                .OrderBy(e => e.StreamVersion)
+                .Take(maxCount)
+                .AsAsyncEnumerable()
+                .WithCancellation(cancellationToken)
+                .ConfigureAwait(false);
 
-        activity?.SetTag("pal.eventlog.read_count", read);
-        PalMetrics.EventLogRead.Add(read);
+            await foreach (var @event in query)
+            {
+                checked { read++; }
+                yield return @event.ToRecordedEvent();
+            }
+        }
+        finally
+        {
+            activity?.SetTag("pal.eventlog.read_count", read);
+            PalMetrics.EventLogRead.Add(read);
+        }
     }
 
     /// <inheritdoc />
@@ -128,23 +139,30 @@ public abstract class EventLogDbContext(
         using var activity = PalActivitySource.StartEventLogReadAll(fromPosition);
 
         var read = 0;
-        var query = Events
-            .AsNoTracking()
-            .Where(e => e.GlobalPosition >= fromPosition)
-            .OrderBy(e => e.GlobalPosition)
-            .Take(maxCount)
-            .AsAsyncEnumerable()
-            .WithCancellation(cancellationToken)
-            .ConfigureAwait(false);
-
-        await foreach (var @event in query)
+        // ITM-167 修复：metrics 尾部语句移入 finally + yield 前计数（同 ReadStreamAsync，
+        // 对齐 InMemoryEventLog 二十一轮 / ITM-120）。
+        try
         {
-            yield return @event.ToRecordedEvent();
-            checked { read++; }
-        }
+            var query = Events
+                .AsNoTracking()
+                .Where(e => e.GlobalPosition >= fromPosition)
+                .OrderBy(e => e.GlobalPosition)
+                .Take(maxCount)
+                .AsAsyncEnumerable()
+                .WithCancellation(cancellationToken)
+                .ConfigureAwait(false);
 
-        activity?.SetTag("pal.eventlog.read_count", read);
-        PalMetrics.EventLogRead.Add(read);
+            await foreach (var @event in query)
+            {
+                checked { read++; }
+                yield return @event.ToRecordedEvent();
+            }
+        }
+        finally
+        {
+            activity?.SetTag("pal.eventlog.read_count", read);
+            PalMetrics.EventLogRead.Add(read);
+        }
     }
 
     /// <summary>配置持久化事件日志实体。</summary>
@@ -224,13 +242,31 @@ public abstract class EventLogDbContext(
                 throw;
 
             DetachAddedEvents();
-            var currentVersion = await GetActualStreamVersionAsync(streamName, cancellationToken).ConfigureAwait(false);
+            // ITM-126 修复：PG 显式事务内 SaveChanges 抛 23505 后事务进入 aborted 状态，
+            // 同事务重查会抛 25P02 并替换原始 DbUpdateException——重查失败时放弃分类，
+            // 走外层 throw 原样上抛原始冲突异常（对齐 DapperEventLog/PalOrmEventLog 姊妹实现）
+            long? currentVersion = null;
+            var requerySucceeded = false;
+            try
+            {
+                currentVersion = await GetActualStreamVersionAsync(streamName, cancellationToken).ConfigureAwait(false);
+                requerySucceeded = true;
+            }
+            catch (DbException)
+            {
+                // PG aborted transaction（25P02）等重查失败——保留原始 DbUpdateException 语义
+            }
+            // 验证轮返工（V-R2-1）：重查失败必须 `throw;` 保留原始 DbUpdateException——
+            // 初版实现重查失败仍抛 EventStreamConcurrencyException(-1)，与姊妹实现
+            // （DapperEventLog/PalOrmEventLog 重查失败走外层 throw）不一致，重试契约依旧失真
+            if (!requerySucceeded)
+                throw;
             // P2 修复（EventId 冲突误译）：版本仍满足期望说明不是流版本冲突
             // 而是 EventId 唯一索引撞——重复事件 ID 是数据错误，原样上抛（转并发异常会让
             // 盲目重试的调用方无限循环）
-            if (expectedVersion.Matches(currentVersion))
+            if (expectedVersion.Matches(currentVersion!.Value))
                 throw;
-            throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion);
+            throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion.Value);
         }
 
         return new AppendEventsResult(

@@ -61,6 +61,7 @@ internal sealed class AddItemH(OrderRepo r) : ICommandHandler<AddItemCmd, Unit>
 {
     public ValueTask<Unit> HandleAsync(AddItemCmd c, CancellationToken ct)
     {
+        // 示例从简：订单不存在时 Get! 会 NRE。生产代码应判 null 并抛领域 NotFound 异常（映射 404）。
         r.Get(c.OrderId)!.AddItem(c.Name, c.Qty, c.Price); return ValueTask.FromResult(new Unit());
     }
 }
@@ -70,6 +71,7 @@ internal sealed class ConfirmH(OrderRepo r) : ICommandHandler<ConfirmCmd, Unit>
 {
     public ValueTask<Unit> HandleAsync(ConfirmCmd c, CancellationToken ct)
     {
+        // 示例从简：订单不存在时 Get! 会 NRE。生产代码应判 null 并抛领域 NotFound 异常（映射 404）。
         r.Get(c.OrderId)!.Confirm(); return ValueTask.FromResult(new Unit());
     }
 }
@@ -100,16 +102,18 @@ internal static class ECommerceApp
     public static async Task RunAsync()
     {
         var services = new ServiceCollection();
-        services.AddLogging();
+        // ITM-171：AddPalPipelineBehaviors 的 LoggingBehavior 依赖 IPalLogger 门面，
+        // 只调 AddLogging 会在运行时解析管道行为时失败。
+        services.AddPalLogging();
         services.AddPalDDD();
         services.AddPalPipelineBehaviors();
         services.AddSingleton<OrderRepo>();
-        services.AddSingleton<AddItemH>();
-        services.AddSingleton<ConfirmH>();
-        services.AddSingleton<GetOrderH>();
-        services.AddSingleton<ICommandHandler<AddItemCmd, Unit>, AddItemH>();
-        services.AddSingleton<ICommandHandler<ConfirmCmd, Unit>, ConfirmH>();
-        services.AddSingleton<IQueryHandler<GetOrderQry, OrderDto?>, GetOrderH>();
+        // ITM-171：处理器经框架显式注册 API（AOT 安全）注册进 DI。
+        // 注意：本示例没有 Generic Host，HandlerRegistrar（IHostedService）不会自动运行，
+        // 因此下方仍需显式 d.Register 把处理器登记到 Dispatcher（Web 宿主则无需）。
+        services.AddPalCommandHandler<AddItemCmd, Unit, AddItemH>();
+        services.AddPalCommandHandler<ConfirmCmd, Unit, ConfirmH>();
+        services.AddPalQueryHandler<GetOrderQry, OrderDto?, GetOrderH>();
         var sp = services.BuildServiceProvider();
         var d = sp.GetRequiredService<Dispatcher>();
         d.Register<AddItemCmd, Unit, AddItemH>();

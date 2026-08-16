@@ -45,7 +45,13 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
             {
                 try { await ExecuteTickAsync(stoppingToken); }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
-                catch (OperationCanceledException) { /* 下游取消但 Host 未关停，静默忽略 */ }
+                // ITM-166 修复（声明）：此分支为 OCE 吞弃的边界声明——当前 ExecuteTickAsync
+                // 只接收 stoppingToken，tick 内部无 linked-CTS 超时（OutboxBatchProcessor/
+                // SagaProcessor 均未创建带独立超时的 CTS），因此"下游取消但 Host 未关停"
+                // 的 OCE 理论不可达。保留该分支是防御性边界：若未来 tick 引入内部超时
+                // linked-CTS，其 OCE 不应计入 OnTickFailed（失败指标/日志不应记录取消），
+                // 也不应中断整个轮询循环。语义：静默忽略是设计性吞弃，非异常处理遗漏。
+                catch (OperationCanceledException) { /* 下游取消但 Host 未关停，静默忽略（见上方边界声明） */ }
                 catch (Exception ex) { OnTickFailed(ex); }
             }
         }

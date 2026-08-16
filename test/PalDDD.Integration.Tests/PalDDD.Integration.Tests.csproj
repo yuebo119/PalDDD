@@ -20,6 +20,7 @@
     <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Dapper\PalDDD.Dapper.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Dapper.PostgreSql\PalDDD.Dapper.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Dapper.Sqlite\PalDDD.Dapper.Sqlite.csproj" />
     <ProjectReference Include="..\PalDDD.Testing\PalDDD.Testing.csproj" />
   </ItemGroup>
 
@@ -28,10 +29,6 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="TUnit" />
-    <PackageReference Include="coverlet.collector">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
   </ItemGroup>
 
 </Project>

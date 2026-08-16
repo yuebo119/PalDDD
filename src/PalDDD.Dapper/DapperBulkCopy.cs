@@ -36,6 +36,7 @@ using MySqlConnector;
 using Npgsql;
 using System.Data;
 using System.Data.Common;
+using System.Globalization;
 using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Dapper;
@@ -226,6 +227,11 @@ public static class DapperBulkCopy
         {
             ByteAether.Ulid.Ulid ulid => ulid.ToString(),
             DateTimeOffset dto => dto.UtcDateTime,
+            // ITM-166 修复：decimal 显式转 InvariantCulture 字符串——DataTable 列全 string 时，
+            // 直接赋 decimal 由 DataTable 按当前区域设置 ToString（如 de-DE 产出 "1,5"），
+            // MySqlBulkCopy 把字符串按原样写入 DECIMAL 列时静默损坏或报错。Invariant 字符串
+            // （"1.5"）由 MySQL 服务端按数值解析，与区域设置无关。
+            decimal dec => dec.ToString(CultureInfo.InvariantCulture),
             _ => val,
         };
 

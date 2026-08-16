@@ -43,13 +43,27 @@ public static class SqliteJson
     /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Extract(string column, string key)
-        => $"json_extract({EscapeIdentifier(column)}, '$.{EscapeLiteral(key)}')";
+    {
+        // ITM-167 修复：补 null/空白守卫——缺守卫时 null 列名/键进入转义生成畸形
+        // JSON 路径片段，失败延迟到 SQLite 执行期。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        return $"json_extract({EscapeIdentifier(column)}, '$.{EscapeLiteral(key)}')";
+    }
 
     /// <summary>提取嵌套 JSON 路径：json_extract(col, '$.a.b.c')</summary>
     /// <param name="path">路径段数组（每段不得含点号——同 <see cref="Extract"/> 的 key 约束，点号是分隔符）。</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractPath(string column, params string[] path)
-        => $"json_extract({EscapeIdentifier(column)}, '$.{string.Join('.', path.Select(EscapeLiteral))}')";
+    {
+        // ITM-167 修复：补 null/空白守卫（column 与 path 数组及每个元素）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        ArgumentNullException.ThrowIfNull(path);
+        foreach (var segment in path)
+            ArgumentException.ThrowIfNullOrWhiteSpace(segment);
+
+        return $"json_extract({EscapeIdentifier(column)}, '$.{string.Join('.', path.Select(EscapeLiteral))}')";
+    }
 
     // ── 类型检查 ──
 
@@ -57,12 +71,21 @@ public static class SqliteJson
     /// <param name="key">JSON 键名（同 <see cref="Extract"/> 的 key 约束：不得含点号）。</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Type(string column, string key)
-        => $"json_type({EscapeIdentifier(column)}, '$.{EscapeLiteral(key)}')";
+    {
+        // ITM-167 修复：补 null/空白守卫（同 Extract）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        return $"json_type({EscapeIdentifier(column)}, '$.{EscapeLiteral(key)}')";
+    }
 
     /// <summary>验证 JSON 有效性：json_valid(col) → 1/0</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string IsValid(string column)
-        => $"json_valid({EscapeIdentifier(column)})";
+    {
+        // ITM-167 修复：补 null/空白守卫（同 Extract）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        return $"json_valid({EscapeIdentifier(column)})";
+    }
 
     /// <summary>检查键是否存在：json_type(col, '$.key') IS NOT NULL</summary>
     /// <param name="key">JSON 键名（同 <see cref="Extract"/> 的 key 约束：不得含点号）。</param>
@@ -75,19 +98,35 @@ public static class SqliteJson
     /// <summary>JSON 数组长度：json_array_length(col)</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ArrayLength(string column)
-        => $"json_array_length({EscapeIdentifier(column)})";
+    {
+        // ITM-167 修复：补 null/空白守卫（同 Extract）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        return $"json_array_length({EscapeIdentifier(column)})";
+    }
 
     /// <summary>创建 JSON 数组：json_array('a','b','c')</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Array(params string[] values)
-        => $"json_array({string.Join(',', values.Select(v => $"'{EscapeLiteral(v)}'"))})";
+    {
+        // ITM-167 修复：补 null/空白守卫（values 数组及每个元素）。
+        ArgumentNullException.ThrowIfNull(values);
+        foreach (var v in values)
+            ArgumentException.ThrowIfNullOrWhiteSpace(v);
+
+        return $"json_array({string.Join(',', values.Select(v => $"'{EscapeLiteral(v)}'"))})";
+    }
 
     /// <summary>创建 JSON 对象：json_object('k1','v1','k2','v2')</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string BuildObject(params string[] keyValuePairs)
     {
+        // ITM-167 修复：补 null/空白守卫（数组及每个键值元素）。
+        ArgumentNullException.ThrowIfNull(keyValuePairs);
         if (keyValuePairs.Length % 2 != 0)
             throw new ArgumentException("keyValuePairs must have even count.");
+        foreach (var pair in keyValuePairs)
+            ArgumentException.ThrowIfNullOrWhiteSpace(pair);
+
         var parts = new string[keyValuePairs.Length];
         for (int i = 0; i < keyValuePairs.Length; i += 2)
         {
@@ -102,12 +141,20 @@ public static class SqliteJson
     /// <summary>展开 JSON 数组为行：json_each(col) → key/value/type/...</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Each(string column)
-        => $"json_each({EscapeIdentifier(column)})";
+    {
+        // ITM-167 修复：补 null/空白守卫（同 Extract）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        return $"json_each({EscapeIdentifier(column)})";
+    }
 
     /// <summary>递归展开 JSON 树：json_tree(col) → key/value/type/path</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Tree(string column)
-        => $"json_tree({EscapeIdentifier(column)})";
+    {
+        // ITM-167 修复：补 null/空白守卫（同 Extract）。
+        ArgumentException.ThrowIfNullOrWhiteSpace(column);
+        return $"json_tree({EscapeIdentifier(column)})";
+    }
 
     // ── 常用于 Outbox/Saga 查询的快捷方法 ──
 

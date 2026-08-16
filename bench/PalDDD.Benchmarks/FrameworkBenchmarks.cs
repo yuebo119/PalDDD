@@ -4,7 +4,8 @@ using PalDDD.Core;
 namespace PalDDD.Benchmarks;
 
 // ═══════════════════════════════════════════════════════════════
-// 实体领域事件存储基准 — 单链表 vs List
+// 实体领域事件存储基准 — 单链表领域事件（追加/遍历/清理）
+// 注：标题不再声称 "vs List"——本组只测单链表实现，未设 List 对照基准。
 // ═══════════════════════════════════════════════════════════════
 
 [MemoryDiagnoser]
@@ -12,14 +13,16 @@ namespace PalDDD.Benchmarks;
 public class EntityDomainEventBenchmarks
 {
     [Benchmark(Baseline = true)]
-    public void AddSingleEvent_LinkedList()
+    public int AddSingleEvent_LinkedList()
     {
         var order = new Order(Guid.NewGuid(), "Test");
         order.Complete();
+        // 返回可观测值防 DCE：JIT 必须保留 RaiseEvent 的副作用
+        return order.HasDomainEvents ? 1 : 0;
     }
 
     [Benchmark]
-    public void AddMultipleEvents_LinkedList()
+    public int AddMultipleEvents_LinkedList()
     {
         var order = new Order(Guid.NewGuid(), "Test");
         order.Complete();
@@ -27,27 +30,33 @@ public class EntityDomainEventBenchmarks
         order.Complete();
         order.Cancel("again");
         order.Complete();
+        // 返回可观测值防 DCE：JIT 必须保留 5 次 RaiseEvent 的副作用
+        return order.HasDomainEvents ? 1 : 0;
     }
 
     [Benchmark]
-    public void IterateEvents_RefStructEnumerator()
+    public int IterateEvents_RefStructEnumerator()
     {
         var order = new Order(Guid.NewGuid(), "Test");
         order.Complete();
         order.Cancel("reason");
 
+        // ITM-154 修复：返回 count 供 BDN 消费，防止死计数被 JIT 整体消除（DCE）
         var count = 0;
         foreach (var _ in order.DomainEvents())
             count++;
+        return count;
     }
 
     [Benchmark]
-    public void ClearEvents()
+    public int ClearEvents()
     {
         var order = new Order(Guid.NewGuid(), "Test");
         order.Complete();
         order.Cancel("reason");
         order.ClearDomainEvents();
+        // 返回可观测值防 DCE：结果依赖 ClearDomainEvents 执行
+        return order.HasDomainEvents ? 1 : 0;
     }
 
     [AggregateName("Order")]
@@ -117,6 +126,8 @@ public class SmartEnumBenchmarks
     public bool TryFromValue_Valid()
         => OrderStatusBench.TryFromValue("pending", out _);
 
+    // 仅测量 All 属性（FrozenDictionary.Values）的访问开销——不枚举值集合；
+    // 若要测量完整枚举开销，需另行对 All 执行 foreach。
     [Benchmark]
     public IReadOnlyCollection<OrderStatusBench> AllValues()
         => OrderStatusBench.All;
@@ -132,6 +143,13 @@ public class SmartEnumBenchmarks
         public static readonly OrderStatusBench Delivered = new("delivered");
         public static readonly OrderStatusBench Cancelled = new("cancelled");
         public static readonly OrderStatusBench Refunded = new("refunded");
+
+        // ITM-151 修复：显式注册五个值——否则 FromValue/TryFromValue/All 会触基类
+        // "未注册任何值"异常，四个 SmartEnum 基准必败。
+        static OrderStatusBench()
+        {
+            RegisterValues([Pending, Shipped, Delivered, Cancelled, Refunded]);
+        }
 
         public OrderStatusBench(string value) : base(value)
         {

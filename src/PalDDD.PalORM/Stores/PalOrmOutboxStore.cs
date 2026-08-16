@@ -95,6 +95,8 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
     /// <inheritdoc />
     public void AddMessage(OutboxMessage message)
     {
+        // ITM-163 修复：补 message null 守卫（对齐 InMemoryOutboxStore）
+        ArgumentNullException.ThrowIfNull(message);
         // InsertAsync 对 [Key(AutoIncrement=false)] 的 Ulid 主键不回填 —— 实体已带 Id。
         // created_at 由领域对象在构造时赋值（init-only，Store 不覆盖）。
         var row = OutboxMessageRow.FromDomain(message);
@@ -104,6 +106,8 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
     /// <inheritdoc />
     public async ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
     {
+        // ITM-163 修复：补 messages null 守卫（对齐 InMemoryOutboxStore/OutboxDbContext）
+        ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
         var rows = messages.Select(OutboxMessageRow.FromDomain).ToList();
         // BulkInsertAsync 自动选方言最优路径（PG COPY / MySQL BulkCopy / SQLite 多值 INSERT）
@@ -113,6 +117,8 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
     /// <inheritdoc />
     public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
     {
+        // ITM-163 修复：补 message null 守卫（对齐 InMemoryOutboxStore/OutboxDbContext）
+        ArgumentNullException.ThrowIfNull(message);
         // UpdateAsync 经 [ConcurrencyCheck]RetryCount 自动加 WHERE retry_count=@orig
         // 失败抛 ConcurrencyConflictException —— 调用方（OutboxProcessor）应捕获并视为已处理
         message.Status = OutboxStatus.Processed;
@@ -128,6 +134,9 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
     /// <inheritdoc />
     public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
     {
+        // ITM-163 修复：补 message null + failureReason 空白守卫（对齐 InMemoryOutboxStore/OutboxDbContext）
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         message.Status = OutboxStatus.Dead;
         message.Error = failureReason;
         message.ProcessedAt = deadAt;
@@ -141,6 +150,9 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
     /// <inheritdoc />
     public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
     {
+        // ITM-163 修复：补 message null + failureReason 空白守卫（对齐 InMemoryOutboxStore/OutboxDbContext）
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         // 手写 SQL 路径：原子自增 retry_count（避免读-改-写竞态）
         // 不走 UpdateAsync —— 避免 [ConcurrencyCheck] 干扰原子自增语义
         // P2 修复：补租约守卫——原 WHERE 仅按 id，租约过期被其他 worker 抢占后，
@@ -183,6 +195,8 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
     /// <inheritdoc />
     public async ValueTask<int> RequeueDeadAsync(Ulid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)
     {
+        // ITM-163 修复：补 retriedBy 空白守卫（对齐 DapperOutboxStore/InMemoryOutboxStore/OutboxDbContext）
+        ArgumentException.ThrowIfNullOrWhiteSpace(retriedBy);
         var now = Clock.GetUtcNow();
         var audit = $"requeued by {retriedBy} at {now:O}";
         // 条件 UPDATE：status='Dead' 守卫防止重复重投；返回受影响行数用于幂等判断

@@ -33,6 +33,9 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
     public async ValueTask<InboxMessage?> TryStartProcessingAsync(
         string consumerName, string messageId, DateTimeOffset now, TimeSpan processingTimeout, CancellationToken ct)
     {
+        // ITM-163 修复：补空白守卫（对齐 InMemoryInboxStore 同款）
+        ArgumentException.ThrowIfNullOrWhiteSpace(consumerName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
         var statusProcessing = (int)InboxStatus.Processing;
 
         if (TProvider.SupportsReturningClause)
@@ -131,28 +134,42 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
     /// <inheritdoc />
     public async ValueTask MarkProcessedAsync(InboxMessage message, DateTimeOffset processedAt, CancellationToken ct)
     {
+        // ITM-163 修复：补 message null 守卫（对齐 InMemoryInboxStore/InboxDbContext 同款）
+        ArgumentNullException.ThrowIfNull(message);
         // 手写 SQL（不走 UpdateAsync）—— 避免 [ConcurrencyCheck]attempts 干扰并发场景
         // WHERE status='Processing' 守卫，防止重复标记（与 Dapper 实现一致）
-        message.Status = InboxStatus.Processed;
-        message.ProcessedAt = processedAt;
-        await Session.ExecuteAsync(
+        var affected = await Session.ExecuteAsync(
             $"UPDATE inbox_messages SET status = {(int)InboxStatus.Processed}, processed_at = {processedAt} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing}",
             ct);
+        // ITM-168 修复：本地对象仅在 DB 行确实受影响（affected > 0）时变更——原实现先改
+        // 本地再执行 SQL 且不看 affected：记录已被并发者标记终态时 DB 未变，本地对象却
+        // 已显示 Processed（陈旧语义，与 PalOrmProjectionCheckpointStore rows>0 才变更同款）。
+        if (affected > 0)
+        {
+            message.Status = InboxStatus.Processed;
+            message.ProcessedAt = processedAt;
+        }
     }
 
     /// <inheritdoc />
     public async ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
     {
+        // ITM-163 修复：补 message null 守卫（对齐 InMemoryInboxStore/InboxDbContext 同款）
+        ArgumentNullException.ThrowIfNull(message);
         // ITM-077 修复：补 failureReason 空白校验（对齐 DapperInboxStore.MarkFailedAsync/InboxDbContext/
         // InMemoryInboxStore 同款守卫）——缺守卫时空/空白失败原因会写入 last_error 列，破坏跨实现
         // 契约一致（其余三版均抛 ArgumentException）
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         // 手写 SQL（不走 UpdateAsync）—— 避免 [ConcurrencyCheck]attempts 在并发场景抛异常
         // WHERE status='Processing' 守卫，防止覆盖已 Processed 的记录（与 Dapper 实现一致）
-        message.Status = InboxStatus.Failed;
-        message.LastError = failureReason;
-        await Session.ExecuteAsync(
+        var affected = await Session.ExecuteAsync(
             $"UPDATE inbox_messages SET status = {(int)InboxStatus.Failed}, last_error = {failureReason} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing}",
             ct);
+        // ITM-168 修复：affected > 0 才变更本地对象（同 MarkProcessedAsync 陈旧语义修复）。
+        if (affected > 0)
+        {
+            message.Status = InboxStatus.Failed;
+            message.LastError = failureReason;
+        }
     }
 }

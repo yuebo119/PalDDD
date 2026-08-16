@@ -35,8 +35,11 @@ public sealed class EventLogReplaySourceTests
         var events = await ReadAllAsync(
             source.ReadAsync("ordering-order-1", cancellationToken));
 
-        await Assert.That(events.Select(e => e.Position)).IsEquivalentTo(DefaultPositionValues);
-        await Assert.That(events.Select(e => e.Message)).IsEquivalentTo(new[] { first, second });
+        await Assert.That(events).Count().IsEqualTo(2);
+        await Assert.That(events[0].Position).IsEqualTo(DefaultPositionValues[0]);
+        await Assert.That(events[1].Position).IsEqualTo(DefaultPositionValues[1]);
+        await Assert.That(events[0].Message).IsEqualTo(first);
+        await Assert.That(events[1].Message).IsEqualTo(second);
         foreach (var e in events)
             await Assert.That(e.SourceName).IsEqualTo("ordering-order-1");
     }

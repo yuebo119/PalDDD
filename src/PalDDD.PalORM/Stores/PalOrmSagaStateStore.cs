@@ -35,6 +35,13 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
     private readonly JsonTypeInfo<TState>? _jsonTypeInfo;
     private readonly TimeProvider _clock;
 
+    /// <summary>
+    /// ITM-127（PG jsonb 42804）：PG 的 saga_data 为 jsonb 列，text 参数无隐式赋值转换——
+    /// PG 方言派生类覆写为 true 后，INSERT/UPDATE 对快照参数加 CAST(... AS jsonb)
+    /// （对齐 Dapper SqlTemplates.SagaInsertPG/SagaUpdatePG）。SQLite/MySQL 列类型收 text 无此需要。
+    /// </summary>
+    protected virtual bool RequiresJsonbCast => false;
+
     /// <summary>构造 Saga Store。</summary>
     /// <param name="session">Scoped 数据库会话。</param>
     /// <param name="jsonTypeInfo">可选 STJ 源生成上下文。</param>
@@ -64,6 +71,8 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
     public async ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
         string owner, TimeSpan leaseDuration, int batchSize, CancellationToken ct)
     {
+        // ITM-163 修复：补 owner 空白守卫（对齐 InMemorySagaStateStore/SagaStateDbContext/DapperSagaStateStore）
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         // P3 修复（八轮）：与 Dapper/EFCore 姊妹实现对齐——batchSize 非正直接拒绝
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
 
@@ -121,6 +130,8 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
     /// <inheritdoc />
     public async ValueTask<int> SaveChangesAsync(TState state, CancellationToken ct)
     {
+        // ITM-163 修复：补 state null 守卫（对齐 InMemorySagaStateStore/DapperSagaStateStore/SagaStateDbContext）
+        ArgumentNullException.ThrowIfNull(state);
         var existing = await GetByIdAsync(state.SagaId, ct);
 
         // saga_data：STJ 手写序列化（开放泛型 TState，[OwnedJson] 不可用）
@@ -134,7 +145,9 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
             try
             {
                 await Session.ExecuteAsync(
-                    $"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString()}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {state.Error}, {state.ErrorAt}, {state.Version}, {jsonData}, {state.LeasedBy}, {state.LeasedUntil})",
+                    RequiresJsonbCast
+                        ? (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString()}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {state.Error}, {state.ErrorAt}, {state.Version}, CAST({jsonData} AS jsonb), {state.LeasedBy}, {state.LeasedUntil})"
+                        : (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString()}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {state.Error}, {state.ErrorAt}, {state.Version}, {jsonData}, {state.LeasedBy}, {state.LeasedUntil})",
                     ct);
             }
             catch (DbException ex) when (IsUniqueConstraintViolation(ex))
@@ -151,7 +164,9 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         // 与 EFCore 版 Version concurrency token（内存快照比对）语义对齐。
         var expectedVersion = state.Version;
         var affected = await Session.ExecuteAsync(
-            $"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {state.Error}, error_at = {state.ErrorAt}, saga_data = {jsonData}, leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}",
+            RequiresJsonbCast
+                ? (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {state.Error}, error_at = {state.ErrorAt}, saga_data = CAST({jsonData} AS jsonb), leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}"
+                : (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {state.Error}, error_at = {state.ErrorAt}, saga_data = {jsonData}, leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}",
             ct);
         if (affected > 0) state.Version++;
         return affected;

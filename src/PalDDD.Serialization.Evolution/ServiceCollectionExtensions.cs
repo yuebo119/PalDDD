@@ -25,7 +25,12 @@ public static class ServiceCollectionExtensions
             configure?.Invoke(builder);
             return builder.BuildPipeline();
         });
-        services.AddHostedService<PalPlatformVerificationHostedService>();
+        // ITM-167 修复：AddHostedService → TryAddEnumerable——pipeline 注册保留
+        // AddSingleton（后注册者覆盖，多模块各自 configure 的语义见十七轮修复）；
+        // hosted service 是验证执行器，多次调用本扩展不应重复启动验证（重复注册会
+        // 跑多遍启动验证且 DI 中残留重复 IHostedService）。TryAddEnumerable 按
+        // ServiceType+ImplementationType 对去重，一次注册、幂等重入。
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, PalPlatformVerificationHostedService>());
         return services;
     }
 }

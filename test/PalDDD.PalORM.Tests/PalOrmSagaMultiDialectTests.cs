@@ -113,6 +113,25 @@ public class PalOrmSagaMultiDialectTests
     public async Task Saga_Sqlite_WithJsonTypeInfo_PreservesBusinessFields()
         => await Test_WithJsonTypeInfo_PreservesBusinessFields(await MultiDialectFixture.CreateSqliteAsync());
 
+    [Test]
+    public async Task Saga_PostgreSql_WithJsonTypeInfo_PreservesBusinessFields()
+    {
+        // ITM-127 回归：必须走 PG 方言派生类（RequiresJsonbCast=true）——
+        // 泛型基类在 PG 上无 CAST 会抛 42804，本测试锁死方言固化类的 jsonb 快照往返
+        var ts = await MultiDialectFixture.CreatePostgreSqlAsync();
+        var store = new PostgreSqlSagaStateStore<TestSagaState>(
+            ts.Session, SagaTestJsonContext.Default.TestSagaState);
+        var state = new TestSagaState { CustomerId = "cust-json-pg", CurrentState = "Started" };
+
+        await store.SaveChangesAsync(state, default);
+        var loaded = await store.GetByIdAsync(state.SagaId, default);
+
+        await Assert.That(loaded).IsNotNull();
+        await Assert.That(loaded!.CustomerId).IsEqualTo("cust-json-pg");
+        await Assert.That(loaded.SagaId).IsEqualTo(state.SagaId);
+        await Assert.That(loaded.CurrentState).IsEqualTo("Started");
+    }
+
     private static async Task Test_WithJsonTypeInfo_PreservesBusinessFields<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {

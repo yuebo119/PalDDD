@@ -138,7 +138,7 @@ public sealed class MemoryPackSerializerTests
 
         // MemoryPack 对空 payload 应抛序列化异常（而非静默返回 default）。
         // 框架调用方应在反序列化前检查 payload 长度，但序列化器本身也应拒绝无效输入。
-        await Assert.That(() => serializer.Deserialize(emptyBytes, descriptor)).ThrowsException();
+        await Assert.That(() => serializer.Deserialize(emptyBytes, descriptor)).Throws<MemoryPackSerializationException>();
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -156,10 +156,12 @@ public sealed class MemoryPackSerializerTests
                 contentType: ContentTypes.MemoryPack));
         });
 
-        var provider = services.BuildServiceProvider();
-        var serializer = provider.GetRequiredService<IMessageSerializer>();
+        using var provider = services.BuildServiceProvider();
+        var first = provider.GetRequiredService<IMessageSerializer>();
+        var second = provider.GetRequiredService<IMessageSerializer>();
 
-        await Assert.That(serializer).IsTypeOf<MemoryPackMessageSerializer>();
+        await Assert.That(first).IsTypeOf<MemoryPackMessageSerializer>();
+        await Assert.That(second).IsSameReferenceAs(first);
     }
 
     [Test]

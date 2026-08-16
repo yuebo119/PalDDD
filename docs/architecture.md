@@ -124,13 +124,13 @@ flowchart BT
 | `PalDDD.Core.SourceGen` | 生成强类型 ID、智能枚举注册、消息目录辅助代码。 |
 | `PalDDD.CQRS` | 请求模型、handler、dispatcher、验证/日志 pipeline behaviors。 |
 | `PalDDD.DependencyInjection` | AOT-safe 显式 DI 注册 API（`AddPalDDD`、`AddPalCommandHandler<T,...>` 等）。 |
-| `PalDDD.Prompts` | 元包 + AI 提示模板（`.pal/prompts/` 9 份）。 |
+| `PalDDD.Prompts` | 元包 + AI 提示模板（`.pal/prompts/` 8 个 `.prompt.md` + 1 个 `README.md`，共 9 份）。 |
 | `PalDDD.EventLog` | append-only 事件日志、审计元数据、乐观并发和有序回放抽象。 |
 | `PalDDD.EventLog.EFCore` | EF Core durable event log base context。 |
 | `PalDDD.Messaging` | 领域事件派发、broker 抽象（进程内 EventBus 已移除，统一 Outbox 模式）。 |
 | `PalDDD.Projections` | Read Model 投影处理、checkpoint store 抽象和内存实现。 |
 | `PalDDD.Projections.EventLog` | 把 append-only EventLog stream 转换为 projection replay source。 |
-| `PalDDD.Dapper` | Dapper projection checkpoint store 实现。 |
+| `PalDDD.Dapper` | Dapper 统一持久化：Projection checkpoint store + Outbox/Inbox/Saga store 基础实现 + durable event log + UnitOfWork + SqlTemplates。 |
 | `PalDDD.Idempotency` | 命令/API 幂等处理、idempotency store 抽象和内存实现。 |
 | `PalDDD.Serialization` | 消息描述符、不可变消息目录、序列化接口，含 JSON 序列化器（`PalDDD.Serialization.Json` 命名空间，无独立项目）。 |
 | `PalDDD.Serialization.Evolution` | 显式消息 schema version 升级执行链。 |
@@ -138,15 +138,12 @@ flowchart BT
 | `PalDDD.Repository.EFCore` | EF Core UnitOfWork、领域事件 interceptor。 |
 | `PalDDD.Transactions` | Outbox/Inbox/Saga 处理器、store 抽象和 options。 |
 | `PalDDD.Transactions.EFCore` | EF Core Outbox/Inbox/Saga store base contexts。 |
-| `PalDDD.Dapper` | Dapper Outbox/Inbox/Saga store 基础实现 + SqlTemplates。 |
 | `PalDDD.Dapper.PostgreSql` | PostgreSQL 扩展（COPY/Pipelining/NOTIFY/JSONB/多主机/分片/软删除）。 |
 | `PalDDD.Dapper.MySql` | MySQL 扩展。 |
 | `PalDDD.Dapper.Sqlite` | SQLite 扩展。 |
 | `PalDDD.Hosting.AspNetCore` | Web hosting helpers、异常处理中间件、健康检查。 |
 | `PalDDD.Messaging.Kafka` | Kafka broker adapter。 |
 | `PalDDD.Messaging.RabbitMQ` | RabbitMQ broker adapter。 |
-| `PalDDD.Dapper` | Dapper durable event log 实现。 |
-| `PalDDD.Dapper` | Dapper UnitOfWork 实现。 |
 
 ## 依赖方向
 
@@ -155,7 +152,7 @@ flowchart BT
 - `Core` 不依赖任何基础设施包。
 - `Analyzers` 只在编译期运行，通过元数据名识别 Pal.DDD API，不参与运行时执行链。
 - `CQRS` 只依赖 `Core` 和 Microsoft.Extensions 抽象；不引用 messaging、repository 或 transaction 包。
-- `Repository` 不依赖 `Core`；它只表达事务提交边界。
+- `PalDDD.Repository.EFCore` 是 EF Core 外圈适配器（`IUnitOfWork` 抽象已合并入 `Core` 的 `PalDDD.Core.Repository` 命名空间）；它依赖 `Core` / `Serialization` / `Transactions`，表达事务提交边界。
 - `EventLog` 不依赖 EF Core、broker 或具体 serializer，只保存 bytes + metadata。
 - `Messaging` 依赖 `Core` 和 `Serialization`。
 - `Projections` 和 `Idempotency` 不依赖 EF Core 或 broker，只表达应用层幂等执行边界。

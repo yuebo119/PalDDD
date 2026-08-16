@@ -162,6 +162,8 @@ public sealed class DapperEventLog : IEventLog
         string streamName, long fromVersion = 0, int maxCount = int.MaxValue,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        // ITM-163 修复：补 streamName 空白守卫（对齐 EventLogDbContext/InMemoryEventLog 同款）
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamName);
         // P3 修复（二十一轮）：补 fromVersion 非负守卫（对齐 EFCore/PalORM 版 ThrowIfLessThan(fromVersion, 0)）
         ArgumentOutOfRangeException.ThrowIfLessThan(fromVersion, 0);
         // ITM-080 修复：补 maxCount 守卫（对齐 EFCore/PalORM/InMemory 版 ThrowIfLessThan(maxCount, 1)）——

@@ -72,7 +72,8 @@ public sealed class PostgreSqlPipeline : IAsyncDisposable
         await using var reader = await _batch.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         // 排空全部结果集（读循环不可省略——未读完不能 NextResult）
-        while (await reader.ReadAsync(ct)) { }
+        // ITM-166 修复：补 ConfigureAwait(false)（对齐本方法其余 await）。
+        while (await reader.ReadAsync(ct).ConfigureAwait(false)) { }
         while (await reader.NextResultAsync(ct).ConfigureAwait(false))
         {
             while (await reader.ReadAsync(ct)) { }

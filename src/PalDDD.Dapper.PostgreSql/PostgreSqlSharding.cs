@@ -96,6 +96,9 @@ public sealed class ConsistentHashSharding : IShardingStrategy
     public ConsistentHashSharding(int shardCount, int virtualNodes = 256)
     {
         if (shardCount <= 0) throw new ArgumentOutOfRangeException(nameof(shardCount));
+        // ITM-136 修复：virtualNodes <= 0 会在 GetShardId 时对空环取模 0（DivideByZero），
+        // 守卫上移构造器（对齐 ModShardingStrategy 的 shardCount 校验）。
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(virtualNodes);
         ShardCount = shardCount;
 
         var entries = new (uint Hash, int Shard)[shardCount * virtualNodes];
@@ -121,7 +124,15 @@ public sealed class ConsistentHashSharding : IShardingStrategy
 
     public int GetShardId(string key) => HashToShard(Fnv1A(Encoding.UTF8.GetBytes(key)));
 
-    public int GetShardId(long key) => HashToShard(Fnv1A(BitConverter.GetBytes(key)));
+    public int GetShardId(long key)
+    {
+        // ITM-168 修复：BitConverter.GetBytes 使用本机端序（小端/大端平台哈希不同，
+        // 跨平台部署时同一 key 落到不同分片）。改用 BinaryPrimitives 大端固定字节序，
+        // 与 Guid key 路径的 ToByteArray 显式字节序一样跨平台稳定。
+        Span<byte> bytes = stackalloc byte[sizeof(long)];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(bytes, key);
+        return HashToShard(Fnv1A(bytes));
+    }
 
     /// <summary>FNV-1a 哈希 — 稳定、跨平台一致</summary>
     private static uint Fnv1A(ReadOnlySpan<byte> data)

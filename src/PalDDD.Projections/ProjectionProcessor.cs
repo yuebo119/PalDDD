@@ -13,6 +13,11 @@ namespace PalDDD.Projections;
     Justification = "投影处理器需在重新抛出前持久化任意用户投影失败信息，需捕获 Exception 基类。")]
 public sealed class ProjectionProcessor<TMessage>
 {
+    // ITM-167 修复：失败原因入库截断上限（对齐 InboxProcessor/OutboxBatchProcessor 的
+    // MaxFailureReasonLength=2000）——checkpoint.error 列上限 2048，超长 ex.Message 会让
+    // MarkFailedAsync 的持久化本身失败，掩盖原始投影失败。
+    internal const int MaxFailureReasonLength = 2000;
+
     private readonly IProjectionHandler<TMessage> _handler;
     private readonly IProjectionCheckpointStore _checkpointStore;
     private readonly TimeProvider _timeProvider;
@@ -26,6 +31,13 @@ public sealed class ProjectionProcessor<TMessage>
     {
         ArgumentNullException.ThrowIfNull(handler);
         ArgumentNullException.ThrowIfNull(checkpointStore);
+        // ITM-166 修复：checkpoint 租约时长（processingTimeout）负值集中校验——负值使
+        // LeaseUntil = startedAt + timeout < startedAt（租约即刻过期，僵尸抢占语义失效）。
+        // Projection 无独立 Options 类，构造函数是进程内配置入口（Options 层等价物）；
+        // 允许 TimeSpan.Zero：租约即刻过期是测试"超时接管可重入"的合法语义
+        // （对齐 DapperProjectionCheckpointStore.TryStartAsync 同款非负约束）。
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
 
         _handler = handler;
         _checkpointStore = checkpointStore;
@@ -63,7 +75,14 @@ public sealed class ProjectionProcessor<TMessage>
             // 验证轮返工：内层 catch 不加 OCE 过滤（同 InboxProcessor——None 令牌下 OCE 属异常形态）。
             try
             {
-                await _checkpointStore.MarkFailedAsync(checkpoint, ex.Message, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+                // ITM-167 修复：ex.Message 截断到 MaxFailureReasonLength 再入库——
+                // 长异常消息（含大 payload 的序列化错误等）超出 checkpoint.error 列上限
+                // 会让失败标记持久化本身失败，掩盖原始投影失败（对齐 InboxProcessor 十七轮
+                // 与 OutboxBatchProcessor 二十一轮姊妹修复）。
+                var failureReason = ex.Message.Length <= MaxFailureReasonLength
+                    ? ex.Message
+                    : ex.Message[..MaxFailureReasonLength];
+                await _checkpointStore.MarkFailedAsync(checkpoint, failureReason, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception markEx)
             {

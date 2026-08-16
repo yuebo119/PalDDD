@@ -31,6 +31,13 @@ public sealed class InMemoryInboxStore : IInboxStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerName);
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        // ITM-166 修复：补取消前置检查与超时非负守卫——ct 未检查时已取消请求仍进入
+        // 内存表写入（异步签名形同虚设）；负 processingTimeout 使 Processing 租约
+        // 即刻过期（now - started < negative 恒 false），与数据库三实现语义分叉。
+        // 允许 TimeSpan.Zero：租约即刻过期是"超时接管可重入"的合法测试语义。
+        ct.ThrowIfCancellationRequested();
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
 
         lock (_lock)
         {

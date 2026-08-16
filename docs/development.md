@@ -54,24 +54,16 @@ dotnet build PalDDD.slnx --no-restore
 PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests/PalDDD.Core.Tests.csproj --no-restore
 ```
 
-### Stryker 突变测试
+### 断言强度检查（替代 Stryker 突变测试）
 
-仓库根 `stryker-config.json` 配置了 [Stryker.NET](https://stryker-mutator.io/) 突变测试，对 `PalDDD.Core` 项目做验证测试强度。
+仓库不包含 `stryker-config.json`：Stryker.NET 当前不支持 TUnit/MTP，无法在本仓库运行。突变测试职责已由 `.ai/scripts/assertion-strength-check.sh` 替代（断言强度棘轮，当前 173/173）。
 
-- **门禁阈值**：`high=80` / `low=60` / `break=50`
-  - 突变分数 < 50% 时 Stryker 以非零退出码失败（CI 阻断）
-  - 50%–60% 之间为低分（需人工核查并加分支/边界测试）
-  - ≥ 80% 为高分（理想区间）
-- **报告**：`reporters` 配置为 `html` / `progress` / `dashboard`，HTML 报告生成到 `StrykerOutput/<timestamp>/` 目录
-- **覆盖分析**：`coverage-analysis: perTest` 启用按测试用例的覆盖率归因，定位未杀死的突变
 - **运行**：
   ```bash
-  dotnet tool install -g dotnet-stryker
-  dotnet stryker --config-file stryker-config.json
+  bash .ai/scripts/assertion-strength-check.sh
   ```
-- **集成建议**：CI 中将上述命令接入 nightly/PR 流水线，突变分数 < 50% 视为质量门禁失败。
-
-新增/修改核心生产代码时，建议本地运行一次 Stryker 检查测试是否已杀死新引入的突变，避免"代码分支无测试覆盖"的环境突变残留。
+- **门禁口径**：脚本以非零退出码报告弱断言/零断言测试，CI 与提交前检查使用同一脚本。
+- 新增/修改核心生产代码时，应同步补强对应测试断言，避免"代码分支无测试覆盖"的断言盲区残留。
 
 ### Testcontainers 集成测试 CI 配置
 
@@ -91,8 +83,8 @@ jobs:
         with:
           dotnet-version: '11.0.x'
       - run: dotnet restore PalDDD.slnx
-      - run: dotnet test test/PalDDD.Messaging.Integration.Tests --filter "Category=Integration"
-      - run: dotnet test test/PalDDD.Integration.Tests --filter "Category=Integration"
+      - run: dotnet test test/PalDDD.Messaging.Integration.Tests/PalDDD.Messaging.Integration.Tests.csproj -- --filter "Category=Integration"
+      - run: dotnet test test/PalDDD.Integration.Tests/PalDDD.Integration.Tests.csproj -- --filter "Category=Integration"
 ```
 
 要点：
@@ -100,7 +92,7 @@ jobs:
 - Testcontainers 自动拉起容器并暴露随机端口，无需预置 service container；仅需 runner 支持 Docker daemon。
 - Windows runner 不支持 Testcontainers，集成测试 CI 必须在 `ubuntu-latest` 上运行。
 - 单元测试（不依赖 Docker）仍可跨平台运行，可拆为独立 job 在 PR 触发；集成测试建议 nightly / 合并到 main 时触发以缩短 PR 周转。
-- 本地预跑：`docker info` 确保 Docker Desktop 已启动，再执行 `dotnet test --filter "Category=Integration"`。
+- 本地预跑：`docker info` 确保 Docker Desktop 已启动，再执行 `dotnet test <csproj> -- --filter "Category=Integration"`。
 
 修改 package 或 restore assets 后先运行：
 

@@ -103,5 +103,11 @@ public class PalOrmEventLogMultiDialectTests
         await foreach (var e in log.ReadAllAsync(0, int.MaxValue, default))
             all.Add(e);
         await Assert.That(all.Count).IsEqualTo(2);
+        await Assert.That(all[0].GlobalPosition).IsEqualTo(1L);
+        await Assert.That(all[1].GlobalPosition).IsEqualTo(2L);
+        await Assert.That(all[0].StreamName).IsEqualTo("s1");
+        await Assert.That(all[1].StreamName).IsEqualTo("s2");
+        await Assert.That(all[0].EventName).IsEqualTo("s1.e1");
+        await Assert.That(all[1].EventName).IsEqualTo("s2.e1");
     }
 }

@@ -85,6 +85,10 @@ public static class SqlitePerformanceOptimizer
     /// <summary>应用轻量优化（嵌入式/移动端）</summary>
     public static async ValueTask OptimizeLightAsync(SqliteConnection connection)
     {
+        // ITM-165 修复：补 connection null 守卫（对齐 OptimizeAsync）——原路径在
+        // connection.OpenAsync() 处以 NullReferenceException 暴露，失败点与异常类型
+        // 与 Production 路径不一致。
+        ArgumentNullException.ThrowIfNull(connection);
         await connection.OpenAsync().ConfigureAwait(false);
         await ApplyAsync(connection, SqliteOptimizeLevel.Light).ConfigureAwait(false);
     }
@@ -92,6 +96,8 @@ public static class SqlitePerformanceOptimizer
     /// <summary>应用内存优先优化（测试/CI 环境）</summary>
     public static async ValueTask OptimizeInMemoryAsync(SqliteConnection connection)
     {
+        // ITM-165 修复：补 connection null 守卫（对齐 OptimizeAsync/Light）。
+        ArgumentNullException.ThrowIfNull(connection);
         await connection.OpenAsync().ConfigureAwait(false);
         await ApplyAsync(connection, SqliteOptimizeLevel.InMemory).ConfigureAwait(false);
     }

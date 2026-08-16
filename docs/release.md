@@ -3,7 +3,7 @@
 > 本规范定义 Pal.DDD 项目从代码变更到 NuGet 发布的标准流程。
 > 所有版本发布（含补丁版/小版本/大版本/Preview）必须遵守。
 >
-> **当前状态**：`VersionPrefix=1.0.0` / `VersionSuffix=preview.1`（见 `Directory.Build.props`）。
+> **当前状态**：`VersionPrefix=1.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**1.1.0 未发布（Unreleased）**：仓库 tag 仅 `v1.0.0-preview.1`，无 `[1.1.0]` CHANGELOG 段；发布 1.1.0 时按第 5 章补 `v1.1.0` tag，并在 CHANGELOG 将 `[Unreleased]` 段改为 `[1.1.0]`。
 > **首次发布待办**：本规范第 5/6/9 章在首次实际发布后需补实测教训（参考 ORM 项目 `docs/发布规范.md` §9）。
 
 ---
@@ -102,7 +102,7 @@ DDD 项目分层（对照 conventions §4.2 解决方案分层）：
 | `PalDDD.Idempotency.EFCore` | `src/PalDDD.Idempotency.EFCore/` | ✅ |
 | `PalDDD.Projections.EFCore` | `src/PalDDD.Projections.EFCore/` | ✅ |
 
-#### Infra-Dapper 层（AOT 兼容）
+#### Infra-Dapper 层（⚠️ 声明层 AOT 兼容、运行时反射，见 [aot.md](aot.md)）
 
 | 包 ID | 项目路径 | 公开发布 |
 |-------|---------|:------:|
@@ -176,11 +176,11 @@ DDD 项目分层（对照 conventions §4.2 解决方案分层）：
 | 项目 | 当前 NuGet 残留 | 禁止原因 | 处置 |
 |------|:--:|------|------|
 | `PalDDD.EntityFrameworkCore` | 1.1.0（已 Unlist） | 源码未入库（OBS-068），被 PalORM 替代 | 永不打包，NuGet 旧包保持 Unlist |
-| `PalDDD.Prompts` | 1.1.0 | AI 代码生成模板，非运行时库 | `<IsPackable>false>`，NuGet 包 Unlist |
-| `PalDDD.Testing` | 1.1.0（已 Unlist） | 测试基础设施，仅项目内部用 | `<IsPackable=false>`，NuGet 包保持 Unlist |
+| `PalDDD.Prompts` | 1.1.0 | AI 代码生成模板，非运行时库 | `<IsPackable>false</IsPackable>`，NuGet 包 Unlist |
+| `PalDDD.Testing` | 1.1.0（已 Unlist） | 测试基础设施，仅项目内部用 | `<IsPackable>false</IsPackable>`，NuGet 包保持 Unlist |
 | `PalORM.Testing` | 5.0.0（已 Unlist） | PalORM 测试基础设施 | NuGet 包保持 Unlist |
-| `PalDDD.AotSample` | 未发布 | CI AOT 验证示例 | `<IsPackable=false>` |
-| `PalDDD.ECommerce` | 未发布 | 电商场景示例代码 | `<IsPackable=false>` |
+| `PalDDD.AotSample` | 未发布 | CI AOT 验证示例 | `<IsPackable>false</IsPackable>` |
+| `PalDDD.ECommerce` | 未发布 | 电商场景示例代码 | `<IsPackable>false</IsPackable>` |
 
 **判定规则**：以下三类项目永不打包——
 1. **示例项目**（samples/）：AotSample / ECommerce / PalOrmSample / MinimalApi
@@ -210,7 +210,7 @@ feature/xxx ──PR──▶ dev ──PR──▶ main
     └── 开发分支      └── 集成测试   └── 生产发布（含 tag）
 ```
 
-- **main**：仅接受来自 dev 的 PR 合并，禁止直接 push
+- **main**：仅接受来自 dev 的 PR 合并，禁止直接 push（**发布经 PR/人工合并，无强推脚本**——`scripts/publish-main.sh` 已删除）
 - **dev**：接受来自 `feature/*` 的 PR 合并
 - **feature/\*\***：从 dev 创建，PR 到 dev
 
@@ -460,7 +460,7 @@ git push origin v1.1.0
 
 ## 九、发布实践教训
 
-> ⚠️ **首次发布待补**：DDD 项目已发布 1.1.0 正式版到 NuGet.org（35 个 PalDDD 包 + 5 个 PalORM 包）。
+> ⚠️ **首次发布待补**：DDD 项目 **1.1.0 尚未发布**（仓库 tag 仅 `v1.0.0-preview.1`；计划发布 35 个 PalDDD 打包项目 + 5 个 PalORM 依赖包单列）。
 > 首次实际发布后，在此章节补充实测教训（参考 ORM 项目 `docs/发布规范.md` §9 的 9 条 v5.0.0 教训）。
 
 预期可能踩的坑（基于 ORM 项目经验预判）：
@@ -539,7 +539,7 @@ git commit -m "功能：xxx + 升版本 preview.2"
 |------|------|
 | `Directory.Build.props` | 版本号真源 + 包元数据 + SourceLink 配置 |
 | `.github/workflows/release.yml`（待创建） | 发布 workflow |
-| `.github/workflows/ci.yml`（待创建） | CI 主流程 |
+| `.github/workflows/ci.yml`（已创建） | CI 主流程 |
 | `CHANGELOG.md` | 变更日志（GitHub Release body 来源） |
 | `README.md` | 包页面展示用 README |
 | `docs/branch-flow.md` | 分支与发布流程（精简版） |

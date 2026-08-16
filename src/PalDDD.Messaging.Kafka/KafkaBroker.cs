@@ -300,6 +300,12 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                 // （consumer.Close + Dispose）不会执行——此处兜底释放 consumer
                 // （Confluent.Kafka Dispose 幂等，与委托内 finally 双重释放安全）。
                 _consumer.Dispose();
+                // ITM-167 声明（登记窗口 cts 释放噪声）：DisposeAsync 可能落在
+                // "已登记未 SetConsumeTask" 窗口，此刻释放 _cts 是安全的——委托工厂
+                // 已捕获 cts.Token（Token 在源 Dispose 后仍可读取 IsCancellationRequested，
+                // 且 CancelAsync 已先行请求取消），释放不会让循环误判为未取消或抛
+                // ObjectDisposedException；SetConsumeTask 的后置注入仅写 Task 引用，
+                // 不触碰 _cts。无资源泄漏，仅存在一个可安全忽略的已取消任务。
                 _cts.Dispose();
             }
         }

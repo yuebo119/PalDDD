@@ -200,13 +200,16 @@ public sealed class IterativeDomainEventDispatcherTests
     }
 
     [Test]
+    [NotInParallel]
     public async Task HandlerCancellation_DoesNotRecordEventHandlerFailedMetric()
     {
         using var listener = new RecordingMeterListener("paldd.event_handlers.failed");
         var dispatcher = new IterativeDomainEventDispatcher([new CancelingHandler()]);
 
         await Assert.That(() => dispatcher.DispatchAsync([new OrderPlaced(Guid.NewGuid(), 400m)]).AsTask()).Throws<OperationCanceledException>();
-        // 注意: 并行执行时其他测试可能已递增 paldd.event_handlers.failed，因此不检查 IsEmpty。
+
+        // OCE 不进入 failed 指标分支；[NotInParallel] 隔离下可安全断言零记录。
+        await Assert.That(listener.Measurements).IsEmpty();
     }
 
     private sealed class ThrowingHandler : IEventHandler<OrderPlaced>

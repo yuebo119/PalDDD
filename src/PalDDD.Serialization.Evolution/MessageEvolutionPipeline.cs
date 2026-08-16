@@ -17,9 +17,14 @@ public sealed class MessageEvolutionPipeline
     {
         ArgumentNullException.ThrowIfNull(steps);
 
+        // ITM-166 修复：steps 先物化一次再校验/建字典——原 foreach + ToFrozenDictionary
+        // 对同一 IEnumerable 枚举两次：单次序列（如生成器）第二次枚举为空/抛错，
+        // 且两次枚举间若序列内容变化（如延迟求值依赖外部状态）会校验一套、建字典另一套。
+        var stepList = steps.ToArray();
+
         // P2 修复：构造期校验升级链严格递增——v1→v2 与 v2→v1 之类的回环注册
         // 会让 Upgrade/ValidatePath 的 while 循环无限乒乓（挂死而非异常）
-        foreach (var step in steps)
+        foreach (var step in stepList)
         {
             if (step.TargetDescriptor.SchemaVersion <= step.SourceDescriptor.SchemaVersion)
                 throw new MessageEvolutionException(
@@ -27,7 +32,7 @@ public sealed class MessageEvolutionPipeline
                     + "必须严格递增：回环/退化注册会导致升级死循环。");
         }
 
-        _steps = steps.ToFrozenDictionary(
+        _steps = stepList.ToFrozenDictionary(
             step => new Key(step.SourceDescriptor.Name, step.SourceDescriptor.SchemaVersion));
 
         // P3 修复（二十一轮）：相邻步 ClrType 衔接校验（构造期 fail-fast）——升级链按

@@ -66,6 +66,10 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
     public async ValueTask<IdempotencyRecord?> TryStartAsync(
         string operationName, string key, DateTimeOffset now, IdempotencyPolicy policy, CancellationToken ct = default)
     {
+        // ITM-163 修复：补 policy null + op/key 空白守卫（对齐 IdempotencyDbContext/InMemoryIdempotencyStore）
+        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
         var lockedUntil = now + policy.ProcessingTimeout;
         var expiresAt = now + policy.Retention;
         var statusProcessing = (int)IdempotencyRecordStatus.Processing;
@@ -120,6 +124,8 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
     public async ValueTask MarkCompletedAsync(
         IdempotencyRecord record, ReadOnlyMemory<byte> responsePayload, DateTimeOffset completedAt, CancellationToken ct = default)
     {
+        // ITM-163 修复：补 record null 守卫（对齐 IdempotencyDbContext/InMemoryIdempotencyStore）
+        ArgumentNullException.ThrowIfNull(record);
         var expectedUpdatedAt = record.UpdatedAt;
         var statusCompleted = (int)IdempotencyRecordStatus.Completed;
         var payloadBase64 = Convert.ToBase64String(responsePayload.ToArray());
@@ -137,6 +143,9 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
     public async ValueTask MarkFailedAsync(
         IdempotencyRecord record, string failureReason, DateTimeOffset failedAt, CancellationToken ct = default)
     {
+        // ITM-163 修复：补 record null + failureReason 空白守卫（对齐 IdempotencyDbContext/InMemoryIdempotencyStore）
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         var expectedUpdatedAt = record.UpdatedAt;
         var statusFailed = (int)IdempotencyRecordStatus.Failed;
         var statusCompleted = (int)IdempotencyRecordStatus.Completed;
