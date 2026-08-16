@@ -33,11 +33,11 @@
     <PackageVersion Include="Dapper" Version="2.1.79" />
     <PackageVersion Include="Dapper.AOT" Version="1.0.52" />
     <!-- PalORM 适配器 — 面向 Native AOT 的 .NET 11 微 ORM（源生成 + 编译期 SQL，真 AOT 安全） -->
-    <PackageVersion Include="PalORM.Core" Version="5.1.0" />
-    <PackageVersion Include="PalORM.SourceGen" Version="5.1.0" />
-    <PackageVersion Include="PalORM.Sqlite" Version="5.1.0" />
-    <PackageVersion Include="PalORM.PostgreSql" Version="5.1.0" />
-    <PackageVersion Include="PalORM.MySql" Version="5.1.0" />
+    <PackageVersion Include="PalORM.Core" Version="5.2.0" />
+    <PackageVersion Include="PalORM.SourceGen" Version="5.2.0" />
+    <PackageVersion Include="PalORM.Sqlite" Version="5.2.0" />
+    <PackageVersion Include="PalORM.PostgreSql" Version="5.2.0" />
+    <PackageVersion Include="PalORM.MySql" Version="5.2.0" />
     <!-- MemoryPack 二进制序列化（AOT 兼容） -->
     <PackageVersion Include="MemoryPack" Version="1.21.4" />
     <!-- Dapper.FluentMap 已移除 — 改用 Dapper.DefaultTypeMap.MatchNamesWithUnderscores -->
