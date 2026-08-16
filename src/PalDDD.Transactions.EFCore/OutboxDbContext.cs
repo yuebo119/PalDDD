@@ -102,6 +102,11 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
 
+        // ITM-082 修复：存储层兜底截断（同款于 MarkDead 的 2040 截断）——Error 列 HasMaxLength(2048)，
+        // 超长失败原因此前让 ExecuteUpdate 生成的 UPDATE 抛 provider 截断异常（PG 整条 UPDATE 失败 →
+        // 消息滞留 Processing 且租约已过期 → 下轮重租后重试计数丢失；对齐 MarkDead 十七轮防御）
+        var error = failureReason.Length > 2040 ? failureReason[..2040] : failureReason;
+
         var originalOwner = message.LockedBy;
 
         OutboxMessages
@@ -111,7 +116,7 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
                 .SetProperty(m => m.RetryCount, m => m.RetryCount + 1)
                 .SetProperty(m => m.Status, OutboxStatus.Pending)
                 .SetProperty(m => m.ProcessedAt, (DateTimeOffset?)null)
-                .SetProperty(m => m.Error, failureReason)
+                .SetProperty(m => m.Error, error)
                 .SetProperty(m => m.NextAttemptAt, nextAttemptAt)
                 .SetProperty(m => m.LockedBy, (string?)null)
                 .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null));

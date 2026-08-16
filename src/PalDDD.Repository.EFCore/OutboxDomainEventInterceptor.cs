@@ -131,7 +131,11 @@ public sealed class OutboxDomainEventInterceptor(
                 Payload = payload.ToArray(),
                 ContentType = _serializer.ContentType,
                 SchemaVersion = descriptor.SchemaVersion,
-                CausationId = evt.EventId,
+                // ITM-103 修复：CausationId 不再自指——原 `CausationId = evt.EventId` 使 outbox 行
+                // 的因果链自环（"事件由自身引起"），下游消费方按 causation 追踪时断链。
+                // 本层无父事件追踪（DomainEvent 不含触发者 ID），诚实值为 null；
+                // 有父链语义的调用方应在构造 OutboxMessage 时显式赋值。
+                CausationId = null,
                 TraceParent = Activity.Current?.Id,
                 TraceState = Activity.Current?.TraceStateString,
                 Status = Transactions.OutboxStatus.Pending

@@ -52,7 +52,30 @@ public static class EndpointExtensions
 
             var dispatcher = context.RequestServices.GetRequiredService<CQRS.Dispatcher>();
             var ct = context.RequestAborted;
-            await dispatcher.SendAsync(cmd, ct);
+            try
+            {
+                // ITM-091 修复：SendAsync 纳入本地 try——PalValidationException 由 Dispatcher 派发时
+                // 抛出（原 catch 仅覆盖 ReadFromJsonAsync），此前验证失败会逃逸为 500；
+                // JsonException catch 语义保持不变（仍只覆盖反序列化）
+                await dispatcher.SendAsync(cmd, ct);
+            }
+            catch (PalDDD.CQRS.PalValidationException ex)
+            {
+                // 验证轮返工：与 ExceptionMiddleware 同款 ProblemDetails 响应体（裸 400 无 body
+                // 会让客户端拿不到错误明细；日志由派发管线内记录）
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                var response = new ValidationProblemResponse(
+                    "https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1",
+                    "Validation Failed",
+                    StatusCodes.Status400BadRequest,
+                    ex.Errors.Select(e => new ValidationProblemError(e.PropertyName, e.Message)).ToArray());
+                await context.Response.WriteAsJsonAsync(
+                    response,
+                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                    contentType: null,
+                    cancellationToken: ct);
+                return;
+            }
             context.Response.StatusCode = StatusCodes.Status200OK;
         });
     }
@@ -98,7 +121,30 @@ public static class EndpointExtensions
 
             var dispatcher = context.RequestServices.GetRequiredService<CQRS.Dispatcher>();
             var ct = context.RequestAborted;
-            var result = await dispatcher.SendAsync(cmd, ct);
+            TResponse result;
+            try
+            {
+                // ITM-091 修复：SendAsync 纳入本地 try——PalValidationException 由 Dispatcher 派发时
+                // 抛出（原 catch 仅覆盖 ReadFromJsonAsync），此前验证失败会逃逸为 500；
+                // JsonException catch 语义保持不变（仍只覆盖反序列化）
+                result = await dispatcher.SendAsync(cmd, ct);
+            }
+            catch (PalDDD.CQRS.PalValidationException ex)
+            {
+                // 验证轮返工：与 ExceptionMiddleware 同款 ProblemDetails 响应体
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                var response = new ValidationProblemResponse(
+                    "https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1",
+                    "Validation Failed",
+                    StatusCodes.Status400BadRequest,
+                    ex.Errors.Select(e => new ValidationProblemError(e.PropertyName, e.Message)).ToArray());
+                await context.Response.WriteAsJsonAsync(
+                    response,
+                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                    contentType: null,
+                    cancellationToken: ct);
+                return;
+            }
             await context.Response.WriteAsJsonAsync(
                 result,
                 responseJsonTypeInfo,

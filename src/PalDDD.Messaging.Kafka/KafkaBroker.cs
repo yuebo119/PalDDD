@@ -109,7 +109,17 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                 $"Message type '{typeof(TMessage).FullName}' is not registered in MessageCatalog.");
         var topic = descriptor.Name;
         var consumer = new ConsumerBuilder<string, byte[]>(_consumerConfig).Build();
-        consumer.Subscribe(topic); // 同步订阅（无需网络调用）
+        try
+        {
+            consumer.Subscribe(topic); // 同步订阅（无需网络调用）
+        }
+        catch
+        {
+            // ITM-084 修复：Subscribe 抛异常时 consumer 尚未登记进 _consumers（登记在下方
+            // 锁登记之后）——无人负责释放，此处显式 Dispose 后重抛，避免连接/组状态泄漏。
+            consumer.Dispose();
+            throw;
+        }
 
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 

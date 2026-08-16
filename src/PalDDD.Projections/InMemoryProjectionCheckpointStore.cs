@@ -45,6 +45,14 @@ public sealed class InMemoryProjectionCheckpointStore : IProjectionCheckpointSto
             if (_checkpoints.TryGetValue(key, out var existing))
             {
                 // 已完成的位置不再重复处理。
+                // ITM-106 修复（声明）：Completed/Processing 检查点刻意保留在字典中——
+                // Completed 是去重标记（TryStartAsync 对已完成位置返回 null；GetAsync 仍须
+                // 读到已完成检查点供 ReplayAsync 跳过逻辑与测试断言），Processing 是活跃租约
+                // （过期由下方抢占复用）。不做"返回 null 时移除"：会破坏上述去重/可读语义
+                // （ProjectionTests 断言完成态可读、ReplayAsync 依赖跳过）。内存增长以
+                // ResetAsync 显式清理为界；本存储定位测试/原型替身（对齐
+                // InMemoryIdempotencyStore/InMemoryEventLog 的语义声明惯例），长生命周期
+                // 生产场景应使用 Dapper/EFCore 持久化实现。
                 if (existing.Status == ProjectionCheckpointStatus.Completed)
                     return ValueTask.FromResult<ProjectionCheckpoint?>(null);
 

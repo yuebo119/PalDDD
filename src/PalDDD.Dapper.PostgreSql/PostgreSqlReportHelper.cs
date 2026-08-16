@@ -65,8 +65,10 @@ public static class PostgreSqlReportHelper
             for (int i = 0; i < values.Length; i++)
                 values[i] = values[i] is DBNull ? null : values[i];
 
+            // ITM-114 修复：按类型原生格式化（FormatCsvValue）——原 Convert.ToString 把
+            // byte[] 降级为 "System.Byte[]"、DateTime 丢时区/亚秒精度、float 精度失真
             var line = string.Join(',',
-                values.Select(v => v is null ? "" : EscapeCsvSpan(Convert.ToString(v, CultureInfo.InvariantCulture).AsSpan())));
+                values.Select(v => v is null ? "" : EscapeCsvSpan(FormatCsvValue(v).AsSpan())));
             await writer.WriteLineAsync(line).ConfigureAwait(false);
 
             if (++rowCount % 100_000 == 0)
@@ -198,8 +200,32 @@ public static class PostgreSqlReportHelper
             case DateTime dt: writer.WriteStringValue(dt.ToString("O")); break;
             case DateTimeOffset dto: writer.WriteStringValue(dto.ToString("O")); break;
             case Guid g: writer.WriteStringValue(g.ToString("D")); break;
+            // ITM-114 修复：byte[] → Base64（原 default 分支输出 "System.Byte[]"）；
+            // float 单独处理（float 装箱不匹配 double 分支，原落入 default 变字符串）
+            case byte[] bytes: writer.WriteStringValue(Convert.ToBase64String(bytes)); break;
+            case float f: writer.WriteNumberValue(f); break;
             default: writer.WriteStringValue(Convert.ToString(value, CultureInfo.InvariantCulture) ?? ""); break;
         }
+    }
+
+    /// <summary>
+    /// ITM-114 修复：按 CLR 类型原生格式化 CSV 单元格——原 Convert.ToString 把 byte[]
+    /// 降级为 "System.Byte[]"、DateTime 丢时区/亚秒精度、float/double 精度失真。
+    /// 与 WriteJsonValue 的映射规则对齐（byte[] → Base64；时间 "O"；Guid "D"）。
+    /// </summary>
+    private static string FormatCsvValue(object value)
+    {
+        return value switch
+        {
+            byte[] bytes => Convert.ToBase64String(bytes),
+            DateTimeOffset dto => dto.ToString("O", CultureInfo.InvariantCulture),
+            DateTime dt => dt.ToString("O", CultureInfo.InvariantCulture),
+            Guid g => g.ToString("D", CultureInfo.InvariantCulture),
+            float f => f.ToString(CultureInfo.InvariantCulture),
+            double d => d.ToString(CultureInfo.InvariantCulture),
+            decimal m => m.ToString(CultureInfo.InvariantCulture),
+            _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? ""
+        };
     }
 
     /// <summary>CSV 转义 — SearchValues 零分配检测</summary>

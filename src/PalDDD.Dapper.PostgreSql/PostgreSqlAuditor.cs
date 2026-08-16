@@ -183,5 +183,15 @@ public sealed class PostgreSqlAuditEntry
     public string? OldData { get; set; }
     public string? NewData { get; set; }
     public string? ChangedBy { get; set; }
+
+    /// <summary>
+    /// ITM-115 修复（声明）：ChangedAt 保持 DateTime——审计表列是 TIMESTAMPTZ（见
+    /// <see cref="PostgreSqlAuditor.CreateAuditTable"/>），Npgsql 默认映射为 DateTime
+    /// （Kind=Local/Utc）。DTO 是公开查询结果类型，改 DateTimeOffset 属公共 API 变更
+    /// （PublicApiSnapshot 漂移 + 二进制兼容破坏），故仅声明：DateTime 不携带原始时区
+    /// 偏移，跨时区消费方应按 DateTime.Kind 显式转换（如 Kind==Utc 时
+    /// <c>new DateTimeOffset(dt, TimeSpan.Zero)</c>），或改用查询侧
+    /// <c>changed_at AT TIME ZONE 'UTC'</c> 归一化。
+    /// </summary>
     public DateTime ChangedAt { get; set; }
 }

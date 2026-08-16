@@ -145,6 +145,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
                     _transaction, cancellationToken: ct)).ConfigureAwait(false);
 
             // 🔴 P0 修复：按租约标识回读，不重新评估子查询
+            // ITM-109 修复（声明，对齐 PalORM P3 声明）：回读按 (locked_by, locked_until)
+            // 匹配——同一 tick（同 now → 同 until）内的第二次租约会回读到上一批遗留行，
+            // 属已知限制（PalORM 已声明同限制）；PG RETURNING 路径（SupportsOutboxReturning
+            // 分支）按行锁语义返回刚锁定行，无此窗口。生产多实例建议用 PG 路径。
             var msgs = await conn.QueryAsync<OutboxMessage>(
                 new CommandDefinition(
                     SqlTemplates.OutboxSelectByLease,

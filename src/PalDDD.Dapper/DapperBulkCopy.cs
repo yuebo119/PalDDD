@@ -172,7 +172,10 @@ public static class DapperBulkCopy
 
         // 构建 DataTable — MySqlBulkCopy 的唯一数据源格式
         // 注意：DataTable 在现代 .NET（net6.0+）中已 AOT 兼容
-        var dt = new DataTable();
+        // ITM-083 修复：DataTable 用 using 声明（成功/异常路径都释放）。
+        // MySqlBulkCopy 经查证（MySqlConnector 2.6.x XML 文档）不实现 IDisposable——无 Dispose 可调，
+        // 其内部连接生命周期由 myConn 持有者管理；此处仅 DataTable 需要释放。
+        using var dt = new DataTable();
         foreach (var col in cols) dt.Columns.Add(col);
 
         foreach (var item in items)
@@ -186,6 +189,7 @@ public static class DapperBulkCopy
             dt.Rows.Add(row);
         }
 
+        // MySqlBulkCopy 不实现 IDisposable（MySqlConnector 2.6.x）——无 using，见上方 ITM-083 注释
         var bulkCopy = new MySqlBulkCopy(myConn)
         {
             DestinationTableName = table

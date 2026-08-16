@@ -57,6 +57,14 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         CancellationToken ct = default)
     {
         ValidateKeyParts(projectionName, sourceName, position);
+        // ITM-107 修复：processingTimeout 必须非负——负值使租约即刻过期
+        // （leaseUntil = startedAt + timeout < startedAt），僵尸抢占语义失效。
+        // 允许 TimeSpan.Zero：租约即刻过期是方言探针"超时接管（timeout=0）可重入"的
+        // 合法测试语义（与 DapperInboxStore 同款无正数约束的 Inbox 路径对齐）；
+        // 仅禁止负值（leaseUntil 早于 startedAt 的退化状态）。
+        // TimeSpan 不实现 INumberBase，用显式比较。
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
         var leaseUntil = startedAt + processingTimeout;
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
 

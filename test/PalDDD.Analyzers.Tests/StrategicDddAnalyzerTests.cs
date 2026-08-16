@@ -258,6 +258,85 @@ public sealed class StrategicDddAnalyzerTests
         await Assert.That(diagnostics.Any(d => d.Id.StartsWith("PDDD", StringComparison.Ordinal))).IsFalse();
     }
 
+    // ITM-122 回归测试：派生 ProcessManager 继承基类 [BoundedContext]——
+    // [BoundedContext] 与 [ProcessManager] 均 Inherited=true，shape 检查（PDDD003）与
+    // 上下文名校验（PDDD014）都应沿基类链取上下文（修复前直接声明查不到 → 误报 PDDD003）
+    [Test]
+    public async Task ProcessManagerInheritingBoundedContextFromBase_DoesNotReportPddd003()
+    {
+        var diagnostics = await AnalyzeAsync(
+            """
+            using PalDDD.Core;
+            using PalDDD.Messaging;
+
+            [BoundedContext("ordering")]
+            [GenerateMessage(Name = "ordering.order-submitted.v1", SchemaVersion = 1)]
+            public sealed class OrderSubmitted : DomainEvent, IDomainEvent
+            {
+                public static string EventName => "ordering.order-submitted.v1";
+            }
+
+            [BoundedContext("ordering")]
+            public abstract class OrderProcessManagerBase : IEventHandler<OrderSubmitted>
+            {
+                public abstract ValueTask HandleAsync(OrderSubmitted @event, CancellationToken ct);
+            }
+
+            [ProcessManager("ordering.order-fulfillment")]
+            public sealed class OrderProcessManager : OrderProcessManagerBase
+            {
+                public override ValueTask HandleAsync(OrderSubmitted @event, CancellationToken ct)
+                    => ValueTask.CompletedTask;
+            }
+            """);
+
+        // 全源码零 PDDD 诊断：base 无 [ProcessManager] 不触发，派生类继承上下文
+        // 且 shape/名称均合法——修复前派生类误报 PDDD003
+        await Assert.That(diagnostics.Any(d => d.Id.StartsWith("PDDD", StringComparison.Ordinal))).IsFalse();
+    }
+
+    // ITM-123 回归测试：struct 实现 IDomainEvent——[BoundedContext]/[GenerateMessage] 均为
+    // AttributeTargets.Class 不可消解，领域事件契约诊断（PDDD001/005）仅对 class 生效
+    [Test]
+    public async Task StructDomainEvent_DoesNotReportPddd001OrPddd005()
+    {
+        var diagnostics = await AnalyzeAsync(
+            """
+            using PalDDD.Core;
+
+            public readonly record struct OrderInfo : IDomainEvent
+            {
+                public static string EventName => "ordering.order-info.v1";
+            }
+            """);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PDDD001")).IsFalse();
+        await Assert.That(diagnostics.Any(d => d.Id == "PDDD005")).IsFalse();
+    }
+
+    // ITM-124 回归测试：EventName 声明为非字面量（const 拼接）——无法静态判定与
+    // [GenerateMessage].Name 的等价性，跳过比对（修复前以 null 比对恒报 PDDD015）；
+    // 与完全缺失声明（仍报 PDDD015，见 MissingEventNameDeclaration_DoesNotRegisterCodeFix）区分
+    [Test]
+    public async Task DomainEventWithConstConcatenatedEventName_DoesNotReportPddd015()
+    {
+        var diagnostics = await AnalyzeAsync(
+            """
+            using PalDDD.Core;
+
+            [BoundedContext("ordering")]
+            [GenerateMessage(Name = "ordering.order-submitted.v1", SchemaVersion = 1)]
+            public sealed class OrderSubmitted : DomainEvent, IDomainEvent
+            {
+                private const string Context = "ordering";
+                private const string BaseName = "order-submitted";
+                public static string EventName => Context + "." + BaseName + ".v1";
+            }
+            """);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PDDD015")).IsFalse();
+    }
+
     // P2 修复（二十一轮）测试：contextName 沿基类链提取——派生事件的消息名不属于
     // 基类声明的上下文时应照常报 PDDD008（修复前 gate 用直接声明判 null 直接跳过，
     // 继承上下文的事件脱离前缀治理）

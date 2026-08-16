@@ -53,7 +53,7 @@ public static class SqliteServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        if (connectionString.Contains(":memory:", StringComparison.OrdinalIgnoreCase))
+        if (IsMemoryDataSource(new SqliteConnectionStringBuilder(connectionString).DataSource))
         {
             // ⚠️ 线程安全契约（八轮评审 P3 补强声明，不加 SemaphoreSlim 串行化——包装连接改动面大）：
             // :memory: 必须 Singleton（连接关闭数据即销毁），但 SqliteConnection 非线程安全——
@@ -138,5 +138,27 @@ public static class SqliteServiceCollectionExtensions
             cmd.CommandText = sql;
             cmd.ExecuteNonQuery();
         }
+    }
+
+    /// <summary>
+    /// ITM-111 修复：精确判定 SQLite 内存数据源——原 <c>Contains(":memory:")</c> 子串匹配
+    /// 会把文件名恰含 ":memory:" 子串的文件库误判为内存库（误配 Singleton 生命周期 +
+    /// 连接关闭数据即销毁，误判直接丢数据）。判定规则对齐 SQLite 语义：
+    /// DataSource 为 ":memory:" 字面量、<c>file::memory:</c> URI 形式（含 shared cache
+    /// 变体 <c>file::memory:?cache=shared</c>）、或 <c>file:</c> URI 查询参数含
+    /// <c>mode=memory</c>（命名内存库形式）。
+    /// </summary>
+    private static bool IsMemoryDataSource(string dataSource)
+    {
+        if (dataSource.Equals(":memory:", StringComparison.OrdinalIgnoreCase)
+            || dataSource.StartsWith("file::memory:", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!dataSource.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var queryIndex = dataSource.IndexOf('?');
+        return queryIndex >= 0
+            && dataSource.AsSpan(queryIndex + 1).Contains("mode=memory", StringComparison.OrdinalIgnoreCase);
     }
 }

@@ -164,6 +164,10 @@ public sealed class DapperEventLog : IEventLog
     {
         // P3 修复（二十一轮）：补 fromVersion 非负守卫（对齐 EFCore/PalORM 版 ThrowIfLessThan(fromVersion, 0)）
         ArgumentOutOfRangeException.ThrowIfLessThan(fromVersion, 0);
+        // ITM-080 修复：补 maxCount 守卫（对齐 EFCore/PalORM/InMemory 版 ThrowIfLessThan(maxCount, 1)）——
+        // maxCount=0 时 SQLite `LIMIT 0` 返回空结果（契约要求抛 ArgumentOutOfRangeException）；
+        // maxCount<0 时 SQLite `LIMIT -1` = 无限制（危险——负数意图不明时全量拉取，绕过调用方上限）
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
 
         // 💡 RecordedEvent 的构造函数是 internal 且属性只读，Dapper 运行时无法直接物化。
         // 通过 EventLogRow DTO（public 无参构造 + public setters）读取，再映射到 RecordedEvent。
@@ -180,6 +184,8 @@ public sealed class DapperEventLog : IEventLog
     {
         // P3 修复（二十一轮）：补 fromPosition 非负守卫（对齐 EFCore/PalORM 版 ThrowIfLessThan(fromPosition, 0)）
         ArgumentOutOfRangeException.ThrowIfLessThan(fromPosition, 0);
+        // ITM-080 修复：补 maxCount 守卫（同 ReadStreamAsync——SQLite `LIMIT -1` = 无限制的方言陷阱）
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
 
         var rows = await _connection.QueryAsync<EventLogRow>(
             new CommandDefinition(EventLogSql.ReadAll, new { from = fromPosition, max = maxCount }, _transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);

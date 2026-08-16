@@ -67,7 +67,12 @@ public static class PostgreSqlMultiHost
             var standbyHost = standbyBuilder.Port != 5432
                 ? $"{standbyBuilder.Host}:{standbyBuilder.Port}"
                 : standbyBuilder.Host;
-            builder.ConnectionStringBuilder.Host += $",{standbyHost}";
+            // ITM-110 修复：拼接规范化——主串无 Host 时原 `Host += ",{standbyHost}"` 产生
+            // 前导逗号（",pg2"），Npgsql 解析出空主机条目；改为空则直接赋值
+            var primaryHost = builder.ConnectionStringBuilder.Host;
+            builder.ConnectionStringBuilder.Host = string.IsNullOrWhiteSpace(primaryHost)
+                ? standbyHost
+                : $"{primaryHost},{standbyHost}";
         }
 
         builder.ConnectionStringBuilder.TargetSessionAttributes = "primary";
@@ -99,7 +104,15 @@ public static class PostgreSqlMultiHost
         ArgumentNullException.ThrowIfNull(replicaConnectionStrings);
 
         if (replicaConnectionStrings.Length == 0)
-            return AddPalNpgsqlDataSourceWithFailover(services, primaryConnectionString, primaryConnectionString, applicationName);
+        {
+            // ITM-110 修复：零副本时直接注册主库单数据源——原实现回退 failover(primary, primary)
+            // 产生重复 Host（"pg1,pg1"），驱动层视为主备两份（故障转移/负载语义错乱）
+            var soloBuilder = new NpgsqlDataSourceBuilder(primaryConnectionString);
+            soloBuilder.ConnectionStringBuilder.ApplicationName = applicationName;
+            soloBuilder.ConnectionStringBuilder.TargetSessionAttributes = "primary";
+            services.AddSingleton(soloBuilder.Build());
+            return services;
+        }
 
         var builder = new NpgsqlDataSourceBuilder(primaryConnectionString);
 
@@ -119,7 +132,12 @@ public static class PostgreSqlMultiHost
 
         if (hosts.Count > 0)
         {
-            builder.ConnectionStringBuilder.Host += "," + string.Join(",", hosts);
+            // ITM-110 修复：拼接规范化——主串无 Host 时直接赋值，避免前导逗号（同
+            // AddPalNpgsqlDataSourceWithFailover 的 ITM-110 修复）
+            var primaryHost = builder.ConnectionStringBuilder.Host;
+            builder.ConnectionStringBuilder.Host = string.IsNullOrWhiteSpace(primaryHost)
+                ? string.Join(",", hosts)
+                : $"{primaryHost},{string.Join(",", hosts)}";
             builder.ConnectionStringBuilder.LoadBalanceHosts = true;
             // ITM-067：必须 primary 亲和——"any" 会把写操作负载均衡到只读副本导致写失败
             builder.ConnectionStringBuilder.TargetSessionAttributes = "primary";

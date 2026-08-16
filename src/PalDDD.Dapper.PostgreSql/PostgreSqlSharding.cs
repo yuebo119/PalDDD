@@ -168,11 +168,22 @@ public sealed class ShardedDataSourceManager : IAsyncDisposable
             throw new ArgumentException("connectionStrings 不得为空数组——至少需要一个分片连接串。", nameof(connectionStrings));
 
         _shards = new NpgsqlDataSource[connectionStrings.Length];
-        for (int i = 0; i < connectionStrings.Length; i++)
+        try
         {
-            var builder = new NpgsqlDataSourceBuilder(connectionStrings[i]);
-            builder.ConnectionStringBuilder.ApplicationName = $"{applicationName}-{i}";
-            _shards[i] = builder.Build();
+            for (int i = 0; i < connectionStrings.Length; i++)
+            {
+                var builder = new NpgsqlDataSourceBuilder(connectionStrings[i]);
+                builder.ConnectionStringBuilder.ApplicationName = $"{applicationName}-{i}";
+                _shards[i] = builder.Build();
+            }
+        }
+        catch (Exception)
+        {
+            // ITM-085 修复：Build 中途抛错时构造未完成，DisposeAsync 永远不会被调用——
+            // 已构建的 0..i-1 个数据源在此显式释放后重抛（_shards 后续元素为 null，跳过）。
+            for (int i = 0; i < _shards.Length && _shards[i] is not null; i++)
+                _shards[i].Dispose();
+            throw;
         }
     }
 

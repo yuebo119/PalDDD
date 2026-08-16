@@ -75,68 +75,75 @@ public sealed class OutboxBatchProcessor
         var dead = 0;
         var retried = 0;
 
-        foreach (var msg in messages)
+        try
         {
-            try
+            foreach (var msg in messages)
             {
-                var descriptor = _messageCatalog.Find(msg.Type);
-                if (descriptor is null)
+                try
                 {
-                    _store.MarkDead(msg, $"Type '{msg.Type}' not registered in MessageCatalog", now);
-                    checked { dead++; }
-                    await PersistSingleAsync(msg.Id, ct);
-                    continue;
-                }
+                    var descriptor = _messageCatalog.Find(msg.Type);
+                    if (descriptor is null)
+                    {
+                        _store.MarkDead(msg, $"Type '{msg.Type}' not registered in MessageCatalog", now);
+                        checked { dead++; }
+                        await PersistSingleAsync(msg.Id, ct);
+                        continue;
+                    }
 
-                var @event = _serializer.Deserialize(msg.Payload, descriptor);
-                if (@event is null)
-                {
-                    _store.MarkDead(msg, "Deserialization returned null", now);
-                    checked { dead++; }
-                    await PersistSingleAsync(msg.Id, ct);
-                    continue;
-                }
+                    var @event = _serializer.Deserialize(msg.Payload, descriptor);
+                    if (@event is null)
+                    {
+                        _store.MarkDead(msg, "Deserialization returned null", now);
+                        checked { dead++; }
+                        await PersistSingleAsync(msg.Id, ct);
+                        continue;
+                    }
 
-                var publishContext = new Messaging.MessagePublishContext(
-                    msg.CorrelationId,
-                    msg.CausationId,
-                    msg.TraceParent,
-                    msg.TraceState);
-                await _broker.PublishAsync(@event, descriptor, msg.Id, publishContext, ct);
-                _store.MarkProcessed(msg, now);
-                checked { processed++; }
-                await PersistSingleAsync(msg.Id, ct);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // RetryCount 由 Store.ReleaseForRetry 在内部递增并与状态一同持久化，
-                // 确保计数与状态原子一致（P0 修复：消除增量-持久化窗口）。
-                // 退避延迟由 IRetryBackoffPolicy 计算（默认指数 2^n，上限 64s，可选抖动）。
-                var nextAttemptAt = now + options.RetryBackoffPolicy.ComputeDelay(msg.RetryCount + 1);
-                // P1 修复（二十一轮）：入库前截断（日志行保留完整消息）——机理见类头常量注释
-                var failureReason = ex.Message.Length <= MaxFailureReasonLength
-                    ? ex.Message
-                    : ex.Message[..MaxFailureReasonLength];
-                if (msg.RetryCount + 1 >= options.MaxRetryCount)
-                {
-                    _store.MarkDead(msg, failureReason, now);
-                    checked { dead++; }
+                    var publishContext = new Messaging.MessagePublishContext(
+                        msg.CorrelationId,
+                        msg.CausationId,
+                        msg.TraceParent,
+                        msg.TraceState);
+                    await _broker.PublishAsync(@event, descriptor, msg.Id, publishContext, ct);
+                    _store.MarkProcessed(msg, now);
+                    checked { processed++; }
+                    await PersistSingleAsync(msg.Id, ct);
                 }
-                else
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _store.ReleaseForRetry(msg, failureReason, nextAttemptAt);
-                    checked { retried++; }
+                    // RetryCount 由 Store.ReleaseForRetry 在内部递增并与状态一同持久化，
+                    // 确保计数与状态原子一致（P0 修复：消除增量-持久化窗口）。
+                    // 退避延迟由 IRetryBackoffPolicy 计算（默认指数 2^n，上限 64s，可选抖动）。
+                    var nextAttemptAt = now + options.RetryBackoffPolicy.ComputeDelay(msg.RetryCount + 1);
+                    // P1 修复（二十一轮）：入库前截断（日志行保留完整消息）——机理见类头常量注释
+                    var failureReason = ex.Message.Length <= MaxFailureReasonLength
+                        ? ex.Message
+                        : ex.Message[..MaxFailureReasonLength];
+                    if (msg.RetryCount + 1 >= options.MaxRetryCount)
+                    {
+                        _store.MarkDead(msg, failureReason, now);
+                        checked { dead++; }
+                    }
+                    else
+                    {
+                        _store.ReleaseForRetry(msg, failureReason, nextAttemptAt);
+                        checked { retried++; }
+                    }
+                    _logger.Warning($"Outbox: message {msg.Id} processing failed at retry {msg.RetryCount + 1}: {ex.Message}");
+                    await PersistSingleAsync(msg.Id, ct);
                 }
-                _logger.Warning($"Outbox: message {msg.Id} processing failed at retry {msg.RetryCount + 1}: {ex.Message}");
-                await PersistSingleAsync(msg.Id, ct);
             }
         }
-
-        activity?.SetTag("pal.outbox.processed", processed);
-        activity?.SetTag("pal.outbox.dead", dead);
-        activity?.SetTag("pal.outbox.retried", retried);
-        PalMetrics.OutboxProcessed.Add(processed);
-        PalMetrics.OutboxFailed.Add(dead + retried);
+        finally
+        {
+            // ITM-097 修复：指标段移入 finally——单条消息 OCE 直接中止整批时（如关停），
+            // 已处理/死亡/重试计数仍被记录，批次指标不再随 OCE 丢失（finally 中不再抛）
+            activity?.SetTag("pal.outbox.processed", processed);
+            activity?.SetTag("pal.outbox.dead", dead);
+            activity?.SetTag("pal.outbox.retried", retried);
+            PalMetrics.OutboxProcessed.Add(processed);
+            PalMetrics.OutboxFailed.Add(dead + retried);
+        }
     }
 
     /// <summary>逐条持久化 — 每条消息处理后立即 SaveChanges，避免批次回滚</summary>

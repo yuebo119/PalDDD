@@ -62,7 +62,11 @@ public sealed class EventLogGlobalPositionAllocator
         {
             NextGlobalPosition += chunkSize;
         }
-        Revision++;
+        // ITM-117 修复：Revision 并发令牌 checked 自增——原 uint 溢出静默回绕
+        //（0xFFFFFFFF 后归 0），EF concurrency token 的 WHERE Revision=orig 可能误匹配
+        // 旧行（CAS 失效）；checked 抛 OverflowException 显式化。uint 需 42 亿次区块
+        // 分配才可能触发，纯防御性修复，不影响字段类型与使用点（EF token 无碍）。
+        checked { Revision++; }
         return first;
     }
 }

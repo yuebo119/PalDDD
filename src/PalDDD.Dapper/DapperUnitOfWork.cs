@@ -32,6 +32,12 @@ public sealed class DapperUnitOfWork : IUnitOfWork
 
     public async ValueTask BeginTransactionAsync(CancellationToken ct = default)
     {
+        // ITM-088 修复：事务已激活时再次 Begin 会覆盖旧 _transaction 引用（旧事务未处置即丢失）——
+        // 前置判活明确抛错，调用方应先 CommitAsync/RollbackAsync 结束当前事务。
+        if (_transaction is not null)
+            throw new InvalidOperationException(
+                "BeginTransactionAsync 在事务已激活时被再次调用——请先 CommitAsync/RollbackAsync 结束当前事务。");
+
         if (_connection.State != System.Data.ConnectionState.Open)
             await _connection.OpenAsync(ct).ConfigureAwait(false);
         _transaction = await _connection.BeginTransactionAsync(ct).ConfigureAwait(false);

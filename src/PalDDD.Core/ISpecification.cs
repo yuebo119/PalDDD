@@ -39,7 +39,11 @@ namespace PalDDD.Core;
 [SuppressMessage("Naming", "CA1716:Identifiers should not match keywords", Justification = "And/Or/Not 是 DDD Specification 模式的标准命名，VB.NET 兼容性非本项目关注。")]
 public interface ISpecification<T>
 {
-    /// <summary>在内存中判断实体是否满足此规约</summary>
+    /// <summary>在内存中判断实体是否满足此规约。</summary>
+    /// <remarks>
+    /// ITM-073：内存求值需要编译表达式树（Expression.Compile），NativeAOT 下不受支持——
+    /// AOT 应用请改用 <see cref="ToExpression"/> 将规约传给查询提供者（EF Core 等）在数据库端求值。
+    /// </remarks>
     bool IsSatisfiedBy(T entity);
 
     /// <summary>
@@ -210,20 +214,46 @@ public static class Spec<T>
     public static ISpecification<T> None { get; } = new ExpressionSpecification<T>(_ => false);
 }
 
-[UnconditionalSuppressMessage("AOT", "IL3050:Members annotated with RequiresDynamicCodeAttribute may require dynamic code",
-    Justification = "ExpressionSpecification 是规约模式的内存评估实现，仅用于非 AOT 场景的内存筛选。AOT 场景应通过 ToExpression() 将表达式传递给 EF Core 等查询提供者，由它们在数据库端执行。生产代码不通过 IsSatisfiedBy 做内存评估。")]
+/// <summary>
+/// 表达式规约实现 — 同时支持内存求值（<see cref="IsSatisfiedBy"/>）与查询翻译（<see cref="ToExpression"/>）。
+/// <para>
+/// ITM-073 修复：<c>Compile()</c> 从构造期延迟到首次 <see cref="IsSatisfiedBy"/> 调用——
+/// 原实现构造即编译（含 <c>Spec&lt;T&gt;.All/None</c> 静态初始化），NativeAOT 下任何触碰
+/// Spec&lt;T&gt; 的代码都会在构造期触发 PlatformNotSupportedException，且与
+/// <see cref="Spec{T}"/> 文档承诺的"AOT 场景走 ToExpression() 零编译"矛盾。
+/// 延迟后：仅内存求值路径需要动态代码（该路径由私有 helper <see cref="ExpressionSpecification{T}.Compile"/>
+/// 的 [RequiresDynamicCode] 标注诚实声明，公共 API 不带标注以满足 AotContractTests），
+/// ToExpression 查询翻译路径全程零编译，AOT 应用可安全使用 Spec&lt;T&gt; 组合查询。
+/// </para>
+/// </summary>
 internal sealed class ExpressionSpecification<T> : ISpecification<T>
 {
     private readonly Expression<Func<T, bool>> _expression;
-    private readonly Func<T, bool> _compiled;
+    private Func<T, bool>? _compiled;
 
     public ExpressionSpecification(Expression<Func<T, bool>> expression)
     {
         _expression = expression ?? throw new ArgumentNullException(nameof(expression));
-        _compiled = _expression.Compile();
+    }
+    /// <remarks>
+    /// ITM-073：编译延迟到首次内存求值（结果缓存），AOT 场景走 <see cref="ToExpression"/> 零编译；
+    /// 编译动作收敛在私有 helper（<see cref="Compile"/>）并诚实标注 RequiresDynamicCode——
+    /// 公共 API 不带该标注（AotContractTests 禁止 A 类程序集公共成员标注），
+    /// 但此路径在 NativeAOT 下确实需要动态代码，故在调用点以 UnconditionalSuppressMessage
+    /// 抑制 IL3050 并声明理由（对齐 conventions 抑制策略）。
+    /// </remarks>
+    [UnconditionalSuppressMessage("AOT", "IL3050:Members annotated with RequiresDynamicCodeAttribute may require dynamic code",
+        Justification = "IsSatisfiedBy 的内存求值路径需要编译表达式树；AOT 场景应使用 ToExpression() 传给查询提供者（EF Core 等），该路径零编译。生产代码不在 AOT 环境下通过 IsSatisfiedBy 做内存评估。")]
+    public bool IsSatisfiedBy(T entity)
+    {
+        _compiled ??= Compile(_expression);
+        return _compiled(entity);
     }
 
-    public bool IsSatisfiedBy(T entity) => _compiled(entity);
+    /// <summary>编译表达式树（ITM-073 延迟编译——首次内存求值才触发，结果缓存于 <c>_compiled</c>）。</summary>
+    [RequiresDynamicCode("表达式树编译（Expression.Compile）在 NativeAOT 下不受支持；AOT 场景请使用 ToExpression() 传给查询提供者。")]
+    private static Func<T, bool> Compile(Expression<Func<T, bool>> expression)
+        => expression.Compile();
 
     public Expression<Func<T, bool>> ToExpression() => _expression;
 }

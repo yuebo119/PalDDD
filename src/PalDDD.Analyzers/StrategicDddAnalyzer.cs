@@ -206,7 +206,12 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
         // 链上最近声明同时供 PDDD008/013/014 的 contextName 提取（PDDD002 仍只验直接声明，
         // 派生类不重复报命名错误）
         var chainBoundedContext = TryGetAttributeAlongBaseChain(type, BoundedContextAttributeName);
-        if (IsDomainModelType(type) && chainBoundedContext is null)
+        // ITM-123 修复：struct 实现 IDomainEvent 时 [GenerateMessage]/[BoundedContext] 均为
+        // AttributeTargets.Class 不可消解——领域事件契约诊断（PDDD001/005）仅对 class 生效，
+        // struct 事件与 static abstract 组合属不支持形态（编译期无对应可消解诊断，排除误报）
+        if (type.TypeKind == TypeKind.Class
+            && IsDomainModelType(type)
+            && chainBoundedContext is null)
         {
             context.ReportDiagnostic(Diagnostic.Create(
                 MissingBoundedContext,
@@ -217,7 +222,11 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
         var generateMessage = IsDomainEventType(type)
             ? TryGetAttribute(type, GenerateMessageAttributeName)
             : null;
-        if (IsDomainEventType(type) && generateMessage is null)
+        // ITM-123 修复：PDDD005 仅对 class 生效——[GenerateMessage] 为 AttributeTargets.Class，
+        // struct 事件不可消解（与上方 PDDD001 的 struct 排除对称）
+        if (type.TypeKind == TypeKind.Class
+            && IsDomainEventType(type)
+            && generateMessage is null)
         {
             context.ReportDiagnostic(Diagnostic.Create(
                 MissingGeneratedMessageContract,
@@ -241,7 +250,13 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
             if (IsStableName(messageName))
             {
                 var eventName = TryGetStaticStringProperty(type, "EventName", context.CancellationToken);
-                if (!StringComparer.Ordinal.Equals(eventName.Name, messageName))
+                // ITM-124 修复：EventName 声明为非字面量（const 拼接/计算）时
+                // TryGetStaticStringProperty 返回 (Name=null, Location=声明位置)——原实现以 null
+                // 比对 messageName 恒报 PDDD015 误报；非字面量无法静态判定，跳过比对。
+                // 注意区分：完全缺失声明时返回 (null, null)——Location 为 null，保留
+                // 原"缺失声明同样报 PDDD015"行为（事件契约诊断不因缺失而静默）。
+                if (eventName is not { Name: null, Location: not null }
+                    && !StringComparer.Ordinal.Equals(eventName.Name, messageName))
                 {
                     var properties = ImmutableDictionary<string, string?>.Empty
                         .Add("ExpectedMessageName", messageName);
@@ -249,7 +264,7 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
                         DomainEventNameMismatch,
                         eventName.Location ?? type.Locations[0],
                         properties,
-                        eventName.Name ?? string.Empty,
+                        eventName.Name,
                         messageName));
                 }
             }
@@ -320,8 +335,12 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
         }
 
         var processManager = TryGetAttribute(type, ProcessManagerAttributeName);
+        // ITM-122 修复：PDDD003 shape 检查用链式 BoundedContext——[ProcessManager] 与
+        // [BoundedContext] 均 Inherited=true，派生 ProcessManager 继承基类 [BoundedContext]
+        // 时直接声明查不到（boundedContext 仅本类型），误报"未声明 [BoundedContext]"；
+        // 与 PDDD001（chainBoundedContext）及 PDDD004（HasAttributeAlongBaseChain）口径对齐
         if (processManager is not null
-            && (!type.IsSealed || boundedContext is null || !ImplementsGenericInterface(type, EventHandlerInterfaceName)))
+            && (!type.IsSealed || chainBoundedContext is null || !ImplementsGenericInterface(type, EventHandlerInterfaceName)))
         {
             context.ReportDiagnostic(Diagnostic.Create(
                 InvalidProcessManagerShape,

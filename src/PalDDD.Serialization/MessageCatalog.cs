@@ -118,6 +118,11 @@ public sealed class MessageCatalogBuilder
         int schemaVersion = 1,
         string contentType = ContentTypes.Json)
     {
+        // ITM-102 修复（声明）：schemaVersion>=1 校验已由 MessageDescriptor.Create/构造函数
+        // 强制执行（ArgumentOutOfRangeException.ThrowIfLessThan(schemaVersion, 1)），与
+        // IMessageCatalog.Find(name, schemaVersion) 的 ThrowIfLessThan 契约对齐——此处
+        // 无需重复校验：schemaVersion=0 在 Create 即抛；显式 Add(MessageDescriptor) 传入
+        // 非法描述符同样在构造时被拦截。
         var descriptor = MessageDescriptor.Create(jsonTypeInfo, name, schemaVersion, contentType);
         Add(descriptor);
         return descriptor;

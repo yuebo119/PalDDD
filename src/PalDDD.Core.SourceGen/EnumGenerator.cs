@@ -26,7 +26,9 @@ public sealed class EnumGenerator : IIncrementalGenerator
         "Generated enum has no static fields to register",
         // P3 修复（十七轮）：文案对齐实际收集逻辑——字段收集只要求 public/internal static
         // （不要求 readonly），原文案 "static readonly" 与实现不符
-        "Type '{0}' is marked with [GenerateEnum] but has no public static fields. Add at least one field or remove the attribute.",
+        // ITM-100 修复：文案补 internal——收集条件为 static && (public || internal)，
+        // 原文案 "public static" 与实现不符（仅 internal static 字段的枚举会误报 PALENUM001）
+        "Type '{0}' is marked with [GenerateEnum] but has no public or internal static fields. Add at least one field or remove the attribute.",
         "PalDDD.EnumGeneration",
         DiagnosticSeverity.Warning,
         isEnabledByDefault: true);
@@ -84,6 +86,24 @@ public sealed class EnumGenerator : IIncrementalGenerator
             transform: static (context, ct) =>
             {
                 var classSymbol = (INamedTypeSymbol)context.TargetSymbol;
+
+                // ITM-100 修复：record struct 声明前置分支——原代码 IsRecord && TypeKind==Class
+                // 不匹配 record struct（TypeKind==Struct），struct 无基类可继承 SmartEnum，
+                // 落入下方基类检查报 PALENUM002（误导用户改基类）；补此分支与 record class
+                // 一样报 PALENUM003（引导改用 class）
+                if (classSymbol.IsRecord && classSymbol.TypeKind == TypeKind.Struct)
+                {
+                    return new EnumGenInfo(
+                        Namespace: GetNamespaceName(classSymbol),
+                        TypeName: classSymbol.Name,
+                        ContainingDeclarations: [],
+                        ContainingNames: [],
+                        ValueType: classSymbol.BaseType?.ToDisplayString() ?? "?",
+                        Fields: [],
+                        HasFields: false,
+                        DiagnosticId: "PALENUM003",
+                        Location: context.TargetNode.GetLocation());
+                }
 
                 // P3 修复（八轮评审）：record 声明（GenerateEnumAttribute 的 Class target
                 // 覆盖 record class）不支持——SmartEnum 的静态字段注册依赖 class 语义

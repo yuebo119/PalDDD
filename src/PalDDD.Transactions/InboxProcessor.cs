@@ -112,7 +112,18 @@ public sealed class InboxProcessor
             var failureReason = ex.Message.Length <= MaxFailureReasonLength
                 ? ex.Message
                 : ex.Message[..MaxFailureReasonLength];
-            await _store.MarkFailedAsync(record, failureReason, CancellationToken.None);
+            // ITM-092 修复：MarkFailedAsync 本身失败（DB 故障）不得掩盖主异常——内层捕获把清理
+            // 错误挂到主异常 Data 上，仍以主异常优先向上传播（对齐 SagaProcessor OCE 释放路径）。
+            // 验证轮返工：内层 catch 不加 OCE 过滤——MarkFailedAsync 以 CancellationToken.None
+            // 调用，其抛 OCE 属异常形态（而非外层取消传播），同样不得覆盖主异常。
+            try
+            {
+                await _store.MarkFailedAsync(record, failureReason, CancellationToken.None);
+            }
+            catch (Exception markEx)
+            {
+                ex.Data["MarkFailedError"] = markEx.Message;
+            }
             activity?.SetTag("pal.inbox.result", "failed");
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             PalMetrics.InboxFailed.Add(1);

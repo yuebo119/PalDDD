@@ -113,8 +113,10 @@ public sealed class InMemoryEventLog : IEventLog
             foreach (var @event in snapshot)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                yield return @event;
+                // ITM-120 修复：yield 前计数——原 yield 后计数使消费方 break 早退时
+                // 最后一个已产出事件不计入 read 指标；前置后早退路径计数完整
                 checked { read++; }
+                yield return @event;
                 await Task.Yield();
             }
         }
@@ -152,8 +154,10 @@ public sealed class InMemoryEventLog : IEventLog
             foreach (var @event in snapshot)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                yield return @event;
+                // ITM-120 修复：yield 前计数——原 yield 后计数使消费方 break 早退时
+                // 最后一个已产出事件不计入 read 指标；前置后早退路径计数完整
                 checked { read++; }
+                yield return @event;
                 await Task.Yield();
             }
         }

@@ -189,6 +189,13 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
             var processor = scope.ServiceProvider.GetRequiredService<OutboxBatchProcessor>();
             await processor.ProcessBatchAsync(ct).ConfigureAwait(false);
         }
+        catch (OperationCanceledException)
+        {
+            // ITM-094 修复：关停信号在批处理执行期间触发——fire-and-forget 任务不得向上抛
+            // 未观察的 OCE（宿主关停路径，批处理结果已无意义），记录后静默退出；
+            // gate 释放与自通知仍由 finally 兜底
+            _logger.Information("PostgreSQL NOTIFY batch process canceled during shutdown");
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.Error(ex, "PostgreSQL NOTIFY batch process failed");

@@ -58,6 +58,17 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    // ITM-074 修复：构造参数为 null（[GenerateId(null)]）时 transform 直接 NRE——
+    // NRE 从增量生成器冒泡会毁掉整个编译的全部生成物（与 PALID004 崩溃同害）。
+    // 编译期报 PALID005 引导修正，不崩溃。
+    private static readonly DiagnosticDescriptor NullSourceType = new(
+        "PALID005",
+        "GenerateId source type must not be null",
+        "Type '{0}' uses [GenerateId] with a null source type. Pass a supported type: System.Guid, ByteAether.Ulid.Ulid, int (Int32), long (Int64), string.",
+        "PalDDD.IdentityGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var candidates = context.SyntaxProvider.ForAttributeWithMetadataName(
@@ -67,7 +78,22 @@ public sealed class IdentityGenerator : IIncrementalGenerator
             {
                 var structSymbol = (INamedTypeSymbol)context.TargetSymbol;
                 var attrData = context.Attributes[0];
-                var sourceType = (INamedTypeSymbol)attrData.ConstructorArguments[0].Value!;
+                // ITM-074 修复：构造参数缺失/为 null（[GenerateId(null)]）时
+                // 原代码 (INamedTypeSymbol)null! 在下方 ToDisplayString() 处 NRE，
+                // 从增量生成器冒泡毁掉整个编译的全部生成物。先判 null 报 PALID005。
+                if (attrData.ConstructorArguments.Length == 0
+                    || attrData.ConstructorArguments[0].Value is not INamedTypeSymbol sourceType)
+                {
+                    return new IdGenInfo(
+                        Namespace: null,
+                        TypeName: structSymbol.Name,
+                        ContainingDeclarations: [],
+                        ContainingNames: [],
+                        SourceType: "",
+                        IsNumeric: false,
+                        DiagnosticId: "PALID005",
+                        Location: context.TargetNode.GetLocation());
+                }
 
                 // P3 修复（九轮评审）：非 partial record struct 声明报 PALID002——
                 // 生成物恒为 partial record struct，普通 struct / 非 partial 声明无法合并
@@ -185,6 +211,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 {
                     // 诊断分派（九轮）：PALID001=源类型白名单外；PALID002=声明形式非 partial record struct
                     // P3 修复（十七轮）：PALID003=泛型声明（自身或包含类型）暂不支持
+                    // ITM-074 修复：PALID005=构造参数为 null（[GenerateId(null)]）
                     switch (info.DiagnosticId)
                     {
                         case "PALID002":
@@ -196,6 +223,12 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                         case "PALID003":
                             spc.ReportDiagnostic(Diagnostic.Create(
                                 GenericDeclarationNotSupported,
+                                info.Location ?? Location.None,
+                                info.TypeName));
+                            break;
+                        case "PALID005":
+                            spc.ReportDiagnostic(Diagnostic.Create(
+                                NullSourceType,
                                 info.Location ?? Location.None,
                                 info.TypeName));
                             break;
@@ -214,7 +247,15 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 var src = GenerateIdentityCode(info);
                 // P3 修复（八轮评审）：全局命名空间（Namespace == null）用 "_" 仅作 hint 名保底，
                 // 生成代码本身不再含 namespace 声明
-                var hint = $"{info.Namespace ?? "_"}.{string.Join("_", info.ContainingNames)}_{info.TypeName}.g.cs";
+                // ITM-098 修复（验证轮返工）：hint 拼接用 "+" 显式编码嵌套层级——命名空间内的
+                // "." 保留原样（"A.B+C" 与 "A+B.C" 不再碰撞），"+" 非 C# 标识符字符，
+                // 命名空间/类型名不可能包含，彻底消除同 hint 碰撞（PALID004 误报/AddSource 冲突）。
+                // hint 仅作生成物文件名与去重键，变更不影响编译（测试均按 ".g.cs" 后缀匹配，
+                // 见 SourceGeneratorDirectTests.GetGeneratedSource）；转换器类名仍用 "_" 拼接
+                // （C# 标识符不允许 "+"，下划线边界撞名的 CS0101 属已声明限制）。
+                var hint = info.ContainingNames.Length > 0
+                    ? $"{info.Namespace ?? "_"}+{string.Join("+", info.ContainingNames)}.{info.TypeName}.g.cs"
+                    : $"{info.Namespace ?? "_"}.{info.TypeName}.g.cs";
                 if (!seenHints.Add(hint))
                 {
                     // P2 修复（二十一轮）：重复 [GenerateId] 声明——仅首个声明生成代码，
@@ -404,10 +445,13 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
         _ => "        throw new JsonException(\"Unsupported identity source type.\");"
     };
 
+    // ITM-099 修复：++/-- 的加减法改 checked——原 unchecked 下 int.MaxValue 自增静默
+    // 回绕为 int.MinValue（数据损坏无感知）；checked 抛 OverflowException 显式化。
+    // 生成代码文本变化（+checked 包裹）不影响编译；测试仅断言含 "operator"。
     private static string NumericOperators(string name, string srcType) => $$"""
 
-    public static {{name}} operator ++({{name}} value) => new() { Value = ({{srcType}})(value.Value + 1) };
-    public static {{name}} operator --({{name}} value) => new() { Value = ({{srcType}})(value.Value - 1) };
+    public static {{name}} operator ++({{name}} value) => new() { Value = checked(({{srcType}})(value.Value + 1)) };
+    public static {{name}} operator --({{name}} value) => new() { Value = checked(({{srcType}})(value.Value - 1)) };
 """;
 
     private sealed record IdGenInfo(

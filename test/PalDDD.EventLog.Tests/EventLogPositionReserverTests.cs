@@ -129,11 +129,77 @@ public sealed class EventLogPositionReserverTests
         await Assert.That(positions.Max() < 200).IsTrue();
     }
 
+    [Test]
+    public async Task ReserveAsync_NonUniqueDbUpdateException_PropagatesWithoutRetry(CancellationToken cancellationToken)
+    {
+        // ITM-071 回归：非唯一约束的 DbUpdateException（连接故障/字段溢出等）必须原样上抛，
+        // 不再被误判为"主键冲突"重试 5 次后抛误导性 InvalidOperationException。
+        // 鸭子判定按异常类型名匹配——假异常类名必须是字面 "PostgresException" 才会进入
+        // 鸭子判定分支（SqlState != 23505 → 非唯一约束 → 原样上抛）。
+        await using var db = new ThrowingSaveEventLogDbContext(
+            CreateThrowingOptions(),
+            new PostgresException("XX000"));
+        var reserver = new EventLogPositionReserver(chunkSize: 10);
+
+        await Assert.That(async () =>
+            await reserver.ReserveAsync(db, count: 1, cancellationToken))
+            .Throws<DbUpdateException>();
+    }
+
+    [Test]
+    public async Task ReserveAsync_UniqueConstraintDbUpdateException_RetriesThenFails(CancellationToken cancellationToken)
+    {
+        // ITM-071 回归：唯一约束冲突（SqliteException 消息含 "UNIQUE constraint"）走重试路径，
+        // 5 次后抛 InvalidOperationException（对齐修复前行为，证明窄化 catch 未破坏并发重试语义）。
+        await using var db = new ThrowingSaveEventLogDbContext(
+            CreateThrowingOptions(),
+            new Microsoft.Data.Sqlite.SqliteException("SQLite Error 19: 'UNIQUE constraint failed'", 19));
+        var reserver = new EventLogPositionReserver(chunkSize: 10);
+
+        // 先捕获异常再断言消息（TUnit 链式 WithMessage 是方法，不能直接跟在 Throws 后）
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => reserver.ReserveAsync(db, count: 1, cancellationToken).AsTask());
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.Message).Contains("optimistic concurrency retries");
+    }
+
     private static DbContextOptions<TestEventLogDbContext> CreateOptions()
         => new DbContextOptionsBuilder<TestEventLogDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
             .Options;
 
+    private static DbContextOptions<ThrowingSaveEventLogDbContext> CreateThrowingOptions()
+        => new DbContextOptionsBuilder<ThrowingSaveEventLogDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+
     private sealed class TestEventLogDbContext(DbContextOptions<TestEventLogDbContext> options)
         : EventLogDbContext(options);
+
+    /// <summary>SaveChanges 恒抛 DbUpdateException（内层为注入的假 provider 异常）——用于验证 catch 窄化。</summary>
+    private sealed class ThrowingSaveEventLogDbContext : EventLogDbContext
+    {
+        private readonly Exception _inner;
+
+        public ThrowingSaveEventLogDbContext(DbContextOptions<ThrowingSaveEventLogDbContext> options, Exception inner)
+            : base(options) => _inner = inner;
+
+        public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+            => throw new DbUpdateException("save failed", _inner);
+    }
+
+    /// <summary>鸭子类型判定用的假 Npgsql 异常——类名必须为字面 "PostgresException" 才进入判定分支（仅按类型名 + SqlState 属性匹配）。</summary>
+    private sealed class PostgresException : Exception
+    {
+        public PostgresException(string sqlState)
+            : base("fake postgres exception") => SqlState = sqlState;
+
+        // CA1032 要求异常标准构造齐全
+        public PostgresException() { }
+
+        public PostgresException(string message, Exception innerException)
+            : base(message, innerException) { }
+
+        public string SqlState { get; } = "";
+    }
 }

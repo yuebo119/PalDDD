@@ -47,6 +47,33 @@ public sealed class SagaEfCoreConcurrencyTests
     }
 
     [Test]
+    public async Task SaveChangesAsync_Interface_OnConcurrencyConflict_ReturnsZero(CancellationToken ct)
+    {
+        // ITM-072 回归：经 ISagaStateStore 接口保存时，乐观锁冲突必须返回 0（契约语义），
+        // 而非把 DbUpdateConcurrencyException 上抛给调用方（修复前直接透传 SaveChangesAsync(ct)）。
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(ct);
+        await using var ctx1 = new TestSagaDbContext(CreateOptions(connection));
+        await using var ctx2 = new TestSagaDbContext(CreateOptions(connection));
+        await ctx1.Database.EnsureCreatedAsync(ct);
+
+        var state = new EfConcurrencySagaState { CurrentState = "Initial" };
+        ctx1.SagaStates.Add(state);
+        await ctx1.SaveChangesAsync(ct);
+
+        var copy1 = await ctx1.SagaStates.SingleAsync(s => s.SagaId == state.SagaId, ct);
+        var copy2 = await ctx2.SagaStates.SingleAsync(s => s.SagaId == state.SagaId, ct);
+        copy1.CurrentState = "Writer1";
+        copy2.CurrentState = "Writer2";
+
+        await ctx1.SaveChangesAsync(ct);
+
+        var affected = await ((ISagaStateStore<EfConcurrencySagaState>)ctx2).SaveChangesAsync(copy2, ct);
+
+        await Assert.That(affected).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task SaveChangesAsync_ModifiedSaga_AdvancesVersionInMemoryAndDatabase(CancellationToken ct)
     {
         await using var connection = new SqliteConnection("DataSource=:memory:");

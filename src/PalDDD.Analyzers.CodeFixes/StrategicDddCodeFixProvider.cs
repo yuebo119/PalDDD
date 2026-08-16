@@ -71,7 +71,9 @@ public sealed class AddVersionSuffixCodeFix : CodeFixProvider
 
         // 从诊断属性中获取 SchemaVersion
         if (!diagnostic.Properties.TryGetValue("SchemaVersion", out var versionText)) return;
-        var schemaVersion = int.Parse(versionText, CultureInfo.InvariantCulture);
+        // ITM-095 修复：SchemaVersion 来自外部诊断数据，格式不可信——TryParse 失败
+        // 直接跳过本修复，不再让 int.Parse 抛 FormatException 中断修复流程
+        if (!int.TryParse(versionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var schemaVersion)) return;
 
         // 找到 Name 参数
         if (!CodeFixHelpers.TryGetNamedArgument(attr, "Name", out var nameArg) || nameArg.Expression is not LiteralExpressionSyntax literal)

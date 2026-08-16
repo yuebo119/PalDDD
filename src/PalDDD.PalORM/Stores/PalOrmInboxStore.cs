@@ -143,6 +143,10 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
     /// <inheritdoc />
     public async ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
     {
+        // ITM-077 修复：补 failureReason 空白校验（对齐 DapperInboxStore.MarkFailedAsync/InboxDbContext/
+        // InMemoryInboxStore 同款守卫）——缺守卫时空/空白失败原因会写入 last_error 列，破坏跨实现
+        // 契约一致（其余三版均抛 ArgumentException）
+        ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         // 手写 SQL（不走 UpdateAsync）—— 避免 [ConcurrencyCheck]attempts 在并发场景抛异常
         // WHERE status='Processing' 守卫，防止覆盖已 Processed 的记录（与 Dapper 实现一致）
         message.Status = InboxStatus.Failed;

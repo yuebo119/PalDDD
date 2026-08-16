@@ -52,11 +52,22 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_transaction is null) return;
 
-        await _transaction.CommitAsync(ct);
-        await _transaction.DisposeAsync();
-        _transaction = null;
-        // 清除 DataSession 内部的事务引用（PalORM 要求 Commit/Rollback 后显式清空）
-        _session.UseTransaction(null);
+        try
+        {
+            await _transaction.CommitAsync(ct);
+        }
+        finally
+        {
+            // ITM-087 修复：Commit 成功或失败都清理事务引用并解绑 DataSession——
+            // 原失败路径遗留 _transaction 与非 null 的 UseTransaction 绑定，后续 RollbackAsync
+            // 会二次操作已失效事务、以新异常掩盖根因。finally 保证任何路径都清理；
+            // DisposeAsync 的幂等异常（已失效/已释放）按文件既有惯例吞掉，保留根因异常。
+            try { await _transaction.DisposeAsync(); }
+            catch (Exception ex) when (ex is InvalidOperationException or System.Data.Common.DbException) { /* 事务已失效/已释放 */ }
+            _transaction = null;
+            // 清除 DataSession 内部的事务引用（PalORM 要求 Commit/Rollback 后显式清空）
+            _session.UseTransaction(null);
+        }
     }
 
     /// <inheritdoc />

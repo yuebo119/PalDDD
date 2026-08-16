@@ -122,18 +122,26 @@ public static class MySqlServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         var connection = new MySqlConnection(connectionString);
-        if (applyOptimization)
-            MySqlPerformanceOptimizer.Optimize(connection);
+        try
+        {
+            if (applyOptimization)
+                MySqlPerformanceOptimizer.Optimize(connection);
 
-        // P2 真修（三轮评审发现此前假修）：闭包共享同一 MySqlConnection 实例，线程安全未修。
-        // Scoped 工厂按连接串为每个 scope 创建新连接。
-        var cs = connection.ConnectionString;
-        connection.Dispose(); // P2 修复：Optimize 内部 Open 的连接及时释放（防启动期泄漏）
-        services.AddScoped(_ => new MySqlConnector.MySqlConnection(cs));
-        // P2 修复（captive dependency）：移除 singleton→scoped 桥接——root 单例捕获 scoped
-        // MySqlConnection 导致全进程共享一条非线程安全连接。DbConnection 需要者应从 scope 内
-        // 解析 MySqlConnection（C# 无法转型桥接泛型注册，改注册工厂供 Scoped 消费方使用）
-        services.AddScoped<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<MySqlConnection>());
+            // P2 真修（三轮评审发现此前假修）：闭包共享同一 MySqlConnection 实例，线程安全未修。
+            // Scoped 工厂按连接串为每个 scope 创建新连接。
+            var cs = connection.ConnectionString;
+            services.AddScoped(_ => new MySqlConnector.MySqlConnection(cs));
+            // P2 修复（captive dependency）：移除 singleton→scoped 桥接——root 单例捕获 scoped
+            // MySqlConnection 导致全进程共享一条非线程安全连接。DbConnection 需要者应从 scope 内
+            // 解析 MySqlConnection（C# 无法转型桥接泛型注册，改注册工厂供 Scoped 消费方使用）
+            services.AddScoped<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<MySqlConnection>());
+        }
+        finally
+        {
+            // ITM-086 修复：Optimize 抛异常时原路径连接不释放——finally 统一兜底
+            // （正常路径原有的 Dispose 语义不变，异常路径补释放，无双释放）。
+            connection.Dispose();
+        }
 
         return services;
     }

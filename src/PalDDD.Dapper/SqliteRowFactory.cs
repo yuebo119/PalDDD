@@ -55,9 +55,12 @@ public static class SqliteRowFactory
     /// <summary>从 SQLite TEXT 列解析 Guid</summary>
     public static Guid ParseGuid(IDataReader reader, int ordinal)
     {
+        // ITM-116 修复（声明）：DBNull 仍返回 Guid.Empty——与 ParseUlid/ParseDateTimeOffset
+        // 的 DBNull→default 语义一致（可空列合法值，调用方按需判空）；仅"非空但类型失配"
+        // 走 switch 兜底抛 InvalidCastException（脏值不得伪装成合法 Guid——空 Guid 与合法值
+        // 无法区分）。原注释（二十一轮）误称 DBNull 亦改抛，实际改抛范围仅未知类型。
         if (reader.IsDBNull(ordinal)) return Guid.Empty;
         var value = reader.GetValue(ordinal);
-        // P3 修复（二十一轮）：同 ParseUlid——静默 Guid.Empty 改抛（空 Guid 与合法值无法区分）
         return value switch
         {
             Guid g => g,

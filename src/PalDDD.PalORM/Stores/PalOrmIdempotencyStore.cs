@@ -96,8 +96,12 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
                 IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now);
         }
 
+        // ITM-078 修复：Completed 非过期记录返回 null（语义=他人已持有终态，本调用未获得租约）——
+        // 契约对齐：EFCore（IdempotencyDbContext.TryStartAsync）与 InMemory（InMemoryIdempotencyStore）
+        // 对非过期终态记录均返回 null，读取已完成响应走 GetAsync（含 response_payload）；
+        // 原实现返回 existing 会让调用方把终态记录误当"本次已开始处理"
         if (existing.Status == IdempotencyRecordStatus.Completed)
-            return existing;
+            return null;
 
         if (existing.Status == IdempotencyRecordStatus.Processing && existing.LockedUntil > now)
             return null;

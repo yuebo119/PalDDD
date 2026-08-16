@@ -31,9 +31,10 @@ public sealed class PalPlatformVerifier
             {
                 pipeline.ValidatePath(requirement.SourceDescriptor, requirement.TargetDescriptor);
             }
-            // 同步验证路径，不涉及 CancellationToken，故不按 OperationCanceledException 过滤。
+            // ITM-093 修复：补 OCE 过滤——pipeline.ValidatePath 实现内部可能抛出 OCE，
+            // 不应在聚合阶段误收集；不吞 OutOfMemoryException 语义保持不变。
             // 此处聚合所有验证错误统一抛出；OutOfMemoryException 直接向上传播不收集。
-            catch (Exception exception) when (exception is not OutOfMemoryException)
+            catch (Exception exception) when (exception is not OperationCanceledException and not OutOfMemoryException)
             {
                 errors ??= [];
                 errors.Add(new PalPlatformVerificationError(requirement, exception));

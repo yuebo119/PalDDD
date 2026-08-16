@@ -33,7 +33,10 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
     protected SmartEnum(TValue value, string? name = null)
     {
         Value = value;
-        Name = name ?? value.ToString()!;
+        // ITM-101 修复：TValue.ToString() 返回 null 时回退 ""——自定义 TValue 的
+        // ToString() 可返回 null，原 `name ?? value.ToString()!` 使 Name 为 null，
+        // 违反 Name 的 string 非空契约（后续 ToString()/序列化路径 NRE）
+        Name = name ?? value.ToString() ?? "";
     }
 
     /// <summary>所有枚举值 — O(1) 查找</summary>
@@ -73,7 +76,15 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
     {
         var dict = new Dictionary<TValue, TSelf>(values.Length);
         foreach (var item in values)
-            dict[item.Value] = item;
+        {
+            // ITM-101 修复：重复 Value 抛明确异常——原 `dict[item.Value] = item` 静默
+            // 后者覆盖（最后注册者胜），数据错误（两个枚举项同值）被掩盖，FromValue 的
+            // 反查结果取决于注册顺序，不可预测。契约文档未声明"后者覆盖"，故显式化；
+            // 多次调用 RegisterValues 注册互异值仍受 Interlocked.CompareExchange 保护。
+            if (!dict.TryAdd(item.Value, item))
+                throw new InvalidOperationException(
+                    $"SmartEnum<{typeof(TSelf).Name}, {typeof(TValue).Name}> 重复注册值 '{item.Value}'。每个枚举值必须唯一。");
+        }
         Interlocked.CompareExchange(ref s_values, dict.ToFrozenDictionary(), null);
     }
 

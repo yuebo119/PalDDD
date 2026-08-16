@@ -44,6 +44,9 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
         int maxRetryCount,
         CancellationToken ct)
     {
+        // ITM-081 修复：补 owner 空白校验（对齐 SqlServerOutboxDbContext.LeasePendingMessagesAsync
+        // 同款守卫）——缺守卫时空/空白 owner 会写入 "LockedBy" 列，破坏跨方言契约一致
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         var sec = (int)Math.Ceiling(leaseDuration.TotalSeconds);
         var nowSql = GetNowSql();
 #pragma warning disable EF1002 // FromSqlRaw with trusted provider-specific NOW expression

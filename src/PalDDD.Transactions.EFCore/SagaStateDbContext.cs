@@ -101,9 +101,33 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
         => await SagaStates.SingleOrDefaultAsync(s => s.SagaId == sagaId, ct);
 
     /// <inheritdoc/>
-    /// <remarks>EF Core 版：DbContext 变更跟踪自动检测修改，state 参数可选。</remarks>
+    /// <remarks>
+    /// EF Core 版：DbContext 变更跟踪自动检测修改，state 参数可选。
+    /// ITM-072：对齐 <see cref="ISagaStateStore{TState}.SaveChangesAsync"/> 契约——
+    /// 原实现直接透传 <c>await SaveChangesAsync(ct)</c> 返回"实际写入实体数"：
+    /// 无变更保存返回 0（被调用方误判为乐观锁冲突）、多实体保存返回 N&gt;1（契约只定义 0/1）。
+    /// 现改为：保存成功且无并发冲突 → 1（写入生效）；DbUpdateConcurrencyException → 分离实体返回 0
+    /// （对齐 Dapper/PalORM 的受影响行数语义——冲突时返回 0 而非抛异常）。
+    /// </remarks>
     async ValueTask<int> ISagaStateStore<TState>.SaveChangesAsync(TState state, CancellationToken ct)
-        => await SaveChangesAsync(ct);
+    {
+        try
+        {
+            await SaveChangesAsync(ct);
+            return 1;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // 乐观锁冲突（他实例已写同一 Saga）——契约要求返回 0 而非上抛，
+            // 调用方（SagaProcessor）据此判定内存快照作废并记 Warning。
+            // 验证轮返工：仅当 state 已跟踪时才 detach——Entry() 对未跟踪实体
+            // 会静默把它挂为 Unchanged（污染 ChangeTracker），且并发冲突可能来自
+            // 其他被跟踪实体；未跟踪时无需任何清理。
+            if (ChangeTracker.Entries<TState>().Any(e => ReferenceEquals(e.Entity, state)))
+                Entry(state).State = EntityState.Detached;
+            return 0;
+        }
+    }
 
     /// <summary>
     /// P2 修复（八轮评审）：<see cref="SagaState.Version"/> 并发令牌此前从不递增——

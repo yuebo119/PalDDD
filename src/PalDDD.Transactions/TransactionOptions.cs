@@ -31,7 +31,15 @@ public sealed class OutboxOptions
     /// </summary>
     public TimeSpan MaxRetryDelay { get; set; } = TimeSpan.FromSeconds(60);
 
-    /// <summary>租约持有者标识 — 用于区分多实例部署中的不同节点。默认为 {机器名}:{随机ID}。</summary>
+    /// <summary>
+    /// 租约持有者标识 — 用于区分多实例部署中的不同节点。默认为 {机器名}:{随机ID}。
+    /// <para>
+    /// ITM-108 声明：默认值在属性初始化时求值（每次 new 一个新随机后缀）——本选项必须经
+    /// <c>IOptions&lt;T&gt;</c>/单例配置绑定（Options 模式启动期绑定一次），直接多次
+    /// <c>new OutboxOptions()</c> 会得到不同 LeaseOwner，同一节点自认为多实例（租约互抢/
+    /// 自锁漂移）。改动默认值为 static 会破坏多实例隔离语义，故仅作声明。
+    /// </para>
+    /// </summary>
     public string LeaseOwner { get; set; } = $"{Environment.MachineName}:{PalUlid.New()}";
 }
 
@@ -48,5 +56,14 @@ public sealed class SagaProcessorOptions
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(30);
     public int TimeoutScanBatchSize { get; set; } = 256;
     public TimeSpan LeaseDuration { get; set; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// 租约持有者标识 — 用于区分多实例部署中的不同节点。默认为 {机器名}:{随机ID}。
+    /// <para>
+    /// ITM-108 声明：同 <see cref="OutboxOptions.LeaseOwner"/>——默认值每次 new 求值，
+    /// 必须经 <c>IOptions&lt;T&gt;</c>/单例配置绑定使用；多次直构会得到不同 owner，
+    /// 同一节点自认为多实例（租约互抢/自锁漂移）。
+    /// </para>
+    /// </summary>
     public string LeaseOwner { get; set; } = $"{Environment.MachineName}:{PalUlid.New()}";
 }

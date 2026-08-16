@@ -121,6 +121,12 @@ public static class SqlTemplates
     /// 按租约标识回读刚锁定的消息。<br/>
     /// 💡 解决非 PG 路径的并发 Bug：子查询在 UPDATE 后重新评估会把锁定行排除。<br/>
     /// 改为按 <c>locked_by=@owner AND locked_until=@until</c> 回读，精确匹配本次租约。
+    /// <para>
+    /// ITM-109 修复（声明，对齐 PalORM P3 声明）：同 tick 同 until 限制——同一 tick
+    /// （同 now → 同 until）内的第二次租约回读会命中第一轮遗留的锁定行（上一批），
+    /// 属已知限制；PG RETURNING 路径（<c>SupportsOutboxReturning</c>）按行锁语义返回
+    /// 刚锁定行，无此窗口。生产多实例建议使用 PG 路径。
+    /// </para>
     /// </summary>
     public const string OutboxSelectByLease =
         "SELECT * FROM outbox_messages WHERE locked_by=@owner AND locked_until=@until";

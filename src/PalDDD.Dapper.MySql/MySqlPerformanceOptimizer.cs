@@ -39,6 +39,11 @@ public static class MySqlPerformanceOptimizer
     /// 调整三个关键参数：行锁超时、SQL 严格模式、事务隔离级别。
     /// </summary>
     /// <param name="connection">MySQL 连接（方法内部会打开连接）</param>
+    /// <remarks>
+    /// ITM-089 修复（声明）：连接生命周期归调用方——本方法接收调用方传入的连接，仅在未打开时
+    /// 幂等 Open，<b>不会 Close/Dispose 连接</b>。SET SESSION 是会话级设置，优化后连接保持打开，
+    /// 调用方可继续使用；连接最终由调用方负责关闭/释放（本库调用点均自行 Dispose）。
+    /// </remarks>
     public static void Optimize(MySqlConnection connection)
     {
         if (connection.State != System.Data.ConnectionState.Open) connection.Open(); // P3 修复：幂等开连接
@@ -56,7 +61,11 @@ public static class MySqlPerformanceOptimizer
     /// 设置当前连接的字符集为 utf8mb4（完整 Unicode 支持，含 Emoji）。<br/>
     /// ⚠️ MySQL 的 "utf8" 别名实际只支持 3 字节 UTF-8，始终使用 "utf8mb4"。
     /// </summary>
-    /// <param name="connection">MySQL 连接</param>
+    /// <param name="connection">MySQL 连接（方法内部会打开连接）</param>
+    /// <remarks>
+    /// ITM-089 修复（声明）：连接生命周期归调用方——本方法仅在未打开时幂等 Open，
+    /// <b>不会 Close/Dispose 连接</b>；调用方负责用后关闭/释放。
+    /// </remarks>
     public static void SetUtf8mb4(MySqlConnection connection)
     {
         if (connection.State != System.Data.ConnectionState.Open) connection.Open(); // P3 修复：幂等开连接

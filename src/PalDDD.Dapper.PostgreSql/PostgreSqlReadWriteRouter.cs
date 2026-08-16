@@ -104,15 +104,28 @@ public static class PostgreSqlReadWriteRouterExtensions
                 // 副本凭据/库名与主库不一致时被静默丢弃，此处快速失败（复用 PostgreSqlMultiHost 校验）
                 PostgreSqlMultiHost.ThrowIfCredentialsMismatch(primaryCsBuilder, sb, "replica");
                 // PD17 姊妹统一：端口编码进 Host 条目
-                if (sb.Host is not null)
-                    hosts.Add(sb.Port != 5432 ? $"{sb.Host}:{sb.Port}" : sb.Host);
+                // ITM-112 修复（验证轮返工）：副本连接串缺 Host 是配置错误——原实现静默跳过，
+                // 副本被无声丢弃（读写分离静默退化为纯主库、流量全走写库，无任何提示）；显式抛
+                // ArgumentException 暴露配置问题（框架库语义：配置错误快速失败）。
+                // 注意：Npgsql 的 NpgsqlConnectionStringBuilder.Host 在连接串未指定时
+                // 返回空字符串而非 null（Npgsql 10.0.3 实证）——必须用 IsNullOrWhiteSpace 判定，
+                // 仅判 null 永不触发（假修）。
+                if (string.IsNullOrWhiteSpace(sb.Host))
+                    throw new ArgumentException(
+                        $"Replica connection string '{cs}' has no Host. Each replica must specify a Host.",
+                        nameof(replicaConnectionStrings));
+                hosts.Add(sb.Port != 5432 ? $"{sb.Host}:{sb.Port}" : sb.Host);
             }
 
             if (hosts.Count > 0)
             {
                 var readerCs = primaryConnectionString;
                 var psb = new NpgsqlConnectionStringBuilder(readerCs);
-                psb.Host += "," + string.Join(",", hosts);
+                // ITM-110 姊妹路径修复（验证轮返工）：主库串无 Host 时原 `psb.Host += ",..."
+                // 产生前导逗号（",replica"），Npgsql 解析出空主机条目——空则直接赋值
+                psb.Host = string.IsNullOrWhiteSpace(psb.Host)
+                    ? string.Join(",", hosts)
+                    : psb.Host + "," + string.Join(",", hosts);
                 psb.LoadBalanceHosts = true;
                 psb.TargetSessionAttributes = "any";
                 psb.ApplicationName = applicationName + "-Reader";

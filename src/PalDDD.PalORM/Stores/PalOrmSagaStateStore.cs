@@ -93,10 +93,17 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         // 第二次回读会混入第一次已锁定的批次。生产触发条件近乎为零（DATETIME(6) 微秒精度 + 单 owner
         // 串行租约）；PG/SQLite 走单语句 UPDATE 天然免疫。候选 id 预取需 IN 列表参数化，PalORM 的
         // FormattableString 路径不支持（详见 PalOrmOutboxStore.LeasePendingMessagesAsync 同款声明）。
+        // ITM-076 实测结论（2026-08-16 双连接探针，5 轮）：跨 owner 并发 UPDATE...JOIN 时
+        // derived table 按语句开始快照物化，后到者会覆盖先到者的 leased_by（last-writer-wins），
+        // 但"双 worker 同批回读"窗口未复现——被覆盖方的回读按 (owner, until) 已不再匹配。
+        // 残余窗口由 SaveChangesAsync 的 version 乐观锁兜底（与 Dapper SagaLeaseActiveMySql
+        // 声明的"由 SagaUpdate 的 version 乐观锁兜底"对齐）——重复保存被版本冲突拒绝。
+        // 回读补 status=Active 守卫：已被处理方标记终态（Completed 等）的租约残留行不再混入。
         await using var cmd = Session.GetRawConnection().CreateCommand();
-        cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE leased_by = @p0 AND leased_until = @p1 ORDER BY created_at";
+        cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE leased_by = @p0 AND leased_until = @p1 AND status = @p2 ORDER BY created_at";
         AddParam(cmd, "@p0", owner);
         AddParam(cmd, "@p1", until);
+        AddParam(cmd, "@p2", (int)SagaStatus.Active);
         return await ReadSagasAsync(cmd, ct);
     }
 

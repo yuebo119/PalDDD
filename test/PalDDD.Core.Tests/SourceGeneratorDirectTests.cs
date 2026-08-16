@@ -339,6 +339,29 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(source).Contains("RegisterValues");
     }
 
+    // ── ITM-074 回归：null 源类型不再 NRE 崩溃（PALID005）──
+
+    [Test]
+    public async Task IdentityGenerator_NullSourceType_ReportsPalid005_AndDoesNotCrash()
+    {
+        // [GenerateId(null)] 编译期合法（构造参数允许 null）——修复前 transform 内
+        // (INamedTypeSymbol)null! 在 ToDisplayString() 处 NRE，整个生成器崩溃、
+        // 该编译全部生成物丢失；修复后报 PALID005 且不生成代码、不崩溃
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            [GenerateId(null)]
+            public readonly partial record struct NullTypeId;
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALID005")).IsTrue();
+        var generatedCount = result.Compilation.SyntaxTrees.Count(t => t.FilePath.EndsWith(".g.cs", StringComparison.Ordinal));
+        await Assert.That(generatedCount).IsEqualTo(0);
+    }
+
     // ── 辅助方法（参照 MessageRegistryGeneratorTests 的模式）──
 
     private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics) RunEnumGenerator(string source)

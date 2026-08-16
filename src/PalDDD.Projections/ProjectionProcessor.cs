@@ -59,7 +59,16 @@ public sealed class ProjectionProcessor<TMessage>
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await _checkpointStore.MarkFailedAsync(checkpoint, ex.Message, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+            // ITM-092 修复：MarkFailedAsync 本身失败不得掩盖主异常——内层捕获挂 Data 后仍以主异常优先。
+            // 验证轮返工：内层 catch 不加 OCE 过滤（同 InboxProcessor——None 令牌下 OCE 属异常形态）。
+            try
+            {
+                await _checkpointStore.MarkFailedAsync(checkpoint, ex.Message, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception markEx)
+            {
+                ex.Data["MarkFailedError"] = markEx.Message;
+            }
             throw;
         }
     }

@@ -60,7 +60,7 @@ while IFS= read -r identifier; do
     if is_path "$identifier"; then
         if [ -e "$identifier" ]; then
             FOUND=$((FOUND + 1))
-        elif [[ "$identifier" != */* ]] && git grep -F -q -- "$identifier" src test scripts docs .github .ai  # 元审计脚本#30：补 .ai——验证 AI 系统自身行动项（PD21/tech-debt 项）时找不到会误报 2>/dev/null; then
+        elif [[ "$identifier" != */* ]] && git grep -F -q -- "$identifier" src test scripts docs .github .ai 2>/dev/null; then  # 元审计脚本#30：补 .ai——验证 AI 系统自身行动项（PD21/tech-debt 项）时找不到会误报
             # 无目录前缀的相对文件名（如模板名）——文件不存在但正文有引用则放行
             FOUND=$((FOUND + 1))
         else
@@ -70,7 +70,7 @@ while IFS= read -r identifier; do
         continue
     fi
 
-    if git grep -F -q -- "$identifier" src test scripts docs .github .ai  # 元审计脚本#30：补 .ai——验证 AI 系统自身行动项（PD21/tech-debt 项）时找不到会误报 2>/dev/null; then
+    if git grep -F -q -- "$identifier" src test scripts docs .github .ai 2>/dev/null; then  # 元审计脚本#30：补 .ai——验证 AI 系统自身行动项（PD21/tech-debt 项）时找不到会误报
         FOUND=$((FOUND + 1))
     else
         printf 'FAIL 标识符未找到：%s\n' "$identifier"
