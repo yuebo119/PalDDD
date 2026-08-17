@@ -91,7 +91,11 @@ public sealed class BrokerFixture : IAsyncDisposable
         var producerConfig = new Confluent.Kafka.ProducerConfig
         {
             BootstrapServers = bootstrap,
-            AllowAutoCreateTopics = true
+            AllowAutoCreateTopics = true,
+            // 二十八轮修复：broker 不可达时 ProduceAsync 默认 5 分钟才抛
+            // ProduceException（MessageTimeoutMs 默认 300000）——3 条测试各白等
+            // 5 分钟，套件无谓耗时 15 分钟。5s 快速失败让环境故障立即可见。
+            MessageTimeoutMs = 5000
         };
         var consumerConfig = new Confluent.Kafka.ConsumerConfig
         {
