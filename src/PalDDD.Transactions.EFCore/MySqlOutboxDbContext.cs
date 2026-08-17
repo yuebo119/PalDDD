@@ -65,6 +65,9 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
         int maxRetryCount,
         CancellationToken ct)
     {
+        // P3 修复（二十六轮验证轮 W1 前在 nit）：owner 空白守卫——对齐 PG（:53）/SqlServer（:43）
+        // 的 ITM-081 跨方言对齐（MySQL 漏网）；空 owner 产生无归属租约
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         // ITM-167 修复：leaseDuration 边界守卫——leaseDuration 非正时租约秒数非正
         // （立即过期/永不过期语义错乱）；TotalSeconds 超过 int.MaxValue 时
         // until = now.Add(leaseDuration) 的秒数语义溢出。Options 层已校验正数，

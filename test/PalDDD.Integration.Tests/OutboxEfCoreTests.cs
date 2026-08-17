@@ -189,7 +189,17 @@ public sealed class OutboxEfCoreTests
             int maxRetryCount,
             CancellationToken ct)
         {
-            var messages = await GetPendingMessagesAsync(batchSize, maxRetryCount, ct);
+            // P3 修复（二十六轮验证轮 W1）：不能复用 GetPending——基类已 AsNoTracking（二十五轮 EF-1），
+            // 非跟踪实体的内存突变 + SaveChanges 恒写 0 行（租约静默失效）。镜像 SqliteOutboxDbContext
+            // 的内联跟踪查询。此 override 当前零调用（潜伏缺陷），修复防未来测试踩坑。
+            var now = GetUtcNow();
+            var messages = await OutboxMessages
+                .Where(m => m.Status == OutboxStatus.Pending && m.RetryCount < maxRetryCount)
+                .Where(m => m.NextAttemptAt == null || m.NextAttemptAt <= now)
+                .Where(m => m.LockedUntil == null || m.LockedUntil <= now)
+                .OrderBy(m => m.CreatedAt)
+                .Take(batchSize)
+                .ToListAsync(ct);
             foreach (var message in messages)
             {
                 message.LockedBy = owner;

@@ -313,7 +313,10 @@ public sealed class IdentityGenerator : IIncrementalGenerator
             ? "\n" + string.Join("\n", info.ContainingDeclarations.Select(_ => "}")) + "\n"
             : "";
 
-        var ulidUsing = srcType == "Ulid" ? "\r\nusing PalUlid = ByteAether.Ulid.Ulid;" : "";
+        // Medium 修复（二十六轮验证轮 W3）：同时 emit 命名空间 using 与别名——模板以裸 Ulid 作
+        // srcType（IPalIdentity<Ulid>/public Ulid Value），仅别名时无 global using 的真实消费方
+        // 编译失败（7 个 CS0246/CS1503，harness 实测；仓内零真实 Ulid Id 类型故从未暴露）
+        var ulidUsing = srcType == "Ulid" ? "\r\nusing ByteAether.Ulid;\r\nusing PalUlid = ByteAether.Ulid.Ulid;" : "";
 
         // P3 修复（八轮评审）：全局命名空间（Namespace == null）不生成 namespace 声明——
         // 旧 fallback "_" 产出 "namespace _;" 使生成物落入 _ 命名空间与用户类型不合并

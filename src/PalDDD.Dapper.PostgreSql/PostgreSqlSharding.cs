@@ -189,7 +189,10 @@ public sealed class ShardedDataSourceManager : IAsyncDisposable
                 // 同一文本执行 ≥5 次后 Npgsql 自动 PREPARE，省去每次执行的 parse/plan 开销（连接级 LRU）。
                 // ⚠️ 与 PostgreSqlJsonbExtensions 的动态拼接 SQL 互斥（动态 SQL 反复进出 LRU 会把
                 // 固定模板逐出）——启用 Jsonb 动态查询的场景请自行构建分片数据源（文档已声明互斥）。
-                builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
+                // 条件化（二十六轮 W2）：仅未设置（读 0）时赋默认——显式非零调优不被覆盖；
+                // 显式禁用（写 0）与未设置不可区分，禁用走 configure 回调或自建 DataSource
+                if (builder.ConnectionStringBuilder.MaxAutoPrepare == 0)
+                    builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
                 _shards[i] = builder.Build();
             }
         }

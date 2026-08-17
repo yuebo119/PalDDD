@@ -82,7 +82,10 @@ public static class PostgreSqlMultiHost
         // 反复进出 LRU 会把固定模板逐出（预备失效反而变慢）——启用 Jsonb 动态查询的场景
         // 请改用自行构建 NpgsqlDataSourceBuilder 注册（文档已声明互斥）。
         // 注意：此代码赋值覆盖连接串中的 Max Auto Prepare 设置。
-        builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
+        // 条件化（二十六轮 W2）：仅未设置（读 0）时赋默认——显式非零调优不被覆盖；
+        // 显式禁用（写 0）与未设置不可区分，禁用走 configure 回调或自建 DataSource
+        if (builder.ConnectionStringBuilder.MaxAutoPrepare == 0)
+            builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
 
         services.AddSingleton(builder.Build());
         return services;
@@ -117,7 +120,10 @@ public static class PostgreSqlMultiHost
             soloBuilder.ConnectionStringBuilder.ApplicationName = applicationName;
             soloBuilder.ConnectionStringBuilder.TargetSessionAttributes = "primary";
             // 优化（二十五轮 API 扫描 B-1）：MaxAutoPrepare=20（同 AddPalNpgsqlDataSourceWithFailover 注释）
-            soloBuilder.ConnectionStringBuilder.MaxAutoPrepare = 20;
+            // 条件化（二十六轮 W2）：仅未设置（读 0）时赋默认——显式非零调优不被覆盖；
+            // 显式禁用（写 0）与未设置不可区分，禁用走 configure 回调或自建 DataSource
+            if (soloBuilder.ConnectionStringBuilder.MaxAutoPrepare == 0)
+                soloBuilder.ConnectionStringBuilder.MaxAutoPrepare = 20;
             services.AddSingleton(soloBuilder.Build());
             return services;
         }
@@ -155,7 +161,10 @@ public static class PostgreSqlMultiHost
 
         builder.ConnectionStringBuilder.ApplicationName = applicationName;
         // 优化（二十五轮 API 扫描 B-1）：MaxAutoPrepare=20（同 AddPalNpgsqlDataSourceWithFailover 注释）
-        builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
+        // 条件化（二十六轮 W2）：仅未设置（读 0）时赋默认——显式非零调优不被覆盖；
+        // 显式禁用（写 0）与未设置不可区分，禁用走 configure 回调或自建 DataSource
+        if (builder.ConnectionStringBuilder.MaxAutoPrepare == 0)
+            builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
 
         services.AddSingleton(builder.Build());
         return services;
@@ -180,7 +189,10 @@ public static class PostgreSqlMultiHost
         builder.ConnectionStringBuilder.ApplicationName = applicationName;
         // 优化（二十五轮 API 扫描 B-1）：MaxAutoPrepare=20（同 AddPalNpgsqlDataSourceWithFailover 注释；
         // 代码赋值覆盖连接串中的同项设置）
-        builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
+        // 条件化（二十六轮 W2）：仅未设置（读 0）时赋默认——显式非零调优不被覆盖；
+        // 显式禁用（写 0）与未设置不可区分，禁用走 configure 回调或自建 DataSource
+        if (builder.ConnectionStringBuilder.MaxAutoPrepare == 0)
+            builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
 
         services.AddSingleton(builder.Build());
         return services;
