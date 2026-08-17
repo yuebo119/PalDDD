@@ -84,9 +84,26 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         if (TProvider.SupportsReturningClause)
         {
             // PG/SQLite 路径
-            await Session.ExecuteAsync(
-                $"UPDATE saga_states SET leased_by = {owner}, leased_until = {until} WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status = {(int)SagaStatus.Active} AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize})",
-                ct);
+            // ITM-173 修复（二十九轮）：PG 子查询补 FOR UPDATE SKIP LOCKED——对齐
+            // Dapper SagaLeaseActivePG（SqlTemplates.cs），消除多 worker 并发租约的
+            // 互相阻塞与后到者覆盖先到者 leased_by（ITM-076 实测现象）。SQLite 无
+            // FOR UPDATE 语法（库级单写者串行，无需），按 Dialect 分支。
+            // ⚠️ 分支构造完整 FormattableString：PalORM 的 ExecuteAsync(FormattableString)
+            // 把每个插值参数化为 @p{N}（PD18）——若把 SQL 片段放插值里会生成
+            // `LIMIT @p5 @p6` 语法错误（实证：SQLite near "@p5"）；又因 ExecuteAsync
+            // 仅接受 FormattableString，无法用字符串拼接，故按方言分支整句构造。
+            if (TProvider.Dialect == global::PalORM.SqlDialect.PostgreSql)
+            {
+                await Session.ExecuteAsync(
+                    $"UPDATE saga_states SET leased_by = {owner}, leased_until = {until} WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status = {(int)SagaStatus.Active} AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize} FOR UPDATE SKIP LOCKED)",
+                    ct);
+            }
+            else
+            {
+                await Session.ExecuteAsync(
+                    $"UPDATE saga_states SET leased_by = {owner}, leased_until = {until} WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status = {(int)SagaStatus.Active} AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize})",
+                    ct);
+            }
         }
         else
         {

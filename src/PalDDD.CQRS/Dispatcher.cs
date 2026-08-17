@@ -84,6 +84,12 @@ public sealed class Dispatcher
         ArgumentNullException.ThrowIfNull(responseType);
         ArgumentNullException.ThrowIfNull(executor);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _frozen) is not null, this);
+        // ITM-182 修复（二十九轮）：Freeze 在发布 _frozen 后置 _entries = null!——并发
+        // Register 通过上方守卫后的狭窄窗口内 _entries 已失效，直接写入抛 NRE。
+        // 补 null 检查以抛与守卫一致的可定位异常（违反"启动期单线程"文档契约时，
+        // 从 NRE 变为明确的 ObjectDisposedException）。守卫本身不承诺并发安全——
+        // 仅把失败形态从晦涩 NRE 转为可诊断异常。
+        ObjectDisposedException.ThrowIf(_entries is null, this);
 
         _entries[requestType] = new HandlerEntry(handlerType, responseType, executor);
     }

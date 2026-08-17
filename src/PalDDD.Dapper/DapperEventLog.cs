@@ -252,9 +252,13 @@ public sealed class DapperEventLog : IEventLog
                 return true;
             }
 
-            // SQLite: 消息包含 "UNIQUE constraint"
+            // SQLite: Microsoft.Data.Sqlite.SqliteException 消息包含 "UNIQUE constraint"
+            // ITM-188 修复（二十九轮）：补 SqliteException 类型限定（镜像 EFCore/PalORM
+            // 姊妹，PD17）——裸消息匹配会把文案恰好含该词组的非唯一约束异常（如业务错误
+            // 文本含 "UNIQUE constraint"）误判为并发冲突 → 走 requery 分类路径，掩盖真实数据错误。
             var message = inner.Message;
-            if (!string.IsNullOrEmpty(message)
+            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(message)
                 && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
             {
                 return true;

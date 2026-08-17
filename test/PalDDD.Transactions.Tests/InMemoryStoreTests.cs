@@ -53,18 +53,24 @@ public sealed class InMemoryStoreTests
         store.AddMessage(msg);
         var leased = await store.LeasePendingMessagesAsync(10, "owner-1", TimeSpan.FromMinutes(2), new OutboxOptions().MaxRetryCount, cancellationToken);
         await Assert.That(leased).Count().IsEqualTo(1);
-        store.MarkProcessed(msg, DateTimeOffset.UtcNow);
-        await Assert.That(msg.Status).IsEqualTo(OutboxStatus.Processed);
+        // ITM-174 修复：使用 Lease 返回的 successor 标记（真实调用语义——OutboxBatchProcessor
+        // 用 Lease 返回值；旧引用已被替换，其标记被守卫忽略）
+        var leasedMsg = leased[0];
+        store.MarkProcessed(leasedMsg, DateTimeOffset.UtcNow);
+        await Assert.That(leasedMsg.Status).IsEqualTo(OutboxStatus.Processed);
     }
 
     [Test]
-    public async Task InMemoryOutboxStore_ReleaseForRetry_IncrementsRetryCount()
+    public async Task InMemoryOutboxStore_ReleaseForRetry_IncrementsRetryCount(CancellationToken cancellationToken)
     {
         var store = new InMemoryOutboxStore();
         var msg = new OutboxMessage { Type = "test", Payload = [1], ContentType = "application/json", SchemaVersion = 1 };
-        store.ReleaseForRetry(msg, "test failure", DateTimeOffset.UtcNow.AddSeconds(30));
-        await Assert.That(msg.RetryCount).IsEqualTo(1);
-        await Assert.That(msg.Status).IsEqualTo(OutboxStatus.Pending);
+        store.AddMessage(msg);
+        // ITM-174 修复：对齐 Inbox 测试形态——先 Lease 拿 successor 再 Mark（守卫要求租约持有者）
+        var leased = await store.LeasePendingMessagesAsync(10, "owner-1", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        store.ReleaseForRetry(leased[0], "test failure", DateTimeOffset.UtcNow.AddSeconds(30));
+        await Assert.That(leased[0].RetryCount).IsEqualTo(1);
+        await Assert.That(leased[0].Status).IsEqualTo(OutboxStatus.Pending);
     }
 
     [Test]
@@ -73,7 +79,9 @@ public sealed class InMemoryStoreTests
         var store = new InMemoryOutboxStore();
         var msg = new OutboxMessage { Type = "test", Payload = [1], ContentType = "application/json", SchemaVersion = 1 };
         store.AddMessage(msg);
-        store.ReleaseForRetry(msg, "test failure", DateTimeOffset.UtcNow.AddSeconds(-1));
+        // ITM-174 修复：先 Lease 拿到 successor 再 ReleaseForRetry（守卫要求租约持有者）
+        var leased = await store.LeasePendingMessagesAsync(10, "owner-1", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        store.ReleaseForRetry(leased[0], "test failure", DateTimeOffset.UtcNow.AddSeconds(-1));
 
         var pending = await store.GetPendingMessagesAsync(10, 1, cancellationToken);
 
@@ -81,13 +89,47 @@ public sealed class InMemoryStoreTests
     }
 
     [Test]
-    public async Task InMemoryOutboxStore_MarkDead_SetsDeadStatus()
+    public async Task InMemoryOutboxStore_MarkDead_SetsDeadStatus(CancellationToken cancellationToken)
     {
         var store = new InMemoryOutboxStore();
         var msg = new OutboxMessage { Type = "test", Payload = [1], ContentType = "application/json", SchemaVersion = 1 };
-        store.MarkDead(msg, "max retries", DateTimeOffset.UtcNow);
-        await Assert.That(msg.Status).IsEqualTo(OutboxStatus.Dead);
-        await Assert.That(msg.Error).IsEqualTo("max retries");
+        store.AddMessage(msg);
+        // ITM-174 修复：对齐 Inbox 测试形态——先 Lease 拿 successor 再 Mark（守卫要求租约持有者）
+        var leased = await store.LeasePendingMessagesAsync(10, "owner-1", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        store.MarkDead(leased[0], "max retries", DateTimeOffset.UtcNow);
+        await Assert.That(leased[0].Status).IsEqualTo(OutboxStatus.Dead);
+        await Assert.That(leased[0].Error).IsEqualTo("max retries");
+    }
+
+    [Test]
+    public async Task InMemoryOutboxStore_StaleReferenceAfterReLease_MarkIgnored(CancellationToken cancellationToken)
+    {
+        // ITM-174 回归：worker A 租约到期后 B 重租同一消息（successor 替换），
+        // A 的旧引用 MarkProcessed/MarkDead 被 IsCurrentLeaseHolder 守卫忽略——
+        // 修复前 A 的僵尸标记会覆盖 B 的活跃租约（消息在 B 处理完成前被标 Processed）
+        var fakeTime = new PalDDD.Testing.FakeTimeProvider(DateTimeOffset.Parse("2026-06-25T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        var store = new InMemoryOutboxStore(fakeTime);
+        var msg = new OutboxMessage { Type = "test", Payload = [1], ContentType = "application/json", SchemaVersion = 1 };
+        store.AddMessage(msg);
+
+        // worker A 租约（t=0 起 2 分钟）
+        var leaseA = await store.LeasePendingMessagesAsync(10, "owner-A", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        var heldByA = leaseA[0];
+
+        // 租约过期后 worker B 重租（successor 替换，A 的引用脱离列表持有者）
+        fakeTime.Set(DateTimeOffset.Parse("2026-06-25T00:03:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        var leaseB = await store.LeasePendingMessagesAsync(10, "owner-B", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        var heldByB = leaseB[0];
+        await Assert.That(ReferenceEquals(heldByA, heldByB)).IsFalse();
+
+        // A 的僵尸标记被忽略——B 的活跃租约不被覆盖
+        store.MarkProcessed(heldByA, DateTimeOffset.UtcNow);
+        await Assert.That(heldByB.Status).IsEqualTo(OutboxStatus.Pending);
+        await Assert.That(heldByB.LockedBy).IsEqualTo("owner-B");
+
+        // B 正常标记生效
+        store.MarkProcessed(heldByB, DateTimeOffset.UtcNow);
+        await Assert.That(heldByB.Status).IsEqualTo(OutboxStatus.Processed);
     }
 
     [Test]

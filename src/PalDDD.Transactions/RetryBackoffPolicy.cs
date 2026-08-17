@@ -57,6 +57,11 @@ public sealed class ExponentialBackoffPolicy : IRetryBackoffPolicy
         int exponentCap = 6)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(exponentCap, 1);
+        // ITM-176 修复（二十九轮）：上限校验——2^exponentCap 秒必须落在 TimeSpan
+        // 可表示范围（最大值约 9.22e11 秒；2^39≈5.5e11 合法、2^40≈1.1e12 溢出）。
+        // 修复前 TimeSpan.FromSeconds 在 maxDelay 封顶之前求值，exponentCap≥40 时
+        // 退避计算直接 OverflowException 崩溃。
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(exponentCap, 39, nameof(exponentCap));
         // ITM-137 修复：负 maxDelay 会让 nextAttemptAt 落在过去、退避失效成紧循环；
         // 零合法（立即重试语义）。对齐 FixedBackoffPolicy 的非负守卫。
         if (maxDelay is { } value && value < TimeSpan.Zero)
@@ -77,12 +82,10 @@ public sealed class ExponentialBackoffPolicy : IRetryBackoffPolicy
 
         // 指数增长 2^n，受 exponentCap 封顶（避免 attempt 过大时 2^attempt 溢出）
         var cappedExponent = Math.Min(attempt, _exponentCap);
-        var delaySeconds = Math.Pow(2, cappedExponent);
-
-        // 应用绝对上限
+        // ITM-176 修复：clamp 到 maxDelay 秒数后再 FromSeconds——防御构造校验被
+        // 绕过（如反射构造）的路径，保证 FromSeconds 永不溢出
+        var delaySeconds = Math.Min(Math.Pow(2, cappedExponent), _maxDelay.TotalSeconds);
         var baseDelay = TimeSpan.FromSeconds(delaySeconds);
-        if (baseDelay > _maxDelay)
-            baseDelay = _maxDelay;
 
         if (!_withJitter)
             return baseDelay;

@@ -112,6 +112,12 @@ public static class DapperServiceCollectionExtensions
     /// 此方法以<b>具体泛型</b>注册覆盖开放泛型（MS DI 具体泛型优先于开放泛型解析），
     /// 闭包构造传入 <paramref name="jsonTypeInfo"/>（STJ source-generated）。
     /// <para>
+    /// ITM-177 声明（二十九轮）：MS DI 对闭合泛型注册与开放泛型注册共存时，
+    /// 闭合泛型恒优先（CallSiteFactory 优先精确闭合匹配）——调用顺序无关紧要：
+    /// 无论 <see cref="AddPalDapperTransactions"/> 在前在后，具体泛型
+    /// <c>ISagaStateStore&lt;TState&gt;</c> 都覆盖开放泛型后备。
+    /// </para>
+    /// <para>
     /// ⚠️ <b>不调用此方法则 saga_data 不持久化（重启丢业务字段）</b>——开放泛型默认注册无通道传入
     /// JsonTypeInfo，这是 PalDDD.Dapper/PalORM 双适配器的共同已知限制（PD17 修复为便捷方法暴露）。
     /// </para>

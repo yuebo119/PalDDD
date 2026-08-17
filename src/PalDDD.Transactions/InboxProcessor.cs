@@ -103,7 +103,20 @@ public sealed class InboxProcessor
             // P2 修复（八轮评审）：副作用（handler）已发生后，完成标记不应随请求级 ct 取消——
             // 取消会导致 Processing 记录滞留，租约/超时到期后同一消息被双重执行
             // （对齐下方 MarkFailedAsync 的 CancellationToken.None）
-            await _store.MarkProcessedAsync(record, _timeProvider.GetUtcNow(), CancellationToken.None);
+            try
+            {
+                await _store.MarkProcessedAsync(record, _timeProvider.GetUtcNow(), CancellationToken.None);
+            }
+            catch (Exception markEx) when (markEx is not OperationCanceledException)
+            {
+                // ITM-180 修复（二十九轮）：handler 成功但标记失败（DB 故障）——副作用已发生，
+                // 不得按通用失败重新标记 Failed 再抛（那会把"已执行"降级为"可重试失败"，
+                // 重试时重放副作用）。记录区分性错误日志后按成功返回（at-least-once 语义下
+                // 状态待观察者确认；Inbox 的 Processed 状态由下一轮循环/监控补正）。
+                _logger.Error(markEx, $"Inbox: message {messageId} handler SUCCEEDED but MarkProcessed failed; state pending confirmation (at-least-once)");
+                activity?.SetTag("pal.inbox.result", "processed-pending-confirmation");
+                return true;
+            }
             activity?.SetTag("pal.inbox.result", "processed");
             PalMetrics.InboxProcessed.Add(1);
             _logger.Information($"Inbox: message {messageId} processed successfully");

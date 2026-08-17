@@ -138,7 +138,14 @@ public static class PostgreSqlReadWriteRouterExtensions
                     ? string.Join(",", hosts)
                     : psb.Host + "," + string.Join(",", hosts);
                 psb.LoadBalanceHosts = true;
-                psb.TargetSessionAttributes = "any";
+                // ITM-181 修复（二十九轮）：any → read-only——修复前 any 对列表内主机
+                // 轮询（含写主库），读流量负载均衡到 write master，读写分离稀释、主库
+                // 连接池承压。read-only 意指"会话默认不接受读写事务"（Npgsql 10.0.3
+                // 实证：hot standby 副本满足，主库不满足）——读流量优先副本，
+                // 主库仅当所有副本不可达时 fallback（Npgsql 多主机顺序尝试语义）。
+                // ⚠️ 连接串值必须是连字符 "read-only"（NpgsqlConnectionStringBuilder
+                // 实证：readonly/read_only 抛 ArgumentException）。
+                psb.TargetSessionAttributes = "read-only";
                 psb.ApplicationName = applicationName + "-Reader";
 
                 var readerBuilder = new NpgsqlDataSourceBuilder(psb.ConnectionString);

@@ -233,6 +233,15 @@ public static class PostgreSqlReportHelper
             // float 单独处理（float 装箱不匹配 double 分支，原落入 default 变字符串）
             case byte[] bytes: writer.WriteStringValue(Convert.ToBase64String(bytes)); break;
             case float f: writer.WriteNumberValue(f); break;
+            // ITM-189 修复（二十九轮）：其余整数族补数值分支——uint/ulong/short/ushort/
+            // byte/sbyte 装箱不匹配 long/int（值类型装箱类型敏感），原落 default 被
+            // Convert.ToString 写成 JSON 字符串，消费端按 number 反序列化失败/失真。
+            case uint ui: writer.WriteNumberValue(ui); break;
+            case ulong ul: writer.WriteNumberValue(ul); break;
+            case short sh: writer.WriteNumberValue(sh); break;
+            case ushort us: writer.WriteNumberValue(us); break;
+            case byte by: writer.WriteNumberValue(by); break;
+            case sbyte sb: writer.WriteNumberValue(sb); break;
             default: writer.WriteStringValue(Convert.ToString(value, CultureInfo.InvariantCulture) ?? ""); break;
         }
     }

@@ -15,6 +15,12 @@ namespace PalDDD.Idempotency;
     Justification = "幂等处理器需在重新抛出前持久化任意用户 handler 失败信息，需捕获 Exception 基类。")]
 public sealed class IdempotencyProcessor
 {
+    // ITM-175 修复（二十九轮）：失败原因入库截断上限——error 列 HasMaxLength(2048)
+    // （IdempotencyDbContext），超长 ex.Message 让 MarkFailedAsync 自身抛截断异常 →
+    // 失败记录残留 Processing → 租约过期重放 → 副作用二次执行。
+    // 对齐 OutboxBatchProcessor/InboxProcessor 的 MaxFailureReasonLength=2000（PD24 失败标记族）。
+    internal const int MaxFailureReasonLength = 2000;
+
     private readonly IIdempotencyStore _store;
     private readonly TimeProvider _timeProvider;
 
@@ -67,7 +73,11 @@ public sealed class IdempotencyProcessor
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await _store.MarkFailedAsync(record, ex.Message, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+            // ITM-175 修复：截断后再入库（对齐 Inbox/Outbox 管线孪生）
+            var failureReason = ex.Message.Length <= MaxFailureReasonLength
+                ? ex.Message
+                : ex.Message[..MaxFailureReasonLength];
+            await _store.MarkFailedAsync(record, failureReason, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
             activity?.SetTag("pal.idempotency.result", "failed");
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             PalMetrics.IdempotencyFailed.Add(1);

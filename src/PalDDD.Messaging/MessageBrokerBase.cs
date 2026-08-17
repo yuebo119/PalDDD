@@ -37,6 +37,13 @@ public abstract class MessageBrokerBase : IMessageBroker
     /// <summary>发布消息（泛型）— 查找描述符后转发到传输核心。</summary>
     public ValueTask PublishAsync<TMessage>(TMessage message, CancellationToken ct = default)
     {
+        // ITM-179 修复（二十九轮）：泛型入口统一 null 校验——修复前引用类型 null 仅
+        // `message!` 空断言放行，null 被序列化为 "null" 负载发布到 broker，消费端
+        // 反序列化为 null 后 handler NRE 远离入口。非泛型核心重载（KafkaBroker/
+        // RabbitMqBroker 的 PublishAsync 实现）已有 ThrowIfNull，唯此泛型入口缺。
+        if (message is null)
+            throw new ArgumentNullException(nameof(message));
+
         var descriptor = MessageCatalog.Find(typeof(TMessage))
             ?? throw new InvalidOperationException(
                 $"Message type '{typeof(TMessage).FullName}' is not registered in MessageCatalog.");

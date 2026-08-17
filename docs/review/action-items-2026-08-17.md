@@ -107,4 +107,22 @@
 | ITM-175 | 失败截断对称——tech-debt-scan #18 已有截断守卫对称性检查，本项落后者修复即闭合 |
 | ITM-176 | exponentCap 上界——构造校验属语义判断，保留为测试覆盖 |
 
-## 完成回填（修复后逐项勾选）
+## 完成回填（修复轮 2026-08-17 · 全量验证中）
+
+- [x] ITM-173 · PalOrmSaga PG SKIP LOCKED — 修复轮 `PalDDD.PalORM` 分支构造；PalORM.Tests 99/99（含 `Saga_PostgreSql/Sqlite_LeaseActiveSagas` 双方言真库）+ 方言探针全 PASS；教训：PalORM `{lockClause}` 插值被参数化生成 `LIMIT @p5 @p6` 语法错误（PD18 再证），需按方言分支整句构造完整 FormattableString
+- [x] ITM-174 · InMemoryOutbox 租约守卫 — successor 替换 + `IsCurrentLeaseHolder`（对齐 Inbox/Idempotency，ITM-105 模式）；Transactions.Tests 148/148（4 测试修正 + 1 新回归 `StaleReferenceAfterReLease_MarkIgnored`）
+- [x] ITM-175 · IdempotencyProcessor 截断 — 补 `MaxFailureReasonLength=2000` 截断（PD24 失败标记族对称）；Idempotency 由 Integration.Tests 覆盖
+- [x] ITM-176 · Backoff exponentCap 上限 — 构造校验 `>39 抛` + ComputeDelay 内 clamp（双保险）
+- [x] ITM-177 · MySqlSagaSnapshot 注册顺序 — **探针证伪**（MS DI 闭合泛型恒优先，A/B 双向实测 CLOSED 胜出）；文档澄清调用顺序无关；伪证计入 metrics 证伪数
+- [x] ITM-178 · OutboxInterceptor 失败 Detach — 失败路径 Detach Added OutboxMessage（EF 不自动回滚）；验证：代码审查 + 集成测试网回归（fake store 不触 ChangeTracker，无法单元验证 Detach，如实标注）
+- [x] ITM-179 · MessageBrokerBase null 校验 — 泛型入口补 `ArgumentNullException.ThrowIfNull`
+- [x] ITM-180 · InboxProcessor 标记失败区分 — MarkProcessedAsync 失败单独捕获，Error 日志标注 "handler SUCCEEDED" 按成功返回（at-least-once 状态待确认）
+- [x] ITM-181 · ReadWriteRouter 读均衡 — `TargetSessionAttributes` any→`read-only`（Npgsql 10.0.3 实证合法值须连字符；readonly/read_only 抛 ArgumentException）
+- [x] ITM-182 · Dispatcher 守卫 — 补 `_entries is null` 检查抛 ObjectDisposedException（一行防御）
+- [ ] ITM-187 · observer 异常分离 — **记录为设计权衡**（P3）：observer 为框架扩展点，异常导致已成功步骤被补偿属可接受语义；如需分离投入产出不成比例，暂缓
+- [x] ITM-186 · Saga.MaxRetries 下限 — setter `ThrowIfNegative`
+- [x] ITM-188 · DapperEventLog SQLite 限定 — 补 `SqliteException` 类型前置（镜像 EFCore/PalORM 姊妹）
+- [x] ITM-189 · PostgreSqlReportHelper JSON 数值 — 补 uint/ulong/short/ushort/byte/sbyte 数值分支
+- [ ] ITM-190 · KafkaBroker ConsumeException 刷屏 — 记录（P3，行为已文档化：退避防空转）；持续故障日志刷屏属可观测性权衡，暂缓
+
+构建验证：全解决方案 build 0/0 · Transactions 148 · PalORM 99 · DI 82 · Core 241 · CQRS 25 · Messaging 25 · Repository.EFCore 8 · 方言探针全 PASS

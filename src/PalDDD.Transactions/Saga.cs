@@ -87,7 +87,20 @@ public abstract class Saga<TState> where TState : SagaState, new()
     public CompensationPolicy CompensationPolicy { get; protected set; } = CompensationPolicy.Backward;
 
     /// <summary>最大重试次数 — 0 表示不重试</summary>
-    public int MaxRetries { get; protected set; } = 3;
+    /// <remarks>ITM-186 修复（二十九轮）：负值无语义（for 循环零次执行、静默跳过），setter 拒绝。</remarks>
+    private int _maxRetries = 3;
+
+    public int MaxRetries
+    {
+        get => _maxRetries;
+        protected set
+        {
+            // ITM-186 修复：负重试次数会让重试循环零次执行、ProcessEventAsync 静默返回
+            // current（步骤未执行也无异常），调用方误以为走完——断言非负。
+            ArgumentOutOfRangeException.ThrowIfNegative(value, nameof(MaxRetries));
+            _maxRetries = value;
+        }
+    }
 
     /// <summary>重试退避策略 — 默认固定 1 秒，保持历史 RetryDelay 语义</summary>
     public IRetryBackoffPolicy RetryBackoffPolicy { get; protected set; } = new FixedBackoffPolicy(TimeSpan.FromSeconds(1));

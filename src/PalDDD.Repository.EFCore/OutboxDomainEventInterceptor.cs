@@ -99,6 +99,10 @@ public sealed class OutboxDomainEventInterceptor(
     {
         ArgumentNullException.ThrowIfNull(eventData);
 
+        // ITM-178 修复（二十九轮）：EF 失败不自动回滚 ChangeTracker——本轮 AddMessage
+        // 注入的 OutboxMessage 仍处 Added 状态，若不 Detach，调用方修复后重试 SaveChanges
+        // 会旧消息+新消息一起落库（同事件 outbox 双写，下游重复消费）。
+        RemoveInjectedOutboxMessages(eventData.Context);
         _pending.Clear();
         await base.SaveChangesFailedAsync(eventData, cancellationToken);
     }
@@ -109,8 +113,25 @@ public sealed class OutboxDomainEventInterceptor(
     {
         ArgumentNullException.ThrowIfNull(eventData);
 
+        RemoveInjectedOutboxMessages(eventData.Context);
         _pending.Clear();
         base.SaveChangesFailed(eventData);
+    }
+
+    /// <summary>
+    /// 从 ChangeTracker Detach 本轮注入的 OutboxMessage 实体——
+    /// 避免失败重试时的 outbox 双写。仅处理 Added 状态实体（已跟踪未持久化）。
+    /// </summary>
+    private static void RemoveInjectedOutboxMessages(Microsoft.EntityFrameworkCore.DbContext? context)
+    {
+        if (context is null)
+            return;
+
+        foreach (var entry in context.ChangeTracker.Entries<Transactions.OutboxMessage>().ToList())
+        {
+            if (entry.State == Microsoft.EntityFrameworkCore.EntityState.Added)
+                entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+        }
     }
 
     private void WriteEventsToOutbox(IReadOnlyList<Core.DomainEvent> events)

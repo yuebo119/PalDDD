@@ -53,18 +53,47 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
         int maxRetryCount,
         CancellationToken ct)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ct.ThrowIfCancellationRequested();
+
         lock (_lock)
         {
             var pending = QueryPending(batchSize, maxRetryCount);
 
             var now = _timeProvider.GetUtcNow();
+            var leased = new List<OutboxMessage>(pending.Count);
             foreach (var msg in pending)
             {
-                msg.LockedBy = owner;
-                msg.LockedUntil = now.Add(leaseDuration);
+                // ITM-174 修复（二十九轮）：successor 替换——对齐 InMemoryInboxStore/
+                // InMemoryIdempotencyStore 模式（ITM-105）。原实现原地改写并返回同一实例：
+                // worker A 租约到期后 worker B 重租同一实例，A 的 MarkProcessed/MarkDead
+                // 无任何校验即可覆盖 B 的活跃租约（僵尸标记）。替换后旧引用不再是列表
+                // 持有者，其 Mark 被 IsCurrentLeaseHolder 守卫忽略。
+                var successor = new OutboxMessage
+                {
+                    Id = msg.Id,
+                    Type = msg.Type,
+                    Payload = msg.Payload,
+                    ContentType = msg.ContentType,
+                    SchemaVersion = msg.SchemaVersion,
+                    CorrelationId = msg.CorrelationId,
+                    CausationId = msg.CausationId,
+                    TraceParent = msg.TraceParent,
+                    TraceState = msg.TraceState,
+                    CreatedAt = msg.CreatedAt,
+                    RetryCount = msg.RetryCount,
+                    Status = OutboxStatus.Pending,
+                    LockedBy = owner,
+                    LockedUntil = now.Add(leaseDuration),
+                    NextAttemptAt = null,
+                    Error = null,
+                    ProcessedAt = null
+                };
+                _messages[_messages.IndexOf(msg)] = successor;
+                leased.Add(successor);
             }
 
-            return ValueTask.FromResult<IReadOnlyList<OutboxMessage>>(pending);
+            return ValueTask.FromResult<IReadOnlyList<OutboxMessage>>(leased);
         }
     }
 
@@ -95,6 +124,12 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
         // 不再依赖字段书写顺序这一隐式契约保证可见性
         lock (_lock)
         {
+            // ITM-174 修复（二十九轮）：所有权守卫——仅列表当前持有者可标记
+            // （对齐 InMemoryInboxStore.IsCurrentLeaseHolder）。被 successor 替换后的
+            // 旧引用（租约被其他 worker 重租）标记静默忽略，不覆盖新持有者状态。
+            if (!IsCurrentLeaseHolder(message))
+                return;
+
             message.ProcessedAt = processedAt;
             message.Status = OutboxStatus.Processed;
             message.Error = null;
@@ -111,6 +146,9 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         lock (_lock)
         {
+            if (!IsCurrentLeaseHolder(message))
+                return;
+
             message.ProcessedAt = deadAt;
             message.Status = OutboxStatus.Dead;
             message.Error = failureReason;
@@ -127,6 +165,9 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         lock (_lock)
         {
+            if (!IsCurrentLeaseHolder(message))
+                return;
+
             message.RetryCount++;
             message.Status = OutboxStatus.Pending;
             message.ProcessedAt = null;
@@ -159,6 +200,18 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
             return ValueTask.FromResult(1);
         }
     }
+
+    /// <summary>
+    /// 判定传入 message 是否仍为列表当前持有的活跃租约实例。
+    /// 对齐 InMemoryInboxStore.IsCurrentLeaseHolder 守卫强度：引用一致（未被 successor
+    /// 替换）+ 仍处租约中（LockedBy 非空）——不校验 LockedUntil 是否过期：真库语义
+    /// （DapperOutboxStore.MarkProcessed 仅 WHERE id AND locked_by）允许处理时长超过
+    /// 租约期限时仍标记（须在 <see cref="_lock"/> 内调用）。
+    /// </summary>
+    private bool IsCurrentLeaseHolder(OutboxMessage message)
+        => _messages.Contains(message)
+            && message.Status == OutboxStatus.Pending
+            && message.LockedBy is not null;
 
     private List<OutboxMessage> QueryPending(int batchSize, int maxRetryCount)
     {
