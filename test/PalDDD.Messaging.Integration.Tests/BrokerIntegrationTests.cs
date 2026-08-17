@@ -196,13 +196,15 @@ public sealed class BrokerIntegrationTests
         }, cancellationToken);
 
         // 先发 warmup，等 handler 确认 consumer ready
+        // 三十轮修复：超时 30s→120s 对齐 RabbitMQ——全量并行跑高负载下 Kafka 消费者
+        // join/rebalance 可超过 30s（实测全量 3 条 TimeoutException 而单独跑通过）。
         await broker.PublishAsync(new TestMessage($"kafka-ready-{tag}"), cancellationToken);
-        await consumerReady.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        await consumerReady.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
 
         // consumer ready 后再发测试消息
         await broker.PublishAsync(new TestMessage($"kafka-rt-{tag}"), cancellationToken);
 
-        var got = await received.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        var got = await received.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
         await Assert.That(got.Name).IsEqualTo($"kafka-rt-{tag}");
     }
 
@@ -237,11 +239,11 @@ public sealed class BrokerIntegrationTests
 
         // 先发 warmup，等 handler 确认 consumer ready
         await broker.PublishAsync(new TestMessage($"kafka-ready-{tag}"), cancellationToken);
-        await ready.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
 
         // consumer ready 后再发 cancel 测试消息
         await broker.PublishAsync(new TestMessage($"kafka-cancel-{tag}"), cancellationToken);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
         await sub.DisposeAsync();
 
         await Assert.That(logger.ErrorCount).IsEqualTo(0);
@@ -269,12 +271,12 @@ public sealed class BrokerIntegrationTests
 
         // 先发 warmup，等 handler 确认 consumer ready
         await broker.PublishAsync(new TestMessage($"kafka-ready-{prefix}"), cancellationToken);
-        await consumerReady.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        await consumerReady.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
 
         for (var i = 0; i < 5; i++)
             await broker.PublishAsync(new TestMessage($"{prefix}-{i}"), cancellationToken);
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
         await Assert.That(received.Count).IsEqualTo(5);
     }
 
