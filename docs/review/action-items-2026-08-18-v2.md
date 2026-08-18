@@ -43,4 +43,13 @@
 | ITM-200 | 截断族机械枚举——tech-debt 建议新增：Error 列写入点（MarkFailed/Error=ex.Message/audit）全仓 grep 截断兜底 |
 | ITM-201 | CSV 注入前缀检测可下沉 assertion/tech-debt grep（EscapeCsv 系列方法） |
 
-## 完成回填（修复后逐项勾选）
+## 完成回填（修复轮 2026-08-18 · 提交 01498c1）
+
+- [x] ITM-200 · SagaProcessor 截断 — Error 截断 2000 对齐截断族；全仓 Saga Error 赋值点仅此一处（PD17 枚举确认）
+- [x] ITM-201 · CSV 公式注入 — EscapeCsvSpan 前置单引号防护 + 3 条回归测试
+- [x] ITM-205 部分 · NameAndVersionComparer 自反性 / HandlerNotFound 头注释 400→404
+- [x] ITM-204 部分 · InMemory Outbox GetPending + Inbox Mark×2 ct 对齐姊妹
+- [x] ITM-206 部分 · mode=memory 逐参数精确解析
+- [x] ITM-207 部分 · SagaCompensation ReferenceEquals / BulkCopy probe 首行双调用声明契约
+- [ ] ITM-202（时区语义 3 项）、ITM-203（retriedBy 长度/Jsonb 空数组）、ITM-204 余（Kafka Dispose/ServiceRegistration 双实例）、ITM-205 余（DapperEventLog 流式注释/ProjectionProcessor Zero/PalOrm sync 契约）、ITM-206 余（OCE 计数/EnumGenerator/CodeFix）、ITM-207 余（Replay 计数注释/Endpoint 400）— 保留后续轮次
+
