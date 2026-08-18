@@ -48,4 +48,15 @@
 | ITM-191 | 管线孪生对称——tech-debt-scan #18 已覆盖截断族，另建议 Command 行为失败语义抽查入修复清单 |
 | ITM-192/193 | SQLite 类型限定——可下沉 tech-debt 机械 grep（9 处 IsUniqueConstraintViolation 的 SQLite 分支必须有 SqliteException）：新增 #23 守卫 |
 
-## 完成回填（修复后逐项勾选）
+## 完成回填（修复轮 2026-08-18 · 提交 7ae860a）
+
+- [x] ITM-191 · IdempotencyProcessor 对齐 ITM-180 — MarkCompleted 失败按 Executed 返回 + MarkFailedCalls==0 回归测试；全量 974（+1）
+- [x] ITM-192 · DapperSagaStateStore SQLite 限定 — 补 typeName.Equals 前置
+- [x] ITM-193 · ProjectionCheckpointDbContext SQLite 限定 — 补前置 + 删过时 P3-3 声明
+- [x] ITM-194 部分 · MultiHost 注释矛盾 ×2 已清（Jsonb doc/PipelineBehavior 措辞/MessageCatalog 契约保留标注）
+- [x] ITM-195 部分 · OutboxByType / GetDiagnosticsAsync / BulkCopy extractor 长度已补；SqliteFts 全文件、leaseDuration×4 保留观察（Options 层 Validate(LeaseDuration>Zero) 已拦）
+- [x] ITM-197 部分 · pending-confirmation 指标、HasStarted 日志、BulkCopy RowsInserted 已补；MessageConsumeContext 判空语义保留
+- [x] ITM-199 部分 · LoggingBehavior 前缀统一 Request（IL2090 AOT 反射否决→中性措辞）
+- [ ] ITM-194/195/196/198/199 其余（Jsonb doc/PipelineBehavior 措辞/MessageCatalog 契约/SqliteFts/MessageConsumeContext/Kafka Flush 推断/生成器结构性 5 项）— 保留，后续轮次
+- [x] 下沉：#2 SQLite 类型限定机械 grep 建议已执行（三十轮已抓 2 处，待下沉 tech-debt #23）
+
