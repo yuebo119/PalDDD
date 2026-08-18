@@ -151,7 +151,14 @@ TState>
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         _logger.Error(ex, $"Saga {sagaState.SagaId} compensation failed");
-                        sagaState.Error = ex.Message;
+                        // ITM-200 修复（三十一轮）：截断后再入库——Error 列 HasMaxLength(2048)
+                        // （SagaStateDbContext），补偿异常（AggregateException/FanOut 聚合消息）超长
+                        // 会让 SaveChangesAsync 抛 DbUpdateException → 被外层 catch 吞 → Saga
+                        // 停留 Processing 无限重租重补偿且 CompensationFailed 永不落库。
+                        // 对齐 Inbox/Outbox 的 MaxFailureReasonLength=2000 截断族（PD24）。
+                        sagaState.Error = ex.Message.Length <= 2000
+                            ? ex.Message
+                            : ex.Message[..2000];
                         sagaState.CurrentState = "CompensationFailed";
                         sagaState.Status = SagaStatus.CompensationFailed;
                         sagaState.ErrorAt = now;

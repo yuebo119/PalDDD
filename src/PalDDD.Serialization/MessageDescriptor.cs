@@ -67,8 +67,12 @@ public sealed class MessageDescriptor : IEquatable<MessageDescriptor>
     /// </summary>
     public static EqualityComparer<MessageDescriptor> NameAndVersionComparer { get; } =
         EqualityComparer<MessageDescriptor>.Create(
-            (a, b) => a is not null && b is not null
-                && a.Name == b.Name && a.SchemaVersion == b.SchemaVersion,
+            // ITM-205 修复（三十一轮）：自反性契约——原 (a,b) 委托对 Equals(null,null) 返回
+            // false，违反 IEqualityComparer 自反性；null 键存字典后 ContainsKey(null)/Remove(null)
+            // 恒 false 键永久泄漏。ReferenceEquals 兜底恢复自反性。
+            (a, b) => a is null || b is null
+                ? ReferenceEquals(a, b)
+                : a.Name == b.Name && a.SchemaVersion == b.SchemaVersion,
             d => d is null ? 0 : HashCode.Combine(d.Name, d.SchemaVersion));
 
     public bool Equals(MessageDescriptor? other)

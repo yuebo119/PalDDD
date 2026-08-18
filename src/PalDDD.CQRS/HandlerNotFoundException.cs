@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────
-// ❓ HandlerNotFoundException — 未注册 Handler 时抛出（DTO 400）
+// ❓ HandlerNotFoundException — 未注册 Handler 时抛出（DTO 404）
 // ─────────────────────────────────────────────────────────────
 namespace PalDDD.CQRS;
 

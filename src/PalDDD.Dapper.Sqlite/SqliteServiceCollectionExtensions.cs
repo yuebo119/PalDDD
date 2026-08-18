@@ -171,7 +171,25 @@ public static class SqliteServiceCollectionExtensions
             return false;
 
         var queryIndex = dataSource.IndexOf('?');
-        return queryIndex >= 0
-            && dataSource.AsSpan(queryIndex + 1).Contains("mode=memory", StringComparison.OrdinalIgnoreCase);
+        if (queryIndex < 0)
+            return false;
+
+        // ITM-206 修复（三十一轮）：逐参数精确比对——原整体子串 Contains 会把
+        // `mode=memoryx`、`a=mode=memory`、`vfs=mode=memory` 均误判为内存库 →
+        // 误配 Singleton 生命周期，文件库数据关闭即毁。
+        var query = dataSource.AsSpan(queryIndex + 1);
+        foreach (var segment in query.Split('&'))
+        {
+            var part = query[segment];
+            var eq = part.IndexOf('=');
+            if (eq <= 0)
+                continue;
+            if (part[..eq].Equals("mode", StringComparison.OrdinalIgnoreCase)
+                && part[(eq + 1)..].Equals("memory", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 }

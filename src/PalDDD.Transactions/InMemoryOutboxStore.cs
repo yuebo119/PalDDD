@@ -40,6 +40,9 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
         int maxRetryCount,
         CancellationToken ct)
     {
+        // ITM-204 修复（三十一轮）：ct 对齐姊妹（同文件 LeasePendingMessagesAsync:57 与
+        // InMemoryIdempotencyStore.GetAsync 均检查）——已取消请求不返回批次快照。
+        ct.ThrowIfCancellationRequested();
         lock (_lock)
             return ValueTask.FromResult<IReadOnlyList<OutboxMessage>>(
                 QueryPending(batchSize, maxRetryCount));

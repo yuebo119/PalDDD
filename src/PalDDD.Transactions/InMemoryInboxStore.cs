@@ -93,6 +93,9 @@ public sealed class InMemoryInboxStore : IInboxStore
     public ValueTask MarkProcessedAsync(InboxMessage message, DateTimeOffset processedAt, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(message);
+        // ITM-204 修复（三十一轮）：ct 对齐姊妹（InMemoryIdempotencyStore.MarkCompletedAsync
+        // 有 ct.ThrowIfCancellationRequested）——已取消请求不执行内存标记。
+        ct.ThrowIfCancellationRequested();
 
         lock (_lock)
         {
@@ -114,6 +117,8 @@ public sealed class InMemoryInboxStore : IInboxStore
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+        // ITM-204 修复（三十一轮）：ct 对齐姊妹——同 MarkProcessedAsync。
+        ct.ThrowIfCancellationRequested();
 
         lock (_lock)
         {

@@ -59,7 +59,9 @@ internal sealed class SagaCompensation<TState>
                 targets.Add(step);
         }
 
-        if (failedStep.CompensateAsync is not null && !targets.Contains(failedStep))
+        // ITM-207 修复（三十一轮）：ReferenceEquals 锁定引用语义——原 List.Contains 依赖
+        // 引用相等，若 SagaStep 未来重写 Equals 为值语义则去重误判、失败步骤漏补偿。
+        if (failedStep.CompensateAsync is not null && !targets.Any(s => ReferenceEquals(s, failedStep)))
             targets.Add(failedStep);
 
         await RunAsync(state, targets, ct);

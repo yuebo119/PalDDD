@@ -266,13 +266,25 @@ public static class PostgreSqlReportHelper
         };
     }
 
-    /// <summary>CSV 转义 — SearchValues 零分配检测</summary>
-    private static string EscapeCsvSpan(ReadOnlySpan<char> value)
+    /// <summary>CSV 转义 — SearchValues 零分配检测 + CSV 公式注入防护</summary>
+    internal static string EscapeCsvSpan(ReadOnlySpan<char> value)
     {
+        // ITM-201 修复（三十一轮）：CSV 公式注入防护（OWASP CSV Injection）——以
+        // = + - @ \t 开头的单元格在 Excel 打开时会被当作公式执行；前置单引号
+        // 使 Excel 按文本解释。reason/actor_id 等操作者输入字段经报表导出可达此路径。
+        if (!value.IsEmpty && IsCsvFormulaPrefix(value[0]))
+            return "'" + (value.ContainsAny(s_csvSpecial)
+                ? $"\"{value.ToString().Replace("\"", "\"\"")}\""
+                : value.ToString());
+
         if (value.ContainsAny(s_csvSpecial))
             return $"\"{value.ToString().Replace("\"", "\"\"")}\"";
         return value.ToString();
     }
+
+    /// <summary>CSV 公式注入前缀集合（OWASP：= + - @ Tab）</summary>
+    private static bool IsCsvFormulaPrefix(char c)
+        => c is '=' or '+' or '-' or '@' or '\t';
 
     /// <summary>CSV 转义（字符串重载）</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

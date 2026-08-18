@@ -88,6 +88,8 @@ public static class DapperBulkCopy
         // ITM-195 修复（三十轮）：首行校验值提取长度与列数一致——lambda 返回数组短于
         // 列数时原实现抛晦涩 IndexOutOfRange/MysqlDataTruncation；长于列数时多余值
         // 静默丢弃。入口一次校验（列数恒定，首行代表性）给出可定位的 ArgumentException。
+        // 契约声明（ITM-207 三十一轮）：此校验使 extractor 对首行额外调用一次——
+        // valueExtractor 必须是无副作用的纯提取函数（首行值可能被提取两次）。
         var probe = valueExtractor(items[0]);
         if (probe.Length != columns.Length)
             throw new ArgumentException(
