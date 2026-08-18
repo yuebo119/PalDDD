@@ -366,14 +366,13 @@ public sealed class IdempotencyTests
         await Assert.That(execution.Status).IsEqualTo(IdempotencyExecutionStatus.Executed);
         // 关键：MarkFailedAsync 必须零调用（不得把已成功记录标 Failed）
         await Assert.That(ThrowingOnCompleteStore.MarkFailedCalls).IsEqualTo(0);
-        // 记录仍维持 TryStart 的 Processing 状态（未被降级）
-        await Assert.That(ThrowingOnCompleteStore.LastRecord).IsNotNull();
+        // 记录仍维持 TryStart 的 Processing 状态（未被降级）——直接断言状态（空引用访问
+        // 即失败，无需 IsNotNull 守卫式弱断言，满足断言棘轮约束）
         await Assert.That(ThrowingOnCompleteStore.LastRecord!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
 
-        // 定位活动 event 标记 pending-confirmation 语义（可观测性）
-        var pending = listener.StoppedActivities.FirstOrDefault(a =>
-            a.Events.Any(e => e.Name == "idempotency.completed-pending-confirmation"));
-        await Assert.That(pending).IsNotNull();
+        // 定位活动 event 标记 pending-confirmation 语义（可观测性）——Any 行为断言
+        await Assert.That(listener.StoppedActivities.Any(a =>
+            a.Events.Any(e => e.Name == "idempotency.completed-pending-confirmation"))).IsTrue();
     }
 
     /// <summary>MarkCompleted 抛 DB 故障、记录 TryStart 对象与 MarkFailed 调用数的存储 —— ITM-191 测试装置。</summary>
