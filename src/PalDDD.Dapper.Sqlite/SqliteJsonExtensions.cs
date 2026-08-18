@@ -161,7 +161,12 @@ public static class SqliteJson
     /// <summary>按 Outbox 消息类型过滤（payload JSON 中 Type 字段）</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string OutboxByType(string messageType)
-        => $"{Extract("payload", "Type")} = '{EscapeLiteral(messageType)}'";
+    {
+        // ITM-195 修复（三十轮）：补空白守卫——同文件其余 9 个方法已 ITM-167 对齐，唯此漏。
+        // 缺守卫时 null → EscapeLiteral 内 NRE 而非入口 ArgumentException。
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageType);
+        return $"{Extract("payload", "Type")} = '{EscapeLiteral(messageType)}'";
+    }
 
     // ── 内部 ──
 

@@ -342,6 +342,71 @@ public sealed class IdempotencyTests
     private static string Deserialize(ReadOnlyMemory<byte> payload)
         => Encoding.UTF8.GetString(payload.Span);
 
+    [Test]
+    public async Task ExecuteAsync_MarkCompletedFails_ReturnsExecutedWithoutMarkingFailed(CancellationToken cancellationToken)
+    {
+        // ITM-191 回归（三十轮）：handler 成功但 MarkCompleted 失败（DB 故障）——
+        // 不得降级为 Failed（Failed 可重入 → handler 重放 → 副作用二次执行）。
+        // 对齐 InboxProcessor ITM-180（镜像修复）。修复前 MarkCompleted 异常落入
+        // 通用 catch → MarkFailedAsync 把已成功记录标 Failed。
+        ThrowingOnCompleteStore.MarkFailedCalls = 0;
+        ThrowingOnCompleteStore.LastRecord = null;
+        using var listener = new RecordingActivityListener();
+        var processor = new IdempotencyProcessor(new ThrowingOnCompleteStore());
+
+        var execution = await processor.ExecuteAsync(
+            "CreateOrder",
+            "cmd-fail",
+            _ => ValueTask.FromResult("order-ok"),
+            Serialize,
+            Deserialize,
+            cancellationToken: cancellationToken);
+
+        // 副作用已发生：按 Executed 返回——修复前落入 catch 被降级 Failed
+        await Assert.That(execution.Status).IsEqualTo(IdempotencyExecutionStatus.Executed);
+        // 关键：MarkFailedAsync 必须零调用（不得把已成功记录标 Failed）
+        await Assert.That(ThrowingOnCompleteStore.MarkFailedCalls).IsEqualTo(0);
+        // 记录仍维持 TryStart 的 Processing 状态（未被降级）
+        await Assert.That(ThrowingOnCompleteStore.LastRecord).IsNotNull();
+        await Assert.That(ThrowingOnCompleteStore.LastRecord!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+
+        // 定位活动 event 标记 pending-confirmation 语义（可观测性）
+        var pending = listener.StoppedActivities.FirstOrDefault(a =>
+            a.Events.Any(e => e.Name == "idempotency.completed-pending-confirmation"));
+        await Assert.That(pending).IsNotNull();
+    }
+
+    /// <summary>MarkCompleted 抛 DB 故障、记录 TryStart 对象与 MarkFailed 调用数的存储 —— ITM-191 测试装置。</summary>
+    private sealed class ThrowingOnCompleteStore : IIdempotencyStore
+    {
+        public static IdempotencyRecord? LastRecord;
+        public static int MarkFailedCalls;
+
+        public ValueTask<IdempotencyRecord?> GetAsync(string operationName, string key, DateTimeOffset now, CancellationToken ct = default)
+            => ValueTask.FromResult<IdempotencyRecord?>(null);
+
+        public ValueTask<IdempotencyRecord?> TryStartAsync(string operationName, string key, DateTimeOffset now,
+            IdempotencyPolicy policy, CancellationToken ct = default)
+        {
+            var nowUtc = now.ToUniversalTime();
+            LastRecord = new IdempotencyRecord(operationName, key, IdempotencyRecordStatus.Processing,
+                nowUtc.AddMinutes(5), nowUtc.AddMinutes(30), nowUtc);
+            return ValueTask.FromResult<IdempotencyRecord?>(LastRecord);
+        }
+
+        public ValueTask MarkCompletedAsync(IdempotencyRecord record, ReadOnlyMemory<byte> responsePayload,
+            DateTimeOffset completedAt, CancellationToken ct = default)
+            => throw new InvalidOperationException("simulated DB failure on complete");
+
+        public ValueTask MarkFailedAsync(IdempotencyRecord record, string failureReason,
+            DateTimeOffset failedAt, CancellationToken ct = default)
+        {
+            MarkFailedCalls++;
+            record.MarkFailed(failureReason, failedAt);
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private sealed class SkippingIdempotencyStore : IIdempotencyStore
     {
         public ValueTask<IdempotencyRecord?> GetAsync(

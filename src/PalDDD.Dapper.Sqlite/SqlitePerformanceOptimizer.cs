@@ -138,6 +138,8 @@ public static class SqlitePerformanceOptimizer
     /// <summary>获取当前 SQLite 版本和编译选项（诊断用）</summary>
     public static async Task<string> GetDiagnosticsAsync(SqliteConnection connection)
     {
+        // ITM-195 修复（三十轮）：补 null 守卫——同文件 Optimize 系列已 ITM-165 对齐，唯此漏。
+        ArgumentNullException.ThrowIfNull(connection);
         await connection.OpenAsync().ConfigureAwait(false);
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT sqlite_version(), sqlite_source_id()";

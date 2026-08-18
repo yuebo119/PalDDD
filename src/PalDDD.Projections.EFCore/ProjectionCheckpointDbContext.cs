@@ -237,9 +237,13 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
             }
 
             // SQLite: Microsoft.Data.Sqlite.SqliteException 消息包含 "UNIQUE constraint"
-            // ⚠️ 已知局限（P3-3）：字符串匹配可能误判未来某 provider 的非唯一约束错误。
+            // ITM-193 修复（三十轮）：补 SqliteException 类型限定（对齐全仓姊妹，PD17）——
+            // 裸消息匹配会在 TryCreateCheckpointAsync 主路径把文案含该词组的非唯一约束
+            // 误判为租约竞争返回 null，租约被静默让出。原"P3-3 已知局限"声明在姊妹统一
+            // 修复后已过时，随本修复删除。
             var message = inner.Message;
-            if (!string.IsNullOrEmpty(message)
+            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(message)
                 && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
             {
                 return true;

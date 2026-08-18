@@ -85,6 +85,15 @@ public static class DapperBulkCopy
         // 同步上下文下阻塞，且 CancellationToken 无法传导（取消要等 Open 完成后才生效）。
         await EnsureOpenAsync(conn, ct).ConfigureAwait(false);
 
+        // ITM-195 修复（三十轮）：首行校验值提取长度与列数一致——lambda 返回数组短于
+        // 列数时原实现抛晦涩 IndexOutOfRange/MysqlDataTruncation；长于列数时多余值
+        // 静默丢弃。入口一次校验（列数恒定，首行代表性）给出可定位的 ArgumentException。
+        var probe = valueExtractor(items[0]);
+        if (probe.Length != columns.Length)
+            throw new ArgumentException(
+                $"valueExtractor 返回 {probe.Length} 个值，但 columns 有 {columns.Length} 列。",
+                nameof(valueExtractor));
+
         // 💡 switch 表达式按 DapperDbType 枚举分发 — 编译时已知值，零反射
         return dbType switch
         {
@@ -211,6 +220,12 @@ public static class DapperBulkCopy
             throw new InvalidOperationException(
                 $"MySqlBulkCopy 完成但有 {result.Warnings.Count} 条警告（可能有数据截断）: {warnings}");
         }
+
+        // ITM-197 修复（三十轮）：RowsInserted 与 items 数不符（部分写入/被忽略行）显式暴露——
+        // 仅靠 Warnings 间接覆盖不足（无 warning 的部分写入不报，调用方误以为全量成功）。
+        if (result.RowsInserted != items.Count)
+            throw new InvalidOperationException(
+                $"MySqlBulkCopy 仅插入 {result.RowsInserted}/{items.Count} 行（非全量，可能含被忽略/重复键行）。");
 
         return result.RowsInserted;
     }

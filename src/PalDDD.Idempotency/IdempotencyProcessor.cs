@@ -68,7 +68,22 @@ public sealed class IdempotencyProcessor
             var result = await handler(cancellationToken).ConfigureAwait(false);
             // P2 修复（八轮评审）：副作用已发生后状态标记尽力持久化，不被请求级取消
             // （对齐下方 MarkFailedAsync 的 None——取消丢失完成标记会让重放重复执行副作用）。
-            await _store.MarkCompletedAsync(record, serializeResult(result), _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await _store.MarkCompletedAsync(record, serializeResult(result), _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception markEx) when (markEx is not OperationCanceledException)
+            {
+                // ITM-191 修复（三十轮）：handler 成功但标记失败（DB 故障）——副作用已发生，
+                // 不得按通用失败重新标记 Failed 再抛（那会把"已执行"降级为"可重试失败"，
+                // 重试时重放副作用）。记区分性错误日志后按 Executed 返回（at-least-once
+                // 语义下状态待确认；对齐 InboxProcessor ITM-180 的管线孪生修复）。
+                System.Diagnostics.Activity.Current?.AddEvent(new(
+                    "idempotency.completed-pending-confirmation",
+                    tags: new ActivityTagsCollection { ["error"] = markEx.Message }));
+                return SetActivityResult(activity,
+                    new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Executed, result));
+            }
             return SetActivityResult(activity, new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Executed, result));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -77,7 +92,16 @@ public sealed class IdempotencyProcessor
             var failureReason = ex.Message.Length <= MaxFailureReasonLength
                 ? ex.Message
                 : ex.Message[..MaxFailureReasonLength];
-            await _store.MarkFailedAsync(record, failureReason, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await _store.MarkFailedAsync(record, failureReason, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception markEx)
+            {
+                // ITM-191 修复（镜像 InboxProcessor ITM-092）：MarkFailedAsync 自身失败
+                // （DB 故障）不得掩盖主异常——挂 Data 后仍以主异常优先向上传播。
+                ex.Data["MarkFailedError"] = markEx.Message;
+            }
             activity?.SetTag("pal.idempotency.result", "failed");
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             PalMetrics.IdempotencyFailed.Add(1);

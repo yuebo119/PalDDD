@@ -81,9 +81,9 @@ public static class PostgreSqlMultiHost
         // ⚠️ 与 PostgreSqlJsonbExtensions 的动态拼接 SQL 互斥：动态 SQL 文本随参数变化，
         // 反复进出 LRU 会把固定模板逐出（预备失效反而变慢）——启用 Jsonb 动态查询的场景
         // 请改用自行构建 NpgsqlDataSourceBuilder 注册（文档已声明互斥）。
-        // 注意：此代码赋值覆盖连接串中的 Max Auto Prepare 设置。
         // 条件化（二十六轮 W2）：仅未设置（读 0）时赋默认——显式非零调优不被覆盖；
         // 显式禁用（写 0）与未设置不可区分，禁用走 configure 回调或自建 DataSource
+        // （ITM-194 三十轮：删除旧"赋值覆盖"残留注释，与 W2 条件化行为矛盾）
         if (builder.ConnectionStringBuilder.MaxAutoPrepare == 0)
             builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
 
@@ -188,7 +188,6 @@ public static class PostgreSqlMultiHost
         var builder = new NpgsqlDataSourceBuilder(multiHostConnectionString);
         builder.ConnectionStringBuilder.ApplicationName = applicationName;
         // 优化（二十五轮 API 扫描 B-1）：MaxAutoPrepare=20（同 AddPalNpgsqlDataSourceWithFailover 注释；
-        // 代码赋值覆盖连接串中的同项设置）
         // 条件化（二十六轮 W2）：仅未设置（读 0）时赋默认——显式非零调优不被覆盖；
         // 显式禁用（写 0）与未设置不可区分，禁用走 configure 回调或自建 DataSource
         if (builder.ConnectionStringBuilder.MaxAutoPrepare == 0)

@@ -115,6 +115,9 @@ public sealed class InboxProcessor
                 // 状态待观察者确认；Inbox 的 Processed 状态由下一轮循环/监控补正）。
                 _logger.Error(markEx, $"Inbox: message {messageId} handler SUCCEEDED but MarkProcessed failed; state pending confirmation (at-least-once)");
                 activity?.SetTag("pal.inbox.result", "processed-pending-confirmation");
+                // ITM-197 修复（三十轮）：该路径补指标——修复前监控盲区（handler 成功但状态
+                // 待确认在 InboxProcessed/InboxFailed 均不可见）。
+                PalMetrics.InboxProcessed.Add(1);
                 return true;
             }
             activity?.SetTag("pal.inbox.result", "processed");

@@ -80,9 +80,11 @@ public sealed class ExceptionMiddleware
         }
         catch (Exception ex)
         {
+            // ITM-197 修复（三十轮）：响应已开始（SSE/流式）后抛出的未处理异常也须落日志——
+            // 原实现 HasStarted 直接 rethrow 不记录，该路径在日志中不可见（与常规 500 分歧）。
+            _logger.Error(ex, "Unhandled exception");
             if (context.Response.HasStarted) throw;
 
-            _logger.Error(ex, "Unhandled exception");
             context.Response.StatusCode = StatusCodes.Status500InternalServerError;
             var response = new InternalServerErrorProblemResponse(
                 "https://www.rfc-editor.org/rfc/rfc9110#section-15.6.1",

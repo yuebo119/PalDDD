@@ -219,8 +219,13 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
                 return true;
             }
 
+            // SQLite: Microsoft.Data.Sqlite.SqliteException 消息包含 "UNIQUE constraint"
+            // ITM-192 修复（三十轮）：补 SqliteException 类型限定（镜像 DapperEventLog
+            // ITM-188 / PalORM / EFCore 姊妹，PD17）——裸消息匹配会把文案恰好含该词组的
+            // 非唯一约束异常误判为并发冲突 → 转 InvalidOperationException 掩盖真实数据错误。
             var message = inner.Message;
-            if (!string.IsNullOrEmpty(message)
+            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(message)
                 && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
             {
                 return true;

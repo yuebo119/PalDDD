@@ -84,8 +84,12 @@ internal sealed class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<T
 
     public async ValueTask<TResponse> HandleAsync(TRequest request, CancellationToken ct, Func<ValueTask<TResponse>> next)
     {
+        // ITM-199 修复（三十轮）：统一 "Request" 中性前缀——QueryAsync 也走本行为，
+        // 原固定 "Command" 前缀在日志中误导排障；按 IQuery 反射区分需 DAM 注解（IL2090，
+        // AOT 反对），改用中性措辞零反射安全。
+
         if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
-            _logger.Debug($"Command {typeof(TRequest).Name}: dispatching");
+            _logger.Debug($"Request {typeof(TRequest).Name}: dispatching");
 
         var start = _timeProvider.GetTimestamp();
         try
@@ -94,14 +98,14 @@ internal sealed class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<T
             var elapsed = _timeProvider.GetElapsedTime(start).TotalMilliseconds;
 
             if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
-                _logger.Debug($"Command {typeof(TRequest).Name}: completed in {elapsed:F2}ms");
+                _logger.Debug($"Request {typeof(TRequest).Name}: completed in {elapsed:F2}ms");
 
             return result;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             var elapsed = _timeProvider.GetElapsedTime(start).TotalMilliseconds;
-            _logger.Error(ex, $"Command {typeof(TRequest).Name}: failed after {elapsed:F2}ms");
+            _logger.Error(ex, $"Request {typeof(TRequest).Name}: failed after {elapsed:F2}ms");
             throw;
         }
     }
