@@ -83,6 +83,8 @@ stryker-config.json
 /.codebuddy
 /.codebuddy
 /nupkgs
+# Native AOT publish 临时产物
+/artifacts
 
 # PalOrmSample 运行时临时数据库
 palddd-palorm-sample.db

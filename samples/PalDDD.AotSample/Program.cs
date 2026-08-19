@@ -1,3 +1,10 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using PalDDD.Core;
+using PalDDD.CQRS;
+
+#pragma warning disable CA1812 // DI 实例化的内部类（AddPalCommandHandler 泛型注册）
+using PalDDD.DependencyInjection;
 using PalDDD.Serialization;
 using PalDDD.Serialization.Json;
 using PalDDD.Transactions;
@@ -63,6 +70,28 @@ sagaStore.Add(sagaState);
 var active = await sagaStore.GetActiveSagasAsync(10, CancellationToken.None).ConfigureAwait(false);
 Check("saga active scan", active.Count == 1);
 
+// ── 6. CQRS 管道（AOT 值类型管道验证）──
+// 背景：Native AOT 下 DI 开放泛型解析 + 值类型响应（Unit/int）抛 AotCannotCreateGenericValueType。
+// 解法：AddPalCommandHandler/AddPalQueryHandler 内部闭合注册管道行为——闭合类型走 TryCreateExact 不经值类型校验。
+Console.WriteLine("\n── 6. CQRS 管道（AOT 值类型管道验证）──");
+
+var pipelineServices = new ServiceCollection();
+pipelineServices.AddPalLogging();
+pipelineServices.AddPalDDD();
+pipelineServices.AddPalCommandHandler<PipelineCreateCmd, Unit, PipelineCreateHandler>();
+pipelineServices.AddPalQueryHandler<PipelineCountQry, int, PipelineCountHandler>();
+await using var pipelineProvider = pipelineServices.BuildServiceProvider();
+
+// 无 Host 场景下手动启动 HostedService（HandlerRegistrar 将 HandlerMarker 注册进 Dispatcher）
+foreach (var hostedService in pipelineProvider.GetServices<IHostedService>())
+    await hostedService.StartAsync(CancellationToken.None);
+
+var dispatcher = pipelineProvider.GetRequiredService<Dispatcher>();
+await dispatcher.SendAsync(new PipelineCreateCmd("aot-pipeline"));
+await dispatcher.SendAsync(new PipelineCreateCmd("aot-pipeline-2"));
+var count = await dispatcher.QueryAsync(new PipelineCountQry());
+Check("AOT pipeline (Unit command + int query)", count == 2);
+
 Console.WriteLine();
 if (failures == 0)
 {
@@ -80,3 +109,28 @@ internal sealed record SampleMessage(string Name, int Count);
 internal sealed partial class SampleJsonContext : JsonSerializerContext;
 
 internal sealed class SampleSagaState : SagaState;
+
+// ── CQRS 管道类型（AOT 值类型管道验证）──
+internal sealed record PipelineCreateCmd(string Name) : ICommand;
+internal sealed record PipelineCountQry : IQuery<int>;
+
+/// <summary>管道验证共享存储（handler 间共享，模拟应用状态）</summary>
+internal static class PipelineStore
+{
+    public static readonly List<string> Names = [];
+}
+
+internal sealed class PipelineCreateHandler : ICommandHandler<PipelineCreateCmd, Unit>
+{
+    public ValueTask<Unit> HandleAsync(PipelineCreateCmd cmd, CancellationToken ct)
+    {
+        PipelineStore.Names.Add(cmd.Name);
+        return ValueTask.FromResult(new Unit());
+    }
+}
+
+internal sealed class PipelineCountHandler : IQueryHandler<PipelineCountQry, int>
+{
+    public ValueTask<int> HandleAsync(PipelineCountQry qry, CancellationToken ct)
+        => ValueTask.FromResult(PipelineStore.Names.Count);
+}

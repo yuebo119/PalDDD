@@ -737,6 +737,7 @@ Pal.DDD 的 AOT 兼容性建立在 DIM 桥接 + 源码生成器之上。AI 生�
 |------|--------|------|
 | `MakeGenericType` | DIM 桥接（`IHandler.HandleAsync` 默认实现） | AOT 编译失败 |
 | `Activator.CreateInstance` | DI 显式注册 `AddPalCommandHandler<T>()` | AOT 编译失败 |
+| 开放泛型管道行为注册 `AddPalPipelineBehaviors()`（无类型参数，值类型响应） | 闭合注册 `AddPalPipelineBehaviors<TReq,TResp>()` 或 `AddPalCommandHandler<T...>()`（自动闭合） | 运行时 `AotCannotCreateGenericValueType`（`NotSupportedException`，无配置可关闭） |
 | `Assembly.GetTypes()` | 源码生成器 `[ModuleInitializer]` | AOT 编译失败 |
 | `Type.GetType(string)` | `typeof(T)` 编译时常量 | AOT 编译失败 |
 | 反射式 JSON 序列化 | `[JsonSerializable]` 源生成 `JsonTypeInfo` | `JsonSerializerIsReflectionEnabledByDefault=false` |

@@ -397,6 +397,7 @@ static class PalDDD.DependencyInjection.ServiceRegistration
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalIdentity(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalLogging(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalPipelineBehaviors(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalPipelineBehaviors(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalQueryHandler(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
 
 # PalDDD.EventLog

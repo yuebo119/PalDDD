@@ -45,12 +45,17 @@ services.AddPalQueryHandler<GetOrderQuery, string, GetOrderHandler>();
 services.AddPalEventHandler<OrderCreated, OrderCreatedHandler>();
 ```
 
+`AddPalCommandHandler<TCommand, TResponse, THandler>()` / `AddPalQueryHandler<TQuery, TResponse, THandler>()` 内部**自动闭合注册**内置管道行为（`ValidationBehavior<TRequest, TResponse>` + `LoggingBehavior<TRequest, TResponse>`）。闭合泛型注册在 AOT 下走 `TryCreateExact` 路径——闭合类型编译期可见，native code 已生成，不经值类型校验，因此 `Unit`、`int`、`Guid` 等值类型响应均安全。
+
+> **互斥语义**：闭合注册与开放注册（`AddPalPipelineBehaviors()`）先到先得。旧代码同时调用两者时，后调用的注册会被跳过，解析结果始终收敛为 2 个 behavior——不会叠加成 4 个导致验证/日志重复执行。
+
 禁止：
 
 - 按程序集扫描 handler。
 - 使用 `Activator.CreateInstance` 动态创建 handler。
 - 使用 `MakeGenericType` 在运行时拼接泛型 handler。
 - 使用 request attribute 隐式声明事务策略。
+- **AOT 发布下使用开放泛型管道行为注册** `services.AddPalPipelineBehaviors()`（无类型参数的重载）。该重载注册开放泛型 `IPipelineBehavior<,>`，运行时解析 + 值类型响应（`Unit`/`int`/`Guid`）会触发 DI 的 `AotCannotCreateGenericValueType`（`NotSupportedException`，无配置可关闭）。改用闭合注册：`AddPalPipelineBehaviors<TRequest, TResponse>()`（显式闭合）或直接使用 `AddPalCommandHandler<T...>()` / `AddPalQueryHandler<T...>()`（自动闭合）。
 
 `PalDDD.CQRS` 只保留 request/handler/dispatcher/pipeline 核心能力。事务由应用层或外层持久化适配层显式处理，避免 CQRS 包依赖 repository 抽象，也避免 attribute 驱动的隐藏策略。
 
