@@ -21,6 +21,9 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
     /// <inheritdoc/>
     public ValueTask<IReadOnlyList<TState>> GetActiveSagasAsync(int batchSize, CancellationToken ct)
     {
+        // ITM-215 修复（三十二轮）：ct 对齐——对照 InMemoryOutbox/InMemoryInbox 均已 ThrowIfCancellationRequested，
+        // 本类 4 个异步方法此前全部忽略 ct（同步完成但契约要求响应取消）
+        ct.ThrowIfCancellationRequested();
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
 
         lock (_lock)
@@ -43,6 +46,8 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        // ITM-215 修复（三十二轮）：ct 对齐（见 GetActiveSagasAsync）
+        ct.ThrowIfCancellationRequested();
 
         var now = _timeProvider.GetUtcNow();
         var leasedUntil = now.Add(leaseDuration);
@@ -68,6 +73,8 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
     /// <inheritdoc/>
     public ValueTask<TState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
     {
+        // ITM-215 修复（三十二轮）：ct 对齐（见 GetActiveSagasAsync）
+        ct.ThrowIfCancellationRequested();
         lock (_lock)
         {
             _states.TryGetValue(sagaId, out var state);
@@ -92,6 +99,8 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
     public ValueTask<int> SaveChangesAsync(TState state, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(state);
+        // ITM-215 修复（三十二轮）：ct 对齐（见 GetActiveSagasAsync）
+        ct.ThrowIfCancellationRequested();
         lock (_lock)
         {
             return ValueTask.FromResult(_states.ContainsKey(state.SagaId) ? 1 : 0);

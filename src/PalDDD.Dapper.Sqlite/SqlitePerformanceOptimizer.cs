@@ -77,7 +77,10 @@ public static class SqlitePerformanceOptimizer
     public static async ValueTask OptimizeAsync(SqliteConnection connection)
     {
         ArgumentNullException.ThrowIfNull(connection);
-        await connection.OpenAsync().ConfigureAwait(false);
+        // ITM-220 修复（三十二轮）：State 守卫——对照 MySqlPerformanceOptimizer 同款，
+        // 对已打开连接重复 Open 抛 InvalidOperationException（调用方复用共享连接场景）
+        if (connection.State != System.Data.ConnectionState.Open)
+            await connection.OpenAsync().ConfigureAwait(false);
         await ApplyAsync(connection, SqliteOptimizeLevel.Production).ConfigureAwait(false);
     }
 
@@ -88,7 +91,9 @@ public static class SqlitePerformanceOptimizer
         // connection.OpenAsync() 处以 NullReferenceException 暴露，失败点与异常类型
         // 与 Production 路径不一致。
         ArgumentNullException.ThrowIfNull(connection);
-        await connection.OpenAsync().ConfigureAwait(false);
+        // ITM-220 修复（三十二轮）：State 守卫（见 OptimizeAsync）
+        if (connection.State != System.Data.ConnectionState.Open)
+            await connection.OpenAsync().ConfigureAwait(false);
         await ApplyAsync(connection, SqliteOptimizeLevel.Light).ConfigureAwait(false);
     }
 
@@ -97,7 +102,9 @@ public static class SqlitePerformanceOptimizer
     {
         // ITM-165 修复：补 connection null 守卫（对齐 OptimizeAsync/Light）。
         ArgumentNullException.ThrowIfNull(connection);
-        await connection.OpenAsync().ConfigureAwait(false);
+        // ITM-220 修复（三十二轮）：State 守卫（见 OptimizeAsync）
+        if (connection.State != System.Data.ConnectionState.Open)
+            await connection.OpenAsync().ConfigureAwait(false);
         await ApplyAsync(connection, SqliteOptimizeLevel.InMemory).ConfigureAwait(false);
     }
 
@@ -140,7 +147,9 @@ public static class SqlitePerformanceOptimizer
     {
         // ITM-195 修复（三十轮）：补 null 守卫——同文件 Optimize 系列已 ITM-165 对齐，唯此漏。
         ArgumentNullException.ThrowIfNull(connection);
-        await connection.OpenAsync().ConfigureAwait(false);
+        // ITM-220 修复（三十二轮）：State 守卫（见 OptimizeAsync）
+        if (connection.State != System.Data.ConnectionState.Open)
+            await connection.OpenAsync().ConfigureAwait(false);
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT sqlite_version(), sqlite_source_id()";
         await using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);

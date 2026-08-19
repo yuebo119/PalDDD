@@ -234,12 +234,22 @@ public sealed class ShardedDataSourceManager : IAsyncDisposable
 public static class ShardedTableName
 {
     /// <summary>获取分片表名：outbox_messages → outbox_messages_3</summary>
+    /// <remarks>ITM-220 修复（三十二轮）：标识符校验——For/All 的返回值会直接拼入
+    /// SQL（如 Dapper 查询/迁移脚本），与同文件 DDL 入口 CreateShardedTableDdl 的
+    /// ValidateIdentifier 守卫对称，防 baseTable 注入。</remarks>
     public static string For(string baseTable, int shardId)
-        => $"{baseTable}_{shardId}";
+    {
+        ValidateIdentifier(baseTable);
+        return $"{baseTable}_{shardId}";
+    }
 
     /// <summary>获取所有分片表名</summary>
     public static string[] All(string baseTable, int shardCount)
-        => Enumerable.Range(0, shardCount).Select(i => For(baseTable, i)).ToArray();
+    {
+        // ITM-220 修复（三十二轮）：校验一次后直拼（For 已校验，循环内免重复校验）
+        ValidateIdentifier(baseTable);
+        return Enumerable.Range(0, shardCount).Select(i => $"{baseTable}_{i}").ToArray();
+    }
 
     /// <summary>
     /// 创建分片表（复制基础表结构）。

@@ -76,7 +76,8 @@ public sealed class PostgreSqlPipeline : IAsyncDisposable
         while (await reader.ReadAsync(ct).ConfigureAwait(false)) { }
         while (await reader.NextResultAsync(ct).ConfigureAwait(false))
         {
-            while (await reader.ReadAsync(ct)) { }
+            // ITM-218 修复（三十二轮）：内层 ReadAsync 补齐——ITM-166 修复不完整（:75 注释已声称对齐）
+            while (await reader.ReadAsync(ct).ConfigureAwait(false)) { }
         }
 
         // 三轮评审修正：Npgsql 的 RecordsAffected 是跨全部语句的聚合值——

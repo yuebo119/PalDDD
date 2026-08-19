@@ -19,10 +19,11 @@
 - **修复**：消除或隔离 `GetType().GetProperty` 动态访问；restore/publish 均传 `PublishAot=true`、`SelfContained=true`、RID；不得以 NoWarn 作为兼容证明。
 - **验证**：原生产物存在且不携带 CoreCLR runtime 布局；运行退出 0；AOT warning 0。
 
-### [x] ITM-210 · 给 EF/PalORM 租约终态写加入 fencing
+### [x] ITM-210 · 给 EF/PalORM 租约终态写加入 fencing（部分落地，见"未落地"注）
 - **范围**：EF Outbox MarkProcessed/MarkDead；PalORM Outbox/Inbox/Saga。
-- **修复**：租约获取原子推进单调 LeaseVersion/FencingToken；完成、失败、释放均匹配 token；PG PalORM Outbox 子查询加 `FOR UPDATE SKIP LOCKED`。
-- **验证**：双连接屏障并发；旧 worker 终态写影响 0 行，新 owner 状态不变；同批消息只被一个 worker 获租。
+- **已落地**：EF MarkProcessed/MarkDead 的 `ExecuteUpdate` 携带 owner 匹配守卫（`WHERE LockedBy IS NULL OR LockedBy == 原持有者`，`OutboxDbContext.cs:70-137`；非关系型 provider 回退条件加载同款守卫）；PG PalORM Outbox 租约子查询 `FOR UPDATE SKIP LOCKED`（`PalOrmOutboxStore.cs:68`）。
+- **未落地（后续项）**：单调 LeaseVersion/FencingToken 列与 token 匹配终态写——owner 匹配守卫已覆盖"旧 worker 终态写覆盖新 owner"路径，但同 owner 复用场景无 token 序防护；涉及 outbox/inbox/saga 表跨方言 DDL 变更，需专项轮处理。
+- **验证**：守卫与 SKIP LOCKED 代码位置实测核实；PG 集成路径由 PalORM Testcontainers 测试覆盖（需 Docker 环境）。
 
 ### [x] ITM-211 · 隔离 Projection 完成确认失败
 - **范围**：`ProjectionProcessor.ProcessAsync`。
@@ -181,6 +182,19 @@
 - PG/MySQL 双连接并发租约；完整 payload/metadata/audit/trace 往返。
 - ChildSaga/Interrupt/Dynamic 成功、失败、取消、补偿。
 - JSONL/CSV 超限与解析；Generator 增量缓存；Native AOT publish+run。
+
+## 第三十三轮 · 修复验证轮补充（2026-08-19）
+
+> 按用户指令执行"验证优先"纪律：修复前逐项复核问题是否仍存在（代码已被多 agent 并行修改），
+> 已不存在则跳过记录。完整证据见 `docs/review/verify-2026-08-19-r33.md`。
+
+- **复核跳过 4 项**：EF Outbox 租约终态守卫 / PalORM PG Outbox SKIP LOCKED / 方言探针安全门（均已被其他 agent 在 `c0d3ed2` 前修复，实测代码核实）；ITM-214 IdempotencyTests flaky（实测 5×161 全绿证伪——时间戳过滤 + "至少一个匹配"断言形态免疫并行污染，无需 [NotInParallel]）。
+- **新修复 3 项**：
+  1. **Saga.cs SagaManager XML doc 失实**（上轮审计语境 ITM-219）：原声明"需步骤自身配置 Timeout 才会被超时补偿"——实际所有 Store 的 LeaseActiveSagasAsync 只取 `Status=Active`，中断态（AwaitingHumanDecision）永不被 CheckTimeoutsAsync 扫描，超时兜底对中断态完全不可用。已改准确声明（行为级兜底属 ITM-235 HumanDecisionDeadline 方向，未动）。
+  2. **PostgreSqlReportHelper.cs:190 CS0419**：上轮 ITM-212 声明的 cref 引用 `EscapeCsvSpan` 双重载不明确——消歧义为 `EscapeCsvSpan(System.ReadOnlySpan{char})`。
+  3. **MessageRegistryGenerator.cs:241 CS0234**：上轮增量缓存修复用了 netstandard2.0 不存在的 `System.HashCode`——改 17/31 手写哈希（对齐 Enum/Identity 生成器）。
+- **机械轴**：build 0 error/0 warning；885 测试 14/16 项目全绿（含复核轮补充的 3 组行为回归测试；PalORM 45 失败 = ITM-208 fail-closed 无 Docker 预期行为；RabbitMQ 3 失败 = broker 不可达——均环境性零回归）；format 0 issue。
+- **复核更正（2026-08-19）**：本轮跳过项 #1 原表述"实测代码含 FencingToken 匹配"失实——实际为 owner 匹配守卫（`WHERE LockedBy IS NULL OR LockedBy == 原持有者`）；单调 LeaseVersion/FencingToken 未实现，已在 ITM-210 条目标注"未落地（后续项）"。详见 `verify-2026-08-19-r33.md` 第三节注与第四节。
 
 ## 完成定义
 

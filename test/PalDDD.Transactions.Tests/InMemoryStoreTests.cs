@@ -172,6 +172,17 @@ public sealed class InMemoryStoreTests
     }
 
     [Test]
+    public async Task InMemorySagaStateStore_CancelledToken_ThrowsBeforeWork()
+    {
+        // 三十三轮修复回归：4 个异步方法 ct 对齐——已取消令牌在同步完成路径也须响应取消
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var store = new InMemorySagaStateStore<SampleSaga>();
+        await Assert.That(async () => { await store.GetActiveSagasAsync(10, cts.Token); }).Throws<OperationCanceledException>();
+        await Assert.That(async () => { await store.SaveChangesAsync(new SampleSaga { SagaId = Guid.NewGuid() }, cts.Token); }).Throws<OperationCanceledException>();
+    }
+
+    [Test]
     public async Task InMemorySagaStateStore_GetById_ReturnsCorrectState(CancellationToken cancellationToken)
     {
         var store = new InMemorySagaStateStore<SampleSaga>();

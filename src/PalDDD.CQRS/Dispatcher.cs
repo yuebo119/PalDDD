@@ -121,7 +121,8 @@ public sealed class Dispatcher
         // ITM-223：移除运行时 null 检查——泛型 TResponse 的可空性由编译期 NRT 契约决定，
         // 运行时无法区分 T 与 T?（typeof(OrderDto?) == typeof(OrderDto)）。
         // IQuery<OrderDto?> 未找到返回 null 是合法契约；非空契约由调用方 NRT 保证。
-        var result = await ExecutePipelineAsync(cmd.GetType(), cmd, ct);
+        // ITM-218 修复（三十二轮）：库内核心分发路径补 ConfigureAwait(false)（G12 口径）
+        var result = await ExecutePipelineAsync(cmd.GetType(), cmd, ct).ConfigureAwait(false);
         return (TResponse)result!;
     }
 
@@ -131,7 +132,8 @@ public sealed class Dispatcher
         ArgumentNullException.ThrowIfNull(q);
 
         // ITM-223：同 SendAsync——IQuery<OrderDto?> 合法返回 null
-        var result = await ExecutePipelineAsync(q.GetType(), q, ct);
+        // ITM-218 修复（三十二轮）：补 ConfigureAwait(false)（见 SendAsync）
+        var result = await ExecutePipelineAsync(q.GetType(), q, ct).ConfigureAwait(false);
         return (TResponse)result!;
     }
 
@@ -149,7 +151,8 @@ public sealed class Dispatcher
 
         using var scope = _scopeFactory.CreateScope();
         var services = scope.ServiceProvider;
-        return await entry.Executor(services, request, ct);
+        // ITM-218 修复（三十二轮）：补 ConfigureAwait(false)（见 SendAsync）
+        return await entry.Executor(services, request, ct).ConfigureAwait(false);
     }
 
     /// <summary>执行完整的泛型管道链，供源码生成器或显式注册 API 绑定。</summary>
@@ -172,12 +175,14 @@ public sealed class Dispatcher
 
         var pipeline = new PipelineStateMachine();
         pipeline.Reset(matching, handler, request, ct);
-        return await pipeline.ExecuteNextAsync();
+        // ITM-218 修复（三十二轮）：补 ConfigureAwait(false)（见 SendAsync）
+        return await pipeline.ExecuteNextAsync().ConfigureAwait(false);
     }
 
     private static async ValueTask DiscardResultAsync(ValueTask<object?> vt)
     {
-        await vt;
+        // ITM-218 修复（三十二轮）：补 ConfigureAwait(false)（见 SendAsync）
+        await vt.ConfigureAwait(false);
     }
 
     private sealed record HandlerEntry(Type HandlerType, Type ResponseType, RequestExecutor Executor);

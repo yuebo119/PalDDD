@@ -184,7 +184,12 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
     /// <inheritdoc/>
     public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)
     {
+        // ITM-215 修复（三十二轮）：ct 对齐（同 GetPending/Lease 的 :45/:60——ITM-204 修复时漏本成员）
+        ct.ThrowIfCancellationRequested();
         ArgumentException.ThrowIfNullOrWhiteSpace(retriedBy);
+        // ITM-216 修复（三十二轮）：retriedBy 截断兜底——Error 列上限 2048（同款于
+        // OutboxDbContext.RequeueDeadAsync 的 2040 截断族），超长 retriedBy 使审计串超列
+        var owner = retriedBy.Length > 256 ? retriedBy[..256] : retriedBy;
         var now = _timeProvider.GetUtcNow();
         lock (_lock)
         {
@@ -196,7 +201,7 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
             // （运维工具）需确保 maxRetryCount > 消息当前 RetryCount 才能被拾取。
             msg.Status = OutboxStatus.Pending;
             msg.ProcessedAt = null;
-            msg.Error = $"requeued by {retriedBy} at {now:O}";
+            msg.Error = $"requeued by {owner} at {now:O}";
             msg.NextAttemptAt = nextAttemptAt;
             msg.LockedBy = null;
             msg.LockedUntil = null;

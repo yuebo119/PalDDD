@@ -74,7 +74,6 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         ArgumentNullException.ThrowIfNull(message);
 
         var originalOwner = message.LockedBy;
-        var translated = false;
         try
         {
             var affected = OutboxMessages
@@ -87,7 +86,6 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
                     .SetProperty(m => m.NextAttemptAt, (DateTimeOffset?)null)
                     .SetProperty(m => m.LockedBy, (string?)null)
                     .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null));
-            translated = true;
             if (affected > 0) return;
         }
         catch (InvalidOperationException)
@@ -95,7 +93,8 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
             // ExecuteUpdate 不支持的 provider（EF InMemory 等）——回退到条件加载路径
         }
 
-        if (!translated || true)
+        // 兜底路径：ExecuteUpdate 未命中（行不存在/守卫拒绝）或 provider 不支持——
+        // 条件加载带同款守卫（三十二轮修复复审：清理原 `!translated || true` 恒真条件）
         {
             var tracked = OutboxMessages
                 .Where(m => m.Id == message.Id
@@ -125,7 +124,6 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         var error = failureReason.Length > 2040 ? failureReason[..2040] : failureReason;
 
         var originalOwner = message.LockedBy;
-        var translated = false;
         try
         {
             var affected = OutboxMessages
@@ -138,7 +136,6 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
                     .SetProperty(m => m.NextAttemptAt, (DateTimeOffset?)null)
                     .SetProperty(m => m.LockedBy, (string?)null)
                     .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null));
-            translated = true;
             if (affected > 0) return;
         }
         catch (InvalidOperationException)
@@ -146,7 +143,7 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
             // 同 MarkProcessed——非关系型 provider 回退
         }
 
-        if (!translated || true)
+        // 兜底路径：同 MarkProcessed（清理原 `!translated || true` 恒真条件）
         {
             var tracked = OutboxMessages
                 .Where(m => m.Id == message.Id
@@ -211,8 +208,11 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     public async ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(retriedBy);
+        // ITM-216 修复（三十二轮）：retriedBy 截断兜底（截断族 2040）——Error 列上限 2048，
+        // 超长 retriedBy 使 audit 串超列，ExecuteUpdateAsync 抛截断异常（对齐 MarkDead/ReleaseForRetry）
+        var owner = retriedBy.Length > 256 ? retriedBy[..256] : retriedBy;
         var now = GetUtcNow();
-        var audit = $"requeued by {retriedBy} at {now:O}";
+        var audit = $"requeued by {owner} at {now:O}";
 
         return await OutboxMessages
             .Where(m => m.Id == messageId && m.Status == OutboxStatus.Dead)

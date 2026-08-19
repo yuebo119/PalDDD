@@ -217,7 +217,11 @@ public static class MySqlServiceCollectionExtensions
     /// 取出的连接会话已被重置，SET SESSION 设置随连接归池即丢，并不会被后续会话继承。
     /// 调用方（AddPalMySqlDataSource）已显式设 Reset Connections=false 使设置持久化到池内
     /// 物理连接；直接调用本方法且未关闭会话重置时，优化在下一次取连接时即失效。<br/>
-    /// 对于生产环境多连接场景，建议在 MySQL 服务端配置（my.cnf）中全局设置这些参数。
+    /// ⚠️ <b>池扩容缺口（ITM-211 声明·三十二轮）</b>：本方法仅优化启动时创建的<b>首个物理连接</b>——
+    /// MySQL 池默认 MinimumPoolSize=0，并发高峰按需新建的物理连接<b>不会</b>收到 SET SESSION，
+    /// 使用服务端默认（如 transaction_isolation=REPEATABLE-READ）——同池内 RC 与 RR 隔离级别
+    /// 混跑（间隙锁/死锁行为不一致）。<br/>
+    /// 对于生产环境多连接场景，<b>必须</b>在 MySQL 服务端配置（my.cnf）中全局设置这些参数。
     /// </summary>
     private static void ApplySessionOptimization(MySqlDataSource dataSource)
     {

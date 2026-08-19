@@ -171,7 +171,9 @@ public readonly record struct UpdateTime(DateTimeOffset Value)
 public readonly record struct RowVersion(int Value)
 {
     /// <summary>递增版本号 —— 返回新实例，不修改原实例</summary>
-    public RowVersion Next() => new(Value + 1);
+    /// <exception cref="OverflowException">Value == int.MaxValue 时——与 IdentityGenerator（ITM-099）的 checked 语义一致，
+    /// 溢出显式失败优于静默回绕（回绕产生"旧版本"乐观锁令牌，并发判定失真）。</exception>
+    public RowVersion Next() => new(checked(Value + 1));
     public static implicit operator int(RowVersion v) => v.Value;
     public override string ToString() => Value.ToString();
 }

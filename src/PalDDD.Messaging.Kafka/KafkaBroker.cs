@@ -31,6 +31,8 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
     // 优化（二十四轮 OP-2）：object → System.Threading.Lock——全仓最后一个 object 锁，
     // Lock 有 JIT 专用锁内联优化（与其余 8 处模式统一）
     private readonly Lock _consumersLock = new();
+    // ITM-217 修复（三十二轮）：DisposeAsync 幂等门（对照 KafkaSubscription._disposed）
+    private int _disposed;
 
     public KafkaBroker(
         ProducerConfig producerConfig,
@@ -209,8 +211,21 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             }
             finally
             {
-                consumer.Close();
-                consumer.Dispose();
+                // ITM-217 修复（三十二轮）：Close() 抛非 OCE 异常时不得跳过 Dispose——
+                // 原 finally 裸调两行，Close 失败即泄漏 consumer（连接/组状态）。
+                try
+                {
+                    consumer.Close();
+                }
+                catch (Exception closeEx) when (closeEx is not OperationCanceledException)
+                {
+                    _logger.Warning($"Kafka consumer Close failed during shutdown: {closeEx.Message} @ {_consumerConfig.GroupId}");
+                }
+                finally
+                {
+                    // Confluent.Kafka Dispose 幂等——与 KafkaSubscription 兜底 Dispose 双重释放安全
+                    consumer.Dispose();
+                }
             }
         }, cts.Token);
 
@@ -238,6 +253,11 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        // ITM-217 修复（三十二轮）：Broker 级幂等门——对照 KafkaSubscription 的 Interlocked
+        // _disposed 门；DI 容器与显式 using 双释放时第二次调用不再重复遍历/释放 producer
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
         IAsyncDisposable[] snapshot;
         lock (_consumersLock)
         {

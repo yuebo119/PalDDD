@@ -185,6 +185,14 @@ public static class PostgreSqlReportHelper
 
     /// <summary>使用 COPY TO STDOUT 导出 CSV（最快方式）</summary>
     /// <param name="tableOrQuery">表名或 SELECT 查询。⚠️ 直接插入 COPY 语句——必须为编译期常量或受信任来源，禁止传入用户输入（COPY 语法要求完整 SQL，无法参数化）。</param>
+    /// <remarks>
+    /// ⚠️ <b>CSV 公式注入无防护（ITM-212 声明·三十二轮）</b>：本方法走服务器端
+    /// <c>COPY (...) TO STDOUT</c> 原样转储，<b>不经过</b> <see cref="EscapeCsvSpan(System.ReadOnlySpan{char})"/> 的
+    /// OWASP 公式前缀防护（= + - @ \t，见 ITM-201）——服务器流式输出无法在传输中改写单元格。
+    /// 导出含操作者可控字段（outbox error / audit reason 等）时，输出在 Excel 打开可触发
+    /// 公式执行；此类场景<b>必须改用</b> <see cref="ExportCsvAsync"/>（客户端逐单元格转义）。
+    /// 仅导出受信任/系统字段（时间戳、计数、固定枚举）时可安全使用本方法。
+    /// </remarks>
     public static async Task<long> CopyToCsvAsync(
         NpgsqlDataSource dataSource,
         string tableOrQuery,

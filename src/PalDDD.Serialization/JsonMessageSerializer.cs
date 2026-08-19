@@ -111,7 +111,36 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         ArgumentNullException.ThrowIfNull(message);
         ArgumentNullException.ThrowIfNull(descriptor);
 
-        return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(message, descriptor.JsonTypeInfo);
+        // ITM-221 修复（三十二轮）：非泛型路径接入 ThreadStatic 池化（二十五轮 C1 仅覆盖
+        // 泛型路径）——KafkaBroker/RabbitMqBroker 的发布热路径恰走本重载，此前每次
+        // SerializeToUtf8Bytes 内部新建 Writer/Buffer 分配；非泛型 JsonTypeInfo 重载
+        // 与泛型同款池化路径，输出字节一致。
+        var bufferWriter = _tlsBufferWriter;
+        if (bufferWriter is null)
+        {
+            bufferWriter = new ArrayBufferWriter<byte>(256);
+            _tlsBufferWriter = bufferWriter;
+        }
+        else
+        {
+            bufferWriter.Clear();
+        }
+
+        var writer = _tlsWriter;
+        if (writer is null)
+        {
+            writer = new Utf8JsonWriter(bufferWriter);
+            _tlsWriter = writer;
+        }
+        else
+        {
+            writer.Reset(bufferWriter);
+        }
+
+        System.Text.Json.JsonSerializer.Serialize(writer, message, descriptor.JsonTypeInfo);
+        writer.Flush();
+
+        return bufferWriter.WrittenSpan.ToArray();
     }
 
     /// <inheritdoc />

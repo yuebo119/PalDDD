@@ -61,6 +61,14 @@ public sealed class ValueObjectPropertyTests
     }
 
     [Test]
+    public async Task RowVersion_Next_AtMaxValue_ThrowsOverflow()
+    {
+        // 三十三轮修复回归：checked 语义——回绕产生"旧版本"乐观锁令牌，并发判定静默失真
+        var max = new RowVersion(int.MaxValue);
+        await Assert.That(() => max.Next()).Throws<OverflowException>();
+    }
+
+    [Test]
     public void RowVersion_Equality_ByValue()
     {
         Prop.ForAll((int a, int b) =>

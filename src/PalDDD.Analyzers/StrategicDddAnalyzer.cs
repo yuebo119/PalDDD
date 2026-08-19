@@ -700,7 +700,17 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
         if (containingNamespace is null || containingNamespace.IsGlobalNamespace)
             return type.MetadataName;
 
-        return containingNamespace.ToDisplayString() + "." + type.MetadataName;
+        // ITM-220 修复（三十二轮）：嵌套类型拼 ContainingType 链（Ns.Outer+Inner）——
+        // MetadataName 仅返回最内层简名，原实现使嵌套 Inner 与顶层 Ns.Inner 元数据名碰撞
+        var name = type.MetadataName;
+        var containing = type.ContainingType;
+        while (containing is not null)
+        {
+            name = containing.MetadataName + "+" + name;
+            containing = containing.ContainingType;
+        }
+
+        return containingNamespace.ToDisplayString() + "." + name;
     }
 
     private static bool IsStableName(string? value)

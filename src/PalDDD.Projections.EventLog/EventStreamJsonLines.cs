@@ -44,7 +44,8 @@ public static class EventStreamJsonLines
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(output);
 
-        await foreach (var evt in events.WithCancellation(ct))
+        // ITM-218 修复（三十二轮）：导出迭代补 ConfigureAwait(false)——库代码续体不应回捕调用方上下文
+        await foreach (var evt in events.WithCancellation(ct).ConfigureAwait(false))
         {
             var line = SerializeEventLine(evt);
             await output.WriteAsync(line, ct).ConfigureAwait(false);

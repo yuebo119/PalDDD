@@ -224,7 +224,34 @@ public static class PalMessageCatalog
         string Name,
         int SchemaVersion,
         bool HasExplicitName,
-        LocationInfo Location);
+        LocationInfo Location)
+    {
+        // ITM-220 修复（三十二轮）：Location 不参与相等比较——record 默认全字段相等使
+        // 位置漂移（如上方插入空行）令增量管线缓存 miss；与 EnumGenerator.EnumGenInfo /
+        // IdentityGenerator.IdGenInfo 手写 Equals 排除 Location 的缓存策略对齐。
+        // Location 仅用于诊断输出，不影响生成物。
+        public bool Equals(MessageInfo? other) =>
+            other is not null
+            && TypeName == other.TypeName
+            && Name == other.Name
+            && SchemaVersion == other.SchemaVersion
+            && HasExplicitName == other.HasExplicitName;
+
+        public override int GetHashCode()
+        {
+            // netstandard2.0 无 System.HashCode——与 EnumGenerator.EnumGenInfo /
+            // IdentityGenerator.IdGenInfo 的 17/31 手写哈希策略对齐
+            unchecked
+            {
+                var hash = 17;
+                hash = hash * 31 + TypeName.GetHashCode();
+                hash = hash * 31 + Name.GetHashCode();
+                hash = hash * 31 + SchemaVersion;
+                hash = hash * 31 + HasExplicitName.GetHashCode();
+                return hash;
+            }
+        }
+    }
 
     /// <summary>
     /// 增量生成器友好的 Location 表示：value-equatable，可参与缓存键比较。

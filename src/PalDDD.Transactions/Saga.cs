@@ -126,8 +126,12 @@ public abstract class Saga<TState> where TState : SagaState, new()
     /// ⚠️ <b>中断后果（P3 声明·十七轮）</b>：<see cref="InterruptStep"/> 执行时若本属性为 null
     /// （或非 <see cref="DefaultSagaManager"/> 类型），中断条目无处注册——该 Saga 状态已被置为
     /// <see cref="SagaStatus.AwaitingHumanDecision"/> 且无人能消费后续人工决策，
-    /// 将<b>永久滞留</b>在中断态（无超时检测兜底：IsTimedOut 只扫描 StepStartedAt 超时，
-    /// 中断态步骤已记录开始时间，需步骤自身配置 Timeout 才会被超时补偿）。
+    /// 将<b>永久滞留</b>在中断态——超时兜底对中断态完全不可用：
+    /// SagaProcessor.CheckTimeoutsAsync 经 LeaseActiveSagasAsync 只取回
+    /// <see cref="SagaStatus.Active"/> 的 Saga，中断态不在扫描范围；
+    /// 即使 InterruptStep 配置了 <see cref="SagaStep.Timeout"/>，IsTimedOut
+    /// 也无人对该 Saga 调用，超时补偿不会触发（ITM-219 修正·三十三轮：
+    /// 原文档误称配置 Timeout 可获超时补偿——实际扫描器不取回中断态）。
     /// 使用 Interrupt 步骤前必须设置本属性。
     /// </summary>
     public ISagaManager? SagaManager { get; set; }
