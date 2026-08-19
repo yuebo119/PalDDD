@@ -2,11 +2,8 @@
 // TestEnvironment - 统一测试环境配置
 // ─────────────────────────────────────────────────────────────
 // 解析优先级：环境变量 > appsettings.test.local.json > appsettings.test.json > 默认值(Testcontainers)
-//
-// 配置文件查找路径：从 AppContext.BaseDirectory 向上回溯最多 6 层找 appsettings.test*.json。
-// CI 环境（GitHub Actions）不配 appsettings.test*.json -> 走 Testcontainers 默认。
-// 本地外部数据库必须显式设置 UseTestcontainers=false，并使用唯一 palddd_test_ 前缀。
-// 需要清理外部数据库时还必须设置 PALDDD_TEST_ALLOW_DESTRUCTIVE_CLEANUP=1。
+// 配置文件存在但读取或解析失败时 fail-closed，不回退默认值。
+// PG/MySQL Fixture 只允许 Testcontainers；外部数据库清理路径已禁用。
 
 using System.Data.Common;
 using System.Text.Json;
@@ -18,7 +15,7 @@ public static class TestEnvironment
 {
     private static readonly TestConfig _config = Load();
 
-    /// <summary>PG 连接串（环境变量 PALDDD_TEST_PG 覆盖）。</summary>
+    /// <summary>PG 连接串（环境变量 PALDDD_TEST_PG 覆盖）。仅供非 Fixture 测试配置读取。</summary>
     public static string PostgreSqlConnectionString =>
         Environment.GetEnvironmentVariable("PALDDD_TEST_PG") ?? _config.PostgreSql?.ConnectionString ?? DefaultPg;
 
@@ -29,11 +26,7 @@ public static class TestEnvironment
     /// <summary>PostgreSQL Testcontainers 镜像。</summary>
     public static string PostgreSqlImage => _config.PostgreSql?.Image ?? "postgres:18-alpine";
 
-    /// <summary>PostgreSQL 外部测试数据库名前缀。</summary>
-    public static string PostgreSqlIsolationDatabasePrefix =>
-        _config.PostgreSql?.IsolationDatabasePrefix ?? "palddd_test_";
-
-    /// <summary>MySQL 连接串（环境变量 PALDDD_TEST_MYSQL 覆盖）。</summary>
+    /// <summary>MySQL 连接串（环境变量 PALDDD_TEST_MYSQL 覆盖）。仅供非 Fixture 测试配置读取。</summary>
     public static string MySqlConnectionString =>
         Environment.GetEnvironmentVariable("PALDDD_TEST_MYSQL") ?? _config.MySql?.ConnectionString ?? DefaultMySql;
 
@@ -43,10 +36,6 @@ public static class TestEnvironment
 
     /// <summary>MySQL Testcontainers 镜像。</summary>
     public static string MySqlImage => _config.MySql?.Image ?? "mysql:8.4";
-
-    /// <summary>MySQL 外部测试数据库名前缀。</summary>
-    public static string MySqlIsolationDatabasePrefix =>
-        _config.MySql?.IsolationDatabasePrefix ?? "palddd_test_";
 
     /// <summary>Kafka BootstrapServers（环境变量 PALDDD_TEST_KAFKA 覆盖）。</summary>
     public static string KafkaBootstrapServers =>
@@ -69,29 +58,47 @@ public static class TestEnvironment
     public static string RabbitMqPassword =>
         Environment.GetEnvironmentVariable("PALDDD_TEST_RABBIT_PASS") ?? _config.RabbitMq?.Password ?? "guest";
 
-    /// <summary>外部数据库清理所需的显式环境变量确认。</summary>
-    public static bool ExternalDatabaseCleanupConfirmed =>
-        string.Equals(Environment.GetEnvironmentVariable("PALDDD_TEST_ALLOW_DESTRUCTIVE_CLEANUP"), "1", StringComparison.Ordinal);
-
     /// <summary>
-    /// 校验外部数据库是否为当前测试专用目标。数据库名必须以唯一测试前缀开头，且必须有显式清理确认。
+    /// 从连接串读取唯一数据库别名。Database、Initial Catalog、Catalog 只能出现一个，
+    /// 即使多个别名的值相同也拒绝，避免不同 provider 对别名解析不一致。
     /// </summary>
-    public static bool CanCleanExternalDatabase(string connectionString, string requiredPrefix, bool explicitConfirmation)
+    public static bool TryGetUniqueDatabaseName(string connectionString, out string? database)
     {
-        if (!explicitConfirmation || string.IsNullOrWhiteSpace(requiredPrefix)) return false;
-
+        database = null;
         try
         {
+            var aliases = GetDatabaseAliases(connectionString);
+            if (aliases.Count != 1) return false;
+
             var builder = new DbConnectionStringBuilder { ConnectionString = connectionString };
-            var database = GetDatabaseName(builder);
-            return database is not null
-                && database.StartsWith(requiredPrefix, StringComparison.Ordinal)
-                && database.Length > requiredPrefix.Length;
+            if (!builder.TryGetValue(aliases[0], out var value)
+                || value is not string name || string.IsNullOrWhiteSpace(name))
+                return false;
+
+            database = name.Trim();
+            return true;
         }
         catch (ArgumentException)
         {
             return false;
         }
+    }
+
+    /// <summary>校验生成数据库名是否属于本次进程，并且只有在创建成功后才允许补偿清理。</summary>
+    public static bool IsStrictGeneratedDatabaseName(string database, string prefix, bool databaseCreated)
+    {
+        if (!databaseCreated || string.IsNullOrWhiteSpace(prefix)
+            || !database.StartsWith(prefix, StringComparison.Ordinal)
+            || database.Length <= prefix.Length)
+            return false;
+
+        foreach (var character in database)
+        {
+            if ((character is < 'a' or > 'z') && (character is < '0' or > '9') && character != '_')
+                return false;
+        }
+
+        return true;
     }
 
     /// <summary>按显式配置、连接串覆盖和默认值决定是否启动 Testcontainers。</summary>
@@ -131,7 +138,6 @@ public static class TestEnvironment
 
     private static TestConfig Load()
     {
-        // 文件一旦存在，任何读取/解析错误都必须失败；只有文件不存在才允许默认容器模式。
         var path = FindPath("appsettings.test.local.json") ?? FindPath("appsettings.test.json");
         if (path is null) return new();
 
@@ -195,8 +201,7 @@ public static class TestEnvironment
         {
             ConnectionString = ReadString(db, "ConnectionString"),
             UseTestcontainers = ReadBoolean(db, "UseTestcontainers", true),
-            Image = ReadString(db, "Image"),
-            IsolationDatabasePrefix = ReadString(db, "IsolationDatabasePrefix")
+            Image = ReadString(db, "Image")
         };
     }
 
@@ -220,16 +225,23 @@ public static class TestEnvironment
             : value.GetInt32();
     }
 
-    private static string? GetDatabaseName(DbConnectionStringBuilder builder)
+    private static List<string> GetDatabaseAliases(string connectionString)
     {
-        foreach (var key in new[] { "Database", "Initial Catalog", "Catalog" })
+        var aliases = new List<string>();
+        foreach (var segment in connectionString.Split(';', StringSplitOptions.RemoveEmptyEntries))
         {
-            if (builder.TryGetValue(key, out var value) && value is string database && !string.IsNullOrWhiteSpace(database))
-                return database;
+            var separator = segment.IndexOf('=');
+            if (separator <= 0) continue;
+            var key = segment[..separator].Trim();
+            if (IsDatabaseAlias(key)) aliases.Add(key);
         }
-
-        return null;
+        return aliases;
     }
+
+    private static bool IsDatabaseAlias(string key) =>
+        key.Equals("Database", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("Initial Catalog", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("Catalog", StringComparison.OrdinalIgnoreCase);
 
     private static string? FindPath(string fileName)
     {
@@ -268,7 +280,6 @@ public static class TestEnvironment
         public string? ConnectionString { get; init; }
         public bool UseTestcontainers { get; init; } = true;
         public string? Image { get; init; }
-        public string? IsolationDatabasePrefix { get; init; }
     }
 
     private sealed class KafkaConfig

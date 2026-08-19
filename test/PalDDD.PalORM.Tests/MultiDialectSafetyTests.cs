@@ -8,36 +8,87 @@ namespace PalDDD.PalORM.Tests;
 public sealed class MultiDialectSafetyTests
 {
     [Test]
-    public async Task ExternalCleanupWithoutExplicitConfirmationIsRejected()
+    public async Task SingleDatabaseAliasIsAccepted()
     {
-        var allowed = TestEnvironment.CanCleanExternalDatabase(
+        var valid = TestEnvironment.TryGetUniqueDatabaseName(
             "Host=127.0.0.1;Database=palddd_test_run_123",
-            "palddd_test_",
-            explicitConfirmation: false);
+            out var database);
 
-        await Assert.That(allowed).IsFalse();
+        await Assert.That(valid).IsTrue();
+        await Assert.That(database).IsEqualTo("palddd_test_run_123");
     }
 
     [Test]
-    public async Task ExternalCleanupForNonTestDatabaseIsRejected()
+    public async Task DuplicateDatabaseAliasIsRejected()
     {
-        var allowed = TestEnvironment.CanCleanExternalDatabase(
-            "Server=127.0.0.1;Database=production",
-            "palddd_test_",
-            explicitConfirmation: true);
+        var valid = TestEnvironment.TryGetUniqueDatabaseName(
+            "Host=127.0.0.1;Database=palddd_test_one;Database=palddd_test_two",
+            out _);
 
-        await Assert.That(allowed).IsFalse();
+        await Assert.That(valid).IsFalse();
     }
 
     [Test]
-    public async Task UniqueTestDatabaseWithExplicitConfirmationIsAccepted()
+    public async Task ConflictingDatabaseAliasesAreRejected()
     {
-        var allowed = TestEnvironment.CanCleanExternalDatabase(
-            "Host=127.0.0.1;Port=5432;Database=palddd_test_run_20260819_001",
-            "palddd_test_",
-            explicitConfirmation: true);
+        var valid = TestEnvironment.TryGetUniqueDatabaseName(
+            "Server=127.0.0.1;Database=palddd_test_one;Initial Catalog=palddd_test_two",
+            out _);
 
-        await Assert.That(allowed).IsTrue();
+        await Assert.That(valid).IsFalse();
+    }
+
+    [Test]
+    public async Task CatalogAliasBypassIsRejected()
+    {
+        var valid = TestEnvironment.TryGetUniqueDatabaseName(
+            "Server=127.0.0.1;Database=palddd_test_one;Catalog=production",
+            out _);
+
+        await Assert.That(valid).IsFalse();
+    }
+
+    [Test]
+    public async Task ExternalFixtureModeIsRejected()
+    {
+        await Assert.That(() => MultiDialectFixture.EnsureTestcontainersRequired(false, "PostgreSQL"))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task GeneratedDatabaseCleanupRequiresCreatedStateAndStrictName()
+    {
+        await Assert.That(TestEnvironment.IsStrictGeneratedDatabaseName(
+            "palddd_probe_pg_a1b2c3", "palddd_probe_pg_", databaseCreated: true)).IsTrue();
+        await Assert.That(TestEnvironment.IsStrictGeneratedDatabaseName(
+            "palddd_probe_pg_a1b2c3", "palddd_probe_pg_", databaseCreated: false)).IsFalse();
+        await Assert.That(TestEnvironment.IsStrictGeneratedDatabaseName(
+            "production", "palddd_probe_pg_", databaseCreated: true)).IsFalse();
+    }
+
+    [Test]
+    public async Task PrimaryDisposeFailureStillDisposesSecondary()
+    {
+        var primary = new RecordingAsyncDisposable(new InvalidOperationException("primary"));
+        var secondary = new RecordingAsyncDisposable();
+
+        await Assert.That(async () => await AsyncResourceDisposer.DisposeAsync(primary, secondary))
+            .Throws<InvalidOperationException>();
+        await Assert.That(primary.DisposeCount).IsEqualTo(1);
+        await Assert.That(secondary.DisposeCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task DualDisposeFailuresAreAggregated()
+    {
+        var primary = new RecordingAsyncDisposable(new InvalidOperationException("primary"));
+        var secondary = new RecordingAsyncDisposable(new IOException("secondary"));
+
+        var exception = await Assert.That(async () => await AsyncResourceDisposer.DisposeAsync(primary, secondary))
+            .Throws<AggregateException>();
+        await Assert.That(exception!.InnerExceptions).Count().IsEqualTo(2);
+        await Assert.That(primary.DisposeCount).IsEqualTo(1);
+        await Assert.That(secondary.DisposeCount).IsEqualTo(1);
     }
 
     [Test]
@@ -52,5 +103,16 @@ public sealed class MultiDialectSafetyTests
     {
         await Assert.That(() => TestEnvironment.ValidateConfigurationJson("{}"))
             .Throws<InvalidOperationException>();
+    }
+
+    private sealed class RecordingAsyncDisposable(Exception? exception = null) : IAsyncDisposable
+    {
+        public int DisposeCount { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return exception is null ? ValueTask.CompletedTask : ValueTask.FromException(exception);
+        }
     }
 }
