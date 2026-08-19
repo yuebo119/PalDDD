@@ -69,13 +69,13 @@ public static class PalActivitySource
     public static Activity? StartInboxProcess(string consumerName, string messageId)
         => Start("Inbox Process",
             ("pal.inbox.consumer", consumerName));
-        // ITM-229：移除 pal.inbox.message_id——高基数（每消息唯一）且可能含业务 ID
+    // ITM-229：移除 pal.inbox.message_id——高基数（每消息唯一）且可能含业务 ID
 
     /// <summary>创建幂等执行 Activity</summary>
     public static Activity? StartIdempotencyExecute(string operationName, string key)
         => Start("Idempotency Execute",
             ("pal.idempotency.operation", operationName));
-        // ITM-229：移除 pal.idempotency.key——高基数且可能含敏感业务标识
+    // ITM-229：移除 pal.idempotency.key——高基数且可能含敏感业务标识
 
     /// <summary>创建投影重建 Activity</summary>
     public static Activity? StartProjectionRebuild(string projectionName, string sourceName)

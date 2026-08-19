@@ -3,7 +3,6 @@
 // ─────────────────────────────────────────────────────────────
 
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace PalDDD.Serialization.MemoryPack;
 

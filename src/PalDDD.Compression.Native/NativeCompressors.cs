@@ -139,8 +139,8 @@ internal sealed class ZStandardCompressor : ICompressor
 internal sealed class OpenZLCompressor : ICompressor
 {
     public CompressionAlgorithm // P2 定案（前向兼容声明）：本实现输出/输入为 Zstandard 字节格式，算法标识 OpenZL
-        // 是历史命名。若未来接入"真 OpenZL"实现，旧数据的算法标识与字节格式不匹配
-        // 将导致解压失败——持久化侧应同时记录格式版本。
+                                // 是历史命名。若未来接入"真 OpenZL"实现，旧数据的算法标识与字节格式不匹配
+                                // 将导致解压失败——持久化侧应同时记录格式版本。
         Algorithm => CompressionAlgorithm.OpenZL;
 
     public ReadOnlyMemory<byte> Compress(ReadOnlySpan<byte> data, CompressionLevel level = CompressionLevel.Balanced)

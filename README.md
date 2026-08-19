@@ -160,11 +160,11 @@ InMemory 实现覆盖全部抽象接口，单元测试和原型开发无需外�
 | **PalDDD.Dapper.PostgreSql** | 1.1.0 | Dapper PostgreSQL 增强：审计 / JSONB / 分片 / 软删除 |
 | **PalDDD.Dapper.MySql** | 1.1.0 | Dapper MySQL 增强 |
 | **PalDDD.Dapper.Sqlite** | 1.1.0 | Dapper SQLite 增强：TypeHandler / RowFactory / FTS5 |
-| **PalORM.Core** | 5.1.0 | PalORM 引擎核心：DataSession / Provider / RowFactory（PalDDD.PalORM 的底层依赖） |
-| **PalORM.SourceGen** | 5.1.0 | PalORM 源生成器：编译期生成 RowFactory / CommandFactory（零反射） |
-| **PalORM.PostgreSql** | 5.1.0 | PalORM PostgreSQL 方言 Provider：RETURNING / COPY |
-| **PalORM.MySql** | 5.1.0 | PalORM MySQL 方言 Provider：BulkCopy / 多值 INSERT |
-| **PalORM.Sqlite** | 5.1.0 | PalORM SQLite 方言 Provider：FTS5 / JSON1 |
+| **PalORM.Core** | 5.2.0 | PalORM 引擎核心：DataSession / Provider / RowFactory（PalDDD.PalORM 的底层依赖） |
+| **PalORM.SourceGen** | 5.2.0 | PalORM 源生成器：编译期生成 RowFactory / CommandFactory（零反射） |
+| **PalORM.PostgreSql** | 5.2.0 | PalORM PostgreSQL 方言 Provider：RETURNING / COPY |
+| **PalORM.MySql** | 5.2.0 | PalORM MySQL 方言 Provider：BulkCopy / 多值 INSERT |
+| **PalORM.Sqlite** | 5.2.0 | PalORM SQLite 方言 Provider：FTS5 / JSON1 |
 
 ---
 
@@ -531,14 +531,14 @@ await projectionRebuilder.RebuildAsync(ct);
 
 ### 13. 可观测性：内建 OpenTelemetry，零配置
 
-PalDDD 在所有关键路径内置了 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（27 个计数器）——不需要手写埋点。
+PalDDD 在所有关键路径内置了 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（20 个遥测 instrument）——不需要手写埋点。
 
 ```csharp
 // 框架自动埋点：
 // - Dispatcher.SendAsync → Activity "PalDDD.CQRS.Dispatch"
 // - OutboxProcessor → Counter "palddd.outbox.processed" / "palddd.outbox.failed"
 // - SagaProcessor → Activity "PalDDD.Saga.Execute" + "PalDDD.Saga.Compensate"
-// - IdempotencyProcessor → Counter "palddd.idempotency.hit" / "palddd.idempotency.miss"
+// - IdempotencyProcessor → Counter "palddd.idempotency.executed" / "palddd.idempotency.cached"
 
 // 你的 OpenTelemetry 配置只需引用 Activity Source：
 services.AddOpenTelemetry()
@@ -581,7 +581,7 @@ services.AddPalOutbox();  // MediatR 没有的能力
 | DomainEvent | 不可变 sealed record，静态 `EventName` 契约，`[GenerateMessage]` 源生成注册 |
 | ValueObject / SmartEnum | 强类型 ID（Ulid 推荐），FrozenDictionary O(1) 查找 |
 | ISpecification | ExpressionVisitor 参数替换组合 And/Or/Not，与 EF Core LINQ 完全兼容 |
-| 诊断 | 内建 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（27 个计数器） |
+| 诊断 | 内建 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（20 个遥测 instrument） |
 
 ### CQRS
 | 组件 | 实现策略 |
@@ -667,7 +667,7 @@ src/                         36 源项目 · Clean Architecture（Folder 与 Pal
 ├── Hosting/                 DependencyInjection · Hosting.AspNetCore
 └── Metapackages/            Base · Extension · Prompts（Prompts 非包，IsPackable=false）
 
-test/                        16 测试项目（TUnit）· 972 测试
+test/                        16 测试项目（TUnit）· 977 测试
 bench/                       BenchmarkDotNet 性能基准
 samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi · AotSample
 docs/                        架构 · 使用指南 · 教程 · ADR
@@ -742,7 +742,7 @@ MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Servi
 不支持 .NET 8/9/10（单目标 net11.0）。Saga 的 ChildSaga 和 DynamicStep 依赖 `MakeGenericType`，在 AOT 发布时不可用（标注了 `[RequiresDynamicCode]`）。不含内置的 EventStore 快照机制——需要快照策略的项目需要自行实现。
 
 **生产环境有谁在用？**
-Pal.DDD 当前版本 v1.1.0 未发布（Unreleased；仓库 tag 仅 v1.0.0-preview.1）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 972 用例。欢迎在非生产环境中试用并反馈。
+Pal.DDD 当前版本 v1.1.0 未发布（Unreleased；仓库 tag 仅 v1.0.0-preview.1）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 977 用例。欢迎在非生产环境中试用并反馈。
 
 ---
 

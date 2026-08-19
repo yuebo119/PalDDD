@@ -675,9 +675,9 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
                     foreach (var statement in accessor.Body.Statements)
                     {
                         if (statement is ReturnStatementSyntax
-                        {
-                            Expression: LiteralExpressionSyntax returnLiteral
-                        })
+                            {
+                                Expression: LiteralExpressionSyntax returnLiteral
+                            })
                         {
                             return (returnLiteral.Token.Value as string, returnLiteral.GetLocation());
                         }

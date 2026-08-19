@@ -2,7 +2,6 @@
 // 🔧 DI 注册 — AddPalSerialization 等
 // ─────────────────────────────────────────────────────────────
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace PalDDD.Serialization.Json;
 

@@ -1,5 +1,4 @@
 using Microsoft.Extensions.DependencyInjection;
-using PalDDD.Compression;
 
 namespace PalDDD.Compression.Tests;
 

@@ -3,10 +3,7 @@ using PalORM;
 using PalORM.Sqlite;
 using PalDDD.PalORM.Sqlite;
 using PalDDD.Idempotency;
-using PalDDD.Projections;
 using PalDDD.Transactions;
-using TUnit.Assertions;
-using TUnit.Assertions.Extensions;
 
 namespace PalDDD.PalORM.Tests;
 

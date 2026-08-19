@@ -94,7 +94,7 @@ public static class MultiDialectFixture
         if (!useTestcontainers)
         {
             throw new InvalidOperationException(
-                $"{provider} 多方言 Fixture 禁止连接或清理外部数据库；必须启用 Testcontainers。" );
+                $"{provider} 多方言 Fixture 禁止连接或清理外部数据库；必须启用 Testcontainers。");
         }
     }
 

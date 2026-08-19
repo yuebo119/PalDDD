@@ -124,11 +124,11 @@ DDD 项目分层（对照 conventions §4.2 解决方案分层）：
 
 | 包 ID | NuGet 版本 | 说明 |
 |-------|:--:|------|
-| `PalORM.Core` | 5.1.0 | PalORM 引擎核心 |
-| `PalORM.SourceGen` | 5.1.0 | PalORM 源生成器 |
-| `PalORM.PostgreSql` | 5.1.0 | PG 方言 Provider |
-| `PalORM.MySql` | 5.1.0 | MySQL 方言 Provider |
-| `PalORM.Sqlite` | 5.1.0 | SQLite 方言 Provider |
+| `PalORM.Core` | 5.2.0 | PalORM 引擎核心 |
+| `PalORM.SourceGen` | 5.2.0 | PalORM 源生成器 |
+| `PalORM.PostgreSql` | 5.2.0 | PG 方言 Provider |
+| `PalORM.MySql` | 5.2.0 | MySQL 方言 Provider |
+| `PalORM.Sqlite` | 5.2.0 | SQLite 方言 Provider |
 
 #### Infra-Messaging 层（非 AOT 适配器）
 

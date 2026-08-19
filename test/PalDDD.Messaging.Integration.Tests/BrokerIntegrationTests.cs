@@ -6,7 +6,6 @@ using PalDDD.Serialization;
 using PalDDD.Serialization.Json;
 using PalDDD.Testing;
 using RabbitMQ.Client;
-using System.Text.Json;
 using System.Text.Json.Serialization;
 using Testcontainers.Kafka;
 using Testcontainers.RabbitMq;

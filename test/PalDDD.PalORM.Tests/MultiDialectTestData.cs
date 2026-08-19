@@ -1,7 +1,5 @@
 using ByteAether.Ulid;
 using PalDDD.EventLog;
-using PalDDD.Idempotency;
-using PalDDD.Projections;
 using PalDDD.Transactions;
 
 namespace PalDDD.PalORM.Tests;

@@ -3,7 +3,6 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using PalDDD.Core.Repository;
 using PalDDD.EventLog;
 using PalDDD.Idempotency;
-using PalDDD.PalORM.MySql;
 using PalDDD.Projections;
 using PalDDD.Transactions;
 using PalORM;

@@ -160,11 +160,11 @@ InMemory implementations cover all abstract interfaces, so unit tests and protot
 | **PalDDD.Dapper.PostgreSql** | 1.1.0 | Dapper PostgreSQL enhancements: audit / JSONB / sharding / soft delete |
 | **PalDDD.Dapper.MySql** | 1.1.0 | Dapper MySQL enhancements |
 | **PalDDD.Dapper.Sqlite** | 1.1.0 | Dapper SQLite enhancements: TypeHandler / RowFactory / FTS5 |
-| **PalORM.Core** | 5.1.0 | PalORM engine core: DataSession / Provider / RowFactory (underlying dependency of PalDDD.PalORM) |
-| **PalORM.SourceGen** | 5.1.0 | PalORM source generator: compile-time RowFactory / CommandFactory generation (zero reflection) |
-| **PalORM.PostgreSql** | 5.1.0 | PalORM PostgreSQL dialect Provider: RETURNING / COPY |
-| **PalORM.MySql** | 5.1.0 | PalORM MySQL dialect Provider: BulkCopy / multi-value INSERT |
-| **PalORM.Sqlite** | 5.1.0 | PalORM SQLite dialect Provider: FTS5 / JSON1 |
+| **PalORM.Core** | 5.2.0 | PalORM engine core: DataSession / Provider / RowFactory (underlying dependency of PalDDD.PalORM) |
+| **PalORM.SourceGen** | 5.2.0 | PalORM source generator: compile-time RowFactory / CommandFactory generation (zero reflection) |
+| **PalORM.PostgreSql** | 5.2.0 | PalORM PostgreSQL dialect Provider: RETURNING / COPY |
+| **PalORM.MySql** | 5.2.0 | PalORM MySQL dialect Provider: BulkCopy / multi-value INSERT |
+| **PalORM.Sqlite** | 5.2.0 | PalORM SQLite dialect Provider: FTS5 / JSON1 |
 
 ---
 
@@ -531,7 +531,7 @@ await projectionRebuilder.RebuildAsync(ct);
 
 ### 13. Observability: Built-In OpenTelemetry, Zero Configuration
 
-PalDDD ships `PalActivitySource` (11 Start methods) + `PalMetrics` (27 counters) built into all critical paths — no manual instrumentation needed.
+PalDDD ships `PalActivitySource` (11 Start methods) + `PalMetrics` (20 telemetry instruments) built into all critical paths — no manual instrumentation needed.
 
 ```csharp
 // Framework auto-instrumentation:
@@ -581,7 +581,7 @@ services.AddPalOutbox();  // A capability MediatR lacks
 | DomainEvent | Immutable sealed record, static `EventName` contract, `[GenerateMessage]` source-generated registration |
 | ValueObject / SmartEnum | Strongly-typed IDs (Ulid recommended), FrozenDictionary O(1) lookup |
 | ISpecification | ExpressionVisitor parameter substitution composes And/Or/Not, fully compatible with EF Core LINQ |
-| Diagnostics | Built-in `PalActivitySource` (11 Start methods) + `PalMetrics` (27 counters) |
+| Diagnostics | Built-in `PalActivitySource` (11 Start methods) + `PalMetrics` (20 telemetry instruments) |
 
 ### CQRS
 | Component | Implementation Strategy |
@@ -667,7 +667,7 @@ src/                         36 source projects · Clean Architecture (folders m
 ├── Hosting/                 DependencyInjection · Hosting.AspNetCore
 └── Metapackages/            Base · Extension · Prompts (Prompts is not a package, IsPackable=false)
 
-test/                        16 test projects (TUnit) · 972 tests
+test/                        16 test projects (TUnit) · 977 tests
 bench/                       BenchmarkDotNet performance benchmarks
 samples/                     PalOrmSample (AOT verification) · ECommerce · MinimalApi · AotSample
 docs/                        Architecture · Usage guide · Tutorial · ADR
@@ -736,7 +736,7 @@ If you need Native AOT deployment (microservices, CLI tools, edge computing) →
 Does not support .NET 8/9/10 (single target net11.0). Saga's ChildSaga and DynamicStep rely on `MakeGenericType`, which is unavailable in AOT publishing (annotated with `[RequiresDynamicCode]`). No built-in EventStore snapshot mechanism — projects that need a snapshot strategy must implement it themselves.
 
 **Who is using it in production?**
-Pal.DDD is currently at version v1.1.0, which is unreleased (Unreleased; the only repository tag is v1.0.0-preview.1). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with test coverage of 972 cases. You are welcome to try it in non-production environments and provide feedback.
+Pal.DDD is currently at version v1.1.0, which is unreleased (Unreleased; the only repository tag is v1.0.0-preview.1). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with test coverage of 977 cases. You are welcome to try it in non-production environments and provide feedback.
 
 ---
 

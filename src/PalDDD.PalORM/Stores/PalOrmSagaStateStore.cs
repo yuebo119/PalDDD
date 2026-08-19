@@ -2,7 +2,6 @@ using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
-using ByteAether.Ulid;
 using PalORM;
 using PalDDD.Transactions;
 using PalUlid = ByteAether.Ulid.Ulid;

@@ -235,7 +235,7 @@ var message = new OutboxMessage
 Outbox 批处理还会发出 `PalActivitySource` span：
 
 ```csharp
-using PalDDD.Diagnostics;
+using PalDDD.Core.Diagnostics;
 
 builder.Services.AddOpenTelemetry()
     .WithTracing(tracing => tracing.AddSource(PalActivitySource.Name));

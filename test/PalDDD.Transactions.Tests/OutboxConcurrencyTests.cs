@@ -1,4 +1,3 @@
-using PalDDD.Transactions;
 using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions.Tests;

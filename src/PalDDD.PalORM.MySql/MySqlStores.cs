@@ -1,9 +1,6 @@
 using PalORM;
 using PalORM.MySql;
-using PalDDD.EventLog;
-using PalDDD.Idempotency;
 using PalDDD.PalORM.Stores;
-using PalDDD.Projections;
 using PalDDD.Transactions;
 
 namespace PalDDD.PalORM.MySql;

@@ -1,9 +1,6 @@
 using PalORM;
 using PalORM.PostgreSql;
-using PalDDD.EventLog;
-using PalDDD.Idempotency;
 using PalDDD.PalORM.Stores;
-using PalDDD.Projections;
 using PalDDD.Transactions;
 
 namespace PalDDD.PalORM.PostgreSql;
