@@ -64,21 +64,13 @@ public sealed class ProjectionProcessor<TMessage>
         try
         {
             await _handler.ProjectAsync(message, context, ct).ConfigureAwait(false);
-            // P2 修复（八轮评审）：副作用已发生后 checkpoint 标记尽力持久化，不被请求级取消
-            // （对齐下方 MarkFailedAsync 的 None——取消丢失完成标记会导致同一位置重放）。
-            await _checkpointStore.MarkCompletedAsync(checkpoint, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
-            return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // ITM-092 修复：MarkFailedAsync 本身失败不得掩盖主异常——内层捕获挂 Data 后仍以主异常优先。
-            // 验证轮返工：内层 catch 不加 OCE 过滤（同 InboxProcessor——None 令牌下 OCE 属异常形态）。
             try
             {
-                // ITM-167 修复：ex.Message 截断到 MaxFailureReasonLength 再入库——
-                // 长异常消息（含大 payload 的序列化错误等）超出 checkpoint.error 列上限
-                // 会让失败标记持久化本身失败，掩盖原始投影失败（对齐 InboxProcessor 十七轮
-                // 与 OutboxBatchProcessor 二十一轮姊妹修复）。
+                // ITM-167 修复：ex.Message 截断到 MaxFailureReasonLength 再入库
                 var failureReason = ex.Message.Length <= MaxFailureReasonLength
                     ? ex.Message
                     : ex.Message[..MaxFailureReasonLength];
@@ -90,5 +82,21 @@ public sealed class ProjectionProcessor<TMessage>
             }
             throw;
         }
+
+        // ITM-211 修复：handler 已成功——MarkCompletedAsync 失败不得进入 MarkFailedAsync
+        // （那会把"已成功投影"降级为"可重试失败"→同一位置重放副作用）。
+        // 镜像 ITM-191（IdempotencyProcessor）/ ITM-180（InboxProcessor）的管线孪生修复。
+        try
+        {
+            await _checkpointStore.MarkCompletedAsync(checkpoint, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception markEx) when (markEx is not OperationCanceledException)
+        {
+            // 副作用已发生，按 at-least-once 语义返回成功；区分性事件供运维介入。
+            System.Diagnostics.Activity.Current?.AddEvent(new(
+                "projection.completed-pending-confirmation",
+                tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = markEx.Message }));
+        }
+        return true;
     }
 }

@@ -1,5 +1,6 @@
 using PalDDD.Core.Diagnostics;
 using System.Collections.Frozen;
+using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions;
 
@@ -272,6 +273,26 @@ public abstract class Saga<TState> where TState : SagaState, new()
     // Normal 步骤执行（标准重试 + 补偿）
     // ═══════════════════════════════════════════════════════════════
 
+    // ─────────────────────────────────────────────────────────────
+    // ITM-212：Observer best-effort 安全调用——Sink 异常不影响业务结果
+    // ─────────────────────────────────────────────────────────────
+
+    private static async ValueTask SafeObserveCompletedAsync(
+        SagaExecutionObserver? observer, PalUlid sagaId, string stepKey, TimeSpan elapsed, CancellationToken ct)
+    {
+        if (observer is null) return;
+        try
+        {
+            await observer.OnStepCompleted(sagaId, stepKey, elapsed, ct).ConfigureAwait(false);
+        }
+        catch (Exception obsEx) when (obsEx is not OperationCanceledException)
+        {
+            System.Diagnostics.Activity.Current?.AddEvent(new(
+                "saga.observer.step-completed-failed",
+                tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = obsEx.Message, ["step"] = stepKey }));
+        }
+    }
+
     private async ValueTask<TState> ExecuteNormalStepAsync(
         TState current, string stepKey, SagaStep step, object @event,
         bool wasCompleted, DateTimeOffset startedAt,
@@ -296,8 +317,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 RecordExecutedStep(current, result, stepKey, startedAt);
 
-                if (observer is not null)
-                    await observer.OnStepCompleted(current.SagaId, stepKey, sw.Elapsed, ct).ConfigureAwait(false);
+                // ITM-212：Observer best-effort——Sink 异常不重放业务步骤
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct);
 
                 return result;
             }
@@ -386,8 +407,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 RecordExecutedStep(current, current, stepKey, startedAt);
 
-                if (observer is not null)
-                    await observer.OnStepCompleted(current.SagaId, stepKey, sw.Elapsed, ct).ConfigureAwait(false);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct);
 
                 return current;
             }
@@ -486,8 +506,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 RecordExecutedStep(current, current, stepKey, startedAt);
 
-                if (observer is not null)
-                    await observer.OnStepCompleted(current.SagaId, stepKey, sw.Elapsed, ct).ConfigureAwait(false);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct);
 
                 return current;
             }
