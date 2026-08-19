@@ -32,9 +32,23 @@ public sealed record IdempotencyPolicy
 
     // ITM-118 声明（Retention >= ProcessingTimeout 倒挂校验降级为注释声明）：
     // 跨字段不变式未在属性 setter 强制——init 赋值顺序不定（任一 setter 先执行时另一
-    // 字段仍是默认值，无法可靠比较）；且现有测试刻意构造倒挂策略验证过期语义
-    //（IdempotencyEfCoreTests.GetAsync_DoesNotMutateStoreWhenRecordIsExpired 与
-    // PalOrmIdempotencyStoreTests 同名用例：ProcessingTimeout 长于 Retention），
-    // 测试文件不在本轮改动范围。语义约定：Retention 应 >= ProcessingTimeout，否则
-    // Processing 记录可能在处理超时前过期清除、去重窗口失效——调用方自行保证。
+    // 字段仍是默认值，无法可靠比较）。
+    //
+    // ITM-216 修复（三十二轮）：提供 Validate() 供生产入口调用——倒挂策略在旧处理仍持
+    // 租约时允许重入（ExpiresAt < LockedUntil），导致 handler 双执行。Store 层直接测试
+    // 倒挂语义的用例不走 Processor，不受影响。
+
+    /// <summary>
+    /// 校验跨字段不变式：<see cref="Retention"/> 必须大于等于 <see cref="ProcessingTimeout"/>。
+    /// 倒挂策略使记录在处理租约仍有效时过期（ExpiresAt &lt; LockedUntil），去重窗口失效。
+    /// </summary>
+    /// <exception cref="ArgumentException">Retention 小于 ProcessingTimeout。</exception>
+    public void Validate()
+    {
+        if (Retention < ProcessingTimeout)
+            throw new ArgumentException(
+                $"IdempotencyPolicy Retention ({Retention}) must be >= ProcessingTimeout ({ProcessingTimeout}). " +
+                "Retention < ProcessingTimeout allows duplicate execution while the original lease is still active (ITM-216).",
+                nameof(Retention));
+    }
 }

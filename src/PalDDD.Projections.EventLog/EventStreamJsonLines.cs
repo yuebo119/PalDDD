@@ -64,6 +64,9 @@ public static class EventStreamJsonLines
         return ImportAsyncCore(input, ct);
     }
 
+    /// <summary>单行最大字符数——ITM-218 修复：无上限 ReadLineAsync 可被超长无换行输入耗尽内存。</summary>
+    public const int MaxLineChars = 16 * 1024 * 1024; // 16MB/行（Base64 payload 后合法事件已宽裕）
+
     private static async IAsyncEnumerable<EventData> ImportAsyncCore(
         Stream input,
         [EnumeratorCancellation] CancellationToken ct)
@@ -77,6 +80,11 @@ public static class EventStreamJsonLines
             if (string.IsNullOrWhiteSpace(line))
                 continue;
 
+            // ITM-218 修复：超长行在上抛带行号的受控异常——不让恶意输入以 OOM 崩溃进程
+            if (line.Length > MaxLineChars)
+                throw new EventReplayException(
+                    $"Event import failed at line {lineNumber}: line exceeds {MaxLineChars} character limit.");
+
             EventData? evt;
             try
             {
@@ -84,9 +92,6 @@ public static class EventStreamJsonLines
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // P3 修复（十七轮）：坏行异常（JsonException / Ulid 格式错等）原样上抛无行号，
-                // 大文件排障需逐行二分定位——转 EventReplayException 带行号与原始异常
-                // （对齐 EventLogReplaySource 反序列化失败转 EventReplayException 的模式）
                 throw new EventReplayException(
                     $"Event import failed at line {lineNumber}: line is not a valid exported event record.", ex);
             }

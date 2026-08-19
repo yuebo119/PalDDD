@@ -35,6 +35,12 @@ namespace PalDDD.Core;
 /// <b>与 IPalValidator 的区别：</b><br/>
 /// — IPalValidator 返回 <see cref="PalValidationResult"/>（含多个错误描述），用于输入验证<br/>
 /// — ISpecification 返回 <c>bool</c>，用于业务规则判断和查询过滤
+/// <para>
+/// ⚠️ <b>NativeAOT 注意（ITM-225）</b>：<see cref="IsSatisfiedBy"/> 的内存求值路径
+/// 内部调用 <c>Expression.Compile()</c>，在 NativeAOT 环境下不受支持。
+/// AOT 应用请使用 <see cref="ToExpression"/> 将规约传给查询提供者（EF Core / Dapper），
+/// 该翻译路径全程零编译、零动态代码。
+/// </para>
 /// </remarks>
 [SuppressMessage("Naming", "CA1716:Identifiers should not match keywords", Justification = "And/Or/Not 是 DDD Specification 模式的标准命名，VB.NET 兼容性非本项目关注。")]
 public interface ISpecification<T>

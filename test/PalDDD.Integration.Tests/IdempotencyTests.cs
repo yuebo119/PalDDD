@@ -28,7 +28,8 @@ public sealed class IdempotencyTests
             string.Equals(a.GetTagItem("pal.idempotency.result") as string, "executed", StringComparison.Ordinal));
         await Assert.That(execution.Status).IsEqualTo(IdempotencyExecutionStatus.Executed);
         await Assert.That(activity.GetTagItem("pal.idempotency.operation")).IsEqualTo("CreateOrder");
-        await Assert.That(activity.GetTagItem("pal.idempotency.key")).IsEqualTo("cmd-1");
+        // ITM-229: pal.idempotency.key removed (high cardinality) — assert operation instead
+        await Assert.That(activity.GetTagItem("pal.idempotency.operation")).IsEqualTo("CreateOrder");
         await Assert.That(activity.GetTagItem("pal.idempotency.result")).IsEqualTo("executed");
     }
 
@@ -60,7 +61,8 @@ public sealed class IdempotencyTests
         var activity = matches[0];
         await Assert.That(execution.Status).IsEqualTo(IdempotencyExecutionStatus.Cached);
         await Assert.That(activity.GetTagItem("pal.idempotency.operation")).IsEqualTo("CreateOrder");
-        await Assert.That(activity.GetTagItem("pal.idempotency.key")).IsEqualTo("cmd-1");
+        // ITM-229: pal.idempotency.key removed (high cardinality) — assert operation instead
+        await Assert.That(activity.GetTagItem("pal.idempotency.operation")).IsEqualTo("CreateOrder");
     }
 
     [Test]
@@ -121,7 +123,8 @@ public sealed class IdempotencyTests
             string.Equals(a.GetTagItem("pal.idempotency.result") as string, "skipped", StringComparison.Ordinal));
         await Assert.That(execution.Status).IsEqualTo(IdempotencyExecutionStatus.Skipped);
         await Assert.That(activity.GetTagItem("pal.idempotency.operation")).IsEqualTo("CreateOrder");
-        await Assert.That(activity.GetTagItem("pal.idempotency.key")).IsEqualTo("cmd-1");
+        // ITM-229: pal.idempotency.key removed (high cardinality) — assert operation instead
+        await Assert.That(activity.GetTagItem("pal.idempotency.operation")).IsEqualTo("CreateOrder");
         await Assert.That(activity.GetTagItem("pal.idempotency.result")).IsEqualTo("skipped");
     }
 

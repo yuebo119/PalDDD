@@ -115,6 +115,21 @@ public static class ServiceRegistration
         where TCommand : CQRS.IRequest<TResponse>
         where THandler : class, CQRS.ICommandHandler<TCommand, TResponse>
     {
+        // ITM-220 修复（三十二轮）：同一命令的不同 Handler 在注册期快速失败——
+        // 原实现静默追加 Marker，Dispatcher 后注册者覆盖先注册者（配置错误无诊断）。
+        foreach (var descriptor in services)
+        {
+            if (descriptor.ServiceType == typeof(HandlerMarker)
+                && descriptor.ImplementationInstance is HandlerMarker existing
+                && existing.RequestType == typeof(TCommand))
+            {
+                if (existing.HandlerType != typeof(THandler))
+                    throw new InvalidOperationException(
+                        $"Duplicate command handler for {typeof(TCommand).Name}: {existing.HandlerType.Name} and {typeof(THandler).Name}. Commands must have exactly one handler.");
+                return services; // 同一 Handler 重复注册——幂等跳过
+            }
+        }
+
         services.TryAddScoped<THandler>();
         services.TryAddScoped<CQRS.ICommandHandler<TCommand, TResponse>, THandler>();
         // 注册标记：typeof(TCommand) 和 typeof(THandler) 均为编译时常量
@@ -142,6 +157,20 @@ public static class ServiceRegistration
         where TQuery : CQRS.IQuery<TResponse>
         where THandler : class, CQRS.IQueryHandler<TQuery, TResponse>
     {
+        // ITM-220 修复（三十二轮）：同命令——查询的不同 Handler 也注册期快速失败
+        foreach (var descriptor in services)
+        {
+            if (descriptor.ServiceType == typeof(HandlerMarker)
+                && descriptor.ImplementationInstance is HandlerMarker existing
+                && existing.RequestType == typeof(TQuery))
+            {
+                if (existing.HandlerType != typeof(THandler))
+                    throw new InvalidOperationException(
+                        $"Duplicate query handler for {typeof(TQuery).Name}: {existing.HandlerType.Name} and {typeof(THandler).Name}. Queries must have exactly one handler.");
+                return services; // 同一 Handler 重复注册——幂等跳过
+            }
+        }
+
         services.TryAddScoped<THandler>();
         services.TryAddScoped<CQRS.IQueryHandler<TQuery, TResponse>, THandler>();
         services.AddSingleton(new HandlerMarker(

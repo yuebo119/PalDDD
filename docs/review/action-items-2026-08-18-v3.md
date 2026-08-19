@@ -6,11 +6,11 @@
 
 ## P0
 
-### [ ] ITM-208 · 阻止测试与方言探针误删共享数据库
+### [x] ITM-208 · 阻止测试与方言探针误删共享数据库
 - **范围**：`.ai/scripts/dialect-probe.sh`、`test/PalDDD.PalORM.Tests/MultiDialectFixture.cs`、`test/PalDDD.Testing/TestEnvironment.cs`
 - **问题**：固定库名/表名直接 DROP，缺少测试环境所有权证明和显式破坏确认。
-- **修复**：随机会话库或 schema；写入 ownership marker；执行 DROP 前校验专用前缀、marker、环境类型与显式 `--allow-destructive-probe`；配置文件存在但解析错误时 fail-closed。
-- **验证**：错误目标、无 marker、无确认参数三种情况必须 exit non-zero 且不执行 SQL；唯一测试目标可完整创建、运行、清理。
+- **修复**：探针要求 `--allow-destructive-probe`，每次生成唯一 `palddd_probe_*` 数据库，创建并回读 ownership marker 后才允许清理；管理库和目标库均做专用目标校验。Fixture 默认按 `UseTestcontainers` 启动隔离 PG/MySQL 容器；外部库清理要求 `palddd_test_` 数据库名前缀与 `PALDDD_TEST_ALLOW_DESTRUCTIVE_CLEANUP=1` 双门。配置文件存在但 JSON/IO/权限错误时 fail-closed。
+- **验证**：`itm-208-safety-test.sh` 以假命令验证无授权、非测试目标和损坏配置均 exit non-zero 且不执行探针；`MultiDialectSafetyTests` 验证无授权、非测试目标、损坏配置和合法唯一测试目标纯逻辑通过；未执行真实 DROP。
 
 ## P1 生产与发布
 

@@ -123,6 +123,8 @@ public static class PostgreSqlReportHelper
         {
             reader.GetValues(values);
 
+            // ITM-215 修复：JSONL 每行一个根对象——同一 writer 连续 WriteStartObject 第二次必抛
+            // InvalidOperationException。Flush + 写换行 + Reset 允许下一行作为新根对象。
             jsonWriter.WriteStartObject();
             for (int i = 0; i < columns.Length; i++)
             {
@@ -133,9 +135,10 @@ public static class PostgreSqlReportHelper
                 WriteJsonValue(jsonWriter, val);
             }
             jsonWriter.WriteEndObject();
-
-            if (++rowCount % 100_000 == 0)
-                await jsonWriter.FlushAsync(ct).ConfigureAwait(false);
+            jsonWriter.Flush();
+            await stream.WriteAsync("\n"u8.ToArray(), ct).ConfigureAwait(false);
+            jsonWriter.Reset();
+            rowCount++;
         }
 
         await jsonWriter.FlushAsync(ct).ConfigureAwait(false);
@@ -272,10 +275,15 @@ public static class PostgreSqlReportHelper
         // ITM-201 修复（三十一轮）：CSV 公式注入防护（OWASP CSV Injection）——以
         // = + - @ \t 开头的单元格在 Excel 打开时会被当作公式执行；前置单引号
         // 使 Excel 按文本解释。reason/actor_id 等操作者输入字段经报表导出可达此路径。
+        // ITM-215 修复（三十二轮）：公式前缀的单引号必须放在 CSV 双引号内部——
+        // 原实现放在双引号外部会破坏列边界（'=1,=HYPERLINK 被解析为两列）。
         if (!value.IsEmpty && IsCsvFormulaPrefix(value[0]))
-            return "'" + (value.ContainsAny(s_csvSpecial)
-                ? $"\"{value.ToString().Replace("\"", "\"\"")}\""
-                : value.ToString());
+        {
+            var text = value.ToString();
+            return value.ContainsAny(s_csvSpecial)
+                ? "\"'" + text.Replace("\"", "\"\"") + "\""
+                : "'" + text;
+        }
 
         if (value.ContainsAny(s_csvSpecial))
             return $"\"{value.ToString().Replace("\"", "\"\"")}\"";

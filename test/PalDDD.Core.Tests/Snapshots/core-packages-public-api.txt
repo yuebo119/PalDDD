@@ -505,6 +505,7 @@ class PalDDD.Idempotency.IdempotencyPolicy
   method System.Boolean Equals(System.Object obj)
   method System.Int32 GetHashCode()
   method System.String ToString()
+  method System.Void Validate()
 class PalDDD.Idempotency.IdempotencyProcessor
   ctor(PalDDD.Idempotency.IIdempotencyStore store, System.TimeProvider timeProvider)
   method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyExecution<TResult>> ExecuteAsync(System.String operationName, System.String key, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<TResult>> handler, System.Func<TResult, System.ReadOnlyMemory<System.Byte>> serializeResult, System.Func<System.ReadOnlyMemory<System.Byte>, TResult> deserializeResult, PalDDD.Idempotency.IdempotencyPolicy policy, System.Threading.CancellationToken cancellationToken)

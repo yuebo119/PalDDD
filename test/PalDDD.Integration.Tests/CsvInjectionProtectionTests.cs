@@ -35,9 +35,15 @@ public sealed class CsvInjectionProtectionTests
     [Test]
     public async Task EscapeCsv_FormulaWithComma_BothNeutralizedAndQuoted()
     {
-        // 公式前缀 + 逗号共存：前置单引号 + 引号包裹同时生效
+        // ITM-215 修复（三十二轮）：公式前缀 + 逗号共存——单引号必须在 CSV 双引号内部
+        // 原实现 '"..."' 中单引号在双引号外，CSV 解析器按逗号拆成两列（第二列仍以 = 开头）
         var escaped = PostgreSqlReportHelper.EscapeCsvSpan("=1+1,x".AsSpan());
-        await Assert.That(escaped[0]).IsEqualTo('\'');
-        await Assert.That(escaped).Contains("\"=1+1,x\"");
+        // 修复后："'=1+1,x"——双引号开头，单引号在双引号内作为字段值前缀
+        await Assert.That(escaped[0]).IsEqualTo('"');
+        await Assert.That(escaped).IsEqualTo("\"'=1+1,x\"");
+        // 标准 CSV 解析验证：按逗号拆分后必须是单列（值以 ' 开头，公式被中和）
+        var inner = escaped.Trim('"');
+        await Assert.That(inner[0]).IsEqualTo('\'');
+        await Assert.That(inner).Contains(",");
     }
 }

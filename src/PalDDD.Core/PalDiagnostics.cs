@@ -68,14 +68,14 @@ public static class PalActivitySource
     /// <summary>创建收件箱幂等消费 Activity</summary>
     public static Activity? StartInboxProcess(string consumerName, string messageId)
         => Start("Inbox Process",
-            ("pal.inbox.consumer", consumerName),
-            ("pal.inbox.message_id", messageId));
+            ("pal.inbox.consumer", consumerName));
+        // ITM-229：移除 pal.inbox.message_id——高基数（每消息唯一）且可能含业务 ID
 
     /// <summary>创建幂等执行 Activity</summary>
     public static Activity? StartIdempotencyExecute(string operationName, string key)
         => Start("Idempotency Execute",
-            ("pal.idempotency.operation", operationName),
-            ("pal.idempotency.key", key));
+            ("pal.idempotency.operation", operationName));
+        // ITM-229：移除 pal.idempotency.key——高基数且可能含敏感业务标识
 
     /// <summary>创建投影重建 Activity</summary>
     public static Activity? StartProjectionRebuild(string projectionName, string sourceName)
@@ -126,25 +126,14 @@ public static class PalActivitySource
 // --- Metrics ---
 
 /// <summary>PalDDD 指标 — 标准 OpenTelemetry 兼容</summary>
+/// <remarks>
+/// ITM-229：移除 7 个无记录路径的死指标（CommandTotal/CommandDuration/EventsPublished/
+/// EventsConsumed/OutboxPending/SagaActive/BehaviorDuration）——声明但框架零调用，
+/// 误导用户认为会产出数据。需要这些指标时在调用方自行 Meter.CreateCounter 并 Add。
+/// </remarks>
 public static class PalMetrics
 {
     private static readonly Meter Meter = new(PalActivitySource.Name, PalActivitySource.Version);
-
-    /// <summary>命令执行总数（按命令名和结果分类）</summary>
-    public static readonly Counter<long> CommandTotal = Meter.CreateCounter<long>(
-        "paldd.commands.total", description: "命令执行总数");
-
-    /// <summary>命令执行耗时（毫秒）</summary>
-    public static readonly Histogram<double> CommandDuration = Meter.CreateHistogram<double>(
-        "paldd.commands.duration_ms", "ms", "命令执行耗时");
-
-    /// <summary>领域事件发布总数</summary>
-    public static readonly Counter<long> EventsPublished = Meter.CreateCounter<long>(
-        "paldd.events.published", description: "领域事件发布总数");
-
-    /// <summary>领域事件消费总数</summary>
-    public static readonly Counter<long> EventsConsumed = Meter.CreateCounter<long>(
-        "paldd.events.consumed", description: "领域事件消费总数");
 
     /// <summary>领域事件处理器成功调用总数</summary>
     public static readonly Counter<long> EventHandlersHandled = Meter.CreateCounter<long>(
@@ -161,10 +150,6 @@ public static class PalMetrics
     /// <summary>事件日志读取事件数</summary>
     public static readonly Counter<long> EventLogRead = Meter.CreateCounter<long>(
         "paldd.eventlog.read", description: "事件日志读取事件数");
-
-    /// <summary>发件箱待处理消息数</summary>
-    public static readonly UpDownCounter<long> OutboxPending = Meter.CreateUpDownCounter<long>(
-        "paldd.outbox.pending", description: "发件箱待处理消息数");
 
     /// <summary>发件箱处理成功数</summary>
     public static readonly Counter<long> OutboxProcessed = Meter.CreateCounter<long>(
@@ -218,10 +203,6 @@ public static class PalMetrics
     public static readonly Counter<long> ReplayFailed = Meter.CreateCounter<long>(
         "paldd.replay.failed", description: "事件回放失败数");
 
-    /// <summary>活跃 Saga 数量</summary>
-    public static readonly UpDownCounter<long> SagaActive = Meter.CreateUpDownCounter<long>(
-        "paldd.saga.active", description: "活跃 Saga 数量");
-
     /// <summary>Saga 完成数</summary>
     public static readonly Counter<long> SagaCompleted = Meter.CreateCounter<long>(
         "paldd.saga.completed", description: "Saga 完成总数");
@@ -233,8 +214,4 @@ public static class PalMetrics
     /// <summary>Saga 补偿失败数</summary>
     public static readonly Counter<long> SagaCompensationFailed = Meter.CreateCounter<long>(
         "paldd.saga.compensation_failed", description: "Saga 补偿失败总数");
-
-    /// <summary>管道行为执行耗时（按行为名分类）</summary>
-    public static readonly Histogram<double> BehaviorDuration = Meter.CreateHistogram<double>(
-        "paldd.pipeline.behavior_duration_ms", "ms", "管道行为执行耗时");
 }

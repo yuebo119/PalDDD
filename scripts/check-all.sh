@@ -8,10 +8,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 echo "═══════ 1/3 IDE 风格 ═══════"
-# ITM-172 修复：grep -c 零匹配返回 1，set -euo pipefail 下会中止脚本——
-# 计数与输出拆两步，grep 用 || true 兜底
-IDE_COUNT=$(dotnet format style --verify-no-changes PalDDD.slnx 2>&1 | grep -c "error\|warning" || true)
+# ITM-233 修复：dotnet format 退出码必须传播——此前 grep -c || true 把 format 失败吞掉
+FORMAT_OUTPUT=$(dotnet format style --verify-no-changes PalDDD.slnx 2>&1)
+FORMAT_EXIT=$?
+IDE_COUNT=$(printf '%s\n' "$FORMAT_OUTPUT" | grep -c "error\|warning" || true)
 echo "  IDE 建议: $IDE_COUNT 项"
+if [ "$FORMAT_EXIT" -ne 0 ]; then
+    echo "  ❌ dotnet format 退出码 $FORMAT_EXIT——存在格式违规"
+    exit 1
+fi
 
 echo "═══════ 2/3 CA 分析 ═══════"
 dotnet build PalDDD.slnx -c Debug --nologo 2>&1 | tail -3

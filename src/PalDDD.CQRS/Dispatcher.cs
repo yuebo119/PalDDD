@@ -118,10 +118,11 @@ public sealed class Dispatcher
     {
         ArgumentNullException.ThrowIfNull(cmd);
 
+        // ITM-223：移除运行时 null 检查——泛型 TResponse 的可空性由编译期 NRT 契约决定，
+        // 运行时无法区分 T 与 T?（typeof(OrderDto?) == typeof(OrderDto)）。
+        // IQuery<OrderDto?> 未找到返回 null 是合法契约；非空契约由调用方 NRT 保证。
         var result = await ExecutePipelineAsync(cmd.GetType(), cmd, ct);
-        return result is null
-                ? throw new InvalidOperationException($"Handler for {cmd.GetType().Name} returned null for non-nullable {typeof(TResponse).Name}.")
-                : (TResponse)result;
+        return (TResponse)result!;
     }
 
     /// <summary>执行查询</summary>
@@ -129,10 +130,9 @@ public sealed class Dispatcher
     {
         ArgumentNullException.ThrowIfNull(q);
 
+        // ITM-223：同 SendAsync——IQuery<OrderDto?> 合法返回 null
         var result = await ExecutePipelineAsync(q.GetType(), q, ct);
-        return result is null
-                ? throw new InvalidOperationException($"Handler for {q.GetType().Name} returned null for non-nullable {typeof(TResponse).Name}.")
-                : (TResponse)result;
+        return (TResponse)result!;
     }
 
     /// <summary>执行完整的管道链：行为1 → 行为2 → ... → Handler</summary>
