@@ -164,6 +164,8 @@ public static class DapperBulkCopy
     /// ⚡ 需要连接字符串包含 <c>AllowLoadLocalInfile=True</c>。<br/>
     /// 🛡️ 检查 <see cref="MySqlBulkCopyResult.Warnings"/> 防止静默数据截断。
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Aot", "IL2062:RequiresDynamicallyAccessedMembers",
+        Justification = "Dapper 适配层为非 AOT（IsAotCompatible=false）；DataTable 列类型按运行时值推断是 MySqlBulkCopy 唯一数据源格式。")]
     private static async Task<int> MySqlBulkAsync<T>(
         DbConnection conn, string table, string[] cols,
         IReadOnlyList<T> items, Func<T, object?[]> extractor, CancellationToken ct)
@@ -187,8 +189,26 @@ public static class DapperBulkCopy
         // ITM-083 修复：DataTable 用 using 声明（成功/异常路径都释放）。
         // MySqlBulkCopy 经查证（MySqlConnector 2.6.x XML 文档）不实现 IDisposable——无 Dispose 可调，
         // 其内部连接生命周期由 myConn 持有者管理；此处仅 DataTable 需要释放。
+        // ITM-214 修复（三十二轮）：按首行非空值推断列类型——默认 string 列把 byte[]
+        // 静默 ToString() 为 "System.Byte[]"，二进制负载损坏。
+        var columnTypes = new Type?[cols.Length];
+        foreach (var item in items)
+        {
+            var sampleValues = extractor(item);
+            for (int i = 0; i < cols.Length; i++)
+            {
+                if (columnTypes[i] is null && sampleValues[i] is not null)
+                {
+                    var converted = ConvertForMySql(sampleValues[i]);
+                    columnTypes[i] = converted?.GetType();
+                }
+            }
+            if (Array.TrueForAll(columnTypes, t => t is not null)) break;
+        }
+
         using var dt = new DataTable();
-        foreach (var col in cols) dt.Columns.Add(col);
+        for (int i = 0; i < cols.Length; i++)
+            dt.Columns.Add(cols[i], columnTypes[i] ?? typeof(object));
 
         foreach (var item in items)
         {
