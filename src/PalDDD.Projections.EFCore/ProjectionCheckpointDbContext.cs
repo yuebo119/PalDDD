@@ -30,7 +30,7 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
             x => x.ProjectionName == projectionName
                 && x.SourceName == sourceName
                 && x.Position == position,
-            ct);
+            ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -48,10 +48,10 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
             x => x.ProjectionName == projectionName
                 && x.SourceName == sourceName
                 && x.Position == position,
-            ct);
+            ct).ConfigureAwait(false);
 
         if (checkpoint is null)
-            return await TryCreateCheckpointAsync(projectionName, sourceName, position, startedAt, processingTimeout, ct);
+            return await TryCreateCheckpointAsync(projectionName, sourceName, position, startedAt, processingTimeout, ct).ConfigureAwait(false);
 
         // 已完成的位置永远不会重新处理。
         if (checkpoint.Status == ProjectionCheckpointStatus.Completed)
@@ -66,7 +66,7 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
 
         try
         {
-            await SaveChangesAsync(ct);
+            await SaveChangesAsync(ct).ConfigureAwait(false);
             return checkpoint;
         }
         catch (DbUpdateConcurrencyException)
@@ -88,7 +88,7 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         checkpoint.MarkCompleted(completedAt);
         try
         {
-            await SaveChangesAsync(ct);
+            await SaveChangesAsync(ct).ConfigureAwait(false);
         }
         catch (DbUpdateConcurrencyException)
         {
@@ -113,7 +113,7 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         checkpoint.MarkFailed(failureReason, failedAt);
         try
         {
-            await SaveChangesAsync(ct);
+            await SaveChangesAsync(ct).ConfigureAwait(false);
         }
         catch (DbUpdateConcurrencyException)
         {
@@ -189,7 +189,7 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
 
         try
         {
-            await SaveChangesAsync(ct);
+            await SaveChangesAsync(ct).ConfigureAwait(false);
             return checkpoint;
         }
         // P2 修复（ITM-065 同型）：仅唯一约束冲突返回 null（语义=他人已持有租约）；

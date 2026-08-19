@@ -56,7 +56,7 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
             .Where(s => s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision)
             .OrderBy(s => s.CreatedAt)
             .Take(batchSize)
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -79,7 +79,7 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
                 && (s.LeasedUntil == null || s.LeasedUntil <= now))
             .OrderBy(s => s.CreatedAt)
             .Take(batchSize)
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
 
         foreach (var state in states)
         {
@@ -89,7 +89,7 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
 
         try
         {
-            await SaveChangesAsync(ct);
+            await SaveChangesAsync(ct).ConfigureAwait(false);
         }
         catch (DbUpdateConcurrencyException)
         {
@@ -106,7 +106,7 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
 
     /// <inheritdoc/>
     public async ValueTask<TState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
-        => await SagaStates.SingleOrDefaultAsync(s => s.SagaId == sagaId, ct);
+        => await SagaStates.SingleOrDefaultAsync(s => s.SagaId == sagaId, ct).ConfigureAwait(false);
 
     /// <inheritdoc/>
     /// <remarks>
@@ -121,7 +121,7 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
     {
         try
         {
-            await SaveChangesAsync(ct);
+            await SaveChangesAsync(ct).ConfigureAwait(false);
             return 1;
         }
         catch (DbUpdateConcurrencyException)

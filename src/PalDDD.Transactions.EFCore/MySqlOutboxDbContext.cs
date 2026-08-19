@@ -22,7 +22,7 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
             .OrderBy(m => m.CreatedAt)
             .Take(batchSize)
             .AsNoTracking()
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>

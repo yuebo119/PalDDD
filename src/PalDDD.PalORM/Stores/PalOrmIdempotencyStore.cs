@@ -37,8 +37,8 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         cmd.CommandText = "SELECT operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error FROM idempotency_records WHERE operation_name = @p0 AND idempotency_key = @p1";
         AddParam(cmd, "@p0", operationName);
         AddParam(cmd, "@p1", key);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct)) return null;
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        if (!await reader.ReadAsync(ct).ConfigureAwait(false)) return null;
 
         var record = new IdempotencyRecord(
             reader.GetString(0), reader.GetString(1),
@@ -79,13 +79,13 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         int affected;
         if (TProvider.SupportsReturningClause)
         {
-            affected = await Session.ExecuteAsync($"INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL) ON CONFLICT DO NOTHING", ct);
+            affected = await Session.ExecuteAsync($"INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL) ON CONFLICT DO NOTHING", ct).ConfigureAwait(false);
         }
         else
         {
             try
             {
-                affected = await Session.ExecuteAsync($"INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL)", ct);
+                affected = await Session.ExecuteAsync($"INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL)", ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (IsDuplicateKeyError(ex))
             {
@@ -99,7 +99,7 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
                 IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now);
         }
 
-        var existing = await GetAsync(operationName, key, now, ct);
+        var existing = await GetAsync(operationName, key, now, ct).ConfigureAwait(false);
 
         // ITM-064：INSERT 冲突已证明记录存在；GetAsync 返回 null 只可能是记录已过期
         // （GetAsync 对 ExpiresAt <= now 返回 null）。过期记录必须重新获取租约
@@ -108,7 +108,7 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         {
             affected = await Session.ExecuteAsync(
                 $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL WHERE operation_name = {operationName} AND idempotency_key = {key} AND expires_at <= {now}",
-                ct);
+                ct).ConfigureAwait(false);
             if (affected == 0) return null;
 
             return new IdempotencyRecord(operationName, key,
@@ -128,7 +128,7 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         var expectedUpdatedAt = existing.UpdatedAt;
         affected = await Session.ExecuteAsync(
             $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL WHERE operation_name = {operationName} AND idempotency_key = {key} AND updated_at = {expectedUpdatedAt} AND status <> {(int)IdempotencyRecordStatus.Completed}",
-            ct);
+            ct).ConfigureAwait(false);
         if (affected == 0) return null;
 
         return new IdempotencyRecord(operationName, key,
@@ -146,7 +146,7 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         var payloadBase64 = Convert.ToBase64String(responsePayload.ToArray());
         var affected = await Session.ExecuteAsync(
             $"UPDATE idempotency_records SET status = {statusCompleted}, updated_at = {completedAt}, response_payload = {payloadBase64}, error = NULL WHERE operation_name = {record.OperationName} AND idempotency_key = {record.Key} AND updated_at = {expectedUpdatedAt}",
-            ct);
+            ct).ConfigureAwait(false);
         // P1-3 修复：乐观锁竞争失败（affected=0，租约已被他方重新获取）时 DB 未落库——
         // 不再变更本地对象假装成功。语义契约见接口注释：终态写入是尽力而为，
         // 冲突意味着另一执行者持有租约并将完成同样的终态（幂等操作重复执行无害）。
@@ -166,7 +166,7 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         var statusCompleted = (int)IdempotencyRecordStatus.Completed;
         var affected = await Session.ExecuteAsync(
             $"UPDATE idempotency_records SET status = {statusFailed}, updated_at = {failedAt}, error = {failureReason} WHERE operation_name = {record.OperationName} AND idempotency_key = {record.Key} AND updated_at = {expectedUpdatedAt} AND status <> {statusCompleted}",
-            ct);
+            ct).ConfigureAwait(false);
         if (affected > 0)
             record.MarkFailed(failureReason, failedAt);
     }

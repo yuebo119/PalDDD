@@ -55,7 +55,7 @@ public sealed class OutboxDomainEventInterceptor(
         _pending.Clear();
         DomainEventCollector.Collect(eventData.Context, _pending);
         WriteEventsToOutbox(_pending);
-        return await base.SavingChangesAsync(eventData, result, cancellationToken);
+        return await base.SavingChangesAsync(eventData, result, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -84,7 +84,7 @@ public sealed class OutboxDomainEventInterceptor(
         DomainEventCollector.Clear(eventData.Context);
         _pending.Clear();
         _injectedOutboxIds.Clear();
-        return await base.SavedChangesAsync(eventData, result, cancellationToken);
+        return await base.SavedChangesAsync(eventData, result, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -109,7 +109,7 @@ public sealed class OutboxDomainEventInterceptor(
         // 会旧消息+新消息一起落库（同事件 outbox 双写，下游重复消费）。
         RemoveInjectedOutboxMessages(eventData.Context);
         _pending.Clear();
-        await base.SaveChangesFailedAsync(eventData, cancellationToken);
+        await base.SaveChangesFailedAsync(eventData, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />

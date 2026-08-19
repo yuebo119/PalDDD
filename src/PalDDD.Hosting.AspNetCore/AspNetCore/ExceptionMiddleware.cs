@@ -39,7 +39,7 @@ public sealed class ExceptionMiddleware
 
         try
         {
-            await _next(context);
+            await _next(context).ConfigureAwait(false);
         }
         catch (CQRS.PalValidationException ex)
         {
@@ -55,7 +55,7 @@ public sealed class ExceptionMiddleware
                 response,
                 PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
                 contentType: null,
-                cancellationToken: context.RequestAborted);
+                cancellationToken: context.RequestAborted).ConfigureAwait(false);
         }
         catch (CQRS.HandlerNotFoundException ex)
         {
@@ -71,7 +71,7 @@ public sealed class ExceptionMiddleware
                 response,
                 PalAspNetCoreJsonContext.Default.HandlerNotFoundProblemResponse,
                 contentType: null,
-                cancellationToken: context.RequestAborted);
+                cancellationToken: context.RequestAborted).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -94,7 +94,7 @@ public sealed class ExceptionMiddleware
                 response,
                 PalAspNetCoreJsonContext.Default.InternalServerErrorProblemResponse,
                 contentType: null,
-                cancellationToken: context.RequestAborted);
+                cancellationToken: context.RequestAborted).ConfigureAwait(false);
         }
     }
 }

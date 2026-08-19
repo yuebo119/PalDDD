@@ -71,7 +71,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             Key = key,
             Value = value.ToArray(),
             Headers = CreateHeaders(context)
-        }, ct);
+        }, ct).ConfigureAwait(false);
 
         // 优化（二十五轮 Z-1）：Debug 级门控——AddPalLogging 最低 Information，无门控时
         // 每消息的字符串插值（类型名+topic+key 的 Ulid.ToString）全部白做
@@ -178,7 +178,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                         {
                             // P2 修复（八轮评审）：消费端还原追踪头——写侧 CreateHeaders 的镜像
                             var consumeContext = MessageConsumeContext.FromHeaders(ToHeaderMap(result.Message.Headers));
-                            await handler((TMessage)message, consumeContext, cts.Token);
+                            await handler((TMessage)message, consumeContext, cts.Token).ConfigureAwait(false);
                         }
                         else
                         {
@@ -264,7 +264,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             snapshot = [.. _consumers];
             _consumers.Clear();
         }
-        foreach (var c in snapshot) await c.DisposeAsync();
+        foreach (var c in snapshot) await c.DisposeAsync().ConfigureAwait(false);
         _producer.Dispose();
     }
 
@@ -300,7 +300,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return; // 幂等
 
-            await _cts.CancelAsync();
+            await _cts.CancelAsync().ConfigureAwait(false);
             try
             {
                 // 等待后台消费循环真正退出（而非盲猜延时）。
@@ -309,7 +309,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                 // 会释放 consumer，下方 finally 兜底 Dispose 幂等，无泄漏。
                 var consumeTask = Volatile.Read(ref _consumeTask);
                 if (consumeTask is not null)
-                    await consumeTask;
+                    await consumeTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

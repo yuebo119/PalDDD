@@ -23,7 +23,7 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         ValidateKeyParts(operationName, key);
 
         var record = await IdempotencyRecords.SingleOrDefaultAsync(
-            x => x.OperationName == operationName && x.Key == key, ct);
+            x => x.OperationName == operationName && x.Key == key, ct).ConfigureAwait(false);
         if (record is null)
             return null;
 
@@ -48,16 +48,16 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         ValidateKeyParts(operationName, key);
 
         var record = await IdempotencyRecords.SingleOrDefaultAsync(
-            x => x.OperationName == operationName && x.Key == key, ct);
+            x => x.OperationName == operationName && x.Key == key, ct).ConfigureAwait(false);
 
         if (record is null)
-            return await TryCreateRecordAsync(operationName, key, now, policy, ct);
+            return await TryCreateRecordAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
 
         if (record.ExpiresAt <= now
             || record.Status == IdempotencyRecordStatus.Failed
             || (record.Status == IdempotencyRecordStatus.Processing && record.LockedUntil <= now))
         {
-            return await TryReuseRecordAsync(record, now, policy, ct);
+            return await TryReuseRecordAsync(record, now, policy, ct).ConfigureAwait(false);
         }
 
         return null;
@@ -132,7 +132,7 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
 
         try
         {
-            await SaveChangesAsync(ct);
+            await SaveChangesAsync(ct).ConfigureAwait(false);
             return record;
         }
         // ITM-065：仅唯一约束冲突返回 null（语义=他人已持有）；连接故障/超时等其他
@@ -154,7 +154,7 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
 
         try
         {
-            await SaveChangesAsync(ct);
+            await SaveChangesAsync(ct).ConfigureAwait(false);
             return record;
         }
         catch (DbUpdateConcurrencyException)

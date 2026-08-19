@@ -28,26 +28,26 @@ public sealed class UnitOfWork<TContext> : IUnitOfWork
     public async ValueTask BeginTransactionAsync(CancellationToken ct = default)
     {
         if (_context.Database.CurrentTransaction is null)
-            await _context.Database.BeginTransactionAsync(ct);
+            await _context.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
     public async ValueTask CommitAsync(CancellationToken ct = default)
     {
         if (_context.Database.CurrentTransaction is not null)
-            await _context.Database.CommitTransactionAsync(ct);
+            await _context.Database.CommitTransactionAsync(ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
     public async ValueTask RollbackAsync(CancellationToken ct = default)
     {
         if (_context.Database.CurrentTransaction is not null)
-            await _context.Database.RollbackTransactionAsync(ct);
+            await _context.Database.RollbackTransactionAsync(ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
     public async ValueTask<int> SaveChangesAsync(CancellationToken ct = default)
-        => await _context.SaveChangesAsync(ct);
+        => await _context.SaveChangesAsync(ct).ConfigureAwait(false);
 
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
@@ -56,6 +56,6 @@ public sealed class UnitOfWork<TContext> : IUnitOfWork
         _disposed = true;
 
         if (_context.Database.CurrentTransaction is not null)
-            await _context.Database.RollbackTransactionAsync();
+            await _context.Database.RollbackTransactionAsync().ConfigureAwait(false);
     }
 }

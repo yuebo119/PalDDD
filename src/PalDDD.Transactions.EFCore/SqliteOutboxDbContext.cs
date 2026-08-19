@@ -30,7 +30,7 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
             .Where(m => m.LockedUntil == null || m.LockedUntil <= now)
             .OrderBy(m => m.CreatedAt)
             .Take(batchSize)
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -56,14 +56,14 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
             .Where(m => m.LockedUntil == null || m.LockedUntil <= now)
             .OrderBy(m => m.CreatedAt)
             .Take(batchSize)
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
 
         foreach (var msg in messages)
         {
             msg.LockedBy = owner;
             msg.LockedUntil = until;
         }
-        await SaveChangesAsync(ct);
+        await SaveChangesAsync(ct).ConfigureAwait(false);
         return messages;
     }
 }

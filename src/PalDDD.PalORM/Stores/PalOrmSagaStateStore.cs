@@ -65,7 +65,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         AddParam(cmd, "@p0", (int)SagaStatus.Active);
         AddParam(cmd, "@p1", (int)SagaStatus.AwaitingHumanDecision);
         AddParam(cmd, "@p2", batchSize);
-        return await ReadSagasAsync(cmd, ct);
+        return await ReadSagasAsync(cmd, ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -97,13 +97,13 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
             {
                 await Session.ExecuteAsync(
                     $"UPDATE saga_states SET leased_by = {owner}, leased_until = {until} WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize} FOR UPDATE SKIP LOCKED)",
-                    ct);
+                    ct).ConfigureAwait(false);
             }
             else
             {
                 await Session.ExecuteAsync(
                     $"UPDATE saga_states SET leased_by = {owner}, leased_until = {until} WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize})",
-                    ct);
+                    ct).ConfigureAwait(false);
             }
         }
         else
@@ -111,7 +111,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
             // MySQL 特化路径：JOIN 子查询
             await Session.ExecuteAsync(
                 $"UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize}) AS sub ON t.saga_id = sub.saga_id SET t.leased_by = {owner}, t.leased_until = {until}",
-                ct);
+                ct).ConfigureAwait(false);
         }
 
         // 按 lease 标识回读（手动 reader）
@@ -133,7 +133,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         AddParam(cmd, "@p1", until);
         AddParam(cmd, "@p2", (int)SagaStatus.Active);
         AddParam(cmd, "@p3", (int)SagaStatus.AwaitingHumanDecision);
-        return await ReadSagasAsync(cmd, ct);
+        return await ReadSagasAsync(cmd, ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -142,8 +142,8 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         await using var cmd = Session.GetRawConnection().CreateCommand();
         cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE saga_id = @p0";
         AddParam(cmd, "@p0", sagaId.ToString());
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct)) return null;
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        if (!await reader.ReadAsync(ct).ConfigureAwait(false)) return null;
         return Materialize(ReadSagaRow(reader));
     }
 
@@ -161,7 +161,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
                 "Register with AddPalSagaStore<TState>(jsonTypeInfo) or pass it to the constructor. " +
                 "Without it, SaveChangesAsync silently drops all business fields (ITM-228).");
 
-        var existing = await GetByIdAsync(state.SagaId, ct);
+        var existing = await GetByIdAsync(state.SagaId, ct).ConfigureAwait(false);
 
         // saga_data：STJ 手写序列化（开放泛型 TState，[OwnedJson] 不可用）
         var jsonData = JsonSerializer.Serialize(state, _jsonTypeInfo);
@@ -177,7 +177,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
                     RequiresJsonbCast
                         ? (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString()}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {state.Error}, {state.ErrorAt}, {state.Version}, CAST({jsonData} AS jsonb), {state.LeasedBy}, {state.LeasedUntil})"
                         : (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString()}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {state.Error}, {state.ErrorAt}, {state.Version}, {jsonData}, {state.LeasedBy}, {state.LeasedUntil})",
-                    ct);
+                    ct).ConfigureAwait(false);
             }
             catch (DbException ex) when (IsUniqueConstraintViolation(ex))
             {
@@ -196,7 +196,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
             RequiresJsonbCast
                 ? (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {state.Error}, error_at = {state.ErrorAt}, saga_data = CAST({jsonData} AS jsonb), leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}"
                 : (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {state.Error}, error_at = {state.ErrorAt}, saga_data = {jsonData}, leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}",
-            ct);
+            ct).ConfigureAwait(false);
         if (affected > 0) state.Version++;
         return affected;
     }
@@ -205,8 +205,8 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
     private async Task<List<TState>> ReadSagasAsync(DbCommand cmd, CancellationToken ct)
     {
         var result = new List<TState>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             result.Add(Materialize(ReadSagaRow(reader)));
         }

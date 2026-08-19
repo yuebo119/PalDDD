@@ -45,7 +45,7 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
             // 注：QueryFirstAsync<T> 约束 T:class，不接受值类型；用 ScalarAsync<long?> 取标量
             var newId = await Session.ScalarAsync<long?>(
                 $"INSERT INTO inbox_messages (message_id, consumer_name, status, received_at, processing_started_at, attempts) VALUES ({messageId}, {consumerName}, {statusProcessing}, {now}, {now}, 1) ON CONFLICT (consumer_name, message_id) DO NOTHING RETURNING id",
-                ct);
+                ct).ConfigureAwait(false);
             if (newId is long id)
             {
                 return new InboxMessage
@@ -67,13 +67,13 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
             // 改用两步：先 INSERT IGNORE（捕获影响行数），再按复合键查
             var affected = await Session.ExecuteAsync(
                 $"INSERT IGNORE INTO inbox_messages (message_id, consumer_name, status, received_at, processing_started_at, attempts) VALUES ({messageId}, {consumerName}, {statusProcessing}, {now}, {now}, 1)",
-                ct);
+                ct).ConfigureAwait(false);
             if (affected > 0)
             {
                 // 新插入成功 —— 查回自增 id（ScalarAsync 支持 long）
                 var newId = await Session.ScalarAsync<long>(
                     $"SELECT id FROM inbox_messages WHERE consumer_name = {consumerName} AND message_id = {messageId}",
-                    ct);
+                    ct).ConfigureAwait(false);
                 return new InboxMessage
                 {
                     Id = newId,
@@ -94,7 +94,7 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         {
             existing = await Session.QueryFirstAsync<InboxMessageRow>(
                 $"SELECT id, message_id, consumer_name, status, received_at, processed_at, processing_started_at, attempts, last_error FROM inbox_messages WHERE consumer_name = {consumerName} AND message_id = {messageId}",
-                ct);
+                ct).ConfigureAwait(false);
         }
         catch (InvalidOperationException)
         {
@@ -121,7 +121,7 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         var cutoff = now - processingTimeout;
         var leaseAffected = await Session.ExecuteAsync(
             $"UPDATE inbox_messages SET status = {statusProcessing}, attempts = attempts + 1, processing_started_at = {now}, last_error = NULL WHERE id = {existing.Id} AND (status = {(int)InboxStatus.Pending} OR (status = {statusProcessing} AND processing_started_at < {cutoff}) OR status = {(int)InboxStatus.Failed})",
-            ct);
+            ct).ConfigureAwait(false);
         if (leaseAffected == 0) return null;
 
         existing.Status = statusProcessing;
@@ -140,7 +140,7 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         // WHERE status='Processing' 守卫，防止重复标记（与 Dapper 实现一致）
         var affected = await Session.ExecuteAsync(
             $"UPDATE inbox_messages SET status = {(int)InboxStatus.Processed}, processed_at = {processedAt} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing}",
-            ct);
+            ct).ConfigureAwait(false);
         // ITM-168 修复：本地对象仅在 DB 行确实受影响（affected > 0）时变更——原实现先改
         // 本地再执行 SQL 且不看 affected：记录已被并发者标记终态时 DB 未变，本地对象却
         // 已显示 Processed（陈旧语义，与 PalOrmProjectionCheckpointStore rows>0 才变更同款）。
@@ -164,7 +164,7 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         // WHERE status='Processing' 守卫，防止覆盖已 Processed 的记录（与 Dapper 实现一致）
         var affected = await Session.ExecuteAsync(
             $"UPDATE inbox_messages SET status = {(int)InboxStatus.Failed}, last_error = {failureReason} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing}",
-            ct);
+            ct).ConfigureAwait(false);
         // ITM-168 修复：affected > 0 才变更本地对象（同 MarkProcessedAsync 陈旧语义修复）。
         if (affected > 0)
         {

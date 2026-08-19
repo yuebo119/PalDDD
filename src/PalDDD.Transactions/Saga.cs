@@ -236,12 +236,12 @@ public abstract class Saga<TState> where TState : SagaState, new()
         {
             case StepDispatchKind.FanOut:
                 return await ExecuteFanOutStepAsync(
-                    current, stepKey, step, wasCompleted, startedAt, observer, ct);
+                    current, stepKey, step, wasCompleted, startedAt, observer, ct).ConfigureAwait(false);
 
             case StepDispatchKind.ChildSaga:
 #pragma warning disable IL2026, IL3050 // ChildSaga dispatch uses reflection; safe in non-AOT scenarios
                 return await ExecuteChildSagaStepAsync(
-                    current, stepKey, step, @event, wasCompleted, startedAt, observer, ct);
+                    current, stepKey, step, @event, wasCompleted, startedAt, observer, ct).ConfigureAwait(false);
 #pragma warning restore IL2026, IL3050
 
             case StepDispatchKind.Interrupt:
@@ -250,12 +250,12 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
             case StepDispatchKind.Dynamic:
                 return await ExecuteDynamicStepAsync(
-                    current, stepKey, (DynamicStep)step, @event, wasCompleted, startedAt, observer, ct);
+                    current, stepKey, (DynamicStep)step, @event, wasCompleted, startedAt, observer, ct).ConfigureAwait(false);
 
             default:
                 // Normal — 标准重试循环
                 return await ExecuteNormalStepAsync(
-                    current, stepKey, step, @event, wasCompleted, startedAt, observer, ct);
+                    current, stepKey, step, @event, wasCompleted, startedAt, observer, ct).ConfigureAwait(false);
         }
     }
 
@@ -321,7 +321,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 RecordExecutedStep(current, result, stepKey, startedAt);
 
                 // ITM-212：Observer best-effort——Sink 异常不重放业务步骤
-                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct).ConfigureAwait(false);
 
                 return result;
             }
@@ -410,7 +410,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 RecordExecutedStep(current, current, stepKey, startedAt);
 
-                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct).ConfigureAwait(false);
 
                 return current;
             }
@@ -509,7 +509,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 RecordExecutedStep(current, current, stepKey, startedAt);
 
-                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct).ConfigureAwait(false);
 
                 return current;
             }

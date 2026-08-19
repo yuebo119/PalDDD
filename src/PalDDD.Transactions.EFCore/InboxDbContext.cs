@@ -38,7 +38,7 @@ public abstract class InboxDbContext(
         CancellationToken ct)
     {
         var record = await InboxMessages.SingleOrDefaultAsync(
-            x => x.ConsumerName == consumerName && x.MessageId == messageId, ct);
+            x => x.ConsumerName == consumerName && x.MessageId == messageId, ct).ConfigureAwait(false);
 
         if (record is null)
         {
@@ -55,7 +55,7 @@ public abstract class InboxDbContext(
 
             try
             {
-                await SaveChangesAsync(ct);
+                await SaveChangesAsync(ct).ConfigureAwait(false);
                 return record;
             }
             catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
@@ -67,7 +67,7 @@ public abstract class InboxDbContext(
                 // 查不到按"他人正在处理"处理，返回 null 让调用方走重投递。
                 Entry(record).State = EntityState.Detached;
                 record = await InboxMessages.SingleOrDefaultAsync(
-                    x => x.ConsumerName == consumerName && x.MessageId == messageId, ct);
+                    x => x.ConsumerName == consumerName && x.MessageId == messageId, ct).ConfigureAwait(false);
                 if (record is null)
                     return null;
             }
@@ -89,7 +89,7 @@ public abstract class InboxDbContext(
         record.ProcessingStartedAt = now;
         try
         {
-            await SaveChangesAsync(ct);
+            await SaveChangesAsync(ct).ConfigureAwait(false);
         }
         catch (DbUpdateConcurrencyException)
         {
@@ -109,7 +109,7 @@ public abstract class InboxDbContext(
         message.Status = InboxStatus.Processed;
         message.ProcessedAt = processedAt;
         message.LastError = null;
-        await SaveTerminalStateAsync(message, ct);
+        await SaveTerminalStateAsync(message, ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -126,7 +126,7 @@ public abstract class InboxDbContext(
         AttachIfDetached(message);
         message.Status = InboxStatus.Failed;
         message.LastError = failureReason;
-        await SaveTerminalStateAsync(message, ct);
+        await SaveTerminalStateAsync(message, ct).ConfigureAwait(false);
     }
 
     /// <summary>配置收件箱实体 — MessageId 唯一约束是幂等的核心</summary>
@@ -158,7 +158,7 @@ public abstract class InboxDbContext(
     {
         try
         {
-            await SaveChangesAsync(ct);
+            await SaveChangesAsync(ct).ConfigureAwait(false);
         }
         catch (DbUpdateConcurrencyException)
         {

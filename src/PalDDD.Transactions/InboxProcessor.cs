@@ -87,7 +87,7 @@ public sealed class InboxProcessor
             messageId,
             now,
             options.ProcessingTimeout,
-            ct);
+            ct).ConfigureAwait(false);
 
         if (record is null)
         {
@@ -99,13 +99,13 @@ public sealed class InboxProcessor
 
         try
         {
-            await handler(message, ct);
+            await handler(message, ct).ConfigureAwait(false);
             // P2 修复（八轮评审）：副作用（handler）已发生后，完成标记不应随请求级 ct 取消——
             // 取消会导致 Processing 记录滞留，租约/超时到期后同一消息被双重执行
             // （对齐下方 MarkFailedAsync 的 CancellationToken.None）
             try
             {
-                await _store.MarkProcessedAsync(record, _timeProvider.GetUtcNow(), CancellationToken.None);
+                await _store.MarkProcessedAsync(record, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception markEx) when (markEx is not OperationCanceledException)
             {
@@ -138,7 +138,7 @@ public sealed class InboxProcessor
             // 调用，其抛 OCE 属异常形态（而非外层取消传播），同样不得覆盖主异常。
             try
             {
-                await _store.MarkFailedAsync(record, failureReason, CancellationToken.None);
+                await _store.MarkFailedAsync(record, failureReason, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception markEx)
             {

@@ -73,7 +73,7 @@ public static class HealthCheckExtensions
             response,
             PalAspNetCoreJsonContext.Default.PalHealthResponse,
             contentType: null,
-            cancellationToken: context.RequestAborted);
+            cancellationToken: context.RequestAborted).ConfigureAwait(false);
     }
 }
 
@@ -113,7 +113,7 @@ internal sealed class PalOutboxHealthCheck : IHealthCheck
         try
         {
             // 尝试获取待处理消息来验证数据库连接
-            await _store.GetPendingMessagesAsync(1, Transactions.IPalOutboxStore.DefaultMaxRetryCount, cancellationToken);
+            await _store.GetPendingMessagesAsync(1, Transactions.IPalOutboxStore.DefaultMaxRetryCount, cancellationToken).ConfigureAwait(false);
             return HealthCheckResult.Healthy("发件箱存储可用（DB 查询成功）");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

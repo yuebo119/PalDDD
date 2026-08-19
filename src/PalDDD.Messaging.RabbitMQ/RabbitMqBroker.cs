@@ -75,7 +75,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             _channel);
         try
         {
-            await declaration;
+            await declaration.ConfigureAwait(false);
         }
         catch
         {
@@ -98,7 +98,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             mandatory: true,
             basicProperties: CreateProperties(descriptor, messageId, context),
             body: body,
-            cancellationToken: ct);
+            cancellationToken: ct).ConfigureAwait(false);
 
         // 优化（二十五轮 Z-1）：同 KafkaBroker——Debug 级门控免白做插值
         if (_logger.IsEnabled(LogLevel.Debug))
@@ -156,9 +156,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         var exchange = descriptor.Name;
         var queueName = $"{exchange}.{PalUlid.New()}";
 
-        await _channel.ExchangeDeclareAsync(exchange, ExchangeType.Fanout, durable: true, cancellationToken: ct);
-        await _channel.QueueDeclareAsync(queueName, durable: false, exclusive: true, autoDelete: true, cancellationToken: ct);
-        await _channel.QueueBindAsync(queueName, exchange, "", cancellationToken: ct);
+        await _channel.ExchangeDeclareAsync(exchange, ExchangeType.Fanout, durable: true, cancellationToken: ct).ConfigureAwait(false);
+        await _channel.QueueDeclareAsync(queueName, durable: false, exclusive: true, autoDelete: true, cancellationToken: ct).ConfigureAwait(false);
+        await _channel.QueueBindAsync(queueName, exchange, "", cancellationToken: ct).ConfigureAwait(false);
 
         var consumer = new AsyncEventingBasicConsumer(_channel);
         consumer.ReceivedAsync += async (_, ea) =>
@@ -172,16 +172,16 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                     // correlation 兜底读 BasicProperties.CorrelationId（写侧未写 x-correlation-id 头）
                     var consumeContext = MessageConsumeContext.FromHeaders(
                         ea.BasicProperties.Headers, ea.BasicProperties.CorrelationId);
-                    await handler((TMessage)message, consumeContext, ea.CancellationToken);
+                    await handler((TMessage)message, consumeContext, ea.CancellationToken).ConfigureAwait(false);
                     // 手动确认 — 仅在处理成功后 ACK
                     // P3 修复：ACK 与 Nack 同样加保护——channel 已关时异常逃逸进消费者回调
-                    await TryAckSafeAsync(ea.DeliveryTag, queueName);
+                    await TryAckSafeAsync(ea.DeliveryTag, queueName).ConfigureAwait(false);
                 }
                 else
                 {
                     // 反序列化返回 null — 消息无法处理，不重试
                     _logger.Warning($"Deserializing {typeof(TMessage).Name} returned null, discarding message: {queueName}");
-                    await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName);
+                    await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException)
@@ -190,7 +190,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 // 连接关闭即删除，"重连后重新投递"不可能；OCE 多发生在关停路径，队列将随连接消亡。
                 // requeue:false 显式弃置并留日志（true 会在存活连接上形成自我热循环）。
                 _logger.Warning($"Handling {typeof(TMessage).Name} message was canceled during shutdown, discarding: {queueName}");
-                await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName);
+                await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -198,11 +198,11 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 // P2 定案：exclusive 队列的消费者只有本连接——requeue:true 会立即重投给自己，
                 // 持续失败时形成无退避热循环。与 Kafka 路径 ITM-008 对齐：记录后弃置（at-most-once）。
                 // 需要失败重试语义的应用应使用持久队列 + DLX，由自身的 Broker 配置承载。
-                await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName);
+                await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
         };
 
-        var consumerTag = await _channel.BasicConsumeAsync(queueName, autoAck: false, consumer, cancellationToken: ct);
+        var consumerTag = await _channel.BasicConsumeAsync(queueName, autoAck: false, consumer, cancellationToken: ct).ConfigureAwait(false);
 
         // P3 修复（八轮评审）：channel 已关/连接断时 BasicCancelAsync 抛 AlreadyClosed 类异常——
         // 订阅释放不应被关停路径异常中断，记 Warning 吞掉（对齐 TryAckSafeAsync 模式）。
@@ -210,7 +210,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         {
             try
             {
-                await _channel.BasicCancelAsync(consumerTag);
+                await _channel.BasicCancelAsync(consumerTag).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -224,7 +224,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         // P2 修复（所有权契约）：IConnection 由调用方创建并注入——可能被多个 Channel/Broker
         // 共享，本 Broker 无权释放（越权释放会断掉其他使用方）。仅释放本 Broker 独占使用的
         // Channel；连接的生命周期由创建者管理。
-        await _channel.DisposeAsync();
+        await _channel.DisposeAsync().ConfigureAwait(false);
     }
 
     /// <summary>
@@ -235,7 +235,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     {
         try
         {
-            await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: requeue);
+            await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: requeue).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -251,7 +251,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     {
         try
         {
-            await _channel.BasicAckAsync(deliveryTag, multiple: false);
+            await _channel.BasicAckAsync(deliveryTag, multiple: false).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -261,6 +261,6 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
 
     private sealed class AsyncSubscription(Func<Task> unsubscribe) : IAsyncDisposable
     {
-        public async ValueTask DisposeAsync() => await unsubscribe();
+        public async ValueTask DisposeAsync() => await unsubscribe().ConfigureAwait(false);
     }
 }

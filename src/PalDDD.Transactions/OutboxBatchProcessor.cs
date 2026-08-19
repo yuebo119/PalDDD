@@ -68,7 +68,7 @@ public sealed class OutboxBatchProcessor
             options.LeaseOwner,
             options.LeaseDuration,
             options.MaxRetryCount,
-            ct);
+            ct).ConfigureAwait(false);
 
         using var activity = PalActivitySource.StartOutboxProcess(messages.Count);
         var processed = 0;
@@ -88,7 +88,7 @@ public sealed class OutboxBatchProcessor
                     {
                         _store.MarkDead(msg, $"Type '{msg.Type}' not registered in MessageCatalog", now);
                         checked { dead++; }
-                        await PersistSingleAsync(msg.Id, ct);
+                        await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false);
                         continue;
                     }
 
@@ -97,7 +97,7 @@ public sealed class OutboxBatchProcessor
                     {
                         _store.MarkDead(msg, "Deserialization returned null", now);
                         checked { dead++; }
-                        await PersistSingleAsync(msg.Id, ct);
+                        await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false);
                         continue;
                     }
 
@@ -106,10 +106,10 @@ public sealed class OutboxBatchProcessor
                         msg.CausationId,
                         msg.TraceParent,
                         msg.TraceState);
-                    await _broker.PublishAsync(@event, descriptor, msg.Id, publishContext, ct);
+                    await _broker.PublishAsync(@event, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
                     _store.MarkProcessed(msg, now);
                     checked { processed++; }
-                    await PersistSingleAsync(msg.Id, ct);
+                    await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -132,7 +132,7 @@ public sealed class OutboxBatchProcessor
                         checked { retried++; }
                     }
                     _logger.Warning($"Outbox: message {msg.Id} processing failed at retry {msg.RetryCount + 1}: {ex.Message}");
-                    await PersistSingleAsync(msg.Id, ct);
+                    await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false);
                 }
             }
         }
@@ -153,7 +153,7 @@ public sealed class OutboxBatchProcessor
     {
         try
         {
-            await _store.SaveChangesAsync(ct);
+            await _store.SaveChangesAsync(ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

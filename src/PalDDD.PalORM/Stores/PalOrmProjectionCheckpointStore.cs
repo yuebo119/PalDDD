@@ -35,8 +35,8 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         AddParam(cmd, "@p0", projectionName);
         AddParam(cmd, "@p1", sourceName);
         AddParam(cmd, "@p2", position);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct)) return null;
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        if (!await reader.ReadAsync(ct).ConfigureAwait(false)) return null;
 
         return ProjectionCheckpoint.Rehydrate(
             reader.GetString(0), reader.GetString(1), reader.GetString(2),
@@ -63,8 +63,8 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
 
         // 方言分叉：PG/SQLite 用 ON CONFLICT DO NOTHING；MySQL 用 INSERT IGNORE
         var affected = TProvider.SupportsReturningClause
-            ? await Session.ExecuteAsync($"INSERT INTO projection_checkpoints (projection_name, source_name, position, status, updated_at, lease_until, revision, error) VALUES ({projectionName}, {sourceName}, {position}, {statusProcessing}, {startedAt}, {leaseUntil}, 1, NULL) ON CONFLICT DO NOTHING", ct)
-            : await Session.ExecuteAsync($"INSERT IGNORE INTO projection_checkpoints (projection_name, source_name, position, status, updated_at, lease_until, revision, error) VALUES ({projectionName}, {sourceName}, {position}, {statusProcessing}, {startedAt}, {leaseUntil}, 1, NULL)", ct);
+            ? await Session.ExecuteAsync($"INSERT INTO projection_checkpoints (projection_name, source_name, position, status, updated_at, lease_until, revision, error) VALUES ({projectionName}, {sourceName}, {position}, {statusProcessing}, {startedAt}, {leaseUntil}, 1, NULL) ON CONFLICT DO NOTHING", ct).ConfigureAwait(false)
+            : await Session.ExecuteAsync($"INSERT IGNORE INTO projection_checkpoints (projection_name, source_name, position, status, updated_at, lease_until, revision, error) VALUES ({projectionName}, {sourceName}, {position}, {statusProcessing}, {startedAt}, {leaseUntil}, 1, NULL)", ct).ConfigureAwait(false);
 
         if (affected > 0)
         {
@@ -74,7 +74,7 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
                 leaseUntil, 1, null);
         }
 
-        var existing = await GetAsync(projectionName, sourceName, position, ct);
+        var existing = await GetAsync(projectionName, sourceName, position, ct).ConfigureAwait(false);
         if (existing is null) return null;
         if (existing.Status == ProjectionCheckpointStatus.Completed) return null;
         if (existing.Status == ProjectionCheckpointStatus.Processing && existing.LeaseUntil > startedAt)
@@ -84,7 +84,7 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         var statusCompleted = (int)ProjectionCheckpointStatus.Completed;
         affected = await Session.ExecuteAsync(
             $"UPDATE projection_checkpoints SET status = {statusProcessing}, updated_at = {startedAt}, lease_until = {leaseUntil}, revision = revision + 1, error = NULL WHERE projection_name = {projectionName} AND source_name = {sourceName} AND position = {position} AND revision = {expectedRevision} AND status <> {statusCompleted}",
-            ct);
+            ct).ConfigureAwait(false);
         if (affected == 0) return null;
 
         existing.MarkProcessing(startedAt, processingTimeout);
@@ -100,7 +100,7 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         var statusCompleted = (int)ProjectionCheckpointStatus.Completed;
         var affected = await Session.ExecuteAsync(
             $"UPDATE projection_checkpoints SET status = {statusCompleted}, updated_at = {completedAt}, revision = revision + 1, error = NULL WHERE projection_name = {checkpoint.ProjectionName} AND source_name = {checkpoint.SourceName} AND position = {checkpoint.Position} AND revision = {expectedRevision}",
-            ct);
+            ct).ConfigureAwait(false);
         // 修复覆盖残留：对齐 Dapper 版同方法（rows>0 才变更本地对象）——
         // 乐观锁冲突时 DB 未变，不假装落库成功
         if (affected > 0)
@@ -118,7 +118,7 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         var statusCompleted = (int)ProjectionCheckpointStatus.Completed;
         var affected = await Session.ExecuteAsync(
             $"UPDATE projection_checkpoints SET status = {statusFailed}, updated_at = {failedAt}, revision = revision + 1, error = {failureReason} WHERE projection_name = {checkpoint.ProjectionName} AND source_name = {checkpoint.SourceName} AND position = {checkpoint.Position} AND revision = {expectedRevision} AND status <> {statusCompleted}",
-            ct);
+            ct).ConfigureAwait(false);
         if (affected > 0)
             checkpoint.MarkFailed(failureReason, failedAt);
     }
@@ -131,7 +131,7 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
         await Session.ExecuteAsync(
             $"DELETE FROM projection_checkpoints WHERE projection_name = {projectionName} AND source_name = {sourceName}",
-            ct);
+            ct).ConfigureAwait(false);
     }
 
     private static void AddParam(DbCommand cmd, string name, object value)

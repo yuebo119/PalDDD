@@ -64,7 +64,7 @@ internal sealed class SagaCompensation<TState>
         if (failedStep.CompensateAsync is not null && !targets.Any(s => ReferenceEquals(s, failedStep)))
             targets.Add(failedStep);
 
-        await RunAsync(state, targets, ct);
+        await RunAsync(state, targets, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -83,7 +83,7 @@ internal sealed class SagaCompensation<TState>
                 targets.Add(step);
         }
 
-        await RunAsync(state, targets, ct);
+        await RunAsync(state, targets, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -108,7 +108,7 @@ internal sealed class SagaCompensation<TState>
         {
             try
             {
-                await targets[i].CompensateAsync!(state, ct);
+                await targets[i].CompensateAsync!(state, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

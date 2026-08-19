@@ -49,7 +49,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // 列名内联到 SQL 字面量（PalORM 要求 FormattableString 类型，字符串拼接会退化为 string）
         var rows = await Session.QueryAsync<OutboxMessageRow>(
             $"SELECT id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state FROM outbox_messages WHERE status = {(int)OutboxStatus.Pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}",
-            ct);
+            ct).ConfigureAwait(false);
         return rows.Select(r => r.ToDomain()).ToList();
     }
 
@@ -74,14 +74,14 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
             {
                 var rows = await Session.QueryAsync<OutboxMessageRow>(
                     $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize} FOR UPDATE SKIP LOCKED) RETURNING id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state",
-                    ct);
+                    ct).ConfigureAwait(false);
                 return rows.Select(r => r.ToDomain()).ToList();
             }
             else
             {
                 var rows = await Session.QueryAsync<OutboxMessageRow>(
                     $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}) RETURNING id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state",
-                    ct);
+                    ct).ConfigureAwait(false);
                 return rows.Select(r => r.ToDomain()).ToList();
             }
         }
@@ -99,10 +99,10 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
             // 待 PalORM 支持 IN 参数化后与 Saga 路径统一修。
             await Session.ExecuteAsync(
                 $"UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}) AS sub ON t.id = sub.id SET t.locked_by = {owner}, t.locked_until = {until}",
-                ct);
+                ct).ConfigureAwait(false);
             var rows = await Session.QueryAsync<OutboxMessageRow>(
                 $"SELECT id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state FROM outbox_messages WHERE locked_by = {owner} AND locked_until = {until} ORDER BY created_at",
-                ct);
+                ct).ConfigureAwait(false);
             return rows.Select(r => r.ToDomain()).ToList();
         }
     }
@@ -126,7 +126,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         if (messages.Count == 0) return 0;
         var rows = messages.Select(OutboxMessageRow.FromDomain).ToList();
         // BulkInsertAsync 自动选方言最优路径（PG COPY / MySQL BulkCopy / SQLite 多值 INSERT）
-        return (int)await Session.BulkInsertAsync(rows, batchSize: 1000, ct: default);
+        return (int)await Session.BulkInsertAsync(rows, batchSize: 1000, ct: default).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -254,7 +254,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // 条件 UPDATE：status='Dead' 守卫防止重复重投；返回受影响行数用于幂等判断
         return await Session.ExecuteAsync(
             $"UPDATE outbox_messages SET status = {(int)OutboxStatus.Pending}, processed_at = NULL, error = {audit}, next_attempt_at = {nextAttemptAt}, locked_by = NULL, locked_until = NULL WHERE id = {messageId.ToString()} AND status = {(int)OutboxStatus.Dead}",
-            ct);
+            ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc />

@@ -59,7 +59,7 @@ internal sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavio
         if (errors is { Count: > 0 })
             throw new PalValidationException([.. errors]);
 
-        return await next();
+        return await next().ConfigureAwait(false);
     }
 }
 
@@ -94,7 +94,7 @@ internal sealed class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<T
         var start = _timeProvider.GetTimestamp();
         try
         {
-            var result = await next();
+            var result = await next().ConfigureAwait(false);
             var elapsed = _timeProvider.GetElapsedTime(start).TotalMilliseconds;
 
             if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))

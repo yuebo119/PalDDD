@@ -199,7 +199,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             ["id", "type", "payload", "content_type", "schema_version", "status", "created_at", "correlation_id", "causation_id", "trace_parent", "trace_state"],
             messages,
             m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, StatusPending, _timeProvider.GetUtcNow(),
-                m.CorrelationId?.ToString(), m.CausationId?.ToString(), m.TraceParent, m.TraceState]);
+                m.CorrelationId?.ToString(), m.CausationId?.ToString(), m.TraceParent, m.TraceState]).ConfigureAwait(false);
     }
 
     public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)

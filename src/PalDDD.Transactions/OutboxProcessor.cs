@@ -45,7 +45,7 @@ public sealed class OutboxProcessor : PeriodicBackgroundProcessor
     {
         using var scope = ScopeFactory.CreateScope();
         var processor = scope.ServiceProvider.GetRequiredService<OutboxBatchProcessor>();
-        await processor.ProcessBatchAsync(ct);
+        await processor.ProcessBatchAsync(ct).ConfigureAwait(false);
     }
 
     protected override void OnTickFailed(Exception ex)

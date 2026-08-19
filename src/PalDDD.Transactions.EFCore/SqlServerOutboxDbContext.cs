@@ -29,7 +29,7 @@ public abstract class SqlServerOutboxDbContext(DbContextOptions options) : Outbo
             .OrderBy(m => m.CreatedAt)
             .Take(batchSize)
             .AsNoTracking()
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -64,7 +64,7 @@ public abstract class SqlServerOutboxDbContext(DbContextOptions options) : Outbo
                   UPDATE candidates
                   SET LockedBy = {{2}}, LockedUntil = DATEADD(second, {{3}}, {nowSql})
                   OUTPUT INSERTED.*", batchSize, maxRetryCount, owner, leaseSeconds)
-                .ToListAsync(ct);
+                .ToListAsync(ct).ConfigureAwait(false);
 #pragma warning restore EF1002
     }
 }

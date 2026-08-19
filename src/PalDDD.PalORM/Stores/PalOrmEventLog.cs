@@ -62,7 +62,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         // 步骤 1：乐观并发检查 —— 读当前最大 StreamVersion
         var currentMax = await Session.ScalarAsync<long?>(
             $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
         var currentVersion = currentMax ?? -1;
         if (!expectedVersion.Matches(currentVersion))
             throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion);
@@ -109,7 +109,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
             EventLogRow inserted;
             try
             {
-                inserted = await Session.InsertAsync(row, cancellationToken);
+                inserted = await Session.InsertAsync(row, cancellationToken).ConfigureAwait(false);
             }
             catch (DbException ex) when (IsUniqueConstraintViolation(ex))
             {
@@ -123,7 +123,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
                 {
                     actualVersion = await Session.ScalarAsync<long?>(
                         $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
-                        cancellationToken);
+                        cancellationToken).ConfigureAwait(false);
                     requerySucceeded = true;
                 }
                 catch (DbException)

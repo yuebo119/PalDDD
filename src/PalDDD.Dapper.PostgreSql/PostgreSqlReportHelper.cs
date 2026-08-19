@@ -54,7 +54,7 @@ public static class PostgreSqlReportHelper
         foreach (var p in parameters) cmd.Parameters.Add(p);
 
         await using var reader = await cmd.ExecuteReaderAsync(
-            CommandBehavior.Default, ct);
+            CommandBehavior.Default, ct).ConfigureAwait(false);
         await using var writer = new StreamWriter(outputPath, false, Encoding.UTF8);
 
         // 写入 CSV 头
@@ -66,7 +66,7 @@ public static class PostgreSqlReportHelper
         // 流式写入数据行
         long rowCount = 0;
         var values = new object?[columns.Length];
-        while (await reader.ReadAsync(ct))
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             reader.GetValues(values);
             for (int i = 0; i < values.Length; i++)
@@ -109,7 +109,7 @@ public static class PostgreSqlReportHelper
         foreach (var p in parameters) cmd.Parameters.Add(p);
 
         await using var reader = await cmd.ExecuteReaderAsync(
-            CommandBehavior.Default, ct);
+            CommandBehavior.Default, ct).ConfigureAwait(false);
         await using var stream = new FileStream(outputPath, FileMode.Create, FileAccess.Write);
         await using var jsonWriter = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = false });
 
@@ -119,7 +119,7 @@ public static class PostgreSqlReportHelper
 
         long rowCount = 0;
         var values = new object?[columns.Length];
-        while (await reader.ReadAsync(ct))
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             reader.GetValues(values);
 
@@ -168,12 +168,12 @@ public static class PostgreSqlReportHelper
         foreach (var p in parameters) cmd.Parameters.Add(p);
 
         await using var reader = await cmd.ExecuteReaderAsync(
-            CommandBehavior.Default, ct);
+            CommandBehavior.Default, ct).ConfigureAwait(false);
 
         long rowCount = 0;
-        while (await reader.ReadAsync(ct))
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            if (!await rowHandler(reader, ct))
+            if (!await rowHandler(reader, ct).ConfigureAwait(false))
                 break;
             rowCount++;
         }
@@ -216,7 +216,7 @@ public static class PostgreSqlReportHelper
         // Npgsql 10.x: 使用流式复制替代 CopyToAsync
         var buffer = new char[8192];
         int charsRead;
-        while ((charsRead = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
+        while ((charsRead = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
             await writer.WriteAsync(buffer, 0, charsRead).ConfigureAwait(false);
 
         // ITM-167 修复：StreamWriter 改 await using + 显式异步 Flush——

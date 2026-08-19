@@ -47,7 +47,7 @@ TState> : PeriodicBackgroundProcessor
     {
         using var scope = ScopeFactory.CreateScope();
         var processor = scope.ServiceProvider.GetRequiredService<SagaTimeoutProcessor<TState>>();
-        await processor.CheckTimeoutsAsync(ct);
+        await processor.CheckTimeoutsAsync(ct).ConfigureAwait(false);
     }
 
     protected override void OnTickFailed(Exception ex)
@@ -103,7 +103,7 @@ TState>
             options.LeaseOwner,
             options.LeaseDuration,
             options.TimeoutScanBatchSize,
-            ct);
+            ct).ConfigureAwait(false);
 
         foreach (var sagaState in activeSagas)
         {
@@ -125,7 +125,7 @@ TState>
 
                     try
                     {
-                        await _orchestrator.CompensateAsync(sagaState, ct);
+                        await _orchestrator.CompensateAsync(sagaState, ct).ConfigureAwait(false);
                         sagaState.Status = SagaStatus.Compensated;
                         sagaState.CompletedAt = now;
                         sagaState.CurrentState = "Compensated";
@@ -168,7 +168,7 @@ TState>
                     sagaState.LeasedUntil = null;
                     // P2 修复（取消路径对称）：租约释放是终态写入，不响应取消（与上方 OCE 路径
                     // 的 CancellationToken.None 对齐）——此前正常路径用 ct，OCE 传播时租约滞留
-                    var compensatedSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None);
+                    var compensatedSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
                     if (compensatedSaved == 0)
                     {
                         // P3 修复（八轮）：0 行 = 乐观锁冲突（他实例已写同一 Saga）——
@@ -187,7 +187,7 @@ TState>
                     sagaState.LeasedBy = null;
                     sagaState.LeasedUntil = null;
                     // P2 修复（取消路径对称）：同上——终态写入不响应取消
-                    var releaseSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None);
+                    var releaseSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
                     if (releaseSaved == 0)
                     {
                         // P3 修复（八轮）：0 行 = 乐观锁冲突——租约释放未落库（LeaseDuration 到期兜底），

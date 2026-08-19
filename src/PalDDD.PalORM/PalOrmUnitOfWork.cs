@@ -38,7 +38,7 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
         if (_transaction is not null) return;  // 幂等：已有活动事务
 
         // PalORM DataSession 已 Open 连接（构造时打开），BeginTransactionAsync 直接 begin
-        _transaction = await _session.BeginTransactionAsync(ct: ct);
+        _transaction = await _session.BeginTransactionAsync(ct: ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -53,7 +53,7 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
 
         try
         {
-            await _transaction.CommitAsync(ct);
+            await _transaction.CommitAsync(ct).ConfigureAwait(false);
         }
         finally
         {
@@ -61,7 +61,7 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
             // 原失败路径遗留 _transaction 与非 null 的 UseTransaction 绑定，后续 RollbackAsync
             // 会二次操作已失效事务、以新异常掩盖根因。finally 保证任何路径都清理；
             // DisposeAsync 的幂等异常（已失效/已释放）按文件既有惯例吞掉，保留根因异常。
-            try { await _transaction.DisposeAsync(); }
+            try { await _transaction.DisposeAsync().ConfigureAwait(false); }
             catch (Exception ex) when (ex is InvalidOperationException or System.Data.Common.DbException) { /* 事务已失效/已释放 */ }
             _transaction = null;
             // 清除 DataSession 内部的事务引用（PalORM 要求 Commit/Rollback 后显式清空）
@@ -75,8 +75,8 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_transaction is null) return;
 
-        await _transaction.RollbackAsync(ct);
-        await _transaction.DisposeAsync();
+        await _transaction.RollbackAsync(ct).ConfigureAwait(false);
+        await _transaction.DisposeAsync().ConfigureAwait(false);
         _transaction = null;
         _session.UseTransaction(null);
     }
@@ -90,9 +90,9 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
 
         if (_transaction is not null)
         {
-            try { await _transaction.RollbackAsync(); }
+            try { await _transaction.RollbackAsync().ConfigureAwait(false); }
             catch (Exception ex) when (ex is InvalidOperationException or System.Data.Common.DbException) { /* 事务已提交/回滚 */ }
-            await _transaction.DisposeAsync();
+            await _transaction.DisposeAsync().ConfigureAwait(false);
             _transaction = null;
             _session.UseTransaction(null);
         }

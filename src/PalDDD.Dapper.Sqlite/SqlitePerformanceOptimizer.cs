@@ -153,7 +153,7 @@ public static class SqlitePerformanceOptimizer
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT sqlite_version(), sqlite_source_id()";
         await using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
-        if (await reader.ReadAsync())
+        if (await reader.ReadAsync().ConfigureAwait(false))
         {
             // P3 修复：source_id 短于 20 字符时切片越界
             var sourceId = reader.GetString(1);

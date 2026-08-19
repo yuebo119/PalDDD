@@ -30,7 +30,7 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         // 的主键必要——OutboxMessage 主键 Ulid 预设（HasConversion 字符串存储，无 DB 生成），
         // 同步 AddRange 免逐实体 async 状态机开销。
         OutboxMessages.AddRange(messages);
-        return await SaveChangesAsync();
+        return await SaveChangesAsync().ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -52,7 +52,7 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
                 && (m.LockedUntil == null || m.LockedUntil <= now))
             .OrderBy(m => m.CreatedAt)
             .Take(batchSize)
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -230,12 +230,12 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
                 .SetProperty(m => m.Error, audit)
                 .SetProperty(m => m.NextAttemptAt, nextAttemptAt)
                 .SetProperty(m => m.LockedBy, (string?)null)
-                .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null), ct);
+                .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null), ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
     async ValueTask<int> IPalOutboxStore.SaveChangesAsync(CancellationToken ct)
-        => await SaveChangesAsync(ct);
+        => await SaveChangesAsync(ct).ConfigureAwait(false);
 
     /// <summary>获取当前 UTC 时间，派生测试上下文可重写以控制时间</summary>
     protected virtual DateTimeOffset GetUtcNow() => TimeProvider.System.GetUtcNow();

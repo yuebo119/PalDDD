@@ -81,7 +81,7 @@ internal sealed class IterativeDomainEventDispatcher : IDomainEventDispatcher
                 continue;
             }
 
-            await DispatchSingleAsync(@event, ct);
+            await DispatchSingleAsync(@event, ct).ConfigureAwait(false);
         }
 
         if (queue.Count > 0)
@@ -101,7 +101,7 @@ internal sealed class IterativeDomainEventDispatcher : IDomainEventDispatcher
             {
                 foreach (var h in handlers)
                 {
-                    await h.HandleAsync(@event, ct);
+                    await h.HandleAsync(@event, ct).ConfigureAwait(false);
                     PalMetrics.EventHandlersHandled.Add(1);
                 }
             }

@@ -41,9 +41,9 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
     {
         try
         {
-            while (await _timer.WaitForNextTickAsync(stoppingToken))
+            while (await _timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
             {
-                try { await ExecuteTickAsync(stoppingToken); }
+                try { await ExecuteTickAsync(stoppingToken).ConfigureAwait(false); }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
                 // ITM-166 修复（声明）：此分支为 OCE 吞弃的边界声明——当前 ExecuteTickAsync
                 // 只接收 stoppingToken，tick 内部无 linked-CTS 超时（OutboxBatchProcessor/

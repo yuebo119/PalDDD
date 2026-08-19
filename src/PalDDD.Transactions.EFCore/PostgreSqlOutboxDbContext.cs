@@ -37,7 +37,7 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
             .OrderBy(m => m.CreatedAt)
             .Take(batchSize)
             .AsNoTracking()
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -75,7 +75,7 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
                       FOR UPDATE SKIP LOCKED
                   )
                   RETURNING *", batchSize, maxRetryCount, owner, sec)
-            .ToListAsync(ct);
+            .ToListAsync(ct).ConfigureAwait(false);
 #pragma warning restore EF1002
     }
 }
