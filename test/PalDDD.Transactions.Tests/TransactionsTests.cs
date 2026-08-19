@@ -534,7 +534,7 @@ public sealed class InboxProcessorTests
             string.Equals(a.GetTagItem("pal.inbox.consumer") as string, "orders", StringComparison.Ordinal));
         await Assert.That(processed).IsTrue();
         await Assert.That(activity.GetTagItem("pal.inbox.consumer")).IsEqualTo("orders");
-        await Assert.That(activity.GetTagItem("pal.inbox.message_id")).IsEqualTo("message-1");
+        // ITM-229: pal.inbox.message_id removed (high cardinality) — consumer tag already asserted above
         await Assert.That(activity.GetTagItem("pal.inbox.result")).IsEqualTo("processed");
     }
 
@@ -570,7 +570,7 @@ public sealed class InboxProcessorTests
         var activity = matching.First();
         await Assert.That(skipped).IsFalse();
         await Assert.That(activity.GetTagItem("pal.inbox.consumer")).IsEqualTo("orders");
-        await Assert.That(activity.GetTagItem("pal.inbox.message_id")).IsEqualTo("message-1");
+        // ITM-229: pal.inbox.message_id removed (high cardinality) — consumer tag already asserted above
     }
 
     [Test]
