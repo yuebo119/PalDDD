@@ -38,6 +38,9 @@ public sealed class OutboxDomainEventInterceptor(
     /// <summary>当前 SaveChanges 操作收集的领域事件列表 — 非线程安全，依赖 Scoped 生命周期保证单请求独占。</summary>
     private readonly List<Core.DomainEvent> _pending = [];
 
+    /// <summary>ITM-227：本轮由拦截器注入的 OutboxMessage ID——SaveChanges 失败时只 Detach 这些，不影响调用方自己 Add 的消息。</summary>
+    private readonly HashSet<ByteAether.Ulid.Ulid> _injectedOutboxIds = [];
+
     /// <summary>当前 SaveChanges 操作期间收集的领域事件列表。</summary>
     public IReadOnlyList<Core.DomainEvent> PendingEvents => _pending;
 
@@ -80,6 +83,7 @@ public sealed class OutboxDomainEventInterceptor(
 
         DomainEventCollector.Clear(eventData.Context);
         _pending.Clear();
+        _injectedOutboxIds.Clear();
         return await base.SavedChangesAsync(eventData, result, cancellationToken);
     }
 
@@ -91,6 +95,7 @@ public sealed class OutboxDomainEventInterceptor(
 
         DomainEventCollector.Clear(eventData.Context);
         _pending.Clear();
+        _injectedOutboxIds.Clear();
         return base.SavedChanges(eventData, result);
     }
 
@@ -119,19 +124,23 @@ public sealed class OutboxDomainEventInterceptor(
     }
 
     /// <summary>
-    /// 从 ChangeTracker Detach 本轮注入的 OutboxMessage 实体——
-    /// 避免失败重试时的 outbox 双写。仅处理 Added 状态实体（已跟踪未持久化）。
+    /// ITM-227 修复：只 Detach 本拦截器本轮注入的 OutboxMessage（按 _injectedOutboxIds 精确匹配），
+    /// 不影响调用方自行 Add 的消息。避免失败重试时调用方消息被误删。
     /// </summary>
-    private static void RemoveInjectedOutboxMessages(Microsoft.EntityFrameworkCore.DbContext? context)
+    private void RemoveInjectedOutboxMessages(Microsoft.EntityFrameworkCore.DbContext? context)
     {
-        if (context is null)
+        if (context is null || _injectedOutboxIds.Count == 0)
             return;
 
         foreach (var entry in context.ChangeTracker.Entries<Transactions.OutboxMessage>().ToList())
         {
-            if (entry.State == Microsoft.EntityFrameworkCore.EntityState.Added)
+            if (entry.State == Microsoft.EntityFrameworkCore.EntityState.Added
+                && _injectedOutboxIds.Contains(entry.Entity.Id))
+            {
                 entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+            }
         }
+        _injectedOutboxIds.Clear();
     }
 
     private void WriteEventsToOutbox(IReadOnlyList<Core.DomainEvent> events)
@@ -162,6 +171,7 @@ public sealed class OutboxDomainEventInterceptor(
                 Status = Transactions.OutboxStatus.Pending
             };
             _outboxStore.AddMessage(msg);
+            _injectedOutboxIds.Add(msg.Id);
         }
     }
 }
