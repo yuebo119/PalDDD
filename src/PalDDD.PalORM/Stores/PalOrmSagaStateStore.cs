@@ -149,10 +149,19 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
     {
         // ITM-163 修复：补 state null 守卫（对齐 InMemorySagaStateStore/DapperSagaStateStore/SagaStateDbContext）
         ArgumentNullException.ThrowIfNull(state);
+
+        // ITM-228 修复（三十二轮）：JsonTypeInfo null 时 saga_data 写 NULL——
+        // 业务字段（CustomerId 等）全部丢失。fail-fast 比静默丢数据更诚实。
+        if (_jsonTypeInfo is null)
+            throw new InvalidOperationException(
+                $"PalOrmSagaStateStore<TProvider,TState> requires JsonTypeInfo<TState> to persist saga_data. " +
+                "Register with AddPalSagaStore<TState>(jsonTypeInfo) or pass it to the constructor. " +
+                "Without it, SaveChangesAsync silently drops all business fields (ITM-228).");
+
         var existing = await GetByIdAsync(state.SagaId, ct);
 
         // saga_data：STJ 手写序列化（开放泛型 TState，[OwnedJson] 不可用）
-        var jsonData = _jsonTypeInfo is null ? null : JsonSerializer.Serialize(state, _jsonTypeInfo);
+        var jsonData = JsonSerializer.Serialize(state, _jsonTypeInfo);
 
         if (existing is null)
         {

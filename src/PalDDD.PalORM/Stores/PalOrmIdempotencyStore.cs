@@ -74,9 +74,24 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         var expiresAt = now + policy.Retention;
         var statusProcessing = (int)IdempotencyRecordStatus.Processing;
 
-        var affected = TProvider.SupportsReturningClause
-            ? await Session.ExecuteAsync($"INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL) ON CONFLICT DO NOTHING", ct)
-            : await Session.ExecuteAsync($"INSERT IGNORE INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL)", ct);
+        // ITM-228 修复（三十二轮）：MySQL INSERT IGNORE 会把截断、非法日期等非重复键
+        // 错误也降为 warning 并写入调整值——幂等键被静默破坏。改为普通 INSERT + 捕获唯一冲突。
+        int affected;
+        if (TProvider.SupportsReturningClause)
+        {
+            affected = await Session.ExecuteAsync($"INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL) ON CONFLICT DO NOTHING", ct);
+        }
+        else
+        {
+            try
+            {
+                affected = await Session.ExecuteAsync($"INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL)", ct);
+            }
+            catch (Exception ex) when (IsDuplicateKeyError(ex))
+            {
+                affected = 0; // 唯一约束冲突——记录已存在，非错误
+            }
+        }
 
         if (affected > 0)
         {
@@ -162,5 +177,40 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         p.ParameterName = name;
         p.Value = value;
         cmd.Parameters.Add(p);
+    }
+
+    /// <summary>
+    /// ITM-228：判定异常是否为唯一约束冲突（MySQL 1062/1586、PG 23505、SQLite UNIQUE、SqlServer 2601/2627）。
+    /// 仅捕获重复键——INSERT IGNORE 会把截断/非法日期等其他错误也降为 warning。
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Aot", "IL2075:RequiresDynamicallyAccessedMembers",
+        Justification = "PalORM 适配层为非 AOT（IsAotCompatible=false）；反射读取 provider 异常属性用于错误分类。")]
+    private static bool IsDuplicateKeyError(Exception exception)
+    {
+        for (var ex = exception; ex is not null; ex = ex.InnerException)
+        {
+            var type = ex.GetType();
+            var typeName = type.Name;
+
+            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(ex) is int mysqlNum
+                && (mysqlNum == 1062 || mysqlNum == 1586))
+                return true;
+
+            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
+                && type.GetProperty("SqlState")?.GetValue(ex) is string pgState
+                && pgState == "23505")
+                return true;
+
+            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
+                && ex.Message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (typeName.Equals("SqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(ex) is int sqlNum
+                && (sqlNum == 2601 || sqlNum == 2627))
+                return true;
+        }
+        return false;
     }
 }
