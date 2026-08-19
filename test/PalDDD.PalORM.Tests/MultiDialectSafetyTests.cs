@@ -8,7 +8,7 @@ namespace PalDDD.PalORM.Tests;
 public sealed class MultiDialectSafetyTests
 {
     [Test]
-    public async Task SingleDatabaseAliasIsAccepted()
+    public async Task SingleAlias_ValidConnection_IsAccepted()
     {
         var valid = TestEnvironment.TryGetUniqueDatabaseName(
             "Host=127.0.0.1;Database=palddd_test_run_123",
@@ -19,7 +19,7 @@ public sealed class MultiDialectSafetyTests
     }
 
     [Test]
-    public async Task DuplicateDatabaseAliasIsRejected()
+    public async Task DuplicateAlias_SameKey_IsRejected()
     {
         var valid = TestEnvironment.TryGetUniqueDatabaseName(
             "Host=127.0.0.1;Database=palddd_test_one;Database=palddd_test_two",
@@ -29,7 +29,7 @@ public sealed class MultiDialectSafetyTests
     }
 
     [Test]
-    public async Task ConflictingDatabaseAliasesAreRejected()
+    public async Task ConflictingAliases_DifferentKeys_IsRejected()
     {
         var valid = TestEnvironment.TryGetUniqueDatabaseName(
             "Server=127.0.0.1;Database=palddd_test_one;Initial Catalog=palddd_test_two",
@@ -39,7 +39,7 @@ public sealed class MultiDialectSafetyTests
     }
 
     [Test]
-    public async Task CatalogAliasBypassIsRejected()
+    public async Task CatalogAlias_BypassAttempt_IsRejected()
     {
         var valid = TestEnvironment.TryGetUniqueDatabaseName(
             "Server=127.0.0.1;Database=palddd_test_one;Catalog=production",
@@ -49,14 +49,14 @@ public sealed class MultiDialectSafetyTests
     }
 
     [Test]
-    public async Task ExternalFixtureModeIsRejected()
+    public async Task ExternalFixture_DisabledTestcontainers_IsRejected()
     {
         await Assert.That(() => MultiDialectFixture.EnsureTestcontainersRequired(false, "PostgreSQL"))
             .Throws<InvalidOperationException>();
     }
 
     [Test]
-    public async Task GeneratedDatabaseCleanupRequiresCreatedStateAndStrictName()
+    public async Task GeneratedDatabase_CreatedStateAndStrictName_Required()
     {
         await Assert.That(TestEnvironment.IsStrictGeneratedDatabaseName(
             "palddd_probe_pg_a1b2c3", "palddd_probe_pg_", databaseCreated: true)).IsTrue();
@@ -67,7 +67,7 @@ public sealed class MultiDialectSafetyTests
     }
 
     [Test]
-    public async Task PrimaryDisposeFailureStillDisposesSecondary()
+    public async Task Dispose_PrimaryFails_SecondaryStillDisposed()
     {
         var primary = new RecordingAsyncDisposable(new InvalidOperationException("primary"));
         var secondary = new RecordingAsyncDisposable();
@@ -79,7 +79,7 @@ public sealed class MultiDialectSafetyTests
     }
 
     [Test]
-    public async Task DualDisposeFailuresAreAggregated()
+    public async Task Dispose_DualFailures_Aggregated()
     {
         var primary = new RecordingAsyncDisposable(new InvalidOperationException("primary"));
         var secondary = new RecordingAsyncDisposable(new IOException("secondary"));
@@ -92,14 +92,14 @@ public sealed class MultiDialectSafetyTests
     }
 
     [Test]
-    public async Task MalformedConfigurationFailsClosed()
+    public async Task MalformedConfiguration_FailsClosed()
     {
         await Assert.That(() => TestEnvironment.ValidateConfigurationJson("{\"TestEnvironment\":"))
             .Throws<InvalidOperationException>();
     }
 
     [Test]
-    public async Task ConfigurationWithoutTestEnvironmentFailsClosed()
+    public async Task MissingTestEnvironmentSection_FailsClosed()
     {
         await Assert.That(() => TestEnvironment.ValidateConfigurationJson("{}"))
             .Throws<InvalidOperationException>();
