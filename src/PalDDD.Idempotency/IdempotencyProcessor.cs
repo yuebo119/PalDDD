@@ -48,6 +48,7 @@ public sealed class IdempotencyProcessor
         ArgumentNullException.ThrowIfNull(deserializeResult);
 
         policy ??= IdempotencyPolicy.Default;
+        policy.Validate(); // ITM-216：倒挂策略在 Processor 入口快速失败
         using var activity = PalActivitySource.StartIdempotencyExecute(operationName, key);
         var now = _timeProvider.GetUtcNow();
         var existing = await _store.GetAsync(operationName, key, now, cancellationToken).ConfigureAwait(false);
