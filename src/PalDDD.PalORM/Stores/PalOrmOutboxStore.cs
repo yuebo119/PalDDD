@@ -65,10 +65,25 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // 方言分支：PG/SQLite 走 RETURNING 单语句；MySQL 走 UPDATE + SELECT 两步。
         if (TProvider.SupportsReturningClause)
         {
-            var rows = await Session.QueryAsync<OutboxMessageRow>(
-                $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}) RETURNING id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state",
-                ct);
-            return rows.Select(r => r.ToDomain()).ToList();
+            // ITM-210 修复（三十二轮）：PG 子查询补 FOR UPDATE SKIP LOCKED——对齐
+            // PalOrmSagaStateStore.cs:95-106 的方言分支（ITM-173）。PG READ COMMITTED 下
+            // 并发 UPDATE...WHERE id IN(子查询) 后到 worker 阻塞后 EPQ 重查仍命中同 id 集
+            // → last-writer-wins 覆盖 locked_by → 双 worker 同批租约 → 重复投递。
+            // SQLite 无 FOR UPDATE（库级单写者串行，无需），按 Dialect 分支整句构造（PD18）。
+            if (TProvider.Dialect == global::PalORM.SqlDialect.PostgreSql)
+            {
+                var rows = await Session.QueryAsync<OutboxMessageRow>(
+                    $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize} FOR UPDATE SKIP LOCKED) RETURNING id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state",
+                    ct);
+                return rows.Select(r => r.ToDomain()).ToList();
+            }
+            else
+            {
+                var rows = await Session.QueryAsync<OutboxMessageRow>(
+                    $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}) RETURNING id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state",
+                    ct);
+                return rows.Select(r => r.ToDomain()).ToList();
+            }
         }
         else
         {

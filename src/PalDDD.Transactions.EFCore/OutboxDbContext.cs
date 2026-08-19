@@ -64,32 +64,104 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         CancellationToken ct);
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// ITM-210 修复（三十二轮）：关系型 provider 用 ExecuteUpdate 带租约守卫；
+    /// 非 SQL 可翻译 provider（InMemory 测试）回退到条件加载 + 内存突变 + SaveChanges。
+    /// 守卫：WHERE Id == id AND (LockedBy IS NULL OR LockedBy == 原持有者)。
+    /// </remarks>
     public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
     {
         ArgumentNullException.ThrowIfNull(message);
 
-        message.ProcessedAt = processedAt;
-        message.Status = OutboxStatus.Processed;
-        message.Error = null;
-        message.NextAttemptAt = null;
-        message.LockedBy = null;
-        message.LockedUntil = null;
+        var originalOwner = message.LockedBy;
+        var translated = false;
+        try
+        {
+            var affected = OutboxMessages
+                .Where(m => m.Id == message.Id
+                    && (m.LockedBy == null || m.LockedBy == originalOwner))
+                .ExecuteUpdate(s => s
+                    .SetProperty(m => m.ProcessedAt, processedAt)
+                    .SetProperty(m => m.Status, OutboxStatus.Processed)
+                    .SetProperty(m => m.Error, (string?)null)
+                    .SetProperty(m => m.NextAttemptAt, (DateTimeOffset?)null)
+                    .SetProperty(m => m.LockedBy, (string?)null)
+                    .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null));
+            translated = true;
+            if (affected > 0) return;
+        }
+        catch (InvalidOperationException)
+        {
+            // ExecuteUpdate 不支持的 provider（EF InMemory 等）——回退到条件加载路径
+        }
+
+        if (!translated || true)
+        {
+            var tracked = OutboxMessages
+                .Where(m => m.Id == message.Id
+                    && (m.LockedBy == null || m.LockedBy == originalOwner))
+                .FirstOrDefault();
+            if (tracked is not null)
+            {
+                tracked.ProcessedAt = processedAt;
+                tracked.Status = OutboxStatus.Processed;
+                tracked.Error = null;
+                tracked.NextAttemptAt = null;
+                tracked.LockedBy = null;
+                tracked.LockedUntil = null;
+            }
+        }
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// ITM-210 修复（三十二轮）：同 MarkProcessed——关系型 ExecuteUpdate 守卫 + 非关系型回退。
+    /// </remarks>
     public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
 
-        message.ProcessedAt = deadAt;
-        message.Status = OutboxStatus.Dead;
-        // P1 修复（二十一轮）：存储层兜底截断——Error 列 HasMaxLength(2048)，超长让 SaveChanges
-        // 抛截断异常且毒实体滞留 ChangeTracker（对齐 InboxDbContext.MarkFailedAsync 十七轮防御）
-        message.Error = failureReason.Length > 2040 ? failureReason[..2040] : failureReason;
-        message.NextAttemptAt = null;
-        message.LockedBy = null;
-        message.LockedUntil = null;
+        var error = failureReason.Length > 2040 ? failureReason[..2040] : failureReason;
+
+        var originalOwner = message.LockedBy;
+        var translated = false;
+        try
+        {
+            var affected = OutboxMessages
+                .Where(m => m.Id == message.Id
+                    && (m.LockedBy == null || m.LockedBy == originalOwner))
+                .ExecuteUpdate(s => s
+                    .SetProperty(m => m.ProcessedAt, deadAt)
+                    .SetProperty(m => m.Status, OutboxStatus.Dead)
+                    .SetProperty(m => m.Error, error)
+                    .SetProperty(m => m.NextAttemptAt, (DateTimeOffset?)null)
+                    .SetProperty(m => m.LockedBy, (string?)null)
+                    .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null));
+            translated = true;
+            if (affected > 0) return;
+        }
+        catch (InvalidOperationException)
+        {
+            // 同 MarkProcessed——非关系型 provider 回退
+        }
+
+        if (!translated || true)
+        {
+            var tracked = OutboxMessages
+                .Where(m => m.Id == message.Id
+                    && (m.LockedBy == null || m.LockedBy == originalOwner))
+                .FirstOrDefault();
+            if (tracked is not null)
+            {
+                tracked.ProcessedAt = deadAt;
+                tracked.Status = OutboxStatus.Dead;
+                tracked.Error = error;
+                tracked.NextAttemptAt = null;
+                tracked.LockedBy = null;
+                tracked.LockedUntil = null;
+            }
+        }
     }
 
     /// <inheritdoc/>
