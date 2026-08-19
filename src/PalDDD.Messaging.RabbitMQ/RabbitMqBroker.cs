@@ -88,10 +88,14 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         // 优化（二十五轮 R-1）：CachedString 重载——缓存 exchange 名的 UTF-8 字节表示
         // （免每发布 string→bytes 编码分配；XML 证实 BasicPublishAsync(CachedString,...) 存在）
         var cachedExchange = _cachedExchanges.GetOrAdd(exchange, static name => new CachedString(name));
+        // ITM-213 修复（三十二轮）：mandatory:true——无绑定队列时发布抛 PublishException，
+        // 不再静默丢弃（原 mandatory:false 使 Outbox 标记 Processed 但消息实际未路由）。
+        // 注意：publisher confirms 需由调用方在注入的 IChannel 上启用
+        // （channel.EnablePublisherConfirmation() 或 CreateChannelAsync 时配置）。
         await _channel.BasicPublishAsync(
             exchange: cachedExchange,
             routingKey: CachedString.Empty,
-            mandatory: false,
+            mandatory: true,
             basicProperties: CreateProperties(descriptor, messageId, context),
             body: body,
             cancellationToken: ct);
