@@ -134,6 +134,8 @@ public sealed class DefaultSagaManager : ISagaManager
 
     /// <summary>拆箱并 await 反射调用的 ValueTask&lt;TState&gt;，返回 SagaState 结果。</summary>
     [RequiresDynamicCode("Uses MakeGenericType to construct ValueTask<TState> when reflection return type is not pre-constructed; not compatible with native AOT.")]
+    [UnconditionalSuppressMessage("Aot", "IL2075:RequiresDynamicallyAccessedMembers",
+        Justification = "整个方法已声明 RequiresDynamicCode 边界——GetProperty 位于该边界内，消费方已获得编译期 AOT 警告。")]
     private static async ValueTask<SagaState> UnboxAndAwaitValueTaskAsync(
         object boxedValueTask, Type? methodReturnType, Type stateType)
     {
