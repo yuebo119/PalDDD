@@ -186,6 +186,11 @@ public sealed class EnumGenerator : IIncrementalGenerator
                     if (reference.GetSyntax(ct) is not ClassDeclarationSyntax partialDecl)
                         continue;
 
+                    // ITM-222 修复（三十二轮）：用 SemanticModel（transform context 自带）判字段类型——
+                    // 只收集类型为目标 SmartEnum 自身的字段。原实现把所有 static 字段都当枚举值
+                    // （如 public static readonly int Version = 1 也被注册，生成编译失败的 RegisterValues）。
+                    var semanticModel = context.SemanticModel;
+
                     foreach (var member in partialDecl.Members)
                     {
                         if (member is FieldDeclarationSyntax fds
@@ -193,7 +198,16 @@ public sealed class EnumGenerator : IIncrementalGenerator
                             && (fds.Modifiers.Any(SyntaxKind.PublicKeyword) || fds.Modifiers.Any(SyntaxKind.InternalKeyword)))
                         {
                             foreach (var variable in fds.Declaration.Variables)
-                                fields.Add(variable.Identifier.Text);
+                            {
+                                var fieldSymbol = semanticModel.GetDeclaredSymbol(variable, ct) as IFieldSymbol;
+                                if (fieldSymbol is null) continue;
+
+                                // 字段声明类型必须等于目标类型自身（排除 int Version / string Name 等辅助字段）
+                                if (SymbolEqualityComparer.Default.Equals(fieldSymbol.Type, classSymbol))
+                                {
+                                    fields.Add(variable.Identifier.Text);
+                                }
+                            }
                         }
                     }
                 }
