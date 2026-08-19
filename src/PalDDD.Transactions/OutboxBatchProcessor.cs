@@ -81,7 +81,9 @@ public sealed class OutboxBatchProcessor
             {
                 try
                 {
-                    var descriptor = _messageCatalog.Find(msg.Type);
+                    // ITM-217 修复：按存储的 SchemaVersion 解析——Find(name) 返回最新版本，
+                    // 旧版 payload 被新版 descriptor 解释会产生错误字段/反序列化失败。
+                    var descriptor = _messageCatalog.Find(msg.Type, msg.SchemaVersion);
                     if (descriptor is null)
                     {
                         _store.MarkDead(msg, $"Type '{msg.Type}' not registered in MessageCatalog", now);
