@@ -84,10 +84,11 @@ public abstract class Entity<TId> : Entity
 {
     /// <summary>实体唯一标识</summary>
     /// <remarks>
-    /// Id 使用 <c>init</c> setter，要求 ORM 支持 init 属性设置。<br/>
-    /// EF Core 8+ 兼容；Dapper 通过直接 SQL 映射不依赖此 setter。
+    /// ITM-224：get-only——构造后不可被对象初始化器覆盖（原 init 允许 new Entity(id1){ Id = id2 }
+    /// 造成构造器与最终 Id 不一致的竞态）。EF Core 经构造函数绑定（protected Entity(TId id)），
+    /// Dapper 经 SQL 直接映射，均不依赖 init setter。
     /// </remarks>
-    public TId Id { get; init; }
+    public TId Id { get; }
 
     protected Entity(TId id) => Id = id;
 

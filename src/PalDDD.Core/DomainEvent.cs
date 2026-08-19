@@ -92,12 +92,14 @@ public abstract class DomainEvent
     /// <summary>
     /// 事件全局唯一 ID。每次 new DomainEvent 时自动生成，
     /// 用于幂等处理、事件去重、以及分布式追踪中的事件关联。
+    /// ITM-224：get-only——构造后不可被覆盖（原 init 允许伪造 EventId/OccurredOn）。
     /// </summary>
-    public PalUlid EventId { get; init; } = PalUlid.New();
+    public PalUlid EventId { get; } = PalUlid.New();
 
     /// <summary>
     /// 事件发生时间（UTC）。构造时自动从 TimeProvider 获取当前时间。
     /// 如果测试中设置了 FakeTimeProvider，则使用测试提供的固定时间。
+    /// ITM-224：get-only——构造后不可被覆盖。
     /// </summary>
-    public DateTimeOffset OccurredOn { get; init; } = TimeProvider.GetUtcNow();
+    public DateTimeOffset OccurredOn { get; } = TimeProvider.GetUtcNow();
 }

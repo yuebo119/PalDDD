@@ -111,22 +111,20 @@ public sealed class DomainEventSemanticsTests
     {
         var evt = new PriceChangedEvent(Guid.NewGuid(), 42m);
 
-        // EventId 和 OccurredOn 是 init — 构造后不可变
-        // 验证它们可读
+        // ITM-224：EventId/OccurredOn get-only——比 init 更强（无任何 setter，包括 init）
         await Assert.That(evt.EventId).IsNotEqualTo(default(PalUlid));
         await Assert.That(evt.OccurredOn <= DateTimeOffset.UtcNow).IsTrue();
 
-        // 验证 init 语义 — init setter 在反射中 CanWrite=true（setter 存在但仅限 init 期），
-        // 且编译后元数据中保留 setter（GetSetMethod 非 null）
+        // 验证 get-only 语义 — 无 setter（CanWrite=false、GetSetMethod=null）
         var eventIdProp = typeof(DomainEvent).GetProperty(nameof(DomainEvent.EventId));
         await Assert.That(eventIdProp).IsNotNull();
-        await Assert.That(eventIdProp!.CanWrite).IsTrue();
-        await Assert.That(eventIdProp.GetSetMethod(nonPublic: true) is not null).IsTrue();
+        await Assert.That(eventIdProp!.CanWrite).IsFalse();
+        await Assert.That(eventIdProp.GetSetMethod(nonPublic: true)).IsNull();
 
         var occurredOnProp = typeof(DomainEvent).GetProperty(nameof(DomainEvent.OccurredOn));
         await Assert.That(occurredOnProp).IsNotNull();
-        await Assert.That(occurredOnProp!.CanWrite).IsTrue();
-        await Assert.That(occurredOnProp.GetSetMethod(nonPublic: true) is not null).IsTrue();
+        await Assert.That(occurredOnProp!.CanWrite).IsFalse();
+        await Assert.That(occurredOnProp.GetSetMethod(nonPublic: true)).IsNull();
     }
 
     [Test]
