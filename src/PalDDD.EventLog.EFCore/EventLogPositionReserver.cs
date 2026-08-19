@@ -152,14 +152,26 @@ public sealed class EventLogPositionReserver
                     continue;
                 }
 
-                lock (_lock)
+                // ITM-226 修复（三十二轮）：检测活动事务——外层事务回滚时 allocator UPDATE
+                // 与事件 INSERT 一同回滚，但内存 _lo/_hi 已超前发布。重启后 DB allocator
+                // 重新取块落在已用区间→唯一约束报错。
+                // 修复策略：有活动事务时不更新内存游标（下次调用重读 DB，慢但正确）；
+                // 无事务时 SaveChanges 原子提交，立即发布安全。
+                var hasActiveTransaction = context.Database.CurrentTransaction is not null;
+                if (hasActiveTransaction)
                 {
-                    // ITM-166 声明（理论不可达）：first + count / first + chunkSize 的
-                    // long 溢出同 ReserveAsync 快路径声明——需 DB allocator 推进到
-                    // long.MaxValue 附近，实际不可达；若未来分配器行可手工改写，需 checked。
-                    _lo = first + count;
-                    _hi = first + chunkSize;
-                    _initialized = true;
+                    // 不发布到内存——下次 ReserveAsync 走 AllocateNewChunkAsync 重读 DB
+                    // （DB allocator 已推进，只是本进程不缓存它——正确但慢一个往返）
+                    _initialized = false;
+                }
+                else
+                {
+                    lock (_lock)
+                    {
+                        _lo = first + count;
+                        _hi = first + chunkSize;
+                        _initialized = true;
+                    }
                 }
 
                 return first;
