@@ -13,10 +13,19 @@ namespace PalDDD.Transactions;
 /// <typeparam name="TState">Saga 状态类型</typeparam>
 public interface ISagaStateStore<TState> where TState : SagaState
 {
-    /// <summary>获取一批活跃（<see cref="SagaStatus.Active"/>）的 Saga 状态。</summary>
+    /// <summary>
+    /// 获取一批活跃的 Saga 状态（<see cref="SagaStatus.Active"/> 与
+    /// <see cref="SagaStatus.AwaitingHumanDecision"/>——三十四轮起中断态纳入扫描，
+    /// 用于中断步骤超时兜底补偿；未配置步骤 Timeout 的中断态不会被 IsTimedOut 命中）。
+    /// </summary>
     ValueTask<IReadOnlyList<TState>> GetActiveSagasAsync(int batchSize, CancellationToken ct);
 
-    /// <summary>租约获取一批活跃 Saga，避免多实例后台扫描器重复处理同一状态。</summary>
+    /// <summary>
+    /// 租约获取一批活跃 Saga，避免多实例后台扫描器重复处理同一状态。<br/>
+    /// 扫描集含 <see cref="SagaStatus.Active"/> 与 <see cref="SagaStatus.AwaitingHumanDecision"/>
+    ///（三十四轮中断态超时兜底）——是否补偿由 <c>SagaTimeoutProcessor.IsTimedOut</c> 门控：
+    /// 中断步骤配置了 Timeout 且超期才触发补偿，否则仅经历租约获取/释放（显式无限等待）。
+    /// </summary>
     ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
         string owner,
         TimeSpan leaseDuration,

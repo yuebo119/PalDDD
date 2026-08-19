@@ -53,8 +53,11 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
         var leasedUntil = now.Add(leaseDuration);
         lock (_lock)
         {
+            // 三十四轮（中断态超时兜底）：扫描集扩 AwaitingHumanDecision——中断态 Saga
+            // 配置了步骤 Timeout 且超期时由 SagaTimeoutProcessor.IsTimedOut 门控补偿；
+            // 未配置 Timeout 则 IsTimedOut 恒 false，仅经历租约获取/释放（显式无限等待契约）
             var active = _states.Values
-                .Where(s => s.Status == SagaStatus.Active
+                .Where(s => (s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision)
                     && (s.LeasedUntil is null || s.LeasedUntil <= now))
                 .OrderBy(s => s.CreatedAt)
                 .Take(batchSize)

@@ -183,6 +183,21 @@ public sealed class InMemoryStoreTests
     }
 
     [Test]
+    public async Task InMemorySagaStateStore_LeaseActiveSagas_IncludesAwaitingHumanDecision()
+    {
+        // 三十四轮中断态超时兜底回归：扫描集扩 AwaitingHumanDecision（配步骤 Timeout 的
+        // 中断态由 SagaTimeoutProcessor 补偿）；终态（Completed 等）仍被过滤
+        var store = new InMemorySagaStateStore<SampleSaga>();
+        store.Add(new SampleSaga { SagaId = Guid.NewGuid(), CurrentState = "Waiting", Status = SagaStatus.AwaitingHumanDecision });
+        store.Add(new SampleSaga { SagaId = Guid.NewGuid(), CurrentState = "Done", Status = SagaStatus.Completed });
+
+        var leased = await store.LeaseActiveSagasAsync("scanner", TimeSpan.FromMinutes(1), 10, CancellationToken.None);
+
+        await Assert.That(leased.Count).IsEqualTo(1);
+        await Assert.That(leased[0].Status).IsEqualTo(SagaStatus.AwaitingHumanDecision);
+    }
+
+    [Test]
     public async Task InMemorySagaStateStore_GetById_ReturnsCorrectState(CancellationToken cancellationToken)
     {
         var store = new InMemorySagaStateStore<SampleSaga>();

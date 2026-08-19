@@ -19,11 +19,15 @@
 - **修复**：消除或隔离 `GetType().GetProperty` 动态访问；restore/publish 均传 `PublishAot=true`、`SelfContained=true`、RID；不得以 NoWarn 作为兼容证明。
 - **验证**：原生产物存在且不携带 CoreCLR runtime 布局；运行退出 0；AOT warning 0。
 
-### [x] ITM-210 · 给 EF/PalORM 租约终态写加入 fencing（部分落地，见"未落地"注）
+### [x] ITM-210 · 给 EF/PalORM 租约终态写加入 fencing（三十四轮 token 方案落地）
 - **范围**：EF Outbox MarkProcessed/MarkDead；PalORM Outbox/Inbox/Saga。
-- **已落地**：EF MarkProcessed/MarkDead 的 `ExecuteUpdate` 携带 owner 匹配守卫（`WHERE LockedBy IS NULL OR LockedBy == 原持有者`，`OutboxDbContext.cs:70-137`；非关系型 provider 回退条件加载同款守卫）；PG PalORM Outbox 租约子查询 `FOR UPDATE SKIP LOCKED`（`PalOrmOutboxStore.cs:68`）。
-- **未落地（后续项）**：单调 LeaseVersion/FencingToken 列与 token 匹配终态写——owner 匹配守卫已覆盖"旧 worker 终态写覆盖新 owner"路径，但同 owner 复用场景无 token 序防护；涉及 outbox/inbox/saga 表跨方言 DDL 变更，需专项轮处理。
-- **验证**：守卫与 SKIP LOCKED 代码位置实测核实；PG 集成路径由 PalORM Testcontainers 测试覆盖（需 Docker 环境）。
+- **已落地（三十四轮，免 DDL token 方案）**：以 **(locked_by, locked_until) 租约标识对** 充当 fencing token——locked_until 随每次租约单调变化（重租必在过期后，新 until 严格更晚），终态写要求行内标识对与租约时捕获值完全匹配：
+  - EF `OutboxDbContext`：MarkProcessed/MarkDead/ReleaseForRetry 统一走 `FencedTarget` 守卫（`OutboxDbContext.cs`）；持租调用方匹配标识对，无租约直呼仅放行 `LockedBy IS NULL` 行（原 "NULL 放行" 分支正是缺口）。
+  - PalORM `PalOrmOutboxStore`：MarkProcessed/MarkDead 从 UpdateAsync（仅 RetryCount 乐观锁，不防同 owner 复用）改手写 SQL 双守卫（retry_count 乐观锁 + 租约 token）；ReleaseForRetry owner 分支升级 token 完全匹配。
+  - Dapper `SqlTemplates`：OutboxMarkProcessed/OutboxMarkDead 从裸 `WHERE id=@id`（零防护）补 token 守卫；OutboxReleaseForRetry 同步升级。
+  - PG SKIP LOCKED（`PalOrmOutboxStore.cs` PG 分支）三十二轮已落地。
+- **设计取舍**：免 DDL 加列（lease_version 需 outbox/inbox/saga 跨方言 schema 迁移），精度前提 = 存储列精度 ≥ 租约粒度（PG timestamptz µs / SQLite TEXT "O" 全精度 / Dapper PG 原生 timestamptz 均满足；租约 token 值均取自 DB 回读，无编码漂移）。Saga 终态写本就走 version 乐观锁（`SagaUpdate` / EF SaveChanges 0 行检测），无需本方案。
+- **验证**：EF SQLite ×2（重租接管拒绝 + 租约释放后拒绝，`OutboxSqliteConcurrencyTests`）；Dapper SQLite ×1（`DapperStoreTests`）；PalORM SQLite ×1（`PalOrmConcurrencyTests`）。PG/MySQL 集成路径由 Testcontainers CI 覆盖。
 
 ### [x] ITM-211 · 隔离 Projection 完成确认失败
 - **范围**：`ProjectionProcessor.ProcessAsync`。
@@ -152,6 +156,7 @@
 ### [x] ITM-235 · 明确 Kafka 与 HITL 产品契约
 - Kafka 保持 at-most-once 就写入公共契约；若要 at-least-once，关闭 auto offset store，handler/DLQ 成功后 StoreOffset。
 - HITL 明确无限等待或增加 HumanDecisionDeadline；后者需单独扫描 AwaitingHumanDecision。
+- **三十四轮落地**：中断步骤配置 `SagaStep.Timeout` 即为 HumanDecisionDeadline——全部 4 个 Store 的 `LeaseActiveSagasAsync` 扫描集扩为 `Active + AwaitingHumanDecision`，超期中断态由 `SagaTimeoutProcessor.IsTimedOut` 门控补偿（Status → Compensated）；未配置 Timeout = 显式无限等待（扫描命中但永不超时）。契约写入 `ISagaStateStore`/`Saga.SagaManager` XML doc；回归测试见 TransactionsTests（中断态补偿 + 无限等待两例）。
 
 ### [x] ITM-236 · 同步文档与提示模板事实
 - 统一 PalORM 5.2.0、977 测试、遥测名称/命名空间/instrument 类型。

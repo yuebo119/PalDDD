@@ -155,4 +155,61 @@ public class PalOrmConcurrencyTests
 
         if (File.Exists(dbPath)) try { File.Delete(dbPath); } catch { /* SQLite 连接池延迟释放 */ }
     }
+
+    /// <summary>
+    /// Outbox 租约 token fencing（三十四轮 ITM-210）——租约被重租（locked_until 变化 = 新 token）后，
+    /// 旧 worker 的 MarkProcessed 必须影响 0 行：原 UpdateAsync 路径的 [ConcurrencyCheck]RetryCount
+    /// 乐观锁无法防同 owner 复用（retry_count 不随租约变化）。
+    /// </summary>
+    [Test]
+    public async Task Outbox_MarkProcessed_LeaseTakenOver_StaleWriteRejected()
+    {
+        var dbPath = $"fence_outbox_{Guid.NewGuid():N}.db";
+        if (File.Exists(dbPath)) try { File.Delete(dbPath); } catch { /* SQLite 连接池延迟释放 */ }
+
+        try
+        {
+            await using (var setupSession = await CreateSharedFileSessionAsync(dbPath))
+            {
+                await InitSchemaAsync(setupSession);
+                var setupStore = new SqliteOutboxStore(setupSession);
+                setupStore.AddMessage(new OutboxMessage
+                {
+                    Id = Ulid.New(),
+                    Type = "fence.event.v1",
+                    Payload = System.Text.Encoding.UTF8.GetBytes("[]"),
+                });
+            }
+
+            // worker-1 租约（捕获 token = (LockedBy, LockedUntil)）
+            await using var session1 = await CreateSharedFileSessionAsync(dbPath);
+            var store1 = new SqliteOutboxStore(session1);
+            var leased = await store1.LeasePendingMessagesAsync(10, "stale-worker", TimeSpan.FromMinutes(5), 10, default);
+            await Assert.That(leased).Count().IsEqualTo(1);
+            var staleMsg = leased[0];
+
+            // 模拟租约被重租（token 单调变化：locked_until 更晚、持有者更换）
+            await using (var session2 = await CreateSharedFileSessionAsync(dbPath))
+            {
+                var newUntil = DateTimeOffset.UtcNow.AddMinutes(10);
+                await session2.ExecuteAsync(
+                    $"UPDATE outbox_messages SET locked_by = {"new-worker"}, locked_until = {newUntil} WHERE id = {staleMsg.Id.ToString()}",
+                    default);
+            }
+
+            // 旧 worker 终态写——token 失配应影响 0 行
+            store1.MarkProcessed(staleMsg, DateTimeOffset.UtcNow);
+
+            var status = await session1.ScalarAsync<long>(
+                $"SELECT status FROM outbox_messages WHERE id = {staleMsg.Id.ToString()}", default);
+            await Assert.That(status).IsNotEqualTo((long)OutboxStatus.Processed);
+            var currentOwner = await session1.ScalarAsync<string>(
+                $"SELECT locked_by FROM outbox_messages WHERE id = {staleMsg.Id.ToString()}", default);
+            await Assert.That(currentOwner).IsEqualTo("new-worker"); // 新租约未被旧写清除
+        }
+        finally
+        {
+            if (File.Exists(dbPath)) try { File.Delete(dbPath); } catch { /* SQLite 连接池延迟释放 */ }
+        }
+    }
 }

@@ -134,16 +134,34 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
     {
         // ITM-163 修复：补 message null 守卫（对齐 InMemoryOutboxStore/OutboxDbContext）
         ArgumentNullException.ThrowIfNull(message);
-        // UpdateAsync 经 [ConcurrencyCheck]RetryCount 自动加 WHERE retry_count=@orig
-        // 失败抛 ConcurrencyConflictException —— 调用方（OutboxProcessor）应捕获并视为已处理
-        message.Status = OutboxStatus.Processed;
-        message.ProcessedAt = processedAt;
-        message.Error = null;
-        message.NextAttemptAt = null;
-        message.LockedBy = null;
-        message.LockedUntil = null;
-        var row = OutboxMessageRow.FromDomain(message);
-        Session.UpdateAsync(row, default).AsTask().GetAwaiter().GetResult();
+        // 三十四轮 ITM-210 token 化：UpdateAsync 的 [ConcurrencyCheck]RetryCount 乐观锁
+        // 无法防"同 owner 复用/租约释放后旧 worker 终态写"（retry_count 不随租约变化）——
+        // 改手写 SQL 双守卫：retry_count 乐观锁 + (locked_by, locked_until) 租约 token
+        //（LockedUntil 随每次租约单调变化，免 DDL fencing）。affected=0（token 拒绝/并发冲突）
+        // 时零内存变异（镜像 ReleaseForRetry 模式，对齐 OutboxProcessor 的"视为已处理"语义）。
+        // ⚠️ SET/WHERE 只插值"值"（参数位合法）；SQL 片段变量会被 PalORM 整体参数化成
+        // SET @pN 语法错误（十七轮实证，见 PalOrmSagaStateStore PD18 注释）。
+        var id = message.Id.ToString();
+        var retry = message.RetryCount;
+        var owner = message.LockedBy;
+        var until = message.LockedUntil;
+        var statusProcessed = (int)OutboxStatus.Processed;
+        var affected = owner is null
+            ? Session.ExecuteAsync(
+                $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND locked_by IS NULL",
+                default).AsTask().GetAwaiter().GetResult()
+            : Session.ExecuteAsync(
+                $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND locked_by = {owner} AND locked_until = {until}",
+                default).AsTask().GetAwaiter().GetResult();
+        if (affected > 0)
+        {
+            message.Status = OutboxStatus.Processed;
+            message.ProcessedAt = processedAt;
+            message.Error = null;
+            message.NextAttemptAt = null;
+            message.LockedBy = null;
+            message.LockedUntil = null;
+        }
     }
 
     /// <inheritdoc />
@@ -152,14 +170,29 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // ITM-163 修复：补 message null + failureReason 空白守卫（对齐 InMemoryOutboxStore/OutboxDbContext）
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
-        message.Status = OutboxStatus.Dead;
-        message.Error = failureReason;
-        message.ProcessedAt = deadAt;
-        message.NextAttemptAt = null;
-        message.LockedBy = null;
-        message.LockedUntil = null;
-        var row = OutboxMessageRow.FromDomain(message);
-        Session.UpdateAsync(row, default).AsTask().GetAwaiter().GetResult();
+        // 三十四轮 ITM-210 token 化：同 MarkProcessed——retry_count 乐观锁 + 租约 token 双守卫
+        //（SET/WHERE 只插值"值"；SQL 片段变量会被 PalORM 整体参数化成语法错误，见 MarkProcessed 注释）
+        var id = message.Id.ToString();
+        var retry = message.RetryCount;
+        var owner = message.LockedBy;
+        var until = message.LockedUntil;
+        var statusDead = (int)OutboxStatus.Dead;
+        var affected = owner is null
+            ? Session.ExecuteAsync(
+                $"UPDATE outbox_messages SET status = {statusDead}, error = {failureReason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND locked_by IS NULL",
+                default).AsTask().GetAwaiter().GetResult()
+            : Session.ExecuteAsync(
+                $"UPDATE outbox_messages SET status = {statusDead}, error = {failureReason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND locked_by = {owner} AND locked_until = {until}",
+                default).AsTask().GetAwaiter().GetResult();
+        if (affected > 0)
+        {
+            message.Status = OutboxStatus.Dead;
+            message.Error = failureReason;
+            message.ProcessedAt = deadAt;
+            message.NextAttemptAt = null;
+            message.LockedBy = null;
+            message.LockedUntil = null;
+        }
     }
 
     /// <inheritdoc />
@@ -177,6 +210,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // FormattableString 会把字符串变量参数化（AND (@p) 恒假，UPDATE 0 行，
         // file-based app 探针定位）。
         var leaseOwner = message.LockedBy;
+        var leaseUntil = message.LockedUntil;
         var statusPending = (int)OutboxStatus.Pending;
         var id = message.Id.ToString();
         // P3 修复（九轮→十轮修正）：SQL 先行且按受影响行数门控内存同步——守卫拦截
@@ -188,12 +222,15 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // P2/P3 修复（十七轮）：UPDATE 补 processed_at = NULL——对齐 EFCore/Dapper 版
         // ReleaseForRetry 与 RequeueDeadAsync 语义（消息重回 Pending 后清除上次完成时间，
         // 防止监控/报表误判），三方统一。
+        // 三十四轮 ITM-210 token 化：owner 分支从"仅防他人持有"升级为 (locked_by, locked_until)
+        // 租约 token 完全匹配——原 NULL 放行分支正是 fencing 缺口（租约释放后旧 worker 复活
+        // Processed 消息）；无租约直呼分支保持 locked_by IS NULL 字面量。
         var affected = leaseOwner is null
             ? Session.ExecuteAsync(
                 $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND (locked_by IS NULL)",
                 default).AsTask().GetAwaiter().GetResult()
             : Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND (locked_by IS NULL OR locked_by = {leaseOwner})",
+                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND locked_by = {leaseOwner} AND locked_until = {leaseUntil}",
                 default).AsTask().GetAwaiter().GetResult();
         if (affected > 0)
         {

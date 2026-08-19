@@ -97,6 +97,69 @@ public sealed class OutboxSqliteConcurrencyTests
         await Assert.That(loaded.Error).IsEqualTo("broker timeout");
     }
 
+    [Test]
+    public async Task MarkProcessed_LeaseTakenOverByReLease_StaleWriteRejected(CancellationToken cancellationToken)
+    {
+        // 三十四轮 ITM-210 租约 token 回归：worker-1 持租后租约被重租（同 owner 复用场景，
+        // locked_until 更晚 = 新 token），旧 worker 的终态写必须影响 0 行——原 owner 守卫的
+        // "LockedBy 相同即放行"分支会让旧写覆盖新租约状态
+        var messageId = PalUlid.New();
+        await SeedMessageAsync(messageId, "orders.created.v1");
+
+        await using var ctx1 = new SqliteOutboxDbContext(_options);
+        var store1 = (IPalOutboxStore)ctx1;
+        var leased = (await store1.LeasePendingMessagesAsync(
+            10, "worker-1", TimeSpan.FromMinutes(2), 5, cancellationToken)).ToList();
+        await Assert.That(leased).Count().IsEqualTo(1);
+        var staleMsg = leased[0];
+
+        // 模拟同 owner 重租（token 单调变化：locked_until 更晚）
+        await using var ctx2 = new SqliteOutboxDbContext(_options);
+        var row = await ctx2.OutboxMessages.SingleAsync(m => m.Id == messageId, cancellationToken);
+        row.LockedUntil = row.LockedUntil!.Value.AddMinutes(5);
+        await ctx2.SaveChangesAsync(cancellationToken);
+
+        // 旧 worker 终态写——token 失配应影响 0 行
+        store1.MarkProcessed(staleMsg, DateTimeOffset.UtcNow);
+
+        await using var readerCtx = new SqliteOutboxDbContext(_options);
+        var final = await readerCtx.OutboxMessages.SingleAsync(
+            m => m.Id == messageId, cancellationToken);
+        await Assert.That(final.Status).IsNotEqualTo(OutboxStatus.Processed);
+        await Assert.That(final.LockedBy).IsEqualTo("worker-1"); // 新租约未被旧写清除
+    }
+
+    [Test]
+    public async Task MarkProcessed_LeaseReleased_StaleWriteRejected(CancellationToken cancellationToken)
+    {
+        // 三十四轮 ITM-210 租约 token 回归：租约被释放（locked_by/until 置 NULL，
+        // 如他路径 RequeueDead/ReleaseForRetry），旧 worker 的终态写必须被拒——
+        // 原 "LockedBy IS NULL OR ..." 守卫的 NULL 放行分支正是 fencing 缺口
+        var messageId = PalUlid.New();
+        await SeedMessageAsync(messageId, "orders.created.v1");
+
+        await using var ctx1 = new SqliteOutboxDbContext(_options);
+        var store1 = (IPalOutboxStore)ctx1;
+        var leased = (await store1.LeasePendingMessagesAsync(
+            10, "worker-1", TimeSpan.FromMinutes(2), 5, cancellationToken)).ToList();
+        var staleMsg = leased[0];
+
+        // 模拟租约释放（行回到未租状态）
+        await using var ctx2 = new SqliteOutboxDbContext(_options);
+        var row = await ctx2.OutboxMessages.SingleAsync(m => m.Id == messageId, cancellationToken);
+        row.LockedBy = null;
+        row.LockedUntil = null;
+        await ctx2.SaveChangesAsync(cancellationToken);
+
+        // 旧 worker 终态写——持租 token 非空但行未租，必须影响 0 行
+        store1.MarkProcessed(staleMsg, DateTimeOffset.UtcNow);
+
+        await using var readerCtx = new SqliteOutboxDbContext(_options);
+        var final = await readerCtx.OutboxMessages.SingleAsync(
+            m => m.Id == messageId, cancellationToken);
+        await Assert.That(final.Status).IsEqualTo(OutboxStatus.Pending);
+    }
+
     private async ValueTask SeedMessageAsync(PalUlid id, string type)
     {
         await using var ctx = new SqliteOutboxDbContext(_options);

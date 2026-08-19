@@ -123,15 +123,14 @@ public abstract class Saga<TState> where TState : SagaState, new()
     /// <summary>
     /// Saga 管理器——提供中断恢复和子 Saga 执行能力。<br/>
     /// 可由 DI 注入或手动设置。若为 null，ChildSagaStep 和恢复流程将不可用。<br/>
-    /// ⚠️ <b>中断后果（P3 声明·十七轮）</b>：<see cref="InterruptStep"/> 执行时若本属性为 null
+    /// ⚠️ <b>中断后果（P3 声明·十七轮；三十四轮兜底落地）</b>：<see cref="InterruptStep"/> 执行时若本属性为 null
     /// （或非 <see cref="DefaultSagaManager"/> 类型），中断条目无处注册——该 Saga 状态已被置为
-    /// <see cref="SagaStatus.AwaitingHumanDecision"/> 且无人能消费后续人工决策，
-    /// 将<b>永久滞留</b>在中断态——超时兜底对中断态完全不可用：
-    /// SagaProcessor.CheckTimeoutsAsync 经 LeaseActiveSagasAsync 只取回
-    /// <see cref="SagaStatus.Active"/> 的 Saga，中断态不在扫描范围；
-    /// 即使 InterruptStep 配置了 <see cref="SagaStep.Timeout"/>，IsTimedOut
-    /// 也无人对该 Saga 调用，超时补偿不会触发（ITM-219 修正·三十三轮：
-    /// 原文档误称配置 Timeout 可获超时补偿——实际扫描器不取回中断态）。
+    /// <see cref="SagaStatus.AwaitingHumanDecision"/> 且无人能消费后续人工决策，将<b>滞留</b>在中断态。
+    /// 滞留时长由中断步骤的 <see cref="SagaStep.Timeout"/> 决定：<br/>
+    /// - <b>配置了 Timeout</b>：超期后 <c>SagaProcessor.CheckTimeoutsAsync</c> 扫描
+    ///   （三十四轮起 <c>LeaseActiveSagasAsync</c> 纳入 AwaitingHumanDecision）命中
+    ///   <c>IsTimedOut</c>，触发补偿回滚（Status → Compensated）——人工决策超时兜底；<br/>
+    /// - <b>未配置 Timeout</b>：显式无限等待——仅人工决策可恢复，超时扫描永不命中。<br/>
     /// 使用 Interrupt 步骤前必须设置本属性。
     /// </summary>
     public ISagaManager? SagaManager { get; set; }

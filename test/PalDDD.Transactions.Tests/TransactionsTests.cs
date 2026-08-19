@@ -972,6 +972,55 @@ public sealed class SagaTimeoutProcessorTests
         await Assert.That(state.ErrorAt).IsNotNull();
     }
 
+    [Test]
+    public async Task CheckTimeoutsAsync_InterruptedSaga_WithExpiredStepTimeout_IsCompensated()
+    {
+        // 三十四轮中断态超时兜底回归：AwaitingHumanDecision + 步骤 Timeout 超期 →
+        // CheckTimeoutsAsync 扫描命中 IsTimedOut 并补偿（此前扫描集只含 Active，
+        // 中断态永不超时——人工决策失踪即永久滞留）
+        var state = new OrderSagaState
+        {
+            CurrentState = "Waiting",
+            Status = SagaStatus.AwaitingHumanDecision
+        };
+        state.StepStartedAt["Waiting|OrderPlacedSagaEvent"] = DateTimeOffset.UnixEpoch;
+        var store = new RecordingSagaStateStore([state]);
+        var processor = new SagaTimeoutProcessor<OrderSagaState>(
+            store,
+            new TimedOutSaga(),
+            NullPalLogger<SagaTimeoutProcessor<OrderSagaState>>.Instance,
+            new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions()),
+            TimeProvider.System);
+
+        await processor.CheckTimeoutsAsync(CancellationToken.None);
+
+        await Assert.That(state.Status).IsEqualTo(SagaStatus.Compensated);
+        await Assert.That(state.CurrentState).IsEqualTo("Compensated");
+    }
+
+    [Test]
+    public async Task CheckTimeoutsAsync_InterruptedSaga_WithoutStepTimeout_StaysInterrupted()
+    {
+        // 三十四轮契约回归：未配置步骤 Timeout 的中断态 = 显式无限等待——
+        // 纳入扫描（租约获取/释放）但 IsTimedOut 不命中，状态不变
+        var state = new OrderSagaState
+        {
+            CurrentState = "Waiting",
+            Status = SagaStatus.AwaitingHumanDecision
+        };
+        var store = new RecordingSagaStateStore([state]);
+        var processor = new SagaTimeoutProcessor<OrderSagaState>(
+            store,
+            new OrderFulfillmentSaga(), // 无 Timeout 配置的 Saga（IsTimedOut 恒 false）
+            NullPalLogger<SagaTimeoutProcessor<OrderSagaState>>.Instance,
+            new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions()),
+            TimeProvider.System);
+
+        await processor.CheckTimeoutsAsync(CancellationToken.None);
+
+        await Assert.That(state.Status).IsEqualTo(SagaStatus.AwaitingHumanDecision);
+    }
+
     private sealed class RecordingSagaStateStore(IReadOnlyList<OrderSagaState>? states = null)
         : ISagaStateStore<OrderSagaState>
     {

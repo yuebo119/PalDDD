@@ -221,7 +221,19 @@ public static class MySqlServiceCollectionExtensions
     /// MySQL 池默认 MinimumPoolSize=0，并发高峰按需新建的物理连接<b>不会</b>收到 SET SESSION，
     /// 使用服务端默认（如 transaction_isolation=REPEATABLE-READ）——同池内 RC 与 RR 隔离级别
     /// 混跑（间隙锁/死锁行为不一致）。<br/>
-    /// 对于生产环境多连接场景，<b>必须</b>在 MySQL 服务端配置（my.cnf）中全局设置这些参数。
+    /// <b>生产环境收口方案（三十四轮，按优先级）</b>：<br/>
+    /// 1. <b>服务器端 init_connect（推荐）</b>——MySQL 对<b>每个新建连接</b>执行该 SQL，覆盖池内
+    /// 全部现在与未来的物理连接，应用侧零改动：<br/>
+    /// <code>
+    /// -- my.cnf [mysqld] 段：
+    /// init_connect = 'SET SESSION transaction_isolation=''READ-COMMITTED'', sql_mode=''STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION'', innodb_lock_wait_timeout=10'
+    /// </code>
+    /// ⚠️ 注意：拥有 CONNECTION_ADMIN/SUPER 权限的连接<b>不执行</b> init_connect（MySQL 官方语义）——
+    /// 应用账号不应授予该权限，否则该连接回到缺口状态。<br/>
+    /// 2. <b>全局参数</b>——my.cnf 直接设 <c>transaction_isolation</c>/<c>sql_mode</c> 服务器级值
+    /// （影响所有库与账号，需 DBA 评估）。<br/>
+    /// .NET 侧无每连接 checkout 钩子（MySqlDataSource 无 on-open 回调），应用内无法闭环——
+    /// 本方法保留为"首连接尽力优化 + 缺口显式声明"。
     /// </summary>
     private static void ApplySessionOptimization(MySqlDataSource dataSource)
     {

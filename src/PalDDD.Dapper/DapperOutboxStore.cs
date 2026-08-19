@@ -208,8 +208,11 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         var c = EnsureOpen();
         // P1 修复（八轮评审）：时间参数统一走 ToTimeParam——ToSqliteParameter 产出 "O" string，
         // PG 下 timestamptz 列收 text 参数无比较/赋值运算符（详见 ToTimeParam 的 PG 分支注释）
+        // 三十四轮 ITM-210 token 化：补租约 token 参数（owner/until 调用时快照；无租约时均传
+        // null → SQL 走 locked_by IS NULL 分支）。affected 返回值不消费——与原语义一致
+        //（token 拒绝时 DB 行不变，内存入参仍按下方 ITM-130 同步清租约字段）。
         c.Execute(SqlTemplates.OutboxMarkProcessed,
-            new { at = ToTimeParam(processedAt), id = DapperAotInitializer.ToSqliteParameter(message.Id) }, _transaction);
+            new { at = ToTimeParam(processedAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message) }, _transaction);
         // ITM-130 修复：SQL 清除 DB 租约列后同步入参——调用方读入参不应再见陈旧持有者
         // （对齐 EFCore/PalORM/InMemory 三姊妹的对象字段语义）
         message.LockedBy = null;
@@ -222,7 +225,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         var c = EnsureOpen();
         c.Execute(SqlTemplates.OutboxMarkDead,
-            new { reason = failureReason, at = ToTimeParam(deadAt), id = DapperAotInitializer.ToSqliteParameter(message.Id) }, _transaction); // P1 修复（八轮评审）：时间参数走 ToTimeParam
+            new { reason = failureReason, at = ToTimeParam(deadAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message) }, _transaction); // P1 修复（八轮评审）：时间参数走 ToTimeParam；三十四轮 ITM-210：租约 token 参数
         // ITM-130 修复：SQL 清除 DB 租约列后同步入参（对齐 EFCore/PalORM/InMemory 三姊妹）
         message.LockedBy = null;
         message.LockedUntil = null;
@@ -234,11 +237,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         var c = EnsureOpen();
         // P2 修复（八轮评审）：补租约守卫（对齐 PalORM 版 PalOrmOutboxStore）——租约过期被其他 worker
-        // 抢占后，原 worker 的失败释放不再清掉新 worker 的锁并误增 retry_count；被他人持有时
-        // affected=0。owner 取调用时快照 message.LockedBy（string? 直传，调用方 OutboxBatchProcessor
-        // 在租约回读后未清空该字段）。
+        // 抢占后，原 worker 的失败释放不再清掉新 worker 的锁或误增 retry_count；三十四轮 ITM-210
+        // 升级为 token 完全匹配（owner/until 调用时快照，无租约时均传 null 走 IS NULL 分支）。
         var affected = c.Execute(SqlTemplates.OutboxReleaseForRetry,
-            new { reason = failureReason, next = ToTimeParam(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy }, _transaction);
+            new { reason = failureReason, next = ToTimeParam(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message) }, _transaction);
         // ITM-130 修复：SQL 成功（affected>0）后同步入参到 DB 终态（对齐 PalORM ReleaseForRetry
         // 成功路径）；守卫拒绝（affected=0，租约已被他人持有）时零变异——保持 PalORM 零变异语义。
         if (affected > 0)
@@ -312,4 +314,14 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             DapperDbType.MySql => DapperAotInitializer.ToMySqlParameter(value),
             _ => DapperAotInitializer.ToSqliteParameter(value),
         };
+
+    /// <summary>
+    /// 租约 token 的 until 参数（三十四轮 ITM-210）——持租时经 <see cref="ToTimeParam"/> 方言编码
+    ///（租约值来自 DB 回读，再编码后与库内值逐字节一致）；无租约/租约标识不完整时返回 null
+    ///（SQL 走 <c>locked_by IS NULL</c> 分支或 token 比较不命中——防御性拒绝）。
+    /// </summary>
+    private object? LeaseUntilParam(OutboxMessage message)
+        => message.LockedBy is null || message.LockedUntil is null
+            ? null
+            : ToTimeParam(message.LockedUntil.Value);
 }

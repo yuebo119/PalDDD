@@ -306,6 +306,37 @@ public sealed class DapperStoreTests
     }
 
     [Test]
+    public async Task Outbox_MarkProcessed_LeaseTakenOver_StaleWriteRejected(CancellationToken cancellationToken)
+    {
+        // 三十四轮 ITM-210 租约 token 回归：租约被重租（locked_until 变化 = 新 token）后，
+        // 旧 worker 终态写必须影响 0 行——原裸 WHERE id=@id 对重租/同 owner 复用零防护
+        var store = new DapperOutboxStore(_conn, _dbType);
+        store.AddMessage(CreateOutboxMessage("fence.v1"));
+        var leased = await store.LeasePendingMessagesAsync(
+            10, "stale-worker", TimeSpan.FromMinutes(5), new OutboxOptions().MaxRetryCount, cancellationToken);
+        await Assert.That(leased).Count().IsEqualTo(1);
+        var staleMsg = leased[0];
+
+        // 模拟租约被重租（token 变化：locked_until 更晚、持有者更换）——
+        // 用与生产路径一致的 SQLite TEXT 编码（Ulid 字符串 / "O" 时间串），ADO.NET 辅助方法避开 DAP005
+        var idParam = staleMsg.Id.ToString();
+        await ExecuteNonQueryAsync(
+            "UPDATE outbox_messages SET locked_by=$owner, locked_until=$until WHERE id=$id",
+            ("$owner", "new-worker"),
+            ("$until", DateTimeOffset.UtcNow.AddMinutes(10).ToString("O", CultureInfo.InvariantCulture)),
+            ("$id", idParam));
+
+        store.MarkProcessed(staleMsg, TimeProvider.System.GetUtcNow());
+
+        var status = await ReadScalarAsync<string>(
+            "SELECT status FROM outbox_messages WHERE id=$id", ("$id", idParam));
+        await Assert.That(status).IsNotEqualTo("Processed");
+        var currentOwner = await ReadScalarAsync<string>(
+            "SELECT locked_by FROM outbox_messages WHERE id=$id", ("$id", idParam));
+        await Assert.That(currentOwner).IsEqualTo("new-worker"); // 新租约未被旧写清除
+    }
+
+    [Test]
     public async Task Outbox_MarkDead(CancellationToken cancellationToken)
     {
         var store = new DapperOutboxStore(_conn, _dbType);

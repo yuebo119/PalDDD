@@ -56,30 +56,37 @@ public static class SqlTemplates
 
     /// <summary>
     /// 标记消息为"已处理"。<br/>
-    /// 💡 同时清除 <c>locked_by</c> 和 <c>locked_until</c>——释放租约。
+    /// 💡 同时清除 <c>locked_by</c> 和 <c>locked_until</c>——释放租约。<br/>
+    /// 三十四轮 ITM-210 token 化：补租约 token 守卫——持租调用方匹配
+    /// <c>(locked_by, locked_until)</c> 标识对（locked_until 随每次租约单调变化，免 DDL fencing）；
+    /// 无租约直呼（@owner 为 NULL）仅放行 <c>locked_by IS NULL</c> 的行。原裸 <c>WHERE id=@id</c>
+    /// 对过期重租/同 owner 复用零防护（旧 worker 终态写覆盖新租约）。
     /// </summary>
     public const string OutboxMarkProcessed =
-        "UPDATE outbox_messages SET status='Processed',processed_at=@at,error=NULL,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id";
+        "UPDATE outbox_messages SET status='Processed',processed_at=@at,error=NULL,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
 
     /// <summary>
     /// 标记消息为"死信"。<br/>
-    /// 💡 死信意味着消息不可恢复——需要人工介入。
+    /// 💡 死信意味着消息不可恢复——需要人工介入。<br/>
+    /// 三十四轮 ITM-210 token 化：同 <see cref="OutboxMarkProcessed"/> 的租约 token 守卫。
     /// </summary>
     public const string OutboxMarkDead =
-        "UPDATE outbox_messages SET status='Dead',error=@reason,processed_at=@at,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id";
+        "UPDATE outbox_messages SET status='Dead',error=@reason,processed_at=@at,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
 
     /// <summary>
     /// 释放租约并等待下次重试。<br/>
     /// 💡 <c>retry_count+1</c> 原子递增——当重试次数达到 10 时不再出现在 Pending 列表中。<br/>
-    /// P2 修复（八轮评审）：WHERE 补租约守卫 <c>AND (locked_by IS NULL OR locked_by=@owner)</c>——
-    /// 租约过期被其他 worker 抢占后，原 worker 的失败释放会清掉新 worker 的锁并误增 retry_count；
-    /// 被他人持有时 affected=0（语义对齐 PalORM 版 PalOrmOutboxStore，仅防"他人持有"）。<br/>
+    /// P2 修复（八轮评审）：WHERE 补租约守卫——租约过期被其他 worker 抢占后，
+    /// 原 worker 的失败释放会清掉新 worker 的锁并误增 retry_count。<br/>
+    /// 三十四轮 ITM-210 token 化：守卫从"仅防他人持有"（<c>locked_by IS NULL OR locked_by=@owner</c>）
+    /// 升级为 token 完全匹配——NULL 放行分支正是 fencing 缺口（租约释放后旧 worker 复活
+    /// Processed 消息）；无租约直呼（@owner 为 NULL）仍放行未租行。<br/>
     /// P2/P3 修复（十七轮）：补 <c>processed_at=NULL</c>——对齐 EFCore 版 ReleaseForRetry 与
     /// <see cref="OutboxRequeueDead"/> 语义：消息重回 Pending 后 processed_at 应清除，
     /// 否则残留上次处理的完成时间（监控/报表误判"已处理又 Pending"）。
     /// </summary>
     public const string OutboxReleaseForRetry =
-        "UPDATE outbox_messages SET status='Pending',processed_at=NULL,error=@reason,next_attempt_at=@next,retry_count=retry_count+1,locked_by=NULL,locked_until=NULL WHERE id=@id AND (locked_by IS NULL OR locked_by=@owner)";
+        "UPDATE outbox_messages SET status='Pending',processed_at=NULL,error=@reason,next_attempt_at=@next,retry_count=retry_count+1,locked_by=NULL,locked_until=NULL WHERE id=@id AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
 
     /// <summary>
     /// 将死信消息重置为 Pending（ops 重投递入口）。<br/>
@@ -234,15 +241,19 @@ public static class SqlTemplates
 
     /// <summary>
     /// 查询活跃的 Saga 状态。<br/>
-    /// 💡 只返回 Active=0 的 Saga；Completed、Compensated、CompensationFailed、DeadLettered 都是终态或人工介入态。<br/>
+    /// 💡 返回 Active=0 与 AwaitingHumanDecision=5 的 Saga（三十四轮：中断态超时兜底——
+    /// 中断态 Saga 配置了步骤 Timeout 且超期时由 SagaTimeoutProcessor 补偿，未配置则显式无限等待）；
+    /// Completed、Compensated、CompensationFailed、DeadLettered 为终态仍过滤。<br/>
     /// 注：Saga 状态使用 int 枚举值存储（SagaStatus 底层为 int），与 Outbox 的字符串状态不同。
     /// 这是有意选择：Saga 状态需要版本号乐观并发控制，int 比较比字符串更快。
     /// </summary>
     public const string SagaActive =
-        "SELECT * FROM saga_states WHERE status = 0 ORDER BY created_at LIMIT @n";
+        "SELECT * FROM saga_states WHERE status IN (0, 5) ORDER BY created_at LIMIT @n";
 
     /// <summary>
     /// 租约获取活跃 Saga，避免多 worker 重复处理。<br/>
+    /// 三十四轮（中断态超时兜底）：扫描集扩 AwaitingHumanDecision（status IN (0,5)）——
+    /// 是否补偿由 SagaTimeoutProcessor.IsTimedOut 门控（仅配置了步骤 Timeout 且超期者）。<br/>
     /// P2/P3 修复（十七轮）：方言语义声明——
     /// MySQL 变体见 <see cref="SagaLeaseActiveMySql"/>（JOIN 形态；READ COMMITTED 下
     /// UPDATE 与租约回读两步之间存在抢占窗口，由 SagaUpdate 的 version 乐观锁兜底）；
@@ -250,35 +261,37 @@ public static class SqlTemplates
     /// PG 变体见 <see cref="SagaLeaseActivePG"/>（SKIP LOCKED 消除锁竞争）。
     /// </summary>
     public const string SagaLeaseActive =
-        "UPDATE saga_states SET leased_by=@owner, leased_until=@until WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status = 0 AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n)";
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n)";
 
     /// <summary>
     /// PG 专用 Saga 租约获取 — 子查询行锁 <c>FOR UPDATE SKIP LOCKED</c>。<br/>
+    /// 三十四轮（中断态超时兜底）：扫描集扩 AwaitingHumanDecision（status IN (0,5)）。<br/>
     /// P2/P3 修复（十七轮）：与 Outbox PG 路径（<see cref="OutboxLeaseUpdatePG"/>）同款——
     /// 多 worker 并发租约时，子查询锁定行互相跳过而非阻塞等待，
     /// 各自拿到不相交的 Saga 批次。注意 PG 的 locking clause 位于 LIMIT 之后。
     /// </summary>
     public const string SagaLeaseActivePG =
-        "UPDATE saga_states SET leased_by=@owner, leased_until=@until WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status = 0 AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)";
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)";
 
     /// <summary>
     /// MySQL 专用 Saga 租约获取 — JOIN 形态。<br/>
+    /// 三十四轮（中断态超时兜底）：扫描集扩 AwaitingHumanDecision（status IN (0,5)）。<br/>
     /// P1 修复（十一轮·实测发现）：同 OutboxLeaseUpdateMySql——MySQL 禁止 IN 子查询内 LIMIT，
     /// 与 PalORM 版（PalOrmSagaStateStore MySQL 分支）同款 JOIN 替代，PD17 姊妹同步。<br/>
     /// ⚠️ READ COMMITTED 隔离下 UPDATE 与租约回读两步之间存在抢占窗口（无 SKIP LOCKED 等价物），
     /// 由 <see cref="SagaUpdate"/> 的 version 乐观锁兜底——并发覆盖在保存时检测。
     /// </summary>
     public const string SagaLeaseActiveMySql =
-        "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status = 0 AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until";
+        "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until";
 
     /// <summary>
     /// 按本次租约回读刚获取的 Saga。<br/>
-    /// ITM-134 修复：补 <c>AND status = 0</c>（Active）守卫——对齐 PalORM 回读语义
-    /// （<c>PalOrmSagaStateStore.LeaseActiveSagasAsync</c> 回读同样带 status=Active 守卫）：
+    /// ITM-134 修复：补 <c>AND status IN (0, 5)</c> 守卫——对齐 PalORM 回读语义
+    /// （<c>PalOrmSagaStateStore.LeaseActiveSagasAsync</c> 回读同样带状态守卫）：
     /// 租约 UPDATE 后行被处理方标记终态（Completed/Compensated 等）时，Dapper worker 不再领回终态 Saga。
     /// </summary>
     public const string SagaSelectByLease =
-        "SELECT * FROM saga_states WHERE leased_by=@owner AND leased_until=@until AND status = 0";
+        "SELECT * FROM saga_states WHERE leased_by=@owner AND leased_until=@until AND status IN (0, 5)";
 
     /// <summary>按 SagaId 查找指定 Saga</summary>
     public const string SagaById =

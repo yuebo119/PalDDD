@@ -65,20 +65,21 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
 
     /// <inheritdoc/>
     /// <remarks>
-    /// ITM-210 修复（三十二轮）：关系型 provider 用 ExecuteUpdate 带租约守卫；
-    /// 非 SQL 可翻译 provider（InMemory 测试）回退到条件加载 + 内存突变 + SaveChanges。
-    /// 守卫：WHERE Id == id AND (LockedBy IS NULL OR LockedBy == 原持有者)。
+    /// ITM-210 修复（三十二轮守卫 → 三十四轮 token 化）：关系型 provider 用 ExecuteUpdate 带租约守卫；
+    /// 非 SQL 可翻译 provider（InMemory 测试）回退到条件加载 + 内存突变 + SaveChanges。<br/>
+    /// <b>租约 token（三十四轮）</b>：持租调用方（<c>message.LockedBy</c> 非空）的终态写要求行内
+    /// <c>(LockedBy, LockedUntil)</c> 与租约时捕获的标识对<b>完全匹配</b>——租约过期被重租（同 owner
+    /// 复用或他 owner 接手）后，旧 worker 的终态写影响 0 行（<c>LockedUntil</c> 随每次租约单调变化，
+    /// 充当 fencing token，免 DDL 加列）；无租约直呼（LockedBy 为 null，运维/测试路径）仅当行当前
+    /// 未被租（<c>LockedBy IS NULL</c>）时放行。
     /// </remarks>
     public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
     {
         ArgumentNullException.ThrowIfNull(message);
 
-        var originalOwner = message.LockedBy;
         try
         {
-            var affected = OutboxMessages
-                .Where(m => m.Id == message.Id
-                    && (m.LockedBy == null || m.LockedBy == originalOwner))
+            var affected = FencedTarget(message)
                 .ExecuteUpdate(s => s
                     .SetProperty(m => m.ProcessedAt, processedAt)
                     .SetProperty(m => m.Status, OutboxStatus.Processed)
@@ -93,13 +94,10 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
             // ExecuteUpdate 不支持的 provider（EF InMemory 等）——回退到条件加载路径
         }
 
-        // 兜底路径：ExecuteUpdate 未命中（行不存在/守卫拒绝）或 provider 不支持——
-        // 条件加载带同款守卫（三十二轮修复复审：清理原 `!translated || true` 恒真条件）
+        // 兜底路径：ExecuteUpdate 未命中（行不存在/token 拒绝）或 provider 不支持——
+        // 条件加载带同款 token 守卫（三十二轮修复复审：清理原 `!translated || true` 恒真条件）
         {
-            var tracked = OutboxMessages
-                .Where(m => m.Id == message.Id
-                    && (m.LockedBy == null || m.LockedBy == originalOwner))
-                .FirstOrDefault();
+            var tracked = FencedTarget(message).FirstOrDefault();
             if (tracked is not null)
             {
                 tracked.ProcessedAt = processedAt;
@@ -114,7 +112,8 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
 
     /// <inheritdoc/>
     /// <remarks>
-    /// ITM-210 修复（三十二轮）：同 MarkProcessed——关系型 ExecuteUpdate 守卫 + 非关系型回退。
+    /// ITM-210 修复（三十二轮守卫 → 三十四轮 token 化）：同 <see cref="MarkProcessed"/>——
+    /// 租约 token 匹配守卫 + 非关系型回退。
     /// </remarks>
     public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
     {
@@ -123,12 +122,9 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
 
         var error = failureReason.Length > 2040 ? failureReason[..2040] : failureReason;
 
-        var originalOwner = message.LockedBy;
         try
         {
-            var affected = OutboxMessages
-                .Where(m => m.Id == message.Id
-                    && (m.LockedBy == null || m.LockedBy == originalOwner))
+            var affected = FencedTarget(message)
                 .ExecuteUpdate(s => s
                     .SetProperty(m => m.ProcessedAt, deadAt)
                     .SetProperty(m => m.Status, OutboxStatus.Dead)
@@ -145,10 +141,7 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
 
         // 兜底路径：同 MarkProcessed（清理原 `!translated || true` 恒真条件）
         {
-            var tracked = OutboxMessages
-                .Where(m => m.Id == message.Id
-                    && (m.LockedBy == null || m.LockedBy == originalOwner))
-                .FirstOrDefault();
+            var tracked = FencedTarget(message).FirstOrDefault();
             if (tracked is not null)
             {
                 tracked.ProcessedAt = deadAt;
@@ -161,15 +154,34 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         }
     }
 
+    /// <summary>
+    /// 租约 token 守卫目标集——持租调用方匹配 (LockedBy, LockedUntil) 标识对；
+    /// 无租约直呼（LockedBy 为 null）仅放行当前未被租的行。
+    /// </summary>
+    /// <remarks>三十四轮 ITM-210 落地：原 <c>LockedBy IS NULL OR LockedBy == 原持有者</c> 守卫的
+    /// "NULL 放行"分支正是 fencing 缺口——租约被释放（ReleaseForRetry/RequeueDead）后旧 worker
+    /// 的终态写仍会命中；同 owner 复用（worker 重启）亦无防护。<c>LockedUntil</c> 随每次租约
+    /// 单调变化（重租必在过期后，<c>新 until = 更晚的 now + duration &gt; 旧 until</c>），以
+    /// 微秒精度存储（PG timestamptz / SQLite TEXT "O" 格式）下充当免 DDL 的 fencing token。</remarks>
+    private IQueryable<OutboxMessage> FencedTarget(OutboxMessage message)
+    {
+        var originalOwner = message.LockedBy;
+        var originalUntil = message.LockedUntil;
+        var target = OutboxMessages.Where(m => m.Id == message.Id);
+        return originalOwner is null
+            ? target.Where(m => m.LockedBy == null)
+            : target.Where(m => m.LockedBy == originalOwner && m.LockedUntil == originalUntil);
+    }
+
     /// <inheritdoc/>
     /// <remarks>
-    /// P2 修复（八轮评审）：改用 <c>ExecuteUpdate</c> 生成带守卫的单条 UPDATE——
-    /// <c>WHERE Id == id AND (LockedBy IS NULL OR LockedBy == 原持有者)</c>（原持有者从入参捕获）。
-    /// 此前的"内存修改 + 后续 SaveChangesAsync"模式在租约被抢占（过期后他实例已 re-lease）
-    /// 时会用 <c>LockedBy = null</c> 覆盖新持有者的租约；守卫下被抢占时影响 0 行，不覆盖。<br/>
-    /// RetryCount 递增与状态变更在同一 SQL 内原子完成，不再依赖后续 <c>SaveChangesAsync</c>；
-    /// 入参 <paramref name="message"/> 不再被修改——若其为 ChangeTracker 跟踪实体，同步改内存
-    /// 会在后续 SaveChangesAsync 因 RetryCount 并发令牌失配抛出假冲突。<br/>
+    /// P2 修复（八轮评审）：<c>ExecuteUpdate</c> 生成带守卫的单条 UPDATE；三十四轮 ITM-210
+    /// 升级为租约 token 守卫（<c>(LockedBy, LockedUntil)</c> 标识对匹配，见
+    /// <see cref="FencedTarget"/>）——租约过期被重租/释放后，旧 worker 的失败释放影响 0 行，
+    /// 不再清掉新租约或误增 retry_count。<br/>
+    /// RetryCount 递增与状态变更在同一 SQL 内原子完成；入参 <paramref name="message"/>
+    /// 不被修改——若其为 ChangeTracker 跟踪实体，同步改内存会在后续 SaveChangesAsync
+    /// 因 RetryCount 并发令牌失配抛出假冲突。<br/>
     /// ⚠️ <b>Provider 约束（九轮评审声明）</b>：<c>ExecuteUpdate</c> 需要关系型 provider
     /// （SQLite/PG/MySQL/SqlServer 等）；EF InMemory/Cosmos 不支持，本方法会抛
     /// <see cref="InvalidOperationException"/>——非关系型测试场景请用 Dapper/PalORM/InMemory 适配器。
@@ -184,11 +196,7 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         // 消息滞留 Processing 且租约已过期 → 下轮重租后重试计数丢失；对齐 MarkDead 十七轮防御）
         var error = failureReason.Length > 2040 ? failureReason[..2040] : failureReason;
 
-        var originalOwner = message.LockedBy;
-
-        OutboxMessages
-            .Where(m => m.Id == message.Id
-                && (m.LockedBy == null || m.LockedBy == originalOwner))
+        FencedTarget(message)
             .ExecuteUpdate(s => s
                 .SetProperty(m => m.RetryCount, m => m.RetryCount + 1)
                 .SetProperty(m => m.Status, OutboxStatus.Pending)

@@ -59,10 +59,12 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
 
         // SagaStateRow 未注册 —— 用 GetRawConnection + 手动 reader
+        // 三十四轮（中断态超时兜底）：观测查询与 Lease 同步纳入 AwaitingHumanDecision（5）
         await using var cmd = Session.GetRawConnection().CreateCommand();
-        cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE status = @p0 ORDER BY created_at LIMIT @p1";
+        cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE status IN (@p0, @p1) ORDER BY created_at LIMIT @p2";
         AddParam(cmd, "@p0", (int)SagaStatus.Active);
-        AddParam(cmd, "@p1", batchSize);
+        AddParam(cmd, "@p1", (int)SagaStatus.AwaitingHumanDecision);
+        AddParam(cmd, "@p2", batchSize);
         return await ReadSagasAsync(cmd, ct);
     }
 
@@ -94,13 +96,13 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
             if (TProvider.Dialect == global::PalORM.SqlDialect.PostgreSql)
             {
                 await Session.ExecuteAsync(
-                    $"UPDATE saga_states SET leased_by = {owner}, leased_until = {until} WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status = {(int)SagaStatus.Active} AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize} FOR UPDATE SKIP LOCKED)",
+                    $"UPDATE saga_states SET leased_by = {owner}, leased_until = {until} WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize} FOR UPDATE SKIP LOCKED)",
                     ct);
             }
             else
             {
                 await Session.ExecuteAsync(
-                    $"UPDATE saga_states SET leased_by = {owner}, leased_until = {until} WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status = {(int)SagaStatus.Active} AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize})",
+                    $"UPDATE saga_states SET leased_by = {owner}, leased_until = {until} WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize})",
                     ct);
             }
         }
@@ -108,7 +110,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         {
             // MySQL 特化路径：JOIN 子查询
             await Session.ExecuteAsync(
-                $"UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status = {(int)SagaStatus.Active} AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize}) AS sub ON t.saga_id = sub.saga_id SET t.leased_by = {owner}, t.leased_until = {until}",
+                $"UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize}) AS sub ON t.saga_id = sub.saga_id SET t.leased_by = {owner}, t.leased_until = {until}",
                 ct);
         }
 
@@ -123,12 +125,14 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         // 但"双 worker 同批回读"窗口未复现——被覆盖方的回读按 (owner, until) 已不再匹配。
         // 残余窗口由 SaveChangesAsync 的 version 乐观锁兜底（与 Dapper SagaLeaseActiveMySql
         // 声明的"由 SagaUpdate 的 version 乐观锁兜底"对齐）——重复保存被版本冲突拒绝。
-        // 回读补 status=Active 守卫：已被处理方标记终态（Completed 等）的租约残留行不再混入。
+        // 回读补状态守卫：已被处理方标记终态（Completed 等）的租约残留行不再混入
+        //（三十四轮：守卫集与租约集同步扩为 Active + AwaitingHumanDecision）。
         await using var cmd = Session.GetRawConnection().CreateCommand();
-        cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE leased_by = @p0 AND leased_until = @p1 AND status = @p2 ORDER BY created_at";
+        cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE leased_by = @p0 AND leased_until = @p1 AND status IN (@p2, @p3) ORDER BY created_at";
         AddParam(cmd, "@p0", owner);
         AddParam(cmd, "@p1", until);
         AddParam(cmd, "@p2", (int)SagaStatus.Active);
+        AddParam(cmd, "@p3", (int)SagaStatus.AwaitingHumanDecision);
         return await ReadSagasAsync(cmd, ct);
     }
 
