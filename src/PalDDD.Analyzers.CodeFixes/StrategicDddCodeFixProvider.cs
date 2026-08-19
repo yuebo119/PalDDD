@@ -95,13 +95,14 @@ public sealed class AddVersionSuffixCodeFix : CodeFixProvider
     {
         var editor = await DocumentEditor.CreateAsync(document, ct).ConfigureAwait(false);
 
+        // ITM-221 修复（三十二轮）：替换已有 .v{N} 后缀而非叠加——
+        // 原实现只检查目标版本结尾，x.v1 + v2 生成 x.v1.v2（字面通过校验但语义错误）。
         var oldValue = literal.Token.ValueText;
-        var newValue = oldValue.EndsWith($".v{schemaVersion}", StringComparison.Ordinal)
-            ? oldValue
-            : oldValue + $".v{schemaVersion}";
+        var withoutSuffix = System.Text.RegularExpressions.Regex.Replace(oldValue, @"\.v\d+$", "");
+        var newValue = withoutSuffix + $".v{schemaVersion}";
 
         editor.ReplaceNode(literal, SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression,
-            SyntaxFactory.Literal(newValue)));
+            SyntaxFactory.Literal(newValue)).WithTriviaFrom(literal));
         return editor.GetChangedDocument();
     }
 }

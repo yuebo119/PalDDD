@@ -282,11 +282,13 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        // P2 修复（二十一轮）：PDDD008 的 contextName 沿基类链取最近声明——派生事件
-        // 继承基类 [BoundedContext] 时消息名前缀校验照常生效（原直接声明判 null 直接跳过）
-        if (chainBoundedContext is not null && generateMessage is not null)
+        // ITM-221 修复（三十二轮）：PDDD009/010/011 是消息名/版本校验——不依赖 BoundedContext
+        // 存在。原 `chainBoundedContext is not null && generateMessage is not null` 条件让
+        // 无 [BoundedContext] 的 [GenerateMessage] 完全跳过这三个诊断（漏报）。
+        // 只有 PDDD008（上下文前缀不匹配）需要 BoundedContext。
+        if (generateMessage is not null)
         {
-            var contextName = TryGetStringConstructorArgument(chainBoundedContext);
+            var contextName = chainBoundedContext is null ? null : TryGetStringConstructorArgument(chainBoundedContext);
             var messageName = TryGetNamedStringArgument(generateMessage, "Name");
             var schemaVersion = TryGetNamedIntArgument(generateMessage, "SchemaVersion") ?? 1;
             if (schemaVersion < 1)
@@ -319,7 +321,9 @@ public sealed class StrategicDddAnalyzer : DiagnosticAnalyzer
                     schemaVersion));
             }
 
-            if (IsStableName(contextName)
+            // PDDD008 需要 BoundedContext——消息名前缀校验（上下文归属）
+            if (chainBoundedContext is not null
+                && IsStableName(contextName)
                 && IsStableName(messageName)
                 && !BelongsToBoundedContext(messageName!, contextName!))
             {
