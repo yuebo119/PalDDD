@@ -69,12 +69,18 @@ jobs:
           # .ai/ 是独立 git 仓库（.gitignore 第 95 行），fresh checkout 不存在——
           # 本地装有 .ai 才跑全量自检，否则退化为根目录快速门禁（G1-G3），
           # 避免 CI 在无 .ai 的仓库上必然失败（终验轮 B-1 实锤）
+          # unified v2.0（2026-08-20）：gate 步骤自诊断化（CI 实测 exit 2 本地却过——
+          # tee 捕获 + CTX 注解通道让失败现场经公开 API 可读）
           if [ -d .ai/scripts ]; then
             bash .ai/scripts/verify-ai-system.sh
             bash .ai/scripts/gate-check.sh --allow-dirty
           else
             echo "SKIP .ai self-check: .ai 质量系统未随仓库分发"
-            bash scripts/gate-check.sh
+            if ! bash scripts/gate-check.sh 2>&1 | tee ci-gate.log; then
+              echo "::error ::ROOT GATE-CHECK FAILED"
+              python3 scripts/ci-failed-tests.py gate ci-gate.log || true
+              exit 1
+            fi
           fi
 
   aot-verify:
