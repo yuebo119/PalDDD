@@ -198,6 +198,8 @@
   - **3b/3c** ｜ .ai `8f6f8ff` ｜ engine.md 六要素；flaky-gate 合成自测 + 端到端真跑 F/P/F 检出 + 清洁零误报；注入测试曾被严格构建 CA5394 拦截（防线自证）
   - 终态：verify-ai-system **20/20 全绿**；全部新增门禁均带红测记录（V16/#13 教训零违例）
 
+- 2026-08-20（续二·推送与 CI 链）：用户授权推送 → fetch 揭示远程 PR#1（同修复平行实现）→ 合并双文件冲突按演进版裁决（本地互斥版替代十七轮哨兵）→ 推送 74845f4 → **CI 首跑三结果**：dialect-probe job 首战正确（容器起+路径门判 SKIP，设计行为 1:1 复现）；aot-verify 绿；build-and-test 挂 CS0111×7——根因=**ServiceRegistrationTests 自动合并把两侧同名测试方法都留下**（远程调试版含 Console 探针 vs 本地演进版），且此前本地“构建过”系管道掩码假绿+--no-build 旧程序集。修复：删调试版留演进版（6dbf1f4，退出码直读 0 错+89/89）。**教训回填 lessons XIII.7：SHELL-1/2（退出码掩码三连假绿）、MERGE-1（零冲突标记≠语义正确）**（.ai af02a8f）。后续推送被网络阻断（github.com:443 不可达、api.github.com 正常、无代理配置），后台重试循环挂起中；恢复后按序：推 6dbf1f4 → CI 裁决 → 2a.4 红测循环。
+
 ### Phase 3 试点记录格式（任务轮积累，两轮后裁决）
 
 ```markdown
