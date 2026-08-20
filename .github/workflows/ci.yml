@@ -40,11 +40,17 @@ jobs:
       - name: Test (unit + integration)
         # MTP 手写协议：dotnet test 一次只跑一个测试项目（多项目/--collect 批量触发
         # VSTest 握手 → exit 5，本地已实测复现）；PalDDD.Testing 为支持库非测试项目
+        # 失败自诊断（unified v2.0，2026-08-20）：失败项目的 TUnit JSON 报告解析为
+        # ::error 控制台注解——GitHub 将其转为 check-run 注解，公开 API 可读（无需认证下载日志）。
         run: |
           set -euo pipefail
           for csproj in $(find test -name '*.csproj' ! -name 'PalDDD.Testing.csproj' | sort); do
             echo "== Testing: $csproj =="
-            dotnet test "$csproj" --no-build -c Release --verbosity minimal
+            if ! dotnet test "$csproj" --no-build -c Release --verbosity minimal; then
+              echo "::error ::FAILED PROJECT: $csproj"
+              python3 scripts/ci-failed-tests.py "$(basename "$csproj" .csproj)" || true
+              exit 1
+            fi
           done
         env:
           # CI 环境：Testcontainers 自动启动 PG/MySQL/Kafka/RabbitMQ

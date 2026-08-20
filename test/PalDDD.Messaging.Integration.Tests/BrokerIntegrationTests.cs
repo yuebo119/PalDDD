@@ -37,6 +37,9 @@ public sealed class BrokerFixture : IAsyncDisposable
     /// 那类"半坏"由 CapturingLogger 诊断输出兜底。
     /// </summary>
     public bool KafkaAvailable { get; private set; } = true;
+
+    /// <summary>RabbitMQ 预检结果（unified v2.0 2026-08-20，对称 KafkaAvailable）——远程路径 TCP 探活，Testcontainers 路径恒 true。</summary>
+    public bool RabbitAvailable { get; private set; } = true;
     private KafkaContainer? _kafka;
     private RabbitMqContainer? _rabbitMq;
     private readonly CatalogAndSerializer _catalogAndSerializer = CreateCatalogAndSerializer();
@@ -101,6 +104,22 @@ public sealed class BrokerFixture : IAsyncDisposable
 #pragma warning restore CA1031
         {
             KafkaAvailable = false;
+        }
+
+        // unified v2.0（2026-08-20）：RabbitMQ 预检——TCP 探活 host:port（5s），对称 Kafka 预检。
+        // broker 不可达时显式 Skip 而非 19s×3 假失败（本地实测 41s 假失败签名；T-DDD-6 四层防线在 Rabbit 轴的补全）。
+        try
+        {
+            using var tcp = new System.Net.Sockets.TcpClient();
+            await tcp.ConnectAsync(_remoteRabbitHost!, _remoteRabbitPort)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            RabbitAvailable = tcp.Connected;
+        }
+#pragma warning disable CA1031 // Intentionally broad: 环境探测任意失败均视为不可用
+        catch
+#pragma warning restore CA1031
+        {
+            RabbitAvailable = false;
         }
     }
 
@@ -237,6 +256,13 @@ public sealed class BrokerIntegrationTests
     {
         if (!Fixture.KafkaAvailable)
             Skip.Test("Kafka broker 预检失败（GetMetadata 不可达）——环境问题，非代码失败。检查服务器 Kafka 服务/网络后重试。");
+    }
+
+    /// <summary>RabbitMQ broker 预检守卫（unified v2.0 2026-08-20，对称 SkipIfKafkaUnavailable）——预检失败时显式 Skip。</summary>
+    private void SkipIfRabbitUnavailable()
+    {
+        if (!Fixture.RabbitAvailable)
+            Skip.Test("RabbitMQ broker 预检失败（TCP 探活不可达）——环境问题，非代码失败。检查服务器 RabbitMQ 服务/网络后重试。");
     }
 
     /// <summary>
@@ -384,6 +410,7 @@ public sealed class BrokerIntegrationTests
     [Test]
     public async Task RabbitMq_PublishAndSubscribe_RoundTripsMessage(CancellationToken cancellationToken)
     {
+        SkipIfRabbitUnavailable();
         var created = await Fixture.CreateRabbitMqBrokerAsync();
         await using var broker = created.Item1;
         var tag = Guid.NewGuid().ToString("N")[..8];
@@ -405,6 +432,7 @@ public sealed class BrokerIntegrationTests
     [Test]
     public async Task RabbitMq_HandlerCancellation_DoesNotLogHandlerFailure(CancellationToken cancellationToken)
     {
+        SkipIfRabbitUnavailable();
         var logger = new CapturingLogger<RabbitMqBroker>();
         var rabbit = await Fixture.CreateRabbitMqBrokerAsync(logger);
         await using var broker = rabbit.Item1;
@@ -446,6 +474,7 @@ public sealed class BrokerIntegrationTests
     [NotInParallel("broker-integration")]
     public async Task RabbitMq_MultipleMessages_AllReceived(CancellationToken cancellationToken)
     {
+        SkipIfRabbitUnavailable();
         var created = await Fixture.CreateRabbitMqBrokerAsync();
         await using var broker = created.Item1;
         var received = new List<TestMessage>();
