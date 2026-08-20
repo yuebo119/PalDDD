@@ -44,8 +44,14 @@ def from_log_tail(log_path: str) -> int:
         lines = open(log_path, encoding="utf-8", errors="replace").read().splitlines()
     except OSError:
         return 0
-    # 2026-08-20 二次校准：[-40:][-12:] 只截到 MTP 汇总，失败明细（测试名+断言）在更高处——
-    # 扩窗到尾部 120 行、发射尾部 30 条非空行（注解有数量上限，30 条足够覆盖 3 个失败块）
+    # 通道 2a：全日志关键字上下文（异常/失败/超时/退出码——不受尾部窗口限制，2026-08-20 三次校准）
+    keys = ("exception", "failed", "error(s)", "timeout", "timed out", "killed", "exit code", "fatal")
+    hits = [(i, ln) for i, ln in enumerate(lines) if any(k in ln.lower() for k in keys)]
+    for i, ln in hits[-15:]:
+        emit(f"CTX| {ln}")
+        if i + 1 < len(lines) and lines[i + 1].strip():
+            emit(f"CTX+1| {lines[i + 1]}")
+    # 通道 2b：尾部窗口
     tail = [ln for ln in lines[-120:] if ln.strip()][-30:]
     for ln in tail:
         emit(f"LOG| {ln}")
