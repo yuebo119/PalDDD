@@ -19,3 +19,9 @@
 # 的基线也转成 CRLF，Verify 拒绝含 \r 的基线——CI 三失败根因（2026-08-20 自诊断注解实锤）
 *.verified.txt text eol=lf working-tree-encoding=UTF-8
 *.verified.json text eol=lf working-tree-encoding=UTF-8
+
+# Shell/Python 脚本强制 LF（bash 遇 CRLF 报 invalid option / command not found——
+# 仓库级 eol=crlf 曾把 CI Linux checkout 的 .sh 转 CRLF，gate-check.sh line 2 set -euo pipefail
+# 即死，2026-08-20 CI 自诊断注解实锤"set: pipefail: invalid option name"）
+*.sh text eol=lf
+*.py text eol=lf
