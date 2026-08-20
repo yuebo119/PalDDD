@@ -29,6 +29,7 @@
 | `projection-handler.prompt.md` | 投影 + 事件回放 | 构建读模型 |
 | `value-object.prompt.md` | 值对象 | 封装原始类型 |
 | `bounded-context.prompt.md` | BC 脚手架 + DI | 项目初始化 |
+| `task-intake.prompt.md` | 任务进件验收断言门 | 任何中回路以上任务开工前（unified v2.0 Phase 3a） |
 
 ## 模板结构
 
