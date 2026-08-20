@@ -46,9 +46,10 @@ jobs:
           set -euo pipefail
           for csproj in $(find test -name '*.csproj' ! -name 'PalDDD.Testing.csproj' | sort); do
             echo "== Testing: $csproj =="
-            if ! dotnet test "$csproj" --no-build -c Release --verbosity minimal; then
+            if ! dotnet test "$csproj" --no-build -c Release --verbosity minimal 2>&1 | tee ci-last-test.log; then
               echo "::error ::FAILED PROJECT: $csproj"
-              python3 scripts/ci-failed-tests.py "$(basename "$csproj" .csproj)" || true
+              python3 scripts/ci-failed-tests.py "$(basename "$csproj" .csproj)" ci-last-test.log || true
+              rm -f ci-last-test.log
               exit 1
             fi
           done
