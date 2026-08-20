@@ -17,6 +17,9 @@
     <IsTrimmable>true</IsTrimmable>
     <Description>Pal.DDD PalORM PostgreSQL 适配包（AOT + 源生成 + RETURNING/COPY）</Description>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- IL3058（三十五轮 B1 补理由）：方言 connector 包（MySqlConnector/Npgsql/Microsoft.Data.Sqlite）
+         传递的 AOT 分析器警告噪声；IsAotCompatible=true 声明基于核心包 PublishAot 验证，
+         方言级 AOT publish 仅 Sqlite 样例经 CI aot-verify 验证（MySql/PG 为缺口，docs/aot.md 已声明） -->
     <NoWarn>$(NoWarn);CS1591;CS1573;CA2007;IL3058</NoWarn>
   </PropertyGroup>
 

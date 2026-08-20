@@ -176,7 +176,7 @@ services.AddPalJsonSerialization(catalog =>
 
 ## 使用 MemoryPack 二进制序列化（AOT 场景推荐）
 
-JSON 是默认消息序列化器，零反射且跨语言友好。当追求**更高吞吐 / 更小 payload**（典型 3-5x 加速、payload 缩减 2-4x），可切换到 MemoryPack 二进制序列化器。MemoryPack 内置 source generator，同样 AOT 安全、零反射。
+JSON 是默认消息序列化器，零反射且跨语言友好。当追求**更高吞吐 / 更小 payload**（典型 3-5x 加速、payload 缩减 2-4x），可切换到 MemoryPack 二进制序列化器。MemoryPack 内置 source generator，运行时零反射；但本适配器包 IsAotCompatible=false（AOT 声明未经验证），AOT 场景请实测 PublishAot 后再用。
 
 ```csharp
 using MemoryPack;
@@ -474,7 +474,7 @@ public sealed class OrderSaga : Saga<OrderSagaState>
 {
     public OrderSaga()
     {
-        When("Initial", typeof(OrderSubmitted), new SagaStep(
+        When<OrderSubmitted>("Initial", new SagaStep(
             "ReserveInventory",
             static (state, @event, ct) =>
             {

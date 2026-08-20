@@ -4,7 +4,7 @@
     <RootNamespace>PalDDD.Dapper.PostgreSql</RootNamespace>
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
-    <Description>Pal.DDD PostgreSQL 增强扩展包（✅ AOT）</Description>
+    <Description>Pal.DDD PostgreSQL 增强扩展包（⚠️ AOT 假象：Dapper 反射路径 + NoWarn IL3058 声明兼容，详见母包说明）</Description>
     <NoWarn>$(NoWarn);IL3058;CS1591;CS1573</NoWarn>
   </PropertyGroup>
 

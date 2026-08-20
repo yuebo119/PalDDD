@@ -5,15 +5,17 @@ using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions.Tests;
 
-// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
-// 鈴?SagaProcessor<TState> 鍚庡彴鏈嶅姟鐢熷懡鍛ㄦ湡娴嬭瘯
-// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
-// SagaTimeoutProcessor 宸叉湁瓒呮椂妫€娴嬪崟鍏冩祴璇曪紝鏈枃浠跺彧瑕嗙洊寰幆灞傦細
-// 1. 鍚姩鍚庢寜 PollInterval 杞
-// 2. 瓒呮椂妫€鏌ュ紓甯镐笉宕╂簝寰幆锛圕A1031 闅旂锛?
-// 3. 鍋滄浠ょ墝浼橀泤缁堟
-// 4. 鎵瑰ぇ灏忛厤缃紶閫掑埌 store
-// 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?
+// ══════════════════════════════════════════════════════════════
+// SagaProcessor<TState> 后台服务生命周期测试
+// ══════════════════════════════════════════════════════════════
+// SagaTimeoutProcessor 已有超时检测单元测试，本文件只覆盖循环层：
+// 1. 启动后按 PollInterval 轮询
+// 2. 超时检查异常不崩溃循环（CA1031 隔离）
+// 3. 停止令牌优雅终止
+// 4. 批大小配置透传到 store
+// ══════════════════════════════════════════════════════════════
+// 三十五轮 P3 修复：原文件头注释 UTF-8→GBK mojibake 整块损坏（被 CS1570 NoWarn 掩盖），
+// 内容按 SagaProcessor 语义重写；代码体 ASCII 未受影响（152 测试全绿实证）。
 
 /// <summary>SagaProcessor 娴嬭瘯鐢ㄧ姸鎬?/summary>
 public sealed class LifecycleSagaState : SagaState
@@ -32,9 +34,9 @@ public sealed class SagaProcessorTests
     [Test]
     public async Task ExecuteAsync_PollsAtConfiguredInterval(CancellationToken cancellationToken)
     {
-        // P4 修复（十九轮验证轮 V4）：真实时钟断言在高载并行下 flaky（250ms 内 50ms 轮询
-        // 理论 4-5 次，高载时可能仅 2 次）——等待窗口放宽到 400ms 且阈值降为 ≥2
-        // （轮询周期正确性的最小可区分断言：单次启动不会只轮询 1 次）
+        // P4 修复（ʮ九轮验֤轮 V4）：真ʵʱ钟断言在高载并行下 flaky（250ms 内 50ms 轮ѯ
+        // 理论 4-5 次，高载ʱ可能仅 2 次）——等待窗口放宽到 400ms 且阈ֵ降Ϊ ≥2
+        // （轮ѯ周期正ȷ性的最С可区分断言：单次启动不会ֻ轮ѯ 1 次）
         var store = new CountingSagaStore();
         var scopeFactory = new SagaStubScopeFactory(BuildTimeoutProcessor(store));
         var options = new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions
