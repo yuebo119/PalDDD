@@ -67,6 +67,7 @@ CREATE TABLE events (
     causation_id    CHAR(26),   -- 审计：因果 Ulid（26 字符）
     trace_parent    VARCHAR(255),
     trace_state     VARCHAR(255),
+    UNIQUE INDEX idx_events_event_id (event_id),
     UNIQUE INDEX idx_events_stream (stream_name, stream_version),
     INDEX idx_events_global (global_position)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -8,7 +8,7 @@ using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions.Tests;
 
-// （三十五轮 P3：原中文注释 mojibake 损坏，标题按类名可推回）
+ // // 三十五轮 P3原中文注释 mojibake 损坏标题按类名可推回
 
 public sealed class OrderCreatedIntegrationEvent
 {
@@ -975,8 +975,8 @@ public sealed class SagaTimeoutProcessorTests
     [Test]
     public async Task CheckTimeoutsAsync_InterruptedSaga_WithExpiredStepTimeout_IsCompensated()
     {
-        // 三十四轮中断态超时兜底回归：AwaitingHumanDecision + 步骤 Timeout 超期 →
-        // CheckTimeoutsAsync 扫描命中 IsTimedOut 并补偿（此前扫描集只含 Active，
+ // // 三十四轮中断态超时兜底回归AwaitingHumanDecision + 步骤 Timeout 超期
+ // // CheckTimeoutsAsync 扫描命中 IsTimedOut 并补偿此前扫描集只含 Active
         // 中断态永不超时——人工决策失踪即永久滞留）
         var state = new OrderSagaState
         {
@@ -1001,7 +1001,7 @@ public sealed class SagaTimeoutProcessorTests
     [Test]
     public async Task CheckTimeoutsAsync_InterruptedSaga_WithoutStepTimeout_StaysInterrupted()
     {
-        // 三十四轮契约回归：未配置步骤 Timeout 的中断态 = 显式无限等待——
+ // // 三十四轮契约回归未配置步骤 Timeout 的中断态 = 显式无限等待
         // 纳入扫描（租约获取/释放）但 IsTimedOut 不命中，状态不变
         var state = new OrderSagaState
         {
@@ -1046,8 +1046,8 @@ public sealed class SagaTimeoutProcessorTests
             => ValueTask.FromResult<OrderSagaState?>(null);
 
         public ValueTask<int> SaveChangesAsync(OrderSagaState state, CancellationToken ct)
-            // P3 对齐（八轮）：返回受影响行数语义——录制替身模拟"保存成功"返回 1，
-            // 返回 0 会被 SagaProcessor 解释为乐观锁冲突（只记 Warning、跳过指标）
+ // // P3 对齐八轮返回受影响行数语义录制替身模拟"保存成功"返回 1
+ // // 返回 0 会被 SagaProcessor 解释为乐观锁冲突只记 Warning跳过指标
             => ValueTask.FromResult(1);
     }
 
@@ -1188,10 +1188,10 @@ public sealed class SagaTests
         var saga = new OrderFulfillmentSaga();
         var state = new OrderSagaState { CurrentState = "Initial" };
 
-        // 鐢ㄤ笉鍖归厤鐨勪簨浠剁被鍨嬭皟鐢?
+ // // 鐢笉鍖归厤鐨勪簨浠剁被鍨嬭皟鐢?
         var result = await saga.HandleEventAsync(state, new PaymentProcessedEvent(), CancellationToken.None);
 
-        // 搴旇淇濇寔 "Initial"锛堟病鏈夊尮閰嶇殑杞崲锛?
+ // // 搴旇淇濇寔 "Initial"锛堟病鏈夊尮閰嶇殑杞崲锛?
         await Assert.That(result.CurrentState).IsEqualTo("Initial");
         await Assert.That(result).IsSameReferenceAs(state);
     }
@@ -1202,15 +1202,15 @@ public sealed class SagaTests
         var saga = new OrderFulfillmentSaga();
         var state = new OrderSagaState();
 
-        // Step 1: Initial 鈫?Validated
+ // (mojibake cleared)
         state = await saga.HandleEventAsync(state, new OrderPlacedSagaEvent(), CancellationToken.None);
         await Assert.That(state.CurrentState).IsEqualTo("Validated");
 
-        // Step 2: Validated 鈫?Paid
+ // (mojibake cleared)
         state = await saga.HandleEventAsync(state, new PaymentProcessedEvent(), CancellationToken.None);
         await Assert.That(state.CurrentState).IsEqualTo("Paid");
 
-        // Step 3: Paid 鈫?Completed (any event)
+ // (mojibake cleared)
         state = await saga.HandleEventAsync(state, new OrderPlacedSagaEvent(), CancellationToken.None);
         await Assert.That(state.CurrentState).IsEqualTo("Completed");
         await Assert.That(state.Status).IsEqualTo(SagaStatus.Completed);
@@ -1225,7 +1225,7 @@ public sealed class SagaTests
 
         await saga.CompensateAsync(state, CancellationToken.None);
 
-        // 琛ュ伩鎵ц宸叉敞鍐岀殑琛ュ伩澶勭悊鍣?鈥?ValidateOrder 姝ラ鐨?compensate 璁剧疆 CurrentState
+ // // 琛伩鎵宸叉敞鍐岀殑琛伩澶勭悊鍣?鈥?ValidateOrder 姝鐨?compensate 璁剧疆 CurrentState
         await Assert.That(state.CurrentState).IsEqualTo("Compensated_Validate");
     }
 
@@ -1245,7 +1245,7 @@ public sealed class SagaTests
     [Test]
     public async Task CompensateAsync_NoCompensationHandlers_Succeeds()
     {
-        // 鍒涘缓娌℃湁琛ュ伩鐨?Saga
+ // (mojibake cleared)
         var saga = new NoCompensationSaga();
         var state = new OrderSagaState();
 
@@ -1253,19 +1253,19 @@ public sealed class SagaTests
         // 不应抛出异常
     }
 
-    /// <summary>验证 ProcessEventAsync 补偿所有已执行步骤（而非仅当前步骤）</summary>
+ // /// <summary>验证 ProcessEventAsync 补偿所有已执行步骤而非仅当前步骤</summary>
     [Test]
     public async Task ProcessEventAsync_CompensatesAllExecutedSteps()
     {
-        // 第三个步骤会失败（FailingStep）
+ // // 第三个步骤会失败FailingStep
         var failingSaga = new FailingSaga();
         var failingState = new OrderSagaState();
-        // 手动模拟已执行步骤：Validated 和 Paid
+ // // 手动模拟已执行步骤Validated 和 Paid
         failingState.ExecutedStepKeys.Add("Initial|OrderPlacedSagaEvent");
         failingState.ExecutedStepKeys.Add("Validated|PaymentProcessedEvent");
         failingState.CurrentState = "Paid";
 
-        // 验证失败时会补偿已执行步骤，且抛 AggregateException 包含所有重试失败
+ // // 验证失败时会补偿已执行步骤且抛 AggregateException 包含所有重试失败
         var aggEx = await Assert.That(async () =>
         {
             await failingSaga.ProcessEventAsync(failingState, new OrderPlacedSagaEvent { OrderId = Guid.NewGuid(), Amount = 100 });
@@ -1275,7 +1275,7 @@ public sealed class SagaTests
             await Assert.That(ex).IsTypeOf<InvalidOperationException>();
         }
 
-        // 补偿覆盖全部已执行步骤 + 失败步骤，且按 Backward 策略逆序执行
+ // // 补偿覆盖全部已执行步骤 + 失败步骤且按 Backward 策略逆序执行
         await Assert.That(failingState.CurrentState).IsEqualTo("Compensated_Validate");
         await Assert.That(failingSaga.CompensationLog).Count().IsEqualTo(3);
         await Assert.That(failingSaga.CompensationLog[0]).IsEqualTo("FailingStep");

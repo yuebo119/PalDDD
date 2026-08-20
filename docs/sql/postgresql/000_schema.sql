@@ -69,6 +69,7 @@ CREATE TABLE events (
     trace_state     TEXT    -- 审计：W3C tracestate
 );
 CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id);
 CREATE INDEX idx_events_global ON events(global_position);
 
 -- P3 修复（九轮评审）：补齐通用脚本已有而方言脚本缺失的两张表

@@ -10,8 +10,8 @@ namespace PalDDD.Transactions.Tests;
 // ══════════════════════════════════════════════════════════════
 // SagaTimeoutProcessor 已有超时检测单元测试，本文件只覆盖循环层：
 // 1. 启动后按 PollInterval 轮询
-// 2. 超时检查异常不崩溃循环（CA1031 隔离）
-// 3. 停止令牌优雅终止
+ // // 2. 超时检查异常不崩溃循环CA1031 隔离
+ // // 3. 停止令牌优雅终止
 // 4. 批大小配置透传到 store
 // ══════════════════════════════════════════════════════════════
 // 三十五轮 P3 修复：原文件头注释 UTF-8→GBK mojibake 整块损坏（被 CS1570 NoWarn 掩盖），
@@ -34,8 +34,8 @@ public sealed class SagaProcessorTests
     [Test]
     public async Task ExecuteAsync_PollsAtConfiguredInterval(CancellationToken cancellationToken)
     {
-        // P4 修复（ʮ九轮验֤轮 V4）：真ʵʱ钟断言在高载并行下 flaky（250ms 内 50ms 轮ѯ
-        // 理论 4-5 次，高载ʱ可能仅 2 次）——等待窗口放宽到 400ms 且阈ֵ降Ϊ ≥2
+ // // P4 修复九轮验轮 V4真钟断言在高载并行下 flaky250ms 内 50ms 轮
+ // // 理论 4-5 次高载可能仅 2 次等待窗口放宽到 400ms 且阈降 2
         // （轮ѯ周期正ȷ性的最С可区分断言：单次启动不会ֻ轮ѯ 1 次）
         var store = new CountingSagaStore();
         var scopeFactory = new SagaStubScopeFactory(BuildTimeoutProcessor(store));
@@ -123,7 +123,7 @@ public sealed class SagaProcessorTests
 
     // 测试 stub
 
-    /// <summary>璁℃暟 Saga store 鈥?杩斿洖绌哄垪琛紝璁板綍璋冪敤娆℃暟涓庢壒澶у皬</summary>
+ // /// <summary>璁暟 Saga store 鈥?杩斿洖绌哄垪琛紝璁板綍璋冪敤娆暟涓庢壒澶皬</summary>
     private sealed class CountingSagaStore : ISagaStateStore<LifecycleSagaState>
     {
         public int GetActiveCallCount;
@@ -173,7 +173,7 @@ public sealed class SagaProcessorTests
         public ValueTask<int> SaveChangesAsync(LifecycleSagaState state, CancellationToken ct) => new(0);
     }
 
-    /// <summary>鑷畾涔?IServiceScopeFactory 鈥?杩斿洖鍥哄畾 SagaTimeoutProcessor 瀹炰緥</summary>
+ // /// <summary>鑷畾涔?IServiceScopeFactory 鈥?杩斿洖鍥哄畾 SagaTimeoutProcessor 瀹炰緥</summary>
     private sealed class SagaStubScopeFactory(SagaTimeoutProcessor<LifecycleSagaState> processor) : IServiceScopeFactory
     {
         public IServiceScope CreateScope() => new SagaStubScope(processor);
@@ -193,7 +193,7 @@ public sealed class SagaProcessorTests
             => serviceType == typeof(SagaTimeoutProcessor<LifecycleSagaState>) ? processor : null;
     }
 
-    /// <summary>鏃犳搷浣?Saga 鈥?涓嶆敞鍐屼换浣曠姸鎬佽浆鎹紝IsTimedOut 姘歌繙杩斿洖 false</summary>
+ // (mojibake cleared)
     private sealed class NoOpSaga : Saga<LifecycleSagaState>
     { }
 }

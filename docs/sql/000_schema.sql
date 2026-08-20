@@ -85,6 +85,7 @@ CREATE TABLE events (
 );
 
 CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id);
 CREATE INDEX idx_events_global ON events(global_position);
 
 -- ── Idempotency 幂等记录表（P3-010 补充）──
