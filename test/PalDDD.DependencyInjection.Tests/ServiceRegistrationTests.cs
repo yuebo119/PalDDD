@@ -117,6 +117,7 @@ public sealed class ServiceRegistrationTests
     public async Task AddPalCommandHandler_RegistersHandlerAndInterfaceAsScoped()
     {
         var services = new ServiceCollection();
+        services.AddPalLogging();
         services.AddPalCommandHandler<TestCommand, string, TestCommandHandler>();
         using var provider = services.BuildServiceProvider();
         using var scope = provider.CreateScope();
@@ -140,6 +141,7 @@ public sealed class ServiceRegistrationTests
     public async Task AddPalQueryHandler_RegistersHandlerAndInterfaceAsScoped()
     {
         var services = new ServiceCollection();
+        services.AddPalLogging();
         services.AddPalQueryHandler<TestQuery, int, TestQueryHandler>();
         using var provider = services.BuildServiceProvider();
         using var scope = provider.CreateScope();
@@ -197,6 +199,103 @@ public sealed class ServiceRegistrationTests
         using var provider = services.BuildServiceProvider();
         var dispatcher = provider.GetRequiredService<Dispatcher>();
         await Assert.That(dispatcher).IsNotNull();
+    }
+
+    // ─── AOT 闭合注册测试（AotCannotCreateGenericValueType 修复）───
+
+    /// <summary>回归：开放版在前 + AddPalCommandHandler 在后（旧代码升级）→ 收敛 2 个 behavior，不叠加成 4</summary>
+    [Test]
+    public async Task MixOpenThenClosed_ResolvesTwoBehaviors()
+    {
+        var services = new ServiceCollection();
+        services.AddPalLogging();
+        services.AddPalPipelineBehaviors(); // 开放版（旧代码）
+        services.AddPalCommandHandler<TestCommand, string, TestCommandHandler>(); // 自动闭合注册
+        using var provider = services.BuildServiceProvider();
+
+        var behaviors = provider.GetServices<IPipelineBehavior<TestCommand, string>>().ToArray();
+        Console.WriteLine($"PROBE open-then-closed: {behaviors.Length} behaviors");
+        await Assert.That(behaviors.Length).IsEqualTo(2); // 期望 2，若 4 则混用回归成立
+    }
+
+    /// <summary>回归：闭合在前 + 开放版在后 → 收敛 2 个 behavior，不叠加成 4</summary>
+    [Test]
+    public async Task MixClosedThenOpen_ResolvesTwoBehaviors()
+    {
+        var services = new ServiceCollection();
+        services.AddPalLogging();
+        services.AddPalCommandHandler<TestCommand, string, TestCommandHandler>(); // 自动闭合注册
+        services.AddPalPipelineBehaviors(); // 开放版（后调用）
+        using var provider = services.BuildServiceProvider();
+
+        var behaviors = provider.GetServices<IPipelineBehavior<TestCommand, string>>().ToArray();
+        Console.WriteLine($"PROBE closed-then-open: {behaviors.Length} behaviors");
+        await Assert.That(behaviors.Length).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task AddPalPipelineBehaviors_ClosedGeneric_RegistersForRequestResponse()
+    {
+        var services = new ServiceCollection();
+        services.AddPalLogging();
+        services.AddPalPipelineBehaviors<TestCommand, string>();
+        using var provider = services.BuildServiceProvider();
+
+        // 闭合注册：GetServices<IPipelineBehavior<TestCommand, string>>() 应解析到 2 个内置行为
+        var behaviors = provider.GetServices<IPipelineBehavior<TestCommand, string>>().ToArray();
+        await Assert.That(behaviors.Length).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task AddPalPipelineBehaviors_ClosedGeneric_ValueTypeResponse_Resolves()
+    {
+        // 值类型响应（int）闭合注册——AOT 下走 TryCreateExact 不经值类型校验
+        var services = new ServiceCollection();
+        services.AddPalLogging();
+        services.AddPalPipelineBehaviors<TestQuery, int>();
+        using var provider = services.BuildServiceProvider();
+
+        var behaviors = provider.GetServices<IPipelineBehavior<TestQuery, int>>().ToArray();
+        await Assert.That(behaviors.Length).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task AddPalPipelineBehaviors_ClosedGeneric_MultipleCalls_DoesNotDuplicate()
+    {
+        var services = new ServiceCollection();
+        services.AddPalLogging();
+        services.AddPalPipelineBehaviors<TestCommand, string>();
+        services.AddPalPipelineBehaviors<TestCommand, string>(); // 重复调用
+        using var provider = services.BuildServiceProvider();
+
+        var behaviors = provider.GetServices<IPipelineBehavior<TestCommand, string>>().ToArray();
+        await Assert.That(behaviors.Length).IsEqualTo(2); // TryAddEnumerable 去重
+    }
+
+    [Test]
+    public async Task AddPalCommandHandler_RegistersClosedPipelineBehaviors()
+    {
+        var services = new ServiceCollection();
+        services.AddPalLogging();
+        services.AddPalCommandHandler<TestCommand, string, TestCommandHandler>();
+        using var provider = services.BuildServiceProvider();
+
+        // AddPalCommandHandler 应自动闭合注册内置行为
+        var behaviors = provider.GetServices<IPipelineBehavior<TestCommand, string>>().ToArray();
+        await Assert.That(behaviors.Length).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task AddPalQueryHandler_RegistersClosedPipelineBehaviors_ValueTypeResponse()
+    {
+        var services = new ServiceCollection();
+        services.AddPalLogging();
+        services.AddPalQueryHandler<TestQuery, int, TestQueryHandler>();
+        using var provider = services.BuildServiceProvider();
+
+        // 值类型响应（int）也应自动闭合注册
+        var behaviors = provider.GetServices<IPipelineBehavior<TestQuery, int>>().ToArray();
+        await Assert.That(behaviors.Length).IsEqualTo(2);
     }
 
     private sealed class TestDomainEvent : DomainEvent;
