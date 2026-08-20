@@ -17,7 +17,7 @@ namespace PalDDD.Transactions.Tests;
 // 三十五轮 P3 修复：原文件头注释 UTF-8→GBK mojibake 整块损坏（被 CS1570 NoWarn 掩盖），
 // 内容按 SagaProcessor 语义重写；代码体 ASCII 未受影响（152 测试全绿实证）。
 
-/// <summary>SagaProcessor 娴嬭瘯鐢ㄧ姸鎬?/summary>
+/// <summary>SagaProcessor 测试用状态</summary>
 public sealed class LifecycleSagaState : SagaState
 { }
 
@@ -121,7 +121,7 @@ public sealed class SagaProcessorTests
         await Assert.That(store.LastBatchSize == expectedBatchSize).IsTrue();
     }
 
-    // 鈹€鈹€鈹€ 娴嬭瘯 stub 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    // 测试 stub
 
     /// <summary>璁℃暟 Saga store 鈥?杩斿洖绌哄垪琛紝璁板綍璋冪敤娆℃暟涓庢壒澶у皬</summary>
     private sealed class CountingSagaStore : ISagaStateStore<LifecycleSagaState>
@@ -149,7 +149,7 @@ public sealed class SagaProcessorTests
         public ValueTask<int> SaveChangesAsync(LifecycleSagaState state, CancellationToken ct) => new(0);
     }
 
-    /// <summary>鎶涘紓甯?Saga store 鈥?妯℃嫙瓒呮椂妫€鏌ュけ璐?/summary>
+    /// <summary>抛异常：Saga store 模拟超时检查失败</summary>
     private sealed class ThrowingSagaStore : ISagaStateStore<LifecycleSagaState>
     {
         public int GetActiveCallCount;

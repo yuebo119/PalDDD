@@ -8,7 +8,7 @@ using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions.Tests;
 
-// 鈹€鈹€鈹€ 娴嬭瘯鐢ㄨ法杩涚▼娑堟伅 鈹€鈹€鈹€
+// （三十五轮 P3：原中文注释 mojibake 损坏，标题按类名可推回）
 
 public sealed class OrderCreatedIntegrationEvent
 {
@@ -25,7 +25,7 @@ public sealed class OrderCancelledIntegrationEvent
 [JsonSerializable(typeof(OrderCancelledIntegrationEvent))]
 internal sealed partial class TransactionsJsonContext : JsonSerializerContext;
 
-// 鈹€鈹€鈹€ OutboxMessage 娴嬭瘯 鈹€鈹€鈹€
+// OutboxMessage
 
 public sealed class OutboxMessageTests
 {
@@ -273,7 +273,7 @@ public sealed class OutboxBatchProcessorTests
         await Assert.That(store.MarkProcessedCalled).IsTrue();
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Sonar", "S927", Justification = "娴嬭瘯 stub 鍙傛暟鍚?outboxMessage 涓庢帴鍙?message 涓嶅悓锛岄伩鍏嶉伄钄芥崟鑾风殑鏋勯€犲嚱鏁板弬鏁?message.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Sonar", "S927", Justification = "测试 stub 参数名与接口不一致，避免遮蔽构造函数参数。")]
     private sealed class SingleMessageOutboxStore(
         OutboxMessage message,
         bool allowFailureTransitions = false,
@@ -433,7 +433,7 @@ public sealed class OutboxBatchProcessorTests
     }
 }
 
-// 鈹€鈹€鈹€ MessageCatalog 娴嬭瘯 鈹€鈹€鈹€
+// MessageCatalog
 
 public sealed class MessageCatalogTests
 {
@@ -855,7 +855,7 @@ public sealed class InboxProcessorTests
     }
 }
 
-// 鈹€鈹€鈹€ SagaState 娴嬭瘯 鈹€鈹€鈹€
+// SagaState
 
 public sealed class OrderSagaState : SagaState
 {
@@ -1080,7 +1080,7 @@ public sealed class SagaTimeoutProcessorTests
     }
 }
 
-// 鈹€鈹€鈹€ SagaStep 娴嬭瘯 鈹€鈹€鈹€
+// SagaStep
 
 public sealed class SagaStepTests
 {
@@ -1112,7 +1112,7 @@ public sealed class SagaStepTests
     }
 }
 
-// 鈹€鈹€鈹€ Saga 娴嬭瘯 鈹€鈹€鈹€
+// Saga
 
 public sealed class OrderFulfillmentSaga : Saga<OrderSagaState>
 {
@@ -1234,7 +1234,7 @@ public sealed class SagaTests
     {
         var saga = new OrderFulfillmentSaga();
         var state = new OrderSagaState();
-        var now = state.CreatedAt.AddMinutes(1); // 1鍒嗛挓鍚?
+        var now = state.CreatedAt.AddMinutes(1); // （mojibake 清理）
 
         var isTimedOut = saga.IsTimedOut(state, now, out var steps);
 
@@ -1250,7 +1250,7 @@ public sealed class SagaTests
         var state = new OrderSagaState();
 
         await saga.CompensateAsync(state);
-        // 涓嶅簲鎶涘嚭寮傚父
+        // 不应抛出异常
     }
 
     /// <summary>验证 ProcessEventAsync 补偿所有已执行步骤（而非仅当前步骤）</summary>
@@ -1351,7 +1351,7 @@ public sealed class SagaTests
     }
 }
 
-// 鈹€鈹€鈹€ InboxMessage 娴嬭瘯 鈹€鈹€鈹€
+// InboxMessage
 
 public sealed class InboxMessageTests
 {
