@@ -182,8 +182,8 @@ echo ""
 cd "$ROOT_DIR"
 # 三十五轮 A2 修复：退出码先行 + 锚定匹配。原判定 `grep -qE "0 (个错误|Error)"` 是子串匹配——
 # "10 个错误"包含"0 个错误"子串，错误/警告数以 0 结尾时坏构建假通过（门禁假绿族）。
-BUILD_OUTPUT=$(dotnet build PalDDD.slnx 2>&1)
-BUILD_RC=$?
+BUILD_OUTPUT=$(dotnet build PalDDD.slnx 2>&1) || BUILD_RC=$?
+BUILD_RC=${BUILD_RC:-0}
 
 # 双语兼容：锚定数字边界（前面不是数字），"0 个错误"/"0 Error(s)" 才算零
 if [ $BUILD_RC -eq 0 ] \

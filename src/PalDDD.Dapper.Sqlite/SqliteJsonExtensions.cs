@@ -50,7 +50,7 @@ public static class SqliteJson
         // JSON 路径片段，失败延迟到 SQLite 执行期。
         ArgumentException.ThrowIfNullOrWhiteSpace(column);
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
-        return $"json_extract({EscapeIdentifier(column)}, '$.{EscapeLiteral(key)}')";
+        return $"json_extract({EscapeIdentifier(column)}, '$.{EscapeJsonPathSegment(key)}')";
     }
 
     /// <summary>提取嵌套 JSON 路径：json_extract(col, '$.a.b.c')</summary>
@@ -64,7 +64,7 @@ public static class SqliteJson
         foreach (var segment in path)
             ArgumentException.ThrowIfNullOrWhiteSpace(segment);
 
-        return $"json_extract({EscapeIdentifier(column)}, '$.{string.Join('.', path.Select(EscapeLiteral))}')";
+        return $"json_extract({EscapeIdentifier(column)}, '$.{string.Join('.', path.Select(EscapeJsonPathSegment))}')";
     }
 
     // ── 类型检查 ──
@@ -77,7 +77,7 @@ public static class SqliteJson
         // ITM-167 修复：补 null/空白守卫（同 Extract）。
         ArgumentException.ThrowIfNullOrWhiteSpace(column);
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
-        return $"json_type({EscapeIdentifier(column)}, '$.{EscapeLiteral(key)}')";
+        return $"json_type({EscapeIdentifier(column)}, '$.{EscapeJsonPathSegment(key)}')";
     }
 
     /// <summary>验证 JSON 有效性：json_valid(col) → 1/0</summary>
@@ -115,7 +115,7 @@ public static class SqliteJson
         foreach (var v in values)
             ArgumentException.ThrowIfNullOrWhiteSpace(v);
 
-        return $"json_array({string.Join(',', values.Select(v => $"'{EscapeLiteral(v)}'"))})";
+        return $"json_array({string.Join(',', values.Select(v => $"'{EscapeSqlLiteral(v)}'"))})";
     }
 
     /// <summary>创建 JSON 对象：json_object('k1','v1','k2','v2')</summary>
@@ -132,8 +132,8 @@ public static class SqliteJson
         var parts = new string[keyValuePairs.Length];
         for (int i = 0; i < keyValuePairs.Length; i += 2)
         {
-            parts[i] = $"'{EscapeLiteral(keyValuePairs[i])}'";
-            parts[i + 1] = $"'{EscapeLiteral(keyValuePairs[i + 1])}'";
+            parts[i] = $"'{EscapeSqlLiteral(keyValuePairs[i])}'";
+            parts[i + 1] = $"'{EscapeSqlLiteral(keyValuePairs[i + 1])}'";
         }
         return $"json_object({string.Join(',', parts)})";
     }
@@ -165,9 +165,9 @@ public static class SqliteJson
     public static string OutboxByType(string messageType)
     {
         // ITM-195 修复（三十轮）：补空白守卫——同文件其余 9 个方法已 ITM-167 对齐，唯此漏。
-        // 缺守卫时 null → EscapeLiteral 内 NRE 而非入口 ArgumentException。
+        // 缺守卫时 null → EscapeJsonPathSegment 内 NRE 而非入口 ArgumentException。
         ArgumentException.ThrowIfNullOrWhiteSpace(messageType);
-        return $"{Extract("payload", "Type")} = '{EscapeLiteral(messageType)}'";
+        return $"{Extract("payload", "Type")} = '{EscapeSqlLiteral(messageType)}'";
     }
 
     // ── 内部 ──
@@ -175,17 +175,23 @@ public static class SqliteJson
     // P2/P3 修复（二十一轮·转义语义拆分，对齐 SqliteFtsExtensions.Escape:130）：
     // 此前 Escape（单引号翻倍）被同时用于标识符位置与值位置——标识符位置的 column
     // 应双引号包裹（SQLite 标识符引用语法），单引号翻倍对列名既不引用也挡不住注入。
-    // 现拆为：EscapeIdentifier 管标识符（column 参数），EscapeLiteral 管单引号
-    // 字面量内文（key/path 段、Array/BuildObject 的 JSON 键值、OutboxByType 比较值）。
+    // 现拆为：EscapeIdentifier 管标识符（column 参数），EscapeJsonPathSegment 管
+    // JSON 路径键名（Extract/Type/HasKey/ExtractPath），EscapeSqlLiteral 管
+    // 纯 SQL 字符串字面量值（Array/BuildObject 的 JSON 键值、OutboxByType 比较值）。
     private static string EscapeIdentifier(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
 
-    // 三十五轮 D4：键含 '.' 或 '"' 时原实现生成畸形/非法路径、执行期静默错查——
-    // 改为构建期 fail-fast（ITM-167 null 守卫谱系：错误越早暴露定位成本越低）。
-    private static string EscapeLiteral(string s)
+    // 三十六轮 P1-1 修复：D4 的 '.'/'"' fail-fast 被错误应用到 SQL 值位置——
+    // .NET 消息类型全名（Order.Created）几乎必然含 '.'，修复前合法调用正常工作，
+    // 修复后直接抛 ArgumentException。拆分：守卫只留在 JSON 路径位置（点号是层级
+    // 分隔符、引号需转义），值位置仅做单引号翻倍（注入防线完整）。
+    private static string EscapeJsonPathSegment(string s)
     {
         if (s.Contains('.') || s.Contains('"'))
             throw new ArgumentException(
-                $"JSON 键名含违禁字符（'.' 或 '\"'）：\"{s}\"。本 API 不支持此类键，请改用原生 SQL 手写引号包裹路径。", nameof(s));
+                $"JSON 路径键含违禁字符（'.' 或 '\"'）：\"{s}\"。请改用原生 SQL 手写引号包裹路径。", nameof(s));
         return s.Replace("'", "''");
     }
+
+    private static string EscapeSqlLiteral(string s)
+        => s.Replace("'", "''");
 }
