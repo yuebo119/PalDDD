@@ -49,7 +49,7 @@ public sealed class OrderSaga : Saga<OrderSagaState>
         MaxRetries = 3;
 
         // 步骤 1：创建订单
-        When("Initial", typeof(OrderRequested), new SagaStep("CreateOrder",
+        When<OrderRequested>("Initial", new SagaStep("CreateOrder",
             execute: async (state, evt, ct) =>
             {
                 state.CustomerName = ((OrderRequested)evt).CustomerName;
@@ -64,7 +64,7 @@ public sealed class OrderSaga : Saga<OrderSagaState>
             timeout: TimeSpan.FromMinutes(5)));
 
         // 步骤 2：预留库存
-        When("Created", typeof(OrderCreated), new SagaStep("ReserveInventory",
+        When<OrderCreated>("Created", new SagaStep("ReserveInventory",
             execute: async (state, evt, ct) =>
             {
                 state.CurrentState = "InventoryReserved";

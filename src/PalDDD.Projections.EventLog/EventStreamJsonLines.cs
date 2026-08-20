@@ -75,21 +75,60 @@ public static class EventStreamJsonLines
         using var reader = new StreamReader(input, leaveOpen: true);
 
         var lineNumber = 0L;
-        while (await reader.ReadLineAsync(ct).ConfigureAwait(false) is { } line)
-        {
-            lineNumber++; // 空行也计入——行号须对齐文件物理行，坏行才定位得准
-            if (string.IsNullOrWhiteSpace(line))
-                continue;
+        // 三十五轮 D2 修复：分块读行替换 ReadLineAsync——原实现先把整行物化为 string 再做
+        // MaxLineChars 检查，超长无换行输入在检查生效前已完成巨型分配（防 OOM 声明失效）。
+        // 本循环遇 '\n' 即止、累积超过限值即刻抛出：分配上界 = MaxLineChars + 8K 读取块。
+        var buf = new char[8192];
+        var line = new System.Text.StringBuilder();
+        int bufLen = 0, bufPos = 0;
+        bool eof = false;
 
-            // ITM-218 修复：超长行在上抛带行号的受控异常——不让恶意输入以 OOM 崩溃进程
-            if (line.Length > MaxLineChars)
-                throw new EventReplayException(
-                    $"Event import failed at line {lineNumber}: line exceeds {MaxLineChars} character limit.");
+        while (!eof)
+        {
+            line.Clear();
+            bool sawNewline = false;
+            while (!sawNewline)
+            {
+                if (bufPos >= bufLen)
+                {
+                    bufLen = await reader.ReadAsync(buf.AsMemory(0, buf.Length), ct).ConfigureAwait(false);
+                    bufPos = 0;
+                    if (bufLen == 0) { eof = true; break; }
+                }
+                var nl = Array.IndexOf(buf, '\n', bufPos, bufLen - bufPos);
+                if (nl >= 0)
+                {
+                    line.Append(buf, bufPos, nl - bufPos);
+                    bufPos = nl + 1;  // 跳过 '\n'
+                    sawNewline = true;
+                }
+                else
+                {
+                    line.Append(buf, bufPos, bufLen - bufPos);
+                    bufPos = bufLen;
+                }
+                if (line.Length > MaxLineChars)
+                    throw new EventReplayException(
+                        $"Event import failed at line {lineNumber + 1}: line exceeds {MaxLineChars} character limit.");
+            }
+            if (eof && line.Length == 0) break;  // 尾部无多余行
+            // 对齐 ReadLineAsync 语义：剥离 CRLF 的 '\r'
+            if (line.Length > 0 && line[line.Length - 1] == '\r') line.Length--;
+
+            lineNumber++; // 空行也计入——行号须对齐文件物理行，坏行才定位得准
+            if (line.Length == 0)
+                continue;
+            // 对齐原 IsNullOrWhiteSpace 容忍语义：全空白行跳过（零分配扫描）
+            var allWhitespace = true;
+            for (var i = 0; i < line.Length; i++)
+                if (!char.IsWhiteSpace(line[i])) { allWhitespace = false; break; }
+            if (allWhitespace)
+                continue;
 
             EventData? evt;
             try
             {
-                evt = DeserializeEventLine(line);
+                evt = DeserializeEventLine(line.ToString());
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

@@ -180,13 +180,18 @@ echo "════════════════════════�
 echo ""
 
 cd "$ROOT_DIR"
-BUILD_OUTPUT=$(dotnet build PalDDD.slnx 2>&1) || true
+# 三十五轮 A2 修复：退出码先行 + 锚定匹配。原判定 `grep -qE "0 (个错误|Error)"` 是子串匹配——
+# "10 个错误"包含"0 个错误"子串，错误/警告数以 0 结尾时坏构建假通过（门禁假绿族）。
+BUILD_OUTPUT=$(dotnet build PalDDD.slnx 2>&1)
+BUILD_RC=$?
 
-# 双语兼容：检查 "0 个错误" 或 "0 Error"
-if echo "$BUILD_OUTPUT" | grep -qE "0 (个错误|Error)" && echo "$BUILD_OUTPUT" | grep -qE "0 (个警告|Warning)"; then
+# 双语兼容：锚定数字边界（前面不是数字），"0 个错误"/"0 Error(s)" 才算零
+if [ $BUILD_RC -eq 0 ] \
+    && echo "$BUILD_OUTPUT" | grep -qE "(^|[^0-9])0( 个错误| 个警告| Error| Warning)" \
+    && ! echo "$BUILD_OUTPUT" | grep -qE "[1-9][0-9]* (个错误|个警告|Error|Warning)"; then
     echo -e "${GREEN}✅ dotnet build 零错误零警告${NC}"
 else
-    echo -e "${RED}❌ dotnet build 有错误或警告${NC}"
+    echo -e "${RED}❌ dotnet build 有错误或警告（rc=$BUILD_RC）${NC}"
     echo "$BUILD_OUTPUT" | tail -10
     FAIL=1
 fi

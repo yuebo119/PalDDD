@@ -19,18 +19,19 @@ public sealed class PublicApiSnapshotTests
 {
     private static readonly Assembly[] Assemblies =
     [
-        typeof(AggregateRoot<>).Assembly,
-        typeof(Dispatcher).Assembly,
-        typeof(ServiceRegistration).Assembly,
-        typeof(IEventLog).Assembly,
-        typeof(IIdempotencyStore).Assembly,
-        typeof(IMessageBroker).Assembly,
-        typeof(IProjectionCheckpointStore).Assembly,
-        typeof(EventLogReplaySource<DomainEvent>).Assembly,
-        typeof(IUnitOfWork).Assembly,
-        typeof(IMessageSerializer).Assembly,
-        typeof(MessageContractManifest).Assembly,
-        typeof(Saga<>).Assembly
+        typeof(AggregateRoot<>).Assembly,       // PalDDD.Core
+        typeof(Dispatcher).Assembly,            // PalDDD.CQRS
+        typeof(ServiceRegistration).Assembly,   // PalDDD.DependencyInjection
+        typeof(IEventLog).Assembly,             // PalDDD.EventLog
+        typeof(IIdempotencyStore).Assembly,     // PalDDD.Idempotency
+        typeof(IMessageBroker).Assembly,        // PalDDD.Messaging
+        typeof(IProjectionCheckpointStore).Assembly, // PalDDD.Projections
+        typeof(EventLogReplaySource<DomainEvent>).Assembly, // PalDDD.Projections.EventLog
+        // 三十五轮 P3-2 修复：原第 9 项 typeof(IUnitOfWork).Assembly 与 AggregateRoot<>
+        // 同为 PalDDD.Core——快照 PalDDD.Core 段被 dump 两遍（218 行重复），快照体积虚增 47%。
+        typeof(IMessageSerializer).Assembly,    // PalDDD.Serialization
+        typeof(MessageContractManifest).Assembly, // PalDDD.Serialization.Evolution
+        typeof(Saga<>).Assembly                 // PalDDD.Transactions
     ];
 
     [Test]

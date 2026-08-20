@@ -55,7 +55,19 @@ public sealed class UnitOfWork<TContext> : IUnitOfWork
         if (_disposed) return;
         _disposed = true;
 
-        if (_context.Database.CurrentTransaction is not null)
-            await _context.Database.RollbackTransactionAsync().ConfigureAwait(false);
+        // 三十五轮 C2（ITM-131 姊妹对齐）：停机路径回滚 best-effort——
+        // 连接已断/事务悬挂/上下文先释放时 Rollback 或 Database 访问抛出会从 Dispose 逃逸，
+        // 在容器 teardown 中覆盖其他 scope 的真实根因异常（对齐 DapperUnitOfWork.DisposeAsync 过滤模式）。
+        try
+        {
+            if (_context.Database.CurrentTransaction is not null)
+                await _context.Database.RollbackTransactionAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException
+            or ObjectDisposedException
+            or System.Data.Common.DbException)
+        {
+            // 上下文已释放/事务已失效/连接已断——Dispose 路径吞掉，保留真正根因
+        }
     }
 }

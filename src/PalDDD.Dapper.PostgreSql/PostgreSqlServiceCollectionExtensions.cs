@@ -196,7 +196,8 @@ public static class PostgreSqlServiceCollectionExtensions
     /// P2/P3 修复（十七轮）：读写分离存在双入口（本方法与
     /// <see cref="PostgreSqlReadWriteRouterExtensions.AddPalReadWriteRouter"/>）——
     /// 后者为推荐入口：Writer/Reader 各自 ApplicationName 后缀（-Writer/-Reader，监控可区分）、
-    /// Reader 走 LoadBalanceHosts 负载均衡、并做副本凭据一致性校验（PD17）；本方法三项均缺。
+    /// Reader 走 LoadBalanceHosts 负载均衡、并做副本凭据一致性校验（PD17）。本方法缺应用名
+    /// 后缀与副本凭据校验两项（Reader 负载均衡已具备——LoadBalanceHosts=true，三十五轮口径勘正）。
     /// </remarks>
     [System.Obsolete("读写分离请使用 PostgreSqlReadWriteRouterExtensions.AddPalReadWriteRouter（Writer/Reader 应用名后缀区分 + 负载均衡 + 副本凭据校验）。本入口保留仅为既有调用方兼容。")]
     public static IServiceCollection AddPalPostgreSqlReadWriteRouter(
@@ -215,13 +216,17 @@ public static class PostgreSqlServiceCollectionExtensions
         NpgsqlDataSource? reader = null;
         if (readerConnectionStrings.Length > 0)
         {
-            // PD17 姊妹统一：端口编码进 Host 条目（非 5432 副本端口不丢弃）
+            // PD17 姊妹统一：端口编码进 Host 条目（非 5432 副本端口不丢弃）。
+            // 三十五轮 C3 修复：writer 端口非默认（如 5433）时，readerCs 继承 writer 的 Port——
+            // 副本自身 Port=5432 若不编码会被继承端口顶替（读流量连错实例）。对齐
+            // PostgreSqlMultiHost.EncodeHostEntry 语义：主端口非默认则全部条目显式编码（含默认端口副本）。
+            var writerPort = new NpgsqlConnectionStringBuilder(writerConnectionString).Port;
             var hosts = readerConnectionStrings.Select(cs =>
             {
                 var sb = new NpgsqlConnectionStringBuilder(cs);
                 return sb.Host is null || sb.Host.Length == 0
                     ? ""
-                    : (sb.Port != 5432 ? $"{sb.Host}:{sb.Port}" : sb.Host);
+                    : (sb.Port != 5432 || writerPort != 5432 ? $"{sb.Host}:{sb.Port}" : sb.Host);
             }).Where(h => h.Length > 0);
             var readerCs = new NpgsqlConnectionStringBuilder(writerConnectionString)
             {

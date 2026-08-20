@@ -75,10 +75,20 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_transaction is null) return;
 
-        await _transaction.RollbackAsync(ct).ConfigureAwait(false);
-        await _transaction.DisposeAsync().ConfigureAwait(false);
-        _transaction = null;
-        _session.UseTransaction(null);
+        try
+        {
+            await _transaction.RollbackAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            // 三十五轮 C1（ITM-131 姊妹对齐）：回滚失败也必须清理引用并解绑 DataSession——
+            // 原实现回滚抛出（连接故障/已取消）时悬挂 _transaction 与 UseTransaction 绑定，
+            // 后续 DisposeAsync 二次操作已失效事务以新异常掩盖根因（对齐 CommitAsync 的 ITM-087 finally 模式）。
+            try { await _transaction.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception ex) when (ex is InvalidOperationException or System.Data.Common.DbException) { /* 事务已失效/已释放 */ }
+            _transaction = null;
+            _session.UseTransaction(null);
+        }
     }
 
     /// <inheritdoc />
