@@ -1,12 +1,19 @@
 using PalDDD.PalORM.Stores;
 using System.Text.Json.Serialization;
 using PalORM;
+using PalDDD.PalORM.MySql;
 using PalDDD.PalORM.PostgreSql;
+using PalDDD.PalORM.Sqlite;
 using PalDDD.Transactions;
 
 namespace PalDDD.PalORM.Tests;
 
 /// <summary>Saga Store 跨方言测试 —— 验证 saga_data JSON 列 + version 乐观锁。</summary>
+/// <remarks>
+/// unified v2.0（2026-08-20）：全部 store 构造注入 jsonTypeInfo——产品侧 SaveChangesAsync 已是
+/// fail-fast 守卫（无 jsonTypeInfo 抛 InvalidOperationException，防 saga_data 静默丢失，ITM-005 谱系），
+/// 无 json 的宽容时代测试属过期契约；PG 方言必须走派生类（jsonb CAST，ITM-127 回归）。
+/// </remarks>
 [TUnit.Core.NotInParallel("palorm-multidialect")]
 public class PalOrmSagaMultiDialectTests
 {
@@ -15,51 +22,70 @@ public class PalOrmSagaMultiDialectTests
         public string CustomerId { get; set; } = "";
     }
 
+    private static readonly System.Text.Json.Serialization.Metadata.JsonTypeInfo<TestSagaState> Json =
+        SagaTestJsonContext.Default.TestSagaState;
+
+    // ── 方言 store 工厂（PG 走派生类避 42804；SQLite/MySQL 泛型基类即可）──
+
+    private static async Task<ISagaStateStore<TestSagaState>> CreateSqliteStoreAsync()
+    {
+        var ts = await MultiDialectFixture.CreateSqliteAsync();
+        return new SqliteSagaStateStore<TestSagaState>(ts.Session, Json);
+    }
+
+    private static async Task<ISagaStateStore<TestSagaState>> CreatePostgreSqlStoreAsync()
+    {
+        var ts = await MultiDialectFixture.CreatePostgreSqlAsync();
+        return new PostgreSqlSagaStateStore<TestSagaState>(ts.Session, Json);
+    }
+
+    private static async Task<ISagaStateStore<TestSagaState>> CreateMySqlStoreAsync()
+    {
+        var ts = await MultiDialectFixture.CreateMySqlAsync();
+        return new MySqlSagaStateStore<TestSagaState>(ts.Session, Json);
+    }
+
     [Test]
     public async Task Saga_Sqlite_InsertNew_ThenGetById()
-        => await Test_InsertNew_ThenGetById(await MultiDialectFixture.CreateSqliteAsync());
+        => await Test_InsertNew_ThenGetById(await CreateSqliteStoreAsync());
 
     [Test]
     public async Task Saga_PostgreSql_InsertNew_ThenGetById()
-        => await Test_InsertNew_ThenGetById(await MultiDialectFixture.CreatePostgreSqlAsync());
+        => await Test_InsertNew_ThenGetById(await CreatePostgreSqlStoreAsync());
 
     [Test]
     public async Task Saga_MySql_InsertNew_ThenGetById()
-        => await Test_InsertNew_ThenGetById(await MultiDialectFixture.CreateMySqlAsync());
+        => await Test_InsertNew_ThenGetById(await CreateMySqlStoreAsync());
 
-    private static async Task Test_InsertNew_ThenGetById<TProvider>(TestSession<TProvider> ts)
-        where TProvider : IDbProvider
+    private static async Task Test_InsertNew_ThenGetById(ISagaStateStore<TestSagaState> store)
     {
-        var store = new PalOrmSagaStateStore<TProvider, TestSagaState>(ts.Session);
         var state = new TestSagaState { CustomerId = "cust-1", CurrentState = "Started" };
 
         await store.SaveChangesAsync(state, default);
         var loaded = await store.GetByIdAsync(state.SagaId, default);
 
         await Assert.That(loaded).IsNotNull();
-        // 注：无 jsonTypeInfo 时 saga_data 不持久化，CustomerId 是默认值。
-        // 验证元数据列（DB 列直接映射，不依赖 JSON 快照）
-        await Assert.That(loaded!.CurrentState).IsEqualTo("Started");
+        // jsonTypeInfo 注入路径：CustomerId 从 saga_data JSON 反序列化恢复（fail-fast 契约下必持久化）
+        await Assert.That(loaded!.CustomerId).IsEqualTo("cust-1");
+        await Assert.That(loaded.CurrentState).IsEqualTo("Started");
         await Assert.That(loaded.Version).IsEqualTo(0);  // INSERT 不自增 version（与 Dapper 实现一致）
         await Assert.That(loaded.Status).IsEqualTo(SagaStatus.Active);
     }
 
     [Test]
     public async Task Saga_Sqlite_GetActiveSagas_ReturnsOnlyActive()
-        => await Test_GetActiveSagas(await MultiDialectFixture.CreateSqliteAsync());
+        => await Test_GetActiveSagas(await CreateSqliteStoreAsync());
 
     [Test]
     public async Task Saga_PostgreSql_GetActiveSagas_ReturnsOnlyActive()
-        => await Test_GetActiveSagas(await MultiDialectFixture.CreatePostgreSqlAsync());
+        => await Test_GetActiveSagas(await CreatePostgreSqlStoreAsync());
 
     [Test]
     public async Task Saga_MySql_GetActiveSagas_ReturnsOnlyActive()
-        => await Test_GetActiveSagas(await MultiDialectFixture.CreateMySqlAsync());
+        => await Test_GetActiveSagas(await CreateMySqlStoreAsync());
 
-    private static async Task Test_GetActiveSagas<TProvider>(TestSession<TProvider> ts)
-        where TProvider : IDbProvider
+    private static async Task Test_GetActiveSagas(ISagaStateStore<TestSagaState> store)
     {
-        var store = new PalOrmSagaStateStore<TProvider, TestSagaState>(ts.Session);
         var active = new TestSagaState { CurrentState = "Active" };
         var completed = new TestSagaState { CurrentState = "Done", Status = SagaStatus.Completed };
 
@@ -74,20 +100,18 @@ public class PalOrmSagaMultiDialectTests
 
     [Test]
     public async Task Saga_Sqlite_LeaseActiveSagas()
-        => await Test_LeaseActiveSagas(await MultiDialectFixture.CreateSqliteAsync());
+        => await Test_LeaseActiveSagas(await CreateSqliteStoreAsync());
 
     [Test]
     public async Task Saga_PostgreSql_LeaseActiveSagas()
-        => await Test_LeaseActiveSagas(await MultiDialectFixture.CreatePostgreSqlAsync());
+        => await Test_LeaseActiveSagas(await CreatePostgreSqlStoreAsync());
 
     [Test]
     public async Task Saga_MySql_LeaseActiveSagas()
-        => await Test_LeaseActiveSagas(await MultiDialectFixture.CreateMySqlAsync());
+        => await Test_LeaseActiveSagas(await CreateMySqlStoreAsync());
 
-    private static async Task Test_LeaseActiveSagas<TProvider>(TestSession<TProvider> ts)
-        where TProvider : IDbProvider
+    private static async Task Test_LeaseActiveSagas(ISagaStateStore<TestSagaState> store)
     {
-        var store = new PalOrmSagaStateStore<TProvider, TestSagaState>(ts.Session);
         await store.SaveChangesAsync(new TestSagaState { CurrentState = "Active" }, default);
 
         var leased = await store.LeaseActiveSagasAsync("worker-1", TimeSpan.FromMinutes(5), 10, default);
@@ -102,32 +126,15 @@ public class PalOrmSagaMultiDialectTests
 
     [Test]
     public async Task Saga_Sqlite_WithJsonTypeInfo_PreservesBusinessFields()
-        => await Test_WithJsonTypeInfo_PreservesBusinessFields(await MultiDialectFixture.CreateSqliteAsync());
+        => await Test_WithJsonTypeInfo_PreservesBusinessFields(await CreateSqliteStoreAsync());
 
     [Test]
     public async Task Saga_PostgreSql_WithJsonTypeInfo_PreservesBusinessFields()
-    {
-        // ITM-127 回归：必须走 PG 方言派生类（RequiresJsonbCast=true）——
-        // 泛型基类在 PG 上无 CAST 会抛 42804，本测试锁死方言固化类的 jsonb 快照往返
-        var ts = await MultiDialectFixture.CreatePostgreSqlAsync();
-        var store = new PostgreSqlSagaStateStore<TestSagaState>(
-            ts.Session, SagaTestJsonContext.Default.TestSagaState);
-        var state = new TestSagaState { CustomerId = "cust-json-pg", CurrentState = "Started" };
+        => await Test_WithJsonTypeInfo_PreservesBusinessFields(await CreatePostgreSqlStoreAsync());
 
-        await store.SaveChangesAsync(state, default);
-        var loaded = await store.GetByIdAsync(state.SagaId, default);
-
-        await Assert.That(loaded).IsNotNull();
-        await Assert.That(loaded!.CustomerId).IsEqualTo("cust-json-pg");
-        await Assert.That(loaded.SagaId).IsEqualTo(state.SagaId);
-        await Assert.That(loaded.CurrentState).IsEqualTo("Started");
-    }
-
-    private static async Task Test_WithJsonTypeInfo_PreservesBusinessFields<TProvider>(TestSession<TProvider> ts)
-        where TProvider : IDbProvider
+    private static async Task Test_WithJsonTypeInfo_PreservesBusinessFields(ISagaStateStore<TestSagaState> store)
     {
         // 注入 jsonTypeInfo，使 saga_data JSON 列持久化完整状态快照（ITM-014 覆盖）
-        var store = new PalOrmSagaStateStore<TProvider, TestSagaState>(ts.Session, SagaTestJsonContext.Default.TestSagaState);
         var state = new TestSagaState { CustomerId = "cust-json-42", CurrentState = "Started" };
 
         await store.SaveChangesAsync(state, default);
@@ -144,12 +151,9 @@ public class PalOrmSagaMultiDialectTests
 
     [Test]
     public async Task Saga_Sqlite_SaveChanges_WithStaleVersion_ReturnsZero()
-        => await Test_SaveChanges_WithStaleVersion_ReturnsZero(await MultiDialectFixture.CreateSqliteAsync());
-
-    private static async Task Test_SaveChanges_WithStaleVersion_ReturnsZero<TProvider>(TestSession<TProvider> ts)
-        where TProvider : IDbProvider
     {
-        var store = new PalOrmSagaStateStore<TProvider, TestSagaState>(ts.Session);
+        var ts = await MultiDialectFixture.CreateSqliteAsync();
+        var store = new SqliteSagaStateStore<TestSagaState>(ts.Session, Json);
         var state = new TestSagaState { CustomerId = "cust-1", CurrentState = "Started" };
 
         // 首次 INSERT（version=0），state.Version 内存快照仍为 0
