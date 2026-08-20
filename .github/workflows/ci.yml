@@ -76,6 +76,9 @@ jobs:
             bash .ai/scripts/gate-check.sh --allow-dirty
           else
             echo "SKIP .ai self-check: .ai 质量系统未随仓库分发"
+            # set -o pipefail 必须：无它则 bash|tee 管道退出码是 tee 的 0——
+            # gate 真实失败被掩码（SHELL-1 教训在本会话的第四次现身，2026-08-20 自首自修）
+            set -o pipefail
             if ! bash scripts/gate-check.sh 2>&1 | tee ci-gate.log; then
               echo "::error ::ROOT GATE-CHECK FAILED"
               python3 scripts/ci-failed-tests.py gate ci-gate.log || true
