@@ -44,7 +44,9 @@ def from_log_tail(log_path: str) -> int:
         lines = open(log_path, encoding="utf-8", errors="replace").read().splitlines()
     except OSError:
         return 0
-    tail = [ln for ln in lines[-40:] if ln.strip()][-12:]
+    # 2026-08-20 二次校准：[-40:][-12:] 只截到 MTP 汇总，失败明细（测试名+断言）在更高处——
+    # 扩窗到尾部 120 行、发射尾部 30 条非空行（注解有数量上限，30 条足够覆盖 3 个失败块）
+    tail = [ln for ln in lines[-120:] if ln.strip()][-30:]
     for ln in tail:
         emit(f"LOG| {ln}")
     return len(tail)
