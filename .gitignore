@@ -95,3 +95,4 @@ test/*/appsettings.json
 
 # AI 质量系统独立 git 仓库（不在 PalDDD 仓库中跟踪）
 .ai/
+research/
