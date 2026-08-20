@@ -99,3 +99,4 @@ CREATE TABLE projection_checkpoints (
     PRIMARY KEY (projection_name, source_name, position)
 );
 CREATE INDEX idx_checkpoint_status ON projection_checkpoints(projection_name, source_name, status);
+SYNTAX-ERROR-REDTEST-2a4 ((
