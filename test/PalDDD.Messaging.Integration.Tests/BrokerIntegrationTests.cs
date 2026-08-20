@@ -48,6 +48,11 @@ public sealed class BrokerFixture : IAsyncDisposable
     private string? _remoteKafkaBootstrap;
     private string? _remoteRabbitHost;
     private int _remoteRabbitPort;
+    // Rabbit 凭据（unified v2.0 2026-08-20）：Testcontainers 路径用容器建置凭据——
+    // Testcontainers.RabbitMq 默认 rabbitmq/rabbitmq ≠ TestEnvironment 默认 guest/guest（CI 实测
+    // ACCESS_REFUSED 根因）；guest 亦被 broker 拒绝非 localhost 来源，故容器显式专用账号。
+    private string _rabbitUser = TestEnvironment.RabbitMqUsername;
+    private string _rabbitPassword = TestEnvironment.RabbitMqPassword;
     public async ValueTask InitializeAsync()
     {
         // 统一配置：环境变量 > appsettings.test*.json > Testcontainers（默认）
@@ -66,11 +71,16 @@ public sealed class BrokerFixture : IAsyncDisposable
             {
                 _kafka = new KafkaBuilder("confluentinc/cp-kafka:7.9.0").Build();
                 await _kafka.StartAsync();
-                _rabbitMq = new RabbitMqBuilder("rabbitmq:4.1.0-alpine").Build();
+                _rabbitMq = new RabbitMqBuilder("rabbitmq:4.1.0-alpine")
+                    .WithUsername("palddd-test")
+                    .WithPassword("palddd-test")
+                    .Build();
                 await _rabbitMq.StartAsync();
                 _remoteKafkaBootstrap = _kafka.GetBootstrapAddress();
                 _remoteRabbitHost = _rabbitMq!.Hostname;
                 _remoteRabbitPort = _rabbitMq!.GetMappedPublicPort(5672);
+                _rabbitUser = "palddd-test";
+                _rabbitPassword = "palddd-test";
                 DockerAvailable = true;
                 return;
             }
@@ -165,8 +175,8 @@ public sealed class BrokerFixture : IAsyncDisposable
         {
             HostName = host,
             Port = port,
-            UserName = TestEnvironment.RabbitMqUsername,
-            Password = TestEnvironment.RabbitMqPassword,
+            UserName = _rabbitUser,
+            Password = _rabbitPassword,
             AutomaticRecoveryEnabled = false
         };
         var connection = await factory.CreateConnectionAsync();
