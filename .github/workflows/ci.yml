@@ -96,3 +96,72 @@ jobs:
 
       - name: PublishAot verify
         run: dotnet publish samples/PalDDD.PalOrmSample/PalDDD.PalOrmSample.csproj -c Release -r linux-x64 /p:PublishAot=true --verbosity normal
+
+  dialect-probe:
+    # unified v2.0 Phase 2a：方言实测防线固化——40 断言 × PG/MySQL 从"本机可选跑"升 CI 必跑。
+    # 定位是准发布门：路径触发（仅 Store/SQL/DDL/映射面变更），不阻塞 build-and-test 快速反馈。
+    # 脚本用根 scripts/dialect-probe.sh（.ai 独立仓不随主仓分发的分发副本，真源 .ai/scripts/）。
+    # 红测欠账：破坏一个 SQL 模板必红的一次性验证，待本 job 首次 CI 运行时补（tasks 2a.4）。
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PALDDD_TEST_PG: "Host=localhost;Port=5432;Username=postgres;Password=postgres;Database=postgres"
+      PALDDD_TEST_MYSQL: "Server=localhost;Port=3306;User ID=root;Password=root;Database=mysql"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Path gate（Store/SQL/DDL/映射面才跑；PR 全跑宁多验不漏验）
+        id: paths
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "match=1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! git rev-parse HEAD~1 >/dev/null 2>&1; then
+            echo "match=1" >> "$GITHUB_OUTPUT"; exit 0   # 首提交/浅历史退化为全跑
+          fi
+          if git diff --name-only HEAD~1 HEAD | grep -qE '(PalDDD\.Dapper|docs/sql/|Store|SqlTemplates)'; then
+            echo "match=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "match=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup .NET
+        if: steps.paths.outputs.match == '1'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '11.0.x'
+          include-prerelease: true
+
+      - name: Run dialect probe（每方言 20 断言，独立临时库自动清理）
+        if: steps.paths.outputs.match == '1'
+        run: bash scripts/dialect-probe.sh --allow-destructive-probe
