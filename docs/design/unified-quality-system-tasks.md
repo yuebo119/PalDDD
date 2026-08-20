@@ -200,6 +200,10 @@
 
 - 2026-08-20（续二·推送与 CI 链）：用户授权推送 → fetch 揭示远程 PR#1（同修复平行实现）→ 合并双文件冲突按演进版裁决（本地互斥版替代十七轮哨兵）→ 推送 74845f4 → **CI 首跑三结果**：dialect-probe job 首战正确（容器起+路径门判 SKIP，设计行为 1:1 复现）；aot-verify 绿；build-and-test 挂 CS0111×7——根因=**ServiceRegistrationTests 自动合并把两侧同名测试方法都留下**（远程调试版含 Console 探针 vs 本地演进版），且此前本地“构建过”系管道掩码假绿+--no-build 旧程序集。修复：删调试版留演进版（6dbf1f4，退出码直读 0 错+89/89）。**教训回填 lessons XIII.7：SHELL-1/2（退出码掩码三连假绿）、MERGE-1（零冲突标记≠语义正确）**（.ai af02a8f）。后续推送被网络阻断（github.com:443 不可达、api.github.com 正常、无代理配置），后台重试循环挂起中；恢复后按序：推 6dbf1f4 → CI 裁决 → 2a.4 红测循环。
 
+- 2026-08-20（续三·CI 六层洋葱全清 + 2a.4 闭环）：用户授权推送（代理 10808）→ main CI 首跑三 job 裁决 → **六层修复链**：① CS0111 合并语义重复（MERGE-1）② Rabbit 预检缺失 + Testcontainers 凭据错配（rabbitmq/rabbitmq≠guest/guest，ACCESS_REFUSED 实证）③ Verify 快照 eol（仓库级 eol=crlf 污染基线，gitattributes 官方处方）④ PalORM Saga jsonTypeInfo 过期契约（产品 fail-fast vs 宽容时代测试，方言 store 工厂重构）⑤ gate 步骤 tee 无 pipefail 掩码（SHELL-1 第四次现身——我自己的代码，自首自修）⑥ **.sh CRLF 终因**（eol=crlf 把 CI Linux checkout 脚本转 CRLF，bash 在 set -euo pipefail 即死"invalid option name"；dialect-probe.sh 此前从未真执行故雷未爆）。诊断基建：CI 自诊断三通道（ci-failed-tests.py：TUnit 报告+CTX 关键字上下文+快照差异→::error 注解→公开 API 可读，免认证）。**main 4b9b4ea 真·全绿**（gate 真实执行）。**2a.4 红测闭环**：dev 1a61c03 注入 SQL 语法错误→dialect-probe FAILURE（路径门命中+探针真跑+坏输入必红，build/aot 不受扰）→ revert→复绿（绿半程见下条）。分支策略固化：main=CI 验证通道（保持绿），dev=修改分支。
+
+- 2026-08-20（续三补·2a.4 闭环确认）：红半程 dev `1a61c03`（注入 SQL 语法错误）→ dialect-probe **FAILURE**（路径门命中+探针真跑+坏输入必红，build-and-test/aot-verify 不受扰）；绿半程 dev `fb51544`（revert）→ 三 job 全 success（dialect-probe 复跑通过）。**2a.4 红测欠账正式清偿，四态验证完整**。插曲：git revert 不支持 -q 标志（usage 129），首轮回滚未执行即推送链断裂——靠轮询盯陈旧 run 发现，正确重做。main 已同步至 fb51544。
+
 ### Phase 3 试点记录格式（任务轮积累，两轮后裁决）
 
 ```markdown
