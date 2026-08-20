@@ -22,7 +22,6 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '11.0.x'
-          include-prerelease: true
 
       - name: Cache NuGet
         uses: actions/cache@v4
@@ -89,7 +88,6 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '11.0.x'
-          include-prerelease: true
 
       - name: Cache NuGet
         uses: actions/cache@v4
@@ -167,7 +165,6 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '11.0.x'
-          include-prerelease: true
 
       - name: Run dialect probe（每方言 20 断言，独立临时库自动清理）
         if: steps.paths.outputs.match == '1'
