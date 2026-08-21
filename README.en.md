@@ -667,7 +667,7 @@ src/                         36 source projects · Clean Architecture (folders m
 ├── Hosting/                 DependencyInjection · Hosting.AspNetCore
 └── Metapackages/            Base · Extension · Prompts (Prompts is not a package, IsPackable=false)
 
-test/                        16 test projects (TUnit) · 977 tests
+test/                        16 test projects (TUnit) · 897+ tests (15 local + 1 PalORM CI/Docker)
 bench/                       BenchmarkDotNet performance benchmarks
 samples/                     PalOrmSample (AOT verification) · ECommerce · MinimalApi · AotSample
 docs/                        Architecture · Usage guide · Tutorial · ADR
@@ -736,7 +736,26 @@ If you need Native AOT deployment (microservices, CLI tools, edge computing) →
 Does not support .NET 8/9/10 (single target net11.0). Saga's ChildSaga and DynamicStep rely on `MakeGenericType`, which is unavailable in AOT publishing (annotated with `[RequiresDynamicCode]`). No built-in EventStore snapshot mechanism — projects that need a snapshot strategy must implement it themselves.
 
 **Who is using it in production?**
-Pal.DDD is currently at version v1.1.0, which is unreleased (Unreleased; the only repository tag is v1.0.0-preview.1). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with test coverage of 977 cases. You are welcome to try it in non-production environments and provide feedback.
+Pal.DDD is currently at version v1.1.0 (tag v1.1.0 pushed; CI green after full-repo clearance). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with test coverage of 897+ cases (15 local projects) + 41 Testcontainers integration (CI). You are welcome to try it in non-production environments and provide feedback.
+
+---
+
+## AI-Assisted Development Quality System
+
+This repository embeds a `.ai/` directory (separate git repository) containing a comprehensive AI coding quality defense system:
+
+| Defense | Purpose |
+|---------|---------|
+| `gate-check.sh` (PDDD-G1..G22) | Architecture integrity gate (strict mode) |
+| `verify-ai-system.sh` (V1-V20) | System self-check (ledger/repair gate/sensor expiry/intake template) |
+| `encoding-gate.sh` (E1-E4) | Encoding consistency (CRLF/BOM/mojibake/verified LF) |
+| `sibling-map.sh` | Sibling family enumeration (16 families transitive closure) — fix-round linkage |
+| `flaky-gate.sh` | Rerun-based flaky detection (env isolation + skipped classification) |
+| `fix-orchestrator.sh` | Fix-round orchestrator (sibling linkage + repair gate + regression checklist) |
+| `dialect-probe.sh` | Dialect live probe (PG/MySQL 40 assertions, CI path-triggered) |
+| `ci-failed-tests.py` | CI failure self-diagnostic 3-channel annotations (publicly readable) |
+
+See `.ai/README.md` for details (four systems, one entry point + unified quality system v2.0).
 
 ---
 

@@ -667,7 +667,7 @@ src/                         36 源项目 · Clean Architecture（Folder 与 Pal
 ├── Hosting/                 DependencyInjection · Hosting.AspNetCore
 └── Metapackages/            Base · Extension · Prompts（Prompts 非包，IsPackable=false）
 
-test/                        16 测试项目（TUnit）· 977 测试
+test/                        16 测试项目（TUnit）· 897+ 测试（15 本地 + 1 PalORM CI/Docker）
 bench/                       BenchmarkDotNet 性能基准
 samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi · AotSample
 docs/                        架构 · 使用指南 · 教程 · ADR
@@ -742,7 +742,26 @@ MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Servi
 不支持 .NET 8/9/10（单目标 net11.0）。Saga 的 ChildSaga 和 DynamicStep 依赖 `MakeGenericType`，在 AOT 发布时不可用（标注了 `[RequiresDynamicCode]`）。不含内置的 EventStore 快照机制——需要快照策略的项目需要自行实现。
 
 **生产环境有谁在用？**
-Pal.DDD 当前版本 v1.1.0 未发布（Unreleased；仓库 tag 仅 v1.0.0-preview.1）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 977 用例。欢迎在非生产环境中试用并反馈。
+Pal.DDD 当前版本 v1.1.0（tag v1.1.0 已推送；三十七轮全仓清偿后 CI 全绿）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 897+ 用例（本地 15 项目）+ 41 Testcontainers 真库集成（CI）。欢迎在非生产环境中试用并反馈。
+
+---
+
+## AI 辅助开发质量系统
+
+本仓库内嵌 `.ai/` 目录（独立 git 仓库），包含一套完整的 AI 编码质量防线：
+
+| 防线 | 作用 |
+|------|------|
+| `gate-check.sh`（PDDD-G1..G22） | 架构完整性门禁（严格模式） |
+| `verify-ai-system.sh`（V1-V20） | 系统自检（账本校验/修复门/台账超期/进件模板） |
+| `encoding-gate.sh`（E1-E4） | 编码一致性（CRLF/BOM/mojibake/verified LF） |
+| `sibling-map.sh` | 姊妹族枚举（16 族传递闭包）——修复轮联动防线 |
+| `flaky-gate.sh` | 重跑式 flaky 检测（环境隔离 + skipped 分类） |
+| `fix-orchestrator.sh` | 修复轮编排（姊妹联动 + 修复门 + 回归清单） |
+| `dialect-probe.sh` | 方言实测探针（PG/MySQL 40 断言，CI 路径触发） |
+| `ci-failed-tests.py` | CI 失败自诊断三通道注解（公开 API 可读） |
+
+详见 `.ai/README.md`（四系统一个入口 + 统一质量体系 v2.0）。
 
 ---
 
