@@ -34,17 +34,22 @@ namespace PalDDD.Integration.Tests;
 public sealed class DapperStoreTests
 {
     private DbConnection _conn = null!;
-    // 三十八轮 P2 修复（方言测试盲区）：原硬编码 Sqlite 使 1148 行 Dapper 测试只跑 SQLite——
-    // MySQL/PG 分支（InboxInsertMySql、JOIN 租约、RETURNING、jsonb CAST 等）零自动化验证，
-    // 方言间契约不一致只能靠人工实测轮兜底。现支持环境变量注入：
-    //   PALDDD_TEST_DAPPER_DB = Sqlite(缺省) | MySql | PostgreSql
-    // CI 可在带 DB service 的 job 中设为 MySql/PostgreSql 跑同一套测试；缺省保持本地零依赖。
-    // ⚠️ 当前 CI 未接入该变量（build-and-test 无 DB service）——接入属后续任务。
-    private static readonly DapperDbType _dbType =
-        Enum.TryParse<DapperDbType>(
-            Environment.GetEnvironmentVariable("PALDDD_TEST_DAPPER_DB") ?? "Sqlite", ignoreCase: true, out var parsed)
-            ? parsed
-            : DapperDbType.Sqlite;
+    // 三十八轮 P2 备注（方言测试盲区）：原硬编码 Sqlite 使全部 Dapper 测试只跑 SQLite。
+    // ⚠️ 当前仅支持 Sqlite——MySQL/PG 分支需配套连接工厂与方言 Schema（CreateSchemaAsync
+    // 亦为 SQLite 专用），完整实现属后续任务；在此之前其他值显式失败而非静默错配。
+    // MySQL/PG 路径的自动化验证由 scripts/dialect-probe.sh 承载（40 断言，CI dialect-probe job）。
+    private static readonly DapperDbType _dbType = ResolveDbType();
+
+    private static DapperDbType ResolveDbType()
+    {
+        var raw = Environment.GetEnvironmentVariable("PALDDD_TEST_DAPPER_DB") ?? "Sqlite";
+        if (Enum.TryParse<DapperDbType>(raw, ignoreCase: true, out var parsed) && parsed == DapperDbType.Sqlite)
+            return parsed;
+        throw new NotSupportedException(
+            $"PALDDD_TEST_DAPPER_DB={raw}：DapperStoreTests 当前仅实现 Sqlite 分支（连接工厂/Schema 为 SQLite 专用）。"
+            + "MySQL/PG 路径请运行 scripts/dialect-probe.sh（40 断言）。");
+    }
+
     private static bool s_previousUnderscoreSetting;
 
     [Before(Class)]
