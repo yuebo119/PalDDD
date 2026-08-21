@@ -16,7 +16,7 @@
 //
 // 使用方式：
 //   // 创建 FTS5 索引
-//   conn.Execute(SqliteFts.CreateOutboxIndex("outbox_messages"));
+//   conn.Execute(SqliteFts.CreateFtsIndex("payload_idx")  // 三十七轮修正：原示例触发 TEXT 主键 datatype mismatch);
 //
 //   // 全文搜索
 //   conn.QueryAsync<OutboxMessage>(
