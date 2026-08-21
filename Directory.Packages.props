@@ -7,9 +7,9 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- 源码生成器（仅编译时，不传递到用户项目） -->
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.6.0" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.6.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.9.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.9.0" />
     <!-- 仓储层依赖 (EF Core 11 Preview 7) — 多数据库 Provider -->
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="11.0.0-preview.7.26381.103" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="11.0.0-preview.7.26381.103" />
@@ -33,11 +33,11 @@
     <PackageVersion Include="Dapper" Version="2.1.79" />
     <PackageVersion Include="Dapper.AOT" Version="1.0.52" />
     <!-- PalORM 适配器 — 面向 Native AOT 的 .NET 11 微 ORM（源生成 + 编译期 SQL，真 AOT 安全） -->
-    <PackageVersion Include="PalORM.Core" Version="5.2.0" />
-    <PackageVersion Include="PalORM.SourceGen" Version="5.2.0" />
-    <PackageVersion Include="PalORM.Sqlite" Version="5.2.0" />
-    <PackageVersion Include="PalORM.PostgreSql" Version="5.2.0" />
-    <PackageVersion Include="PalORM.MySql" Version="5.2.0" />
+    <PackageVersion Include="PalORM.Core" Version="5.3.0" />
+    <PackageVersion Include="PalORM.SourceGen" Version="5.3.0" />
+    <PackageVersion Include="PalORM.Sqlite" Version="5.3.0" />
+    <PackageVersion Include="PalORM.PostgreSql" Version="5.3.0" />
+    <PackageVersion Include="PalORM.MySql" Version="5.3.0" />
     <!-- MemoryPack 二进制序列化（AOT 兼容） -->
     <PackageVersion Include="MemoryPack" Version="1.21.4" />
     <!-- Dapper.FluentMap 已移除 — 改用 Dapper.DefaultTypeMap.MatchNamesWithUnderscores -->
@@ -54,11 +54,11 @@
     <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
     <PackageVersion Include="Confluent.Kafka" Version="2.15.0" />
     <!-- 测试基础设施 — TUnit（源生成器测试框架 · MTP） -->
-    <PackageVersion Include="TUnit" Version="1.65.0" />
+    <PackageVersion Include="TUnit" Version="1.65.38" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <!-- 属性测试 — FsCheck + TUnit 集成 -->
-    <PackageVersion Include="FsCheck" Version="3.3.4" />
-    <PackageVersion Include="TUnit.FsCheck" Version="1.65.0" />
+    <PackageVersion Include="FsCheck" Version="3.4.0" />
+    <PackageVersion Include="TUnit.FsCheck" Version="1.65.38" />
     <!-- 快照测试 — Verify + TUnit 集成 -->
     <PackageVersion Include="Verify.TUnit" Version="31.28.0" />
     <!-- 集成测试 — Testcontainers -->

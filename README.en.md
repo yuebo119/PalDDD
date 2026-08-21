@@ -160,11 +160,11 @@ InMemory implementations cover all abstract interfaces, so unit tests and protot
 | **PalDDD.Dapper.PostgreSql** | 1.1.0 | Dapper PostgreSQL enhancements: audit / JSONB / sharding / soft delete |
 | **PalDDD.Dapper.MySql** | 1.1.0 | Dapper MySQL enhancements |
 | **PalDDD.Dapper.Sqlite** | 1.1.0 | Dapper SQLite enhancements: TypeHandler / RowFactory / FTS5 |
-| **PalORM.Core** | 5.2.0 | PalORM engine core: DataSession / Provider / RowFactory (underlying dependency of PalDDD.PalORM) |
-| **PalORM.SourceGen** | 5.2.0 | PalORM source generator: compile-time RowFactory / CommandFactory generation (zero reflection) |
-| **PalORM.PostgreSql** | 5.2.0 | PalORM PostgreSQL dialect Provider: RETURNING / COPY |
-| **PalORM.MySql** | 5.2.0 | PalORM MySQL dialect Provider: BulkCopy / multi-value INSERT |
-| **PalORM.Sqlite** | 5.2.0 | PalORM SQLite dialect Provider: FTS5 / JSON1 |
+| **PalORM.Core** | 5.3.0 | PalORM engine core: DataSession / Provider / RowFactory (underlying dependency of PalDDD.PalORM) |
+| **PalORM.SourceGen** | 5.3.0 | PalORM source generator: compile-time RowFactory / CommandFactory generation (zero reflection) |
+| **PalORM.PostgreSql** | 5.3.0 | PalORM PostgreSQL dialect Provider: RETURNING / COPY |
+| **PalORM.MySql** | 5.3.0 | PalORM MySQL dialect Provider: BulkCopy / multi-value INSERT |
+| **PalORM.Sqlite** | 5.3.0 | PalORM SQLite dialect Provider: FTS5 / JSON1 |
 
 ---
 
