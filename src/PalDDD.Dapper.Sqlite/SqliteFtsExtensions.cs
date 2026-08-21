@@ -130,10 +130,12 @@ public static class SqliteFts
     private static string Escape(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
     private static string EscapeLiteral(string s) => s.Replace("'", "''");
 
-    /// <summary>P3 修复：触发器名只允许字母数字下划线（SQLite 标识符约束）——非标识符字符剔除。</summary>
+    /// <summary>P3 修复：触发器名只允许字母数字下划线（SQLite 标识符约束）——非标识符字符剔除。
+    /// 三十八轮 P3 修复：下划线保留——原实现剔除后 "outbox-messages" 与 "outbox_messages"
+    /// 清洗同名，第二张表的 CREATE TRIGGER IF NOT EXISTS 静默跳过致其 FTS 索引停更。</summary>
     private static string SanitizeTriggerName(string s)
     {
-        var chars = s.Where(char.IsLetterOrDigit).ToArray();
+        var chars = s.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray();
         return chars.Length > 0 ? new string(chars) : "fts";
     }
 

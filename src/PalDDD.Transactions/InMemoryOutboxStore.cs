@@ -65,6 +65,11 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
 
             var now = _timeProvider.GetUtcNow();
             var leased = new List<OutboxMessage>(pending.Count);
+            // 三十八轮 P3 修复：引用索引表替代逐条 IndexOf 线性扫——批量租约 O(n²) → O(n)。
+            // pending 元素即 _messages 内的同一引用（QueryPending 直接筛选），引用比较安全。
+            var indexMap = new Dictionary<OutboxMessage, int>(pending.Count * 2, ReferenceEqualityComparer.Instance);
+            for (int i = 0; i < _messages.Count; i++)
+                indexMap.TryAdd(_messages[i], i);
             foreach (var msg in pending)
             {
                 // ITM-174 修复（二十九轮）：successor 替换——对齐 InMemoryInboxStore/
@@ -92,7 +97,7 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
                     Error = null,
                     ProcessedAt = null
                 };
-                _messages[_messages.IndexOf(msg)] = successor;
+                _messages[indexMap[msg]] = successor;
                 leased.Add(successor);
             }
 

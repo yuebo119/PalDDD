@@ -239,17 +239,26 @@ public abstract class EventLogDbContext(
             // 其它 DbUpdateException（外键约束、CHECK 约束、字段过长、空值违约等）
             // 是真实的数据错误，必须原样向上传播，否则会掩盖真实错误并误导重试策略。
             if (!IsUniqueConstraintViolation(ex))
+            {
+                // 三十八轮 P2 修复：上抛前清理本批 Added 实体——长生命周期 DbContext 中
+                // 残留批次携带旧 GlobalPosition，污染后续追加（ITM-226 场景级联：重取块
+                // 落入已用区间 → PK 冲突 → 再被误分类）
+                DetachAddedEvents();
                 throw;
+            }
 
             DetachAddedEvents();
             // ITM-126 修复：PG 显式事务内 SaveChanges 抛 23505 后事务进入 aborted 状态，
             // 同事务重查会抛 25P02 并替换原始 DbUpdateException——重查失败时放弃分类，
             // 走外层 throw 原样上抛原始冲突异常（对齐 DapperEventLog/PalOrmEventLog 姊妹实现）
             long? currentVersion = null;
+            var eventIdExists = false;
             var requerySucceeded = false;
             try
             {
                 currentVersion = await GetActualStreamVersionAsync(streamName, cancellationToken).ConfigureAwait(false);
+                eventIdExists = await Events.AsNoTracking()
+                    .AnyAsync(e => e.EventId == events[0].EventId, cancellationToken).ConfigureAwait(false);
                 requerySucceeded = true;
             }
             catch (DbException)
@@ -264,9 +273,15 @@ public abstract class EventLogDbContext(
             // P2 修复（EventId 冲突误译）：版本仍满足期望说明不是流版本冲突
             // 而是 EventId 唯一索引撞——重复事件 ID 是数据错误，原样上抛（转并发异常会让
             // 盲目重试的调用方无限循环）
-            if (expectedVersion.Matches(currentVersion!.Value))
+            // 三十八轮 P2 修复：上述 Matches 判定对 Any/StreamExists 失效（恒 true）——
+            // 并发写者推进流后原样上抛 provider 异常，重试契约失真。改为精确判定：
+            // ① 批内 EventId 重复 或 ② 表中已存在同 EventId → 数据错误，原样上抛；
+            // ③ 否则（EventId 全新但流已被并发推进）→ 流版本冲突，转统一并发异常。
+            // Exact/NoStream 场景下新判定与旧 Matches 判定结论一致。
+            var hasDuplicateEventIdInBatch = events.Select(e => e.EventId).Distinct().Count() != events.Count;
+            if (hasDuplicateEventIdInBatch || eventIdExists)
                 throw;
-            throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion.Value);
+            throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion!.Value);
         }
 
         return new AppendEventsResult(

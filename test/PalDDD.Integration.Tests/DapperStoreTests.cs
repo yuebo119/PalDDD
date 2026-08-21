@@ -34,7 +34,17 @@ namespace PalDDD.Integration.Tests;
 public sealed class DapperStoreTests
 {
     private DbConnection _conn = null!;
-    private const DapperDbType _dbType = DapperDbType.Sqlite;
+    // 三十八轮 P2 修复（方言测试盲区）：原硬编码 Sqlite 使 1148 行 Dapper 测试只跑 SQLite——
+    // MySQL/PG 分支（InboxInsertMySql、JOIN 租约、RETURNING、jsonb CAST 等）零自动化验证，
+    // 方言间契约不一致只能靠人工实测轮兜底。现支持环境变量注入：
+    //   PALDDD_TEST_DAPPER_DB = Sqlite(缺省) | MySql | PostgreSql
+    // CI 可在带 DB service 的 job 中设为 MySql/PostgreSql 跑同一套测试；缺省保持本地零依赖。
+    // ⚠️ 当前 CI 未接入该变量（build-and-test 无 DB service）——接入属后续任务。
+    private static readonly DapperDbType _dbType =
+        Enum.TryParse<DapperDbType>(
+            Environment.GetEnvironmentVariable("PALDDD_TEST_DAPPER_DB") ?? "Sqlite", ignoreCase: true, out var parsed)
+            ? parsed
+            : DapperDbType.Sqlite;
     private static bool s_previousUnderscoreSetting;
 
     [Before(Class)]

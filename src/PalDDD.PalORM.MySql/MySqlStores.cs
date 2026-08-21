@@ -10,7 +10,8 @@ namespace PalDDD.PalORM.MySql;
 // ════════════════════════════════════════════════════════════
 // MySQL 不支持 RETURNING —— TProvider.SupportsReturningClause=false。
 // Outbox LeasePending 走两步 UPDATE+SELECT 回读路径（避免重跑子查询）。
-// Inbox TryStart 走 INSERT IGNORE + LAST_INSERT_ID 路径。
+// Inbox TryStart 走普通 INSERT + 唯一约束冲突异常捕获路径（三十八轮 P1 回归修复，
+// 弃用 ON DUPLICATE KEY UPDATE——MySqlConnector 默认 found rows 使冲突误判为新插入）。
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>MySQL 方言 Outbox Store。</summary>

@@ -16,7 +16,10 @@
 //
 // 💡 跨数据库 INSERT + RETURN ID 语法差异：
 //   ｜ - PostgreSQL：INSERT ... ON CONFLICT ... RETURNING id（单语句原子幂等，无 TOCTOU）
-//   ｜ - MySQL：INSERT IGNORE ...; SELECT LAST_INSERT_ID();
+//   ｜ - MySQL：普通 INSERT ...; SELECT LAST_INSERT_ID();（冲突抛 1062 由
+//   ｜   IsUniqueConstraintViolation 捕获转回查分支——三十八轮 P1 回归修复，
+//   ｜   弃用 ON DUPLICATE KEY UPDATE 模式：SELECT LAST_INSERT_ID() 恒返回一行，
+//   ｜   冲突路径伪造 Processing 记录）
 //   ｜ - SQLite：INSERT OR IGNORE ...; SELECT last_insert_rowid() WHERE changes() > 0;
 //   ｜
 // ⚠️ SQLite / MySQL 路径的幂等是"弱保证"：依赖唯一约束防重复记录，
@@ -59,9 +62,20 @@ public sealed class DapperInboxStore : IInboxStore
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // P2/P3 修复（十七轮）：全部查询/执行改 CommandDefinition 传递 ct（对齐 DapperOutboxStore.RequeueDeadAsync 模式）——
         // 原重载不接收取消令牌，取消信号只在 EnsureOpenAsync 阶段可传递，SQL 执行阶段不可取消
-        var insertedId = await c.QueryFirstOrDefaultAsync<long?>(
-            new CommandDefinition(_dialect.InboxInsert,
-                new { c = consumerName, m = messageId, now = ToTimeParam(now) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+        // 三十八轮 P1 回归修复：MySQL 路径 InboxInsertMySql 为普通 INSERT——唯一约束冲突抛
+        // MySqlException(1062)，捕获后转下方 existing 回查分支（Processed 判断/超时抢占语义恢复可达）。
+        // PG（RETURNING）/SQLite（INSERT OR IGNORE）路径冲突不抛异常，此 catch 仅 MySQL 可达。
+        long? insertedId;
+        try
+        {
+            insertedId = await c.QueryFirstOrDefaultAsync<long?>(
+                new CommandDefinition(_dialect.InboxInsert,
+                    new { c = consumerName, m = messageId, now = ToTimeParam(now) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+        }
+        catch (DbException ex) when (_dbType == DapperDbType.MySql && IsUniqueConstraintViolation(ex))
+        {
+            insertedId = null; // 唯一约束冲突——记录已存在，非错误
+        }
         if (insertedId.HasValue)
         {
             return new InboxMessage
@@ -121,9 +135,13 @@ public sealed class DapperInboxStore : IInboxStore
         ArgumentNullException.ThrowIfNull(message);
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // P2/P3 修复（十七轮）：CommandDefinition 传 ct（见 TryStartProcessingAsync 同款注释）
+        // 三十八轮 P2 修复（ITM-210 Inbox 姊妹）：processing_started_at 抢占 token 守卫——
+        // 被抢占的旧 worker token 不匹配零命中，不覆盖新 worker 的行；affected=0 时
+        // 零内存变异（对齐 Outbox ITM-210 语义）。ProcessingStartedAt 为 null 属调用方误用，
+        // SQL 等值比较 NULL 永假 → fail-closed。
         await c.ExecuteAsync(
             new CommandDefinition(SqlTemplates.InboxMarkProcessed,
-                new { at = ToTimeParam(processedAt), id = message.Id }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+                new { at = ToTimeParam(processedAt), id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
     }
 
     public async ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
@@ -133,9 +151,10 @@ public sealed class DapperInboxStore : IInboxStore
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // P2/P3 修复（十七轮）：CommandDefinition 传 ct（见 TryStartProcessingAsync 同款注释）
+        // 三十八轮 P2 修复：同 MarkProcessedAsync——processing_started_at 抢占 token 守卫
         await c.ExecuteAsync(
             new CommandDefinition(SqlTemplates.InboxMarkFailed,
-                new { err = failureReason, id = message.Id }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+                new { err = failureReason, id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -162,5 +181,36 @@ public sealed class DapperInboxStore : IInboxStore
         var c = _connection;
         if (c.State != ConnectionState.Open) { await c.OpenAsync(ct).ConfigureAwait(false); }
         return c;
+    }
+
+    /// <summary>
+    /// 三十八轮 P1 回归修复：判定异常是否为唯一约束冲突（MySQL 1062/1586、PG 23505、SQLite UNIQUE）。
+    /// 仅捕获重复键——其他错误原样上抛。与 DapperEventLog/DapperSagaStateStore 同型
+    /// （本 Store 无 SqlServer 方言，不含 2601/2627 分支）。
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075:This",
+        Justification = "Provider 异常鸭子类型判定。裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级）。")]
+    private static bool IsUniqueConstraintViolation(Exception exception)
+    {
+        for (var inner = exception; inner is not null; inner = inner.InnerException)
+        {
+            var type = inner.GetType();
+            var typeName = type.Name;
+
+            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int mysqlNumber
+                && (mysqlNumber == 1062 || mysqlNumber == 1586))
+                return true;
+
+            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
+                && type.GetProperty("SqlState")?.GetValue(inner) is string pgState
+                && pgState == "23505")
+                return true;
+
+            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
+                && inner.Message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 }

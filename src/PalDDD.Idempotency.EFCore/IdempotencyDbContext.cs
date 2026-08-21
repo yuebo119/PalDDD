@@ -142,6 +142,13 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
             Entry(record).State = EntityState.Detached;
             return null;
         }
+        catch (DbUpdateException)
+        {
+            // 三十八轮 P2 修复：瞬时故障上抛前同样 Detach——长生命周期 DbContext 中残留的
+            // Added 实体会污染后续无关 SaveChanges（幽灵写入）
+            Entry(record).State = EntityState.Detached;
+            throw;
+        }
     }
 
     private async ValueTask<IdempotencyRecord?> TryReuseRecordAsync(
@@ -161,6 +168,13 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         {
             Entry(record).State = EntityState.Detached;
             return null;
+        }
+        catch (DbUpdateException)
+        {
+            // 三十八轮 P2 修复：record 已被 MarkProcessing 变异为 Modified——瞬时故障上抛前
+            // Detach，防止下次无关 SaveChanges 把幽灵租约续期一并提交（阻塞其他 worker 至租约过期）
+            Entry(record).State = EntityState.Detached;
+            throw;
         }
     }
 
@@ -233,6 +247,13 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
             // 只是终态标记被抢先。at-least-once 语义下这是可接受的（操作本身幂等）。
             // 调用方收到 Executed 返回值——DB 终态可能是另一节点写入的 Completed 或 Failed。
             Entry(record).State = EntityState.Detached;
+        }
+        catch (DbUpdateException)
+        {
+            // 三十八轮 P2 修复：瞬时故障上抛前 Detach——record 已被变异为 Modified，
+            // 残留 ChangeTracker 会把幽灵终态/租约一并提交到后续无关 SaveChanges
+            Entry(record).State = EntityState.Detached;
+            throw;
         }
     }
 

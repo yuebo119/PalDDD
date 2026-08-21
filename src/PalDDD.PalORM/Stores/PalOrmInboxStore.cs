@@ -11,7 +11,9 @@ namespace PalDDD.PalORM.Stores;
 /// <b>核心挑战</b>：<see cref="IInboxStore.TryStartProcessingAsync"/> 需要原子幂等 INSERT —— 三方言分叉：
 /// <list type="bullet">
 /// <item><b>PG/SQLite</b>：<c>INSERT ... ON CONFLICT (consumer_name, message_id) DO NOTHING RETURNING id</c>（单语句原子）</item>
-/// <item><b>MySQL</b>：<c>INSERT IGNORE ...; SELECT LAST_INSERT_ID()</c>（两步）+ 冲突时回查</item>
+/// <item><b>MySQL</b>：普通 INSERT + 唯一约束冲突异常捕获（IsDuplicateKeyError）→ 回查现有记录。
+/// 三十八轮 P1 回归修复：弃用三十七轮 A1 的 <c>ON DUPLICATE KEY UPDATE id = id</c> + affected&gt;0 判断——
+/// MySqlConnector 默认 UseAffectedRows=false 报告 found rows，冲突时也返回 1，伪造 Processing 记录。</item>
 /// </list>
 /// </para>
 /// <para>
@@ -62,11 +64,22 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         }
         else
         {
-            // MySQL 路径：INSERT + ON DUPLICATE KEY UPDATE（三十七轮 A1：ITM-228 姊妹修复——
-            // INSERT IGNORE 会把截断/非法日期等非重复键错误静默降为 warning）
-            var affected = await Session.ExecuteAsync(
-                $"INSERT INTO inbox_messages (message_id, consumer_name, status, received_at, processing_started_at, attempts) VALUES ({messageId}, {consumerName}, {statusProcessing}, {now}, {now}, 1) ON DUPLICATE KEY UPDATE id = id",
-                ct).ConfigureAwait(false);
+            // MySQL 路径：普通 INSERT + 唯一约束冲突异常捕获（三十八轮 P1 回归修复）。
+            // 三十七轮 A1 曾改为 ON DUPLICATE KEY UPDATE id = id + affected>0 判断新插入——
+            // 但 MySqlConnector 默认 UseAffectedRows=false 报告 found rows，冲突时也返回 1，
+            // 伪造 Processing 记录绕过 Processed/超时/抢占分支（幂等破坏）。
+            // 现对齐 PalOrmIdempotencyStore ITM-228 同款模式：冲突抛 1062 → affected=0 → 回查分支。
+            var affected = 0;
+            try
+            {
+                affected = await Session.ExecuteAsync(
+                    $"INSERT INTO inbox_messages (message_id, consumer_name, status, received_at, processing_started_at, attempts) VALUES ({messageId}, {consumerName}, {statusProcessing}, {now}, {now}, 1)",
+                    ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsDuplicateKeyError(ex))
+            {
+                affected = 0; // 唯一约束冲突——记录已存在，非错误
+            }
             if (affected > 0)
             {
                 // 新插入成功 —— 查回自增 id（ScalarAsync 支持 long）
@@ -137,8 +150,10 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         ArgumentNullException.ThrowIfNull(message);
         // 手写 SQL（不走 UpdateAsync）—— 避免 [ConcurrencyCheck]attempts 干扰并发场景
         // WHERE status='Processing' 守卫，防止重复标记（与 Dapper 实现一致）
+        // 三十八轮 P2 修复（ITM-210 Inbox 姊妹）：processing_started_at 抢占 token 守卫——
+        // 被抢占的旧 worker token 不匹配零命中，不覆盖新 worker 的行（对齐 Dapper 版同款）
         var affected = await Session.ExecuteAsync(
-            $"UPDATE inbox_messages SET status = {(int)InboxStatus.Processed}, processed_at = {processedAt} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing}",
+            $"UPDATE inbox_messages SET status = {(int)InboxStatus.Processed}, processed_at = {processedAt} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing} AND processing_started_at = {message.ProcessingStartedAt}",
             ct).ConfigureAwait(false);
         // ITM-168 修复：本地对象仅在 DB 行确实受影响（affected > 0）时变更——原实现先改
         // 本地再执行 SQL 且不看 affected：记录已被并发者标记终态时 DB 未变，本地对象却
@@ -161,8 +176,9 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         // 手写 SQL（不走 UpdateAsync）—— 避免 [ConcurrencyCheck]attempts 在并发场景抛异常
         // WHERE status='Processing' 守卫，防止覆盖已 Processed 的记录（与 Dapper 实现一致）
+        // 三十八轮 P2 修复（ITM-210 Inbox 姊妹）：processing_started_at 抢占 token 守卫（对齐 Dapper 版同款）
         var affected = await Session.ExecuteAsync(
-            $"UPDATE inbox_messages SET status = {(int)InboxStatus.Failed}, last_error = {failureReason} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing}",
+            $"UPDATE inbox_messages SET status = {(int)InboxStatus.Failed}, last_error = {failureReason} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing} AND processing_started_at = {message.ProcessingStartedAt}",
             ct).ConfigureAwait(false);
         // ITM-168 修复：affected > 0 才变更本地对象（同 MarkProcessedAsync 陈旧语义修复）。
         if (affected > 0)
@@ -170,5 +186,40 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
             message.Status = InboxStatus.Failed;
             message.LastError = failureReason;
         }
+    }
+
+    /// <summary>
+    /// 三十八轮 P1 回归修复：判定异常是否为唯一约束冲突（MySQL 1062/1586、PG 23505、SQLite UNIQUE、SqlServer 2601/2627）。
+    /// 仅捕获重复键——其他错误原样上抛。与 PalOrmIdempotencyStore/PalOrmSagaStateStore 同型。
+    /// </summary>
+    [UnconditionalSuppressMessage("Aot", "IL2075:RequiresDynamicallyAccessedMembers",
+        Justification = "PalORM 适配层为非 AOT（IsAotCompatible=false）；反射读取 provider 异常属性用于错误分类。")]
+    private static bool IsDuplicateKeyError(Exception exception)
+    {
+        for (var ex = exception; ex is not null; ex = ex.InnerException)
+        {
+            var type = ex.GetType();
+            var typeName = type.Name;
+
+            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(ex) is int mysqlNum
+                && (mysqlNum == 1062 || mysqlNum == 1586))
+                return true;
+
+            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
+                && type.GetProperty("SqlState")?.GetValue(ex) is string pgState
+                && pgState == "23505")
+                return true;
+
+            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
+                && ex.Message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (typeName.Equals("SqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(ex) is int sqlNum
+                && (sqlNum == 2601 || sqlNum == 2627))
+                return true;
+        }
+        return false;
     }
 }

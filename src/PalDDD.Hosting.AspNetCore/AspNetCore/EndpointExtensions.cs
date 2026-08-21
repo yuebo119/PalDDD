@@ -10,10 +10,17 @@ namespace PalDDD.Hosting.AspNetCore;
 // Minimal API 端点映射
 // ─────────────────────────────────────────────────────────────
 
-/// <summary>Minimal API 命令/查询端点映射扩展。调用方必须传入源生成 JSON metadata 以保持 AOT 安全。</summary>
+/// <summary>
+/// Minimal API 命令/查询端点映射扩展。调用方必须传入源生成 JSON metadata 以保持 AOT 安全。
+/// <para>
+/// ⚠️ <b>滥用控制声明（三十八轮 P2）</b>：本类映射的端点默认不含速率限制与请求体大小约束——
+/// 生产部署须在宿主层配置（ASP.NET Core 内置 RateLimiter 中间件 + RequestSizeLimit），
+/// 或置于网关限流之后。传输强制（TLS/HSTS）同样由宿主/反向代理层承担。
+/// </para>
+/// </summary>
 public static class EndpointExtensions
 {
-    /// <summary>映射无返回值命令到 HTTP POST 端点</summary>
+    /// <summary>映射无返回值命令到 HTTP POST 端点。⚠️ 滥用控制见类 doc 声明。</summary>
     public static IEndpointConventionBuilder MapCommand<TCommand>(
         this IEndpointRouteBuilder endpoints,
         string pattern,

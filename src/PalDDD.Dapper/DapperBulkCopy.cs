@@ -61,6 +61,10 @@ public static class DapperBulkCopy
     /// P2 修复（八轮评审，配套批量追踪列）：元素类型放宽为可空——null 由各方言路径归一为 SQL NULL
     /// （SQLite/MySQL 显式 ?? DBNull.Value，PG COPY 走 NpgsqlDbType.Unknown）；Func 协变保证
     /// 既有 object[] 返回的 lambda 兼容。</param>
+    /// <param name="transaction">可选外部事务（UnitOfWork 模式）。三十八轮 P2 修复：三方言行为统一声明——
+    /// PG COPY 自动加入连接上的活动局部事务（本参数仅作契约显式化）；MySQL 显式挂接传入事务
+    /// （原实现未挂接，连接有活动事务时 WriteToServerAsync 直接抛 InvalidOperationException）；
+    /// SQLite 传入时命令挂接该事务且不 Commit/Dispose（所有权归调用方），未传时自建本地事务。</param>
     /// <returns>成功插入的行数</returns>
     /// <exception cref="NotSupportedException">不支持的数据库类型</exception>
     public static async ValueTask<int> BulkInsertAsync<T>(
@@ -70,6 +74,7 @@ public static class DapperBulkCopy
         string[] columns,
         IReadOnlyList<T> items,
         Func<T, object?[]> valueExtractor,
+        DbTransaction? transaction = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(conn);
@@ -99,9 +104,9 @@ public static class DapperBulkCopy
         // 💡 switch 表达式按 DapperDbType 枚举分发 — 编译时已知值，零反射
         return dbType switch
         {
-            DapperDbType.PostgreSql => await PgCopyAsync(conn, tableName, columns, items, valueExtractor, ct).ConfigureAwait(false),
-            DapperDbType.MySql => await MySqlBulkAsync(conn, tableName, columns, items, valueExtractor, ct).ConfigureAwait(false),
-            DapperDbType.Sqlite => await SqliteBatchAsync(conn, tableName, columns, items, valueExtractor, ct).ConfigureAwait(false),
+            DapperDbType.PostgreSql => await PgCopyAsync(conn, tableName, columns, items, valueExtractor, transaction, ct).ConfigureAwait(false),
+            DapperDbType.MySql => await MySqlBulkAsync(conn, tableName, columns, items, valueExtractor, transaction, ct).ConfigureAwait(false),
+            DapperDbType.Sqlite => await SqliteBatchAsync(conn, tableName, columns, items, valueExtractor, transaction, ct).ConfigureAwait(false),
             _ => throw new NotSupportedException($"数据库类型 {dbType} 不支持批量导入。")
         };
     }
@@ -115,8 +120,11 @@ public static class DapperBulkCopy
     /// </summary>
     private static async Task<int> PgCopyAsync<T>(
         DbConnection conn, string table, string[] cols,
-        IReadOnlyList<T> items, Func<T, object?[]> extractor, CancellationToken ct)
+        IReadOnlyList<T> items, Func<T, object?[]> extractor, DbTransaction? transaction, CancellationToken ct)
     {
+        // 三十八轮 P2：Npgsql COPY 自动加入连接上的活动局部事务（Npgsql 语义），
+        // 本参数仅作契约显式化——无需额外挂接动作。
+        _ = transaction;
         var pgConn = (NpgsqlConnection)conn;
         var colList = string.Join(", ", cols);
         var copySql = $"COPY {table} ({colList}) FROM STDIN (FORMAT BINARY)";
@@ -181,7 +189,7 @@ public static class DapperBulkCopy
         Justification = "Dapper 适配层为非 AOT（IsAotCompatible=false）；DataTable 列类型按运行时值推断是 MySqlBulkCopy 唯一数据源格式。")]
     private static async Task<int> MySqlBulkAsync<T>(
         DbConnection conn, string table, string[] cols,
-        IReadOnlyList<T> items, Func<T, object?[]> extractor, CancellationToken ct)
+        IReadOnlyList<T> items, Func<T, object?[]> extractor, DbTransaction? transaction, CancellationToken ct)
     {
         var myConn = (MySqlConnection)conn;
 
@@ -235,7 +243,15 @@ public static class DapperBulkCopy
         }
 
         // MySqlBulkCopy 不实现 IDisposable（MySqlConnector 2.6.x）——无 using，见上方 ITM-083 注释
-        var bulkCopy = new MySqlBulkCopy(myConn)
+        // 三十八轮 P2 修复：显式挂接传入事务——MySqlConnector 要求连接有活动事务时
+        // 命令必须挂接同一事务，原实现未挂接导致 UnitOfWork 内调用直接抛 InvalidOperationException
+        var mysqlTx = transaction as MySqlTransaction
+            ?? (transaction is null
+                ? null
+                : throw new ArgumentException(
+                    $"MySQL 批量导入要求事务为 MySqlTransaction，实际为 {transaction.GetType().Name}。",
+                    nameof(transaction)));
+        var bulkCopy = new MySqlBulkCopy(myConn, mysqlTx)
         {
             DestinationTableName = table
         };
@@ -296,7 +312,7 @@ public static class DapperBulkCopy
     /// </summary>
     private static async Task<int> SqliteBatchAsync<T>(
         DbConnection conn, string table, string[] cols,
-        IReadOnlyList<T> items, Func<T, object?[]> extractor, CancellationToken ct)
+        IReadOnlyList<T> items, Func<T, object?[]> extractor, DbTransaction? transaction, CancellationToken ct)
     {
         // 构建参数化 INSERT SQL：INSERT INTO t (c1,c2) VALUES (@c1,@c2)
         var placeholders = string.Join(", ", cols.Select(c => $"@{c}"));
@@ -304,37 +320,52 @@ public static class DapperBulkCopy
         var sql = $"INSERT INTO {table} ({colList}) VALUES ({placeholders})";
 
         // 📦 开启事务 — SQLite 默认每条 INSERT 都会 fsync，事务中只 fsync 一次
-        await using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = sql;
-        cmd.Transaction = tx;
-
-        // 🔄 复用参数 — 每次循环只改 Value，不重新 CreateParameter
-        var parameters = cols.Select(c =>
+        // 三十八轮 P2 修复：传入外部事务时挂接该事务且不 Commit/Dispose（所有权归调用方）；
+        // 未传时保持自建本地事务（原行为）。嵌套场景 Microsoft.Data.Sqlite 6+ 转 SAVEPOINT。
+        DbTransaction? localTx = null;
+        if (transaction is null)
+            localTx = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
         {
-            var p = cmd.CreateParameter();
-            p.ParameterName = $"@{c}";
-            return p;
-        }).ToArray();
-        foreach (var p in parameters) cmd.Parameters.Add(p);
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.Transaction = transaction ?? localTx;
 
-        int count = 0;
-        foreach (var item in items)
-        {
-            var values = extractor(item);
-            for (int i = 0; i < cols.Length; i++)
-                parameters[i].Value = values[i] switch
-                {
-                    PalUlid ulid => DapperAotInitializer.ToSqliteParameter(ulid),
-                    Guid guid => DapperAotInitializer.ToSqliteParameter(guid),
-                    DateTimeOffset dto => DapperAotInitializer.ToSqliteParameter(dto),
-                    _ => values[i] ?? DBNull.Value
-                };
-            count += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            // 🔄 复用参数 — 每次循环只改 Value，不重新 CreateParameter
+            var parameters = cols.Select(c =>
+            {
+                var p = cmd.CreateParameter();
+                p.ParameterName = $"@{c}";
+                return p;
+            }).ToArray();
+            foreach (var p in parameters) cmd.Parameters.Add(p);
+
+            int count = 0;
+            foreach (var item in items)
+            {
+                var values = extractor(item);
+                for (int i = 0; i < cols.Length; i++)
+                    parameters[i].Value = values[i] switch
+                    {
+                        PalUlid ulid => DapperAotInitializer.ToSqliteParameter(ulid),
+                        Guid guid => DapperAotInitializer.ToSqliteParameter(guid),
+                        DateTimeOffset dto => DapperAotInitializer.ToSqliteParameter(dto),
+                        _ => values[i] ?? DBNull.Value
+                    };
+                count += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+
+            // 仅自建事务需要本地 Commit——外部事务所有权归调用方
+            if (localTx is not null)
+                await localTx.CommitAsync(ct).ConfigureAwait(false);
+            return count;
         }
-
-        await tx.CommitAsync().ConfigureAwait(false);
-        return count;
+        finally
+        {
+            // 自建事务的释放归本方法；外部事务不由本方法 Dispose
+            if (localTx is not null)
+                await localTx.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     private static void ValidateColumns(string[] columns)
