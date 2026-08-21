@@ -67,11 +67,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     private readonly DbTransaction? _transaction;
     private readonly TimeProvider _timeProvider;
 
-    // 优化（二十五轮 API 扫描 A-4）：status 列的 'Pending' 值固定为编译期常量——
-    // OutboxStatus.Pending.ToString() 每次调用都做枚举名格式化并分配新字符串（热路径：
-    // 轮询查询与批量插入逐行执行）；该值同时是 DB 持久化契约（SqlTemplates 各 SQL 内联的
-    // status='Pending'），字面量固定不随 C# 标识符重命名漂移。
-    private const string StatusPending = "Pending";
+    // 三十八轮统一（状态列 int 化）：status 列持久化契约从字符串 'Pending' 改为 INT 0
+    // （对齐 OutboxStatus.Pending 枚举值与 Saga/Checkpoint/Idempotency 三表的既定 int 语义，
+    // docs/sql DDL 同步）。编译期常量保留原优化意图——避免热路径枚举格式化分配。
+    private const int StatusPending = 0;
 
     /// <param name="transaction">可选共享事务（用于 UnitOfWork 模式）</param>
     public DapperOutboxStore(

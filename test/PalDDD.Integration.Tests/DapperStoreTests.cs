@@ -118,7 +118,7 @@ public sealed class DapperStoreTests
                 payload         BLOB NOT NULL,
                 content_type    TEXT NOT NULL DEFAULT 'application/json',
                 schema_version  INTEGER NOT NULL DEFAULT 1,
-                status          TEXT NOT NULL DEFAULT 'Pending',
+                status          INTEGER NOT NULL DEFAULT 0,
                 retry_count     INTEGER NOT NULL DEFAULT 0,
                 error           TEXT,
                 created_at      TEXT NOT NULL,
@@ -137,7 +137,7 @@ public sealed class DapperStoreTests
                 id                    INTEGER PRIMARY KEY AUTOINCREMENT,
                 message_id            TEXT NOT NULL,
                 consumer_name         TEXT NOT NULL,
-                status                TEXT NOT NULL DEFAULT 'Processing',
+                status                INTEGER NOT NULL DEFAULT 0,
                 received_at           TEXT NOT NULL,
                 processing_started_at TEXT,
                 processed_at          TEXT,
@@ -343,9 +343,10 @@ public sealed class DapperStoreTests
 
         store.MarkProcessed(staleMsg, TimeProvider.System.GetUtcNow());
 
-        var status = await ReadScalarAsync<string>(
+        // 三十八轮统一（状态列 int 化）：断言改读数值——OutboxStatus.Processed=1
+        var status = await ReadScalarAsync<long>(
             "SELECT status FROM outbox_messages WHERE id=$id", ("$id", idParam));
-        await Assert.That(status).IsNotEqualTo("Processed");
+        await Assert.That(status).IsNotEqualTo(1L);
         var currentOwner = await ReadScalarAsync<string>(
             "SELECT locked_by FROM outbox_messages WHERE id=$id", ("$id", idParam));
         await Assert.That(currentOwner).IsEqualTo("new-worker"); // 新租约未被旧写清除
@@ -597,10 +598,11 @@ public sealed class DapperStoreTests
         await store.MarkProcessedAsync(first, now, cancellationToken);
         await store.MarkFailedAsync(first, "stale handler failed", cancellationToken);
 
-        var status = await ReadScalarAsync<string>(
+        // 三十八轮统一（状态列 int 化）：断言改读数值——InboxStatus.Processed=2
+        var status = await ReadScalarAsync<long>(
             "SELECT status FROM inbox_messages WHERE id=$id",
             ("$id", first.Id));
-        await Assert.That(status).IsEqualTo(InboxStatus.Processed.ToString());
+        await Assert.That(status).IsEqualTo((long)InboxStatus.Processed);
     }
 
     [Test]

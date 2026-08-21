@@ -149,7 +149,7 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         // ITM-163 修复：补 message null 守卫（对齐 InMemoryInboxStore/InboxDbContext 同款）
         ArgumentNullException.ThrowIfNull(message);
         // 手写 SQL（不走 UpdateAsync）—— 避免 [ConcurrencyCheck]attempts 干扰并发场景
-        // WHERE status='Processing' 守卫，防止重复标记（与 Dapper 实现一致）
+        // WHERE status=Processing(1) 守卫，防止重复标记（与 Dapper 实现一致）
         // 三十八轮 P2 修复（ITM-210 Inbox 姊妹）：processing_started_at 抢占 token 守卫——
         // 被抢占的旧 worker token 不匹配零命中，不覆盖新 worker 的行（对齐 Dapper 版同款）
         var affected = await Session.ExecuteAsync(
@@ -175,7 +175,7 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         // 契约一致（其余三版均抛 ArgumentException）
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         // 手写 SQL（不走 UpdateAsync）—— 避免 [ConcurrencyCheck]attempts 在并发场景抛异常
-        // WHERE status='Processing' 守卫，防止覆盖已 Processed 的记录（与 Dapper 实现一致）
+        // WHERE status=Processing(1) 守卫，防止覆盖已 Processed 的记录（与 Dapper 实现一致）
         // 三十八轮 P2 修复（ITM-210 Inbox 姊妹）：processing_started_at 抢占 token 守卫（对齐 Dapper 版同款）
         var affected = await Session.ExecuteAsync(
             $"UPDATE inbox_messages SET status = {(int)InboxStatus.Failed}, last_error = {failureReason} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing} AND processing_started_at = {message.ProcessingStartedAt}",
