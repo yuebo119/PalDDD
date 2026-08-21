@@ -11,7 +11,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Messaging\PalDDD.Messaging.csproj" />
-    <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Repository.EFCore\PalDDD.Repository.EFCore.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
   </ItemGroup>

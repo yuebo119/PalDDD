@@ -35,7 +35,7 @@ using PalDDD.Core;
 namespace YourDomain.Events;
 
 [GenerateMessage(Name = "ordering.order-submitted.v1")]
-public sealed record OrderSubmitted(
+public sealed record OrderSubmitted  // 需加 [GenerateMessage] 标注(TPL-003)(
     Guid OrderId,
     string CustomerName,
     decimal Amount

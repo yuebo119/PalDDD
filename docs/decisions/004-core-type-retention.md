@@ -30,7 +30,7 @@ Pal.DDD 框架中有多个核心类型当前没有内部引用（或仅有少量
 ### 4. PipelineBehaviors — 管道行为实现
 
 - **文件**：`src/PalDDD.CQRS/PipelineBehaviors.cs`
-- **类型**：`PalValidationPipelineBehavior` / `PalLoggingPipelineBehavior` / `PalDiagnosticPipelineBehavior`
+- **类型**：`ValidationBehavior` / `LoggingBehavior` / `(不存在——仅两个)`
 - **保留理由**：`IPipelineBehavior` 接口的具体实现，提供验证/日志/诊断横切关注点。通过非泛型 DIM 桥接消除 `MakeGenericType`。
 
 ### 5. PipelineStateMachine — 管道状态机

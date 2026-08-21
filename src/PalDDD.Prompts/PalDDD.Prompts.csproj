@@ -9,7 +9,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include=".pal\prompts\**" Pack="true" PackagePath=".pal/prompts/" />
+    <!-- 三十七轮 DEAD-004：Pack=true 已移除（IsPackable=false 使其成为死配置） -->
+    <None Include=".pal\prompts\**" PackagePath=".pal/prompts/" />
   </ItemGroup>
 
 </Project>
