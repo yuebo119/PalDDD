@@ -251,7 +251,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         ArgumentException.ThrowIfNullOrWhiteSpace(retriedBy);
         var now = Clock.GetUtcNow();
         var audit = $"requeued by {retriedBy} at {now:O}";
-        // 条件 UPDATE：status='Dead' 守卫防止重复重投；返回受影响行数用于幂等判断
+        // 条件 UPDATE：status=Dead(2) 守卫防止重复重投；返回受影响行数用于幂等判断
         return await Session.ExecuteAsync(
             $"UPDATE outbox_messages SET status = {(int)OutboxStatus.Pending}, processed_at = NULL, error = {audit}, next_attempt_at = {nextAttemptAt}, locked_by = NULL, locked_until = NULL WHERE id = {messageId.ToString()} AND status = {(int)OutboxStatus.Dead}",
             ct).ConfigureAwait(false);

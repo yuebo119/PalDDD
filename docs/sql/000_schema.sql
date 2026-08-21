@@ -14,7 +14,7 @@ CREATE TABLE outbox_messages (
     payload         BLOB    NOT NULL,  -- 代码侧 byte[]；PG: BYTEA / MySQL: MEDIUMBLOB / SQLite: BLOB
     content_type    TEXT    NOT NULL DEFAULT 'application/json',
     schema_version  INTEGER NOT NULL DEFAULT 1,
-    status          TEXT    NOT NULL DEFAULT 'Pending',  -- Pending | Processing | Processed | Dead
+    status          INT     NOT NULL DEFAULT 0,           -- OutboxStatus: Pending=0 | Processed=1 | Dead=2
     retry_count     INTEGER NOT NULL DEFAULT 0,
     error           TEXT,
     created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -36,7 +36,7 @@ CREATE TABLE inbox_messages (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
     message_id            TEXT    NOT NULL,  -- 全局消息 ID
     consumer_name         TEXT    NOT NULL,  -- 消费者标识
-    status                TEXT    NOT NULL DEFAULT 'Processing',  -- Processing | Processed | Failed
+    status                INT     NOT NULL DEFAULT 0,             -- InboxStatus: Pending=0 | Processing=1 | Processed=2 | Failed=3
     received_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     processing_started_at TIMESTAMP,
     processed_at          TIMESTAMP,

@@ -5,7 +5,7 @@ CREATE TABLE outbox_messages (
     payload         BYTEA NOT NULL,
     content_type    TEXT NOT NULL DEFAULT 'application/json',
     schema_version  INTEGER NOT NULL DEFAULT 1,
-    status          TEXT NOT NULL DEFAULT 'Pending',
+    status          INTEGER NOT NULL DEFAULT 0,
     retry_count     INTEGER NOT NULL DEFAULT 0,
     error           TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -18,14 +18,14 @@ CREATE TABLE outbox_messages (
     trace_parent    TEXT,
     trace_state     TEXT
 );
-CREATE INDEX idx_outbox_status ON outbox_messages(status, next_attempt_at, locked_until) WHERE status = 'Pending';
+CREATE INDEX idx_outbox_status ON outbox_messages(status, next_attempt_at, locked_until) WHERE status = 0;
 CREATE INDEX idx_outbox_created ON outbox_messages(created_at);
 
 CREATE TABLE inbox_messages (
     id                    BIGSERIAL PRIMARY KEY,
     message_id            TEXT NOT NULL,
     consumer_name         TEXT NOT NULL,
-    status                TEXT NOT NULL DEFAULT 'Processing',
+    status                INTEGER NOT NULL DEFAULT 0,
     received_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     processing_started_at TIMESTAMPTZ,
     processed_at          TIMESTAMPTZ,

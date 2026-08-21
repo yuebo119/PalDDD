@@ -152,7 +152,9 @@ dotnet publish samples/PalDDD.PalOrmSample/PalDDD.PalOrmSample.csproj \
 
 ## 六、数据迁移脚本（Dapper → PalORM）
 
-### 6.1 Outbox（status: string → int）
+> **三十八轮统一（2026-08-21）**：Dapper 栈 outbox/inbox status 列已同步 int 化（对齐 PalORM/EFCore/Saga 系语义），docs/sql DDL 同步更新。本节脚本仅适用于**升级前旧版本（≤1.1.0 字符串状态）的存量数据库**——新部署直接使用现行 docs/sql DDL，无需本节。
+
+### 6.1 Outbox（status: string → int，仅存量 ≤1.1.0 数据库需要）
 
 ```sql
 -- PostgreSQL / MySQL / SQLite 通用
@@ -164,7 +166,7 @@ UPDATE outbox_messages SET status = CASE status
 END;
 ```
 
-### 6.2 Inbox（status: string → int）
+### 6.2 Inbox（status: string → int，仅存量 ≤1.1.0 数据库需要）
 
 ```sql
 UPDATE inbox_messages SET status = CASE status

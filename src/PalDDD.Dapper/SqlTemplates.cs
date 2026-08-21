@@ -52,7 +52,7 @@ public static class SqlTemplates
     ///   ｜ <c>OutboxMessage.Id</c> 在构造时已经 <c>Guid.NewGuid()</c>，直接传入即可。
     /// </summary>
     public const string OutboxInsert =
-        "INSERT INTO outbox_messages (id,type,payload,content_type,schema_version,status,created_at, correlation_id, causation_id, trace_parent, trace_state) VALUES (@Id,@Type,@Payload,@ContentType,@SchemaVersion,'Pending',@CreatedAt, @CorrelationId, @CausationId, @TraceParent, @TraceState)";
+        "INSERT INTO outbox_messages (id,type,payload,content_type,schema_version,status,created_at, correlation_id, causation_id, trace_parent, trace_state) VALUES (@Id,@Type,@Payload,@ContentType,@SchemaVersion,0,@CreatedAt, @CorrelationId, @CausationId, @TraceParent, @TraceState)";
 
     /// <summary>
     /// 标记消息为"已处理"。<br/>
@@ -63,7 +63,7 @@ public static class SqlTemplates
     /// 对过期重租/同 owner 复用零防护（旧 worker 终态写覆盖新租约）。
     /// </summary>
     public const string OutboxMarkProcessed =
-        "UPDATE outbox_messages SET status='Processed',processed_at=@at,error=NULL,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
+        "UPDATE outbox_messages SET status=1,processed_at=@at,error=NULL,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
 
     /// <summary>
     /// 标记消息为"死信"。<br/>
@@ -71,7 +71,7 @@ public static class SqlTemplates
     /// 三十四轮 ITM-210 token 化：同 <see cref="OutboxMarkProcessed"/> 的租约 token 守卫。
     /// </summary>
     public const string OutboxMarkDead =
-        "UPDATE outbox_messages SET status='Dead',error=@reason,processed_at=@at,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
+        "UPDATE outbox_messages SET status=2,error=@reason,processed_at=@at,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
 
     /// <summary>
     /// 释放租约并等待下次重试。<br/>
@@ -86,16 +86,16 @@ public static class SqlTemplates
     /// 否则残留上次处理的完成时间（监控/报表误判"已处理又 Pending"）。
     /// </summary>
     public const string OutboxReleaseForRetry =
-        "UPDATE outbox_messages SET status='Pending',processed_at=NULL,error=@reason,next_attempt_at=@next,retry_count=retry_count+1,locked_by=NULL,locked_until=NULL WHERE id=@id AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
+        "UPDATE outbox_messages SET status=0,processed_at=NULL,error=@reason,next_attempt_at=@next,retry_count=retry_count+1,locked_by=NULL,locked_until=NULL WHERE id=@id AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
 
     /// <summary>
     /// 将死信消息重置为 Pending（ops 重投递入口）。<br/>
-    /// 💡 仅作用于 <c>status='Dead'</c> 的消息，避免越权把已 Processed/Pending 重置；<c>retry_count</c> 保留失败历史。<br/>
+    /// 💡 仅作用于 <c>status=2</c> 的消息，避免越权把已 Processed/Pending 重置；<c>retry_count</c> 保留失败历史。<br/>
     /// <c>processed_at</c> 清 NULL、<c>error</c> 写入操作审计串。<br/>
     /// ⚠️ 幂等前提由调用方保证（详见 ADR-011）。
     /// </summary>
     public const string OutboxRequeueDead =
-        "UPDATE outbox_messages SET status='Pending',processed_at=NULL,error=@audit,next_attempt_at=@next,locked_by=NULL,locked_until=NULL WHERE id=@id AND status='Dead'";
+        "UPDATE outbox_messages SET status=0,processed_at=NULL,error=@audit,next_attempt_at=@next,locked_by=NULL,locked_until=NULL WHERE id=@id AND status=2";
 
     /// <summary>原子租约获取 — UPDATE 子句。
     /// ⚠️ 三十八轮 P3 标注：当前无内部引用（二十五轮常量化残留）；框架库公共 const 面向外部
@@ -110,7 +110,7 @@ public static class SqlTemplates
     /// 与 PalORM 版（PalOrmOutboxStore MySQL 分支）同款 JOIN 替代，PD17 姊妹同步。
     /// </summary>
     public const string OutboxLeaseUpdateMySql =
-        "UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status='Pending' AND retry_count<@maxRetryCount"
+        "UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
         + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
         + " AND (locked_until IS NULL OR locked_until<=@now)"
         + " ORDER BY created_at LIMIT @n) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until";
@@ -128,7 +128,7 @@ public static class SqlTemplates
     /// </summary>
     public const string OutboxLeaseUpdatePG =
         "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN "
-        + "(SELECT id FROM outbox_messages WHERE status='Pending' AND retry_count<@maxRetryCount"
+        + "(SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
         + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
         + " AND (locked_until IS NULL OR locked_until<=@now)"
         + " ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
@@ -141,7 +141,7 @@ public static class SqlTemplates
     /// </summary>
     public const string OutboxLeaseUpdateSqlite =
         "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN "
-        + "(SELECT id FROM outbox_messages WHERE status='Pending' AND retry_count<@maxRetryCount"
+        + "(SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
         + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
         + " AND (locked_until IS NULL OR locked_until<=@now)"
         + " ORDER BY created_at LIMIT @n)";
@@ -199,7 +199,7 @@ public static class SqlTemplates
         // 旧失败原因（对齐 InMemoryInboxStore successor 重置 LastError、EFCore 版
         // LastError=null、PalORM 版 last_error = NULL 三姊妹语义）；Dapper 原 SQL 未清，
         // DB 侧重试成功前仍残留上次错误，监控/审计误读。
-        "UPDATE inbox_messages SET status='Processing',attempts=attempts+1,processing_started_at=@now,last_error=NULL WHERE id=@id AND (status='Pending' OR (status='Processing' AND processing_started_at<@cutoff) OR status='Failed')";
+        "UPDATE inbox_messages SET status=1,attempts=attempts+1,processing_started_at=@now,last_error=NULL WHERE id=@id AND (status=0 OR (status=1 AND processing_started_at<@cutoff) OR status=3)";
 
     /// <summary>
     /// 标记消息处理成功。<br/>
@@ -208,7 +208,7 @@ public static class SqlTemplates
     /// token 不匹配零命中，不再覆盖 B 正在处理的行（对齐 Outbox 租约 token 化）。
     /// </summary>
     public const string InboxMarkProcessed =
-        "UPDATE inbox_messages SET status='Processed',processed_at=@at WHERE id=@id AND status='Processing' AND processing_started_at=@startedAt";
+        "UPDATE inbox_messages SET status=2,processed_at=@at WHERE id=@id AND status=1 AND processing_started_at=@startedAt";
 
     /// <summary>
     /// 标记消息处理失败。<br/>
@@ -217,7 +217,7 @@ public static class SqlTemplates
     /// 抢占 token 守卫，防止被抢占的旧 worker 写入失败态干扰新 worker。
     /// </summary>
     public const string InboxMarkFailed =
-        "UPDATE inbox_messages SET status='Failed',last_error=@err WHERE id=@id AND status='Processing' AND processing_started_at=@startedAt";
+        "UPDATE inbox_messages SET status=3,last_error=@err WHERE id=@id AND status=1 AND processing_started_at=@startedAt";
 
     /// <summary>
     /// PostgreSQL conflict-safe INSERT 语法。<br/>
@@ -225,7 +225,7 @@ public static class SqlTemplates
     /// 消除 SQLite/MySQL 路径的 TOCTOU 窗口，生产推荐路径。
     /// </summary>
     public const string InboxInsertPG =
-        "INSERT INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,'Processing',@now,@now,1) ON CONFLICT (consumer_name,message_id) DO NOTHING RETURNING id";
+        "INSERT INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,1,@now,@now,1) ON CONFLICT (consumer_name,message_id) DO NOTHING RETURNING id";
 
     /// <summary>
     /// MySQL conflict-safe INSERT 语法（普通 INSERT，冲突由调用方捕获唯一约束异常）。<br/>
@@ -239,7 +239,7 @@ public static class SqlTemplates
     /// 不用 affected rows 区分冲突（MySqlConnector 默认 UseAffectedRows=false 报告 found rows）。
     /// </summary>
     public const string InboxInsertMySql =
-        "INSERT INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,'Processing',@now,@now,1); SELECT LAST_INSERT_ID();";
+        "INSERT INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,1,@now,@now,1); SELECT LAST_INSERT_ID();";
 
     /// <summary>
     /// SQLite conflict-safe INSERT 语法。<br/>
@@ -249,7 +249,7 @@ public static class SqlTemplates
     /// SQLite 路径适合单实例/低并发/测试场景，仅依赖 <c>(consumer_name, message_id)</c> 唯一约束避免重复记录，不保证强幂等。
     /// </summary>
     public const string InboxInsertSqlite =
-        "INSERT OR IGNORE INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,'Processing',@now,@now,1); SELECT last_insert_rowid() WHERE changes() > 0;";
+        "INSERT OR IGNORE INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,1,@now,@now,1); SELECT last_insert_rowid() WHERE changes() > 0;";
 
     // ═══════════════════════════════════════════════════════════
     // 💾 Saga（长事务编排）— 持久化 Saga 状态，支持补偿
