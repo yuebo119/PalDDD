@@ -10,12 +10,12 @@ namespace PalDDD.Transactions.Tests;
 // ══════════════════════════════════════════════════════════════
 // SagaTimeoutProcessor 已有超时检测单元测试，本文件只覆盖循环层：
 // 1. 启动后按 PollInterval 轮询
- // // 2. 超时检查异常不崩溃循环CA1031 隔离
- // // 3. 停止令牌优雅终止
+// 2. 超时检查异常不崩溃循环（CA1031 隔离）
+// 3. 停止令牌优雅终止
 // 4. 批大小配置透传到 store
 // ══════════════════════════════════════════════════════════════
-// 三十五轮 P3 修复：原文件头注释 UTF-8→GBK mojibake 整块损坏（被 CS1570 NoWarn 掩盖），
-// 内容按 SagaProcessor 语义重写；代码体 ASCII 未受影响（152 测试全绿实证）。
+// 三十五轮 P3 修复 + 三十七轮 P1 全文法根治：原文件 UTF-8→GBK mojibake
+// 多层损坏，指纹式逐行清理三轮漏检后改全文重写。
 
 /// <summary>SagaProcessor 测试用状态</summary>
 public sealed class LifecycleSagaState : SagaState
@@ -34,9 +34,9 @@ public sealed class SagaProcessorTests
     [Test]
     public async Task ExecuteAsync_PollsAtConfiguredInterval(CancellationToken cancellationToken)
     {
- // // P4 修复九轮验轮 V4真钟断言在高载并行下 flaky250ms 内 50ms 轮
- // // 理论 4-5 次高载可能仅 2 次等待窗口放宽到 400ms 且阈降 2
-        // （轮ѯ周期正ȷ性的最С可区分断言：单次启动不会ֻ轮ѯ 1 次）
+        // P4 修复（九轮验证轮）：真实时钟断言在高载并行下 flaky——250ms 内 50ms 轮询
+        // 理论 4-5 次，高载可能仅 2 次。等待窗口放宽到 400ms 且阈值降为 2。
+        // （轮询周期正确性的最小可区分断言：单次启动不会只轮询 1 次）
         var store = new CountingSagaStore();
         var scopeFactory = new SagaStubScopeFactory(BuildTimeoutProcessor(store));
         var options = new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions
@@ -123,7 +123,7 @@ public sealed class SagaProcessorTests
 
     // 测试 stub
 
- // /// <summary>璁暟 Saga store 鈥?杩斿洖绌哄垪琛紝璁板綍璋冪敤娆暟涓庢壒澶皬</summary>
+    /// <summary>计数 Saga store — 返回空列表，记录调用次数与批大小</summary>
     private sealed class CountingSagaStore : ISagaStateStore<LifecycleSagaState>
     {
         public int GetActiveCallCount;
@@ -173,7 +173,7 @@ public sealed class SagaProcessorTests
         public ValueTask<int> SaveChangesAsync(LifecycleSagaState state, CancellationToken ct) => new(0);
     }
 
- // /// <summary>鑷畾涔?IServiceScopeFactory 鈥?杩斿洖鍥哄畾 SagaTimeoutProcessor 瀹炰緥</summary>
+    /// <summary>自定义 IServiceScopeFactory — 返回固定 SagaTimeoutProcessor 实例</summary>
     private sealed class SagaStubScopeFactory(SagaTimeoutProcessor<LifecycleSagaState> processor) : IServiceScopeFactory
     {
         public IServiceScope CreateScope() => new SagaStubScope(processor);

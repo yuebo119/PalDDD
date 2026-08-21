@@ -1188,10 +1188,10 @@ public sealed class SagaTests
         var saga = new OrderFulfillmentSaga();
         var state = new OrderSagaState { CurrentState = "Initial" };
 
- // // 鐢笉鍖归厤鐨勪簨浠剁被鍨嬭皟鐢?
+        // 用不匹配的事件类型调用
         var result = await saga.HandleEventAsync(state, new PaymentProcessedEvent(), CancellationToken.None);
 
- // // 搴旇淇濇寔 "Initial"锛堟病鏈夊尮閰嶇殑杞崲锛?
+        // 应回保持 "Initial"（没有匹配的转换）
         await Assert.That(result.CurrentState).IsEqualTo("Initial");
         await Assert.That(result).IsSameReferenceAs(state);
     }
@@ -1225,7 +1225,7 @@ public sealed class SagaTests
 
         await saga.CompensateAsync(state, CancellationToken.None);
 
- // // 琛伩鎵宸叉敞鍐岀殑琛伩澶勭悊鍣?鈥?ValidateOrder 姝鐨?compensate 璁剧疆 CurrentState
+        // 不拦截已注册的拦截器——ValidateOrder 的 compensate 设置 CurrentState
         await Assert.That(state.CurrentState).IsEqualTo("Compensated_Validate");
     }
 

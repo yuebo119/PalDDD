@@ -683,7 +683,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 if (observer is not null)
                 {
-                    await observer.OnStepCompleted(current.SagaId, stepKey, sw.Elapsed, ct).ConfigureAwait(false);
+                    // 三十七轮 A5：对齐 Normal(:324)/FanOut(:413)/ChildSaga(:512) 三路径的 ITM-212 best-effort 保护
+                    await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct).ConfigureAwait(false);
                 }
 
                 return result;
