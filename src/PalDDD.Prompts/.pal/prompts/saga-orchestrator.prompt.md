@@ -15,7 +15,7 @@
 ## 必须遵守
 - Saga 状态继承 `SagaState`（包含 SagaId / CurrentState / Version / StepStartedAt / ExecutedStepKeys）
 - Saga 编排器继承 `Saga<TState>`，在构造函数中用 `When()` 注册步骤
-- 步骤定义用 `SagaStep`，包含 `execute` / `compensate` / `Timeout` 三个委托
+- 步骤定义用 `SagaStep`，包含 `execute` / `compensate` / `Timeout` 两个委托+timeout配置
 - 补偿策略通过 `CompensationPolicy` 设置（Backward / Forward / None）
 - 重试通过 `MaxRetries` + `RetryBackoffPolicy` 配置
 - `SagaState.CurrentState` 不能包含 `|` 字符（`|` 是 key 分隔符）

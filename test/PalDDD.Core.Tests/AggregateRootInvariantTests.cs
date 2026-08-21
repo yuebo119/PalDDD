@@ -242,8 +242,12 @@ public sealed class AggregateRootInvariantTests
         order.AddLine("prod-1", quantity: 1, unitPrice: 10m);
 
         // Lines 是 IReadOnlyList — 外部无法添加/移除
-        await Assert.That(order.Lines is IReadOnlyList<OrderLine>).IsTrue();
-        await Assert.That(order.Lines).Count().IsEqualTo(1);
+        // 三十七轮 TST-001 修复：原 `is IReadOnlyList<OrderLine>` 恒真断言（编译期已知类型），
+        // 改为行为断言——验证只读性（Count 受控）+ 内容正确性
+        var lines = order.Lines;
+        await Assert.That(lines.Count).IsEqualTo(1);
+        await Assert.That(lines[0].ProductId).IsEqualTo("prod-1");
+        await Assert.That(lines[0].Quantity).IsEqualTo(1);
     }
 
     [Test]

@@ -6,7 +6,7 @@
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
-    <!-- 八轮评审 P3：CS1591/IL3058 已在 Directory.Build.props 全局 NoWarn，删除项目级冗余 -->
+    <!-- 八轮评审 P3：CS1591(全局); IL3058(项目级,全局无) 已在 Directory.Build.props 全局 NoWarn，删除项目级冗余 -->
   </PropertyGroup>
 
   <ItemGroup>

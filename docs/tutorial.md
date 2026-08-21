@@ -192,7 +192,7 @@ public sealed class Order : AggregateRoot<OrderId>
 
         CustomerName = customerName;
         TotalAmount = amount;
-        OrderedAt = DateTimeOffset.UtcNow;
+        OrderedAt = timeProvider.GetUtcNow();
 
         // 记录领域事件 —— 不是直接调用其他服务，只是记录"发生了什么"
         RaiseEvent(new OrderCreated(id, customerName, amount));

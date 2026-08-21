@@ -24,7 +24,7 @@ public sealed class OutboxConcurrencyTests
         }
 
         var allLeased = new System.Collections.Concurrent.ConcurrentBag<OutboxMessage>();
-        var now = DateTimeOffset.UtcNow;
+        // removed unused var
         var workerCount = 4;
 
         // 4 个 worker 并行抢消息

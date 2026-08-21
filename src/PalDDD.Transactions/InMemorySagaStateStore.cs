@@ -40,7 +40,7 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
     }
 
     /// <inheritdoc/>
-    public ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
+    public ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(  // PERF-008:负值由Options校验(ITM-166)
         string owner,
         TimeSpan leaseDuration,
         int batchSize,
