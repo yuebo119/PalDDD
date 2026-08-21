@@ -51,6 +51,10 @@ internal sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavio
             var result = validator.Validate(request);
             if (!result.IsValid)
             {
+                // 三十八轮 P2 修复：用户验证器 return default 时 Errors 为 default(ImmutableArray)，
+                // AddRange 直接 NRE 且发生在验证失败路径上（同形态 PalValidationException.CreateMessage
+                // 已用 IsDefaultOrEmpty 防御，此处对齐）
+                if (result.Errors.IsDefaultOrEmpty) continue;
                 errors ??= [];
                 errors.AddRange(result.Errors);
             }

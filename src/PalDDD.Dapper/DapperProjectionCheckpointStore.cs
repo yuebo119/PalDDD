@@ -68,12 +68,26 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         var leaseUntil = startedAt + processingTimeout;
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
 
-        var inserted = await connection.ExecuteAsync(
-            new CommandDefinition(
-                _insertSql,
-                new { projectionName, sourceName, position, status = ProjectionCheckpointStatus.Processing, startedAt = ToTimeParam(startedAt), leaseUntil = ToTimeParam(leaseUntil) },
-                _transaction,
-                cancellationToken: ct)).ConfigureAwait(false);
+        // 三十八轮 P1 回归修复：MySQL 路径 InsertMySql 为普通 INSERT——唯一约束冲突抛
+        // MySqlException(1062)，捕获后 inserted=0 转下方 existing 回查分支（Completed 判断/
+        // 租约判断/CAS 抢占语义恢复可达）。原 ON DUPLICATE KEY UPDATE revision = revision +
+        // inserted == 1 判断在 MySqlConnector 默认 UseAffectedRows=false（found rows）下
+        // 冲突时也返回 1，伪造 Processing checkpoint。PG/SQLite（ON CONFLICT DO NOTHING）
+        // 冲突不抛异常，此 catch 仅 MySQL 可达。
+        int inserted;
+        try
+        {
+            inserted = await connection.ExecuteAsync(
+                new CommandDefinition(
+                    _insertSql,
+                    new { projectionName, sourceName, position, status = ProjectionCheckpointStatus.Processing, startedAt = ToTimeParam(startedAt), leaseUntil = ToTimeParam(leaseUntil) },
+                    _transaction,
+                    cancellationToken: ct)).ConfigureAwait(false);
+        }
+        catch (DbException ex) when (_dbType == DapperDbType.MySql && IsUniqueConstraintViolation(ex))
+        {
+            inserted = 0; // 唯一约束冲突——记录已存在，非错误
+        }
         if (inserted == 1)
         {
             var checkpoint = new ProjectionCheckpoint(
@@ -245,7 +259,6 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         INSERT INTO projection_checkpoints (
             projection_name, source_name, position, status, updated_at, lease_until, revision, error)
         VALUES (@projectionName, @sourceName, @position, @status, @startedAt, @leaseUntil, 1, NULL)
-        ON DUPLICATE KEY UPDATE revision = revision
         """;
 
     private const string MarkProcessing = """
@@ -302,7 +315,10 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         public string Position { get; set; } = "";
         public ProjectionCheckpointStatus Status { get; set; }
         public DateTimeOffset UpdatedAt { get; set; }
-        public DateTimeOffset LeaseUntil { get; set; }
+        // 三十八轮 P3 修复：DB 出现 NULL lease_until 行（手工运维插入等）时非空物化直接抛
+        // Dapper 物化异常——改 nullable 并在 ToCheckpoint 兜底 default（当前写入路径不产生
+        // NULL，此为防御性容错）
+        public DateTimeOffset? LeaseUntil { get; set; }
         public long Revision { get; set; }
         public string? Error { get; set; }
 
@@ -313,8 +329,39 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                 Position,
                 Status,
                 UpdatedAt,
-                LeaseUntil,
+                LeaseUntil ?? default,
                 Revision,
                 Error);
+    }
+
+    /// <summary>
+    /// 三十八轮 P1 回归修复：判定异常是否为唯一约束冲突（MySQL 1062/1586、PG 23505、SQLite UNIQUE）。
+    /// 仅捕获重复键——其他错误原样上抛。与 DapperInboxStore/DapperEventLog 同型
+    /// （本 Store 无 SqlServer 方言，不含 2601/2627 分支）。
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075:This",
+        Justification = "Provider 异常鸭子类型判定。裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级）。")]
+    private static bool IsUniqueConstraintViolation(Exception exception)
+    {
+        for (var inner = exception; inner is not null; inner = inner.InnerException)
+        {
+            var type = inner.GetType();
+            var typeName = type.Name;
+
+            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int mysqlNumber
+                && (mysqlNumber == 1062 || mysqlNumber == 1586))
+                return true;
+
+            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
+                && type.GetProperty("SqlState")?.GetValue(inner) is string pgState
+                && pgState == "23505")
+                return true;
+
+            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
+                && inner.Message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 }

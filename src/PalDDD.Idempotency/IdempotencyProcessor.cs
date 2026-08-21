@@ -154,9 +154,22 @@ public sealed class IdempotencyProcessor
     {
         if (record.Status == IdempotencyRecordStatus.Completed && record.ResponsePayload is not null)
         {
-            return new IdempotencyExecution<TResult>(
-                IdempotencyExecutionStatus.Cached,
-                deserializeResult(record.ResponsePayload.Value));
+            // 三十八轮 P3 修复：schema 漂移产生毒载荷时原样抛反序列化异常，该 key 在整个
+            // 保留窗口内每次命中都抛——降级为 Skipped（与 Completed 无 payload 同款路径），
+            // 调用方按既有"无缓存结果"分支处理；Activity 留痕供诊断。
+            try
+            {
+                return new IdempotencyExecution<TResult>(
+                    IdempotencyExecutionStatus.Cached,
+                    deserializeResult(record.ResponsePayload.Value));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                System.Diagnostics.Activity.Current?.AddEvent(new(
+                    "idempotency.cached-payload-deserialize-failed",
+                    tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = ex.Message }));
+                return new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Skipped, default);
+            }
         }
 
         return new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Skipped, default);

@@ -61,11 +61,27 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         var leaseUntil = startedAt + processingTimeout;
         var statusProcessing = (int)ProjectionCheckpointStatus.Processing;
 
-        // 方言分叉：PG/SQLite 用 ON CONFLICT DO NOTHING；MySQL 用 INSERT ... ON DUPLICATE KEY UPDATE（ITM-228 姊妹修复，
-        // 三十七轮 A1：INSERT IGNORE 会把截断/非法日期等非重复键错误静默降为 warning——ON DUPLICATE KEY UPDATE 只在唯一约束冲突时走 UPDATE 分支）
-        var affected = TProvider.SupportsReturningClause
-            ? await Session.ExecuteAsync($"INSERT INTO projection_checkpoints (projection_name, source_name, position, status, updated_at, lease_until, revision, error) VALUES ({projectionName}, {sourceName}, {position}, {statusProcessing}, {startedAt}, {leaseUntil}, 1, NULL) ON CONFLICT DO NOTHING", ct).ConfigureAwait(false)
-            : await Session.ExecuteAsync($"INSERT INTO projection_checkpoints (projection_name, source_name, position, status, updated_at, lease_until, revision, error) VALUES ({projectionName}, {sourceName}, {position}, {statusProcessing}, {startedAt}, {leaseUntil}, 1, NULL) ON DUPLICATE KEY UPDATE revision = revision", ct).ConfigureAwait(false);
+        // 方言分叉：PG/SQLite 用 ON CONFLICT DO NOTHING；MySQL 用普通 INSERT + 唯一约束冲突异常捕获。
+        // 三十八轮 P1 回归修复：三十七轮 A1 的 ON DUPLICATE KEY UPDATE revision = revision +
+        // affected > 0 判断在 MySqlConnector 默认 UseAffectedRows=false（found rows）下冲突时也返回 1，
+        // 伪造 Processing checkpoint 绕过 Completed 判断/租约判断/CAS 抢占。现对齐 PalOrmIdempotencyStore
+        // ITM-228 同款模式：冲突抛 1062 → affected=0 → 回查分支。
+        int affected;
+        if (TProvider.SupportsReturningClause)
+        {
+            affected = await Session.ExecuteAsync($"INSERT INTO projection_checkpoints (projection_name, source_name, position, status, updated_at, lease_until, revision, error) VALUES ({projectionName}, {sourceName}, {position}, {statusProcessing}, {startedAt}, {leaseUntil}, 1, NULL) ON CONFLICT DO NOTHING", ct).ConfigureAwait(false);
+        }
+        else
+        {
+            try
+            {
+                affected = await Session.ExecuteAsync($"INSERT INTO projection_checkpoints (projection_name, source_name, position, status, updated_at, lease_until, revision, error) VALUES ({projectionName}, {sourceName}, {position}, {statusProcessing}, {startedAt}, {leaseUntil}, 1, NULL)", ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsDuplicateKeyError(ex))
+            {
+                affected = 0; // 唯一约束冲突——记录已存在，非错误
+            }
+        }
 
         if (affected > 0)
         {
@@ -148,5 +164,40 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
         ArgumentException.ThrowIfNullOrWhiteSpace(position);
+    }
+
+    /// <summary>
+    /// 三十八轮 P1 回归修复：判定异常是否为唯一约束冲突（MySQL 1062/1586、PG 23505、SQLite UNIQUE、SqlServer 2601/2627）。
+    /// 仅捕获重复键——其他错误原样上抛。与 PalOrmIdempotencyStore/PalOrmInboxStore 同型。
+    /// </summary>
+    [UnconditionalSuppressMessage("Aot", "IL2075:RequiresDynamicallyAccessedMembers",
+        Justification = "PalORM 适配层为非 AOT（IsAotCompatible=false）；反射读取 provider 异常属性用于错误分类。")]
+    private static bool IsDuplicateKeyError(Exception exception)
+    {
+        for (var ex = exception; ex is not null; ex = ex.InnerException)
+        {
+            var type = ex.GetType();
+            var typeName = type.Name;
+
+            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(ex) is int mysqlNum
+                && (mysqlNum == 1062 || mysqlNum == 1586))
+                return true;
+
+            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
+                && type.GetProperty("SqlState")?.GetValue(ex) is string pgState
+                && pgState == "23505")
+                return true;
+
+            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
+                && ex.Message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (typeName.Equals("SqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(ex) is int sqlNum
+                && (sqlNum == 2601 || sqlNum == 2627))
+                return true;
+        }
+        return false;
     }
 }

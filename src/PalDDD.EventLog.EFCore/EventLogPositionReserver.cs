@@ -38,6 +38,13 @@ namespace PalDDD.EventLog;
 /// ReadAll 使用 <c>&gt;= fromPosition</c> 过滤，因此间隙不影响正确性。
 /// </para>
 /// <para>
+/// ⚠️ <b>倒挂-跳过风险（三十八轮 P2 声明）</b>：Hi/Lo 使 GlobalPosition 的<b>分配序</b>与
+/// <b>事务提交序</b>可倒挂——事务 B 预留更高块 [110-119] 先提交、事务 A 预留 [100-109] 后提交时，
+/// 按 <c>ReadAllAsync(fromPosition)</c> 检查点消费的消费方读到 110 即推进检查点，A 提交后其
+/// 事件被永久跳过。检查点用法要求所有追加方提交延迟相近，或改用 <c>ReadStreamAsync</c>
+/// （流内 StreamVersion 严格连续，不受 Hi/Lo 影响）。
+/// </para>
+/// <para>
 /// ⚠️ <b>回滚窗口（P2/P3 修复·十七轮声明）</b>：调用方事务回滚时，本预留器的进程内
 /// <c>_lo/_hi</c> 游标<b>不回退</b>——
 /// (a) 区块推进已随 <c>SaveChangesAsync</c> 提交而事件 INSERT 被回滚：已预留位置成为永久间隙

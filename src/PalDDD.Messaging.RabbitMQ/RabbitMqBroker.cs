@@ -31,13 +31,18 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Task> _exchangeDeclarations = new();
     // 优化（二十五轮 R-1）：exchange 名的 CachedString 缓存（UTF-8 字节表示，免每发布编码分配）
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, CachedString> _cachedExchanges = new();
+    // 三十八轮 P2 修复：消费 prefetch 上限——manual-ack 下无 BasicQos 时 broker 无界推送，
+    // 慢 handler 会无限堆积 unacked 消息（内存膨胀/服务端告警）。默认 10，可按吞吐调整。
+    private readonly ushort _prefetchCount;
 
+    /// <param name="prefetchCount">每消费者 unacked 消息上限（BasicQos prefetch，默认 10）。</param>
     public RabbitMqBroker(
         IConnection connection,
         IChannel channel,
         IPalLogger<RabbitMqBroker> logger,
         IMessageSerializer serializer,
-        IMessageCatalog messageCatalog)
+        IMessageCatalog messageCatalog,
+        ushort prefetchCount = 10)
         : base(serializer, messageCatalog)
     {
         ArgumentNullException.ThrowIfNull(connection);
@@ -47,6 +52,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         _connection = connection;
         _channel = channel;
         _logger = logger;
+        _prefetchCount = prefetchCount;
     }
 
     /// <summary>发布消息到 RabbitMQ Exchange（Fanout 模式）</summary>
@@ -202,6 +208,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             }
         };
 
+        // 三十八轮 P2 修复：consume 前设置 prefetch 上限——manual-ack 下防 broker 无界推送
+        await _channel.BasicQosAsync(0, _prefetchCount, false, ct).ConfigureAwait(false);
         var consumerTag = await _channel.BasicConsumeAsync(queueName, autoAck: false, consumer, cancellationToken: ct).ConfigureAwait(false);
 
         // P3 修复（八轮评审）：channel 已关/连接断时 BasicCancelAsync 抛 AlreadyClosed 类异常——

@@ -104,6 +104,11 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         await conn.ExecuteAsync(
             new CommandDefinition(leaseSql, new { owner, until = ToTimeParam(until), now = ToTimeParam(now), n = batchSize }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
 
+        // 三十八轮 P3 声明（对齐 OutboxSelectByLease 的 ITM-109 格式）：两步租约回读按
+        // (leased_by, leased_until) 匹配——同一 owner 在同一 tick（until 完全相等，如
+        // FakeTimeProvider 冻结时间）发起两次租约时第二次回读会混入第一次已锁定的批次。
+        // 生产触发条件近乎为零（DATETIME(6) 微秒精度 + 单 owner 串行租约）；PG 走
+        // FOR UPDATE SKIP LOCKED 单语句天然免疫。残余窗口由 SagaUpdate 的 version 乐观锁兜底。
         var rows = await conn.QueryAsync<SagaStateRow>(
             new CommandDefinition(SqlTemplates.SagaSelectByLease, new { owner, until = ToTimeParam(until) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
         return rows.Select(Materialize).ToList();

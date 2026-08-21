@@ -70,6 +70,14 @@ internal sealed class IterativeDomainEventDispatcher : IDomainEventDispatcher
         var processed = new HashSet<Guid>(); // 防止循环事件
         var maxIterations = _options.MaxIterations;
 
+        // 三十八轮 P2 修复：入口 fail-fast——原实现先派发 maxIterations 个再抛异常，
+        // 前 N 个 handler 已产生完整副作用后整体报失败，重试会导致二次派发。
+        // 去重后仍超上限的只可能是初始批量本身过大（Handler 不产生新入队事件）。
+        if (queue.Count > maxIterations)
+            throw new InvalidOperationException(
+                $"Domain event initial batch size ({queue.Count}) exceeds MaxIterations ({maxIterations}) — refusing to partially dispatch. "
+                + "Split the batch or raise DomainEventDispatcherOptions.MaxIterations.");
+
         for (int i = 0; i < maxIterations && queue.Count > 0; i++)
         {
             var @event = queue.Dequeue();

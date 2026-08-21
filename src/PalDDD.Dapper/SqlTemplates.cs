@@ -97,7 +97,9 @@ public static class SqlTemplates
     public const string OutboxRequeueDead =
         "UPDATE outbox_messages SET status='Pending',processed_at=NULL,error=@audit,next_attempt_at=@next,locked_by=NULL,locked_until=NULL WHERE id=@id AND status='Dead'";
 
-    /// <summary>原子租约获取 — UPDATE 子句</summary>
+    /// <summary>原子租约获取 — UPDATE 子句。
+    /// ⚠️ 三十八轮 P3 标注：当前无内部引用（二十五轮常量化残留）；框架库公共 const 面向外部
+    /// 消费方保留，删除前须按代码价值判定六项核查（docs 定位/roadmap/git 演进/测试覆盖）。</summary>
     public const string OutboxLeaseUpdate =
         "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN ";
 
@@ -144,7 +146,9 @@ public static class SqlTemplates
         + " AND (locked_until IS NULL OR locked_until<=@now)"
         + " ORDER BY created_at LIMIT @n)";
 
-    /// <summary>按 ID 批量查询（用于 PG RETURING * 替代路径）</summary>
+    /// <summary>按 ID 批量查询（用于 PG RETURNING * 替代路径）。
+    /// ⚠️ 三十八轮 P3 标注：当前无内部引用（二十五轮常量化残留）；框架库公共 const 面向外部
+    /// 消费方保留，删除前须按代码价值判定六项核查。另勘正原注释错字 "RETURING"。</summary>
     public const string OutboxSelectById =
         "SELECT * FROM outbox_messages WHERE id IN ";
 
@@ -197,16 +201,23 @@ public static class SqlTemplates
         // DB 侧重试成功前仍残留上次错误，监控/审计误读。
         "UPDATE inbox_messages SET status='Processing',attempts=attempts+1,processing_started_at=@now,last_error=NULL WHERE id=@id AND (status='Pending' OR (status='Processing' AND processing_started_at<@cutoff) OR status='Failed')";
 
-    /// <summary>标记消息处理成功</summary>
+    /// <summary>
+    /// 标记消息处理成功。<br/>
+    /// 💡 三十八轮 P2 修复（ITM-210 Inbox 姊妹）：补 <c>processing_started_at</c> 抢占 token 守卫——
+    /// worker A 超时后 worker B 经 TryStartProcessing 抢占（CAS 更新该列），A 苏醒后其 Mark 因
+    /// token 不匹配零命中，不再覆盖 B 正在处理的行（对齐 Outbox 租约 token 化）。
+    /// </summary>
     public const string InboxMarkProcessed =
-        "UPDATE inbox_messages SET status='Processed',processed_at=@at WHERE id=@id AND status='Processing'";
+        "UPDATE inbox_messages SET status='Processed',processed_at=@at WHERE id=@id AND status='Processing' AND processing_started_at=@startedAt";
 
     /// <summary>
     /// 标记消息处理失败。<br/>
-    /// 💡 保留 <c>last_error</c> 以便排查问题，消息可以重试。
+    /// 💡 保留 <c>last_error</c> 以便排查问题，消息可以重试。<br/>
+    /// 💡 三十八轮 P2 修复（ITM-210 Inbox 姊妹）：同 InboxMarkProcessed——补 <c>processing_started_at</c>
+    /// 抢占 token 守卫，防止被抢占的旧 worker 写入失败态干扰新 worker。
     /// </summary>
     public const string InboxMarkFailed =
-        "UPDATE inbox_messages SET status='Failed',last_error=@err WHERE id=@id AND status='Processing'";
+        "UPDATE inbox_messages SET status='Failed',last_error=@err WHERE id=@id AND status='Processing' AND processing_started_at=@startedAt";
 
     /// <summary>
     /// PostgreSQL conflict-safe INSERT 语法。<br/>
@@ -217,16 +228,18 @@ public static class SqlTemplates
         "INSERT INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,'Processing',@now,@now,1) ON CONFLICT (consumer_name,message_id) DO NOTHING RETURNING id";
 
     /// <summary>
-    /// MySQL conflict-safe INSERT 语法。<br/>
-    /// 三十七轮 A1（ITM-228 姊妹修复）：INSERT IGNORE → INSERT ... ON DUPLICATE KEY UPDATE——
-    /// 前者会把截断/非法日期等非重复键错误静默降为 warning 并写入调整值，键被破坏。<br/>
-    /// 💡 <c>WHERE ROW_COUNT() &gt; 0</c> 守卫（ITM-061）：唯一约束冲突时 ON DUPLICATE KEY UPDATE
-    /// 走 UPDATE 分支 ROW_COUNT()=1（MySQL 语义），INSERT 分支 ROW_COUNT()=1——需改为 2 条件判定。
-    /// 改用 <c>ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)</c> 模式：冲突时 LAST_INSERT_ID 回填已有行 id，
-    /// ROW_COUNT()=1（UPDATE 路径）；新插入 ROW_COUNT()=1（INSERT 路径）。调用方改走"查回已有行"分支。
+    /// MySQL conflict-safe INSERT 语法（普通 INSERT，冲突由调用方捕获唯一约束异常）。<br/>
+    /// 三十八轮 P1 回归修复：三十七轮 A1 的 <c>ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)</c> 模式存在幂等破口——
+    /// <c>SELECT LAST_INSERT_ID()</c> 恒返回一行非 NULL 值（MySQL 官方语义），冲突路径返回已有行 id，
+    /// 调用方 <c>HasValue</c> 判断恒真，existing 回查/Processed 判断/超时抢占分支全部不可达（重复投递伪造 Processing 记录）。<br/>
+    /// 💡 现改为普通 INSERT + 尾随 <c>SELECT LAST_INSERT_ID()</c>：新插入成功时返回自增 id；
+    /// 唯一约束冲突时 INSERT 抛 MySqlException(1062)，由调用方
+    /// <c>IsUniqueConstraintViolation</c> 捕获转 existing 回查分支（对齐 PalOrmIdempotencyStore ITM-228 同款模式）。
+    /// 不用 INSERT IGNORE（ITM-228：会把截断/非法日期等非重复键错误静默降为 warning），
+    /// 不用 affected rows 区分冲突（MySqlConnector 默认 UseAffectedRows=false 报告 found rows）。
     /// </summary>
     public const string InboxInsertMySql =
-        "INSERT INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,'Processing',@now,@now,1) ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id); SELECT LAST_INSERT_ID();";
+        "INSERT INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,'Processing',@now,@now,1); SELECT LAST_INSERT_ID();";
 
     /// <summary>
     /// SQLite conflict-safe INSERT 语法。<br/>
@@ -307,7 +320,9 @@ public static class SqlTemplates
     public const string SagaUpdate =
         "UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=@data,leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v";
 
-    /// <summary>插入新的 Saga 状态</summary>
+    /// <summary>插入新的 Saga 状态。
+    /// 💡 三十八轮 P3 声明：不写 version 列——依赖 DB DEFAULT 0 与 state.Version 初始值隐式对齐；
+    /// schema 默认值漂移将致首次 UPDATE（version CAS）必冲突。</summary>
     public const string SagaInsert =
         "INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,@data,@leasedBy,@leasedUntil)";
 

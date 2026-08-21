@@ -18,6 +18,11 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
     public DbSet<ProjectionCheckpoint> ProjectionCheckpoints => Set<ProjectionCheckpoint>();
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// 三十八轮 P3 修复：变更追踪无界增长——长驻 scope 下每次查询的跟踪条目滞留
+    /// ChangeTracker。本方法为纯读契约（结果不进 Mark*+SaveChanges 写回路径，接口
+    /// doc 与全部调用方已核实），改 AsNoTracking 后零跟踪残留。
+    /// </remarks>
     public async ValueTask<ProjectionCheckpoint?> GetAsync(
         string projectionName,
         string sourceName,
@@ -26,14 +31,22 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
     {
         ValidateKeyParts(projectionName, sourceName, position);
 
-        return await ProjectionCheckpoints.SingleOrDefaultAsync(
-            x => x.ProjectionName == projectionName
-                && x.SourceName == sourceName
-                && x.Position == position,
-            ct).ConfigureAwait(false);
+        return await ProjectionCheckpoints
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                x => x.ProjectionName == projectionName
+                    && x.SourceName == sourceName
+                    && x.Position == position,
+                ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// 三十八轮 P3 修复：变更追踪无界增长——本方法保持跟踪查询（僵尸回收分支的
+    /// MarkProcessing 突变依赖 ChangeTracker 持久化，AsNoTracking 会使保存静默丢失），
+    /// 但在每条返回路径上 Detach 清理跟踪条目；调用方后续的
+    /// MarkCompletedAsync/MarkFailedAsync 自带 AttachIfDetached 兜底，Detach 后语义不变。
+    /// </remarks>
     public async ValueTask<ProjectionCheckpoint?> TryStartAsync(
         string projectionName,
         string sourceName,
@@ -55,11 +68,19 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
 
         // 已完成的位置永远不会重新处理。
         if (checkpoint.Status == ProjectionCheckpointStatus.Completed)
+        {
+            // 三十八轮 P3 修复：未命中写回路径的只读分支同样清理跟踪条目（无界增长）
+            Entry(checkpoint).State = EntityState.Detached;
             return null;
+        }
 
         // 活跃的工作器 —— 租约尚未过期。
         if (checkpoint.Status == ProjectionCheckpointStatus.Processing && checkpoint.LeaseUntil > startedAt)
+        {
+            // 三十八轮 P3 修复：同上——清理跟踪条目（无界增长）
+            Entry(checkpoint).State = EntityState.Detached;
             return null;
+        }
 
         // 僵尸（处理中 + 已过期）或失败 —— 通过 MarkProcessing 回收。
         checkpoint.MarkProcessing(startedAt, processingTimeout);
@@ -67,6 +88,9 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         try
         {
             await SaveChangesAsync(ct).ConfigureAwait(false);
+            // 三十八轮 P3 修复：保存成功后立即 Detach——租约已落库，后续 Mark* 走
+            // AttachIfDetached 重挂，ChangeTracker 不残留本条目（无界增长）
+            Entry(checkpoint).State = EntityState.Detached;
             return checkpoint;
         }
         catch (DbUpdateConcurrencyException)
@@ -89,6 +113,9 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         try
         {
             await SaveChangesAsync(ct).ConfigureAwait(false);
+            // 三十八轮 P3 修复：保存成功后 Detach（与 TryStartAsync 无界增长修复同轮）——
+            // 状态已落库，ChangeTracker 不残留本条目
+            Entry(checkpoint).State = EntityState.Detached;
         }
         catch (DbUpdateConcurrencyException)
         {
@@ -114,6 +141,8 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         try
         {
             await SaveChangesAsync(ct).ConfigureAwait(false);
+            // 三十八轮 P3 修复：保存成功后 Detach（与 MarkCompletedAsync 同型，无界增长）
+            Entry(checkpoint).State = EntityState.Detached;
         }
         catch (DbUpdateConcurrencyException)
         {
@@ -190,6 +219,9 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         try
         {
             await SaveChangesAsync(ct).ConfigureAwait(false);
+            // 三十八轮 P3 修复：保存成功后立即 Detach——新建租约已落库，后续 Mark* 走
+            // AttachIfDetached 重挂，ChangeTracker 不残留本条目（无界增长）
+            Entry(checkpoint).State = EntityState.Detached;
             return checkpoint;
         }
         // P2 修复（ITM-065 同型）：仅唯一约束冲突返回 null（语义=他人已持有租约）；

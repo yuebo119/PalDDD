@@ -182,9 +182,9 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     }
 
     /// <summary>批量添加消息 — 自动选择数据库最优批量路径。
-    /// <para>⚠️ <b>已知限制（P1）</b>：批量插入不参与 UnitOfWork 外部事务（BulkCopy 各方言自管事务）。
-    /// 如需事务原子性，使用单条 <see cref="AddMessage"/>。后续可扩展 BulkInsertAsync 传 transaction 参数。
-    /// </para>
+    /// <para>三十八轮 P2 修复：批量插入现支持参与 UnitOfWork 外部事务——_transaction 经
+    /// BulkInsertAsync 贯通三方言（PG COPY 自动入连接事务；MySQL 显式挂接；SQLite 挂接外部
+    /// 事务不 Commit）。未开启事务时行为不变。</para>
     /// </summary>
     public async ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
     {
@@ -199,7 +199,8 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             ["id", "type", "payload", "content_type", "schema_version", "status", "created_at", "correlation_id", "causation_id", "trace_parent", "trace_state"],
             messages,
             m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, StatusPending, _timeProvider.GetUtcNow(),
-                m.CorrelationId?.ToString(), m.CausationId?.ToString(), m.TraceParent, m.TraceState]).ConfigureAwait(false);
+                m.CorrelationId?.ToString(), m.CausationId?.ToString(), m.TraceParent, m.TraceState],
+            _transaction).ConfigureAwait(false);
     }
 
     public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)

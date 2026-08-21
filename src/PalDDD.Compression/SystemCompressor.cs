@@ -147,12 +147,17 @@ internal sealed class GZipCompressor : ICompressor
             throw new InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
 
-        using var input = new MemoryStream(compressed.ToArray());
-        using var output = new MemoryStream();
-        using var gzip = new GZipStream(input, CompressionMode.Decompress);
-
-        DecompressionGuard.CopyWithLimit(gzip, output); // P2 修复：输出上限防膨胀炸弹
-        return output.ToArray();
+        // 三十八轮 P3 修复：Write 进 MemoryStream 免去 ToArray 整体拷贝（ReadOnlyMemory→byte[]）
+        var input = new MemoryStream();
+        input.Write(compressed);
+        input.Position = 0;
+        using (input)
+        using (var output = new MemoryStream())
+        using (var gzip = new GZipStream(input, CompressionMode.Decompress))
+        {
+            DecompressionGuard.CopyWithLimit(gzip, output); // P2 修复：输出上限防膨胀炸弹
+            return output.ToArray();
+        }
     }
 
     private static System.IO.Compression.CompressionLevel MapLevel(CompressionLevel level) => level switch
@@ -194,12 +199,17 @@ internal sealed class DeflateCompressor : ICompressor
             throw new InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
 
-        using var input = new MemoryStream(compressed.ToArray());
-        using var output = new MemoryStream();
-        using var deflate = new DeflateStream(input, CompressionMode.Decompress);
-
-        DecompressionGuard.CopyWithLimit(deflate, output); // P2 修复：输出上限防膨胀炸弹
-        return output.ToArray();
+        // 三十八轮 P3 修复：Write 进 MemoryStream 免去 ToArray 整体拷贝（同 GZip 路径）
+        var input = new MemoryStream();
+        input.Write(compressed);
+        input.Position = 0;
+        using (input)
+        using (var output = new MemoryStream())
+        using (var deflate = new DeflateStream(input, CompressionMode.Decompress))
+        {
+            DecompressionGuard.CopyWithLimit(deflate, output); // P2 修复：输出上限防膨胀炸弹
+            return output.ToArray();
+        }
     }
 
     private static System.IO.Compression.CompressionLevel MapLevel(CompressionLevel level) => level switch

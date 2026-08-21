@@ -69,6 +69,8 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         await _producer.ProduceAsync(descriptor.Name, new Message<string, byte[]>
         {
             Key = key,
+            // Serialize 契约返回 ReadOnlyMemory<byte>，Message.Value 需 byte[]——此处 ToArray
+            // 是必要转换非冗余拷贝（ReadOnlyMemory 底层即单次 ToArray 产物，无双重拷贝）
             Value = value.ToArray(),
             Headers = CreateHeaders(context)
         }, ct).ConfigureAwait(false);
@@ -173,6 +175,13 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
 
                     try
                     {
+                        // 三十八轮 P3 修复：tombstone（null value）消息走专门分支——
+                        // 原路径 null 经隐式转换成空 span 触发反序列化异常，日志噪声且语义混淆
+                        if (result.Message.Value is null)
+                        {
+                            _logger.Information($"Tombstone (null value) message on {topic}, discarding");
+                            continue;
+                        }
                         var message = Serializer.Deserialize(result.Message.Value, descriptor);
                         if (message is not null)
                         {
@@ -265,6 +274,12 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             _consumers.Clear();
         }
         foreach (var c in snapshot) await c.DisposeAsync().ConfigureAwait(false);
+        // 三十八轮 P2 修复：Dispose 前 Flush 排空 in-flight 消息——关停瞬间仍在飞行中的
+        // produce（ct 取消边界/并发发布中）没有排空机会即被 librdkafka destroy 丢弃。
+        // 有限超时 5 秒：剩余未确认消息记 Warning（调用方可据此判断是否需要重发）。
+        var remaining = _producer.Flush(TimeSpan.FromSeconds(5));
+        if (remaining > 0)
+            _logger.Warning($"KafkaBroker disposed with {remaining} unconfirmed message(s) still in-flight (flush timeout 5s)");
         _producer.Dispose();
     }
 

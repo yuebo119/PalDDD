@@ -10,6 +10,35 @@
 
 ## [Unreleased]
 
+### 修复（三十八轮：AI 质量系统全面运行 + 198 文件地毯式审计清偿）
+
+- **🔴 P1 MySQL 幂等回归根治（四处姊妹）**：三十七轮 A1 的 `ON DUPLICATE KEY UPDATE` 模式存在幂等破口——`SELECT LAST_INSERT_ID()` 恒返回一行非 NULL（MySQL 官方语义）+ MySqlConnector 默认 `UseAffectedRows=false` 报告 found rows，冲突被误判为新插入伪造 Processing 记录。Dapper Inbox/Checkpoint + PalORM Inbox/Checkpoint 统一改为普通 INSERT + `IsUniqueConstraintViolation` 异常捕获（对齐 IdempotencyStore ITM-228 已验证模式）；tech-debt 门禁 #13 同步识别第三种合法守卫形态
+- **Inbox Mark 系列抢占 token fencing（ITM-210 姊妹·四实现对齐）**：Dapper/PalORM 补 `processing_started_at` token 守卫——超时抢占后旧 worker 不再覆盖新 worker 的行；EFCore 已有 `IsConcurrencyToken`、InMemory 已有 successor 守卫（核查确认）
+- **BulkCopy 事务贯通三方言**：`BulkInsertAsync` 新增可选 `transaction` 参数——MySQL 显式挂接（原未挂接在 UnitOfWork 内直接抛 InvalidOperationException）、SQLite 挂接外部事务不 Commit、PG COPY 自动入连接事务（契约显式化）
+- **EventLog 冲突误分类修复**：唯一约束冲突判定对 `ExpectedStreamVersion.Any/StreamExists` 失效（Matches 恒真）——改为批内 EventId 重复 + 表中 EventId 存在性精确判定
+- **ChangeTracker 异常路径清理**：EventLog/Idempotency EFCore 全部失败路径 Detach 涉事实体——长生命周期 DbContext 幽灵租约/幽灵批次不再污染后续 SaveChanges
+- **RabbitMQ prefetch 上限**：`BasicQosAsync(prefetchCount)` 默认 10 可配——manual-ack 下防 broker 无界推送
+- **IterativeDomainEventDispatcher 入口 fail-fast**：初始批量超 MaxIterations 时拒绝派发（原先派发 N 个再抛异常致部分副作用后整体报失败）
+- **Kafka DisposeAsync Flush**：关停前排空 in-flight 消息（5 秒有限超时 + 剩余 Warning）；tombstone（null value）消息走专门分支不再进反序列化异常路径
+- **ValidationBehavior default 防御**：用户验证器 `return default` 时 Errors 为 default(ImmutableArray) 不再 NRE（对齐 PalValidationException 同款防御）
+- **Saga 观察者防护补全（ITM-212 四路对称）**：OnStepStarted/OnStepFailed 纳入 SafeObserve 隔离——Sink 异常不再使步骤未执行即失败或遮蔽原始异常
+- **IdempotencyProcessor 毒载荷降级**：缓存命中反序列化失败降级 Skipped + Activity 留痕，不再永久阻塞该 key
+- **SqliteOutboxDbContext leaseDuration 守卫补齐**（三姊妹漏网项）；类头"RetryCount 兜底"失真声明修正为如实描述
+- **BackoffPolicy 抖动整型溢出 clamp**；EventLogReplaySource 计数移 yield 前（早退少计一条）
+- **FTS 触发器名保留下划线**（outbox-messages/outbox_messages 清洗碰撞致第二张表索引停更）；PostgreSqlNotifier 未请求取消的 OCE 不再逃逸 StopHost
+- **CheckpointRow.LeaseUntil nullable 物化**（NULL 行防御性容错）；ProjectionCheckpointDbContext 读路径 AsNoTracking + 写回分支 Detach（变更追踪无界增长）
+
+### 文档与口径
+
+- **IMessageBroker 契约修正**：RabbitMQ 描述改为与实现一致的 at-most-once（原声明 at-least-once 与 durable queue 失真）；新增顺序性声明（分区键=每消息 Ulid 无序）与多订阅者语义分叉声明（RabbitMQ 广播 vs Kafka 负载均衡）
+- **Hi/Lo 倒挂-跳过风险声明**：GlobalPosition 分配序与提交序可倒挂，检查点消费需追加方提交延迟相近或改用 ReadStreamAsync
+- **OutboxDomainEventInterceptor 已知窗口声明**：SaveChanges 成功 + Commit 失败 + 同 scope 重试场景事件不重产（行为重构有双行风险，声明不修）
+- **EndpointExtensions 滥用控制声明**：端点默认无限流/请求体约束，生产须宿主层配置
+- **死常量标注**（OutboxLeaseUpdate/OutboxSelectById 无内部引用保留供外部消费方）；SagaInsert version 隐式对齐声明；Dapper Saga 两步租约同 tick 回读限制声明（对齐 ITM-109 格式）
+- **EnumGenerator hint 拼接拉齐 IdentityGenerator "+" 方案**（消除病态命名 AddSource 碰撞）
+- **DapperStoreTests 方言参数化基础**：`PALDDD_TEST_DAPPER_DB` 环境变量注入（缺省 Sqlite），CI 接入属后续任务
+- **MySqlStores.cs 过时注释勘正**（INSERT IGNORE → 普通 INSERT + 异常捕获）
+
 ### 新增
 
 - **统一质量体系 v2.0（三层一面）**：生成面/检测-修复面/元面 + 确定性>概率性统一原则，三源融合（实证数据 + 文献 + 控制论）

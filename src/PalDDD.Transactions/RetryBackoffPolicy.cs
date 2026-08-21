@@ -93,7 +93,10 @@ public sealed class ExponentialBackoffPolicy : IRetryBackoffPolicy
         // ±20% 抖动 — Random.Shared 线程安全，AOT 友好
         // 范围 [0.8, 1.2) × baseDelay
         var jitterFactor = 0.8 + (Random.Shared.NextDouble() * 0.4);
-        return TimeSpan.FromTicks((long)(baseDelay.Ticks * jitterFactor));
+        // 三十八轮 P3 修复：抖动整型溢出——baseDelay 已封顶 maxDelay，但 ×1.2 抖动可越过
+        // long.MaxValue（maxDelay 取 TimeSpan.MaxValue 时），double→long 转换直接溢出。
+        // 先在 double 域 clamp 到 maxDelay.Ticks 再转 long，结果恒 ≤ maxDelay。
+        return TimeSpan.FromTicks((long)Math.Min(baseDelay.Ticks * jitterFactor, (double)_maxDelay.Ticks));
     }
 }
 

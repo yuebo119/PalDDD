@@ -296,6 +296,43 @@ public abstract class Saga<TState> where TState : SagaState, new()
         }
     }
 
+    // 三十八轮 P3 修复（ITM-212 防护补全）：OnStepStarted/OnStepFailed 原为直调——Sink 抛异常
+    // 会使步骤未执行即失败 / 替换遮蔽原始步骤异常，与 ISagaEventSink "尽力语义"不符。
+    // 对齐 SafeObserveCompletedAsync 同款隔离。
+
+    private static async ValueTask SafeObserveStartedAsync(
+        SagaExecutionObserver? observer, PalUlid sagaId, string stepKey, CancellationToken ct)
+    {
+        if (observer is null) return;
+        try
+        {
+            await observer.OnStepStarted(sagaId, stepKey, ct).ConfigureAwait(false);
+        }
+        catch (Exception obsEx) when (obsEx is not OperationCanceledException)
+        {
+            System.Diagnostics.Activity.Current?.AddEvent(new(
+                "saga.observer.step-started-failed",
+                tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = obsEx.Message, ["step"] = stepKey }));
+        }
+    }
+
+    /// <summary>必须在原步骤异常的 catch 块内调用——观察者异常被吞，原始异常继续向上传播。</summary>
+    private static async ValueTask SafeObserveFailedAsync(
+        SagaExecutionObserver? observer, PalUlid sagaId, string stepKey, Exception stepError, CancellationToken ct)
+    {
+        if (observer is null) return;
+        try
+        {
+            await observer.OnStepFailed(sagaId, stepKey, stepError, ct).ConfigureAwait(false);
+        }
+        catch (Exception obsEx) when (obsEx is not OperationCanceledException)
+        {
+            System.Diagnostics.Activity.Current?.AddEvent(new(
+                "saga.observer.step-failed-notify-error",
+                tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = obsEx.Message, ["step"] = stepKey }));
+        }
+    }
+
     private async ValueTask<TState> ExecuteNormalStepAsync(
         TState current, string stepKey, SagaStep step, object @event,
         bool wasCompleted, DateTimeOffset startedAt,
@@ -304,8 +341,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
         List<Exception> failures = [];
 
         // Emit step started
-        if (observer is not null)
-            await observer.OnStepStarted(current.SagaId, stepKey, ct).ConfigureAwait(false);
+        await SafeObserveStartedAsync(observer, current.SagaId, stepKey, ct).ConfigureAwait(false);
 
         for (int attempt = 0; attempt <= MaxRetries; attempt++)
         {
@@ -341,8 +377,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 // 所有重试耗尽 — 补偿所有已成功执行的步骤（含当前步骤如果有补偿）
                 failures.Add(ex);
 
-                if (observer is not null)
-                    await observer.OnStepFailed(current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
+                // 三十八轮 P3：观察者异常被吞，原始步骤异常 ex 继续传播
+                await SafeObserveFailedAsync(observer, current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
 
                 // P3 修复（十七轮）：补偿自身抛出会替换原步骤失败异常向上传播，步骤根因
                 // （failures）丢失——catch 后把补偿异常并入 failures 抛出，外层
@@ -381,8 +417,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
         List<Exception> failures = [];
 
-        if (observer is not null)
-            await observer.OnStepStarted(current.SagaId, stepKey, ct).ConfigureAwait(false);
+        await SafeObserveStartedAsync(observer, current.SagaId, stepKey, ct).ConfigureAwait(false);
 
         for (int attempt = 0; attempt <= MaxRetries; attempt++)
         {
@@ -427,8 +462,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
             {
                 failures.Add(ex);
 
-                if (observer is not null)
-                    await observer.OnStepFailed(current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
+                // 三十八轮 P3：观察者异常被吞，原始步骤异常 ex 继续传播
+                await SafeObserveFailedAsync(observer, current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
 
                 // P3 修复（十七轮）：补偿失败嵌套（见 ExecuteNormalStepAsync 同名修复注释）——
                 // 补偿异常并入 failures 抛出，不吞 FanOut 步骤根因
@@ -479,8 +514,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
         List<Exception> failures = [];
 
-        if (observer is not null)
-            await observer.OnStepStarted(current.SagaId, stepKey, ct).ConfigureAwait(false);
+        await SafeObserveStartedAsync(observer, current.SagaId, stepKey, ct).ConfigureAwait(false);
 
         for (int attempt = 0; attempt <= MaxRetries; attempt++)
         {
@@ -526,8 +560,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
             {
                 failures.Add(ex);
 
-                if (observer is not null)
-                    await observer.OnStepFailed(current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
+                // 三十八轮 P3：观察者异常被吞，原始步骤异常 ex 继续传播
+                await SafeObserveFailedAsync(observer, current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
 
                 // P3 修复（十七轮）：补偿失败嵌套（见 ExecuteNormalStepAsync 同名修复注释）——
                 // 补偿异常并入 failures 抛出，不吞 ChildSaga 步骤根因
@@ -654,8 +688,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // 记录动态步骤本身
         RecordExecutedStep(current, current, stepKey, startedAt);
 
-        if (observer is not null)
-            await observer.OnStepStarted(current.SagaId, stepKey, ct).ConfigureAwait(false);
+        await SafeObserveStartedAsync(observer, current.SagaId, stepKey, ct).ConfigureAwait(false);
 
         // 递归分发到路由步骤（可能也是特殊步骤）
         // 使用 HandleEventAsync 的查找逻辑，但走的是当前状态+事件类型的匹配
@@ -702,8 +735,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
             {
                 failures.Add(ex);
 
-                if (observer is not null)
-                    await observer.OnStepFailed(current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
+                // 三十八轮 P3：观察者异常被吞，原始步骤异常 ex 继续传播
+                await SafeObserveFailedAsync(observer, current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
 
                 // P3 修复（十七轮）：补偿失败嵌套（见 ExecuteNormalStepAsync 同名修复注释）——
                 // 补偿异常并入 failures 抛出，不吞 Dynamic 路由步骤根因

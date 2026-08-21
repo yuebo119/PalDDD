@@ -14,6 +14,12 @@ namespace PalDDD.Repository.EFCore;
 //   4. SaveChanges 成功后清除实体的领域事件（ClearDomainEvents）
 //   5. 所有操作在同一个 SaveChanges 事务中——保证事件与业务数据的原子性
 //
+// ⚠️ 已知窗口（三十八轮 P2 修复：声明不修）：原子性只在单次 SaveChanges 内成立。
+//   SaveChanges 成功但外层 UnitOfWork Commit 失败时，领域事件已在 SavedChanges(Async)
+//   中被清空——同一 scope 内重试 SaveChanges 不会重新产生 outbox 行（业务落库而
+//   outbox 无行）。需要跨 Commit 重试保证的应用应在新的 UnitOfWork scope 中重试
+//   整个业务操作。行为重构（事件清理移到 Commit 之后）有双行风险，本轮不做。
+//
 // 💡 保留理由：DDD + EF Core + Outbox 关键桥梁 · 事务内领域事件持久化。
 //    详见 docs/decisions/004-core-type-retention.md
 
@@ -25,6 +31,13 @@ namespace PalDDD.Repository.EFCore;
 /// 如果注册为 Singleton，<c>_pending</c> 会被多个并发请求交叉写入，导致数据污染。<br/>
 /// 当前注册方式见 <see cref="ServiceCollectionExtensions.AddPalOutboxUnitOfWork{TContext}"/>，
 /// 使用 <c>TryAddScoped</c> 保证正确生命周期。
+/// <para>
+/// ⚠️ <b>已知窗口（三十八轮 P2 修复：声明不修）</b>：事件与业务数据的原子性只在单次
+/// SaveChanges 内成立。SaveChanges 成功但外层 UnitOfWork Commit 失败时，领域事件已在
+/// SavedChanges(Async) 中被清空——同一 scope 内重试不会重新产生 outbox 行（业务落库而
+/// outbox 无行）。需要跨 Commit 重试保证的应用应在新的 UnitOfWork scope 中重试整个
+/// 业务操作；行为重构（清理移到 Commit 后）有双行风险，本轮不做。
+/// </para>
 /// </remarks>
 public sealed class OutboxDomainEventInterceptor(
     Transactions.IPalOutboxStore outboxStore,

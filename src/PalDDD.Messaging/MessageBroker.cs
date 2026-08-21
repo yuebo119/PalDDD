@@ -14,16 +14,24 @@ namespace PalDDD.Messaging;
 
 /// <summary>跨进程消息代理抽象 — AOT 安全的消息发布与订阅。</summary>
 /// <remarks>
-/// ⚠️ <b>投递语义声明（ITM-234）</b>：<br/>
-/// — <b>RabbitMQ</b>：at-least-once（mandatory=true + durable queue；publisher confirm 需由调用方启用）<br/>
+/// ⚠️ <b>投递语义声明（ITM-234；三十八轮 P2 修正 RabbitMQ 描述与实现对齐）</b>：<br/>
+/// — <b>RabbitMQ</b>：at-most-once（非持久 exclusive 自删队列 + handler 失败 nack 弃置；
+///   订阅者离线窗口内发布的消息不可达）。需持久化/at-least-once 请自行实现 IMessageBroker
+///   （durable 队列 + DLX + requeue 策略）。<br/>
 /// — <b>Kafka</b>：at-most-once（handler 失败的 offset 照常自动提交，消息不重投）。
 ///   若需 at-least-once，请关闭 EnableAutoOffsetStore 并在 handler 成功后 StoreOffset。<br/>
 /// — <b>Null</b>：不发送任何消息（单节点测试用）。<br/>
+/// ⚠️ <b>顺序性声明（三十八轮 P2）</b>：本抽象不保证消息顺序——Kafka 分区键为每消息唯一
+/// Ulid（均匀散列到随机分区），RabbitMQ fanout 同样无序。需要分区内有序的场景须自行实现
+/// IMessageBroker 并以聚合 Id 作分区键。<br/>
+/// ⚠️ <b>多订阅者语义声明（三十八轮 P2）</b>：同一消息类型的多个订阅者，RabbitMQ 为广播
+/// （每订阅独立匿名队列各收全量）；Kafka 同一 GroupId 下为负载均衡（各订阅分得部分分区，
+/// 各收部分消息）——需要 Kafka 广播语义请为每个订阅使用独立 GroupId。<br/>
 /// 消费方幂等性由应用层保证（Inbox/Idempotency Store）。
 /// </remarks>
 public interface IMessageBroker
 {
-    /// <summary>发布消息（泛型，编译时已知类型）</summary>
+    /// <summary>发布消息（泛型，编译时已知类型）。⚠️ 不保证顺序——见接口 remarks 顺序性声明。</summary>
     ValueTask PublishAsync<TMessage>(TMessage message, CancellationToken ct = default);
 
     /// <summary>发布消息（非泛型，使用预注册消息描述符和外部消息 ID）</summary>

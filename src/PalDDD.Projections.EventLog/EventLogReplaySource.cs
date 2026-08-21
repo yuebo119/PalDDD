@@ -67,8 +67,11 @@ public sealed class EventLogReplaySource<TMessage> : IEventReplaySource<TMessage
                     throw;
                 }
 
-                yield return replayEvent;
+                // 三十八轮 P3 修复：计数在 yield 前（对齐 InMemoryEventLog ITM-120 /
+                // EventLogDbContext 同款惯例）——原 yield 后计数使消费方拿到最后一条后
+                // break/Dispose 早退时 read++ 不执行，已回放事件的计数少计最后一条。
                 checked { read++; }
+                yield return replayEvent;
             }
         }
         finally
