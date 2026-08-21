@@ -224,7 +224,20 @@ public sealed class ShardedDataSourceManager : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var ds in _shards) await ds.DisposeAsync().ConfigureAwait(false);
+        // 三十七轮修复：逐 shard 异常隔离——首 shard Dispose 抛出不再中断循环泄漏其余连接池
+        Exception? firstError = null;
+        foreach (var ds in _shards)
+        {
+            try
+            {
+                await ds.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                firstError ??= ex;  // 保首个异常，继续释放其余
+            }
+        }
+        if (firstError is not null) throw firstError;
     }
 }
 

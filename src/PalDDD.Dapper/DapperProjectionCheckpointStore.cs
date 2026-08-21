@@ -242,9 +242,10 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         """;
 
     private const string InsertMySql = """
-        INSERT IGNORE INTO projection_checkpoints (
+        INSERT INTO projection_checkpoints (
             projection_name, source_name, position, status, updated_at, lease_until, revision, error)
         VALUES (@projectionName, @sourceName, @position, @status, @startedAt, @leaseUntil, 1, NULL)
+        ON DUPLICATE KEY UPDATE revision = revision
         """;
 
     private const string MarkProcessing = """

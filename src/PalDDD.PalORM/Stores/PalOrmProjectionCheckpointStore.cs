@@ -61,10 +61,11 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         var leaseUntil = startedAt + processingTimeout;
         var statusProcessing = (int)ProjectionCheckpointStatus.Processing;
 
-        // 方言分叉：PG/SQLite 用 ON CONFLICT DO NOTHING；MySQL 用 INSERT IGNORE
+        // 方言分叉：PG/SQLite 用 ON CONFLICT DO NOTHING；MySQL 用 INSERT ... ON DUPLICATE KEY UPDATE（ITM-228 姊妹修复，
+        // 三十七轮 A1：INSERT IGNORE 会把截断/非法日期等非重复键错误静默降为 warning——ON DUPLICATE KEY UPDATE 只在唯一约束冲突时走 UPDATE 分支）
         var affected = TProvider.SupportsReturningClause
             ? await Session.ExecuteAsync($"INSERT INTO projection_checkpoints (projection_name, source_name, position, status, updated_at, lease_until, revision, error) VALUES ({projectionName}, {sourceName}, {position}, {statusProcessing}, {startedAt}, {leaseUntil}, 1, NULL) ON CONFLICT DO NOTHING", ct).ConfigureAwait(false)
-            : await Session.ExecuteAsync($"INSERT IGNORE INTO projection_checkpoints (projection_name, source_name, position, status, updated_at, lease_until, revision, error) VALUES ({projectionName}, {sourceName}, {position}, {statusProcessing}, {startedAt}, {leaseUntil}, 1, NULL)", ct).ConfigureAwait(false);
+            : await Session.ExecuteAsync($"INSERT INTO projection_checkpoints (projection_name, source_name, position, status, updated_at, lease_until, revision, error) VALUES ({projectionName}, {sourceName}, {position}, {statusProcessing}, {startedAt}, {leaseUntil}, 1, NULL) ON DUPLICATE KEY UPDATE revision = revision", ct).ConfigureAwait(false);
 
         if (affected > 0)
         {

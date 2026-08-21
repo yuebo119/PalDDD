@@ -218,12 +218,15 @@ public static class SqlTemplates
 
     /// <summary>
     /// MySQL conflict-safe INSERT 语法。<br/>
-    /// 💡 <c>WHERE ROW_COUNT() &gt; 0</c> 守卫（ITM-061）：INSERT IGNORE 被唯一约束忽略时
-    /// ROW_COUNT()=0，SELECT 不返回行 → 调用方正确走"已存在"分支；否则 LAST_INSERT_ID()
-    /// 会返回 0 或同连接上一条 INSERT 的陈旧自增 ID，伪造 Processing 记录破坏幂等。
+    /// 三十七轮 A1（ITM-228 姊妹修复）：INSERT IGNORE → INSERT ... ON DUPLICATE KEY UPDATE——
+    /// 前者会把截断/非法日期等非重复键错误静默降为 warning 并写入调整值，键被破坏。<br/>
+    /// 💡 <c>WHERE ROW_COUNT() &gt; 0</c> 守卫（ITM-061）：唯一约束冲突时 ON DUPLICATE KEY UPDATE
+    /// 走 UPDATE 分支 ROW_COUNT()=1（MySQL 语义），INSERT 分支 ROW_COUNT()=1——需改为 2 条件判定。
+    /// 改用 <c>ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)</c> 模式：冲突时 LAST_INSERT_ID 回填已有行 id，
+    /// ROW_COUNT()=1（UPDATE 路径）；新插入 ROW_COUNT()=1（INSERT 路径）。调用方改走"查回已有行"分支。
     /// </summary>
     public const string InboxInsertMySql =
-        "INSERT IGNORE INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,'Processing',@now,@now,1); SELECT LAST_INSERT_ID() WHERE ROW_COUNT() > 0;";
+        "INSERT INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,'Processing',@now,@now,1) ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id); SELECT LAST_INSERT_ID();";
 
     /// <summary>
     /// SQLite conflict-safe INSERT 语法。<br/>

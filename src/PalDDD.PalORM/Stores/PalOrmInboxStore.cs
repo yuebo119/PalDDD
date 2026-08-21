@@ -62,11 +62,10 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         }
         else
         {
-            // MySQL 路径：INSERT IGNORE + LAST_INSERT_ID（无 RETURNING）
-            // 注意：MySQL 用复合 INSERT ...; SELECT 结构 —— PalORM ExecuteAsync 仅返回影响行数，不返回查询结果
-            // 改用两步：先 INSERT IGNORE（捕获影响行数），再按复合键查
+            // MySQL 路径：INSERT + ON DUPLICATE KEY UPDATE（三十七轮 A1：ITM-228 姊妹修复——
+            // INSERT IGNORE 会把截断/非法日期等非重复键错误静默降为 warning）
             var affected = await Session.ExecuteAsync(
-                $"INSERT IGNORE INTO inbox_messages (message_id, consumer_name, status, received_at, processing_started_at, attempts) VALUES ({messageId}, {consumerName}, {statusProcessing}, {now}, {now}, 1)",
+                $"INSERT INTO inbox_messages (message_id, consumer_name, status, received_at, processing_started_at, attempts) VALUES ({messageId}, {consumerName}, {statusProcessing}, {now}, {now}, 1) ON DUPLICATE KEY UPDATE id = id",
                 ct).ConfigureAwait(false);
             if (affected > 0)
             {

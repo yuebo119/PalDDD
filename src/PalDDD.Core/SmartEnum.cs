@@ -85,6 +85,9 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
                 throw new InvalidOperationException(
                     $"SmartEnum<{typeof(TSelf).Name}, {typeof(TValue).Name}> 重复注册值 '{item.Value}'。每个枚举值必须唯一。");
         }
+        // 三十七轮口径勘正：双注册场景（用户手写 + 生成器 emit 并存）行为是"首者胜"——
+        // CompareExchange 保留先到者的完整值集，后到者整批静默丢弃（测试 RegisterValues_CalledTwice 锁定此行为）。
+        // 注意：后到者中的新值不会合并也不会报错；如需扩展值集请在首次注册时包含所有值。
         Interlocked.CompareExchange(ref s_values, dict.ToFrozenDictionary(), null);
     }
 
