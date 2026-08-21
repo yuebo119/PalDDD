@@ -14,7 +14,7 @@
   -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
-    <Description>Pal.DDD 基础元包 — 最小编程模型：领域基元 + 序列化 + 压缩 + 源生成 + 编译时分析器。零外部依赖，AOT 安全。</Description>
+    <Description>Pal.DDD 基础元包 — 最小编程模型：领域基元 + 序列化 + 压缩 + 源生成 + 编译时分析器。最小依赖（含 ByteAether.Ulid），AOT 安全。</Description>
     <PackageTags>DDD;Entity;ValueObject;DomainEvent;Specification;AOT;.NET11;Foundation</PackageTags>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>

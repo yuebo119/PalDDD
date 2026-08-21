@@ -110,7 +110,7 @@
 | **EF Core 解耦** | ❌ 耦合 | ❌ 耦合 | ✅ 无 EF | **✅ 完全可选** |
 | **OpenTelemetry** | ⚠️ 部分 | ✅ | ⚠️ 部分 | **✅ 全链路 27 指标** |
 | **包大小** | ~50MB | ~120MB | ~500KB | **~2MB** |
-| **测试覆盖** | ⚠️ 部分 | ⚠️ 部分 | ✅ | **✅ 972 passed** |
+| **测试覆盖** | ⚠️ 部分 | ⚠️ 部分 | ✅ | **✅ 1087+ passed** |
 
 ### 核心优势一句话
 
@@ -499,7 +499,7 @@ COMMIT
 while (true)
 {
     // 1. 租约锁定一批待发送消息（UPDLOCK + READPAST，多实例竞争安全）
-    var messages = await _store.LeasePendingMessagesAsync(100, _leaseOwner, TimeSpan.FromMinutes(2), maxRetryCount: 5, ct);
+    var messages = await _store.LeasePendingMessagesAsync(100, _leaseOwner, TimeSpan.FromMinutes(2), maxRetryCount: 10, ct);
 
     foreach (var msg in messages)
     {

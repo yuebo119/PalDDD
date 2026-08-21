@@ -142,8 +142,10 @@ public static class DapperBulkCopy
     }
 
     /// <summary>
-    /// P1 修复：Ulid/DateTimeOffset 转 Npgsql 原生类型——raw 对象 + Unknown
-    /// 在 COPY BINARY 下无法推断类型。转换策略与 Dapper TypeHandler 一致。
+    /// P1 修复 + 三十七轮 P2-3：Ulid/DateTimeOffset 转 Npgsql 原生类型；主流基元类型补显式映射。
+    /// 原 default 分支对 byte[]/int/string/long/bool/Guid 等全走 Unknown——COPY BINARY 下依赖运行时推断，
+    /// 可能抛晦涩类型异常或类型误写。补显式映射后 default 仅覆盖罕见类型（decimal/TimeSpan 等），
+    /// Unknown 作为最后的运行时推断回退保留。
     /// </summary>
     private static (object? value, NpgsqlTypes.NpgsqlDbType type) ConvertForNpgsql(object? val)
     {
@@ -152,7 +154,18 @@ public static class DapperBulkCopy
             null => (null, NpgsqlTypes.NpgsqlDbType.Unknown),
             ByteAether.Ulid.Ulid ulid => (ulid.ToString(), NpgsqlTypes.NpgsqlDbType.Text),
             DateTimeOffset dto => (dto, NpgsqlTypes.NpgsqlDbType.TimestampTz),
-            _ => (val, NpgsqlTypes.NpgsqlDbType.Unknown),
+            // 三十七轮 P2-3：主流基元类型显式映射（消除 Unknown 覆盖面）
+            byte[] bytes => (bytes, NpgsqlTypes.NpgsqlDbType.Bytea),
+            int i => (i, NpgsqlTypes.NpgsqlDbType.Integer),
+            long l => (l, NpgsqlTypes.NpgsqlDbType.Bigint),
+            string s => (s, NpgsqlTypes.NpgsqlDbType.Text),
+            bool b => (b, NpgsqlTypes.NpgsqlDbType.Boolean),
+            Guid g => (g, NpgsqlTypes.NpgsqlDbType.Uuid),
+            double d => (d, NpgsqlTypes.NpgsqlDbType.Double),
+            float f => (f, NpgsqlTypes.NpgsqlDbType.Real),
+            short sh => (sh, NpgsqlTypes.NpgsqlDbType.Smallint),
+            DateTime dt => (dt, NpgsqlTypes.NpgsqlDbType.Timestamp),
+            _ => (val, NpgsqlTypes.NpgsqlDbType.Unknown),  // 罕见类型回退（decimal/TimeSpan/自定义类型等）
         };
     }
 
