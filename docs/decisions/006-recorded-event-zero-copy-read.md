@@ -20,7 +20,7 @@
   - 写入路径专用。从 `EventData.Payload` / `EventData.Metadata`（`ReadOnlyMemory<byte>`）`ToArray()` 拷贝得到 `_payload` / `_metadata`。
   - 行为保守：写入事件瞬时可忽略两次拷贝，且对外 API 稳定。
 
-- `internal RecordedEvent(string streamName, long streamVersion, long globalPosition, DateTimeOffset recordedAt, Guid eventId, string eventName, int schemaVersion, string contentType, byte[] payload, byte[] metadata, EventAuditMetadata audit)`
+- `internal RecordedEvent(string streamName, long streamVersion, long globalPosition, DateTimeOffset recordedAt, PalUlid eventId, string eventName, int schemaVersion, string contentType, byte[] payload, byte[] metadata, EventAuditMetadata audit)`
   - 读取路径专用。`payload` / `metadata` 直接引用赋值，**零拷贝**。
   - 通过 `internal static RecordedEvent RehydrateFromBytes(...)` 工厂方法暴露给 Infrastructure 包内部（Dapper / EF Core 适配层），避免外部调用方误传共享 `byte[]` 缓冲区。
 

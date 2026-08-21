@@ -41,7 +41,7 @@ services.AddPalJsonSerialization(catalog =>
     catalog.Add(AppJsonContext.Default.OrderConfirmed);
 });
 
-// 持久化 — 选择 Dapper（AOT 兼容）或 EF Core
+// 持久化 — 选择 Dapper（AOT 假象，见 README）或 EF Core
 services.AddPalDapper(DapperDbType.PostgreSql, connectionString);
 // 或 services.AddPalOutboxUnitOfWork<OrderDbContext>();
 
@@ -78,4 +78,4 @@ app.MapPalHealthChecks();
 |------|---------|
 | 仅 CQRS | `PalDDD.Core` + `PalDDD.CQRS` + `PalDDD.DependencyInjection` |
 | DDD 全栈 Dapper | `PalDDD.Base` + `PalDDD.Extension` + `PalDDD.Dapper` + 方言包 |
-| DDD 全栈 EF Core | `PalDDD.Base` + `PalDDD.Extension` + `PalDDD.EntityFrameworkCore` |
+| DDD 全栈 EF Core | `PalDDD.Base` + `PalDDD.Extension` + `5 个 EF Core 分立包（EventLog/Idempotency/Transactions/Projections/Repository）` |
