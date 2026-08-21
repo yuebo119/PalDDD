@@ -14,6 +14,13 @@
 
 - **Dapper 栈 outbox/inbox status 列从字符串改为 INT**：`OutboxStatus` Pending=0/Processed=1/Dead=2、`InboxStatus` Pending=0/Processing=1/Processed=2/Failed=3——对齐 Saga/Checkpoint/Idempotency 三表既定 int 语义与 PalORM/EFCore 映射，五表状态列自此全部 INT，docs/sql DDL 一套三栈通用。**存量 ≤1.1.0 数据库需执行迁移脚本**（`docs/sql/migration-status-to-int.md`：先停写 → CASE 数据转换 → 改列类型 → 升级应用）；新部署直接用现行 DDL。技术可行性经 Dapper.AOT 1.0.52 探针实证（经典反射/AOT 拦截 × INT 列→枚举 读/写/参数化 7/7 断言 + 生成代码 `GetFieldValue<enum>` 直接证据）
 
+### 依赖升级（2026-08-22 全量更新）
+
+- **PalORM 全家 5.2.0→5.3.0**（Core/SourceGen/PostgreSql/MySql/Sqlite）：上游 byte[] 二进制列原生支持（ADR-G：白名单收窄放行 Byte 一维数组 + 三方言 BYTEA/BLOB/LONGBLOB DDL + DbType.Binary 显式绑定 + 等值谓词含 0x00 + Scaffold 反向工程闭环），**无破坏性变更**（纯放宽）——PalDDD 适配器的 `ByteArrayBase64Converter` 路径保留、存量 TEXT 列不受影响；真库验证 PalORM 5.3.0 Integration 181/181（PG COPY/MySQL 往返含 0x00 字节，专用临时库实测）
+- **Microsoft.CodeAnalysis 5.6.0→5.9.0**（Analyzers/CodeFixes/SourceGen 三项目，编译期工具链）
+- **TUnit 1.65.0→1.65.38 / TUnit.FsCheck 同步 / FsCheck 3.3.4→3.4.0**（测试框架与属性测试）
+- 验证：严格构建 0 警告 0 错误；16 测试项目 956 例（915 通过 + 41 环境性 fail-closed 与升级前基线逐项一致，零回归）；README/docs 16 处 PalORM 版本引用三方同步
+
 ### 修复（三十八轮：AI 质量系统全面运行 + 198 文件地毯式审计清偿）
 
 - **🔴 P1 MySQL 幂等回归根治（四处姊妹）**：三十七轮 A1 的 `ON DUPLICATE KEY UPDATE` 模式存在幂等破口——`SELECT LAST_INSERT_ID()` 恒返回一行非 NULL（MySQL 官方语义）+ MySqlConnector 默认 `UseAffectedRows=false` 报告 found rows，冲突被误判为新插入伪造 Processing 记录。Dapper Inbox/Checkpoint + PalORM Inbox/Checkpoint 统一改为普通 INSERT + `IsUniqueConstraintViolation` 异常捕获（对齐 IdempotencyStore ITM-228 已验证模式）；tech-debt 门禁 #13 同步识别第三种合法守卫形态
