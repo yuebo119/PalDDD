@@ -3,7 +3,7 @@
 > 本规范定义 Pal.DDD 项目从代码变更到 NuGet 发布的标准流程。
 > 所有版本发布（含补丁版/小版本/大版本/Preview）必须遵守。
 >
-> **当前状态**：`VersionPrefix=1.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**1.1.0 未发布（Unreleased）**：仓库 tag 仅 `v1.0.0-preview.1`，无 `[1.1.0]` CHANGELOG 段；发布 1.1.0 时按第 5 章补 `v1.1.0` tag，并在 CHANGELOG 将 `[Unreleased]` 段改为 `[1.1.0]`。
+> **当前状态**：`VersionPrefix=1.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**1.1.0 已发布**（2026-07-31 推送 NuGet.org，tag `v1.1.0`→`b4d532f`；`[1.1.0]` CHANGELOG 段为 2026-08-21 事后回填——发布时 CHANGELOG 尚未建立）。tag 之后的变更累积在 `[Unreleased]`，下个版本发布前需将 `VersionPrefix` 升位。
 > **首次发布待办**：本规范第 5/6/9 章在首次实际发布后需补实测教训（参考 ORM 项目 `docs/发布规范.md` §9）。
 
 ---
@@ -460,8 +460,8 @@ git push origin v1.1.0
 
 ## 九、发布实践教训
 
-> ⚠️ **首次发布待补**：DDD 项目 **1.1.0 尚未发布**（仓库 tag 仅 `v1.0.0-preview.1`；计划发布 35 个 PalDDD 打包项目 + 5 个 PalORM 依赖包单列）。
-> 首次实际发布后，在此章节补充实测教训（参考 ORM 项目 `docs/发布规范.md` §9 的 9 条 v5.0.0 教训）。
+> ⚠️ **教训待补**：DDD 项目 **1.1.0 已于 2026-07-31 发布**（NuGet.org + tag `v1.1.0`），但发布时未按本规范同次提交 CHANGELOG `[1.1.0]` 段——该段为 2026-08-21 事后回填。此为第 1 条实测教训：**CHANGELOG 先行，tag 后打**。
+> 后续发布在此章节继续补充实测教训（参考 ORM 项目 `docs/发布规范.md` §9 的 9 条 v5.0.0 教训）。
 
 预期可能踩的坑（基于 ORM 项目经验预判）：
 
