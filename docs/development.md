@@ -5,7 +5,7 @@
 ## 环境要求
 
 - .NET SDK 11.0.x (Preview 7+)
-- Windows / PowerShell 可直接使用本文命令
+- Windows / PowerShell Git Bash/Linux 可直接使用（PowerShell 需 $env: 语法）
 - NuGet 源默认使用 `https://api.nuget.org/v3/index.json`
 
 确认环境：

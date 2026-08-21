@@ -77,7 +77,7 @@ CREATE INDEX idx_events_global ON events(global_position);
 CREATE TABLE idempotency_records (
     operation_name    TEXT    NOT NULL,
     idempotency_key   TEXT    NOT NULL,
-    status            INTEGER NOT NULL DEFAULT 0,  -- 0:Started 1:Completed 2:Failed
+    status            INTEGER NOT NULL DEFAULT 0,  -- 0:Processing 1:Completed 2:Failed
     locked_until      TIMESTAMPTZ NOT NULL,
     expires_at        TIMESTAMPTZ NOT NULL,
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),

@@ -27,7 +27,8 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SRC_DIR="$ROOT_DIR/src"
 
 # 解析参数
-MODE="${1:-full}"  # full / --quick / --build
+MODE="${1:-full}"
+case "$MODE" in full|quick|build) ;; *) echo "WARN: unknown MODE: $MODE";; esac  # full / --quick / --build
 
 # 颜色
 RED='\033[0;31m'

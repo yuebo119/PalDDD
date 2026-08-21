@@ -37,7 +37,7 @@ using PalDDD.Core;
 
 namespace YourDomain;
 
-// 数值类型值对象 — 继承 ValueObject<T>
+// 数值类型值对象 — 实现 IValueObject (三十七轮对齐)
 public readonly record struct Money : IValueObject
 {
     public decimal Amount { get; }
