@@ -6,9 +6,8 @@
 # 输出：TestResults/coverage.cobertura.xml（Cobertura 格式）
 #       TestResults/coverage-report/（HTML 报告）
 #
-# 💡 覆盖率阈值：
-#   · Line >= 80%
-#   · Branch >= 70%
+# 💡 覆盖率：本脚本仅生成报告，不强制阈值（P3-DOC-009 勘正——历史注释声称的
+#   Line/Branch 阈值从未实现；如需门禁请在 CI 步骤中自行解析 cobertura XML）
 # ─────────────────────────────────────────────────────────────
 set -e
 

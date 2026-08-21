@@ -303,7 +303,7 @@ public sealed class OrderingProcessManager : Saga<OrderingState> { ... }
 
 ### 3. Lease-Lock Concurrent Outbox: Multi-Instance Without Duplicate Delivery
 
-The Outbox uses database row-level lease locks (`LockedBy` + `LockedUntil`) to enable concurrent publishing across multiple instances — no distributed lock required, with zero message loss and zero duplication.
+The Outbox uses database row-level lease locks to enable concurrent publishing across multiple instances — the `(LockedBy, LockedUntil)` pair acts as a fencing token (`LockedUntil` changes monotonically with each lease, no DDL column needed); once a lease expires, the stale worker's UPDATE is rejected on token mismatch. Zero message loss, zero duplication, no distributed lock required.
 
 ```csharp
 // Registration: Outbox + background processor auto-polling
@@ -587,15 +587,15 @@ services.AddPalOutbox();  // A capability MediatR lacks
 | Component | Implementation Strategy |
 |------|---------|
 | Dispatcher | FrozenDictionary routing table, `IHandler.HandleAsync` DIM bridging, zero MakeGenericType |
-| PipelineBehavior | Open generic registration, built-in ValidationBehavior + LoggingBehavior |
+| PipelineBehavior | Open generic + closed generic dual registration (closed `AddPalPipelineBehaviors<TRequest, TResponse>()` keeps value-type pipelines Native AOT safe), built-in ValidationBehavior + LoggingBehavior |
 | Handler Registration | `AddPalCommandHandler<T>` compile-time type constants, no assembly scanning |
 
 ### Messaging Infrastructure
 | Component | Core Mechanism |
 |------|---------|
-| **Outbox** | Atomic message row write within the DB transaction, lease lock (LockedBy + LockedUntil) for multi-instance concurrent publishing, exponential backoff retry, dead-letter queue + operation re-injection |
+| **Outbox** | Atomic message row write within the DB transaction, lease lock + token fencing ((LockedBy, LockedUntil) full-match rejects stale workers; LockedUntil monotonic, no DDL) for multi-instance concurrent publishing, exponential backoff retry, dead-letter queue + operation re-injection |
 | **Inbox** | `(ConsumerName, MessageId)` composite unique constraint, four-state lifecycle (Pending → Processing → Processed/Failed), zombie record timeout reclaim |
-| **Saga** | Explicit state/event transition registration → FrozenDictionary lookup, configurable retry+backoff, Backward/Forward/None compensation strategies, timeout detection background service, manual approval interrupt+resume |
+| **Saga** | Explicit state/event transition registration → FrozenDictionary lookup, configurable retry+backoff, Backward/Forward/None compensation strategies, timeout detection background service (including AwaitingHumanDecision interrupted-state fallback scanning), manual approval interrupt+resume |
 | **EventLog** | Named streams + optimistic concurrency (ExpectedStreamVersion), global monotonically increasing position, `RehydrateFromBytes` zero-copy read path |
 | **Projection** | `IProjectionCheckpointStore` checkpoint persistence, `EventLogReplaySource<T>` full replay, independent of the storage adapter |
 
@@ -610,7 +610,7 @@ services.AddPalOutbox();  // A capability MediatR lacks
 | Dialect | Unique Capabilities |
 |------|---------|
 | PostgreSQL | COPY bulk write, Pipeline single-round-trip batching, LISTEN/NOTIFY event push, consistent-hashing sharding, JSONB operators, soft delete, audit log |
-| MySQL | Multi-host failover (FailOver/RoundRobin/LeastConnections), InnoDB session tuning (lock timeout, isolation level, SQL mode) |
+| MySQL | Multi-host failover (FailOver/RoundRobin/LeastConnections), InnoDB session tuning (lock timeout, isolation level, SQL mode), connection-pool session survival guidance (ConnectionReset=false) |
 | SQLite | WAL mode + PRAGMA optimization (three-tier tuning), FTS5 full-text search, JSON1 functions |
 
 ---
@@ -747,7 +747,7 @@ This repository embeds a `.ai/` directory (separate git repository) containing a
 | Defense | Purpose |
 |---------|---------|
 | `gate-check.sh` (PDDD-G1..G22) | Architecture integrity gate (strict mode) |
-| `verify-ai-system.sh` (V1-V20) | System self-check (ledger/repair gate/sensor expiry/intake template) |
+| `verify-ai-system.sh` (V1-V21) | System self-check (ledger/repair gate/sensor expiry/intake template/P3 aging) |
 | `encoding-gate.sh` (E1-E4) | Encoding consistency (CRLF/BOM/mojibake/verified LF) |
 | `sibling-map.sh` | Sibling family enumeration (16 families transitive closure) — fix-round linkage |
 | `flaky-gate.sh` | Rerun-based flaky detection (env isolation + skipped classification) |

@@ -303,7 +303,7 @@ public sealed class OrderingProcessManager : Saga<OrderingState> { ... }
 
 ### 3. 租约锁并发 Outbox：多实例无重复投递
 
-Outbox 用数据库行级租约锁（`LockedBy` + `LockedUntil`）实现多实例并发发布——无需分布式锁，消息零丢失零重复。
+Outbox 用数据库行级租约锁实现多实例并发发布——`(LockedBy, LockedUntil)` 对充当 fencing token（`LockedUntil` 随每次租约单调变化，免 DDL 加列），旧 worker 租约失效后其 UPDATE 因 token 不匹配被拒绝，消息零丢失零重复，无需分布式锁。
 
 ```csharp
 // 注册：Outbox + 后台处理器自动轮询
@@ -587,15 +587,15 @@ services.AddPalOutbox();  // MediatR 没有的能力
 | 组件 | 实现策略 |
 |------|---------|
 | Dispatcher | FrozenDictionary 路由表，`IHandler.HandleAsync` DIM 桥接，零 MakeGenericType |
-| PipelineBehavior | 开放泛型注册，内建 ValidationBehavior + LoggingBehavior |
+| PipelineBehavior | 开放泛型 + 闭合泛型双注册（闭合版 `AddPalPipelineBehaviors<TRequest, TResponse>()` 保障 Native AOT 值类型管道），内建 ValidationBehavior + LoggingBehavior |
 | Handler 注册 | `AddPalCommandHandler<T>` 编译时类型常量，无装配扫描 |
 
 ### 消息基础设施
 | 组件 | 核心机制 |
 |------|---------|
-| **Outbox** | 数据库事务内原子写入消息行，租约锁（LockedBy + LockedUntil）多实例并发发布，指数退避重试，死信队列 + 操作重注入 |
+| **Outbox** | 数据库事务内原子写入消息行，租约锁 + token fencing（(LockedBy, LockedUntil) 完整匹配拒绝旧 worker，LockedUntil 单调变化免 DDL）多实例并发发布，指数退避重试，死信队列 + 操作重注入 |
 | **Inbox** | `(ConsumerName, MessageId)` 复合唯一约束，四态生命周期（Pending → Processing → Processed/Failed），僵尸记录超时回收 |
-| **Saga** | 显式状态/事件转换注册 → FrozenDictionary 查找，可配置重试+退避，Backward/Forward/None 三种补偿策略，超时检测后台服务，人工审批中断+恢复 |
+| **Saga** | 显式状态/事件转换注册 → FrozenDictionary 查找，可配置重试+退避，Backward/Forward/None 三种补偿策略，超时检测后台服务（含 AwaitingHumanDecision 中断态兜底扫描），人工审批中断+恢复 |
 | **EventLog** | 命名流 + 乐观并发（ExpectedStreamVersion），全局单调递增位置，`RehydrateFromBytes` 零拷贝读取路径 |
 | **Projection** | `IProjectionCheckpointStore` 断点存储，`EventLogReplaySource<T>` 全量重放，独立于存储适配器 |
 
@@ -610,7 +610,7 @@ services.AddPalOutbox();  // MediatR 没有的能力
 | 方言 | 特有能力 |
 |------|---------|
 | PostgreSQL | COPY 批量写入、Pipeline 单往返批处理、LISTEN/NOTIFY 事件推送、一致性哈希分片、JSONB 操作符、软删除、审计日志 |
-| MySQL | 多主机故障转移（FailOver/RoundRobin/LeastConnections）、InnoDB 会话调优（锁超时、隔离级别、SQL 模式） |
+| MySQL | 多主机故障转移（FailOver/RoundRobin/LeastConnections）、InnoDB 会话调优（锁超时、隔离级别、SQL 模式）、连接池会话保活取舍（ConnectionReset=false） |
 | SQLite | WAL 模式 + PRAGMA 优化（三级调优）、FTS5 全文搜索、JSON1 函数 |
 
 ---
@@ -753,7 +753,7 @@ Pal.DDD 当前版本 v1.1.0（tag v1.1.0 已推送；三十七轮全仓清偿后
 | 防线 | 作用 |
 |------|------|
 | `gate-check.sh`（PDDD-G1..G22） | 架构完整性门禁（严格模式） |
-| `verify-ai-system.sh`（V1-V20） | 系统自检（账本校验/修复门/台账超期/进件模板） |
+| `verify-ai-system.sh`（V1-V21） | 系统自检（账本校验/修复门/台账超期/进件模板/P3 老化） |
 | `encoding-gate.sh`（E1-E4） | 编码一致性（CRLF/BOM/mojibake/verified LF） |
 | `sibling-map.sh` | 姊妹族枚举（16 族传递闭包）——修复轮联动防线 |
 | `flaky-gate.sh` | 重跑式 flaky 检测（环境隔离 + skipped 分类） |
