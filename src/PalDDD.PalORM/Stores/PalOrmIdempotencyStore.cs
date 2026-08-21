@@ -106,8 +106,11 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         // （对齐 EFCore 版 TryReuseRecordAsync 复用语义），否则该 key 在 GC 清理前永久被拒。
         if (existing is null)
         {
+            // 三十七轮 P2-5：过期回收补 status 守卫——原 WHERE 只有 expires_at <= now，
+            // 并发场景下 Completed 终态可能被过期回收覆盖。补 status <> Completed 确保只回收
+            // Processing 态过期记录（对齐 :130 行 MarkFailed 的乐观锁模式）。
             affected = await Session.ExecuteAsync(
-                $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL WHERE operation_name = {operationName} AND idempotency_key = {key} AND expires_at <= {now}",
+                $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL WHERE operation_name = {operationName} AND idempotency_key = {key} AND expires_at <= {now} AND status <> {(int)IdempotencyRecordStatus.Completed}",
                 ct).ConfigureAwait(false);
             if (affected == 0) return null;
 

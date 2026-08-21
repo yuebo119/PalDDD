@@ -9,7 +9,8 @@ cd "$ROOT"
 
 echo "═══════ 1/3 IDE 风格 ═══════"
 # ITM-233 修复：dotnet format 退出码必须传播——此前 grep -c || true 把 format 失败吞掉
-FORMAT_OUTPUT=$(dotnet format style --verify-no-changes PalDDD.slnx 2>&1)
+FORMAT_OUTPUT=$(dotnet format 2>&1) || FORMAT_EXIT=$?
+FORMAT_EXIT=${FORMAT_EXIT:-0} style --verify-no-changes PalDDD.slnx 2>&1)
 FORMAT_EXIT=$?
 IDE_COUNT=$(printf '%s\n' "$FORMAT_OUTPUT" | grep -c "error\|warning" || true)
 echo "  IDE 建议: $IDE_COUNT 项"
