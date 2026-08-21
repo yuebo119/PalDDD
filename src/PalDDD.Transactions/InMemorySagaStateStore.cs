@@ -28,8 +28,10 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
 
         lock (_lock)
         {
+            // 三十七轮 A3：对齐 LeaseActiveSagasAsync（:60）与 EFCore 姊妹（SagaStateDbContext）——
+            // 观测查询与 Lease 同步纳入 AwaitingHumanDecision（HITL 中断态超时兜底扫描依赖此查询）
             var active = _states.Values
-                .Where(static s => s.Status == SagaStatus.Active)
+                .Where(static s => s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision)
                 .OrderBy(s => s.CreatedAt)
                 .Take(batchSize)
                 .ToList();

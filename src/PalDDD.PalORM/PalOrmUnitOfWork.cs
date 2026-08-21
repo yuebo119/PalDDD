@@ -102,7 +102,9 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
         {
             try { await _transaction.RollbackAsync().ConfigureAwait(false); }
             catch (Exception ex) when (ex is InvalidOperationException or System.Data.Common.DbException) { /* 事务已提交/回滚 */ }
-            await _transaction.DisposeAsync().ConfigureAwait(false);
+            // 三十七轮 A4：对齐 CommitAsync/RollbackAsync 的 DisposeAsync 幂等 catch——三处同类两处有防护的不对称
+            try { await _transaction.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception ex) when (ex is InvalidOperationException or System.Data.Common.DbException) { /* 已释放/连接断 */ }
             _transaction = null;
             _session.UseTransaction(null);
         }
