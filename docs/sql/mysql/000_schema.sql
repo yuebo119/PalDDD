@@ -16,7 +16,7 @@ CREATE TABLE outbox_messages (
     correlation_id  CHAR(26),  -- 审计：关联 Ulid（26 字符）
     causation_id    CHAR(26),  -- 审计：因果 Ulid（26 字符）
     trace_parent    VARCHAR(255),
-    trace_state     VARCHAR(255),
+    trace_state     VARCHAR(512),  -- 三十七轮 C2：对齐 EFCore MaxLength(512)
     INDEX idx_outbox_status (status, next_attempt_at, locked_until),
     INDEX idx_outbox_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -54,7 +54,7 @@ CREATE TABLE events (
     global_position BIGINT AUTO_INCREMENT PRIMARY KEY,
     event_id        VARCHAR(255) NOT NULL,
     event_name      VARCHAR(255) NOT NULL,
-    stream_name     VARCHAR(255) NOT NULL,
+    stream_name     VARCHAR(512) NOT NULL,  -- 三十七轮 C2：对齐 EFCore MaxLength(512)
     stream_version  BIGINT NOT NULL,
     schema_version  INT NOT NULL DEFAULT 1,
     content_type    VARCHAR(255) NOT NULL DEFAULT 'application/json',
@@ -62,11 +62,11 @@ CREATE TABLE events (
     metadata        MEDIUMBLOB,
     recorded_at     DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     actor_id        VARCHAR(255),
-    reason          VARCHAR(255),
+    reason          VARCHAR(2048),  -- 三十七轮 C2：对齐 EFCore MaxLength(2048)
     correlation_id  CHAR(26),   -- 审计：关联 Ulid（26 字符）
     causation_id    CHAR(26),   -- 审计：因果 Ulid（26 字符）
     trace_parent    VARCHAR(255),
-    trace_state     VARCHAR(255),
+    trace_state     VARCHAR(512),  -- 三十七轮 C2：对齐 EFCore MaxLength(512)
     UNIQUE INDEX idx_events_event_id (event_id),
     UNIQUE INDEX idx_events_stream (stream_name, stream_version),
     INDEX idx_events_global (global_position)

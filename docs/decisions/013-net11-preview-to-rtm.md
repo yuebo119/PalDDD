@@ -22,7 +22,7 @@ Preview API 可能在 RTM 前发生破坏性变更，需有迁移预案。
 
 ## 迁移策略
 
-1. **时间线**：参考 .NET 官方发布节奏，.NET 11 预计 2025 年 11 月 GA。RTM 发布后 1 周内完成升级。
+1. **时间线**：参考 .NET 官方发布节奏，.NET 11 预计 2026 年 11 月 GA（三十七轮勘正）。RTM 发布后 1 周内完成升级。
 2. **升级步骤**：
    - 更新 `global.json`：`allowPrerelease:false`，SDK 版本升至 RTM
    - 更新 `Directory.Packages.props`：BenchmarkDotNet 升至支持 .NET 11 RTM 的版本（触发 ITM-041 执行）
