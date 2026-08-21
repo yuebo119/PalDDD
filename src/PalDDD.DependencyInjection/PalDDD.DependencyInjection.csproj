@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.DependencyInjection</RootNamespace>
+    <!-- IL3058: ZLogger 传递分析器警告 -->
     <NoWarn>$(NoWarn);CA1812;IL3058</NoWarn>
   </PropertyGroup>
 

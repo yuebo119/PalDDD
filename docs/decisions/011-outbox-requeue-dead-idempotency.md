@@ -20,7 +20,7 @@
 ### 方法签名
 
 ```csharp
-ValueTask<int> RequeueDeadAsync(Guid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct);
+ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct);
 ```
 
 ### 语义约束

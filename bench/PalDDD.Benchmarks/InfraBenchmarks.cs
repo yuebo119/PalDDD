@@ -202,13 +202,25 @@ public class SqlGenBenchmarks
     public string Sqlite_FtsCreateIndex()
         => SqliteFts.CreateOutboxIndex("outbox_messages");
 
+    // 三十七轮 P2-6 修复：构造外置——ConsistentHash 构造含 2048 vnode + Array.Sort，
+    // 原基准把构造成本计入 GetShardId 测量（对齐 ITM-152/153 构造外置先例）
+    private ConsistentHashSharding? _consistentHash;
+    private ModShardingStrategy? _modStrategy;
+
+    [IterationSetup]
+    public void SetupSharding()
+    {
+        _consistentHash ??= new ConsistentHashSharding(8);
+        _modStrategy ??= new ModShardingStrategy(8);
+    }
+
     [Benchmark]
     public int Sharding_ModStrategy()
-        => new ModShardingStrategy(8).GetShardId(Guid.NewGuid());
+        => (_modStrategy ?? new ModShardingStrategy(8)).GetShardId(Guid.NewGuid());
 
     [Benchmark]
     public int Sharding_ConsistentHash()
-        => new ConsistentHashSharding(8).GetShardId(Guid.NewGuid());
+        => (_consistentHash ?? new ConsistentHashSharding(8)).GetShardId(Guid.NewGuid());
 }
 
 // ═══════════════════════════════════════════════════════════

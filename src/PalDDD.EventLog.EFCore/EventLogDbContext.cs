@@ -25,7 +25,7 @@ public abstract class EventLogDbContext(
     EventLogPositionReserver? positionReserver = null) : DbContext(options), IEventLog
 {
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
-    private readonly EventLogPositionReserver _positionReserver = positionReserver ?? new EventLogPositionReserver();
+    private readonly EventLogPositionReserver _positionReserver = positionReserver ?? new EventLogPositionReserver();  // P2-4: Scoped 下 Hi/Lo 缓存不可达，生产推荐 Singleton
 
     /// <summary>持久化事件日志表。</summary>
     public DbSet<StoredEvent> Events => Set<StoredEvent>();
