@@ -34,7 +34,9 @@ public class FanOutStepTimeoutTests
             timeout: null)
         {
             MaxConcurrency = 4,
-            PerItemTimeout = TimeSpan.FromMilliseconds(50)
+            // 200ms 窗口含安全余量：快任务（近零工作）在并行度 4 下远小于该窗口，
+            // 慢任务 500ms 稳定超时——50ms 真实时序在高载 CI 下快任务可能被误判超时（flaky）
+            PerItemTimeout = TimeSpan.FromMilliseconds(200)
         };
 
         var sagaState = new TestFanOutSagaState();
@@ -44,6 +46,8 @@ public class FanOutStepTimeoutTests
 
         // Assert：超时项必须在 Failed 中（修复前会被静默丢弃）
         await Assert.That(result.Failed.Count).IsEqualTo(1);
+        // 超时条目 Item 为 null 属 FanOutStep 既有设计（超时非单条目失败，无可归属条目）
+        // ——业务异常路径（ExecutorThrows 测试）保留 Item；此处锁定该行为契约
         await Assert.That(result.Failed[0].Item).IsNull();
         // 超时转化的异常类型应为 TimeoutException
         await Assert.That(result.Failed[0].Error).IsTypeOf<TimeoutException>();

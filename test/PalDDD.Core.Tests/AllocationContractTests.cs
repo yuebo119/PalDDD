@@ -1,5 +1,3 @@
-using System.Collections.Frozen;
-
 namespace PalDDD.Core.Tests;
 
 // ═══════════════════════════════════════════════════════════════
@@ -13,7 +11,8 @@ namespace PalDDD.Core.Tests;
 // 5. RowVersion.Next — 零堆分配
 // 6. PalValidationResult.Success — 空 ImmutableArray 零分配
 // 7. Entity.Equals — 非瞬时实体比较零分配
-// 8. SmartEnum FromValue — FrozenDictionary 查找零分配
+// （TST-111：原第 8 项 FrozenDictionary 查找零分配测的是 BCL 行为，
+// 与产品路径零关联——已删；SmartEnum FrozenDictionary 零反射由 AotContractTests 承载）
 // ═══════════════════════════════════════════════════════════════
 
 public sealed class AllocationContractTests
@@ -49,6 +48,8 @@ public sealed class AllocationContractTests
 
         // 允许事件对象 + 实体分配，但不允许链表容器分配
         // 实体(~32B) + 事件(~88B: Guid+DateTimeOffset+Next+派生属性) ≈ 120B/迭代
+        // 预算语义（刻意）：上界含安全余量（预估 120B/预算 130B 形态）——只拦截大幅回归
+        // （如误引入 List 扩容或装箱），精确预算由 benchmark（bench/）承载，不在此收紧
         var expectedMax = 130 * Iterations;
         await Assert.That(allocPerIteration <= expectedMax).IsTrue();
     }
@@ -166,25 +167,6 @@ public sealed class AllocationContractTests
         });
 
         // Equals 不创建新对象 — 仅比较 GetType() + EqualityComparer<Guid>.Default.Equals
-        await Assert.That(alloc <= 100).IsTrue();
-    }
-
-    [Test]
-    public async Task FrozenDictionary_Lookup_ZeroAllocation()
-    {
-        // FrozenDictionary 查找命中路径零分配
-        var dict = new Dictionary<int, string>
-        {
-            [1] = "one",
-            [2] = "two",
-            [3] = "three",
-        }.ToFrozenDictionary();
-
-        var alloc = MeasureAllocation(() =>
-        {
-            _ = dict.TryGetValue(2, out _);
-        });
-
         await Assert.That(alloc <= 100).IsTrue();
     }
 }

@@ -16,9 +16,14 @@ internal sealed class TestSagaState : SagaState
 
 internal sealed class TestSaga : Saga<TestSagaState>
 {
-    public TestSaga(CompensationPolicy compensationPolicy = CompensationPolicy.Backward)
+    private readonly List<string>? _compensationLog;
+
+    public TestSaga(
+        CompensationPolicy compensationPolicy = CompensationPolicy.Backward,
+        List<string>? compensationLog = null)
     {
         base.CompensationPolicy = compensationPolicy;
+        _compensationLog = compensationLog;
         MaxRetries = 2;
         RetryDelay = TimeSpan.FromMilliseconds(1);
     }
@@ -41,6 +46,7 @@ internal sealed class TestSaga : Saga<TestSagaState>
             },
             compensate: (s, ct) =>
             {
+                _compensationLog?.Add($"{stepName}-compensated");
                 s.CurrentState = $"{stepName}-compensated";
                 return ValueTask.CompletedTask;
             }));
@@ -57,6 +63,7 @@ internal sealed class TestSaga : Saga<TestSagaState>
             },
             compensate: (s, ct) =>
             {
+                _compensationLog?.Add($"{stepName}-compensated");
                 s.CurrentState = $"{stepName}-compensated";
                 return ValueTask.CompletedTask;
             }));
@@ -257,7 +264,7 @@ public class SagaRetryAndCompensationTests
 
         // 补偿按 Backward 策略：当前失败步骤 + 已执行步骤逆序
         // FailingStep→FailingStep-compensated, Step1→Step1-compensated
-        await Assert.That(state.CurrentState).Contains("compensated");
+        await Assert.That(state.CurrentState).IsEqualTo("Step1-compensated");
     }
 
     [Test]
@@ -324,7 +331,8 @@ public class SagaCompensationPolicyTests
     [Test]
     public async Task BackwardPolicy_CompensatesInReverseOrder()
     {
-        var saga = new TestSaga(CompensationPolicy.Backward);
+        var compensationLog = new List<string>();
+        var saga = new TestSaga(CompensationPolicy.Backward, compensationLog);
         saga.PublicWhen("A", "B");
         saga.PublicWhen("B", "Fail", shouldFail: true);
 
@@ -334,13 +342,18 @@ public class SagaCompensationPolicyTests
         await Assert.That(async () =>
             await saga.ProcessEventAsync(state, new object())).Throws<AggregateException>();
 
-        await Assert.That(state.CurrentState).Contains("compensated");
+        // Backward 策略：失败步骤先补偿，已执行步骤后补偿（逆序）
+        await Assert.That(compensationLog).Count().IsEqualTo(2);
+        await Assert.That(compensationLog[0]).IsEqualTo("Fail-compensated");
+        await Assert.That(compensationLog[1]).IsEqualTo("B-compensated");
+        await Assert.That(state.CurrentState).IsEqualTo("B-compensated");
     }
 
     [Test]
     public async Task ForwardPolicy_CompensatesInForwardOrder()
     {
-        var saga = new TestSaga(CompensationPolicy.Forward);
+        var compensationLog = new List<string>();
+        var saga = new TestSaga(CompensationPolicy.Forward, compensationLog);
         saga.PublicWhen("A", "B");
         saga.PublicWhen("B", "Fail", shouldFail: true);
 
@@ -350,7 +363,11 @@ public class SagaCompensationPolicyTests
         await Assert.That(async () =>
             await saga.ProcessEventAsync(state, new object())).Throws<AggregateException>();
 
-        await Assert.That(state.CurrentState).Contains("compensated");
+        // Forward 策略：已执行步骤先补偿，失败步骤后补偿（正序）
+        await Assert.That(compensationLog).Count().IsEqualTo(2);
+        await Assert.That(compensationLog[0]).IsEqualTo("B-compensated");
+        await Assert.That(compensationLog[1]).IsEqualTo("Fail-compensated");
+        await Assert.That(state.CurrentState).IsEqualTo("Fail-compensated");
     }
 
     [Test]
@@ -502,7 +519,9 @@ public class SagaCompensationExceptionCollectionTests
     /// 补偿第一个步骤失败时不中断第二个步骤的补偿，所有异常收集后抛 AggregateException。
     /// 同时验证 SagaCompensationFailed 指标计数。
     /// </summary>
+    // 指标断言依赖进程级 Meter 广播——串行运行以独占测量流，精确计数不被并行测试污染
     [Test]
+    [NotInParallel]
     public async Task CompensationFailure_DoesNotBlockSubsequentCompensation()
     {
         using var listener = new RecordingMeterListener("paldd.saga.compensation_failed");
@@ -526,8 +545,8 @@ public class SagaCompensationExceptionCollectionTests
         await Assert.That(ex!.Message).Contains("Step1 compensation failed");
         await Assert.That(ex.InnerExceptions).Count().IsEqualTo(1);
 
-        // 验证 SagaCompensationFailed 指标计数（Step1 补偿失败 → 1）
-        await Assert.That(listener.Measurements).Contains(1);
+        // 验证 SagaCompensationFailed 指标恰好计数一次（Step1 补偿失败）
+        await Assert.That(listener.Measurements).Count().IsEqualTo(1);
     }
 
     /// <summary>

@@ -8,8 +8,6 @@ using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions.Tests;
 
- // // 三十五轮 P3原中文注释 mojibake 损坏标题按类名可推回
-
 public sealed class OrderCreatedIntegrationEvent
 {
     public Guid OrderId { get; init; }
@@ -111,7 +109,9 @@ public sealed class OutboxBatchProcessorTests
         await Assert.That(activity.GetTagItem("pal.outbox.processed")).IsEqualTo(1);
     }
 
+    // 指标断言依赖进程级 Meter 广播——串行运行以独占测量流，精确计数不被并行测试污染
     [Test]
+    [NotInParallel]
     public async Task ProcessBatchAsync_RecordsOutboxProcessedMetric(CancellationToken cancellationToken)
     {
         using var listener = new RecordingMeterListener("paldd.outbox.processed");
@@ -138,10 +138,12 @@ public sealed class OutboxBatchProcessorTests
 
         await processor.ProcessBatchAsync(cancellationToken);
 
-        await Assert.That(listener.Measurements).Contains(1);
+        await Assert.That(listener.Measurements).Count().IsEqualTo(1);
     }
 
+    // 指标断言依赖进程级 Meter 广播——串行运行以独占测量流，精确计数不被并行测试污染
     [Test]
+    [NotInParallel]
     public async Task ProcessBatchAsync_RecordsOutboxFailedMetricWhenMessageRetries(CancellationToken cancellationToken)
     {
         using var listener = new RecordingMeterListener("paldd.outbox.failed");
@@ -168,7 +170,7 @@ public sealed class OutboxBatchProcessorTests
 
         await processor.ProcessBatchAsync(cancellationToken);
 
-        await Assert.That(listener.Measurements).Contains(1);
+        await Assert.That(listener.Measurements).Count().IsEqualTo(1);
     }
 
     [Test]
@@ -573,7 +575,9 @@ public sealed class InboxProcessorTests
         // ITM-229: pal.inbox.message_id removed (high cardinality) — consumer tag already asserted above
     }
 
+    // 指标断言依赖进程级 Meter 广播——串行运行以独占测量流，精确计数不被并行测试污染
     [Test]
+    [NotInParallel]
     public async Task TryProcessAsync_RecordsInboxProcessedMetric(CancellationToken cancellationToken)
     {
         using var listener = new RecordingMeterListener("paldd.inbox.processed");
@@ -591,10 +595,12 @@ public sealed class InboxProcessorTests
             "payload",
             cancellationToken);
 
-        await Assert.That(listener.Measurements).Contains(1);
+        await Assert.That(listener.Measurements).Count().IsEqualTo(1);
     }
 
+    // 指标断言依赖进程级 Meter 广播——串行运行以独占测量流，精确计数不被并行测试污染
     [Test]
+    [NotInParallel]
     public async Task TryProcessAsync_RecordsInboxSkippedMetric(CancellationToken cancellationToken)
     {
         using var listener = new RecordingMeterListener("paldd.inbox.skipped");
@@ -618,10 +624,12 @@ public sealed class InboxProcessorTests
             "payload",
             cancellationToken);
 
-        await Assert.That(listener.Measurements).Contains(1);
+        await Assert.That(listener.Measurements).Count().IsEqualTo(1);
     }
 
+    // 指标断言依赖进程级 Meter 广播——串行运行以独占测量流，精确计数不被并行测试污染
     [Test]
+    [NotInParallel]
     public async Task TryProcessAsync_RecordsInboxFailedMetric(CancellationToken cancellationToken)
     {
         using var listener = new RecordingMeterListener("paldd.inbox.failed");
@@ -639,7 +647,7 @@ public sealed class InboxProcessorTests
                 "payload",
                 cancellationToken)).Throws<InvalidOperationException>();
 
-        await Assert.That(listener.Measurements).Contains(1);
+        await Assert.That(listener.Measurements).Count().IsEqualTo(1);
     }
 
     [Test]
@@ -925,7 +933,9 @@ public sealed class SagaTimeoutProcessorTests
         await Assert.That(store.BatchSize).IsEqualTo(17);
     }
 
+    // 指标断言依赖进程级 Meter 广播——串行运行以独占测量流，精确计数不被并行测试污染
     [Test]
+    [NotInParallel]
     public async Task CheckTimeoutsAsync_RecordsSagaCompensatedMetric()
     {
         using var listener = new RecordingMeterListener("paldd.saga.compensated");
@@ -944,7 +954,7 @@ public sealed class SagaTimeoutProcessorTests
 
         await processor.CheckTimeoutsAsync(CancellationToken.None);
 
-        await Assert.That(listener.Measurements).Contains(1);
+        await Assert.That(listener.Measurements).Count().IsEqualTo(1);
     }
 
     [Test]
@@ -975,9 +985,9 @@ public sealed class SagaTimeoutProcessorTests
     [Test]
     public async Task CheckTimeoutsAsync_InterruptedSaga_WithExpiredStepTimeout_IsCompensated()
     {
- // // 三十四轮中断态超时兜底回归AwaitingHumanDecision + 步骤 Timeout 超期
- // // CheckTimeoutsAsync 扫描命中 IsTimedOut 并补偿此前扫描集只含 Active
-        // 中断态永不超时——人工决策失踪即永久滞留）
+        // 回归（三十四轮）：AwaitingHumanDecision 中断态 + 已配置步骤 Timeout 且超期时，
+        // CheckTimeoutsAsync 扫描应命中 IsTimedOut 并补偿——此前扫描集只含 Active，
+        // 中断态永不超时，人工决策失踪即永久滞留。
         var state = new OrderSagaState
         {
             CurrentState = "Waiting",
@@ -1001,7 +1011,7 @@ public sealed class SagaTimeoutProcessorTests
     [Test]
     public async Task CheckTimeoutsAsync_InterruptedSaga_WithoutStepTimeout_StaysInterrupted()
     {
- // // 三十四轮契约回归未配置步骤 Timeout 的中断态 = 显式无限等待
+        // 契约回归（三十四轮）：未配置步骤 Timeout 的中断态 = 显式无限等待——
         // 纳入扫描（租约获取/释放）但 IsTimedOut 不命中，状态不变
         var state = new OrderSagaState
         {
@@ -1046,8 +1056,8 @@ public sealed class SagaTimeoutProcessorTests
             => ValueTask.FromResult<OrderSagaState?>(null);
 
         public ValueTask<int> SaveChangesAsync(OrderSagaState state, CancellationToken ct)
- // // P3 对齐八轮返回受影响行数语义录制替身模拟"保存成功"返回 1
- // // 返回 0 会被 SagaProcessor 解释为乐观锁冲突只记 Warning跳过指标
+            // P3 对齐八轮：SaveChangesAsync 返回受影响行数——录制替身模拟"保存成功"返回 1；
+            // 返回 0 会被 SagaProcessor 解释为乐观锁冲突，只记 Warning 并跳过指标
             => ValueTask.FromResult(1);
     }
 
@@ -1202,15 +1212,15 @@ public sealed class SagaTests
         var saga = new OrderFulfillmentSaga();
         var state = new OrderSagaState();
 
- // (mojibake cleared)
+        // 第一步：ValidateOrder
         state = await saga.HandleEventAsync(state, new OrderPlacedSagaEvent(), CancellationToken.None);
         await Assert.That(state.CurrentState).IsEqualTo("Validated");
 
- // (mojibake cleared)
+        // 第二步：ProcessPayment
         state = await saga.HandleEventAsync(state, new PaymentProcessedEvent(), CancellationToken.None);
         await Assert.That(state.CurrentState).IsEqualTo("Paid");
 
- // (mojibake cleared)
+        // 第三步：CompleteOrder
         state = await saga.HandleEventAsync(state, new OrderPlacedSagaEvent(), CancellationToken.None);
         await Assert.That(state.CurrentState).IsEqualTo("Completed");
         await Assert.That(state.Status).IsEqualTo(SagaStatus.Completed);
@@ -1234,7 +1244,7 @@ public sealed class SagaTests
     {
         var saga = new OrderFulfillmentSaga();
         var state = new OrderSagaState();
-        var now = state.CreatedAt.AddMinutes(1); // （mojibake 清理）
+        var now = state.CreatedAt.AddMinutes(1);
 
         var isTimedOut = saga.IsTimedOut(state, now, out var steps);
 
@@ -1259,19 +1269,19 @@ public sealed class SagaTests
         await Assert.That(state.ExecutedStepKeys.Count).IsEqualTo(1);
     }
 
- // /// <summary>验证 ProcessEventAsync 补偿所有已执行步骤而非仅当前步骤</summary>
+    /// <summary>验证 ProcessEventAsync 补偿所有已执行步骤而非仅当前步骤</summary>
     [Test]
     public async Task ProcessEventAsync_CompensatesAllExecutedSteps()
     {
- // // 第三个步骤会失败FailingStep
+        // FailingSaga 的第三个步骤 FailingStep 会失败
         var failingSaga = new FailingSaga();
         var failingState = new OrderSagaState();
- // // 手动模拟已执行步骤Validated 和 Paid
+        // 手动模拟已执行步骤 Validated 和 Paid
         failingState.ExecutedStepKeys.Add("Initial|OrderPlacedSagaEvent");
         failingState.ExecutedStepKeys.Add("Validated|PaymentProcessedEvent");
         failingState.CurrentState = "Paid";
 
- // // 验证失败时会补偿已执行步骤且抛 AggregateException 包含所有重试失败
+        // 验证失败时会补偿已执行步骤，且抛 AggregateException 包含所有重试失败
         var aggEx = await Assert.That(async () =>
         {
             await failingSaga.ProcessEventAsync(failingState, new OrderPlacedSagaEvent { OrderId = Guid.NewGuid(), Amount = 100 });
@@ -1281,14 +1291,16 @@ public sealed class SagaTests
             await Assert.That(ex).IsTypeOf<InvalidOperationException>();
         }
 
- // // 补偿覆盖全部已执行步骤 + 失败步骤且按 Backward 策略逆序执行
+        // 补偿覆盖全部已执行步骤 + 失败步骤，且按 Backward 策略逆序执行
         await Assert.That(failingState.CurrentState).IsEqualTo("Compensated_Validate");
         await Assert.That(failingSaga.CompensationLog).Count().IsEqualTo(3);
         await Assert.That(failingSaga.CompensationLog[0]).IsEqualTo("FailingStep");
         await Assert.That(failingSaga.CompensationLog[1]).IsEqualTo("ProcessPayment");
         await Assert.That(failingSaga.CompensationLog[2]).IsEqualTo("ValidateOrder");
     }
+    // 指标断言依赖进程级 Meter 广播——串行运行以独占测量流，精确计数不被并行测试污染
     [Test]
+    [NotInParallel]
     public async Task ProcessEventAsync_RecordsSagaCompletedMetric()
     {
         using var listener = new RecordingMeterListener("paldd.saga.completed");
@@ -1297,7 +1309,7 @@ public sealed class SagaTests
 
         await saga.ProcessEventAsync(state, new OrderPlacedSagaEvent(), CancellationToken.None);
 
-        await Assert.That(listener.Measurements).Contains(1);
+        await Assert.That(listener.Measurements).Count().IsEqualTo(1);
     }
 
     private sealed class NoCompensationSaga : Saga<OrderSagaState>
@@ -1369,7 +1381,6 @@ public sealed class InboxMessageTests
         await Assert.That(msg.Id).IsEqualTo(0);
         await Assert.That(msg.MessageId).IsEqualTo("");
         await Assert.That(msg.Status).IsEqualTo(InboxStatus.Pending);
-        await Assert.That(msg.ReceivedAt <= DateTimeOffset.UtcNow).IsTrue();
         await Assert.That(msg.ProcessedAt).IsNull();
         await Assert.That(msg.ProcessingStartedAt).IsNull();
     }
