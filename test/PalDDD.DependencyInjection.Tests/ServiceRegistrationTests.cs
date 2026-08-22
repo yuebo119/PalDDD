@@ -39,9 +39,11 @@ public sealed class ServiceRegistrationTests
         services.AddPalDDD();
         using var provider = services.BuildServiceProvider();
 
-        var broker = provider.GetRequiredService<IMessageBroker>();
-        await Assert.That(broker).IsNotNull();
-        await Assert.That(broker).IsTypeOf<NullMessageBroker>();
+        var b1 = provider.GetRequiredService<IMessageBroker>();
+        var b2 = provider.GetRequiredService<IMessageBroker>();
+
+        await Assert.That(b1).IsTypeOf<NullMessageBroker>();
+        await Assert.That(b2).IsSameReferenceAs(b1);
     }
 
     [Test]
@@ -52,8 +54,9 @@ public sealed class ServiceRegistrationTests
         services.AddPalCoreStack();
 
         using var provider = services.BuildServiceProvider();
-        await Assert.That(provider.GetRequiredService<Dispatcher>()).IsNotNull();
-        await Assert.That(provider.GetRequiredService<IDomainEventDispatcher>()).IsNotNull();
+        // GetRequiredService 失败即抛（恒真断言已删）——resolve 本身即注册冒烟验证
+        _ = provider.GetRequiredService<Dispatcher>();
+        _ = provider.GetRequiredService<IDomainEventDispatcher>();
 
         var pipelineDescriptors = services
             .Where(sd => sd.ServiceType.IsGenericType
@@ -70,7 +73,7 @@ public sealed class ServiceRegistrationTests
         services.AddPalFullStack();
 
         using var provider = services.BuildServiceProvider();
-        await Assert.That(provider.GetRequiredService<Dispatcher>()).IsNotNull();
+        _ = provider.GetRequiredService<Dispatcher>(); // GetRequiredService 失败即抛（恒真断言已删）
         await Assert.That(provider.GetRequiredService<IMessageBroker>()).IsTypeOf<NullMessageBroker>();
         await Assert.That(provider.GetService<IMessageSerializer>()).IsNull();
     }
@@ -126,8 +129,6 @@ public sealed class ServiceRegistrationTests
         var handler = scope.ServiceProvider.GetRequiredService<TestCommandHandler>();
         var viaInterface = scope.ServiceProvider.GetRequiredService<ICommandHandler<TestCommand, string>>();
 
-        await Assert.That(handler).IsNotNull();
-        await Assert.That(viaInterface).IsNotNull();
         await Assert.That(viaInterface).IsTypeOf<TestCommandHandler>();
 
         // 不同作用域返回不同实例
@@ -149,8 +150,6 @@ public sealed class ServiceRegistrationTests
         var handler = scope.ServiceProvider.GetRequiredService<TestQueryHandler>();
         var viaInterface = scope.ServiceProvider.GetRequiredService<IQueryHandler<TestQuery, int>>();
 
-        await Assert.That(handler).IsNotNull();
-        await Assert.That(viaInterface).IsNotNull();
         await Assert.That(viaInterface).IsTypeOf<TestQueryHandler>();
     }
 
@@ -197,8 +196,7 @@ public sealed class ServiceRegistrationTests
         services.AddPalDDD();
 
         using var provider = services.BuildServiceProvider();
-        var dispatcher = provider.GetRequiredService<Dispatcher>();
-        await Assert.That(dispatcher).IsNotNull();
+        _ = provider.GetRequiredService<Dispatcher>(); // GetRequiredService 失败即抛（恒真断言已删）
     }
 
     private sealed class TestDomainEvent : DomainEvent;

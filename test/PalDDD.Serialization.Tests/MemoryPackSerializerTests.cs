@@ -50,7 +50,6 @@ public sealed class MemoryPackSerializerTests
     public async Task Serialize_NonGeneric_RoundTrips()
     {
         var serializer = CreateSerializer();
-        var catalog = serializer.ContentType; // trigger build
         var descriptor = new MessageDescriptor("test.msg.v1", typeof(MemoryPackTestMessage),
             TestJsonContext.Default.MemoryPackTestMessage, 1,
             contentType: ContentTypes.MemoryPack);

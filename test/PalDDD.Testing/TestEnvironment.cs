@@ -45,10 +45,21 @@ public static class TestEnvironment
     public static string RabbitMqHost =>
         Environment.GetEnvironmentVariable("PALDDD_TEST_RABBIT_HOST") ?? _config.RabbitMq?.Host ?? DefaultRabbitHost;
 
-    /// <summary>RabbitMQ Port。</summary>
-    public static int RabbitMqPort =>
-        int.TryParse(Environment.GetEnvironmentVariable("PALDDD_TEST_RABBIT_PORT"), out var p)
-            ? p : _config.RabbitMq?.Port ?? 5672;
+    /// <summary>RabbitMQ Port（环境变量 PALDDD_TEST_RABBIT_PORT 覆盖）。
+    /// fail-closed（TST-105b）：环境变量存在但不是有效整数时抛异常，不静默回退 5672——
+    /// typo（如 5673u）静默连错端口比显式失败更难排查。</summary>
+    public static int RabbitMqPort
+    {
+        get
+        {
+            var raw = Environment.GetEnvironmentVariable("PALDDD_TEST_RABBIT_PORT");
+            if (raw is null) return _config.RabbitMq?.Port ?? 5672;
+            if (!int.TryParse(raw, out var port))
+                throw new InvalidOperationException(
+                    $"环境变量 PALDDD_TEST_RABBIT_PORT 的值 '{raw}' 不是有效整数端口（fail-closed，不回退默认值 5672）。");
+            return port;
+        }
+    }
 
     /// <summary>RabbitMQ 用户名（环境变量 PALDDD_TEST_RABBIT_USER 覆盖）。</summary>
     public static string RabbitMqUsername =>
