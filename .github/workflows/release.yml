@@ -99,7 +99,7 @@ jobs:
       - name: Verify package count
         run: |
           COUNT=$(ls release-packages/*.nupkg | wc -l)
-          EXPECTED=25
+          EXPECTED=35
           if [ "$COUNT" -ne "$EXPECTED" ]; then
             echo "ERROR: Package count mismatch — expected $EXPECTED, got $COUNT"
             ls release-packages/
