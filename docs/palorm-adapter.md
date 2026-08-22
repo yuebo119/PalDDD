@@ -204,6 +204,8 @@ ALTER TABLE outbox_messages ALTER COLUMN payload TYPE BYTEA USING decode(payload
 - **`[ConcurrencyCheck]` 仅 int/long**：PALORM012，DateTimeOffset 时间戳乐观锁不可用
 - **多映射 `Query<T1, T2>`**：不支持（用 QueryBuilder JOIN 或手写 DTO）
 - **动态表名**：不支持（表名编译期固化）
+- **raw command 事务挂接（ITM-243 后的残余限制）**：Saga/Checkpoint/Idempotency 三 Store 的手动 reader 命令经 `PalOrmAmbientTransaction`（AsyncLocal）挂接 **IUnitOfWork 开启的**活动事务——MySQL 活动事务下未挂 `cmd.Transaction` 的命令会抛 InvalidOperationException（MySqlConnector 严格校验）。直接调 `session.BeginTransactionAsync` 绕过 IUnitOfWork 时 raw command 仍不挂接（PalORM 5.3 无公开活动事务访问器，待上游提供后迁移）
+- **时间戳读取已统一 Utc（ITM-242，原漂移已修）**：三 Store 读回时间戳统一 `DateTime.SpecifyKind(..., Utc)`——MySQL DATETIME 回读 Kind=Unspecified，隐式 `DateTime→DateTimeOffset` 转换套本地偏移（探针实测 -8h 累积回拨）；Npgsql timestamptz 与 SQLite 带偏移文本返回 Kind=Utc，幂等无害
 
 ### 未启用特性（待后续增强）
 

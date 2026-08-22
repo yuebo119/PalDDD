@@ -93,4 +93,49 @@ public class PalOrmProjectionCheckpointStoreTests
         // source-2 保留
         await Assert.That(await store.GetAsync("proj-1", "source-2", "pos-1", default)).IsNotNull();
     }
+
+    [Test]
+    public async Task ProjectionCheckpoint_GetAsync_LeaseTimestampsRoundTripWithZeroOffset()
+    {
+        // ITM-242 守护（跨方言形态）：updated_at/lease_until 物化读回偏移必须为 0，
+        // 且时刻与写入值（now + timeout）一致——任何方言的本地偏移漂移在此现形
+        //（探针结论：SQLite 正常写读路径免疫；MySQL DATETIME 路径漂移 -8h，由下方墙钟测试本地复现）。
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteProjectionCheckpointStore(session);
+        var now = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMinutes(5);
+
+        await store.TryStartAsync("proj-1", "source-1", "pos-1", now, timeout, default);
+        var gotten = await store.GetAsync("proj-1", "source-1", "pos-1", default);
+
+        await Assert.That(gotten).IsNotNull();
+        await Assert.That(gotten!.UpdatedAt.Offset).IsEqualTo(TimeSpan.Zero);
+        await Assert.That(gotten.LeaseUntil.Offset).IsEqualTo(TimeSpan.Zero);
+        var maxDrift = Math.Max(
+            Math.Abs((gotten.UpdatedAt - now).Ticks),
+            Math.Abs((gotten.LeaseUntil - (now + timeout)).Ticks));
+        await Assert.That(maxDrift).IsLessThan(TimeSpan.FromSeconds(5).Ticks);
+    }
+
+    [Test]
+    public async Task ProjectionCheckpoint_GetAsync_ReadsUtcWallClockTimestamps_WithoutLocalOffsetDrift()
+    {
+        // ITM-242 本地复现：模拟 MySQL DATETIME 存储形态——DateTime(Kind=Utc) 参数存无偏移墙钟文本，
+        // GetDateTime 返回 Kind=Unspecified + UTC 墙钟。修复前隐式转 DateTimeOffset 套本地偏移
+        //（UTC+8 机器实测 -8h 漂移）→ 红；修复后 SpecifyKind(Utc) → offset 0 精确读回 → 绿。
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteProjectionCheckpointStore(session);
+        var updatedAtUtc = DateTime.UtcNow.AddMinutes(-10);
+        var leaseUntilUtc = DateTime.UtcNow.AddMinutes(5);
+        await session.ExecuteAsync(
+            $"INSERT INTO projection_checkpoints (projection_name, source_name, position, status, updated_at, lease_until, revision) VALUES ({"proj-1"}, {"source-1"}, {"pos-1"}, {(int)ProjectionCheckpointStatus.Processing}, {updatedAtUtc}, {leaseUntilUtc}, {1})");
+
+        var gotten = await store.GetAsync("proj-1", "source-1", "pos-1", default);
+
+        await Assert.That(gotten).IsNotNull();
+        await Assert.That(gotten!.UpdatedAt.Offset).IsEqualTo(TimeSpan.Zero);
+        await Assert.That(gotten.UpdatedAt.UtcDateTime).IsEqualTo(updatedAtUtc);
+        await Assert.That(gotten.LeaseUntil.Offset).IsEqualTo(TimeSpan.Zero);
+        await Assert.That(gotten.LeaseUntil.UtcDateTime).IsEqualTo(leaseUntilUtc);
+    }
 }

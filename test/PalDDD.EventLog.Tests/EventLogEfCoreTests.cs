@@ -123,6 +123,38 @@ public sealed class EventLogEfCoreTests
         await Assert.That(exception!.ActualVersion).IsEqualTo(0);
     }
 
+    // ITM-247 传感器（F5）：批内非首位事件的 EventId 与库中既有事件（其他流）重复时，
+    // 唯一索引冲突是数据错误——必须原样上抛 DbUpdateException，而非被误译为
+    // EventStreamConcurrencyException（并发冲突会诱导调用方按乐观并发无限重试）。
+    // 修复前实现只探测 events[0].EventId（批内首事件），本场景首事件 EventId 全新 →
+    // 漏检 → 误判流版本冲突 → 红。
+    [Test]
+    public async Task AppendAsync_NonFirstBatchEventIdDuplicatesExisting_ThrowsDbUpdateException(CancellationToken cancellationToken)
+    {
+        var options = CreateSqliteOptions();
+        var duplicatedId = PalUlid.New();
+        await using (var writer = new TestEventLogDbContext(options))
+        {
+            await writer.Database.EnsureCreatedAsync();
+            await writer.AppendAsync(
+                "other-stream",
+                ExpectedStreamVersion.NoStream,
+                [CreateEvent(duplicatedId, "orders.order-submitted.v1", "existing")],
+                cancellationToken);
+        }
+
+        await using var db = new TestEventLogDbContext(options);
+        await Assert.That(() =>
+            db.AppendAsync(
+                "ordering-order-1",
+                ExpectedStreamVersion.NoStream,
+                [
+                    CreateEvent(PalUlid.New(), "orders.order-submitted.v1", "first"),
+                    CreateEvent(duplicatedId, "orders.order-submitted.v1", "duplicate")
+                ],
+                cancellationToken).AsTask()).Throws<DbUpdateException>();
+    }
+
     [Test]
     public async Task AppendAsync_UsesInjectedTimeProviderForRecordedAt(CancellationToken cancellationToken)
     {

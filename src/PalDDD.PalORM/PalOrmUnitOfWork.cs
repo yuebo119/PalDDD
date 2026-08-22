@@ -11,6 +11,9 @@ namespace PalDDD.PalORM;
 /// 后，<c>DataSession</c> 内部 <c>OperationState.PublishTransaction</c>；
 /// 后续所有 Store 的 ExecuteAsync/InsertAsync 经 <c>CreateCommand</c> 自动附加 <c>GetActiveTransaction()</c>，
 /// 无需 Store 显式接收 transaction 参数。
+/// <b>raw command 路径（ITM-243）</b>：Store 的手动 reader 命令（GetRawConnection）不自动 enlist，
+/// 经 <see cref="PalOrmAmbientTransaction"/>（Session 键控弱引用表）在 Begin 后挂接、Commit/Rollback/Dispose 清理
+///（MySQL 活动事务下未挂接抛 InvalidOperationException）。
 /// </para>
 /// <para>
 /// <b>单 Scoped 共享</b>：所有 Store 注入同一 Scoped <c>DataSession&lt;TProvider&gt;</c>，
@@ -39,6 +42,9 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
 
         // PalORM DataSession 已 Open 连接（构造时打开），BeginTransactionAsync 直接 begin
         _transaction = await _session.BeginTransactionAsync(ct: ct).ConfigureAwait(false);
+        // ITM-243：事务边界经 Session 键控弱引用表挂接到 Store 的 raw command（GetRawConnection 手动命令
+        // 不自动 enlist，MySQL 活动事务下未挂接抛 InvalidOperationException）；Commit/Rollback/Dispose 清理。
+        PalOrmAmbientTransaction.Set(_session, _transaction);
     }
 
     /// <inheritdoc />
@@ -66,6 +72,7 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
             _transaction = null;
             // 清除 DataSession 内部的事务引用（PalORM 要求 Commit/Rollback 后显式清空）
             _session.UseTransaction(null);
+            PalOrmAmbientTransaction.Set(_session, null);  // ITM-243：同步清除 raw command 事务挂接
         }
     }
 
@@ -88,6 +95,7 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
             catch (Exception ex) when (ex is InvalidOperationException or System.Data.Common.DbException) { /* 事务已失效/已释放 */ }
             _transaction = null;
             _session.UseTransaction(null);
+            PalOrmAmbientTransaction.Set(_session, null);  // ITM-243：同步清除 raw command 事务挂接
         }
     }
 
@@ -107,6 +115,7 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
             catch (Exception ex) when (ex is InvalidOperationException or System.Data.Common.DbException) { /* 已释放/连接断 */ }
             _transaction = null;
             _session.UseTransaction(null);
+            PalOrmAmbientTransaction.Set(_session, null);  // ITM-243：同步清除 raw command 事务挂接
         }
     }
 }

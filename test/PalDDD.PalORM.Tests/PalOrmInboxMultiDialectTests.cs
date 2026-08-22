@@ -28,12 +28,17 @@ public class PalOrmInboxMultiDialectTests
     private static async Task Test_TryStartProcessing_FirstAttempt<TProvider>(
         TestSession<TProvider> ts) where TProvider : IDbProvider
     {
-        var store = new PalOrmInboxStore<TProvider>(ts.Session);
-        var now = DateTimeOffset.UtcNow;
-        var msg = await store.TryStartProcessingAsync("consumer-1", "msg-1", now, TimeSpan.FromMinutes(5), default);
-        await Assert.That(msg).IsNotNull();
-        await Assert.That(msg!.Status).IsEqualTo(InboxStatus.Processing);
-        await Assert.That(msg.Attempts).IsEqualTo(1);
+        await using (ts)
+        {
+            var store = new PalOrmInboxStore<TProvider>(ts.Session);
+            var now = DateTimeOffset.UtcNow;
+            var msg = await store.TryStartProcessingAsync("consumer-1", "msg-1", now, TimeSpan.FromMinutes(5), default);
+            await Assert.That(msg).IsNotNull();
+            await Assert.That(msg!.Status).IsEqualTo(InboxStatus.Processing);
+            await Assert.That(msg.Attempts).IsEqualTo(1);
+            // ITM-245：时间戳往返守护网——received_at 物化读回与写入时刻绝对差值须在窗口内
+            await MultiDialectFixture.AssertTimestampRoundTrip(msg.ReceivedAt, now, nameof(msg.ReceivedAt));
+        }
     }
 
     [Test]
@@ -51,15 +56,18 @@ public class PalOrmInboxMultiDialectTests
     private static async Task Test_TryStartProcessing_Duplicate<TProvider>(
         TestSession<TProvider> ts) where TProvider : IDbProvider
     {
-        var store = new PalOrmInboxStore<TProvider>(ts.Session);
-        var now = DateTimeOffset.UtcNow;
+        await using (ts)
+        {
+            var store = new PalOrmInboxStore<TProvider>(ts.Session);
+            var now = DateTimeOffset.UtcNow;
 
-        var first = await store.TryStartProcessingAsync("consumer-1", "msg-1", now, TimeSpan.FromMinutes(5), default);
-        await Assert.That(first).IsNotNull();
-        await store.MarkProcessedAsync(first!, now, default);
+            var first = await store.TryStartProcessingAsync("consumer-1", "msg-1", now, TimeSpan.FromMinutes(5), default);
+            await Assert.That(first).IsNotNull();
+            await store.MarkProcessedAsync(first!, now, default);
 
-        var second = await store.TryStartProcessingAsync("consumer-1", "msg-1", now.AddSeconds(1), TimeSpan.FromMinutes(5), default);
-        await Assert.That(second).IsNull();
+            var second = await store.TryStartProcessingAsync("consumer-1", "msg-1", now.AddSeconds(1), TimeSpan.FromMinutes(5), default);
+            await Assert.That(second).IsNull();
+        }
     }
 
     [Test]
@@ -77,14 +85,17 @@ public class PalOrmInboxMultiDialectTests
     private static async Task Test_MarkFailed_ThenRetry<TProvider>(
         TestSession<TProvider> ts) where TProvider : IDbProvider
     {
-        var store = new PalOrmInboxStore<TProvider>(ts.Session);
-        var now = DateTimeOffset.UtcNow;
+        await using (ts)
+        {
+            var store = new PalOrmInboxStore<TProvider>(ts.Session);
+            var now = DateTimeOffset.UtcNow;
 
-        var msg = await store.TryStartProcessingAsync("consumer-1", "msg-1", now, TimeSpan.FromMinutes(5), default);
-        await store.MarkFailedAsync(msg!, "transient error", default);
+            var msg = await store.TryStartProcessingAsync("consumer-1", "msg-1", now, TimeSpan.FromMinutes(5), default);
+            await store.MarkFailedAsync(msg!, "transient error", default);
 
-        var retry = await store.TryStartProcessingAsync("consumer-1", "msg-1", now.AddSeconds(1), TimeSpan.FromMinutes(5), default);
-        await Assert.That(retry).IsNotNull();
-        await Assert.That(retry!.Attempts).IsEqualTo(2);
+            var retry = await store.TryStartProcessingAsync("consumer-1", "msg-1", now.AddSeconds(1), TimeSpan.FromMinutes(5), default);
+            await Assert.That(retry).IsNotNull();
+            await Assert.That(retry!.Attempts).IsEqualTo(2);
+        }
     }
 }

@@ -19,24 +19,51 @@ namespace PalDDD.Transactions;
 /// </remarks>
 public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDbContext(options)
 {
+    /// <summary>按资格条件分页查询到期消息（GetPending/Lease 共用）。
+    /// <para>
+    /// 三十九轮 ITM-261 修复：EF Core 11 preview7 的 SQLite provider 不能翻译 DateTimeOffset 的
+    /// <b>有序</b>比较（<c>&lt;=</c>）——等值比较可翻译（MarkProcessed/FencedTarget 的租约守卫不受影响），
+    /// 因此 <c>NextAttemptAt &lt;= now</c> / <c>LockedUntil &lt;= now</c> 必须物化后内存过滤。
+    /// 分页循环保证"时间过滤先于 Take"：首页全为未来重试/未到期租约时继续翻页直至填满
+    /// batchSize 或耗尽（此前被测试本地重写遮蔽，重写版"SQL Take 后内存过滤"会少取批次）。
+    /// </para>
+    /// </summary>
+    private async Task<List<OutboxMessage>> QueryEligibleAsync(
+        int batchSize, int maxRetryCount, bool asNoTracking, CancellationToken ct)
+    {
+        var now = GetUtcNow();
+        var result = new List<OutboxMessage>(batchSize);
+        var skip = 0;
+        while (result.Count < batchSize)
+        {
+            var query = asNoTracking ? OutboxMessages.AsNoTracking() : OutboxMessages;
+            var page = await query
+                .Where(m => m.Status == OutboxStatus.Pending && m.RetryCount < maxRetryCount)
+                // ITM-261 续：EF SQLite 对 DateTimeOffset 连 ORDER BY 也不支持（"does not support
+                // expressions of type 'DateTimeOffset' in ORDER BY clauses"）——改按 Id 排序：
+                // ULID 的 Crockford Base32 字典序即创建时间序（规范级 sortable guarantee），
+                // 与 CreatedAt 排序语义等价（均为创建序，分页确定性不受影响）。
+                .OrderBy(m => m.Id)
+                .Skip(skip).Take(batchSize)
+                .ToListAsync(ct).ConfigureAwait(false);
+            if (page.Count == 0) break;
+            result.AddRange(page.Where(m =>
+                (m.NextAttemptAt is null || m.NextAttemptAt <= now)
+                && (m.LockedUntil is null || m.LockedUntil <= now)));
+            skip += batchSize;
+        }
+        if (result.Count > batchSize) result.RemoveRange(batchSize, result.Count - batchSize);
+        return result;
+    }
+
     /// <inheritdoc/>
     public override async ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(
         int batchSize,
         int maxRetryCount,
         CancellationToken ct)
-    {
-        var now = GetUtcNow();
         // 优化（二十五轮 API 扫描 EF-5）：AsNoTracking——只读契约（接口 doc 保证不进
         // Mark*+SaveChanges）；违反契约的突变将静默丢失
-        return await OutboxMessages
-            .AsNoTracking()
-            .Where(m => m.Status == OutboxStatus.Pending && m.RetryCount < maxRetryCount)
-            .Where(m => m.NextAttemptAt == null || m.NextAttemptAt <= now)
-            .Where(m => m.LockedUntil == null || m.LockedUntil <= now)
-            .OrderBy(m => m.CreatedAt)
-            .Take(batchSize)
-            .ToListAsync(ct).ConfigureAwait(false);
-    }
+        => await QueryEligibleAsync(batchSize, maxRetryCount, asNoTracking: true, ct).ConfigureAwait(false);
 
     /// <inheritdoc/>
     public override async ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
@@ -57,19 +84,12 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
             throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration must be greater than zero.");
         if (leaseDuration.TotalSeconds > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for the lease LockedUntil value.");
-        var now = GetUtcNow();
-        var until = now.Add(leaseDuration);
-        // 优化（二十五轮 API 扫描 EF-5 配套）：租约不再复用 GetPendingMessagesAsync——
+        var until = GetUtcNow().Add(leaseDuration);
+        // 优化（二十五轮 API 扫描 EF-5 配套）：租约不复用 GetPendingMessagesAsync——
         // 其 AsNoTracking 化后，"SELECT → 内存改 → SaveChanges"三步租约（ITM-004，
         // 见类头 remarks）的突变将静默丢失（SaveChangesAsync 无跟踪条目 = 0 行写入，
-        // RetryCount 令牌兜底也随之失效）。此处内联同条件跟踪查询，租约/兜底语义不变。
-        var messages = await OutboxMessages
-            .Where(m => m.Status == OutboxStatus.Pending && m.RetryCount < maxRetryCount)
-            .Where(m => m.NextAttemptAt == null || m.NextAttemptAt <= now)
-            .Where(m => m.LockedUntil == null || m.LockedUntil <= now)
-            .OrderBy(m => m.CreatedAt)
-            .Take(batchSize)
-            .ToListAsync(ct).ConfigureAwait(false);
+        // RetryCount 令牌兜底也随之失效）。此处用跟踪查询，租约/兜底语义不变。
+        var messages = await QueryEligibleAsync(batchSize, maxRetryCount, asNoTracking: false, ct).ConfigureAwait(false);
 
         foreach (var msg in messages)
         {

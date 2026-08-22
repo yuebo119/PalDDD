@@ -1,5 +1,6 @@
 namespace PalDDD.Integration.Tests;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using PalDDD.Transactions;
 using System.Globalization;
@@ -196,9 +197,89 @@ public sealed class InboxEfCoreTests
         await Assert.That(preempted.ProcessingStartedAt).IsEqualTo(startedAt.AddSeconds(31));
     }
 
+    [Test]
+    public async Task TryStartProcessingAsync_Sqlite_RoundtripAndDuplicateReturnsNull(CancellationToken cancellationToken)
+    {
+        // ITM-254（F14/PD26）：InMemory 无真实索引——SQLite 内存库 EnsureCreated 建真 schema，
+        // (ConsumerName,MessageId) 唯一索引真实在场，重复 TryStart 的幂等判定在关系型下验证
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = CreateSqliteOptions(connection);
+        var now = DateTimeOffset.Parse("2026-05-31T00:00:00Z", CultureInfo.InvariantCulture);
+
+        await using (var first = new TestInboxDbContext(options))
+        {
+            await first.Database.EnsureCreatedAsync(cancellationToken);
+            var record = await ((IInboxStore)first).TryStartProcessingAsync(
+                "orders",
+                "message-1",
+                now,
+                TimeSpan.FromMinutes(5),
+                cancellationToken);
+            await Assert.That(record).IsNotNull();
+        }
+
+        await using var second = new TestInboxDbContext(options);
+        var duplicate = await ((IInboxStore)second).TryStartProcessingAsync(
+            "orders",
+            "message-1",
+            now.AddMinutes(1),
+            TimeSpan.FromMinutes(5),
+            cancellationToken);
+        await Assert.That(duplicate).IsNull();
+
+        // 写读 roundtrip（新 context 读回 Processing 记录）
+        var loaded = await second.InboxMessages.SingleAsync(cancellationToken);
+        await Assert.That(loaded.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(loaded.Attempts).IsEqualTo(1);
+        await Assert.That(loaded.ProcessingStartedAt).IsEqualTo(now);
+    }
+
+    [Test]
+    public async Task AddDuplicateConsumerMessage_Sqlite_ViolatesUniqueIndex(CancellationToken cancellationToken)
+    {
+        // ITM-254（F14）：真实唯一索引存在性守护——同 (ConsumerName,MessageId) 直插第二行
+        // 必须触发 UNIQUE 约束（TryStart 的幂等冲突回查路径依赖此索引真实在场）
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = CreateSqliteOptions(connection);
+        var now = DateTimeOffset.Parse("2026-05-31T00:00:00Z", CultureInfo.InvariantCulture);
+
+        await using (var seed = new TestInboxDbContext(options))
+        {
+            await seed.Database.EnsureCreatedAsync(cancellationToken);
+            await ((IInboxStore)seed).TryStartProcessingAsync(
+                "orders",
+                "message-1",
+                now,
+                TimeSpan.FromMinutes(5),
+                cancellationToken);
+        }
+
+        await using var db = new TestInboxDbContext(options);
+        db.InboxMessages.Add(new InboxMessage
+        {
+            ConsumerName = "orders",
+            MessageId = "message-1",
+            Status = InboxStatus.Processing,
+            Attempts = 1,
+            ReceivedAt = now,
+            ProcessingStartedAt = now
+        });
+
+        await Assert.That(async () =>
+            await db.SaveChangesAsync(cancellationToken)).Throws<DbUpdateException>();
+    }
+
     private static DbContextOptions<TestInboxDbContext> CreateOptions()
         => new DbContextOptionsBuilder<TestInboxDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture))
+            .Options;
+
+    /// <summary>SQLite 内存库 options——需共享同一打开的 <see cref="SqliteConnection"/>（:memory: 库随连接存活）。</summary>
+    private static DbContextOptions<TestInboxDbContext> CreateSqliteOptions(SqliteConnection connection)
+        => new DbContextOptionsBuilder<TestInboxDbContext>()
+            .UseSqlite(connection)
             .Options;
 
     private sealed class TestInboxDbContext(DbContextOptions<TestInboxDbContext> options)

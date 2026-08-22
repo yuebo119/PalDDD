@@ -179,7 +179,7 @@ DDD 项目分层（对照 conventions §4.2 解决方案分层）：
 | `PalDDD.Prompts` | 1.1.0 | AI 代码生成模板，非运行时库 | `<IsPackable>false</IsPackable>`，NuGet 包 Unlist |
 | `PalDDD.Testing` | 1.1.0（已 Unlist） | 测试基础设施，仅项目内部用 | `<IsPackable>false</IsPackable>`，NuGet 包保持 Unlist |
 | `PalORM.Testing` | 5.0.0（已 Unlist） | PalORM 测试基础设施 | NuGet 包保持 Unlist |
-| `PalDDD.AotSample` | 未发布 | CI AOT 验证示例 | `<IsPackable>false</IsPackable>` |
+| `PalDDD.AotSample` | 未发布 | 手动 AOT 验证示例（CI 的 AOT publish 覆盖见 PalOrmSample，见 `.github/workflows/ci.yml` aot-verify job） | `<IsPackable>false</IsPackable>` |
 | `PalDDD.ECommerce` | 未发布 | 电商场景示例代码 | `<IsPackable>false</IsPackable>` |
 
 **判定规则**：以下三类项目永不打包——

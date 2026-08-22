@@ -22,6 +22,17 @@ namespace PalDDD.PalORM.Stores;
 /// <b>乐观锁</b>：<c>version</c> 列（int）—— UPDATE 时手写 <c>WHERE version = @expected</c>，
 /// 0 行返回视为冲突；不走 UpdateAsync（SagaStateRow 非注册实体，无 [ConcurrencyCheck]）。
 /// </para>
+/// <para>
+/// <b>时间戳读取（ITM-242）</b>：MySQL DATETIME 回读的 DateTime Kind=Unspecified，
+/// C# 隐式 DateTime→DateTimeOffset 转换对 Unspecified 套<b>本地时区偏移</b>（探针实测 -8h 累积回拨）。
+/// <see cref="ReadSagaRow"/> 统一 <see cref="DateTime.SpecifyKind"/>(Utc) 使隐式转换套 offset 0
+///（Npgsql timestamptz / SQLite 带偏移文本均返回 Kind=Utc，幂等无害）。
+/// </para>
+/// <para>
+/// <b>raw command 事务（ITM-243）</b>：手动 reader 查询经 <see cref="CreateRawCommand"/> 创建命令并挂接
+/// <c>PalOrmAmbientTransaction</c>（IUnitOfWork 事务边界 Session 键控传导）——MySQL 活动事务下
+/// 未挂 cmd.Transaction 的命令抛 InvalidOperationException（MySqlConnector 严格校验）。
+/// </para>
 /// </summary>
 public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
     where TProvider : IDbProvider
@@ -58,9 +69,9 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         // P3 修复（八轮）：与 Dapper/EFCore 姊妹实现对齐——batchSize 非正直接拒绝
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
 
-        // SagaStateRow 未注册 —— 用 GetRawConnection + 手动 reader
+        // SagaStateRow 未注册 —— 用 GetRawConnection + 手动 reader（ITM-243：经 CreateRawCommand 挂接环境事务）
         // 三十四轮（中断态超时兜底）：观测查询与 Lease 同步纳入 AwaitingHumanDecision（5）
-        await using var cmd = Session.GetRawConnection().CreateCommand();
+        await using var cmd = CreateRawCommand();
         cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE status IN (@p0, @p1) ORDER BY created_at LIMIT @p2";
         AddParam(cmd, "@p0", (int)SagaStatus.Active);
         AddParam(cmd, "@p1", (int)SagaStatus.AwaitingHumanDecision);
@@ -127,7 +138,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         // 声明的"由 SagaUpdate 的 version 乐观锁兜底"对齐）——重复保存被版本冲突拒绝。
         // 回读补状态守卫：已被处理方标记终态（Completed 等）的租约残留行不再混入
         //（三十四轮：守卫集与租约集同步扩为 Active + AwaitingHumanDecision）。
-        await using var cmd = Session.GetRawConnection().CreateCommand();
+        await using var cmd = CreateRawCommand();  // ITM-243：挂接 IUnitOfWork 环境事务
         cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE leased_by = @p0 AND leased_until = @p1 AND status IN (@p2, @p3) ORDER BY created_at";
         AddParam(cmd, "@p0", owner);
         AddParam(cmd, "@p1", until);
@@ -139,7 +150,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
     /// <inheritdoc />
     public async ValueTask<TState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
     {
-        await using var cmd = Session.GetRawConnection().CreateCommand();
+        await using var cmd = CreateRawCommand();  // ITM-243：挂接 IUnitOfWork 环境事务
         cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE saga_id = @p0";
         AddParam(cmd, "@p0", sagaId.ToString());
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
@@ -219,15 +230,37 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         SagaId = reader.GetString(0),
         CurrentState = reader.GetString(1),
         Status = reader.GetInt32(2),
-        CreatedAt = reader.GetDateTime(3),
-        CompletedAt = reader.IsDBNull(4) ? null : reader.GetDateTime(4),
+        CreatedAt = GetUtc(reader, 3),
+        CompletedAt = reader.IsDBNull(4) ? null : GetUtc(reader, 4),
         Error = reader.IsDBNull(5) ? null : reader.GetString(5),
-        ErrorAt = reader.IsDBNull(6) ? null : reader.GetDateTime(6),
+        ErrorAt = reader.IsDBNull(6) ? null : GetUtc(reader, 6),
         Version = reader.GetInt32(7),
         SagaData = reader.IsDBNull(8) ? null : reader.GetString(8),
         LeasedBy = reader.IsDBNull(9) ? null : reader.GetString(9),
-        LeasedUntil = reader.IsDBNull(10) ? null : reader.GetDateTime(10),
+        LeasedUntil = reader.IsDBNull(10) ? null : GetUtc(reader, 10),
     };
+
+    /// <summary>
+    /// ITM-242：读回时间戳并标记 UTC。MySQL DATETIME 回读的 DateTime Kind=Unspecified，
+    /// 隐式 DateTime→DateTimeOffset 转换对 Unspecified 套本地时区偏移（探针实测 -8h 累积回拨）；
+    /// SpecifyKind(Utc) 使隐式转换套 offset 0。Npgsql timestamptz 与 SQLite 带偏移文本
+    /// 均返回 Kind=Utc（探针实测幂等）。
+    /// </summary>
+    private static DateTimeOffset GetUtc(DbDataReader reader, int ordinal)
+        => DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc);
+
+    /// <summary>
+    /// ITM-243：创建 raw command 并挂接 IUnitOfWork 活动事务。GetRawConnection().CreateCommand()
+    /// 的手动命令不自动 enlist（PalORM 仅 ExecuteAsync 路径自动挂 GetActiveTransaction()），
+    /// MySQL 活动事务下未挂接抛 InvalidOperationException（MySqlConnector 严格校验，探针实测）。
+    /// </summary>
+    private DbCommand CreateRawCommand()
+    {
+        var cmd = Session.GetRawConnection().CreateCommand();
+        var tx = PalOrmAmbientTransaction.TryGet(Session);
+        if (tx is not null) cmd.Transaction = tx;
+        return cmd;
+    }
 
     /// <summary>SagaStateRow → TState（JSON 反序列化 + 元数据覆盖）。
     /// <para>当 <c>_jsonTypeInfo</c> 为 null 或 SagaData 为空时，从数据库列恢复 SagaId/CreatedAt（init-only 通过 object initializer 赋值）。

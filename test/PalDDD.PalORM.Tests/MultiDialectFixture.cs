@@ -98,6 +98,26 @@ public static class MultiDialectFixture
         }
     }
 
+    /// <summary>
+    /// 时间戳往返守护网断言（ITM-245）：DB 物化读回的时间与写入基准时刻的<b>绝对时刻</b>差值
+    /// 必须在容忍窗口内。方言驱动/读回路径若发生时区漂移（如 UTC 存储被挂上本地 offset 未换算，
+    /// 绝对时刻偏差为小时级），此断言必红——这是 src 侧时间戳规范化（ITM-242）的跨方言回归网。
+    /// </summary>
+    /// <param name="materialized">从 DB 物化读回的时间字段（任意 offset 表示）。</param>
+    /// <param name="baseline">写入时的基准时刻（测试内取 UtcNow）。</param>
+    /// <param name="fieldName">被断言字段名（失败时定位）。</param>
+    internal static async Task AssertTimestampRoundTrip(
+        DateTimeOffset materialized, DateTimeOffset baseline, string fieldName)
+    {
+        var deltaMs = Math.Abs((materialized.ToUniversalTime() - baseline.ToUniversalTime()).TotalMilliseconds);
+        await Assert.That(deltaMs)
+            .IsLessThan(TimestampToleranceMs)
+            .Because($"{fieldName} 往返漂移 {deltaMs:F0}ms（基准 {baseline:O}，物化 {materialized:O}）——疑似时区换算回归");
+    }
+
+    /// <summary>时间戳往返容忍窗口（毫秒）：写入到读回的时钟推进上限；小时级漂移（时区 bug）远超此值。</summary>
+    internal const double TimestampToleranceMs = 60_000;
+
     private static void EnsureSingleDatabaseAlias(string connectionString, string expectedDatabase, string provider)
     {
         if (!TestEnvironment.TryGetUniqueDatabaseName(connectionString, out var configuredDatabase)
@@ -153,7 +173,11 @@ public static class MultiDialectFixture
             throw new InvalidOperationException("测试数据库 ownership marker 校验失败。");
     }
 
-    private static async Task ApplySchemaAsync<TProvider>(DataSession<TProvider> session, string[] ddls, CancellationToken ct)
+    /// <summary>
+    /// 逐条执行建表 DDL。internal 供 PalOrmStoreFixture 复用（ITM-259 单一真源收敛）——
+    /// 不能走 ExecuteAsync($"...")：PalORM 会把插值参数化为 @pN，整句 DDL 会退化为单参数。
+    /// </summary>
+    internal static async Task ApplySchemaAsync<TProvider>(DataSession<TProvider> session, string[] ddls, CancellationToken ct)
         where TProvider : IDbProvider
     {
         var connection = session.GetRawConnection();

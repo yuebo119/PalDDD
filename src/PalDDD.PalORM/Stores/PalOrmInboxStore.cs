@@ -100,17 +100,20 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         }
 
         // INSERT 冲突（记录已存在）—— 回查现有记录决定返回语义
-        // 显式列序：与 InboxMessageRow 属性声明序对齐（QueryFirstAsync 按序号映射）
-        InboxMessageRow? existing;
-        try
+        // 显式列序：与 InboxMessageRow 属性声明序对齐（QueryAsync 按序号映射）
+        // ITM-250 修复（F8）：弃用 QueryFirstAsync + catch(InvalidOperationException)——
+        // PalORM QueryFirstAsync 无结果抛 InvalidOperationException，该 catch 把"无行"
+        // 与真实 DB 故障/会话门禁异常一并吞为 null → 消息静默跳过无失败痕迹。
+        // 改"查空"语义：QueryAsync 无行返回空列表，FirstOrDefault 显式判空，
+        // 删除异常控制流（对齐 DapperInboxStore.QueryFirstOrDefaultAsync 姊妹形态，PD17——
+        // 无行=非异常路径，DB 故障原样上抛）。唯一约束保证 (consumer_name, message_id)
+        // 至多一行，FirstOrDefault 无歧义。
+        var existing = (await Session.QueryAsync<InboxMessageRow>(
+            $"SELECT id, message_id, consumer_name, status, received_at, processed_at, processing_started_at, attempts, last_error FROM inbox_messages WHERE consumer_name = {consumerName} AND message_id = {messageId}",
+            ct).ConfigureAwait(false)).FirstOrDefault();
+        if (existing is null)
         {
-            existing = await Session.QueryFirstAsync<InboxMessageRow>(
-                $"SELECT id, message_id, consumer_name, status, received_at, processed_at, processing_started_at, attempts, last_error FROM inbox_messages WHERE consumer_name = {consumerName} AND message_id = {messageId}",
-                ct).ConfigureAwait(false);
-        }
-        catch (InvalidOperationException)
-        {
-            // 异常路径：回查也无（极罕见，如并发 DELETE）—— 返回 null 让调用方重试
+            // 回查无行（极罕见，如并发 DELETE）—— 返回 null 让调用方重试
             return null;
         }
 

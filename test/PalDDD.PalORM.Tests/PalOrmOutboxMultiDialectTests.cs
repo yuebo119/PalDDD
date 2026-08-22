@@ -43,13 +43,20 @@ public class PalOrmOutboxMultiDialectTests
     {
         await using var session = await MultiDialectFixture.CreateSqliteAsync();
         var store = new SqliteOutboxStore(session.Session);
+        var before = DateTimeOffset.UtcNow;
         store.AddMessage(CreateMessage("sqlite.lease"));
 
-        var leased = await store.LeasePendingMessagesAsync(10, "w1", TimeSpan.FromMinutes(5), 10, default);
+        var leaseDuration = TimeSpan.FromMinutes(5);
+        var leased = await store.LeasePendingMessagesAsync(10, "w1", leaseDuration, 10, default);
         await Assert.That(leased).Count().IsEqualTo(1);
+        // ITM-245：时间戳往返守护网——created_at 物化读回 + lease_until（减租约时长=租约起点）
+        // 与写入时刻绝对差值须在窗口内（时区漂移回归必红）
+        await MultiDialectFixture.AssertTimestampRoundTrip(leased[0].CreatedAt, before, "CreatedAt");
+        await MultiDialectFixture.AssertTimestampRoundTrip(
+            leased[0].LockedUntil!.Value - leaseDuration, before, "LockedUntil");
 
         // 第二次 Lease 应为空
-        var second = await store.LeasePendingMessagesAsync(10, "w2", TimeSpan.FromMinutes(5), 10, default);
+        var second = await store.LeasePendingMessagesAsync(10, "w2", leaseDuration, 10, default);
         await Assert.That(second).IsEmpty();
     }
 
@@ -88,12 +95,18 @@ public class PalOrmOutboxMultiDialectTests
         // PG 走 RETURNING 单语句路径 —— 验证 SupportsReturningClause=true 分支
         await using var session = await MultiDialectFixture.CreatePostgreSqlAsync();
         var store = new PostgreSqlOutboxStore(session.Session);
+        var before = DateTimeOffset.UtcNow;
         store.AddMessage(CreateMessage("pg.lease"));
 
-        var leased = await store.LeasePendingMessagesAsync(10, "w1", TimeSpan.FromMinutes(5), 10, default);
+        var leaseDuration = TimeSpan.FromMinutes(5);
+        var leased = await store.LeasePendingMessagesAsync(10, "w1", leaseDuration, 10, default);
         await Assert.That(leased).Count().IsEqualTo(1);
+        // ITM-245：时间戳往返守护网（TIMESTAMPTZ 路径）
+        await MultiDialectFixture.AssertTimestampRoundTrip(leased[0].CreatedAt, before, "CreatedAt");
+        await MultiDialectFixture.AssertTimestampRoundTrip(
+            leased[0].LockedUntil!.Value - leaseDuration, before, "LockedUntil");
 
-        var second = await store.LeasePendingMessagesAsync(10, "w2", TimeSpan.FromMinutes(5), 10, default);
+        var second = await store.LeasePendingMessagesAsync(10, "w2", leaseDuration, 10, default);
         await Assert.That(second).IsEmpty();
     }
 
@@ -132,12 +145,18 @@ public class PalOrmOutboxMultiDialectTests
         // MySQL 走两步 UPDATE + SELECT 路径（无 RETURNING）—— 验证 SupportsReturningClause=false 分支
         await using var session = await MultiDialectFixture.CreateMySqlAsync();
         var store = new MySqlOutboxStore(session.Session);
+        var before = DateTimeOffset.UtcNow;
         store.AddMessage(CreateMessage("mysql.lease"));
 
-        var leased = await store.LeasePendingMessagesAsync(10, "w1", TimeSpan.FromMinutes(5), 10, default);
+        var leaseDuration = TimeSpan.FromMinutes(5);
+        var leased = await store.LeasePendingMessagesAsync(10, "w1", leaseDuration, 10, default);
         await Assert.That(leased).Count().IsEqualTo(1);
+        // ITM-245：时间戳往返守护网（DATETIME(6) 无时区路径——漂移高风险区）
+        await MultiDialectFixture.AssertTimestampRoundTrip(leased[0].CreatedAt, before, "CreatedAt");
+        await MultiDialectFixture.AssertTimestampRoundTrip(
+            leased[0].LockedUntil!.Value - leaseDuration, before, "LockedUntil");
 
-        var second = await store.LeasePendingMessagesAsync(10, "w2", TimeSpan.FromMinutes(5), 10, default);
+        var second = await store.LeasePendingMessagesAsync(10, "w2", leaseDuration, 10, default);
         await Assert.That(second).IsEmpty();
     }
 

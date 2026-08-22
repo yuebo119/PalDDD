@@ -257,8 +257,14 @@ public abstract class EventLogDbContext(
             try
             {
                 currentVersion = await GetActualStreamVersionAsync(streamName, cancellationToken).ConfigureAwait(false);
+                // ITM-247 修复（F5）：EventId 冲突探测覆盖批内全部事件——原实现只探测
+                // events[0].EventId，批内非首位事件撞库中既有 EventId 时漏检 → 误判为
+                // 流版本冲突 → 调用方按乐观并发重试 → 数据错误变永久冲突无限重试。
+                // Distinct 去重后 List.Contains 由 EF 翻译为 SQL IN（EventId 的 Ulid→string
+                // 值转换器沿用既有 == 比较的同一路径应用到 IN 列表元素）。
+                var batchEventIds = events.Select(e => e.EventId).Distinct().ToList();
                 eventIdExists = await Events.AsNoTracking()
-                    .AnyAsync(e => e.EventId == events[0].EventId, cancellationToken).ConfigureAwait(false);
+                    .AnyAsync(e => batchEventIds.Contains(e.EventId), cancellationToken).ConfigureAwait(false);
                 requerySucceeded = true;
             }
             catch (DbException)
@@ -275,7 +281,8 @@ public abstract class EventLogDbContext(
             // 盲目重试的调用方无限循环）
             // 三十八轮 P2 修复：上述 Matches 判定对 Any/StreamExists 失效（恒 true）——
             // 并发写者推进流后原样上抛 provider 异常，重试契约失真。改为精确判定：
-            // ① 批内 EventId 重复 或 ② 表中已存在同 EventId → 数据错误，原样上抛；
+            // ① 批内 EventId 重复 或 ② 表中已存在批内任一 EventId（ITM-247：全批探测，
+            // 非仅首事件）→ 数据错误，原样上抛；
             // ③ 否则（EventId 全新但流已被并发推进）→ 流版本冲突，转统一并发异常。
             // Exact/NoStream 场景下新判定与旧 Matches 判定结论一致。
             var hasDuplicateEventIdInBatch = events.Select(e => e.EventId).Distinct().Count() != events.Count;

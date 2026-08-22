@@ -19,7 +19,8 @@ using SqliteJson = PalDDD.Dapper.Sqlite.SqliteJson;
 namespace PalDDD.Benchmarks;
 
 // ═══════════════════════════════════════════════════════════
-// Outbox 批处理吞吐量基准
+// Outbox 批处理基准 — GetPending 为纯查询；
+// LeasePending/LeaseAndMarkAll 为耗尽型操作，每 invoke 含重灌成本（见方法注释）
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
 [ShortRunJob]
@@ -28,11 +29,26 @@ public class OutboxThroughputBenchmarks
     private InMemoryOutboxStore _store = null!;
     private const int BatchSize = 100;
 
-    // ITM-152 修复：每次迭代重建 InMemory store 并重新灌入 100 条待处理消息。
-    // 原 [GlobalSetup] 只在首个迭代灌一次，LeasePending/LeaseAndMarkAll 首个迭代
-    // 即全部租走/处理，后续迭代空转测不到真实吞吐。
+    // ITM-152 修复：IterationSetup 重建 store（跨迭代隔离）。
+    // ITM-246 修复：IterationSetup 只覆盖每个迭代的第一笔 invoke——BDN 单迭代内方法被
+    // 调用数万次，租约型基准首个 invoke 即满额租走 100 条，后续 invoke 恒为空扫描，
+    // ns/op 被稀释失真。现改为方法体内满额租走后立即重灌（见 ReseedStore 与各方法注释）。
     [IterationSetup]
-    public void Setup()
+    public void Setup() => ReseedStore();
+
+    [IterationCleanup]
+    public void Cleanup()
+    {
+        // 每次迭代结束丢弃 store，避免跨迭代状态泄漏（双保险，IterationSetup 亦会重建）
+        _store = null!;
+    }
+
+    /// <summary>
+    /// 重灌 = 新建 store + 100 条待处理消息。不向旧 store 追加：已租约/已处理消息
+    /// 永不移除，追加会使 _messages 线性增长，QueryPending 扫描成本随 invoke 次数漂移；
+    /// 新建保证每次租约面对恒定 100 条 backlog，扫描口径稳定。
+    /// </summary>
+    private void ReseedStore()
     {
         _store = new InMemoryOutboxStore();
         for (int i = 0; i < BatchSize; i++)
@@ -46,17 +62,23 @@ public class OutboxThroughputBenchmarks
         }
     }
 
-    [IterationCleanup]
-    public void Cleanup()
+    // 守卫：不足额租约说明重灌不变量被破坏（store 未满灌或被外部消费）——
+    // 抛出而非静默空转，静默空扫描正是 ITM-246 修前的失效模式。
+    private static void EnsureFullLease(IReadOnlyList<OutboxMessage> msgs)
     {
-        // 每次迭代结束丢弃 store，避免跨迭代状态泄漏（双保险，IterationSetup 亦会重建）
-        _store = null!;
+        if (msgs.Count != BatchSize)
+            throw new InvalidOperationException(
+                $"应满额租走 {BatchSize} 条，实际 {msgs.Count} 条——重灌不变量被破坏，基准数字失真");
     }
 
+    // 测量语义（ITM-246）：每个 invoke = 1 次满额租约（100 条）+ 1 次重灌（新建 store +
+    // 100 次 AddMessage）。ns/op 含重灌成本，不是纯租约开销；纯查询对照见 GetPending_Batch100。
     [Benchmark(Baseline = true)]
     public async ValueTask<int> LeasePending_Batch100()
     {
         var msgs = await _store.LeasePendingMessagesAsync(BatchSize, "bench", TimeSpan.FromSeconds(30), 10, default);
+        EnsureFullLease(msgs);
+        ReseedStore();
         return msgs.Count;
     }
 
@@ -67,13 +89,16 @@ public class OutboxThroughputBenchmarks
         return msgs.Count;
     }
 
+    // 同 LeasePending_Batch100：每 invoke = 满额租约 + MarkProcessed×100 + 重灌，ns/op 含重灌成本。
     [Benchmark]
     public async ValueTask LeaseAndMarkAll_Batch100()
     {
         var msgs = await _store.LeasePendingMessagesAsync(BatchSize, "bench", TimeSpan.FromSeconds(30), 10, default);
+        EnsureFullLease(msgs);
         var now = DateTimeOffset.UtcNow;
         foreach (var m in msgs)
             _store.MarkProcessed(m, now);
+        ReseedStore();
     }
 
     [Benchmark]
@@ -145,6 +170,7 @@ public class SagaStateBenchmarks
 {
     private InMemorySagaStateStore<BenchSagaState> _store = null!;
     private readonly Guid _sagaId = Guid.NewGuid();
+    private const int ActiveSagaCount = 50;
 
     public sealed class BenchSagaState : SagaState
     { }
@@ -161,6 +187,19 @@ public class SagaStateBenchmarks
             CreatedAt = DateTimeOffset.UtcNow
         };
         _store.Add(state);
+
+        // P3-SMP-106 修复：补足至 50 条——原 GlobalSetup 仅 1 条，GetActiveSagas_Batch50
+        // 名义批量 50 实际只测单条返回路径。GetActiveSagas 为只读查询不耗尽状态，
+        // GlobalSetup 一次性种子即可，无需 IterationSetup。
+        // SagaId/CreatedAt 留默认（构造时自动生成），保证 50 条键唯一。
+        for (int i = 1; i < ActiveSagaCount; i++)
+        {
+            _store.Add(new BenchSagaState
+            {
+                CurrentState = "Active",
+                Status = SagaStatus.Active
+            });
+        }
     }
 
     [Benchmark]

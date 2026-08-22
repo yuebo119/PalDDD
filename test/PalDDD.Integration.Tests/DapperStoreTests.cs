@@ -30,7 +30,9 @@ using PalUlid = ByteAether.Ulid.Ulid;
 namespace PalDDD.Integration.Tests;
 
 /// <summary>Dapper 测试集合 — 序列化执行避免全局静态状态竞态（ClassCleanup 调 ResetTypeHandlers 清理全局状态）。
-/// 注：TUnit 无 xUnit 的 [Collection] 概念，全局状态隔离靠 ClassInitialize/ClassCleanup 的静态生命周期保证。</summary>
+/// 注：TUnit 无 xUnit 的 [Collection] 概念，全局状态隔离靠 ClassInitialize/ClassCleanup 的静态生命周期保证；
+/// [NotInParallel("dapper-global")]（ITM-253/F12）使本类测试互不并行执行，与类注释声称的"序列化执行"对齐。</summary>
+[TUnit.Core.NotInParallel("dapper-global")]
 public sealed class DapperStoreTests
 {
     private DbConnection _conn = null!;

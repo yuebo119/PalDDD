@@ -53,7 +53,11 @@ public sealed class ValueObjectPropertyTests
     [Test]
     public void RowVersion_Next_AlwaysIncrement()
     {
-        Prop.ForAll((int start) =>
+        // F22 防御性边界排除（10 次基线未复现，属慢性 flaky 预防）：生成域排除 int.MaxValue——
+        // checked 语义下 MaxValue 的 Next() 抛 OverflowException（见
+        // RowVersion_Next_AtMaxValue_ThrowsOverflow 专门覆盖），与 +1 递增断言天然冲突；
+        // FsCheck 全域 int 采样低概率命中该边界即假失败
+        Prop.ForAll(Arb.From(Gen.Choose(int.MinValue, int.MaxValue - 1)), (int start) =>
         {
             var v = new RowVersion(start);
             return v.Next().Value == start + 1;

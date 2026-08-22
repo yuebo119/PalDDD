@@ -759,6 +759,54 @@ public sealed class ArchitectureBoundaryTests
     /// 对应 conventions.md §3.6。<br/>
     ///排除: 辅助方法(private/protected)、IDisposable、构造函数、初始化方法、分析器测试。
     /// </summary>
+    /// <summary>
+    /// 测试方法签名扫描正则（F19 修复：消除参数化方法假阴性）。<br/>
+    /// ① 特性块允许多行——[Test] 后可跟 [Arguments]/[MethodDataSource] 等参数化特性行
+    ///    （原正则要求特性紧邻 public 行，参数化方法全部漏检）；<br/>
+    /// ② 返回类型支持泛型——[^\s(]* 吃掉 Task&lt;T&gt;/ValueTask&lt;T&gt; 尾巴
+    ///    （原正则 (?:void|Task|ValueTask)\s+ 漏检泛型返回）；<br/>
+    /// ③ 刻意不用 RegexOptions.Singleline：public 与返回类型约定同行（[^\n]*?），
+    ///    Singleline 下特性块的 . 会跨行贪婪吞掉后续多个方法。
+    /// </summary>
+    private const string TestMethodPattern =
+        @"\[(?:Test|Fact|Theory)[^\]]*\](?:\s*\n\s*\[.*\])*\s*\n\s*public[^\n]*?\b(?:ValueTask|Task|void)[^\s(]*\s+(\w+)\s*\(";
+
+    /// <summary>
+    /// 扫描器负向自证（falsification，F19）：用故意坏命名的参数化/泛型返回样本
+    /// 证明 <see cref="TestMethodPattern"/> 不再对参数化方法盲——修复前该形态全漏检，
+    /// 扫描器对它是无声 no-op（静默放行 = 覆盖率为零的门禁）。
+    /// </summary>
+    [Test]
+    public async Task TestMethodPattern_DetectsParameterizedAndGenericReturnMethods()
+    {
+        // 坏样本 1：[Test] + [Arguments] 参数化特性 + 坏命名（无下划线）
+        const string parameterized = """
+            [Test]
+            [Arguments(1, 2)]
+            public async Task BadParameterizedName(int a, int b)
+            {
+                await Task.CompletedTask;
+            }
+
+            """;
+
+        // 坏样本 2：泛型返回 Task<T> + 坏命名（原正则漏检泛型返回形态）
+        const string genericReturn = """
+            [Test]
+            public async Task<bool> BadGenericReturnName(int a)
+            {
+                return true;
+            }
+            """;
+
+        var detected = new List<string>();
+        foreach (Match m in Regex.Matches(parameterized + genericReturn, TestMethodPattern))
+            detected.Add(m.Groups[1].Value);
+
+        await Assert.That(detected).Contains("BadParameterizedName");
+        await Assert.That(detected).Contains("BadGenericReturnName");
+    }
+
     [Test]
     public async Task TestMethods_MustFollowTripleUnderscorePattern()
     {
@@ -784,8 +832,7 @@ public sealed class ArchitectureBoundaryTests
         foreach (var file in testFiles)
         {
             var source = File.ReadAllText(file);
-            var methodPattern = @"\[(?:Test|Fact|Theory)[^\]]*\]\s*\n\s*public.*?(?:void|Task|ValueTask)\s+(\w+)\s*\(";
-            foreach (Match m in Regex.Matches(source, methodPattern, RegexOptions.Singleline))
+            foreach (Match m in Regex.Matches(source, TestMethodPattern))
             {
                 var methodName = m.Groups[1].Value;
                 if (exemptPrefixes.Any(p => methodName.StartsWith(p, StringComparison.Ordinal)))
