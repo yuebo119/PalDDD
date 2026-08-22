@@ -20,6 +20,10 @@ public class PalOrmConcurrencyTests
     private static async Task<DataSession<SqliteProvider>> CreateSharedFileSessionAsync(string dbPath, CancellationToken ct = default)
     {
         var session = await DataSession<SqliteProvider>.CreateAsync(DbOptions.Development($"Data Source={dbPath}"), ct);
+        // ITM-281（R44，原 TST-502 位置勘正）：busy_timeout 必须在每个连接上设置——原放
+        // InitSchemaAsync 仅 setup session 获得，10-20 个并发 worker 连接（本工厂直建、
+        // 不经 InitSchemaAsync）裸奔；移入共享工厂使全部连接获得等待
+        await session.ExecuteAsync($"PRAGMA busy_timeout=5000", ct);
         return session;
     }
 
@@ -32,11 +36,7 @@ public class PalOrmConcurrencyTests
     /// </summary>
     private static async Task InitSchemaAsync(DataSession<SqliteProvider> session, CancellationToken ct = default)
     {
-        // TST-502 查证（2026-08-22，palorm.sqlite 5.3.0 PalORM.Sqlite.xml）：SqliteProvider.
-        // InitializeConnectionAsync 的 PRAGMA 清单为 FK+WAL+synchronous=NORMAL+cache_size+
-        // temp_store+wal_autocheckpoint+mmap_size（条件）——未内置 busy_timeout，SQLITE_BUSY
-        // 仅靠 IsTransient 归类 + Development 预设单次重试兜底。此处显式补连接级等待。
-        await session.ExecuteAsync($"PRAGMA busy_timeout=5000", ct);
+        // busy_timeout 已上移至 CreateSharedFileSessionAsync（ITM-281：每个连接都需设置——查证注释见彼处）
         await session.ExecuteAsync($"CREATE TABLE IF NOT EXISTS outbox_messages (id TEXT PRIMARY KEY, type TEXT NOT NULL, payload TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT 'application/json', schema_version INTEGER NOT NULL DEFAULT 1, status INTEGER NOT NULL DEFAULT 0, retry_count INTEGER NOT NULL DEFAULT 0, error TEXT, created_at TEXT NOT NULL, processed_at TEXT, next_attempt_at TEXT, locked_by TEXT, locked_until TEXT, correlation_id TEXT, causation_id TEXT, trace_parent TEXT, trace_state TEXT)", ct);
         await session.ExecuteAsync($"CREATE TABLE IF NOT EXISTS inbox_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL, consumer_name TEXT NOT NULL, status INTEGER NOT NULL DEFAULT 0, received_at TEXT NOT NULL, processing_started_at TEXT, processed_at TEXT, attempts INTEGER NOT NULL DEFAULT 1, last_error TEXT)", ct);
         await session.ExecuteAsync($"CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_unique ON inbox_messages(consumer_name, message_id)", ct);

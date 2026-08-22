@@ -222,9 +222,10 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
     /// 租约期限时仍标记（须在 <see cref="_lock"/> 内调用）。
     /// </summary>
     private bool IsCurrentLeaseHolder(OutboxMessage message)
-        // P3-SRC-105：O(1) 谓词前置——被 successor 替换的旧引用（ITM-174 僵尸守卫的主要
-        // 拦截对象）的 Status/LockedBy 已被后续操作改写，在此 O(1) 短路返回 false，
-        // 不再每次先付 O(n) Contains 线性扫（&& 短路无副作用，条件重排语义等价）。
+        // P3-SRC-105（R44 ITM-280 勘正动机）：O(1) 谓词前置短路——实际命中场景是终态重复
+        // Mark 与未租约引用（Status≠Pending 或 LockedBy=null 的 O(1) 拒绝）。原注释"僵尸引用
+        // 在此 O(1) 短路"不成立：successor 替换换的是列表元素，旧引用自身字段冻结在租约快照
+        //（Pending+非空 LockedBy），仍需走到 Contains 拒绝。
         // 未复用 LeasePendingMessagesAsync 的引用索引表：indexMap 为局部变量，租约后即
         // 丢弃；提升为字段需在 _messages 全部变更点同步维护 List+Dictionary 双结构，
         // 超出最小改动。活跃租约正常路径仍走 Contains（每消息批一次，规模=测试负载）。

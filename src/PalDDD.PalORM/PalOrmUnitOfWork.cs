@@ -32,7 +32,13 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
     private bool _disposed;
 
     /// <summary>构造 UnitOfWork。</summary>
-    public PalOrmUnitOfWork(DataSession<TProvider> session) => _session = session;
+    public PalOrmUnitOfWork(DataSession<TProvider> session)
+    {
+        // ITM-281（R44）：三栈守卫对齐——DapperUnitOfWork/EFCore UnitOfWork 均有（SRC-108），
+        // null session 原延迟到 BeginTransactionAsync 才 NRE
+        ArgumentNullException.ThrowIfNull(session);
+        _session = session;
+    }
 
     /// <inheritdoc />
     public async ValueTask BeginTransactionAsync(CancellationToken ct = default)

@@ -103,6 +103,23 @@ public sealed class MultiDialectSafetyTests
             .Throws<InvalidOperationException>();
     }
 
+    /// <summary>ITM-282（R44）：RabbitMqPort fail-closed 行为锁定——非法整数环境变量抛
+    /// InvalidOperationException 而非静默回退 5672（TST-105b 改造零覆盖）。</summary>
+    [Test]
+    public async Task RabbitMqPort_InvalidEnvironmentVariable_ThrowsFailClosed()
+    {
+        var original = Environment.GetEnvironmentVariable("PALDDD_TEST_RABBIT_PORT");
+        try
+        {
+            Environment.SetEnvironmentVariable("PALDDD_TEST_RABBIT_PORT", "5673u");
+            await Assert.That(() => TestEnvironment.RabbitMqPort).Throws<InvalidOperationException>();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PALDDD_TEST_RABBIT_PORT", original);
+        }
+    }
+
     private sealed class RecordingAsyncDisposable(Exception? exception = null) : IAsyncDisposable
     {
         public int DisposeCount { get; private set; }
