@@ -3,7 +3,7 @@
 > 本规范定义 Pal.DDD 项目从代码变更到 NuGet 发布的标准流程。
 > 所有版本发布（含补丁版/小版本/大版本/Preview）必须遵守。
 >
-> **当前状态**：`VersionPrefix=1.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**1.1.0 已发布**（2026-07-31 推送 NuGet.org，tag `v1.1.0`→`b4d532f`；`[1.1.0]` CHANGELOG 段为 2026-08-21 事后回填——发布时 CHANGELOG 尚未建立）。tag 之后的变更累积在 `[Unreleased]`，下个版本发布前需将 `VersionPrefix` 升位。
+> **当前状态**：`VersionPrefix=2.0.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**2.0.0 已发布**（2026-08-23）。1.1.0 已于 2026-07-31 发布（2026-07-31 推送 NuGet.org，tag `v1.1.0`→`b4d532f`；`[1.1.0]` CHANGELOG 段为 2026-08-21 事后回填——发布时 CHANGELOG 尚未建立）。tag 之后的变更累积在 `[Unreleased]`，下个版本发布前需将 `VersionPrefix` 升位。
 > **首次发布待办**：本规范第 5/6/9 章在首次实际发布后需补实测教训（参考 ORM 项目 `docs/发布规范.md` §9）。
 
 ---

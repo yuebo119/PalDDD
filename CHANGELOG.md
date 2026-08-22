@@ -2,13 +2,15 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-> **当前版本**：`VersionPrefix=1.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）
-> **发布状态**：**1.1.0 已发布**（2026-07-31 推送 NuGet.org + tag `v1.1.0`→`b4d532f`；本节为事后回填——发布时 CHANGELOG 尚未建立）。tag 之后的所有变更见 `[Unreleased]`。
+> **当前版本**：`VersionPrefix=2.0.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）
+> **发布状态**：**2.0.0 已发布**（2026-08-23 tag `v2.0.0`）；1.1.0 已于 2026-07-31 发布（2026-07-31 推送 NuGet.org + tag `v1.1.0`→`b4d532f`；本节为事后回填——发布时 CHANGELOG 尚未建立）。tag 之后的所有变更见 `[Unreleased]`。
 > **发布规范**：见 [`docs/release.md`](docs/release.md)
 
 ---
 
 ## [Unreleased]
+
+## [2.0.0] - 2026-08-23
 
 ### ⚠️ 破坏性变更（三十八轮统一：状态列 int 化）
 
