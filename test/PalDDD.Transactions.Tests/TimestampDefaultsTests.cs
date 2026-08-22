@@ -41,10 +41,15 @@ public sealed class TimestampDefaultsTests
     public async Task NoMutableStaticClock_OnEntities()
     {
         // 反模式 static TimeProvider Clock 已移除：三个实体类型都不应再暴露 internal static Clock。
-        await Assert.That(typeof(OutboxMessage).GetProperty("Clock", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)).IsNull();
-        await Assert.That(typeof(InboxMessage).GetProperty("Clock", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)).IsNull();
-        await Assert.That(typeof(SagaState).GetProperty("Clock", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)).IsNull();
+        // 属性 + 字段双扫（GetMember 匹配所有成员种类）——仅扫属性会漏掉改写为静态字段的回退形态。
+        await Assert.That(FindStaticNonPublicClockMember(typeof(OutboxMessage))).IsNull();
+        await Assert.That(FindStaticNonPublicClockMember(typeof(InboxMessage))).IsNull();
+        await Assert.That(FindStaticNonPublicClockMember(typeof(SagaState))).IsNull();
     }
+
+    private static System.Reflection.MemberInfo? FindStaticNonPublicClockMember(Type type)
+        => type.GetMember("Clock", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            .FirstOrDefault();
 
     private sealed class TestSagaState : SagaState;
 }

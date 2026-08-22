@@ -78,6 +78,8 @@ public sealed class InvariantOrder : AggregateRoot<Guid>
     /// <summary>状态转换守卫 — 已确认不能取消（业务规则示例）</summary>
     public void Cancel(string reason)
     {
+        if (Status == InvariantOrderStatus.Confirmed)
+            throw new InvalidOperationException("已确认的订单不能取消。");
         if (string.IsNullOrWhiteSpace(reason))
             throw new ArgumentException("取消原因不能为空。", nameof(reason));
 
@@ -194,6 +196,15 @@ public sealed class AggregateRootInvariantTests
 
         await Assert.That(() => order.Cancel("")).Throws<ArgumentException>();
         await Assert.That(() => order.Cancel("   ")).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task Cancel_FromConfirmed_Throws()
+    {
+        var order = new InvariantOrder(Guid.NewGuid(), "Alice");
+        order.Confirm();
+
+        await Assert.That(() => order.Cancel("test")).Throws<InvalidOperationException>();
     }
 
     [Test]

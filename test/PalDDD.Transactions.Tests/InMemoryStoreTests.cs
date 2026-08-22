@@ -161,13 +161,16 @@ public sealed class InMemoryStoreTests
     {
         var store = new InMemorySagaStateStore<SampleSaga>();
         store.Add(new SampleSaga { SagaId = Guid.NewGuid(), CurrentState = "Started", Status = SagaStatus.Active });
+        store.Add(new SampleSaga { SagaId = Guid.NewGuid(), CurrentState = "Waiting", Status = SagaStatus.AwaitingHumanDecision });
         store.Add(new SampleSaga { SagaId = Guid.NewGuid(), CurrentState = "Done", Status = SagaStatus.Completed });
         store.Add(new SampleSaga { SagaId = Guid.NewGuid(), CurrentState = "Compensated", Status = SagaStatus.Compensated });
         store.Add(new SampleSaga { SagaId = Guid.NewGuid(), CurrentState = "CompensationFailed", Status = SagaStatus.CompensationFailed });
         store.Add(new SampleSaga { SagaId = Guid.NewGuid(), CurrentState = "Dead", Status = SagaStatus.DeadLettered });
 
         var active = await store.GetActiveSagasAsync(10, cancellationToken);
-        await Assert.That(active).Count().IsEqualTo(1); // 只返回 Active，终态和人工介入态均过滤
+        // 返回 Active + AwaitingHumanDecision（三十四轮中断态超时兜底：观测查询同步纳入
+        // 中断态，HITL 扫描依赖此查询）；终态（Completed/Compensated/…）被过滤
+        await Assert.That(active).Count().IsEqualTo(2);
     }
 
     [Test]
@@ -179,6 +182,8 @@ public sealed class InMemoryStoreTests
         var store = new InMemorySagaStateStore<SampleSaga>();
         await Assert.That(async () => { await store.GetActiveSagasAsync(10, cts.Token); }).Throws<OperationCanceledException>();
         await Assert.That(async () => { await store.SaveChangesAsync(new SampleSaga { SagaId = Guid.NewGuid() }, cts.Token); }).Throws<OperationCanceledException>();
+        await Assert.That(async () => { await store.LeaseActiveSagasAsync("scanner", TimeSpan.FromMinutes(1), 10, cts.Token); }).Throws<OperationCanceledException>();
+        await Assert.That(async () => { await store.GetByIdAsync(Guid.NewGuid(), cts.Token); }).Throws<OperationCanceledException>();
     }
 
     [Test]

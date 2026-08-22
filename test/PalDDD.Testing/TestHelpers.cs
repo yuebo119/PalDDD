@@ -212,11 +212,15 @@ public sealed class FakeTimeProvider : TimeProvider
             DueTime = dueTime;
         }
 
+        /// <summary>
+        /// 不支持重设计时器——FakeTimer 仅支持一次性到期语义，重设（含周期计时器）显式抛出，
+        /// 调用方依赖 Change 语义时立即失败而非静默得到 false。
+        /// </summary>
+        /// <param name="dueTime">忽略。</param>
+        /// <param name="period">忽略。</param>
+        /// <exception cref="NotSupportedException">总是抛出。</exception>
         public bool Change(TimeSpan dueTime, TimeSpan period)
-        {
-            // 简化实现：不支持周期计时器（Saga/Outbox 场景不需要）
-            return false;
-        }
+            => throw new NotSupportedException("FakeTimer 不支持 Change（重设/周期计时器）——仅支持一次性到期语义。");
 
         public void Dispose()
         {

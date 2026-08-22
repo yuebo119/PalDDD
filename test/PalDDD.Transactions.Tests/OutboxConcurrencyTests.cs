@@ -6,6 +6,11 @@ namespace PalDDD.Transactions.Tests;
 /// InMemoryOutboxStore 并发竞争测试 — 多线程同时 lease 验证消息不重复投递。
 /// 补充 OutboxSqliteConcurrencyTests 的 SQLite 场景，覆盖内存存储的线程安全。
 /// </summary>
+/// <remarks>
+/// 覆盖语义（刻意）：单次运行概率性覆盖并发窗口——竞态是否真实交错取决于调度器，
+/// 通过即验证该次交错下无重复分配；确定性并发回归由 fencing 行为测试
+/// （InMemoryStoreTests 的 StaleReferenceAfterReLease 系列）与 PalOrmConcurrencyTests 承载。
+/// </remarks>
 public sealed class OutboxConcurrencyTests
 {
     [Test]
@@ -24,7 +29,6 @@ public sealed class OutboxConcurrencyTests
         }
 
         var allLeased = new System.Collections.Concurrent.ConcurrentBag<OutboxMessage>();
-        // removed unused var
         var workerCount = 4;
 
         // 4 个 worker 并行抢消息
@@ -53,7 +57,6 @@ public sealed class OutboxConcurrencyTests
         });
 
         var allLeased = new System.Collections.Concurrent.ConcurrentBag<OutboxMessage>();
-        var now = DateTimeOffset.UtcNow;
 
         // 8 个 worker 抢 1 条消息
         await Parallel.ForAsync(0, 8, async (workerId, ct) =>

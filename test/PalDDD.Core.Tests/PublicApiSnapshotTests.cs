@@ -17,6 +17,9 @@ namespace PalDDD.Core.Tests;
 
 public sealed class PublicApiSnapshotTests
 {
+    // 范围决策（刻意）：核心 11 程序集——适配层（Dapper/PalORM/EFCore 族）公共面由其
+    // 各自集成测试与编译消费锁定，不纳入本快照；快照范围扩大需评审 PublicApiSnapshot
+    // 基线成本（基线文件体积与每次公共面变更的更新负担）。
     private static readonly Assembly[] Assemblies =
     [
         typeof(AggregateRoot<>).Assembly,       // PalDDD.Core

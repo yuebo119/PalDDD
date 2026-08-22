@@ -10,7 +10,6 @@ using PalDDD.Serialization;
 using PalDDD.Serialization.Evolution;
 using PalDDD.Serialization.Json;
 using PalDDD.Transactions;
-using System.Collections.Frozen;
 using System.Reflection;
 using System.Text.Json.Serialization;
 
@@ -38,6 +37,11 @@ public sealed class AotContractTests
     /// A 类程序集（AOT 合规库）不应包含 [RequiresDynamicCode] 或 [RequiresUnreferencedCode] 标注。
     /// 防止误加导致 AOT 发布失败。
     /// </summary>
+    /// <remarks>
+    /// 扫描边界（刻意）：仅扫 public 面（public 类型 + 其公共方法/构造器）——
+    /// internal 成员的 DAM 标注由编译器自身警告链（自定义编译器警告即错误）覆盖，
+    /// 不在此重复扫描。扩大扫描面需先评估 internal 类型反射枚举的误报成本。
+    /// </remarks>
     [Test]
     [Arguments(typeof(PalDDD.Core.Entity))]                        // PalDDD.Core
     [Arguments(typeof(MessageCatalog))]                            // PalDDD.Serialization
@@ -102,7 +106,7 @@ public sealed class AotContractTests
         var builder = new MessageCatalogBuilder();
         // 同一 wire name 不同 schema version（表示调用了两次 Add 但其中一次 SchemaVersion 不同）
         // Name 相同意味着对最新的覆盖查找
-        var v1 = builder.Add(AotContractJsonContext.Default.AotTestMessage, name: "latest-test.v1", schemaVersion: 1);
+        builder.Add(AotContractJsonContext.Default.AotTestMessage, name: "latest-test.v1", schemaVersion: 1);
         var v2 = builder.Add(AotContractJsonContext.Default.AotTestMessageV2, name: "latest-test.v1", schemaVersion: 2);
         var catalog = builder.Build();
 
@@ -329,21 +333,8 @@ public sealed class AotContractTests
     // ═══════════════════════════════════════════════════════════════
     // 5️⃣ FrozenDictionary 构建后查找 AOT-safe — 零反射
     // ═══════════════════════════════════════════════════════════════
-
-    [Test]
-    public async Task FrozenDictionary_Lookup_AotSafe()
-    {
-        var dict = new Dictionary<string, int>
-        {
-            ["one"] = 1,
-            ["two"] = 2,
-            ["three"] = 3,
-        }.ToFrozenDictionary();
-
-        await Assert.That(dict.TryGetValue("two", out var value)).IsTrue();
-        await Assert.That(value).IsEqualTo(2);
-        await Assert.That(dict.TryGetValue("four", out _)).IsFalse();
-    }
+    // （TST-111：原 FrozenDictionary_Lookup_AotSafe 测 BCL ToFrozenDictionary 行为，
+    // 与产品路径零关联——BCL 恒真断言已删，产品路径由下方 MessageCatalog 查找测试承载）
 
     /// <summary>MessageCatalog 构建后 FrozenDictionary 查找正确</summary>
     [Test]
@@ -442,20 +433,6 @@ public sealed class AotContractTests
         {
             var status = OrderStatus.FromValue(expected);
             await Assert.That(status.Value).IsEqualTo(expected);
-        }
-    }
-
-    /// <summary>
-    /// [GenerateEnum] 源生成器输出的 SmartEnum 值查找使用 FrozenDictionary —— O(1) 零反射。
-    /// </summary>
-    [Test]
-    public async Task GeneratedEnum_FrozenDictionaryLookup_ConsistentPerformance()
-    {
-        // 重复查找验证 FrozenDictionary 行为一致性
-        for (var i = 0; i < 100; i++)
-        {
-            await Assert.That(OrderStatus.TryFromValue("delivered", out var result)).IsTrue();
-            await Assert.That(result!.Value).IsEqualTo("delivered");
         }
     }
 

@@ -193,7 +193,7 @@ public sealed class SagaProcessorTests
             => serviceType == typeof(SagaTimeoutProcessor<LifecycleSagaState>) ? processor : null;
     }
 
- // (mojibake cleared)
+    /// <summary>空 Saga — 无步骤注册，扫描无操作</summary>
     private sealed class NoOpSaga : Saga<LifecycleSagaState>
     { }
 }

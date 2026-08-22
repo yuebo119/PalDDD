@@ -4,35 +4,16 @@ namespace PalDDD.Core.Tests;
 // 🔄 事件溯源回放契约测试
 // ═══════════════════════════════════════════════════════════════
 // DDD 聚合根事件溯源的核心契约：
-// 1. 相同事件序列重建出相同聚合状态
-// 2. 事件应用幂等（重复应用同一事件不变状态）
-// 3. 事件顺序敏感（乱序重建状态不同）
-// 4. 空事件流边界
-// 5. 事件重建后可继续产生新事件
+// 1. 事件应用幂等（同一事件流多次回放，结果一致——含"相同序列重建相同状态"）
+// 2. 事件顺序敏感（乱序回放抛异常）
+// 3. 空事件流边界
+// 4. 事件重建后可继续产生新事件
+// （TST-215：原 Replay_SameEventSequence_ProducesEqualState 与幂等版测试体完全
+// 重复——保留名字更准确的幂等契约版）
 // ═══════════════════════════════════════════════════════════════
 
 public sealed class EventSourcingContractTests
 {
-    [Test]
-    public async Task Replay_SameEventSequence_ProducesEqualState()
-    {
-        var id = Guid.NewGuid();
-        var events = new DomainEvent[]
-        {
-            new ReplayableOrderCreated(id, "Alice", 100m),
-            new ReplayableOrderAmountAdjusted(id, 50m),
-            new ReplayableOrderConfirmed(id)
-        };
-
-        var agg1 = ReplayableOrder.Replay(events);
-        var agg2 = ReplayableOrder.Replay(events);
-
-        await Assert.That(agg1.CustomerName).IsEqualTo(agg2.CustomerName);
-        await Assert.That(agg1.Amount).IsEqualTo(agg2.Amount);
-        await Assert.That(agg1.Status).IsEqualTo(agg2.Status);
-        await Assert.That(agg1.Version).IsEqualTo(agg2.Version);
-    }
-
     [Test]
     public async Task Replay_DifferentEventSequences_ProduceDifferentState()
     {
@@ -77,7 +58,7 @@ public sealed class EventSourcingContractTests
     }
 
     [Test]
-    public async Task Replay_OutOfOrder_ThrowsOrProducesDifferentState()
+    public async Task Replay_OutOfOrder_Throws()
     {
         // 顺序敏感 — Confirm 必须在 Created 之后
         var id = Guid.NewGuid();
