@@ -88,11 +88,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-packages
+          # -p:NoWarn=NU5104 — .NET 11 preview 依赖（Directory.Build.props NoWarn 在 CI pack 阶段偶不生效，命令行属性保底）
           for dir in src/*/; do
             proj=$(basename "$dir")
             csproj="src/$proj/$proj.csproj"
             if [ -f "$csproj" ]; then
-              dotnet pack "$csproj" -c Release --no-build -o release-packages --nologo
+              dotnet pack "$csproj" -c Release --no-build -o release-packages --nologo -p:NoWarn=NU5104
             fi
           done
 
