@@ -111,7 +111,7 @@ public class PalOrmSagaStateStoreTests
     public async Task GetByIdAsync_AfterCommit_RawCommandNotBoundToReleasedTransaction()
     {
         // ITM-243 清理侧守护：Commit 的 finally 清空 PalOrmAmbientTransaction 后，
-        // 后续 raw command 不挂已释放事务（事务挂接残留会导致命令复用失效 DbTransaction——R40 起为 CWT Session 键控）.
+        // 后续 raw command 不挂已释放事务（事务挂接残留会导致命令复用失效 DbTransaction——R40 起为 CWT Session 键控）。
         await using var session = await PalOrmStoreFixture.CreateAsync();
         var store = new SqliteSagaStateStore<StoreTestSagaState>(session, Json);
         await using var uow = new SqlitePalOrmUnitOfWork(session);

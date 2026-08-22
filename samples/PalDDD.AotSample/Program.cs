@@ -56,8 +56,8 @@ var pending = await outboxStore.LeasePendingMessagesAsync(10, "aot-sample", Time
 Check("outbox lease + process", pending.Count == 1);
 // ITM-265（R40）：MarkProcessed 必须传租约返回的实例——InMemory 租约会创建 successor 对象，
 // 传原始 outboxMsg 会被 IsCurrentLeaseHolder 的引用守卫拒绝（静默 no-op）。写法先例见
-// ECommerce 样本（msgs[0]，Lease 返回值）；PalOrmSample 走的是 PalORM 特有的无租约直标路径
-//（owner-null 分支仅 PalORM 放行——ITM-269 另行声明）。
+// ECommerce/PalOrmSample 样本（均传 Lease 返回值 msgs[0]/leased[0]——ITM-269 后两者同形态）；
+// owner-null 直标分支仅 PalORM/Dapper 放行（ITM-272 勘正），样本不走该分支。
 // ITM-268（R41）：先 Check 后索引——空租约时 pending[0] 直接抛 IndexOutOfRange 会绕过
 // Check 的 failures 累计机制。
 outboxStore.MarkProcessed(pending[0], DateTimeOffset.UtcNow);
