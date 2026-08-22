@@ -37,7 +37,13 @@ public interface IPalOutboxStore
     ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages);
 
     /// <summary>标记消息发布成功。</summary>
-    /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。</remarks>
+    /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。
+    /// <para>
+    /// ⚠️ <b>前置条件（ITM-269 声明）</b>：应传入 <see cref="LeasePendingMessagesAsync"/> 返回的租约实例。
+    /// 对<b>未租约</b>消息直接标记的实现语义相反——PalORM 栈放行（owner-null 分支视为管理员干预/直标），
+    /// InMemory/Dapper 栈拒绝（租约守卫静默 no-op，零变异零报错）。处理管线一律走 Lease 路径；
+    /// GetPending 观测结果不构成标记资格。
+    /// </para></remarks>
     void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt);
 
     /// <summary>标记消息不可恢复。</summary>

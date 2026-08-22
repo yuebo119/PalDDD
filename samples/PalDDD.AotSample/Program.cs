@@ -53,14 +53,18 @@ var outboxMsg = new OutboxMessage
 };
 outboxStore.AddMessage(outboxMsg);
 var pending = await outboxStore.LeasePendingMessagesAsync(10, "aot-sample", TimeSpan.FromMinutes(2), new OutboxOptions().MaxRetryCount, CancellationToken.None).ConfigureAwait(false);
-// ITM-265（R40）：MarkProcessed 必须传租约返回的实例——InMemory 租约会创建 successor 对象，
-// 传原始 outboxMsg 会被 IsCurrentLeaseHolder 的引用守卫拒绝（静默 no-op，三方实现同）。
-// 对齐 ECommerce/PalOrmSample 的正确写法（pending[0]）。
-outboxStore.MarkProcessed(pending[0], DateTimeOffset.UtcNow);
 Check("outbox lease + process", pending.Count == 1);
-// 终验（ITM-265）：标记成功后 GetPending 应为空——防止"标记无效但租约计数仍 1"的验证器自欺
-var afterMark = await outboxStore.GetPendingMessagesAsync(10, new OutboxOptions().MaxRetryCount, CancellationToken.None).ConfigureAwait(false);
-Check("outbox marked processed (no pending left)", afterMark.Count == 0);
+// ITM-265（R40）：MarkProcessed 必须传租约返回的实例——InMemory 租约会创建 successor 对象，
+// 传原始 outboxMsg 会被 IsCurrentLeaseHolder 的引用守卫拒绝（静默 no-op）。写法先例见
+// ECommerce 样本（msgs[0]，Lease 返回值）；PalOrmSample 走的是 PalORM 特有的无租约直标路径
+//（owner-null 分支仅 PalORM 放行——ITM-269 另行声明）。
+// ITM-268（R41）：先 Check 后索引——空租约时 pending[0] 直接抛 IndexOutOfRange 会绕过
+// Check 的 failures 累计机制。
+outboxStore.MarkProcessed(pending[0], DateTimeOffset.UtcNow);
+// 终验（ITM-268 修正）：断言租约实例的终态而非查询侧不可见——R40 版的 GetPending==0 是恒真
+//（标记被拒时 successor 持未过期租约，租约过滤本来就把租约中的消息排除出 GetPending，两态皆绿）。
+// MarkProcessed 成功时原地改写入参状态为 Processed；被引用守卫拒绝时 no-op、状态仍 Pending。
+Check("outbox marked processed (terminal state)", pending[0].Status == OutboxStatus.Processed);
 
 // ── 4. InMemory Inbox 幂等消费 ──
 var inboxStore = new InMemoryInboxStore();

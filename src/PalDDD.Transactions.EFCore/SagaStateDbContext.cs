@@ -128,9 +128,9 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
         {
             // 乐观锁冲突（他实例已写同一 Saga）——契约要求返回 0 而非上抛，
             // 调用方（SagaProcessor）据此判定内存快照作废并记 Warning。
-            // 验证轮返工：仅当 state 已跟踪时才 detach——Entry() 对未跟踪实体
-            // 会静默把它挂为 Unchanged（污染 ChangeTracker），且并发冲突可能来自
-            // 其他被跟踪实体；未跟踪时无需任何清理。
+            // 验证轮返工：仅当 state 已跟踪时才 detach——对未跟踪实体调 Entry(state)
+            // 读取状态不附加（EF Core：仅 State 赋值才附加；R41 ITM-271 勘正原"静默挂为
+            // Unchanged"的失实描述），且并发冲突可能来自其他被跟踪实体；未跟踪时无需清理。
             if (ChangeTracker.Entries<TState>().Any(e => ReferenceEquals(e.Entity, state)))
                 Entry(state).State = EntityState.Detached;
             return 0;

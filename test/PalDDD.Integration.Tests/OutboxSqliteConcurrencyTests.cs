@@ -76,7 +76,7 @@ public sealed class OutboxSqliteConcurrencyTests
     [Test]
     public async Task ReleaseForRetry_IncrementsRetryCountAndClearsLease(CancellationToken cancellationToken)
     {
-        // 租约直接种子建立（生产 Lease 不可翻译，见上）——聚焦 ReleaseForRetry 语义
+        // 租约直接种子建立（ITM-261 已修复但保留此形态——终态写仍走生产路径，聚焦 ReleaseForRetry 语义，见类尾注释）
         var messageId = PalUlid.New();
         await SeedMessageAsync(messageId, "orders.created.v1",
             lockedBy: "worker-1", lockedUntil: DateTimeOffset.UtcNow.AddMinutes(2));
@@ -163,7 +163,7 @@ public sealed class OutboxSqliteConcurrencyTests
         await Assert.That(final.Status).IsEqualTo(OutboxStatus.Pending);
     }
 
-    /// <summary>种子一条 Pending 消息；可选预置租约字段（生产 Lease 不可翻译期间的替代建租方式）。</summary>
+    /// <summary>种子一条 Pending 消息；可选预置租约字段（终态写测试聚焦语义的直建租约形态——见类尾 ITM-261 勘正注释）。</summary>
     private async ValueTask SeedMessageAsync(
         PalUlid id,
         string type,
