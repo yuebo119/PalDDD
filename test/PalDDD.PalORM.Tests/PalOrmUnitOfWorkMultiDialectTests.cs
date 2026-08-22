@@ -26,7 +26,7 @@ public class PalOrmUnitOfWorkMultiDialectTests
             await using var uow = new PalOrmUnitOfWork<TProvider>(ts.Session);
             await uow.BeginTransactionAsync();
             var before = DateTimeOffset.UtcNow;
-            await ts.Session.ExecuteAsync($"INSERT INTO outbox_messages (id, type, payload, content_type, schema_version, status, retry_count, created_at) VALUES ({ByteAether.Ulid.Ulid.New().ToString()}, {"tx.commit"}, {"[]"}, {"application/json"}, {1}, {0}, {0}, {before})", default);
+            await ts.Session.ExecuteAsync($"INSERT INTO outbox_messages (id, type, payload, content_type, schema_version, status, retry_count, created_at) VALUES ({ByteAether.Ulid.Ulid.New().ToString()}, {"tx.commit"}, {System.Text.Encoding.UTF8.GetBytes("[]")}, {"application/json"}, {1}, {0}, {0}, {before})", default);
             await uow.CommitAsync();
 
             var count = await ts.Session.ScalarAsync<long>($"SELECT COUNT(*) FROM outbox_messages");
@@ -66,7 +66,7 @@ public class PalOrmUnitOfWorkMultiDialectTests
         {
             await using var uow = new PalOrmUnitOfWork<TProvider>(ts.Session);
             await uow.BeginTransactionAsync();
-            await ts.Session.ExecuteAsync($"INSERT INTO outbox_messages (id, type, payload, content_type, schema_version, status, retry_count, created_at) VALUES ({ByteAether.Ulid.Ulid.New().ToString()}, {"tx.rollback"}, {"[]"}, {"application/json"}, {1}, {0}, {0}, {DateTimeOffset.UtcNow})", default);
+            await ts.Session.ExecuteAsync($"INSERT INTO outbox_messages (id, type, payload, content_type, schema_version, status, retry_count, created_at) VALUES ({ByteAether.Ulid.Ulid.New().ToString()}, {"tx.rollback"}, {System.Text.Encoding.UTF8.GetBytes("[]")}, {"application/json"}, {1}, {0}, {0}, {DateTimeOffset.UtcNow})", default);
             await uow.RollbackAsync();
 
             var count = await ts.Session.ScalarAsync<long>($"SELECT COUNT(*) FROM outbox_messages");
