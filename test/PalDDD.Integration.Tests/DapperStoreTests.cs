@@ -107,6 +107,8 @@ public sealed class DapperStoreTests
         }
     }
 
+    // TST-205 平行副本声明：Dapper 栈与 PalORM 栈 schema 刻意分离（栈内演化独立），
+    // 对齐需双改——见 MultiDialectSchema（PalORM.Tests）。
     private static async Task CreateSchemaAsync(DbConnection conn)
     {
         var cmd = conn.CreateCommand();
@@ -448,6 +450,12 @@ public sealed class DapperStoreTests
             store.ReleaseForRetry(target, $"retry {i + 1}",
                 TimeProvider.System.GetUtcNow().AddMilliseconds(-1));
         }
+
+        // TST-116/201：Dapper 版 ReleaseForRetry 在 SQL 原子递增 retry_count（内存对象不回写），
+        // 从 DB 读验证递增确实发生 10 次——对齐 PalOrmOutboxStoreTests 同名测试的 RetryCount==10 断言
+        var retryCount = await ReadScalarAsync<long>(
+            "SELECT retry_count FROM outbox_messages WHERE id=$id", ("$id", msg.Id));
+        await Assert.That(retryCount).IsEqualTo(10L);
 
         var final = await store.GetPendingMessagesAsync(10, new OutboxOptions().MaxRetryCount, cancellationToken);
         await Assert.That(final).IsEmpty();
@@ -982,7 +990,9 @@ public sealed class DapperStoreTests
     {
         // P3 回归（九轮）：批内两条事件共享 EventId 时，冲突重查的分类基线是"本批已写入的
         // 最高版本"（version-2）——误用 expectedVersion 会把批内重复误报为并发冲突。
-        // 前提：event_id 需唯一索引才会违约（默认 DDL 只约束 stream+version；生产可加此强化）。
+        // 前置声明（TST-202）：生产默认 schema 无 event_id 唯一索引时该路径不触发
+        // （默认 DDL 只约束 stream+version，生产可加此强化）；本测试自建索引验证分类逻辑
+        // （ITM-247 传感器形态）。
         await using (var indexCommand = _conn.CreateCommand())
         {
             indexCommand.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id)";

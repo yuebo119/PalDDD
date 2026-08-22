@@ -155,6 +155,30 @@ public sealed class EventLogEfCoreTests
                 cancellationToken).AsTask()).Throws<DbUpdateException>();
     }
 
+    // TST-218：批内自重复分支（同批两条相同 EventId，库中无既有行）——
+    // EventLogDbContext 的 hasDuplicateEventIdInBatch 分类路径：SaveChanges 撞
+    // event_id 唯一索引 → 重查 eventIdExists=false → 批内 Distinct 数 < 总数 →
+    // 数据错误，原样上抛 DbUpdateException（非 EventStreamConcurrencyException）。
+    // 与上方 NonFirstBatchEventIdDuplicatesExisting 的差异：重复对内（前者为批 vs 库既有）。
+    [Test]
+    public async Task AppendAsync_DuplicateEventIdWithinBatch_ThrowsDbUpdateException(CancellationToken cancellationToken)
+    {
+        var options = CreateSqliteOptions();
+        var duplicatedId = PalUlid.New();
+        await using var db = new TestEventLogDbContext(options);
+        await db.Database.EnsureCreatedAsync();
+
+        await Assert.That(() =>
+            db.AppendAsync(
+                "ordering-order-1",
+                ExpectedStreamVersion.NoStream,
+                [
+                    CreateEvent(duplicatedId, "orders.order-submitted.v1", "first"),
+                    CreateEvent(duplicatedId, "orders.order-submitted.v1", "duplicate")
+                ],
+                cancellationToken).AsTask()).Throws<DbUpdateException>();
+    }
+
     [Test]
     public async Task AppendAsync_UsesInjectedTimeProviderForRecordedAt(CancellationToken cancellationToken)
     {

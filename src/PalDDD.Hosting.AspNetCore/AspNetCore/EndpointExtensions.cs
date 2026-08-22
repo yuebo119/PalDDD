@@ -71,11 +71,7 @@ public static class EndpointExtensions
                 // 验证轮返工：与 ExceptionMiddleware 同款 ProblemDetails 响应体（裸 400 无 body
                 // 会让客户端拿不到错误明细；日志由派发管线内记录）
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                var response = new ValidationProblemResponse(
-                    "https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1",
-                    "Validation Failed",
-                    StatusCodes.Status400BadRequest,
-                    ex.Errors.Select(e => new ValidationProblemError(e.PropertyName, e.Message)).ToArray());
+                var response = ValidationProblemResponseFactory.Create(ex);
                 await context.Response.WriteAsJsonAsync(
                     response,
                     PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
@@ -140,11 +136,7 @@ public static class EndpointExtensions
             {
                 // 验证轮返工：与 ExceptionMiddleware 同款 ProblemDetails 响应体
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                var response = new ValidationProblemResponse(
-                    "https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1",
-                    "Validation Failed",
-                    StatusCodes.Status400BadRequest,
-                    ex.Errors.Select(e => new ValidationProblemError(e.PropertyName, e.Message)).ToArray());
+                var response = ValidationProblemResponseFactory.Create(ex);
                 await context.Response.WriteAsJsonAsync(
                     response,
                     PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
@@ -190,11 +182,7 @@ public static class EndpointExtensions
                 // 严格对齐 MapCommand 两个方法的响应体写法：与 ExceptionMiddleware 同款
                 // ProblemDetails 响应体（裸 400 无 body 会让客户端拿不到错误明细）。
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                var response = new ValidationProblemResponse(
-                    "https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1",
-                    "Validation Failed",
-                    StatusCodes.Status400BadRequest,
-                    ex.Errors.Select(e => new ValidationProblemError(e.PropertyName, e.Message)).ToArray());
+                var response = ValidationProblemResponseFactory.Create(ex);
                 await context.Response.WriteAsJsonAsync(
                     response,
                     PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
@@ -209,4 +197,21 @@ public static class EndpointExtensions
                 cancellationToken: ct).ConfigureAwait(false);
         });
     }
+}
+
+/// <summary>
+/// P3-SRC-403 修复：ValidationProblemResponse 构造收口——同一构造块（type/title/status/errors
+/// 四参）此前在 ExceptionMiddleware 与 EndpointExtensions 三处逐字重复 4 次，新增端点漏抄即
+/// 产生裸 400 无 body 的分叉（ITM-168 曾因 MapQuery 漏改出现）。构造参数逐字保持，
+/// 响应字节级不变（快照锁定）。
+/// </summary>
+internal static class ValidationProblemResponseFactory
+{
+    /// <summary>按 PalValidationException 构造规范 ValidationProblemResponse（RFC 9110 §15.5.1）。</summary>
+    internal static ValidationProblemResponse Create(CQRS.PalValidationException ex)
+        => new(
+            "https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1",
+            "Validation Failed",
+            StatusCodes.Status400BadRequest,
+            ex.Errors.Select(e => new ValidationProblemError(e.PropertyName, e.Message)).ToArray());
 }

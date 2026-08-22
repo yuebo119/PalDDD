@@ -352,10 +352,11 @@ public sealed class IdempotencyTests
         // 不得降级为 Failed（Failed 可重入 → handler 重放 → 副作用二次执行）。
         // 对齐 InboxProcessor ITM-180（镜像修复）。修复前 MarkCompleted 异常落入
         // 通用 catch → MarkFailedAsync 把已成功记录标 Failed。
-        ThrowingOnCompleteStore.MarkFailedCalls = 0;
-        ThrowingOnCompleteStore.LastRecord = null;
+        // TST-203/306b：装置改实例字段（static 可变字段污染并行测试）——每测试 new，
+        // 无需手动重置。
         using var listener = new RecordingActivityListener();
-        var processor = new IdempotencyProcessor(new ThrowingOnCompleteStore());
+        var store = new ThrowingOnCompleteStore();
+        var processor = new IdempotencyProcessor(store);
 
         var execution = await processor.ExecuteAsync(
             "CreateOrder",
@@ -368,21 +369,22 @@ public sealed class IdempotencyTests
         // 副作用已发生：按 Executed 返回——修复前落入 catch 被降级 Failed
         await Assert.That(execution.Status).IsEqualTo(IdempotencyExecutionStatus.Executed);
         // 关键：MarkFailedAsync 必须零调用（不得把已成功记录标 Failed）
-        await Assert.That(ThrowingOnCompleteStore.MarkFailedCalls).IsEqualTo(0);
+        await Assert.That(store.MarkFailedCalls).IsEqualTo(0);
         // 记录仍维持 TryStart 的 Processing 状态（未被降级）——直接断言状态（空引用访问
         // 即失败，无需 IsNotNull 守卫式弱断言，满足断言棘轮约束）
-        await Assert.That(ThrowingOnCompleteStore.LastRecord!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+        await Assert.That(store.LastRecord!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
 
         // 定位活动 event 标记 pending-confirmation 语义（可观测性）——Any 行为断言
         await Assert.That(listener.StoppedActivities.Any(a =>
             a.Events.Any(e => e.Name == "idempotency.completed-pending-confirmation"))).IsTrue();
     }
 
-    /// <summary>MarkCompleted 抛 DB 故障、记录 TryStart 对象与 MarkFailed 调用数的存储 —— ITM-191 测试装置。</summary>
+    /// <summary>MarkCompleted 抛 DB 故障、记录 TryStart 对象与 MarkFailed 调用数的存储 —— ITM-191 测试装置。
+    /// TST-203/306b：状态用实例字段（static 可变字段会跨测试串扰并行执行），每测试 new 即隔离。</summary>
     private sealed class ThrowingOnCompleteStore : IIdempotencyStore
     {
-        public static IdempotencyRecord? LastRecord;
-        public static int MarkFailedCalls;
+        public IdempotencyRecord? LastRecord;
+        public int MarkFailedCalls;
 
         public ValueTask<IdempotencyRecord?> GetAsync(string operationName, string key, DateTimeOffset now, CancellationToken ct = default)
             => ValueTask.FromResult<IdempotencyRecord?>(null);

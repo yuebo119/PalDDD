@@ -148,6 +148,12 @@ public abstract class InboxDbContext(
         });
     }
 
+    /// <summary>
+    /// 分离态消息附加回变更跟踪器。
+    /// P3-SRC-109 声明调用方义务：message 实例由 TryStartProcessingAsync 返回后不得跨
+    /// DbContext 复用——同键实例已被本上下文跟踪时 <c>Attach</c> 抛 InvalidOperationException
+    ///（EF Core 跟踪冲突：同一键已有不同实例被跟踪），调用方须保证同一上下文内单实例流转。
+    /// </summary>
     private void AttachIfDetached(InboxMessage message)
     {
         if (Entry(message).State == EntityState.Detached)

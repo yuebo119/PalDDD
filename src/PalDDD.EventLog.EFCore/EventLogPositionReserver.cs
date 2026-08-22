@@ -164,16 +164,23 @@ public sealed class EventLogPositionReserver
                 // 重新取块落在已用区间→唯一约束报错。
                 // 修复策略：有活动事务时不更新内存游标（下次调用重读 DB，慢但正确）；
                 // 无事务时 SaveChanges 原子提交，立即发布安全。
+                // ⚠️ ITM-226 盲区（P3-SRC-405）：CurrentTransaction 只能检测 EF 显式事务
+                // （BeginTransaction）——调用方以 TransactionScope 包裹时为 null，本检测
+                // 失明：ambient 事务随后回滚会使 Hi/Lo 内存游标超前持久化 allocator（同
+                // 类头"回滚窗口 (b)"场景），依赖 events 表唯一索引兜底报错。
                 var hasActiveTransaction = context.Database.CurrentTransaction is not null;
-                if (hasActiveTransaction)
+                // P3-SRC-104：_initialized 写入统一在 _lock 内——原 else 分支持锁写而本分支裸写，
+                // 双锁设施徒增读者困惑（语义等价：bool 原子写 + _dbSemaphore 已串行化本方法，
+                // 不存在可见性缺口，纯纪律性收敛）
+                lock (_lock)
                 {
-                    // 不发布到内存——下次 ReserveAsync 走 AllocateNewChunkAsync 重读 DB
-                    // （DB allocator 已推进，只是本进程不缓存它——正确但慢一个往返）
-                    _initialized = false;
-                }
-                else
-                {
-                    lock (_lock)
+                    if (hasActiveTransaction)
+                    {
+                        // 不发布到内存——下次 ReserveAsync 走 AllocateNewChunkAsync 重读 DB
+                        // （DB allocator 已推进，只是本进程不缓存它——正确但慢一个往返）
+                        _initialized = false;
+                    }
+                    else
                     {
                         _lo = first + count;
                         _hi = first + chunkSize;

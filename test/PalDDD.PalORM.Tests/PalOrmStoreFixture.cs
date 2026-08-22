@@ -32,8 +32,18 @@ public static class PalOrmStoreFixture
     {
         var session = await DataSession<SqliteProvider>.CreateAsync(
             DbOptions.Development("Data Source=:memory:"), ct);
-        await session.ExecuteAsync($"PRAGMA journal_mode=WAL", ct);
-        await MultiDialectFixture.ApplySchemaAsync(session, MultiDialectSchema.Sqlite, ct);
-        return session;
+        // TST-306：PRAGMA/建表中途失败时 session 泄漏——对齐 MultiDialectFixture.CreateSqliteAsync
+        // 的 catch-dispose 形态（失败释放已创建 session 后原样上抛）
+        try
+        {
+            await session.ExecuteAsync($"PRAGMA journal_mode=WAL", ct);
+            await MultiDialectFixture.ApplySchemaAsync(session, MultiDialectSchema.Sqlite, ct);
+            return session;
+        }
+        catch
+        {
+            await session.DisposeAsync();
+            throw;
+        }
     }
 }

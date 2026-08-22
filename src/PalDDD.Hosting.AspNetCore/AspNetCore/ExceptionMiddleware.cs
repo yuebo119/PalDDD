@@ -43,14 +43,16 @@ public sealed class ExceptionMiddleware
         }
         catch (CQRS.PalValidationException ex)
         {
-            if (context.Response.HasStarted) throw;
+            // P3-SRC-210 修复（对齐 ITM-197 通用段模式）：响应已开始（SSE/流式）后抛出的
+            // 验证异常 rethrow 前也须落日志——该路径在日志中不可见（与通用 500 分支分歧）。
+            if (context.Response.HasStarted)
+            {
+                _logger.Warning($"Validation exception after response started: {ex.Message}");
+                throw;
+            }
 
             context.Response.StatusCode = StatusCodes.Status400BadRequest;
-            var response = new ValidationProblemResponse(
-                "https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1",
-                "Validation Failed",
-                StatusCodes.Status400BadRequest,
-                ex.Errors.Select(e => new ValidationProblemError(e.PropertyName, e.Message)).ToArray());
+            var response = ValidationProblemResponseFactory.Create(ex);
             await context.Response.WriteAsJsonAsync(
                 response,
                 PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
@@ -59,14 +61,24 @@ public sealed class ExceptionMiddleware
         }
         catch (CQRS.HandlerNotFoundException ex)
         {
-            if (context.Response.HasStarted) throw;
+            // P3-SRC-210 修复（对齐 ITM-197 通用段模式）：HasStarted-rethrow 前落 Warning，
+            // 同上——该路径在日志中不可见。
+            if (context.Response.HasStarted)
+            {
+                _logger.Warning($"HandlerNotFound exception after response started: {ex.Message}");
+                throw;
+            }
 
             context.Response.StatusCode = StatusCodes.Status404NotFound;
+            // P3-SRC-107 修复：detail 收窄为类型级信息——ex.Message 尾部含"请使用
+            // AddPalCommandHandler / AddPalQueryHandler 显式注册处理器"式框架内部注册指引，
+            // 不应暴露给任意 HTTP 客户端；类型名已足够定位缺失处理器的请求类型。
+            // RequestType 为 null（字符串构造路径）时回退通用文案。
             var response = new HandlerNotFoundProblemResponse(
                 "https://www.rfc-editor.org/rfc/rfc9110#section-15.5.5",
                 "Handler Not Found",
                 StatusCodes.Status404NotFound,
-                ex.Message);
+                ex.RequestType is { } requestType ? $"Handler not found for {requestType.Name}" : "Handler not found.");
             await context.Response.WriteAsJsonAsync(
                 response,
                 PalAspNetCoreJsonContext.Default.HandlerNotFoundProblemResponse,

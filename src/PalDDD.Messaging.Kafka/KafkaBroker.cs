@@ -114,6 +114,10 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
     public override ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
         Func<TMessage, MessageConsumeContext?, CancellationToken, ValueTask> handler, CancellationToken ct = default)
     {
+        // P3-SRC-402 修复：补 _disposed 守卫（对齐 DisposeAsync 的 ITM-217 幂等门）——
+        // Broker 已释放后订阅会登记进已被清空的 _consumers（此后无 DisposeAsync 再遍历），
+        // consumer 无人释放且消费循环在已释放 broker 上空转。
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
         var descriptor = MessageCatalog.Find(typeof(TMessage))
             ?? throw new InvalidOperationException(
                 $"Message type '{typeof(TMessage).FullName}' is not registered in MessageCatalog.");

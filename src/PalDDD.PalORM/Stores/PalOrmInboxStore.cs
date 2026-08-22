@@ -82,13 +82,19 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
             }
             if (affected > 0)
             {
-                // 新插入成功 —— 查回自增 id（ScalarAsync 支持 long）
-                var newId = await Session.ScalarAsync<long>(
+                // 新插入成功 —— 查回自增 id。P3-SRC-212：改 ScalarAsync<long?>（对齐上方
+                // PG/SQLite 路径的可空标量形态）——行不存在时（INSERT 成功后被并发 DELETE，
+                // 实际不可达）原非空断言会抛 InvalidCastException 掩盖真实根因；显式判空抛
+                // 语义化异常，加固不可达路径
+                var newId = await Session.ScalarAsync<long?>(
                     $"SELECT id FROM inbox_messages WHERE consumer_name = {consumerName} AND message_id = {messageId}",
                     ct).ConfigureAwait(false);
+                if (newId is null)
+                    throw new InvalidOperationException(
+                        $"INSERT 成功但回查 id 不存在（consumer_name={consumerName}, message_id={messageId}）——可能被并发 DELETE");
                 return new InboxMessage
                 {
-                    Id = newId,
+                    Id = newId.Value,
                     MessageId = messageId,
                     ConsumerName = consumerName,
                     Status = InboxStatus.Processing,

@@ -44,7 +44,9 @@ public static class SqliteServiceCollectionExtensions
     /// 生命周期按连接串自动选择（P2 修复）：<br/>
     /// · <c>:memory:</c> → <b>Singleton</b>（连接关闭后数据即销毁，必须保持单连接）；<br/>
     /// · 文件模式 → <b>Scoped</b>（SqliteConnection 非线程安全，Singleton 在并发请求下属未定义行为）。<br/>
-    /// 不建议同时调用 <c>AddPalSqlite</c> 和 <c>AddPalDapperTransactions</c>——两者都注册 <c>DbConnection</c>。
+    /// 不建议同时调用 <c>AddPalSqlite</c> 和 <c>AddPalDapperTransactions</c>——两者都注册 <c>DbConnection</c>。<br/>
+    /// P3-SRC-213 声明：显式设置的 Foreign Keys=false 会被本扩展覆盖为 true（关系完整性优先）；
+    /// 需关闭 FK 请自建连接工厂。
     /// </remarks>
     public static IServiceCollection AddPalSqlite(
         this IServiceCollection services,

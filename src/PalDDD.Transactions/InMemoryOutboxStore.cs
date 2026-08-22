@@ -222,9 +222,15 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
     /// 租约期限时仍标记（须在 <see cref="_lock"/> 内调用）。
     /// </summary>
     private bool IsCurrentLeaseHolder(OutboxMessage message)
-        => _messages.Contains(message)
-            && message.Status == OutboxStatus.Pending
-            && message.LockedBy is not null;
+        // P3-SRC-105：O(1) 谓词前置——被 successor 替换的旧引用（ITM-174 僵尸守卫的主要
+        // 拦截对象）的 Status/LockedBy 已被后续操作改写，在此 O(1) 短路返回 false，
+        // 不再每次先付 O(n) Contains 线性扫（&& 短路无副作用，条件重排语义等价）。
+        // 未复用 LeasePendingMessagesAsync 的引用索引表：indexMap 为局部变量，租约后即
+        // 丢弃；提升为字段需在 _messages 全部变更点同步维护 List+Dictionary 双结构，
+        // 超出最小改动。活跃租约正常路径仍走 Contains（每消息批一次，规模=测试负载）。
+        => message.Status == OutboxStatus.Pending
+            && message.LockedBy is not null
+            && _messages.Contains(message);
 
     private List<OutboxMessage> QueryPending(int batchSize, int maxRetryCount)
     {
