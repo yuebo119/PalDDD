@@ -335,7 +335,7 @@ public sealed class PipelineBehaviorTests
     // ─── 日志行为测试 ───
 
     [Test]
-    public async Task LoggingBehavior_NoOp_WhenLoggerNotAvailable()
+    public async Task LoggingBehavior_PropagatesHandlerException()
     {
         // 测试日志行为在底层 Handler 抛异常时正确传播
         var behavior = new LoggingBehavior<CreateOrderCommand, Guid>(

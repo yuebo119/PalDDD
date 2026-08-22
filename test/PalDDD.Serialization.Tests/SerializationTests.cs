@@ -388,7 +388,7 @@ public sealed class JsonMessageSerializerPooledTests
         await Assert.That(pooledAlloc <= legacyAlloc).IsTrue();
     }
 
-    // A2-T3: 并发安全 — 100 线程各 1000 次，无数据错乱
+    // A2-T3: 并发安全 — 100 线程各 100 次，无数据错乱
     [Test]
     public async Task Pooled_ThreadSafe_NoDataCorruption()
     {
@@ -526,9 +526,9 @@ public sealed class JsonLinesEventTests
             await Assert.That(deserialized[i]).IsEqualTo(messages[i]);
     }
 
-    // B2-T2: 逐行读取无整批缓存 — 10000 条事件峰值内存合理
+    // B2-T2: 逐行读取无整批缓存 — 10000 条事件每事件分配低于阈值（无与批处理模式的峰值对比）
     [Test]
-    public async Task JsonLines_LowerPeakMemory_ThanBatch()
+    public async Task JsonLines_PerEventAlloc_BelowThreshold()
     {
         var options = TestJsonContext.Default.Options;
         var writer = new JsonLinesEventWriter();

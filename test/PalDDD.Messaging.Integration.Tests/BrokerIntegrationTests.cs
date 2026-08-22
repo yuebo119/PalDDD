@@ -62,7 +62,9 @@ public sealed class BrokerFixture : IAsyncDisposable
         var kafkaBootstrap = TestEnvironment.KafkaBootstrapServers;
         var rabbitHost = TestEnvironment.RabbitMqHost;
 
-        // 如果配置指向 localhost（默认值/Testcontainers 模式），尝试用 Testcontainers 启动
+        // 如果配置指向 localhost（默认值/Testcontainers 模式），尝试用 Testcontainers 启动。
+        // 混合配置（一轴 localhost 一轴远程）走下方远程分支——localhost 轴预检将判不可达而
+        // Skip，属保守方向（宁可跳过不误连远程轴）。
         if (kafkaBootstrap.Contains("localhost") && rabbitHost.Contains("localhost"))
         {
             // ITM-264：异步锁防并行双启容器（[NotInParallel] 序列化是第一道防线，此为夹具级兜底——
@@ -109,36 +111,51 @@ public sealed class BrokerFixture : IAsyncDisposable
         // 三十轮重设计：远程 Kafka 预检——AdminClient 元数据探测（8s 超时）。
         // 服务器断连型故障（TCP 通但建连 1ms 被 RST）时 GetMetadata 也会失败，
         // 此时标记不可用让 Kafka 测试显式 Skip 而非 120s 假失败。
-        try
+        // TST-206：预检结果缓存——Fixture 每测试共享（PerTestSession），首次探测后
+        // 跳过重复预检（每测试重付 8s+5s 探测开销是纯浪费；环境状态会话内视为稳定）。
+        if (!_kafkaProbed)
         {
-            using var admin = new Confluent.Kafka.AdminClientBuilder(
-                new Confluent.Kafka.AdminClientConfig { BootstrapServers = _remoteKafkaBootstrap }).Build();
-            var metadata = admin.GetMetadata(TimeSpan.FromSeconds(8));
-            KafkaAvailable = metadata.Brokers.Count > 0;
-        }
+            _kafkaProbed = true;
+            try
+            {
+                using var admin = new Confluent.Kafka.AdminClientBuilder(
+                    new Confluent.Kafka.AdminClientConfig { BootstrapServers = _remoteKafkaBootstrap }).Build();
+                var metadata = admin.GetMetadata(TimeSpan.FromSeconds(8));
+                KafkaAvailable = metadata.Brokers.Count > 0;
+            }
 #pragma warning disable CA1031 // Intentionally broad: 环境探测任意失败均视为不可用
-        catch
+            catch
 #pragma warning restore CA1031
-        {
-            KafkaAvailable = false;
+            {
+                KafkaAvailable = false;
+            }
         }
 
         // unified v2.0（2026-08-20）：RabbitMQ 预检——TCP 探活 host:port（5s），对称 Kafka 预检。
         // broker 不可达时显式 Skip 而非 19s×3 假失败（本地实测 41s 假失败签名；T-DDD-6 四层防线在 Rabbit 轴的补全）。
-        try
+        if (!_rabbitProbed)
         {
-            using var tcp = new System.Net.Sockets.TcpClient();
-            await tcp.ConnectAsync(_remoteRabbitHost!, _remoteRabbitPort)
-                .WaitAsync(TimeSpan.FromSeconds(5));
-            RabbitAvailable = tcp.Connected;
-        }
+            _rabbitProbed = true;
+            try
+            {
+                using var tcp = new System.Net.Sockets.TcpClient();
+                await tcp.ConnectAsync(_remoteRabbitHost!, _remoteRabbitPort)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                RabbitAvailable = tcp.Connected;
+            }
 #pragma warning disable CA1031 // Intentionally broad: 环境探测任意失败均视为不可用
-        catch
+            catch
 #pragma warning restore CA1031
-        {
-            RabbitAvailable = false;
+            {
+                RabbitAvailable = false;
+            }
         }
     }
+
+    // TST-206：预检缓存标志——false 表示尚未探测（KafkaAvailable/RabbitAvailable 默认 true
+    // 仅是"未探测前不阻断"的占位，探测后由真实结果覆盖）
+    private bool _kafkaProbed;
+    private bool _rabbitProbed;
 
     private bool _triedTestcontainers;
     private readonly SemaphoreSlim _initializeLock = new(1, 1);
@@ -281,7 +298,7 @@ public sealed class BrokerIntegrationTests
     private void SkipIfRabbitUnavailable()
     {
         if (!Fixture.RabbitAvailable)
-            Skip.Test("RabbitMQ broker 预检失败（TCP 探活不可达）——环境问题，非代码失败。检查服务器 RabbitMQ 服务/网络后重试。");
+            Skip.Test("RabbitMQ broker 预检失败（TCP 探活不可达）——环境问题，非代码失败。检查服务器 RabbitMQ 服务/网络后重试。（若为远程环境请检查 PALDDD_TEST_RABBIT_* 凭据配置）");
     }
 
     /// <summary>
@@ -510,6 +527,60 @@ public sealed class BrokerIntegrationTests
         await sub.DisposeAsync();
 
         await Assert.That(logger.ErrorCount).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// TST-121：Rabbit at-most-once 的非 OCE 失败半边——handler 抛 InvalidOperationException 时
+    /// 应记一条 Error 日志并弃置（nack requeue:false），不重投（区别于 OCE 取消路径的零 Error）。
+    /// 断言前留 200ms 稳定窗口：消费循环异步记日志，Dispose 后立即断言 ErrorCount 存在竞态。
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task RabbitMq_HandlerNonOceFailure_DeadLettersWithoutRequeue(CancellationToken cancellationToken)
+    {
+        SkipIfRabbitUnavailable();
+        var logger = new CapturingLogger<RabbitMqBroker>();
+        var rabbit = await Fixture.CreateRabbitMqBrokerAsync(logger);
+        await using var broker = rabbit.Item1;
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handlerEntered = 0;
+
+        await using var sub = await broker.SubscribeAsync<TestMessage>((msg, ct) =>
+        {
+            // warmup 消息确认 consumer ready
+            if (msg.Name == $"rmq-ready-{tag}")
+            {
+                ready.TrySetResult();
+                return ValueTask.CompletedTask;
+            }
+            // 测试消息抛非 OCE 异常（CAS 保证只有首次进入抛——若发生重投会有第二次进入计数）
+            if (msg.Name == $"rmq-fail-{tag}" && Interlocked.CompareExchange(ref handlerEntered, 1, 0) == 0)
+            {
+                entered.TrySetResult();
+                throw new InvalidOperationException("simulated non-OCE handler failure");
+            }
+            return ValueTask.CompletedTask;
+        }, cancellationToken);
+
+        // 先发 warmup 确认 consumer 链路通畅 + 周期重发
+        await broker.PublishAsync(new TestMessage($"rmq-ready-{tag}"), cancellationToken);
+        await WaitForSignalAsync(ready.Task,
+            ct => broker.PublishAsync(new TestMessage($"rmq-ready-{tag}"), ct),
+            logger, "RabbitMQ", "consumer 就绪（warmup 回调）", TimeSpan.FromSeconds(120), cancellationToken);
+
+        // consumer 已 ready，发测试消息
+        await broker.PublishAsync(new TestMessage($"rmq-fail-{tag}"), cancellationToken);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        await sub.DisposeAsync();
+
+        // 稳定窗口：Error 日志在消费循环线程异步写入，Dispose 后立即断言有竞态
+        await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
+
+        // 弃置路径记恰好一条 Error（RabbitMqBroker 非 OCE catch 分支）；handler 仅进入一次 = 无重投
+        await Assert.That(logger.ErrorCount).IsEqualTo(1);
+        await Assert.That(Volatile.Read(ref handlerEntered)).IsEqualTo(1);
     }
 
     [Test]

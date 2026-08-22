@@ -204,7 +204,8 @@ public sealed class ArchitectureBoundaryTests
         var source = ReadSource("src/PalDDD.Transactions/InboxProcessor.cs");
 
         await Assert.That(source).DoesNotContain("IServiceScopeFactory");
-        await Assert.That(source).DoesNotContain("CreateScope(");
+        // 不带括号：同时覆盖 CreateScope( 与 CreateScopeAsync( 两形态（带括号会被 Async 形态绕过）
+        await Assert.That(source).DoesNotContain("CreateScope");
         await Assert.That(source).Contains("IInboxStore");
     }
 
@@ -445,7 +446,12 @@ public sealed class ArchitectureBoundaryTests
         foreach (var file in files)
         {
             var source = File.ReadAllText(file);
-            if (source.Contains(keyword, StringComparison.Ordinal))
+            // 注释剥离（对齐 DomainAndAppLayers_DoNotContainInfrastructureKeywords 姊妹正则）：
+            // 文档注释中的 HTTP 关键字是说明性引用，不代表代码依赖 HTTP 基础设施
+            var codeOnly = Regex.Replace(source, @"//.*$", "", RegexOptions.Multiline); // 去除行内和整行 // 注释
+            codeOnly = Regex.Replace(codeOnly, @"/\*.*?\*/", "", RegexOptions.Singleline); // 去除 /* */ 块注释
+
+            if (codeOnly.Contains(keyword, StringComparison.Ordinal))
             {
                 Assert.Fail(
                     $"文件 {Path.GetRelativePath(Root, file)} 包含禁止的 HTTP 关键字 '{keyword}'。" +
@@ -543,9 +549,14 @@ public sealed class ArchitectureBoundaryTests
         foreach (var file in files)
         {
             var source = File.ReadAllText(file);
+            // 注释剥离（对齐 DomainAndAppLayers_DoNotContainInfrastructureKeywords 姊妹正则）：
+            // 注释中的层名是说明性文字，不代表 using 引入
+            var codeOnly = Regex.Replace(source, @"//.*$", "", RegexOptions.Multiline); // 去除行内和整行 // 注释
+            codeOnly = Regex.Replace(codeOnly, @"/\*.*?\*/", "", RegexOptions.Singleline); // 去除 /* */ 块注释
+
             foreach (var keyword in forbidden)
             {
-                if (source.Contains(keyword, StringComparison.Ordinal))
+                if (codeOnly.Contains(keyword, StringComparison.Ordinal))
                 {
                     Assert.Fail(
                         $"文件 {Path.GetRelativePath(Root, file)} 的 using 引用了禁止的命名空间 '{keyword}'。" +
@@ -647,6 +658,8 @@ public sealed class ArchitectureBoundaryTests
             Path.Combine(Root, "test"),
             "*.cs",
             SearchOption.AllDirectories)
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                     && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
             .ToList();
 
         var missing = new List<string>();
@@ -654,8 +667,9 @@ public sealed class ArchitectureBoundaryTests
         {
             var source = File.ReadAllText(file);
             // 匹配 sealed class Xxx : BackgroundService 或 sealed class Xxx : PeriodicBackgroundProcessor
-            // 只匹配 sealed（具体类），排除 abstract 基类
-            var classMatches = Regex.Matches(source, @"sealed\s+class\s+(\w+)\s*:\s*(?:BackgroundService|PeriodicBackgroundProcessor)");
+            // 只匹配 sealed（具体类），排除 abstract 基类；可选 <T> 泛型参数段——
+            // 泛型服务类（如 sealed class Xxx<T> : BackgroundService）此前被漏检
+            var classMatches = Regex.Matches(source, @"sealed\s+class\s+(\w+)(?:<[^>]*>)?\s*:\s*(?:BackgroundService|PeriodicBackgroundProcessor)");
             foreach (Match m in classMatches)
             {
                 var className = m.Groups[1].Value;
@@ -733,7 +747,9 @@ public sealed class ArchitectureBoundaryTests
         var srcFiles = Directory.EnumerateFiles(
             Path.Combine(Root, "src"),
             "*.cs",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories)
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                     && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"));
 
         foreach (var file in srcFiles)
         {
@@ -755,21 +771,20 @@ public sealed class ArchitectureBoundaryTests
     }
 
     /// <summary>
-    /// 测试方法遵循 Method_Scenario 下划线格式（≥1 个下划线）。<br/>
-    /// 对应 conventions.md §3.6。<br/>
-    ///排除: 辅助方法(private/protected)、IDisposable、构造函数、初始化方法、分析器测试。
-    /// </summary>
-    /// <summary>
-    /// 测试方法签名扫描正则（F19 修复：消除参数化方法假阴性）。<br/>
-    /// ① 特性块允许多行——[Test] 后可跟 [Arguments]/[MethodDataSource] 等参数化特性行
-    ///    （原正则要求特性紧邻 public 行，参数化方法全部漏检）；<br/>
+    /// 测试方法签名扫描正则（F19 修复：消除参数化方法假阴性），供
+    /// <see cref="TestMethods_MustFollowTripleUnderscorePattern"/> 执行 Method_Scenario
+    /// 下划线格式守护（≥1 个下划线，对应 conventions.md §3.6；排除辅助方法/private/protected、
+    /// IDisposable、构造函数、初始化方法、分析器测试）：<br/>
+    /// ① 特性块允许多行——[Test] 后可跟 [Arguments]/[MethodDataSource] 等参数化特性行，
+    ///    且单特性内容可跨行（后续特性用 [^\]]* 匹配，字符类否定天然含换行）；
+    ///    原正则要求特性紧邻 public 行，参数化方法全部漏检，多行 Arguments 参数形态亦漏检；<br/>
     /// ② 返回类型支持泛型——[^\s(]* 吃掉 Task&lt;T&gt;/ValueTask&lt;T&gt; 尾巴
     ///    （原正则 (?:void|Task|ValueTask)\s+ 漏检泛型返回）；<br/>
     /// ③ 刻意不用 RegexOptions.Singleline：public 与返回类型约定同行（[^\n]*?），
-    ///    Singleline 下特性块的 . 会跨行贪婪吞掉后续多个方法。
+    ///    Singleline 下特性块的 . 会跨行贪婪吞掉后续多个方法（[^\]]* 遇 ] 即停，无此问题）。
     /// </summary>
     private const string TestMethodPattern =
-        @"\[(?:Test|Fact|Theory)[^\]]*\](?:\s*\n\s*\[.*\])*\s*\n\s*public[^\n]*?\b(?:ValueTask|Task|void)[^\s(]*\s+(\w+)\s*\(";
+        @"\[(?:Test|Fact|Theory)[^\]]*\](?:\s*\n\s*\[[^\]]*\])*\s*\n\s*public[^\n]*?\b(?:ValueTask|Task|void)[^\s(]*\s+(\w+)\s*\(";
 
     /// <summary>
     /// 扫描器负向自证（falsification，F19）：用故意坏命名的参数化/泛型返回样本
@@ -799,12 +814,26 @@ public sealed class ArchitectureBoundaryTests
             }
             """;
 
+        // 坏样本 3：[Arguments] 参数跨多行 + 坏命名——特性内容含换行时
+        // 特性块匹配若用不跨行的模式会漏检（[^\]]* 可跨行，此样本证伪"行级假设"）
+        const string multiLineArguments = """
+            [Test]
+            [Arguments(
+                1,
+                2)]
+            public async Task BadMultiLineArgumentsName(int a, int b)
+            {
+                await Task.CompletedTask;
+            }
+            """;
+
         var detected = new List<string>();
-        foreach (Match m in Regex.Matches(parameterized + genericReturn, TestMethodPattern))
+        foreach (Match m in Regex.Matches(parameterized + genericReturn + multiLineArguments, TestMethodPattern))
             detected.Add(m.Groups[1].Value);
 
         await Assert.That(detected).Contains("BadParameterizedName");
         await Assert.That(detected).Contains("BadGenericReturnName");
+        await Assert.That(detected).Contains("BadMultiLineArgumentsName");
     }
 
     [Test]
@@ -814,7 +843,8 @@ public sealed class ArchitectureBoundaryTests
             Path.Combine(Root, "test"),
             "*.cs",
             SearchOption.AllDirectories)
-            .Where(f => !f.Contains("obj") && !f.Contains("bin")
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                     && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
                 && !f.Contains("ArchitectureBoundaryTests.cs")
                 && !f.Contains("PalDDD.Analyzers.Tests")
                 && !f.Contains("PalDDD.Core.Abstractions.Tests")

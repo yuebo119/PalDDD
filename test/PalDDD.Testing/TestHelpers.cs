@@ -12,7 +12,7 @@ namespace PalDDD.Testing;
 
 /// <summary>Records OpenTelemetry Activity events for test assertions.</summary>
 /// <remarks>
-/// 📐 <b>跨测试项目隔离设计</b>：xunit 并行运行不同测试项目，全局 <c>ActivitySource</c>
+/// 📐 <b>跨测试项目隔离设计</b>：TUnit 类级并行 + MTP 多项目并行会同时运行不同测试项目，全局 <c>ActivitySource</c>
 /// 的 listener 会收到所有项目的 activity。本类在构造时记录时间戳，<c>ActivityStopped</c>
 /// 回调中过滤 <c>StartTimeUtc</c> 早于构造时间的残留 activity，确保只收集本 listener
 /// 创建后产生的 activity——无需依赖 <c>[Collection]</c> 序列化即可跨项目隔离。
