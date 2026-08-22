@@ -247,16 +247,21 @@ public sealed class DispatcherTests
     }
 
     [Test]
-    public async Task SendAsync_PassesCancellationToken()
+    public async Task SendAsync_PassesCancellationToken_ToHandler()
     {
-        var sp = CreateProvider();
+        // ITM-285（R45）：原断言仅 IsNotEqualTo(Empty)——Dispatcher 吞 token 换 None 也绿。
+        // 改探针 handler 记录收到的 token，断言同一引用（真实验证传递）。
+        // ITM-285：探针 handler 以 Singleton 实例注册进容器，Register 无参泛型由容器解析
+        var handler = new CapturingCtHandler();
+        var sp = CreateProvider(services => services.AddSingleton(handler));
         var dispatcher = new Dispatcher(sp.GetRequiredService<IServiceScopeFactory>());
-        dispatcher.Register<CreateOrderCommand, Guid, CreateOrderHandler>();
+        dispatcher.Register<CreateOrderCommand, Guid, CapturingCtHandler>();
 
         using var cts = new CancellationTokenSource();
-        var result = await dispatcher.SendAsync(new CreateOrderCommand("Test", 100m), cts.Token);
+        await dispatcher.SendAsync(new CreateOrderCommand("Test", 100m), cts.Token);
 
-        await Assert.That(result).IsNotEqualTo(Guid.Empty);
+        await Assert.That(handler.ReceivedToken).IsNotNull();
+        await Assert.That(handler.ReceivedToken!.Value.Equals(cts.Token)).IsTrue();
     }
 
     [Test]
@@ -274,6 +279,17 @@ public sealed class DispatcherTests
 
         await Assert.That(() => dispatcher.SendAsync(new CreateOrderCommand("X", 0), cts.Token).AsTask())
             .Throws<OperationCanceledException>();
+    }
+
+    /// <summary>ITM-285：记录收到的 CancellationToken 的探针 handler。</summary>
+    internal sealed class CapturingCtHandler : ICommandHandler<CreateOrderCommand, Guid>
+    {
+        public CancellationToken? ReceivedToken { get; private set; }
+        public ValueTask<Guid> HandleAsync(CreateOrderCommand command, CancellationToken ct)
+        {
+            ReceivedToken = ct;
+            return ValueTask.FromResult(Guid.NewGuid());
+        }
     }
 }
 
@@ -500,4 +516,5 @@ public sealed class CqrsAllocationContractTests
     {
         public ValueTask<string> HandleAsync(SimpleQuery query, CancellationToken ct) => new("ok");
     }
+
 }

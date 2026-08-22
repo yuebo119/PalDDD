@@ -131,8 +131,8 @@ public sealed class SystemCompressionTests
     {
         var provider = CreateProvider();
 
-        await Assert.That(provider.GetCompressor(CompressionAlgorithm.Brotli).Algorithm).IsEqualTo(CompressionAlgorithm.Brotli);
-        await Assert.That(provider.GetCompressor(CompressionAlgorithm.GZip).Algorithm).IsEqualTo(CompressionAlgorithm.GZip);
-        await Assert.That(provider.GetCompressor(CompressionAlgorithm.Deflate).Algorithm).IsEqualTo(CompressionAlgorithm.Deflate);
+        await Assert.That(provider.GetCompressor(CompressionAlgorithm.Brotli).Algorithm).IsEquivalentTo(CompressionAlgorithm.Brotli);
+        await Assert.That(provider.GetCompressor(CompressionAlgorithm.GZip).Algorithm).IsEquivalentTo(CompressionAlgorithm.GZip);
+        await Assert.That(provider.GetCompressor(CompressionAlgorithm.Deflate).Algorithm).IsEquivalentTo(CompressionAlgorithm.Deflate);
     }
 }

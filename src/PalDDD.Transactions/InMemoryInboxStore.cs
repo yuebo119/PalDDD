@@ -51,6 +51,9 @@ public sealed class InMemoryInboxStore : IInboxStore
                     && existing.ProcessingStartedAt.HasValue
                     && (now - existing.ProcessingStartedAt.Value) < processingTimeout)
                     return ValueTask.FromResult<InboxMessage?>(null);
+                // ITM-283（R45）边界声明：processingTimeout=0 且 elapsed 恰为 0（同刻重入）时本栈允许
+                // 重入（0<0 false），Dapper 栈拒绝（startedAt<cutoff=now 为 false→UPDATE 0 行→null）。
+                // 极端测试语义（真实场景 timeout>0）；对齐需改 SQL 守卫或本式加 <=，破坏面大于收益——声明保留。
 
                 // 失败或超时 — 重新进入 Processing
                 // ITM-105 修复：对齐 InMemoryIdempotencyStore/InMemoryProjectionCheckpointStore

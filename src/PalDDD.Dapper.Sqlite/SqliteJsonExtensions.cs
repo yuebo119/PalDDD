@@ -186,9 +186,11 @@ public static class SqliteJson
     // 分隔符、引号需转义），值位置仅做单引号翻倍（注入防线完整）。
     private static string EscapeJsonPathSegment(string s)
     {
-        if (s.Contains('.') || s.Contains('"'))
+        // ITM-284（R45）：补 '[' ']'——SQLite JSON1 路径的数组索引语法（$.notes[1] 被解释为
+        // 数组访问而非键名 "notes[1]"，静默错查——与三十五轮 D4 点号问题同源漏网）
+        if (s.Contains('.') || s.Contains('"') || s.Contains('[') || s.Contains(']'))
             throw new ArgumentException(
-                $"JSON 路径键含违禁字符（'.' 或 '\"'）：\"{s}\"。请改用原生 SQL 手写引号包裹路径。", nameof(s));
+                $"JSON 路径键含违禁字符（'.' '\"' '[' ']'）：\"{s}\"。请改用原生 SQL 手写引号包裹路径。", nameof(s));
         return s.Replace("'", "''");
     }
 

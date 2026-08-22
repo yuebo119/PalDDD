@@ -405,6 +405,9 @@ public sealed class BrokerIntegrationTests
         // consumer ready 后发 cancel 测试消息
         await broker.PublishAsync(new TestMessage($"kafka-cancel-{tag}"), cancellationToken);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        // ITM-286（R45）：稳定窗口——若 requeue:true 回归存在，重投需在消费者存活时落地
+        // 才能使 handlerEntered 计数 >1（cancel 抢先则消息留队列、无消费者——假阴性）
+        await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
         await sub.DisposeAsync();
 
         await Assert.That(logger.ErrorCount).IsEqualTo(0);
@@ -524,6 +527,9 @@ public sealed class BrokerIntegrationTests
         await broker.PublishAsync(new TestMessage($"rmq-cancel-{tag}"), cancellationToken);
         // ITM-264：对齐 Kafka 同型测试的 30s——consumer 已 ready 信号确认，120s 是复制疏漏
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        // ITM-286（R45）：稳定窗口——若 requeue:true 回归存在，重投需在消费者存活时落地
+        // 才能使 handlerEntered 计数 >1（cancel 抢先则消息留队列、无消费者——假阴性）
+        await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
         await sub.DisposeAsync();
 
         await Assert.That(logger.ErrorCount).IsEqualTo(0);
@@ -576,6 +582,9 @@ public sealed class BrokerIntegrationTests
         // consumer 已 ready，发测试消息
         await broker.PublishAsync(new TestMessage($"rmq-fail-{tag}"), cancellationToken);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        // ITM-286（R45）：稳定窗口——若 requeue:true 回归存在，重投需在消费者存活时落地
+        // 才能使 handlerEntered 计数 >1（cancel 抢先则消息留队列、无消费者——假阴性）
+        await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
         await sub.DisposeAsync();
 
         // 稳定窗口：Error 日志在消费循环线程异步写入，Dispose 后立即断言有竞态

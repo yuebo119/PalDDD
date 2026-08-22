@@ -88,14 +88,16 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
                     .SetProperty(m => m.LockedBy, (string?)null)
                     .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null));
             if (affected > 0) return;
+            // ITM-283（R45）：token 拒绝（affected=0 且无异常）提前 return——原兜底查询用同款
+            // FencedTarget 守卫必然返回 null，纯冗余 DB 往返；兜底仅 provider 不支持路径需要
+            return;
         }
         catch (InvalidOperationException)
         {
             // ExecuteUpdate 不支持的 provider（EF InMemory 等）——回退到条件加载路径
         }
 
-        // 兜底路径：ExecuteUpdate 未命中（行不存在/token 拒绝）或 provider 不支持——
-        // 条件加载带同款 token 守卫（三十二轮修复复审：清理原 `!translated || true` 恒真条件）
+        // 兜底路径：仅 provider 不支持 ExecuteUpdate 时到达（ITM-283 收窄）
         {
             var tracked = FencedTarget(message).FirstOrDefault();
             if (tracked is not null)
@@ -133,6 +135,8 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
                     .SetProperty(m => m.LockedBy, (string?)null)
                     .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null));
             if (affected > 0) return;
+            // ITM-283：同 MarkProcessed——token 拒绝提前 return，兜底仅 provider 不支持
+            return;
         }
         catch (InvalidOperationException)
         {

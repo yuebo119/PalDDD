@@ -106,7 +106,10 @@ public class PalOrmIdempotencyStoreTests
         var now = DateTimeOffset.UtcNow;
 
         var shortPolicy = new IdempotencyPolicy { ProcessingTimeout = TimeSpan.FromMinutes(5), Retention = TimeSpan.FromSeconds(1) };
-        await store.TryStartAsync("op-1", "key-1", now, shortPolicy, default);
+        // ITM-285（R45）：前置断言——TryStart 失败（记录未写入）时 GetAsync 同样返回 null，
+        // 无前置则测试恒绿无法区分"存在但过期"与"不存在"
+        var seeded = await store.TryStartAsync("op-1", "key-1", now, shortPolicy, default);
+        await Assert.That(seeded).IsNotNull();
 
         var later = now + TimeSpan.FromSeconds(2);
         var gotten = await store.GetAsync("op-1", "key-1", later, default);
