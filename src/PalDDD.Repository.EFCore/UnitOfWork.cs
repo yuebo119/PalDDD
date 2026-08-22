@@ -33,6 +33,8 @@ public sealed class UnitOfWork<TContext> : IUnitOfWork
     /// <inheritdoc/>
     public async ValueTask BeginTransactionAsync(CancellationToken ct = default)
     {
+        // ITM-284（R45）：三栈 disposed 守卫对齐（PalOrm 3/3、Dapper 1/3、EFCore 原 0/3）
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (_context.Database.CurrentTransaction is null)
             await _context.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
     }
@@ -40,6 +42,8 @@ public sealed class UnitOfWork<TContext> : IUnitOfWork
     /// <inheritdoc/>
     public async ValueTask CommitAsync(CancellationToken ct = default)
     {
+        // ITM-284（R45）：三栈 disposed 守卫对齐（PalOrm 3/3、Dapper 1/3、EFCore 原 0/3）
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (_context.Database.CurrentTransaction is not null)
             await _context.Database.CommitTransactionAsync(ct).ConfigureAwait(false);
     }
@@ -47,6 +51,8 @@ public sealed class UnitOfWork<TContext> : IUnitOfWork
     /// <inheritdoc/>
     public async ValueTask RollbackAsync(CancellationToken ct = default)
     {
+        // ITM-284（R45）：三栈 disposed 守卫对齐（PalOrm 3/3、Dapper 1/3、EFCore 原 0/3）
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (_context.Database.CurrentTransaction is not null)
             await _context.Database.RollbackTransactionAsync(ct).ConfigureAwait(false);
     }

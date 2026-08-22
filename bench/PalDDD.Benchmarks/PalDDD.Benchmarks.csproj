@@ -15,8 +15,8 @@
   <ItemGroup>
     <!-- SMP-104：移除 PalDDD.CQRS / Serialization / Messaging 三个零使用引用——
          基准代码（FrameworkBenchmarks/InfraBenchmarks/Program）经 grep 确认无任何
-         上述三命名空间的 using 或全限定引用；Outbox/Inbox 基准用的
-         OutboxMessage/InMemoryOutboxStore/InMemoryInboxStore 属 PalDDD.Transactions。 -->
+         上述三命名空间的 using 或全限定引用；Outbox 基准用的 OutboxMessage/InMemoryOutboxStore
+         （InMemoryInboxStore 实际零引用——ITM-286 勘正） -->
     <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.EventLog\PalDDD.EventLog.csproj" />

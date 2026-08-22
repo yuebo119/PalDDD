@@ -114,7 +114,7 @@ public sealed class JsonMessageSerializerTests
 
         var typed = result as TestMessage;
         await Assert.That(typed).IsNotNull();
-        await Assert.That(typed).IsEqualTo(message);
+        await Assert.That(typed).IsEquivalentTo(message);
     }
 
     [Test]
@@ -129,7 +129,7 @@ public sealed class JsonMessageSerializerTests
         var payload = serializer.Serialize(message, descriptor);
         var result = serializer.Deserialize<ValueMessage>(payload.Span, descriptor);
 
-        await Assert.That(result).IsEqualTo(message);
+        await Assert.That(result).IsEquivalentTo(message);
     }
 
     [Test]
@@ -246,7 +246,7 @@ public sealed class JsonMessageSerializerGetTypeInfoTests
         var payload = serializer.Serialize(message, descriptor);
         var result = serializer.Deserialize<ValueMessage>(payload.Span, descriptor);
 
-        await Assert.That(result).IsEqualTo(message);
+        await Assert.That(result).IsEquivalentTo(message);
     }
 
     // A1-T2: 通过 options 注入的序列化器与旧路径（直接传 JsonTypeInfo）输出完全一致
@@ -284,7 +284,7 @@ public sealed class JsonMessageSerializerGetTypeInfoTests
 
         var typed = result as TestMessage;
         await Assert.That(typed).IsNotNull();
-        await Assert.That(typed).IsEqualTo((TestMessage)message);
+        await Assert.That(typed).IsEquivalentTo((TestMessage)message);
     }
 }
 
@@ -307,7 +307,7 @@ public sealed class JsonSerializationServiceCollectionTests
 
         await Assert.That(serializer).IsTypeOf<JsonMessageSerializer>();
         // 行为断言（弱断言棘轮）：SchemaVersion 默认 1——Find 未命中时 ?? 0 使断言失败
-        await Assert.That(catalog.Find(typeof(JsonOnlyMessage))?.SchemaVersion ?? 0).IsEqualTo(1);
+        await Assert.That(catalog.Find(typeof(JsonOnlyMessage))?.SchemaVersion ?? 0).IsEquivalentTo(1);
     }
 
     [Test]
@@ -403,7 +403,7 @@ public sealed class JsonMessageSerializerPooledTests
                 var message = new TestMessage($"thread-{threadId}-msg-{i}", i);
                 var bytes = serializer.Serialize(message, descriptor).ToArray();
                 var result = serializer.Deserialize<TestMessage>(bytes.AsSpan(), descriptor);
-                await Assert.That(result).IsEqualTo(message);
+                await Assert.That(result).IsEquivalentTo(message);
             }
         }));
 

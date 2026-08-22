@@ -15,7 +15,12 @@ internal sealed class PalLogger<T> : IPalLogger<T>
 {
     private readonly ILogger<T> _logger;
 
-    public PalLogger(ILogger<T> logger) => _logger = logger;
+    public PalLogger(ILogger<T> logger)
+    {
+        // ITM-284（R45）：对齐全仓构造守卫惯例
+        ArgumentNullException.ThrowIfNull(logger);
+        _logger = logger;
+    }
 
     public void Debug(string msg) => _logger.LogDebug(msg);
     public void Information(string msg) => _logger.LogInformation(msg);

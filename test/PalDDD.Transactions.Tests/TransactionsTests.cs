@@ -1328,6 +1328,9 @@ public sealed class SagaTests
 
         public FailingSaga()
         {
+            // ITM-285（R45）：MaxRetries=0——默认 3 次重试 + FixedBackoffPolicy(1s) 使本夹具
+            // 每次运行阻塞约 3 秒真实 Task.Delay；设 0 后首败即落终态，断言无需变化
+            MaxRetries = 0;
             When("Initial", typeof(OrderPlacedSagaEvent), new SagaStep(
                 "ValidateOrder",
                 (state, evt, ct) =>

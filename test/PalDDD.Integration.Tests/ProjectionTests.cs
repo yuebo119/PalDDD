@@ -111,6 +111,8 @@ public sealed class ProjectionTests
 
         await rebuilder.RebuildAsync(cancellationToken);
 
+        // ITM-285（R45 勘回）：原 Contains(2) 语义是"测量值列表含 2"（replayed 计数指标值），
+        // 非计数断言——Count==2 会误断测量次数。指标次数锁定由该类 [NotInParallel] 隔离承载
         await Assert.That(listener.Measurements).Contains(2);
     }
 
@@ -198,6 +200,7 @@ public sealed class ProjectionTests
         await Assert.That(
             async () => await rebuilder.RebuildAsync(cancellationToken)).Throws<InvalidOperationException>();
 
+        // ITM-285（R45 勘回）：同上——测量值断言非计数断言
         await Assert.That(listener.Measurements).Contains(1);
     }
 
