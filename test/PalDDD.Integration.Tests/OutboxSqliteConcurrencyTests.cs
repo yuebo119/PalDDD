@@ -48,8 +48,10 @@ public sealed class OutboxSqliteConcurrencyTests
         await Assert.That(secondLeased).IsEmpty();
     }
 
+    // TST-402 改名：原名 MarkProcessed_TransactionCommits_PersistsAcrossContexts 名不副实
+    // （本测试不涉及显式事务提交语义，聚焦 MarkProcessed 跨 DbContext 持久化）
     [Test]
-    public async Task MarkProcessed_TransactionCommits_PersistsAcrossContexts(CancellationToken cancellationToken)
+    public async Task MarkProcessed_PersistsAcrossContexts(CancellationToken cancellationToken)
     {
         // 历史（ITM-261 已修复，原"见 Skip 说明"勘正）——
         // 租约改直接种子建立；本测试聚焦 MarkProcessed 持久化语义（其 fencing 用 == 相等比较，可翻译）

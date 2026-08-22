@@ -23,12 +23,23 @@ internal sealed class Order : AggregateRoot<OrderId>
     public string CustomerName { get; private set; }
     public Money TotalAmount { get; private set; } = Money.CNY(0);
     public string Status { get; private set; } = "pending";
-    public List<OrderItem> Items { get; } = [];
+    // SMP-102：Items 暴露只读接口——public List 可被外部持有者绕过聚合直接 Add/Remove 破坏不变量；
+    // 构造内的 List 改私有字段 _items，经 IReadOnlyList 视图对外
+    private readonly List<OrderItem> _items = [];
+    public IReadOnlyList<OrderItem> Items => _items;
 
     public Order(OrderId id, string cn) : base(id) => CustomerName = cn;
 
+    // SMP-103 守卫：参数校验（数量/单价/币种）先于状态机校验，fail-fast——
+    // 非法参数在触碰任何聚合状态前拒绝
     public void AddItem(string name, int qty, Money price)
-    { Items.Add(new OrderItem { Name = name, Qty = qty, Price = price }); TotalAmount = Money.CNY(TotalAmount.Amount + price.Amount * qty); RaiseEvent(new ItemAdded { OrderId = Id.Value, Name = name, Qty = qty, Price = price }); }
+    {
+        if (qty <= 0) throw new ArgumentOutOfRangeException(nameof(qty), qty, "数量必须为正整数");
+        if (price.Amount < 0) throw new ArgumentOutOfRangeException(nameof(price), price.Amount, "单价不能为负数");
+        if (price.Currency != TotalAmount.Currency) throw new ArgumentException($"币种不匹配：订单 {TotalAmount.Currency}，入参 {price.Currency}", nameof(price));
+        if (Status == "confirmed") throw new InvalidOperationException("订单已确认，不能再添加商品");
+        _items.Add(new OrderItem { Name = name, Qty = qty, Price = price }); TotalAmount = Money.CNY(TotalAmount.Amount + price.Amount * qty); RaiseEvent(new ItemAdded { OrderId = Id.Value, Name = name, Qty = qty, Price = price });
+    }
 
     public void Confirm()
     { Status = "confirmed"; RaiseEvent(new OrderConfirmed { OrderId = Id.Value, Customer = CustomerName, Total = TotalAmount }); }
@@ -110,7 +121,8 @@ internal static class ECommerceApp
         services.AddSingleton<OrderRepo>();
         // ITM-171：处理器经框架显式注册 API（AOT 安全）注册进 DI。
         // 注意：本示例没有 Generic Host，HandlerRegistrar（IHostedService）不会自动运行，
-        // 因此下方仍需显式 d.Register 把处理器登记到 Dispatcher（Web 宿主则无需）。
+        // 因此下方仍需显式 d.Register 把处理器登记到 Dispatcher（Web 宿主则无需；
+        // 替代路径见 AotSample：手动 StartAsync IHostedService 触发自动注册）。
         services.AddPalCommandHandler<AddItemCmd, Unit, AddItemH>();
         services.AddPalCommandHandler<ConfirmCmd, Unit, ConfirmH>();
         services.AddPalQueryHandler<GetOrderQry, OrderDto?, GetOrderH>();
@@ -138,6 +150,12 @@ internal static class ECommerceApp
         Console.WriteLine("\n── CQRS: 确认订单 ──");
         await d.SendAsync(new ConfirmCmd(oid));
         Console.WriteLine($"  状态: {o.Status}");
+
+        Console.WriteLine("\n── 领域守卫演示（SMP-103）──");
+        try { o.AddItem("零数量", 0, Money.CNY(9)); } catch (ArgumentOutOfRangeException ex) { Console.WriteLine($"  ✅ 数量守卫: {ex.Message.Split('\n')[0]}"); }
+        try { o.AddItem("负单价", 1, Money.CNY(-1)); } catch (ArgumentOutOfRangeException ex) { Console.WriteLine($"  ✅ 单价守卫: {ex.Message.Split('\n')[0]}"); }
+        try { o.AddItem("美元支付", 1, new Money(1, "USD")); } catch (ArgumentException ex) { Console.WriteLine($"  ✅ 币种守卫: {ex.Message}"); }
+        try { o.AddItem("确认后追加", 1, Money.CNY(9)); } catch (InvalidOperationException ex) { Console.WriteLine($"  ✅ 状态机守卫: {ex.Message}"); }
 
         Console.WriteLine("\n── CQRS: 查询订单 ──");
         var dto = await d.QueryAsync(new GetOrderQry(oid));

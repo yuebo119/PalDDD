@@ -241,6 +241,15 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     protected virtual DateTimeOffset GetUtcNow() => TimeProvider.System.GetUtcNow();
 
     /// <summary>获取数据库特定的 NOW 函数（用于原始 SQL 查询），派生 provider 子类可重写</summary>
+    /// <remarks>
+    /// ⚠️ <b>派生类必须 override（P3-SRC-103）</b>：默认值 <c>CURRENT_TIMESTAMP</c> 仅供派生类
+    /// 参考，直接沿用有已知坑——(a) MySQL 的 <c>CURRENT_TIMESTAMP</c> 返回会话时区时间而非 UTC
+    ///（<c>MySqlOutboxDbContext</c> override 为 <c>UTC_TIMESTAMP()</c>）；(b) 默认
+    /// <see cref="BuildPendingSql"/> 模板的列名无引号，在 PG（未加引号的标识符折叠为小写）下与
+    /// 引号建表的混合大小写列不匹配（<c>PostgreSqlOutboxDbContext</c> override 为双引号列名 +
+    /// <c>NOW()</c>）。新方言派生类必须同时 override 本方法与 <see cref="BuildPendingSql"/>
+    ///（参考 <c>MySqlOutboxDbContext</c> / <c>PostgreSqlOutboxDbContext</c> / <c>SqliteOutboxDbContext</c>）。
+    /// </remarks>
     protected virtual string GetNowSql() => "CURRENT_TIMESTAMP";
 
     /// <summary>
@@ -248,6 +257,13 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     /// 💡 优化（二十四轮 OP-5）：手工 LIMIT/TOP/OFFSET 分页曾引发十七轮 P1（T-SQL TOP 位置
     /// 非法）——改为 FromSqlRaw + OrderBy + Take 让 EF provider 生成各方言分页，消灭整类缺陷面。
     /// </summary>
+    /// <remarks>
+    /// ⚠️ <b>派生类必须 override（P3-SRC-103）</b>：默认模板的裸列名（无引号）与
+    /// <c>CURRENT_TIMESTAMP</c> 默认值仅供派生类参考——裸列名在 PG 下折叠为小写（与引号建表的
+    /// 混合大小写列不匹配）、<c>CURRENT_TIMESTAMP</c> 在 MySQL 下返回会话时区时间而非 UTC。
+    /// 见 <see cref="GetNowSql"/> 的同款警示与 <c>MySqlOutboxDbContext</c> /
+    /// <c>PostgreSqlOutboxDbContext</c> 的 override 样例。
+    /// </remarks>
     protected virtual string BuildPendingSql() => $$"""
         SELECT * FROM OutboxMessages
         WHERE Status = 0 AND RetryCount < {0}

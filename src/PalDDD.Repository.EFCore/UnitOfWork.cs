@@ -22,7 +22,13 @@ public sealed class UnitOfWork<TContext> : IUnitOfWork
     private readonly TContext _context;
     private bool _disposed;
 
-    public UnitOfWork(TContext context) => _context = context;
+    public UnitOfWork(TContext context)
+    {
+        // P3-SRC-108 修复：补 null 守卫（对齐姊妹 DapperUnitOfWork 构造）——原 null 上下文
+        // 延迟到首个事务/SaveChanges 调用才以 NullReferenceException 暴露，构造期报错更可定位。
+        ArgumentNullException.ThrowIfNull(context);
+        _context = context;
+    }
 
     /// <inheritdoc/>
     public async ValueTask BeginTransactionAsync(CancellationToken ct = default)

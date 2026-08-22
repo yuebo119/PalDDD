@@ -8,6 +8,7 @@ using Microsoft.CodeAnalysis.Diagnostics;
 using PalDDD.Analyzers;
 using PalDDD.Core;
 using PalDDD.Messaging;
+using PalDDD.Projections;
 using System.Collections.Immutable;
 
 public sealed class StrategicDddAnalyzerTests
@@ -191,26 +192,18 @@ public sealed class StrategicDddAnalyzerTests
             using PalDDD.Core;
             using PalDDD.Projections;
 
-            namespace PalDDD.Projections;
-
-            public interface IProjectionHandler<in TMessage>
-            {
-                string ProjectionName { get; }
-                ValueTask ProjectAsync(TMessage message, CancellationToken ct = default);
-            }
-
             public sealed record OrderSubmitted;
 
             [BoundedContext("ordering")]
             public abstract class ProjectionBase : IProjectionHandler<OrderSubmitted>
             {
                 public string ProjectionName => "ordering.order-summary";
-                public abstract ValueTask ProjectAsync(OrderSubmitted message, CancellationToken ct = default);
+                public abstract ValueTask ProjectAsync(OrderSubmitted message, ProjectionContext context, CancellationToken ct = default);
             }
 
             public sealed class OrderSummaryProjection : ProjectionBase
             {
-                public override ValueTask ProjectAsync(OrderSubmitted message, CancellationToken ct = default)
+                public override ValueTask ProjectAsync(OrderSubmitted message, ProjectionContext context, CancellationToken ct = default)
                     => ValueTask.CompletedTask;
             }
             """);
@@ -396,26 +389,18 @@ public sealed class StrategicDddAnalyzerTests
             using PalDDD.Core;
             using PalDDD.Projections;
 
-            namespace PalDDD.Projections;
-
-            public interface IProjectionHandler<in TMessage>
-            {
-                string ProjectionName { get; }
-                ValueTask ProjectAsync(TMessage message, CancellationToken ct = default);
-            }
-
             public sealed record OrderSubmitted;
 
             [BoundedContext("ordering")]
             public abstract class ProjectionBase : IProjectionHandler<OrderSubmitted>
             {
                 public string ProjectionName => "ordering.order-summary";
-                public abstract ValueTask ProjectAsync(OrderSubmitted message, CancellationToken ct = default);
+                public abstract ValueTask ProjectAsync(OrderSubmitted message, ProjectionContext context, CancellationToken ct = default);
             }
 
             public sealed class OrderSummaryProjection : ProjectionBase
             {
-                public override ValueTask ProjectAsync(OrderSubmitted message, CancellationToken ct = default)
+                public override ValueTask ProjectAsync(OrderSubmitted message, ProjectionContext context, CancellationToken ct = default)
                     => ValueTask.CompletedTask;
             }
             """);
@@ -607,20 +592,12 @@ public sealed class StrategicDddAnalyzerTests
             using System.Threading.Tasks;
             using PalDDD.Projections;
 
-            namespace PalDDD.Projections;
-
-            public interface IProjectionHandler<in TMessage>
-            {
-                string ProjectionName { get; }
-                ValueTask ProjectAsync(TMessage message, CancellationToken ct = default);
-            }
-
             public sealed record OrderSubmitted;
 
             public class OrderSummaryProjection : IProjectionHandler<OrderSubmitted>
             {
                 public string ProjectionName => "order-summary";
-                public ValueTask ProjectAsync(OrderSubmitted message, CancellationToken ct = default)
+                public ValueTask ProjectAsync(OrderSubmitted message, ProjectionContext context, CancellationToken ct = default)
                     => ValueTask.CompletedTask;
             }
             """);
@@ -638,21 +615,13 @@ public sealed class StrategicDddAnalyzerTests
             using PalDDD.Core;
             using PalDDD.Projections;
 
-            namespace PalDDD.Projections;
-
-            public interface IProjectionHandler<in TMessage>
-            {
-                string ProjectionName { get; }
-                ValueTask ProjectAsync(TMessage message, CancellationToken ct = default);
-            }
-
             public sealed record OrderSubmitted;
 
             [BoundedContext("ordering")]
             public sealed class OrderSummaryProjection : IProjectionHandler<OrderSubmitted>
             {
                 public string ProjectionName => "ordering.order-summary";
-                public ValueTask ProjectAsync(OrderSubmitted message, CancellationToken ct = default)
+                public ValueTask ProjectAsync(OrderSubmitted message, ProjectionContext context, CancellationToken ct = default)
                     => ValueTask.CompletedTask;
             }
             """);
@@ -670,21 +639,13 @@ public sealed class StrategicDddAnalyzerTests
             using PalDDD.Core;
             using PalDDD.Projections;
 
-            namespace PalDDD.Projections;
-
-            public interface IProjectionHandler<in TMessage>
-            {
-                string ProjectionName { get; }
-                ValueTask ProjectAsync(TMessage message, CancellationToken ct = default);
-            }
-
             public sealed record OrderSubmitted;
 
             [BoundedContext("ordering")]
             public sealed class OrderSummaryProjection : IProjectionHandler<OrderSubmitted>
             {
                 public string ProjectionName => "Order_Summary";
-                public ValueTask ProjectAsync(OrderSubmitted message, CancellationToken ct = default)
+                public ValueTask ProjectAsync(OrderSubmitted message, ProjectionContext context, CancellationToken ct = default)
                     => ValueTask.CompletedTask;
             }
             """);
@@ -702,21 +663,13 @@ public sealed class StrategicDddAnalyzerTests
             using PalDDD.Core;
             using PalDDD.Projections;
 
-            namespace PalDDD.Projections;
-
-            public interface IProjectionHandler<in TMessage>
-            {
-                string ProjectionName { get; }
-                ValueTask ProjectAsync(TMessage message, CancellationToken ct = default);
-            }
-
             public sealed record OrderSubmitted;
 
             [BoundedContext("ordering")]
             public sealed class OrderSummaryProjection : IProjectionHandler<OrderSubmitted>
             {
                 public string ProjectionName => "billing.order-summary";
-                public ValueTask ProjectAsync(OrderSubmitted message, CancellationToken ct = default)
+                public ValueTask ProjectAsync(OrderSubmitted message, ProjectionContext context, CancellationToken ct = default)
                     => ValueTask.CompletedTask;
             }
             """);
@@ -734,21 +687,13 @@ public sealed class StrategicDddAnalyzerTests
             using PalDDD.Core;
             using PalDDD.Projections;
 
-            namespace PalDDD.Projections;
-
-            public interface IProjectionHandler<in TMessage>
-            {
-                string ProjectionName { get; }
-                ValueTask ProjectAsync(TMessage message, CancellationToken ct = default);
-            }
-
             public sealed record OrderSubmitted;
 
             [BoundedContext("ordering")]
             public sealed class OrderSummaryProjection : IProjectionHandler<OrderSubmitted>
             {
                 public string ProjectionName => "ordering.order-summary";
-                public ValueTask ProjectAsync(OrderSubmitted message, CancellationToken ct = default)
+                public ValueTask ProjectAsync(OrderSubmitted message, ProjectionContext context, CancellationToken ct = default)
                     => ValueTask.CompletedTask;
             }
             """);
@@ -843,21 +788,13 @@ public sealed class StrategicDddAnalyzerTests
             using PalDDD.Core;
             using PalDDD.Projections;
 
-            namespace PalDDD.Projections;
-
-            public interface IProjectionHandler<in TMessage>
-            {
-                string ProjectionName { get; }
-                ValueTask ProjectAsync(TMessage message, CancellationToken ct = default);
-            }
-
             public sealed record OrderSubmitted;
 
             [BoundedContext("ordering")]
             public sealed class OrderSummaryProjection : IProjectionHandler<OrderSubmitted>
             {
                 public string ProjectionName { get { return "order-summary"; } }
-                public ValueTask ProjectAsync(OrderSubmitted message, CancellationToken ct = default)
+                public ValueTask ProjectAsync(OrderSubmitted message, ProjectionContext context, CancellationToken ct = default)
                     => ValueTask.CompletedTask;
             }
             """;
@@ -879,21 +816,13 @@ public sealed class StrategicDddAnalyzerTests
             using PalDDD.Projections;
             using BC = PalDDD.Core.BoundedContextAttribute;
 
-            namespace PalDDD.Projections;
-
-            public interface IProjectionHandler<in TMessage>
-            {
-                string ProjectionName { get; }
-                ValueTask ProjectAsync(TMessage message, CancellationToken ct = default);
-            }
-
             public sealed record OrderSubmitted;
 
             [BC("ordering")]
             public sealed class OrderSummaryProjection : IProjectionHandler<OrderSubmitted>
             {
                 public string ProjectionName => "order-summary";
-                public ValueTask ProjectAsync(OrderSubmitted message, CancellationToken ct = default)
+                public ValueTask ProjectAsync(OrderSubmitted message, ProjectionContext context, CancellationToken ct = default)
                     => ValueTask.CompletedTask;
             }
             """;
@@ -1056,5 +985,8 @@ public sealed class StrategicDddAnalyzerTests
 
         yield return MetadataReference.CreateFromFile(typeof(BoundedContextAttribute).Assembly.Location);
         yield return MetadataReference.CreateFromFile(typeof(IEventHandler).Assembly.Location);
+        // TST-503：被分析源码的 IProjectionHandler 解析到真实 PalDDD.Projections 程序集——
+        // 内嵌 stub 已移除（stub 与真实签名会漂移，真实接口含 ProjectionContext 参数）
+        yield return MetadataReference.CreateFromFile(typeof(IProjectionHandler<>).Assembly.Location);
     }
 }

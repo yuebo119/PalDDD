@@ -13,6 +13,10 @@ namespace PalDDD.PalORM.Tests;
 /// </list>
 /// </para>
 /// <para>枚举列 status 全部 INTEGER（v4 决策 2：统一 int）。</para>
+/// <para>
+/// TST-205 平行副本声明：PalORM 栈与 Dapper 栈 schema 刻意分离（栈内演化独立），
+/// 对齐需双改——见 DapperStoreTests.CreateSchemaAsync（Integration.Tests）。
+/// </para>
 /// </summary>
 public static class MultiDialectSchema
 {

@@ -122,7 +122,12 @@ public class EventLogBenchmarks
     private const string Stream = "order-123";
     private const int SeedCount = 100;
 
-    [GlobalSetup]
+    // TST-401 修复：IterationSetup 重建 log（跨迭代截断流）——Append_SingleEvent 每 invoke
+    // 追加 1 条且 InMemoryEventLog 无 Clear/Remove API，GlobalSetup 一次性种子会使流跨迭代
+    // 无限增长（List 扩容 + Gen2 扫描成为 ns/op 漂移源）。重建后每迭代从 100 条种子起步，
+    // Append 摊销 O(1) 口径稳定；ReadStream_Forward 亦回到恒定 100 条基线。
+    // 种子 100 条的重灌成本在迭代边界执行，不计入 ns/op（对齐 OutboxThroughputBenchmarks 先例）。
+    [IterationSetup]
     public void Setup()
     {
         _log = new InMemoryEventLog();
@@ -210,6 +215,11 @@ public class SagaStateBenchmarks
     public async ValueTask<int> GetActiveSagas_Batch50()
     {
         var list = await _store.GetActiveSagasAsync(50, default);
+        // SMP-201 守卫：不足额返回说明 GlobalSetup 种子不变量被破坏（对齐 EnsureFullLease 先例）——
+        // 静默少查会以失真的小结果集稀释 ns/op
+        if (list.Count != ActiveSagaCount)
+            throw new InvalidOperationException(
+                $"应满额返回 {ActiveSagaCount} 条，实际 {list.Count} 条——种子不变量被破坏，基准数字失真");
         return list.Count;
     }
 }

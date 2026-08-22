@@ -170,6 +170,11 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // ITM-163 修复：补 message null + failureReason 空白守卫（对齐 InMemoryOutboxStore/OutboxDbContext）
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+        // ITM-082 姊妹对齐（P3-SRC-302）：failureReason 存储层截断兜底 2040——对齐 OutboxDbContext.
+        // MarkDead（Error 列上限 2048 族的截断值）。三层截断的存储层兜底：调用方 OutboxBatchProcessor
+        // 的 2000 截断为第一层；PalORM 三方言 error 列 TEXT 无上限（栈内无害），本兜底为跨栈姊妹
+        // 对称性 + 防 DDL 收紧后超列失败（消息滞留租约过期态）
+        var reason = failureReason.Length > 2040 ? failureReason[..2040] : failureReason;
         // 三十四轮 ITM-210 token 化：同 MarkProcessed——retry_count 乐观锁 + 租约 token 双守卫
         //（SET/WHERE 只插值"值"；SQL 片段变量会被 PalORM 整体参数化成语法错误，见 MarkProcessed 注释）
         var id = message.Id.ToString();
@@ -179,15 +184,15 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         var statusDead = (int)OutboxStatus.Dead;
         var affected = owner is null
             ? Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusDead}, error = {failureReason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND locked_by IS NULL",
+                $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND locked_by IS NULL",
                 default).AsTask().GetAwaiter().GetResult()
             : Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusDead}, error = {failureReason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND locked_by = {owner} AND locked_until = {until}",
+                $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND locked_by = {owner} AND locked_until = {until}",
                 default).AsTask().GetAwaiter().GetResult();
         if (affected > 0)
         {
             message.Status = OutboxStatus.Dead;
-            message.Error = failureReason;
+            message.Error = reason;
             message.ProcessedAt = deadAt;
             message.NextAttemptAt = null;
             message.LockedBy = null;
@@ -201,6 +206,9 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // ITM-163 修复：补 message null + failureReason 空白守卫（对齐 InMemoryOutboxStore/OutboxDbContext）
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+        // ITM-082 姊妹对齐（P3-SRC-302）：failureReason 存储层截断兜底 2040——对齐 OutboxDbContext.
+        // ReleaseForRetry（同 MarkDead，见其注释的三层截断说明）
+        var reason = failureReason.Length > 2040 ? failureReason[..2040] : failureReason;
         // 手写 SQL 路径：原子自增 retry_count（避免读-改-写竞态）
         // 不走 UpdateAsync —— 避免 [ConcurrencyCheck] 干扰原子自增语义
         // P2 修复：补租约守卫——原 WHERE 仅按 id，租约过期被其他 worker 抢占后，
@@ -227,15 +235,15 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // Processed 消息）；无租约直呼分支保持 locked_by IS NULL 字面量。
         var affected = leaseOwner is null
             ? Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND (locked_by IS NULL)",
+                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {reason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND (locked_by IS NULL)",
                 default).AsTask().GetAwaiter().GetResult()
             : Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {failureReason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND locked_by = {leaseOwner} AND locked_until = {leaseUntil}",
+                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {reason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND locked_by = {leaseOwner} AND locked_until = {leaseUntil}",
                 default).AsTask().GetAwaiter().GetResult();
         if (affected > 0)
         {
             message.Status = OutboxStatus.Pending;
-            message.Error = failureReason;
+            message.Error = reason;
             message.NextAttemptAt = nextAttemptAt;
             message.RetryCount += 1;
             message.LockedBy = null;
@@ -249,8 +257,12 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
     {
         // ITM-163 修复：补 retriedBy 空白守卫（对齐 DapperOutboxStore/InMemoryOutboxStore/OutboxDbContext）
         ArgumentException.ThrowIfNullOrWhiteSpace(retriedBy);
+        // ITM-216 姊妹对齐（P3-SRC-102/201）：retriedBy 截断兜底 256——对齐 OutboxDbContext/
+        // InMemoryOutboxStore 的 RequeueDeadAsync（审计串预留 " at {时间戳}" 后缀空间，Error 列
+        // 上限族 2048）。入参保持不变，仅审计串使用截断值
+        var retriedByToken = retriedBy.Length > 256 ? retriedBy[..256] : retriedBy;
         var now = Clock.GetUtcNow();
-        var audit = $"requeued by {retriedBy} at {now:O}";
+        var audit = $"requeued by {retriedByToken} at {now:O}";
         // 条件 UPDATE：status=Dead(2) 守卫防止重复重投；返回受影响行数用于幂等判断
         return await Session.ExecuteAsync(
             $"UPDATE outbox_messages SET status = {(int)OutboxStatus.Pending}, processed_at = NULL, error = {audit}, next_attempt_at = {nextAttemptAt}, locked_by = NULL, locked_until = NULL WHERE id = {messageId.ToString()} AND status = {(int)OutboxStatus.Dead}",

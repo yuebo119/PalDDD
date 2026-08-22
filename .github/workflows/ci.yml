@@ -111,6 +111,12 @@ jobs:
       - name: PublishAot verify
         run: dotnet publish samples/PalDDD.PalOrmSample/PalDDD.PalOrmSample.csproj -c Release -r linux-x64 /p:PublishAot=true --verbosity normal
 
+      - name: Run AOT-published binary
+        # SMP-101：publish 只验证编译期 0 警告，运行时路径（Outbox CRUD/事务提交回滚）
+        # 需实跑确认——Program.cs 自带断言与 PASSED 输出，非零退出码即失败。
+        # 产物为 linux-x64 自包含 native binary，直接执行即可（无需 dotnet 命令）。
+        run: ./samples/PalDDD.PalOrmSample/bin/Release/net11.0/linux-x64/publish/PalDDD.PalOrmSample
+
   dialect-probe:
     # unified v2.0 Phase 2a：方言实测防线固化——40 断言 × PG/MySQL 从"本机可选跑"升 CI 必跑。
     # 定位是准发布门：路径触发（仅 Store/SQL/DDL/映射面变更），不阻塞 build-and-test 快速反馈。

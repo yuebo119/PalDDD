@@ -32,8 +32,19 @@ public sealed class MessageEvolutionPipeline
                     + "必须严格递增：回环/退化注册会导致升级死循环。");
         }
 
-        _steps = stepList.ToFrozenDictionary(
-            step => new Key(step.SourceDescriptor.Name, step.SourceDescriptor.SchemaVersion));
+        // P3-SRC-304 修复：重复键抛 MessageEvolutionException——原 ToFrozenDictionary 对重复
+        // (Name, SourceSchemaVersion) 键抛 BCL ArgumentException（"An item with the same key..."），
+        // 与本构造器其余校验（严格递增/ClrType 衔接）的异常类型分叉，消费者无法单点 catch
+        // MessageEvolutionException 覆盖全部注册期错误。显式检测后带键信息抛出。
+        var seed = new Dictionary<Key, MessageUpgradeStep>(stepList.Length);
+        foreach (var step in stepList)
+        {
+            var key = new Key(step.SourceDescriptor.Name, step.SourceDescriptor.SchemaVersion);
+            if (!seed.TryAdd(key, step))
+                throw new MessageEvolutionException(
+                    $"Duplicate message evolution step: name '{key.Name}' from version {key.SchemaVersion} is registered more than once.");
+        }
+        _steps = seed.ToFrozenDictionary();
 
         // P3 修复（二十一轮）：相邻步 ClrType 衔接校验（构造期 fail-fast）——升级链按
         // (Name, SourceSchemaVersion) 键衔接，相邻两步 A→B 要求 A.TargetDescriptor.ClrType

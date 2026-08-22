@@ -3,6 +3,8 @@
   <PropertyGroup>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- SMP-107：Web SDK 项目不参与 Native AOT publish（AOT 验证由 AotSample/PalOrmSample
+         承载）；代码本身 AOT 友好（source-gen JSON + 显式注册）。 -->
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>
     <!-- 样例：广撒网抑制可接受 -->

@@ -253,6 +253,10 @@ public static class ShardedTableName
     public static string For(string baseTable, int shardId)
     {
         ValidateIdentifier(baseTable);
+        // P3-SRC-303 修复：shardId 下界校验——负值（策略实现 bug/算术下溢）拼出 "table_-1"
+        // 形态可通过标识符白名单（数字合法字符），静默路由到不存在的表，失败延迟到 SQL 执行期。
+        // 上界由调用方按 ShardCount 保证（与 GetShard 的越界报错分工一致）。
+        ArgumentOutOfRangeException.ThrowIfLessThan(shardId, 0);
         return $"{baseTable}_{shardId}";
     }
 

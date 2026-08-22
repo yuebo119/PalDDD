@@ -117,6 +117,10 @@ public sealed class InMemoryEventLog : IEventLog
                 // 最后一个已产出事件不计入 read 指标；前置后早退路径计数完整
                 checked { read++; }
                 yield return @event;
+                // 每事件让出调度器（P3-SRC-106 动机声明）：async 迭代器循环体内无其他 await 时
+                // MoveNextAsync 同步级联完成——消费方逐事件同步处理（重计算/同步阻塞）时整个
+                // 枚举垄断线程池线程，饿死同池排队的工作项（计时器/其他 task）。Task.Yield
+                // 强制回到调度器给其他工作项执行机会。历史行为保留：移除需基准证据
                 await Task.Yield();
             }
         }
@@ -158,6 +162,10 @@ public sealed class InMemoryEventLog : IEventLog
                 // 最后一个已产出事件不计入 read 指标；前置后早退路径计数完整
                 checked { read++; }
                 yield return @event;
+                // 每事件让出调度器（P3-SRC-106 动机声明）：async 迭代器循环体内无其他 await 时
+                // MoveNextAsync 同步级联完成——消费方逐事件同步处理（重计算/同步阻塞）时整个
+                // 枚举垄断线程池线程，饿死同池排队的工作项（计时器/其他 task）。Task.Yield
+                // 强制回到调度器给其他工作项执行机会。历史行为保留：移除需基准证据
                 await Task.Yield();
             }
         }

@@ -239,8 +239,9 @@ public static class PostgreSqlJsonb
 
     /// <summary>
     /// SQL 单引号字面量内文转义（P1 修复）：JSON 转义后的值嵌入 '...'::jsonb 字面量时，
-    /// 值含单引号会提前终止 SQL 字符串——必须再翻倍单引号。key 同理受影响但通常为
-    /// 开发者常量，此处只对 value 应用（key 走 <see cref="EscapeJsonValue"/> + 本方法）。
+    /// 值含单引号会提前终止 SQL 字符串——必须再翻倍单引号。key 与 value 两侧均应用本方法
+    ///（Include/IncludedBy 中 key/value 都走 <see cref="EscapeJsonValue"/> + 本方法双重转义，
+    /// key 虽通常为开发者常量亦不豁免——P3-SRC-404 勘正旧 doc"只对 value 应用"与代码的矛盾）。
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static string EscapeSqlLiteral(string jsonEscaped)

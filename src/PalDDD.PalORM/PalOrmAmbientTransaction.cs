@@ -27,6 +27,13 @@ namespace PalDDD.PalORM;
 /// 的 raw command 构造处 TryGet 挂接。
 /// </para>
 /// <para>
+/// ⚠️ 理论边界（P3-SRC-211 声明）：同 Session 双 UoW 并发 Begin 时，CWT 键级条目只存
+/// "最后一个"事务——先结束者的 finally <c>Set(null)</c> 会按键 <c>Remove</c> 误清后者挂接
+/// 的事务。当前三方言 provider 均禁并行事务（连接已有活动事务时第二个
+/// <c>BeginTransactionAsync</c> 即抛），本路径不可达；若未来引入 savepoint 型 provider
+///（同连接嵌套事务），需重新评估键结构（如 value 改为事务栈）。
+/// </para>
+/// <para>
 /// ⚠️ 限制：仅经 IUnitOfWork（<see cref="PalOrmUnitOfWork{TProvider}"/>）开启的事务被传导；
 /// 直接调 <c>session.BeginTransactionAsync</c> 绕过 IUnitOfWork 时 raw command 不挂接
 ///（该路径下连 PalORM ExecuteAsync 也需手动 UseTransaction，属既有语义）。

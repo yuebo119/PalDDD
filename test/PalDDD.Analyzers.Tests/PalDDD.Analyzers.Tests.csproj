@@ -13,6 +13,8 @@
     <ProjectReference Include="..\..\src\PalDDD.Analyzers.CodeFixes\PalDDD.Analyzers.CodeFixes.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Messaging\PalDDD.Messaging.csproj" />
+    <!-- TST-503：被分析源码引用真实 IProjectionHandler（含 ProjectionContext 参数），替代内嵌 stub -->
+    <ProjectReference Include="..\..\src\PalDDD.Projections\PalDDD.Projections.csproj" />
   </ItemGroup>
 
   <ItemGroup>

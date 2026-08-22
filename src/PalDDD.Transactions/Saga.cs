@@ -510,6 +510,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 $"Child saga orchestrator for state type '{childStateType.Name}' could not be resolved. "
                 + "Override ResolveChildSaga<T>() or inject an ISagaManager.");
 
+        // P3-SRC-401 声明：临时 manager 使"使用 Interrupt 前须设 SagaManager"的前提不可检测——
+        // 子 saga 含 InterruptStep 且父未设 manager 时条目落入临时实例（执行完丢弃），滞留中断态
+        // 无警告；含 Interrupt 的子 saga 必须显式设 SagaManager（见 InterruptStep 的 HITL 设计注释）。
         var manager = SagaManager ?? new DefaultSagaManager();
 
         List<Exception> failures = [];
@@ -681,7 +684,11 @@ public abstract class Saga<TState> where TState : SagaState, new()
         var dict = GetFrozen();
         if (!dict.TryGetValue(targetKey, out var routedStep))
         {
-            // 目标未找到——无操作
+            // P3-SRC-101 设计意图声明：未注册 key 静默返回 current 为刻意宽容——对比下方
+            // ITM-069 对"路由到特殊步骤"的显式拒绝：路由表可演进（滚动发布窗口期新事件
+            // 先到、旧版本未注册新步骤 key），未知 key 容忍使 saga 停留当前状态等待后续
+            // 事件，而非炸掉整条管线；特殊步骤分发则是结构性错误（execute 为 null!，必
+            // NRE），故显式拒绝。两种处置的差异是刻意的
             return current;
         }
 
@@ -714,11 +721,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 RecordExecutedStep(current, result, matchedKey, startedAt);
 
-                if (observer is not null)
-                {
-                    // 三十七轮 A5：对齐 Normal(:324)/FanOut(:413)/ChildSaga(:512) 三路径的 ITM-212 best-effort 保护
-                    await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct).ConfigureAwait(false);
-                }
+                // ITM-212：Observer best-effort——Sink 异常不重放业务步骤
+                // P3-SRC-214：删除冗余 observer null 包裹——SafeObserveCompletedAsync 内部
+                // 已判 null，对齐 Normal/FanOut/ChildSaga 三路径的直调形态
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct).ConfigureAwait(false);
 
                 return result;
             }

@@ -215,8 +215,8 @@ public static class DapperBulkCopy
         // ITM-083 修复：DataTable 用 using 声明（成功/异常路径都释放）。
         // MySqlBulkCopy 经查证（MySqlConnector 2.6.x XML 文档）不实现 IDisposable——无 Dispose 可调，
         // 其内部连接生命周期由 myConn 持有者管理；此处仅 DataTable 需要释放。
-        // ITM-214 修复（三十二轮）：按首行非空值推断列类型——默认 string 列把 byte[]
-        // 静默 ToString() 为 "System.Byte[]"，二进制负载损坏。
+        // ITM-214 修复（三十二轮）：按首行非空值推断列类型（ITM-251 后演进为跨行首个非空值，见下）——
+        // 默认 string 列把 byte[] 静默 ToString() 为 "System.Byte[]"，二进制负载损坏。
         // ITM-251 修复（F9）：提取值一次性物化缓存——原推断循环 + 填充循环各调一次
         // extractor（首行含 null 列时推断循环扫多行，每行被提取两次），与入口契约
         // "首行值可能被提取两次"失实。现每行恰提取一次，推断/填充共用缓存；
@@ -266,8 +266,11 @@ public static class DapperBulkCopy
         };
 
         // 映射 DataTable 列 → 数据库列（按索引匹配）
-        foreach (var col in cols)
-            bulkCopy.ColumnMappings.Add(new MySqlBulkCopyColumnMapping(Array.IndexOf(cols, col), col));
+        // P3-SRC-209 修复：列映射改按索引直配——原 Array.IndexOf(cols, col) 在重复列名时
+        // 恒命中首个索引（重复名之后的列全部错配到首列，静默错列），且逐列扫描 O(n²)；
+        // DataTable 列与 cols 同序构建（上方循环），索引天然一一对应。
+        for (int i = 0; i < cols.Length; i++)
+            bulkCopy.ColumnMappings.Add(new MySqlBulkCopyColumnMapping(i, cols[i]));
 
         // WriteToServerAsync — 真正执行批量导入
         var result = await bulkCopy.WriteToServerAsync(dt, ct).ConfigureAwait(false);

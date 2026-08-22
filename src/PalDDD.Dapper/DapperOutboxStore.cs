@@ -189,6 +189,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     {
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
+        // P3-SRC-207 修复：now 方法开头取一次——原 extractor 内嵌 _timeProvider.GetUtcNow()
+        // 违反 DapperBulkCopy 的纯提取函数契约（值提取须无副作用且确定，首行还会被提取两次），
+        // 且同批各行 CreatedAt 随调用时刻漂移。闭包单值快照后三方言每行同刻。
+        var now = _timeProvider.GetUtcNow();
         var conn = await EnsureOpenAsync().ConfigureAwait(false);
         // P2 修复（八轮评审 PD17）：批量路径补 correlation/causation/trace 4 追踪列——
         // 单条路径 AddMessage（七轮）已补，批量漏列导致追踪链在批量写入时丢失；
@@ -197,7 +201,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             conn, _dbType, "outbox_messages",
             ["id", "type", "payload", "content_type", "schema_version", "status", "created_at", "correlation_id", "causation_id", "trace_parent", "trace_state"],
             messages,
-            m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, StatusPending, _timeProvider.GetUtcNow(),
+            m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, StatusPending, now,
                 m.CorrelationId?.ToString(), m.CausationId?.ToString(), m.TraceParent, m.TraceState],
             _transaction).ConfigureAwait(false);
     }
@@ -211,6 +215,9 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // 三十四轮 ITM-210 token 化：补租约 token 参数（owner/until 调用时快照；无租约时均传
         // null → SQL 走 locked_by IS NULL 分支）。affected 返回值不消费——与原语义一致
         //（token 拒绝时 DB 行不变，内存入参仍按下方 ITM-130 同步清租约字段）。
+        // P3-SRC-301 声明：affected=0（token 拒绝）时内存对象仅清租约字段不回写 Status——
+        // 与 InMemory 版（守卫内联设 Processed）/PalORM 版（affected>0 才全套回写）的分叉属
+        // ITM-210 历史语义，调用方（OutboxBatchProcessor）不读该状态故无实害。
         c.Execute(SqlTemplates.OutboxMarkProcessed,
             new { at = ToTimeParam(processedAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message) }, _transaction);
         // ITM-130 修复：SQL 清除 DB 租约列后同步入参——调用方读入参不应再见陈旧持有者
@@ -224,6 +231,9 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         var c = EnsureOpen();
+        // P3-SRC-301 声明（同 MarkProcessed）：affected=0（token 拒绝）时内存对象仅清租约字段
+        // 不回写 Status——与 InMemory 版（守卫内联设 Dead）/PalORM 版（affected>0 才全套回写）
+        // 的分叉属 ITM-210 历史语义，调用方（OutboxBatchProcessor）不读该状态故无实害。
         c.Execute(SqlTemplates.OutboxMarkDead,
             new { reason = failureReason, at = ToTimeParam(deadAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message) }, _transaction); // P1 修复（八轮评审）：时间参数走 ToTimeParam；三十四轮 ITM-210：租约 token 参数
         // ITM-130 修复：SQL 清除 DB 租约列后同步入参（对齐 EFCore/PalORM/InMemory 三姊妹）
