@@ -143,6 +143,41 @@ public sealed class OutboxEfCoreTests
         await Assert.That(loaded.Error).IsNull();
     }
 
+    [Test]
+    public async Task LeasePendingMessagesAsync_GrantsAndPersistsLease_ProductionSqlite(CancellationToken cancellationToken)
+    {
+        // ITM-252（F10/F11）：TestOutboxDbContext 曾带零调用的 Lease 死 override（潜伏缺陷已删），
+        // 本文件此前对生产 EF Lease 零覆盖——此测试直接继承生产 SqliteOutboxDbContext，
+        // SQLite 内存库跑真实 SQL 翻译。ITM-261 修复后时间过滤物化后内存进行
+        //（EF Core 11 preview7 SQLite 对 DateTimeOffset 有序比较不可翻译），状态/重试过滤与
+        // 分页仍在 SQL 内——租约写入/持久化断言覆盖完整生产路径。
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        await using var db = new SqliteLeaseOutboxDbContext(CreateSqliteLeaseOptions(connection));
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+        var message = CreateMessage("orders.submitted", DateTimeOffset.UtcNow.AddMinutes(-5));
+        db.OutboxMessages.Add(message);
+        await db.SaveChangesAsync(cancellationToken);
+        db.ChangeTracker.Clear();
+
+        var leased = await db.LeasePendingMessagesAsync(
+            10, "worker-1", TimeSpan.FromMinutes(2), 5, cancellationToken);
+
+        var leasedList = leased.ToList();
+        await Assert.That(leasedList).Count().IsEqualTo(1);
+        await Assert.That(leasedList[0].LockedBy).IsEqualTo("worker-1");
+        await Assert.That(leasedList[0].Status).IsEqualTo(OutboxStatus.Pending);
+        var expectedLockedUntil = leasedList[0].LockedUntil;
+        await Assert.That(expectedLockedUntil).IsNotNull();
+
+        // Lease 内部已 SaveChanges——租约用新 context 读回验证持久化（PD26 写读 roundtrip）
+        await using var reader = new SqliteLeaseOutboxDbContext(CreateSqliteLeaseOptions(connection));
+        var loaded = await reader.OutboxMessages.SingleAsync(cancellationToken);
+        await Assert.That(loaded.LockedBy).IsEqualTo("worker-1");
+        await Assert.That(loaded.Status).IsEqualTo(OutboxStatus.Pending);
+        await Assert.That(loaded.LockedUntil).IsEqualTo(expectedLockedUntil);
+    }
+
     private static readonly DateTimeOffset FixedNow = DateTimeOffset.Parse(
         "2026-05-31T00:00:00Z",
         CultureInfo.InvariantCulture);
@@ -155,6 +190,12 @@ public sealed class OutboxEfCoreTests
     /// <summary>SQLite 内存库 options——需共享同一打开的 <see cref="SqliteConnection"/>（:memory: 库随连接存活）。</summary>
     private static DbContextOptions<TestOutboxDbContext> CreateSqliteOptions(SqliteConnection connection)
         => new DbContextOptionsBuilder<TestOutboxDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+    /// <summary>生产 Lease 专用的 SQLite options（<see cref="SqliteLeaseOutboxDbContext"/>）。</summary>
+    private static DbContextOptions<SqliteLeaseOutboxDbContext> CreateSqliteLeaseOptions(SqliteConnection connection)
+        => new DbContextOptionsBuilder<SqliteLeaseOutboxDbContext>()
             .UseSqlite(connection)
             .Options;
 
@@ -182,34 +223,25 @@ public sealed class OutboxEfCoreTests
         DbContextOptions<TestOutboxDbContext> options,
         DateTimeOffset utcNow) : OutboxDbContext(options)
     {
-        public override async ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
+        // ITM-252：原死 override（零调用、潜伏缺陷）已删除。InMemory 变体不提供 Lease——
+        // Lease 行为由 SqliteLeaseOutboxDbContext（生产 SqliteOutboxDbContext 继承）测试。
+        // 显式 throw 防止未来测试误用 InMemory 上下文测 Lease 而不自知。
+        public override ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
             int batchSize,
             string owner,
             TimeSpan leaseDuration,
             int maxRetryCount,
             CancellationToken ct)
-        {
-            // P3 修复（二十六轮验证轮 W1）：不能复用 GetPending——基类已 AsNoTracking（二十五轮 EF-1），
-            // 非跟踪实体的内存突变 + SaveChanges 恒写 0 行（租约静默失效）。镜像 SqliteOutboxDbContext
-            // 的内联跟踪查询。此 override 当前零调用（潜伏缺陷），修复防未来测试踩坑。
-            var now = GetUtcNow();
-            var messages = await OutboxMessages
-                .Where(m => m.Status == OutboxStatus.Pending && m.RetryCount < maxRetryCount)
-                .Where(m => m.NextAttemptAt == null || m.NextAttemptAt <= now)
-                .Where(m => m.LockedUntil == null || m.LockedUntil <= now)
-                .OrderBy(m => m.CreatedAt)
-                .Take(batchSize)
-                .ToListAsync(ct);
-            foreach (var message in messages)
-            {
-                message.LockedBy = owner;
-                message.LockedUntil = utcNow.Add(leaseDuration);
-            }
-
-            await SaveChangesAsync(ct);
-            return messages;
-        }
+            => throw new NotSupportedException(
+                "TestOutboxDbContext（InMemory）不提供 Lease 实现——Lease 测试请用 SqliteLeaseOutboxDbContext（生产路径）。");
 
         protected override DateTimeOffset GetUtcNow() => utcNow;
     }
+
+    /// <summary>
+    /// 生产 Lease 测试上下文——直接继承生产 <see cref="SqliteOutboxDbContext"/>，
+    /// 无任何重写（ITM-252：原 TestOutboxDbContext 的 Lease 死 override 已删除）。
+    /// </summary>
+    private sealed class SqliteLeaseOutboxDbContext(DbContextOptions<SqliteLeaseOutboxDbContext> options)
+        : SqliteOutboxDbContext(options);
 }

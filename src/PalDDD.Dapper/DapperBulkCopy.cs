@@ -58,6 +58,8 @@ public static class DapperBulkCopy
     /// <param name="columns">列名列表（顺序必须与值提取函数一致）</param>
     /// <param name="items">实体列表</param>
     /// <param name="valueExtractor">每行值提取函数：item → object?[]，调用者 lambda 完成，零反射。
+    /// 调用次数契约（ITM-251）：三方言均每行恰调用一次；首行因入口长度校验额外一次
+    /// （首行值可能被提取两次）。MySQL 路径类型推断复用缓存值，不二次提取。
     /// P2 修复（八轮评审，配套批量追踪列）：元素类型放宽为可空——null 由各方言路径归一为 SQL NULL
     /// （SQLite/MySQL 显式 ?? DBNull.Value，PG COPY 走 NpgsqlDbType.Unknown）；Func 协变保证
     /// 既有 object[] 返回的 lambda 兼容。</param>
@@ -95,6 +97,9 @@ public static class DapperBulkCopy
         // 静默丢弃。入口一次校验（列数恒定，首行代表性）给出可定位的 ArgumentException。
         // 契约声明（ITM-207 三十一轮）：此校验使 extractor 对首行额外调用一次——
         // valueExtractor 必须是无副作用的纯提取函数（首行值可能被提取两次）。
+        // ITM-251 修复（F9）：MySQL 路径原对每行调用 extractor 两次（类型推断循环 +
+        // 填充循环），与本契约失实；现已物化缓存，每行恰一次（加本探针后首行共两次）。
+        // 契约自此对三方言一致成立：每行一次 + 首行额外一次。
         var probe = valueExtractor(items[0]);
         if (probe.Length != columns.Length)
             throw new ArgumentException(
@@ -212,10 +217,16 @@ public static class DapperBulkCopy
         // 其内部连接生命周期由 myConn 持有者管理；此处仅 DataTable 需要释放。
         // ITM-214 修复（三十二轮）：按首行非空值推断列类型——默认 string 列把 byte[]
         // 静默 ToString() 为 "System.Byte[]"，二进制负载损坏。
+        // ITM-251 修复（F9）：提取值一次性物化缓存——原推断循环 + 填充循环各调一次
+        // extractor（首行含 null 列时推断循环扫多行，每行被提取两次），与入口契约
+        // "首行值可能被提取两次"失实。现每行恰提取一次，推断/填充共用缓存；
+        // 值已全部在手，类型推断退化为内存数组扫描（无需提前 break）。
+        var cachedValues = new object?[items.Count][];
+        for (var i = 0; i < items.Count; i++)
+            cachedValues[i] = extractor(items[i]);
         var columnTypes = new Type?[cols.Length];
-        foreach (var item in items)
+        foreach (var sampleValues in cachedValues)
         {
-            var sampleValues = extractor(item);
             for (int i = 0; i < cols.Length; i++)
             {
                 if (columnTypes[i] is null && sampleValues[i] is not null)
@@ -224,17 +235,15 @@ public static class DapperBulkCopy
                     columnTypes[i] = converted?.GetType();
                 }
             }
-            if (Array.TrueForAll(columnTypes, t => t is not null)) break;
         }
 
         using var dt = new DataTable();
         for (int i = 0; i < cols.Length; i++)
             dt.Columns.Add(cols[i], columnTypes[i] ?? typeof(object));
 
-        foreach (var item in items)
+        foreach (var values in cachedValues)
         {
             var row = dt.NewRow();
-            var values = extractor(item);
             // P2 修复（八轮评审）：套用 ConvertForMySql——DataTable 对未知类型（Ulid/DateTimeOffset）
             // 静默 ToString() 是区域性依赖的静默损坏（本地化时间分隔符/Ulid 表示漂移），显式转换消除。
             for (int i = 0; i < cols.Length; i++)

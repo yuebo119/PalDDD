@@ -42,4 +42,63 @@ public sealed class DapperBulkCopyTests
 
         await Assert.That(exception!.ParamName).IsEqualTo("columns");
     }
+
+    // ITM-251 传感器（F9）：带 null 首行值的批量插入——守护值提取/NULL 归一路径
+    // 不被首行 null 短路（MySQL 推断路径的同型场景），并断言 extractor 调用次数契约：
+    // 每行恰一次 + 首行入口长度探针额外一次（契约修复后三方言一致；修复前 MySQL 路径
+    // 推断循环 + 填充循环对每行各调一次）。SQLite 路径可直接运行验证。
+    [Test]
+    public async Task BulkInsertAsync_WithNullValuesInFirstRow_InsertsAllRowsCorrectly()
+    {
+        await using var conn = new SqliteConnection("Data Source=:memory:");
+        await conn.OpenAsync();
+        await using (var create = conn.CreateCommand())
+        {
+            create.CommandText = "CREATE TABLE bulk_null_test (id INTEGER PRIMARY KEY, name TEXT, amount INT)";
+            await create.ExecuteNonQueryAsync();
+        }
+
+        (int Id, string? Name, int? Amount)[] items =
+        [
+            (1, null, null),   // 首行含 null 列
+            (2, "alpha", 10),
+            (3, null, 30),
+        ];
+
+        var extractorCalls = 0;
+        var inserted = await DapperBulkCopy.BulkInsertAsync(
+            conn,
+            DapperDbType.Sqlite,
+            "bulk_null_test",
+            ["id", "name", "amount"],
+            items,
+            item =>
+            {
+                extractorCalls++;
+                return [item.Id, item.Name, item.Amount];
+            });
+
+        await Assert.That(inserted).IsEqualTo(3);
+        await Assert.That(extractorCalls).IsEqualTo(items.Length + 1); // 每行一次 + 首行探针一次
+
+        await using var verify = conn.CreateCommand();
+        verify.CommandText = "SELECT id, name, amount FROM bulk_null_test ORDER BY id";
+        await using var reader = await verify.ExecuteReaderAsync();
+        var rows = new List<(long Id, string? Name, long? Amount)>();
+        while (await reader.ReadAsync())
+        {
+            rows.Add((
+                reader.GetInt64(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetInt64(2)));
+        }
+
+        await Assert.That(rows.Count).IsEqualTo(3);
+        await Assert.That(rows[0].Name).IsNull();
+        await Assert.That(rows[0].Amount).IsNull();
+        await Assert.That(rows[1].Name).IsEqualTo("alpha");
+        await Assert.That(rows[1].Amount).IsEqualTo(10L);
+        await Assert.That(rows[2].Name).IsNull();
+        await Assert.That(rows[2].Amount).IsEqualTo(30L);
+    }
 }

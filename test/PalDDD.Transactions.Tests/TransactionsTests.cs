@@ -1245,12 +1245,18 @@ public sealed class SagaTests
     [Test]
     public async Task CompensateAsync_NoCompensationHandlers_Succeeds()
     {
- // (mojibake cleared)
+        // 步骤无 compensate 委托时，即使已执行过（ExecutedStepKeys 有记录），
+        // CompensateAsync 也应静默跳过该步骤而非抛异常（SagaCompensation 只收集有补偿的步骤）
         var saga = new NoCompensationSaga();
         var state = new OrderSagaState();
+        state.ExecutedStepKeys.Add("Initial"); // 通配步骤 key（eventType=null → key 即状态名）
 
         await saga.CompensateAsync(state);
-        // 不应抛出异常
+
+        // 补偿为 no-op：状态机状态与执行记录保持原样——无补偿可执行，记录也不得误清
+        await Assert.That(state.CurrentState).IsEqualTo("Initial");
+        await Assert.That(state.Status).IsEqualTo(SagaStatus.Active);
+        await Assert.That(state.ExecutedStepKeys.Count).IsEqualTo(1);
     }
 
  // /// <summary>验证 ProcessEventAsync 补偿所有已执行步骤而非仅当前步骤</summary>

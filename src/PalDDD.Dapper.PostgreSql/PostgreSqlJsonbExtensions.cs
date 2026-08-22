@@ -159,7 +159,8 @@ public static class PostgreSqlJsonb
     /// <summary>路径提取 JSON：payload #> '{path,to,key}'</summary>
     /// <param name="path">
     /// 路径段数组（同 <see cref="ExtractTextByPath"/> 的 path 约束：每段不得含逗号/花括号——
-    /// P3·二十一轮 doc 声明，元素内逗号是 PG path 数组分隔符，静默拆段查错位置）。
+    /// 元素内逗号是 PG path 数组分隔符，静默拆段查错位置；花括号是数组字面量定界符）。
+    /// ITM-248（F6，对齐姊妹三十七轮 P2-2）：违禁字符由 doc 声明升级为构建期 fail-fast。
     /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractJsonByPath(string column, params string[] path)
@@ -168,7 +169,14 @@ public static class PostgreSqlJsonb
         ArgumentException.ThrowIfNullOrWhiteSpace(column);
         ArgumentNullException.ThrowIfNull(path);
         foreach (var segment in path)
+        {
             ArgumentException.ThrowIfNullOrWhiteSpace(segment);
+            // ITM-248 修复（F6，PD24 对称）：对齐姊妹 ExtractTextByPath（三十七轮 P2-2）——
+            // PG path 数组语法违禁字符构建期 fail-fast，不再仅 doc 声明靠调用方自觉
+            if (segment.Contains(',') || segment.Contains('{') || segment.Contains('}'))
+                throw new ArgumentException(
+                    $"JSON 路径段含违禁字符（逗号或花括号）：\"{segment}\"。PG path 数组语法限制，请改用原生参数化 SQL。", nameof(path));
+        }
 
         // P3 修复（八轮评审）：path 元素内单引号改 SQL 标准翻倍（对齐同文件 EscapeLiteral）——
         // 此前 Replace("'","\\") 的反斜杠转义在 standard_conforming_strings=on（PG 默认）下不生效，

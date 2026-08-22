@@ -22,6 +22,13 @@ public class PalOrmConcurrencyTests
         return session;
     }
 
+    /// <summary>
+    /// 共享文件 DB 的建表 DDL。ITM-259 审议：<b>有意不引用</b> <see cref="MultiDialectSchema.Sqlite"/>——
+    /// 本文件用共享磁盘文件 + 多 worker 独立连接，DDL 需 IF NOT EXISTS（幂等建表），
+    /// 且只建并发测试涉及的 4 张表（无 saga_states/events）；payload/response_payload 列声明
+    /// TEXT 系历史遗留（SQLite 动态类型不约束实际存储，byte[] 参数仍按 BLOB 写入，行为等价）。
+    /// 与单一真源的结构差异不影响并发测试语义，强行对齐反而引入无谓的表/列膨胀。
+    /// </summary>
     private static async Task InitSchemaAsync(DataSession<SqliteProvider> session, CancellationToken ct = default)
     {
         await session.ExecuteAsync($"CREATE TABLE IF NOT EXISTS outbox_messages (id TEXT PRIMARY KEY, type TEXT NOT NULL, payload TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT 'application/json', schema_version INTEGER NOT NULL DEFAULT 1, status INTEGER NOT NULL DEFAULT 0, retry_count INTEGER NOT NULL DEFAULT 0, error TEXT, created_at TEXT NOT NULL, processed_at TEXT, next_attempt_at TEXT, locked_by TEXT, locked_until TEXT, correlation_id TEXT, causation_id TEXT, trace_parent TEXT, trace_state TEXT)", ct);

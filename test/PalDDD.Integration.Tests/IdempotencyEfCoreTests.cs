@@ -1,5 +1,6 @@
 namespace PalDDD.Integration.Tests;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using PalDDD.Idempotency;
 using System.Globalization;
@@ -189,9 +190,53 @@ public sealed class IdempotencyEfCoreTests
         await Assert.That(stillThere).IsNotNull();
     }
 
+    [Test]
+    public async Task TryStartAsync_Sqlite_DuplicateReturnsNullAndExpiredLeaseIsReused(CancellationToken cancellationToken)
+    {
+        // ITM-254（F14/PD26）：SQLite 内存库真 schema——复合主键 (OperationName,Key) 唯一真实在场，
+        // 重复 TryStart 幂等判定 + 过期租约回收（UpdatedAt 并发令牌 SaveChanges）在关系型下验证
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = CreateSqliteOptions(connection);
+        var now = DateTimeOffset.Parse("2026-05-30T00:00:00Z", CultureInfo.InvariantCulture);
+        var policy = new IdempotencyPolicy { ProcessingTimeout = TimeSpan.FromSeconds(5), Retention = TimeSpan.FromMinutes(10) };
+
+        await using (var first = new TestIdempotencyDbContext(options))
+        {
+            await first.Database.EnsureCreatedAsync(cancellationToken);
+            var record = await ((IIdempotencyStore)first).TryStartAsync(
+                "CreateOrder", "cmd-1", now, policy, cancellationToken);
+            await Assert.That(record).IsNotNull();
+        }
+
+        // 写读 roundtrip：新 context 读回 Processing 记录（关系型持久化验证）
+        await using var second = new TestIdempotencyDbContext(options);
+        var loaded = await ((IIdempotencyStore)second).GetAsync("CreateOrder", "cmd-1", now.AddSeconds(1), cancellationToken);
+        await Assert.That(loaded).IsNotNull();
+        await Assert.That(loaded.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+        await Assert.That(loaded.LockedUntil).IsEqualTo(now.AddSeconds(5));
+
+        // 重复 TryStart（now+2，租约活跃窗口内 LockedUntil=now+5 > now+2）——返回 null
+        var duplicate = await ((IIdempotencyStore)second).TryStartAsync(
+            "CreateOrder", "cmd-1", now.AddSeconds(2), policy, cancellationToken);
+        await Assert.That(duplicate).IsNull();
+
+        // 过期回收（now+6 已过 LockedUntil=now+5）——租约被复用，LockedUntil 前移到 now+6+5s
+        var reused = await ((IIdempotencyStore)second).TryStartAsync(
+            "CreateOrder", "cmd-1", now.AddSeconds(6), policy, cancellationToken);
+        await Assert.That(reused).IsNotNull();
+        await Assert.That(reused.LockedUntil).IsEqualTo(now.AddSeconds(11));
+    }
+
     private static DbContextOptions<TestIdempotencyDbContext> CreateOptions()
         => new DbContextOptionsBuilder<TestIdempotencyDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture))
+            .Options;
+
+    /// <summary>SQLite 内存库 options——需共享同一打开的 <see cref="SqliteConnection"/>（:memory: 库随连接存活）。</summary>
+    private static DbContextOptions<TestIdempotencyDbContext> CreateSqliteOptions(SqliteConnection connection)
+        => new DbContextOptionsBuilder<TestIdempotencyDbContext>()
+            .UseSqlite(connection)
             .Options;
 
     private sealed class TestIdempotencyDbContext(DbContextOptions<TestIdempotencyDbContext> options)

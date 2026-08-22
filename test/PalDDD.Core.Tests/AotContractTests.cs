@@ -74,6 +74,13 @@ public sealed class AotContractTests
                 if (HasAotUnsafeAttribute(method))
                     Assert.Fail($"方法 {targetType.FullName}.{method.Name}（程序集 {assembly.GetName().Name}）标注了 AOT 不安全特性");
             }
+
+            // 检查构造器级标注（P3-TST-105：AOT 标注同样可打在 .ctor 上，原扫描漏检）
+            foreach (var ctor in targetType.GetConstructors(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            {
+                if (HasAotUnsafeAttribute(ctor))
+                    Assert.Fail($"构造器 {targetType.FullName}..ctor（程序集 {assembly.GetName().Name}）标注了 AOT 不安全特性");
+            }
         }
     }
 
@@ -246,10 +253,23 @@ public sealed class AotContractTests
     [Test]
     public async Task DimBridge_EventHandlerTypes_AreKnownAtCompileTime()
     {
-        // 通过 IEventHandler<T> 的泛型约束，T 在编译时完全确定
-        // typeof(TEvent) 是 IL Ldtoken 指令，不是反射
+        // 源码级检查：DIM 桥接（EventHandler.cs）不得调用 MakeGenericType ——
+        // 桥接通过直接强转 (TEvent)@event 分派到泛型 HandleAsync，T 在编译时完全确定。
+        // 若有人改桥接为反射构造（MakeGenericType），此断言立即变红。
+        // 只检查非注释代码行：该文件 remarks 注释中合法地提及过 "MakeGenericType" 一词。
+        var sourcePath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..",
+            "src", "PalDDD.Messaging", "EventHandler.cs"));
+        var source = await File.ReadAllTextAsync(sourcePath);
+        var offendingLines = source.Split('\n')
+            .Select(line => line.TrimStart())
+            .Where(line => !line.StartsWith("//", StringComparison.Ordinal))
+            .Where(line => line.Contains("MakeGenericType", StringComparison.Ordinal))
+            .ToList();
+        await Assert.That(offendingLines).IsEmpty();
 
-        // 此处注册所有已知 handler 类型，确认它们不使用 MakeGenericType
+        // 行为验证：EventType 返回编译时 typeof(TEvent)（IL Ldtoken，非运行时反射）
         await RegisterAndVerifyHandler<AotTestDomainEvent, AotTestEventHandler>();
         await RegisterAndVerifyHandler<AotTestSecondaryDomainEvent, AotTestSecondaryEventHandler>();
     }
@@ -265,13 +285,8 @@ public sealed class AotContractTests
         IEventHandler nonGeneric = handler;
 #pragma warning restore CA1859
 
-        // EventType 返回编译时 typeof(TEvent)
+        // EventType 经 DIM 桥接返回编译时 typeof(TEvent)
         await Assert.That(nonGeneric.EventType).IsEqualTo(typeof(TEvent));
-
-        // 验证方法签名不依赖 MakeGenericType
-        var handleMethod = typeof(IEventHandler).GetMethod(nameof(IEventHandler.HandleAsync))!;
-        await Assert.That(handleMethod).IsNotNull();
-        await Assert.That(handleMethod.GetParameters().Length).IsEqualTo(2);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -355,6 +370,13 @@ public sealed class AotContractTests
     [Test]
     public async Task JsonSerializer_ReflectionDisabled_DoesNotFallback()
     {
+        // 前提守卫：本仓 Directory.Build.props 全局设置 JsonSerializerIsReflectionEnabledByDefault=false
+        // （写入 runtimeconfig，进程级生效）。不在测试内用 AppContext.SetSwitch 建立/切换前提：
+        // SetSwitch 改的是进程全局状态，会污染同进程并行执行的其他测试，且 BCL 对该开关值
+        // 可能已静态缓存 [推断]。故只显式断言前提成立——若全局配置丢失本测试立即失败，
+        // 而非静默变成"反射启用下也能跑"的假绿（前提不再成立时测试名即虚假）。
+        await Assert.That(System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault).IsFalse();
+
         var options = AotContractJsonContext.Default.Options;
         var serializer = new JsonMessageSerializer(MessageCatalog.Empty, options);
 
@@ -372,6 +394,10 @@ public sealed class AotContractTests
     [Test]
     public async Task UnregisteredType_FailsFast_WhenReflectionDisabled()
     {
+        // 前提守卫：同 JsonSerializer_ReflectionDisabled_DoesNotFallback——反射禁用由
+        // 全局构建配置（Directory.Build.props）进程级建立，此处显式断言前提成立
+        await Assert.That(System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault).IsFalse();
+
         var serializer = new JsonMessageSerializer(MessageCatalog.Empty);
 
         var exception = await Assert.That(() => serializer.Serialize(new UnregisteredAotMessage("test")))

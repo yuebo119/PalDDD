@@ -23,18 +23,24 @@ public class PalOrmEventLogMultiDialectTests
     private static async Task Test_AppendNoStream_ThenReadStream<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        var log = new PalOrmEventLog<TProvider>(ts.Session);
-        var events = new[] { MultiDialectTestData.CreateEventData("event.v1") };
+        await using (ts)
+        {
+            var log = new PalOrmEventLog<TProvider>(ts.Session);
+            var before = DateTimeOffset.UtcNow;
+            var events = new[] { MultiDialectTestData.CreateEventData("event.v1") };
 
-        var result = await log.AppendAsync("stream-1", ExpectedStreamVersion.NoStream, events, default);
-        await Assert.That(result.FirstStreamVersion).IsEqualTo(0L);
-        await Assert.That(result.LastStreamVersion).IsEqualTo(0L);
+            var result = await log.AppendAsync("stream-1", ExpectedStreamVersion.NoStream, events, default);
+            await Assert.That(result.FirstStreamVersion).IsEqualTo(0L);
+            await Assert.That(result.LastStreamVersion).IsEqualTo(0L);
 
-        var read = new List<RecordedEvent>();
-        await foreach (var e in log.ReadStreamAsync("stream-1", 0, int.MaxValue, default))
-            read.Add(e);
-        await Assert.That(read.Count).IsEqualTo(1);
-        await Assert.That(read[0].EventName).IsEqualTo("event.v1");
+            var read = new List<RecordedEvent>();
+            await foreach (var e in log.ReadStreamAsync("stream-1", 0, int.MaxValue, default))
+                read.Add(e);
+            await Assert.That(read.Count).IsEqualTo(1);
+            await Assert.That(read[0].EventName).IsEqualTo("event.v1");
+            // ITM-245：时间戳往返守护网——RecordedAt 物化读回与写入时刻绝对差值须在窗口内
+            await MultiDialectFixture.AssertTimestampRoundTrip(read[0].RecordedAt, before, "RecordedAt");
+        }
     }
 
     [Test]
@@ -52,24 +58,27 @@ public class PalOrmEventLogMultiDialectTests
     private static async Task Test_AppendMultiple_SequentialVersions<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        var log = new PalOrmEventLog<TProvider>(ts.Session);
-        var events = new[]
+        await using (ts)
         {
-            MultiDialectTestData.CreateEventData("event.a"),
-            MultiDialectTestData.CreateEventData("event.b"),
-            MultiDialectTestData.CreateEventData("event.c"),
-        };
+            var log = new PalOrmEventLog<TProvider>(ts.Session);
+            var events = new[]
+            {
+                MultiDialectTestData.CreateEventData("event.a"),
+                MultiDialectTestData.CreateEventData("event.b"),
+                MultiDialectTestData.CreateEventData("event.c"),
+            };
 
-        var result = await log.AppendAsync("multi-stream", ExpectedStreamVersion.NoStream, events, default);
-        await Assert.That(result.FirstStreamVersion).IsEqualTo(0L);
-        await Assert.That(result.LastStreamVersion).IsEqualTo(2L);
+            var result = await log.AppendAsync("multi-stream", ExpectedStreamVersion.NoStream, events, default);
+            await Assert.That(result.FirstStreamVersion).IsEqualTo(0L);
+            await Assert.That(result.LastStreamVersion).IsEqualTo(2L);
 
-        var read = new List<RecordedEvent>();
-        await foreach (var e in log.ReadStreamAsync("multi-stream", 0, int.MaxValue, default))
-            read.Add(e);
-        await Assert.That(read.Count).IsEqualTo(3);
-        await Assert.That(read[0].EventName).IsEqualTo("event.a");
-        await Assert.That(read[2].EventName).IsEqualTo("event.c");
+            var read = new List<RecordedEvent>();
+            await foreach (var e in log.ReadStreamAsync("multi-stream", 0, int.MaxValue, default))
+                read.Add(e);
+            await Assert.That(read.Count).IsEqualTo(3);
+            await Assert.That(read[0].EventName).IsEqualTo("event.a");
+            await Assert.That(read[2].EventName).IsEqualTo("event.c");
+        }
     }
 
     [Test]
@@ -87,19 +96,22 @@ public class PalOrmEventLogMultiDialectTests
     private static async Task Test_ReadAll_GlobalOrder<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        var log = new PalOrmEventLog<TProvider>(ts.Session);
-        await log.AppendAsync("s1", ExpectedStreamVersion.NoStream, [MultiDialectTestData.CreateEventData("s1.e1")], default);
-        await log.AppendAsync("s2", ExpectedStreamVersion.NoStream, [MultiDialectTestData.CreateEventData("s2.e1")], default);
+        await using (ts)
+        {
+            var log = new PalOrmEventLog<TProvider>(ts.Session);
+            await log.AppendAsync("s1", ExpectedStreamVersion.NoStream, [MultiDialectTestData.CreateEventData("s1.e1")], default);
+            await log.AppendAsync("s2", ExpectedStreamVersion.NoStream, [MultiDialectTestData.CreateEventData("s2.e1")], default);
 
-        var all = new List<RecordedEvent>();
-        await foreach (var e in log.ReadAllAsync(0, int.MaxValue, default))
-            all.Add(e);
-        await Assert.That(all.Count).IsEqualTo(2);
-        await Assert.That(all[0].GlobalPosition).IsEqualTo(1L);
-        await Assert.That(all[1].GlobalPosition).IsEqualTo(2L);
-        await Assert.That(all[0].StreamName).IsEqualTo("s1");
-        await Assert.That(all[1].StreamName).IsEqualTo("s2");
-        await Assert.That(all[0].EventName).IsEqualTo("s1.e1");
-        await Assert.That(all[1].EventName).IsEqualTo("s2.e1");
+            var all = new List<RecordedEvent>();
+            await foreach (var e in log.ReadAllAsync(0, int.MaxValue, default))
+                all.Add(e);
+            await Assert.That(all.Count).IsEqualTo(2);
+            await Assert.That(all[0].GlobalPosition).IsEqualTo(1L);
+            await Assert.That(all[1].GlobalPosition).IsEqualTo(2L);
+            await Assert.That(all[0].StreamName).IsEqualTo("s1");
+            await Assert.That(all[1].StreamName).IsEqualTo("s2");
+            await Assert.That(all[0].EventName).IsEqualTo("s1.e1");
+            await Assert.That(all[1].EventName).IsEqualTo("s2.e1");
+        }
     }
 }

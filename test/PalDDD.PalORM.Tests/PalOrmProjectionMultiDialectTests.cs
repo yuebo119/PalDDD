@@ -23,12 +23,18 @@ public class PalOrmProjectionMultiDialectTests
     private static async Task Test_TryStart_CreatesCheckpoint<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        var store = new PalOrmProjectionCheckpointStore<TProvider>(ts.Session);
-        var now = DateTimeOffset.UtcNow;
-        var cp = await store.TryStartAsync("proj", "src", "pos", now, TimeSpan.FromMinutes(5), default);
-        await Assert.That(cp).IsNotNull();
-        await Assert.That(cp!.Status).IsEqualTo(ProjectionCheckpointStatus.Processing);
-        await Assert.That(cp.Revision).IsEqualTo(1L);
+        await using (ts)
+        {
+            var store = new PalOrmProjectionCheckpointStore<TProvider>(ts.Session);
+            var now = DateTimeOffset.UtcNow;
+            var cp = await store.TryStartAsync("proj", "src", "pos", now, TimeSpan.FromMinutes(5), default);
+            await Assert.That(cp).IsNotNull();
+            await Assert.That(cp!.Status).IsEqualTo(ProjectionCheckpointStatus.Processing);
+            await Assert.That(cp.Revision).IsEqualTo(1L);
+            // ITM-245：时间戳往返守护网——lease_until 物化读回与写入值（now+5min）绝对差值须在窗口内
+            await MultiDialectFixture.AssertTimestampRoundTrip(
+                cp.LeaseUntil, now + TimeSpan.FromMinutes(5), nameof(cp.LeaseUntil));
+        }
     }
 
     [Test]
@@ -46,13 +52,16 @@ public class PalOrmProjectionMultiDialectTests
     private static async Task Test_MarkCompleted_PreventsReprocessing<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        var store = new PalOrmProjectionCheckpointStore<TProvider>(ts.Session);
-        var now = DateTimeOffset.UtcNow;
-        var cp = await store.TryStartAsync("proj", "src", "pos", now, TimeSpan.FromMinutes(5), default);
-        await store.MarkCompletedAsync(cp!, now.AddSeconds(1), default);
+        await using (ts)
+        {
+            var store = new PalOrmProjectionCheckpointStore<TProvider>(ts.Session);
+            var now = DateTimeOffset.UtcNow;
+            var cp = await store.TryStartAsync("proj", "src", "pos", now, TimeSpan.FromMinutes(5), default);
+            await store.MarkCompletedAsync(cp!, now.AddSeconds(1), default);
 
-        var again = await store.TryStartAsync("proj", "src", "pos", now.AddSeconds(2), TimeSpan.FromMinutes(5), default);
-        await Assert.That(again).IsNull();
+            var again = await store.TryStartAsync("proj", "src", "pos", now.AddSeconds(2), TimeSpan.FromMinutes(5), default);
+            await Assert.That(again).IsNull();
+        }
     }
 
     [Test]
@@ -70,13 +79,51 @@ public class PalOrmProjectionMultiDialectTests
     private static async Task Test_Reset_RemovesSource<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {
-        var store = new PalOrmProjectionCheckpointStore<TProvider>(ts.Session);
-        var now = DateTimeOffset.UtcNow;
-        await store.TryStartAsync("proj", "src-1", "pos-1", now, TimeSpan.FromMinutes(5), default);
-        await store.TryStartAsync("proj", "src-2", "pos-1", now, TimeSpan.FromMinutes(5), default);
+        await using (ts)
+        {
+            var store = new PalOrmProjectionCheckpointStore<TProvider>(ts.Session);
+            var now = DateTimeOffset.UtcNow;
+            await store.TryStartAsync("proj", "src-1", "pos-1", now, TimeSpan.FromMinutes(5), default);
+            await store.TryStartAsync("proj", "src-2", "pos-1", now, TimeSpan.FromMinutes(5), default);
 
-        await store.ResetAsync("proj", "src-1", default);
-        await Assert.That(await store.GetAsync("proj", "src-1", "pos-1", default)).IsNull();
-        await Assert.That(await store.GetAsync("proj", "src-2", "pos-1", default)).IsNotNull();
+            await store.ResetAsync("proj", "src-1", default);
+            await Assert.That(await store.GetAsync("proj", "src-1", "pos-1", default)).IsNull();
+            await Assert.That(await store.GetAsync("proj", "src-2", "pos-1", default)).IsNotNull();
+        }
+    }
+
+    // ── ITM-245：过期 lease 抢占 —— Processing 且租约过期的检查点可被重新 TryStart（revision 递增）。
+    // SQLite 逻辑先例见 PalOrmProjectionCheckpointStoreTests.ReclaimsExpiredLease；此处补全跨方言矩阵。──
+
+    [Test]
+    public async Task Projection_Sqlite_TryStart_ReclaimsExpiredLease()
+        => await Test_TryStart_ReclaimsExpiredLease(await MultiDialectFixture.CreateSqliteAsync());
+
+    [Test]
+    public async Task Projection_PostgreSql_TryStart_ReclaimsExpiredLease()
+        => await Test_TryStart_ReclaimsExpiredLease(await MultiDialectFixture.CreatePostgreSqlAsync());
+
+    [Test]
+    public async Task Projection_MySql_TryStart_ReclaimsExpiredLease()
+        => await Test_TryStart_ReclaimsExpiredLease(await MultiDialectFixture.CreateMySqlAsync());
+
+    private static async Task Test_TryStart_ReclaimsExpiredLease<TProvider>(TestSession<TProvider> ts)
+        where TProvider : IDbProvider
+    {
+        await using (ts)
+        {
+            var store = new PalOrmProjectionCheckpointStore<TProvider>(ts.Session);
+            var now = DateTimeOffset.UtcNow;
+
+            // 1 秒租约 → 以 now+2s 视角已过期 → 第二个 worker 可抢占
+            var first = await store.TryStartAsync("proj", "src", "pos", now, TimeSpan.FromSeconds(1), default);
+            await Assert.That(first).IsNotNull();
+
+            var later = now + TimeSpan.FromSeconds(2);
+            var reclaimed = await store.TryStartAsync("proj", "src", "pos", later, TimeSpan.FromMinutes(5), default);
+
+            await Assert.That(reclaimed).IsNotNull();
+            await Assert.That(reclaimed!.Revision).IsEqualTo(2L);
+        }
     }
 }

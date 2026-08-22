@@ -278,11 +278,13 @@ public sealed class BrokerIntegrationTests
     /// <summary>
     /// 等待信号（TCS Task）就绪，未就绪时每 15s 重发 warmup（幂等：consumer join 完成
     /// 后收到的任意一条 warmup 都会触发信号），总时限内未就绪抛带诊断的 TimeoutException。
+    /// brokerAxis 参数化 broker 名（"Kafka"/"RabbitMQ"），供 Kafka/Rabbit 两轴共用（F22）。
     /// </summary>
-    private static async Task WaitForSignalAsync(
+    private static async Task WaitForSignalAsync<TBroker>(
         Task signal,
         Func<CancellationToken, ValueTask> resendWarmup,
-        CapturingLogger<KafkaBroker> logger,
+        CapturingLogger<TBroker> logger,
+        string brokerAxis,
         string signalName,
         TimeSpan total,
         CancellationToken ct)
@@ -302,8 +304,8 @@ public sealed class BrokerIntegrationTests
             await resendWarmup(ct).ConfigureAwait(false);
         }
         throw new TimeoutException(
-            $"Kafka 等待 {signalName} 超时（{total.TotalSeconds:0}s）。消费侧最近错误：{logger.RecentErrorsSummary}。" +
-            "若为空则 consumer 可能从未完成 join（服务器断连型故障的特征：TCP 通但建连后被 RST）。");
+            $"{brokerAxis} 等待 {signalName} 超时（{total.TotalSeconds:0}s）。消费侧最近错误：{logger.RecentErrorsSummary}。" +
+            $"若为空则 {brokerAxis} consumer 可能从未完成就绪（服务器断连型故障的特征：TCP 通但建连后被 RST）。");
     }
 
     [Test]
@@ -329,7 +331,7 @@ public sealed class BrokerIntegrationTests
         await broker.PublishAsync(new TestMessage($"kafka-ready-{tag}"), cancellationToken);
         await WaitForSignalAsync(consumerReady.Task,
             ct => broker.PublishAsync(new TestMessage($"kafka-ready-{tag}"), ct),
-            logger, "consumer join（warmup 回调）", TimeSpan.FromSeconds(120), cancellationToken);
+            logger, "Kafka", "consumer join（warmup 回调）", TimeSpan.FromSeconds(120), cancellationToken);
 
         // consumer ready 后再发测试消息
         await broker.PublishAsync(new TestMessage($"kafka-rt-{tag}"), cancellationToken);
@@ -372,7 +374,7 @@ public sealed class BrokerIntegrationTests
         await broker.PublishAsync(new TestMessage($"kafka-ready-{tag}"), cancellationToken);
         await WaitForSignalAsync(ready.Task,
             ct => broker.PublishAsync(new TestMessage($"kafka-ready-{tag}"), ct),
-            logger, "consumer join（warmup 回调）", TimeSpan.FromSeconds(120), cancellationToken);
+            logger, "Kafka", "consumer join（warmup 回调）", TimeSpan.FromSeconds(120), cancellationToken);
 
         // consumer ready 后发 cancel 测试消息
         await broker.PublishAsync(new TestMessage($"kafka-cancel-{tag}"), cancellationToken);
@@ -408,7 +410,7 @@ public sealed class BrokerIntegrationTests
         await broker.PublishAsync(new TestMessage($"kafka-ready-{prefix}"), cancellationToken);
         await WaitForSignalAsync(consumerReady.Task,
             ct => broker.PublishAsync(new TestMessage($"kafka-ready-{prefix}"), ct),
-            logger, "consumer join（warmup 回调）", TimeSpan.FromSeconds(120), cancellationToken);
+            logger, "Kafka", "consumer join（warmup 回调）", TimeSpan.FromSeconds(120), cancellationToken);
 
         for (var i = 0; i < 5; i++)
             await broker.PublishAsync(new TestMessage($"{prefix}-{i}"), cancellationToken);
@@ -421,21 +423,33 @@ public sealed class BrokerIntegrationTests
     public async Task RabbitMq_PublishAndSubscribe_RoundTripsMessage(CancellationToken cancellationToken)
     {
         SkipIfRabbitUnavailable();
-        var created = await Fixture.CreateRabbitMqBrokerAsync();
+        // F22（T-DDD-6 四层防线 Rabbit 轴补全）：对称 Kafka 轴——CapturingLogger 记消费侧
+        // 错误 + warmup-ready 信号重发 + 超时带诊断摘要（原 NullLogger + 固定 Delay(2) +
+        // 裸 120s 超时，失败时无从排查且 queue 声明慢于发送时消息白发）
+        var logger = new CapturingLogger<RabbitMqBroker>();
+        var created = await Fixture.CreateRabbitMqBrokerAsync(logger);
         await using var broker = created.Item1;
         var tag = Guid.NewGuid().ToString("N")[..8];
         var received = new TaskCompletionSource<TestMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var consumerReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var sub = await broker.SubscribeAsync<TestMessage>((msg, ct) =>
         {
+            consumerReady.TrySetResult(); // handler 首次回调 = queue 声明 + BasicConsume 链路通
             if (msg.Name == $"rmq-rt-{tag}") received.TrySetResult(msg);
             return ValueTask.CompletedTask;
         }, cancellationToken);
 
-        await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+        // warmup + 周期重发（订阅启动慢于发送时消息无人消费——ready 前发的任一条 warmup 都会触发信号）
+        await broker.PublishAsync(new TestMessage($"rmq-ready-{tag}"), cancellationToken);
+        await WaitForSignalAsync(consumerReady.Task,
+            ct => broker.PublishAsync(new TestMessage($"rmq-ready-{tag}"), ct),
+            logger, "RabbitMQ", "consumer 就绪（warmup 回调）", TimeSpan.FromSeconds(120), cancellationToken);
+
+        // consumer ready 后再发测试消息
         await broker.PublishAsync(new TestMessage($"rmq-rt-{tag}"), cancellationToken);
 
-        var got = await received.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
+        var got = await received.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
         await Assert.That(got.Name).IsEqualTo($"rmq-rt-{tag}");
     }
 
@@ -468,9 +482,11 @@ public sealed class BrokerIntegrationTests
             }
         }, cancellationToken);
 
-        // 先发 warmup 确认 consumer 链路通畅
+        // 先发 warmup 确认 consumer 链路通畅 + 周期重发（F22：对称 Kafka 轴，裸 120s 等待无诊断）
         await broker.PublishAsync(new TestMessage($"rmq-ready-{tag}"), cancellationToken);
-        await ready.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
+        await WaitForSignalAsync(ready.Task,
+            ct => broker.PublishAsync(new TestMessage($"rmq-ready-{tag}"), ct),
+            logger, "RabbitMQ", "consumer 就绪（warmup 回调）", TimeSpan.FromSeconds(120), cancellationToken);
 
         // consumer 已 ready，发测试消息
         await broker.PublishAsync(new TestMessage($"rmq-cancel-{tag}"), cancellationToken);
@@ -485,25 +501,36 @@ public sealed class BrokerIntegrationTests
     public async Task RabbitMq_MultipleMessages_AllReceived(CancellationToken cancellationToken)
     {
         SkipIfRabbitUnavailable();
-        var created = await Fixture.CreateRabbitMqBrokerAsync();
+        // F22（T-DDD-6 四层防线 Rabbit 轴补全）：对称 Kafka 轴——CapturingLogger + warmup-ready
+        // 信号重发 + 超时带诊断（原 NullLogger + 固定 Delay(2) + 裸 120s 超时）
+        var logger = new CapturingLogger<RabbitMqBroker>();
+        var created = await Fixture.CreateRabbitMqBrokerAsync(logger);
         await using var broker = created.Item1;
         var received = new List<TestMessage>();
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var prefix = $"rmq-multi-{Guid.NewGuid():N}".Substring(0, 20);
+        var consumerReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var sub = await broker.SubscribeAsync<TestMessage>((msg, ct) =>
         {
+            consumerReady.TrySetResult(); // handler 首次回调 = queue 声明 + BasicConsume 链路通
             if (!msg.Name.StartsWith(prefix, StringComparison.Ordinal)) return ValueTask.CompletedTask;
             lock (received) received.Add(msg);
             if (received.Count >= 5) done.TrySetResult();
             return ValueTask.CompletedTask;
         }, cancellationToken);
 
-        await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+        // warmup + 周期重发（订阅启动慢于发送时消息无人消费——ready 信号触发后才开始发测试消息）
+        var warmupName = $"rmq-ready-{Guid.NewGuid():N}"[..24];
+        await broker.PublishAsync(new TestMessage(warmupName), cancellationToken);
+        await WaitForSignalAsync(consumerReady.Task,
+            ct => broker.PublishAsync(new TestMessage(warmupName), ct),
+            logger, "RabbitMQ", "consumer 就绪（warmup 回调）", TimeSpan.FromSeconds(120), cancellationToken);
+
         for (var i = 0; i < 5; i++)
             await broker.PublishAsync(new TestMessage($"{prefix}-{i}"), cancellationToken);
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
         await Assert.That(received.Count).IsEqualTo(5);
     }
 }

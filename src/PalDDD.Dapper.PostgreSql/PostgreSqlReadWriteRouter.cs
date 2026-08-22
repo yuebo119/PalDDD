@@ -62,9 +62,34 @@ public sealed class PostgreSqlReadWriteRouter : IAsyncDisposable
     /// </summary>
     public async ValueTask DisposeAsync()
     {
-        await Writer.DisposeAsync().ConfigureAwait(false);
+        // ITM-249 修复（F9，对齐同包姊妹 PostgreSqlSharding.ShardedDataSourceManager 三十七轮）：
+        // 逐数据源异常隔离——原实现 Writer.DisposeAsync 抛出时 Reader 永不释放（读库连接池
+        // 泄漏）。现挂起首异常继续释放 Reader，最后重抛（姊妹同款 OperationCanceledException
+        // 不吞过滤）。
+        // 传感器说明：Writer/Reader 为 NpgsqlDataSource 具体类型，构造经 NpgsqlDataSourceBuilder
+        // 收口（无可注入替换点，fake 子类不可行），"Writer 抛异常后 Reader 仍被释放"无法单测
+        // 隔离验证——验证方式为与姊妹逐 shard 隔离实现逐行形态对照（本包内同型已生效模式）。
+        Exception? firstError = null;
+        try
+        {
+            await Writer.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            firstError = ex;
+        }
         if (Reader is not null)
-            await Reader.DisposeAsync().ConfigureAwait(false);
+        {
+            try
+            {
+                await Reader.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                firstError ??= ex;  // 保首个异常，继续释放其余
+            }
+        }
+        if (firstError is not null) throw firstError;
     }
 }
 

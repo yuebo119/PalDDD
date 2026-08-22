@@ -11,6 +11,17 @@ namespace PalDDD.PalORM.Stores;
 /// <b>复合主键限制</b>：表 <c>projection_checkpoints</c> 是三列复合主键 —— PALORM019 拒绝实体注册。
 /// <see cref="GetAsync"/> 用 <see cref="DbDataReader"/> 手动映射（QueryFirstAsync 对未注册类型返回空对象）。
 /// </para>
+/// <para>
+/// <b>时间戳读取（ITM-242）</b>：MySQL DATETIME 回读的 DateTime Kind=Unspecified，隐式
+/// DateTime→DateTimeOffset 转换对 Unspecified 套<b>本地时区偏移</b>（探针实测 -8h 累积回拨）。
+/// <see cref="GetAsync"/> 统一 <see cref="DateTime.SpecifyKind"/>(Utc) 使隐式转换套 offset 0
+///（Npgsql timestamptz / SQLite 带偏移文本均返回 Kind=Utc，幂等无害）。
+/// </para>
+/// <para>
+/// <b>raw command 事务（ITM-243）</b>：手动 reader 查询经 <see cref="CreateRawCommand"/> 创建命令并挂接
+/// <c>PalOrmAmbientTransaction</c>（IUnitOfWork 事务边界 Session 键控传导）——MySQL 活动事务下
+/// 未挂 cmd.Transaction 的命令抛 InvalidOperationException（MySqlConnector 严格校验）。
+/// </para>
 /// </summary>
 public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointStore
     where TProvider : IDbProvider
@@ -30,7 +41,8 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         ValidateKeyParts(projectionName, sourceName, position);
         // 复合主键表全程手写 SQL —— GetRawConnection + 手动 reader（QueryFirstAsync 对未注册类型返回空对象）
         // P2/P3 修复（十七轮）：修正矛盾注释——CheckpointRow 投影 DTO 已删除（Models 死代码，Store 从未使用）
-        await using var cmd = Session.GetRawConnection().CreateCommand();
+        // ITM-243：经 CreateRawCommand 挂接 IUnitOfWork 环境事务
+        await using var cmd = CreateRawCommand();
         cmd.CommandText = "SELECT projection_name, source_name, position, status, updated_at, lease_until, revision, error FROM projection_checkpoints WHERE projection_name = @p0 AND source_name = @p1 AND position = @p2";
         AddParam(cmd, "@p0", projectionName);
         AddParam(cmd, "@p1", sourceName);
@@ -41,8 +53,8 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         return ProjectionCheckpoint.Rehydrate(
             reader.GetString(0), reader.GetString(1), reader.GetString(2),
             (ProjectionCheckpointStatus)reader.GetInt32(3),
-            reader.GetDateTime(4),
-            reader.GetDateTime(5),
+            GetUtc(reader, 4),
+            GetUtc(reader, 5),
             reader.GetInt64(6),
             reader.IsDBNull(7) ? null : reader.GetString(7));
     }
@@ -157,6 +169,28 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         p.ParameterName = name;
         p.Value = value;
         cmd.Parameters.Add(p);
+    }
+
+    /// <summary>
+    /// ITM-242：读回时间戳并标记 UTC。MySQL DATETIME 回读的 DateTime Kind=Unspecified，
+    /// 隐式 DateTime→DateTimeOffset 转换对 Unspecified 套本地时区偏移（探针实测 -8h 累积回拨）；
+    /// SpecifyKind(Utc) 使隐式转换套 offset 0。Npgsql timestamptz 与 SQLite 带偏移文本
+    /// 均返回 Kind=Utc（探针实测幂等）。
+    /// </summary>
+    private static DateTimeOffset GetUtc(DbDataReader reader, int ordinal)
+        => DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc);
+
+    /// <summary>
+    /// ITM-243：创建 raw command 并挂接 IUnitOfWork 活动事务。GetRawConnection().CreateCommand()
+    /// 的手动命令不自动 enlist（PalORM 仅 ExecuteAsync 路径自动挂 GetActiveTransaction()），
+    /// MySQL 活动事务下未挂接抛 InvalidOperationException（MySqlConnector 严格校验，探针实测）。
+    /// </summary>
+    private DbCommand CreateRawCommand()
+    {
+        var cmd = Session.GetRawConnection().CreateCommand();
+        var tx = PalOrmAmbientTransaction.TryGet(Session);
+        if (tx is not null) cmd.Transaction = tx;
+        return cmd;
     }
 
     private static void ValidateKeyParts(string projectionName, string sourceName, string position)

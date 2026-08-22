@@ -40,12 +40,13 @@ public sealed class DotNet11MigrationTests
     }
 
     [Test]
-    public async Task AotCompatibility_AnalyzerEnabled()
+    public async Task AotConfig_JsonSerializerReflectionDisabledByDefault()
     {
-        // 验收：AOT 兼容性分析器已启用（IsAotCompatible=true）
-        // 通过检查编译时常量验证（AOT 分析器在构建时运行，零警告）
-        // 此测试在构建时验证：所有 AOT 相关配置在 Directory.Build.props 中启用
-        // 运行时验证：JsonSerializer.IsReflectionEnabledByDefault == false
+        // 验收：运行时 JSON 序列化反射默认禁用（IsReflectionEnabledByDefault == false）
+        // 实际断言的是 JsonSerializer 反射默认值（由 Directory.Build.props 的
+        // <JsonSerializerIsReflectionEnabledByDefault>false</...> 写入 runtimeconfig，
+        // 进程级生效）——不验证 AOT 分析器本身（分析器是构建时 MSBuild 概念，
+        // 无法用运行时断言检验；原名 AnalyzerEnabled 与实际断言不符，故改名对齐）
         await Assert.That(System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault).IsFalse();
     }
 }

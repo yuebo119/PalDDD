@@ -12,10 +12,17 @@ namespace PalDDD.PalORM.Stores;
 /// <see cref="GetAsync"/> 用 <see cref="DbDataReader"/> 手动映射（QueryFirstAsync 对未注册类型返回空对象）。
 /// </para>
 /// <para>
-/// ⚠️ <b>已知限制（P0-4）</b>：<see cref="GetAsync"/> 通过 <c>GetRawConnection().CreateCommand()</c>
-/// 创建的 DbCommand 不自动 enlist 活动事务（PalORM 的 ExecuteAsync 路径才会自动 enlist）。
-/// 只读路径在大多数场景正确（读已提交），但事务内脏读检查不可靠。
-/// 待 PalORM 提供 <c>Session.CreateCommand(FormattableString)</c> 公开 API 后迁移。
+/// <b>时间戳读取（ITM-242）</b>：MySQL DATETIME 回读的 DateTime Kind=Unspecified，隐式
+/// DateTime→DateTimeOffset 转换对 Unspecified 套<b>本地时区偏移</b>（探针实测 -8h 累积回拨）。
+/// <see cref="GetAsync"/> 统一 <see cref="DateTime.SpecifyKind"/>(Utc) 使隐式转换套 offset 0
+///（Npgsql timestamptz / SQLite 带偏移文本均返回 Kind=Utc，幂等无害）。
+/// </para>
+/// <para>
+/// <b>事务挂接（ITM-243，原 P0-4 已知限制更新）</b>：<see cref="GetAsync"/> 的 raw command 经
+/// <see cref="CreateRawCommand"/> 挂接 <c>PalOrmAmbientTransaction</c>（IUnitOfWork 事务边界
+/// Session 键控传导）——MySQL 活动事务下未挂接的命令抛 InvalidOperationException（MySqlConnector
+/// 严格校验）。残余限制：仅经 IUnitOfWork 开启的事务被传导，直接调 session.BeginTransactionAsync
+/// 绕过 IUnitOfWork 时仍不挂接（待 PalORM 提供公开活动事务访问器后迁移）。
 /// </para>
 /// </summary>
 public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
@@ -33,7 +40,8 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         string operationName, string key, DateTimeOffset now, CancellationToken ct = default)
     {
         // 复合主键表未注册实体 —— 用 GetRawConnection + 手动 reader（QueryFirstAsync 对未注册类型返回空对象）
-        await using var cmd = Session.GetRawConnection().CreateCommand();
+        // ITM-243：经 CreateRawCommand 挂接 IUnitOfWork 环境事务
+        await using var cmd = CreateRawCommand();
         cmd.CommandText = "SELECT operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error FROM idempotency_records WHERE operation_name = @p0 AND idempotency_key = @p1";
         AddParam(cmd, "@p0", operationName);
         AddParam(cmd, "@p1", key);
@@ -43,7 +51,7 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         var record = new IdempotencyRecord(
             reader.GetString(0), reader.GetString(1),
             (IdempotencyRecordStatus)reader.GetInt32(2),
-            reader.GetDateTime(3), reader.GetDateTime(4), reader.GetDateTime(5));
+            GetUtc(reader, 3), GetUtc(reader, 4), GetUtc(reader, 5));
 
         if (record.ExpiresAt <= now) return null;
 
@@ -182,6 +190,28 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         p.ParameterName = name;
         p.Value = value;
         cmd.Parameters.Add(p);
+    }
+
+    /// <summary>
+    /// ITM-242：读回时间戳并标记 UTC。MySQL DATETIME 回读的 DateTime Kind=Unspecified，
+    /// 隐式 DateTime→DateTimeOffset 转换对 Unspecified 套本地时区偏移（探针实测 -8h 累积回拨）；
+    /// SpecifyKind(Utc) 使隐式转换套 offset 0。Npgsql timestamptz 与 SQLite 带偏移文本
+    /// 均返回 Kind=Utc（探针实测幂等）。
+    /// </summary>
+    private static DateTimeOffset GetUtc(DbDataReader reader, int ordinal)
+        => DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc);
+
+    /// <summary>
+    /// ITM-243：创建 raw command 并挂接 IUnitOfWork 活动事务。GetRawConnection().CreateCommand()
+    /// 的手动命令不自动 enlist（PalORM 仅 ExecuteAsync 路径自动挂 GetActiveTransaction()），
+    /// MySQL 活动事务下未挂接抛 InvalidOperationException（MySqlConnector 严格校验，探针实测）。
+    /// </summary>
+    private DbCommand CreateRawCommand()
+    {
+        var cmd = Session.GetRawConnection().CreateCommand();
+        var tx = PalOrmAmbientTransaction.TryGet(Session);
+        if (tx is not null) cmd.Transaction = tx;
+        return cmd;
     }
 
     /// <summary>

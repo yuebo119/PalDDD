@@ -261,3 +261,19 @@ catch(Exception) 69 · OCE 引用 68
 □ 对比: ✅ 与 38 轮报告衔接，趋势快览无断档
 违反项: 无
 ```
+
+---
+
+## 事后追加：修复轮记录（2026-08-22 同日，报告正文不可变规则的追加块）
+
+- **ITM-242..260 全部完成**（6 分族并行修复代理 + 主线程），另暴露并修复 **ITM-261**（生产
+  SqliteOutboxDbContext DateTimeOffset 有序比较/ORDER BY 在 EF Core 11 preview7 SQLite 不可翻译，
+  此前被 F10 的测试本地重写完全遮蔽——F10 的深层后果）。
+- **F2 修复设计修正（对修复轮本身的验证轮发现）**：族 A 初版 AsyncLocal 环境事务在异步方法内
+  赋值不外流（探针 ambient=null 实证），主线程改 ConditionalWeakTable 按 Session 实例键控后探针
+  5/5 全过。族 A 的 SQLite 事务测试通过属传感器盲区（SQLite 引擎级事务自动参与，探测不到缺失
+  挂接）——真实检测力由 MySQL 真库探针承载。
+- **S3 反向验证闭环**：F1 反转退回 -8.000h 漂移、F2 反转退回 InvalidOperationException（单变量
+  隔离，另一因子保持绿）——两修复因子必要性实证。
+- **终基线**：build 0/0；测试 1041 = 996 通过 + 45 fail-closed（新基线）+ 0 代码失败；
+  dialect-probe 40/40；机械防线全绿。行动项勾销与详情见 action-items-2026-08-22.md 追加段。
