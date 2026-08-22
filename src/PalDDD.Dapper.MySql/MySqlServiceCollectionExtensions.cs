@@ -113,7 +113,11 @@ public static class MySqlServiceCollectionExtensions
     // ── Legacy（旧 API 兼容）──
 
     /// <summary>注册 MySQL 连接（Singleton）并应用性能优化</summary>
-    [System.Obsolete("请使用 AddPalMySqlDataSource 以获得自动连接池管理、健康检查和 OpenTelemetry 追踪。")]
+    /// <remarks>⚠️ <b>ITM-276（R43）：applyOptimization 参数在本 Legacy 路径实际不生效</b>——
+    /// 优化 SET SESSION 打在临时连接上，Dispose 归池后被 ResetConnections=true（MySqlConnector 默认）
+    /// 清除，后续 Scoped 工厂从池取的连接不继承任何会话优化。有效的优化路径是
+    /// <see cref="AddPalMySqlDataSource"/>（数据源级配置在建连时逐连接应用）。</remarks>
+    [System.Obsolete("请使用 AddPalMySqlDataSource 以获得自动连接池管理、健康检查和 OpenTelemetry 追踪。注意：本方法的 applyOptimization 参数实际不生效（会话优化随连接归池被 ResetConnections 清除，见 remarks ITM-276）。")]
     public static IServiceCollection AddPalMySql(
         this IServiceCollection services,
         string connectionString,

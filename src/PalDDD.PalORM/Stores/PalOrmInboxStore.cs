@@ -151,10 +151,11 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
     {
         // ITM-163 修复：补 message null 守卫（对齐 InMemoryInboxStore/InboxDbContext 同款）
         ArgumentNullException.ThrowIfNull(message);
-        // ITM-274（R42）：ProcessingStartedAt 为 null 属调用方误用（未经 TryStartProcessingAsync 的
-        // 手工构造 message）——对齐 Dapper 姊妹的 fail-fast 形态：显式抛 InvalidOperationException
-        // 而非插值参数化 DBNull 使 SQL `= NULL` 永假、affected=0 静默零变更（R41 勘正 Dapper 侧
-        // "实际失败点在 C# 层"时暴露的本栈姊妹缺口）
+        // ITM-274（R42；R43 ITM-275 勘正异常类型）：ProcessingStartedAt 为 null 属调用方误用
+        //（未经 TryStartProcessingAsync 的手工构造 message）——显式 fail-fast 而非插值参数化
+        // DBNull 使 SQL `= NULL` 永假、affected=0 静默零变更。对齐 Dapper 姊妹的 fail-fast 语义
+        //（其失败点为 ProcessingStartedAt!.Value 附带抛 InvalidOperationException；本栈为设计守卫
+        // 抛 ArgumentNullException——异常类型差异属刻意，fail-fast 语义一致）
         if (message.ProcessingStartedAt is null)
             throw new ArgumentNullException(nameof(message) + "." + nameof(message.ProcessingStartedAt));
         // 手写 SQL（不走 UpdateAsync）—— 避免 [ConcurrencyCheck]attempts 干扰并发场景

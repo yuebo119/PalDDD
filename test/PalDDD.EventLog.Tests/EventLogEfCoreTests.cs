@@ -409,16 +409,19 @@ public sealed class EventLogOptimizedSerializationTests
 
         var baseline = GC.GetAllocatedBytesForCurrentThread();
 
-        await using (var db = new TestOptimizedDbContext(options))
+        // ITM-278（R43）：同步阻塞执行——await 后 continuation 可能切线程池线程，跨线程相减使
+        // 计量失真（InMemory 多数同步完成故未爆，但守护退化为概率性）。对齐 CqrsTests 分配
+        // 契约测试的 GetAwaiter().GetResult() 范式，两取样点保证同线程。
+        using (var db = new TestOptimizedDbContext(options))
         {
-            await db.AppendAsync(
+            db.AppendAsync(
                 "test-alloc",
                 ExpectedStreamVersion.NoStream,
                 [
                     CreateTestEvent("payload-a", "meta-a"),
                     CreateTestEvent("payload-b", "meta-b"),
                 ],
-                cancellationToken);
+                cancellationToken).AsTask().GetAwaiter().GetResult();
         }
 
         var alloc = GC.GetAllocatedBytesForCurrentThread() - baseline;

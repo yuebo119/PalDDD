@@ -57,11 +57,13 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
 
         if (!reader.IsDBNull(6))
         {
-            // 原生二进制列（bytea/BLOB/LONGBLOB）——与 EFCore 栈 ResponsePayload 的 byte[] 转换对齐
-            var payloadBytes = reader.GetFieldValue<byte[]>(6);
-            if (payloadBytes.Length > 0 && record.Status == IdempotencyRecordStatus.Completed)
+            // 原生二进制列（bytea/BLOB/LONGBLOB）——与 EFCore 栈 ResponsePayload 的 byte[] 转换对齐。
+            // ITM-277（R43）往返保真：空 bytea（成功完成 + 空响应体，落库为空字节序列而非 NULL）
+            // 同样回放 MarkCompleted——原 `Length > 0` 守卫使空响应读回 ResponsePayload=null，
+            // 与"无响应"不可区分，幂等命中方以 null 判"无可复用响应"会重放副作用。
+            if (record.Status == IdempotencyRecordStatus.Completed)
             {
-                record.MarkCompleted(payloadBytes, record.UpdatedAt);
+                record.MarkCompleted(reader.GetFieldValue<byte[]>(6), record.UpdatedAt);
             }
         }
         if (!reader.IsDBNull(7) && record.Status == IdempotencyRecordStatus.Failed)

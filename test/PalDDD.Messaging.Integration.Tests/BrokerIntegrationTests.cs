@@ -425,7 +425,11 @@ public sealed class BrokerIntegrationTests
             await broker.PublishAsync(new TestMessage($"{prefix}-{i}"), cancellationToken);
 
         await done.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
-        await Assert.That(received.Count).IsEqualTo(5);
+        // ITM-278（R43）：读侧同 lock 取快照——handler 线程持 lock 写 List，测试线程无锁读
+        // Count 在 at-least-once 重投递并发到达时构成读写竞态（撕裂读/瞬时 6 假失败）
+        List<TestMessage> snapshot;
+        lock (received) snapshot = [.. received];
+        await Assert.That(snapshot.Count).IsEqualTo(5);
     }
 
     [Test]
@@ -543,6 +547,10 @@ public sealed class BrokerIntegrationTests
             await broker.PublishAsync(new TestMessage($"{prefix}-{i}"), cancellationToken);
 
         await done.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
-        await Assert.That(received.Count).IsEqualTo(5);
+        // ITM-278（R43）：读侧同 lock 取快照——handler 线程持 lock 写 List，测试线程无锁读
+        // Count 在 at-least-once 重投递并发到达时构成读写竞态（撕裂读/瞬时 6 假失败）
+        List<TestMessage> snapshot;
+        lock (received) snapshot = [.. received];
+        await Assert.That(snapshot.Count).IsEqualTo(5);
     }
 }
