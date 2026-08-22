@@ -27,7 +27,7 @@ public static class PalOrmStoreFixture
         CREATE TABLE outbox_messages (
             id              TEXT PRIMARY KEY,
             type            TEXT NOT NULL,
-            payload         TEXT NOT NULL,
+            payload         BLOB NOT NULL,
             content_type    TEXT NOT NULL DEFAULT 'application/json',
             schema_version  INTEGER NOT NULL DEFAULT 1,
             status          INTEGER NOT NULL DEFAULT 0,
@@ -80,8 +80,8 @@ public static class PalOrmStoreFixture
             StreamVersion  INTEGER NOT NULL,
             SchemaVersion  INTEGER NOT NULL DEFAULT 1,
             ContentType    TEXT NOT NULL DEFAULT 'application/json',
-            Payload        TEXT NOT NULL,
-            Metadata       TEXT,
+            Payload        BLOB NOT NULL,
+            Metadata       BLOB,
             RecordedAt     TEXT NOT NULL,
             ActorId        TEXT,
             Reason         TEXT
@@ -108,7 +108,7 @@ public static class PalOrmStoreFixture
             locked_until     TEXT NOT NULL,
             expires_at       TEXT NOT NULL,
             updated_at       TEXT NOT NULL,
-            response_payload TEXT,
+            response_payload BLOB,
             error            TEXT,
             PRIMARY KEY (operation_name, idempotency_key)
         );
@@ -122,15 +122,15 @@ public static class PalOrmStoreFixture
             DbOptions.Development("Data Source=:memory:"), ct);
         await session.ExecuteAsync($"PRAGMA journal_mode=WAL", ct);
         // 注：SQLite 不支持单 ExecuteAsync 执行多条分号分隔 SQL —— 逐条执行
-        await session.ExecuteAsync($"CREATE TABLE outbox_messages (id TEXT PRIMARY KEY, type TEXT NOT NULL, payload TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT 'application/json', schema_version INTEGER NOT NULL DEFAULT 1, status INTEGER NOT NULL DEFAULT 0, retry_count INTEGER NOT NULL DEFAULT 0, error TEXT, created_at TEXT NOT NULL, processed_at TEXT, next_attempt_at TEXT, locked_by TEXT, locked_until TEXT, correlation_id TEXT, causation_id TEXT, trace_parent TEXT, trace_state TEXT)", ct);
+        await session.ExecuteAsync($"CREATE TABLE outbox_messages (id TEXT PRIMARY KEY, type TEXT NOT NULL, payload BLOB NOT NULL, content_type TEXT NOT NULL DEFAULT 'application/json', schema_version INTEGER NOT NULL DEFAULT 1, status INTEGER NOT NULL DEFAULT 0, retry_count INTEGER NOT NULL DEFAULT 0, error TEXT, created_at TEXT NOT NULL, processed_at TEXT, next_attempt_at TEXT, locked_by TEXT, locked_until TEXT, correlation_id TEXT, causation_id TEXT, trace_parent TEXT, trace_state TEXT)", ct);
         await session.ExecuteAsync($"CREATE INDEX idx_outbox_status ON outbox_messages(status, next_attempt_at, locked_until)", ct);
         await session.ExecuteAsync($"CREATE TABLE inbox_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL, consumer_name TEXT NOT NULL, status INTEGER NOT NULL DEFAULT 0, received_at TEXT NOT NULL, processing_started_at TEXT, processed_at TEXT, attempts INTEGER NOT NULL DEFAULT 1, last_error TEXT)", ct);
         await session.ExecuteAsync($"CREATE UNIQUE INDEX idx_inbox_unique ON inbox_messages(consumer_name, message_id)", ct);
         await session.ExecuteAsync($"CREATE TABLE saga_states (saga_id TEXT PRIMARY KEY, current_state TEXT NOT NULL, status INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, completed_at TEXT, error TEXT, error_at TEXT, version INTEGER NOT NULL DEFAULT 0, saga_data TEXT, leased_by TEXT, leased_until TEXT)", ct);
-        await session.ExecuteAsync($"CREATE TABLE events (global_position INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, event_name TEXT NOT NULL, stream_name TEXT NOT NULL, stream_version INTEGER NOT NULL, schema_version INTEGER NOT NULL DEFAULT 1, content_type TEXT NOT NULL DEFAULT 'application/json', payload TEXT NOT NULL, metadata TEXT, recorded_at TEXT NOT NULL, actor_id TEXT, reason TEXT)", ct);
+        await session.ExecuteAsync($"CREATE TABLE events (global_position INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, event_name TEXT NOT NULL, stream_name TEXT NOT NULL, stream_version INTEGER NOT NULL, schema_version INTEGER NOT NULL DEFAULT 1, content_type TEXT NOT NULL DEFAULT 'application/json', payload BLOB NOT NULL, metadata BLOB, recorded_at TEXT NOT NULL, actor_id TEXT, reason TEXT)", ct);
         await session.ExecuteAsync($"CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version)", ct);
         await session.ExecuteAsync($"CREATE TABLE projection_checkpoints (projection_name TEXT NOT NULL, source_name TEXT NOT NULL, position TEXT NOT NULL, status INTEGER NOT NULL, updated_at TEXT NOT NULL, lease_until TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, error TEXT, PRIMARY KEY (projection_name, source_name, position))", ct);
-        await session.ExecuteAsync($"CREATE TABLE idempotency_records (operation_name TEXT NOT NULL, idempotency_key TEXT NOT NULL, status INTEGER NOT NULL, locked_until TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL, response_payload TEXT, error TEXT, PRIMARY KEY (operation_name, idempotency_key))", ct);
+        await session.ExecuteAsync($"CREATE TABLE idempotency_records (operation_name TEXT NOT NULL, idempotency_key TEXT NOT NULL, status INTEGER NOT NULL, locked_until TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL, response_payload BLOB, error TEXT, PRIMARY KEY (operation_name, idempotency_key))", ct);
         return session;
     }
 }

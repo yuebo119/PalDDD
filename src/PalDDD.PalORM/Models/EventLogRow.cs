@@ -47,18 +47,16 @@ public sealed partial class EventLogRow
     [Column("content_type")]
     public string ContentType { get; set; } = "application/json";
 
-    /// <summary>事件 payload（二进制 → Base64 string 存储）。</summary>
+    /// <summary>事件 payload（原生二进制列：BLOB/BYTEA/LONGBLOB）。</summary>
     [SuppressMessage("Performance", "CA1819:Properties should not return arrays",
         Justification = "PalORM Row DTO 持久化边界；EventLog payload 是不可变二进制负载。")]
     [Column("payload")]
-    [Converter(typeof(ByteArrayBase64Converter))]
     public byte[] Payload { get; set; } = [];
 
-    /// <summary>事件元数据（二进制 → Base64 string 存储）。</summary>
+    /// <summary>事件元数据（原生二进制列：BLOB/BYTEA/LONGBLOB）。</summary>
     [SuppressMessage("Performance", "CA1819:Properties should not return arrays",
         Justification = "PalORM Row DTO 持久化边界；EventLog metadata 是不可变二进制负载。")]
     [Column("metadata")]
-    [Converter(typeof(ByteArrayBase64Converter))]
     public byte[] Metadata { get; set; } = [];
 
     /// <summary>记录时间（应用层赋值）。</summary>

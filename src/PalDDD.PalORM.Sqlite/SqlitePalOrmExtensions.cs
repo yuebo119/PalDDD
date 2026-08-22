@@ -22,10 +22,11 @@ public static class SqlitePalOrmExtensions
     /// UnitOfWork.BeginTransactionAsync 后 CreateCommand 自动附加 GetActiveTransaction。
     /// </para>
     /// <para>
-    /// ⚠️ <b>与 Dapper 适配器的 outbox status 编码互斥（P2 定案声明）</b>：
-    /// PalORM 版 outbox_messages.status 存 <b>int 枚举值</b>，Dapper 版存<b>字符串字面量</b>
-    /// （'Pending' 等）——同一物理表两者编码互斥，<b>禁止对同一数据库同时注册
-    /// PalORM 与 Dapper 的 Outbox 实现</b>（互相读不到对方状态）。选型后全程使用同一适配器族。
+    /// <b>与 Dapper 适配器的编码契约（2026-08-22 统一后现状）</b>：
+    /// outbox/inbox status 列两栈均为 <b>int 枚举值</b>（三十八轮统一），
+    /// payload 系列列两栈均为<b>原生二进制</b>（BLOB/BYTEA/LONGBLOB，随 PalORM 5.3
+    /// 原生 byte[] 支持统一）——表结构与编码已兼容。跨栈共用同一物理表虽无编码障碍，
+    /// 但两栈租约/重试行为未经完整回归验证，<b>仍建议同一库选定单一适配器族</b>。
     /// </para>
     /// <para>
     /// <b>DI 工厂 sync-over-async</b>：<see cref="DataSession{TProvider}"/>.<c>CreateAsync</c> 是异步方法，

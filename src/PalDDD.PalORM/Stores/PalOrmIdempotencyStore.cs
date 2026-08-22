@@ -49,10 +49,11 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
 
         if (!reader.IsDBNull(6))
         {
-            var payloadBase64 = reader.GetString(6);
-            if (!string.IsNullOrEmpty(payloadBase64) && record.Status == IdempotencyRecordStatus.Completed)
+            // 原生二进制列（bytea/BLOB/LONGBLOB）——与 EFCore 栈 ResponsePayload 的 byte[] 转换对齐
+            var payloadBytes = reader.GetFieldValue<byte[]>(6);
+            if (payloadBytes.Length > 0 && record.Status == IdempotencyRecordStatus.Completed)
             {
-                record.MarkCompleted(Convert.FromBase64String(payloadBase64), record.UpdatedAt);
+                record.MarkCompleted(payloadBytes, record.UpdatedAt);
             }
         }
         if (!reader.IsDBNull(7) && record.Status == IdempotencyRecordStatus.Failed)
@@ -146,9 +147,10 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         ArgumentNullException.ThrowIfNull(record);
         var expectedUpdatedAt = record.UpdatedAt;
         var statusCompleted = (int)IdempotencyRecordStatus.Completed;
-        var payloadBase64 = Convert.ToBase64String(responsePayload.ToArray());
+        // 原生 byte[] 参数（PalORM ≥5.3 DbType.Binary 显式分派）——列类型 bytea/BLOB/LONGBLOB
+        var payloadBytes = responsePayload.ToArray();
         var affected = await Session.ExecuteAsync(
-            $"UPDATE idempotency_records SET status = {statusCompleted}, updated_at = {completedAt}, response_payload = {payloadBase64}, error = NULL WHERE operation_name = {record.OperationName} AND idempotency_key = {record.Key} AND updated_at = {expectedUpdatedAt}",
+            $"UPDATE idempotency_records SET status = {statusCompleted}, updated_at = {completedAt}, response_payload = {payloadBytes}, error = NULL WHERE operation_name = {record.OperationName} AND idempotency_key = {record.Key} AND updated_at = {expectedUpdatedAt}",
             ct).ConfigureAwait(false);
         // P1-3 修复：乐观锁竞争失败（affected=0，租约已被他方重新获取）时 DB 未落库——
         // 不再变更本地对象假装成功。语义契约见接口注释：终态写入是尽力而为，
