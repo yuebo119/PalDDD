@@ -137,8 +137,9 @@ public sealed class DapperInboxStore : IInboxStore
         // P2/P3 修复（十七轮）：CommandDefinition 传 ct（见 TryStartProcessingAsync 同款注释）
         // 三十八轮 P2 修复（ITM-210 Inbox 姊妹）：processing_started_at 抢占 token 守卫——
         // 被抢占的旧 worker token 不匹配零命中，不覆盖新 worker 的行；affected=0 时
-        // 零内存变异（对齐 Outbox ITM-210 语义）。ProcessingStartedAt 为 null 属调用方误用，
-        // SQL 等值比较 NULL 永假 → fail-closed。
+        // 零内存变异（对齐 Outbox ITM-210 语义）。ProcessingStartedAt 为 null 属调用方误用——
+        // 实际失败点在 C# 层：下方 message.ProcessingStartedAt!.Value 先抛 InvalidOperationException
+        //（R41 ITM-271 勘正原"SQL 等值比较 NULL 永假"的失实描述——SQL 层不可达）；行为仍 fail-closed。
         await c.ExecuteAsync(
             new CommandDefinition(SqlTemplates.InboxMarkProcessed,
                 new { at = ToTimeParam(processedAt), id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);

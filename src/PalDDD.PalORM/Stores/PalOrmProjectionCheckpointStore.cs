@@ -54,7 +54,10 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
             reader.GetString(0), reader.GetString(1), reader.GetString(2),
             (ProjectionCheckpointStatus)reader.GetInt32(3),
             GetUtc(reader, 4),
-            GetUtc(reader, 5),
+            // ITM-270（R41，对齐 DapperProjectionCheckpointStore 三十八轮 P3）：NULL lease_until 行
+            // （手工运维插入；Dapper 正式 DDL 的该列可空，跨栈共用表场景 NULL 合法）容错为 default
+            // 而非抛 SqlNullValueException——防御性容错，当前 PalORM 写入路径不产生 NULL
+            reader.IsDBNull(5) ? default : GetUtc(reader, 5),
             reader.GetInt64(6),
             reader.IsDBNull(7) ? null : reader.GetString(7));
     }

@@ -36,15 +36,17 @@ var msg = new OutboxMessage
 outbox.AddMessage(msg);
 Console.WriteLine($"[OK] Outbox.AddMessage: Id={msg.Id}, Status={msg.Status}");
 
-var pending = await outbox.GetPendingMessagesAsync(batchSize: 10, maxRetryCount: 5, ct: default);
-if (pending.Count != 1) throw new InvalidOperationException($"Expected 1 pending, got {pending.Count}");
-Console.WriteLine($"[OK] Outbox.GetPending: Count={pending.Count}, Type={pending[0].Type}");
+// 步骤 2：租约获取——处理管线的标准路径（ITM-269：GetPendingMessagesAsync 按 IPalOutboxStore
+// 契约"仅用于观测/健康检查，不获取租约"——R40 及之前样本把 GetPending 结果当处理管线基础，
+// 该写法仅 PalORM 实现放行（owner-null 直标分支），复制到 InMemory/Dapper 会静默 no-op）
+var leased = await outbox.LeasePendingMessagesAsync(batchSize: 10, owner: "palorm-sample", leaseDuration: TimeSpan.FromMinutes(2), maxRetryCount: 5, ct: default);
+if (leased.Count != 1) throw new InvalidOperationException($"Expected 1 leased, got {leased.Count}");
+Console.WriteLine($"[OK] Outbox.Lease: Count={leased.Count}, Owner={leased[0].LockedBy}");
 
-// 步骤 3：MarkProcessed
-outbox.MarkProcessed(msg, DateTimeOffset.UtcNow);
-var afterProcessed = await outbox.GetPendingMessagesAsync(10, 5, default);
-if (afterProcessed.Count != 0) throw new InvalidOperationException($"Expected 0 pending after MarkProcessed, got {afterProcessed.Count}");
-Console.WriteLine($"[OK] Outbox.MarkProcessed: Status={msg.Status}");
+// 步骤 3：MarkProcessed（传租约返回的实例 + 终态断言——成功时原地改写入参状态，token 拒绝时零变异）
+outbox.MarkProcessed(leased[0], DateTimeOffset.UtcNow);
+if (leased[0].Status != OutboxStatus.Processed) throw new InvalidOperationException($"MarkProcessed rejected (Status={leased[0].Status})");
+Console.WriteLine($"[OK] Outbox.MarkProcessed: Status={leased[0].Status}");
 
 // 步骤 4：事务（UnitOfWork）
 var uow = new SqlitePalOrmUnitOfWork(db);

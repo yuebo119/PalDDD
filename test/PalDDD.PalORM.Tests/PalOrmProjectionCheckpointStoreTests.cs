@@ -1,4 +1,6 @@
 using PalDDD.PalORM.Sqlite;
+using PalORM;
+using PalORM.Sqlite;
 using PalDDD.Projections;
 
 namespace PalDDD.PalORM.Tests;
@@ -133,5 +135,44 @@ public class PalOrmProjectionCheckpointStoreTests
         await Assert.That(gotten.UpdatedAt.UtcDateTime).IsEqualTo(updatedAtUtc);
         await Assert.That(gotten.LeaseUntil.Offset).IsEqualTo(TimeSpan.Zero);
         await Assert.That(gotten.LeaseUntil.UtcDateTime).IsEqualTo(leaseUntilUtc);
+    }
+
+    /// <summary>ITM-270（R41）：NULL lease_until 行（手工运维插入——Dapper 正式 DDL 该列可空，
+    /// 跨栈共用表场景合法）容错为 default 而非抛 SqlNullValueException。
+    /// 传感器用宽松 DDL（lease_until 无 NOT NULL 约束）直插 NULL 行——修复前 GetAsync 抛异常红。</summary>
+    [Test]
+    public async Task ProjectionCheckpoint_GetAsync_NullLeaseUntilRow_ReturnsDefaultInsteadOfThrowing()
+    {
+        // 绕过标准 fixture（其 DDL 带 NOT NULL 约束插不进 NULL）——手工建宽松 schema 会话
+        await using var session = await DataSession<SqliteProvider>.CreateAsync(
+            DbOptions.Development("Data Source=:memory:"));
+        await using (var cmd = session.GetRawConnection().CreateCommand())
+        {
+            cmd.CommandText = """
+                CREATE TABLE projection_checkpoints (projection_name TEXT NOT NULL, source_name TEXT NOT NULL, position TEXT NOT NULL,
+                    status INTEGER NOT NULL, updated_at TEXT NOT NULL, lease_until TEXT, revision INTEGER NOT NULL DEFAULT 0, error TEXT,
+                    PRIMARY KEY (projection_name, source_name, position))
+                """;
+            await cmd.ExecuteNonQueryAsync();
+        }
+        await using (var insert = session.GetRawConnection().CreateCommand())
+        {
+            // raw 参数而非 FormattableString——lease_until 需绑 DBNull（PalORM 插值对 null 值参数化行为未声明）
+            insert.CommandText = "INSERT INTO projection_checkpoints (projection_name, source_name, position, status, updated_at, lease_until, revision) VALUES (@p0, @p1, @p2, @p3, @p4, @p5, @p6)";
+            var p0 = insert.CreateParameter(); p0.ParameterName = "@p0"; p0.Value = "proj-null"; insert.Parameters.Add(p0);
+            var p1 = insert.CreateParameter(); p1.ParameterName = "@p1"; p1.Value = "src"; insert.Parameters.Add(p1);
+            var p2 = insert.CreateParameter(); p2.ParameterName = "@p2"; p2.Value = "pos"; insert.Parameters.Add(p2);
+            var p3 = insert.CreateParameter(); p3.ParameterName = "@p3"; p3.Value = (int)ProjectionCheckpointStatus.Completed; insert.Parameters.Add(p3);
+            var p4 = insert.CreateParameter(); p4.ParameterName = "@p4"; p4.Value = DateTimeOffset.UtcNow; insert.Parameters.Add(p4);
+            var p5 = insert.CreateParameter(); p5.ParameterName = "@p5"; p5.Value = DBNull.Value; insert.Parameters.Add(p5);
+            var p6 = insert.CreateParameter(); p6.ParameterName = "@p6"; p6.Value = 1L; insert.Parameters.Add(p6);
+            await insert.ExecuteNonQueryAsync();
+        }
+        var store = new SqliteProjectionCheckpointStore(session);
+
+        var cp = await store.GetAsync("proj-null", "src", "pos", default);
+
+        await Assert.That(cp!.Status).IsEqualTo(ProjectionCheckpointStatus.Completed);
+        await Assert.That(cp.LeaseUntil).IsEqualTo(default(DateTimeOffset));
     }
 }

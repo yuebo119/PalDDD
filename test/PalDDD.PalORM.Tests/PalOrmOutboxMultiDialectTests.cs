@@ -13,7 +13,7 @@ namespace PalDDD.PalORM.Tests;
 /// <list type="bullet">
 /// <item>PG/SQLite 的 <c>UPDATE...RETURNING</c> 单语句原子租约</item>
 /// <item>MySQL 的 <c>UPDATE + SELECT</c> 两步租约（无 RETURNING）</item>
-/// <item>三方言的 ULID 主键、Base64 Payload、DateTimeOffset 时间戳往返</item>
+/// <item>三方言的 ULID 主键、二进制 Payload（BLOB/BYTEA/LONGBLOB，070b42f 原生化）、DateTimeOffset 时间戳往返</item>
 /// <item>三方言的事务 Commit/Rollback</item>
 /// </list>
 /// </para>
