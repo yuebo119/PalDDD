@@ -18,11 +18,9 @@ public class PalOrmIdempotencyStoreTests
 
         var record = await store.TryStartAsync("op-1", "key-1", now, IdempotencyPolicy.Default, default);
 
-        await Assert.That(record).IsNotNull();
         await Assert.That(record!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
 
         var gotten = await store.GetAsync("op-1", "key-1", now.AddSeconds(1), default);
-        await Assert.That(gotten).IsNotNull();
         await Assert.That(gotten!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
     }
 
@@ -68,7 +66,6 @@ public class PalOrmIdempotencyStoreTests
         await store.MarkCompletedAsync(record!, payload, now.AddSeconds(1), default);
 
         var gotten = await store.GetAsync("op-1", "key-1", now.AddSeconds(2), default);
-        await Assert.That(gotten).IsNotNull();
         await Assert.That(gotten!.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
         // ResponsePayload 是 ReadOnlyMemory<byte>? —— 验证非空且长度匹配
         await Assert.That(gotten.ResponsePayload.HasValue).IsTrue();
@@ -130,7 +127,6 @@ public class PalOrmIdempotencyStoreTests
         await store.TryStartAsync("op-1", "key-1", now, policy, default);
         var gotten = await store.GetAsync("op-1", "key-1", now.AddSeconds(1), default);
 
-        await Assert.That(gotten).IsNotNull();
         await Assert.That(gotten!.LockedUntil.Offset).IsEqualTo(TimeSpan.Zero);
         await Assert.That(gotten.ExpiresAt.Offset).IsEqualTo(TimeSpan.Zero);
         await Assert.That(gotten.UpdatedAt.Offset).IsEqualTo(TimeSpan.Zero);
@@ -159,7 +155,6 @@ public class PalOrmIdempotencyStoreTests
 
         var gotten = await store.GetAsync("op-1", "key-1", DateTimeOffset.UtcNow, default);
 
-        await Assert.That(gotten).IsNotNull();
         await Assert.That(gotten!.LockedUntil.Offset).IsEqualTo(TimeSpan.Zero);
         await Assert.That(gotten.LockedUntil.UtcDateTime).IsEqualTo(lockedUntilUtc);
         await Assert.That(gotten.ExpiresAt.Offset).IsEqualTo(TimeSpan.Zero);

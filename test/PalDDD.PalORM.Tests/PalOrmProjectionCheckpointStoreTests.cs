@@ -18,7 +18,6 @@ public class PalOrmProjectionCheckpointStoreTests
 
         var cp = await store.TryStartAsync("proj-1", "source-1", "pos-1", now, TimeSpan.FromMinutes(5), default);
 
-        await Assert.That(cp).IsNotNull();
         await Assert.That(cp!.Status).IsEqualTo(ProjectionCheckpointStatus.Processing);
         await Assert.That(cp.LeaseUntil).IsEqualTo(now + TimeSpan.FromMinutes(5));
         await Assert.That(cp.Revision).IsEqualTo(1L);
@@ -52,7 +51,6 @@ public class PalOrmProjectionCheckpointStoreTests
         var later = now + TimeSpan.FromSeconds(2);
         var reclaimed = await store.TryStartAsync("proj-1", "source-1", "pos-1", later, TimeSpan.FromMinutes(5), default);
 
-        await Assert.That(reclaimed).IsNotNull();
         await Assert.That(reclaimed!.Revision).IsEqualTo(2L);
     }
 
@@ -108,7 +106,6 @@ public class PalOrmProjectionCheckpointStoreTests
         await store.TryStartAsync("proj-1", "source-1", "pos-1", now, timeout, default);
         var gotten = await store.GetAsync("proj-1", "source-1", "pos-1", default);
 
-        await Assert.That(gotten).IsNotNull();
         await Assert.That(gotten!.UpdatedAt.Offset).IsEqualTo(TimeSpan.Zero);
         await Assert.That(gotten.LeaseUntil.Offset).IsEqualTo(TimeSpan.Zero);
         var maxDrift = Math.Max(
@@ -132,7 +129,6 @@ public class PalOrmProjectionCheckpointStoreTests
 
         var gotten = await store.GetAsync("proj-1", "source-1", "pos-1", default);
 
-        await Assert.That(gotten).IsNotNull();
         await Assert.That(gotten!.UpdatedAt.Offset).IsEqualTo(TimeSpan.Zero);
         await Assert.That(gotten.UpdatedAt.UtcDateTime).IsEqualTo(updatedAtUtc);
         await Assert.That(gotten.LeaseUntil.Offset).IsEqualTo(TimeSpan.Zero);

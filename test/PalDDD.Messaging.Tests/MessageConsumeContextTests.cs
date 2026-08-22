@@ -23,7 +23,6 @@ public sealed class MessageConsumeContextTests
 
         var context = MessageConsumeContext.FromHeaders(headers);
 
-        await Assert.That(context).IsNotNull();
         await Assert.That(context!.TraceParent).IsEqualTo("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01");
         await Assert.That(context.TraceState).IsEqualTo("acme=orange,rig=honey");
         await Assert.That(context.CorrelationId).IsEqualTo("01ARZ3NDEKTSV4RRFFQ69G5FAV");
@@ -42,7 +41,6 @@ public sealed class MessageConsumeContextTests
 
         var context = MessageConsumeContext.FromHeaders(headers);
 
-        await Assert.That(context).IsNotNull();
         await Assert.That(context!.TraceParent).IsEqualTo("00-abc-def-01");
         await Assert.That(context.CausationId).IsEqualTo("01ARZ3NDKK9Q3VQ7Z7V1F2K6FA");
         await Assert.That(context.TraceState).IsNull();
@@ -65,7 +63,6 @@ public sealed class MessageConsumeContextTests
             headers: new Dictionary<string, object?>(),
             correlationId: "01ARZ3NFF4G5H6J7K8L9M0N1O2");
 
-        await Assert.That(context).IsNotNull();
         await Assert.That(context!.CorrelationId).IsEqualTo("01ARZ3NFF4G5H6J7K8L9M0N1O2");
         await Assert.That(context.CausationId).IsNull();
         await Assert.That(context.Headers.Count).IsEqualTo(0);
@@ -81,7 +78,6 @@ public sealed class MessageConsumeContextTests
 
         var context = MessageConsumeContext.FromHeaders(headers, correlationId: "from-fallback");
 
-        await Assert.That(context).IsNotNull();
         await Assert.That(context!.CorrelationId).IsEqualTo("from-header");
     }
 
@@ -96,7 +92,6 @@ public sealed class MessageConsumeContextTests
 
         var context = MessageConsumeContext.FromHeaders(headers);
 
-        await Assert.That(context).IsNotNull();
         await Assert.That(context!.TraceParent).IsNull();
         await Assert.That(context.Headers.ContainsKey("traceparent")).IsTrue();
         await Assert.That(context.Headers["traceparent"]).IsNull();
@@ -112,7 +107,6 @@ public sealed class MessageConsumeContextTests
 
         var context = MessageConsumeContext.FromHeaders(headers);
 
-        await Assert.That(context).IsNotNull();
         await Assert.That(context!.TraceState).IsNull();
     }
 
@@ -126,7 +120,6 @@ public sealed class MessageConsumeContextTests
 
         var context = MessageConsumeContext.FromHeaders(headers);
 
-        await Assert.That(context).IsNotNull();
         await Assert.That(context!.CorrelationId).IsNull();
         await Assert.That(context.Headers["x-custom"]).IsEqualTo("value");
     }

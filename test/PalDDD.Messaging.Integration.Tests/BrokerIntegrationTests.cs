@@ -65,32 +65,39 @@ public sealed class BrokerFixture : IAsyncDisposable
         // 如果配置指向 localhost（默认值/Testcontainers 模式），尝试用 Testcontainers 启动
         if (kafkaBootstrap.Contains("localhost") && rabbitHost.Contains("localhost"))
         {
-            if (DockerAvailable || _triedTestcontainers) return;
-            _triedTestcontainers = true;
+            // ITM-264：异步锁防并行双启容器（[NotInParallel] 序列化是第一道防线，此为夹具级兜底——
+            // 双测试并行进入时第二实例覆盖第一容器引用导致泄漏 + DockerAvailable 竞态）
+            await _initializeLock.WaitAsync();
             try
             {
-                _kafka = new KafkaBuilder("confluentinc/cp-kafka:7.9.0").Build();
-                await _kafka.StartAsync();
-                _rabbitMq = new RabbitMqBuilder("rabbitmq:4.1.0-alpine")
-                    .WithUsername("palddd-test")
-                    .WithPassword("palddd-test")
-                    .Build();
-                await _rabbitMq.StartAsync();
-                _remoteKafkaBootstrap = _kafka.GetBootstrapAddress();
-                _remoteRabbitHost = _rabbitMq!.Hostname;
-                _remoteRabbitPort = _rabbitMq!.GetMappedPublicPort(5672);
-                _rabbitUser = "palddd-test";
-                _rabbitPassword = "palddd-test";
-                DockerAvailable = true;
-                return;
-            }
+                if (DockerAvailable || _triedTestcontainers) return;
+                _triedTestcontainers = true;
+                try
+                {
+                    _kafka = new KafkaBuilder("confluentinc/cp-kafka:7.9.0").Build();
+                    await _kafka.StartAsync();
+                    _rabbitMq = new RabbitMqBuilder("rabbitmq:4.1.0-alpine")
+                        .WithUsername("palddd-test")
+                        .WithPassword("palddd-test")
+                        .Build();
+                    await _rabbitMq.StartAsync();
+                    _remoteKafkaBootstrap = _kafka.GetBootstrapAddress();
+                    _remoteRabbitHost = _rabbitMq!.Hostname;
+                    _remoteRabbitPort = _rabbitMq!.GetMappedPublicPort(5672);
+                    _rabbitUser = "palddd-test";
+                    _rabbitPassword = "palddd-test";
+                    DockerAvailable = true;
+                    return;
+                }
 #pragma warning disable CA1031 // Intentionally broad: detect Docker presence
-            catch
+                catch
 #pragma warning restore CA1031
-            {
-                DockerAvailable = false;
-                return;
+                {
+                    DockerAvailable = false;
+                    return;
+                }
             }
+            finally { _initializeLock.Release(); }
         }
 
         // 远程配置（非 localhost）→ 直接用配置的连接串
@@ -134,6 +141,7 @@ public sealed class BrokerFixture : IAsyncDisposable
     }
 
     private bool _triedTestcontainers;
+    private readonly SemaphoreSlim _initializeLock = new(1, 1);
 
     public (KafkaBroker, JsonMessageSerializer) CreateKafkaBroker()
         => CreateKafkaBroker(NullPalLogger<KafkaBroker>.Instance);
@@ -192,6 +200,7 @@ public sealed class BrokerFixture : IAsyncDisposable
     {
         if (_kafka is not null) await _kafka.DisposeAsync();
         if (_rabbitMq is not null) await _rabbitMq.DisposeAsync();
+        _initializeLock.Dispose();
     }
 
     private static CatalogAndSerializer CreateCatalogAndSerializer()
@@ -420,6 +429,7 @@ public sealed class BrokerIntegrationTests
     }
 
     [Test]
+    [NotInParallel("broker-integration")]
     public async Task RabbitMq_PublishAndSubscribe_RoundTripsMessage(CancellationToken cancellationToken)
     {
         SkipIfRabbitUnavailable();
@@ -454,6 +464,7 @@ public sealed class BrokerIntegrationTests
     }
 
     [Test]
+    [NotInParallel("broker-integration")]
     public async Task RabbitMq_HandlerCancellation_DoesNotLogHandlerFailure(CancellationToken cancellationToken)
     {
         SkipIfRabbitUnavailable();
@@ -490,7 +501,8 @@ public sealed class BrokerIntegrationTests
 
         // consumer 已 ready，发测试消息
         await broker.PublishAsync(new TestMessage($"rmq-cancel-{tag}"), cancellationToken);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(120), cancellationToken);
+        // ITM-264：对齐 Kafka 同型测试的 30s——consumer 已 ready 信号确认，120s 是复制疏漏
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
         await sub.DisposeAsync();
 
         await Assert.That(logger.ErrorCount).IsEqualTo(0);

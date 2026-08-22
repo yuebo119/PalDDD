@@ -28,6 +28,7 @@
 //   var writeConn = router.GetWriter().CreateConnection();
 // ─────────────────────────────────────────────────────────────
 
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
@@ -103,6 +104,8 @@ public static class PostgreSqlReadWriteRouterExtensions
     /// <param name="primaryConnectionString">主库连接串</param>
     /// <param name="replicaConnectionStrings">只读副本连接串（可选）</param>
     /// <param name="applicationName">PGAPPNAME</param>
+    [SuppressMessage("Design", "CA1031",
+        Justification = "Reader build failure path must dispose the not-yet-registered writer DataSource for ANY exception before rethrowing (ITM-262); narrowing the catch would leak on unexpected Npgsql build failures.")]
     public static IServiceCollection AddPalReadWriteRouter(
         this IServiceCollection services,
         string primaryConnectionString,
@@ -128,58 +131,72 @@ public static class PostgreSqlReadWriteRouterExtensions
         NpgsqlDataSource? reader = null;
         if (replicaConnectionStrings is { Length: > 0 })
         {
-            List<string> hosts = [];
-            var primaryCsBuilder = new NpgsqlConnectionStringBuilder(primaryConnectionString);
-            foreach (var cs in replicaConnectionStrings)
+            // P3（R40 ITM-262 顺带）：reader 构建路径（凭据失配/缺 Host/端口编码/reader Build）抛出时
+            // writer 已 Build 尚未注册进 DI——失败路径同步释放，防宿主重试场景 NpgsqlDataSource 累积
+            //（NpgsqlDataSource.Dispose 同步且未连接时无 IO）。
+            try
             {
-                var sb = new NpgsqlConnectionStringBuilder(cs);
-                // P2/P3 修复（十七轮 · 镜像 MySQL failover 校验）：reader 连接串以主库串为基线仅追加 Host——
-                // 副本凭据/库名与主库不一致时被静默丢弃，此处快速失败（复用 PostgreSqlMultiHost 校验）
-                PostgreSqlMultiHost.ThrowIfCredentialsMismatch(primaryCsBuilder, sb, "replica");
-                // PD17 姊妹统一：端口编码进 Host 条目
-                // ITM-112 修复（验证轮返工）：副本连接串缺 Host 是配置错误——原实现静默跳过，
-                // 副本被无声丢弃（读写分离静默退化为纯主库、流量全走写库，无任何提示）；显式抛
-                // ArgumentException 暴露配置问题（框架库语义：配置错误快速失败）。
-                // 注意：Npgsql 的 NpgsqlConnectionStringBuilder.Host 在连接串未指定时
-                // 返回空字符串而非 null（Npgsql 10.0.3 实证）——必须用 IsNullOrWhiteSpace 判定，
-                // 仅判 null 永不触发（假修）。
-                if (string.IsNullOrWhiteSpace(sb.Host))
-                    throw new ArgumentException(
-                        $"Replica connection string '{cs}' has no Host. Each replica must specify a Host.",
-                        nameof(replicaConnectionStrings));
-                // ITM-132 修复：primary Port≠5432 时，未编码的副本 Host 会继承 reader 连接串共享 Port
-                // （Npgsql 的 Port 只对未内嵌端口的主机生效），读流量/故障转移落到错误实例——
-                // 统一经 EncodeHostEntry 编码：primary Port≠5432 时全部 Host 显式 host:port（含显式 5432）。
-                hosts.Add(PostgreSqlMultiHost.EncodeHostEntry(sb, primaryCsBuilder.Port));
+                List<string> hosts = [];
+                var primaryCsBuilder = new NpgsqlConnectionStringBuilder(primaryConnectionString);
+                foreach (var (cs, index) in replicaConnectionStrings.Select((c, i) => (c, i)))
+                {
+                    var sb = new NpgsqlConnectionStringBuilder(cs);
+                    // P2/P3 修复（十七轮 · 镜像 MySQL failover 校验）：reader 连接串以主库串为基线仅追加 Host——
+                    // 副本凭据/库名与主库不一致时被静默丢弃，此处快速失败（复用 PostgreSqlMultiHost 校验）
+                    PostgreSqlMultiHost.ThrowIfCredentialsMismatch(primaryCsBuilder, sb, "replica");
+                    // PD17 姊妹统一：端口编码进 Host 条目
+                    // ITM-112 修复（验证轮返工）：副本连接串缺 Host 是配置错误——原实现静默跳过，
+                    // 副本被无声丢弃（读写分离静默退化为纯主库、流量全走写库，无任何提示）；显式抛
+                    // ArgumentException 暴露配置问题（框架库语义：配置错误快速失败）。
+                    // P0 修复（R40 ITM-262）：消息只报副本索引，不内嵌连接串原文——连接串含 Password
+                    // 等敏感段，异常进宿主日志即凭据泄漏（探针实锤；对齐 ThrowIfCredentialsMismatch
+                    // 姊妹"只含角色名"形态）。注意触发条件：须凭据与主库一致才到达此处（前置校验拦截差异凭据）。
+                    // 注意：Npgsql 的 NpgsqlConnectionStringBuilder.Host 在连接串未指定时
+                    // 返回空字符串而非 null（Npgsql 10.0.3 实证）——必须用 IsNullOrWhiteSpace 判定，
+                    // 仅判 null 永不触发（假修）。
+                    if (string.IsNullOrWhiteSpace(sb.Host))
+                        throw new ArgumentException(
+                            $"Replica connection string at index {index} has no Host. Each replica must specify a Host.",
+                            nameof(replicaConnectionStrings));
+                    // ITM-132 修复：primary Port≠5432 时，未编码的副本 Host 会继承 reader 连接串共享 Port
+                    // （Npgsql 的 Port 只对未内嵌端口的主机生效），读流量/故障转移落到错误实例——
+                    // 统一经 EncodeHostEntry 编码：primary Port≠5432 时全部 Host 显式 host:port（含显式 5432）。
+                    hosts.Add(PostgreSqlMultiHost.EncodeHostEntry(sb, primaryCsBuilder.Port));
+                }
+
+                if (hosts.Count > 0)
+                {
+                    var readerCs = primaryConnectionString;
+                    var psb = new NpgsqlConnectionStringBuilder(readerCs);
+                    // ITM-110 姊妹路径修复（验证轮返工）：主库串无 Host 时原 `psb.Host += ",..."`
+                    // 产生前导逗号（",replica"），Npgsql 解析出空主机条目——空则直接赋值
+                    psb.Host = string.IsNullOrWhiteSpace(psb.Host)
+                        ? string.Join(",", hosts)
+                        : psb.Host + "," + string.Join(",", hosts);
+                    psb.LoadBalanceHosts = true;
+                    // ITM-181 修复（二十九轮）：any → read-only——修复前 any 对列表内主机
+                    // 轮询（含写主库），读流量负载均衡到 write master，读写分离稀释、主库
+                    // 连接池承压。read-only 意指"会话默认不接受读写事务"（Npgsql 10.0.3
+                    // 实证：hot standby 副本满足，主库不满足）——读流量优先副本，
+                    // 主库仅当所有副本不可达时 fallback（Npgsql 多主机顺序尝试语义）。
+                    // ⚠️ 连接串值必须是连字符 "read-only"（NpgsqlConnectionStringBuilder
+                    // 实证：readonly/read_only 抛 ArgumentException）。
+                    psb.TargetSessionAttributes = "read-only";
+                    psb.ApplicationName = applicationName + "-Reader";
+
+                    var readerBuilder = new NpgsqlDataSourceBuilder(psb.ConnectionString);
+                    // 优化（二十五轮 API 扫描 B-1）：读副本同 writer 启用自动预备（见上方 writer 注释）
+                    // 条件化（二十六轮 W2）：仅未设置（读 0）时赋默认——显式非零调优不被覆盖；
+                    // 显式禁用（写 0）与未设置不可区分，禁用走 configure 回调或自建 DataSource
+                    if (readerBuilder.ConnectionStringBuilder.MaxAutoPrepare == 0)
+                        readerBuilder.ConnectionStringBuilder.MaxAutoPrepare = 20;
+                    reader = readerBuilder.Build();
+                }
             }
-
-            if (hosts.Count > 0)
+            catch
             {
-                var readerCs = primaryConnectionString;
-                var psb = new NpgsqlConnectionStringBuilder(readerCs);
-                // ITM-110 姊妹路径修复（验证轮返工）：主库串无 Host 时原 `psb.Host += ",..."
-                // 产生前导逗号（",replica"），Npgsql 解析出空主机条目——空则直接赋值
-                psb.Host = string.IsNullOrWhiteSpace(psb.Host)
-                    ? string.Join(",", hosts)
-                    : psb.Host + "," + string.Join(",", hosts);
-                psb.LoadBalanceHosts = true;
-                // ITM-181 修复（二十九轮）：any → read-only——修复前 any 对列表内主机
-                // 轮询（含写主库），读流量负载均衡到 write master，读写分离稀释、主库
-                // 连接池承压。read-only 意指"会话默认不接受读写事务"（Npgsql 10.0.3
-                // 实证：hot standby 副本满足，主库不满足）——读流量优先副本，
-                // 主库仅当所有副本不可达时 fallback（Npgsql 多主机顺序尝试语义）。
-                // ⚠️ 连接串值必须是连字符 "read-only"（NpgsqlConnectionStringBuilder
-                // 实证：readonly/read_only 抛 ArgumentException）。
-                psb.TargetSessionAttributes = "read-only";
-                psb.ApplicationName = applicationName + "-Reader";
-
-                var readerBuilder = new NpgsqlDataSourceBuilder(psb.ConnectionString);
-                // 优化（二十五轮 API 扫描 B-1）：读副本同 writer 启用自动预备（见上方 writer 注释）
-                // 条件化（二十六轮 W2）：仅未设置（读 0）时赋默认——显式非零调优不被覆盖；
-                // 显式禁用（写 0）与未设置不可区分，禁用走 configure 回调或自建 DataSource
-                if (readerBuilder.ConnectionStringBuilder.MaxAutoPrepare == 0)
-                    readerBuilder.ConnectionStringBuilder.MaxAutoPrepare = 20;
-                reader = readerBuilder.Build();
+                try { writer.Dispose(); } catch { /* 释放失败不掩盖根因 */ }
+                throw;
             }
         }
 

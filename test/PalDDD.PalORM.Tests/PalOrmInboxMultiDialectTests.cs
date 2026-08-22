@@ -33,7 +33,6 @@ public class PalOrmInboxMultiDialectTests
             var store = new PalOrmInboxStore<TProvider>(ts.Session);
             var now = DateTimeOffset.UtcNow;
             var msg = await store.TryStartProcessingAsync("consumer-1", "msg-1", now, TimeSpan.FromMinutes(5), default);
-            await Assert.That(msg).IsNotNull();
             await Assert.That(msg!.Status).IsEqualTo(InboxStatus.Processing);
             await Assert.That(msg.Attempts).IsEqualTo(1);
             // ITM-245：时间戳往返守护网——received_at 物化读回与写入时刻绝对差值须在窗口内
@@ -94,7 +93,6 @@ public class PalOrmInboxMultiDialectTests
             await store.MarkFailedAsync(msg!, "transient error", default);
 
             var retry = await store.TryStartProcessingAsync("consumer-1", "msg-1", now.AddSeconds(1), TimeSpan.FromMinutes(5), default);
-            await Assert.That(retry).IsNotNull();
             await Assert.That(retry!.Attempts).IsEqualTo(2);
         }
     }

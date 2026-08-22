@@ -8,7 +8,6 @@ public sealed class InMemoryStoreTests
         var store = new InMemoryInboxStore();
         var record = await store.TryStartProcessingAsync(
             "consumer", "msg-001", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5), cancellationToken);
-        await Assert.That(record).IsNotNull();
         await Assert.That(record!.Status).IsEqualTo(InboxStatus.Processing);
         await Assert.That(record.Attempts).IsEqualTo(1);
     }
@@ -205,7 +204,6 @@ public sealed class InMemoryStoreTests
         store.Add(new SampleSaga { SagaId = id, CurrentState = "Started" });
 
         var found = await store.GetByIdAsync(id, cancellationToken);
-        await Assert.That(found).IsNotNull();
         await Assert.That(found!.CurrentState).IsEqualTo("Started");
     }
 

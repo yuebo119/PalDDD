@@ -17,7 +17,6 @@ public class PalOrmInboxStoreTests
 
         var msg = await store.TryStartProcessingAsync("consumer-1", "msg-1", now, TimeSpan.FromMinutes(5), default);
 
-        await Assert.That(msg).IsNotNull();
         await Assert.That(msg!.Status).IsEqualTo(InboxStatus.Processing);
         await Assert.That(msg.Attempts).IsEqualTo(1);
     }
@@ -80,7 +79,6 @@ public class PalOrmInboxStoreTests
 
         // Failed 状态可重新 TryStart（attempts 自增）
         var retry = await store.TryStartProcessingAsync("consumer-1", "msg-1", now.AddSeconds(1), TimeSpan.FromMinutes(5), default);
-        await Assert.That(retry).IsNotNull();
         await Assert.That(retry!.Attempts).IsEqualTo(2);
     }
 
