@@ -76,7 +76,7 @@ public sealed class OutboxSqliteConcurrencyTests
     [Test]
     public async Task ReleaseForRetry_IncrementsRetryCountAndClearsLease(CancellationToken cancellationToken)
     {
-        // 租约直接种子建立（ITM-261 已修复但保留此形态——终态写仍走生产路径，聚焦 ReleaseForRetry 语义，见类尾注释）
+        // 租约直接种子建立（ITM-261 已修复；保留此形态聚焦终态写语义——见类尾注释）
         var messageId = PalUlid.New();
         await SeedMessageAsync(messageId, "orders.created.v1",
             lockedBy: "worker-1", lockedUntil: DateTimeOffset.UtcNow.AddMinutes(2));
@@ -105,7 +105,7 @@ public sealed class OutboxSqliteConcurrencyTests
         // 三十四轮 ITM-210 租约 token 回归：worker-1 持租后租约被重租（同 owner 复用场景，
         // locked_until 更晚 = 新 token），旧 worker 的终态写必须影响 0 行——原 owner 守卫的
         // "LockedBy 相同即放行"分支会让旧写覆盖新租约状态
-        // 租约直接种子建立（ITM-261 修复前的历史形态保留：终态写仍走生产路径，见类尾注释勘正）
+        // 租约直接种子建立（ITM-261 已修复；保留此形态聚焦终态写语义——见类尾注释）
         var messageId = PalUlid.New();
         await SeedMessageAsync(messageId, "orders.created.v1",
             lockedBy: "worker-1", lockedUntil: DateTimeOffset.UtcNow.AddMinutes(2));
@@ -137,7 +137,7 @@ public sealed class OutboxSqliteConcurrencyTests
         // 三十四轮 ITM-210 租约 token 回归：租约被释放（locked_by/until 置 NULL，
         // 如他路径 RequeueDead/ReleaseForRetry），旧 worker 的终态写必须被拒——
         // 原 "LockedBy IS NULL OR ..." 守卫的 NULL 放行分支正是 fencing 缺口
-        // 租约直接种子建立（ITM-261 修复前的历史形态保留：终态写仍走生产路径，见类尾注释勘正）
+        // 租约直接种子建立（ITM-261 已修复；保留此形态聚焦终态写语义——见类尾注释）
         var messageId = PalUlid.New();
         await SeedMessageAsync(messageId, "orders.created.v1",
             lockedBy: "worker-1", lockedUntil: DateTimeOffset.UtcNow.AddMinutes(2));

@@ -112,8 +112,11 @@ public class PalOrmSagaMultiDialectTests
 
             var actives = await store.GetActiveSagasAsync(10, default);
             await Assert.That(actives.Count).IsEqualTo(1);
-            // 比较 CurrentState 而非 SagaId（读回的是 new TState()，SagaId 是新 Ulid，与原始不同）
+            // ITM-273 勘正：原注释"SagaId 是新 Ulid 与原始不同"失实——工厂恒注入 JsonTypeInfo，
+            // Materialize 走 JSON 路径，SagaId 是公共 init 属性已序列化进 saga_data 并可恢复
+            //（同文件 WithJsonTypeInfo 测试的 loaded.SagaId==state.SagaId 断言互证）。
             await Assert.That(actives[0].CurrentState).IsEqualTo("Active");
+            await Assert.That(actives[0].SagaId).IsEqualTo(active.SagaId);
         }
     }
 

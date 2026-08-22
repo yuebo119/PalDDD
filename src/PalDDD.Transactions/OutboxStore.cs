@@ -39,10 +39,12 @@ public interface IPalOutboxStore
     /// <summary>标记消息发布成功。</summary>
     /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。
     /// <para>
-    /// ⚠️ <b>前置条件（ITM-269 声明）</b>：应传入 <see cref="LeasePendingMessagesAsync"/> 返回的租约实例。
-    /// 对<b>未租约</b>消息直接标记的实现语义相反——PalORM 栈放行（owner-null 分支视为管理员干预/直标），
-    /// InMemory/Dapper 栈拒绝（租约守卫静默 no-op，零变异零报错）。处理管线一律走 Lease 路径；
-    /// GetPending 观测结果不构成标记资格。
+    /// ⚠️ <b>前置条件（ITM-269 声明；ITM-272 勘正 Dapper 阵营）</b>：应传入 <see cref="LeasePendingMessagesAsync"/>
+    /// 返回的租约实例。对<b>未租约</b>消息（LockedBy=null）直接标记的三栈真实行为：
+    /// PalORM/Dapper 栈<b>放行</b>（owner-null SQL 分支命中即 UPDATE——Dapper 内存侧仅清租约字段不回写
+    /// Status，fencing 弱于 PalORM 的 affected 门控）；InMemory 栈<b>拒绝</b>（引用守卫静默 no-op、零变异
+    /// 零报错）。处理管线一律走 Lease 路径；GetPending 观测结果原则上不构成标记资格——
+    /// 例外：租约已过期且未被他人重租的消息经 token 分支仍可标记成功（原 worker 过期后完成属合理语义）。
     /// </para></remarks>
     void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt);
 

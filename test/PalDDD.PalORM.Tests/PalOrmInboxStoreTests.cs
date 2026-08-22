@@ -95,4 +95,23 @@ public class PalOrmInboxStoreTests
         await Assert.That(c1).IsNotNull();
         await Assert.That(c2).IsNotNull();  // 不同 consumer 独立处理
     }
+
+    /// <summary>ITM-274（R42）：null ProcessingStartedAt 的手工构造 message 直调 Mark* 属调用方
+    /// 误用——显式 fail-fast（对齐 Dapper 姊妹 C# 层抛异常形态）而非 SQL =NULL 永假静默零变更。
+    /// 修复前该场景 affected=0 无任何痕迹。</summary>
+    [Test]
+    public async Task Inbox_MarkProcessed_NullProcessingStartedAt_ThrowsFailFast()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteInboxStore(session);
+        var msg = new InboxMessage { MessageId = "m1", ConsumerName = "c1" }; // ProcessingStartedAt 默认 null
+
+        var ex = await Assert.That(() =>
+        {
+            var m = msg;
+            return store.MarkProcessedAsync(m, DateTimeOffset.UtcNow, default).AsTask();
+        }).Throws<ArgumentNullException>();
+
+        await Assert.That(ex!.ParamName).IsEqualTo("message.ProcessingStartedAt");
+    }
 }
