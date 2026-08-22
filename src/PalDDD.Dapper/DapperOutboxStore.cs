@@ -230,6 +230,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+        // P3-TST-601（R45，对齐 PalORM/EFCore ITM-082 截断族）：存储层兜底截断——
+        // 调用方 OutboxBatchProcessor 2000 为第一层；error 列 TEXT 在 Dapper 栈无上限但
+        // 跨栈共用表场景（Dapper DDL 列可空 TEXT）防 DDL 收紧后超列失败
+        if (failureReason.Length > 2040) failureReason = failureReason[..2040];
         var c = EnsureOpen();
         // P3-SRC-301 声明（同 MarkProcessed）：affected=0（token 拒绝）时内存对象仅清租约字段
         // 不回写 Status——与 InMemory 版（守卫内联设 Dead）/PalORM 版（affected>0 才全套回写）
@@ -245,6 +249,8 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+        // P3-TST-601：同 MarkDead——存储层兜底截断
+        if (failureReason.Length > 2040) failureReason = failureReason[..2040];
         var c = EnsureOpen();
         // P2 修复（八轮评审）：补租约守卫（对齐 PalORM 版 PalOrmOutboxStore）——租约过期被其他 worker
         // 抢占后，原 worker 的失败释放不再清掉新 worker 的锁或误增 retry_count；三十四轮 ITM-210
@@ -268,6 +274,8 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     public async ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(retriedBy);
+        // P3-TST-601：对齐 EFCore ITM-216（256 截断）
+        if (retriedBy.Length > 256) retriedBy = retriedBy[..256];
         var now = _timeProvider.GetUtcNow();
         var audit = $"requeued by {retriedBy} at {now:O}";
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);

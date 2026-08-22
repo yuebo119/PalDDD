@@ -66,12 +66,16 @@ public static class PalActivitySource
             ("pal.outbox.batch_size", batchSize));
 
     /// <summary>创建收件箱幂等消费 Activity</summary>
+    /// <remarks>P3-SRC-605（R45）：messageId 参数自 ITM-229 移除高基数 tag 后不再产生任何
+    /// 遥测输出——保留仅为源兼容；后续破坏性版本将收参。</remarks>
     public static Activity? StartInboxProcess(string consumerName, string messageId)
         => Start("Inbox Process",
             ("pal.inbox.consumer", consumerName));
     // ITM-229：移除 pal.inbox.message_id——高基数（每消息唯一）且可能含业务 ID
 
     /// <summary>创建幂等执行 Activity</summary>
+    /// <remarks>P3-SRC-605（R45）：key 参数自 ITM-229 移除高基数 tag 后不再产生任何
+    /// 遥测输出——保留仅为源兼容；后续破坏性版本将收参。</remarks>
     public static Activity? StartIdempotencyExecute(string operationName, string key)
         => Start("Idempotency Execute",
             ("pal.idempotency.operation", operationName));

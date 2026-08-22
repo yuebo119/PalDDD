@@ -193,7 +193,7 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
         ct.ThrowIfCancellationRequested();
         ArgumentException.ThrowIfNullOrWhiteSpace(retriedBy);
         // ITM-216 修复（三十二轮）：retriedBy 截断兜底——Error 列上限 2048（同款于
-        // OutboxDbContext.RequeueDeadAsync 的 2040 截断族），超长 retriedBy 使审计串超列
+        // OutboxDbContext.RequeueDeadAsync 的 2040 截断族），姊妹对称性截断（内存实现无列上限——P3-TST-603 勘正）
         var owner = retriedBy.Length > 256 ? retriedBy[..256] : retriedBy;
         var now = _timeProvider.GetUtcNow();
         lock (_lock)

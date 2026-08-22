@@ -677,6 +677,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
         bool wasCompleted, DateTimeOffset startedAt,
         SagaExecutionObserver? observer, CancellationToken ct)
     {
+        // P3-SRC-603（R45）声明：观察者 OnStepStarted/Completed/Failed 上报的是 DynamicStep
+        // 注册键（stepKey 参数）而非路由目标键（matchedKey）——实际执行体与计时对象是 matchedKey。
+        // 耗时/失败在观察端归因到 Dynamic 入口名下属刻意设计（跟踪 Dynamic 分发总量）。
         // 路由到目标步骤 key
         var targetKey = step.Route(current);
 

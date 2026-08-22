@@ -117,7 +117,10 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         // P3-SRC-402 修复：补 _disposed 守卫（对齐 DisposeAsync 的 ITM-217 幂等门）——
         // Broker 已释放后订阅会登记进已被清空的 _consumers（此后无 DisposeAsync 再遍历），
         // consumer 无人释放且消费循环在已释放 broker 上空转。
-        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        // P3-SRC-602 修复（R45）：守卫移入 _consumersLock 临界区——原锁外读取与 DisposeAsync
+        // 的 Exchange+snapshot+Clear 无同步关系，check-then-act 窗口内 Dispose 先行则订阅
+        // 仍被登记进已清空列表（守卫缩小了但未消除窗口）；锁内检查与 DisposeAsync 的
+        // snapshot 串行化，窗口彻底关闭。
         var descriptor = MessageCatalog.Find(typeof(TMessage))
             ?? throw new InvalidOperationException(
                 $"Message type '{typeof(TMessage).FullName}' is not registered in MessageCatalog.");
@@ -144,6 +147,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         var subscription = new KafkaSubscription(cts, consumer);
         lock (_consumersLock)
         {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
             _consumers.Add(subscription);
         }
 
