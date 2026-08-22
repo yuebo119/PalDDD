@@ -117,12 +117,10 @@ public sealed class DomainEventSemanticsTests
 
         // 验证 get-only 语义 — 无 setter（CanWrite=false、GetSetMethod=null）
         var eventIdProp = typeof(DomainEvent).GetProperty(nameof(DomainEvent.EventId));
-        await Assert.That(eventIdProp).IsNotNull();
         await Assert.That(eventIdProp!.CanWrite).IsFalse();
         await Assert.That(eventIdProp.GetSetMethod(nonPublic: true)).IsNull();
 
         var occurredOnProp = typeof(DomainEvent).GetProperty(nameof(DomainEvent.OccurredOn));
-        await Assert.That(occurredOnProp).IsNotNull();
         await Assert.That(occurredOnProp!.CanWrite).IsFalse();
         await Assert.That(occurredOnProp.GetSetMethod(nonPublic: true)).IsNull();
     }

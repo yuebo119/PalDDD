@@ -53,8 +53,14 @@ var outboxMsg = new OutboxMessage
 };
 outboxStore.AddMessage(outboxMsg);
 var pending = await outboxStore.LeasePendingMessagesAsync(10, "aot-sample", TimeSpan.FromMinutes(2), new OutboxOptions().MaxRetryCount, CancellationToken.None).ConfigureAwait(false);
-outboxStore.MarkProcessed(outboxMsg, DateTimeOffset.UtcNow);
+// ITM-265（R40）：MarkProcessed 必须传租约返回的实例——InMemory 租约会创建 successor 对象，
+// 传原始 outboxMsg 会被 IsCurrentLeaseHolder 的引用守卫拒绝（静默 no-op，三方实现同）。
+// 对齐 ECommerce/PalOrmSample 的正确写法（pending[0]）。
+outboxStore.MarkProcessed(pending[0], DateTimeOffset.UtcNow);
 Check("outbox lease + process", pending.Count == 1);
+// 终验（ITM-265）：标记成功后 GetPending 应为空——防止"标记无效但租约计数仍 1"的验证器自欺
+var afterMark = await outboxStore.GetPendingMessagesAsync(10, new OutboxOptions().MaxRetryCount, CancellationToken.None).ConfigureAwait(false);
+Check("outbox marked processed (no pending left)", afterMark.Count == 0);
 
 // ── 4. InMemory Inbox 幂等消费 ──
 var inboxStore = new InMemoryInboxStore();

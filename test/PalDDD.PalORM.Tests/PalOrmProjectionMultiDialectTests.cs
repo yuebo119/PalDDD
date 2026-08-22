@@ -28,7 +28,6 @@ public class PalOrmProjectionMultiDialectTests
             var store = new PalOrmProjectionCheckpointStore<TProvider>(ts.Session);
             var now = DateTimeOffset.UtcNow;
             var cp = await store.TryStartAsync("proj", "src", "pos", now, TimeSpan.FromMinutes(5), default);
-            await Assert.That(cp).IsNotNull();
             await Assert.That(cp!.Status).IsEqualTo(ProjectionCheckpointStatus.Processing);
             await Assert.That(cp.Revision).IsEqualTo(1L);
             // ITM-245：时间戳往返守护网——lease_until 物化读回与写入值（now+5min）绝对差值须在窗口内
@@ -122,7 +121,6 @@ public class PalOrmProjectionMultiDialectTests
             var later = now + TimeSpan.FromSeconds(2);
             var reclaimed = await store.TryStartAsync("proj", "src", "pos", later, TimeSpan.FromMinutes(5), default);
 
-            await Assert.That(reclaimed).IsNotNull();
             await Assert.That(reclaimed!.Revision).IsEqualTo(2L);
         }
     }

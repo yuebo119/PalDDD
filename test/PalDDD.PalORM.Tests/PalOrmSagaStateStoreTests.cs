@@ -88,7 +88,6 @@ public class PalOrmSagaStateStoreTests
         await uow.CommitAsync();
 
         var loaded = await store.GetByIdAsync(state.SagaId, default);
-        await Assert.That(loaded).IsNotNull();
         await Assert.That(loaded!.CustomerId).IsEqualTo("tx-commit");
     }
 

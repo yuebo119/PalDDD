@@ -35,7 +35,6 @@ public class PalOrmIdempotencyMultiDialectTests
             await store.MarkCompletedAsync(record!, payload, completedAt, default);
 
             var gotten = await store.GetAsync("op", "key", now.AddSeconds(2), default);
-            await Assert.That(gotten).IsNotNull();
             await Assert.That(gotten!.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
             await Assert.That(gotten.ResponsePayload.HasValue).IsTrue();
             // ITM-245：时间戳往返守护网——updated_at 物化读回与写入时刻绝对差值须在窗口内
@@ -73,7 +72,6 @@ public class PalOrmIdempotencyMultiDialectTests
 
             // 回放路径：GetAsync 返回 Completed 记录 + 缓存响应（幂等回放语义不变）
             var replayed = await store.GetAsync("op", "key", now.AddSeconds(2), default);
-            await Assert.That(replayed).IsNotNull();
             await Assert.That(replayed!.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
             await Assert.That(replayed.ResponsePayload.HasValue).IsTrue();
         }

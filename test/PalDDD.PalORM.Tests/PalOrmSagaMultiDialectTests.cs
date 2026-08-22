@@ -75,7 +75,6 @@ public class PalOrmSagaMultiDialectTests
             await store.SaveChangesAsync(state, default);
             var loaded = await store.GetByIdAsync(state.SagaId, default);
 
-            await Assert.That(loaded).IsNotNull();
             // jsonTypeInfo 注入路径：CustomerId 从 saga_data JSON 反序列化恢复（fail-fast 契约下必持久化）
             await Assert.That(loaded!.CustomerId).IsEqualTo("cust-1");
             await Assert.That(loaded.CurrentState).IsEqualTo("Started");
@@ -177,7 +176,6 @@ public class PalOrmSagaMultiDialectTests
             await store.SaveChangesAsync(state, default);
             var loaded = await store.GetByIdAsync(state.SagaId, default);
 
-            await Assert.That(loaded).IsNotNull();
             // jsonTypeInfo 非 null 路径：CustomerId 从 saga_data JSON 反序列化恢复
             await Assert.That(loaded!.CustomerId).IsEqualTo("cust-json-42");
             await Assert.That(loaded.SagaId).IsEqualTo(state.SagaId);

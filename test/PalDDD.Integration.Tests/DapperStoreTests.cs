@@ -747,7 +747,6 @@ public sealed class DapperStoreTests
         await store.SaveChangesAsync(state, cancellationToken);
 
         var loaded = await store.GetByIdAsync(state.SagaId, cancellationToken);
-        await Assert.That(loaded).IsNotNull();
         await Assert.That(loaded!.CustomerId).IsEqualTo("customer-001");
         await Assert.That(loaded.StepStartedAt["ReservePayment"]).IsEqualTo(state.CreatedAt.AddSeconds(1));
         await Assert.That(loaded.ExecutedStepKeys).Count().IsEqualTo(1);

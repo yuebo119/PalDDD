@@ -51,7 +51,7 @@ public sealed class OutboxSqliteConcurrencyTests
     [Test]
     public async Task MarkProcessed_TransactionCommits_PersistsAcrossContexts(CancellationToken cancellationToken)
     {
-        // 生产 Lease 在 SQLite provider 下不可翻译（见 LeasePending_SequentialWorkers 的 Skip 说明）——
+        // 历史（ITM-261 已修复，原"见 Skip 说明"勘正）——
         // 租约改直接种子建立；本测试聚焦 MarkProcessed 持久化语义（其 fencing 用 == 相等比较，可翻译）
         var messageId = PalUlid.New();
         await SeedMessageAsync(messageId, "orders.created.v1",
@@ -105,7 +105,7 @@ public sealed class OutboxSqliteConcurrencyTests
         // 三十四轮 ITM-210 租约 token 回归：worker-1 持租后租约被重租（同 owner 复用场景，
         // locked_until 更晚 = 新 token），旧 worker 的终态写必须影响 0 行——原 owner 守卫的
         // "LockedBy 相同即放行"分支会让旧写覆盖新租约状态
-        // 租约直接种子建立（生产 Lease 不可翻译，见 LeasePending_SequentialWorkers 的 Skip 说明）
+        // 租约直接种子建立（ITM-261 修复前的历史形态保留：终态写仍走生产路径，见类尾注释勘正）
         var messageId = PalUlid.New();
         await SeedMessageAsync(messageId, "orders.created.v1",
             lockedBy: "worker-1", lockedUntil: DateTimeOffset.UtcNow.AddMinutes(2));
@@ -137,7 +137,7 @@ public sealed class OutboxSqliteConcurrencyTests
         // 三十四轮 ITM-210 租约 token 回归：租约被释放（locked_by/until 置 NULL，
         // 如他路径 RequeueDead/ReleaseForRetry），旧 worker 的终态写必须被拒——
         // 原 "LockedBy IS NULL OR ..." 守卫的 NULL 放行分支正是 fencing 缺口
-        // 租约直接种子建立（生产 Lease 不可翻译，见 LeasePending_SequentialWorkers 的 Skip 说明）
+        // 租约直接种子建立（ITM-261 修复前的历史形态保留：终态写仍走生产路径，见类尾注释勘正）
         var messageId = PalUlid.New();
         await SeedMessageAsync(messageId, "orders.created.v1",
             lockedBy: "worker-1", lockedUntil: DateTimeOffset.UtcNow.AddMinutes(2));
@@ -187,14 +187,13 @@ public sealed class OutboxSqliteConcurrencyTests
     // ITM-252（F10/F11 修复）：此处曾本地重写 LeasePendingMessagesAsync（时间过滤移到
     // ToListAsync 之后的内存过滤）——5 个测试（含 3 个 ITM-210 fencing 回归）的 Lease 端
     // 测的是重写版，生产 EF Lease 零覆盖。重写已删除：本类仅继承生产抽象类
-    // SqliteOutboxDbContext（其 LeasePendingMessagesAsync 在 SQL 内做时间过滤翻译），
-    // 租约/终态写全部走生产实现路径，时钟用生产默认 TimeProvider.System。
+    // SqliteOutboxDbContext，租约/终态写全部走生产实现路径，时钟用生产默认 TimeProvider.System。
     //
-    // ⚠️ 删除重写后暴露生产缺陷（已探针实证，见 LeasePending_SequentialWorkers 的 Skip 说明）：
-    // 生产 GetPendingMessagesAsync/LeasePendingMessagesAsync 的 "DateTimeOffset <= now" 过滤在
-    // EF Core 11 preview7 SQLite provider 下不可翻译（== 可译、<= 全组合抛异常）——SQLite 真库
-    // 调用即崩。处置：Lease 互斥行为测试 Skip（缺陷固化，等 src 修复）；MarkProcessed/
-    // ReleaseForRetry/fencing 回归改为直接种子租约字段，继续走生产终态写路径。
+    // ITM-261（R40 主线程修复，历史勘正——原"缺陷固化 Skip 等 src 修复"描述已过时）：
+    // 删除重写后曾暴露生产 GetPending/Lease 的 "DateTimeOffset <= now" 在 EF Core 11 preview7
+    // SQLite provider 下不可翻译（== 可译、<= 与 ORDER BY 均抛）。src 侧已改为分页物化 + 内存
+    // 时间过滤 + OrderBy(Id)（ULID 字典序=创建序）——Lease 互斥测试已恢复直调生产路径（无 Skip）；
+    // MarkProcessed/ReleaseForRetry/fencing 回归保留直接种子租约字段形态（终态写仍走生产路径）。
     private sealed class TestSqliteOutboxDbContext(DbContextOptions<TestSqliteOutboxDbContext> options)
         : SqliteOutboxDbContext(options);
 }

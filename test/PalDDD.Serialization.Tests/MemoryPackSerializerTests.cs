@@ -61,7 +61,6 @@ public sealed class MemoryPackSerializerTests
 
         await Assert.That(result).IsNotNull();
         var typed = result as MemoryPackTestMessage;
-        await Assert.That(typed).IsNotNull();
         await Assert.That(typed!.Id).IsEqualTo(original.Id);
         await Assert.That(typed.Count).IsEqualTo(original.Count);
     }
@@ -214,7 +213,6 @@ public sealed class MemoryPackSerializerTests
 
         await Assert.That(result).IsNotNull();
         var typed = result as MemoryPackValueMessage;
-        await Assert.That(typed).IsNotNull();
         await Assert.That(typed!.Sequence).IsEqualTo(original.Sequence);
         await Assert.That(typed.Timestamp).IsEqualTo(original.Timestamp);
     }
