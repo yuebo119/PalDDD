@@ -37,8 +37,8 @@ outbox.AddMessage(msg);
 Console.WriteLine($"[OK] Outbox.AddMessage: Id={msg.Id}, Status={msg.Status}");
 
 // 步骤 2：租约获取——处理管线的标准路径（ITM-269：GetPendingMessagesAsync 按 IPalOutboxStore
-// 契约"仅用于观测/健康检查，不获取租约"——R40 及之前样本把 GetPending 结果当处理管线基础，
-// 该写法仅 PalORM 实现放行（owner-null 直标分支），复制到 InMemory/Dapper 会静默 no-op）
+// 契约"仅用于观测/健康检查，不获取租约"。owner-null 直标分支仅 PalORM/Dapper 放行（ITM-272
+// 勘正阵营），InMemory 引用守卫静默 no-op——处理管线一律走 Lease 路径）
 var leased = await outbox.LeasePendingMessagesAsync(batchSize: 10, owner: "palorm-sample", leaseDuration: TimeSpan.FromMinutes(2), maxRetryCount: 5, ct: default);
 if (leased.Count != 1) throw new InvalidOperationException($"Expected 1 leased, got {leased.Count}");
 Console.WriteLine($"[OK] Outbox.Lease: Count={leased.Count}, Owner={leased[0].LockedBy}");

@@ -38,7 +38,9 @@ public sealed class OutboxProcessorTests
         await Task.Delay(250, cancellationToken);
         await processor.StopAsync(cancellationToken);
 
-        await Assert.That(store.LeaseCallCount >= 3).IsTrue();
+        // ITM-278（R43）：250ms/50ms 理论 4-5 次，高载并行下可能仅 2 次——对齐 SagaProcessorTests
+        // 九轮的同型放宽（其注释在案），阈值降为 >=2 消除 CI 假红窗口
+        await Assert.That(store.LeaseCallCount >= 2).IsTrue();
     }
 
     [Test]
@@ -99,7 +101,8 @@ public sealed class OutboxProcessorTests
         await Task.Delay(200, cancellationToken);
         await processor.StopAsync(cancellationToken);
 
-        await Assert.That(store.LeaseCallCount >= 3).IsTrue();
+        // ITM-278：200ms/40ms 余量 2 倍稍紧——同型对齐放宽
+        await Assert.That(store.LeaseCallCount >= 2).IsTrue();
         await Assert.That(store.MarkProcessedCount).IsEqualTo(0);
     }
 

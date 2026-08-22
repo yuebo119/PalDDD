@@ -162,4 +162,22 @@ public class PalOrmIdempotencyStoreTests
         await Assert.That(gotten.UpdatedAt.Offset).IsEqualTo(TimeSpan.Zero);
         await Assert.That(gotten.UpdatedAt.UtcDateTime).IsEqualTo(updatedAtUtc);
     }
+
+    /// <summary>ITM-277（R43）：空响应体的 Completed 记录（落库空 bytea 而非 NULL）读回
+    /// ResponsePayload 应为非 null 空序列——修复前 Length>0 守卫使其读回 null，
+    /// 幂等命中方以 null 判"无可复用响应"会重放副作用。</summary>
+    [Test]
+    public async Task GetAsync_EmptyResponsePayload_CompletedRoundTripsAsNonNullEmpty()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteIdempotencyStore(session);
+        var now = DateTimeOffset.UtcNow;
+        await session.ExecuteAsync(
+            $"INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload) VALUES ({"op-empty"}, {"key-empty"}, {(int)IdempotencyRecordStatus.Completed}, {now}, {now.AddHours(1)}, {now}, {Array.Empty<byte>()})", default);
+
+        var gotten = await store.GetAsync("op-empty", "key-empty", now.AddMinutes(1), default);
+
+        await Assert.That(gotten!.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
+        await Assert.That(gotten.ResponsePayload!.Value.Length).IsEqualTo(0);
+    }
 }
