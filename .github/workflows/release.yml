@@ -1,0 +1,133 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (must match Directory.Build.props)'
+        required: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '11.0.x'
+
+      - name: Verify version matches Directory.Build.props
+        run: |
+          PROPS_VERSION=$(grep -oP '<VersionPrefix>\K[^<]+' Directory.Build.props)
+          TAG_VERSION="${{ steps.version.outputs.version }}"
+          if [ "$PROPS_VERSION" != "$TAG_VERSION" ]; then
+            echo "ERROR: Version mismatch — Directory.Build.props=$PROPS_VERSION, tag/input=$TAG_VERSION"
+            exit 1
+          fi
+          echo "Version match: $PROPS_VERSION"
+
+      - name: Restore
+        run: dotnet restore PalDDD.slnx
+
+      - name: Build (warnings as errors)
+        run: dotnet build PalDDD.slnx -c Release --no-restore -warnaserror
+
+      - name: Unit + Integration tests
+        run: |
+          set -euo pipefail
+          for proj in $(find test -name "*.Tests.csproj" ! -path "*/obj/*" ! -path "*/bin/*" | sort); do
+            echo "== Testing: $proj =="
+            dotnet test "$proj" --no-build -c Release --nologo
+          done
+
+      - name: AOT publish verification
+        run: |
+          set -euo pipefail
+          dotnet publish samples/PalDDD.PalOrmSample/PalDDD.PalOrmSample.csproj \
+            -c Release -r linux-x64 --self-contained \
+            /p:PublishAot=true /p:PublishDir=bin/aot-publish \
+            --nologo
+          echo "AOT publish: PASSED"
+
+      - name: Run AOT-published binary
+        run: |
+          set -euo pipefail
+          ./samples/PalDDD.PalOrmSample/bin/aot-publish/PalDDD.PalOrmSample
+          echo "AOT run: PASSED"
+
+      - name: Pack all publishable projects
+        run: |
+          set -euo pipefail
+          mkdir -p release-packages
+          for dir in src/*/; do
+            proj=$(basename "$dir")
+            csproj="src/$proj/$proj.csproj"
+            if [ -f "$csproj" ]; then
+              dotnet pack "$csproj" -c Release --no-build -o release-packages --nologo
+            fi
+          done
+
+      - name: Verify package count
+        run: |
+          COUNT=$(ls release-packages/*.nupkg | wc -l)
+          EXPECTED=25
+          if [ "$COUNT" -ne "$EXPECTED" ]; then
+            echo "ERROR: Package count mismatch — expected $EXPECTED, got $COUNT"
+            ls release-packages/
+            exit 1
+          fi
+          echo "Package count: $COUNT (expected $EXPECTED)"
+
+      - name: Push to NuGet.org
+        if: ${{ env.NUGET_API_KEY != '' }}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          set -euo pipefail
+          for nupkg in release-packages/*.nupkg; do
+            echo "Pushing: $(basename $nupkg)"
+            dotnet nuget push "$nupkg" \
+              --api-key "$NUGET_API_KEY" \
+              --source https://api.nuget.org/v3/index.json \
+              --skip-duplicate
+          done
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: CHANGELOG.md
+          files: release-packages/*.nupkg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
