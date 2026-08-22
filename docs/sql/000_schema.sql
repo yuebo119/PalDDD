@@ -11,7 +11,7 @@
 CREATE TABLE outbox_messages (
     id              TEXT    PRIMARY KEY,   -- Ulid 26 字符（代码侧始终显式提供，非自增）；MySQL: CHAR(26)
     type            TEXT    NOT NULL,
-    payload         BLOB    NOT NULL,  -- 代码侧 byte[]；PG: BYTEA / MySQL: MEDIUMBLOB / SQLite: BLOB
+    payload         BLOB    NOT NULL,  -- 代码侧 byte[]；PG: BYTEA / MySQL: LONGBLOB / SQLite: BLOB
     content_type    TEXT    NOT NULL DEFAULT 'application/json',
     schema_version  INTEGER NOT NULL DEFAULT 1,
     status          INT     NOT NULL DEFAULT 0,           -- OutboxStatus: Pending=0 | Processed=1 | Dead=2
@@ -98,7 +98,7 @@ CREATE TABLE idempotency_records (
     locked_until      TIMESTAMP NOT NULL,
     expires_at        TIMESTAMP NOT NULL,
     updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    response_payload  TEXT,                         -- 成功响应快照（Base64 for PalORM）
+    response_payload  BLOB,                          -- 成功响应快照（代码侧 byte[]；PG: BYTEA / MySQL: LONGBLOB / SQLite: BLOB）
     error             TEXT,
     PRIMARY KEY (operation_name, idempotency_key)
 );

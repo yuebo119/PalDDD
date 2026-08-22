@@ -84,7 +84,7 @@ CREATE TABLE idempotency_records (
     locked_until      TEXT NOT NULL,
     expires_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
-    response_payload  TEXT,
+    response_payload  BLOB,
     error             TEXT,
     PRIMARY KEY (operation_name, idempotency_key)
 );

@@ -2,7 +2,7 @@
 CREATE TABLE outbox_messages (
     id              CHAR(26) PRIMARY KEY,  -- Ulid 26 字符（代码侧始终显式提供，非自增）
     type            TEXT NOT NULL,
-    payload         MEDIUMBLOB NOT NULL,
+    payload         LONGBLOB NOT NULL,
     content_type    VARCHAR(255) NOT NULL DEFAULT 'application/json',
     schema_version  INT NOT NULL DEFAULT 1,
     status          INT NOT NULL DEFAULT 0,
@@ -58,8 +58,8 @@ CREATE TABLE events (
     stream_version  BIGINT NOT NULL,
     schema_version  INT NOT NULL DEFAULT 1,
     content_type    VARCHAR(255) NOT NULL DEFAULT 'application/json',
-    payload         MEDIUMBLOB NOT NULL,
-    metadata        MEDIUMBLOB,
+    payload         LONGBLOB NOT NULL,
+    metadata        LONGBLOB,
     recorded_at     DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     actor_id        VARCHAR(255),
     reason          VARCHAR(2048),  -- 三十七轮 C2：对齐 EFCore MaxLength(2048)
@@ -81,7 +81,7 @@ CREATE TABLE idempotency_records (
     locked_until      DATETIME(6) NOT NULL,
     expires_at        DATETIME(6) NOT NULL,
     updated_at        DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    response_payload  TEXT,
+    response_payload  LONGBLOB,
     error             TEXT,
     PRIMARY KEY (operation_name, idempotency_key),
     INDEX idx_idempotency_expires (expires_at)

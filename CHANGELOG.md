@@ -14,6 +14,10 @@
 
 - **Dapper 栈 outbox/inbox status 列从字符串改为 INT**：`OutboxStatus` Pending=0/Processed=1/Dead=2、`InboxStatus` Pending=0/Processing=1/Processed=2/Failed=3——对齐 Saga/Checkpoint/Idempotency 三表既定 int 语义与 PalORM/EFCore 映射，五表状态列自此全部 INT，docs/sql DDL 一套三栈通用。**存量 ≤1.1.0 数据库需执行迁移脚本**（`docs/sql/migration-status-to-int.md`：先停写 → CASE 数据转换 → 改列类型 → 升级应用）；新部署直接用现行 DDL。技术可行性经 Dapper.AOT 1.0.52 探针实证（经典反射/AOT 拦截 × INT 列→枚举 读/写/参数化 7/7 断言 + 生成代码 `GetFieldValue<enum>` 直接证据）
 
+### ⚠️ 破坏性变更（PalORM 栈 payload 列原生化，2026-08-22）
+
+- **PalORM 适配器移除 `ByteArrayBase64Converter`，payload 系列列改原生二进制**（随 PalORM 5.3 ADR-G）：`outbox_messages.payload`、`events.payload`、`events.metadata`、`idempotency_records.response_payload` 四列从 Base64 TEXT 统一为原生二进制列（PG `BYTEA` / MySQL `LONGBLOB` / SQLite `BLOB`）——与 Dapper/EFCore 栈及 docs/sql DDL 完全一致，三栈 payload 列契约归一（省 33% 体积、免双向编解码、消除 85KB 档 LOH 分配；PalORM ADR-G 基准：64KB 档 2.3× 延迟/6.3× 分配差异）。**公共类型 `ByteArrayBase64Converter` 移除**（PalORM 适配器不在 12 核心程序集快照口径内，快照无变化）。**存量 PalORM 栈库需执行反向迁移**（`docs/sql/migration-payload-to-blob.md`：PG `decode` / MySQL `FROM_BASE64` 三步法 / SQLite 应用侧解码回填）；Dapper/EFCore 栈与新部署零动作。验证：真库探针 10/10（PG/MySQL × Outbox/EventLog payload+metadata/幂等 response_payload，含 0x00 字节全链路往返，临时库实测）+ 全量测试与基线逐项一致零回归 + PalOrmSample AOT 冒烟
+
 ### 依赖升级（2026-08-22 全量更新）
 
 - **PalORM 全家 5.2.0→5.3.0**（Core/SourceGen/PostgreSql/MySql/Sqlite）：上游 byte[] 二进制列原生支持（ADR-G：白名单收窄放行 Byte 一维数组 + 三方言 BYTEA/BLOB/LONGBLOB DDL + DbType.Binary 显式绑定 + 等值谓词含 0x00 + Scaffold 反向工程闭环），**无破坏性变更**（纯放宽）——PalDDD 适配器的 `ByteArrayBase64Converter` 路径保留、存量 TEXT 列不受影响；真库验证 PalORM 5.3.0 Integration 181/181（PG COPY/MySQL 往返含 0x00 字节，专用临时库实测）

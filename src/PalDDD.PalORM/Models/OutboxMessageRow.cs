@@ -16,7 +16,7 @@ namespace PalDDD.PalORM.Models;
 /// <item>枚举存储：统一 int（<see cref="OutboxStatus"/> → int），替代 Dapper 的 string 字面量。破坏性变更，配套 migration.md。</item>
 /// <item>主键：Id 为 Ulid（构造时 <see cref="Ulid.New()"/> 赋值），<see cref="KeyAttribute"/>(<c>AutoIncrement=false</c>) 显式声明应用层赋值（PALORM022）。</item>
 /// <item>乐观锁：<see cref="RetryCount"/> 标 <see cref="ConcurrencyCheckAttribute"/>，替代 Dapper 手写 WHERE retry_count=@v（声明式，由 PalORM 自动生成并发谓词）。</item>
-/// <item>Payload：byte[] 经 <see cref="ByteArrayBase64Converter"/> 转 Base64 string 存储（PALORM016 拒绝 byte[]，必须转换）。</item>
+/// <item>Payload：byte[] 原生二进制列（PalORM ≥5.3 ADR-G 白名单放行，DbType.Binary 显式绑定）——与 Dapper/EFCore 栈及 docs/sql DDL（BLOB/BYTEA/LONGBLOB）完全一致，三栈 payload 列契约统一。</item>
 /// </list>
 /// </para>
 /// <para>
@@ -41,11 +41,10 @@ public sealed partial class OutboxMessageRow
     [Column("type")]
     public string Type { get; set; } = "";
 
-    /// <summary>消息负载（二进制 → Base64 string 存储）。</summary>
+    /// <summary>消息负载（原生二进制列：BLOB/BYTEA/LONGBLOB）。</summary>
     [SuppressMessage("Performance", "CA1819:Properties should not return arrays",
         Justification = "PalORM Row DTO 持久化边界；Payload 是 Outbox 的不可变二进制负载，与领域类型 OutboxMessage.Payload 保持一致。")]
     [Column("payload")]
-    [Converter(typeof(ByteArrayBase64Converter))]
     public byte[] Payload { get; set; } = [];
 
     /// <summary>Content-Type（默认 application/json）。</summary>

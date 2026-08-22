@@ -178,16 +178,19 @@ UPDATE inbox_messages SET status = CASE status
 END;
 ```
 
-### 6.3 Payload 列（BLOB → Base64 TEXT）
+### 6.3 Payload 列（Base64 TEXT → 原生二进制，仅存量 PalORM 库需要）
 
-PalORM 的 `byte[]` 经 `[Converter(typeof(ByteArrayBase64Converter))]` 转 Base64 string 存储。原 Dapper 的 BLOB 列需要转 Base64：
+> **2026-08-22 反向迁移**：随 PalORM 5.3（ADR-G 原生 byte[] 支持）升级，PalORM 适配器已移除
+> `ByteArrayBase64Converter`——payload 系列列与 Dapper/EFCore 栈及 docs/sql DDL 统一为原生
+> 二进制列（PG `BYTEA` / MySQL `LONGBLOB` / SQLite `BLOB`）。本节原方向（BLOB → Base64 TEXT）
+> 作废；**新部署直接使用现行 docs/sql DDL，无需任何转换**。
+
+存量 PalORM 库（Base64 TEXT 列）按 [`docs/sql/migration-payload-to-blob.md`](sql/migration-payload-to-blob.md)
+反向迁移（PG `decode` / MySQL `FROM_BASE64` 三步法 / SQLite 应用侧解码回填）：
 
 ```sql
--- PostgreSQL
-ALTER TABLE outbox_messages ALTER COLUMN payload TYPE TEXT USING encode(payload, 'base64');
--- MySQL
-ALTER TABLE outbox_messages MODIFY COLUMN payload TEXT;
--- SQLite（需新建表 + 数据迁移，SQLite 不支持 ALTER COLUMN TYPE）
+-- PostgreSQL 示例（完整脚本见 migration-payload-to-blob.md）
+ALTER TABLE outbox_messages ALTER COLUMN payload TYPE BYTEA USING decode(payload, 'base64');
 ```
 
 ---
@@ -197,7 +200,7 @@ ALTER TABLE outbox_messages MODIFY COLUMN payload TEXT;
 ### 已知限制（PalORM 当前版本）
 
 - **复合主键**：PALORM019 拒绝（Projection/Idempotency 走手写 SQL）
-- **`byte[]` 不在白名单**：PALORM016，必须 `[Converter]` 转 Base64
+- **`byte[]` 白名单（≥5.3 已放行）**：一维 Byte 数组原生二进制列（ADR-G，DbType.Binary 显式绑定）；`int[]`/`string[]`/多维数组仍被 PALORM016 拒绝
 - **`[ConcurrencyCheck]` 仅 int/long**：PALORM012，DateTimeOffset 时间戳乐观锁不可用
 - **多映射 `Query<T1, T2>`**：不支持（用 QueryBuilder JOIN 或手写 DTO）
 - **动态表名**：不支持（表名编译期固化）
@@ -215,7 +218,7 @@ ALTER TABLE outbox_messages MODIFY COLUMN payload TEXT;
 
 ### 源码
 
-- `src/PalDDD.PalORM/` — 核心层（7 Store + UnitOfWork + 3 Row DTO + 2 Converter）
+- `src/PalDDD.PalORM/` — 核心层（7 Store + UnitOfWork + 3 Row DTO + 1 Converter：UlidStringConverter；ByteArrayBase64Converter 已随 PalORM 5.3 原生 byte[] 支持移除）
 - `src/PalDDD.PalORM.Sqlite/` — SQLite 方言包（7 中间固化类 + DI 扩展）
 - `src/PalDDD.PalORM.PostgreSql/` — PostgreSQL 方言包（同构，RETURNING + Binary COPY）
 - `src/PalDDD.PalORM.MySql/` — MySQL 方言包（同构，无 RETURNING + local_infile 自适应 BulkInsert）

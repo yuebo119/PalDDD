@@ -12,15 +12,15 @@ using PalDDD.Transactions;
 using PalORM;
 using PalORM.Sqlite;
 
-// 步骤 1：建表（手工 DDL，与 PalORM.Tests/MultiDialectSchema.cs 一致：枚举列存 int、payload TEXT。
-// 注意：Dapper 栈的 docs/sql DDL 用字符串枚举/BLOB——两栈 DDL 不兼容，迁移见 docs/palorm-adapter.md §6）
+// 步骤 1：建表（手工 DDL，与 PalORM.Tests/MultiDialectSchema.cs 一致：枚举列存 int、payload BLOB 原生二进制。
+// 注意：payload 系列列与 Dapper 栈的 docs/sql DDL 同为二进制列（2026-08-22 随 PalORM 5.3 统一））
 const string DbPath = "palddd-palorm-sample.db";
 if (File.Exists(DbPath)) File.Delete(DbPath);
 
 await using var db = await DataSession<SqliteProvider>.CreateAsync(
     DbOptions.Development($"Data Source={DbPath}"));
 
-await db.ExecuteAsync($"CREATE TABLE outbox_messages (id TEXT PRIMARY KEY, type TEXT NOT NULL, payload TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT 'application/json', schema_version INTEGER NOT NULL DEFAULT 1, status INTEGER NOT NULL DEFAULT 0, retry_count INTEGER NOT NULL DEFAULT 0, error TEXT, created_at TEXT NOT NULL, processed_at TEXT, next_attempt_at TEXT, locked_by TEXT, locked_until TEXT, correlation_id TEXT, causation_id TEXT, trace_parent TEXT, trace_state TEXT)");
+await db.ExecuteAsync($"CREATE TABLE outbox_messages (id TEXT PRIMARY KEY, type TEXT NOT NULL, payload BLOB NOT NULL, content_type TEXT NOT NULL DEFAULT 'application/json', schema_version INTEGER NOT NULL DEFAULT 1, status INTEGER NOT NULL DEFAULT 0, retry_count INTEGER NOT NULL DEFAULT 0, error TEXT, created_at TEXT NOT NULL, processed_at TEXT, next_attempt_at TEXT, locked_by TEXT, locked_until TEXT, correlation_id TEXT, causation_id TEXT, trace_parent TEXT, trace_state TEXT)");
 
 // 步骤 2：Outbox CRUD
 var outbox = new SqliteOutboxStore(db);

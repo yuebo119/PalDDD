@@ -222,7 +222,7 @@
 | # | 踩坑 | 根因 | 修复 | 状态 |
 |---|------|------|------|:---:|
 | PALORM-SG1 | PalORM.SourceGen analyzer 不触发 Row DTO 生成 | Provider 包用 `exclude="Build,Analyzers"` 引用 Core，不传递 SourceGen | 消费项目显式 `<PackageReference Include="PalORM.SourceGen">` | ✅ |
-| PALORM-SG2 | `byte[]` 属性被 PALORM016 拒绝 | byte[] 不在白名单（IArrayTypeSymbol 拒绝） | `[Converter(typeof(ByteArrayBase64Converter))]` 转 Base64 string | ✅ |
+| PALORM-SG2 | `byte[]` 属性被 PALORM016 拒绝 | byte[] 不在白名单（IArrayTypeSymbol 拒绝） | ≤PalORM 5.2：`[Converter]` 转 Base64 string；≥5.3：原生 byte[] 直用（ADR-G，本仓已移除 Converter，2026-08-22） | ✅ |
 | PALORM-SG3 | `[ConcurrencyCheck]` DateTimeOffset 属性被 PALORM012 拒绝 | 源生成器 emit `++` 自增，仅支持 int/long | Inbox 改用 `Attempts`（int 计数器）替代 `ProcessingStartedAt`（DateTimeOffset） | ✅ |
 | PALORM-SG4 | 复合主键实体被 PALORM019 拒绝 | 源生成器 BindDelete 单 key 语义无法表达 | Projection/Idempotency 不注册实体，全程 `GetRawConnection()` + `DbDataReader` 手动映射 | ✅ |
 | PALORM-SG5 | `[Key]` 非 int/long 属性 PALORM022 报错 | Ulid 主键不支持自增回填 | `[Key(AutoIncrement = false)]` 显式声明应用层赋值 | ✅ |
