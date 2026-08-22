@@ -86,6 +86,9 @@ public class OutboxThroughputBenchmarks
     public async ValueTask<int> GetPending_Batch100()
     {
         var msgs = await _store.GetPendingMessagesAsync(BatchSize, 10, default);
+        // P3-TST-602（R45）：满额守卫——对齐 EnsureFullLease 先例（种子不变量破坏时
+        // 静默以失真小结果集稀释 ns/op，正是 ITM-246 修前的失效形态）
+        if (msgs.Count != BatchSize) throw new InvalidOperationException($"GetPending returned {msgs.Count}, expected {BatchSize}");
         return msgs.Count;
     }
 

@@ -178,7 +178,7 @@ public static class PostgreSqlReadWriteRouterExtensions
                     // 轮询（含写主库），读流量负载均衡到 write master，读写分离稀释、主库
                     // 连接池承压。read-only 意指"会话默认不接受读写事务"（Npgsql 10.0.3
                     // 实证：hot standby 副本满足，主库不满足）——读流量优先副本，
-                    // 主库仅当所有副本不可达时 fallback（Npgsql 多主机顺序尝试语义）。
+                    // 全部副本不可达时连接失败（Npgsql read-only target_session_attrs 为过滤语义：不满足 read-only 的主库被跳过、不参与 fallback——P3-SRC-604 勘正原"回退主库"失实描述）。
                     // ⚠️ 连接串值必须是连字符 "read-only"（NpgsqlConnectionStringBuilder
                     // 实证：readonly/read_only 抛 ArgumentException）。
                     psb.TargetSessionAttributes = "read-only";

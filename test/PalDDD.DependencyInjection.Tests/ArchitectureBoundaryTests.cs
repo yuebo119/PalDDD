@@ -2,6 +2,15 @@ using System.Text.RegularExpressions;
 
 namespace PalDDD.DependencyInjection.Tests;
 
+/// <summary>P3-SRC-601（R45）：构建产物排除 helper——全部 *.cs 目录扫描统一走此过滤，
+/// 消除"仅因 obj 生成文件恰无关键字子串交集才不爆"的巧合式安全（GlobalUsings.g.cs 含 HttpClient）。</summary>
+internal static class BuildArtifactFilter
+{
+    public static bool IsNotBuildArtifact(string file) =>
+        !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") &&
+        !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}");
+}
+
 public sealed class ArchitectureBoundaryTests
 {
     private static readonly string Root = FindRepositoryRoot();
@@ -32,7 +41,7 @@ public sealed class ArchitectureBoundaryTests
         var srcCsprojs = Directory.EnumerateFiles(
             Path.Combine(Root, "src"),
             "*.csproj",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
 
         var violations = new List<string>();
         foreach (var csprojPath in srcCsprojs)
@@ -60,7 +69,7 @@ public sealed class ArchitectureBoundaryTests
         var cqrsFiles = Directory.EnumerateFiles(
             Path.Combine(Root, "src", "PalDDD.CQRS"),
             "*.cs",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
 
         foreach (var file in cqrsFiles)
         {
@@ -111,7 +120,7 @@ public sealed class ArchitectureBoundaryTests
         var coreFiles = Directory.EnumerateFiles(
             Path.Combine(Root, "src", "PalDDD.Core"),
             "*.cs",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
 
         foreach (var file in coreFiles)
         {
@@ -127,7 +136,7 @@ public sealed class ArchitectureBoundaryTests
         var files = Directory.EnumerateFiles(
             Path.Combine(Root, "src", "PalDDD.Serialization.Evolution"),
             "*.cs",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
 
         foreach (var file in files)
         {
@@ -159,11 +168,11 @@ public sealed class ArchitectureBoundaryTests
         var coreFiles = Directory.EnumerateFiles(
             Path.Combine(Root, "src", "PalDDD.Core"),
             "*.cs",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
         var hostingFiles = Directory.EnumerateFiles(
             Path.Combine(Root, "src", "PalDDD.Hosting.AspNetCore"),
             "*.cs",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
 
         foreach (var file in coreFiles.Concat(hostingFiles))
         {
@@ -261,7 +270,7 @@ public sealed class ArchitectureBoundaryTests
         var csprojFiles = Directory.EnumerateFiles(
             Path.Combine(Root, "src"),
             "*.csproj",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
 
         var checkedProjects = 0;
         foreach (var csprojPath in csprojFiles)
@@ -290,7 +299,7 @@ public sealed class ArchitectureBoundaryTests
         var files = Directory.EnumerateFiles(
             Path.Combine(Root, "src", "PalDDD.Hosting.AspNetCore"),
             "*.cs",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
 
         foreach (var file in files)
         {
@@ -409,7 +418,7 @@ public sealed class ArchitectureBoundaryTests
         var files = Directory.EnumerateFiles(
             Path.Combine(Root, directory),
             "*.cs",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
 
         foreach (var file in files)
         {
@@ -441,7 +450,7 @@ public sealed class ArchitectureBoundaryTests
         var files = Directory.EnumerateFiles(
             Path.Combine(Root, directory),
             "*.cs",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
 
         foreach (var file in files)
         {
@@ -482,7 +491,7 @@ public sealed class ArchitectureBoundaryTests
         var files = Directory.EnumerateFiles(
             Path.Combine(Root, directory),
             "*.cs",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
 
         // 禁止的完整命名空间——仅匹配 PalDDD 基础设施实现层命名空间
         // 使用完整形式避免误报：
@@ -539,7 +548,7 @@ public sealed class ArchitectureBoundaryTests
         var files = Directory.EnumerateFiles(
             Path.Combine(Root, "src", "PalDDD.Core"),
             "*.cs",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
 
         // PalDDD.Repository 命名空间已随 IUnitOfWork 合并到 Core（原 PalDDD.Repository 项目已移除）
         var forbidden = new[] { "PalDDD.CQRS", "PalDDD.Messaging", "PalDDD.EventLog",
@@ -593,7 +602,7 @@ public sealed class ArchitectureBoundaryTests
         var testCsprojs = Directory.EnumerateFiles(
             Path.Combine(Root, "test"),
             "*.csproj",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
 
         var violations = new List<string>();
         foreach (var csprojPath in testCsprojs)
@@ -620,7 +629,7 @@ public sealed class ArchitectureBoundaryTests
         var domainTestFiles = Directory.EnumerateFiles(
             Path.Combine(Root, "test", "PalDDD.Core.Tests"),
             "*.cs",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
 
         foreach (var file in domainTestFiles)
         {
@@ -718,7 +727,7 @@ public sealed class ArchitectureBoundaryTests
         var diFiles = Directory.EnumerateFiles(
             Path.Combine(Root, "src", "PalDDD.DependencyInjection"),
             "*.cs",
-            SearchOption.AllDirectories);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
 
         foreach (var file in diFiles)
         {
