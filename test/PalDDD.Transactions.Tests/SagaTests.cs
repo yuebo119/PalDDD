@@ -440,6 +440,27 @@ public class SagaCompensationPolicyTests
         await Assert.That(compensationLog).IsEmpty();
     }
 
+    /// <summary>ITM-282（R44）：Forward 策略多已执行步骤正序锁定——既有 Forward 测试全部
+    /// ≤1 已执行步，"已执行步骤正序 vs 逆序"回归不可见（Backward 有 3 步锁定，不对称）。</summary>
+    [Test]
+    public async Task ForwardPolicy_MultipleExecutedSteps_CompensatesInForwardOrder()
+    {
+        var compensationLog = new List<string>();
+        var saga = new TwoExecutedThenFailingSaga(CompensationPolicy.Forward, compensationLog);
+
+        var state = new TestSagaState { CurrentState = "Start" };
+        state = await saga.ProcessEventAsync(state, new object());
+        state = await saga.ProcessEventAsync(state, new object());
+
+        await Assert.That(async () =>
+            await saga.ProcessEventAsync(state, new object())).Throws<AggregateException>();
+
+        await Assert.That(compensationLog).Count().IsEqualTo(3);
+        await Assert.That(compensationLog[0]).IsEqualTo("compensate:First");
+        await Assert.That(compensationLog[1]).IsEqualTo("compensate:Second");
+        await Assert.That(compensationLog[2]).IsEqualTo("compensate:Failing");
+    }
+
     /// <summary>无补偿处理器的步骤失败时不补偿</summary>
     [Test]
     public async Task FailedStepWithoutCompensation_NotCompensated()
@@ -641,6 +662,28 @@ internal sealed class ExecutedStepWithoutCompensationSaga : Saga<TestSagaState>
 }
 
 /// <summary>已执行步骤后失败 Saga — 验证已执行步骤补偿顺序</summary>
+internal sealed class TwoExecutedThenFailingSaga : Saga<TestSagaState>
+{
+    private readonly List<string> _log;
+
+    public TwoExecutedThenFailingSaga(CompensationPolicy policy, List<string> compensationLog)
+    {
+        CompensationPolicy = policy;
+        MaxRetries = 0;
+        _log = compensationLog;
+
+        When("Start", new SagaStep("First",
+            execute: (s, _, _) => { s.CurrentState = "First"; return ValueTask.FromResult(s); },
+            compensate: (_, _) => { _log.Add("compensate:First"); return ValueTask.CompletedTask; }));
+        When("First", new SagaStep("Second",
+            execute: (s, _, _) => { s.CurrentState = "Second"; return ValueTask.FromResult(s); },
+            compensate: (_, _) => { _log.Add("compensate:Second"); return ValueTask.CompletedTask; }));
+        When("Second", new SagaStep("Failing",
+            execute: (_, _, _) => throw new InvalidOperationException("boom"),
+            compensate: (_, _) => { _log.Add("compensate:Failing"); return ValueTask.CompletedTask; }));
+    }
+}
+
 internal sealed class ExecutedStepThenFailingSaga : Saga<TestSagaState>
 {
     private readonly List<string> _log;

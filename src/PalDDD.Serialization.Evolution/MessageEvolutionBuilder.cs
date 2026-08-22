@@ -39,7 +39,9 @@ public sealed class MessageEvolutionBuilder
         var key = new Key(step.SourceDescriptor.Name, step.SourceDescriptor.SchemaVersion);
         if (!_steps.TryAdd(key, step))
         {
-            throw new InvalidOperationException(
+            // ITM-280（R44）：对齐 MessageEvolutionPipeline 的重复键异常类型——原抛 InvalidOperationException
+            // 使消费者无法单点 catch MessageEvolutionException 覆盖全部注册期错误（Builder 是链式主入口）
+            throw new MessageEvolutionException(
                 $"Message upgrade step '{key.Name}' v{key.SchemaVersion} is already registered.");
         }
 

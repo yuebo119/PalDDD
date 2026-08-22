@@ -64,4 +64,15 @@ public sealed class FakeTimeProviderTimerTests
         await Assert.That(order.ToArray()).IsEquivalentTo([1, 2]);
         await Assert.That(order.ToArray()[0]).IsEqualTo(1);
     }
+
+    /// <summary>ITM-282（R44）：Change 从"恒 false"改为总是抛 NotSupportedException（TST-114）——
+    /// 公共契约行为变更零锁定，本测试防止未来被改回。</summary>
+    [Test]
+    public async Task Change_Always_Throws_NotSupported()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var timer = time.CreateTimer(_ => { }, null, TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan);
+
+        await Assert.That(() => timer.Change(TimeSpan.Zero, Timeout.InfiniteTimeSpan)).Throws<NotSupportedException>();
+    }
 }

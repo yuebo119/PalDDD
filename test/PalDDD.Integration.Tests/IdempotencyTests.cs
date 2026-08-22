@@ -5,6 +5,9 @@ using PalDDD.Testing;
 using System.Diagnostics;
 using System.Text;
 
+// ITM-281（R44）：指标断言测试与同类 emit 同 instrument 的非指标测试互斥——
+// RecordingMeterListener 接收进程级广播，类内并行会互染计数（TST-109 同款根治）
+[TUnit.Core.NotInParallel("idempotency-metrics")]
 public sealed class IdempotencyTests
 {
     [Test]
@@ -142,7 +145,8 @@ public sealed class IdempotencyTests
             Deserialize,
             cancellationToken: cancellationToken);
 
-        await Assert.That(listener.Measurements).Contains(1);
+        // ITM-281（R44）：Contains(1) 弱断言 + 进程级 Meter 广播互染下恒过——改精确计数
+        await Assert.That(listener.Measurements.Count).IsEqualTo(1);
     }
 
     [Test]
@@ -166,7 +170,8 @@ public sealed class IdempotencyTests
             Deserialize,
             cancellationToken: cancellationToken);
 
-        await Assert.That(listener.Measurements).Contains(1);
+        // ITM-281（R44）：Contains(1) 弱断言 + 进程级 Meter 广播互染下恒过——改精确计数
+        await Assert.That(listener.Measurements.Count).IsEqualTo(1);
     }
 
     [Test]
@@ -183,7 +188,8 @@ public sealed class IdempotencyTests
             Deserialize,
             cancellationToken: cancellationToken);
 
-        await Assert.That(listener.Measurements).Contains(1);
+        // ITM-281（R44）：Contains(1) 弱断言 + 进程级 Meter 广播互染下恒过——改精确计数
+        await Assert.That(listener.Measurements.Count).IsEqualTo(1);
     }
 
     [Test]
@@ -201,7 +207,8 @@ public sealed class IdempotencyTests
                 Deserialize,
                 cancellationToken: cancellationToken)).Throws<InvalidOperationException>();
 
-        await Assert.That(listener.Measurements).Contains(1);
+        // ITM-281（R44）：Contains(1) 弱断言 + 进程级 Meter 广播互染下恒过——改精确计数
+        await Assert.That(listener.Measurements.Count).IsEqualTo(1);
     }
 
     [Test]

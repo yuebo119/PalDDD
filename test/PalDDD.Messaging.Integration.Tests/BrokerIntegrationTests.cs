@@ -555,8 +555,11 @@ public sealed class BrokerIntegrationTests
                 ready.TrySetResult();
                 return ValueTask.CompletedTask;
             }
-            // 测试消息抛非 OCE 异常（CAS 保证只有首次进入抛——若发生重投会有第二次进入计数）
-            if (msg.Name == $"rmq-fail-{tag}" && Interlocked.CompareExchange(ref handlerEntered, 1, 0) == 0)
+            // 测试消息抛非 OCE 异常。ITM-279（R44）：计数用 Increment——原 CompareExchange==0 才抛
+            // 的形态下，requeue:true 回归时第二次进入 CAS 失败直接 return（被 ACK 不抛不计数），
+            // handlerEntered 恒 1 断言对目标回归失明。Increment==1 时抛：首次进入抛异常（触发
+            // nack requeue:false 路径），后续任何进入（重投回归）都会使计数 >1 → 断言必红。
+            if (msg.Name == $"rmq-fail-{tag}" && Interlocked.Increment(ref handlerEntered) == 1)
             {
                 entered.TrySetResult();
                 throw new InvalidOperationException("simulated non-OCE handler failure");
