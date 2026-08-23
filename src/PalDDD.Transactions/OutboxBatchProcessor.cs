@@ -118,9 +118,15 @@ public sealed class OutboxBatchProcessor
                     // 退避延迟由 IRetryBackoffPolicy 计算（默认指数 2^n，上限 64s，可选抖动）。
                     var nextAttemptAt = now + options.RetryBackoffPolicy.ComputeDelay(msg.RetryCount + 1);
                     // P1 修复（二十一轮）：入库前截断（日志行保留完整消息）——机理见类头常量注释
-                    var failureReason = ex.Message.Length <= MaxFailureReasonLength
-                        ? ex.Message
-                        : ex.Message[..MaxFailureReasonLength];
+                    var failureReason = ex.Message is { Length: > MaxFailureReasonLength }
+                        ? ex.Message[..MaxFailureReasonLength]
+                        : ex.Message ?? string.Empty;
+                    // F2 修复（audit-probe 2026-08-23）：空白/空 ex.Message 会让 Store 的
+                    // MarkDead/ReleaseForRetry 入口 ThrowIfNullOrWhiteSpace 抛 ArgumentException，
+                    // 消息状态停留 Processing → 重试/死信路径失效（ITM-175 只堵长度没堵空白；
+                    // 同 Inbox/Idempotency/Projection）。
+                    if (string.IsNullOrWhiteSpace(failureReason))
+                        failureReason = "(no message)";
                     if (msg.RetryCount + 1 >= options.MaxRetryCount)
                     {
                         _store.MarkDead(msg, failureReason, now);

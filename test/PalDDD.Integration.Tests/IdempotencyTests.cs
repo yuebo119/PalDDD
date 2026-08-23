@@ -314,6 +314,83 @@ public sealed class IdempotencyTests
     }
 
     [Test]
+    public async Task ExecuteAsync_WhenSerializeResultFails_PropagatesAndKeepsRecordProcessing(CancellationToken cancellationToken)
+    {
+        // F1 回归（audit-probe 2026-08-23）：serializeResult 抛异常必须传播——原实现作为
+        // MarkCompletedAsync 实参求值落入 ITM-191 catch 被静默按 Executed 吞掉：序列化失败
+        // 是持久性缺陷（每次必然再抛），记录残留 Processing、租约过期后 handler 重放、
+        // 副作用无限重复执行且调用方无感知。修复后：传播异常 + 不标记 Failed
+        // （Failed 可立即重试 → handler 重放）+ 保持 Processing（租约窗口内挡重试）。
+        var store = new InMemoryIdempotencyStore();
+        var processor = new IdempotencyProcessor(store);
+        var calls = 0;
+
+        await Assert.That(
+            async () => await processor.ExecuteAsync<string>(
+                "CreateOrder",
+                "cmd-1",
+                _ =>
+                {
+                    calls++;
+                    return ValueTask.FromResult("order-123");
+                },
+                _ => throw new InvalidOperationException("serialize boom"),
+                Deserialize,
+                cancellationToken: cancellationToken)).Throws<InvalidOperationException>();
+
+        // 副作用已发生：记录保持 Processing，不得被标记 Failed
+        var record = await store.GetAsync("CreateOrder", "cmd-1", DateTimeOffset.UtcNow, cancellationToken);
+        await Assert.That(record!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+
+        // 租约窗口内同 key 重试被挡（at-least-once 状态待确认）——handler 不重放
+        var retry = await processor.ExecuteAsync(
+            "CreateOrder",
+            "cmd-1",
+            _ =>
+            {
+                calls++;
+                return ValueTask.FromResult("retried");
+            },
+            Serialize,
+            Deserialize,
+            cancellationToken: cancellationToken);
+
+        await Assert.That(retry.Status).IsEqualTo(IdempotencyExecutionStatus.Skipped);
+        await Assert.That(calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_WhenHandlerThrowsBlankMessage_NormalizesAndMarksFailed(CancellationToken cancellationToken)
+    {
+        // F2 回归（audit-probe 2026-08-23）：handler 抛空白 Message 时失败原因须归一化再
+        // 入库——否则三个 Store 的 MarkFailedAsync 入口 ThrowIfNullOrWhiteSpace 抛
+        // ArgumentException 被吞（挂 Data），记录残留 Processing、租约过期后 handler
+        // 重放、副作用二次执行（ITM-175 只堵了长度没堵空白）。
+        var store = new InMemoryIdempotencyStore();
+        var processor = new IdempotencyProcessor(store);
+        var calls = 0;
+
+        await Assert.That(
+            async () => await processor.ExecuteAsync<string>(
+                "CreateOrder",
+                "cmd-2",
+                _ =>
+                {
+                    calls++;
+                    throw new InvalidOperationException(" ");
+                },
+                Serialize,
+                Deserialize,
+                cancellationToken: cancellationToken)).Throws<InvalidOperationException>();
+
+        // 归一化后 MarkFailed 成功：记录标 Failed、失败原因落固定文案
+        var record = await store.GetAsync("CreateOrder", "cmd-2", DateTimeOffset.UtcNow, cancellationToken);
+        await Assert.That(record!.Status).IsEqualTo(IdempotencyRecordStatus.Failed);
+        await Assert.That(record!.Error).IsEqualTo("(no message)");
+        await Assert.That(calls).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task InMemoryStore_TryStartAsync_PreemptsZombieAndOldHolderMarkIgnored()
     {
         // P3 回归（二十一轮）：InMemory 幂等存储的僵尸/失败抢占路径现返回新实例（引用隔离对齐

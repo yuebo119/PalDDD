@@ -64,35 +64,25 @@ public sealed class IdempotencyProcessor
                 : GetExistingResult(existing, deserializeResult));
         }
 
+        // 阶段 1：执行 handler。失败路径标记 Failed 并传播（副作用未发生，可重试）。
+        TResult result;
         try
         {
-            var result = await handler(cancellationToken).ConfigureAwait(false);
-            // P2 修复（八轮评审）：副作用已发生后状态标记尽力持久化，不被请求级取消
-            // （对齐下方 MarkFailedAsync 的 None——取消丢失完成标记会让重放重复执行副作用）。
-            try
-            {
-                await _store.MarkCompletedAsync(record, serializeResult(result), _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception markEx) when (markEx is not OperationCanceledException)
-            {
-                // ITM-191 修复（三十轮）：handler 成功但标记失败（DB 故障）——副作用已发生，
-                // 不得按通用失败重新标记 Failed 再抛（那会把"已执行"降级为"可重试失败"，
-                // 重试时重放副作用）。记区分性错误日志后按 Executed 返回（at-least-once
-                // 语义下状态待确认；对齐 InboxProcessor ITM-180 的管线孪生修复）。
-                System.Diagnostics.Activity.Current?.AddEvent(new(
-                    "idempotency.completed-pending-confirmation",
-                    tags: new ActivityTagsCollection { ["error"] = markEx.Message }));
-                return SetActivityResult(activity,
-                    new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Executed, result));
-            }
-            return SetActivityResult(activity, new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Executed, result));
+            result = await handler(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // ITM-175 修复：截断后再入库（对齐 Inbox/Outbox 管线孪生）
-            var failureReason = ex.Message.Length <= MaxFailureReasonLength
-                ? ex.Message
-                : ex.Message[..MaxFailureReasonLength];
+            var failureReason = ex.Message is { Length: > MaxFailureReasonLength }
+                ? ex.Message[..MaxFailureReasonLength]
+                : ex.Message ?? string.Empty;
+            // F2 修复（audit-probe 2026-08-23）：空白/空 ex.Message（含自定义异常
+            // override Message 返回 null）——三个 Store 的 MarkFailedAsync 入口
+            // ThrowIfNullOrWhiteSpace 抛 ArgumentException 被下方 catch 吞掉，记录残留
+            // Processing → 租约过期重放 handler → 副作用二次执行（与 ITM-175 同后果链，
+            // 只堵了长度没堵空白/null）。回退固定文案归一化。
+            if (string.IsNullOrWhiteSpace(failureReason))
+                failureReason = "(no message)";
             try
             {
                 await _store.MarkFailedAsync(record, failureReason, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
@@ -108,6 +98,46 @@ public sealed class IdempotencyProcessor
             PalMetrics.IdempotencyFailed.Add(1);
             throw;
         }
+
+        // 阶段 2：序列化 + 完成标记。副作用已发生，任何失败不得按"可重试失败"处理。
+        // F1 修复（audit-probe 2026-08-23）：serializeResult 原作为 MarkCompletedAsync
+        // 实参求值，其异常落入下方 ITM-191 catch 被静默按 Executed 吞掉——序列化失败是
+        // 持久性缺陷（每次必然再抛），记录残留 Processing 导致租约过期后 handler 重放、
+        // 副作用无限重复执行且调用方无感知。先序列化再进 try：异常传播给调用方（副作用
+        // 已发生、结果未落库）；不标记 Failed（ITM-191 同禁——Failed 可立即重试 = 立即
+        // 重放副作用；保持 Processing = 租约窗口内挡重试，at-least-once 状态待确认）。
+        ReadOnlyMemory<byte> payload;
+        try
+        {
+            payload = serializeResult(result);
+        }
+        catch (Exception serializeEx) when (serializeEx is not OperationCanceledException)
+        {
+            System.Diagnostics.Activity.Current?.AddEvent(new(
+                "idempotency.serialize-result-failed",
+                tags: new ActivityTagsCollection { ["error"] = serializeEx.Message }));
+            throw;
+        }
+
+        try
+        {
+            // P2 修复（八轮评审）：副作用已发生后状态标记尽力持久化，不被请求级取消
+            // （对齐 MarkFailedAsync 的 None——取消丢失完成标记会让重放重复执行副作用）。
+            await _store.MarkCompletedAsync(record, payload, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception markEx) when (markEx is not OperationCanceledException)
+        {
+            // ITM-191 修复（三十轮）：handler 成功但标记失败（DB 故障）——副作用已发生，
+            // 不得按通用失败重新标记 Failed 再抛（那会把"已执行"降级为"可重试失败"，
+            // 重试时重放副作用）。记区分性错误日志后按 Executed 返回（at-least-once
+            // 语义下状态待确认；对齐 InboxProcessor ITM-180 的管线孪生修复）。
+            System.Diagnostics.Activity.Current?.AddEvent(new(
+                "idempotency.completed-pending-confirmation",
+                tags: new ActivityTagsCollection { ["error"] = markEx.Message }));
+            return SetActivityResult(activity,
+                new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Executed, result));
+        }
+        return SetActivityResult(activity, new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Executed, result));
     }
 
     private static bool CanStartNewExecution(IdempotencyRecord record, DateTimeOffset now)

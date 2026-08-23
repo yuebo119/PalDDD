@@ -129,9 +129,15 @@ public sealed class InboxProcessor
         {
             // P3 修复（十七轮）：ex.Message 截断到 2000 再入库——长异常消息（含大 payload
             // 的序列化错误等）超出 LastError 列上限会让终态保存本身失败，掩盖原始 handler 失败
-            var failureReason = ex.Message.Length <= MaxFailureReasonLength
-                ? ex.Message
-                : ex.Message[..MaxFailureReasonLength];
+            var failureReason = ex.Message is { Length: > MaxFailureReasonLength }
+                ? ex.Message[..MaxFailureReasonLength]
+                : ex.Message ?? string.Empty;
+            // F2 修复（audit-probe 2026-08-23）：空白/空 ex.Message（含自定义异常 override
+            // Message 返回 null）会让 Store 的 MarkFailedAsync 入口 ThrowIfNullOrWhiteSpace
+            // 抛 ArgumentException（被下方 catch 吞掉）——记录残留 Processing，超时/租约
+            // 过期后同一消息被双重执行（ITM-175 只堵长度没堵空白；同 Idempotency/Outbox/Projection）。
+            if (string.IsNullOrWhiteSpace(failureReason))
+                failureReason = "(no message)";
             // ITM-092 修复：MarkFailedAsync 本身失败（DB 故障）不得掩盖主异常——内层捕获把清理
             // 错误挂到主异常 Data 上，仍以主异常优先向上传播（对齐 SagaProcessor OCE 释放路径）。
             // 验证轮返工：内层 catch 不加 OCE 过滤——MarkFailedAsync 以 CancellationToken.None

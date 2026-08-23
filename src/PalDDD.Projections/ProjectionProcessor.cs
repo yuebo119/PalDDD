@@ -71,9 +71,15 @@ public sealed class ProjectionProcessor<TMessage>
             try
             {
                 // ITM-167 修复：ex.Message 截断到 MaxFailureReasonLength 再入库
-                var failureReason = ex.Message.Length <= MaxFailureReasonLength
-                    ? ex.Message
-                    : ex.Message[..MaxFailureReasonLength];
+                var failureReason = ex.Message is { Length: > MaxFailureReasonLength }
+                    ? ex.Message[..MaxFailureReasonLength]
+                    : ex.Message ?? string.Empty;
+                // F2 修复（audit-probe 2026-08-23）：空白/空 ex.Message 会让 Store 的
+                // MarkFailedAsync 入口 ThrowIfNullOrWhiteSpace 抛 ArgumentException（被下方
+                // catch 吞掉）——Checkpoint 残留 Processing，租约过期后同一投影重放副作用
+                // （ITM-167 只堵长度没堵空白；同 Inbox/Outbox/Idempotency）。
+                if (string.IsNullOrWhiteSpace(failureReason))
+                    failureReason = "(no message)";
                 await _checkpointStore.MarkFailedAsync(checkpoint, failureReason, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception markEx)
