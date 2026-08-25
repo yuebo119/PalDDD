@@ -10,6 +10,10 @@
 
 ## [Unreleased]
 
+### 决策（维护者裁决 2026-08-26）
+
+- **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）
+
 ### ⚠️ 行为变更（AddPalLogging 追加语义，二轮评审 P2-2）
 
 - **`AddPalLogging` 默认不再清除用户已配置的日志 Provider、不再覆盖最低级别**——v2.0.0 的旧行为（隐式 `ClearProviders()` + `SetMinimumLevel(Information)`）会静默丢弃调用方的全部日志配置，属隐式破坏性副作用。新主签名为 `AddPalLogging(IServiceCollection, bool clearProviders = false, LogLevel? minimumLevel = null)`：独占接管传 `clearProviders: true`，指定级别传 `minimumLevel`。**原 1 参重载保留**（委托至新签名默认参数，源码与二进制均兼容）——注意其行为已从"独占接管"变为"追加"：ASP.NET 默认宿主下宿主 Console Provider 与 ZLoggerConsole 并存，日志将双份输出（plain + JSON），需要旧行为请显式传 `clearProviders: true`
