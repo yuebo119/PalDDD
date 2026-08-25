@@ -3,6 +3,12 @@ using Microsoft.EntityFrameworkCore;
 namespace PalDDD.Transactions;
 
 /// <summary>SQL Server outbox store with atomic lease acquisition.</summary>
+/// <remarks>
+/// ⚠️ <b>废弃预告（精炼裁决 2026-08-26）</b>：本类型零测试覆盖（全仓无 SqlServer 测试容器/
+/// 断言）、无 src 消费——框架以未验证状态发布该方言基类。v3.0 移除；若你在使用且需要保留，
+/// 请提 issue 附测试方案（Testcontainers SqlServer 覆盖租约/终态写后可解除废弃）。
+/// </remarks>
+[Obsolete("零测试覆盖的未验证方言基类（精炼裁决 2026-08-26）——v3.0 移除；需要保留请提 issue 附测试方案。", error: false)]
 public abstract class SqlServerOutboxDbContext(DbContextOptions options) : OutboxDbContext(options)
 {
     /// <inheritdoc />

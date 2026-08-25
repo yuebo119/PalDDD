@@ -270,7 +270,7 @@ public sealed class ArchitectureBoundaryTests
     [Test]
     public async Task InboxProcessor_DoesNotUseServiceLocator()
     {
-        var source = ReadSource("src/PalDDD.Transactions/InboxProcessor.cs");
+        var source = ReadSource("src/PalDDD.Transactions/Inbox/InboxProcessor.cs");
 
         await Assert.That(source).DoesNotContain("IServiceScopeFactory");
         // 不带括号：同时覆盖 CreateScope( 与 CreateScopeAsync( 两形态（带括号会被 Async 形态绕过）
@@ -281,7 +281,7 @@ public sealed class ArchitectureBoundaryTests
     [Test]
     public async Task OutboxMessage_UsesBinaryPayload()
     {
-        var source = ReadSource("src/PalDDD.Transactions/OutboxMessage.cs");
+        var source = ReadSource("src/PalDDD.Transactions/Outbox/OutboxMessage.cs");
 
         await Assert.That(source).Contains("byte[] Payload");
         await Assert.That(source).DoesNotContain("public string Content ");
@@ -306,7 +306,7 @@ public sealed class ArchitectureBoundaryTests
     [Test]
     public async Task SagaTimeoutStore_UsesBoundedActiveScan()
     {
-        var storeSource = ReadSource("src/PalDDD.Transactions/ISagaStateStore.cs");
+        var storeSource = ReadSource("src/PalDDD.Transactions/Saga/ISagaStateStore.cs");
         var efSource = ReadSource("src/PalDDD.Transactions.EFCore/SagaStateDbContext.cs");
 
         await Assert.That(storeSource).Contains("GetActiveSagasAsync(int batchSize");

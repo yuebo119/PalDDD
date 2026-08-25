@@ -74,6 +74,7 @@ public sealed class BoundedContextAttribute(string name) : Attribute
 /// <para>💡 一个限界上下文中可以有多个领域能力，一个聚合可能实现一个或多个能力。</para>
 /// </summary>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
+[Obsolete("框架自身零消费（SourceGen/Analyzer 均不读取，精炼裁决 2026-08-26）——v3.0 移除；需要标记语义请在应用层自定义 attribute。", error: false)]
 public sealed class DomainCapabilityAttribute(string name) : Attribute
 {
     // P3 修复（八轮评审）：补 blank 校验——对齐 BoundedContextAttribute/AggregateNameAttribute
@@ -102,10 +103,11 @@ public sealed class ProcessManagerAttribute(string name) : Attribute
 }
 
 /// <summary>
-/// 标记聚合根的领域名称 —— 供 Source Generator 和运行时诊断使用。
+/// 标记聚合根的领域名称。
 /// <para>使用 Attribute 而非抽象属性将框架元数据从领域基类中解耦，保持领域层纯净。</para>
 /// </summary>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
+[Obsolete("框架自身零消费（原 doc 声称'供 Source Generator 使用'已失实，精炼裁决 2026-08-26）——v3.0 移除；需要标记语义请在应用层自定义 attribute。", error: false)]
 public sealed class AggregateNameAttribute(string name) : Attribute
 {
     /// <summary>聚合的业务名称</summary>

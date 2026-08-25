@@ -12,8 +12,7 @@ namespace PalDDD.MinimalApi
     }
     readonly partial record struct OrderId(Guid Value) : IPalIdentity<Guid>;
 
-    [AggregateName("Order")]
-    internal sealed class Order : AggregateRoot<OrderId>
+        internal sealed class Order : AggregateRoot<OrderId>
     {
         public string CustomerName { get; private set; } = null!; public Money TotalAmount { get; private set; } = Money.CNY(0); public string Status { get; private set; } = "pending";
         // SMP-102：Items 暴露只读接口（同 ECommerce 示例）——public List 可被外部持有者

@@ -17,7 +17,6 @@ readonly record struct Money(decimal Amount, string Currency) : IValueObject
 readonly partial record struct OrderId(Guid Value) : IPalIdentity<Guid>;
 
 [BoundedContext("ecommerce")]
-[AggregateName("Order")]
 internal sealed class Order : AggregateRoot<OrderId>
 {
     public string CustomerName { get; private set; }

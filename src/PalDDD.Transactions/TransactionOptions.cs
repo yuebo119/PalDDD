@@ -9,6 +9,14 @@ namespace PalDDD.Transactions;
 // 事务配置选项
 // ─────────────────────────────────────────────────────────────
 
+/// <summary>租约持有者默认标识工厂（精炼提取 2026-08-26）——"机器名:ULID" 保证同节点
+/// 多选项实例天然互异（多实例隔离语义见 OutboxOptions.LeaseOwner remarks）。原内联表达式
+/// 在 Outbox/Inbox 两 Options 逐字重复。</summary>
+internal static class LeaseOwnerFactory
+{
+    internal static string Create() => $"{Environment.MachineName}:{PalUlid.New()}";
+}
+
 /// <summary>发件箱发布器运行时选项。</summary>
 /// <remarks>
 /// ITM-166 声明：<see cref="LeaseDuration"/> 与 <see cref="LeaseOwner"/> 的集中校验在
@@ -46,7 +54,7 @@ public sealed class OutboxOptions
     /// 自锁漂移）。改动默认值为 static 会破坏多实例隔离语义，故仅作声明。
     /// </para>
     /// </summary>
-    public string LeaseOwner { get; set; } = $"{Environment.MachineName}:{PalUlid.New()}";
+    public string LeaseOwner { get; set; } = LeaseOwnerFactory.Create();
 }
 
 /// <summary>收件箱幂等性运行时选项。</summary>
@@ -76,5 +84,5 @@ public sealed class SagaProcessorOptions
     /// 同一节点自认为多实例（租约互抢/自锁漂移）。
     /// </para>
     /// </summary>
-    public string LeaseOwner { get; set; } = $"{Environment.MachineName}:{PalUlid.New()}";
+    public string LeaseOwner { get; set; } = LeaseOwnerFactory.Create();
 }

@@ -83,8 +83,7 @@ internal static class SmokeBenchmarks
         }
     }
 
-    [AggregateName("SmokeOrder")]
-    private sealed class SmokeOrder : AggregateRoot<Guid>
+        private sealed class SmokeOrder : AggregateRoot<Guid>
     {
         public SmokeOrder(Guid id, string name) : base(id) => CustomerName = name;
 
