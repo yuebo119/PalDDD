@@ -10,6 +10,14 @@
 
 ## [Unreleased]
 
+### 精炼（2026-08-26 第三轮：全源码价值判定 + 组织重组）
+
+- **零消费公共 API 废弃预告**：`AggregateNameAttribute`/`DomainCapabilityAttribute`（SourceGen/Analyzer 均不读取，原 doc"供 SourceGen 使用"失实）与 `SqlServerOutboxDbContext`（零测试覆盖的未验证方言基类）标 `[Obsolete(error: false)]` 指向 v3.0 移除；samples/bench 的装饰性标注同步移除。废弃 API 保留反射式契约测试
+- **死配置清除**：PalDDD.Prompts csproj 的无效 PackagePath 打包配置（IsPackable=false 下自认死配置）
+- **重复收敛**：`LeaseOwnerFactory`（Outbox/Inbox 两 Options 逐字重复的"机器名:ULID"默认值）；`MessageVersionKey`（Evolution 的 Builder/Pipeline 嵌套 Key record 双拷）
+- **组织重组（零破坏，命名空间不变）**：PalDDD.Transactions 30 文件平铺 → Saga/（18）+ Outbox/（5）+ Inbox/（3）+ 根共享（5）；InboxStore.cs 三类型拆分为 InboxStatus/InboxMessage/IInboxStore 独立文件（对齐 OutboxStore 单类型组织）
+- **明确不做**（裁决记录，详见本轮报告）：EFCore 五处 SQL 错误分类器不收敛（五包无共同上层，新建共享包成本>收益）；PalORM 三方言 DI 注册不提取（形状相似≠语义等价，9 泛型参数+公共 API 扩张违背 ADR-021）；Outbox 列清单/跨栈截断常量不提取（PalORM FormattableString 约束/公共 API 面成本）；Dapper 栈四处分類器不动（ADR-020 只修缺陷不重构）
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）

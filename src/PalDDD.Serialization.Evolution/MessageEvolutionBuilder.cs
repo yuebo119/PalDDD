@@ -6,7 +6,7 @@ namespace PalDDD.Serialization.Evolution;
 
 public sealed class MessageEvolutionBuilder
 {
-    private readonly Dictionary<Key, MessageUpgradeStep> _steps = [];
+    private readonly Dictionary<MessageVersionKey, MessageUpgradeStep> _steps = [];
 
     public MessageEvolutionBuilder Add<TSource, TTarget>(
         MessageDescriptor sourceDescriptor,
@@ -36,7 +36,7 @@ public sealed class MessageEvolutionBuilder
     {
         ArgumentNullException.ThrowIfNull(step);
 
-        var key = new Key(step.SourceDescriptor.Name, step.SourceDescriptor.SchemaVersion);
+        var key = new MessageVersionKey(step.SourceDescriptor.Name, step.SourceDescriptor.SchemaVersion);
         if (!_steps.TryAdd(key, step))
         {
             // ITM-280（R44）：对齐 MessageEvolutionPipeline 的重复键异常类型——原抛 InvalidOperationException
@@ -50,5 +50,5 @@ public sealed class MessageEvolutionBuilder
 
     public MessageEvolutionPipeline Build() => new(_steps.Values);
 
-    private readonly record struct Key(string Name, int SchemaVersion);
+
 }

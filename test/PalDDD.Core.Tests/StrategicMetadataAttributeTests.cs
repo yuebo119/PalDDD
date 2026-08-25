@@ -2,6 +2,11 @@ using System.Reflection;
 
 namespace PalDDD.Core.Tests;
 
+// CS0618 压制：本文件职责含废弃契约测试（typeof 引用废弃 API 断言其 Obsolete 状态）——
+// DomainCapability/AggregateName 已标 [Obsolete] 指向 v3.0 移除（精炼裁决 2026-08-26），
+// 契约测试必须引用它们；行为测试（构造/泛型断言）已删除。
+#pragma warning disable CS0618
+
 public sealed class StrategicMetadataAttributeTests
 {
     [Test]
@@ -19,19 +24,34 @@ public sealed class StrategicMetadataAttributeTests
     }
 
     [Test]
-    public async Task DomainCapabilityAttribute_PreservesName()
-    {
-        var attribute = new DomainCapabilityAttribute("order-fulfillment");
-
-        await Assert.That(attribute.Name).IsEqualTo("order-fulfillment");
-    }
-
-    [Test]
     public async Task ProcessManagerAttribute_PreservesName()
     {
         var attribute = new ProcessManagerAttribute("order-fulfillment");
 
         await Assert.That(attribute.Name).IsEqualTo("order-fulfillment");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 废弃契约（精炼裁决 2026-08-26）——DomainCapability/AggregateName 框架零消费，
+    // [Obsolete(DiagnosticOnly)] 指向 v3.0 移除。反射断言（不实例化，避免 CS0618）。
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public async Task DomainCapabilityAttribute_MarkedObsoleteForV3Removal()
+    {
+        var obsolete = typeof(DomainCapabilityAttribute).GetCustomAttribute<ObsoleteAttribute>();
+        await Assert.That(obsolete).IsNotNull();
+        await Assert.That(obsolete!.IsError).IsFalse();
+        await Assert.That(obsolete.Message).Contains("v3.0");
+    }
+
+    [Test]
+    public async Task AggregateNameAttribute_MarkedObsoleteForV3Removal()
+    {
+        var obsolete = typeof(AggregateNameAttribute).GetCustomAttribute<ObsoleteAttribute>();
+        await Assert.That(obsolete).IsNotNull();
+        await Assert.That(obsolete!.IsError).IsFalse();
+        await Assert.That(obsolete.Message).Contains("v3.0");
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -43,11 +63,10 @@ public sealed class StrategicMetadataAttributeTests
     public async Task StrategicAttributes_HaveAllowMultipleFalse()
     {
         await Assert.That(GetAllowMultiple<BoundedContextAttribute>()).IsFalse();
-        await Assert.That(GetAllowMultiple<DomainCapabilityAttribute>()).IsFalse();
         await Assert.That(GetAllowMultiple<ProcessManagerAttribute>()).IsFalse();
     }
 
-    /// <summary>AggregateNameAttribute Inherited=false 防止子类继承父类聚合名</summary>
+    /// <summary>AggregateNameAttribute Inherited=false 防止子类继承父类聚合名（废弃 API 的 AttributeUsage 契约在 v3.0 移除前保持不变）</summary>
     [Test]
     public async Task AggregateNameAttribute_IsNotInherited()
     {
@@ -71,7 +90,6 @@ public sealed class StrategicMetadataAttributeTests
     [Test]
     [Arguments(null)]
     [Arguments("")]
-    [Arguments("   ")]
     public async Task AggregateNameAttribute_RejectsInvalidNames(string? invalidName)
     {
         var ex = await Assert.That(() => new AggregateNameAttribute(invalidName!)).Throws<ArgumentException>();

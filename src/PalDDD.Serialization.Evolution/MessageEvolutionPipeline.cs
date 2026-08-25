@@ -11,7 +11,7 @@ namespace PalDDD.Serialization.Evolution;
 
 public sealed class MessageEvolutionPipeline
 {
-    private readonly FrozenDictionary<Key, MessageUpgradeStep> _steps;
+    private readonly FrozenDictionary<MessageVersionKey, MessageUpgradeStep> _steps;
 
     internal MessageEvolutionPipeline(IEnumerable<MessageUpgradeStep> steps)
     {
@@ -36,10 +36,10 @@ public sealed class MessageEvolutionPipeline
         // (Name, SourceSchemaVersion) 键抛 BCL ArgumentException（"An item with the same key..."），
         // 与本构造器其余校验（严格递增/ClrType 衔接）的异常类型分叉，消费者无法单点 catch
         // MessageEvolutionException 覆盖全部注册期错误。显式检测后带键信息抛出。
-        var seed = new Dictionary<Key, MessageUpgradeStep>(stepList.Length);
+        var seed = new Dictionary<MessageVersionKey, MessageUpgradeStep>(stepList.Length);
         foreach (var step in stepList)
         {
-            var key = new Key(step.SourceDescriptor.Name, step.SourceDescriptor.SchemaVersion);
+            var key = new MessageVersionKey(step.SourceDescriptor.Name, step.SourceDescriptor.SchemaVersion);
             if (!seed.TryAdd(key, step))
                 throw new MessageEvolutionException(
                     $"Duplicate message evolution step: name '{key.Name}' from version {key.SchemaVersion} is registered more than once.");
@@ -54,7 +54,7 @@ public sealed class MessageEvolutionPipeline
         // 末步（target 无后继）不参与本检查。
         foreach (var step in _steps.Values)
         {
-            var targetKey = new Key(step.TargetDescriptor.Name, step.TargetDescriptor.SchemaVersion);
+            var targetKey = new MessageVersionKey(step.TargetDescriptor.Name, step.TargetDescriptor.SchemaVersion);
             if (_steps.TryGetValue(targetKey, out var next)
                 && next.SourceDescriptor.ClrType != step.TargetDescriptor.ClrType)
             {
@@ -111,7 +111,7 @@ public sealed class MessageEvolutionPipeline
         MessageDescriptor currentDescriptor,
         MessageDescriptor targetDescriptor)
     {
-        var key = new Key(currentDescriptor.Name, currentDescriptor.SchemaVersion);
+        var key = new MessageVersionKey(currentDescriptor.Name, currentDescriptor.SchemaVersion);
         if (!_steps.TryGetValue(key, out var step))
         {
             throw new MessageEvolutionException(
@@ -140,5 +140,10 @@ public sealed class MessageEvolutionPipeline
 
     private static string GetTypeName(Type type) => type.FullName ?? type.Name;
 
-    private readonly record struct Key(string Name, int SchemaVersion);
+
 }
+
+/// <summary>消息版本标识（Name, SchemaVersion）——Pipeline 与 Builder 原各自嵌套同型 MessageVersionKey
+/// 双拷（精炼提取 2026-08-26），包内共享。</summary>
+internal readonly record struct MessageVersionKey(string Name, int SchemaVersion);
+
