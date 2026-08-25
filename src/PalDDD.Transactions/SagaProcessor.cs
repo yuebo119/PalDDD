@@ -155,10 +155,9 @@ TState>
                         // （SagaStateDbContext），补偿异常（AggregateException/FanOut 聚合消息）超长
                         // 会让 SaveChangesAsync 抛 DbUpdateException → 被外层 catch 吞 → Saga
                         // 停留 Processing 无限重租重补偿且 CompensationFailed 永不落库。
-                        // 对齐 Inbox/Outbox 的 MaxFailureReasonLength=2000 截断族（PD24）。
-                        sagaState.Error = ex.Message.Length <= 2000
-                            ? ex.Message
-                            : ex.Message[..2000];
+                        // 二轮评审 T6：改用共享 FailureReason.Normalize（截断 + F2 空白归一——
+                        // 后者此前为 Saga 漏网姊妹，ex.Message 为 null 时旧内联版直接 NRE）。
+                        sagaState.Error = Core.FailureReason.Normalize(ex.Message);
                         sagaState.CurrentState = "CompensationFailed";
                         sagaState.Status = SagaStatus.CompensationFailed;
                         sagaState.ErrorAt = now;

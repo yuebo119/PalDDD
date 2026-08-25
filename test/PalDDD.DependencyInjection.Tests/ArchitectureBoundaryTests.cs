@@ -27,7 +27,11 @@ public sealed class ArchitectureBoundaryTests
     // 这类家族包，同时避免子串误报）。
     // ═══════════════════════════════════════════════════════════════
 
-    /// <summary>解析 csproj，提取全部包引用名与项目引用的目标项目名。</summary>
+    /// <summary>解析 csproj，提取全部包引用名与项目引用的目标项目名。
+    /// 路径分隔符先归一化——仓库 ProjectReference 全用反斜杠，
+    /// <see cref="Path.GetFileNameWithoutExtension"/> 在 Linux（CI 运行平台）上对反斜杠
+    /// 路径返回整段路径，导致项目引用守卫在 CI 上永不命中（二轮评审 P2-NEW-1，
+    /// 由负向自证测试 <see cref="ParseCsprojReferences_NormalizesWindowsPathSeparators"/> 锁定）。</summary>
     private static (IReadOnlyList<string> Packages, IReadOnlyList<string> ProjectNames) ParseCsprojReferences(string csprojPath)
     {
         var doc = XDocument.Load(csprojPath);
@@ -39,7 +43,9 @@ public sealed class ArchitectureBoundaryTests
         var projectNames = doc.Descendants("ProjectReference")
             .Select(e => (string?)e.Attribute("Include"))
             .Where(s => !string.IsNullOrEmpty(s))
-            .Select(s => Path.GetFileNameWithoutExtension(s!))
+            // 归一化：csproj 内路径常为 Windows 分隔符（MSBuild 双向兼容），Unix 上
+            // Path 处理反斜杠路径不拆分——先统一为 '/' 再取文件名，跨平台行为一致
+            .Select(s => Path.GetFileNameWithoutExtension(s!.Replace('\\', '/')))
             .ToList();
         return (packages, projectNames);
     }
@@ -771,8 +777,7 @@ public sealed class ArchitectureBoundaryTests
     /// 被禁子串，守卫对它们是无声 no-op。
     /// </summary>
     [Test]
-    public async Task CsprojReferenceGuard_DetectsBlindSpotPackages()
-    {
+    public async Task CsprojReferenceGuard_DetectsBlindSpotPackages()    {
         const string maliciousCsproj = """
             <Project Sdk="Microsoft.NET.Sdk">
               <ItemGroup>
@@ -803,6 +808,41 @@ public sealed class ArchitectureBoundaryTests
 
             // 反向：合法包（Microsoft.Extensions.DependencyInjection）不被误报
             await Assert.That(s_infraPackages.Any(f => MatchesPackage("Microsoft.Extensions.DependencyInjection", f))).IsFalse();
+        }
+        finally
+        {
+            File.Delete(tempPath);
+        }
+    }
+
+    /// <summary>
+    /// 守卫跨平台自证（二轮评审 P2-NEW-1）：仓库 ProjectReference 全用 Windows 反斜杠路径，
+    /// 修复前 <c>Path.GetFileNameWithoutExtension</c> 在 Linux（CI 运行平台 ubuntu-latest）上
+    /// 对反斜杠路径返回<b>整段路径</b>——项目引用守卫在 CI 上永不命中（守卫平台性 no-op）。
+    /// 本测试用反斜杠路径样本锁定归一化行为，在任何平台上都必须通过。
+    /// </summary>
+    [Test]
+    public async Task ParseCsprojReferences_NormalizesWindowsPathSeparators()
+    {
+        const string backslashCsproj = """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
+                <ProjectReference Include="..\PalDDD.Dapper\PalDDD.Dapper.csproj" />
+              </ItemGroup>
+            </Project>
+            """;
+        var tempPath = Path.Combine(Path.GetTempPath(), $"palddd-pathnorm-probe-{Guid.NewGuid():N}.csproj");
+        File.WriteAllText(tempPath, backslashCsproj);
+        try
+        {
+            var (_, projectNames) = ParseCsprojReferences(tempPath);
+
+            // 反斜杠路径必须解析出裸项目名（而非整段路径）——否则 infraProjects/
+            // forbiddenProjectRefs 的 Contains 守卫在 Linux CI 上永不命中
+            await Assert.That(projectNames.Count).IsEqualTo(2);
+            await Assert.That(projectNames).Contains("PalDDD.Core");
+            await Assert.That(projectNames).Contains("PalDDD.Dapper");
         }
         finally
         {

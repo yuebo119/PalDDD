@@ -224,6 +224,7 @@ async Task RunPg()
         await SagaSmoke(conn, DapperDbType.PostgreSql, "PG");
         await InboxSmoke(conn, DapperDbType.PostgreSql, "PG");
         await CheckpointSmoke(conn, DapperDbType.PostgreSql, "PG");
+        await AmbientTxDapperSmoke(conn, DapperDbType.PostgreSql, "PG");
     }
     finally
     {
@@ -270,6 +271,7 @@ async Task RunMySql()
         await SagaSmoke(conn, DapperDbType.MySql, "MySQL");
         await InboxSmoke(conn, DapperDbType.MySql, "MySQL");
         await CheckpointSmoke(conn, DapperDbType.MySql, "MySQL");
+        await AmbientTxDapperSmoke(conn, DapperDbType.MySql, "MySQL");
     }
     finally
     {
@@ -401,6 +403,24 @@ async Task InboxSmoke(DbConnection conn, DapperDbType dbType, string tag)
         await store.TryStartProcessingAsync("probe-consumer", "probe-msg-1", clock.AddSeconds(2), TimeSpan.FromMinutes(5), default) is null, "");
     Check(tag, "Inbox 超时接管（timeout=0）可重入",
         await store.TryStartProcessingAsync("probe-consumer", "probe-msg-stale", clock, TimeSpan.Zero, default) is not null, "");
+}
+
+async Task AmbientTxDapperSmoke(DbConnection conn, DapperDbType dbType, string tag)
+{
+    // 二轮评审 T5 断链探针：DI 形态 store（transaction: null）+ DapperUnitOfWork.Begin →
+    // 写入必须进入活动事务（回滚即丢弃）。挂接缺失时两种失败形态都会被捕获：
+    // MySQL/PG 严格校验（未挂 tx 的命令直接抛）或写入自动提交（回滚后仍可查到）。
+    var store = new DapperOutboxStore(conn, dbType);
+    await using var uow = new DapperUnitOfWork(conn);
+    await uow.BeginTransactionAsync(default);
+    store.AddMessage(new OutboxMessage
+    {
+        Type = "probe.ambienttx.v1", Payload = [9], ContentType = "application/json", SchemaVersion = 1,
+        CorrelationId = PalUlid.New(), CausationId = PalUlid.New(),
+    });
+    await uow.RollbackAsync(default);
+    var leaked = await store.GetPendingMessagesAsync(10, 10, default);
+    Check(tag, "AmbientTx 回滚后无泄漏", leaked.Count == 0, $"泄漏 {leaked.Count} 条（store 未挂接 UoW 事务）");
 }
 
 async Task CheckpointSmoke(DbConnection conn, DapperDbType dbType, string tag)

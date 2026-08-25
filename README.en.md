@@ -708,7 +708,7 @@ flowchart TB
 | [Engineering Conventions](docs/conventions.md) | Naming, file organization, DI, AOT |
 | [AOT Guide](docs/aot.md) | Native AOT rules and checklist |
 | [Performance Records](docs/performance.md) | Benchmark data |
-| [Architecture Decisions](docs/decisions/) | 17 ADRs |
+| [Architecture Decisions](docs/decisions/) | 21 ADRs |
 
 ---
 

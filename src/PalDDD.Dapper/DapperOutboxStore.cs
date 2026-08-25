@@ -65,6 +65,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     private readonly DapperDbType _dbType;
     private readonly DapperSqlDialect _dialect;
     private readonly DbTransaction? _transaction;
+    /// <summary>生效事务（二轮评审 T5）：显式构造参数优先，否则查同连接 DapperUnitOfWork
+    /// 的 ambient 活动事务——DI 解析的 Store（构造时无事务）也能参与 UoW 事务边界。</summary>
+    private DbTransaction? Tx => _transaction ?? DapperAmbientTransaction.TryGet(_connection);
+
     private readonly TimeProvider _timeProvider;
 
     // 三十八轮统一（状态列 int 化）：status 列持久化契约从字符串 'Pending' 改为 INT 0
@@ -100,7 +104,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             new CommandDefinition(
                 SqlTemplates.OutboxSelectPending,
                 new { status = StatusPending, now = ToTimeParam(now), maxRetryCount, n = batchSize },
-                _transaction, cancellationToken: ct)).ConfigureAwait(false);
+                Tx, cancellationToken: ct)).ConfigureAwait(false);
         return messages.AsList();
     }
 
@@ -128,7 +132,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
                     // 可被 Npgsql MaxAutoPrepare 自动预备（PG 数据源侧已默认启用）。
                     SqlTemplates.OutboxLeaseUpdatePG,
                     new { owner, until = ToTimeParam(until), now = ToTimeParam(now), maxRetryCount, n = batchSize },
-                    _transaction, cancellationToken: ct)).ConfigureAwait(false);
+                    Tx, cancellationToken: ct)).ConfigureAwait(false);
             return msgs.AsList();
         }
         else
@@ -143,7 +147,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
                 new CommandDefinition(
                     leaseSql,
                     new { owner, until = ToTimeParam(until), now = ToTimeParam(now), maxRetryCount, n = batchSize },
-                    _transaction, cancellationToken: ct)).ConfigureAwait(false);
+                    Tx, cancellationToken: ct)).ConfigureAwait(false);
 
             // 🔴 P0 修复：按租约标识回读，不重新评估子查询
             // ITM-109 修复（声明，对齐 PalORM P3 声明）：回读按 (locked_by, locked_until)
@@ -154,7 +158,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
                 new CommandDefinition(
                     SqlTemplates.OutboxSelectByLease,
                     new { owner, until = ToTimeParam(until) },
-                    _transaction, cancellationToken: ct)).ConfigureAwait(false);
+                    Tx, cancellationToken: ct)).ConfigureAwait(false);
             return msgs.AsList();
         }
     }
@@ -177,11 +181,11 @@ public sealed class DapperOutboxStore : IPalOutboxStore
                 CausationId = message.CausationId?.ToString(),
                 message.TraceParent,
                 message.TraceState
-            }, _transaction);
+            }, Tx);
     }
 
     /// <summary>批量添加消息 — 自动选择数据库最优批量路径。
-    /// <para>三十八轮 P2 修复：批量插入现支持参与 UnitOfWork 外部事务——_transaction 经
+    /// <para>三十八轮 P2 修复：批量插入现支持参与 UnitOfWork 外部事务——Tx 经
     /// BulkInsertAsync 贯通三方言（PG COPY 自动入连接事务；MySQL 显式挂接；SQLite 挂接外部
     /// 事务不 Commit）。未开启事务时行为不变。</para>
     /// </summary>
@@ -203,7 +207,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             messages,
             m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, StatusPending, now,
                 m.CorrelationId?.ToString(), m.CausationId?.ToString(), m.TraceParent, m.TraceState],
-            _transaction).ConfigureAwait(false);
+            Tx).ConfigureAwait(false);
     }
 
     public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
@@ -219,7 +223,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // 与 InMemory 版（守卫内联设 Processed）/PalORM 版（affected>0 才全套回写）的分叉属
         // ITM-210 历史语义，调用方（OutboxBatchProcessor）不读该状态故无实害。
         c.Execute(SqlTemplates.OutboxMarkProcessed,
-            new { at = ToTimeParam(processedAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message) }, _transaction);
+            new { at = ToTimeParam(processedAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message) }, Tx);
         // ITM-130 修复：SQL 清除 DB 租约列后同步入参——调用方读入参不应再见陈旧持有者
         // （对齐 EFCore/PalORM/InMemory 三姊妹的对象字段语义）
         message.LockedBy = null;
@@ -239,7 +243,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // 不回写 Status——与 InMemory 版（守卫内联设 Dead）/PalORM 版（affected>0 才全套回写）
         // 的分叉属 ITM-210 历史语义，调用方（OutboxBatchProcessor）不读该状态故无实害。
         c.Execute(SqlTemplates.OutboxMarkDead,
-            new { reason = failureReason, at = ToTimeParam(deadAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message) }, _transaction); // P1 修复（八轮评审）：时间参数走 ToTimeParam；三十四轮 ITM-210：租约 token 参数
+            new { reason = failureReason, at = ToTimeParam(deadAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message) }, Tx); // P1 修复（八轮评审）：时间参数走 ToTimeParam；三十四轮 ITM-210：租约 token 参数
         // ITM-130 修复：SQL 清除 DB 租约列后同步入参（对齐 EFCore/PalORM/InMemory 三姊妹）
         message.LockedBy = null;
         message.LockedUntil = null;
@@ -256,7 +260,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // 抢占后，原 worker 的失败释放不再清掉新 worker 的锁或误增 retry_count；三十四轮 ITM-210
         // 升级为 token 完全匹配（owner/until 调用时快照，无租约时均传 null 走 IS NULL 分支）。
         var affected = c.Execute(SqlTemplates.OutboxReleaseForRetry,
-            new { reason = failureReason, next = ToTimeParam(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message) }, _transaction);
+            new { reason = failureReason, next = ToTimeParam(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message) }, Tx);
         // ITM-130 修复：SQL 成功（affected>0）后同步入参到 DB 终态（对齐 PalORM ReleaseForRetry
         // 成功路径）；守卫拒绝（affected=0，租约已被他人持有）时零变异——保持 PalORM 零变异语义。
         if (affected > 0)
@@ -285,7 +289,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             new CommandDefinition(
                 SqlTemplates.OutboxRequeueDead,
                 new { audit, next = ToTimeParam(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(messageId) },
-                _transaction, cancellationToken: ct)).ConfigureAwait(false);
+                Tx, cancellationToken: ct)).ConfigureAwait(false);
     }
 
     public ValueTask<int> SaveChangesAsync(CancellationToken ct) => ValueTask.FromResult(0);

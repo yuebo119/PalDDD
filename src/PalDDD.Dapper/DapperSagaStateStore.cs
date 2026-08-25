@@ -39,6 +39,10 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
 {
     private readonly DbConnection _connection;
     private readonly DbTransaction? _transaction;
+    /// <summary>生效事务（二轮评审 T5）：显式构造参数优先，否则查同连接 DapperUnitOfWork
+    /// 的 ambient 活动事务——DI 解析的 Store（构造时无事务）也能参与 UoW 事务边界。</summary>
+    private DbTransaction? Tx => _transaction ?? DapperAmbientTransaction.TryGet(_connection);
+
     private readonly JsonTypeInfo<TState>? _jsonTypeInfo;
 
     /// <summary>
@@ -74,7 +78,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
 
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
         var rows = await conn.QueryAsync<SagaStateRow>(
-            new CommandDefinition(SqlTemplates.SagaActive, new { n = batchSize }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+            new CommandDefinition(SqlTemplates.SagaActive, new { n = batchSize }, Tx, cancellationToken: ct)).ConfigureAwait(false);
         return rows.Select(Materialize).ToList();
     }
 
@@ -102,7 +106,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
             _ => SqlTemplates.SagaLeaseActive
         };
         await conn.ExecuteAsync(
-            new CommandDefinition(leaseSql, new { owner, until = ToTimeParam(until), now = ToTimeParam(now), n = batchSize }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+            new CommandDefinition(leaseSql, new { owner, until = ToTimeParam(until), now = ToTimeParam(now), n = batchSize }, Tx, cancellationToken: ct)).ConfigureAwait(false);
 
         // 三十八轮 P3 声明（对齐 OutboxSelectByLease 的 ITM-109 格式）：两步租约回读按
         // (leased_by, leased_until) 匹配——同一 owner 在同一 tick（until 完全相等，如
@@ -110,7 +114,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         // 生产触发条件近乎为零（DATETIME(6) 微秒精度 + 单 owner 串行租约）；PG 走
         // FOR UPDATE SKIP LOCKED 单语句天然免疫。残余窗口由 SagaUpdate 的 version 乐观锁兜底。
         var rows = await conn.QueryAsync<SagaStateRow>(
-            new CommandDefinition(SqlTemplates.SagaSelectByLease, new { owner, until = ToTimeParam(until) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+            new CommandDefinition(SqlTemplates.SagaSelectByLease, new { owner, until = ToTimeParam(until) }, Tx, cancellationToken: ct)).ConfigureAwait(false);
         return rows.Select(Materialize).ToList();
     }
 
@@ -118,7 +122,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
     {
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
         var row = await conn.QueryFirstOrDefaultAsync<SagaStateRow>(
-            new CommandDefinition(SqlTemplates.SagaById, new { id = DapperAotInitializer.ToSqliteParameter(sagaId) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+            new CommandDefinition(SqlTemplates.SagaById, new { id = DapperAotInitializer.ToSqliteParameter(sagaId) }, Tx, cancellationToken: ct)).ConfigureAwait(false);
         return row is null ? null : Materialize(row);
     }
 
@@ -149,7 +153,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
                         id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
                         v = state.Version
                     },
-                    _transaction,
+                    Tx,
                     cancellationToken: ct)).ConfigureAwait(false);
 
             if (rows > 0) state.Version++;
@@ -176,7 +180,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
                         leasedBy = state.LeasedBy,
                         leasedUntil = state.LeasedUntil.HasValue ? ToTimeParam(state.LeasedUntil.Value) : null
                     },
-                    _transaction,
+                    Tx,
                     cancellationToken: ct)).ConfigureAwait(false);
         }
         catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))

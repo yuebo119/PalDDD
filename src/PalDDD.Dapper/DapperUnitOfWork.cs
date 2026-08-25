@@ -45,6 +45,10 @@ public sealed class DapperUnitOfWork : IUnitOfWork
         if (_connection.State != System.Data.ConnectionState.Open)
             await _connection.OpenAsync(ct).ConfigureAwait(false);
         _transaction = await _connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        // 二轮评审 T5：活动事务登记到 ambient 通道——同连接的 DI 解析 Store
+        // （Outbox/Inbox/SagaState/Checkpoint/EventLog）执行时自动挂接，
+        // 消除"DI Store 恒无事务"的构造时序断链（见 DapperAmbientTransaction）。
+        DapperAmbientTransaction.Set(_connection, _transaction);
     }
 
     public async ValueTask CommitAsync(CancellationToken ct = default)
@@ -65,6 +69,7 @@ public sealed class DapperUnitOfWork : IUnitOfWork
             try { await transaction.DisposeAsync().ConfigureAwait(false); }
             catch (Exception ex) when (ex is InvalidOperationException or System.Data.Common.DbException) { /* 事务已失效/已释放 */ }
             _transaction = null;
+            DapperAmbientTransaction.Set(_connection, null);
         }
     }
 
@@ -87,6 +92,7 @@ public sealed class DapperUnitOfWork : IUnitOfWork
             try { await transaction.DisposeAsync().ConfigureAwait(false); }
             catch (Exception ex) when (ex is InvalidOperationException or System.Data.Common.DbException) { /* 事务已失效/已释放 */ }
             _transaction = null;
+            DapperAmbientTransaction.Set(_connection, null);
         }
     }
 
@@ -107,6 +113,7 @@ public sealed class DapperUnitOfWork : IUnitOfWork
             try { await transaction.DisposeAsync().ConfigureAwait(false); }
             catch (Exception ex) when (ex is InvalidOperationException or System.Data.Common.DbException) { /* 事务已失效/已释放 */ }
             _transaction = null;
+            DapperAmbientTransaction.Set(_connection, null);
         }
     }
 }
