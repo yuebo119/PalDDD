@@ -1,7 +1,7 @@
-# ADR 020：三栈并行策略与 Dapper 栈退役路线（草案，退役时点待维护者裁决）
+# ADR 020：三栈并行策略与 Dapper 栈退役路线
 
-> 状态：草案（战略方向已定，Dapper 退役时点待维护者裁决）
-> 日期：2026-08-26
+> 状态：已采纳（维护者裁决 2026-08-26：v3.0 Obsolete / v4.0 移除；IPalOutboxStore 契约统一+异步化并入 v3.0 窗口）
+> 日期：2026-08-26（草案）/ 2026-08-26（采纳）
 > 关联：README"Dapper 持久化 — ⚠️ 不支持 AOT，逐步弃用"、ADR-012（方言项目粒度）、二轮架构评审"三栈并行的姊妹维护成本"
 
 ## 背景
@@ -19,7 +19,7 @@ Outbox/Inbox/Saga/EventLog/Projection 持久化当前有**三栈并存**（加 I
 ## 决策
 
 1. **战略方向：收敛到 PalORM（AOT 主线）+ EF Core（生态兼容线）双栈**，Dapper 栈进入退役轨道。
-2. **退役节奏（建议，待维护者裁决时点）**：
+2. **退役节奏（维护者已裁决 2026-08-26，按建议节奏执行）**：
    - **现在起**：Dapper 栈只修缺陷不加特性；新特性（新 Store 能力、新表）仅落 PalORM/EFCore 双栈；README 与 docs 的推荐位序把 Dapper 移到"存量维护"段。
    - **v3.0（破坏性变更窗口）**：Dapper 栈标记 `[Obsolete]`（编译期警告 + 迁移指引）；同窗口合并 IPalOutboxStore 异步化与跨栈 fencing 契约统一（两项均已排队的破坏性变更，一次 major 窗口清偿）。
    - **v4.0**：移除 Dapper 五包（PalDDD.Dapper / .MySql / .PostgreSql / .Sqlite 及关联），保留迁移文档。

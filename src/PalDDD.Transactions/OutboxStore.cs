@@ -10,6 +10,14 @@ namespace PalDDD.Transactions;
 /// <remarks>
 /// 生产实现必须提供原子租约获取语义，避免多实例重复发布。<br/>
 /// EF Core / SQL Server 实现由 PalDDD.Transactions.EFCore 适配包提供。
+/// <para>
+/// 📣 <b>v3.0 破坏性变更预告（ADR-020，维护者裁决 2026-08-26）</b>：本接口的两项已排队
+/// 破坏性变更合并到 v3.0 窗口执行——① <b>跨栈 fencing 契约统一</b>：对未租约消息
+/// MarkProcessed 的三栈分歧行为（PalORM/Dapper 放行 vs InMemory 拒绝，见
+/// <see cref="MarkProcessed"/> Remarks）收敛为统一语义；② <b>异步化</b>：AddMessage/
+/// MarkProcessed/MarkDead/ReleaseForRetry 等同步方法改异步签名（PalORM 栈 7 处
+/// sync-over-async 的根因）。实现者请在 v3.0 前关注迁移指引。
+/// </para>
 /// </remarks>
 public interface IPalOutboxStore
 {
