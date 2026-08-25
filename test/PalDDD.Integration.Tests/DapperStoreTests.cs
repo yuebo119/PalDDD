@@ -219,6 +219,47 @@ public sealed class DapperStoreTests
         await Assert.That(pending[0].Status).IsEqualTo(OutboxStatus.Pending);
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // 二轮评审 T5：DapperUnitOfWork ambient 事务贯通行为回归。
+    // ⚠️ 能力边界（S3 反向验证实证 + 对齐 PalOrmAmbientTransaction 声明）：SQLite 引擎级
+    // 事务使同连接命令自动参与活动事务——本测试对"ambient 挂接缺失"不可观测（禁用
+    // DapperAmbientTransaction.Set 后测试仍过，已实测）。它验证的是行为语义正确性
+    // （回滚丢弃/提交持久化/边界清理），真正的断链探测器在 scripts/dialect-probe.sh
+    // 的 AmbientTxDapperSmoke（MySQL/PG 严格校验，CI dialect-probe job 承载）。
+    // ─────────────────────────────────────────────────────────────
+
+    [Test]
+    public async Task UnitOfWorkRollback_DIAppliedStoreWrite_IsDiscarded(CancellationToken cancellationToken)
+    {
+        // DI 解析形态：与 DapperServiceCollectionExtensions 的容器构造完全一致（无事务参数）
+        var store = new DapperOutboxStore(_conn, _dbType);
+        await using var uow = new DapperUnitOfWork(_conn);
+
+        await uow.BeginTransactionAsync(cancellationToken);
+        store.AddMessage(CreateOutboxMessage("tx.rollback.v1"));
+        await uow.RollbackAsync(cancellationToken);
+
+        // 回滚后消息不可见——若 store 未挂接 UoW 事务（断链），写入已自动提交、此处查到 1 条
+        var pending = await store.GetPendingMessagesAsync(10, new OutboxOptions().MaxRetryCount, cancellationToken);
+        await Assert.That(pending).IsEmpty();
+    }
+
+    [Test]
+    public async Task UnitOfWorkCommit_DIAppliedStoreWrite_Persists(CancellationToken cancellationToken)
+    {
+        var store = new DapperOutboxStore(_conn, _dbType);
+        await using var uow = new DapperUnitOfWork(_conn);
+
+        await uow.BeginTransactionAsync(cancellationToken);
+        store.AddMessage(CreateOutboxMessage("tx.commit.v1"));
+        await uow.CommitAsync(cancellationToken);
+
+        // 提交后持久化且 ambient 通道已清空（后续写入不再误挂已终结事务）
+        store.AddMessage(CreateOutboxMessage("tx.after-commit.v1"));
+        var pending = await store.GetPendingMessagesAsync(10, new OutboxOptions().MaxRetryCount, cancellationToken);
+        await Assert.That(pending.Count).IsEqualTo(2);
+    }
+
     [Test]
     public async Task Outbox_AddMessage_UsesInjectedTimeProvider(CancellationToken cancellationToken)
     {

@@ -41,6 +41,10 @@ public sealed class DapperInboxStore : IInboxStore
     private readonly DapperSqlDialect _dialect;
     private readonly DapperDbType _dbType;
     private readonly DbTransaction? _transaction;
+    /// <summary>生效事务（二轮评审 T5）：显式构造参数优先，否则查同连接 DapperUnitOfWork
+    /// 的 ambient 活动事务——DI 解析的 Store（构造时无事务）也能参与 UoW 事务边界。</summary>
+    private DbTransaction? Tx => _transaction ?? DapperAmbientTransaction.TryGet(_connection);
+
 
     /// <param name="transaction">可选共享事务（用于 UnitOfWork 模式）</param>
     public DapperInboxStore(DbConnection connection, DapperDbType dbType, DbTransaction? transaction = null)
@@ -70,7 +74,7 @@ public sealed class DapperInboxStore : IInboxStore
         {
             insertedId = await c.QueryFirstOrDefaultAsync<long?>(
                 new CommandDefinition(_dialect.InboxInsert,
-                    new { c = consumerName, m = messageId, now = ToTimeParam(now) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+                    new { c = consumerName, m = messageId, now = ToTimeParam(now) }, Tx, cancellationToken: ct)).ConfigureAwait(false);
         }
         catch (DbException ex) when (_dbType == DapperDbType.MySql && IsUniqueConstraintViolation(ex))
         {
@@ -92,7 +96,7 @@ public sealed class DapperInboxStore : IInboxStore
 
         var existing = await c.QueryFirstOrDefaultAsync<InboxMessage>(
             new CommandDefinition(SqlTemplates.InboxSelect,
-                new { c = consumerName, m = messageId }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+                new { c = consumerName, m = messageId }, Tx, cancellationToken: ct)).ConfigureAwait(false);
 
         if (existing is not null)
         {
@@ -110,7 +114,7 @@ public sealed class DapperInboxStore : IInboxStore
                         // P1 修复（超时接管）：cutoff = now - processingTimeout——超时前的 Processing
                         // 记录可被抢占，刚开始的不可（CAS 由 processing_started_at 原子更新保证）
                         cutoff = ToTimeParam(now - processingTimeout)
-                    }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+                    }, Tx, cancellationToken: ct)).ConfigureAwait(false);
             if (rows == 0) return null;
 
             // ITM-168 修复：抢占后本地字段同步 DB 真值——原实现只改 Status/Attempts，
@@ -142,7 +146,7 @@ public sealed class DapperInboxStore : IInboxStore
         //（R41 ITM-271 勘正原"SQL 等值比较 NULL 永假"的失实描述——SQL 层不可达）；行为仍 fail-closed。
         await c.ExecuteAsync(
             new CommandDefinition(SqlTemplates.InboxMarkProcessed,
-                new { at = ToTimeParam(processedAt), id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+                new { at = ToTimeParam(processedAt), id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value) }, Tx, cancellationToken: ct)).ConfigureAwait(false);
     }
 
     public async ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
@@ -155,7 +159,7 @@ public sealed class DapperInboxStore : IInboxStore
         // 三十八轮 P2 修复：同 MarkProcessedAsync——processing_started_at 抢占 token 守卫
         await c.ExecuteAsync(
             new CommandDefinition(SqlTemplates.InboxMarkFailed,
-                new { err = failureReason, id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value) }, _transaction, cancellationToken: ct)).ConfigureAwait(false);
+                new { err = failureReason, id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value) }, Tx, cancellationToken: ct)).ConfigureAwait(false);
     }
 
     /// <summary>

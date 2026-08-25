@@ -11,7 +11,13 @@ namespace PalDDD.Transactions;
 /// （等值比较在 EF SQLite 可翻译——ITM-261 实证仅有序比较不可翻译），
 /// SQLite WAL 单写者串行化 UPDATE——后写实例守卫不匹配、影响 0 行、该消息被丢弃，
 /// 与 MySQL/Dapper 栈的 (locked_by, locked_until) 双守卫语义对齐。
-/// 代价：批次内逐条 UPDATE（SQLite 嵌入式单机场景可接受，且 WAL 写事务本就串行）。
+/// <para>
+/// ⚠️ <b>批次语义（二轮评审验证轮披露）</b>：逐条 UPDATE 无显式包围事务——批次第 k 条
+/// 抛异常（如 SQLITE_BUSY）时，已租的 0..k-1 条成为"已租未发布"，异常上抛至后台循环，
+/// 这些消息需等 LeaseDuration 过期后由下一 tick 重租重试（<b>延迟，非丢失/重复</b>——
+/// CAS 守卫保证不重复发布）。租约方法不包含在调用方的 SaveChanges 事务中属预期行为：
+/// 租约的存活期本就应超越单次业务事务。
+/// </para>
 /// </remarks>
 public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDbContext(options)
 {

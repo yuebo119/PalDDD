@@ -10,6 +10,26 @@
 
 ## [Unreleased]
 
+### ⚠️ 行为变更（AddPalLogging 追加语义，二轮评审 P2-2）
+
+- **`AddPalLogging` 默认不再清除用户已配置的日志 Provider、不再覆盖最低级别**——v2.0.0 的旧行为（隐式 `ClearProviders()` + `SetMinimumLevel(Information)`）会静默丢弃调用方的全部日志配置，属隐式破坏性副作用。新主签名为 `AddPalLogging(IServiceCollection, bool clearProviders = false, LogLevel? minimumLevel = null)`：独占接管传 `clearProviders: true`，指定级别传 `minimumLevel`。**原 1 参重载保留**（委托至新签名默认参数，源码与二进制均兼容）——注意其行为已从"独占接管"变为"追加"：ASP.NET 默认宿主下宿主 Console Provider 与 ZLoggerConsole 并存，日志将双份输出（plain + JSON），需要旧行为请显式传 `clearProviders: true`
+- ⚠️ 已知可观测变化：`WebApplication.CreateBuilder` 默认自带 Console/Debug/EventSource Provider（官方文档），追加语义下宿主 plain-text Console 与 ZLoggerConsole 并存、每条日志双份输出（此前被 ClearProviders 抑制）；需要旧行为请显式传 `clearProviders: true`。`CreateSlimBuilder` 场景经 MinimalApi 样例实测无宿主 Console 输出，无双份问题
+
+### 行为变更（AddPalCommandHandler/AddPalQueryHandler 自动补齐核心注册，二轮评审 P2-1）
+
+- 漏调 `AddPalDDD()` 时不再把错误延迟到首个请求（HandlerNotFound）：两个显式注册 API 现自动调用 `AddPalDDD()`（全 TryAdd 幂等，已显式调用者零影响）。纯 `BuildServiceProvider()`（非 IHost）场景 IHostedService 仍不执行——见 `HandlerRegistrar` Remarks 的手动注册指引
+
+### 修复（SQLite Outbox 租约竞态，二轮评审 P1-3）
+
+- `SqliteOutboxDbContext.LeasePendingMessagesAsync` 弃"SELECT 跟踪→内存改→SaveChanges"三步分离（两实例可同时租约同一批消息导致重复发布），改逐条 CAS 条件更新（`ExecuteUpdateAsync` 以 `Id + Status==Pending + LockedUntil==原值` 守卫，0 行即被抢占丢弃），多实例语义对齐 PG/MySQL。已知语义：批次内逐条 UPDATE 无显式事务——中途失败已租消息需等租约过期重试（延迟非丢失/重复）
+
+### 内部（不涉公共 API）
+
+- 架构边界测试改 csproj XML 解析 + 家族前缀匹配（消灭 `Confluent.Kafka`/`RabbitMQ.Client`/`MySqlConnector`/`Pomelo.*` 等文本子串匹配盲区）+ 项目引用路径分隔符归一化（修复 Linux CI 守卫空转）
+- `ci-coverage.sh` 落地全局行覆盖率 ≥65% 门禁（fail-closed）
+- Saga 补偿幂等契约升格（`SagaStep.CompensateAsync` Remarks 强制声明）
+- PalORM 栈五处 SQL 错误分类器收敛为共享 `SqlErrorClassifier`（反射属性缓存）
+
 ## [2.0.0] - 2026-08-23
 
 ### ⚠️ 破坏性变更（三十八轮统一：状态列 int 化）

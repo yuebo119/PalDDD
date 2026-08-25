@@ -14,6 +14,10 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
 {
     private readonly DbConnection _connection;
     private readonly DbTransaction? _transaction;
+    /// <summary>生效事务（二轮评审 T5）：显式构造参数优先，否则查同连接 DapperUnitOfWork
+    /// 的 ambient 活动事务——DI 解析的 Store（构造时无事务）也能参与 UoW 事务边界。</summary>
+    private DbTransaction? Tx => _transaction ?? DapperAmbientTransaction.TryGet(_connection);
+
     private readonly string _insertSql;
     private readonly DapperDbType _dbType;
 
@@ -42,7 +46,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
             new CommandDefinition(
                 SelectOne,
                 new { projectionName, sourceName, position },
-                _transaction,
+                Tx,
                 cancellationToken: ct)).ConfigureAwait(false) is { } row
             ? row.ToCheckpoint()
             : null;
@@ -81,7 +85,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                 new CommandDefinition(
                     _insertSql,
                     new { projectionName, sourceName, position, status = ProjectionCheckpointStatus.Processing, startedAt = ToTimeParam(startedAt), leaseUntil = ToTimeParam(leaseUntil) },
-                    _transaction,
+                    Tx,
                     cancellationToken: ct)).ConfigureAwait(false);
         }
         catch (DbException ex) when (_dbType == DapperDbType.MySql && IsUniqueConstraintViolation(ex))
@@ -119,7 +123,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                     leaseUntil = ToTimeParam(leaseUntil),
                     revision = existing.Revision
                 },
-                _transaction,
+                Tx,
                 cancellationToken: ct)).ConfigureAwait(false);
 
         if (rows == 0)
@@ -147,7 +151,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                     completedAt = ToTimeParam(completedAt),
                     checkpoint.Revision
                 },
-                _transaction,
+                Tx,
                 cancellationToken: ct)).ConfigureAwait(false);
         // P2 修复：乐观并发（WHERE revision=@Revision）冲突时 rows=0，DB 状态未变——
         // 不再无条件变更本地对象，避免调用方误以为落库成功（对齐 EFCore 版 detach 语义）
@@ -177,7 +181,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                     error = failureReason,
                     checkpoint.Revision
                 },
-                _transaction,
+                Tx,
                 cancellationToken: ct)).ConfigureAwait(false);
         // P2 修复：同 MarkCompletedAsync——并发冲突（rows=0）时不变更本地对象
         if (rows > 0)
@@ -197,7 +201,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
             new CommandDefinition(
                 Reset,
                 new { projectionName, sourceName },
-                _transaction,
+                Tx,
                 cancellationToken: ct)).ConfigureAwait(false);
     }
 

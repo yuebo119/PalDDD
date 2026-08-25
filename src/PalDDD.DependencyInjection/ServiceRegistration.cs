@@ -137,6 +137,17 @@ public static class ServiceRegistration
         }
     }
 
+    /// <summary>注册 ZLogger + IPalLogger&lt;T&gt; 日志门面（追加语义）。</summary>
+    /// <remarks>
+    /// v2.0.0 二进制兼容重载（二轮评审 P2-NEW-2）：主签名改为 3 参后，已针对 1 参
+    /// <c>AddPalLogging(IServiceCollection)</c> 编译的消费者升级本包会 MissingMethodException——
+    /// 本重载委托至主签名，恢复二进制兼容；行为与主签名默认参数一致（追加，不清除）。
+    /// 注意：v2.0.0 发布时的旧行为（ClearProviders + SetMinimumLevel(Information)）<b>未</b>
+    /// 恢复——独占接管请显式传 <c>clearProviders: true</c>。
+    /// </remarks>
+    public static IServiceCollection AddPalLogging(this IServiceCollection services)
+        => services.AddPalLogging(clearProviders: false, minimumLevel: null);
+
     /// <summary>注册 ZLogger + IPalLogger&lt;T&gt; 日志门面。</summary>
     /// <remarks>
     /// 追加 ZLogger 控制台 JSON Provider 并注册 <see cref="IPalLogger{T}"/> → <see cref="PalLogger{T}"/> 单例适配。<br/>
@@ -144,6 +155,12 @@ public static class ServiceRegistration
     /// <b>不</b>覆盖最低级别——旧行为 <c>ClearProviders()</c> 会静默丢弃调用方的全部日志配置，
     /// 属隐式破坏性副作用。如需独占式接管日志管道，传 <paramref name="clearProviders"/>: true；
     /// 如需指定最低级别，传 <paramref name="minimumLevel"/>（未传时不触碰，尊重宿主默认/appsettings）。
+    /// <para>
+    /// ⚠️ <b>已知可观测变化（二轮评审验证轮）</b>：ASP.NET Core 默认宿主自带 Console
+    /// Provider（<c>WebApplication.CreateBuilder</c> 默认添加 Console/Debug/EventSource 等，
+    /// 官方文档"Logging providers"节）——追加语义下宿主 plain-text Console 与本方法添加的
+    /// ZLoggerConsole JSON 并存，<b>每条日志双份输出</b>。需要单输出时传 <c>clearProviders: true</c>。
+    /// </para>
     /// </remarks>
     public static IServiceCollection AddPalLogging(
         this IServiceCollection services,

@@ -19,7 +19,6 @@ public sealed class IdempotencyProcessor
     // （IdempotencyDbContext），超长 ex.Message 让 MarkFailedAsync 自身抛截断异常 →
     // 失败记录残留 Processing → 租约过期重放 → 副作用二次执行。
     // 对齐 OutboxBatchProcessor/InboxProcessor 的 MaxFailureReasonLength=2000（PD24 失败标记族）。
-    internal const int MaxFailureReasonLength = 2000;
 
     private readonly IIdempotencyStore _store;
     private readonly TimeProvider _timeProvider;
@@ -73,16 +72,7 @@ public sealed class IdempotencyProcessor
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // ITM-175 修复：截断后再入库（对齐 Inbox/Outbox 管线孪生）
-            var failureReason = ex.Message is { Length: > MaxFailureReasonLength }
-                ? ex.Message[..MaxFailureReasonLength]
-                : ex.Message ?? string.Empty;
-            // F2 修复（audit-probe 2026-08-23）：空白/空 ex.Message（含自定义异常
-            // override Message 返回 null）——三个 Store 的 MarkFailedAsync 入口
-            // ThrowIfNullOrWhiteSpace 抛 ArgumentException 被下方 catch 吞掉，记录残留
-            // Processing → 租约过期重放 handler → 副作用二次执行（与 ITM-175 同后果链，
-            // 只堵了长度没堵空白/null）。回退固定文案归一化。
-            if (string.IsNullOrWhiteSpace(failureReason))
-                failureReason = "(no message)";
+            var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
             try
             {
                 await _store.MarkFailedAsync(record, failureReason, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);

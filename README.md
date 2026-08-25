@@ -714,7 +714,7 @@ flowchart TB
 | [工程规范](docs/conventions.md) | 命名、文件组织、DI、AOT |
 | [AOT 指南](docs/aot.md) | Native AOT 规则与检查清单 |
 | [性能记录](docs/performance.md) | 基准测试数据 |
-| [架构决策](docs/decisions/) | 17 份 ADR |
+| [架构决策](docs/decisions/) | 21 份 ADR |
 
 ---
 

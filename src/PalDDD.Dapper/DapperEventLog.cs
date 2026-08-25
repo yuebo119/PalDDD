@@ -39,6 +39,10 @@ public sealed class DapperEventLog : IEventLog
 {
     private readonly DbConnection _connection;
     private readonly DbTransaction? _transaction;
+    /// <summary>生效事务（二轮评审 T5）：显式构造参数优先，否则查同连接 DapperUnitOfWork
+    /// 的 ambient 活动事务——DI 解析的 Store（构造时无事务）也能参与 UoW 事务边界。</summary>
+    private DbTransaction? Tx => _transaction ?? DapperAmbientTransaction.TryGet(_connection);
+
     private readonly DapperDbType _dbType;
     private readonly TimeProvider _timeProvider;
 
@@ -66,13 +70,13 @@ public sealed class DapperEventLog : IEventLog
         if (events.Count == 0) throw new ArgumentException("至少需要一个事件。", nameof(events));
 
         // 📐 事务契约（P2 定案声明）：批量追加的原子性由调用方事务保证——传入
-        // _transaction 则整批可回滚；未传时中途失败会留下前半批（部分写入）。
+        // Tx 则整批可回滚；未传时中途失败会留下前半批（部分写入）。
         // EFCore 版在内部事务中自动回滚，Dapper 版依赖外部 UoW（两版契约差异是
         // Dapper 连接由调用方持有的设计结果——与 PalORM 版一致）。
         // 1. 乐观并发检查（P0-2 修复：原 expectedVersion.Matches 返回值被丢弃）
         var currentVersion = await _connection.QueryFirstOrDefaultAsync<long?>(
             new CommandDefinition(EventLogSql.MaxVersion,
-                new { name = streamName }, _transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
+                new { name = streamName }, Tx, cancellationToken: cancellationToken)).ConfigureAwait(false);
         if (!expectedVersion.Matches(currentVersion ?? -1))
             throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion ?? -1);
 
@@ -115,7 +119,7 @@ public sealed class DapperEventLog : IEventLog
                     CausationId = evt.Audit.CausationId?.ToString(),
                     TraceParent = evt.Audit.TraceParent,
                     TraceState = evt.Audit.TraceState
-                }, _transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
+                }, Tx, cancellationToken: cancellationToken)).ConfigureAwait(false);
             }
             catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
             {
@@ -123,7 +127,7 @@ public sealed class DapperEventLog : IEventLog
                 // EventId 冲突误译防护（对齐 EFCore 版）：版本仍满足期望说明是 EventId 唯一
                 // 索引撞（重复事件 ID），原样上抛而非转并发异常
                 // P2 修复（stale version）：冲突后重查实际版本再分类——预检查快照可能已陈旧
-                // P1 修复（八轮评审）：重查必须挂接 _transaction——Microsoft.Data.Sqlite 要求
+                // P1 修复（八轮评审）：重查必须挂接 Tx——Microsoft.Data.Sqlite 要求
                 // 命令挂接连接的活动事务（传 null 在 UoW 事务内抛 InvalidOperationException，
                 // 吞掉本应转换的并发异常）。PG 事务 aborted（25P02）下同事务重查自身会抛——
                 // 无法分类时保守上抛原始冲突异常（外层事务将回滚，不会产生误判）。
@@ -132,7 +136,7 @@ public sealed class DapperEventLog : IEventLog
                 try
                 {
                     actualVersion = await _connection.QueryFirstOrDefaultAsync<long?>(
-                        new CommandDefinition(EventLogSql.MaxVersion, new { name = streamName }, _transaction,
+                        new CommandDefinition(EventLogSql.MaxVersion, new { name = streamName }, Tx,
                             cancellationToken: cancellationToken)).ConfigureAwait(false);
                     requerySucceeded = true;
                 }
@@ -174,7 +178,7 @@ public sealed class DapperEventLog : IEventLog
         // 💡 RecordedEvent 的构造函数是 internal 且属性只读，Dapper 运行时无法直接物化。
         // 通过 EventLogRow DTO（public 无参构造 + public setters）读取，再映射到 RecordedEvent。
         var rows = await _connection.QueryAsync<EventLogRow>(
-            new CommandDefinition(EventLogSql.ReadStream, new { name = streamName, from = fromVersion, max = maxCount }, _transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
+            new CommandDefinition(EventLogSql.ReadStream, new { name = streamName, from = fromVersion, max = maxCount }, Tx, cancellationToken: cancellationToken)).ConfigureAwait(false);
 
         foreach (var row in rows)
             yield return row.ToRecordedEvent();
@@ -190,7 +194,7 @@ public sealed class DapperEventLog : IEventLog
         ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
 
         var rows = await _connection.QueryAsync<EventLogRow>(
-            new CommandDefinition(EventLogSql.ReadAll, new { from = fromPosition, max = maxCount }, _transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
+            new CommandDefinition(EventLogSql.ReadAll, new { from = fromPosition, max = maxCount }, Tx, cancellationToken: cancellationToken)).ConfigureAwait(false);
 
         foreach (var row in rows)
             yield return row.ToRecordedEvent();
