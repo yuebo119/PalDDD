@@ -4,18 +4,14 @@ namespace PalDDD.Transactions;
 
 /// <summary>SQLite outbox store — single-writer, no lock hints needed (WAL mode).</summary>
 /// <remarks>
-/// <b>租约原子性限制（ITM-004）</b>：SQLite 不支持 <c>FOR UPDATE SKIP LOCKED</c>，
-/// 租约操作为"SELECT → 内存改 → SaveChanges"三步分离，无行级锁。
-/// WAL 模式保证单写者串行写入，但不阻塞并发 SELECT 读阶段——多实例 Outbox processor 场景下
-/// 可能出现读-改-写竞态窗口（两个实例读到同一批 Pending 消息）。
-/// <para>
-/// ⚠️ <b>三十八轮 P2 修正（声明失真）：租约写入（LeasePending）无并发防护</b>——
-/// 两实例可同时持同一批租约导致重复发布。原 remarks 声称的"RetryCount 并发令牌冲突兜底"
-/// 实为 no-op：租约写入只改 LockedBy/LockedUntil 不触碰 RetryCount，
-/// <c>UPDATE WHERE RetryCount=@orig</c> 恒匹配、检测不到竞态。
-/// 仅靠部署边界约束（单实例/开发测试）。多实例请用 PG/MySQL/SqlServer 实现
-/// （它们的 LeasePendingMessagesAsync 用 <c>FOR UPDATE SKIP LOCKED</c> 保证原子性）。
-/// </para>
+/// <b>租约原子性（评审 P1-3 修复）</b>：SQLite 不支持 <c>FOR UPDATE SKIP LOCKED</c>，
+/// 旧实现"SELECT 跟踪 → 内存改 → SaveChanges"三步分离，两实例可同时读到同一批
+/// Pending 消息并各自写入租约（重复发布）。现改为逐条 CAS 条件更新：
+/// <c>ExecuteUpdateAsync</c> 以 <c>Id + Status==Pending + LockedUntil==原值</c> 为守卫
+/// （等值比较在 EF SQLite 可翻译——ITM-261 实证仅有序比较不可翻译），
+/// SQLite WAL 单写者串行化 UPDATE——后写实例守卫不匹配、影响 0 行、该消息被丢弃，
+/// 与 MySQL/Dapper 栈的 (locked_by, locked_until) 双守卫语义对齐。
+/// 代价：批次内逐条 UPDATE（SQLite 嵌入式单机场景可接受，且 WAL 写事务本就串行）。
 /// </remarks>
 public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDbContext(options)
 {
@@ -85,18 +81,32 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
         if (leaseDuration.TotalSeconds > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for the lease LockedUntil value.");
         var until = GetUtcNow().Add(leaseDuration);
-        // 优化（二十五轮 API 扫描 EF-5 配套）：租约不复用 GetPendingMessagesAsync——
-        // 其 AsNoTracking 化后，"SELECT → 内存改 → SaveChanges"三步租约（ITM-004，
-        // 见类头 remarks）的突变将静默丢失（SaveChangesAsync 无跟踪条目 = 0 行写入，
-        // RetryCount 令牌兜底也随之失效）。此处用跟踪查询，租约/兜底语义不变。
-        var messages = await QueryEligibleAsync(batchSize, maxRetryCount, asNoTracking: false, ct).ConfigureAwait(false);
+        // 评审 P1-3 修复：租约不再走"SELECT 跟踪 → 内存改 → SaveChanges"（三步分离，
+        // 两实例可同时租约同一批——见类头 remarks）。改为无跟踪读 + 逐条 CAS：
+        // ExecuteUpdateAsync 的 WHERE 守卫（Id 等值 + Status==Pending + LockedUntil==读到的原值）
+        // 全部为等值比较，EF SQLite 可翻译（ITM-261：仅 DateTimeOffset 有序比较不可翻译）。
+        // LockedUntil 等值即版本守卫——另一实例先一步写入租约后本条影响 0 行，消息丢弃。
+        var candidates = await QueryEligibleAsync(batchSize, maxRetryCount, asNoTracking: true, ct).ConfigureAwait(false);
 
-        foreach (var msg in messages)
+        var leased = new List<OutboxMessage>(candidates.Count);
+        foreach (var msg in candidates)
         {
-            msg.LockedBy = owner;
-            msg.LockedUntil = until;
+            var originalLockedUntil = msg.LockedUntil;
+            var affected = await OutboxMessages
+                .Where(m => m.Id == msg.Id
+                         && m.Status == OutboxStatus.Pending
+                         && m.LockedUntil == originalLockedUntil)
+                .ExecuteUpdateAsync(
+                    s => s.SetProperty(m => m.LockedBy, owner)
+                          .SetProperty(m => m.LockedUntil, until),
+                    ct).ConfigureAwait(false);
+            if (affected > 0)
+            {
+                msg.LockedBy = owner;
+                msg.LockedUntil = until;
+                leased.Add(msg);
+            }
         }
-        await SaveChangesAsync(ct).ConfigureAwait(false);
-        return messages;
+        return leased;
     }
 }

@@ -171,9 +171,12 @@ TState>
                     var compensatedSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
                     if (compensatedSaved == 0)
                     {
-                        // P3 修复（八轮）：0 行 = 乐观锁冲突（他实例已写同一 Saga）——
-                        // 补偿结果未落库，本实例的内存快照作废，记 Warning 供排查双写
-                        _logger.Warning($"Saga {sagaState.SagaId} compensated state save affected 0 rows (optimistic concurrency conflict); another instance may have written");
+                        // 评审 P1-4 增强（八轮 P3 基础上）：0 行 = 乐观锁冲突（他实例已写同一
+                        // Saga）——补偿副作用已在本实例执行，他实例可能再次补偿同一 Saga
+                        // （双重副作用风险）。框架无法回滚外部副作用，只能依赖补偿动作幂等
+                        // （契约见 SagaStep.CompensateAsync remarks）——本日志是重入发生时
+                        // 的唯一信号，供告警规则采集。
+                        _logger.Warning($"Saga {sagaState.SagaId} compensated state save affected 0 rows (optimistic concurrency conflict); another instance may have compensated it too — double compensation detected, ensure SagaStep.CompensateAsync actions are idempotent");
                     }
                     else if (compensationSucceeded)
                     {

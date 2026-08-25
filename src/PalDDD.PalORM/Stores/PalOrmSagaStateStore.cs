@@ -190,7 +190,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
                         : (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString()}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {state.Error}, {state.ErrorAt}, {state.Version}, {jsonData}, {state.LeasedBy}, {state.LeasedUntil})",
                     ct).ConfigureAwait(false);
             }
-            catch (DbException ex) when (IsUniqueConstraintViolation(ex))
+            catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
             {
                 throw new InvalidOperationException(
                     $"Saga {state.SagaId} 被并发实例同时创建（主键冲突）——请重新加载后以 UPDATE 保存。", ex);
@@ -298,54 +298,6 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         cmd.Parameters.Add(p);
     }
 
-    /// <summary>
-    /// INSERT 路径的并发插入兜底（P2 修复·八轮）：两个并发 SaveChangesAsync 保存同一新 Saga
-    /// 都判 existing==null 都走 INSERT 时，第二个撞 saga_id 主键抛原始 provider 异常。
-    /// 此处捕获唯一约束冲突并转换为带 SagaId 的语义化异常，调用方可区分"并发冲突"与"数据错误"
-    /// （与 DapperSagaStateStore.IsUniqueConstraintViolation 同型）。
-    /// </summary>
-    [UnconditionalSuppressMessage("Trimming", "IL2075:This",
-        Justification = "Provider 异常鸭子类型判定。裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级，不崩溃）。")]
-    private static bool IsUniqueConstraintViolation(Exception exception)
-    {
-        for (var inner = exception; inner is not null; inner = inner.InnerException)
-        {
-            var type = inner.GetType();
-            var typeName = type.Name;
-
-            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
-                && type.GetProperty("SqlState")?.GetValue(inner) is string sqlState
-                && sqlState == "23505")
-            {
-                return true;
-            }
-
-            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
-                && type.GetProperty("Number")?.GetValue(inner) is int mysqlNumber
-                && (mysqlNumber == 1062 || mysqlNumber == 1586))
-            {
-                return true;
-            }
-
-            if (typeName.Equals("SqlException", StringComparison.Ordinal)
-                && type.GetProperty("Number")?.GetValue(inner) is int sqlServerNumber
-                && (sqlServerNumber == 2601 || sqlServerNumber == 2627))
-            {
-                return true;
-            }
-
-            // P2 修复（二十一轮）：补 SqliteException 类型限定（镜像 InboxDbContext 十七轮修复，PD17）——裸消息匹配误判非唯一约束异常
-            var message = inner.Message;
-            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
-                && !string.IsNullOrEmpty(message)
-                && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
 
     /// <summary>临时 SagaStateRow（内部用，不注册为实体）。</summary>
     private sealed class SagaStateRow

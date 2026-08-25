@@ -111,7 +111,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
             {
                 inserted = await Session.InsertAsync(row, cancellationToken).ConfigureAwait(false);
             }
-            catch (DbException ex) when (IsUniqueConstraintViolation(ex))
+            catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
             {
                 // ITM-075：预检后并发写入兜底——唯一索引冲突转为统一并发异常（对齐 Dapper/EFCore）。
                 // 分类逻辑镜像 Dapper 八轮修复：批内前序 INSERT 已推进 MaxVersion（同事务可见），
@@ -251,61 +251,4 @@ public class PalOrmEventLog<TProvider> : IEventLog
             ? ulid
             : (Ulid?)null;
 
-    /// <summary>
-    /// 判定 DbException 是否为唯一约束冲突（ITM-075：跨 provider 鸭子类型，与
-    /// PalOrmSagaStateStore.IsUniqueConstraintViolation / DapperEventLog / EFCore 侧同型）。
-    /// </summary>
-    /// <remarks>
-    /// ITM-167 裁剪降级声明：本方法通过反射鸭子类型读取 provider 异常属性
-    /// （PostgresException.SqlState / MySqlException.Number / SqlException.Number）。在裁剪
-    /// （trimmed/AOT）发布下，GetProperty 可能因元数据被裁而返回 null——判定安全降级为 false，
-    /// 原始 provider 异常原样上抛（并发冲突仅失去统一 EventStreamConcurrencyException 翻译，
-    /// 不会崩溃、不会误判；调用方重试契约退化为检查原始异常）。
-    /// </remarks>
-    [UnconditionalSuppressMessage("Trimming", "IL2075:This",
-        Justification = "Provider 异常鸭子类型判定。裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级，不崩溃）。")]
-    private static bool IsUniqueConstraintViolation(DbException exception)
-    {
-        for (var inner = (Exception)exception; inner is not null; inner = inner.InnerException)
-        {
-            var type = inner.GetType();
-            var typeName = type.Name;
-
-            // PostgreSQL: Npgsql.PostgresException.SqlState == "23505"
-            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
-                && type.GetProperty("SqlState")?.GetValue(inner) is string sqlState
-                && sqlState == "23505")
-            {
-                return true;
-            }
-
-            // MySQL: MySqlException.Number == 1062（ER_DUP_ENTRY）或 1586
-            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
-                && type.GetProperty("Number")?.GetValue(inner) is int mysqlNumber
-                && (mysqlNumber == 1062 || mysqlNumber == 1586))
-            {
-                return true;
-            }
-
-            // SQL Server: SqlException.Number == 2601 或 2627
-            if (typeName.Equals("SqlException", StringComparison.Ordinal)
-                && type.GetProperty("Number")?.GetValue(inner) is int sqlServerNumber
-                && (sqlServerNumber == 2601 || sqlServerNumber == 2627))
-            {
-                return true;
-            }
-
-            // SQLite: Microsoft.Data.Sqlite.SqliteException 消息包含 "UNIQUE constraint"
-            // 类型限定：裸消息匹配会把文案恰好含该词组的非唯一约束异常误判（镜像 InboxDbContext 十七轮修复）
-            var message = inner.Message;
-            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
-                && !string.IsNullOrEmpty(message)
-                && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
 }
