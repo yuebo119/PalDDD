@@ -98,7 +98,7 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
             {
                 affected = await Session.ExecuteAsync($"INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL)", ct).ConfigureAwait(false);
             }
-            catch (Exception ex) when (IsDuplicateKeyError(ex))
+            catch (Exception ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
             {
                 affected = 0; // 唯一约束冲突——记录已存在，非错误
             }
@@ -214,40 +214,5 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         var tx = PalOrmAmbientTransaction.TryGet(Session);
         if (tx is not null) cmd.Transaction = tx;
         return cmd;
-    }
-
-    /// <summary>
-    /// ITM-228：判定异常是否为唯一约束冲突（MySQL 1062/1586、PG 23505、SQLite UNIQUE、SqlServer 2601/2627）。
-    /// 仅捕获重复键——INSERT IGNORE 会把截断/非法日期等其他错误也降为 warning。
-    /// </summary>
-    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Aot", "IL2075:RequiresDynamicallyAccessedMembers",
-        Justification = "PalORM 适配层为非 AOT（IsAotCompatible=false）；反射读取 provider 异常属性用于错误分类。")]
-    private static bool IsDuplicateKeyError(Exception exception)
-    {
-        for (var ex = exception; ex is not null; ex = ex.InnerException)
-        {
-            var type = ex.GetType();
-            var typeName = type.Name;
-
-            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
-                && type.GetProperty("Number")?.GetValue(ex) is int mysqlNum
-                && (mysqlNum == 1062 || mysqlNum == 1586))
-                return true;
-
-            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
-                && type.GetProperty("SqlState")?.GetValue(ex) is string pgState
-                && pgState == "23505")
-                return true;
-
-            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
-                && ex.Message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            if (typeName.Equals("SqlException", StringComparison.Ordinal)
-                && type.GetProperty("Number")?.GetValue(ex) is int sqlNum
-                && (sqlNum == 2601 || sqlNum == 2627))
-                return true;
-        }
-        return false;
     }
 }

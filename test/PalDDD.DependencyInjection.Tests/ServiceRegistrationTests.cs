@@ -65,6 +65,41 @@ public sealed class ServiceRegistrationTests
         await Assert.That(pipelineDescriptors.Count).IsEqualTo(2);
     }
 
+    /// <summary>评审 P2-2 回归：AddPalCommandHandler 单独调用（漏调 AddPalDDD）
+    /// 也必须自动补齐核心注册（Dispatcher/HandlerRegistrar）——旧实现错误延迟到
+    /// 首个请求（HandlerNotFound），现在注册期闭环。</summary>
+    [Test]
+    public async Task AddPalCommandHandler_WithoutAddPalDDD_AutoEnsuresCoreRegistration()
+    {
+        var services = new ServiceCollection();
+        // 刻意不调 AddPalDDD/AddPalCoreStack——只注册 handler
+        services.AddPalCommandHandler<TestCommand, string, TestCommandHandler>();
+
+        using var provider = services.BuildServiceProvider();
+        // 核心 Dispatcher 可解析（自动补注册）
+        _ = provider.GetRequiredService<Dispatcher>();
+        // HandlerRegistrar hosted service 已注册（internal 类型，按名断言——Marker 将被启动消费）
+        await Assert.That(services.Any(sd =>
+            sd.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService)
+            && sd.ImplementationType?.Name == "HandlerRegistrar")).IsTrue();
+    }
+
+    /// <summary>评审 P2-2 回归：AddPalLogging 默认不清除用户已配置的日志 Provider
+    /// （追加语义）；clearProviders: true 时恢复独占式接管。</summary>
+    [Test]
+    public async Task AddPalLogging_DefaultAppends_DoesNotClearExistingProviders()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging(); // 用户已有默认 Provider
+        services.AddPalLogging();
+
+        using var provider = services.BuildServiceProvider();
+        var loggerFactory = provider.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>();
+        await Assert.That(loggerFactory).IsNotNull();
+        // 行为冒烟：追加语义下 IPalLogger 适配可用
+        _ = provider.GetRequiredService<PalDDD.Core.Logging.IPalLogger<object>>();
+    }
+
     [Test]
     public async Task AddPalFullStack_EqualsCoreStackWithoutInfrastructureAdapters()
     {

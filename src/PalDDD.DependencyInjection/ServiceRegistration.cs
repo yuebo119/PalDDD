@@ -139,15 +139,23 @@ public static class ServiceRegistration
 
     /// <summary>注册 ZLogger + IPalLogger&lt;T&gt; 日志门面。</summary>
     /// <remarks>
-    /// 清除已有 Provider，设置最低级别为 Information，添加 ZLogger 控制台 JSON 格式化器。<br/>
-    /// 注册 <see cref="IPalLogger{T}"/> → <see cref="PalLogger{T}"/> 单例适配。
+    /// 追加 ZLogger 控制台 JSON Provider 并注册 <see cref="IPalLogger{T}"/> → <see cref="PalLogger{T}"/> 单例适配。<br/>
+    /// <b>追加语义（评审 P2-2 修复）</b>：默认<b>不</b>清除用户已配置的日志 Provider、
+    /// <b>不</b>覆盖最低级别——旧行为 <c>ClearProviders()</c> 会静默丢弃调用方的全部日志配置，
+    /// 属隐式破坏性副作用。如需独占式接管日志管道，传 <paramref name="clearProviders"/>: true；
+    /// 如需指定最低级别，传 <paramref name="minimumLevel"/>（未传时不触碰，尊重宿主默认/appsettings）。
     /// </remarks>
-    public static IServiceCollection AddPalLogging(this IServiceCollection services)
+    public static IServiceCollection AddPalLogging(
+        this IServiceCollection services,
+        bool clearProviders = false,
+        LogLevel? minimumLevel = null)
     {
         services.AddLogging(logging =>
         {
-            logging.ClearProviders();
-            logging.SetMinimumLevel(LogLevel.Information);
+            if (clearProviders)
+                logging.ClearProviders();
+            if (minimumLevel is { } level)
+                logging.SetMinimumLevel(level);
             logging.AddZLoggerConsole(options => options.UseJsonFormatter());
         });
         services.TryAddSingleton(typeof(IPalLogger<>), typeof(PalLogger<>));
@@ -177,6 +185,11 @@ public static class ServiceRegistration
         where TCommand : CQRS.IRequest<TResponse>
         where THandler : class, CQRS.ICommandHandler<TCommand, TResponse>
     {
+        // 评审 P2-1 修复：自动确保核心注册（AddPalDDD 全 TryAdd，幂等零覆盖）——
+        // 漏调 AddPalDDD 时旧实现把错误延迟到首个请求（HandlerRegistrar 缺失 →
+        // Freeze 不发生 → 一律 HandlerNotFound 404），现在注册期即完成闭环。
+        services.AddPalDDD();
+
         // ITM-220 修复（三十二轮）：同一命令的不同 Handler 在注册期快速失败——
         // 原实现静默追加 Marker，Dispatcher 后注册者覆盖先注册者（配置错误无诊断）。
         foreach (var descriptor in services)
@@ -221,6 +234,9 @@ public static class ServiceRegistration
         where TQuery : CQRS.IQuery<TResponse>
         where THandler : class, CQRS.IQueryHandler<TQuery, TResponse>
     {
+        // 评审 P2-1 修复：同命令——自动确保核心注册（幂等），消除漏调 AddPalDDD 的 fail-late
+        services.AddPalDDD();
+
         // ITM-220 修复（三十二轮）：同命令——查询的不同 Handler 也注册期快速失败
         foreach (var descriptor in services)
         {
@@ -312,6 +328,12 @@ internal sealed class HandlerCollector
 }
 
 /// <summary>启动时注册 Handler 到 Dispatcher — 零反射，仅消费编译时已知的类型标记</summary>
+/// <remarks>
+/// ⚠️ 本注册器是 <c>IHostedService</c>——仅在 IHost 宿主（HostBuilder/WebApplicationBuilder）
+/// 启动时执行。纯 <c>BuildServiceProvider()</c> 场景（单元测试/控制台工具）IHostedService
+/// 不会运行：Dispatcher 不 Freeze、Marker 不消费，<c>SendAsync</c> 将抛 HandlerNotFound。
+/// 此类场景请改用 IHost 宿主，或手动解析 HandlerCollector 并调用 Dispatcher.Register/Freeze。
+/// </remarks>
 internal sealed class HandlerRegistrar : IHostedService
 {
     private readonly CQRS.Dispatcher _dispatcher;

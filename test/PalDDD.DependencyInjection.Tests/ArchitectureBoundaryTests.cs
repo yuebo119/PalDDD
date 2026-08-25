@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 
 namespace PalDDD.DependencyInjection.Tests;
 
@@ -14,6 +15,57 @@ internal static class BuildArtifactFilter
 public sealed class ArchitectureBoundaryTests
 {
     private static readonly string Root = FindRepositoryRoot();
+
+    // ═══════════════════════════════════════════════════════════════
+    // csproj 引用解析辅助（P1 修复：评审报告 P1-1）
+    //
+    // 旧实现用文本 Contains 匹配 forbiddenRefs 子串——`Confluent.Kafka`、
+    // `RabbitMQ.Client`、`MySqlConnector`、`Pomelo.*`、`MySql.EntityFrameworkCore`
+    // 均不含任何被禁子串，非 Infra 项目引用它们不会被拦截（守卫盲区）。
+    // 现改为 XDocument 解析 PackageReference/ProjectReference 的 Include 属性，
+    // 并用"精确名或 包名+'.' 前缀"匹配（覆盖 Npgsql → Npgsql.EntityFrameworkCore
+    // 这类家族包，同时避免子串误报）。
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>解析 csproj，提取全部包引用名与项目引用的目标项目名。</summary>
+    private static (IReadOnlyList<string> Packages, IReadOnlyList<string> ProjectNames) ParseCsprojReferences(string csprojPath)
+    {
+        var doc = XDocument.Load(csprojPath);
+        var packages = doc.Descendants("PackageReference")
+            .Select(e => (string?)e.Attribute("Include"))
+            .Where(s => !string.IsNullOrEmpty(s))
+            .Select(s => s!)
+            .ToList();
+        var projectNames = doc.Descendants("ProjectReference")
+            .Select(e => (string?)e.Attribute("Include"))
+            .Where(s => !string.IsNullOrEmpty(s))
+            .Select(s => Path.GetFileNameWithoutExtension(s!))
+            .ToList();
+        return (packages, projectNames);
+    }
+
+    /// <summary>包名匹配：精确相等，或以 包名+'.' 开头（家族前缀，如 Npgsql → Npgsql.Json.NET）。</summary>
+    private static bool MatchesPackage(string packageName, string forbidden)
+        => packageName.Equals(forbidden, StringComparison.Ordinal)
+           || packageName.StartsWith(forbidden + ".", StringComparison.Ordinal);
+
+    /// <summary>非 Infra 项目（Core/App/Serialization/CQRS/DI）禁止引用的基础设施包清单。
+    /// 涵盖三栈（EFCore/Dapper/PalORM）全部 Provider、消息 Client、Web 宿主。</summary>
+    private static readonly string[] s_infraPackages =
+    [
+        "Microsoft.EntityFrameworkCore", // 前缀覆盖 .Relational/.Sqlite/.Design 等全家
+        "Dapper",
+        "PalORM",                        // 前缀覆盖 PalORM.Core/PalORM.SourceGen
+        "Npgsql",                        // 前缀覆盖 Npgsql.EntityFrameworkCore/Npgsql.Json.NET
+        "MySqlConnector",
+        "MySql.EntityFrameworkCore",
+        "MySql.Data",
+        "Pomelo",                        // 前缀覆盖 Pomelo.EntityFrameworkCore.MySql
+        "Microsoft.Data.Sqlite",
+        "Confluent.Kafka",
+        "RabbitMQ.Client",
+        "Microsoft.AspNetCore"           // 前缀覆盖 .Hosting/.Http 等（App 层禁止；Hosting.AspNetCore 适配器在 Infra 白名单）
+    ];
 
     /// <summary>Core/App 层项目不得引用基础设施实现包。
     /// 动态扫描 src/ 下所有 Core/App 层项目 csproj，禁止引用 Infra 实现包。
@@ -36,8 +88,6 @@ public sealed class ArchitectureBoundaryTests
             "PalDDD.Extension", "PalDDD.Base", "PalDDD.Prompts"
         };
 
-        var forbiddenRefs = new[] { "Microsoft.EntityFrameworkCore", "PalDDD.Dapper", "Npgsql", "PalORM" };
-
         var srcCsprojs = Directory.EnumerateFiles(
             Path.Combine(Root, "src"),
             "*.csproj",
@@ -50,14 +100,18 @@ public sealed class ArchitectureBoundaryTests
             if (infraProjects.Contains(projectName))
                 continue;
 
-            var csproj = File.ReadAllText(csprojPath);
-            // 排除 InternalsVisibleTo 行（程序集可见性声明，非项目/包引用）
-            var relevant = Regex.Replace(csproj, @"<InternalsVisibleTo\b[^>]*/>", "");
-            foreach (var forbidden in forbiddenRefs)
-            {
-                if (relevant.Contains(forbidden, StringComparison.Ordinal))
+            var (packages, projectNames) = ParseCsprojReferences(csprojPath);
+
+            // 包引用：精确名/家族前缀匹配（覆盖 Confluent.Kafka、RabbitMQ.Client、
+            // MySqlConnector、Pomelo.* 等旧文本子串匹配的盲区）
+            foreach (var forbidden in s_infraPackages)
+                if (packages.Any(p => MatchesPackage(p, forbidden)))
                     violations.Add($"{projectName} 引用了禁止的 Infra 包 '{forbidden}'");
-            }
+
+            // 项目引用：目标项目名落在 Infra 白名单集合即违规
+            foreach (var referenced in projectNames)
+                if (infraProjects.Contains(referenced))
+                    violations.Add($"{projectName} 引用了 Infra 项目 '{referenced}'");
         }
 
         await Assert.That(violations).IsEmpty();
@@ -362,7 +416,9 @@ public sealed class ArchitectureBoundaryTests
         await Assert.That(csproj).DoesNotContain("Microsoft.AspNetCore");
     }
 
-    /// <summary>App 层（CQRS/Transactions/EventLog/Idempotency）不引用 Infra 实现</summary>
+    /// <summary>App 层（CQRS/Transactions/EventLog/Idempotency）不引用 Infra 实现。
+    /// XML 解析引用（对齐 CoreAndBrokerProjects 守卫的 P1 修复），禁止清单含
+    /// PalORM/MySqlConnector/Confluent 等旧文本匹配盲区。</summary>
     [Test]
     [Arguments("src/PalDDD.CQRS/PalDDD.CQRS.csproj")]
     [Arguments("src/PalDDD.EventLog/PalDDD.EventLog.csproj")]
@@ -370,18 +426,18 @@ public sealed class ArchitectureBoundaryTests
     [Arguments("src/PalDDD.Projections/PalDDD.Projections.csproj")]
     public async Task AppLayerProjects_DoNotReferenceInfrastructure(string csprojPath)
     {
-        var csproj = ReadSource(csprojPath);
+        var (packages, projectNames) = ParseCsprojReferences(Path.Combine(Root, csprojPath));
 
-        // Exclude InternalsVisibleTo lines — those are assembly-level declarations, not project references
-        var relevant = Regex.Replace(csproj, @"<InternalsVisibleTo\b[^>]*/>", "");
+        // App 层项目引用任何 Infra 项目即违规
+        var infraProjectTokens = new[] { "EFCore", "Dapper", "PalORM", "Kafka", "RabbitMQ", "Sqlite" };
+        foreach (var referenced in projectNames)
+            foreach (var token in infraProjectTokens)
+                if (referenced.Contains(token, StringComparison.Ordinal))
+                    Assert.Fail($"App 层项目 {csprojPath} 引用了 Infra 项目 '{referenced}'。");
 
-        await Assert.That(relevant).DoesNotContain("EFCore");
-        await Assert.That(relevant).DoesNotContain("Dapper");
-        await Assert.That(relevant).DoesNotContain("Kafka");
-        await Assert.That(relevant).DoesNotContain("RabbitMQ");
-        await Assert.That(relevant).DoesNotContain("Microsoft.AspNetCore");
-        await Assert.That(relevant).DoesNotContain("Npgsql");
-        await Assert.That(relevant).DoesNotContain("Sqlite");
+        foreach (var forbidden in s_infraPackages)
+            if (packages.Any(p => MatchesPackage(p, forbidden)))
+                Assert.Fail($"App 层项目 {csprojPath} 引用了禁止的 Infra 包 '{forbidden}'。");
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -586,17 +642,25 @@ public sealed class ArchitectureBoundaryTests
     [Test]
     public async Task DomainTests_DoNotReferenceInfrastructureImplementations()
     {
-        // Infra 测试项目（允许引用 Infra 实现）
+        // Infra 测试项目（允许引用 Infra 实现）。
+        // PalDDD.Hosting.AspNetCore.Tests：Hosting 适配器专属测试（XML 解析守卫的
+        // 首个真实发现——旧文本匹配因清单缺 Hosting 而从未覆盖它）。
         var infraTestProjects = new HashSet<string>(StringComparer.Ordinal)
         {
             "PalDDD.Integration.Tests", "PalDDD.PalORM.Tests",
             "PalDDD.Messaging.Integration.Tests", "PalDDD.Repository.EFCore.Tests",
-            "PalDDD.EventLog.Tests", "PalDDD.Projections.EventLog.Tests"
+            "PalDDD.EventLog.Tests", "PalDDD.Projections.EventLog.Tests",
+            "PalDDD.Hosting.AspNetCore.Tests"
         };
 
-        var forbiddenRefs = new[] {
-            "PalDDD.Repository.EFCore", "PalDDD.Dapper", "PalDDD.Messaging.Kafka",
-            "PalDDD.Messaging.RabbitMQ", "PalDDD.Transactions.EFCore"
+        var forbiddenProjectRefs = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "PalDDD.Repository.EFCore", "PalDDD.Dapper", "PalDDD.Dapper.PostgreSql",
+            "PalDDD.Dapper.MySql", "PalDDD.Dapper.Sqlite",
+            "PalDDD.Messaging.Kafka", "PalDDD.Messaging.RabbitMQ",
+            "PalDDD.Transactions.EFCore", "PalDDD.EventLog.EFCore",
+            "PalDDD.Projections.EFCore", "PalDDD.Idempotency.EFCore",
+            "PalDDD.Hosting.AspNetCore"
         };
 
         var testCsprojs = Directory.EnumerateFiles(
@@ -611,12 +675,16 @@ public sealed class ArchitectureBoundaryTests
             if (infraTestProjects.Contains(projectName))
                 continue;
 
-            var csproj = File.ReadAllText(csprojPath);
-            foreach (var forbidden in forbiddenRefs)
-            {
-                if (csproj.Contains(forbidden, StringComparison.Ordinal))
+            var (packages, projectNames) = ParseCsprojReferences(csprojPath);
+
+            // 域测试禁止直接引用 Infra 实现包（消息 Client/ORM Provider/EFCore 全家）
+            foreach (var forbidden in s_infraPackages)
+                if (packages.Any(p => MatchesPackage(p, forbidden)))
                     violations.Add($"{projectName} 引用了禁止的 Infra 包 '{forbidden}'");
-            }
+
+            foreach (var referenced in projectNames)
+                if (forbiddenProjectRefs.Contains(referenced))
+                    violations.Add($"{projectName} 引用了 Infra 实现 project '{referenced}'");
         }
 
         await Assert.That(violations).IsEmpty();
@@ -694,6 +762,52 @@ public sealed class ArchitectureBoundaryTests
         }
 
         await Assert.That(missing).IsEmpty();
+    }
+
+    /// <summary>
+    /// 守卫负向自证（评审 P1-1）：用内联坏 csproj 样本证明 XML 解析 + 前缀匹配
+    /// 不再对旧文本子串匹配的盲区包（Confluent.Kafka / RabbitMQ.Client /
+    /// MySqlConnector / Pomelo.* / Npgsql 家族）放行——修复前这些包名不含任何
+    /// 被禁子串，守卫对它们是无声 no-op。
+    /// </summary>
+    [Test]
+    public async Task CsprojReferenceGuard_DetectsBlindSpotPackages()
+    {
+        const string maliciousCsproj = """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <PackageReference Include="Confluent.Kafka" Version="2.0.0" />
+                <PackageReference Include="RabbitMQ.Client" Version="7.0.0" />
+                <PackageReference Include="MySqlConnector" Version="3.0.0" />
+                <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="11.0.0" />
+                <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="11.0.0" />
+              </ItemGroup>
+            </Project>
+            """;
+        var tempPath = Path.Combine(Path.GetTempPath(), $"palddd-guard-probe-{Guid.NewGuid():N}.csproj");
+        File.WriteAllText(tempPath, maliciousCsproj);
+        try
+        {
+            var (packages, _) = ParseCsprojReferences(tempPath);
+
+            // InternalsVisibleTo/普通文本中的包名不可见——解析只看 Include 属性
+            await Assert.That(packages.Count).IsEqualTo(5);
+
+            var caught = s_infraPackages
+                .Where(forbidden => packages.Any(p => MatchesPackage(p, forbidden)))
+                .ToList();
+            // 五个盲区包必须全部命中（Pomelo 命中前缀、Npgsql.EntityFrameworkCore
+            // 命中 Npgsql 家族前缀）
+            foreach (var expected in new[] { "Confluent.Kafka", "RabbitMQ.Client", "MySqlConnector", "Pomelo", "Npgsql" })
+                await Assert.That(caught).Contains(expected);
+
+            // 反向：合法包（Microsoft.Extensions.DependencyInjection）不被误报
+            await Assert.That(s_infraPackages.Any(f => MatchesPackage("Microsoft.Extensions.DependencyInjection", f))).IsFalse();
+        }
+        finally
+        {
+            File.Delete(tempPath);
+        }
     }
 
     private static string ReadSource(string relativePath)

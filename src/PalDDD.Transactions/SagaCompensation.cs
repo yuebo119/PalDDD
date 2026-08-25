@@ -71,6 +71,10 @@ internal sealed class SagaCompensation<TState>
     /// 补偿已执行的步骤。<br/>
     /// 用于 SagaProcessor 超时补偿——仅回滚实际执行过的步骤，不补偿未执行步骤。
     /// </summary>
+    /// <remarks>
+    /// ⚠️ 多实例下补偿可能与另一实例重入（终态落库乐观锁冲突时，他实例会再次调用）——
+    /// 所有补偿动作必须幂等（契约详见 <see cref="SagaStep.CompensateAsync"/>，评审 P1-4）。
+    /// </remarks>
     public async ValueTask CompensateAllAsync(TState state, CancellationToken ct)
     {
         if (_policy == CompensationPolicy.None) return;

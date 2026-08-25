@@ -92,7 +92,7 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
             {
                 affected = await Session.ExecuteAsync($"INSERT INTO projection_checkpoints (projection_name, source_name, position, status, updated_at, lease_until, revision, error) VALUES ({projectionName}, {sourceName}, {position}, {statusProcessing}, {startedAt}, {leaseUntil}, 1, NULL)", ct).ConfigureAwait(false);
             }
-            catch (Exception ex) when (IsDuplicateKeyError(ex))
+            catch (Exception ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
             {
                 affected = 0; // 唯一约束冲突——记录已存在，非错误
             }
@@ -203,38 +203,4 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         ArgumentException.ThrowIfNullOrWhiteSpace(position);
     }
 
-    /// <summary>
-    /// 三十八轮 P1 回归修复：判定异常是否为唯一约束冲突（MySQL 1062/1586、PG 23505、SQLite UNIQUE、SqlServer 2601/2627）。
-    /// 仅捕获重复键——其他错误原样上抛。与 PalOrmIdempotencyStore/PalOrmInboxStore 同型。
-    /// </summary>
-    [UnconditionalSuppressMessage("Aot", "IL2075:RequiresDynamicallyAccessedMembers",
-        Justification = "PalORM 适配层为非 AOT（IsAotCompatible=false）；反射读取 provider 异常属性用于错误分类。")]
-    private static bool IsDuplicateKeyError(Exception exception)
-    {
-        for (var ex = exception; ex is not null; ex = ex.InnerException)
-        {
-            var type = ex.GetType();
-            var typeName = type.Name;
-
-            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
-                && type.GetProperty("Number")?.GetValue(ex) is int mysqlNum
-                && (mysqlNum == 1062 || mysqlNum == 1586))
-                return true;
-
-            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
-                && type.GetProperty("SqlState")?.GetValue(ex) is string pgState
-                && pgState == "23505")
-                return true;
-
-            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
-                && ex.Message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            if (typeName.Equals("SqlException", StringComparison.Ordinal)
-                && type.GetProperty("Number")?.GetValue(ex) is int sqlNum
-                && (sqlNum == 2601 || sqlNum == 2627))
-                return true;
-        }
-        return false;
-    }
 }
