@@ -90,6 +90,15 @@
 - **P3** SagaTests 注释勘正×2（引用不存在测试名/UTE 机理表述——OnlyOnFaulted 延续访问 t.Exception 即 observed 不触发 UTE，AsyncThrowingSink 改 Task.Yield 真异步）；MySqlOutboxDbContext 行号锚勘正；批 now 漂移取舍声明在源头 DapperOutboxStore 落档
 - **v16 敌对复核全过**：ObserverInterrupt 双故障测试两段流/通配命中/无竞态三问确认；Legacy "any"/漂移声明与事实一致
 
+### 修复（v17 片 E 迟到报告追偿，2026-08-26）
+
+片 E 验证轮迟到返回后主线程核实的**三项假修**（上轮脚本 NameError 中断，部分项未落地但被误报成功）：
+- **P2** `AddPalLogging` 双重载守卫缺失——8 处守卫中此二方法实际无 guard，本轮补齐至 9+1=10 处（含三参主签名）
+- **P2** MemoryPack csproj "AOT-safe" 措辞**声称修了实际没修**（git log -S 实证自初始提交未变更）——本轮改为精确表述
+- **P2** MessageConsumeContext null key 注释未落地——本轮落地
+- **P3** OpenZL 行尾注释不成句修复；ServiceRegistration 格式核查（无损伤）
+- **v17 F1（片 D）已先行清偿**：CodeFix 的 BC 本地早退门控删除（Properties 唯一来源）——v16 P2-4 第二次修一半的终结
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）

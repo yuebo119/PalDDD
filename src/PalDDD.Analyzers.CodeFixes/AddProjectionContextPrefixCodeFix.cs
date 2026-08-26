@@ -42,28 +42,11 @@ public sealed class AddProjectionContextPrefixCodeFix : CodeFixProvider
         // MetadataNameEquals 语义）
         var semanticModel = await context.Document.GetSemanticModelAsync(context.CancellationToken).ConfigureAwait(false);
         if (semanticModel is null) return;
-
-        AttributeSyntax? boundedContextAttr = null;
-        foreach (var attribute in typeDecl.AttributeLists.SelectMany(al => al.Attributes))
-        {
-            if (semanticModel.GetSymbolInfo(attribute, context.CancellationToken).Symbol is not IMethodSymbol ctor)
-                continue;
-            if (ctor.ContainingType is { MetadataName: "BoundedContextAttribute" } attrType
-                && attrType.ContainingNamespace?.ToDisplayString() == "PalDDD.Core")
-            {
-                boundedContextAttr = attribute;
-                break;
-            }
-        }
-        if (boundedContextAttr?.ArgumentList?.Arguments.FirstOrDefault()?.Expression is not LiteralExpressionSyntax ctxLiteral)
-            return;
-
-        var boundedContext = ctxLiteral.Token.ValueText;
-
         // 找到 ProjectionName 属性定义
-        // v16 P2-4：BC 来源改读 diagnostic.Properties（对齐 PDDD008 fix；analyzer 的 Handlers.cs
-        // 传入该属性但旧版未消费——v13 只修了字面量轴，BC 轴在字面量位于基类时会取到基类的
-        // [BoundedContext] 导致前缀错误或 no-op）
+        // v17 F1 修复（v16 P2-4 是修一半）：BC 唯一来源 = diagnostic.Properties["BoundedContext"]
+        // （analyzer 沿基类链取后随诊断传入）——原"typeDecl 本地 [BoundedContext] 字面量"早退门控
+        // 已删除：派生投影继承基类 BC 时（PDDD013 最常见命中形态）本类查不到 attribute 会先于此
+        // return，诊断照报而 fix 不注册；Properties 路径对继承形态天然正确。
         if (!diagnostic.Properties.TryGetValue("BoundedContext", out var capturedContextObj)
             || capturedContextObj is not string capturedContext)
             return;

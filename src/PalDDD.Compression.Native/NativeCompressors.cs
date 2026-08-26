@@ -158,7 +158,7 @@ internal sealed class OpenZLCompressor : ICompressor
         };
 
         var written = Zstandard.Compress(data, destination, options);
-        return destination.AsSpan(0, written).ToArray(); // v13：裁剪拷贝对齐 BrotliCompressor——ReadOnlyMemory 会持住整个 maxSize 超分配数组（8MB 输入 算法上界 ~上限的 LoH 驻留）
+        return destination.AsSpan(0, written).ToArray(); // v13：裁剪拷贝对齐 BrotliCompressor——ReadOnlyMemory 会持住整个 maxSize 超分配数组（ZStd/OpenZL 同为 Zstd 字节格式））
     }
 
     public byte[] Decompress(ReadOnlySpan<byte> compressed)

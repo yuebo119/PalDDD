@@ -54,6 +54,7 @@ public sealed class MessageConsumeContext(
         IEnumerable<KeyValuePair<string, object?>>? headers,
         string? correlationId = null)
     {
+        // v16/v17 文档化：headers 的 key 由 broker 库保证非 null（null key 时下方索引器抛 ANE——框架边界外输入，不防御）
         var decoded = new Dictionary<string, string?>(StringComparer.Ordinal);
         if (headers is not null)
         {

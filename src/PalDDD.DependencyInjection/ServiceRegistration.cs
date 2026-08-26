@@ -153,7 +153,10 @@ public static class ServiceRegistration
     /// 恢复——独占接管请显式传 <c>clearProviders: true</c>。
     /// </remarks>
     public static IServiceCollection AddPalLogging(this IServiceCollection services)
-        => services.AddPalLogging(clearProviders: false, minimumLevel: null);
+    {
+        ArgumentNullException.ThrowIfNull(services); // v17 片E 假修勘正
+        return services.AddPalLogging(clearProviders: false, minimumLevel: null);
+    }
 
     /// <summary>注册 ZLogger + IPalLogger&lt;T&gt; 日志门面。</summary>
     /// <remarks>
@@ -174,6 +177,7 @@ public static class ServiceRegistration
         bool clearProviders = false,
         LogLevel? minimumLevel = null)
     {
+        ArgumentNullException.ThrowIfNull(services); // v17 片E 假修勘正（第 9 处守卫）
         services.AddLogging(logging =>
         {
             if (clearProviders)
