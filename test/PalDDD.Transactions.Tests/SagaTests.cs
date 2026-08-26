@@ -69,6 +69,13 @@ internal sealed class TestSaga : Saga<TestSagaState>
             }));
     }
 
+    public void PublicWhenInterrupt(string state, string stepName, string interruptReason)
+    {
+        // 通配注册（internal When(state, step)）——决策事件由 ResumeAsync 重新进入管线，
+        // 注册时的 eventType 无关紧要；通配使任意事件到达 Submitted 即中断
+        When(state, new InterruptStep(stepName, interruptReason, typeof(string)));
+    }
+
     public void PublicWhenWithTimeout(string state, string stepName, TimeSpan timeout)
     {
         When(state, new SagaStep(stepName,
@@ -172,8 +179,10 @@ public class SagaNormalTransitionTests
         await Assert.That(compensationLog[1]).IsEqualTo("compensate:Submitted");
     }
 
-    /// <summary>v14 回归：异步故障 Sink（ValueTask.FromException）不阻断补偿且不崩——
-    /// OnStatusChanged 的 ContinueWith(OnlyOnFaulted) 路径行为验证（同步版见下方 ObserverSinkFailure）。</summary>
+    /// <summary>v14 回归：异步故障 Sink（ValueTask.FromException）不阻断补偿且不崩。<br/>
+    /// ⚠️ 路径澄清（v16 P2-1 勘正）：本测试 Saga 只注册普通步骤，走 ExecuteNormalStepAsync 的
+    /// SafeObserve 族（await 全覆盖），<b>不触</b> OnStatusChanged 的 ContinueWith 路径——该路径
+    /// 由下方 ObserverInterrupt_SyncThrow_AsyncFault Sink 测试锁定。</summary>
     [Test]
     public async Task ObserverSinkAsyncFailure_DoesNotBlockCompensationOrCrash()
     {
@@ -187,6 +196,36 @@ public class SagaNormalTransitionTests
             await saga.ProcessEventAsync(state, new object())).Throws<AggregateException>();
 
         await Assert.That(compensationLog).Count().IsEqualTo(2);
+    }
+
+    /// <summary>v16 P2-1：OnStatusChanged（唯一调用点=InterruptStep）故障不逃逸回归——
+    /// Saga 正常进入 AwaitingHumanDecision。<br/>
+    /// ⚠️ 覆盖边界诚实声明（v16 S3 实证三轮）：①同步抛=true 半面，直接锁定；②真异步抛
+    /// （await 后抛）的故障被吞为<b>进程级 UnobservedTaskException</b>——不在测试域断言面内，
+    /// 该半面的防线是 ContinueWith(OnlyOnFaulted)+Preserve 本身（v14 diff 亲核保证）+ GATE-1 式
+    /// 门禁。曾三次试图用测试探针锁定异步半面均不可达（FromException 同步态/delay 真异步/
+    /// 删半面对照均绿）。</summary>
+    [Test]
+    [Arguments(true)]   // 同步抛——同步 try-catch 半面（可测）
+    [Arguments(false)]  // 异步抛——行为面=不崩不逃逸（继续内故障观测为进程级，不可断言）
+    public async Task ObserverInterrupt_BothFaultModes_DoNotEscape(bool syncThrow)
+    {
+        var saga = new TestSaga();
+        saga.PublicWhen("Initial", "Submitted");
+        saga.PublicWhenInterrupt("Submitted", "AwaitHuman", "needs human decision");
+
+        using var observer = new SagaExecutionObserver(syncThrow ? new ThrowingSink() : new AsyncThrowingSink());
+        var state = new TestSagaState { CurrentState = "Initial" };
+        // 两段：先到 Submitted（普通步骤），再触发 Submitted 上的 Interrupt
+        state = await saga.ProcessEventAsync(state, new TestEvent());
+        await Assert.That(state.Status).IsEqualTo(SagaStatus.Active);
+
+        var result = await saga.ProcessEventAsync(state, new object());
+
+        await Assert.That(result.Status).IsEqualTo(SagaStatus.AwaitingHumanDecision);
+        // Interrupt 不改 CurrentState（HITL 设计：暂停在原状态等人，恢复时带决策重入）
+        await Assert.That(result.CurrentState).IsEqualTo("Submitted");
+        await Assert.That(result.InterruptReason).IsEqualTo("needs human decision");
     }
 
     /// <summary>v9 P2-1 回归：观察者 Sink 抛异常不得阻断真实补偿——原 OnCompensationStarted
@@ -949,6 +988,11 @@ internal sealed class ThrowingSink : ISagaEventSink
 /// <summary>异步故障 Sink（v14——EmitAsync 返回 ValueTask.FromException 触发 ContinueWith 路径）。</summary>
 internal sealed class AsyncThrowingSink : ISagaEventSink
 {
-    public ValueTask EmitAsync<T>(T sagaEvent, CancellationToken ct) where T : notnull
-        => ValueTask.FromException(new InvalidOperationException("async sink failure probe"));
+    // v16 S3 勘正：FromException 是同步已完成态——走到 IsCompletedSuccessfully=false 分支但故障
+    // 仍从 IsCompletedSuccessfully 同步路径被 catch（v13/v14 路径盲区实锤）。真 pending 需延迟：
+    public async ValueTask EmitAsync<T>(T sagaEvent, CancellationToken ct) where T : notnull
+    {
+        await Task.Yield();
+        throw new InvalidOperationException("async sink failure probe");
+    }
 }

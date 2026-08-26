@@ -69,6 +69,15 @@
 - **fix 覆盖**：`AddProjectionContextPrefixCodeFix` 补语义基类链查找（对齐 analyzer 链式——ProjectionName 在基类时 fix 可注册）
 - **裁剪对齐**：Native LZ4/ZStd/OpenZL Compress 返回 `AsSpan(0,written).ToArray()`（对齐 BrotliCompressor——消除 maxSize 超分配数组的 LoH 驻留）
 
+### 修复（v16 清偿，2026-08-26 · P2×5 + P3 重点族）
+
+- **P2-1** 补 OnStatusChanged 真路径回归：`ObserverInterrupt_BothFaultModes_DoNotEscape`（同步抛=true 半面/[异步抛=行为面不崩]，TestSaga 新增 PublicWhenInterrupt 辅助）——**v15 测试走错路径勘正**（其覆盖 SafeObserve 族非 ContinueWith，注释已诚实声明覆盖边界与三轮 S3 不可达实证）
+- **P2-2** PG MultiHost 三入口补 `DbDataSource` 抽象双注册（对齐 MySQL ITM-113 模式——缺失时 WithStores 连接工厂解析即抛）
+- **P2-3** MySqlOutboxDbContext 注释勘正（Mark* 已是 ITM-210 token 化 ExecuteUpdate 直写，原"内存突变依赖 ChangeTracker"理由失效）
+- **P2-4** PDDD013 fix 的 BC 来源改读 `diagnostic.Properties`（对齐 PDDD008——analyzer 已传属性但旧版未消费；字面量定位保留基类链）
+- **P2-5** DependencyInjection 项目 AOT 归属落档：csproj 声明注释 + gate G14 三态表/aot.md 补列（核心层 7→8 项目）
+- **P3 重点**：EFCore GetPending batchSize 非正守卫（姊妹对称）；NativeATO 错拼/ZStd 注释复制文案勘正
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）
