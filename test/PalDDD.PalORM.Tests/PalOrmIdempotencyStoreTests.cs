@@ -54,6 +54,29 @@ public class PalOrmIdempotencyStoreTests
         await Assert.That(reclaimed).IsNotNull();
     }
 
+    /// <summary>v8 评审 P2-2 回归：过期 Completed 记录必须可回收重建——原 `AND status&lt;&gt;Completed`
+    /// 守卫使该 key 永久拒绝（affected=0→null），EFCore/InMemory 同场景均可重新执行（三栈分叉）。
+    /// expires_at&lt;=now 已含过期语义，Retention 即"可重新执行窗口"。</summary>
+    [Test]
+    public async Task TryStartAsync_ReclaimsExpiredCompletedRecord()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteIdempotencyStore(session);
+        var now = DateTimeOffset.UtcNow;
+
+        // 完成一个短 Retention 的记录
+        var shortPolicy = new IdempotencyPolicy { ProcessingTimeout = TimeSpan.FromSeconds(5), Retention = TimeSpan.FromSeconds(10) };
+        var first = await store.TryStartAsync("op-1", "key-1", now, shortPolicy, default);
+        await Assert.That(first).IsNotNull();
+        await store.MarkCompletedAsync(first!, System.Text.Encoding.UTF8.GetBytes("{}"), now.AddSeconds(1), default);
+
+        // Retention 过后同 key 重新执行——必须回收（返回非 null 且 Processing 态），而非永久拒绝
+        var later = now + TimeSpan.FromSeconds(30);
+        var reclaimed = await store.TryStartAsync("op-1", "key-1", later, IdempotencyPolicy.Default, default);
+        await Assert.That(reclaimed).IsNotNull();
+        await Assert.That(reclaimed!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+    }
+
     [Test]
     public async Task MarkCompletedAsync_PersistsReplayPayload()
     {

@@ -197,6 +197,8 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // 违反 DapperBulkCopy 的纯提取函数契约（值提取须无副作用且确定，首行还会被提取两次），
         // 且同批各行 CreatedAt 随调用时刻漂移。闭包单值快照后三方言每行同刻。
         var now = _timeProvider.GetUtcNow();
+        // v8 声明：接口 IPalOutboxStore.AddMessagesAsync 无 CancellationToken 参数，本路径
+        // 无法响应取消——v3.0 契约窗口（ADR-020）随接口异步化一并补。
         var conn = await EnsureOpenAsync().ConfigureAwait(false);
         // P2 修复（八轮评审 PD17）：批量路径补 correlation/causation/trace 4 追踪列——
         // 单条路径 AddMessage（七轮）已补，批量漏列导致追踪链在批量写入时丢失；

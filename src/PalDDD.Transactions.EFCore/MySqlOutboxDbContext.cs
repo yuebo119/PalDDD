@@ -3,6 +3,10 @@ using Microsoft.EntityFrameworkCore;
 namespace PalDDD.Transactions;
 
 /// <summary>MySQL outbox store — atomic lease with <c>FOR UPDATE SKIP LOCKED</c> (MySQL 8.0+).</summary>
+/// <remarks>
+/// ⚠️ 双时钟源（v8 声明）：GetPending 用 DB 时钟（UTC_TIMESTAMP）而 Lease 用应用时钟
+/// （GetUtcNow）——时钟漂移时观测与租约路径的资格窗口不一致（观测侧容忍，无正确性影响）。
+/// </remarks>
 public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbContext(options)
 {
     /// <inheritdoc />

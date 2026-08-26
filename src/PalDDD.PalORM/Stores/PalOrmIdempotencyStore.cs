@@ -117,11 +117,14 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         // （对齐 EFCore 版 TryReuseRecordAsync 复用语义），否则该 key 在 GC 清理前永久被拒。
         if (existing is null)
         {
-            // 三十七轮 P2-5：过期回收补 status 守卫——原 WHERE 只有 expires_at <= now，
-            // 并发场景下 Completed 终态可能被过期回收覆盖。补 status <> Completed 确保只回收
-            // Processing 态过期记录（对齐 :130 行 MarkFailed 的乐观锁模式）。
+            // 三十七轮 P2-5 → v8 评审 P2-2 修正：过期回收不再排除 Completed——原
+            // `AND status <> Completed` 守卫使"过期 Completed"记录 affected=0 → return null
+            // → 该幂等 key 永久拒绝，而 EFCore（ExpiresAt<=now 即回收）与 InMemory（过期
+            // Remove 重建）同场景均可重新执行，三栈分叉。expires_at <= now 已含过期语义；
+            // 该守卫真正要防的"未过期 Completed 被回收"由 expires_at 条件天然排除。
+            // 三栈契约自此统一：过期即回收（无论终态），Retention 语义 = 可重新执行窗口。
             affected = await Session.ExecuteAsync(
-                $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL WHERE operation_name = {operationName} AND idempotency_key = {key} AND expires_at <= {now} AND status <> {(int)IdempotencyRecordStatus.Completed}",
+                $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL WHERE operation_name = {operationName} AND idempotency_key = {key} AND expires_at <= {now}",
                 ct).ConfigureAwait(false);
             if (affected == 0) return null;
 

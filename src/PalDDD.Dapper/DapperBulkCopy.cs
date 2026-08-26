@@ -191,7 +191,7 @@ public static class DapperBulkCopy
     /// 🛡️ 检查 <see cref="MySqlBulkCopyResult.Warnings"/> 防止静默数据截断。
     /// </summary>
     [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Aot", "IL2062:RequiresDynamicallyAccessedMembers",
-        Justification = "Dapper 适配层为非 AOT（IsAotCompatible=false）；DataTable 列类型按运行时值推断是 MySqlBulkCopy 唯一数据源格式。")]
+        Justification = "PalDDD.Dapper csproj 声明 IsAotCompatible=true，但运行时 Dapper 路径（[DapperAot(false)] Store）不满足真 AOT——DataTable 列类型按运行时值推断是 MySqlBulkCopy 唯一数据源格式，裁剪后按 null 降级。第 28 轮已裁决 Dapper.AOT 启用不做（ADR-020 退役栈）。")]
     private static async Task<int> MySqlBulkAsync<T>(
         DbConnection conn, string table, string[] cols,
         IReadOnlyList<T> items, Func<T, object?[]> extractor, DbTransaction? transaction, CancellationToken ct)

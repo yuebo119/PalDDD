@@ -11,7 +11,7 @@ namespace PalDDD.Transactions;
 
 /// <summary>租约持有者默认标识工厂（精炼提取 2026-08-26）——"机器名:ULID" 保证同节点
 /// 多选项实例天然互异（多实例隔离语义见 OutboxOptions.LeaseOwner remarks）。原内联表达式
-/// 在 Outbox/Inbox 两 Options 逐字重复。</summary>
+/// 在 OutboxOptions 与 SagaProcessorOptions 两处逐字重复（v8 勘正：InboxOptions 无 LeaseOwner）。</summary>
 internal static class LeaseOwnerFactory
 {
     internal static string Create() => $"{Environment.MachineName}:{PalUlid.New()}";
