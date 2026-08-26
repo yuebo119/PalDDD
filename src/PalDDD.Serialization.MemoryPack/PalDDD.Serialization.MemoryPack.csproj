@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.Serialization.MemoryPack</RootNamespace>
-    <Description>Pal.DDD MemoryPack binary serializer adapter — zero-reflection, AOT-safe, globally switchable with JSON serializer.</Description>
+        <Description>Pal.DDD MemoryPack binary serializer adapter — zero-reflection generic-path; explicit IsAotCompatible=false pending full-chain verification (v17 wording fix).</Description>
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
