@@ -37,6 +37,10 @@ public abstract class InboxDbContext(
         TimeSpan processingTimeout,
         CancellationToken ct)
     {
+        // v17 P1 修复：补空白键守卫（ITM-163 四姊妹中唯一漏网——Dapper:65/InMemory:32/PalORM:39
+        // 均有）。空串键可创建幂等行却无法命中正常消息；契约对齐其余三实现抛 ArgumentException。
+        ArgumentException.ThrowIfNullOrWhiteSpace(consumerName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
         var record = await InboxMessages.SingleOrDefaultAsync(
             x => x.ConsumerName == consumerName && x.MessageId == messageId, ct).ConfigureAwait(false);
 

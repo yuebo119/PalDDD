@@ -84,6 +84,12 @@
 - **声明与措辞**：Legacy Router Reader "any" 读到主库的缺口注释落位；MessageConsumeContext null key 框架边界文档化；DapperOutboxStore 补下游 nextAttemptAt 批次漂移取舍声明；PALMSG003 文案精确化（"registered more than once"）；MemoryPack "AOT-safe" csproj 措辞改精确表述
 - **裁决维持**：SqliteFts 私有拼接种子（无触发路径）/ Sqlite 翻页全扫（Skip 保证终止）/ PalOrmInbox 捕 Exception（when 已收窄）/ 观察项×3 维持
 
+### 修复（v17 验证轮清偿，2026-08-26）
+
+- **P1** `InboxDbContext.TryStartProcessingAsync` 补 consumerName/messageId 空白守卫——ITM-163 四姊妹（Dapper/InMemory/PalORM 均有）中 EFCore 唯一漏网，空串键可创建幂等行且无法命中正常消息；契约对齐其余三实现抛 ArgumentException。新增回归测试 `TryStartProcessingAsync_BlankKeys_ThrowsArgumentException`（S3 双向：删→红/恢复→绿）
+- **P3** SagaTests 注释勘正×2（引用不存在测试名/UTE 机理表述——OnlyOnFaulted 延续访问 t.Exception 即 observed 不触发 UTE，AsyncThrowingSink 改 Task.Yield 真异步）；MySqlOutboxDbContext 行号锚勘正；批 now 漂移取舍声明在源头 DapperOutboxStore 落档
+- **v16 敌对复核全过**：ObserverInterrupt 双故障测试两段流/通配命中/无竞态三问确认；Legacy "any"/漂移声明与事实一致
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）

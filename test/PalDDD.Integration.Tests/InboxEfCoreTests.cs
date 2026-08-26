@@ -7,6 +7,22 @@ using System.Globalization;
 
 public sealed class InboxEfCoreTests
 {
+    /// <summary>v17 P1 回归：空白键契约（ITM-163 四姊妹中 EFCore 漏网）——
+    /// consumerName/messageId 空白必须抛 ArgumentException（对齐 Dapper/InMemory/PalORM）。</summary>
+    [Test]
+    public async Task TryStartProcessingAsync_BlankKeys_ThrowsArgumentException(CancellationToken cancellationToken)
+    {
+        await using var db = new TestInboxDbContext(CreateOptions());
+        var store = (IInboxStore)db;
+
+        await Assert.That(async () => await store.TryStartProcessingAsync(
+            "", "msg-1", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5), cancellationToken))
+            .Throws<ArgumentException>();
+        await Assert.That(async () => await store.TryStartProcessingAsync(
+            "consumer", "", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5), cancellationToken))
+            .Throws<ArgumentException>();
+    }
+
     [Test]
     public async Task TryStartProcessingAsync_PersistsProcessingRecord(CancellationToken cancellationToken)
     {
