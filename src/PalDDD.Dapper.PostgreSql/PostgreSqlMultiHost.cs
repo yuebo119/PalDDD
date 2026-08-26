@@ -87,7 +87,10 @@ public static class PostgreSqlMultiHost
         if (builder.ConnectionStringBuilder.MaxAutoPrepare == 0)
             builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
 
-        services.AddSingleton(builder.Build());
+        var dataSource0 = builder.Build();
+        // v16 P2-2：补 DbDataSource 抽象双注册（对齐 MySQL MultiHost ITM-113 模式与基础入口）——
+        // 缺失时 WithStores 连接工厂解析 DbDataSource 抛 InvalidOperationException
+        services.AddSingleton<System.Data.Common.DbDataSource>(dataSource0);
         return services;
     }
 
@@ -124,7 +127,10 @@ public static class PostgreSqlMultiHost
             // 显式禁用（写 0）与未设置不可区分，禁用走 configure 回调或自建 DataSource
             if (soloBuilder.ConnectionStringBuilder.MaxAutoPrepare == 0)
                 soloBuilder.ConnectionStringBuilder.MaxAutoPrepare = 20;
-            services.AddSingleton(soloBuilder.Build());
+            var dataSource1 = soloBuilder.Build();
+            // v16 P2-2：补 DbDataSource 抽象双注册（对齐 MySQL MultiHost ITM-113 模式与基础入口）——
+            // 缺失时 WithStores 连接工厂解析 DbDataSource 抛 InvalidOperationException
+            services.AddSingleton<System.Data.Common.DbDataSource>(dataSource1);
             return services;
         }
 
@@ -166,7 +172,10 @@ public static class PostgreSqlMultiHost
         if (builder.ConnectionStringBuilder.MaxAutoPrepare == 0)
             builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
 
-        services.AddSingleton(builder.Build());
+        var dataSource2 = builder.Build();
+        // v16 P2-2：补 DbDataSource 抽象双注册（对齐 MySQL MultiHost ITM-113 模式与基础入口）——
+        // 缺失时 WithStores 连接工厂解析 DbDataSource 抛 InvalidOperationException
+        services.AddSingleton<System.Data.Common.DbDataSource>(dataSource2);
         return services;
     }
 
@@ -193,7 +202,10 @@ public static class PostgreSqlMultiHost
         if (builder.ConnectionStringBuilder.MaxAutoPrepare == 0)
             builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
 
-        services.AddSingleton(builder.Build());
+        var dataSource3 = builder.Build();
+        // v16 P2-2：补 DbDataSource 抽象双注册（对齐 MySQL MultiHost ITM-113 模式与基础入口）——
+        // 缺失时 WithStores 连接工厂解析 DbDataSource 抛 InvalidOperationException
+        services.AddSingleton<System.Data.Common.DbDataSource>(dataSource3);
         return services;
     }
 

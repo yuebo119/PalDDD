@@ -61,14 +61,20 @@ public sealed class AddProjectionContextPrefixCodeFix : CodeFixProvider
         var boundedContext = ctxLiteral.Token.ValueText;
 
         // 找到 ProjectionName 属性定义
-        // v13 基类链对齐 analyzer：ProjectionName 声明在投影基类时诊断照报（analyzer 沿
-        // BaseType 链查），fix 此前只扫本类型导致不注册——语义模型沿链取各层的字面量声明
-        var chainModel = await context.Document.GetSemanticModelAsync(context.CancellationToken).ConfigureAwait(false); // v13 修正：方法本就 async Task——G11 门禁抓出初版的 GetResult 同步阻塞，直接 await
-        var typeSymbol = chainModel?.GetDeclaredSymbol(typeDecl, context.CancellationToken);
-        var projectionNameLiteral = typeSymbol is null ? FindProjectionNameLiteral(typeDecl) : FindProjectionNameLiteralAlongChain(typeSymbol, context.CancellationToken);
+        // v16 P2-4：BC 来源改读 diagnostic.Properties（对齐 PDDD008 fix；analyzer 的 Handlers.cs
+        // 传入该属性但旧版未消费——v13 只修了字面量轴，BC 轴在字面量位于基类时会取到基类的
+        // [BoundedContext] 导致前缀错误或 no-op）
+        if (!diagnostic.Properties.TryGetValue("BoundedContext", out var capturedContextObj)
+            || capturedContextObj is not string capturedContext)
+            return;
+
+        // 字面量定位仍沿基类链（v13 修复保留）——复用方法起始处已解析的 typeDecl/semanticModel
+        var typeSymbol2 = semanticModel.GetDeclaredSymbol(typeDecl, context.CancellationToken);
+        var projectionNameLiteral = typeSymbol2 is not null
+            ? FindProjectionNameLiteralAlongChain(typeSymbol2, context.CancellationToken)
+            : FindProjectionNameLiteral(typeDecl);
         if (projectionNameLiteral is null) return;
 
-        var capturedContext = boundedContext;
         context.RegisterCodeFix(
             CodeAction.Create(
                 $"添加前缀 '{capturedContext}.'",

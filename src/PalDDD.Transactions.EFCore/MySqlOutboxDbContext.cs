@@ -50,10 +50,10 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
     /// 单 owner 串行租约）；PG/SqlServer 走 RETURNING/OUTPUT 单语句天然免疫。
     /// </para>
     /// <para>
-    /// 回读物化保持跟踪（与 PG/SqlServer 租约路径同因）：调用方 OutboxBatchProcessor 的
-    /// MarkProcessed/MarkDead 是内存突变 + SaveChangesAsync 持久化（仅 ReleaseForRetry 十七轮
-    /// 改为 ExecuteUpdate），依赖 ChangeTracker——AsNoTracking 会使 Mark* 突变静默丢失
-    /// （消息永留租约态 → 租约过期重租 → 重复发布）。AcceptAllChanges 不再需要：旧路径
+    /// 回读物化保持跟踪（与 PG/SqlServer 租约路径同因）：<b>v16 勘正</b>——三十四轮 ITM-210
+    /// token 化后基类 MarkProcessed/MarkDead 已是 FencedTarget + ExecuteUpdate 直写 DB（不再依赖
+    /// ChangeTracker），本注释的原始理由失效；当前保留跟踪是兼容性现状（无害——租约回读值即
+    /// DB 真值，物化即 Unchanged）。AcceptAllChanges 不再需要：旧路径
     /// FromSqlRaw 物化后内存改 LockedBy/LockedUntil 产生 Modified 脏状态需归位；
     /// 两步法回读值即 DB 真值，物化即 Unchanged。
     /// </para>

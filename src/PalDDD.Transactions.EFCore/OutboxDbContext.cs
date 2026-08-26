@@ -42,6 +42,8 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         int maxRetryCount,
         CancellationToken ct)
     {
+        // v16 姊妹对称：batchSize 非正守卫（对齐 Saga 族）——EF Take(0/负) 空返回静默无诊断
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
         var now = GetUtcNow();
         // 优化（二十五轮 API 扫描 EF-1）：AsNoTracking 跳过 ChangeTracker 物化（免快照 +
         // 身份解析开销）。只读契约（IPalOutboxStore.GetPendingMessagesAsync doc：

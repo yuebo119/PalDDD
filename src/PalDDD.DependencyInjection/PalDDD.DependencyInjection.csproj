@@ -3,6 +3,9 @@
   <PropertyGroup>
     <RootNamespace>PalDDD.DependencyInjection</RootNamespace>
     <!-- IL3058: ZLogger 传递分析器警告 -->
+    <!-- v16 P2-5 声明：本项目无 IsAotCompatible 显式行——继承 Build.props 的 true（CI PalOrmSample
+         AOT publish+run 实证 AddPalDDD/AddPalCommandHandler 链路可行）。IL3058 为 ZLogger 传递
+         分析器警告，与运行时 AOT 能力无关。 -->
     <NoWarn>$(NoWarn);CA1812;IL3058</NoWarn>
   </PropertyGroup>
 
