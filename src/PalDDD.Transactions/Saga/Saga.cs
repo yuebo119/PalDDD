@@ -110,7 +110,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
     public TimeSpan RetryDelay
     {
         get => RetryBackoffPolicy.ComputeDelay(1);
-        protected set => RetryBackoffPolicy = new FixedBackoffPolicy(value);
+        // v17 声明：protected set 不做 null 校验——派生类显式置 null 属程序化配置错误
+        // （重试路径 NRE 自曝），与 OutboxOptions.ValidateOnStart 拦截业务面不同层。
+                protected set => RetryBackoffPolicy = new FixedBackoffPolicy(value);
     }
 
     /// <summary>获取所有已注册的步骤（按注册顺序）</summary>
@@ -280,6 +282,12 @@ public abstract class Saga<TState> where TState : SagaState, new()
     // ITM-212：Observer best-effort 安全调用——Sink 异常不影响业务结果
     // ─────────────────────────────────────────────────────────────
 
+    // ── SafeObserve 族边界声明（v17 补文，四方法共用）──
+    // catch 过滤 `when (obsEx is not OCE)`：Sink 抛 OCE 时会传播（与普通异常不同）。
+    // 理由：OCE 视为"调用方取消意图的镜像"应透传；已知副作用是 Failed 观察点在 catch 块内
+    // 调用时 Sink 的 OCE 会替换原步骤异常——ITM-212 家族共有语义，触发需 Sink 自身抛出
+    // 未关联外部取消的 OCE，窗口窄。派生 saga 的 RetryBackoffPolicy（protected set）同理
+    // 无守卫——置 null 属程序化配置错误，框架不防（对齐 OutboxOptions 已拦的业务面）。
     private static async ValueTask SafeObserveCompletedAsync(
         SagaExecutionObserver? observer, PalUlid sagaId, string stepKey, TimeSpan elapsed, CancellationToken ct)
     {

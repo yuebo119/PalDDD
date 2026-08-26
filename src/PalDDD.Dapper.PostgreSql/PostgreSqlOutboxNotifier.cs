@@ -169,7 +169,9 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
                 // 三十八轮 P3 修复：未请求取消时抛出的 OCE（如 conn.WaitAsync 内部超时转换）
                 // 原会穿透两个 catch 逃出 ExecuteAsync 致 .NET 6+ 默认 StopHost——记 Warning
                 // 后按连接丢失同款重连路径处理
-                _logger.Warning($"PostgreSQL NOTIFY wait cancelled without stop request: {oce.Message}, reconnecting...");
+                // v17 F-B-2 补：消息措辞明确"非停机请求的 OCE"（内部超时转换等），与上方
+                // stoppingToken 分支（真关停）区分，避免日志误导排障方向
+                _logger.Warning($"PostgreSQL NOTIFY wait cancelled without stop request (internal timeout/conversion): {oce.Message}, reconnecting...");
                 await Task.Delay(TimeSpan.FromSeconds(1), CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)

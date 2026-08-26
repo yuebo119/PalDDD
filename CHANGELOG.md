@@ -104,6 +104,14 @@
 - **对账追偿×4**（上轮提交声称清偿但未落地的 SagaTests/MySql 注释项，本轮 git diff 对账发现后逐一真实落地）：SagaTests:185 引用不存在测试名勘正；:203 UTE 机理论证修正（OnlyOnFaulted 延续访问 t.Exception 即 observed——原"被吞为进程级 UTE"表述错误）；:988 AsyncThrowingSink summary 更新为 Task.Yield 真异步实现；MySqlOutboxDbContext "PalORM :78-84" 行号锚勘正（实为 :98-104）
 - **声明级**：InMemory RequeueDeadAsync now 锁外取值微 TOCTOU 取舍声明；Legacy Router 引用处补全两处行为差异列示（Reader any→主库/Host 静默跳过）
 
+### 修复（v17 P3 收官批，2026-08-27）
+
+- **InboxDbContext Mark* 补 status==Processing 守卫**（v16 P3-2 姊妹对称收口——对齐 Dapper SqlTemplates/PalORM 的 AND status=Processing：重复标记/Completed 后误标不再静默 mutation；触发需调用方序列 bug，防御深度补齐）
+- **Saga SafeObserve 族边界声明**（OCE 透传语义 + 派生 RetryBackoffPolicy 无守卫取舍成文）
+- **Notifier OCE 日志措辞精确化**（区分真关停与非停机请求的内部超时转换）
+- **批次 now 漂移取舍在 DapperOutboxStore 源头落档**（下游 OutboxBatchProcessor 行为的架构级说明）
+- 观察项维持：ContinueWith ExecutionContext/Sqlite 翻页终止保证/跨包分类器收敛受架构约束
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）

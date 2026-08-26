@@ -116,6 +116,12 @@ public abstract class InboxDbContext(
     {
         ArgumentNullException.ThrowIfNull(message);
 
+        // v16 P3-2 姊妹对称：仅 Processing 态可终态化（对齐 Dapper SqlTemplates:211/PalORM
+        // :172 的 AND status=Processing 守卫）——重复标记/Completed 后误标不再静默 revision+1。
+        // 注意与 OutboxDbContext.RequeueDeadAsync 已有的同型守卫形态一致（防御深度补齐，
+        // 触发需调用方序列 bug——正常管线只租约后标记一次）
+        if (message.Status != InboxStatus.Processing)
+            return;
         AttachIfDetached(message);
         message.Status = InboxStatus.Processed;
         message.ProcessedAt = processedAt;
@@ -128,6 +134,8 @@ public abstract class InboxDbContext(
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+        if (message.Status != InboxStatus.Processing)
+            return; // v16 P3-2 姊妹对称：仅 Processing 态可标失败（对齐三栈）
 
         // P3 修复（十七轮）：入库前截断到 2000——超出 LastError 列上限的失败原因会让
         // 终态保存本身抛 DbUpdateException，掩盖原始处理失败（存储层兜底防御）
