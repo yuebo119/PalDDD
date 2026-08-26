@@ -48,6 +48,8 @@ public sealed class MessageConsumeContext(
     /// </summary>
     /// <param name="headers">Broker 原始消息头（值为字节数组或字符串）；可为 null。接受 KVP 序列以同时兼容 Kafka 的 Dictionary 与 RabbitMQ 的 IDictionary（接口间无 IDictionary→IReadOnlyDictionary 转换）。</param>
     /// <param name="correlationId">header 缺失 x-correlation-id 时的兜底关联 ID。</param>
+    /// <remarks>v9 E5 澄清：头部含<b>未知类型</b>值（非 byte[]/string）时返回非 null 但对应字段为
+    /// null 的部分上下文（非全 null——已知类型字段照常填充）；完全无追踪头才返回 null。</remarks>
     public static MessageConsumeContext? FromHeaders(
         IEnumerable<KeyValuePair<string, object?>>? headers,
         string? correlationId = null)

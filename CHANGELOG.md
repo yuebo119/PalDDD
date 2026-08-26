@@ -30,6 +30,15 @@
 - **文档/注释修正 ×12**：int 化同步残留（SqlTemplates remarks/BulkCopy IL2062/AmbientTransaction DI 口径）、LeaseOwnerFactory 管线名勘正、"零 GC"过度声明收敛、Saga 重试整步重放语义成文、PALID002 补 readonly 提示、补偿告警双路径声明、Any 占位歧义、双时钟源/DapperEventLog auto-open/Kafka Dispose 超时声明
 - **不修（裁决）**：MarkCompleted 无 status 守卫（姊妹对齐行为）、开放/闭合 behavior 互斥（设计权衡已声明）、Inbox 截断跨栈分叉（各有列契约）、EventLogPositionReserver 慢路径（正确性无影响）、AddMessagesAsync 无 ct（v3.0 接口窗口，已注释声明）
 
+### 修复（v9 验证轮清偿，2026-08-26）
+
+- **P1-1** `DapperEventLog` 恢复 `: IEventLog` 接口声明——上轮行内注释注入事故把接口声明吞进注释行尾（build/测试/快照三重拦截缺口均未拦，v9 敌对复核抓出）；注释移入 XML doc；**新增接口赋值契约测试**（`DapperEventLog_ImplementsIEventLog_InterfaceAssignmentCompiles`——声明丢失即 CS0029 编译失败，S3 双向验证：删→红/恢复→绿）
+- **P2-1** `Saga` 补 `SafeObserveCompensationStartedAsync` 隔离（对齐 ITM-212 的 SafeObserve 族姊妹补全）——观察者 Sink 抛异常不再阻断真实补偿、不再误报"补偿失败"；回归测试 `ObserverSinkFailure_DoesNotBlockCompensation`（S3：直 await 版 10 红）
+- **P2-2 + 注释×6**：SqlTemplates SagaActive int 化第四处残留（"字符串状态"勘正）、幻影 StatusPending 引用勘正、BulkCopy 不存在的 `[DapperAot(false)]` 标注措辞、SqliteExtensions `[module:DapperAot]` 失实勘正、GenerateIdAttribute doc 三处补 readonly（对齐 PALID002）、CodeFixes "5 个 provider"计数勘正（4 provider+1 helper）
+- **行为×3**：`AddPalOutbox` 补 `RetryBackoffPolicy` 非空校验（原显式置 null 时 catch 块内 NRE 逐 tick 中止、已租约消息滞留）；`RabbitMqBroker.DisposeAsync` 补幂等门（对齐 Kafka ITM-217）；`MapCommand`/`MapQuery` 的空 body 裸 400 补 ProblemDetails（三处 400 形态统一收口，E1）
+- **测试×1**：`CreateInvalidBody` 工厂契约测试（v8 引入时零覆盖，E6）
+- **措辞×3**：SagaStep 重放语义 remarks 挪类头（原挂 FanOut/ChildSaga 恒 null 的 ExecuteAsync 上，挂靠错位）；Any 占位注意点改为面向框架维护者（Kind 为 internal 外部不可达）；FromHeaders 未知类型头行为澄清（部分上下文非全 null）
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）

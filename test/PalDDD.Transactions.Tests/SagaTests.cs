@@ -172,6 +172,26 @@ public class SagaNormalTransitionTests
         await Assert.That(compensationLog[1]).IsEqualTo("compensate:Submitted");
     }
 
+    /// <summary>v9 P2-1 回归：观察者 Sink 抛异常不得阻断真实补偿——原 OnCompensationStarted
+    /// 直 await，Sink 异常使补偿被跳过且误并入"补偿失败"聚合（ITM-212 姊妹漏网）。
+    /// 修复后 Sink 异常隔离为 Activity 事件，compensationLog 照常记录两条补偿。</summary>
+    [Test]
+    public async Task ObserverSinkFailure_DoesNotBlockCompensation()
+    {
+        var compensationLog = new List<string>();
+        var saga = new EventSpecificCompensationSaga(compensationLog);
+
+        var state = new TestSagaState { CurrentState = "Initial" };
+        state = await saga.ProcessEventAsync(state, new TestEvent());
+
+        using var observer = new SagaExecutionObserver(new ThrowingSink());
+        await Assert.That(async () =>
+            await saga.ProcessEventAsync(state, new object())).Throws<AggregateException>();
+
+        // 关键断言：补偿照常执行（修复前 Sink 异常在补偿前抛出，日志为空且误报"补偿失败"）
+        await Assert.That(compensationLog).Count().IsEqualTo(2);
+    }
+
     [Test]
     public async Task UnmatchedStep_ReturnsUnchangedState()
     {
@@ -899,4 +919,12 @@ public class SagaStateValidationTests
         var state = new TestSagaState();
         await Assert.That(state.CurrentState).IsEqualTo("Initial");
     }
+
+}
+
+/// <summary>全事件抛异常的 Sink（v9 P2-1 回归专用——验证观察者隔离不阻断补偿）。</summary>
+internal sealed class ThrowingSink : ISagaEventSink
+{
+    public ValueTask EmitAsync<T>(T sagaEvent, CancellationToken ct) where T : notnull
+        => throw new InvalidOperationException("sink failure probe");
 }

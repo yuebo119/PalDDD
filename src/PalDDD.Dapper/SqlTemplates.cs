@@ -34,7 +34,7 @@ namespace PalDDD.Dapper;
 ///   - 参数名使用 <c>PascalCase</c>（Dapper 自动映射到 <c>@ParamName</c>）
 ///   - PostgreSQL 专用语法（如 RETURNING）通过 Dapper 层的 DapperDbType switch 处理
 ///   - 状态列为 INT（三十八轮统一：outbox/inbox/saga 等五表状态列全部 INT，枚举值 0 起）——
-///     SQL 中以数字字面量出现（0=Pending 等，见 OutboxInsert/StatusPending 常量族）。
+///     SQL 中以数字字面量出现（0=Pending 等，OutboxInsert 内联 0；StatusPending 常量在 DapperOutboxStore）。
 /// </remarks>
 public static class SqlTemplates
 {
@@ -260,8 +260,8 @@ public static class SqlTemplates
     /// 💡 返回 Active=0 与 AwaitingHumanDecision=5 的 Saga（三十四轮：中断态超时兜底——
     /// 中断态 Saga 配置了步骤 Timeout 且超期时由 SagaTimeoutProcessor 补偿，未配置则显式无限等待）；
     /// Completed、Compensated、CompensationFailed、DeadLettered 为终态仍过滤。<br/>
-    /// 注：Saga 状态使用 int 枚举值存储（SagaStatus 底层为 int），与 Outbox 的字符串状态不同。
-    /// 这是有意选择：Saga 状态需要版本号乐观并发控制，int 比较比字符串更快。
+    /// 注：五表状态列均为 INT（v9 勘正：原"与 Outbox 的字符串状态不同"为 int 化前残留——三十八轮已统一）。
+    /// Saga 侧另有版本号乐观并发控制（version 列），与状态列编码正交。
     /// </summary>
     public const string SagaActive =
         "SELECT * FROM saga_states WHERE status IN (0, 5) ORDER BY created_at LIMIT @n";

@@ -60,7 +60,12 @@ public static class EndpointExtensions
             }
             if (cmd is null)
             {
+                // v9 E1：空 body 裸 400 是第三处形态分叉——统一 ProblemDetails（对齐 ITM-283/v8 畸形 JSON）
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await context.Response.WriteAsJsonAsync(
+                    ValidationProblemResponseFactory.CreateInvalidBody("Request body is required."),
+                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                    contentType: null).ConfigureAwait(false);
                 return;
             }
 
@@ -132,7 +137,12 @@ public static class EndpointExtensions
             }
             if (cmd is null)
             {
+                // v9 E1：空 body 裸 400 是第三处形态分叉——统一 ProblemDetails（对齐 ITM-283/v8 畸形 JSON）
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await context.Response.WriteAsJsonAsync(
+                    ValidationProblemResponseFactory.CreateInvalidBody("Request body is required."),
+                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                    contentType: null).ConfigureAwait(false);
                 return;
             }
 
