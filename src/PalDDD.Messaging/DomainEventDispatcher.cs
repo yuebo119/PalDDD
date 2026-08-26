@@ -92,6 +92,9 @@ internal sealed class IterativeDomainEventDispatcher : IDomainEventDispatcher
             await DispatchSingleAsync(@event, ct).ConfigureAwait(false);
         }
 
+        // v17 论证成文：正常语义下此处不可达——入口 :76 已 fail-fast 初始批量，循环每迭代
+        // 必 Dequeue 一个且 Handler 不产生新入队事件（:35 语义声明）。保留 throw 作为未来
+        // 入队行为变更的哨兵（而非删除），误触发时错误信息可直接定位 MaxIterations 配置。
         if (queue.Count > 0)
             throw new InvalidOperationException(
                 $"Domain event dispatch exceeded MaxIterations ({maxIterations}): initial batch size {events.Count} 超过上限"
