@@ -5,7 +5,7 @@
 //
 // 💡 本类提供静态解析方法——供手动调用或经典 Dapper 路径使用。
 //
-// ⚠️ AOT 状态：[module:DapperAot] 当前未启用（DapperAotInitializer.cs:21 注释禁用）。
+// ⚠️ AOT 状态：[module:DapperAot] 当前未启用（DapperAotInitializer.cs:25（v10 勘正：行号 21→25） 注释禁用）。
 //   TypeHandler 通过 [ModuleInitializer] 注册，经典 Dapper 运行时路径生效。
 //   QueryAsync<T> 走 IL.Emit 反射物化，NativeAOT 发布会失败。
 //   PalORM 适配层（PalDDD.PalORM）提供真 AOT 路径替代。

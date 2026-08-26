@@ -58,6 +58,13 @@ public abstract class InboxDbContext(
                 await SaveChangesAsync(ct).ConfigureAwait(false);
                 return record;
             }
+            catch (DbUpdateException ex) when (!IsUniqueConstraintViolation(ex))
+            {
+                // v10 P3-1：瞬时异常（连接断/超时）上抛前 Detach——长驻 DbContext 下重试
+                // Add 同键实体抛 identity conflict（对齐 EventLogDbContext 三十八轮姊妹形态）
+                Entry(record).State = EntityState.Detached;
+                throw;
+            }
             catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
             {
                 // 唯一约束冲突（(ConsumerName,MessageId) 已存在）—— 幂等路径：分离并重查。

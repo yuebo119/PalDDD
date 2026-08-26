@@ -29,7 +29,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor NonPartialRecordStructDeclaration = new(
         "PALID002",
         "GenerateId target must be a partial record struct",
-        "Type '{0}' uses [GenerateId] but is not declared as a readonly partial record struct. Declare it as 'readonly partial record struct' (v8: readonly 与生成物一致性要求，省略会引发 partial 修饰符不匹配的 CS 编译错误) so the generator can merge generated members.",
+        "Type '{0}' uses [GenerateId] but is not declared as a partial record struct. Declare it as 'partial record struct' so the generator can merge generated members (readonly optional — the generated part makes the whole struct readonly; do not declare non-readonly instance fields, CS8340).",
         "PalDDD.IdentityGeneration",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);

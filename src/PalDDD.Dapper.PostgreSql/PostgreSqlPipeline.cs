@@ -1,5 +1,8 @@
 // ─────────────────────────────────────────────────────────────
 // ⚡ PostgreSqlPipeline — Npgsql 管道批量执行（绕过 ADO.NET）
+// ⚠️ v10 声明：NpgsqlBatch.Transaction 未挂接——连接有活动事务（如 UoW.Begin 后）时
+//    使用将抛 InvalidOperationException；调用方须在无事务上下文使用（与 DapperBulkCopy 的
+//    事务贯通形成能力差异，后者有挂接）——事务内批量请走 DapperBulkCopy。
 // ─────────────────────────────────────────────────────────────
 // AOT 安全性：
 //   ✅ Add(NpgsqlParameter[]) — 显式参数，零反射，完全 AOT 安全。

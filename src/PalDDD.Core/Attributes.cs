@@ -21,10 +21,11 @@ namespace PalDDD.Core;
 /// 白名单外类型在编译期报 PALID001 诊断（IdentityGenerator），
 /// 而非生成恒失败的 TryParse。
 /// </para>
-/// <para>📐 目标声明必须是 <c>readonly partial record struct</c>——生成物为
-/// <c>readonly partial record struct</c>（v9 对齐 PALID002：省略 readonly 会引发 partial
-/// 修饰符不匹配的 CS 编译错误），普通 <c>partial struct</c> 与之不合并，
-/// 编译期报 PALID002 诊断。</para>
+/// <para>📐 目标声明必须是 <c>partial record struct</c>（普通 <c>partial struct</c> 不合并，
+/// 编译期报 PALID002 诊断）。readonly 可省略——C# 规则是 readonly 出现在任一 partial 部分即
+/// 整体 readonly，生成物（<c>readonly partial record struct</c>）已保证整体只读（v10 勘正：
+/// 原"省略引发修饰符不匹配错误"经编译探针证伪）；但用户部分<b>不得声明非 readonly 实例字段</b>
+/// （CS8340）。推荐带 readonly 与生成物一致。</para>
 /// </summary>
 [AttributeUsage(AttributeTargets.Struct)]
 public sealed class GenerateIdAttribute(Type idType) : Attribute
