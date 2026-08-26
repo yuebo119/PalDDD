@@ -146,6 +146,14 @@ public sealed class EventLogPositionReserver
                 {
                     await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
                 }
+                catch (DbUpdateException ex) when (ex is not DbUpdateConcurrencyException
+                    && !IsUniqueConstraintViolation(ex))
+                {
+                    // v10 P3-1：瞬时异常（连接断/超时）上抛前 Detach——长驻 context 重试 Add
+                    // 同键分配器抛 identity conflict（对齐 EventLogDbContext 三十八轮姊妹）
+                    context.Entry(allocator).State = EntityState.Detached;
+                    throw;
+                }
                 catch (DbUpdateConcurrencyException)
                 {
                     // CAS 失败（Revision 不匹配）—— 另一个进程同时分配了区块。重试。

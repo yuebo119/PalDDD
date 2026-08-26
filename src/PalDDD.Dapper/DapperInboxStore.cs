@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────
 // 📥 DapperInboxStore — 收件箱存储的 Dapper 实现
-//    纯 Dapper SQL + Dapper.AOT 编译时拦截
+//    纯 Dapper SQL + 运行时经典 Dapper 路径（v10 勘正：AOT 拦截未启用，非零反射）
 // ─────────────────────────────────────────────────────────────
-// AOT 安全性：同 DapperOutboxStore，Dapper snake_case 纯字符串映射，零反射。
+// AOT 安全性：同 DapperOutboxStore（v10 勘正：运行时经典路径含反射，真 AOT 不可达——ADR-020）。
 //
 // 💡 什么是收件箱模式（Inbox Pattern）？
 //   ｜ 当服务消费消息队列中的消息时，可能出现"处理成功但确认失败"

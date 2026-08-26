@@ -39,6 +39,13 @@
 - **测试×1**：`CreateInvalidBody` 工厂契约测试（v8 引入时零覆盖，E6）
 - **措辞×3**：SagaStep 重放语义 remarks 挪类头（原挂 FanOut/ChildSaga 恒 null 的 ExecuteAsync 上，挂靠错位）；Any 占位注意点改为面向框架维护者（Kind 为 internal 外部不可达）；FromHeaders 未知类型头行为澄清（部分上下文非全 null）
 
+### 修复（v10 验证轮清偿，2026-08-26）
+
+- **P2-1 readonly 失实链改口**：`GenerateIdAttribute` doc 与 PALID002 诊断消息勘正——readonly **可省略**（C# 规则：readonly 出现在任一 partial 部分即整体 readonly，编译探针+主线程双实证）；真实约束是用户部分不得声明非 readonly 实例字段（CS8340）。v8 引入→v9 强化→v10 传播的未验证语言规则断言链终结
+- **幽灵 Added 三处补 Detach**（姊妹对齐）：`InboxDbContext`/`EventLogPositionReserver`/`ProjectionCheckpointDbContext` 在瞬时 DbUpdateException（非唯一冲突）上抛前 Detach——对齐 EventLogDbContext 三十八轮形态，长驻 DbContext 重试不再 identity conflict
+- **幻影/措辞勘正×8**：`[DapperAot(false)]` 幻影标注三处（测试文件）、契约测试错码 CS0311→CS0029、Outbox/Inbox Store 头部"Dapper.AOT 拦截器"措辞勘正（与诚实声明对齐）、两处 DapperAotInitializer 行号漂移、PostgreSqlPipeline 事务限制声明（NpgsqlBatch 未挂接事务，事务内批量走 DapperBulkCopy）
+- **裁决不做**：双 Broker DisposeAsync 幂等门回归测试——无 mock 框架、fake IChannel 接口面成本超收益，Interlocked 门逻辑经两轮敌对确认（传感器欠账留档）；观察项×3（死 throw 防御保留/GetAsync 跟踪设计差异/Current 重读形态）维持既有裁决
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）

@@ -99,7 +99,8 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         var now = _timeProvider.GetUtcNow();
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // 🟡 P1 修复 (2026-06-21): 替换 SqlKata.QueryFactory.GetAsync 为纯 Dapper SQL
-        // 直接使用 Dapper.QueryAsync<OutboxMessage> 走 Dapper.AOT 拦截器路径。
+        // 直接使用 Dapper.QueryAsync<OutboxMessage>（v10 勘正：走运行时经典 Dapper 路径——
+        // AOT 拦截未启用，与 csproj IsAotCompatible=true 的差异见 DapperBulkCopy IL2062 注释）。
         var messages = await conn.QueryAsync<OutboxMessage>(
             new CommandDefinition(
                 SqlTemplates.OutboxSelectPending,

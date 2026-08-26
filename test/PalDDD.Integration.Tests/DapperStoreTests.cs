@@ -10,7 +10,7 @@
 //   [Collection("Dapper")] 确保不与其他使用 Dapper 全局状态的测试并行。
 //
 // 💡 Dapper.AOT 与 SQLite 类型映射：
-//   生产 Store 标注 [DapperAot(false)]，走运行时 Dapper 路径。
+//   生产 Store 未启用 Dapper.AOT 拦截（[module:DapperAot] 为注释禁用态），走运行时经典 Dapper 路径。
 //   SQLite TEXT 列需要运行时 TypeHandler 转换 Guid/DateTimeOffset（见 InitializeAsync 注册）。
 //   Dapper.AOT 编译时拦截器不适用于这些 Store，TypeHandler 是必需的。
 // ─────────────────────────────────────────────────────────────
@@ -64,7 +64,7 @@ public sealed class DapperStoreTests
         global::Dapper.DefaultTypeMap.MatchNamesWithUnderscores = true;
 
         // 注册运行时 TypeHandler — SQLite TEXT 列需要转换为 Guid/DateTimeOffset
-        // 生产 Store 已标注 [DapperAot(false)]，走运行时 Dapper 路径，TypeHandler 生效
+        // 生产 Store 未启用 Dapper.AOT 拦截（注释禁用态），走运行时经典 Dapper 路径，TypeHandler 生效
         var dtoHandler = new SqliteDateTimeOffsetTypeHandler();
         SqlMapper.AddTypeHandler(dtoHandler);
         SqlMapper.AddTypeHandler(typeof(DateTimeOffset), dtoHandler);
@@ -1208,7 +1208,7 @@ public sealed class DapperStoreTests
     [Test]
     public async Task DapperEventLog_ImplementsIEventLog_InterfaceAssignmentCompiles()
     {
-        // 接口赋值——若 DapperEventLog 丢失 : IEventLog 声明，本行编译失败（CS0311）
+        // 接口赋值——若 DapperEventLog 丢失 : IEventLog 声明，本行编译失败（CS0029；v10 勘正——泛型约束码 CS0311 不适用）
         PalDDD.EventLog.IEventLog log = new DapperEventLog(_conn, dbType: _dbType);
         await Assert.That(log).IsNotNull();
     }
@@ -1225,6 +1225,6 @@ internal sealed partial class DapperStoreJsonContext : JsonSerializerContext;
 // ═══════════════════════════════════════════════════════════════
 // Dapper SQLite 类型处理器（运行时路径必需）
 // ─────────────────────────────────────────────────────────────────
-// 生产 Store 标注 [DapperAot(false)]，走运行时 Dapper 路径。
+// 生产 Store 未启用 Dapper.AOT 拦截（[module:DapperAot] 为注释禁用态），走运行时经典 Dapper 路径。
 // SQLite TEXT 列需要运行时 TypeHandler 转换 DateTimeOffset/Guid/Ulid（见 ClassInitialize 注册）。
 // ClassCleanup 调用 SqlMapper.ResetTypeHandlers() 清理全局状态。

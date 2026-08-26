@@ -226,6 +226,12 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         }
         // P2 修复（ITM-065 同型）：仅唯一约束冲突返回 null（语义=他人已持有租约）；
         // 连接故障等其他 DbUpdateException 上抛，避免基础设施故障被误判为租约竞争。
+        catch (DbUpdateException ex) when (!IsUniqueConstraintViolation(ex))
+        {
+            // v10 P3-1：瞬时异常上抛前 Detach（对齐 EventLogDbContext 三十八轮姊妹形态）
+            Entry(checkpoint).State = EntityState.Detached;
+            throw;
+        }
         catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
         {
             Entry(checkpoint).State = EntityState.Detached;
