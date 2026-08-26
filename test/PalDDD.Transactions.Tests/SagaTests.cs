@@ -182,7 +182,7 @@ public class SagaNormalTransitionTests
     /// <summary>v14 回归：异步故障 Sink（ValueTask.FromException）不阻断补偿且不崩。<br/>
     /// ⚠️ 路径澄清（v16 P2-1 勘正）：本测试 Saga 只注册普通步骤，走 ExecuteNormalStepAsync 的
     /// SafeObserve 族（await 全覆盖），<b>不触</b> OnStatusChanged 的 ContinueWith 路径——该路径
-    /// 由下方 ObserverInterrupt_SyncThrow_AsyncFault Sink 测试锁定。</summary>
+    /// 该路径的行为面由下方 ObserverInterrupt_BothFaultModes_DoNotEscape（v17 勘正引用名）覆盖；</summary>
     [Test]
     public async Task ObserverSinkAsyncFailure_DoesNotBlockCompensationOrCrash()
     {
@@ -200,10 +200,10 @@ public class SagaNormalTransitionTests
 
     /// <summary>v16 P2-1：OnStatusChanged（唯一调用点=InterruptStep）故障不逃逸回归——
     /// Saga 正常进入 AwaitingHumanDecision。<br/>
-    /// ⚠️ 覆盖边界诚实声明（v16 S3 实证三轮）：①同步抛=true 半面，直接锁定；②真异步抛
-    /// （await 后抛）的故障被吞为<b>进程级 UnobservedTaskException</b>——不在测试域断言面内，
-    /// 该半面的防线是 ContinueWith(OnlyOnFaulted)+Preserve 本身（v14 diff 亲核保证）+ GATE-1 式
-    /// 门禁。曾三次试图用测试探针锁定异步半面均不可达（FromException 同步态/delay 真异步/
+    /// ⚠️ 覆盖边界诚实声明：①同步抛=true 半面，直接锁定；②真异步抛（await 后抛）的故障由
+    /// ContinueWith(OnlyOnFaulted) 延续访问 t.Exception 标记为已观察并仅记 Activity——不逃逸
+    /// 不出异常（v17 勘正机理：延续内读取即 observed，不会触发进程级 UnobservedTaskException）。
+    /// 该半面行为测试只能锁"不崩不阻断"，静默丢弃本身不可断言。
     /// 删半面对照均绿）。</summary>
     [Test]
     [Arguments(true)]   // 同步抛——同步 try-catch 半面（可测）
@@ -985,7 +985,8 @@ internal sealed class ThrowingSink : ISagaEventSink
         => throw new InvalidOperationException("sink failure probe");
 }
 
-/// <summary>异步故障 Sink（v14——EmitAsync 返回 ValueTask.FromException 触发 ContinueWith 路径）。</summary>
+/// <summary>异步故障 Sink（v14/v16——EmitAsync 经 Task.Yield 后抛出，制造真 pending 态，
+/// 使 OnStatusChanged 的 IsCompletedSuccessfully=false 分支与 OnlyOnFaulted 延续可达）。</summary>
 internal sealed class AsyncThrowingSink : ISagaEventSink
 {
     // v16 S3 勘正：FromException 是同步已完成态——走到 IsCompletedSuccessfully=false 分支但故障
