@@ -102,6 +102,11 @@ public sealed class InboxProcessor
             // P2 修复（八轮评审）：副作用（handler）已发生后，完成标记不应随请求级 ct 取消——
             // 取消会导致 Processing 记录滞留，租约/超时到期后同一消息被双重执行
             // （对齐下方 MarkFailedAsync 的 CancellationToken.None）
+            //
+            // ⚠️ v17 补文（OCE 滞留语义）：handler 本身抛 OCE（如 ct 取消传播）时同样不标
+            // Failed——记录滞留 Processing 至 ProcessingTimeout 才可重入。此为设计取舍：
+            // OCE 语义 = "不知道执行到哪一步"，标 Failed 会重放副作用而实际可能已完成。
+            // 代价 = 最长 Timeout 的重试延迟（默认 5 分钟）。
             try
             {
                 await _store.MarkProcessedAsync(record, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);

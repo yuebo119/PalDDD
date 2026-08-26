@@ -112,6 +112,11 @@
 - **批次 now 漂移取舍在 DapperOutboxStore 源头落档**（下游 OutboxBatchProcessor 行为的架构级说明）
 - 观察项维持：ContinueWith ExecutionContext/Sqlite 翻页终止保证/跨包分类器收敛受架构约束
 
+### 修复（v17 观察项收官，2026-08-27 · 第二批）
+
+- **OCE 滞留语义成文**：InboxProcessor 补 handler 抛 OCE 时记录滞留 Processing 至 ProcessingTimeout 的设计取舍说明（不标 Failed 的理由：OCE 语义="不知道执行到哪一步"，标 Failed 会重放可能已完成的副作用；代价=最长 Timeout 重试延迟）
+- **Dispatcher 尾部 throw 论证成文**：正常语义不可达的推导链（入口 fail-fast + 每迭代必 Dequeue + Handler 不入队）保留 throw 作为未来入队行为变更的哨兵
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）
