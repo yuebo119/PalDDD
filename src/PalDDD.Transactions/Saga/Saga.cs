@@ -673,7 +673,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 if (!vt.IsCompletedSuccessfully)
                     _ = vt.Preserve().AsTask().ContinueWith(
                         t => RecordObserverFault(t.Exception!.GetBaseException()),
-                        TaskScheduler.Default);
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted,
+                        TaskScheduler.Default); // v14 修正：漏传 OnlyOnFaulted——原版每次正常完成也执行延续，t.Exception 为 null 时延续内 NRE 被静默吞掉
             }
             catch (Exception obsEx) when (obsEx is not OperationCanceledException)
             {
