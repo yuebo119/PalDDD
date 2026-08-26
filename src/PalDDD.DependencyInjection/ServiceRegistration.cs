@@ -23,7 +23,7 @@ public static class ServiceRegistration
 {
     /// <summary>注册 PalDDD 核心：事件总线 + 分发器 + 空消息代理 + 迭代事件派发</summary>
     public static IServiceCollection AddPalDDD(this IServiceCollection services)
-    {
+    {        ArgumentNullException.ThrowIfNull(services);
         services.TryAddSingleton<CQRS.Dispatcher>();
         services.TryAddScoped<Message.IDomainEventDispatcher, Message.IterativeDomainEventDispatcher>();
         services.TryAddSingleton<Message.IMessageBroker, Message.NullMessageBroker>();
@@ -39,7 +39,7 @@ public static class ServiceRegistration
     /// <summary>注册 ByteAether.Ulid 统一 ID 生成器。</summary>
     /// <remarks>将 <see cref="Core.Identity.IPalIdGenerator"/> 注册为单例，提供给 DomainEvent、OutboxMessage 等核心类型使用。</remarks>
     public static IServiceCollection AddPalIdentity(this IServiceCollection services)
-    {
+    {        ArgumentNullException.ThrowIfNull(services);
         services.TryAddSingleton<Core.Identity.IPalIdGenerator, Core.Identity.ByteAetherUlidGenerator>();
         return services;
     }
@@ -47,12 +47,18 @@ public static class ServiceRegistration
     /// <summary>注册推荐的核心栈：<see cref="AddPalDDD"/> + <see cref="AddPalPipelineBehaviors"/> + <see cref="AddPalIdentity"/>。</summary>
     /// <remarks>只包含 AOT 安全的核心、CQRS、内存消息能力；序列化、持久化、Broker、ASP.NET Core 适配器仍由对应包显式注册。</remarks>
     public static IServiceCollection AddPalCoreStack(this IServiceCollection services)
-        => services.AddPalDDD().AddPalPipelineBehaviors().AddPalIdentity();
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        return services.AddPalDDD().AddPalPipelineBehaviors().AddPalIdentity();
+    }
 
     /// <summary>注册 PalDDD 默认栈；当前等价于 <see cref="AddPalCoreStack"/>。</summary>
     /// <remarks>为新用户提供低认知入口，同时不越过 Clean Architecture 边界自动引用基础设施适配器。</remarks>
     public static IServiceCollection AddPalFullStack(this IServiceCollection services)
-        => services.AddPalCoreStack();
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        return services.AddPalCoreStack();
+    }
 
     /// <summary>添加常用管道行为（验证 + 日志）— 开放泛型注册（仅 JIT / 非 Native AOT 场景）</summary>
     /// <remarks>
@@ -71,6 +77,7 @@ public static class ServiceRegistration
     /// </remarks>
     public static IServiceCollection AddPalPipelineBehaviors(this IServiceCollection services)
     {
+        ArgumentNullException.ThrowIfNull(services);
         ThrowIfAotNotSupported();
         // 互斥（替代十七轮哨兵 PalPipelineBehaviorsMarker，见 P0 决策）：检查服务集合实际状态而非
         // 代理标记——开放注册已存在（防双调）或闭合注册已存在（AddPalCommandHandler/AddPalQueryHandler
@@ -202,6 +209,8 @@ public static class ServiceRegistration
         where TCommand : CQRS.IRequest<TResponse>
         where THandler : class, CQRS.ICommandHandler<TCommand, TResponse>
     {
+        ArgumentNullException.ThrowIfNull(services);
+
         // 评审 P2-1 修复：自动确保核心注册（AddPalDDD 全 TryAdd，幂等零覆盖）——
         // 漏调 AddPalDDD 时旧实现把错误延迟到首个请求（HandlerRegistrar 缺失 →
         // Freeze 不发生 → 一律 HandlerNotFound 404），现在注册期即完成闭环。
@@ -251,6 +260,8 @@ public static class ServiceRegistration
         where TQuery : CQRS.IQuery<TResponse>
         where THandler : class, CQRS.IQueryHandler<TQuery, TResponse>
     {
+        ArgumentNullException.ThrowIfNull(services);
+
         // 评审 P2-1 修复：同命令——自动确保核心注册（幂等），消除漏调 AddPalDDD 的 fail-late
         services.AddPalDDD();
 

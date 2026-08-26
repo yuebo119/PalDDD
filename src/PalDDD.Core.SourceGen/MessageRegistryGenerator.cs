@@ -34,7 +34,7 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor DuplicateMessageName = new(
         "PALMSG003",
         "Generated message names must be unique",
-        "Message name '{0}' is used by more than one generated message type",
+        "Message name '{0}' is registered more than once (duplicate [GenerateMessage] declaration on the same or multiple partial declarations)",
         "PalDDD.MessageContracts",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
