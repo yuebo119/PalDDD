@@ -172,6 +172,23 @@ public class SagaNormalTransitionTests
         await Assert.That(compensationLog[1]).IsEqualTo("compensate:Submitted");
     }
 
+    /// <summary>v14 回归：异步故障 Sink（ValueTask.FromException）不阻断补偿且不崩——
+    /// OnStatusChanged 的 ContinueWith(OnlyOnFaulted) 路径行为验证（同步版见下方 ObserverSinkFailure）。</summary>
+    [Test]
+    public async Task ObserverSinkAsyncFailure_DoesNotBlockCompensationOrCrash()
+    {
+        var compensationLog = new List<string>();
+        var saga = new EventSpecificCompensationSaga(compensationLog);
+        var state = new TestSagaState { CurrentState = "Initial" };
+        state = await saga.ProcessEventAsync(state, new TestEvent());
+
+        using var observer = new SagaExecutionObserver(new AsyncThrowingSink());
+        await Assert.That(async () =>
+            await saga.ProcessEventAsync(state, new object())).Throws<AggregateException>();
+
+        await Assert.That(compensationLog).Count().IsEqualTo(2);
+    }
+
     /// <summary>v9 P2-1 回归：观察者 Sink 抛异常不得阻断真实补偿——原 OnCompensationStarted
     /// 直 await，Sink 异常使补偿被跳过且误并入"补偿失败"聚合（ITM-212 姊妹漏网）。
     /// 修复后 Sink 异常隔离为 Activity 事件，compensationLog 照常记录两条补偿。</summary>
@@ -927,4 +944,11 @@ internal sealed class ThrowingSink : ISagaEventSink
 {
     public ValueTask EmitAsync<T>(T sagaEvent, CancellationToken ct) where T : notnull
         => throw new InvalidOperationException("sink failure probe");
+}
+
+/// <summary>异步故障 Sink（v14——EmitAsync 返回 ValueTask.FromException 触发 ContinueWith 路径）。</summary>
+internal sealed class AsyncThrowingSink : ISagaEventSink
+{
+    public ValueTask EmitAsync<T>(T sagaEvent, CancellationToken ct) where T : notnull
+        => ValueTask.FromException(new InvalidOperationException("async sink failure probe"));
 }
