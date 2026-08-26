@@ -63,8 +63,8 @@ public sealed class AddProjectionContextPrefixCodeFix : CodeFixProvider
         // 找到 ProjectionName 属性定义
         // v13 基类链对齐 analyzer：ProjectionName 声明在投影基类时诊断照报（analyzer 沿
         // BaseType 链查），fix 此前只扫本类型导致不注册——语义模型沿链取各层的字面量声明
-        var chainModel = context.Document.GetSemanticModelAsync(context.CancellationToken).GetAwaiter().GetResult();
-        var typeSymbol = chainModel.GetDeclaredSymbol(typeDecl, context.CancellationToken);
+        var chainModel = await context.Document.GetSemanticModelAsync(context.CancellationToken).ConfigureAwait(false); // v13 修正：方法本就 async Task——G11 门禁抓出初版的 GetResult 同步阻塞，直接 await
+        var typeSymbol = chainModel?.GetDeclaredSymbol(typeDecl, context.CancellationToken);
         var projectionNameLiteral = typeSymbol is null ? FindProjectionNameLiteral(typeDecl) : FindProjectionNameLiteralAlongChain(typeSymbol, context.CancellationToken);
         if (projectionNameLiteral is null) return;
 
