@@ -234,7 +234,9 @@ public static class PostgreSqlServiceCollectionExtensions
                 LoadBalanceHosts = true,
                 // v16 声明（Legacy Obsolete 入口）：Reader "any" 允许读流量均衡到主库——新入口
                 // AddPalReadWriteRouter 已改 read-only（ITM-181），本入口已 Obsolete 不再修，
-                // 见 remarks 缺口列表
+                // 见 AddPalPostgreSqlReadWriteRouter 方法的 obsolete remarks（v17 补全两处
+                // 未列差异：①本入口 Reader 为 "any"——读流量可均衡到主库，与 ITM-181 新入口的
+                // read-only 不同；②Host 缺失时静默跳过而新入口 ITM-112 fail-fast）
                 TargetSessionAttributes = "any"
             }.ConnectionString;
             var readerBuilder = new NpgsqlDataSourceBuilder(readerCs);

@@ -44,7 +44,7 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
     /// 以应用时钟一致性换精确回读（PalORM 同款取舍）。
     /// </para>
     /// <para>
-    /// ⚠️ 已知限制（八轮评审 P3，对齐 PalORM :78-84 声明不修）：回读按 (LockedBy, LockedUntil)
+    /// ⚠️ 已知限制（八轮评审 P3，声明不修——PalORM 同款见 PalOrmOutboxStore.cs:98-104，v17 勘正行号锚）：回读按 (LockedBy, LockedUntil)
     /// 匹配——同一 owner 在同一 tick（until 完全相等，如 FakeTimeProvider 冻结时间）发起两次租约时，
     /// 第二次回读会混入第一次已锁定的批次。生产触发条件近乎为零（DATETIME(6) 微秒精度 +
     /// 单 owner 串行租约）；PG/SqlServer 走 RETURNING/OUTPUT 单语句天然免疫。
