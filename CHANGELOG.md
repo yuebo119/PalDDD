@@ -52,6 +52,13 @@
 - **P3×3**：PostgreSqlPipeline"后者有挂接"精确化（Npgsql 自动加入 vs MySQL/SQLite 显式挂接）；InboxStore ADR-020 引用改为准确技术依据（csproj IL2062/IL3058）；StrategicDddAnalyzer 主文件 unused using 删除
 - v11 敌对复核全部通过：readonly 改口三探针复证闭环、幽灵 Added 三处双代理交叉确认（when 互补穷尽含 Concurrency 子类归路论证）
 
+### 能力实证轮（v12，2026-08-26 · engine 第五轴首触发）
+
+- **审计能力验证：注入 1/1 全抓**——LeaseOwnerFactory 固定 owner 注入（测试盲区实证：154 全绿测不出），不知情子代理 P1 定级精确命中（触发路径推演 + git diff 佐证 + 三处文档失实连带抓出）
+- **顺带存量清偿 P3×2**：`Saga.OnStatusChanged`（Interrupt 路径）补异常隔离——ITM-212 族第五个观察点漏网（原 fire-and-forget 只抑制 CA2012 警告，Sink 同步抛仍逃逸）；`FanOutStep` 构造器补 selector/executor null 守卫（ITM-166 漏网姊妹，对齐 DynamicStep/ChildSagaStep）
+- **注入零残留确认**：git checkout 恢复 + ULID 回位 + 154 全绿
+- v12 静态前置：8cc6ab7 亲核零 P2（纯注释级变更）——触发条件达成记录
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）

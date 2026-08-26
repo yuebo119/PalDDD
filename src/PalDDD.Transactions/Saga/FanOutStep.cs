@@ -81,6 +81,10 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
         int maxConcurrency = 0)
         : base(key, execute: null!, compensate, timeout)
     {
+        // 能力实证轮 v12（ITM-166 漏网姊妹）：null 延迟到执行期 NRE 被当业务失败空转
+        // MaxRetries + 补偿——构造期 fail-fast 对齐 DynamicStep/ChildSagaStep
+        ArgumentNullException.ThrowIfNull(selector);
+        ArgumentNullException.ThrowIfNull(executor);
         _selector = selector;
         _executor = executor;
         // P3 修复（十七轮）：MaxConcurrency 校验上移构造函数——原 ThrowIfNegativeOrZero

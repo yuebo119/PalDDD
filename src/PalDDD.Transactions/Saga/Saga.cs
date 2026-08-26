@@ -657,11 +657,23 @@ public abstract class Saga<TState> where TState : SagaState, new()
                     await ProcessEventAsync(current, decision, dispatchCt).ConfigureAwait(false));
         }
 
-        // Emit status change via observer (fire-and-forget in sync context)
+        // Emit status change via observer（能力实证轮 v12 补隔离——原 fire-and-forget 只抑制了
+        // CA2012 警告，Sink 同步抛异常仍会逃逸，违背 :280 "ITM-212 观察者异常不影响业务结果"——
+        // 对齐 SafeObserve 族第五个观察点；此上下文无法 await（Interrupt 同步），catch 后记
+        // Activity 事件，与 fire-and-forget 的尽力语义一致）
         if (observer is not null)
         {
-#pragma warning disable CA2012 // ValueTask 不应被忽略——Interrupt 步骤为同步执行，观察者事件为尽力通知，丢失不影响正确性
-            _ = observer.OnStatusChanged(current.SagaId, oldStatus, SagaStatus.AwaitingHumanDecision, CancellationToken.None);
+#pragma warning disable CA2012 // ValueTask 不应被忽略——Interrupt 步骤为同步执行
+            try
+            {
+                _ = observer.OnStatusChanged(current.SagaId, oldStatus, SagaStatus.AwaitingHumanDecision, CancellationToken.None);
+            }
+            catch (Exception obsEx) when (obsEx is not OperationCanceledException)
+            {
+                System.Diagnostics.Activity.Current?.AddEvent(new(
+                    "saga.observer.status-changed-failed",
+                    tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = obsEx.Message }));
+            }
 #pragma warning restore CA2012
         }
 
