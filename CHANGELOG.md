@@ -16,6 +16,8 @@
 - **死配置清除**：PalDDD.Prompts csproj 的无效 PackagePath 打包配置（IsPackable=false 下自认死配置）
 - **重复收敛**：`LeaseOwnerFactory`（Outbox/Inbox 两 Options 逐字重复的"机器名:ULID"默认值）；`MessageVersionKey`（Evolution 的 Builder/Pipeline 嵌套 Key record 双拷）
 - **组织重组（零破坏，命名空间不变）**：PalDDD.Transactions 30 文件平铺 → Saga/（18）+ Outbox/（5）+ Inbox/（3）+ 根共享（5）；InboxStore.cs 三类型拆分为 InboxStatus/InboxMessage/IInboxStore 独立文件（对齐 OutboxStore 单类型组织）
+- **Analyzers/CodeFixes 单文件拆分（纯搬运，逻辑与修复史注释逐字保留）**：`StrategicDddAnalyzer.cs` 738 行单文件 → 5 文件（主文件 218 行：ID/descriptor 表 + Initialize + 调度骨架；`.BoundedContext.cs` PDDD001/002；`.MessageContracts.cs` PDDD005/008/009/010/011/012/015；`.Handlers.cs` PDDD003/004/006/007/013/014；`.SymbolHelpers.cs` 符号/语法辅助）——原 `AnalyzeNamedType` 230 行圈复杂度 ~50 的调度按规则族分发。`StrategicDddCodeFixProvider.cs` 343 行 5 类型 → 5 文件（对齐一个诊断一文件的 Roslyn 惯例）。36 个分析器测试零回归锁定
+- **testing.md 新增"〇、InMemory 实现族定位"**：六个 InMemory 实现刻意分散各抽象包（单元测试/原型一跳引用零依赖），不集中独立包（避免反向汇聚依赖与版本耦合）；定位为测试默认实现非生产实现（生产见 ADR-020 三栈）
 - **明确不做**（裁决记录，详见本轮报告）：EFCore 五处 SQL 错误分类器不收敛（五包无共同上层，新建共享包成本>收益）；PalORM 三方言 DI 注册不提取（形状相似≠语义等价，9 泛型参数+公共 API 扩张违背 ADR-021）；Outbox 列清单/跨栈截断常量不提取（PalORM FormattableString 约束/公共 API 面成本）；Dapper 栈四处分類器不动（ADR-020 只修缺陷不重构）
 
 ### 决策（维护者裁决 2026-08-26）
