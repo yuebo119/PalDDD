@@ -1199,6 +1199,19 @@ public sealed class DapperStoreTests
     {
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // v9 P1-1 契约测试：接口赋值可编译性——行内注释吞掉 ": IEventLog" 的接口声明丢失
+    // 曾在 build 0/0 + 全量测试 + API 快照三重缺口下静默（快照不覆盖 Dapper 族/测试全用
+    // var 具体类型/方法结构仍满足接口）。本测试以接口类型接收构造物，声明丢失即编译失败。
+    // ─────────────────────────────────────────────────────────────
+    [Test]
+    public async Task DapperEventLog_ImplementsIEventLog_InterfaceAssignmentCompiles()
+    {
+        // 接口赋值——若 DapperEventLog 丢失 : IEventLog 声明，本行编译失败（CS0311）
+        PalDDD.EventLog.IEventLog log = new DapperEventLog(_conn, dbType: _dbType);
+        await Assert.That(log).IsNotNull();
+    }
 }
 
 [JsonSerializable(typeof(DapperStoreTests.TestSagaState))]

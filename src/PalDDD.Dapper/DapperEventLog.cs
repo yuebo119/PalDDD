@@ -35,7 +35,11 @@ using PalDDD.EventLog;
 namespace PalDDD.Dapper;
 
 /// <summary>Dapper 事件日志 — 实现 IEventLog 接口</summary>
-public sealed class DapperEventLog  // v8 声明：唯一不显式 EnsureOpen 的 Store——依赖 Dapper CommandDefinition auto-open/close 兜底（事务场景连接必已 open） : IEventLog
+/// <remarks>v8 声明：唯一不显式 EnsureOpen 的 Store——依赖 Dapper CommandDefinition
+/// auto-open/close 兜底（事务场景连接必已 open）。
+/// v9 修复 P1-1：本注释原以行内 // 形式加在类声明行，把 ": IEventLog" 吞进注释行尾——
+/// 接口声明静默丢失（build/测试/快照三重缺口均未拦，验证轮 v9 抓出）；现移入 XML doc 并恢复声明。</remarks>
+public sealed class DapperEventLog : IEventLog
 {
     private readonly DbConnection _connection;
     private readonly DbTransaction? _transaction;

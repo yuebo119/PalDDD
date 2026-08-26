@@ -84,7 +84,8 @@ public static class SqliteServiceCollectionExtensions
             services.AddScoped<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<SqliteConnection>());
         }
 
-        // ✅ SQLite TypeHandler 已通过 [ModuleInitializer] + [module:DapperAot] 在 DapperAotInitializer.cs 注册
+        // ✅ SQLite TypeHandler 已通过 [ModuleInitializer] 在 DapperAotInitializer.cs 注册
+        // （v9 勘正：原提及的 [module:DapperAot] 标注处于注释禁用态，实际仅靠 ModuleInitializer 注册）
         // 不再需要运行时 RegisterTypeHandlers() 调用
 
         return services;

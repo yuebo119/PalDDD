@@ -24,6 +24,7 @@ namespace PalDDD.Messaging.RabbitMQ;
 public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
 {
     private readonly IConnection _connection;
+    private int _disposed;
     private readonly IChannel _channel;
     private readonly IPalLogger<RabbitMqBroker> _logger;
     // P2 修复（八轮评审）：exchange 声明任务缓存——声明幂等但避免每发布一次 AMQP 往返；
@@ -232,6 +233,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         // P2 修复（所有权契约）：IConnection 由调用方创建并注入——可能被多个 Channel/Broker
         // 共享，本 Broker 无权释放（越权释放会断掉其他使用方）。仅释放本 Broker 独占使用的
         // Channel；连接的生命周期由创建者管理。
+        // v9 E3：幂等门（对齐 KafkaBroker ITM-217）——双 Dispose 时 Channel 自身幂等，
+        // 显式门消除对下游幂等性的依赖假设
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         await _channel.DisposeAsync().ConfigureAwait(false);
     }
 

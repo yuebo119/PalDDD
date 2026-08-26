@@ -20,17 +20,17 @@ public enum StepDispatchKind
 }
 
 /// <summary>Saga 步骤定义</summary>
+/// <remarks>
+/// ⚠️ <b>重试语义为整步重放（v8 成文，v9 挪至类头——原挂 ExecuteAsync 而 FanOut/ChildSaga 该属性恒 null）</b>：
+/// FanOut 部分失败 → retry 重跑<b>全部</b>子项（含已成功项）；ChildSaga 每 attempt 重建子状态从零执行。
+/// 正向动作必须与补偿动作（<see cref="CompensateAsync"/> 契约）同样考虑幂等性——子项级断点续传当前版本不提供。
+/// </remarks>
 public class SagaStep
 {
     /// <summary>步骤名称</summary>
     public string Name { get; }
 
     /// <summary>前向动作</summary>
-    /// <remarks>
-    /// ⚠️ <b>重试语义为整步重放（v8 成文）</b>：FanOut 部分失败 → retry 重跑<b>全部</b>子项（含已成功项）；
-    /// ChildSaga 每 attempt 重建子状态从零执行。正向动作必须与补偿动作同样考虑幂等性
-    /// （<see cref="CompensateAsync"/> 契约）——子项级断点续传当前版本不提供。
-    /// </remarks>
     public Func<SagaState, object, CancellationToken, ValueTask<SagaState>> ExecuteAsync { get; }
 
     /// <summary>补偿动作（可选）</summary>

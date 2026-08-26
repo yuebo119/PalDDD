@@ -24,6 +24,9 @@ public static class ServiceCollectionExtensions
             // P3 修复（十七轮）：补 LeaseOwner 校验（对齐 AddPalSaga 侧）——LeaseOwner 为空时
             // 租约无法归属多实例中的节点，LockedBy 写入空白使租约抢占判断失效
             .Validate(static options => !string.IsNullOrWhiteSpace(options.LeaseOwner), "Outbox lease owner is required.")
+            // v9 修复：显式置 null 时 OutboxBatchProcessor 的 catch 块内 NRE（RetryBackoffPolicy.ComputeDelay
+            // 在 catch 内再次抛出且不被同类 catch 捕获）——逐 tick 整批中止、已租约消息滞留 LeaseDuration
+            .Validate(static options => options.RetryBackoffPolicy is not null, "Outbox retry backoff policy is required.")
             .ValidateOnStart();
         services.TryAddScoped<OutboxBatchProcessor>();
         services.AddHostedService<OutboxProcessor>();

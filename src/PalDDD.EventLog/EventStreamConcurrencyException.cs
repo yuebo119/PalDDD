@@ -12,7 +12,8 @@ public sealed class EventStreamConcurrencyException : InvalidOperationException
 {
     /// <summary>
     /// ⚠️ (string) 便捷构造把 ExpectedVersion 置为 Any（占位语义=无论版本都追加）——
-    /// catch 方读 Kind 判别时应注意 Any 不代表实际观测版本（v8 声明）。创建并发异常。</summary>
+    /// 框架内 catch 方判别时应注意 Any 不代表实际观测版本（v8 声明；v9 勘正：Kind 为 internal，
+    /// 外部 catch 方只能按类型判别，此注意点面向框架维护者）。创建并发异常。</summary>
     public EventStreamConcurrencyException()
         : this("Event stream expected version check failed.")
     {

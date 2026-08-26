@@ -814,10 +814,29 @@ public abstract class Saga<TState> where TState : SagaState, new()
         TState state, string failedStepKey, SagaStep failedStep, CancellationToken ct)
     {
         var observer = SagaExecutionObserver.Current;
-        if (observer is not null)
-            await observer.OnCompensationStarted(state.SagaId, failedStepKey, ct).ConfigureAwait(false);
+        // v9 P2-1 修复：OnCompensationStarted 原为直 await——Sink 抛异常时下方真实补偿被跳过，
+        // 且异常被外层 catch (compensationEx) 误并入"补偿也失败"聚合（补偿实际未执行却报失败）。
+        // 对齐 SafeObserve 族（ITM-212 姊妹补全）：观察者异常隔离为 Activity 事件，补偿照常执行。
+        await SafeObserveCompensationStartedAsync(observer, state.SagaId, failedStepKey, ct).ConfigureAwait(false);
 
         await Compensation.CompensateExecutedStepsAsync(state, failedStepKey, failedStep, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>补偿开始观察的隔离版（v9 P2-1）——Sink 异常不得阻断真实补偿（ISagaEventSink 尽力语义）。</summary>
+    private static async ValueTask SafeObserveCompensationStartedAsync(
+        SagaExecutionObserver? observer, PalUlid sagaId, string stepKey, CancellationToken ct)
+    {
+        if (observer is null) return;
+        try
+        {
+            await observer.OnCompensationStarted(sagaId, stepKey, ct).ConfigureAwait(false);
+        }
+        catch (Exception obsEx) when (obsEx is not OperationCanceledException)
+        {
+            System.Diagnostics.Activity.Current?.AddEvent(new(
+                "saga.observer.compensation-started-failed",
+                tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = obsEx.Message, ["step"] = stepKey }));
+        }
     }
 
     /// <inheritdoc cref="SagaCompensation{TState}.CompensateAllAsync"/>

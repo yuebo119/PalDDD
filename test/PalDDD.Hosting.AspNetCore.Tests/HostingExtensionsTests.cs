@@ -113,6 +113,19 @@ public sealed class HealthCheckExtensionsTests
 
 public sealed class EndpointExtensionsTests
 {
+    /// <summary>v9 E6：CreateInvalidBody（畸形 JSON/空 body 400 的 ProblemDetails 工厂）契约——
+    /// v8 引入时零测试覆盖（人工复核替代），本测试锁定 title/errors/状态码形态（IVT 可见 internal）。</summary>
+    [Test]
+    public async Task CreateInvalidBody_ProducesProblemDetailsShape()
+    {
+        var response = ValidationProblemResponseFactory.CreateInvalidBody("probe detail");
+
+        await Assert.That(response.Status).IsEqualTo(StatusCodes.Status400BadRequest);
+        await Assert.That(response.Title).IsEqualTo("Invalid Request Body");
+        await Assert.That(response.Type).IsEqualTo("https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1");
+        await Assert.That(response.Errors).Count().IsEqualTo(1);
+    }
+
     [Test]
     public async Task MapCommand_NullEndpoints_Throws()
     {

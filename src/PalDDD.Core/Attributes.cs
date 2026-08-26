@@ -14,16 +14,17 @@ namespace PalDDD.Core;
 
 /// <summary>
 /// 标记强类型 ID 生成目标 —— 源码生成器据此生成 Identity 结构体。
-/// <para>💡 使用示例：<c>[GenerateId(typeof(Guid))] public partial record struct UserId;</c></para>
+/// <para>💡 使用示例：<c>[GenerateId(typeof(Guid))] public readonly partial record struct UserId;</c></para>
 /// <para>
 /// 📐 <b>IdType 白名单（八轮评审补充）</b>：仅支持
 /// <see cref="Guid"/>、ByteAether.Ulid.Ulid、int (Int32)、long (Int64)、string。
 /// 白名单外类型在编译期报 PALID001 诊断（IdentityGenerator），
 /// 而非生成恒失败的 TryParse。
 /// </para>
-/// <para>📐 目标声明必须是 <c>partial record struct</c>——生成物为
-/// <c>partial record struct</c>，普通 <c>partial struct</c> 与之不合并，
-/// 编译期报 PALID002 诊断（九轮评审补充）。</para>
+/// <para>📐 目标声明必须是 <c>readonly partial record struct</c>——生成物为
+/// <c>readonly partial record struct</c>（v9 对齐 PALID002：省略 readonly 会引发 partial
+/// 修饰符不匹配的 CS 编译错误），普通 <c>partial struct</c> 与之不合并，
+/// 编译期报 PALID002 诊断。</para>
 /// </summary>
 [AttributeUsage(AttributeTargets.Struct)]
 public sealed class GenerateIdAttribute(Type idType) : Attribute
