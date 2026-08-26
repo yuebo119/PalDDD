@@ -232,6 +232,9 @@ public static class PostgreSqlServiceCollectionExtensions
             {
                 Host = string.Join(",", hosts),
                 LoadBalanceHosts = true,
+                // v16 声明（Legacy Obsolete 入口）：Reader "any" 允许读流量均衡到主库——新入口
+                // AddPalReadWriteRouter 已改 read-only（ITM-181），本入口已 Obsolete 不再修，
+                // 见 remarks 缺口列表
                 TargetSessionAttributes = "any"
             }.ConnectionString;
             var readerBuilder = new NpgsqlDataSourceBuilder(readerCs);

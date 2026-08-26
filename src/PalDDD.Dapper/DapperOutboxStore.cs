@@ -196,6 +196,8 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // P3-SRC-207 修复：now 方法开头取一次——原 extractor 内嵌 _timeProvider.GetUtcNow()
         // 违反 DapperBulkCopy 的纯提取函数契约（值提取须无副作用且确定，首行还会被提取两次），
         // 且同批各行 CreatedAt 随调用时刻漂移。闭包单值快照后三方言每行同刻。
+        // ⚠️ v16 声明（下游漂移取舍）：OutboxBatchProcessor 的 nextAttemptAt 亦基于批次起始
+        // now——长批次尾部消息的重试时间提前（漂移=批耗时）；受 batchSize 上限约束可接受。
         var now = _timeProvider.GetUtcNow();
         // v8 声明：接口 IPalOutboxStore.AddMessagesAsync 无 CancellationToken 参数，本路径
         // 无法响应取消——v3.0 契约窗口（ADR-020）随接口异步化一并补。

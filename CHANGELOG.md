@@ -78,6 +78,12 @@
 - **P2-5** DependencyInjection 项目 AOT 归属落档：csproj 声明注释 + gate G14 三态表/aot.md 补列（核心层 7→8 项目）
 - **P3 重点**：EFCore GetPending batchSize 非正守卫（姊妹对称）；NativeATO 错拼/ZStd 注释复制文案勘正
 
+### 修复（v16 P3 尾批清偿，2026-08-26）
+
+- **DI 扩展守卫补齐×8**：AddPalDDD/AddPalIdentity/AddPalCoreStack(块体化)/AddPalFullStack(同)/AddPalPipelineBehaviors/AddPalLogging×2/AddPalCommandHandler/AddPalQueryHandler 全部补 `ThrowIfNull(services)`——此前 8 方法仅泛型 behaviors 版有
+- **声明与措辞**：Legacy Router Reader "any" 读到主库的缺口注释落位；MessageConsumeContext null key 框架边界文档化；DapperOutboxStore 补下游 nextAttemptAt 批次漂移取舍声明；PALMSG003 文案精确化（"registered more than once"）；MemoryPack "AOT-safe" csproj 措辞改精确表述
+- **裁决维持**：SqliteFts 私有拼接种子（无触发路径）/ Sqlite 翻页全扫（Skip 保证终止）/ PalOrmInbox 捕 Exception（when 已收窄）/ 观察项×3 维持
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）
