@@ -61,7 +61,11 @@ public sealed class AddProjectionContextPrefixCodeFix : CodeFixProvider
         var boundedContext = ctxLiteral.Token.ValueText;
 
         // 找到 ProjectionName 属性定义
-        var projectionNameLiteral = FindProjectionNameLiteral(typeDecl);
+        // v13 基类链对齐 analyzer：ProjectionName 声明在投影基类时诊断照报（analyzer 沿
+        // BaseType 链查），fix 此前只扫本类型导致不注册——语义模型沿链取各层的字面量声明
+        var chainModel = context.Document.GetSemanticModelAsync(context.CancellationToken).GetAwaiter().GetResult();
+        var typeSymbol = chainModel.GetDeclaredSymbol(typeDecl, context.CancellationToken);
+        var projectionNameLiteral = typeSymbol is null ? FindProjectionNameLiteral(typeDecl) : FindProjectionNameLiteralAlongChain(typeSymbol, context.CancellationToken);
         if (projectionNameLiteral is null) return;
 
         var capturedContext = boundedContext;
@@ -71,6 +75,22 @@ public sealed class AddProjectionContextPrefixCodeFix : CodeFixProvider
                 ct => FixProjectionNameAsync(context.Document, projectionNameLiteral, capturedContext, ct),
                 equivalenceKey: "AddProjectionContextPrefix"),
             diagnostic);
+    }
+
+    /// <summary>沿语义基类链查找 ProjectionName 字面量声明（v13——对齐 analyzer 的链式查找）。</summary>
+    private static LiteralExpressionSyntax? FindProjectionNameLiteralAlongChain(
+        Microsoft.CodeAnalysis.INamedTypeSymbol type, CancellationToken ct)
+    {
+        for (var current = type; current is not null; current = current.BaseType)
+        {
+            foreach (var syntaxRef in current.DeclaringSyntaxReferences)
+            {
+                if (syntaxRef.GetSyntax(ct) is not TypeDeclarationSyntax typeDecl) continue;
+                var found = FindProjectionNameLiteral(typeDecl);
+                if (found is not null) return found;
+            }
+        }
+        return null;
     }
 
     private static LiteralExpressionSyntax? FindProjectionNameLiteral(TypeDeclarationSyntax typeDecl)

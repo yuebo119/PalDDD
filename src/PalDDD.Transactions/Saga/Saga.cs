@@ -666,18 +666,31 @@ public abstract class Saga<TState> where TState : SagaState, new()
 #pragma warning disable CA2012 // ValueTask 不应被忽略——Interrupt 步骤为同步执行
             try
             {
-                _ = observer.OnStatusChanged(current.SagaId, oldStatus, SagaStatus.AwaitingHumanDecision, CancellationToken.None);
+                var vt = observer.OnStatusChanged(current.SagaId, oldStatus, SagaStatus.AwaitingHumanDecision, CancellationToken.None);
+                // v13 异步半面补全（CAP-2 完整闭环）：同步 try-catch 只捕半面——真异步 Sink 故障
+                // 落入被丢弃的 ValueTask 无任何观测。Preserve 后挂 OnlyOnFaulted 延续记 Activity
+                // （尽力观测，不阻塞 Interrupt 同步路径）。
+                if (!vt.IsCompletedSuccessfully)
+                    _ = vt.Preserve().AsTask().ContinueWith(
+                        t => RecordObserverFault(t.Exception!.GetBaseException()),
+                        TaskScheduler.Default);
             }
             catch (Exception obsEx) when (obsEx is not OperationCanceledException)
             {
-                System.Diagnostics.Activity.Current?.AddEvent(new(
-                    "saga.observer.status-changed-failed",
-                    tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = obsEx.Message }));
+                RecordObserverFault(obsEx);
             }
 #pragma warning restore CA2012
         }
 
         return current;
+
+        // v13：观察者故障的统一记录点（同步 catch 与异步 OnlyOnFaulted 延续共用）
+        void RecordObserverFault(Exception obsEx)
+        {
+            System.Diagnostics.Activity.Current?.AddEvent(new(
+                "saga.observer.status-changed-failed",
+                tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = obsEx.Message }));
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════

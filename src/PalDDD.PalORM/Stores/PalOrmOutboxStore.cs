@@ -89,6 +89,11 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         {
             // MySQL 路径：不支持 UPDATE...WHERE id IN (SELECT...LIMIT)。
             // 用 JOIN 子查询替代（MySQL 特化）+ 按 lease 标识回读（两步避免重跑子查询 P0 bug）
+            // v13 分叉声明：MySQL 分支 JOIN 无 FOR UPDATE SKIP LOCKED——语义为 last-writer-wins
+            // （并发双 worker 同批时后写覆盖先写、败者空批，消息延迟至下轮租约），与 EFCore 侧
+            // MySqlOutboxDbContext 的 SKIP LOCKED（败者租他行）不同。取舍：JOIN 写法避开 MySQL
+            // 派生表锁的版本兼容矩阵（8.0.18 以下行为差异），正确性由 (locked_by,locked_until)
+            // token 终态守卫兜底（败者租约被覆盖后其终态写 0 行）。
             //
             // ⚠️ 已知限制（八轮评审 P3，声明不修）：回读按 (locked_by, locked_until) 匹配——同一 owner
             // 在同一 tick（until 完全相等，如 FakeTimeProvider 冻结时间）发起两次租约时，第二次回读

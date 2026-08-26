@@ -119,7 +119,12 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
         lock (_lock)
         {
             foreach (var msg in messages)
+            {
+                // v13 姊妹对称：单条 null 对齐同文件 AddMessage 的 ThrowIfNull——null 延迟到
+                // QueryPending lambda 的 NRE 更难定位
+                ArgumentNullException.ThrowIfNull(msg);
                 _messages.Add(msg);
+            }
         }
         return ValueTask.FromResult(messages.Count);
     }

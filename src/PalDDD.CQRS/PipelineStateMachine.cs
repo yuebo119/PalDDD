@@ -18,9 +18,9 @@ namespace PalDDD.CQRS;
 /// 多请求交错调用 <see cref="ExecuteNextAsync"/> 会互相污染 <c>_index</c> 游标与 <c>_behaviors</c> 引用。
 /// </para>
 /// <para>
-/// 推荐用法：每个 <see cref="Dispatcher"/> 请求通过对象池/线程局部借用实例，
-/// 一次 <see cref="Reset"/> + 一次 <see cref="ExecuteNextAsync"/> 链完成后立即归还，
-/// 不跨请求保留中间状态。详见 <see cref="Reset"/> 与 <see cref="ExecuteNextAsync"/> 注释。
+/// 当前实现：Dispatcher 每请求 new 一个实例（~40B，v13 勘正措辞——原文"对象池/线程局部借用"
+/// 为设计畅想非现状，易误读为已池化）；单请求生命周期内一次 Reset + 一次链执行，不跨请求保留。
+/// 若未来基准证明 40B 分配成为瓶颈，再评估池化（YAGNI——以 bench 数据为准）。
 /// </para>
 /// </remarks>
 internal sealed class PipelineStateMachine
