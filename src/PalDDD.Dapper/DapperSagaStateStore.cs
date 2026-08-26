@@ -1,11 +1,8 @@
 // ─────────────────────────────────────────────────────────────
 // 💾 DapperSagaStateStore — Saga 状态持久化（UPSERT + 乐观并发控制）
 // ─────────────────────────────────────────────────────────────
-// AOT 安全性：
-//   ✅ Dapper snake_case 映射 — 纯字符串操作，零反射。
-//   ✅ 原生 SQL — 所有 DML 在编译时确定。
-//   ✅ 完整 TState 快照通过调用方传入 JsonTypeInfo<TState>，使用 STJ source generation。
-//   ⚠️ 建议配合 Dapper.AOT Source Generator 使用以获得完全 NativeAOT 兼容。
+// AOT 状态：见下方"三十七轮勘正"块（v11 删除本旧块——"零反射/建议启用 Dapper.AOT SG"
+// 与勘正事实及 ADR-020 裁决【启用不做】冲突）。
 //
 // 💡 什么是 Saga？
 //   ｜ Saga 是一种分布式事务模式，将一个跨多个服务的长业务流程

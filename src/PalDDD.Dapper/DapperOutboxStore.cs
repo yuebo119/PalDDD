@@ -21,14 +21,13 @@
 //   ｜   2. 原子租约获取（多实例部署时避免重复发布）
 //   ｜   3. 标记已处理/死信/重试
 //
-// ✅ AOT 安全性：
-//   ✅ Dapper.QueryAsync<T> + MatchNamesWithUnderscores
-//      自动将 snake_case 列名映射到 PascalCase 属性
-//      纯字符串操作（Split('_') + 拼接），零反射
-//   ✅ DapperDbType 枚举分发 — 编译时已知值，零运行时类型推断
-//   ✅ DapperBulkCopy — Func<T, object[]> 委托，零反射
-//   ⚠️ 运行时 Dapper IL 发射在 NativeAOT 下不可用 — Dapper Store 适配器层
-//      依赖 DbConnection 运行时注入，本身不参与 AOT 发布（AotSample 不引用 Dapper Store）
+// AOT 状态（v11 勘正——旧"零反射"块与实际矛盾）：
+//   ⚠️ 运行时经典 Dapper 路径（QueryAsync<T> 物化经 IL 发射，AOT 下退化为反射）——
+//      真 AOT 不可达；csproj IsAotCompatible=true 是"编译无警告"口径而非运行时承诺
+//      （详见 DapperBulkCopy IL2062 注释与 csproj Description）。snake_case 映射
+//      （MatchNamesWithUnderscores）本身是纯字符串操作，但物化整链含反射。
+//   ✅ DapperDbType 枚举分发 / DapperBulkCopy 委托提取 — 这两处确为零反射。
+//   栈级 AOT 策略见 ADR-020（Dapper 退役；Native AOT 场景用 PalORM）。
 //
 // ⚡ 性能：
 //   ✅ 查询使用手写 SQL + Dapper 执行
