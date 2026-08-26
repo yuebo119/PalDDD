@@ -71,6 +71,8 @@ public static class SqlitePalOrmExtensions
         services.AddScoped<IInboxStore, SqliteInboxStore>();
         services.AddScoped(typeof(ISagaStateStore<>), typeof(SqliteSagaStateStore<>));
         // ⚠️ Saga Data 陷阱（四轮评审 P2）：此注册的 jsonTypeInfo 恒为 null——用户自定义 TState
+        // v18 勘正（ITM-228 后注释过时）：null 时基类 PalOrmSagaStateStore.Save 已 fail-fast
+        // 抛 InvalidOperationException，不再静默写 NULL
         // 字段不持久化（saga_data 列写 NULL，重启丢业务字段）。
         // P2/P3 修复（十七轮）：便捷注册 AddPalOrmSqliteSagaSnapshot<TState> 已提供——
         // 以具体泛型覆盖开放泛型并闭包传入 JsonTypeInfo，需 Saga 快照时调用。

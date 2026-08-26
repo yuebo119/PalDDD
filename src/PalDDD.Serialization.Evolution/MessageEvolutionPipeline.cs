@@ -90,6 +90,13 @@ public sealed class MessageEvolutionPipeline
             currentDescriptor = step.TargetDescriptor;
         }
 
+        // v18 D2：末步产出类型哨兵——descriptor 等价性按 (Name,Version) 判定，ClrType 不同的
+        // 描述符可互换传入使产出对象静默错配、下游 cast 才炸。构造期衔接校验只覆盖 _steps
+        // 内部相邻步，此处补齐"调用方传入 targetDescriptor"这一入口。
+        if (targetDescriptor.ClrType != currentDescriptor.ClrType)
+            throw new MessageEvolutionException(
+                $"Target descriptor ClrType mismatch: expected {currentDescriptor.ClrType}, got {targetDescriptor.ClrType}.");
+
         return current;
     }
 
@@ -131,11 +138,13 @@ public sealed class MessageEvolutionPipeline
         MessageDescriptor sourceDescriptor,
         MessageDescriptor targetDescriptor)
     {
+        // v18 D1：运行期校验统一 MessageEvolutionException（原裸 InvalidOperationException 因
+        // 不继承前者使 catch(MessageEvolutionException) 的"单点 catch"意图在运行期断裂）
         if (!StringComparer.Ordinal.Equals(sourceDescriptor.Name, targetDescriptor.Name))
-            throw new InvalidOperationException("Message evolution requires matching stable wire names.");
+            throw new MessageEvolutionException("Message evolution requires matching stable wire names.");
 
         if (sourceDescriptor.SchemaVersion > targetDescriptor.SchemaVersion)
-            throw new InvalidOperationException("Cannot evolve a message from a newer schema version to an older version.");
+            throw new MessageEvolutionException("Cannot evolve a message from a newer schema version to an older version.");
     }
 
     private static string GetTypeName(Type type) => type.FullName ?? type.Name;
