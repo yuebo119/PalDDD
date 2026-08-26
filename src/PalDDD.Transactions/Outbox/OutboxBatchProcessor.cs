@@ -85,7 +85,7 @@ public sealed class OutboxBatchProcessor
                     var descriptor = _messageCatalog.Find(msg.Type, msg.SchemaVersion);
                     if (descriptor is null)
                     {
-                        _store.MarkDead(msg, $"Type '{msg.Type}' not registered in MessageCatalog", now);
+                        _store.MarkDead(msg, Core.FailureReason.Normalize($"Type '{msg.Type}' not registered in MessageCatalog"), now);
                         checked { dead++; }
                         await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false);
                         continue;
@@ -94,7 +94,7 @@ public sealed class OutboxBatchProcessor
                     var @event = _serializer.Deserialize(msg.Payload, descriptor);
                     if (@event is null)
                     {
-                        _store.MarkDead(msg, "Deserialization returned null", now);
+                        _store.MarkDead(msg, Core.FailureReason.Normalize("Deserialization returned null"), now);
                         checked { dead++; }
                         await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false);
                         continue;

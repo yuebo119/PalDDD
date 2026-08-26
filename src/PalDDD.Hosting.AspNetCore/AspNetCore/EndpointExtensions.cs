@@ -39,10 +39,15 @@ public static class EndpointExtensions
                     commandJsonTypeInfo,
                     context.RequestAborted).ConfigureAwait(false);
             }
-            catch (System.Text.Json.JsonException)
+            catch (System.Text.Json.JsonException ex)
             {
                 // P3 修复：畸形 JSON 是用户输入错误 → 400 而非未捕获 500
+                // v8 对齐：补 ProblemDetails body（原裸 400 与验证 400 形态分叉，客户端拿不到错误明细）
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await context.Response.WriteAsJsonAsync(
+                    ValidationProblemResponseFactory.CreateInvalidBody(ex.Message),
+                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                    contentType: null).ConfigureAwait(false);
                 return;
             }
             catch (PalDDD.CQRS.PalValidationException ex)
@@ -106,10 +111,15 @@ public static class EndpointExtensions
                     commandJsonTypeInfo,
                     context.RequestAborted).ConfigureAwait(false);
             }
-            catch (System.Text.Json.JsonException)
+            catch (System.Text.Json.JsonException ex)
             {
                 // P3 修复：畸形 JSON 是用户输入错误 → 400 而非未捕获 500
+                // v8 对齐：补 ProblemDetails body（原裸 400 与验证 400 形态分叉，客户端拿不到错误明细）
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await context.Response.WriteAsJsonAsync(
+                    ValidationProblemResponseFactory.CreateInvalidBody(ex.Message),
+                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                    contentType: null).ConfigureAwait(false);
                 return;
             }
             catch (PalDDD.CQRS.PalValidationException ex)
@@ -217,6 +227,14 @@ public static class EndpointExtensions
 
 internal static class ValidationProblemResponseFactory
 {
+    /// <summary>畸形 JSON 请求体构造 ValidationProblemResponse（v8：对齐验证 400 的 ProblemDetails 形态）。</summary>
+    internal static ValidationProblemResponse CreateInvalidBody(string message)
+        => new(
+            "https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1",
+            "Invalid Request Body",
+            StatusCodes.Status400BadRequest,
+            [new ValidationProblemError("requestBody", message)]);
+
     /// <summary>按 PalValidationException 构造规范 ValidationProblemResponse（RFC 9110 §15.5.1）。</summary>
     internal static ValidationProblemResponse Create(CQRS.PalValidationException ex)
         => new(

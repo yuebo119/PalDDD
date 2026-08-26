@@ -29,7 +29,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor NonPartialRecordStructDeclaration = new(
         "PALID002",
         "GenerateId target must be a partial record struct",
-        "Type '{0}' uses [GenerateId] but is not declared as a partial record struct. Declare it as 'partial record struct' so the generator can merge generated members.",
+        "Type '{0}' uses [GenerateId] but is not declared as a readonly partial record struct. Declare it as 'readonly partial record struct' (v8: readonly 与生成物一致性要求，省略会引发 partial 修饰符不匹配的 CS 编译错误) so the generator can merge generated members.",
         "PalDDD.IdentityGeneration",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -187,7 +187,9 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                     [.. containingDeclarations],
                     [.. containingNames],
                     normalizedSourceType,
-                    sourceType.Name is "Int32" or "Int64" && sourceType.ContainingNamespace?.ToDisplayString() == "System",
+                    // v8 评审：SpecialType 判定替代命名空间字符串比对——extern alias 下 ToDisplayString
+                    // 可能带别名前缀使 'System' 比对失配，int/long ID 静默丢 ++/-- 生成
+                    sourceType.SpecialType is Microsoft.CodeAnalysis.SpecialType.System_Int32 or Microsoft.CodeAnalysis.SpecialType.System_Int64,
                     // P2 修复（二十一轮）：携带定位供 PALID004（重复 partial 声明）指示
                     // 重复挂 attribute 的具体声明——不参与相等（位置随编辑漂移）
                     Location: context.TargetNode.GetLocation());

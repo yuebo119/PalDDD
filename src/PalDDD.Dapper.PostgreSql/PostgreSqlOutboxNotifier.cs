@@ -22,7 +22,9 @@
 //
 //   CREATE TRIGGER outbox_notify
 //     AFTER INSERT OR UPDATE ON outbox_messages
-//     FOR EACH ROW WHEN (NEW.status = 'Pending')
+//     -- status 列为 INT（三十八轮统一：Pending=0）——PG 无 integer=text 运算符，
+//     -- 必须写数字字面量（v8 评审 P2-1：旧示例 'Pending' 照抄即建坏触发器）
+//     FOR EACH ROW WHEN (NEW.status = 0)
 //     EXECUTE FUNCTION notify_outbox();
 // ─────────────────────────────────────────────────────────────
 

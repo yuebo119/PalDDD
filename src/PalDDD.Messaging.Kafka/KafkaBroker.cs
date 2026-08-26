@@ -318,6 +318,8 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             Volatile.Write(ref _consumeTask, consumeTask);
         }
 
+        // v8 声明：consumeTask 等待无独立超时——handler 不响应取消时靠宿主 HostOptions
+        // ShutdownTimeout（默认 30s）兜底强杀
         public async ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)

@@ -35,7 +35,7 @@ using PalDDD.EventLog;
 namespace PalDDD.Dapper;
 
 /// <summary>Dapper 事件日志 — 实现 IEventLog 接口</summary>
-public sealed class DapperEventLog : IEventLog
+public sealed class DapperEventLog  // v8 声明：唯一不显式 EnsureOpen 的 Store——依赖 Dapper CommandDefinition auto-open/close 兜底（事务场景连接必已 open） : IEventLog
 {
     private readonly DbConnection _connection;
     private readonly DbTransaction? _transaction;

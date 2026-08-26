@@ -174,7 +174,8 @@ TState>
                         // Saga）——补偿副作用已在本实例执行，他实例可能再次补偿同一 Saga
                         // （双重副作用风险）。框架无法回滚外部副作用，只能依赖补偿动作幂等
                         // （契约见 SagaStep.CompensateAsync remarks）——本日志是重入发生时
-                        // 的唯一信号，供告警规则采集。
+                        // 的常规信号（0 行路径）；SaveChangesAsync 抛异常路径落入下方通用 catch——
+                        // 同为重入风险但措辞通用，排障两处都看（v8 声明）。
                         _logger.Warning($"Saga {sagaState.SagaId} compensated state save affected 0 rows (optimistic concurrency conflict); another instance may have compensated it too — double compensation detected, ensure SagaStep.CompensateAsync actions are idempotent");
                     }
                     else if (compensationSucceeded)

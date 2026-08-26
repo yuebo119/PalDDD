@@ -20,6 +20,16 @@
 - **testing.md 新增"〇、InMemory 实现族定位"**：六个 InMemory 实现刻意分散各抽象包（单元测试/原型一跳引用零依赖），不集中独立包（避免反向汇聚依赖与版本耦合）；定位为测试默认实现非生产实现（生产见 ADR-020 三栈）
 - **明确不做**（裁决记录，详见本轮报告）：EFCore 五处 SQL 错误分类器不收敛（五包无共同上层，新建共享包成本>收益）；PalORM 三方言 DI 注册不提取（形状相似≠语义等价，9 泛型参数+公共 API 扩张违背 ADR-021）；Outbox 列清单/跨栈截断常量不提取（PalORM FormattableString 约束/公共 API 面成本）；Dapper 栈四处分類器不动（ADR-020 只修缺陷不重构）
 
+### 修复（v8 全量评审清偿，2026-08-26）
+
+- **P2-1** `PostgreSqlOutboxNotifier` 触发器示例 `NEW.status='Pending'` → `NEW.status=0`（int 化契约同步——旧示例照抄即建坏触发器，PG 无 integer=text 运算符）
+- **P2-2** `PalOrmIdempotencyStore` 过期回收移除 `AND status<>Completed` 守卫——过期 Completed 记录从"该 key 永久拒绝"修正为可回收重建（三栈契约统一：Retention=可重新执行窗口）；新增回归测试 `TryStartAsync_ReclaimsExpiredCompletedRecord`（S3 双向验证：守卫恢复→红）
+- **P2-3** `PalDDD.Analyzers.CodeFixes` 移除 `SuppressDependenciesWhenPacking`——nuspec 现声明 `PalDDD.Analyzers (>=2.0.0)` 依赖（重打包实证），独立安装时 5 个 fix provider 不再静默失效；analyzers/ 目录仍仅自身 dll（无双加载）
+- **行为修正**：`FailureReason.Normalize` 代理对完整性防御（截断不落孤立高代理，+6 契约测试）；畸形 JSON 400 补 ProblemDetails body（对齐 ITM-283 验证 400 形态）；`IdentityGenerator.IsNumeric` 改 `SpecialType` 判定（extern alias 场景不再静默丢生成）；Outbox MarkDead 构造串过 Normalize 一致化
+- **工具**：dialect-probe 单方言连接失败降级为记 fail（原 Unhandled 崩溃连带另一方言探针未跑，2026-08-26 PG 超时实证）
+- **文档/注释修正 ×12**：int 化同步残留（SqlTemplates remarks/BulkCopy IL2062/AmbientTransaction DI 口径）、LeaseOwnerFactory 管线名勘正、"零 GC"过度声明收敛、Saga 重试整步重放语义成文、PALID002 补 readonly 提示、补偿告警双路径声明、Any 占位歧义、双时钟源/DapperEventLog auto-open/Kafka Dispose 超时声明
+- **不修（裁决）**：MarkCompleted 无 status 守卫（姊妹对齐行为）、开放/闭合 behavior 互斥（设计权衡已声明）、Inbox 截断跨栈分叉（各有列契约）、EventLogPositionReserver 慢路径（正确性无影响）、AddMessagesAsync 无 ct（v3.0 接口窗口，已注释声明）
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）

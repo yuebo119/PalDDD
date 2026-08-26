@@ -8,6 +8,8 @@ namespace PalDDD.Dapper;
 /// 按 <see cref="DbConnection"/> 实例键控的弱引用表，非 AsyncLocal。
 /// <para>
 /// <b>断链背景</b>：五个 Dapper Store（Outbox/Inbox/SagaState/ProjectionCheckpoint/EventLog）
+/// [v8 勘正] 其中仅 Outbox/Inbox/SagaState 三者有 DI 注册（AddPalDapperTransactions 族）；
+/// EventLog/ProjectionCheckpoint 需直连构造（构造时同样受益于本通道——显式参数仍优先）
 /// 在构造函数快照 <c>DbTransaction</c>，而 DI 只注册 <c>DbConnection</c> 不注册事务——
 /// DI 解析的 Store 恒无事务，Outbox"事件与业务数据同一事务提交"的核心前提靠调用方手工
 /// 构造时序纪律。本通道让 <c>DapperUnitOfWork</c> 开启的活动事务自动传导给同连接的全部

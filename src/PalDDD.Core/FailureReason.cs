@@ -27,6 +27,10 @@ public static class FailureReason
         var truncated = message is { Length: > MaxLength }
             ? message[..MaxLength]
             : message ?? string.Empty;
+        // v8 评审：char 截断可能在代理对中间切断（超长含 emoji 的消息）——末位高代理回退一位，
+        // 防孤立高代理入库（UTF-16 代理对完整性）
+        if (truncated.Length > 0 && char.IsHighSurrogate(truncated[^1]))
+            truncated = truncated[..(truncated.Length - 1)];
         return string.IsNullOrWhiteSpace(truncated) ? "(no message)" : truncated;
     }
 }

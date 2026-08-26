@@ -114,7 +114,8 @@ public static class PalActivitySource
     // ── 内部辅助 ──
     // 11 个公共 Start* 方法遵循完全相同的模式：Source.StartActivity → SetTag → return。
     // 使用 params ReadOnlySpan<(string,object?)>（C# 13+ / .NET 11）压缩重复代码，
-    // 编译器对少量参数生成栈分配 span，消除原 params 数组的堆分配——零 GC 压力。
+    // 编译器对少量参数生成栈分配 span，消除原 params 数组的堆分配。注（v8 勘正）：int/long
+    // tag 经元组构造仍存在装箱（listener 关闭也发生）——本优化消除的是数组分配而非全部 GC。
     // 命名元组 Key/Value 而非 key/value（避免与 System.Collections.Generic.KeyValuePair 混淆）。
 
     private static Activity? Start(string name, params ReadOnlySpan<(string Key, object? Value)> tags)

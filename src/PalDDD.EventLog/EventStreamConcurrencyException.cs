@@ -10,7 +10,9 @@ namespace PalDDD.EventLog;
 /// <summary>当事件流期望版本检查失败时抛出。</summary>
 public sealed class EventStreamConcurrencyException : InvalidOperationException
 {
-    /// <summary>创建并发异常。</summary>
+    /// <summary>
+    /// ⚠️ (string) 便捷构造把 ExpectedVersion 置为 Any（占位语义=无论版本都追加）——
+    /// catch 方读 Kind 判别时应注意 Any 不代表实际观测版本（v8 声明）。创建并发异常。</summary>
     public EventStreamConcurrencyException()
         : this("Event stream expected version check failed.")
     {

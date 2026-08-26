@@ -33,8 +33,8 @@ namespace PalDDD.Dapper;
 ///   - 表名和列名使用 <c>snake_case</c>（PostgreSQL/MySQL 标准）
 ///   - 参数名使用 <c>PascalCase</c>（Dapper 自动映射到 <c>@ParamName</c>）
 ///   - PostgreSQL 专用语法（如 RETURNING）通过 Dapper 层的 DapperDbType switch 处理
-///   - 状态值使用与 C# 枚举一致的名称（Pending/Processed/Dead/Active/Completed/DeadLettered）
-///     避免 Outbox（字符串状态）和 Saga（数字状态）风格不一致。
+///   - 状态列为 INT（三十八轮统一：outbox/inbox/saga 等五表状态列全部 INT，枚举值 0 起）——
+///     SQL 中以数字字面量出现（0=Pending 等，见 OutboxInsert/StatusPending 常量族）。
 /// </remarks>
 public static class SqlTemplates
 {

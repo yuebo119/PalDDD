@@ -200,8 +200,15 @@ var ddlPg = File.ReadAllText(Path.Combine(root, "docs/sql/postgresql/000_schema.
 var ddlMy = File.ReadAllText(Path.Combine(root, "docs/sql/mysql/000_schema.sql"));
 var failures = new List<string>();
 
-if (runPg) await RunPg();
-if (runMy) await RunMySql();
+// v8 工具修复：单方言连接失败降级为记 fail（另一方言继续）——原 Unhandled 崩溃连带另一方
+// 探针全跳过（2026-08-26 实证：PG 握手超时使 MySQL 探针未跑）
+async Task RunDialectGuarded(string tag, Func<Task> run)
+{
+    try { await run(); }
+    catch (Exception ex) { failures.Add($"[{tag}] 方言探针连接/执行失败（环境性降级）：{ex.GetType().Name}: {ex.Message}"); }
+}
+if (runPg) await RunDialectGuarded("PG", RunPg);
+if (runMy) await RunDialectGuarded("MySql", RunMySql);
 Console.WriteLine(failures.Count == 0 ? "=== 方言探针全部通过 ===" : $"=== 失败 {failures.Count} 项 ===\n{string.Join("\n", failures)}");
 return failures.Count == 0 ? 0 : 1;
 
