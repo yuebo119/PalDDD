@@ -122,6 +122,12 @@
 - **P1 E-1** `KafkaBroker.SubscribeAsync` 泄漏修复：Dispose 后并发 Subscribe 时 `_disposed` 守卫在锁内抛出，但 consumer 已 Subscribe 却未登记进 _consumers——无人释放。catch 内就地同步释放（cts.Cancel + consumer.Dispose；consumeTask 尚未创建无 unobserved 风险）。回归测试因需 Kafka 真实 Broker 无法本地化——探针方案已入档（file-based app + Dispose 后 Subscribe 断言）
 - 其余批次继续进行中
 
+### 修复（v18 清偿收口，2026-08-27）
+
+- **P1 E-1** KafkaBroker SubscribeAsync：Dispose 后并发 Subscribe 时守卫抛出致 consumer 泄漏——catch 内就地同步释放（cts.Cancel + consumer.Dispose；consumeTask 未创建无 unobserved 风险）
+- **P2 B1** PostgreSqlOutboxNotifier.FireBatchProcessAsync OCE 分类拆分（PD24 孪生对称）：真关停静默退出 / 非关停 OCE 按 Error 记录——原单分支把两类混记 "canceled during shutdown"
+- **P3 批量**：EvolutionPipeline 运行期校验统一 MessageEvolutionException（对齐构造期单点 catch 语义）+ Upgrade 末步 ClrType 哨兵（防描述符互换静默错配）；DI AddPalEventHandler 补 ThrowIfNull；DapperServiceCollectionExtensions "全 AOT 安全"旧口径勘正；三方言 PalOrmExtensions jsonTypeInfo 注释随 ITM-228 fail-fast 勘正；Legacy Router 引用处两处行为差异补全
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）

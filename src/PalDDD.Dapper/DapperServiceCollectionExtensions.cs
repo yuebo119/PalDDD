@@ -16,7 +16,8 @@
 //   ｜   Scoped 生命周期确保每个请求/事务使用独立连接。
 //   ｜   实际的连接池由数据库驱动（Npgsql/MySqlConnector）在底层管理。
 //
-// ✅ AOT 分析：
+// ⚠️ v18 B2 勘正（原"全 AOT 安全"为 DapperAot 启用前旧口径）：运行时经典 Dapper 路径
+// 含反射，csproj IsAotCompatible=true 是编译无警告口径——详见 csproj Description 与 IL2062 注释。
 //   ✅ Dapper.DefaultTypeMap.MatchNamesWithUnderscores — 纯字符串转换（PascalCase→snake_case），零反射
 //   ✅ DapperDbType 枚举（Singleton）— 编译时已知值，零运行时开销
 //   ✅ DbConnection（Scoped）— ADO.NET 原生连接，非托管资源，AOT 安全
