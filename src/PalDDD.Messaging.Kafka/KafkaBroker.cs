@@ -145,10 +145,23 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         // DisposeAsync 的 snapshot 不含此订阅 → consumer 无人释放。占位后任何时点的
         // DisposeAsync 都能触达本订阅（DisposeAsync 容忍 _consumeTask 尚未 Set 的窗口）。
         var subscription = new KafkaSubscription(cts, consumer);
-        lock (_consumersLock)
+        try
         {
-            ObjectDisposedException.ThrowIf(_disposed != 0, this);
-            _consumers.Add(subscription);
+            lock (_consumersLock)
+            {
+                ObjectDisposedException.ThrowIf(_disposed != 0, this);
+                _consumers.Add(subscription);
+            }
+        }
+        catch
+        {
+            // v18 E-1 修复：Dispose 后并发 Subscribe 时守卫抛出——consumer 已 Subscribe 但未登记，
+            // 无人负责释放。方法非 async（不能 await DisposeAsync），就地同步释放核心资源：
+            // cts.Cancel 终止消费循环，consumer.Dispose 释放连接/组状态；consumeTask 尚未创建
+            // （Task.Run 在下方），无 unobserved task 风险。释放后传播 ObjectDisposedException。
+            cts.Cancel();
+            consumer.Dispose();
+            throw;
         }
 
         // 保存 Task 引用，用于等待完成和错误观测

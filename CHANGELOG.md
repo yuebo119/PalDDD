@@ -117,6 +117,11 @@
 - **OCE 滞留语义成文**：InboxProcessor 补 handler 抛 OCE 时记录滞留 Processing 至 ProcessingTimeout 的设计取舍说明（不标 Failed 的理由：OCE 语义="不知道执行到哪一步"，标 Failed 会重放可能已完成的副作用；代价=最长 Timeout 重试延迟）
 - **Dispatcher 尾部 throw 论证成文**：正常语义不可达的推导链（入口 fail-fast + 每迭代必 Dequeue + Handler 不入队）保留 throw 作为未来入队行为变更的哨兵
 
+### 修复（v18 清偿首批，2026-08-27）
+
+- **P1 E-1** `KafkaBroker.SubscribeAsync` 泄漏修复：Dispose 后并发 Subscribe 时 `_disposed` 守卫在锁内抛出，但 consumer 已 Subscribe 却未登记进 _consumers——无人释放。catch 内就地同步释放（cts.Cancel + consumer.Dispose；consumeTask 尚未创建无 unobserved 风险）。回归测试因需 Kafka 真实 Broker 无法本地化——探针方案已入档（file-based app + Dispose 后 Subscribe 断言）
+- 其余批次继续进行中
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）
