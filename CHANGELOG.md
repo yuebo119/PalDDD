@@ -46,6 +46,12 @@
 - **幻影/措辞勘正×8**：`[DapperAot(false)]` 幻影标注三处（测试文件）、契约测试错码 CS0311→CS0029、Outbox/Inbox Store 头部"Dapper.AOT 拦截器"措辞勘正（与诚实声明对齐）、两处 DapperAotInitializer 行号漂移、PostgreSqlPipeline 事务限制声明（NpgsqlBatch 未挂接事务，事务内批量走 DapperBulkCopy）
 - **裁决不做**：双 Broker DisposeAsync 幂等门回归测试——无 mock 框架、fake IChannel 接口面成本超收益，Interlocked 门逻辑经两轮敌对确认（传感器欠账留档）；观察项×3（死 throw 防御保留/GetAsync 跟踪设计差异/Current 重读形态）维持既有裁决
 
+### 修复（v11 验证轮清偿，2026-08-26）
+
+- **P2×2**（d85183f 勘正链头部残留）：`DapperOutboxStore` 头部旧"零反射"AOT 块整体重写为诚实状态（经典路径含反射/编译无警告≠运行时承诺/栈级策略指 ADR-020）；`DapperSagaStateStore` 删除与 ADR-020 裁决冲突的旧块（"建议启用 Dapper.AOT SG"）
+- **P3×3**：PostgreSqlPipeline"后者有挂接"精确化（Npgsql 自动加入 vs MySQL/SQLite 显式挂接）；InboxStore ADR-020 引用改为准确技术依据（csproj IL2062/IL3058）；StrategicDddAnalyzer 主文件 unused using 删除
+- v11 敌对复核全部通过：readonly 改口三探针复证闭环、幽灵 Added 三处双代理交叉确认（when 互补穷尽含 Concurrency 子类归路论证）
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）
