@@ -19,7 +19,10 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
 
     /// <inheritdoc/>
     void IPalOutboxStore.AddMessage(OutboxMessage message)
-        => OutboxMessages.Add(message);
+    {
+        ArgumentNullException.ThrowIfNull(message); // v13 姊妹对称：对齐 AddMessagesAsync/InMemory/PalORM 单条守卫（ITM-163 漏网）
+        OutboxMessages.Add(message);
+    }
 
     /// <inheritdoc/>
     async ValueTask<int> IPalOutboxStore.AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)

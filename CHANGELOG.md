@@ -59,6 +59,16 @@
 - **注入零残留确认**：git checkout 恢复 + ULID 回位 + 154 全绿
 - v12 静态前置：8cc6ab7 亲核零 P2（纯注释级变更）——触发条件达成记录
 
+### 修复（v13 清偿，2026-08-26 · P3×14 全清）
+
+- **卫生**：unused using×9（StrategicDddAnalyzer 主文件 2——上轮拆分继承残留；CodeFixHelpers 7）；PipelineStateMachine remarks 对齐实现（每请求 new ~40B，原文"对象池"为畅想）；Dapper SqlServer 死分支口径统一注释
+- **文档失实**：docs/aot.md 补"MySql/PG 方言 AOT publish 未经验证"真实声明（三方言包 csproj 引用的缺口落档）
+- **姊妹守卫×3**：`OutboxDbContext.AddMessage`（expression-bodied 改块体）+ `InMemoryOutboxStore.AddMessagesAsync` 单条 ThrowIfNull；Rabbit `AsyncSubscription` 句柄级幂等门（对齐 KafkaSubscription ITM-217）
+- **异步半面**：`Saga.OnStatusChanged` 补异步故障观测——`Preserve().AsTask().ContinueWith(OnlyOnFaulted)` 记 Activity（本地函数 RecordObserverFault 同步/异步两路共用）——CAP-2 完整闭环
+- **租约分叉声明**：PalORM MySQL JOIN 的 last-writer-wins vs EFCore SKIP LOCKED 取舍落注释（版本兼容矩阵 + token 终态守卫兜底）
+- **fix 覆盖**：`AddProjectionContextPrefixCodeFix` 补语义基类链查找（对齐 analyzer 链式——ProjectionName 在基类时 fix 可注册）
+- **裁剪对齐**：Native LZ4/ZStd/OpenZL Compress 返回 `AsSpan(0,written).ToArray()`（对齐 BrotliCompressor——消除 maxSize 超分配数组的 LoH 驻留）
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）

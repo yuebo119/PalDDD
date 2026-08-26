@@ -273,6 +273,13 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
 
     private sealed class AsyncSubscription(Func<Task> unsubscribe) : IAsyncDisposable
     {
-        public async ValueTask DisposeAsync() => await unsubscribe().ConfigureAwait(false);
+        private int _disposed;
+        public async ValueTask DisposeAsync()
+        {
+            // v13 姊妹对称：句柄级幂等门（对齐 KafkaSubscription ITM-217）——双 Dispose 时
+            // 第二次 BasicCancelAsync 异常被 Broker 侧 catch 吞成 Warning，显式门消除噪音
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            await unsubscribe().ConfigureAwait(false);
+        }
     }
 }

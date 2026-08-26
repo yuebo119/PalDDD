@@ -197,6 +197,9 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
     /// </summary>
     [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075:This",
         Justification = "Provider 异常鸭子类型判定（与 DapperEventLog 同型）。裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级，不崩溃）。")]
+    // v13 口径统一：本分类器含 SqlServer 2601/2627 分支——与 Inbox/Checkpoint 版的"本 Store 无
+    // SqlServer 方言不含"注释口径不同。统一口径：分类器为跨 provider 鸭子类型判定（防未来扩方言），
+    // 死分支是防御性保留（与 DapperDbType 无 SqlServer 值的现状不冲突）。
     private static bool IsUniqueConstraintViolation(Exception exception)
     {
         for (var inner = exception; inner is not null; inner = inner.InnerException)
