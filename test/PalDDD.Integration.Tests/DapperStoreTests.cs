@@ -778,6 +778,33 @@ public sealed class DapperStoreTests
     }
 
     [Test]
+    public async Task Saga_SaveChangesAsync_OverlongEmojiError_TruncatesWithoutSplittingSurrogatePair(CancellationToken cancellationToken)
+    {
+        // v29 P3（S12）：存储层截断的 UTF-16 代理对守卫端到端验证——超长含 emoji 的 Error
+        // 在 [..2040] 切片点恰落在高代理上时（'a'*2039 + 🎉 长度 2041），守卫回退一位
+        // 防孤立高代理入库（镜像 FailureReasonTests.Normalize/Truncate 同名用例形态；
+        // INSERT 与 UPDATE 共用方法开头收口，测 INSERT 路径即可覆盖）
+        var store = new DapperSagaStateStore<TestSagaState>(_conn);
+        var state = new TestSagaState
+        {
+            SagaId = PalUlid.New(),
+            CurrentState = "Initial",
+            Status = SagaStatus.CompensationFailed,
+            CreatedAt = TimeProvider.System.GetUtcNow(),
+            Error = new string('a', 2039) + "🎉",
+            ErrorAt = TimeProvider.System.GetUtcNow()
+        };
+
+        await store.SaveChangesAsync(state, cancellationToken);
+
+        var loaded = await store.GetByIdAsync(state.SagaId, cancellationToken);
+        await Assert.That(loaded!.Error).IsNotNull();
+        // 末字符必须是完整 'a'（高代理回退一位），长度 2039 而非 2040
+        await Assert.That(loaded.Error!.Length).IsEqualTo(2039);
+        await Assert.That(char.IsHighSurrogate(loaded.Error[^1])).IsFalse();
+    }
+
+    [Test]
     public async Task Saga_SaveChangesAsync_PersistsFullStateSnapshot(CancellationToken cancellationToken)
     {
         var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);

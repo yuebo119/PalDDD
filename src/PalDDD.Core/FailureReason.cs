@@ -24,13 +24,31 @@ public static class FailureReason
     /// <summary>归一化异常消息用于持久化：截断到 <see cref="MaxLength"/>，空白归一为 "(no message)"。</summary>
     public static string Normalize(string? message)
     {
-        var truncated = message is { Length: > MaxLength }
-            ? message[..MaxLength]
-            : message ?? string.Empty;
+        // v29 P3：截断 + 代理对守卫收敛到 Truncate（单一来源，七处存储层兜底共用）
+        var truncated = Truncate(message, MaxLength) ?? string.Empty;
+        return string.IsNullOrWhiteSpace(truncated) ? "(no message)" : truncated;
+    }
+
+    /// <summary>
+    /// v29 P3：仅截断不归一（存储层兜底族共享收口）——<see cref="Normalize"/> 会把 null/空白
+    /// 归一为 "(no message)"，而 Error=null 是"未出错"语义（SagaState.Error 等），归一会破坏
+    /// 该语义。Dapper 五处（Outbox MarkDead/ReleaseForRetry、Inbox MarkFailed、Checkpoint
+    /// MarkFailed、Saga SaveChanges）+ PalORM/EFCore Saga 的 2040 兜底截断共用本方法
+    ///（error 列上限 2048 的安全余量）；代理对守卫同 <see cref="Normalize"/>
+    ///（末位高代理回退一位，防孤立高代理入库——UTF-16 代理对完整性）。
+    /// </summary>
+    /// <param name="value">原始值；null 原样返回（null 语义保持）。</param>
+    /// <param name="maxLength">截断上限（超过才截断）。</param>
+    [return: System.Diagnostics.CodeAnalysis.NotNullIfNotNull(nameof(value))]
+    public static string? Truncate(string? value, int maxLength)
+    {
+        // 关系模式（> maxLength）右侧要求编译期常量，参数版须显式比较
+        if (value is null || value.Length <= maxLength) return value;
+        var truncated = value[..maxLength];
         // v8 评审：char 截断可能在代理对中间切断（超长含 emoji 的消息）——末位高代理回退一位，
         // 防孤立高代理入库（UTF-16 代理对完整性）
         if (truncated.Length > 0 && char.IsHighSurrogate(truncated[^1]))
             truncated = truncated[..(truncated.Length - 1)];
-        return string.IsNullOrWhiteSpace(truncated) ? "(no message)" : truncated;
+        return truncated;
     }
 }

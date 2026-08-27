@@ -32,6 +32,7 @@
 using Dapper;
 using System.Data;
 using System.Data.Common;
+using PalDDD.Core;
 
 using PalDDD.Transactions;
 namespace PalDDD.Dapper;
@@ -165,7 +166,9 @@ public sealed class DapperInboxStore : IInboxStore
         // v22 B 批：截断兜底——对齐 DapperOutboxStore.MarkDead/ReleaseForRetry 的 2040（PD24 管线截断族）
         // v27 P3（B 片 N1）：守卫前置——原截断先于 null/空白守卫执行，null 输入抛 NRE 而非
         // ArgumentException（对照姊妹 DapperOutboxStore.MarkDead 的守卫在前形态）
-        if (failureReason.Length > 2040) failureReason = failureReason[..2040];
+        // v29 P3：改经 FailureReason.Truncate 共享收口——截断切片可能切半 UTF-16 代理对
+        //（超长含 emoji 的消息），末位高代理回退一位防孤立高代理入库（S1 五处截断点同款）
+        failureReason = FailureReason.Truncate(failureReason, 2040);
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // P2/P3 修复（十七轮）：CommandDefinition 传 ct（见 TryStartProcessingAsync 同款注释）
         // 三十八轮 P2 修复：同 MarkProcessedAsync——processing_started_at 抢占 token 守卫

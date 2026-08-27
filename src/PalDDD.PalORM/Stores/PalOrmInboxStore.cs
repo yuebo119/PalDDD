@@ -43,6 +43,13 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         // ITM-163 修复：补空白守卫（对齐 InMemoryInboxStore 同款）
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerName);
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        // v29 P3（S7，镜像 v28 DapperInboxStore ITM-107 姊妹守卫）：processingTimeout 必须非负——
+        // 负值使 cutoff = now - processingTimeout 落到 now 之后，刚启动的 Processing 记录
+        //（now - ProcessingStartedAt ≈ 0 < 负 timeout 的反向区间）被误判超时可抢占，防并发
+        // 保护失效（僵尸接管窗口）。允许 TimeSpan.Zero：超时接管（timeout=0）恒可重入是方言
+        // 探针的合法测试语义（对齐 Checkpoint 侧"仅禁负值"口径）。
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
         var statusProcessing = (int)InboxStatus.Processing;
 
         if (TProvider.SupportsReturningClause)

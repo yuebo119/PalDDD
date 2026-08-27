@@ -5,6 +5,7 @@ using Dapper;
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
+using PalDDD.Core;
 
 using PalDDD.Projections;
 namespace PalDDD.Dapper;
@@ -170,7 +171,9 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         // v22 B 批：截断兜底——对齐 Outbox 2040（PD24）
         // v27 P3（B 片 N2）：守卫前置——原截断先于 null/空白守卫执行，null 输入抛 NRE 而非
         // ArgumentException（对照姊妹 DapperOutboxStore.MarkDead 的守卫在前形态）
-        if (failureReason.Length > 2040) failureReason = failureReason[..2040];
+        // v29 P3：改经 FailureReason.Truncate 共享收口——截断切片可能切半 UTF-16 代理对
+        //（超长含 emoji 的消息），末位高代理回退一位防孤立高代理入库（S1 五处截断点同款）
+        failureReason = FailureReason.Truncate(failureReason, 2040);
 
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
         var rows = await connection.ExecuteAsync(

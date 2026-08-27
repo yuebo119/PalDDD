@@ -1,6 +1,7 @@
 namespace PalDDD.Core.Tests;
 
-/// <summary>FailureReason.Normalize 契约（v8 评审补测：截断/空白归一/代理对完整性四路径）。</summary>
+/// <summary>FailureReason.Normalize/Truncate 契约（v8 评审补测：截断/空白归一/代理对完整性四路径；
+/// v29 P3 补 Truncate：null 语义保持/截断/代理对守卫）。</summary>
 public sealed class FailureReasonTests
 {
     [Test]
@@ -43,5 +44,34 @@ public sealed class FailureReasonTests
     {
         var longBlank = new string(' ', FailureReason.MaxLength + 10);
         await Assert.That(FailureReason.Normalize(longBlank)).IsEqualTo("(no message)");
+    }
+
+    // ── v29 P3：Truncate（仅截断不归一，存储层 2040 兜底族共享收口）──────────────
+
+    [Test]
+    public async Task Truncate_NullValue_PreservesNull()
+        => await Assert.That(FailureReason.Truncate(null, 2040)).IsNull();
+
+    [Test]
+    public async Task Truncate_ShortValue_ReturnsUnchanged()
+    {
+        await Assert.That(FailureReason.Truncate("broker timeout", 2040)).IsEqualTo("broker timeout");
+        // 边界：恰好等于上限不截断
+        await Assert.That(FailureReason.Truncate(new string('x', 2040), 2040)).IsEqualTo(new string('x', 2040));
+    }
+
+    [Test]
+    public async Task Truncate_OverlongValue_TruncatesToMaxLength()
+        => await Assert.That(FailureReason.Truncate(new string('x', 2041), 2040)!.Length).IsEqualTo(2040);
+
+    [Test]
+    public async Task Truncate_TruncationAtSurrogatePair_DoesNotLeaveLoneHighSurrogate()
+    {
+        // 构造截断点恰落在高代理上的输入：'a'*2039 + emoji（2 char 代理对）→ 长度 2041——
+        // [..2040] 的末位是高代理（低代理被切），防御应回退一位（镜像 Normalize 同名用例形态）
+        var value = new string('a', 2039) + "🎉";
+        var truncated = FailureReason.Truncate(value, 2040)!;
+        await Assert.That(truncated.Length).IsEqualTo(2039);
+        await Assert.That(char.IsHighSurrogate(truncated[^1])).IsFalse();
     }
 }

@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using PalORM;
+using PalDDD.Core;
 using PalDDD.Transactions;
 using PalUlid = ByteAether.Ulid.Ulid;
 
@@ -173,6 +174,15 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
     {
         // ITM-163 修复：补 state null 守卫（对齐 InMemorySagaStateStore/DapperSagaStateStore/SagaStateDbContext）
         ArgumentNullException.ThrowIfNull(state);
+
+        // v29 P3（S9，镜像 v28 DapperSagaStateStore 的 Q1 形态）：存储层截断兜底——error 列
+        // 上限 2048（EFCore 侧 DDL 共表基准），调用层 SagaProcessor 保存前已
+        // FailureReason.Normalize（2000）截断，此处防直调路径（未经 SagaProcessor 的
+        // SaveChangesAsync）超长 Error 直传 SQL，跨栈共用表场景 EFCore 侧 2048 列写入失败。
+        // 经 FailureReason.Truncate（2040 截断 + UTF-16 代理对守卫）——仅截断不归一空白，
+        // Error=null 是"未出错"语义，Normalize 会把 null 归一为 "(no message)" 破坏该语义
+        //（INSERT/UPDATE 两处 {state.Error} 赋值点共用此收口）。
+        state.Error = FailureReason.Truncate(state.Error, 2040);
 
         // ITM-228 修复（三十二轮）：JsonTypeInfo null 时 saga_data 写 NULL——
         // 业务字段（CustomerId 等）全部丢失。fail-fast 比静默丢数据更诚实。

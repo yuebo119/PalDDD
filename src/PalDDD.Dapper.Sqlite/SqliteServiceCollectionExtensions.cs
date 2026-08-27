@@ -171,8 +171,13 @@ public static class SqliteServiceCollectionExtensions
     /// DataSource 为 ":memory:" 字面量、<c>file::memory:</c> URI 形式（含 shared cache
     /// 变体 <c>file::memory:?cache=shared</c>）、或 <c>file:</c> URI 查询参数含
     /// <c>mode=memory</c>（命名内存库形式）。
+    /// <para>
+    /// v29 P3（S6）：private → internal——同包 SqlitePerformanceOptimizer.OptimizeAsync
+    /// 直调路径的 :memory: 降级复用本判定（单一来源，判定规则含 URI 变体，两处各自实现
+    /// 易漂移分叉）。
+    /// </para>
     /// </summary>
-    private static bool IsMemoryDataSource(string dataSource)
+    internal static bool IsMemoryDataSource(string dataSource)
     {
         if (dataSource.Equals(":memory:", StringComparison.OrdinalIgnoreCase)
             || dataSource.StartsWith("file::memory:", StringComparison.OrdinalIgnoreCase))

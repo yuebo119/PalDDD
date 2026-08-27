@@ -40,6 +40,7 @@
 using Dapper;
 using System.Data;
 using System.Data.Common;
+using PalDDD.Core;
 using PalUlid = ByteAether.Ulid.Ulid;
 
 using PalDDD.Transactions;
@@ -251,7 +252,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // P3-TST-601（R45，对齐 PalORM/EFCore ITM-082 截断族）：存储层兜底截断——
         // 调用方 OutboxBatchProcessor 2000 为第一层；error 列 TEXT 在 Dapper 栈无上限但
         // 跨栈共用表场景（Dapper DDL 列可空 TEXT）防 DDL 收紧后超列失败
-        if (failureReason.Length > 2040) failureReason = failureReason[..2040];
+        // v29 P3：改经 FailureReason.Truncate 共享收口——[..2040] 切片可能切半 UTF-16
+        // 代理对（超长含 emoji 的消息），末位高代理回退一位防孤立高代理入库（S1 五处
+        // 截断点同款）
+        failureReason = FailureReason.Truncate(failureReason, 2040);
         var c = EnsureOpen();
         // P3-SRC-301 声明（同 MarkProcessed）：affected=0（token 拒绝）时内存对象仅清租约字段
         // 不回写 Status——与 InMemory 版（守卫内联设 Dead）/PalORM 版（affected>0 才全套回写）
@@ -267,8 +271,9 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
-        // P3-TST-601：同 MarkDead——存储层兜底截断
-        if (failureReason.Length > 2040) failureReason = failureReason[..2040];
+        // P3-TST-601：同 MarkDead——存储层兜底截断（v29 P3：经 FailureReason.Truncate
+        // 共享收口，含 UTF-16 代理对守卫，见 MarkDead 注释）
+        failureReason = FailureReason.Truncate(failureReason, 2040);
         var c = EnsureOpen();
         // P2 修复（八轮评审）：补租约守卫（对齐 PalORM 版 PalOrmOutboxStore）——租约过期被其他 worker
         // 抢占后，原 worker 的失败释放不再清掉新 worker 的锁或误增 retry_count；三十四轮 ITM-210
