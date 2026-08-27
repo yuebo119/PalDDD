@@ -60,7 +60,12 @@ public static class PostgreSqlMultiHost
         // 备机串与主库不一致时差异无法表达且被静默丢弃（故障转移后必然连接失败/连错库）。
         // Port 不校验：已编码进 Host 条目（host:port 语法，见 EncodeHostEntry 注释）。
         ThrowIfCredentialsMismatch(primaryBuilder, standbyBuilder, "standby");
-        if (!string.IsNullOrWhiteSpace(standbyBuilder.Host)) // v20 F3：v19 B3 只改了 2/3 调用点，Failover 漏网
+        // v21 B-1：原 IsNullOrWhiteSpace==false 时静默跳过 standby——注册成 primary-only
+        // 数据源无备机无告警（MySQL v20 F2 fail-fast / ReadWriteRouter ITM-112 均定性为 bug，
+        // PG MultiHost 唯二保留跳过语义的入口）。对齐姊妹改 fail-fast。
+        if (string.IsNullOrWhiteSpace(standbyBuilder.Host))
+            throw new InvalidOperationException(
+                "Standby connection string is missing 'Host='. Failover registration cannot silently degrade to primary-only.");
         {
             // ITM-132 修复：primary Port≠5432 时，未编码的备机 Host 会继承连接串共享 Port
             // （Npgsql 的 Port 只对未内嵌端口的主机生效），导致备机被连到主库端口——
@@ -152,11 +157,12 @@ public static class PostgreSqlMultiHost
             // ITM-132 修复：primary Port≠5432 时，未编码的副本 Host 会继承连接串共享 Port
             // （Npgsql 的 Port 只对未内嵌端口的主机生效），读流量/故障转移落到错误实例——
             // 统一经 EncodeHostEntry 编码：primary Port≠5432 时全部 Host 显式 host:port（含显式 5432）。
-            // v19 B3 勘正：Npgsql 缺 Host 返回空串非 null（ITM-262 同包实证），原 `is not null`
-            // 恒真为死分支——真实守卫在 EncodeHostEntry 内的 IsNullOrWhiteSpace（:260），
-            // 这里改为显式 IsNullOrWhiteSpace 使守卫在调用点可见（"弱存在检查"防御深度收口）
-            if (!string.IsNullOrWhiteSpace(sb.Host))
-                hosts.Add(EncodeHostEntry(sb, primaryCsBuilder.Port));
+            // v19 B3 勘正 + v21 B-1：Npgsql 缺 Host 返回空串（ITM-262 实证）。原跳过语义
+            // 与 MySQL fail-fast / ITM-112 不对称——对齐姊妹改 fail-fast
+            if (string.IsNullOrWhiteSpace(sb.Host))
+                throw new InvalidOperationException(
+                    "Read replica connection string is missing 'Host='. ReadWriteSplit cannot silently skip a replica.");
+            hosts.Add(EncodeHostEntry(sb, primaryCsBuilder.Port));
         }
 
         if (hosts.Count > 0)

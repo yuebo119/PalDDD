@@ -161,6 +161,13 @@
 - **A-P3-1** PeriodicBackgroundProcessor v19 注释机理勘正——WaitForNextTickAsync 位于 while 条件不在内层 try，其 ODE 直接终止循环（不可能无限循环）；ODE catch 分支实际守护 tick 内部 ODE
 - **A-P3-2** `_disposed` 加 volatile（Dispose 线程写/循环线程读 stale 窗口收口）
 
+### 修复（v21 B 批清偿，2026-08-27）
+
+- **B-1** PG MultiHost Failover + ReadWriteSplit 静默跳过 standby/replica 改 fail-fast（对齐 MySQL v20 F2 / ReadWriteRouter ITM-112 姊妹——原跳过语义使无备机数据源无声注册）
+- **B-2** MySqlMultiHost primary 缺 Server 前导空条目修复（镜像 PG ITM-110 规范化：primary 空则直接赋 standby）
+- **B-3 勘误放弃**：ReportHelper `
+`u8.ToArray()` 优化尝试——`u8` 字面量是 `ReadOnlySpan<byte>`，`WriteAsync` 收 `ReadOnlyMemory<byte>` 无隐式转换，ToArray 是必需的。P3 撤销
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）
