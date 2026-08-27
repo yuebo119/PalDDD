@@ -33,7 +33,11 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
     protected readonly DataSession<TProvider> Session;
 
     /// <summary>构造 Idempotency Store。</summary>
-    public PalOrmIdempotencyStore(DataSession<TProvider> session) => Session = session;
+    public PalOrmIdempotencyStore(DataSession<TProvider> session)
+    {
+        ArgumentNullException.ThrowIfNull(session); // v22 C-1
+        Session = session;
+    }
 
     /// <inheritdoc />
     public async ValueTask<IdempotencyRecord?> GetAsync(

@@ -186,10 +186,12 @@ public sealed class EnumGenerator : IIncrementalGenerator
                     if (reference.GetSyntax(ct) is not ClassDeclarationSyntax partialDecl)
                         continue;
 
-                    // ITM-222 修复（三十二轮）：用 SemanticModel（transform context 自带）判字段类型——
-                    // 只收集类型为目标 SmartEnum 自身的字段。原实现把所有 static 字段都当枚举值
-                    // （如 public static readonly int Version = 1 也被注册，生成编译失败的 RegisterValues）。
-                    var semanticModel = context.SemanticModel;
+                    // v22 D1 修复：跨文件 partial 时 reference.GetSyntax 返回另一棵语法树的节点，
+                    // context.SemanticModel 绑定 attribute 所在树——CheckSyntaxNode 对树外节点抛
+                    // ArgumentException → CS8785 生成器崩溃（探针实证：CrossFilePartial 测试红）。
+                    // 改用 compilation.GetSemanticModel(node.SyntaxTree)——per-tree 获取正确模型。
+                    // ITM-222 语义不变：仍只收集类型为目标 SmartEnum 自身的字段。
+                    var semanticModel = context.SemanticModel.Compilation.GetSemanticModel(partialDecl.SyntaxTree);
 
                     foreach (var member in partialDecl.Members)
                     {

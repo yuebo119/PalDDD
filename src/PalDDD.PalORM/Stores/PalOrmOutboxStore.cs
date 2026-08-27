@@ -37,6 +37,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
     /// <summary>构造 Outbox Store。</summary>
     public PalOrmOutboxStore(DataSession<TProvider> session, TimeProvider? clock = null)
     {
+        ArgumentNullException.ThrowIfNull(session); // v22 C-1
         Session = session;
         Clock = clock ?? TimeProvider.System;
     }
@@ -57,6 +58,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
     public async ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
         int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner); // v22 C-2：对齐 EFCore 四方言 ITM-081/216
         var now = Clock.GetUtcNow();
         var until = now + leaseDuration;
         var pending = (int)OutboxStatus.Pending;

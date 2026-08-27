@@ -65,7 +65,7 @@ public sealed class AddBoundedContextPrefixCodeFix : CodeFixProvider
 
         var newValue = prefix + "." + oldValue;
         editor.ReplaceNode(literal, SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression,
-            SyntaxFactory.Literal(newValue)));
+            SyntaxFactory.Literal(newValue)).WithTriviaFrom(literal)); // v22 D2：trivia 对齐 AddVersionSuffix ITM-221
         return editor.GetChangedDocument();
     }
 }

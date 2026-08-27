@@ -58,6 +58,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
     /// <param name="clock">可选时间提供者（默认 System）；用于租约时间一致性（P1-8 修复）。</param>
     public PalOrmSagaStateStore(DataSession<TProvider> session, JsonTypeInfo<TState>? jsonTypeInfo = null, TimeProvider? clock = null)
     {
+        ArgumentNullException.ThrowIfNull(session); // v22 C-1
         Session = session;
         _jsonTypeInfo = jsonTypeInfo;
         _clock = clock ?? TimeProvider.System;
