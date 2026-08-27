@@ -183,6 +183,13 @@
 - **E-1** KafkaBroker `cts.Token` ODE 窗口修复——Task.Run 第二实参在启动前求值，Dispose 并发完成时抛 ODE；改用 lock 后快照 `tokenSnapshot` 传入
 - **E-2** AddPalEventHandler 补 `AddPalDDD()` 自动核心注册（对齐 Command/Query P2-1 一致性）
 
+### 修复（v23 清偿，2026-08-27）
+
+- **P1 C1** SagaStateDbContext SQLite 翻译缺口修复（探针先行：UseSqlite 测试红→NotSupportedException 实证）——ITM-261 对 Outbox 族修复的姊妹漏网（Saga 族无 SQLite 特化，InMemory 测试掩盖）。修复镜像 SqliteOutboxDbContext：OrderBy(CreatedAt)→OrderBy(SagaId)（ULID 字典序=创建序）+ Lease 的 LeasedUntil<=now 改物化后内存过滤。排序语义变化（CreatedAt 时间戳→ULID 生成序）在关联测试断言中同步声明
+- **C1 探针测试**：`SQLiteProvider_DateTimeOffsetOrderByAndLeaseComparison_Translates` 通过 Store 方法验证修复（Integration 196=+1）
+- **E-2** AddPalEventHandler 重复 ThrowIfNull 删除（v22 补注册时残留）
+- **v22 E-2 修复对账**：确认 AddPalDDD() 调用在位
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）

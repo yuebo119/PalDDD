@@ -53,8 +53,14 @@ public sealed class SagaStateEfCoreTests
         var activeList = active.ToList();
 
         await Assert.That(activeList).Count().IsEqualTo(2);
-        await Assert.That(activeList[0].CurrentState).IsEqualTo("FirstActive");
-        await Assert.That(activeList[1].CurrentState).IsEqualTo("SecondActive");
+        // v23 C1 排序语义变化：OrderBy(CreatedAt)→OrderBy(SagaId)——SQLite 翻译修复的连带。
+        // SagaId（ULID）生成序=插入序，"SecondActive"先插入故 SagaId 较小排首位。
+        // 创建时间戳显式设置不参与排序（ULID 生成时刻才是排序键）。
+        var bySagaId = activeList.OrderBy(s => s.SagaId).ToList();
+        await Assert.That(bySagaId[0].CurrentState).IsEqualTo("SecondActive"); // 先插入
+        await Assert.That(bySagaId[1].CurrentState).IsEqualTo("FirstActive");  // 后插入
+        // 实际返回也应按此序
+        await Assert.That(activeList[0].CurrentState).IsEqualTo(bySagaId[0].CurrentState);
     }
 
     [Test]
@@ -232,6 +238,31 @@ public sealed class SagaStateEfCoreTests
         };
 
     public sealed class TestSagaState : SagaState;
+
+    /// <summary>v23 C1 探针：SQLite provider 下 SagaStateDbContext 的 DateTimeOffset 排序/比较
+    /// 翻译——ITM-261 对 Outbox 族实证不可翻译，Saga 族无 SQLite 特化，InMemory 掩盖。此测试
+    /// 用 UseSqlite 直接验证；若通过则 C1 转误判库候选（provider 版本差异已修复）。</summary>
+    [Test]
+    public async Task SQLiteProvider_DateTimeOffsetOrderByAndLeaseComparison_Translates()
+    {
+        var conn = new Microsoft.Data.Sqlite.SqliteConnection("DataSource=:memory:");
+        await conn.OpenAsync();
+        var options = new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<TestSagaStateDbContext>()
+            .UseSqlite(conn).Options;
+
+        await using var db = new TestSagaStateDbContext(options);
+        await db.Database.EnsureCreatedAsync();
+        db.SagaStates.Add(new TestSagaState { SagaId = ByteAether.Ulid.Ulid.New().ToString(), CurrentState = "A", Status = SagaStatus.Active });
+        await db.SaveChangesAsync();
+
+        // 通过实际 Store 方法（修复后走 OrderBy(SagaId) + 物化过滤）
+        var store = (PalDDD.Transactions.ISagaStateStore<TestSagaState>)db;
+        var active = await store.GetActiveSagasAsync(5, CancellationToken.None);
+        await Assert.That(active.Count).IsEqualTo(1);
+
+        var leased = await store.LeaseActiveSagasAsync("c1-probe-owner", TimeSpan.FromMinutes(2), 5, CancellationToken.None);
+        await Assert.That(leased.Count).IsEqualTo(1);
+    }
 
     private sealed class TestSagaStateDbContext(DbContextOptions<TestSagaStateDbContext> options)
         : SagaStateDbContext<TestSagaState>(options);
