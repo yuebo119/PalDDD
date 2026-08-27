@@ -159,6 +159,39 @@ public sealed class SourceGeneratorDirectTests
     }
 
     [Test]
+    public async Task IdentityGenerator_UlidViaExternAlias_GeneratesWithoutPalid001()
+    {
+        // v25 P3 生成器族：extern alias 下白名单比对改符号语义——ToDisplayString() 对
+        // extern-aliased 类型可能带 "UlidAlias::" 前缀，Replace("global::","") 剥不掉使
+        // "ByteAether.Ulid.Ulid" 精确匹配失败误报 PALID001（int/long 的同型失配 v8 已用
+        // SpecialType 修，本测试锁定 Ulid 的 extern alias 路径）。
+        // 桩要点：ByteAether.Ulid 程序集仅以别名引用（排除 global 引用）——双引用时
+        // Roslyn 以 global 引用为 canonical，display 无别名前缀，无法复现失配路径。
+        var ulidAssemblyPath = typeof(ByteAether.Ulid.Ulid).Assembly.Location;
+        var references = GetReferences()
+            .Where(r => !string.Equals(Path.GetFileName(r.Display), "ByteAether.Ulid.dll", StringComparison.OrdinalIgnoreCase))
+            .Append(MetadataReference.CreateFromFile(ulidAssemblyPath).WithAliases(ImmutableArray.Create("UlidAlias")))
+            .ToArray();
+
+        var result = RunIdentityGeneratorWithReferences(
+            references,
+            """
+            extern alias UlidAlias;
+
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            [GenerateId(typeof(UlidAlias::ByteAether.Ulid.Ulid))]
+            public readonly partial record struct ExternAliasUlidId;
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALID001")).IsFalse();
+        var source = GetGeneratedSource(result, "ExternAliasUlidId.g.cs");
+        await Assert.That(source).Contains("Ulid.New()");
+    }
+
+    [Test]
     public async Task IdentityGenerator_StringType_GeneratesNullGuard()
     {
         var result = RunIdentityGenerator(
@@ -411,6 +444,25 @@ private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics)
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
         var generator = proxy.LoadGenerator();
+        var driver = CSharpGeneratorDriver.Create([generator.AsSourceGenerator()], parseOptions: parseOptions);
+        driver.RunGeneratorsAndUpdateCompilation(compilation, out var updatedCompilation, out var diagnostics);
+        return (updatedCompilation, diagnostics);
+    }
+
+    // v25 P3 生成器族：extern alias 场景需注入带别名（UlidAlias）的程序集引用——
+    // 复用 IdentityGeneratorProxy，仅替换引用集
+    private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics) RunIdentityGeneratorWithReferences(
+        MetadataReference[] references,
+        string source)
+    {
+        var parseOptions = CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Preview);
+        var compilation = CSharpCompilation.Create(
+            "PalDDD.SourceGen.DirectTests",
+            [CSharpSyntaxTree.ParseText(source, parseOptions)],
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var generator = new IdentityGeneratorProxy().LoadGenerator();
         var driver = CSharpGeneratorDriver.Create([generator.AsSourceGenerator()], parseOptions: parseOptions);
         driver.RunGeneratorsAndUpdateCompilation(compilation, out var updatedCompilation, out var diagnostics);
         return (updatedCompilation, diagnostics);

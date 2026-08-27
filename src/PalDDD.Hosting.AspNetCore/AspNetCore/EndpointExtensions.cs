@@ -190,7 +190,19 @@ public static class EndpointExtensions
 
         return endpoints.MapGet(pattern, async context =>
         {
-            var query = bindQuery(context);
+            TQuery query;
+            try
+            {
+                // v25 P3 行为族 B8：bindQuery 移入本地 try——绑定函数（调用方提供，如
+                // query string 解析）抛 PalValidationException 时原在 try 外逃逸为 500；
+                // 对齐 MapCommand 反序列化段的 400 映射（ITM-283 形态）
+                query = bindQuery(context);
+            }
+            catch (PalDDD.CQRS.PalValidationException ex)
+            {
+                await WriteValidationProblemAsync(context, ex).ConfigureAwait(false);
+                return;
+            }
             var dispatcher = context.RequestServices.GetRequiredService<CQRS.Dispatcher>();
             var ct = context.RequestAborted;
             TResult result;

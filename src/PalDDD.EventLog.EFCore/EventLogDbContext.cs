@@ -70,7 +70,6 @@ public abstract class EventLogDbContext(
                 cancellationToken)
                 .ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            SetAppendActivityTags(activity, result);
             PalMetrics.EventLogAppended.Add(events.Count);
             return result;
         }
@@ -81,7 +80,6 @@ public abstract class EventLogDbContext(
             events,
             cancellationToken)
             .ConfigureAwait(false);
-        SetAppendActivityTags(activity, inMemoryResult);
         PalMetrics.EventLogAppended.Add(events.Count);
         return inMemoryResult;
     }
@@ -123,7 +121,8 @@ public abstract class EventLogDbContext(
         }
         finally
         {
-            activity?.SetTag("pal.eventlog.read_count", read);
+            // v25 P3 指标族（D5）：pal.eventlog.read_count SetTag 移除——读取数量随
+            // maxCount 无界，高基数命中 ITM-229 清理标准；计数保留在 EventLogRead 指标
             PalMetrics.EventLogRead.Add(read);
         }
     }
@@ -160,7 +159,8 @@ public abstract class EventLogDbContext(
         }
         finally
         {
-            activity?.SetTag("pal.eventlog.read_count", read);
+            // v25 P3 指标族（D5）：pal.eventlog.read_count SetTag 移除——读取数量随
+            // maxCount 无界，高基数命中 ITM-229 清理标准；计数保留在 EventLogRead 指标
             PalMetrics.EventLogRead.Add(read);
         }
     }
@@ -299,15 +299,10 @@ public abstract class EventLogDbContext(
             firstGlobalPosition + events.Count - 1);
     }
 
-    private static void SetAppendActivityTags(
-        System.Diagnostics.Activity? activity,
-        AppendEventsResult result)
-    {
-        activity?.SetTag("pal.eventlog.first_stream_version", result.FirstStreamVersion);
-        activity?.SetTag("pal.eventlog.last_stream_version", result.LastStreamVersion);
-        activity?.SetTag("pal.eventlog.first_global_position", result.FirstGlobalPosition);
-        activity?.SetTag("pal.eventlog.last_global_position", result.LastGlobalPosition);
-    }
+    // v25 P3 指标族（D5）：原 SetAppendActivityTags（first/last_stream_version 与
+    // first/last_global_position 四个 SetTag）移除——版本/位置值每事件唯一递增，高基数
+    // 命中 ITM-229 清理标准（与 InMemoryEventLog 同步清理）；位置信息由
+    // AppendEventsResult 返回值承载
 
     private async ValueTask<long> GetActualStreamVersionAsync(string streamName, CancellationToken cancellationToken)
     {

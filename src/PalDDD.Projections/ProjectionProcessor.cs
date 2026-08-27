@@ -1,6 +1,7 @@
 // ─────────────────────────────────────────────────────────────
 // 📽️ ProjectionProcessor — Checkpoint 幂等投影处理
 // ─────────────────────────────────────────────────────────────
+using PalDDD.Core.Logging;
 using System.Diagnostics.CodeAnalysis;
 
 namespace PalDDD.Projections;
@@ -21,12 +22,16 @@ public sealed class ProjectionProcessor<TMessage>
     private readonly IProjectionCheckpointStore _checkpointStore;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _processingTimeout;
+    // v25 P3 行为族 B7：pending-confirmation 信号补日志通道（原仅 Activity 事件，无 Trace
+    // listener 时静默）；可选参数默认 null 向后兼容，DI 注册处无需改动
+    private readonly IPalLogger<ProjectionProcessor<TMessage>>? _logger;
 
     public ProjectionProcessor(
         IProjectionHandler<TMessage> handler,
         IProjectionCheckpointStore checkpointStore,
         TimeProvider? timeProvider = null,
-        TimeSpan processingTimeout = default)
+        TimeSpan processingTimeout = default,
+        IPalLogger<ProjectionProcessor<TMessage>>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(handler);
         ArgumentNullException.ThrowIfNull(checkpointStore);
@@ -42,6 +47,7 @@ public sealed class ProjectionProcessor<TMessage>
         _checkpointStore = checkpointStore;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _processingTimeout = processingTimeout == default ? TimeSpan.FromMinutes(5) : processingTimeout;
+        _logger = logger;
     }
 
     public async ValueTask<bool> ProcessAsync(
@@ -90,9 +96,13 @@ public sealed class ProjectionProcessor<TMessage>
         catch (Exception markEx) when (markEx is not OperationCanceledException)
         {
             // 副作用已发生，按 at-least-once 语义返回成功；区分性事件供运维介入。
+            // v25 P3 行为族 B7：补日志通道——原仅 Activity.Current?.AddEvent，无 Trace
+            // listener 时该信号完全静默；可选 logger 补 Warning（默认 null 不启用）。
             System.Diagnostics.Activity.Current?.AddEvent(new(
                 "projection.completed-pending-confirmation",
                 tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = markEx.Message }));
+            _logger?.Warning(
+                $"Projection '{_handler.ProjectionName}' handler succeeded but checkpoint completion could not be persisted (pending confirmation); error: {markEx.Message}");
         }
         return true;
     }

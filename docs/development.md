@@ -141,7 +141,7 @@ git diff --check
 
 | 系列 | 生成器 | ID | 含义 |
 |---|---|---|---|
-| PALMSG | MessageRegistryGenerator | PALMSG001-005 | wire name 字符集/格式/版本后缀/schema 版本一致性 |
+| PALMSG | MessageRegistryGenerator | PALMSG001-006 | wire name 字符集/格式/版本后缀/schema 版本一致性/泛型声明不支持 |
 | PALID | IdentityGenerator | PALID001 | [GenerateId] 源类型白名单外（Guid/Ulid/int/long/string） |
 | PALID | IdentityGenerator | PALID002 | 目标声明非 `partial record struct`（无法与生成物合并） |
 | PALENUM | EnumGenerator | PALENUM001-003 | SmartEnum 基类校验、字段声明约束、record 声明不支持 |
@@ -173,7 +173,7 @@ public sealed class OrderSubmitted : DomainEvent, IDomainEvent
 
 `BoundedContext` 名称必须使用稳定小写形式：小写字母、数字、`-` 和 `.`。例如 `ordering`、`payments.refunds`、`order-fulfillment`。
 
-领域事件类型必须是 `sealed`，避免事件契约通过继承扩展导致 replay、serializer descriptor 和 handler 分派语义漂移；未 sealed 会触发 `PDDD012`。领域事件还必须声明 `[GenerateMessage]`，让 Outbox、broker、EventLog replay 和 schema evolution 使用稳定 `MessageDescriptor`。`GenerateMessage` 的 wire name 和 schema version 由 source generator 继续执行 `PALMSG001`-`PALMSG005` 校验；领域事件的 wire name 和 schema version 还会由 analyzer 用 `PDDD009` / `PDDD010` / `PDDD011` 执行稳定小写命名、版本后缀和正数版本治理。
+领域事件类型必须是 `sealed`，避免事件契约通过继承扩展导致 replay、serializer descriptor 和 handler 分派语义漂移；未 sealed 会触发 `PDDD012`。领域事件还必须声明 `[GenerateMessage]`，让 Outbox、broker、EventLog replay 和 schema evolution 使用稳定 `MessageDescriptor`。`GenerateMessage` 的 wire name 和 schema version 由 source generator 继续执行 `PALMSG001`-`PALMSG006` 校验（`PALMSG006` 拦截泛型声明——生成物无法 emit 泛型类型的 `typeof` 引用）；领域事件的 wire name 和 schema version 还会由 analyzer 用 `PDDD009` / `PDDD010` / `PDDD011` 执行稳定小写命名、版本后缀和正数版本治理。
 `IDomainEvent.EventName` 必须是 string literal，并与 `[GenerateMessage(Name = "...")]` 完全一致；不一致或使用 `nameof` / 运行时拼接会触发 `PDDD015`，避免 dispatcher、trace、EventLog 和 broker 使用不同事件名称。
 领域事件的 wire name 还必须属于同一个 bounded context：`[BoundedContext("ordering")]` 的事件应使用 `ordering.*`，例如 `ordering.order-submitted.v1`，不能漂移到 `billing.*`。
 

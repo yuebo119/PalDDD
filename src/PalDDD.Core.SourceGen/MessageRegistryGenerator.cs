@@ -55,6 +55,18 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    // v25 P3 生成器族：泛型消息类型（partial class Foo<T> 挂 [GenerateMessage]）此前无
+    // 编译期拦截——emit typeof(global::Ns.Foo<T>) 生成不可编译代码（CS0246 落在
+    // auto-generated 文件）。镜像姊妹拦截（EnumGenerator PALENUM004 / IdentityGenerator
+    // PALID003）编译期报 PALMSG006，不生成坏代码。
+    private static readonly DiagnosticDescriptor GenericMessageNotSupported = new(
+        "PALMSG006",
+        "Generated messages do not support generic declarations",
+        "Message type '{0}' is marked with [GenerateMessage] within a generic declaration. Generic messages are not supported; move the target out of the generic type or remove its type parameters.",
+        "PalDDD.MessageContracts",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var candidates = context.SyntaxProvider.ForAttributeWithMetadataName(
@@ -63,6 +75,21 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
             transform: static (context, ct) =>
             {
                 var type = (INamedTypeSymbol)context.TargetSymbol;
+
+                // v25 P3 生成器族：泛型声明（自身带类型参数或嵌套于泛型包含类型）拦截——
+                // 提前返回携带 DiagnosticId，RegisterSourceOutput 报 PALMSG006 并剔除出
+                // 生成物（镜像 EnumGenerator PALENUM004 的 transform 形态）
+                if (type.Arity > 0 || IsWithinGenericContainingType(type))
+                {
+                    return new MessageInfo(
+                        type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                        type.Name,
+                        1,
+                        HasExplicitName: false,
+                        LocationInfo.From(context.TargetNode.GetLocation()),
+                        DiagnosticId: "PALMSG006");
+                }
+
                 var attr = context.Attributes[0];
                 string? name = null;
                 var hasExplicitName = false;
@@ -102,6 +129,13 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
             var validMessages = ImmutableArray.CreateBuilder<MessageInfo>(messages.Length);
             foreach (var message in messages)
             {
+                // v25 P3 生成器族：泛型声明报 PALMSG006（定位到类型声明）并剔除出生成物
+                if (message.DiagnosticId is not null)
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(GenericMessageNotSupported, message.Location.ToLocation(), message.TypeName));
+                    continue;
+                }
+
                 var hasMessageErrors = false;
                 var location = message.Location.ToLocation();
                 if (!message.HasExplicitName || string.IsNullOrWhiteSpace(message.Name))
@@ -219,23 +253,41 @@ public static class PalMessageCatalog
     private static bool HasVersionSuffix(string name, int schemaVersion)
         => name.EndsWith(".v" + schemaVersion, StringComparison.Ordinal);
 
+    // v25 P3 生成器族：沿 ContainingType 链检测泛型包含类型——嵌套于泛型外层内的消息
+    // 无法在生成物中以裸名 typeof 引用（镜像 EnumGenerator/IdentityGenerator 同名方法）
+    private static bool IsWithinGenericContainingType(INamedTypeSymbol symbol)
+    {
+        for (var t = symbol.ContainingType; t is not null; t = t.ContainingType)
+        {
+            if (t.Arity > 0)
+                return true;
+        }
+
+        return false;
+    }
+
     private sealed record MessageInfo(
         string TypeName,
         string Name,
         int SchemaVersion,
         bool HasExplicitName,
-        LocationInfo Location)
+        LocationInfo Location,
+        string? DiagnosticId = null)
     {
         // ITM-220 修复（三十二轮）：Location 不参与相等比较——record 默认全字段相等使
         // 位置漂移（如上方插入空行）令增量管线缓存 miss；与 EnumGenerator.EnumGenInfo /
         // IdentityGenerator.IdGenInfo 手写 Equals 排除 Location 的缓存策略对齐。
         // Location 仅用于诊断输出，不影响生成物。
+        // v25 P3 生成器族：DiagnosticId 纳入相等——ReportDiagnostic 也是管线输出，
+        // PALMSG006 翻转而其余字段相等时缓存命中会残留 IDE 僵尸诊断（镜像
+        // EnumGenInfo 十八轮修法）。
         public bool Equals(MessageInfo? other) =>
             other is not null
             && TypeName == other.TypeName
             && Name == other.Name
             && SchemaVersion == other.SchemaVersion
-            && HasExplicitName == other.HasExplicitName;
+            && HasExplicitName == other.HasExplicitName
+            && DiagnosticId == other.DiagnosticId;
 
         public override int GetHashCode()
         {
@@ -248,6 +300,7 @@ public static class PalMessageCatalog
                 hash = hash * 31 + Name.GetHashCode();
                 hash = hash * 31 + SchemaVersion;
                 hash = hash * 31 + HasExplicitName.GetHashCode();
+                hash = hash * 31 + (DiagnosticId?.GetHashCode() ?? 0);
                 return hash;
             }
         }

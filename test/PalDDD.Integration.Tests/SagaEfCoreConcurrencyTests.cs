@@ -142,6 +142,36 @@ public sealed class SagaEfCoreConcurrencyTests
     }
 
     [Test]
+    public async Task ResumeAsync_CompensatedTerminalState_ThrowsInsteadOfSilentSuccess(CancellationToken ct)
+    {
+        // v25 P2-4 探针：Saga 中断后被超时兜底补偿（SagaProcessor 置 Status=Compensated，
+        // 不触碰 Manager——条目滞留）；迟到决策对 "Compensated"+决策类型无路由，宽容返回，
+        // 旧行为落 TryRemove 正常返回（假成功，决策静默丢弃——违反"要么投递、要么可见
+        // 失败"契约）。正确行为：可见失败。
+        // 注意区分：Completed 是决策被消费后的正常完成路径（既有测试
+        // ResumeAsync_AfterInterrupt 覆盖，保持成功返回），不在本判范围。
+        var manager = new DefaultSagaManager();
+        var saga = new HitlTestSaga { SagaManager = manager };
+        var state = new HitlSagaState();
+
+        var interrupted = await saga.ProcessEventAsync(state, new KickoffEvent(), ct);
+        await Assert.That(interrupted.Status).IsEqualTo(SagaStatus.AwaitingHumanDecision);
+
+        // 模拟超时兜底补偿：Processor 直写终态（不经过 Manager——正是条目滞留的成因）
+        state.Status = SagaStatus.Compensated;
+        state.CurrentState = SagaState.CompensatedStateName;
+
+        await Assert.That(async () =>
+            await manager.ResumeAsync(state.SagaId, new ApproveDecision(Approved: true), ct))
+            .Throws<InvalidOperationException>();
+
+        // 终态条目已清理（终态不可恢复）——二次调用走"无已注册条目"IOE（同为可见失败）
+        await Assert.That(async () =>
+            await manager.ResumeAsync(state.SagaId, new ApproveDecision(Approved: true), ct))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
     public async Task ResumeAsync_DecisionTriggersSecondInterrupt_SucceedsAndKeepsNewEntry(CancellationToken ct)
     {
         // P3 回归（十轮修正）：多阶段 HITL——决策处理再次触发 InterruptStep 时返回的也是

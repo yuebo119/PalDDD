@@ -159,14 +159,22 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 // 返回 "ByteAether.Ulid.Ulid"（命名空间 ByteAether.Ulid + 类型名 Ulid），
                 // [GenerateId(typeof(Ulid))] 恒报 PALID001（诊断消息声称支持的正是它拒绝的类型）。
                 // 编译探针实证；十六轮未发现因测试零 Ulid/long 用例。
-                var normalizedSourceType = sourceType.ToDisplayString().Replace("global::", "") switch
+                // v25 P3 生成器族：白名单比对改符号语义——ToDisplayString() 的字符串前缀
+                // 剥离（Replace("global::","")）对 extern alias 前缀（"alias::Ns.Type"）失效
+                // 使精确匹配误报 PALID001；int/long 的同型失配 v8 已用 SpecialType 修复
+                //（见下方 IsNumeric 注释），本处推广到全部白名单——int/long/string 走
+                // SpecialType（基元类型），Guid/Ulid 用 Name + 命名空间链判定（SpecialType
+                // 枚举无 System_Guid——Guid 非基元类型；Symbol.Name 不含别名前缀，不受
+                // extern alias 影响）。extern alias 测试桩：见
+                // SourceGeneratorDirectTests.IdentityGenerator_UlidViaExternAlias。
+                var normalizedSourceType = sourceType.SpecialType switch
                 {
-                    "System.Guid" => "Guid",
-                    "int" => "int",
-                    "long" => "long",
-                    "string" => "string",
-                    "ByteAether.Ulid.Ulid" => "Ulid",
-                    _ => null
+                    Microsoft.CodeAnalysis.SpecialType.System_Int32 => "int",
+                    Microsoft.CodeAnalysis.SpecialType.System_Int64 => "long",
+                    Microsoft.CodeAnalysis.SpecialType.System_String => "string",
+                    _ => IsSystemGuid(sourceType) ? "Guid"
+                        : IsByteAetherUlid(sourceType) ? "Ulid"
+                        : null
                 };
                 if (normalizedSourceType is null)
                 {
@@ -273,6 +281,25 @@ public sealed class IdentityGenerator : IIncrementalGenerator
             }
         });
     }
+
+    // v25 P3 生成器族：Guid/Ulid 白名单的符号语义判定——Name + 命名空间链逐级比对，
+    // 不经 ToDisplayString()（其输出可能带 extern alias 前缀）；同时限定外层命名空间
+    // 直属 global，排除 Foo.System.Guid / Foo.ByteAether.Ulid 之类的嵌套误匹配
+    private static bool IsSystemGuid(INamedTypeSymbol symbol)
+        => symbol.Name == "Guid"
+           && symbol.ContainingNamespace is
+           {
+               Name: "System",
+               ContainingNamespace.IsGlobalNamespace: true
+           };
+
+    private static bool IsByteAetherUlid(INamedTypeSymbol symbol)
+        => symbol.Name == "Ulid"
+           && symbol.ContainingNamespace is
+           {
+               Name: "Ulid",
+               ContainingNamespace: { Name: "ByteAether", ContainingNamespace.IsGlobalNamespace: true }
+           };
 
     // P3 修复（九轮评审）：predicate 放宽到全部 struct 类声明（普通 struct + record struct），
     // 非 partial record struct 由 transform 报 PALID002——静默跳过让错误延迟到使用点 CS0117
@@ -432,15 +459,23 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
 
     private static string JsonReadBody(string srcType, string name) => srcType switch
     {
-        "Guid" => $"        return {name}.From(reader.GetGuid());",
+        // v25 P3 生成器族：Guid/int/long 分支补 token 守卫——GetGuid/GetInt32/GetInt64 对
+        // 不匹配 token 抛 InvalidOperationException，违反 S.T.J converter 契约（Read 的
+        // 失败应以 JsonException 抛出，上层 catch (JsonException) 才能统一捕获；Ulid 分支
+        // 已有同型守卫，string 分支有 ?? throw 守卫）。Guid 来自 String token，int/long
+        // 来自 Number token，守卫条件各按类型。
+        "Guid" => $"""
+                if (reader.TokenType != JsonTokenType.String)
+                    throw new JsonException("Guid identity JSON value must be a JSON string.");
+                return {name}.From(reader.GetGuid());
+        """,
         // 优化（二十五轮 API 扫描 B2）：读路径原为 GetString()（必然堆分配）+ Parse(string)——
         // 非转义字符串（绝大多数）直接 reader.ValueSpan（UTF-8 原始切片）TryParse 零分配；
         // 转义字符串回退 GetString()+Parse(string)。token 守卫保留原 JsonException-for-null
         // 语义（ValueSpan/ValueIsEscaped 仅对 String/PropertyName token 有效，Null token 原靠
         // GetString() 返 null 触发 JsonException，不守卫会退化成 InvalidOperationException）。
         // TryParse(ReadOnlySpan<byte>, IFormatProvider?, out Ulid) 已在 ByteAether.Ulid 1.4.0
-        // net10 XML 证实。Read 无显式 TokenType 分支——S.T.J converter 契约保证 reader 位于
-        // 本类型的 JSON 值 token 上，坏 JSON 不会进入本方法。
+        // net10 XML 证实。
         "Ulid" => $"""
                 if (reader.TokenType != JsonTokenType.String)
                     throw new JsonException("Ulid identity JSON value cannot be null.");
@@ -450,8 +485,18 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
                     return {name}.From(ulid);
                 throw new JsonException("Ulid identity JSON value is not a valid Ulid.");
         """,
-        "int" => $"        return {name}.From(reader.GetInt32());",
-        "long" => $"        return {name}.From(reader.GetInt64());",
+        // v25 P3 生成器族：同 Guid 分支——Number token 守卫使坏 token（String/Null 等）抛
+        // JsonException 而非 GetInt32/GetInt64 的 InvalidOperationException
+        "int" => $"""
+                if (reader.TokenType != JsonTokenType.Number)
+                    throw new JsonException("Int32 identity JSON value must be a JSON number.");
+                return {name}.From(reader.GetInt32());
+        """,
+        "long" => $"""
+                if (reader.TokenType != JsonTokenType.Number)
+                    throw new JsonException("Int64 identity JSON value must be a JSON number.");
+                return {name}.From(reader.GetInt64());
+        """,
         "string" => $"        return {name}.From(reader.GetString() ?? throw new JsonException(\"String identity JSON value cannot be null.\"));",
         _ => "        throw new JsonException(\"Unsupported identity source type.\");"
     };

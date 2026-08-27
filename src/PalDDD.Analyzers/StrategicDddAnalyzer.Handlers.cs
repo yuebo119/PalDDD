@@ -64,7 +64,12 @@ public sealed partial class StrategicDddAnalyzer
             // P3 修复（二十一轮）：abstract 投影基类不再报 sealed 缺失——sealed 与 abstract
             // 互斥（组合声明非法），shape 由最终 sealed 派生类消解（镜像 IsDomainEventType
             // 的 abstract 排除）；上下文缺失仍在 abstract 上可消解，保持链检查。
-            if ((!type.IsSealed && !type.IsAbstract) || !HasAttributeAlongBaseChain(type, BoundedContextAttributeName))
+            // P2 修复（二十五轮）：struct 投影处理器不报 PDDD004——struct IsSealed 恒 true 使
+            // sealed 轴天然满足，而 [BoundedContext] 是 AttributeTargets.Class（ITM-123 同型）
+            // 挂不上 struct，BC 轴对 struct 不可消解，恒报 Error 无消解路径；shape 检查仅对
+            // class 生效。投影名检查（PDDD007）对 struct 保留（ProjectionName 属性可实现）。
+            if (type.TypeKind == TypeKind.Class
+                && ((!type.IsSealed && !type.IsAbstract) || !HasAttributeAlongBaseChain(type, BoundedContextAttributeName)))
             {
                 context.ReportDiagnostic(Diagnostic.Create(
                     InvalidProjectionHandlerShape,

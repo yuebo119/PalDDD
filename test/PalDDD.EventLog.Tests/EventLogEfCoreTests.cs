@@ -262,13 +262,17 @@ public sealed class EventLogEfCoreTests
             cancellationToken);
 
         await Assert.That(activityListener.StoppedActivities.Any(a => a.OperationName == "EventLog Append")).IsTrue();
+        // v25 P3 指标族（D5）：pal.eventlog.stream / first/last_global_position 已移除
+        //（高基数，ITM-229 清理标准）——原唯一指纹（随机 streamName tag）删除后，
+        // RecordingActivityListener 是进程级监听，并行测试的同名 activity 会混入，
+        // 定位改用 OperationName + event_count 组合
         var activity = activityListener.StoppedActivities.First(a =>
             a.OperationName == "EventLog Append" &&
-            string.Equals(a.GetTagItem("pal.eventlog.stream") as string, streamName, StringComparison.Ordinal));
-        await Assert.That(activity.GetTagItem("pal.eventlog.stream")).IsEqualTo(streamName);
+            a.GetTagItem("pal.eventlog.event_count") is 2);
+        await Assert.That(activity.GetTagItem("pal.eventlog.stream")).IsNull();
         await Assert.That(activity.GetTagItem("pal.eventlog.event_count")).IsEqualTo(2);
-        await Assert.That(activity.GetTagItem("pal.eventlog.first_global_position")).IsEqualTo(0L);
-        await Assert.That(activity.GetTagItem("pal.eventlog.last_global_position")).IsEqualTo(1L);
+        await Assert.That(activity.GetTagItem("pal.eventlog.first_global_position")).IsNull();
+        await Assert.That(activity.GetTagItem("pal.eventlog.last_global_position")).IsNull();
         await Assert.That(meterListener.Measurements).Contains(2);
     }
 

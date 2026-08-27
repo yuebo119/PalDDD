@@ -60,6 +60,22 @@ public sealed class DefaultSagaManager : ISagaManager
         // P2 修复（八轮）：重新派发——把中断恢复接回执行管线
         var resumedState = await entry.ResumeDispatch(decision, ct).ConfigureAwait(false);
 
+        // P2 修复（二十五轮）：补偿/死信终态的决策必然未被消费——超时兜底补偿
+        // （SagaTimeoutProcessor）把中断 Saga 置 Compensated 后全程不触碰本 Manager
+        // （条目滞留），迟到决策对终态状态无路由命中而宽容返回；若走 TryRemove+正常
+        // 返回即"静默吞弃+假报成功"，违反本方法"要么投递、要么可见失败"契约。三类
+        // 补偿/死信终态时先清理条目（终态不可恢复）再可见失败。
+        // Completed 不在此列：那是决策被消费后的正常完成路径（保持成功返回）；
+        // 已完成 Saga 的重复决策宽容处理（幂等语义）。
+        if (resumedState.Status is SagaStatus.Compensated or SagaStatus.CompensationFailed
+            or SagaStatus.DeadLettered)
+        {
+            _interrupted.TryRemove(new KeyValuePair<PalUlid, InterruptedSagaEntry>(sagaId, entry));
+            throw new InvalidOperationException(
+                $"Saga {sagaId} 已处于终态 {resumedState.Status}（可能已被超时补偿回滚），" +
+                $"决策 {decision.GetType().Name} 未能被消费——按契约可见失败而非静默丢弃。");
+        }
+
         // P3 修复（九轮→十轮修正）：状态 Alone 无法区分"路由缺失"与"合法二次中断"
         // （多阶段 HITL 的决策触发下一个 InterruptStep 同样返回 AwaitingHumanDecision）——
         // 用条目身份判别：二次中断会 RegisterInterrupted 以新条目对象替换字典项，

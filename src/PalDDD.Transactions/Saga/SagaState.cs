@@ -89,4 +89,15 @@ public abstract class SagaState
 
     /// <summary>中断原因 — HITL 中断时记录等待人工决策的原因</summary>
     public string? InterruptReason { get; set; }
+
+    /// <summary>
+    /// 创建当前状态的成员级浅拷贝（v25 P3 行为族 B1）——供 <see cref="InMemorySagaStateStore{TState}"/>
+    /// 的 successor 租约替换使用（对齐 InMemoryOutboxStore 的 ITM-174 模式）。
+    /// <see cref="object.MemberwiseClone"/> 为 CLR 内在方法（非反射，AOT 安全），拷贝全部
+    /// 实例字段（含子类字段）。⚠️ <see cref="StepStartedAt"/>/<see cref="ExecutedStepKeys"/>
+    /// 为 init-only 属性，浅拷贝后新旧实例共享集合容器：标量字段（Status/Version/LeasedBy 等）
+    /// 已隔离，租约 fencing 语义不受影响；步骤执行轨迹（集合内容）属"事实记录"而非租约
+    /// 保护状态，旧持有者的步骤记录反映到 successor 语义可接受（其确实执行过该步骤）。
+    /// </summary>
+    internal SagaState CloneForLease() => (SagaState)MemberwiseClone();
 }

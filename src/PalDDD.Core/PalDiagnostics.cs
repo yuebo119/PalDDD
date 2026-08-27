@@ -95,21 +95,29 @@ public static class PalActivitySource
             ("pal.replay.message_type", messageType));
 
     /// <summary>创建事件日志追加 Activity</summary>
+    /// <remarks>v25 P3 指标族（D5）：streamName 参数自移除高基数 tag 后不再产生任何
+    /// 遥测输出——保留仅为源兼容；后续破坏性版本将收参。</remarks>
     public static Activity? StartEventLogAppend(string streamName, int eventCount)
         => Start("EventLog Append",
-            ("pal.eventlog.stream", streamName),
             ("pal.eventlog.event_count", eventCount));
+    // ITM-229 后续（v25 P3 指标族）：移除 pal.eventlog.stream——流名含聚合 ID（如
+    // ordering-order-3f9a…），高基数且含业务 ID，命中 ITM-229 清理标准
 
     /// <summary>创建事件日志单流读取 Activity</summary>
+    /// <remarks>v25 P3 指标族（D5）：参数自移除高基数 tag 后不再产生任何遥测输出——
+    /// 保留仅为源兼容；后续破坏性版本将收参。</remarks>
     public static Activity? StartEventLogReadStream(string streamName, long fromVersion)
-        => Start("EventLog ReadStream",
-            ("pal.eventlog.stream", streamName),
-            ("pal.eventlog.from_stream_version", fromVersion));
+        => Start("EventLog ReadStream");
+    // ITM-229 后续（v25 P3 指标族）：移除 pal.eventlog.stream（流名含聚合 ID）与
+    // pal.eventlog.from_stream_version（流版本号每事件唯一递增）——均高基数
 
     /// <summary>创建事件日志全局读取 Activity</summary>
+    /// <remarks>v25 P3 指标族（D5）：fromPosition 参数自移除高基数 tag 后不再产生任何
+    /// 遥测输出——保留仅为源兼容；后续破坏性版本将收参。</remarks>
     public static Activity? StartEventLogReadAll(long fromPosition)
-        => Start("EventLog ReadAll",
-            ("pal.eventlog.from_global_position", fromPosition));
+        => Start("EventLog ReadAll");
+    // ITM-229 后续（v25 P3 指标族）：移除 pal.eventlog.from_global_position——
+    // 全局位置每事件唯一递增，高基数
 
     // ── 内部辅助 ──
     // 11 个公共 Start* 方法遵循完全相同的模式：Source.StartActivity → SetTag → return。

@@ -88,6 +88,15 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         // P3 修复（八轮）：与 Dapper/EFCore 姊妹实现对齐——batchSize 非正直接拒绝
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        // v25 P3 守卫族：leaseDuration 边界守卫——对照 EFCore 四方言 LeasePendingMessagesAsync
+        //（MySql/PG/Sqlite，ITM-167/216 对齐系列）同型漏网——leaseDuration 非正时租约
+        // 即刻过期/永不过期语义错乱；TotalSeconds 超过 int.MaxValue 时
+        // until = now + leaseDuration 的秒数语义溢出。Options 层已校验正数，
+        // 此处是 Store 直调路径的防御性 fail-fast（与同文件姊妹 PalOrmOutboxStore 同步补齐）。
+        if (leaseDuration <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration must be greater than zero.");
+        if (leaseDuration.TotalSeconds > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for the lease LeasedUntil value.");
 
         var now = _clock.GetUtcNow();  // P1-8：用注入的 Clock 替代硬编码 UtcNow
         var until = now + leaseDuration;

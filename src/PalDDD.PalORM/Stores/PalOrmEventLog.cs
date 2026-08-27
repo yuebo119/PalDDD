@@ -186,7 +186,9 @@ public class PalOrmEventLog<TProvider> : IEventLog
         }
         finally
         {
-            activity?.SetTag("pal.eventlog.read_count", read);
+            // v25 P3 指标族（D5）：pal.eventlog.read_count SetTag 移除——读取数量随
+            // maxCount 无界，高基数命中 ITM-229 清理标准（与 InMemory/EFCore 实现同步）；
+            // 计数保留在 EventLogRead 指标
             PalMetrics.EventLogRead.Add(read);
         }
     }
@@ -221,7 +223,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         }
         finally
         {
-            activity?.SetTag("pal.eventlog.read_count", read);
+            // v25 P3 指标族（D5）：pal.eventlog.read_count SetTag 移除——同 ReadStreamAsync
             PalMetrics.EventLogRead.Add(read);
         }
     }

@@ -59,6 +59,10 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         MessagePublishContext context,
         CancellationToken ct = default)
     {
+        // v25 P3 守卫族：发布侧 _disposed 守卫（镜像订阅侧 P3-SRC-402 守卫——订阅侧在
+        // _consumersLock 临界区 ThrowIf；发布侧不在锁上下文，用 _disposed != 0 直接判定）——
+        // Broker 释放后 ProduceAsync 落在已 Dispose 的 producer 上行为未定义，fail-fast。
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
         ArgumentNullException.ThrowIfNull(message);
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentOutOfRangeException.ThrowIfEqual(messageId, default);

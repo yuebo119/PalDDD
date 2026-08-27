@@ -69,7 +69,7 @@
 |:--:|---------------|------------|:----:|
 | **E15** | **场景**：跨进程消息 payload 实现 `IIntegrationEvent` 标记接口 → 消费方通过类型反射读取业务属性。**问题**：基础设施接口污染 + 反射不安全。**后果**：耦合 + AOT 风险 | 🚫 不暴露 `IIntegrationEvent`，跨进程 payload 是普通 CLR 类型（架构测试守护） | ✅ |
 | **E16** | **场景**：消息演化用 `IUpcaster` marker 接口 + Assembly.GetTypes() 扫描实现。**问题**：反射扫描违反零反射红线。**后果**：AOT 不兼容 | 🚫 不暴露 `IUpcaster`，用 `MessageEvolutionPipeline` 显式注册演化步骤（ADR-007） | ✅ |
-| **E17** | **场景**：消息 wire name 不稳定 → dispatcher/trace/EventLog/broker 各自命名 → 跨服务无法对齐。**问题**：两套名称。**后果**：消息丢失/误连 | 稳定 wire name 规则：小写+`.v{n}` 后缀+BC 前缀（PDDD008/009/010/011/015 + PALMSG001-005 编译期强制） | ✅ |
+| **E17** | **场景**：消息 wire name 不稳定 → dispatcher/trace/EventLog/broker 各自命名 → 跨服务无法对齐。**问题**：两套名称。**后果**：消息丢失/误连 | 稳定 wire name 规则：小写+`.v{n}` 后缀+BC 前缀（PDDD008/009/010/011/015 + PALMSG001-006 编译期强制） | ✅ |
 | **E18** | **场景**：DomainEvent 可继承 → 子类事件层级 → replay/serializer/handler 分派语义漂移。**问题**：继承层级导致序列化不闭合。**后果**：消息丢失 | PDDD012 强制 DomainEvent `sealed`（事件契约对回放/序列化关闭） | ✅ |
 
 ---

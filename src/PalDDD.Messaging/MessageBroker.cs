@@ -47,12 +47,18 @@ public interface IMessageBroker
         => PublishAsync(message, descriptor, messageId, ct);
 
     /// <summary>异步订阅消息 — 完全异步，零 Task.Run，零死锁风险</summary>
+    /// <remarks>
+    /// 📐 <b>ct 契约（二十五轮 P2-5 统一）</b>：<paramref name="ct"/> 参与订阅初始化与
+    /// <b>消费生命周期</b>——取消即终止消费（解绑消费者，飞行中的 handler 收到取消信号）；
+    /// 不是"仅初始化 token"。订阅的完整释放仍以返回的句柄 Dispose 为准。
+    /// </remarks>
     ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(Func<TMessage, CancellationToken, ValueTask> handler, CancellationToken ct = default);
 
     /// <summary>异步订阅消息（含消费上下文）— 从消息头还原 correlation/causation/traceparent/tracestate。</summary>
     /// <remarks>
     /// 默认实现（DIM）适配到无 context 的重载，context 恒为 null；KafkaBroker/RabbitMqBroker
     /// 覆写此成员以提供从消息头提取的真实 <see cref="MessageConsumeContext"/>（八轮评审：补追踪头消费端断链）。
+    /// <paramref name="ct"/> 契约同无 context 重载（参与初始化与消费生命周期——取消即终止消费）。
     /// </remarks>
     ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
         Func<TMessage, MessageConsumeContext?, CancellationToken, ValueTask> handler, CancellationToken ct = default)

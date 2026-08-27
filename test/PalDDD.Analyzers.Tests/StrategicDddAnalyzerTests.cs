@@ -410,6 +410,34 @@ public sealed class StrategicDddAnalyzerTests
         await Assert.That(diagnostics.Any(d => d.Id == "PDDD004")).IsFalse();
     }
 
+    // P2 修复（二十五轮）测试：struct 投影处理器——struct IsSealed 恒 true 使 sealed 轴天然
+    // 满足，[BoundedContext] 是 AttributeTargets.Class 挂不上 struct（ITM-123 同型），
+    // BC 轴不可消解——修复前 struct 投影恒报 Error 且无消解路径（诊断指令不可能满足）
+    [Test]
+    public async Task StructProjectionHandler_DoesNotReportPddd004()
+    {
+        var diagnostics = await AnalyzeAsync(
+            """
+            using System.Threading;
+            using System.Threading.Tasks;
+            using PalDDD.Core;
+            using PalDDD.Projections;
+
+            public sealed record OrderSubmitted;
+
+            public readonly struct OrderCountProjection : IProjectionHandler<OrderSubmitted>
+            {
+                public string ProjectionName => "ordering.order-count";
+                public ValueTask ProjectAsync(OrderSubmitted message, ProjectionContext context, CancellationToken ct = default)
+                    => ValueTask.CompletedTask;
+            }
+            """);
+
+        // 修复前：struct 因 BC 轴恒 false 报 PDDD004（要求声明挂不上的 attribute）；
+        // 修复后 shape 检查仅对 class 生效，零 PDDD004
+        await Assert.That(diagnostics.Any(d => d.Id == "PDDD004")).IsFalse();
+    }
+
     // P3 修复（二十四轮）测试：abstract ProcessManager 基类——sealed 与 abstract 互斥，
     // shape 由最终 sealed 派生类消解，基类自身不再报 PDDD003
     // （镜像 PDDD004 二十一轮 AbstractProjectionBase 修复，姊妹漏网）

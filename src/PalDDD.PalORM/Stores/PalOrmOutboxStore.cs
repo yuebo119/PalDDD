@@ -46,6 +46,10 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
     public async ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(
         int batchSize, int maxRetryCount, CancellationToken ct)
     {
+        // v25 P3 守卫族：batchSize 非正守卫——与 Dapper/EFCore 姊妹实现对齐
+        //（镜像同文件姊妹 PalOrmSagaStateStore.GetActiveSagasAsync :71 的 P3 修复形态）——
+        // LIMIT 0/负在各方言下静默空返回，无诊断
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
         var now = Clock.GetUtcNow();
         // 列名内联到 SQL 字面量（PalORM 要求 FormattableString 类型，字符串拼接会退化为 string）
         var rows = await Session.QueryAsync<OutboxMessageRow>(
@@ -59,6 +63,19 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner); // v22 C-2：对齐 EFCore 四方言 ITM-081/216
+        // v25 P3 守卫族：batchSize 非正守卫——与 Dapper/EFCore 姊妹实现对齐
+        //（镜像 EFCore 四方言 LeasePendingMessagesAsync 的 v22 C-3 形态）——
+        // 子查询 LIMIT 0/负静默空返回，无诊断
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        // v25 P3 守卫族：leaseDuration 边界守卫——对照 EFCore 四方言 LeasePendingMessagesAsync
+        //（MySql/PG/Sqlite，ITM-167/216 对齐系列）同型漏网——leaseDuration 非正时租约
+        // 即刻过期/永不过期语义错乱；TotalSeconds 超过 int.MaxValue 时
+        // until = now + leaseDuration 的秒数语义溢出。Options 层已校验正数，
+        // 此处是 Store 直调路径的防御性 fail-fast。
+        if (leaseDuration <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration must be greater than zero.");
+        if (leaseDuration.TotalSeconds > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for the lease LockedUntil value.");
         var now = Clock.GetUtcNow();
         var until = now + leaseDuration;
         var pending = (int)OutboxStatus.Pending;

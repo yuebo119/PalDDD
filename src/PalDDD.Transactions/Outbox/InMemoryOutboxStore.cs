@@ -118,11 +118,17 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
         ArgumentNullException.ThrowIfNull(messages);
         lock (_lock)
         {
+            // v25 P3 行为族 B2：两段式——先全量校验再添加。原单循环边校验边添加，
+            // 中途遇 null 条目抛出时前面条目已写入（部分写入残留），调用方重试整批
+            // 会产生重复消息；校验前置后失败批次零写入（全有全无语义）。
             foreach (var msg in messages)
             {
                 // v13 姊妹对称：单条 null 对齐同文件 AddMessage 的 ThrowIfNull——null 延迟到
                 // QueryPending lambda 的 NRE 更难定位
                 ArgumentNullException.ThrowIfNull(msg);
+            }
+            foreach (var msg in messages)
+            {
                 _messages.Add(msg);
             }
         }
