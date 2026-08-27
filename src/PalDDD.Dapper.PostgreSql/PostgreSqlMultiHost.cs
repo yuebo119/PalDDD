@@ -89,7 +89,7 @@ public static class PostgreSqlMultiHost
             // 两个参数独立传入，primary/standby 同指一机时拼接仍会产生 "pg1,pg1"——驱动视为主备
             // 两份，故障转移/负载语义错乱。比较用归一化 (host, port) 对：primary 条目未内嵌端口时
             // 按共享 Port（primaryBuilder.Port，同 EncodeHostEntry 的 Npgsql 语义）；主机名
-            // OrdinalIgnoreCase（DNS 大小写不敏感；同文件 ThrowIfCredentialsMismatch 的 Ordinal
+            // 大小写不敏感（DNS 大小写不敏感；同文件 ThrowIfCredentialsMismatch 的 Ordinal
             // 适用于凭据精确匹配，主机名语义不同）。
             // v26 P3 H2：两侧比较统一经 NormalizeHostEntry 归一化——Host=pg1:5433 内嵌端口
             // 语法下 standbyBuilder.Host 返回原始串（含端口，Port 属性不吸收内嵌值），直接与
@@ -98,19 +98,28 @@ public static class PostgreSqlMultiHost
             // 多主机列表（Host="sb1,sb2"），单值版把整串当一个主机名归一化，与 primary 任意
             // 单条目恒不等，重复检测失效（如 primary "Host=pg1,sb2" + standby "Host=sb1,sb2"
             // 时 sb2 重复漏检，拼接产生双份 sb2 条目）。
+            // v29 P3：查重改 seenHosts HashSet 形态（镜像 ReadWriteSplit v26 H1 的 Add 查重）——
+            // v28 双层循环只查 primary×standby 交叉重复，standby 多主机列表内部重复
+            //（"Host=sb1,sb1"）互不比较漏检，拼接仍产生双份 sb1 条目。primary 条目 + standby
+            // 展开条目全部进集合，Add 失败即抛（一并覆盖跨串与 standby 内部两类重复）；
+            // 大小写归一经 ToUpperInvariant（与 ReadWriteSplit 同款，等价 C9 的
+            // OrdinalIgnoreCase 比较——CA1308 规约的大小写归一方向）。
             var standbyEntries = NormalizeHostEntries(standbyBuilder.Host, standbyBuilder.Port);
+            var seenHosts = new HashSet<(string Host, int Port)>();
             foreach (var raw in primaryHost.Split(','))
             {
                 var (host, port) = NormalizeHostEntry(raw, primaryBuilder.Port);
                 if (host.Length == 0) continue;
-                foreach (var (standbyNormHost, standbyNormPort) in standbyEntries)
-                {
-                    if (string.Equals(host, standbyNormHost, StringComparison.OrdinalIgnoreCase) && port == standbyNormPort)
-                        throw new ArgumentException(
-                            $"standby Host '{standbyNormHost}:{standbyNormPort}' 与 primary 主机列表中的条目重复："
-                            + "多主机拼接将产生重复 Host 条目（如 \"pg1,pg1\"），驱动视为主备两份，故障转移语义错乱。"
-                            + "请为 standby 指定不同主机，或使用 AddPalNpgsqlDataSourceMultiHost 自定义完整连接串。");
-                }
+                seenHosts.Add((host.ToUpperInvariant(), port));
+            }
+            foreach (var (standbyNormHost, standbyNormPort) in standbyEntries)
+            {
+                if (standbyNormHost.Length == 0) continue;
+                if (!seenHosts.Add((standbyNormHost.ToUpperInvariant(), standbyNormPort)))
+                    throw new ArgumentException(
+                        $"standby Host '{standbyNormHost}:{standbyNormPort}' 与 primary 主机列表或 standby 列表内其他条目重复："
+                        + "多主机拼接将产生重复 Host 条目（如 \"pg1,pg1\"），驱动视为主备两份，故障转移语义错乱。"
+                        + "请为 standby 指定不同主机，或使用 AddPalNpgsqlDataSourceMultiHost 自定义完整连接串。");
             }
             builder.ConnectionStringBuilder.Host = $"{primaryHost},{standbyHost}";
         }
@@ -341,15 +350,27 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
         // v26 P3 H3：Host 含内嵌端口（如 "pg1:5433"）时原实现直接拼 hostBuilder.Port，
         // Port 属性不吸收内嵌值（缺省 5432）——产出畸形 "pg1:5433:5432"。先经
         // NormalizeHostEntry 拆内嵌端口再编码；无内嵌端口时归一化结果与原值一致，行为不变。
-        // v28 P3 声明（混编码，行为保持不改）：Host 为多主机列表（"sb1,sb2"）时端口仅编码在
-        // 尾条目（产出 "sb1,sb2:5433"）——Npgsql 对列表内未内嵌端口的条目应用连接串共享 Port，
-        // 逐主机应用端口语义本身正确；共享 Port 与编码端口一致（primary 侧 TargetSession 合并
-        // 串的常态）时行为完全正确，不一致时仅尾条目受编码保护。多主机条目要求逐条独立端口时
-        // 应在条目内各自内嵌（"sb1:5433,sb2:5434"）或经 AddPalNpgsqlDataSourceMultiHost 自定义。
-        var (bareHost, effectivePort) = NormalizeHostEntry(host, hostBuilder.Port);
-        return primaryPort != 5432 || effectivePort != 5432
-            ? $"{bareHost}:{effectivePort}"
-            : bareHost;
+        // v28 P3 声明（混编码，已由 v29 废弃）：Host 为多主机列表（"sb1,sb2"）时端口仅编码在
+        // 尾条目（产出 "sb1,sb2:5433"）。
+        // v29 P3（S3）：改经 NormalizeHostEntries 复数版逐条拆分归一化、每条独立编码后重新
+        // 逗号拼接——原单值版对"已内嵌端口的多主机列表 + primaryPort≠5432"组合整串归一化
+        //（"sb1:5433,sb2:5434" 含多个冒号，唯一冒号判定失败回退原串），编码时再追加共享端口
+        // 产出三段畸形串 "sb1:5433,sb2:5434:5433"。逐条编码后每条目端口独立挂载
+        //（"sb1:5433,sb2:5434"），单条目与未内嵌端口的多主机列表行为不变（后者由"仅尾条目
+        // 编码"升级为逐条编码，端口值相同）。空条目原样保留空串（与 v28 整串穿透行为一致，
+        // 防产出 ":port" 畸形前缀；缺 Host 由上游 fail-fast 拦截）。
+        var entries = NormalizeHostEntries(host, hostBuilder.Port);
+        List<string> encoded = [];
+        foreach (var (bareHost, effectivePort) in entries)
+        {
+            if (bareHost.Length == 0)
+                encoded.Add("");
+            else if (primaryPort != 5432 || effectivePort != 5432)
+                encoded.Add($"{bareHost}:{effectivePort}");
+            else
+                encoded.Add(bareHost);
+        }
+        return string.Join(",", encoded);
     }
 
     /// <summary>

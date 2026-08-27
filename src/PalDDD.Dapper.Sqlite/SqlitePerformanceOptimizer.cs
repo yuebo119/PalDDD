@@ -77,6 +77,19 @@ public static class SqlitePerformanceOptimizer
     public static async ValueTask OptimizeAsync(SqliteConnection connection)
     {
         ArgumentNullException.ThrowIfNull(connection);
+        // v29 P3（S6，镜像同包 DI 路径 ITM-135 降级——SqliteServiceCollectionExtensions
+        // .ApplyOptimization 的 isMemory 分支）：直调路径对 :memory: 连接必抛误导性 WAL
+        // 异常——:memory: 上 PRAGMA journal_mode=WAL 恒返回 "memory"（无法切换 WAL），
+        // ApplyAsync 的 WAL 确认失配抛 InvalidOperationException（WAL 语义不适用于内存库）。
+        // 内存源判定经 SqliteServiceCollectionExtensions.IsMemoryDataSource（internal 共享，
+        // 覆盖 :memory: / file::memory: / mode=memory 三形态）——真时改走 OptimizeInMemoryAsync
+        //（PRAGMA journal_mode=MEMORY 级别）。文件库调用方不受影响。
+        if (SqliteServiceCollectionExtensions.IsMemoryDataSource(
+                new SqliteConnectionStringBuilder(connection.ConnectionString).DataSource))
+        {
+            await OptimizeInMemoryAsync(connection).ConfigureAwait(false);
+            return;
+        }
         // ITM-220 修复（三十二轮）：State 守卫——对照 MySqlPerformanceOptimizer 同款，
         // 对已打开连接重复 Open 抛 InvalidOperationException（调用方复用共享连接场景）
         if (connection.State != System.Data.ConnectionState.Open)

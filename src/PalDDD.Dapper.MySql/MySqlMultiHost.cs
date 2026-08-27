@@ -69,8 +69,10 @@ public static class MySqlMultiHost
         // v28 P3（v27 N8 副作用修复）：本 fail-fast 前置于 Port 一致性校验——空 Server 时
         // HasHostWithoutEmbeddedPort("") 返回 true，Port 比较先抛误导性端口消息（真实问题是
         // 缺 Server），故 Port 校验移到本守卫之后
+        // v29 P3（S5）：异常类型 InvalidOperationException → ArgumentException——缺 Server
+        // 是连接串配置参数错误（对齐 PG 侧 v28 裁决与 primary 侧 N7 同步修正），消息不变
         if (string.IsNullOrWhiteSpace(standbyBuilder.Server))
-            throw new InvalidOperationException(
+            throw new ArgumentException(
                 "Standby connection string is missing 'Server='. Failover cannot silently include an empty host.");
         // v27 P3（B 片 N8）：Port 一致性校验改内嵌端口感知——MySqlConnector 的 Server 支持
         // "host:port" 内嵌语法（内嵌端口不吸收进 Port 属性，v26 H5 已证），合并后未内嵌端口
@@ -98,21 +100,36 @@ public static class MySqlMultiHost
         // 内嵌端口时回退共享 Port（MySqlConnector 语义：Port 只对未内嵌端口的主机生效）。
         // primary 列表空条目（primary 缺 Server 的 Split 产物）跳过——该输入随后由下方
         // N7 fail-fast 拦截，此处跳过仅为不误抛"重复"异常。
-        var (standbyServer, standbyPort) = NormalizeServerEntry(standbyBuilder.Server, (int)standbyBuilder.Port);
+        // v29 P3（S4，镜像 PG 侧 v28/v29 形态）：standby 侧改复数版 NormalizeServerEntries
+        // 展开 + seenServers HashSet 查重——原单值版把 standby 多主机列表整串归一化
+        //（"sb1,sb2" 当一个主机名），与 primary 任意单条目恒不等，跨串重复漏检（primary
+        // "Server=db1,sb2" + standby "Server=sb1,sb2" 时 sb2 重复漏检）；standby 列表内部
+        // 重复（"Server=sb1,sb1"）互不比较同样漏检。primary 条目 + standby 展开条目全部进
+        // 集合，Add 失败即抛（一并覆盖两类重复）；大小写归一经 ToUpperInvariant
+        //（等价 v26 H5 的 OrdinalIgnoreCase 比较，与 PG 侧 ReadWriteSplit 同款）。
+        var seenServers = new HashSet<(string Server, int Port)>();
         foreach (var raw in primaryBuilder.Server.Split(','))
         {
             var (primaryServer, primaryPort) = NormalizeServerEntry(raw, (int)primaryBuilder.Port);
             if (primaryServer.Length == 0) continue;
-            if (string.Equals(primaryServer, standbyServer, StringComparison.OrdinalIgnoreCase) && primaryPort == standbyPort)
+            seenServers.Add((primaryServer.ToUpperInvariant(), primaryPort));
+        }
+        foreach (var (standbyServer, standbyPort) in NormalizeServerEntries(standbyBuilder.Server, (int)standbyBuilder.Port))
+        {
+            if (standbyServer.Length == 0) continue;
+            if (!seenServers.Add((standbyServer.ToUpperInvariant(), standbyPort)))
                 throw new ArgumentException(
-                    $"standby Server '{standbyServer}:{standbyPort}' 与 primary 主机列表中的条目重复："
+                    $"standby Server '{standbyServer}:{standbyPort}' 与 primary 主机列表或 standby 列表内其他条目重复："
                     + "多主机拼接将产生重复 Server 条目（如 \"mysql1,mysql1\"），FailOver 把同一实例视作两个节点轮试，"
                     + "故障转移语义错乱。请为 standby 指定不同主机，或使用自定义多主机扩展。");
         }
-        // v27 P3（B 片 N7）：primary 缺 Server fail-fast——异常类型与消息风格对齐同文件
-        // standby 缺 Server 先例（v20 F2/v21 B-1 的 InvalidOperationException）
+        // v27 P3（B 片 N7）：primary 缺 Server fail-fast
+        // v29 P3（S5）：异常类型 InvalidOperationException → ArgumentException——缺 Server
+        // 是连接串配置参数错误（对齐 PG 侧 v28 裁决"配置参数错误语义"，与上方 standby 侧
+        // 同步修正；原 v27 N7 注释所称"对齐 v20 F2/v21 B-1 的 InvalidOperationException
+        // 先例"随该裁决一并废止），消息不变
         if (string.IsNullOrWhiteSpace(primaryBuilder.Server))
-            throw new InvalidOperationException(
+            throw new ArgumentException(
                 "Primary connection string is missing 'Server='. Failover cannot silently substitute the standby as the only host.");
         primaryBuilder.Server = $"{primaryBuilder.Server},{standbyBuilder.Server}";
 
@@ -220,6 +237,25 @@ public static class MySqlMultiHost
             return (entry[..colon], embedded);
         }
         return (entry, fallbackPort);
+    }
+
+    /// <summary>
+    /// v29 P3（S4）：多主机列表归一化（复数版）——按顶层逗号拆分后逐条调
+    /// <see cref="NormalizeServerEntry"/>（镜像 PG 侧 NormalizeHostEntries v28 形态）。
+    /// 单值版把 "sb1,sb2" 整串当一个主机名归一化，与任何单条目恒不等——多主机 standby
+    /// 条目参与查重（Failover standby 侧的 seenServers 收集）必须经本复数版展开，否则
+    /// 跨串/内部重复条目漏检、拼接产生双份主机。
+    /// </summary>
+    /// <param name="rawServer">原始 Server（可为逗号分隔多主机列表，逐项 Trim；空项原样保留由调用方跳过）。</param>
+    /// <param name="fallbackPort">未内嵌端口条目的回退端口（共享 Port）。</param>
+    internal static IReadOnlyList<(string Server, int Port)> NormalizeServerEntries(string? rawServer, int fallbackPort)
+    {
+        List<(string Server, int Port)> entries = [];
+        foreach (var raw in (rawServer ?? "").Split(','))
+        {
+            entries.Add(NormalizeServerEntry(raw, fallbackPort));
+        }
+        return entries;
     }
 
     /// <summary>

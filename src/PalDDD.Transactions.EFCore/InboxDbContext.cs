@@ -42,6 +42,13 @@ public abstract class InboxDbContext(
         // 均有）。空串键可创建幂等行却无法命中正常消息；契约对齐其余三实现抛 ArgumentException。
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerName);
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        // v29 P3（S8，镜像 v28 DapperInboxStore ITM-107 姊妹守卫）：processingTimeout 必须非负——
+        // 负值使"Processing 且未超时"窗口判定（now - ProcessingStartedAt < 负 timeout 恒假）
+        // 失效，刚启动的 Processing 记录被误判超时可抢占，防并发保护失效（僵尸接管窗口）。
+        // 允许 TimeSpan.Zero：超时接管（timeout=0）恒可重入是方言探针的合法测试语义
+        //（对齐 Checkpoint 侧"仅禁负值"口径）。
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
         var record = await InboxMessages.SingleOrDefaultAsync(
             x => x.ConsumerName == consumerName && x.MessageId == messageId, ct).ConfigureAwait(false);
 

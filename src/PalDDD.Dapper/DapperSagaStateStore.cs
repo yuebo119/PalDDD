@@ -26,6 +26,7 @@ using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using PalDDD.Core;
 using PalUlid = ByteAether.Ulid.Ulid;
 
 using PalDDD.Transactions;
@@ -143,7 +144,10 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         // SaveChangesAsync）超长 Error 直传 SQL，跨栈共用表场景 EFCore 侧 2048 列写入失败。
         // 仅截断不归一空白——Error=null 是"未出错"语义，Normalize 会把 null 归一为
         // "(no message)" 破坏该语义，故不采用（UPDATE/INSERT 两处 err 赋值点共用此收口）。
-        if (state.Error is { Length: > 2040 }) state.Error = state.Error[..2040];
+        // v29 P3：改经 FailureReason.Truncate 共享收口——[..2040] 切片可能切半 UTF-16
+        // 代理对（超长含 emoji 的 Error，镜像 Normalize 的 v8 代理对防御），末位高代理
+        // 回退一位防孤立高代理入库（S1 五处截断点 + PalORM/EFCore Saga 姊妹同款）。
+        state.Error = FailureReason.Truncate(state.Error, 2040);
 
         var existing = await GetByIdAsync(state.SagaId, ct).ConfigureAwait(false);
         var sagaData = SerializeState(state);

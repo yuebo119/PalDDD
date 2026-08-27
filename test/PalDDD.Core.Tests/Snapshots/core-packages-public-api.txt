@@ -105,6 +105,7 @@ class PalDDD.Core.Entity<TId>
   method System.String ToString()
 static class PalDDD.Core.FailureReason
   method System.String Normalize(System.String message)
+  method System.String Truncate(System.String value, System.Int32 maxLength)
 class PalDDD.Core.GenerateEnumAttribute
   ctor()
 class PalDDD.Core.GenerateIdAttribute

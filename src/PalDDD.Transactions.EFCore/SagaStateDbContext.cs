@@ -172,6 +172,15 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
     /// </remarks>
     async ValueTask<int> ISagaStateStore<TState>.SaveChangesAsync(TState state, CancellationToken ct)
     {
+        // v29 P3（S10，镜像 v28 DapperSagaStateStore / v29 PalOrmSagaStateStore 的 Q1 形态）：
+        // 存储层截断兜底——Error 列 HasMaxLength(2048)（本类 OnModelCreating），超长 ex.Message
+        //（含大 payload 的序列化错误）会让终态保存本身抛 DbUpdateException 掩盖原始异常
+        //（ITM-167/175 截断族）；截断到 2040 对齐跨栈（Dapper/PalORM 同款 2040，2048 列上限
+        // 的安全余量）。EF Core 是变更跟踪写入（Error 赋值在调用方），入口截断 state.Error
+        // 后本次 SaveChanges 随即生效。经 Core.FailureReason.Truncate：仅截断不归一
+        //（Error=null 是"未出错"语义，Normalize 会归一为 "(no message)" 破坏之），
+        // 含 UTF-16 代理对守卫（末位高代理回退一位）。
+        state.Error = Core.FailureReason.Truncate(state.Error, 2040);
         try
         {
             await SaveChangesAsync(ct).ConfigureAwait(false);
