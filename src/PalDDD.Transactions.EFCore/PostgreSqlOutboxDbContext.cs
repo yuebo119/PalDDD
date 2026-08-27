@@ -49,6 +49,7 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
         int maxRetryCount,
         CancellationToken ct)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v22 C-3：v20 C-1 GetPending 补齐后 Lease 路径漏网
         // ITM-081 修复：补 owner 空白校验（对齐 SqlServerOutboxDbContext.LeasePendingMessagesAsync
         // 同款守卫）——缺守卫时空/空白 owner 会写入 "LockedBy" 列，破坏跨方言契约一致
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);

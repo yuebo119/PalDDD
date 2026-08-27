@@ -165,6 +165,8 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         DateTimeOffset failedAt,
         CancellationToken ct = default)
     {
+        // v22 B 批：截断兜底——对齐 Outbox 2040（PD24）
+        if (failureReason.Length > 2040) failureReason = failureReason[..2040];
         ArgumentNullException.ThrowIfNull(checkpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
 

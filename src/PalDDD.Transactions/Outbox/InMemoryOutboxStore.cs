@@ -198,7 +198,8 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
         ct.ThrowIfCancellationRequested();
         ArgumentException.ThrowIfNullOrWhiteSpace(retriedBy);
         // ITM-216 修复（三十二轮）：retriedBy 截断兜底——Error 列上限 2048（同款于
-        // OutboxDbContext.RequeueDeadAsync 的 2040 截断族），姊妹对称性截断（内存实现无列上限——P3-TST-603 勘正）
+        // OutboxDbContext.RequeueDeadAsync 的 2040 截断族）——v22 勘正：此处实际截 256（内存列上限声明不适用，
+        // 与 2040 族的差异为防御性收窄：retriedBy 是运维标识不会接近 2048）
         var owner = retriedBy.Length > 256 ? retriedBy[..256] : retriedBy;
         // v17 声明：now 取值在 lock 外——与 lock 内使用有微 TOCTOU，但仅影响审计时间戳精度
         // （不影响 fencing/token 正确性，对齐 Lease 路径可随统一重构处理）。
@@ -242,6 +243,7 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
 
     private List<OutboxMessage> QueryPending(int batchSize, int maxRetryCount)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v22 A 批：对齐 InMemorySagaStateStore :27/:50
         var now = _timeProvider.GetUtcNow();
         return _messages
             .Where(m => m.Status == OutboxStatus.Pending

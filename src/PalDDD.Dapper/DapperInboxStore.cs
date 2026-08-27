@@ -152,6 +152,8 @@ public sealed class DapperInboxStore : IInboxStore
 
     public async ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
     {
+        // v22 B 批：截断兜底——对齐 DapperOutboxStore.MarkDead/ReleaseForRetry 的 2040（PD24 管线截断族）
+        if (failureReason.Length > 2040) failureReason = failureReason[..2040];
         // ITM-163 修复：补 message null 守卫（failureReason 空白守卫已存在）
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);

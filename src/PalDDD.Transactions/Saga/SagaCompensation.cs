@@ -103,6 +103,7 @@ internal sealed class SagaCompensation<TState>
         List<Exception>? failures = null;
         var (start, end, step) = _policy switch
         {
+            // v22 声明：switch 表达式穷尽枚举——未来新增 CompensationPolicy 值时编译器会报不穷尽错误（编译期防御，非运行时 default 吞弃）
             CompensationPolicy.Backward => (targets.Count - 1, -1, -1),
             CompensationPolicy.Forward => (0, targets.Count, 1),
             _ => (0, 0, 0)

@@ -165,12 +165,15 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             throw;
         }
 
+        // v22 E-1：cts.Token 在 lock 后快照一次——Dispose 并发完成时 cts.Token 属性抛 ODE
+        var tokenSnapshot = cts.Token;
+
         // 保存 Task 引用，用于等待完成和错误观测
         var consumeTask = Task.Run(async () =>
         {
             try
             {
-                while (!cts.Token.IsCancellationRequested)
+                while (!tokenSnapshot.IsCancellationRequested)
                 {
                     ConsumeResult<string, byte[]> result;
                     try
@@ -258,7 +261,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                     consumer.Dispose();
                 }
             }
-        }, cts.Token);
+        }, tokenSnapshot); // v22 E-1：Task.Run 第二实参在启动前求值=ODE 窗口，用快照
 
         // P3 修复（十七轮）：登记先行的回填——循环启动后注入 Task 引用
         // （Set 前若被 Dispose，DisposeAsync 走 null 窗口路径：cts 已取消，

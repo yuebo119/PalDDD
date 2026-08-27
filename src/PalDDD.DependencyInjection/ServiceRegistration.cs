@@ -306,6 +306,10 @@ public static class ServiceRegistration
         where THandler : class, Message.IEventHandler<TEvent>
     {
         ArgumentNullException.ThrowIfNull(services);
+        // v22 E-2：对齐 Command/Query 的 P2-1 修复——自动补核心注册（幂等）
+        services.AddPalDDD();
+
+        ArgumentNullException.ThrowIfNull(services);
         // P3 修复（八轮评审）→ P1 修正（十七轮）：八轮把三个注册统一 TryAddScoped 防重，
         // 但 TryAdd 按 ServiceType 去重——同事件第二个不同 THandler 的接口注册被静默吞掉
         // （运行探针实证 GetServices<IEventHandler<T>> 只剩首个 handler，破坏注释自述的
