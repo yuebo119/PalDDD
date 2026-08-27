@@ -22,11 +22,13 @@ public sealed class JsonLinesEventWriter
 {
     /// <summary>序列化一条事件为 JSON Lines 格式的一行（含尾部 \n）。</summary>
     /// <remarks>
-    /// ⚠️ <b>重入限制（v28 P3 声明，镜像 JsonMessageSerializer v27 同款）</b>：ThreadStatic 池
+    /// ⚠️ <b>重入限制（v28 P3 声明，镜像 JsonMessageSerializer v27 同款；v29 P3 勘正）</b>：ThreadStatic 池
     /// （<c>_tlsWriter</c>/<c>_tlsBuffer</c>）非重入安全——自定义 JsonConverter.Write 内
     /// 回调同线程 <c>SerializeLine</c> 会清空外层缓冲（入口 <c>GetOrCreateBufferWriter</c>
-    /// 的 <c>Clear()</c> + <c>GetOrCreateWriter</c> 的 <c>Reset()</c> 使外层已写内容丢失）；
-    /// 多态信封等嵌套序列化场景应使用独立实例或避开 converter 内回调。
+    /// 的 <c>Clear()</c> + <c>GetOrCreateWriter</c> 的 <c>Reset()</c> 使外层已写内容丢失）。
+    /// v29 勘正：池字段为 static [ThreadStatic]（挂线程不挂实例），"使用独立实例"无法规避——
+    /// 同线程嵌套序列化共用同一 TLS 池，跨实例不隔离；唯一规避路径是避开 converter 内回调
+    /// （嵌套值先物化再进入外层序列化）。多态信封等嵌套场景受此约束。
     /// </remarks>
     public ReadOnlyMemory<byte> SerializeLine<TMessage>(
         TMessage message,

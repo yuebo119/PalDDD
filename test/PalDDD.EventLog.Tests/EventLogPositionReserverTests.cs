@@ -171,6 +171,37 @@ public sealed class EventLogPositionReserverTests
         await Assert.That(exception!.Message).Contains("invisible to the current transaction snapshot");
     }
 
+    [Test]
+    public async Task ReserveAsync_CasFailureStaleSnapshot_FailsWithSnapshotSemantics(CancellationToken cancellationToken)
+    {
+        // v29 P2 回归（镜像 v28 ReserveAsync_UniqueConstraintInvisibleAllocator 测试形态，
+        // 覆盖 CAS 分支）：CAS 失败（DbUpdateConcurrencyException）后探测仍返回与本轮 CAS
+        // 基准相同的旧 Revision（共享 InMemory 库的播种行恒为播种值，等价于 MySQL
+        // REPEATABLE READ 固定快照看不到并发提交的新 Revision）时，不再 continue 空转 5 次
+        // 后抛误导性 "optimistic concurrency retries"，第一次探测命中即抛带快照语义的
+        // InvalidOperationException（外层调用方以新事务重试可恢复）。
+        var dbName = Guid.NewGuid().ToString("N");
+        var seedOptions = new DbContextOptionsBuilder<TestEventLogDbContext>()
+            .UseInMemoryDatabase(dbName)
+            .Options;
+        await using (var seed = new TestEventLogDbContext(seedOptions))
+        {
+            seed.GlobalPositionAllocators.Add(EventLogGlobalPositionAllocator.Create());
+            await seed.SaveChangesAsync(cancellationToken);
+        }
+
+        var casOptions = new DbContextOptionsBuilder<CasConflictEventLogDbContext>()
+            .UseInMemoryDatabase(dbName)
+            .Options;
+        await using var db = new CasConflictEventLogDbContext(casOptions);
+        var reserver = new EventLogPositionReserver(chunkSize: 10);
+
+        // 先捕获异常再断言消息（对齐上方 v28 测试形态——ThrowsAsync 成功即证明异常非空）
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => reserver.ReserveAsync(db, count: 1, cancellationToken).AsTask());
+        await Assert.That(exception!.Message).Contains("not visible to the current transaction snapshot");
+    }
+
     private static DbContextOptions<TestEventLogDbContext> CreateOptions()
         => new DbContextOptionsBuilder<TestEventLogDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
@@ -218,6 +249,18 @@ public sealed class EventLogPositionReserverTests
 
         public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
             => throw new DbUpdateException("save failed", _inner);
+    }
+
+    /// <summary>
+    /// CAS 失败注入——SaveChangesAsync 恒抛 DbUpdateConcurrencyException（Revision CAS 失败）。
+    /// 播种行经共享 InMemory 库名对 AsNoTracking 探测可见且 Revision 保持播种值（快照旧值），
+    /// 构造"探测仍返回旧 Revision"的 MySQL REPEATABLE READ 同构场景。
+    /// </summary>
+    private sealed class CasConflictEventLogDbContext(DbContextOptions<CasConflictEventLogDbContext> options)
+        : EventLogDbContext(options)
+    {
+        public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+            => throw new DbUpdateConcurrencyException("CAS failed (Revision mismatch)");
     }
 
     /// <summary>鸭子类型判定用的假 Npgsql 异常——类名必须为字面 "PostgresException" 才进入判定分支（仅按类型名 + SqlState 属性匹配）。</summary>

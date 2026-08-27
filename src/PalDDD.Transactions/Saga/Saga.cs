@@ -59,7 +59,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
     /// <summary>已注册的步骤 — Dictionary 确保 O(1) 按键查找，替代 List.Find 的 O(n)</summary>
     private readonly Dictionary<string, SagaStep> _stepsByKey = [];
 
-    /// <summary>保持原始注册顺序用于补偿（Dictionary 本身保证插入顺序）</summary>
+    /// <summary>保持原始注册顺序用于补偿（v29 P3 勘正：注册顺序由本 List 维护——Dictionary 枚举序无保证）</summary>
     private readonly List<(string Key, SagaStep Step)> _stepsInOrder = [];
 
     private FrozenDictionary<string, SagaStep>? _frozen;
@@ -250,8 +250,11 @@ public abstract class Saga<TState> where TState : SagaState, new()
 #pragma warning restore IL2026, IL3050
 
             case StepDispatchKind.Interrupt:
+                // v29 P3：wasCompleted 死参数移除——ExecuteInterruptStep 挂起语义不产出 Completed
+                // 终态（置 AwaitingHumanDecision），其余分发路径用于 Completed 指标判重的该参数
+                // 在本路径从未被读取；私有方法单调用点，签名同步收敛
                 return ExecuteInterruptStep(
-                    current, stepKey, (InterruptStep)step, wasCompleted, startedAt, observer);
+                    current, stepKey, (InterruptStep)step, startedAt, observer);
 
             case StepDispatchKind.Dynamic:
                 return await ExecuteDynamicStepAsync(
@@ -641,7 +644,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
     private TState ExecuteInterruptStep(
         TState current, string stepKey, InterruptStep step,
-        bool wasCompleted, DateTimeOffset startedAt,
+        DateTimeOffset startedAt,
         SagaExecutionObserver? observer)
     {
         // v28 P3 修复：注册前移到状态变更之前——原顺序先改状态（AWD + RecordExecutedStep）
