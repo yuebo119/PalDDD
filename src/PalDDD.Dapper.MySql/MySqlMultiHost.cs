@@ -71,7 +71,11 @@ public static class MySqlMultiHost
         if (string.IsNullOrWhiteSpace(standbyBuilder.Server))
             throw new InvalidOperationException(
                 "Standby connection string is missing 'Server='. Failover cannot silently include an empty host.");
-        primaryBuilder.Server = $"{primaryBuilder.Server},{standbyBuilder.Server}";
+        // v21 B-2：primary 缺 Server 时 Server 属性为空串（v20 F2 自证）——合并产出
+        // 前导空条目。镜像 PG ITM-110 规范化：primary 空则直接赋 standby。
+        primaryBuilder.Server = string.IsNullOrWhiteSpace(primaryBuilder.Server)
+            ? standbyBuilder.Server
+            : $"{primaryBuilder.Server},{standbyBuilder.Server}";
 
         // 故障转移模式：默认先连第一个，失败再试后续
         primaryBuilder.LoadBalance = MySqlLoadBalance.FailOver;

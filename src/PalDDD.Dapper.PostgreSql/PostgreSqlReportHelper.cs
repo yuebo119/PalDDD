@@ -136,7 +136,7 @@ public static class PostgreSqlReportHelper
             }
             jsonWriter.WriteEndObject();
             jsonWriter.Flush();
-            await stream.WriteAsync("\n"u8.ToArray(), ct).ConfigureAwait(false);
+            await stream.WriteAsync("\n"u8.ToArray(), ct).ConfigureAwait(false); // v21 B-3 勘误放弃：u8 是 ReadOnlySpan，WriteAsync 收 ReadOnlyMemory 无隐式转换
             jsonWriter.Reset();
             rowCount++;
         }
