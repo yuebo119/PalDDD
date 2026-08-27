@@ -304,7 +304,8 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
     private sealed class SagaStateRow
     {
         public string SagaId { get; set; } = "";
-        public string CurrentState { get; set; } = "Initial";
+        // SagaState.InitialStateName 而非字面量（二十四轮）：与领域状态机协议值单一来源
+        public string CurrentState { get; set; } = SagaState.InitialStateName;
         public int Status { get; set; }
         public DateTimeOffset CreatedAt { get; set; }
         public DateTimeOffset? CompletedAt { get; set; }

@@ -28,6 +28,16 @@ public sealed class OutboxOptions
 {
     public int BatchSize { get; set; } = 100;
     public TimeSpan LeaseDuration { get; set; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// 轮询间隔 — OutboxProcessor 的 PeriodicTimer 周期。
+    /// <para>
+    /// ⚠️ <b>冷快照声明（二十四轮）</b>：仅在 Processor 构造时读取一次（<c>PeriodicTimer</c>
+    /// 间隔构造后固定），运行时经配置热更新本值<b>不生效</b>，需重启进程；同组的
+    /// <see cref="BatchSize"/>/<see cref="LeaseDuration"/>/<see cref="LeaseOwner"/> 经
+    /// <c>IOptionsMonitor.CurrentValue</c> 每 tick 热读取，热更新即时生效。
+    /// </para>
+    /// </summary>
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromMilliseconds(500);
     public int MaxRetryCount { get; set; } = IPalOutboxStore.DefaultMaxRetryCount;
 
@@ -73,6 +83,15 @@ public sealed class InboxOptions
 /// </remarks>
 public sealed class SagaProcessorOptions
 {
+    /// <summary>
+    /// 轮询间隔 — SagaProcessor 的 PeriodicTimer 周期。
+    /// <para>
+    /// ⚠️ <b>冷快照声明（二十四轮）</b>：仅在 Processor 构造时读取一次（<c>PeriodicTimer</c>
+    /// 间隔构造后固定），运行时热更新不生效，需重启进程；同组的
+    /// <see cref="TimeoutScanBatchSize"/>/<see cref="LeaseDuration"/>/<see cref="LeaseOwner"/>
+    /// 经 <c>IOptionsMonitor.CurrentValue</c> 每次扫描热读取，热更新即时生效。
+    /// </para>
+    /// </summary>
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(30);
     public int TimeoutScanBatchSize { get; set; } = 256;
     public TimeSpan LeaseDuration { get; set; } = TimeSpan.FromMinutes(2);
