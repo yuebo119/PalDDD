@@ -54,7 +54,7 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
             .AsNoTracking()
             // 三十四轮（中断态超时兜底）：观测查询与 Lease 同步纳入 AwaitingHumanDecision
             .Where(s => s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision)
-            .OrderBy(s => s.CreatedAt)
+            .OrderBy(s => s.SagaId) // v23 C1：EF SQLite 不支持 DateTimeOffset ORDER BY（ITM-261 姊妹）——改按 Id（ULID 字典序=创建序）
             .Take(batchSize)
             .ToListAsync(ct).ConfigureAwait(false);
     }
@@ -71,15 +71,20 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
 
         var now = GetUtcNow();
         var leasedUntil = now.Add(leaseDuration);
-        var states = await SagaStates
+        var candidates = await SagaStates
             // 三十四轮（中断态超时兜底）：扫描集扩 AwaitingHumanDecision——中断态 Saga
             // 配置了步骤 Timeout 且超期时由 SagaTimeoutProcessor.IsTimedOut 门控补偿；
             // 未配置 Timeout 则 IsTimedOut 恒 false（显式无限等待契约）
-            .Where(s => (s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision)
-                && (s.LeasedUntil == null || s.LeasedUntil <= now))
-            .OrderBy(s => s.CreatedAt)
+            // v23 C1：EF SQLite 不支持 DateTimeOffset 有序比较/排序（ITM-261 姊妹）——
+            // 等值比较（Status）可翻译，LeasedUntil <= now 改物化后内存过滤，OrderBy 改 SagaId
+            .Where(s => s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision)
+            .OrderBy(s => s.SagaId)
             .Take(batchSize)
             .ToListAsync(ct).ConfigureAwait(false);
+        var states = candidates
+            .Where(s => s.LeasedUntil is null || s.LeasedUntil <= now)
+            .Take(batchSize)
+            .ToList();
 
         foreach (var state in states)
         {
