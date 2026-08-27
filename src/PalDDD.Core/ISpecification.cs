@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
+using System.Threading;
 
 namespace PalDDD.Core;
 
@@ -252,8 +253,17 @@ internal sealed class ExpressionSpecification<T> : ISpecification<T>
         Justification = "IsSatisfiedBy 的内存求值路径需要编译表达式树；AOT 场景应使用 ToExpression() 传给查询提供者（EF Core 等），该路径零编译。生产代码不在 AOT 环境下通过 IsSatisfiedBy 做内存评估。")]
     public bool IsSatisfiedBy(T entity)
     {
-        _compiled ??= Compile(_expression);
-        return _compiled(entity);
+        // v25 P3 勘正族 C8：原 `_compiled ??= Compile(_expression)` 非原子——并发首调双写
+        // 后写者覆盖先写者。镜像 SmartEnum 惰性初始化形态（Interlocked.CompareExchange 先到者胜 +
+        // Volatile.Read 读取）：并发重复编译幂等无害（两个委托实例功能等价，丢弃其一），
+        // Interlocked 只防覆盖竞态与重复劳动。
+        var compiled = Volatile.Read(ref _compiled);
+        if (compiled is null)
+        {
+            Interlocked.CompareExchange(ref _compiled, Compile(_expression), null);
+            compiled = Volatile.Read(ref _compiled);
+        }
+        return compiled(entity);
     }
 
     /// <summary>编译表达式树（ITM-073 延迟编译——首次内存求值才触发，结果缓存于 <c>_compiled</c>）。</summary>

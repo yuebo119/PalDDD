@@ -49,7 +49,8 @@ public static class SqlTemplates
     /// 插入一条新消息到发件箱。<br/>
     /// 💡 为什么包含 <c>id</c> 列？<br/>
     ///   ｜ PostgreSQL 的 UUID 和 SQLite 的 TEXT 都需要显式传入 id。<br/>
-    ///   ｜ <c>OutboxMessage.Id</c> 在构造时已经 <c>Guid.NewGuid()</c>，直接传入即可。
+    ///   ｜ <c>OutboxMessage.Id</c> 在构造时已经 <c>PalUlid.New()</c>（ByteAether.Ulid 生成器），
+    ///   ｜ 直接传入即可（v25 P3 勘正：原注释 "Guid.NewGuid()" 与实际 Id 类型 PalUlid 不符）。
     /// </summary>
     public const string OutboxInsert =
         "INSERT INTO outbox_messages (id,type,payload,content_type,schema_version,status,created_at, correlation_id, causation_id, trace_parent, trace_state) VALUES (@Id,@Type,@Payload,@ContentType,@SchemaVersion,0,@CreatedAt, @CorrelationId, @CausationId, @TraceParent, @TraceState)";

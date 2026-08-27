@@ -37,6 +37,16 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// ⚠️ <b>基类默认 LINQ 的 provider 可译性（v25 P3 勘正族 C6）</b>：下方默认查询的
+    /// <c>NextAttemptAt &lt;= now</c> / <c>LockedUntil &lt;= now</c>（DateTimeOffset 有序比较）与
+    /// <c>OrderBy(CreatedAt)</c>（DateTimeOffset 排序）在 EF Core 11 的 SQLite provider 下
+    /// <b>不可翻译</b>（运行时抛 "could not be translated"，见 SqliteOutboxDbContext 的 ITM-261 实证）——
+    /// 派生类必须 override（对照 <c>SqliteOutboxDbContext.QueryEligibleAsync</c> 的物化后内存
+    /// 过滤 + Id 排序翻页形态；当前 Sqlite/PostgreSql/MySql/SqlServer 四方言适配器均已
+    /// override 兜住）。EF InMemory 测试走基类可正常求值（客户端评估），<b>会掩盖该限制</b>——
+    /// SQLite 系派生类漏 override 将延迟到首个真实查询才暴露。
+    /// </remarks>
     public virtual async ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(
         int batchSize,
         int maxRetryCount,

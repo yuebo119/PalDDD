@@ -18,10 +18,12 @@ namespace PalDDD.Projections.EventLog;
 //   ｜ 内存峰值 O(1) — 流式处理，不整批加载，百万事件不 OOM
 //
 // 📐 导入语义（P2 定案，设计意图声明）：
-//   ｜ 导入即重建——streamName/streamVersion/globalPosition 仅随导出记录（溯源），
+//   ｜ 导入即重建——streamName/streamVersion/globalPosition/recordedAt 仅随导出记录（溯源），
 //   ｜ 导入侧刻意丢弃：目标流的边界与版本由 AppendAsync 的乐观并发重新分配，
 //   ｜ GlobalPosition 由目标库自增生成本次序。跨库迁移不会（也不应）保留
 //   ｜ 源库的全局位置。需要按流恢复时，按导出文件分组后逐流 Append。
+//   ｜ recordedAt（v25 P3 勘正族 C5 补导出）：导出侧保留记录时 UTC 时间戳（备份/分析
+//   ｜ 完整性）；导入侧忽略重建——目标流的重录时间即新的记录时间，EventData 无该字段。
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>事件流 JSON Lines 导入导出工具</summary>
@@ -154,6 +156,9 @@ public static class EventStreamJsonLines
         json.WriteString("streamName", evt.StreamName);
         json.WriteNumber("streamVersion", evt.StreamVersion);
         json.WriteNumber("globalPosition", evt.GlobalPosition);
+        // v25 P3 勘正族 C5：补 recordedAt 导出（RecordedEvent.RecordedAt 的记录时 UTC 时间戳）——
+        // 备份/分析完整性；导入侧忽略（头注释"导入即重建"丢弃清单），EventData 无对应字段
+        json.WriteString("recordedAt", evt.RecordedAt);
         json.WriteNumber("schemaVersion", evt.SchemaVersion);
         json.WriteString("contentType", evt.ContentType);
         json.WriteBase64String("payload", evt.Payload.Span);
@@ -182,6 +187,8 @@ public static class EventStreamJsonLines
 
     private static EventData? DeserializeEventLine(string line)
     {
+        // JsonDocument.Parse + TryGetProperty/GetProperty 仅按已知字段名读取——未知字段
+        //（含 v25 补导出的 recordedAt 及未来新增导出字段）被自然跳过，不会抛异常
         using var doc = JsonDocument.Parse(line);
         var root = doc.RootElement;
 
