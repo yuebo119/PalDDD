@@ -137,6 +137,13 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
     public async ValueTask<int> SaveChangesAsync(TState state, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(state);
+        // v28 P3：存储层截断兜底（镜像同文件族 DapperOutboxStore.MarkDead/ReleaseForRetry
+        // 的 2040 形态）——error 列上限 2048（EFCore 侧 DDL），调用层 SagaProcessor 保存前
+        // 已 FailureReason.Normalize（2000）截断，此处防直调路径（未经 SagaProcessor 的
+        // SaveChangesAsync）超长 Error 直传 SQL，跨栈共用表场景 EFCore 侧 2048 列写入失败。
+        // 仅截断不归一空白——Error=null 是"未出错"语义，Normalize 会把 null 归一为
+        // "(no message)" 破坏该语义，故不采用（UPDATE/INSERT 两处 err 赋值点共用此收口）。
+        if (state.Error is { Length: > 2040 }) state.Error = state.Error[..2040];
 
         var existing = await GetByIdAsync(state.SagaId, ct).ConfigureAwait(false);
         var sagaData = SerializeState(state);

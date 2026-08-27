@@ -63,8 +63,11 @@ public static class PostgreSqlMultiHost
         // v21 B-1：原 IsNullOrWhiteSpace==false 时静默跳过 standby——注册成 primary-only
         // 数据源无备机无告警（MySQL v20 F2 fail-fast / ReadWriteRouter ITM-112 均定性为 bug，
         // PG MultiHost 唯二保留跳过语义的入口）。对齐姊妹改 fail-fast。
+        // v28 P3：异常类型改 ArgumentException——缺 Host 是连接串配置参数错误（与 primary 侧
+        // 缺 Host 的 v26 H4 / ReadWriteRouter ITM-112 的 ArgumentException 语义统一），
+        // 原InvalidOperationException 属状态错误语义，不适用。
         if (string.IsNullOrWhiteSpace(standbyBuilder.Host))
-            throw new InvalidOperationException(
+            throw new ArgumentException(
                 "Standby connection string is missing 'Host='. Failover registration cannot silently degrade to primary-only.");
         {
             // ITM-132 修复：primary Port≠5432 时，未编码的备机 Host 会继承连接串共享 Port
@@ -91,16 +94,23 @@ public static class PostgreSqlMultiHost
             // v26 P3 H2：两侧比较统一经 NormalizeHostEntry 归一化——Host=pg1:5433 内嵌端口
             // 语法下 standbyBuilder.Host 返回原始串（含端口，Port 属性不吸收内嵌值），直接与
             // primary 侧拆出的裸名+端口比较恒不等（v25 查重失效的根因）。
-            var (standbyNormHost, standbyNormPort) = NormalizeHostEntry(standbyBuilder.Host, standbyBuilder.Port);
+            // v28 P3：standby 侧改用复数版 NormalizeHostEntries 展开——standby 串自身可为
+            // 多主机列表（Host="sb1,sb2"），单值版把整串当一个主机名归一化，与 primary 任意
+            // 单条目恒不等，重复检测失效（如 primary "Host=pg1,sb2" + standby "Host=sb1,sb2"
+            // 时 sb2 重复漏检，拼接产生双份 sb2 条目）。
+            var standbyEntries = NormalizeHostEntries(standbyBuilder.Host, standbyBuilder.Port);
             foreach (var raw in primaryHost.Split(','))
             {
                 var (host, port) = NormalizeHostEntry(raw, primaryBuilder.Port);
                 if (host.Length == 0) continue;
-                if (string.Equals(host, standbyNormHost, StringComparison.OrdinalIgnoreCase) && port == standbyNormPort)
-                    throw new ArgumentException(
-                        $"standby Host '{standbyNormHost}:{standbyNormPort}' 与 primary 主机列表中的条目重复："
-                        + "多主机拼接将产生重复 Host 条目（如 \"pg1,pg1\"），驱动视为主备两份，故障转移语义错乱。"
-                        + "请为 standby 指定不同主机，或使用 AddPalNpgsqlDataSourceMultiHost 自定义完整连接串。");
+                foreach (var (standbyNormHost, standbyNormPort) in standbyEntries)
+                {
+                    if (string.Equals(host, standbyNormHost, StringComparison.OrdinalIgnoreCase) && port == standbyNormPort)
+                        throw new ArgumentException(
+                            $"standby Host '{standbyNormHost}:{standbyNormPort}' 与 primary 主机列表中的条目重复："
+                            + "多主机拼接将产生重复 Host 条目（如 \"pg1,pg1\"），驱动视为主备两份，故障转移语义错乱。"
+                            + "请为 standby 指定不同主机，或使用 AddPalNpgsqlDataSourceMultiHost 自定义完整连接串。");
+                }
             }
             builder.ConnectionStringBuilder.Host = $"{primaryHost},{standbyHost}";
         }
@@ -205,16 +215,24 @@ public static class PostgreSqlMultiHost
             // 统一经 EncodeHostEntry 编码：primary Port≠5432 时全部 Host 显式 host:port（含显式 5432）。
             // v19 B3 勘正 + v21 B-1：Npgsql 缺 Host 返回空串（ITM-262 实证）。原跳过语义
             // 与 MySQL fail-fast / ITM-112 不对称——对齐姊妹改 fail-fast
+            // v28 P3：异常类型改 ArgumentException——缺 Host 是连接串配置参数错误，与同文件
+            // standby 侧 v28 / primary 侧 v26 H4 的 ArgumentException 语义统一
             if (string.IsNullOrWhiteSpace(sb.Host))
-                throw new InvalidOperationException(
+                throw new ArgumentException(
                     "Read replica connection string is missing 'Host='. ReadWriteSplit cannot silently skip a replica.");
             // v26 P3 H1：hosts.Add 前比对已收集集合（primary 主机条目 + 先前并入的副本）
-            var (replicaHost, replicaPort) = NormalizeHostEntry(sb.Host, sb.Port);
-            if (!seenHosts.Add((replicaHost.ToUpperInvariant(), replicaPort)))
-                throw new ArgumentException(
-                    $"replica Host '{replicaHost}:{replicaPort}' 与 primary 主机列表或其他副本中的条目重复："
-                    + "多主机拼接将产生重复 Host 条目，LoadBalanceHosts 轮询把同一实例计入多份权重，"
-                    + "故障转移/负载语义错乱。请为副本指定不同主机，或使用 AddPalNpgsqlDataSourceMultiHost 自定义完整连接串。");
+            // v28 P3：副本侧改用复数版 NormalizeHostEntries 展开——副本串自身可为多主机列表
+            //（Host="rb1,rb2"），单值版整串归一化使多主机副本与 primary/其他副本的重复条目
+            // 恒不等，查重失效（同 Failover 入口 v28 勘正）
+            foreach (var (replicaHost, replicaPort) in NormalizeHostEntries(sb.Host, sb.Port))
+            {
+                if (replicaHost.Length == 0) continue;
+                if (!seenHosts.Add((replicaHost.ToUpperInvariant(), replicaPort)))
+                    throw new ArgumentException(
+                        $"replica Host '{replicaHost}:{replicaPort}' 与 primary 主机列表或其他副本中的条目重复："
+                        + "多主机拼接将产生重复 Host 条目，LoadBalanceHosts 轮询把同一实例计入多份权重，"
+                        + "故障转移/负载语义错乱。请为副本指定不同主机，或使用 AddPalNpgsqlDataSourceMultiHost 自定义完整连接串。");
+            }
             hosts.Add(EncodeHostEntry(sb, primaryCsBuilder.Port));
         }
 
@@ -323,6 +341,11 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
         // v26 P3 H3：Host 含内嵌端口（如 "pg1:5433"）时原实现直接拼 hostBuilder.Port，
         // Port 属性不吸收内嵌值（缺省 5432）——产出畸形 "pg1:5433:5432"。先经
         // NormalizeHostEntry 拆内嵌端口再编码；无内嵌端口时归一化结果与原值一致，行为不变。
+        // v28 P3 声明（混编码，行为保持不改）：Host 为多主机列表（"sb1,sb2"）时端口仅编码在
+        // 尾条目（产出 "sb1,sb2:5433"）——Npgsql 对列表内未内嵌端口的条目应用连接串共享 Port，
+        // 逐主机应用端口语义本身正确；共享 Port 与编码端口一致（primary 侧 TargetSession 合并
+        // 串的常态）时行为完全正确，不一致时仅尾条目受编码保护。多主机条目要求逐条独立端口时
+        // 应在条目内各自内嵌（"sb1:5433,sb2:5434"）或经 AddPalNpgsqlDataSourceMultiHost 自定义。
         var (bareHost, effectivePort) = NormalizeHostEntry(host, hostBuilder.Port);
         return primaryPort != 5432 || effectivePort != 5432
             ? $"{bareHost}:{effectivePort}"
@@ -355,5 +378,24 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
             return (entry[..colon], embedded);
         }
         return (entry, fallbackPort);
+    }
+
+    /// <summary>
+    /// v28 P3：多主机列表归一化（复数版）——按顶层逗号拆分后逐条调
+    /// <see cref="NormalizeHostEntry"/>。单值版把 "sb1,sb2" 整串当一个主机名归一化，
+    /// 与任何单条目恒不等——多主机条目参与查重（Failover standby 侧 / ReadWriteSplit
+    /// replica 侧 / ReadWriteRouter replica 侧的 seenHosts 收集）必须经本复数版展开，
+    /// 否则重复条目漏检、拼接产生双份主机。
+    /// </summary>
+    /// <param name="rawHost">原始 Host（可为逗号分隔多主机列表，逐项 Trim；空项原样保留由调用方跳过）。</param>
+    /// <param name="fallbackPort">未内嵌端口条目的回退端口（共享 Port）。</param>
+    internal static IReadOnlyList<(string Host, int Port)> NormalizeHostEntries(string? rawHost, int fallbackPort)
+    {
+        List<(string Host, int Port)> entries = [];
+        foreach (var raw in (rawHost ?? "").Split(','))
+        {
+            entries.Add(NormalizeHostEntry(raw, fallbackPort));
+        }
+        return entries;
     }
 }

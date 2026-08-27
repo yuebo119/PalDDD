@@ -141,8 +141,11 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // 的 isPartialRecordStruct 形态——attribute 所在声明可能恰好非 partial，
                 // 但同类型另一 partial 声明存在时生成物仍可合并）；全部声明非 partial 时
                 // 生成物与用户类型无法合并（CS0260），不生成代码
-                var isPartial = classSymbol.DeclaringSyntaxReferences.Any(static r =>
-                    r.GetSyntax() is TypeDeclarationSyntax d
+                // v28 P3：GetSyntax 补传 ct（对齐同文件下方 partialDecl 收集路径的
+                // reference.GetSyntax(ct) 与 MessageRegistryGenerator 形态）——增量管线
+                // 取消信号可传播到语法物化
+                var isPartial = classSymbol.DeclaringSyntaxReferences.Any(r =>
+                    r.GetSyntax(ct) is TypeDeclarationSyntax d
                     && d.Modifiers.Any(static m => m.IsKind(SyntaxKind.PartialKeyword)));
                 if (!isPartial)
                 {

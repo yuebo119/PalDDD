@@ -179,13 +179,19 @@ public static class PostgreSqlReadWriteRouterExtensions
                             nameof(replicaConnectionStrings));
                     // v27 P3（B 片 N4-②）：hosts.Add 前比对已收集集合（primary 主机条目 + 先前
                     // 并入的副本）——归一化后重复即 fail-fast，不把重复条目拼进 reader 主机列表
-                    var (replicaHost, replicaPort) = PostgreSqlMultiHost.NormalizeHostEntry(sb.Host, sb.Port);
-                    if (!seenHosts.Add((replicaHost.ToUpperInvariant(), replicaPort)))
-                        throw new ArgumentException(
-                            $"Replica connection string at index {index} Host '{replicaHost}:{replicaPort}' duplicates the primary host list or another replica: "
-                            + "multi-host concatenation would produce duplicate Host entries (e.g. \"pg1,pg1\"), LoadBalanceHosts counting the same instance multiple times. "
-                            + "Specify a distinct host for each replica.",
-                            nameof(replicaConnectionStrings));
+                    // v28 P3：副本侧改用复数版 NormalizeHostEntries 展开——副本串自身可为多主机
+                    // 列表（Host="rb1,rb2"），单值版整串归一化使重复条目漏检（同 MultiHost
+                    // Failover/ReadWriteSplit 两入口的 v28 勘正）
+                    foreach (var (replicaHost, replicaPort) in PostgreSqlMultiHost.NormalizeHostEntries(sb.Host, sb.Port))
+                    {
+                        if (replicaHost.Length == 0) continue;
+                        if (!seenHosts.Add((replicaHost.ToUpperInvariant(), replicaPort)))
+                            throw new ArgumentException(
+                                $"Replica connection string at index {index} Host '{replicaHost}:{replicaPort}' duplicates the primary host list or another replica: "
+                                + "multi-host concatenation would produce duplicate Host entries (e.g. \"pg1,pg1\"), LoadBalanceHosts counting the same instance multiple times. "
+                                + "Specify a distinct host for each replica.",
+                                nameof(replicaConnectionStrings));
+                    }
                     // ITM-132 修复：primary Port≠5432 时，未编码的副本 Host 会继承 reader 连接串共享 Port
                     // （Npgsql 的 Port 只对未内嵌端口的主机生效），读流量/故障转移落到错误实例——
                     // 统一经 EncodeHostEntry 编码：primary Port≠5432 时全部 Host 显式 host:port（含显式 5432）。
