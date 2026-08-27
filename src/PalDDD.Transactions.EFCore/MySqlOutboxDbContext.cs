@@ -70,6 +70,7 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
         int maxRetryCount,
         CancellationToken ct)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v22 C-3：v20 C-1 GetPending 补齐后 Lease 路径漏网
         // P3 修复（二十六轮验证轮 W1 前在 nit）：owner 空白守卫——对齐 PG（:53）/SqlServer（:43）
         // 的 ITM-081 跨方言对齐（MySQL 漏网）；空 owner 产生无归属租约
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);

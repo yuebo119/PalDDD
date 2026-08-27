@@ -47,6 +47,7 @@ public abstract class SqlServerOutboxDbContext(DbContextOptions options) : Outbo
         int maxRetryCount,
         CancellationToken ct)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v22 C-3：v20 C-1 GetPending 补齐后 Lease 路径漏网
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         // ITM-167 修复：leaseSeconds 边界守卫（同 MySqlOutboxDbContext——防御 Store 直调
         // 路径的负值/超大值，Options 层已校验正数，此处为运行时 fail-fast）。
