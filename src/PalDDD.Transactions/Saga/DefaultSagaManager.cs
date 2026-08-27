@@ -129,8 +129,12 @@ public sealed class DefaultSagaManager : ISagaManager
     /// </summary>
     public void InvalidateInterrupted(PalUlid sagaId)
     {
-        _interrupted.TryRemove(sagaId, out _);
+        // v29 P2 修复：先写失效集再移除条目——两步换序消除竞态窗口。原序
+        // （TryRemove → _invalidated 写入）的窗口内并发 RegisterInterrupted 读
+        // ContainsKey=false 照常注册幽灵条目（v27 防护经窗口回归）；换序后窗口内
+        // 注册被失效集拒绝、迟到决策走"无条目"IOE，两向闭环
         _invalidated[sagaId] = 1;
+        _interrupted.TryRemove(sagaId, out _);
     }
 
     /// <inheritdoc/>

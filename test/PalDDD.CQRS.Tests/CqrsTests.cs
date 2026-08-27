@@ -247,6 +247,25 @@ public sealed class DispatcherTests
     }
 
     [Test]
+    public async Task SendAsync_BeforeAnyRegistration_DoesNotFreezeEmptyRegistry()
+    {
+        // v29 P2 探针：用户 HostedService 先于 HandlerRegistrar 启动（IHostedService 按
+        // 注册顺序执行 StartAsync）时发命令——修复前隐式冻结空表并清空 _entries，
+        // Registrar 随后 Register 抛 ObjectDisposedException 使 host 启动崩溃；
+        // 修复后空注册表不冻结，注册照常可用
+        var sp = CreateProvider();
+        var dispatcher = new Dispatcher(sp.GetRequiredService<IServiceScopeFactory>());
+
+        await Assert.That(() => dispatcher.SendAsync(new CreateOrderCommand("X", 1)).AsTask())
+            .Throws<HandlerNotFoundException>();
+
+        // 未冻结证据：注册不抛 ODE，且注册后的派发可达
+        dispatcher.Register<CreateOrderCommand, Guid, CreateOrderHandler>();
+        var result = await dispatcher.SendAsync(new CreateOrderCommand("X", 1));
+        await Assert.That(result).IsNotEqualTo(Guid.Empty);
+    }
+
+    [Test]
     public async Task SendAsync_PassesCancellationToken_ToHandler()
     {
         // ITM-285（R45）：原断言仅 IsNotEqualTo(Empty)——Dispatcher 吞 token 换 None 也绿。
