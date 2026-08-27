@@ -91,6 +91,8 @@ public static class PostgreSqlMultiHost
         // v16 P2-2：补 DbDataSource 抽象双注册（对齐 MySQL MultiHost ITM-113 模式与基础入口）——
         // 缺失时 WithStores 连接工厂解析 DbDataSource 抛 InvalidOperationException
         services.AddSingleton<System.Data.Common.DbDataSource>(dataSource0);
+// v19 P2-①：补具体型注册（Notifier 工厂 GetRequiredService<NpgsqlDataSource>() 依赖）
+        services.AddSingleton<NpgsqlDataSource>(dataSource0);
         return services;
     }
 
@@ -131,6 +133,8 @@ public static class PostgreSqlMultiHost
             // v16 P2-2：补 DbDataSource 抽象双注册（对齐 MySQL MultiHost ITM-113 模式与基础入口）——
             // 缺失时 WithStores 连接工厂解析 DbDataSource 抛 InvalidOperationException
             services.AddSingleton<System.Data.Common.DbDataSource>(dataSource1);
+            // v19 P2-①：补具体型注册
+            services.AddSingleton<NpgsqlDataSource>(dataSource1);
             return services;
         }
 
@@ -176,6 +180,8 @@ public static class PostgreSqlMultiHost
         // v16 P2-2：补 DbDataSource 抽象双注册（对齐 MySQL MultiHost ITM-113 模式与基础入口）——
         // 缺失时 WithStores 连接工厂解析 DbDataSource 抛 InvalidOperationException
         services.AddSingleton<System.Data.Common.DbDataSource>(dataSource2);
+// v19 P2-①：补具体型注册（Notifier 工厂 GetRequiredService<NpgsqlDataSource>() 依赖）
+services.AddSingleton<NpgsqlDataSource>(dataSource2);
         return services;
     }
 
@@ -206,6 +212,8 @@ public static class PostgreSqlMultiHost
         // v16 P2-2：补 DbDataSource 抽象双注册（对齐 MySQL MultiHost ITM-113 模式与基础入口）——
         // 缺失时 WithStores 连接工厂解析 DbDataSource 抛 InvalidOperationException
         services.AddSingleton<System.Data.Common.DbDataSource>(dataSource3);
+        // v19 P2-①：补具体型注册（Notifier 工厂 GetRequiredService<NpgsqlDataSource>() 依赖）
+        services.AddSingleton<NpgsqlDataSource>(dataSource3);
         return services;
     }
 

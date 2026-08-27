@@ -23,6 +23,7 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly PeriodicTimer _timer;
+    private bool _disposed; // v19 P2：Dispose 置位——ODE 终止循环的确定性信号
 
     protected PeriodicBackgroundProcessor(
         IServiceScopeFactory scopeFactory,
@@ -52,6 +53,13 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
                 // linked-CTS，其 OCE 不应计入 OnTickFailed（失败指标/日志不应记录取消），
                 // 也不应中断整个轮询循环。语义：静默忽略是设计性吞弃，非异常处理遗漏。
                 catch (OperationCanceledException) { /* 下游取消但 Host 未关停，静默忽略（见上方边界声明） */ }
+                catch (ObjectDisposedException) when (_disposed)
+                {
+                    // v19 P2 修复：Dispose 先于 stoppingToken 取消时（不规范宿主直调 Dispose），
+                    // WaitForNextTickAsync 持续抛 ODE 且被 catch(Exception) 吞掉形成无限异常循环
+                    // 烧 CPU。_disposed 标志（Dispose 设置）+ ODE = 确定性终止信号，break 退出。
+                    break;
+                }
                 catch (Exception ex) { OnTickFailed(ex); }
             }
         }
@@ -69,6 +77,7 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
 
     public override void Dispose()
     {
+        _disposed = true;
         _timer.Dispose();
         GC.SuppressFinalize(this);
         base.Dispose();
