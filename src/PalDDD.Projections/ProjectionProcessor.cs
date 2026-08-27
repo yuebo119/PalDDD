@@ -37,9 +37,12 @@ public sealed class ProjectionProcessor<TMessage>
         ArgumentNullException.ThrowIfNull(checkpointStore);
         // ITM-166 修复：checkpoint 租约时长（processingTimeout）负值集中校验——负值使
         // LeaseUntil = startedAt + timeout < startedAt（租约即刻过期，僵尸抢占语义失效）。
-        // Projection 无独立 Options 类，构造函数是进程内配置入口（Options 层等价物）；
-        // 允许 TimeSpan.Zero：租约即刻过期是测试"超时接管可重入"的合法语义
+        // Projection 无独立 Options 类，构造函数是进程内配置入口（Options 层等价物）
         // （对齐 DapperProjectionCheckpointStore.TryStartAsync 同款非负约束）。
+        // v27 P3 勘正：原注释"允许 TimeSpan.Zero：租约即刻过期"与实现矛盾——
+        // default(TimeSpan) == Zero，下方 `processingTimeout == default ? 5min : ...`
+        // 把显式 Zero 替换为 5 分钟默认，"即刻过期"语义当前不可达；如需支持须改用
+        // nullable 参数（TimeSpan?，破坏性变更留 v3.0）。仅勘正注释，不改行为。
         if (processingTimeout < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
 

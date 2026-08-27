@@ -17,6 +17,12 @@ namespace PalDDD.Serialization.Json;
 /// <c>GetTypeInfo&lt;T&gt;()</c> 路径，消除值类型序列化的装箱开销。<br/>
 /// 通过 <c>Utf8JsonWriter.Reset(IBufferWriter&lt;byte&gt;)</c> 复用 Writer，减少热路径分配。
 /// </summary>
+/// <remarks>
+/// ⚠️ <b>重入限制（v27 P3 声明）</b>：ThreadStatic 池（<c>_tlsWriter</c>/<c>_tlsBufferWriter</c>）
+/// 非重入安全——自定义 JsonConverter.Write 内回调同线程 <c>Serialize</c> 会清空外层缓冲
+/// （入口 <c>bufferWriter.Clear()</c> + <c>writer.Reset()</c> 使外层已写内容丢失）；
+/// 多态信封等嵌套序列化场景应使用独立实例或避开 converter 内回调。
+/// </remarks>
 public sealed class JsonMessageSerializer : IMessageSerializer
 {
     private readonly IMessageCatalog _messageCatalog;
@@ -120,6 +126,8 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         // 泛型路径）——KafkaBroker/RabbitMqBroker 的发布热路径恰走本重载，此前每次
         // SerializeToUtf8Bytes 内部新建 Writer/Buffer 分配；非泛型 JsonTypeInfo 重载
         // 与泛型同款池化路径，输出字节一致。
+        // v27 P3：本路径与 SerializePooled 共用同一 ThreadStatic 池——同样非重入安全
+        // （converter 内回调同线程 Serialize 会清空外层缓冲，详见类头重入限制声明）。
         var bufferWriter = _tlsBufferWriter;
         if (bufferWriter is null)
         {
@@ -180,6 +188,11 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     /// 使用 <c>Utf8JsonWriter.Reset(IBufferWriter&lt;byte&gt;)</c> 复用 Writer 的池化序列化路径。<br/>
     /// 消除每次 <c>SerializeToUtf8Bytes</c> 内部创建的 Writer 对象分配。
     /// </summary>
+    /// <remarks>
+    /// ⚠️ v27 P3：ThreadStatic 池非重入安全——自定义 JsonConverter.Write 内回调同线程
+    /// Serialize 会清空外层缓冲；多态信封等嵌套序列化场景应使用独立实例或避开 converter
+    /// 内回调（详见类头重入限制声明）。
+    /// </remarks>
     private static ReadOnlyMemory<byte> SerializePooled<TMessage>(
         TMessage message,
         System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage> typeInfo)

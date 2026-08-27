@@ -2,6 +2,7 @@
 // 🎯 EventLogPositionReserver — Hi/Lo 全局位置分配器（CAS 重试）
 // ─────────────────────────────────────────────────────────────
 using Microsoft.EntityFrameworkCore;
+using System.Data.Common;
 
 namespace PalDDD.EventLog;
 
@@ -163,7 +164,27 @@ public sealed class EventLogPositionReserver
                 catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
                 {
                     // 主键冲突 —— 另一个进程先插入了分配器行。重试。
+                    // v27 P3 修复（镜像 EventLogDbContext ITM-126 :270-273 aborted 重查降级）：
+                    // PG 显式事务内本 23505 使事务进入 aborted 状态，直接 continue 后下一迭代
+                    // SingleOrDefaultAsync 在 aborted 事务上抛 25P02（DbException）逃逸重试循环。
+                    // 形态：就地探测重查——失败（aborted）则 throw; 保留本原始冲突异常上抛
+                    // （不掩盖为误导性 retries-exhausted），成功则 continue 正常重试
                     context.Entry(allocator).State = EntityState.Detached;
+                    var requerySucceeded = false;
+                    try
+                    {
+                        _ = await context.GlobalPositionAllocators
+                            .AsNoTracking()
+                            .AnyAsync(a => a.Id == EventLogGlobalPositionAllocator.SingletonId, cancellationToken)
+                            .ConfigureAwait(false);
+                        requerySucceeded = true;
+                    }
+                    catch (DbException)
+                    {
+                        // PG aborted transaction（25P02）等重查失败——保留原始 DbUpdateException 语义
+                    }
+                    if (!requerySucceeded)
+                        throw;
                     continue;
                 }
 

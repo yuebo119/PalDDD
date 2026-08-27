@@ -1,16 +1,19 @@
 // ─────────────────────────────────────────────────────────────
-// ⚡ PipelineStateMachine — 替代 lambda 闭包链（零堆分配）
+// ⚡ PipelineStateMachine — 替代逐行为 async lambda 链的显式管道推进
 // ─────────────────────────────────────────────────────────────
-// 传统做法：每个行为产生一个编译器生成的闭包类（~72B/请求）
-// 状态机方案：1 个可复用实例（~40B），N×72B → 1×40B
+// v27 P3 勘正（原"零堆分配/每请求节省 ~360B"声称与 IL 不符）：每经过一个行为
+// 分配一个 Func 委托（ExecuteNextAsync 实例方法组无缓存，~64B/行为）；
+// 快路径省 AwaitAndBox 状态机装箱；总收益相对逐行为 async 链约省状态机分配
 //
 using System.Collections.Immutable;
 
 namespace PalDDD.CQRS;
 
-/// <summary>管道状态机 — 可重用实例，消除每个请求的闭包分配</summary>
+/// <summary>管道状态机 — 可重用实例，替代逐行为 async lambda 链</summary>
 /// <remarks>
-/// 💡 保留理由：替代 lambda 闭包链，每请求节省 ~360B 堆分配（5 行为典型场景）。
+/// 💡 保留理由：替代逐行为 async lambda 链。每行为一次 Func 委托分配（~64B，实例方法组
+///    不缓存——v27 P3 勘正，原"零闭包/每请求节省 ~360B"声称与 IL 不符），快路径省
+///    AwaitAndBox 状态机装箱；总收益相对逐行为 async 链约省状态机分配。
 ///    详见 docs/decisions/004-core-type-retention.md
 /// <para>
 /// ⚠️ <b>单请求独占语义：</b>实例的字段在每个 <see cref="Reset"/> 调用被完整覆盖（ behaviors/handler/request/ct/index 全部重置），

@@ -53,7 +53,7 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
         Dictionary.TryGetValue(value, out result);
 
     // ═══════════════════════════════════════════════════════════════
-    // AOT 安全注入点 — 源码生成器在静态构造函数中调用
+    // AOT 安全注入点 — 模块初始化器（[ModuleInitializer]，模块加载时触发）调用
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
