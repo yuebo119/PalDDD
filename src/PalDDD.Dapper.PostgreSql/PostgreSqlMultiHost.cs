@@ -60,7 +60,7 @@ public static class PostgreSqlMultiHost
         // 备机串与主库不一致时差异无法表达且被静默丢弃（故障转移后必然连接失败/连错库）。
         // Port 不校验：已编码进 Host 条目（host:port 语法，见 EncodeHostEntry 注释）。
         ThrowIfCredentialsMismatch(primaryBuilder, standbyBuilder, "standby");
-        if (standbyBuilder.Host is not null)
+        if (!string.IsNullOrWhiteSpace(standbyBuilder.Host)) // v20 F3：v19 B3 只改了 2/3 调用点，Failover 漏网
         {
             // ITM-132 修复：primary Port≠5432 时，未编码的备机 Host 会继承连接串共享 Port
             // （Npgsql 的 Port 只对未内嵌端口的主机生效），导致备机被连到主库端口——

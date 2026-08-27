@@ -33,6 +33,7 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
     private async Task<List<OutboxMessage>> QueryEligibleAsync(
         int batchSize, int maxRetryCount, bool asNoTracking, CancellationToken ct)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v20 C-1
         var now = GetUtcNow();
         var result = new List<OutboxMessage>(batchSize);
         var skip = 0;

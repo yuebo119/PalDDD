@@ -150,6 +150,17 @@
 - **B4** ChildSagaStep 泛型 `ExtractInput` 死代码删除——grep 全仓零调用方（唯一分发走 IInternalChildSagaStep 接口 object 版），镜像 :75 ExtractOutput 先例（十七轮"删一半留一半"的姊妹补全）
 - **B5** IsUniqueConstraintViolation 四份注释双口径统一——Inbox/Checkpoint 版原称"不含 2601/2627"与代码矛盾（代码含该分支），统一为 SagaStateStore 的"防御性保留"口径
 
+### 修复（v20 清偿，2026-08-27）
+
+- **C-1** EFCore Outbox 四方言 override 补 `ThrowIfNegativeOrZero(batchSize)` 守卫——基类 :46 守卫因 override 不调 base 而死码化（batchSize=0 → LIMIT 0 静默空返回）
+- **B-F3** PG MultiHost Failover 路径 :63 补 `IsNullOrWhiteSpace`（v19 B3 只改了 2/3 调用点，漏 Failover）
+- **B-F1** DapperInbox/Checkpoint 分类器补 SqlServer 2601/2627 分支——v19 B5 注释称含但代码无，代码侧补齐对齐 EventLog/Saga
+- **B-F2** MySqlMultiHost standby fail-fast 注释机理勘正——MySqlConnector 2.6.2 缺 Server 返空串非 localhost（片 B 探针实证）
+- **B-F4** MySqlPerformanceOptimizer 补 connection null 守卫×2（对齐 Sqlite ITM-165/195/220 家族）
+- **E-P3-2** Kafka E-1 catch 内补 `cts.Dispose()`（linked 注册即刻回收）
+- **A-P3-1** PeriodicBackgroundProcessor v19 注释机理勘正——WaitForNextTickAsync 位于 while 条件不在内层 try，其 ODE 直接终止循环（不可能无限循环）；ODE catch 分支实际守护 tick 内部 ODE
+- **A-P3-2** `_disposed` 加 volatile（Dispose 线程写/循环线程读 stale 窗口收口）
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）

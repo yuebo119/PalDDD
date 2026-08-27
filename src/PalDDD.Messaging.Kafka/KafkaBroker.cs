@@ -160,6 +160,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             // cts.Cancel 终止消费循环，consumer.Dispose 释放连接/组状态；consumeTask 尚未创建
             // （Task.Run 在下方），无 unobserved task 风险。释放后传播 ObjectDisposedException。
             cts.Cancel();
+            cts.Dispose(); // v20 E-P3-2：linked 注册即刻回收（原只 Cancel 留至 GC）
             consumer.Dispose();
             throw;
         }
