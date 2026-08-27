@@ -410,6 +410,43 @@ public sealed class StrategicDddAnalyzerTests
         await Assert.That(diagnostics.Any(d => d.Id == "PDDD004")).IsFalse();
     }
 
+    // P3 修复（二十四轮）测试：abstract ProcessManager 基类——sealed 与 abstract 互斥，
+    // shape 由最终 sealed 派生类消解，基类自身不再报 PDDD003
+    // （镜像 PDDD004 二十一轮 AbstractProjectionBase 修复，姊妹漏网）
+    [Test]
+    public async Task AbstractProcessManagerBase_DoesNotReportPddd003()
+    {
+        var diagnostics = await AnalyzeAsync(
+            """
+            using PalDDD.Core;
+            using PalDDD.Messaging;
+
+            [BoundedContext("ordering")]
+            [GenerateMessage(Name = "ordering.order-submitted.v1", SchemaVersion = 1)]
+            public sealed class OrderSubmitted : DomainEvent, IDomainEvent
+            {
+                public static string EventName => "ordering.order-submitted.v1";
+            }
+
+            [BoundedContext("ordering")]
+            [ProcessManager("ordering.order-fulfillment")]
+            public abstract class ProcessManagerBase : IEventHandler<OrderSubmitted>
+            {
+                public abstract ValueTask HandleAsync(OrderSubmitted @event, CancellationToken ct);
+            }
+
+            public sealed class OrderFulfillmentProcessManager : ProcessManagerBase
+            {
+                public override ValueTask HandleAsync(OrderSubmitted @event, CancellationToken ct)
+                    => ValueTask.CompletedTask;
+            }
+            """);
+
+        // 修复前：abstract ProcessManagerBase 因 !IsSealed 自身报 PDDD003；
+        // 修复后基类与派生类均零 PDDD003
+        await Assert.That(diagnostics.Any(d => d.Id == "PDDD003")).IsFalse();
+    }
+
     // P3 修复（二十一轮）测试：EventName 由接口 static virtual 默认实现提供——
     // 声明语法在接口上，BaseType 链查不到（原实现误报 PDDD015）；
     // 补 AllInterfaces 遍历后应能提取默认实现中的字面量。

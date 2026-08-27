@@ -128,7 +128,7 @@ TState>
                         await _orchestrator.CompensateAsync(sagaState, ct).ConfigureAwait(false);
                         sagaState.Status = SagaStatus.Compensated;
                         sagaState.CompletedAt = now;
-                        sagaState.CurrentState = "Compensated";
+                        sagaState.CurrentState = SagaState.CompensatedStateName;
                         compensationSucceeded = true;
                     }
                     catch (OperationCanceledException)
@@ -158,7 +158,7 @@ TState>
                         // 二轮评审 T6：改用共享 FailureReason.Normalize（截断 + F2 空白归一——
                         // 后者此前为 Saga 漏网姊妹，ex.Message 为 null 时旧内联版直接 NRE）。
                         sagaState.Error = Core.FailureReason.Normalize(ex.Message);
-                        sagaState.CurrentState = "CompensationFailed";
+                        sagaState.CurrentState = SagaState.CompensationFailedStateName;
                         sagaState.Status = SagaStatus.CompensationFailed;
                         sagaState.ErrorAt = now;
                     }

@@ -19,8 +19,11 @@ public sealed partial class StrategicDddAnalyzer
         // [BoundedContext] 均 Inherited=true，派生 ProcessManager 继承基类 [BoundedContext]
         // 时直接声明查不到（boundedContext 仅本类型），误报"未声明 [BoundedContext]"；
         // 与 PDDD001（chainBoundedContext）及 PDDD004（HasAttributeAlongBaseChain）口径对齐
+        // P3 修复（二十四轮）：sealed 轴豁免 abstract 基类——sealed 与 abstract 互斥，
+        // shape 由最终 sealed 派生类消解（镜像 PDDD004 二十一轮修复，姊妹漏网）；
+        // BoundedContext 链与 IEventHandler 接口轴对 abstract 仍检查（与 PDDD004 一致）
         if (processManager is not null
-            && (!type.IsSealed || chainBoundedContext is null || !ImplementsGenericInterface(type, EventHandlerInterfaceName)))
+            && ((!type.IsSealed && !type.IsAbstract) || chainBoundedContext is null || !ImplementsGenericInterface(type, EventHandlerInterfaceName)))
         {
             context.ReportDiagnostic(Diagnostic.Create(
                 InvalidProcessManagerShape,

@@ -6,10 +6,19 @@ namespace PalDDD.Transactions;
 /// <summary>Saga 状态基类 — 持久化到业务数据库，与领域事件在同一事务中</summary>
 public abstract class SagaState
 {
+    /// <summary>框架内置状态名（<see cref="CurrentState"/> 协议值）— 新建 Saga 的初始状态。</summary>
+    public const string InitialStateName = "Initial";
+
+    /// <summary>框架内置状态名（<see cref="CurrentState"/> 协议值）— SagaTimeoutProcessor 补偿成功的终态。</summary>
+    public const string CompensatedStateName = "Compensated";
+
+    /// <summary>框架内置状态名（<see cref="CurrentState"/> 协议值）— SagaTimeoutProcessor 补偿失败的终态。</summary>
+    public const string CompensationFailedStateName = "CompensationFailed";
+
     /// <summary>Saga 唯一标识</summary>
     public PalUlid SagaId { get; init; } = PalUlid.New();
 
-    private string _currentState = "Initial";
+    private string _currentState = InitialStateName;
 
     /// <summary>
     /// 当前状态名称。
