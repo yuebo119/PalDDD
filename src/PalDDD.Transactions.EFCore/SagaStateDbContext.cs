@@ -100,7 +100,16 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
             .Skip(skip).Take(batchSize)
             .ToListAsync(ct).ConfigureAwait(false);
             if (page.Count == 0) break;
-            states.AddRange(page.Where(s => s.LeasedUntil is null || s.LeasedUntil <= now));
+            // v27 P3 修复：翻页循环内对未选中实体 Detach——page 为 tracked 物化（LeasedUntil
+            // 过滤在内存做），未被租约选中的实体（Unchanged）滞留 ChangeTracker 逐 tick 累积
+            // （长驻 SagaProcessor 的 DbContext 内存膨胀）；选中项保持跟踪，供下方
+            // LeasedBy/LeasedUntil 变异 + SaveChanges 持久化。单次遍历分支替代
+            // AddRange + Contains 回查（O(n) 而非 O(n²)，语义等价）
+            foreach (var s in page)
+            {
+                if (s.LeasedUntil is null || s.LeasedUntil <= now) states.Add(s);
+                else Entry(s).State = EntityState.Detached;
+            }
             skip += batchSize;
         }
         if (states.Count > batchSize) states.RemoveRange(batchSize, states.Count - batchSize);
@@ -169,6 +178,17 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
             if (ChangeTracker.Entries<TState>().Any(e => ReferenceEquals(e.Entity, state)))
                 Entry(state).State = EntityState.Detached;
             return 0;
+        }
+        catch (DbUpdateException)
+        {
+            // v27 P2 修复：非并发瞬时故障（连接闪断/超时）上抛前 Detach——state 可能已被
+            // 调用方变异为 Modified（Version 已被 BumpVersion 递增），滞留 ChangeTracker 会被
+            // 同 scope 下一条 Saga 的 SaveChangesAsync 幽灵提交或抛并发异常污染后续批处理
+            // （SagaProcessor foreach 吞异常继续）——镜像 v26 Lease 路径与 IdempotencyDbContext
+            // 三十八轮全修样板
+            if (ChangeTracker.Entries<TState>().Any(e => ReferenceEquals(e.Entity, state)))
+                Entry(state).State = EntityState.Detached;
+            throw;
         }
     }
 

@@ -37,7 +37,7 @@ Pal.DDD 框架中有多个核心类型当前没有内部引用（或仅有少量
 
 - **文件**：`src/PalDDD.CQRS/PipelineStateMachine.cs`
 - **类型**：`PipelineStateMachine` 结构体
-- **保留理由**：替代 lambda 闭包链的可重用状态机。每请求分配从 N×72B（lambda 闭包）降为 ~40B（单一结构体）。
+- **保留理由**：替代逐行为 async lambda 链的可重用状态机。每行为一次 Func 委托分配（~64B，实例方法组不缓存），快路径省 AwaitAndBox 状态机装箱；总收益相对逐行为 async 链约省状态机分配（v27 P3 勘正——原"每请求分配从 N×72B（lambda 闭包）降为 ~40B"口径与 IL 不符：状态机为 class 非结构体，且非零闭包）。
 
 ### 6. ExpectedStreamVersion — 事件流版本预期
 

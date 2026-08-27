@@ -205,4 +205,24 @@ public sealed class GeneratedIdentityTests
         var text = default(TenantKey).ToString();
         await Assert.That(text).IsEqualTo(string.Empty);
     }
+
+    // ── v27 P3 生成器族：string Id 的 default 结构 JsonWrite 防 ANE ──
+
+    [Test]
+    public async Task StringIdentity_DefaultJsonWrite_WritesNullTokenInsteadOfThrowing()
+    {
+        // v27 P3 生成器族：default(TenantKey).Value == null——原生成物 Write 统一生成
+        // WriteStringValue(value.Value)，null 时抛 ArgumentNullException；修复后 string
+        // 分支 default 写 null token（对齐 v26 ToStringBody 的 default 防御）
+        var converter = new TenantKeyJsonConverter();
+        var output = new ArrayBufferWriter<byte>();
+        using var writer = new Utf8JsonWriter(output);
+
+        converter.Write(writer, default, JsonSerializerOptions.Default);
+        writer.Flush();
+
+        var reader = new Utf8JsonReader(output.WrittenSpan);
+        await Assert.That(reader.Read()).IsTrue();
+        await Assert.That(reader.TokenType).IsEqualTo(JsonTokenType.Null);
+    }
 }

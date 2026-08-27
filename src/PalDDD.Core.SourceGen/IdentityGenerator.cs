@@ -563,7 +563,16 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
         """,
         "int" => "        writer.WriteNumberValue(value.Value);",
         "long" => "        writer.WriteNumberValue(value.Value);",
-        "string" => "        writer.WriteStringValue(value.Value);",
+        // v27 P3 生成器族：string Id 的 default 结构（Value == null）显式 null 防御
+        // （对齐 v26 ToStringBody 的 default 防御）——net11.0 实测 WriteStringValue(null)
+        // 已写 null token 不抛 ANE，本分支为契约锁定（显式 null 语义，不依赖框架对
+        // null 的隐式处理）。void 写方法不能套三元（分支类型 void 不编译），生成 if/else
+        "string" => """
+                if (value.Value is null)
+                    writer.WriteNullValue();
+                else
+                    writer.WriteStringValue(value.Value);
+        """,
         _ => "        throw new JsonException(\"Unsupported identity source type.\");"
     };
 

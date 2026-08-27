@@ -208,6 +208,15 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                     await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
                 }
             }
+            catch (ObjectDisposedException)
+            {
+                // v27 P3 修复：句柄释放（AsyncSubscription.DisposeAsync → linkedCts.Dispose()）后
+                // in-flight 投递访问 linkedCts.Token 抛 ODE，原落入下方通用 catch 被记 Error 级
+                // "Failed to handle"——关停竞态是预期路径，应为 Warning 语义
+                // （subscription disposed, in-flight delivery discarded），不 requeue
+                _logger.Warning($"Subscription disposed while handling {typeof(TMessage).Name} message, in-flight delivery discarded: {queueName}");
+                await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+            }
             catch (OperationCanceledException)
             {
                 // P2 定案（匿名队列 requeue 语义）：本 Broker 的队列为 exclusive+autoDelete——

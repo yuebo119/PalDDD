@@ -139,10 +139,11 @@ public sealed class Dispatcher
 
     /// <summary>执行完整的管道链：行为1 → 行为2 → ... → Handler</summary>
     /// <remarks>
-    /// 使用 <see cref="PipelineStateMachine"/> 替代闭包链：<br/>
-    /// — 零闭包分配（原每个行为 ~72B 的编译器生成闭包类）<br/>
+    /// 使用 <see cref="PipelineStateMachine"/> 替代逐行为 async lambda 链：<br/>
+    /// — 每行为一次 Func 委托分配（~64B，实例方法组不缓存——v27 P3 勘正，原"零闭包
+    ///   分配（每行为 ~72B 编译器生成闭包类）"与 IL 不符）<br/>
     /// — 零 LINQ 迭代器分配（原 Where() ~40B）<br/>
-    /// — 每次请求创建新状态机实例（~40B），确保线程安全（Dispatcher 为 Singleton）
+    /// — 快路径省 AwaitAndBox 状态机装箱；每次请求创建新状态机实例（~40B），确保线程安全（Dispatcher 为 Singleton）
     /// </remarks>
     private async ValueTask<object?> ExecutePipelineAsync(Type requestType, IBaseRequest request, CancellationToken ct)
     {
