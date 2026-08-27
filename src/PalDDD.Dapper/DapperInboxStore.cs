@@ -216,6 +216,13 @@ public sealed class DapperInboxStore : IInboxStore
             if (typeName.Equals("SqliteException", StringComparison.Ordinal)
                 && inner.Message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
                 return true;
+
+            // v20 F1：补 SqlServer 2601/2627 分支——v19 B5 注释称含但代码无（EventLog/Saga
+            // 真含），代码侧补齐对齐。DapperDbType 无 SqlServer 值现状下属防御性保留。
+            if (typeName.Equals("SqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int sqlServerNumber
+                && (sqlServerNumber == 2601 || sqlServerNumber == 2627))
+                return true;
         }
         return false;
     }

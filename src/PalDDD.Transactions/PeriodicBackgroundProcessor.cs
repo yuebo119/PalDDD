@@ -23,7 +23,7 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly PeriodicTimer _timer;
-    private bool _disposed; // v19 P2：Dispose 置位——ODE 终止循环的确定性信号
+    private volatile bool _disposed; // v19 P2 + v20 volatile：Dispose 线程写/循环线程读的 stale 窗口收口
 
     protected PeriodicBackgroundProcessor(
         IServiceScopeFactory scopeFactory,
@@ -55,9 +55,9 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
                 catch (OperationCanceledException) { /* 下游取消但 Host 未关停，静默忽略（见上方边界声明） */ }
                 catch (ObjectDisposedException) when (_disposed)
                 {
-                    // v19 P2 修复：Dispose 先于 stoppingToken 取消时（不规范宿主直调 Dispose），
-                    // WaitForNextTickAsync 持续抛 ODE 且被 catch(Exception) 吞掉形成无限异常循环
-                    // 烧 CPU。_disposed 标志（Dispose 设置）+ ODE = 确定性终止信号，break 退出。
+                    // v20 A-P3-1 机理勘正：WaitForNextTickAsync 位于 while 条件不在内层 try，其
+                    // ODE 直接终止循环（不可能形成无限循环）。本分支守护的是 ExecuteTickAsync
+                    // 内部的 ODE（如 tick 内对象已释放）——_disposed 标志使终止确定性成立。
                     break;
                 }
                 catch (Exception ex) { OnTickFailed(ex); }

@@ -18,6 +18,7 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
         int maxRetryCount,
         CancellationToken ct)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v20 C-1：override 不调 base 使基类守卫死码化——四处补齐
         // 优化（二十四轮 OP-5）：可组合 FromSql——分页由 EF 生成（删手工 LIMIT）
         // 优化（二十五轮 API 扫描 EF-4）：AsNoTracking——只读契约（接口 doc 保证不进
         // Mark*+SaveChanges）；违反契约的突变将静默丢失

@@ -65,11 +65,12 @@ public static class MySqlMultiHost
         }
 
         // 合并主机列表（凭据/端口/库已验证一致，取 primary 的即可）
-        // v19 P2-②：standby 串缺 Server= 时 builder 默认 "localhost" 被并入列表——
-        // 故障转移静默指向错误节点。fail-fast 对齐 PG 姊妹 EncodeHostEntry。
+        // v19 P2-② + v20 F2 机理勘正：standby 串缺 Server= 时 MySqlConnector 返回<b>空串</b>非
+        // "localhost"（片 B 探针实证 2.6.2；PG 同构 ITM-262）——空条目并入列表使故障转移静默
+        // 失败。fail-fast 对齐 PG 姊妹 EncodeHostEntry。
         if (string.IsNullOrWhiteSpace(standbyBuilder.Server))
             throw new InvalidOperationException(
-                "Standby connection string is missing 'Server='. Failover cannot silently target localhost.");
+                "Standby connection string is missing 'Server='. Failover cannot silently include an empty host.");
         primaryBuilder.Server = $"{primaryBuilder.Server},{standbyBuilder.Server}";
 
         // 故障转移模式：默认先连第一个，失败再试后续

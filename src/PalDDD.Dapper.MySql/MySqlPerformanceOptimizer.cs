@@ -46,6 +46,7 @@ public static class MySqlPerformanceOptimizer
     /// </remarks>
     public static void Optimize(MySqlConnection connection)
     {
+        ArgumentNullException.ThrowIfNull(connection); // v20 F4：对齐 SqlitePerformanceOptimizer 守卫族
         if (connection.State != System.Data.ConnectionState.Open) connection.Open(); // P3 修复：幂等开连接
 
         using var cmd = connection.CreateCommand();
@@ -68,6 +69,7 @@ public static class MySqlPerformanceOptimizer
     /// </remarks>
     public static void SetUtf8mb4(MySqlConnection connection)
     {
+        ArgumentNullException.ThrowIfNull(connection); // v20 F4：对齐 SqlitePerformanceOptimizer 守卫族
         if (connection.State != System.Data.ConnectionState.Open) connection.Open(); // P3 修复：幂等开连接
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci";

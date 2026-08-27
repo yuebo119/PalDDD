@@ -29,6 +29,7 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
         int maxRetryCount,
         CancellationToken ct)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v20 C-1：override 不调 base 使基类守卫死码化——四处补齐
         // 优化（二十四轮 OP-5）：可组合 FromSql——OrderBy/Take 由 EF 生成 PG LIMIT
         // 优化（二十五轮 API 扫描 EF-2）：AsNoTracking——只读契约（接口 doc 保证不进
         // Mark*+SaveChanges）；违反契约的突变将静默丢失
