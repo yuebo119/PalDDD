@@ -30,6 +30,10 @@ public static class PostgreSqlReportHelper
     // 预编译 SearchValues — CSV 转义检测零分配
     private static readonly SearchValues<char> s_csvSpecial = SearchValues.Create(",\"\n\r");
 
+    // v27 P3（B 片 N6）：JSONL 行分隔符缓存——原每行 "\n"u8.ToArray() 分配一个新 byte[1]，
+    // 百万行导出即百万次短命分配（GC gen0 压力线性放大）；静态只读字段一次分配全程复用
+    private static readonly byte[] s_jsonLinesNewline = "\n"u8.ToArray();
+
     // ── CSV 导出 ──
 
     /// <summary>流式导出 CSV（支持百万级行，O(1) 内存）</summary>
@@ -136,7 +140,7 @@ public static class PostgreSqlReportHelper
             }
             jsonWriter.WriteEndObject();
             jsonWriter.Flush();
-            await stream.WriteAsync("\n"u8.ToArray(), ct).ConfigureAwait(false); // v21 B-3 勘误放弃：u8 是 ReadOnlySpan，WriteAsync 收 ReadOnlyMemory 无隐式转换
+            await stream.WriteAsync(s_jsonLinesNewline, ct).ConfigureAwait(false); // v21 B-3 勘误放弃：u8 是 ReadOnlySpan，WriteAsync 收 ReadOnlyMemory 无隐式转换；v27 P3（B 片 N6）经静态缓存字段消除每行分配
             jsonWriter.Reset();
             rowCount++;
         }

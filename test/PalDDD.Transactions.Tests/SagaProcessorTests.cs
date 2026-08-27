@@ -257,4 +257,20 @@ public sealed class SagaProcessorTests
             .Throws<InvalidOperationException>();
         await Assert.That(state.CurrentState).IsNotEqualTo("Approved");
     }
+
+    [Test]
+    public void RegisterInterrupted_AfterInvalidate_RejectsGhostReRegistration()
+    {
+        // v27 P2 探针：失效（超时补偿）后的"幽灵再注册"必须被拒——失效后仍飞行中的
+        // ResumeDispatch 在旧实例上触发下一个 InterruptStep（多阶段 HITL）时注册的
+        // 条目是幽灵条目，后续决策会经它在已回滚 Saga 上继续执行并假成功
+        var manager = new DefaultSagaManager();
+        var sagaId = PalUlid.New();
+
+        manager.InvalidateInterrupted(sagaId);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            manager.RegisterInterrupted(sagaId, "ghost-reentry",
+                static (decision, ct) => ValueTask.FromResult<SagaState>(null!)));
+    }
 }

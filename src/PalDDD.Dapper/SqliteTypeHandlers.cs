@@ -75,7 +75,12 @@ public sealed class SqliteDateTimeOffsetTypeHandler : SqlMapper.TypeHandler<Date
         ArgumentNullException.ThrowIfNull(value);
         return value switch
         {
-            string s => DateTimeOffset.Parse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+            // v27 P3（B 片 N10）：解析样式统一 AssumeUniversal——与姊妹 SqliteRowFactory.
+            // ParseDateTimeOffset 的 string 分支对齐（原 RoundtripKind 为两文件仅存分叉）。
+            // 库存均经 SetValue 以 "O" 带偏移格式写入，两种样式 round-trip 等价；差异仅在
+            // 无偏移脏数据（手工运维写入等）：AssumeUniversal 按 UTC 解释（偏移 +00:00），
+            // 与库内 UTC 存储约定一致且不依赖宿主时区，语义统一。
+            string s => DateTimeOffset.Parse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal),
             DateTimeOffset d => d,
             // P1 修复（七轮评审）：Npgsql timestamptz / MySqlConnector DATETIME 的
             // GetValue 返回 DateTime——此 handler 经 [ModuleInitializer] 全局注册，

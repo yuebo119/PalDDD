@@ -51,17 +51,30 @@ public static class MySqlMultiHost
         var primaryBuilder = new MySqlConnectionStringBuilder(primaryConnectionString);
         var standbyBuilder = new MySqlConnectionStringBuilder(standbyConnectionString);
 
-        // P2 定案（failover 参数丢弃）：MySQL 连接串的 Port/User/Password/Database
+        // P2 定案（failover 参数丢弃）：MySQL 连接串的 User/Password/Database
         // 对主机列表内所有节点统一生效——standby 与 primary 不一致时无法表达，
         // 静默丢弃会导致故障转移后连接失败。此处快速失败并说明约束。
-        if (standbyBuilder.Port != primaryBuilder.Port
-            || !string.Equals(standbyBuilder.UserID, primaryBuilder.UserID, StringComparison.Ordinal)
+        if (!string.Equals(standbyBuilder.UserID, primaryBuilder.UserID, StringComparison.Ordinal)
             || !string.Equals(standbyBuilder.Password, primaryBuilder.Password, StringComparison.Ordinal)
             || !string.Equals(standbyBuilder.Database, primaryBuilder.Database, StringComparison.Ordinal))
         {
             throw new ArgumentException(
-                "standby 与 primary 的 Port/User/Password/Database 必须一致：MySQL 连接串的这些参数对主机列表内全部节点统一生效，"
-                + "差异无法表达且会被静默丢弃（故障转移后必然连接失败）。请为两节点配置相同账号/端口/库，或使用自定义多主机扩展。");
+                "standby 与 primary 的 User/Password/Database 必须一致：MySQL 连接串的这些参数对主机列表内全部节点统一生效，"
+                + "差异无法表达且会被静默丢弃（故障转移后必然连接失败）。请为两节点配置相同账号/库，或使用自定义多主机扩展。");
+        }
+        // v27 P3（B 片 N8）：Port 一致性校验改内嵌端口感知——MySqlConnector 的 Server 支持
+        // "host:port" 内嵌语法（内嵌端口不吸收进 Port 属性，v26 H5 已证），合并后未内嵌端口
+        // 的条目统一用 primary 的共享 Port。归一化判定（解析规则与 NormalizeServerEntry 同款，
+        // 经 HasHostWithoutEmbeddedPort）：standby 全部条目均内嵌端口 → 其 Port 声明不参与实际
+        // 连接，跳过比较（原属性直比会误拒实际无冲突的配置，如 primary "Server=db1;Port=3306"
+        // + standby "Server=db2:3306;Port=3307"——实际端口一致仅属性不同）；standby 存在未
+        // 内嵌条目（依赖共享 Port）→ 保持原有一致性要求，差异快速失败。
+        if (HasHostWithoutEmbeddedPort(standbyBuilder.Server) && standbyBuilder.Port != primaryBuilder.Port)
+        {
+            throw new ArgumentException(
+                "standby 与 primary 的 Port 必须一致：MySQL 连接串的共享 Port 对未内嵌端口的主机列表条目统一生效，"
+                + "差异无法表达且会被静默丢弃（合并后 standby 的未内嵌条目被静默改用 primary 端口，故障转移后必然连接失败）。"
+                + "请统一端口、改用 Server 内嵌 \"host:port\" 语法逐条目声明，或使用自定义多主机扩展。");
         }
 
         // 合并主机列表（凭据/端口/库已验证一致，取 primary 的即可）
@@ -71,15 +84,17 @@ public static class MySqlMultiHost
         if (string.IsNullOrWhiteSpace(standbyBuilder.Server))
             throw new InvalidOperationException(
                 "Standby connection string is missing 'Server='. Failover cannot silently include an empty host.");
-        // v21 B-2：primary 缺 Server 时 Server 属性为空串（v20 F2 自证）——合并产出
-        // 前导空条目。镜像 PG ITM-110 规范化：primary 空则直接赋 standby。
+        // v21 B-2（v27 P3 B 片 N7 勘正行为）：primary 缺 Server 时 Server 属性为空串
+        //（v20 F2 自证）——原"空则直接赋 standby"静默把一主一备注册退化为 standby 单机，
+        // 配置错误被吞；改 fail-fast（镜像 v26 H4 PostgreSqlMultiHost，见下方合并处）。
         // v26 P3 H5：拼接前 Server 查重 fail-fast（镜像 PG Failover 入口 v25 C9 查重）——
         // primary/standby 同指一机时拼接产生重复 Server 条目（如 "mysql1,mysql1"），
         // FailOver 把同一实例视作两个节点轮试，故障转移语义错乱。归一化经
         // NormalizeServerEntry：MySqlConnector 的 Server 支持 "server:port" 内嵌语法，
         // 属性返回原始串（内嵌端口不吸收进 Port 属性），须拆出 (裸名, port) 再比较；未
         // 内嵌端口时回退共享 Port（MySqlConnector 语义：Port 只对未内嵌端口的主机生效）。
-        // primary 列表空条目（primary 缺 Server 的 Split 产物）跳过，不改变 v21 B-2 行为。
+        // primary 列表空条目（primary 缺 Server 的 Split 产物）跳过——该输入随后由下方
+        // N7 fail-fast 拦截，此处跳过仅为不误抛"重复"异常。
         var (standbyServer, standbyPort) = NormalizeServerEntry(standbyBuilder.Server, (int)standbyBuilder.Port);
         foreach (var raw in primaryBuilder.Server.Split(','))
         {
@@ -91,9 +106,12 @@ public static class MySqlMultiHost
                     + "多主机拼接将产生重复 Server 条目（如 \"mysql1,mysql1\"），FailOver 把同一实例视作两个节点轮试，"
                     + "故障转移语义错乱。请为 standby 指定不同主机，或使用自定义多主机扩展。");
         }
-        primaryBuilder.Server = string.IsNullOrWhiteSpace(primaryBuilder.Server)
-            ? standbyBuilder.Server
-            : $"{primaryBuilder.Server},{standbyBuilder.Server}";
+        // v27 P3（B 片 N7）：primary 缺 Server fail-fast——异常类型与消息风格对齐同文件
+        // standby 缺 Server 先例（v20 F2/v21 B-1 的 InvalidOperationException）
+        if (string.IsNullOrWhiteSpace(primaryBuilder.Server))
+            throw new InvalidOperationException(
+                "Primary connection string is missing 'Server='. Failover cannot silently substitute the standby as the only host.");
+        primaryBuilder.Server = $"{primaryBuilder.Server},{standbyBuilder.Server}";
 
         // 故障转移模式：默认先连第一个，失败再试后续
         primaryBuilder.LoadBalance = MySqlLoadBalance.FailOver;
@@ -126,9 +144,15 @@ public static class MySqlMultiHost
 
         var builder = new MySqlConnectionStringBuilder(connectionString)
         {
-            LoadBalance = MySqlLoadBalance.RoundRobin,
-            Pooling = true
+            LoadBalance = MySqlLoadBalance.RoundRobin
         };
+        // v27 P3（B 片 N9）：Pooling 条件化（对照 W2 MaxAutoPrepare 条件化模式——仅未显式
+        // 设置时赋默认）——原无条件 Pooling = true 覆盖用户显式的 "Pooling=false"（调试/
+        // 排障禁用连接池被静默重启）。MySqlConnector 默认 Pooling=true，未显式设置时本就
+        // 生效；bool 默认值与显式 true 不可区分（无法走 == 默认值 判定式），经 TryGetValue
+        // 判定串内是否显式出现 Pooling 关键字——仅补默认、不覆盖显式值。
+        if (!builder.TryGetValue("Pooling", out _))
+            builder.Pooling = true;
 
         var dataSource = new MySqlDataSourceBuilder(builder.ConnectionString).Build();
 
@@ -153,9 +177,11 @@ public static class MySqlMultiHost
 
         var builder = new MySqlConnectionStringBuilder(connectionString)
         {
-            LoadBalance = MySqlLoadBalance.LeastConnections,
-            Pooling = true
+            LoadBalance = MySqlLoadBalance.LeastConnections
         };
+        // v27 P3（B 片 N9）：同 LoadBalance 入口——Pooling 条件化，不覆盖显式 "Pooling=false"
+        if (!builder.TryGetValue("Pooling", out _))
+            builder.Pooling = true;
 
         var dataSource = new MySqlDataSourceBuilder(builder.ConnectionString).Build();
 
@@ -191,5 +217,27 @@ public static class MySqlMultiHost
             return (entry[..colon], embedded);
         }
         return (entry, fallbackPort);
+    }
+
+    /// <summary>
+    /// v27 P3（B 片 N8）：判定 Server 多主机列表是否存在<b>未内嵌端口</b>的条目（解析规则与
+    /// <see cref="NormalizeServerEntry"/> 同款：唯一冒号且后缀可解析为整数才算内嵌）。
+    /// 未内嵌条目依赖连接串共享 Port——合并后统一取 primary 的 Port，两端共享 Port 不一致时
+    /// 此类条目被静默改端口。空条目同样返回 true（空条目不携带端口，由缺 Server fail-fast 拦截）。
+    /// </summary>
+    /// <param name="serverList">Server 属性原始值（可为多主机逗号分隔列表，内部逐项 Trim）。</param>
+    internal static bool HasHostWithoutEmbeddedPort(string? serverList)
+    {
+        foreach (var raw in (serverList ?? "").Split(','))
+        {
+            var entry = raw.Trim();
+            var colon = entry.LastIndexOf(':');
+            if (colon < 0 || entry.IndexOf(':') != colon
+                || !int.TryParse(entry.AsSpan(colon + 1), out _))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 }

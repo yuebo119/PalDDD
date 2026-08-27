@@ -88,9 +88,11 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
         // v26 P3 守卫族：leaseDuration 边界守卫——v25 只修了 EFCore/PalORM 两姊妹
-        //（SagaStateDbContext/PalOrmSagaStateStore LeaseActiveSagasAsync 同型漏网），
-        // 本版 until = now + leaseDuration 同样受非正租约（租约即刻过期/永不过期语义错乱）
-        // 与秒数溢出影响；消息与双检形态对齐两姊妹同款
+        //（SagaStateDbContext/PalOrmSagaStateStore LeaseActiveSagasAsync 同型漏网）。
+        // v27 P3 勘正（B 片）：原注释"同样受秒数溢出影响"失实——Dapper 版绑定原生 @until 参数
+        //（ToTimeParam 产 DateTimeOffset/"O" 串），无秒数换算，上界守卫无本版实害路径；守卫
+        // 保留，理由改"防御直调路径 + 与姊妹对称"。非正租约（租约即刻过期/永不过期语义错乱）
+        // 为实害。消息与双检形态对齐两姊妹同款
         if (leaseDuration <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration must be greater than zero.");
         if (leaseDuration.TotalSeconds > int.MaxValue)

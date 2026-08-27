@@ -165,10 +165,12 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         DateTimeOffset failedAt,
         CancellationToken ct = default)
     {
-        // v22 B 批：截断兜底——对齐 Outbox 2040（PD24）
-        if (failureReason.Length > 2040) failureReason = failureReason[..2040];
         ArgumentNullException.ThrowIfNull(checkpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+        // v22 B 批：截断兜底——对齐 Outbox 2040（PD24）
+        // v27 P3（B 片 N2）：守卫前置——原截断先于 null/空白守卫执行，null 输入抛 NRE 而非
+        // ArgumentException（对照姊妹 DapperOutboxStore.MarkDead 的守卫在前形态）
+        if (failureReason.Length > 2040) failureReason = failureReason[..2040];
 
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
         var rows = await connection.ExecuteAsync(

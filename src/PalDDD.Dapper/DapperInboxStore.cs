@@ -152,11 +152,13 @@ public sealed class DapperInboxStore : IInboxStore
 
     public async ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
     {
-        // v22 B 批：截断兜底——对齐 DapperOutboxStore.MarkDead/ReleaseForRetry 的 2040（PD24 管线截断族）
-        if (failureReason.Length > 2040) failureReason = failureReason[..2040];
         // ITM-163 修复：补 message null 守卫（failureReason 空白守卫已存在）
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+        // v22 B 批：截断兜底——对齐 DapperOutboxStore.MarkDead/ReleaseForRetry 的 2040（PD24 管线截断族）
+        // v27 P3（B 片 N1）：守卫前置——原截断先于 null/空白守卫执行，null 输入抛 NRE 而非
+        // ArgumentException（对照姊妹 DapperOutboxStore.MarkDead 的守卫在前形态）
+        if (failureReason.Length > 2040) failureReason = failureReason[..2040];
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // P2/P3 修复（十七轮）：CommandDefinition 传 ct（见 TryStartProcessingAsync 同款注释）
         // 三十八轮 P2 修复：同 MarkProcessedAsync——processing_started_at 抢占 token 守卫

@@ -138,6 +138,25 @@ public static class PostgreSqlReadWriteRouterExtensions
             {
                 List<string> hosts = [];
                 var primaryCsBuilder = new NpgsqlConnectionStringBuilder(primaryConnectionString);
+                // v27 P3（B 片 N4-①）：primary 缺 Host（Npgsql 返回空串——ITM-262 自证）时原
+                // 拼接三元分支静默以副本列表充当主机列表，读库合并串缺主库 Host，读写分离
+                // 退化为纯副本——fail-fast（镜像 v26 H4 PostgreSqlMultiHost.ReadWriteSplit 同款）
+                var primaryHost = primaryCsBuilder.Host;
+                if (string.IsNullOrWhiteSpace(primaryHost))
+                    throw new ArgumentException(
+                        "Primary connection string is missing 'Host='. Read-write split cannot silently substitute replicas as the host list.",
+                        nameof(primaryConnectionString));
+                // v27 P3（B 片 N4-②）：归一化主机集合查重——副本与 primary 同指一机（或副本互相
+                // 重复）时拼接产生重复 Host 条目，LoadBalanceHosts=true 轮询把同一实例计入多份
+                // 权重（镜像 MultiHost v26 H1；归一化经 NormalizeHostEntry 消除内嵌 host:port
+                // 语法差异，主机名 ToUpperInvariant 后以 tuple 判等——DNS 大小写不敏感）
+                var seenHosts = new HashSet<(string Host, int Port)>();
+                foreach (var raw in primaryHost.Split(','))
+                {
+                    var (primaryEntryHost, primaryEntryPort) = PostgreSqlMultiHost.NormalizeHostEntry(raw, primaryCsBuilder.Port);
+                    if (primaryEntryHost.Length == 0) continue;
+                    seenHosts.Add((primaryEntryHost.ToUpperInvariant(), primaryEntryPort));
+                }
                 foreach (var (cs, index) in replicaConnectionStrings.Select((c, i) => (c, i)))
                 {
                     var sb = new NpgsqlConnectionStringBuilder(cs);
@@ -158,6 +177,15 @@ public static class PostgreSqlReadWriteRouterExtensions
                         throw new ArgumentException(
                             $"Replica connection string at index {index} has no Host. Each replica must specify a Host.",
                             nameof(replicaConnectionStrings));
+                    // v27 P3（B 片 N4-②）：hosts.Add 前比对已收集集合（primary 主机条目 + 先前
+                    // 并入的副本）——归一化后重复即 fail-fast，不把重复条目拼进 reader 主机列表
+                    var (replicaHost, replicaPort) = PostgreSqlMultiHost.NormalizeHostEntry(sb.Host, sb.Port);
+                    if (!seenHosts.Add((replicaHost.ToUpperInvariant(), replicaPort)))
+                        throw new ArgumentException(
+                            $"Replica connection string at index {index} Host '{replicaHost}:{replicaPort}' duplicates the primary host list or another replica: "
+                            + "multi-host concatenation would produce duplicate Host entries (e.g. \"pg1,pg1\"), LoadBalanceHosts counting the same instance multiple times. "
+                            + "Specify a distinct host for each replica.",
+                            nameof(replicaConnectionStrings));
                     // ITM-132 修复：primary Port≠5432 时，未编码的副本 Host 会继承 reader 连接串共享 Port
                     // （Npgsql 的 Port 只对未内嵌端口的主机生效），读流量/故障转移落到错误实例——
                     // 统一经 EncodeHostEntry 编码：primary Port≠5432 时全部 Host 显式 host:port（含显式 5432）。
@@ -169,10 +197,11 @@ public static class PostgreSqlReadWriteRouterExtensions
                     var readerCs = primaryConnectionString;
                     var psb = new NpgsqlConnectionStringBuilder(readerCs);
                     // ITM-110 姊妹路径修复（验证轮返工）：主库串无 Host 时原 `psb.Host += ",..."`
-                    // 产生前导逗号（",replica"），Npgsql 解析出空主机条目——空则直接赋值
-                    psb.Host = string.IsNullOrWhiteSpace(psb.Host)
-                        ? string.Join(",", hosts)
-                        : psb.Host + "," + string.Join(",", hosts);
+                    // 产生前导逗号（",replica"），Npgsql 解析出空主机条目
+                    // v27 P3（B 片 N4-①）：primary Host 已在副本循环前 fail-fast 校验非空
+                    //（primaryHost 与 psb.Host 同源 primaryConnectionString）——空赋值分支
+                    // 不可达，删除三元改直拼（对齐 MultiHost v26 H4 后形态）
+                    psb.Host = primaryHost + "," + string.Join(",", hosts);
                     psb.LoadBalanceHosts = true;
                     // ITM-181 修复（二十九轮）：any → read-only——修复前 any 对列表内主机
                     // 轮询（含写主库），读流量负载均衡到 write master，读写分离稀释、主库
