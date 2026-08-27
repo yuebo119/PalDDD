@@ -144,6 +144,12 @@
 - **三方言 jsonTypeInfo 断裂注释缝合**：v18 勘正插入原句中间造成的句子错乱，三方言统一重写为通顺版本
 - **SagaTests 注释勘正**：叠词"该路径该路径"与 :207 残缺悬句修正
 
+### 修复（v19 B 批清偿，2026-08-27 · 第二批）
+
+- **B3** PostgreSqlMultiHost `if (sb.Host is not null)` 恒真死分支修正——Npgsql 缺 Host 返回空串非 null（ITM-262 同包实证），改为显式 `IsNullOrWhiteSpace` 使守卫在调用点可见（真实防线原本藏在 EncodeHostEntry callee 内）
+- **B4** ChildSagaStep 泛型 `ExtractInput` 死代码删除——grep 全仓零调用方（唯一分发走 IInternalChildSagaStep 接口 object 版），镜像 :75 ExtractOutput 先例（十七轮"删一半留一半"的姊妹补全）
+- **B5** IsUniqueConstraintViolation 四份注释双口径统一——Inbox/Checkpoint 版原称"不含 2601/2627"与代码矛盾（代码含该分支），统一为 SagaStateStore 的"防御性保留"口径
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）

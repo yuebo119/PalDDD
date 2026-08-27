@@ -192,7 +192,7 @@ public sealed class DapperInboxStore : IInboxStore
     /// <summary>
     /// 三十八轮 P1 回归修复：判定异常是否为唯一约束冲突（MySQL 1062/1586、PG 23505、SQLite UNIQUE）。
     /// 仅捕获重复键——其他错误原样上抛。与 DapperEventLog/DapperSagaStateStore 同型
-    /// （本 Store 无 SqlServer 方言，不含 2601/2627 分支）。
+    /// （含 SqlServer 2601/2627 分支——v19 B5 勘正：原称"不含"与代码矛盾，分支为跨 provider 鸭子类型防御性保留，与 SagaStateStore 口径统一）。
     /// </summary>
     [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075:This",
         Justification = "Provider 异常鸭子类型判定。裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级）。")]
