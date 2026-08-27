@@ -55,6 +55,14 @@ public sealed class Dispatcher
         {
             // lock 内已有全屏障——二次检查普通读即可
             if (_frozen is { } f2) return f2;
+            // v29 P2 修复：空注册表不冻结——用户 HostedService 先于 HandlerRegistrar 启动
+            // （IHostedService 按注册顺序执行 StartAsync）时发命令会隐式冻结空表并清空
+            // _entries，Registrar 随后 Register 抛 ObjectDisposedException 使整个 host 启动
+            // 崩溃。空表冻结无任何价值（永久空表）；此处返回临时空冻结表（不缓存、不清
+            // _entries），查找照常 miss 抛 HandlerNotFoundException，Registrar 启动后注册
+            // 不受影响。部分注册中的冻结窗口（多 Marker 场景启动中途发命令）仍存在——
+            // 见 HandlerRegistrar remarks 的场景声明。
+            if (_entries.Count == 0) return _entries.ToFrozenDictionary();
             Volatile.Write(ref _frozen, _entries.ToFrozenDictionary());
             _entries = null!;
             return _frozen;
