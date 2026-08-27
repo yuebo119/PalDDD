@@ -62,6 +62,16 @@ public static class MySqlMultiHost
                 "standby 与 primary 的 User/Password/Database 必须一致：MySQL 连接串的这些参数对主机列表内全部节点统一生效，"
                 + "差异无法表达且会被静默丢弃（故障转移后必然连接失败）。请为两节点配置相同账号/库，或使用自定义多主机扩展。");
         }
+        // 合并主机列表（凭据/端口/库已验证一致，取 primary 的即可）
+        // v19 P2-② + v20 F2 机理勘正：standby 串缺 Server= 时 MySqlConnector 返回<b>空串</b>非
+        // "localhost"（片 B 探针实证 2.6.2；PG 同构 ITM-262）——空条目并入列表使故障转移静默
+        // 失败。fail-fast 对齐 PG 姊妹 EncodeHostEntry。
+        // v28 P3（v27 N8 副作用修复）：本 fail-fast 前置于 Port 一致性校验——空 Server 时
+        // HasHostWithoutEmbeddedPort("") 返回 true，Port 比较先抛误导性端口消息（真实问题是
+        // 缺 Server），故 Port 校验移到本守卫之后
+        if (string.IsNullOrWhiteSpace(standbyBuilder.Server))
+            throw new InvalidOperationException(
+                "Standby connection string is missing 'Server='. Failover cannot silently include an empty host.");
         // v27 P3（B 片 N8）：Port 一致性校验改内嵌端口感知——MySqlConnector 的 Server 支持
         // "host:port" 内嵌语法（内嵌端口不吸收进 Port 属性，v26 H5 已证），合并后未内嵌端口
         // 的条目统一用 primary 的共享 Port。归一化判定（解析规则与 NormalizeServerEntry 同款，
@@ -77,13 +87,6 @@ public static class MySqlMultiHost
                 + "请统一端口、改用 Server 内嵌 \"host:port\" 语法逐条目声明，或使用自定义多主机扩展。");
         }
 
-        // 合并主机列表（凭据/端口/库已验证一致，取 primary 的即可）
-        // v19 P2-② + v20 F2 机理勘正：standby 串缺 Server= 时 MySqlConnector 返回<b>空串</b>非
-        // "localhost"（片 B 探针实证 2.6.2；PG 同构 ITM-262）——空条目并入列表使故障转移静默
-        // 失败。fail-fast 对齐 PG 姊妹 EncodeHostEntry。
-        if (string.IsNullOrWhiteSpace(standbyBuilder.Server))
-            throw new InvalidOperationException(
-                "Standby connection string is missing 'Server='. Failover cannot silently include an empty host.");
         // v21 B-2（v27 P3 B 片 N7 勘正行为）：primary 缺 Server 时 Server 属性为空串
         //（v20 F2 自证）——原"空则直接赋 standby"静默把一主一备注册退化为 standby 单机，
         // 配置错误被吞；改 fail-fast（镜像 v26 H4 PostgreSqlMultiHost，见下方合并处）。

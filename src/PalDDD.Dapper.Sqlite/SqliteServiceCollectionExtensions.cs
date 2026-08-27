@@ -66,7 +66,9 @@ public static class SqliteServiceCollectionExtensions
             // :memory: 必须 Singleton（连接关闭数据即销毁），但 SqliteConnection 非线程安全——
             // 并发 scope 共享此 Singleton 连接属未定义行为（SQLite Error 5 "database is locked" /
             // 交叉读写损坏）。契约：调用方必须串行访问（单线程应用 / 逐个 await 的测试）；
-            // 需要并发时改用文件模式（Scoped 连接隔离）或 AddPalSqliteInMemory(sharedCache: true)。
+            // 需要并发时改用文件模式（Scoped 连接隔离）——v28 P3 勘正：原指向
+            // AddPalSqliteInMemory(sharedCache: true) 作并发出口失实，该重载同样落此 Singleton
+            // 单连接分支，不改变并发行为（见其 sharedCache 参数注释）。
             var connection = new SqliteConnection(connectionString);
             ApplyOptimization(connection, optimize, isMemory);
             services.AddSingleton(connection);
@@ -99,6 +101,12 @@ public static class SqliteServiceCollectionExtensions
     /// 是否使用共享缓存（跨连接保持数据）。P2 探针实证修复：共享形式必须用
     /// <c>file::memory:?cache=shared</c> URI 语法——裸形式 <c>:memory:?cache=shared</c>
     /// 会被当普通文件名（Windows 上 ? 非法），Open 直接抛 SQLite Error 14。
+    /// <para>
+    /// v28 P3 勘正：sharedCache 在当前 Singleton 单连接注册下<b>不改变并发行为</b>——
+    /// cache=shared 的价值是<b>多连接</b>共享同一内存库，本重载经 AddPalSqlite 的内存分支
+    /// 注册 Singleton 单连接，单连接下该参数无并发意义；并发需求应使用文件模式
+    ///（Scoped 连接隔离）。参数保留用于连接串形态正确（file URI 语法）及既有调用方兼容。
+    /// </para>
     /// </param>
     public static IServiceCollection AddPalSqliteInMemory(
         this IServiceCollection services,

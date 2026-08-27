@@ -64,6 +64,13 @@ public sealed class DapperInboxStore : IInboxStore
         // ITM-163 修复：补空白守卫（对齐 InMemoryInboxStore 同款）
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerName);
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        // v28 P3（ITM-107 姊妹守卫，镜像 DapperProjectionCheckpointStore.TryStartAsync 的负值守卫）：
+        // processingTimeout 必须非负——负值使 cutoff = now - processingTimeout 落到 now 之后，
+        // 刚启动的 Processing 记录（now - ProcessingStartedAt ≈ 0 < 负 timeout 的反向区间）被
+        // 误判超时可抢占，防并发保护失效（僵尸接管窗口）。允许 TimeSpan.Zero：超时接管
+        //（timeout=0）恒可重入是方言探针的合法测试语义（对齐 Checkpoint 侧"仅禁负值"口径）。
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // P2/P3 修复（十七轮）：全部查询/执行改 CommandDefinition 传递 ct（对齐 DapperOutboxStore.RequeueDeadAsync 模式）——
         // 原重载不接收取消令牌，取消信号只在 EnsureOpenAsync 阶段可传递，SQL 执行阶段不可取消

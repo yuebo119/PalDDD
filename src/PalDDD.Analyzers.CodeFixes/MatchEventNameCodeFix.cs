@@ -41,9 +41,13 @@ public sealed class MatchEventNameCodeFix : CodeFixProvider
         if (node.FirstAncestorOrSelf<PropertyDeclarationSyntax>() is not { Identifier.Text: "EventName" } eventNameDecl)
             return;
 
-        var literal = eventNameDecl.DescendantNodes()
-            .OfType<LiteralExpressionSyntax>()
-            .FirstOrDefault(l => l.IsKind(SyntaxKind.StringLiteralExpression));
+        // v28 P3：字面量选取镜像 analyzer 侧 StrategicDddAnalyzer.SymbolHelpers 的
+        // TryGetLiteralFromTypeMembers 优先级（表达式体→初始化器→getter 表达式体→getter 体
+        // 首个 return 字面量）——原 DescendantNodes().FirstOrDefault(StringLiteral) 与 analyzer
+        // 定位点分歧：attribute 参数（[Obsolete("...")]）、getter 体内先于 return 的辅助字面量
+        //（日志前缀等）会被首选命中，fix 改写无辜字符串而真正的 EventName 字面量未动。
+        // analyzer 侧算法为 private（无 InternalsVisibleTo），此处为等价复刻（语法层）
+        var literal = TryGetEventNameLiteral(eventNameDecl);
         if (literal is null) return;
 
         // messageName 来自诊断属性，已在上方 TryGetValue 保证非 null
@@ -54,6 +58,46 @@ public sealed class MatchEventNameCodeFix : CodeFixProvider
                 ct => FixEventNameAsync(context.Document, literal, expectedName, ct),
                 equivalenceKey: "MatchEventName"),
             diagnostic);
+    }
+
+    /// <summary>
+    /// v28 P3：EventName 属性声明的定位式字面量选取——按 analyzer 侧
+    /// TryGetLiteralFromTypeMembers 同款优先级（表达式体→初始化器→getter 表达式体→
+    /// getter 体首个 return 字面量）。仅接受字符串字面量（analyzer 侧经属性类型符号
+    /// 过滤 string，此处以 StringLiteralExpression kind 等价判定）；无匹配形式返回 null
+    /// （fix 不注册，与 analyzer"找到声明但非字面量"时报 declaration 定位的语义衔接）。
+    /// </summary>
+    private static LiteralExpressionSyntax? TryGetEventNameLiteral(PropertyDeclarationSyntax declaration)
+    {
+        if (declaration.ExpressionBody?.Expression is LiteralExpressionSyntax { } expressionLiteral
+            && expressionLiteral.IsKind(SyntaxKind.StringLiteralExpression))
+            return expressionLiteral;
+
+        if (declaration.Initializer?.Value is LiteralExpressionSyntax { } initializerLiteral
+            && initializerLiteral.IsKind(SyntaxKind.StringLiteralExpression))
+            return initializerLiteral;
+
+        foreach (var accessor in declaration.AccessorList?.Accessors ?? [])
+        {
+            if (!accessor.IsKind(SyntaxKind.GetAccessorDeclaration))
+                continue;
+
+            if (accessor.ExpressionBody?.Expression is LiteralExpressionSyntax { } getterLiteral
+                && getterLiteral.IsKind(SyntaxKind.StringLiteralExpression))
+                return getterLiteral;
+
+            if (accessor.Body is null)
+                continue;
+
+            foreach (var statement in accessor.Body.Statements)
+            {
+                if (statement is ReturnStatementSyntax { Expression: LiteralExpressionSyntax { } returnLiteral }
+                    && returnLiteral.IsKind(SyntaxKind.StringLiteralExpression))
+                    return returnLiteral;
+            }
+        }
+
+        return null;
     }
 
     private static async Task<Document> FixEventNameAsync(
