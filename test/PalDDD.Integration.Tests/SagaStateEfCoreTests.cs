@@ -92,6 +92,32 @@ public sealed class SagaStateEfCoreTests
     }
 
     [Test]
+    public async Task LeaseActiveSagasAsync_HeadLeasedSkipsToUnleasedOutsideTakeWindow(CancellationToken cancellationToken)
+    {
+        // v25 P2-1 探针：头部 batchSize 条全为他实例活跃租约时，单页 SQL Take+内存过滤
+        // 每 tick 租 0 条（饥饿——SagaId 序=创建序，老 Saga 恒占头部）；翻页循环应跳过
+        // 头部已租条目取到窗口外的未租 Saga。旧代码：Take(1) 恒取首条（活跃租约）→
+        // 过滤后空 → 本测试红。租约时间用真实时钟（Store 的 GetUtcNow 走系统时钟，
+        // FixedNow 是过去时间会导致租约已过期而绕不过滤）。
+        var now = DateTimeOffset.UtcNow;
+        await using var db = new TestSagaStateDbContext(CreateOptions());
+        var headLeased = CreateState("HeadLeased", now);
+        headLeased.LeasedBy = "owner-1";
+        headLeased.LeasedUntil = now.AddMinutes(5); // 活跃租约——本 tick 不可租
+        db.SagaStates.Add(headLeased);
+        db.SagaStates.Add(CreateState("TailUnleased", now.AddMilliseconds(10)));
+        await db.SaveChangesAsync(cancellationToken);
+        db.ChangeTracker.Clear();
+
+        var result = await db.LeaseActiveSagasAsync("owner-2", TimeSpan.FromMinutes(2), 1, cancellationToken);
+
+        var list = result.ToList();
+        await Assert.That(list).Count().IsEqualTo(1);
+        await Assert.That(list[0].CurrentState).IsEqualTo("TailUnleased");
+        await Assert.That(list[0].LeasedBy).IsEqualTo("owner-2");
+    }
+
+    [Test]
     public async Task SaveChangesAsync_ReturnsOne_WhenSaveSucceeds(CancellationToken cancellationToken)
     {
         // ITM-072 回归：EFCore 版 SaveChangesAsync 必须按接口契约返回 1（写入生效），

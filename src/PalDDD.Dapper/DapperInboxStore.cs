@@ -215,8 +215,12 @@ public sealed class DapperInboxStore : IInboxStore
                 && pgState == "23505")
                 return true;
 
+            // v25 P3 守卫族：message 使用前防护（镜像 DapperEventLog ITM-188 / DapperSagaStateStore
+            // ITM-192 姊妹形态，PD17）——补 !string.IsNullOrEmpty 防 null/空消息进 Contains
+            var message = inner.Message;
             if (typeName.Equals("SqliteException", StringComparison.Ordinal)
-                && inner.Message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
+                && !string.IsNullOrEmpty(message)
+                && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
                 return true;
 
             // v20 F1：补 SqlServer 2601/2627 分支——v19 B5 注释称含但代码无（EventLog/Saga

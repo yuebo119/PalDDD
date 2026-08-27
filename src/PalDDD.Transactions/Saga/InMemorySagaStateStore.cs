@@ -65,13 +65,25 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
                 .Take(batchSize)
                 .ToList();
 
+            // v25 P3 行为族 B1：successor 替换——对齐 InMemoryOutboxStore 的 ITM-174 模式。
+            // 原实现原地直写字典条目（调用方与存储共享同一引用）：worker A 租约到期后
+            // worker B 重租同一实例，A 的 SaveChangesAsync 无任何校验即可覆盖 B 的活跃
+            // 租约（僵尸写回），且"0 行 = 乐观锁冲突"契约路径恒不可达。TState 为抽象用户
+            // 子类无法 new——经 CloneForLease（MemberwiseClone，非反射）产生后继实例替换
+            // 字典条目；Version 递增作为 fencing 代（重租即换代，旧持有者 Version 必然
+            // 落后，其 SaveChangesAsync 见下方不匹配返回 0）。
+            var leased = new List<TState>(active.Count);
             foreach (var state in active)
             {
-                state.LeasedBy = owner;
-                state.LeasedUntil = leasedUntil;
+                var successor = (TState)state.CloneForLease();
+                successor.LeasedBy = owner;
+                successor.LeasedUntil = leasedUntil;
+                successor.Version = state.Version + 1;
+                _states[state.SagaId] = successor;
+                leased.Add(successor);
             }
 
-            return ValueTask.FromResult<IReadOnlyList<TState>>(active);
+            return ValueTask.FromResult<IReadOnlyList<TState>>(leased);
         }
     }
 
@@ -97,9 +109,12 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
     /// <inheritdoc/>
     /// <remarks>
     /// P3 修复（十七轮）：返回值对齐 <see cref="ISagaStateStore{TState}.SaveChangesAsync"/>
-    /// 契约——已跟踪（<see cref="Add"/> 或租约后存在于内部字典）返回 1，未跟踪返回 0。
+    /// 契约——未跟踪（不在内部字典）返回 0，已跟踪返回 1。
     /// 原恒返回 0 使调用方的"0 行 = 乐观锁冲突"告警路径（SagaProcessor）在内存模式下
     /// 每次保存都误触发。
+    /// v25 P3 行为族 B1：Version 乐观锁——字典条目与传入 state 的 <see cref="SagaState.Version"/>
+    /// 不匹配（租约被 successor 抢占，或已被其他持有者保存递增）时返回 0，调用方的冲突
+    /// 告警路径可达；匹配则递增 Version 并以传入实例为最新字典条目，返回 1。
     /// </remarks>
     public ValueTask<int> SaveChangesAsync(TState state, CancellationToken ct)
     {
@@ -108,7 +123,15 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
         ct.ThrowIfCancellationRequested();
         lock (_lock)
         {
-            return ValueTask.FromResult(_states.ContainsKey(state.SagaId) ? 1 : 0);
+            // v25 P3 行为族 B1：0 行路径三态——未跟踪 / Version 落后（已被 successor
+            // 替换或他实例保存）均返回 0；匹配时 Version++（fencing 代推进）
+            if (!_states.TryGetValue(state.SagaId, out var current))
+                return ValueTask.FromResult(0);
+            if (current.Version != state.Version)
+                return ValueTask.FromResult(0);
+            state.Version++;
+            _states[state.SagaId] = state;
+            return ValueTask.FromResult(1);
         }
     }
 }

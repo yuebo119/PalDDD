@@ -10,6 +10,9 @@ public readonly partial record struct CustomerId;
 [GenerateId(typeof(int))]
 public readonly partial record struct OrderNumber;
 
+[GenerateId(typeof(long))]
+public readonly partial record struct LongRowId;
+
 [GenerateId(typeof(string))]
 public readonly partial record struct TenantKey;
 
@@ -115,6 +118,71 @@ public sealed class GeneratedIdentityTests
             reader.Read();
             var converter = new TenantKeyJsonConverter();
             converter.Read(ref reader, typeof(TenantKey), JsonSerializerOptions.Default);
+        }).Throws<JsonException>();
+    }
+
+    // ── v25 P3 生成器族：Guid/int/long JsonReadBody 坏 token 守卫 ──
+    // 契约：S.T.J converter 的 Read 对不匹配 token 应抛 JsonException（与 Ulid/string 分支
+    // 对齐）——修复前 GetGuid/GetInt32/GetInt64 对坏 token 抛 InvalidOperationException，
+    // 上层 catch (JsonException) 无法捕获。
+
+    [Test]
+    public async Task GuidIdentity_JsonNumberToken_ThrowsJsonException()
+    {
+        await Assert.That(() =>
+        {
+            var reader = new Utf8JsonReader("123"u8);
+            reader.Read();
+            var converter = new CustomerIdJsonConverter();
+            converter.Read(ref reader, typeof(CustomerId), JsonSerializerOptions.Default);
+        }).Throws<JsonException>();
+    }
+
+    [Test]
+    public async Task GuidIdentity_JsonNullToken_ThrowsJsonException()
+    {
+        await Assert.That(() =>
+        {
+            var reader = new Utf8JsonReader("null"u8);
+            reader.Read();
+            var converter = new CustomerIdJsonConverter();
+            converter.Read(ref reader, typeof(CustomerId), JsonSerializerOptions.Default);
+        }).Throws<JsonException>();
+    }
+
+    [Test]
+    public async Task IntIdentity_JsonStringToken_ThrowsJsonException()
+    {
+        await Assert.That(() =>
+        {
+            var reader = new Utf8JsonReader("\"42\""u8);
+            reader.Read();
+            var converter = new OrderNumberJsonConverter();
+            converter.Read(ref reader, typeof(OrderNumber), JsonSerializerOptions.Default);
+        }).Throws<JsonException>();
+    }
+
+    [Test]
+    public async Task IntIdentity_JsonNullToken_ThrowsJsonException()
+    {
+        await Assert.That(() =>
+        {
+            var reader = new Utf8JsonReader("null"u8);
+            reader.Read();
+            var converter = new OrderNumberJsonConverter();
+            converter.Read(ref reader, typeof(OrderNumber), JsonSerializerOptions.Default);
+        }).Throws<JsonException>();
+    }
+
+    [Test]
+    public async Task LongIdentity_JsonStringToken_ThrowsJsonException()
+    {
+        await Assert.That(() =>
+        {
+            var reader = new Utf8JsonReader("\"42\""u8);
+            reader.Read();
+            var converter = new LongRowIdJsonConverter();
+            converter.Read(ref reader, typeof(LongRowId), JsonSerializerOptions.Default);
         }).Throws<JsonException>();
     }
 

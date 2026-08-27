@@ -55,8 +55,10 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
                 catch (OperationCanceledException) { /* 下游取消但 Host 未关停，静默忽略（见上方边界声明） */ }
                 catch (ObjectDisposedException) when (_disposed)
                 {
-                    // v20 A-P3-1 机理勘正：WaitForNextTickAsync 位于 while 条件不在内层 try，其
-                    // ODE 直接终止循环（不可能形成无限循环）。本分支守护的是 ExecuteTickAsync
+                    // v20 A-P3-1 机理勘正：WaitForNextTickAsync 位于 while 条件不在内层 try，
+                    // 其 ODE 由外层 catch (ObjectDisposedException) when (_disposed) 归类
+                    //（v25 P3 行为族 B3 补齐——此前无匹配分支，逃逸给 Host 日志；仍不可能
+                    // 形成无限循环，异常本身已使循环离开）。本分支守护的是 ExecuteTickAsync
                     // 内部的 ODE（如 tick 内对象已释放）——_disposed 标志使终止确定性成立。
                     break;
                 }
@@ -66,6 +68,13 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             // Host 停止会取消 WaitForNextTickAsync，这是后台循环的正常退出路径。
+        }
+        catch (ObjectDisposedException) when (_disposed)
+        {
+            // v25 P3 行为族 B3：Dispose 与 WaitForNextTickAsync 的竞态窗口——_timer 已被
+            // Dispose 时 WaitForNextTickAsync 从 while 条件处抛 ODE，此前无匹配分支逃逸
+            // 给 Host 日志（与 OCE 正常停机路径形态分叉）。_disposed 为 true 证明由本服务
+            // 停机引发，归类为正常退出（对齐上方 OCE 分支）；非停机期 ODE 不满足过滤器，仍上抛。
         }
     }
 

@@ -112,6 +112,66 @@ public sealed class MessageRegistryGeneratorTests
         await Assert.That(diagnostic.Location.SourceSpan.Length > 0).IsTrue();
     }
 
+    // ── v25 P3 生成器族：泛型消息类型拦截（镜像 PALENUM004/PALID003）──
+
+    [Test]
+    public async Task GenerateMessage_OnGenericDeclaration_ReportsGenericDiagnostic()
+    {
+        // 泛型消息（partial class Foo<T>）此前无编译期拦截——emit typeof(global::Ns.Foo<T>)
+        // 生成不可编译代码（CS0246 落在 auto-generated 文件）。编译期报 PALMSG006。
+        var diagnostics = RunGenerator(
+            """
+            using PalDDD.Core;
+
+            [GenerateMessage(Name = "orders.generic.v1")]
+            public sealed partial record GenericMessage<T>;
+            """);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALMSG006")).IsTrue();
+    }
+
+    [Test]
+    public async Task GenerateMessage_NestedInsideGenericDeclaration_ReportsGenericDiagnostic()
+    {
+        // 嵌套于泛型包含类型的消息同样拦截——与 EnumGenerator/IdentityGenerator 的
+        // IsWithinGenericContainingType 检测同型（生成物无法以裸名引用泛型外层内的类型）
+        var diagnostics = RunGenerator(
+            """
+            using PalDDD.Core;
+
+            public sealed partial class Outer<T>
+            {
+                [GenerateMessage(Name = "orders.nested.v1")]
+                public sealed record Inner;
+            }
+            """);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALMSG006")).IsTrue();
+    }
+
+    [Test]
+    public async Task GenerateMessage_OnGenericDeclaration_DoesNotGenerateBadCode()
+    {
+        // 泛型消息不仅报诊断，还必须从生成物剔除——否则 CS0246 落在 auto-generated 文件
+        var result = RunGeneratorWithCompilation(
+            """
+            using PalDDD.Core;
+
+            [GenerateMessage(Name = "orders.generic.v1")]
+            public sealed partial record GenericMessage<T>;
+
+            [GenerateMessage(Name = "orders.normal.v1")]
+            public sealed record NormalMessage;
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALMSG006")).IsTrue();
+        var generatedTree = result.Compilation.SyntaxTrees.Single(
+            tree => tree.FilePath.EndsWith("PalDDD.Generated.MessageCatalog.g.cs", StringComparison.Ordinal));
+        var source = generatedTree.ToString();
+        await Assert.That(source).DoesNotContain("GenericMessage");
+        await Assert.That(source).Contains("orders.normal.v1");
+    }
+
     [Test]
     public async Task GenerateMessage_WithOneInvalidMessage_StillGeneratesValidMessages()
     {

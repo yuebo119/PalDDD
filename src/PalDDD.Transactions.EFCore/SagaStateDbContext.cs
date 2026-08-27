@@ -68,10 +68,28 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        // v25 P3 守卫族：leaseDuration 边界守卫——对照 Outbox 四方言 LeasePendingMessagesAsync
+        //（MySql :77-85 / PG :56-62 / Sqlite :82-89，ITM-167/216 对齐系列）同型漏网——
+        // leaseDuration 非正时租约即刻过期/永不过期语义错乱；TotalSeconds 超过 int.MaxValue 时
+        // leasedUntil = now.Add(leaseDuration) 的秒数语义溢出。Options 层已校验正数，
+        // 此处是 Store 直调路径的防御性 fail-fast（与 Options 层校验各自覆盖
+        // DI 启动期与运行时直调两类入口）。
+        if (leaseDuration <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration must be greater than zero.");
+        if (leaseDuration.TotalSeconds > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for the lease LeasedUntil value.");
 
         var now = GetUtcNow();
         var leasedUntil = now.Add(leaseDuration);
-        var candidates = await SagaStates
+        // v25 P2-1：翻页循环防饥饿（镜像 SqliteOutboxDbContext.QueryEligibleAsync 三十九轮形态）——
+        // v23 C1 把 LeasedUntil 过滤移到内存后，头部 batchSize 条全为他实例活跃租约时
+        // 单页 Take 每 tick 租 0 条（SagaId 序=创建序，老 Saga 恒占头部）；循环翻页
+        // 直至填满 batchSize 或耗尽候选。
+        var states = new List<TState>(batchSize);
+        var skip = 0;
+        while (states.Count < batchSize)
+        {
+            var page = await SagaStates
             // 三十四轮（中断态超时兜底）：扫描集扩 AwaitingHumanDecision——中断态 Saga
             // 配置了步骤 Timeout 且超期时由 SagaTimeoutProcessor.IsTimedOut 门控补偿；
             // 未配置 Timeout 则 IsTimedOut 恒 false（显式无限等待契约）
@@ -79,12 +97,13 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
             // 等值比较（Status）可翻译，LeasedUntil <= now 改物化后内存过滤，OrderBy 改 SagaId
             .Where(s => s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision)
             .OrderBy(s => s.SagaId)
-            .Take(batchSize)
+            .Skip(skip).Take(batchSize)
             .ToListAsync(ct).ConfigureAwait(false);
-        var states = candidates
-            .Where(s => s.LeasedUntil is null || s.LeasedUntil <= now)
-            .Take(batchSize)
-            .ToList();
+            if (page.Count == 0) break;
+            states.AddRange(page.Where(s => s.LeasedUntil is null || s.LeasedUntil <= now));
+            skip += batchSize;
+        }
+        if (states.Count > batchSize) states.RemoveRange(batchSize, states.Count - batchSize);
 
         foreach (var state in states)
         {

@@ -184,6 +184,10 @@ public abstract class InboxDbContext(
         try
         {
             await SaveChangesAsync(ct).ConfigureAwait(false);
+            // v25 P3 行为族 B6：保存成功后 Detach（与 IdempotencyDbContext B5 同族修复；
+            // 镜像 ProjectionCheckpointDbContext:115-118）——终态已落库，长驻 ChangeTracker
+            // 不残留本条目（无界增长）；后续对同一 message 的 Mark* 自带 AttachIfDetached 兜底。
+            Entry(message).State = EntityState.Detached;
         }
         catch (DbUpdateConcurrencyException)
         {

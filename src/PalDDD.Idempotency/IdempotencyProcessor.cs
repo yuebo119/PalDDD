@@ -2,6 +2,7 @@
 // 🔁 IdempotencyProcessor — (OperationName,Key) 幂等执行（结果缓存 + 租约）
 // ─────────────────────────────────────────────────────────────
 using PalDDD.Core.Diagnostics;
+using PalDDD.Core.Logging;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 
@@ -22,13 +23,20 @@ public sealed class IdempotencyProcessor
 
     private readonly IIdempotencyStore _store;
     private readonly TimeProvider _timeProvider;
+    // v25 P3 行为族 B7：pending-confirmation 信号补日志通道（原仅 Activity 事件，无 Trace
+    // listener 时静默）；可选参数默认 null 向后兼容，DI 注册处无需改动
+    private readonly IPalLogger<IdempotencyProcessor>? _logger;
 
-    public IdempotencyProcessor(IIdempotencyStore store, TimeProvider? timeProvider = null)
+    public IdempotencyProcessor(
+        IIdempotencyStore store,
+        TimeProvider? timeProvider = null,
+        IPalLogger<IdempotencyProcessor>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(store);
 
         _store = store;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _logger = logger;
     }
 
     public async ValueTask<IdempotencyExecution<TResult>> ExecuteAsync<TResult>(
@@ -121,9 +129,13 @@ public sealed class IdempotencyProcessor
             // 不得按通用失败重新标记 Failed 再抛（那会把"已执行"降级为"可重试失败"，
             // 重试时重放副作用）。记区分性错误日志后按 Executed 返回（at-least-once
             // 语义下状态待确认；对齐 InboxProcessor ITM-180 的管线孪生修复）。
+            // v25 P3 行为族 B7：补日志通道——原仅 Activity 事件，无 Trace listener 时该
+            // 信号完全静默；可选 logger 补 Warning（默认 null 不启用，对称 ProjectionProcessor）。
             System.Diagnostics.Activity.Current?.AddEvent(new(
                 "idempotency.completed-pending-confirmation",
                 tags: new ActivityTagsCollection { ["error"] = markEx.Message }));
+            _logger?.Warning(
+                $"Idempotency operation '{operationName}' (key '{key}') handler succeeded but completion could not be persisted (pending confirmation); error: {markEx.Message}");
             return SetActivityResult(activity,
                 new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Executed, result));
         }

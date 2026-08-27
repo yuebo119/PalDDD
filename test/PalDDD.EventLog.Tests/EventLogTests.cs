@@ -50,16 +50,20 @@ public sealed class EventLogTests
             cancellationToken);
 
         await Assert.That(listener.StoppedActivities.Any(a => a.OperationName == "EventLog Append")).IsTrue();
+        // v25 P3 指标族（D5）：pal.eventlog.stream / first/last_stream_version /
+        // first/last_global_position 已移除（高基数，ITM-229 清理标准）——原唯一指纹
+        //（随机 streamName tag）删除后，RecordingActivityListener 是进程级监听，并行
+        // 测试的同名 activity 会混入，定位改用 OperationName + event_count 组合
         var activity = listener.StoppedActivities.First(a =>
             a.OperationName == "EventLog Append" &&
-            string.Equals(a.GetTagItem("pal.eventlog.stream") as string, streamName, StringComparison.Ordinal));
+            a.GetTagItem("pal.eventlog.event_count") is 2);
         await Assert.That(result.FirstStreamVersion).IsEqualTo(0);
-        await Assert.That(activity.GetTagItem("pal.eventlog.stream")).IsEqualTo(streamName);
+        await Assert.That(activity.GetTagItem("pal.eventlog.stream")).IsNull();
         await Assert.That(activity.GetTagItem("pal.eventlog.event_count")).IsEqualTo(2);
-        await Assert.That(activity.GetTagItem("pal.eventlog.first_stream_version")).IsEqualTo(0L);
-        await Assert.That(activity.GetTagItem("pal.eventlog.last_stream_version")).IsEqualTo(1L);
-        await Assert.That(activity.GetTagItem("pal.eventlog.first_global_position")).IsEqualTo(0L);
-        await Assert.That(activity.GetTagItem("pal.eventlog.last_global_position")).IsEqualTo(1L);
+        await Assert.That(activity.GetTagItem("pal.eventlog.first_stream_version")).IsNull();
+        await Assert.That(activity.GetTagItem("pal.eventlog.last_stream_version")).IsNull();
+        await Assert.That(activity.GetTagItem("pal.eventlog.first_global_position")).IsNull();
+        await Assert.That(activity.GetTagItem("pal.eventlog.last_global_position")).IsNull();
     }
 
     [Test]
@@ -143,13 +147,13 @@ public sealed class EventLogTests
             cancellationToken: cancellationToken));
 
         await Assert.That(listener.StoppedActivities.Any(a => a.OperationName == "EventLog ReadStream")).IsTrue();
-        var activity = listener.StoppedActivities.First(a =>
-            a.OperationName == "EventLog ReadStream" &&
-            string.Equals(a.GetTagItem("pal.eventlog.stream") as string, "ordering-order-1", StringComparison.Ordinal));
+        // v25 P3 指标族（D5）：pal.eventlog.stream / from_stream_version / read_count
+        // 已移除（高基数，ITM-229 清理标准）——定位与断言只依赖 OperationName
+        var activity = listener.StoppedActivities.First(a => a.OperationName == "EventLog ReadStream");
         await Assert.That(events).HasSingleItem();
-        await Assert.That(activity.GetTagItem("pal.eventlog.stream")).IsEqualTo("ordering-order-1");
-        await Assert.That(activity.GetTagItem("pal.eventlog.from_stream_version")).IsEqualTo(1L);
-        await Assert.That(activity.GetTagItem("pal.eventlog.read_count")).IsEqualTo(1);
+        await Assert.That(activity.GetTagItem("pal.eventlog.stream")).IsNull();
+        await Assert.That(activity.GetTagItem("pal.eventlog.from_stream_version")).IsNull();
+        await Assert.That(activity.GetTagItem("pal.eventlog.read_count")).IsNull();
     }
 
     [Test]
@@ -197,12 +201,12 @@ public sealed class EventLogTests
             cancellationToken: cancellationToken));
 
         await Assert.That(listener.StoppedActivities.Any(a => a.OperationName == "EventLog ReadAll")).IsTrue();
-        var activity = listener.StoppedActivities.First(a =>
-            a.OperationName == "EventLog ReadAll" &&
-            a.GetTagItem("pal.eventlog.from_global_position") is 1L);
+        // v25 P3 指标族（D5）：pal.eventlog.from_global_position / read_count 已移除
+        //（高基数，ITM-229 清理标准）——定位与断言只依赖 OperationName
+        var activity = listener.StoppedActivities.First(a => a.OperationName == "EventLog ReadAll");
         await Assert.That(events).HasSingleItem();
-        await Assert.That(activity.GetTagItem("pal.eventlog.from_global_position")).IsEqualTo(1L);
-        await Assert.That(activity.GetTagItem("pal.eventlog.read_count")).IsEqualTo(1);
+        await Assert.That(activity.GetTagItem("pal.eventlog.from_global_position")).IsNull();
+        await Assert.That(activity.GetTagItem("pal.eventlog.read_count")).IsNull();
     }
 
     [Test]

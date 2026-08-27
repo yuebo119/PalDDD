@@ -72,10 +72,9 @@ public sealed class InMemoryEventLog : IEventLog
                 stream.Count - 1L,
                 firstGlobalPosition,
                 _global.Count - 1L);
-            activity?.SetTag("pal.eventlog.first_stream_version", result.FirstStreamVersion);
-            activity?.SetTag("pal.eventlog.last_stream_version", result.LastStreamVersion);
-            activity?.SetTag("pal.eventlog.first_global_position", result.FirstGlobalPosition);
-            activity?.SetTag("pal.eventlog.last_global_position", result.LastGlobalPosition);
+            // v25 P3 指标族（D5）：first/last_stream_version 与 first/last_global_position
+            // 四个 SetTag 移除——版本/位置值每事件唯一递增，高基数命中 ITM-229 清理标准；
+            // 位置信息已由 AppendEventsResult 返回值承载（调用方按需记录）
             PalMetrics.EventLogAppended.Add(events.Count);
 
             return ValueTask.FromResult(result);
@@ -126,7 +125,9 @@ public sealed class InMemoryEventLog : IEventLog
         }
         finally
         {
-            activity?.SetTag("pal.eventlog.read_count", read);
+            // v25 P3 指标族（D5）：pal.eventlog.read_count SetTag 移除——读取数量随
+            // maxCount/流长度无界，高基数命中 ITM-229 清理标准；计数保留在
+            // EventLogRead 指标（零 tag Counter，不受 tag 基数影响）
             PalMetrics.EventLogRead.Add(read);
         }
     }
@@ -171,7 +172,7 @@ public sealed class InMemoryEventLog : IEventLog
         }
         finally
         {
-            activity?.SetTag("pal.eventlog.read_count", read);
+            // v25 P3 指标族（D5）：pal.eventlog.read_count SetTag 移除——同 ReadStreamAsync
             PalMetrics.EventLogRead.Add(read);
         }
     }

@@ -310,6 +310,36 @@ public sealed class PipelineBehaviorTests
             => PalValidationResult.Failed("CustomerName", "Required");
     }
 
+    public sealed class DefaultReturningValidator : IPalValidator<CreateOrderCommand>
+    {
+        // v25 P2-2 场景：病态但真实的验证器（如逻辑分支遗漏 return 值）——
+        // default(PalValidationResult) = IsValid false + Errors default
+        public PalValidationResult Validate(CreateOrderCommand instance) => default;
+    }
+
+    [Test]
+    public async Task ValidationBehavior_DefaultResult_ThrowsInsteadOfSilentPass()
+    {
+        // v25 P2-2 探针：IsValid=false 是验证器明确表达的失败判定——default 结果
+        // （IsValid=false + Errors=default）旧行为 continue 吞掉失败事实静默放行，
+        // 验证拦截被绕过（next 直接执行）；正确行为是占位错误 fail-fast
+        var services = new ServiceCollection();
+        services.AddSingleton<IPalValidator<CreateOrderCommand>, DefaultReturningValidator>();
+        var sp = services.BuildServiceProvider();
+
+        var behavior = new ValidationBehavior<CreateOrderCommand, Guid>(
+            sp.GetServices<IPalValidator<CreateOrderCommand>>());
+
+        var cmd = new CreateOrderCommand("Test", 100m);
+        var nextCalled = false;
+
+        await Assert.That(() => behavior.HandleAsync(cmd, CancellationToken.None,
+            () => { nextCalled = true; return new ValueTask<Guid>(Guid.NewGuid()); }).AsTask())
+            .Throws<PalValidationException>();
+
+        await Assert.That(nextCalled).IsFalse();
+    }
+
     [Test]
     public async Task ValidationBehavior_ValidRequest_Passes()
     {

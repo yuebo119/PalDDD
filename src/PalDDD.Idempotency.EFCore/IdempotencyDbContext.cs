@@ -4,6 +4,12 @@ using System.Diagnostics.CodeAnalysis;
 namespace PalDDD.Idempotency;
 
 /// <summary>EF Core 幂等存储基础上下文。</summary>
+/// <remarks>
+/// v25 P3 行为族 B5：变更跟踪无界增长防护（对齐 ProjectionCheckpointDbContext 三十八轮修复）——
+/// <see cref="GetAsync"/> 纯读路径 AsNoTracking；MarkCompletedAsync/MarkFailedAsync 经
+/// SaveTerminalStateAsync 在终态保存成功（及全部失败路径）后 Detach，长驻 scope 下
+/// ChangeTracker 零残留。
+/// </remarks>
 [UnconditionalSuppressMessage("Trimming", "IL2026:Members annotated with RequiresUnreferencedCode require dynamic access",
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:Members annotated with RequiresDynamicCode require dynamic access",
@@ -14,6 +20,12 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// v25 P3 行为族 B5：改 AsNoTracking（对齐 ProjectionCheckpointDbContext 三十八轮修复）——
+    /// 长驻 scope 下每次查询的跟踪条目滞留 ChangeTracker（无界增长）。本方法为纯读契约
+    ///（调用方 IdempotencyProcessor 只做状态判断/结果反序列化，不进 Mark*+SaveChanges
+    /// 写回路径），零跟踪后过期分支的 Detach 同步移除（对未跟踪实体赋 Detached 是 no-op）。
+    /// </remarks>
     public async ValueTask<IdempotencyRecord?> GetAsync(
         string operationName,
         string key,
@@ -22,8 +34,10 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
     {
         ValidateKeyParts(operationName, key);
 
-        var record = await IdempotencyRecords.SingleOrDefaultAsync(
-            x => x.OperationName == operationName && x.Key == key, ct).ConfigureAwait(false);
+        var record = await IdempotencyRecords
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                x => x.OperationName == operationName && x.Key == key, ct).ConfigureAwait(false);
         if (record is null)
             return null;
 
@@ -32,7 +46,6 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         if (record.ExpiresAt > now)
             return record;
 
-        Entry(record).State = EntityState.Detached;
         return null;
     }
 
@@ -234,11 +247,18 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         return false;
     }
 
+    /// <summary>
+    /// 终态标记持久化（MarkCompletedAsync/MarkFailedAsync 共享）。
+    /// </summary>
     private async ValueTask SaveTerminalStateAsync(IdempotencyRecord record, CancellationToken ct)
     {
         try
         {
             await SaveChangesAsync(ct).ConfigureAwait(false);
+            // v25 P3 行为族 B5：保存成功后 Detach（镜像 ProjectionCheckpointDbContext:115-118）——
+            // 终态已落库，长驻 ChangeTracker 不残留本条目（无界增长）；后续对同一 record 的
+            // Mark* 自带 AttachIfDetached 兜底，Detach 后语义不变。
+            Entry(record).State = EntityState.Detached;
         }
         catch (DbUpdateConcurrencyException)
         {

@@ -811,6 +811,12 @@ public abstract class Saga<TState> where TState : SagaState, new()
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>处理事件 — 查找匹配的状态转换并执行（无重试，无补偿）</summary>
+    /// <remarks>
+    /// v25 P3 行为族 B4（契约声明）：经本入口执行的步骤不记录
+    /// <see cref="SagaState.ExecutedStepKeys"/>/<see cref="SagaState.StepStartedAt"/>——
+    /// 后续 <see cref="ProcessEventAsync"/> 失败触发的补偿范围不含此步骤；
+    /// 需要参与补偿轨迹的步骤应走 <see cref="ProcessEventAsync"/>。
+    /// </remarks>
     public async ValueTask<TState> HandleEventAsync(TState current, object @event, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(current);

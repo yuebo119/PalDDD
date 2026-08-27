@@ -139,18 +139,23 @@ public static class DapperBulkCopy
 
         foreach (var item in items)
         {
-            await writer.StartRowAsync().ConfigureAwait(false);      // 开始新行
+            // v25 P3 生成器族/指标族（D7）：三处 await 补传 ct——Npgsql 10.x 的
+            // NpgsqlBinaryImporter 三个方法均有 CancellationToken 重载（本地 NuGet XML
+            // 证实：StartRowAsync(ct)/WriteAsync(T,NpgsqlDbType,ct)/CompleteAsync(ct)），
+            // 原无参调用使取消要等当前行写完/整批 Complete 后才生效，与入口
+            // BeginBinaryImportAsync(ct) 的取消传导不一致
+            await writer.StartRowAsync(ct).ConfigureAwait(false);      // 开始新行
             foreach (var val in extractor(item))
             {
                 // P1 修复（七轮评审）：Ulid/DateTimeOffset 无 Npgsql 原生映射——
                 // Unknown 类型写入 raw 对象时抛类型解析异常。与 SQLite 路径对称做类型转换。
                 var converted = ConvertForNpgsql(val);
-                await writer.WriteAsync(converted.value, converted.type).ConfigureAwait(false);
+                await writer.WriteAsync(converted.value, converted.type, ct).ConfigureAwait(false);
             }
         }
 
         // CompleteAsync — 发送 COPY 结束标记，返回成功写入的行数
-        var rowsWritten = await writer.CompleteAsync().ConfigureAwait(false);
+        var rowsWritten = await writer.CompleteAsync(ct).ConfigureAwait(false);
         return (int)rowsWritten;
     }
 
@@ -177,7 +182,15 @@ public static class DapperBulkCopy
             double d => (d, NpgsqlTypes.NpgsqlDbType.Double),
             float f => (f, NpgsqlTypes.NpgsqlDbType.Real),
             short sh => (sh, NpgsqlTypes.NpgsqlDbType.Smallint),
-            DateTime dt => (dt, NpgsqlTypes.NpgsqlDbType.Timestamp),
+            // v25 P3 生成器族/指标族（D6）：DateTime 按 Kind 分派——Npgsql 6+ 明确拒绝
+            // Kind=Utc 的 DateTime 写入 timestamp without time zone（InvalidCastException），
+            // 原恒定 Timestamp 映射对 Utc 输入必抛；Utc 走 TimestampTz（timestamptz 恰好
+            // 只接受 Utc），Unspecified/Local 走 Timestamp（Npgsql 对二者接受）。
+            // 边界：Kind=Local 写 timestamp 按本地字面值写入（Npgsql 不做时区换算）——
+            // 与 Npgsql 官方 converter 行为一致，调用方负责语义正确性。
+            DateTime dt => (dt, dt.Kind == DateTimeKind.Utc
+                ? NpgsqlTypes.NpgsqlDbType.TimestampTz
+                : NpgsqlTypes.NpgsqlDbType.Timestamp),
             _ => (val, NpgsqlTypes.NpgsqlDbType.Unknown),  // 罕见类型回退（decimal/TimeSpan/自定义类型等）
         };
     }

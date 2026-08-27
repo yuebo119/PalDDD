@@ -230,5 +230,73 @@ public sealed class InMemoryStoreTests
         await Assert.That(second).IsEmpty();
     }
 
+    [Test]
+    public async Task InMemorySagaStateStore_StaleLeaseHolder_SaveChangesReturnsZero(CancellationToken cancellationToken)
+    {
+        // v25 P3 行为族 B1 回归：租约被后继实例抢占（successor 替换）后，旧持有者的
+        // SaveChangesAsync 因 Version 乐观锁不匹配返回 0——修复前原地直写共享引用且
+        // 恒返回 1，"0 行 = 乐观锁冲突"契约路径在内存模式下不可达（僵尸写回无从拦截）
+        var fakeTime = new PalDDD.Testing.FakeTimeProvider(DateTimeOffset.Parse("2026-06-25T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        var store = new InMemorySagaStateStore<SampleSaga>(fakeTime);
+        store.Add(new SampleSaga { SagaId = Guid.NewGuid(), CurrentState = "Started", Status = SagaStatus.Active });
+
+        // worker A 租约（t=0 起 2 分钟）
+        var leaseA = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        var heldByA = leaseA[0];
+
+        // 租约过期后 worker B 重租——successor 替换：新实例脱离 A 的旧引用
+        fakeTime.Set(DateTimeOffset.Parse("2026-06-25T00:03:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        var leaseB = await store.LeaseActiveSagasAsync("owner-B", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        var heldByB = leaseB[0];
+        await Assert.That(ReferenceEquals(heldByA, heldByB)).IsFalse();
+
+        // 旧持有者 A 保存——Version 不匹配，返回 0（冲突路径可达）
+        await Assert.That(await store.SaveChangesAsync(heldByA, cancellationToken)).IsEqualTo(0);
+
+        // 当前持有者 B 保存正常生效（返回 1 且 Version 递增）
+        await Assert.That(await store.SaveChangesAsync(heldByB, cancellationToken)).IsEqualTo(1);
+        await Assert.That(heldByB.Version).IsGreaterThanOrEqualTo(heldByA.Version + 1);
+    }
+
+    [Test]
+    public async Task InMemorySagaStateStore_StaleLeaseHolderRelease_DoesNotClearNewLease(CancellationToken cancellationToken)
+    {
+        // v25 P3 行为族 B1 回归：B 重租后 A 的"释放"（清 LeasedBy/LeasedUntil 后保存）
+        // 不得清掉 B 的租约——修复前原地直写共享引用，A 直接清了 B 的活跃租约
+        var fakeTime = new PalDDD.Testing.FakeTimeProvider(DateTimeOffset.Parse("2026-06-25T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        var store = new InMemorySagaStateStore<SampleSaga>(fakeTime);
+        store.Add(new SampleSaga { SagaId = Guid.NewGuid(), CurrentState = "Started", Status = SagaStatus.Active });
+
+        var leaseA = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        var heldByA = leaseA[0];
+
+        fakeTime.Set(DateTimeOffset.Parse("2026-06-25T00:03:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        var leaseB = await store.LeaseActiveSagasAsync("owner-B", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        var heldByB = leaseB[0];
+
+        // A 释放：清自己的租约字段后保存——Version 冲突返回 0，B 的租约不受影响
+        heldByA.LeasedBy = null;
+        heldByA.LeasedUntil = null;
+        await Assert.That(await store.SaveChangesAsync(heldByA, cancellationToken)).IsEqualTo(0);
+
+        await Assert.That(heldByB.LeasedBy).IsEqualTo("owner-B");
+        await Assert.That(heldByB.LeasedUntil).IsNotNull();
+    }
+
+    [Test]
+    public async Task InMemoryOutboxStore_AddMessagesAsync_NullEntry_LeavesNoPartialWrite(CancellationToken cancellationToken)
+    {
+        // v25 P3 行为族 B2 回归：批量添加遇 null 条目抛出时不留部分写入——
+        // 修复前单循环边校验边添加，null 前的消息已进列表（调用方重试会产生重复投递）
+        var store = new InMemoryOutboxStore();
+        var msg1 = new OutboxMessage { Type = "test", Payload = [1], ContentType = "application/json", SchemaVersion = 1 };
+        var messages = new List<OutboxMessage> { msg1, null! };
+
+        await Assert.That(async () => await store.AddMessagesAsync(messages)).Throws<ArgumentNullException>();
+
+        var pending = await store.GetPendingMessagesAsync(10, 10, cancellationToken);
+        await Assert.That(pending).IsEmpty();
+    }
+
     public sealed class SampleSaga : SagaState;
 }

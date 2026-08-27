@@ -63,8 +63,11 @@ public sealed class MatchEventNameCodeFix : CodeFixProvider
         CancellationToken ct)
     {
         var editor = await DocumentEditor.CreateAsync(document, ct).ConfigureAwait(false);
+        // v25 P3 生成器族（D4）：补 .WithTriviaFrom——三个姊妹 fix（AddBoundedContextPrefix/
+        // AddProjectionContextPrefix（v22 D2）/AddVersionSuffix（ITM-221））均保留 trivia，
+        // 裸替换丢失字面量前后注释与换行格式
         editor.ReplaceNode(literal, SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression,
-            SyntaxFactory.Literal(messageName)));
+            SyntaxFactory.Literal(messageName)).WithTriviaFrom(literal));
         return editor.GetChangedDocument();
     }
 }
