@@ -213,6 +213,14 @@ public abstract class InboxDbContext(
             Entry(message).State = EntityState.Detached;
             _logger?.Warning($"Inbox: terminal state for message {message.MessageId} (consumer {message.ConsumerName}) was overwritten by a concurrent processor; the record is detached without persisting the local terminal state.");
         }
+        catch (DbUpdateException)
+        {
+            // v27 P2 修复：非并发瞬时故障上抛前 Detach——message 已被变异为 Modified（终态
+            // 字段），滞留 ChangeTracker 会被下次无关 SaveChanges 幽灵提交（镜像
+            // IdempotencyDbContext.SaveTerminalStateAsync 三十八轮全修样板）
+            Entry(message).State = EntityState.Detached;
+            throw;
+        }
     }
 
     /// <summary>

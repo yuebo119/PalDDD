@@ -32,6 +32,9 @@ public sealed class DefaultSagaManager : ISagaManager
     /// <summary>暂存的中断状态 — keyed by sagaId</summary>
     private readonly ConcurrentDictionary<PalUlid, InterruptedSagaEntry> _interrupted = [];
 
+    /// <summary>已失效（超时补偿回滚）的 sagaId 集合——拒绝幽灵条目再注册（v27 P2）</summary>
+    private readonly ConcurrentDictionary<PalUlid, byte> _invalidated = [];
+
     /// <inheritdoc/>
     /// <remarks>
     /// 默认实现：以决策为事件重新派发到中断时的 Saga 执行管线
@@ -108,8 +111,20 @@ public sealed class DefaultSagaManager : ISagaManager
     /// 并假成功。本方法把失效责任移到补偿侧（补偿持有 successor 真实状态），
     /// 终态分支保留作双保险。
     /// </para>
+    /// <para>
+    /// v27 P2 修复：失效同时登记失效集——失效后仍飞行中的 ResumeDispatch 在旧实例上
+    /// 触发下一个 InterruptStep（多阶段 HITL）时 RegisterInterrupted 会注册"幽灵条目"，
+    /// 使后续决策经幽灵条目在已回滚 Saga 上继续执行并假成功（v26 失效被绕过）。
+    /// 失效集按 sagaId 记录（16 字节/项，量级=超时补偿的 HITL Saga 数，只增不减——
+    /// 与 _interrupted 的历史泄漏教训权衡：本集拒绝注册后条目永不重建，幂等防御所需）。
+    /// 按 key TryRemove 与 ResumeAsync 的 KVP 身份式语义差异由此失效集兜底（再注册被拒）。
+    /// </para>
     /// </summary>
-    public void InvalidateInterrupted(PalUlid sagaId) => _interrupted.TryRemove(sagaId, out _);
+    public void InvalidateInterrupted(PalUlid sagaId)
+    {
+        _interrupted.TryRemove(sagaId, out _);
+        _invalidated[sagaId] = 1;
+    }
 
     /// <inheritdoc/>
     public ValueTask<IReadOnlyList<SagaState>> GetInterruptedSagasAsync(CancellationToken ct)
@@ -202,6 +217,13 @@ public sealed class DefaultSagaManager : ISagaManager
         Func<object, CancellationToken, ValueTask<SagaState>> resumeDispatch)
     {
         ArgumentNullException.ThrowIfNull(resumeDispatch);
+        // v27 P2 修复：失效 Saga 拒绝再注册——失效（超时补偿）后仍飞行中的
+        // ResumeDispatch 在旧实例上触发下一个 InterruptStep（多阶段 HITL）时，
+        // 若照常注册会形成"幽灵条目"，后续决策经幽灵条目在已回滚 Saga 上继续
+        // 执行并假成功（v26 Invalidate 的一次性 TryRemove 被再注册绕过）
+        if (_invalidated.ContainsKey(sagaId))
+            throw new InvalidOperationException(
+                $"Saga {sagaId} 已被超时兜底补偿失效，拒绝注册新的中断条目——决策不应再投向已回滚的 Saga。");
         _interrupted[sagaId] = new InterruptedSagaEntry(sagaId, reason, resumeDispatch);
     }
 

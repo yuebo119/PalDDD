@@ -112,6 +112,15 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner); // v22 C-2：对齐 EFCore 四方言 ITM-081/216
+        // v27 P3 守卫族（B 片 N3）：leaseDuration 双检守卫（v25/v26 守卫族最后缺口）——镜像
+        // DapperSagaStateStore.LeaseActiveSagasAsync 守卫形态。非正租约使租约即刻过期/永不过期
+        // 语义错乱（OutboxProcessor 默认配置不触发，此处是直调路径的防御性 fail-fast）；上界
+        // 检查为与姊妹对称保留——Dapper 版绑定原生 @until 参数（ToTimeParam 产 DateTimeOffset/
+        // "O" 串），无秒数换算（消息文本对齐 PalOrmOutboxStore/EFCore 四方言 LockedUntil 同款）
+        if (leaseDuration <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration must be greater than zero.");
+        if (leaseDuration.TotalSeconds > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for the lease LockedUntil value.");
         var now = _timeProvider.GetUtcNow();
         var until = now.Add(leaseDuration);
 

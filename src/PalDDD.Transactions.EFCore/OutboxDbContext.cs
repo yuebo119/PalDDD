@@ -33,7 +33,22 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         // 的主键必要——OutboxMessage 主键 Ulid 预设（HasConversion 字符串存储，无 DB 生成），
         // 同步 AddRange 免逐实体 async 状态机开销。
         OutboxMessages.AddRange(messages);
-        return await SaveChangesAsync().ConfigureAwait(false);
+        try
+        {
+            // 注：接口 IPalOutboxStore.AddMessagesAsync 无 CancellationToken 参数（v23 轮已
+            // 裁决接口异步化属 v3.0 破坏性变更），取消信号不传播为已知契约限制
+            return await SaveChangesAsync().ConfigureAwait(false);
+        }
+        catch (DbUpdateException)
+        {
+            // v27 P2 修复：失败上抛前全批 Detach——Added 实体滞留 ChangeTracker 会被同
+            // DbContext 下次无关 SaveChanges 幽灵 INSERT（调用方以为失败已放弃的消息被写入，
+            // 或重发后双份）——镜像 EventLogDbContext.DetachAddedEvents（三十八轮 ITM-226
+            // "残留批次污染后续追加"同型同文件族）
+            foreach (var message in messages)
+                Entry(message).State = EntityState.Detached;
+            throw;
+        }
     }
 
     /// <inheritdoc/>

@@ -265,6 +265,11 @@ public static class ShardedTableName
     {
         // ITM-220 修复（三十二轮）：校验一次后直拼（For 已校验，循环内免重复校验）
         ValidateIdentifier(baseTable);
+        // v27 P3（B 片 N5）：shardCount 边界守卫——0 产出空表名数组静默空转（调用方以为是
+        // 全量表名实为空集，失败延迟到消费端），负值虽由 Enumerable.Range 抛但异常不指明
+        // shardCount 语义。对照 For 的 shardId>=0 下界守卫与 ShardedDataSourceManager
+        // 空数组抛的先例——策略 bug 快速失败优于延迟暴露。
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(shardCount);
         return Enumerable.Range(0, shardCount).Select(i => $"{baseTable}_{i}").ToArray();
     }
 
@@ -276,6 +281,8 @@ public static class ShardedTableName
     public static string CreateShardedTableDdl(string baseTable, int shardCount)
     {
         ValidateIdentifier(baseTable);
+        // v27 P3（B 片 N5）：同 All——空 DDL 静默跳过建表，迁移脚本"成功"但零表创建
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(shardCount);
         return string.Join(";\n", Enumerable.Range(0, shardCount)
             .Select(i => $"CREATE TABLE IF NOT EXISTS {For(baseTable, i)} (LIKE {baseTable} INCLUDING ALL)"));
     }

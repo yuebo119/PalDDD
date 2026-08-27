@@ -134,6 +134,12 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
             // （对齐上方 TryStartAsync 的既有捕获模式）。
             Entry(checkpoint).State = EntityState.Detached;
         }
+        catch (DbUpdateException)
+        {
+            // v27 P2 修复：非并发瞬时故障上抛前 Detach（与 MarkFailedAsync 同型，样板同上）
+            Entry(checkpoint).State = EntityState.Detached;
+            throw;
+        }
     }
 
     /// <inheritdoc/>
@@ -161,9 +167,18 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         catch (DbUpdateConcurrencyException)
         {
             // P2 修复（八轮评审）：Revision 并发令牌冲突 = 租约已被其他工作器回收，被抢占者的
-            // 失败标记不生效——Detach 清理跟踪状态后静默返回，不掩盖原始业务异常、不中止回放
+            // 标记不生效——Detach 清理跟踪状态后静默返回，不掩盖原始业务异常、不中止回放
             // （对齐上方 TryStartAsync 的既有捕获模式）。
             Entry(checkpoint).State = EntityState.Detached;
+        }
+        catch (DbUpdateException)
+        {
+            // v27 P2 修复：非并发瞬时故障上抛前 Detach——checkpoint 已被变异为 Modified
+            // （Revision 已递增），滞留 ChangeTracker 会使同 scope 下次 TryStart 的 identity
+            // resolution 返回内存 Status=Completed 而 DB 未写的实例，误判"已完成"静默跳过
+            // （重启/他节点接管后重复投影）——镜像 IdempotencyDbContext 全修样板
+            Entry(checkpoint).State = EntityState.Detached;
+            throw;
         }
     }
 
