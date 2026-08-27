@@ -2,7 +2,9 @@ namespace PalDDD.Integration.Tests;
 
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using PalDDD.Transactions;
+using System.Data.Common;
 using System.Globalization;
 
 public sealed class InboxEfCoreTests
@@ -287,6 +289,57 @@ public sealed class InboxEfCoreTests
             await db.SaveChangesAsync(cancellationToken)).Throws<DbUpdateException>();
     }
 
+    [Test]
+    public async Task TryStartProcessingAsync_UniqueConflictRequeryFails_PropagatesOriginalDbUpdateException(CancellationToken cancellationToken)
+    {
+        // v28 P3 回归（镜像 EventLogPositionReserverTests 的 mock 手法，补 Inbox 侧）：
+        // 唯一冲突后回查失败（PG aborted 事务 25P02 形态——拦截器在 SaveChanges 冲突后使
+        // 后续 Reader 命令抛 DbException）时必须 throw; 保留原始 DbUpdateException 语义，
+        // 不得被回查异常替换/掩盖、误导上层重试策略
+        var state = new RequeryFailureState();
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = new DbContextOptionsBuilder<ThrowingSaveInboxDbContext>()
+            .UseSqlite(connection)
+            .AddInterceptors(new RequeryFailureInterceptor(state))
+            .Options;
+
+        await using var db = new ThrowingSaveInboxDbContext(options, state);
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+
+        var exception = await Assert.ThrowsAsync<DbUpdateException>(
+            () => ((IInboxStore)db).TryStartProcessingAsync(
+                "orders",
+                "message-1",
+                DateTimeOffset.UtcNow,
+                TimeSpan.FromMinutes(5),
+                cancellationToken).AsTask());
+        // 断言上抛的是原始冲突异常（内层为注入的唯一约束 SqliteException），而非回查注入的失败
+        await Assert.That(exception!.InnerException!.Message).Contains("UNIQUE constraint");
+    }
+
+    [Test]
+    public async Task TryStartProcessingAsync_UniqueConflictRequerySucceeds_ReturnsNullIdempotently(CancellationToken cancellationToken)
+    {
+        // v28 P3 回归姊妹：唯一冲突后回查成功且查无行（冲突行由并发消费者插入但其事务未提交，
+        // 本 mock 空库等价于 MySQL REPEATABLE READ 快照不可见）→ 按"他人正在处理"返回 null
+        // （幂等语义，调用方走重投递），不得抛 SingleAsync 的多行/零行异常
+        var options = new DbContextOptionsBuilder<ThrowingSaveInboxDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture))
+            .Options;
+        await using var db = new ThrowingSaveInboxDbContext(options, new RequeryFailureState());
+        var store = (IInboxStore)db;
+
+        var duplicate = await store.TryStartProcessingAsync(
+            "orders",
+            "message-1",
+            DateTimeOffset.UtcNow,
+            TimeSpan.FromMinutes(5),
+            cancellationToken);
+
+        await Assert.That(duplicate).IsNull();
+    }
+
     private static DbContextOptions<TestInboxDbContext> CreateOptions()
         => new DbContextOptionsBuilder<TestInboxDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture))
@@ -300,4 +353,43 @@ public sealed class InboxEfCoreTests
 
     private sealed class TestInboxDbContext(DbContextOptions<TestInboxDbContext> options)
         : InboxDbContext(options);
+
+    /// <summary>回查失败注入状态——SaveChangesAsync 冲突抛出后置位，使后续 Reader 命令（回查）失败。</summary>
+    private sealed class RequeryFailureState
+    {
+        public bool SaveThrew;
+    }
+
+    /// <summary>
+    /// v28 回归注入器（镜像 EventLogPositionReserverTests.ThrowingSaveEventLogDbContext 手法）——
+    /// SaveChangesAsync 恒抛 DbUpdateException（内层为 UNIQUE 约束 SqliteException，构造唯一冲突）。
+    /// </summary>
+    private sealed class ThrowingSaveInboxDbContext(
+        DbContextOptions<ThrowingSaveInboxDbContext> options, RequeryFailureState state)
+        : InboxDbContext(options)
+    {
+        public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+        {
+            state.SaveThrew = true;
+            throw new DbUpdateException(
+                "save failed",
+                new SqliteException("SQLite Error 19: 'UNIQUE constraint failed: InboxMessages.ConsumerName, InboxMessages.MessageId'", 19));
+        }
+    }
+
+    /// <summary>
+    /// Save 冲突抛出后的 Reader 命令注入 DbException——模拟 PG aborted 事务上回查抛 25P02
+    /// （首个查询在 SaveThrew 置位前执行，正常返回）。
+    /// </summary>
+    private sealed class RequeryFailureInterceptor(RequeryFailureState state) : DbCommandInterceptor
+    {
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+            => state.SaveThrew
+                ? throw new SqliteException("SQLite Error 25: 'injected aborted-transaction requery failure'", 25)
+                : ValueTask.FromResult(result);
+    }
 }

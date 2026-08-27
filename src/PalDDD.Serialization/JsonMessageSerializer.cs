@@ -18,10 +18,12 @@ namespace PalDDD.Serialization.Json;
 /// 通过 <c>Utf8JsonWriter.Reset(IBufferWriter&lt;byte&gt;)</c> 复用 Writer，减少热路径分配。
 /// </summary>
 /// <remarks>
-/// ⚠️ <b>重入限制（v27 P3 声明）</b>：ThreadStatic 池（<c>_tlsWriter</c>/<c>_tlsBufferWriter</c>）
+/// ⚠️ <b>重入限制（v27 P3 声明；v29 P3 勘正）</b>：ThreadStatic 池（<c>_tlsWriter</c>/<c>_tlsBufferWriter</c>）
 /// 非重入安全——自定义 JsonConverter.Write 内回调同线程 <c>Serialize</c> 会清空外层缓冲
-/// （入口 <c>bufferWriter.Clear()</c> + <c>writer.Reset()</c> 使外层已写内容丢失）；
-/// 多态信封等嵌套序列化场景应使用独立实例或避开 converter 内回调。
+/// （入口 <c>bufferWriter.Clear()</c> + <c>writer.Reset()</c> 使外层已写内容丢失）。
+/// v29 勘正：池字段为 static [ThreadStatic]（挂线程不挂实例），"使用独立实例"无法规避——
+/// 同线程嵌套序列化共用同一 TLS 池，跨实例不隔离；唯一规避路径是避开 converter 内回调
+/// （嵌套值先物化再进入外层序列化）。多态信封等嵌套场景受此约束。
 /// </remarks>
 public sealed class JsonMessageSerializer : IMessageSerializer
 {
@@ -102,6 +104,15 @@ public sealed class JsonMessageSerializer : IMessageSerializer
             ?? throw new InvalidOperationException(
                 $"Message type '{typeof(TMessage).FullName}' is not registered in MessageCatalog.");
 
+        // v29 P3 修复：显式 descriptor 补 ClrType 守卫——descriptor 注册类型与 TMessage 不符时
+        // 原直接强转 (JsonTypeInfo<TMessage>) 抛无指向性的 InvalidCastException（堆栈落在
+        // 强转行）；改抛指向性 ArgumentException（消息注明期望/实际类型），对齐非泛型版
+        // 显式契约。经 catalog 按 typeof(TMessage) 解析的路径不受影响（键即类型）
+        if (descriptor.ClrType != typeof(TMessage))
+            throw new ArgumentException(
+                $"The descriptor is registered for CLR type '{descriptor.ClrType.FullName}' but the generic message type is '{typeof(TMessage).FullName}'. Pass a descriptor registered for the generic type.",
+                nameof(descriptor));
+
         if (_options is not null)
         {
             // .NET 11 强类型路径：GetTypeInfo<T>() 返回 JsonTypeInfo<TMessage>，零装箱
@@ -170,6 +181,13 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     {
         ArgumentNullException.ThrowIfNull(descriptor);
 
+        // v29 P3 修复：显式 descriptor 补 ClrType 守卫（对齐泛型 Serialize 同款）——
+        // 类型不符时原在下方强转抛裸 InvalidCastException，改抛指向性 ArgumentException
+        if (descriptor.ClrType != typeof(TMessage))
+            throw new ArgumentException(
+                $"The descriptor is registered for CLR type '{descriptor.ClrType.FullName}' but the generic message type is '{typeof(TMessage).FullName}'. Pass a descriptor registered for the generic type.",
+                nameof(descriptor));
+
         if (_options is not null)
         {
             // .NET 11 强类型路径：GetTypeInfo<T>() 零装箱
@@ -189,9 +207,10 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     /// 消除每次 <c>SerializeToUtf8Bytes</c> 内部创建的 Writer 对象分配。
     /// </summary>
     /// <remarks>
-    /// ⚠️ v27 P3：ThreadStatic 池非重入安全——自定义 JsonConverter.Write 内回调同线程
-    /// Serialize 会清空外层缓冲；多态信封等嵌套序列化场景应使用独立实例或避开 converter
-    /// 内回调（详见类头重入限制声明）。
+    /// ⚠️ v27 P3（v29 P3 勘正）：ThreadStatic 池非重入安全——自定义 JsonConverter.Write 内
+    /// 回调同线程 Serialize 会清空外层缓冲；池字段为 static [ThreadStatic]（挂线程不挂
+    /// 实例），使用独立实例无法规避——同线程嵌套序列化共用同一 TLS 池，跨实例不隔离，
+    /// 唯一规避路径是避开 converter 内回调（详见类头重入限制声明）。
     /// </remarks>
     private static ReadOnlyMemory<byte> SerializePooled<TMessage>(
         TMessage message,

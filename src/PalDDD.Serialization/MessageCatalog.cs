@@ -134,17 +134,25 @@ public sealed class MessageCatalogBuilder
         ArgumentNullException.ThrowIfNull(descriptor);
 
         var key = new MessageCatalog.NameVersionKey(descriptor.Name, descriptor.SchemaVersion);
-        if (!_byNameAndVersion.TryAdd(key, descriptor))
+        // v29 P3 修复（半提交）：原实现 _byNameAndVersion.TryAdd 成功后 _byType.TryAdd 失败
+        // 抛异常不回滚——Builder 滞留"名称版本键已注册、类型键未注册"的中间态，异常后继续
+        // 复用同一 Builder 会产出目录缺键不一致。改为先双键 ContainsKey 预检（两键都空闲才
+        // 继续）再提交双 Add——Builder 为启动期单线程契约（见类头"启动期"声明），预检与
+        // 提交之间无并发写入窗口
+        if (_byNameAndVersion.ContainsKey(key))
         {
             throw new InvalidOperationException(
                 $"Message name '{descriptor.Name}' with schema version {descriptor.SchemaVersion} is already registered.");
         }
 
-        if (!_byType.TryAdd(descriptor.ClrType, descriptor))
+        if (_byType.ContainsKey(descriptor.ClrType))
         {
             throw new InvalidOperationException(
                 $"Message CLR type '{GetTypeName(descriptor.ClrType)}' is already registered.");
         }
+
+        _byNameAndVersion.Add(key, descriptor);
+        _byType.Add(descriptor.ClrType, descriptor);
 
         return this;
     }

@@ -62,12 +62,27 @@ public sealed class OutboxBatchProcessor
         // 保证批次内时间一致性（而非每条消息各取一次 GetUtcNow，避免批次耗时导致的处理时间漂移）。
         var now = _timeProvider.GetUtcNow();
 
-        var messages = await _store.LeasePendingMessagesAsync(
-            options.BatchSize,
-            options.LeaseOwner,
-            options.LeaseDuration,
-            options.MaxRetryCount,
-            ct).ConfigureAwait(false);
+        // v29 P3（观测域补全）：Lease 调用原在观测域外——DB 故障时 LeasePendingMessagesAsync
+        // 抛异常直接上抛，零指标零 activity（下方 finally 的 OutboxFailed 不可达），长故障期
+        // 监控面板显示"零失败"假象。选最小形态（拆两级）：Lease 外层 catch 计失败指标 +1 后
+        // 重抛（OCE 关停信号不计失败，对齐下方 catch 过滤与 tick 循环取消语义）；不建
+        // activity——StartOutboxProcess 需要 batchSize 上下文，Lease 失败时无批次可归属，
+        // tick 级失败由 OutboxProcessor.OnTickFailed 记日志兜底
+        IReadOnlyList<OutboxMessage> messages;
+        try
+        {
+            messages = await _store.LeasePendingMessagesAsync(
+                options.BatchSize,
+                options.LeaseOwner,
+                options.LeaseDuration,
+                options.MaxRetryCount,
+                ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            PalMetrics.OutboxFailed.Add(1);
+            throw;
+        }
 
         using var activity = PalActivitySource.StartOutboxProcess(messages.Count);
         var processed = 0;
@@ -115,7 +130,20 @@ public sealed class OutboxBatchProcessor
                     // RetryCount 由 Store.ReleaseForRetry 在内部递增并与状态一同持久化，
                     // 确保计数与状态原子一致（P0 修复：消除增量-持久化窗口）。
                     // 退避延迟由 IRetryBackoffPolicy 计算（默认指数 2^n，上限 64s，可选抖动）。
-                    var nextAttemptAt = now + options.RetryBackoffPolicy.ComputeDelay(msg.RetryCount + 1);
+                    // v29 P3：ComputeDelay 抛异常会跳过 MarkDead/ReleaseForRetry（消息状态滞留
+                    // 租约直到过期，重试链断）——包 try-catch 降级默认延迟 1s + Warning，保证
+                    // 标记路径始终执行（对齐 v9 观察者隔离修复的运行期半面：策略故障不阻断主流程）
+                    TimeSpan delay;
+                    try
+                    {
+                        delay = options.RetryBackoffPolicy.ComputeDelay(msg.RetryCount + 1);
+                    }
+                    catch (Exception delayEx)
+                    {
+                        delay = TimeSpan.FromSeconds(1);
+                        _logger.Warning($"Outbox: retry backoff computation failed for message {msg.Id}, falling back to 1s delay: {delayEx.Message}");
+                    }
+                    var nextAttemptAt = now + delay;
                     // P1 修复（二十一轮）：入库前截断（日志行保留完整消息）——机理见类头常量注释
                     var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
                     if (msg.RetryCount + 1 >= options.MaxRetryCount)

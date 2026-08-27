@@ -35,6 +35,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     // 三十八轮 P2 修复：消费 prefetch 上限——manual-ack 下无 BasicQos 时 broker 无界推送，
     // 慢 handler 会无限堆积 unacked 消息（内存膨胀/服务端告警）。默认 10，可按吞吐调整。
     private readonly ushort _prefetchCount;
+    // v29 P3：订阅句柄登记（consumerTag → 句柄）——DisposeAsync 兜底释放（镜像 KafkaBroker
+    // _consumers 持有列表）；多线程订阅/释放并发安全用 ConcurrentDictionary
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IAsyncDisposable> _subscriptions = new();
 
     /// <param name="prefetchCount">每消费者 unacked 消息上限（BasicQos prefetch，默认 10）。</param>
     public RabbitMqBroker(
@@ -280,13 +283,24 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         // P3 修复（八轮评审）：channel 已关/连接断时 BasicCancelAsync 抛 AlreadyClosed 类异常——
         // 订阅释放不应被关停路径异常中断，记 Warning 吞掉（对齐 TryAckSafeAsync 模式）。
         // v25 P2-5：释放时先取消组合 token（通知飞行中 handler）再解绑，最后释放 linked cts。
-        return new AsyncSubscription(async () =>
+        // v29 P3 修复（兜底释放，镜像 KafkaBroker _consumers）：此前 Broker 不追踪订阅句柄——
+        // 调用方（如容器 teardown 顺序异常）未 Dispose 句柄时 tokenReg 滞留于 ct 生命周期、
+        // 消费者悬挂至 channel 关闭。现以 consumerTag 为键登记进 _subscriptions（v26 初始化
+        // 清理 try 成功后、返回前）；DisposeAsync 在 channel 释放前遍历 Dispose 全部句柄
+        //（句柄级幂等门已防双释放）；句柄闭包正常释放时同步移除登记，防长驻 Broker 反复
+        // 订阅/退订下登记表无界增长。残留窗口声明：DisposeAsync 遍历后并发完成登记的句柄
+        //（SubscribeAsync 入口的 _disposed 守卫之后的飞行中订阅）不在兜底范围——句柄随
+        // channel 释放终结，仅 tokenReg 沿调用方 ct 生命周期滞留（修复前常态，收敛不改恶）
+        var subscription = new AsyncSubscription(async () =>
         {
+            _subscriptions.TryRemove(consumerTag!, out _);
             tokenReg.Dispose();
             linkedCts.Cancel();
             await CancelConsumeSafeAsync(consumerTag!, queueName).ConfigureAwait(false);
             linkedCts.Dispose();
         });
+        _subscriptions[consumerTag] = subscription;
+        return subscription;
     }
 
     public async ValueTask DisposeAsync()
@@ -296,7 +310,12 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         // Channel；连接的生命周期由创建者管理。
         // v9 E3：幂等门（对齐 KafkaBroker ITM-217）——双 Dispose 时 Channel 自身幂等，
         // 显式门消除对下游幂等性的依赖假设
+        // v29 P3：订阅句柄兜底释放——channel 释放前遍历 Dispose 全部登记句柄（调用方
+        // 已自行释放时句柄幂等门使再释放为 no-op）
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        foreach (var subscription in _subscriptions.Values)
+            await subscription.DisposeAsync().ConfigureAwait(false);
+        _subscriptions.Clear();
         await _channel.DisposeAsync().ConfigureAwait(false);
     }
 

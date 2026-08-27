@@ -24,6 +24,15 @@ namespace PalDDD.PalORM.Stores;
 /// <b>乐观并发</b>：<see cref="IEventLog.AppendAsync"/> 在 INSERT 前预检查 <c>SELECT MAX(StreamVersion)</c>，
 /// 与 <c>ExpectedStreamVersion.Matches</c> 配合实现流版本乐观控制；事件流的唯一索引 (StreamName, StreamVersion) 是兜底。
 /// </para>
+/// <para>
+/// ⚠️ <b>倒挂-跳过风险（v29 P3 声明，镜像 EventLogPositionReserver 三十八轮 Hi/Lo 同款）</b>：
+/// DB 自增使 GlobalPosition 的<b>分配序</b>（INSERT 时点）与<b>事务提交序</b>可倒挂——事务 B
+/// 先 INSERT 拿到更高位置 110 并先提交、事务 A 后拿 100 后提交时无碍；但事务 A 先 INSERT 拿到
+/// 100 尚未提交、事务 B 后拿 110 先提交时，按 <c>ReadAllAsync(fromPosition)</c> 检查点消费的
+/// 消费方读到 110（A 未提交不可见）即推进检查点至 110，A 提交后其事件位置 100 已低于检查点，
+/// 被永久跳过。检查点用法要求所有追加方提交延迟相近，或改用 <c>ReadStreamAsync</c>
+/// （流内 StreamVersion 严格连续，不受自增分配倒挂影响）。
+/// </para>
 /// </summary>
 public class PalOrmEventLog<TProvider> : IEventLog
     where TProvider : IDbProvider

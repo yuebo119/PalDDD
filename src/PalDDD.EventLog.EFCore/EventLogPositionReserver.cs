@@ -157,8 +157,37 @@ public sealed class EventLogPositionReserver
                 }
                 catch (DbUpdateConcurrencyException)
                 {
-                    // CAS 失败（Revision 不匹配）—— 另一个进程同时分配了区块。重试。
+                    // v29 P2 修复（镜像 v28 唯一冲突分支的快照快速失败手法）：CAS 失败后原实现
+                    // 直接 continue，但 MySQL REPEATABLE READ（外层显式事务内快照固定）下，
+                    // 下一迭代重查恒返回快照旧 Revision → 再 UPDATE 必再败 → 5 次空转后抛
+                    // 误导性 "optimistic concurrency retries" IOE（与 v28 唯一冲突分支同机理）。
+                    // 修复：CAS 失败本身即证明 DB 真值 Revision 已被并发提交推进（UPDATE 是
+                    // 当前读），再以 AsNoTracking 探测——若探测仍返回与本轮 CAS 基准（Original
+                    // Revision）相同的旧值，说明本事务读视图看不到并发提交，同事务内重试不可能
+                    // 成功，直接抛带快照语义的 IOE（外层调用方以新事务重试可恢复——新事务建立
+                    // 新快照即可见）；若探测已见不同（更新）Revision（如 PG ReadCommitted 语句级
+                    // 快照 / 无外层事务的自动提交），读视图新鲜，continue 正常重试。
+                    // [推断] 基于 MySQL 一致性读语义推演，未跑真 MySQL 探针——CI 环境以
+                    // InMemory mock 同构场景验证（见 ReserveAsync_CasFailureStaleSnapshot 测试）。
+                    var snapshotRevision = context.Entry(allocator).Property(a => a.Revision).OriginalValue;
                     context.Entry(allocator).State = EntityState.Detached;
+                    EventLogGlobalPositionAllocator? probe = null;
+                    try
+                    {
+                        probe = await context.GlobalPositionAllocators
+                            .AsNoTracking()
+                            .SingleOrDefaultAsync(a => a.Id == EventLogGlobalPositionAllocator.SingletonId, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch (DbException)
+                    {
+                        // PG aborted transaction（25P02）等探测失败——无法判定快照新鲜度，
+                        // 退回原 continue 重试语义（最多 5 次后以既有 IOE 失败），
+                        // 不掩盖原始 DbUpdateConcurrencyException
+                    }
+                    if (probe is not null && probe.Revision == snapshotRevision)
+                        throw new InvalidOperationException(
+                            "The allocator revision was advanced by a concurrent commit (the failed CAS proves it), but the probe still returns the same stale revision — under MySQL REPEATABLE READ the concurrently committed revision is not visible to the current transaction snapshot; retrying inside the same transaction cannot succeed. The caller should retry with a new transaction, which establishes a fresh snapshot and can see the new revision.");
                     continue;
                 }
                 catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))

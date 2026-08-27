@@ -59,7 +59,14 @@ public sealed class UnitOfWork<TContext> : IUnitOfWork
 
     /// <inheritdoc/>
     public async ValueTask<int> SaveChangesAsync(CancellationToken ct = default)
-        => await _context.SaveChangesAsync(ct).ConfigureAwait(false);
+    {
+        // v29 P3（ITM-284 三栈守卫补全 4/4）：SaveChangesAsync 缺 disposed 守卫——同接口
+        // Begin/Commit/Rollback 三方法均有 ObjectDisposedException.ThrowIf，本方法在
+        // Dispose 后落到已释放 DbContext 上抛 provider 级异常（语义误导、排障指向错误层）。
+        // 对齐其余三方法形态
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return await _context.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
 
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()

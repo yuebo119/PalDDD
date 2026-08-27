@@ -36,7 +36,14 @@ TState> : PeriodicBackgroundProcessor
         TimeSpan? pollInterval = null)
         // P3 修复（十七轮）：options 空守卫前移到 base 实参——原实参 pollInterval 为 null 时
         // 先在 options.CurrentValue 解引用 NRE，构造体内的 ThrowIfNull 永不可达（对齐 OutboxProcessor）
-        : base(scopeFactory, pollInterval ?? (options ?? throw new ArgumentNullException(nameof(options))).CurrentValue.PollInterval)
+        // v29 P3：?? 短路勘正——pollInterval 非 null 时 (options ?? throw) 不求值，base 构造
+        // 成功创建了 PeriodicTimer 后构造体 ThrowIfNull 才抛（构造中断 Dispose 不可达）→ timer
+        // 泄漏。改为三元显式判 options：null 时在任何路径上都先于 base 调用求值抛出，
+        // 不创建 timer（对齐 OutboxProcessor v29 同款）
+        : base(scopeFactory,
+               options is null
+                   ? throw new ArgumentNullException(nameof(options))
+                   : pollInterval ?? options.CurrentValue.PollInterval)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
