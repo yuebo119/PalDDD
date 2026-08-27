@@ -1,6 +1,7 @@
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using PalORM;
+using PalDDD.Core;
 using PalDDD.Projections;
 
 namespace PalDDD.PalORM.Stores;
@@ -149,14 +150,19 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         // ITM-163 修复：补 checkpoint null + failureReason 空白守卫（对齐 DapperProjectionCheckpointStore/InMemoryProjectionCheckpointStore）
         ArgumentNullException.ThrowIfNull(checkpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+        // v26 P3 截断族：failureReason 入库前 Core.FailureReason.Normalize 截断（对齐
+        // PalOrmOutboxStore ITM-082 存储层兜底先例，收敛到 Core 公共方法：2000 上限 +
+        // 空白归一）——超长 ex.Message 会让 MarkFailed 的持久化抛列截断异常（error 列
+        // 上限 2048 族），终态保存本身失败掩盖原始异常（ITM-167/175）；本地对象同步截断值
+        var reason = FailureReason.Normalize(failureReason);
         var expectedRevision = checkpoint.Revision;
         var statusFailed = (int)ProjectionCheckpointStatus.Failed;
         var statusCompleted = (int)ProjectionCheckpointStatus.Completed;
         var affected = await Session.ExecuteAsync(
-            $"UPDATE projection_checkpoints SET status = {statusFailed}, updated_at = {failedAt}, revision = revision + 1, error = {failureReason} WHERE projection_name = {checkpoint.ProjectionName} AND source_name = {checkpoint.SourceName} AND position = {checkpoint.Position} AND revision = {expectedRevision} AND status <> {statusCompleted}",
+            $"UPDATE projection_checkpoints SET status = {statusFailed}, updated_at = {failedAt}, revision = revision + 1, error = {reason} WHERE projection_name = {checkpoint.ProjectionName} AND source_name = {checkpoint.SourceName} AND position = {checkpoint.Position} AND revision = {expectedRevision} AND status <> {statusCompleted}",
             ct).ConfigureAwait(false);
         if (affected > 0)
-            checkpoint.MarkFailed(failureReason, failedAt);
+            checkpoint.MarkFailed(reason, failedAt);
     }
 
     /// <inheritdoc />

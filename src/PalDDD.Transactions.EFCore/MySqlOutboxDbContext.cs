@@ -51,10 +51,10 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
     /// 单 owner 串行租约）；PG/SqlServer 走 RETURNING/OUTPUT 单语句天然免疫。
     /// </para>
     /// <para>
-    /// 回读物化保持跟踪（与 PG/SqlServer 租约路径同因）：<b>v16 勘正</b>——三十四轮 ITM-210
-    /// token 化后基类 MarkProcessed/MarkDead 已是 FencedTarget + ExecuteUpdate 直写 DB（不再依赖
-    /// ChangeTracker），本注释的原始理由失效；当前保留跟踪是兼容性现状（无害——租约回读值即
-    /// DB 真值，物化即 Unchanged）。AcceptAllChanges 不再需要：旧路径
+    /// 回读物化改用 AsNoTracking（v26 P3，对齐 SqliteOutbox CAS 路径）：<b>v16 勘正</b>——
+    /// 三十四轮 ITM-210 token 化后基类 MarkProcessed/MarkDead 已是 FencedTarget +
+    /// ExecuteUpdate 直写 DB（不再依赖 ChangeTracker），调用方（OutboxBatchProcessor）终态写
+    /// 全部直写，跟踪物化无消费方。AcceptAllChanges 不再需要：旧路径
     /// FromSqlRaw 物化后内存改 LockedBy/LockedUntil 产生 Modified 脏状态需归位；
     /// 两步法回读值即 DB 真值，物化即 Unchanged。
     /// </para>
@@ -112,7 +112,8 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
             new object[] { maxRetryCount, now, batchSize, owner, until }, ct).ConfigureAwait(false);
 #pragma warning restore EF1003
 
-        // 步骤 2：按精确租约标识 (owner, until) 回读——跟踪物化（Mark* 语义所需，见 remarks）；
+        // 步骤 2：按精确租约标识 (owner, until) 回读——AsNoTracking 物化（v26 P3：Mark* 已是
+        // FencedTarget + ExecuteUpdate 直写，无跟踪消费方，见 remarks）；
         // {0}/{1} 为 FromSqlRaw 字面参数占位符（值全部参数化，无用户输入拼接——EF1002 豁免）
 #pragma warning disable EF1002
         return await OutboxMessages
@@ -123,6 +124,7 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
                 ORDER BY CreatedAt
                 """,
                 owner, until)
+            .AsNoTracking()
             .ToListAsync(ct).ConfigureAwait(false);
 #pragma warning restore EF1002
     }

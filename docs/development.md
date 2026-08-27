@@ -144,7 +144,9 @@ git diff --check
 | PALMSG | MessageRegistryGenerator | PALMSG001-006 | wire name 字符集/格式/版本后缀/schema 版本一致性/泛型声明不支持 |
 | PALID | IdentityGenerator | PALID001 | [GenerateId] 源类型白名单外（Guid/Ulid/int/long/string） |
 | PALID | IdentityGenerator | PALID002 | 目标声明非 `partial record struct`（无法与生成物合并） |
+| PALID | IdentityGenerator | PALID005 | 源类型为 null 或非命名类型（`typeof(T)`/`typeof(int[])` 等，消息按两种根因区分） |
 | PALENUM | EnumGenerator | PALENUM001-003 | SmartEnum 基类校验、字段声明约束、record 声明不支持 |
+| PALENUM | EnumGenerator | PALENUM006 | 目标声明非 partial class（生成物无法合并，CS0260） |
 
 示例：
 

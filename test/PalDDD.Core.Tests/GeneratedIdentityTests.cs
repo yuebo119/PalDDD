@@ -192,4 +192,17 @@ public sealed class GeneratedIdentityTests
         var type = typeof(CustomerId);
         await Assert.That(type.GetInterfaces()).Contains(typeof(ISpanParsable<>).MakeGenericType(type));
     }
+
+    // ── v26 P3 生成器族：string Id 的 default 结构 ToString 防 NRE ──
+
+    [Test]
+    public async Task StringIdentity_DefaultToString_ReturnsEmptyInsteadOfThrowing()
+    {
+        // v26 P3 生成器族：default(TenantKey).Value == null——原生成物 ToString() 统一
+        // 生成 Value.ToString()!，null.ToString() 抛 NullReferenceException；修复后仅
+        // string 分支生成 Value ?? string.Empty（值类型分支保持原样——?? 对非可空值
+        // 类型不编译）
+        var text = default(TenantKey).ToString();
+        await Assert.That(text).IsEqualTo(string.Empty);
+    }
 }

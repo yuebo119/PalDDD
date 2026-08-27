@@ -94,10 +94,14 @@ public abstract class SagaState
     /// 创建当前状态的成员级浅拷贝（v25 P3 行为族 B1）——供 <see cref="InMemorySagaStateStore{TState}"/>
     /// 的 successor 租约替换使用（对齐 InMemoryOutboxStore 的 ITM-174 模式）。
     /// <see cref="object.MemberwiseClone"/> 为 CLR 内在方法（非反射，AOT 安全），拷贝全部
-    /// 实例字段（含子类字段）。⚠️ <see cref="StepStartedAt"/>/<see cref="ExecutedStepKeys"/>
-    /// 为 init-only 属性，浅拷贝后新旧实例共享集合容器：标量字段（Status/Version/LeasedBy 等）
-    /// 已隔离，租约 fencing 语义不受影响；步骤执行轨迹（集合内容）属"事实记录"而非租约
-    /// 保护状态，旧持有者的步骤记录反映到 successor 语义可接受（其确实执行过该步骤）。
+    /// 实例字段（含子类字段）。⚠️ v26 P3 勘正：<see cref="StepStartedAt"/>/<see cref="ExecutedStepKeys"/>
+    /// 为 init-only 属性，浅拷贝后新旧实例共享集合容器——<b>并发写安全未保障</b>（旧持有者僵尸
+    /// 与新持有者并发执行时对共享容器的并发读写可抛，如 Dictionary 枚举中修改）；
+    /// <b>Version fencing 语义不受影响</b>（标量字段 Status/Version/LeasedBy 等已隔离，
+    /// 僵尸的 SaveChangesAsync 因 Version 落后返回 0）；<b>深隔离需后续破坏性变更</b>
+    /// （拷贝容器会改变既有共享语义，须随主版本演进）。当前共享语义下，步骤执行轨迹
+    /// （集合内容）属"事实记录"而非租约保护状态，旧持有者的步骤记录反映到 successor
+    /// 语义可接受（其确实执行过该步骤）。
     /// </summary>
     internal SagaState CloneForLease() => (SagaState)MemberwiseClone();
 }

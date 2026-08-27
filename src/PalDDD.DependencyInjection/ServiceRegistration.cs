@@ -193,6 +193,11 @@ public static class ServiceRegistration
                 logging.SetMinimumLevel(level);
             logging.AddZLoggerConsole(options => options.UseJsonFormatter());
         });
+        // v26 P3 声明：开放泛型注册在 AOT 下对值类型 T 解析会抛 AotCannotCreateGenericValueType
+        // （同 AddPalPipelineBehaviors 的 ThrowIfAotNotSupported 注释自述机制——DI CallSiteFactory
+        // 硬校验，开放泛型 + 值类型实参组合无 native code 可用）。T 惯例为引用类型
+        // （logger 类别，如 IPalLogger<LoggingBehavior<,>>），值类型类别无业务意义，
+        // 故不设 AOT 门禁仅此声明。
         services.TryAddSingleton(typeof(IPalLogger<>), typeof(PalLogger<>));
         return services;
     }
@@ -383,6 +388,8 @@ internal sealed class HandlerRegistrar : IHostedService
 
     public HandlerRegistrar(CQRS.Dispatcher dispatcher, HandlerCollector collector)
     {
+        ArgumentNullException.ThrowIfNull(dispatcher); // v26 P3（ITM-284 对齐）：全仓构造守卫
+        ArgumentNullException.ThrowIfNull(collector);
         _dispatcher = dispatcher;
         _collector = collector;
     }

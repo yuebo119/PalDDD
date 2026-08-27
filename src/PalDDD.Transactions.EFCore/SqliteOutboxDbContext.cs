@@ -21,7 +21,7 @@ namespace PalDDD.Transactions;
 /// </remarks>
 public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDbContext(options)
 {
-    /// <summary>按资格条件分页查询到期消息（GetPending/Lease 共用）。
+    /// <summary>按资格条件分页查询到期消息（GetPending/Lease 共用，恒 AsNoTracking）。
     /// <para>
     /// 三十九轮 ITM-261 修复：EF Core 11 preview7 的 SQLite provider 不能翻译 DateTimeOffset 的
     /// <b>有序</b>比较（<c>&lt;=</c>）——等值比较可翻译（MarkProcessed/FencedTarget 的租约守卫不受影响），
@@ -29,9 +29,15 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
     /// 分页循环保证"时间过滤先于 Take"：首页全为未来重试/未到期租约时继续翻页直至填满
     /// batchSize 或耗尽（此前被测试本地重写遮蔽，重写版"SQL Take 后内存过滤"会少取批次）。
     /// </para>
+    /// <para>
+    /// ⚠️ v26 P3 声明（翻页耗尽）：稳态退避重试下最坏全表分页扫描（页数=表/batchSize）——
+    /// 所有候选行均为未来重试/活跃租约时逐页取完整表（时间过滤在内存，(Status, NextAttemptAt,
+    /// CreatedAt) 索引无法提前裁剪未到期行）；批量退避表膨胀时考虑索引化到期时间列的
+    /// 后续优化（需方言侧支持 DateTimeOffset 有序比较的查询形态，突破 ITM-261 限制方可下推）。
+    /// </para>
     /// </summary>
     private async Task<List<OutboxMessage>> QueryEligibleAsync(
-        int batchSize, int maxRetryCount, bool asNoTracking, CancellationToken ct)
+        int batchSize, int maxRetryCount, CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v20 C-1
         var now = GetUtcNow();
@@ -39,8 +45,9 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
         var skip = 0;
         while (result.Count < batchSize)
         {
-            var query = asNoTracking ? OutboxMessages.AsNoTracking() : OutboxMessages;
-            var page = await query
+            // v26 P3：删除 asNoTracking 死分支——两调用点（GetPending/Lease）均传 true，
+            // false 分支零调用方；恒 AsNoTracking（只读契约 + Lease 的 CAS 候选路径）
+            var page = await OutboxMessages.AsNoTracking()
                 .Where(m => m.Status == OutboxStatus.Pending && m.RetryCount < maxRetryCount)
                 // ITM-261 续：EF SQLite 对 DateTimeOffset 连 ORDER BY 也不支持（"does not support
                 // expressions of type 'DateTimeOffset' in ORDER BY clauses"）——改按 Id 排序：
@@ -66,7 +73,7 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
         CancellationToken ct)
         // 优化（二十五轮 API 扫描 EF-5）：AsNoTracking——只读契约（接口 doc 保证不进
         // Mark*+SaveChanges）；违反契约的突变将静默丢失
-        => await QueryEligibleAsync(batchSize, maxRetryCount, asNoTracking: true, ct).ConfigureAwait(false);
+        => await QueryEligibleAsync(batchSize, maxRetryCount, ct).ConfigureAwait(false);
 
     /// <inheritdoc/>
     public override async ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
@@ -93,7 +100,7 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
         // ExecuteUpdateAsync 的 WHERE 守卫（Id 等值 + Status==Pending + LockedUntil==读到的原值）
         // 全部为等值比较，EF SQLite 可翻译（ITM-261：仅 DateTimeOffset 有序比较不可翻译）。
         // LockedUntil 等值即版本守卫——另一实例先一步写入租约后本条影响 0 行，消息丢弃。
-        var candidates = await QueryEligibleAsync(batchSize, maxRetryCount, asNoTracking: true, ct).ConfigureAwait(false);
+        var candidates = await QueryEligibleAsync(batchSize, maxRetryCount, ct).ConfigureAwait(false);
 
         var leased = new List<OutboxMessage>(candidates.Count);
         foreach (var msg in candidates)

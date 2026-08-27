@@ -77,6 +77,11 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
                       FOR UPDATE SKIP LOCKED
                   )
                   RETURNING *", batchSize, maxRetryCount, owner, sec)
+            // v26 P3：AsNoTracking 物化——调用方（OutboxBatchProcessor）的 Mark*/ReleaseForRetry
+            // 均为 FencedTarget + ExecuteUpdate 直写 DB（不依赖 ChangeTracker），租约回读实体仅
+            // 用于内存 fencing 判断（LockedBy/LockedUntil 原值），无跟踪消费方；镜像
+            // SqliteOutbox CAS 路径的 AsNoTracking 形态（Sqlite 租约实体本就无跟踪且全链路工作）
+            .AsNoTracking()
             .ToListAsync(ct).ConfigureAwait(false);
 #pragma warning restore EF1002
     }

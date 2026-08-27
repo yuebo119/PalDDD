@@ -96,6 +96,21 @@ public sealed class DefaultSagaManager : ISagaManager
         _interrupted.TryRemove(new KeyValuePair<PalUlid, InterruptedSagaEntry>(sagaId, entry));
     }
 
+    /// <summary>
+    /// 失效指定 Saga 的中断条目——超时兜底补偿（SagaTimeoutProcessor）把 Saga 置
+    /// Compensated/CompensationFailed 后调用，使迟到的决策走"无已注册的中断条目"
+    /// 可见失败而非静默处理。
+    /// <para>
+    /// v26 P1 修复背景：ResumeAsync 内的终态分支（Compensated/CompensationFailed/
+    /// DeadLettered 检查）依赖 resumedState 终态，但条目闭包捕获的是<b>中断时实例</b>，
+    /// 补偿写的是 store 租约 successor（CloneForLease 后继实例）——旧实例永远停留在
+    /// AwaitingHumanDecision，终态分支不可达，迟到决策会在已回滚 Saga 上执行副作用
+    /// 并假成功。本方法把失效责任移到补偿侧（补偿持有 successor 真实状态），
+    /// 终态分支保留作双保险。
+    /// </para>
+    /// </summary>
+    public void InvalidateInterrupted(PalUlid sagaId) => _interrupted.TryRemove(sagaId, out _);
+
     /// <inheritdoc/>
     public ValueTask<IReadOnlyList<SagaState>> GetInterruptedSagasAsync(CancellationToken ct)
     {

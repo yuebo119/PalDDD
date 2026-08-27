@@ -216,8 +216,11 @@ public static class PostgreSqlReportHelper
         // Npgsql 10.x: 使用流式复制替代 CopyToAsync
         var buffer = new char[8192];
         int charsRead;
-        while ((charsRead = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
-            await writer.WriteAsync(buffer, 0, charsRead).ConfigureAwait(false);
+        // v26 P3 H6：补 ct 传导（同文件其余方法均传 ct）——TextReader/StreamWriter 的
+        // (char[],int,int) 重载不带 CancellationToken，改用 Memory 重载透传 ct，
+        // 取消延迟从"整个拷贝完成"收敛到"当前块 IO 完成"。
+        while ((charsRead = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false)) > 0)
+            await writer.WriteAsync(buffer.AsMemory(0, charsRead), ct).ConfigureAwait(false);
 
         // ITM-167 修复：StreamWriter 改 await using + 显式异步 Flush——
         // 原同步 using/Dispose 在释放时同步 flush 阻塞线程（同步释放路径）。

@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using PalORM;
+using PalDDD.Core;
 using PalDDD.PalORM.Models;
 using PalDDD.Transactions;
 
@@ -194,6 +195,12 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         // InMemoryInboxStore 同款守卫）——缺守卫时空/空白失败原因会写入 last_error 列，破坏跨实现
         // 契约一致（其余三版均抛 ArgumentException）
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+        // v26 P3 截断族：failureReason 入库前 Core.FailureReason.Normalize 截断（对齐
+        // PalOrmOutboxStore ITM-082 存储层兜底先例，收敛到 Core 公共方法：2000 上限 +
+        // 空白归一）——超长 ex.Message（含大 payload 的序列化错误）会让 MarkFailed 的
+        // 持久化抛列截断异常（error 列上限 2048 族），终态保存本身失败掩盖原始异常
+        //（ITM-167/175）；本地对象同步截断值，与 DB 行一致
+        var reason = FailureReason.Normalize(failureReason);
         // ITM-274（R42）：同 MarkProcessedAsync——null ProcessingStartedAt 显式 fail-fast（对齐 Dapper 姊妹）
         if (message.ProcessingStartedAt is null)
             throw new ArgumentNullException(nameof(message) + "." + nameof(message.ProcessingStartedAt));
@@ -201,13 +208,13 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         // WHERE status=Processing(1) 守卫，防止覆盖已 Processed 的记录（与 Dapper 实现一致）
         // 三十八轮 P2 修复（ITM-210 Inbox 姊妹）：processing_started_at 抢占 token 守卫（对齐 Dapper 版同款）
         var affected = await Session.ExecuteAsync(
-            $"UPDATE inbox_messages SET status = {(int)InboxStatus.Failed}, last_error = {failureReason} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing} AND processing_started_at = {message.ProcessingStartedAt}",
+            $"UPDATE inbox_messages SET status = {(int)InboxStatus.Failed}, last_error = {reason} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing} AND processing_started_at = {message.ProcessingStartedAt}",
             ct).ConfigureAwait(false);
         // ITM-168 修复：affected > 0 才变更本地对象（同 MarkProcessedAsync 陈旧语义修复）。
         if (affected > 0)
         {
             message.Status = InboxStatus.Failed;
-            message.LastError = failureReason;
+            message.LastError = reason;
         }
     }
 }

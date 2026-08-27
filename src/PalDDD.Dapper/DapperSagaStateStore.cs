@@ -87,6 +87,14 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        // v26 P3 守卫族：leaseDuration 边界守卫——v25 只修了 EFCore/PalORM 两姊妹
+        //（SagaStateDbContext/PalOrmSagaStateStore LeaseActiveSagasAsync 同型漏网），
+        // 本版 until = now + leaseDuration 同样受非正租约（租约即刻过期/永不过期语义错乱）
+        // 与秒数溢出影响；消息与双检形态对齐两姊妹同款
+        if (leaseDuration <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration must be greater than zero.");
+        if (leaseDuration.TotalSeconds > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for the lease LeasedUntil value.");
 
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
         var now = _timeProvider.GetUtcNow();

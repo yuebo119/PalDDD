@@ -73,6 +73,10 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
             return await TryReuseRecordAsync(record, now, policy, ct).ConfigureAwait(false);
         }
 
+        // v26 P3 修复：读路径无效分支（活跃 Processing/Completed 未过期）Detach——跟踪查询
+        // 物化的实体滞留会在长驻 scope 下累积（对照 ProjectionCheckpointDbContext 三十八轮
+        // 同分支已修；v25 B5 只修了 GetAsync 的 AsNoTracking 与终态 Detach，此分支漏）
+        Entry(record).State = EntityState.Detached;
         return null;
     }
 
@@ -101,7 +105,10 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
 
         AttachIfDetached(record);
-        record.MarkFailed(failureReason, failedAt);
+        // v26 P3 修复：存储层截断兜底（FailureReason.Normalize）——Error 列上限内保障，
+        // 超长原因使 MarkFailed 持久化自身抛 DbUpdateException 掩盖原始失败（调用层
+        // IdempotencyProcessor 已 Normalize，此处防御直调 Store 路径，对齐 Inbox/Checkpoint 姊妹）
+        record.MarkFailed(Core.FailureReason.Normalize(failureReason), failedAt);
         await SaveTerminalStateAsync(record, ct).ConfigureAwait(false);
     }
 

@@ -196,4 +196,65 @@ public sealed class SagaProcessorTests
     /// <summary>空 Saga — 无步骤注册，扫描无操作</summary>
     private sealed class NoOpSaga : Saga<LifecycleSagaState>
     { }
+
+    // ── v26 P1 探针装置：HITL 超时兜底 + 迟到决策 ──
+
+    private sealed record TimeoutKickoff;
+    private sealed record TimeoutApprove(bool Approved);
+
+    private sealed class TimeoutHitlSaga : Saga<LifecycleSagaState>
+    {
+        public TimeoutHitlSaga()
+        {
+            When<TimeoutKickoff>("Initial",
+                new InterruptStep("await-approval", "threshold", typeof(TimeoutApprove))
+                { Timeout = TimeSpan.FromSeconds(1) });
+            When<TimeoutApprove>("Initial", new SagaStep("apply-decision",
+                execute: static (s, e, ct) =>
+                {
+                    s.CurrentState = "Approved"; // 决策副作用标记——探针断言不发生
+                    s.Status = SagaStatus.Completed;
+                    return new ValueTask<SagaState>(s);
+                }));
+        }
+    }
+
+    [Test]
+    public async Task CheckTimeouts_CompensatedInterrupt_LateDecisionFailsVisibly(CancellationToken ct)
+    {
+        // v26 P1 探针：中断 → SagaTimeoutProcessor 真路径超时补偿（store 租约经
+        // CloneForLease 返回 successor，补偿写 successor；Manager 条目闭包捕获中断时
+        // 旧实例——v25 P2-4 的终态分支因此不可达）→ 迟到决策必须可见失败。
+        // 修复前双红信号：① ResumeAsync 假成功静默返回（不抛 IOE）；
+        // ② 决策步骤在已回滚 Saga 上执行副作用（旧实例 CurrentState 被改 "Approved"）
+        var manager = new DefaultSagaManager();
+        var saga = new TimeoutHitlSaga { SagaManager = manager };
+        var store = new InMemorySagaStateStore<LifecycleSagaState>();
+        var state = new LifecycleSagaState();
+
+        var interrupted = await saga.ProcessEventAsync(state, new TimeoutKickoff(), ct);
+        await Assert.That(interrupted.Status).IsEqualTo(SagaStatus.AwaitingHumanDecision);
+
+        // store 落盘 + 中断步骤时间戳拨到过去（触发 IsTimedOut）
+        store.Add(state);
+        foreach (var key in state.StepStartedAt.Keys.ToList())
+            state.StepStartedAt[key] = DateTimeOffset.UtcNow.AddMinutes(-5);
+
+        var processor = new SagaTimeoutProcessor<LifecycleSagaState>(
+            store, saga,
+            NullPalLogger<SagaTimeoutProcessor<LifecycleSagaState>>.Instance,
+            new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions { TimeoutScanBatchSize = 64 }),
+            TimeProvider.System);
+        await processor.CheckTimeoutsAsync(ct);
+
+        // 补偿已发生（写的是 store successor，旧实例不变——successor 化语义）
+        var persisted = await store.GetByIdAsync(state.SagaId, ct);
+        await Assert.That(persisted!.Status).IsEqualTo(SagaStatus.Compensated);
+
+        // 迟到决策：必须可见失败且副作用不施加
+        await Assert.That(async () =>
+            await manager.ResumeAsync(state.SagaId, new TimeoutApprove(true), ct))
+            .Throws<InvalidOperationException>();
+        await Assert.That(state.CurrentState).IsNotEqualTo("Approved");
+    }
 }

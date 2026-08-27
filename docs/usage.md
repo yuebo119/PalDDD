@@ -269,7 +269,7 @@ var processed = await inbox.TryProcessAsync(
 
 `false` 表示该消息已处理或仍在其他消费者处理中。
 
-`InboxProcessor` 会发出 `Inbox Process` span。它使用同一个 `PalActivitySource.Name`，包含 `pal.inbox.consumer`、`pal.inbox.message_id` 和 `pal.inbox.result` 标签；结果值为 `processed`、`skipped` 或 `failed`。
+`InboxProcessor` 会发出 `Inbox Process` span。它使用同一个 `PalActivitySource.Name`，仅包含 `pal.inbox.consumer` 和 `pal.inbox.result` 标签——`pal.inbox.message_id` 已按 ITM-229 标准从 tag 移除（高基数：每消息唯一，且可能含业务 ID）；结果值为 `processed`、`skipped` 或 `failed`。
 
 同一幂等消费边界还会记录 `paldd.inbox.processed`、`paldd.inbox.skipped` 和 `paldd.inbox.failed` metrics，应用层可通过 OpenTelemetry `AddMeter(PalActivitySource.Name)` 采集。
 
@@ -433,7 +433,7 @@ if (execution.Status == IdempotencyExecutionStatus.Cached)
 
 `Executed` 表示本次请求执行了 handler；`Cached` 表示返回之前成功执行的结果；`Skipped` 表示同 key 当前仍在处理中或没有可重放结果。
 
-`IdempotencyProcessor` 会发出 `Idempotency Execute` span。它使用同一个 `PalActivitySource.Name`，包含 `pal.idempotency.operation`、`pal.idempotency.key` 和 `pal.idempotency.result` 标签；结果值为 `executed`、`cached`、`skipped` 或 `failed`。
+`IdempotencyProcessor` 会发出 `Idempotency Execute` span。它使用同一个 `PalActivitySource.Name`，仅包含 `pal.idempotency.operation` 和 `pal.idempotency.result` 标签——`pal.idempotency.key` 已按 ITM-229 标准从 tag 移除（高基数，且可能含敏感业务标识）；结果值为 `executed`、`cached`、`skipped` 或 `failed`。
 
 同一执行边界还会记录 `paldd.idempotency.executed`、`paldd.idempotency.cached`、`paldd.idempotency.skipped` 和 `paldd.idempotency.failed` metrics，应用层可通过 OpenTelemetry `AddMeter(PalActivitySource.Name)` 采集。
 

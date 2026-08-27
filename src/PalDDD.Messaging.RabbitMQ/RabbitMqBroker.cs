@@ -227,13 +227,30 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         };
 
         // 三十八轮 P2 修复：consume 前设置 prefetch 上限——manual-ack 下防 broker 无界推送
-        await _channel.BasicQosAsync(0, _prefetchCount, false, ct).ConfigureAwait(false);
-        var consumerTag = await _channel.BasicConsumeAsync(queueName, autoAck: false, consumer, cancellationToken: ct).ConfigureAwait(false);
+        // v26 P3（镜像 KafkaBroker v18 E-1）：初始化段失败清理——linkedCts 创建后至订阅句柄
+        // 构造前（BasicQosAsync/BasicConsumeAsync/ct.Register）任一抛出时，linkedCts（含其
+        // 对 ct 的 linked 注册）与 tokenReg 无人负责释放（句柄尚未创建），就地 Dispose 后重抛；
+        // BasicConsumeAsync 已成功时同步取消消费，防消费者悬挂在已声明队列上无人管理
+        string? consumerTag = null;
+        CancellationTokenRegistration tokenReg = default;
+        try
+        {
+            await _channel.BasicQosAsync(0, _prefetchCount, false, ct).ConfigureAwait(false);
+            consumerTag = await _channel.BasicConsumeAsync(queueName, autoAck: false, consumer, cancellationToken: ct).ConfigureAwait(false);
 
-        // v25 P2-5：ct 取消 → 异步解绑消费者终止消费；channel 已关等异常由安全包装吞成
-        // Warning。句柄释放时 Dispose registration 防泄漏（释放与取消并发时，双
-        // BasicCancelAsync 的后者同样被安全包装吞掉）
-        var tokenReg = ct.Register(() => { _ = CancelConsumeSafeAsync(consumerTag, queueName); });
+            // v25 P2-5：ct 取消 → 异步解绑消费者终止消费；channel 已关等异常由安全包装吞成
+            // Warning。句柄释放时 Dispose registration 防泄漏（释放与取消并发时，双
+            // BasicCancelAsync 的后者同样被安全包装吞掉）
+            tokenReg = ct.Register(() => { _ = CancelConsumeSafeAsync(consumerTag!, queueName); });
+        }
+        catch
+        {
+            tokenReg.Dispose();
+            if (consumerTag is not null)
+                await CancelConsumeSafeAsync(consumerTag, queueName).ConfigureAwait(false);
+            linkedCts.Dispose();
+            throw;
+        }
 
         // P3 修复（八轮评审）：channel 已关/连接断时 BasicCancelAsync 抛 AlreadyClosed 类异常——
         // 订阅释放不应被关停路径异常中断，记 Warning 吞掉（对齐 TryAckSafeAsync 模式）。
@@ -242,7 +259,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         {
             tokenReg.Dispose();
             linkedCts.Cancel();
-            await CancelConsumeSafeAsync(consumerTag, queueName).ConfigureAwait(false);
+            await CancelConsumeSafeAsync(consumerTag!, queueName).ConfigureAwait(false);
             linkedCts.Dispose();
         });
     }
