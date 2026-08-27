@@ -73,12 +73,14 @@ public static class ServiceRegistration
     /// </para>
     /// <para><b>互斥语义</b>：与闭合注册版先到先得——服务集合已存在开放泛型 <c>IPipelineBehavior&lt;,&gt;</c>
     /// 注册（本方法重复调用）或闭合注册（AddPalCommandHandler/AddPalQueryHandler 自动注册）时本方法跳过，
-    /// 避免两种注册叠加导致 behavior 重复执行（验证/日志各跑两次）。</para>
+    /// 避免两种注册叠加导致 behavior 重复执行（验证/日志各跑两次）。
+    /// v25 P3 勘正族 C10：闭合注册的匹配范围是<b>任意</b> <c>IPipelineBehavior&lt;,&gt;</c> 闭合注册——
+    /// 含用户自定义 behavior，不仅限内置 Validation/Logging；用户先注册任意闭合 behavior 即抑制
+    /// 内置 Validation/Logging 开放注册（先到先得）。匹配行为保持不变，仅显式声明。</para>
     /// </remarks>
     public static IServiceCollection AddPalPipelineBehaviors(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
-        ThrowIfAotNotSupported();
         // 互斥（替代十七轮哨兵 PalPipelineBehaviorsMarker，见 P0 决策）：检查服务集合实际状态而非
         // 代理标记——开放注册已存在（防双调）或闭合注册已存在（AddPalCommandHandler/AddPalQueryHandler
         // 已自动闭合注册）时跳过，避免 GetServices<IPipelineBehavior<T,R>>() 叠加出 4 个 behavior
@@ -86,6 +88,11 @@ public static class ServiceRegistration
         // 互斥检查同时解决自去重与跨方法协作两个问题。
         if (HasOpenGenericPipelineBehaviors(services) || HasClosedGenericPipelineBehaviors(services))
             return services;
+
+        // v25 P3 勘正族 C4：AOT 门禁移至互斥检查之后——原顺序先 ThrowIfAotNotSupported() 再查互斥，
+        // 被互斥跳过（已有闭合注册、无需开放泛型，AOT 下合法的用法组合）的调用也会触发
+        // AOT 抛异常；互斥先行后，AOT 门禁仅在确定要注册开放泛型时生效。
+        ThrowIfAotNotSupported();
 
         services.AddScoped(typeof(CQRS.IPipelineBehavior<,>), typeof(CQRS.ValidationBehavior<,>));
         services.AddScoped(typeof(CQRS.IPipelineBehavior<,>), typeof(CQRS.LoggingBehavior<,>));

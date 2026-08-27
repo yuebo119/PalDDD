@@ -38,7 +38,12 @@ public interface IPipelineBehavior<TRequest, TResponse> : IPipelineBehavior
     ValueTask<TResponse> HandleAsync(TRequest request, CancellationToken ct, Func<ValueTask<TResponse>> next);
 
     /// <summary>非泛型桥接 — 默认实现，行为作者无需覆盖</summary>
-    /// <remarks>同步完成路径零分配（跳过 async 状态机），异步路径按需分配</remarks>
+    /// <remarks>
+    /// v25 P3 勘正：原"同步完成路径零分配"声明失实——DIM 桥接每次调用有 2 次固定分配
+    /// （传给泛型 <see cref="HandleAsync(TRequest,System.Threading.CancellationToken,System.Func{System.Threading.Tasks.ValueTask{TResponse}})"/> 的 async lambda 闭包 + Func 委托）。
+    /// 快路径（task 已成功完成）的实际收益仅是跳过 AwaitAndBox 状态机的装箱分配，
+    /// 非零分配；异步路径另按需分配状态机。
+    /// </remarks>
     ValueTask<object?> IPipelineBehavior.HandleAsync(IBaseRequest request, CancellationToken ct, Func<ValueTask<object?>> next)
     {
         var task = HandleAsync(

@@ -74,6 +74,35 @@ public static class PostgreSqlMultiHost
             // ITM-110 修复：拼接规范化——主串无 Host 时原 `Host += ",{standbyHost}"` 产生
             // 前导逗号（",pg2"），Npgsql 解析出空主机条目；改为空则直接赋值
             var primaryHost = builder.ConnectionStringBuilder.Host;
+            // v25 P3 勘正族 C9：primary/standby Host 重复条目 fail-fast——对照 ReadWriteSplit
+            // 零副本分支的 ITM-110 "pg1,pg1" 处置（该分支通过不合并避免重复条目）；failover 入口
+            // 两个参数独立传入，primary/standby 同指一机时拼接仍会产生 "pg1,pg1"——驱动视为主备
+            // 两份，故障转移/负载语义错乱。比较用归一化 (host, port) 对：primary 条目未内嵌端口时
+            // 按共享 Port（primaryBuilder.Port，同 EncodeHostEntry 的 Npgsql 语义）；主机名
+            // OrdinalIgnoreCase（DNS 大小写不敏感；同文件 ThrowIfCredentialsMismatch 的 Ordinal
+            // 适用于凭据精确匹配，主机名语义不同）。
+            foreach (var raw in primaryHost?.Split(',') ?? [])
+            {
+                var entry = raw.Trim();
+                if (entry.Length == 0) continue;
+                string host; int port;
+                var colon = entry.LastIndexOf(':');
+                if (colon >= 0 && int.TryParse(entry.AsSpan(colon + 1), out var embedded))
+                {
+                    host = entry[..colon];
+                    port = embedded;
+                }
+                else
+                {
+                    host = entry;
+                    port = primaryBuilder.Port;
+                }
+                if (string.Equals(host, standbyBuilder.Host, StringComparison.OrdinalIgnoreCase) && port == standbyBuilder.Port)
+                    throw new ArgumentException(
+                        $"standby Host '{standbyBuilder.Host}:{standbyBuilder.Port}' 与 primary 主机列表中的条目重复："
+                        + "多主机拼接将产生重复 Host 条目（如 \"pg1,pg1\"），驱动视为主备两份，故障转移语义错乱。"
+                        + "请为 standby 指定不同主机，或使用 AddPalNpgsqlDataSourceMultiHost 自定义完整连接串。");
+            }
             builder.ConnectionStringBuilder.Host = string.IsNullOrWhiteSpace(primaryHost)
                 ? standbyHost
                 : $"{primaryHost},{standbyHost}";

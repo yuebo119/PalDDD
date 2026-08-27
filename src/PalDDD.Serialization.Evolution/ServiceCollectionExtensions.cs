@@ -38,7 +38,7 @@ public static class ServiceCollectionExtensions
 [System.Diagnostics.CodeAnalysis.SuppressMessage(
     "Performance",
     "CA1812:Avoid uninstantiated internal classes",
-    Justification = "Hosted service 由 Microsoft.Extensions.DependencyInjection 通过 AddHostedService 实例化。")]
+    Justification = "Hosted service 由 DI 容器实例化——经上方 TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, ...>) 注册进容器，宿主启动时按 IHostedService 服务类型解析（v25 P3 勘正：原声明 'AddHostedService 实例化' 与实际注册机制不符）。")]
 internal sealed class PalPlatformVerificationHostedService : IHostedService
 {
     private readonly IMessageCatalog _messageCatalog;

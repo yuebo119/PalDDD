@@ -87,6 +87,11 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     /// </remarks>
     public ReadOnlyMemory<byte> Serialize<TMessage>(TMessage message, MessageDescriptor? descriptor = null)
     {
+        // v25 P3 勘正族 C7：补 null 守卫，对齐非泛型版（下方 Serialize(object, ...)）与
+        // JsonLinesEventWriter.SerializeLine 姊妹。行为变更：null 引用消息原静默产出 "null"
+        // 载荷，现抛 ArgumentNullException。TMessage 为值类型时 ThrowIfNull 为 no-op（JIT 消除）
+        ArgumentNullException.ThrowIfNull(message);
+
         descriptor ??= _messageCatalog.Find(typeof(TMessage))
             ?? throw new InvalidOperationException(
                 $"Message type '{typeof(TMessage).FullName}' is not registered in MessageCatalog.");
