@@ -182,7 +182,7 @@ public class SagaNormalTransitionTests
     /// <summary>v14 回归：异步故障 Sink（ValueTask.FromException）不阻断补偿且不崩。<br/>
     /// ⚠️ 路径澄清（v16 P2-1 勘正）：本测试 Saga 只注册普通步骤，走 ExecuteNormalStepAsync 的
     /// SafeObserve 族（await 全覆盖），<b>不触</b> OnStatusChanged 的 ContinueWith 路径——该路径
-    /// 该路径的行为面由下方 ObserverInterrupt_BothFaultModes_DoNotEscape（v17 勘正引用名）覆盖；</summary>
+    /// 的行为面由下方 ObserverInterrupt_BothFaultModes_DoNotEscape 覆盖（v17 勘正引用名）。</summary>
     [Test]
     public async Task ObserverSinkAsyncFailure_DoesNotBlockCompensationOrCrash()
     {
@@ -203,8 +203,7 @@ public class SagaNormalTransitionTests
     /// ⚠️ 覆盖边界诚实声明：①同步抛=true 半面，直接锁定；②真异步抛（await 后抛）的故障由
     /// ContinueWith(OnlyOnFaulted) 延续访问 t.Exception 标记为已观察并仅记 Activity——不逃逸
     /// 不出异常（v17 勘正机理：延续内读取即 observed，不会触发进程级 UnobservedTaskException）。
-    /// 该半面行为测试只能锁"不崩不阻断"，静默丢弃本身不可断言。
-    /// 删半面对照均绿）。</summary>
+    /// 该半面行为测试只能锁"不崩不阻断"，静默丢弃本身不可断言。</summary>
     [Test]
     [Arguments(true)]   // 同步抛——同步 try-catch 半面（可测）
     [Arguments(false)]  // 异步抛——行为面=不崩不逃逸（继续内故障观测为进程级，不可断言）
