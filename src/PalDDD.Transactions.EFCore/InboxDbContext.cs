@@ -85,12 +85,19 @@ public abstract class InboxDbContext(
         }
 
         if (record.Status == InboxStatus.Processed)
+        {
+            // v26 P3 修复：读路径无效分支 Detach——跟踪查询物化的实体滞留会在长驻 scope
+            // 下随活跃 key 数累积（镜像 ProjectionCheckpointDbContext 三十八轮同分支）
+            Entry(record).State = EntityState.Detached;
             return null;
+        }
 
         if (record.Status == InboxStatus.Processing
             && record.ProcessingStartedAt.HasValue
             && (now - record.ProcessingStartedAt.Value) < processingTimeout)
         {
+            // v26 P3 修复：同上——他人活跃 Processing 未超时分支
+            Entry(record).State = EntityState.Detached;
             return null;
         }
 
@@ -106,6 +113,15 @@ public abstract class InboxDbContext(
         {
             Entry(record).State = EntityState.Detached;
             return null;
+        }
+        catch (DbUpdateException)
+        {
+            // v26 P2/P3 修复：抢占路径非并发瞬时故障上抛前 Detach——record 已被变异为
+            // Modified（Status=Processing 等四项），滞留 ChangeTracker 会被下次无关
+            // SaveChanges 提交为幽灵 Processing 态（镜像 IdempotencyDbContext 三十八轮
+            // P2 全修样板；v10 P3-1 只修了第一个 SaveChanges 新建路径）
+            Entry(record).State = EntityState.Detached;
+            throw;
         }
 
         return record;

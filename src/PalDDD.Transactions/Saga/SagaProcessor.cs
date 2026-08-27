@@ -140,7 +140,14 @@ TState>
                         sagaState.LeasedUntil = null;
                         try
                         {
-                            await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
+                            var releaseSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
+                            if (releaseSaved == 0)
+                            {
+                                // v26 P3：OCE 关停路径的租约释放 0 行——乐观锁冲突（LeaseDuration 兜底）。
+                                // 与下方补偿路径/非超时路径的 0 行 Warning 对齐（排障三处都看），
+                                // 原实现忽略返回值使关停期冲突静默
+                                _logger.Warning($"Saga {sagaState.SagaId} lease release save affected 0 rows during cancellation (optimistic concurrency conflict); lease will expire by LeaseDuration");
+                            }
                         }
                         catch (Exception releaseEx) when (releaseEx is not OperationCanceledException)
                         {
@@ -165,6 +172,16 @@ TState>
 
                     sagaState.LeasedBy = null;
                     sagaState.LeasedUntil = null;
+                    // v26 P1 修复：补偿终态同步失效 Manager 中断条目——迟到决策走"无条目"
+                    // IOE 可见失败。此前仅靠 DefaultSagaManager.ResumeAsync 的终态分支，
+                    // 但条目闭包捕获中断时旧实例、补偿写的是 store successor（CloneForLease
+                    // 后继），旧实例永远停留 AwaitingHumanDecision——终态分支不可达，迟到
+                    // 决策会在已回滚 Saga 上执行副作用并假成功
+                    if ((sagaState.Status == SagaStatus.Compensated || sagaState.Status == SagaStatus.CompensationFailed)
+                        && _orchestrator.SagaManager is DefaultSagaManager defaultManager)
+                    {
+                        defaultManager.InvalidateInterrupted(sagaState.SagaId);
+                    }
                     // P2 修复（取消路径对称）：租约释放是终态写入，不响应取消（与上方 OCE 路径
                     // 的 CancellationToken.None 对齐）——此前正常路径用 ct，OCE 传播时租约滞留
                     var compensatedSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);

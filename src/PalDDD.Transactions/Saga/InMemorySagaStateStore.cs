@@ -72,6 +72,9 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
             // 子类无法 new——经 CloneForLease（MemberwiseClone，非反射）产生后继实例替换
             // 字典条目；Version 递增作为 fencing 代（重租即换代，旧持有者 Version 必然
             // 落后，其 SaveChangesAsync 见下方不匹配返回 0）。
+            // ⚠️ v26 P3：CloneForLease 为浅拷贝——新旧实例共享 StepStartedAt/ExecutedStepKeys
+            // 容器，并发写安全未保障（僵尸与新持有者并发写集合可抛）；Version fencing
+            // 不受影响（标量隔离）。深隔离需后续破坏性变更，详见 SagaState.CloneForLease remarks。
             var leased = new List<TState>(active.Count);
             foreach (var state in active)
             {

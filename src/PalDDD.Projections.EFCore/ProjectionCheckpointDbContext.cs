@@ -98,6 +98,16 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
             Entry(checkpoint).State = EntityState.Detached;
             return null;
         }
+        catch (DbUpdateException)
+        {
+            // v26 P2 修复：非并发瞬时故障（连接闪断/超时）上抛前 Detach——checkpoint 已被
+            // MarkProcessing 变异为 Modified（含 Revision++），滞留 ChangeTracker 会被下次
+            // 无关 SaveChanges 提交为从未成功获取的幽灵租约（WHERE Revision=orig 匹配 DB
+            // 真值必成功），锁死该投影位置至 LeaseDuration 过期——镜像 IdempotencyDbContext
+            // 三十八轮 P2 全修样板
+            Entry(checkpoint).State = EntityState.Detached;
+            throw;
+        }
     }
 
     /// <inheritdoc/>
@@ -137,7 +147,11 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
 
         AttachIfDetached(checkpoint);
-        checkpoint.MarkFailed(failureReason, failedAt);
+        // v26 P3 修复：存储层截断兜底（FailureReason.Normalize）——Error 列 HasMaxLength(2048)，
+        // 超长原因使 MarkFailed 持久化自身抛 DbUpdateException 掩盖原始投影失败（十七轮
+        // InboxDbContext 同型场景）；调用层 ProjectionProcessor 已 Normalize，此处防御
+        // 直调 Store 路径（对齐 v22 B 批 DapperProjectionCheckpointStore 2040 先例）
+        checkpoint.MarkFailed(Core.FailureReason.Normalize(failureReason), failedAt);
         try
         {
             await SaveChangesAsync(ct).ConfigureAwait(false);

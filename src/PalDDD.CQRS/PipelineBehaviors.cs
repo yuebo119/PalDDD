@@ -41,7 +41,10 @@ internal sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavio
     private readonly IEnumerable<Core.IPalValidator<TRequest>> _validators;
 
     public ValidationBehavior(IEnumerable<Core.IPalValidator<TRequest>> validators)
-        => _validators = validators;
+    {
+        ArgumentNullException.ThrowIfNull(validators); // v26 P3（ITM-284 对齐）：全仓构造守卫
+        _validators = validators;
+    }
 
     public async ValueTask<TResponse> HandleAsync(TRequest request, CancellationToken ct, Func<ValueTask<TResponse>> next)
     {
@@ -88,6 +91,7 @@ internal sealed class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<T
     // P3 修复（时钟双轨清零）：可选注入，默认 System——测试可传 FakeTimeProvider
     public LoggingBehavior(IPalLogger<LoggingBehavior<TRequest, TResponse>> logger, TimeProvider? timeProvider = null)
     {
+        ArgumentNullException.ThrowIfNull(logger); // v26 P3（ITM-284 对齐）：全仓构造守卫（timeProvider 可选 null 不守卫）
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }

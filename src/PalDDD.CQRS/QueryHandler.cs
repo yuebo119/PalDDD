@@ -20,7 +20,12 @@ public interface IQueryHandler<TQuery, TResult> : IHandler
     ValueTask<TResult> HandleAsync(TQuery query, CancellationToken ct);
 
     /// <summary>非泛型桥接 — 默认实现，Handler 作者无需覆盖</summary>
-    /// <remarks>同步完成路径零分配（跳过 async 状态机），异步路径按需分配</remarks>
+    /// <remarks>
+    /// v26 P3 勘正：原"同步完成路径零分配"声明对值类型响应失实——快路径
+    /// <c>new ValueTask&lt;object?&gt;(task.Result)</c> 在 TResult 为值类型时有 1 次装箱
+    /// 分配，引用类型响应才零分配（对齐 PipelineBehavior.cs v25 勘正措辞）。快路径的实际
+    /// 收益是跳过 AwaitAndBox 状态机分配，非零分配；异步路径另按需分配状态机。
+    /// </remarks>
     ValueTask<object?> IHandler.HandleAsync(IBaseRequest request, CancellationToken ct)
     {
         var task = HandleAsync((TQuery)request, ct);

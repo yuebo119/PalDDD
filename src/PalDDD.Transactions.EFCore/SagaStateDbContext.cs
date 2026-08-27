@@ -125,6 +125,17 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
                 Entry(state).State = EntityState.Detached;
             return [];
         }
+        catch (DbUpdateException)
+        {
+            // v26 P2 修复：非并发瞬时故障（连接闪断/超时）上抛前全批 Detach——states 已被
+            // 变异为 Modified（LeasedBy/LeasedUntil + BumpVersion），滞留 ChangeTracker 会被
+            // 下次无关 SaveChanges 提交为从未成功获取的幽灵租约（WHERE Version=orig 匹配
+            // DB 真值必成功），无主锁死这批 Saga 至 LeaseDuration 过期——镜像
+            // IdempotencyDbContext 三十八轮 P2 全修样板
+            foreach (var state in states)
+                Entry(state).State = EntityState.Detached;
+            throw;
+        }
         return states;
     }
 

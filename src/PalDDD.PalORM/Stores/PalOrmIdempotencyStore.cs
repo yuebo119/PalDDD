@@ -1,6 +1,7 @@
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using PalORM;
+using PalDDD.Core;
 using PalDDD.Idempotency;
 
 namespace PalDDD.PalORM.Stores;
@@ -183,14 +184,19 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         // ITM-163 修复：补 record null + failureReason 空白守卫（对齐 IdempotencyDbContext/InMemoryIdempotencyStore）
         ArgumentNullException.ThrowIfNull(record);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+        // v26 P3 截断族：failureReason 入库前 Core.FailureReason.Normalize 截断（对齐
+        // PalOrmOutboxStore ITM-082 存储层兜底先例，收敛到 Core 公共方法：2000 上限 +
+        // 空白归一）——超长 ex.Message 会让 MarkFailed 的持久化抛列截断异常（error 列
+        // 上限 2048 族），终态保存本身失败掩盖原始异常（ITM-167/175）；本地对象同步截断值
+        var reason = FailureReason.Normalize(failureReason);
         var expectedUpdatedAt = record.UpdatedAt;
         var statusFailed = (int)IdempotencyRecordStatus.Failed;
         var statusCompleted = (int)IdempotencyRecordStatus.Completed;
         var affected = await Session.ExecuteAsync(
-            $"UPDATE idempotency_records SET status = {statusFailed}, updated_at = {failedAt}, error = {failureReason} WHERE operation_name = {record.OperationName} AND idempotency_key = {record.Key} AND updated_at = {expectedUpdatedAt} AND status <> {statusCompleted}",
+            $"UPDATE idempotency_records SET status = {statusFailed}, updated_at = {failedAt}, error = {reason} WHERE operation_name = {record.OperationName} AND idempotency_key = {record.Key} AND updated_at = {expectedUpdatedAt} AND status <> {statusCompleted}",
             ct).ConfigureAwait(false);
         if (affected > 0)
-            record.MarkFailed(failureReason, failedAt);
+            record.MarkFailed(reason, failedAt);
     }
 
     private static void AddParam(DbCommand cmd, string name, object value)

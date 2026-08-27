@@ -408,6 +408,94 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(generatedCount).IsEqualTo(0);
     }
 
+    // ── v26 P3 生成器族：非 partial 声明诊断（PALENUM006）──
+
+    [Test]
+    public async Task EnumGenerator_NonPartialClass_ReportsPalenum006()
+    {
+        // v26 P3 生成器族：非 partial class 挂 [GenerateEnum] 此前被 predicate 的
+        // PartialKeyword 前置过滤静默跳过（零诊断零生成）；现报 PALENUM006 引导补
+        // partial 修饰符且不生成代码（生成物 partial class 与非 partial 用户声明
+        // 无法合并，CS0260）
+        var result = RunEnumGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            [GenerateEnum]
+            public class NonPartialStatus : SmartEnum<NonPartialStatus, string>
+            {
+                public static readonly NonPartialStatus A = new("a", "A");
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALENUM006")).IsTrue();
+        var generatedCount = result.Compilation.SyntaxTrees.Count(t => t.FilePath.EndsWith(".g.cs", StringComparison.Ordinal));
+        await Assert.That(generatedCount).IsEqualTo(0);
+    }
+
+    // ── v26 P3 生成器族：SmartEnum 基类比对符号化（extern alias 下不误报 PALENUM002）──
+
+    [Test]
+    public async Task EnumGenerator_SmartEnumViaExternAlias_GeneratesWithoutPalenum002()
+    {
+        // v26 P3 生成器族：SmartEnum 基类比对符号化——OriginalDefinition.ToDisplayString()
+        // 在 extern alias 下带别名前缀（"PalAlias::PalDDD.Core.SmartEnum<TSelf, TValue>"），
+        // 字符串精确比对失配误报 PALENUM002（Error 级）；修复后用 Name + 命名空间链 +
+        // Arity 判定（镜像 v25 IdentityGenerator 白名单符号语义化）。
+        // 桩要点：PalDDD.Core 程序集仅以别名引用（排除 global 引用）——双引用时
+        // Roslyn 以 global 引用为 canonical，display 无别名前缀，无法复现失配路径
+        var coreAssemblyPath = typeof(GenerateMessageAttribute).Assembly.Location;
+        var references = GetReferences()
+            .Where(r => !string.Equals(Path.GetFileName(r.Display), "PalDDD.Core.dll", StringComparison.OrdinalIgnoreCase))
+            .Append(MetadataReference.CreateFromFile(coreAssemblyPath).WithAliases(ImmutableArray.Create("PalAlias")))
+            .ToArray();
+
+        var result = RunEnumGeneratorWithReferences(
+            references,
+            """
+            extern alias PalAlias;
+
+            namespace TestDomain;
+
+            [PalAlias::PalDDD.Core.GenerateEnum]
+            public partial class AliasStatus : PalAlias::PalDDD.Core.SmartEnum<AliasStatus, string>
+            {
+                public static readonly AliasStatus A = new("a", "A");
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALENUM002")).IsFalse();
+        var source = GetGeneratedSource(result, "AliasStatus.g.cs");
+        await Assert.That(source).Contains("RegisterValues");
+    }
+
+    // ── v26 P3 生成器族：PALID005 消息区分 null 与非 NamedType 源类型 ──
+
+    [Test]
+    public async Task IdentityGenerator_TypeParameterSourceType_ReportsPalid005WithNamedTypeMessage()
+    {
+        // v26 P3 生成器族：[GenerateId(typeof(T))] 的 T 是 ITypeParameterSymbol——
+        // 原实现与 null 同报 "null source type" 消息（非 null 却称 null，误导排障）；
+        // 修复后消息指明 "not a named type"（Id 不变，仍 PALID005）
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            public class Wrapper<T>
+            {
+                [GenerateId(typeof(T))]
+                public readonly partial record struct WrapperId;
+            }
+            """);
+
+        var diagnostic = result.Diagnostics.Single(d => d.Id == "PALID005");
+        await Assert.That(diagnostic.GetMessage()).Contains("not a named type");
+    }
+
     // ── 辅助方法（参照 MessageRegistryGeneratorTests 的模式）──
 
     private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics) RunEnumGenerator(string source)
@@ -463,6 +551,25 @@ private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics)
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
         var generator = new IdentityGeneratorProxy().LoadGenerator();
+        var driver = CSharpGeneratorDriver.Create([generator.AsSourceGenerator()], parseOptions: parseOptions);
+        driver.RunGeneratorsAndUpdateCompilation(compilation, out var updatedCompilation, out var diagnostics);
+        return (updatedCompilation, diagnostics);
+    }
+
+    // v26 P3 生成器族：EnumGenerator 的 extern alias 场景（PalDDD.Core 以别名引用）——
+    // 镜像 RunIdentityGeneratorWithReferences，仅替换生成器代理
+    private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics) RunEnumGeneratorWithReferences(
+        MetadataReference[] references,
+        string source)
+    {
+        var parseOptions = CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Preview);
+        var compilation = CSharpCompilation.Create(
+            "PalDDD.SourceGen.DirectTests",
+            [CSharpSyntaxTree.ParseText(source, parseOptions)],
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var generator = new EnumGeneratorProxy().LoadGenerator();
         var driver = CSharpGeneratorDriver.Create([generator.AsSourceGenerator()], parseOptions: parseOptions);
         driver.RunGeneratorsAndUpdateCompilation(compilation, out var updatedCompilation, out var diagnostics);
         return (updatedCompilation, diagnostics);

@@ -73,16 +73,29 @@ public sealed class EnumGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    // v26 P3 生成器族：非 partial class 声明此前被 predicate 的 PartialKeyword 前置过滤
+    // 静默跳过（attribute 挂着但零诊断零生成）——镜像 IdentityGenerator PALID002 的
+    // "predicate 放宽 + transform 报诊断"模式报 PALENUM006，引导补 partial 修饰符
+    //（生成物恒为 partial class，非 partial 用户声明无法与之合并，CS0260）
+    private static readonly DiagnosticDescriptor NonPartialDeclarationError = new(
+        "PALENUM006",
+        "GenerateEnum target must be a partial class declaration",
+        "Type '{0}' is marked with [GenerateEnum] but is not declared as a partial class. Add the 'partial' modifier so the generator can merge generated members.",
+        "PalDDD.EnumGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        // 步骤 1：收集所有标记了 [GenerateEnum] 的 partial class 及其静态字段
+        // 步骤 1：收集所有标记了 [GenerateEnum] 的 class 声明及其静态字段
         // P3 修复（八轮评审）：predicate 同时匹配 record 声明（Class target 含 record class），
         // 由 transform 报 PALENUM003——此前静默跳过，用户无反馈
+        // v26 P3 生成器族：predicate 放宽到全部类型声明——非 partial class 挂 [GenerateEnum]
+        // 此前被 PartialKeyword 前置过滤静默跳过（零诊断零生成），改由 transform 报 PALENUM006
+        //（镜像 IdentityGenerator PALID002 的 predicate 放宽模式）
         var candidates = context.SyntaxProvider.ForAttributeWithMetadataName(
             AttrName,
-            predicate: static (node, _) =>
-                node is TypeDeclarationSyntax t
-                && t.Modifiers.Any(SyntaxKind.PartialKeyword),
+            predicate: static (node, _) => node is TypeDeclarationSyntax,
             transform: static (context, ct) =>
             {
                 var classSymbol = (INamedTypeSymbol)context.TargetSymbol;
@@ -123,6 +136,28 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         Location: context.TargetNode.GetLocation());
                 }
 
+                // v26 P3 生成器族：非 partial 声明报 PALENUM006——partial 可拆多文件，
+                // 沿 DeclaringSyntaxReferences 检查任一声明带 partial（镜像 IdentityGenerator
+                // 的 isPartialRecordStruct 形态——attribute 所在声明可能恰好非 partial，
+                // 但同类型另一 partial 声明存在时生成物仍可合并）；全部声明非 partial 时
+                // 生成物与用户类型无法合并（CS0260），不生成代码
+                var isPartial = classSymbol.DeclaringSyntaxReferences.Any(static r =>
+                    r.GetSyntax() is TypeDeclarationSyntax d
+                    && d.Modifiers.Any(static m => m.IsKind(SyntaxKind.PartialKeyword)));
+                if (!isPartial)
+                {
+                    return new EnumGenInfo(
+                        Namespace: GetNamespaceName(classSymbol),
+                        TypeName: classSymbol.Name,
+                        ContainingDeclarations: [],
+                        ContainingNames: [],
+                        ValueType: classSymbol.BaseType?.ToDisplayString() ?? "?",
+                        Fields: [],
+                        HasFields: false,
+                        DiagnosticId: "PALENUM006",
+                        Location: context.TargetNode.GetLocation());
+                }
+
                 // P3 修复（十七轮）：泛型声明（自身带类型参数或嵌套于泛型包含类型）暂不支持
                 // （见 GenericDeclarationNotSupported 注释）——编译期报 PALENUM004
                 if (classSymbol.Arity > 0 || IsWithinGenericContainingType(classSymbol))
@@ -141,8 +176,13 @@ public sealed class EnumGenerator : IIncrementalGenerator
 
                 // 从基类 SmartEnum<TSelf, TValue> 提取 TValue
                 var baseType = classSymbol.BaseType;
+                // v26 P3 生成器族：SmartEnum 基类比对符号化——原 ToDisplayString() 字符串比对
+                // 在 extern alias 下可能带别名前缀（"alias::PalDDD.Core.SmartEnum<TSelf, TValue>"）
+                // 使精确匹配失配误报 PALENUM002（Error 级）。镜像 v25 IdentityGenerator 白名单
+                // 的符号语义化（IsSystemGuid 形态）：Name + 命名空间链逐级比对 + Arity，
+                // Symbol.Name 不含别名前缀，不受 extern alias 影响
                 if (baseType is not INamedTypeSymbol { TypeArguments.Length: 2 } namedBase
-                    || namedBase.OriginalDefinition.ToDisplayString() != "PalDDD.Core.SmartEnum<TSelf, TValue>")
+                    || !IsPalSmartEnumBase(namedBase.OriginalDefinition))
                 {
                     // P2 修复：隔层继承不再静默跳过——报 PALENUM002（与 PALENUM001 对称）
                     return new EnumGenInfo(
@@ -258,10 +298,12 @@ public sealed class EnumGenerator : IIncrementalGenerator
                     // P2 修复：隔层继承报 PALENUM002（Error 级）
                     // P3 修复（八轮评审）：record 声明报 PALENUM003——按 DiagnosticId 分派
                     // P3 修复（十七轮）：泛型声明报 PALENUM004
+                    // v26 P3 生成器族：非 partial 声明报 PALENUM006
                     var descriptor = info.DiagnosticId switch
                     {
                         "PALENUM003" => RecordNotSupportedError,
                         "PALENUM004" => GenericDeclarationNotSupported,
+                        "PALENUM006" => NonPartialDeclarationError,
                         _ => NotDirectInheritanceError,
                     };
                     spc.ReportDiagnostic(Diagnostic.Create(
@@ -314,6 +356,18 @@ public sealed class EnumGenerator : IIncrementalGenerator
         => symbol.ContainingNamespace is { IsGlobalNamespace: false } ns
             ? ns.ToDisplayString()
             : null;
+
+    // v26 P3 生成器族：PalDDD.Core.SmartEnum<TSelf, TValue> 的符号语义判定——
+    // Name + 命名空间链逐级比对（PalDDD.Core 直属 global）+ Arity==2，
+    // 不经 ToDisplayString()（其输出在 extern alias 下带别名前缀使精确比对失配）
+    private static bool IsPalSmartEnumBase(INamedTypeSymbol originalDefinition)
+        => originalDefinition.Name == "SmartEnum"
+           && originalDefinition.Arity == 2
+           && originalDefinition.ContainingNamespace is
+           {
+               Name: "Core",
+               ContainingNamespace: { Name: "PalDDD", ContainingNamespace.IsGlobalNamespace: true }
+           };
 
     // P3 修复（十七轮）：沿 ContainingType 链检测泛型包含类型——
     // [ModuleInitializer] 不允许位于泛型类型成员，生成物必然编译失败

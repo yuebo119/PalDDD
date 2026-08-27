@@ -69,6 +69,18 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    // v26 P3 生成器族：PALID005 消息区分两种情形——非 null 但非 INamedTypeSymbol 的
+    // 源类型（泛型参数 [GenerateId(typeof(T))] / 数组 typeof(int[]) 等）原与 null 同报
+    // "null source type"（非 null 却称 null，误导排障方向）；诊断 Id 不变（PALID005），
+    // 与 NullSourceType 共用 Id 但消息各自指向根因
+    private static readonly DiagnosticDescriptor NonNamedSourceType = new(
+        "PALID005",
+        "GenerateId source type must be a named type",
+        "Type '{0}' uses [GenerateId] with source type '{1}', which is not a named type. Pass a supported named type: System.Guid, ByteAether.Ulid.Ulid, int (Int32), long (Int64), string.",
+        "PalDDD.IdentityGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var candidates = context.SyntaxProvider.ForAttributeWithMetadataName(
@@ -81,15 +93,23 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 // ITM-074 修复：构造参数缺失/为 null（[GenerateId(null)]）时
                 // 原代码 (INamedTypeSymbol)null! 在下方 ToDisplayString() 处 NRE，
                 // 从增量生成器冒泡毁掉整个编译的全部生成物。先判 null 报 PALID005。
+                // v26 P3 生成器族：null 与非 null 非 NamedType 分开携带——SourceType 置
+                // 实际类型显示名（null/缺参时空串），分派侧据此选择 PALID005 的两种消息；
+                // 非 null 的 ITypeParameterSymbol（typeof(T)）/IArrayTypeSymbol（typeof(int[])）
+                // 此前被同一模式吞掉误报 "null source type"
                 if (attrData.ConstructorArguments.Length == 0
                     || attrData.ConstructorArguments[0].Value is not INamedTypeSymbol sourceType)
                 {
+                    var nonNullSourceTypeDisplay = attrData.ConstructorArguments.Length > 0
+                        && attrData.ConstructorArguments[0].Value is ITypeSymbol nonNamedType
+                            ? nonNamedType.ToDisplayString()
+                            : "";
                     return new IdGenInfo(
                         Namespace: null,
                         TypeName: structSymbol.Name,
                         ContainingDeclarations: [],
                         ContainingNames: [],
-                        SourceType: "",
+                        SourceType: nonNullSourceTypeDisplay,
                         IsNumeric: false,
                         DiagnosticId: "PALID005",
                         Location: context.TargetNode.GetLocation());
@@ -237,10 +257,24 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                                 info.TypeName));
                             break;
                         case "PALID005":
-                            spc.ReportDiagnostic(Diagnostic.Create(
-                                NullSourceType,
-                                info.Location ?? Location.None,
-                                info.TypeName));
+                            // v26 P3 生成器族：SourceType 空 = null/缺参（原消息）；
+                            // 非空 = 非 NamedType 源类型（typeof(T)/typeof(int[]) 等，
+                            // 携带实际类型显示名）——两种根因各报各的消息，Id 不变
+                            if (info.SourceType.Length == 0)
+                            {
+                                spc.ReportDiagnostic(Diagnostic.Create(
+                                    NullSourceType,
+                                    info.Location ?? Location.None,
+                                    info.TypeName));
+                            }
+                            else
+                            {
+                                spc.ReportDiagnostic(Diagnostic.Create(
+                                    NonNamedSourceType,
+                                    info.Location ?? Location.None,
+                                    info.TypeName,
+                                    info.SourceType));
+                            }
                             break;
                         default:
                             // P3 修复（八轮评审）：PALID001——非白名单 IdType 编译期报错，不生成代码
@@ -370,7 +404,7 @@ public readonly partial record struct {{name}} : IPalIdentity<{{srcType}}>, ISpa
 
     public static {{name}} New() => {{NewBody(srcType)}};
     public static {{name}} From({{srcType}} value) => {{FromBody(srcType)}};
-    public override string ToString() => Value.ToString()!;
+    {{ToStringBody(srcType)}}
     public static bool TryParse(string? input, out {{name}} result)
     {
 {{TryParseBody(srcType)}}
@@ -435,6 +469,16 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
     {
         "string" => "!string.IsNullOrEmpty(value) ? new() { Value = value } : throw new ArgumentException(\"String identity value cannot be null or empty.\", nameof(value))",
         _ => "new() { Value = value }"
+    };
+
+    // v26 P3 生成器族：string Id 的 default 结构（Value == null）ToString 防 NRE——
+    // 原模板统一生成 Value.ToString()!，null.ToString() 抛 NullReferenceException；
+    // string 的 ToString() 返回自身，?? 空合并等价且零分配。值类型分支保持原样
+    //（?? 对非可空值类型不编译，模板必须按 srcType 分支）
+    private static string ToStringBody(string srcType) => srcType switch
+    {
+        "string" => "public override string ToString() => Value ?? string.Empty;",
+        _ => "public override string ToString() => Value.ToString()!;"
     };
 
     private static string TryParseBody(string srcType) => srcType switch

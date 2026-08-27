@@ -72,8 +72,15 @@ public static class PostgreSqlMultiHost
             // 统一经 EncodeHostEntry 编码：primary Port≠5432 时全部 Host 显式 host:port（含显式 5432）。
             var standbyHost = EncodeHostEntry(standbyBuilder, primaryBuilder.Port);
             // ITM-110 修复：拼接规范化——主串无 Host 时原 `Host += ",{standbyHost}"` 产生
-            // 前导逗号（",pg2"），Npgsql 解析出空主机条目；改为空则直接赋值
+            // 前导逗号（",pg2"），Npgsql 解析出空主机条目。
+            // v26 P3 H4：primary 缺 Host（Npgsql 返回空串——ITM-262 自证）时原实现静默以
+            // standby 充当唯一主机，一主一备注册退化为 standby 单机，配置错误被吞——对齐
+            // v19-v21 standby/replica 缺 Host 的 fail-fast 先例改抛异常，原 ITM-110
+            // "空则直接赋值"分支随之不可达，删除。
             var primaryHost = builder.ConnectionStringBuilder.Host;
+            if (string.IsNullOrWhiteSpace(primaryHost))
+                throw new ArgumentException(
+                    "Primary connection string is missing 'Host='. Failover cannot silently substitute the standby as the only host.");
             // v25 P3 勘正族 C9：primary/standby Host 重复条目 fail-fast——对照 ReadWriteSplit
             // 零副本分支的 ITM-110 "pg1,pg1" 处置（该分支通过不合并避免重复条目）；failover 入口
             // 两个参数独立传入，primary/standby 同指一机时拼接仍会产生 "pg1,pg1"——驱动视为主备
@@ -81,31 +88,21 @@ public static class PostgreSqlMultiHost
             // 按共享 Port（primaryBuilder.Port，同 EncodeHostEntry 的 Npgsql 语义）；主机名
             // OrdinalIgnoreCase（DNS 大小写不敏感；同文件 ThrowIfCredentialsMismatch 的 Ordinal
             // 适用于凭据精确匹配，主机名语义不同）。
-            foreach (var raw in primaryHost?.Split(',') ?? [])
+            // v26 P3 H2：两侧比较统一经 NormalizeHostEntry 归一化——Host=pg1:5433 内嵌端口
+            // 语法下 standbyBuilder.Host 返回原始串（含端口，Port 属性不吸收内嵌值），直接与
+            // primary 侧拆出的裸名+端口比较恒不等（v25 查重失效的根因）。
+            var (standbyNormHost, standbyNormPort) = NormalizeHostEntry(standbyBuilder.Host, standbyBuilder.Port);
+            foreach (var raw in primaryHost.Split(','))
             {
-                var entry = raw.Trim();
-                if (entry.Length == 0) continue;
-                string host; int port;
-                var colon = entry.LastIndexOf(':');
-                if (colon >= 0 && int.TryParse(entry.AsSpan(colon + 1), out var embedded))
-                {
-                    host = entry[..colon];
-                    port = embedded;
-                }
-                else
-                {
-                    host = entry;
-                    port = primaryBuilder.Port;
-                }
-                if (string.Equals(host, standbyBuilder.Host, StringComparison.OrdinalIgnoreCase) && port == standbyBuilder.Port)
+                var (host, port) = NormalizeHostEntry(raw, primaryBuilder.Port);
+                if (host.Length == 0) continue;
+                if (string.Equals(host, standbyNormHost, StringComparison.OrdinalIgnoreCase) && port == standbyNormPort)
                     throw new ArgumentException(
-                        $"standby Host '{standbyBuilder.Host}:{standbyBuilder.Port}' 与 primary 主机列表中的条目重复："
+                        $"standby Host '{standbyNormHost}:{standbyNormPort}' 与 primary 主机列表中的条目重复："
                         + "多主机拼接将产生重复 Host 条目（如 \"pg1,pg1\"），驱动视为主备两份，故障转移语义错乱。"
                         + "请为 standby 指定不同主机，或使用 AddPalNpgsqlDataSourceMultiHost 自定义完整连接串。");
             }
-            builder.ConnectionStringBuilder.Host = string.IsNullOrWhiteSpace(primaryHost)
-                ? standbyHost
-                : $"{primaryHost},{standbyHost}";
+            builder.ConnectionStringBuilder.Host = $"{primaryHost},{standbyHost}";
         }
 
         builder.ConnectionStringBuilder.TargetSessionAttributes = "primary";
@@ -177,6 +174,26 @@ public static class PostgreSqlMultiHost
         // 合并所有主机
         List<string> hosts = [];
         var primaryCsBuilder = new NpgsqlConnectionStringBuilder(primaryConnectionString);
+        // v26 P3 H4：primary 缺 Host（Npgsql 返回空串——ITM-262 自证）时原实现静默以副本列表
+        // 充当主机列表，主库亲和（ITM-067）注册退化为纯副本，配置错误被吞——对齐 Failover
+        // 入口 H4 fail-fast（镜像 v19-v21 standby/replica 缺 Host 先例）。
+        var primaryHost = builder.ConnectionStringBuilder.Host;
+        if (string.IsNullOrWhiteSpace(primaryHost))
+            throw new ArgumentException(
+                "Primary connection string is missing 'Host='. ReadWriteSplit cannot silently substitute replicas as the host list.");
+        // v26 P3 H1：归一化主机集合查重——副本与 primary 同指一机（或副本互相重复）时拼接
+        // 产生重复 Host 条目，LoadBalanceHosts=true 轮询把同一实例计入多份权重（镜像 Failover
+        // 入口 v25 C9 查重）。归一化经 NormalizeHostEntry（H2）：内嵌 "pg1:5433" 语法与
+        // 裸名+共享 Port 统一为 (裸名, port) 对；主机名 ToUpperInvariant 后以 Ordinal tuple
+        // 相等判定（DNS 大小写不敏感，等价 v25 C9 的 OrdinalIgnoreCase 比较；ToUpperInvariant
+        // 是 CA1308 规约的大小写归一方向——ToLower 对部分字符会丢失信息）。
+        var seenHosts = new HashSet<(string Host, int Port)>();
+        foreach (var raw in primaryHost.Split(','))
+        {
+            var (primaryEntryHost, primaryEntryPort) = NormalizeHostEntry(raw, primaryCsBuilder.Port);
+            if (primaryEntryHost.Length == 0) continue;
+            seenHosts.Add((primaryEntryHost.ToUpperInvariant(), primaryEntryPort));
+        }
         foreach (var cs in replicaConnectionStrings)
         {
             var sb = new NpgsqlConnectionStringBuilder(cs);
@@ -191,17 +208,22 @@ public static class PostgreSqlMultiHost
             if (string.IsNullOrWhiteSpace(sb.Host))
                 throw new InvalidOperationException(
                     "Read replica connection string is missing 'Host='. ReadWriteSplit cannot silently skip a replica.");
+            // v26 P3 H1：hosts.Add 前比对已收集集合（primary 主机条目 + 先前并入的副本）
+            var (replicaHost, replicaPort) = NormalizeHostEntry(sb.Host, sb.Port);
+            if (!seenHosts.Add((replicaHost.ToUpperInvariant(), replicaPort)))
+                throw new ArgumentException(
+                    $"replica Host '{replicaHost}:{replicaPort}' 与 primary 主机列表或其他副本中的条目重复："
+                    + "多主机拼接将产生重复 Host 条目，LoadBalanceHosts 轮询把同一实例计入多份权重，"
+                    + "故障转移/负载语义错乱。请为副本指定不同主机，或使用 AddPalNpgsqlDataSourceMultiHost 自定义完整连接串。");
             hosts.Add(EncodeHostEntry(sb, primaryCsBuilder.Port));
         }
 
         if (hosts.Count > 0)
         {
             // ITM-110 修复：拼接规范化——主串无 Host 时直接赋值，避免前导逗号（同
-            // AddPalNpgsqlDataSourceWithFailover 的 ITM-110 修复）
-            var primaryHost = builder.ConnectionStringBuilder.Host;
-            builder.ConnectionStringBuilder.Host = string.IsNullOrWhiteSpace(primaryHost)
-                ? string.Join(",", hosts)
-                : $"{primaryHost},{string.Join(",", hosts)}";
+            // AddPalNpgsqlDataSourceWithFailover 的 ITM-110 修复）。
+            // v26 P3 H4：primary Host 已在副本循环前 fail-fast 校验非空，空赋值分支不可达，删除。
+            builder.ConnectionStringBuilder.Host = $"{primaryHost},{string.Join(",", hosts)}";
             builder.ConnectionStringBuilder.LoadBalanceHosts = true;
             // ITM-067：必须 primary 亲和——"any" 会把写操作负载均衡到只读副本导致写失败
             builder.ConnectionStringBuilder.TargetSessionAttributes = "primary";
@@ -298,8 +320,40 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
         if (string.IsNullOrWhiteSpace(host))
             throw new ArgumentException("多主机合并的每个节点都必须显式指定 Host。", nameof(hostBuilder));
 
-        return primaryPort != 5432 || hostBuilder.Port != 5432
-            ? $"{host}:{hostBuilder.Port}"
-            : host;
+        // v26 P3 H3：Host 含内嵌端口（如 "pg1:5433"）时原实现直接拼 hostBuilder.Port，
+        // Port 属性不吸收内嵌值（缺省 5432）——产出畸形 "pg1:5433:5432"。先经
+        // NormalizeHostEntry 拆内嵌端口再编码；无内嵌端口时归一化结果与原值一致，行为不变。
+        var (bareHost, effectivePort) = NormalizeHostEntry(host, hostBuilder.Port);
+        return primaryPort != 5432 || effectivePort != 5432
+            ? $"{bareHost}:{effectivePort}"
+            : bareHost;
+    }
+
+    /// <summary>
+    /// v26 P3（H2/H3）：Host 内嵌端口归一化——解析 "host:port" 形式为 (裸名, 端口)。
+    /// <para>
+    /// Npgsql 连接串支持 <c>Host=pg1:5433</c> 内嵌端口语法，此时
+    /// <see cref="NpgsqlConnectionStringBuilder.Host"/> 返回原始串（含端口），Port 属性不吸收
+    /// 内嵌值——直接拿 Host 属性与裸名+Port 比较恒不等（v25 Failover 查重失效的根因）。
+    /// 归一化后两侧统一为可比较的 (裸名, port) 对；未内嵌端口时返回 (原串, <paramref name="fallbackPort"/>)。
+    /// </para>
+    /// <para>
+    /// 仅当冒号为<b>唯一</b>冒号且后缀可解析为整数才拆分：裸 IPv6 字面量（如 "::1"）内部
+    /// 含冒号，误拆会产生 (":", 1) 畸形对；方括号 IPv6（"[::1]:5432"）不拆分，整体作主机名
+    /// （较 v25 Failover 查重内联的 LastIndex 解析收紧了该边界）。
+    /// </para>
+    /// </summary>
+    /// <param name="rawHost">原始 Host 条目（可为多主机列表中的单项，内部 Trim）。</param>
+    /// <param name="fallbackPort">未内嵌端口时的回退端口（共享 Port）。</param>
+    internal static (string Host, int Port) NormalizeHostEntry(string? rawHost, int fallbackPort)
+    {
+        var entry = rawHost?.Trim() ?? "";
+        var colon = entry.LastIndexOf(':');
+        if (colon >= 0 && entry.IndexOf(':') == colon
+            && int.TryParse(entry.AsSpan(colon + 1), out var embedded))
+        {
+            return (entry[..colon], embedded);
+        }
+        return (entry, fallbackPort);
     }
 }

@@ -72,6 +72,10 @@ public abstract class SqlServerOutboxDbContext(DbContextOptions options) : Outbo
                   UPDATE candidates
                   SET LockedBy = {{2}}, LockedUntil = DATEADD(second, {{3}}, {nowSql})
                   OUTPUT INSERTED.*", batchSize, maxRetryCount, owner, leaseSeconds)
+                // v26 P3：AsNoTracking 物化——同 PG RETURNING 路径：Mark*/ReleaseForRetry 均为
+                // ExecuteUpdate 直写，租约回读实体仅用于内存 fencing 判断，无跟踪消费方
+                // （镜像 SqliteOutbox CAS 路径）
+                .AsNoTracking()
                 .ToListAsync(ct).ConfigureAwait(false);
 #pragma warning restore EF1002
     }

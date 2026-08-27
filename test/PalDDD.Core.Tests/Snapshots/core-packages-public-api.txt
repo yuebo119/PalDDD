@@ -619,6 +619,7 @@ class PalDDD.Transactions.DefaultSagaManager
   ctor()
   method System.Threading.Tasks.ValueTask<TChildState> ExecuteChildSagaAsync(PalDDD.Transactions.Saga<TChildState> childSaga, TChildState childState, System.Object triggerEvent, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.SagaState>> GetInterruptedSagasAsync(System.Threading.CancellationToken ct)
+  method System.Void InvalidateInterrupted(ByteAether.Ulid.Ulid sagaId)
   method System.Threading.Tasks.ValueTask ResumeAsync(ByteAether.Ulid.Ulid sagaId, TDecision decision, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.DynamicStep
   ctor(System.String key, System.Func<PalDDD.Transactions.SagaState, System.String> router, System.Func<PalDDD.Transactions.SagaState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> compensate)

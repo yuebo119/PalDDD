@@ -177,6 +177,13 @@ public static class EndpointExtensions
     }
 
     /// <summary>映射查询到 HTTP GET 端点。查询绑定由调用方显式提供，避免运行时模型绑定反射。</summary>
+    /// <remarks>
+    /// v26 P3 契约声明（bindQuery 异常映射）：<paramref name="bindQuery"/> 抛
+    /// <see cref="CQRS.PalValidationException"/> → 400（ValidationProblemResponse 体）；
+    /// 其他异常（如原生 query string 解析的 <c>FormatException</c>/<c>UriFormatException</c>）
+    /// → 500（逃逸至全局 ExceptionMiddleware）——<b>调用方应自行包装输入错误</b>：
+    /// 需要将解析失败映射为 400 时请在 bindQuery 内捕获并抛 PalValidationException。
+    /// </remarks>
     public static IEndpointConventionBuilder MapQuery<TQuery, TResult>(
         this IEndpointRouteBuilder endpoints,
         string pattern,

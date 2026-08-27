@@ -293,12 +293,11 @@ public sealed partial class StrategicDddAnalyzer
 
     private static string GetFullMetadataName(INamedTypeSymbol type)
     {
-        var containingNamespace = type.ContainingNamespace;
-        if (containingNamespace is null || containingNamespace.IsGlobalNamespace)
-            return type.MetadataName;
-
         // ITM-220 修复（三十二轮）：嵌套类型拼 ContainingType 链（Ns.Outer+Inner）——
         // MetadataName 仅返回最内层简名，原实现使嵌套 Inner 与顶层 Ns.Inner 元数据名碰撞
+        // v26 P3：global 命名空间分支同样拼 ContainingType 链——原实现直接 return
+        // type.MetadataName 简名，global 嵌套类型（global::Outer.Inner）返回 "Inner"，
+        // 与 MetadataNameEquals 的全名比对及嵌套类型语义均失真；拼接逻辑前移为两分支共用
         var name = type.MetadataName;
         var containing = type.ContainingType;
         while (containing is not null)
@@ -306,6 +305,10 @@ public sealed partial class StrategicDddAnalyzer
             name = containing.MetadataName + "+" + name;
             containing = containing.ContainingType;
         }
+
+        var containingNamespace = type.ContainingNamespace;
+        if (containingNamespace is null || containingNamespace.IsGlobalNamespace)
+            return name;
 
         return containingNamespace.ToDisplayString() + "." + name;
     }
