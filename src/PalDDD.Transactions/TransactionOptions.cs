@@ -41,7 +41,8 @@ public sealed class OutboxOptions
 
     /// <summary>
     /// 重试延迟上限 — 仅用于观测/健康检查展示。<br/>
-    /// 实际上限由 <see cref="RetryBackoffPolicy"/> 内部控制。
+    /// 实际封顶由 <see cref="RetryBackoffPolicy"/> 内部控制（默认 Exponential 封顶 64s——与本
+    /// 展示默认值 60s 存在 4s 差异，v19 声明：仅影响观测读数不影响行为；如需一致请两处同步修改）。
     /// </summary>
     public TimeSpan MaxRetryDelay { get; set; } = TimeSpan.FromSeconds(60);
 

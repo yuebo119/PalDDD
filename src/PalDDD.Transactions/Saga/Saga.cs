@@ -219,12 +219,15 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // 查找实际命中的注册步骤：精确匹配使用 state|event，通配匹配使用 state。
         var match = FindStep(current, requestedStepKey);
         if (match is null)
-            return current;
+            return current; // P3-SRC-101 宽容语义；注：此路径发生在 SafeObserveStarted 前，观察端零观测（v17 声明的不对称，刻意保留以兼容无匹配静默跳过的既有消费形态）
 
         var (stepKey, step) = match.Value;
         var wasCompleted = current.Status == SagaStatus.Completed;
 
         // 记录实际命中步骤的开始时间，用于精确超时计算。
+        // ⚠️ v17 边界声明：StepStartedAt 只写不清、重入不刷新——状态回流到已执行步骤并滞留
+        // 超期时会再次命中 IsTimedOut 触发兜底补偿（"滞留→补偿"宣称语义的自然延伸，
+        // 与三十四轮中断态纳入同设计）。重入场景需要刷新时间戳的调用方请自行管理。
         if (!current.StepStartedAt.TryGetValue(stepKey, out var startedAt))
         {
             startedAt = Clock.GetUtcNow();
