@@ -96,7 +96,15 @@ public sealed class ExponentialBackoffPolicy : IRetryBackoffPolicy
         // 三十八轮 P3 修复：抖动整型溢出——baseDelay 已封顶 maxDelay，但 ×1.2 抖动可越过
         // long.MaxValue（maxDelay 取 TimeSpan.MaxValue 时），double→long 转换直接溢出。
         // 先在 double 域 clamp 到 maxDelay.Ticks 再转 long，结果恒 ≤ maxDelay。
-        return TimeSpan.FromTicks((long)Math.Min(baseDelay.Ticks * jitterFactor, (double)_maxDelay.Ticks));
+        // v28 P3 修复：上述"恒 ≤ maxDelay"在极端参数下不成立——maxDelay.Ticks 接近
+        // long.MaxValue 时其 double 表示上取整到 2^63（> long.MaxValue 的精确值），
+        // clamp 后的 double→long 转换仍溢出为负值（浮点→整型转换溢出不抛异常，
+        // .NET 实际结果 long.MinValue），产出负延迟（nextAttemptAt 落在过去、退避失效）。
+        // 转换结果为负时回退 _maxDelay.Ticks（clamp 语义的本意封顶值）。
+        var ticks = (long)Math.Min(baseDelay.Ticks * jitterFactor, (double)_maxDelay.Ticks);
+        if (ticks < 0)
+            ticks = _maxDelay.Ticks;
+        return TimeSpan.FromTicks(ticks);
     }
 }
 

@@ -112,7 +112,16 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
             }
             skip += batchSize;
         }
-        if (states.Count > batchSize) states.RemoveRange(batchSize, states.Count - batchSize);
+        // v28 P3 修复：超额裁剪前先 Detach 被裁实体——RemoveRange 只从列表移除不清跟踪
+        // 状态，被裁实体仍为 tracked（Unchanged）滞留 ChangeTracker，长驻 SagaProcessor 下
+        // 逐 tick 累积（同方法 v27 P3 对循环内未选中实体的 Detach，此处是循环结束后
+        // 超出 batchSize 的尾部；随后 foreach 只变异保留项，被裁项再无释放机会）
+        if (states.Count > batchSize)
+        {
+            for (var i = batchSize; i < states.Count; i++)
+                Entry(states[i]).State = EntityState.Detached;
+            states.RemoveRange(batchSize, states.Count - batchSize);
+        }
 
         foreach (var state in states)
         {

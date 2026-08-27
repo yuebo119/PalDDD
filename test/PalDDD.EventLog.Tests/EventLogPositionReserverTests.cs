@@ -151,10 +151,14 @@ public sealed class EventLogPositionReserverTests
     }
 
     [Test]
-    public async Task ReserveAsync_UniqueConstraintDbUpdateException_RetriesThenFails(CancellationToken cancellationToken)
+    public async Task ReserveAsync_UniqueConstraintInvisibleAllocator_FailsWithSnapshotSemantics(CancellationToken cancellationToken)
     {
-        // ITM-071 回归：唯一约束冲突（SqliteException 消息含 "UNIQUE constraint"）走重试路径，
-        // 5 次后抛 InvalidOperationException（对齐修复前行为，证明窄化 catch 未破坏并发重试语义）。
+        // ITM-071 回归：唯一约束冲突（SqliteException 消息含 "UNIQUE constraint"）不走
+        // 原样上抛，仍以 InvalidOperationException 失败（证明窄化 catch 未破坏分类语义）。
+        // v28 P3 行为更新：唯一冲突后探测 AnyAsync 返回 false（本 mock 的 InMemory 空库
+        // 等价于 MySQL REPEATABLE READ 快照不可见并发提交的分配器行）时不再 continue
+        // 空转 5 次后抛误导性 "optimistic concurrency retries"，第一次探测 false 即抛
+        // 带快照语义的 InvalidOperationException（外层调用方新事务重试可恢复）。
         await using var db = new ThrowingSaveEventLogDbContext(
             CreateThrowingOptions(),
             new Microsoft.Data.Sqlite.SqliteException("SQLite Error 19: 'UNIQUE constraint failed'", 19));
@@ -164,7 +168,7 @@ public sealed class EventLogPositionReserverTests
         // 不做 IsNotNull 弱断言——ThrowsAsync 成功即已证明异常非空
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => reserver.ReserveAsync(db, count: 1, cancellationToken).AsTask());
-        await Assert.That(exception!.Message).Contains("optimistic concurrency retries");
+        await Assert.That(exception!.Message).Contains("invisible to the current transaction snapshot");
     }
 
     private static DbContextOptions<TestEventLogDbContext> CreateOptions()

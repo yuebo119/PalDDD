@@ -21,6 +21,13 @@ namespace PalDDD.Serialization.Json;
 public sealed class JsonLinesEventWriter
 {
     /// <summary>序列化一条事件为 JSON Lines 格式的一行（含尾部 \n）。</summary>
+    /// <remarks>
+    /// ⚠️ <b>重入限制（v28 P3 声明，镜像 JsonMessageSerializer v27 同款）</b>：ThreadStatic 池
+    /// （<c>_tlsWriter</c>/<c>_tlsBuffer</c>）非重入安全——自定义 JsonConverter.Write 内
+    /// 回调同线程 <c>SerializeLine</c> 会清空外层缓冲（入口 <c>GetOrCreateBufferWriter</c>
+    /// 的 <c>Clear()</c> + <c>GetOrCreateWriter</c> 的 <c>Reset()</c> 使外层已写内容丢失）；
+    /// 多态信封等嵌套序列化场景应使用独立实例或避开 converter 内回调。
+    /// </remarks>
     public ReadOnlyMemory<byte> SerializeLine<TMessage>(
         TMessage message,
         System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage> typeInfo)

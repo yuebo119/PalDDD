@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 using Microsoft.EntityFrameworkCore;
 using PalDDD.Core.Logging;
+using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 
 namespace PalDDD.Transactions;
@@ -77,8 +78,24 @@ public abstract class InboxDbContext(
                 // 本事务不可见），SingleAsync 此处会抛 InvalidOperationException 掩盖幂等语义；
                 // 查不到按"他人正在处理"处理，返回 null 让调用方走重投递。
                 Entry(record).State = EntityState.Detached;
-                record = await InboxMessages.SingleOrDefaultAsync(
-                    x => x.ConsumerName == consumerName && x.MessageId == messageId, ct).ConfigureAwait(false);
+                // v28 P3 修复（镜像 EventLogPositionReserver v27 ITM-126 形态）：回查无
+                // 25P02 保护——PG 显式事务内本 23505 使事务进入 aborted 状态，回查的
+                // SingleOrDefaultAsync 在 aborted 事务上抛 25P02（DbException）替换原始
+                // 冲突异常上抛，掩盖幂等语义并误导上层重试策略。回查失败时 throw; 保留
+                // 原始 DbUpdateException 语义（对齐 EventLogDbContext ITM-126 同款）
+                var requerySucceeded = false;
+                try
+                {
+                    record = await InboxMessages.SingleOrDefaultAsync(
+                        x => x.ConsumerName == consumerName && x.MessageId == messageId, ct).ConfigureAwait(false);
+                    requerySucceeded = true;
+                }
+                catch (DbException)
+                {
+                    // PG aborted transaction（25P02）等回查失败——保留原始 DbUpdateException 语义
+                }
+                if (!requerySucceeded)
+                    throw;
                 if (record is null)
                     return null;
             }
