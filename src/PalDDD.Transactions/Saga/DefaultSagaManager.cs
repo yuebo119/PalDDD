@@ -84,9 +84,16 @@ public sealed class DefaultSagaManager : ISagaManager
         // 用条目身份判别：二次中断会 RegisterInterrupted 以新条目对象替换字典项，
         // 路由缺失则条目原样未动。路由缺失时可见失败并保留条目，兑现"要么投递
         // 要么可见失败"契约；二次中断则保留新条目供下一次决策到达。
+        // v28 P2 修复：十轮判别设计时条目只有"原样/被替换"两个预期态——v26 的
+        // InvalidateInterrupted（TryRemove）引入第三态"被移除"：TryGetValue false 时
+        // 原逻辑短路落到 return，飞行中决策（ResumeDispatch 返回 AWD 且路由缺失）被
+        // 静默吞弃+假成功，与 v26 修复动机同款违约。三分支判别补全第三态。
         if (resumedState.Status == SagaStatus.AwaitingHumanDecision)
         {
-            if (_interrupted.TryGetValue(sagaId, out var currentEntry) && ReferenceEquals(currentEntry, entry))
+            if (!_interrupted.TryGetValue(sagaId, out var currentEntry))
+                throw new InvalidOperationException(
+                    $"Saga {sagaId} 的中断条目在决策派发期间被移除（可能已被超时补偿失效）——决策 {decision.GetType().Name} 未能被消费。");
+            if (ReferenceEquals(currentEntry, entry))
                 throw new InvalidOperationException(
                     $"Saga {sagaId} 未注册决策类型 {decision.GetType().Name} 的处理路由（缺少对应 When 注册）——决策未被消费。");
             return; // 合法二次中断：新条目已就位，本次恢复视为成功
