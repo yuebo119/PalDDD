@@ -152,7 +152,10 @@ public static class PostgreSqlMultiHost
             // ITM-132 修复：primary Port≠5432 时，未编码的副本 Host 会继承连接串共享 Port
             // （Npgsql 的 Port 只对未内嵌端口的主机生效），读流量/故障转移落到错误实例——
             // 统一经 EncodeHostEntry 编码：primary Port≠5432 时全部 Host 显式 host:port（含显式 5432）。
-            if (sb.Host is not null)
+            // v19 B3 勘正：Npgsql 缺 Host 返回空串非 null（ITM-262 同包实证），原 `is not null`
+            // 恒真为死分支——真实守卫在 EncodeHostEntry 内的 IsNullOrWhiteSpace（:260），
+            // 这里改为显式 IsNullOrWhiteSpace 使守卫在调用点可见（"弱存在检查"防御深度收口）
+            if (!string.IsNullOrWhiteSpace(sb.Host))
                 hosts.Add(EncodeHostEntry(sb, primaryCsBuilder.Port));
         }
 
