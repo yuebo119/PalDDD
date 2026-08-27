@@ -111,6 +111,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     public async ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
         int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner); // v22 C-2：对齐 EFCore 四方言 ITM-081/216
         var now = _timeProvider.GetUtcNow();
         var until = now.Add(leaseDuration);
 

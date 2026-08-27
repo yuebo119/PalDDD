@@ -37,6 +37,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
     /// <summary>构造 EventLog。</summary>
     public PalOrmEventLog(DataSession<TProvider> session, TimeProvider? clock = null)
     {
+        ArgumentNullException.ThrowIfNull(session); // v22 C-1
         Session = session;
         _clock = clock ?? TimeProvider.System;
     }

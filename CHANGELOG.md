@@ -168,6 +168,13 @@
 - **B-3 勘误放弃**：ReportHelper `
 `u8.ToArray()` 优化尝试——`u8` 字面量是 `ReadOnlySpan<byte>`，`WriteAsync` 收 `ReadOnlyMemory<byte>` 无隐式转换，ToArray 是必需的。P3 撤销
 
+### 修复（v22 清偿，2026-08-27 · 全量档）
+
+- **P1 D1** EnumGenerator 跨文件 partial 崩溃修复——`context.SemanticModel` 绑定 attribute 所在树，`GetDeclaredSymbol` 对树外节点抛 ArgumentException → CS8785 生成器崩溃。改用 `SemanticModel.Compilation.GetSemanticModel(partialDecl.SyntaxTree)` per-tree 获取。**探针先行**：CrossFilePartial 测试红（source=""=崩溃确认）→ 修复 → 绿
+- **P2 C-1** PalORM 六 Store 构造补 `ThrowIfNull(session)`（ITM-281 姊妹漏网——三栈 UnitOfWork 均有，Store 层 PalORM 独缺）
+- **P2 C-2** PalORM + Dapper Outbox Lease 补 `ThrowIfNullOrWhiteSpace(owner)`（EFCore 四方言 ITM-081/216 均有，两栈漏网姊妹）
+- **P3 批**：D2 CodeFix WithTriviaFrom 对齐×2（ITM-221 先例）/ C-4 方言包 Saga 注释 Sqlite 方法名笔误×2 / InMemoryOutbox SaveChangesAsync 补 ct 检查（ITM-204 漏网）
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）

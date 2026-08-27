@@ -29,7 +29,11 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
     protected readonly DataSession<TProvider> Session;
 
     /// <summary>构造 Inbox Store。</summary>
-    public PalOrmInboxStore(DataSession<TProvider> session) => Session = session;
+    public PalOrmInboxStore(DataSession<TProvider> session)
+    {
+        ArgumentNullException.ThrowIfNull(session); // v22 C-1
+        Session = session;
+    }
 
     /// <inheritdoc />
     public async ValueTask<InboxMessage?> TryStartProcessingAsync(

@@ -59,7 +59,7 @@ public static class PostgreSqlPalOrmExtensions
         services.AddScoped<IInboxStore, PostgreSqlInboxStore>();
         services.AddScoped(typeof(ISagaStateStore<>), typeof(PostgreSqlSagaStateStore<>));
         // ⚠️ Saga Data 陷阱（四轮评审 P2；v18 行为变更注释缝合）：本开放泛型注册无
-        // jsonTypeInfo 传入通道——调用 AddPalOrmSqliteSagaSnapshot<TState> 前，Save 时基类
+        // jsonTypeInfo 传入通道——调用 AddPalOrmPostgreSqlSagaSnapshot<TState> 前，Save 时基类
         // fail-fast 抛 InvalidOperationException（ITM-228 后行为，v16 前为静默写 NULL）。
         // 需 Saga 快照持久化请用便捷注册方法。
         // P2/P3 修复（十七轮）：便捷注册 AddPalOrmPostgreSqlSagaSnapshot<TState> 已提供——

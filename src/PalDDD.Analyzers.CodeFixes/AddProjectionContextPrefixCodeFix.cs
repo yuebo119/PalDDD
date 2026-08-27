@@ -127,7 +127,7 @@ public sealed class AddProjectionContextPrefixCodeFix : CodeFixProvider
         if (oldValue.StartsWith(prefix + ".", StringComparison.Ordinal)) return document;
 
         editor.ReplaceNode(literal, SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression,
-            SyntaxFactory.Literal(prefix + "." + oldValue)));
+            SyntaxFactory.Literal(prefix + "." + oldValue)).WithTriviaFrom(literal)); // v22 D2
         return editor.GetChangedDocument();
     }
 }

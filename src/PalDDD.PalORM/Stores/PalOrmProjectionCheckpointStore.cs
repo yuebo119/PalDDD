@@ -31,7 +31,11 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
     protected readonly DataSession<TProvider> Session;
 
     /// <summary>构造 Projection Checkpoint Store。</summary>
-    public PalOrmProjectionCheckpointStore(DataSession<TProvider> session) => Session = session;
+    public PalOrmProjectionCheckpointStore(DataSession<TProvider> session)
+    {
+        ArgumentNullException.ThrowIfNull(session); // v22 C-1
+        Session = session;
+    }
 
     /// <inheritdoc />
     public async ValueTask<ProjectionCheckpoint?> GetAsync(

@@ -339,6 +339,19 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(source).Contains("RegisterValues");
     }
 
+[Test]
+    public async Task EnumGenerator_CrossFilePartial_CollectsFieldsFromBothTrees()
+    {
+        var result = RunGeneratorTwoTrees<EnumGeneratorProxy>(
+            "using PalDDD.Core;\nnamespace TestDomain;\n[GenerateEnum]\npublic partial class CrossStatus : SmartEnum<CrossStatus, string>\n{\n}",
+            "namespace TestDomain;\npublic partial class CrossStatus : SmartEnum<CrossStatus, string>\n{\n    public static readonly CrossStatus B = new(\"b\", \"B\");\n}");
+
+        var crashed = result.Diagnostics.Any(d => d.Id == "CS8785");
+        var source = crashed ? "" : GetGeneratedSource(result, "CrossStatus.g.cs");
+        await Assert.That(source).Contains("RegisterValues");
+        await Assert.That(source).Contains("B");
+    }
+
     // ── ITM-074 回归：null 源类型不再 NRE 崩溃（PALID005）──
 
     [Test]
@@ -369,6 +382,22 @@ public sealed class SourceGeneratorDirectTests
 
     private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics) RunIdentityGenerator(string source)
         => RunGenerator<IdentityGeneratorProxy>(source);
+
+private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics) RunGeneratorTwoTrees<TProxy>(string source1, string source2)
+        where TProxy : IGeneratorProxy, new()
+    {
+        var proxy = new TProxy();
+        var parseOptions = CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Preview);
+        var compilation = CSharpCompilation.Create(
+            "PalDDD.SourceGen.DirectTests",
+            [CSharpSyntaxTree.ParseText(source1, parseOptions), CSharpSyntaxTree.ParseText(source2, parseOptions)],
+            GetReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var generator = proxy.LoadGenerator();
+        var driver = CSharpGeneratorDriver.Create([generator.AsSourceGenerator()], parseOptions: parseOptions);
+        driver.RunGeneratorsAndUpdateCompilation(compilation, out var updatedCompilation, out var diagnostics);
+        return (updatedCompilation, diagnostics);
+    }
 
     private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics) RunGenerator<TProxy>(string source)
         where TProxy : IGeneratorProxy, new()
