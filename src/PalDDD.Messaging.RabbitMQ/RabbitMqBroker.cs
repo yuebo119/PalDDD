@@ -194,12 +194,37 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                     // v25 P2-5：per-delivery token 与订阅生命周期 token 组合（每消息一个小 CTS
                     // 分配，消费路径本有反序列化分配；订阅取消/释放时 handler 感知取消→走
                     // OCE 分支 nack 弃置，与关停语义一致）
-                    using var deliveryCts = CancellationTokenSource.CreateLinkedTokenSource(
-                        ea.CancellationToken, linkedCts.Token);
-                    await handler((TMessage)message, consumeContext, deliveryCts.Token).ConfigureAwait(false);
-                    // 手动确认 — 仅在处理成功后 ACK
-                    // P3 修复：ACK 与 Nack 同样加保护——channel 已关时异常逃逸进消费者回调
-                    await TryAckSafeAsync(ea.DeliveryTag, queueName).ConfigureAwait(false);
+                    // v28 P3 修复：cts 创建提取到独立 try-catch(ODE)——v27 的 ODE catch 覆盖
+                    // 整个 try 块，应用 handler 内部的 ODE（应用自身对象已释放）被误分类为
+                    // 关停 Warning。收窄后仅框架 token（linkedCts，随订阅句柄释放）访问的
+                    // ODE 走关停 Warning；应用层 ODE 落回下方通用 Error catch（真实故障语义）。
+                    // 未采用 `when (_disposed != 0)` 谓词：_disposed 是 broker 级字段，v27 的
+                    // 主场景是订阅级释放（sub 先于 broker 释放，此时 _disposed==0），谓词
+                    // 会使框架 ODE 落回 Error catch，回退 v27 修复本身
+                    CancellationTokenSource deliveryCts;
+                    try
+                    {
+                        deliveryCts = CancellationTokenSource.CreateLinkedTokenSource(
+                            ea.CancellationToken, linkedCts.Token);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // v27 P3 修复（自外层 catch 移入，场景源收窄）：句柄释放
+                        // （AsyncSubscription.DisposeAsync → linkedCts.Dispose()）后
+                        // in-flight 投递访问 linkedCts.Token 抛 ODE——关停竞态是预期路径，
+                        // Warning 语义（subscription disposed, in-flight delivery discarded），
+                        // 不 requeue
+                        _logger.Warning($"Subscription disposed while handling {typeof(TMessage).Name} message, in-flight delivery discarded: {queueName}");
+                        await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+                        return;
+                    }
+                    using (deliveryCts)
+                    {
+                        await handler((TMessage)message, consumeContext, deliveryCts.Token).ConfigureAwait(false);
+                        // 手动确认 — 仅在处理成功后 ACK
+                        // P3 修复：ACK 与 Nack 同样加保护——channel 已关时异常逃逸进消费者回调
+                        await TryAckSafeAsync(ea.DeliveryTag, queueName).ConfigureAwait(false);
+                    }
                 }
                 else
                 {
@@ -207,15 +232,6 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                     _logger.Warning($"Deserializing {typeof(TMessage).Name} returned null, discarding message: {queueName}");
                     await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
                 }
-            }
-            catch (ObjectDisposedException)
-            {
-                // v27 P3 修复：句柄释放（AsyncSubscription.DisposeAsync → linkedCts.Dispose()）后
-                // in-flight 投递访问 linkedCts.Token 抛 ODE，原落入下方通用 catch 被记 Error 级
-                // "Failed to handle"——关停竞态是预期路径，应为 Warning 语义
-                // （subscription disposed, in-flight delivery discarded），不 requeue
-                _logger.Warning($"Subscription disposed while handling {typeof(TMessage).Name} message, in-flight delivery discarded: {queueName}");
-                await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

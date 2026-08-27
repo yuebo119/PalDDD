@@ -171,9 +171,10 @@ public sealed class EventLogPositionReserver
                     // （不掩盖为误导性 retries-exhausted），成功则 continue 正常重试
                     context.Entry(allocator).State = EntityState.Detached;
                     var requerySucceeded = false;
+                    var allocatorRowVisible = false;
                     try
                     {
-                        _ = await context.GlobalPositionAllocators
+                        allocatorRowVisible = await context.GlobalPositionAllocators
                             .AsNoTracking()
                             .AnyAsync(a => a.Id == EventLogGlobalPositionAllocator.SingletonId, cancellationToken)
                             .ConfigureAwait(false);
@@ -185,6 +186,15 @@ public sealed class EventLogPositionReserver
                     }
                     if (!requerySucceeded)
                         throw;
+                    // v28 P3 修复：探测 false 不再 continue 空转——唯一冲突（唯一性检查为当前读）
+                    // 已证明分配器行存在，探测 false 只能是本事务快照看不到并发提交的行
+                    //（MySQL REPEATABLE READ 固定快照：同事务内 continue 重试的
+                    // SingleOrDefaultAsync 依然返回 null，必然再撞冲突再探测 false，5 次
+                    // 空转后抛误导性的 "optimistic concurrency retries" IOE）。改为直接抛
+                    // 带语义异常——外层调用方以新事务重试可恢复（新事务建立新快照即可见）。
+                    if (!allocatorRowVisible)
+                        throw new InvalidOperationException(
+                            "Allocator row exists (the unique-constraint conflict proves it) but is invisible to the current transaction snapshot — under MySQL REPEATABLE READ the concurrently committed allocator row is not visible to this transaction's snapshot; retrying inside the same transaction cannot succeed. The caller should retry with a new transaction, which establishes a fresh snapshot and can see the row.");
                     continue;
                 }
 

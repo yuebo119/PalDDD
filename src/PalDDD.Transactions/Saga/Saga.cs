@@ -644,16 +644,15 @@ public abstract class Saga<TState> where TState : SagaState, new()
         bool wasCompleted, DateTimeOffset startedAt,
         SagaExecutionObserver? observer)
     {
-        // 挂起 Saga：设置 AwaitingHumanDecision 状态
-        var oldStatus = current.Status;
-        current.Status = SagaStatus.AwaitingHumanDecision;
-        current.InterruptReason = step.InterruptReason;
-
-        RecordExecutedStep(current, current, stepKey, startedAt);
-
+        // v28 P3 修复：注册前移到状态变更之前——原顺序先改状态（AWD + RecordExecutedStep）
+        // 后注册，RegisterInterrupted 抛 IOE（v27 失效集拒绝：Saga 已被超时补偿失效）时
+        // 状态污染无回滚（内存实体滞留 AWD 但中断条目未建立）。前移后注册成功才改状态，
+        // 失效拒绝路径状态零污染。时序评估：ResumeDispatch 闭包捕获的是 current 实例引用、
+        // 延迟到人工决策（ResumeAsync）时才调用，届时状态已改；RecordExecutedStep 为纯
+        // 内存写（注册后执行不抛）；OnStatusChanged 仍在注册后发射——对外语义不变。
         // 注册到 DefaultSagaManager（如果可用）
         // P3 声明（十七轮）：SagaManager 为 null 或非 DefaultSagaManager 时本块整体跳过——
-        // 上方已把状态置为 AwaitingHumanDecision，但中断条目无处注册，人工决策无人消费，
+        // 下方把状态置为 AwaitingHumanDecision，但中断条目无处注册，人工决策无人消费，
         // saga 永久滞留中断态（详见 SagaManager 属性 XML doc 的后果声明）
         if (SagaManager is DefaultSagaManager defaultManager)
         {
@@ -667,6 +666,13 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 async (decision, dispatchCt) =>
                     await ProcessEventAsync(current, decision, dispatchCt).ConfigureAwait(false));
         }
+
+        // 挂起 Saga：设置 AwaitingHumanDecision 状态
+        var oldStatus = current.Status;
+        current.Status = SagaStatus.AwaitingHumanDecision;
+        current.InterruptReason = step.InterruptReason;
+
+        RecordExecutedStep(current, current, stepKey, startedAt);
 
         // Emit status change via observer（能力实证轮 v12 补隔离——原 fire-and-forget 只抑制了
         // CA2012 警告，Sink 同步抛异常仍会逃逸，违背 :280 "ITM-212 观察者异常不影响业务结果"——

@@ -130,6 +130,11 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                 $"Message type '{typeof(TMessage).FullName}' is not registered in MessageCatalog.");
         var topic = descriptor.Name;
         var consumer = new ConsumerBuilder<string, byte[]>(_consumerConfig).Build();
+        // v28 P3 修复：cts 创建前移至 Subscribe 之前——原位于 Subscribe 成功后、登记 try
+        // 之前，CreateLinkedTokenSource 抛出时已 Subscribe 的 consumer 无人释放（连接/组
+        // 状态泄漏，ITM-084 同族窗口）。cts 只依赖外部 ct，与 Subscribe 无时序依赖；此处
+        // 创建若抛出，consumer 尚未 Subscribe（Build 不建立网络连接），无实质资源泄漏。
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         try
         {
             consumer.Subscribe(topic); // 同步订阅（无需网络调用）
@@ -138,11 +143,10 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         {
             // ITM-084 修复：Subscribe 抛异常时 consumer 尚未登记进 _consumers（登记在下方
             // 锁登记之后）——无人负责释放，此处显式 Dispose 后重抛，避免连接/组状态泄漏。
+            cts.Dispose(); // v28 P3：前移的 cts 一并释放（linked 注册回收，v20 E-P3-2 同款）
             consumer.Dispose();
             throw;
         }
-
-        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
         // P3 修复（十七轮）：登记先行——先创建订阅占位并登记进 _consumers，再启动消费循环。
         // 原顺序 Task.Run 先于登记：循环若在登记前已终止（如订阅后 token 预取消即抛 OCE），

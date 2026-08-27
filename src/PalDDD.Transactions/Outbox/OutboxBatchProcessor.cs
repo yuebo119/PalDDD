@@ -137,6 +137,12 @@ public sealed class OutboxBatchProcessor
         {
             // ITM-097 修复：指标段移入 finally——单条消息 OCE 直接中止整批时（如关停），
             // 已处理/死亡/重试计数仍被记录，批次指标不再随 OCE 丢失（finally 中不再抛）
+            // v28 P3 观测局限声明：IPalOutboxStore.Mark*（MarkProcessed/MarkDead/
+            // ReleaseForRetry）三栈均为 void 返回——InMemory 栈 IsCurrentLeaseHolder 守卫
+            // 失败时静默 no-op、EF 栈 fencing token 拒绝时提前 return、PersistSingleAsync
+            // 持久化失败时吞成 Warning，processed/dead/retried 计数含租约竞态下标记未落库
+            // 的条目。指标为尽力语义（计数=已尝试标记数），精确计数需 v3.0 接口返回
+            // affected 行数（接口签名变更超出 P3 范围）
             activity?.SetTag("pal.outbox.processed", processed);
             activity?.SetTag("pal.outbox.dead", dead);
             activity?.SetTag("pal.outbox.retried", retried);
