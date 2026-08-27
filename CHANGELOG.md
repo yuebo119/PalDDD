@@ -128,6 +128,13 @@
 - **P2 B1** PostgreSqlOutboxNotifier.FireBatchProcessAsync OCE 分类拆分（PD24 孪生对称）：真关停静默退出 / 非关停 OCE 按 Error 记录——原单分支把两类混记 "canceled during shutdown"
 - **P3 批量**：EvolutionPipeline 运行期校验统一 MessageEvolutionException（对齐构造期单点 catch 语义）+ Upgrade 末步 ClrType 哨兵（防描述符互换静默错配）；DI AddPalEventHandler 补 ThrowIfNull；DapperServiceCollectionExtensions "全 AOT 安全"旧口径勘正；三方言 PalOrmExtensions jsonTypeInfo 注释随 ITM-228 fail-fast 勘正；Legacy Router 引用处两处行为差异补全
 
+### 修复（v19 清偿收口，2026-08-27）
+
+- **P2-①** PG MultiHost 四处注册补 `NpgsqlDataSource` 具体型双注册（Notifier 工厂强依赖具体型——仅抽象型时 failover+notifier 组合启动解析即抛）
+- **P2-②** MySqlMultiHost 补 standby 串缺 Server 的 fail-fast（原静默并入 localhost 使故障转移指向错误节点——对齐 PG 姊妹 EncodeHostEntry）
+- **P2-③** PeriodicBackgroundProcessor 补 `_disposed` 标志 + ODE 终止循环守卫（不规范宿主直调 Dispose 后 WaitForNextTickAsync 持续抛 ODE 被吞形成无限异常循环烧 CPU）
+- **P3 批量**：ChildSagaStep 泛型 ExtractInput 死代码删除（姊妹镜像 ExtractOutput 先例）；PalOrm Saga 并发注释"PG/SQLite 免疫"失实勘正；三方言 jsonTypeInfo 断裂注释缝合；批 now 漂移取舍补 DapperOutboxStore 源头声明；Legacy Router remark 差异列表补全；DapperServiceCollectionExtensions AOT 旧口径勘正；OutboxInsert doc UUID→TEXT/Ulid26 勘正；SafeObserve 族 OCE 边界成文；批次漂移/DI 归属等观察项维持
+
 ### 决策（维护者裁决 2026-08-26）
 
 - **ADR-020 正式采纳**：Dapper 栈退役时点定为 v3.0 `[Obsolete]` / v4.0 移除五包；终态双栈（PalORM AOT 主线 + EF Core 生态线）。Dapper 栈即日起**功能冻结**（只修缺陷不加特性，conventions §8.5）。`IPalOutboxStore` 的跨栈 fencing 契约统一 + 异步化两项破坏性变更合并到 v3.0 窗口执行（接口 Remarks 已加预告，实现者关注迁移指引）
