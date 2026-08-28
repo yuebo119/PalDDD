@@ -53,6 +53,11 @@ public static class PostgreSqlServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // v34 P3：空白连接串 fail-fast（v33 姊妹收口，镜像 MySqlServiceCollectionExtensions
+        // AddPalMySqlDataSource 同款口径）——空白串原样放行会延迟到 NpgsqlDataSourceBuilder.Build()/
+        // 建连时才抛 provider 专属异常（ThrowIfNullOrWhiteSpace 对 null 抛 ArgumentNullException）
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+
         var builder = new NpgsqlDataSourceBuilder(connectionString);
         builder.ConnectionStringBuilder.ApplicationName = applicationName;
         // 优化（二十五轮 API 扫描 B-1）：MaxAutoPrepare=20——固定模板 SQL（SqlTemplates 全系：
@@ -92,6 +97,9 @@ public static class PostgreSqlServiceCollectionExtensions
         Action<NpgsqlDataSourceBuilder> configure)
     {
         ArgumentNullException.ThrowIfNull(services);
+
+        // v34 P3：空白连接串 fail-fast（v33 姊妹收口，同基础重载）
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
 
         var builder = new NpgsqlDataSourceBuilder(connectionString);
         builder.ConnectionStringBuilder.ApplicationName = applicationName;
@@ -198,6 +206,9 @@ public static class PostgreSqlServiceCollectionExtensions
     /// 后者为推荐入口：Writer/Reader 各自 ApplicationName 后缀（-Writer/-Reader，监控可区分）、
     /// Reader 走 LoadBalanceHosts 负载均衡、并做副本凭据一致性校验（PD17）。本方法缺应用名
     /// 后缀与副本凭据校验两项（Reader 负载均衡已具备——LoadBalanceHosts=true，三十五轮口径勘正）。
+    /// v34 P3 补第三差异：副本 Host 含内嵌端口（如 pg1:5433）时，本入口 <c>{Host}:{Port}</c>
+    /// 拼接产出畸形条目——v26 H3 已在新入口经 EncodeHostEntry/NormalizeHostEntries 修复，
+    /// 本 Obsolete 入口不再修（含内嵌端口副本串的场景请迁移新入口）。
     /// </remarks>
     [System.Obsolete("读写分离请使用 PostgreSqlReadWriteRouterExtensions.AddPalReadWriteRouter（Writer/Reader 应用名后缀区分 + 负载均衡 + 副本凭据校验）。本入口保留仅为既有调用方兼容。")]
     public static IServiceCollection AddPalPostgreSqlReadWriteRouter(

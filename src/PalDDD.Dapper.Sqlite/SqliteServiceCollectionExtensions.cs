@@ -55,6 +55,11 @@ public static class SqliteServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // v34 P3：空白连接串 fail-fast（v33 姊妹收口，镜像 MySqlServiceCollectionExtensions
+        // AddPalMySqlDataSource 同款口径）——空白串原样放行会延迟到建连/Open 时才抛
+        // provider 专属异常（ThrowIfNullOrWhiteSpace 对 null 抛 ArgumentNullException）
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+
         // 优化（二十五轮 B3）：foreign_keys 移入连接串——驱动层每物理连接首开自动发送
         // （比 PRAGMA 批每 scope 重跑可靠；PRAGMA 批已移除该行）
         var csb = new SqliteConnectionStringBuilder(connectionString) { ForeignKeys = true };

@@ -110,8 +110,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
     public TimeSpan RetryDelay
     {
         get => RetryBackoffPolicy.ComputeDelay(1);
-        // v17 声明：protected set 不做 null 校验——派生类显式置 null 属程序化配置错误
-        // （重试路径 NRE 自曝），与 OutboxOptions.ValidateOnStart 拦截业务面不同层。
+        // v17 声明（v34 P3 勘正）：protected set 不做 null 校验——派生类显式置 null 属
+        // 程序化配置错误。v17 原"重试路径 NRE 自曝"已被 v30 ComputeRetryDelaySafely
+        // catch(Exception) 吞掉静默降级 1s 推翻：null 策略经降级守卫静默 1s，无异常暴露
+        // ——配置错误检测靠调用方启动期校验（ValidateOnStart 模式）与步骤异常复现，非 NRE。
                 protected set => RetryBackoffPolicy = new FixedBackoffPolicy(value);
     }
 
@@ -318,7 +320,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
     // 理由：OCE 视为"调用方取消意图的镜像"应透传；已知副作用是 Failed 观察点在 catch 块内
     // 调用时 Sink 的 OCE 会替换原步骤异常——ITM-212 家族共有语义，触发需 Sink 自身抛出
     // 未关联外部取消的 OCE，窗口窄。派生 saga 的 RetryBackoffPolicy（protected set）同理
-    // 无守卫——置 null 属程序化配置错误，框架不防（对齐 OutboxOptions 已拦的业务面）。
+    // 无守卫——置 null 属程序化配置错误，框架不防（v34 P3 勘正：null 策略经
+    // ComputeRetryDelaySafely 降级守卫静默 1s，无异常暴露——配置错误检测靠调用方
+    // 启动期校验（ValidateOnStart 模式）与步骤异常复现，非 NRE）。
     private static async ValueTask SafeObserveCompletedAsync(
         SagaExecutionObserver? observer, PalUlid sagaId, string stepKey, TimeSpan elapsed, CancellationToken ct)
     {
@@ -547,7 +551,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
         if (resolved is null)
             throw new InvalidOperationException(
                 $"Child saga orchestrator for state type '{childStateType.Name}' could not be resolved. "
-                + "Override ResolveChildSaga<T>() or inject an ISagaManager.");
+                + "Override ResolveChildSaga<T>() to return the child saga orchestrator.");
 
         // P3-SRC-401 声明：临时 manager 使"使用 Interrupt 前须设 SagaManager"的前提不可检测——
         // 子 saga 含 InterruptStep 且父未设 manager 时条目落入临时实例（执行完丢弃），滞留中断态
@@ -688,9 +692,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
             // 事件重新进入 ProcessEventAsync 管线。此前仅暂存决策且无人消费（恢复链路断裂）
             // P3 修复（二十一轮）：不再传 step.DecisionType——RegisterInterrupted 已删除该
             // 参数（下游字段只写不读的死状态，详见其注释）
+            // v34 P3：不再传 step.InterruptReason——reason 参数同理只写不读（中断原因仍由
+            // SagaState.InterruptReason 承载，条目无需副本），见 RegisterInterrupted 注释
             defaultManager.RegisterInterrupted(
                 current.SagaId,
-                step.InterruptReason,
                 async (decision, dispatchCt) =>
                     await ProcessEventAsync(current, decision, dispatchCt).ConfigureAwait(false));
         }

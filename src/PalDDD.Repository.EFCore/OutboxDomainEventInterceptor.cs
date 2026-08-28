@@ -67,7 +67,7 @@ public sealed class OutboxDomainEventInterceptor(
 
         _pending.Clear();
         DomainEventCollector.Collect(eventData.Context, _pending);
-        WriteEventsToOutbox(_pending);
+        WriteEventsToOutbox(eventData.Context, _pending);
         return await base.SavingChangesAsync(eventData, result, cancellationToken).ConfigureAwait(false);
     }
 
@@ -82,7 +82,7 @@ public sealed class OutboxDomainEventInterceptor(
 
         _pending.Clear();
         DomainEventCollector.Collect(eventData.Context, _pending);
-        WriteEventsToOutbox(_pending);
+        WriteEventsToOutbox(eventData.Context, _pending);
         return base.SavingChanges(eventData, result);
     }
 
@@ -156,35 +156,51 @@ public sealed class OutboxDomainEventInterceptor(
         _injectedOutboxIds.Clear();
     }
 
-    private void WriteEventsToOutbox(IReadOnlyList<Core.DomainEvent> events)
+    private void WriteEventsToOutbox(Microsoft.EntityFrameworkCore.DbContext? context, IReadOnlyList<Core.DomainEvent> events)
     {
-        foreach (var evt in events)
+        // v34 P2 修复：注入循环整体纳入自清理域——EF 源码实证 SavingChanges(Async) 的
+        // 派发点位于 DbContext.SaveChanges 的 try 块之前，拦截器自身抛异常（catalog
+        // miss/序列化失败）不触发 SaveChangesFailed，ITM-178 的 Detach 兜底整条失效：
+        // 批内第 k 个事件失败时前 k-1 个 Added 行滞留 ChangeTracker，同 scope 重试
+        // SaveChanges 即同事件双行（下游重复消费）。循环内 try/catch 自清理后 rethrow，
+        // sync/async 两路共用本方法天然闭合
+        try
         {
-            var descriptor = _messageCatalog.Find(evt.GetType())
-                ?? throw new InvalidOperationException(
-                    $"Domain event '{evt.GetType().FullName}' is not registered in MessageCatalog.");
-            var payload = _serializer.Serialize((object)evt, descriptor);
-            // P1 修复（七轮评审）：evt 静态类型是 abstract DomainEvent——泛型重载
-            // Serialize<DomainEvent>(evt, descriptor) 绑定基类 JsonTypeInfo 与派生 descriptor
-            // 不匹配（InvalidCastException）。显式 (object) 强转走非泛型 Serialize(object, descriptor)
-            // 用派生 JsonTypeInfo，与读侧（KafkaBroker/RabbitMqBroker 用 object 声明）对称。
-            var msg = new Transactions.OutboxMessage
+            foreach (var evt in events)
             {
-                Type = descriptor.Name,
-                Payload = payload.ToArray(),
-                ContentType = _serializer.ContentType,
-                SchemaVersion = descriptor.SchemaVersion,
-                // ITM-103 修复：CausationId 不再自指——原 `CausationId = evt.EventId` 使 outbox 行
-                // 的因果链自环（"事件由自身引起"），下游消费方按 causation 追踪时断链。
-                // 本层无父事件追踪（DomainEvent 不含触发者 ID），诚实值为 null；
-                // 有父链语义的调用方应在构造 OutboxMessage 时显式赋值。
-                CausationId = null,
-                TraceParent = Activity.Current?.Id,
-                TraceState = Activity.Current?.TraceStateString,
-                Status = Transactions.OutboxStatus.Pending
-            };
-            _outboxStore.AddMessage(msg);
-            _injectedOutboxIds.Add(msg.Id);
+                var descriptor = _messageCatalog.Find(evt.GetType())
+                    ?? throw new InvalidOperationException(
+                        $"Domain event '{evt.GetType().FullName}' is not registered in MessageCatalog.");
+                var payload = _serializer.Serialize((object)evt, descriptor);
+                // P1 修复（七轮评审）：evt 静态类型是 abstract DomainEvent——泛型重载
+                // Serialize<DomainEvent>(evt, descriptor) 绑定基类 JsonTypeInfo 与派生 descriptor
+                // 不匹配（InvalidCastException）。显式 (object) 强转走非泛型 Serialize(object, descriptor)
+                // 用派生 JsonTypeInfo，与读侧（KafkaBroker/RabbitMqBroker 用 object 声明）对称。
+                var msg = new Transactions.OutboxMessage
+                {
+                    Type = descriptor.Name,
+                    Payload = payload.ToArray(),
+                    ContentType = _serializer.ContentType,
+                    SchemaVersion = descriptor.SchemaVersion,
+                    // ITM-103 修复：CausationId 不再自指——原 `CausationId = evt.EventId` 使 outbox 行
+                    // 的因果链自环（"事件由自身引起"），下游消费方按 causation 追踪时断链。
+                    // 本层无父事件追踪（DomainEvent 不含触发者 ID），诚实值为 null；
+                    // 有父链语义的调用方应在构造 OutboxMessage 时显式赋值。
+                    CausationId = null,
+                    TraceParent = Activity.Current?.Id,
+                    TraceState = Activity.Current?.TraceStateString,
+                    Status = Transactions.OutboxStatus.Pending
+                };
+                _outboxStore.AddMessage(msg);
+                _injectedOutboxIds.Add(msg.Id);
+            }
+        }
+        catch (Exception)
+        {
+            // 部分注入清理：对当前 context 的 Added 半成品 Detach（语义同 ITM-178 兜底，
+            // 但覆盖"拦截器自身抛异常"这一 SaveChangesFailed 不可达路径）
+            RemoveInjectedOutboxMessages(context);
+            throw;
         }
     }
 }

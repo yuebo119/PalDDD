@@ -167,7 +167,7 @@ Pal.DDD 当前做法：
 
 PalORM 是面向 Native AOT 的 .NET 11 微 ORM，通过源生成器在编译期生成 RowFactory/CommandFactory，零反射、零 IL.Emit。
 
-- **PalDDD.PalORM**：核心层，7 Store + UnitOfWork，`IsAotCompatible=true`，`PublishAot=true` 验证通过。
+- **PalDDD.PalORM**：核心层，6 Store + UnitOfWork，`IsAotCompatible=true`，`PublishAot=true` 验证通过。
 - **PalDDD.PalORM.Sqlite / PostgreSql / MySql**：方言包，固化 Provider 类型供 DI 注册，`IsAotCompatible=true`。
 - 底层依赖 PalORM 5.3.0（`PalORM.Core` + `PalORM.SourceGen` + 方言 Provider）。
 

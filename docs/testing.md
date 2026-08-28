@@ -80,7 +80,7 @@
 | `PalDDD.Hosting.AspNetCore.Tests` | 集成 | ExceptionMiddleware + AspNetCore 中间件链 |
 | `PalDDD.Integration.Tests` | 集成 | Testcontainers 真库（PG/MySQL/SQLite）+ OutboxDbContext 全链路 + Idempotency |
 | `PalDDD.Messaging.Integration.Tests` | 集成 | Testcontainers 真库（RabbitMQ/Kafka）+ Broker 抽象对称 |
-| `PalDDD.PalORM.Tests` | 集成 | PalORM 7 Store + 跨方言（SQLite/PG/MySQL）+ 并发竞争 |
+| `PalDDD.PalORM.Tests` | 集成 | PalORM 6 Store + 跨方言（SQLite/PG/MySQL）+ 并发竞争 |
 | `PalDDD.Compression.Tests` | 单元 + 集成 | 系统压缩器往返（Brotli/GZip/Deflate）+ Native（LZ4/ZStandard） |
 | `PalDDD.Analyzers.Tests` | 单元 | PDDD001-015 编译期诊断负向测试 |
 

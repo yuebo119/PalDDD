@@ -243,6 +243,7 @@ public abstract class EventLogDbContext(
                 // 三十八轮 P2 修复：上抛前清理本批 Added 实体——长生命周期 DbContext 中
                 // 残留批次携带旧 GlobalPosition，污染后续追加（ITM-226 场景级联：重取块
                 // 落入已用区间 → PK 冲突 → 再被误分类）
+                // v34 P3：清理范围扩至 allocator 跟踪实体（见 DetachAddedEvents v34 P3 注释）
                 DetachAddedEvents();
                 throw;
             }
@@ -320,12 +321,32 @@ public abstract class EventLogDbContext(
         return await _positionReserver.ReserveAsync(this, count, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// 追加失败上抛前复位本上下文的追加期跟踪状态（v34 P3 扩展：事件 + allocator 两类）。
+    /// </summary>
+    /// <remarks>
+    /// v34 P3 同族收口（"幽灵跟踪状态"唯一漏点）：外层追加失败回滚后，本轮经
+    /// <see cref="EventLogPositionReserver"/> 跟踪并推进的 <see cref="EventLogGlobalPositionAllocator"/>
+    /// 实体（SaveChanges 成功 → Unchanged，携带已被 DB 回滚的 NextGlobalPosition/Revision 内存值）
+    /// 此前不复位——长驻 context 重试时跟踪查询经标识解析返回同一实例且不覆盖当前值，
+    /// AllocateChunk 在幽灵值上继续推进，UPDATE WHERE Revision=幽灵值 0 行命中 → 重试首轮
+    /// 空转一轮并罕见误报 DbUpdateConcurrencyException（其 catch 分支可自愈，但多一次往返）。
+    /// 与 <see cref="EventLogPositionReserver"/> 各异常分支的 <c>Entry(allocator).State = Detached</c>
+    /// 手法同源；一并 Detach 后重试从 DB 真值重读。
+    /// </remarks>
     private void DetachAddedEvents()
     {
         foreach (var entry in ChangeTracker.Entries<StoredEvent>())
         {
             if (entry.State == EntityState.Added)
                 entry.State = EntityState.Detached;
+        }
+
+        // v34 P3：allocator 无状态过滤——Unchanged（SaveChanges 成功后）与 Modified 均为
+        // 待清幽灵态；Added 仅存在于 Reserver 内部 SaveChanges 之前，其异常分支已自行 Detach
+        foreach (var entry in ChangeTracker.Entries<EventLogGlobalPositionAllocator>())
+        {
+            entry.State = EntityState.Detached;
         }
     }
 

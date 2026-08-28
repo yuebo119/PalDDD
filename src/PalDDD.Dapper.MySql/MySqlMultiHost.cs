@@ -162,6 +162,10 @@ public static class MySqlMultiHost
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // v34 P3：空白连接串 fail-fast（v33 姊妹收口，镜像 MySqlServiceCollectionExtensions
+        // AddPalMySqlDataSource 同款口径）——空白串原样放行会延迟到 Build()/建连时才抛异常
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+
         var builder = new MySqlConnectionStringBuilder(connectionString)
         {
             LoadBalance = MySqlLoadBalance.RoundRobin
@@ -194,6 +198,9 @@ public static class MySqlMultiHost
         string connectionString)
     {
         ArgumentNullException.ThrowIfNull(services);
+
+        // v34 P3：空白连接串 fail-fast（v33 姊妹收口，同 LoadBalance 入口）
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
 
         var builder = new MySqlConnectionStringBuilder(connectionString)
         {

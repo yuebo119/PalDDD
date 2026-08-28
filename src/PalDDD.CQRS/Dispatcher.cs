@@ -60,12 +60,13 @@ public sealed class Dispatcher
             // _entries，Registrar 随后 Register 抛 ObjectDisposedException 使整个 host 启动
             // 崩溃。空表冻结无任何价值（永久空表）；此处返回临时空冻结表（不缓存、不清
             // _entries），查找照常 miss 抛 HandlerNotFoundException，Registrar 启动后注册
-            // 不受影响。部分注册中的冻结窗口（多 Marker 场景启动中途发命令）仍存在——
-            // v33 P3 勘正：原"见 HandlerRegistrar remarks 的场景声明"为跨文件悬空引用
-            // （目标 remarks 无该内容），改为本处自含声明：应用含多个 HandlerMarker
-            // 分段注册时，若在启动中途（部分 handler 已注册、其余 Registrar 尚未运行）
-            // 发命令，本方法将冻结"已注册部分"的表，剩余 Registrar 随后的 Register 抛
-            // ObjectDisposedException。v29 P2 空表修复只兜住全空表场景，不覆盖此窗口；
+            // 不受影响。部分注册中的冻结窗口仍存在——v33 P3 勘正：原"见 HandlerRegistrar
+            // remarks 的场景声明"为跨文件悬空引用（目标 remarks 无该内容），改为本处自含
+            // 声明；v34 P3 再勘正：v33 归因"多 HandlerMarker 分段注册、部分 Registrar 运行"
+            // 失实——HandlerRegistrar 经 TryAddEnumerable 防重为单实例（ServiceRegistration），
+            // 标准 IHost 接线下不存在"部分 Registrar 运行"。冻结窗口真实可达路径：手动分阶段
+            // Register（公共 API）或自定义 HostedService 注册部分 handler 后派发——空表不冻结
+            // 已兜掉启动崩溃，部分注册冻结仍会 ODE（Register 抛 ObjectDisposedException）；
             // 规避方式：保证全部注册先于首个命令派发（如注册完成后才启动派发方 HostedService）。
             if (_entries.Count == 0) return _entries.ToFrozenDictionary();
             Volatile.Write(ref _frozen, _entries.ToFrozenDictionary());

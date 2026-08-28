@@ -106,7 +106,9 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
                 // nested 类型对生成物 PalMessageCatalog 的 typeof 引用不可见。编译期报
                 // PALMSG007 不生成坏代码（镜像 EnumGenerator PALENUM007 / IdentityGenerator
                 // PALID006）
-                if (type.DeclaredAccessibility is not (Accessibility.Public or Accessibility.Internal))
+                // v34 P2：检查升格为 ContainingType 全链（GeneratorAccessibility 共享 helper）——
+                // 中间层 private 同样阻断 typeof 引用可见性
+                if (GeneratorAccessibility.GetBlockingAccessibility(type) is not null)
                 {
                     return new MessageInfo(
                         type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
