@@ -245,7 +245,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // 与 InMemory 版（守卫内联设 Processed）/PalORM 版（affected>0 才全套回写）的分叉属
         // ITM-210 历史语义，调用方（OutboxBatchProcessor）不读该状态故无实害。
         c.Execute(SqlTemplates.OutboxMarkProcessed,
-            new { at = ToTimeParam(processedAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message) }, Tx);
+            new { at = ToTimeParam(processedAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message), retryCount = message.RetryCount }, Tx); // P1 修复（八轮评审）：时间参数走 ToTimeParam；三十四轮 ITM-210：租约 token 参数；v37 P3：retry_count fencing 快照
         // ITM-130 修复：SQL 清除 DB 租约列后同步入参——调用方读入参不应再见陈旧持有者
         // （对齐 EFCore/PalORM/InMemory 三姊妹的对象字段语义）
         message.LockedBy = null;
@@ -268,7 +268,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // 不回写 Status——与 InMemory 版（守卫内联设 Dead）/PalORM 版（affected>0 才全套回写）
         // 的分叉属 ITM-210 历史语义，调用方（OutboxBatchProcessor）不读该状态故无实害。
         c.Execute(SqlTemplates.OutboxMarkDead,
-            new { reason = failureReason, at = ToTimeParam(deadAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message) }, Tx); // P1 修复（八轮评审）：时间参数走 ToTimeParam；三十四轮 ITM-210：租约 token 参数
+            new { reason = failureReason, at = ToTimeParam(deadAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message), retryCount = message.RetryCount }, Tx); // P1 修复（八轮评审）：时间参数走 ToTimeParam；三十四轮 ITM-210：租约 token 参数；v37 P3：retry_count fencing 快照
         // ITM-130 修复：SQL 清除 DB 租约列后同步入参（对齐 EFCore/PalORM/InMemory 三姊妹）
         message.LockedBy = null;
         message.LockedUntil = null;
@@ -286,7 +286,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // 抢占后，原 worker 的失败释放不再清掉新 worker 的锁或误增 retry_count；三十四轮 ITM-210
         // 升级为 token 完全匹配（owner/until 调用时快照，无租约时均传 null 走 IS NULL 分支）。
         var affected = c.Execute(SqlTemplates.OutboxReleaseForRetry,
-            new { reason = failureReason, next = ToTimeParam(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message) }, Tx);
+            new { reason = failureReason, next = ToTimeParam(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message), retryCount = message.RetryCount }, Tx); // v37 P3：retry_count fencing 快照（PD17 姊妹同步，v33 Status 守卫之外的另一半）
         // ITM-130 修复：SQL 成功（affected>0）后同步入参到 DB 终态（对齐 PalORM ReleaseForRetry
         // 成功路径）；守卫拒绝（affected=0，租约已被他人持有）时零变异——保持 PalORM 零变异语义。
         if (affected > 0)

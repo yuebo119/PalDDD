@@ -31,6 +31,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using PalUlid = ByteAether.Ulid.Ulid;
 
+using PalDDD.Core.Diagnostics;
 using PalDDD.EventLog;
 namespace PalDDD.Dapper;
 
@@ -74,6 +75,12 @@ public sealed class DapperEventLog : IEventLog
         ArgumentException.ThrowIfNullOrWhiteSpace(streamName);
         ArgumentNullException.ThrowIfNull(events);
         if (events.Count == 0) throw new ArgumentException("至少需要一个事件。", nameof(events));
+
+        // v37 P3：写侧观测（镜像 v36 PalOrmEventLog 修复形态，对齐 EventLogDbContext 与
+        // InMemoryEventLog 的 StartEventLogAppend 形态）——Dapper 路径此前完全无 Activity/
+        // metrics，追加耗时与吞吐不可见；成功路径 return 前 EventLogAppended 计数
+        //（并发冲突等异常路径不计数，与 EFCore/PalORM 姊妹一致）
+        using var activity = PalActivitySource.StartEventLogAppend(streamName, events.Count);
 
         // 📐 事务契约（P2 定案声明）：批量追加的原子性由调用方事务保证——传入
         // Tx 则整批可回滚；未传时中途失败会留下前半批（部分写入）。
@@ -164,6 +171,9 @@ public sealed class DapperEventLog : IEventLog
             lastGlobalPos = pos; // P1 修复（四轮评审，PD17）：循环内每次更新，不用算术推导（并发下 GlobalPosition 非连续）——对齐 PalORM 版同方法
         }
 
+        // v37 P3：写侧 metrics（对齐 EventLogDbContext/InMemoryEventLog/PalOrmEventLog 的
+        // EventLogAppended——成功追加的事件数，异常路径不计数）
+        PalMetrics.EventLogAppended.Add(events.Count);
         return new AppendEventsResult(
             streamName, firstVersion, version - 1, firstGlobalPos, lastGlobalPos);
     }

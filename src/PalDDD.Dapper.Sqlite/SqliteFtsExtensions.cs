@@ -132,7 +132,11 @@ public static class SqliteFts
 
     /// <summary>P3 修复：触发器名只允许字母数字下划线（SQLite 标识符约束）——非标识符字符剔除。
     /// 三十八轮 P3 修复：下划线保留——原实现剔除后 "outbox-messages" 与 "outbox_messages"
-    /// 清洗同名，第二张表的 CREATE TRIGGER IF NOT EXISTS 静默跳过致其 FTS 索引停更。</summary>
+    /// 清洗同名，第二张表的 CREATE TRIGGER IF NOT EXISTS 静默跳过致其 FTS 索引停更。
+    /// ⚠️ v37 P3 残余声明：清洗后仍可能碰撞——仅保留字母数字下划线，"a-b" 与 "a.b" 清洗
+    /// 同名（仅差被剔字符），后者的触发器静默不创建、其 FTS 索引停更。清洗后碰撞检测不可行
+    /// （框架无触发器注册表可查），调用方须保证传入的多个 indexName 清洗后互不相同；
+    /// 默认两常量（OutboxIndex 及配套 Content 表名）无碰撞。</summary>
     private static string SanitizeTriggerName(string s)
     {
         var chars = s.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray();

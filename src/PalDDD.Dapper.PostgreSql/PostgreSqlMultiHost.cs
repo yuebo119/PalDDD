@@ -348,6 +348,12 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
     /// <paramref name="primaryPort"/> == 5432 时仅对非 5432 端口的 Host 编码
     /// （未编码 Host 继承 5432 语义正确）。
     /// </para>
+    /// <para>
+    /// v37 P3：IPv6 字面量条目不支持自动端口追加——方括号形态（<c>[::1]:5432</c>，
+    /// NormalizeHostEntry 整体保留）与裸 IPv6（<c>::1</c>，含多个冒号）追加 <c>:port</c>
+    /// 均产出 Npgsql 无法解析的畸形条目（如 <c>[::1]:5432:5433</c>），此类条目 Host 原样
+    /// 输出，端口需用内嵌端口语法或依赖默认端口 5432。
+    /// </para>
     /// </summary>
     /// <param name="hostBuilder">副本/备机连接串（读取其 Host/Port）。</param>
     /// <param name="primaryPort">主库连接串 Port（决定是否强制全部显式编码）。</param>
@@ -378,12 +384,35 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
         {
             if (bareHost.Length == 0)
                 encoded.Add("");
+            // v37 P3：IPv6 字面量条目不追加端口——方括号形态（"[::1]:5432"，NormalizeHostEntry
+            // 整体保留）与裸 IPv6（"::1"，多冒号）追加端口均产出畸形条目
+            //（"[::1]:5432:5433" / "::1:5433"），Npgsql 无法解析。Host 原样输出，
+            // 端口靠内嵌语法或默认 5432
+            else if (IsIpV6Literal(bareHost))
+                encoded.Add(bareHost);
             else if (primaryPort != 5432 || effectivePort != 5432)
                 encoded.Add($"{bareHost}:{effectivePort}");
             else
                 encoded.Add(bareHost);
         }
         return string.Join(",", encoded);
+    }
+
+    /// <summary>
+    /// v37 P3：判定条目是否为 IPv6 字面量——方括号开头（"[::1]:5432"，Npgsql 内嵌端口语法）
+    /// 或含多个冒号（裸 IPv6 "::1"）。单冒号且后缀可解析为整数的普通 host:port 条目不受影响。
+    /// </summary>
+    private static bool IsIpV6Literal(string host)
+    {
+        if (host.StartsWith('['))
+            return true;
+        var colonCount = 0;
+        foreach (var c in host)
+        {
+            if (c == ':' && ++colonCount > 1)
+                return true;
+        }
+        return false;
     }
 
     /// <summary>

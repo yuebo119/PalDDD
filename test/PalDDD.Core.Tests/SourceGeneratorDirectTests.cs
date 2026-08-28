@@ -580,6 +580,29 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(generatedCount).IsEqualTo(0);
     }
 
+    [Test]
+    public async Task IdentityGenerator_InternalTopLevelStruct_ReportsPalid006()
+    {
+        // v37 P2：internal 顶层 record struct 挂 [GenerateId]——v36 收紧阈值（public/internal）
+        // 仍放行 internal（当初顾虑"误伤 internal 顶层合法场景"），但 internal 声明与硬编码
+        // public 生成物合并必报 CS0262（双向探针实证，不存在可工作的 internal 用法）。
+        // v37 阈值收紧为 Public-only，internal 编译期报 PALID006 且不生成坏代码
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+            using System;
+
+            namespace TestDomain;
+
+            [GenerateId(typeof(Guid))]
+            internal readonly partial record struct InternalId;
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALID006")).IsTrue();
+        var generatedCount = result.Compilation.SyntaxTrees.Count(t => t.FilePath.EndsWith(".g.cs", StringComparison.Ordinal));
+        await Assert.That(generatedCount).IsEqualTo(0);
+    }
+
     // ── v35 P3（DA4）：普通 struct / interface 声明引导诊断（PALENUM008）──
 
     [Test]

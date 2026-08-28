@@ -45,7 +45,13 @@ public sealed class DefaultSagaManager : ISagaManager
     /// 📐 <b>并发语义（P3 声明·二十一轮）</b>：本实现非线程安全——同一 sagaId 的多次
     /// 决策/恢复调用之间无互斥（ResumeDispatch 直接进入 Saga 管线，条目移除按 KVP 身份
     /// 仅防误删，不防并发重入）。同一 sagaId 的决策必须由调用方串行投递（先等上一次
-    /// ResumeAsync 完成再投递下一决策）；跨 sagaId 并发恢复安全。
+    /// ResumeAsync 完成再投递下一决策）；跨 sagaId 并发恢复安全。<br/>
+    /// 📐 <b>已知残余窗口（v37 P2 声明）</b>：决策派发与超时补偿线程并发交错时（决策恰落在
+    /// <c>CompensateAsync</c> 执行期间），决策副作用可能在正被回滚的 Saga 上产生且假成功——
+    /// 失效集在补偿保存成功后才写入，窗口内不可检测。v26/v27 修复族只关闭了"补偿完成后"
+    /// 半边（迟到决策经失效集/终态检查可见失败），"补偿进行中"半边仍敞开。框架级根治需
+    /// manager 侧租约 fencing（v3.0 接口窗口）；调用方对配 Timeout 的 HITL 步骤应保证
+    /// 决策与扫描周期错开。
     /// </remarks>
     public async ValueTask ResumeAsync<TDecision>(
         PalUlid sagaId, TDecision decision, CancellationToken ct)
