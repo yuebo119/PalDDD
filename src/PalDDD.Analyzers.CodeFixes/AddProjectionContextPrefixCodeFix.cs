@@ -85,14 +85,20 @@ public sealed class AddProjectionContextPrefixCodeFix : CodeFixProvider
 
     private static LiteralExpressionSyntax? FindProjectionNameLiteral(TypeDeclarationSyntax typeDecl)
     {
+        // v36 P3：四处裸 is LiteralExpressionSyntax 会匹配 bool/char/数值等任意字面量
+        //（ProjectionName 返回 true / 123 时 fix 误注册，FixProjectionNameAsync 按字符串
+        // 前缀拼接产出坏替换）；补 StringLiteralExpression kind 过滤（镜像姊妹
+        // MatchEventNameCodeFix v28 形态）
         foreach (var member in typeDecl.Members)
         {
             if (member is not PropertyDeclarationSyntax prop) continue;
             if (prop.Identifier.Text != "ProjectionName") continue;
 
-            if (prop.ExpressionBody?.Expression is LiteralExpressionSyntax exprLiteral)
+            if (prop.ExpressionBody?.Expression is LiteralExpressionSyntax exprLiteral
+                && exprLiteral.IsKind(SyntaxKind.StringLiteralExpression))
                 return exprLiteral;
-            if (prop.Initializer?.Value is LiteralExpressionSyntax initLiteral)
+            if (prop.Initializer?.Value is LiteralExpressionSyntax initLiteral
+                && initLiteral.IsKind(SyntaxKind.StringLiteralExpression))
                 return initLiteral;
             // P3 修复（二十一轮）：镜像 analyzer TryGetProjectionName 的四形式——getter
             // 表达式体 / getter 语句体 return 字面量此前查不到（诊断照报但 fix 不注册，
@@ -102,14 +108,16 @@ public sealed class AddProjectionContextPrefixCodeFix : CodeFixProvider
                 if (!accessor.IsKind(SyntaxKind.GetAccessorDeclaration))
                     continue;
 
-                if (accessor.ExpressionBody?.Expression is LiteralExpressionSyntax getterLiteral)
+                if (accessor.ExpressionBody?.Expression is LiteralExpressionSyntax getterLiteral
+                    && getterLiteral.IsKind(SyntaxKind.StringLiteralExpression))
                     return getterLiteral;
                 if (accessor.Body is null)
                     continue;
 
                 foreach (var statement in accessor.Body.Statements)
                 {
-                    if (statement is ReturnStatementSyntax { Expression: LiteralExpressionSyntax returnLiteral })
+                    if (statement is ReturnStatementSyntax { Expression: LiteralExpressionSyntax returnLiteral }
+                        && returnLiteral.IsKind(SyntaxKind.StringLiteralExpression))
                         return returnLiteral;
                 }
             }

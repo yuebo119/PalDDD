@@ -553,6 +553,33 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(generatedCount).IsEqualTo(0);
     }
 
+    [Test]
+    public async Task IdentityGenerator_ProtectedOrInternalNestedStruct_ReportsPalid006()
+    {
+        // v36 P2：protected internal 声明此前经 GeneratorAccessibility 的 ProtectedOrInternal
+        // 放行（该放行对 Enum/Message 姊妹成立——其生成物不带访问修饰符，与用户声明合并无
+        // 冲突），对 Identity 不成立：生成物硬编码 public readonly partial record struct，与
+        // protected internal 用户声明合并报 CS0262（net11 探针双向实证）。链检查通过后自身
+        // 声明收紧为 public/internal，protected internal 编译期报 PALID006 且不生成坏代码
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+            using System;
+
+            namespace TestDomain;
+
+            public class Outer
+            {
+                [GenerateId(typeof(Guid))]
+                protected internal readonly partial record struct PartnerId;
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALID006")).IsTrue();
+        var generatedCount = result.Compilation.SyntaxTrees.Count(t => t.FilePath.EndsWith(".g.cs", StringComparison.Ordinal));
+        await Assert.That(generatedCount).IsEqualTo(0);
+    }
+
     // ── v35 P3（DA4）：普通 struct / interface 声明引导诊断（PALENUM008）──
 
     [Test]

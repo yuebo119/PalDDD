@@ -51,6 +51,9 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
         // ITM-215 修复（三十二轮）：ct 对齐（见 GetActiveSagasAsync）
         ct.ThrowIfCancellationRequested();
 
+        // v36 P3：now 在 lock 外取值——与姊妹 InMemoryOutboxStore.LeasePendingMessagesAsync
+        //（lock 内取）不一致；fencing 正确性不受影响（仅 leasedUntil 时间戳微早），
+        // 保留现状并声明（对齐 InMemoryOutboxStore.RequeueDeadAsync 的 lock 外声明先例）
         var now = _timeProvider.GetUtcNow();
         var leasedUntil = now.Add(leaseDuration);
         lock (_lock)

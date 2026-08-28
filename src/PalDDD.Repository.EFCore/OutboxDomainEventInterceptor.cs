@@ -216,6 +216,12 @@ public sealed class OutboxDomainEventInterceptor(
                     // 的因果链自环（"事件由自身引起"），下游消费方按 causation 追踪时断链。
                     // 本层无父事件追踪（DomainEvent 不含触发者 ID），诚实值为 null；
                     // 有父链语义的调用方应在构造 OutboxMessage 时显式赋值。
+                    // v36 P3（镜像 v35 EA4 在 EventAuditMetadata.TraceParent 的格式前提声明）：
+                    // TraceParent 取自 Activity.Current?.Id，其格式跟随 Activity.IdFormat——
+                    // 假定 W3C（.NET 5+ 默认 DefaultIdFormat 为 W3C）。宿主若全局改用 Hierarchical
+                    //（Activity.DefaultIdFormat = ActivityIdFormat.Hierarchical），写入值为
+                    // hierarchical 格式（|... 形态）而非 W3C traceparent（00-... 四段），下游
+                    // 按 W3C 解析将失真；跨格式环境需在宿主统一 IdFormat 或消费侧按前缀判别。
                     CausationId = null,
                     TraceParent = Activity.Current?.Id,
                     TraceState = Activity.Current?.TraceStateString,

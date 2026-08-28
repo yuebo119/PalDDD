@@ -196,7 +196,22 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         }
 
         // v22 E-1：cts.Token 在 lock 后快照一次——Dispose 并发完成时 cts.Token 属性抛 ODE
-        var tokenSnapshot = cts.Token;
+        // v36 P3：快照创建点（登记后、Task.Run 前）仍裸露于并发 Dispose 窗口——Add 后被
+        // 抢占、DisposeAsync 完成 cts.Dispose 后 cts.Token 属性抛原始 ODE，调用方会误判为
+        // "对象已释放"的杂散状态而非"订阅无法启动"。转译为 InvalidOperationException（保留
+        // ODE 为 InnerException 供诊断）注明并发释放语义；订阅此刻已登记进 _consumers，
+        // 其 cts/consumer 资源由 DisposeAsync 统一回收，本异常仅为启动失败的契约表达。
+        CancellationToken tokenSnapshot;
+        try
+        {
+            tokenSnapshot = cts.Token;
+        }
+        catch (ObjectDisposedException ex)
+        {
+            throw new InvalidOperationException(
+                $"Kafka 订阅 {typeof(TMessage).Name} @ {topic} 正在被并发释放（DisposeAsync 已完成），消费循环无法启动。",
+                ex);
+        }
 
         // 保存 Task 引用，用于等待完成和错误观测
         var consumeTask = Task.Run(async () =>
@@ -250,6 +265,15 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                             _logger.Warning($"Deserializing {typeof(TMessage).Name} returned null, discarding message: {topic}");
                         }
                     }
+                    catch (OperationCanceledException ex)
+                    {
+                        // v36 P1 真修（v34 假修勘正）：非关停 OCE = 应用自身取消 = 单消息事件
+                        //（对齐 RabbitBroker v33 判定）——本 catch 必须位于 while 体内：v34 的
+                        // 对齐只改了外层 catch 的日志文本，catch 锚定在 while 之外物理上不可
+                        // 能继续循环（捕获后直落 finally Close+Dispose → 订阅静默死亡），
+                        // "continuing consumption" 文案与实际终止行为相反。移入后消费继续
+                        _logger.Error(ex, $"Handler for {typeof(TMessage).Name} threw a non-shutdown OperationCanceledException, discarding: {topic}");
+                    }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         _logger.Error(ex, $"Failed to handle {typeof(TMessage).Name} message: {topic}");
@@ -260,17 +284,13 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             {
                 // 正常取消
             }
-            // v34 P2（姊妹语义对齐）：非关停 OCE 对齐 RabbitBroker v33 判定——handler 非关停
-            // OCE = 应用自身取消 = 单消息事件（记 Error 后继续消费），而非终止整个循环。
-            // 逐行追踪证伪了原"语义不明"前提：外层非关停 OCE 只能来自 handler（Consume 的
-            // OCE 在内层 break；Task.Delay 的 OCE 必伴随 cts 取消走关停 when 分支）——同
-            // 一 handler（如 CancelAfter 超时）在旧判定下 Kafka 侧一次触发即订阅静默死亡
-            //（Close 提交 offset、后续消息无人消费），Rabbit 侧仅丢单条，语义矛盾。
-            // 继续消费与"取消意图"不冲突：真正的取消走 cts（上方 when 分支 break）。
-            // 历史（十七轮原修复）：本分支曾因"语义不明"选择终止——该前提已被逐行追踪证伪。
+            // v36 勘正：外层非关停 OCE 兜底——v34 假修勘正后，handler 的非关停 OCE 已在
+            // while 体内 catch+继续（真 continue）；到达本外层 catch 的是 while 条件求值等
+            // 循环骨架位置的非关停 OCE——此处终止是真实语义（骨架异常无法安全 continue），
+            // 文案如实描述终止
             catch (OperationCanceledException ex)
             {
-                _logger.Error(ex, $"Handler for {typeof(TMessage).Name} threw a non-shutdown OperationCanceledException, continuing consumption: {topic} @ {_consumerConfig.GroupId}");
+                _logger.Error(ex, $"Kafka consume loop terminated by non-shutdown cancellation at loop skeleton: {topic} @ {_consumerConfig.GroupId}");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

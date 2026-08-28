@@ -2,6 +2,7 @@
 // 🔧 DI 注册 — AddPalSerialization 等
 // ─────────────────────────────────────────────────────────────
 using Microsoft.Extensions.DependencyInjection;
+using System.Text.Json;
 
 namespace PalDDD.Serialization.Json;
 
@@ -9,6 +10,19 @@ namespace PalDDD.Serialization.Json;
 public static class ServiceCollectionExtensions
 {
     /// <summary>注册 AOT-first JSON 消息序列化器。</summary>
+    /// <remarks>
+    /// ⚠️ v36 P3 存疑挂账声明（DI 构造选择漂移）：<see cref="JsonMessageSerializer"/> 有两个
+    /// 构造——单参 catalog 路径（<c>(JsonTypeInfo&lt;TMessage&gt;)descriptor.JsonTypeInfo</c>
+    /// 强制转换获取 metadata）与双参 options 路径（<c>options.GetTypeInfo&lt;TMessage&gt;()</c>
+    /// 强类型零装箱）。本方法仅注册 <see cref="IMessageCatalog"/> 与 <see cref="IMessageSerializer"/>，
+    /// MS DI 默认激活按"可解析参数最多的构造"挑选——容器中已注册
+    /// <see cref="JsonSerializerOptions"/> 时将静默选中 options 构造（形状分叉），且"后注册
+    /// options"同样改变形状（构造选择在解析时点决策，非注册时点）。
+    /// 需要 catalog 路径的用户：避免全局注册 JsonSerializerOptions，或显式固定构造——
+    /// <c>services.AddSingleton&lt;IMessageSerializer&gt;(sp => new JsonMessageSerializer(
+    /// sp.GetRequiredService&lt;IMessageCatalog&gt;()))</c>。
+    /// 行为探针（锁定双分支选择语义）留后续验证轮。
+    /// </remarks>
     public static IServiceCollection AddPalJsonSerialization(
         this IServiceCollection services,
         Action<MessageCatalogBuilder>? configureCatalog = null)

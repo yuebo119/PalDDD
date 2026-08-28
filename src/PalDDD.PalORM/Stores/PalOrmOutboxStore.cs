@@ -267,12 +267,20 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // 同轮收口）。合法持租路径不误伤：租约只落在 Pending 行上，持租处理中的行恒为 Pending。
         // statusPending 为 int 插值（值位参数化合法，非 SQL 片段——PD18 教训），字面量分支
         // 构造与既有 owner 分支一致。
+        // v36 P3：两分支 WHERE 同补 retry_count = {retry} 快照守卫——对齐 EFCore
+        // OutboxDbContext.FencedTarget 的 originalRetry 双分支形态（v30 无租约分支 + v33 持租
+        // 分支收口；PalORM 版 MarkProcessed/MarkDead 同款快照守卫已有，本方法为姊妹漏网）。
+        // 缺口：本方法语义为 retry_count = retry_count + 1 原子自增，行被并发推进（他人
+        // ReleaseForRetry 已自增 / RequeueDead 推进）后，持旧快照的调用方再释放会在新值上
+        // 二次自增（重试计数虚高提前 Dead）。快照守卫使自增严格基于捕获点版本，并发推进后
+        // 旧写不命中（affected=0，走下方既有门控零内存变异）。
+        var retry = message.RetryCount;
         var affected = leaseOwner is null
             ? Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {reason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND status = {statusPending} AND (locked_by IS NULL)",
+                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {reason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND status = {statusPending} AND retry_count = {retry} AND (locked_by IS NULL)",
                 default).AsTask().GetAwaiter().GetResult()
             : Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {reason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND status = {statusPending} AND locked_by = {leaseOwner} AND locked_until = {leaseUntil}",
+                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {reason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND status = {statusPending} AND retry_count = {retry} AND locked_by = {leaseOwner} AND locked_until = {leaseUntil}",
                 default).AsTask().GetAwaiter().GetResult();
         if (affected > 0)
         {

@@ -31,6 +31,13 @@ internal sealed class SagaTimeoutDetector<TState>
     /// <summary>
     /// 检查 Saga 是否超时——收集所有超时步骤。
     /// </summary>
+    /// <remarks>
+    /// v36 P3 边界声明：超时命中的"执行中滞留步骤"（StepStartedAt 已记录但步骤未返回）
+    /// 自身不在补偿范围——CompensateAllAsync 按 ExecutedStepKeys（仅成功步骤）执行；
+    /// 若滞留步骤最终完成产生副作用而 Saga 已被补偿至终态，该副作用泄漏。
+    /// 补偿"已成功执行的步骤"是既定语义（SagaStep 类头整步重放+幂等契约），
+    /// 滞留窗口（超时命中→步骤完成）极窄，接受为边界。
+    /// </remarks>
     /// <param name="state">当前 Saga 状态</param>
     /// <param name="now">当前时间</param>
     /// <param name="timedOutSteps">超时的步骤列表</param>
