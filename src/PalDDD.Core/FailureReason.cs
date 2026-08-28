@@ -36,12 +36,24 @@ public static class FailureReason
     /// MarkFailed、Saga SaveChanges）+ PalORM/EFCore Saga 的 2040 兜底截断共用本方法
     ///（error 列上限 2048 的安全余量）；代理对守卫同 <see cref="Normalize"/>
     ///（末位高代理回退一位，防孤立高代理入库——UTF-16 代理对完整性）。
+    /// <para>
+    /// v30 P3 收口扩容：Outbox MarkDead/ReleaseForRetry 的 2040 兜底（PalORM
+    /// PalOrmOutboxStore + EFCore OutboxDbContext 各两处）与 RequeueDeadAsync 的
+    /// retriedBy 256 截断（Dapper/PalORM/EFCore/InMemory 四栈）全部改经本方法——
+    /// 此前九处裸 [..N] 切片无代理对守卫。
+    /// </para>
     /// </summary>
     /// <param name="value">原始值；null 原样返回（null 语义保持）。</param>
-    /// <param name="maxLength">截断上限（超过才截断）。</param>
+    /// <param name="maxLength">截断上限（超过才截断）；v30 P3 契约：<c>0</c> 返回空串（非 null 输入
+    /// 截到零长），负值抛 <see cref="ArgumentOutOfRangeException"/>。</param>
     [return: System.Diagnostics.CodeAnalysis.NotNullIfNotNull(nameof(value))]
     public static string? Truncate(string? value, int maxLength)
     {
+        // v30 P3：maxLength 负值守卫——无守卫时负值落到 value[..maxLength] 抛
+        // ArgumentOutOfRangeException，但错误信息指向切片表达式而非参数契约（可诊断性差，
+        // 调用方难以定位误传负值的源头）。守卫前置于 null 检查：参数校验优先于
+        // "null 原样返回"短路（null + 负值组合以契约违规报错，不静默放行）
+        ArgumentOutOfRangeException.ThrowIfNegative(maxLength);
         // 关系模式（> maxLength）右侧要求编译期常量，参数版须显式比较
         if (value is null || value.Length <= maxLength) return value;
         var truncated = value[..maxLength];

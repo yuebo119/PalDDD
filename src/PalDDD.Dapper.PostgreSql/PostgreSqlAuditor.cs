@@ -100,6 +100,12 @@ public static class PostgreSqlAuditor
     {
         // P3 修复（二十一轮）：表名在本语句处于单引号字面量位置（VALUES 值）——仅消费校验，丢弃包裹返回值
         _ = QuoteIdentifier(tableName, nameof(tableName));
+        // v30 P3 守卫族：rowId/operation 补 ThrowIfNullOrWhiteSpace——对齐 tableName 的守卫
+        //（QuoteIdentifier 入口的同款 BCL 守卫形态；二者在本语句为字面量值位置，不走标识符
+        // 字符集校验）：null/空白 rowId 使审计行失去行定位、空白 operation 破坏
+        // INSERT|UPDATE|DELETE 契约，均静默入库后才暴露
+        ArgumentException.ThrowIfNullOrWhiteSpace(rowId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(operation);
 
         return $"""
         INSERT INTO audit_log (table_name, row_id, operation, old_data, new_data, changed_by)
@@ -114,6 +120,9 @@ public static class PostgreSqlAuditor
     {
         // P3 修复（二十一轮）：表名在本语句处于单引号字面量位置（WHERE 比较值）——仅消费校验，丢弃包裹返回值
         _ = QuoteIdentifier(tableName, nameof(tableName));
+        // v30 P3 守卫族：rowId 补 ThrowIfNullOrWhiteSpace（对齐 AppendAuditLog 同款）——
+        // null/空白 rowId 的历史查询恒空结果，静默无诊断
+        ArgumentException.ThrowIfNullOrWhiteSpace(rowId);
 
         return $"SELECT * FROM audit_log WHERE table_name = '{EscapeLiteral(tableName)}' AND row_id = '{EscapeLiteral(rowId)}' ORDER BY changed_at DESC";
     }

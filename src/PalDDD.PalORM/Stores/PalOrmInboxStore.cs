@@ -46,8 +46,14 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         // v29 P3（S7，镜像 v28 DapperInboxStore ITM-107 姊妹守卫）：processingTimeout 必须非负——
         // 负值使 cutoff = now - processingTimeout 落到 now 之后，刚启动的 Processing 记录
         //（now - ProcessingStartedAt ≈ 0 < 负 timeout 的反向区间）被误判超时可抢占，防并发
-        // 保护失效（僵尸接管窗口）。允许 TimeSpan.Zero：超时接管（timeout=0）恒可重入是方言
-        // 探针的合法测试语义（对齐 Checkpoint 侧"仅禁负值"口径）。
+        // 保护失效（僵尸接管窗口）。
+        // v30 P3 勘正（v29 注释失实）："允许 TimeSpan.Zero：超时接管恒可重入"不成立——
+        // 本栈抢占 UPDATE 的守卫是 processing_started_at < cutoff 的<b>严格小于</b>：
+        // 同刻（started == now，elapsed 恰为 0）时不满足 → UPDATE 0 行 → 返回 null 拒绝重入；
+        // timeout=0 的接管仅在跨 tick（started 严格早于 now）时成立。同刻边界与 Dapper 栈
+        // 一致（startedAt < cutoff=now 为 false → 0 行 → null），与 InMemory 栈相反（其
+        // elapsed < timeout 判 0<0 为 false → 走重入，见 InMemoryInboxStore ITM-283 边界声明）。
+        // 口径不变：仅禁负值——跨 tick 的 timeout=0 接管仍是方言探针的合法测试语义。
         if (processingTimeout < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
         var statusProcessing = (int)InboxStatus.Processing;

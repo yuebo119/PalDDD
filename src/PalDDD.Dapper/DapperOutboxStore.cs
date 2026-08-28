@@ -96,6 +96,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         int maxRetryCount,
         CancellationToken ct)
     {
+        // v30 P3 守卫族：batchSize 非正守卫——镜像全族 ThrowIfNegativeOrZero 形态
+        //（PalOrmOutboxStore.GetPendingMessagesAsync / OutboxDbContext.GetPendingMessagesAsync）——
+        // LIMIT 0/负在各方言下静默空返回，无诊断
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
         var now = _timeProvider.GetUtcNow();
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // 🟡 P1 修复 (2026-06-21): 替换 SqlKata.QueryFactory.GetAsync 为纯 Dapper SQL
@@ -113,6 +117,9 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner); // v22 C-2：对齐 EFCore 四方言 ITM-081/216
+        // v30 P3 守卫族：batchSize 非正守卫（同 GetPendingMessagesAsync——PalORM/EFCore 姊妹
+        // 的 Lease 路径均已补）；子查询 LIMIT 0/负静默空返回，无诊断
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
         // v27 P3 守卫族（B 片 N3）：leaseDuration 双检守卫（v25/v26 守卫族最后缺口）——镜像
         // DapperSagaStateStore.LeaseActiveSagasAsync 守卫形态。非正租约使租约即刻过期/永不过期
         // 语义错乱（OutboxProcessor 默认配置不触发，此处是直调路径的防御性 fail-fast）；上界
@@ -298,7 +305,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(retriedBy);
         // P3-TST-601：对齐 EFCore ITM-216（256 截断）
-        if (retriedBy.Length > 256) retriedBy = retriedBy[..256];
+        // v30 P3：改经 FailureReason.Truncate 共享收口——[..256] 裸切片可能切半 UTF-16
+        // 代理对（超长含 emoji 的操作者标识），末位高代理回退一位防孤立高代理入库
+        //（Dapper/PalORM/EFCore/InMemory 四栈 retriedBy 截断点同款，见 FailureReason.Truncate）
+        retriedBy = FailureReason.Truncate(retriedBy, 256);
         var now = _timeProvider.GetUtcNow();
         var audit = $"requeued by {retriedBy} at {now:O}";
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);

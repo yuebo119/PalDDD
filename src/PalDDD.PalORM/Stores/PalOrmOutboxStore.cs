@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using ByteAether.Ulid;
+using PalDDD.Core; // v30 P3：Outbox 截断点接入 FailureReason.Truncate 共享收口（对齐姊妹 PalOrmInboxStore）
 using PalORM;
 using PalDDD.PalORM.Models;
 using PalDDD.Transactions;
@@ -198,7 +199,9 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // MarkDead（Error 列上限 2048 族的截断值）。三层截断的存储层兜底：调用方 OutboxBatchProcessor
         // 的 2000 截断为第一层；PalORM 三方言 error 列 TEXT 无上限（栈内无害），本兜底为跨栈姊妹
         // 对称性 + 防 DDL 收紧后超列失败（消息滞留租约过期态）
-        var reason = failureReason.Length > 2040 ? failureReason[..2040] : failureReason;
+        // v30 P3：改经 FailureReason.Truncate 共享收口——裸 [..2040] 切片可能切半 UTF-16
+        // 代理对（超长含 emoji 的消息），末位高代理回退一位防孤立高代理入库
+        var reason = FailureReason.Truncate(failureReason, 2040);
         // 三十四轮 ITM-210 token 化：同 MarkProcessed——retry_count 乐观锁 + 租约 token 双守卫
         //（SET/WHERE 只插值"值"；SQL 片段变量会被 PalORM 整体参数化成语法错误，见 MarkProcessed 注释）
         var id = message.Id.ToString();
@@ -232,7 +235,8 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         // ITM-082 姊妹对齐（P3-SRC-302）：failureReason 存储层截断兜底 2040——对齐 OutboxDbContext.
         // ReleaseForRetry（同 MarkDead，见其注释的三层截断说明）
-        var reason = failureReason.Length > 2040 ? failureReason[..2040] : failureReason;
+        // v30 P3：改经 FailureReason.Truncate 共享收口（代理对守卫，见 MarkDead 注释）
+        var reason = FailureReason.Truncate(failureReason, 2040);
         // 手写 SQL 路径：原子自增 retry_count（避免读-改-写竞态）
         // 不走 UpdateAsync —— 避免 [ConcurrencyCheck] 干扰原子自增语义
         // P2 修复：补租约守卫——原 WHERE 仅按 id，租约过期被其他 worker 抢占后，
@@ -284,7 +288,9 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // ITM-216 姊妹对齐（P3-SRC-102/201）：retriedBy 截断兜底 256——对齐 OutboxDbContext/
         // InMemoryOutboxStore 的 RequeueDeadAsync（审计串预留 " at {时间戳}" 后缀空间，Error 列
         // 上限族 2048）。入参保持不变，仅审计串使用截断值
-        var retriedByToken = retriedBy.Length > 256 ? retriedBy[..256] : retriedBy;
+        // v30 P3：改经 FailureReason.Truncate 共享收口——裸 [..256] 切片可能切半 UTF-16 代理对
+        //（超长含 emoji 的操作者标识），四栈 retriedBy 截断点同款
+        var retriedByToken = FailureReason.Truncate(retriedBy, 256);
         var now = Clock.GetUtcNow();
         var audit = $"requeued by {retriedByToken} at {now:O}";
         // 条件 UPDATE：status=Dead(2) 守卫防止重复重投；返回受影响行数用于幂等判断

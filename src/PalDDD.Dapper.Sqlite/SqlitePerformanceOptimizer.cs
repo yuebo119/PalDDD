@@ -104,6 +104,17 @@ public static class SqlitePerformanceOptimizer
         // connection.OpenAsync() 处以 NullReferenceException 暴露，失败点与异常类型
         // 与 Production 路径不一致。
         ArgumentNullException.ThrowIfNull(connection);
+        // v30 P3（镜像 OptimizeAsync 的 v29 :memory: 降级 + 同包 DI 路径 ITM-135）：直调路径
+        // 对 :memory: 连接必抛误导性 WAL 异常——:memory: 上 PRAGMA journal_mode=WAL 恒返回
+        // "memory"（无法切换 WAL），ApplyAsync 的 WAL 确认失配抛 InvalidOperationException
+        //（WAL 语义不适用于内存库）。Light 级与 Production 级同走 WAL 确认分支（ApplyAsync
+        // 的 is Production or Light），内存库降级 OptimizeInMemoryAsync 后文件库不受影响。
+        if (SqliteServiceCollectionExtensions.IsMemoryDataSource(
+                new SqliteConnectionStringBuilder(connection.ConnectionString).DataSource))
+        {
+            await OptimizeInMemoryAsync(connection).ConfigureAwait(false);
+            return;
+        }
         // ITM-220 修复（三十二轮）：State 守卫（见 OptimizeAsync）
         if (connection.State != System.Data.ConnectionState.Open)
             await connection.OpenAsync().ConfigureAwait(false);

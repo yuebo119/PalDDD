@@ -298,5 +298,35 @@ public sealed class InMemoryStoreTests
         await Assert.That(pending).IsEmpty();
     }
 
+    [Test]
+    public async Task InMemoryOutboxStore_AddMessagesAsync_DuplicateId_ThrowsAndLeavesNoWrite(CancellationToken cancellationToken)
+    {
+        // v30 P3 重复 Id 防护回归：同一 OutboxMessage 实例 Add 两次（同批次重复 Id）抛
+        // ArgumentException 且零写入——修复前双条目经 LeasePending 引用索引表（TryAdd
+        // 保留首索引）产生错位租约，successor 覆盖首位置后第二位置残留 Pending 原始引用，
+        // 下轮 Lease 再次租出（重复发布）。对齐 DB 栈 PK 约束行为
+        var store = new InMemoryOutboxStore();
+        var msg = new OutboxMessage { Type = "test", Payload = [1], ContentType = "application/json", SchemaVersion = 1 };
+        var messages = new List<OutboxMessage> { msg, msg };
+
+        await Assert.That(async () => await store.AddMessagesAsync(messages)).Throws<ArgumentException>();
+
+        var pending = await store.GetPendingMessagesAsync(10, 10, cancellationToken);
+        await Assert.That(pending).IsEmpty();
+    }
+
+    [Test]
+    public async Task InMemoryInboxStore_NegativeProcessingTimeout_ThrowsArgumentOutOfRange(CancellationToken cancellationToken)
+    {
+        // v30 P3 守卫族回归：负 processingTimeout 使租约即刻过期（now - started < negative
+        // 恒 false），与数据库三实现语义分叉——必须 fail-fast（镜像 PalOrmInboxStore
+        // v29 S7 / DapperInboxStore ITM-107 姊妹守卫的 InMemory 侧对齐）
+        var store = new InMemoryInboxStore();
+
+        await Assert.That(async () => await store.TryStartProcessingAsync(
+            "consumer", "msg-001", DateTimeOffset.UtcNow, TimeSpan.FromSeconds(-1), cancellationToken))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
     public sealed class SampleSaga : SagaState;
 }

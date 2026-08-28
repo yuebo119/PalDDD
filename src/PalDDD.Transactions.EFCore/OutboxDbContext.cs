@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 using Microsoft.EntityFrameworkCore;
 using System.Diagnostics.CodeAnalysis;
+using PalDDD.Core; // v30 P3：Outbox 截断点接入 FailureReason.Truncate 共享收口
 using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions;
@@ -96,12 +97,16 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     /// <inheritdoc/>
     /// <remarks>
     /// ITM-210 修复（三十二轮守卫 → 三十四轮 token 化）：关系型 provider 用 ExecuteUpdate 带租约守卫；
-    /// 非 SQL 可翻译 provider（InMemory 测试）回退到条件加载 + 内存突变 + SaveChanges。<br/>
+    /// v30 P3 勘正（原"内存突变 + SaveChanges"失实）：非 SQL 可翻译 provider（InMemory 测试）的
+    /// 回退路径<b>仅变异 tracked 实体，不做任何 SaveChanges</b>——持久化由调用方经
+    /// <see cref="IPalOutboxStore.SaveChangesAsync"/> 完成（OutboxBatchProcessor 在每条 Mark 后
+    /// 调用 PersistSingleAsync 触发，非本方法职责）。<br/>
     /// <b>租约 token（三十四轮）</b>：持租调用方（<c>message.LockedBy</c> 非空）的终态写要求行内
     /// <c>(LockedBy, LockedUntil)</c> 与租约时捕获的标识对<b>完全匹配</b>——租约过期被重租（同 owner
     /// 复用或他 owner 接手）后，旧 worker 的终态写影响 0 行（<c>LockedUntil</c> 随每次租约单调变化，
-    /// 充当 fencing token，免 DDL 加列）；无租约直呼（LockedBy 为 null，运维/测试路径）仅当行当前
-    /// 未被租（<c>LockedBy IS NULL</c>）时放行。
+    /// 充当 fencing token，免 DDL 加列）；无租约直呼（LockedBy 为 null，运维/测试路径）当行当前
+    /// 未被租（<c>LockedBy IS NULL</c>）且 <c>RetryCount</c> 与入参快照一致时放行（v30 P3 补快照
+    /// 守卫，见 <see cref="FencedTarget"/>）。
     /// </remarks>
     public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
     {
@@ -152,7 +157,10 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
 
-        var error = failureReason.Length > 2040 ? failureReason[..2040] : failureReason;
+        // v30 P3：改经 FailureReason.Truncate 共享收口——裸 [..2040] 切片可能切半 UTF-16
+        // 代理对（超长含 emoji 的消息），末位高代理回退一位防孤立高代理入库
+        //（MarkDead/ReleaseForRetry + retriedBy 同款，见 FailureReason.Truncate）
+        var error = FailureReason.Truncate(failureReason, 2040);
 
         try
         {
@@ -190,20 +198,25 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
 
     /// <summary>
     /// 租约 token 守卫目标集——持租调用方匹配 (LockedBy, LockedUntil) 标识对；
-    /// 无租约直呼（LockedBy 为 null）仅放行当前未被租的行。
+    /// 无租约直呼（LockedBy 为 null）放行当前未被租的行，且要求 RetryCount 快照一致。
     /// </summary>
     /// <remarks>三十四轮 ITM-210 落地：原 <c>LockedBy IS NULL OR LockedBy == 原持有者</c> 守卫的
     /// "NULL 放行"分支正是 fencing 缺口——租约被释放（ReleaseForRetry/RequeueDead）后旧 worker
     /// 的终态写仍会命中；同 owner 复用（worker 重启）亦无防护。<c>LockedUntil</c> 随每次租约
     /// 单调变化（重租必在过期后，<c>新 until = 更晚的 now + duration &gt; 旧 until</c>），以
-    /// 微秒精度存储（PG timestamptz / SQLite TEXT "O" 格式）下充当免 DDL 的 fencing token。</remarks>
+    /// 微秒精度存储（PG timestamptz / SQLite TEXT "O" 格式）下充当免 DDL 的 fencing token。<br/>
+    /// v30 P3：无租约分支补 <c>RetryCount == message.RetryCount</c> 快照守卫（对齐 PalORM 版
+    /// 全分支的 <c>retry_count = {retry}</c> 形态，PalOrmOutboxStore.MarkProcessed）——无租约
+    /// 直呼的行从 Pending 被 ReleaseForRetry（RetryCount+1）或 RequeueDead 推进后，持旧快照的
+    /// 调用方终态写不再命中（与持租分支的 LockedUntil token 同向收口）。本方法为
+    /// MarkProcessed/MarkDead/ReleaseForRetry 三方法共享目标集，一处守卫三方法生效。</remarks>
     private IQueryable<OutboxMessage> FencedTarget(OutboxMessage message)
     {
         var originalOwner = message.LockedBy;
         var originalUntil = message.LockedUntil;
         var target = OutboxMessages.Where(m => m.Id == message.Id);
         return originalOwner is null
-            ? target.Where(m => m.LockedBy == null)
+            ? target.Where(m => m.LockedBy == null && m.RetryCount == message.RetryCount)
             : target.Where(m => m.LockedBy == originalOwner && m.LockedUntil == originalUntil);
     }
 
@@ -228,7 +241,8 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         // ITM-082 修复：存储层兜底截断（同款于 MarkDead 的 2040 截断）——Error 列 HasMaxLength(2048)，
         // 超长失败原因此前让 ExecuteUpdate 生成的 UPDATE 抛 provider 截断异常（PG 整条 UPDATE 失败 →
         // 消息滞留 Processing 且租约已过期 → 下轮重租后重试计数丢失；对齐 MarkDead 十七轮防御）
-        var error = failureReason.Length > 2040 ? failureReason[..2040] : failureReason;
+        // v30 P3：改经 FailureReason.Truncate 共享收口（代理对守卫，见 MarkDead 注释）
+        var error = FailureReason.Truncate(failureReason, 2040);
 
         FencedTarget(message)
             .ExecuteUpdate(s => s
@@ -252,7 +266,9 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         ArgumentException.ThrowIfNullOrWhiteSpace(retriedBy);
         // ITM-216 修复（三十二轮）：retriedBy 截断兜底（截断族 2040）——Error 列上限 2048，
         // 超长 retriedBy 使 audit 串超列，ExecuteUpdateAsync 抛截断异常（对齐 MarkDead/ReleaseForRetry）
-        var owner = retriedBy.Length > 256 ? retriedBy[..256] : retriedBy;
+        // v30 P3：改经 FailureReason.Truncate 共享收口——裸 [..256] 切片可能切半 UTF-16 代理对
+        //（超长含 emoji 的操作者标识），四栈 retriedBy 截断点同款
+        var owner = FailureReason.Truncate(retriedBy, 256);
         var now = GetUtcNow();
         var audit = $"requeued by {owner} at {now:O}";
 

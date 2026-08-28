@@ -121,11 +121,24 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
             // v25 P3 行为族 B2：两段式——先全量校验再添加。原单循环边校验边添加，
             // 中途遇 null 条目抛出时前面条目已写入（部分写入残留），调用方重试整批
             // 会产生重复消息；校验前置后失败批次零写入（全有全无语义）。
+            // v30 P3（重复 Id 防护）：同批次内重复 Id（典型形态：同一 OutboxMessage 实例
+            // Add 两次）在 LeasePending 的引用索引表（indexMap.TryAdd 保留首索引）下产生
+            // 错位租约——successor 覆盖首位置后，重复条目的第二位置残留 Pending 原始引用，
+            // 下轮 Lease 再次租出 → 重复发布。对齐 DB 栈 PK 约束行为（Ulid 主键冲突拒绝
+            // 写入）：批内 Id 去重失败即抛 ArgumentException，零写入。
+            // ⚠️ 边界声明：仅校验批内重复（最小修复）；跨批次重复（AddMessage 后再
+            // AddMessagesAsync 同 Id）需全表 Id 索引，超出本修复范围——本栈定位为
+            // 测试/单进程原型，批内拒绝已兜住主流误用形态。
+            var seenIds = new HashSet<PalUlid>(messages.Count * 2);
             foreach (var msg in messages)
             {
                 // v13 姊妹对称：单条 null 对齐同文件 AddMessage 的 ThrowIfNull——null 延迟到
                 // QueryPending lambda 的 NRE 更难定位
                 ArgumentNullException.ThrowIfNull(msg);
+                if (!seenIds.Add(msg.Id))
+                    throw new ArgumentException(
+                        $"Duplicate OutboxMessage id '{msg.Id}' in the messages batch (Id must be unique, mirroring the DB primary-key constraint).",
+                        nameof(messages));
             }
             foreach (var msg in messages)
             {
@@ -206,7 +219,9 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
         // ITM-216 修复（三十二轮）：retriedBy 截断兜底——Error 列上限 2048（同款于
         // OutboxDbContext.RequeueDeadAsync 的 2040 截断族）——v22 勘正：此处实际截 256（内存列上限声明不适用，
         // 与 2040 族的差异为防御性收窄：retriedBy 是运维标识不会接近 2048）
-        var owner = retriedBy.Length > 256 ? retriedBy[..256] : retriedBy;
+        // v30 P3：改经 FailureReason.Truncate 共享收口（项目全局别名 Core.）——裸 [..256]
+        // 切片可能切半 UTF-16 代理对（超长含 emoji 的操作者标识），四栈 retriedBy 截断点同款
+        var owner = Core.FailureReason.Truncate(retriedBy, 256);
         // v17 声明：now 取值在 lock 外——与 lock 内使用有微 TOCTOU，但仅影响审计时间戳精度
         // （不影响 fencing/token 正确性，对齐 Lease 路径可随统一重构处理）。
         var now = _timeProvider.GetUtcNow();

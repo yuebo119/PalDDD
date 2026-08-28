@@ -186,6 +186,23 @@ public sealed class GeneratedIdentityTests
         }).Throws<JsonException>();
     }
 
+    // ── v30 P3 生成器族：string 分支 JsonReadBody 坏 token 守卫 ──
+    // 契约：同 Guid/int/long 分支——非 String token（Number/True 等）原从 GetString()
+    // 抛 InvalidOperationException，上层 catch (JsonException) 无法捕获；修复后
+    // 守卫前置统一抛 JsonException（Null token 的 ?? throw 语义保留）。
+
+    [Test]
+    public async Task StringIdentity_JsonNumberToken_ThrowsJsonException()
+    {
+        await Assert.That(() =>
+        {
+            var reader = new Utf8JsonReader("123"u8);
+            reader.Read();
+            var converter = new TenantKeyJsonConverter();
+            converter.Read(ref reader, typeof(TenantKey), JsonSerializerOptions.Default);
+        }).Throws<JsonException>();
+    }
+
     [Test]
     public async Task GeneratedType_ImplementsISpanParsable()
     {
