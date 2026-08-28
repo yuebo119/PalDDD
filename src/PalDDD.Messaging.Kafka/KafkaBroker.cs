@@ -135,7 +135,19 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         // CriticalHandle finalizer 延迟释放。cts 只依赖外部 ct，与 Build 无时序依赖；
         // 创建失败时 consumer 尚未构造，窗口彻底关闭
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var consumer = new ConsumerBuilder<string, byte[]>(_consumerConfig).Build();
+        // v32 P3 修复：Build 纳入清理域——cts 前移后 Build 抛出时 cts 无人 Dispose（纯托管
+        // 对象无泄漏后果，但其 linked 注册滞留至 ct 生命周期）。拆两段 try：Build 失败仅回收
+        // cts（consumer 尚未构造）；Subscribe 失败回收两者
+        Consumer<string, byte[]> consumer;
+        try
+        {
+            consumer = new ConsumerBuilder<string, byte[]>(_consumerConfig).Build();
+        }
+        catch
+        {
+            cts.Dispose();
+            throw;
+        }
         try
         {
             consumer.Subscribe(topic); // 同步订阅（无需网络调用）
