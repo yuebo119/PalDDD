@@ -51,6 +51,9 @@ public static class MySqlServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(connectionString);
+        // v33 P3：空白连接串 fail-fast（对齐同包 DapperConfiguration.Create:42 口径）——
+        // 空白串原样放行会延迟到 MySqlDataSourceBuilder.Build()/建连时才抛 provider 专属异常
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
 
         // P2 修复（二十一轮）：SET SESSION 传导前提——MySqlConnector 默认 ResetConnections=true，
         // 从池中取出的连接会话已被重置（CHARACTER_SET_RESULTS / SQL_MODE 等恢复服务端默认），

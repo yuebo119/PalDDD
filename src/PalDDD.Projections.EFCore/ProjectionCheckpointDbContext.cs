@@ -57,6 +57,14 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
     {
         ValidateKeyParts(projectionName, sourceName, position);
 
+        // v33 P3：processingTimeout 必须非负（四栈 Checkpoint 族唯一漏网——镜像 v29 S8
+        // InboxDbContext.cs:50-51 / DapperProjectionCheckpointStore ITM-107 姊妹守卫）：
+        // 领域方法 MarkProcessing 无守卫，负值使 LeaseUntil = startedAt + timeout < startedAt，
+        // 下方"Processing 且 LeaseUntil > startedAt"防抢占判定恒假，刚启动的 Processing
+        // 检查点被误判僵尸可抢占。允许 TimeSpan.Zero（仅禁负值，对齐姊妹口径）。
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
+
         var checkpoint = await ProjectionCheckpoints.SingleOrDefaultAsync(
             x => x.ProjectionName == projectionName
                 && x.SourceName == sourceName
@@ -236,6 +244,11 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         TimeSpan processingTimeout,
         CancellationToken ct)
     {
+        // v33 P3：同 TryStartAsync 的非负守卫——本方法是租约创建的唯一汇聚点，防御未来
+        // 新增调用路径绕过上游守卫（当前仅 TryStartAsync 可达，纯纵深防御）
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
+
         var checkpoint = new ProjectionCheckpoint(
             projectionName,
             sourceName,

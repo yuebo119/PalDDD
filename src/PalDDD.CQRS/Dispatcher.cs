@@ -61,7 +61,12 @@ public sealed class Dispatcher
             // 崩溃。空表冻结无任何价值（永久空表）；此处返回临时空冻结表（不缓存、不清
             // _entries），查找照常 miss 抛 HandlerNotFoundException，Registrar 启动后注册
             // 不受影响。部分注册中的冻结窗口（多 Marker 场景启动中途发命令）仍存在——
-            // 见 HandlerRegistrar remarks 的场景声明。
+            // v33 P3 勘正：原"见 HandlerRegistrar remarks 的场景声明"为跨文件悬空引用
+            // （目标 remarks 无该内容），改为本处自含声明：应用含多个 HandlerMarker
+            // 分段注册时，若在启动中途（部分 handler 已注册、其余 Registrar 尚未运行）
+            // 发命令，本方法将冻结"已注册部分"的表，剩余 Registrar 随后的 Register 抛
+            // ObjectDisposedException。v29 P2 空表修复只兜住全空表场景，不覆盖此窗口；
+            // 规避方式：保证全部注册先于首个命令派发（如注册完成后才启动派发方 HostedService）。
             if (_entries.Count == 0) return _entries.ToFrozenDictionary();
             Volatile.Write(ref _frozen, _entries.ToFrozenDictionary());
             _entries = null!;
@@ -150,7 +155,10 @@ public sealed class Dispatcher
     /// 使用 <see cref="PipelineStateMachine"/> 替代逐行为 async lambda 链：<br/>
     /// — 每行为一次 Func 委托分配（~64B，实例方法组不缓存——v27 P3 勘正，原"零闭包
     ///   分配（每行为 ~72B 编译器生成闭包类）"与 IL 不符）<br/>
-    /// — 零 LINQ 迭代器分配（原 Where() ~40B）<br/>
+    /// — Select 投影迭代器 + 转型 lambda 每请求一次分配（见泛型 ExecutePipelineAsync 的
+    ///   Select→ToImmutableArray 链：GetServices 每请求返回新枚举，无法跨请求缓存；单请求
+    ///   内仅枚举一次、不重复创建。原"零 LINQ 迭代器分配（原 Where() ~40B）"失实——
+    ///   Where 已替换为 Select 转型链，但迭代器分配并未消失）<br/>
     /// — 快路径省 AwaitAndBox 状态机装箱；每次请求创建新状态机实例（~40B），确保线程安全（Dispatcher 为 Singleton）
     /// </remarks>
     private async ValueTask<object?> ExecutePipelineAsync(Type requestType, IBaseRequest request, CancellationToken ct)
@@ -177,7 +185,9 @@ public sealed class Dispatcher
 
         var allBehaviors = services.GetServices<IPipelineBehavior<TRequest, TResponse>>();
         // 转换为非泛型 IPipelineBehavior 数组——PipelineStateMachine 通过非泛型接口构建管道链。
-        // behavior 数量通常 ≤2（Validation+Logging），用集合表达式 + ToImmutableArray 简洁清晰。
+        // v33 P3 勘正：原注释"用集合表达式 + ToImmutableArray 简洁清晰"与实现不符——
+        // 实际是 Select 转型链 + ToImmutableArray（DI 多服务枚举来自 GetServices，
+        // 无法写成集合表达式字面量）。behavior 数量通常 ≤2（Validation+Logging）。
         var matching = allBehaviors.Select(b => (IPipelineBehavior)b).ToImmutableArray();
 
         var handler = (IHandler)services.GetRequiredService<THandler>();

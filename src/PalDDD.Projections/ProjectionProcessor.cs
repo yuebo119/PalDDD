@@ -61,6 +61,15 @@ public sealed class ProjectionProcessor<TMessage>
         ProjectionContext context,
         CancellationToken ct = default)
     {
+        // v33 P3 补落 v31 承诺的入口 null 校验（仅 message 半边成立）：引用类型消息
+        // 实例化可为 null，原实现直通 ProjectAsync，失败点远离入口。不校验 context——
+        // ProjectionContext 是 readonly record struct（值类型不可能为 null，除非调用方
+        // 传 Nullable<T>，而那在非 nullable 形参处过不了 NRT 警告，本项目 warnaserror
+        // 编译不过），ThrowIfNull(context) 是死代码且触发 CA2264（v31 的"入口 null
+        // 校验"承诺里 context 半边本就无法成立）。
+        if (message is null)
+            throw new ArgumentNullException(nameof(message));
+
         var checkpoint = await _checkpointStore.TryStartAsync(
             _handler.ProjectionName,
             context.SourceName,

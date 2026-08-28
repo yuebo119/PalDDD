@@ -81,6 +81,18 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    // v33 P3：private/protected nested 类型挂 [GenerateId] 时，生成物的 namespace 级
+    // TypeConverter/JsonConverter 以裸名引用该类型——可访问性低于 internal 的嵌套类型
+    // 对生成物不可见（CS0122 落在 auto-generated 文件，排障困难）。编译期报 PALID006
+    // 不生成坏代码（顶层类型恒 public/internal 不受影响；镜像 EnumGenerator PALENUM007）
+    private static readonly DiagnosticDescriptor NonAccessibleDeclaration = new(
+        "PALID006",
+        "GenerateId does not support inaccessible declarations",
+        "Type '{0}' uses [GenerateId] but is not at least internal (private or protected nested types are invisible to the generated converters). Raise the declaration to internal or public.",
+        "PalDDD.IdentityGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var candidates = context.SyntaxProvider.ForAttributeWithMetadataName(
@@ -149,6 +161,22 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                         SourceType: sourceType.ToDisplayString(),
                         IsNumeric: false,
                         DiagnosticId: "PALID003",
+                        Location: context.TargetNode.GetLocation());
+                }
+
+                // v33 P3：可访问性拦截——可访问性低于 internal（private/protected 等）的
+                // nested 类型对生成物的 namespace 级 converter 不可见（裸名引用必 CS0122）。
+                // 编译期报 PALID006 不生成坏代码
+                if (structSymbol.DeclaredAccessibility is not (Accessibility.Public or Accessibility.Internal))
+                {
+                    return new IdGenInfo(
+                        Namespace: null,
+                        TypeName: structSymbol.Name,
+                        ContainingDeclarations: [],
+                        ContainingNames: [],
+                        SourceType: sourceType.ToDisplayString(),
+                        IsNumeric: false,
+                        DiagnosticId: "PALID006",
                         Location: context.TargetNode.GetLocation());
                 }
 
@@ -278,6 +306,13 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                                     info.TypeName,
                                     info.SourceType));
                             }
+                            break;
+                        case "PALID006":
+                            // v33 P3：private/protected nested 声明对生成物不可见
+                            spc.ReportDiagnostic(Diagnostic.Create(
+                                NonAccessibleDeclaration,
+                                info.Location ?? Location.None,
+                                info.TypeName));
                             break;
                         default:
                             // P3 修复（八轮评审）：PALID001——非白名单 IdType 编译期报错，不生成代码
@@ -513,10 +548,15 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
         // v30 P3 勘正：string 分支原仅靠 ?? throw 兜 Null token，Number/True 等非 String
         // token 仍从 GetString() 抛 InvalidOperationException——已补同型 token 守卫（见
         // string 分支注释），四值类型分支至此守卫族齐整。
+        // v33 P2 补全：token 守卫只堵了类型半边——token 类型正确但格式非法时
+        // GetGuid/GetInt32/GetInt64 仍抛 FormatException（Learn 官方文档独立异常条目），
+        // 非 JsonException，契约破裂。三分支补 TryParse/TryGet 形态（镜像 Ulid 分支）。
         "Guid" => $"""
                 if (reader.TokenType != JsonTokenType.String)
                     throw new JsonException("Guid identity JSON value must be a JSON string.");
-                return {name}.From(reader.GetGuid());
+                if (!Guid.TryParse(reader.GetString(), out var guidValue))
+                    throw new JsonException("Guid identity JSON value is not a valid Guid.");
+                return {name}.From(guidValue);
         """,
         // 优化（二十五轮 API 扫描 B2）：读路径原为 GetString()（必然堆分配）+ Parse(string)——
         // 非转义字符串（绝大多数）直接 reader.ValueSpan（UTF-8 原始切片）TryParse 零分配；
@@ -535,26 +575,35 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
                 throw new JsonException("Ulid identity JSON value is not a valid Ulid.");
         """,
         // v25 P3 生成器族：同 Guid 分支——Number token 守卫使坏 token（String/Null 等）抛
-        // JsonException 而非 GetInt32/GetInt64 的 InvalidOperationException
+        // JsonException 而非 GetInt32/GetInt64 的 InvalidOperationException。
+        // v33 P2 补全：TryGetInt32/TryGetInt64 兜格式腿（1.5/溢出等非法 Number token 由
+        // GetInt32/GetInt64 抛 FormatException——非 JsonException）
         "int" => $"""
                 if (reader.TokenType != JsonTokenType.Number)
                     throw new JsonException("Int32 identity JSON value must be a JSON number.");
-                return {name}.From(reader.GetInt32());
+                if (!reader.TryGetInt32(out var intValue))
+                    throw new JsonException("Int32 identity JSON value is not a valid Int32.");
+                return {name}.From(intValue);
         """,
         "long" => $"""
                 if (reader.TokenType != JsonTokenType.Number)
                     throw new JsonException("Int64 identity JSON value must be a JSON number.");
-                return {name}.From(reader.GetInt64());
+                if (!reader.TryGetInt64(out var longValue))
+                    throw new JsonException("Int64 identity JSON value is not a valid Int64.");
+                return {name}.From(longValue);
         """,
         // v30 P3 生成器族：string 分支补 token 类型守卫（对齐 Guid/Ulid/int/long 分支）——
         // GetString() 对 Number/True/False/StartObject 等非 String token 抛
         // InvalidOperationException，违反 S.T.J converter 契约（Read 失败应以 JsonException
-        // 抛出，上层 catch (JsonException) 才能统一捕获）。?? throw 保留：Null token 时
-        // GetString() 返回 null 而非抛错，null 兜底仍需独立防线
+        // 抛出，上层 catch (JsonException) 才能统一捕获）。
+        // v33 P3 勘正：v30 声称"?? throw 保留——Null token 时 GetString() 返回 null，
+        // null 兜底仍需独立防线"不成立——上方 token 守卫已拦 Null token
+        // （TokenType.Null != String 即抛），执行到 GetString() 时 TokenType 恒为 String、
+        // 恒返回非 null，?? throw 为不可达死防线。删除改直接 GetString()!（对齐 Ulid 分支）。
         "string" => $"""
                 if (reader.TokenType != JsonTokenType.String)
                     throw new JsonException("String identity JSON value must be a JSON string.");
-                return {name}.From(reader.GetString() ?? throw new JsonException("String identity JSON value cannot be null."));
+                return {name}.From(reader.GetString()!);
         """,
         _ => "        throw new JsonException(\"Unsupported identity source type.\");"
     };

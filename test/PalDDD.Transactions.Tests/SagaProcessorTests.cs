@@ -274,3 +274,4 @@ public sealed class SagaProcessorTests
                 static (decision, ct) => ValueTask.FromResult<SagaState>(null!)));
     }
 }
+

@@ -84,10 +84,15 @@ public static class SqlTemplates
     /// Processed 消息）；无租约直呼（@owner 为 NULL）仍放行未租行。<br/>
     /// P2/P3 修复（十七轮）：补 <c>processed_at=NULL</c>——对齐 EFCore 版 ReleaseForRetry 与
     /// <see cref="OutboxRequeueDead"/> 语义：消息重回 Pending 后 processed_at 应清除，
-    /// 否则残留上次处理的完成时间（监控/报表误判"已处理又 Pending"）。
+    /// 否则残留上次处理的完成时间（监控/报表误判"已处理又 Pending"）。<br/>
+    /// v33 P3：WHERE 补 <c>status=0</c>（Pending）守卫——无租约直呼（@owner 为 NULL）时防把
+    /// Processed/Dead 行复活为 Pending（对齐 <see cref="OutboxRequeueDead"/> 的 <c>status=2</c>
+    /// 守卫；EFCore OutboxDbContext.ReleaseForRetry / PalOrmOutboxStore.ReleaseForRetry 同轮
+    /// 收口）。字面量 0 对应枚举 OutboxStatus.Pending=0（状态列 INT，三十八轮统一口径）；
+    /// 合法持租路径不误伤——租约只落在 Pending 行上，持租处理中的行恒为 Pending。
     /// </summary>
     public const string OutboxReleaseForRetry =
-        "UPDATE outbox_messages SET status=0,processed_at=NULL,error=@reason,next_attempt_at=@next,retry_count=retry_count+1,locked_by=NULL,locked_until=NULL WHERE id=@id AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
+        "UPDATE outbox_messages SET status=0,processed_at=NULL,error=@reason,next_attempt_at=@next,retry_count=retry_count+1,locked_by=NULL,locked_until=NULL WHERE id=@id AND status=0 AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
 
     /// <summary>
     /// 将死信消息重置为 Pending（ops 重投递入口）。<br/>

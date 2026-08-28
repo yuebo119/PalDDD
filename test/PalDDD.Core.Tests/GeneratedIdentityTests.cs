@@ -139,6 +139,35 @@ public sealed class GeneratedIdentityTests
     }
 
     [Test]
+    public async Task GuidIdentity_JsonInvalidString_ThrowsJsonException()
+    {
+        // v33 P2 探针：token 类型正确但格式非法（"not-a-guid"）——修复前 GetGuid 抛
+        // FormatException（非 JsonException，S.T.J converter 契约破裂）；修复后
+        // TryParse → JsonException
+        await Assert.That(() =>
+        {
+            var reader = new Utf8JsonReader("\"not-a-guid\""u8);
+            reader.Read();
+            var converter = new CustomerIdJsonConverter();
+            converter.Read(ref reader, typeof(CustomerId), JsonSerializerOptions.Default);
+        }).Throws<JsonException>();
+    }
+
+    [Test]
+    public async Task IntIdentity_JsonFractionalNumber_ThrowsJsonException()
+    {
+        // v33 P2 探针：Number token 但非整数（1.5）——修复前 GetInt32 抛 FormatException；
+        // 修复后 TryGetInt32 → JsonException
+        await Assert.That(() =>
+        {
+            var reader = new Utf8JsonReader("1.5"u8);
+            reader.Read();
+            var converter = new OrderNumberJsonConverter();
+            converter.Read(ref reader, typeof(OrderNumber), JsonSerializerOptions.Default);
+        }).Throws<JsonException>();
+    }
+
+    [Test]
     public async Task GuidIdentity_JsonNullToken_ThrowsJsonException()
     {
         await Assert.That(() =>

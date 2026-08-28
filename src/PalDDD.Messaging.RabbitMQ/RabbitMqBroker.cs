@@ -176,13 +176,45 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
 
         await _channel.ExchangeDeclareAsync(exchange, ExchangeType.Fanout, durable: true, cancellationToken: ct).ConfigureAwait(false);
         await _channel.QueueDeclareAsync(queueName, durable: false, exclusive: true, autoDelete: true, cancellationToken: ct).ConfigureAwait(false);
-        await _channel.QueueBindAsync(queueName, exchange, "", cancellationToken: ct).ConfigureAwait(false);
+
+        // v33 P3：队列删除清理的共享收口——v31 初始化失败 catch 与本轮扩围后的新 catch
+        // 共用（避免两处 catch 各自内联同一段尽力删除逻辑）
+        async Task CleanupDeclaredQueueAsync()
+        {
+            // v31 P3 修复：尽力删除已声明的匿名队列——autoDelete 仅在"有过消费者后全部
+            // 断开"才删除，从未有消费者的 exclusive 队列随连接关闭才消亡；连接长驻时每次
+            // 初始化失败会累积一个空壳队列。失败吞掉（channel 已关等，对齐安全包装模式）
+            try
+            {
+                await _channel.QueueDeleteAsync(queueName).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.Warning($"Queue cleanup after failed subscribe was skipped (channel closed?): {queueName}: {ex.Message}");
+            }
+        }
 
         var consumer = new AsyncEventingBasicConsumer(_channel);
+        // v33 P3 清理域扩围：v31 的清理 catch 只覆盖 BasicQos 起的失败——QueueBindAsync
+        // 失败、CreateLinkedTokenSource 抛出时已声明队列无清理（连接长驻时每次失败累积
+        // 一个空壳匿名队列）。两失败点纳入下方 try-catch，尽力删除已声明队列后重抛；
+        // consumer 创建（纯本地对象，BasicConsume 前 broker 无消费状态）不入域。
         // v25 P2-5：linked-CTS——外部 ct 参与消费生命周期（对齐 KafkaBroker 的
         // CreateLinkedTokenSource 契约，修复前 ct 仅中断初始化、取消后静默继续消费）：
         // ct 取消 → 解绑消费者终止消费；飞行中的 handler 经组合 token 感知取消
-        var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        CancellationTokenSource linkedCts;
+        try
+        {
+            await _channel.QueueBindAsync(queueName, exchange, "", cancellationToken: ct).ConfigureAwait(false);
+            linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        }
+        catch
+        {
+            // QueueBind 失败时 consumer 尚未注册消费（无 consumerTag），清理只需队列删除；
+            // CreateLinkedTokenSource 抛出时无 CTS 对象产生，同样只需队列删除
+            await CleanupDeclaredQueueAsync().ConfigureAwait(false);
+            throw;
+        }
         consumer.ReceivedAsync += async (_, ea) =>
         {
             try
@@ -248,6 +280,18 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 _logger.Warning($"Handling {typeof(TMessage).Name} message was canceled during shutdown, discarding: {queueName}");
                 await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
+            catch (Exception ex) when (ex is OperationCanceledException)
+            {
+                // v33 P2 修复：补齐 v31 谓词化引入的 filter 互斥缝——非关停 OCE（应用 handler
+                // 自身超时/取消抛出，linkedCts 未取消）不匹配上方关停谓词、也不匹配下方
+                // is-not-OCE 通用 catch，异常从 async 回调逃逸且 Ack/Nack 均未执行 → delivery
+                // 恒 unacked 占用 prefetch 名额（默认 10），连续后 broker 停推，超
+                // consumer_timeout（默认 30 分钟）触发 PRECONDITION_FAILED 关闭 channel，
+                // 共用 _channel 的全部订阅与发布一并瘫痪。本分支记 Error + nack 弃置
+                //（与 ITM-008 at-most-once 对齐），消费继续
+                _logger.Error(ex, $"Handler for {typeof(TMessage).Name} threw a non-shutdown OperationCanceledException, discarding: {queueName}");
+                await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
+            }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.Error(ex, $"Failed to handle {typeof(TMessage).Name} message, discarding (anonymous queue): {queueName}");
@@ -281,17 +325,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             if (consumerTag is not null)
                 await CancelConsumeSafeAsync(consumerTag, queueName).ConfigureAwait(false);
             linkedCts.Dispose();
-            // v31 P3 修复：尽力删除已声明的匿名队列——autoDelete 仅在"有过消费者后全部
-            // 断开"才删除，从未有消费者的 exclusive 队列随连接关闭才消亡；连接长驻时每次
-            // 初始化失败会累积一个空壳队列。失败吞掉（channel 已关等，对齐安全包装模式）
-            try
-            {
-                await _channel.QueueDeleteAsync(queueName).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger.Warning($"Queue cleanup after failed subscribe was skipped (channel closed?): {queueName}: {ex.Message}");
-            }
+            // v33 P3：队列删除逻辑上移至 CleanupDeclaredQueueAsync 共享收口（QueueBind/
+            // linkedCts 失败的扩围 catch 同用；v31 原内联 try-catch 注释见局部函数内）
+            await CleanupDeclaredQueueAsync().ConfigureAwait(false);
             throw;
         }
 

@@ -50,7 +50,9 @@ public sealed class DapperEventLog : IEventLog
     private readonly DapperDbType _dbType;
     private readonly TimeProvider _timeProvider;
 
-    /// <param name="dbType">数据库类型（用于选择 INSERT ... RETURNING / LAST_INSERT_ID / last_insert_rowid 语法）</param>
+    /// <param name="dbType">数据库类型（用于选择 INSERT ... RETURNING / LAST_INSERT_ID / last_insert_rowid 语法）。
+    /// v33 P3 声明：默认 Sqlite 仅为既有直连调用方兼容；非 SQLite 用户必须显式传 dbType
+    ///（PG 报类型错误可见，MySQL 静默时差混存）。</param>
     public DapperEventLog(
         DbConnection connection,
         DbTransaction? transaction = null,

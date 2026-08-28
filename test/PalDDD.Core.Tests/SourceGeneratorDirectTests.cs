@@ -496,6 +496,61 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(diagnostic.GetMessage()).Contains("not a named type");
     }
 
+    // ── v33 P3：private/protected nested 声明拦截（PALENUM007 / PALID006 同族）──
+
+    [Test]
+    public async Task EnumGenerator_PrivateNestedClass_ReportsPalenum007()
+    {
+        // v33 P3：private nested class 挂 [GenerateEnum]——生成物（namespace 级 partial
+        // class + [ModuleInitializer] 静态构造）以裸名引用该类型，可访问性低于 internal
+        // 的嵌套类型对生成物不可见（CS0122 落在 auto-generated 文件）。编译期报
+        // PALENUM007 且不生成坏代码
+        var result = RunEnumGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            public partial class Outer
+            {
+                [GenerateEnum]
+                private partial class HiddenStatus : SmartEnum<HiddenStatus, string>
+                {
+                    public static readonly HiddenStatus A = new("a", "A");
+                }
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALENUM007")).IsTrue();
+        var generatedCount = result.Compilation.SyntaxTrees.Count(t => t.FilePath.EndsWith(".g.cs", StringComparison.Ordinal));
+        await Assert.That(generatedCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task IdentityGenerator_PrivateNestedStruct_ReportsPalid006()
+    {
+        // v33 P3：private nested record struct 挂 [GenerateId]——生成物的 namespace 级
+        // TypeConverter/JsonConverter 以裸名引用该类型 CS0122（同 PALENUM007 根因）。
+        // 编译期报 PALID006 且不生成坏代码
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+            using System;
+
+            namespace TestDomain;
+
+            public sealed class Outer
+            {
+                [GenerateId(typeof(Guid))]
+                private readonly partial record struct HiddenId;
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALID006")).IsTrue();
+        var generatedCount = result.Compilation.SyntaxTrees.Count(t => t.FilePath.EndsWith(".g.cs", StringComparison.Ordinal));
+        await Assert.That(generatedCount).IsEqualTo(0);
+    }
+
     // ── 辅助方法（参照 MessageRegistryGeneratorTests 的模式）──
 
     private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics) RunEnumGenerator(string source)

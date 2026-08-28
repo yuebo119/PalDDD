@@ -45,8 +45,13 @@ public abstract class InboxDbContext(
         // v29 P3（S8，镜像 v28 DapperInboxStore ITM-107 姊妹守卫）：processingTimeout 必须非负——
         // 负值使"Processing 且未超时"窗口判定（now - ProcessingStartedAt < 负 timeout 恒假）
         // 失效，刚启动的 Processing 记录被误判超时可抢占，防并发保护失效（僵尸接管窗口）。
-        // 允许 TimeSpan.Zero：超时接管（timeout=0）恒可重入是方言探针的合法测试语义
-        //（对齐 Checkpoint 侧"仅禁负值"口径）。
+        // 允许 TimeSpan.Zero：v33 P3 勘正（v29 注释失实，对齐 v30 PalOrmInboxStore.cs:50-56
+        // 勘正措辞）——"超时接管（timeout=0）恒可重入"不是四栈统一语义：本栈守卫是
+        // elapsed < timeout（同刻 elapsed=0，timeout=0 时 0<0 恒假 → 同刻重入成功）；
+        // PalORM/Dapper 栈为 processing_started_at < cutoff 严格小于（同刻不满足 → 0 行 →
+        // null 拒绝），四栈口径 2:2 分叉（EFCore/InMemory 同刻可重入，PalORM/Dapper 同刻拒绝）。
+        // timeout=0 的接管仅在跨 tick（started 严格早于 now）时四栈一致成立，方言探针以此为准。
+        // 口径不变：仅禁负值。
         if (processingTimeout < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
         var record = await InboxMessages.SingleOrDefaultAsync(
@@ -179,8 +184,11 @@ public abstract class InboxDbContext(
 
         // P3 修复（十七轮）：入库前截断到 2000——超出 LastError 列上限的失败原因会让
         // 终态保存本身抛 DbUpdateException，掩盖原始处理失败（存储层兜底防御）
-        if (failureReason.Length > MaxFailureReasonLength)
-            failureReason = failureReason[..MaxFailureReasonLength];
+        // v33 P3：改经 Core.FailureReason.Truncate 共享收口（v30 收口枚举漏网）——裸 [..2000]
+        // 切片可能切半 UTF-16 代理对（超长含 emoji 的失败原因），末位高代理回退一位防孤立
+        // 高代理入库；Truncate 内含长度判断，原 if 薄壳删除（MaxFailureReasonLength=2000
+        // 与 Truncate 代理对守卫兼容，对齐同包 OutboxDbContext.MarkDead/ReleaseForRetry 收口）
+        failureReason = Core.FailureReason.Truncate(failureReason, MaxFailureReasonLength);
 
         AttachIfDetached(message);
         message.Status = InboxStatus.Failed;
