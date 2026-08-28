@@ -61,18 +61,24 @@ public static class SqlTemplates
     /// 三十四轮 ITM-210 token 化：补租约 token 守卫——持租调用方匹配
     /// <c>(locked_by, locked_until)</c> 标识对（locked_until 随每次租约单调变化，免 DDL fencing）；
     /// 无租约直呼（@owner 为 NULL）仅放行 <c>locked_by IS NULL</c> 的行。原裸 <c>WHERE id=@id</c>
-    /// 对过期重租/同 owner 复用零防护（旧 worker 终态写覆盖新租约）。
+    /// 对过期重租/同 owner 复用零防护（旧 worker 终态写覆盖新租约）。<br/>
+    /// v37 P3（PD17 提示姊妹同步）：补 <c>retry_count=@retryCount</c> fencing（对齐 EFCore
+    /// FencedTarget/PalORM 全分支形态）——租约 token 之外再匹配内存快照 retry_count；
+    /// 租约期间行内 retry_count 不变（租约 SQL 不触碰该列），不匹配即说明行已被重置/重放，
+    /// 拒绝终态写。调用点（DapperOutboxStore.MarkProcessed）须同步传 <c>message.RetryCount</c>。
     /// </summary>
     public const string OutboxMarkProcessed =
-        "UPDATE outbox_messages SET status=1,processed_at=@at,error=NULL,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
+        "UPDATE outbox_messages SET status=1,processed_at=@at,error=NULL,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND retry_count=@retryCount AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
 
     /// <summary>
     /// 标记消息为"死信"。<br/>
     /// 💡 死信意味着消息不可恢复——需要人工介入。<br/>
-    /// 三十四轮 ITM-210 token 化：同 <see cref="OutboxMarkProcessed"/> 的租约 token 守卫。
+    /// 三十四轮 ITM-210 token 化：同 <see cref="OutboxMarkProcessed"/> 的租约 token 守卫。<br/>
+    /// v37 P3（PD17 提示姊妹同步）：同 <see cref="OutboxMarkProcessed"/> 补 <c>retry_count=@retryCount</c>
+    /// fencing——调用点（DapperOutboxStore.MarkDead）须同步传 <c>message.RetryCount</c>。
     /// </summary>
     public const string OutboxMarkDead =
-        "UPDATE outbox_messages SET status=2,error=@reason,processed_at=@at,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
+        "UPDATE outbox_messages SET status=2,error=@reason,processed_at=@at,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND retry_count=@retryCount AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
 
     /// <summary>
     /// 释放租约并等待下次重试。<br/>
@@ -89,10 +95,13 @@ public static class SqlTemplates
     /// Processed/Dead 行复活为 Pending（对齐 <see cref="OutboxRequeueDead"/> 的 <c>status=2</c>
     /// 守卫；EFCore OutboxDbContext.ReleaseForRetry / PalOrmOutboxStore.ReleaseForRetry 同轮
     /// 收口）。字面量 0 对应枚举 OutboxStatus.Pending=0（状态列 INT，三十八轮统一口径）；
-    /// 合法持租路径不误伤——租约只落在 Pending 行上，持租处理中的行恒为 Pending。
+    /// 合法持租路径不误伤——租约只落在 Pending 行上，持租处理中的行恒为 Pending。<br/>
+    /// v37 P3（PD17 提示姊妹同步）：WHERE 补 <c>retry_count=@retryCount</c>——v33 只关了
+    /// Status 半边；行已被重置/重放（retry_count 与内存快照不一致）时拒绝递增，防误增。
+    /// 调用点（DapperOutboxStore.ReleaseForRetry）须同步传 <c>message.RetryCount</c>。
     /// </summary>
     public const string OutboxReleaseForRetry =
-        "UPDATE outbox_messages SET status=0,processed_at=NULL,error=@reason,next_attempt_at=@next,retry_count=retry_count+1,locked_by=NULL,locked_until=NULL WHERE id=@id AND status=0 AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
+        "UPDATE outbox_messages SET status=0,processed_at=NULL,error=@reason,next_attempt_at=@next,retry_count=retry_count+1,locked_by=NULL,locked_until=NULL WHERE id=@id AND status=0 AND retry_count=@retryCount AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
 
     /// <summary>
     /// 将死信消息重置为 Pending（ops 重投递入口）。<br/>

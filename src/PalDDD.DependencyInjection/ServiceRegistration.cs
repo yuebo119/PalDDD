@@ -37,7 +37,9 @@ public static class ServiceRegistration
     }
 
     /// <summary>注册 ByteAether.Ulid 统一 ID 生成器。</summary>
-    /// <remarks>将 <see cref="Core.Identity.IPalIdGenerator"/> 注册为单例，提供给 DomainEvent、OutboxMessage 等核心类型使用。</remarks>
+    /// <remarks>将 <see cref="Core.Identity.IPalIdGenerator"/> 注册为单例，供应用层替换 ID 生成策略消费
+    ///（v37 P3 勘正：框架核心类型不经 DI 消费 ID 生成器——框架核心直调 <c>PalUlid.New</c>，
+    /// 原声明"提供给 DomainEvent、OutboxMessage 等核心类型使用"失实，IPalIdGenerator 在框架内无核心消费方）。</remarks>
     public static IServiceCollection AddPalIdentity(this IServiceCollection services)
     {        ArgumentNullException.ThrowIfNull(services);
         services.TryAddSingleton<Core.Identity.IPalIdGenerator, Core.Identity.ByteAetherUlidGenerator>();

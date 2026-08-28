@@ -86,17 +86,24 @@ public sealed class IdentityGenerator : IIncrementalGenerator
     // 对生成物不可见（CS0122 落在 auto-generated 文件，排障困难）。编译期报 PALID006
     // 不生成坏代码（镜像 EnumGenerator PALENUM007）。v34 P3 勘正：原"顶层类型恒
     // public/internal 不受影响"失实——生成 partial 硬编码 public，internal 声明（含顶层）
-    // 放行后与生成物合并报 CS0262，internal 非合法目标，消息单腿引导升 public
+    // 放行后与生成物合并报 CS0262，internal 非合法目标，消息单腿引导升 public。
+    // v37 P2 统一口径：internal 声明编译必炸 CS0262——Public-only 阈值不放行任何坏输入
+    //（v36 收紧阈值仍放行 internal 的"误伤 internal 顶层合法场景"顾虑已被双向探针证伪：
+    // 不存在可工作的 internal 用法）
     // v35 P3（DA1）：v34 链检查升格后原消息 "is not at least internal" 仍描述目标自身——
     // 链中间层阻断场景（public Outer → private Mid → public Foo）目标自身 public，消息
     // 失实且"raise the declaration"指引无效（改目标自身救不了 Mid）。消息改两参：{1} 经
     // BlockingAccessibilityText 携带实际阻断层修饰符文本（GeneratorAccessibility 共享
     // helper），措辞改为"declaration or its containing type chain blocks visibility"形态；
     // public 单腿保留但补链语义（"and its containing types"）
+    // v37 P3：解释腿改双因通用措辞——原 "declarations below internal are invisible" 只描述
+    // 链可见性腿（CS0122），与 v34/v36 陆续补入的 partial 合并冲突腿（CS0262）失配——
+    // internal 自身声明被拦的真因是 partial 合并冲突而非不可见。统一为"不能与生成的
+    // public 声明合并（可访问性低于 internal 或 partial 访问性冲突）"双因措辞
     private static readonly DiagnosticDescriptor NonAccessibleDeclaration = new(
         "PALID006",
         "GenerateId does not support inaccessible declarations",
-        "Type '{0}' uses [GenerateId] but its declaration or its containing type chain blocks visibility (blocking declaration is '{1}'; declarations below internal are invisible to the generated converters). Raise the declaration (and its containing types) to public.",
+        "Type '{0}' uses [GenerateId] but its declaration or its containing type chain cannot merge with the generated public declaration (blocking declaration is '{1}'; visibility below internal or partial accessibility conflict). Raise the declaration (and its containing types) to public.",
         "PalDDD.IdentityGeneration",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -104,7 +111,10 @@ public sealed class IdentityGenerator : IIncrementalGenerator
     // GeneratorAccessibility 的 ProtectedOrInternal 放行对 Enum/Message 姊妹成立（其生成物
     // 不带访问修饰符，与用户声明合并无冲突），对 Identity 不成立：生成物硬编码
     // public readonly partial record struct，用户 protected internal 声明与之合并报 CS0262
-    //（net11 探针双向实证）。消息沿用本 descriptor 现有形态（{1} = 自身修饰符文本）
+    //（net11 探针双向实证）。消息沿用本 descriptor 现有形态（{1} = 自身修饰符文本）。
+    // v37 P2：阈值进一步收紧为 Public-only——v36 的 public/internal 阈值仍放行 internal，
+    // 而 internal 声明与硬编码 public 生成物合并同样必报 CS0262（双向探针实证），不存在
+    // 可工作的 internal 用法；v36 保留 internal 的"误伤 internal 顶层合法场景"顾虑已被证伪
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
@@ -181,10 +191,11 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 // nested 类型对生成物的 namespace 级 converter 不可见（裸名引用必 CS0122）。
                 // 编译期报 PALID006 不生成坏代码。
                 // v34 P2：检查升格为 ContainingType 全链（GeneratorAccessibility 共享 helper）。
-                // ⚠️ 已知残余（v34 A 片复核，v36 仍未消除）：生成 partial 硬编码 public——
-                // 链可见但自身为 internal 的声明放行后与生成物合并报 CS0262；拦截阈值取
-                // Public-only 可消除但会误伤 internal 顶层合法场景，待后续裁决（生成物携带
-                // 用户可访问性 or 收紧阈值）
+                // v37 P2 勘正（原 v34"已知残余"消除）：v34 曾标注"链可见但自身 internal 的
+                // 声明放行后与生成物合并报 CS0262、Public-only 阈值会误伤 internal 顶层合法
+                // 场景"——该顾虑已被双向探针证伪：internal 声明与硬编码 public 生成物合并
+                // 编译必炸 CS0262，不存在可工作的 internal 用法；拦截阈值已收紧为 Public-only
+                //（见下方 v37 自身声明检查），本残余不再存在
                 // v35 P3（DA1）：捕获阻断层可访问性并经 BlockingAccessibilityText 携带——
                 // 链中间层阻断（public Outer → private Mid → public Foo）时消息 {1} 显示
                 // 实际阻断层（Mid）的修饰符，不再失实描述目标自身
@@ -202,14 +213,16 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                         Location: context.TargetNode.GetLocation());
                 }
 
-                // v36 P2：链检查通过后追加自身声明收紧——自身声明只允许 public 或 internal。
+                // v36 P2→v37 P2：链检查通过后追加自身声明收紧，阈值 Public-only——
                 // 依据（与 Enum/Message 姊妹的差异）：二者生成物（partial class / partial 声明）
                 // 不带访问修饰符、无 partial 合并冲突，ProtectedOrInternal 放行对其成立；
                 // Identity 生成物硬编码 public readonly partial record struct（见
-                // GenerateIdentityCode 模板），用户 protected internal 声明与之合并报 CS0262
-                //（net11 探针双向实证），故放行不成立。private/protected/private protected
-                // 已被上方链检查先报，本检查唯一新增拦截的是 ProtectedOrInternal
-                if (structSymbol.DeclaredAccessibility is not (Accessibility.Public or Accessibility.Internal))
+                // GenerateIdentityCode 模板），用户声明与之一旦访问性不同（protected internal
+                // 或 internal）合并即报 CS0262（net11 探针双向实证）——internal 声明编译必炸
+                // CS0262，Public-only 阈值不放行任何坏输入，不存在被"误伤"的合法 internal
+                // 用法。private/protected/private protected 已被上方链检查先报，本检查
+                // 新增拦截 ProtectedOrInternal 与 Internal
+                if (structSymbol.DeclaredAccessibility is not Accessibility.Public)
                 {
                     return new IdGenInfo(
                         Namespace: null,

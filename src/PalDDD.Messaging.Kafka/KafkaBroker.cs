@@ -265,6 +265,16 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                             _logger.Warning($"Deserializing {typeof(TMessage).Name} returned null, discarding message: {topic}");
                         }
                     }
+                    // v37 P3：关停谓词拆双分支（镜像 RabbitMqBroker v31/v33 关停/非关停双 catch
+                    // 形态）——关停 OCE（tokenSnapshot 已取消）走 Warning + break 中断 while
+                    //（对齐外层关停分支语义），不再把关停误标为 Error；非关停 OCE（应用自身
+                    // 取消）保留 v36 语义 Error 后继续消费。tokenSnapshot 为启动时快照，
+                    // IsCancellationRequested 在 Dispose 后读取安全（不抛 ODE）
+                    catch (OperationCanceledException) when (tokenSnapshot.IsCancellationRequested)
+                    {
+                        _logger.Warning($"Handling {typeof(TMessage).Name} message was canceled during shutdown: {topic}");
+                        break; // 关停：中断 while（与外层关停分支同语义，直落 finally Close+Dispose）
+                    }
                     catch (OperationCanceledException ex)
                     {
                         // v36 P1 真修（v34 假修勘正）：非关停 OCE = 应用自身取消 = 单消息事件
