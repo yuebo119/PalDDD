@@ -86,6 +86,11 @@ public static class PostgreSqlJsonb
         foreach (var k in keys)
             ArgumentException.ThrowIfNullOrWhiteSpace(k);
 
+        // v33 P3：零长度 keys 客户端 fail-fast——空数组会生成 `payload ?| array[]` 畸形片段，
+        // PG 服务端报语法错误（失败延迟到执行期）；对齐 ITM-167 守卫形态（入口统一抛出）
+        if (keys.Length == 0)
+            throw new ArgumentException("keys 不能为空——零长度数组生成 `?| array[]` 畸形 SQL 片段，PostgreSQL 服务端报错。", nameof(keys));
+
         var list = string.Join(",", keys.Select(k => $"'{EscapeLiteral(k)}'"));
         return $"{Escape(column)} ?| array[{list}]";
     }
@@ -99,6 +104,10 @@ public static class PostgreSqlJsonb
         ArgumentNullException.ThrowIfNull(keys);
         foreach (var k in keys)
             ArgumentException.ThrowIfNullOrWhiteSpace(k);
+
+        // v33 P3：零长度 keys 客户端 fail-fast（同 HasAnyKey——`?& array[]` 同型畸形片段）。
+        if (keys.Length == 0)
+            throw new ArgumentException("keys 不能为空——零长度数组生成 `?& array[]` 畸形 SQL 片段，PostgreSQL 服务端报错。", nameof(keys));
 
         var list = string.Join(",", keys.Select(k => $"'{EscapeLiteral(k)}'"));
         return $"{Escape(column)} ?& array[{list}]";

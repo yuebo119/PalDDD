@@ -84,13 +84,8 @@ public static class EndpointExtensions
             {
                 // 验证轮返工：与 ExceptionMiddleware 同款 ProblemDetails 响应体（裸 400 无 body
                 // 会让客户端拿不到错误明细；日志由派发管线内记录）
-                context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                var response = ValidationProblemResponseFactory.Create(ex);
-                await context.Response.WriteAsJsonAsync(
-                    response,
-                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-                    contentType: null,
-                    cancellationToken: ct).ConfigureAwait(false);
+                // v33 P3：派发段三处逐字重复收口到 WriteValidationProblemAsync（ct 透传）
+                await WriteValidationProblemAsync(context, ex, ct).ConfigureAwait(false);
                 return;
             }
             context.Response.StatusCode = StatusCodes.Status200OK;
@@ -163,13 +158,8 @@ public static class EndpointExtensions
             catch (PalDDD.CQRS.PalValidationException ex)
             {
                 // 验证轮返工：与 ExceptionMiddleware 同款 ProblemDetails 响应体
-                context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                var response = ValidationProblemResponseFactory.Create(ex);
-                await context.Response.WriteAsJsonAsync(
-                    response,
-                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-                    contentType: null,
-                    cancellationToken: ct).ConfigureAwait(false);
+                // v33 P3：派发段三处逐字重复收口到 WriteValidationProblemAsync（ct 透传）
+                await WriteValidationProblemAsync(context, ex, ct).ConfigureAwait(false);
                 return;
             }
             await context.Response.WriteAsJsonAsync(
@@ -228,13 +218,8 @@ public static class EndpointExtensions
             {
                 // 严格对齐 MapCommand 两个方法的响应体写法：与 ExceptionMiddleware 同款
                 // ProblemDetails 响应体（裸 400 无 body 会让客户端拿不到错误明细）。
-                context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                var response = ValidationProblemResponseFactory.Create(ex);
-                await context.Response.WriteAsJsonAsync(
-                    response,
-                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-                    contentType: null,
-                    cancellationToken: ct).ConfigureAwait(false);
+                // v33 P3：派发段三处逐字重复收口到 WriteValidationProblemAsync（ct 透传）
+                await WriteValidationProblemAsync(context, ex, ct).ConfigureAwait(false);
                 return;
             }
             await context.Response.WriteAsJsonAsync(
@@ -246,15 +231,21 @@ public static class EndpointExtensions
     }
 
     /// <summary>写入 400 + ValidationProblemResponse 体（ITM-283：反序列化段与派发段统一形态——
-    /// 消除裸 400 无 body 与派发段 ITM-168 形态的分叉）。</summary>
-    private static async Task WriteValidationProblemAsync(HttpContext context, CQRS.PalValidationException ex)
+    /// 消除裸 400 无 body 与派发段 ITM-168 形态的分叉）。v33 P3：派发段三处逐字重复的
+    /// catch 收口到本方法（可选 ct 透传——派发段原样携带 RequestAborted，写响应可随
+    /// 客户端断连取消；反序列化/绑定段不传 ct，与原 default(CancellationToken) 等价）。</summary>
+    private static async Task WriteValidationProblemAsync(
+        HttpContext context,
+        CQRS.PalValidationException ex,
+        CancellationToken ct = default)
     {
         context.Response.StatusCode = StatusCodes.Status400BadRequest;
         var response = ValidationProblemResponseFactory.Create(ex);
         await context.Response.WriteAsJsonAsync(
             response,
             PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-            contentType: null).ConfigureAwait(false);
+            contentType: null,
+            cancellationToken: ct).ConfigureAwait(false);
     }
 }
 

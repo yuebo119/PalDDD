@@ -138,7 +138,12 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         // v32 P3 修复：Build 纳入清理域——cts 前移后 Build 抛出时 cts 无人 Dispose（纯托管
         // 对象无泄漏后果，但其 linked 注册滞留至 ct 生命周期）。拆两段 try：Build 失败仅回收
         // cts（consumer 尚未构造）；Subscribe 失败回收两者
-        Consumer<string, byte[]> consumer;
+        // v33 P3 环境修复：类型声明从具体类 Consumer<,> 换为公开契约 IConsumer<,>——
+        // Confluent.Kafka 2.15.0 的 net10.0 资产中具体类 Consumer<,> 为 internal（net11.0
+        // 项目按资产选择绑定 net10.0 资产，netstandard2.0 资产才声明 public），显式具体类
+        // 声明触发 CS0122。Build() 返回值本就是 IConsumer<,>，接口类型声明零行为变化；
+        // 下方 KafkaSubscription 构造参数同为 IConsumer<,>。
+        IConsumer<string, byte[]> consumer;
         try
         {
             consumer = new ConsumerBuilder<string, byte[]>(_consumerConfig).Build();
@@ -421,10 +426,15 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                 // （Confluent.Kafka Dispose 幂等，与委托内 finally 双重释放安全）。
                 _consumer.Dispose();
                 // ITM-167 声明（登记窗口 cts 释放噪声）：DisposeAsync 可能落在
-                // "已登记未 SetConsumeTask" 窗口，此刻释放 _cts 是安全的——委托工厂
-                // 已捕获 cts.Token（Token 在源 Dispose 后仍可读取 IsCancellationRequested，
-                // 且 CancelAsync 已先行请求取消），释放不会让循环误判为未取消或抛
-                // ObjectDisposedException；SetConsumeTask 的后置注入仅写 Task 引用，
+                // "已登记未 SetConsumeTask" 窗口，此刻释放 _cts 是安全的——
+                // v33 P3 勘正：原声明"Token 在源 Dispose 后仍可读取"失实——Dispose 后
+                // 访问 cts.Token 属性抛 ObjectDisposedException（仅 IsCancellationRequested
+                // 安全）。实际安全机制：① 循环判取消用 tokenSnapshot（Task.Run 启动前预捕获
+                // 的 CancellationToken 结构快照），Task.Run 第二实参同用快照（v22 E-1：
+                // 规避启动前求值 Token 的 ODE 窗口）——IsCancellationRequested 只读快照
+                // 状态，不触碰已 Dispose 源；② CancelAsync 先行请求取消，循环随即退出；
+                // ③ await consumeTask 之后才进 finally Dispose——时序保证 Dispose 时循环
+                // 已终止，不再读任何 cts 状态。SetConsumeTask 的后置注入仅写 Task 引用，
                 // 不触碰 _cts。无资源泄漏，仅存在一个可安全忽略的已取消任务。
                 _cts.Dispose();
             }

@@ -67,6 +67,18 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    // v33 P3：private/protected nested 类型挂 [GenerateMessage] 时，生成物
+    // PalMessageCatalog 的 typeof 引用该类型——可访问性低于 internal 的嵌套类型对
+    // 生成物不可见（CS0122 落在 auto-generated 文件，排障困难）。编译期报 PALMSG007
+    // 不生成坏代码（顶层类型恒 public/internal 不受影响；镜像 PALMSG006 姊妹拦截）
+    private static readonly DiagnosticDescriptor NonAccessibleMessageNotSupported = new(
+        "PALMSG007",
+        "Generated messages do not support inaccessible declarations",
+        "Message type '{0}' is marked with [GenerateMessage] but is not at least internal (private or protected nested types are invisible to the generated catalog). Raise the declaration to internal or public.",
+        "PalDDD.MessageContracts",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var candidates = context.SyntaxProvider.ForAttributeWithMetadataName(
@@ -88,6 +100,21 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
                         HasExplicitName: false,
                         LocationInfo.From(context.TargetNode.GetLocation()),
                         DiagnosticId: "PALMSG006");
+                }
+
+                // v33 P3：可访问性拦截——可访问性低于 internal（private/protected 等）的
+                // nested 类型对生成物 PalMessageCatalog 的 typeof 引用不可见。编译期报
+                // PALMSG007 不生成坏代码（镜像 EnumGenerator PALENUM007 / IdentityGenerator
+                // PALID006）
+                if (type.DeclaredAccessibility is not (Accessibility.Public or Accessibility.Internal))
+                {
+                    return new MessageInfo(
+                        type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                        type.Name,
+                        1,
+                        HasExplicitName: false,
+                        LocationInfo.From(context.TargetNode.GetLocation()),
+                        DiagnosticId: "PALMSG007");
                 }
 
                 var attr = context.Attributes[0];
@@ -130,9 +157,17 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
             foreach (var message in messages)
             {
                 // v25 P3 生成器族：泛型声明报 PALMSG006（定位到类型声明）并剔除出生成物
+                // v33 P3：按 DiagnosticId 分派——原实现假定 DiagnosticId 非 null 即
+                // PALMSG006；新增 PALMSG007 后改 switch 分派（镜像 EnumGenerator/
+                // IdentityGenerator 的 descriptor switch 形态）
                 if (message.DiagnosticId is not null)
                 {
-                    spc.ReportDiagnostic(Diagnostic.Create(GenericMessageNotSupported, message.Location.ToLocation(), message.TypeName));
+                    DiagnosticDescriptor declarationDiagnostic = message.DiagnosticId switch
+                    {
+                        "PALMSG007" => NonAccessibleMessageNotSupported,
+                        _ => GenericMessageNotSupported,
+                    };
+                    spc.ReportDiagnostic(Diagnostic.Create(declarationDiagnostic, message.Location.ToLocation(), message.TypeName));
                     continue;
                 }
 

@@ -106,7 +106,7 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     /// 复用或他 owner 接手）后，旧 worker 的终态写影响 0 行（<c>LockedUntil</c> 随每次租约单调变化，
     /// 充当 fencing token，免 DDL 加列）；无租约直呼（LockedBy 为 null，运维/测试路径）当行当前
     /// 未被租（<c>LockedBy IS NULL</c>）且 <c>RetryCount</c> 与入参快照一致时放行（v30 P3 补快照
-    /// 守卫，见 <see cref="FencedTarget"/>）。
+    /// 守卫；v33 P3 起持租分支同要求 RetryCount 快照一致，见 <see cref="FencedTarget"/>）。
     /// </remarks>
     public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
     {
@@ -197,8 +197,9 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     }
 
     /// <summary>
-    /// 租约 token 守卫目标集——持租调用方匹配 (LockedBy, LockedUntil) 标识对；
-    /// 无租约直呼（LockedBy 为 null）放行当前未被租的行，且要求 RetryCount 快照一致。
+    /// 租约 token 守卫目标集——持租调用方匹配 (LockedBy, LockedUntil) 标识对且 RetryCount
+    /// 与入参快照一致；无租约直呼（LockedBy 为 null）放行当前未被租的行，且要求 RetryCount
+    /// 快照一致。
     /// </summary>
     /// <remarks>三十四轮 ITM-210 落地：原 <c>LockedBy IS NULL OR LockedBy == 原持有者</c> 守卫的
     /// "NULL 放行"分支正是 fencing 缺口——租约被释放（ReleaseForRetry/RequeueDead）后旧 worker
@@ -208,16 +209,23 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     /// v30 P3：无租约分支补 <c>RetryCount == message.RetryCount</c> 快照守卫（对齐 PalORM 版
     /// 全分支的 <c>retry_count = {retry}</c> 形态，PalOrmOutboxStore.MarkProcessed）——无租约
     /// 直呼的行从 Pending 被 ReleaseForRetry（RetryCount+1）或 RequeueDead 推进后，持旧快照的
-    /// 调用方终态写不再命中（与持租分支的 LockedUntil token 同向收口）。本方法为
+    /// 调用方终态写不再命中（与持租分支的 LockedUntil token 同向收口）。<br/>
+    /// v33 P3：持租分支同补 <c>RetryCount == 快照</c> 守卫（全分支对齐 PalORM 版
+    /// MarkProcessed/MarkDead/ReleaseForRetry 的 retry_count 快照形态）——快照在捕获点冻结为
+    /// 局部变量，lambda 不再引用可变实体属性；持旧 RetryCount 快照的调用方在行被并发推进后
+    /// 其写不再命中。本方法为
     /// MarkProcessed/MarkDead/ReleaseForRetry 三方法共享目标集，一处守卫三方法生效。</remarks>
     private IQueryable<OutboxMessage> FencedTarget(OutboxMessage message)
     {
         var originalOwner = message.LockedBy;
         var originalUntil = message.LockedUntil;
+        // v33 P3：RetryCount 快照在捕获点冻结（原无租约分支 lambda 直接引用 message.RetryCount
+        // 可变属性）——两分支共用同一快照，对齐 PalORM 版全分支 retry_count 快照守卫
+        var originalRetry = message.RetryCount;
         var target = OutboxMessages.Where(m => m.Id == message.Id);
         return originalOwner is null
-            ? target.Where(m => m.LockedBy == null && m.RetryCount == message.RetryCount)
-            : target.Where(m => m.LockedBy == originalOwner && m.LockedUntil == originalUntil);
+            ? target.Where(m => m.LockedBy == null && m.RetryCount == originalRetry)
+            : target.Where(m => m.LockedBy == originalOwner && m.LockedUntil == originalUntil && m.RetryCount == originalRetry);
     }
 
     /// <inheritdoc/>
@@ -245,6 +253,11 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         var error = FailureReason.Truncate(failureReason, 2040);
 
         FencedTarget(message)
+            // v33 P3：Status == Pending 守卫——无租约直呼（运维/测试路径）时防把 Processed/Dead
+            // 行复活为 Pending（对齐同族 RequeueDeadAsync 的 Status == Dead 守卫；三栈同轮收口：
+            // PalOrmOutboxStore.ReleaseForRetry / Dapper SqlTemplates.OutboxReleaseForRetry 同款）。
+            // 合法持租路径不误伤：租约只落在 Pending 行上，持租处理中的行恒为 Pending。
+            .Where(m => m.Status == OutboxStatus.Pending)
             .ExecuteUpdate(s => s
                 .SetProperty(m => m.RetryCount, m => m.RetryCount + 1)
                 .SetProperty(m => m.Status, OutboxStatus.Pending)

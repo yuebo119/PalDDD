@@ -219,6 +219,37 @@ public sealed class MessageRegistryGeneratorTests
         await Assert.That(source).DoesNotContain("orders.duplicate.v1");
     }
 
+    // ── v33 P3：private/protected nested 消息声明拦截（PALMSG007）──
+
+    [Test]
+    public async Task GenerateMessage_OnPrivateNestedDeclaration_ReportsAccessibilityDiagnostic()
+    {
+        // v33 P3：private nested record 挂 [GenerateMessage]——生成物 typeof(global::...)
+        // 引用该类型，可访问性低于 internal 的嵌套类型对生成物不可见（CS0122 落在
+        // auto-generated 文件）。编译期报 PALMSG007 且从生成物剔除（镜像 PALMSG006 形态）；
+        // 附带正常消息验证剔除不影响其余消息生成
+        var result = RunGeneratorWithCompilation(
+            """
+            using PalDDD.Core;
+
+            public sealed partial class Outer
+            {
+                [GenerateMessage(Name = "orders.hidden.v1")]
+                private sealed record HiddenMessage;
+            }
+
+            [GenerateMessage(Name = "orders.normal.v1")]
+            public sealed record NormalMessage;
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALMSG007")).IsTrue();
+        var generatedTree = result.Compilation.SyntaxTrees.Single(
+            tree => tree.FilePath.EndsWith("PalDDD.Generated.MessageCatalog.g.cs", StringComparison.Ordinal));
+        var source = generatedTree.ToString();
+        await Assert.That(source).DoesNotContain("HiddenMessage");
+        await Assert.That(source).Contains("orders.normal.v1");
+    }
+
     private static ImmutableArray<Diagnostic> RunGenerator(string source)
         => RunGeneratorWithCompilation(source).Diagnostics;
 

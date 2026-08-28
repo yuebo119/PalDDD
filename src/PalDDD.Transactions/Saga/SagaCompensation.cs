@@ -103,10 +103,16 @@ internal sealed class SagaCompensation<TState>
         List<Exception>? failures = null;
         var (start, end, step) = _policy switch
         {
-            // v22 声明：switch 表达式穷尽枚举——未来新增 CompensationPolicy 值时编译器会报不穷尽错误（编译期防御，非运行时 default 吞弃）
+            // v33 P3 终裁（二难消解——第三选项）：前序两版各有缺陷——删 discard 声称
+            // "编译期穷尽"实证不成立（底层 int 未命名值 (CompensationPolicy)3 使无 discard
+            // 的枚举 switch 恒触发 CS8524，warnaserror 下编译失败）；保留 discard 静默
+            // (0,0,0) 则新增枚举值静默零补偿（原始评审发现）。终裁：discard 分支改抛——
+            // 保留 discard 满足 CS8524 穷尽性（可编译），新增枚举值 fail-fast 而非静默零
+            // 补偿（防御成立）。None 分支不可达（两个入口均对 None 提前 return）
             CompensationPolicy.Backward => (targets.Count - 1, -1, -1),
             CompensationPolicy.Forward => (0, targets.Count, 1),
-            _ => (0, 0, 0)
+            _ => throw new InvalidOperationException(
+                $"未知的补偿策略 {_policy}——请在 CompensationPolicy 枚举新增值时同步本 switch（Backward 逆序 / Forward 正序）。")
         };
 
         for (int i = start; i != end; i += step)

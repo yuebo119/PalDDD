@@ -25,10 +25,16 @@ namespace PalDDD.EventLog;
 /// 预留器构造为单例传入各上下文（内部 <c>_lock</c>/<c>_dbSemaphore</c> 已保证跨上下文线程安全）。
 /// </para>
 /// <para>
-/// 这消除了旧设计中每次 <c>AppendAsync</c> 都需要在 <c>Serializable</c>
-/// 事务内读取和更新单个分配器行所带来的全局序列化瓶颈。当区块大小为 N 时，
-/// 只有 1/N 的追加操作触及分配器行；其余操作从进程内缓存分配位置，
-/// 零数据库往返。
+/// 设计动机是消除旧设计中每次 <c>AppendAsync</c> 都需要在 <c>Serializable</c>
+/// 事务内读取和更新单个分配器行所带来的全局序列化瓶颈。
+/// ⚠️ <b>性能契约勘正（v33 P3）</b>：ITM-226 修复后，关系型路径
+/// <see cref="EventLogDbContext.AppendAsync"/> 恒以 BeginTransaction 包裹追加（正确性优先：
+/// 防外层事务回滚后内存游标超前持久化），事务存活期内 <c>CurrentTransaction</c> 恒非空 →
+/// <see cref="AllocateNewChunkAsync"/> 恒走 <c>_initialized = false</c> 分支（不发布内存
+/// 游标）→ <b>每次 AppendAsync 都 SELECT+UPDATE 分配器行</b>。因此"区块大小为 N 时只有
+/// 1/N 的追加触及分配器行、其余零数据库往返"在关系型栈当前<b>不成立</b>——Hi/Lo 批量
+/// 收益仅 EF InMemory 路径（无事务包装）生效。行为正确但类头性能声明与实现不符；
+/// 收益兑现需 v3.0（事务外预分配或 DDL 层序列）。
 /// </para>
 /// <para>
 /// 区块耗尽时使用乐观并发（通过 <see cref="EventLogGlobalPositionAllocator.Revision"/> 的 CAS）。

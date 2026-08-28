@@ -23,6 +23,9 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
     private readonly DapperDbType _dbType;
 
     /// <param name="transaction">可选共享事务（用于 UnitOfWork 模式）。</param>
+    /// <param name="dbType">数据库方言（选择 INSERT 语法与时间参数格式）。
+    /// v33 P3 声明：默认 Sqlite 仅为既有直连调用方兼容；非 SQLite 用户必须显式传 dbType
+    ///（PG 报类型错误可见，MySQL 静默时差混存）。</param>
     public DapperProjectionCheckpointStore(
         DbConnection connection,
         DapperDbType dbType = DapperDbType.Sqlite,

@@ -261,12 +261,18 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // 三十四轮 ITM-210 token 化：owner 分支从"仅防他人持有"升级为 (locked_by, locked_until)
         // 租约 token 完全匹配——原 NULL 放行分支正是 fencing 缺口（租约释放后旧 worker 复活
         // Processed 消息）；无租约直呼分支保持 locked_by IS NULL 字面量。
+        // v33 P3：两分支 WHERE 同补 status = Pending 守卫——无租约直呼（运维/测试路径）时防把
+        // Processed/Dead 行复活为 Pending（对齐同族 RequeueDeadAsync 的 status = Dead 守卫；
+        // EFCore OutboxDbContext.ReleaseForRetry / Dapper SqlTemplates.OutboxReleaseForRetry
+        // 同轮收口）。合法持租路径不误伤：租约只落在 Pending 行上，持租处理中的行恒为 Pending。
+        // statusPending 为 int 插值（值位参数化合法，非 SQL 片段——PD18 教训），字面量分支
+        // 构造与既有 owner 分支一致。
         var affected = leaseOwner is null
             ? Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {reason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND (locked_by IS NULL)",
+                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {reason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND status = {statusPending} AND (locked_by IS NULL)",
                 default).AsTask().GetAwaiter().GetResult()
             : Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {reason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND locked_by = {leaseOwner} AND locked_until = {leaseUntil}",
+                $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {reason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND status = {statusPending} AND locked_by = {leaseOwner} AND locked_until = {leaseUntil}",
                 default).AsTask().GetAwaiter().GetResult();
         if (affected > 0)
         {

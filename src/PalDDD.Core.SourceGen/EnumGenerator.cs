@@ -85,6 +85,18 @@ public sealed class EnumGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    // v33 P3：private/protected nested 类型挂 [GenerateEnum] 时，生成物（namespace 级
+    // partial class + [ModuleInitializer] 静态构造）以裸名引用该类型——可访问性低于
+    // internal 的嵌套类型对生成物不可见（CS0122 落在 auto-generated 文件，排障困难）。
+    // 编译期报 PALENUM007 不生成坏代码（顶层类型恒 public/internal 不受影响）
+    private static readonly DiagnosticDescriptor NonAccessibleDeclarationError = new(
+        "PALENUM007",
+        "GenerateEnum does not support inaccessible declarations",
+        "Type '{0}' is marked with [GenerateEnum] but is declared '{1}'. Generated registration code cannot reference private or protected nested types; raise the declaration to internal or public.",
+        "PalDDD.EnumGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         // 步骤 1：收集所有标记了 [GenerateEnum] 的 class 声明及其静态字段
@@ -174,6 +186,24 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         Fields: [],
                         HasFields: false,
                         DiagnosticId: "PALENUM004",
+                        Location: context.TargetNode.GetLocation());
+                }
+
+                // v33 P3：可访问性拦截——可访问性低于 internal（private/protected 等）的
+                // nested 类型对生成物不可见，RegisterValues 生成物引用必 CS0122。编译期报
+                // PALENUM007（'{1}' 经 ValueType 携带声明修饰符文本，分派侧两参格式统一）
+                // 不生成坏代码
+                if (classSymbol.DeclaredAccessibility is not (Accessibility.Public or Accessibility.Internal))
+                {
+                    return new EnumGenInfo(
+                        Namespace: GetNamespaceName(classSymbol),
+                        TypeName: classSymbol.Name,
+                        ContainingDeclarations: [],
+                        ContainingNames: [],
+                        ValueType: AccessibilityToModifierText(classSymbol.DeclaredAccessibility),
+                        Fields: [],
+                        HasFields: false,
+                        DiagnosticId: "PALENUM007",
                         Location: context.TargetNode.GetLocation());
                 }
 
@@ -307,6 +337,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         "PALENUM003" => RecordNotSupportedError,
                         "PALENUM004" => GenericDeclarationNotSupported,
                         "PALENUM006" => NonPartialDeclarationError,
+                        "PALENUM007" => NonAccessibleDeclarationError,
                         _ => NotDirectInheritanceError,
                     };
                     spc.ReportDiagnostic(Diagnostic.Create(
@@ -384,6 +415,17 @@ public sealed class EnumGenerator : IIncrementalGenerator
 
         return false;
     }
+
+    // v33 P3：Accessibility 枚举 → C# 修饰符文本（PALENUM007 消息 '{1}' 显示用——
+    // 枚举 ToString 的 "ProtectedAndInternal" 非合法修饰符写法，映射为源码等价文本）
+    private static string AccessibilityToModifierText(Accessibility accessibility) => accessibility switch
+    {
+        Accessibility.Private => "private",
+        Accessibility.Protected => "protected",
+        Accessibility.ProtectedAndInternal => "private protected",
+        Accessibility.ProtectedOrInternal => "protected internal",
+        _ => accessibility.ToString(),
+    };
 
     /// <summary>生成硬编码字段引用的静态构造函数——零反射，100% AOT 兼容</summary>
     private static string GenerateEnumCode(EnumGenInfo info)
