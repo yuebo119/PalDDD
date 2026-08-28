@@ -33,6 +33,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using MySqlConnector;
+using Microsoft.Data.Sqlite;
 using Npgsql;
 using System.Data;
 using System.Data.Common;
@@ -201,7 +202,11 @@ public static class DapperBulkCopy
     /// MySQL BulkCopy 批量导入。<br/>
     /// 💡 MySqlBulkCopy 使用 MySQL 原生的 LOAD DATA INFILE 协议，比逐行 INSERT 快约 10 倍。<br/>
     /// ⚡ 需要连接字符串包含 <c>AllowLoadLocalInfile=True</c>。<br/>
-    /// 🛡️ 检查 <see cref="MySqlBulkCopyResult.Warnings"/> 防止静默数据截断。
+    /// 🛡️ 检查 <see cref="MySqlBulkCopyResult.Warnings"/> 防止静默数据截断。<br/>
+    /// ⚠️ v35 P3：列类型按首个非空值采样（ITM-214 跨行首个非空值口径）——跨行同列异型
+    ///（如首行 int、后续 long）时 DataTable 列定型为首个非空值的类型，不兼容值延迟到
+    /// DataTable 填充/WriteToServerAsync 阶段晦涩失败。真实调用方（Store/源码生成器）的
+    /// extractor 同列同型；外部自定义 extractor 需自保每列类型一致。
     /// </summary>
     [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Aot", "IL2062:RequiresDynamicallyAccessedMembers",
         Justification = "PalDDD.Dapper csproj 声明 IsAotCompatible=true，但运行时 Dapper 路径（Store 未启用 Dapper.AOT 拦截，走经典反射物化）不满足真 AOT——DataTable 列类型按运行时值推断是 MySqlBulkCopy 唯一数据源格式，裁剪后按 null 降级。第 28 轮已裁决 Dapper.AOT 启用不做（ADR-020 退役栈）。")]
@@ -348,6 +353,14 @@ public static class DapperBulkCopy
         // 📦 开启事务 — SQLite 默认每条 INSERT 都会 fsync，事务中只 fsync 一次
         // 三十八轮 P2 修复：传入外部事务时挂接该事务且不 Commit/Dispose（所有权归调用方）；
         // 未传时保持自建本地事务（原行为）。嵌套场景 Microsoft.Data.Sqlite 6+ 转 SAVEPOINT。
+        // v35 P3：外部事务类型校验（镜像 MySQL 分支 MySqlBulkAsync 的 MySqlTransaction
+        // fail-fast 形态）——传入非 SqliteTransaction 的外部事务对象（如 Npgsql/MySql 事务）
+        // 原实现直接挂接 DbCommand.Transaction，执行时才在 SQLite 驱动深处报晦涩错误；
+        // 提前 fail-fast 给出明确类型要求。自建事务路径（transaction is null）不受影响。
+        if (transaction is not null and not SqliteTransaction)
+            throw new ArgumentException(
+                $"SQLite 批量导入要求事务为 SqliteTransaction，实际为 {transaction.GetType().Name}。",
+                nameof(transaction));
         DbTransaction? localTx = null;
         if (transaction is null)
             localTx = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);

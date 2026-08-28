@@ -49,6 +49,11 @@ public static class PostgreSqlMultiHost
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // v35 P3：空白连接串 fail-fast（v34 五处姊妹收口的延续，同款口径）——空白串原样
+        // 放行会延迟到 NpgsqlDataSourceBuilder.Build()/建连时才抛异常
+        ArgumentException.ThrowIfNullOrWhiteSpace(primaryConnectionString);
+        ArgumentException.ThrowIfNullOrWhiteSpace(standbyConnectionString);
+
         // 多主机连接串：Host 逗号分隔，TargetSessionAttributes 控制
         var builder = new NpgsqlDataSourceBuilder(primaryConnectionString);
         var primaryBuilder = new NpgsqlConnectionStringBuilder(primaryConnectionString);
@@ -166,6 +171,10 @@ public static class PostgreSqlMultiHost
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(replicaConnectionStrings);
+
+        // v35 P3：空白连接串 fail-fast（v34 五处姊妹收口的延续，同款口径）——空白串原样
+        // 放行会延迟到 NpgsqlDataSourceBuilder.Build()/建连时才抛异常
+        ArgumentException.ThrowIfNullOrWhiteSpace(primaryConnectionString);
 
         if (replicaConnectionStrings.Length == 0)
         {
@@ -286,6 +295,10 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
         string applicationName = "Pal.DDD")
     {
         ArgumentNullException.ThrowIfNull(services);
+
+        // v35 P3：空白连接串 fail-fast（v34 五处姊妹收口的延续，同款口径）——空白串原样
+        // 放行会延迟到 NpgsqlDataSourceBuilder.Build()/建连时才抛异常
+        ArgumentException.ThrowIfNullOrWhiteSpace(multiHostConnectionString);
 
         var builder = new NpgsqlDataSourceBuilder(multiHostConnectionString);
         builder.ConnectionStringBuilder.ApplicationName = applicationName;

@@ -209,6 +209,10 @@ public static class PostgreSqlServiceCollectionExtensions
     /// v34 P3 补第三差异：副本 Host 含内嵌端口（如 pg1:5433）时，本入口 <c>{Host}:{Port}</c>
     /// 拼接产出畸形条目——v26 H3 已在新入口经 EncodeHostEntry/NormalizeHostEntries 修复，
     /// 本 Obsolete 入口不再修（含内嵌端口副本串的场景请迁移新入口）。
+    /// v35 P3 补第四差异：reader 构建失败（凭据失配/缺 Host/reader Build 抛出）时 writer
+    /// DataSource 已 Build 尚未注册进 DI，失败路径无释放——新入口 ITM-262 已修（try-catch
+    /// 同步 Dispose writer），本 Obsolete 入口不再修（宿主重试场景会累积未释放数据源，
+    /// 请迁移新入口）。
     /// </remarks>
     [System.Obsolete("读写分离请使用 PostgreSqlReadWriteRouterExtensions.AddPalReadWriteRouter（Writer/Reader 应用名后缀区分 + 负载均衡 + 副本凭据校验）。本入口保留仅为既有调用方兼容。")]
     public static IServiceCollection AddPalPostgreSqlReadWriteRouter(

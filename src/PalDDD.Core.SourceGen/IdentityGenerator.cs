@@ -87,10 +87,16 @@ public sealed class IdentityGenerator : IIncrementalGenerator
     // 不生成坏代码（镜像 EnumGenerator PALENUM007）。v34 P3 勘正：原"顶层类型恒
     // public/internal 不受影响"失实——生成 partial 硬编码 public，internal 声明（含顶层）
     // 放行后与生成物合并报 CS0262，internal 非合法目标，消息单腿引导升 public
+    // v35 P3（DA1）：v34 链检查升格后原消息 "is not at least internal" 仍描述目标自身——
+    // 链中间层阻断场景（public Outer → private Mid → public Foo）目标自身 public，消息
+    // 失实且"raise the declaration"指引无效（改目标自身救不了 Mid）。消息改两参：{1} 经
+    // BlockingAccessibilityText 携带实际阻断层修饰符文本（GeneratorAccessibility 共享
+    // helper），措辞改为"declaration or its containing type chain blocks visibility"形态；
+    // public 单腿保留但补链语义（"and its containing types"）
     private static readonly DiagnosticDescriptor NonAccessibleDeclaration = new(
         "PALID006",
         "GenerateId does not support inaccessible declarations",
-        "Type '{0}' uses [GenerateId] but is not at least internal (private or protected nested types are invisible to the generated converters). Raise the declaration to public.",
+        "Type '{0}' uses [GenerateId] but its declaration or its containing type chain blocks visibility (blocking declaration is '{1}'; declarations below internal are invisible to the generated converters). Raise the declaration (and its containing types) to public.",
         "PalDDD.IdentityGeneration",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -173,7 +179,10 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 // ⚠️ 已知残余（v34 A 片复核）：生成 partial 硬编码 public——链可见但自身为
                 // internal 的声明放行后与生成物合并报 CS0262；拦截阈值取 Public-only 可消除
                 // 但会误伤 internal 顶层合法场景，待 v35 裁决（生成物携带用户可访问性 or 收紧阈值）
-                if (GeneratorAccessibility.GetBlockingAccessibility(structSymbol) is not null)
+                // v35 P3（DA1）：捕获阻断层可访问性并经 BlockingAccessibilityText 携带——
+                // 链中间层阻断（public Outer → private Mid → public Foo）时消息 {1} 显示
+                // 实际阻断层（Mid）的修饰符，不再失实描述目标自身
+                if (GeneratorAccessibility.GetBlockingAccessibility(structSymbol) is { } blockingAccessibility)
                 {
                     return new IdGenInfo(
                         Namespace: null,
@@ -183,6 +192,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                         SourceType: sourceType.ToDisplayString(),
                         IsNumeric: false,
                         DiagnosticId: "PALID006",
+                        BlockingAccessibilityText: GeneratorAccessibility.AccessibilityToModifierText(blockingAccessibility),
                         Location: context.TargetNode.GetLocation());
                 }
 
@@ -315,10 +325,13 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                             break;
                         case "PALID006":
                             // v33 P3：private/protected nested 声明对生成物不可见
+                            // v35 P3（DA1）：{1} = 实际阻断层修饰符文本（BlockingAccessibilityText
+                            // 携带）——链中间层阻断场景消息不再失实描述目标自身
                             spc.ReportDiagnostic(Diagnostic.Create(
                                 NonAccessibleDeclaration,
                                 info.Location ?? Location.None,
-                                info.TypeName));
+                                info.TypeName,
+                                info.BlockingAccessibilityText));
                             break;
                         default:
                             // P3 修复（八轮评审）：PALID001——非白名单 IdType 编译期报错，不生成代码
@@ -425,6 +438,19 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         // 编译失败（7 个 CS0246/CS1503，harness 实测；仓内零真实 Ulid Id 类型故从未暴露）
         var ulidUsing = srcType == "Ulid" ? "\r\nusing ByteAether.Ulid;\r\nusing PalUlid = ByteAether.Ulid.Ulid;" : "";
 
+        // v35 P3（DA2）：模板对 Ulid/Guid 输出裸类型名——用户命名空间含同名类型（class Ulid/
+        // class Guid）时裸名解析被遮蔽，生成物编译失败（CS0246/CS1503 落在用户侧同名类型）。
+        // Ulid 特化为 PalUlid 别名（上方 ulidUsing 的 using+using 双发已备，v24 机制）；
+        // Guid 特化为 global::System.Guid 限定名；int/long/string 为基元关键字无遮蔽风险。
+        // body 方法（New/TryParse/JsonRead 等）的分派键仍用 srcType，仅其输出文本内的
+        // Guid 裸名同勘（见各方法内 global::System.Guid）
+        var displayType = srcType switch
+        {
+            "Ulid" => "PalUlid",
+            "Guid" => "global::System.Guid",
+            _ => srcType
+        };
+
         // P3 修复（八轮评审）：全局命名空间（Namespace == null）不生成 namespace 声明——
         // 旧 fallback "_" 产出 "namespace _;" 使生成物落入 _ 命名空间与用户类型不合并
         var nsDecl = info.Namespace is null ? "" : $"namespace {info.Namespace};\n";
@@ -442,12 +468,12 @@ using PalDDD.Core;{{ulidUsing}}
 {{nsDecl}}{{open}}
 [TypeConverter(typeof({{converterName}}TypeConverter))]
 [JsonConverter(typeof({{converterName}}JsonConverter))]
-public readonly partial record struct {{name}} : IPalIdentity<{{srcType}}>, ISpanParsable<{{name}}>
+public readonly partial record struct {{name}} : IPalIdentity<{{displayType}}>, ISpanParsable<{{name}}>
 {
-    public {{srcType}} Value { get; init; }
+    public {{displayType}} Value { get; init; }
 
     public static {{name}} New() => {{NewBody(srcType)}};
-    public static {{name}} From({{srcType}} value) => {{FromBody(srcType)}};
+    public static {{name}} From({{displayType}} value) => {{FromBody(srcType)}};
     {{ToStringBody(srcType)}}
     public static bool TryParse(string? input, out {{name}} result)
     {
@@ -488,13 +514,13 @@ internal sealed class {{converterName}}JsonConverter : JsonConverter<{{fullName}
 internal sealed class {{converterName}}TypeConverter : TypeConverter
 {
     public override bool CanConvertFrom(ITypeDescriptorContext? context, Type sourceType)
-        => sourceType == typeof(string) || sourceType == typeof({{srcType}});
+        => sourceType == typeof(string) || sourceType == typeof({{displayType}});
 
     public override object? ConvertFrom(ITypeDescriptorContext? context, CultureInfo? culture, object value)
         => value switch
         {
             string s when {{fullName}}.TryParse(s, out var parsed) => parsed,
-            {{srcType}} v => {{fullName}}.From(v),
+            {{displayType}} v => {{fullName}}.From(v),
             _ => throw new NotSupportedException()
         };
 }
@@ -503,7 +529,9 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
 
     private static string NewBody(string srcType) => srcType switch
     {
-        "Guid" => "new() { Value = Guid.NewGuid() }",
+        // v35 P3（DA2）：Guid 裸名 → global::System.Guid——用户命名空间含同名 Guid 类型时
+        // 裸名被遮蔽（Ulid 腿已用 PalUlid 别名，v26 W3）；分派键仍为白名单归一化值
+        "Guid" => "new() { Value = global::System.Guid.NewGuid() }",
         "Ulid" => "new() { Value = PalUlid.New() }",
         // 数值/字符串类型 Id 由数据库或服务端分配，客户端 New() 无意义 —— 明确报错而非静默返回 default。
         _ => "throw new NotSupportedException(\"Numeric/string identities are assigned by the store; use From(value) instead.\")"
@@ -527,7 +555,8 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
 
     private static string TryParseBody(string srcType) => srcType switch
     {
-        "Guid" => "        if (Guid.TryParse(input, out var v)) { result = new() { Value = v }; return true; } result = default; return false;",
+        // v35 P3（DA2）：Guid 裸名 → global::System.Guid（同 NewBody——遮蔽防护）
+        "Guid" => "        if (global::System.Guid.TryParse(input, out var v)) { result = new() { Value = v }; return true; } result = default; return false;",
         "Ulid" => "        if (PalUlid.TryParse(input, CultureInfo.InvariantCulture, out var v)) { result = new() { Value = v }; return true; } result = default; return false;",
         "int" => "        if (int.TryParse(input, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)) { result = new() { Value = v }; return true; } result = default; return false;",
         "long" => "        if (long.TryParse(input, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)) { result = new() { Value = v }; return true; } result = default; return false;",
@@ -537,7 +566,8 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
 
     private static string TryParseSpanBody(string srcType) => srcType switch
     {
-        "Guid" => "        if (Guid.TryParse(s, out var v)) { result = new() { Value = v }; return true; } result = default; return false;",
+        // v35 P3（DA2）：Guid 裸名 → global::System.Guid（同 NewBody——遮蔽防护）
+        "Guid" => "        if (global::System.Guid.TryParse(s, out var v)) { result = new() { Value = v }; return true; } result = default; return false;",
         "Ulid" => "        if (PalUlid.TryParse(s, CultureInfo.InvariantCulture, out var v)) { result = new() { Value = v }; return true; } result = default; return false;",
         "int" => "        if (int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)) { result = new() { Value = v }; return true; } result = default; return false;",
         "long" => "        if (long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)) { result = new() { Value = v }; return true; } result = default; return false;",
@@ -560,7 +590,8 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
         "Guid" => $"""
                 if (reader.TokenType != JsonTokenType.String)
                     throw new JsonException("Guid identity JSON value must be a JSON string.");
-                if (!Guid.TryParse(reader.GetString(), out var guidValue))
+                // v35 P3（DA2）：Guid 裸名 → global::System.Guid（遮蔽防护，同 NewBody）
+                if (!global::System.Guid.TryParse(reader.GetString(), out var guidValue))
                     throw new JsonException("Guid identity JSON value is not a valid Guid.");
                 return {name}.From(guidValue);
         """,
@@ -616,9 +647,13 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
         // （TokenType.Null != String 即抛），执行到 GetString() 时 TokenType 恒为 String、
         // 恒返回非 null，?? throw 为不可达死防线。删除改直接 GetString()!（对齐 Ulid 分支）。
         // v34 P2 补全（空串腿）：String token 但值为 "" 时 From 抛 ArgumentException
-        // （FromBody 的 IsNullOrEmpty 守卫）——非 JsonException 契约破裂；且写侧对
-        // default 绕过构造的实例会写出 ""，roundtrip 读回即炸。空串转 JsonException
+        //（FromBody 的 IsNullOrEmpty 守卫）——非 JsonException 契约破裂；写侧写出 "" 仅当
+        // 用户显式 new() { Value = "" }（default 实例 Value==null，经 v27 的 WriteNullValue
+        // 防御写 null token，不会写出 ""），roundtrip 读回即炸。空串转 JsonException
         //（对齐 TryParseBody 的 IsNullOrEmpty 判定语义）
+        // v35 P3（DA3）勘正：上段 v34 原注"写侧对 default 绕过构造的实例会写出 ''"失实——
+        // v27 写侧 null 防御（JsonWriteBody string 分支）已使 default 实例写 null token
+        // 而非 ""；空串写出的唯一路径是用户显式以空串构造 Value
         "string" => $"""
                 if (reader.TokenType != JsonTokenType.String)
                     throw new JsonException("String identity JSON value must be a JSON string.");
@@ -678,6 +713,11 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
         string SourceType,
         bool IsNumeric,
         string? DiagnosticId = null,
+        // v35 P3（DA1）：PALID006 的阻断层修饰符文本（"private"/"protected"/…）——仅
+        // 可访问性诊断分支携带，供诊断消息 {1} 显示实际阻断层（生成路径恒 null）。
+        // 纳入相等：诊断也是管线输出，翻转而其余字段相等时缓存命中会残留 IDE 僵尸诊断
+        //（镜像 DiagnosticId 十轮修法）
+        string? BlockingAccessibilityText = null,
         Location? Location = null)
     {
         // P3 修复（八轮评审）：数组字段默认引用相等破坏增量管线缓存（每次编译新数组实例
@@ -694,7 +734,8 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
             && ContainingNames.SequenceEqual(other.ContainingNames)
             && SourceType == other.SourceType
             && IsNumeric == other.IsNumeric
-            && DiagnosticId == other.DiagnosticId;
+            && DiagnosticId == other.DiagnosticId
+            && BlockingAccessibilityText == other.BlockingAccessibilityText;
 
         public override int GetHashCode()
         {
@@ -708,6 +749,7 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
                 hash = hash * 31 + SourceType.GetHashCode();
                 hash = hash * 31 + IsNumeric.GetHashCode();
                 hash = hash * 31 + (DiagnosticId?.GetHashCode() ?? 0);
+                hash = hash * 31 + (BlockingAccessibilityText?.GetHashCode() ?? 0);
                 return hash;
             }
         }

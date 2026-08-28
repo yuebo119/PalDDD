@@ -113,6 +113,11 @@ public sealed class OutboxDomainEventInterceptor(
     }
 
     /// <inheritdoc />
+    // v35 P3：CA1031 抑制——清理路径捕获 Exception 是刻意设计（对齐 WriteEventsToOutbox
+    // 的 v34 P2 catch(Exception)+rethrow 先例）：任何清理失败（ChangeTracker 状态异常等）
+    // 都不得替换 EF 原始 SaveChanges 失败异常，清理异常已挂 Exception.Data 供诊断
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
+        Justification = "失败事件派发路径的清理必须对任意异常免疫，否则清理次生异常替换真实 DbUpdateException。")]
     public override async Task SaveChangesFailedAsync(DbContextErrorEventData eventData, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(eventData);
@@ -120,18 +125,39 @@ public sealed class OutboxDomainEventInterceptor(
         // ITM-178 修复（二十九轮）：EF 失败不自动回滚 ChangeTracker——本轮 AddMessage
         // 注入的 OutboxMessage 仍处 Added 状态，若不 Detach，调用方修复后重试 SaveChanges
         // 会旧消息+新消息一起落库（同事件 outbox 双写，下游重复消费）。
-        RemoveInjectedOutboxMessages(eventData.Context);
+        // v35 P3：清理包 try-catch——EF 在 SaveChanges 的 catch 内派发本失败事件，清理
+        // 自身抛出会成为冒出异常替换真实 DbUpdateException；清理异常挂 Exception.Data
+        // 供诊断，不替换原始异常。
+        try
+        {
+            RemoveInjectedOutboxMessages(eventData.Context);
+        }
+        catch (Exception cleanupEx)
+        {
+            eventData.Exception?.Data["PalOutboxCleanupFailure"] = cleanupEx.ToString();
+        }
         _pending.Clear();
         await base.SaveChangesFailedAsync(eventData, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     /// <para>P1 修复：sync SaveChanges() 失败路径（与 async 版对齐）。</para>
+    // v35 P3：CA1031 同 SaveChangesFailedAsync——清理路径刻意捕获 Exception
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
+        Justification = "失败事件派发路径的清理必须对任意异常免疫，否则清理次生异常替换真实 DbUpdateException。")]
     public override void SaveChangesFailed(DbContextErrorEventData eventData)
     {
         ArgumentNullException.ThrowIfNull(eventData);
 
-        RemoveInjectedOutboxMessages(eventData.Context);
+        // v35 P3：同 SaveChangesFailedAsync——清理异常不替换真实 SaveChanges 失败异常
+        try
+        {
+            RemoveInjectedOutboxMessages(eventData.Context);
+        }
+        catch (Exception cleanupEx)
+        {
+            eventData.Exception?.Data["PalOutboxCleanupFailure"] = cleanupEx.ToString();
+        }
         _pending.Clear();
         base.SaveChangesFailed(eventData);
     }
@@ -156,6 +182,10 @@ public sealed class OutboxDomainEventInterceptor(
         _injectedOutboxIds.Clear();
     }
 
+    // v35 P3：CA1031 抑制仅针对内层清理 catch（吞掉挂 Data、原异常经 throw; 重抛）——
+    // 外层主 catch (Exception) 本就 rethrow 不触发本规约
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
+        Justification = "部分注入清理必须对任意异常免疫，清理失败挂原始异常 Data 供诊断而非替换之。")]
     private void WriteEventsToOutbox(Microsoft.EntityFrameworkCore.DbContext? context, IReadOnlyList<Core.DomainEvent> events)
     {
         // v34 P2 修复：注入循环整体纳入自清理域——EF 源码实证 SavingChanges(Async) 的
@@ -195,11 +225,21 @@ public sealed class OutboxDomainEventInterceptor(
                 _injectedOutboxIds.Add(msg.Id);
             }
         }
-        catch (Exception)
+        catch (Exception original)
         {
             // 部分注入清理：对当前 context 的 Added 半成品 Detach（语义同 ITM-178 兜底，
-            // 但覆盖"拦截器自身抛异常"这一 SaveChangesFailed 不可达路径）
-            RemoveInjectedOutboxMessages(context);
+            // 但覆盖"拦截器自身抛异常"这一 SaveChangesFailed 不可达路径）。
+            // v35 P3：清理自身包 try-catch——清理失败（ChangeTracker 状态异常等）若不加
+            // 保护会成为 catch 内新异常替换 rethrow 的原始异常（真实 catalog miss/序列化
+            // 失败被吞），清理异常挂 original.Data 供诊断；throw; 重抛原始异常（堆栈保留）。
+            try
+            {
+                RemoveInjectedOutboxMessages(context);
+            }
+            catch (Exception cleanupEx)
+            {
+                original.Data["PalOutboxCleanupFailure"] = cleanupEx.ToString();
+            }
             throw;
         }
     }

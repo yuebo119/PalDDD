@@ -140,8 +140,13 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         // ⚠️ 已知限制（八轮评审 P3，声明不修）：MySQL 两步路径回读按 (leased_by, leased_until) 匹配——
         // 同一 owner 在同一 tick（until 完全相等，如 FakeTimeProvider 冻结时间）发起两次租约时，
         // 第二次回读会混入第一次已锁定的批次。生产触发条件近乎为零（DATETIME(6) 微秒精度 + 单 owner
-        // 串行租约）；PG/SQLite 走单语句 UPDATE 天然免疫。候选 id 预取需 IN 列表参数化，PalORM 的
-        // FormattableString 路径不支持（详见 PalOrmOutboxStore.LeasePendingMessagesAsync 同款声明）。
+        // 串行租约）。候选 id 预取需 IN 列表参数化，PalORM 的 FormattableString 路径不支持
+        //（详见 PalOrmOutboxStore.LeasePendingMessagesAsync 同款声明）。
+        // v35 P3 勘正：上段原声明"PG/SQLite 走单语句 UPDATE 天然免疫"失实——上方
+        // SupportsReturningClause 分支的 UPDATE 无 RETURNING，回读仍是本处两步 SELECT，
+        // 三方言均两步回读，同 tick 混批窗口一致；混批后果由 SaveChangesAsync 的 version
+        // 乐观锁兜底（重复保存被版本冲突拒绝）。对照 PalOrmOutboxStore.LeasePendingMessagesAsync:95-104
+        // ——真 RETURNING（UPDATE..RETURNING 单语句返回租约行）才免疫两步混批。
         // ITM-076 实测结论（2026-08-16 双连接探针，5 轮）：跨 owner 并发 UPDATE...JOIN 时
         // derived table 按语句开始快照物化，后到者会覆盖先到者的 leased_by（last-writer-wins），
         // 但"双 worker 同批回读"窗口未复现——被覆盖方的回读按 (owner, until) 已不再匹配。

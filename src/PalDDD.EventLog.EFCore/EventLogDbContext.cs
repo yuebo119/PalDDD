@@ -333,6 +333,12 @@ public abstract class EventLogDbContext(
     /// 空转一轮并罕见误报 DbUpdateConcurrencyException（其 catch 分支可自愈，但多一次往返）。
     /// 与 <see cref="EventLogPositionReserver"/> 各异常分支的 <c>Entry(allocator).State = Detached</c>
     /// 手法同源；一并 Detach 后重试从 DB 真值重读。
+    /// <para>
+    /// v35 P3 家族边界声明（纯文档，不修）：本方法仅覆盖 <c>DbUpdateException</c> 路径——
+    /// OCE（OperationCanceledException）与非 DbUpdateException 异常路径的幽灵清理属全库
+    /// 同型家族边界（Outbox/Inbox/Checkpoint/Idempotency 各 EFCore Store 一致），触发需
+    /// 取消后同 scope 复用 context（违背正常生命周期：取消即应弃置 scope）。v3.0 统一收敛。
+    /// </para>
     /// </remarks>
     private void DetachAddedEvents()
     {

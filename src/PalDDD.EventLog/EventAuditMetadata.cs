@@ -41,7 +41,17 @@ public sealed record EventAuditMetadata
     /// <summary>导致本事件的命令或事件标识符。</summary>
     public PalUlid? CausationId { get; }
 
-    /// <summary>从 <see cref="Activity.Current"/> 捕获的 W3C traceparent。</summary>
+    /// <summary>
+    /// 从 <see cref="Activity.Current"/> 捕获的 W3C traceparent。
+    /// </summary>
+    /// <remarks>
+    /// ⚠️ v35 P3（EA4）格式前提声明：本值取自 <see cref="Activity.Current"/>.<see cref="Activity.Id"/>，
+    /// 其格式跟随 <see cref="Activity.IdFormat"/>——<b>假定 W3C</b>（.NET 5+ 默认
+    /// <see cref="Activity.DefaultIdFormat"/> 为 W3C）。宿主若全局改用
+    /// <see cref="ActivityIdFormat.Hierarchical"/>（<c>Activity.DefaultIdFormat = ActivityIdFormat.Hierarchical</c>），
+    /// 写入值为 hierarchical 格式（<c>|...</c> 形态），非 W3C traceparent（<c>00-...</c> 四段）；
+    /// 回放/查询侧按 W3C 解析将失真。跨格式环境需在宿主统一 IdFormat 或在消费侧按前缀判别。
+    /// </remarks>
     public string? TraceParent { get; }
 
     /// <summary>从 <see cref="Activity.Current"/> 捕获的 W3C tracestate。</summary>

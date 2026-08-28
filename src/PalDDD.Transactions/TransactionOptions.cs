@@ -34,11 +34,23 @@ public sealed class OutboxOptions
     /// <para>
     /// ⚠️ <b>冷快照声明（二十四轮）</b>：仅在 Processor 构造时读取一次（<c>PeriodicTimer</c>
     /// 间隔构造后固定），运行时经配置热更新本值<b>不生效</b>，需重启进程；同组的
-    /// <see cref="BatchSize"/>/<see cref="LeaseDuration"/>/<see cref="LeaseOwner"/> 经
-    /// <c>IOptionsMonitor.CurrentValue</c> 每 tick 热读取，热更新即时生效。
+    /// <see cref="BatchSize"/>/<see cref="LeaseDuration"/>/<see cref="LeaseOwner"/>/
+    /// <see cref="MaxRetryCount"/> 经 <c>IOptionsMonitor.CurrentValue</c> 每 tick 热读取，
+    /// 热更新即时生效（v35 P3 补记：MaxRetryCount 属热更新组，语义见其属性声明）。
     /// </para>
     /// </summary>
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// 最大重试次数 — 失败消息重试超过本值后转 Dead（死信），不再拾取。
+    /// <para>
+    /// ⚠️ <b>热更新滞留声明（v35 P3·EA3）</b>：本值经 <c>IOptionsMonitor</c> 每 tick 热读取，
+    /// 运行时调小即时生效——但 <c>RetryCount &gt;= 新值</c> 的 Pending 消息将被拾取查询
+    /// 永久过滤（既不派发也不转 Dead：转 Dead 仅发生在发布失败路径），消息<b>滞留无出口</b>。
+    /// 运维止血（调小止血后）需手工清理这些滞留消息（<c>RequeueDeadAsync</c> 不适用——
+    /// 它只处理 Dead 状态），或将 MaxRetryCount 调回 ≥ 滞留消息的 RetryCount。
+    /// </para>
+    /// </summary>
     public int MaxRetryCount { get; set; } = IPalOutboxStore.DefaultMaxRetryCount;
 
     /// <summary>

@@ -660,8 +660,23 @@ public abstract class Saga<TState> where TState : SagaState, new()
         return (SagaState)instance;
     }
 
-    /// <summary>子 Saga 输入事件——包装输入数据传递给子 Saga。</summary>
-    internal sealed class ChildSagaInputEvent
+    /// <summary>
+    /// 子 Saga 输入事件——包装 <see cref="ChildSagaStep{TChildState, TInput, TOutput}"/> 的 inputSelector 提取值
+    /// 传递给子 Saga。
+    /// </summary>
+    /// <remarks>
+    /// v35 P2 修复：internal→public——原 internal 使子 Saga（通常位于用户程序集）无法以
+    /// 本类型作 <c>When&lt;ChildSagaInputEvent&gt;</c> 泛型参数（精确 key 永不可注册，仅能
+    /// 通配注册且通配回调解包不了 internal 类型），inputSelector 提取的输入对子 Saga 用户
+    /// 代码不可达——输入通道被封死（ChildSagaStep 测试覆盖 0% 掩盖至今）。公开后子 Saga
+    /// 可精确注册路由并读取 <see cref="Input"/>。
+    /// </remarks>
+    // v35 P3（P3 修复代编译修复）：CA1034——子 Saga 输入事件与 Saga&lt;TState&gt; 的
+    // When/inputSelector 契约强内聚，提升为顶层反而弱化归属并扩大 API 面
+    //（镜像 MessageConsumeContext 同款抑制先例）
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1034",
+        Justification = "子 Saga 输入事件与 Saga<TState> 的 When/inputSelector 契约强内聚，提升为顶层反而弱化归属并扩大 API 面。")]
+    public sealed class ChildSagaInputEvent
     {
         public object? Input { get; }
         public ChildSagaInputEvent(object? input) => Input = input;

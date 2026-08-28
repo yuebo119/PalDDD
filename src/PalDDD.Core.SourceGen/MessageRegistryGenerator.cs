@@ -71,10 +71,15 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
     // PalMessageCatalog 的 typeof 引用该类型——可访问性低于 internal 的嵌套类型对
     // 生成物不可见（CS0122 落在 auto-generated 文件，排障困难）。编译期报 PALMSG007
     // 不生成坏代码（顶层类型恒 public/internal 不受影响；镜像 PALMSG006 姊妹拦截）
+    // v35 P3（DA1）：v34 链检查升格后原消息 "is not at least internal" 仍描述目标自身——
+    // 链中间层阻断场景（public Outer → private Mid → public Foo）目标自身 public，消息
+    // 失实且"raise the declaration"指引无效。消息改两参：{1} 经 BlockingAccessibilityText
+    // 携带实际阻断层修饰符文本（GeneratorAccessibility 共享 helper），措辞改 "declaration
+    // or its containing type chain blocks visibility" 形态 + 指引补 "and its containing types"
     private static readonly DiagnosticDescriptor NonAccessibleMessageNotSupported = new(
         "PALMSG007",
         "Generated messages do not support inaccessible declarations",
-        "Message type '{0}' is marked with [GenerateMessage] but is not at least internal (private or protected nested types are invisible to the generated catalog). Raise the declaration to internal or public.",
+        "Message type '{0}' is marked with [GenerateMessage] but its declaration or its containing type chain blocks visibility (blocking declaration is '{1}'; declarations below internal are invisible to the generated catalog). Raise the declaration (and its containing types) to internal or public.",
         "PalDDD.MessageContracts",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -108,7 +113,9 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
                 // PALID006）
                 // v34 P2：检查升格为 ContainingType 全链（GeneratorAccessibility 共享 helper）——
                 // 中间层 private 同样阻断 typeof 引用可见性
-                if (GeneratorAccessibility.GetBlockingAccessibility(type) is not null)
+                // v35 P3（DA1）：捕获阻断层可访问性并经 BlockingAccessibilityText 携带——
+                // 链中间层阻断时消息 {1} 显示实际阻断层的修饰符，不再失实描述目标自身
+                if (GeneratorAccessibility.GetBlockingAccessibility(type) is { } blockingAccessibility)
                 {
                     return new MessageInfo(
                         type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
@@ -116,7 +123,8 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
                         1,
                         HasExplicitName: false,
                         LocationInfo.From(context.TargetNode.GetLocation()),
-                        DiagnosticId: "PALMSG007");
+                        DiagnosticId: "PALMSG007",
+                        BlockingAccessibilityText: GeneratorAccessibility.AccessibilityToModifierText(blockingAccessibility));
                 }
 
                 var attr = context.Attributes[0];
@@ -169,7 +177,9 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
                         "PALMSG007" => NonAccessibleMessageNotSupported,
                         _ => GenericMessageNotSupported,
                     };
-                    spc.ReportDiagnostic(Diagnostic.Create(declarationDiagnostic, message.Location.ToLocation(), message.TypeName));
+                    // v35 P3（DA1）：PALMSG007 补传 {1} = 实际阻断层修饰符文本——
+                    // PALMSG006 消息不含 {1}，string.Format 忽略多余参数，两参统一无副作用
+                    spc.ReportDiagnostic(Diagnostic.Create(declarationDiagnostic, message.Location.ToLocation(), message.TypeName, message.BlockingAccessibilityText));
                     continue;
                 }
 
@@ -309,7 +319,12 @@ public static class PalMessageCatalog
         int SchemaVersion,
         bool HasExplicitName,
         LocationInfo Location,
-        string? DiagnosticId = null)
+        string? DiagnosticId = null,
+        // v35 P3（DA1）：PALMSG007 的阻断层修饰符文本（"private"/"protected"/…）——仅
+        // 可访问性诊断分支携带，供诊断消息 {1} 显示实际阻断层（生成路径恒 null）。
+        // 纳入相等：诊断也是管线输出，翻转而其余字段相等时缓存命中会残留 IDE 僵尸诊断
+        //（镜像 DiagnosticId 的 v25 修法）
+        string? BlockingAccessibilityText = null)
     {
         // ITM-220 修复（三十二轮）：Location 不参与相等比较——record 默认全字段相等使
         // 位置漂移（如上方插入空行）令增量管线缓存 miss；与 EnumGenerator.EnumGenInfo /
@@ -324,7 +339,8 @@ public static class PalMessageCatalog
             && Name == other.Name
             && SchemaVersion == other.SchemaVersion
             && HasExplicitName == other.HasExplicitName
-            && DiagnosticId == other.DiagnosticId;
+            && DiagnosticId == other.DiagnosticId
+            && BlockingAccessibilityText == other.BlockingAccessibilityText;
 
         public override int GetHashCode()
         {
@@ -338,6 +354,7 @@ public static class PalMessageCatalog
                 hash = hash * 31 + SchemaVersion;
                 hash = hash * 31 + HasExplicitName.GetHashCode();
                 hash = hash * 31 + (DiagnosticId?.GetHashCode() ?? 0);
+                hash = hash * 31 + (BlockingAccessibilityText?.GetHashCode() ?? 0);
                 return hash;
             }
         }

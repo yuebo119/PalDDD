@@ -101,8 +101,15 @@ public sealed class Dispatcher
         // ITM-182 修复（二十九轮）：Freeze 在发布 _frozen 后置 _entries = null!——并发
         // Register 通过上方守卫后的狭窄窗口内 _entries 已失效，直接写入抛 NRE。
         // 补 null 检查以抛与守卫一致的可定位异常（违反"启动期单线程"文档契约时，
-        // 从 NRE 变为明确的 ObjectDisposedException）。守卫本身不承诺并发安全——
-        // 仅把失败形态从晦涩 NRE 转为可诊断异常。
+        // 从 NRE 变为明确的 ObjectDisposedException）。守卫本身不承诺并发安全。
+        // v35 P3 勘正：上句"仅把失败形态从晦涩 NRE 转为可诊断异常"声明的失败形态
+        // 集合不全——并发 Register 违约下除 {NRE→ODE} 外还有两种未声明形态：
+        // ① 注册静默丢失——写入发生在冻结线程 ToFrozenDictionary 快照之后、
+        //    _entries 置 null 之前，写入成功但进的是已被弃用的旧 Dictionary，
+        //    永不出现在冻结表，且无任何异常；
+        // ② Dictionary 并发枚举崩溃——冻结线程 ToFrozenDictionary 枚举 _entries
+        //    时另一线程并发写入，抛 InvalidOperationException（版本号校验）。
+        // 两者均无法靠 null 守卫拦截，根因是违反"启动期单线程注册"契约本身。
         ObjectDisposedException.ThrowIf(_entries is null, this);
 
         _entries[requestType] = new HandlerEntry(handlerType, responseType, executor);

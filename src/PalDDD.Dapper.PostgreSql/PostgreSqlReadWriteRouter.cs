@@ -114,6 +114,10 @@ public static class PostgreSqlReadWriteRouterExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // v35 P3：空白连接串 fail-fast（v34 五处姊妹收口的延续，同款口径）——空白串原样
+        // 放行会延迟到 NpgsqlDataSourceBuilder.Build()/建连时才抛异常
+        ArgumentException.ThrowIfNullOrWhiteSpace(primaryConnectionString);
+
         // 主库（写）
         var writerBuilder = new NpgsqlDataSourceBuilder(primaryConnectionString);
         writerBuilder.ConnectionStringBuilder.ApplicationName = applicationName + "-Writer";

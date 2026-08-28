@@ -177,6 +177,11 @@ public static class ServiceRegistration
     /// Provider（<c>WebApplication.CreateBuilder</c> 默认添加 Console/Debug/EventSource 等，
     /// 官方文档"Logging providers"节）——追加语义下宿主 plain-text Console 与本方法添加的
     /// ZLoggerConsole JSON 并存，<b>每条日志双份输出</b>。需要单输出时传 <c>clearProviders: true</c>。
+    /// <para>
+    /// v35 P3 防重：同一 <see cref="IServiceCollection"/> 重复调用本方法为幂等 no-op——
+    /// ZLogger provider 只注册一次（哨兵 descriptor 检测）；不同集合（多 Host / 测试各自
+    /// 建 host）互不影响，各自正常注册。重复调用时的 <paramref name="clearProviders"/>/
+    /// <paramref name="minimumLevel"/> 不再生效（首次配置为准）。
     /// </para>
     /// </remarks>
     public static IServiceCollection AddPalLogging(
@@ -185,6 +190,18 @@ public static class ServiceRegistration
         LogLevel? minimumLevel = null)
     {
         ArgumentNullException.ThrowIfNull(services); // v17 片E 假修勘正（第 9 处守卫）
+        // v35 P3 防重：AddZLoggerConsole 非幂等——同一 IServiceCollection 重复调用会注册
+        // 第二个 ZLogger provider，每条日志双份输出（区别于上方 remarks 声明的"宿主自带
+        // Console 与 ZLogger 并存"——那是不同 provider 共存，这是同 provider 自我重复）。
+        // 防重形态：哨兵 descriptor——同一集合二次调用检测到 PalLoggingMarker 即整体幂等
+        // 跳过。刻意不用进程级静态 Interlocked 标志位：AddPalLogging 按集合生效（多 Host /
+        // 测试各建独立 host 均应获得 ZLogger），静态标志会静默吞掉第二个宿主的注册
+        // （测试套件 13 处各自 new ServiceCollection 即此场景）。
+        foreach (var descriptor in services)
+        {
+            if (descriptor.ServiceType == typeof(PalLoggingMarker))
+                return services; // 同集合已调用过——幂等跳过，防 ZLogger 双份输出
+        }
         services.AddLogging(logging =>
         {
             if (clearProviders)
@@ -193,6 +210,8 @@ public static class ServiceRegistration
                 logging.SetMinimumLevel(level);
             logging.AddZLoggerConsole(options => options.UseJsonFormatter());
         });
+        // 哨兵最后注册——仅当 ZLogger 注册路径完整走完后标记本集合"已处理"
+        services.TryAddSingleton<PalLoggingMarker>();
         // v26 P3 声明：开放泛型注册在 AOT 下对值类型 T 解析会抛 AotCannotCreateGenericValueType
         // （同 AddPalPipelineBehaviors 的 ThrowIfAotNotSupported 注释自述机制——DI CallSiteFactory
         // 硬校验，开放泛型 + 值类型实参组合无 native code 可用）。T 惯例为引用类型
@@ -408,4 +427,13 @@ internal sealed class HandlerRegistrar : IHostedService
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+/// <summary>
+/// v35 P3：<see cref="ServiceRegistration.AddPalLogging(Microsoft.Extensions.DependencyInjection.IServiceCollection, bool, Microsoft.Extensions.Logging.LogLevel?)"/> 防重哨兵——仅作
+/// ServiceDescriptor 标记（同集合二次调用据此幂等跳过 ZLogger 注册），无运行时行为。
+/// internal + 无依赖，不影响容器解析。
+/// </summary>
+internal sealed class PalLoggingMarker
+{
 }
