@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 
 namespace PalDDD.Core;
@@ -27,6 +28,9 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
 {
     private static FrozenDictionary<TValue, TSelf>? s_values;
 
+    // v36 P3：All 的缓存容器（引用类型）——消除 Dictionary.Values 每次访问的装箱
+    private static IReadOnlyCollection<TSelf>? s_all;
+
     public TValue Value { get; }
     public string Name { get; }
 
@@ -45,7 +49,33 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
     }
 
     /// <summary>所有枚举值 — O(1) 查找</summary>
-    public static IReadOnlyCollection<TSelf> All => Dictionary.Values;
+    /// <remarks>
+    /// v36 P3：FrozenDictionary.Values 返回 <see cref="ImmutableArray{T}"/>（struct）——
+    /// 原 <c>Dictionary.Values</c> 转 <see cref="IReadOnlyCollection{TSelf}"/> 每次访问装箱，
+    /// 全量枚举场景（校验/展示）反复调用下产生稳定分配流。改为惰性物化为 <c>TSelf[]</c>
+    /// （引用类型）后缓存，只装一次箱。仿 <c>ExpressionSpecification._compiled</c> 形态
+    ///（<c>Volatile.Read</c> + <c>Interlocked.CompareExchange</c> 先到者胜）：
+    /// 并发首调重复物化幂等无害（内容相同，丢弃其一），Interlocked 只防覆盖竞态与重复劳动。
+    /// ⚠️ 刻意不用静态字段初始化器（<c>s_all = Dictionary.Values...</c>）：初始化器会进入
+    /// 类型构造器（cctor），把"未注册即抛 <see cref="InvalidOperationException"/>"提前到
+    /// 类型加载时点变为 <see cref="TypeInitializationException"/>（异常被 cctor 包裹、且类型
+    /// 永久失效，后续 RegisterValues 也无法恢复）——惰性访问保住 Dictionary 属性"调用时抛、
+    /// 可恢复重试"的异常契约。
+    /// </remarks>
+    public static IReadOnlyCollection<TSelf> All
+    {
+        get
+        {
+            var cached = Volatile.Read(ref s_all);
+            if (cached is not null) return cached;
+
+            // 先物化后缓存：未注册时 Dictionary getter 抛 InvalidOperationException，
+            // s_all 保持 null，异常形态与直接访问一致（且缓存写入必然发生在注册之后）
+            var snapshot = Dictionary.Values.ToArray();
+            Interlocked.CompareExchange(ref s_all, snapshot, null);
+            return Volatile.Read(ref s_all)!;
+        }
+    }
 
     /// <summary>根据值获取枚举项</summary>
     public static TSelf FromValue(TValue value) =>

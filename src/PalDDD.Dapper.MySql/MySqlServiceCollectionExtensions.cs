@@ -119,7 +119,12 @@ public static class MySqlServiceCollectionExtensions
     /// <remarks>⚠️ <b>ITM-276（R43）：applyOptimization 参数在本 Legacy 路径实际不生效</b>——
     /// 优化 SET SESSION 打在临时连接上，Dispose 归池后被 ResetConnections=true（MySqlConnector 默认）
     /// 清除，后续 Scoped 工厂从池取的连接不继承任何会话优化。有效的优化路径是
-    /// <see cref="AddPalMySqlDataSource"/>（数据源级配置在建连时逐连接应用）。</remarks>
+    /// <see cref="AddPalMySqlDataSource"/>（数据源级配置在建连时逐连接应用）。
+    /// v36 P3 补差异：空白连接串无注册时 fail-fast——新入口 <see cref="AddPalMySqlDataSource"/>
+    /// 已有 <c>ArgumentException.ThrowIfNullOrWhiteSpace</c> 守卫（v33），本入口 null/空白串
+    /// 原样传入 MySqlConnection 构造，失败延迟到建连（Open）时抛 provider 专属异常，与本包
+    /// 其余注册入口的统一 ArgumentException 口径不一致；本 Obsolete 入口不再补守卫
+    ///（既有调用方可能依赖宽松行为），请迁移新入口。</remarks>
     [System.Obsolete("请使用 AddPalMySqlDataSource 以获得自动连接池管理、健康检查和 OpenTelemetry 追踪。注意：本方法的 applyOptimization 参数实际不生效（会话优化随连接归池被 ResetConnections 清除，见 remarks ITM-276）。")]
     public static IServiceCollection AddPalMySql(
         this IServiceCollection services,

@@ -76,6 +76,13 @@ public class PalOrmEventLog<TProvider> : IEventLog
         // 仅异常类型不同；逐元素预检与解引用失败对契约影响无差，省一次遍历。
         cancellationToken.ThrowIfCancellationRequested();
 
+        // v36 P3：补写侧观测（对齐 EFCore EventLogDbContext / InMemoryEventLog 姊妹实现——
+        // 三栈中本栈此前零命中）：方法守卫后创建 activity（镜像 EventLogDbContext.AppendAsync :53
+        // 与 InMemoryEventLog.AppendAsync :42 的 StartEventLogAppend 形态），成功路径返回前
+        // EventLogAppended 计数（镜像 EventLogDbContext :73/:83 两个成功分支的 return 前计数——
+        // 写路径非迭代器、异常直接上抛，失败路径不计数与姊妹语义一致，无需 finally）。
+        using var activity = PalActivitySource.StartEventLogAppend(streamName, events.Count);
+
         // 步骤 1：乐观并发检查 —— 读当前最大 StreamVersion
         var currentMax = await Session.ScalarAsync<long?>(
             $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
@@ -162,6 +169,8 @@ public class PalOrmEventLog<TProvider> : IEventLog
         var firstStreamVersion = currentVersion + 1;
         var lastStreamVersion = currentVersion + events.Count;
         // lastGlobalPos 已在循环内每次更新（不再用 firstGlobalPos + count - 1 推导）
+        // v36 P3：写侧 metrics（对齐 EventLogDbContext/InMemoryEventLog 的 EventLogAppended）
+        PalMetrics.EventLogAppended.Add(events.Count);
         return new AppendEventsResult(streamName, firstStreamVersion, lastStreamVersion, firstGlobalPos, lastGlobalPos);
     }
 

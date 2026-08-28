@@ -231,7 +231,10 @@ public static class PostgreSqlReportHelper
 
         // ITM-167 修复：StreamWriter 改 await using + 显式异步 Flush——
         // 原同步 using/Dispose 在释放时同步 flush 阻塞线程（同步释放路径）。
-        await writer.FlushAsync().ConfigureAwait(false);
+        // v36 P3：收尾 FlushAsync 补传 ct——v35 FlushAsync 修复的姊妹漏网（同文件
+        // ExportCsvAsync :89/:92 与 ExportJsonLinesAsync :151 均已传 ct），原无参调用
+        // 使取消信号无法传导到收尾刷盘等待
+        await writer.FlushAsync(ct).ConfigureAwait(false);
         return 0; // COPY TO 不返回行数
     }
 

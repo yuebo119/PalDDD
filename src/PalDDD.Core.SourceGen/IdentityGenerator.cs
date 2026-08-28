@@ -100,6 +100,11 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         "PalDDD.IdentityGeneration",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
+    // v36 P2：Identity 侧在链检查通过后追加自身声明收紧（见 transform 内 if 块）——
+    // GeneratorAccessibility 的 ProtectedOrInternal 放行对 Enum/Message 姊妹成立（其生成物
+    // 不带访问修饰符，与用户声明合并无冲突），对 Identity 不成立：生成物硬编码
+    // public readonly partial record struct，用户 protected internal 声明与之合并报 CS0262
+    //（net11 探针双向实证）。消息沿用本 descriptor 现有形态（{1} = 自身修饰符文本）
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
@@ -176,9 +181,10 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 // nested 类型对生成物的 namespace 级 converter 不可见（裸名引用必 CS0122）。
                 // 编译期报 PALID006 不生成坏代码。
                 // v34 P2：检查升格为 ContainingType 全链（GeneratorAccessibility 共享 helper）。
-                // ⚠️ 已知残余（v34 A 片复核）：生成 partial 硬编码 public——链可见但自身为
-                // internal 的声明放行后与生成物合并报 CS0262；拦截阈值取 Public-only 可消除
-                // 但会误伤 internal 顶层合法场景，待 v35 裁决（生成物携带用户可访问性 or 收紧阈值）
+                // ⚠️ 已知残余（v34 A 片复核，v36 仍未消除）：生成 partial 硬编码 public——
+                // 链可见但自身为 internal 的声明放行后与生成物合并报 CS0262；拦截阈值取
+                // Public-only 可消除但会误伤 internal 顶层合法场景，待后续裁决（生成物携带
+                // 用户可访问性 or 收紧阈值）
                 // v35 P3（DA1）：捕获阻断层可访问性并经 BlockingAccessibilityText 携带——
                 // 链中间层阻断（public Outer → private Mid → public Foo）时消息 {1} 显示
                 // 实际阻断层（Mid）的修饰符，不再失实描述目标自身
@@ -193,6 +199,27 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                         IsNumeric: false,
                         DiagnosticId: "PALID006",
                         BlockingAccessibilityText: GeneratorAccessibility.AccessibilityToModifierText(blockingAccessibility),
+                        Location: context.TargetNode.GetLocation());
+                }
+
+                // v36 P2：链检查通过后追加自身声明收紧——自身声明只允许 public 或 internal。
+                // 依据（与 Enum/Message 姊妹的差异）：二者生成物（partial class / partial 声明）
+                // 不带访问修饰符、无 partial 合并冲突，ProtectedOrInternal 放行对其成立；
+                // Identity 生成物硬编码 public readonly partial record struct（见
+                // GenerateIdentityCode 模板），用户 protected internal 声明与之合并报 CS0262
+                //（net11 探针双向实证），故放行不成立。private/protected/private protected
+                // 已被上方链检查先报，本检查唯一新增拦截的是 ProtectedOrInternal
+                if (structSymbol.DeclaredAccessibility is not (Accessibility.Public or Accessibility.Internal))
+                {
+                    return new IdGenInfo(
+                        Namespace: null,
+                        TypeName: structSymbol.Name,
+                        ContainingDeclarations: [],
+                        ContainingNames: [],
+                        SourceType: sourceType.ToDisplayString(),
+                        IsNumeric: false,
+                        DiagnosticId: "PALID006",
+                        BlockingAccessibilityText: GeneratorAccessibility.AccessibilityToModifierText(structSymbol.DeclaredAccessibility),
                         Location: context.TargetNode.GetLocation());
                 }
 

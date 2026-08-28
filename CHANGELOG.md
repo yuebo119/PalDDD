@@ -10,6 +10,17 @@
 
 ## [Unreleased]
 
+### AI 质量系统评审循环 v24-v36（2026-08-23 起十三轮全仓地毯 + 修复，commit fc6447a..v36）
+
+> 十三轮评审-修复循环（v24 起，每轮：六片独立子代理全量逐行 + 主线程亲验 + 机械门禁）。
+> 完整轮次明细见 `.ai/review/metrics.md`；本段为发布面摘要。
+
+- **P1 级（3 项）**：SagaStateDbContext SQLite 翻译缺口（ITM-261 姊妹，v23）；Kafka 非关停 OCE 假修勘正——v34 对齐仅改日志文本，catch 锚定 while 外层物理上无法继续循环（v36 真修：移入循环体 per-message continue）；审计系统能力实证轮注入缺陷全抓（R46）
+- **P2 级（14 项）**：EF 幽灵租约族（瞬时异常 Detach 收口，Idempotency 样板推广五 DbContext）；ValidationBehavior default 验证器静默放行；PDDD003 abstract / PDDD004 struct 误报；Saga 终态吞决策（可见失败 + 失效集 + TOCTOU double-check 三层递进）；RabbitMQ ct 参与消费生命周期（对齐 Kafka linked-CTS 契约）；Rabbit OCE filter 互斥缝；IdentityGenerator FormatException 三腿 + 可访问性链检查；拦截器注入自清理（EF SavingChanges 派发点在 try 前，源码级实证）；ChildSagaInputEvent 通道封死（public 化）；Kafka/Rabbit 非关停 OCE 语义对齐
+- **P3 级（约 110 项）**：守卫/截断/查重/ct 传导姊妹族全栈收口（FailureReason.Truncate 共享收敛 34 点）；可观测性（20 Counter 零 tag 设计声明、高基数 Activity tag 三实现清理、pending-confirmation logger 通道）；生成器族（PALMSG006/PALENUM006/007/008、PALID006、displayType 遮蔽、可访问性链检查）；多主机族（PG/MySQL 查重/归一化/异常统一）；文档三方一致勘正约 40 处（含 "7 Store" 计数、性能契约、日志跨栈口径）
+- **测试**：净增约 60 个回归测试（全部探针红→绿或修复锁定），测试总数 1053 → 约 1180
+- **已知架构裁决项（v3.0 窗口，留档 `.ai/review/action-items-p3-backlog.md`）**：HITL 恢复状态落库归属（Saga-store 分离，探针实证）；ChildSagaInputEvent 泛型嵌套顶层化；ReleaseForRetry Status 守卫三栈对齐的 InMemory 侧；Dynamic 路由 Timeout 语义
+
 ### 精炼（2026-08-26 第三轮：全源码价值判定 + 组织重组）
 
 - **零消费公共 API 废弃预告**：`AggregateNameAttribute`/`DomainCapabilityAttribute`（SourceGen/Analyzer 均不读取，原 doc"供 SourceGen 使用"失实）与 `SqlServerOutboxDbContext`（零测试覆盖的未验证方言基类）标 `[Obsolete(error: false)]` 指向 v3.0 移除；samples/bench 的装饰性标注同步移除。废弃 API 保留反射式契约测试

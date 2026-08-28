@@ -52,6 +52,11 @@ internal static class GeneratorAccessibility
         Accessibility.Protected => "protected",
         Accessibility.ProtectedAndInternal => "private protected",
         Accessibility.ProtectedOrInternal => "protected internal",
+        // v36 P3 勘误（N2）：计划中的 Accessibility.File => "file" 映射经编译证伪未加入——
+        // 本项目锁定的 Microsoft.CodeAnalysis.CSharp 5.9.0（Directory.Packages.props）的
+        // Accessibility 枚举无 File 成员（编译报 CS0117；本机 nuget 缓存 5.10 预览版同样无），
+        // file 类型在该版本不产生 File 可访问性值，"fallback ToString 输出 "File"" 的场景
+        // 不存在。未来 CodeAnalysis 引入 File 成员时再补 "file" 映射
         _ => accessibility.ToString(),
     };
 }

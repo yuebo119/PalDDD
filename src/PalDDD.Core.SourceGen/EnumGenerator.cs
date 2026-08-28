@@ -111,7 +111,10 @@ public sealed class EnumGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor StructOrInterfaceNotSupportedError = new(
         "PALENUM008",
         "GenerateEnum target must be a class deriving SmartEnum",
-        "Type '{0}' is marked with [GenerateEnum] but is a {1}. Structs and interfaces cannot inherit the SmartEnum<TSelf, TValue> base class; change the declaration to a partial class deriving SmartEnum<TSelf, TValue>.",
+        // v36 P3：消息去冠词语病——原文案 "but is a {1}" 在 interface 腿输出 "is a interface"
+        //（冠词失配）；改为直陈两种声明种类，不再按 {1} 插值（{1} 仍由分派侧统一两参传入，
+        // string.Format 忽略多余参数，消息不再引用）
+        "Type '{0}' is marked with [GenerateEnum] but is a struct or interface declaration. Structs and interfaces cannot inherit the SmartEnum<TSelf, TValue> base class; change the declaration to a partial class deriving SmartEnum<TSelf, TValue>.",
         "PalDDD.EnumGeneration",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);

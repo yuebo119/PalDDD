@@ -74,6 +74,12 @@ public static class DapperServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // v36 P3：连接串 fail-fast（对齐 DapperConfiguration.Create:42 同款守卫）——本方法是
+        // v33-v35 注册时 fail-fast 收口轴唯一漏网的直调入口：connectionString 原先只在下方
+        // Scoped 工厂闭包内传给 Create，空白串延迟到首次解析/建连才抛 provider 专属异常；
+        // 注册时统一 ArgumentException，失败点前移到组合根
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+
         // ⚡ 启用 snake_case → PascalCase 自动映射
         // 数据库列名是 snake_case（如 created_at），C# 属性是 PascalCase（如 CreatedAt）
         // MatchNamesWithUnderscores 是纯字符串转换（Split('_') + 拼接），零反射，AOT 安全

@@ -32,6 +32,12 @@ public static class PostgreSqlPalOrmExtensions
     /// </summary>
     /// <param name="services">DI 容器。</param>
     /// <param name="connectionString">PostgreSQL 连接串（如 "Host=localhost;Username=user;Password=pass;Database=mydb"）。</param>
+    /// <param name="options">
+    /// 可选 DbOptions。v36 P3 二义性声明：非 null 时 <paramref name="connectionString"/>
+    /// 仅用于入口守卫校验（非空白检查），连接串以 options 为准——两参同传且不一致时
+    /// 静默采用 options（<c>options ?? DbOptions.Development(connectionString)</c>），无告警；
+    /// options 为 null 时以 connectionString 构造 Development 默认 DbOptions。
+    /// </param>
     /// <param name="clock">可选时间提供者。</param>
     public static IServiceCollection AddPalOrmPostgreSql(
         this IServiceCollection services,
