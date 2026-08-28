@@ -160,6 +160,14 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         ArgumentNullException.ThrowIfNull(checkpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
 
+        // v35 P3：Completed 终态防御——Completed 不可翻转为 Failed（终态语义）。镜像
+        // PalORM 版 PalOrmProjectionCheckpointStore.MarkFailedAsync 的 SQL
+        // `AND status <> Completed` 守卫与 InMemoryInboxStore.MarkProcessedAsync 的
+        // 所有权/状态守卫先例；EFCore 版此前缺内存侧防御，同 scope 复用或竞态场景下
+        // 直调本方法可把 Completed 检查点改写为 Failed 并落库（重建回放被误触发）。
+        if (checkpoint.Status == ProjectionCheckpointStatus.Completed)
+            return;
+
         AttachIfDetached(checkpoint);
         // v26 P3 修复：存储层截断兜底（FailureReason.Normalize）——Error 列 HasMaxLength(2048)，
         // 超长原因使 MarkFailed 持久化自身抛 DbUpdateException 掩盖原始投影失败（十七轮

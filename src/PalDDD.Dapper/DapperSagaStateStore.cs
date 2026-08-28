@@ -50,11 +50,17 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
     /// </summary>
     private readonly DapperDbType _dbType;
 
-    /// <param name="transaction">可选共享事务（用于 UnitOfWork 模式）</param>
-    /// <param name="jsonTypeInfo">可选 STJ source-generated type info；传入后持久化完整 <typeparamref name="TState"/> 快照。</param>
-    /// <param name="dbType">数据库方言——决定时间参数绑定格式（默认 Sqlite，见 <see cref="ToTimeParam"/>）。</param>
+    /// <summary>时钟源——构造可选注入，默认 <see cref="TimeProvider.System"/>（与 PalOrmSagaStateStore 对齐）。</summary>
     private readonly TimeProvider _timeProvider;
 
+    /// <summary>
+    /// 构造 Saga 状态存储。
+    /// </summary>
+    /// <param name="connection">数据库连接（本 Store 不持有其生命周期）。</param>
+    /// <param name="transaction">可选共享事务（用于 UnitOfWork 模式）。</param>
+    /// <param name="jsonTypeInfo">可选 STJ source-generated type info；传入后持久化完整 <typeparamref name="TState"/> 快照。</param>
+    /// <param name="timeProvider">可选时钟注入，默认 <see cref="TimeProvider.System"/>（v35 P3：原三个 <c>&lt;param&gt;</c> 标签错位挂在本字段上，已迁移至本构造函数并补齐缺项）。</param>
+    /// <param name="dbType">数据库方言——决定时间参数绑定格式（默认 Sqlite，见 <see cref="ToTimeParam"/>）。</param>
     public DapperSagaStateStore(
         DbConnection connection,
         DbTransaction? transaction = null,

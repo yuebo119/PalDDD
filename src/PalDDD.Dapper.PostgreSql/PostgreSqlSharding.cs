@@ -178,6 +178,12 @@ public sealed class ShardedDataSourceManager : IAsyncDisposable
         if (connectionStrings.Length == 0)
             throw new ArgumentException("connectionStrings 不得为空数组——至少需要一个分片连接串。", nameof(connectionStrings));
 
+        // v35 P3：空白连接串项 fail-fast（v34 五处姊妹收口的延续，同款口径）——空白项原样
+        // 放行会延迟到 NpgsqlDataSourceBuilder.Build()/建连时才抛异常；逐项校验并携带索引，
+        // 放在 ITM-085 的 try 之外（守卫参数错误不参与已构建数据源的清理路径）
+        for (int i = 0; i < connectionStrings.Length; i++)
+            ArgumentException.ThrowIfNullOrWhiteSpace(connectionStrings[i], $"connectionStrings[{i}]");
+
         _shards = new NpgsqlDataSource[connectionStrings.Length];
         try
         {

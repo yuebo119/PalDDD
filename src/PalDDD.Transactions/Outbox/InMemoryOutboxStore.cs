@@ -265,6 +265,12 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
     private List<OutboxMessage> QueryPending(int batchSize, int maxRetryCount)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v22 A 批：对齐 InMemorySagaStateStore :27/:50
+        // v35 P3（EA3）行为声明：maxRetryCount 经 Options 每 tick 热读取——运行时调小后，
+        // RetryCount >= 新值的 Pending 消息被本谓词永久过滤（既不派发也不转 Dead：Dead
+        // 仅在 OutboxBatchProcessor 发布失败路径产生），消息滞留无出口；RequeueDeadAsync
+        // 只处理 Dead 状态同样不可达。运维止血后需手工清理或调回 MaxRetryCount（声明见
+        // OutboxOptions.MaxRetryCount）。本行为与 DB 栈（Dapper/EF 的同款拾取谓词）对齐，
+        // 接口签名与行为不变。
         var now = _timeProvider.GetUtcNow();
         return _messages
             .Where(m => m.Status == OutboxStatus.Pending

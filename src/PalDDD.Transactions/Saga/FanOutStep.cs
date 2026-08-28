@@ -121,6 +121,12 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
             var item = items[i];
             tasks[i] = Task.Run(async () =>
             {
+                // v35 P3（EA1）勘正：Release 与 Wait 的配对依赖本行位于下方 try 块<b>之外</b>这一
+                // 结构事实——WaitAsync(ct) 抛 OCE（外部取消）时异常直接传播，不进入 try/finally，
+                // 不会执行 Release（未 acquire 即未 Release，无幽灵计数）。若未来把本行挪入
+                // try 块，finally 的无条件 Release 将在 Wait 失败路径上产生幽灵 +1（信号量计数
+                // 超 MaxConcurrency，后续 Release 抛 SemaphoreFullException）——届时必须引入
+                // acquired 标志配对。当前结构配对正确，仅以注释固化前提，不做行为改动。
                 await semaphore.WaitAsync(ct).ConfigureAwait(false);
                 using var cts = PerItemTimeout.HasValue
                     ? CancellationTokenSource.CreateLinkedTokenSource(ct)

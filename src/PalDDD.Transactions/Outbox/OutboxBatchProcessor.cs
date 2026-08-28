@@ -127,6 +127,11 @@ public sealed class OutboxBatchProcessor
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    // v35 P3（EA2）：进入失败路径即捕获 RetryCount 快照——下方 ReleaseForRetry
+                    // 在 InMemory 栈就地递增 msg.RetryCount（EF 栈则不动内存对象），末尾日志若
+                    // 再读 msg.RetryCount + 1 会跨栈不一致（InMemory 偏大 1）。快照在所有
+                    // Mark*/Release 之前取值，日志与 delay 计算（本快照 +1）口径统一
+                    var retryAtFailure = msg.RetryCount;
                     // RetryCount 由 Store.ReleaseForRetry 在内部递增并与状态一同持久化，
                     // 确保计数与状态原子一致（P0 修复：消除增量-持久化窗口）。
                     // 退避延迟由 IRetryBackoffPolicy 计算（默认指数 2^n，上限 64s，可选抖动）。
@@ -156,7 +161,9 @@ public sealed class OutboxBatchProcessor
                         _store.ReleaseForRetry(msg, failureReason, nextAttemptAt);
                         checked { retried++; }
                     }
-                    _logger.Warning($"Outbox: message {msg.Id} processing failed at retry {msg.RetryCount + 1}: {ex.Message}");
+                    // v35 P3（EA2）：日志用进入失败路径时的快照 +1（本次为第 N 次失败）——
+                    // 原读 msg.RetryCount + 1 在 InMemory 栈 ReleaseForRetry 就地递增后偏大 1
+                    _logger.Warning($"Outbox: message {msg.Id} processing failed at retry {retryAtFailure + 1}: {ex.Message}");
                     await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false);
                 }
             }

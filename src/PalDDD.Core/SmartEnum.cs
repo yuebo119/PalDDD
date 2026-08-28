@@ -32,6 +32,11 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
 
     protected SmartEnum(TValue value, string? name = null)
     {
+        // v35 P3（ITM-284 构造守卫批次姊妹漏网）：TValue : notnull 约束仅约束到编译期
+        // 可空性标注，引用类型 TValue（如 string）仍可在运行时传入 null——Value=null
+        // 使 GetHashCode()（Equality 路径）与 FromValue/All（Dictionary 键路径）NRE，
+        // 且此时字典键含 null，失败点远离构造处，晦涩难诊。构造即 fail-fast。
+        ArgumentNullException.ThrowIfNull(value);
         Value = value;
         // ITM-101 修复：TValue.ToString() 返回 null 时回退 ""——自定义 TValue 的
         // ToString() 可返回 null，原 `name ?? value.ToString()!` 使 Name 为 null，

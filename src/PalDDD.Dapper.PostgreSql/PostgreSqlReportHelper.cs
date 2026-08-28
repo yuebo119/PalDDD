@@ -82,11 +82,14 @@ public static class PostgreSqlReportHelper
                 values.Select(v => v is null ? "" : EscapeCsvSpan(FormatCsvValue(v).AsSpan())));
             await writer.WriteLineAsync(line).ConfigureAwait(false);
 
+            // v35 P3：FlushAsync 补传 ct（镜像同文件 ExportJsonLinesAsync 收尾 FlushAsync(ct)
+            // 形态）——原无参调用使取消信号无法传导到刷盘等待，长导出中段/收尾取消要等
+            // 当前 Flush 完成才响应
             if (++rowCount % 100_000 == 0)
-                await writer.FlushAsync().ConfigureAwait(false);
+                await writer.FlushAsync(ct).ConfigureAwait(false);
         }
 
-        await writer.FlushAsync().ConfigureAwait(false);
+        await writer.FlushAsync(ct).ConfigureAwait(false);
         return rowCount;
     }
 

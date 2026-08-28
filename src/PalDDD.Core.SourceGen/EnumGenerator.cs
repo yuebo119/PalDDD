@@ -89,10 +89,29 @@ public sealed class EnumGenerator : IIncrementalGenerator
     // partial class + [ModuleInitializer] 静态构造）以裸名引用该类型——可访问性低于
     // internal 的嵌套类型对生成物不可见（CS0122 落在 auto-generated 文件，排障困难）。
     // 编译期报 PALENUM007 不生成坏代码（顶层类型恒 public/internal 不受影响）
+    // v35 P3（DA1）：v34 链检查升格后原消息 "is declared '{1}'" 仍描述目标自身——链中间层
+    // 阻断场景（public Outer → private Mid → internal Inner）目标自身 internal，消息失实且
+    // "raise the declaration" 指引无效（改目标自身救不了 Mid）。{1} 语义勘正为实际阻断层
+    // 修饰符文本（ValueType 携带机制不变），措辞改 "declaration or its containing type chain
+    // blocks visibility" 形态 + 指引补 "and its containing types"
     private static readonly DiagnosticDescriptor NonAccessibleDeclarationError = new(
         "PALENUM007",
         "GenerateEnum does not support inaccessible declarations",
-        "Type '{0}' is marked with [GenerateEnum] but is declared '{1}'. Generated registration code cannot reference private or protected nested types; raise the declaration to internal or public.",
+        "Type '{0}' is marked with [GenerateEnum] but its declaration or its containing type chain blocks visibility (blocking declaration is '{1}'). Generated registration code cannot reference declarations below internal; raise the declaration (and its containing types) to internal or public.",
+        "PalDDD.EnumGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    // v35 P3（DA4）：普通 struct / interface 挂 [GenerateEnum]——struct 的 BaseType 恒为
+    // ValueType（interface 恒 null），无法继承 SmartEnum 基类，原落基类检查报 PALENUM002
+    // "does not directly inherit SmartEnum"（误导用户"改基类"——struct/interface 根本没有
+    // 可改的基类；且 GenerateEnumAttribute 的 AttributeTargets 限 Class，用户挂载点本就
+    // 违例 CS0592）。镜像 record struct 的 PALENUM003 前置处理，报 PALENUM008 引导改用
+    // partial class
+    private static readonly DiagnosticDescriptor StructOrInterfaceNotSupportedError = new(
+        "PALENUM008",
+        "GenerateEnum target must be a class deriving SmartEnum",
+        "Type '{0}' is marked with [GenerateEnum] but is a {1}. Structs and interfaces cannot inherit the SmartEnum<TSelf, TValue> base class; change the declaration to a partial class deriving SmartEnum<TSelf, TValue>.",
         "PalDDD.EnumGeneration",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -145,6 +164,26 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         Fields: [],
                         HasFields: false,
                         DiagnosticId: "PALENUM003",
+                        Location: context.TargetNode.GetLocation());
+                }
+
+                // v35 P3（DA4）：普通 struct / interface 分支——struct 的 BaseType 恒为
+                // ValueType（interface 恒 null），无法继承 SmartEnum 基类，原落基类检查报
+                // PALENUM002（误导）；前置报 PALENUM008 引导改用 partial class（镜像上方
+                // record struct 的 PALENUM003 前置处理；record struct 已被上方分支捕获，
+                // 不受本分支影响）。{1} 经 ValueType 携带声明种类（struct/interface），
+                // 分派侧两参格式统一
+                if (classSymbol.TypeKind is TypeKind.Struct or TypeKind.Interface)
+                {
+                    return new EnumGenInfo(
+                        Namespace: GetNamespaceName(classSymbol),
+                        TypeName: classSymbol.Name,
+                        ContainingDeclarations: [],
+                        ContainingNames: [],
+                        ValueType: classSymbol.TypeKind == TypeKind.Struct ? "struct" : "interface",
+                        Fields: [],
+                        HasFields: false,
+                        DiagnosticId: "PALENUM008",
                         Location: context.TargetNode.GetLocation());
                 }
 
@@ -202,7 +241,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
                         ContainingNames: [],
-                        ValueType: AccessibilityToModifierText(blockingAccessibility),
+                        ValueType: GeneratorAccessibility.AccessibilityToModifierText(blockingAccessibility),
                         Fields: [],
                         HasFields: false,
                         DiagnosticId: "PALENUM007",
@@ -340,6 +379,8 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         "PALENUM004" => GenericDeclarationNotSupported,
                         "PALENUM006" => NonPartialDeclarationError,
                         "PALENUM007" => NonAccessibleDeclarationError,
+                        // v35 P3（DA4）：struct/interface 声明引导诊断
+                        "PALENUM008" => StructOrInterfaceNotSupportedError,
                         _ => NotDirectInheritanceError,
                     };
                     spc.ReportDiagnostic(Diagnostic.Create(
@@ -418,16 +459,8 @@ public sealed class EnumGenerator : IIncrementalGenerator
         return false;
     }
 
-    // v33 P3：Accessibility 枚举 → C# 修饰符文本（PALENUM007 消息 '{1}' 显示用——
-    // 枚举 ToString 的 "ProtectedAndInternal" 非合法修饰符写法，映射为源码等价文本）
-    private static string AccessibilityToModifierText(Accessibility accessibility) => accessibility switch
-    {
-        Accessibility.Private => "private",
-        Accessibility.Protected => "protected",
-        Accessibility.ProtectedAndInternal => "private protected",
-        Accessibility.ProtectedOrInternal => "protected internal",
-        _ => accessibility.ToString(),
-    };
+    // v35 P3（DA1）：AccessibilityToModifierText 私有副本已提取至 GeneratorAccessibility
+    // 共享（PALENUM007/PALID006/PALMSG007 三生成器统一消费），本文件改调共享实现。
 
     /// <summary>生成硬编码字段引用的静态构造函数——零反射，100% AOT 兼容</summary>
     private static string GenerateEnumCode(EnumGenInfo info)

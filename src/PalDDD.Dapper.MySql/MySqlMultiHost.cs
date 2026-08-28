@@ -48,6 +48,11 @@ public static class MySqlMultiHost
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // v35 P3：空白连接串 fail-fast（v34 LoadBalance/LeastConnections 两入口收口的姊妹
+        // 漏网，同款口径）——空白串原样放行会延迟到 Build()/建连时才抛异常
+        ArgumentException.ThrowIfNullOrWhiteSpace(primaryConnectionString);
+        ArgumentException.ThrowIfNullOrWhiteSpace(standbyConnectionString);
+
         var primaryBuilder = new MySqlConnectionStringBuilder(primaryConnectionString);
         var standbyBuilder = new MySqlConnectionStringBuilder(standbyConnectionString);
 

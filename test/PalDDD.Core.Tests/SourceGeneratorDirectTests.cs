@@ -93,7 +93,9 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(result.Diagnostics).IsEmpty();
         var source = GetGeneratedSource(result, "TestOrderId.g.cs");
         await Assert.That(source).Contains("public static TestOrderId New()");
-        await Assert.That(source).Contains("public static TestOrderId From(Guid value)");
+        // v35 P3（DA2）：Guid 裸名 → global::System.Guid——用户命名空间含同名 Guid 类型时
+        // 裸名被遮蔽，模板特化限定名（断言同步生成器输出变更）
+        await Assert.That(source).Contains("public static TestOrderId From(global::System.Guid value)");
         await Assert.That(source).Contains("ISpanParsable<TestOrderId>");
     }
 
@@ -549,6 +551,91 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(result.Diagnostics.Any(d => d.Id == "PALID006")).IsTrue();
         var generatedCount = result.Compilation.SyntaxTrees.Count(t => t.FilePath.EndsWith(".g.cs", StringComparison.Ordinal));
         await Assert.That(generatedCount).IsEqualTo(0);
+    }
+
+    // ── v35 P3（DA4）：普通 struct / interface 声明引导诊断（PALENUM008）──
+
+    [Test]
+    public async Task EnumGenerator_PlainStructDeclaration_ReportsPalenum008()
+    {
+        // v35 P3：普通 partial struct 挂 [GenerateEnum]——struct 的 BaseType 恒为 ValueType，
+        // 无法继承 SmartEnum 基类，原落基类检查报 PALENUM002 "does not directly inherit
+        // SmartEnum"（误导用户"改基类"——struct 根本没有可改的基类）；现报 PALENUM008
+        // 引导改用 partial class。
+        // ⚠️ 探针声明（v35 P3 实测）：GenerateEnumAttribute 的 AttributeTargets 限 Class，
+        // 本桩挂载即产生 CS0592（compilation 诊断，不影响 generator driver 运行）——
+        // ForAttributeWithMetadataName 的 transform 在 CS0592 下仍触发，PALENUM008 可达
+        var result = RunEnumGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            [GenerateEnum]
+            public partial struct StructStatus
+            {
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALENUM008")).IsTrue();
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALENUM002")).IsFalse();
+    }
+
+    [Test]
+    public async Task EnumGenerator_InterfaceDeclaration_ReportsPalenum008()
+    {
+        // v35 P3（DA4）姊妹：interface 的 BaseType 恒为 null，同样无法继承 SmartEnum——
+        // 同报 PALENUM008（{1} 显示 "interface"）
+        var result = RunEnumGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            [GenerateEnum]
+            public partial interface IStatusContract
+            {
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALENUM008")).IsTrue();
+        var diagnostic = result.Diagnostics.Single(d => d.Id == "PALENUM008");
+        await Assert.That(diagnostic.GetMessage()).Contains("interface");
+    }
+
+    // ── v35 P3（DA2）：用户命名空间同名类型遮蔽生成物裸名（Ulid/Guid）──
+
+    [Test]
+    public async Task IdentityGenerator_UlidShadowedByUserType_GeneratesAliasedReferences()
+    {
+        // v35 P3：用户命名空间含同名 class Ulid 时，生成物裸名 Ulid（IPalIdentity<Ulid>/
+        // public Ulid Value 等）解析到用户类型而非 ByteAether Ulid——生成物编译失败。
+        // 修复后模板对 Ulid 输出 PalUlid 别名（ulidUsing 的 using+using 双发已备，v24 机制）。
+        // 桩内声明 class Ulid 复现遮蔽环境；typeof(PalUlid) 保证白名单符号判定命中真实
+        // ByteAether Ulid（typeof(Ulid) 在遮蔽环境下会解析到用户类，报 PALID001）
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+            using PalUlid = ByteAether.Ulid.Ulid;
+
+            namespace TestDomain;
+
+            public class Ulid { }
+
+            [GenerateId(typeof(PalUlid))]
+            public readonly partial record struct ShadowedUlidId;
+            """);
+
+        await Assert.That(result.Diagnostics).IsEmpty();
+        var source = GetGeneratedSource(result, "ShadowedUlidId.g.cs");
+        await Assert.That(source).Contains("IPalIdentity<PalUlid>");
+        await Assert.That(source).Contains("public PalUlid Value { get; init; }");
+        // 编译级验证：生成物与用户类型合并后零 Error——裸名遮蔽若回退，生成物中对
+        // TestDomain.Ulid 的成员引用（New/TryParse 等）必在此复现 CS 错误
+        var errors = result.Compilation.GetDiagnostics()
+            .Where(d => d.Severity == DiagnosticSeverity.Error)
+            .ToList();
+        await Assert.That(errors).IsEmpty();
     }
 
     // ── 辅助方法（参照 MessageRegistryGeneratorTests 的模式）──

@@ -80,19 +80,10 @@ public sealed partial class StrategicDddAnalyzer
     // 在运行时反射对派生类可见，编译符号模型不可见）——沿 BaseType 链查找存在性，
     // 与运行时反射语义对齐。仅用于 shape 检查的存在性判断；具体参数提取（如
     // TryGetStringConstructorArgument）仍走直接声明路径，避免派生类重复报 PDDD002。
+    // v35 P3（DA5）：原实现与 TryGetAttributeAlongBaseChain 逐字重复——改为其非空判断
+    //（单一实现），链遍历与"最近声明胜出"语义由 TryGet 单点维护
     private static bool HasAttributeAlongBaseChain(INamedTypeSymbol type, string metadataName)
-    {
-        for (var current = type; current is not null; current = current.BaseType)
-        {
-            foreach (var attribute in current.GetAttributes())
-            {
-                if (attribute.AttributeClass is not null && MetadataNameEquals(attribute.AttributeClass, metadataName))
-                    return true;
-            }
-        }
-
-        return false;
-    }
+        => TryGetAttributeAlongBaseChain(type, metadataName) is not null;
 
     // P2 修复（二十一轮）：沿 BaseType 链取最近声明的 attribute 实例——派生类未直接
     // 声明时继承基类值（AttributeUsage.Inherited=true），多级链取离派生类最近的声明
