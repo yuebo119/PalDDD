@@ -236,11 +236,15 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                     await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (linkedCts.IsCancellationRequested)
             {
                 // P2 定案（匿名队列 requeue 语义）：本 Broker 的队列为 exclusive+autoDelete——
                 // 连接关闭即删除，"重连后重新投递"不可能；OCE 多发生在关停路径，队列将随连接消亡。
                 // requeue:false 显式弃置并留日志（true 会在存活连接上形成自我热循环）。
+                // v31 P3 修复：补订阅级取消谓词（对齐 KafkaBroker when(cts.Token.IsCancellationRequested)
+                // 的关停/非关停区分）——应用 handler 内部抛出的 OCE（应用自身超时/取消）不再被
+                // 误标为关停 Warning；CTS.IsCancellationRequested 属性在 Dispose 后读取安全（不抛），
+                // 句柄释放（linkedCts.Dispose）后的飞行中 OCE 同样落回通用 catch 记 Error
                 _logger.Warning($"Handling {typeof(TMessage).Name} message was canceled during shutdown, discarding: {queueName}");
                 await TryNackSafeAsync(ea.DeliveryTag, requeue: false, queueName).ConfigureAwait(false);
             }
@@ -277,6 +281,17 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             if (consumerTag is not null)
                 await CancelConsumeSafeAsync(consumerTag, queueName).ConfigureAwait(false);
             linkedCts.Dispose();
+            // v31 P3 修复：尽力删除已声明的匿名队列——autoDelete 仅在"有过消费者后全部
+            // 断开"才删除，从未有消费者的 exclusive 队列随连接关闭才消亡；连接长驻时每次
+            // 初始化失败会累积一个空壳队列。失败吞掉（channel 已关等，对齐安全包装模式）
+            try
+            {
+                await _channel.QueueDeleteAsync(queueName).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.Warning($"Queue cleanup after failed subscribe was skipped (channel closed?): {queueName}: {ex.Message}");
+            }
             throw;
         }
 

@@ -19,6 +19,9 @@ public sealed class ProjectionProcessor<TMessage>
     // MarkFailedAsync 的持久化本身失败，掩盖原始投影失败。
 
     private readonly IProjectionHandler<TMessage> _handler;
+
+    /// <summary>投影显示名称 — handler 契约成员的透传（Rebuilder 名称一致性守卫的比对源）。</summary>
+    public string ProjectionName => _handler.ProjectionName;
     private readonly IProjectionCheckpointStore _checkpointStore;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _processingTimeout;

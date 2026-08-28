@@ -25,7 +25,7 @@ namespace PalDDD.CQRS;
 //      与 LoggerMessage.Define 所需的 ILogger 入参不兼容；且插值仅在 IsEnabled(Debug) 门控后执行，
 //      生产路径零分配。改为 LoggerMessage 会泄漏门面抽象、增加复杂度，故保持现状（YAGNI）。
 //
-// 3. 可扩展性：用户可以通过实现 IPipelineBehavior<TRequest,TResponse>
+// 可扩展性：用户可以通过实现 IPipelineBehavior<TRequest,TResponse>
 //    添加自定义行为（如事务、缓存、限流），无需修改框架代码。
 //    这两个内置行为是"开箱即用"的合理默认，不是强制的。
 

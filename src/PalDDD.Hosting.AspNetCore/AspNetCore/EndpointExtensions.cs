@@ -39,13 +39,15 @@ public static class EndpointExtensions
                     commandJsonTypeInfo,
                     context.RequestAborted).ConfigureAwait(false);
             }
-            catch (System.Text.Json.JsonException ex)
+            catch (System.Text.Json.JsonException)
             {
                 // P3 修复：畸形 JSON 是用户输入错误 → 400 而非未捕获 500
                 // v8 对齐：补 ProblemDetails body（原裸 400 与验证 400 形态分叉，客户端拿不到错误明细）
+                // v31 P3：泛化文案——ex.Message 含 .NET 内部类型名/JSON 路径与字节位置，
+                // 向任意 HTTP 客户端暴露实现细节（对齐 P3-SRC-107 HandlerNotFound 收窄口径）
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await context.Response.WriteAsJsonAsync(
-                    ValidationProblemResponseFactory.CreateInvalidBody(ex.Message),
+                    ValidationProblemResponseFactory.CreateInvalidBody("Request body is not valid JSON."),
                     PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
                     contentType: null).ConfigureAwait(false);
                 return;
@@ -116,13 +118,15 @@ public static class EndpointExtensions
                     commandJsonTypeInfo,
                     context.RequestAborted).ConfigureAwait(false);
             }
-            catch (System.Text.Json.JsonException ex)
+            catch (System.Text.Json.JsonException)
             {
                 // P3 修复：畸形 JSON 是用户输入错误 → 400 而非未捕获 500
                 // v8 对齐：补 ProblemDetails body（原裸 400 与验证 400 形态分叉，客户端拿不到错误明细）
+                // v31 P3：泛化文案——ex.Message 含 .NET 内部类型名/JSON 路径与字节位置，
+                // 向任意 HTTP 客户端暴露实现细节（对齐 P3-SRC-107 HandlerNotFound 收窄口径）
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await context.Response.WriteAsJsonAsync(
-                    ValidationProblemResponseFactory.CreateInvalidBody(ex.Message),
+                    ValidationProblemResponseFactory.CreateInvalidBody("Request body is not valid JSON."),
                     PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
                     contentType: null).ConfigureAwait(false);
                 return;
