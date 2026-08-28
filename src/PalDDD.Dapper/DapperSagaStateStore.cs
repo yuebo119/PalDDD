@@ -153,7 +153,11 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         // v29 P3：改经 FailureReason.Truncate 共享收口——[..2040] 切片可能切半 UTF-16
         // 代理对（超长含 emoji 的 Error，镜像 Normalize 的 v8 代理对防御），末位高代理
         // 回退一位防孤立高代理入库（S1 五处截断点 + PalORM/EFCore Saga 姊妹同款）。
-        state.Error = FailureReason.Truncate(state.Error, 2040);
+        // v38 P3：截断值先算局部变量、保存结果确认后才赋回 state.Error——原实现在保存
+        // 结果未知前就变异调用方对象（UPDATE 版本冲突 rows=0 时 DB 未变而调用方 Error
+        // 已被截断），对齐姊妹 DapperProjectionCheckpointStore.MarkCompletedAsync/
+        // MarkFailedAsync 的"rows>0 才变异"形态；UPDATE/INSERT 两处 err 赋值点共用截断值。
+        var truncatedError = FailureReason.Truncate(state.Error, 2040);
 
         var existing = await GetByIdAsync(state.SagaId, ct).ConfigureAwait(false);
         var sagaData = SerializeState(state);
@@ -169,7 +173,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
                         cs = state.CurrentState,
                         st = (int)state.Status,
                         ca = state.CompletedAt.HasValue ? ToTimeParam(state.CompletedAt.Value) : null,
-                        err = state.Error,
+                        err = truncatedError,
                         ea = state.ErrorAt.HasValue ? ToTimeParam(state.ErrorAt.Value) : null,
                         data = sagaData,
                         leasedBy = state.LeasedBy,
@@ -180,7 +184,11 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
                     Tx,
                     cancellationToken: ct)).ConfigureAwait(false);
 
-            if (rows > 0) state.Version++;
+            if (rows > 0)
+            {
+                state.Version++;
+                state.Error = truncatedError; // v38 P3：rows>0（DB 已更新）才回写调用方对象
+            }
             return rows;
         }
 
@@ -198,7 +206,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
                         st = (int)state.Status,
                         ca = ToTimeParam(state.CreatedAt),
                         completedAt = state.CompletedAt.HasValue ? ToTimeParam(state.CompletedAt.Value) : null,
-                        err = state.Error,
+                        err = truncatedError,
                         ea = state.ErrorAt.HasValue ? ToTimeParam(state.ErrorAt.Value) : null,
                         data = sagaData,
                         leasedBy = state.LeasedBy,
@@ -214,6 +222,8 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
             throw new InvalidOperationException(
                 $"Saga {state.SagaId} 被并发实例同时创建（主键冲突）——请重新加载后以 UPDATE 保存。", ex);
         }
+        if (inserted > 0)
+            state.Error = truncatedError; // v38 P3：INSERT 已落库才回写调用方对象（失败路径经异常上抛不达此处）
         return inserted;
     }
 

@@ -273,6 +273,13 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     /// 使用 <c>ExecuteUpdateAsync</c>（<c>RelationalQueryableExtensions</c> 扩展）
     /// 直接生成 UPDATE SQL，绕过 ChangeTracker，AOT 友好且无追踪开销。<br/>
     /// RetryCount 保留失败历史不重置；仅作用于 Status == Dead 的行。
+    /// <para>
+    /// ⚠️ <b>Provider 约束（v38 P3 声明，对齐 MarkProcessed/MarkDead/ReleaseForRetry
+    /// 的"ExecuteUpdate 需关系型 provider"声明形态）</b>：<c>ExecuteUpdateAsync</c> 需要
+    /// 关系型 provider（SQLite/PG/MySQL/SqlServer 等）；EF InMemory/Cosmos 不支持，本方法
+    /// 会抛 <see cref="InvalidOperationException"/>——非关系型测试场景请用
+    /// Dapper/PalORM/InMemory 适配器。
+    /// </para>
     /// </remarks>
     public async ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)
     {

@@ -49,15 +49,16 @@ internal sealed class LZ4Compressor : ICompressor
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
         // ITM-219 修复：OOM → 受控 InvalidDataException——NativeCompressions 内部全量分配，
         // 恶意载荷在输出检查生效前可能触发 OOM。catch 转为可处理的受控异常而非进程崩溃。
+        // v38 P3：补 ex 内层异常保根因堆栈（ITM-219 只声明行为权衡未覆盖可诊断性）。
         byte[] result;
         try
         {
             result = LZ4.Decompress(compressed);
         }
-        catch (OutOfMemoryException)
+        catch (OutOfMemoryException ex)
         {
             throw new System.IO.InvalidDataException(
-                $"LZ4 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。");
+                $"LZ4 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。", ex);
         }
         if (result.Length > DecompressionGuard.MaxOutputBytes)
             throw new System.IO.InvalidDataException($"解压输出 {result.Length:N0} 字节超过安全上限（疑似解压炸弹）。");
@@ -104,15 +105,16 @@ internal sealed class ZStandardCompressor : ICompressor
             throw new System.IO.InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
         // ITM-219：OOM → 受控 InvalidDataException（同 LZ4 路径）
+        // v38 P3：补 ex 内层异常保根因堆栈（ITM-219 只声明行为权衡未覆盖可诊断性）。
         byte[] result;
         try
         {
             result = Zstandard.Decompress(compressed);
         }
-        catch (OutOfMemoryException)
+        catch (OutOfMemoryException ex)
         {
             throw new System.IO.InvalidDataException(
-                $"ZStandard 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。");
+                $"ZStandard 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。", ex);
         }
         if (result.Length > DecompressionGuard.MaxOutputBytes)
             throw new System.IO.InvalidDataException($"解压输出 {result.Length:N0} 字节超过安全上限（疑似解压炸弹）。");
@@ -169,15 +171,16 @@ internal sealed class OpenZLCompressor : ICompressor
             throw new System.IO.InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
         // ITM-219：OOM → 受控 InvalidDataException（同 LZ4 路径）
+        // v38 P3：补 ex 内层异常保根因堆栈（ITM-219 只声明行为权衡未覆盖可诊断性）。
         byte[] result;
         try
         {
             result = Zstandard.Decompress(compressed);
         }
-        catch (OutOfMemoryException)
+        catch (OutOfMemoryException ex)
         {
             throw new System.IO.InvalidDataException(
-                $"ZStandard 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。");
+                $"ZStandard 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。", ex);
         }
         if (result.Length > DecompressionGuard.MaxOutputBytes)
             throw new System.IO.InvalidDataException($"解压输出 {result.Length:N0} 字节超过安全上限（疑似解压炸弹）。");
