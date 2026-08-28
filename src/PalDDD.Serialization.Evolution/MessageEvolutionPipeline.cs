@@ -86,6 +86,20 @@ public sealed class MessageEvolutionPipeline
                 return null;
 
             var step = GetNextStep(currentDescriptor, targetDescriptor);
+            // v30 P3：source 端类型哨兵（镜像 v18 D2 target 端形态）——descriptor 等价性按
+            // (Name,Version) 判定，调用方传入的 sourceDescriptor 可与注册第一步同名同版本但
+            // ClrType 不同：Deserialize 按传入 descriptor 的 JsonTypeInfo 产出对象，而
+            // step.Convert 期望注册 SourceClrType 的实例——错配静默传到 Convert 的强转才炸
+            // InvalidCastException（或更糟：结构兼容时静默错误转换）。仅第一步需要本哨兵：
+            // 后续步 currentDescriptor 来自 step.TargetDescriptor（注册对象），与下一步
+            // Source 的衔接已由构造期校验覆盖。ReferenceEquals 判定第一步（循环从
+            // sourceDescriptor 起步，首轮必真；后续轮 currentDescriptor 已被改写为注册
+            // TargetDescriptor——即便与传入 sourceDescriptor 同引用，ClrType 相等性由构造期
+            // 校验保证，哨兵无假阳性）
+            if (ReferenceEquals(currentDescriptor, sourceDescriptor)
+                && step.SourceDescriptor.ClrType != sourceDescriptor.ClrType)
+                throw new MessageEvolutionException(
+                    $"Source descriptor ClrType mismatch: expected {step.SourceDescriptor.ClrType}, got {sourceDescriptor.ClrType}.");
             current = step.Convert(current);
             currentDescriptor = step.TargetDescriptor;
         }

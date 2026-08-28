@@ -40,13 +40,19 @@ TState> : PeriodicBackgroundProcessor
         // 成功创建了 PeriodicTimer 后构造体 ThrowIfNull 才抛（构造中断 Dispose 不可达）→ timer
         // 泄漏。改为三元显式判 options：null 时在任何路径上都先于 base 调用求值抛出，
         // 不创建 timer（对齐 OutboxProcessor v29 同款）
-        : base(scopeFactory,
+        // v30 P3（logger 轴扩展）：构造体 ThrowIfNull(logger) 同理在 base 成功后抛——timer
+        // 已创建、Dispose 不可达 → 泄漏。logger 守卫合并进 base 第一实参（v29 options 轴
+        // 三元形态扩展）：实参按出现顺序先于 base 体求值，logger/options 任一为 null 时
+        // 均在 PeriodicTimer 创建前抛出；scopeFactory 轴无此问题（基类构造体在创建 timer
+        // 之前先 ThrowIfNull(scopeFactory)）（两文件对称）
+        : base(
+               logger is null
+                   ? throw new ArgumentNullException(nameof(logger))
+                   : scopeFactory,
                options is null
                    ? throw new ArgumentNullException(nameof(options))
                    : pollInterval ?? options.CurrentValue.PollInterval)
     {
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(logger);
         _logger = logger;
     }
 

@@ -233,6 +233,38 @@ public sealed class SagaStateEfCoreTests
         await Assert.That(final!.CurrentState).IsEqualTo("MutatedByFresh");
     }
 
+    [Test]
+    public async Task Saga_SaveChangesAsync_OverlongEmojiError_TruncatesWithoutSplittingSurrogatePair(CancellationToken cancellationToken)
+    {
+        // v30 P3（S12 姊妹，EFCore 版——Dapper 版见 DapperStoreTests 同名用例）：存储层
+        // 截断的 UTF-16 代理对守卫端到端验证——超长含 emoji 的 Error 在 [..2040] 切片点
+        // 恰落在高代理上时（'a'*2039 + 🎉 长度 2041），守卫回退一位防孤立高代理入库
+        // （镜像 FailureReasonTests 同名用例形态）。EFCore 栈截断在
+        // ISagaStateStore.SaveChangesAsync 入口收口（v29 S10），本测试用 SQLite 真实
+        // 关系型列（Error HasMaxLength(2048)）做持久化端到端验证
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = CreateSqliteOptions(connection);
+
+        TestSagaState state;
+        await using (var writer = new TestSagaStateDbContext(options))
+        {
+            await writer.Database.EnsureCreatedAsync(cancellationToken);
+            state = CreateState("Initial", FixedNow, status: SagaStatus.CompensationFailed);
+            state.Error = new string('a', 2039) + "🎉";
+            state.ErrorAt = FixedNow;
+            writer.SagaStates.Add(state);
+            await ((ISagaStateStore<TestSagaState>)writer).SaveChangesAsync(state, cancellationToken);
+        }
+
+        await using var reader = new TestSagaStateDbContext(options);
+        var loaded = await reader.GetByIdAsync(state.SagaId, cancellationToken);
+        await Assert.That(loaded!.Error).IsNotNull();
+        // 末字符必须是完整 'a'（高代理回退一位），长度 2039 而非 2040
+        await Assert.That(loaded.Error!.Length).IsEqualTo(2039);
+        await Assert.That(char.IsHighSurrogate(loaded.Error[^1])).IsFalse();
+    }
+
     private static readonly DateTimeOffset FixedNow = DateTimeOffset.Parse(
         "2026-05-31T00:00:00Z",
         CultureInfo.InvariantCulture);

@@ -53,6 +53,13 @@ internal sealed class PipelineStateMachine
     }
 
     /// <summary>执行管道中的下一个行为，或到达终点时执行 Handler</summary>
+    /// <remarks>
+    /// v30 P3 契约声明：传给 <see cref="IPipelineBehavior.HandleAsync"/> 的 next 委托（即本方法
+    /// 的方法组）在每次管道执行中<b>恰好调用一次</b>——本方法用 <c>_index++</c> 推进游标，
+    /// 多次调用会跳过后续 behavior（每次调用都消费一个游标位）。重试场景应在 behavior 内
+    /// 缓存首次 next 结果后复用，而非重调 next；需要多次执行后续段的语义应改用独立的
+    /// 管道实例（Reset 后重新执行）。
+    /// </remarks>
     public ValueTask<object?> ExecuteNextAsync()
     {
         if (_index < _behaviors.Length)

@@ -35,11 +35,12 @@ public sealed class AddProjectionContextPrefixCodeFix : CodeFixProvider
         var typeDecl = node.FirstAncestorOrSelf<TypeDeclarationSyntax>();
         if (typeDecl is null) return;
 
-        // P3 修复（二十一轮）：attribute 识别改符号级——原 a.Name.ToString().Contains(
-        // "BoundedContext") 文本匹配对 using 别名（[BC]）漏识别（fix 不注册）、对含
-        // 同名后缀的其他 attribute 误识别；改 GetSymbolInfo 解析 attribute 构造器符号
-        // 后按 ContainingType 的命名空间 + MetadataName 匹配（镜像 analyzer 的
-        // MetadataNameEquals 语义）
+        // v30 P3 注释勘正（漂移）：下方 semanticModel 仅服务 GetDeclaredSymbol(typeDecl)——
+        // 沿基类链查 ProjectionName 字面量需要类型符号（FindProjectionNameLiteralAlongChain
+        // 消费 INamedTypeSymbol）。历史上的"attribute 符号级识别"（GetSymbolInfo 解析
+        // attribute 构造器 + ContainingType/MetadataName 匹配）已随 v17 F1 修复删除：
+        // BC 唯一来源改为 diagnostic.Properties["BoundedContext"]（见下方注释），
+        // 本类不再解析 attribute 符号
         var semanticModel = await context.Document.GetSemanticModelAsync(context.CancellationToken).ConfigureAwait(false);
         if (semanticModel is null) return;
         // 找到 ProjectionName 属性定义

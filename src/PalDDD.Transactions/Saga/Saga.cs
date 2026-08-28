@@ -115,6 +115,31 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 protected set => RetryBackoffPolicy = new FixedBackoffPolicy(value);
     }
 
+    /// <summary>
+    /// v30 P3：重试延迟计算降级守卫（镜像 v29 OutboxBatchProcessor 的 ComputeDelay 降级形态）。
+    /// 四处重试路径（Normal/FanOut/ChildSaga/Dynamic）原先裸调
+    /// <c>Task.Delay(RetryBackoffPolicy.ComputeDelay(...))</c>——自定义策略的 ComputeDelay
+    /// 抛异常时，策略异常会替换原始步骤异常向上传播（Task.Delay 实参求值即抛，步骤根因
+    /// failures 与 AggregateException 均不再到达调用方）。降级为默认 1s（对齐 RetryDelay
+    /// 默认 FixedBackoffPolicy(1s) 语义），保证重试循环按原始异常路径继续。
+    /// </summary>
+    /// <remarks>Saga 上下文无 IPalLogger（v29 OutboxBatchProcessor 形态的 Warning 分支不可用）——
+    /// 静默降级 + 注释声明可观测性取舍：策略配置错误由后续步骤异常的稳定复现暴露，
+    /// 不叠加新的异常源。</remarks>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types",
+        Justification = "v30 P3：自定义退避策略的任意计算异常降级为 1s 默认延迟（镜像 v29 OutboxBatchProcessor 同款）——策略故障不得替换/吞掉原始步骤异常。")]
+    private TimeSpan ComputeRetryDelaySafely(int attempt)
+    {
+        try
+        {
+            return RetryBackoffPolicy.ComputeDelay(attempt);
+        }
+        catch (Exception)
+        {
+            return TimeSpan.FromSeconds(1);
+        }
+    }
+
     /// <summary>获取所有已注册的步骤（按注册顺序）</summary>
     protected IReadOnlyList<(string Key, SagaStep Step)> Steps => _stepsInOrder;
 
@@ -384,7 +409,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 // 失败但还有重试次数 — 等待后继续
                 // 使用 Clock（TimeProvider）控制延迟，测试中可注入 FakeTimeProvider 实现确定性重试时序
                 failures.Add(ex);
-                await Task.Delay(RetryBackoffPolicy.ComputeDelay(attempt + 1), Clock, ct).ConfigureAwait(false);
+                await Task.Delay(ComputeRetryDelaySafely(attempt + 1), Clock, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -470,7 +495,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
             catch (Exception ex) when (attempt < MaxRetries)
             {
                 failures.Add(ex);
-                await Task.Delay(RetryBackoffPolicy.ComputeDelay(attempt + 1), Clock, ct).ConfigureAwait(false);
+                await Task.Delay(ComputeRetryDelaySafely(attempt + 1), Clock, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -571,7 +596,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
             catch (Exception ex) when (attempt < MaxRetries)
             {
                 failures.Add(ex);
-                await Task.Delay(RetryBackoffPolicy.ComputeDelay(attempt + 1), Clock, ct).ConfigureAwait(false);
+                await Task.Delay(ComputeRetryDelaySafely(attempt + 1), Clock, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -785,7 +810,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
             catch (Exception ex) when (attempt < MaxRetries)
             {
                 failures.Add(ex);
-                await Task.Delay(RetryBackoffPolicy.ComputeDelay(attempt + 1), Clock, ct).ConfigureAwait(false);
+                await Task.Delay(ComputeRetryDelaySafely(attempt + 1), Clock, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

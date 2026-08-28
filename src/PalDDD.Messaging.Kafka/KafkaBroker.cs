@@ -152,7 +152,11 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         // 原顺序 Task.Run 先于登记：循环若在登记前已终止（如订阅后 token 预取消即抛 OCE），
         // DisposeAsync 的 snapshot 不含此订阅 → consumer 无人释放。占位后任何时点的
         // DisposeAsync 都能触达本订阅（DisposeAsync 容忍 _consumeTask 尚未 Set 的窗口）。
-        var subscription = new KafkaSubscription(cts, consumer);
+        // v30 P3（登记条目移除，镜像 v29 Rabbit 侧 AsyncSubscription 的 TryRemove 形态）：
+        // 订阅句柄正常释放后 Broker._consumers 登记条目原先不移除——长驻 Broker 反复
+        // 订阅/退订下登记表无界增长。构造注入 removeAction（this 由句柄自身传入，避免
+        // 闭包自引用），DisposeAsync 幂等门通过后触发锁内 Remove。
+        var subscription = new KafkaSubscription(cts, consumer, RemoveConsumerRegistration);
         try
         {
             lock (_consumersLock)
@@ -316,20 +320,41 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         _producer.Dispose();
     }
 
+    /// <summary>
+    /// v30 P3：从 _consumers 移除指定订阅的登记条目（订阅句柄正常释放时经 removeAction 触发）。
+    /// 镜像 v29 Rabbit 侧 _subscriptions.TryRemove 形态——防长驻 Broker 反复订阅/退订下登记表
+    /// 无界增长。与 DisposeAsync 的 snapshot+Clear 在 _consumersLock 临界区互斥：句柄先自行
+    /// 移除则 snapshot 不含它（免重复 Dispose）；Broker 先 snapshot 则句柄后续的 removeAction
+    /// 对已 Clear 的列表 Remove 为 no-op（幂等安全）。List.Remove 为 O(n)——订阅数与拓扑
+    /// 同阶（每消息类型一订阅），非热路径。
+    /// </summary>
+    private void RemoveConsumerRegistration(KafkaSubscription subscription)
+    {
+        lock (_consumersLock)
+        {
+            _consumers.Remove(subscription);
+        }
+    }
+
     /// <summary>Kafka 订阅句柄 — 持有后台 Task 引用，支持等待完成和状态观测</summary>
     private sealed class KafkaSubscription : IAsyncDisposable
     {
         private readonly CancellationTokenSource _cts;
         private readonly IConsumer<string, byte[]> _consumer;
+        private readonly Action<KafkaSubscription>? _removeAction;
         // P3 修复（十七轮）：登记先行模式——构造时不持有 Task（循环尚未启动），
         // 由 SetConsumeTask 后置注入；Volatile 读写保证跨线程可见性（引用写原子）
         private Task? _consumeTask;
         private int _disposed;
 
-        public KafkaSubscription(CancellationTokenSource cts, IConsumer<string, byte[]> consumer)
+        public KafkaSubscription(
+            CancellationTokenSource cts,
+            IConsumer<string, byte[]> consumer,
+            Action<KafkaSubscription>? removeAction = null)
         {
             _cts = cts;
             _consumer = consumer;
+            _removeAction = removeAction;
         }
 
         /// <summary>后台消费 Task — 可用于健康检查和异常观测。
@@ -349,6 +374,12 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return; // 幂等
+
+            // v30 P3（镜像 v29 Rabbit 侧 TryRemove 前置形态）：释放流程启动即从 Broker
+            // 登记表移除本条目——长驻 Broker 反复订阅/退订下 _consumers 不再无界增长；
+            // Broker.DisposeAsync 兜底遍历与此处移除经 _consumersLock 互斥（snapshot
+            // 已含本句柄时其 DisposeAsync 调用被幂等门拦截，双路径安全）
+            _removeAction?.Invoke(this);
 
             await _cts.CancelAsync().ConfigureAwait(false);
             try

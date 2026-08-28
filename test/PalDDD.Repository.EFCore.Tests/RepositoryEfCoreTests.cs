@@ -57,6 +57,21 @@ public sealed class UnitOfWorkTests
     }
 
     [Test]
+    public async Task SaveChangesAsync_AfterDispose_ThrowsObjectDisposedException()
+    {
+        // v30 P3 守卫族回归（v29 P3 ITM-284 三栈守卫 4/4 的补测）：UnitOfWork 释放后
+        // SaveChangesAsync 必须被守卫拦截抛 ObjectDisposedException——无守卫时落到
+        // 已释放 DbContext 上抛 provider 级异常（语义误导、排障指向错误层）
+        var context = new TestDbContext(CreateOptions());
+        var uow = new UnitOfWork<TestDbContext>(context);
+        await uow.DisposeAsync();
+
+        await Assert.That(async () => await uow.SaveChangesAsync()).Throws<ObjectDisposedException>();
+
+        await context.DisposeAsync();
+    }
+
+    [Test]
     public async Task ExecuteInTransactionAsync_CommitsWorkOnSuccess(CancellationToken cancellationToken)
     {
         var options = CreateOptions();

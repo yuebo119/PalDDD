@@ -509,8 +509,10 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
         // v25 P3 生成器族：Guid/int/long 分支补 token 守卫——GetGuid/GetInt32/GetInt64 对
         // 不匹配 token 抛 InvalidOperationException，违反 S.T.J converter 契约（Read 的
         // 失败应以 JsonException 抛出，上层 catch (JsonException) 才能统一捕获；Ulid 分支
-        // 已有同型守卫，string 分支有 ?? throw 守卫）。Guid 来自 String token，int/long
-        // 来自 Number token，守卫条件各按类型。
+        // 已有同型守卫）。Guid 来自 String token，int/long 来自 Number token，守卫条件各按类型。
+        // v30 P3 勘正：string 分支原仅靠 ?? throw 兜 Null token，Number/True 等非 String
+        // token 仍从 GetString() 抛 InvalidOperationException——已补同型 token 守卫（见
+        // string 分支注释），四值类型分支至此守卫族齐整。
         "Guid" => $"""
                 if (reader.TokenType != JsonTokenType.String)
                     throw new JsonException("Guid identity JSON value must be a JSON string.");
@@ -544,7 +546,16 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
                     throw new JsonException("Int64 identity JSON value must be a JSON number.");
                 return {name}.From(reader.GetInt64());
         """,
-        "string" => $"        return {name}.From(reader.GetString() ?? throw new JsonException(\"String identity JSON value cannot be null.\"));",
+        // v30 P3 生成器族：string 分支补 token 类型守卫（对齐 Guid/Ulid/int/long 分支）——
+        // GetString() 对 Number/True/False/StartObject 等非 String token 抛
+        // InvalidOperationException，违反 S.T.J converter 契约（Read 失败应以 JsonException
+        // 抛出，上层 catch (JsonException) 才能统一捕获）。?? throw 保留：Null token 时
+        // GetString() 返回 null 而非抛错，null 兜底仍需独立防线
+        "string" => $"""
+                if (reader.TokenType != JsonTokenType.String)
+                    throw new JsonException("String identity JSON value must be a JSON string.");
+                return {name}.From(reader.GetString() ?? throw new JsonException("String identity JSON value cannot be null."));
+        """,
         _ => "        throw new JsonException(\"Unsupported identity source type.\");"
     };
 

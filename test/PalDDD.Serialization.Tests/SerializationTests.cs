@@ -96,6 +96,25 @@ public sealed class MessageCatalogTests
 
         await Assert.That(exception!.Message).Contains(typeof(TestMessage).FullName!);
     }
+
+    [Test]
+    public async Task Builder_WithSameTypeDifferentName_FailureLeavesNoGhostKeyInBuild()
+    {
+        // v30 P3 差异化回归（v29 半提交修复的行为面）：同类型不同名 Add 触发 _byType
+        // 重复键抛 InvalidOperationException 后，Builder 不得滞留已提交的名称版本键
+        //（幽灵键）——修复前半提交会让 Build 产出含失败描述符的目录；修复后双键预检
+        // 先于提交，失败 Add 零残留，Builder 仍可 Build 出只含成功注册项的目录
+        var builder = new MessageCatalogBuilder();
+        builder.Add(TestJsonContext.Default.TestMessage, name: "ghost-test");
+
+        await Assert.That(
+            () => builder.Add(TestJsonContext.Default.TestMessage, name: "ghost-test-2")).Throws<InvalidOperationException>();
+
+        var catalog = builder.Build();
+        await Assert.That(catalog.Descriptors).Count().IsEqualTo(1);
+        await Assert.That(catalog.Find("ghost-test")).IsNotNull();
+        await Assert.That(catalog.Find("ghost-test-2")).IsNull();
+    }
 }
 
 public sealed class JsonMessageSerializerTests
@@ -221,6 +240,44 @@ public sealed class JsonMessageSerializerTests
                 TestJsonContext.Default.TestMessage)).Throws<ArgumentException>();
 
         await Assert.That(exception!.ParamName).IsEqualTo("jsonTypeInfo");
+    }
+
+    // ── v30 P3 测试缺口：JsonMessageSerializer 显式 descriptor 的 ClrType 守卫（v29 P3 实现）──
+    // 两路径（泛型 Serialize / 泛型 Deserialize）对 mismatched descriptor 均须抛指向性
+    // ArgumentException（消息注明期望/实际类型），而非裸 InvalidCastException 落在强转行。
+
+    [Test]
+    public async Task SerializeGeneric_WithMismatchedDescriptorClrType_ThrowsArgumentException()
+    {
+        var serializer = new JsonMessageSerializer(MessageCatalog.Empty);
+        // descriptor 注册给 TestMessage，泛型实参却是 TestMessageV1——ClrType 错配
+        var mismatched = MessageDescriptor.Create(
+            TestJsonContext.Default.TestMessage,
+            name: "clr-type-mismatch-serialize");
+
+        var exception = await Assert.That(
+            () => serializer.Serialize(new TestMessageV1("order-x"), mismatched)).Throws<ArgumentException>();
+
+        await Assert.That(exception!.Message).Contains(typeof(TestMessage).FullName!);
+        await Assert.That(exception!.Message).Contains(typeof(TestMessageV1).FullName!);
+        await Assert.That(exception!.ParamName).IsEqualTo("descriptor");
+    }
+
+    [Test]
+    public async Task DeserializeGeneric_WithMismatchedDescriptorClrType_ThrowsArgumentException()
+    {
+        var serializer = new JsonMessageSerializer(MessageCatalog.Empty);
+        var v1Descriptor = MessageDescriptor.Create(
+            TestJsonContext.Default.TestMessageV1,
+            name: "clr-type-mismatch-deserialize");
+        var payload = serializer.Serialize(new TestMessageV1("order-x"), v1Descriptor);
+
+        var exception = await Assert.That(
+            () => serializer.Deserialize<TestMessage>(payload.Span, v1Descriptor)).Throws<ArgumentException>();
+
+        await Assert.That(exception!.Message).Contains(typeof(TestMessageV1).FullName!);
+        await Assert.That(exception!.Message).Contains(typeof(TestMessage).FullName!);
+        await Assert.That(exception!.ParamName).IsEqualTo("descriptor");
     }
 }
 

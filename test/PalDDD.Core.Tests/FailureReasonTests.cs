@@ -74,4 +74,22 @@ public sealed class FailureReasonTests
         await Assert.That(truncated.Length).IsEqualTo(2039);
         await Assert.That(char.IsHighSurrogate(truncated[^1])).IsFalse();
     }
+
+    [Test]
+    public async Task Truncate_NegativeMaxLength_ThrowsArgumentOutOfRange()
+    {
+        // v30 P3 守卫回归：负 maxLength 须在入口抛 ArgumentOutOfRangeException（参数契约可定位），
+        // 而非落到切片表达式抛同型异常但错误信息指向内部实现
+        await Assert.That(() => FailureReason.Truncate("value", -1)).Throws<ArgumentOutOfRangeException>();
+        // null + 负值：参数校验优先于 null 短路（契约违规不静默放行）
+        await Assert.That(() => FailureReason.Truncate(null, -1)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task Truncate_ZeroMaxLength_ReturnsEmptyString()
+    {
+        // v30 P3 契约文档化：maxLength=0 返回空串（非 null 输入截到零长——
+        // Length <= 0 对非空字符串恒 false，走截断分支切到 0 位）
+        await Assert.That(FailureReason.Truncate("value", 0)).IsEqualTo(string.Empty);
+    }
 }
