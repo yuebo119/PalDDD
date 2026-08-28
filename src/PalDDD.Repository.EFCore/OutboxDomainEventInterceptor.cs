@@ -38,6 +38,14 @@ namespace PalDDD.Repository.EFCore;
 /// outbox 无行）。需要跨 Commit 重试保证的应用应在新的 UnitOfWork scope 中重试整个
 /// 业务操作；行为重构（清理移到 Commit 后）有双行风险，本轮不做。
 /// </para>
+/// <para>
+/// ⚠️ <b>多拦截器链中断窗口（v38 P3 声明不修）</b>：多拦截器配置下，链中其他拦截器在
+/// SavingChanges(Async) 阶段抛异常时 SaveChangesFailed(Async) 不可达（EF 派发点位于
+/// SaveChanges 的 try 块之前，见 <see cref="WriteEventsToOutbox"/> 注释）——本拦截器已
+/// 注入的 outbox 行将滞留 ChangeTracker 至同 scope 重试（双行风险）。单拦截器（本框架
+/// 推荐配置，AddPalOutboxUnitOfWork 默认）下链上唯一异常源是本拦截器自身，已由 v34
+/// 注入循环自清理域覆盖；多拦截器场景的清理挂钩方案 v3.0 收敛。
+/// </para>
 /// </remarks>
 public sealed class OutboxDomainEventInterceptor(
     Transactions.IPalOutboxStore outboxStore,
@@ -194,6 +202,9 @@ public sealed class OutboxDomainEventInterceptor(
         // 批内第 k 个事件失败时前 k-1 个 Added 行滞留 ChangeTracker，同 scope 重试
         // SaveChanges 即同事件双行（下游重复消费）。循环内 try/catch 自清理后 rethrow，
         // sync/async 两路共用本方法天然闭合
+        // v38 P3 声明：本自清理域只覆盖"本拦截器自身抛异常"路径——多拦截器配置下其他
+        // 拦截器在 SavingChanges 抛异常时 SaveChangesFailed 同样不可达且无自清理挂钩，
+        // 已注入行滞留至同 scope 重试；详见类 remarks（多拦截器场景 v3.0 收敛）。
         try
         {
             foreach (var evt in events)

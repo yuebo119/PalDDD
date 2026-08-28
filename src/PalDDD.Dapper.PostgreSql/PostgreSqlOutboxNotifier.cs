@@ -220,10 +220,12 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
         }
         finally
         {
-            // P2 修复：Dispose 已释放 gate 时 in-flight 批处理的 Release 会抛
-            // ObjectDisposedException 且无人观察——吞掉（停机路径，gate 已无意义）
-            try { _processGate.Release(); }
-            catch (ObjectDisposedException) { }
+            // v38 P3：自通知节流检查与 _lastSelfNotify 读改写移到 gate Release 之前——
+            // gate（SemaphoreSlim）内串行化读改写，消除原"Release 后节流"窗口：两个 fire
+            // 任务（前批 finally 与下批 Task.Run 后的 finally）在 gate 外并发读到同一旧
+            // _lastSelfNotify、各自判定通过 → 双自通知。gate 的 WaitAsync/Release 作为
+            // 同步基元自带内存屏障，gate 内写入对下一个进入者可见。NOTIFY 为快速操作，
+            // gate 内多驻留时长远小于批处理本身，无背压回归。
 
             // 🔴 P1 修复 (2026-07-28): 批处理完成后主动发送一次 NOTIFY 自唤醒。
             // 必要性：消息可能在批处理执行期间（_processGate 被占用，新的 NOTIFY 被 TryEnter(0) 丢弃）
@@ -251,6 +253,11 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
                     // 自唤醒失败不影响主流程；外部 NOTIFY 或下次插入仍会触发。
                 }
             }
+
+            // P2 修复：Dispose 已释放 gate 时 in-flight 批处理的 Release 会抛
+            // ObjectDisposedException 且无人观察——吞掉（停机路径，gate 已无意义）
+            try { _processGate.Release(); }
+            catch (ObjectDisposedException) { }
         }
     }
 }

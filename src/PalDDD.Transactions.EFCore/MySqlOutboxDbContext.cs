@@ -6,6 +6,16 @@ namespace PalDDD.Transactions;
 /// <remarks>
 /// ⚠️ 双时钟源（v8 声明）：GetPending 用 DB 时钟（UTC_TIMESTAMP）而 Lease 用应用时钟
 /// （GetUtcNow）——时钟漂移时观测与租约路径的资格窗口不一致（观测侧容忍，无正确性影响）。
+/// <para>
+/// ⚠️ <b>MySQL 版本兼容声明（v38 P3，镜像姊妹 PalOrmOutboxStore.cs:112-116 的 v13 分叉声明）</b>：
+/// 本栈租约 SQL（<see cref="LeasePendingMessagesAsync"/> 步骤 1）为 JOIN + <b>派生表内</b>
+/// <c>FOR UPDATE SKIP LOCKED</c>——行锁位于派生表（derived table）子查询内，依赖 MySQL 派生表
+/// 锁语义；MySQL 8.0.18 以下版本对派生表物化/锁下推行为有差异，SKIP LOCKED 可能失效。锁失效时
+/// 退化为 last-writer-wins（并发双 worker 后写覆盖先写、败者回读空批，消息延迟至下轮租约）。
+/// 正确性由 <c>(LockedBy, LockedUntil)</c> 租约 token + <c>RetryCount</c> 快照守卫（基类
+/// FencedTarget 终态写，见 <see cref="OutboxDbContext"/>）兜底——败者租约被覆盖后其终态写
+/// 影响 0 行。声明而非改写，最低支持版本维持 MySQL 8.0+。
+/// </para>
 /// </remarks>
 public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbContext(options)
 {

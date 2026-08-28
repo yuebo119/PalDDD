@@ -193,11 +193,31 @@ public sealed class DapperEventLog : IEventLog
 
         // 💡 RecordedEvent 的构造函数是 internal 且属性只读，Dapper 运行时无法直接物化。
         // 通过 EventLogRow DTO（public 无参构造 + public setters）读取，再映射到 RecordedEvent。
+        // v38 P3：读侧观测补齐（v37 补了写侧，读侧 PD24 残留——镜像 EventLogDbContext:97/138
+        // 与 PalOrmEventLog:199/239 的 StartEventLogReadStream/StartEventLogReadAll +
+        // EventLogRead 计数形态）——读取耗时与吞吐此前不可见。
+        using var activity = PalActivitySource.StartEventLogReadStream(streamName, fromVersion);
+
         var rows = await _connection.QueryAsync<EventLogRow>(
             new CommandDefinition(EventLogSql.ReadStream, new { name = streamName, from = fromVersion, max = maxCount }, Tx, cancellationToken: cancellationToken)).ConfigureAwait(false);
 
-        foreach (var row in rows)
-            yield return row.ToRecordedEvent();
+        var read = 0;
+        // ITM-167 同款：计数与 metrics 置入 finally——迭代器被消费方提前 Dispose（await
+        // foreach 中 break/抛异常）时循环后语句不执行，finally 在任何退出路径都记录已产出
+        // 计数；计数在 yield 前（对齐 EventLogDbContext/PalOrmEventLog/InMemoryEventLog）。
+        try
+        {
+            foreach (var row in rows)
+            {
+                checked { read++; }
+                yield return row.ToRecordedEvent();
+            }
+        }
+        finally
+        {
+            // v25 P3 指标族（D5）口径：EventLogRead 计数保留，无 SetTag
+            PalMetrics.EventLogRead.Add(read);
+        }
     }
 
     public async IAsyncEnumerable<RecordedEvent> ReadAllAsync(
@@ -209,11 +229,28 @@ public sealed class DapperEventLog : IEventLog
         // ITM-080 修复：补 maxCount 守卫（同 ReadStreamAsync——SQLite `LIMIT -1` = 无限制的方言陷阱）
         ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
 
+        // v38 P3：读侧观测补齐（同 ReadStreamAsync——镜像 EventLogDbContext:138 /
+        // PalOrmEventLog:239 的 StartEventLogReadAll + EventLogRead 计数形态）。
+        using var activity = PalActivitySource.StartEventLogReadAll(fromPosition);
+
         var rows = await _connection.QueryAsync<EventLogRow>(
             new CommandDefinition(EventLogSql.ReadAll, new { from = fromPosition, max = maxCount }, Tx, cancellationToken: cancellationToken)).ConfigureAwait(false);
 
-        foreach (var row in rows)
-            yield return row.ToRecordedEvent();
+        var read = 0;
+        // ITM-167 同款：计数与 metrics 置入 finally + yield 前计数（同 ReadStreamAsync）。
+        try
+        {
+            foreach (var row in rows)
+            {
+                checked { read++; }
+                yield return row.ToRecordedEvent();
+            }
+        }
+        finally
+        {
+            // v25 P3 指标族（D5）口径：EventLogRead 计数保留，无 SetTag
+            PalMetrics.EventLogRead.Add(read);
+        }
     }
 
     /// <summary>
