@@ -60,9 +60,9 @@ PALORM012 约束：`[ConcurrencyCheck]` 仅支持非 nullable int/long（源生�
 
 ---
 
-## 三、7 Store 实现分级
+## 三、6 Store + UnitOfWork 实现分级
 
-### A 级：QueryBuilder + 声明式特性（5 Store）
+### A 级：QueryBuilder + 声明式特性（4 Store + UnitOfWork）
 
 | Store | 主键 | PalORM 特性 | 手写 SQL 降级点 |
 |---|---|---|---|
@@ -132,7 +132,7 @@ services.AddPalOrmPostgreSqlSagaSnapshot<OrderSagaState>(
 dotnet publish samples/PalDDD.PalOrmSample/PalDDD.PalOrmSample.csproj \
   -c Release -r win-x64
 # 编译期 0 警告（TreatWarningsAsErrors）
-# 运行时 PASSED（7 Store 端到端 CRUD + 事务）
+# 运行时 PASSED（6 Store + UnitOfWork 端到端 CRUD + 事务）
 ```
 
 **填补的缺口**：PalDDD 此前从未做过真实 AOT publish（AotSample 是纯内存 + 未触发 PublishAot）。
@@ -220,7 +220,7 @@ ALTER TABLE outbox_messages ALTER COLUMN payload TYPE BYTEA USING decode(payload
 
 ### 源码
 
-- `src/PalDDD.PalORM/` — 核心层（7 Store + UnitOfWork + 3 Row DTO + 1 Converter：UlidStringConverter；ByteArrayBase64Converter 已随 PalORM 5.3 原生 byte[] 支持移除）
+- `src/PalDDD.PalORM/` — 核心层（6 Store + UnitOfWork + 3 Row DTO + 1 Converter：UlidStringConverter；ByteArrayBase64Converter 已随 PalORM 5.3 原生 byte[] 支持移除）
 - `src/PalDDD.PalORM.Sqlite/` — SQLite 方言包（7 中间固化类 + DI 扩展）
 - `src/PalDDD.PalORM.PostgreSql/` — PostgreSQL 方言包（同构，RETURNING + Binary COPY）
 - `src/PalDDD.PalORM.MySql/` — MySQL 方言包（同构，无 RETURNING + local_infile 自适应 BulkInsert）

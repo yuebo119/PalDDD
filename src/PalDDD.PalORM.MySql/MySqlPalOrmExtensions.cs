@@ -11,7 +11,9 @@ using PalORM.MySql;
 namespace PalDDD.PalORM.MySql;
 
 /// <summary>
-/// PalORM MySQL DI 扩展 —— 一键注册 7 Store + UnitOfWork + Scoped DataSession。
+/// PalORM MySQL DI 扩展 —— 一键注册 6 Store + UnitOfWork + Scoped DataSession。
+///（v34 P3 计数勘正：原"7 Store"不实——抽象层 Store 接口共 6 个
+/// Outbox/Inbox/Saga/EventLog/ProjectionCheckpoint/Idempotency，本方法全数注册 + UnitOfWork）。
 /// <para>
 /// <b>MySQL 特性</b>：不支持 RETURNING（走两步 UPDATE+SELECT）；BulkInsert 检测 local_infile 系统变量自动选 BulkCopy 或多值 INSERT。
 /// </para>

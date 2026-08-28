@@ -142,6 +142,8 @@ public static class PostgreSqlJsonb
     /// 静默查错嵌套位置；同理不得含花括号 <c>{ }</c>（数组字面量定界符）。
     /// 含逗号/花括号的键请改用原生参数化 SQL。段内单引号已按 SQL 标准翻倍处理（八轮修复）。
     /// 三十七轮 P2-2：违禁字符改为构建期 fail-fast（对齐 SqliteJson.EscapeJsonPathSegment 口径）。
+    /// v34 P3 声明：反斜杠段未经转义处理——standard_conforming_strings（PG 默认）下
+    /// <c>\</c> 被 PG 数组解析器吃掉，含反斜杠的键路径会静默错位（键名含反斜杠属不支持场景）。
     /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractTextByPath(string column, params string[] path)
@@ -170,6 +172,8 @@ public static class PostgreSqlJsonb
     /// 路径段数组（同 <see cref="ExtractTextByPath"/> 的 path 约束：每段不得含逗号/花括号——
     /// 元素内逗号是 PG path 数组分隔符，静默拆段查错位置；花括号是数组字面量定界符）。
     /// ITM-248（F6，对齐姊妹三十七轮 P2-2）：违禁字符由 doc 声明升级为构建期 fail-fast。
+    /// v34 P3 声明（对齐姊妹）：反斜杠段未经转义处理——standard_conforming_strings（PG 默认）
+    /// 下 <c>\</c> 被 PG 数组解析器吃掉，含反斜杠的键路径会静默错位（键名含反斜杠属不支持场景）。
     /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractJsonByPath(string column, params string[] path)

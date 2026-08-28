@@ -181,7 +181,9 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
 /// <summary>Fan-out 执行结果。</summary>
 /// <typeparam name="TResult">子任务输出类型</typeparam>
 /// <param name="Completed">成功完成的子任务结果</param>
-/// <param name="Failed">失败的子任务（含异常信息）</param>
+/// <param name="Failed">失败的子任务（含异常信息）。⚠️ v34 P3 勘正：Item 恒为 default——
+/// 失败子任务未产生结果，定位靠 <paramref name="Failed"/> 元组的 Error 异常消息；携带
+/// 失败输入项属 v3.0 接口扩展</param>
 public readonly record struct FanOutResult<TResult>(
     IReadOnlyList<TResult> Completed,
     IReadOnlyList<(TResult? Item, Exception Error)> Failed)

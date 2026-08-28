@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.ComponentModel;
 using System.Text.Json;
+using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Core.Tests;
 
@@ -15,6 +16,9 @@ public readonly partial record struct LongRowId;
 
 [GenerateId(typeof(string))]
 public readonly partial record struct TenantKey;
+
+[GenerateId(typeof(PalUlid))]
+public readonly partial record struct UlidKey;
 
 public sealed class GeneratedIdentityTests
 {
@@ -229,6 +233,34 @@ public sealed class GeneratedIdentityTests
             reader.Read();
             var converter = new TenantKeyJsonConverter();
             converter.Read(ref reader, typeof(TenantKey), JsonSerializerOptions.Default);
+        }).Throws<JsonException>();
+    }
+
+    [Test]
+    public async Task StringIdentity_JsonEmptyString_ThrowsJsonException()
+    {
+        // v34 P2 探针：String token 但值为 ""——修复前借道 From 抛 ArgumentException
+        //（非 JsonException 契约破裂）；修复后空串转 JsonException
+        await Assert.That(() =>
+        {
+            var reader = new Utf8JsonReader("\"\""u8);
+            reader.Read();
+            var converter = new TenantKeyJsonConverter();
+            converter.Read(ref reader, typeof(TenantKey), JsonSerializerOptions.Default);
+        }).Throws<JsonException>();
+    }
+
+    [Test]
+    public async Task UlidIdentity_JsonEscapedInvalid_ThrowsJsonException()
+    {
+        // v34 P2 探针：转义字符串（\u006E = 'n'，拼接出非法 Ulid 内容）——修复前 escaped
+        // 腿 Parse 抛 FormatException；修复后 TryParse → JsonException
+        await Assert.That(() =>
+        {
+            var reader = new Utf8JsonReader("\"\\u006Eot-a-ulid\""u8);
+            reader.Read();
+            var converter = new UlidKeyJsonConverter();
+            converter.Read(ref reader, typeof(UlidKey), JsonSerializerOptions.Default);
         }).Throws<JsonException>();
     }
 

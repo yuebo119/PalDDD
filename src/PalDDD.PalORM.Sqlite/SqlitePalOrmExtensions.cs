@@ -11,12 +11,14 @@ using PalORM.Sqlite;
 namespace PalDDD.PalORM.Sqlite;
 
 /// <summary>
-/// PalORM SQLite DI 扩展 —— 一键注册 7 Store + UnitOfWork + Scoped DataSession。
+/// PalORM SQLite DI 扩展 —— 一键注册 6 Store + UnitOfWork + Scoped DataSession。
+///（v34 P3 计数勘正：原"7 Store"不实——抽象层 Store 接口共 6 个
+/// Outbox/Inbox/Saga/EventLog/ProjectionCheckpoint/Idempotency，本方法全数注册 + UnitOfWork）。
 /// </summary>
 public static class SqlitePalOrmExtensions
 {
     /// <summary>
-    /// 注册 PalORM SQLite 适配包（7 Store + UnitOfWork + DataSession）。
+    /// 注册 PalORM SQLite 适配包（6 Store + UnitOfWork + DataSession；v34 P3 计数勘正）。
     /// <para>
     /// <b>事务自动传播</b>：DataSession 注册为 Scoped —— 同一请求作用域内所有 Store 注入同一实例，
     /// UnitOfWork.BeginTransactionAsync 后 CreateCommand 自动附加 GetActiveTransaction。
@@ -66,7 +68,7 @@ public static class SqlitePalOrmExtensions
             services.TryAddSingleton(TimeProvider.System); // TryAdd——用户先注册的 TimeProvider 不被覆盖
         }
 
-        // 7 Store + UnitOfWork（全部 Scoped，共享同一 DataSession）
+        // 6 Store + UnitOfWork（全部 Scoped，共享同一 DataSession；v34 P3 计数勘正）
         services.AddScoped<IPalOutboxStore, SqliteOutboxStore>();
         services.AddScoped<IInboxStore, SqliteInboxStore>();
         services.AddScoped(typeof(ISagaStateStore<>), typeof(SqliteSagaStateStore<>));

@@ -208,9 +208,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                     ConsumeResult<string, byte[]> result;
                     try
                     {
-                        result = consumer.Consume(cts.Token);
+                        result = consumer.Consume(tokenSnapshot);
                     }
-                    catch (OperationCanceledException) when (cts.Token.IsCancellationRequested)
+                    catch (OperationCanceledException) when (tokenSnapshot.IsCancellationRequested)
                     {
                         break; // 正常取消
                     }
@@ -224,7 +224,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                         _logger.Error(ex, $"Kafka consume error on {topic} @ {_consumerConfig.GroupId}, continuing consumption");
                         // 退避防止边缘场景（如 topic 不存在）的 CPU 空转。
                         // Consume 本身通常阻塞等待，但某些持续错误会立即返回。
-                        await Task.Delay(TimeSpan.FromSeconds(1), cts.Token).ConfigureAwait(false);
+                        await Task.Delay(TimeSpan.FromSeconds(1), tokenSnapshot).ConfigureAwait(false);
                         continue;
                     }
 
@@ -242,7 +242,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                         {
                             // P2 修复（八轮评审）：消费端还原追踪头——写侧 CreateHeaders 的镜像
                             var consumeContext = MessageConsumeContext.FromHeaders(ToHeaderMap(result.Message.Headers));
-                            await handler((TMessage)message, consumeContext, cts.Token).ConfigureAwait(false);
+                            await handler((TMessage)message, consumeContext, tokenSnapshot).ConfigureAwait(false);
                         }
                         else
                         {
@@ -256,17 +256,21 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                     }
                 }
             }
-            catch (OperationCanceledException) when (cts.Token.IsCancellationRequested)
+            catch (OperationCanceledException) when (tokenSnapshot.IsCancellationRequested)
             {
                 // 正常取消
             }
-            // P3 修复（十七轮）：非关停 OCE 空洞——外层 token 未取消却收到 OCE（语义不明，
-            // 如链路 token 深层触发）时，此前 when 分支与 not-OCE 分支均不匹配，
-            // 异常逃逸致 Task 静默 fault。终止而非 continue：OCE 语义不明时继续消费
-            // 可能违背取消意图，终止更安全（终止经 Error 日志可观测（捕获后 Task 以 RanToCompletion 完成，与正常关停不可凭状态区分——十八轮验证轮 V3 勘正），运维可介入）。
+            // v34 P2（姊妹语义对齐）：非关停 OCE 对齐 RabbitBroker v33 判定——handler 非关停
+            // OCE = 应用自身取消 = 单消息事件（记 Error 后继续消费），而非终止整个循环。
+            // 逐行追踪证伪了原"语义不明"前提：外层非关停 OCE 只能来自 handler（Consume 的
+            // OCE 在内层 break；Task.Delay 的 OCE 必伴随 cts 取消走关停 when 分支）——同
+            // 一 handler（如 CancelAfter 超时）在旧判定下 Kafka 侧一次触发即订阅静默死亡
+            //（Close 提交 offset、后续消息无人消费），Rabbit 侧仅丢单条，语义矛盾。
+            // 继续消费与"取消意图"不冲突：真正的取消走 cts（上方 when 分支 break）。
+            // 历史（十七轮原修复）：本分支曾因"语义不明"选择终止——该前提已被逐行追踪证伪。
             catch (OperationCanceledException ex)
             {
-                _logger.Error(ex, $"Kafka consume loop terminated by non-shutdown cancellation: {topic} @ {_consumerConfig.GroupId}");
+                _logger.Error(ex, $"Handler for {typeof(TMessage).Name} threw a non-shutdown OperationCanceledException, continuing consumption: {topic} @ {_consumerConfig.GroupId}");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

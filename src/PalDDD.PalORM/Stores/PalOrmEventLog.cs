@@ -33,6 +33,13 @@ namespace PalDDD.PalORM.Stores;
 /// 被永久跳过。检查点用法要求所有追加方提交延迟相近，或改用 <c>ReadStreamAsync</c>
 /// （流内 StreamVersion 严格连续，不受自增分配倒挂影响）。
 /// </para>
+/// <para>
+/// ⚠️ <b>ITM-075 分类局限（v34 P3 声明，与 Dapper 对齐故不改行为）</b>：EFCore 姊妹
+/// （EventLogDbContext）在同场景用 eventIdExists 探测区分 EventId 撞库与流推进两因；
+/// 本栈与 Dapper 对齐为单一并发判定（重查 <c>MAX(stream_version) &gt;= 失败事件版本</c> 即转
+/// EventStreamConcurrencyException）——event_id 撞库 + 并发推进同窗叠加时误译为并发异常
+/// （调用方重试经版本预检自然收敛），接受此权衡；v3.0 对齐窗口。
+/// </para>
 /// </summary>
 public class PalOrmEventLog<TProvider> : IEventLog
     where TProvider : IDbProvider
@@ -127,6 +134,9 @@ public class PalOrmEventLog<TProvider> : IEventLog
                 // 分类逻辑镜像 Dapper 八轮修复：批内前序 INSERT 已推进 MaxVersion（同事务可见），
                 // 失败事件的赋值版本（streamVersion）未落库——重查实际版本，命中并发写入则转
                 // EventStreamConcurrencyException，否则（如批内 EventId 重复）原样上抛。
+                // v34 P3 声明：本判定为单一并发判定，不区分 EventId 撞库与流推进两因
+                // （EFCore 姊妹经 eventIdExists 探测区分）——两因同窗叠加时误译为并发异常，
+                // 重试经版本预检自然收敛；权衡声明见类头"ITM-075 分类局限"。
                 long? actualVersion = null;
                 var requerySucceeded = false;
                 try

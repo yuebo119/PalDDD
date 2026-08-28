@@ -11,7 +11,9 @@ using PalORM.PostgreSql;
 namespace PalDDD.PalORM.PostgreSql;
 
 /// <summary>
-/// PalORM PostgreSQL DI 扩展 —— 一键注册 7 Store + UnitOfWork + Scoped DataSession。
+/// PalORM PostgreSQL DI 扩展 —— 一键注册 6 Store + UnitOfWork + Scoped DataSession。
+///（v34 P3 计数勘正：原"7 Store"不实——抽象层 Store 接口共 6 个
+/// Outbox/Inbox/Saga/EventLog/ProjectionCheckpoint/Idempotency，本方法全数注册 + UnitOfWork）。
 /// <para>
 /// <b>PG 优势</b>：支持 RETURNING 子句 —— Outbox LeasePending / Inbox TryStart 走单语句原子路径（无两步回读）。
 /// BulkInsert 走 Npgsql Binary COPY（性能最优）。
@@ -21,6 +23,12 @@ public static class PostgreSqlPalOrmExtensions
 {
     /// <summary>
     /// 注册 PalORM PostgreSQL 适配包。
+    /// <para>
+    /// <b>DI 工厂 sync-over-async（ITM-166 声明，v34 P3 补齐——对齐 MySQL/SQLite 版同款声明）</b>：
+    /// <see cref="DataSession{TProvider}"/>.<c>CreateAsync</c> 是异步方法，DI 工厂是同步的——
+    /// 用 <c>GetAwaiter().GetResult()</c> 同步阻塞。仅在 Scoped 解析时执行（请求起始），非热路径；
+    /// 如未来死锁可改为 <c>Task.Run().Result</c> 或建议 PalORM 提供 IDataSessionFactory。
+    /// </para>
     /// </summary>
     /// <param name="services">DI 容器。</param>
     /// <param name="connectionString">PostgreSQL 连接串（如 "Host=localhost;Username=user;Password=pass;Database=mydb"）。</param>

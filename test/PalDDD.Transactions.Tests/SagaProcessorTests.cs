@@ -270,7 +270,7 @@ public sealed class SagaProcessorTests
         manager.InvalidateInterrupted(sagaId);
 
         Assert.Throws<InvalidOperationException>(() =>
-            manager.RegisterInterrupted(sagaId, "ghost-reentry",
+            manager.RegisterInterrupted(sagaId,
                 static (decision, ct) => ValueTask.FromResult<SagaState>(null!)));
     }
 }

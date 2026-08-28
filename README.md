@@ -152,7 +152,7 @@ InMemory 实现覆盖全部抽象接口，单元测试和原型开发无需外�
 | **PalDDD.DependencyInjection** | 2.0.0 | DI 注册入口：ServiceRegistration + AddPal 统一扩展 |
 | **PalDDD.Repository.EFCore** | 2.0.0 | EF Core 仓储：UnitOfWork + DomainEvent 拦截器 |
 | **PalDDD.Hosting.AspNetCore** | 2.0.0 | ASP.NET Core 集成：异常中间件 + 健康检查 + Minimal API 端点 |
-| **PalDDD.PalORM** | 2.0.0 | PalORM 持久化核心：7 Store + UnitOfWork（真 AOT + 源生成） |
+| **PalDDD.PalORM** | 2.0.0 | PalORM 持久化核心：6 Store + UnitOfWork（真 AOT + 源生成） |
 | **PalDDD.PalORM.PostgreSql** | 2.0.0 | PalORM PostgreSQL 方言：RETURNING / COPY |
 | **PalDDD.PalORM.MySql** | 2.0.0 | PalORM MySQL 方言：BulkCopy / 多值 INSERT |
 | **PalDDD.PalORM.Sqlite** | 2.0.0 | PalORM SQLite 方言：FTS5 / JSON1 |

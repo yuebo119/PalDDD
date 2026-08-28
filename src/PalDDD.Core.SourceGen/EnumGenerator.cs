@@ -191,16 +191,18 @@ public sealed class EnumGenerator : IIncrementalGenerator
 
                 // v33 P3：可访问性拦截——可访问性低于 internal（private/protected 等）的
                 // nested 类型对生成物不可见，RegisterValues 生成物引用必 CS0122。编译期报
-                // PALENUM007（'{1}' 经 ValueType 携带声明修饰符文本，分派侧两参格式统一）
-                // 不生成坏代码
-                if (classSymbol.DeclaredAccessibility is not (Accessibility.Public or Accessibility.Internal))
+                // PALENUM007（'{1}' 经 ValueType 携带阻断层修饰符文本，分派侧两参格式统一）
+                // 不生成坏代码。v34 P2：检查升格为 ContainingType 全链（GeneratorAccessibility
+                // 共享 helper）——中间层 private（public Outer → private Mid → internal Inner）
+                // 同样阻断生成物可见性，仅查自身声明会漏
+                if (GeneratorAccessibility.GetBlockingAccessibility(classSymbol) is { } blockingAccessibility)
                 {
                     return new EnumGenInfo(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
                         ContainingNames: [],
-                        ValueType: AccessibilityToModifierText(classSymbol.DeclaredAccessibility),
+                        ValueType: AccessibilityToModifierText(blockingAccessibility),
                         Fields: [],
                         HasFields: false,
                         DiagnosticId: "PALENUM007",

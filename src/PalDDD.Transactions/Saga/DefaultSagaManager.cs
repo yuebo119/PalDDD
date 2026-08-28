@@ -222,9 +222,11 @@ public sealed class DefaultSagaManager : ISagaManager
     // 字段只写不读（死状态）。原拟"由 GetInterruptedSagasAsync 消费"，但接口契约返回
     // IReadOnlyList<SagaState>，无法携带 DecisionType（改公共接口超出 P3 范围）；
     // 期望的决策类型仍可由调用方经 InterruptStep.DecisionType（公共 DSL 元数据）获知。
+    // v34 P3：再删 reason 参数——InterruptedSagaEntry.Reason 同样只写不读（死状态，
+    // 与 Decision/DecisionType 残留同款）；中断原因仍由 SagaState.InterruptReason 承载，
+    // 条目无需副本。
     internal void RegisterInterrupted(
         PalUlid sagaId,
-        string reason,
         Func<object, CancellationToken, ValueTask<SagaState>> resumeDispatch)
     {
         ArgumentNullException.ThrowIfNull(resumeDispatch);
@@ -235,13 +237,24 @@ public sealed class DefaultSagaManager : ISagaManager
         if (_invalidated.ContainsKey(sagaId))
             throw new InvalidOperationException(
                 $"Saga {sagaId} 已被超时兜底补偿失效，拒绝注册新的中断条目——决策不应再投向已回滚的 Saga。");
-        _interrupted[sagaId] = new InterruptedSagaEntry(sagaId, reason, resumeDispatch);
+        var entry = new InterruptedSagaEntry(sagaId, resumeDispatch);
+        _interrupted[sagaId] = entry;
+        // v34 P2 修复：写入后二次检查（double-check）收口 TOCTOU 残余——ContainsKey 检查
+        // 与字典写入是两个独立操作，"检查 false → Invalidate 落地（失效集写入+TryRemove
+        // 旧条目）→ 本方法写入新条目"的交错会让幽灵条目逃过前置检查。失效集单调为真
+        // （Invalidate 先写失效集再删条目，v29 换序），写入后重读必然看到并发失效 →
+        // 撤销刚写入的条目（KVP 身份式防误删并发新注册），任何交错下幽灵条目均不可留存
+        if (_invalidated.ContainsKey(sagaId))
+        {
+            _interrupted.TryRemove(new KeyValuePair<PalUlid, InterruptedSagaEntry>(sagaId, entry));
+            throw new InvalidOperationException(
+                $"Saga {sagaId} 在中断注册期间被超时兜底补偿失效——拒绝注册（并发失效检查）。");
+        }
     }
 
     private sealed class InterruptedSagaEntry
     {
         public PalUlid SagaId { get; }
-        public string Reason { get; }
 
         /// <summary>恢复派发委托——以决策为事件重新进入 ProcessEventAsync（见 RegisterInterrupted）。</summary>
         public Func<object, CancellationToken, ValueTask<SagaState>> ResumeDispatch { get; }
@@ -249,14 +262,13 @@ public sealed class DefaultSagaManager : ISagaManager
         // P3 修复（十七轮）：删除 Decision 属性与 SetDecision 方法——决策经 ResumeDispatch
         // 参数直接传递，属性只写不读（死状态）
         // P3 修复（二十一轮）：再删 DecisionType 属性——同理只写不读（见 RegisterInterrupted 注释）
+        // v34 P3：再删 Reason 属性——同理只写不读（见 RegisterInterrupted 注释）
 
         public InterruptedSagaEntry(
             PalUlid sagaId,
-            string reason,
             Func<object, CancellationToken, ValueTask<SagaState>> resumeDispatch)
         {
             SagaId = sagaId;
-            Reason = reason;
             ResumeDispatch = resumeDispatch;
         }
     }
