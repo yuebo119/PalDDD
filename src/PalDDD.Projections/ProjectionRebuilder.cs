@@ -34,6 +34,14 @@ public sealed class ProjectionRebuilder<TMessage>
         ArgumentNullException.ThrowIfNull(checkpointStore);
         ArgumentNullException.ThrowIfNull(processor);
 
+        // v31 P3 修复：名称一致性守卫——projectionName 与 processor 内部 handler 的
+        // ProjectionName 错位时（配置错误），ResetAsync 清 A 流检查点而 TryStartAsync 用
+        // B 名，旧 Completed 检查点残留使回放被静默跳过（重建丢事件）
+        if (!string.Equals(projectionName, processor.ProjectionName, StringComparison.Ordinal))
+            throw new ArgumentException(
+                $"projectionName '{projectionName}' 与 processor 的投影名 '{processor.ProjectionName}' 不一致——检查点重置与回放将作用于不同流。",
+                nameof(projectionName));
+
         _projectionName = projectionName;
         _sourceName = sourceName;
         _replaySource = replaySource;

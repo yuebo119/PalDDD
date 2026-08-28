@@ -129,12 +129,13 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             ?? throw new InvalidOperationException(
                 $"Message type '{typeof(TMessage).FullName}' is not registered in MessageCatalog.");
         var topic = descriptor.Name;
-        var consumer = new ConsumerBuilder<string, byte[]>(_consumerConfig).Build();
-        // v28 P3 修复：cts 创建前移至 Subscribe 之前——原位于 Subscribe 成功后、登记 try
-        // 之前，CreateLinkedTokenSource 抛出时已 Subscribe 的 consumer 无人释放（连接/组
-        // 状态泄漏，ITM-084 同族窗口）。cts 只依赖外部 ct，与 Subscribe 无时序依赖；此处
-        // 创建若抛出，consumer 尚未 Subscribe（Build 不建立网络连接），无实质资源泄漏。
+        // v31 P3 修复：cts 创建再前移到 Build 之前——v28 形态中 CreateLinkedTokenSource
+        // 位于 Build 之后、try 之外，其抛出（如 ct 源已 Dispose 时 Register 抛 ODE）时已
+        // Build 的 consumer（librdkafka native handle 已分配）无人显式 Dispose，仅靠
+        // CriticalHandle finalizer 延迟释放。cts 只依赖外部 ct，与 Build 无时序依赖；
+        // 创建失败时 consumer 尚未构造，窗口彻底关闭
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var consumer = new ConsumerBuilder<string, byte[]>(_consumerConfig).Build();
         try
         {
             consumer.Subscribe(topic); // 同步订阅（无需网络调用）

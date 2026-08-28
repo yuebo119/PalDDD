@@ -457,6 +457,7 @@ struct PalDDD.Projections.ProjectionContext
   method System.String ToString()
 class PalDDD.Projections.ProjectionProcessor<TMessage>
   ctor(PalDDD.Projections.IProjectionHandler<TMessage> handler, PalDDD.Projections.IProjectionCheckpointStore checkpointStore, System.TimeProvider timeProvider, System.TimeSpan processingTimeout, PalDDD.Core.Logging.IPalLogger<PalDDD.Projections.ProjectionProcessor<TMessage>> logger)
+  property System.String ProjectionName
   method System.Threading.Tasks.ValueTask<System.Boolean> ProcessAsync(TMessage message, PalDDD.Projections.ProjectionContext context, System.Threading.CancellationToken ct)
 class PalDDD.Projections.ProjectionRebuilder<TMessage>
   ctor(System.String projectionName, System.String sourceName, PalDDD.Projections.IEventReplaySource<TMessage> replaySource, PalDDD.Projections.IProjectionCheckpointStore checkpointStore, PalDDD.Projections.ProjectionProcessor<TMessage> processor)
