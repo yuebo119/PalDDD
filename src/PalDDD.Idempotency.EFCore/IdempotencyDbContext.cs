@@ -104,6 +104,15 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         ArgumentNullException.ThrowIfNull(record);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
 
+        // v38 P2 修复：Completed 终态守卫（镜像 InMemoryIdempotencyStore:139 八轮
+        // "Completed 终态不可翻转为 Failed" + PalOrmIdempotencyStore:196 SQL
+        // "AND status <> Completed"——本栈是 PD24 管线孪生唯一漏网）。同实例续写
+        // 场景下 UpdatedAt 并发令牌失守（Attach 后 original=current，UPDATE 恒命中），
+        // Completed 翻转为 Failed 会使 TryStartAsync 走 CAS 复用 → 副作用重新执行，
+        // 幂等保证被绕过
+        if (record.Status == IdempotencyRecordStatus.Completed)
+            return;
+
         AttachIfDetached(record);
         // v26 P3 修复：存储层截断兜底（FailureReason.Normalize）——Error 列上限内保障，
         // 超长原因使 MarkFailed 持久化自身抛 DbUpdateException 掩盖原始失败（调用层

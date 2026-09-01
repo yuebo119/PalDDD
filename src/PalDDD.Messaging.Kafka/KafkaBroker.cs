@@ -366,9 +366,19 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         // 三十八轮 P2 修复：Dispose 前 Flush 排空 in-flight 消息——关停瞬间仍在飞行中的
         // produce（ct 取消边界/并发发布中）没有排空机会即被 librdkafka destroy 丢弃。
         // 有限超时 5 秒：剩余未确认消息记 Warning（调用方可据此判断是否需要重发）。
-        var remaining = _producer.Flush(TimeSpan.FromSeconds(5));
-        if (remaining > 0)
-            _logger.Warning($"KafkaBroker disposed with {remaining} unconfirmed message(s) still in-flight (flush timeout 5s)");
+        // v38 P3：Flush 异常不阻断 Dispose——Flush 抛非 OCE 异常（handle 失效等）时裸调
+        // 会让 _producer.Dispose 被跳过，native handle 只能靠 finalizer 兜底（对齐
+        // KafkaSubscription 委托的 try-finally 嵌套防护）
+        try
+        {
+            var remaining = _producer.Flush(TimeSpan.FromSeconds(5));
+            if (remaining > 0)
+                _logger.Warning($"KafkaBroker disposed with {remaining} unconfirmed message(s) still in-flight (flush timeout 5s)");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.Warning($"KafkaBroker flush during dispose failed, proceeding to dispose producer: {ex.Message}");
+        }
         _producer.Dispose();
     }
 
