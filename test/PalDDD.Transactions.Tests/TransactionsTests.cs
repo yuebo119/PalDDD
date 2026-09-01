@@ -982,6 +982,34 @@ public sealed class SagaTimeoutProcessorTests
         await Assert.That(state.ErrorAt).IsNotNull();
     }
 
+    // v43 P2 语义矩阵测试：E1-P2 场景——AWD 中断态 + 同状态已成功普通步骤的残留
+    // 时间戳超期，不得触发兜底补偿（中断态显式无限等待契约；修复前 IsTimedOut 命中
+    // "早已成功"的步骤 A 导致中断被回滚）
+    [Test]
+    public async Task CheckTimeoutsAsync_AwdWithCompletedStepResidualTimestamp_NotCompensated()
+    {
+        var state = new OrderSagaState
+        {
+            CurrentState = "Waiting",
+            Status = SagaStatus.AwaitingHumanDecision
+        };
+        // 步骤 A 已成功执行（ExecutedStepKeys 在案）+ 残留时间戳超期
+        state.StepStartedAt["Waiting|OrderPlacedSagaEvent"] = DateTimeOffset.UnixEpoch;
+        state.ExecutedStepKeys.Add("Waiting|OrderPlacedSagaEvent");
+        var store = new RecordingSagaStateStore([state]);
+        var processor = new SagaTimeoutProcessor<OrderSagaState>(
+            store,
+            new TimedOutSaga(), // 步骤 A 配 Timeout=1s（超期）
+            NullPalLogger<SagaTimeoutProcessor<OrderSagaState>>.Instance,
+            new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions()),
+            TimeProvider.System);
+
+        await processor.CheckTimeoutsAsync(CancellationToken.None);
+
+        // AWD 显式无限等待：残留时间戳不触发兜底补偿
+        await Assert.That(state.Status).IsEqualTo(SagaStatus.AwaitingHumanDecision);
+    }
+
     [Test]
     public async Task CheckTimeoutsAsync_InterruptedSaga_WithExpiredStepTimeout_IsCompensated()
     {

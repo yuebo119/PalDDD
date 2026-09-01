@@ -53,10 +53,19 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         if (!await reader.ReadAsync(ct).ConfigureAwait(false)) return null;
 
+        // v43 P2：locked_until/expires_at/updated_at 三时间戳列补 IsDBNull 容错——此前仅
+        // response_payload/error 两列（姊妹 6/7）有 IsDBNull 检查，3/4/5 直读 GetDateTime 遇
+        // DBNull 抛 provider 空值异常（正常写入路径三列恒非空，损坏行/手工数据路径无容错）。
+        // 容错口径（分支形态镜像 PalOrmSagaStateStore.ReadSagaRow 的 IsDBNull 三元式；回退
+        // DateTimeOffset.MinValue 而非 null——IdempotencyRecord 构造三时间戳为非空契约）：
+        // expires_at=MinValue 使 GetAsync 视为已过期返回 null（无法判定的记录不当作有效放行）；
+        // locked_until=MinValue 使 Processing 租约判定恒过期、不阻塞重租；updated_at=MinValue
+        // 作为乐观锁基准时 UPDATE 的 NULL 等值比较恒不命中，Mark* 不写本地对象（P1-3 行为：
+        // affected=0 不假装成功）。
         var record = new IdempotencyRecord(
             reader.GetString(0), reader.GetString(1),
             (IdempotencyRecordStatus)reader.GetInt32(2),
-            GetUtc(reader, 3), GetUtc(reader, 4), GetUtc(reader, 5));
+            GetUtcOrMin(reader, 3), GetUtcOrMin(reader, 4), GetUtcOrMin(reader, 5));
 
         if (record.ExpiresAt <= now) return null;
 
@@ -215,6 +224,13 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
     /// </summary>
     private static DateTimeOffset GetUtc(DbDataReader reader, int ordinal)
         => DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc);
+
+    /// <summary>
+    /// v43 P2：时间戳列 DBNull 容错读取——DBNull 回退 DateTimeOffset.MinValue（容错口径见
+    /// <see cref="GetAsync"/> 注释），非空走 <see cref="GetUtc"/>。
+    /// </summary>
+    private static DateTimeOffset GetUtcOrMin(DbDataReader reader, int ordinal)
+        => reader.IsDBNull(ordinal) ? default : GetUtc(reader, ordinal);
 
     /// <summary>
     /// ITM-243：创建 raw command 并挂接 IUnitOfWork 活动事务。GetRawConnection().CreateCommand()

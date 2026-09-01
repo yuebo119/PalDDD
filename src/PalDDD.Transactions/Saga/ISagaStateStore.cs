@@ -16,7 +16,8 @@ public interface ISagaStateStore<TState> where TState : SagaState
     /// <summary>
     /// 获取一批活跃的 Saga 状态（<see cref="SagaStatus.Active"/> 与
     /// <see cref="SagaStatus.AwaitingHumanDecision"/>——三十四轮起中断态纳入扫描，
-    /// 用于中断步骤超时兜底补偿；未配置步骤 Timeout 的中断态不会被 IsTimedOut 命中）。
+    /// 用于中断步骤超时兜底补偿；v43 勘正：IsTimedOut 判据含"步骤未成功完成"排除
+    /// （ExecutedStepKeys 排除）——同状态已成功步骤的残留时间戳不再触发中断态兜底补偿）。
     /// </summary>
     ValueTask<IReadOnlyList<TState>> GetActiveSagasAsync(int batchSize, CancellationToken ct);
 

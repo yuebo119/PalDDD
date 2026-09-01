@@ -105,7 +105,8 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     /// <c>(LockedBy, LockedUntil)</c> 与租约时捕获的标识对<b>完全匹配</b>——租约过期被重租（同 owner
     /// 复用或他 owner 接手）后，旧 worker 的终态写影响 0 行（<c>LockedUntil</c> 随每次租约单调变化，
     /// 充当 fencing token，免 DDL 加列）；无租约直呼（LockedBy 为 null，运维/测试路径）当行当前
-    /// 未被租（<c>LockedBy IS NULL</c>）且 <c>RetryCount</c> 与入参快照一致时放行（v30 P3 补快照
+    /// 未被租（<c>LockedBy IS NULL</c）、仍为 Pending（v43 P2 补终态守卫）且 <c>RetryCount</c>
+    /// 与入参快照一致时放行（v30 P3 补快照
     /// 守卫；v33 P3 起持租分支同要求 RetryCount 快照一致，见 <see cref="FencedTarget"/>）。
     /// </remarks>
     public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
@@ -199,8 +200,8 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
 
     /// <summary>
     /// 租约 token 守卫目标集——持租调用方匹配 (LockedBy, LockedUntil) 标识对且 RetryCount
-    /// 与入参快照一致；无租约直呼（LockedBy 为 null）放行当前未被租的行，且要求 RetryCount
-    /// 快照一致。
+    /// 与入参快照一致；无租约直呼（LockedBy 为 null）放行当前未被租且仍为 Pending 的行，
+    /// 且要求 RetryCount 快照一致。
     /// </summary>
     /// <remarks>三十四轮 ITM-210 落地：原 <c>LockedBy IS NULL OR LockedBy == 原持有者</c> 守卫的
     /// "NULL 放行"分支正是 fencing 缺口——租约被释放（ReleaseForRetry/RequeueDead）后旧 worker
@@ -215,7 +216,12 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     /// MarkProcessed/MarkDead/ReleaseForRetry 的 retry_count 快照形态）——快照在捕获点冻结为
     /// 局部变量，lambda 不再引用可变实体属性；持旧 RetryCount 快照的调用方在行被并发推进后
     /// 其写不再命中。本方法为
-    /// MarkProcessed/MarkDead/ReleaseForRetry 三方法共享目标集，一处守卫三方法生效。</remarks>
+    /// MarkProcessed/MarkDead/ReleaseForRetry 三方法共享目标集，一处守卫三方法生效。<br/>
+    /// v43 P2：无租约分支补 <c>Status == Pending</c> 终态守卫（与 <see cref="ReleaseForRetry"/>
+    /// 的 v33 P3 守卫同形态，该轮三栈收口参照了 RequeueDead 的 Status 守卫形态但 Mark* 未纳入）——
+    /// 无租约直呼语义是"未租行的终态化"（Pending 行才可终态化），原守卫可把 Dead 翻 Processed、
+    /// Processed 翻 Dead（FencedTarget 三方法共享，一处修复同时收口）。持租分支不受影响：
+    /// 租约只落在 Pending 行上，持租处理中的行恒为 Pending。</remarks>
     private IQueryable<OutboxMessage> FencedTarget(OutboxMessage message)
     {
         var originalOwner = message.LockedBy;
@@ -225,7 +231,9 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         var originalRetry = message.RetryCount;
         var target = OutboxMessages.Where(m => m.Id == message.Id);
         return originalOwner is null
-            ? target.Where(m => m.LockedBy == null && m.RetryCount == originalRetry)
+            // v43 P2：无租约分支补 Status == Pending 终态守卫——未租行中仅 Pending 可被
+            // Mark*/ReleaseForRetry 推进（对齐 ReleaseForRetry v33 P3 守卫形态）
+            ? target.Where(m => m.LockedBy == null && m.RetryCount == originalRetry && m.Status == OutboxStatus.Pending)
             : target.Where(m => m.LockedBy == originalOwner && m.LockedUntil == originalUntil && m.RetryCount == originalRetry);
     }
 

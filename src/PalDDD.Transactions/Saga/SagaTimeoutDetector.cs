@@ -49,10 +49,24 @@ internal sealed class SagaTimeoutDetector<TState>
         List<SagaStep> list = [];
         foreach (var (key, step) in _stepsInOrder)
         {
+            // v43 P2 修复（判据三条件合取，三个既有测试语义矩阵一次保全）：
+            // ① E1-P2 场景（AWD + 普通步骤已成功 + 残留时间戳超期）→ 排除：StepStartedAt
+            //    只写不清（v17 声明），三十四轮 AWD 纳入扫描后同状态混注册（带 Timeout 普通
+            //    步骤 A 成功执行 + 无 Timeout InterruptStep 中断）时，A 的残留时间戳让
+            //    IsTimedOut 命中"早已成功"的 A，违背中断态"显式无限等待"契约；
+            // ② 三十四轮场景（InterruptStep 自带 Timeout 超期）→ 保留触发："等待人工决策
+            //    超时"是 InterruptStep 的设计能力（人工决策失踪由 Timeout 兜底回滚）；
+            // ③ Active 态普通步骤已成功 + 超期 → 保留触发：saga 卡死兜底
+            //    （RecordsCompensationFailedStatus 语义）。
+            // 排除条件 = AWD 态 ∧ 步骤已成功完成 ∧ 非 InterruptStep
+            var isAwdCompletedNonInterruptStep = state.Status == SagaStatus.AwaitingHumanDecision
+                && state.ExecutedStepKeys.Contains(key)
+                && step.DispatchKind != StepDispatchKind.Interrupt;
             if (step.Timeout.HasValue
                 && state.CurrentState == SagaKey.ExtractState(key)
                 && state.StepStartedAt.TryGetValue(key, out var startedAt)
-                && (now - startedAt) > step.Timeout.Value)
+                && (now - startedAt) > step.Timeout.Value
+                && !isAwdCompletedNonInterruptStep)
             {
                 list.Add(step);
             }

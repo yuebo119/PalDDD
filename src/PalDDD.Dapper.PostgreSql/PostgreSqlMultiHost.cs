@@ -350,7 +350,8 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
     /// </para>
     /// <para>
     /// v37 P3：IPv6 字面量条目不支持自动端口追加——方括号形态（<c>[::1]:5432</c>，
-    /// NormalizeHostEntry 整体保留）与裸 IPv6（<c>::1</c>，含多个冒号）追加 <c>:port</c>
+    /// v43 P2 起 NormalizeHostEntry 拆出方括号 host 与内嵌端口，端口随 ITM-132 契约编码，
+    /// 输出与原样等价）与裸 IPv6（<c>::1</c>，含多个冒号）追加 <c>:port</c>
     /// 均产出 Npgsql 无法解析的畸形条目（如 <c>[::1]:5432:5433</c>），此类条目 Host 原样
     /// 输出，端口需用内嵌端口语法或依赖默认端口 5432。
     /// </para>
@@ -405,6 +406,8 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
                 else if (bareHost.StartsWith('['))
                 {
                     // 形态②：方括号 + 内嵌端口，自洽
+                    //（v43 P2 勘正：NormalizeHostEntry 已把 "[::1]:port" 拆出方括号 host——
+                    // 本分支现仅畸形 '[' 开头无 ']' 条目可达，防御性保留）
                     encoded.Add(bareHost);
                 }
                 else
@@ -449,8 +452,11 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
     /// </para>
     /// <para>
     /// 仅当冒号为<b>唯一</b>冒号且后缀可解析为整数才拆分：裸 IPv6 字面量（如 "::1"）内部
-    /// 含冒号，误拆会产生 (":", 1) 畸形对；方括号 IPv6（"[::1]:5432"）不拆分，整体作主机名
-    /// （较 v25 Failover 查重内联的 LastIndex 解析收紧了该边界）。
+    /// 含冒号，误拆会产生 (":", 1) 畸形对。v43 P2 追加方括号条目等价形态分支：方括号纯
+    /// host（"[::1]"，']' 收尾）返回 (原串含方括号, fallback)；方括号+内嵌端口
+    ///（"[::1]:5433"，']' 后带 ":port"）拆出 (方括号 host, 内嵌端口)——同实例双语法 tuple
+    /// 相等、查重可检出（'[::1]' + Port=5433 与 '[::1]:5433' 归一化结果一致）；畸形条目
+    ///（'[' 开头无 ']' / ']' 后非 ":port"）落回唯一冒号判定，行为不变。
     /// </para>
     /// </summary>
     /// <param name="rawHost">原始 Host 条目（可为多主机列表中的单项，内部 Trim）。</param>
@@ -458,6 +464,27 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
     internal static (string Host, int Port) NormalizeHostEntry(string? rawHost, int fallbackPort)
     {
         var entry = rawHost?.Trim() ?? "";
+        // v43 P2：方括号条目等价形态归一——"[::1]"（方括号纯 host）与 "[::1]:5433"（方括号
+        // +内嵌端口）是同一实例的两种语法，原实现均走唯一冒号判定：前者多冒号不拆返回
+        // (原串, fallback)，后者 LastIndexOf 落在端口分隔符但与 IndexOf（方括号内冒号）不等
+        // 同样返回 (原串, fallback)——双语法 tuple 恒不等，查重漏检（primary "[::1]"+Port=5433
+        // 与 standby "Host=[::1]:5433" 同指一机不可检出）。分支：']' 收尾返回 (原串, fallback)；
+        // ']' 后带 ":port" 拆出 (方括号 host, 内嵌端口)——tuple 口径统一为真实端口。畸形条目
+        //（'[' 无 ']' / ']' 后非 ":port"）落回下方唯一冒号判定，行为不变。
+        if (entry.StartsWith('['))
+        {
+            var close = entry.IndexOf(']');
+            if (close > 0)
+            {
+                if (close == entry.Length - 1)
+                    return (entry, fallbackPort);
+                if (entry.AsSpan(close + 1).StartsWith(":")
+                    && int.TryParse(entry.AsSpan(close + 2), out var bracketed))
+                {
+                    return (entry[..(close + 1)], bracketed);
+                }
+            }
+        }
         var colon = entry.LastIndexOf(':');
         if (colon >= 0 && entry.IndexOf(':') == colon
             && int.TryParse(entry.AsSpan(colon + 1), out var embedded))
