@@ -64,9 +64,13 @@ public sealed class AddVersionSuffixCodeFix : CodeFixProvider
 
         // ITM-221 修复（三十二轮）：替换已有 .v{N} 后缀而非叠加——
         // 原实现只检查目标版本结尾，x.v1 + v2 生成 x.v1.v2（字面通过校验但语义错误）。
+        // v41 P3：循环剥离所有 .vN 后缀段——Regex.Replace 带 $ 锚单次调用只剥末尾一段，
+        // 双后缀输入（x.v1.v2）残留 x.v1.v{N}（产物仍含两个后缀段，字面通过结尾校验
+        // 但语义错误）；循环至无匹配后再拼唯一新后缀
         var oldValue = literal.Token.ValueText;
-        var withoutSuffix = System.Text.RegularExpressions.Regex.Replace(oldValue, @"\.v\d+$", "");
-        var newValue = withoutSuffix + $".v{schemaVersion}";
+        while (System.Text.RegularExpressions.Regex.IsMatch(oldValue, @"\.v\d+$"))
+            oldValue = System.Text.RegularExpressions.Regex.Replace(oldValue, @"\.v\d+$", "");
+        var newValue = oldValue + $".v{schemaVersion}";
 
         editor.ReplaceNode(literal, SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression,
             SyntaxFactory.Literal(newValue)).WithTriviaFrom(literal));

@@ -79,19 +79,25 @@ public static class MySqlMultiHost
         if (string.IsNullOrWhiteSpace(standbyBuilder.Server))
             throw new ArgumentException(
                 "Standby connection string is missing 'Server='. Failover cannot silently include an empty host.");
-        // v27 P3（B 片 N8）：Port 一致性校验改内嵌端口感知——MySqlConnector 的 Server 支持
-        // "host:port" 内嵌语法（内嵌端口不吸收进 Port 属性，v26 H5 已证），合并后未内嵌端口
-        // 的条目统一用 primary 的共享 Port。归一化判定（解析规则与 NormalizeServerEntry 同款，
-        // 经 HasHostWithoutEmbeddedPort）：standby 全部条目均内嵌端口 → 其 Port 声明不参与实际
-        // 连接，跳过比较（原属性直比会误拒实际无冲突的配置，如 primary "Server=db1;Port=3306"
-        // + standby "Server=db2:3306;Port=3307"——实际端口一致仅属性不同）；standby 存在未
-        // 内嵌条目（依赖共享 Port）→ 保持原有一致性要求，差异快速失败。
-        if (HasHostWithoutEmbeddedPort(standbyBuilder.Server) && standbyBuilder.Port != primaryBuilder.Port)
+        // v41 P2 勘正：v27 N8 曾称"MySqlConnector 的 Server 支持 host:port 内嵌语法（v26 H5
+        // 已证）"——该声明失实：H5 所证仅为"内嵌端口不吸收进 Port 属性"（属性层为真），运行时
+        // 建连层不支持（MySqlConnector 2.6.2 源码：ConnectionSettings 仅 Split(',') 且端口恒取
+        // 共享 Port；主机名原样传 Dns.GetHostAddresses——"db2:3306" 是非法 DNS 主机名必炸；
+        // 维护者 feature request #762 open 至今）。内嵌语法现一律 fail-fast；Port 一致性恢复
+        // 无条件校验（原"内嵌感知跳过"建立在不存在的语法上）。
+        if (standbyBuilder.Server.Contains(':'))
         {
             throw new ArgumentException(
-                "standby 与 primary 的 Port 必须一致：MySQL 连接串的共享 Port 对未内嵌端口的主机列表条目统一生效，"
-                + "差异无法表达且会被静默丢弃（合并后 standby 的未内嵌条目被静默改用 primary 端口，故障转移后必然连接失败）。"
-                + "请统一端口、改用 Server 内嵌 \"host:port\" 语法逐条目声明，或使用自定义多主机扩展。");
+                "standby Server 含内嵌端口语法（\"host:port\"）——MySqlConnector 2.6.2 不支持该语法"
+                + "（主机名原样传 DNS 解析，含冒号条目是非法主机名，该节点永不可连）。"
+                + "请移除内嵌端口、统一使用共享 Port 关键字。");
+        }
+        if (standbyBuilder.Port != primaryBuilder.Port)
+        {
+            throw new ArgumentException(
+                "standby 与 primary 的 Port 必须一致：MySQL 连接串的共享 Port 对主机列表条目统一生效，"
+                + "差异无法表达且会被静默丢弃（合并后 standby 条目被静默改用 primary 端口，故障转移后必然连接失败）。"
+                + "请统一端口（MySQL 多主机不支持 per-host 端口声明）。");
         }
 
         // v21 B-2（v27 P3 B 片 N7 勘正行为）：primary 缺 Server 时 Server 属性为空串
@@ -100,9 +106,9 @@ public static class MySqlMultiHost
         // v26 P3 H5：拼接前 Server 查重 fail-fast（镜像 PG Failover 入口 v25 C9 查重）——
         // primary/standby 同指一机时拼接产生重复 Server 条目（如 "mysql1,mysql1"），
         // FailOver 把同一实例视作两个节点轮试，故障转移语义错乱。归一化经
-        // NormalizeServerEntry：MySqlConnector 的 Server 支持 "server:port" 内嵌语法，
+        // NormalizeServerEntry：v41 勘正——MySqlConnector 实不支持 "server:port" 内嵌语法
         // 属性返回原始串（内嵌端口不吸收进 Port 属性），须拆出 (裸名, port) 再比较；未
-        // 内嵌端口时回退共享 Port（MySqlConnector 语义：Port 只对未内嵌端口的主机生效）。
+        // （见 :82 v41 P2 勘正）；归一化仅用于查重比较口径统一，内嵌形态已被入口 fail-fast 拦截。
         // primary 列表空条目（primary 缺 Server 的 Split 产物）跳过——该输入随后由下方
         // N7 fail-fast 拦截，此处跳过仅为不误抛"重复"异常。
         // v29 P3（S4，镜像 PG 侧 v28/v29 形态）：standby 侧改复数版 NormalizeServerEntries
@@ -227,7 +233,7 @@ public static class MySqlMultiHost
     }
 
     /// <summary>
-    /// v26 P3（H5）：Server 内嵌端口归一化（MySqlConnector 语义）——解析 "server:port"
+    /// v41 勘正：MySqlConnector 不支持 Server 内嵌端口（见多主机入口 v41 P2）——解析 "server:port"
     /// 形式为 (裸名, 端口)。MySqlConnector 连接串的 Server 支持 "host:port" 内嵌语法，
     /// 属性返回原始串（内嵌端口不吸收进 Port 属性），与裸名+共享 Port 直接比较恒不等。
     /// 未内嵌端口时返回 (原串, <paramref name="fallbackPort"/>)。

@@ -800,6 +800,38 @@ public sealed class StrategicDddAnalyzerTests
         await Assert.That(result).IsEqualTo(fixedSource);
     }
 
+    // v41 P3：双后缀输入回归——原 Regex 单次剥离去末尾一段 .vN，x.v1.v2 产物残留
+    // x.v1.v{N}（仍含两个后缀段）；循环剥离后产物只含一个后缀
+    [Test]
+    public async Task AddVersionSuffix_StripsAllExistingSuffixesOnDoubleSuffixInput()
+    {
+        var source = """
+            using PalDDD.Core;
+
+            [BoundedContext("ordering")]
+            [GenerateMessage(Name = "ordering.order-submitted.v1.v2", SchemaVersion = 3)]
+            public sealed class OrderSubmitted : DomainEvent, IDomainEvent
+            {
+                public static string EventName => "ordering.order-submitted.v2";
+            }
+            """;
+
+        var fixedSource = """
+            using PalDDD.Core;
+
+            [BoundedContext("ordering")]
+            [GenerateMessage(Name = "ordering.order-submitted.v3", SchemaVersion = 3)]
+            public sealed class OrderSubmitted : DomainEvent, IDomainEvent
+            {
+                public static string EventName => "ordering.order-submitted.v2";
+            }
+            """;
+
+        var result = await ApplyCodeFixAsync(source, "PDDD010");
+        // 产物只含一个后缀：整体相等锁定无 .v1.v2 双后缀残留
+        await Assert.That(result).IsEqualTo(fixedSource);
+    }
+
     [Test]
     public async Task AddBoundedContextPrefix_FixesMessageNameContextMismatch()
     {

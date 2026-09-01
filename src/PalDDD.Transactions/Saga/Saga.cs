@@ -779,10 +779,11 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // 注册键（stepKey 参数）而非路由目标键（matchedKey）——实际执行体与计时对象是 matchedKey。
         // 耗时/失败在观察端归因到 Dynamic 入口名下属刻意设计（跟踪 Dynamic 分发总量）。
         // 路由到目标步骤 key
-        // v40 P2 修复：Route 求值纳入失败管线——用户 router 委托抛异常此前直接逃逸
-        // ProcessEventAsync（零重试/零补偿/零观测），前序已执行步骤的 ExecutedStepKeys
-        // 无人消费。Route 是 DynamicStep 文档声明的"步骤执行时求值"的一部分，其失败按
-        // 步骤失败同型处理：并入 failures 让补偿链消费（下段 try 的补偿/重试管线可达）
+        // v40/v41 勘正：Route 求值失败按 fail-fast 直接抛出（AggregateException 包装
+        // 提升 router 异常的可定位性 + OCE 过滤防关停信号被吞）——不进下段重试/补偿
+        // 管线（throw 位于重试循环之前，v40 注释曾误称"补偿链消费"，A 片复核证伪）。
+        // 前序已执行步骤的 ExecutedStepKeys 消费由 SagaTimeoutProcessor 超时兜底或
+        // 调用方 catch 后自行处理；嵌套子 Saga 场景经反射包装为步骤失败可获父级重试
         List<Exception> routeFailures = [];
         string targetKey;
         try

@@ -41,6 +41,12 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
         // 使 GetHashCode()（Equality 路径）与 FromValue/All（Dictionary 键路径）NRE，
         // 且此时字典键含 null，失败点远离构造处，晦涩难诊。构造即 fail-fast。
         ArgumentNullException.ThrowIfNull(value);
+        // v41 P3（姊妹漏网，对齐同项目 Attributes.cs 四处 IsNullOrWhiteSpace 守卫族）：
+        // name 显式传空白串（""/空白字符）时不是 null、不触发下方 ToString() 兜底，
+        // 空白 Name 直接进字典与序列化路径（静默产出不可用枚举名）；null 仍走默认
+        // value.ToString() 路径（保留），仅空白串 fail-fast
+        if (name is not null && string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("Name cannot be blank", nameof(name));
         Value = value;
         // ITM-101 修复：TValue.ToString() 返回 null 时回退 ""——自定义 TValue 的
         // ToString() 可返回 null，原 `name ?? value.ToString()!` 使 Name 为 null，
@@ -154,7 +160,14 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
 
     public override string ToString() => Name;
 
-    public static bool operator ==(SmartEnum<TSelf, TValue>? left, TSelf? right) => left?.Equals(right) ?? right is null;
+    // v41 P3：运算符对称性修复——原第二参数为 TSelf?，混合比较（左操作数为
+    // SmartEnum 基类变量、右为 TSelf 派生变量）时绑定本运算符走值相等，反向
+    //（派生在左、基类在右）因基类→派生无隐式转换不绑定，回退 object== 引用相等——
+    // 同一对操作数交换后 == 结果可能分叉（值相等 vs 引用相等）。第二参数放宽为
+    // SmartEnum<TSelf,TValue>? 后双向均绑定；运算符体经 is TSelf 模式匹配收窄，
+    // 非 TSelf 的同封闭基类实例返回 false（对齐上方 Equals(object) 的 obj is TSelf 语义）。
+    public static bool operator ==(SmartEnum<TSelf, TValue>? left, SmartEnum<TSelf, TValue>? right)
+        => left is null ? right is null : right is TSelf typed && left.Equals(typed);
 
-    public static bool operator !=(SmartEnum<TSelf, TValue>? left, TSelf? right) => !(left == right);
+    public static bool operator !=(SmartEnum<TSelf, TValue>? left, SmartEnum<TSelf, TValue>? right) => !(left == right);
 }

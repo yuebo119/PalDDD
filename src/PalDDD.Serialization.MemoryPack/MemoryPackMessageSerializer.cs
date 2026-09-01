@@ -40,6 +40,11 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
     /// <inheritdoc />
     public ReadOnlyMemory<byte> Serialize<TMessage>(TMessage message, MessageDescriptor? descriptor = null)
     {
+        // v41 P3（对齐 Json 姊妹 v25 C7）：补 null 守卫——null 引用消息交给 MemoryPack 会静默
+        // 产出 nil 载荷（反序列化得 null，错误远离序列化点），现入口抛 ArgumentNullException。
+        // TMessage 为值类型时 ThrowIfNull 为 no-op（JIT 消除）
+        ArgumentNullException.ThrowIfNull(message);
+
         // P3 修复（八轮评审）：泛型路径 descriptor 可选——非 null 时校验 ContentType 断链
         if (descriptor is not null)
             ValidateDescriptorContentType(descriptor);
