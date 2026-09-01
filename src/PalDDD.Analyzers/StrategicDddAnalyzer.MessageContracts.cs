@@ -49,7 +49,22 @@ public sealed partial class StrategicDddAnalyzer
                 // 比对 messageName 恒报 PDDD015 误报；非字面量无法静态判定，跳过比对。
                 // 注意区分：完全缺失声明时返回 (null, null)——Location 为 null，保留
                 // 原"缺失声明同样报 PDDD015"行为（事件契约诊断不因缺失而静默）。
-                if (eventName is not { Name: null, Location: not null }
+                // v40 P3：完全缺失腿（(null, null)）单列专用消息 DomainEventNameMissing——
+                // 原实现该腿落入比对消息，EventName 值占位符格式化 null 为空串，诊断不可读；
+                // 专用诊断带同款 ExpectedMessageName 属性（code fix 侧经类声明定位找不到
+                // EventName 属性仍不注册 fix，MissingEventNameDeclaration 测试锁定的行为不变）
+                if (eventName is { Name: null, Location: null })
+                {
+                    var missingProperties = ImmutableDictionary<string, string?>.Empty
+                        .Add("ExpectedMessageName", messageName);
+                    context.ReportDiagnostic(Diagnostic.Create(
+                        DomainEventNameMissing,
+                        type.Locations[0],
+                        missingProperties,
+                        type.Name,
+                        messageName));
+                }
+                else if (eventName is not { Name: null, Location: not null }
                     && !StringComparer.Ordinal.Equals(eventName.Name, messageName))
                 {
                     var properties = ImmutableDictionary<string, string?>.Empty

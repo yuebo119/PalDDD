@@ -154,6 +154,18 @@ public sealed partial class StrategicDddAnalyzer : DiagnosticAnalyzer
         DiagnosticSeverity.Warning,
         isEnabledByDefault: true);
 
+    // v40 P3：PDDD015 完全缺失声明腿的专用描述符（同 ID PDDD015，双描述符合法且均入
+    // SupportedDiagnostics）——原实现该腿复用比对消息，EventName 值占位符格式化 null
+    // 为空串，诊断不可读。与 DomainEventNameMismatch 的参数序不同：{0}=类型名
+    //（缺失时无 EventName 值可显示），{1}=期望消息名
+    private static readonly DiagnosticDescriptor DomainEventNameMissing = new(
+        DomainEventNameMismatchId,
+        "Domain events must declare a static EventName",
+        "EventName declaration is missing on domain event '{0}'; it must be a string literal matching generated message name '{1}'",
+        "PalDDD.MessageContracts",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
     [
         MissingBoundedContext,
@@ -170,7 +182,8 @@ public sealed partial class StrategicDddAnalyzer : DiagnosticAnalyzer
         UnsealedDomainEvent,
         ProjectionNameContextMismatch,
         ProcessManagerNameContextMismatch,
-        DomainEventNameMismatch
+        DomainEventNameMismatch,
+        DomainEventNameMissing
     ];
 
     public override void Initialize(AnalysisContext context)

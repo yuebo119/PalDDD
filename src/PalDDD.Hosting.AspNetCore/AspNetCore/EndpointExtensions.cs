@@ -32,6 +32,19 @@ public static class EndpointExtensions
 
         return endpoints.MapPost(pattern, async context =>
         {
+            // v40 P3：非 JSON Content-Type 的 POST 原由 ReadFromJsonAsync 抛
+            // InvalidOperationException（非 JsonException）逃逸为 500——语义应为
+            // 415 Unsupported Media Type（RFC 9110 §15.5.16，对齐 ASP.NET Core MVC
+            // [ApiController] 的 Content-Type 约束行为），带 ProblemDetails 形态体
+            if (!context.Request.HasJsonContentType())
+            {
+                context.Response.StatusCode = StatusCodes.Status415UnsupportedMediaType;
+                await context.Response.WriteAsJsonAsync(
+                    ValidationProblemResponseFactory.CreateUnsupportedContentType(),
+                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                    contentType: null).ConfigureAwait(false);
+                return;
+            }
             TCommand? cmd;
             try
             {
@@ -106,6 +119,19 @@ public static class EndpointExtensions
 
         return endpoints.MapPost(pattern, async context =>
         {
+            // v40 P3：非 JSON Content-Type 的 POST 原由 ReadFromJsonAsync 抛
+            // InvalidOperationException（非 JsonException）逃逸为 500——语义应为
+            // 415 Unsupported Media Type（RFC 9110 §15.5.16，对齐 ASP.NET Core MVC
+            // [ApiController] 的 Content-Type 约束行为），带 ProblemDetails 形态体
+            if (!context.Request.HasJsonContentType())
+            {
+                context.Response.StatusCode = StatusCodes.Status415UnsupportedMediaType;
+                await context.Response.WriteAsJsonAsync(
+                    ValidationProblemResponseFactory.CreateUnsupportedContentType(),
+                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                    contentType: null).ConfigureAwait(false);
+                return;
+            }
             TCommand? cmd;
             try
             {
@@ -258,6 +284,15 @@ internal static class ValidationProblemResponseFactory
             "Invalid Request Body",
             StatusCodes.Status400BadRequest,
             [new ValidationProblemError("requestBody", message)]);
+
+    /// <summary>非 JSON Content-Type 构造 ValidationProblemResponse（v40 P3：415 短路路径的
+    /// ProblemDetails 形态体，链接 RFC 9110 §15.5.16）。</summary>
+    internal static ValidationProblemResponse CreateUnsupportedContentType()
+        => new(
+            "https://www.rfc-editor.org/rfc/rfc9110#section-15.5.16",
+            "Unsupported Media Type",
+            StatusCodes.Status415UnsupportedMediaType,
+            [new ValidationProblemError("contentType", "Request Content-Type is not application/json.")]);
 
     /// <summary>按 PalValidationException 构造规范 ValidationProblemResponse（RFC 9110 §15.5.1）。</summary>
     internal static ValidationProblemResponse Create(CQRS.PalValidationException ex)

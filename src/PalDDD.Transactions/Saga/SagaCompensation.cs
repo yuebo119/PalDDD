@@ -24,7 +24,10 @@ namespace PalDDD.Transactions;
 
 /// <summary>
 /// Saga 补偿策略执行器。<br/>
-/// 按 <see cref="CompensationPolicy"/> 决定顺序执行已注册步骤的补偿动作。
+/// v40 P3 勘正（v39 执行序勘正的文档残留——原措辞"已注册步骤"暗示补偿全部注册步骤，
+/// 与实现不符）：按 <see cref="CompensationPolicy"/> 决定顺序，基于
+/// <see cref="SagaState.ExecutedStepKeys"/> 执行序对已执行步骤的补偿动作回放——
+/// 未执行步骤不补偿（两个入口均先经 ExecutedStepKeys 过滤）。
 /// </summary>
 internal sealed class SagaCompensation<TState>
     where TState : SagaState
