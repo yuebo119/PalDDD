@@ -35,9 +35,13 @@ internal static class GeneratorAccessibility
             // AccessibilityToModifierText 的 v36 勘误），internal 腿在下方判定中被放行；
             // 但 file-local 可见性仅限声明文件，生成物 emitted 到独立 generated 文件
             // 不可引用（CS0122 落在 auto-generated 文件，同 private nested 根因）。
-            // file-local 视为阻断层，阻断可访问性按其声明值 Internal 呈现
+            // v41 P3 勘正：原返回 Internal 使诊断消息显示 "internal"——与姊妹判定放行
+            // internal（上方 v35 分支）自相矛盾（用户看到"internal 被阻断"却放行 internal）。
+            // 改返回 Private：private 在所有生成器均拦截，消息显示 "private" 并引导
+            // "raise to internal or public"——对 file→internal 转换成立（file 改 internal
+            // 确实消解阻断），指引有效
             if (current.IsFileLocal)
-                return Accessibility.Internal;
+                return Accessibility.Private;
 
             // v35 P3：放行 Public/Internal/ProtectedOrInternal——后者在同程序集 internal 腿成立
             if (current.DeclaredAccessibility is not (Accessibility.Public

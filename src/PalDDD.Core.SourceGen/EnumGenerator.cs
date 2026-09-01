@@ -285,7 +285,11 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 {
                     var kind = t.IsRecord
                         ? (t.TypeKind == TypeKind.Struct ? "partial record struct" : "partial record")
-                        : t.TypeKind == TypeKind.Struct ? "partial struct" : "partial class";
+                        : t.TypeKind == TypeKind.Struct ? "partial struct"
+                        : t.TypeKind == TypeKind.Interface ? "partial interface"
+                        : "partial class";
+                    // v41 P1：补 Interface 腿——interface 嵌套类型（C# 合法）落 partial class
+                    // 产出同名义声明种类冲突（CS0101/CS0261 落 auto-generated 文件）
                     var arity = t.Arity > 0
                         ? $"<{string.Join(", ", t.TypeParameters.Select(pr => pr.Name))}>"
                         : "";

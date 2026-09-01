@@ -114,7 +114,11 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
 
         try
         {
-            var affected = FencedTarget(message)
+            // ITM-283（R45）：token 拒绝（affected=0 且无异常）提前 return——原兜底查询用同款
+            // FencedTarget 守卫必然返回 null，纯冗余 DB 往返；兜底仅 provider 不支持路径需要。
+            // v41 P3 清理：原 `if (affected > 0) return;` 后紧跟无条件 return，恒死分支删除
+            //（affected>0 与 =0 均提前返回，语义不变），返回值不再接收
+            FencedTarget(message)
                 .ExecuteUpdate(s => s
                     .SetProperty(m => m.ProcessedAt, processedAt)
                     .SetProperty(m => m.Status, OutboxStatus.Processed)
@@ -122,9 +126,6 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
                     .SetProperty(m => m.NextAttemptAt, (DateTimeOffset?)null)
                     .SetProperty(m => m.LockedBy, (string?)null)
                     .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null));
-            if (affected > 0) return;
-            // ITM-283（R45）：token 拒绝（affected=0 且无异常）提前 return——原兜底查询用同款
-            // FencedTarget 守卫必然返回 null，纯冗余 DB 往返；兜底仅 provider 不支持路径需要
             return;
         }
         catch (InvalidOperationException)
@@ -164,7 +165,9 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
 
         try
         {
-            var affected = FencedTarget(message)
+            // ITM-283：同 MarkProcessed——token 拒绝提前 return，兜底仅 provider 不支持。
+            // v41 P3 清理：同款死 if（`if (affected > 0) return;` + 无条件 return）删除
+            FencedTarget(message)
                 .ExecuteUpdate(s => s
                     .SetProperty(m => m.ProcessedAt, deadAt)
                     .SetProperty(m => m.Status, OutboxStatus.Dead)
@@ -172,8 +175,6 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
                     .SetProperty(m => m.NextAttemptAt, (DateTimeOffset?)null)
                     .SetProperty(m => m.LockedBy, (string?)null)
                     .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null));
-            if (affected > 0) return;
-            // ITM-283：同 MarkProcessed——token 拒绝提前 return，兜底仅 provider 不支持
             return;
         }
         catch (InvalidOperationException)

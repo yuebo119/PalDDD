@@ -19,11 +19,17 @@ public sealed class MessageEvolutionBuilder
         ArgumentNullException.ThrowIfNull(targetDescriptor);
         ArgumentNullException.ThrowIfNull(convert);
 
+        // v41 P3（ITM-280 收尾）：ClrType 失配腿对齐注册期异常统一——原抛 ArgumentException，
+        // 与 MessageUpgradeStep 的 wire name/版本腿、Builder 重复键腿分叉，消费者无法单点
+        // catch MessageEvolutionException 覆盖全部注册期错误；参数信息（原 nameof 参数名 +
+        // 期望/实际类型）保留在消息中
         if (sourceDescriptor.ClrType != typeof(TSource))
-            throw new ArgumentException("Source descriptor CLR type does not match converter source type.", nameof(sourceDescriptor));
+            throw new MessageEvolutionException(
+                $"Source descriptor CLR type does not match converter source type (parameter 'sourceDescriptor': expected {typeof(TSource).FullName}, actual {sourceDescriptor.ClrType.FullName}).");
 
         if (targetDescriptor.ClrType != typeof(TTarget))
-            throw new ArgumentException("Target descriptor CLR type does not match converter target type.", nameof(targetDescriptor));
+            throw new MessageEvolutionException(
+                $"Target descriptor CLR type does not match converter target type (parameter 'targetDescriptor': expected {typeof(TTarget).FullName}, actual {targetDescriptor.ClrType.FullName}).");
 
         Add(new MessageUpgradeStep(
             sourceDescriptor,
