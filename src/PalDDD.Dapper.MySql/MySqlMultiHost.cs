@@ -85,12 +85,24 @@ public static class MySqlMultiHost
         // 共享 Port；主机名原样传 Dns.GetHostAddresses——"db2:3306" 是非法 DNS 主机名必炸；
         // 维护者 feature request #762 open 至今）。内嵌语法现一律 fail-fast；Port 一致性恢复
         // 无条件校验（原"内嵌感知跳过"建立在不存在的语法上）。
-        if (standbyBuilder.Server.Contains(':'))
+        // v42 勘正：内嵌端口检测收窄为"单冒号+数字后缀"（复用 HasHostWithoutEmbeddedPort
+        // 的解析规则）——v41 的 Contains(':') 会误拦裸 IPv6（"::1"，MySQL 侧唯一可用 IPv6
+        // 形态：IP 字面量可直连 + 共享 Port）
+        if (HasHostWithoutEmbeddedPort(standbyBuilder.Server))
         {
-            throw new ArgumentException(
-                "standby Server 含内嵌端口语法（\"host:port\"）——MySqlConnector 2.6.2 不支持该语法"
-                + "（主机名原样传 DNS 解析，含冒号条目是非法主机名，该节点永不可连）。"
-                + "请移除内嵌端口、统一使用共享 Port 关键字。");
+            foreach (var raw in standbyBuilder.Server.Split(','))
+            {
+                var entry = raw.Trim();
+                var colon = entry.LastIndexOf(':');
+                if (colon > 0 && entry.IndexOf(':') == colon
+                    && int.TryParse(entry.AsSpan(colon + 1), out _))
+                {
+                    throw new ArgumentException(
+                        $"standby Server 条目 '{entry}' 含内嵌端口语法（\"host:port\"）——MySqlConnector 2.6.2 不支持该语法"
+                        + "（主机名原样传 DNS 解析，含冒号条目是非法主机名，该节点永不可连）。"
+                        + "请移除内嵌端口、统一使用共享 Port 关键字。");
+                }
+            }
         }
         if (standbyBuilder.Port != primaryBuilder.Port)
         {
