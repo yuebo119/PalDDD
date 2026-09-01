@@ -32,8 +32,15 @@ public readonly struct PalValidationResult : IEquatable<PalValidationResult>
     public static PalValidationResult Success() => new(true, ImmutableArray<PalValidationError>.Empty);
 
     /// <summary>验证失败，附带错误列表</summary>
+    /// <remarks>v40 P2：default(ImmutableArray) 归一为空数组——用户验证器 return default
+    /// 的现实可达形态（38 轮注释自证）下 Errors 可枚举性契约与 v39 PalValidationException
+    /// 构造归一同族闭环（default ImmutableArray 枚举抛 NRE）。</remarks>
     public static PalValidationResult Failed(ImmutableArray<PalValidationError> errors)
-        => new(false, errors);
+    {
+        if (errors.IsDefault)
+            errors = ImmutableArray<PalValidationError>.Empty;
+        return new(false, errors);
+    }
 
     /// <summary>验证失败，附带单个错误</summary>
     public static PalValidationResult Failed(string property, string message)

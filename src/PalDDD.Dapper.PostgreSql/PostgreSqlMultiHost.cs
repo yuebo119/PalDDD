@@ -384,34 +384,34 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
         {
             if (bareHost.Length == 0)
                 encoded.Add("");
-            // v37 P3：IPv6 字面量条目不追加端口——方括号形态（"[::1]:5432"，NormalizeHostEntry
-            // 整体保留）与裸 IPv6（"::1"，多冒号）追加端口均产出畸形条目
-            //（"[::1]:5432:5433" / "::1:5433"），Npgsql 无法解析。Host 原样输出，
-            // 端口靠内嵌语法或默认 5432
+            // v40 P2 定稿（v37/v38/v39 三轮该分支各留一缺口，本轮四象限一次闭环）：
+            // IPv6 条目按形态三分派——
+            // ① "[::1]"（方括号无端口）：端口在 Port 属性，按 ITM-132 契约（primary 非默认
+            //    端口时全部条目须显式编码）追加 ":{effectivePort}" 产 "[::1]:5433"（Npgsql
+            //    支持方括号 host + 冒号端口语法），primary/effective 均默认时原样；
+            // ② "[::1]:5433"（方括号+内嵌端口）：端口已内嵌、Port 属性不参与，自洽原样；
+            // ③ 裸 IPv6（"::1"）/畸形（"::1:5433"）：追加 ":port" 必产出畸形（冒号歧义），
+            //    一律 fail-fast 指引方括号语法。
             else if (IsIpV6Literal(bareHost))
             {
-                // v39 P2 勘正：v38 fail-fast 条件只拦"显式非默认 Port"，漏"条目未显式设
-                // Port（取默认 5432）+ primaryPort=非 5432"组合——拼接后该条目继承主库端口
-                // 被静默连错实例（同方法 ITM-132 契约"primary 非默认端口时必须对全部条目
-                // 显式编码"在 IPv6 分支复活失效）。统一契约：primary 非默认端口时 IPv6 条目
-                // 必须 fail-fast 指引内嵌语法；且已内嵌端口的条目（[::1]:5433）不受 Port
-                // 属性影响，不应被拒绝（v38 曾误拒该自洽配置，v37 B 片已证）
-                // 方括号形态必含内嵌端口（NormalizeHostEntry 整体保留 "[::1]:5433"）——
-                // 端口已内嵌、Port 属性不参与连接，自洽配置直接放行（v38 曾误拒）；
-                // 裸 IPv6（"::1"，无方括号）无内嵌端口，primary 非默认端口时将继承主库端口
-                var entryIsBracketed = bareHost.StartsWith('[');
-                if (entryIsBracketed)
+                if (bareHost.StartsWith('[') && bareHost.EndsWith(']'))
                 {
-                    encoded.Add(bareHost);
+                    // 形态①：方括号定界纯 host
+                    if (primaryPort != 5432 || effectivePort != primaryPort)
+                        encoded.Add($"{bareHost}:{effectivePort}");
+                    else
+                        encoded.Add(bareHost);
                 }
-                else if (primaryPort != 5432)
+                else if (bareHost.StartsWith('['))
                 {
-                    throw new ArgumentException(
-                        $"IPv6 主机条目 '{bareHost}' 在 primaryPort={primaryPort}（非默认）下不支持——Npgsql 的 Port 仅对未内嵌端口的主机生效，条目将错误继承主库端口。请改用内嵌端口语法 '[{bareHost}]:<port>'。");
+                    // 形态②：方括号 + 内嵌端口，自洽
+                    encoded.Add(bareHost);
                 }
                 else
                 {
-                    encoded.Add(bareHost);
+                    // 形态③：裸 IPv6 / 畸形混合——无法安全编码
+                    throw new ArgumentException(
+                        $"IPv6 主机条目 '{bareHost}' 无法安全编码端口（裸 IPv6 追加 ':port' 产出畸形条目）——请改用方括号语法 '[{bareHost}]' 或 '[{bareHost}]:{effectivePort}'。");
                 }
             }
             else if (primaryPort != 5432 || effectivePort != 5432)
