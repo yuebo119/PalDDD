@@ -111,8 +111,10 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
         if (items.Count == 0)
             return new([], Array.Empty<(TResult?, Exception)>());
 
-        // P3 修复：0 时全部子任务挂起（P3·十七轮：构造参数路径已前置校验，
-        // 此处兜底对象初始化器直接设 MaxConcurrency <= 0 的路径）
+        // P3 修复：0 时全部子任务挂起。v43 P3 注释勘正：原声称兜底"对象初始化器直接设
+        // MaxConcurrency <= 0"路径已不可达（MaxConcurrency 为 init-only——init setter 赋值点
+        // 即时校验并归一化，十七轮构造参数路径同样前置校验）。本行按纵深防御保留（构造函数
+        // 路径与 init setter 均已保证 >0；此校验防未来新增写入点）。
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxConcurrency);
         using var semaphore = new SemaphoreSlim(MaxConcurrency);
         var results = new TResult?[items.Count];

@@ -66,6 +66,13 @@ internal sealed class IterativeDomainEventDispatcher : IDomainEventDispatcher
         ArgumentNullException.ThrowIfNull(events);
         if (events.Count == 0) return;
 
+        // v43 P3：逐元素 null 校验（镜像姊妹 InMemoryEventLog.AppendAsync 的逐元素
+        // ThrowIfNull 形态）——原实现 null 元素在派发循环首次 Dequeue 后读 EventId
+        // （processed.Add）处 NRE：前序事件 handler 副作用已发生后才炸，重试会二次
+        // 派发已完成事件。入口 fail-fast，与三十八轮 P2 的批量预检同位置原则。
+        foreach (var @event in events)
+            ArgumentNullException.ThrowIfNull(@event);
+
         var queue = new Queue<Core.DomainEvent>(events);
         var processed = new HashSet<Guid>(); // 防止循环事件
         var maxIterations = _options.MaxIterations;

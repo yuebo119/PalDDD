@@ -12,6 +12,10 @@ namespace PalDDD.Transactions;
 /// <c>FOR UPDATE SKIP LOCKED</c>——行锁位于派生表（derived table）子查询内，依赖 MySQL 派生表
 /// 锁语义；MySQL 8.0.18 以下版本对派生表物化/锁下推行为有差异，SKIP LOCKED 可能失效。锁失效时
 /// 退化为 last-writer-wins（并发双 worker 后写覆盖先写、败者回读空批，消息延迟至下轮租约）。
+/// v43 P3 时序完整性补充：last-writer-wins 未覆盖 (A 写,A 读,B 写,B 读) 交错时序——两 worker
+/// 子查询均在对方提交前选中同一行集时，后写者 JOIN-SET 直接覆盖先写者租约并回读到整批，
+/// 双 worker 同批重复投递（而非延迟）；fencing 终态守卫只防双终态写、不防双执行。重复投递
+/// 在 at-least-once 投递契约内，由下游幂等消费兜底。
 /// 正确性由 <c>(LockedBy, LockedUntil)</c> 租约 token + <c>RetryCount</c> 快照守卫（基类
 /// FencedTarget 终态写，见 <see cref="OutboxDbContext"/>）兜底——败者租约被覆盖后其终态写
 /// 影响 0 行。声明而非改写，最低支持版本维持 MySQL 8.0+。
