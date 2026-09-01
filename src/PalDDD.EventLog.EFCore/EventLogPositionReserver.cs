@@ -178,19 +178,28 @@ public sealed class EventLogPositionReserver
                     var snapshotRevision = context.Entry(allocator).Property(a => a.Revision).OriginalValue;
                     context.Entry(allocator).State = EntityState.Detached;
                     EventLogGlobalPositionAllocator? probe = null;
+                    var probeSucceeded = false;
                     try
                     {
                         probe = await context.GlobalPositionAllocators
                             .AsNoTracking()
                             .SingleOrDefaultAsync(a => a.Id == EventLogGlobalPositionAllocator.SingletonId, cancellationToken)
                             .ConfigureAwait(false);
+                        probeSucceeded = true;
                     }
                     catch (DbException)
                     {
-                        // PG aborted transaction（25P02）等探测失败——无法判定快照新鲜度，
-                        // 退回原 continue 重试语义（最多 5 次后以既有 IOE 失败），
-                        // 不掩盖原始 DbUpdateConcurrencyException
+                        // v39 P3 勘正（原注释三处失实）：原注释称"退回原 continue 重试语义
+                        //（最多 5 次后以既有 IOE 失败）"——① 25P02 可达：PG aborted transaction
+                        // 下 continue 后下一迭代 SingleOrDefaultAsync 必抛 25P02（DbException）
+                        // 逃逸重试循环，"最多 5 次"不可达；② 持续故障逃逸：探测失败后继续
+                        // 迭代使后续 DbException 替换原始 DbUpdateConcurrencyException 上抛；
+                        // ③ 异常替换：与"不掩盖原始异常"声明相反。镜像同方法唯一冲突分支
+                        // v27 形态：探测失败就地 throw; 保原始异常上抛（外层调用方以新事务
+                        // 重试可恢复）
                     }
+                    if (!probeSucceeded)
+                        throw;
                     if (probe is not null && probe.Revision == snapshotRevision)
                         throw new InvalidOperationException(
                             "The allocator revision was advanced by a concurrent commit (the failed CAS proves it), but the probe still returns the same stale revision — under MySQL REPEATABLE READ the concurrently committed revision is not visible to the current transaction snapshot; retrying inside the same transaction cannot succeed. The caller should retry with a new transaction, which establishes a fresh snapshot and can see the new revision.");

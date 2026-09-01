@@ -84,7 +84,10 @@ public abstract class SagaState
     /// <summary>租约过期时间；过期后其他后台扫描器可重新获取。</summary>
     public DateTimeOffset? LeasedUntil { get; set; }
 
-    /// <summary>已成功执行的步骤 Key 列表（按执行顺序）— 用于精确补偿已执行步骤</summary>
+    /// <summary>已成功执行的步骤 Key 列表（按执行顺序）— 补偿顺序的唯一依据：
+    /// <see cref="CompensationPolicy.Backward"/> 逆序遍历（最后执行的先回滚）、
+    /// <see cref="CompensationPolicy.Forward"/> 正序遍历。v39 P3 勘正声明：补偿按执行序
+    /// 而非注册序（注册顺序的 List 供超时检测使用，与本列表无关）</summary>
     public Collection<string> ExecutedStepKeys { get; init; } = [];
 
     /// <summary>中断原因 — HITL 中断时记录等待人工决策的原因</summary>

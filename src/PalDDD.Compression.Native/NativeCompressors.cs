@@ -179,8 +179,10 @@ internal sealed class OpenZLCompressor : ICompressor
         }
         catch (OutOfMemoryException ex)
         {
+            // v39 P3 勘正：消息误写"ZStandard"（自 ZStandardCompressor 复制残留）——
+            // 本类算法标识为 OpenZL（底层虽为 Zstd 实现，排障按算法标识检索），勘正为 OpenZL
             throw new System.IO.InvalidDataException(
-                $"ZStandard 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。", ex);
+                $"OpenZL 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。", ex);
         }
         if (result.Length > DecompressionGuard.MaxOutputBytes)
             throw new System.IO.InvalidDataException($"解压输出 {result.Length:N0} 字节超过安全上限（疑似解压炸弹）。");

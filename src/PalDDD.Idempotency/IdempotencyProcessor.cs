@@ -114,6 +114,12 @@ public sealed class IdempotencyProcessor
             System.Diagnostics.Activity.Current?.AddEvent(new(
                 "idempotency.serialize-result-failed",
                 tags: new ActivityTagsCollection { ["error"] = serializeEx.Message }));
+            // v39 P3：补 Activity Error 状态 + 失败指标（镜像同方法 handler 失败路径形态）——
+            // 原仅 AddEvent，Activity 终态呈正常成功且 IdempotencyFailed 指标漏计，
+            // 观测端（APM 告警/仪表盘按 SetStatus 与指标过滤）看不见该失败
+            activity?.SetTag("pal.idempotency.result", "failed");
+            activity?.SetStatus(ActivityStatusCode.Error, serializeEx.Message);
+            PalMetrics.IdempotencyFailed.Add(1);
             throw;
         }
 
