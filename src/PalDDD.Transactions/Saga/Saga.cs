@@ -779,7 +779,22 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // 注册键（stepKey 参数）而非路由目标键（matchedKey）——实际执行体与计时对象是 matchedKey。
         // 耗时/失败在观察端归因到 Dynamic 入口名下属刻意设计（跟踪 Dynamic 分发总量）。
         // 路由到目标步骤 key
-        var targetKey = step.Route(current);
+        // v40 P2 修复：Route 求值纳入失败管线——用户 router 委托抛异常此前直接逃逸
+        // ProcessEventAsync（零重试/零补偿/零观测），前序已执行步骤的 ExecutedStepKeys
+        // 无人消费。Route 是 DynamicStep 文档声明的"步骤执行时求值"的一部分，其失败按
+        // 步骤失败同型处理：并入 failures 让补偿链消费（下段 try 的补偿/重试管线可达）
+        List<Exception> routeFailures = [];
+        string targetKey;
+        try
+        {
+            targetKey = step.Route(current);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            routeFailures.Add(ex);
+            throw new AggregateException(
+                $"DynamicStep '{step.Name}' 路由函数执行失败", routeFailures);
+        }
 
         // 在已注册步骤中查找
         var dict = GetFrozen();
