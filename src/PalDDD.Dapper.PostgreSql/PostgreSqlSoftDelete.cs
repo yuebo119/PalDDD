@@ -36,11 +36,16 @@ public static class PostgreSqlSoftDelete
     /// <param name="whereClause">
     /// WHERE 条件（不带 WHERE 关键字）。此参数是 SQL 片段，调用方必须只传入受信任模板，
     /// 用户输入必须通过 Dapper/Npgsql 参数绑定，不得拼接进此字符串。
+    /// v43 P3：whereClause 会被<b>括号包裹</b>后与软删除过滤条件 AND 连接——含顶层 OR 的
+    /// 条目（如 <c>"id = @id OR tenant = @t"</c>）不再因 AND 优先级高于 OR 而绕过
+    /// <c>deleted_at IS NULL</c> 过滤（原语义下 OR 右支已删行再次命中、deleted_at 被覆盖）。
     /// </param>
     /// <param name="column">软删除列名（默认 "deleted_at"）</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Delete(string table, string whereClause, string column = DefaultColumn)
-        => $"UPDATE {Escape(table)} SET {Escape(column)} = NOW() WHERE {whereClause} AND {Escape(column)} IS NULL";
+        // v43 P3：whereClause 括号包裹——修复顶层 OR 与 AND 的优先级语义缺陷
+        //（"cond1 OR cond2 AND col IS NULL" 实际解析为 "cond1 OR (cond2 AND col IS NULL)"）
+        => $"UPDATE {Escape(table)} SET {Escape(column)} = NOW() WHERE ({whereClause}) AND {Escape(column)} IS NULL";
 
     /// <summary>生成恢复语句（取消软删除）</summary>
     /// <param name="table">表名</param>

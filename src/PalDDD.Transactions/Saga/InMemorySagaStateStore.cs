@@ -60,7 +60,9 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
         {
             // 三十四轮（中断态超时兜底）：扫描集扩 AwaitingHumanDecision——中断态 Saga
             // 配置了步骤 Timeout 且超期时由 SagaTimeoutProcessor.IsTimedOut 门控补偿；
-            // 未配置 Timeout 则 IsTimedOut 恒 false，仅经历租约获取/释放（显式无限等待契约）
+            // v43 勘正：原声明"未配置 Timeout 则 IsTimedOut 恒 false"在残留时间戳下
+            // 不成立（v43 P2 已补已成功完成排除判据）——中断态（未配 Timeout 的
+            // InterruptStep）现在确实不会被已成功步骤的残留时间戳触发兜底补偿
             var active = _states.Values
                 .Where(s => (s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision)
                     && (s.LeasedUntil is null || s.LeasedUntil <= now))

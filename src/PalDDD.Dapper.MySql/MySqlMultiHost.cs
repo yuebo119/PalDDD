@@ -71,9 +71,8 @@ public static class MySqlMultiHost
         // v19 P2-② + v20 F2 机理勘正：standby 串缺 Server= 时 MySqlConnector 返回<b>空串</b>非
         // "localhost"（片 B 探针实证 2.6.2；PG 同构 ITM-262）——空条目并入列表使故障转移静默
         // 失败。fail-fast 对齐 PG 姊妹 EncodeHostEntry。
-        // v28 P3（v27 N8 副作用修复）：本 fail-fast 前置于 Port 一致性校验——空 Server 时
-        // HasHostWithoutEmbeddedPort("") 返回 true，Port 比较先抛误导性端口消息（真实问题是
-        // 缺 Server），故 Port 校验移到本守卫之后
+        // v28 P3（v27 N8 副作用修复）：本 fail-fast 前置于 Port 一致性校验——空 Server 会被
+        // 缺 Server fail-fast 先拦（否则 Port 比较先抛误导性端口消息，真实问题是缺 Server）
         // v29 P3（S5）：异常类型 InvalidOperationException → ArgumentException——缺 Server
         // 是连接串配置参数错误（对齐 PG 侧 v28 裁决与 primary 侧 N7 同步修正），消息不变
         if (string.IsNullOrWhiteSpace(standbyBuilder.Server))
@@ -85,25 +84,23 @@ public static class MySqlMultiHost
         // 共享 Port；主机名原样传 Dns.GetHostAddresses——"db2:3306" 是非法 DNS 主机名必炸；
         // 维护者 feature request #762 open 至今）。内嵌语法现一律 fail-fast；Port 一致性恢复
         // 无条件校验（原"内嵌感知跳过"建立在不存在的语法上）。
-        // v42 勘正：内嵌端口检测收窄为"单冒号+数字后缀"（复用 HasHostWithoutEmbeddedPort
-        // 的解析规则）——v41 的 Contains(':') 会误拦裸 IPv6（"::1"，MySQL 侧唯一可用 IPv6
+        // v42 勘正：内嵌端口检测收窄为"单冒号+数字后缀"（解析规则同 EnsureNoEmbeddedPort）
+        // ——v41 的 Contains(':') 会误拦裸 IPv6（"::1"，MySQL 侧唯一可用 IPv6
         // 形态：IP 字面量可直连 + 共享 Port）
-        if (HasHostWithoutEmbeddedPort(standbyBuilder.Server))
-        {
-            foreach (var raw in standbyBuilder.Server.Split(','))
-            {
-                var entry = raw.Trim();
-                var colon = entry.LastIndexOf(':');
-                if (colon > 0 && entry.IndexOf(':') == colon
-                    && int.TryParse(entry.AsSpan(colon + 1), out _))
-                {
-                    throw new ArgumentException(
-                        $"standby Server 条目 '{entry}' 含内嵌端口语法（\"host:port\"）——MySqlConnector 2.6.2 不支持该语法"
-                        + "（主机名原样传 DNS 解析，含冒号条目是非法主机名，该节点永不可连）。"
-                        + "请移除内嵌端口、统一使用共享 Port 关键字。");
-                }
-            }
-        }
+        // v43 P2 修复：删除外层门——v42 把检测开关接在"存在任一无内嵌条目"布尔判定
+        //（语义为"存在任一无内嵌条目"，该判定 v43 P2 收口时随死代码一并删除）上，全内嵌
+        // 端口列表恰好返回 false 使 fail-fast 整块跳过（v41 P2-2 的核心场景静默复活；
+        // 独立探针实证 db2:3306 → gate=False）。内层循环的"单冒号+数字后缀"判定本身已
+        // 正确收窄（裸 IPv6 放行、host:port 拦截），直接执行
+        // v43 P2 收口：检测提取共享 helper EnsureNoEmbeddedPort——原 standby/primary 两处
+        // 内联循环拷贝 + LoadBalance/LeastConnections 两活跃入口零检测，四入口一处收口
+        EnsureNoEmbeddedPort(standbyBuilder.Server, "standby Server");
+        // v43 P3 顺序校正：primary 侧检测同样前置于 Port 一致性校验——内嵌端口的明确错误
+        // 不应被 Port 不一致的误导消息先拦（v43 P2 内联循环误置于 Port 校验之后）
+        // v43 P2 历史：primary 侧检测为 v43 P2 新补——v41/v42 检测只作用于 standby，primary
+        // "Server=db1:3306" 经归一化查重后原始串原样进连接串（节点永不可连，FailOver 静默
+        // 改连备库、写流量落备库拓扑倒挂）
+        EnsureNoEmbeddedPort(primaryBuilder.Server, "primary Server");
         if (standbyBuilder.Port != primaryBuilder.Port)
         {
             throw new ArgumentException(
@@ -118,9 +115,10 @@ public static class MySqlMultiHost
         // v26 P3 H5：拼接前 Server 查重 fail-fast（镜像 PG Failover 入口 v25 C9 查重）——
         // primary/standby 同指一机时拼接产生重复 Server 条目（如 "mysql1,mysql1"），
         // FailOver 把同一实例视作两个节点轮试，故障转移语义错乱。归一化经
-        // NormalizeServerEntry：v41 勘正——MySqlConnector 实不支持 "server:port" 内嵌语法
-        // 属性返回原始串（内嵌端口不吸收进 Port 属性），须拆出 (裸名, port) 再比较；未
-        // （见 :82 v41 P2 勘正）；归一化仅用于查重比较口径统一，内嵌形态已被入口 fail-fast 拦截。
+        // NormalizeServerEntry：v41 勘正——MySqlConnector 实不支持 "server:port" 内嵌语法，
+        // 属性返回原始串（内嵌端口不吸收进 Port 属性），须拆出 (裸名, port) 再比较（doc
+        // 口径勘正见 NormalizeServerEntry）；归一化仅用于查重比较口径统一，内嵌形态已被
+        // 入口 EnsureNoEmbeddedPort fail-fast 拦截（primary 侧检测 v43 P2 补齐并前置）。
         // primary 列表空条目（primary 缺 Server 的 Split 产物）跳过——该输入随后由下方
         // N7 fail-fast 拦截，此处跳过仅为不误抛"重复"异常。
         // v29 P3（S4，镜像 PG 侧 v28/v29 形态）：standby 侧改复数版 NormalizeServerEntries
@@ -193,6 +191,10 @@ public static class MySqlMultiHost
         {
             LoadBalance = MySqlLoadBalance.RoundRobin
         };
+        // v43 P2 收口：内嵌端口检测接线——原入口零检测，"Server=db1:3306" 原样进连接串
+        //（节点永不可连，轮询/均衡静默失败延迟到建连且无诊断）；对齐 Failover 入口在
+        // 共享 Port 语义生效前拦截
+        EnsureNoEmbeddedPort(builder.Server, "Server");
         // v27 P3（B 片 N9）：Pooling 条件化（对照 W2 MaxAutoPrepare 条件化模式——仅未显式
         // 设置时赋默认）——原无条件 Pooling = true 覆盖用户显式的 "Pooling=false"（调试/
         // 排障禁用连接池被静默重启）。MySqlConnector 默认 Pooling=true，未显式设置时本就
@@ -229,6 +231,8 @@ public static class MySqlMultiHost
         {
             LoadBalance = MySqlLoadBalance.LeastConnections
         };
+        // v43 P2 收口：内嵌端口检测接线——原入口零检测，同 LoadBalance 入口口径
+        EnsureNoEmbeddedPort(builder.Server, "Server");
         // v27 P3（B 片 N9）：同 LoadBalance 入口——Pooling 条件化，不覆盖显式 "Pooling=false"
         if (!builder.TryGetValue("Pooling", out _))
             builder.Pooling = true;
@@ -245,9 +249,11 @@ public static class MySqlMultiHost
     }
 
     /// <summary>
-    /// v41 勘正：MySqlConnector 不支持 Server 内嵌端口（见多主机入口 v41 P2）——解析 "server:port"
-    /// 形式为 (裸名, 端口)。MySqlConnector 连接串的 Server 支持 "host:port" 内嵌语法，
-    /// 属性返回原始串（内嵌端口不吸收进 Port 属性），与裸名+共享 Port 直接比较恒不等。
+    /// 解析 "server:port" 形式为 (裸名, 端口)。v43 P3 勘正 doc 自相矛盾：MySqlConnector
+    /// 2.6.2 运行时建连<b>不支持</b> Server 内嵌端口（"host:port" 条目主机名原样传 DNS
+    /// 解析，永不可连；入口经 <see cref="EnsureNoEmbeddedPort"/> fail-fast 拦截）——本归一化
+    /// 的拆分仅用于查重比较口径统一（属性层 Host 返回原始串、不吸收内嵌端口，与裸名+共享
+    /// Port 直接比较恒不等）。
     /// 未内嵌端口时返回 (原串, <paramref name="fallbackPort"/>)。
     /// <para>
     /// 仅当冒号为<b>唯一</b>冒号且后缀可解析为整数才拆分：裸 IPv6 字面量内部含冒号，
@@ -289,24 +295,38 @@ public static class MySqlMultiHost
     }
 
     /// <summary>
-    /// v27 P3（B 片 N8）：判定 Server 多主机列表是否存在<b>未内嵌端口</b>的条目（解析规则与
-    /// <see cref="NormalizeServerEntry"/> 同款：唯一冒号且后缀可解析为整数才算内嵌）。
-    /// 未内嵌条目依赖连接串共享 Port——合并后统一取 primary 的 Port，两端共享 Port 不一致时
-    /// 此类条目被静默改端口。空条目同样返回 true（空条目不携带端口，由缺 Server fail-fast 拦截）。
+    /// v43 P2（收口）：Server 内嵌端口 fail-fast 共享 helper——遍历逗号分隔条目，对
+    /// "单冒号+数字后缀"（host:port 内嵌语法）条目抛 <see cref="ArgumentException"/>，
+    /// 消息含命中的条目与 MySqlConnector 2.6.2 不支持说明。
+    /// <para>
+    /// v41 P2 勘正口径：MySqlConnector 2.6.2 运行时建连不支持内嵌端口——主机名原样传
+    /// DNS 解析，含冒号条目是非法主机名，该节点永不可连。判定收窄为"唯一冒号且后缀可
+    /// 解析为整数"（v42 勘正）：裸 IPv6（"::1"，多冒号）不命中、放行——MySQL 侧唯一可用
+    /// IPv6 形态（IP 字面量可直连 + 共享 Port）；方括号条目（"[::1]"）亦放行。
+    /// <see cref="NormalizeServerEntry"/> 的同规则解析仅服务查重口径，本方法才是入口门禁。
+    /// </para>
+    /// <para>
+    /// 四入口统一接线（v43 P2 收口）：Failover standby/primary（原两处内联循环拷贝）+
+    /// LoadBalance / LeastConnections（原零检测——"Server=db1:3306" 原样放行，节点永不可
+    /// 连且无诊断）。检测前置于共享 Port 语义相关校验，明确错误优先于误导消息。
+    /// </para>
     /// </summary>
     /// <param name="serverList">Server 属性原始值（可为多主机逗号分隔列表，内部逐项 Trim）。</param>
-    internal static bool HasHostWithoutEmbeddedPort(string? serverList)
+    /// <param name="parameterName">来源参数名（拼入异常消息，如 "standby Server" / "primary Server" / "Server"）。</param>
+    internal static void EnsureNoEmbeddedPort(string? serverList, string parameterName)
     {
         foreach (var raw in (serverList ?? "").Split(','))
         {
             var entry = raw.Trim();
             var colon = entry.LastIndexOf(':');
-            if (colon < 0 || entry.IndexOf(':') != colon
-                || !int.TryParse(entry.AsSpan(colon + 1), out _))
+            if (colon > 0 && entry.IndexOf(':') == colon
+                && int.TryParse(entry.AsSpan(colon + 1), out _))
             {
-                return true;
+                throw new ArgumentException(
+                    $"{parameterName} 条目 '{entry}' 含内嵌端口语法（\"host:port\"）——MySqlConnector 2.6.2 不支持该语法"
+                    + "（主机名原样传 DNS 解析，含冒号条目是非法主机名，该节点永不可连）。"
+                    + "请移除内嵌端口、统一使用共享 Port 关键字。");
             }
         }
-        return false;
     }
 }

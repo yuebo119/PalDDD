@@ -9,8 +9,21 @@ public sealed class PostgreSqlSoftDeleteTests
     {
         var sql = PostgreSqlSoftDelete.Delete("outbox_messages", "id=@id");
 
+        // v43 P3：whereClause 改为括号包裹后与软删除过滤条件 AND 连接
         await Assert.That(sql).IsEqualTo(
-            "UPDATE \"outbox_messages\" SET \"deleted_at\" = NOW() WHERE id=@id AND \"deleted_at\" IS NULL");
+            "UPDATE \"outbox_messages\" SET \"deleted_at\" = NOW() WHERE (id=@id) AND \"deleted_at\" IS NULL");
+    }
+
+    // v43 P3：whereClause 含顶层 OR 时的优先级语义修复——原 "WHERE cond1 OR cond2 AND deleted_at IS NULL"
+    // 按 AND 优先于 OR 解析，OR 左支命中的已删行再次被 UPDATE、deleted_at 被覆盖；括号包裹后
+    // 软删除过滤恒为合取项，已删行不可能再命中
+    [Test]
+    public async Task Delete_TopLevelOrInWhereClause_SoftDeleteFilterStaysConjunctive()
+    {
+        var sql = PostgreSqlSoftDelete.Delete("outbox_messages", "id=@id OR tenant=@t");
+
+        await Assert.That(sql).IsEqualTo(
+            "UPDATE \"outbox_messages\" SET \"deleted_at\" = NOW() WHERE (id=@id OR tenant=@t) AND \"deleted_at\" IS NULL");
     }
 
     // TST-206：标识符注入防护测试。注（偏离说明）：PostgreSqlSoftDelete 与 PostgreSqlAuditor
