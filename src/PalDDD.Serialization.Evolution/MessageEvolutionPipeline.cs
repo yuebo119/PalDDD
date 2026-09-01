@@ -101,6 +101,15 @@ public sealed class MessageEvolutionPipeline
                 throw new MessageEvolutionException(
                     $"Source descriptor ClrType mismatch: expected {step.SourceDescriptor.ClrType}, got {sourceDescriptor.ClrType}.");
             current = step.Convert(current);
+            // v40 P3：中间步 converter 返回 null 禁止静默传播——原实现 null 流入下一轮
+            // 循环头的 `if (current is null) return null`，与"首轮 payload 反序列化为
+            // null"（空/null JSON 输入，合法空结果）的语义混流，converter 缺陷（如条件
+            // 分支漏 return）被吞成静默 null 返回。走到本行的 current 必非 null（循环头
+            // 哨兵已拦截首轮），null 只能来自 step.Convert 本身 → fail-fast
+            if (current is null)
+                throw new MessageEvolutionException(
+                    $"Message evolution step returned null: name '{step.TargetDescriptor.Name}' "
+                    + $"version {step.TargetDescriptor.SchemaVersion}.");
             currentDescriptor = step.TargetDescriptor;
         }
 

@@ -212,7 +212,7 @@ public sealed class OrderFulfillmentProcessManager : IEventHandler<OrderSubmitte
 - `PDDD012`：领域事件类型未声明为 `sealed`。
 - `PDDD013`：projection handler 的 `ProjectionName` 不属于声明的 bounded context。
 - `PDDD014`：process manager 名称不属于声明的 bounded context。
-- `PDDD015`：领域事件 `EventName` 与 `[GenerateMessage(Name = "...")]` 不一致，或不是 string literal。
+- `PDDD015`：领域事件 `EventName` 与 `[GenerateMessage(Name = "...")]` 不一致，不是 string literal，或完全缺失声明（缺失声明使用同 ID 的专用消息）。
 
 ## 新增 handler
 

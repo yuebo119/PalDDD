@@ -8,7 +8,10 @@ namespace PalDDD.Serialization.Json;
 // ─────────────────────────────────────────────────────────────
 // 运行时集成路径：OutboxBatchProcessor 批量序列化时可使用
 // JsonLinesEventWriter 替代逐条 Serialize，消除整批内存峰值。
-// 示例：new JsonLinesEventWriter(buffer).Write(msg, payload)
+// v40 P3 勘正：原示例 new JsonLinesEventWriter(buffer).Write(msg, payload) 与实际
+// API 不符（无 buffer 构造参数、无 Write 方法）——真实调用形态为无参构造 +
+// SerializeLine<TMessage>(message, typeInfo)：
+// 示例：new JsonLinesEventWriter().SerializeLine(msg, typeInfo)
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>
@@ -96,12 +99,17 @@ public sealed class JsonLinesEventWriter
         return w;
     }
 }
+// v40 P3：Writer 区域 CA1822 豁免到此为止——Reader 区域独立声明（见下方）
+#pragma warning restore CA1822
 
 /// <summary>
 /// JSON Lines (.jsonl) 逐行反序列化器。<br/>
 /// 一次读取整块 payload，按 \n 拆分，每行独立反序列化为一条事件。<br/>
 /// 使用 <see cref="SearchValues{Byte}"/> 硬件加速换行检测（SIMD）。
 /// </summary>
+// v40 P3：Reader 区域独立声明 CA1822 豁免（设计为实例 API，同 Writer 类注释）——
+// 原实现经文件尾 restore 前的宽作用域连带豁免，见文件尾收窄说明
+#pragma warning disable CA1822 // Mark members as static — 设计为实例 API 供未来 DI/状态管理
 public sealed class JsonLinesEventReader
 {
     private static readonly SearchValues<byte> s_newline = SearchValues.Create("\n"u8);
@@ -149,4 +157,9 @@ public sealed class JsonLinesEventReader
         return result;
     }
 }
+// v40 P3：CA1822 抑制由单条宽作用域（disable 于 Writer 类前、restore 于文件尾）
+// 拆为 Writer/Reader 两段独立声明——原作用域连带豁免 JsonLinesEventReader（隐性
+// 豁免无声明理由）。Reader 与 Writer 同属"实例 API 供未来 DI/状态管理"设计
+//（DeserializeAll 同样不访问实例状态），豁免意图不变，但各自显式声明，
+// 避免未来在该区域新增成员时被沉默放过
 #pragma warning restore CA1822

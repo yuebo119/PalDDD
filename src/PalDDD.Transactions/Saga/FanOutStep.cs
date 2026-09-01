@@ -100,7 +100,14 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
     internal async ValueTask<FanOutResult<TResult>> ExecuteFanOutAsync(
         SagaState state, CancellationToken ct)
     {
-        var items = _selector(state);
+        // v40 P3（ITM-166 姊妹）：selector 返回 null 执行期 fail-fast——构造期无法校验
+        // 委托行为（委托未执行），原实现 null 流到下方 items.Count 处 NRE，在编排器内
+        // 被当作步骤失败空转 MaxRetries + 补偿；此处抛 ArgumentException 定位到配置
+        // 错误源头（无子任务应返回空集合而非 null）。（无 paramName 重载——CA2208
+        // 要求 paramName 匹配本方法形参，selector 非本方法参数）
+        var items = _selector(state)
+            ?? throw new ArgumentException(
+                $"FanOut 步骤 '{Name}' 的 selector 对当前 SagaState 返回 null——无子任务请返回空集合。");
         if (items.Count == 0)
             return new([], Array.Empty<(TResult?, Exception)>());
 
