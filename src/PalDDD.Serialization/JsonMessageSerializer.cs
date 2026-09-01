@@ -133,6 +133,16 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         ArgumentNullException.ThrowIfNull(message);
         ArgumentNullException.ThrowIfNull(descriptor);
 
+        // v39 P3：补 ClrType 一致性守卫（镜像 v29 泛型版 Serialize/Deserialize 同款守卫
+        // 形态）——运行时类型与 descriptor 注册类型不符时，原直接以 descriptor.JsonTypeInfo
+        // 序列化（探针实证抛裸 InvalidCastException，堆栈落在序列化内部，无指向性）；
+        // 改抛指向性 ArgumentException（消息注明期望/实际类型）。null 已由上方 ThrowIfNull
+        // 排除，is not null 仅为可空流分析显式化
+        if (message is not null && message.GetType() != descriptor.ClrType)
+            throw new ArgumentException(
+                $"The descriptor is registered for CLR type '{descriptor.ClrType.FullName}' but the message runtime type is '{message.GetType().FullName}'. Pass a descriptor registered for the message type.",
+                nameof(message));
+
         // ITM-221 修复（三十二轮）：非泛型路径接入 ThreadStatic 池化（二十五轮 C1 仅覆盖
         // 泛型路径）——KafkaBroker/RabbitMqBroker 的发布热路径恰走本重载，此前每次
         // SerializeToUtf8Bytes 内部新建 Writer/Buffer 分配；非泛型 JsonTypeInfo 重载

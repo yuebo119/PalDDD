@@ -30,6 +30,15 @@ internal static class GeneratorAccessibility
     {
         for (var current = (INamedTypeSymbol?)type; current is not null; current = current.ContainingType)
         {
+            // v39 P3：file-local 类型（C# 12 file class/struct）拦截——IsFileLocal=true 时
+            // DeclaredAccessibility 报 Internal（Accessibility 枚举无 File 成员，见下方
+            // AccessibilityToModifierText 的 v36 勘误），internal 腿在下方判定中被放行；
+            // 但 file-local 可见性仅限声明文件，生成物 emitted 到独立 generated 文件
+            // 不可引用（CS0122 落在 auto-generated 文件，同 private nested 根因）。
+            // file-local 视为阻断层，阻断可访问性按其声明值 Internal 呈现
+            if (current.IsFileLocal)
+                return Accessibility.Internal;
+
             // v35 P3：放行 Public/Internal/ProtectedOrInternal——后者在同程序集 internal 腿成立
             if (current.DeclaredAccessibility is not (Accessibility.Public
                     or Accessibility.Internal

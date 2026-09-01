@@ -390,14 +390,29 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
             // 端口靠内嵌语法或默认 5432
             else if (IsIpV6Literal(bareHost))
             {
-                // v38 P2 勘正：v37 把 IPv6 条目从"响亮失败（畸形串）"改成"静默丢弃显式
-                // Port"——备机端口≠主库端口时静默连到错误实例。IPv6+显式非默认 Port 的
-                // 组合不支持（Npgsql 的 Port 只对未内嵌端口的主机生效），fail-fast 指引
-                // 内嵌端口语法（镜像 MySQL 姊妹 HasHostWithoutEmbeddedPort + Port 校验形态）
-                if (hostBuilder.Port != 5432)
+                // v39 P2 勘正：v38 fail-fast 条件只拦"显式非默认 Port"，漏"条目未显式设
+                // Port（取默认 5432）+ primaryPort=非 5432"组合——拼接后该条目继承主库端口
+                // 被静默连错实例（同方法 ITM-132 契约"primary 非默认端口时必须对全部条目
+                // 显式编码"在 IPv6 分支复活失效）。统一契约：primary 非默认端口时 IPv6 条目
+                // 必须 fail-fast 指引内嵌语法；且已内嵌端口的条目（[::1]:5433）不受 Port
+                // 属性影响，不应被拒绝（v38 曾误拒该自洽配置，v37 B 片已证）
+                // 方括号形态必含内嵌端口（NormalizeHostEntry 整体保留 "[::1]:5433"）——
+                // 端口已内嵌、Port 属性不参与连接，自洽配置直接放行（v38 曾误拒）；
+                // 裸 IPv6（"::1"，无方括号）无内嵌端口，primary 非默认端口时将继承主库端口
+                var entryIsBracketed = bareHost.StartsWith('[');
+                if (entryIsBracketed)
+                {
+                    encoded.Add(bareHost);
+                }
+                else if (primaryPort != 5432)
+                {
                     throw new ArgumentException(
-                        $"IPv6 主机条目 '{bareHost}' 不支持随显式 Port={hostBuilder.Port} 自动追加端口（Npgsql 端口仅对未内嵌端口的主机生效）——请改用内嵌端口语法 '[{bareHost}]:{hostBuilder.Port}' 或依赖默认端口 5432。");
-                encoded.Add(bareHost);
+                        $"IPv6 主机条目 '{bareHost}' 在 primaryPort={primaryPort}（非默认）下不支持——Npgsql 的 Port 仅对未内嵌端口的主机生效，条目将错误继承主库端口。请改用内嵌端口语法 '[{bareHost}]:<port>'。");
+                }
+                else
+                {
+                    encoded.Add(bareHost);
+                }
             }
             else if (primaryPort != 5432 || effectivePort != 5432)
                 encoded.Add($"{bareHost}:{effectivePort}");

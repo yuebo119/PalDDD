@@ -15,7 +15,8 @@ namespace PalDDD.Transactions;
 //   ｜
 // 💡 步骤查找用 Dictionary 而非 List.Find：
 //   ｜ List.Find 是 O(n)，当步骤数量增加时查找变慢。
-//   ｜ Dictionary 是 O(1)，同时通过 _stepsInOrder 保持注册顺序用于补偿。
+//   ｜ Dictionary 是 O(1)，同时通过 _stepsInOrder 保持注册顺序供超时检测使用
+//   ｜ （v39 P3 勘正：补偿顺序由 SagaState.ExecutedStepKeys 按执行顺序承载，非本 List）。
 //
 // 📁 文件拆分（Batch 8）：
 //   ｜ 策略组件（补偿/超时）已提取为独立类：
@@ -36,10 +37,13 @@ public enum CompensationPolicy
     /// <summary>无补偿 — 失败后不执行任何回滚</summary>
     None,
 
-    /// <summary>逆序补偿 — 失败后按注册顺序逆序执行已执行步骤的补偿动作</summary>
+    /// <summary>逆序补偿 — 失败后按执行顺序逆序回滚已执行步骤（最后执行的先回滚）。
+    /// v39 P3 勘正：原声明"按注册顺序逆序"失实——补偿范围与顺序以
+    /// <see cref="SagaState.ExecutedStepKeys"/>（执行序）为准，与注册顺序无关</summary>
     Backward,
 
-    /// <summary>正序补偿 — 失败后按注册顺序正序执行补偿动作</summary>
+    /// <summary>正序补偿 — 失败后按执行顺序回滚已执行步骤（先执行的先回滚）。
+    /// v39 P3 勘正：原声明"按注册顺序正序"失实，同 Backward 以执行序为准</summary>
     Forward
 }
 
@@ -59,7 +63,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
     /// <summary>已注册的步骤 — Dictionary 确保 O(1) 按键查找，替代 List.Find 的 O(n)</summary>
     private readonly Dictionary<string, SagaStep> _stepsByKey = [];
 
-    /// <summary>保持原始注册顺序用于补偿（v29 P3 勘正：注册顺序由本 List 维护——Dictionary 枚举序无保证）</summary>
+    /// <summary>保持原始注册顺序（v29 P3 勘正：注册顺序由本 List 维护——Dictionary 枚举序无保证）。
+    /// v39 P3 勘正用途声明：本 List 供超时检测（<see cref="TimeoutDetector"/>）与
+    /// <see cref="Steps"/> 消费——补偿顺序由 <see cref="SagaState.ExecutedStepKeys"/> 承载，非本 List</summary>
     private readonly List<(string Key, SagaStep Step)> _stepsInOrder = [];
 
     private FrozenDictionary<string, SagaStep>? _frozen;
@@ -227,7 +233,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
     /// 这是对外推荐的主入口。与 <see cref="HandleEventAsync"/> 不同，<br/>
     /// 此方法自动处理失败重试和补偿编排。<br/>
     /// 支持 4 种增强步骤类型：FanOut / ChildSaga / Interrupt / Dynamic。<br/>
-    /// 补偿范围：所有已成功执行的步骤（按注册顺序或逆序，由 <see cref="CompensationPolicy"/> 控制），<br/>
+    /// 补偿范围：所有已成功执行的步骤（按执行顺序或其逆序，由 <see cref="CompensationPolicy"/> 控制；v39 P3 勘正——原"按注册顺序或逆序"失实，补偿以 <see cref="SagaState.ExecutedStepKeys"/> 执行序为准），<br/>
     /// 而非仅当前失败的步骤。<br/>
     /// 重试策略见 <see cref="MaxRetries"/> 和 <see cref="RetryBackoffPolicy"/>。
     /// </remarks>

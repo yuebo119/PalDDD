@@ -28,6 +28,11 @@ public sealed class PalValidationException : Exception
     public PalValidationException(ImmutableArray<Core.PalValidationError> errors)
         : base(CreateMessage(errors))
     {
+        // v39 P2 根因修：default(ImmutableArray) 归一为空数组——39 轮修复家族的三消费方
+        // （ValidationBehavior 38 轮/CreateMessage 38 轮/EndpointExtensions:268 探针实证 NRE）
+        // 全部因消费 default Errors 抛 NullReferenceException；构造层归一后整个家族闭环
+        if (errors.IsDefault)
+            errors = ImmutableArray<Core.PalValidationError>.Empty;
         Errors = errors;
     }
 

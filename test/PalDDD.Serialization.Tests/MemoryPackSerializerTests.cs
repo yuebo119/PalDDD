@@ -36,9 +36,14 @@ public sealed class MemoryPackSerializerTests
     {
         var serializer = CreateSerializer();
         var original = new MemoryPackTestMessage("hello", 42, 99.95m);
+        // v39 P3：泛型 Deserialize 补 null descriptor 守卫后，round-trip 断言需传有效
+        // descriptor（MemoryPack contentType）
+        var descriptor = new MessageDescriptor("test.msg.v1", typeof(MemoryPackTestMessage),
+            TestJsonContext.Default.MemoryPackTestMessage, 1,
+            contentType: ContentTypes.MemoryPack);
 
         var bytes = serializer.Serialize(original);
-        var result = serializer.Deserialize<MemoryPackTestMessage>(bytes.Span, null!);
+        var result = serializer.Deserialize<MemoryPackTestMessage>(bytes.Span, descriptor);
 
         await Assert.That(result).IsNotNull();
         await Assert.That(result.Id).IsEqualTo(original.Id);
@@ -85,6 +90,13 @@ public sealed class MemoryPackSerializerTests
         var serializer = CreateSerializer();
         var v1 = new MemoryPackV1Message("Alice");
         var v2 = new MemoryPackV2Message("Bob", 2);
+        // v39 P3：泛型 Deserialize 补 null descriptor 守卫后，需传有效 descriptor
+        var v1Descriptor = new MessageDescriptor("test.v1.v1", typeof(MemoryPackV1Message),
+            TestJsonContext.Default.MemoryPackV1Message, 1,
+            contentType: ContentTypes.MemoryPack);
+        var v2Descriptor = new MessageDescriptor("test.v2.v1", typeof(MemoryPackV2Message),
+            TestJsonContext.Default.MemoryPackV2Message, 1,
+            contentType: ContentTypes.MemoryPack);
 
         var v1Bytes = serializer.Serialize(v1);
         var v2Bytes = serializer.Serialize(v2);
@@ -92,10 +104,10 @@ public sealed class MemoryPackSerializerTests
         // v1 和 v2 的序列化结果不同（v2 多了 Version 字段）
         await Assert.That(v1Bytes.Length).IsNotEqualTo(v2Bytes.Length);
 
-        var v1Result = serializer.Deserialize<MemoryPackV1Message>(v1Bytes.Span, null!);
+        var v1Result = serializer.Deserialize<MemoryPackV1Message>(v1Bytes.Span, v1Descriptor);
         await Assert.That(v1Result!.Name).IsEqualTo("Alice");
 
-        var v2Result = serializer.Deserialize<MemoryPackV2Message>(v2Bytes.Span, null!);
+        var v2Result = serializer.Deserialize<MemoryPackV2Message>(v2Bytes.Span, v2Descriptor);
         await Assert.That(v2Result!.Name).IsEqualTo("Bob");
         await Assert.That(v2Result!.Version).IsEqualTo(2);
     }
@@ -190,9 +202,13 @@ public sealed class MemoryPackSerializerTests
     {
         var serializer = CreateSerializer();
         var original = new MemoryPackValueMessage(7, new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        // v39 P3：泛型 Deserialize 补 null descriptor 守卫后，需传有效 descriptor
+        var descriptor = new MessageDescriptor("test.value.v1", typeof(MemoryPackValueMessage),
+            TestJsonContext.Default.MemoryPackValueMessage, 1,
+            contentType: ContentTypes.MemoryPack);
 
         var bytes = serializer.Serialize(original);
-        var result = serializer.Deserialize<MemoryPackValueMessage>(bytes.Span, null!);
+        var result = serializer.Deserialize<MemoryPackValueMessage>(bytes.Span, descriptor);
         await Assert.That(result).IsNotNull();
         await Assert.That(result.Sequence).IsEqualTo(original.Sequence);
         await Assert.That(result.Timestamp).IsEqualTo(original.Timestamp);
@@ -221,21 +237,36 @@ public sealed class MemoryPackSerializerTests
     // ═══════════════════════════════════════════════════════════════
 
     [Test]
-    public async Task Deserialize_UnregisteredType_ReturnsCorrectResult()
+    public async Task Deserialize_GenericPath_WorksIndependentOfCatalog()
     {
-        // MemoryPack 不依赖 MessageCatalog 的类型注册——它使用编译时 [MemoryPackable] 注解
-        // 此测试验证：即使不使用 MessageDescriptor（传 null），泛型反序列化也能正常工作
+        // MemoryPack 不依赖 MessageCatalog 的类型注册——它使用编译时 [MemoryPackable] 注解。
+        // 此测试验证：泛型反序列化传入 descriptor（v39 P3 起 null 已被入口守卫拒绝）时，
+        // 反序列化本体仍不查询 catalog，编译时类型路径独立于注册机制工作
         var serializer = CreateSerializer();
         var original = new MemoryPackTestMessage("unregistered-test", 99, 299.99m);
+        var descriptor = new MessageDescriptor("test.msg.v1", typeof(MemoryPackTestMessage),
+            TestJsonContext.Default.MemoryPackTestMessage, 1,
+            contentType: ContentTypes.MemoryPack);
 
         var bytes = serializer.Serialize(original);
-        // 使用泛型路径，不传 descriptor（null）
-        var result = serializer.Deserialize<MemoryPackTestMessage>(bytes.Span, null!);
+        var result = serializer.Deserialize<MemoryPackTestMessage>(bytes.Span, descriptor);
 
         await Assert.That(result).IsNotNull();
         await Assert.That(result.Id).IsEqualTo(original.Id);
         await Assert.That(result.Count).IsEqualTo(original.Count);
         await Assert.That(result.Amount).IsEqualTo(original.Amount);
+    }
+
+    [Test]
+    public async Task Deserialize_Generic_NullDescriptor_ThrowsArgumentNullException()
+    {
+        // v39 P3：泛型 Deserialize 补 null descriptor 守卫（对齐姊妹非泛型入口）——
+        // 原 null 静默放行（ContentType 校验被跳过且反序列化照常成功），现入口快速失败
+        var serializer = CreateSerializer();
+        var bytes = serializer.Serialize(new MemoryPackTestMessage("x", 1, 2m));
+
+        await Assert.That(() =>
+            serializer.Deserialize<MemoryPackTestMessage>(bytes.Span, null!)).Throws<ArgumentNullException>();
     }
 
     // ═══════════════════════════════════════════════════════════════

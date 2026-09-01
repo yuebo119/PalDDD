@@ -97,10 +97,13 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
     public TMessage? Deserialize<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.NonPublicConstructors)] TMessage>(
         ReadOnlySpan<byte> payload, MessageDescriptor descriptor)
     {
-        // P3 修复（八轮评审）：泛型路径 descriptor 未参与反序列化，但非 null 时仍校验
-        // ContentType 断链（调用方传入错误 descriptor 应尽早暴露）
-        if (descriptor is not null)
-            ValidateDescriptorContentType(descriptor);
+        // v39 P3：补 null 守卫（对齐姊妹非泛型 Deserialize 同款）——原 null descriptor
+        // 静默放行（ContentType 校验被 if 跳过、反序列化本体不使用 descriptor 照常成功），
+        // 与接口契约（descriptor 必传）不符，null 应入口快速失败
+        ArgumentNullException.ThrowIfNull(descriptor);
+        // P3 修复（八轮评审）：ContentType 断链入口校验——descriptor 未参与反序列化本体，
+        // 但传入错误 descriptor 应尽早暴露（v39 P3 起 null 已由上方守卫排除）
+        ValidateDescriptorContentType(descriptor);
 
         return MemoryPackSerializer.Deserialize<TMessage>(payload);
     }

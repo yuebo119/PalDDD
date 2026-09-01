@@ -46,11 +46,15 @@ public sealed class DefaultSagaManager : ISagaManager
     /// 决策/恢复调用之间无互斥（ResumeDispatch 直接进入 Saga 管线，条目移除按 KVP 身份
     /// 仅防误删，不防并发重入）。同一 sagaId 的决策必须由调用方串行投递（先等上一次
     /// ResumeAsync 完成再投递下一决策）；跨 sagaId 并发恢复安全。<br/>
-    /// 📐 <b>已知残余窗口（v37 P2 声明，v38 勘正时序描述）</b>：决策派发与超时补偿线程并发
-    /// 交错时（决策恰落在 <c>CompensateAsync</c> 执行期间），决策副作用可能在正被回滚的
-    /// Saga 上产生且假成功——失效集在补偿副作用开始前写入（InvalidateInterrupted 先于
-    /// SaveChangesAsync），窗口为"失效集写入 → CompensateAsync 完成"期间在飞的决策派发，
-    /// 该窗口内失效集已置位但本方法前置检查早已通过（TryGetValue 先于失效发生）。
+    /// 📐 <b>已知残余窗口（v37 P2 声明；v38 勘正时序描述，v39 勘正先后方向）</b>：决策派发与
+    /// 超时补偿线程并发交错时（决策恰落在 <c>CompensateAsync</c> 执行期间），决策副作用可能
+    /// 在正被回滚的 Saga 上产生且假成功。实际时序（SagaProcessor.CheckTimeoutsAsync：
+    /// <c>CompensateAsync</c> 先执行 → <c>InvalidateInterrupted</c> 后写失效集 →
+    /// <c>SaveChangesAsync</c> 收尾）——v38 勘正把先后方向写反（称"失效集在补偿副作用开始前
+    /// 写入（InvalidateInterrupted 先于 SaveChangesAsync）"），与实序不符，v39 勘正。
+    /// 窗口为"<b>决策 TryGetValue 通过 → 失效集写入</b>"期间在飞的决策派发：TryGetValue 在
+    /// 失效发生前通过（条目尚未移除），决策派发进入 Saga 管线与补偿并发执行；失效集写入后
+    /// 新决策才经"无已注册条目"检查可见失败。
     /// v26/v27 修复族只关闭了"补偿完成后"半边（迟到决策经失效集/终态检查可见失败），
     /// "补偿进行中"半边仍敞开。框架级根治需 manager 侧租约 fencing（v3.0 接口窗口）；
     /// 调用方对配 Timeout 的 HITL 步骤应保证决策与扫描周期错开。

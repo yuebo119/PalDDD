@@ -9,7 +9,9 @@
 // 💡 设计决策：
 //   ｜ InterruptStep 挂起 Saga（Status → AwaitingHumanDecision）。
 //   ｜ 外部系统通过 ISagaManager.ResumeAsync 恢复执行。
-//   ｜ DecisionType 声明期望的决策数据类型，编译时类型安全。
+//   ｜ DecisionType 为公共 DSL 元数据：声明期望的决策类型供 UI/文档读取；
+//   ｜ 框架不做类型校验（v39 P3 勘正：原"编译时类型安全"失实——ResumeAsync 泛型
+//   ｜ 参数由调用方自由指定，框架零消费该属性、无任何编译时/运行时绑定）。
 // ─────────────────────────────────────────────────────────────
 
 namespace PalDDD.Transactions;
@@ -22,7 +24,8 @@ public sealed class InterruptStep : SagaStep
     /// <summary>中断原因（供 UI/日志展示）</summary>
     public string InterruptReason { get; }
 
-    /// <summary>决策数据类型</summary>
+    /// <summary>决策数据类型（公共 DSL 元数据——声明期望的决策类型供 UI/文档读取；
+    /// 框架不做类型校验，ResumeAsync 泛型参数由调用方保证）</summary>
     public Type DecisionType { get; }
 
     /// <inheritdoc/>

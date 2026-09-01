@@ -43,10 +43,15 @@ public sealed class InMemoryEventLog : IEventLog
 
         lock (_lock)
         {
-            var stream = GetOrCreateStream(streamName);
-            var actualVersion = stream.Count - 1L;
+            // v39 P3：版本校验前置——原顺序 GetOrCreateStream 先于 EnsureExpectedVersion，
+            // 流不存在时先创建空流条目再做校验，校验失败（如期望 NoStream 而探测到空流、
+            // 或期望特定版本与空流失配）抛异常后空流条目残留 _streams（脏状态：后续对
+            // 同一流名的 NoStream 语义检查失配）。改为只读探测实际版本 → 校验 → 通过才
+            // 创建；流不存在时 actualVersion=-1 与空流 Count-1 等价，Matches 行为不变
+            var actualVersion = (_streams.TryGetValue(streamName, out var existing) ? existing.Count : 0) - 1L;
             EnsureExpectedVersion(streamName, expectedVersion, actualVersion);
 
+            var stream = GetOrCreateStream(streamName);
             var firstStreamVersion = stream.Count;
             // 📐 P3 定案（语义声明）：InMemory 的 GlobalPosition 从 0 连续分配，EFCore 版走
             // Hi/Lo 预分配（起始值非 0 且块内连续）——两版 position 语义不对齐是刻意的：

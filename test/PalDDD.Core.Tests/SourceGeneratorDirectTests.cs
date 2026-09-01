@@ -529,6 +529,32 @@ public sealed class SourceGeneratorDirectTests
     }
 
     [Test]
+    public async Task EnumGenerator_FileLocalClass_ReportsPalenum007()
+    {
+        // v39 P3：file-local 类型（C# 12 file class）逃过可访问性链拦截——IsFileLocal=true
+        // 时 DeclaredAccessibility 报 Internal（Accessibility 枚举无 File 成员），internal 腿
+        // 在 GetBlockingAccessibility 中被放行；但 file-local 可见性仅限声明文件，生成物
+        // emitted 到独立 generated 文件不可引用（CS0122 落在 auto-generated 文件，同
+        // private nested 根因）。file-local 视为阻断层，编译期报 PALENUM007 且不生成坏代码
+        var result = RunEnumGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            [GenerateEnum]
+            file partial class FileLocalStatus : SmartEnum<FileLocalStatus, string>
+            {
+                public static readonly FileLocalStatus A = new("a", "A");
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALENUM007")).IsTrue();
+        var generatedCount = result.Compilation.SyntaxTrees.Count(t => t.FilePath.EndsWith(".g.cs", StringComparison.Ordinal));
+        await Assert.That(generatedCount).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task IdentityGenerator_PrivateNestedStruct_ReportsPalid006()
     {
         // v33 P3：private nested record struct 挂 [GenerateId]——生成物的 namespace 级

@@ -45,6 +45,12 @@ internal sealed class PipelineStateMachine
         IBaseRequest request,
         CancellationToken ct)
     {
+        // v39 P3（ITM-284 全仓构造守卫惯例漏网）：补引用参数守卫——handler/request 此前
+        // 零守卫，null 延迟到 ExecuteNextAsync 的 _handler!/_request! 处才 NRE，堆栈不指向
+        // 配置错误源头。behaviors（ImmutableArray 结构体）与 ct（值类型）无 null 语义不守卫
+        //（ThrowIfNull 对非可空 struct 为无操作，CA2264 在 warnaserror 下禁止）
+        ArgumentNullException.ThrowIfNull(handler);
+        ArgumentNullException.ThrowIfNull(request);
         _behaviors = behaviors;
         _handler = handler;
         _request = request;
