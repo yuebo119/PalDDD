@@ -389,7 +389,16 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
             //（"[::1]:5432:5433" / "::1:5433"），Npgsql 无法解析。Host 原样输出，
             // 端口靠内嵌语法或默认 5432
             else if (IsIpV6Literal(bareHost))
+            {
+                // v38 P2 勘正：v37 把 IPv6 条目从"响亮失败（畸形串）"改成"静默丢弃显式
+                // Port"——备机端口≠主库端口时静默连到错误实例。IPv6+显式非默认 Port 的
+                // 组合不支持（Npgsql 的 Port 只对未内嵌端口的主机生效），fail-fast 指引
+                // 内嵌端口语法（镜像 MySQL 姊妹 HasHostWithoutEmbeddedPort + Port 校验形态）
+                if (hostBuilder.Port != 5432)
+                    throw new ArgumentException(
+                        $"IPv6 主机条目 '{bareHost}' 不支持随显式 Port={hostBuilder.Port} 自动追加端口（Npgsql 端口仅对未内嵌端口的主机生效）——请改用内嵌端口语法 '[{bareHost}]:{hostBuilder.Port}' 或依赖默认端口 5432。");
                 encoded.Add(bareHost);
+            }
             else if (primaryPort != 5432 || effectivePort != 5432)
                 encoded.Add($"{bareHost}:{effectivePort}");
             else
