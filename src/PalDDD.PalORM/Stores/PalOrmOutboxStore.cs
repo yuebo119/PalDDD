@@ -114,6 +114,11 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
             // MySqlOutboxDbContext 的 SKIP LOCKED（败者租他行）不同。取舍：JOIN 写法避开 MySQL
             // 派生表锁的版本兼容矩阵（8.0.18 以下行为差异），正确性由 (locked_by,locked_until)
             // token 终态守卫兜底（败者租约被覆盖后其终态写 0 行）。
+            // v43 P3 时序完整性补充（同 EFCore 侧声明）：last-writer-wins 未覆盖 (A写,A读,
+            // B写,B读) 交错时序——两 worker 子查询均在对方提交前选中同一行集时，后写者
+            // JOIN-SET 直接覆盖先写者租约并回读到整批，双 worker 同批重复投递（而非延迟）；
+            // fencing 只防双终态写不防双执行。重复投递在 at-least-once 投递契约内，
+            // 由下游幂等消费兜底。
             //
             // ⚠️ 已知限制（八轮评审 P3，声明不修）：回读按 (locked_by, locked_until) 匹配——同一 owner
             // 在同一 tick（until 完全相等，如 FakeTimeProvider 冻结时间）发起两次租约时，第二次回读

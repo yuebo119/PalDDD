@@ -365,7 +365,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
         }
     }
 
-    /// <summary>必须在原步骤异常的 catch 块内调用——观察者异常被吞，原始异常继续向上传播。</summary>
+    /// <summary>必须在原步骤异常继续向上传播的调用点调用（catch 块内，或抛出前——
+    /// v43 P3 Dynamic 路由拒绝路径）——观察者异常被吞，原始异常继续向上传播。</summary>
     private static async ValueTask SafeObserveFailedAsync(
         SagaExecutionObserver? observer, PalUlid sagaId, string stepKey, Exception stepError, CancellationToken ct)
     {
@@ -821,8 +822,16 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // ITM-069：特殊步骤（FanOut/Interrupt/Dynamic/ChildSaga）的 execute 为 null!，
         // 直接路由分发会 NRE 且错误信息不指向真实原因。显式拒绝并给出可定位的错误。
         if (matchedStep.DispatchKind != StepDispatchKind.Normal)
-            throw new InvalidOperationException(
+        {
+            // v43 P3：补观测链——SafeObserveStartedAsync（上方）已发射而拒绝路径直接
+            // throw 无 OnStepFailed，观察端看到步骤开始后无终态事件（观测链悬空）。
+            // 构造异常先观测后抛出（镜像本方法 catch 内 SafeObserveFailedAsync 形态；
+            // stepKey 用 Dynamic 注册键，对齐 P3-SRC-603 归因声明）。
+            var dispatchEx = new InvalidOperationException(
                 $"DynamicStep 路由目标 '{matchedKey}' 是 {matchedStep.DispatchKind} 类型步骤，不支持事件路由分发；路由目标必须是普通步骤。");
+            await SafeObserveFailedAsync(observer, current.SagaId, stepKey, dispatchEx, ct).ConfigureAwait(false);
+            throw dispatchEx;
+        }
 
         List<Exception> failures = [];
         for (int attempt = 0; attempt <= MaxRetries; attempt++)

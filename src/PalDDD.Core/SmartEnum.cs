@@ -47,11 +47,17 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
         // value.ToString() 路径（保留），仅空白串 fail-fast
         if (name is not null && string.IsNullOrWhiteSpace(name))
             throw new ArgumentException("Name cannot be blank", nameof(name));
-        Value = value;
         // ITM-101 修复：TValue.ToString() 返回 null 时回退 ""——自定义 TValue 的
         // ToString() 可返回 null，原 `name ?? value.ToString()!` 使 Name 为 null，
         // 违反 Name 的 string 非空契约（后续 ToString()/序列化路径 NRE）
-        Name = name ?? value.ToString() ?? "";
+        // v43 P3：兜底值补空白守卫——name=null 且 TValue=string 的值本身空白（如 " "）时，
+        // ToString() 兜底产出空白 Name，同样绕过 v41 空白守卫进入字典与序列化路径（与
+        // name 显式空白同罪，fail-fast）；ToString() 产 null 仍走 "" 兜底（ITM-101 非空契约保留）
+        var resolvedName = name ?? value.ToString() ?? "";
+        if (string.IsNullOrWhiteSpace(resolvedName))
+            throw new ArgumentException("Name cannot be blank", nameof(value));
+        Value = value;
+        Name = resolvedName;
     }
 
     /// <summary>所有枚举值 — O(1) 查找</summary>

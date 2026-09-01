@@ -315,6 +315,13 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                 {
                     consumer.Close();
                 }
+                catch (ObjectDisposedException)
+                {
+                    // v43 P3：登记先行窗口（订阅已 Dispose、迟启动委托此刻才被调度执行）下，
+                    // KafkaSubscription.DisposeAsync 的兜底 Dispose 已先行释放 consumer——
+                    // Close 打在已释放实例上抛 ODE 属该窗口的预期形态，静默跳过（委托侧
+                    // 与兜底 Dispose 幂等，资源回收无缺口），不再记 Warning 噪声误导关停诊断
+                }
                 catch (Exception closeEx) when (closeEx is not OperationCanceledException)
                 {
                     _logger.Warning($"Kafka consumer Close failed during shutdown: {closeEx.Message} @ {_consumerConfig.GroupId}");
@@ -465,9 +472,12 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             }
             finally
             {
-                // P2 修复：若取消发生在 Task.Run 委托开始执行前，委托内 finally
-                // （consumer.Close + Dispose）不会执行——此处兜底释放 consumer
-                // （Confluent.Kafka Dispose 幂等，与委托内 finally 双重释放安全）。
+                // P2 修复 + v43 P3 勘正：本兜底释放 consumer（Confluent.Kafka Dispose 幂等）。
+                // 原注释声称"若取消发生在 Task.Run 委托开始执行前，委托内 finally 不会执行"
+                // ——仅在 Dispose 后委托从未被调度的窄窗口成立（此时本兜底是唯一释放点）；
+                // 委托已被调度时 await consumeTask 保证委托内 finally（Close+Dispose）先行
+                // 执行完毕，本行为幂等二次释放（Close 打已释放实例的 ODE 噪声已由委托侧
+                // v43 降噪）。
                 _consumer.Dispose();
                 // ITM-167 声明（登记窗口 cts 释放噪声）：DisposeAsync 可能落在
                 // "已登记未 SetConsumeTask" 窗口，此刻释放 _cts 是安全的——

@@ -153,12 +153,33 @@ public sealed class OutboxBatchProcessor
                     var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
                     if (msg.RetryCount + 1 >= options.MaxRetryCount)
                     {
-                        _store.MarkDead(msg, failureReason, now);
+                        // v43 P3（ITM-092 管线孪生，镜像 InboxProcessor 同型修复）：标记自身
+                        // 失败（DB 栈标记路径故障）不得替换 broker 失败根因、不得中止整批——
+                        // 原裸调抛出会使上游把标记错误当业务失败处理且同批后续消息饿死。
+                        // 标记错误挂主异常 Data（InboxProcessor 同键形态）+ Warning 留痕
+                        // （此处主异常不向上传播，Data 信息需日志兜底可见），主异常优先。
+                        try
+                        {
+                            _store.MarkDead(msg, failureReason, now);
+                        }
+                        catch (Exception markEx)
+                        {
+                            ex.Data["MarkError"] = markEx.Message;
+                            _logger.Warning($"Outbox: MarkDead for {msg.Id} failed: {markEx.Message}");
+                        }
                         checked { dead++; }
                     }
                     else
                     {
-                        _store.ReleaseForRetry(msg, failureReason, nextAttemptAt);
+                        try
+                        {
+                            _store.ReleaseForRetry(msg, failureReason, nextAttemptAt);
+                        }
+                        catch (Exception markEx)
+                        {
+                            ex.Data["MarkError"] = markEx.Message;
+                            _logger.Warning($"Outbox: ReleaseForRetry for {msg.Id} failed: {markEx.Message}");
+                        }
                         checked { retried++; }
                     }
                     // v35 P3（EA2）：日志用进入失败路径时的快照 +1（本次为第 N 次失败）——
