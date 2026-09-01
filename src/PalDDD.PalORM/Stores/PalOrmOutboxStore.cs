@@ -176,12 +176,14 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         var owner = message.LockedBy;
         var until = message.LockedUntil;
         var statusProcessed = (int)OutboxStatus.Processed;
+        // v44 P2：Status 终态守卫（镜像 v43 EFCore FencedTarget 收口——防 Dead↔Processed 翻转）
+        var statusPending = (int)OutboxStatus.Pending;
         var affected = owner is null
             ? Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND locked_by IS NULL",
+                $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by IS NULL",
                 default).AsTask().GetAwaiter().GetResult()
             : Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND locked_by = {owner} AND locked_until = {until}",
+                $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} AND locked_until = {until}",
                 default).AsTask().GetAwaiter().GetResult();
         if (affected > 0)
         {
@@ -214,12 +216,13 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         var owner = message.LockedBy;
         var until = message.LockedUntil;
         var statusDead = (int)OutboxStatus.Dead;
+        var statusPending = (int)OutboxStatus.Pending;
         var affected = owner is null
             ? Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND locked_by IS NULL",
+                $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by IS NULL",
                 default).AsTask().GetAwaiter().GetResult()
             : Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND locked_by = {owner} AND locked_until = {until}",
+                $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} AND locked_until = {until}",
                 default).AsTask().GetAwaiter().GetResult();
         if (affected > 0)
         {
