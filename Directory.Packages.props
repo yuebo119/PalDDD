@@ -32,7 +32,9 @@
     <!-- Dapper 适配器 — SQLite / PostgreSQL / MySQL（AOT 兼容） -->
     <PackageVersion Include="Dapper" Version="2.1.79" />
     <PackageVersion Include="Dapper.AOT" Version="1.0.52" />
-    <!-- PalORM 适配器 — 面向 Native AOT 的 .NET 11 微 ORM（源生成 + 编译期 SQL，真 AOT 安全） -->
+    <!-- PalORM 适配器 — 面向 Native AOT 的 .NET 11 微 ORM（源生成 + 编译期 SQL，真 AOT 安全）
+         5.4.0 新增 ResilienceExecutor 弹性层（WithRetry/WithCircuitBreaker/ExecuteWithResilience，
+         默认 IsPassThrough 直通）；5.3→5.4 唯一移除 API BuildMySqlUpsertSetClause 本仓零引用 -->
     <PackageVersion Include="PalORM.Core" Version="5.4.0" />
     <PackageVersion Include="PalORM.SourceGen" Version="5.4.0" />
     <PackageVersion Include="PalORM.Sqlite" Version="5.4.0" />
