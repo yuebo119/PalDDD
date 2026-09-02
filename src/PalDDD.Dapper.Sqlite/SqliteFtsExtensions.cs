@@ -128,10 +128,24 @@ public static class SqliteFts
     public static string Optimize(string indexName)
         => $"INSERT INTO {Escape(indexName)}({Escape(indexName)}) VALUES('optimize')";
 
-    /// <summary>删除 FTS5 索引</summary>
+    /// <summary>删除 FTS5 索引（连同源表上的三个同步触发器）。</summary>
+    /// <remarks>
+    /// v45 P2 修复：Drop 只 DROP 虚表不清理触发器——SQLite 触发器宿主是 ON 子句的
+    /// 源表，虚表删除不级联；此后对源表任何 DML 会触发器体内 <c>INSERT INTO 已删除的
+    /// fts 表</c> 报 "no such table"，源表写路径全断。现产出三条 DROP TRIGGER + 虚表
+    /// DROP 的一条批处理（与 <see cref="CreateFtsIndex"/> 的三触发器对称）。
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Drop(string indexName)
-        => $"DROP TABLE IF EXISTS {Escape(indexName)}";
+    {
+        var sanitized = SanitizeTriggerName(indexName);
+        return $"""
+            DROP TRIGGER IF EXISTS {Escape(sanitized + "_ai")};
+            DROP TRIGGER IF EXISTS {Escape(sanitized + "_ad")};
+            DROP TRIGGER IF EXISTS {Escape(sanitized + "_au")};
+            DROP TABLE IF EXISTS {Escape(indexName)};
+            """;
+    }
 
     // ── 辅助 ──
 
