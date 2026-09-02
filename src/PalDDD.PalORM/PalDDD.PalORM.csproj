@@ -15,7 +15,7 @@
     <RootNamespace>PalDDD.PalORM</RootNamespace>
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
-    <Description>Pal.DDD PalORM 持久化适配核心层（真 AOT + 源生成 + 编译期方言特化）— 含 7 Store + UnitOfWork</Description>
+    <Description>Pal.DDD PalORM 持久化适配核心层（真 AOT + 源生成 + 编译期方言特化）— 含 6 Store + UnitOfWork（v54 勘正：对齐 v34 P3 计数勘正）</Description>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
     <!--

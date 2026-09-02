@@ -19,6 +19,8 @@ public sealed record PalPlatformVerificationError
 public sealed class PalPlatformVerificationException : InvalidOperationException
 {
     /// <summary>创建空的平台验证异常。</summary>
+    /// <remarks>v54 P3 契约声明：无参/单参构造为序列化兼容预留——Errors 可为空集合（四参构造
+    /// 强制至少一错），框架内唯一调用方仅用四参构造，空 Errors 路径无缺陷场景。</remarks>
     public PalPlatformVerificationException()
     {
         Errors = [];

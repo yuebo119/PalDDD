@@ -383,14 +383,24 @@ public static class MySqlMultiHost
             // Contains(':') 全拦（未声明变更），裸 IPv6（::1 等多冒号）被误拦，且与上方
             // 方括号消息"请使用裸字面量（如 ::1）"互指死路（IPv6 无可用形态）。
             // 唯一冒号（"host:port" / "host:" / ":port"）是内嵌端口语法照拦；
-            // 多冒号是裸 IPv6 字面量，.NET Dns.GetHostAddresses 可直接解析，放行（共享 Port）。
+            // v54 P3 收窄：多冒号条目须为可解析 IPv6 字面量（IPAddress.TryParse）——
+            // "a:b:c" 等垃圾多冒号原样传 Dns 延迟到建连期抛晦涩 SocketException，改配置期定位
             var firstColon = entry.IndexOf(':');
-            if (firstColon >= 0 && entry.IndexOf(':', firstColon + 1) < 0)
+            if (firstColon >= 0)
             {
-                throw new ArgumentException(
-                    $"{parameterName} 条目 '{entry}' 内嵌端口（host:port 语法）——MySqlConnector 不支持"
-                    + "（原样传 DNS 解析失败，该节点永不可连）。"
-                    + "请移除内嵌端口、统一使用共享 Port 关键字。", parameterName);
+                if (entry.IndexOf(':', firstColon + 1) < 0)
+                {
+                    throw new ArgumentException(
+                        $"{parameterName} 条目 '{entry}' 内嵌端口（host:port 语法）——MySqlConnector 不支持"
+                        + "（原样传 DNS 解析失败，该节点永不可连）。"
+                        + "请移除内嵌端口、统一使用共享 Port 关键字。", parameterName);
+                }
+                if (!System.Net.IPAddress.TryParse(entry, out _))
+                {
+                    throw new ArgumentException(
+                        $"{parameterName} 条目 '{entry}' 含多个冒号但不是合法 IPv6 字面量——"
+                        + "原样传 DNS 建连必失败。请修正主机名或使用合法 IPv6 字面量（如 ::1）。", parameterName);
+                }
             }
         }
     }

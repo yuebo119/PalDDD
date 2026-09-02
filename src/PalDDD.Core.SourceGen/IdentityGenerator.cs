@@ -687,7 +687,7 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
         // {{name}}），字面 { } 单写——C# 11 raw interpolated string 规则（$""" 下无法写字面 {）
         "Ulid" => $$"""
                 if (reader.TokenType != JsonTokenType.String)
-                    throw new JsonException("Ulid identity JSON value cannot be null.");
+                    throw new JsonException("Ulid identity JSON value must be a JSON string (Ulid wire form).");
                 if (reader.ValueIsEscaped)
                 {
                     // v34 P2 补全（escaped 腿）：转义字符串无法走 ValueSpan 快路径，GetString 后

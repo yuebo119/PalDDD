@@ -57,6 +57,11 @@ public static class PostgreSqlServiceCollectionExtensions
         // AddPalMySqlDataSource 同款口径）——空白串原样放行会延迟到 NpgsqlDataSourceBuilder.Build()/
         // 建连时才抛 provider 专属异常（ThrowIfNullOrWhiteSpace 对 null 抛 ArgumentNullException）
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        // v54 P3（B-P3-5）：单主机入口列表守卫（镜像 MySQL v50/v53 三连收口；Host 整体空
+        // 跳过——PG 空 Host 是 Unix socket 合法语义）
+        var singleHost = new NpgsqlConnectionStringBuilder(connectionString).Host;
+        PostgreSqlMultiHost.EnsureNoBlankHostEntries(singleHost, "Host");
+        PostgreSqlMultiHost.EnsureNoDuplicateHost(singleHost, "Host");
 
         var builder = new NpgsqlDataSourceBuilder(connectionString);
         builder.ConnectionStringBuilder.ApplicationName = applicationName;
@@ -100,6 +105,10 @@ public static class PostgreSqlServiceCollectionExtensions
 
         // v34 P3：空白连接串 fail-fast（v33 姊妹收口，同基础重载）
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        // v54 P3（B-P3-5）：单主机入口列表守卫（同基础重载）
+        var singleHost = new NpgsqlConnectionStringBuilder(connectionString).Host;
+        PostgreSqlMultiHost.EnsureNoBlankHostEntries(singleHost, "Host");
+        PostgreSqlMultiHost.EnsureNoDuplicateHost(singleHost, "Host");
 
         var builder = new NpgsqlDataSourceBuilder(connectionString);
         builder.ConnectionStringBuilder.ApplicationName = applicationName;

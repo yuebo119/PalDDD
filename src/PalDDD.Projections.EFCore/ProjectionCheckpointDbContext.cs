@@ -165,6 +165,9 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         ArgumentNullException.ThrowIfNull(checkpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
 
+        // v54 P3 口径声明：EFCore 仅拦 Completed（Failed 重复 MarkFailed 允许更新错误信息并落库），
+        // InMemory 姊妹的 IsCurrentLeaseHolder 更严格（非 Processing 全拦）——系统性口径差非孤例，
+        // 失败信息更新是有用行为，保留宽松口径。
         // v35 P3：Completed 终态防御——Completed 不可翻转为 Failed（终态语义）。镜像
         // PalORM 版 PalOrmProjectionCheckpointStore.MarkFailedAsync 的 SQL
         // `AND status <> Completed` 守卫与 InMemoryInboxStore.MarkProcessedAsync 的

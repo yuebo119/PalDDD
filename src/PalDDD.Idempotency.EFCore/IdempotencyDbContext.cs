@@ -115,6 +115,8 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         // 令牌是 UpdatedAt，v53 已换 Revision 单调令牌但同实例续写路径仍恒命中），
         // Completed 翻转为 Failed 会使 TryStartAsync 走 CAS 复用 → 副作用重新执行，
         // 幂等保证被绕过
+        // v54 P3 口径声明：EFCore 仅拦 Completed（Failed 重复 MarkFailed 允许更新错误信息），
+        // InMemory 姊妹更严格（非 Processing 全拦）——系统性口径差，保留宽松口径（同 ProjectionCheckpoint）
         if (record.Status == IdempotencyRecordStatus.Completed)
             return;
 
@@ -169,6 +171,8 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         try
         {
             await SaveChangesAsync(ct).ConfigureAwait(false);
+            // v54 P3：成功路径 Detach（镜像 ProjectionCheckpointDbContext）——中断路径不滞留
+            Entry(record).State = EntityState.Detached;
             return record;
         }
         // ITM-065：仅唯一约束冲突返回 null（语义=他人已持有）；连接故障/超时等其他
@@ -198,6 +202,8 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         try
         {
             await SaveChangesAsync(ct).ConfigureAwait(false);
+            // v54 P3：成功路径 Detach（同 TryCreate 路径）
+            Entry(record).State = EntityState.Detached;
             return record;
         }
         catch (DbUpdateConcurrencyException)

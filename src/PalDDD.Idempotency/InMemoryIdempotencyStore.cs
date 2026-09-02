@@ -110,8 +110,9 @@ public sealed class InMemoryIdempotencyStore : IIdempotencyStore
 
         lock (_lock)
         {
-            // P3 修复（八轮评审）：所有权/终态守卫——IdempotencyRecord 无 Revision 字段，以状态机
-            // 守卫替代：仅字典当前实例且 Processing（本租约持有中）可标记，Completed 终态不可
+            // P3 修复（八轮评审）：所有权/终态守卫——v54 勘正：IdempotencyRecord 已有 Revision
+            // 字段（v53 新增），但 InMemory 栈不依赖它（引用一致 + 状态机守卫等价，单进程锁
+            // 天然序列化，令牌冗余）：仅字典当前实例且 Processing（本租约持有中）可标记，Completed 终态不可
             // 翻转为 Failed、Failed 待 TryStartAsync 回收；过期清除/替换后的旧引用同样不生效
             // （二十一轮起另含被 TryStartAsync 抢占的僵尸/失败旧持有者——抢占时已换新实例，
             // 见其注释）。

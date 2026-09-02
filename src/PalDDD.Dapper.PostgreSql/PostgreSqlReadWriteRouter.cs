@@ -158,6 +158,10 @@ public static class PostgreSqlReadWriteRouterExtensions
                 foreach (var raw in primaryHost.Split(','))
                 {
                     var (primaryEntryHost, primaryEntryPort) = PostgreSqlMultiHost.NormalizeHostEntry(raw, primaryCsBuilder.Port);
+                    // v54 P3（B-P3-2）：primary 裸 IPv6 拦截（同 MultiHost 口径）
+                    if (primaryEntryHost.Count(c => c == ':') > 1 && !primaryEntryHost.StartsWith('['))
+                        throw new ArgumentException(
+                            $"primary Host 条目 '{primaryEntryHost}' 是裸 IPv6——请改用 '[host]' 或 '[host]:port' 语法。");
                     // v53 P2：空条目 fail-fast（镜像 MySQL v49 姊妹）——列表空段是死节点
                     if (primaryEntryHost.Length == 0)
                         throw new ArgumentException(

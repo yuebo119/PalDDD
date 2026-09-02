@@ -9,4 +9,7 @@
     <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
   </ItemGroup>
 
+  <!-- v54 P2：PalORM 幂等栈 Revision 令牌换代——物化构造/回放恢复 internal 通道的消费方 -->
+  <ItemGroup><InternalsVisibleTo Include="PalDDD.PalORM" /></ItemGroup>
+
 </Project>

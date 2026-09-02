@@ -83,6 +83,7 @@ CREATE TABLE idempotency_records (
     updated_at        DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     response_payload  LONGBLOB,
     error             TEXT,
+    revision          BIGINT NOT NULL DEFAULT 0,   -- 乐观并发令牌（单调递增，v53 P2；v54 修正：v53 脚本表尾定位漂移错插到 projection_checkpoints）
     PRIMARY KEY (operation_name, idempotency_key),
     INDEX idx_idempotency_expires (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -97,7 +98,6 @@ CREATE TABLE projection_checkpoints (
     lease_until       DATETIME(6),
     revision          INT NOT NULL DEFAULT 0,
     error             TEXT,
-        revision         BIGINT NOT NULL DEFAULT 0,                     -- 乐观并发令牌（单调递增，v53 P2）
     PRIMARY KEY (projection_name, source_name, position),
     INDEX idx_checkpoint_status (projection_name, source_name, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

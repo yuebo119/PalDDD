@@ -599,7 +599,7 @@ partial class {{info.TypeName}}
 /// <summary>INamedTypeSymbol 扩展（v52 P2：包含类型 partial 性检查共享）。</summary>
 internal static class NamedTypeSymbolExtensions
 {
-    /// <summary>判断命名空间内类型声明是否含 partial 修饰符。</summary>
+    /// <summary>判断命名类型声明（任意层级，与是否在命名空间内无关）是否含 partial 修饰符。</summary>
     public static bool IsPartial(this INamedTypeSymbol type, CancellationToken ct = default)
     {
         foreach (var reference in type.DeclaringSyntaxReferences)

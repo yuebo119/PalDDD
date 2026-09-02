@@ -11,10 +11,13 @@
 
 ## 必须遵守
 
-### 数值类型值对象 — 继承 `ValueObject<T>`
-- 当包装类型是 `int` / `long` / `decimal` / `float` / `double` 等数值时使用
-- `ValueObject<T>` 提供 `IUtf8SpanFormattable`（零分配格式化）和隐式转换
-- 约束 `where T : struct, INumber<T>, IMinMaxValue<T>`
+### 数值类型值对象 — 实现 `IValueObject`（或直接使用框架 `ValueObject<T>` 类型）
+- 声明 `readonly record struct : IValueObject`，字段直接持数值
+- 需要零分配格式化与算术参与时可**直接使用**框架预置的 `ValueObject<T>` 类型
+  （它是 `readonly record struct`，**不可被继承**——struct 无继承，`class Foo : ValueObject<int>`
+  /`record struct Foo : ValueObject<int>` 均编译失败 CS0527；以字段/参数/属性类型的方式组合使用，
+  隐式转换 `ValueObject<T> → T` 正是为直接参与算术设计）
+- `ValueObject<T>` 约束 `where T : struct, INumber<T>, IMinMaxValue<T>`
 
 ### 非数值类型值对象 — 实现 `IValueObject`
 - 当包装类型是 `string` / `Guid` 或其他非数值类型时使用
@@ -30,6 +33,7 @@
 - ❌ 不在值对象中放实体引用 — 值对象无身份
 - ❌ 不给值对象设 setter — 不可变
 - ❌ 不使用 `class`（引用类型值对象）— 使用 `readonly record struct`（栈分配）
+- ❌ 不**继承** `ValueObject<T>`（struct 不可继承，CS0527）— 直接用它作类型，或实现 `IValueObject`
 
 ## 输出格式
 ````csharp
@@ -37,20 +41,10 @@ using PalDDD.Core;
 
 namespace YourDomain;
 
-// 数值类型值对象 — 实现 IValueObject (三十七轮对齐)
-public readonly record struct Money : IValueObject
+// 数值类型值对象 — 实现 IValueObject（与示例段同形态，v54 统一）
+public readonly record struct Money(decimal Amount, string Currency) : IValueObject
 {
-    public decimal Amount { get; }
-    public string Currency { get; }
-
-    public Money(decimal amount, string currency)
-    {
-        Amount = amount;
-        Currency = currency;
-    }
-
-    public static Money Zero(string currency = "CNY") => new(0, currency);
-    public Money Add(Money other) => new(Amount + other.Amount, Currency);
+    public static Money CNY(decimal a) => new(a, "CNY");
     public override string ToString() => $"{Amount:F2} {Currency}";
 }
 
@@ -63,14 +57,16 @@ public readonly record struct EmailAddress(string Value) : IValueObject
             : new EmailAddress(value);
 }
 
-// 使用 ValueObject<T> 的数值包装（隐式转换到基础类型）
-public readonly record struct Quantity(int Value) : ValueObject<int>, IValueObject
+// 框架预置数值包装 — 直接使用 ValueObject<T> 类型（组合，非继承）
+// 注意隐式转换是单向的：ValueObject<T> → T（参与算术）；构造方向用 new
+public readonly record struct OrderLine
 {
-    public Quantity(int value) : base(value)
-    {
-        if (value < 0)
-            throw new ArgumentOutOfRangeException(nameof(value), "Quantity cannot be negative");
-    }
+    public ValueObject<int> Quantity { get; }
+    public OrderLine(int quantity) => Quantity = quantity >= 0
+        ? new ValueObject<int>(quantity)
+        : throw new ArgumentOutOfRangeException(nameof(quantity), "Quantity cannot be negative");
+
+    public int Raw => Quantity; // 隐式转换回 int（单向隐式 ValueObject<T> → T）
 }
 ````
 

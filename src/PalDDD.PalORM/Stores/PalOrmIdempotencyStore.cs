@@ -47,7 +47,7 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         // 复合主键表未注册实体 —— 用 GetRawConnection + 手动 reader（QueryFirstAsync 对未注册类型返回空对象）
         // ITM-243：经 CreateRawCommand 挂接 IUnitOfWork 环境事务
         await using var cmd = CreateRawCommand();
-        cmd.CommandText = "SELECT operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error FROM idempotency_records WHERE operation_name = @p0 AND idempotency_key = @p1";
+        cmd.CommandText = "SELECT operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error, revision FROM idempotency_records WHERE operation_name = @p0 AND idempotency_key = @p1";
         AddParam(cmd, "@p0", operationName);
         AddParam(cmd, "@p1", key);
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
@@ -62,10 +62,13 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         // locked_until=MinValue 使 Processing 租约判定恒过期、不阻塞重租；updated_at=MinValue
         // 作为乐观锁基准时 UPDATE 的 NULL 等值比较恒不命中，Mark* 不写本地对象（P1-3 行为：
         // affected=0 不假装成功）。
+        // v54 P2：internal 物化构造携带 DB 真值 revision（public ctor 恒 0，CAS 基准失配）；
+        // revision 列 DBNull 容错回退 0（对齐三时间戳容错口径——损坏行不炸物化）
         var record = new IdempotencyRecord(
             reader.GetString(0), reader.GetString(1),
             (IdempotencyRecordStatus)reader.GetInt32(2),
-            GetUtcOrMin(reader, 3), GetUtcOrMin(reader, 4), GetUtcOrMin(reader, 5));
+            GetUtcOrMin(reader, 3), GetUtcOrMin(reader, 4), GetUtcOrMin(reader, 5),
+            reader.IsDBNull(8) ? 0 : reader.GetInt64(8));
 
         if (record.ExpiresAt <= now) return null;
 
@@ -77,12 +80,14 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
             // 与"无响应"不可区分，幂等命中方以 null 判"无可复用响应"会重放副作用。
             if (record.Status == IdempotencyRecordStatus.Completed)
             {
-                record.MarkCompleted(reader.GetFieldValue<byte[]>(6), record.UpdatedAt);
+                // v54 P2：回放改 RestoreTerminalState——借用 Mark* 会使 Revision 偏移 +1，
+                // 该 record 若被用作 CAS 基准（TryStart 抢占路径）恒失配
+                record.RestoreTerminalState(reader.GetFieldValue<byte[]>(6), null);
             }
         }
         if (!reader.IsDBNull(7) && record.Status == IdempotencyRecordStatus.Failed)
         {
-            record.MarkFailed(reader.GetString(7), record.UpdatedAt);
+            record.RestoreTerminalState(null, reader.GetString(7)); // v54 P2：回放不递增 Revision
         }
         return record;
     }
@@ -137,13 +142,23 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
             // Remove 重建）同场景均可重新执行，三栈分叉。expires_at <= now 已含过期语义；
             // 该守卫真正要防的"未过期 Completed 被回收"由 expires_at 条件天然排除。
             // 三栈契约自此统一：过期即回收（无论终态），Retention 语义 = 可重新执行窗口。
+            // v54 P2：补 revision = revision + 1（换代）——Mark* 的 CAS 基准从 updated_at 换 revision
+            //（时间戳受 DB 列精度截断，同刻双 worker 回收可双双命中绕过幂等）
             affected = await Session.ExecuteAsync(
-                $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL WHERE operation_name = {operationName} AND idempotency_key = {key} AND expires_at <= {now}",
+                $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL, revision = revision + 1 WHERE operation_name = {operationName} AND idempotency_key = {key} AND expires_at <= {now}",
                 ct).ConfigureAwait(false);
             if (affected == 0) return null;
 
+            // 换代后回读 DB 新 revision（existing is null 分支无内存基准可算；低频路径可接受一次回读）
+            await using var readBack = CreateRawCommand();
+            readBack.CommandText = "SELECT revision FROM idempotency_records WHERE operation_name = @p0 AND idempotency_key = @p1";
+            AddParam(readBack, "@p0", operationName);
+            AddParam(readBack, "@p1", key);
+            await using var rr = await readBack.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            var newRevision = await rr.ReadAsync(ct).ConfigureAwait(false) ? rr.GetInt64(0) : 0;
+
             return new IdempotencyRecord(operationName, key,
-                IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now);
+                IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, newRevision);
         }
 
         // ITM-078 修复：Completed 非过期记录返回 null（语义=他人已持有终态，本调用未获得租约）——
@@ -156,14 +171,16 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         if (existing.Status == IdempotencyRecordStatus.Processing && existing.LockedUntil > now)
             return null;
 
-        var expectedUpdatedAt = existing.UpdatedAt;
+        // v54 P2：CAS 基准 updated_at → revision（existing.Revision 经 internal ctor 物化，
+        // 是 DB 真值；回放走 RestoreTerminalState 不污染）。换代后内存可算新值（existing+1），无需回读
+        var expectedRevision = existing.Revision;
         affected = await Session.ExecuteAsync(
-            $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL WHERE operation_name = {operationName} AND idempotency_key = {key} AND updated_at = {expectedUpdatedAt} AND status <> {(int)IdempotencyRecordStatus.Completed}",
+            $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL, revision = revision + 1 WHERE operation_name = {operationName} AND idempotency_key = {key} AND revision = {expectedRevision} AND status <> {(int)IdempotencyRecordStatus.Completed}",
             ct).ConfigureAwait(false);
         if (affected == 0) return null;
 
         return new IdempotencyRecord(operationName, key,
-            IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now);
+            IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, expectedRevision + 1);
     }
 
     /// <inheritdoc />
@@ -172,12 +189,16 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
     {
         // ITM-163 修复：补 record null 守卫（对齐 IdempotencyDbContext/InMemoryIdempotencyStore）
         ArgumentNullException.ThrowIfNull(record);
-        var expectedUpdatedAt = record.UpdatedAt;
+        var expectedRevision = record.Revision;
         var statusCompleted = (int)IdempotencyRecordStatus.Completed;
+        var statusProcessing = (int)IdempotencyRecordStatus.Processing;
         // 原生 byte[] 参数（PalORM ≥5.3 DbType.Binary 显式分派）——列类型 bytea/BLOB/LONGBLOB
         var payloadBytes = responsePayload.ToArray();
+        // v54 P2：CAS 基准 updated_at → revision + 补 status = Processing 守卫
+        //（对齐 EFCore 版 MarkCompletedAsync 本地守卫与 MarkFailedAsync 的 SQL 守卫形态——
+        // 直调终态实例不再翻转状态落库）
         var affected = await Session.ExecuteAsync(
-            $"UPDATE idempotency_records SET status = {statusCompleted}, updated_at = {completedAt}, response_payload = {payloadBytes}, error = NULL WHERE operation_name = {record.OperationName} AND idempotency_key = {record.Key} AND updated_at = {expectedUpdatedAt}",
+            $"UPDATE idempotency_records SET status = {statusCompleted}, updated_at = {completedAt}, response_payload = {payloadBytes}, error = NULL, revision = revision + 1 WHERE operation_name = {record.OperationName} AND idempotency_key = {record.Key} AND revision = {expectedRevision} AND status = {statusProcessing}",
             ct).ConfigureAwait(false);
         // P1-3 修复：乐观锁竞争失败（affected=0，租约已被他方重新获取）时 DB 未落库——
         // 不再变更本地对象假装成功。语义契约见接口注释：终态写入是尽力而为，
@@ -198,11 +219,12 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         // 空白归一）——超长 ex.Message 会让 MarkFailed 的持久化抛列截断异常（error 列
         // 上限 2048 族），终态保存本身失败掩盖原始异常（ITM-167/175）；本地对象同步截断值
         var reason = FailureReason.Normalize(failureReason);
-        var expectedUpdatedAt = record.UpdatedAt;
+        var expectedRevision = record.Revision;
         var statusFailed = (int)IdempotencyRecordStatus.Failed;
         var statusCompleted = (int)IdempotencyRecordStatus.Completed;
+        // v54 P2：CAS 基准 updated_at → revision（单调令牌不受列精度截断）
         var affected = await Session.ExecuteAsync(
-            $"UPDATE idempotency_records SET status = {statusFailed}, updated_at = {failedAt}, error = {reason} WHERE operation_name = {record.OperationName} AND idempotency_key = {record.Key} AND updated_at = {expectedUpdatedAt} AND status <> {statusCompleted}",
+            $"UPDATE idempotency_records SET status = {statusFailed}, updated_at = {failedAt}, error = {reason}, revision = revision + 1 WHERE operation_name = {record.OperationName} AND idempotency_key = {record.Key} AND revision = {expectedRevision} AND status <> {statusCompleted}",
             ct).ConfigureAwait(false);
         if (affected > 0)
             record.MarkFailed(reason, failedAt);

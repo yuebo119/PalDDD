@@ -12,7 +12,7 @@
 
 ---
 
-Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox 的租约锁并发与死信恢复、Saga 的补偿编排与超时检测——标准化为 40 个独立 NuGet 包。不做 `IRepository<T>`、不定义 `IIntegrationEvent`、不实施装配扫描。业务代码保持纯 C#，框架只提供基础设施。
+Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox 的租约锁并发与死信恢复、Saga 的补偿编排与超时检测——标准化为 35 个独立 NuGet 包（另依赖 PalORM 引擎 5 个第三方包，见清单末段）。不做 `IRepository<T>`、不定义 `IIntegrationEvent`、不实施装配扫描。业务代码保持纯 C#，框架只提供基础设施。
 
 开箱即用：**零反射命令分发 · 租约锁并发 Outbox · 自动补偿 Saga · 不可变 EventLog · 断点续传 Projection · 编译时 DDD 合规检查。**
 
@@ -121,7 +121,7 @@ InMemory 实现覆盖全部抽象接口，单元测试和原型开发无需外�
 
 ---
 
-## NuGet 包清单（40 个）
+## NuGet 包清单（PalDDD 自有 35 个 + PalORM 引擎 5 个第三方包）
 
 | 包 | 版本 | 说明 |
 |------|:--:|------|
@@ -160,11 +160,11 @@ InMemory 实现覆盖全部抽象接口，单元测试和原型开发无需外�
 | **PalDDD.Dapper.PostgreSql** | 2.0.0 | Dapper PostgreSQL 增强：审计 / JSONB / 分片 / 软删除 |
 | **PalDDD.Dapper.MySql** | 2.0.0 | Dapper MySQL 增强 |
 | **PalDDD.Dapper.Sqlite** | 2.0.0 | Dapper SQLite 增强：TypeHandler / RowFactory / FTS5 |
-| **PalORM.Core** | 5.3.0 | PalORM 引擎核心：DataSession / Provider / RowFactory（PalDDD.PalORM 的底层依赖） |
-| **PalORM.SourceGen** | 5.3.0 | PalORM 源生成器：编译期生成 RowFactory / CommandFactory（零反射） |
-| **PalORM.PostgreSql** | 5.3.0 | PalORM PostgreSQL 方言 Provider：RETURNING / COPY |
-| **PalORM.MySql** | 5.3.0 | PalORM MySQL 方言 Provider：BulkCopy / 多值 INSERT |
-| **PalORM.Sqlite** | 5.3.0 | PalORM SQLite 方言 Provider：FTS5 / JSON1 |
+| **PalORM.Core** | 5.4.0 | PalORM 引擎核心：DataSession / Provider / RowFactory（PalDDD.PalORM 的底层依赖） |
+| **PalORM.SourceGen** | 5.4.0 | PalORM 源生成器：编译期生成 RowFactory / CommandFactory（零反射） |
+| **PalORM.PostgreSql** | 5.4.0 | PalORM PostgreSQL 方言 Provider：RETURNING / COPY |
+| **PalORM.MySql** | 5.4.0 | PalORM MySQL 方言 Provider：BulkCopy / 多值 INSERT |
+| **PalORM.Sqlite** | 5.4.0 | PalORM SQLite 方言 Provider：FTS5 / JSON1 |
 
 ---
 
