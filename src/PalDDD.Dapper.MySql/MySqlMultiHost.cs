@@ -386,12 +386,13 @@ public static class MySqlMultiHost
     /// </summary>
     internal static void EnsureNoDuplicateServer(string? serverList, string parameterName)
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // 归一化形态对齐同文件 :142/:230/:287 姊妹（默认 comparer + ToUpperInvariant 值）
+        var seen = new HashSet<(string Server, int Port)>();
         foreach (var raw in (serverList ?? "").Split(','))
         {
             var entry = raw.Trim();
             if (entry.Length == 0) continue;
-            if (!seen.Add(entry.ToUpperInvariant()))
+            if (!seen.Add((entry.ToUpperInvariant(), 0)))
                 throw new ArgumentException(
                     $"{parameterName} 列表存在重复条目 '{entry}'：多主机拼接将产生重复节点（轮试/权重倾斜）。请去重。", parameterName);
         }

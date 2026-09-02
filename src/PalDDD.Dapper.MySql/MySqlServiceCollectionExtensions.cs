@@ -36,7 +36,7 @@ public static class MySqlServiceCollectionExtensions
     ///   - OpenTelemetry 追踪（自动记录 SQL 执行）<br/>
     ///   - DbDataSource 标准接口（.NET 7+ 通用抽象）<br/>
     /// ⚠️ <b>会话泄漏权衡（applyOptimization=true 时）</b>：连接串被显式追加
-    /// <c>ConnectionReset=false</c>（连接串键 "Reset Connections"）（否则 MySqlConnector 默认 ResetConnections=true，
+    /// <c>ConnectionReset=false</c>（连接串键 "Connection Reset"——v45 探针实证 2.6.2 不支持 "Reset Connections" 旧键名）（否则 MySqlConnector 默认 ResetConnections=true，
     /// 池取连接时会话已重置，SET SESSION 优化随归池即丢）。代价是同一 DataSource 池内的
     /// 物理连接共享会话设置——优化参数对所有使用方生效，应用方自行执行的 SET SESSION
     /// 变更同样会跨 scope 泄漏到池内其他使用方。若不能接受，传 applyOptimization=false
@@ -61,6 +61,10 @@ public static class MySqlServiceCollectionExtensions
         // 冒号+数字（合法语法）击穿（合法串误拦）或核心场景漏报（探针实证双向失守）。
         // 先经 builder 解析取 Server 属性值再检测（对齐姊妹四入口的 builder 前置形态）
         var serverAttr = new MySqlConnectionStringBuilder(connectionString).Server;
+        // v51 P2：Server 属性空校验（对齐 MySqlMultiHost 三姊妹入口——缺 Server 键时
+        // MySqlConnector 默认 Server=localhost，同机部署场景静默连错库）
+        if (string.IsNullOrWhiteSpace(serverAttr))
+            throw new ArgumentException("Server is required.", nameof(connectionString));
         MySqlMultiHost.EnsureNoEmbeddedPort(serverAttr, "Server");
         // v50 P2（F4 第五姊妹）：单主机入口补列表内查重——"Server=db1,db1" 重复条目
         // 与多主机入口同危害（重复节点轮试/权重倾斜）
