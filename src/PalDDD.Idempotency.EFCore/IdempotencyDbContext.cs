@@ -89,6 +89,10 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
     {
         ArgumentNullException.ThrowIfNull(record);
 
+        // v53 P3：仅 Processing 可完成（对齐 InMemory 姊妹 + ProjectionCheckpoint 同轮守卫）
+        if (record.Status != IdempotencyRecordStatus.Processing)
+            return;
+
         AttachIfDetached(record);
         record.MarkCompleted(responsePayload, completedAt);
         await SaveTerminalStateAsync(record, ct).ConfigureAwait(false);
@@ -107,7 +111,8 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         // v38 P2 修复：Completed 终态守卫（镜像 InMemoryIdempotencyStore:139 八轮
         // "Completed 终态不可翻转为 Failed" + PalOrmIdempotencyStore:196 SQL
         // "AND status <> Completed"——本栈是 PD24 管线孪生唯一漏网）。同实例续写
-        // 场景下 UpdatedAt 并发令牌失守（Attach 后 original=current，UPDATE 恒命中），
+        // 场景下时间戳并发令牌失守（Attach 后 original=current，UPDATE 恒命中；v38 时点
+        // 令牌是 UpdatedAt，v53 已换 Revision 单调令牌但同实例续写路径仍恒命中），
         // Completed 翻转为 Failed 会使 TryStartAsync 走 CAS 复用 → 副作用重新执行，
         // 幂等保证被绕过
         if (record.Status == IdempotencyRecordStatus.Completed)
@@ -132,7 +137,9 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
             e.Property(x => x.OperationName).HasMaxLength(256);
             e.Property(x => x.Key).HasMaxLength(256);
             e.Property(x => x.Status).HasConversion<int>();
-            e.Property(x => x.UpdatedAt).IsConcurrencyToken();
+            // v53 P2：并发令牌改 Revision（对齐 ProjectionCheckpoint 栈）——UpdatedAt 时间戳
+            // 令牌受 DB 列精度截断影响，同刻双 worker 回收同一过期租约可双双命中（幂等失效）
+            e.Property(x => x.Revision).IsConcurrencyToken();
             e.Property(x => x.ResponsePayload)
                 .HasConversion(
                     value => value.HasValue ? value.Value.ToArray() : null,

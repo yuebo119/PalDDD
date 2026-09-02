@@ -437,6 +437,63 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(generatedCount).IsEqualTo(0);
     }
 
+    // ── v53 P2：非 partial 包含类型专用诊断（PALENUM009）——原复用 PALENUM007 的
+    //    {1} 是人为字符串且"raise visibility"指引对该根因无效 ──
+
+    [Test]
+    public async Task EnumGenerator_NonPartialContainingType_ReportsPalenum009()
+    {
+        var result = RunEnumGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            public class NonPartialOuter
+            {
+                [GenerateEnum]
+                public partial class InnerStatus : SmartEnum<InnerStatus, string>
+                {
+                    public static readonly InnerStatus A = new("a", "A");
+                }
+            }
+            """);
+
+        var diag = result.Diagnostics.FirstOrDefault(d => d.Id == "PALENUM009");
+        await Assert.That(diag).IsNotNull();
+        // {1} 必须是实际包含类型名（原为人为字符串 "non-partial containing type"）
+        await Assert.That(diag!.GetMessage()).Contains("NonPartialOuter");
+        await Assert.That(result.Compilation.SyntaxTrees.Count(t => t.FilePath.EndsWith(".g.cs", StringComparison.Ordinal))).IsEqualTo(0);
+    }
+
+    // ── v53 P1：PALID007 非 partial 包含类型——原落 default 报 PALID001 错误指引 ──
+
+    [Test]
+    public async Task IdentityGenerator_NonPartialContainingType_ReportsPalid007NotPalid001()
+    {
+        // Guid 在白名单内——修复前此场景报 PALID001 "unsupported source type 'System.Guid'"
+        //（指引彻底反向：真实修复是给 Outer 加 partial）
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+            using System;
+
+            namespace TestDomain;
+
+            public class NonPartialOuter
+            {
+                [GenerateId(typeof(Guid))]
+                public readonly partial record struct InnerId;
+            }
+            """);
+
+        var diag = result.Diagnostics.FirstOrDefault(d => d.Id == "PALID007");
+        await Assert.That(diag).IsNotNull();
+        await Assert.That(diag!.GetMessage()).Contains("NonPartialOuter");
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALID001")).IsFalse();
+        await Assert.That(result.Compilation.SyntaxTrees.Count(t => t.FilePath.EndsWith(".g.cs", StringComparison.Ordinal))).IsEqualTo(0);
+    }
+
     // ── v26 P3 生成器族：SmartEnum 基类比对符号化（extern alias 下不误报 PALENUM002）──
 
     [Test]

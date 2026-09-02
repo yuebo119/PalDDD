@@ -379,14 +379,18 @@ public static class MySqlMultiHost
                     $"MySQL 不支持 IPv6 方括号主机语法：条目 '{entry}' 的方括号会原样传 DNS 解析失败。"
                     + "MySQL 侧 IPv6 请使用裸字面量（如 ::1）并统一共享 Port。", parameterName);
             }
-            // v49 P3：唯一冒号即拦（含 "host:port" / "host:" / ":port" 全形态）——
-            // 含冒号主机名原样传 DNS 均为非法；裸 IPv6（多冒号）不命中照常放行
-            if (entry.Contains(':'))
+            // v53 P1：恢复 v49 的唯一冒号判定——v50 F3 方括号拦截实施时误将判定改写为
+            // Contains(':') 全拦（未声明变更），裸 IPv6（::1 等多冒号）被误拦，且与上方
+            // 方括号消息"请使用裸字面量（如 ::1）"互指死路（IPv6 无可用形态）。
+            // 唯一冒号（"host:port" / "host:" / ":port"）是内嵌端口语法照拦；
+            // 多冒号是裸 IPv6 字面量，.NET Dns.GetHostAddresses 可直接解析，放行（共享 Port）。
+            var firstColon = entry.IndexOf(':');
+            if (firstColon >= 0 && entry.IndexOf(':', firstColon + 1) < 0)
             {
                 throw new ArgumentException(
-                    $"{parameterName} 条目 '{entry}' 含冒号——MySqlConnector 不支持含冒号主机名"
+                    $"{parameterName} 条目 '{entry}' 内嵌端口（host:port 语法）——MySqlConnector 不支持"
                     + "（原样传 DNS 解析失败，该节点永不可连）。"
-                    + "请移除冒号、统一使用共享 Port 关键字。", parameterName);
+                    + "请移除内嵌端口、统一使用共享 Port 关键字。", parameterName);
             }
         }
     }
@@ -406,6 +410,22 @@ public static class MySqlMultiHost
             if (!seen.Add((entry.ToUpperInvariant(), 0)))
                 throw new ArgumentException(
                     $"{parameterName} 列表存在重复条目 '{entry}'：多主机拼接将产生重复节点（轮试/权重倾斜）。请去重。", parameterName);
+        }
+    }
+
+    /// <summary>
+    /// Server 列表空条目 fail-fast（v53 P2：单主机入口第五姊妹）——
+    /// "Server=db1,,db2" 空段并入主机列表成为参与轮询的死节点（多主机四入口 v49
+    /// 同款危害；整串空白由入口 IsNullOrWhiteSpace 前置拦截，此处仅拦列表内空段）。
+    /// </summary>
+    internal static void EnsureNoBlankServerEntries(string? serverList, string parameterName)
+    {
+        foreach (var raw in (serverList ?? "").Split(','))
+        {
+            if (raw.Trim().Length == 0)
+                throw new ArgumentException(
+                    $"{parameterName} 列表存在空条目（如 \"db1,,db2\"）：空条目并入主机列表后"
+                    + "成为参与轮询的死节点，故障转移静默失败。请清理 Server 列表中的空条目。", parameterName);
         }
     }
 }

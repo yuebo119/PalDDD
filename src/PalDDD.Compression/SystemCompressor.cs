@@ -148,7 +148,8 @@ internal sealed class GZipCompressor : ICompressor
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
 
         // 三十八轮 P3 修复：Write 进 MemoryStream 免去 ToArray 整体拷贝（ReadOnlyMemory→byte[]）
-        var input = new MemoryStream();
+        // v53 P3：按输入长度预设容量——默认从 0 倍增扩容累计多拷约一倍载荷（热路径）
+        var input = new MemoryStream(compressed.Length);
         input.Write(compressed);
         input.Position = 0;
         using (input)
@@ -200,7 +201,7 @@ internal sealed class DeflateCompressor : ICompressor
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
 
         // 三十八轮 P3 修复：Write 进 MemoryStream 免去 ToArray 整体拷贝（同 GZip 路径）
-        var input = new MemoryStream();
+        var input = new MemoryStream(compressed.Length);
         input.Write(compressed);
         input.Position = 0;
         using (input)

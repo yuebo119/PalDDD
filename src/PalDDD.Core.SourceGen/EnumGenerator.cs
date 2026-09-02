@@ -119,6 +119,18 @@ public sealed class EnumGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    // v53 P2（D 片）：非 partial 包含类型专用诊断——v52 引入检查时复用 PALENUM007，
+    // {1} 被置人为字符串 "non-partial containing type"，且"raise to internal or public"
+    // 指引对 non-partial 根因无效（正确动作是加 partial 修饰符，与可见性无关）。
+    // {1} = 实际非 partial 包含类型名（ValueType 携带）
+    private static readonly DiagnosticDescriptor ContainingTypeNotPartialError = new(
+        "PALENUM009",
+        "GenerateEnum requires partial containing types",
+        "Type '{0}' is marked with [GenerateEnum] but its containing type '{1}' is not partial — the generated partial declaration cannot merge with it (CS0260 would land in auto-generated files). Add 'partial' to the containing declaration.",
+        "PalDDD.EnumGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         // 步骤 1：收集所有标记了 [GenerateEnum] 的 class 声明及其静态字段
@@ -285,17 +297,19 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 {
                     // v52 P2：包含类型非 partial 时报诊断——生成 partial 包裹声明与
                     // 用户非 partial 声明冲突报 CS0260 落 auto-generated 文件
-                    if (!t.IsPartial())
+                    // v53 P2：改报专用 PALENUM009（原复用 PALENUM007 的 {1} 是人为字符串
+                    // 且"raise visibility"指引对该根因无效）；ValueType 携带实际包含类型名
+                    if (!t.IsPartial(ct))
                     {
                         return new EnumGenInfo(
                             Namespace: GetNamespaceName(classSymbol),
                             TypeName: classSymbol.Name,
                             ContainingDeclarations: [],
                             ContainingNames: [],
-                            ValueType: "non-partial containing type",
+                            ValueType: t.Name,
                             Fields: [],
                             HasFields: false,
-                            DiagnosticId: "PALENUM007",
+                            DiagnosticId: "PALENUM009",
                             Location: context.TargetNode.GetLocation());
                     }
                     var kind = t.IsRecord
@@ -403,6 +417,8 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         "PALENUM007" => NonAccessibleDeclarationError,
                         // v35 P3（DA4）：struct/interface 声明引导诊断
                         "PALENUM008" => StructOrInterfaceNotSupportedError,
+                        // v53 P2：非 partial 包含类型（{1} = 实际包含类型名）
+                        "PALENUM009" => ContainingTypeNotPartialError,
                         _ => NotDirectInheritanceError,
                     };
                     spc.ReportDiagnostic(Diagnostic.Create(
@@ -584,11 +600,11 @@ partial class {{info.TypeName}}
 internal static class NamedTypeSymbolExtensions
 {
     /// <summary>判断命名空间内类型声明是否含 partial 修饰符。</summary>
-    public static bool IsPartial(this INamedTypeSymbol type)
+    public static bool IsPartial(this INamedTypeSymbol type, CancellationToken ct = default)
     {
         foreach (var reference in type.DeclaringSyntaxReferences)
         {
-            if (reference.GetSyntax() is Microsoft.CodeAnalysis.CSharp.Syntax.BaseTypeDeclarationSyntax baseDecl
+            if (reference.GetSyntax(ct) is Microsoft.CodeAnalysis.CSharp.Syntax.BaseTypeDeclarationSyntax baseDecl
                 && baseDecl.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PartialKeyword))
             {
                 return true;

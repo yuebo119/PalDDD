@@ -77,6 +77,9 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
     /// 永久失效，后续 RegisterValues 也无法恢复）——惰性访问保住 Dictionary 属性"调用时抛、
     /// 可恢复重试"的异常契约。
     /// </remarks>
+    /// <remarks>v53 P3：返回顺序未定义——经 FrozenDictionary.Values 物化，序为内部哈希
+    /// 布局（进程内稳定但与注册顺序无关、跨版本不保证）；有序展示需求请自行排序。
+    /// （对照 MessageCatalog.Descriptors 的 OrderedDictionary 保序设计）</remarks>
     public static IReadOnlyCollection<TSelf> All
     {
         get
@@ -99,6 +102,9 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
             : throw new KeyNotFoundException($"No {typeof(TSelf).Name} with value {value}");
 
     /// <summary>尝试根据值获取枚举项</summary>
+    /// <remarks>v53 P3 契约声明：TValue 为引用类型且 value 为 null 时抛 ArgumentNullException
+    ///（FrozenDictionary.TryGetValue 的 null 键行为，对齐 FromValue 的 fail-fast 策略）——
+    /// 调用方探测 null 输入请先行判空，本方法不吞 null。</remarks>
     public static bool TryFromValue(TValue value, [NotNullWhen(true)] out TSelf? result) =>
         Dictionary.TryGetValue(value, out result);
 

@@ -263,7 +263,7 @@ public static class ServiceRegistration
             {
                 if (existing.HandlerType != typeof(THandler))
                     throw new InvalidOperationException(
-                        $"Duplicate command handler for {typeof(TCommand).Name}: {existing.HandlerType.Name} and {typeof(THandler).Name}. Commands must have exactly one handler.");
+                        $"Duplicate handler for {typeof(TCommand).Name}: {existing.HandlerType.Name} and {typeof(THandler).Name}. A request type must have exactly one handler.");
                 return services; // 同一 Handler 重复注册——幂等跳过
             }
         }
@@ -311,7 +311,8 @@ public static class ServiceRegistration
             {
                 if (existing.HandlerType != typeof(THandler))
                     throw new InvalidOperationException(
-                        $"Duplicate query handler for {typeof(TQuery).Name}: {existing.HandlerType.Name} and {typeof(THandler).Name}. Queries must have exactly one handler.");
+                        // v53 P3：中性措辞——同一类型同时实现 ICommand 与 IQuery 时，先注册的命令 Handler 被误标为 query handler
+                        $"Duplicate handler for {typeof(TQuery).Name}: {existing.HandlerType.Name} and {typeof(THandler).Name}. A request type must have exactly one handler.");
                 return services; // 同一 Handler 重复注册——幂等跳过
             }
         }

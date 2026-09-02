@@ -64,4 +64,22 @@ public sealed class PostgreSqlMultiHostPortEncodingTests
 
         await Assert.That(() => PostgreSqlMultiHost.EncodeHostEntry(host, 5432)).Throws<ArgumentException>();
     }
+    // ── v53 P2：空条目 fail-fast — MySQL v49 姊妹（"Host=pg1,,pg2" 死节点）──
+
+    [Test]
+    public async Task AddPalNpgsqlDataSourceWithFailover_BlankEntryInHostList_Throws()
+    {
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalNpgsqlDataSourceWithFailover("Host=pg1,,pg2;Username=u;Password=p", "Host=pgsb;Username=u;Password=p"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalNpgsqlDataSourceWithReadWriteSplit_BlankEntryInReplicaList_Throws()
+    {
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalNpgsqlDataSourceWithReadWriteSplit("Host=pg1;Username=u;Password=p", ["Host=rb1,,rb2;Username=u;Password=p"]))
+            .Throws<ArgumentException>();
+    }
+
 }

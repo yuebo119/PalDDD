@@ -266,6 +266,22 @@ public sealed class DispatcherTests
     }
 
     [Test]
+    public async Task Register_AfterFrozen_ThrowsObjectDisposedException()
+    {
+        // v53 P2（F 片 PD29）：ITM-182 冻结守卫锁定——此前零测试覆盖（守卫可被无声移除）
+        var sp = CreateProvider();
+        var dispatcher = new Dispatcher(sp.GetRequiredService<IServiceScopeFactory>());
+        dispatcher.Register<CreateOrderCommand, Guid, CreateOrderHandler>();
+
+        // 触发隐式冻结（首次派发）
+        _ = await dispatcher.SendAsync(new CreateOrderCommand("X", 1));
+
+        // 冻结后注册必须 ODE（不可变语义，ITM-027/182）
+        await Assert.That(() => dispatcher.Register<CreateOrderCommand, Guid, CreateOrderHandler>())
+            .Throws<ObjectDisposedException>();
+    }
+
+    [Test]
     public async Task SendAsync_PassesCancellationToken_ToHandler()
     {
         // ITM-285（R45）：原断言仅 IsNotEqualTo(Empty)——Dispatcher 吞 token 换 None 也绿。
@@ -413,6 +429,29 @@ public sealed class PipelineBehaviorTests
             .Throws<InvalidOperationException>();
 
         await Assert.That(ex!.Message).IsEqualTo("Handler failed");
+    }
+
+    [Test]
+    public async Task LoggingBehavior_PropagatesOperationCanceledException()
+    {
+        // v53 P3（F 片 PD29）：OCE 过滤路径锁定——catch (Exception ex) when (ex is not OCE)
+        // 使取消异常不记 Error 直接透传；此前零测试覆盖（过滤可被无声移除）
+        var behavior = new LoggingBehavior<CreateOrderCommand, Guid>(
+            NullPalLogger<LoggingBehavior<CreateOrderCommand, Guid>>.Instance);
+
+        var cmd = new CreateOrderCommand("Test", 100m);
+
+        // OCE（含 TaskCanceledException 派生形态）透传且不包装
+        var ex = await Assert.That(() => behavior.HandleAsync(cmd, CancellationToken.None,
+            () => throw new OperationCanceledException("cancelled")).AsTask())
+            .Throws<OperationCanceledException>();
+
+        var tcex = await Assert.That(() => behavior.HandleAsync(cmd, CancellationToken.None,
+            () => throw new TaskCanceledException("timeout")).AsTask())
+            .Throws<TaskCanceledException>();
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(tcex).IsNotNull();
     }
 
     // ─── 管道链测试 ───

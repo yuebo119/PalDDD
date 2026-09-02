@@ -20,6 +20,9 @@ namespace PalDDD.Hosting.AspNetCore;
 /// 使用方式：<br/>
 /// 1. 注册：<c>services.AddPalHealthChecks()</c><br/>
 /// 2. 映射：<c>app.MapPalHealthChecks()</c>
+/// <para><b>滥用控制声明（v53 P3，对齐 EndpointExtensions 同款）</b>：本扩展不内置授权/
+/// 限流/TLS——/health 输出组件健康状态与依赖拓扑，生产部署请以授权策略（RequireAuthorization）
+/// 或内网专用（允许探测端口独立暴露）限定可达面；传输安全由宿主层 HSTS/反代承担。</para>
 /// </remarks>
 public static class HealthCheckExtensions
 {

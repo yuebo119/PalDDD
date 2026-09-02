@@ -210,7 +210,7 @@ ALTER TABLE outbox_messages ALTER COLUMN payload TYPE BYTEA USING decode(payload
 ### 未启用特性（待后续增强）
 
 - **`[TenantAware]` 多租户**：需建表 DDL 同步加 `tenant_id` 列（PALORM018 强制）
-- **`WithRetry` / `WithCircuitBreaker`**：替代 Polly（OutboxProcessor 应用层重试仍需手写）
+- **`WithRetry` / `WithCircuitBreaker`**：替代 Polly（OutboxProcessor 应用层重试仍需手写）。v53 起已接入：`AddPalOrm{Sqlite,PostgreSql,MySql}` 的 `configureResilience` 尾参（PalORM 5.4 弹性层——作用域为连接建立+只读查询内置管线，写路径与事务内查询直连）
 - **`ForRead()` 读写分离**：EventLog 回放场景适用（待补 sample）
 - **`[SoftDelete]`**：列名硬编码 `deleted_at`，不适用于 Outbox 的 status='Dead' 过滤
 

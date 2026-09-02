@@ -350,6 +350,7 @@ class PalDDD.Idempotency.IdempotencyRecord
   property System.DateTimeOffset LockedUntil
   property System.String OperationName
   property System.Nullable<System.ReadOnlyMemory<System.Byte>> ResponsePayload
+  property System.Int64 Revision
   property PalDDD.Idempotency.IdempotencyRecordStatus Status
   property System.DateTimeOffset UpdatedAt
   method System.Void MarkCompleted(System.ReadOnlyMemory<System.Byte> responsePayload, System.DateTimeOffset completedAt)

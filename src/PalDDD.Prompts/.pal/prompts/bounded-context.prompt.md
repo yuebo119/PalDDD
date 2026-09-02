@@ -61,7 +61,7 @@ app.MapCommand<AddItemCmd, Unit>();
 
 // 查询端点 — 显式查询绑定
 app.MapQuery<GetOrderQry, OrderDto?>(ctx =>
-    new GetOrderQry(new OrderId(Guid.Parse(ctx.Request.Query["id"]!))));
+    new GetOrderQry(OrderId.From(Guid.Parse(ctx.Request.Query["id"]!))));
 
 // 健康检查
 app.MapPalHealthChecks();

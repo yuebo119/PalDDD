@@ -638,6 +638,34 @@ public sealed class JsonLinesEventTests
             new byte[] { (byte)'\n' }.AsMemory(), options.GetTypeInfo<TestMessage>());
         await Assert.That(onlyNewline).IsEmpty();
     }
+
+    // v53 P2：UTF-8 BOM 剥离——Windows 编辑器/PowerShell 输出的 .jsonl 首行常带 BOM
+    //（EF BB BF），残留时首行 JsonException（'0xEF' 非法值起始）——CRLF 修复（v52）的姊妹
+    [Test]
+    public async Task Utf8BomPrefixedPayload_DeserializesAllLines()
+    {
+        var options = TestJsonContext.Default.Options;
+        var writer = new JsonLinesEventWriter();
+        var typeInfo = options.GetTypeInfo<TestMessage>();
+        var messages = new[] { new TestMessage("evt-0", 0), new TestMessage("evt-1", 1) };
+
+        var body = messages
+            .Select(m => writer.SerializeLine(m, typeInfo).ToArray())
+            .SelectMany(b => b)
+            .ToArray();
+        var payload = new byte[3 + body.Length];
+        payload[0] = 0xEF;
+        payload[1] = 0xBB;
+        payload[2] = 0xBF;
+        body.CopyTo(payload, 3);
+
+        var reader = new JsonLinesEventReader();
+        var deserialized = reader.DeserializeAll<TestMessage>(payload.AsMemory(), typeInfo);
+
+        await Assert.That(deserialized).Count().IsEqualTo(messages.Length);
+        for (var i = 0; i < messages.Length; i++)
+            await Assert.That(deserialized[i]).IsEqualTo(messages[i]);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════

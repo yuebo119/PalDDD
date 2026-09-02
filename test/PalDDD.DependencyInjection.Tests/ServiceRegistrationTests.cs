@@ -365,7 +365,60 @@ public sealed class ServiceRegistrationTests
         await Assert.That(scope.ServiceProvider.GetServices<TestDomainEventHandler>().Count()).IsEqualTo(1);
     }
 
+    // v53 P2（F 片 PD29）：ITM-220 快速失败行为锁定——重复 Handler / 重复注册的两种路径
+    // 此前零测试覆盖（重构 Marker 遍历可无声移除快速失败，套件全绿）
+
+    [Test]
+    public async Task AddPalCommandHandler_DifferentHandlersForSameCommand_Throws()
+    {
+        var services = new ServiceCollection();
+        services.AddPalCommandHandler<TestCommand, string, TestCommandHandler>();
+
+        var ex = await Assert.That(() => services.AddPalCommandHandler<TestCommand, string, OtherTestCommandHandler>())
+            .Throws<InvalidOperationException>();
+
+        // 消息含两个 Handler 类型名（排障指向性）
+        await Assert.That(ex?.Message ?? "").Contains(nameof(TestCommandHandler));
+        await Assert.That(ex?.Message ?? "").Contains(nameof(OtherTestCommandHandler));
+    }
+
+    [Test]
+    public async Task AddPalCommandHandler_SameHandlerTwice_IsIdempotent()
+    {
+        var services = new ServiceCollection();
+        services.AddPalCommandHandler<TestCommand, string, TestCommandHandler>();
+
+        // 同 Handler 重复注册幂等（防重语义，不抛）
+        services.AddPalCommandHandler<TestCommand, string, TestCommandHandler>();
+
+        using var provider = services.BuildServiceProvider();
+        var handlers = provider.GetServices<ICommandHandler<TestCommand, string>>();
+        await Assert.That(handlers.Count()).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task AddPalQueryHandler_DifferentHandlersForSameQuery_Throws()
+    {
+        var services = new ServiceCollection();
+        services.AddPalQueryHandler<TestQuery, int, TestQueryHandler>();
+
+        await Assert.That(() => services.AddPalQueryHandler<TestQuery, int, OtherTestQueryHandler>())
+            .Throws<InvalidOperationException>();
+    }
+
     private sealed class TestCommand : ICommand<string>;
+
+    private sealed class OtherTestCommandHandler : ICommandHandler<TestCommand, string>
+    {
+        public ValueTask<string> HandleAsync(TestCommand command, CancellationToken ct)
+            => ValueTask.FromResult("other");
+    }
+
+    private sealed class OtherTestQueryHandler : IQueryHandler<TestQuery, int>
+    {
+        public ValueTask<int> HandleAsync(TestQuery query, CancellationToken ct)
+            => ValueTask.FromResult(43);
+    }
 
     private sealed class TestCommandHandler : ICommandHandler<TestCommand, string>
     {

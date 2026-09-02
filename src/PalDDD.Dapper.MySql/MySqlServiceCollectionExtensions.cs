@@ -69,6 +69,9 @@ public static class MySqlServiceCollectionExtensions
         // v50 P2（F4 第五姊妹）：单主机入口补列表内查重——"Server=db1,db1" 重复条目
         // 与多主机入口同危害（重复节点轮试/权重倾斜）
         MySqlMultiHost.EnsureNoDuplicateServer(serverAttr, "Server");
+        // v53 P2（B-P2-2）：列表空段 fail-fast——"Server=db1,,db2" 空段是死节点
+        //（多主机四入口 v49 已修的姊妹，单主机入口漏拦）
+        MySqlMultiHost.EnsureNoBlankServerEntries(serverAttr, "Server");
 
         // P2 修复（二十一轮）：SET SESSION 传导前提——MySqlConnector 默认 ResetConnections=true，
         // 从池中取出的连接会话已被重置（CHARACTER_SET_RESULTS / SQL_MODE 等恢复服务端默认），

@@ -97,6 +97,7 @@ CREATE TABLE projection_checkpoints (
     lease_until       DATETIME(6),
     revision          INT NOT NULL DEFAULT 0,
     error             TEXT,
+        revision         BIGINT NOT NULL DEFAULT 0,                     -- 乐观并发令牌（单调递增，v53 P2）
     PRIMARY KEY (projection_name, source_name, position),
     INDEX idx_checkpoint_status (projection_name, source_name, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -126,6 +126,11 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
 
+        // v53 P3：仅 Processing 可完成（对齐 InMemory 姊妹的状态机守卫）——直调 Store 绕过
+        // 管线时，Failed/Completed 实例的 MarkCompleted 不再翻转状态落库；幂等无害
+        if (checkpoint.Status != ProjectionCheckpointStatus.Processing)
+            return;
+
         AttachIfDetached(checkpoint);
         checkpoint.MarkCompleted(completedAt);
         try
