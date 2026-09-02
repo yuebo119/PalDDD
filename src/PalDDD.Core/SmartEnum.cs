@@ -52,7 +52,10 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
         // 违反 Name 的 string 非空契约（后续 ToString()/序列化路径 NRE）
         // v43 P3：兜底值补空白守卫——name=null 且 TValue=string 的值本身空白（如 " "）时，
         // ToString() 兜底产出空白 Name，同样绕过 v41 空白守卫进入字典与序列化路径（与
-        // name 显式空白同罪，fail-fast）；ToString() 产 null 仍走 "" 兜底（ITM-101 非空契约保留）
+        // name 显式空白同罪，fail-fast）。
+        // v44 勘正（A 片）：原注释"ToString() 产 null 仍走 "" 兜底（ITM-101 非空契约保留）"
+        // 失实——ToString() 产 null 时 resolvedName=""，同样被下方空白守卫拦截（fail-fast）；
+        // ITM-101 的 Name 非空契约由守卫闭环承接，两条兜底输入（null/空白）均构造必抛
         var resolvedName = name ?? value.ToString() ?? "";
         if (string.IsNullOrWhiteSpace(resolvedName))
             throw new ArgumentException("Name cannot be blank", nameof(value));

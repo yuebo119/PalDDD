@@ -1010,6 +1010,36 @@ public sealed class SagaTimeoutProcessorTests
         await Assert.That(state.Status).IsEqualTo(SagaStatus.AwaitingHumanDecision);
     }
 
+    // v44 P3：测试矩阵第三条件固化——AWD 态 + InterruptStep 自带 Timeout + 时间戳已记录
+    // （但未进 ExecutedStepKeys——中断步骤无成功完成）→ 排除判据第三条件（非 Interrupt）
+    // 为真 → 仍触发超时补偿（三十四轮"人工决策失踪由 Timeout 兜底回滚"设计场景）。
+    // 若未来判据被误简化为两条件（去掉 DispatchKind 腿），本测试红——防 HITL 决策失踪
+    // 不再被超时回滚的回归
+    [Test]
+    public async Task CheckTimeoutsAsync_AwdInterruptStepWithTimeout_StillCompensated_EvenAfterRecording()
+    {
+        var state = new OrderSagaState
+        {
+            CurrentState = "Waiting",
+            Status = SagaStatus.AwaitingHumanDecision
+        };
+        state.StepStartedAt["Waiting|OrderPlacedSagaEvent"] = DateTimeOffset.UnixEpoch;
+        state.ExecutedStepKeys.Add("Waiting|OrderPlacedSagaEvent"); // 与 v43 排除判据交互：AWD+已记录
+        var store = new RecordingSagaStateStore([state]);
+        var processor = new SagaTimeoutProcessor<OrderSagaState>(
+            store,
+            new TimedOutInterruptSaga(),
+            NullPalLogger<SagaTimeoutProcessor<OrderSagaState>>.Instance,
+            new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions()),
+            TimeProvider.System);
+
+        await processor.CheckTimeoutsAsync(CancellationToken.None);
+
+        await Assert.That(state.Status).IsEqualTo(SagaStatus.Compensated);
+        // InterruptStep 无自定义补偿委托——CurrentState 由 SagaCompensation 默认置 "Compensated"
+        await Assert.That(state.CurrentState).IsEqualTo("Compensated");
+    }
+
     [Test]
     public async Task CheckTimeoutsAsync_InterruptedSaga_WithExpiredStepTimeout_IsCompensated()
     {
@@ -1102,6 +1132,19 @@ public sealed class SagaTimeoutProcessorTests
                     return ValueTask.CompletedTask;
                 },
                 TimeSpan.FromSeconds(1)));
+        }
+    }
+
+    // v44 P3：InterruptStep 自带 Timeout 装置（第三条件固化——中断步骤超期仍触发补偿）
+    private sealed class TimedOutInterruptSaga : Saga<OrderSagaState>
+    {
+        public TimedOutInterruptSaga()
+        {
+            When("Waiting", typeof(OrderPlacedSagaEvent), new InterruptStep(
+                "WaitForPayment",
+                "human decision missing",
+                typeof(string))
+            { Timeout = TimeSpan.FromSeconds(1) });
         }
     }
 
