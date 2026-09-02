@@ -112,6 +112,12 @@ public static class MySqlMultiHost
         // v21 B-2（v27 P3 B 片 N7 勘正行为）：primary 缺 Server 时 Server 属性为空串
         //（v20 F2 自证）——原"空则直接赋 standby"静默把一主一备注册退化为 standby 单机，
         // 配置错误被吞；改 fail-fast（镜像 v26 H4 PostgreSqlMultiHost，见下方合并处）。
+        // v50 P2 勘正（F1）：专用拦截前置到 Split 循环之前——v49 空条目 fail-fast 落在
+        // 循环内，缺 Server 串 Split 产物 [""] 先触发误导性"空条目"消息（:165 N7 成死
+        // 代码），对齐 standby 侧 :78 前置形态
+        // v50 P2 勘正（F1）：本拦截前置于下方 Split 循环——v49 空条目 fail-fast 落在
+        // 循环内，缺 Server 串 Split 产物 [""] 会先触发误导性"空条目"消息，专用消息
+        // （:165 N7）成死代码。standby 侧 :78 形态同款前置
         // v26 P3 H5：拼接前 Server 查重 fail-fast（镜像 PG Failover 入口 v25 C9 查重）——
         // primary/standby 同指一机时拼接产生重复 Server 条目（如 "mysql1,mysql1"），
         // FailOver 把同一实例视作两个节点轮试，故障转移语义错乱。归一化经
@@ -119,8 +125,8 @@ public static class MySqlMultiHost
         // 属性返回原始串（内嵌端口不吸收进 Port 属性），须拆出 (裸名, port) 再比较（doc
         // 口径勘正见 NormalizeServerEntry）；归一化仅用于查重比较口径统一，内嵌形态已被
         // 入口 EnsureNoEmbeddedPort fail-fast 拦截（primary 侧检测 v43 P2 补齐并前置）。
-        // primary 列表空条目（primary 缺 Server 的 Split 产物）跳过——该输入随后由下方
-        // N7 fail-fast 拦截，此处跳过仅为不误抛"重复"异常。
+        // v50 勘正：原注释"空条目跳过——随后由下方 N7 fail-fast 拦截"已失实——
+        // v50 前置拦截（本段最前）先于循环触发，空条目不再到达此循环
         // v29 P3（S4，镜像 PG 侧 v28/v29 形态）：standby 侧改复数版 NormalizeServerEntries
         // 展开 + seenServers HashSet 查重——原单值版把 standby 多主机列表整串归一化
         //（"sb1,sb2" 当一个主机名），与 primary 任意单条目恒不等，跨串重复漏检（primary
@@ -128,6 +134,11 @@ public static class MySqlMultiHost
         // 重复（"Server=sb1,sb1"）互不比较同样漏检。primary 条目 + standby 展开条目全部进
         // 集合，Add 失败即抛（一并覆盖两类重复）；大小写归一经 ToUpperInvariant
         //（等价 v26 H5 的 OrdinalIgnoreCase 比较，与 PG 侧 ReadWriteSplit 同款）。
+        // v50 P2（F1）：缺 Server 前置拦截（先于下方空条目循环——否则 [""] Split 产物
+        // 触发误导性"空条目"消息而非本专用消息）
+        if (string.IsNullOrWhiteSpace(primaryBuilder.Server))
+            throw new ArgumentException(
+                "Primary connection string is missing 'Server='. Failover cannot silently substitute the standby as the only host.");
         var seenServers = new HashSet<(string Server, int Port)>();
         foreach (var raw in primaryBuilder.Server.Split(','))
         {
@@ -162,9 +173,7 @@ public static class MySqlMultiHost
         // 是连接串配置参数错误（对齐 PG 侧 v28 裁决"配置参数错误语义"，与上方 standby 侧
         // 同步修正；原 v27 N7 注释所称"对齐 v20 F2/v21 B-1 的 InvalidOperationException
         // 先例"随该裁决一并废止），消息不变
-        if (string.IsNullOrWhiteSpace(primaryBuilder.Server))
-            throw new ArgumentException(
-                "Primary connection string is missing 'Server='. Failover cannot silently substitute the standby as the only host.");
+        // v50 P2：N7 专用拦截已前置（见上方 v50 注释），此处不可达删除
         primaryBuilder.Server = $"{primaryBuilder.Server},{standbyBuilder.Server}";
 
         // 故障转移模式：默认先连第一个，失败再试后续
@@ -322,6 +331,9 @@ public static class MySqlMultiHost
     {
         var entry = rawServer?.Trim() ?? "";
         var colon = entry.LastIndexOf(':');
+        // v50 勘正：下方"唯一冒号+数字后缀"拆分分支在 v50 前置拦截（入口 EnsureNoEmbeddedPort
+        // 对唯一冒号条目 fail-fast）后不可达——所有到达此处的条目均无冒号或多冒号（裸 IPv6），
+        // 走回退路径。保留防御性回退形态
         if (colon >= 0 && entry.IndexOf(':') == colon
             && int.TryParse(entry.AsSpan(colon + 1), out var embedded))
         {
@@ -368,12 +380,38 @@ public static class MySqlMultiHost
     /// </summary>
     /// <param name="serverList">Server 属性原始值（可为多主机逗号分隔列表，内部逐项 Trim）。</param>
     /// <param name="parameterName">来源参数名（拼入异常消息，如 "standby Server" / "primary Server" / "Server"）。</param>
+    /// <summary>
+    /// Server 列表内重复条目 fail-fast（v50 P2：单主机入口姊妹接线）——
+    /// "Server=db1,db1" 重复条目与多主机入口同危害（重复节点轮试/权重倾斜）。
+    /// </summary>
+    internal static void EnsureNoDuplicateServer(string? serverList, string parameterName)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in (serverList ?? "").Split(','))
+        {
+            var entry = raw.Trim();
+            if (entry.Length == 0) continue;
+            if (!seen.Add(entry.ToUpperInvariant()))
+                throw new ArgumentException(
+                    $"{parameterName} 列表存在重复条目 '{entry}'：多主机拼接将产生重复节点（轮试/权重倾斜）。请去重。", parameterName);
+        }
+    }
+
     internal static void EnsureNoEmbeddedPort(string? serverList, string parameterName)
     {
         foreach (var raw in (serverList ?? "").Split(','))
         {
             var entry = raw.Trim();
             var colon = entry.LastIndexOf(':');
+            // v50 P2（F3）：方括号带端口形态（"[::1]:3306"）此前因多冒号不命中唯一冒号
+            // 条件而放行——但 MySqlConnector 主机名原样传 DNS，方括号同样非法（与 PG 侧
+            // 方括号语法不同），一并拦截；纯方括号无端口（"[::1]"）同非法一并拦
+            if (entry.StartsWith('['))
+            {
+                throw new ArgumentException(
+                    $"MySQL 不支持 IPv6 方括号主机语法：条目 '{entry}' 的方括号会原样传 DNS 解析失败。"
+                    + "MySQL 侧 IPv6 请使用裸字面量（如 ::1）并统一共享 Port。");
+            }
             // v49 P3：去掉 TryParse 数字后缀条件——"host:"（空端口）/":port"（空主机名）
             // 同属含冒号非法 DNS 主机名（节点永不可连），一并 fail-fast；裸 IPv6（多冒号）
             // 不命中唯一冒号条件照常放行
