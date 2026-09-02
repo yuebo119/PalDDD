@@ -92,7 +92,8 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
             var page = await SagaStates
             // 三十四轮（中断态超时兜底）：扫描集扩 AwaitingHumanDecision——中断态 Saga
             // 配置了步骤 Timeout 且超期时由 SagaTimeoutProcessor.IsTimedOut 门控补偿；
-            // 未配置 Timeout 则 IsTimedOut 恒 false（显式无限等待契约）
+            // v44 勘正（对齐 InMemorySagaStateStore v43 勘正）：IsTimedOut 判据已含
+            // "AWD 态已成功步骤"排除——残留时间戳不再触发中断态兜底补偿
             // v23 C1：EF SQLite 不支持 DateTimeOffset 有序比较/排序（ITM-261 姊妹）——
             // 等值比较（Status）可翻译，LeasedUntil <= now 改物化后内存过滤，OrderBy 改 SagaId
             .Where(s => s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision)

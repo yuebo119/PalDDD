@@ -60,7 +60,16 @@ public static class SqliteFts
     /// 此前 trg_{"name"}_ai 形式在名字中部含双引号导致 SQLite 语法错误，探针实证）。
     /// </summary>
     private static string CreateFtsIndex(string sourceTable, string indexName, string col1, string col2, string rowidColumn)
-        => $"""
+    {
+        // v44 P3：入口守卫族（对齐 SqliteJsonExtensions ITM-167 同族——null 列名/表名
+        // 直入 Escape 产生 NRE，失败点远离入口）。Escape 内部对 null 行为未定义，前置校验
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceTable);
+        ArgumentException.ThrowIfNullOrWhiteSpace(indexName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(col1);
+        ArgumentException.ThrowIfNullOrWhiteSpace(col2);
+        ArgumentException.ThrowIfNullOrWhiteSpace(rowidColumn);
+
+        return $"""
         CREATE VIRTUAL TABLE IF NOT EXISTS {Escape(indexName)} USING fts5(
             {col1},
             {col2},
@@ -81,6 +90,7 @@ public static class SqliteFts
             INSERT INTO {Escape(indexName)}(rowid, {col1}, {col2}) VALUES (NEW.{rowidColumn}, NEW.{col1}, NEW.{col2});
         END;
         """;
+    }
 
     // ── 查询 ──
 
