@@ -16,7 +16,7 @@
 //
 // 使用方式：
 //   // 创建 FTS5 索引
-//   conn.Execute(SqliteFts.CreateFtsIndex("payload_idx")  // 三十七轮修正：原示例触发 TEXT 主键 datatype mismatch);
+//   conn.Execute(SqliteFts.CreateEventLogIndex(sourceTable: "event_log"));  // 公共入口（Outbox 表 id 为 TEXT/Ulid，见下方 P1 警告——FTS 仅适用 INTEGER 主键表）
 //
 //   // 全文搜索
 //   conn.QueryAsync<OutboxMessage>(

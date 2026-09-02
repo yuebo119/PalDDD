@@ -349,11 +349,10 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
     /// （未编码 Host 继承 5432 语义正确）。
     /// </para>
     /// <para>
-    /// v37 P3：IPv6 字面量条目不支持自动端口追加——方括号形态（<c>[::1]:5432</c>，
-    /// v43 P2 起 NormalizeHostEntry 拆出方括号 host 与内嵌端口，端口随 ITM-132 契约编码，
-    /// 输出与原样等价）与裸 IPv6（<c>::1</c>，含多个冒号）追加 <c>:port</c>
-    /// 均产出 Npgsql 无法解析的畸形条目（如 <c>[::1]:5432:5433</c>），此类条目 Host 原样
-    /// 输出，端口需用内嵌端口语法或依赖默认端口 5432。
+    /// v40 P2 定稿（v37/v38/v39 三轮演进后四象限闭环）：IPv6 条目按形态三分派——
+    /// 方括号纯 host（<c>[::1]</c>）按 ITM-132 契约追加 <c>:effectivePort</c>；
+    /// 方括号+内嵌端口（<c>[::1]:5433</c>）自洽原样；裸 IPv6（<c>::1</c>，追加
+    /// <c>:port</c> 必产出畸形条目）fail-fast 指引方括号语法。
     /// </para>
     /// </summary>
     /// <param name="hostBuilder">副本/备机连接串（读取其 Host/Port）。</param>
@@ -403,20 +402,12 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
                     else
                         encoded.Add(bareHost);
                 }
-                else if (bareHost.StartsWith('[') && bareHost.EndsWith(']') is false)
-                {
-                    // 形态②（v44 P3 勘正）：'[' 开头无 ']' 收尾 = 畸形条目（v43 后本分支
-                    // 唯一可达输入）——原样放行延迟到建连失败且无条目定位信息，改 fail-fast
-                    //（对齐形态③裸 IPv6 的 fail-fast 处置，同文件处置一致）
-                    throw new ArgumentException(
-                        $"IPv6 主机条目 '{bareHost}' 方括号未闭合——请改用 '[host]' 或 '[host]:port' 语法。");
-                }
                 else if (bareHost.StartsWith('['))
                 {
-                    // 形态②：方括号 + 内嵌端口，自洽
-                    //（v43 P2 勘正：NormalizeHostEntry 已把 "[::1]:port" 拆出方括号 host——
-                    // 本分支自洽配置放行）
-                    encoded.Add(bareHost);
+                    // 形态②（v44 归并）：方括号+内嵌端口自洽放行；'[' 开头无 ']' 的畸形条目
+                    //（v44 P3：前两分支布尔穷尽后本分支唯一可达输入）fail-fast 对齐形态③
+                    throw new ArgumentException(
+                        $"IPv6 主机条目 '{bareHost}' 方括号未闭合——请改用 '[host]' 或 '[host]:port' 语法。");
                 }
                 else
                 {

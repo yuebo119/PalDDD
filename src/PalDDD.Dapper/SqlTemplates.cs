@@ -68,7 +68,7 @@ public static class SqlTemplates
     /// 拒绝终态写。调用点（DapperOutboxStore.MarkProcessed）须同步传 <c>message.RetryCount</c>。
     /// </summary>
     public const string OutboxMarkProcessed =
-        "UPDATE outbox_messages SET status=1,processed_at=@at,error=NULL,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND retry_count=@retryCount AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
+        "UPDATE outbox_messages SET status=1,processed_at=@at,error=NULL,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND retry_count=@retryCount AND status=0 AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
 
     /// <summary>
     /// 标记消息为"死信"。<br/>
@@ -78,7 +78,7 @@ public static class SqlTemplates
     /// fencing——调用点（DapperOutboxStore.MarkDead）须同步传 <c>message.RetryCount</c>。
     /// </summary>
     public const string OutboxMarkDead =
-        "UPDATE outbox_messages SET status=2,error=@reason,processed_at=@at,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND retry_count=@retryCount AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
+        "UPDATE outbox_messages SET status=2,error=@reason,processed_at=@at,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND retry_count=@retryCount AND status=0 AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
 
     /// <summary>
     /// 释放租约并等待下次重试。<br/>
