@@ -405,7 +405,7 @@ adapter 会校验 `RecordedEvent` 的 wire name、schema version 和 content typ
 
 同一重建边界还会记录 `paldd.projection.replayed` metric，应用层可通过 OpenTelemetry `AddMeter(PalActivitySource.Name)` 采集回放量。
 
-生产环境可从 `PalDDD.Projections.EFCore` 派生 `ProjectionCheckpointDbContext`，并通过 DI 将该上下文作为 `IProjectionCheckpointStore` 使用。适配器会配置 `(ProjectionName, SourceName, Position)` 复合主键、projection/source/status 查询索引和 `UpdatedAt` 并发令牌，用于跨实例投影幂等处理与重建 checkpoint reset。
+生产环境可从 `PalDDD.Projections.EFCore` 派生 `ProjectionCheckpointDbContext`，并通过 DI 将该上下文作为 `IProjectionCheckpointStore` 使用。适配器会配置 `(ProjectionName, SourceName, Position)` 复合主键、projection/source/status 查询索引和 `Revision` 单调并发令牌（v53 勘正：原称 UpdatedAt 时间戳令牌，与代码不符），用于跨实例投影幂等处理与重建 checkpoint reset。
 
 ## 使用 Command Idempotency
 

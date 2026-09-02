@@ -83,6 +83,7 @@ CREATE TABLE idempotency_records (
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     response_payload  BYTEA,
     error             TEXT,
+        revision         BIGINT NOT NULL DEFAULT 0,                     -- 乐观并发令牌（单调递增，v53 P2）
     PRIMARY KEY (operation_name, idempotency_key)
 );
 CREATE INDEX idx_idempotency_expires ON idempotency_records(expires_at);

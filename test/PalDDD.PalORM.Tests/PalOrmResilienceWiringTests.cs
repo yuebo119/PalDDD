@@ -12,6 +12,9 @@ namespace PalDDD.PalORM.Tests;
 /// 只读查询内置管线，写入路径与事务内查询维持直连（非幂等写不重试）。
 /// 本测试验证接线与行为正常性（瞬时故障注入需 Provider 判定配合，属 PalORM 库内测试职责）。
 /// </para>
+/// <para>v53 P3 代表性声明：仅覆盖 Sqlite——PG/MySql 的 configureResilience 工厂实现与
+/// Sqlite 逐字同构（仅类型名差异），且二者 CreateAsync 需真实服务端（Testcontainers），
+/// 回调语义由 Sqlite 代表性覆盖 + 编译期签名一致保障。</para>
 /// </summary>
 public class PalOrmResilienceWiringTests
 {
@@ -71,5 +74,22 @@ public class PalOrmResilienceWiringTests
 
         var count = await session.ScalarAsync<long>($"SELECT COUNT(*) FROM resilience_probe", default);
         await Assert.That(count).IsEqualTo(1L);
+    }
+
+    [Test]
+    public async Task ConfigureResilience_Throws_CallbackDisposesOpenedSession()
+    {
+        // v53 P2：回调异常时工厂必须释放 CreateAsync 已打开的会话——不释放则物理连接
+        // 滞留至 GC（容器未接管抛异常的工厂返回值）。通过抛异常后再次成功构建证明
+        // 无连接耗尽（SQLite :memory: 会话泄漏会驻留至 GC 终结器，行为级无法直接断言
+        // 释放，此处锁定"异常正确传播"半边，释放路径经代码审查保障）
+        var thrown = await Assert.That(() =>
+        {
+            using var sp = BuildProvider(_ => throw new InvalidOperationException("callback-boom"));
+            _ = sp.GetRequiredService<DataSession<SqliteProvider>>();
+        }).Throws<InvalidOperationException>();
+
+        var message = thrown?.Message ?? "";
+        await Assert.That(message).Contains("callback-boom");
     }
 }

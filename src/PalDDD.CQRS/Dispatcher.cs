@@ -118,6 +118,9 @@ public sealed class Dispatcher
     /// <summary>
     /// 注册请求类型到 Handler 类型的映射（泛型 AOT 安全路径）。<br/>
     /// ⚠️ 同 <see cref="Register(Type, Type, Type, RequestExecutor)"/> 的启动期单线程调用约束。
+    /// <para>v53 P3 覆盖语义声明：同一 requestType 重复 Register 为<b>后者静默覆盖</b>
+    /// （索引器赋值语义，手动分阶段注册场景的刻意替换用法）；DI 装配路径的重复冲突
+    /// 检测在 ServiceRegistration 层快速失败（ITM-220），不经本方法。</para>
     /// </summary>
     public void Register<TRequest, TResponse, THandler>()
         where TRequest : IRequest<TResponse>

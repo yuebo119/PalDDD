@@ -25,6 +25,8 @@ public sealed class CompressionProvider : ICompressionProvider
         Dictionary<CompressionAlgorithm, ICompressor> map = [];
         foreach (var compressor in compressors)
         {
+            // v53 P3：序列元素 null 防御——裸 NRE 落 lambda 内部无指向性（镜像 MessageCatalogBuilder.Add）
+            ArgumentNullException.ThrowIfNull(compressor);
             if (!map.TryAdd(compressor.Algorithm, compressor))
                 throw new NotSupportedException(
                     $"Multiple compressors registered for algorithm '{compressor.Algorithm}'; " +

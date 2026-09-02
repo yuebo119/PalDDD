@@ -316,7 +316,7 @@ public static class DapperBulkCopy
     /// P2 修复（八轮评审）：Ulid/DateTimeOffset 转 MySQL 原生可映射类型——
     /// DataTable 对未知类型静默 ToString() 是区域性依赖的静默损坏（本地化时间分隔符/
     /// DateTimeOffset 表示漂移），与 ConvertForNpgsql 对称显式转换：
-    /// Ulid→string（char(36) 文本列），DateTimeOffset→UtcDateTime（DATETIME(6) 原生支持，
+    /// Ulid→string（CHAR(26) 文本列，26 字符 Ulid；v53 勘正：原写 char(36) 是 GUID 长度），DateTimeOffset→UtcDateTime（DATETIME(6) 原生支持，
     /// 统一 UTC 语义与 DapperAotInitializer.ToMySqlParameter 一致）。
     /// </summary>
     private static object? ConvertForMySql(object? val)

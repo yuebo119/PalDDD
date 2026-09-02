@@ -898,6 +898,53 @@ public sealed class DapperStoreTests
         await Assert.That(second).IsEmpty();
     }
 
+    // v53 P2：租约即换代——租约 UPDATE 递增 version（对齐 EFCore BumpVersion/InMemory v25 B1）。
+    // 修复前租约不动 version：worker A 的内存快照（version=N）在租约被 B 抢走后仍与 DB 真值
+    // 相等，A 的保存穿透覆盖 B 的活跃租约（fencing 失效）；修复后重租即换代，A 保存必 0 行
+    [Test]
+    public async Task Saga_LeaseTakeover_BumpsVersion_StaleHolderSaveRejected(CancellationToken cancellationToken)
+    {
+        var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);
+        var state = new TestSagaState
+        {
+            SagaId = PalUlid.New(),
+            CurrentState = "Active",
+            Status = SagaStatus.Active,
+            CreatedAt = TimeProvider.System.GetUtcNow()
+        };
+        await store.SaveChangesAsync(state, cancellationToken);
+        // worker A 租约（version 0→1），回读快照 A 内存 version=1
+        var leasedByA = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(5), 10, cancellationToken);
+        await Assert.That(leasedByA).Count().IsEqualTo(1);
+        var snapshotA = leasedByA[0];
+
+        // 租约过期（直接清空模拟超时）后 worker B 重租（version 1→2）
+        //（原生 DbCommand 直改——绕开 Dapper.AOT 的 DAP005 拦截，与 CreateSchemaAsync 同模式）
+        var expireCmd = _conn.CreateCommand();
+        expireCmd.CommandText = "UPDATE saga_states SET leased_until = @past WHERE saga_id = @id";
+        var pastParam = expireCmd.CreateParameter();
+        pastParam.ParameterName = "@past";
+        pastParam.Value = TimeProvider.System.GetUtcNow().AddMinutes(-1);
+        expireCmd.Parameters.Add(pastParam);
+        var idParam = expireCmd.CreateParameter();
+        idParam.ParameterName = "@id";
+        idParam.Value = state.SagaId.ToString();
+        expireCmd.Parameters.Add(idParam);
+        await expireCmd.ExecuteNonQueryAsync(cancellationToken);
+        var leasedByB = await store.LeaseActiveSagasAsync("owner-B", TimeSpan.FromMinutes(5), 10, cancellationToken);
+        await Assert.That(leasedByB).Count().IsEqualTo(1);
+        await Assert.That(leasedByB[0].Version).IsEqualTo(snapshotA.Version + 1);
+
+        // A 用过期快照保存：修复前 version 匹配 DB 真值（租约没动 version）保存成功覆盖 B；
+        // 修复后 A 的 version 落后，保存 0 行被拒
+        snapshotA.CurrentState = "Stale-A";
+        var rows = await store.SaveChangesAsync(snapshotA, cancellationToken);
+        await Assert.That(rows).IsEqualTo(0);
+
+        var loaded = await store.GetByIdAsync(state.SagaId, cancellationToken);
+        await Assert.That(loaded!.LeasedBy).IsEqualTo("owner-B");
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // DapperProjectionCheckpointStore 测试
     // ═══════════════════════════════════════════════════════════════

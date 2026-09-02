@@ -51,6 +51,9 @@ public static class SqlitePalOrmExtensions
     /// <c>s => s.WithCircuitBreaker(5, TimeSpan.FromSeconds(30))</c>。作用域为连接建立 +
     /// 只读查询内置管线（SELECT/Get/聚合）；写入路径与事务内查询维持直连（非幂等写不重试）。
     /// null（默认）= 弹性直通，热路径零额外开销。
+    /// <para>v53 P3 次序语义：DI 工厂中 CreateAsync 先于回调执行，本会话的<b>首个连接建立</b>
+    /// 永远发生在弹性配置之前（连接重试是 CreateAsync 自有循环）——回调配置的连接重试
+    /// 仅对后续重连生效，首个连接使用 DbOptions 默认弹性。</para>
     /// </param>
     public static IServiceCollection AddPalOrmSqlite(
         this IServiceCollection services,
@@ -67,8 +70,19 @@ public static class SqlitePalOrmExtensions
         {
             var opts = options ?? DbOptions.Development(connectionString);
             var session = DataSession<SqliteProvider>.CreateAsync(opts, default).GetAwaiter().GetResult();
-            configureResilience?.Invoke(session);
-            return session;
+            // v53 P2：回调异常时释放已打开的会话——CreateAsync 创建并打开连接（PalORM 5.4
+            // XML doc），工厂委托抛异常则容器从未接管返回值，物理连接滞留至 GC（同模式
+            // 先例：PostgreSqlSharding ITM-085"Build 中途抛错 DisposeAsync 永不被调用"）
+            try
+            {
+                configureResilience?.Invoke(session);
+                return session;
+            }
+            catch
+            {
+                session.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                throw;
+            }
         });
 
         // 时间提供者（默认 System）

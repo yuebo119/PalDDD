@@ -2,15 +2,18 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.CQRS</RootNamespace>
-    <NoWarn>$(NoWarn);CS1591;CA1040;CA1068;CA1716;CA1033;CA2007;CA1508</NoWarn>
+    <!-- v53 P3 逐条理由（对齐全局"个别位置带具体理由"惯例；CS1591/CA2007 全局清单已含，去重）：
+         CA1040 — IBaseRequest/ICommand/IQuery 空标记接口是 CQRS 分派键的刻意设计
+         CA1068 — IPipelineBehavior<TRequest,TResponse> 异步签名沿 MediatR 惯例
+         CA1716 — RequestExecutor 与 BCL 无实际冲突（ReservedKeyword 误报场景）
+         CA1033 — PipelineStateMachine 显式接口实现（next 单次调用契约）
+         CA1508 — 可空断言重复在防御性守卫链中是刻意冗余 -->
+    <NoWarn>$(NoWarn);CA1040;CA1068;CA1716;CA1033;CA1508</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
   </ItemGroup>
-
-  <ItemGroup>
-    </ItemGroup>
 
   <ItemGroup><InternalsVisibleTo Include="PalDDD.DependencyInjection"/><InternalsVisibleTo Include="PalDDD.CQRS.Tests"/></ItemGroup>
   <ItemGroup><Using Include="PalDDD.Core" Alias="Core"/></ItemGroup>

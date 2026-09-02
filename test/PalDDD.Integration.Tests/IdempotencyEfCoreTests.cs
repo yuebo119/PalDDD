@@ -194,7 +194,7 @@ public sealed class IdempotencyEfCoreTests
     public async Task TryStartAsync_Sqlite_DuplicateReturnsNullAndExpiredLeaseIsReused(CancellationToken cancellationToken)
     {
         // ITM-254（F14/PD26）：SQLite 内存库真 schema——复合主键 (OperationName,Key) 唯一真实在场，
-        // 重复 TryStart 幂等判定 + 过期租约回收（UpdatedAt 并发令牌 SaveChanges）在关系型下验证
+        // 重复 TryStart 幂等判定 + 过期租约回收（Revision 并发令牌 SaveChanges，v53 起）在关系型下验证
         await using var connection = new SqliteConnection("DataSource=:memory:");
         await connection.OpenAsync(cancellationToken);
         var options = CreateSqliteOptions(connection);
@@ -241,4 +241,24 @@ public sealed class IdempotencyEfCoreTests
 
     private sealed class TestIdempotencyDbContext(DbContextOptions<TestIdempotencyDbContext> options)
         : IdempotencyDbContext(options);
+
+    // v53 P2：Revision 并发令牌语义 — 每次状态转移单调递增（镜像 ProjectionCheckpoint）
+    //（替换 UpdatedAt 时间戳令牌——同刻精度截断窗口致双 worker 同时命中 CAS，幂等失效）
+    [Test]
+    public async Task IdempotencyRecord_StateTransitions_BumpRevisionMonotonically(CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.Parse("2026-05-30T00:00:00Z", CultureInfo.InvariantCulture);
+        var record = new IdempotencyRecord(
+            "CreateOrder", "cmd-1", IdempotencyRecordStatus.Processing,
+            now.AddSeconds(5), now.AddMinutes(10), now);
+        var initial = record.Revision;
+
+        record.MarkProcessing(now.AddSeconds(5), now.AddMinutes(10), now);
+        var afterProcessing = record.Revision;
+        record.MarkCompleted(new ReadOnlyMemory<byte>([1, 2, 3]), now.AddSeconds(1));
+        var afterCompleted = record.Revision;
+
+        await Assert.That(afterProcessing).IsGreaterThan(initial);
+        await Assert.That(afterCompleted).IsGreaterThan(afterProcessing);
+    }
 }

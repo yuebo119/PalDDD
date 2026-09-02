@@ -11,7 +11,7 @@ namespace PalDDD.Analyzers;
 //   StrategicDddAnalyzer.MessageContracts.cs：PDDD005/008/009/010/011/012/015（消息契约）
 //   StrategicDddAnalyzer.Handlers.cs：PDDD003/004/006/007/013/014（PM/投影形状与命名）
 //   StrategicDddAnalyzer.SymbolHelpers.cs：符号/语法树辅助
-// 拆分是纯搬运（逻辑与注释逐字保留），行为由 Analyzers.Tests 36 测试锁定。
+// 拆分是纯搬运（逻辑与注释逐字保留），行为由 Analyzers.Tests 39 测试锁定（v53 勘正计数）。
 // ─────────────────────────────────────────────────────────────
 using Microsoft.CodeAnalysis.Diagnostics;
 

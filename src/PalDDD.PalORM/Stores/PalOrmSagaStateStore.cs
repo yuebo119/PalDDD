@@ -118,13 +118,15 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
             if (TProvider.Dialect == global::PalORM.SqlDialect.PostgreSql)
             {
                 await Session.ExecuteAsync(
-                    $"UPDATE saga_states SET leased_by = {owner}, leased_until = {until} WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize} FOR UPDATE SKIP LOCKED)",
+                    // v53 P2：租约即换代（version+1）——对齐 EFCore/InMemory 栈，旧持有者保存被 version 乐观锁真实拦截
+                    $"UPDATE saga_states SET leased_by = {owner}, leased_until = {until}, version = version + 1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize} FOR UPDATE SKIP LOCKED)",
                     ct).ConfigureAwait(false);
             }
             else
             {
                 await Session.ExecuteAsync(
-                    $"UPDATE saga_states SET leased_by = {owner}, leased_until = {until} WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize})",
+                    // v53 P2：租约即换代（version+1），见 PG 分支注释
+                    $"UPDATE saga_states SET leased_by = {owner}, leased_until = {until}, version = version + 1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize})",
                     ct).ConfigureAwait(false);
             }
         }
@@ -132,7 +134,8 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         {
             // MySQL 特化路径：JOIN 子查询
             await Session.ExecuteAsync(
-                $"UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize}) AS sub ON t.saga_id = sub.saga_id SET t.leased_by = {owner}, t.leased_until = {until}",
+                // v53 P2：租约即换代（version+1），见 PG 分支注释
+                $"UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize}) AS sub ON t.saga_id = sub.saga_id SET t.leased_by = {owner}, t.leased_until = {until}, t.version = t.version + 1",
                 ct).ConfigureAwait(false);
         }
 

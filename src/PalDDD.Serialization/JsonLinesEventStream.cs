@@ -134,6 +134,11 @@ public sealed class JsonLinesEventReader
             return [];
 
         var span = payload.Span;
+        // v53 P2：剥离 UTF-8 BOM（EF BB BF）——v52 CRLF 修复认定输入源含"Windows 编辑器
+        // 或上游系统输出的 .jsonl"，同源文件首行常带 BOM（PowerShell 导出/Notepad 保存），
+        // 残留时首行 Deserialize 抛 JsonException（'0xEF' 非法值起始），且无 BOM 指向性
+        if (span.Length >= 3 && span[0] == 0xEF && span[1] == 0xBB && span[2] == 0xBF)
+            span = span[3..];
         List<TMessage> result = [];
 
         var start = 0;

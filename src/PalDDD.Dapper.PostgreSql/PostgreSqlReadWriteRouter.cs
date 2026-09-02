@@ -158,7 +158,11 @@ public static class PostgreSqlReadWriteRouterExtensions
                 foreach (var raw in primaryHost.Split(','))
                 {
                     var (primaryEntryHost, primaryEntryPort) = PostgreSqlMultiHost.NormalizeHostEntry(raw, primaryCsBuilder.Port);
-                    if (primaryEntryHost.Length == 0) continue;
+                    // v53 P2：空条目 fail-fast（镜像 MySQL v49 姊妹）——列表空段是死节点
+                    if (primaryEntryHost.Length == 0)
+                        throw new ArgumentException(
+                            "primary Host 列表存在空条目（如 \"Host=pg1,,pg2\"）：空条目并入主机列表后"
+                            + "成为参与轮询的死节点，故障转移静默失败。请清理 Host 列表中的空条目。");
                     // v52 P2：primary 内部重复也抛（对齐 MultiHost Failover/standby 侧）
                     if (!seenHosts.Add((primaryEntryHost.ToUpperInvariant(), primaryEntryPort)))
                         throw new ArgumentException(
@@ -192,7 +196,11 @@ public static class PostgreSqlReadWriteRouterExtensions
                     // Failover/ReadWriteSplit 两入口的 v28 勘正）
                     foreach (var (replicaHost, replicaPort) in PostgreSqlMultiHost.NormalizeHostEntries(sb.Host, sb.Port))
                     {
-                        if (replicaHost.Length == 0) continue;
+                        // v53 P2：副本列表空段 fail-fast（镜像 MySQL v49 姊妹）
+                        if (replicaHost.Length == 0)
+                            throw new ArgumentException(
+                                "replica Host 列表存在空条目：空条目并入读写分离后成为参与轮询的死节点。"
+                                + "请清理副本 Host 列表中的空条目。");
                         if (!seenHosts.Add((replicaHost.ToUpperInvariant(), replicaPort)))
                             throw new ArgumentException(
                                 $"Replica connection string at index {index} Host '{replicaHost}:{replicaPort}' duplicates the primary host list or another replica: "

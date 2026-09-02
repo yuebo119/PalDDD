@@ -48,7 +48,7 @@ public static class SqlTemplates
     /// <summary>
     /// 插入一条新消息到发件箱。<br/>
     /// 💡 为什么包含 <c>id</c> 列？<br/>
-    ///   ｜ PostgreSQL 的 UUID 和 SQLite 的 TEXT 都需要显式传入 id。<br/>
+    ///   ｜ PostgreSQL/SQLite 的 TEXT id 列（26 字符 Ulid，DDL 实证）都需要显式传入 id（v53 勘正：原称 PG 为 UUID 列型与 DDL 矛盾）。<br/>
     ///   ｜ <c>OutboxMessage.Id</c> 在构造时已经 <c>PalUlid.New()</c>（ByteAether.Ulid 生成器），
     ///   ｜ 直接传入即可（v25 P3 勘正：原注释 "Guid.NewGuid()" 与实际 Id 类型 PalUlid 不符）。
     /// </summary>
@@ -292,7 +292,10 @@ public static class SqlTemplates
     /// PG 变体见 <see cref="SagaLeaseActivePG"/>（SKIP LOCKED 消除锁竞争）。
     /// </summary>
     public const string SagaLeaseActive =
-        "UPDATE saga_states SET leased_by=@owner, leased_until=@until WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n)";
+        // v53 P2：租约即换代（version=version+1）——对齐 EFCore BumpVersion/InMemory v25 B1
+        //（重租即换代）。旧持有者租约被抢后其内存 version 必然落后，SaveChanges 的
+        // version 乐观锁真实拦截（修复前租约不动 version，旧持有者保存可穿透覆盖新租约）
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n)";
 
     /// <summary>
     /// PG 专用 Saga 租约获取 — 子查询行锁 <c>FOR UPDATE SKIP LOCKED</c>。<br/>
@@ -302,7 +305,8 @@ public static class SqlTemplates
     /// 各自拿到不相交的 Saga 批次。注意 PG 的 locking clause 位于 LIMIT 之后。
     /// </summary>
     public const string SagaLeaseActivePG =
-        "UPDATE saga_states SET leased_by=@owner, leased_until=@until WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)";
+        // v53 P2：租约即换代（version=version+1），见 SagaLeaseActive 注释
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)";
 
     /// <summary>
     /// MySQL 专用 Saga 租约获取 — JOIN 形态。<br/>
@@ -313,7 +317,8 @@ public static class SqlTemplates
     /// 由 <see cref="SagaUpdate"/> 的 version 乐观锁兜底——并发覆盖在保存时检测。
     /// </summary>
     public const string SagaLeaseActiveMySql =
-        "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until";
+        // v53 P2：租约即换代（version=version+1），见 SagaLeaseActive 注释
+        "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1";
 
     /// <summary>
     /// 按本次租约回读刚获取的 Saga。<br/>

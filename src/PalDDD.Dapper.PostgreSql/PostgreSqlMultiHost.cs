@@ -114,7 +114,12 @@ public static class PostgreSqlMultiHost
             foreach (var raw in primaryHost.Split(','))
             {
                 var (host, port) = NormalizeHostEntry(raw, primaryBuilder.Port);
-                if (host.Length == 0) continue;
+                // v53 P2：空条目 fail-fast（镜像 MySQL v49）——"Host=pg1,,pg2" 空段原样
+                // 拼接进 Host 列表成为轮询死节点，故障转移静默失败
+                if (host.Length == 0)
+                    throw new ArgumentException(
+                        "primary Host 列表存在空条目（如 \"Host=pg1,,pg2\"）：空条目并入主机列表后"
+                        + "成为参与轮询的死节点，故障转移静默失败。请清理 Host 列表中的空条目。");
                 // v52 P2：primary 内部重复也抛（对齐 standby 侧"Add 失败即抛"——
                 // "Host=pg1,pg1" 静默通过使 FailOver 同实例双份轮试）
                 if (!seenHosts.Add((host.ToUpperInvariant(), port)))
@@ -125,7 +130,11 @@ public static class PostgreSqlMultiHost
             }
             foreach (var (standbyNormHost, standbyNormPort) in standbyEntries)
             {
-                if (standbyNormHost.Length == 0) continue;
+                // v53 P2：空条目 fail-fast（镜像 MySQL v49 姊妹）
+                if (standbyNormHost.Length == 0)
+                    throw new ArgumentException(
+                        "standby Host 列表存在空条目：空条目并入主机列表后成为参与轮询的死节点，"
+                        + "故障转移静默失败。请清理 Host 列表中的空条目。");
                 if (!seenHosts.Add((standbyNormHost.ToUpperInvariant(), standbyNormPort)))
                     throw new ArgumentException(
                         $"standby Host '{standbyNormHost}:{standbyNormPort}' 与 primary 主机列表或 standby 列表内其他条目重复："
@@ -225,7 +234,11 @@ public static class PostgreSqlMultiHost
         foreach (var raw in primaryHost.Split(','))
         {
             var (primaryEntryHost, primaryEntryPort) = NormalizeHostEntry(raw, primaryCsBuilder.Port);
-            if (primaryEntryHost.Length == 0) continue;
+            // v53 P2：空条目 fail-fast（镜像 MySQL v49 姊妹）——列表空段是死节点
+            if (primaryEntryHost.Length == 0)
+                throw new ArgumentException(
+                    "primary Host 列表存在空条目（如 \"Host=pg1,,pg2\"）：空条目并入主机列表后"
+                    + "成为参与轮询的死节点，故障转移静默失败。请清理 Host 列表中的空条目。");
             // v48 P2：primary 内部重复也抛（对齐 standby 侧"Add 失败即抛"——v47 MySQL
             // 侧同款勘正的 PG 姊妹；v29 注释声称"primary 条目 + standby 展开条目全部进
             // 集合，Add 失败即抛"但 primary 侧 Add 返回值被忽略，"pg1,pg1" 静默通过）
@@ -257,7 +270,11 @@ public static class PostgreSqlMultiHost
             // 恒不等，查重失效（同 Failover 入口 v28 勘正）
             foreach (var (replicaHost, replicaPort) in NormalizeHostEntries(sb.Host, sb.Port))
             {
-                if (replicaHost.Length == 0) continue;
+                // v53 P2：副本列表空段 fail-fast（如 "Host=rb1,,rb2"，镜像 MySQL v49 姊妹）
+                if (replicaHost.Length == 0)
+                    throw new ArgumentException(
+                        "replica Host 列表存在空条目：空条目并入 LoadBalanceHosts 后成为参与轮询的死节点。"
+                        + "请清理副本 Host 列表中的空条目。");
                 if (!seenHosts.Add((replicaHost.ToUpperInvariant(), replicaPort)))
                     throw new ArgumentException(
                         $"replica Host '{replicaHost}:{replicaPort}' 与 primary 主机列表或其他副本中的条目重复："
@@ -364,8 +381,9 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
     /// <para>
     /// v40 P2 定稿（v37/v38/v39 三轮演进后四象限闭环）：IPv6 条目按形态三分派——
     /// 方括号纯 host（<c>[::1]</c>）按 ITM-132 契约追加 <c>:effectivePort</c>；
-    /// 方括号+内嵌端口（<c>[::1]:5433</c>）自洽原样；裸 IPv6（<c>::1</c>，追加
-    /// <c>:port</c> 必产出畸形条目）fail-fast 指引方括号语法。
+    /// 方括号+内嵌端口（<c>[::1]:5433</c>）v53 勘正：上游 NormalizeHostEntries 已归一化
+    /// 拆为 ("[::1]", 5433) 走形态①重编码，实际到达该分支的仅畸形条目（v44 行内注释口径）；
+    /// 裸 IPv6（<c>::1</c>，追加 <c>:port</c> 必产出畸形条目）fail-fast 指引方括号语法。
     /// </para>
     /// </summary>
     /// <param name="hostBuilder">副本/备机连接串（读取其 Host/Port）。</param>

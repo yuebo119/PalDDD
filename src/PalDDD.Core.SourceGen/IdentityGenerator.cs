@@ -116,6 +116,18 @@ public sealed class IdentityGenerator : IIncrementalGenerator
     // 而 internal 声明与硬编码 public 生成物合并同样必报 CS0262（双向探针实证），不存在
     // 可工作的 internal 用法；v36 保留 internal 的"误伤 internal 顶层合法场景"顾虑已被证伪
 
+    // v53 P1（D 片）：非 partial 包含类型专用诊断——v52 引入该检查时 DiagnosticId 置
+    // "PALID007" 但既未建 descriptor 也未在分派 switch 加 case，实际落 default 报
+    // PALID001 "unsupported source type"（错误指引：真实修复是给包含类型加 partial，
+    // 与 IdType 白名单无关，Guid 恰在白名单内时指引彻底反向）
+    private static readonly DiagnosticDescriptor ContainingTypeNotPartial = new(
+        "PALID007",
+        "GenerateId requires partial containing types",
+        "Type '{0}' uses [GenerateId] but its containing type '{1}' is not partial — the generated partial declaration cannot merge with it (CS0260 would land in auto-generated files). Add 'partial' to the containing declaration.",
+        "PalDDD.IdentityGeneration",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var candidates = context.SyntaxProvider.ForAttributeWithMetadataName(
@@ -245,15 +257,16 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 {
                     // v52 P2：包含类型非 partial 时报诊断——生成 partial 包裹声明与用户
                     // 非 partial 声明冲突报 CS0260 落 auto-generated 文件无排障指引
+                    // v53 P1：SourceType 字段复用为携带非 partial 包含类型名（分派侧 {1}）
                     if (t.DeclaredAccessibility != Accessibility.NotApplicable
-                        && !t.IsPartial())
+                        && !t.IsPartial(ct))
                     {
                         return new IdGenInfo(
                             Namespace: null,
                             TypeName: structSymbol.Name,
                             ContainingDeclarations: [],
                             ContainingNames: [],
-                            SourceType: sourceType.ToDisplayString(),
+                            SourceType: t.Name,
                             IsNumeric: false,
                             DiagnosticId: "PALID007",
                             Location: context.TargetNode.GetLocation());
@@ -391,6 +404,15 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                                 info.Location ?? Location.None,
                                 info.TypeName,
                                 info.BlockingAccessibilityText));
+                            break;
+                        case "PALID007":
+                            // v53 P1：非 partial 包含类型——{1} = 包含类型名（SourceType 携带），
+                            // 指引加 partial 修饰符（此前落 default 报 PALID001 错误指引）
+                            spc.ReportDiagnostic(Diagnostic.Create(
+                                ContainingTypeNotPartial,
+                                info.Location ?? Location.None,
+                                info.TypeName,
+                                info.SourceType));
                             break;
                         default:
                             // P3 修复（八轮评审）：PALID001——非白名单 IdType 编译期报错，不生成代码

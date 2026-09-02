@@ -54,4 +54,34 @@ public sealed class MySqlMultiHostTests
                 .AddPalMySqlDataSourceWithLeastConnections("Server=;Database=pal"))
             .Throws<ArgumentException>();
     }
+
+    // ── v53 P1：冒号判定形态 — v50 F3 误改 Contains(':') 全拦（IPv6 全形态死路）的回归网 ──
+
+    [Test]
+    public async Task AddPalMySqlDataSourceWithLoadBalance_BareIpv6_DoesNotThrow()
+    {
+        // 裸 IPv6（多冒号）是合法字面量——Dns.GetHostAddresses 可解析，必须放行；
+        // 校验与 Build 均零网络 IO（Build 仅构造 MySqlConnection 对象）
+        var services = new ServiceCollection()
+            .AddPalMySqlDataSourceWithLoadBalance("Server=::1;Database=pal;Port=3306");
+        await Assert.That(services.Count).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task AddPalMySqlDataSourceWithLoadBalance_EmbeddedPort_ThrowsArgumentException()
+    {
+        // 唯一冒号（host:port 内嵌语法）——MySqlConnector 不支持，照拦
+        await Assert.That(() => new ServiceCollection()
+                .AddPalMySqlDataSourceWithLoadBalance("Server=db1:3306;Database=pal"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalMySqlDataSourceWithLoadBalance_BareIpv6ListWithDuplicate_ThrowsArgumentException()
+    {
+        // 裸 IPv6 多主机 + 重复查重兼容——::1 归一化后查重仍生效
+        await Assert.That(() => new ServiceCollection()
+                .AddPalMySqlDataSourceWithLoadBalance("Server=::1,::1;Database=pal;Port=3306"))
+            .Throws<ArgumentException>();
+    }
 }
