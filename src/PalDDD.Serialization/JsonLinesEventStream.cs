@@ -146,9 +146,17 @@ public sealed class JsonLinesEventReader
             if (lineLen > 0)
             {
                 var line = remaining.Slice(0, lineLen);
-                var msg = System.Text.Json.JsonSerializer.Deserialize(line, typeInfo);
-                if (msg is not null)
-                    result.Add(msg);
+                // v52 P2：剥离 CRLF 行尾残留的 '\r'——Writer 自产 LF，但 Windows 编辑器
+                // 或上游系统输出的 .jsonl 常含 \r\n 行尾；'\r' 残留导致空行变 "\r"（lineLen=1
+                // 非空不跳过）和行尾 JsonException（非法 JSON token）
+                if (line[lineLen - 1] == '\r')
+                    line = line.Slice(0, lineLen - 1);
+                if (line.Length > 0)
+                {
+                    var msg = System.Text.Json.JsonSerializer.Deserialize(line, typeInfo);
+                    if (msg is not null)
+                        result.Add(msg);
+                }
             }
 
             start += lineLen + (idx < 0 ? 0 : 1); // skip \n
