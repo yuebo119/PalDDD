@@ -38,11 +38,19 @@ public static class MySqlPalOrmExtensions
     /// options 为 null 时以 connectionString 构造 Development 默认 DbOptions。
     /// </param>
     /// <param name="clock">可选时间提供者。</param>
+    /// <param name="configureResilience">
+    /// 可选弹性配置回调（PalORM 5.4 弹性层）——CreateAsync 后对会话调用，如
+    /// <c>s => s.WithRetry(3, i => TimeSpan.FromMilliseconds(50 * i))</c> 与
+    /// <c>s => s.WithCircuitBreaker(5, TimeSpan.FromSeconds(30))</c>。作用域为连接建立 +
+    /// 只读查询内置管线（SELECT/Get/聚合）；写入路径与事务内查询维持直连（非幂等写不重试）。
+    /// null（默认）= 弹性直通，热路径零额外开销。
+    /// </param>
     public static IServiceCollection AddPalOrmMySql(
         this IServiceCollection services,
         string connectionString,
         DbOptions? options = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        Action<DataSession<MySqlProvider>>? configureResilience = null)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
@@ -50,7 +58,9 @@ public static class MySqlPalOrmExtensions
         services.AddScoped(sp =>
         {
             var opts = options ?? DbOptions.Development(connectionString);
-            return DataSession<MySqlProvider>.CreateAsync(opts, default).GetAwaiter().GetResult();
+            var session = DataSession<MySqlProvider>.CreateAsync(opts, default).GetAwaiter().GetResult();
+            configureResilience?.Invoke(session);
+            return session;
         });
 
         // P2 修复（八轮评审）：改 TryAddSingleton 对齐 Sqlite 版（SqlitePalOrmExtensions）——
