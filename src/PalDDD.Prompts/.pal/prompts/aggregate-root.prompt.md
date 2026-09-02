@@ -48,13 +48,13 @@ public sealed class Order : AggregateRoot<OrderId>
     public Order(OrderId id, string customerName) : base(id)
     {
         CustomerName = customerName;
-        TotalAmount = Money.Zero;
+        TotalAmount = Money.CNY(0);
     }
 
     // 领域行为 — 通过 RaiseEvent 产生领域事件
     public void AddItem(string productName, Money price, int quantity)
     {
-        TotalAmount = TotalAmount.Add(price.Multiply(quantity));
+        TotalAmount = Money.CNY(TotalAmount.Amount + price.Amount * quantity);
         RaiseEvent(new ItemAddedToOrder(Id.Value, productName, price, quantity));
     }
 }

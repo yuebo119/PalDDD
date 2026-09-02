@@ -5,7 +5,9 @@
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
-    <NoWarn>$(NoWarn);CS1591;CA1812;CA2007</NoWarn>
+    <!-- v54 P3：去全局清单重复（CS1591/CA2007 全局已含）；CA1812——internal 健康检查类经
+         AddCheck<T> 泛型注册由 DI 实例化，分析器不可见 -->
+    <NoWarn>$(NoWarn);CA1812</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

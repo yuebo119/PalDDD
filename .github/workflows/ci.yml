@@ -30,8 +30,27 @@ jobs:
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/Directory.Packages.props', '**/Directory.Build.props') }}
           restore-keys: ${{ runner.os }}-nuget-
 
-      - name: 依赖漏洞扫描（v53：确定性强制，替代 NU1900-1904 全局压制下的时点性人工审计）
-        run: dotnet list package --vulnerable --include-transitive
+      - name: 依赖漏洞扫描（v54 真门禁——v53 版为 exit-0 no-op；JSON 解析有漏洞即 exit 1，替代 NU19xx 压制下人工审计）
+        run: |
+          dotnet list package --vulnerable --include-transitive --format json > /tmp/vuln.json
+          python3 - <<'EOF'
+          import json, sys
+          with open('/tmp/vuln.json') as f:
+              data = json.load(f)
+          found = []
+          for project in data.get('projects', []):
+              for fw in project.get('frameworks', []):
+                  for pkg in fw.get('topLevelPackages', []) + fw.get('transitivePackages', []):
+                      if pkg.get('vulnerabilities'):
+                          found.append(f"{pkg['id']}@{pkg.get('resolvedVersion','?')} "
+                                       + ", ".join(v.get('severity','?') for v in pkg['vulnerabilities']))
+          if found:
+              print(f"::error::{len(found)} 个包存在已知漏洞")
+              for line in found:
+                  print(f"  {line}")
+              sys.exit(1)
+          print("漏洞扫描通过：0 个已知漏洞")
+          EOF
 
       - name: Restore
         run: dotnet restore PalDDD.slnx

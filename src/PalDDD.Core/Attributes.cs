@@ -28,10 +28,18 @@ namespace PalDDD.Core;
 /// （CS8340）。推荐带 readonly 与生成物一致。</para>
 /// </summary>
 [AttributeUsage(AttributeTargets.Struct)]
-public sealed class GenerateIdAttribute(Type idType) : Attribute
+public sealed class GenerateIdAttribute : Attribute
 {
+    // v54 P3：null 守卫（对齐同文件 BoundedContext/DomainCapability 守卫族——原 primary ctor
+    // 无守卫，[GenerateId((Type?)null)] 编译合法；编译期另有 PALID005 诊断兜底，此处提前拦）
+    public GenerateIdAttribute(Type idType)
+    {
+        ArgumentNullException.ThrowIfNull(idType);
+        IdType = idType;
+    }
+
     /// <summary>原始键类型，如 typeof(Guid)、typeof(int)、typeof(string)</summary>
-    public Type IdType { get; } = idType;
+    public Type IdType { get; }
 }
 
 /// <summary>标记智能枚举生成目标 —— 源码生成器据此生成 Enum 注册代码</summary>
@@ -51,6 +59,9 @@ public sealed class GenerateMessageAttribute : Attribute
     public string? Name { get; init; }
 
     /// <summary>线缆协议版本号，默认为 1 —— 用于消息格式演化管理</summary>
+    /// <remarks>v54 P3 契约声明：编译期不校验下限——<c>SchemaVersion=0</c> 编译合法但会被
+    /// 运行期 <c>MessageDescriptor.Create</c>/<c>MessageCatalog.Find</c> 的 <c>&gt;=1</c>
+    /// 校验拦截（ThrowIfLessThan）；探测下限请依赖运行期异常而非编译期诊断。</remarks>
     public int SchemaVersion { get; init; } = 1;
 }
 

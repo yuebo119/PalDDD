@@ -264,7 +264,14 @@ public static class ServiceRegistration
                 if (existing.HandlerType != typeof(THandler))
                     throw new InvalidOperationException(
                         $"Duplicate handler for {typeof(TCommand).Name}: {existing.HandlerType.Name} and {typeof(THandler).Name}. A request type must have exactly one handler.");
-                return services; // 同一 Handler 重复注册——幂等跳过
+                // v54 P2：ResponseType 纵深防御校验——"同 Handler 跨 command/query 角色"场景
+                // 经编译实证不可构造（两个 HandleAsync(TRequest, CT) 签名冲突 CS0111 + DIM 桥接
+                // IHandler 无最具体实现 CS8705），本校验防御接口未来演化（如 DIM 形态变化
+                // 解除签名冲突）时静默吞注册的回归；当前不可达，代价一次类型比较
+                if (existing.ResponseType != typeof(TResponse))
+                    throw new InvalidOperationException(
+                        $"Handler {typeof(THandler).Name} is already registered for {typeof(TCommand).Name} with response {existing.ResponseType.Name}; cannot re-register with response {typeof(TResponse).Name} (command/query role conflict).");
+                return services; // 同一 Handler 同角色重复注册——幂等跳过
             }
         }
 
@@ -313,7 +320,11 @@ public static class ServiceRegistration
                     throw new InvalidOperationException(
                         // v53 P3：中性措辞——同一类型同时实现 ICommand 与 IQuery 时，先注册的命令 Handler 被误标为 query handler
                         $"Duplicate handler for {typeof(TQuery).Name}: {existing.HandlerType.Name} and {typeof(THandler).Name}. A request type must have exactly one handler.");
-                return services; // 同一 Handler 重复注册——幂等跳过
+                // v54 P2：ResponseType 纵深防御校验（对称 command 侧，场景实证见 command 侧注释）
+                if (existing.ResponseType != typeof(TResponse))
+                    throw new InvalidOperationException(
+                        $"Handler {typeof(THandler).Name} is already registered for {typeof(TQuery).Name} with response {existing.ResponseType.Name}; cannot re-register with response {typeof(TResponse).Name} (command/query role conflict).");
+                return services; // 同一 Handler 同角色重复注册——幂等跳过
             }
         }
 

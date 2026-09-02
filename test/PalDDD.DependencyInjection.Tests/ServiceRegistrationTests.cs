@@ -408,6 +408,7 @@ public sealed class ServiceRegistrationTests
 
     private sealed class TestCommand : ICommand<string>;
 
+
     private sealed class OtherTestCommandHandler : ICommandHandler<TestCommand, string>
     {
         public ValueTask<string> HandleAsync(TestCommand command, CancellationToken ct)

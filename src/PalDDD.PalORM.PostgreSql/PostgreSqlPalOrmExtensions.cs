@@ -71,7 +71,9 @@ public static class PostgreSqlPalOrmExtensions
             }
             catch
             {
-                session.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                // v54 P3：dispose 失败不得掩盖原始异常（回调异常才是根因）——
+                // DisposeQuietly 吞掉 dispose 次要异常保根因上抛
+                DisposeQuietly(session);
                 throw;
             }
         });
@@ -135,4 +137,16 @@ public static class PostgreSqlPalOrmExtensions
 
         return services;
     }
+    /// <summary>
+    /// 释放会话且吞掉 dispose 次要异常——工厂回调抛异常的清理路径中，dispose 失败
+    /// 不得掩盖根因异常（v54 P3）。
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types",
+        Justification = "dispose 次要异常被有意吞掉以保住工厂回调的原始异常上抛——根因优先")]
+    private static void DisposeQuietly(DataSession<PostgreSqlProvider> session)
+    {
+        try { session.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        catch { /* 保原始异常 */ }
+    }
+
 }

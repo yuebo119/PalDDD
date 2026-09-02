@@ -32,6 +32,33 @@ public sealed class IdempotencyRecord
         UpdatedAt = updatedAt;
     }
 
+    // v54 P2：持久层物化构造（internal）——PalORM 手动 reader 物化需携带 DB 真值 Revision
+    //（public ctor 恒 0 仅供新建记录；CAS 基准若用 0 对已换代记录恒失配）。经
+    // InternalsVisibleTo 供 PalDDD.PalORM 消费，不进公共 API 面。
+    internal IdempotencyRecord(
+        string operationName,
+        string key,
+        IdempotencyRecordStatus status,
+        DateTimeOffset lockedUntil,
+        DateTimeOffset expiresAt,
+        DateTimeOffset updatedAt,
+        long revision)
+        : this(operationName, key, status, lockedUntil, expiresAt, updatedAt)
+    {
+        Revision = revision;
+    }
+
+    /// <summary>
+    /// 回放恢复（internal，v54 P2）——从持久层重建终态字段而<b>不递增</b> <see cref="Revision"/>。
+    /// 领域 <c>Mark*</c> 是状态转移语义必递增；持久层回放是"恢复原状"，CAS 基准必须保持 DB 原值
+    ///（此前 GetAsync 回放借用 Mark* 使内存 Revision 偏移 +1，后续 CAS 恒失配）。
+    /// </summary>
+    internal void RestoreTerminalState(ReadOnlyMemory<byte>? responsePayload, string? error)
+    {
+        ResponsePayload = responsePayload?.ToArray();
+        Error = error;
+    }
+
     public string OperationName { get; }
 
     public string Key { get; }

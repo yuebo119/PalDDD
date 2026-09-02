@@ -26,6 +26,7 @@
 ````csharp
 using PalDDD.Core;
 using PalDDD.CQRS;
+using Microsoft.EntityFrameworkCore; // 输出格式的 ToListAsync 扩展（v54 补）
 
 namespace YourDomain.Queries;
 
@@ -62,12 +63,13 @@ public sealed class GetActiveOrdersHandler(
 
 ## 示例（来自 samples/PalDDD.ECommerce）
 ```csharp
-sealed record GetOrderQry(OrderId OrderId) : IQuery<OrderDto?>;
-sealed record OrderDto(string Id, string Customer, string Status, decimal Amount, int Items);
+// v54 勘正：示例段 DTO 改名 OrderSummary——原与输出格式段 OrderDto 同名异形（字段序不同）易混淆
+sealed record GetOrderQry(OrderId OrderId) : IQuery<OrderSummary?>;
+sealed record OrderSummary(string Id, string Customer, string Status, decimal Amount, int Items);
 
-sealed class GetOrderHandler(OrderRepo r) : IQueryHandler<GetOrderQry, OrderDto?>
+sealed class GetOrderHandler(OrderRepo r) : IQueryHandler<GetOrderQry, OrderSummary?>
 {
-    public ValueTask<OrderDto?> HandleAsync(GetOrderQry q, CancellationToken _)
+    public ValueTask<OrderSummary?> HandleAsync(GetOrderQry q, CancellationToken _)
     {
         var o = r.Get(q.OrderId);
         return o is null
