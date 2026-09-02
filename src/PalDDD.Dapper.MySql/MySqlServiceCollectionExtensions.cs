@@ -55,8 +55,13 @@ public static class MySqlServiceCollectionExtensions
         // 空白串原样放行会延迟到 MySqlDataSourceBuilder.Build()/建连时才抛 provider 专属异常
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         // v44 P3：单主机入口内嵌端口检测接线（v43 四入口收口的姊妹补齐——
-        // "Server=db1:3306" 同样原样传 DNS 必炸，fail-fast 对齐多主机入口口径）
-        MySqlMultiHost.EnsureNoEmbeddedPort(connectionString, "connectionString");
+        // "Server=db1:3306" 同样原样传 DNS 必炸，fail-fast 对齐多主机入口口径）。
+        // v45 P2 勘正：helper 参数契约是 Server 属性值（逗号分隔主机列表），不能传
+        // 完整连接串——整串成一段后"唯一冒号+数字后缀"判定会被 Password 等值内的
+        // 冒号+数字（合法语法）击穿（合法串误拦）或核心场景漏报（探针实证双向失守）。
+        // 先经 builder 解析取 Server 属性值再检测（对齐姊妹四入口的 builder 前置形态）
+        MySqlMultiHost.EnsureNoEmbeddedPort(
+            new MySqlConnectionStringBuilder(connectionString).Server, "Server");
 
         // P2 修复（二十一轮）：SET SESSION 传导前提——MySqlConnector 默认 ResetConnections=true，
         // 从池中取出的连接会话已被重置（CHARACTER_SET_RESULTS / SQL_MODE 等恢复服务端默认），
@@ -66,7 +71,7 @@ public static class MySqlServiceCollectionExtensions
         if (applyOptimization)
             connectionString = new MySqlConnectionStringBuilder(connectionString)
             {
-                ConnectionReset = false  // P2 修正（二十一轮主线程）：builder 属性真名是 ConnectionReset（连接串键 "Reset Connections" 的 C# 映射）
+                ConnectionReset = false  // P2 修正（二十一轮主线程）：builder 属性真名是 ConnectionReset（连接串键为 "Connection Reset"；v45 探针实证 "Reset Connections" 键在 2.6.2 不被支持，勿按旧注释手写）
                 // P3 声明（二十三轮验证轮）：① 显式 applyOptimization=true 时覆盖用户连接串中的
                 // 显式 Reset Connections 设置（强意图优先）；② ApplySessionOptimization 失败被吞时
                 // 连接串已带 ConnectionReset=false——"优化未打上、泄漏代价照付"的次序权衡已接受
