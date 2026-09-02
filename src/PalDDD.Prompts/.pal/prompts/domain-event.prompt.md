@@ -59,6 +59,9 @@ public sealed record OrderSubmittedV2(
 
 ## 示例（来自 samples/PalDDD.ECommerce）
 ```csharp
+// ⚠️ samples 未挂 PalDDD.Analyzers——本段手写 IDomainEvent.EventName 形态在挂了
+// analyzer 的生产项目会触发 PDDD005 Error（必须 [GenerateMessage]）；生产事件请用
+// 上方输出格式段的 [GenerateMessage] 形态（源生成 EventName，免手写）
 sealed class ItemAdded : DomainEvent, IDomainEvent
 {
     public Guid OrderId { get; init; }

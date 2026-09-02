@@ -59,9 +59,10 @@ public sealed class GenerateMessageAttribute : Attribute
     public string? Name { get; init; }
 
     /// <summary>线缆协议版本号，默认为 1 —— 用于消息格式演化管理</summary>
-    /// <remarks>v54 P3 契约声明：编译期不校验下限——<c>SchemaVersion=0</c> 编译合法但会被
-    /// 运行期 <c>MessageDescriptor.Create</c>/<c>MessageCatalog.Find</c> 的 <c>&gt;=1</c>
-    /// 校验拦截（ThrowIfLessThan）；探测下限请依赖运行期异常而非编译期诊断。</remarks>
+    /// <remarks>v55 勘正（v54 声明失实）：分两层——领域事件宿主上 <c>SchemaVersion=0</c>
+    /// 由编译期 PDDD011（Error 级）拦截；非事件宿主（AttributeTargets 未限）编译合法，
+    /// 由运行期 <c>MessageDescriptor.Create</c>/<c>MessageCatalog.Find</c> 的
+    /// <c>&gt;=1</c> 校验拦截（ThrowIfLessThan）。</remarks>
     public int SchemaVersion { get; init; } = 1;
 }
 

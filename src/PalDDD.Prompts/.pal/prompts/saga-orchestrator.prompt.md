@@ -6,7 +6,6 @@
 ## 框架约束（编译期强制执行）
 | 规则 | 说明 |
 |------|------|
-| PDDD001 | Saga 状态模型必须标注 `[BoundedContext]` |
 | PDDD003 | ProcessManager 必须 `sealed` + `[BoundedContext]` + 实现 `IEventHandler<TEvent>` |
 | PDDD006 | ProcessManager 名称必须是 kebab-case |
 | PDDD014 | PM 名称必须以 `{boundedContext}.` 为前缀 |

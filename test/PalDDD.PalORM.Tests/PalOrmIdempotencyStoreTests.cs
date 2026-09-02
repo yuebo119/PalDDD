@@ -75,6 +75,38 @@ public class PalOrmIdempotencyStoreTests
         var reclaimed = await store.TryStartAsync("op-1", "key-1", later, IdempotencyPolicy.Default, default);
         await Assert.That(reclaimed).IsNotNull();
         await Assert.That(reclaimed!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+
+        // v55（C-P3-1）：过期回收路径的 Mark 端到端链——UPDATE 换代 + 回读 revision 是 v54 新代码，
+        // 此前只断言到 TryStart 返回；回读错误（偏移/0）会使 Mark* CAS 恒 0 行潜伏
+        await store.MarkCompletedAsync(reclaimed!, System.Text.Encoding.UTF8.GetBytes("{\"r\":2}"), later.AddSeconds(1), default);
+        var reloaded = await store.GetAsync("op-1", "key-1", later.AddSeconds(2), default);
+        await Assert.That(reloaded).IsNotNull();
+        await Assert.That(reloaded!.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
+        await Assert.That(reloaded.ResponsePayload?.ToArray()).IsEquivalentTo(System.Text.Encoding.UTF8.GetBytes("{\"r\":2}"));
+    }
+
+    [Test]
+    public async Task TryStartAsync_ConcurrentSameTickReclaim_SingleWinnerPerRevision()
+    {
+        // v55（C-P3-2）：v53→v54 换代核心动机的回归网——同刻双 worker 并发回收同一过期租约，
+        // revision 单调令牌保证恰好一个成功（时间戳令牌同刻双命中的窗口已关闭）
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteIdempotencyStore(session);
+        var now = DateTimeOffset.UtcNow;
+
+        // 建立一个已过期租约的 Failed 记录（两 worker 同 tick 抢回收）
+        var shortPolicy = new IdempotencyPolicy { ProcessingTimeout = TimeSpan.FromSeconds(1), Retention = TimeSpan.FromSeconds(1) };
+        var first = await store.TryStartAsync("op-cc", "key-cc", now, shortPolicy, default);
+        await Assert.That(first).IsNotNull();
+        await store.MarkFailedAsync(first!, "boom", now.AddMilliseconds(500), default);
+
+        var later = now + TimeSpan.FromSeconds(30);
+        // SQLite 单写者串行化下两连发即同刻并发等价（无微秒级交错窗口）
+        var w1 = await store.TryStartAsync("op-cc", "key-cc", later, IdempotencyPolicy.Default, default);
+        var w2 = await store.TryStartAsync("op-cc", "key-cc", later, IdempotencyPolicy.Default, default);
+        // w1 拿到 Processing 活跃租约；w2 必然被 LockedUntil > now 拦（或 CAS 失败）→ null
+        await Assert.That(w1).IsNotNull();
+        await Assert.That(w2).IsNull();
     }
 
     [Test]

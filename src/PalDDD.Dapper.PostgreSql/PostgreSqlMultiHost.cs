@@ -116,6 +116,11 @@ public static class PostgreSqlMultiHost
                 var (host, port) = NormalizeHostEntry(raw, primaryBuilder.Port);
                 // v54 P3（B-P3-2）：primary 裸 IPv6 拦截——对齐 standby 侧 EncodeHostEntry 形态③
                 //（primary 原样拼接进 Host 列表，Npgsql host:port 语法下多冒号条目是歧义形态）
+                // v55 P3（B-P3-3 半边）：'[' 未闭合畸形（如 "[::1"）——归一化保留原串致 IPv6
+                // 拦截被 StartsWith('[') 豁免、延迟到 Npgsql 运行期；对齐 standby 形态② fail-fast
+                if (host.StartsWith('[') && !host.Contains(']'))
+                    throw new ArgumentException(
+                        $"primary Host 条目 '{host}' 方括号未闭合——请改用 '[host]' 或 '[host]:port' 语法。");
                 if (host.Count(c => c == ':') > 1 && !host.StartsWith('['))
                     throw new ArgumentException(
                         $"primary Host 条目 '{host}' 是裸 IPv6——未加方括号的多冒号条目在 Npgsql 多主机 Host 列表中歧义。请改用 '[host]' 或 '[host]:port' 语法。");
@@ -240,9 +245,12 @@ public static class PostgreSqlMultiHost
         {
             var (primaryEntryHost, primaryEntryPort) = NormalizeHostEntry(raw, primaryCsBuilder.Port);
             // v54 P3（B-P3-2）：primary 裸 IPv6 拦截（同 Failover 口径）
+            if (primaryEntryHost.StartsWith('[') && !primaryEntryHost.Contains(']'))
+                throw new ArgumentException(
+                    $"primary Host 条目 '{primaryEntryHost}' 方括号未闭合——请改用 '[host]' 或 '[host]:port' 语法。");
             if (primaryEntryHost.Count(c => c == ':') > 1 && !primaryEntryHost.StartsWith('['))
                 throw new ArgumentException(
-                    $"primary Host 条目 '{primaryEntryHost}' 是裸 IPv6——请改用 '[host]' 或 '[host]:port' 语法。");
+                    $"primary Host 条目 '{primaryEntryHost}' 是裸 IPv6——未加方括号的多冒号条目在 Npgsql 多主机 Host 列表中歧义。请改用 '[host]' 或 '[host]:port' 语法。");
             // v53 P2：空条目 fail-fast（镜像 MySQL v49 姊妹）——列表空段是死节点
             if (primaryEntryHost.Length == 0)
                 throw new ArgumentException(
@@ -340,11 +348,13 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
     /// Host 列表内重复条目 fail-fast（v54 P3：单主机入口姊妹）——
     /// 归一化经 NormalizeHostEntries（内嵌端口拆分口径），"pg1:5433,pg1:5434" 不算重复。
     /// </summary>
-    internal static void EnsureNoDuplicateHost(string? hostList, string parameterName)
+    internal static void EnsureNoDuplicateHost(string? hostList, int fallbackPort, string parameterName)
     {
         if (string.IsNullOrWhiteSpace(hostList)) return;
         var seen = new HashSet<(string Host, int Port)>();
-        foreach (var (host, port) in NormalizeHostEntries(hostList, 5432))
+        // v55 P2：fallbackPort 由调用方传入（原硬编码 5432——共享 Port≠5432 时
+        // "Host=pg1,pg1:5432;Port=5433" 裸名继承 5433 与显式 5432 归一后碰撞误拦）
+        foreach (var (host, port) in NormalizeHostEntries(hostList, fallbackPort))
         {
             if (host.Length == 0) continue;
             if (!seen.Add((host.ToUpperInvariant(), port)))
@@ -479,8 +489,8 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
                 {
                     // 形态②（v44 归并）：方括号+内嵌端口自洽放行；'[' 开头无 ']' 的畸形条目
                     //（v44 P3：前两分支布尔穷尽后本分支唯一可达输入）fail-fast 对齐形态③
-                    // v54 P3：消息勘正——本分支可达输入含两类（'[' 无 ']' 与 ']:' 后非数字后缀），
-                    // 原消息断言"未闭合"对已闭合条目失实
+                    // v55 勘正（v54 声明不全）：可达输入三类——'[' 无 ']'、']:' 后非数字后缀、
+                    // ']' 后无冒号直连垃圾（如 "[::1]abc"）；v44 "唯一可达输入"旧断言已废
                     throw new ArgumentException(
                         $"IPv6 主机条目 '{bareHost}' 畸形（方括号未闭合或 ']' 后非数字端口后缀）——请改用 '[host]' 或 '[host]:port' 语法。");
                 }

@@ -18,7 +18,7 @@
 - 强类型 ID 通过 `[GenerateId(typeof(Guid))] partial record struct XxxId` 声明（源码生成器自动生成 `IPalIdentity<T>`、`JsonConverter`、`TypeConverter`）
 - 领域事件通过 `RaiseEvent()` 添加到内部单链表（O(1) 追加，零堆分配）
 - `[BoundedContext("ordering")]` 标注限界上下文
-- `[AggregateName("Order")]` 标注聚合根的业务名称
+- ~~[AggregateName]~~ 已废弃（v3.0 移除，框架零消费）——不再标注
 
 ## 禁止
 - ❌ 不使用 `IRepository<T>` — `DbContext` 就是 UoW+Repository
@@ -37,7 +37,6 @@ namespace YourDomain;
 public readonly partial record struct OrderId;
 
 [BoundedContext("ordering")]
-[AggregateName("Order")]
 public sealed class Order : AggregateRoot<OrderId>
 {
     // 属性 — { get; private set; } 封装
@@ -62,19 +61,20 @@ public sealed class Order : AggregateRoot<OrderId>
 
 ## 示例（来自 samples/PalDDD.ECommerce）
 ```csharp
-[AggregateName("Order")]
 sealed class Order : AggregateRoot<OrderId>
 {
     public string CustomerName { get; private set; }
     public Money TotalAmount { get; private set; } = Money.CNY(0);
     public string Status { get; private set; } = "pending";
-    public List<OrderItem> Items { get; } = [];
+    // SMP-102：私有字段 + 只读视图——public List 可被外部绕过聚合直接 Add/Remove 破坏不变量
+    private readonly List<OrderItem> _items = [];
+    public IReadOnlyList<OrderItem> Items => _items;
 
     public Order(OrderId id, string cn) : base(id) => CustomerName = cn;
 
     public void AddItem(string name, int qty, Money price)
     {
-        Items.Add(new OrderItem { Name = name, Qty = qty, Price = price });
+        _items.Add(new OrderItem { Name = name, Qty = qty, Price = price });
         TotalAmount = Money.CNY(TotalAmount.Amount + price.Amount * qty);
         RaiseEvent(new ItemAdded { OrderId = Id.Value, Name = name, Qty = qty, Price = price });
     }
