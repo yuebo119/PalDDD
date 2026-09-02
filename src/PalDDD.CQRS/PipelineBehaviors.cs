@@ -54,9 +54,12 @@ internal sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavio
             var result = validator.Validate(request);
             if (!result.IsValid)
             {
-                // 三十八轮 P2 修复：用户验证器 return default 时 Errors 为 default(ImmutableArray)，
-                // AddRange 直接 NRE 且发生在验证失败路径上（同形态 PalValidationException.CreateMessage
-                // 已用 IsDefaultOrEmpty 防御，此处对齐）
+                // 三十八轮 P2 修复（v48 P3 勘正）：原表述"用户验证器 return default 时 Errors 为
+                // default(ImmutableArray)，AddRange 直接 NRE"已失实——v47 PalValidationResult.Errors
+                // getter 归一（IPalValidator.cs：_errors 为 default 时返回 Empty）后 IsDefault
+                // 分支不可达，NRE 触发条件不复存在。IsDefaultOrEmpty 防御存续的真实理由仅剩
+                // IsEmpty 分支：归一后的空 Errors 若直接 AddRange 会静默吞掉 IsValid=false 的
+                // 失败事实（next 照常执行，验证拦截被绕过），构造占位错误条目保留失败并给出来源诊断
                 // v25 P2-2 语义修正：IsValid=false 是验证器明确表达的失败判定——default/空 Errors
                 // 时 continue 会吞掉失败事实静默放行（default 验证器 = IsValid false + Errors
                 // default，验证拦截被绕过，next 直接执行）；构造占位错误条目 fail-fast

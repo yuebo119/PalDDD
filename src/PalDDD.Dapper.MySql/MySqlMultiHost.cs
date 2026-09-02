@@ -207,6 +207,21 @@ public static class MySqlMultiHost
         //（节点永不可连，轮询/均衡静默失败延迟到建连且无诊断）；对齐 Failover 入口在
         // 共享 Port 语义生效前拦截
         EnsureNoEmbeddedPort(builder.Server, "Server");
+        // v48 P2：Server 列表内部查重——原两入口零查重，"Server=db1,db1" 静默 Build 出
+        // 同机双份条目（RoundRobin 把同一实例视作两个节点轮询，同机双份权重倾斜）。镜像
+        // Failover 入口 standby 循环的 seenServers HashSet 形态（v29 S4）：
+        // NormalizeServerEntries 展开 + ToUpperInvariant 归一，Add 失败即抛（前置于
+        // Build，fail-fast；消息对齐 Failover primary 查重文案）
+        var seenServers = new HashSet<(string Server, int Port)>();
+        foreach (var (server, port) in NormalizeServerEntries(builder.Server, (int)builder.Port))
+        {
+            if (server.Length == 0) continue;
+            if (!seenServers.Add((server.ToUpperInvariant(), port)))
+                throw new ArgumentException(
+                    $"Server 列表存在重复条目 '{server}:{port}'："
+                    + "多主机列表将产生重复 Server 条目（如 \"db1,db1\"），RoundRobin 把同一实例视作两个节点轮询"
+                    + "（同机双份权重倾斜），负载均衡语义错乱。请去重 Server 主机列表。");
+        }
         // v27 P3（B 片 N9）：Pooling 条件化（对照 W2 MaxAutoPrepare 条件化模式——仅未显式
         // 设置时赋默认）——原无条件 Pooling = true 覆盖用户显式的 "Pooling=false"（调试/
         // 排障禁用连接池被静默重启）。MySqlConnector 默认 Pooling=true，未显式设置时本就
@@ -248,6 +263,19 @@ public static class MySqlMultiHost
             throw new ArgumentException("Server is required.", nameof(connectionString));
         // v43 P2 收口：内嵌端口检测接线——原入口零检测，同 LoadBalance 入口口径
         EnsureNoEmbeddedPort(builder.Server, "Server");
+        // v48 P2：Server 列表内部查重（同 LoadBalance 入口口径，镜像 Failover 入口
+        // seenServers HashSet 形态）——"Server=db1,db1" 静默 Build 出同机双份条目，
+        // LeastConnections 把同一实例视作两个独立节点（同机双池，连接数统计被拆分、均衡失真）
+        var seenServers = new HashSet<(string Server, int Port)>();
+        foreach (var (server, port) in NormalizeServerEntries(builder.Server, (int)builder.Port))
+        {
+            if (server.Length == 0) continue;
+            if (!seenServers.Add((server.ToUpperInvariant(), port)))
+                throw new ArgumentException(
+                    $"Server 列表存在重复条目 '{server}:{port}'："
+                    + "多主机列表将产生重复 Server 条目（如 \"db1,db1\"），LeastConnections 把同一实例视作两个独立节点"
+                    + "（同机双池、连接数统计被拆分），负载均衡语义错乱。请去重 Server 主机列表。");
+        }
         // v27 P3（B 片 N9）：同 LoadBalance 入口——Pooling 条件化，不覆盖显式 "Pooling=false"
         if (!builder.TryGetValue("Pooling", out _))
             builder.Pooling = true;
@@ -293,9 +321,9 @@ public static class MySqlMultiHost
     /// <summary>
     /// v29 P3（S4）：多主机列表归一化（复数版）——按顶层逗号拆分后逐条调
     /// <see cref="NormalizeServerEntry"/>（镜像 PG 侧 NormalizeHostEntries v28 形态）。
-    /// 单值版把 "sb1,sb2" 整串当一个主机名归一化，与任何单条目恒不等——多主机 standby
-    /// 条目参与查重（Failover standby 侧的 seenServers 收集）必须经本复数版展开，否则
-    /// 跨串/内部重复条目漏检、拼接产生双份主机。
+    /// 单值版把 "sb1,sb2" 整串当一个主机名归一化，与任何单条目恒不等——多主机条目
+    /// 参与查重（Failover standby 侧与 v48 后 LoadBalance/LeastConnections 入口的
+    /// seenServers 收集）必须经本复数版展开，否则跨串/内部重复条目漏检、拼接产生双份主机。
     /// </summary>
     /// <param name="rawServer">原始 Server（可为逗号分隔多主机列表，逐项 Trim；空项原样保留由调用方跳过）。</param>
     /// <param name="fallbackPort">未内嵌端口条目的回退端口（共享 Port）。</param>

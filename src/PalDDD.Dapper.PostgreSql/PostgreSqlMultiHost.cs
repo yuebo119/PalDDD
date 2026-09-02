@@ -220,7 +220,14 @@ public static class PostgreSqlMultiHost
         {
             var (primaryEntryHost, primaryEntryPort) = NormalizeHostEntry(raw, primaryCsBuilder.Port);
             if (primaryEntryHost.Length == 0) continue;
-            seenHosts.Add((primaryEntryHost.ToUpperInvariant(), primaryEntryPort));
+            // v48 P2：primary 内部重复也抛（对齐 standby 侧"Add 失败即抛"——v47 MySQL
+            // 侧同款勘正的 PG 姊妹；v29 注释声称"primary 条目 + standby 展开条目全部进
+            // 集合，Add 失败即抛"但 primary 侧 Add 返回值被忽略，"pg1,pg1" 静默通过）
+            if (!seenHosts.Add((primaryEntryHost.ToUpperInvariant(), primaryEntryPort)))
+                throw new ArgumentException(
+                    $"primary Host 列表存在重复条目 '{primaryEntryHost}:{primaryEntryPort}'："
+                    + "多主机拼接将产生重复 Host 条目（如 \"pg1,pg1\"），驱动视为主备两份，故障转移语义错乱。"
+                    + "请去重 primary 主机列表。");
         }
         foreach (var cs in replicaConnectionStrings)
         {
