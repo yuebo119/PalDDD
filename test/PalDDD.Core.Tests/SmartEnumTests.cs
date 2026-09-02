@@ -79,6 +79,55 @@ public sealed class SmartEnumTests
         await Assert.That(OrderStatus.Pending == null).IsFalse();
     }
 
+    /// <summary>
+    /// v48 P3：v47 运算符双向对称化核心场景 — 基类变量在左 × 派生在右的混合比较。
+    /// v41 形态下（第二参数 TSelf?）左基类右派生绑值相等运算符、反向回退 object== 引用相等，
+    /// 同一对操作数交换后结果分叉；v47 双参数放宽为 SmartEnum&lt;TSelf,TValue&gt;? 后双向
+    /// 均绑同一运算符（值相等语义对称）。
+    /// </summary>
+    [Test]
+    public async Task EqualityOperator_MixedBaseAndDerived_Bidirectional()
+    {
+        SmartEnum<OrderStatus, string> baseLeft = OrderStatus.Pending;
+        var derived = OrderStatus.FromValue("pending");
+
+        await Assert.That(baseLeft == derived).IsTrue();
+        await Assert.That(derived == baseLeft).IsTrue();
+    }
+
+    /// <summary>v48 P3：null == null → true、null != null → false（对称化后的空值语义）</summary>
+    [Test]
+    public async Task EqualityOperator_NullEqualsNull_ReturnsTrue()
+    {
+        SmartEnum<OrderStatus, string>? left = null;
+        SmartEnum<OrderStatus, string>? right = null;
+
+        await Assert.That(left == right).IsTrue();
+        await Assert.That(left != right).IsFalse();
+    }
+
+    /// <summary>
+    /// v48 P3：v47 勘正核心场景 — 同封闭基类（SmartEnum&lt;ColorFamily,string&gt;）下
+    /// 基类型与兄弟派生类型实例的比较。v41 的 Equals(TSelf) is TSelf 收窄使
+    /// "派生在左（值等 true）/ 基类在左（引用不等 false）"交换分叉；v47 运算符体绑定
+    /// Equals(object) 语义（值相等 + 类型兼容判定）后双向对称。
+    /// </summary>
+    [Test]
+    public async Task EqualityOperator_SiblingDerivedTypes_Bidirectional()
+    {
+        var baseType = ColorFamily.Red;
+        var sibling = TintedColor.Crimson;
+
+        // 不同值：双向 != 均为 true（对称）
+        await Assert.That(baseType != sibling).IsTrue();
+        await Assert.That(sibling != baseType).IsTrue();
+
+        // 同值跨派生类型：双向 == 均为 true（值相等，运行时类型可赋给封闭基类的 TSelf）
+        var tintedRed = new TintedColor("red", "红-染色");
+        await Assert.That(ColorFamily.Red == tintedRed).IsTrue();
+        await Assert.That(tintedRed == ColorFamily.Red).IsTrue();
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // 并发读取测试 — 初始化后 FrozenDictionary 读操作线程安全
     // ═══════════════════════════════════════════════════════════════
@@ -202,5 +251,32 @@ public sealed class NumericSmartEnumTests
     {
         await Assert.That(NumericSmartEnum.FromValue(1).Name).IsEqualTo("低");
         await Assert.That(NumericSmartEnum.FromValue(10).Name).IsEqualTo("高");
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v48 P3：v47 运算符对称化兄弟类测试辅助 — 同封闭基类不同派生类型
+// （ColorFamily 与 TintedColor 共享封闭基类 SmartEnum<ColorFamily,string>）。
+// 不走 [GenerateEnum]：== / != 比较仅消费 Value 属性，不依赖字典注册；
+// 构造即用，镜像 DuplicateRegSmartEnum 的显式控制注册形态。
+// ═══════════════════════════════════════════════════════════════
+
+/// <summary>测试用非封闭 SmartEnum — 供兄弟派生类型继承，形成同封闭基类两派生类型场景</summary>
+public class ColorFamily : SmartEnum<ColorFamily, string>
+{
+    public static readonly ColorFamily Red = new("red", "红");
+
+    protected ColorFamily(string value, string? name = null) : base(value, name)
+    {
+    }
+}
+
+/// <summary>测试用兄弟派生类型 — 与 ColorFamily 同封闭基类、不同运行时类型（v47 勘正场景）</summary>
+public sealed class TintedColor : ColorFamily
+{
+    public static readonly TintedColor Crimson = new("crimson", "深红");
+
+    public TintedColor(string value, string? name = null) : base(value, name)
+    {
     }
 }
