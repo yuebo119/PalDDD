@@ -60,8 +60,11 @@ public static class MySqlServiceCollectionExtensions
         // 完整连接串——整串成一段后"唯一冒号+数字后缀"判定会被 Password 等值内的
         // 冒号+数字（合法语法）击穿（合法串误拦）或核心场景漏报（探针实证双向失守）。
         // 先经 builder 解析取 Server 属性值再检测（对齐姊妹四入口的 builder 前置形态）
-        MySqlMultiHost.EnsureNoEmbeddedPort(
-            new MySqlConnectionStringBuilder(connectionString).Server, "Server");
+        var serverAttr = new MySqlConnectionStringBuilder(connectionString).Server;
+        MySqlMultiHost.EnsureNoEmbeddedPort(serverAttr, "Server");
+        // v50 P2（F4 第五姊妹）：单主机入口补列表内查重——"Server=db1,db1" 重复条目
+        // 与多主机入口同危害（重复节点轮试/权重倾斜）
+        MySqlMultiHost.EnsureNoDuplicateServer(serverAttr, "Server");
 
         // P2 修复（二十一轮）：SET SESSION 传导前提——MySqlConnector 默认 ResetConnections=true，
         // 从池中取出的连接会话已被重置（CHARACTER_SET_RESULTS / SQL_MODE 等恢复服务端默认），
