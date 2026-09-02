@@ -362,24 +362,35 @@ public static class MySqlMultiHost
     }
 
     /// <summary>
-    /// v43 P2（收口）：Server 内嵌端口 fail-fast 共享 helper——遍历逗号分隔条目，对
-    /// "单冒号+数字后缀"（host:port 内嵌语法）条目抛 <see cref="ArgumentException"/>，
-    /// 消息含命中的条目与 MySqlConnector 2.6.2 不支持说明。
-    /// <para>
-    /// v41 P2 勘正口径：MySqlConnector 2.6.2 运行时建连不支持内嵌端口——主机名原样传
-    /// DNS 解析，含冒号条目是非法主机名，该节点永不可连。判定收窄为"唯一冒号且后缀可
-    /// 解析为整数"（v42 勘正）：裸 IPv6（"::1"，多冒号）不命中、放行——MySQL 侧唯一可用
-    /// IPv6 形态（IP 字面量可直连 + 共享 Port）；方括号条目（"[::1]"）亦放行。
-    /// <see cref="NormalizeServerEntry"/> 的同规则解析仅服务查重口径，本方法才是入口门禁。
-    /// </para>
-    /// <para>
-    /// 四入口统一接线（v43 P2 收口）：Failover standby/primary（原两处内联循环拷贝）+
-    /// LoadBalance / LeastConnections（原零检测——"Server=db1:3306" 原样放行，节点永不可
-    /// 连且无诊断）。检测前置于共享 Port 语义相关校验，明确错误优先于误导消息。
-    /// </para>
+    /// Server 列表内嵌端口 fail-fast 共享 helper（v43 P2 收口）——遍历逗号分隔条目，
+    /// 对含冒号条目（host:port 内嵌语法/裸 IPv6/方括号等）按子形态分派处置。
     /// </summary>
-    /// <param name="serverList">Server 属性原始值（可为多主机逗号分隔列表，内部逐项 Trim）。</param>
-    /// <param name="parameterName">来源参数名（拼入异常消息，如 "standby Server" / "primary Server" / "Server"）。</param>
+    internal static void EnsureNoEmbeddedPort(string? serverList, string parameterName)
+    {
+        foreach (var raw in (serverList ?? "").Split(','))
+        {
+            var entry = raw.Trim();
+            if (entry.Length == 0) continue;
+            // v50 P2（F3）：方括号形态（"[::1]" / "[::1]:3306"）——MySqlConnector 主机名
+            // 原样传 DNS，方括号同样非法，一并 fail-fast
+            if (entry.StartsWith('['))
+            {
+                throw new ArgumentException(
+                    $"MySQL 不支持 IPv6 方括号主机语法：条目 '{entry}' 的方括号会原样传 DNS 解析失败。"
+                    + "MySQL 侧 IPv6 请使用裸字面量（如 ::1）并统一共享 Port。", parameterName);
+            }
+            // v49 P3：唯一冒号即拦（含 "host:port" / "host:" / ":port" 全形态）——
+            // 含冒号主机名原样传 DNS 均为非法；裸 IPv6（多冒号）不命中照常放行
+            if (entry.Contains(':'))
+            {
+                throw new ArgumentException(
+                    $"{parameterName} 条目 '{entry}' 含冒号——MySqlConnector 不支持含冒号主机名"
+                    + "（原样传 DNS 解析失败，该节点永不可连）。"
+                    + "请移除冒号、统一使用共享 Port 关键字。", parameterName);
+            }
+        }
+    }
+
     /// <summary>
     /// Server 列表内重复条目 fail-fast（v50 P2：单主机入口姊妹接线）——
     /// "Server=db1,db1" 重复条目与多主机入口同危害（重复节点轮试/权重倾斜）。
@@ -395,34 +406,6 @@ public static class MySqlMultiHost
             if (!seen.Add((entry.ToUpperInvariant(), 0)))
                 throw new ArgumentException(
                     $"{parameterName} 列表存在重复条目 '{entry}'：多主机拼接将产生重复节点（轮试/权重倾斜）。请去重。", parameterName);
-        }
-    }
-
-    internal static void EnsureNoEmbeddedPort(string? serverList, string parameterName)
-    {
-        foreach (var raw in (serverList ?? "").Split(','))
-        {
-            var entry = raw.Trim();
-            var colon = entry.LastIndexOf(':');
-            // v50 P2（F3）：方括号带端口形态（"[::1]:3306"）此前因多冒号不命中唯一冒号
-            // 条件而放行——但 MySqlConnector 主机名原样传 DNS，方括号同样非法（与 PG 侧
-            // 方括号语法不同），一并拦截；纯方括号无端口（"[::1]"）同非法一并拦
-            if (entry.StartsWith('['))
-            {
-                throw new ArgumentException(
-                    $"MySQL 不支持 IPv6 方括号主机语法：条目 '{entry}' 的方括号会原样传 DNS 解析失败。"
-                    + "MySQL 侧 IPv6 请使用裸字面量（如 ::1）并统一共享 Port。");
-            }
-            // v49 P3：去掉 TryParse 数字后缀条件——"host:"（空端口）/":port"（空主机名）
-            // 同属含冒号非法 DNS 主机名（节点永不可连），一并 fail-fast；裸 IPv6（多冒号）
-            // 不命中唯一冒号条件照常放行
-            if (colon >= 0 && entry.IndexOf(':') == colon)
-            {
-                throw new ArgumentException(
-                    $"{parameterName} 条目 '{entry}' 含内嵌端口语法（\"host:port\"）——MySqlConnector 2.6.2 不支持该语法"
-                    + "（主机名原样传 DNS 解析，含冒号条目是非法主机名，该节点永不可连）。"
-                    + "请移除内嵌端口、统一使用共享 Port 关键字。");
-            }
         }
     }
 }
