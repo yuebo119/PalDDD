@@ -62,7 +62,12 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
             // 配置了步骤 Timeout 且超期时由 SagaTimeoutProcessor.IsTimedOut 门控补偿；
             // v43 勘正：原声明"未配置 Timeout 则 IsTimedOut 恒 false"在残留时间戳下
             // 不成立（v43 P2 已补已成功完成排除判据）——中断态（未配 Timeout 的
-            // InterruptStep）现在确实不会被已成功步骤的残留时间戳触发兜底补偿
+            // InterruptStep）现在确实不会被已成功步骤的残留时间戳触发兜底补偿。
+            // v44 P3 饿死边界：OrderBy(CreatedAt).Take(batchSize) 固定排序下，无 Timeout
+            // 的滞留 AWD saga 永不离场（非超时分支仅清租约）——积压 ≥ batchSize 时排在
+            // 其后的 saga（含待超时补偿者）每轮取不到名额，超时兜底饿死；生产栈
+            // （EFCore/Dapper/PalORM）NextAttemptAt 过滤不占名额无此问题，本栈定位
+            // 测试/原型，接受该边界不修
             var active = _states.Values
                 .Where(s => (s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision)
                     && (s.LeasedUntil is null || s.LeasedUntil <= now))

@@ -319,7 +319,7 @@ public static class MySqlMultiHost
         {
             var entry = raw.Trim();
             var colon = entry.LastIndexOf(':');
-            if (colon > 0 && entry.IndexOf(':') == colon
+            if (colon >= 0 && entry.IndexOf(':') == colon  // v46：口径对齐 NormalizeServerEntry（colon>=0）——":port"（空主机名）同为非法形态 fail-fast
                 && int.TryParse(entry.AsSpan(colon + 1), out _))
             {
                 throw new ArgumentException(
