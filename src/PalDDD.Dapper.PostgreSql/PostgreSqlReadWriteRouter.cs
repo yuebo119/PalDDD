@@ -159,7 +159,11 @@ public static class PostgreSqlReadWriteRouterExtensions
                 {
                     var (primaryEntryHost, primaryEntryPort) = PostgreSqlMultiHost.NormalizeHostEntry(raw, primaryCsBuilder.Port);
                     if (primaryEntryHost.Length == 0) continue;
-                    seenHosts.Add((primaryEntryHost.ToUpperInvariant(), primaryEntryPort));
+                    // v52 P2：primary 内部重复也抛（对齐 MultiHost Failover/standby 侧）
+                    if (!seenHosts.Add((primaryEntryHost.ToUpperInvariant(), primaryEntryPort)))
+                        throw new ArgumentException(
+                            $"primary Host 列表存在重复条目 '{primaryEntryHost}:{primaryEntryPort}'："
+                            + "多主机拼接将产生重复 Host 条目，故障转移语义错乱。请去重 primary 主机列表。");
                 }
                 foreach (var (cs, index) in replicaConnectionStrings.Select((c, i) => (c, i)))
                 {

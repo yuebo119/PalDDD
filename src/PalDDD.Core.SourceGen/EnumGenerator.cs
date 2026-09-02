@@ -283,6 +283,21 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 var containingNames = new List<string>();
                 for (var t = classSymbol.ContainingType; t is not null; t = t.ContainingType)
                 {
+                    // v52 P2：包含类型非 partial 时报诊断——生成 partial 包裹声明与
+                    // 用户非 partial 声明冲突报 CS0260 落 auto-generated 文件
+                    if (!t.IsPartial())
+                    {
+                        return new EnumGenInfo(
+                            Namespace: GetNamespaceName(classSymbol),
+                            TypeName: classSymbol.Name,
+                            ContainingDeclarations: [],
+                            ContainingNames: [],
+                            ValueType: "non-partial containing type",
+                            Fields: [],
+                            HasFields: false,
+                            DiagnosticId: "PALENUM007",
+                            Location: context.TargetNode.GetLocation());
+                    }
                     var kind = t.IsRecord
                         ? (t.TypeKind == TypeKind.Struct ? "partial record struct" : "partial record")
                         : t.TypeKind == TypeKind.Struct ? "partial struct"
@@ -561,5 +576,24 @@ partial class {{info.TypeName}}
                 return hash;
             }
         }
+    }
+}
+
+
+/// <summary>INamedTypeSymbol 扩展（v52 P2：包含类型 partial 性检查共享）。</summary>
+internal static class NamedTypeSymbolExtensions
+{
+    /// <summary>判断命名空间内类型声明是否含 partial 修饰符。</summary>
+    public static bool IsPartial(this INamedTypeSymbol type)
+    {
+        foreach (var reference in type.DeclaringSyntaxReferences)
+        {
+            if (reference.GetSyntax() is Microsoft.CodeAnalysis.CSharp.Syntax.BaseTypeDeclarationSyntax baseDecl
+                && baseDecl.Modifiers.Any(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PartialKeyword))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 }

@@ -243,6 +243,21 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 var containingNames = new List<string>();
                 for (var t = structSymbol.ContainingType; t is not null; t = t.ContainingType)
                 {
+                    // v52 P2：包含类型非 partial 时报诊断——生成 partial 包裹声明与用户
+                    // 非 partial 声明冲突报 CS0260 落 auto-generated 文件无排障指引
+                    if (t.DeclaredAccessibility != Accessibility.NotApplicable
+                        && !t.IsPartial())
+                    {
+                        return new IdGenInfo(
+                            Namespace: null,
+                            TypeName: structSymbol.Name,
+                            ContainingDeclarations: [],
+                            ContainingNames: [],
+                            SourceType: sourceType.ToDisplayString(),
+                            IsNumeric: false,
+                            DiagnosticId: "PALID007",
+                            Location: context.TargetNode.GetLocation());
+                    }
                     var kind = t.IsRecord
                         ? (t.TypeKind == TypeKind.Struct ? "partial record struct" : "partial record")
                         : t.TypeKind == TypeKind.Struct ? "partial struct"

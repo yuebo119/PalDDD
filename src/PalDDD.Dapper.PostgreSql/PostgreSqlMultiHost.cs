@@ -115,7 +115,13 @@ public static class PostgreSqlMultiHost
             {
                 var (host, port) = NormalizeHostEntry(raw, primaryBuilder.Port);
                 if (host.Length == 0) continue;
-                seenHosts.Add((host.ToUpperInvariant(), port));
+                // v52 P2：primary 内部重复也抛（对齐 standby 侧"Add 失败即抛"——
+                // "Host=pg1,pg1" 静默通过使 FailOver 同实例双份轮试）
+                if (!seenHosts.Add((host.ToUpperInvariant(), port)))
+                    throw new ArgumentException(
+                        $"primary Host 列表存在重复条目 '{host}:{port}'："
+                        + "多主机拼接将产生重复 Host 条目（如 \"pg1,pg1\"），驱动视为主备两份，故障转移语义错乱。"
+                        + "请去重 primary 主机列表。");
             }
             foreach (var (standbyNormHost, standbyNormPort) in standbyEntries)
             {
