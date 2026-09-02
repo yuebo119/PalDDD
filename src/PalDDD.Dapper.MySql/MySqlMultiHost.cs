@@ -132,7 +132,10 @@ public static class MySqlMultiHost
         foreach (var raw in primaryBuilder.Server.Split(','))
         {
             var (primaryServer, primaryPort) = NormalizeServerEntry(raw, (int)primaryBuilder.Port);
-            if (primaryServer.Length == 0) continue;
+            if (primaryServer.Length == 0)
+                throw new ArgumentException(
+                    $"primary Server 列表存在空条目（如 \"db1,,db2\"）：空条目并入主机列表后成为参与轮试的死节点，"
+                    + "故障转移静默失败。请清理 Server 列表中的空条目。");
             // v47 P3：primary 内部重复也抛（对齐 standby 侧"Add 失败即抛"——v29 S4 注释
             // 声称"primary 条目 + standby 展开条目全部进集合，Add 失败即抛"，实况 primary
             // 侧 Add 返回值被忽略，"db1,db1" 静默通过）
@@ -144,7 +147,10 @@ public static class MySqlMultiHost
         }
         foreach (var (standbyServer, standbyPort) in NormalizeServerEntries(standbyBuilder.Server, (int)standbyBuilder.Port))
         {
-            if (standbyServer.Length == 0) continue;
+            if (standbyServer.Length == 0)
+                throw new ArgumentException(
+                    $"standby Server 列表存在空条目（如 \"db1,,db2\"）：空条目并入主机列表后成为参与轮试的死节点，"
+                    + "故障转移静默失败。请清理 standby Server 列表中的空条目。");
             if (!seenServers.Add((standbyServer.ToUpperInvariant(), standbyPort)))
                 throw new ArgumentException(
                     $"standby Server '{standbyServer}:{standbyPort}' 与 primary 主机列表或 standby 列表内其他条目重复："
@@ -215,7 +221,10 @@ public static class MySqlMultiHost
         var seenServers = new HashSet<(string Server, int Port)>();
         foreach (var (server, port) in NormalizeServerEntries(builder.Server, (int)builder.Port))
         {
-            if (server.Length == 0) continue;
+            if (server.Length == 0)
+                throw new ArgumentException(
+                    $"Server 列表存在空条目（如 \"db1,,db2\"）：空条目并入主机列表后成为参与轮试的死节点，"
+                    + "故障转移/负载均衡静默失败。请清理 Server 列表中的空条目。");
             if (!seenServers.Add((server.ToUpperInvariant(), port)))
                 throw new ArgumentException(
                     $"Server 列表存在重复条目 '{server}:{port}'："
@@ -269,7 +278,10 @@ public static class MySqlMultiHost
         var seenServers = new HashSet<(string Server, int Port)>();
         foreach (var (server, port) in NormalizeServerEntries(builder.Server, (int)builder.Port))
         {
-            if (server.Length == 0) continue;
+            if (server.Length == 0)
+                throw new ArgumentException(
+                    $"Server 列表存在空条目（如 \"db1,,db2\"）：空条目并入主机列表后成为参与轮试的死节点，"
+                    + "故障转移/负载均衡静默失败。请清理 Server 列表中的空条目。");
             if (!seenServers.Add((server.ToUpperInvariant(), port)))
                 throw new ArgumentException(
                     $"Server 列表存在重复条目 '{server}:{port}'："
@@ -362,8 +374,10 @@ public static class MySqlMultiHost
         {
             var entry = raw.Trim();
             var colon = entry.LastIndexOf(':');
-            if (colon >= 0 && entry.IndexOf(':') == colon  // v46：口径对齐 NormalizeServerEntry（colon>=0）——":port"（空主机名）同为非法形态 fail-fast
-                && int.TryParse(entry.AsSpan(colon + 1), out _))
+            // v49 P3：去掉 TryParse 数字后缀条件——"host:"（空端口）/":port"（空主机名）
+            // 同属含冒号非法 DNS 主机名（节点永不可连），一并 fail-fast；裸 IPv6（多冒号）
+            // 不命中唯一冒号条件照常放行
+            if (colon >= 0 && entry.IndexOf(':') == colon)
             {
                 throw new ArgumentException(
                     $"{parameterName} 条目 '{entry}' 含内嵌端口语法（\"host:port\"）——MySqlConnector 2.6.2 不支持该语法"
