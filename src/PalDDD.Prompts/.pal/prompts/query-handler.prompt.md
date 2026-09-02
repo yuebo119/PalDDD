@@ -54,7 +54,7 @@ public sealed class GetActiveOrdersHandler(
         return await db.Orders
             .Where(o => o.CustomerName == query.CustomerName && o.Status == "active")
             .Select(o => new OrderDto(
-                o.Id.ToString(), o.CustomerName, o.TotalAmount, o.Status))
+                o.Id.ToString(), o.CustomerName, o.TotalAmount.Amount, o.Status))
             .ToListAsync(ct)
             .ConfigureAwait(false);
     }

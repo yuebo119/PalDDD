@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 模板编译探针（v56 机械门禁）——9 个 .pal/prompts 模板的 csharp 代码块逐块真实编译，
+       阻断"照抄必炸"缺陷（v53-v55 连续四轮在模板区发现 P1 的根治手段）。不进 slnx（工具项目）。 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsAotCompatible>false</IsAotCompatible>
+    <NoWarn>$(NoWarn);CS1591;CA2007;CA1812;CA1303</NoWarn><!-- CA1303：探针是内部工具，中文控制台输出非资源化场景 -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalDDD.Analyzers\PalDDD.Analyzers.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Core.SourceGen\PalDDD.Core.SourceGen.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.CQRS\PalDDD.CQRS.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.DependencyInjection\PalDDD.DependencyInjection.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Hosting.AspNetCore\PalDDD.Hosting.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Idempotency\PalDDD.Idempotency.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Messaging\PalDDD.Messaging.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Projections\PalDDD.Projections.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Dapper\PalDDD.Dapper.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.EventLog\PalDDD.EventLog.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Projections.EFCore\PalDDD.Projections.EFCore.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Repository.EFCore\PalDDD.Repository.EFCore.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Serialization\PalDDD.Serialization.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Transactions.EFCore\PalDDD.Transactions.EFCore.csproj" />
+  </ItemGroup>
+
+</Project>

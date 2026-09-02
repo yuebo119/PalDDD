@@ -51,7 +51,9 @@ public sealed class OrderSaga : Saga<OrderSagaState>
         When<OrderRequested>("Initial", new SagaStep("CreateOrder",
             execute: async (state, evt, ct) =>
             {
-                state.CustomerName = ((OrderRequested)evt).CustomerName;
+                // ⚠️ SagaStep.ExecuteAsync 签名的 state 参数是基类 SagaState——访问子类
+                // 属性（如 OrderSagaState.CustomerName）必须先转形
+                ((OrderSagaState)state).CustomerName = ((OrderRequested)evt).CustomerName;
                 state.CurrentState = "Created";
                 return state;
             },
