@@ -15,7 +15,7 @@
 - 处理器实现 `IQueryHandler<TQuery, TResult>`，必须是 `sealed class`
 - 查询处理器**不修改领域状态** — 纯读操作
 - 直接使用 `DbContext` 或 Dapper 做查询（不需要经过领域模型）
-- DI 注册：`services.AddPalQueryHandler<GetOrderQry, OrderDto?, GetOrderHandler>()`
+- DI 注册：`services.AddPalQueryHandler<GetActiveOrdersQry, IReadOnlyList<OrderDto>, GetActiveOrdersHandler>()`（输出格式段完整链；示例段是另一组 OrderSummary 链，v55 勘正三元组混搭）
 
 ## 禁止
 - ❌ 不在查询处理器中调用 `RaiseEvent()` — 查询不应产生副作用
@@ -73,8 +73,8 @@ sealed class GetOrderHandler(OrderRepo r) : IQueryHandler<GetOrderQry, OrderSumm
     {
         var o = r.Get(q.OrderId);
         return o is null
-            ? ValueTask.FromResult<OrderDto?>(null)
-            : ValueTask.FromResult<OrderDto?>(new OrderDto(
+            ? ValueTask.FromResult<OrderSummary?>(null)
+            : ValueTask.FromResult<OrderSummary?>(new OrderSummary(
                 o.Id.Value.ToString(), o.CustomerName, o.Status,
                 o.TotalAmount.Amount, o.Items.Count));
     }

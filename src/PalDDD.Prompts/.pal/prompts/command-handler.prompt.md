@@ -67,7 +67,7 @@ sealed class AddItemHandler(OrderRepo r) : ICommandHandler<AddItemCmd, Unit>
 {
     public async ValueTask<Unit> HandleAsync(AddItemCmd c, CancellationToken ct)
     {
-        var o = r.Get(c.OrderId);
+        var o = r.Get(c.OrderId) ?? throw new InvalidOperationException($"Order {c.OrderId} not found.");
         o.AddItem(c.Name, c.Qty, c.Price);
         return Unit.Value;
     }
@@ -77,7 +77,7 @@ sealed class ConfirmHandler(OrderRepo r) : ICommandHandler<ConfirmCmd, Unit>
 {
     public async ValueTask<Unit> HandleAsync(ConfirmCmd c, CancellationToken ct)
     {
-        var o = r.Get(c.OrderId);
+        var o = r.Get(c.OrderId) ?? throw new InvalidOperationException($"Order {c.OrderId} not found.");
         o.Confirm();
         return Unit.Value;
     }

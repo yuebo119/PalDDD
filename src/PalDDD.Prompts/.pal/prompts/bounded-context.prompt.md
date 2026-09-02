@@ -14,7 +14,8 @@
 ## 必须遵守
 
 ### 限界上下文标识
-- 所有领域类型（聚合根/实体/领域事件/值对象）标注 `[BoundedContext("xxx")]`
+- 聚合根/实体/领域事件标注 `[BoundedContext("xxx")]`（值对象不标——attribute 仅限 Class，
+  挂 `readonly record struct` 即 CS0592，且不在 PDDD001 编译期强制范围）
 - BC 名称为 kebab-case：`ordering` / `inventory` / `shipping`
 - 消息名必须包含 BC 前缀：`ordering.order-submitted.v1`
 
@@ -41,8 +42,8 @@ services.AddPalJsonSerialization(catalog =>
     catalog.Add(AppJsonContext.Default.OrderConfirmed);
 });
 
-// 持久化 — 选择 Dapper（AOT 假象，见 README）或 EF Core
-services.AddPalDapper(DapperDbType.PostgreSql, connectionString);
+// 持久化 — 选择 Dapper（真 AOT，源生成 SQL）或 EF Core（非 AOT 适配器层）
+services.AddPalDapperTransactions(DapperDbType.PostgreSql, connectionString);
 // 或 services.AddPalOutboxUnitOfWork<OrderDbContext>();
 
 // Outbox + Inbox + Saga

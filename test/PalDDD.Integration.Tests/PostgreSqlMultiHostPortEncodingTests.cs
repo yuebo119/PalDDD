@@ -82,4 +82,45 @@ public sealed class PostgreSqlMultiHostPortEncodingTests
             .Throws<ArgumentException>();
     }
 
+    // ── v54/v55 守卫回归网 ──
+
+    [Test]
+    public async Task AddPalNpgsqlDataSourceWithFailover_BareIpv6Primary_Throws()
+    {
+        // v54 primary 裸 IPv6 拦截（对齐 standby 形态③——Npgsql host:port 语法下多冒号歧义）
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalNpgsqlDataSourceWithFailover("Host=::1;Username=u;Password=p", "Host=pgsb;Username=u;Password=p"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalNpgsqlDataSource_BlankEntryInHostList_Throws()
+    {
+        // v54 PG 单主机空段守卫
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalNpgsqlDataSource("Host=pg1,,pg2;Username=u;Password=p"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalNpgsqlDataSource_DuplicateHostSamePort_Throws()
+    {
+        // v54 PG 单主机重复守卫
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalNpgsqlDataSource("Host=pg1,pg1;Username=u;Password=p"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalNpgsqlDataSource_SameHostDifferentExplicitPorts_DoesNotThrow()
+    {
+        // v55 P2（B-P2-1）回归网：共享 Port≠5432 时同主机异端口是合法配置——
+        // fallbackPort 参数化后不再误拦（原硬编码 5432 时 ("pg1",5432) 与 ("pg1",5433) 碰撞）
+        new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddPalNpgsqlDataSource("Host=pg1,pg1:5432;Port=5433;Username=u;Password=p");
+        var services2 = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddPalNpgsqlDataSource("Host=pg1:5433,pg1:5434;Username=u;Password=p");
+        await Assert.That(services2.Count).IsGreaterThan(0);
+    }
+
 }

@@ -155,7 +155,12 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
             AddParam(readBack, "@p0", operationName);
             AddParam(readBack, "@p1", key);
             await using var rr = await readBack.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            var newRevision = await rr.ReadAsync(ct).ConfigureAwait(false) ? rr.GetInt64(0) : 0;
+            // v55 P2：DBNull 容错（对齐 GetAsync 物化路径自设口径）——损坏行 revision=NULL 时
+            // UPDATE 的 +1 经 NULL 传播仍 NULL，回读不容错会 InvalidCastException 使该幂等键
+            // 持续炸出；回退 0 使后续 Mark* CAS 恒 0 行静默不落库（无害降级）
+            var newRevision = await rr.ReadAsync(ct).ConfigureAwait(false)
+                ? (rr.IsDBNull(0) ? 0 : rr.GetInt64(0))
+                : 0;
 
             return new IdempotencyRecord(operationName, key,
                 IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, newRevision);
@@ -222,6 +227,8 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         var expectedRevision = record.Revision;
         var statusFailed = (int)IdempotencyRecordStatus.Failed;
         var statusCompleted = (int)IdempotencyRecordStatus.Completed;
+        // v55 P3 口径声明：仅拦 Completed（Failed 重复 MarkFailed 允许更新错误信息）——
+        // 三栈口径差见 IdempotencyDbContext 同款声明（InMemory 最严，EFCore/PalORM 宽松）
         // v54 P2：CAS 基准 updated_at → revision（单调令牌不受列精度截断）
         var affected = await Session.ExecuteAsync(
             $"UPDATE idempotency_records SET status = {statusFailed}, updated_at = {failedAt}, error = {reason}, revision = revision + 1 WHERE operation_name = {record.OperationName} AND idempotency_key = {record.Key} AND revision = {expectedRevision} AND status <> {statusCompleted}",

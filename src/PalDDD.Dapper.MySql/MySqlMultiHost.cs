@@ -395,6 +395,8 @@ public static class MySqlMultiHost
                         + "（原样传 DNS 解析失败，该节点永不可连）。"
                         + "请移除内嵌端口、统一使用共享 Port 关键字。", parameterName);
                 }
+                // v55 .NET 11 实测：scoped IPv6（fe80::1%eth0 / %25 编码 / %3）全部解析成功放行
+                //（.NET Core 3.0+ 接受任意 zone 名；PowerShell 5.1 的 False 是旧运行时行为，勿引用）
                 if (!System.Net.IPAddress.TryParse(entry, out _))
                 {
                     throw new ArgumentException(
@@ -411,7 +413,8 @@ public static class MySqlMultiHost
     /// </summary>
     internal static void EnsureNoDuplicateServer(string? serverList, string parameterName)
     {
-        // 归一化形态对齐同文件 :142/:230/:287 姊妹（默认 comparer + ToUpperInvariant 值）
+        // v55 勘正：与 :142/:230/:287 姊妹的形态差异——此处 Trim 内联且端口恒 0（内嵌端口已被
+        // EnsureNoEmbeddedPort 前置拦尽，条目不可能携带端口，恒 0 与姊妹 fallbackPort 判重等价）
         var seen = new HashSet<(string Server, int Port)>();
         foreach (var raw in (serverList ?? "").Split(','))
         {

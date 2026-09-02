@@ -59,9 +59,10 @@ public static class PostgreSqlServiceCollectionExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         // v54 P3（B-P3-5）：单主机入口列表守卫（镜像 MySQL v50/v53 三连收口；Host 整体空
         // 跳过——PG 空 Host 是 Unix socket 合法语义）
-        var singleHost = new NpgsqlConnectionStringBuilder(connectionString).Host;
-        PostgreSqlMultiHost.EnsureNoBlankHostEntries(singleHost, "Host");
-        PostgreSqlMultiHost.EnsureNoDuplicateHost(singleHost, "Host");
+        var singleCsBuilder = new NpgsqlConnectionStringBuilder(connectionString);
+        PostgreSqlMultiHost.EnsureNoBlankHostEntries(singleCsBuilder.Host, "Host");
+        // v55 P2：传真实共享 Port（原硬编码 5432 在 Port≠5432 时误拦合法异端口配置）
+        PostgreSqlMultiHost.EnsureNoDuplicateHost(singleCsBuilder.Host, (int)singleCsBuilder.Port, "Host");
 
         var builder = new NpgsqlDataSourceBuilder(connectionString);
         builder.ConnectionStringBuilder.ApplicationName = applicationName;
@@ -106,9 +107,10 @@ public static class PostgreSqlServiceCollectionExtensions
         // v34 P3：空白连接串 fail-fast（v33 姊妹收口，同基础重载）
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         // v54 P3（B-P3-5）：单主机入口列表守卫（同基础重载）
-        var singleHost = new NpgsqlConnectionStringBuilder(connectionString).Host;
-        PostgreSqlMultiHost.EnsureNoBlankHostEntries(singleHost, "Host");
-        PostgreSqlMultiHost.EnsureNoDuplicateHost(singleHost, "Host");
+        var singleCsBuilder = new NpgsqlConnectionStringBuilder(connectionString);
+        PostgreSqlMultiHost.EnsureNoBlankHostEntries(singleCsBuilder.Host, "Host");
+        // v55 P2：传真实共享 Port（原硬编码 5432 在 Port≠5432 时误拦合法异端口配置）
+        PostgreSqlMultiHost.EnsureNoDuplicateHost(singleCsBuilder.Host, (int)singleCsBuilder.Port, "Host");
 
         var builder = new NpgsqlDataSourceBuilder(connectionString);
         builder.ConnectionStringBuilder.ApplicationName = applicationName;

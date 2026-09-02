@@ -84,4 +84,35 @@ public sealed class MySqlMultiHostTests
                 .AddPalMySqlDataSourceWithLoadBalance("Server=::1,::1;Database=pal;Port=3306"))
             .Throws<ArgumentException>();
     }
+
+    // ── v54/v55 守卫回归网：多冒号 IPAddress.TryParse 收窄（"a:b:c" 等垃圾多冒号配置期定位）──
+
+    [Test]
+    public async Task AddPalMySqlDataSourceWithLoadBalance_GarbageMultiColon_Throws()
+    {
+        // 多冒号但非合法 IPv6——TryParse 失败，配置期 fail-fast（原延迟到建连期 SocketException）
+        await Assert.That(() => new ServiceCollection()
+                .AddPalMySqlDataSourceWithLoadBalance("Server=a:b:c;Database=pal"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalMySqlDataSourceWithLoadBalance_ZoneIdScopedIpv6_DoesNotThrow()
+    {
+        // v55 .NET 11 实测勘正（推翻 v55 B 片 PowerShell 5.1 结论）：IPAddress.TryParse 对
+        // scoped IPv6（fe80::1%eth0 / %25 编码 / %3 数字 zone）在 .NET Core 3.0+ 全部解析成功
+        // ——均属合法 IPv6 字面量，配置层放行（Windows PowerShell 5.1 的 False 是旧运行时行为）
+        var services = new ServiceCollection()
+            .AddPalMySqlDataSourceWithLoadBalance("Server=fe80::1%eth0;Database=pal");
+        await Assert.That(services.Count).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task AddPalMySqlDataSource_BlankEntryInServerList_Throws()
+    {
+        // v53 单主机空段（B-P2-2 第五姊妹回归网）
+        await Assert.That(() => new ServiceCollection()
+                .AddPalMySqlDataSource("Server=db1,,db2;Database=pal"))
+            .Throws<ArgumentException>();
+    }
 }
