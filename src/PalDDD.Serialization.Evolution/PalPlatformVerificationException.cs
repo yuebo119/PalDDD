@@ -48,7 +48,9 @@ public sealed class PalPlatformVerificationException : InvalidOperationException
         if (errors.Count == 0)
             throw new ArgumentException("Platform verification exception requires at least one error.", nameof(errors));
 
-        Errors = errors;
+        // v44 P3：防御拷贝——异常对象快照语义，外部调用方持可变 List 变异后
+        // 不漂移 Errors（内部唯一调用方传入后不再改，公共构造器外部使用受影响）
+        Errors = [.. errors];
     }
 
     /// <summary>单次验证中发现的所有启动验证错误。</summary>

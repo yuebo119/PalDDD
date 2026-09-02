@@ -116,7 +116,14 @@ public sealed class ConsistentHashSharding : IShardingStrategy
         }
 
         // 按哈希排序构建环
-        Array.Sort(entries, (a, b) => a.Hash.CompareTo(b.Hash));
+        // v44 P3：排序键补 ShardId 二元组——FNV-1a 32 位哈希在虚拟节点间冲突时
+        // （不同 shard 同哈希），Array.Sort 非稳定排序使两次构建环序不同，
+        // 同一 key 跨进程路由漂移（写读落不同 shard）；二元组排序确定化
+        Array.Sort(entries, (a, b) =>
+        {
+            var hashCompare = a.Hash.CompareTo(b.Hash);
+            return hashCompare != 0 ? hashCompare : a.Shard.CompareTo(b.Shard);
+        });
         _ring = entries;
     }
 
