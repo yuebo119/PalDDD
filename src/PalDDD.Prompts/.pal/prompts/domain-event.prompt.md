@@ -34,25 +34,27 @@ using PalDDD.Core;
 
 namespace YourDomain.Events;
 
+// ⚠️ 宿主必须是 sealed class——record 不能继承非 record 的 DomainEvent（CS8864），
+// 且 [GenerateMessage]/PDDD005 均为 AttributeTargets.Class
+[BoundedContext("ordering")]
 [GenerateMessage(Name = "ordering.order-submitted.v1")]
-public sealed record OrderSubmitted(
-    Guid OrderId,
-    string CustomerName,
-    decimal Amount
-) : DomainEvent, IDomainEvent
+public sealed class OrderSubmitted : DomainEvent, IDomainEvent
 {
-    static string IDomainEvent.EventName => "ordering.order-submitted.v1";
+    public Guid OrderId { get; init; }
+    public string CustomerName { get; init; } = "";
+    public decimal Amount { get; init; }
+    static string IDomainEvent.EventName => "ordering.order-submitted.v1"; // GenerateMessage 同步生成
 }
 
 // 消息版本演化示例（v1 → v2 新增字段）
+[BoundedContext("ordering")]
 [GenerateMessage(Name = "ordering.order-submitted.v2")]
-public sealed record OrderSubmittedV2(
-    Guid OrderId,
-    string FirstName,
-    string LastName,  // 新增字段，替代 v1 的 CustomerName
-    decimal Amount
-) : DomainEvent, IDomainEvent
+public sealed class OrderSubmittedV2 : DomainEvent, IDomainEvent
 {
+    public Guid OrderId { get; init; }
+    public string FirstName { get; init; } = "";
+    public string LastName { get; init; } = "";  // 新增字段，替代 v1 的 CustomerName
+    public decimal Amount { get; init; }
     static string IDomainEvent.EventName => "ordering.order-submitted.v2";
 }
 ````

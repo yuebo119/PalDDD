@@ -54,7 +54,7 @@ public sealed class Order : AggregateRoot<OrderId>
     public void AddItem(string productName, Money price, int quantity)
     {
         TotalAmount = Money.CNY(TotalAmount.Amount + price.Amount * quantity);
-        RaiseEvent(new ItemAddedToOrder(Id.Value, productName, price, quantity));
+        RaiseEvent(new ItemAddedToOrder { OrderId = Id.Value, ProductName = productName, Price = price, Quantity = quantity }); // 初始化器形态（对齐 samples；DomainEvent 无位置构造）
     }
 }
 ````

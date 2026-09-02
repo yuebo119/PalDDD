@@ -22,6 +22,9 @@
 ### DI 注册模式
 ````csharp
 // Program.cs — 显式注册所有 Handler（零 Assembly Scanning）
+var builder = WebApplication.CreateBuilder(args);
+var services = builder.Services;
+var connectionString = "Host=localhost;Database=pal;Username=app;Password=app"; // 占位——生产用配置注入
 services.AddPalDDD();                           // Dispatcher + DomainEventDispatcher
 services.AddPalPipelineBehaviors();             // Validation + Logging
 
@@ -33,7 +36,7 @@ services.AddPalCommandHandler<AddItemCmd, Unit, AddItemHandler>();
 services.AddPalQueryHandler<GetOrderQry, OrderDto?, GetOrderHandler>();
 
 // 事件处理器 — 显式注册
-services.AddPalEventHandler<OrderSubmitted, OrderProjectionHandler>();
+services.AddScoped<ProjectionProcessor<OrderSubmitted>>(); // 投影管线（Handler 经 DI 注入；框架投影注册扩展为 v3.0 待办）
 
 // 序列化 — 选择 JSON 或 MemoryPack
 services.AddPalJsonSerialization(catalog =>
@@ -54,15 +57,16 @@ services.AddPalSaga<OrderSagaState, OrderSaga>();
 
 ### ASP.NET Core 集成
 ````csharp
+// 承接上一块（同一 Program.cs）
 var app = builder.Build();
 
-// 命令端点 — AOT 安全的 Minimal API
-app.MapCommand<SubmitOrder, Unit>();
-app.MapCommand<AddItemCmd, Unit>();
+// 命令端点 — pattern + JsonTypeInfo（AOT：源生成 JsonTypeInfo，零反射）
+app.MapCommand<SubmitOrder>("/commands/submit-order", AppJsonContext.Default.SubmitOrder);
+app.MapCommand<AddItemCmd>("/commands/add-item", AppJsonContext.Default.AddItemCmd);
 
-// 查询端点 — 显式查询绑定
-app.MapQuery<GetOrderQry, OrderDto?>(ctx =>
-    new GetOrderQry(OrderId.From(Guid.Parse(ctx.Request.Query["id"]!))));
+// 查询端点 — pattern + 查询绑定 + JsonTypeInfo
+app.MapQuery<GetOrderQry, OrderDto>("/queries/order", ctx =>
+    new GetOrderQry(OrderId.From(Guid.Parse(ctx.Request.Query["id"]!))), AppJsonContext.Default.OrderDto);
 
 // 健康检查
 app.MapPalHealthChecks();

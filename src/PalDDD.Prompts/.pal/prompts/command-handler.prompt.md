@@ -51,7 +51,7 @@ public sealed class SubmitOrderHandler(
         order.Submit(command.Amount);
         orders.Add(order);
         await orders.SaveChangesAsync(ct).ConfigureAwait(false);
-        return Unit.Value;
+        return new Unit(); // Unit 是 readonly record struct，无静态 Value 成员
     }
 }
 ````
@@ -69,7 +69,7 @@ sealed class AddItemHandler(OrderRepo r) : ICommandHandler<AddItemCmd, Unit>
     {
         var o = r.Get(c.OrderId) ?? throw new InvalidOperationException($"Order {c.OrderId} not found.");
         o.AddItem(c.Name, c.Qty, c.Price);
-        return Unit.Value;
+        return new Unit(); // Unit 是 readonly record struct，无静态 Value 成员
     }
 }
 
@@ -79,7 +79,7 @@ sealed class ConfirmHandler(OrderRepo r) : ICommandHandler<ConfirmCmd, Unit>
     {
         var o = r.Get(c.OrderId) ?? throw new InvalidOperationException($"Order {c.OrderId} not found.");
         o.Confirm();
-        return Unit.Value;
+        return new Unit(); // Unit 是 readonly record struct，无静态 Value 成员
     }
 }
 ```
