@@ -54,6 +54,9 @@ public static class MySqlServiceCollectionExtensions
         // v33 P3：空白连接串 fail-fast（对齐同包 DapperConfiguration.Create:42 口径）——
         // 空白串原样放行会延迟到 MySqlDataSourceBuilder.Build()/建连时才抛 provider 专属异常
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        // v44 P3：单主机入口内嵌端口检测接线（v43 四入口收口的姊妹补齐——
+        // "Server=db1:3306" 同样原样传 DNS 必炸，fail-fast 对齐多主机入口口径）
+        MySqlMultiHost.EnsureNoEmbeddedPort(connectionString, "connectionString");
 
         // P2 修复（二十一轮）：SET SESSION 传导前提——MySqlConnector 默认 ResetConnections=true，
         // 从池中取出的连接会话已被重置（CHARACTER_SET_RESULTS / SQL_MODE 等恢复服务端默认），

@@ -403,11 +403,19 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
                     else
                         encoded.Add(bareHost);
                 }
+                else if (bareHost.StartsWith('[') && bareHost.EndsWith(']') is false)
+                {
+                    // 形态②（v44 P3 勘正）：'[' 开头无 ']' 收尾 = 畸形条目（v43 后本分支
+                    // 唯一可达输入）——原样放行延迟到建连失败且无条目定位信息，改 fail-fast
+                    //（对齐形态③裸 IPv6 的 fail-fast 处置，同文件处置一致）
+                    throw new ArgumentException(
+                        $"IPv6 主机条目 '{bareHost}' 方括号未闭合——请改用 '[host]' 或 '[host]:port' 语法。");
+                }
                 else if (bareHost.StartsWith('['))
                 {
                     // 形态②：方括号 + 内嵌端口，自洽
                     //（v43 P2 勘正：NormalizeHostEntry 已把 "[::1]:port" 拆出方括号 host——
-                    // 本分支现仅畸形 '[' 开头无 ']' 条目可达，防御性保留）
+                    // 本分支自洽配置放行）
                     encoded.Add(bareHost);
                 }
                 else
