@@ -173,10 +173,12 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
     // SmartEnum 基类变量、右为 TSelf 派生变量）时绑定本运算符走值相等，反向
     //（派生在左、基类在右）因基类→派生无隐式转换不绑定，回退 object== 引用相等——
     // 同一对操作数交换后 == 结果可能分叉（值相等 vs 引用相等）。第二参数放宽为
-    // SmartEnum<TSelf,TValue>? 后双向均绑定；运算符体经 is TSelf 模式匹配收窄，
-    // 非 TSelf 的同封闭基类实例返回 false（对齐上方 Equals(object) 的 obj is TSelf 语义）。
+    // SmartEnum<TSelf,TValue>? 后双向均绑定；运算符体 Equals(TSelf) 值比较双向对称
+    // （v47 勘正：v41 的 is TSelf 单侧收窄使"同封闭基类兄弟类"场景 weird==color（值等 true）
+    // 与 color==weird（引用不等 false）交换分叉——双向 Equals 对齐 Equals(object) 语义）。
     public static bool operator ==(SmartEnum<TSelf, TValue>? left, SmartEnum<TSelf, TValue>? right)
-        => left is null ? right is null : right is TSelf typed && left.Equals(typed);
+        => left is null ? right is null
+           : right is not null && left.Equals(right);
 
     public static bool operator !=(SmartEnum<TSelf, TValue>? left, SmartEnum<TSelf, TValue>? right) => !(left == right);
 }

@@ -19,13 +19,18 @@ public readonly struct PalValidationResult : IEquatable<PalValidationResult>
     /// <summary>是否通过验证</summary>
     public bool IsValid { get; }
 
+    private readonly ImmutableArray<PalValidationError> _errors;
+
     /// <summary>验证错误集合（仅在失败时有值）。使用 ImmutableArray 保证不可变语义。</summary>
-    public ImmutableArray<PalValidationError> Errors { get; }
+    // v47 P3：getter 归一——default(Struct) 实例（用户验证器 return default，不经过
+    // Failed 工厂）的 Errors 枚举不再 NRE（v39/v40 消费方防御的源头闭环）。
+    // _errors 为 default 时返回 Empty（零分配——Empty 是 ImmutableArray 的单例形态）
+    public ImmutableArray<PalValidationError> Errors => _errors.IsDefault ? ImmutableArray<PalValidationError>.Empty : _errors;
 
     private PalValidationResult(bool isValid, ImmutableArray<PalValidationError> errors)
     {
         IsValid = isValid;
-        Errors = errors;
+        _errors = errors;
     }
 
     /// <summary>验证通过 — 零分配空结果</summary>
