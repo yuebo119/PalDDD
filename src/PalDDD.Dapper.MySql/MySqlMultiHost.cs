@@ -133,7 +133,14 @@ public static class MySqlMultiHost
         {
             var (primaryServer, primaryPort) = NormalizeServerEntry(raw, (int)primaryBuilder.Port);
             if (primaryServer.Length == 0) continue;
-            seenServers.Add((primaryServer.ToUpperInvariant(), primaryPort));
+            // v47 P3：primary 内部重复也抛（对齐 standby 侧"Add 失败即抛"——v29 S4 注释
+            // 声称"primary 条目 + standby 展开条目全部进集合，Add 失败即抛"，实况 primary
+            // 侧 Add 返回值被忽略，"db1,db1" 静默通过）
+            if (!seenServers.Add((primaryServer.ToUpperInvariant(), primaryPort)))
+                throw new ArgumentException(
+                    $"primary Server 列表存在重复条目 '{primaryServer}:{primaryPort}'："
+                    + "多主机拼接将产生重复 Server 条目（如 \"db1,db1\"），FailOver 把同一实例视作两个节点轮试，"
+                    + "故障转移语义错乱。请去重 primary 主机列表。");
         }
         foreach (var (standbyServer, standbyPort) in NormalizeServerEntries(standbyBuilder.Server, (int)standbyBuilder.Port))
         {
@@ -191,6 +198,11 @@ public static class MySqlMultiHost
         {
             LoadBalance = MySqlLoadBalance.RoundRobin
         };
+        // v47 P3：Server 属性空校验（对齐 Failover 入口 :78/:152 的缺 Server 拦截——
+        // 空白串经 IsNullOrWhiteSpace(connectionString) 放行后 Server 属性为空串，
+        // 静默 Build 出 localhost 默认池）
+        if (string.IsNullOrWhiteSpace(builder.Server))
+            throw new ArgumentException("Server is required.", nameof(connectionString));
         // v43 P2 收口：内嵌端口检测接线——原入口零检测，"Server=db1:3306" 原样进连接串
         //（节点永不可连，轮询/均衡静默失败延迟到建连且无诊断）；对齐 Failover 入口在
         // 共享 Port 语义生效前拦截
@@ -231,6 +243,9 @@ public static class MySqlMultiHost
         {
             LoadBalance = MySqlLoadBalance.LeastConnections
         };
+        // v47 P3：Server 属性空校验（对齐 LoadBalance 入口同款）
+        if (string.IsNullOrWhiteSpace(builder.Server))
+            throw new ArgumentException("Server is required.", nameof(connectionString));
         // v43 P2 收口：内嵌端口检测接线——原入口零检测，同 LoadBalance 入口口径
         EnsureNoEmbeddedPort(builder.Server, "Server");
         // v27 P3（B 片 N9）：同 LoadBalance 入口——Pooling 条件化，不覆盖显式 "Pooling=false"
