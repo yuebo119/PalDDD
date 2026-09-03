@@ -9,7 +9,21 @@ using TUnit.Core;
 [NotInParallel]
 public sealed class ProjectionTests
 {
+        // v68 守卫回归网（mutation 红测抓缺口——v64 加守卫时无测试锁定，移除守卫后套件仍绿）：
+    // 负值 processingTimeout 必须抛 ArgumentOutOfRangeException（对齐 EFCore v33 姊妹口径）
     [Test]
+    public async Task InMemoryCheckpoint_TryStartAsync_NegativeTimeout_ThrowsArgumentOutOfRange()
+    {
+        var store = new InMemoryProjectionCheckpointStore();
+        await Assert.That(() => store.TryStartAsync(
+                "ordering", "orders", "pos-1",
+                DateTimeOffset.UtcNow,
+                TimeSpan.FromSeconds(-1),
+                default).AsTask())
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
+[Test]
     public async Task ProcessAsync_SkipsAlreadyCompletedCheckpoint(CancellationToken cancellationToken)
     {
         var store = new InMemoryProjectionCheckpointStore();
