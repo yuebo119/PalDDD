@@ -45,7 +45,7 @@ public static class SqliteRowFactory
         return value switch
         {
             PalUlid u => u,
-            string s => PalUlid.Parse(s),
+            string s => PalUlid.Parse(s, CultureInfo.InvariantCulture), // v64 对齐 EventLogRow.ParseUlid/族形态标准
             byte[] b when b.Length == 16 => PalUlid.New(new ReadOnlySpan<byte>(b)),
             Guid g => PalUlid.New(g),
             _ => throw new InvalidCastException($"Cannot convert {value.GetType()} to Ulid")

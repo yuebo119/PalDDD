@@ -32,7 +32,7 @@ public sealed class SqliteUlidTypeHandler : SqlMapper.TypeHandler<PalUlid>
         ArgumentNullException.ThrowIfNull(value);
         return value switch
         {
-            string s => PalUlid.Parse(s),
+            string s => PalUlid.Parse(s, CultureInfo.InvariantCulture), // v64 对齐族形态标准（v62 Guid 先例）
             PalUlid u => u,
             byte[] b when b.Length == 16 => PalUlid.New(new ReadOnlySpan<byte>(b)),
             Guid g => PalUlid.New(g),

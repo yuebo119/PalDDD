@@ -231,9 +231,9 @@ public abstract class EventLogDbContext(
         try
         {
             await SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            // v62 P3：成功路径 Detach（对齐 Checkpoint/Idempotency 成功路径家族——长寿命
-            // context 持续追加时 Unchanged 条目线性累积；append-only 契约无后续读写依赖，
-            // Detach 只清跟踪状态不影响已执行 INSERT 与事务提交）
+            // v62 P3 + v64 P2 勘正：成功路径 Detach（v62 版因 Added 过滤实为 no-op，
+            // v64 改无条件后真正对齐 Checkpoint/Idempotency 成功路径家族——长寿命 context
+            // 持续追加时 Unchanged 条目线性累积；append-only 契约无后续读写依赖）
             DetachAddedEvents();
         }
         catch (DbUpdateException ex)
@@ -346,10 +346,13 @@ public abstract class EventLogDbContext(
     /// </remarks>
     private void DetachAddedEvents()
     {
+        // v64 P2：改无条件 Detach——v62 在成功路径复用本方法时是 no-op（SaveChanges 成功
+        // 后本批 StoredEvent 已 Added→Unchanged，Added 过滤匹配零条，Unchanged 线性累积原样
+        // 存在）。本 context 对 StoredEvent 的读路径全 AsNoTracking/投影，跟踪条目只可能来自
+        // append 路径，无条件安全（失败路径条目保持 Added，同样被覆盖）
         foreach (var entry in ChangeTracker.Entries<StoredEvent>())
         {
-            if (entry.State == EntityState.Added)
-                entry.State = EntityState.Detached;
+            entry.State = EntityState.Detached;
         }
 
         // v34 P3：allocator 无状态过滤——Unchanged（SaveChanges 成功后）与 Modified 均为

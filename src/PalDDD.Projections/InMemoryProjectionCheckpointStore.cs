@@ -38,6 +38,10 @@ public sealed class InMemoryProjectionCheckpointStore : IProjectionCheckpointSto
     {
         ct.ThrowIfCancellationRequested();
         ValidateKeyParts(projectionName, sourceName, position);
+        // v64 P3：补负值守卫（Checkpoint 家族唯一缺口——EFCore v33/Dapper/PalOrm 均在位；
+        // 负值使 LeaseUntil < startedAt 即刻过期，防抢占判定恒假）
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
 
         lock (_lock)
         {

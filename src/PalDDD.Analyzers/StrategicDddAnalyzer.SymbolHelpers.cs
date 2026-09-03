@@ -262,7 +262,15 @@ public sealed partial class StrategicDddAnalyzer
                     continue;
 
                 if (declaration.ExpressionBody?.Expression is LiteralExpressionSyntax expressionLiteral)
+                {
+                    // v64 P3：null/default 字面量视为缺失（EventName => null 与 Name 必不等，
+                    // 原被 Token.Value as string 的 null 误判为"非字面量"而静默跳过——
+                    // 现返回 (null, null) 走 Missing 腿报告）
+                    if (expressionLiteral.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NullLiteralExpression)
+                        || expressionLiteral.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.DefaultLiteralExpression))
+                        return (null, null);
                     return (expressionLiteral.Token.Value as string, expressionLiteral.GetLocation());
+                }
 
                 if (declaration.Initializer?.Value is LiteralExpressionSyntax initializerLiteral)
                     return (initializerLiteral.Token.Value as string, initializerLiteral.GetLocation());

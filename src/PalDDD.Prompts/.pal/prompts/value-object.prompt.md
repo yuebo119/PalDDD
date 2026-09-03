@@ -14,8 +14,8 @@
 ### 数值类型值对象 — 实现 `IValueObject`（或直接使用框架 `ValueObject<T>` 类型）
 - 声明 `readonly record struct : IValueObject`，字段直接持数值
 - 需要零分配格式化与算术参与时可**直接使用**框架预置的 `ValueObject<T>` 类型
-  （它是 `readonly record struct`，**不可被继承**——struct 无继承，`class Foo : ValueObject<int>`
-  /`record struct Foo : ValueObject<int>` 均编译失败 CS0527；以字段/参数/属性类型的方式组合使用，
+  （它是 `readonly record struct`，**不可被继承**——struct 无继承，`record struct Foo : ValueObject<int>` 编译失败 CS0527、
+  `class Foo : ValueObject<int>` 编译失败 CS0509（struct 天然 sealed——v64 编译实证勘正，原统称 CS0527 半失实）；以字段/参数/属性类型的方式组合使用，
   隐式转换 `ValueObject<T> → T` 正是为直接参与算术设计）
 - `ValueObject<T>` 约束 `where T : struct, INumber<T>, IMinMaxValue<T>`
 
@@ -33,7 +33,7 @@
 - ❌ 不在值对象中放实体引用 — 值对象无身份
 - ❌ 不给值对象设 setter — 不可变
 - ❌ 不使用 `class`（引用类型值对象）— 使用 `readonly record struct`（栈分配）
-- ❌ 不**继承** `ValueObject<T>`（struct 不可继承，CS0527）— 直接用它作类型，或实现 `IValueObject`
+- ❌ 不**继承** `ValueObject<T>`（record struct 继承报 CS0527、class 继承报 CS0509——v64 编译实证）— 直接用它作类型，或实现 `IValueObject`
 
 ## 输出格式
 ````csharp

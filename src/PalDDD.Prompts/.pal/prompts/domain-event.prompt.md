@@ -8,7 +8,7 @@
 |------|------|
 | PDDD005 | 领域事件必须声明 `[GenerateMessage(Name = "...")]` |
 | PDDD008 | 消息名必须以 `{boundedContext}.` 为前缀 |
-| PDDD009 | 消息名必须是小写 kebab-case |
+| PDDD009 | 消息名必须是小写字母/数字/连字符/点（如 ordering.order-submitted.v1；v64 勘正：规范形态含点，非狭义 kebab-case） |
 | PDDD010 | 消息名必须以 `.v{schemaVersion}` 结尾 |
 | PDDD011 | SchemaVersion >= 1 |
 | PDDD012 | 领域事件必须 `sealed` |
@@ -26,7 +26,7 @@
 - ❌ 不使用 `record`（非 sealed）— 编译器会报 PDDD012
 - ❌ 不在 EventName 中使用大写字母或下划线 — PDDD009
 - ❌ 不遗漏版本号后缀 — PDDD010
-- ❌ 不在事件中包含实体引用 — 事件只含原始数据（Guid/string/decimal 等）
+- ❌ 不在事件中包含实体/聚合引用 — 事件携带原始数据（Guid/string/decimal）与值对象（如 Money；v64 勘正：原"只含原始数据"与自家示例的 Money 成员矛盾）
 
 ## 输出格式
 ````csharp

@@ -468,14 +468,14 @@ git push origin v1.1.0
 
 | # | 预期教训 | 预防措施 |
 |---|---------|---------|
-| 1 | Testcontainers service 容器配置缺失（PG/MySQL/RabbitMQ/Kafka） | §6.2 step 5 必须配 4 个 service |
+| 1 | Testcontainers 容器缺失（PG/MySQL/RabbitMQ/Kafka） | §6.2 step 4（Testcontainers 由测试项目自起 Docker，无需 workflow services 配置；v64 勘正引用失锚+实态） |
 | 2 | `ContinuousIntegrationBuild=true` 触发路径归一化（dotnet/roslyn#55860） | ArchitectureBoundaryTests 的 `FindRepositoryRoot()` 已处理；新增 src 目录扫描需复核 |
 | 3 | git diff --check 对 Windows CRLF 行为不一致 | ci.yml gate 的 `git diff --check` 失败降级为 warning |
 | 4 | `gh pr merge --delete-branch` 会删主分支 | §3.3 表格明确：dev/main 是常驻分支 |
-| 5 | 内部测试库不应公开发布 | `test/PalDDD.Testing` 显式 `<IsPackable>false</IsPackable>`（待声明） |
+| 5 | 内部测试库不应公开发布 | `test/PalDDD.Testing` 显式 `<IsPackable>false</IsPackable>`（v64 勘正：早已设置，原"待声明"系残留） |
 | 6 | 首次 tag 应基于已过 CI 的 commit | §4.1 本地必跑清单 + §5.1 tag 前确认 main 已过 CI |
 | 7 | dev → main 合并必须人工确认 | §3.2 合并权限规则（禁止 AI 自主合并） |
-| 8 | 多包同步发布易漏发 | §6.2 step 8 断言 nupkg 数量 |
+| 8 | 多包同步发布易漏发 | §6.2 step 7 断言 nupkg 数量（v64 勘正引用失锚） |
 
 ---
 

@@ -42,7 +42,7 @@ public interface IDomainEvent
 /// <para>
 /// 💡 <b>为什么用单链表而不是 List&lt;DomainEvent&gt;？</b><br/>
 /// List 在无事件时仍会分配内部数组，每次 Add 可能触发扩容复制。<br/>
-/// 单链表在无事件时只占 16 字节（两个 null 指针），有事件时每个事件 88 字节，无额外容器开销。
+/// 单链表在无事件时只占 16 字节（两个 null 指针），有事件时每事件一个节点对象，无额外容器开销（v64 勘正：原"88 字节"数字无法从当前字段布局推导，对齐 Entity.cs v62 定性化）。
 /// </para>
 /// <para>具体事件类需同时继承此基类并实现 IDomainEvent 接口。</para>
 /// </summary>
