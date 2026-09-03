@@ -43,7 +43,7 @@ public sealed class OrderSubmitted : DomainEvent, IDomainEvent
     public Guid OrderId { get; init; }
     public string CustomerName { get; init; } = "";
     public decimal Amount { get; init; }
-    static string IDomainEvent.EventName => "ordering.order-submitted.v1"; // GenerateMessage 同步生成
+    static string IDomainEvent.EventName => "ordering.order-submitted.v1"; // 手写（生成器不生成此成员）——值须与 Name 一致（PDDD015 强制）
 }
 
 // 消息版本演化示例（v1 → v2 新增字段）
@@ -63,7 +63,7 @@ public sealed class OrderSubmittedV2 : DomainEvent, IDomainEvent
 ```csharp
 // ⚠️ samples 未挂 PalDDD.Analyzers——本段手写 IDomainEvent.EventName 形态在挂了
 // analyzer 的生产项目会触发 PDDD005 Error（必须 [GenerateMessage(Name = "ordering.order-submitted.v1")]）；生产事件请用
-// 上方输出格式段的 [GenerateMessage(Name = "ordering.order-submitted.v1")] 形态（源生成 EventName，免手写）
+// 上方输出格式段形态——[GenerateMessage] + 手写 EventName（值与 Name 一致，PDDD015 强制；v60 勘正：生成器不生成 EventName）
 sealed class ItemAdded : DomainEvent, IDomainEvent
 {
     public Guid OrderId { get; init; }

@@ -115,13 +115,28 @@ jobs:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
           set -euo pipefail
+          PUSHED=0
           for nupkg in release-packages/*.nupkg; do
             echo "Pushing: $(basename $nupkg)"
             dotnet nuget push "$nupkg" \
               --api-key "$NUGET_API_KEY" \
               --source https://api.nuget.org/v3/index.json \
               --skip-duplicate
+            PUSHED=$((PUSHED+1))
           done
+          # v60: push count assertion (mask-proof backstop for --skip-duplicate scenarios)
+          echo "Pushed $PUSHED packages"
+          EXPECTED=$(ls release-packages/*.nupkg | wc -l)
+          if [ "$PUSHED" -ne "$EXPECTED" ]; then
+            echo "ERROR: Push count mismatch - expected $EXPECTED, pushed $PUSHED"
+            exit 1
+          fi
+
+      - name: NuGet push skipped (secret missing)
+        if: ${{ env.NUGET_API_KEY == '' }}
+        run: |
+          # v60: explicit silent-skip warning (GitHub Release still created with nupkg attachments, half-success state is visible)
+          echo "::warning::NUGET_API_KEY is not configured - 35 packages were NOT pushed to NuGet.org"
 
       - name: Create GitHub Release
         if: github.event_name == 'push'

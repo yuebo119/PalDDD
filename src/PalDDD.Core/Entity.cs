@@ -90,7 +90,13 @@ public abstract class Entity<TId> : Entity
     /// </remarks>
     public TId Id { get; }
 
-    protected Entity(TId id) => Id = id;
+    protected Entity(TId id)
+    {
+        // v60 P3：运行时 null 守卫（镜像 SmartEnum v35 ITM-284——where TId : notnull 仅约束
+        // 编译期可空性标注，引用类型 ID 仍可运行时传 null，失败点远离构造处）
+        ArgumentNullException.ThrowIfNull(id);
+        Id = id;
+    }
 
     /// <summary>判断实体是否为瞬时状态（尚未持久化，Id 为默认值）</summary>
     public bool IsTransient() => EqualityComparer<TId>.Default.Equals(Id, default);

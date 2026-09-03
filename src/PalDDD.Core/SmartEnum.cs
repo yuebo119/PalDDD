@@ -130,6 +130,10 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
     /// </summary>
     protected static void RegisterValues(ReadOnlySpan<TSelf> values)
     {
+        // v60 P3：空集 fail-fast——空集把"未注册（getter 抛可恢复 IOE）"不可逆替换为
+        // "已注册空集"（FrozenDictionary 占位 + 首者胜使后续真实注册静默丢弃）
+        if (values.Length == 0)
+            throw new ArgumentException($"{typeof(TSelf).Name} 至少需要一个枚举值。", nameof(values));
         var dict = new Dictionary<TValue, TSelf>(values.Length);
         foreach (var item in values)
         {

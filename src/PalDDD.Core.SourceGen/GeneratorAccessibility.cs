@@ -65,6 +65,10 @@ internal static class GeneratorAccessibility
         Accessibility.Protected => "protected",
         Accessibility.ProtectedAndInternal => "private protected",
         Accessibility.ProtectedOrInternal => "protected internal",
+        // v60 P3：Internal/Public 显式映射——fallback ToString 输出 PascalCase（'Internal'），
+        // internal 是 Identity Public-only 拦截的最常见场景，消息须显示合法修饰符写法
+        Accessibility.Internal => "internal",
+        Accessibility.Public => "public",
         // v36 P3 勘误（N2）：计划中的 Accessibility.File => "file" 映射经编译证伪未加入——
         // 本项目锁定的 Microsoft.CodeAnalysis.CSharp 5.9.0（Directory.Packages.props）的
         // Accessibility 枚举无 File 成员（编译报 CS0117；本机 nuget 缓存 5.10 预览版同样无），

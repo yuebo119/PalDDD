@@ -215,6 +215,22 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
                     validMessages.Add(message);
             }
 
+            // v60 P3：同类型异名双注册拦截——同一类型多 partial 挂不同 Name 时
+            // GroupBy(Name) 只拦同名，异名双注册使一类型两个 wire name 无诊断
+            var duplicateTypeNames = new HashSet<string>(
+                validMessages.GroupBy(static m => m.TypeName, StringComparer.Ordinal)
+                    .Where(static g => g.Count() > 1)
+                    .Select(static g => g.Key),
+                StringComparer.Ordinal);
+            foreach (var dup in validMessages.Where(m => duplicateTypeNames.Contains(m.TypeName)))
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    DuplicateMessageName,
+                    dup.Location.ToLocation(),
+                    $"{dup.Name} (type '{dup.TypeName}' has multiple [GenerateMessage] declarations with different names)"));
+            }
+            validMessages.RemoveAll(m => duplicateTypeNames.Contains(m.TypeName));
+
             var duplicateNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (var group in validMessages.GroupBy(static message => message.Name))
             {

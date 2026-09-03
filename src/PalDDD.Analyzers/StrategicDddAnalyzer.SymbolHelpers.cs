@@ -5,6 +5,9 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace PalDDD.Analyzers;
 
 /// <summary>符号/语法树辅助（精炼重组 2026-08-26 自 AnalyzeNamedType 尾段，逻辑与注释逐字保留）。</summary>
+// v60 P3-8 边界声明：TryGetProjectionName/TryGetStaticStringProperty 依赖
+// DeclaringSyntaxReferences 提取字面量——字面量声明在外部程序集基类（NuGet 包内）时
+// 语法引用为空，合规代码会报 PDDD007/PDDD015 且无仓内消解路径；投影/事件基类需仓内源码。
 public sealed partial class StrategicDddAnalyzer
 {
     private const string BoundedContextAttributeName = "PalDDD.Core.BoundedContextAttribute";

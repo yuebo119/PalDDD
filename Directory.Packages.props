@@ -1,6 +1,6 @@
 <Project>
 
-<!-- 中央包管理 — 统一 NuGet 版本（.NET 11 Preview 5） -->
+<!-- 中央包管理 — 统一 NuGet 版本（.NET 11 preview.7 线；v60 勘正原 Preview 5 头注释 stale） -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>

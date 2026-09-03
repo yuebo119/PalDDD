@@ -280,3 +280,22 @@ public sealed class TintedColor : ColorFamily
     {
     }
 }
+
+// v60 A-P3-2：空集注册 fail-fast——原空集把"未注册可恢复"不可逆替换为"已注册空集"
+public sealed class SmartEnumEmptyRegistrationTests
+{
+    [Test]
+    public async Task RegisterValues_EmptySpan_ThrowsArgumentException()
+    {
+        // RegisterValues 是 protected——经派生类内公开包装触发
+        await Assert.That(() => EmptyProbeEnum.RegisterEmpty()).Throws<ArgumentException>();
+    }
+
+    private sealed class EmptyProbeEnum(string value, string displayName)
+        : SmartEnum<EmptyProbeEnum, string>(value, displayName)
+    {
+        public static readonly EmptyProbeEnum Unused = new("unused", "占位（空集测试不实际注册）");
+
+        public static void RegisterEmpty() => RegisterValues(Array.Empty<EmptyProbeEnum>());
+    }
+}

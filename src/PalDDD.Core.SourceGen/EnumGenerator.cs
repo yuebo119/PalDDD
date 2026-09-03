@@ -126,7 +126,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor ContainingTypeNotPartialError = new(
         "PALENUM009",
         "GenerateEnum requires partial containing types",
-        "Type '{0}' is marked with [GenerateEnum] but its containing type '{1}' is not partial — the generated partial declaration cannot merge with it (CS0260 would land in auto-generated files). Add 'partial' to the containing declaration.",
+        "Type '{0}' is marked with [GenerateEnum] but its containing type '{1}' is not partial — the generated partial declaration cannot merge with it (CS0260 would land in auto-generated files). Add 'partial' to the containing declaration; if it is an enum, move the target out of it (enums cannot be partial).",
         "PalDDD.EnumGeneration",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -299,7 +299,10 @@ public sealed class EnumGenerator : IIncrementalGenerator
                     // 用户非 partial 声明冲突报 CS0260 落 auto-generated 文件
                     // v53 P2：改报专用 PALENUM009（原复用 PALENUM007 的 {1} 是人为字符串
                     // 且"raise visibility"指引对该根因无效）；ValueType 携带实际包含类型名
-                    if (!t.IsPartial(ct))
+                    // v60 P3：enum 包含类型前置拦截（对齐 IdentityGenerator——enum 不允许
+                    // partial，"Add 'partial'"指引死胡同；PALENUM009 消息补"或移出 enum"出路）
+                    if (t.TypeKind == Microsoft.CodeAnalysis.TypeKind.Enum
+                        || !t.IsPartial(ct))
                     {
                         return new EnumGenInfo(
                             Namespace: GetNamespaceName(classSymbol),
@@ -448,8 +451,8 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // （原 "_" 连接方案 AddSource 重复 hint 抛 ArgumentException）。hint 仅作
                 // 生成物文件名与去重键，变更不影响编译。
                 var hint = info.ContainingDeclarations.Length > 0
-                    ? $"{info.Namespace ?? "_"}+{string.Join("+", info.ContainingNames)}.{info.TypeName}.g.cs"
-                    : $"{info.Namespace ?? "_"}.{info.TypeName}.g.cs";
+                    ? $"{(info.Namespace is null ? "" : info.Namespace + "+")}{string.Join("+", info.ContainingNames)}.{info.TypeName}.g.cs"
+                    : $"{(info.Namespace is null ? "" : info.Namespace + ".")}{info.TypeName}.g.cs";
                 if (!seenHints.Add(hint))
                 {
                     // P2 修复（二十一轮）：重复 [GenerateEnum] 声明——仅首个声明生成代码，

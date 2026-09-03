@@ -123,7 +123,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor ContainingTypeNotPartial = new(
         "PALID007",
         "GenerateId requires partial containing types",
-        "Type '{0}' uses [GenerateId] but its containing type '{1}' is not partial — the generated partial declaration cannot merge with it (CS0260 would land in auto-generated files). Add 'partial' to the containing declaration.",
+        "Type '{0}' uses [GenerateId] but its containing type '{1}' is not partial — the generated partial declaration cannot merge with it (CS0260 would land in auto-generated files). Add 'partial' to the containing declaration; if it is an enum, move the target out of it (enums cannot be partial).",
         "PalDDD.IdentityGeneration",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -258,8 +258,12 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                     // v52 P2：包含类型非 partial 时报诊断——生成 partial 包裹声明与用户
                     // 非 partial 声明冲突报 CS0260 落 auto-generated 文件无排障指引
                     // v53 P1：SourceType 字段复用为携带非 partial 包含类型名（分派侧 {1}）
-                    if (t.DeclaredAccessibility != Accessibility.NotApplicable
-                        && !t.IsPartial(ct))
+                    // v60 P3：enum 包含类型前置拦截——enum 不允许 partial（语言规则），下方
+                    // "Add 'partial'" 指引对 enum 不可执行（死胡同），真实出路是移出 enum 声明
+                    //（IsPartial 对 enum 恒 false 落入 PALID007 分支）
+                    if (t.TypeKind == Microsoft.CodeAnalysis.TypeKind.Enum
+                        || (t.DeclaredAccessibility != Accessibility.NotApplicable
+                            && !t.IsPartial(ct)))
                     {
                         return new IdGenInfo(
                             Namespace: null,
@@ -436,8 +440,8 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 // 见 SourceGeneratorDirectTests.GetGeneratedSource）；转换器类名仍用 "_" 拼接
                 // （C# 标识符不允许 "+"，下划线边界撞名的 CS0101 属已声明限制）。
                 var hint = info.ContainingNames.Length > 0
-                    ? $"{info.Namespace ?? "_"}+{string.Join("+", info.ContainingNames)}.{info.TypeName}.g.cs"
-                    : $"{info.Namespace ?? "_"}.{info.TypeName}.g.cs";
+                    ? $"{(info.Namespace is null ? "" : info.Namespace + "+")}{string.Join("+", info.ContainingNames)}.{info.TypeName}.g.cs"
+                    : $"{(info.Namespace is null ? "" : info.Namespace + ".")}{info.TypeName}.g.cs";
                 if (!seenHints.Add(hint))
                 {
                     // P2 修复（二十一轮）：重复 [GenerateId] 声明——仅首个声明生成代码，

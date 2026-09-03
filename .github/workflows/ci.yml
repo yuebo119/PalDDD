@@ -143,8 +143,8 @@ jobs:
     # unified v2.0 Phase 2a：方言实测防线固化——40 断言 × PG/MySQL 从"本机可选跑"升 CI 必跑。
     # 定位是准发布门：路径触发（仅 Store/SQL/DDL/映射面变更），不阻塞 build-and-test 快速反馈。
     # 脚本用根 scripts/dialect-probe.sh（.ai 独立仓不随主仓分发的分发副本，真源 .ai/scripts/）。
-    # 红测欠账（v53 复核）：mutation 验证需本 job 的 PG/MySQL 服务容器（本机无 Docker 不可执行），
-    # 首次 CI 运行后：临时改坏一个 SqlTemplates 断言确认 job 变红，再还原并删除本注释（tasks 2a.4）。
+    # 红测欠账（v60 复核仍开放）：mutation 验证需本 job 的 PG/MySQL 服务容器（本机无 Docker
+    # 不可执行）——首次 CI 运行后：临时改坏一个 SqlTemplates 断言确认 job 变红，再还原销账（tasks 2a.4）。
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -180,7 +180,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0  # v60：全历史 diff——fetch-depth:2 在多 commit push 时漏检中间提交的 Dapper 变更
 
       - name: Path gate（Store/SQL/DDL/映射面才跑；PR 全跑宁多验不漏验）
         id: paths
