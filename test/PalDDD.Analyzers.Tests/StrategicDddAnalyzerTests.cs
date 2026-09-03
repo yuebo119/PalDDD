@@ -13,6 +13,25 @@ using System.Collections.Immutable;
 
 public sealed class StrategicDddAnalyzerTests
 {
+    // v57 P1 回归网：显式接口实现 EventName（IDomainEvent.EventName 是 static abstract，
+    // C# 强制显式实现——框架唯一合规写法）此前被 GetMembers(name) 按名查找漏掉 →
+    // PDDD015 假报 missing（真实项目 TWAE 下合规用户编译失败）
+    [Test]
+    public async Task ExplicitInterfaceEventName_Matches_NoPddd015()
+    {
+        var diagnostics = await AnalyzeAsync("""
+            using PalDDD.Core;
+            namespace ProbeNs;
+            [BoundedContext("ordering")]
+            [GenerateMessage(Name = "ordering.probe.v1")]
+            public sealed class ProbeEvent : DomainEvent, IDomainEvent
+            {
+                static string IDomainEvent.EventName => "ordering.probe.v1";
+            }
+            """);
+        await Assert.That(diagnostics.Any(d => d.Id == "PDDD015")).IsFalse();
+    }
+
     [Test]
     public async Task DomainEventWithoutBoundedContext_ReportsDiagnostic()
     {

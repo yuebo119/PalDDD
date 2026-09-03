@@ -79,6 +79,11 @@ sealed class Order : AggregateRoot<OrderId>
         RaiseEvent(new ItemAdded { OrderId = Id.Value, Name = name, Qty = qty, Price = price });
     }
 
+    public void Submit(decimal amount)
+    {
+        TotalAmount = Money.CNY(amount); Status = "submitted";
+    }
+
     public void Confirm()
     {
         Status = "confirmed";
