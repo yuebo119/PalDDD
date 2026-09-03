@@ -24,6 +24,25 @@ public sealed class DapperBulkCopyTests
         await Assert.That(exception!.ParamName).IsEqualTo("tableName");
     }
 
+    // v66 PG 事务类型对称 fail-fast 回归网（守卫在 (NpgsqlConnection) 强转之前——
+    // 传 SqliteTransaction 即触发，零 PG 连接依赖）
+    [Test]
+    public async Task BulkInsertAsync_PG_WrongTransactionType_ThrowsArgumentException()
+    {
+        var exception = await Assert.That(() =>
+            DapperBulkCopy.BulkInsertAsync(
+                new SqliteConnection("Data Source=:memory:"),
+                DapperDbType.PostgreSql,
+                "outbox_messages",
+                ["id"],
+                [new object()],
+                static item => [item],
+                transaction: OpenSqliteWithTransaction()).AsTask())
+            .Throws<ArgumentException>();
+
+        await Assert.That(exception!.Message).Contains("NpgsqlTransaction");
+    }
+
     [Test]
     [Arguments("id;DROP TABLE outbox_messages")]
     [Arguments("1id")]
@@ -100,5 +119,12 @@ public sealed class DapperBulkCopyTests
         await Assert.That(rows[1].Amount).IsEqualTo(10L);
         await Assert.That(rows[2].Name).IsNull();
         await Assert.That(rows[2].Amount).IsEqualTo(30L);
+    }
+
+    private static SqliteTransaction OpenSqliteWithTransaction()
+    {
+        var conn = new SqliteConnection("Data Source=:memory:");
+        conn.Open();
+        return conn.BeginTransaction();
     }
 }
