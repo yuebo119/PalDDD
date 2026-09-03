@@ -188,7 +188,11 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
                 $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by IS NULL",
                 default).AsTask().GetAwaiter().GetResult()
             : Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} -- v72：删三十四轮 token 化手误的重复谓词（姊妹 ReleaseForRetry/Dapper/EFCore 均单次） AND locked_until = {until}",
+                // v74 P1 修复：v72 勘正说明曾以 SQL 行内注释（--）误嵌本字符串——单行 SQL 中
+                // -- 到语句末尾全部被数据库当注释，AND locked_until 谓词随之失效（同 owner
+                // 重租后旧快照终态写放行，探针实证红）；注释移出字符串，(locked_by, locked_until)
+                // 双谓词恢复（形态对齐姊妹 ReleaseForRetry 单次双谓词）
+                $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} AND locked_until = {until}",
                 default).AsTask().GetAwaiter().GetResult();
         if (affected > 0)
         {
@@ -227,7 +231,9 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
                 $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by IS NULL",
                 default).AsTask().GetAwaiter().GetResult()
             : Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} -- v72：删三十四轮 token 化手误的重复谓词（姊妹 ReleaseForRetry/Dapper/EFCore 均单次） AND locked_until = {until}",
+                // v74 P1 修复：同 MarkProcessed——v72 勘正说明曾误嵌 SQL 字符串（-- 注释吞掉
+                // AND locked_until 谓词，同 owner 重租旧写放行）；双谓词恢复
+                $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} AND locked_until = {until}",
                 default).AsTask().GetAwaiter().GetResult();
         if (affected > 0)
         {
