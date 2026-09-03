@@ -12,7 +12,7 @@
 | PDDD010 | 消息名必须以 `.v{schemaVersion}` 结尾 |
 | PDDD011 | SchemaVersion >= 1 |
 | PDDD012 | 领域事件必须 `sealed` |
-| PDDD015 | `IDomainEvent.EventName` 必须与 `[GenerateMessage]` 的 Name 一致 |
+| PDDD015 | `IDomainEvent.EventName` 必须与 `[GenerateMessage(Name = "ordering.order-submitted.v1")]` 的 Name 一致 |
 
 ## 必须遵守
 - 继承 `DomainEvent` + 实现 `IDomainEvent`
@@ -35,7 +35,7 @@ using PalDDD.Core;
 namespace YourDomain.Events;
 
 // ⚠️ 宿主必须是 sealed class——record 不能继承非 record 的 DomainEvent（CS8864），
-// 且 [GenerateMessage]/PDDD005 均为 AttributeTargets.Class
+// 且 [GenerateMessage(Name = "ordering.order-submitted.v1")]/PDDD005 均为 AttributeTargets.Class
 [BoundedContext("ordering")]
 [GenerateMessage(Name = "ordering.order-submitted.v1")]
 public sealed class OrderSubmitted : DomainEvent, IDomainEvent
@@ -48,7 +48,7 @@ public sealed class OrderSubmitted : DomainEvent, IDomainEvent
 
 // 消息版本演化示例（v1 → v2 新增字段）
 [BoundedContext("ordering")]
-[GenerateMessage(Name = "ordering.order-submitted.v2")]
+[GenerateMessage(Name = "ordering.order-submitted.v2", SchemaVersion = 2)] // 名字 .v2 与 SchemaVersion 必须配套（PDDD010 强制）
 public sealed class OrderSubmittedV2 : DomainEvent, IDomainEvent
 {
     public Guid OrderId { get; init; }
@@ -62,8 +62,8 @@ public sealed class OrderSubmittedV2 : DomainEvent, IDomainEvent
 ## 示例（来自 samples/PalDDD.ECommerce）
 ```csharp
 // ⚠️ samples 未挂 PalDDD.Analyzers——本段手写 IDomainEvent.EventName 形态在挂了
-// analyzer 的生产项目会触发 PDDD005 Error（必须 [GenerateMessage]）；生产事件请用
-// 上方输出格式段的 [GenerateMessage] 形态（源生成 EventName，免手写）
+// analyzer 的生产项目会触发 PDDD005 Error（必须 [GenerateMessage(Name = "ordering.order-submitted.v1")]）；生产事件请用
+// 上方输出格式段的 [GenerateMessage(Name = "ordering.order-submitted.v1")] 形态（源生成 EventName，免手写）
 sealed class ItemAdded : DomainEvent, IDomainEvent
 {
     public Guid OrderId { get; init; }

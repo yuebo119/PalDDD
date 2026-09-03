@@ -115,9 +115,6 @@ public static class MySqlMultiHost
         // v50 P2 勘正（F1）：专用拦截前置到 Split 循环之前——v49 空条目 fail-fast 落在
         // 循环内，缺 Server 串 Split 产物 [""] 先触发误导性"空条目"消息（:165 N7 成死
         // 代码），对齐 standby 侧 :78 前置形态
-        // v50 P2 勘正（F1）：本拦截前置于下方 Split 循环——v49 空条目 fail-fast 落在
-        // 循环内，缺 Server 串 Split 产物 [""] 会先触发误导性"空条目"消息，专用消息
-        // （:165 N7）成死代码。standby 侧 :78 形态同款前置
         // v26 P3 H5：拼接前 Server 查重 fail-fast（镜像 PG Failover 入口 v25 C9 查重）——
         // primary/standby 同指一机时拼接产生重复 Server 条目（如 "mysql1,mysql1"），
         // FailOver 把同一实例视作两个节点轮试，故障转移语义错乱。归一化经

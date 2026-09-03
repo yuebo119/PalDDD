@@ -228,7 +228,12 @@ public sealed partial class StrategicDddAnalyzer
         string propertyName,
         CancellationToken cancellationToken)
     {
-        foreach (var member in type.GetMembers(propertyName))
+        // v57 P1（analyzer 真实缺陷实证修复）：GetMembers(name) 按名查找**不含显式接口实现**——
+        // IDomainEvent.EventName 是 static abstract（C# 强制显式实现），框架合规写法
+        // `static string IDomainEvent.EventName => "..."` 被按名查找漏掉 → PDDD015 假报
+        // missing（真实项目 TreatWarningsAsErrors 下合规用户编译失败）。改无参枚举 +
+        // 简单名/显式实现链双匹配（探针环境 GetMembers("EventName") 返回空的直证）
+        foreach (var member in type.GetMembers())
         {
             if (member is not IPropertySymbol property
                 || !property.IsStatic
@@ -236,6 +241,10 @@ public sealed partial class StrategicDddAnalyzer
             {
                 continue;
             }
+            var matchesTarget = property.Name == propertyName
+                || property.ExplicitInterfaceImplementations.Any(p => p.Name == propertyName);
+            if (!matchesTarget)
+                continue;
 
             foreach (var syntaxReference in property.DeclaringSyntaxReferences)
             {

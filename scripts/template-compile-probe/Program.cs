@@ -5,7 +5,6 @@
 // 退出码：0=全部可编译（输出格式段另过 PDDD analyzer）；1=存在编译失败
 // ─────────────────────────────────────────────────────────────
 using System.Collections.Immutable;
-using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
@@ -128,8 +127,9 @@ internal static class Probe
                 (stubs ? Wrap(code) + TemplateStubs.Render(code, $"{template}:{line}") : Wrap(code)));
         }
 
-        // 顶级语句块（DI/app 骨架段）必须 ConsoleApplication；纯类型声明块用 Library
-        // 顶级语句块（DI/app 骨架段）必须 ConsoleApplication；纯类型声明块用 Library
+        // 顶级语句块（DI/app 骨架段）必须 ConsoleApplication；纯类型声明块用 Library。
+        // v57 P3 局限声明：子串启发式——enum/delegate 声明块（无四关键字）误判 Console；
+        // 字面量含 "class " 的顶级块反向。当前 9 模板未踩，模板演进时校准
         var hasTopLevel = !(code.Contains("class ") || code.Contains("record ") || code.Contains("struct ") || code.Contains("interface "));
         var kind = hasTopLevel ? OutputKind.ConsoleApplication : OutputKind.DynamicallyLinkedLibrary;
         var compilation = CSharpCompilation.Create($"probe.{template}.{line}",
@@ -158,7 +158,10 @@ internal static class Probe
                 File.WriteAllText(Path.Combine(dumpDir, "gen-" + Path.GetFileName(gt.FilePath)), gt.ToString());
         }
 
-        IEnumerable<Diagnostic> diagnostics = withGen.GetDiagnostics();
+        // v57 P1-1：生成器诊断必须进判定——此前 genDiags 被丢弃（PALID/PALMSG/PALENUM 系列
+        // 不进红绿），生成器"不生成坏代码"策略下编译层零错误 → 假绿（实证：桩双同名消息
+        // 当前就该触发 PALMSG003 但探针绿——丢弃实锤）
+        IEnumerable<Diagnostic> diagnostics = withGen.GetDiagnostics().Concat(genDiags);
 
         if (withAnalyzers)
         {
@@ -166,7 +169,12 @@ internal static class Probe
             diagnostics = diagnostics.Concat(withA.GetAnalyzerDiagnosticsAsync().GetAwaiter().GetResult());
         }
 
-        var errors = diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+        // v57 P1-3：Warning 级 PDDD 升 Error——真实项目 TreatWarningsAsErrors=true 使
+        // PDDD002/006/015 等强制，探针与生产同档（否则探针比生产松一档 → 假绿）
+        var errors = diagnostics.Where(d =>
+            d.Severity == DiagnosticSeverity.Error
+            || (d.Id.StartsWith("PDDD", StringComparison.Ordinal) && d.Severity == DiagnosticSeverity.Warning))
+            .ToList();
         // CS0616@生成树豁免：生成物（[TypeConverter] attribute 绑定）在真实 SDK 引用面下编译通过
         //（独立 csproj 实证）；探针引用面（PalDDD 全家+EF+ASP.NET 共享框架组合）下的 attribute
         // 绑定差异为已知限制，豁免且仅限生成树路径
@@ -291,6 +299,9 @@ internal static class TemplateStubs
             declared.Add(m.Groups[1].Value);
 
         var segments = new List<(string Type, string Text)>();
+        // v57 P2-1 声明：桩=samples 真源 ∪ 模板教学扩展（Order.Submit/单参构造/
+        // IOrderRepository.SaveChangesAsync 是 command-handler 教学链成员，samples 无——
+        // aggregate-root 模板已同步补 Submit 闭合教学链；桩漂移审计见 v57 片2 报告
         var sb = new StringBuilder();
         // using 全部在 Wrap 头（单树合并后 using 必须位于类型声明前）
 
@@ -303,9 +314,14 @@ internal static class TemplateStubs
                 public override string ToString() => $"{Amount:F2} {Currency}";
             }
             """);
-        Emit("OrderId", "public readonly record struct OrderId(Guid Value) { public static OrderId From(Guid g) => new(g); }");
+        // v57 P2-3：改 [GenerateId] 真实生成形态（探针已挂 IdentityGenerator——桩手写 From
+        // 与生成面漂移即假绿面；partial 声明由生成器合并出 From/New/Value 全成员面）
+        Emit("OrderId", """
+            [GenerateId(typeof(Guid))]
+            public readonly partial record struct OrderId;
+            """);
         Emit("OrderSubmitted", """
-            [BoundedContext("stubs")]
+            [BoundedContext("ordering")]
             [GenerateMessage(Name = "ordering.order-submitted.v1")]
             public sealed partial class OrderSubmitted : DomainEvent, IDomainEvent
             {
@@ -316,7 +332,7 @@ internal static class TemplateStubs
             }
             """);
         Emit("OrderConfirmed", """
-            [BoundedContext("stubs")]
+            [BoundedContext("ordering")]
             [GenerateMessage(Name = "ordering.order-confirmed.v1")]
             public sealed partial class OrderConfirmed : DomainEvent, IDomainEvent
             {
@@ -327,7 +343,7 @@ internal static class TemplateStubs
             }
             """);
         Emit("ItemAdded", """
-            [BoundedContext("stubs")]
+            [BoundedContext("ordering")]
             [GenerateMessage(Name = "ordering.item-added.v1")]
             public sealed partial class ItemAdded : DomainEvent, IDomainEvent
             {
@@ -339,20 +355,20 @@ internal static class TemplateStubs
             }
             """);
         Emit("ItemAddedToOrder", """
-            [BoundedContext("stubs")]
-            [GenerateMessage(Name = "ordering.item-added.v1")]
+            [BoundedContext("ordering")]
+            [GenerateMessage(Name = "ordering.item-added-to-order.v1")]
             public sealed partial class ItemAddedToOrder : DomainEvent, IDomainEvent
             {
                 public Guid OrderId { get; init; }
                 public string ProductName { get; init; } = "";
                 public Money Price { get; init; }
                 public int Quantity { get; init; }
-                static string IDomainEvent.EventName => "ordering.item-added.v1";
+                static string IDomainEvent.EventName => "ordering.item-added-to-order.v1";
             }
             """);
         Emit("OrderItem", "public sealed class OrderItem { public string Name { get; set; } = \"\"; public int Qty { get; set; } public Money Price { get; set; } }");
         Emit("Order", """
-            [BoundedContext("stubs")]
+            [BoundedContext("ordering")]
             public sealed class Order : AggregateRoot<OrderId>
             {
                 private readonly List<OrderItem> _items = [];
@@ -391,7 +407,7 @@ internal static class TemplateStubs
             public sealed class AppJsonContext
             {
                 public static AppJsonContext Default { get; } = new();
-                public static System.Text.Json.JsonSerializerOptions Options { get; } = new();
+                public System.Text.Json.JsonSerializerOptions Options => throw new NotSupportedException(); // 实例属性（对齐真实 JsonSerializerContext 生成面，v57 P2-2）
                 public System.Text.Json.Serialization.Metadata.JsonTypeInfo<OrderSubmitted> OrderSubmitted => throw new NotSupportedException();
                 public System.Text.Json.Serialization.Metadata.JsonTypeInfo<OrderConfirmed> OrderConfirmed => throw new NotSupportedException();
                 public System.Text.Json.Serialization.Metadata.JsonTypeInfo<SubmitOrder> SubmitOrder => throw new NotSupportedException();
@@ -400,10 +416,10 @@ internal static class TemplateStubs
             }
             """);
         Emit("OrderProjectionHandler", """
-            [BoundedContext("stubs")]
+            [BoundedContext("ordering")]
             public sealed class OrderProjectionHandler : IProjectionHandler<OrderSubmitted>
             {
-                public string ProjectionName => "stubs.order-projection";
+                public string ProjectionName => "ordering.order-projection";
                 public ValueTask ProjectAsync(OrderSubmitted @event, ProjectionContext context, CancellationToken ct) => ValueTask.CompletedTask;
             }
             """);
@@ -411,7 +427,7 @@ internal static class TemplateStubs
         Emit("OrderReadDbContext", "public sealed class OrderReadDbContext : DbContext { public DbSet<OrderSummary> OrderSummaries => Set<OrderSummary>(); public OrderReadDbContext() { } public OrderReadDbContext(DbContextOptions<OrderReadDbContext> o) : base(o) { } }");
         Emit("OrderDbContext", "public sealed class OrderDbContext : DbContext { public DbSet<Order> Orders => Set<Order>(); public OrderDbContext(DbContextOptions<OrderDbContext> o) : base(o) { } }");
         Emit("OrderRequested", """
-            [BoundedContext("stubs")]
+            [BoundedContext("ordering")]
             [GenerateMessage(Name = "ordering.order-requested.v1")]
             public sealed partial class OrderRequested : DomainEvent, IDomainEvent
             {
@@ -421,7 +437,7 @@ internal static class TemplateStubs
             }
             """);
         Emit("OrderCreated", """
-            [BoundedContext("stubs")]
+            [BoundedContext("ordering")]
             [GenerateMessage(Name = "ordering.order-created.v1")]
             public sealed partial class OrderCreated : DomainEvent, IDomainEvent
             {
