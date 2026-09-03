@@ -132,6 +132,46 @@ public sealed class InMemoryStoreTests
     }
 
     [Test]
+    public async Task InMemoryOutboxStore_IsCurrentLeaseHolder_ReferenceSemantics_ValueEqualSnapshotIgnored(CancellationToken cancellationToken)
+    {
+        // v74 P3（P4-S2 收口）回归网：IsCurrentLeaseHolder 的 Contains 显式传
+        // ReferenceEqualityComparer——字段全等的另一引用（外部手工拷贝快照）不被视为
+        // 持有者，其 Mark 被守卫忽略。锁定意图：一旦 OutboxMessage 改 record / 加值相等，
+        // 值相等快照将命中守卫覆盖真持有者（ITM-174 僵尸标记守卫击穿）——本测试变红即
+        // 该形态的报警器（显式引用语义对齐 InMemoryInboxStore/Idempotency/Checkpoint 三姊妹）
+        var store = new InMemoryOutboxStore();
+        var msg = new OutboxMessage { Type = "test", Payload = [1], ContentType = "application/json", SchemaVersion = 1 };
+        store.AddMessage(msg);
+        var leased = await store.LeasePendingMessagesAsync(10, "owner-1", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        var holder = leased[0]; // successor（列表当前持有者）
+
+        // 手工拷贝快照：全部字段相等但不同引用
+        var snapshot = new OutboxMessage
+        {
+            Id = holder.Id,
+            Type = holder.Type,
+            Payload = holder.Payload,
+            ContentType = holder.ContentType,
+            SchemaVersion = holder.SchemaVersion,
+            CorrelationId = holder.CorrelationId,
+            CausationId = holder.CausationId,
+            TraceParent = holder.TraceParent,
+            TraceState = holder.TraceState,
+            CreatedAt = holder.CreatedAt,
+            RetryCount = holder.RetryCount,
+            Status = holder.Status,
+            LockedBy = holder.LockedBy,
+            LockedUntil = holder.LockedUntil,
+        };
+        await Assert.That(ReferenceEquals(holder, snapshot)).IsFalse();
+
+        // 快照的 Mark 被守卫忽略——真持有者状态不被触碰
+        store.MarkProcessed(snapshot, DateTimeOffset.UtcNow);
+        await Assert.That(holder.Status).IsEqualTo(OutboxStatus.Pending);
+        await Assert.That(holder.LockedBy).IsEqualTo("owner-1");
+    }
+
+    [Test]
     public async Task InMemoryOutboxStore_WithInjectedTimeProvider_LeaseExpiryIsDeterministic(CancellationToken cancellationToken)
     {
         // 注入 FakeTimeProvider 验证租约过期时序可控——与 OutboxBatchProcessor 的时间抽象对齐

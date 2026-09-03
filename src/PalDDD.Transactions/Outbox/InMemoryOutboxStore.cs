@@ -258,9 +258,15 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
         // 未复用 LeasePendingMessagesAsync 的引用索引表：indexMap 为局部变量，租约后即
         // 丢弃；提升为字段需在 _messages 全部变更点同步维护 List+Dictionary 双结构，
         // 超出最小改动。活跃租约正常路径仍走 Contains（每消息批一次，规模=测试负载）。
+        // v74 P3（P4-S2 收口）：Contains 显式传 ReferenceEqualityComparer——原默认比较器
+        // 的正确性依赖 OutboxMessage 永不重写 Equals 的类型外部隐式契约（一旦改 record/
+        // 加值相等，successor 替换后旧引用按 Id 值相等命中 Contains，旧 worker 覆盖新
+        // 持有者——ITM-174 僵尸标记守卫静默击穿）。显式引用语义对齐同文件 :70 indexMap
+        // 与姊妹 InMemoryInboxStore/InMemoryIdempotencyStore/InMemoryProjectionCheckpointStore
+        // 的 ReferenceEquals/显式引用字典形态（三姊妹轴唯一漏网处）
         => message.Status == OutboxStatus.Pending
             && message.LockedBy is not null
-            && _messages.Contains(message);
+            && _messages.Contains(message, ReferenceEqualityComparer.Instance);
 
     private List<OutboxMessage> QueryPending(int batchSize, int maxRetryCount)
     {

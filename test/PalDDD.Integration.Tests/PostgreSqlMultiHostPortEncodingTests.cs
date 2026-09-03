@@ -123,4 +123,74 @@ public sealed class PostgreSqlMultiHostPortEncodingTests
         await Assert.That(services2.Count).IsGreaterThan(0);
     }
 
+    // ── v74 P3（P4-S1 收口）：primary 侧方括号畸形后缀拦截的回归网 ──
+    // 原判定 !Contains(']') 只拦 '[' 完全无 ']'；']' 后空端口/垃圾后缀/非数字端口
+    // 三类畸形通过双豁免（Contains(']') 豁免未闭合、StartsWith('[') 豁免裸 IPv6）
+    // 延迟到 Npgsql Build/建连才报晦涩错误。判定收紧 !EndsWith(']')（对齐 standby
+    // 侧 EncodeHostEntry 形态②口径）后配置期 fail-fast
+
+    [Test]
+    public async Task AddPalNpgsqlDataSourceWithFailover_BracketHostGarbageSuffix_Throws()
+    {
+        // "[::1]abc"：']' 后垃圾后缀——原判定双豁免放行，延迟到 Npgsql Build
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalNpgsqlDataSourceWithFailover(
+                    "Host=[::1]abc;Username=u;Password=p",
+                    "Host=pg2;Username=u;Password=p"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalNpgsqlDataSourceWithFailover_BracketHostEmptyPortSuffix_Throws()
+    {
+        // "[::1]:"：']' 后空端口——归一化 TryParse("") 失败回退原串，原判定双豁免放行
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalNpgsqlDataSourceWithFailover(
+                    "Host=[::1]:;Username=u;Password=p",
+                    "Host=pg2;Username=u;Password=p"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalNpgsqlDataSourceWithFailover_BracketHostNonNumericPortSuffix_Throws()
+    {
+        // "[::1]:abc"：']' 后非数字端口——同族畸形
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalNpgsqlDataSourceWithFailover(
+                    "Host=[::1]:abc;Username=u;Password=p",
+                    "Host=pg2;Username=u;Password=p"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalNpgsqlDataSourceWithReadWriteSplit_BracketHostGarbageSuffix_Throws()
+    {
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalNpgsqlDataSourceWithReadWriteSplit(
+                    "Host=[::1]abc;Username=u;Password=p",
+                    ["Host=pg-read1;Username=u;Password=p"]))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalReadWriteRouter_BracketHostGarbageSuffix_Throws()
+    {
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalReadWriteRouter(
+                    "Host=[::1]abc;Username=u;Password=p",
+                    ["Host=pg-read1;Username=u;Password=p"]))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalNpgsqlDataSourceWithFailover_BracketHostValidForms_DoesNotThrow()
+    {
+        // 合法形态不误拦：方括号纯 host "[::1]" 与方括号+端口 "[::1]:5433"
+        //（归一化后均以 ']' 收尾走放行；standby 侧同形态经 EncodeHostEntry 编码）
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddPalNpgsqlDataSourceWithFailover(
+                "Host=[::1];Username=u;Password=p",
+                "Host=[::1]:5433;Username=u;Password=p");
+        await Assert.That(services.Count).IsGreaterThan(0);
+    }
 }
