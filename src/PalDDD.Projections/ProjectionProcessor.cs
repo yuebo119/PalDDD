@@ -14,9 +14,9 @@ namespace PalDDD.Projections;
     Justification = "投影处理器需在重新抛出前持久化任意用户投影失败信息，需捕获 Exception 基类。")]
 public sealed class ProjectionProcessor<TMessage>
 {
-    // ITM-167 修复：失败原因入库截断上限（对齐 InboxProcessor/OutboxBatchProcessor 的
-    // MaxFailureReasonLength=2000）——checkpoint.error 列上限 2048，超长 ex.Message 会让
-    // MarkFailedAsync 的持久化本身失败，掩盖原始投影失败。
+    // ITM-167 修复：失败原因入库截断（Core.FailureReason.Normalize，2000 上限——与
+    // InboxProcessor/OutboxBatchProcessor 的 MaxFailureReasonLength 同口径）——checkpoint.error
+    // 列上限 2048，超长 ex.Message 会让 MarkFailedAsync 的持久化本身失败，掩盖原始投影失败。
 
     private readonly IProjectionHandler<TMessage> _handler;
 
@@ -90,7 +90,7 @@ public sealed class ProjectionProcessor<TMessage>
             // ITM-092 修复：MarkFailedAsync 本身失败不得掩盖主异常——内层捕获挂 Data 后仍以主异常优先。
             try
             {
-                // ITM-167 修复：ex.Message 截断到 MaxFailureReasonLength 再入库
+                // ITM-167 修复：ex.Message 截断再入库（FailureReason.Normalize，2000 上限）
                 var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
                 await _checkpointStore.MarkFailedAsync(checkpoint, failureReason, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
             }
