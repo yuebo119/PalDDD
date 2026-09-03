@@ -540,7 +540,7 @@ await projectionRebuilder.RebuildAsync(ct);
 
 ### 13. 可观测性：内建 OpenTelemetry，零配置
 
-PalDDD 在所有关键路径内置了 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（20 个遥测 instrument）——不需要手写埋点。
+PalDDD 在所有关键路径内置了 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（21 个遥测 instrument，v72 勘正计数）——不需要手写埋点。
 
 ```csharp
 // 框架自动埋点：
@@ -590,7 +590,7 @@ services.AddPalOutbox();  // MediatR 没有的能力
 | DomainEvent | 不可变 sealed record，静态 `EventName` 契约，`[GenerateMessage]` 源生成注册 |
 | ValueObject / SmartEnum | 强类型 ID（Ulid 推荐），FrozenDictionary O(1) 查找 |
 | ISpecification | ExpressionVisitor 参数替换组合 And/Or/Not，与 EF Core LINQ 完全兼容 |
-| 诊断 | 内建 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（20 个遥测 instrument） |
+| 诊断 | 内建 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（21 个遥测 instrument，v72 勘正计数） |
 
 ### CQRS
 | 组件 | 实现策略 |
@@ -676,7 +676,7 @@ src/                         36 源项目 · Clean Architecture（Folder 与 Pal
 ├── Hosting/                 DependencyInjection · Hosting.AspNetCore
 └── Metapackages/            Base · Extension · Prompts（Prompts 非包，IsPackable=false）
 
-test/                        16 测试项目（TUnit）· 897+ 测试（15 本地 + 1 PalORM CI/Docker）
+test/                        16 测试项目（TUnit）· 1000+ 测试（15 项目无 Docker 本地全跑 + PalORM.Tests 需 Docker/CI——v72 统一口径）
 bench/                       BenchmarkDotNet 性能基准
 samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi · AotSample
 docs/                        架构 · 使用指南 · 教程 · ADR
@@ -751,7 +751,7 @@ MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Servi
 不支持 .NET 8/9/10（单目标 net11.0）。Saga 的 ChildSaga 和 DynamicStep 依赖 `MakeGenericType`，在 AOT 发布时不可用（标注了 `[RequiresDynamicCode]`）。不含内置的 EventStore 快照机制——需要快照策略的项目需要自行实现。
 
 **生产环境有谁在用？**
-Pal.DDD 当前版本 v2.0.0（tag v2.0.0 已推送；三十七轮全仓清偿后 CI 全绿）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 900+ 用例（本地 16 项目，v62 勘正计数）+ 41 Testcontainers 真库集成（CI）。欢迎在非生产环境中试用并反馈。
+Pal.DDD 当前版本 v2.0.0（tag v2.0.0 已推送；三十七轮全仓清偿后 CI 全绿）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 1000+ 用例（16 项目其中 PalORM.Tests 需 Docker——与上方口径统一，v72）+ 41 Testcontainers 真库集成（CI）。欢迎在非生产环境中试用并反馈。
 
 ---
 

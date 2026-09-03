@@ -208,8 +208,10 @@ public sealed partial class StrategicDddAnalyzer
                                     Expression: LiteralExpressionSyntax returnLiteral
                                 })
                             {
-                                // v70 P3：null/default 视为缺失（v66 四形态补齐的最后一腿——
-                                // ProjectionName 侧 getter-return 此前漏补，与姊妹 helper 不一致）
+                                // v70 P3：null/default 视为缺失（v66 四形态最后一腿）。
+                                // v72 勘正：此侧消费方对 (null,loc)/(null,null) 均报 PDDD007——
+                                // 修复无行为可观察差异（仅 EventName 侧 ITM-124 分支有差异），
+                                // 属防御性形态一致化，黑盒不可锁定
                                 if (returnLiteral.IsKind(SyntaxKind.NullLiteralExpression)
                                     || returnLiteral.IsKind(SyntaxKind.DefaultLiteralExpression))
                                     return (null, null);

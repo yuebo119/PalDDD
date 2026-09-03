@@ -50,7 +50,7 @@ public static class MySqlServiceCollectionExtensions
         bool applyOptimization = true)
     {
         ArgumentNullException.ThrowIfNull(services);
-        ArgumentNullException.ThrowIfNull(connectionString);
+        // v72：删冗余 ThrowIfNull（ThrowIfNullOrWhiteSpace 对 null 已抛 ANE——对齐 PG 姊妹 v34 声明）
         // v33 P3：空白连接串 fail-fast（对齐同包 DapperConfiguration.Create:42 口径）——
         // 空白串原样放行会延迟到 MySqlDataSourceBuilder.Build()/建连时才抛 provider 专属异常
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);

@@ -15,10 +15,10 @@ public static class DecompressionGuard
     public const int MaxCompressedInputBytes = 8 * 1024 * 1024;
 
     /// <summary>解压输出安全上限（64MB）——gzip 最大膨胀比约 1032:1，8MB 输入理论上可
-    /// 膨胀至 8GB；64MB 覆盖合法消息负载解压后的量级，超限抛 IOException 防炸内存。</summary>
+    /// 膨胀至 8GB；64MB 覆盖合法消息负载解压后的量级，超限抛 InvalidDataException 防炸内存（v72 勘正——v70 统一后 doc 未同步）。</summary>
     public const int MaxOutputBytes = 64 * 1024 * 1024;
 
-    /// <summary>带上限的流拷贝——超限抛 IOException（防高膨胀率炸弹）。</summary>
+    /// <summary>带上限的流拷贝——超限抛 InvalidDataException（防高膨胀率炸弹；v72 同步 v70 统一）。</summary>
     internal static void CopyWithLimit(Stream source, MemoryStream destination)
     {
         // 优化（二十四轮特性扫描 OP-1）：80KB 拷贝缓冲池化——GZip/Deflate 解压共用此路径，
