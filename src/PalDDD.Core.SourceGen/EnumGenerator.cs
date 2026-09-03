@@ -126,7 +126,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor ContainingTypeNotPartialError = new(
         "PALENUM009",
         "GenerateEnum requires partial containing types",
-        "Type '{0}' is marked with [GenerateEnum] but its containing type '{1}' is not partial — the generated partial declaration cannot merge with it (CS0260 would land in auto-generated files). Add 'partial' to the containing declaration; if it is an enum, move the target out of it (enums cannot be partial).",
+        "Type '{0}' is marked with [GenerateEnum] but its containing type '{1}' is not partial — the generated partial declaration cannot merge with it (CS0260 would land in auto-generated files). Add 'partial' to the containing declaration.",
         "PalDDD.EnumGeneration",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -299,10 +299,10 @@ public sealed class EnumGenerator : IIncrementalGenerator
                     // 用户非 partial 声明冲突报 CS0260 落 auto-generated 文件
                     // v53 P2：改报专用 PALENUM009（原复用 PALENUM007 的 {1} 是人为字符串
                     // 且"raise visibility"指引对该根因无效）；ValueType 携带实际包含类型名
-                    // v60 P3：enum 包含类型前置拦截（对齐 IdentityGenerator——enum 不允许
-                    // partial，"Add 'partial'"指引死胡同；PALENUM009 消息补"或移出 enum"出路）
-                    if (t.TypeKind == Microsoft.CodeAnalysis.TypeKind.Enum
-                        || !t.IsPartial(ct))
+                    // v61 勘正：v60 曾加 enum 包含类型前置拦截——经编译实证 C# 语法不允许
+                    // enum 体内声明嵌套类型（CS1513），ContainingType 链不可能出现 enum，
+                    // 该分支是不可构造路径的死代码，已回退（D 片 v60 P3-1 场景为推断幻觉）
+                    if (!t.IsPartial(ct))
                     {
                         return new EnumGenInfo(
                             Namespace: GetNamespaceName(classSymbol),
