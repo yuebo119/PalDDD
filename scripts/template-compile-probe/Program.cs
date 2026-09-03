@@ -224,7 +224,6 @@ internal static class Probe
         using PalDDD.Dapper;
         using PalDDD.Hosting.AspNetCore;
         using PalDDD.Serialization.Json;
-        using PalDDD.CQRS;
         using PalDDD.DependencyInjection;
 
         {{code}}
@@ -316,6 +315,9 @@ internal static class TemplateStubs
             """);
         // v57 P2-3：改 [GenerateId] 真实生成形态（探针已挂 IdentityGenerator——桩手写 From
         // 与生成面漂移即假绿面；partial 声明由生成器合并出 From/New/Value 全成员面）
+        // v60 P3-6 豁免声明：本桩必须保持 public——IdentityGenerator 是 Public-only 阈值
+        //（v37），internal 转换会触发 PALID006 假红；internal 语境的 Replace 盲区
+        //（"partial record struct" 不匹配三 Replace）恰好豁免它，属刻意依赖的现状
         Emit("OrderId", """
             [GenerateId(typeof(Guid))]
             public readonly partial record struct OrderId;

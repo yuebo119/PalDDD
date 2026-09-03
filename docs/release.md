@@ -251,7 +251,8 @@ git status --short
 dotnet build PalDDD.slnx -c Release --no-incremental -warnaserror
 
 # 3. 单元 + 集成测试全绿
-dotnet test PalDDD.slnx --no-restore --no-build
+# 逐项目跑（slnx 批量触发 MTP 握手 exit 5——ci.yml 自述实证；v60 勘正原命令不可执行）
+for p in PalDDD.Core PalDDD.CQRS PalDDD.Transactions PalDDD.Integration PalDDD.EventLog PalDDD.Serialization PalDDD.Messaging PalDDD.Analyzers PalDDD.DependencyInjection PalDDD.Hosting.AspNetCore PalDDD.Projections.EventLog; do dotnet test test/PalDDD.$p.Tests --no-restore --no-build; done
 
 # 4. 规范验证
 bash scripts/verify-conventions.sh
@@ -288,7 +289,7 @@ unzip -p /tmp/release-preview/PalDDD.Core.*.nupkg '*.nuspec' | grep -E "<(id|ver
 
 ## 五、触发发布
 
-> ⚠️ **首次发布前**：DDD 项目当前没有 `.github/workflows/release.yml`。首次发布需先创建该 workflow（见第六章）。
+> release.yml 已就位（commit 7a95bd2 创建，v2.0.0 已用其发布——v60 勘正：原"待创建"声明 stale）。
 
 ### 5.1 tag 触发（标准发布）
 
@@ -348,7 +349,7 @@ on:
 | 3 | Restore + Build | 全量构建，warnings as errors | 编译失败 → exit |
 | 4 | Unit tests | 全部 .Tests 项目 | 测试失败 → exit |
 | 5 | Integration tests | Testcontainers（PG/MySQL/RabbitMQ/Kafka）+ ubuntu-latest | 测试失败 → exit |
-| 6 | AOT publish 验证 | AOT 核心层 7 项目 `dotnet publish -p:PublishAot=true` | AOT 失败 → exit |
+| 6 | AOT publish 验证 | PalOrmSample 单入口 `dotnet publish -p:PublishAot=true` + 实跑（v60 勘正：原"7 项目"与 workflow 实态不符——release.yml/ci.yml 均 1 项目 publish+run） | AOT 失败 → exit |
 | 7 | Pack | 全部公开发布项目 | pack 失败 → exit |
 | 8 | Verify package count | 断言 nupkg 数 = 发布清单总数 | 数量不对 → exit（防漏发） |
 | 9 | Push to NuGet.org | `--skip-duplicate` | push 失败 → exit |
@@ -490,7 +491,8 @@ git checkout -b feature/xxx
 # 2. 修改代码 + 测试
 # ... 编辑代码 ...
 dotnet build PalDDD.slnx --no-incremental
-dotnet test PalDDD.slnx --no-restore --no-build
+# 逐项目跑（slnx 批量触发 MTP 握手 exit 5——ci.yml 自述实证；v60 勘正原命令不可执行）
+for p in PalDDD.Core PalDDD.CQRS PalDDD.Transactions PalDDD.Integration PalDDD.EventLog PalDDD.Serialization PalDDD.Messaging PalDDD.Analyzers PalDDD.DependencyInjection PalDDD.Hosting.AspNetCore PalDDD.Projections.EventLog; do dotnet test test/PalDDD.$p.Tests --no-restore --no-build; done
 
 # 3. 升版本（同一次提交）
 # 编辑 Directory.Build.props: <VersionSuffix></VersionSuffix> → preview.2
@@ -538,7 +540,7 @@ git commit -m "功能：xxx + 升版本 preview.2"
 | 文件 | 用途 |
 |------|------|
 | `Directory.Build.props` | 版本号真源 + 包元数据 + SourceLink 配置 |
-| `.github/workflows/release.yml`（待创建） | 发布 workflow |
+| `.github/workflows/release.yml` | 发布 workflow（v2.0.0 起在用） |
 | `.github/workflows/ci.yml`（已创建） | CI 主流程 |
 | `CHANGELOG.md` | 变更日志（GitHub Release body 来源） |
 | `README.md` | 包页面展示用 README |

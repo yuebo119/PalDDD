@@ -3,7 +3,7 @@
   <!--
     PalDDD.PalORM — PalORM 适配核心层
     ════════════════════════════════════════════════════════════
-    定位：吸取 Dapper + EFCore 双方经验，用 PalORM 源生成 ORM 实现五大基础设施 Store。
+    定位：吸取 Dapper + EFCore 双方经验，用 PalORM 源生成 ORM 实现六大基础设施 Store（v60 勘正：对齐 v34 计数口径）。
     与 PalDDD.Dapper 平级独立（PalDDD.EntityFrameworkCore 适配层源码未入库，见 OBS-068）。
     核心：DataSession<TProvider> 编译期特化（方言分发）+ [ConcurrencyCheck] 声明式乐观锁
          + [TenantAware] 编译期多租户 + 真 Native AOT（源生成替代反射）。
@@ -37,7 +37,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- PalDDD 抽象层 — 7 Store 接口所在项目 -->
+    <!-- PalDDD 抽象层 — 6 Store 接口所在项目（v60 勘正） -->
     <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
     <ProjectReference Include="..\PalDDD.Transactions\PalDDD.Transactions.csproj" />
     <ProjectReference Include="..\PalDDD.EventLog\PalDDD.EventLog.csproj" />

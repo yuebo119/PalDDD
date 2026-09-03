@@ -281,4 +281,13 @@ public sealed class DomainEventEnumerableTests
         foreach (var _ in host.DomainEvents()) count++;
         await Assert.That(count).IsEqualTo(1);
     }
+    // v60 A-P3-1：引用类型 ID 运行时 null 守卫（where TId : notnull 仅约束编译期标注）
+    [Test]
+    public async Task Entity_NullReferenceTypeId_ThrowsArgumentNullException()
+    {
+        await Assert.That(() => new RefIdEntity(null!)).Throws<ArgumentNullException>();
+    }
+
+    private sealed class RefIdEntity(string id) : Entity<string>(id);
+
 }
