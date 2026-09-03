@@ -2,13 +2,19 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
 
-> **当前版本**：`VersionPrefix=2.0.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）
-> **发布状态**：**2.0.0 已发布**（2026-08-23 tag `v2.0.0`）；1.1.0 已于 2026-07-31 发布（2026-07-31 推送 NuGet.org + tag `v1.1.0`→`b4d532f`；本节为事后回填——发布时 CHANGELOG 尚未建立）。tag 之后的所有变更见 `[Unreleased]`。
+> **当前版本**：`VersionPrefix=2.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）
+> **发布状态**：**2.1.0 已发布**（2026-09-04 tag `v2.1.0`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag 之后的所有变更见 `[Unreleased]`。
 > **发布规范**：见 [`docs/release.md`](docs/release.md)
 
 ---
 
 ## [Unreleased]
+
+（暂无）
+
+## [2.1.0] — 2026-09-04
+
+> 本段聚合 2.0.0（2026-08-23 tag `v2.0.0`）之后的全部变更：v24-v74 共 51 轮 AI 质量系统评审-修复循环（全仓地毯逐行 + 探针实证 + mutation 锁定）、一轮全源码精炼、PalORM 5.4 弹性接入与依赖升级。完整轮次明细见 `.ai/review/metrics.md`；本段为发布面摘要。
 
 ### AI 质量系统评审循环 v24-v36（2026-08-23 起十三轮全仓地毯 + 修复，commit fc6447a..v36）
 
@@ -304,6 +310,24 @@
 - **库代码 179 处 `await` 全量补 `ConfigureAwait(false)`**；Native 解压 OOM 转 `InvalidDataException`
 - **Entity.Id/EventId/OccurredOn get-only**（构造后身份不可覆盖）；Hi/Lo 游标事务感知（活动事务不发布内存缓存防回滚分叉）
 - **PDDD009/010/011 解绑 BoundedContext** + CodeFix 版本后缀替换不叠加；EnumGenerator 过滤非 TSelf 字段
+
+### AI 质量系统评审循环 v37-v74（2026-08-28 ~ 09-04 三十八轮稳态收敛 + 清偿）
+
+> v37 起 P1/P2 趋零进入稳态（v70 起 P2 归零、v60 起产品运行时 P1 连续零）；修复主源转为"上轮修复残留 + 存量长尾 + 质量系统自检"。关键能力与缺陷修复按发布面摘录：
+
+- **租约 token fencing 全面落地（v53 特性级）**：Dapper/PalORM Outbox `MarkProcessed/MarkDead/ReleaseForRetry` 持租路径补 `(locked_by, locked_until)` 双 token 守卫 + `retry_count` 乐观锁——租约被重租后旧 worker 终态写被拒（affected=0 零内存变异）；幂等存储补 `Revision` CAS 令牌（Completed 翻转重执行缺口）。EFCore 侧 `FencedTarget` 终态守卫姊妹收口（v43-v44）
+- **IPv6 连接串四象限定稿（v37-v40 四轮闭环）**：方括号纯 host / 方括号+内嵌端口放行、裸 IPv6 fail-fast、`']'` 后三类畸形后缀拦截（v74 清偿批补 primary 侧三入口）+ MySQL 内嵌端口零容忍（MySqlConnector 2.6.2 源码四点实证 #762——内嵌语法 fail-fast 化，四入口共享 helper）
+- **MySQL LoadBalance 显式冲突 fail-fast（v74）**：三入口原无条件覆盖串内显式策略值；规范关键字 `"Load Balance"`（带空格）经探针实证
+- **模板编译探针机械化（v56 特性）**：`template-gate.sh` 确定性强制替代人工评审——模板区连续四轮 P1 根治（record 继承 CS8864/Unit.Value/saga 基类转形/MapCommand 签名等 8 项真实缺陷由探针抓出）
+- **分析器生产缺陷修复（v57-v58）**：PDDD015 显式接口实现假报（analyzer 升级后探针照出）；PDDD013 ProjectionName 同型盲点姊妹收口
+- **PalOrmOutboxStore 租约 token 谓词回归修复（v72 引入 v74 修复，P1）**：勘正说明误以 SQL 行内注释（`--`）嵌进单行 SQL 字符串，`AND locked_until` 谓词被数据库当注释吞掉——同 owner 重租后旧快照终态写放行；探针双红实证 + 修复后双腿回归锁定（换 owner 腿已有测试未覆盖 until 腿的盲区一并补齐）
+- **守卫/口径族清偿（v60-v73 约 180 项）**：NuGet env 作用域 / fetch-depth 正交 / Detach no-op 二例 / README Build 后注册 / 计数三方同步 / `status<>1` 口径收窄（Failed 不可翻转）/ Saga Timeout 守卫锁定 / `null!` 锁定测试零保护力实证（MUTATION-4，防御性修复不可黑盒锁定的诚实声明先例）
+- **mutation 红测纪律制度化（v68-v69）**：守卫修复必须带"移除后套件变红"的锁定测试——连环抓出 v66 回退不完整 + v62 口径偏宽两层潜伏缺陷
+- **测试**：16 项目面板约 1001 → 约 1200 项（净增约 200 个回归/锁定/契约测试；含环境性 49 项待 CI Testcontainers）
+
+### 依赖升级（2026-09-02）
+
+- PalORM 5.3.0 → 5.4.0（弹性层 DI 接入：三 Provider 扩展 `configureResilience` 回调）；TUnit 1.65.38 → 1.65.68（FsCheck 同步）
 
 ### 文档与口径
 

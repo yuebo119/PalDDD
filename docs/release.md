@@ -3,7 +3,7 @@
 > 本规范定义 Pal.DDD 项目从代码变更到 NuGet 发布的标准流程。
 > 所有版本发布（含补丁版/小版本/大版本/Preview）必须遵守。
 >
-> **当前状态**：`VersionPrefix=2.0.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**2.0.0 已发布**（2026-08-23）。1.1.0 已于 2026-07-31 发布（2026-07-31 推送 NuGet.org，tag `v1.1.0`→`b4d532f`；`[1.1.0]` CHANGELOG 段为 2026-08-21 事后回填——发布时 CHANGELOG 尚未建立）。tag 之后的变更累积在 `[Unreleased]`，下个版本发布前需将 `VersionPrefix` 升位。
+> **当前状态**：`VersionPrefix=2.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**2.1.0 已发布**（2026-09-04）。2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正，内容后并入 `[2.1.0]` 段，**CHANGELOG 先行教训第二次**，见 §9 教训 2）。1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`；`[1.1.0]` 段为事后回填）。tag 之后的变更累积在 `[Unreleased]`，下个版本发布前需将 `VersionPrefix` 升位。
 > **首次发布待办**：本规范第 5/6/9 章在首次实际发布后需补实测教训（参考 ORM 项目 `docs/发布规范.md` §9）。
 
 ---
@@ -463,6 +463,15 @@ git push origin v1.1.0
 
 > ⚠️ **教训待补**：DDD 项目 **1.1.0 已于 2026-07-31 发布**（NuGet.org + tag `v1.1.0`），但发布时未按本规范同次提交 CHANGELOG `[1.1.0]` 段——该段为 2026-08-21 事后回填。此为第 1 条实测教训：**CHANGELOG 先行，tag 后打**。
 > 后续发布在此章节继续补充实测教训（参考 ORM 项目 `docs/发布规范.md` §9 的 9 条 v5.0.0 教训）。
+
+**实测教训清单**：
+
+| # | 教训 | 来源版本 | 预防措施 |
+|---|------|---------|---------|
+| 1 | 发布时未建 CHANGELOG 段（事后回填） | 1.1.0（2026-07-31） | **CHANGELOG 先行，tag 后打**（§5.1 打 tag 前核对 `[版本号]` 段已转正） |
+| 2 | 发布时 `[Unreleased]` 未转正 `[2.0.0]` 段（同款教训第二次）——tag 打完 CHANGELOG 头部仍指向上版 | 2.0.0（2026-08-23） | §5.1 步骤 2 增加核对项：`grep "^## " CHANGELOG.md` 首段必须是 `[Unreleased]` + 新 `[版本号]` 段；升版本同次提交内完成转正（见 2.1.0 发布提交形态） |
+| 3 | release.yml pack 阶段 TreatWarningsAsErrors 阻塞（NU5104 preview 依赖/NU5128 元包无 lib 均为预期） | 2.0.0 发布流水线（main a115c22/ae0c912/64c4d3d 三连修） | 构建阶段 `-warnaserror` 与 pack 阶段分离；NoWarn 命令行属性保底（Directory.Build.props 的 NoWarn 在 CI pack 阶段偶不生效） |
+| 4 | Dapper 四包 + EFCore 五包 + DependencyInjection 共 10 项目曾因 NU5104 未 pack（包数断言抓出） | 同上 | §6.2 step 7 包数量断言 35（防漏发的机械防线） |
 
 预期可能踩的坑（基于 ORM 项目经验预判）：
 
