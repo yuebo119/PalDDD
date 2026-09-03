@@ -13,6 +13,29 @@ using System.Collections.Immutable;
 
 public sealed class StrategicDddAnalyzerTests
 {
+    // v58 回归网：显式接口实现 ProjectionName（IProjectionHandler.ProjectionName 显式
+    // 实现形态此前被 GetMembers(name) 按名查找漏掉 → PDDD013 漏检；镜像 v57 EventName 修复）
+    [Test]
+    public async Task ExplicitInterfaceProjectionName_Recognized_NoFalsePddd013()
+    {
+        var diagnostics = await AnalyzeAsync("""
+            using PalDDD.Core;
+            using PalDDD.Projections;
+            namespace ProbeNs;
+            [BoundedContext("ordering")]
+            public sealed class OrderSubmitted : DomainEvent, IDomainEvent
+            {
+                static string IDomainEvent.EventName => "ordering.order-submitted.v1";
+            }
+            public sealed class ExplicitProjection : IProjectionHandler<OrderSubmitted>
+            {
+                string IProjectionHandler<OrderSubmitted>.ProjectionName => "ordering.order-projection";
+                public ValueTask ProjectAsync(OrderSubmitted @event, ProjectionContext context, CancellationToken ct) => ValueTask.CompletedTask;
+            }
+            """);
+        await Assert.That(diagnostics.Any(d => d.Id == "PDDD013" && d.GetMessage().Contains("ExplicitProjection"))).IsFalse();
+    }
+
     // v57 P1 回归网：显式接口实现 EventName（IDomainEvent.EventName 是 static abstract，
     // C# 强制显式实现——框架唯一合规写法）此前被 GetMembers(name) 按名查找漏掉 →
     // PDDD015 假报 missing（真实项目 TWAE 下合规用户编译失败）
