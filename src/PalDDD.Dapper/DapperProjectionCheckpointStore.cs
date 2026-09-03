@@ -157,7 +157,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                 },
                 Tx,
                 cancellationToken: ct)).ConfigureAwait(false);
-        // P2 修复：乐观并发（WHERE revision=@Revision）冲突时 rows=0，DB 状态未变——
+        // P2 修复：乐观并发（WHERE revision=@revision）冲突时 rows=0，DB 状态未变——
         // 不再无条件变更本地对象，避免调用方误以为落库成功（对齐 EFCore 版 detach 语义）
         if (rows > 0)
             checkpoint.MarkCompleted(completedAt);
@@ -308,10 +308,10 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
             updated_at = @failedAt,
             revision = revision + 1,
             error = @error
-        WHERE projection_name = @ProjectionName
-          AND source_name = @SourceName
-          AND position = @Position
-          AND revision = @Revision
+        WHERE projection_name = @projectionName
+          AND source_name = @sourceName
+          AND position = @position
+          AND revision = @revision
           AND status <> 1
         """;
 

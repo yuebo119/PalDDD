@@ -52,7 +52,7 @@ public sealed class OrderSaga : Saga<OrderSagaState>
             execute: async (state, evt, ct) =>
             {
                 // ⚠️ SagaStep.ExecuteAsync 签名的 state 参数是基类 SagaState——访问子类
-                // 属性（如 OrderSagaState.CustomerName）必须先转形
+                // 属性（如 OrderSagaState.CustomerName）必须先转型（cast）
                 ((OrderSagaState)state).CustomerName = ((OrderRequested)evt).CustomerName;
                 state.CurrentState = "Created";
                 return state;

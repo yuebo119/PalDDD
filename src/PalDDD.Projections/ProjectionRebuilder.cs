@@ -100,21 +100,21 @@ public sealed class ProjectionRebuilder<TMessage>
         var completed = false;
         try
         {
-        await foreach (var replayEvent in _replaySource.ReadAsync(_sourceName, ct).ConfigureAwait(false))
-        {
-            ct.ThrowIfCancellationRequested();
+            await foreach (var replayEvent in _replaySource.ReadAsync(_sourceName, ct).ConfigureAwait(false))
+            {
+                ct.ThrowIfCancellationRequested();
 
-            var context = new ProjectionContext(
-                replayEvent.SourceName,
-                replayEvent.Position,
-                replayEvent.OccurredAt,
-                replayEvent.Audit);
+                var context = new ProjectionContext(
+                    replayEvent.SourceName,
+                    replayEvent.Position,
+                    replayEvent.OccurredAt,
+                    replayEvent.Audit);
 
-            if (await _processor.ProcessAsync(replayEvent.Message, context, ct).ConfigureAwait(false))
-                checked { processed++; }
-        }
+                if (await _processor.ProcessAsync(replayEvent.Message, context, ct).ConfigureAwait(false))
+                    checked { processed++; }
+            }
 
-        completed = true;
+            completed = true;
         }
         finally
         {
