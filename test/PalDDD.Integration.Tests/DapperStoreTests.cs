@@ -1013,6 +1013,25 @@ public sealed class DapperStoreTests
         await Assert.That(saved.Status).IsEqualTo(ProjectionCheckpointStatus.Completed);
     }
 
+    // v69 守卫锁定（v62 MarkCompleted 的 status<>1——既有 PreventsReprocessing 测试只锁
+    // TryStart 对 Completed 的拒绝，不锁直调 Failed 快照的 MarkCompleted 不翻转）
+    [Test]
+    public async Task ProjectionCheckpoint_MarkCompleted_FailedSnapshot_DoesNotFlip(CancellationToken cancellationToken)
+    {
+        var store = new DapperProjectionCheckpointStore(_conn, _dbType);
+        var now = DateTimeOffset.Parse("2026-06-27T11:05:00Z", CultureInfo.InvariantCulture);
+        var checkpoint = await store.TryStartAsync("ordering.failed-flip", "orders", "1", now, TimeSpan.FromMinutes(5),
+            cancellationToken);
+        await Assert.That(checkpoint).IsNotNull();
+        await store.MarkFailedAsync(checkpoint, "boom", now.AddSeconds(1), cancellationToken);
+
+        // Failed 快照直调 MarkCompleted——status<>1 守卫使 SQL 0 行，DB 不翻转
+        await store.MarkCompletedAsync(checkpoint, now.AddMinutes(2), cancellationToken);
+
+        var saved = await store.GetAsync("ordering.failed-flip", "orders", "1", cancellationToken);
+        await Assert.That(saved!.Status).IsEqualTo(ProjectionCheckpointStatus.Failed);
+    }
+
     [Test]
     public async Task ProjectionCheckpoint_Reset_RemovesProjectionSourceRows(CancellationToken cancellationToken)
     {
