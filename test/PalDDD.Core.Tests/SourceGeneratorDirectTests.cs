@@ -466,6 +466,33 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(result.Compilation.SyntaxTrees.Count(t => t.FilePath.EndsWith(".g.cs", StringComparison.Ordinal))).IsEqualTo(0);
     }
 
+    // ── v60：hint 无前缀方案——全局类型与命名空间内同名类型不碰撞 ──
+
+    [Test]
+    public async Task IdentityGenerator_GlobalAndNamespacedSameName_BothGenerate()
+    {
+        // 同编译内：全局 FooId 与 namespace Dup 内 FooId——hint 分别为 "FooId.g.cs" 与
+        // "Dup.FooId.g.cs"（v60 无前缀方案；旧 "_" 哨兵在 namespace _ 场景碰撞）。
+        // v61 记录：v60 评审 D 片另称"enum 包含类型"死胡同——经编译实证 C# 语法不允许
+        // enum 体内声明嵌套类型（CS1513），场景不可构造，前置分支已回退
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+            using System;
+
+            [GenerateId(typeof(Guid))]
+            public readonly partial record struct FooId;
+
+            namespace Dup
+            {
+                [GenerateId(typeof(Guid))]
+                public readonly partial record struct FooId;
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALID004")).IsFalse();
+    }
+
     // ── v53 P1：PALID007 非 partial 包含类型——原落 default 报 PALID001 错误指引 ──
 
     [Test]
