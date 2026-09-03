@@ -130,7 +130,11 @@ public static class DapperBulkCopy
     {
         // 三十八轮 P2：Npgsql COPY 自动加入连接上的活动局部事务（Npgsql 语义），
         // 本参数仅作契约显式化——无需额外挂接动作。
-        _ = transaction;
+        // v66 P3：对称 fail-fast（对齐 MySQL :275/SQLite :360 姊妹——传非 NpgsqlTransaction
+        // 的 DbTransaction 子类立即暴露契约错误，而非静默忽略 COPY 挂接活动事务的语义）
+        if (transaction is not null and not NpgsqlTransaction)
+            throw new ArgumentException(
+                $"PG COPY 要求 NpgsqlTransaction，收到 {transaction.GetType().Name}。", nameof(transaction));
         var pgConn = (NpgsqlConnection)conn;
         var colList = string.Join(", ", cols);
         var copySql = $"COPY {table} ({colList}) FROM STDIN (FORMAT BINARY)";

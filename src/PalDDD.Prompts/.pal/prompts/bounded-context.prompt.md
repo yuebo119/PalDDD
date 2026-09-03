@@ -7,8 +7,8 @@
 | 规则 | 说明 |
 |------|------|
 | PDDD001 | 领域模型类型必须声明 `[BoundedContext]` |
-| PDDD002 | BC 名称必须是小写字母/数字/连字符/点（如 ordering.order-submitted.v1；v64 勘正：规范形态含点，非狭义 kebab-case）（如 `ordering`） |
-| PDDD006 | ProcessManager 名称必须是小写字母/数字/连字符/点（如 ordering.order-submitted.v1；v64 勘正：规范形态含点，非狭义 kebab-case） |
+| PDDD002 | BC 名称必须是小写字母/数字/连字符/点（如 `ordering`；v66 勘正：v64 批量替换误植消息名示例——BC 名不带版本后缀） |
+| PDDD006 | ProcessManager 名称必须是小写字母/数字/连字符/点（如 `ordering.order-saga`；v66 勘正：v64 误植消息名示例） |
 | AOT | 零 Assembly Scanning，所有 Handler 显式注册 |
 
 ## 必须遵守
@@ -16,7 +16,7 @@
 ### 限界上下文标识
 - 聚合根/实体/领域事件标注 `[BoundedContext("xxx")]`（值对象不标——attribute 仅限 Class，
   挂 `readonly record struct` 即 CS0592，且不在 PDDD001 编译期强制范围）
-- BC 名称为 kebab-case：`ordering` / `inventory` / `shipping`
+- BC 名称为小写字母/数字/连字符/点：`ordering` / `inventory` / `shipping`（v66 与 :10 措辞统一）
 - 消息名必须包含 BC 前缀：`ordering.order-submitted.v1`
 
 ### DI 注册模式

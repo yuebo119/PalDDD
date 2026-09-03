@@ -36,7 +36,7 @@ namespace PalDDD.Transactions;
 ///   }
 ///
 ///   // 2. 在 Saga 执行作用域入口创建 Observer（AsyncLocal 自动传播到所有异步子步骤）
-///   using var _ = new SagaExecutionObserver(new MetricsSink(TimeProvider.System));
+///   using var _ = new SagaExecutionObserver(new MetricsSink(logger)); // v66：调用点同步 v64 构造签名改写（IPalLogger<T>）——原 TimeProvider.System 旧形态残留照抄 CS1503
 ///   await saga.ProcessEventAsync(state, evt, ct);
 /// </code>
 /// </para>

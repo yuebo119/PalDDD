@@ -61,6 +61,80 @@ public sealed class StrategicDddAnalyzerTests
         await Assert.That(diagnostics.Any(d => d.Id == "PDDD013" && d.GetMessage().Contains("ExplicitProjection"))).IsFalse();
     }
 
+    // v66 回归网：null/default 字面量四形态视为缺失（v64/v65 修复只覆盖 ExpressionBody 腿——
+    // Initializer/getter 腿经实证静默，本轮补齐后锁定全部行为）
+    [Test]
+    public async Task EventName_NullLiteralExpression_ReportsPddd015Missing()
+    {
+        var diagnostics = await AnalyzeAsync("""
+            using PalDDD.Core;
+            namespace ProbeNs;
+            [BoundedContext("ordering")]
+            [GenerateMessage(Name = "ordering.probe-null.v1")]
+            public sealed class ProbeNullEvent : DomainEvent, IDomainEvent
+            {
+                static string IDomainEvent.EventName => null;
+            }
+            """);
+        await Assert.That(diagnostics.Any(d => d.Id == "PDDD015")).IsTrue();
+    }
+
+    [Test]
+    public async Task EventName_NullInitializer_ReportsPddd015Missing()
+    {
+        // { get; } = null 形态（v66 前静默——Initializer 腿盲区）
+        var diagnostics = await AnalyzeAsync("""
+            using PalDDD.Core;
+            namespace ProbeNs;
+            [BoundedContext("ordering")]
+            [GenerateMessage(Name = "ordering.probe-init.v1")]
+            public sealed class ProbeInitEvent : DomainEvent, IDomainEvent
+            {
+                public static string EventName { get; } = null;
+            }
+            """);
+        await Assert.That(diagnostics.Any(d => d.Id == "PDDD015")).IsTrue();
+    }
+
+    [Test]
+    public async Task EventName_GetterReturnNull_ReportsPddd015Missing()
+    {
+        // get { return null; } 形态（v66 前静默——getter-return 腿盲区）
+        var diagnostics = await AnalyzeAsync("""
+            using PalDDD.Core;
+            namespace ProbeNs;
+            [BoundedContext("ordering")]
+            [GenerateMessage(Name = "ordering.probe-ret.v1")]
+            public sealed class ProbeRetEvent : DomainEvent, IDomainEvent
+            {
+                static string IDomainEvent.EventName { get { return null; } }
+            }
+            """);
+        await Assert.That(diagnostics.Any(d => d.Id == "PDDD015")).IsTrue();
+    }
+
+    [Test]
+    public async Task ProjectionName_NullLiteral_ReportsPddd007()
+    {
+        var diagnostics = await AnalyzeAsync("""
+            using PalDDD.Core;
+            using PalDDD.Projections;
+            namespace ProbeNs;
+            [BoundedContext("ordering")]
+            public sealed class ProbeSubmitted : DomainEvent, IDomainEvent
+            {
+                static string IDomainEvent.EventName => "ordering.probe-submitted.v1";
+            }
+            [BoundedContext("ordering")]
+            public sealed class NullProjection : IProjectionHandler<ProbeSubmitted>
+            {
+                public string ProjectionName => null;
+                public ValueTask ProjectAsync(ProbeSubmitted @event, ProjectionContext context, CancellationToken ct) => ValueTask.CompletedTask;
+            }
+            """);
+        await Assert.That(diagnostics.Any(d => d.Id == "PDDD007")).IsTrue(); // v66：PDDD007 空名消息不含类型名——按 Id 断言（v59 PDDD013 同款教训）
+    }
+
     // v57 P1 回归网：显式接口实现 EventName（IDomainEvent.EventName 是 static abstract，
     // C# 强制显式实现——框架唯一合规写法）此前被 GetMembers(name) 按名查找漏掉 →
     // PDDD015 假报 missing（真实项目 TWAE 下合规用户编译失败）

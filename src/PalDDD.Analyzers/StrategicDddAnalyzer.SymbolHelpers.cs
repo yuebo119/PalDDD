@@ -175,16 +175,28 @@ public sealed partial class StrategicDddAnalyzer
                         return (expressionLiteral.Token.Value as string, expressionLiteral.GetLocation());
                     }
 
+                    // v66 P3：姊妹补齐（v65 只修 ExpressionBody 腿——对齐 TryGetLiteralFromTypeMembers 四形态）
                     if (declaration.Initializer?.Value is LiteralExpressionSyntax initializerLiteral)
+                    {
+                        if (initializerLiteral.IsKind(SyntaxKind.NullLiteralExpression)
+                            || initializerLiteral.IsKind(SyntaxKind.DefaultLiteralExpression))
+                            return (null, null);
                         return (initializerLiteral.Token.Value as string, initializerLiteral.GetLocation());
+                    }
 
                     foreach (var accessor in declaration.AccessorList?.Accessors ?? [])
                     {
                         if (!accessor.IsKind(SyntaxKind.GetAccessorDeclaration))
                             continue;
 
+                        // v66 P3：姊妹补齐（null/default 视为缺失——对齐四形态）
                         if (accessor.ExpressionBody?.Expression is LiteralExpressionSyntax getterLiteral)
+                        {
+                            if (getterLiteral.IsKind(SyntaxKind.NullLiteralExpression)
+                                || getterLiteral.IsKind(SyntaxKind.DefaultLiteralExpression))
+                                return (null, null);
                             return (getterLiteral.Token.Value as string, getterLiteral.GetLocation());
+                        }
 
                         if (accessor.Body is null)
                             continue;
@@ -273,14 +285,22 @@ public sealed partial class StrategicDddAnalyzer
                     // v64 P3：null/default 字面量视为缺失（EventName => null 与 Name 必不等，
                     // 原被 Token.Value as string 的 null 误判为"非字面量"而静默跳过——
                     // 现返回 (null, null) 走 Missing 腿报告）
-                    if (expressionLiteral.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.NullLiteralExpression)
-                        || expressionLiteral.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.DefaultLiteralExpression))
+                    if (expressionLiteral.IsKind(SyntaxKind.NullLiteralExpression)
+                        || expressionLiteral.IsKind(SyntaxKind.DefaultLiteralExpression))
                         return (null, null);
                     return (expressionLiteral.Token.Value as string, expressionLiteral.GetLocation());
                 }
 
+                // v66 P3：null/default 字面量在全部四形态视为缺失（v64 只修了 ExpressionBody 腿——
+                // Initializer/getter 表达式体/getter return 三腿仍被 Token.Value as string 的 null
+                // 误判"找到但非字面量"静默跳过；实证 { get; } = null 与 get => null 均零诊断）
                 if (declaration.Initializer?.Value is LiteralExpressionSyntax initializerLiteral)
+                {
+                    if (initializerLiteral.IsKind(SyntaxKind.NullLiteralExpression)
+                        || initializerLiteral.IsKind(SyntaxKind.DefaultLiteralExpression))
+                        return (null, null);
                     return (initializerLiteral.Token.Value as string, initializerLiteral.GetLocation());
+                }
 
                 foreach (var accessor in declaration.AccessorList?.Accessors ?? [])
                 {
@@ -288,7 +308,12 @@ public sealed partial class StrategicDddAnalyzer
                         continue;
 
                     if (accessor.ExpressionBody?.Expression is LiteralExpressionSyntax getterLiteral)
+                    {
+                        if (getterLiteral.IsKind(SyntaxKind.NullLiteralExpression)
+                            || getterLiteral.IsKind(SyntaxKind.DefaultLiteralExpression))
+                            return (null, null);
                         return (getterLiteral.Token.Value as string, getterLiteral.GetLocation());
+                    }
 
                     if (accessor.Body is null)
                         continue;
@@ -300,6 +325,9 @@ public sealed partial class StrategicDddAnalyzer
                                 Expression: LiteralExpressionSyntax returnLiteral
                             })
                         {
+                            if (returnLiteral.IsKind(SyntaxKind.NullLiteralExpression)
+                                || returnLiteral.IsKind(SyntaxKind.DefaultLiteralExpression))
+                                return (null, null);
                             return (returnLiteral.Token.Value as string, returnLiteral.GetLocation());
                         }
                     }
