@@ -234,4 +234,9 @@ public static class PalMetrics
     /// <summary>Saga 补偿失败数</summary>
     public static readonly Counter<long> SagaCompensationFailed = Meter.CreateCounter<long>(
         "paldd.saga.compensation_failed", description: "Saga 补偿失败总数");
+
+    /// <summary>Saga 扫描/租约获取失败数（v71：独立语义——SagaProcessor 的 Lease 失败
+    /// 此前 v70 复用 SagaCompensationFailed 与其"补偿动作失败"doc 语义冲突）</summary>
+    public static readonly Counter<long> SagaScanFailed = Meter.CreateCounter<long>(
+        "paldd.saga.scan_failed", description: "Saga 扫描/租约获取失败总数");
 }

@@ -125,7 +125,9 @@ TState>
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            PalMetrics.SagaCompensationFailed.Add(1);
+            // v71：改独立 SagaScanFailed（v70 复用 SagaCompensationFailed 与其
+            // "补偿动作失败"语义声明冲突——SagaCompensation.cs:133）
+            PalMetrics.SagaScanFailed.Add(1);
             throw;
         }
 
