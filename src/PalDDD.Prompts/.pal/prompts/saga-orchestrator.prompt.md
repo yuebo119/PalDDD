@@ -7,7 +7,7 @@
 | 规则 | 说明 |
 |------|------|
 | PDDD003 | ProcessManager 必须 `sealed` + `[BoundedContext]` + 实现 `IEventHandler<TEvent>` |
-| PDDD006 | ProcessManager 名称必须是 kebab-case |
+| PDDD006 | ProcessManager 名称必须是小写字母/数字/连字符/点（如 `ordering.order-saga`；v70 同步 v66 勘正——PDDD014 强制 BC 前缀含点，纯 kebab-case 不可能合规） |
 | PDDD014 | PM 名称必须以 `{boundedContext}.` 为前缀 |
 | AOT | Saga 步骤通过泛型 `When<TEvent>()` 注册，`typeof(T)` 编译时常量 |
 

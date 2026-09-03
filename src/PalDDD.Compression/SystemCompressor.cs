@@ -32,7 +32,7 @@ public static class DecompressionGuard
             {
                 total += read;
                 if (total > MaxOutputBytes)
-                    throw new IOException($"解压输出超过安全上限 {MaxOutputBytes:N0} 字节（疑似解压炸弹）。");
+                    throw new System.IO.InvalidDataException($"解压输出超过安全上限 {MaxOutputBytes:N0} 字节（疑似解压炸弹）。");
                 destination.Write(buffer, 0, read);
             }
         }
@@ -98,7 +98,7 @@ internal sealed class BrotliCompressor : ICompressor
             // P1 修复（四轮评审）：Brotli 路径补输出上限——与 GZip/Deflate 的 CopyWithLimit
             // 对称（此前六轮修复遗漏此分支，PD17 命中）
             if (totalWritten > DecompressionGuard.MaxOutputBytes)
-                throw new IOException($"Brotli 解压输出超过安全上限 {DecompressionGuard.MaxOutputBytes:N0} 字节（疑似解压炸弹）。");
+                throw new System.IO.InvalidDataException($"Brotli 解压输出超过安全上限 {DecompressionGuard.MaxOutputBytes:N0} 字节（疑似解压炸弹）。");
 
             if (status == OperationStatus.Done) break;
             if (status == OperationStatus.DestinationTooSmall) continue;

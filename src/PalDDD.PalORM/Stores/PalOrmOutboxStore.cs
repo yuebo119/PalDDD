@@ -21,6 +21,11 @@ namespace PalDDD.PalORM.Stores;
 /// <item>[ConcurrencyCheck]RetryCount 在 UpdateAsync 路径自动加并发谓词；ReleaseForRetry 走手写 SQL 避免 [ConcurrencyCheck] 干扰原子自增。</item>
 /// </list>
 /// </para>
+/// <para>v70 P3 声明：持租终态写（Mark*/ReleaseForRetry）对"owner 非空而 until 为 null"
+/// 的异常半租约态，PalORM 的 <c>locked_until = {until}</c>（null 参数化 = NULL 恒假）
+/// 拒绝放行（affected=0 静默），EFCore 的 null 常量翻译为 <c>IS NULL</c> 放行——跨栈
+/// 防御方向分叉（PalORM 更严）。仅手工构造 OutboxMessage 直调可达（正常 Lease 恒
+/// 同写 owner+until），按更严方向保留。</para>
 /// </summary>
 public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
     where TProvider : IDbProvider
@@ -183,7 +188,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
                 $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by IS NULL",
                 default).AsTask().GetAwaiter().GetResult()
             : Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} AND locked_until = {until}",
+                $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} AND locked_by = {owner} AND locked_until = {until}",
                 default).AsTask().GetAwaiter().GetResult();
         if (affected > 0)
         {
@@ -222,7 +227,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
                 $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by IS NULL",
                 default).AsTask().GetAwaiter().GetResult()
             : Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} AND locked_until = {until}",
+                $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} AND locked_by = {owner} AND locked_until = {until}",
                 default).AsTask().GetAwaiter().GetResult();
         if (affected > 0)
         {

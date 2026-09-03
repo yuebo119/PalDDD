@@ -23,7 +23,7 @@
 - 通过 `MessageRegistryGenerator` 源生成器自动注册到 `MessageCatalog`（AOT 安全）
 
 ## 禁止
-- ❌ 不使用 `record`（非 sealed）— 编译器会报 PDDD012
+- ❌ 不使用 `record` 作领域事件宿主——CS8864 编译错（record 不能继承非 record 的 DomainEvent；v70 勘正：PDDD012 的 sealed 检查仅对 class 宿主可达）
 - ❌ 不在 EventName 中使用大写字母或下划线 — PDDD009
 - ❌ 不遗漏版本号后缀 — PDDD010
 - ❌ 不在事件中包含实体/聚合引用 — 事件携带原始数据（Guid/string/decimal）与值对象（如 Money；v64 勘正：原"只含原始数据"与自家示例的 Money 成员矛盾）

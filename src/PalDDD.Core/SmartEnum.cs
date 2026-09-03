@@ -68,7 +68,7 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
     /// v36 P3：FrozenDictionary.Values 返回 <see cref="ImmutableArray{T}"/>（struct）——
     /// 原 <c>Dictionary.Values</c> 转 <see cref="IReadOnlyCollection{TSelf}"/> 每次访问装箱，
     /// 全量枚举场景（校验/展示）反复调用下产生稳定分配流。改为惰性物化为 <c>TSelf[]</c>
-    /// （引用类型）后缓存，只装一次箱。仿 <c>ExpressionSpecification._compiled</c> 形态
+    /// （引用类型）后缓存，T[]→IReadOnlyCollection 是协变引用转换零装箱（v70 勘正）。仿 <c>ExpressionSpecification._compiled</c> 形态
     ///（<c>Volatile.Read</c> + <c>Interlocked.CompareExchange</c> 先到者胜）：
     /// 并发首调重复物化幂等无害（内容相同，丢弃其一），Interlocked 只防覆盖竞态与重复劳动。
     /// ⚠️ 刻意不用静态字段初始化器（<c>s_all = Dictionary.Values...</c>）：初始化器会进入

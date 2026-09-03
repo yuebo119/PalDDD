@@ -31,7 +31,7 @@ namespace PalDDD.Dapper;
 /// <remarks>
 /// 约定：
 ///   - 表名和列名使用 <c>snake_case</c>（PostgreSQL/MySQL 标准）
-///   - 参数名使用 <c>PascalCase</c>（Dapper 自动映射到 <c>@ParamName</c>）
+///   - 参数名混合形态（v70 勘正 remarks：本文件主体为 camelCase（@id/@now/@owner），OutboxInsert 与 EventLogSql Insert 系为 PascalCase——Dapper 按名匹配无大小写约定统一，改动 SQL 参数名必须同轮同步调用方匿名成员
 ///   - PostgreSQL 专用语法（如 RETURNING）通过 Dapper 层的 DapperDbType switch 处理
 ///   - 状态列为 INT（三十八轮统一：outbox/inbox/saga 等五表状态列全部 INT，枚举值 0 起）——
 ///     SQL 中以数字字面量出现（0=Pending 等，OutboxInsert 内联 0；StatusPending 常量在 DapperOutboxStore）。
@@ -337,6 +337,9 @@ public static class SqlTemplates
     /// 更新 Saga 状态（乐观并发控制）。<br/>
     /// 💡 <c>version=version+1</c> + <c>WHERE version=@v</c> 防止并发覆盖。
     /// </summary>
+    /// <remarks>v70 P3：本模板 completed_at 用 @ca，姊妹 <see cref="SagaInsert"/> 同列用
+    /// @completedAt——两套命名并存各自与调用方匹配（DapperSagaStateStore 两处匿名对象），
+    /// 改名必须同轮同步调用方。</remarks>
     public const string SagaUpdate =
         "UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=@data,leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v";
 

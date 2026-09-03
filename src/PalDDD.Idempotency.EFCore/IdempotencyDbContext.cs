@@ -108,7 +108,7 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         ArgumentNullException.ThrowIfNull(record);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
 
-        // v38 P2 修复：Completed 终态守卫（镜像 InMemoryIdempotencyStore:139 八轮
+        // v38 P2 修复：Completed 终态守卫（镜像 InMemoryIdempotencyStore.MarkFailedAsync 八轮（v70 改方法名防行号漂移——原 :139 已漂移至 :140）
         // "Completed 终态不可翻转为 Failed（v55 改引方法名防行号漂移）的 SQL 守卫 "AND status <> Completed"——本栈是 PD24 管线孪生唯一漏网）。同实例续写
         // 场景下时间戳并发令牌失守（Attach 后 original=current，UPDATE 恒命中；v38 时点
         // 令牌是 UpdatedAt，v53 已换 Revision 单调令牌但同实例续写路径仍恒命中），
