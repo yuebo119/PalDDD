@@ -159,9 +159,11 @@ public static class PostgreSqlReadWriteRouterExtensions
                 {
                     var (primaryEntryHost, primaryEntryPort) = PostgreSqlMultiHost.NormalizeHostEntry(raw, primaryCsBuilder.Port);
                     // v54 P3（B-P3-2）：primary 裸 IPv6 拦截（同 MultiHost 口径）
-                    if (primaryEntryHost.StartsWith('[') && !primaryEntryHost.Contains(']'))
+                    // v74 P3（P4-S1 收口）：判定收紧 Contains(']') → EndsWith(']')——同 MultiHost
+                    // Failover/ReadWriteSplit 两入口（']' 后三类畸形原判定双豁免延迟到 Npgsql Build）
+                    if (primaryEntryHost.StartsWith('[') && !primaryEntryHost.EndsWith(']'))
                         throw new ArgumentException(
-                            $"primary Host 条目 '{primaryEntryHost}' 方括号未闭合——请改用 '[host]' 或 '[host]:port' 语法。");
+                            $"primary Host 条目 '{primaryEntryHost}' 方括号畸形（未闭合或 ']' 后非数字端口后缀）——请改用 '[host]' 或 '[host]:port' 语法。");
                     if (primaryEntryHost.Count(c => c == ':') > 1 && !primaryEntryHost.StartsWith('['))
                         throw new ArgumentException(
                             $"primary Host 条目 '{primaryEntryHost}' 是裸 IPv6——未加方括号的多冒号条目在 Npgsql 多主机 Host 列表中歧义。请改用 '[host]' 或 '[host]:port' 语法。");

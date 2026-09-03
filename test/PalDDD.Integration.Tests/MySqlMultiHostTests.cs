@@ -115,4 +115,54 @@ public sealed class MySqlMultiHostTests
                 .AddPalMySqlDataSource("Server=db1,,db2;Database=pal"))
             .Throws<ArgumentException>();
     }
+
+    // ── v74 P3（F1-2 收口）：LoadBalance 显式冲突 fail-fast 的回归网 ──
+    // 原三入口无条件覆盖串内显式值（静默改策略零警告）；显式矛盾现 fail-fast，
+    // 显式同值（合法冗余）与未显式（方法赋策略）放行
+
+    [Test]
+    public async Task AddPalMySqlDataSourceWithFailover_ExplicitLoadBalanceConflict_Throws()
+    {
+        // 串内显式 LeastConnections 调 WithFailover——被静默改 FailOver 的原触发形态
+        await Assert.That(() => new ServiceCollection()
+                .AddPalMySqlDataSourceWithFailover(
+                    "Server=db1;Database=pal;LoadBalance=LeastConnections",
+                    "Server=db2;Database=pal"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalMySqlDataSourceWithLoadBalance_ExplicitLoadBalanceConflict_Throws()
+    {
+        await Assert.That(() => new ServiceCollection()
+                .AddPalMySqlDataSourceWithLoadBalance("Server=db1,db2;Database=pal;LoadBalance=LeastConnections"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalMySqlDataSourceWithLeastConnections_ExplicitLoadBalanceConflict_Throws()
+    {
+        await Assert.That(() => new ServiceCollection()
+                .AddPalMySqlDataSourceWithLeastConnections("Server=db1,db2;Database=pal;LoadBalance=RoundRobin"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalMySqlDataSourceWithLoadBalance_ExplicitMatchingStrategy_DoesNotThrow()
+    {
+        // 显式同值（合法冗余）放行——策略与方法名一致，非矛盾（同时锁定 TryGetValue 值形态
+        // 比较口径：显式 RoundRobin 与方法策略 ToString 归一相等）
+        var services = new ServiceCollection()
+            .AddPalMySqlDataSourceWithLoadBalance("Server=db1,db2;Database=pal;LoadBalance=RoundRobin");
+        await Assert.That(services.Count).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task AddPalMySqlDataSourceWithLoadBalance_NoExplicitStrategy_DoesNotThrow()
+    {
+        // 未显式（默认场景）放行——策略由方法名决定，不因默认值 FailOver ≠ RoundRobin 误抛
+        var services = new ServiceCollection()
+            .AddPalMySqlDataSourceWithLoadBalance("Server=db1,db2;Database=pal");
+        await Assert.That(services.Count).IsGreaterThan(0);
+    }
 }

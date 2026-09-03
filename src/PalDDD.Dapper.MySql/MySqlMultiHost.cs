@@ -56,6 +56,13 @@ public static class MySqlMultiHost
         var primaryBuilder = new MySqlConnectionStringBuilder(primaryConnectionString);
         var standbyBuilder = new MySqlConnectionStringBuilder(standbyConnectionString);
 
+        // v74 P3（F1-2 收口）：LoadBalance 显式冲突 fail-fast——原三入口无条件覆盖串内显式值
+        //（"Server=db1;LoadBalance=LeastConnections" 调本方法被静默改 FailOver 零警告）。
+        // 对齐同文件 User/Password/Database/Port 一致性校验的"矛盾配置 fail-fast"先例而非
+        // Pooling 条件化（v27 N9）：条件化会静默废掉方法名语义，把一种静默覆盖换成另一种
+        EnsureNoLoadBalanceConflict(primaryBuilder, MySqlLoadBalance.FailOver,
+            nameof(AddPalMySqlDataSourceWithFailover), nameof(primaryConnectionString));
+
         // P2 定案（failover 参数丢弃）：MySQL 连接串的 User/Password/Database
         // 对主机列表内所有节点统一生效——standby 与 primary 不一致时无法表达，
         // 静默丢弃会导致故障转移后连接失败。此处快速失败并说明约束。
@@ -206,10 +213,11 @@ public static class MySqlMultiHost
         // AddPalMySqlDataSource 同款口径）——空白串原样放行会延迟到 Build()/建连时才抛异常
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
 
-        var builder = new MySqlConnectionStringBuilder(connectionString)
-        {
-            LoadBalance = MySqlLoadBalance.RoundRobin
-        };
+        var builder = new MySqlConnectionStringBuilder(connectionString);
+        // v74 P3（F1-2 收口）：LoadBalance 显式冲突 fail-fast（同 Failover 入口，见 helper 注释）
+        EnsureNoLoadBalanceConflict(builder, MySqlLoadBalance.RoundRobin,
+            nameof(AddPalMySqlDataSourceWithLoadBalance), nameof(connectionString));
+        builder.LoadBalance = MySqlLoadBalance.RoundRobin;
         // v47 P3：Server 属性空校验（对齐 Failover 入口 :78/:152 的缺 Server 拦截——
         // 空白串经 IsNullOrWhiteSpace(connectionString) 放行后 Server 属性为空串，
         // 静默 Build 出 localhost 默认池）
@@ -269,10 +277,11 @@ public static class MySqlMultiHost
         // v34 P3：空白连接串 fail-fast（v33 姊妹收口，同 LoadBalance 入口）
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
 
-        var builder = new MySqlConnectionStringBuilder(connectionString)
-        {
-            LoadBalance = MySqlLoadBalance.LeastConnections
-        };
+        var builder = new MySqlConnectionStringBuilder(connectionString);
+        // v74 P3（F1-2 收口）：LoadBalance 显式冲突 fail-fast（同 Failover 入口，见 helper 注释）
+        EnsureNoLoadBalanceConflict(builder, MySqlLoadBalance.LeastConnections,
+            nameof(AddPalMySqlDataSourceWithLeastConnections), nameof(connectionString));
+        builder.LoadBalance = MySqlLoadBalance.LeastConnections;
         // v47 P3：Server 属性空校验（对齐 LoadBalance 入口同款）
         if (string.IsNullOrWhiteSpace(builder.Server))
             throw new ArgumentException("Server is required.", nameof(connectionString));
@@ -436,6 +445,37 @@ public static class MySqlMultiHost
                 throw new ArgumentException(
                     $"{parameterName} 列表存在空条目（如 \"db1,,db2\"）：空条目并入主机列表后"
                     + "成为参与轮询的死节点，故障转移静默失败。请清理 Server 列表中的空条目。", parameterName);
+        }
+    }
+
+    /// <summary>
+    /// LoadBalance 显式冲突 fail-fast（v74 P3：F1-2 收口）——原三入口无条件覆盖串内显式值
+    ///（"Server=db1;LoadBalance=LeastConnections" 调 WithFailover 被静默改 FailOver 零警告）。
+    /// <para>
+    /// 处置选 fail-fast 而非 Pooling 式条件化（v27 N9）：LoadBalance 策略由方法名声明
+    /// （WithLoadBalance=RoundRobin），条件化保留串内值会静默废掉方法名语义——把"静默覆盖
+    /// 串值"换成"静默忽略方法"并未消除矛盾；显式矛盾应响亮失败，对齐同文件
+    /// User/Password/Database/Port 一致性校验的"矛盾配置 fail-fast"先例。
+    /// </para>
+    /// <para>
+    /// 判定经 <see cref="System.Data.Common.DbConnectionStringBuilder.TryGetValue"/>：仅串内
+    /// 显式出现且值 ≠ 方法策略时抛；显式同值（合法冗余）与未显式（默认 FailOver，由方法赋
+    /// 策略）均放行——属性值无法区分默认与显式同值，故必须走 TryGetValue 存在性判定
+    /// （Pooling 条件化同款手法）。⚠️ 规范关键字是 <b>"Load Balance"（带空格）</b>——
+    /// C# 属性名 LoadBalance 不是连接串关键字（探针实证 TryGetValue("LoadBalance")=False）；
+    /// 值形态为字符串（"LeastConnections"），经 ToString + OrdinalIgnoreCase 与枚举名归一比较。
+    /// </para>
+    /// </summary>
+    internal static void EnsureNoLoadBalanceConflict(
+        MySqlConnectionStringBuilder builder, MySqlLoadBalance methodStrategy, string methodName, string parameterName)
+    {
+        if (builder.TryGetValue("Load Balance", out var explicitValue)
+            && !string.Equals(explicitValue?.ToString(), methodStrategy.ToString(), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"连接串显式 LoadBalance={explicitValue} 与方法 {methodName} 声明的 {methodStrategy} 策略冲突——"
+                + "显式值将被方法策略覆盖（原为静默覆盖零警告）。请移除连接串中的 LoadBalance 关键字"
+                + "（策略由方法名决定），或改用基础入口 AddPalMySqlDataSource 保留自定义策略。", parameterName);
         }
     }
 }

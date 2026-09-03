@@ -118,9 +118,15 @@ public static class PostgreSqlMultiHost
                 //（primary 原样拼接进 Host 列表，Npgsql host:port 语法下多冒号条目是歧义形态）
                 // v55 P3（B-P3-3 半边）：'[' 未闭合畸形（如 "[::1"）——归一化保留原串致 IPv6
                 // 拦截被 StartsWith('[') 豁免、延迟到 Npgsql 运行期；对齐 standby 形态② fail-fast
-                if (host.StartsWith('[') && !host.Contains(']'))
+                // v74 P3（P4-S1 收口）：判定收紧 Contains(']') → EndsWith(']')——归一化后合法条目
+                //（"[::1]" / 已拆分端口的 "[::1]:5433"→"[::1]"）必以 ']' 收尾；']' 后空端口
+                //（"[::1]:"）/垃圾后缀（"[::1]abc"）/非数字端口（"[::1]:abc"）三类畸形原串
+                // 通过原判定双豁免（Contains(']') 豁免未闭合检查、StartsWith('[') 豁免裸 IPv6
+                // 检查）延迟到 Npgsql Build/建连才报晦涩错误。口径对齐 standby 侧 EncodeHostEntry
+                // 形态②判定（StartsWith('[') && !EndsWith(']') → throw，v55 三类可达输入同款）
+                if (host.StartsWith('[') && !host.EndsWith(']'))
                     throw new ArgumentException(
-                        $"primary Host 条目 '{host}' 方括号未闭合——请改用 '[host]' 或 '[host]:port' 语法。");
+                        $"primary Host 条目 '{host}' 方括号畸形（未闭合或 ']' 后非数字端口后缀）——请改用 '[host]' 或 '[host]:port' 语法。");
                 if (host.Count(c => c == ':') > 1 && !host.StartsWith('['))
                     throw new ArgumentException(
                         $"primary Host 条目 '{host}' 是裸 IPv6——未加方括号的多冒号条目在 Npgsql 多主机 Host 列表中歧义。请改用 '[host]' 或 '[host]:port' 语法。");
@@ -245,9 +251,11 @@ public static class PostgreSqlMultiHost
         {
             var (primaryEntryHost, primaryEntryPort) = NormalizeHostEntry(raw, primaryCsBuilder.Port);
             // v54 P3（B-P3-2）：primary 裸 IPv6 拦截（同 Failover 口径）
-            if (primaryEntryHost.StartsWith('[') && !primaryEntryHost.Contains(']'))
+            // v74 P3（P4-S1 收口）：判定收紧 Contains(']') → EndsWith(']')——同 Failover 入口
+            //（']' 后空端口/垃圾后缀/非数字端口三类畸形原判定双豁免延迟到 Npgsql Build）
+            if (primaryEntryHost.StartsWith('[') && !primaryEntryHost.EndsWith(']'))
                 throw new ArgumentException(
-                    $"primary Host 条目 '{primaryEntryHost}' 方括号未闭合——请改用 '[host]' 或 '[host]:port' 语法。");
+                    $"primary Host 条目 '{primaryEntryHost}' 方括号畸形（未闭合或 ']' 后非数字端口后缀）——请改用 '[host]' 或 '[host]:port' 语法。");
             if (primaryEntryHost.Count(c => c == ':') > 1 && !primaryEntryHost.StartsWith('['))
                 throw new ArgumentException(
                     $"primary Host 条目 '{primaryEntryHost}' 是裸 IPv6——未加方括号的多冒号条目在 Npgsql 多主机 Host 列表中歧义。请改用 '[host]' 或 '[host]:port' 语法。");
