@@ -866,7 +866,7 @@ class PalDDD.Transactions.Saga<TState>
   property PalDDD.Transactions.ISagaManager SagaManager
   method System.Threading.Tasks.ValueTask CompensateAsync(TState state, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TState> HandleEventAsync(TState current, System.Object event, System.Threading.CancellationToken ct)
-  method System.Boolean IsTimedOut(TState state, System.DateTimeOffset now, System.Collections.Generic.IReadOnlyList`1[[PalDDD.Transactions.SagaStep, PalDDD.Transactions, Version=2.0.0.0, Culture=neutral, PublicKeyToken=null]]& timedOutSteps)
+  method System.Boolean IsTimedOut(TState state, System.DateTimeOffset now, System.Collections.Generic.IReadOnlyList`1[[PalDDD.Transactions.SagaStep, PalDDD.Transactions, Version=2.1.0.0, Culture=neutral, PublicKeyToken=null]]& timedOutSteps)
   method System.Threading.Tasks.ValueTask<TState> ProcessEventAsync(TState current, System.Object event, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.Saga<TState>
   ctor(System.Object input)

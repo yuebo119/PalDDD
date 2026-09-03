@@ -52,11 +52,13 @@
     <OptimizationPreference>Speed</OptimizationPreference>
     <!-- AOT 下保留异常行号信息 (.NET 11 Preview 4+) -->
     <StackTraceLineNumberSupport>true</StackTraceLineNumberSupport>
-    <VersionPrefix>2.0.0</VersionPrefix>
+    <VersionPrefix>2.1.0</VersionPrefix>
     <VersionSuffix></VersionSuffix>
     <Authors>PalDDD</Authors>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/yuebo119/PalDDD</PackageProjectUrl>
+    <!-- v2.1.0 补齐 SOP §4.2 必须字段（v2.0.0 及之前未配置——nuspec 缺 releaseNotes 的既有缺口） -->
+    <PackageReleaseNotes>https://github.com/yuebo119/PalDDD/blob/main/CHANGELOG.md</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/yuebo119/PalDDD.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
