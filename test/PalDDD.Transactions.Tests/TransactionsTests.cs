@@ -1165,6 +1165,33 @@ public sealed class SagaTimeoutProcessorTests
 
 public sealed class SagaStepTests
 {
+    // v69 守卫锁定：负值 Timeout fail-fast（v62 加守卫无测试——对齐 MaxRetries ITM-186 家族）
+    [Test]
+    public async Task SagaStep_NegativeTimeout_ThrowsArgumentOutOfRange()
+    {
+        await Assert.That(() => new SagaStep(
+            "step-1",
+            static (state, evt, ct) => ValueTask.FromResult(state),
+            timeout: TimeSpan.FromSeconds(-1))).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task FanOutStep_NegativePerItemTimeout_ThrowsArgumentOutOfRange()
+    {
+        var ex = await Assert.That(() =>
+        {
+            var step = new FanOutStep<string, object?>(
+                "fan-1",
+                static state => [],
+                static (item, ct) => ValueTask.FromResult<object?>(null))
+            {
+                PerItemTimeout = TimeSpan.FromSeconds(-1),
+            };
+            return step.PerItemTimeout;
+        }).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(ex).IsNotNull();
+    }
+
     [Test]
     public async Task Ctor_SetsProperties()
     {

@@ -299,7 +299,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
           AND source_name = @SourceName
           AND position = @Position
           AND revision = @Revision
-          AND status <> 1 -- v62：仅非 Completed 可标记（对齐 MarkFailed/MarkProcessing 姊妹与 EFCore v53 状态机守卫）
+          AND status = 0 -- v69 勘正：仅 Processing 可完成（对齐 EFCore v53 口径——v62 的 status<>1 允许 Failed→Completed 翻转，与 EFCore"Failed/Completed 实例的 MarkCompleted 不再翻转"注释矛盾；测试 ProjectionCheckpoint_MarkCompleted_FailedSnapshot_DoesNotFlip 锁定）
         """;
 
     private const string MarkFailed = """
@@ -308,10 +308,10 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
             updated_at = @failedAt,
             revision = revision + 1,
             error = @error
-        WHERE projection_name = @projectionName
-          AND source_name = @sourceName
-          AND position = @position
-          AND revision = @revision
+        WHERE projection_name = @ProjectionName
+          AND source_name = @SourceName
+          AND position = @Position
+          AND revision = @Revision
           AND status <> 1
         """;
 

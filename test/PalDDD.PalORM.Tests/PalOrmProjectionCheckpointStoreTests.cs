@@ -74,6 +74,24 @@ public class PalOrmProjectionCheckpointStoreTests
         await Assert.That(getAgain!.Status).IsEqualTo(ProjectionCheckpointStatus.Completed);
     }
 
+    // v69 守卫锁定：Failed 快照直调 MarkCompleted 不翻转（v62 status<>Completed 偏宽口径
+    // 已勘正为仅 Processing——对齐 EFCore v53 与 Dapper 姊妹）
+    [Test]
+    public async Task ProjectionCheckpoint_MarkCompleted_FailedSnapshot_DoesNotFlip()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteProjectionCheckpointStore(session);
+        var now = DateTimeOffset.UtcNow;
+
+        var cp = await store.TryStartAsync("proj-flip", "source-flip", "pos-1", now, TimeSpan.FromMinutes(5), default);
+        await store.MarkFailedAsync(cp!, "boom", now.AddSeconds(1), default);
+
+        await store.MarkCompletedAsync(cp!, now.AddSeconds(2), default);
+
+        var saved = await store.GetAsync("proj-flip", "source-flip", "pos-1", default);
+        await Assert.That(saved!.Status).IsEqualTo(ProjectionCheckpointStatus.Failed);
+    }
+
     [Test]
     public async Task ProjectionCheckpoint_Reset_RemovesProjectionSourceRows()
     {

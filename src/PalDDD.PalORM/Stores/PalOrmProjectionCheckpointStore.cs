@@ -138,7 +138,7 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         var expectedRevision = checkpoint.Revision;
         var statusCompleted = (int)ProjectionCheckpointStatus.Completed;
         var affected = await Session.ExecuteAsync(
-            $"UPDATE projection_checkpoints SET status = {statusCompleted}, updated_at = {completedAt}, revision = revision + 1, error = NULL WHERE projection_name = {checkpoint.ProjectionName} AND source_name = {checkpoint.SourceName} AND position = {checkpoint.Position} AND revision = {expectedRevision} AND status <> {(int)ProjectionCheckpointStatus.Completed}", // v62：对齐 Dapper 姊妹与 EFCore v53 状态机守卫
+            $"UPDATE projection_checkpoints SET status = {statusCompleted}, updated_at = {completedAt}, revision = revision + 1, error = NULL WHERE projection_name = {checkpoint.ProjectionName} AND source_name = {checkpoint.SourceName} AND position = {checkpoint.Position} AND revision = {expectedRevision} AND status = {(int)ProjectionCheckpointStatus.Processing}", // v69 勘正：仅 Processing 可完成（对齐 EFCore v53——v62 status<>Completed 允许 Failed 翻转，口径偏宽）
             ct).ConfigureAwait(false);
         // 修复覆盖残留：对齐 Dapper 版同方法（rows>0 才变更本地对象）——
         // 乐观锁冲突时 DB 未变，不假装落库成功
