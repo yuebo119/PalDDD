@@ -68,7 +68,7 @@ public static class EventStreamJsonLines
     }
 
     /// <summary>单行最大字符数——ITM-218 修复：无上限 ReadLineAsync 可被超长无换行输入耗尽内存。</summary>
-    public const int MaxLineChars = 16 * 1024 * 1024; // 16MB/行（Base64 payload 后合法事件已宽裕）
+    public const int MaxLineChars = 16 * 1024 * 1024; // 16M 字符/行（UTF-16 约 32MB 内存；v72 勘正单位口径）
 
     private static async IAsyncEnumerable<EventData> ImportAsyncCore(
         Stream input,

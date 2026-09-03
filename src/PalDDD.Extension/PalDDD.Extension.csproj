@@ -3,7 +3,7 @@
   <!--
     📦 PalDDD.Extension — 扩展聚合元包（仅依赖聚合，无源码）
     ITM-128 修复：①加入 PalDDD.slnx（发布完整性——元包必须被 CI build/pack 覆盖）；
-    ②PalDDD.* 依赖改为 ProjectReference——dotnet pack 自动生成 1.1.0 nuspec 依赖，
+    ②PalDDD.* 依赖改为 ProjectReference——dotnet pack 自动生成带版本的 nuspec 依赖（v72 勘正：去掉写死版本防升版再 stale），
       本地 build 不再要求 NuGet 上已发布同名包；③外部依赖版本对齐中央版本源
       （ByteAether.Ulid 1.4.0 / Microsoft.Extensions.* preview.7）。
 

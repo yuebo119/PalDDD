@@ -23,7 +23,8 @@ public static class ServiceRegistration
 {
     /// <summary>注册 PalDDD 核心：事件总线 + 分发器 + 空消息代理 + 迭代事件派发</summary>
     public static IServiceCollection AddPalDDD(this IServiceCollection services)
-    {        ArgumentNullException.ThrowIfNull(services);
+    {
+        ArgumentNullException.ThrowIfNull(services);
         services.TryAddSingleton<CQRS.Dispatcher>();
         services.TryAddScoped<Message.IDomainEventDispatcher, Message.IterativeDomainEventDispatcher>();
         services.TryAddSingleton<Message.IMessageBroker, Message.NullMessageBroker>();
@@ -41,7 +42,8 @@ public static class ServiceRegistration
     ///（v37 P3 勘正：框架核心类型不经 DI 消费 ID 生成器——框架核心直调 <c>PalUlid.New</c>，
     /// 原声明"提供给 DomainEvent、OutboxMessage 等核心类型使用"失实，IPalIdGenerator 在框架内无核心消费方）。</remarks>
     public static IServiceCollection AddPalIdentity(this IServiceCollection services)
-    {        ArgumentNullException.ThrowIfNull(services);
+    {
+        ArgumentNullException.ThrowIfNull(services);
         services.TryAddSingleton<Core.Identity.IPalIdGenerator, Core.Identity.ByteAetherUlidGenerator>();
         return services;
     }

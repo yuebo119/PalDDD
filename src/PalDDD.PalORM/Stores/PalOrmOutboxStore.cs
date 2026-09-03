@@ -188,7 +188,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
                 $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by IS NULL",
                 default).AsTask().GetAwaiter().GetResult()
             : Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} AND locked_by = {owner} AND locked_until = {until}",
+                $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} -- v72：删三十四轮 token 化手误的重复谓词（姊妹 ReleaseForRetry/Dapper/EFCore 均单次） AND locked_until = {until}",
                 default).AsTask().GetAwaiter().GetResult();
         if (affected > 0)
         {
@@ -227,7 +227,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
                 $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by IS NULL",
                 default).AsTask().GetAwaiter().GetResult()
             : Session.ExecuteAsync(
-                $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} AND locked_by = {owner} AND locked_until = {until}",
+                $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} -- v72：删三十四轮 token 化手误的重复谓词（姊妹 ReleaseForRetry/Dapper/EFCore 均单次） AND locked_until = {until}",
                 default).AsTask().GetAwaiter().GetResult();
         if (affected > 0)
         {

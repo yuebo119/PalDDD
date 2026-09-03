@@ -130,7 +130,10 @@ public sealed class StrategicDddAnalyzerTests
             [BoundedContext("ordering")]
             public sealed class GetterReturnNullProjection : IProjectionHandler<ProbeSubmitted2>
             {
-                public string ProjectionName { get { return null!; } }
+                public string ProjectionName { get { return null; } }
+                // v72 勘正：v71 写 null!（PostfixUnary）不命中 Literal 分支且纯 null 也锁不住——
+                // ProjectionName 侧消费方对 null 两态均报 PDDD007（v70 修复属形态一致化无行为差异）。
+                // 本测试锁定的是"getter-return null 必报 PDDD007"这一可观察行为本身
                 public ValueTask ProjectAsync(ProbeSubmitted2 @event, ProjectionContext context, CancellationToken ct) => ValueTask.CompletedTask;
             }
             """);

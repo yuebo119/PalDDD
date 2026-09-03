@@ -517,10 +517,13 @@ public sealed class IdentityGenerator : IIncrementalGenerator
             ? "\n" + string.Join("\n", info.ContainingDeclarations.Select(_ => "}")) + "\n"
             : "";
 
-        // Medium 修复（二十六轮验证轮 W3）：同时 emit 命名空间 using 与别名——模板以裸 Ulid 作
-        // srcType（IPalIdentity<Ulid>/public Ulid Value），仅别名时无 global using 的真实消费方
-        // 编译失败（7 个 CS0246/CS1503，harness 实测；仓内零真实 Ulid Id 类型故从未暴露）
-        var ulidUsing = srcType == "Ulid" ? "\r\nusing ByteAether.Ulid;\r\nusing PalUlid = ByteAether.Ulid.Ulid;" : "";
+        // Medium 修复（二十六轮验证轮 W3）：emit 别名 using——模板以裸 Ulid 作 srcType
+        //（IPalIdentity<Ulid>/public Ulid Value），仅别名时无 global using 的真实消费方
+        // 编译失败（7 个 CS0246/CS1503，harness 实测）。
+        // v72 勘正：原同时 emit 非别名 using ByteAether.Ulid——v35 DA2 displayType 分派后
+        // 生成模板内裸 Ulid 绝迹（全部经 PalUlid 别名/global::System.Guid 限定），非别名
+        // using 零消费方已删（D 片 grep 实证）
+        var ulidUsing = srcType == "Ulid" ? "\r\nusing PalUlid = ByteAether.Ulid.Ulid;" : "";
 
         // v35 P3（DA2）：模板对 Ulid/Guid 输出裸类型名——用户命名空间含同名类型（class Ulid/
         // class Guid）时裸名解析被遮蔽，生成物编译失败（CS0246/CS1503 落在用户侧同名类型）。
