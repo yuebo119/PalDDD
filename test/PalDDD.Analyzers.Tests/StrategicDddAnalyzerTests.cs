@@ -13,6 +13,31 @@ using System.Collections.Immutable;
 
 public sealed class StrategicDddAnalyzerTests
 {
+    // v59 补全：PDDD013 正向半边——显式实现 + 名字与前缀不匹配必须仍报（v58 只测不误报半边）
+    [Test]
+    public async Task ExplicitInterfaceProjectionName_Mismatch_StillReportsPddd013()
+    {
+        var diagnostics = await AnalyzeAsync("""
+            using PalDDD.Core;
+            using PalDDD.Projections;
+            namespace ProbeNs;
+            [BoundedContext("ordering")]
+            public sealed class OrderSubmitted : DomainEvent, IDomainEvent
+            {
+                static string IDomainEvent.EventName => "ordering.order-submitted.v1";
+            }
+            [BoundedContext("ordering")] // PDDD013 gate 需 BC 存在（contextName 缺失时该规则整体跳过）
+            public sealed class MismatchProjection : IProjectionHandler<OrderSubmitted>
+            {
+                string IProjectionHandler<OrderSubmitted>.ProjectionName => "wrong-prefix.projection";
+                public ValueTask ProjectAsync(OrderSubmitted @event, ProjectionContext context, CancellationToken ct) => ValueTask.CompletedTask;
+            }
+            """);
+        // PDDD013 消息是 "Projection name 'X' must start with bounded context 'Y'"——不含类型名，
+        // 按 Id + 消息含投影名断言（PDDD005 并存合理：测试桩事件未标 GenerateMessage）
+        await Assert.That(diagnostics.Any(d => d.Id == "PDDD013" && d.GetMessage().Contains("wrong-prefix.projection"))).IsTrue();
+    }
+
     // v58 回归网：显式接口实现 ProjectionName（IProjectionHandler.ProjectionName 显式
     // 实现形态此前被 GetMembers(name) 按名查找漏掉 → PDDD013 漏检；镜像 v57 EventName 修复）
     [Test]
