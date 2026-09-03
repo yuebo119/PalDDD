@@ -7,7 +7,7 @@
 | 规则 | 说明 |
 |------|------|
 | PDDD004 | 投影处理器必须 `sealed` + `[BoundedContext]` |
-| PDDD007 | 投影名称必须是小写 kebab-case |
+| PDDD007 | 投影名称必须是小写字母/数字/连字符/点（如 ordering.order-submitted.v1；v64 勘正：规范形态含点，非狭义 kebab-case） |
 | PDDD013 | 投影名必须以 `{boundedContext}.` 为前缀 |
 | AOT | 投影处理器通过泛型 `IProjectionHandler<TMessage>` 注册 |
 

@@ -34,9 +34,12 @@ jobs:
 
       - name: Resolve version
         id: version
+        env:
+          # v64 P3-6: dispatch input via env indirection (script-injection hardening per GitHub guidance)
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
+            VERSION="$DISPATCH_VERSION"
           else
             VERSION="${GITHUB_REF#refs/tags/v}"
           fi

@@ -26,11 +26,11 @@ namespace PalDDD.Transactions;
 /// 到 DI 并不会让事件自动流向它。标准用法：
 /// <code>
 ///   // 1. 实现 Sink（示例：转发到日志/指标）
-///   sealed class MetricsSink(TimeProvider clock) : ISagaEventSink
+///   sealed class MetricsSink(PalDDD.Core.Logging.IPalLogger<MetricsSink> logger) : ISagaEventSink
 ///   {
 ///       public ValueTask EmitAsync&lt;T&gt;(T sagaEvent, CancellationToken ct)
 ///       {
-///           _logger.Information($"saga event: {sagaEvent}"); // 转发到注入的 IPalLogger
+///           logger.Information($"saga event: {sagaEvent}"); // 转发到注入的 IPalLogger
 ///           return ValueTask.CompletedTask;
 ///       }
 ///   }

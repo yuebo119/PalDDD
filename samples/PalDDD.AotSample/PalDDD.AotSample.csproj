@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <!-- v64：release.md §2.2 声明的发布控制落地（原表声明但未设置） -->
+    <IsPackable>false</IsPackable>
     <OutputType>Exe</OutputType>
     <RootNamespace>PalDDD.AotSample</RootNamespace>
     <IsAotCompatible>true</IsAotCompatible>

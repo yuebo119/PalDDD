@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
+    <IsPackable>false</IsPackable> <!-- v64：release.md §2.2 声明的发布控制落地 -->
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- SMP-107：Web SDK 项目不参与 Native AOT publish（AOT 验证由 AotSample/PalOrmSample

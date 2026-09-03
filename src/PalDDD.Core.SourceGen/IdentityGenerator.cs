@@ -279,6 +279,8 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                         : "partial class";
                     // v41 P1：补 Interface 腿——interface 嵌套类型（C# 合法）落 partial class
                     // 产出同名义声明种类冲突（CS0101/CS0261 落 auto-generated 文件）
+                    // v64 P3：泛型包含类型已被 PALID003 前置拦截，此处 Arity 恒 0、arity
+                    // 拼接不可达——保留供未来放宽拦截时复用（对齐 EnumGenerator v62 注释）
                     var arity = t.Arity > 0
                         ? $"<{string.Join(", ", t.TypeParameters.Select(p => p.Name))}>"
                         : "";

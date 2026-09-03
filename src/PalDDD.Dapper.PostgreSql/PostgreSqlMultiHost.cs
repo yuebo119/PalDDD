@@ -38,7 +38,7 @@ public static class PostgreSqlMultiHost
 {
     /// <summary>
     /// 注册支持故障转移的 NpgsqlDataSource（一主一备）。
-    /// 当 primary 不可达时自动切换到 standby。
+    /// primary 不可达时等待 standby 提升为 primary 后自动切换（TargetSessionAttributes=primary 是过滤语义——连接仅落当前 primary 角色，非主动故障转移；v64 勘正措辞）。
     /// </summary>
     /// <param name="applicationName">PGAPPNAME 应用名</param>
     public static IServiceCollection AddPalNpgsqlDataSourceWithFailover(

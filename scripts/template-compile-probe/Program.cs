@@ -126,7 +126,7 @@ internal static class Probe
             Directory.CreateDirectory(dumpDir);
             var safe = $"{template}:{line}".Replace(':', '_').Replace('.', '_');
             File.WriteAllText(Path.Combine(dumpDir, $"{safe}.block.cs"),
-                (stubs ? Wrap(code) + TemplateStubs.Render(code, $"{template}:{line}") : Wrap(code)));
+                (stubs ? Wrap(code) + TemplateStubs.Render(code, $"{template}:{line}", stubAcc) : Wrap(code))); // v64 P3-6：补 stubAcc（dump 与实际编译一致）
         }
 
         // 顶级语句块（DI/app 骨架段）必须 ConsoleApplication；纯类型声明块用 Library。

@@ -7,8 +7,8 @@
 | 规则 | 说明 |
 |------|------|
 | PDDD001 | 领域模型类型必须声明 `[BoundedContext]` |
-| PDDD002 | BC 名称必须是小写 kebab-case（如 `ordering`） |
-| PDDD006 | ProcessManager 名称必须是小写 kebab-case |
+| PDDD002 | BC 名称必须是小写字母/数字/连字符/点（如 ordering.order-submitted.v1；v64 勘正：规范形态含点，非狭义 kebab-case）（如 `ordering`） |
+| PDDD006 | ProcessManager 名称必须是小写字母/数字/连字符/点（如 ordering.order-submitted.v1；v64 勘正：规范形态含点，非狭义 kebab-case） |
 | AOT | 零 Assembly Scanning，所有 Handler 显式注册 |
 
 ## 必须遵守
