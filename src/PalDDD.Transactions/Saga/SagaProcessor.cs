@@ -112,11 +112,22 @@ TState>
         var now = _timeProvider.GetUtcNow();
         var options = _options.CurrentValue;
 
-        var activeSagas = await _store.LeaseActiveSagasAsync(
-            options.LeaseOwner,
-            options.LeaseDuration,
-            options.TimeoutScanBatchSize,
-            ct).ConfigureAwait(false);
+        // v70 P3：租约获取失败观测（对齐 OutboxBatchProcessor v29——此前 DB 故障仅 OnTickFailed
+        // 记日志，长故障期监控面板呈"零失败"假象）
+        System.Collections.Generic.IReadOnlyList<TState> activeSagas;
+        try
+        {
+            activeSagas = await _store.LeaseActiveSagasAsync(
+                options.LeaseOwner,
+                options.LeaseDuration,
+                options.TimeoutScanBatchSize,
+                ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            PalMetrics.SagaCompensationFailed.Add(1);
+            throw;
+        }
 
         foreach (var sagaState in activeSagas)
         {

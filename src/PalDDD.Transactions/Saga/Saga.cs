@@ -120,7 +120,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // 程序化配置错误。v17 原"重试路径 NRE 自曝"已被 v30 ComputeRetryDelaySafely
         // catch(Exception) 吞掉静默降级 1s 推翻：null 策略经降级守卫静默 1s，无异常暴露
         // ——配置错误检测靠调用方启动期校验（ValidateOnStart 模式）与步骤异常复现，非 NRE。
-                protected set => RetryBackoffPolicy = new FixedBackoffPolicy(value);
+        protected set => RetryBackoffPolicy = new FixedBackoffPolicy(value);
     }
 
     /// <summary>

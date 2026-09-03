@@ -208,6 +208,11 @@ public sealed partial class StrategicDddAnalyzer
                                     Expression: LiteralExpressionSyntax returnLiteral
                                 })
                             {
+                                // v70 P3：null/default 视为缺失（v66 四形态补齐的最后一腿——
+                                // ProjectionName 侧 getter-return 此前漏补，与姊妹 helper 不一致）
+                                if (returnLiteral.IsKind(SyntaxKind.NullLiteralExpression)
+                                    || returnLiteral.IsKind(SyntaxKind.DefaultLiteralExpression))
+                                    return (null, null);
                                 return (returnLiteral.Token.Value as string, returnLiteral.GetLocation());
                             }
                         }
