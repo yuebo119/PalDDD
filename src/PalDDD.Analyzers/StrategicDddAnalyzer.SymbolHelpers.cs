@@ -142,13 +142,19 @@ public sealed partial class StrategicDddAnalyzer
         // PDDD007。沿 BaseType 链逐层查找（镜像 TryGetStaticStringProperty 的八轮修复）。
         for (var current = type; current is not null; current = current.BaseType)
         {
-            foreach (var member in current.GetMembers("ProjectionName"))
+            // v58：与 TryGetLiteralFromTypeMembers 同款显式实现盲区修复——GetMembers(name)
+            // 按名查找不含显式接口实现（IProjectionHandler.ProjectionName 显式实现形态漏检 PDDD013）
+            foreach (var member in current.GetMembers())
             {
                 if (member is not IPropertySymbol property
                     || property.Type.SpecialType != SpecialType.System_String)
                 {
                     continue;
                 }
+                var matchesProjection = property.Name == "ProjectionName"
+                    || property.ExplicitInterfaceImplementations.Any(p => p.Name == "ProjectionName");
+                if (!matchesProjection)
+                    continue;
 
                 foreach (var syntaxReference in property.DeclaringSyntaxReferences)
                 {
