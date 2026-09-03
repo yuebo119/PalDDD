@@ -1,6 +1,8 @@
 # Pal.DDD 变更日志
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 规范。
+日志格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范（完整规则见 [`docs/release.md`](docs/release.md) §十一）：
+**消费者可见变更在上**（Added/Changed/Deprecated/Removed/Fixed/Security + 本项目扩展 Dependencies/Documentation/Tests），**工程过程叙事入附录**；数字必须可验证；`[Unreleased]` 与发布段**同次提交转正、先于 tag**。
 
 > **当前版本**：`VersionPrefix=2.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）
 > **发布状态**：**2.1.0 已发布**（2026-09-04 tag `v2.1.0`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag 之后的所有变更见 `[Unreleased]`。
@@ -14,7 +16,58 @@
 
 ## [2.1.0] — 2026-09-04
 
-> 本段聚合 2.0.0（2026-08-23 tag `v2.0.0`）之后的全部变更：v24-v74 共 51 轮 AI 质量系统评审-修复循环（全仓地毯逐行 + 探针实证 + mutation 锁定）、一轮全源码精炼、PalORM 5.4 弹性接入与依赖升级。完整轮次明细见 `.ai/review/metrics.md`；本段为发布面摘要。
+> **范围**：`v2.0.0`（2026-08-23，commit a115c22）→ `v2.1.0`（commit 0370c30），106 个提交（main/dev 同点发布）。
+> **兼容性**：SemVer Minor——向后兼容，无破坏性 API 变更；3 个零消费公共 API 预告废弃（v3.0 移除）。
+> **组织方式**：分两层——上方按 Keep a Changelog 分类给出**消费者可见变更**；文末附录保留**逐轮工程过程记录**（内部评审叙事）。规范见 [`docs/release.md`](docs/release.md) §十一，逐轮明细真源 `.ai/review/metrics.md`。
+
+### Added 新增
+
+- **`Core.FailureReason` 共享类型**：`Normalize`（代理对完整防御——截断不落孤立高代理）+ `Truncate`（UTF-16 安全截断）——替换五栈各自为政的裸切片截断
+- **租约 token fencing（守卫语义，三栈统一）**：Outbox `MarkProcessed`/`MarkDead`/`ReleaseForRetry` 持租路径补 `(locked_by, locked_until)` 双 token 守卫 + `retry_count` 乐观锁——租约被重租后旧 worker 终态写被拒（affected=0 零内存变异）；幂等存储补 `Revision` CAS 令牌（防 Completed 翻转后副作用重执行）
+- **Saga API 扩展**：`Saga<TState>` 新增 `Input` 属性与 `ctor(object input)`（子类携带输入载荷）；`SagaState.InvalidateInterrupted(sagaId)`（HITL 中断失效集）
+- **可观测性注入点**：`IdempotencyProcessor`/`ProjectionProcessor` 构造新增 `IPalLogger<T>` 可选重载；`AddPalLogging`（`clearProviders`/`minimumLevel` 参数化）
+- **分析器与 CodeFix**：新增 PALID007（幂等 Revision 令牌）/PALENUM009 诊断；CodeFix 拆分为四个独立 provider（AddBoundedContextPrefix/AddProjectionContextPrefix/AddVersionSuffix/MatchEventName，一个诊断一文件惯例）
+- **闭合泛型管线重载**：`AddPalPipelineBehaviors<TRequest,TResponse>()`——开放泛型在 AOT 下值类型响应抛异常的根治
+- **质量工程脚本**（`.ai/scripts/`，挂 CI）：`template-gate.sh`（AI 模板编译探针机械门禁）/`encoding-gate.sh`（CRLF/BOM/mojibake 指纹）/`sibling-map.sh`（接口→实现族传递闭包）/`flaky-gate.sh`/`fix-orchestrator.sh`；`ci-failed-tests.py`（CI 失败三通道 `::error` 注解）
+
+### Changed 变更
+
+- **组织重组（零破坏，命名空间不变）**：PalDDD.Transactions 30 文件平铺 → Saga/（18）+ Outbox/（5）+ Inbox/（3）+ 根共享（5）；Analyzers 738 行单文件拆 5 文件（纯搬运，36 测试零回归）
+- **异常口径统一**：解压超限（System 三算法）统一 `InvalidDataException`；畸形 JSON 400 补 ProblemDetails body（三处 400 形态收口）
+- **BulkCopy 11 类型显式映射**（byte[] 不再被 string 列 ToString）；MySQL INSERT IGNORE → `ON DUPLICATE KEY UPDATE`（静默错误降级根治，四处姊妹收口）
+- **默认质量**：库代码 179 处 `await` 全量补 `ConfigureAwait(false)`；mojibake 全仓清零；`IdentityGenerator.IsNumeric` 改 `SpecialType` 判定（extern alias 场景不再静默丢生成）
+
+### Deprecated 废弃（`[Obsolete(error: false)]`，v3.0 移除预告）
+
+- `AggregateNameAttribute` / `DomainCapabilityAttribute`——零消费（SourceGen/Analyzer 均不读取，原 doc"供 SourceGen 使用"失实）
+- `SqlServerOutboxDbContext`——零测试覆盖的未验证方言基类
+
+### Fixed 修复
+
+- **P1 级（全部探针红→绿实证）**：PalOrmOutboxStore 租约 token 谓词被 SQL 行内注释吞（v72 引入 v74 闭环——同 owner 重租旧写放行）；Kafka 非关停 OCE 假修勘正（catch 锚定 while 外物理无法 continue，移入循环体）；interface 嵌套三元漏腿（生成物必炸）；模板区 P1×8（DDL 错位/prompt 破损/CI no-op/README 漏同步/探针假绿路径×3/template-gate 前存量）；PDDD015 显式接口实现假报（analyzer 生产缺陷）；NuGet env 作用域（CI）
+- **并发/租约族**：EF 幽灵租约（瞬时异常 Detach 收口，Idempotency 样板推广五 DbContext）；Saga 终态吞决策（可见失败 + 失效集 + TOCTOU double-check 三层递进）；RabbitMQ ct 参与消费生命周期（linked-CTS + BasicCancelAsync 解绑）；`RabbitMqBroker.DisposeAsync` 幂等门
+- **连接串族**：IPv6 四象限定稿（方括号纯 host/方括号+端口放行、裸 IPv6 fail-fast、`']'` 后三类畸形后缀三入口拦截）；MySQL 内嵌端口零容忍（MySqlConnector 2.6.2 源码四点实证）；LoadBalance 显式冲突 fail-fast；空条目/查重守卫五层
+- **数据正确性**：SQLite JSON 转义拆分（路径位 fail-fast 与值位引号倍增分离）；PG JSONB 42804；Saga JsonTypeInfo fail-fast（防 saga_data 静默丢失）；PalOrmIdempotencyStore 过期 Completed 记录修正为可回收重建
+- **API 语义**：`AddPalOutbox` 补 `RetryBackoffPolicy` 非空校验（原置 null 时逐 tick NRE、消息滞留）；`Saga` 补 `SafeObserveCompensationStartedAsync` 隔离（观察者异常不阻断补偿）；ValidationBehavior default 验证器静默放行修正
+
+### Dependencies 依赖
+
+- PalORM 5.3.0 → 5.4.0（弹性层 DI 接入：三 Provider 扩展 `configureResilience` 回调）
+- TUnit 1.65.38 → 1.65.68（TUnit.FsCheck 同步）
+
+### Documentation 文档
+
+- 新增 4 篇 ADR：018（DomainEvent Ambient TimeProvider）/ 019（IUnitOfWork 归属 Core）/ 020（三栈并行与 Dapper 退役路线）/ 021（四处理器管线不做基类提取）
+- 新增 docs/testing.md（测试体系规范）/ docs/release.md（发布 SOP）/ docs/pitfalls.md（66 条踩坑）
+- README/README.en 全面口径对齐（包表 2.1.0 / 测试计数 / 轮次计数）
+
+### Tests 测试
+
+- 16 项目面板：v2.0.0 基线约 1053 → **v2.1.0 实测 1202**（本机 1153 通过 + 49 环境依赖项由 CI Testcontainers 权威执行）；净增约 150 个回归/锁定测试，守卫类修复均带 mutation 红测锁定（移除修复套件必须变红）
+
+### 附录：工程过程明细（评审逐轮记录——内部叙事，非消费者变更摘要）
+
+> v24-v74 共 51 轮评审-修复循环（全仓地毯逐行 + 探针实证 + mutation 红测锁定），累计发现与处置约 490 项（其中 v53-v74 机械账本口径 P1×17 / P2×35 / P3×189，含证伪与留档项）。逐轮明细（含证伪数、姊妹联动、mutation 记录）见 `.ai/review/metrics.md`；以下保留历史轮次的发布面叙事。
 
 ### AI 质量系统评审循环 v24-v36（2026-08-23 起十三轮全仓地毯 + 修复，commit fc6447a..v36）
 
@@ -321,9 +374,9 @@
 - **模板编译探针机械化（v56 特性）**：`template-gate.sh` 确定性强制替代人工评审——模板区连续四轮 P1 根治（record 继承 CS8864/Unit.Value/saga 基类转形/MapCommand 签名等 8 项真实缺陷由探针抓出）
 - **分析器生产缺陷修复（v57-v58）**：PDDD015 显式接口实现假报（analyzer 升级后探针照出）；PDDD013 ProjectionName 同型盲点姊妹收口
 - **PalOrmOutboxStore 租约 token 谓词回归修复（v72 引入 v74 修复，P1）**：勘正说明误以 SQL 行内注释（`--`）嵌进单行 SQL 字符串，`AND locked_until` 谓词被数据库当注释吞掉——同 owner 重租后旧快照终态写放行；探针双红实证 + 修复后双腿回归锁定（换 owner 腿已有测试未覆盖 until 腿的盲区一并补齐）
-- **守卫/口径族清偿（v60-v73 约 180 项）**：NuGet env 作用域 / fetch-depth 正交 / Detach no-op 二例 / README Build 后注册 / 计数三方同步 / `status<>1` 口径收窄（Failed 不可翻转）/ Saga Timeout 守卫锁定 / `null!` 锁定测试零保护力实证（MUTATION-4，防御性修复不可黑盒锁定的诚实声明先例）
+- **守卫/口径族清偿（v53-v74 P3×189，含证伪与留档项）**：NuGet env 作用域 / fetch-depth 正交 / Detach no-op 二例 / README Build 后注册 / 计数三方同步 / `status<>1` 口径收窄（Failed 不可翻转）/ Saga Timeout 守卫锁定 / `null!` 锁定测试零保护力实证（MUTATION-4，防御性修复不可黑盒锁定的诚实声明先例）
 - **mutation 红测纪律制度化（v68-v69）**：守卫修复必须带"移除后套件变红"的锁定测试——连环抓出 v66 回退不完整 + v62 口径偏宽两层潜伏缺陷
-- **测试**：16 项目面板约 1001 → 约 1200 项（净增约 200 个回归/锁定/契约测试；含环境性 49 项待 CI Testcontainers）
+- **测试**：v2.0.0 基线约 1053 → v2.1.0 实测 1202（本机 16 项目 1153 通过 + 49 环境依赖项由 CI Testcontainers 执行）
 
 ### 依赖升级（2026-09-02）
 
