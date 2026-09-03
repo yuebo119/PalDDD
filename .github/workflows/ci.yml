@@ -189,10 +189,12 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "match=1" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          if ! git rev-parse HEAD~1 >/dev/null 2>&1; then
-            echo "match=1" >> "$GITHUB_OUTPUT"; exit 0   # 首提交/浅历史退化为全跑
+          # v62 P2: push 事件用 before SHA 作 diff 基线——HEAD~1 只覆盖最后一个 commit，多 commit push 中间提交漏检（fetch-depth:0 与 diff 范围正交，v60 修复无效）
+          BEFORE="${{ github.event.before }}"
+          if [ "$GITHUB_EVENT_NAME" != "push" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            echo "match=1" >> "$GITHUB_OUTPUT"; exit 0   # PR/首推/force-push 退化为全跑
           fi
-          if git diff --name-only HEAD~1 HEAD | grep -qE '(PalDDD\.Dapper|docs/sql/|Store|SqlTemplates)'; then
+          if git diff --name-only "$BEFORE" HEAD | grep -qE '(PalDDD\.Dapper|docs/sql/|Store|SqlTemplates)'; then
             echo "match=1" >> "$GITHUB_OUTPUT"
           else
             echo "match=0" >> "$GITHUB_OUTPUT"

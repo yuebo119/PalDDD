@@ -58,6 +58,10 @@ public class SagaStep
         Func<SagaState, CancellationToken, ValueTask>? compensate = null,
         TimeSpan? timeout = null)
     {
+        // v62 P3：负值超时 fail-fast（对齐 MaxRetries ITM-186——负值使 IsTimedOut 恒真，
+        // 步骤记录后每 tick 立即超时补偿，现象不指向根因）
+        if (timeout is { } t && t < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout), "Timeout must be non-negative.");
         // P3 修复：name 入参校验。execute 不校验——FanOut/Child/Dynamic/Interrupt
         // 特殊步骤按既有契约传 null!（防御在 Saga 路由的 DispatchKind 守卫，ITM-069）。
         ArgumentException.ThrowIfNullOrWhiteSpace(name);

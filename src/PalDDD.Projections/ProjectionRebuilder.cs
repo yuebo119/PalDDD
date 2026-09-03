@@ -97,6 +97,9 @@ public sealed class ProjectionRebuilder<TMessage>
         CancellationToken ct)
     {
         var processed = 0;
+        var completed = false;
+        try
+        {
         await foreach (var replayEvent in _replaySource.ReadAsync(_sourceName, ct).ConfigureAwait(false))
         {
             ct.ThrowIfCancellationRequested();
@@ -111,6 +114,18 @@ public sealed class ProjectionRebuilder<TMessage>
                 checked { processed++; }
         }
 
+        completed = true;
+        }
+        finally
+        {
+            // v62 P3：计数入 finally（对齐二十一轮 metrics-finally 三姊妹——中途失败/取消时
+            // 已成功投影数仍进指标，运维可回答"失败前推进到哪里"）
+            if (!completed)
+            {
+                activity?.SetTag("pal.projection.replayed", processed);
+                PalMetrics.ProjectionReplayed.Add(processed);
+            }
+        }
         activity?.SetTag("pal.projection.replayed", processed);
         PalMetrics.ProjectionReplayed.Add(processed);
         return processed;

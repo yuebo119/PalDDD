@@ -222,12 +222,19 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
                     .Where(static g => g.Count() > 1)
                     .Select(static g => g.Key),
                 StringComparer.Ordinal);
-            foreach (var dup in validMessages.Where(m => duplicateTypeNames.Contains(m.TypeName)))
+            foreach (var typeGroup in validMessages.GroupBy(static m => m.TypeName, StringComparer.Ordinal))
             {
-                spc.ReportDiagnostic(Diagnostic.Create(
-                    DuplicateMessageName,
-                    dup.Location.ToLocation(),
-                    $"{dup.Name} (type '{dup.TypeName}' has multiple [GenerateMessage] declarations with different names)"));
+                if (typeGroup.Count() < 2) continue;
+                // v62 P3：同名/异名分措辞（原硬编码 "different names" 在同名双挂场景失实）
+                var sameName = typeGroup.Select(static m => m.Name).Distinct(StringComparer.Ordinal).Count() == 1;
+                var suffix = sameName
+                    ? $" (type '{typeGroup.Key}' has duplicate [GenerateMessage] declarations)"
+                    : $" (type '{typeGroup.Key}' has multiple [GenerateMessage] declarations with different names)";
+                foreach (var dup in typeGroup)
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        DuplicateMessageName,
+                        dup.Location.ToLocation(),
+                        dup.Name + suffix));
             }
             validMessages.RemoveAll(m => duplicateTypeNames.Contains(m.TypeName));
 

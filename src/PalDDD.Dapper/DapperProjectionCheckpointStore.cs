@@ -299,6 +299,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
           AND source_name = @SourceName
           AND position = @Position
           AND revision = @Revision
+          AND status <> 1 -- v62：仅非 Completed 可标记（对齐 MarkFailed/MarkProcessing 姊妹与 EFCore v53 状态机守卫）
         """;
 
     private const string MarkFailed = """

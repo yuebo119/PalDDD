@@ -64,7 +64,7 @@ public static class SqliteRowFactory
         return value switch
         {
             Guid g => g,
-            string s => Guid.Parse(s),
+            string s => Guid.Parse(s, CultureInfo.InvariantCulture), // v62 对齐 TypeHandler 姊妹形态
             // v25 P3 守卫族：byte[] 补 16 字节长度守卫（镜像 SqliteTypeHandlers.
             // SqliteGuidTypeHandler.Parse :59 与本文件 ParseUlid :49 姊妹形态）——
             // 非 16 字节 new Guid(byte[]) 抛 ArgumentException（非转换语义异常），
