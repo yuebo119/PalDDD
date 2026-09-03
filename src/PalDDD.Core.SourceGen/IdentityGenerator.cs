@@ -258,8 +258,9 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                     // v52 P2：包含类型非 partial 时报诊断——生成 partial 包裹声明与用户
                     // 非 partial 声明冲突报 CS0260 落 auto-generated 文件无排障指引
                     // v53 P1：SourceType 字段复用为携带非 partial 包含类型名（分派侧 {1}）
-                    if (t.DeclaredAccessibility != Accessibility.NotApplicable
-                        && !t.IsPartial(ct))
+                    // v62 P3：形态对齐 EnumGenerator（原 DeclaredAccessibility 前置对
+                    // 命名类型恒真——ContainingType 成员不取 NotApplicable）
+                    if (!t.IsPartial(ct))
                     {
                         return new IdGenInfo(
                             Namespace: null,

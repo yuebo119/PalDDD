@@ -22,7 +22,7 @@
     <NoWarn>$(NoWarn);NU5128;IL3058;NU5104</NoWarn>
     <!-- NU5104 项目级抑制（ITM-161 配套）：.NET 11 Preview 生态下 1.1.0 元包必然依赖
          Microsoft.Extensions.* 11.0.0-preview.7（唯一可用线），稳定包引预览依赖是生态事实
-         而非发布失误；全局 NoWarn 已按 ITM-161 收敛，此处是唯一需要的 pack 级例外。 -->
+         而非发布失误；v62 勘正：全局 NoWarn 已含 NU5104，此处为历史保留冗余（可删，保留作 pack 场景显式标注）。 -->
     <!-- IL3058 项目级抑制（ITM-128/161 配套）：元包聚合的 Transactions 显式非 AOT
          （Saga 反射），其编译期/运行期资产按设计传入；元包自身无源码无运行时。 -->
   </PropertyGroup>

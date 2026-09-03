@@ -137,6 +137,9 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
         var dict = new Dictionary<TValue, TSelf>(values.Length);
         foreach (var item in values)
         {
+            // v62 P3：序列元素 null 守卫（镜像 CompressionProvider v53——裸 NRE 无指向性；
+            // 生成器 emit 路径不产出 null，仅手写注册误用可达）
+            ArgumentNullException.ThrowIfNull(item);
             // ITM-101 修复：重复 Value 抛明确异常——原 `dict[item.Value] = item` 静默
             // 后者覆盖（最后注册者胜），数据错误（两个枚举项同值）被掩盖，FromValue 的
             // 反查结果取决于注册顺序，不可预测。契约文档未声明"后者覆盖"，故显式化；

@@ -61,7 +61,19 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
     }
 
     /// <summary>每个子任务的超时时间（可选）</summary>
-    public TimeSpan? PerItemTimeout { get; init; }
+    public TimeSpan? PerItemTimeout
+    {
+        // v62 P3：负值 fail-fast（对齐 MaxConcurrency init 守卫——CancelAfter(负值) 立即取消全部子任务）
+        get => _perItemTimeout;
+        init
+        {
+            if (value is { } t && t < TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(value), "PerItemTimeout must be non-negative.");
+            _perItemTimeout = value;
+        }
+    }
+
+    private readonly TimeSpan? _perItemTimeout;
 
     /// <summary>
     /// 创建 Fan-out 步骤。

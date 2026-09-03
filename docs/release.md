@@ -252,7 +252,7 @@ dotnet build PalDDD.slnx -c Release --no-incremental -warnaserror
 
 # 3. 单元 + 集成测试全绿
 # 逐项目跑（slnx 批量触发 MTP 握手 exit 5——ci.yml 自述实证；v60 勘正原命令不可执行）
-for p in PalDDD.Core PalDDD.CQRS PalDDD.Transactions PalDDD.Integration PalDDD.EventLog PalDDD.Serialization PalDDD.Messaging PalDDD.Analyzers PalDDD.DependencyInjection PalDDD.Hosting.AspNetCore PalDDD.Projections.EventLog; do dotnet test test/PalDDD.$p.Tests --no-restore --no-build; done
+for p in $(find test -name "*.Tests.csproj" | sort); do dotnet test "$p" --no-restore --no-build; done # v62：find 生成全 16 项目（原手列 11 项漏 Compression/Core.Abstractions/Messaging.Integration/PalORM/Repository.EFCore）
 
 # 4. 规范验证
 bash scripts/verify-conventions.sh
@@ -347,13 +347,13 @@ on:
 | 1 | Resolve version | 从 tag/input 解析版本号 | 解析失败 → exit |
 | 2 | Verify version matches props | tag 版本 vs Directory.Build.props | 不一致 → exit（防误发） |
 | 3 | Restore + Build | 全量构建，warnings as errors | 编译失败 → exit |
-| 4 | Unit tests | 全部 .Tests 项目 | 测试失败 → exit |
-| 5 | Integration tests | Testcontainers（PG/MySQL/RabbitMQ/Kafka）+ ubuntu-latest | 测试失败 → exit |
-| 6 | AOT publish 验证 | PalOrmSample 单入口 `dotnet publish -p:PublishAot=true` + 实跑（v60 勘正：原"7 项目"与 workflow 实态不符——release.yml/ci.yml 均 1 项目 publish+run） | AOT 失败 → exit |
-| 7 | Pack | 全部公开发布项目 | pack 失败 → exit |
-| 8 | Verify package count | 断言 nupkg 数 = 发布清单总数 | 数量不对 → exit（防漏发） |
-| 9 | Push to NuGet.org | `--skip-duplicate` | push 失败 → exit |
-| 10 | Create GitHub Release | 仅 tag 触发时 | 创建失败 → exit |
+| 4 | Unit + Integration tests | 单步骤全 16 测试项目（含 Testcontainers PG/MySQL/RabbitMQ/Kafka，v62 勘正：原拆两步与 workflow 实态不符） | 测试失败 → exit |
+| 5 | AOT publish 验证 | PalOrmSample 单入口 `dotnet publish -p:PublishAot=true` + 实跑（v60 勘正：原"7 项目"与 workflow 实态不符——release.yml/ci.yml 均 1 项目 publish+run） | AOT 失败 → exit |
+| 6 | Pack | 全部公开发布项目 | pack 失败 → exit |
+| 7 | Verify package count | 断言 nupkg 数 = 发布清单总数 | 数量不对 → exit（防漏发） |
+| 8 | Push to NuGet.org | `--skip-duplicate` + 推送计数断言（v60 加）| push 失败/计数不符 → exit |
+| 8b | NuGet push skipped 警告 | secret 缺失时 `::warning::`（v60 加，v62 修 job 级 env 作用域） | 显式警告不 exit |
+| 9 | Create GitHub Release | 仅 tag 触发时 | 创建失败 → exit |
 
 ### 6.3 关键配置
 
@@ -492,7 +492,7 @@ git checkout -b feature/xxx
 # ... 编辑代码 ...
 dotnet build PalDDD.slnx --no-incremental
 # 逐项目跑（slnx 批量触发 MTP 握手 exit 5——ci.yml 自述实证；v60 勘正原命令不可执行）
-for p in PalDDD.Core PalDDD.CQRS PalDDD.Transactions PalDDD.Integration PalDDD.EventLog PalDDD.Serialization PalDDD.Messaging PalDDD.Analyzers PalDDD.DependencyInjection PalDDD.Hosting.AspNetCore PalDDD.Projections.EventLog; do dotnet test test/PalDDD.$p.Tests --no-restore --no-build; done
+for p in $(find test -name "*.Tests.csproj" | sort); do dotnet test "$p" --no-restore --no-build; done # v62：find 生成全 16 项目（原手列 11 项漏 Compression/Core.Abstractions/Messaging.Integration/PalORM/Repository.EFCore）
 
 # 3. 升版本（同一次提交）
 # 编辑 Directory.Build.props: <VersionSuffix></VersionSuffix> → preview.2

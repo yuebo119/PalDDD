@@ -231,6 +231,10 @@ public abstract class EventLogDbContext(
         try
         {
             await SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            // v62 P3：成功路径 Detach（对齐 Checkpoint/Idempotency 成功路径家族——长寿命
+            // context 持续追加时 Unchanged 条目线性累积；append-only 契约无后续读写依赖，
+            // Detach 只清跟踪状态不影响已执行 INSERT 与事务提交）
+            DetachAddedEvents();
         }
         catch (DbUpdateException ex)
         {

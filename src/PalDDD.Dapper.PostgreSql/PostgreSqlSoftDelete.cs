@@ -56,7 +56,7 @@ public static class PostgreSqlSoftDelete
     /// <param name="column">软删除列名（默认 "deleted_at"）</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Restore(string table, string whereClause, string column = DefaultColumn)
-        => $"UPDATE {Escape(table)} SET {Escape(column)} = NULL WHERE {whereClause}";
+        => $"UPDATE {Escape(table)} SET {Escape(column)} = NULL WHERE ({whereClause})"; // v62 防御对称（对齐 Delete v43 括号——未来追加守卫时免 OR 优先级缺陷）
 
     /// <summary>生成硬删除历史数据（清理超过 N 天的已删除行）</summary>
     /// <exception cref="ArgumentOutOfRangeException">olderThanDays 不在 1–365 范围</exception>

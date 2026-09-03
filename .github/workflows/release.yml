@@ -23,6 +23,9 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # v62 P1: NUGET_API_KEY at job level - step-level env does not cross steps, skip step's env.NUGET_API_KEY was always empty (false warning after successful push)
+    env:
+      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
     timeout-minutes: 45
 
     steps:
@@ -111,8 +114,6 @@ jobs:
 
       - name: Push to NuGet.org
         if: ${{ env.NUGET_API_KEY != '' }}
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
           set -euo pipefail
           PUSHED=0

@@ -234,7 +234,7 @@ public sealed class CreateOrderHandler(IUnitOfWork uow) : ICommandHandler<Create
 ### DI 注册与分发
 
 ```csharp
-// 1. 注册核心栈（Dispatcher + Pipeline + 序列化 + 分析器）
+// 1. 注册核心栈（Dispatcher + Pipeline + Ulid 身份；v62 勘正：不含序列化/分析器——仍需对应包显式注册，见 AddPalCoreStack remarks）
 services.AddPalCoreStack();
 
 // 2. 注册命令处理器（编译时类型常量，无装配扫描）
@@ -742,7 +742,7 @@ MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Servi
 不支持 .NET 8/9/10（单目标 net11.0）。Saga 的 ChildSaga 和 DynamicStep 依赖 `MakeGenericType`，在 AOT 发布时不可用（标注了 `[RequiresDynamicCode]`）。不含内置的 EventStore 快照机制——需要快照策略的项目需要自行实现。
 
 **生产环境有谁在用？**
-Pal.DDD 当前版本 v2.0.0（tag v2.0.0 已推送；三十七轮全仓清偿后 CI 全绿）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 897+ 用例（本地 15 项目）+ 41 Testcontainers 真库集成（CI）。欢迎在非生产环境中试用并反馈。
+Pal.DDD 当前版本 v2.0.0（tag v2.0.0 已推送；三十七轮全仓清偿后 CI 全绿）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 900+ 用例（本地 16 项目，v62 勘正计数）+ 41 Testcontainers 真库集成（CI）。欢迎在非生产环境中试用并反馈。
 
 ---
 
