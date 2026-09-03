@@ -165,8 +165,15 @@ public sealed partial class StrategicDddAnalyzer
                     if (syntax is not PropertyDeclarationSyntax declaration)
                         continue;
 
+                    // v65：null/default 字面量视为缺失（对齐 TryGetLiteralFromTypeMembers v64——
+                    // Token.Value as string 对 null 字面量产 null，被误判"找到但值为 null"分支跳过比对）
                     if (declaration.ExpressionBody?.Expression is LiteralExpressionSyntax expressionLiteral)
+                    {
+                        if (expressionLiteral.IsKind(SyntaxKind.NullLiteralExpression)
+                            || expressionLiteral.IsKind(SyntaxKind.DefaultLiteralExpression))
+                            return (null, null);
                         return (expressionLiteral.Token.Value as string, expressionLiteral.GetLocation());
+                    }
 
                     if (declaration.Initializer?.Value is LiteralExpressionSyntax initializerLiteral)
                         return (initializerLiteral.Token.Value as string, initializerLiteral.GetLocation());
