@@ -32,7 +32,9 @@ foreach (var template in templates)
 
     // 输出格式段（四反引号）：完整可编译声明 + PDDD analyzer 强制（桩注入——saga/DI 骨架
     // 输出段引用用户域事件类型，剔除逻辑保证块内自定义同名类型优先）
-    // 同模板输出段先合并（如 bounded-context 的 DI 段 + app 段同属一个 Program.cs）
+    // 同模板输出段先合并（如 bounded-context 的 DI 段 + app 段同属一个 Program.cs）。
+    // v62 记录（v63 补声明）：合并按文档出现序拼接——类型声明段+顶级语句段乱序时将 CS8803，
+    // 当前 9 模板两段均顶级语句未踩；模板演进触及时先保段序（类型在前）再合
     var mergedOutput = blocks.OutputBlocks.Select(b => b.Code).ToList();
     if (mergedOutput.Count > 1)
     {
