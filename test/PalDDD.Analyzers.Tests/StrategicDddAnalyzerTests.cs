@@ -114,6 +114,30 @@ public sealed class StrategicDddAnalyzerTests
     }
 
     [Test]
+    public async Task ProjectionName_GetterReturnNull_ReportsPddd007()
+    {
+        // v71 锁定：getter-return 腿（v70 四形态最后一腿——ProjectionName 侧）：
+        // public string ProjectionName { get { return null; } } 必须报 PDDD007
+        var diagnostics = await AnalyzeAsync("""
+            using PalDDD.Core;
+            using PalDDD.Projections;
+            namespace ProbeNs;
+            [BoundedContext("ordering")]
+            public sealed class ProbeSubmitted2 : DomainEvent, IDomainEvent
+            {
+                static string IDomainEvent.EventName => "ordering.probe-submitted2.v1";
+            }
+            [BoundedContext("ordering")]
+            public sealed class GetterReturnNullProjection : IProjectionHandler<ProbeSubmitted2>
+            {
+                public string ProjectionName { get { return null!; } }
+                public ValueTask ProjectAsync(ProbeSubmitted2 @event, ProjectionContext context, CancellationToken ct) => ValueTask.CompletedTask;
+            }
+            """);
+        await Assert.That(diagnostics.Any(d => d.Id == "PDDD007")).IsTrue();
+    }
+
+    [Test]
     public async Task ProjectionName_NullLiteral_ReportsPddd007()
     {
         var diagnostics = await AnalyzeAsync("""
