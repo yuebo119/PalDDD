@@ -21,6 +21,7 @@
 9. [发布实践教训](#九发布实践教训)
 10. [版本发布模板](#十版本发布模板)
 11. [CHANGELOG 规范](#十一changelog-规范)
+12. [变更日志生成流程](#十二变更日志生成流程sop--发版时按本流程执行)
 
 ---
 
@@ -261,6 +262,9 @@ bash scripts/verify-conventions.sh
 # 5. AI 系统门禁（如使用 .ai/）
 bash .ai/scripts/gate-check.sh --allow-dirty
 
+# 5.5 变更日志结构门禁（§十二 Phase 4——FAIL 阻断发版）
+bash scripts/changelog-check.sh
+
 # 6. 本地 pack 验证
 rm -rf /tmp/release-preview && mkdir -p /tmp/release-preview
 for proj in $(ls src/); do
@@ -300,8 +304,10 @@ git checkout main
 git pull origin main
 git log -1 --format="%h %s"
 
-# 2. 确认版本号已更新到目标版本
+# 2. 确认版本号已更新到目标版本 + CHANGELOG 已转正（§十二 Phase 5——未转正禁止打 tag）
 grep -E "VersionPrefix|VersionSuffix" Directory.Build.props
+grep -E "^## \[" CHANGELOG.md | head -2        # 首行 [Unreleased]，次行 [目标版本]
+bash scripts/changelog-check.sh                # 必须 0 FAIL
 
 # 3. 打 tag（tag 名格式：v + 版本号，如 v1.1.0）
 git tag v1.1.0
@@ -626,6 +632,72 @@ git commit -m "功能：xxx + 升版本 preview.2"
 - ❌ 分类层出现 `ITM-163`/`S3 双向验证`/`P2-1` 编号——内部术语，应留在附录层或 metrics 账本。
 - ❌ "净增约 200 个测试"与实测 149 矛盾——发布前用面板实测值校准（v2.1.0 实测：1053 → 1202）。
 - ❌ [Unreleased] 残留到 tag 打完（v2.0.0）——见 §九教训 2。
+
+---
+
+## 十二、变更日志生成流程（SOP · 发版时按本流程执行）
+
+> **定位**：§十一管"写成什么样"（格式），本节管"怎么生成"（流程）。**以后每次发版都按本流程执行。**
+> **核心原则**：事实与措辞分离——机械脚本收集可验证事实，撰写者只做分类与措辞；每条目可回溯到事实源；转正先于 tag。
+> **工具**（2026-09-04 起）：`scripts/changelog-facts.sh`（Phase 1 事实收集）/ `scripts/changelog-check.sh`（Phase 4 结构门禁，挂 §4.1 与 §5.1）。
+
+### 12.0 流程总览
+
+```
+常态（Phase 0）          发布启动（Phase 1-5，一次性）           发布（Phase 6）      事后（Phase 7）
+行为变更合入 dev    →    P1 事实收集 → P2 事实核验 → P3 起草  →   P5 转正 → P6 tag   →   P7 事后同步
+[Unreleased] 即时累积    （changelog-facts.sh） （逐条锚点）  （§11.4 模板）  （check+三件套同次提交）  （workflow 生成 Release body）
+```
+
+### 12.1 Phase 0——常态累积（行为变更合入 dev 时）
+
+| 项 | 内容 |
+|----|------|
+| 触发 | 行为级代码变更（API/守卫/SQL/依赖）的提交合入 dev |
+| 动作 | 同次提交（或当批次收尾提交）更新 `CHANGELOG.md` 的 `[Unreleased]`：按 §11.2 分类归位，锚点与触发语义**当场写**——事后回忆是失实的最大来源 |
+| 豁免 | 纯 docs/注释/测试内部调整可暂不记（转正时由事实清单兜底）；公共 API 变更不可豁免（快照会变） |
+
+### 12.2 Phase 1——事实收集（发布启动时）
+
+```bash
+bash scripts/changelog-facts.sh <上一版tag> [HEAD]     # 例: changelog-facts.sh v2.1.0
+```
+
+产出 9 段事实清单：范围与提交分布 / 公共 API 快照 diff / 新增诊断 / 脚本与工作流增删 / 废弃扫描 / ADR 与文档增删 / 依赖变更 / 测试面板实测占位 / 当前 [Unreleased] 原料。
+**纪律：条目来源仅限事实清单 + [Unreleased] 原料 + metrics 账本；清单之外"凭记忆补充"= 编造，禁止。**
+
+### 12.3 Phase 2——事实核验（三问，逐候选条目过）
+
+1. **数字有来源吗**——测试数 = 面板实测输出（§4.1 命令）；计数 = 机械账本逐轮求和或快照 diff 行数；"基线约 N"允许约数（历史口径），其余禁"约"。
+2. **API 条目在快照 diff 里吗**——分类层 Added/Removed 的每个类型/成员应能在段 2 输出中指认（Analyzers 诊断 ID 例外，查段 3 + PalDiagnostics.cs）。
+3. **Fixed 说清"之前会怎样"吗**——写不出触发语义的条目降级为附录层一句话，不进分类层。
+
+### 12.4 Phase 3——起草（§11.4 模板）
+
+- `[Unreleased]` 原料 + 事实清单 → 分类层（Added→Changed→Deprecated→Removed→Fixed→Security→Dependencies→Documentation→Tests 固定顺序）。
+- 历史轮次叙事**原文不删**，归入附录层（只增不删纪律）。
+- 分类层措辞自查：消费者视角、无内部术语（ITM/轮次/探针/姊妹——公开诊断 ID PDDD0xx/PALxxx 例外）。
+
+### 12.5 Phase 4——校验（机械 + 人工六问）
+
+```bash
+bash scripts/changelog-check.sh    # FAIL=阻断（回 Phase 3）；WARN=人工裁决
+```
+
+人工六问（逐条答"是"才过）：①每条能回答"对我的影响"？②每个数字有实测/账本口径且标注来源？③每条有锚点（类型/成员/文件）？④每条 Fixed 说清"之前会怎样"？⑤分类层无内部叙事泄漏？⑥头部引用块（范围/兼容性/组织方式）齐备？
+
+### 12.6 Phase 5——转正（与版本三件套同次提交，先于 tag）
+
+`[Unreleased]` 改题 `[X.Y.Z] — 日期` + 顶部新增空 `[Unreleased]` + 头部"当前版本/发布状态"更新，**与 `Directory.Build.props`/README badge 同一次提交**（§11.3 规则 5）。转正后 `changelog-check.sh` 必须 0 FAIL。
+
+### 12.7 Phase 6/7——发布与事后同步
+
+- **P6**：按 §5.1 打 tag 推送 → release.yml 以转正后的 CHANGELOG 生成 GitHub Release body（零二次编辑）。
+- **P7**：发布后再改 CHANGELOG（勘误/重构），GitHub Release 页 body **不会**自动更新——需手动同步页面并注明"事后勘误"（v2.1.0 实录：发布当晚重构 [2.1.0] 段，Release 页保留旧版 body，靠仓库 CHANGELOG 为正本）。
+
+### 12.8 流程失效回溯（每次发版后自检）
+
+在 §九教训表追加一行回答三问：①本版条目有无事后发现失实？②失实根因在哪个 Phase 的哪个豁免？③对应 Phase 规则或门禁如何收紧？（首轮基线：v2.1.0 重构轮——教训 2/4 即本流程的立项依据）
 
 ---
 

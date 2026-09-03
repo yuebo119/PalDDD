@@ -12,7 +12,14 @@
 
 ## [Unreleased]
 
-（暂无）
+### Added 新增
+
+- **变更日志事实收集器 `scripts/changelog-facts.sh`**：`changelog-facts.sh <from-tag> [to-ref]` 一次产出 9 段机械可验证事实（提交分布/公共 API 快照 diff/新增诊断/废弃扫描/ADR 与文档增删/依赖变更/测试实测占位/[Unreleased] 原料），每条附可复查命令（`docs/release.md` §十二 Phase 1）
+- **变更日志结构门禁 `scripts/changelog-check.sh`**：C1 [Unreleased] 首位 / C2 tag 与转正段一致性（未转正禁止打 tag）/ C3 分类顺序 / C4 Tests 段预估口径 WARN / C5 分类层内部术语泄漏 WARN——挂入发布前验证清单与打 tag 前核对
+
+### Documentation 文档
+
+- `docs/release.md` 新增 §十二「变更日志生成流程」SOP：Phase 0 常态累积 → P1 事实收集 → P2 事实核验三问 → P3 起草 → P4 校验（机械门禁 + 人工六问）→ P5 转正（先于 tag）→ P6/P7 发布与事后同步，附流程失效回溯条款
 
 ## [2.1.0] — 2026-09-04
 
@@ -63,7 +70,7 @@
 
 ### Tests 测试
 
-- 16 项目面板：v2.0.0 基线约 1053 → **v2.1.0 实测 1202**（本机 1153 通过 + 49 环境依赖项由 CI Testcontainers 权威执行）；净增约 150 个回归/锁定测试，守卫类修复均带 mutation 红测锁定（移除修复套件必须变红）
+- 16 项目面板：v2.0.0 基线约 1053 → **v2.1.0 实测 1202**（本机 1153 通过 + 49 环境依赖项由 CI Testcontainers 权威执行）；净增 149（1202−1053）个回归/锁定测试，守卫类修复均带 mutation 红测锁定（移除修复套件必须变红）
 
 ### 附录：工程过程明细（评审逐轮记录——内部叙事，非消费者变更摘要）
 
