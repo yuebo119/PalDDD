@@ -401,20 +401,23 @@ var status = OrderStatus.FromValue("pending");  // TValue=string，FromValue 实
 所有抽象接口都有 InMemory 实现——单元测试不需要数据库 / Kafka / RabbitMQ。
 
 ```csharp
-// v64 勘正样例：HandlerRegistrar 是 IHostedService——纯 BuildServiceProvider 不启动它，
-// SendAsync 会抛 HandlerNotFound。用 Host 宿主（StartAsync 触发注册），handler 先行注册：
+// v65 勘正样例：HandlerRegistrar 是 IHostedService——纯 BuildServiceProvider 不启动它
+// （SendAsync 抛 HandlerNotFound）。用 Host 宿主：注册必须在 builder.Services（Build() 之后的
+// host.Services 是 IServiceProvider，不可再 Add——v64 样例顺序有误）：
 using Microsoft.Extensions.Hosting;
 
-var host = Host.CreateApplicationBuilder(args).Build();
-var services = host.Services;  // 改用 builder.Services 注册亦可
-// 注册（任一容器形态）：
-//   services.AddPalCoreStack();
-//   services.AddPalCommandHandler<CreateOrder, Unit, CreateOrderHandler>();
-//   services.AddPalOutbox(); services.AddPalInbox(); services.AddPalSaga<OrderSagaState, OrderSaga>();
+var builder = Host.CreateApplicationBuilder(args);
+builder.Services.AddPalCoreStack();
+builder.Services.AddPalCommandHandler<CreateOrder, Unit, CreateOrderHandler>();
+builder.Services.AddPalOutbox();      // InMemoryOutboxStore
+builder.Services.AddPalInbox();       // InMemoryInboxStore
+builder.Services.AddPalSaga<OrderSagaState, OrderSaga>();  // InMemorySagaStateStore
+
+var host = builder.Build();
 await host.StartAsync();  // 启动 HandlerRegistrar（Marker 消费 + Dispatcher 冻结）
 
 // 直接测：命令分发 → 事件 → Outbox → Saga 补偿，全程无外部依赖
-var dispatcher = services.GetRequiredService<Dispatcher>();
+var dispatcher = host.Services.GetRequiredService<Dispatcher>();
 ```
 
 ### 8. Bounded Context 隔离：编译期标记 + 分析器强制
