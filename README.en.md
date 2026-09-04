@@ -195,18 +195,25 @@ public sealed class Order : AggregateRoot<OrderId>
         => RaiseEvent(new OrderCancelled(Id, reason));
 }
 
-// Domain event — sealed record + [GenerateMessage] source-generated registration
+// Domain event — sealed class + init properties + [GenerateMessage] source-generated registration
+// ⚠️ The host must be a class: a record cannot inherit the non-record DomainEvent (CS8864 compile error),
+//    and a class host must be annotated [BoundedContext] (PDDD001 Error)
+[BoundedContext("ordering")]
 [GenerateMessage(Name = "ordering.order-created.v1")]
-public sealed record OrderCreated(Ulid OrderId, string Name, decimal Amount)
-    : DomainEvent, IDomainEvent
+public sealed class OrderCreated : DomainEvent, IDomainEvent
 {
-    static string IDomainEvent.EventName => "ordering.order-created.v1";
+    public Ulid OrderId { get; init; }
+    public string Name { get; init; } = "";
+    public decimal Amount { get; init; }
+    static string IDomainEvent.EventName => "ordering.order-created.v1";  // hand-written; must match Name (PDDD015)
 }
 
+[BoundedContext("ordering")]
 [GenerateMessage(Name = "ordering.order-cancelled.v1")]
-public sealed record OrderCancelled(Ulid OrderId, string Reason)
-    : DomainEvent, IDomainEvent
+public sealed class OrderCancelled : DomainEvent, IDomainEvent
 {
+    public Ulid OrderId { get; init; }
+    public string Reason { get; init; } = "";
     static string IDomainEvent.EventName => "ordering.order-cancelled.v1";
 }
 ```
@@ -266,7 +273,7 @@ using ByteAether.Ulid;   // Framework source alias is PalUlid = ByteAether.Ulid.
 
 // ✅ [GenerateId] triggers the IdentityGenerator source generator
 // Generates ISpanParsable + JsonConverter + TypeConverter at compile time
-[GenerateId(typeof(Ulid))]         // Ulid (recommended, totally ordered)
+[GenerateId(typeof(Ulid))]         // Ulid (total ordering suits event sourcing; the framework treats all five types equally)
 public readonly partial record struct OrderId;
 
 [GenerateId(typeof(Guid))]          // Guid
@@ -287,18 +294,20 @@ var fromDb = OrderId.From(someUlid);
 Pal.DDD does not rely on Code Review memory — **38 compile-time diagnostics** intercept non-compliant code: 15 strategic Roslyn analyzers (PDDD001-015) + 23 source-generator diagnostics (PALID001-007 identity / PALMSG001-007 message registry / PALENUM001-009 smart enums — v2.1.0 adds PALID007 accessibility chain and PALENUM009 containing-type partial).
 
 ```csharp
-// ✅ DomainEvent must be sealed — PDDD012 compile error
-public sealed record OrderCreated(...) : DomainEvent, IDomainEvent;
+// ✅ Domain event host must be a sealed class (a record inheriting the non-record DomainEvent fails CS8864)
+//    A class host must be [BoundedContext]-annotated (PDDD001 Error) and sealed (PDDD012 Error)
+[BoundedContext("ordering")]
+public sealed class OrderCreated : DomainEvent, IDomainEvent { ... }
 
 // ❌ Forgot sealed — direct compile error
-public record OrderCreated(...) : DomainEvent, IDomainEvent;  // PDDD012
+public class OrderCreated : DomainEvent, IDomainEvent { ... }  // PDDD012 + PDDD001 (missing BoundedContext)
 
-// ✅ Message name lowercase-kebab + .vN — PDDD009 compile warning
+// ✅ Message name lowercase-kebab + .vN — PDDD009/PDDD010 compile warnings
 [GenerateMessage(Name = "ordering.order-created.v1")]
 
-// ✅ ProcessManager must be annotated with [BoundedContext] — PDDD001 compile error (PDDD003 rejects non-compliant annotation shapes)
+// ✅ Projections/ProcessManager must be annotated with [BoundedContext] — PDDD004 Error (IProjectionHandler implementations)
 [BoundedContext("ordering")]
-public sealed class OrderingProcessManager : Saga<OrderingState> { ... }
+public sealed class OrderProjection : IProjectionHandler<OrderCreated> { ... }
 
 // ❌ [GenerateId] target missing partial — source generator fails directly
 [GenerateId(typeof(Ulid))]
@@ -314,14 +323,24 @@ The Outbox uses database row-level lease locks to enable concurrent publishing a
 services.AddPalOrmPostgreSql(connectionString);
 services.AddPalOutbox();
 
-// Inside a command handler: SaveChangesAsync atomically writes the Outbox message row
-// → DB transaction commits → OutboxProcessor acquires the lease in the background and publishes → IMessageBroker.PublishAsync
-public async ValueTask<OrderId> HandleAsync(CreateOrder cmd, CancellationToken ct)
+// Command handler (template form: inject repository → Add → SaveChangesAsync)
+// → The interceptor atomically writes the Outbox message row on DB commit (EF Core stack:
+//   OutboxDomainEventInterceptor hooks SavingChanges) → OutboxProcessor background publish
+public sealed class CreateOrderHandler(IOrderRepository orders) : ICommandHandler<CreateOrder, OrderId>
 {
-    var order = Order.Create(cmd.Name, cmd.Amount);
-    await uow.SaveChangesAsync(ct);  // Transaction + atomic Outbox write
-    return order.Id;                 // At-least-once delivery guaranteed for the message
+    public async ValueTask<OrderId> HandleAsync(CreateOrder cmd, CancellationToken ct)
+    {
+        var order = Order.Create(cmd.Name, cmd.Amount);
+        orders.Add(order);                          // ⚠️ explicit Add required — the interceptor only sees tracked entities
+        await orders.SaveChangesAsync(ct).ConfigureAwait(false);
+        return order.Id;                            // At-least-once delivery guaranteed for the message
+    }
 }
+// ⚠️ Stack semantics: interceptor Outbox writes are EF Core stack (Repository.EFCore) behavior; the
+// PalORM stack's UnitOfWork.SaveChangesAsync has no ChangeTracker (no-op) — the PalORM path adds
+// outbox messages explicitly on the business side or mixes stacks (ADR-020: EF Core write path +
+// PalORM read path is the official combination). AddPalOutbox registers processor/Options only —
+// Store/serializer/Catalog/Broker are registered by the caller (see usage.md "Use Outbox").
 
 // Publish-side token fencing (v2.1.0, unified across all three stacks): OutboxProcessor holds
 // the lease snapshot (owner, lockedUntil) when calling MarkProcessed/MarkDead — the terminal-write
@@ -347,6 +366,12 @@ services.AddPalOrmPostgreSql(connectionString);
 
 // ⚠️ Dapper — AOT facade ([module:DapperAot] not enabled, runtime takes the classic reflection path; NoWarn IL3058 declaration-level)
 // Use only to maintain existing Dapper code; new projects should use PalORM
+
+// ⚠️ CQRS pipeline AOT trap (same theme): the parameterless open-generic AddPalPipelineBehaviors()
+// triggers AotCannotCreateGenericValueType for value-type responses (Unit/int/Guid) under Native AOT —
+// AOT apps use AddPalCommandHandler<T...> (registers closed pipelines internally) or the explicit
+// AddPalPipelineBehaviors<TRequest, TResponse>(); the two registrations are first-wins and mutually exclusive.
+// Validation pipeline: IPalValidator<T> + AddScoped; failures throw PalValidationException
 ```
 
 ### 5. Saga Compensation Orchestration: Explicit State Machine + Timeout Detection
@@ -358,7 +383,12 @@ public sealed class OrderSaga : Saga<OrderSagaState>
 {
     public OrderSaga()
     {
-        // Register state transitions in the constructor via When (real API; there is no Configure method)
+        // Policy configuration (template-mandated; defaults are Backward/3)
+        CompensationPolicy = CompensationPolicy.Backward;   // reverse compensation — scope/order follow the execution sequence (ExecutedStepKeys)
+        MaxRetries = 3;
+
+        // Register state transitions in the constructor via When (real API; no Configure method)
+        // Note: the execute lambda's state parameter is the base SagaState — cast to access subclass members
         When<PaymentCompleted>("Initial", new SagaStep(
             "CompletePayment",
             execute: (state, evt, ct) =>
@@ -406,6 +436,11 @@ var status = OrderStatus.FromValue("pending");  // TValue=string, so FromValue's
 // Real AllocationContractTests assertion set (not claims):
 // single event append ≤130B/iter (measured ~120B, budget with headroom) | foreach enumeration ≤100B
 // | multiple appends without List reallocation | ClearDomainEvents zero-alloc | ValueObject Create zero-heap-alloc
+
+// ISpecification dual path (AOT-critical): after And/Or/Not composition —
+var spec = ActiveOrders.And(BigAmount);
+var matches = spec.IsSatisfiedBy(order);   // ⚠️ in-memory path uses Expression.Compile — unsupported under Native AOT
+var expr = spec.ToExpression();           // ✅ AOT path: convert to an expression for EF Core / PalORM query providers
 ```
 
 ### 7. InMemory Testing: Full-Pipeline Coverage With Zero External Dependencies
@@ -413,20 +448,29 @@ var status = OrderStatus.FromValue("pending");  // TValue=string, so FromValue's
 All abstract interfaces have InMemory implementations — unit tests require no database / Kafka / RabbitMQ.
 
 ```csharp
-var services = new ServiceCollection();
-services.AddPalCoreStack();
-services.AddPalOutbox();     // InMemoryOutboxStore
-services.AddPalInbox();      // InMemoryInboxStore
-services.AddPalSaga<OrderSagaState, OrderSaga>();  // InMemorySagaStateStore
+var builder = Host.CreateApplicationBuilder(args);
+builder.Services.AddPalCoreStack();
+builder.Services.AddPalCommandHandler<CreateOrder, Unit, CreateOrderHandler>();
+builder.Services.AddPalOutbox();             // registers processor/Options (NOT the store!)
+builder.Services.AddPalInbox();
+builder.Services.AddPalSaga<OrderSagaState, OrderSaga>();
+// ⚠️ The four dependencies must be registered separately (AddPalOutbox doesn't include them):
+builder.Services.AddPalJsonSerialization(catalog =>        // registers IMessageSerializer + IMessageCatalog (tutorial form)
+{
+    catalog.Add(AppJsonContext.Default.OrderCreated, name: "ordering.order-created.v1");
+    catalog.Add(AppJsonContext.Default.OrderCancelled, name: "ordering.order-cancelled.v1");
+});
+builder.Services.AddSingleton<IMessageBroker>(new MessageBroker());        // InMemory broker (parameterless)
+builder.Services.AddSingleton<IPalOutboxStore, InMemoryOutboxStore>();
+// Time abstraction: inject FakeTimeProvider (PalDDD.Testing) → deterministic lease-expiry/retry timing
 
-// ⚠️ Handler registration is driven by the Host (HandlerRegistrar scans and registers handlers at startup) —
-// fetching the Dispatcher directly from a bare ServiceCollection and calling SendAsync will throw HandlerNotFound.
-// For full examples including the Host bootstrap, see the Chinese README.md §7 (v65 correction).
+var host = builder.Build();
+await host.StartAsync();  // Starts HandlerRegistrar (marker consumption + Dispatcher freeze)
 ```
 
 ### 8. Bounded Context Isolation: Compile-Time Annotation + Analyzer Enforcement
 
-PalDDD uses `[BoundedContext]` to mark aggregate root ownership: PDDD001 (Error) enforces that ProcessManager/Saga must declare their context, and PDDD003 (Error) rejects non-compliant annotation shapes — preventing illegal references across domain boundaries.
+PalDDD uses `[BoundedContext]` to mark domain ownership: PDDD001 (Error) enforces that domain events/aggregates must declare their context, and PDDD004 (Error) enforces it for IProjectionHandler implementations — preventing illegal references across domain boundaries.
 
 ```csharp
 // ✅ Aggregate root annotated with BoundedContext — analyzer knows which domain it belongs to
@@ -436,12 +480,15 @@ public sealed class Order : AggregateRoot<OrderId> { ... }
 [BoundedContext("inventory")]
 public sealed class StockItem : AggregateRoot<StockItemId> { ... }
 
-// ✅ ProcessManager must be annotated with BoundedContext — PDDD001 compile error
+// ✅ Domain events/aggregates/projections must be annotated with BoundedContext — PDDD001 (domain classes)/PDDD004 (IProjectionHandler implementations)
 [BoundedContext("ordering")]
-public sealed class OrderingSaga : Saga<OrderingState> { ... }
+public sealed class Order : AggregateRoot<OrderId> { ... }
+
+[BoundedContext("ordering")]
+public sealed class OrderProjection : IProjectionHandler<OrderCreated> { ... }
 
 // ❌ Forgot annotation — direct compile error
-public sealed class OrderingSaga : Saga<OrderingState> { ... }  // PDDD001
+public sealed class OrderProjection : IProjectionHandler<OrderCreated> { ... }  // PDDD004
 ```
 
 ### 9. Multi-Tenancy: Session-Level Tenant Filter (PalORM `[TenantAware]`)
@@ -462,9 +509,12 @@ public sealed class OrderRow
     [Column("tenant_id")] public string TenantId { get; init; }
 }
 
-// Set the tenant on the session → the query builder auto-appends the filter for annotated
-// entities ([SoftDelete] soft-delete filtering uses the same mechanism)
-await session.WithTenant("tenant-a");
+// Set the tenant on the session (synchronous fluent method returning DataSession — do NOT await)
+// → queries on annotated entities auto-append the filter ([SoftDelete] uses the same mechanism)
+session.WithTenant("tenant-a");
+// ⚠️ Write contract (PalORM ITM-599): Insert/BulkInsert do not auto-fill tenant values — assign
+// TenantId explicitly when constructing entities; WithTenant only affects query filtering.
+// Recommended session scope: Scoped (one DataSession per request, palorm-adapter decision 7).
 var orders = await session.Query<OrderRow>()
     .Where(r => r.Status == "pending");   // generated SQL automatically contains AND tenant_id = @tenantFilter
 
@@ -476,29 +526,29 @@ var orders = await session.Query<OrderRow>()
 
 ### 10. Message Version Evolution: V1→V2 Auto-Upgrade (Framework Built-In)
 
+> **Serialization prerequisite**: `AddPalJsonSerialization(catalog => ...)` (default, AOT-safe) vs `AddPalMemoryPackSerialization` (faster but the adapter is non-AOT) — both register into the same `IMessageSerializer` singleton slot; **the later registration overwrites the earlier one**. Switching changes the ContentType; historical payload compatibility must be assessed (see usage.md "Serialization").
+
 Most DDD frameworks do not ship built-in message version evolution. PalDDD's `[GenerateMessage]` + Upcaster pipeline makes version migration a compile-time check + runtime automatic conversion.
 
 ```csharp
-using ByteAether.Ulid;
+// Evolution messages are pure message contracts (plain records, no DomainEvent inheritance) —
+// domain events and message contracts are layered separately
+public sealed record OrderSubmittedV1(Guid OrderId, decimal Amount);
+public sealed record OrderSubmittedV2(Guid OrderId, decimal Amount, string? CouponCode);
 
-// V1 message (legacy consumers still using it)
-[GenerateMessage(Name = "ordering.order-created.v1")]
-public sealed record OrderCreatedV1(Ulid OrderId, string Name, decimal Amount)
-    : DomainEvent, IDomainEvent;
+// ① Startup contract validation — incomplete adjacent-version paths refuse to start (PalPlatformVerificationException)
+services.AddPalMessageContractVerification(b => b.Add<OrderSubmittedV1, OrderSubmittedV2>(
+    AppJsonContext.Default.OrderSubmittedV1, AppJsonContext.Default.OrderSubmittedV2,
+    old => new OrderSubmittedV2(old.OrderId, old.Amount, null)));
 
-// V2 message (added ShippingAddress field)
-[GenerateMessage(Name = "ordering.order-created.v2")]
-public sealed record OrderCreatedV2(Ulid OrderId, string Name, decimal Amount, string ShippingAddress)
-    : DomainEvent, IDomainEvent;
-
-// Register Upcaster — V1 auto-upgrades to V2, consumers only handle V2
-services.AddPalMessageContractVerification(builder => builder
-    .Add<OrderCreatedV1, OrderCreatedV2>(
-        OrderCreatedV1JsonTypeInfo, OrderCreatedV2JsonTypeInfo,
-        v1 => new OrderCreatedV2(v1.OrderId, v1.Name, v1.Amount, "default-address"),
-        sourceSchemaVersion: 1, targetSchemaVersion: 2));
-
-// Contract integrity auto-validated on startup — missing upgrade path fails fast
+// ② Runtime upgrade pipeline — explicit consumer-side chain (adjacent versions only)
+var oldDescriptor = MessageDescriptor.Create(AppJsonContext.Default.OrderSubmittedV1, "order-submitted", 1);
+var currentDescriptor = MessageDescriptor.Create(AppJsonContext.Default.OrderSubmittedV2, "order-submitted", 2);
+var pipeline = new MessageEvolutionBuilder()
+    .Add<OrderSubmittedV1, OrderSubmittedV2>(oldDescriptor, currentDescriptor,
+        old => new OrderSubmittedV2(old.OrderId, old.Amount, null))
+    .Build();
+var current = pipeline.Upgrade(payload.Span, oldDescriptor, currentDescriptor, serializer);
 ```
 
 ### 11. EventLog Event Sourcing: Named Streams + Optimistic Concurrency + Global Monotonic Increase
@@ -510,11 +560,17 @@ EventLog provides the core storage for event sourcing — Named Streams + optimi
 services.AddPalOrmPostgreSql(connectionString);
 // EventLog is automatically available: PalOrmEventLog<PostgreSqlProvider>
 
-// Append events (optimistic concurrency — throws EventStreamConcurrencyException on version conflict; expected version via factory, no int implicit conversion)
-await eventLog.AppendAsync("order-01HXY...", ExpectedStreamVersion.Exact(3), new[]
+// Append events (optimistic concurrency — throws EventStreamConcurrencyException on conflict;
+// expected version via factory). EventData has a 7-parameter ctor (audit is required non-null):
+var result = await eventLog.AppendAsync("order-01HXY...", ExpectedStreamVersion.NoStream, new[]
 {
-    new EventData(OrderCreatedJsonTypeInfo, messageId, payload)
+    new EventData(
+        PalUlid.New(),                                  // eventId
+        "ordering.order-created.v1", 1, "application/json",
+        payload, ReadOnlyMemory<byte>.Empty,
+        EventAuditMetadata.Capture(actorId: "user-123", reason: "submit order", correlationId: corrId))
 }, ct);
+// First write uses NoStream; subsequent appends use Exact(result.LastStreamVersion)
 
 // Read a stream (IAsyncEnumerable — consume with await foreach)
 await foreach (var e in eventLog.ReadStreamAsync("order-01HXY...", ct)) { ... }
@@ -534,7 +590,8 @@ using PalDDD.Projections;
 services.AddPalOrmPostgreSql(connectionString);
 services.AddScoped<IProjectionHandler<OrderCreated>, OrderProjection>();
 
-// Projection implementation — consumes events, updates read models (real API: IProjectionHandler<T>.ProjectAsync)
+// Projection implementation — must be [BoundedContext]-annotated (PDDD004 Error for IProjectionHandler implementations)
+[BoundedContext("ordering")]
 public sealed class OrderProjection : IProjectionHandler<OrderCreated>
 {
     public string ProjectionName => "ordering.order-view";
@@ -545,10 +602,12 @@ public sealed class OrderProjection : IProjectionHandler<OrderCreated>
         return _readStore.UpsertAsync(evt.OrderId, new OrderView(evt.Name, evt.Amount), ct);
     }
 }
+// Checkpoint semantics: (ProjectionName, SourceName, Position) composite key + monotonic Revision token
 
-// Full replay — rebuild the read model from scratch (zero-downtime recovery)
-await projectionRebuilder.RebuildAsync(ct);
-// → Replays all events from Position=0 → Checkpoint auto-updates → Can resume from interruption
+// Two replay modes: ReplayAsync incremental (recommended safe mode — old data intact on failure)
+// vs RebuildAsync full rebuild
+await projectionRebuilder.ReplayAsync(ct);    // resume incremental events from the Checkpoint
+await projectionRebuilder.RebuildAsync(ct);   // ⚠️ clears the read model first, then replays in full
 ```
 
 ### 13. Idempotent Execution: Result Caching + Revision CAS Token (v2.1.0)
@@ -623,6 +682,49 @@ services.AddPalCommandHandler<CreateOrder, OrderId, CreateOrderHandler>();
 services.AddPalOutbox();  // A capability MediatR lacks
 
 // Incremental migration: legacy code keeps using MediatR, new features use PalDDD, both coexist without conflict
+```
+
+### 16. ASP.NET Core Integration: Minimal API Endpoints + Exception Contract + Health Checks
+
+`PalDDD.Hosting.AspNetCore` maps commands/queries directly to Minimal API endpoints — JsonTypeInfo is mandatory (AOT-safe), with a built-in exception mapping contract.
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddPalCoreStack();
+builder.Services.AddPalCommandHandler<CreateOrder, OrderId, CreateOrderHandler>();
+builder.Services.AddPalHealthChecks();       // Broker + Outbox health checks (call before Build)
+
+var app = builder.Build();
+app.UsePalExceptionHandler();                 // must be first: PalValidationException→400+errors[], HandlerNotFound→404, others→500 (no internal message leakage)
+app.MapPalHealthChecks();                     // GET /health
+
+// Command endpoint (dual JsonTypeInfo overload — responses require the response JsonTypeInfo)
+app.MapCommand<CreateOrder, OrderId>("/orders",
+    AppJsonContext.Default.CreateOrder, AppJsonContext.Default.OrderId);
+
+// Query endpoint (bindQuery delegate binds from HttpContext; exceptions inside follow the unified contract)
+app.MapQuery<GetOrderQuery, OrderDto>("/orders/{orderId}",
+    ctx => new GetOrderQuery(OrderId.Parse(ctx.Request.RouteValues["orderId"]?.ToString() ?? "")),
+    AppJsonContext.Default.OrderDto);
+```
+
+### 17. Kafka / RabbitMQ Broker Integration: Explicit Construction, No DI Magic
+
+The two broker adapters ship **no convenience AddPal extension** — explicit construction (5 parameters: transport configs ×2 + logger + serializer + catalog), transparent and controllable assembly.
+
+```csharp
+// Kafka (RabbitMQ is isomorphic: RabbitMqBroker(RabbitMqBrokerConfig, ConsumerConfig, logger, serializer, catalog))
+builder.Services.AddSingleton<IMessageBroker>(new KafkaBroker(
+    new ProducerConfig { BootstrapServers = "kafka:9092" },
+    new ConsumerConfig { BootstrapServers = "kafka:9092", GroupId = "ordering" },
+    NullPalLogger<KafkaBroker>.Instance,
+    serializer, catalog));   // IMessageSerializer + IMessageCatalog from AddPalJsonSerialization
+
+// Publishing: the OutboxProcessor calls broker.PublishAsync for leased messages — the non-generic
+// path requires a messageId
+await broker.PublishAsync(message, descriptor, messageId, ct);
+// The Outbox side uses OutboxMessage.Id as messageId; correlation/causation/trace metadata flows via MessagePublishContext
+// Broker adapters are non-AOT (Confluent.Kafka/RabbitMQ.Client limits, see the AOT table); InMemory MessageBroker for tests
 ```
 
 ---

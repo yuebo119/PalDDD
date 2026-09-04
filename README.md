@@ -195,18 +195,25 @@ public sealed class Order : AggregateRoot<OrderId>
         => RaiseEvent(new OrderCancelled(Id, reason));
 }
 
-// 领域事件 — sealed record + [GenerateMessage] 源生成注册
+// 领域事件 — sealed class + init 属性 + [GenerateMessage] 源生成注册
+// ⚠️ 宿主必须是 class：record 不能继承非 record 的 DomainEvent（CS8864 编译错），
+//    且 class 宿主必须标 [BoundedContext]（PDDD001 Error）
+[BoundedContext("ordering")]
 [GenerateMessage(Name = "ordering.order-created.v1")]
-public sealed record OrderCreated(Ulid OrderId, string Name, decimal Amount)
-    : DomainEvent, IDomainEvent
+public sealed class OrderCreated : DomainEvent, IDomainEvent
 {
-    static string IDomainEvent.EventName => "ordering.order-created.v1";
+    public Ulid OrderId { get; init; }
+    public string Name { get; init; } = "";
+    public decimal Amount { get; init; }
+    static string IDomainEvent.EventName => "ordering.order-created.v1";  // 手写；值须与 Name 一致（PDDD015）
 }
 
+[BoundedContext("ordering")]
 [GenerateMessage(Name = "ordering.order-cancelled.v1")]
-public sealed record OrderCancelled(Ulid OrderId, string Reason)
-    : DomainEvent, IDomainEvent
+public sealed class OrderCancelled : DomainEvent, IDomainEvent
 {
+    public Ulid OrderId { get; init; }
+    public string Reason { get; init; } = "";
     static string IDomainEvent.EventName => "ordering.order-cancelled.v1";
 }
 ```
@@ -265,7 +272,7 @@ using ByteAether.Ulid;   // 框架源码内部别名 PalUlid = ByteAether.Ulid.U
 
 // ✅ [GenerateId] 触发 IdentityGenerator 源生成器
 // 编译期生成 ISpanParsable + JsonConverter + TypeConverter
-[GenerateId(typeof(Ulid))]         // Ulid（推荐，全序性）
+[GenerateId(typeof(Ulid))]         // Ulid（全序性适合事件溯源场景；框架对五类型一视同仁）
 public readonly partial record struct OrderId;
 
 [GenerateId(typeof(Guid))]          // Guid
@@ -286,18 +293,20 @@ var fromDb = OrderId.From(someUlid);
 Pal.DDD 不依赖 Code Review 记忆——**38 条编译期诊断**在编译阶段拦截不合规代码：15 条战略 Roslyn 分析器（PDDD001-015）+ 23 条源生成器诊断（PALID001-007 身份 / PALMSG001-007 消息注册 / PALENUM001-009 智能枚举——v2.1.0 新增 PALID007 可访问性链与 PALENUM009 包含类型 partial）。
 
 ```csharp
-// ✅ DomainEvent 必须 sealed — PDDD012 编译错误
-public sealed record OrderCreated(...) : DomainEvent, IDomainEvent;
+// ✅ 领域事件宿主必须是 sealed class（record 继承非 record 的 DomainEvent 报 CS8864 编译错）
+//    class 宿主必须标 [BoundedContext]（PDDD001 Error）且必须 sealed（PDDD012 Error）
+[BoundedContext("ordering")]
+public sealed class OrderCreated : DomainEvent, IDomainEvent { ... }
 
 // ❌ 忘记 sealed — 编译直接报错
-public record OrderCreated(...) : DomainEvent, IDomainEvent;  // PDDD012
+public class OrderCreated : DomainEvent, IDomainEvent { ... }  // PDDD012 + PDDD001（缺 BoundedContext）
 
-// ✅ 消息名 lowercase-kebab + .vN — PDDD009 编译警告
+// ✅ 消息名 lowercase-kebab + .vN — PDDD009/PDDD010 编译警告
 [GenerateMessage(Name = "ordering.order-created.v1")]
 
-// ✅ ProcessManager 必须标注 [BoundedContext] — PDDD001 编译错误（PDDD003 拦截不合规标注形状）
+// ✅ 投影/ProcessManager 必须标注 [BoundedContext] — PDDD004 Error（IProjectionHandler 实现类）
 [BoundedContext("ordering")]
-public sealed class OrderingProcessManager : Saga<OrderingState> { ... }
+public sealed class OrderProjection : IProjectionHandler<OrderCreated> { ... }
 
 // ❌ [GenerateId] 目标忘写 partial — 源生成器直接报错
 [GenerateId(typeof(Ulid))]
@@ -313,14 +322,24 @@ Outbox 用数据库行级租约锁实现多实例并发发布——`(LockedBy, L
 services.AddPalOrmPostgreSql(connectionString);
 services.AddPalOutbox();
 
-// 命令处理器内：SaveChangesAsync 时原子写入 Outbox 消息行
-// → DB 事务提交 → OutboxProcessor 后台抢租约发布 → IMessageBroker.PublishAsync
-public async ValueTask<OrderId> HandleAsync(CreateOrder cmd, CancellationToken ct)
+// 命令处理器（模板形态：注入仓储 → Add → SaveChangesAsync）
+// → DB 事务提交时拦截器原子写入 Outbox 消息行（EF Core 栈：OutboxDomainEventInterceptor 挂 SavingChanges）
+// → OutboxProcessor 后台抢租约发布 → IMessageBroker.PublishAsync
+public sealed class CreateOrderHandler(IOrderRepository orders) : ICommandHandler<CreateOrder, OrderId>
 {
-    var order = Order.Create(cmd.Name, cmd.Amount);
-    await uow.SaveChangesAsync(ct);  // 事务 + Outbox 原子写入
-    return order.Id;                 // 消息保证至少一次投递
+    public async ValueTask<OrderId> HandleAsync(CreateOrder cmd, CancellationToken ct)
+    {
+        var order = Order.Create(cmd.Name, cmd.Amount);
+        orders.Add(order);                          // ⚠️ 必须显式 Add——拦截器只处理已跟踪实体
+        await orders.SaveChangesAsync(ct).ConfigureAwait(false);
+        return order.Id;                            // 消息保证至少一次投递
+    }
 }
+// ⚠️ 栈语义：拦截器写 Outbox 是 EF Core 栈（Repository.EFCore）行为；PalORM 栈的
+// UnitOfWork.SaveChangesAsync 无 ChangeTracker（no-op）——PalORM 路径在业务侧显式
+// AddMessage(outboxMessage) 或混用 EF Core 仓储（ADR-020 三栈可混用，写路径 EF Core +
+// 查路径 PalORM 是官方组合）。AddPalOutbox 只注册处理器/Options——Store/序列化器/
+// Catalog/Broker 四件套由调用方注册（见 usage.md「使用 Outbox」）。
 
 // 发布侧 token fencing（v2.1.0 三栈统一）：OutboxProcessor 持租约快照 (owner, lockedUntil)
 // 调 MarkProcessed/MarkDead —— 终态写 SQL 带 AND locked_by = @owner AND locked_until = @until
@@ -344,6 +363,11 @@ services.AddPalOrmPostgreSql(connectionString);
 
 // ⚠️ Dapper — AOT 假象（[module:DapperAot] 未启用，运行时走经典反射路径；NoWarn IL3058 声明层面兼容）
 // 仅用于维护已有 Dapper 代码，新项目用 PalORM
+
+// ⚠️ CQRS 管道 AOT 陷阱（同主题）：无参开放泛型 AddPalPipelineBehaviors() 在 Native AOT 下
+// 对值类型响应（Unit/int/Guid）触发 AotCannotCreateGenericValueType——AOT 应用改用
+// AddPalCommandHandler<T...>（内部闭合注册）或显式 AddPalPipelineBehaviors<TRequest, TResponse>()；
+// 两种注册先到先得互斥。验证管线：IPalValidator<T> + AddScoped 注册，失败抛 PalValidationException
 ```
 
 ### 5. Saga 补偿编排：显式状态机 + 超时检测
@@ -355,7 +379,12 @@ public sealed class OrderSaga : Saga<OrderSagaState>
 {
     public OrderSaga()
     {
+        // 策略配置（模板必配项；默认 Backward/3）
+        CompensationPolicy = CompensationPolicy.Backward;   // 逆序补偿——范围/顺序以执行序（ExecutedStepKeys）为准
+        MaxRetries = 3;
+
         // 构造器内 When 注册状态转换（真实 API；无 Configure 方法）
+        // 注意：execute 的 state 参数是基类 SagaState——访问子类属性须转型 ((OrderSagaState)state)
         When<PaymentCompleted>("Initial", new SagaStep(
             "CompletePayment",
             execute: (state, evt, ct) =>
@@ -403,6 +432,11 @@ var status = OrderStatus.FromValue("pending");  // TValue=string，FromValue 实
 // AllocationContractTests 真实断言集（非声称）：
 // 追加单事件 ≤130B/iter（实测 ~120B，预算含余量）| foreach 枚举 ≤100B
 // | 多次追加无 List 重分配 | ClearDomainEvents 零分配 | ValueObject Create 零堆分配
+
+// ISpecification 双路径（AOT 关键）：And/Or/Not 组合后——
+var spec = ActiveOrders.And(BigAmount);
+var matches = spec.IsSatisfiedBy(order);   // ⚠️ 内存路径走 Expression.Compile——Native AOT 不支持（运行时崩）
+var expr = spec.ToExpression();           // ✅ AOT 路径：转表达式传给 EF Core / PalORM 查询提供者
 ```
 
 ### 7. InMemory 测试：零外部依赖覆盖全链路
@@ -418,9 +452,18 @@ using Microsoft.Extensions.Hosting;
 var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddPalCoreStack();
 builder.Services.AddPalCommandHandler<CreateOrder, Unit, CreateOrderHandler>();
-builder.Services.AddPalOutbox();      // InMemoryOutboxStore
-builder.Services.AddPalInbox();       // InMemoryInboxStore
-builder.Services.AddPalSaga<OrderSagaState, OrderSaga>();  // InMemorySagaStateStore
+builder.Services.AddPalOutbox();             // 注册处理器/Options（不注册 Store！）
+builder.Services.AddPalInbox();
+builder.Services.AddPalSaga<OrderSagaState, OrderSaga>();
+// ⚠️ 依赖四件套必须另注册（AddPalOutbox 只含处理器/Options，不含 Store/序列化/Catalog/Broker）：
+builder.Services.AddPalJsonSerialization(catalog =>        // 注册 IMessageSerializer + IMessageCatalog（教程同款）
+{
+    catalog.Add(AppJsonContext.Default.OrderCreated, name: "ordering.order-created.v1");  // wire name 显式稳定
+    catalog.Add(AppJsonContext.Default.OrderCancelled, name: "ordering.order-cancelled.v1");
+});
+builder.Services.AddSingleton<IMessageBroker>(new MessageBroker());        // InMemory Broker（无参构造）
+builder.Services.AddSingleton<IPalOutboxStore, InMemoryOutboxStore>();     // InMemory Outbox 存储
+// 时间抽象：注入 FakeTimeProvider（PalDDD.Testing 共享库）→ 租约过期/重试时序确定性可控
 
 var host = builder.Build();
 await host.StartAsync();  // 启动 HandlerRegistrar（Marker 消费 + Dispatcher 冻结）
@@ -441,12 +484,15 @@ public sealed class Order : AggregateRoot<OrderId> { ... }
 [BoundedContext("inventory")]
 public sealed class StockItem : AggregateRoot<StockItemId> { ... }
 
-// ✅ ProcessManager 必须标注 BoundedContext — PDDD001 编译错误
+// ✅ 领域事件/聚合/投影必须标注 BoundedContext — PDDD001（领域类）/PDDD004（IProjectionHandler 实现）
 [BoundedContext("ordering")]
-public sealed class OrderingSaga : Saga<OrderingState> { ... }
+public sealed class Order : AggregateRoot<OrderId> { ... }
+
+[BoundedContext("ordering")]
+public sealed class OrderProjection : IProjectionHandler<OrderCreated> { ... }
 
 // ❌ 忘记标注 — 编译直接报错
-public sealed class OrderingSaga : Saga<OrderingState> { ... }  // PDDD001
+public sealed class OrderProjection : IProjectionHandler<OrderCreated> { ... }  // PDDD004
 ```
 
 ### 9. 多租户：会话级租户过滤（PalORM `[TenantAware]`）
@@ -466,10 +512,12 @@ public sealed class OrderRow
     [Column("tenant_id")] public string TenantId { get; init; }
 }
 
-// 会话设置租户 → 标注实体的查询构建器自动附加过滤（[SoftDelete] 软删除过滤同机制）
-await session.WithTenant("tenant-a");
+// 会话设置租户（同步 fluent 方法，返回 DataSession——不可 await）→ 标注实体的查询自动附加过滤
+session.WithTenant("tenant-a");
 var orders = await session.Query<OrderRow>()
-    .Where(r => r.Status == "pending")   // 生成 SQL 自动含 AND tenant_id = @tenantFilter
+    .Where(r => r.Status == "pending");  // 生成 SQL 自动含 AND tenant_id = @tenantFilter
+// ⚠️ 写入契约（PalORM ITM-599）：Insert/BulkInsert 不代填租户值——构造实体时必须显式赋 TenantId，
+// WithTenant 只影响查询过滤；会话建议 Scoped（per-request 一个 DataSession，palorm-adapter 决策 7）
 
 // ⚠️ 豁免警告（PalORM 契约）：QueryAsyncEnumerable / QueryMultipleAsync 原生 SQL 入口
 // 不走自动过滤——多租户会话经此入口可读到全部租户数据，SQL 必须自行携带 tenant_id 条件
@@ -478,29 +526,28 @@ var orders = await session.Query<OrderRow>()
 
 ### 10. 消息版本演化：V1→V2 自动升级（框架内置）
 
+> **序列化选型前置决策**：`AddPalJsonSerialization(catalog => ...)`（默认，AOT 安全）vs `AddPalMemoryPackSerialization`（更快但适配层非 AOT）——两者注册同一 `IMessageSerializer` 单例位，**后注册覆盖先注册**；从 JSON 切 MemoryPack 会改变 ContentType，历史 payload 兼容性需自行评估（选型决策与互斥语义见 usage.md「序列化」）。
+
 大多数 DDD 框架不内置消息版本演化。PalDDD 的 `[GenerateMessage]` + Upcaster 管线让版本迁移成为编译期检查 + 运行时自动转换。
 
 ```csharp
-using ByteAether.Ulid;
+// 演化消息是纯消息契约（纯 record，不继承 DomainEvent）——领域事件与消息契约分层
+public sealed record OrderSubmittedV1(Guid OrderId, decimal Amount);
+public sealed record OrderSubmittedV2(Guid OrderId, decimal Amount, string? CouponCode);
 
-// V1 消息（旧版消费者仍在用）
-[GenerateMessage(Name = "ordering.order-created.v1")]
-public sealed record OrderCreatedV1(Ulid OrderId, string Name, decimal Amount)
-    : DomainEvent, IDomainEvent;
+// ① 启动期契约验证 — 相邻版本升级路径不完整直接拒绝启动（PalPlatformVerificationException）
+services.AddPalMessageContractVerification(b => b.Add<OrderSubmittedV1, OrderSubmittedV2>(
+    AppJsonContext.Default.OrderSubmittedV1, AppJsonContext.Default.OrderSubmittedV2,
+    old => new OrderSubmittedV2(old.OrderId, old.Amount, null)));
 
-// V2 消息（新增字段 ShippingAddress）
-[GenerateMessage(Name = "ordering.order-created.v2")]
-public sealed record OrderCreatedV2(Ulid OrderId, string Name, decimal Amount, string ShippingAddress)
-    : DomainEvent, IDomainEvent;
-
-// 注册 Upcaster — V1 自动升级为 V2，消费者只处理 V2
-services.AddPalMessageContractVerification(builder => builder
-    .Add<OrderCreatedV1, OrderCreatedV2>(
-        OrderCreatedV1JsonTypeInfo, OrderCreatedV2JsonTypeInfo,
-        v1 => new OrderCreatedV2(v1.OrderId, v1.Name, v1.Amount, "default-address"),
-        sourceSchemaVersion: 1, targetSchemaVersion: 2));
-
-// 启动时自动验证契约完整性 — 缺少升级路径直接报错（Fail Fast）
+// ② 运行时升级管线 — 消费侧显式执行链（只支持相邻版本逐步升级）
+var oldDescriptor = MessageDescriptor.Create(AppJsonContext.Default.OrderSubmittedV1, "order-submitted", 1);
+var currentDescriptor = MessageDescriptor.Create(AppJsonContext.Default.OrderSubmittedV2, "order-submitted", 2);
+var pipeline = new MessageEvolutionBuilder()
+    .Add<OrderSubmittedV1, OrderSubmittedV2>(oldDescriptor, currentDescriptor,
+        old => new OrderSubmittedV2(old.OrderId, old.Amount, null))
+    .Build();
+var current = pipeline.Upgrade(payload.Span, oldDescriptor, currentDescriptor, serializer);  // v1 payload → v2 实例
 ```
 
 ### 11. EventLog 事件溯源：命名流 + 乐观并发 + 全局单调递增
@@ -512,11 +559,17 @@ EventLog 提供事件溯源的核心存储——命名流（Named Stream）+ 乐
 services.AddPalOrmPostgreSql(connectionString);
 // EventLog 自动可用：PalOrmEventLog<PostgreSqlProvider>
 
-// 追加事件（乐观并发 — 版本冲突时抛 EventStreamConcurrencyException；期望版本经工厂构造，无 int 隐式转换）
-await eventLog.AppendAsync("order-01HXY...", ExpectedStreamVersion.Exact(3), new[]
+// 追加事件（乐观并发 — 版本冲突抛 EventStreamConcurrencyException；期望版本经工厂构造，无 int 隐式转换）
+// EventData 七参构造（audit 必填非空——审计元数据是强制语义）：
+var result = await eventLog.AppendAsync("order-01HXY...", ExpectedStreamVersion.NoStream, new[]
 {
-    new EventData(OrderCreatedJsonTypeInfo, messageId, payload)
+    new EventData(
+        PalUlid.New(),                                  // eventId
+        "ordering.order-created.v1", 1, "application/json",
+        payload, ReadOnlyMemory<byte>.Empty,
+        EventAuditMetadata.Capture(actorId: "user-123", reason: "submit order", correlationId: corrId))
 }, ct);
+// 首写用 NoStream；后续追加用 ExpectedStreamVersion.Exact(result.LastStreamVersion)——照抄 Exact(3) 首写即抛并发异常
 
 // 读取事件流（IAsyncEnumerable — await foreach 消费）
 await foreach (var e in eventLog.ReadStreamAsync("order-01HXY...", ct)) { ... }
@@ -537,7 +590,8 @@ using PalDDD.Projections;
 services.AddPalOrmPostgreSql(connectionString);
 services.AddScoped<IProjectionHandler<OrderCreated>, OrderProjection>();
 
-// Projection 实现 — 消费事件、更新读模型（真实 API：IProjectionHandler<T>.ProjectAsync）
+// Projection 实现 — 必须标 [BoundedContext]（PDDD004 Error，IProjectionHandler 实现类强制）
+[BoundedContext("ordering")]
 public sealed class OrderProjection : IProjectionHandler<OrderCreated>
 {
     public string ProjectionName => "ordering.order-view";
@@ -548,10 +602,11 @@ public sealed class OrderProjection : IProjectionHandler<OrderCreated>
         return _readStore.UpsertAsync(evt.OrderId, new OrderView(evt.Name, evt.Amount), ct);
     }
 }
+// 断点语义：(ProjectionName, SourceName, Position) 复合键 + Revision 单调令牌（EFCore 适配器并发令牌）
 
-// 全量重放 — 从头重建读模型（不停机恢复）
-await projectionRebuilder.RebuildAsync(ct);
-// → 从 Position=0 开始重放全部事件 → Checkpoint 自动更新 → 中断后可断点续传
+// 回放两种模式：ReplayAsync 增量（推荐安全模式——失败旧数据完整）vs RebuildAsync 全量重建
+await projectionRebuilder.ReplayAsync(ct);    // 从 Checkpoint 续传增量事件
+await projectionRebuilder.RebuildAsync(ct);   // ⚠️ 先清空读模型再全量重放（重建场景专用，非"不停机恢复"）
 ```
 
 ### 13. 幂等执行：结果缓存 + Revision CAS 令牌（v2.1.0）
@@ -625,6 +680,48 @@ services.AddPalCommandHandler<CreateOrder, OrderId, CreateOrderHandler>();
 services.AddPalOutbox();  // MediatR 没有的能力
 
 // 逐步迁移：老代码继续用 MediatR，新功能用 PalDDD，两者共存无冲突
+```
+
+### 16. ASP.NET Core 集成：Minimal API 端点 + 异常契约 + 健康检查
+
+`PalDDD.Hosting.AspNetCore` 把命令/查询直接映射为 Minimal API 端点——JsonTypeInfo 必传（AOT 安全），异常映射契约内建。
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddPalCoreStack();
+builder.Services.AddPalCommandHandler<CreateOrder, OrderId, CreateOrderHandler>();
+builder.Services.AddPalHealthChecks();       // Broker + Outbox 健康检查（Build 前调用）
+
+var app = builder.Build();
+app.UsePalExceptionHandler();                 // 必须放最前：PalValidationException→400+errors[]、HandlerNotFound→404、其他→500（不泄露内部消息）
+app.MapPalHealthChecks();                     // GET /health
+
+// 命令端点（双 JsonTypeInfo 重载——有返回值的命令必传响应 JsonTypeInfo）
+app.MapCommand<CreateOrder, OrderId>("/orders",
+    AppJsonContext.Default.CreateOrder, AppJsonContext.Default.OrderId);
+
+// 查询端点（bindQuery 委托从 HttpContext 绑定参数；异常在委托内抛出会走统一异常契约）
+app.MapQuery<GetOrderQuery, OrderDto>("/orders/{orderId}",
+    ctx => new GetOrderQuery(OrderId.Parse(ctx.Request.RouteValues["orderId"]?.ToString() ?? "")),
+    AppJsonContext.Default.OrderDto);
+```
+
+### 17. Kafka / RabbitMQ Broker 接入：显式构造，无 DI 魔法
+
+两个 Broker 适配器**没有便捷 AddPal 扩展**——显式构造（5 参数：transport 配置 ×2 + logger + serializer + catalog），装配透明可控。
+
+```csharp
+// Kafka（RabbitMQ 同构：RabbitMqBroker(RabbitMqBrokerConfig, ConsumerConfig, logger, serializer, catalog)）
+builder.Services.AddSingleton<IMessageBroker>(new KafkaBroker(
+    new ProducerConfig { BootstrapServers = "kafka:9092" },
+    new ConsumerConfig { BootstrapServers = "kafka:9092", GroupId = "ordering" },
+    NullPalLogger<KafkaBroker>.Instance,
+    serializer, catalog));   // IMessageSerializer + IMessageCatalog 来自 AddPalJsonSerialization
+
+// 发布：OutboxProcessor 持租约消息调 broker.PublishAsync——非泛型路径必须传 messageId
+await broker.PublishAsync(message, descriptor, messageId, ct);
+// Outbox 侧以 OutboxMessage.Id 作 messageId，correlation/causation/trace 元数据随 MessagePublishContext 透传
+// Broker 适配器非 AOT（Confluent.Kafka/RabbitMQ.Client 限制，见 AOT 表）；InMemory MessageBroker 用于测试
 ```
 
 ---
