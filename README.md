@@ -318,6 +318,11 @@ public async ValueTask<OrderId> HandleAsync(CreateOrder cmd, CancellationToken c
     return order.Id;                 // 消息保证至少一次投递
 }
 
+// 发布侧 token fencing（v2.1.0 三栈统一）：OutboxProcessor 持租约快照 (owner, lockedUntil)
+// 调 MarkProcessed/MarkDead —— 终态写 SQL 带 AND locked_by = @owner AND locked_until = @until
+// 双守卫：租约被其他 worker 重租后旧快照 UPDATE 影响 0 行（affected=0 零内存变异），
+// 旧 worker 的迟到标记无法覆盖新持有者——重复投递/终态翻转两个窗口同时关闭。
+
 // 消费侧幂等：Inbox 防重复处理
 services.AddPalInbox();  // (ConsumerName, MessageId) 复合唯一约束
 ```
@@ -439,25 +444,31 @@ public sealed class OrderingSaga : Saga<OrderingState> { ... }
 public sealed class OrderingSaga : Saga<OrderingState> { ... }  // PDDD001
 ```
 
-### 9. 多租户：编译期注入租户过滤，零运行时开销
+### 9. 多租户：会话级租户过滤（PalORM `[TenantAware]`）
 
-PalORM 的 `[TenantAware]` 在编译期生成租户列过滤逻辑——SQL 自动带 `WHERE tenant_id = @tenantId`，不需要运行时拦截器。
+PalORM 引擎的 `[TenantAware]` 标在**实体类**上（非属性），配合 `DataSession.WithTenant()` —— 标注实体的常规查询自动附加 `WHERE tenant_id = @value`，无需拦截器、无需每条 SQL 手写条件。
 
 ```csharp
 using ByteAether.Ulid;
+using PalORM;
 
-// Row DTO 标注 [TenantAware] — 源生成器自动生成租户过滤 SQL
+// ✅ Row DTO 类级标注（PalORM 真实用法；DDL 需有 tenant_id 列——NOT NULL 约束要求插入前赋值）
+[TenantAware]
 public sealed class OrderRow
 {
     [Column("id")] public Ulid Id { get; init; }
     [Column("customer_name")] public string CustomerName { get; init; }
-    [TenantAware]  // ← 编译期注入：所有 SQL 自动加 tenant_id 条件
     [Column("tenant_id")] public string TenantId { get; init; }
 }
 
-// 运行时自动过滤 — 业务代码无感知
-var orders = await outboxStore.GetPendingMessagesAsync(...);
-// 生成的 SQL: SELECT ... FROM outbox_messages WHERE tenant_id = @tenantId AND status = 'Pending'
+// 会话设置租户 → 标注实体的查询构建器自动附加过滤（[SoftDelete] 软删除过滤同机制）
+await session.WithTenant("tenant-a");
+var orders = await session.Query<OrderRow>()
+    .Where(r => r.Status == "pending")   // 生成 SQL 自动含 AND tenant_id = @tenantFilter
+
+// ⚠️ 豁免警告（PalORM 契约）：QueryAsyncEnumerable / QueryMultipleAsync 原生 SQL 入口
+// 不走自动过滤——多租户会话经此入口可读到全部租户数据，SQL 必须自行携带 tenant_id 条件
+// 或改用受过滤保护的查询构建器入口。
 ```
 
 ### 10. 消息版本演化：V1→V2 自动升级（框架内置）
@@ -516,7 +527,8 @@ Projection 从 EventLog 消费事件、更新读模型，断点持久化保证�
 ```csharp
 using PalDDD.Projections;
 
-// 注册 Projection 处理器（IProjectionCheckpointStore 由持久化适配器注册）
+// 注册：handler 普通 DI 注册 + ProjectionProcessor<TMessage> 由你托管（构造注入
+// handler 与 IProjectionCheckpointStore——checkpoint 存储由持久化适配器注册）
 services.AddPalOrmPostgreSql(connectionString);
 services.AddScoped<IProjectionHandler<OrderCreated>, OrderProjection>();
 
@@ -537,7 +549,39 @@ await projectionRebuilder.RebuildAsync(ct);
 // → 从 Position=0 开始重放全部事件 → Checkpoint 自动更新 → 中断后可断点续传
 ```
 
-### 13. 可观测性：内建 OpenTelemetry，零配置
+### 13. 幂等执行：结果缓存 + Revision CAS 令牌（v2.1.0）
+
+API/命令幂等：同 `(OperationName, Key)` 的重复请求返回缓存结果而非重执行 handler。**Revision CAS 令牌**（v2.1.0）防止 Completed 记录被并发翻转后副作用重执行；过期记录可回收重建（Retention = 可重新执行窗口）。
+
+```csharp
+using PalDDD.Idempotency;
+
+// 注册（无便捷扩展方法——手动注册，教程 §真实形态）：IIdempotencyStore 由持久化
+// 适配器提供（EFCore 的 IdempotencyDbContext / PalORM 的 PalOrmIdempotencyStore / InMemory 版零依赖）
+services.AddScoped<IIdempotencyStore>(sp => sp.GetRequiredService<AppIdempotencyDbContext>());
+services.AddScoped<IdempotencyProcessor>();   // 构造注入 store（+可选 TimeProvider/IPalLogger）
+
+// 真实 API：ExecuteAsync<TResult>(operationName, key, handler, serialize, deserialize)
+var execution = await idempotency.ExecuteAsync(
+    "order.create", orderKey,
+    handler: async ct => await CreateOrderExpensivelyAsync(cmd, ct),   // 只在首次执行
+    serializeResult: r => JsonSerializer.SerializeToUtf8Bytes(r, OrderJsonTypeInfo),
+    deserializeResult: b => JsonSerializer.Deserialize<OrderResult>(b, OrderJsonTypeInfo)!,
+    cancellationToken: ct);
+
+// 三态（IdempotencyExecutionStatus）：
+switch (execution.Status)
+{
+    case IdempotencyExecutionStatus.Executed: // 首次真实执行
+        return execution.Result!;
+    case IdempotencyExecutionStatus.Cached:   // 重复请求 → 直接返回缓存 payload（零副作用）
+        return execution.Result!;
+    case IdempotencyExecutionStatus.Skipped:  // 另一请求持有租约执行中 → 稍后重试
+        return Results.Accepted();
+}
+```
+
+### 14. 可观测性：内建 OpenTelemetry，零配置
 
 PalDDD 在所有关键路径内置了 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（21 个遥测 instrument，v72 勘正计数）——不需要手写埋点。
 
@@ -556,7 +600,7 @@ services.AddOpenTelemetry()
 // 零手写埋点 — 命令分发延迟、Outbox 积压量、Saga 补偿次数全部自动上报
 ```
 
-### 14. 渐进式迁移：从 MediatR 逐步引入
+### 15. 渐进式迁移：从 MediatR 逐步引入
 
 PalDDD 的每个 NuGet 包独立可装——不需要一次性重写项目。
 
