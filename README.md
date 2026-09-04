@@ -41,7 +41,7 @@ DIM 桥接消除反射、源码生成器注册类型、FrozenDictionary 替代�
 
 ### 架构约束编译时执行
 
-15 条 Roslyn 分析器规则（PDDD001-015）在编译阶段检查领域模型的合规性。DomainEvent 未声明 sealed → 编译错误。ProcessManager 缺少 `[BoundedContext]` → 编译错误。消息契约命名不符合 lowercase-kebab 规范 → 编译警告。约束不依赖文档纪律或 Code Review 记忆——编译器替代了这两者。
+38 条编译期诊断检查领域模型的合规性：15 条战略 Roslyn 分析器（PDDD001-015）+ 23 条源生成器诊断（PALID001-007 / PALMSG001-007 / PALENUM001-009）。DomainEvent 未声明 sealed → 编译错误。ProcessManager 缺少 `[BoundedContext]` → 编译错误。消息契约命名不符合 lowercase-kebab 规范 → 编译警告。约束不依赖文档纪律或 Code Review 记忆——编译器替代了这两者。
 
 ---
 
@@ -161,7 +161,7 @@ InMemory 实现覆盖全部抽象接口，单元测试和原型开发无需外�
 | **PalORM.Core** | 5.4.0 | PalORM 引擎核心：DataSession / Provider / RowFactory（PalDDD.PalORM 的底层依赖） |
 | **PalORM.SourceGen** | 5.4.0 | PalORM 源生成器：编译期生成 RowFactory / CommandFactory（零反射） |
 | **PalORM.PostgreSql** | 5.4.0 | PalORM PostgreSQL 方言 Provider：RETURNING / COPY |
-| **PalORM.MySql** | 5.4.0 | PalORM MySQL 方言 Provider：BulkCopy / 多值 INSERT |
+| **PalORM.MySql** | 5.4.0 | PalORM MySQL 方言 Provider：BulkCopy / 多值 INSERT（5.4 弹性层三 Provider 均支持 configureResilience 回调） |
 | **PalORM.Sqlite** | 5.4.0 | PalORM SQLite 方言 Provider：FTS5 / JSON1 |
 
 ---
@@ -281,9 +281,9 @@ var someUlid = Ulid.New();           // 与 [GenerateId(typeof(Ulid))] 对应的
 var fromDb = OrderId.From(someUlid);
 ```
 
-### 2. 编译时 DDD 治理：15 条分析器自动检查
+### 2. 编译时 DDD 治理：38 条诊断（15 战略分析器 + 23 源生成器诊断）
 
-Pal.DDD 不依赖 Code Review 记忆——15 条 Roslyn 分析器（PDDD001-015）在编译阶段拦截不合规代码。
+Pal.DDD 不依赖 Code Review 记忆——**38 条编译期诊断**在编译阶段拦截不合规代码：15 条战略 Roslyn 分析器（PDDD001-015）+ 23 条源生成器诊断（PALID001-007 身份 / PALMSG001-007 消息注册 / PALENUM001-009 智能枚举——v2.1.0 新增 PALID007 可访问性链与 PALENUM009 包含类型 partial）。
 
 ```csharp
 // ✅ DomainEvent 必须 sealed — PDDD012 编译错误
@@ -295,9 +295,13 @@ public record OrderCreated(...) : DomainEvent, IDomainEvent;  // PDDD012
 // ✅ 消息名 lowercase-kebab + .vN — PDDD009 编译警告
 [GenerateMessage(Name = "ordering.order-created.v1")]
 
-// ✅ ProcessManager 标注 [BoundedContext] — PDDD003 编译错误
+// ✅ ProcessManager 必须标注 [BoundedContext] — PDDD001 编译错误（PDDD003 拦截不合规标注形状）
 [BoundedContext("ordering")]
 public sealed class OrderingProcessManager : Saga<OrderingState> { ... }
+
+// ❌ [GenerateId] 目标忘写 partial — 源生成器直接报错
+[GenerateId(typeof(Ulid))]
+public readonly record struct OrderId;  // PALID002（非 partial record struct，生成物无法合并）
 ```
 
 ### 3. 租约锁并发 Outbox：多实例无重复投递
@@ -634,6 +638,13 @@ services.AddPalOutbox();  // MediatR 没有的能力
 | ValueObject / SmartEnum | 强类型 ID（Ulid 推荐），FrozenDictionary O(1) 查找 |
 | ISpecification | ExpressionVisitor 参数替换组合 And/Or/Not，与 EF Core LINQ 完全兼容 |
 | 诊断 | 内建 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（21 个遥测 instrument，v72 勘正计数） |
+
+### 源生成器（编译期，零运行时反射）
+| 生成器 | 产出 | 配套诊断 |
+|--------|------|---------|
+| IdentityGenerator | `New`/`From`/`Parse`/`TryParse` + JsonConverter/TypeConverter + ISpanParsable | PALID001-007 |
+| EnumGenerator | SmartEnum 注册代码（FrozenDictionary O(1)） | PALENUM001-009 |
+| MessageRegistryGenerator | MessageCatalog 注册 + GetTypeInfo 桥接 | PALMSG001-007 |
 
 ### CQRS
 | 组件 | 实现策略 |
