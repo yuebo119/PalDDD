@@ -41,7 +41,7 @@ DIM bridging eliminates reflection, source generators register types, FrozenDict
 
 ### Architectural Constraints Enforced at Compile Time
 
-15 Roslyn analyzer rules (PDDD001-015) check domain model compliance during compilation. A DomainEvent not declared `sealed` → compile error. A ProcessManager missing `[BoundedContext]` → compile error. A message contract name that does not follow the lowercase-kebab convention → compile warning. Constraints no longer depend on documentation discipline or Code Review memory — the compiler replaces both.
+38 compile-time diagnostics check domain model compliance: 15 strategic Roslyn analyzers (PDDD001-015) plus 23 source-generator diagnostics (PALID001-007 identity / PALMSG001-007 message registry / PALENUM001-009 smart enums). A DomainEvent not declared `sealed` → compile error. A ProcessManager missing `[BoundedContext]` → compile error. A message contract name that does not follow the lowercase-kebab convention → compile warning. Constraints no longer depend on documentation discipline or Code Review memory — the compiler replaces both.
 
 ---
 
@@ -282,9 +282,9 @@ var someUlid = Ulid.New();           // Underlying type matching [GenerateId(typ
 var fromDb = OrderId.From(someUlid);
 ```
 
-### 2. Compile-Time DDD Governance: 15 Analyzers Auto-Check
+### 2. Compile-Time DDD Governance: 38 Diagnostics (15 Strategic Analyzers + 23 Source-Generator Diagnostics)
 
-Pal.DDD does not rely on Code Review memory — 15 Roslyn analyzers (PDDD001-015) intercept non-compliant code during compilation.
+Pal.DDD does not rely on Code Review memory — **38 compile-time diagnostics** intercept non-compliant code: 15 strategic Roslyn analyzers (PDDD001-015) + 23 source-generator diagnostics (PALID001-007 identity / PALMSG001-007 message registry / PALENUM001-009 smart enums — v2.1.0 adds PALID007 accessibility chain and PALENUM009 containing-type partial).
 
 ```csharp
 // ✅ DomainEvent must be sealed — PDDD012 compile error
@@ -296,9 +296,13 @@ public record OrderCreated(...) : DomainEvent, IDomainEvent;  // PDDD012
 // ✅ Message name lowercase-kebab + .vN — PDDD009 compile warning
 [GenerateMessage(Name = "ordering.order-created.v1")]
 
-// ✅ ProcessManager annotated with [BoundedContext] — PDDD003 compile error
+// ✅ ProcessManager must be annotated with [BoundedContext] — PDDD001 compile error (PDDD003 rejects non-compliant annotation shapes)
 [BoundedContext("ordering")]
 public sealed class OrderingProcessManager : Saga<OrderingState> { ... }
+
+// ❌ [GenerateId] target missing partial — source generator fails directly
+[GenerateId(typeof(Ulid))]
+public readonly record struct OrderId;  // PALID002 (non-partial record struct; generated code cannot merge)
 ```
 
 ### 3. Lease-Lock Concurrent Outbox: Multi-Instance Without Duplicate Delivery
@@ -632,6 +636,13 @@ services.AddPalOutbox();  // A capability MediatR lacks
 | ValueObject / SmartEnum | Strongly-typed IDs (Ulid recommended), FrozenDictionary O(1) lookup |
 | ISpecification | ExpressionVisitor parameter substitution composes And/Or/Not, fully compatible with EF Core LINQ |
 | Diagnostics | Built-in `PalActivitySource` (11 Start methods) + `PalMetrics` (21 telemetry instruments) |
+
+### Source Generators (compile-time, zero runtime reflection)
+| Generator | Output | Companion diagnostics |
+|-----------|--------|----------------------|
+| IdentityGenerator | `New`/`From`/`Parse`/`TryParse` + JsonConverter/TypeConverter + ISpanParsable | PALID001-007 |
+| EnumGenerator | SmartEnum registration code (FrozenDictionary O(1)) | PALENUM001-009 |
+| MessageRegistryGenerator | MessageCatalog registration + GetTypeInfo bridge | PALMSG001-007 |
 
 ### CQRS
 | Component | Implementation Strategy |
