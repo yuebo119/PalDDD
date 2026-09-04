@@ -319,6 +319,13 @@ public async ValueTask<OrderId> HandleAsync(CreateOrder cmd, CancellationToken c
     return order.Id;                 // At-least-once delivery guaranteed for the message
 }
 
+// Publish-side token fencing (v2.1.0, unified across all three stacks): OutboxProcessor holds
+// the lease snapshot (owner, lockedUntil) when calling MarkProcessed/MarkDead — the terminal-write
+// SQL carries AND locked_by = @owner AND locked_until = @until as a dual guard: once the lease is
+// re-acquired by another worker, the stale snapshot's UPDATE affects 0 rows (zero in-memory
+// mutation) — a late marker from the old worker cannot override the new holder, closing both the
+// duplicate-delivery and terminal-flip windows.
+
 // Consumer-side idempotency: Inbox prevents duplicate processing
 services.AddPalInbox();  // Composite unique constraint on (ConsumerName, MessageId)
 ```
@@ -432,25 +439,34 @@ public sealed class OrderingSaga : Saga<OrderingState> { ... }
 public sealed class OrderingSaga : Saga<OrderingState> { ... }  // PDDD001
 ```
 
-### 9. Multi-Tenancy: Compile-Time Tenant Filter Injection, Zero Runtime Overhead
+### 9. Multi-Tenancy: Session-Level Tenant Filter (PalORM `[TenantAware]`)
 
-PalORM's `[TenantAware]` generates tenant column filter logic at compile time — SQL automatically includes `WHERE tenant_id = @tenantId`, requiring no runtime interceptor.
+PalORM's `[TenantAware]` annotates the **entity class** (not a property) and pairs with `DataSession.WithTenant()` — regular queries on annotated entities automatically append `WHERE tenant_id = @value`: no interceptors, no hand-written conditions per SQL.
 
 ```csharp
 using ByteAether.Ulid;
+using PalORM;
 
-// Row DTO annotated with [TenantAware] — source generator auto-generates tenant filter SQL
+// ✅ Class-level annotation on the Row DTO (real PalORM usage; DDL needs a tenant_id column —
+//    the NOT NULL constraint requires it to be assigned before insert)
+[TenantAware]
 public sealed class OrderRow
 {
     [Column("id")] public Ulid Id { get; init; }
     [Column("customer_name")] public string CustomerName { get; init; }
-    [TenantAware]  // ← Compile-time injection: all SQL automatically adds tenant_id condition
     [Column("tenant_id")] public string TenantId { get; init; }
 }
 
-// Automatic runtime filtering — business code is unaware
-var orders = await outboxStore.GetPendingMessagesAsync(...);
-// Generated SQL: SELECT ... FROM outbox_messages WHERE tenant_id = @tenantId AND status = 'Pending'
+// Set the tenant on the session → the query builder auto-appends the filter for annotated
+// entities ([SoftDelete] soft-delete filtering uses the same mechanism)
+await session.WithTenant("tenant-a");
+var orders = await session.Query<OrderRow>()
+    .Where(r => r.Status == "pending");   // generated SQL automatically contains AND tenant_id = @tenantFilter
+
+// ⚠️ Exemption warning (PalORM contract): the raw-SQL entries QueryAsyncEnumerable /
+// QueryMultipleAsync bypass automatic filtering — a tenant session can read all tenants' data
+// through them. SQL must carry the tenant_id condition itself, or use the filter-protected
+// query-builder entry.
 ```
 
 ### 10. Message Version Evolution: V1→V2 Auto-Upgrade (Framework Built-In)
@@ -530,7 +546,40 @@ await projectionRebuilder.RebuildAsync(ct);
 // → Replays all events from Position=0 → Checkpoint auto-updates → Can resume from interruption
 ```
 
-### 13. Observability: Built-In OpenTelemetry, Zero Configuration
+### 13. Idempotent Execution: Result Caching + Revision CAS Token (v2.1.0)
+
+API/command idempotency: duplicate requests with the same `(OperationName, Key)` return the cached result instead of re-executing the handler. The **Revision CAS token** (v2.1.0) prevents side-effect re-execution after a Completed record is concurrently flipped; expired records are reclaimable (Retention = re-execution window).
+
+```csharp
+using PalDDD.Idempotency;
+
+// Registration (no convenience extension — manual, mirroring the tutorial): IIdempotencyStore
+// comes from the persistence adapter (EFCore IdempotencyDbContext / PalORM PalOrmIdempotencyStore /
+// InMemory with zero dependencies)
+services.AddScoped<IIdempotencyStore>(sp => sp.GetRequiredService<AppIdempotencyDbContext>());
+services.AddScoped<IdempotencyProcessor>();   // ctor-injected store (+optional TimeProvider/IPalLogger)
+
+// Real API: ExecuteAsync<TResult>(operationName, key, handler, serialize, deserialize)
+var execution = await idempotency.ExecuteAsync(
+    "order.create", orderKey,
+    handler: async ct => await CreateOrderExpensivelyAsync(cmd, ct),   // runs only on first execution
+    serializeResult: r => JsonSerializer.SerializeToUtf8Bytes(r, OrderJsonTypeInfo),
+    deserializeResult: b => JsonSerializer.Deserialize<OrderResult>(b, OrderJsonTypeInfo)!,
+    cancellationToken: ct);
+
+// Three states (IdempotencyExecutionStatus):
+switch (execution.Status)
+{
+    case IdempotencyExecutionStatus.Executed: // first real execution
+        return execution.Result!;
+    case IdempotencyExecutionStatus.Cached:   // duplicate request → cached payload (zero side effects)
+        return execution.Result!;
+    case IdempotencyExecutionStatus.Skipped:  // another request holds the lease → retry later
+        return Results.Accepted();
+}
+```
+
+### 14. Observability: Built-In OpenTelemetry, Zero Configuration
 
 PalDDD ships `PalActivitySource` (11 Start methods) + `PalMetrics` (21 telemetry instruments) built into all critical paths — no manual instrumentation needed.
 
@@ -549,7 +598,7 @@ services.AddOpenTelemetry()
 // Zero manual instrumentation — command dispatch latency, Outbox backlog, Saga compensation count all auto-reported
 ```
 
-### 14. Incremental Migration: Phased Adoption From MediatR
+### 15. Incremental Migration: Phased Adoption From MediatR
 
 Every NuGet package in PalDDD is independently installable — no need to rewrite the entire project at once.
 
