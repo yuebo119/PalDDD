@@ -63,7 +63,7 @@
 │  ✅ 消息兼容 → Schema Evolution 显式升级管道 + 编译期版本校验       │
 │  ✅ AOT 兼容 → 源码生成器 + 泛型 + JsonTypeInfo 零反射             │
 │  ✅ 编译期防错 → Analyzer 15 条诊断规则，写错代码直接编译不过      │
-│  ✅ 可观测 → 27 个预定义指标 + 11 种 Activity，零配置              │
+│  ✅ 可观测 → 21 个预定义指标 + 11 种 Activity，零配置              │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -108,9 +108,9 @@
 | **零 DateTime.UtcNow** | ❌（30+ 处） | ❌（100+ 处） | ❌（5+ 处） | **✅ 0 处** |
 | **并发模型** | Lease | Saga + Retry | 无状态 | **Hi/Lo + CAS + Lease + Revision** |
 | **EF Core 解耦** | ❌ 耦合 | ❌ 耦合 | ✅ 无 EF | **✅ 完全可选** |
-| **OpenTelemetry** | ⚠️ 部分 | ✅ | ⚠️ 部分 | **✅ 全链路 27 指标** |
+| **OpenTelemetry** | ⚠️ 部分 | ✅ | ⚠️ 部分 | **✅ 全链路 21 指标** |
 | **包大小** | ~50MB | ~120MB | ~500KB | **~2MB** |
-| **测试覆盖** | ⚠️ 部分 | ⚠️ 部分 | ✅ | **✅ 897+ passed（15 本地 + 41 CI 真库）** |
+| **测试覆盖** | ⚠️ 部分 | ⚠️ 部分 | ✅ | **✅ 1202 实测（16 项目：本机 1153 + 49 CI Testcontainers）** |
 
 ### 核心优势一句话
 
@@ -192,7 +192,7 @@ public sealed class Order : AggregateRoot<OrderId>
 
         CustomerName = customerName;
         TotalAmount = amount;
-        OrderedAt = timeProvider.GetUtcNow();
+        OrderedAt = DomainEvent.TimeProvider.GetUtcNow();  // ADR-018：DomainEvent 静态 Ambient TimeProvider（AsyncLocal），聚合不持有 timeProvider 字段
 
         // 记录领域事件 —— 不是直接调用其他服务，只是记录"发生了什么"
         RaiseEvent(new OrderCreated(id, customerName, amount));
@@ -595,7 +595,7 @@ public sealed class OrderFulfillmentSaga : Saga<OrderState>
     {
         // 下单后：尝试预留库存
         // SagaStep 构造：name + executeAsync(Func<SagaState, object, CT, ValueTask<SagaState>>) + 可选 compensate
-        When("Pending", typeof(OrderCreated), new SagaStep("ReserveInventory",
+        When<OrderCreated>("Pending", new SagaStep("ReserveInventory",
             async (state, evt, ct) =>
             {
                 var created = (OrderCreated)evt;
@@ -612,7 +612,7 @@ public sealed class OrderFulfillmentSaga : Saga<OrderState>
             }));
 
         // 库存预留成功 → 处理支付
-        When("ReservingInventory", typeof(InventoryReserved), new SagaStep("ProcessPayment",
+        When<InventoryReserved>("ReservingInventory", new SagaStep("ProcessPayment",
             async (state, evt, ct) =>
             {
                 state.InventoryReserved = true;
@@ -626,7 +626,7 @@ public sealed class OrderFulfillmentSaga : Saga<OrderState>
             }));
 
         // 支付成功 → 订单完成
-        When("ProcessingPayment", typeof(OrderPaid), new SagaStep("Complete",
+        When<OrderPaid>("ProcessingPayment", new SagaStep("Complete",
             async (state, evt, ct) =>
             {
                 state.PaymentCompleted = true;
@@ -674,9 +674,9 @@ builder.Services.AddScoped<IEventLog>(sp =>
 ```csharp
 public async ValueTask<OrderId> HandleAsync(CreateOrderCommand command, CancellationToken ct)
 {
-    var orderId = new OrderId(Guid.NewGuid());
+    var orderId = new OrderId(PalUlid.New());
     var data = new EventData(
-        Guid.NewGuid(),
+        PalUlid.New(),
         "ordering.order-created.v1",
         schemaVersion: 1,
         contentType: "application/json",
@@ -871,14 +871,14 @@ app.Run();
 
 ### 4.14 可观测性：指标与追踪
 
-**框架解决的问题：** 生产环境出问题了，你先要知道的是：命令执行了多少？失败了几个？发件箱积压了多少？Pal.DDD 内建了 27 个 OpenTelemetry 指标和 11 种 Activity，零配置即可采集。
+**框架解决的问题：** 生产环境出问题了，你先要知道的是：命令执行了多少？失败了几个？发件箱积压了多少？Pal.DDD 内建了 21 个 OpenTelemetry 指标和 11 种 Activity，零配置即可采集。
 
 ```csharp
 // 一行代码接入
 builder.Services.AddOpenTelemetry()
     .WithMetrics(meterProviderBuilder =>
         meterProviderBuilder
-            .AddMeter("PalDDD")                          // 内建 27 个指标
+            .AddMeter("PalDDD")                          // 内建 21 个指标
             .AddPrometheusExporter())
     .WithTracing(tracerProviderBuilder =>
         tracerProviderBuilder
@@ -886,18 +886,13 @@ builder.Services.AddOpenTelemetry()
             .AddConsoleExporter());
 ```
 
-**内建的 27 个指标：**
+**内建的 21 个指标**（ITM-229 移除 7 个无记录路径死指标后的现行清单）：
 
 ```
-paldd.commands.total             // 命令执行总数
-paldd.commands.duration_ms       // 命令执行耗时（直方图）
-paldd.events.published           // 领域事件发布数
-paldd.events.consumed            // 事件消费数
 paldd.event_handlers.handled     // 事件处理器成功调用数
 paldd.event_handlers.failed      // 事件处理器失败调用数
 paldd.eventlog.appended          // 事件日志追加数
 paldd.eventlog.read              // 事件日志读取数
-paldd.outbox.pending             // 发件箱待处理数（UpDownCounter）
 paldd.outbox.processed           // 发件箱成功处理数
 paldd.outbox.failed              // 发件箱失败数
 paldd.inbox.processed            // 收件箱成功数
@@ -911,11 +906,10 @@ paldd.projection.replayed        // 投影重建事件数
 paldd.projection.failed          // 投影重建失败数
 paldd.replay.read                // 事件回放读取数
 paldd.replay.failed              // 事件回放失败数
-paldd.saga.active               // 活跃 Saga 数（UpDownCounter）
 paldd.saga.completed             // Saga 完成数
 paldd.saga.compensated           // Saga 补偿数
 paldd.saga.compensation_failed   // Saga 补偿失败数
-paldd.pipeline.behavior_duration_ms  // 管道行为执行耗时（直方图）
+paldd.saga.scan_failed           // Saga 扫描失败数（v2.1.0 新增）
 ```
 
 ### 4.15 AOT 发布与构建检查

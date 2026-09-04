@@ -6,8 +6,8 @@
 >
 > **真源**：
 > - [`conventions.md`](conventions.md) §5（测试规范要点）+ §10.6（TUnit+MTP 4 硬规则）+ §12（性能契约）
-> - [`.ai/test/prompt.md`](../.ai/test/prompt.md)（T1-T14 + T-DDD-1..5 铁律）
-> - [`test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs`](../test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs)（33 测试方法机械守护）
+> - [`.ai/test/prompt.md`](../.ai/test/prompt.md)（T1-T14 + T-DDD-1..6 铁律）
+> - [`test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs`](../test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs)（41 测试方法机械守护）
 
 ---
 
@@ -54,7 +54,7 @@
                   ┌──────────────────┐│ ┌──────────────────────┐
                   │ Architecture     ││ │ Core/CQRS/Transactions│
                   │ BoundaryTests    ││ │  单元功能正确性        │
-                  │ 33 方法 85 断言  ││ │ AggregateRoot/Saga/Outbox│
+                  │ 41 方法 89 断言  ││ │ AggregateRoot/Saga/Outbox│
                   └──────────────────┘│ └──────────────────────┘
                                      ╱
                           ┌────────────────────┐
@@ -67,7 +67,7 @@
 
 | 项目 | 类型 | 职责 |
 |------|------|------|
-| `PalDDD.Core.Tests` | 单元 | AggregateRoot/Entity/ValueObject/SmartEnum/Specification/DomainEvent/PublicApiSnapshot/AotContract/AllocationContract/PerformanceContract |
+| `PalDDD.Core.Tests` | 单元 | AggregateRoot/Entity/ValueObject/SmartEnum/Specification/DomainEvent/PublicApiSnapshot/AotContract/AllocationContract（性能契约由 ArchitectureBoundaryTests 的 PerformanceContract 存在性断言守护） |
 | `PalDDD.Core.Abstractions.Tests` | 单元 | 核心抽象（IUnitOfWork/IMessageBroker 等）契约 |
 | `PalDDD.CQRS.Tests` | 单元 | Dispatcher/PipelineStateMachine/CommandHandler/QueryHandler |
 | `PalDDD.Transactions.Tests` | 单元 + 集成 | Saga/Outbox/Inbox + 租约锁 + 补偿链 + 死信重投递 |
@@ -75,7 +75,7 @@
 | `PalDDD.Projections.EventLog.Tests` | 单元 | EventLog 投影源 + 断点续传 |
 | `PalDDD.Messaging.Tests` | 单元 | IMessageBroker InMemory 实现 + MessageCatalog |
 | `PalDDD.Serialization.Tests` | 单元 | IMessageSerializer + MessageEvolutionPipeline + SchemaVersion |
-| `PalDDD.DependencyInjection.Tests` | 单元 | **ArchitectureBoundaryTests 33 方法机械守护** + DI 注册规范 |
+| `PalDDD.DependencyInjection.Tests` | 单元 | **ArchitectureBoundaryTests 41 方法机械守护** + DI 注册规范 |
 | `PalDDD.Repository.EFCore.Tests` | 集成 | UnitOfWork + OutboxDomainEventInterceptor Scoped |
 | `PalDDD.Hosting.AspNetCore.Tests` | 集成 | ExceptionMiddleware + AspNetCore 中间件链 |
 | `PalDDD.Integration.Tests` | 集成 | Testcontainers 真库（PG/MySQL/SQLite）+ OutboxDbContext 全链路 + Idempotency |
@@ -94,7 +94,7 @@
 
 | 维度 | DDD 约定 |
 |------|---------|
-| **测试框架** | TUnit 1.65.0 + MTP（Microsoft.Testing.Platform） |
+| **测试框架** | TUnit 1.65.68 + MTP（Microsoft.Testing.Platform） |
 | **断言库** | TUnit.Assertions（Fluent 链式） |
 | **属性测试** | TUnit.FsCheck（属性驱动） |
 | **快照测试** | Verify.TUnit 31.28.0（预留，目前 PublicApiSnapshot 自实现） |
@@ -237,13 +237,13 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | **Saga 编排 + 补偿链** | ✅ | — | — | SagaTests（8 类） |
 | **Saga 租约锁**（多实例并发） | ✅ | ⚠ | — | SagaTimeoutTests |
 | **Outbox 死信重投递** | ✅ | ✅ | — | OutboxRequeueTests（9 场景） |
-| **Inbox 幂等**（SQLite TOCTOU/PG ON CONFLICT） | ✅ | ✅ | — | InboxTests |
+| **Inbox 幂等**（SQLite TOCTOU/PG ON CONFLICT） | ✅ | ✅ | — | InboxProcessorTests + InboxMessageTests（Transactions.Tests） |
 | **Outbox 原子租约**（FOR UPDATE SKIP LOCKED） | — | ✅ | — | Integration.Tests |
 | **CQRS Dispatcher Freeze** | ✅ | — | — | DispatcherTests |
 | **Pipeline 状态机**（零分配） | ✅ | — | — | AllocationContractTests |
 | **MessageCatalog 不可变** | ✅ | — | — | AotContractTests |
 | **MessageEvolutionPipeline** | ✅ | — | — | SerializationTests |
-| **Projection 断点续传** | ✅ | ⚠ | — | ProjectionsEventLogTests |
+| **Projection 断点续传** | ✅ | ⚠ | — | EventLogReplaySourceTests（Projections.EventLog.Tests） |
 | **StrategicDdd PDDD001-015** | ✅ | — | — | StrategicDddAnalyzerTests |
 | **Broker 对称**（InMemory/Kafka/RabbitMQ） | ✅ | ✅ | — | MessagingTests + MessagingIntegrationTests |
 
@@ -284,7 +284,7 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 
 | 配置 | DDD 使用场景 | ORM 使用场景 |
 |------|------------|------------|
-| `[ShortRunJob]` + `[MemoryDiagnoser]` | **全部 10 个 benchmark 类**（统一双标注） | 不使用 |
+| `[ShortRunJob]` + `[MemoryDiagnoser]` | **全部 11 个 benchmark 类**（Framework 5 + Infra 6，统一双标注） | 不使用 |
 | `[SimpleJob]` 三档（快速 1/3/5 / 标准 3/5/10 / 严格 5/10/15） | **未使用** | 偏好（grep 实证） |
 | `[BenchmarkCategory]` | **未使用**（按文件分类 Framework/Infra） | 使用（按操作分类） |
 | `[Params]` | **未使用**（用 const 或字段） | 使用（参数化扫描） |
@@ -402,7 +402,7 @@ dotnet run --project bench/PalDDD.Benchmarks -- --smoke | tee /tmp/after.txt
 
 | 层 | 项目数 | AOT 策略 | 验证 |
 |----|:------:|---------|------|
-| **AOT 核心层** | 7 | `IsAotCompatible=true`（继承 Directory.Build.props） | `dotnet publish -p:PublishAot=true` 全绿 |
+| **AOT 核心层** | 显式 8（PalORM×4+Dapper×4）+ 继承 true 22（无 csproj 覆盖即继承全局 true） | `IsAotCompatible=true` | CI aot-verify（PalOrmSample 单入口 publish+run）全绿 |
 | **非 AOT 适配器层** | 14 | 显式 `IsAotCompatible=false`（设计本意） | ArchitectureBoundaryTests `InfrastructureAdapters_AreExplicitlyNonAot` 强制 |
 
 ---
@@ -464,9 +464,9 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 | `docs/conventions.md` §5 | 测试规范要点（精简版） |
 | `docs/conventions.md` §10.6 | TUnit+MTP 4 硬规则 |
 | `docs/conventions.md` §12 | 性能契约（零分配快速路径） |
-| `.ai/test/prompt.md` | T1-T14 + T-DDD-1..5 测试铁律 |
+| `.ai/test/prompt.md` | T1-T14 + T-DDD-1..6 测试铁律 |
 | `test/PalDDD.Testing/TestHelpers.cs` | 共享测试工具（FakeTimeProvider 等） |
-| `test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs` | 33 测试方法机械守护 |
+| `test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs` | 41 测试方法机械守护 |
 | `test/PalDDD.Core.Tests/PublicApiSnapshotTests.cs` | 公共 API 快照 |
 | `test/PalDDD.Core.Tests/Snapshots/*.txt` | 快照基线（评审后提交） |
 | `bench/PalDDD.Benchmarks/Program.cs` | BenchmarkSwitcher + Smoke 模式入口 |

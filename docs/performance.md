@@ -27,7 +27,7 @@
 | 替代性能烟测 | `dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj -- --smoke` | 通过；输出 4 组 Stopwatch + GC 分配数据 |
 | Native AOT 发布 | `dotnet publish samples/PalDDD.AotSample/PalDDD.AotSample.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishAot=true` | 通过 |
 | 全解决方案构建 | `dotnet build PalDDD.slnx --no-restore` | 通过；0 warning / 0 error |
-| 全解决方案测试 | `dotnet test PalDDD.slnx --no-restore` | 通过；869 passed / 2 failed / 6 skipped（历史快照：2026-06-28；当前全量 897+ passed（本地 15 项目） / 0 failed（2026-08-16 修复轮后）） |
+| 全解决方案测试 | `dotnet test PalDDD.slnx --no-restore` | 通过；869 passed / 2 failed / 6 skipped（历史快照：2026-06-28；2026-09-04 v2.1.0 实测：16 项目 1202 = 本机 1153 + 49 环境依赖项 CI Testcontainers） |
 
 ## 已有 BenchmarkDotNet 产物
 
@@ -42,7 +42,7 @@
 
 ## 未完成项
 
-1. 等 BenchmarkDotNet 支持当前 .NET 11 Preview 或发布兼容版本后，用默认入口重新生成全部 9 个 benchmark 类结果。
+1. 等 BenchmarkDotNet 支持当前 .NET 11 Preview 或发布兼容版本后，用默认入口重新生成全部 11 个 benchmark 类结果（Framework 5 + Infra 6）。
 2. 用同一硬件、同一 SDK、同一 `ShortRunJob` 将新 BDN 报告与历史基线对比，明确标注回归、持平或改进。
 3. 保留 `--smoke` 作为 BDN 不可用时的低成本趋势检查；该模式只用于工程烟测，不替代正式 BenchmarkDotNet 报告。
 

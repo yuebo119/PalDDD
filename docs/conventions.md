@@ -20,6 +20,9 @@
 10. [AI Agent 编码约束](#10-ai-agent-编码约束)
 11. [依赖注入规范](#11-依赖注入规范)
 12. [性能契约](#12-性能契约)
+13. [评审纪律](#13-评审纪律)
+14. [诊断三步骤](#14-诊断三步骤)
+附录（测试框架守护方法名等）
 
 ---
 
@@ -301,7 +304,7 @@ Pal.DDD/
 │   └── PalDDD.Prompts/        # AI 提示模板
 ├── test/                      # 16 个测试项目（1:1 映射 src，不含共享基础设施 PalDDD.Testing）
 ├── bench/                     # BenchmarkDotNet 基准
-├── samples/                   # AOT / ECommerce / MinimalApi 示例
+├── samples/                   # AotSample / ECommerce / MinimalApi / PalOrmSample 示例（PalOrmSample 为 CI AOT publish 验证载体）
 └── docs/                      # 架构 / 使用 / 教程 / ADR / 评审
 ```
 
@@ -310,15 +313,16 @@ Pal.DDD/
 `PalDDD.slnx` 用 `<Folder>` 显式表达 Clean Architecture 分层：
 
 ```
-/src/Domain/          ← Core + Analyzers + SourceGen
-/src/App-Abstractions/← Serialization + Messaging
-/src/App-Core/        ← CQRS + EventLog + Transactions + ...
-/src/Infra-Dapper/    ← Dapper 适配器
-/src/Infra-EFCore/    ← EF Core 适配器
-/src/Infra-Serialization/ ← 序列化实现
-/src/Infra-Messaging/ ← 消息代理适配器
-/src/Hosting/         ← DI + AspNetCore
-/src/Metapackages/    ← PalDDD.Prompts
+/src/Domain/            ← Core + Analyzers + SourceGen
+/src/App-Abstractions/  ← Serialization + Serialization.Evolution + Messaging + Compression + Compression.Native
+/src/App-Core/          ← CQRS + EventLog + Transactions + Idempotency + Projections + Projections.EventLog + Repository.EFCore
+/src/Infra-Dapper/      ← Dapper 适配器（+ MySql/PostgreSql/Sqlite 方言子 Folder）
+/src/Infra-EFCore/      ← EF Core 适配器（Transactions/EventLog/Idempotency/Projections 五包）
+/src/Infra-PalORM/      ← PalORM 适配器（+ MySql/PostgreSql/Sqlite 方言子 Folder，ADR-020 第三栈）
+/src/Infra-Serialization/ ← MemoryPack 序列化实现
+/src/Infra-Messaging/   ← Kafka + RabbitMQ 代理适配器
+/src/Hosting/           ← DI + AspNetCore
+/src/Metapackages/      ← Base + Extension 元包 + PalDDD.Prompts
 ```
 
 ### 4.3 文件命名
@@ -333,7 +337,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-07-02 全量验证）：200 源文件·36 项目·0 违规。子目录仅 2 个例外（§4.7）。
+**合规状态**（2026-09-04 复验）：212 源文件·36 项目·0 违规（2026-07-02 锚定时 200 文件，Transactions 拆分等增长）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 
@@ -361,12 +365,16 @@ csproj 只写 `<Project Sdk>` + `<PackageReference Include="..." />`（无 Versi
 
 | 规则 | 详情 |
 |------|------|
-| **默认扁平** | 所有 `.cs` 文件在项目根目录。34/36 项目遵循。 |
-| **例外 1** | `AspNetCore/` 子目录 — ASP.NET 中间件（`ExceptionMiddleware.cs`）和端点映射（`EndpointExtensions.cs`·`HealthCheckExtensions.cs`）因涉及 `RequestDelegate`/`IApplicationBuilder` 类型，与纯 DI 注册分离 |
-| **例外 2** | `.pal/prompts/` — AI 提示模板（8 个 `.prompt.md` 文件），非源码文件 |
-| **禁止** | `Properties/`·`Models/`·`Services/`·`Helpers/`·`Utils/` 等子目录。新增子目录须在本表注册 |
+| **默认扁平** | 所有 `.cs` 文件在项目根目录。30/36 项目遵循（6 个项目有已注册子目录）。 |
+| **例外 1** | `AspNetCore/`（PalDDD.Hosting.AspNetCore）— 中间件/端点映射（`RequestDelegate`/`IApplicationBuilder` 类型域与纯 DI 注册分离） |
+| **例外 2** | `.pal/prompts/`（PalDDD.Prompts）— AI 提示模板（9 个 `.prompt.md` 文件），非源码文件 |
+| **例外 3** | `Identity/`·`Logging/`（PalDDD.Core）— ID 生成与日志抽象子域 |
+| **例外 4** | `Logging/`（PalDDD.DependencyInjection）— PalLogger 适配 |
+| **例外 5** | `Converters/`·`Models/`·`Stores/`（PalDDD.PalORM）— 转换器/Row DTO/六 Store |
+| **例外 6** | `Saga/`·`Outbox/`·`Inbox/`（PalDDD.Transactions，2026-08-26 组织重组零破坏拆分，命名空间不变）— 18+5+3 文件 |
+| **禁止** | `Properties/`·`Services/`·`Helpers/`·`Utils/` 等子目录。新增子目录须在本表注册 |
 
-**合规状态**：36 项目仅 2 个例外目录（均为已注册）。0 违规。
+**合规状态**：36 项目 11 个例外目录（均为已注册）。0 违规。
 
 ### 4.8 项目结构自检清单
 
@@ -411,10 +419,10 @@ csproj 只写 `<Project Sdk>` + `<PackageReference Include="..." />`（无 Versi
 | **事件处理器接口** | `PalDDD.Messaging` | `EventHandler.cs`（追加） | 项目根目录 |
 | **Kafka 实现** | `PalDDD.Messaging.Kafka` | `KafkaBroker.cs`（追加） | 项目根目录 |
 | **RabbitMQ 实现** | `PalDDD.Messaging.RabbitMQ` | `RabbitMqBroker.cs`（追加） | 项目根目录 |
-| **Outbox 抽象** | `PalDDD.Transactions` | `Outbox{Name}.cs` | 项目根目录 |
-| **Inbox 抽象** | `PalDDD.Transactions` | `Inbox{Name}.cs` | 项目根目录 |
-| **Saga 组件** | `PalDDD.Transactions` | `Saga{Name}.cs` | 项目根目录 |
-| **后台处理器** | `PalDDD.Transactions` | `{Name}Processor.cs` 或 `PeriodicBackgroundProcessor.cs`（追加） | 项目根目录 |
+| **Outbox 抽象** | `PalDDD.Transactions` | `Outbox{Name}.cs` | `Outbox/` 子目录 |
+| **Inbox 抽象** | `PalDDD.Transactions` | `Inbox{Name}.cs` | `Inbox/` 子目录 |
+| **Saga 组件** | `PalDDD.Transactions` | `Saga{Name}.cs` | `Saga/` 子目录 |
+| **后台处理器** | `PalDDD.Transactions` | `OutboxProcessor.cs`·`InboxProcessor.cs`·`SagaProcessor.cs`（入对应子目录）或 `PeriodicBackgroundProcessor.cs`（留根） | 见左 |
 | **重试/退避策略** | `PalDDD.Transactions` | `RetryBackoffPolicy.cs`（追加）或 `{Name}Policy.cs` | 项目根目录 |
 | **事务配置** | `PalDDD.Transactions` | `TransactionOptions.cs`（追加） | 项目根目录 |
 | **Dapper 存储实现** | `PalDDD.Dapper` | `Dapper{Name}Store.cs` | 项目根目录 |
@@ -435,7 +443,7 @@ csproj 只写 `<Project Sdk>` + `<PackageReference Include="..." />`（无 Versi
 | **DI 注册入口** | 对应项目的 `ServiceCollectionExtensions.cs` | `ServiceCollectionExtensions.cs` 或 `{Adapter}ServiceCollectionExtensions.cs` | 项目根目录 |
 | **Roslyn 分析器** | `PalDDD.Analyzers` | `StrategicDddAnalyzer.cs`（追加） | 项目根目录 |
 | **源码生成器** | `PalDDD.Core.SourceGen` | `{Name}Generator.cs` | 项目根目录 |
-| **日志接口** | `PalDDD.Core` | `IPalLogger.cs` | 项目根目录 |
+| **日志接口** | `PalDDD.Core` | `IPalLogger.cs` | `Logging/` 子目录 |
 | **ID 生成器接口** | `PalDDD.Core` | `IPalIdGenerator.cs` | `Identity/` 子目录 |
 | **压缩器接口** | `PalDDD.Compression` | `ICompressor.cs` | 项目根目录 |
 | **压缩提供器接口** | `PalDDD.Compression` | `ICompressionProvider.cs` | 项目根目录 |
@@ -517,7 +525,7 @@ public sealed class SagaKeyValidationTests { ... }
 
 ### 5.7 架构边界测试
 
-`ArchitectureBoundaryTests.cs`（33 个测试方法）将 ADR 和 Clean Architecture 落地为可执行断言：
+`ArchitectureBoundaryTests.cs`（41 个测试方法 / 89 断言点）将 ADR 和 Clean Architecture 落地为可执行断言：
 
 - 项目引用禁令矩阵（`[Theory]` + InlineData）
 - 源码内容关键字禁令（扫描 `.cs`，过滤注释行）
@@ -801,7 +809,7 @@ bash scripts/verify-conventions.sh
 
 ### 10.6 测试框架规则（TUnit + MTP · 强制）
 
-> **背景**：本框架统一使用 **TUnit 1.65.0**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.2.3**。不使用 VSTest。
+> **背景**：本框架统一使用 **TUnit 1.65.68**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.3.3**。不使用 VSTest。
 
 **硬性规则**（违反导致 `dotnet test` 发现零测试或构建冲突）：
 

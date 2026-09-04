@@ -1,7 +1,8 @@
 # Pal.DDD .NET 11 迁移追踪
 
 > 更新日期：2026-06-28 · 测试基线同步：2026-07-01 | 分支：`refactor/net11-migration-tdd` | TDD 驱动，零警告红线
-> 测试状态：迁移当时 705 passed / 0 failed / 6 skipped；2026-07-01 最新基线 745 passed, 2 failed, 6 skipped（含 Outbox 取消语义测试 ITM-048 修正后由 137 增至 138）
+> ⚠️ **历史追踪文档**（记录迁移时点状态；当前基线以 README/CHANGELOG 为准——2026-09-04 面板 1202 项）
+> 测试状态：迁移当时 705 passed / 0 failed / 6 skipped；2026-07-01 时点基线 745 passed, 2 failed, 6 skipped（含 Outbox 取消语义测试 ITM-048 修正后由 137 增至 138）
 
 ## 一、概述
 
@@ -24,7 +25,7 @@
 | **Runtime Async V2** | `Directory.Build.props` → `<Features>runtime-async=on</Features>` | 运行时管理的 async 状态机，深度 async 链（Saga/Outbox/Inbox）栈帧减少 ~60% | `DotNet11MigrationTests.RuntimeSupportsAsyncV2` |
 | **AOT OptimizationPreference=Speed** | `Directory.Build.props` → `<OptimizationPreference>Speed</OptimizationPreference>` | AOT 编译优先速度优化，对吞吐敏感的并发路径关键 | `DotNet11MigrationTests.AotCompatibility` |
 | **StackTraceLineNumberSupport** | `Directory.Build.props` → `<StackTraceLineNumberSupport>true</StackTraceLineNumberSupport>` | AOT 场景保留异常行号，生产诊断必需 | 构建验证 |
-| **SDK 11.0.100-preview.5** | `global.json` → `version=11.0.100-preview.5.26302.115`, `rollForward=latestMajor` | 所有 .NET 11 SDK 工具链 | 构建验证 |
+| **SDK 11.0.100-preview.5**（迁移时点；当前 global.json 已升至 preview.7，见 ITM-060 注释） | `global.json` → `rollForward=latestMajor` | 所有 .NET 11 SDK 工具链 | 构建验证 |
 | **net11.0 TFM** | `Directory.Build.props` → `<TargetFramework>net11.0</TargetFramework>` | 统一目标框架 | `DotNet11MigrationTests.TargetFrameworkMatches` |
 | **框架引用 NU1510 移除** | 9 个 csproj 文件 | .NET 11 自动提供 `Microsoft.Extensions.*` 包 | `DotNet11MigrationTests.FrameworkReferencesRemoved` |
 

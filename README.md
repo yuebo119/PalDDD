@@ -377,7 +377,7 @@ services.AddPalSaga<OrderSagaState, OrderSaga>();
 using PalDDD.Core;
 
 // ✅ DomainEvent foreach — ref struct 枚举器，零堆分配
-foreach (var e in aggregate.Root.GetEvents())  // DomainEventEnumerable: ref struct
+foreach (var e in aggregate.DomainEvents())  // DomainEventEnumerable: ref struct
     await handler(e, ct);
 
 // ✅ FrozenDictionary 查找 — O(1) 零反射
@@ -422,7 +422,7 @@ var dispatcher = host.Services.GetRequiredService<Dispatcher>();
 
 ### 8. Bounded Context 隔离：编译期标记 + 分析器强制
 
-PalDDD 用 `[BoundedContext]` 标记聚合根归属，PDDD010 分析器强制 ProcessManager/Saga 必须声明所属上下文——防止跨领域边界的非法引用。
+PalDDD 用 `[BoundedContext]` 标记聚合根归属：PDDD001（Error）强制 ProcessManager/Saga 必须声明所属上下文，PDDD003（Error）拦截不合规的标注形状——防止跨领域边界的非法引用。
 
 ```csharp
 // ✅ 聚合根标注 BoundedContext — 分析器知道它属于哪个领域
@@ -432,12 +432,12 @@ public sealed class Order : AggregateRoot<OrderId> { ... }
 [BoundedContext("inventory")]
 public sealed class StockItem : AggregateRoot<StockItemId> { ... }
 
-// ✅ ProcessManager 必须标注 BoundedContext — PDDD010 编译错误
+// ✅ ProcessManager 必须标注 BoundedContext — PDDD001 编译错误
 [BoundedContext("ordering")]
 public sealed class OrderingSaga : Saga<OrderingState> { ... }
 
 // ❌ 忘记标注 — 编译直接报错
-public sealed class OrderingSaga : Saga<OrderingState> { ... }  // PDDD010
+public sealed class OrderingSaga : Saga<OrderingState> { ... }  // PDDD001
 ```
 
 ### 9. 多租户：编译期注入租户过滤，零运行时开销
@@ -480,9 +480,10 @@ public sealed record OrderCreatedV2(Ulid OrderId, string Name, decimal Amount, s
 
 // 注册 Upcaster — V1 自动升级为 V2，消费者只处理 V2
 services.AddPalMessageContractVerification(builder => builder
-    .FromV1<OrderCreatedV1>()
-    .ToV2<OrderCreatedV2>(v1 => new OrderCreatedV2(v1.OrderId, v1.Name, v1.Amount, "default-address"))
-    .Build());
+    .Add<OrderCreatedV1, OrderCreatedV2>(
+        OrderCreatedV1JsonTypeInfo, OrderCreatedV2JsonTypeInfo,
+        v1 => new OrderCreatedV2(v1.OrderId, v1.Name, v1.Amount, "default-address"),
+        sourceSchemaVersion: 1, targetSchemaVersion: 2));
 
 // 启动时自动验证契约完整性 — 缺少升级路径直接报错（Fail Fast）
 ```
@@ -496,18 +497,17 @@ EventLog 提供事件溯源的核心存储——命名流（Named Stream）+ 乐
 services.AddPalOrmPostgreSql(connectionString);
 // EventLog 自动可用：PalOrmEventLog<PostgreSqlProvider>
 
-// 追加事件（乐观并发 — expectedVersion 冲突时抛 ConcurrencyException）
-await eventLog.AppendAsync("order-01HXY...", expectedVersion: 3, new[]
+// 追加事件（乐观并发 — 版本冲突时抛 EventStreamConcurrencyException；期望版本经工厂构造，无 int 隐式转换）
+await eventLog.AppendAsync("order-01HXY...", ExpectedStreamVersion.Exact(3), new[]
 {
     new EventData(OrderCreatedJsonTypeInfo, messageId, payload)
 }, ct);
 
-// 读取事件流
-var events = await eventLog.ReadAsync("order-01HXY...", ct);
+// 读取事件流（IAsyncEnumerable — await foreach 消费）
+await foreach (var e in eventLog.ReadStreamAsync("order-01HXY...", ct)) { ... }
 
-// 全局单调递增位置 — 用于 Projection 断点续传
-var position = await eventLog.ReadAllAsync(checkpoint, ct);
-// 每条事件携带全局递增 Position → Projection 只需记录最后处理的位置
+// 全局顺序读取（IAsyncEnumerable — 每条事件携带全局递增 Position，Projection 记录最后处理位置即可断点续传）
+await foreach (var e in eventLog.ReadAllAsync(checkpoint, ct)) { ... }
 ```
 
 ### 12. Projection 断点续传：从 EventLog 全量重放重建读模型
@@ -543,11 +543,11 @@ await projectionRebuilder.RebuildAsync(ct);
 PalDDD 在所有关键路径内置了 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（21 个遥测 instrument，v72 勘正计数）——不需要手写埋点。
 
 ```csharp
-// 框架自动埋点：
-// - Dispatcher.SendAsync → Activity "PalDDD.CQRS.Dispatch"
-// - OutboxProcessor → Counter "palddd.outbox.processed" / "palddd.outbox.failed"
-// - SagaProcessor → Activity "PalDDD.Saga.Execute" + "PalDDD.Saga.Compensate"
-// - IdempotencyProcessor → Counter "palddd.idempotency.executed" / "palddd.idempotency.cached"
+// 框架自动埋点（Activity 名为语义短名；Counter 统一 paldd. 前缀——4 个字母 p-a-l-d-d）：
+// - Dispatcher.SendAsync → Activity "Command Dispatch"
+// - OutboxProcessor → Activity "Outbox Process" + Counter "paldd.outbox.processed" / "paldd.outbox.failed"
+// - SagaProcessor → Activity "Saga Transition"
+// - IdempotencyProcessor → Activity "Idempotency Execute" + Counter "paldd.idempotency.executed" / "paldd.idempotency.cached"
 
 // 你的 OpenTelemetry 配置只需引用 Activity Source：
 services.AddOpenTelemetry()
@@ -676,7 +676,7 @@ src/                         36 源项目 · Clean Architecture（Folder 与 Pal
 ├── Hosting/                 DependencyInjection · Hosting.AspNetCore
 └── Metapackages/            Base · Extension · Prompts（Prompts 非包，IsPackable=false）
 
-test/                        16 测试项目（TUnit）· 1000+ 测试（15 项目无 Docker 本地全跑 + PalORM.Tests 需 Docker/CI——v72 统一口径）
+test/                        16 测试项目（TUnit）· 1202 项实测（本机 1153 + 49 环境依赖项 CI Testcontainers——PalORM.Tests 与 Messaging.Integration.Tests 需 Docker）
 bench/                       BenchmarkDotNet 性能基准
 samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi · AotSample
 docs/                        架构 · 使用指南 · 教程 · ADR
@@ -751,7 +751,7 @@ MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Servi
 不支持 .NET 8/9/10（单目标 net11.0）。Saga 的 ChildSaga 和 DynamicStep 依赖 `MakeGenericType`，在 AOT 发布时不可用（标注了 `[RequiresDynamicCode]`）。不含内置的 EventStore 快照机制——需要快照策略的项目需要自行实现。
 
 **生产环境有谁在用？**
-Pal.DDD 当前版本 v2.1.0（tag v2.1.0 发布；七十四轮全仓评审清偿后 CI 全绿）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 1000+ 用例（16 项目其中 PalORM.Tests 需 Docker——与上方口径统一，v72）+ 41 Testcontainers 真库集成（CI）。欢迎在非生产环境中试用并反馈。
+Pal.DDD 当前版本 v2.1.0（tag v2.1.0 发布；七十四轮全仓评审清偿后 CI 全绿）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 1202 项实测用例（16 项目：本机 1153 通过 + 49 环境依赖项由 CI Testcontainers 权威执行——v2.1.0 实测口径）。欢迎在非生产环境中试用并反馈。
 
 ---
 
