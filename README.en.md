@@ -403,8 +403,9 @@ public sealed partial class OrderStatus : SmartEnum<OrderStatus, string>
 
 var status = OrderStatus.FromValue("pending");  // TValue=string, so FromValue's argument type is string
 
-// AllocationContractTests verify (not claim):
-// RaiseEvent < 130B/iter | foreach < 100B | FrozenDictionary < 100B
+// Real AllocationContractTests assertion set (not claims):
+// single event append ≤130B/iter (measured ~120B, budget with headroom) | foreach enumeration ≤100B
+// | multiple appends without List reallocation | ClearDomainEvents zero-alloc | ValueObject Create zero-heap-alloc
 ```
 
 ### 7. InMemory Testing: Full-Pipeline Coverage With Zero External Dependencies
@@ -801,7 +802,7 @@ It relies on .NET 11 static features (JsonSerializerContext source-generation en
 If you need Native AOT deployment (microservices, CLI tools, edge computing) → choose **PalORM** (recommended, source generation + compile-time SQL, true AOT). If you are maintaining existing hand-written Dapper SQL code → choose Dapper (⚠️ AOT facade, being deprecated). The EF Core adapter is for Repository/Outbox/Inbox/Saga DbContext scenarios. The three can be mixed in the same project — for example, PalORM for the write path (Outbox/Saga) and EF Core for the read path (Projection).
 
 **What are the known limitations?**
-Does not support .NET 8/9/10 (single target net11.0). Saga's ChildSaga and DynamicStep rely on `MakeGenericType`, which is unavailable in AOT publishing (annotated with `[RequiresDynamicCode]`). No built-in EventStore snapshot mechanism — projects that need a snapshot strategy must implement it themselves.
+Does not support .NET 8/9/10 (single target net11.0). Three AOT limitations (honestly declared via source `[RequiresDynamicCode]`): ① Saga ChildSaga child-flow dispatch (`MakeGenericMethod`/`MakeGenericType`, see `Saga.cs`) and ② dynamic event routing share the same root; ③ `ISpecification.Compile()` expression-tree compilation is unsupported under Native AOT — in AOT scenarios use `ToExpression()` and pass it to your query provider instead. No built-in EventStore snapshot mechanism — projects that need a snapshot strategy must implement it themselves.
 
 **Who is using it in production?**
 Pal.DDD is currently at version v2.1.0 (tag v2.1.0 published; CI green after 74 rounds of full-repo review clearance). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with test coverage of 1202 measured cases (16 projects: 1153 local + 49 environment-dependent executed by CI Testcontainers — v2.1.0 measured baseline). You are welcome to try it in non-production environments and provide feedback.

@@ -400,8 +400,9 @@ public sealed partial class OrderStatus : SmartEnum<OrderStatus, string>
 
 var status = OrderStatus.FromValue("pending");  // TValue=string，FromValue 实参为 string
 
-// AllocationContractTests 验证（非声称）：
-// RaiseEvent < 130B/iter | foreach < 100B | FrozenDictionary < 100B
+// AllocationContractTests 真实断言集（非声称）：
+// 追加单事件 ≤130B/iter（实测 ~120B，预算含余量）| foreach 枚举 ≤100B
+// | 多次追加无 List 重分配 | ClearDomainEvents 零分配 | ValueObject Create 零堆分配
 ```
 
 ### 7. InMemory 测试：零外部依赖覆盖全链路
@@ -800,7 +801,7 @@ MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Servi
 如果需要 Native AOT 部署（微服务、CLI 工具、边缘计算）→ 选 **PalORM**（推荐，源生成 + 编译期 SQL，真 AOT）。如果维护已有 Dapper 手写 SQL 代码 → 选 Dapper（⚠️ AOT 假象，逐步弃用）。EF Core 适配器用于 Repository/Outbox/Inbox/Saga 的 DbContext 场景。三者可以在同一个项目中混用——例如 PalORM 做写路径（Outbox/Saga），EF Core 做读路径（Projection）。
 
 **有哪些已知限制？**
-不支持 .NET 8/9/10（单目标 net11.0）。Saga 的 ChildSaga 和 DynamicStep 依赖 `MakeGenericType`，在 AOT 发布时不可用（标注了 `[RequiresDynamicCode]`）。不含内置的 EventStore 快照机制——需要快照策略的项目需要自行实现。
+不支持 .NET 8/9/10（单目标 net11.0）。AOT 场景三处限制（源码 `[RequiresDynamicCode]` 诚实声明）：① Saga 的 ChildSaga 子流程分发（`MakeGenericMethod`/`MakeGenericType`，见 `Saga.cs`）与②动态事件路由同源；③ `ISpecification.Compile()` 表达式树编译在 Native AOT 下不受支持——AOT 场景请改用 `ToExpression()` 传给查询提供者。不含内置的 EventStore 快照机制——需要快照策略的项目需要自行实现。
 
 **生产环境有谁在用？**
 Pal.DDD 当前版本 v2.1.0（tag v2.1.0 发布；七十四轮全仓评审清偿后 CI 全绿）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 1202 项实测用例（16 项目：本机 1153 通过 + 49 环境依赖项由 CI Testcontainers 权威执行——v2.1.0 实测口径）。欢迎在非生产环境中试用并反馈。
