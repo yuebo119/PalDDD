@@ -186,7 +186,7 @@ public sealed class Order : AggregateRoot<OrderId>
 
     public static Order Create(string name, decimal amount)
     {
-        var order = new Order();
+        var order = new Order(OrderId.New());   // AggregateRoot<TId> has only protected ctor(TId) — Id is read-only, fixed at construction
         order.RaiseEvent(new OrderCreated(order.Id, name, amount));
         return order;
     }
