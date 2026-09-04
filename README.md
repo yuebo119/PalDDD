@@ -18,8 +18,6 @@ Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox
 
 ---
 
----
-
 ## 核心价值
 
 ### DDD 战术模式完整落地
@@ -246,8 +244,9 @@ services.AddPalOrmSqlite(connectionString);    // 或 PostgreSql / MySql
 // 4. 注册 Outbox（事务内原子写入消息行 + 后台轮询发布）
 services.AddPalOutbox();
 
-// 5. 分发命令
-var dispatcher = provider.GetRequiredService<Dispatcher>();
+// 5. 分发命令（⚠️ Handler 注册由 Host 驱动——HandlerRegistrar 在 Host 启动时扫描注册；
+//    宿主应用用 builder.Services 注册 + app 启动后正常分发。裸 ServiceCollection 直取
+//    Dispatcher 调 SendAsync 会抛 HandlerNotFound——完整可运行示例见教程 §3）
 var orderId = await dispatcher.SendAsync(new CreateOrder("Alice", 99.9m));
 ```
 
@@ -606,6 +605,7 @@ services.AddPalOutbox();  // MediatR 没有的能力
 | **Inbox** | `(ConsumerName, MessageId)` 复合唯一约束，四态生命周期（Pending → Processing → Processed/Failed），僵尸记录超时回收 |
 | **Saga** | 显式状态/事件转换注册 → FrozenDictionary 查找，可配置重试+退避，Backward/Forward/None 三种补偿策略，超时检测后台服务（含 AwaitingHumanDecision 中断态兜底扫描），人工审批中断+恢复 |
 | **EventLog** | 命名流 + 乐观并发（ExpectedStreamVersion），全局单调递增位置，`RehydrateFromBytes` 零拷贝读取路径 |
+| **Idempotency** | `(OperationName, Key)` 幂等执行 + 结果 payload 缓存（Executed/Cached/Skipped 三态），**Revision CAS 令牌**防 Completed 翻转后副作用重执行（v2.1.0），过期记录可回收重建 |
 | **Projection** | `IProjectionCheckpointStore` 断点存储，`EventLogReplaySource<T>` 全量重放，独立于存储适配器 |
 
 ### 持久化适配器
@@ -619,8 +619,9 @@ services.AddPalOutbox();  // MediatR 没有的能力
 | 方言 | 特有能力 |
 |------|---------|
 | PostgreSQL | COPY 批量写入、Pipeline 单往返批处理、LISTEN/NOTIFY 事件推送、一致性哈希分片、JSONB 操作符、软删除、审计日志 |
-| MySQL | 多主机故障转移（FailOver/RoundRobin/LeastConnections）、InnoDB 会话调优（锁超时、隔离级别、SQL 模式）、连接池会话保活取舍（ConnectionReset=false） |
+| MySQL | 多主机故障转移（FailOver/RoundRobin/LeastConnections，显式 LoadBalance 冲突 fail-fast）、InnoDB 会话调优（锁超时、隔离级别、SQL 模式）、连接池会话保活取舍（ConnectionReset=false） |
 | SQLite | WAL 模式 + PRAGMA 优化（三级调优）、FTS5 全文搜索、JSON1 函数 |
+| 三方言共同 | 连接串配置期 fail-fast：IPv6 四象限校验（方括号/裸形态）、内嵌端口语法拦截、主机列表空条目/重复条目检测——配置错误在注册期暴露，不延迟到建连（v2.1.0） |
 
 ---
 
@@ -704,15 +705,6 @@ flowchart TB
     PalORM --> SQLite
 ```
 
-## AI 质量系统（.ai）
-
-- ① `.ai/` 是独立 git 仓库（本仓库 .gitignore 有意排除，clone 不含）。
-- ② 获取：本仓库维护或向 .ai 独立仓库拉取；安装路径见 `.ai/system-template/INSTALL.md`（v2：以现行 .ai 为源）。
-- ③ CI 在无 .ai 时自动降级为根 scripts/gate-check.sh（G1-G3 快速门禁）。
-- ④ 本地运行入口：`bash .ai/scripts/verify-ai-system.sh` / `gate-check.sh` / `tech-debt-scan.sh`（22 类）。
-
----
-
 ## 文档
 
 | 文档 | 说明 |
@@ -720,10 +712,15 @@ flowchart TB
 | [架构说明](docs/architecture.md) | 分层、依赖方向、项目职责 |
 | [使用指南](docs/usage.md) | 各组件完整代码示例 |
 | [教程](docs/tutorial.md) | 从零构建 DDD 应用 |
+| [PalORM 适配层](docs/palorm-adapter.md) | 六 Store/固化类/Row DTO 与 PalORM 的映射 |
 | [工程规范](docs/conventions.md) | 命名、文件组织、DI、AOT |
 | [AOT 指南](docs/aot.md) | Native AOT 规则与检查清单 |
 | [性能记录](docs/performance.md) | 基准测试数据 |
+| [测试体系](docs/testing.md) | 测试金字塔、场景矩阵、BenchmarkDotNet 配置 |
+| [发布规范](docs/release.md) | 版本管理、包范围、CHANGELOG 规范与生成流程 |
+| [踩坑目录](docs/pitfalls.md) | 82 条 DDD/AOT/并发实战踩坑 |
 | [架构决策](docs/decisions/) | 21 份 ADR |
+| [变更日志](CHANGELOG.md) | 版本历史（消费者变更 + 工程过程附录） |
 
 ---
 
@@ -757,7 +754,7 @@ Pal.DDD 当前版本 v2.1.0（tag v2.1.0 发布；七十四轮全仓评审清偿
 
 ## AI 辅助开发质量系统
 
-本仓库内嵌 `.ai/` 目录（独立 git 仓库），包含一套完整的 AI 编码质量防线：
+本仓库内嵌 `.ai/` 目录（**独立 git 仓库**——本仓库 .gitignore 有意排除，clone 不含；获取方式见 `.ai/system-template/INSTALL.md`；CI 在无 .ai 时自动降级为根 `scripts/gate-check.sh`），包含一套完整的 AI 编码质量防线（v2.1，本地运行入口 `bash .ai/scripts/verify-ai-system.sh`）：
 
 | 防线 | 作用 |
 |------|------|
@@ -770,7 +767,7 @@ Pal.DDD 当前版本 v2.1.0（tag v2.1.0 发布；七十四轮全仓评审清偿
 | `dialect-probe.sh` | 方言实测探针（PG/MySQL 40 断言，CI 路径触发） |
 | `ci-failed-tests.py` | CI 失败自诊断三通道注解（公开 API 可读） |
 
-详见 `.ai/README.md`（四系统一个入口 + 统一质量体系 v2.0）。
+详见 `.ai/README.md`（四系统一个入口 + 统一质量体系 v2.1）。
 
 ---
 

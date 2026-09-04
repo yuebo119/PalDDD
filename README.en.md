@@ -18,8 +18,6 @@ Out of the box: **zero-reflection command dispatch · lease-lock concurrent Outb
 
 ---
 
----
-
 ## Core Values
 
 ### Complete Implementation of DDD Tactical Patterns
@@ -246,8 +244,10 @@ services.AddPalOrmSqlite(connectionString);    // or PostgreSql / MySql
 // 4. Register the Outbox (atomic message row write within the transaction + background polling publisher)
 services.AddPalOutbox();
 
-// 5. Dispatch the command
-var dispatcher = provider.GetRequiredService<Dispatcher>();
+// 5. Dispatch the command (⚠️ Handler registration is Host-driven — HandlerRegistrar scans and
+//    registers handlers at Host startup; register via builder.Services and dispatch after app start.
+//    Fetching the Dispatcher from a bare ServiceCollection and calling SendAsync throws
+//    HandlerNotFound — see the Chinese tutorial §3 for a complete runnable example)
 var orderId = await dispatcher.SendAsync(new CreateOrder("Alice", 99.9m));
 ```
 
@@ -598,6 +598,7 @@ services.AddPalOutbox();  // A capability MediatR lacks
 | **Inbox** | `(ConsumerName, MessageId)` composite unique constraint, four-state lifecycle (Pending → Processing → Processed/Failed), zombie record timeout reclaim |
 | **Saga** | Explicit state/event transition registration → FrozenDictionary lookup, configurable retry+backoff, Backward/Forward/None compensation strategies, timeout detection background service (including AwaitingHumanDecision interrupted-state fallback scanning), manual approval interrupt+resume |
 | **EventLog** | Named streams + optimistic concurrency (ExpectedStreamVersion), global monotonically increasing position, `RehydrateFromBytes` zero-copy read path |
+| **Idempotency** | `(OperationName, Key)` idempotent execution + result payload caching (Executed/Cached/Skipped), **Revision CAS token** prevents side-effect re-execution after Completed flip (v2.1.0), expired records reclaimable |
 | **Projection** | `IProjectionCheckpointStore` checkpoint persistence, `EventLogReplaySource<T>` full replay, independent of the storage adapter |
 
 ### Persistence Adapters
@@ -611,8 +612,9 @@ services.AddPalOutbox();  // A capability MediatR lacks
 | Dialect | Unique Capabilities |
 |------|---------|
 | PostgreSQL | COPY bulk write, Pipeline single-round-trip batching, LISTEN/NOTIFY event push, consistent-hashing sharding, JSONB operators, soft delete, audit log |
-| MySQL | Multi-host failover (FailOver/RoundRobin/LeastConnections), InnoDB session tuning (lock timeout, isolation level, SQL mode), connection-pool session survival guidance (ConnectionReset=false) |
+| MySQL | Multi-host failover (FailOver/RoundRobin/LeastConnections, explicit LoadBalance conflict fail-fast), InnoDB session tuning (lock timeout, isolation level, SQL mode), connection-pool session survival guidance (ConnectionReset=false) |
 | SQLite | WAL mode + PRAGMA optimization (three-tier tuning), FTS5 full-text search, JSON1 functions |
+| All three dialects | Connection-string fail-fast at registration time: IPv6 four-quadrant validation (bracketed/bare forms), embedded-port syntax interception, blank/duplicate host-list entry detection — config errors surface at registration, not at connection time (v2.1.0) |
 
 ---
 
@@ -706,10 +708,15 @@ flowchart TB
 | [Architecture](docs/architecture.md) | Layering, dependency direction, project responsibilities |
 | [Usage Guide](docs/usage.md) | Complete code examples for each component |
 | [Tutorial](docs/tutorial.md) | Build a DDD application from scratch |
+| [PalORM Adapter](docs/palorm-adapter.md) | Six Stores / fixed classes / Row DTO mapping to PalORM |
 | [Engineering Conventions](docs/conventions.md) | Naming, file organization, DI, AOT |
 | [AOT Guide](docs/aot.md) | Native AOT rules and checklist |
 | [Performance Records](docs/performance.md) | Benchmark data |
+| [Testing](docs/testing.md) | Test pyramid, scenario matrix, BenchmarkDotNet config |
+| [Release SOP](docs/release.md) | Versioning, package scope, CHANGELOG conventions & workflow |
+| [Pitfalls](docs/pitfalls.md) | 82 real-world DDD/AOT/concurrency pitfalls |
 | [Architecture Decisions](docs/decisions/) | 21 ADRs |
+| [Changelog](CHANGELOG.md) | Version history (consumer-facing changes + engineering appendix) |
 
 ---
 
@@ -743,7 +750,7 @@ Pal.DDD is currently at version v2.1.0 (tag v2.1.0 published; CI green after 74 
 
 ## AI-Assisted Development Quality System
 
-This repository embeds a `.ai/` directory (separate git repository) containing a comprehensive AI coding quality defense system:
+This repository embeds a `.ai/` directory (**separate git repository** — intentionally excluded via .gitignore, not present on clone; see `.ai/system-template/INSTALL.md` for acquisition; CI degrades to root `scripts/gate-check.sh` when absent) containing a comprehensive AI coding quality defense system (v2.1):
 
 | Defense | Purpose |
 |---------|---------|
