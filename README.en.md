@@ -345,7 +345,7 @@ services.AddPalOrmPostgreSql(connectionString);
 // → COPY bulk write
 // → Source generator auto-generates Row DTO materialization code
 
-// ⚠️ Dapper — AOT facade ([module:DapperAot] is actually disabled, NoWarn IL3058)
+// ⚠️ Dapper — AOT facade ([module:DapperAot] not enabled, runtime takes the classic reflection path; NoWarn IL3058 declaration-level)
 // Use only to maintain existing Dapper code; new projects should use PalORM
 ```
 
@@ -632,8 +632,8 @@ services.AddPalOutbox();  // A capability MediatR lacks
 | Component | Implementation Strategy |
 |------|---------|
 | Entity / AggregateRoot | Singly-linked-list event storage, supports zero-allocation `foreach` enumeration, thread-safe event collection |
-| DomainEvent | Immutable sealed record, static `EventName` contract, `[GenerateMessage]` source-generated registration |
-| ValueObject / SmartEnum | Strongly-typed IDs (Ulid recommended), FrozenDictionary O(1) lookup |
+| DomainEvent | abstract base class + user-side `sealed` declarations (enforced by PDDD012), `static abstract EventName` compile-time contract (PDDD015 enforces consistency with `[GenerateMessage].Name`) |
+| IValueObject / SmartEnum | Value-object abstraction (`IValueObject` structural equality, retained per ADR-003); `SmartEnum<TSelf,TValue>` FrozenDictionary O(1) FromValue (strongly-typed IDs go through the `[GenerateId]` source generator) |
 | ISpecification | ExpressionVisitor parameter substitution composes And/Or/Not, fully compatible with EF Core LINQ |
 | Diagnostics | Built-in `PalActivitySource` (11 Start methods) + `PalMetrics` (21 telemetry instruments) |
 
@@ -656,7 +656,7 @@ services.AddPalOutbox();  // A capability MediatR lacks
 |------|---------|
 | **Outbox** | Atomic message row write within the DB transaction, lease lock + token fencing ((LockedBy, LockedUntil) full-match rejects stale workers; LockedUntil monotonic, no DDL) for multi-instance concurrent publishing, exponential backoff retry, dead-letter queue + operation re-injection |
 | **Inbox** | `(ConsumerName, MessageId)` composite unique constraint, four-state lifecycle (Pending → Processing → Processed/Failed), zombie record timeout reclaim |
-| **Saga** | Explicit state/event transition registration → FrozenDictionary lookup, configurable retry+backoff, Backward/Forward/None compensation strategies, timeout detection background service (including AwaitingHumanDecision interrupted-state fallback scanning), manual approval interrupt+resume |
+| **Saga** | Explicit state/event transition registration → FrozenDictionary lookup, configurable retry+backoff, None/Backward/Forward compensation strategies (**compensation scope and order follow the execution sequence via ExecutedStepKeys, not registration order**), timeout detection background service (including AwaitingHumanDecision interrupted-state fallback scanning), manual approval interrupt+resume |
 | **EventLog** | Named streams + optimistic concurrency (ExpectedStreamVersion), global monotonically increasing position, `RehydrateFromBytes` zero-copy read path |
 | **Idempotency** | `(OperationName, Key)` idempotent execution + result payload caching (Executed/Cached/Skipped), **Revision CAS token** prevents side-effect re-execution after Completed flip (v2.1.0), expired records reclaimable |
 | **Projection** | `IProjectionCheckpointStore` checkpoint persistence, `EventLogReplaySource<T>` full replay, independent of the storage adapter |
@@ -665,13 +665,13 @@ services.AddPalOutbox();  // A capability MediatR lacks
 | Adapter | AOT | Database | Coverage |
 |--------|:--:|:--:|------|
 | **PalDDD.PalORM** | ✅ **True AOT** | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / **Idempotency** / UnitOfWork (source generation + compile-time SQL, [see adapter docs](docs/palorm-adapter.md)) |
-| PalDDD.Dapper | ⚠️ Facade | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / UnitOfWork (`[module:DapperAot]` actually disabled, relies on NoWarn IL3058 to declare compatibility) |
+| PalDDD.Dapper | ⚠️ Facade | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / UnitOfWork (`[module:DapperAot]` **not enabled** — runtime takes the classic reflection path; AOT compatibility is declaration-level only, see [aot.md](docs/aot.md); ADR-020 retirement roadmap) |
 | ~~PalDDD.EntityFrameworkCore~~ | ❌ | ~~PG / MySQL / SQLite~~ | ~~Deprecated, source not committed (OBS-068), replaced by PalORM~~ |
 
 ### Database Dialect Extensions
 | Dialect | Unique Capabilities |
 |------|---------|
-| PostgreSQL | COPY bulk write, Pipeline single-round-trip batching, LISTEN/NOTIFY event push, consistent-hashing sharding, JSONB operators, soft delete, audit log |
+| PostgreSQL | **Multi-host failover** (Failover primary/standby merge) and **read/write splitting** (ReadWriteRouter dual data sources: writes to primary + load-balanced replica reads), COPY bulk write, Pipeline single-round-trip batching, LISTEN/NOTIFY event push, consistent-hashing sharding, JSONB operators, soft delete, audit log |
 | MySQL | Multi-host failover (FailOver/RoundRobin/LeastConnections, explicit LoadBalance conflict fail-fast), InnoDB session tuning (lock timeout, isolation level, SQL mode), connection-pool session survival guidance (ConnectionReset=false) |
 | SQLite | WAL mode + PRAGMA optimization (three-tier tuning), FTS5 full-text search, JSON1 functions |
 | All three dialects | Connection-string fail-fast at registration time: IPv6 four-quadrant validation (bracketed/bare forms), embedded-port syntax interception, blank/duplicate host-list entry detection — config errors surface at registration, not at connection time (v2.1.0) |
@@ -685,7 +685,7 @@ services.AddPalOutbox();  // A capability MediatR lacks
 | PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` globally inherited |
 | PalDDD.CQRS · EventLog · Messaging · Projections · DI | ✅ | Same as above |
 | **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **True AOT** | Source-generated RowFactory/CommandFactory, `PublishAot=true` verification passed ([PalOrmSample](samples/PalDDD.PalOrmSample/)) |
-| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ⚠️ Facade | Dapper.AOT `[module:DapperAot]` actually disabled, relies on `<NoWarn>IL3058</NoWarn>` to declare compatibility (see [PalORM adapter docs](docs/palorm-adapter.md)) |
+| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ⚠️ Facade | Dapper.AOT `[module:DapperAot]` not enabled — runtime takes the classic reflection path; `<NoWarn>IL3058</NoWarn>` is declaration-level only (see [AOT guide](docs/aot.md) and [PalORM adapter docs](docs/palorm-adapter.md)) |
 | PalDDD.Transactions | ❌ | Saga reflection exception (`IsAotCompatible=false`, see csproj) |
 | ~~PalDDD.EntityFrameworkCore~~ | ❌ | ~~Deprecated~~ |
 | PalDDD.Messaging.Kafka · RabbitMQ | ❌ | Confluent.Kafka / RabbitMQ.Client limitations |
