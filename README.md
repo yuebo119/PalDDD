@@ -752,25 +752,6 @@ Pal.DDD 当前版本 v2.1.0（tag v2.1.0 发布；七十四轮全仓评审清偿
 
 ---
 
-## AI 辅助开发质量系统
-
-本仓库内嵌 `.ai/` 目录（**独立 git 仓库**——本仓库 .gitignore 有意排除，clone 不含；获取方式见 `.ai/system-template/INSTALL.md`；CI 在无 .ai 时自动降级为根 `scripts/gate-check.sh`），包含一套完整的 AI 编码质量防线（v2.1，本地运行入口 `bash .ai/scripts/verify-ai-system.sh`）：
-
-| 防线 | 作用 |
-|------|------|
-| `gate-check.sh`（PDDD-G1..G22） | 架构完整性门禁（严格模式） |
-| `verify-ai-system.sh`（V1-V21） | 系统自检（账本校验/修复门/台账超期/进件模板/P3 老化） |
-| `encoding-gate.sh`（E1-E4） | 编码一致性（CRLF/BOM/mojibake/verified LF） |
-| `sibling-map.sh` | 姊妹族枚举（16 族传递闭包）——修复轮联动防线 |
-| `flaky-gate.sh` | 重跑式 flaky 检测（环境隔离 + skipped 分类） |
-| `fix-orchestrator.sh` | 修复轮编排（姊妹联动 + 修复门 + 回归清单） |
-| `dialect-probe.sh` | 方言实测探针（PG/MySQL 40 断言，CI 路径触发） |
-| `ci-failed-tests.py` | CI 失败自诊断三通道注解（公开 API 可读） |
-
-详见 `.ai/README.md`（四系统一个入口 + 统一质量体系 v2.1）。
-
----
-
 ## 许可证
 
 [GNU Affero General Public License v3.0 or later](LICENSE)

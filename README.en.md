@@ -748,25 +748,6 @@ Pal.DDD is currently at version v2.1.0 (tag v2.1.0 published; CI green after 74 
 
 ---
 
-## AI-Assisted Development Quality System
-
-This repository embeds a `.ai/` directory (**separate git repository** — intentionally excluded via .gitignore, not present on clone; see `.ai/system-template/INSTALL.md` for acquisition; CI degrades to root `scripts/gate-check.sh` when absent) containing a comprehensive AI coding quality defense system (v2.1):
-
-| Defense | Purpose |
-|---------|---------|
-| `gate-check.sh` (PDDD-G1..G22) | Architecture integrity gate (strict mode) |
-| `verify-ai-system.sh` (V1-V21) | System self-check (ledger/repair gate/sensor expiry/intake template/P3 aging) |
-| `encoding-gate.sh` (E1-E4) | Encoding consistency (CRLF/BOM/mojibake/verified LF) |
-| `sibling-map.sh` | Sibling family enumeration (16 families transitive closure) — fix-round linkage |
-| `flaky-gate.sh` | Rerun-based flaky detection (env isolation + skipped classification) |
-| `fix-orchestrator.sh` | Fix-round orchestrator (sibling linkage + repair gate + regression checklist) |
-| `dialect-probe.sh` | Dialect live probe (PG/MySQL 40 assertions, CI path-triggered) |
-| `ci-failed-tests.py` | CI failure self-diagnostic 3-channel annotations (publicly readable) |
-
-See `.ai/README.md` for details (four systems, one entry point + unified quality system v2.0).
-
----
-
 ## License
 
 [GNU Affero General Public License v3.0 or later](LICENSE)
