@@ -2,7 +2,7 @@
 
 Pal.DDD 采用小型、显式、AOT 友好的 Clean Architecture 分层架构。
 
-> 🤖 **AI 质量防线**：`.ai/` 目录内嵌统一质量体系 v2.0（姊妹防线/传感器台账/编码门禁/修复编排/flaky 检测），详见 `.ai/README.md`。36 个源项目按依赖方向从 Core 到 Infrastructure/Adapters 逐层排列。项目不是应用框架，而是一组可组合的 DDD/CQRS/消息/事务基础设施库。
+> 🤖 **AI 质量防线**：`.ai/` 目录内嵌统一质量体系 v2.1（姊妹防线/传感器台账/编码门禁/修复编排/flaky 检测），详见 `.ai/README.md`。36 个源项目按依赖方向从 Core 到 Infrastructure/Adapters 逐层排列（分层图见 conventions §4.2，含 Infra-PalORM 第三栈）。项目不是应用框架，而是一组可组合的 DDD/CQRS/消息/事务基础设施库。
 
 ## 分层边界
 
@@ -17,6 +17,10 @@ Infrastructure / Adapters
   PalDDD.Dapper.MySql              -- MySqlDataSource DI + InnoDB 性能优化 + 多主机
   PalDDD.Dapper.PostgreSql         -- NpgsqlDataSource + COPY/JSONB/NOTIFY/Sharding/读写分离
   PalDDD.Dapper.Sqlite             -- SQLite FTS/JSON 扩展 + WAL 优化
+  PalDDD.PalORM                    -- PalORM 统一持久化（六 Store + UnitOfWork + AmbientTransaction，真 AOT 源生成——ADR-020 推荐栈，见 palorm-adapter.md）
+  PalDDD.PalORM.MySql              -- MySQL 方言 DI 固化（BulkCopy/多值 INSERT + 弹性层）
+  PalDDD.PalORM.PostgreSql         -- PostgreSQL 方言 DI 固化（RETURNING/COPY + 弹性层）
+  PalDDD.PalORM.Sqlite             -- SQLite 方言 DI 固化（CI AOT publish 验证载体 PalOrmSample）
   -> PalDDD.Messaging
   -> PalDDD.EventLog
   -> PalDDD.Transactions
@@ -238,13 +242,13 @@ Pal.DDD 已经覆盖 DDD 基础设施的最小闭环：领域模型、领域事�
 
 该包只提供执行模型和内存实现。生产环境应使用外圈持久化 adapter，把 expected version 检查映射为数据库唯一约束、事务隔离或事件存储的 expected revision。
 
-生产事件日志持久化通过可选 `PalDDD.EventLog.EFCore` 包提供 `EventLogDbContext`。它把 `StoredEvent.GlobalPosition` 作为由事件日志分配的稳定主键，关系型 provider 下使用 serializable transaction 保护 `Max + 1` 的 position 分配，并配置 `(StreamName, StreamVersion)` 唯一索引和 `EventId` 唯一索引，持久化 payload、metadata、actor、reason、correlation/causation 和 W3C trace context。核心 `PalDDD.EventLog` 包不依赖 EF Core，durable store 只位于外圈 adapter。
+生产事件日志持久化通过可选 `PalDDD.EventLog.EFCore` 包提供 `EventLogDbContext`。它把 `StoredEvent.GlobalPosition` 作为由事件日志分配的稳定主键；position 分配经 Hi/Lo 段分配器 + CAS（`EventLogPositionReserver`，消除 Serializable 事务瓶颈），append 使用默认隔离级别（ReadCommitted），并配置 `(StreamName, StreamVersion)` 唯一索引和 `EventId` 唯一索引，持久化 payload、metadata、actor、reason、correlation/causation 和 W3C trace context。核心 `PalDDD.EventLog` 包不依赖 EF Core，durable store 只位于外圈 adapter。
 
-EventLog append 通过 `PalActivitySource` 发出 `EventLog Append` activity，包含 stream、event count、stream version range 和 global position range 标签。这些标签用于把命令处理、Outbox 发布、投影重建和事件日志写入串成可追踪链路。
+EventLog append 通过 `PalActivitySource` 发出 `EventLog Append` activity，仅含 `pal.eventlog.event_count` 一个标签（stream/version range/position range 已按 ITM-229 高基数治理移除）。
 
 EventLog append 还会通过 `PalMetrics` 记录 `paldd.eventlog.appended`，用于统计事件日志写入吞吐和审计事件增长趋势。
 
-EventLog read/replay 通过 `EventLog ReadStream` 和 `EventLog ReadAll` activity 覆盖单流回放和全局回放边界，包含起始 stream version / global position 和 read count 标签。投影重建、审计回放和跨上下文诊断可以用这些 span 观察历史事件读取范围。
+EventLog read/replay 通过 `EventLog ReadStream` 和 `EventLog ReadAll` activity 覆盖单流回放和全局回放边界（两个 activity 均无标签——起始位置标签已按 ITM-229 移除）。
 
 EventLog read/replay 还会通过 `PalMetrics` 记录 `paldd.eventlog.read`，用于统计审计回放、投影修复和跨上下文诊断读取吞吐。
 
@@ -282,7 +286,7 @@ Projection rebuild 还会通过 `PalMetrics` 记录 `paldd.projection.replayed`�
 
 `IdempotencyProcessor` 会缓存成功结果 payload，重复请求返回 `Cached`，未完成或已锁定请求返回 `Skipped`。结果序列化由调用方显式提供，避免强绑定某个 serializer。
 
-Command/API idempotency 通过 `PalActivitySource` 发出 `Idempotency Execute` activity，包含 operation name、idempotency key 和 executed / cached / skipped / failed 结果标签。API retry、command dispatch 和最终 Outbox publish 可以在同一个 tracing source 中串联。
+Command/API idempotency 通过 `PalActivitySource` 发出 `Idempotency Execute` activity，包含 operation name 和 executed / cached / skipped / failed 结果标签（idempotency key 已按 ITM-229 高基数治理移除）。API retry、command dispatch 和最终 Outbox publish 可以在同一个 tracing source 中串联。
 
 Command/API idempotency 还会通过 `PalMetrics` 记录 `paldd.idempotency.executed`、`paldd.idempotency.cached`、`paldd.idempotency.skipped` 和 `paldd.idempotency.failed`，用于区分真实执行、缓存命中、活动 lease 跳过和 handler 失败。
 
@@ -298,13 +302,13 @@ Outbox 批处理同时通过 `PalActivitySource` 发出 `Outbox Process` activit
 
 Outbox 批处理还会通过 `PalMetrics` 记录 `paldd.outbox.processed` 与 `paldd.outbox.failed`，使发布吞吐、重试和死信路径可以在不解析日志的情况下被告警和看板聚合。
 
-生产持久化通过可选 `PalDDD.Transactions.EFCore` 包提供 `OutboxDbContext` 和 SQL Server 专用 `SqlServerOutboxDbContext`。通用 base context 负责状态映射、pending 查询过滤、成功/死亡/重试状态转换；SQL Server base context 使用 `UPDLOCK` / `READPAST` 在数据库内原子获取 lease，避免多实例重复发布。核心 `PalDDD.Transactions` 包只依赖 `IPalOutboxStore` 抽象。
+生产持久化通过可选 `PalDDD.Transactions.EFCore` 包提供 `OutboxDbContext` 与四方言 base context（`SqlServerOutboxDbContext`/`PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`，ADR-012）。通用 base context 负责状态映射、pending 查询过滤、成功/死亡/重试状态转换；SQL Server base context 使用 `UPDLOCK` / `READPAST` 在数据库内原子获取 lease，避免多实例重复发布。核心 `PalDDD.Transactions` 包只依赖 `IPalOutboxStore` 抽象。
 
 ### Inbox
 
 `InboxProcessor` 使用 `IInboxStore` 记录 `ConsumerName + MessageId`，通过存储唯一约束提供幂等消费。处理失败后记录 `Failed` 和错误原因，由消息 broker 重投递或 DLQ 策略决定后续处理。
 
-Inbox 幂等消费通过 `PalActivitySource` 发出 `Inbox Process` activity，包含 consumer、message id 和 processed / skipped / failed 结果标签。重复消息、僵尸 processing 超时重入和 handler 失败都可以在同一 tracing source 中与 broker delivery、Outbox publish 和 projection 更新关联。
+Inbox 幂等消费通过 `PalActivitySource` 发出 `Inbox Process` activity，包含 consumer 和 processed / skipped / failed 结果标签（message id 已按 ITM-229 移除）。重复消息、僵尸 processing 超时重入和 handler 失败都可以在同一 tracing source 中与 broker delivery、Outbox publish 和 projection 更新关联。
 
 Inbox 幂等消费还会通过 `PalMetrics` 记录 `paldd.inbox.processed`、`paldd.inbox.skipped` 和 `paldd.inbox.failed`，用于区分真实消费吞吐、重复投递去重效果和 handler 失败率。
 

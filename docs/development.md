@@ -2,6 +2,8 @@
 
 ## 分支模型
 
+分支模型与合并权限见 [`branch-flow.md`](branch-flow.md)（内容已整体迁移）。
+
 ## 环境要求
 
 - .NET SDK 11.0.x (Preview 7+)
@@ -56,7 +58,7 @@ PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests/PalDDD.C
 
 ### 断言强度检查（替代 Stryker 突变测试）
 
-仓库不包含 `stryker-config.json`：Stryker.NET 当前不支持 TUnit/MTP，无法在本仓库运行。突变测试职责已由 `.ai/scripts/assertion-strength-check.sh` 替代（断言强度棘轮，当前 173/173）。
+仓库不包含 `stryker-config.json`：Stryker.NET 当前不支持 TUnit/MTP，无法在本仓库运行。突变测试职责已由 `.ai/scripts/assertion-strength-check.sh` 替代（断言强度棘轮，基线上限 173，2026-09-04 实测当前 166——只减不增）。
 
 - **运行**：
   ```bash
@@ -141,15 +143,10 @@ git diff --check
 
 | 系列 | 生成器 | ID | 含义 |
 |---|---|---|---|
-| PALMSG | MessageRegistryGenerator | PALMSG001-006 | wire name 字符集/格式/版本后缀/schema 版本一致性/泛型声明不支持 |
+| PALMSG | MessageRegistryGenerator | PALMSG001-007 | wire name 字符集/格式/版本后缀/schema 版本一致性/泛型声明不支持/可访问性低于 internal |
 | PALMSG | MessageRegistryGenerator | PALMSG007 | 消息类型可访问性低于 internal（private/protected nested 类型，生成物 catalog 不可见，CS0122） |
-| PALID | IdentityGenerator | PALID001 | [GenerateId] 源类型白名单外（Guid/Ulid/int/long/string） |
-| PALID | IdentityGenerator | PALID002 | 目标声明非 `partial record struct`（无法与生成物合并） |
-| PALID | IdentityGenerator | PALID005 | 源类型为 null 或非命名类型（`typeof(T)`/`typeof(int[])` 等，消息按两种根因区分） |
-| PALID | IdentityGenerator | PALID006 | 目标可访问性低于 internal（private/protected nested 类型，生成物 converter 不可见，CS0122） |
-| PALENUM | EnumGenerator | PALENUM001-003 | SmartEnum 基类校验、字段声明约束、record 声明不支持 |
-| PALENUM | EnumGenerator | PALENUM006 | 目标声明非 partial class（生成物无法合并，CS0260） |
-| PALENUM | EnumGenerator | PALENUM007 | 目标可访问性低于 internal（private/protected nested 类型，生成物注册代码不可见，CS0122） |
+| PALID | IdentityGenerator | PALID001-007 | 001 源类型白名单外（Guid/Ulid/int/long/string）/002 非 partial record struct/003 泛型声明不支持/004 多 partial 声明重复标注特性/005 源类型 null 或非命名类型/006 可访问性低于 internal/007 包含类型非 partial（CS0260） |
+| PALENUM | EnumGenerator | PALENUM001-009 | 001-003 SmartEnum 基类校验/字段声明约束/record 声明不支持/004 泛型声明不支持/005 多 partial 声明重复标注/006 非 partial class/007 可访问性低于 internal/008 目标非 SmartEnum 派生 class/009 包含类型非 partial |
 
 示例：
 

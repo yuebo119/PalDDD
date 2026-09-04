@@ -96,7 +96,7 @@ public sealed partial class OrderStatus : SmartEnum<OrderStatus, int>
 
 ### 消息
 
-`[GenerateMessage]` 用于标记可生成消息目录辅助代码的类型。消息必须声明稳定 wire name；`SchemaVersion` 必须大于等于 1，且同一编译单元中的 wire name 不能重复。稳定 wire name 只允许小写字母、数字、`.` 和 `-`，并且必须以 `.v{SchemaVersion}` 结尾。违反这些规则时，源码生成器会报告 `PALMSG001`、`PALMSG002`、`PALMSG003`、`PALMSG004` 或 `PALMSG005` 编译期错误；消息类型若声明在泛型类型内（含自身带类型参数），会报告 `PALMSG006`。
+`[GenerateMessage]` 用于标记可生成消息目录辅助代码的类型。消息必须声明稳定 wire name；`SchemaVersion` 必须大于等于 1，且同一编译单元中的 wire name 不能重复。稳定 wire name 只允许小写字母、数字、`.` 和 `-`，并且必须以 `.v{SchemaVersion}` 结尾。违反这些规则时，源码生成器会报告 `PALMSG001`-`PALMSG005` 编译期错误；消息类型若声明在泛型类型内（含自身带类型参数）报告 `PALMSG006`；可访问性低于 internal 报告 `PALMSG007`。
 
 领域事件类型必须是 `sealed`，否则 analyzer 会报告 `PDDD012`；领域事件也必须声明 `[GenerateMessage]`，否则 analyzer 会报告 `PDDD005`。这些规则保证 Outbox、broker、EventLog replay 和 schema evolution 不依赖可继承事件层级、CLR 类型名或运行时反射推断消息契约。
 领域事件的 message name 必须是稳定小写 wire name，否则 analyzer 会报告 `PDDD009`。
@@ -169,7 +169,7 @@ PalORM 是面向 Native AOT 的 .NET 11 微 ORM，通过源生成器在编译期
 
 - **PalDDD.PalORM**：核心层，6 Store + UnitOfWork，`IsAotCompatible=true`，`PublishAot=true` 验证通过。
 - **PalDDD.PalORM.Sqlite / PostgreSql / MySql**：方言包，固化 Provider 类型供 DI 注册，`IsAotCompatible=true`。
-- 底层依赖 PalORM 5.3.0（`PalORM.Core` + `PalORM.SourceGen` + 方言 Provider）。
+- 底层依赖 PalORM 5.4.0（`PalORM.Core` + `PalORM.SourceGen` + 方言 Provider，5.4 含弹性层 configureResilience 回调）。
 
 PalORM 是推荐的持久化路径——完整链路 Native AOT 支持，取代 Dapper 的反射路径。
 
@@ -179,7 +179,7 @@ Dapper 适配项目使用项目级 IL3058 抑制（`<NoWarn>$(NoWarn);IL3058</No
 
 **结论**：Dapper 适配层的 AOT 兼容是假象（NoWarn IL3058 声明），不适用于 Native AOT 发布。推荐使用 PalORM 替代。
 
-所有库代码的 await 调用（179 处，三十七轮 ConfigureAwait 全量补齐）均使用 `ConfigureAwait(false)`。所有时间获取（44+ 处）通过 `TimeProvider` 而非 `DateTimeOffset.UtcNow`。
+所有库代码的 await 调用（2026-09-04 实测 443 处；三十七轮起全量补齐后随评审持续增长）均使用 `ConfigureAwait(false)`。所有时间获取通过 `TimeProvider` 而非 `DateTimeOffset.UtcNow`。
 
 ## 检查清单
 

@@ -121,7 +121,7 @@ InMemory implementations cover all abstract interfaces, so unit tests and protot
 
 ---
 
-## NuGet Package List (40 packages)
+## NuGet Package List (35 PalDDD packages + 5 third-party PalORM dependencies)
 
 | Package | Version | Description |
 |------|:--:|------|
@@ -152,7 +152,7 @@ InMemory implementations cover all abstract interfaces, so unit tests and protot
 | **PalDDD.DependencyInjection** | 2.1.0 | DI registration entry point: ServiceRegistration + unified AddPal extensions |
 | **PalDDD.Repository.EFCore** | 2.1.0 | EF Core repository: UnitOfWork + DomainEvent interceptor |
 | **PalDDD.Hosting.AspNetCore** | 2.1.0 | ASP.NET Core integration: exception middleware + health checks + Minimal API endpoints |
-| **PalDDD.PalORM** | 2.1.0 | PalORM persistence core: 7 Store + UnitOfWork (true AOT + source generation) |
+| **PalDDD.PalORM** | 2.1.0 | PalORM persistence core: 6 Store + UnitOfWork (true AOT + source generation) |
 | **PalDDD.PalORM.PostgreSql** | 2.1.0 | PalORM PostgreSQL dialect: RETURNING / COPY |
 | **PalDDD.PalORM.MySql** | 2.1.0 | PalORM MySQL dialect: BulkCopy / multi-value INSERT |
 | **PalDDD.PalORM.Sqlite** | 2.1.0 | PalORM SQLite dialect: FTS5 / JSON1 |
@@ -160,11 +160,11 @@ InMemory implementations cover all abstract interfaces, so unit tests and protot
 | **PalDDD.Dapper.PostgreSql** | 2.1.0 | Dapper PostgreSQL enhancements: audit / JSONB / sharding / soft delete |
 | **PalDDD.Dapper.MySql** | 2.1.0 | Dapper MySQL enhancements |
 | **PalDDD.Dapper.Sqlite** | 2.1.0 | Dapper SQLite enhancements: TypeHandler / RowFactory / FTS5 |
-| **PalORM.Core** | 5.3.0 | PalORM engine core: DataSession / Provider / RowFactory (underlying dependency of PalDDD.PalORM) |
-| **PalORM.SourceGen** | 5.3.0 | PalORM source generator: compile-time RowFactory / CommandFactory generation (zero reflection) |
-| **PalORM.PostgreSql** | 5.3.0 | PalORM PostgreSQL dialect Provider: RETURNING / COPY |
-| **PalORM.MySql** | 5.3.0 | PalORM MySQL dialect Provider: BulkCopy / multi-value INSERT |
-| **PalORM.Sqlite** | 5.3.0 | PalORM SQLite dialect Provider: FTS5 / JSON1 |
+| **PalORM.Core** | 5.4.0 | PalORM engine core: DataSession / Provider / RowFactory (underlying dependency of PalDDD.PalORM) |
+| **PalORM.SourceGen** | 5.4.0 | PalORM source generator: compile-time RowFactory / CommandFactory generation (zero reflection) |
+| **PalORM.PostgreSql** | 5.4.0 | PalORM PostgreSQL dialect Provider: RETURNING / COPY |
+| **PalORM.MySql** | 5.4.0 | PalORM MySQL dialect Provider: BulkCopy / multi-value INSERT (5.4 adds resilience configureResilience callback) |
+| **PalORM.Sqlite** | 5.4.0 | PalORM SQLite dialect Provider: FTS5 / JSON1 |
 
 ---
 
@@ -234,7 +234,7 @@ public sealed class CreateOrderHandler(IUnitOfWork uow) : ICommandHandler<Create
 ### DI Registration and Dispatch
 
 ```csharp
-// 1. Register the core stack (Dispatcher + Pipeline + serialization + analyzers)
+// 1. Register the core stack (Dispatcher + Pipeline + Identity; serialization/analyzers still registered explicitly by their own packages)
 services.AddPalCoreStack();
 
 // 2. Register command handlers (compile-time type constants, no assembly scanning)
@@ -377,7 +377,7 @@ Zero allocation on the core path is not a comment claim — it is verified at ru
 using PalDDD.Core;
 
 // ✅ DomainEvent foreach — ref struct enumerator, zero heap allocation
-foreach (var e in aggregate.Root.GetEvents())  // DomainEventEnumerable: ref struct
+foreach (var e in aggregate.DomainEvents())  // DomainEventEnumerable: ref struct
     await handler(e, ct);
 
 // ✅ FrozenDictionary lookup — O(1) zero reflection
@@ -407,13 +407,14 @@ services.AddPalOutbox();     // InMemoryOutboxStore
 services.AddPalInbox();      // InMemoryInboxStore
 services.AddPalSaga<OrderSagaState, OrderSaga>();  // InMemorySagaStateStore
 
-// Test directly: command dispatch → events → Outbox → Saga compensation, all with no external dependencies
-var dispatcher = services.BuildServiceProvider().GetRequiredService<Dispatcher>();
+// ⚠️ Handler registration is driven by the Host (HandlerRegistrar scans and registers handlers at startup) —
+// fetching the Dispatcher directly from a bare ServiceCollection and calling SendAsync will throw HandlerNotFound.
+// For full examples including the Host bootstrap, see the Chinese README.md §7 (v65 correction).
 ```
 
 ### 8. Bounded Context Isolation: Compile-Time Annotation + Analyzer Enforcement
 
-PalDDD uses `[BoundedContext]` to mark aggregate root ownership, and the PDDD010 analyzer enforces that ProcessManager/Saga must declare their context — preventing illegal references across domain boundaries.
+PalDDD uses `[BoundedContext]` to mark aggregate root ownership: PDDD001 (Error) enforces that ProcessManager/Saga must declare their context, and PDDD003 (Error) rejects non-compliant annotation shapes — preventing illegal references across domain boundaries.
 
 ```csharp
 // ✅ Aggregate root annotated with BoundedContext — analyzer knows which domain it belongs to
@@ -423,12 +424,12 @@ public sealed class Order : AggregateRoot<OrderId> { ... }
 [BoundedContext("inventory")]
 public sealed class StockItem : AggregateRoot<StockItemId> { ... }
 
-// ✅ ProcessManager must be annotated with BoundedContext — PDDD010 compile error
+// ✅ ProcessManager must be annotated with BoundedContext — PDDD001 compile error
 [BoundedContext("ordering")]
 public sealed class OrderingSaga : Saga<OrderingState> { ... }
 
 // ❌ Forgot annotation — direct compile error
-public sealed class OrderingSaga : Saga<OrderingState> { ... }  // PDDD010
+public sealed class OrderingSaga : Saga<OrderingState> { ... }  // PDDD001
 ```
 
 ### 9. Multi-Tenancy: Compile-Time Tenant Filter Injection, Zero Runtime Overhead
@@ -471,9 +472,10 @@ public sealed record OrderCreatedV2(Ulid OrderId, string Name, decimal Amount, s
 
 // Register Upcaster — V1 auto-upgrades to V2, consumers only handle V2
 services.AddPalMessageContractVerification(builder => builder
-    .FromV1<OrderCreatedV1>()
-    .ToV2<OrderCreatedV2>(v1 => new OrderCreatedV2(v1.OrderId, v1.Name, v1.Amount, "default-address"))
-    .Build());
+    .Add<OrderCreatedV1, OrderCreatedV2>(
+        OrderCreatedV1JsonTypeInfo, OrderCreatedV2JsonTypeInfo,
+        v1 => new OrderCreatedV2(v1.OrderId, v1.Name, v1.Amount, "default-address"),
+        sourceSchemaVersion: 1, targetSchemaVersion: 2));
 
 // Contract integrity auto-validated on startup — missing upgrade path fails fast
 ```
@@ -487,18 +489,17 @@ EventLog provides the core storage for event sourcing — Named Streams + optimi
 services.AddPalOrmPostgreSql(connectionString);
 // EventLog is automatically available: PalOrmEventLog<PostgreSqlProvider>
 
-// Append events (optimistic concurrency — throws ConcurrencyException on expectedVersion conflict)
-await eventLog.AppendAsync("order-01HXY...", expectedVersion: 3, new[]
+// Append events (optimistic concurrency — throws EventStreamConcurrencyException on version conflict; expected version via factory, no int implicit conversion)
+await eventLog.AppendAsync("order-01HXY...", ExpectedStreamVersion.Exact(3), new[]
 {
     new EventData(OrderCreatedJsonTypeInfo, messageId, payload)
 }, ct);
 
-// Read an event stream
-var events = await eventLog.ReadAsync("order-01HXY...", ct);
+// Read a stream (IAsyncEnumerable — consume with await foreach)
+await foreach (var e in eventLog.ReadStreamAsync("order-01HXY...", ct)) { ... }
 
-// Global monotonically increasing position — for Projection resumption
-var position = await eventLog.ReadAllAsync(checkpoint, ct);
-// Each event carries a globally increasing Position → Projection only needs to record the last processed position
+// Global ordered read (IAsyncEnumerable — each event carries a globally increasing Position for Projection resumption)
+await foreach (var e in eventLog.ReadAllAsync(checkpoint, ct)) { ... }
 ```
 
 ### 12. Projection Resumption: Rebuild Read Models via Full EventLog Replay
@@ -531,14 +532,14 @@ await projectionRebuilder.RebuildAsync(ct);
 
 ### 13. Observability: Built-In OpenTelemetry, Zero Configuration
 
-PalDDD ships `PalActivitySource` (11 Start methods) + `PalMetrics` (20 telemetry instruments) built into all critical paths — no manual instrumentation needed.
+PalDDD ships `PalActivitySource` (11 Start methods) + `PalMetrics` (21 telemetry instruments) built into all critical paths — no manual instrumentation needed.
 
 ```csharp
-// Framework auto-instrumentation:
-// - Dispatcher.SendAsync → Activity "PalDDD.CQRS.Dispatch"
-// - OutboxProcessor → Counter "palddd.outbox.processed" / "palddd.outbox.failed"
-// - SagaProcessor → Activity "PalDDD.Saga.Execute" + "PalDDD.Saga.Compensate"
-// - IdempotencyProcessor → Counter "palddd.idempotency.hit" / "palddd.idempotency.miss"
+// Framework auto-instrumentation (Activity names are semantic short names; Counters use the paldd. prefix):
+// - Dispatcher.SendAsync → Activity "Command Dispatch"
+// - OutboxProcessor → Activity "Outbox Process" + Counter "paldd.outbox.processed" / "paldd.outbox.failed"
+// - SagaProcessor → Activity "Saga Transition"
+// - IdempotencyProcessor → Activity "Idempotency Execute" + Counter "paldd.idempotency.executed" / "paldd.idempotency.cached"
 
 // Your OpenTelemetry configuration only needs to reference the Activity Source:
 services.AddOpenTelemetry()
@@ -581,7 +582,7 @@ services.AddPalOutbox();  // A capability MediatR lacks
 | DomainEvent | Immutable sealed record, static `EventName` contract, `[GenerateMessage]` source-generated registration |
 | ValueObject / SmartEnum | Strongly-typed IDs (Ulid recommended), FrozenDictionary O(1) lookup |
 | ISpecification | ExpressionVisitor parameter substitution composes And/Or/Not, fully compatible with EF Core LINQ |
-| Diagnostics | Built-in `PalActivitySource` (11 Start methods) + `PalMetrics` (20 telemetry instruments) |
+| Diagnostics | Built-in `PalActivitySource` (11 Start methods) + `PalMetrics` (21 telemetry instruments) |
 
 ### CQRS
 | Component | Implementation Strategy |
@@ -667,7 +668,7 @@ src/                         36 source projects · Clean Architecture (folders m
 ├── Hosting/                 DependencyInjection · Hosting.AspNetCore
 └── Metapackages/            Base · Extension · Prompts (Prompts is not a package, IsPackable=false)
 
-test/                        16 test projects (TUnit) · 897+ tests (15 local + 1 PalORM CI/Docker)
+test/                        16 test projects (TUnit) · 1202 measured tests (1153 local + 49 environment-dependent via CI Testcontainers — PalORM.Tests & Messaging.Integration.Tests need Docker)
 bench/                       BenchmarkDotNet performance benchmarks
 samples/                     PalOrmSample (AOT verification) · ECommerce · MinimalApi · AotSample
 docs/                        Architecture · Usage guide · Tutorial · ADR
@@ -736,7 +737,7 @@ If you need Native AOT deployment (microservices, CLI tools, edge computing) →
 Does not support .NET 8/9/10 (single target net11.0). Saga's ChildSaga and DynamicStep rely on `MakeGenericType`, which is unavailable in AOT publishing (annotated with `[RequiresDynamicCode]`). No built-in EventStore snapshot mechanism — projects that need a snapshot strategy must implement it themselves.
 
 **Who is using it in production?**
-Pal.DDD is currently at version v1.1.0 (tag v1.1.0 pushed; CI green after full-repo clearance). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with test coverage of 897+ cases (15 local projects) + 41 Testcontainers integration (CI). You are welcome to try it in non-production environments and provide feedback.
+Pal.DDD is currently at version v2.1.0 (tag v2.1.0 published; CI green after 74 rounds of full-repo review clearance). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with test coverage of 1202 measured cases (16 projects: 1153 local + 49 environment-dependent executed by CI Testcontainers — v2.1.0 measured baseline). You are welcome to try it in non-production environments and provide feedback.
 
 ---
 

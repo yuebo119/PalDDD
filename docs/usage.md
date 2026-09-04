@@ -13,7 +13,7 @@ var services = new ServiceCollection();
 services.AddPalCoreStack();
 ```
 
-`AddPalCoreStack()` 是推荐的核心入口，等价于 `AddPalDDD()` + `AddPalPipelineBehaviors()`。`AddPalFullStack()` 当前也等价于核心栈：它不会自动引用序列化、持久化、Broker 或 ASP.NET Core 适配器，避免基础设施依赖越过 Clean Architecture 边界。
+`AddPalCoreStack()` 是推荐的核心入口，等价于 `AddPalDDD()` + `AddPalPipelineBehaviors()` + `AddPalIdentity()`。`AddPalFullStack()` 当前也等价于核心栈：它不会自动引用序列化、持久化、Broker 或 ASP.NET Core 适配器，避免基础设施依赖越过 Clean Architecture 边界。
 
 领域事件 dispatcher 通过 `HashSet<Guid>` 去重循环事件，并通过 `while` 循环替代递归防止深层事件链导致栈溢出。
 
@@ -214,7 +214,7 @@ services.AddPalOutbox();
 
 `IPalOutboxStore.LeasePendingMessagesAsync` 必须提供原子租约语义。SQL Server EF Core base context 提供了基于 `UPDLOCK` / `READPAST` 的实现。
 
-生产环境可从 `PalDDD.Transactions.EFCore` 派生 `OutboxDbContext`，或在 SQL Server 上派生 `SqlServerOutboxDbContext` 以复用原子租约获取。适配器会配置 pending 查询索引、payload 必填、trace/correlation 字段长度和错误字段长度；`MarkProcessed` 会清理 lease/retry 状态，`ReleaseForRetry` 会释放 lease 并设置 `NextAttemptAt`。
+生产环境可从 `PalDDD.Transactions.EFCore` 派生 `OutboxDbContext`，或按方言派生 `SqlServerOutboxDbContext`/`PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`（ADR-012 方言粒度）以复用原子租约获取。适配器会配置 pending 查询索引、payload 必填、trace/correlation 字段长度和错误字段长度；`MarkProcessed` 会清理 lease/retry 状态，`ReleaseForRetry` 会释放 lease 并设置 `NextAttemptAt`。
 
 Outbox message 可以携带跨上下文追踪元数据：
 
@@ -294,7 +294,7 @@ var result = await eventLog.AppendAsync(
     events:
     [
         new EventData(
-            Guid.NewGuid(),
+            PalUlid.New(),
             "orders.order-submitted.v1",
             schemaVersion: 1,
             contentType: "application/json",
