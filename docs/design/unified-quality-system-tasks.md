@@ -97,29 +97,29 @@
 
 ### 2a dialect-probe CI 固化（1 天｜主仓 .github/）
 
-- [ ] 2a.1 `.github/workflows/ci.yml` 新增 dialect-probe job：services 起 PG + MySQL，跑 40 断言
-- [ ] 2a.2 路径触发精确化：文件列表匹配（`src/**/Dapper*/**`、`docs/sql/**`、`*Store*.cs`、SqlTemplates 相关 `*Extensions*.cs`），不用宽 glob
-- [ ] 2a.3 强度分层：build + 单测保持快（提交门）；dialect 40 断言挂路径触发 job（准发布门）；夜间全量可选
-- [ ] 2a.4 **红测**：临时破坏一个 SQL 模板 → job 必 FAIL → 恢复 → PASS（一次性，不留痕）
+- [x] 2a.1 `.github/workflows/ci.yml` 新增 dialect-probe job：services 起 PG + MySQL，跑 40 断言（✅ 2026-08-20 ｜ 主仓 `dcccca7` ｜ job 在档 ci.yml `dialect-probe`）
+- [x] 2a.2 路径触发精确化：文件列表匹配（`src/**/Dapper*/**`、`docs/sql/**`、`*Store*.cs`、SqlTemplates 相关 `*Extensions*.cs`），不用宽 glob（✅ 2026-08-20 ｜ 主仓 `dcccca7` ｜ steps.paths 输出 match 门控）
+- [x] 2a.3 强度分层：build + 单测保持快（提交门）；dialect 40 断言挂路径触发 job（准发布门）；夜间全量可选（✅ 2026-08-20 ｜ 主仓 `dcccca7` ｜ job 不阻塞 build-and-test）
+- [x] 2a.4 **红测**：临时破坏一个 SQL 模板 → job 必 FAIL → 恢复 → PASS（✅ 2026-08-20 ｜ dev `4b9b4ea` ｜ metrics 在案：dev 注入→dialect-probe 红→revert 绿）
 
 **验收**：main 分支 CI 绿；红测记录在案。
 **熔断**：job 时长超预算 → 断言分层（快断言提交门 / 全量发布门）。
 
 ### 2b 文档一致性扩展（0.5 天 + 30 天观察｜.ai 仓）
 
-- [ ] 2b.0 **前置确认**：0c 对 doc-consistency-check 定标结果为 OK（非 no-op）才开工
-- [ ] 2b.1 形态盘点落盘：从 8-17/8-18 报告统计文档类 P3 具体形态，圈定机械可覆盖子集（口径计数类）
-- [ ] 2b.2 `doc-consistency-check.sh` 新增检查项，**观察模式上线（WARN 不阻断）**
-- [ ] 2b.3 观察态登记：owner + 转正期限（30 天）+ 误报率记录位
-- [ ] 2b.4 期满裁决：误报率过阈值转阻断；否则调整检查项或移除
+- [x] 2b.0 **前置确认**：0c 对 doc-consistency-check 定标结果为 OK（非 no-op）才开工（✅ 2026-08-20 ｜ 台账行 13 D5 红测在案）
+- [x] 2b.1 形态盘点落盘：从 8-17/8-18 报告统计文档类 P3 具体形态，圈定机械可覆盖子集（口径计数类）（✅ 2026-08-20 ｜ 基线 45 处缺失在档台账行 29）
+- [x] 2b.2 `doc-consistency-check.sh` 新增检查项，**观察模式上线（WARN 不阻断）**（✅ 2026-08-20 ｜ D11 运行中，2026-09-09 复读 46 处）
+- [x] 2b.3 观察态登记：owner + 转正期限（30 天）+ 误报率记录位（✅ 2026-08-20 ｜ 台账行 29：owner 主线程，观察期至 2026-09-19）
+- [ ] 2b.4 期满裁决：误报率过阈值转阻断；否则调整检查项或移除（⏳ 2026-09-19 到期裁决）
 
 **验收**：观察模式运行中且有台账。
 **熔断**：两轮后文档类 P3 不降 → 形态误判，重新分诊。
 
 ### 2c 台账 CI 化（0.25 天｜.ai 仓）
 
-- [ ] 2c.1 verify-ai-system（或 gate-check）增校验：sensor-ledger 定标日期超期（默认 90 天）→ WARN
-- [ ] 2c.2 **红测**：人为改老某行日期 → WARN 必触发 → 恢复
+- [x] 2c.1 verify-ai-system（或 gate-check）增校验：sensor-ledger 定标日期超期（默认 90 天）→ WARN（✅ 2026-08-21 ｜ V19 补实现，台账行 12）
+- [x] 2c.2 **红测**：人为改老某行日期 → WARN 必触发 → 恢复（✅ 2026-08-20 ｜ V19 红测记录在案：OK 行日期改 2026-01-01 → FAIL；恢复 → PASS）
 
 **验收**：红测过。
 
@@ -173,7 +173,7 @@
 |---|---|:--:|
 | Phase 0 完成 | verify-ai 17/17 + 台账 + 基线落盘 | ✅ 2026-08-20 |
 | Phase 1 完成 | 双向红测过 + 首轮修复轮实战留痕 | 🔶 2026-08-20 建成；首轮实战留痕待下轮修复轮 |
-| Phase 2 完成 | CI 绿 + 观察模式上线 + 台账告警生效 | 🔶 2026-08-20 建成；dialect-probe job 待首次 CI 运行（含 2a.4 红测欠账） |
+| Phase 2 完成 | CI 绿 + 观察模式上线 + 台账告警生效 | ✅ 2026-08-20 建成；2a.4 红测闭环（dev `4b9b4ea`，2026-09-09 勾销补记）；余项=2b.4 期满裁决（2026-09-19） |
 | Phase 3 完成 | 三项试点数据落盘并裁决 | 🔶 2026-08-20 建成；试点对照数据待后续任务轮积累 |
 
 完成记录格式（逐项追加）：`编号 ｜ 完成日期 ｜ commit hash（注明仓库）｜ 红测记录指针`。
