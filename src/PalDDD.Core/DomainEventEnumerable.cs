@@ -19,8 +19,10 @@ public ref struct DomainEventEnumerable
 {
     private readonly DomainEvent? _head;
 
+    /// <summary>包裹事件链表头——null 表示空序列（无待发事件）。</summary>
     public DomainEventEnumerable(DomainEvent? head) => _head = head;
 
+    /// <summary>foreach 模式入口——返回栈分配枚举器，全程零堆分配。</summary>
     public DomainEventEnumerator GetEnumerator() => new(_head);
 }
 
@@ -34,6 +36,7 @@ public ref struct DomainEventEnumerator
 
     public readonly DomainEvent Current => _current!;
 
+    /// <summary>推进到下一事件——首次调用定位链表头，其后沿 Next 前进；耗尽返回 false。</summary>
     public bool MoveNext()
     {
         if (_first)

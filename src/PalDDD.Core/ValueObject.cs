@@ -67,6 +67,7 @@ public readonly record struct ValueObject<T> : IValueObject, IUtf8SpanFormattabl
     /// <summary>值对象中包装的原始数值</summary>
     public T Value { get; }
 
+    /// <summary>显式构造——与隐式转换共享，Value 就地赋值（readonly record struct 不可变）。</summary>
     public ValueObject(T value) { Value = value; }
 
     /// <summary>隐式转换为底层数值类型 —— 允许直接参与算术运算</summary>
@@ -131,7 +132,9 @@ public readonly record struct Deleted(bool Value = false)
 {
     public static readonly Deleted No = new(false);
     public static readonly Deleted Yes = new(true);
+    /// <summary>if (d.IsDeleted) 直读语义——true 表示已删除。</summary>
     public static implicit operator bool(Deleted d) => d.Value;
+    /// <summary>deleted = true 赋值语法糖。</summary>
     public static implicit operator Deleted(bool b) => new(b);
     public override string ToString() => Value ? "deleted" : "active";
 }
@@ -142,6 +145,7 @@ public readonly record struct Deleted(bool Value = false)
 /// </summary>
 public readonly record struct DeletedTime(DateTimeOffset? Value)
 {
+    /// <summary>记录软删除时刻——经 DomainEvent.TimeProvider 取 UTC（时钟注入契约，禁直取 UtcNow）。</summary>
     public static DeletedTime Now() => new(DomainEvent.TimeProvider.GetUtcNow());
     public static readonly DeletedTime Never = new(null);
     public override string ToString() => Value?.ToString("O") ?? "never";
@@ -153,7 +157,9 @@ public readonly record struct DeletedTime(DateTimeOffset? Value)
 /// </summary>
 public readonly record struct UpdateTime(DateTimeOffset Value)
 {
+    /// <summary>记录最后修改时刻——经 DomainEvent.TimeProvider 取 UTC（时钟注入契约）。</summary>
     public static UpdateTime Now() => new(DomainEvent.TimeProvider.GetUtcNow());
+    /// <summary>直接参与时间比较与运算。</summary>
     public static implicit operator DateTimeOffset(UpdateTime t) => t.Value;
     public override string ToString() => Value.ToString("O");
 }
@@ -174,6 +180,7 @@ public readonly record struct RowVersion(int Value)
     /// <exception cref="OverflowException">Value == int.MaxValue 时——与 IdentityGenerator（ITM-099）的 checked 语义一致，
     /// 溢出显式失败优于静默回绕（回绕产生"旧版本"乐观锁令牌，并发判定失真）。</exception>
     public RowVersion Next() => new(checked(Value + 1));
+    /// <summary>直接参与版本比较（int 语义）。</summary>
     public static implicit operator int(RowVersion v) => v.Value;
     public override string ToString() => Value.ToString();
 }

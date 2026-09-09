@@ -20,6 +20,12 @@ namespace PalDDD.Repository.EFCore;
 //   outbox 无行）。需要跨 Commit 重试保证的应用应在新的 UnitOfWork scope 中重试
 //   整个业务操作。行为重构（事件清理移到 Commit 之后）有双行风险，本轮不做。
 //
+// ⚠️ 中途抛语义（V25 探针 a 实测，2026-09-09）：outbox 写入中途抛（如 store 侧失败）时，
+//   异常从 SavingChanges(Async) 阶段原样透传——EF 的 SaveChangesFailed 回调「不触发」
+//   （该回调只覆盖 provider 层失败/DbUpdateException 形态，控制组实证）；聚合实体以
+//   Added 态滞留 ChangeTracker、领域事件未清除、_pending 残留。调用方 catch 后应弃用
+//   当前 scope（新 scope 重试），依赖滞留实体二次 SaveChanges 会重复收集事件。
+//
 // 💡 保留理由：DDD + EF Core + Outbox 关键桥梁 · 事务内领域事件持久化。
 //    详见 docs/decisions/004-core-type-retention.md
 
