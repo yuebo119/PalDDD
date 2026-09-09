@@ -31,7 +31,9 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
     // v36 P3：All 的缓存容器（引用类型）——消除 Dictionary.Values 每次访问的装箱
     private static IReadOnlyCollection<TSelf>? s_all;
 
+    /// <summary>不可变枚举值——构造后只读，相等性与哈希的唯一依据。</summary>
     public TValue Value { get; }
+    /// <summary>显示名——name 省略时回退 value.ToString()；显式空白或兜底产出空白时构造必抛。</summary>
     public string Name { get; }
 
     protected SmartEnum(TValue value, string? name = null)
@@ -174,6 +176,7 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
     // 相等性判断
     // ═══════════════════════════════════════════════════════════════
 
+    /// <summary>按 Value 相等（EqualityComparer&lt;TValue&gt;.Default）——与 == / != 运算符一致。</summary>
     public bool Equals(TSelf? other) => other is not null && EqualityComparer<TValue>.Default.Equals(Value, other.Value);
 
     public override bool Equals(object? obj) => obj is TSelf other && Equals(other);

@@ -30,6 +30,7 @@ namespace PalDDD.Core;
 [AttributeUsage(AttributeTargets.Struct)]
 public sealed class GenerateIdAttribute : Attribute
 {
+    /// <summary>创建标记并记录键类型——idType 为 null 时在此抛出（编译期另有 PALID005 兜底）。</summary>
     // v54 P3：null 守卫（对齐同文件 BoundedContext/DomainCapability 守卫族——原 primary ctor
     // 无守卫，[GenerateId((Type?)null)] 编译合法；编译期另有 PALID005 诊断兜底，此处提前拦）
     public GenerateIdAttribute(Type idType)
@@ -78,6 +79,7 @@ public sealed class GenerateMessageAttribute : Attribute
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
 public sealed class BoundedContextAttribute(string name) : Attribute
 {
+    /// <summary>限界上下文名称——空白输入在构造时拒绝。</summary>
     public string Name { get; } = string.IsNullOrWhiteSpace(name)
         ? throw new ArgumentException("Name cannot be blank", nameof(name))
         : name;
@@ -92,6 +94,7 @@ public sealed class BoundedContextAttribute(string name) : Attribute
 public sealed class DomainCapabilityAttribute(string name) : Attribute
 {
     // P3 修复（八轮评审）：补 blank 校验——对齐 BoundedContextAttribute/AggregateNameAttribute
+    /// <summary>能力名称——空白输入在构造时拒绝。</summary>
     public string Name { get; } = string.IsNullOrWhiteSpace(name)
         ? throw new ArgumentException("Name cannot be blank", nameof(name))
         : name;
@@ -111,6 +114,7 @@ public sealed class DomainCapabilityAttribute(string name) : Attribute
 public sealed class ProcessManagerAttribute(string name) : Attribute
 {
     // P3 修复（八轮评审）：补 blank 校验——对齐 BoundedContextAttribute/AggregateNameAttribute
+    /// <summary>流程名称——空白输入在构造时拒绝。</summary>
     public string Name { get; } = string.IsNullOrWhiteSpace(name)
         ? throw new ArgumentException("Name cannot be blank", nameof(name))
         : name;

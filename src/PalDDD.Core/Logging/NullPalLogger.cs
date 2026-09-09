@@ -13,9 +13,14 @@ public sealed class NullPalLogger<T> : IPalLogger<T>
 
     private NullPalLogger() { }
 
+    /// <summary>无操作（null object 模式）——调用即吞，零开销。</summary>
     public void Debug(string message) { }
+    /// <summary>无操作（null object 模式）。</summary>
     public void Information(string message) { }
+    /// <summary>无操作（null object 模式）。</summary>
     public void Warning(string message) { }
+    /// <summary>无操作（null object 模式）——异常对象不外泄。</summary>
     public void Error(Exception ex, string message) { }
+    /// <summary>恒 false——调用方据此短路消息格式化开销。</summary>
     public bool IsEnabled(LogLevel level) => false;
 }
