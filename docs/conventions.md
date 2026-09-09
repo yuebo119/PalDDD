@@ -809,7 +809,7 @@ bash scripts/verify-conventions.sh
 
 ### 10.6 测试框架规则（TUnit + MTP · 强制）
 
-> **背景**：本框架统一使用 **TUnit 1.65.68**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.3.3**。不使用 VSTest。
+> **背景**：本框架统一使用 **TUnit 1.66.27**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.3.3**。不使用 VSTest。
 
 **硬性规则**（违反导致 `dotnet test` 发现零测试或构建冲突）：
 

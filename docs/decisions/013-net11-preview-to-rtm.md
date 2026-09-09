@@ -38,4 +38,4 @@ Preview API 可能在 RTM 前发生破坏性变更，需有迁移预案。
 
 ## 不动
 
-当前维持 Preview 7 锁定（2026-08-14 自 Preview 5 升级，NuGet 包版本同步对齐 preview.7；ByteAether.Ulid 同步迁移至 1.4.0，适配新增的 string 隐式转换与可空注解），待 RTM 后按本 ADR 执行升级。
+当前锁定 RC1（2026-09-10 自 Preview 7 升级，go-live 许可；微软官方包与传递钉扎同步升至 `11.0.0-rc.1.26425.128`，第三方升最新稳定版；Npgsql Provider preview.6 / Pomelo preview.5 待其出 RC 后跟进），待 RTM 后按本 ADR 执行升级。

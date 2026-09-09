@@ -94,10 +94,10 @@
 
 | 维度 | DDD 约定 |
 |------|---------|
-| **测试框架** | TUnit 1.65.68 + MTP（Microsoft.Testing.Platform） |
+| **测试框架** | TUnit 1.66.27 + MTP（Microsoft.Testing.Platform） |
 | **断言库** | TUnit.Assertions（Fluent 链式） |
 | **属性测试** | TUnit.FsCheck（属性驱动） |
-| **快照测试** | Verify.TUnit 31.28.0（预留，目前 PublicApiSnapshot 自实现） |
+| **快照测试** | Verify.TUnit 32.0.0（预留，目前 PublicApiSnapshot 自实现） |
 | **集成测试** | Testcontainers.*（PG/MySQL/SQLite/RabbitMQ/Kafka） |
 
 > **禁用** `Microsoft.NET.Test.Sdk`（与 TUnit MTP 冲突，conventions §10.6 硬规则）
@@ -106,7 +106,7 @@
 
 ```json
 {
-  "sdk": { "version": "11.0.100-preview.7.26381.103", "rollForward": "latestMajor", "allowPrerelease": true },
+  "sdk": { "version": "11.0.100-rc.1.26425.128", "rollForward": "latestMajor", "allowPrerelease": true },
   "test": { "runner": "Microsoft.Testing.Platform" }
 }
 ```

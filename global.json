@@ -7,5 +7,5 @@
   "test": {
     "runner": "Microsoft.Testing.Platform"
   },
-  "_comment": "ITM-060：SDK 已锁定 .NET 11 RC1（go-live 许可，API 冻结；2026-09-10 用户批准升级）。注意包线仍为 Preview 7（Directory.Packages.props）——EFCore 等 Microsoft 官方包待随 Provider（Npgsql/Pomelo）出 RC 后统一升级，GA 后清偿 NU5104 抑制并重评 TFM，避免 EFCore RC1 与第三方 Provider preview 混搭漂移。"
+  "_comment": "ITM-060：SDK 已锁定 .NET 11 RC1（go-live 许可，API 冻结；2026-09-10 用户批准升级）。包线已随同升级（微软官方包/传递钉扎至 11.0.0-rc.1.26425.128，第三方升至最新稳定版）；Npgsql Provider（preview.6）/Pomelo（preview.5，其 11 线即此最新）待出 RC 后跟进。GA 后清偿 NU5104 抑制并重评 TFM。"
 }
