@@ -37,8 +37,8 @@
     <ProjectReference Include="..\PalDDD.Projections\PalDDD.Projections.csproj" PrivateAssets="build;analyzers" />
     <ProjectReference Include="..\PalDDD.Transactions\PalDDD.Transactions.csproj" PrivateAssets="build;analyzers" />
     <PackageReference Include="ByteAether.Ulid" Version="1.4.0" PrivateAssets="build;analyzers" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0-preview.7.26381.103" PrivateAssets="build;analyzers" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="11.0.0-preview.7.26381.103" PrivateAssets="build;analyzers" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0-rc.1.26425.128" PrivateAssets="build;analyzers" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="11.0.0-rc.1.26425.128" PrivateAssets="build;analyzers" />
     <PackageReference Include="ZLogger" Version="2.5.10" PrivateAssets="build;analyzers" />
   </ItemGroup>
 

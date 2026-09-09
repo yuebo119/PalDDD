@@ -25,7 +25,7 @@
 | **Runtime Async V2** | `Directory.Build.props` → `<Features>runtime-async=on</Features>` | 运行时管理的 async 状态机，深度 async 链（Saga/Outbox/Inbox）栈帧减少 ~60% | `DotNet11MigrationTests.RuntimeSupportsAsyncV2` |
 | **AOT OptimizationPreference=Speed** | `Directory.Build.props` → `<OptimizationPreference>Speed</OptimizationPreference>` | AOT 编译优先速度优化，对吞吐敏感的并发路径关键 | `DotNet11MigrationTests.AotCompatibility` |
 | **StackTraceLineNumberSupport** | `Directory.Build.props` → `<StackTraceLineNumberSupport>true</StackTraceLineNumberSupport>` | AOT 场景保留异常行号，生产诊断必需 | 构建验证 |
-| **SDK 11.0.100-preview.5**（迁移时点；当前 global.json 已升至 preview.7，见 ITM-060 注释） | `global.json` → `rollForward=latestMajor` | 所有 .NET 11 SDK 工具链 | 构建验证 |
+| **SDK 11.0.100-preview.5**（迁移时点；当前 global.json 已升至 RC1 `11.0.100-rc.1.26425.128`，包线随同升级，见 ITM-060 注释） | `global.json` → `rollForward=latestMajor` | 所有 .NET 11 SDK 工具链 | 构建验证 |
 | **net11.0 TFM** | `Directory.Build.props` → `<TargetFramework>net11.0</TargetFramework>` | 统一目标框架 | `DotNet11MigrationTests.TargetFrameworkMatches` |
 | **框架引用 NU1510 移除** | 9 个 csproj 文件 | .NET 11 自动提供 `Microsoft.Extensions.*` 包 | `DotNet11MigrationTests.FrameworkReferencesRemoved` |
 
