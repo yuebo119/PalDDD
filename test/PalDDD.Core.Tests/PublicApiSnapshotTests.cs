@@ -1,4 +1,3 @@
-using PalDDD.Core.Repository;
 using PalDDD.CQRS;
 using PalDDD.DependencyInjection;
 using PalDDD.EventLog;
