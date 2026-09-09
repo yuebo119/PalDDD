@@ -102,6 +102,7 @@ public sealed class DynamicStepTimeoutProbeTests
 
         // 回拨时间戳构造超期
         BackdateStepStartedAt(state);
+        var probeStart = DateTimeOffset.UtcNow;
         var timedOut = saga.IsTimedOut(state, DateTimeOffset.UtcNow, out var timedOutSteps);
 
         // 事实断言：检测器命中，且命中的是 Dynamic 步骤本身
@@ -117,7 +118,8 @@ public sealed class DynamicStepTimeoutProbeTests
         var persisted = await store.GetByIdAsync(state.SagaId, ct);
         await Assert.That(persisted!.Status).IsEqualTo(SagaStatus.Compensated);
         await Assert.That(persisted.CurrentState).IsEqualTo(SagaState.CompensatedStateName);
-        await Assert.That(persisted.CompletedAt).IsNotNull();
+        // 行为断言：终态时间戳被真实写入且不早于探针起点（替代 IsNotNull 弱断言）
+        await Assert.That(persisted.CompletedAt!.Value).IsGreaterThan(probeStart);
         // 事实断言：补偿按 ExecutedStepKeys 执行序逆序回放（Backward 默认）——
         // 后执行的 work 先补偿，Dynamic 入口后补偿
         await Assert.That(string.Join(",", saga.CompensationLog)).IsEqualTo("work,dyn");
