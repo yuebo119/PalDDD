@@ -63,6 +63,14 @@ public sealed class AddBoundedContextPrefixCodeFix : CodeFixProvider
         var oldValue = literal.Token.ValueText;
         if (oldValue.StartsWith(prefix + ".", StringComparison.Ordinal)) return document;
 
+        // v66 P3 边界声明（错前缀叠加）：oldValue 首段已是其它 BC 前缀（类型跨上下文迁移
+        // 后 Name 未改，如 [BoundedContext("billing")] + Name="orders.submit.v1"）时，本 fix
+        // 叠加产出 "billing.orders.submit.v1" 双前缀（旧前缀残留）。不实现"替换首段"的理由：
+        // ① 判定"首段是 BC 名"需要解决方案内 BC 名全集——纯语法扫描有 using alias/跨项目
+        // 遗漏两类误判（>30 行仍不正确），语义扫描（Compilation.GetSymbolsWithName 级）成本
+        // 不适配 fix 的交互时延；② 误判代价不对称：叠加双前缀是显性错误（PDDD008 复检仍
+        // 报错，肉眼可见），而启发式误把名称主体当 BC 前缀替换会静默丢失名称主体且可能
+        // 通过全部校验产出静默错误名。跨上下文迁移的正确路径是手动改写 Name 值。
         var newValue = prefix + "." + oldValue;
         editor.ReplaceNode(literal, SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression,
             SyntaxFactory.Literal(newValue)).WithTriviaFrom(literal)); // v22 D2：trivia 对齐 AddVersionSuffix ITM-221

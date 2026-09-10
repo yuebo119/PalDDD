@@ -87,11 +87,19 @@ public sealed class IterativeDomainEventDispatcherTests
     [Test]
     public async Task EmptyList_NoOp()
     {
+        // P3 补显式断言：原测试零断言（恒绿）。两条腿各给可观察输出——
         var dispatcher = new IterativeDomainEventDispatcher([]);
 
-        await dispatcher.DispatchAsync([]);
+        // 腿1：事件非空但 handler 池为空——静默完成不抛（空池吞事件）
+        await dispatcher.DispatchAsync([new OrderPlaced(Guid.NewGuid(), 1m)]);
 
-        // 不应抛出异常
+        // 腿2：handler 在场但事件集为空——handler 零调用
+        var handler = new OrderPlacedHandler();
+        var dispatcherWithHandler = new IterativeDomainEventDispatcher([handler]);
+
+        await dispatcherWithHandler.DispatchAsync([]);
+
+        await Assert.That(handler.HandleCount).IsEqualTo(0);
     }
 
     [Test]

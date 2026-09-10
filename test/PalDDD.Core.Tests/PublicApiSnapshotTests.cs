@@ -91,6 +91,14 @@ public sealed class PublicApiSnapshotTests
                 foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly).OrderBy(static p => p.Name, StringComparer.Ordinal))
                     builder.AppendLine("  " + GetPropertySignature(property));
 
+                // P3 补全：公共 event 纳入快照——add_/remove_ 访问器是 special name 已被
+                // 下方方法过滤，event 本体此前零枚举（新增公共 event 会静默漏出快照）
+                foreach (var evt in type.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
+                    .OrderBy(static e => e.Name, StringComparer.Ordinal))
+                {
+                    builder.AppendLine($"  event {FormatType(evt.EventHandlerType!)} {evt.Name}");
+                }
+
                 foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
                     .OrderBy(GetMemberSortKey, StringComparer.Ordinal))
                 {
@@ -113,16 +121,20 @@ public sealed class PublicApiSnapshotTests
 
     private static string GetTypeSignature(Type type)
     {
-        var kind = type switch
-        {
-            { IsInterface: true } => "interface",
-            { IsEnum: true } => "enum",
-            { IsValueType: true } when type.IsAssignableTo(typeof(Delegate)) => "delegate",
-            { IsValueType: true } => "struct",
-            { IsClass: true, IsAbstract: true, IsSealed: true } => "static class",
-            { IsClass: true } => "class",
-            _ => "type"
-        };
+        // P3 修复：delegate 判定须在值类型/类判定之前——delegate 全部 IsClass
+        //（原 { IsValueType: true } when IsAssignableTo(Delegate) 分支恒不可达，
+        // delegate 被误记为 "static class"，如 PalDDD.CQRS.RequestExecutor）
+        var kind = type.IsAssignableTo(typeof(Delegate))
+            ? "delegate"
+            : type switch
+            {
+                { IsInterface: true } => "interface",
+                { IsEnum: true } => "enum",
+                { IsValueType: true } => "struct",
+                { IsClass: true, IsAbstract: true, IsSealed: true } => "static class",
+                { IsClass: true } => "class",
+                _ => "type"
+            };
 
         return $"{kind} {FormatType(type)}";
     }

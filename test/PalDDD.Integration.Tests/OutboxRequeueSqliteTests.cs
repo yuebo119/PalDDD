@@ -4,6 +4,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using PalDDD.Dapper;
 using PalDDD.Transactions;
+using System.Globalization;
 using PalUlid = ByteAether.Ulid.Ulid;
 
 // ═══════════════════════════════════════════════════════════════
@@ -92,7 +93,11 @@ public sealed class DapperOutboxRequeueSqliteTests
         await Assert.That(row.RetryCount).IsEqualTo(7L); // 失败历史保留，不重置
         await Assert.That(row.Error).Contains("requeued by ops-alice");
         await Assert.That(row.Error).DoesNotContain("original failure");
-        await Assert.That(row.NextAttempt).IsNotEmpty(); // 重投递写入了下次尝试时间
+        // SQLite TEXT 往返：ToTimeParam 产 "O" 格式（tick 级保真），读回解析后须与传入
+        // nextAttempt 等值（解析先例：PalOrmIdempotencyStoreTests 的租约时间戳往返断言）
+        await Assert.That(row.NextAttempt).IsNotNull();
+        await Assert.That(DateTimeOffset.Parse(row.NextAttempt!, CultureInfo.InvariantCulture))
+            .IsEqualTo(nextAttempt);
     }
 
     [Test]
@@ -209,6 +214,9 @@ public sealed class EfCoreOutboxRequeueSqliteTests
         await Assert.That(loaded.RetryCount).IsEqualTo(7); // 失败历史保留，不重置
         await Assert.That(loaded.Error).Contains("requeued by ops-alice");
         await Assert.That(loaded.Error).DoesNotContain("original failure");
+        // EFCore SQLite TEXT 往返（DateTimeOffset.Equals 按绝对时刻比较，偏移表示差异不误伤）
+        await Assert.That(loaded.NextAttemptAt).IsNotNull();
+        await Assert.That(loaded.NextAttemptAt.Value).IsEqualTo(nextAttempt);
         await Assert.That(loaded.ProcessedAt).IsNull();
         await Assert.That(loaded.LockedBy).IsNull();
         await Assert.That(loaded.LockedUntil).IsNull();

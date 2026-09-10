@@ -193,6 +193,11 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         // v65 P3：截断值先算局部变量、保存结果确认后才赋回 state.Error——对齐 DapperSagaStateStore
         // v38（原实现在保存结果未知前就变异调用方对象：UPDATE 版本冲突 affected=0 时 DB 未变
         // 而调用方 Error 已被截断；INSERT 路径同理）。
+        // ITM-649 修复（v65 回归勘正）：v65 重构时 UPDATE 两条 SQL 的 error 绑定点误留
+        // {state.Error}（INSERT 两条已改 {truncatedError}）——直调路径超长 Error 经 UPDATE
+        // 原文入库（SQLite TEXT 不限长不报错；MySQL/EFCore 共表侧 2048 列写入失败），且
+        // affected>0 后内存回写截断值造成内存/DB 分叉。两路径绑定统一回 {truncatedError}
+        //（对齐 DapperSagaStateStore :176/:209 的 err 赋值点）。
         var truncatedError = FailureReason.Truncate(state.Error, 2040);
 
         // ITM-228 修复（三十二轮）：JsonTypeInfo null 时 saga_data 写 NULL——
@@ -240,8 +245,8 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         var expectedVersion = state.Version;
         var affected = await Session.ExecuteAsync(
             RequiresJsonbCast
-                ? (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {state.Error}, error_at = {state.ErrorAt}, saga_data = CAST({jsonData} AS jsonb), leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}"
-                : (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {state.Error}, error_at = {state.ErrorAt}, saga_data = {jsonData}, leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}",
+                ? (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {truncatedError}, error_at = {state.ErrorAt}, saga_data = CAST({jsonData} AS jsonb), leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}"
+                : (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {truncatedError}, error_at = {state.ErrorAt}, saga_data = {jsonData}, leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}",
             ct).ConfigureAwait(false);
         if (affected > 0)
         {

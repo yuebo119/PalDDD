@@ -17,6 +17,9 @@ public class PalOrmInboxStoreTests
 
         var msg = await store.TryStartProcessingAsync("consumer-1", "msg-1", now, TimeSpan.FromMinutes(5), default);
 
+        // P3 补前置断言：原 msg!. 直接解引用——首次受理失败返回 null 时会在 .Status 处抛
+        // NullReferenceException 而非指向性的断言失败（对齐下方 Duplicate 测试的 IsNotNull 形态）
+        await Assert.That(msg).IsNotNull();
         await Assert.That(msg!.Status).IsEqualTo(InboxStatus.Processing);
         await Assert.That(msg.Attempts).IsEqualTo(1);
     }

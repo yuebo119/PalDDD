@@ -71,13 +71,16 @@ public sealed class DiagnosticCoverageGateTests
         const string id = "PALENUM999";
 
         // ── 真断言：必须判为覆盖（含跨行链式，上一版假红形态）──
-        await Assert.That(HasAssertion($"await Assert.That(d.Id == \"{id}\").IsTrue();", id)).IsTrue();
+        // 形态①（二元比较）的正例须根植诊断集合：lambda 参数（diagnostics.Any(d => ...)）
+        // 或直接索引（diagnostics[0].Id）——P3 收紧后孤立的 d.Id 不再计入
+        await Assert.That(HasAssertion($"await Assert.That(diagnostics.Any(d => d.Id == \"{id}\")).IsTrue();", id)).IsTrue();
+        await Assert.That(HasAssertion($"await Assert.That(diagnostics[0].Id == \"{id}\").IsTrue();", id)).IsTrue();
         await Assert.That(HasAssertion($"await Assert.That(diagnostics[0].Id).IsEqualTo(\"{id}\");", id)).IsTrue();
         await Assert.That(HasAssertion($"await Assert.That(diagnostics[0].Id){'\n'}    .IsEqualTo(\"{id}\");", id)).IsTrue();
         await Assert.That(HasAssertion($"await Assert.That(result.Diagnostics[0].Id).IsEquivalentTo(\"{id}\");", id)).IsTrue();
         await Assert.That(HasAssertion($"HasId(\"{id}\");", id)).IsTrue();
         // 同行含 // 的字符串（上一版假红形态）：断言在字符串之后，剥注释不得伤及断言
-        await Assert.That(HasAssertion($"var u = \"http://x\"; await Assert.That(d.Id == \"{id}\").IsTrue();", id)).IsTrue();
+        await Assert.That(HasAssertion($"var u = \"http://x\"; await Assert.That(diagnostics.Any(d => d.Id == \"{id}\")).IsTrue();", id)).IsTrue();
 
         // ── 伪覆盖：必须拒绝（注释 / 文件级字符串 / 条件编译 / 否定）──
         await Assert.That(HasAssertion($"// Id == \"{id}\"", id)).IsFalse();
@@ -92,6 +95,8 @@ public sealed class DiagnosticCoverageGateTests
         // 非诊断对象的 .Id 断言：ID 字面量虽匹配，接收者非诊断集合（名不含 Diag）——不得计入覆盖
         // （P3 收紧：原 MentionsId 只查任意 .Id，order.Id 这类无关断言会被误判为覆盖）
         await Assert.That(HasAssertion($"await Assert.That(order.Id).IsEqualTo(\"{id}\");", id)).IsFalse();
+        // 形态①负例（P3 收紧，镜像上一条形态②）：非诊断对象的二元比较同样不得计入覆盖
+        await Assert.That(HasAssertion($"await Assert.That(order.Id == \"{id}\").IsTrue();", id)).IsFalse();
     }
 
     /// <summary>
@@ -114,7 +119,7 @@ public sealed class DiagnosticCoverageGateTests
                 // 形态①：d.Id == "X"（lambda/断言内的相等比较）
                 case BinaryExpressionSyntax binary
                     when binary.IsKind(SyntaxKind.EqualsExpression)
-                         && IsIdMemberAccess(binary.Left)
+                         && IsDiagnosticIdAccess(binary.Left)
                          && IsStringLiteral(binary.Right, id):
                     return true;
 
@@ -140,10 +145,50 @@ public sealed class DiagnosticCoverageGateTests
         return false;
     }
 
-    /// <summary>表达式是否为 <c>某对象.Id</c> 成员访问。</summary>
-    private static bool IsIdMemberAccess(ExpressionSyntax expression)
-        => expression is MemberAccessExpressionSyntax access
-           && access.Name.Identifier.Text == "Id";
+    /// <summary>
+    /// 表达式是否为<b>诊断对象</b>的 <c>.Id</c> 成员访问。
+    /// <para>
+    /// P3 收紧（2026-09-10，镜像形态② <see cref="MentionsId"/> 的收紧）：原实现只要求
+    /// <c>某对象.Id</c>——非诊断对象断言（如 <c>order.Id == "PALENUM004"</c>）会被误判为
+    /// 覆盖。现要求接收者根植诊断集合（<c>diagnostics[0].Id == "X"</c>），或为诊断集合
+    /// LINQ 调用的 lambda 参数（<c>diagnostics.Any(d => d.Id == "X")</c> 中的 <c>d.Id</c>）。
+    /// </para>
+    /// </summary>
+    private static bool IsDiagnosticIdAccess(ExpressionSyntax expression)
+        => expression is MemberAccessExpressionSyntax { Name.Identifier.Text: "Id" } access
+           && (IsDiagnosticRooted(access.Expression)
+               || (access.Expression is IdentifierNameSyntax identifier && IsDiagnosticLambdaParameter(identifier)));
+
+    /// <summary>
+    /// 标识符是否绑定于诊断集合 LINQ 调用的 lambda 参数（如 <c>result.Diagnostics.Any(d => ...)</c> 的 d）。
+    /// <para>自标识符向上只认<b>最近一层</b> lambda 的直接参数绑定——参数名不匹配说明引用的是
+    /// 外层变量（如 lambda 体内的 <c>order.Id</c>），不放宽；lambda 宿主调用（Any/Where 等）
+    /// 的接收者须 diag 根植，孤儿标识符不认。</para>
+    /// </summary>
+    private static bool IsDiagnosticLambdaParameter(IdentifierNameSyntax identifier)
+    {
+        for (var current = identifier.Parent; current is not null; current = current.Parent)
+        {
+            if (current is not LambdaExpressionSyntax lambda)
+            {
+                continue;
+            }
+
+            var isParameter = lambda switch
+            {
+                SimpleLambdaExpressionSyntax simple => simple.Parameter.Identifier.ValueText == identifier.Identifier.ValueText,
+                ParenthesizedLambdaExpressionSyntax parenthesized => parenthesized.ParameterList.Parameters.Any(p => p.Identifier.ValueText == identifier.Identifier.ValueText),
+                _ => false,
+            };
+            return isParameter
+                   && lambda.Parent is ArgumentSyntax argument
+                   && argument.Parent?.Parent is InvocationExpressionSyntax invocation
+                   && invocation.Expression is MemberAccessExpressionSyntax method
+                   && IsDiagnosticRooted(method.Expression);
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// 子树内是否出现"诊断对象"的 <c>.Id</c> 成员访问（覆盖 <c>Assert.That(x.Id)</c> 链式起点形态）。

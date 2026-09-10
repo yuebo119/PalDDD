@@ -256,6 +256,30 @@ public sealed class ProjectionCheckpointEfCoreTests
         await Assert.That(ghostCount).IsEqualTo(0);
     }
 
+    [Test]
+    public async Task TryStartAsync_NegativeProcessingTimeout_ThrowsArgumentOutOfRange(CancellationToken cancellationToken)
+    {
+        // v33 P3 守卫直接测试（EFCore 栈，SQLite 关系型真 schema 在场）：负 processingTimeout
+        // 使 LeaseUntil < startedAt，"Processing 且 LeaseUntil > startedAt"防抢占判定恒假，
+        // 刚启动的检查点会被误判僵尸可抢占——守卫必须在任何 DB 写之前触发
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = CreateSqliteOptions(connection);
+        var now = DateTimeOffset.Parse("2026-05-30T00:00:00Z", CultureInfo.InvariantCulture);
+
+        await using var db = new TestProjectionCheckpointDbContext(options);
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+        var store = (IProjectionCheckpointStore)db;
+
+        await Assert.That(async () => await store.TryStartAsync(
+            "order-summary", "orders", "42", now, TimeSpan.FromSeconds(-1), cancellationToken))
+            .Throws<ArgumentOutOfRangeException>();
+
+        // 守卫前置：拒绝后不得落任何检查点行
+        await Assert.That(await db.ProjectionCheckpoints.AsNoTracking().CountAsync(cancellationToken))
+            .IsEqualTo(0);
+    }
+
     private static DbContextOptions<TestProjectionCheckpointDbContext> CreateOptions()
         => new DbContextOptionsBuilder<TestProjectionCheckpointDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture))

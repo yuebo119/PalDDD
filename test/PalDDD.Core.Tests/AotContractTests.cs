@@ -441,6 +441,9 @@ public sealed class AotContractTests
     /// - 使用 typeof(T) 而非 Type.GetType(string)
     /// - 使用 JsonSerializerContext.GetTypeInfo(typeof(T)) 而非反射 GetTypeInfo
     /// - 所有类型在编译时已知
+    /// 验证方式（P3 诚实化）：行为断言——在反射禁用进程内用编译时 JsonTypeInfo 完成
+    /// 序列化往返；注册模式若退化为 Type.GetType/GetMethod 反射查找，会与
+    /// <see cref="UnregisteredType_FailsFast_WhenReflectionDisabled"/> 同款抛 InvalidOperationException。
     /// </summary>
     [Test]
     public async Task SourceGen_MessageRegistrationPattern_IsAotSafe()
@@ -454,6 +457,20 @@ public sealed class AotContractTests
 
         await Assert.That(descriptor.Name).IsEqualTo("src-gen-pattern.v1");
         await Assert.That(descriptor.ClrType).IsEqualTo(typeof(AotTestMessage));
+
+        // P3 补真断言：原只验上方 2 个属性，summary 声称的"无反射注册模式"无实际验证——
+        // 在反射禁用（全局构建配置进程级建立，前提守卫同 FailsFast 测试）下走完
+        // 编译时元数据的序列化往返，反射回退路径在此必炸
+        await Assert.That(System.Text.Json.JsonSerializer.IsReflectionEnabledByDefault).IsFalse();
+        var serializer = new JsonMessageSerializer(MessageCatalog.Empty, AotContractJsonContext.Default.Options);
+        var message = new AotTestMessage("aot-pattern", 7);
+
+        var payload = serializer.Serialize(message, descriptor);
+        var roundTripped = serializer.Deserialize<AotTestMessage>(payload.Span, descriptor);
+
+        await Assert.That(roundTripped).IsNotNull();
+        await Assert.That(roundTripped.Id).IsEqualTo(message.Id);
+        await Assert.That(roundTripped.Count).IsEqualTo(message.Count);
     }
 }
 

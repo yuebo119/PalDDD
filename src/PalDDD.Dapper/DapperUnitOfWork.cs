@@ -53,6 +53,13 @@ public sealed class DapperUnitOfWork : IUnitOfWork
 
     public async ValueTask CommitAsync(CancellationToken ct = default)
     {
+        // ITM-165 姊妹收口：Dispose 后 Commit 抛 ObjectDisposedException（对齐 PalOrmUnitOfWork.
+        // CommitAsync 首行守卫）——原静默 return 把"已释放后提交"伪装成成功落库；
+        // 未 Begin 事务的幂等 no-op 语义不受影响（下方 null 判定保留，测试
+        // CommitAsync_WithoutBegin_IsNoOp 锁定）。全仓调用方（IUnitOfWork 扩展
+        // ExecuteInTransactionAsync 等）均在 Dispose 前提交，无静默语义依赖。
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
         if (_transaction is null)
             return;
 

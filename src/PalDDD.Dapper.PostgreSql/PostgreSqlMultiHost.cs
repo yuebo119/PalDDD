@@ -420,6 +420,11 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
     /// P2/P3 修复（十七轮）：副本连接串的 Username/Password/Database 与主库不一致时抛明确异常——
     /// Npgsql 连接串的凭据/库名对主机列表内全部节点统一生效，多主机合并只保留 Host 条目，
     /// 差异被静默丢弃（故障转移后必然连接失败/连错库）。镜像 MySqlMultiHost 快速失败模式。
+    /// <para>
+    /// ITM-652（镜像 MySqlMultiHost v65 P3 F1-3 收口）：SslMode 纳入同集——同为
+    /// "主机列表内统一生效"的共享参数，standby/replica 与主库不一致时合并后仅 primary 值生效
+    /// （显式更严/更宽均被静默丢弃；TLS 安全配置被静默降级属高危）。
+    /// </para>
     /// </summary>
     /// <param name="primary">主库连接串（凭据基准）。</param>
     /// <param name="replica">副本连接串（仅 Host/Port 应与主库不同）。</param>
@@ -429,12 +434,16 @@ services.AddSingleton<NpgsqlDataSource>(dataSource2);
     {
         if (!string.Equals(replica.Username, primary.Username, StringComparison.Ordinal)
             || !string.Equals(replica.Password, primary.Password, StringComparison.Ordinal)
-            || !string.Equals(replica.Database, primary.Database, StringComparison.Ordinal))
+            || !string.Equals(replica.Database, primary.Database, StringComparison.Ordinal)
+            // ITM-652：SslMode 属性比对（枚举值相等）——镜像 MySqlMultiHost v65 的
+            // standbyBuilder.SslMode != primaryBuilder.SslMode 写法；未显式时两侧同取
+            // Npgsql 默认值（Prefer），显式同值（合法冗余）与未显式均放行，仅显式不一致拦截
+            || replica.SslMode != primary.SslMode)
         {
             throw new ArgumentException(
-                $"{replicaRole} 与主库的 Username/Password/Database 必须一致：Npgsql 连接串的这些参数对主机列表内全部节点统一生效，"
-                + "多主机合并只保留 Host 条目（端口经 host:port 内嵌），凭据/库名差异无法表达且会被静默丢弃"
-                + "（故障转移后必然连接失败或连错库）。请为节点配置相同账号与库，或使用 AddPalNpgsqlDataSourceMultiHost 自定义完整连接串。");
+                $"{replicaRole} 与主库的 Username/Password/Database/SslMode 必须一致：Npgsql 连接串的这些参数对主机列表内全部节点统一生效，"
+                + "多主机合并只保留 Host 条目（端口经 host:port 内嵌），凭据/库名/TLS 模式差异无法表达且会被静默丢弃"
+                + "（故障转移后必然连接失败或连错库，或 TLS 安全配置被静默降级）。请为节点配置相同账号/库/TLS 模式，或使用 AddPalNpgsqlDataSourceMultiHost 自定义完整连接串。");
         }
     }
 

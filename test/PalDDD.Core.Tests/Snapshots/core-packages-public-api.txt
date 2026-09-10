@@ -37,7 +37,7 @@ class PalDDD.CQRS.PalValidationException
   ctor(System.String message, System.Exception inner)
   ctor(System.String property, System.String message)
   property System.Collections.Immutable.ImmutableArray<PalDDD.Core.PalValidationError> Errors
-class PalDDD.CQRS.RequestExecutor
+delegate PalDDD.CQRS.RequestExecutor
   ctor(System.Object object, System.IntPtr method)
   method System.IAsyncResult BeginInvoke(System.IServiceProvider services, PalDDD.CQRS.IBaseRequest request, System.Threading.CancellationToken ct, System.AsyncCallback callback, System.Object object)
   method System.Threading.Tasks.ValueTask<System.Object> EndInvoke(System.IAsyncResult result)

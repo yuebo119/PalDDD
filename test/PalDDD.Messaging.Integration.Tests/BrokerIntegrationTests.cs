@@ -6,6 +6,7 @@ using PalDDD.Serialization;
 using PalDDD.Serialization.Json;
 using PalDDD.Testing;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Exceptions;
 using System.Text.Json.Serialization;
 using Testcontainers.Kafka;
 using Testcontainers.RabbitMq;
@@ -192,7 +193,11 @@ public sealed class BrokerFixture : IAsyncDisposable
     public async ValueTask<(RabbitMqBroker, JsonMessageSerializer)> CreateRabbitMqBrokerAsync()
         => await CreateRabbitMqBrokerAsync(NullPalLogger<RabbitMqBroker>.Instance);
 
-    public async ValueTask<(RabbitMqBroker, JsonMessageSerializer)> CreateRabbitMqBrokerAsync(IPalLogger<RabbitMqBroker> logger)
+    /// <summary>
+    /// 创建 RabbitMQ 连接（ITM-651 提取）——默认 broker 工厂与 PublishException 测试的
+    /// 自定义 catalog 构造共用同一套连接参数；连接生命周期由调用方管理。
+    /// </summary>
+    public async ValueTask<IConnection> CreateRabbitConnectionAsync()
     {
         var host = _remoteRabbitHost ?? _rabbitMq!.Hostname;
         var port = _remoteRabbitHost is not null ? _remoteRabbitPort : _rabbitMq!.GetMappedPublicPort(5672);
@@ -204,9 +209,19 @@ public sealed class BrokerFixture : IAsyncDisposable
             Password = _rabbitPassword,
             AutomaticRecoveryEnabled = false
         };
-        var connection = await factory.CreateConnectionAsync();
-        var channel = await connection.CreateChannelAsync();
-        var broker = new RabbitMqBroker(connection, channel,
+        return await factory.CreateConnectionAsync();
+    }
+
+    public async ValueTask<(RabbitMqBroker, JsonMessageSerializer)> CreateRabbitMqBrokerAsync(IPalLogger<RabbitMqBroker> logger)
+    {
+        var connection = await CreateRabbitConnectionAsync();
+        // ITM-651：改走 CreateAsync 工厂——channel 启用 publisher confirms + confirmation
+        // tracking（原裸 CreateChannelAsync() 的 channel 无 confirms，mandatory:true 的
+        // basic.return 不会被客户端转成 PublishException，集成面从未覆盖 confirms 路径）。
+        // 现有 Rabbit 测试均"先订阅后发布"（exchange 有绑定队列，mandatory 路由必成功），
+        // 无依赖无 confirms 行为的用例，故不保留旧的无 confirms 构造分支。
+        var broker = await RabbitMqBroker.CreateAsync(
+            connection,
             logger,
             _catalogAndSerializer.Serializer,
             _catalogAndSerializer.Catalog);
@@ -430,8 +445,17 @@ public sealed class BrokerIntegrationTests
         {
             consumerReady.TrySetResult(); // handler 首次回调 = consumer join group + 消费链路通
             if (!msg.Name.StartsWith(prefix, StringComparison.Ordinal)) return ValueTask.CompletedTask;
-            lock (received) received.Add(msg);
-            if (received.Count >= 5) done.TrySetResult();
+            // P3#18：done 门限改按去重集合计数（原 received.Count >= 5 总计数）——重投递
+            // 副本恰为第 5 个到达时总计数先到 5 而唯一消息不足 5 条，done 提前触发使下方
+            // Distinct 断言假红（非消息缺失）。去重计数并入写锁计算（原 Count 读取在锁外，
+            // 与写侧 List 构成读写竞态，一并收敛）；到 5 才触发保证 done 后 5 条唯一消息必齐。
+            int uniqueCount;
+            lock (received)
+            {
+                received.Add(msg);
+                uniqueCount = received.Select(m => m.Name).Distinct().Count();
+            }
+            if (uniqueCount >= 5) done.TrySetResult();
             return ValueTask.CompletedTask;
         }, cancellationToken);
 
@@ -617,8 +641,17 @@ public sealed class BrokerIntegrationTests
         {
             consumerReady.TrySetResult(); // handler 首次回调 = queue 声明 + BasicConsume 链路通
             if (!msg.Name.StartsWith(prefix, StringComparison.Ordinal)) return ValueTask.CompletedTask;
-            lock (received) received.Add(msg);
-            if (received.Count >= 5) done.TrySetResult();
+            // P3#18：done 门限改按去重集合计数（原 received.Count >= 5 总计数）——重投递
+            // 副本恰为第 5 个到达时总计数先到 5 而唯一消息不足 5 条，done 提前触发使下方
+            // Distinct 断言假红（非消息缺失）。去重计数并入写锁计算（原 Count 读取在锁外，
+            // 与写侧 List 构成读写竞态，一并收敛）；到 5 才触发保证 done 后 5 条唯一消息必齐。
+            int uniqueCount;
+            lock (received)
+            {
+                received.Add(msg);
+                uniqueCount = received.Select(m => m.Name).Distinct().Count();
+            }
+            if (uniqueCount >= 5) done.TrySetResult();
             return ValueTask.CompletedTask;
         }, cancellationToken);
 
@@ -640,5 +673,43 @@ public sealed class BrokerIntegrationTests
         lock (received) snapshot = [.. received];
         await Assert.That(snapshot.Count).IsGreaterThanOrEqualTo(5);
         await Assert.That(snapshot.Select(m => m.Name).Distinct().Count()).IsGreaterThanOrEqualTo(5);
+    }
+
+    /// <summary>
+    /// ITM-651：锁定 ITM-213+639 联合语义——publisher confirms 启用（fixture 改走
+    /// RabbitMqBroker.CreateAsync）+ mandatory:true 下，发布到无绑定队列的 exchange 时
+    /// broker 的 basic.return 必须被客户端转成 <see cref="PublishException"/> 而非静默
+    /// "成功"（后者会使 Outbox 误标 Processed → 消息实际丢失）。此前该联合语义零集成锁定。
+    /// 专用 exchange 恒无绑定：固定名 + durable 声明幂等（远程长期 broker 上残留恒为一个
+    /// 空 exchange），且任何测试/并发会话都不会向它绑定队列，不受测试顺序影响。
+    /// </summary>
+    [Test]
+    [NotInParallel("broker-integration")]
+    public async Task RabbitMq_PublishUnroutableMessage_ThrowsPublishException(CancellationToken cancellationToken)
+    {
+        SkipIfRabbitUnavailable();
+
+        // 专用 catalog：TestMessage 映射到恒无绑定的 exchange——fixture 默认 catalog 的
+        // "test-message" 会被其余 Rabbit 测试的订阅队列绑定（并发会话亦然），重用会因
+        // 路由成功而不抛异常 → 假失败
+        const string unroutableExchange = "test-message-unroutable";
+        var builder = new MessageCatalogBuilder();
+        builder.Add(MessageDescriptor.Create(TestJsonContext.Default.TestMessage, unroutableExchange));
+        var catalog = builder.Build();
+        var serializer = new JsonMessageSerializer(catalog);
+
+        // 自管连接：RabbitMqBroker.DisposeAsync 只释放 channel（所有权契约），连接由本
+        // 测试持有并释放（await using 声明顺序保证 channel 先于连接释放）
+        await using var connection = await Fixture.CreateRabbitConnectionAsync();
+        await using var broker = await RabbitMqBroker.CreateAsync(
+            connection, NullPalLogger<RabbitMqBroker>.Instance, serializer, catalog,
+            ct: cancellationToken);
+
+        // 无绑定 exchange + mandatory:true + confirms 启用 → broker 回 basic.return →
+        // 客户端转 PublishException（先捕获再断言——ThrowsAsync 成功即已证明异常非空）
+        var exception = await Assert.ThrowsAsync<PublishException>(
+            () => broker.PublishAsync(new TestMessage("rmq-unroutable"), cancellationToken).AsTask());
+        // IsReturn=true 锁定异常确因 basic.return（mandatory 路由失败）而非 confirm nack
+        await Assert.That(exception!.IsReturn).IsTrue();
     }
 }

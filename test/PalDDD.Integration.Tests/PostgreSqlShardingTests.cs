@@ -25,11 +25,17 @@ public sealed class PostgreSqlShardingTests
     {
         var sharding = new ConsistentHashSharding(4, virtualNodes: 16);
 
+        var shards = new HashSet<int>();
         for (var i = 0; i < 100; i++)
         {
             var shard = sharding.GetShardId(Guid.NewGuid());
             await Assert.That(shard).IsGreaterThanOrEqualTo(0).And.IsLessThan(4);
+            shards.Add(shard);
         }
+
+        // P3 补分布断言：只验范围时"恒路由到同一分片"的退化实现也全绿——
+        // 100 个随机 Guid 须至少落到 2 个不同分片（只防退化，不断言均匀性）
+        await Assert.That(shards.Count).IsGreaterThanOrEqualTo(2);
     }
 
     [Test]
