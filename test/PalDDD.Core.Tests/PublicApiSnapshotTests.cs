@@ -48,6 +48,16 @@ public sealed class PublicApiSnapshotTests
 
         if (Environment.GetEnvironmentVariable("PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS") == "1")
         {
+            // P3 修复：CI 守卫——该开关若误泄漏进流水线（环境变量继承/脚本污染），
+            // 本测试会静默把金标改写成当前公共面，吞掉 API 破坏（门禁假绿）。
+            // CI 下拒绝自更新并快失败，金标更新只允许本地显式执行。
+            if (IsCiEnvironment())
+            {
+                throw new InvalidOperationException(
+                    "PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 在 CI 环境被检测到——拒绝在 CI 上自更新公共 API 金标"
+                    + "（会静默吞掉 API 破坏）。请在本地更新快照并提交。");
+            }
+
             Directory.CreateDirectory(Path.GetDirectoryName(snapshotPath)!);
             await File.WriteAllTextAsync(snapshotPath, actual, cancellationToken);
         }
@@ -56,6 +66,11 @@ public sealed class PublicApiSnapshotTests
 
         await Assert.That(Normalize(expected)).IsEqualTo(Normalize(actual));
     }
+
+    /// <summary>是否处于 CI 环境（CI / GITHUB_ACTIONS 任一非空即判定）。</summary>
+    private static bool IsCiEnvironment()
+        => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI"))
+           || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"));
 
     private static string BuildSnapshot()
     {

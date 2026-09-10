@@ -23,8 +23,11 @@ cd "$(dirname "$0")/.."
 CHANGELOG="CHANGELOG.md"
 FAIL=0
 WARN=0
+# P3 修复：通过数按实际执行的检查项累加——原汇总行 `$((4+1-WARN-FAIL))` 硬编码 5 项上限，
+# 而 C4/C5 在"无已发布段/无附录"时整段跳过（既不 pass 也不 warn/fail），通过数虚报。
+PASS=0
 
-pass() { echo "PASS C$1: ${2:-}"; }
+pass() { echo "PASS C$1: ${2:-}"; PASS=$((PASS+1)); }
 fail() { echo "FAIL C$1: ${2:-}"; FAIL=$((FAIL+1)); }
 warn() { echo "WARN C$1: ${2:-}"; WARN=$((WARN+1)); }
 
@@ -100,5 +103,5 @@ if [ -n "${LATEST_LINE:-}" ] && [ -n "${APPENDIX_LINE:-}" ]; then
     fi
 fi
 
-echo "═══ 结果: $((4+1-WARN-FAIL)) 通过 / ${WARN} 警告 / ${FAIL} 失败 ═══"
+echo "═══ 结果: ${PASS} 通过 / ${WARN} 警告 / ${FAIL} 失败 ═══"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -65,12 +65,18 @@ public sealed class PostgreSqlReadWriteRouter : IAsyncDisposable
     /// 实例注册（<c>AddSingleton(router)</c>，ImplementationInstance）下 MS.DI 不接管释放，
     /// 本方法永不执行、NpgsqlDataSource 连接池静默泄漏（ITM-637）。
     /// </summary>
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types",
+        Justification = "Writer/Reader 释放需逐项隔离任意异常（含 OperationCanceledException），确保先释放项失败不中断其余连接池释放；首个异常循环结束后上抛。")]
     public async ValueTask DisposeAsync()
     {
-        // ITM-249 修复（F9，对齐同包姊妹 PostgreSqlSharding.ShardedDataSourceManager 三十七轮）：
+        // ITM-249 修复（F9，对齐同包姊妹 PostgreSqlSharding.ShardedDataSourceManager 逐 shard 形态）：
         // 逐数据源异常隔离——原实现 Writer.DisposeAsync 抛出时 Reader 永不释放（读库连接池
-        // 泄漏）。现挂起首异常继续释放 Reader，最后重抛（姊妹同款 OperationCanceledException
-        // 不吞过滤）。
+        // 泄漏）。现挂起首异常继续释放 Reader，最后重抛。
+        // P3 修复：catch 过滤 `when (ex is not OperationCanceledException)` 使 Writer 抛
+        // OperationCanceledException 时异常直接逃逸出 try——Reader 分支不执行（连接池泄漏），
+        // 且首异常语义失效。Dispose 路径无调用方取消语义（NpgsqlDataSource.DisposeAsync 本身
+        // 不收 token），OCE 与普通异常同等处理：记录首个异常后继续释放其余，循环结束再上抛
+        //（对齐姊妹 ShardedDataSourceManager v65 同款口径）。
         // 传感器说明：Writer/Reader 为 NpgsqlDataSource 具体类型，构造经 NpgsqlDataSourceBuilder
         // 收口（无可注入替换点，fake 子类不可行），"Writer 抛异常后 Reader 仍被释放"无法单测
         // 隔离验证——验证方式为与姊妹逐 shard 隔离实现逐行形态对照（本包内同型已生效模式）。
@@ -79,7 +85,7 @@ public sealed class PostgreSqlReadWriteRouter : IAsyncDisposable
         {
             await Writer.DisposeAsync().ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
             firstError = ex;
         }
@@ -89,7 +95,7 @@ public sealed class PostgreSqlReadWriteRouter : IAsyncDisposable
             {
                 await Reader.DisposeAsync().ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex)
             {
                 firstError ??= ex;  // 保首个异常，继续释放其余
             }

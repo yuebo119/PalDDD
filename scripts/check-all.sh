@@ -25,6 +25,13 @@ echo "═══════ 2/3 CA 分析 ═══════"
 dotnet build PalDDD.slnx -c Debug --nologo 2>&1 | tail -3
 
 echo "═══════ 3/3 编译 ═══════"
+# set -e 下赋值须用 || 捕获退出码（对齐上方 FORMAT_EXIT 形态）；ERROR_COUNT 为死变量
+# 修复：原计算后从不使用——现真正参与判定（非 "error CS" 形式的构建失败已由 2/3 段
+# pipefail 拦截，此处兜住 error CS 计数型失败）。
 ERROR_COUNT=$(dotnet build PalDDD.slnx -c Debug --nologo 2>&1 | grep -c "error CS" || true)
 echo "  编译错误: $ERROR_COUNT 项"
+if [ "$ERROR_COUNT" -gt 0 ]; then
+    echo "  ❌ 编译存在 $ERROR_COUNT 项 error CS"
+    exit 1
+fi
 echo "═══ 完成 ═══"

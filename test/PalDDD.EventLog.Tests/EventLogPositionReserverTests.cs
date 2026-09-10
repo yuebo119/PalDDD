@@ -2,6 +2,16 @@ using Microsoft.EntityFrameworkCore;
 
 namespace PalDDD.EventLog.Tests;
 
+/// <summary>
+/// 事件日志位置预留器测试（chunk 分配 / 持久化恢复 / 并发去重 / 唯一约束分类）。
+/// </summary>
+/// <remarks>
+/// 伪异常说明（P3）：<c>ReserveAsync_NonUniqueDbUpdateException_*</c> 用测试内自定义伪
+/// <c>PostgresException</c>（仅类型名 + <c>SqlState</c> 属性）驱动，<c>ReserveAsync_UniqueConstraint*</c>
+/// 用真实 <c>Microsoft.Data.Sqlite.SqliteException</c> 驱动。前者仅验证 <c>SqlErrorClassifier</c>
+/// 鸭子匹配的 SqlState 分支，<b>不覆盖真实 Npgsql.PostgresException 类型</b>（真实驱动路径由关系型
+/// 集成测试覆盖）。
+/// </remarks>
 public sealed class EventLogPositionReserverTests
 {
     [Test]
