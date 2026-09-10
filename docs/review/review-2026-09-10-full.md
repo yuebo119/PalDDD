@@ -284,3 +284,27 @@ SDK         : 11.0.100-rc.1.26425.128
 ---
 
 > 报告与证据链：`.ai` 系统运行输出留档于工作区临时目录；子代理逐文件覆盖度自报见各分片交付。本报告按 `.ai/review/prompt.md`「报告不可变」规则归档——后续只可追加「事后勘误」区块，不得改写正文结论。
+
+---
+
+## 事后勘误 / 修复轮与验证轮（2026-09-10 追加，正文结论不变）
+
+**修复轮**：ITM-615～647 **64 条全部清偿**（4 P1 + 26 P2 + 34 P3）。主仓 4 commit（`891a1a0`/`043c9f1`/`612f3e0` + 本轮收尾）+ `.ai` 仓 1 commit（`19b1e4b`）。
+
+**验证轮要点**：
+
+| 验证项 | 结果 |
+|--------|------|
+| Release 构建 | 0 警告 0 错误 |
+| 无外部依赖测试 | 15 项目 1094+ 用例全绿（Core.Tests 298 含 ITM-626 端到端 2 例） |
+| 机械防线 | gate（含新变更集基线）· verify-ai **23/23**（新增 V23 镜像对内容比对）· tech-debt 0 失败 · doc/encoding/template/test-gate 全绿 |
+| **S3 反向验证** | ITM-632：移除修复 → 幽灵租约测试红 → 恢复 → 绿（测试真实锁定） |
+| **ITM-626 双向 mutation** | 移除 `[JsonSerializable]` → 编译失败；断言改错名 → 测试红 |
+| 门禁红测 | fix-completeness guard 错 KEY 现 exit 1；secret-scan 植入伪凭据 exit 1、干净仓库 PASS |
+| 三方一致 | 旧事实值（21 ADR/212 文件/33 方法/40 包/继承 22/`dotnet test slnx`）零残留 |
+
+**方言实测轴（第三轴）终态**：重试后**仍不可达**——PG/MySQL 均 TCP 层可达（探活 OK），但应用层握手超时（Npgsql/MySqlConnector Connect Timeout）。结论：**环境不可达，方言轴待 CI**（CI 有 Testcontainers dialect-probe job）。**附带实证**：探针优雅记录双侧"环境性降级"并继续（输出"失败 2 项"而非 Unhandled 崩溃）——确认 ITM-618 同步过来的 v8 单方言降级修复（`RunDialectGuarded`）在本轮真实生效。
+
+**新增回归测试**：`MessageCatalogEndToEndTests`（2）· `OutboxRequeueSqliteTests`（跨栈 RequeueDead）· 投影/Idempotency/Saga 三库幽灵租约测试（4）· 零副本 Host 校验（2）· PalORM RequeueDead（4）· MySQL Saga JSON（1）· AddPalPrefix 负向自证（1）· 诊断覆盖门禁负向（1）——共约 16 个新测试，均带 mutation 或 S3 实证。
+
+**收束判定更新**：机械轴 ✅ · 静态轴 ✅（P0-P2 全清）· 实测轴 ⏸️ 待 CI（方言）；验收标准五项中四项达成，剩"方言探针真跑"归 CI。

@@ -95,7 +95,7 @@ public sealed class IterativeDomainEventDispatcherTests
     }
 
     [Test]
-    public async Task SingleEvent_DispachesToHandler()
+    public async Task SingleEvent_DispatchesToHandler()
     {
         var handler = new OrderPlacedHandler();
 
@@ -136,7 +136,7 @@ public sealed class IterativeDomainEventDispatcherTests
     }
 
     [Test]
-    public async Task MultipleEvents_DispachesToAll()
+    public async Task MultipleEvents_DispatchesToAll()
     {
         var placedHandler = new OrderPlacedHandler();
         var shippedHandler = new OrderShippedHandler();

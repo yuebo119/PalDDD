@@ -72,9 +72,9 @@ public sealed class DiagnosticCoverageGateTests
 
         // ── 真断言：必须判为覆盖（含跨行链式，上一版假红形态）──
         await Assert.That(HasAssertion($"await Assert.That(d.Id == \"{id}\").IsTrue();", id)).IsTrue();
-        await Assert.That(HasAssertion($"await Assert.That(d.Id).IsEqualTo(\"{id}\");", id)).IsTrue();
-        await Assert.That(HasAssertion($"await Assert.That(d.Id){'\n'}    .IsEqualTo(\"{id}\");", id)).IsTrue();
-        await Assert.That(HasAssertion($"await Assert.That(d.Id).IsEquivalentTo(\"{id}\");", id)).IsTrue();
+        await Assert.That(HasAssertion($"await Assert.That(diagnostics[0].Id).IsEqualTo(\"{id}\");", id)).IsTrue();
+        await Assert.That(HasAssertion($"await Assert.That(diagnostics[0].Id){'\n'}    .IsEqualTo(\"{id}\");", id)).IsTrue();
+        await Assert.That(HasAssertion($"await Assert.That(result.Diagnostics[0].Id).IsEquivalentTo(\"{id}\");", id)).IsTrue();
         await Assert.That(HasAssertion($"HasId(\"{id}\");", id)).IsTrue();
         // 同行含 // 的字符串（上一版假红形态）：断言在字符串之后，剥注释不得伤及断言
         await Assert.That(HasAssertion($"var u = \"http://x\"; await Assert.That(d.Id == \"{id}\").IsTrue();", id)).IsTrue();
@@ -89,6 +89,9 @@ public sealed class DiagnosticCoverageGateTests
         await Assert.That(HasAssertion($"await Assert.That(d.Id).IsNotEqualTo(\"{id}\");", id)).IsFalse();
         // 不相关成员访问：不得因 "Id" 子串误判
         await Assert.That(HasAssertion($"await Assert.That(other.Value).IsEqualTo(\"{id}\");", id)).IsFalse();
+        // 非诊断对象的 .Id 断言：ID 字面量虽匹配，接收者非诊断集合（名不含 Diag）——不得计入覆盖
+        // （P3 收紧：原 MentionsId 只查任意 .Id，order.Id 这类无关断言会被误判为覆盖）
+        await Assert.That(HasAssertion($"await Assert.That(order.Id).IsEqualTo(\"{id}\");", id)).IsFalse();
     }
 
     /// <summary>
@@ -142,11 +145,26 @@ public sealed class DiagnosticCoverageGateTests
         => expression is MemberAccessExpressionSyntax access
            && access.Name.Identifier.Text == "Id";
 
-    /// <summary>子树内是否出现 <c>.Id</c> 成员访问（覆盖 <c>Assert.That(x.Id)</c> 链式起点形态）。</summary>
+    /// <summary>
+    /// 子树内是否出现"诊断对象"的 <c>.Id</c> 成员访问（覆盖 <c>Assert.That(x.Id)</c> 链式起点形态）。
+    /// <para>
+    /// P3 收紧（2026-09-10）：原实现只要子树含任意 <c>.Id</c> 即判覆盖——非诊断对象断言
+    /// （如 <c>Assert.That(order.Id).IsEqualTo("PALENUM004")</c>）会被误判为覆盖，削弱门禁召回。
+    /// 现要求 <c>.Id</c> 的接收者标识符链根植于诊断集合（标识符名含 Diag，如
+    /// <c>result.Diagnostics[0].Id</c>）；无关对象的 <c>.Id</c> 不再计入。
+    /// </para>
+    /// </summary>
     private static bool MentionsId(SyntaxNode node)
         => node.DescendantNodesAndSelf()
             .OfType<MemberAccessExpressionSyntax>()
-            .Any(access => access.Name.Identifier.Text == "Id");
+            .Any(access => access.Name.Identifier.Text == "Id"
+                           && IsDiagnosticRooted(access.Expression));
+
+    /// <summary>被 <c>.Id</c> 访问的接收者标识符链是否根植于诊断集合（标识符名含 Diag，忽略大小写）。</summary>
+    private static bool IsDiagnosticRooted(ExpressionSyntax receiver)
+        => receiver.DescendantNodesAndSelf()
+            .OfType<IdentifierNameSyntax>()
+            .Any(identifier => identifier.Identifier.Text.Contains("diag", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>表达式是否为值等于 <paramref name="value"/> 的字符串字面量。</summary>
     private static bool IsStringLiteral(ExpressionSyntax expression, string value)

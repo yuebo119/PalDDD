@@ -15,11 +15,11 @@
 |:------:|:------:|:------:|:------:|:------:|:------:|
 | **P0** | 0 | 0 | 0 | 0 | — |
 | **P1** | 4 | 0 | 0 | 4 | 100% |
-| **P2** | 26 | 1 | 0 | 25 | 96% |
-| **P3** | 34（汇总） | 2 | 0 | 32 | 94% |
-| **合计** | 64 | 3 | 0 | 61 | **95%** |
+| **P2** | 26 | 0 | 0 | 26 | 100% |
+| **P3** | 34（汇总） | 0 | 0 | 34 | 100% |
+| **合计** | 64 | 0 | 0 | 64 | **100%** |
 
-**未完成项**：ITM-626（生成物端到端测试，需设计载体）、P3 中 2 条低价值观察项。
+**全部清偿**（第二轮补漏：ITM-626 生成物端到端测试 + P3 收尾 11 项）。
 
 **本轮结论**：机械防线全绿（gate 24/24 · verify-ai 23/23 · tech-debt 0 失败 · doc-consistency 11/11 · encoding 4/4 · template PASS · test-gate 0 失败）· Release 构建 0 警告 0 错误 · 无外部依赖测试 14 项目 1096 用例全绿。地毯式逐行 + 跨片核对暴露的 **4 项 P1 + 26 项 P2 已全部清偿**，P3 汇总清偿 32/34（余 2 条属低价值观察项，留 P3 backlog）。
 
@@ -149,7 +149,7 @@
 ### [ ] ITM-626 · `AddGeneratedMessages` 全仓零接线——生成物无端到端测试 · 可信度 ✅
 - **维度**：生成语义流
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
-- **状态**：⏸️ 本轮未做（需设计端到端测试载体，单独排期）
+- **状态**：✅ 已修（2026-09-10 第二轮）——新增 `test/PalDDD.Core.Tests/MessageCatalogEndToEndTests.cs`：用真实 `[GenerateMessage]` + `[JsonSerializable]` context（测试项目以 Analyzer 形式引用生成器），在测试内直接调用生成物 `PalMessageCatalog.AddGeneratedMessages`，验证"标注 → 生成 → 运行期目录可查（按名/按类型）"全链打通。双向 mutation 验证：移除 `[JsonSerializable]` → 编译失败（证明生成链路活跃）；断言改错名 → 测试红（证明有区分力）。
 - **问题**：`MessageRegistryGenerator` emit 的 `PalMessageCatalog.AddGeneratedMessages(builder, jsonContext)`（`MessageRegistryGenerator.cs:298`）在全仓（src/test/samples/docs）**零调用点**；所有样本/测试手写 `MessageCatalogBuilder`。生成物是"孤儿 API"——单测用 Roslyn driver 断言生成源码，但**无集成测试证明生成物能被 `AddPalJsonSerialization` 消费**。若用户 context 缺 `[JsonSerializable]`，运行时抛 `InvalidOperationException("Missing JsonTypeInfo")`，编译期无守卫。
 - **建议**：补一个 samples/ 或测试用例走完整链（`[GenerateMessage]` → 生成器 → `AddGeneratedMessages` → 序列化 roundtrip）；或在文档明确"生成物需手动接线"契约。
 - **验证**：`grep -rn "AddGeneratedMessages" -- .` → 仅生成器自身 1 处（定义）。✅ 已实测

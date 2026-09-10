@@ -62,7 +62,10 @@ if [[ ! -f "$merged_cobertura" ]]; then
   echo "ERROR: merged cobertura report not found at $merged_cobertura" >&2
   exit 1
 fi
-line_rate=$(grep -o '<coverage[^>]*line-rate="[0-9.]*"' "$merged_cobertura" | head -1 | grep -o 'line-rate="[0-9.]*"' | grep -o '[0-9.]*$')
+# set -e（无 pipefail）下末段 grep 无匹配即返回非零——原写法会让脚本在此直接退出，
+# 下方友好报错分支不可达。`|| true` 兜底使赋值空串、控制流交给显式判定
+#（保持 fail-closed：无法解析仍退出 1，但给出可读信息）。
+line_rate=$(grep -o '<coverage[^>]*line-rate="[0-9.]*"' "$merged_cobertura" | head -1 | grep -o 'line-rate="[0-9.]*"' | grep -o '[0-9.]*$' || true)
 if [[ -z "$line_rate" ]]; then
   echo "ERROR: could not parse line-rate from $merged_cobertura (report format drift?)" >&2
   exit 1
