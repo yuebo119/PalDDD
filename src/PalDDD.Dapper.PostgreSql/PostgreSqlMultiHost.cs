@@ -209,6 +209,15 @@ public static class PostgreSqlMultiHost
 
         if (replicaConnectionStrings.Length == 0)
         {
+            // ITM-635 修复（姊妹对称）：零副本分支接入单主机列表守卫。本分支直连主库单数据源，
+            // 原实现绕过全部列表校验，与语义等价的单主机入口（PostgreSqlServiceCollectionExtensions
+            // AddPalNpgsqlDataSource 两处重载）行为分叉：同一连接串 "Host=pg1,,pg2" 传
+            // AddPalNpgsqlDataSource 抛异常，传本入口却静默放行，空段成为参与轮询的死节点
+            //（同文件 EnsureNoBlankHostEntries 的既定定性）。复用现成守卫保持口径一致。
+            var soloCsBuilder = new NpgsqlConnectionStringBuilder(primaryConnectionString);
+            EnsureNoBlankHostEntries(soloCsBuilder.Host, "Host");
+            EnsureNoDuplicateHost(soloCsBuilder.Host, soloCsBuilder.Port, "Host");
+
             // ITM-110 修复：零副本时直接注册主库单数据源——原实现回退 failover(primary, primary)
             // 产生重复 Host（"pg1,pg1"），驱动层视为主备两份（故障转移/负载语义错乱）
             var soloBuilder = new NpgsqlDataSourceBuilder(primaryConnectionString);

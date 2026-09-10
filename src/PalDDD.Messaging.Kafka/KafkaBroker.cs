@@ -245,6 +245,12 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
 
                     try
                     {
+                        // ITM-628 修复：分区 EOF 空消息守卫（EnablePartitionEof=true 时
+                        // Consume 返回 ConsumeResult.Message == null，仅 IsPartitionEOF 置位）——
+                        // 原代码直接解引用 result.Message.Value 抛 NRE，落 catch(Exception)
+                        // 记假错误日志。EOF 非消息，跳过继续等待（continue 锚定本 while 体）
+                        if (result.Message is null)
+                            continue;
                         // 三十八轮 P3 修复：tombstone（null value）消息走专门分支——
                         // 原路径 null 经隐式转换成空 span 触发反序列化异常，日志噪声且语义混淆
                         if (result.Message.Value is null)

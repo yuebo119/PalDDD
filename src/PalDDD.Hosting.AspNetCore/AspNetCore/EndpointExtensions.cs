@@ -230,6 +230,21 @@ public static class EndpointExtensions
                 await WriteValidationProblemAsync(context, ex).ConfigureAwait(false);
                 return;
             }
+            if (query is null)
+            {
+                // v65 P3：对称 MapCommand 的 `cmd is null` 守卫（:76-85）——bindQuery 在缺必需
+                // 查询参数等场景可能返回 null（接口类型的 TQuery），此前直接流入
+                // Dispatcher.QueryAsync 触发下游 NRE 或 HandlerNotFoundException 逃逸为 500；
+                // 语义应为输入缺失（400），与命令路径统一 ProblemDetails 形态。
+                // （GET 无 body，错误文案指向 query 参数而非请求体）
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await context.Response.WriteAsJsonAsync(
+                    ValidationProblemResponseFactory.CreateInvalidBody(
+                        "Query binding returned null. Ensure all required query parameters are provided."),
+                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                    contentType: null).ConfigureAwait(false);
+                return;
+            }
             var dispatcher = context.RequestServices.GetRequiredService<CQRS.Dispatcher>();
             var ct = context.RequestAborted;
             TResult result;

@@ -83,7 +83,16 @@ public static class SqliteRowFactory
         return value switch
         {
             DateTimeOffset dto => dto,
-            DateTime dt => new DateTimeOffset(dt, TimeSpan.Zero),
+            // v65 P3：按 Kind 分派——原 `new DateTimeOffset(dt, TimeSpan.Zero)` 对 Kind=Local 抛
+            // ArgumentException（"Offset must be zero for Local"）。Utc 套零偏移；Local 用
+            // 无参构造保留真实本地偏移（瞬时不变）；Unspecified 视为 UTC 套零偏移（保持既有语义，
+            // 对齐库内 UTC 存储约定）。
+            DateTime dt => dt.Kind switch
+            {
+                DateTimeKind.Utc => new DateTimeOffset(dt, TimeSpan.Zero),
+                DateTimeKind.Local => new DateTimeOffset(dt),
+                _ => new DateTimeOffset(dt, TimeSpan.Zero)
+            },
             string s => DateTimeOffset.Parse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal),
             _ => throw new InvalidCastException($"Cannot convert {value.GetType()} to DateTimeOffset")
         };

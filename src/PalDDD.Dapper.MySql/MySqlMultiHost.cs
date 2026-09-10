@@ -66,13 +66,17 @@ public static class MySqlMultiHost
         // P2 定案（failover 参数丢弃）：MySQL 连接串的 User/Password/Database
         // 对主机列表内所有节点统一生效——standby 与 primary 不一致时无法表达，
         // 静默丢弃会导致故障转移后连接失败。此处快速失败并说明约束。
+        // v65 P3（F1-3 收口）：SslMode 纳入同集——同为"主机列表内统一生效"的共享参数，
+        // standby 与 primary 不一致时合并后仅 primary 值生效（standby 显式更严/更宽均
+        // 被静默丢弃；安全配置被静默降级属高危）。对照下方 LoadBalance 冲突 fail-fast 先例。
         if (!string.Equals(standbyBuilder.UserID, primaryBuilder.UserID, StringComparison.Ordinal)
             || !string.Equals(standbyBuilder.Password, primaryBuilder.Password, StringComparison.Ordinal)
-            || !string.Equals(standbyBuilder.Database, primaryBuilder.Database, StringComparison.Ordinal))
+            || !string.Equals(standbyBuilder.Database, primaryBuilder.Database, StringComparison.Ordinal)
+            || standbyBuilder.SslMode != primaryBuilder.SslMode)
         {
             throw new ArgumentException(
-                "standby 与 primary 的 User/Password/Database 必须一致：MySQL 连接串的这些参数对主机列表内全部节点统一生效，"
-                + "差异无法表达且会被静默丢弃（故障转移后必然连接失败）。请为两节点配置相同账号/库，或使用自定义多主机扩展。");
+                "standby 与 primary 的 User/Password/Database/SslMode 必须一致：MySQL 连接串的这些参数对主机列表内全部节点统一生效，"
+                + "差异无法表达且会被静默丢弃（故障转移后必然连接失败，或 TLS 安全配置被静默降级）。请为两节点配置相同账号/库/TLS 模式，或使用自定义多主机扩展。");
         }
         // 合并主机列表（凭据/端口/库已验证一致，取 primary 的即可）
         // v19 P2-② + v20 F2 机理勘正：standby 串缺 Server= 时 MySqlConnector 返回<b>空串</b>非

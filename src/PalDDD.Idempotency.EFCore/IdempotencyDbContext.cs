@@ -188,6 +188,14 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
             Entry(record).State = EntityState.Detached;
             throw;
         }
+        catch
+        {
+            // ITM-632：保存失败（含 OCE 与非 DbUpdate 异常）逃逸前 Detach——record 已 Add 为
+            // Added，异常逃逸后滞留 ChangeTracker 会被后续无关 SaveChanges 以 INSERT 落库为
+            // 从未成功获取的幽灵记录；异常（含 OCE）原样上抛，不吞取消、不改语义。
+            Entry(record).State = EntityState.Detached;
+            throw;
+        }
     }
 
     private async ValueTask<IdempotencyRecord?> TryReuseRecordAsync(
@@ -214,6 +222,14 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         {
             // 三十八轮 P2 修复：record 已被 MarkProcessing 变异为 Modified——瞬时故障上抛前
             // Detach，防止下次无关 SaveChanges 把幽灵租约续期一并提交（阻塞其他 worker 至租约过期）
+            Entry(record).State = EntityState.Detached;
+            throw;
+        }
+        catch
+        {
+            // ITM-632：保存失败（含 OCE 与非 DbUpdate 异常）逃逸前 Detach——record 已被
+            // MarkProcessing 变异为 Modified，异常逃逸后滞留 ChangeTracker 会被下次无关
+            // SaveChanges 提交为幽灵租约续期；异常（含 OCE）原样上抛，不吞取消、不改语义。
             Entry(record).State = EntityState.Detached;
             throw;
         }
@@ -300,6 +316,14 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         {
             // 三十八轮 P2 修复：瞬时故障上抛前 Detach——record 已被变异为 Modified，
             // 残留 ChangeTracker 会把幽灵终态/租约一并提交到后续无关 SaveChanges
+            Entry(record).State = EntityState.Detached;
+            throw;
+        }
+        catch
+        {
+            // ITM-632：保存失败（含 OCE 与非 DbUpdate 异常）逃逸前 Detach——record 已被
+            // MarkCompleted/MarkFailed 变异为 Modified，异常逃逸后滞留 ChangeTracker 会被
+            // 后续无关 SaveChanges 提交为幽灵终态；异常（含 OCE）原样上抛，不吞取消、不改语义。
             Entry(record).State = EntityState.Detached;
             throw;
         }

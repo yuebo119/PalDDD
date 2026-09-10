@@ -77,6 +77,13 @@ public sealed class ProjectionCheckpoint
 
     public void MarkProcessing(DateTimeOffset startedAt, TimeSpan processingTimeout)
     {
+        // v65 P3：补负值守卫（对齐 Store 层 TryStartAsync 口径）——负值使 LeaseUntil < startedAt
+        // 即刻过期，僵尸抢占语义退化。注意<b>不禁止 TimeSpan.Zero</b>：方言探针
+        //（scripts/dialect-probe.sh CheckpointSmoke）以 default 租约验证"超时接管可重入"，
+        // Store 层守卫同样仅拒负值（与 DapperInboxStore 路径对齐）。
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
+
         Status = ProjectionCheckpointStatus.Processing;
         UpdatedAt = startedAt;
         LeaseUntil = startedAt + processingTimeout;

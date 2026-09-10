@@ -32,6 +32,11 @@ internal interface IInternalFanOutStep
 /// 不会读取 Completed 内容，也不会把它写回 <see cref="SagaState"/>。子任务结果需要
 /// 留存时，executor 必须在自身逻辑内写入状态（副作用）；无 outputApplier 之类的
 /// 自动回传通道。
+/// <para>
+/// <b>取消语义（v65 P3）</b>：外部 <c>ct</c> 取消 → OCE 传播（中止整条 FanOut）；
+/// PerItemTimeout 触发 → 该项记为 <see cref="TimeoutException"/> 失败；
+/// executor 自身抛出的非外部 OCE（内部超时/子 CTS 取消）→ 该项记为失败，不中止整体。
+/// </para>
 /// </remarks>
 public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
     where TItem : notnull
@@ -167,6 +172,16 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
                     lock (errors)
                         errors.Add((default, new TimeoutException(
                             $"FanOut 子任务 [{idx}] 超过 PerItemTimeout {PerItemTimeout!.Value.TotalMilliseconds}ms")));
+                }
+                catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+                {
+                    // v65 P3：executor 自身抛出的 OCE（内部超时/自建子 CTS 取消/第三方库取消信号），
+                    // 既非外部 ct 取消、也非上方 PerItemTimeout 分支——原实现使其逃逸 Task，
+                    // Task.WhenAll 后在编排器被当作整体取消（单个子任务自取消中止整条 FanOut）。
+                    // 按"该项失败"收集（对齐文件头"部分失败不阻断其他子任务"的设计契约）；
+                    // 外部 ct 真取消时本分支过滤为假，OCE 照常传播（保留取消语义）。
+                    lock (errors)
+                        errors.Add((default, ex));
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {

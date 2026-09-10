@@ -145,6 +145,77 @@ public class PalOrmOutboxStoreTests
         await Assert.That(count).IsEqualTo(0);
     }
 
+    // ── ITM-642：RequeueDeadAsync（ADR-011 Dead→Pending）行为——PalORM 栈此前零覆盖 ──
+
+    [Test]
+    public async Task Outbox_RequeueDeadAsync_DeadMessage_FlipsToPendingAndPreservesRetryCount()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteOutboxStore(session);
+        var msg = CreateOutboxMessage("requeue.dead");
+        msg.RetryCount = 7; // 失败历史（MarkDead 不重置 retry_count）
+        store.AddMessage(msg);
+        store.MarkDead(msg, "original failure", DateTimeOffset.UtcNow);
+
+        var nextAttempt = DateTimeOffset.UtcNow.AddSeconds(-1);
+        var rows = await store.RequeueDeadAsync(msg.Id, nextAttempt, "ops-alice", default);
+
+        await Assert.That(rows).IsEqualTo(1);
+        var pending = await store.GetPendingMessagesAsync(10, 10, default); // maxRetryCount > 既有 RetryCount(7)
+        await Assert.That(pending).Count().IsEqualTo(1);
+        await Assert.That(pending[0].Status).IsEqualTo(OutboxStatus.Pending);
+        await Assert.That(pending[0].RetryCount).IsEqualTo(7); // 失败历史保留，不重置
+        await Assert.That(pending[0].Error).Contains("requeued by ops-alice");
+        await Assert.That(pending[0].Error).DoesNotContain("original failure");
+    }
+
+    [Test]
+    public async Task Outbox_RequeueDeadAsync_PendingMessage_ReturnsZero()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteOutboxStore(session);
+        var msg = CreateOutboxMessage("requeue.pending");
+        store.AddMessage(msg);
+
+        var rows = await store.RequeueDeadAsync(msg.Id, DateTimeOffset.UtcNow, "ops-alice", default);
+
+        await Assert.That(rows).IsEqualTo(0);
+        var pending = await store.GetPendingMessagesAsync(10, 5, default);
+        await Assert.That(pending).Count().IsEqualTo(1); // 仍 Pending，未被重置
+    }
+
+    [Test]
+    public async Task Outbox_RequeueDeadAsync_ProcessedMessage_ReturnsZero()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteOutboxStore(session);
+        var msg = CreateOutboxMessage("requeue.processed");
+        store.AddMessage(msg);
+        store.MarkProcessed(msg, DateTimeOffset.UtcNow);
+
+        var rows = await store.RequeueDeadAsync(msg.Id, DateTimeOffset.UtcNow, "ops-alice", default);
+
+        await Assert.That(rows).IsEqualTo(0);
+        var pending = await store.GetPendingMessagesAsync(10, 5, default);
+        await Assert.That(pending).IsEmpty();
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments("   ")]
+    public async Task Outbox_RequeueDeadAsync_BlankRetriedBy_ThrowsArgumentException(string retriedBy)
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteOutboxStore(session);
+        var msg = CreateOutboxMessage("requeue.blank");
+        store.AddMessage(msg);
+        store.MarkDead(msg, "original failure", DateTimeOffset.UtcNow);
+
+        await Assert.That(async () =>
+            await store.RequeueDeadAsync(msg.Id, DateTimeOffset.UtcNow, retriedBy, default).AsTask())
+            .Throws<ArgumentException>();
+    }
+
     private static OutboxMessage CreateOutboxMessage(string type) => new()
     {
         Id = Ulid.New(),

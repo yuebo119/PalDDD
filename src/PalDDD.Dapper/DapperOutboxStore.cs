@@ -194,7 +194,11 @@ public sealed class DapperOutboxStore : IPalOutboxStore
                 message.Payload,
                 message.ContentType,
                 message.SchemaVersion,
-                CreatedAt = ToTimeParam(_timeProvider.GetUtcNow()),
+                // ITM-634 修复（跨栈契约一致）：created_at 持久化领域赋值 OutboxMessage.CreatedAt——
+                // 原实现用 Store 时钟 _timeProvider.GetUtcNow() 覆盖，与 PalORM（OutboxMessageRow.FromDomain）、
+                // EFCore（OutboxMessages.Add(message)）、InMemory（列表直存）三栈保留领域值分叉：
+                // 同消息跨栈落库 created_at 不同，ORDER BY created_at 投递序与 CreatedAt 往返断言随之分叉。
+                CreatedAt = ToTimeParam(message.CreatedAt),
                 CorrelationId = message.CorrelationId?.ToString(),
                 CausationId = message.CausationId?.ToString(),
                 message.TraceParent,
@@ -211,12 +215,12 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     {
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
-        // P3-SRC-207 修复：now 方法开头取一次——原 extractor 内嵌 _timeProvider.GetUtcNow()
-        // 违反 DapperBulkCopy 的纯提取函数契约（值提取须无副作用且确定，首行还会被提取两次），
-        // 且同批各行 CreatedAt 随调用时刻漂移。闭包单值快照后三方言每行同刻。
-        // ⚠️ v16 声明（下游漂移取舍）：OutboxBatchProcessor 的 nextAttemptAt 亦基于批次起始
-        // now——长批次尾部消息的重试时间提前（漂移=批耗时）；受 batchSize 上限约束可接受。
-        var now = _timeProvider.GetUtcNow();
+        // ITM-634 修复（跨栈契约一致）：created_at 改持久化各消息领域赋值 CreatedAt——
+        // 原实现方法开头取一次 Store 时钟 now 作为整批 created_at（P3-SRC-207 纯提取契约修复），
+        // 与 PalORM/EFCore/InMemory 三栈保留领域值分叉（同批各行时间被抹平为同刻，且与领域值不等）。
+        // ⚠️ v16 声明（下游漂移，与本方法无关仍成立）：OutboxBatchProcessor 的 nextAttemptAt 基于
+        // 其自身的批次起始 now——长批次尾部消息的重试时间提前（漂移=批耗时）；受 batchSize 上限
+        // 约束可接受。本方法现不再取批次时钟，该漂移属处理器时间语义。
         // v8 声明：接口 IPalOutboxStore.AddMessagesAsync 无 CancellationToken 参数，本路径
         // 无法响应取消——v3.0 契约窗口（ADR-020）随接口异步化一并补。
         var conn = await EnsureOpenAsync().ConfigureAwait(false);
@@ -227,7 +231,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             conn, _dbType, "outbox_messages",
             ["id", "type", "payload", "content_type", "schema_version", "status", "created_at", "correlation_id", "causation_id", "trace_parent", "trace_state"],
             messages,
-            m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, StatusPending, now,
+            m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, StatusPending, m.CreatedAt,
                 m.CorrelationId?.ToString(), m.CausationId?.ToString(), m.TraceParent, m.TraceState],
             Tx).ConfigureAwait(false);
     }

@@ -228,6 +228,87 @@ public sealed class IdempotencyEfCoreTests
         await Assert.That(reused.LockedUntil).IsEqualTo(now.AddSeconds(11));
     }
 
+    [Test]
+    public async Task TryStartAsync_CancelledLeaseReuseSave_DoesNotLeaveGhostRecordInChangeTracker(CancellationToken cancellationToken)
+    {
+        // ITM-632 回归：过期租约复用（TryReuseRecordAsync）保存失败（此处注入 OCE）时，
+        // 已被 MarkProcessing 变异为 Modified 的 record 必须 Detach——否则滞留
+        // ChangeTracker，后续无关 SaveChangesAsync 会把幽灵租约续期落库，阻塞其他 worker
+        // 至租约过期。SQLite 关系型 provider + EnsureCreated 构造真 schema。
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = new DbContextOptionsBuilder<ThrowingIdempotencyDbContext>()
+            .UseSqlite(connection).Options;
+        var now = DateTimeOffset.Parse("2026-05-30T00:00:00Z", CultureInfo.InvariantCulture);
+        var policy = new IdempotencyPolicy { ProcessingTimeout = TimeSpan.FromSeconds(5), Retention = TimeSpan.FromMinutes(10) };
+
+        await using var db = new ThrowingIdempotencyDbContext(options);
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+        var store = (IIdempotencyStore)db;
+
+        var seeded = await store.TryStartAsync("CreateOrder", "cmd-1", now, policy, cancellationToken);
+        await Assert.That(seeded).IsNotNull();
+        db.ChangeTracker.Clear();
+
+        // now+6 已过首次 LockedUntil=now+5 → 走复用路径改写记录，保存注入 OCE
+        db.ThrowOnNextSave = true;
+        await Assert.That(async () => await store.TryStartAsync(
+            "CreateOrder", "cmd-1", now.AddSeconds(6), policy, cancellationToken))
+            .Throws<OperationCanceledException>();
+
+        // 失败后无幽灵态残留 ChangeTracker
+        await Assert.That(db.ChangeTracker.Entries<IdempotencyRecord>()).IsEmpty();
+
+        // 后续无关保存不得把幽灵租约续期落库：LockedUntil 仍为首次写入值 now+5s
+        db.ThrowOnNextSave = false;
+        await db.SaveChangesAsync(cancellationToken);
+
+        await using var verifier = new ThrowingIdempotencyDbContext(options);
+        var loaded = await ((IIdempotencyStore)verifier).GetAsync(
+            "CreateOrder", "cmd-1", now.AddSeconds(6), cancellationToken);
+        await Assert.That(loaded).IsNotNull();
+        await Assert.That(loaded.LockedUntil).IsEqualTo(now.AddSeconds(5));
+    }
+
+    [Test]
+    public async Task MarkCompletedAsync_CancelledSave_DoesNotLeaveGhostTerminalStateInChangeTracker(CancellationToken cancellationToken)
+    {
+        // ITM-632 回归：终态保存（SaveTerminalStateAsync）失败（此处注入 OCE）时，已被
+        // MarkCompleted 变异为 Modified 的 record 必须 Detach——否则滞留 ChangeTracker，
+        // 后续无关 SaveChangesAsync 会把"从未成功写入的幽灵终态"落库。SQLite 关系型 provider。
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = new DbContextOptionsBuilder<ThrowingIdempotencyDbContext>()
+            .UseSqlite(connection).Options;
+        var now = DateTimeOffset.Parse("2026-05-30T00:00:00Z", CultureInfo.InvariantCulture);
+
+        await using var db = new ThrowingIdempotencyDbContext(options);
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+        var store = (IIdempotencyStore)db;
+
+        var record = await store.TryStartAsync("CreateOrder", "cmd-1", now, IdempotencyPolicy.Default, cancellationToken);
+        await Assert.That(record).IsNotNull();
+
+        db.ThrowOnNextSave = true;
+        await Assert.That(async () => await store.MarkCompletedAsync(
+            record!, "order-123"u8.ToArray(), now.AddSeconds(1), cancellationToken))
+            .Throws<OperationCanceledException>();
+
+        // 失败后无幽灵态残留 ChangeTracker
+        await Assert.That(db.ChangeTracker.Entries<IdempotencyRecord>()).IsEmpty();
+
+        // 后续无关保存不得把幽灵终态落库：DB 仍为 Processing
+        db.ThrowOnNextSave = false;
+        await db.SaveChangesAsync(cancellationToken);
+
+        await using var verifier = new ThrowingIdempotencyDbContext(options);
+        var loaded = await ((IIdempotencyStore)verifier).GetAsync(
+            "CreateOrder", "cmd-1", now.AddSeconds(2), cancellationToken);
+        await Assert.That(loaded).IsNotNull();
+        await Assert.That(loaded.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+        await Assert.That(loaded.ResponsePayload.HasValue).IsFalse();
+    }
+
     private static DbContextOptions<TestIdempotencyDbContext> CreateOptions()
         => new DbContextOptionsBuilder<TestIdempotencyDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture))
@@ -241,6 +322,24 @@ public sealed class IdempotencyEfCoreTests
 
     private sealed class TestIdempotencyDbContext(DbContextOptions<TestIdempotencyDbContext> options)
         : IdempotencyDbContext(options);
+
+    /// <summary>ITM-632 探针上下文：下一次 SaveChangesAsync 注入 OperationCanceledException，
+    /// 构造"取消/保存失败"场景验证失败后实体被 Detach（无幽灵记录/租约滞留）。</summary>
+    private sealed class ThrowingIdempotencyDbContext(DbContextOptions<ThrowingIdempotencyDbContext> options)
+        : IdempotencyDbContext(options)
+    {
+        public bool ThrowOnNextSave { get; set; }
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            if (ThrowOnNextSave)
+            {
+                ThrowOnNextSave = false;
+                throw new OperationCanceledException("simulated cancellation");
+            }
+            return base.SaveChangesAsync(cancellationToken);
+        }
+    }
 
     // v53 P2：Revision 并发令牌语义 — 每次状态转移单调递增（镜像 ProjectionCheckpoint）
     //（替换 UpdatedAt 时间戳令牌——同刻精度截断窗口致双 worker 同时命中 CAS，幂等失效）

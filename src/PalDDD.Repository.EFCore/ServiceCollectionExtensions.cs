@@ -36,6 +36,12 @@ public static class ServiceCollectionExtensions
     /// </code>
     /// 否则拦截器不会执行，领域事件不会进入发件箱（静默丢失）。
     /// </para>
+    /// <para>
+    /// ⛔ <b>禁止与 <c>AddDbContextPool</c> 组合（ITM-640）</b>：<see cref="OutboxDomainEventInterceptor"/>
+    /// 持有实例级可变状态（<c>_pending</c>/<c>_injectedOutboxIds</c>），正确性依赖 Scoped
+    /// 单请求独占。池化 DbContext 会使拦截器实例跨请求共享，导致状态交叉污染——
+    /// 请勿对本拦截器所依附的 <typeparamref name="TContext"/> 使用 <c>AddDbContextPool</c>。
+    /// </para>
     /// </remarks>
     public static IServiceCollection AddPalOutboxUnitOfWork<TContext>(this IServiceCollection services)
         where TContext : DbContext
@@ -43,6 +49,8 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.TryAddScoped<IUnitOfWork, UnitOfWork<TContext>>();
+        // ITM-640：Scoped 是硬约束（实例级 _pending/_injectedOutboxIds）——不得改为 Singleton，
+        // 也不得与 AddDbContextPool 组合（池化 options 会跨请求复用本实例）。
         services.TryAddScoped<OutboxDomainEventInterceptor>();
         return services;
     }
@@ -50,6 +58,12 @@ public static class ServiceCollectionExtensions
     /// <summary>
     /// 在 <see cref="DbContextOptionsBuilder"/> 上注册 Outbox 领域事件拦截器。
     /// <para>用法：<c>services.AddDbContext&lt;MyDb&gt;((sp, opts) =&gt; opts.UseSqlite(cs).UsePalOutboxInterceptor(sp));</c></para>
+    /// <para>
+    /// ⚠️ 与 <c>AddDbContextPool</c> 不兼容（ITM-640）：此方法从 <paramref name="serviceProvider"/>
+    /// 解析 Scoped 拦截器并烘焙进 options。池化场景下该实例被首个请求创建后跨请求复用，
+    /// 实例级状态（<c>_pending</c>/<c>_injectedOutboxIds</c>）并发交叉污染。
+    /// <b>请搭配 <c>AddDbContext</c>（非池化）使用。</b>
+    /// </para>
     /// </summary>
     public static DbContextOptionsBuilder UsePalOutboxInterceptor(
         this DbContextOptionsBuilder optionsBuilder,

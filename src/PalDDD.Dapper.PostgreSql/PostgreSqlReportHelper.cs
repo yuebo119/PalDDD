@@ -266,6 +266,25 @@ public static class PostgreSqlReportHelper
             case ushort us: writer.WriteNumberValue(us); break;
             case byte by: writer.WriteNumberValue(by); break;
             case sbyte sb: writer.WriteNumberValue(sb); break;
+            // ITM-641 修复：DateOnly/TimeOnly 未覆盖时落入 default 的 Convert.ToString——
+            // 区域性相关输出（非 ISO），消费端解析失真。PG date/time 的 Npgsql 默认映射即
+            // DateOnly/TimeOnly，显式走 InvariantCulture 定长格式（对齐 DateTime "O" 分支）。
+            case DateOnly dateOnly: writer.WriteStringValue(dateOnly.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)); break;
+            case TimeOnly timeOnly: writer.WriteStringValue(timeOnly.ToString("HH:mm:ss.fffffff", CultureInfo.InvariantCulture)); break;
+            // ITM-641 修复：数组（PG text[] 等，Npgsql 映射为 CLR 数组/集合）原落 default 输出
+            // "System.String[]"；此处写 JSON 数组，元素递归走本方法（string/byte[] 已在前面
+            // 分支优先匹配，故 IEnumerable 分支仅命中真正的集合类型）。
+            case System.Collections.IEnumerable seq:
+                writer.WriteStartArray();
+                foreach (var item in seq)
+                {
+                    if (item is null or DBNull)
+                        writer.WriteNullValue();
+                    else
+                        WriteJsonValue(writer, item);
+                }
+                writer.WriteEndArray();
+                break;
             default: writer.WriteStringValue(Convert.ToString(value, CultureInfo.InvariantCulture) ?? ""); break;
         }
     }
@@ -283,6 +302,16 @@ public static class PostgreSqlReportHelper
             DateTimeOffset dto => dto.ToString("O", CultureInfo.InvariantCulture),
             DateTime dt => dt.ToString("O", CultureInfo.InvariantCulture),
             Guid g => g.ToString("D", CultureInfo.InvariantCulture),
+            // ITM-641 修复：DateOnly/TimeOnly 原落 default 的 Convert.ToString——区域性相关；
+            // PG date/time 的 Npgsql 默认映射即此二者，显式 InvariantCulture 定长格式。
+            DateOnly dateOnly => dateOnly.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            TimeOnly timeOnly => timeOnly.ToString("HH:mm:ss.fffffff", CultureInfo.InvariantCulture),
+            // ITM-641 修复：数组（PG text[] 等）原落 default 输出 "System.String[]"；
+            // 逐元素递归格式化后以逗号连接（含逗号的单元格会被 EscapeCsvSpan 整格引用，
+            // 列边界不破）。string 同为 IEnumerable 必须排除，否则被逐字符拆分；
+            // byte[] 已在前面分支优先匹配。
+            System.Collections.IEnumerable seq when value is not string => string.Join(',',
+                seq.Cast<object?>().Select(e => e is null or DBNull ? "" : FormatCsvValue(e))),
             float f => f.ToString(CultureInfo.InvariantCulture),
             double d => d.ToString(CultureInfo.InvariantCulture),
             decimal m => m.ToString(CultureInfo.InvariantCulture),

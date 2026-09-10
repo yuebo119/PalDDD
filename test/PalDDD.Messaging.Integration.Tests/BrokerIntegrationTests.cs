@@ -447,9 +447,12 @@ public sealed class BrokerIntegrationTests
         await done.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
         // ITM-278（R43）：读侧同 lock 取快照——handler 线程持 lock 写 List，测试线程无锁读
         // Count 在 at-least-once 重投递并发到达时构成读写竞态（撕裂读/瞬时 6 假失败）
+        // ITM-646：at-least-once 语义下重投递使精确 5 成为不稳定断言——改为 >= 5
+        //（5 条唯一消息全部到达即满足"全部收到"，多出的重投递副本不构成本测试失败）。
         List<TestMessage> snapshot;
         lock (received) snapshot = [.. received];
-        await Assert.That(snapshot.Count).IsEqualTo(5);
+        await Assert.That(snapshot.Count).IsGreaterThanOrEqualTo(5);
+        await Assert.That(snapshot.Select(m => m.Name).Distinct().Count()).IsGreaterThanOrEqualTo(5);
     }
 
     [Test]
@@ -632,8 +635,10 @@ public sealed class BrokerIntegrationTests
         await done.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
         // ITM-278（R43）：读侧同 lock 取快照——handler 线程持 lock 写 List，测试线程无锁读
         // Count 在 at-least-once 重投递并发到达时构成读写竞态（撕裂读/瞬时 6 假失败）
+        // ITM-646：同 Kafka 轴——at-least-once 重投递下改 >= 5，唯一消息集仍须覆盖 5 条。
         List<TestMessage> snapshot;
         lock (received) snapshot = [.. received];
-        await Assert.That(snapshot.Count).IsEqualTo(5);
+        await Assert.That(snapshot.Count).IsGreaterThanOrEqualTo(5);
+        await Assert.That(snapshot.Select(m => m.Name).Distinct().Count()).IsGreaterThanOrEqualTo(5);
     }
 }

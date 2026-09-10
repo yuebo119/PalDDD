@@ -55,9 +55,16 @@ public sealed class PostgreSqlPipeline : IAsyncDisposable
     /// <summary>添加参数化 SQL 到管道（AOT 安全，零反射）</summary>
     public void Add(string sql, params NpgsqlParameter[] parameters)
     {
+        // v65 P3：补入口守卫——空白 SQL 与 null 参数元素会延迟到 ExecuteReaderAsync
+        // 才由 Npgsql 抛出（错误定位远离调用点）；此处 fail-fast 对齐全库参数化 API 守卫族。
+        ArgumentException.ThrowIfNullOrWhiteSpace(sql);
+        ArgumentNullException.ThrowIfNull(parameters);
         var cmd = new NpgsqlBatchCommand(sql);
         foreach (var p in parameters)
+        {
+            ArgumentNullException.ThrowIfNull(p);
             cmd.Parameters.Add(p);
+        }
         _batch.BatchCommands.Add(cmd);
     }
 

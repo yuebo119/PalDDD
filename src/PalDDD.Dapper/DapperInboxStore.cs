@@ -163,12 +163,15 @@ public sealed class DapperInboxStore : IInboxStore
         // ITM-163 修复：补 message null 守卫（failureReason 空白守卫已存在）
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
-        // v22 B 批：截断兜底——对齐 DapperOutboxStore.MarkDead/ReleaseForRetry 的 2040（PD24 管线截断族）
+        // v22 B 批：截断兜底——PD24 管线截断族
         // v27 P3（B 片 N1）：守卫前置——原截断先于 null/空白守卫执行，null 输入抛 NRE 而非
         // ArgumentException（对照姊妹 DapperOutboxStore.MarkDead 的守卫在前形态）
-        // v29 P3：改经 FailureReason.Truncate 共享收口——截断切片可能切半 UTF-16 代理对
-        //（超长含 emoji 的消息），末位高代理回退一位防孤立高代理入库（S1 五处截断点同款）
-        failureReason = FailureReason.Truncate(failureReason, 2040);
+        // ITM-638 修复（跨栈契约一致）：Truncate(2040) 改 FailureReason.Normalize——PalORM
+        // PalOrmInboxStore.MarkFailedAsync 走 Normalize（截 MaxLength=2000 + 空白归一
+        // "(no message)"），Dapper 用 2040 使同输入跨栈存储值分叉；Normalize 内部复用 Truncate
+        //（含 UTF-16 代理对守卫），无需另行处理截断。Outbox 族保持 2040 不变——Error=null 是
+        // "未出错"语义，空白归一会破坏该语义（见 FailureReason.Truncate 文档）。
+        failureReason = FailureReason.Normalize(failureReason);
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // P2/P3 修复（十七轮）：CommandDefinition 传 ct（见 TryStartProcessingAsync 同款注释）
         // 三十八轮 P2 修复：同 MarkProcessedAsync——processing_started_at 抢占 token 守卫
