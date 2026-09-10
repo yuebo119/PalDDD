@@ -557,6 +557,30 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(source).Contains("RegisterValues");
     }
 
+    [Test]
+    public async Task EnumGenerator_ClassNotDerivingSmartEnum_ReportsPalenum002()
+    {
+        // 2026-09-10 补正向触发守护（诊断覆盖门禁加固后暴露的缺口）：PALENUM002 在测试中
+        // 此前仅有 .IsFalse() 反向断言（"某场景不误报"）——反向断言在实现被破坏后反而更易
+        // 通过（不误报→破坏后仍不误报），不构成守护，与 PALENUM004/PALID003 同类。
+        // 本测试正向触发：partial class 挂 [GenerateEnum] 但基类非 SmartEnum<TSelf,TValue>
+        // → Error 级 PALENUM002（隔层/无继承路径，EnumGenerator.cs:273 判定）。
+        var result = RunEnumGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            [GenerateEnum]
+            public partial class NotDerivedStatus
+            {
+                public static readonly NotDerivedStatus A = new();
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALENUM002")).IsTrue();
+    }
+
     // ── v26 P3 生成器族：PALID005 消息区分 null 与非 NamedType 源类型 ──
 
     [Test]
