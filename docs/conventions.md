@@ -677,6 +677,10 @@ Infrastructure / Adapters → App-Core → App-Abstractions → Domain
 
 **诊断覆盖门禁**：`test/PalDDD.Core.Tests/DiagnosticCoverageGateTests.cs` 扫描诊断定义源码，断言每条诊断 ID 都出现在某测试的断言表达式中（仅出现在注释里不算）——防止出现"实现了但无测试守护"的诊断。此门禁源于一次 mutation 实证：`PALENUM004`/`PALID003` 长期只有一行"镜像 `PALMSG006`"注释而无断言，破坏其检测实现后测试仍全绿。
 
+**分析器 ↔ 生成器分层**（详见 ADR 022）：PDDD009/PALMSG004、PDDD010/PALMSG005、PDDD011/PALMSG002 三对诊断检查同一输入，但**不是冗余**——分析器只覆盖领域事件（生成器的范围是其超集），生成器在泛型/不可访问声明下提前返回时由分析器兜底，且分析器可单独引用（不装生成器时是唯一守护）。生成器侧统一 Error（阻断构建），分析器侧命名类为 Warning 且部分配 CodeFix（一键修复），构成「阻断 + 修复」反馈链。审计此类"重复"时应先实测覆盖范围与兜底关系再判定。
+
+**跨包共享谓词**：`src/PalDDD.Shared/` 存放被多个分析器/生成器项目以链接源码方式共享的类型（当前仅 `StableNameValidation`）。分析器与生成器包必须相互独立（用户可各自单独引用），故共享走链接编译而非程序集引用或独立 NuGet 包。
+
 ### 8.4 「不做」清单
 
 | 不做 | 原因 |
