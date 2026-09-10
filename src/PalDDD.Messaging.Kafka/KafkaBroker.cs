@@ -245,6 +245,12 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
 
                     try
                     {
+                        // ITM-628 修复：分区 EOF 空消息守卫（EnablePartitionEof=true 时
+                        // Consume 返回 ConsumeResult.Message == null，仅 IsPartitionEOF 置位）——
+                        // 原代码直接解引用 result.Message.Value 抛 NRE，落 catch(Exception)
+                        // 记假错误日志。EOF 非消息，跳过继续等待（continue 锚定本 while 体）
+                        if (result.Message is null)
+                            continue;
                         // 三十八轮 P3 修复：tombstone（null value）消息走专门分支——
                         // 原路径 null 经隐式转换成空 span 触发反序列化异常，日志噪声且语义混淆
                         if (result.Message.Value is null)
@@ -356,6 +362,15 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         return map;
     }
 
+    /// <summary>释放 Broker：先释放全部订阅，再 Flush 排空在途消息，最后释放 producer。</summary>
+    /// <remarks>
+    /// ⚠️ 已知竞态（P3 声明，未加固）：<see cref="PublishAsync"/> 的 <c>_disposed</c> 预检无锁，
+    /// 与本方法无互斥——释放窗口内并发到达的 <see cref="PublishAsync"/> 可能通过预检后落在
+    /// 正在/已被 <c>_producer.Dispose()</c> 的 producer 上，此时 ProduceAsync 行为未定义
+    ///（可能抛 ObjectDisposedException，也可能无确认地丢弃）。<br/>
+    /// 契约：调用方应在调用本方法<b>之前</b>停止生产者并等待在途发布完成；不保证释放窗口内
+    /// 并发发布的投递结果。并发加固（发布/释放互斥）不在当前实现范围。
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
         // ITM-217 修复（三十二轮）：Broker 级幂等门——对照 KafkaSubscription 的 Interlocked

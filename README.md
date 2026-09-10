@@ -647,17 +647,19 @@ PalDDD 在所有关键路径内置了 `PalActivitySource`（11 个 Start 方法�
 
 ```csharp
 // 框架自动埋点（Activity 名为语义短名；Counter 统一 paldd. 前缀——4 个字母 p-a-l-d-d）：
-// - Dispatcher.SendAsync → Activity "Command Dispatch"
 // - OutboxProcessor → Activity "Outbox Process" + Counter "paldd.outbox.processed" / "paldd.outbox.failed"
-// - SagaProcessor → Activity "Saga Transition"
 // - IdempotencyProcessor → Activity "Idempotency Execute" + Counter "paldd.idempotency.executed" / "paldd.idempotency.cached"
+
+// 预留（尚未接线，无内部发射点，保留供外部集成）：
+// - Dispatcher.SendAsync → Activity "Command Dispatch"（PalActivitySource.StartCommandDispatch）
+// - SagaProcessor → Activity "Saga Transition"（PalActivitySource.StartSagaTransition）
 
 // 你的 OpenTelemetry 配置只需引用 Activity Source：
 services.AddOpenTelemetry()
     .WithTracing(t => t.AddSource("PalDDD"))      // 自动捕获全部 PalDDD Activity
     .WithMetrics(m => m.AddMeter("PalDDD"));       // 自动捕获全部 PalDDD Metrics
 
-// 零手写埋点 — 命令分发延迟、Outbox 积压量、Saga 补偿次数全部自动上报
+// 零手写埋点 — Outbox 积压量、幂等命中/跳过、Saga 补偿次数等已接线路径全部自动上报（命令分发/Saga 转换 Activity 为预留，见上）
 ```
 
 ### 15. 渐进式迁移：从 MediatR 逐步引入
@@ -872,7 +874,7 @@ flowchart TB
 | [测试体系](docs/testing.md) | 测试金字塔、场景矩阵、BenchmarkDotNet 配置 |
 | [发布规范](docs/release.md) | 版本管理、包范围、CHANGELOG 规范与生成流程 |
 | [踩坑目录](docs/pitfalls.md) | 82 条 DDD/AOT/并发实战踩坑 |
-| [架构决策](docs/decisions/) | 21 份 ADR |
+| [架构决策](docs/decisions/) | 22 份 ADR |
 | [变更日志](CHANGELOG.md) | 版本历史（消费者变更 + 工程过程附录） |
 
 ---

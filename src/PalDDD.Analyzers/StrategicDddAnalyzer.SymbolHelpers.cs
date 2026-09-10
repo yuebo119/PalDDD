@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using PalDDD.Shared;
 
 namespace PalDDD.Analyzers;
 
@@ -372,21 +373,9 @@ public sealed partial class StrategicDddAnalyzer
         return containingNamespace.ToDisplayString() + "." + name;
     }
 
-    private static bool IsStableName(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return false;
-
-        foreach (var ch in value!)
-        {
-            if (ch is >= 'a' and <= 'z' or >= '0' and <= '9' or '-' or '.')
-                continue;
-
-            return false;
-        }
-
-        return true;
-    }
+    // ADR 022：实现收敛至 PalDDD.Shared/StableNameValidation.cs（与 PalDDD.Core.SourceGen
+    // 链接编译同一份源码）——原两处逐字重复副本存在漂移风险，本方法仅作调用点适配。
+    private static bool IsStableName(string? value) => StableNameValidation.IsStable(value);
 
     private static bool BelongsToBoundedContext(string messageName, string boundedContext)
         => StringComparer.Ordinal.Equals(messageName, boundedContext)

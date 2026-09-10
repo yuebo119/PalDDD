@@ -379,7 +379,7 @@ public sealed class SourceGeneratorDirectTests
     {
         var result = RunGeneratorTwoTrees<EnumGeneratorProxy>(
             "using PalDDD.Core;\nnamespace TestDomain;\n[GenerateEnum]\npublic partial class CrossStatus : SmartEnum<CrossStatus, string>\n{\n}",
-            "namespace TestDomain;\npublic partial class CrossStatus : SmartEnum<CrossStatus, string>\n{\n    public static readonly CrossStatus B = new(\"b\", \"B\");\n}");
+            "using PalDDD.Core;\nnamespace TestDomain;\npublic partial class CrossStatus : SmartEnum<CrossStatus, string>\n{\n    public static readonly CrossStatus B = new(\"b\", \"B\");\n}");
 
         var crashed = result.Diagnostics.Any(d => d.Id == "CS8785");
         var source = crashed ? "" : GetGeneratedSource(result, "CrossStatus.g.cs");
@@ -491,6 +491,15 @@ public sealed class SourceGeneratorDirectTests
             """);
 
         await Assert.That(result.Diagnostics.Any(d => d.Id == "PALID004")).IsFalse();
+
+        // ITM-645 补强：Test 名含 BothGenerate，原只断言"无 PALID004"（不证明真产出）——
+        // 此处断言两个同名 FooId（全局 + Dup 命名空间）各自产出独立生成物（hint 无前缀方案）。
+        var generatedPaths = result.Compilation.SyntaxTrees.Select(t => t.FilePath).ToList();
+        await Assert.That(generatedPaths.Any(p =>
+            p.EndsWith("FooId.g.cs", StringComparison.Ordinal)
+            && !p.EndsWith("Dup.FooId.g.cs", StringComparison.Ordinal))).IsTrue();
+        await Assert.That(generatedPaths.Any(p =>
+            p.EndsWith("Dup.FooId.g.cs", StringComparison.Ordinal))).IsTrue();
     }
 
     // ── v53 P1：PALID007 非 partial 包含类型——原落 default 报 PALID001 错误指引 ──
@@ -555,6 +564,30 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(result.Diagnostics.Any(d => d.Id == "PALENUM002")).IsFalse();
         var source = GetGeneratedSource(result, "AliasStatus.g.cs");
         await Assert.That(source).Contains("RegisterValues");
+    }
+
+    [Test]
+    public async Task EnumGenerator_ClassNotDerivingSmartEnum_ReportsPalenum002()
+    {
+        // 2026-09-10 补正向触发守护（诊断覆盖门禁加固后暴露的缺口）：PALENUM002 在测试中
+        // 此前仅有 .IsFalse() 反向断言（"某场景不误报"）——反向断言在实现被破坏后反而更易
+        // 通过（不误报→破坏后仍不误报），不构成守护，与 PALENUM004/PALID003 同类。
+        // 本测试正向触发：partial class 挂 [GenerateEnum] 但基类非 SmartEnum<TSelf,TValue>
+        // → Error 级 PALENUM002（隔层/无继承路径，EnumGenerator.cs:273 判定）。
+        var result = RunEnumGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            [GenerateEnum]
+            public partial class NotDerivedStatus
+            {
+                public static readonly NotDerivedStatus A = new();
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALENUM002")).IsTrue();
     }
 
     // ── v26 P3 生成器族：PALID005 消息区分 null 与非 NamedType 源类型 ──
@@ -796,6 +829,94 @@ public sealed class SourceGeneratorDirectTests
             .Where(d => d.Severity == DiagnosticSeverity.Error)
             .ToList();
         await Assert.That(errors).IsEmpty();
+    }
+
+    // ── 泛型声明拦截断言（补 PALENUM004/PALID003 此前仅注释"镜像"无断言的缺口；
+    //    mutation 实证：破坏检测后 289/289 全绿，同型 PALMSG006 有 2 测试守护）──
+
+    [Test]
+    public async Task EnumGenerator_OnGenericDeclaration_ReportsPalenum004()
+    {
+        // 泛型 SmartEnum 生成物以裸名声明 partial class（与用户泛型声明同名冲突），
+        // 且 [ModuleInitializer] 不允许位于泛型类型成员——编译期报 PALENUM004 引导移出。
+        var result = RunEnumGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            [GenerateEnum]
+            public partial class GenericStatus<T> : SmartEnum<GenericStatus<T>, string>
+            {
+                public static readonly GenericStatus<T> Pending = new("pending", "待处理");
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALENUM004")).IsTrue();
+    }
+
+    [Test]
+    public async Task EnumGenerator_NestedInsideGenericDeclaration_ReportsPalenum004()
+    {
+        // 嵌套于泛型包含类型同样拦截——IsWithinGenericContainingType 递归检测路径，
+        // 与自身泛型（Arity > 0）是两个独立分支。
+        var result = RunEnumGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            public partial class Outer<T>
+            {
+                [GenerateEnum]
+                public partial class InnerStatus : SmartEnum<InnerStatus, string>
+                {
+                    public static readonly InnerStatus Pending = new("pending", "待处理");
+                }
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALENUM004")).IsTrue();
+    }
+
+    [Test]
+    public async Task IdentityGenerator_OnGenericDeclaration_ReportsPalid003()
+    {
+        // 泛型 ID 生成物中 namespace 级 TypeConverter/JsonConverter 以裸名引用嵌套 ID，
+        // 自身泛型时裸名声明与用户 partial record struct Foo<T> 同名冲突——报 PALID003。
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+            using System;
+
+            namespace TestDomain;
+
+            [GenerateId(typeof(Guid))]
+            public readonly partial record struct GenericId<T>;
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALID003")).IsTrue();
+    }
+
+    [Test]
+    public async Task IdentityGenerator_NestedInsideGenericDeclaration_ReportsPalid003()
+    {
+        // 嵌套于泛型包含类型的 ID 同样拦截（typeof(Outer.Foo) 在泛型外层无类型参数可用）。
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+            using System;
+
+            namespace TestDomain;
+
+            public partial class Outer<T>
+            {
+                [GenerateId(typeof(Guid))]
+                public readonly partial record struct InnerId;
+            }
+            """);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Id == "PALID003")).IsTrue();
     }
 
     // ── 辅助方法（参照 MessageRegistryGeneratorTests 的模式）──

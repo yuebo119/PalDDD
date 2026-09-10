@@ -9,6 +9,11 @@ namespace PalDDD.Transactions.Tests;
 //   3. RetryCount 保留失败历史不重置
 //   4. Error 列写入操作审计串
 //   5. retriedBy 空白抛 ArgumentException
+//
+// ITM-642 诚实声明：本文件仅覆盖 InMemory 实现（InMemoryOutboxStore）。Dapper/EFCore
+// 两栈的行为回归在 test/PalDDD.Integration.Tests/OutboxRequeueSqliteTests.cs（SQLite），
+// PalORM 栈在 test/PalDDD.PalORM.Tests/PalOrmOutboxStoreTests.cs——三栈各有独立用例，
+// 避免"Header 声称全栈覆盖、实际只测内存实现"的假覆盖。
 // ═══════════════════════════════════════════════════════════════
 
 public class OutboxRequeueTests

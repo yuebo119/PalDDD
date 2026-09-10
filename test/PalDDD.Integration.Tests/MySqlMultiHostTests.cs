@@ -165,4 +165,56 @@ public sealed class MySqlMultiHostTests
             .AddPalMySqlDataSourceWithLoadBalance("Server=db1,db2;Database=pal");
         await Assert.That(services.Count).IsGreaterThan(0);
     }
+
+    // ── P3#7：standby 侧 LoadBalance 冲突 fail-fast（v74 F1-2 的 standby 侧缺口收口）──
+    // 合并只取 primaryBuilder——standby 串显式 LoadBalance 值原被静默丢弃零警告
+
+    // ── P3#20：MySQL SslMode 冲突校验行为测试（v65 P3 F1-3 修复的姊妹测试收口）──
+    // SslMode 属"主机列表内统一生效"的共享参数，显式异值 = TLS 配置静默降级，v65 已
+    // 纳入 ThrowIfCredentialsMismatch 校验集——此前零行为测试锁定（验证轮 P3#20 命中）
+
+    [Test]
+    public async Task AddPalMySqlDataSourceWithFailover_SslModeMismatch_Throws()
+    {
+        // standby 与 primary SslMode 显式不一致（Required vs None）→ ArgumentException
+        await Assert.That(() => new ServiceCollection()
+                .AddPalMySqlDataSourceWithFailover(
+                    "Server=db1;Database=pal;User Id=root;Password=p;SslMode=Required",
+                    "Server=db2;Database=pal;User Id=root;Password=p;SslMode=None"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalMySqlDataSourceWithFailover_SslModeExplicitSame_DoesNotThrow()
+    {
+        // 显式同值（合法冗余）放行——两侧均显式 Required，非矛盾
+        var services = new ServiceCollection()
+            .AddPalMySqlDataSourceWithFailover(
+                "Server=db1;Database=pal;User Id=root;Password=p;SslMode=Required",
+                "Server=db2;Database=pal;User Id=root;Password=p;SslMode=Required");
+        await Assert.That(services.Count).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task AddPalMySqlDataSourceWithFailover_ExplicitLoadBalanceConflictOnStandby_Throws()
+    {
+        // primary 无 LoadBalance + standby 显式 RoundRobin——原被静默丢弃（方法仍 FailOver），
+        // 现 standby 侧同款 fail-fast（守卫族双侧对称：SslMode/凭据/Port 比对均两侧同参）
+        await Assert.That(() => new ServiceCollection()
+                .AddPalMySqlDataSourceWithFailover(
+                    "Server=db1;Database=pal",
+                    "Server=db2;Database=pal;LoadBalance=RoundRobin"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalMySqlDataSourceWithFailover_ExplicitLoadBalanceSameOnStandby_DoesNotThrow()
+    {
+        // standby 显式 FailOver 同值（合法冗余）放行——非矛盾，锁定现状
+        var services = new ServiceCollection()
+            .AddPalMySqlDataSourceWithFailover(
+                "Server=db1;Database=pal",
+                "Server=db2;Database=pal;LoadBalance=FailOver");
+        await Assert.That(services.Count).IsGreaterThan(0);
+    }
 }

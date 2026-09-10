@@ -73,6 +73,10 @@ public static class PostgreSqlReportHelper
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             reader.GetValues(values);
+            // v66 P4 声明（DBNull 分叉，与 JSONL 路径契约不同）：CSV 把 DBNull 归一为 null
+            // 后经下方 `v is null ? ""` 输出空单元格——DB NULL 与零长字符串在 CSV 输出中
+            // 不可区分（CSV 无 null 字面量）；JSONL 侧（ExportJsonLinesAsync）DBNull 是
+            // 整字段缺失（非 JSON null），消费端按"字段不存在"处理。
             for (int i = 0; i < values.Length; i++)
                 values[i] = values[i] is DBNull ? null : values[i];
 
@@ -136,6 +140,10 @@ public static class PostgreSqlReportHelper
             for (int i = 0; i < columns.Length; i++)
             {
                 var val = values[i];
+                // v66 P4 声明（DBNull 分叉，与 CSV 路径契约不同）：NULL 列整字段跳过
+                //（不写 JSON null）——消费端按"字段缺失"而非显式 null 解析；如需
+                // 显式 null 语义应改 WriteNullValue（行为变更，需下游协商）。CSV 侧
+                //（ExportCsvAsync）NULL 输出为空单元格。
                 if (val is DBNull or null) continue;
 
                 jsonWriter.WritePropertyName(columns[i]);
@@ -192,6 +200,9 @@ public static class PostgreSqlReportHelper
 
     /// <summary>使用 COPY TO STDOUT 导出 CSV（最快方式）</summary>
     /// <param name="tableOrQuery">表名或 SELECT 查询。⚠️ 直接插入 COPY 语句——必须为编译期常量或受信任来源，禁止传入用户输入（COPY 语法要求完整 SQL，无法参数化）。</param>
+    /// <returns>恒返回 0——COPY TO 协议只回传字节流不回传行数（与 <see cref="ExportCsvAsync"/>/
+    /// <see cref="ExportJsonLinesAsync"/> 逐行计数的 long 返回契约不同）；需要行数的场景
+    /// 改用 ExportCsvAsync 或先 <c>SELECT count(*)</c>。</returns>
     /// <remarks>
     /// ⚠️ <b>CSV 公式注入无防护（ITM-212 声明·三十二轮）</b>：本方法走服务器端
     /// <c>COPY (...) TO STDOUT</c> 原样转储，<b>不经过</b> <see cref="EscapeCsvSpan(System.ReadOnlySpan{char})"/> 的
@@ -266,6 +277,25 @@ public static class PostgreSqlReportHelper
             case ushort us: writer.WriteNumberValue(us); break;
             case byte by: writer.WriteNumberValue(by); break;
             case sbyte sb: writer.WriteNumberValue(sb); break;
+            // ITM-641 修复：DateOnly/TimeOnly 未覆盖时落入 default 的 Convert.ToString——
+            // 区域性相关输出（非 ISO），消费端解析失真。PG date/time 的 Npgsql 默认映射即
+            // DateOnly/TimeOnly，显式走 InvariantCulture 定长格式（对齐 DateTime "O" 分支）。
+            case DateOnly dateOnly: writer.WriteStringValue(dateOnly.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)); break;
+            case TimeOnly timeOnly: writer.WriteStringValue(timeOnly.ToString("HH:mm:ss.fffffff", CultureInfo.InvariantCulture)); break;
+            // ITM-641 修复：数组（PG text[] 等，Npgsql 映射为 CLR 数组/集合）原落 default 输出
+            // "System.String[]"；此处写 JSON 数组，元素递归走本方法（string/byte[] 已在前面
+            // 分支优先匹配，故 IEnumerable 分支仅命中真正的集合类型）。
+            case System.Collections.IEnumerable seq:
+                writer.WriteStartArray();
+                foreach (var item in seq)
+                {
+                    if (item is null or DBNull)
+                        writer.WriteNullValue();
+                    else
+                        WriteJsonValue(writer, item);
+                }
+                writer.WriteEndArray();
+                break;
             default: writer.WriteStringValue(Convert.ToString(value, CultureInfo.InvariantCulture) ?? ""); break;
         }
     }
@@ -283,6 +313,16 @@ public static class PostgreSqlReportHelper
             DateTimeOffset dto => dto.ToString("O", CultureInfo.InvariantCulture),
             DateTime dt => dt.ToString("O", CultureInfo.InvariantCulture),
             Guid g => g.ToString("D", CultureInfo.InvariantCulture),
+            // ITM-641 修复：DateOnly/TimeOnly 原落 default 的 Convert.ToString——区域性相关；
+            // PG date/time 的 Npgsql 默认映射即此二者，显式 InvariantCulture 定长格式。
+            DateOnly dateOnly => dateOnly.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            TimeOnly timeOnly => timeOnly.ToString("HH:mm:ss.fffffff", CultureInfo.InvariantCulture),
+            // ITM-641 修复：数组（PG text[] 等）原落 default 输出 "System.String[]"；
+            // 逐元素递归格式化后以逗号连接（含逗号的单元格会被 EscapeCsvSpan 整格引用，
+            // 列边界不破）。string 同为 IEnumerable 必须排除，否则被逐字符拆分；
+            // byte[] 已在前面分支优先匹配。
+            System.Collections.IEnumerable seq when value is not string => string.Join(',',
+                seq.Cast<object?>().Select(e => e is null or DBNull ? "" : FormatCsvValue(e))),
             float f => f.ToString(CultureInfo.InvariantCulture),
             double d => d.ToString(CultureInfo.InvariantCulture),
             decimal m => m.ToString(CultureInfo.InvariantCulture),

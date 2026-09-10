@@ -67,6 +67,14 @@ public class OutboxStaleTokenUntilLegTests
                 $"SELECT status FROM outbox_messages WHERE id = {stale.Id.ToString()}", default);
             // 断言：不应被写成 Processed（2）。若实测 status==Processed → until 腿失效实锤
             await Assert.That(status).IsNotEqualTo((long)OutboxStatus.Processed);
+            // P3 补租约列断言（镜像 PalOrmConcurrencyTests 换 owner 腿的 locked_by 断言）：
+            // token 拒绝不仅"不写终态"——陈旧写不得触碰租约列，重租后的租约原样保留
+            var lockedBy = await session1.ScalarAsync<string>(
+                $"SELECT locked_by FROM outbox_messages WHERE id = {stale.Id.ToString()}", default);
+            await Assert.That(lockedBy).IsEqualTo("w1"); // 同 owner 重租：w1 未被旧写清除
+            var lockedUntil = await session1.ScalarAsync<string>(
+                $"SELECT locked_until FROM outbox_messages WHERE id = {stale.Id.ToString()}", default);
+            await Assert.That(lockedUntil).IsNotNull(); // 重租后的新 until 未被陈旧写清空
         }
         finally
         {

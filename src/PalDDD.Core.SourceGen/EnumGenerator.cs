@@ -28,7 +28,10 @@ public sealed class EnumGenerator : IIncrementalGenerator
         // （不要求 readonly），原文案 "static readonly" 与实现不符
         // ITM-100 修复：文案补 internal——收集条件为 static && (public || internal)，
         // 原文案 "public static" 与实现不符（仅 internal static 字段的枚举会误报 PALENUM001）
-        "Type '{0}' is marked with [GenerateEnum] but has no public or internal static fields. Add at least one field or remove the attribute.",
+        // P3 修复：补类型过滤条件——收集为双条件（public/internal static 且字段声明类型
+        // 等于目标类型自身，见 transform 内 SymbolEqualityComparer 比对），仅声明修饰符
+        // 满足而类型为辅助类型（如 int Version）时仍报本诊断；原文案只提修饰符，误导用户
+        "Type '{0}' is marked with [GenerateEnum] but has no public or internal static fields of its own type. Only fields declared with the target type itself are registered; add at least one such field or remove the attribute.",
         "PalDDD.EnumGeneration",
         DiagnosticSeverity.Warning,
         isEnabledByDefault: true);

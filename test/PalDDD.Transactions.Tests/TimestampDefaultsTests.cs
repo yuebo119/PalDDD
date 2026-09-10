@@ -40,16 +40,28 @@ public sealed class TimestampDefaultsTests
     [Test]
     public async Task NoMutableStaticClock_OnEntities()
     {
-        // 反模式 static TimeProvider Clock 已移除：三个实体类型都不应再暴露 internal static Clock。
-        // 属性 + 字段双扫（GetMember 匹配所有成员种类）——仅扫属性会漏掉改写为静态字段的回退形态。
-        await Assert.That(FindStaticNonPublicClockMember(typeof(OutboxMessage))).IsNull();
-        await Assert.That(FindStaticNonPublicClockMember(typeof(InboxMessage))).IsNull();
-        await Assert.That(FindStaticNonPublicClockMember(typeof(SagaState))).IsNull();
+        // 反模式 static TimeProvider Clock 已移除：三个实体类型都不得再持有可变全局静态时钟。
+        // P3 收宽扫描口径：字段腿扫**全部** static TimeProvider 字段（任意命名——裸静态字段
+        // 与 settable 静态属性的编译器后备字段 <X>k__BackingField 均在此现形，原按名 "Clock"
+        // 扫描对改名回退形态失明）；属性腿仅按历史名 Clock 扫——不扫全部 TimeProvider 属性，
+        // 因 OutboxMessage/SagaState 的 internal static TimeProvider 属性是 AsyncLocal 测试
+        // 注入门面（P2 定案：时间控制双轨统一），其存储字段类型为 AsyncLocal<TimeProvider?>，
+        // 不会被字段腿误伤。
+        await Assert.That(FindMutableStaticClockMember(typeof(OutboxMessage))).IsNull();
+        await Assert.That(FindMutableStaticClockMember(typeof(InboxMessage))).IsNull();
+        await Assert.That(FindMutableStaticClockMember(typeof(SagaState))).IsNull();
     }
 
-    private static System.Reflection.MemberInfo? FindStaticNonPublicClockMember(Type type)
-        => type.GetMember("Clock", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+    private static System.Reflection.MemberInfo? FindMutableStaticClockMember(Type type)
+    {
+        var field = type.GetFields(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+            .FirstOrDefault(member => member.FieldType == typeof(TimeProvider));
+        if (field is not null)
+            return field;
+
+        return type.GetMember("Clock", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
             .FirstOrDefault();
+    }
 
     private sealed class TestSagaState : SagaState;
 }

@@ -13,7 +13,11 @@ public sealed class NativeCompressionTests
         var services = new ServiceCollection();
         services.AddPalCompression();
         services.AddPalCompressionNative();
-        return services.BuildServiceProvider().GetRequiredService<ICompressionProvider>();
+        // P3 修复：ServiceProvider 补 using——原 BuildServiceProvider() 后即弃，
+        // 容器滞留到进程结束。Compressor/Provider 均非 IDisposable（P/Invoke 无状态），
+        // 容器 dispose 不级联影响解析出的实例，方法返回后照常可用
+        using var provider = services.BuildServiceProvider();
+        return provider.GetRequiredService<ICompressionProvider>();
     }
 
     private static byte[] DeterministicData(int size)

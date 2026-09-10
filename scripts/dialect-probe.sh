@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# ⚠ 本文件是 .ai/scripts/dialect-probe.sh 的 CI 分发副本（unified v2.0 Phase 2a，2026-08-20）。
-# 真源在 .ai 独立仓（不随主仓分发）；修改探针断言以 .ai 版为准，改后必须同步重新生成本副本。
+# ⚠ 本文件是 .ai/scripts/dialect-probe.sh 的 CI 分发副本（unified v2.0 Phase 2a，2026-08-20；正文同步 2026-09-09）。
+# 由 .ai 独立仓分发（不随主仓分发）；改探针断言必须同步重新生成本副本。
 # 本副本仅差异：ROOT 定位按根 scripts/ 深度修正（../..→..）；其余逐行一致。
-# 方言实测探针：只允许在显式授权下创建和清理唯一的测试数据库。
+# 方言实测探针（真源：.ai/scripts/dialect-probe.sh；根 scripts/ 副本仅 ROOT 定位行不同）。
+# 只允许在显式授权下创建和清理唯一的测试数据库；凭据从环境变量或配置文件读取，绝不打印连接串。
 # 用法：bash .ai/scripts/dialect-probe.sh --allow-destructive-probe
-# 凭据从环境变量或配置文件读取，绝不打印连接串。
 set -euo pipefail
 
 usage() {
@@ -28,6 +28,8 @@ if [[ "$SELF_TEST_SAFETY" -eq 0 && "$ALLOW_DESTRUCTIVE_PROBE" -ne 1 ]]; then
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# ENV-3（2026-09-09）：python3/python 双探测——Windows 常无 python3 命令名；均缺时探针无法生成/解析
+PY="$(command -v python3 || command -v python)" || { printf 'FAIL: python/python3 均不可用——探针生成与解析依赖它\n' >&2; exit 1; }
 PROBE_DIR="$(mktemp -d /tmp/palddd-dialect-probe.XXXXXX)"
 trap 'rm -r -- "$PROBE_DIR"' EXIT
 
@@ -46,7 +48,7 @@ validate_generated_database() {
 # 通过 Python 标准库严格解析连接串。数据库别名只能出现一次，重复或冲突都拒绝。
 connection_value() {
   local cs="$1" requested="$2"
-  python3 - "$cs" "$requested" <<'PY'
+  "$PY" - "$cs" "$requested" <<'PY'
 import sys
 
 connection_string, requested = sys.argv[1:]
@@ -95,7 +97,7 @@ probe_tcp() {
   local host="$1" port="$2"
   [[ "$host" =~ ^[A-Za-z0-9._:-]+$ ]] || return 1
   [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]] || return 1
-  python3 - "$host" "$port" <<'PY' 2>/dev/null
+  "$PY" - "$host" "$port" <<'PY' 2>/dev/null
 import socket
 import sys
 
@@ -108,7 +110,7 @@ PY
 # 配置文件存在即严格解析，解析错误不得回退默认值。
 read_config_value() {
   local path="$1" provider="$2"
-  python3 - "$path" "$provider" <<'PY'
+  "$PY" - "$path" "$provider" <<'PY'
 import json
 import sys
 
@@ -177,7 +179,7 @@ cd "$PROBE_DIR"
 dotnet new console -o . --force -v q >/dev/null 2>&1 || fail 'dotnet new console'
 dotnet add reference "$ROOT/src/PalDDD.Dapper/PalDDD.Dapper.csproj" >/dev/null 2>&1 || fail 'add reference'
 
-python3 - <<'PYEOF' > Program.cs
+"$PY" - <<'PYEOF' > Program.cs
 import os
 
 program = r'''
@@ -460,7 +462,7 @@ print(program)
 PYEOF
 
 PROBE_ROOT_W="$(cygpath -w "$ROOT" 2>/dev/null || printf '%s' "$ROOT")"
-run_token="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+run_token="$("$PY" -c 'import uuid; print(uuid.uuid4().hex)')"
 PG_DB="palddd_probe_pg_${run_token}"
 MY_DB="palddd_probe_mysql_${run_token}"
 validate_generated_database "$PG_DB" palddd_probe_pg_

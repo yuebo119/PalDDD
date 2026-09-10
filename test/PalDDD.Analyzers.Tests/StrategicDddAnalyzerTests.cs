@@ -58,7 +58,10 @@ public sealed class StrategicDddAnalyzerTests
                 public ValueTask ProjectAsync(OrderSubmitted @event, ProjectionContext context, CancellationToken ct) => ValueTask.CompletedTask;
             }
             """);
-        await Assert.That(diagnostics.Any(d => d.Id == "PDDD013" && d.GetMessage().Contains("ExplicitProjection"))).IsFalse();
+        // P3 修复（诚实化）：原断言谓词含 GetMessage().Contains("ExplicitProjection")——PDDD013 消息
+        // 只含投影名（"ordering.order-projection"）不含类名（v59 注释同款结论），谓词恒 false，
+        // IsFalse 对任意分析器行为都通过（空洞）。改为纯 Id 断言：投影名匹配前缀时必须零 PDDD013
+        await Assert.That(diagnostics.Any(d => d.Id == "PDDD013")).IsFalse();
     }
 
     // v66 回归网：null/default 字面量四形态视为缺失（v64/v65 修复只覆盖 ExpressionBody 腿——

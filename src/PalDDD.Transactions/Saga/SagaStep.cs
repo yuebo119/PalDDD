@@ -46,7 +46,16 @@ public class SagaStep
     /// </remarks>
     public Func<SagaState, CancellationToken, ValueTask>? CompensateAsync { get; }
 
-    /// <summary>超时时间（可选）</summary>
+    /// <summary>
+    /// 超时时间（可选）。
+    /// </summary>
+    /// <remarks>
+    /// 📐 消费语义（V25 探针 c 实测，2026-09-09）：Timeout 仅被<b>快照超时检测器</b>消费——
+    /// 步骤停留同状态且 StepStartedAt 超期时，SagaTimeoutProcessor 触发全量补偿并迁移终态。
+    /// 两个边界：① 路由目标把 CurrentState 移走后，残留的超期时间戳因状态名不匹配不再命中——
+    /// 不补偿、不迁移，Saga 以 Active 滞留（快照滞留检测语义）；② 执行路径<b>不内联消费</b>
+    /// Timeout——它没有"步骤执行中到点中断"的能力。
+    /// </remarks>
     public TimeSpan? Timeout { get; init; }
 
     /// <summary>步骤调度类型——子类重写以声明特殊执行路径</summary>

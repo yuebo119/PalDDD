@@ -19,7 +19,7 @@ public sealed class IdempotencyProcessor
     // ITM-175 修复（二十九轮）：失败原因入库截断上限——error 列 HasMaxLength(2048)
     // （IdempotencyDbContext），超长 ex.Message 让 MarkFailedAsync 自身抛截断异常 →
     // 失败记录残留 Processing → 租约过期重放 → 副作用二次执行。
-    // 对齐 OutboxBatchProcessor/InboxProcessor 的 MaxFailureReasonLength=2000（PD24 失败标记族）。
+    // 对齐 OutboxBatchProcessor/InboxProcessor 的 FailureReason.Normalize 收口（PD24 失败标记族，MaxLength=2000）。
 
     private readonly IIdempotencyStore _store;
     private readonly TimeProvider _timeProvider;
@@ -73,6 +73,12 @@ public sealed class IdempotencyProcessor
 
         // 阶段 1：执行 handler。失败路径标记 Failed 并传播（副作用未发生，可重试）。
         TResult result;
+        // v66 P4 声明（OCE 无观测，对齐 InboxProcessor v17 补文口径）：handler 抛 OCE 时
+        // 不标 Failed 直接逃逸——OCE 语义 = "不知道执行到哪一步"，标 Failed 可立即重试
+        // = 立即重放可能已完成的副作用；记录残留 Processing 由 LockedUntil 租约到期后
+        // 才可重入。代价：① 最长租约期的重试延迟；② 该路径无 SetStatus/无指标/无日志
+        //（IdempotencyFailed 不计、Activity 无 result tag）——OCE 由调用方按取消语义
+        // 观测（ct.IsCancellationRequested / 调用方自身日志），处理器侧不可见。
         try
         {
             result = await handler(cancellationToken).ConfigureAwait(false);

@@ -265,6 +265,44 @@ public sealed class SagaStateEfCoreTests
         await Assert.That(char.IsHighSurrogate(loaded.Error[^1])).IsFalse();
     }
 
+    [Test]
+    public async Task LeaseActiveSagasAsync_CancelledSave_DoesNotLeaveGhostLeaseInChangeTracker(CancellationToken cancellationToken)
+    {
+        // ITM-632 回归：租约保存失败（此处注入 OCE）时，已被变异（LeasedBy/LeasedUntil +
+        // BumpVersion）的 Saga 必须全批 Detach——否则滞留 ChangeTracker，后续无关
+        // SaveChangesAsync 会把"从未成功获取的幽灵租约"落库（WHERE Version=orig 必命中），
+        // 无主锁死这批 Saga 至 LeaseDuration。SQLite 关系型 provider + EnsureCreated。
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = new DbContextOptionsBuilder<ThrowingSagaStateDbContext>()
+            .UseSqlite(connection).Options;
+
+        await using var db = new ThrowingSagaStateDbContext(options);
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+        var created = CreateState("Active", DateTimeOffset.UtcNow);
+        db.SagaStates.Add(created);
+        await db.SaveChangesAsync(cancellationToken);
+        db.ChangeTracker.Clear();
+
+        db.ThrowOnNextSave = true;
+        await Assert.That(async () => await db.LeaseActiveSagasAsync(
+            "owner-1", TimeSpan.FromMinutes(2), 10, cancellationToken))
+            .Throws<OperationCanceledException>();
+
+        // 失败后无幽灵态残留 ChangeTracker
+        await Assert.That(db.ChangeTracker.Entries<TestSagaState>()).IsEmpty();
+
+        // 后续无关保存不得把幽灵租约落库
+        db.ThrowOnNextSave = false;
+        await db.SaveChangesAsync(cancellationToken);
+
+        await using var verifier = new ThrowingSagaStateDbContext(options);
+        var loaded = await verifier.GetByIdAsync(created.SagaId, cancellationToken);
+        await Assert.That(loaded?.SagaId).IsEqualTo(created.SagaId);
+        await Assert.That(loaded!.LeasedBy).IsNull();
+        await Assert.That(loaded.LeasedUntil).IsNull();
+    }
+
     private static readonly DateTimeOffset FixedNow = DateTimeOffset.Parse(
         "2026-05-31T00:00:00Z",
         CultureInfo.InvariantCulture);
@@ -303,7 +341,9 @@ public sealed class SagaStateEfCoreTests
     [Test]
     public async Task SQLiteProvider_DateTimeOffsetOrderByAndLeaseComparison_Translates()
     {
-        var conn = new Microsoft.Data.Sqlite.SqliteConnection("DataSource=:memory:");
+        // P3 修复：连接补 await using——:memory: 库随连接存活，原裸 new 未 dispose，
+        // 每次运行泄漏一个 SQLite 连接句柄到 GC 终结器
+        await using var conn = new Microsoft.Data.Sqlite.SqliteConnection("DataSource=:memory:");
         await conn.OpenAsync();
         var options = new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<TestSagaStateDbContext>()
             .UseSqlite(conn).Options;
@@ -324,4 +364,22 @@ public sealed class SagaStateEfCoreTests
 
     private sealed class TestSagaStateDbContext(DbContextOptions<TestSagaStateDbContext> options)
         : SagaStateDbContext<TestSagaState>(options);
+
+    /// <summary>ITM-632 探针上下文：下一次 SaveChangesAsync 注入 OperationCanceledException，
+    /// 构造"取消/保存失败"场景验证租约路径失败后实体被 Detach（无幽灵租约滞留）。</summary>
+    private sealed class ThrowingSagaStateDbContext(DbContextOptions<ThrowingSagaStateDbContext> options)
+        : SagaStateDbContext<TestSagaState>(options)
+    {
+        public bool ThrowOnNextSave { get; set; }
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            if (ThrowOnNextSave)
+            {
+                ThrowOnNextSave = false;
+                throw new OperationCanceledException("simulated cancellation");
+            }
+            return base.SaveChangesAsync(cancellationToken);
+        }
+    }
 }

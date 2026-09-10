@@ -43,6 +43,10 @@ public sealed class Dispatcher
     internal bool IsFrozen => Volatile.Read(ref _frozen) is not null;
 
     /// <summary>冻结注册表 — 转换字典为不可变只读格式，注册完成后调用。</summary>
+    /// <remarks>v65 P3（特例声明）：空注册表下本调用<b>不触发后续 Register 的 ObjectDisposedException</b>
+    /// ——<see cref="GetFrozenEntries"/> 对 <c>_entries.Count == 0</c> 返回临时空冻结表且不缓存、
+    /// 不置空 <c>_entries</c>（防"HostedService 先于 HandlerRegistrar 启动"隐式冻结空表清空注册）。
+    /// 非空表冻结后 Register 才抛 ODE。</remarks>
     internal void Freeze() => GetFrozenEntries();
 
     /// <summary>获取当前只读注册表 — 冻结后返回 <see cref="FrozenDictionary"/>，线程安全</summary>
@@ -215,5 +219,8 @@ public sealed class Dispatcher
         await vt.ConfigureAwait(false);
     }
 
+    // v65 P3（未消费参数声明）：HandlerType/ResponseType 当前仅由本类构造写入、执行路径
+    // 只读 Executor——两字段为诊断/未来扩展保留（如冻结表内省、重复注册报错携带类型），
+    // 属刻意保留的诊断元数据而非死代码；删除会使冻结表丢失请求→handler 的类型映射。
     private sealed record HandlerEntry(Type HandlerType, Type ResponseType, RequestExecutor Executor);
 }

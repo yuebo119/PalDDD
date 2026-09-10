@@ -237,6 +237,15 @@ public static class PostgreSqlJsonb
     /// <summary>
     /// 单引号字符串字面量内文转义 —— 单引号翻倍，不添加外层引号（模板已提供）。
     /// 用于 JSONB 键存在/提取操作符的 'Key' 位置（ITM-062）。
+    /// <para>
+    /// v65 P3（反斜杠声明）：本方法<b>不处理反斜杠</b>。在 PG 默认
+    /// <c>standard_conforming_strings=on</c>（PG 9.1+ 默认）下，普通字符串字面量中
+    /// <c>\</c> 是字面反斜杠，键名含反斜杠可正常工作；但若服务端显式配置为 <c>off</c>，
+    /// <c>\</c> 会被当作转义引导符吃掉，含反斜杠的键静默错查（键名含反斜杠属不支持场景）。
+    /// <b>不做反斜杠翻倍</b>：<c>\\</c> 在 <c>on</c> 下被解释为两个字面反斜杠——翻倍会在
+    /// 默认配置下破坏当前合法的含反斜杠键，两种服务端配置下不存在统一正确的转义形态，
+    /// 故保持现状并声明。需要绝对安全时请改用参数化查询（<c>payload ? @key</c>）。
+    /// </para>
     /// </summary>
     private static string EscapeLiteral(string value)
         => value.Replace("'", "''");

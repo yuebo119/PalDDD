@@ -22,6 +22,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Npgsql;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
 namespace PalDDD.Dapper.PostgreSql;
@@ -235,9 +236,15 @@ public sealed class ShardedDataSourceManager : IAsyncDisposable
     /// <summary>获取所有分片数据源</summary>
     public IReadOnlyList<NpgsqlDataSource> AllShards => _shards;
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types",
+        Justification = "逐 shard 释放需隔离任意异常，确保首 shard 失败不中断其余连接池释放；首个异常循环结束后上抛。")]
     public async ValueTask DisposeAsync()
     {
         // 三十七轮修复：逐 shard 异常隔离——首 shard Dispose 抛出不再中断循环泄漏其余连接池
+        // v65 P3：补 OCE 分支——原 `catch (Exception) when (ex is not OperationCanceledException)`
+        // 使任一 shard 抛 OperationCanceledException 时直接逃逸，剩余分片不再释放（连接池泄漏）。
+        // Dispose 路径无调用方取消语义（NpgsqlDataSource.DisposeAsync 本身不收 token），
+        // 故此处 OCE 与普通异常同等处理：记录首个异常后继续释放其余，循环结束再上抛首个异常。
         Exception? firstError = null;
         foreach (var ds in _shards)
         {
@@ -245,7 +252,7 @@ public sealed class ShardedDataSourceManager : IAsyncDisposable
             {
                 await ds.DisposeAsync().ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex)
             {
                 firstError ??= ex;  // 保首个异常，继续释放其余
             }

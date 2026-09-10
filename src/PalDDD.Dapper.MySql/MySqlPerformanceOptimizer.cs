@@ -43,6 +43,13 @@ public static class MySqlPerformanceOptimizer
     /// ITM-089 修复（声明）：连接生命周期归调用方——本方法接收调用方传入的连接，仅在未打开时
     /// 幂等 Open，<b>不会 Close/Dispose 连接</b>。SET SESSION 是会话级设置，优化后连接保持打开，
     /// 调用方可继续使用；连接最终由调用方负责关闭/释放（本库调用点均自行 Dispose）。
+    /// <para>
+    /// v65 P3（连接池声明）：SET SESSION 作用于<b>物理连接</b>；连接归还池后，池可将其分配给
+    /// 后续请求复用（设置持续），也可能因空闲超时/池空间回收而真正关闭——届时<b>设置随物理连接
+    /// 丢失</b>，再次借出的是未优化的新连接。本方法不做"每次借用都重放优化"的保证；依赖特定
+    /// 会话参数的场景请在取连接后自行调用本方法，或使用 <c>ConnectionReset</c>/<c>MySqlConnection
+    /// .StateChange</c> 钩子重放，或改在 <c>my.cnf</c> 全局配置。
+    /// </para>
     /// </remarks>
     public static void Optimize(MySqlConnection connection)
     {
@@ -66,6 +73,8 @@ public static class MySqlPerformanceOptimizer
     /// <remarks>
     /// ITM-089 修复（声明）：连接生命周期归调用方——本方法仅在未打开时幂等 Open，
     /// <b>不会 Close/Dispose 连接</b>；调用方负责用后关闭/释放。
+    /// v65 P3：SET NAMES 亦为会话级设置——连接池复用/物理连接回收的持久性边界同
+    /// <see cref="Optimize"/> 的池声明（归还池后设置可能随物理连接回收丢失）。
     /// </remarks>
     public static void SetUtf8mb4(MySqlConnection connection)
     {

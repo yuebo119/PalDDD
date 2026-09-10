@@ -38,6 +38,8 @@ Core
 App-Abstractions
   PalDDD.Serialization          — 消息描述符、不可变消息目录、序列化接口（IUnitOfWork 已合并入 PalDDD.Core / PalDDD.Core.Repository 命名空间）
   PalDDD.Messaging              — 领域事件派发 + Broker 抽象
+  PalDDD.Compression            — 压缩抽象（Brotli/GZip/Deflate，AOT 安全）
+  PalDDD.Compression.Native     — 原生压缩（LZ4/ZStandard，P/Invoke）
 
 Adapters
   PalDDD.Repository.EFCore       — UnitOfWork + OutboxDomainEventInterceptor
@@ -89,6 +91,8 @@ flowchart BT
     subgraph AppAbstractions[App-Abstractions]
         Serialization[PalDDD.Serialization]
         Messaging[PalDDD.Messaging]
+        Compression[PalDDD.Compression]
+        CompressionNative[PalDDD.Compression.Native]
     end
 
     subgraph Domain[Domain]
@@ -303,6 +307,8 @@ Outbox 批处理同时通过 `PalActivitySource` 发出 `Outbox Process` activit
 Outbox 批处理还会通过 `PalMetrics` 记录 `paldd.outbox.processed` 与 `paldd.outbox.failed`，使发布吞吐、重试和死信路径可以在不解析日志的情况下被告警和看板聚合。
 
 生产持久化通过可选 `PalDDD.Transactions.EFCore` 包提供 `OutboxDbContext` 与四方言 base context（`SqlServerOutboxDbContext`/`PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`，ADR-012）。通用 base context 负责状态映射、pending 查询过滤、成功/死亡/重试状态转换；SQL Server base context 使用 `UPDLOCK` / `READPAST` 在数据库内原子获取 lease，避免多实例重复发布。核心 `PalDDD.Transactions` 包只依赖 `IPalOutboxStore` 抽象。
+
+> ⚠️ **方言支持状态**：SQL Server（`SqlServerOutboxDbContext`）当前标 `[Obsolete]`、**零测试覆盖、未验证**，属**实验性**支持（v3.0 前评估是否移除）；生产推荐使用已验证方言 SQLite / PostgreSQL / MySQL。
 
 ### Inbox
 

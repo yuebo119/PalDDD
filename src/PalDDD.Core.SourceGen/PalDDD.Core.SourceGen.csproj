@@ -21,6 +21,12 @@
     <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" PrivateAssets="all" />
   </ItemGroup>
 
+  <!-- 共享源码（链接编译）：与 PalDDD.Analyzers 共用同一份稳定名称谓词，
+       避免两包各自维护副本产生漂移（见 ADR 022） -->
+  <ItemGroup>
+    <Compile Include="..\PalDDD.Shared\StableNameValidation.cs" Link="Shared\StableNameValidation.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" />
   </ItemGroup>

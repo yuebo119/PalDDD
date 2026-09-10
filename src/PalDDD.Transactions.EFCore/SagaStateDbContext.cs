@@ -155,6 +155,18 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
                 Entry(state).State = EntityState.Detached;
             throw;
         }
+        catch
+        {
+            // ITM-632：保存失败（含 OCE 与非 DbUpdate 异常）逃逸前全批 Detach——states 已被
+            // 变异为 Modified（LeasedBy/LeasedUntil + BumpVersion），异常逃逸后滞留
+            // ChangeTracker 会被下次无关 SaveChanges 提交为从未成功获取的幽灵租约
+            //（WHERE Version=orig 匹配 DB 真值必成功），无主锁死这批 Saga 至 LeaseDuration
+            // 过期。与上方 DbUpdateException 分支同款 Detach 手法；异常（含 OCE）原样上抛，
+            // 不吞取消、不转成功语义。
+            foreach (var state in states)
+                Entry(state).State = EntityState.Detached;
+            throw;
+        }
         return states;
     }
 
@@ -205,6 +217,16 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
             // 同 scope 下一条 Saga 的 SaveChangesAsync 幽灵提交或抛并发异常污染后续批处理
             // （SagaProcessor foreach 吞异常继续）——镜像 v26 Lease 路径与 IdempotencyDbContext
             // 三十八轮全修样板
+            if (ChangeTracker.Entries<TState>().Any(e => ReferenceEquals(e.Entity, state)))
+                Entry(state).State = EntityState.Detached;
+            throw;
+        }
+        catch
+        {
+            // ITM-632：保存失败（含 OCE 与非 DbUpdate 异常）逃逸前 Detach——state 已被调用方
+            // 变异为 Modified（含 Version 递增），异常逃逸后滞留 ChangeTracker 会被同 scope
+            // 后续 SaveChanges 幽灵提交为未生效的终态；与上方 DbUpdateException 分支同款
+            // 受跟踪判定手法；异常（含 OCE）原样上抛，不吞取消、不改语义。
             if (ChangeTracker.Entries<TState>().Any(e => ReferenceEquals(e.Entity, state)))
                 Entry(state).State = EntityState.Detached;
             throw;

@@ -104,7 +104,7 @@
 |---|---|---|---|---|
 | **AOT 兼容** | ⚠️ 部分 | ❌ 大多不兼容 | ❌ | **✅ 100%** |
 | **源码生成器** | ❌ | ❌ | ❌ | **✅ 3 个** |
-| **编译期诊断** | ❌ | ❌ | ❌ | **✅ 15 条规则** |
+| **编译期诊断** | ❌ | ❌ | ❌ | **✅ 38 条诊断** |
 | **零 DateTime.UtcNow** | ❌（30+ 处） | ❌（100+ 处） | ❌（5+ 处） | **✅ 0 处** |
 | **并发模型** | Lease | Saga + Retry | 无状态 | **Hi/Lo + CAS + Lease + Revision** |
 | **EF Core 解耦** | ❌ 耦合 | ❌ 耦合 | ✅ 无 EF | **✅ 完全可选** |
@@ -140,6 +140,8 @@ dotnet add reference ../Pal.DDD/src/PalDDD.DependencyInjection/PalDDD.Dependency
 #   PalDDD.Serialization.Evolution（消息版本升级）
 #   PalDDD.Hosting.AspNetCore（异常中间件 + 健康检查 + 端点映射）
 #   PalDDD.Messaging（IEventHandler）
+# 教程数据库方言：PostgreSQL（已验证）——需 EF provider 包：
+dotnet add package Npgsql.EntityFrameworkCore.PostgreSQL
 ```
 
 **为什么用项目引用而不是 NuGet？** — 框架还在开发中，正式发布后会改成 NuGet 包。
@@ -411,7 +413,7 @@ public class AppDbContext : DbContext
 
 // Program.cs
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
+    options.UseNpgsql(builder.Configuration.GetConnectionString("Default")));   // 教程统一用 PostgreSQL（已验证方言；SQL Server 当前实验性、未验证）
 
 // 注册工作单元（可选 —— 直接用 DbContext 也行）
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork<AppDbContext>>();
@@ -463,15 +465,14 @@ await _eventBus.PublishAsync(new OrderCreated(...), ct);  // 这里崩溃 → �
 builder.Services.AddPalOutboxUnitOfWork<AppDbContext>();
 // 2. 注册 Outbox 后台处理器（轮询 OutboxMessages 表 → 发布到 Broker）
 builder.Services.AddPalOutbox();
-// 3. 注册 Outbox Store（EF Core 方式：继承 OutboxDbContext）
-//    首先定义 AppOutboxDbContext：
+// 3. 注册 Outbox Store（EF Core 方式：继承已验证方言基类，此处 PostgreSQL）
+//    方言基类已实现抽象的 LeasePendingMessagesAsync（原子租约）；直接继承 OutboxDbContext
+//    则必须自行实现该抽象成员。
+//    定义 AppOutboxDbContext：
 //    public sealed class AppOutboxDbContext(DbContextOptions<AppOutboxDbContext> options)
-//        : OutboxDbContext(options)
-//    {
-//        public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
-//    }
+//        : PostgreSqlOutboxDbContext(options);
 builder.Services.AddDbContext<AppOutboxDbContext>(o =>
-    o.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
+    o.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
 builder.Services.AddScoped<IPalOutboxStore>(sp => sp.GetRequiredService<AppOutboxDbContext>());
 ```
 
@@ -664,7 +665,7 @@ public sealed class AppEventLogDbContext(DbContextOptions<AppEventLogDbContext> 
     : EventLogDbContext(options);
 
 builder.Services.AddDbContext<AppEventLogDbContext>(options =>
-    options.UseSqlServer(connectionString));
+    options.UseNpgsql(connectionString));
 builder.Services.AddScoped<IEventLog>(sp =>
     sp.GetRequiredService<AppEventLogDbContext>());
 ```
@@ -674,9 +675,9 @@ builder.Services.AddScoped<IEventLog>(sp =>
 ```csharp
 public async ValueTask<OrderId> HandleAsync(CreateOrderCommand command, CancellationToken ct)
 {
-    var orderId = new OrderId(PalUlid.New());
+    var orderId = new OrderId(Guid.NewGuid());   // OrderId 由 [GenerateId(typeof(Guid))] 生成（见 4.2）
     var data = new EventData(
-        PalUlid.New(),
+        PalUlid.New(),   // EventId 用 Ulid（可排序）；OrderId 载体是 Guid
         "ordering.order-created.v1",
         schemaVersion: 1,
         contentType: "application/json",
@@ -757,7 +758,7 @@ var replayed = await rebuilder.RebuildAsync(ct);     // 先清空再重建
 ```csharp
 // Program.cs — IdempotencyProcessor 通过手动注册（无便捷扩展方法）
 builder.Services.AddDbContext<AppIdempotencyDbContext>(o =>
-    o.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
+    o.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
 builder.Services.AddScoped<IIdempotencyStore>(sp => sp.GetRequiredService<AppIdempotencyDbContext>());
 builder.Services.AddScoped<IdempotencyProcessor>();
 
@@ -967,9 +968,9 @@ builder.Services.AddPalOutbox();
 
 // ── EF Core ──
 builder.Services.AddDbContext<AppDbContext>(o =>
-    o.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
+    o.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
 builder.Services.AddDbContext<AppOutboxDbContext>(o =>
-    o.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
+    o.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
 
 builder.Services.AddPalHealthChecks();
 

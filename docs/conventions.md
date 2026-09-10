@@ -69,7 +69,7 @@ EF Core / Kafka / RabbitMQ / MemoryPack 等不支持 AOT 的项目**显式覆盖
 
 - **`ValueTask` / `ValueTask<T>` 优先**于 `Task`，热路径零分配
 - **`IsCompletedSuccessfully` 快速路径**：同步完成时直接 `.Result`，避免异步状态机分配
-- **`ConfigureAwait(false)` 全层使用**（基础设施层 143+ 处，NoWarn CA2007）
+- **`ConfigureAwait(false)` 全层使用**（库代码 await 调用均显式该后缀——机械保证为本脚本族 PDDD-G12 零违规，NoWarn CA2007；不锚定裸数字计数：该计数随每次提交漂移，曾致 444/447 振荡，PD34 后口径去数字化）
 - **禁止 `async void`**（ArchitectureBoundaryTests 零容忍）
 
 ### 1.6 null 校验
@@ -266,7 +266,8 @@ AppendAsync_WithStaleExpectedVersion_ThrowsConcurrencyException
 Serialize_NullMessage_ThrowsArgumentNullException
 ```
 
-此约定已由 `ArchitectureBoundaryTests.TestMethods_MustFollowTripleUnderscorePattern` 强制执行。
+此约定已由 `ArchitectureBoundaryTests.TestMethods_MustFollowUnderscorePattern` 强制执行
+（ITM-645 诚实改名：原名 `...TripleUnderscorePattern` 与实断言"≥1 个下划线"不符）。
 
 ### 3.7 文档文件命名
 
@@ -337,7 +338,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-09-04 复验）：212 源文件·36 项目·0 违规（2026-07-02 锚定时 200 文件，Transactions 拆分等增长）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-09-04 复验）：213 源文件·36 项目·0 违规（2026-07-02 锚定时 200 文件，Transactions 拆分等增长）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 
@@ -525,7 +526,7 @@ public sealed class SagaKeyValidationTests { ... }
 
 ### 5.7 架构边界测试
 
-`ArchitectureBoundaryTests.cs`（41 个测试方法 / 89 断言点）将 ADR 和 Clean Architecture 落地为可执行断言：
+`ArchitectureBoundaryTests.cs`（37 个测试方法 / 89 断言点）将 ADR 和 Clean Architecture 落地为可执行断言：
 
 - 项目引用禁令矩阵（`[Theory]` + InlineData）
 - 源码内容关键字禁令（扫描 `.cs`，过滤注释行）
@@ -673,6 +674,14 @@ Infrastructure / Adapters → App-Core → App-Abstractions → Domain
 - 消息名必须含 BC 前缀 + `.v{N}` 后缀
 - ProcessManager / ProjectionHandler 必须 `sealed` + 归属 BC
 
+连同 3 个源生成器的 23 条输入契约诊断（PALMSG001-007 / PALENUM001-009 / PALID001-007），全框架共 **38 条编译期诊断**。
+
+**诊断覆盖门禁**：`test/PalDDD.Core.Tests/DiagnosticCoverageGateTests.cs` 扫描诊断定义源码，断言每条诊断 ID 都出现在某测试的断言表达式中（仅出现在注释里不算）——防止出现"实现了但无测试守护"的诊断。此门禁源于一次 mutation 实证：`PALENUM004`/`PALID003` 长期只有一行"镜像 `PALMSG006`"注释而无断言，破坏其检测实现后测试仍全绿。
+
+**分析器 ↔ 生成器分层**（详见 ADR 022）：PDDD009/PALMSG004、PDDD010/PALMSG005、PDDD011/PALMSG002 三对诊断检查同一输入，但**不是冗余**——分析器只覆盖领域事件（生成器的范围是其超集），生成器在泛型/不可访问声明下提前返回时由分析器兜底，且分析器可单独引用（不装生成器时是唯一守护）。生成器侧统一 Error（阻断构建），分析器侧命名类为 Warning 且部分配 CodeFix（一键修复），构成「阻断 + 修复」反馈链。审计此类"重复"时应先实测覆盖范围与兜底关系再判定。
+
+**跨包共享谓词**：`src/PalDDD.Shared/` 存放被多个分析器/生成器项目以链接源码方式共享的类型（当前仅 `StableNameValidation`）。分析器与生成器包必须相互独立（用户可各自单独引用），故共享走链接编译而非程序集引用或独立 NuGet 包。
+
 ### 8.4 「不做」清单
 
 | 不做 | 原因 |
@@ -797,8 +806,8 @@ var body = Expression.AndAlso(
 # 1. 构建（零错误零警告）
 dotnet build PalDDD.slnx
 
-# 2. 测试（零失败）
-dotnet test PalDDD.slnx --no-restore
+# 2. 测试（零失败）——MTP 禁用 slnx 批量（握手 → exit 5），逐测试项目循环
+for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore; done
 
 # 3. 公共 API 变更时更新快照（filter 需在 -- 之后传递给 MTP）
 PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
@@ -809,7 +818,7 @@ bash scripts/verify-conventions.sh
 
 ### 10.6 测试框架规则（TUnit + MTP · 强制）
 
-> **背景**：本框架统一使用 **TUnit 1.65.68**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.3.3**。不使用 VSTest。
+> **背景**：本框架统一使用 **TUnit 1.66.27**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.3.3**。不使用 VSTest。
 
 **硬性规则**（违反导致 `dotnet test` 发现零测试或构建冲突）：
 

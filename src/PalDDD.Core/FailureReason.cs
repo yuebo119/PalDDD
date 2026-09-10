@@ -32,8 +32,7 @@ public static class FailureReason
     /// <summary>
     /// v29 P3：仅截断不归一（存储层兜底族共享收口）——<see cref="Normalize"/> 会把 null/空白
     /// 归一为 "(no message)"，而 Error=null 是"未出错"语义（SagaState.Error 等），归一会破坏
-    /// 该语义。Dapper 五处（Outbox MarkDead/ReleaseForRetry、Inbox MarkFailed、Checkpoint
-    /// MarkFailed、Saga SaveChanges）+ PalORM/EFCore Saga 的 2040 兜底截断共用本方法
+    /// 该语义。Outbox/Saga 的 Error 列与 retriedBy 标识等兜底截断共用本方法
     ///（error 列上限 2048 的安全余量）；代理对守卫同 <see cref="Normalize"/>
     ///（末位高代理回退一位，防孤立高代理入库——UTF-16 代理对完整性）。
     /// <para>
@@ -41,6 +40,11 @@ public static class FailureReason
     /// PalOrmOutboxStore + EFCore OutboxDbContext 各两处）与 RequeueDeadAsync 的
     /// retriedBy 256 截断（Dapper/PalORM/EFCore/InMemory 四栈）全部改经本方法——
     /// 此前九处裸 [..N] 切片无代理对守卫。
+    /// </para>
+    /// <para>
+    /// ITM-638 口径分派：Dapper Inbox MarkFailed 与 Checkpoint MarkFailed 两处不归一族——
+    /// 改经 <see cref="Normalize"/>（对齐 PalORM/EFCore 侧 2000 + 空白归一，消除同输入跨栈
+    /// 存储值分叉），Normalize 内部复用本方法保持代理对守卫。
     /// </para>
     /// </summary>
     /// <param name="value">原始值；null 原样返回（null 语义保持）。</param>

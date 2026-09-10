@@ -111,12 +111,17 @@ public sealed class InboxProcessor
             {
                 await _store.MarkProcessedAsync(record, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
             }
-            catch (Exception markEx) when (markEx is not OperationCanceledException)
+            catch (Exception markEx)
             {
                 // ITM-180 修复（二十九轮）：handler 成功但标记失败（DB 故障）——副作用已发生，
                 // 不得按通用失败重新标记 Failed 再抛（那会把"已执行"降级为"可重试失败"，
                 // 重试时重放副作用）。记录区分性错误日志后按成功返回（at-least-once 语义下
                 // 状态待观察者确认；Inbox 的 Processed 状态由下一轮循环/监控补正）。
+                // v66 P3：移除原 `when (markEx is not OperationCanceledException)` 过滤，对齐
+                // ITM-092 口径——MarkProcessedAsync 以 CancellationToken.None 调用，其抛 OCE
+                // 属存储异常形态（而非请求级取消传播），原过滤让 OCE 逃逸给调用方，而
+                // handler 实际已成功——调用方按取消处理触发重试重放路径；捕获后统一按
+                // processed-pending-confirmation 处理（与下方 MarkFailedAsync 的不过滤口径对称）。
                 _logger.Error(markEx, $"Inbox: message {messageId} handler SUCCEEDED but MarkProcessed failed; state pending confirmation (at-least-once)");
                 activity?.SetTag("pal.inbox.result", "processed-pending-confirmation");
                 // ITM-197 修复（三十轮）：该路径补指标——修复前监控盲区（handler 成功但状态

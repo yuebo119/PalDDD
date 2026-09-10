@@ -77,12 +77,12 @@ public class PalOrmResilienceWiringTests
     }
 
     [Test]
-    public async Task ConfigureResilience_Throws_CallbackDisposesOpenedSession()
+    public async Task ConfigureResilience_CallbackThrows_PropagatesException()
     {
-        // v53 P2：回调异常时工厂必须释放 CreateAsync 已打开的会话——不释放则物理连接
-        // 滞留至 GC（容器未接管抛异常的工厂返回值）。通过抛异常后再次成功构建证明
-        // 无连接耗尽（SQLite :memory: 会话泄漏会驻留至 GC 终结器，行为级无法直接断言
-        // 释放，此处锁定"异常正确传播"半边，释放路径经代码审查保障）
+        // v53 P2 诚实改名（ITM-645）：原名 ..._CallbackDisposesOpenedSession 与断言不符——
+        // 本测试只锁定"回调异常正确传播"，无法直接观测已打开会话是否被释放（SQLite :memory:
+        // 会话泄漏行为级不可断言；不释放则物理连接滞留至 GC）。工厂的 catch-dispose 释放路径
+        // 由代码审查保障，测试端只覆盖异常传播这一半。
         var thrown = await Assert.That(() =>
         {
             using var sp = BuildProvider(_ => throw new InvalidOperationException("callback-boom"));

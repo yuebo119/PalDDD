@@ -37,7 +37,7 @@ class PalDDD.CQRS.PalValidationException
   ctor(System.String message, System.Exception inner)
   ctor(System.String property, System.String message)
   property System.Collections.Immutable.ImmutableArray<PalDDD.Core.PalValidationError> Errors
-class PalDDD.CQRS.RequestExecutor
+delegate PalDDD.CQRS.RequestExecutor
   ctor(System.Object object, System.IntPtr method)
   method System.IAsyncResult BeginInvoke(System.IServiceProvider services, PalDDD.CQRS.IBaseRequest request, System.Threading.CancellationToken ct, System.AsyncCallback callback, System.Object object)
   method System.Threading.Tasks.ValueTask<System.Object> EndInvoke(System.IAsyncResult result)
@@ -54,6 +54,8 @@ class PalDDD.Core.BoundedContextAttribute
 struct PalDDD.Core.Deleted
   ctor(System.Boolean Value)
   property System.Boolean Value
+  field static readonly PalDDD.Core.Deleted No
+  field static readonly PalDDD.Core.Deleted Yes
   method System.Void Deconstruct(System.Boolean& Value)
   method System.Boolean Equals(PalDDD.Core.Deleted other)
   method System.Boolean Equals(System.Object obj)
@@ -62,6 +64,7 @@ struct PalDDD.Core.Deleted
 struct PalDDD.Core.DeletedTime
   ctor(System.Nullable<System.DateTimeOffset> Value)
   property System.Nullable<System.DateTimeOffset> Value
+  field static readonly PalDDD.Core.DeletedTime Never
   method System.Void Deconstruct(System.Nullable`1[[System.DateTimeOffset, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]& Value)
   method System.Boolean Equals(PalDDD.Core.DeletedTime other)
   method System.Boolean Equals(System.Object obj)
@@ -69,6 +72,9 @@ struct PalDDD.Core.DeletedTime
   method PalDDD.Core.DeletedTime Now()
   method System.String ToString()
 static class PalDDD.Core.Diagnostics.PalActivitySource
+  field const System.String Name = PalDDD
+  field static readonly System.Diagnostics.ActivitySource Source
+  field static readonly System.String Version
   method System.Diagnostics.Activity StartCommandDispatch(System.String commandName, System.String handlerName)
   method System.Diagnostics.Activity StartEventDispatch(System.String eventName)
   method System.Diagnostics.Activity StartEventLogAppend(System.String streamName, System.Int32 eventCount)
@@ -81,6 +87,27 @@ static class PalDDD.Core.Diagnostics.PalActivitySource
   method System.Diagnostics.Activity StartProjectionRebuild(System.String projectionName, System.String sourceName)
   method System.Diagnostics.Activity StartSagaTransition(System.String sagaType, System.String fromState, System.String toState)
 static class PalDDD.Core.Diagnostics.PalMetrics
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> EventHandlersFailed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> EventHandlersHandled
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> EventLogAppended
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> EventLogRead
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> IdempotencyCached
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> IdempotencyExecuted
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> IdempotencyFailed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> IdempotencySkipped
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> InboxFailed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> InboxProcessed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> InboxSkipped
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> OutboxFailed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> OutboxProcessed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> ProjectionFailed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> ProjectionReplayed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> ReplayFailed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> ReplayRead
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> SagaCompensated
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> SagaCompensationFailed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> SagaCompleted
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> SagaScanFailed
 class PalDDD.Core.DomainCapabilityAttribute
   ctor(System.String name)
   property System.String Name
@@ -104,6 +131,7 @@ class PalDDD.Core.Entity<TId>
   method System.Boolean IsTransient()
   method System.String ToString()
 static class PalDDD.Core.FailureReason
+  field const System.Int32 MaxLength = 2000
   method System.String Normalize(System.String message)
   method System.String Truncate(System.String value, System.Int32 maxLength)
 class PalDDD.Core.GenerateEnumAttribute
@@ -138,6 +166,7 @@ interface PalDDD.Core.Logging.IPalLogger<T>
   method System.Boolean IsEnabled(Microsoft.Extensions.Logging.LogLevel level)
   method System.Void Warning(System.String message)
 class PalDDD.Core.Logging.NullPalLogger<T>
+  field static readonly PalDDD.Core.Logging.NullPalLogger<T> Instance
   method System.Void Debug(System.String message)
   method System.Void Error(System.Exception ex, System.String message)
   method System.Void Information(System.String message)
@@ -318,6 +347,10 @@ interface PalDDD.Idempotency.IIdempotencyStore
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Idempotency.IdempotencyRecord record, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyRecord> TryStartAsync(System.String operationName, System.String key, System.DateTimeOffset now, PalDDD.Idempotency.IdempotencyPolicy policy, System.Threading.CancellationToken ct)
 enum PalDDD.Idempotency.IdempotencyExecutionStatus
+  field const PalDDD.Idempotency.IdempotencyExecutionStatus Cached = 1
+  field const PalDDD.Idempotency.IdempotencyExecutionStatus Executed = 0
+  field const PalDDD.Idempotency.IdempotencyExecutionStatus Skipped = 2
+  field System.Int32 value__
 class PalDDD.Idempotency.IdempotencyExecution<TResult>
   ctor(PalDDD.Idempotency.IdempotencyExecutionStatus Status, TResult Result)
   property TResult Result
@@ -357,6 +390,10 @@ class PalDDD.Idempotency.IdempotencyRecord
   method System.Void MarkFailed(System.String error, System.DateTimeOffset failedAt)
   method System.Void MarkProcessing(System.DateTimeOffset lockedUntil, System.DateTimeOffset expiresAt, System.DateTimeOffset updatedAt)
 enum PalDDD.Idempotency.IdempotencyRecordStatus
+  field const PalDDD.Idempotency.IdempotencyRecordStatus Completed = 1
+  field const PalDDD.Idempotency.IdempotencyRecordStatus Failed = 2
+  field const PalDDD.Idempotency.IdempotencyRecordStatus Processing = 0
+  field System.Int32 value__
 class PalDDD.Idempotency.InMemoryIdempotencyStore
   ctor()
   method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyRecord> GetAsync(System.String operationName, System.String key, System.DateTimeOffset now, System.Threading.CancellationToken ct)
@@ -396,6 +433,10 @@ class PalDDD.Messaging.MessageConsumeContext
   property System.String TraceState
   method PalDDD.Messaging.MessageConsumeContext FromHeaders(System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<System.String, System.Object>> headers, System.String correlationId)
 static class PalDDD.Messaging.MessageConsumeContext+HeaderNames
+  field const System.String CausationId = x-causation-id
+  field const System.String CorrelationId = x-correlation-id
+  field const System.String TraceParent = traceparent
+  field const System.String TraceState = tracestate
 struct PalDDD.Messaging.MessagePublishContext
   ctor(System.Nullable<ByteAether.Ulid.Ulid> CorrelationId, System.Nullable<ByteAether.Ulid.Ulid> CausationId, System.String TraceParent, System.String TraceState)
   property System.Nullable<ByteAether.Ulid.Ulid> CausationId
@@ -445,6 +486,10 @@ class PalDDD.Projections.ProjectionCheckpoint
   method System.Void MarkProcessing(System.DateTimeOffset startedAt, System.TimeSpan processingTimeout)
   method PalDDD.Projections.ProjectionCheckpoint Rehydrate(System.String projectionName, System.String sourceName, System.String position, PalDDD.Projections.ProjectionCheckpointStatus status, System.DateTimeOffset updatedAt, System.DateTimeOffset leaseUntil, System.Int64 revision, System.String error)
 enum PalDDD.Projections.ProjectionCheckpointStatus
+  field const PalDDD.Projections.ProjectionCheckpointStatus Completed = 1
+  field const PalDDD.Projections.ProjectionCheckpointStatus Failed = 2
+  field const PalDDD.Projections.ProjectionCheckpointStatus Processing = 0
+  field System.Int32 value__
 struct PalDDD.Projections.ProjectionContext
   ctor(System.String sourceName, System.String position, System.DateTimeOffset occurredAt)
   ctor(System.String sourceName, System.String position, System.DateTimeOffset occurredAt, PalDDD.Projections.ReplayAuditMetadata audit)
@@ -500,11 +545,14 @@ class PalDDD.Projections.EventLog.EventReplayException
   ctor(System.String message)
   ctor(System.String message, System.Exception innerException)
 static class PalDDD.Projections.EventLog.EventStreamJsonLines
+  field const System.Int32 MaxLineChars = 16777216
   method System.Threading.Tasks.ValueTask ExportAsync(System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> events, System.IO.Stream output, System.Threading.CancellationToken ct)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.EventData> ImportAsync(System.IO.Stream input, System.Threading.CancellationToken ct)
 
 # PalDDD.Serialization
 static class PalDDD.Serialization.ContentTypes
+  field const System.String Json = application/json
+  field const System.String MemoryPack = application/x-memorypack
 interface PalDDD.Serialization.IMessageCatalog
   property System.Collections.Generic.IReadOnlyList<PalDDD.Serialization.MessageDescriptor> Descriptors
   method PalDDD.Serialization.MessageDescriptor Find(System.String name)
@@ -618,6 +666,10 @@ class PalDDD.Transactions.ChildSagaStep<TChildState, TInput, TOutput>
   ctor(System.String key, System.Func<PalDDD.Transactions.SagaState, TInput> inputSelector, System.Func<TChildState, TOutput> outputSelector, System.Action<PalDDD.Transactions.SagaState, TOutput> outputApplier, System.Func<PalDDD.Transactions.SagaState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> compensate)
   property PalDDD.Transactions.StepDispatchKind DispatchKind
 enum PalDDD.Transactions.CompensationPolicy
+  field const PalDDD.Transactions.CompensationPolicy Backward = 1
+  field const PalDDD.Transactions.CompensationPolicy Forward = 2
+  field const PalDDD.Transactions.CompensationPolicy None = 0
+  field System.Int32 value__
 class PalDDD.Transactions.DefaultSagaManager
   ctor()
   method System.Threading.Tasks.ValueTask<TChildState> ExecuteChildSagaAsync(PalDDD.Transactions.Saga<TChildState> childSaga, TChildState childState, System.Object triggerEvent, System.Threading.CancellationToken ct)
@@ -653,6 +705,7 @@ interface PalDDD.Transactions.IInboxStore
   method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.InboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<PalDDD.Transactions.InboxMessage> TryStartProcessingAsync(System.String consumerName, System.String messageId, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.IPalOutboxStore
+  field const System.Int32 DefaultMaxRetryCount = 10
   method System.Void AddMessage(PalDDD.Transactions.OutboxMessage message)
   method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> GetPendingMessagesAsync(System.Int32 batchSize, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
@@ -718,6 +771,11 @@ class PalDDD.Transactions.InboxProcessor
   method System.Threading.Tasks.ValueTask<System.Boolean> TryProcessAsync(System.String consumerName, System.String messageId, System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, TMessage message, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Boolean> TryProcessAsync(System.String messageId, System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, TMessage message, System.Threading.CancellationToken ct)
 enum PalDDD.Transactions.InboxStatus
+  field const PalDDD.Transactions.InboxStatus Failed = 3
+  field const PalDDD.Transactions.InboxStatus Pending = 0
+  field const PalDDD.Transactions.InboxStatus Processed = 2
+  field const PalDDD.Transactions.InboxStatus Processing = 1
+  field System.Int32 value__
 class PalDDD.Transactions.InterruptStep
   ctor(System.String key, System.String interruptReason, System.Type decisionType)
   property System.Type DecisionType
@@ -757,6 +815,10 @@ class PalDDD.Transactions.OutboxOptions
 class PalDDD.Transactions.OutboxProcessor
   ctor(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.OutboxOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.OutboxProcessor> logger, System.Nullable<System.TimeSpan> pollInterval)
 enum PalDDD.Transactions.OutboxStatus
+  field const PalDDD.Transactions.OutboxStatus Dead = 2
+  field const PalDDD.Transactions.OutboxStatus Pending = 0
+  field const PalDDD.Transactions.OutboxStatus Processed = 1
+  field System.Int32 value__
 class PalDDD.Transactions.PeriodicBackgroundProcessor
   method System.Void Dispose()
 struct PalDDD.Transactions.SagaCompensationStarted
@@ -808,7 +870,17 @@ class PalDDD.Transactions.SagaState
   property PalDDD.Transactions.SagaStatus Status
   property System.Collections.Generic.Dictionary<System.String, System.DateTimeOffset> StepStartedAt
   property System.Int32 Version
+  field const System.String CompensatedStateName = Compensated
+  field const System.String CompensationFailedStateName = CompensationFailed
+  field const System.String InitialStateName = Initial
 enum PalDDD.Transactions.SagaStatus
+  field const PalDDD.Transactions.SagaStatus Active = 0
+  field const PalDDD.Transactions.SagaStatus AwaitingHumanDecision = 5
+  field const PalDDD.Transactions.SagaStatus Compensated = 2
+  field const PalDDD.Transactions.SagaStatus CompensationFailed = 3
+  field const PalDDD.Transactions.SagaStatus Completed = 1
+  field const PalDDD.Transactions.SagaStatus DeadLettered = 4
+  field System.Int32 value__
 struct PalDDD.Transactions.SagaStatusChanged
   ctor(ByteAether.Ulid.Ulid SagaId, PalDDD.Transactions.SagaStatus OldStatus, PalDDD.Transactions.SagaStatus NewStatus)
   property PalDDD.Transactions.SagaStatus NewStatus
@@ -876,4 +948,10 @@ static class PalDDD.Transactions.ServiceCollectionExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOutbox(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalSaga(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
 enum PalDDD.Transactions.StepDispatchKind
+  field const PalDDD.Transactions.StepDispatchKind ChildSaga = 2
+  field const PalDDD.Transactions.StepDispatchKind Dynamic = 4
+  field const PalDDD.Transactions.StepDispatchKind FanOut = 1
+  field const PalDDD.Transactions.StepDispatchKind Interrupt = 3
+  field const PalDDD.Transactions.StepDispatchKind Normal = 0
+  field System.Int32 value__
 

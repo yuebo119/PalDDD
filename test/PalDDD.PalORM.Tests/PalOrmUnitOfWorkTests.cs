@@ -66,7 +66,18 @@ public class PalOrmUnitOfWorkTests
         await using var session = await PalOrmStoreFixture.CreateAsync();
         await using var uow = new SqlitePalOrmUnitOfWork(session);
         var executed = false;
-        await uow.ExecuteInTransactionAsync(async _ => { executed = true; await ValueTask.CompletedTask; }, default);
+        await uow.ExecuteInTransactionAsync(async ct =>
+        {
+            executed = true;
+            // 委托内写入必须随 Commit 落库——只断言 executed 无法区分"提交"与"未提交"，
+            // 这里在事务内插入一行，提交后回读计数证明事务真正提交。
+            await session.ExecuteAsync(
+                $"INSERT INTO outbox_messages (id, type, payload, created_at) VALUES ({"commit-tx"}, {"tx.commit"}, {"[]"}, {DateTimeOffset.UtcNow})",
+                ct);
+        }, default);
+
         await Assert.That(executed).IsTrue();
+        var count = await session.ScalarAsync<long>($"SELECT COUNT(*) FROM outbox_messages");
+        await Assert.That(count).IsEqualTo(1L);
     }
 }

@@ -26,6 +26,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Npgsql;
 using PalDDD.Core.Logging;
@@ -173,13 +174,27 @@ public static class PostgreSqlServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.AddSingleton<IHostedService>(sp =>
+        // ITM-637 姊妹：AddSingleton<IHostedService>(factory) 重复调用会追加多个描述符（多次
+        // 调用启动多个 LISTEN 监听 + 每个 NOTIFY 触发多轮批处理）。改 TryAddEnumerable 按
+        // ServiceType+ImplementationType 去重（对齐 Serialization.Evolution ITM-167 修复）。
+        // v66 P1 修复（预设勘正）：原 Singleton<IHostedService>(factory) 单泛型重载在
+        // MS.DI 8.0+ 的 TryAddEnumerable 下【首次调用即抛 ArgumentException】而非"静默去重"
+        // ——反编译证实 GetImplementationType() 对 factory 取委托返回类型（IHostedService），
+        // 与 ServiceType 相同命中 indistinguishable-type 检查（8.0.0/9.0.0/10.0.0/
+        // 11.0.0-preview.6 四版一致）。改双泛型 Singleton<IHostedService, TNotifier>(factory)
+        // 重载：去重键为 (IHostedService, PostgreSqlOutboxNotifier)（对齐 ServiceRegistration.cs
+        // HandlerRegistrar 同款形态），调用即抛消除、重复调用真去重。
+        // ⚠️ 边界声明（channelName 静默以首次为准）：channelName 捕获在工厂闭包内，描述符层
+        // 不可比较——不同 channelName 的第二次调用被去重跳过（首次注册生效）。需要多通道的
+        // 场景应手动注册不同实现类型（TryAddEnumerable 去重键含实现类型）；因"调用即抛"缺陷
+        // 此前该方法实际不可用，无既有调用方依赖任何旧行为。
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, PostgreSqlOutboxNotifier>(sp =>
             new PostgreSqlOutboxNotifier(
                 sp.GetRequiredService<NpgsqlDataSource>(),
                 sp.GetRequiredService<IServiceScopeFactory>(),
                 sp.GetRequiredService<IPalLogger<PostgreSqlOutboxNotifier>>(),
                 sp.GetService<TimeProvider>(),
-                channelName));
+                channelName)));
 
         return services;
     }
@@ -273,7 +288,10 @@ public static class PostgreSqlServiceCollectionExtensions
                 readerBuilder.ConnectionStringBuilder.MaxAutoPrepare = 20;
             reader = readerBuilder.Build();
         }
-        services.AddSingleton(new PostgreSqlReadWriteRouter(writer, reader));
+        // ITM-637 姊妹修复：工厂注册（容器创建 → 宿主 Dispose 时调用 router.DisposeAsync）。
+        // 原实例注册 `AddSingleton(new PostgreSqlReadWriteRouter(...))` 下 MS.DI 不释放容器
+        // 未创建的对象，writer/reader 连接池静默泄漏（与本类新入口同款缺陷，同批收口）。
+        services.AddSingleton(_ => new PostgreSqlReadWriteRouter(writer, reader));
         return services;
     }
 }

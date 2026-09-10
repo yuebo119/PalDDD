@@ -13,10 +13,15 @@ namespace PalDDD.Serialization.MemoryPack;
 
 /// <summary>
 /// MemoryPack 二进制消息序列化器。<br/>
-/// AOT 兼容、零反射、比 JSON 快 3-5x、payload 小 2-4x。<br/>
+/// 泛型路径无反射、配合 <c>[MemoryPackable]</c> 源生成器可 AOT 工作，比 JSON 快 3-5x、payload 小 2-4x；
+/// 非泛型 <c>object</c> 重载走运行时类型查找，<b>非</b> AOT 安全。<br/>
 /// 通过 <c>AddPalMemoryPackSerialization()</c> 注册，替换默认 JSON 序列化器。
 /// </summary>
 /// <remarks>
+/// ⚠️ v65 P3（AOT 声明勘正）：本类型所在包 <c>IsAotCompatible=false</c>（csproj）——本类
+/// <b>不声明整包 NativeAOT 兼容</b>（源生成器全链路验证未完成，见 P0 硬约束 #3）。上文"泛型路径
+/// 可 AOT 工作"指该路径无反射调用，不等同于本类的 AOT 兼容性承诺；原摘要"（整类）AOT 兼容、
+/// 零反射"与非泛型路径的反射事实及包级设置矛盾，已收窄。
 /// 📐 与 JsonMessageSerializer 互斥注册（均为 IMessageSerializer Singleton）。
 /// 💡 泛型路径使用 <c>MemoryPackSerializer.Serialize&lt;T&gt;()</c>，编译时类型安全。
 /// 💡 非泛型路径使用 <c>MemoryPackSerializer.Serialize(value.GetType())</c> + descriptor 回退。
