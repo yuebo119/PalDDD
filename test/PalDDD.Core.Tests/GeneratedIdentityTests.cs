@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.ComponentModel;
+using System.Text;
 using System.Text.Json;
 using PalUlid = ByteAether.Ulid.Ulid;
 
@@ -302,5 +303,55 @@ public sealed class GeneratedIdentityTests
         var reader = new Utf8JsonReader(output.WrittenSpan);
         await Assert.That(reader.Read()).IsTrue();
         await Assert.That(reader.TokenType).IsEqualTo(JsonTokenType.Null);
+    }
+
+    // ── ITM-629 回归：Ulid converter 的多段 ReadOnlySequence 读取路径 ──
+    // 修复前生成物无条件取 reader.ValueSpan——ValueSpan 仅对单段有效，string token
+    // 跨段（HasValueSequence=true）时抛 InvalidOperationException（非 JsonException，
+    // 破坏 converter 契约并绕过上层 catch(JsonException)）；修复后该分支回退
+    // GetString() 字符串重载。本测试从 token 正中切段强制走多段 reader 路径，
+    // 证明反序列化成功且值正确（修复前此路径必抛 InvalidOperationException）。
+
+    [Test]
+    public async Task UlidIdentity_MultiSegmentSequence_DeserializesWithoutValueSpan()
+    {
+        var expected = UlidKey.From(PalUlid.New());
+        // JSON 文本 = 完整 string token（含两侧引号），从正中切成两段拼 sequence
+        var json = Encoding.UTF8.GetBytes($"\"{expected.Value}\"");
+        var sequence = SplitIntoTwoSegments(json, json.Length / 2);
+
+        // 多段 reader 路径：Utf8JsonReader(ReadOnlySequence) 重载，token 跨段
+        // （JsonSerializer 无 sequence 公共重载——其内部即此 reader 形态）
+        var reader = new Utf8JsonReader(sequence);
+        await Assert.That(reader.Read()).IsTrue();
+        // 前置守卫：token 跨段强制 HasValueSequence=true——否则测试静默退化为单段快路径
+        await Assert.That(reader.HasValueSequence).IsTrue();
+
+        var converter = new UlidKeyJsonConverter();
+        var result = converter.Read(ref reader, typeof(UlidKey), JsonSerializerOptions.Default);
+
+        await Assert.That(result).IsEqualTo(expected);
+    }
+
+    /// <summary>把缓冲区切成两段拼成跨段 <see cref="ReadOnlySequence{T}"/>——
+    /// string token 跨越段边界，reader 呈现 HasValueSequence=true（多段读取路径）。</summary>
+    private static ReadOnlySequence<byte> SplitIntoTwoSegments(byte[] payload, int splitAt)
+    {
+        var first = new SequenceSegment(payload.AsMemory(0, splitAt));
+        var last = first.Append(payload.AsMemory(splitAt));
+        return new ReadOnlySequence<byte>(first, 0, last, payload.Length - splitAt);
+    }
+
+    /// <summary>最小双段 sequence 载体——仅服务于上面的多段读取回归测试。</summary>
+    private sealed class SequenceSegment : ReadOnlySequenceSegment<byte>
+    {
+        public SequenceSegment(ReadOnlyMemory<byte> memory) => Memory = memory;
+
+        public SequenceSegment Append(ReadOnlyMemory<byte> nextMemory)
+        {
+            var next = new SequenceSegment(nextMemory) { RunningIndex = RunningIndex + Memory.Length };
+            Next = next;
+            return next;
+        }
     }
 }

@@ -1,4 +1,3 @@
-using PalDDD.Core.Repository;
 using PalDDD.CQRS;
 using PalDDD.DependencyInjection;
 using PalDDD.EventLog;
@@ -49,6 +48,16 @@ public sealed class PublicApiSnapshotTests
 
         if (Environment.GetEnvironmentVariable("PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS") == "1")
         {
+            // P3 修复：CI 守卫——该开关若误泄漏进流水线（环境变量继承/脚本污染），
+            // 本测试会静默把金标改写成当前公共面，吞掉 API 破坏（门禁假绿）。
+            // CI 下拒绝自更新并快失败，金标更新只允许本地显式执行。
+            if (IsCiEnvironment())
+            {
+                throw new InvalidOperationException(
+                    "PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 在 CI 环境被检测到——拒绝在 CI 上自更新公共 API 金标"
+                    + "（会静默吞掉 API 破坏）。请在本地更新快照并提交。");
+            }
+
             Directory.CreateDirectory(Path.GetDirectoryName(snapshotPath)!);
             await File.WriteAllTextAsync(snapshotPath, actual, cancellationToken);
         }
@@ -57,6 +66,11 @@ public sealed class PublicApiSnapshotTests
 
         await Assert.That(Normalize(expected)).IsEqualTo(Normalize(actual));
     }
+
+    /// <summary>是否处于 CI 环境（CI / GITHUB_ACTIONS 任一非空即判定）。</summary>
+    private static bool IsCiEnvironment()
+        => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI"))
+           || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"));
 
     private static string BuildSnapshot()
     {
@@ -77,6 +91,20 @@ public sealed class PublicApiSnapshotTests
                 foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly).OrderBy(static p => p.Name, StringComparer.Ordinal))
                     builder.AppendLine("  " + GetPropertySignature(property));
 
+                // P3 补全：公共 event 纳入快照——add_/remove_ 访问器是 special name 已被
+                // 下方方法过滤，event 本体此前零枚举（新增公共 event 会静默漏出快照）
+                foreach (var evt in type.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
+                    .OrderBy(static e => e.Name, StringComparer.Ordinal))
+                {
+                    builder.AppendLine($"  event {FormatType(evt.EventHandlerType!)} {evt.Name}");
+                }
+
+                foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
+                    .OrderBy(GetMemberSortKey, StringComparer.Ordinal))
+                {
+                    builder.AppendLine("  " + GetFieldSignature(field));
+                }
+
                 foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
                     .Where(static method => !method.IsSpecialName)
                     .OrderBy(GetMemberSortKey, StringComparer.Ordinal))
@@ -93,16 +121,20 @@ public sealed class PublicApiSnapshotTests
 
     private static string GetTypeSignature(Type type)
     {
-        var kind = type switch
-        {
-            { IsInterface: true } => "interface",
-            { IsEnum: true } => "enum",
-            { IsValueType: true } when type.IsAssignableTo(typeof(Delegate)) => "delegate",
-            { IsValueType: true } => "struct",
-            { IsClass: true, IsAbstract: true, IsSealed: true } => "static class",
-            { IsClass: true } => "class",
-            _ => "type"
-        };
+        // P3 修复：delegate 判定须在值类型/类判定之前——delegate 全部 IsClass
+        //（原 { IsValueType: true } when IsAssignableTo(Delegate) 分支恒不可达，
+        // delegate 被误记为 "static class"，如 PalDDD.CQRS.RequestExecutor）
+        var kind = type.IsAssignableTo(typeof(Delegate))
+            ? "delegate"
+            : type switch
+            {
+                { IsInterface: true } => "interface",
+                { IsEnum: true } => "enum",
+                { IsValueType: true } => "struct",
+                { IsClass: true, IsAbstract: true, IsSealed: true } => "static class",
+                { IsClass: true } => "class",
+                _ => "type"
+            };
 
         return $"{kind} {FormatType(type)}";
     }
@@ -112,6 +144,19 @@ public sealed class PublicApiSnapshotTests
 
     private static string GetPropertySignature(PropertyInfo property)
         => $"property {FormatType(property.PropertyType)} {property.Name}";
+
+    private static string GetFieldSignature(FieldInfo field)
+    {
+        // 字面量（const）带值（如 PalActivitySource.Name）；只读字段（如 PalMetrics 的
+        // Counter<long>、Deleted.No）按 readonly 记类型与名；其余只记类型与名。
+        if (field.IsLiteral)
+            return $"field const {FormatType(field.FieldType)} {field.Name} = {Convert.ToString(field.GetRawConstantValue(), CultureInfo.InvariantCulture)}";
+
+        if (field.IsInitOnly)
+            return $"field {(field.IsStatic ? "static " : "")}readonly {FormatType(field.FieldType)} {field.Name}";
+
+        return $"field {FormatType(field.FieldType)} {field.Name}";
+    }
 
     private static string GetMethodSignature(MethodInfo method)
         => $"method {FormatType(method.ReturnType)} {method.Name}({FormatParameters(method.GetParameters())})";
@@ -140,6 +185,9 @@ public sealed class PublicApiSnapshotTests
 
     private static string GetMemberSortKey(MethodBase member)
         => member.Name + "(" + FormatParameters(member.GetParameters()) + ")";
+
+    private static string GetMemberSortKey(FieldInfo field)
+        => field.Name;
 
     private static string Normalize(string value)
         => value.Replace("\r\n", "\n", StringComparison.Ordinal).Trim();

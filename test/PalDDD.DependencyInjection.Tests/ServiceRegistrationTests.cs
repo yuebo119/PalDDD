@@ -91,9 +91,22 @@ public sealed class ServiceRegistrationTests
     {
         var services = new ServiceCollection();
         services.AddLogging(); // 用户已有默认 Provider
+        var userProvider = new RecordingLoggerProvider();
+        services.AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider>(userProvider);
         services.AddPalLogging();
 
+        // ITM-645 收紧：原名只断言工厂可解析（不证明"未清除"）。此处断言用户先注册的
+        // ILoggerProvider 仍在——ClearProviders() 会 RemoveAll(ILoggerProvider) 静默丢弃
+        // 用户日志配置，此断言在独占接管回归时会失败。
+        await Assert.That(services.Any(sd =>
+            sd.ServiceType == typeof(Microsoft.Extensions.Logging.ILoggerProvider)
+            && ReferenceEquals(sd.ImplementationInstance, userProvider))).IsTrue();
+
         using var provider = services.BuildServiceProvider();
+        // 行为层复验：解析出的 Provider 集合仍含用户实例（不被 ZLogger 注册顶替）
+        await Assert.That(provider.GetServices<Microsoft.Extensions.Logging.ILoggerProvider>()
+            .Any(p => ReferenceEquals(p, userProvider))).IsTrue();
+
         var loggerFactory = provider.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>();
         await Assert.That(loggerFactory).IsNotNull();
         // 行为冒烟：追加语义下 IPalLogger 适配可用
@@ -186,6 +199,12 @@ public sealed class ServiceRegistrationTests
         var viaInterface = scope.ServiceProvider.GetRequiredService<IQueryHandler<TestQuery, int>>();
 
         await Assert.That(viaInterface).IsTypeOf<TestQueryHandler>();
+
+        // ITM-645：Test 名含 AsScoped，补跨 scope 断言（镜像命令版 AddPalCommandHandler 的
+        // IsNotSameReferenceAs）——同 scope 复用、跨 scope 新实例即 Scoped 生命周期证据。
+        using var scope2 = provider.CreateScope();
+        var handler2 = scope2.ServiceProvider.GetRequiredService<TestQueryHandler>();
+        await Assert.That(handler).IsNotSameReferenceAs(handler2);
     }
 
     /// <summary>AddPalPipelineBehaviors 注册两个开放泛型管道行为到服务集合</summary>
@@ -227,14 +246,30 @@ public sealed class ServiceRegistrationTests
         var services = new ServiceCollection();
 
         services.AddPalDDD();
+        var firstCount = services.Count;
+        await Assert.That(firstCount).IsGreaterThan(0);
         // 第二次调用不应抛异常（TryAddSingleton 保证幂等）
         services.AddPalDDD();
+
+        // P3 补描述符计数断言：幂等的可验证含义是二次调用零新增——只断言不抛无法
+        // 区分"TryAdd 拒绝"与"静默重复注册"（后者会让 HostedService 双 Registrar）
+        await Assert.That(services.Count).IsEqualTo(firstCount);
 
         using var provider = services.BuildServiceProvider();
         _ = provider.GetRequiredService<Dispatcher>(); // GetRequiredService 失败即抛（恒真断言已删）
     }
 
     private sealed class TestDomainEvent : DomainEvent;
+
+    /// <summary>ITM-645 辅助：用户侧日志 Provider 哨兵——用于断言 AddPalLogging 追加语义
+    /// 未清除用户已注册的 ILoggerProvider（ClearProviders 回归时该 descriptor 消失）。</summary>
+    private sealed class RecordingLoggerProvider : Microsoft.Extensions.Logging.ILoggerProvider
+    {
+        public Microsoft.Extensions.Logging.ILogger CreateLogger(string categoryName)
+            => Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+
+        public void Dispose() { }
+    }
 
     // ─── AOT 闭合注册测试（AotCannotCreateGenericValueType 修复 · 互斥检查替代哨兵）───
 

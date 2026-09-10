@@ -224,16 +224,35 @@ public static class TestEnvironment
 
     private static bool ReadBoolean(JsonElement parent, string name, bool defaultValue)
     {
-        return !parent.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null
-            ? defaultValue
-            : value.GetBoolean();
+        if (!parent.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null)
+            return defaultValue;
+        try
+        {
+            return value.GetBoolean();
+        }
+        catch (InvalidOperationException ex)
+        {
+            // P3 修复：值类型不匹配（如 "UseTestcontainers": "true"）时 S.T.J 抛的 IOE
+            // 无字段指向，且被 Parse 的 catch(InvalidOperationException){throw;} 原样穿透
+            //——包装为带字段名与实际类型的指向性配置错误（fail-closed 口径同 RabbitMqPort）
+            throw new InvalidOperationException($"配置字段 {name} 应为布尔类型，实际为 {value.ValueKind}。", ex);
+        }
     }
 
     private static int ReadInt32(JsonElement parent, string name, int defaultValue)
     {
-        return !parent.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null
-            ? defaultValue
-            : value.GetInt32();
+        if (!parent.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null)
+            return defaultValue;
+        try
+        {
+            return value.GetInt32();
+        }
+        catch (InvalidOperationException ex)
+        {
+            // P3 修复：同 ReadBoolean——"Port": "5672" 这类字符串值须报出字段名，
+            // 而非 S.T.J 内部 "requires an element of type 'Number'" 的无指向穿透
+            throw new InvalidOperationException($"配置字段 {name} 应为整数类型，实际为 {value.ValueKind}。", ex);
+        }
     }
 
     private static List<string> GetDatabaseAliases(string connectionString)

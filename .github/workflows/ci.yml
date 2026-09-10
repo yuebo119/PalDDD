@@ -16,7 +16,11 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # fetch-depth: 0 —— gate-check G23/G24 以 `git diff HEAD~1..HEAD` 为变更集基线，
+      # 浅克隆（默认 depth=1）下 HEAD~1 不可解析 → 两门在 CI 退化为 no-op（ITM-620）。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -88,19 +92,49 @@ jobs:
 
       - name: AI system self-check + gate
         run: |
+          # ITM-648：set -o pipefail 必须置于本步骤【首个管道调用之前】——GitHub 默认 bash -e
+          # 无 pipefail，`if ! cmd | tee` 管道退出码取 tee 的 0，失败被掩码（SHELL-1 教训
+          # 第五次现身：上轮把 set 放在 :120/:135 的六门禁循环前，漏了 :106 的 secret-scan
+          # 首个调用点——CI 凭据门禁实为 no-op，探针 MASKED/CAUGHT 实锤）。提至块首覆盖全部管道。
+          set -o pipefail
           # .ai/ 是独立 git 仓库（.gitignore 第 95 行），fresh checkout 不存在——
           # 本地装有 .ai 才跑全量自检，否则退化为根目录快速门禁（G1-G3），
           # 避免 CI 在无 .ai 的仓库上必然失败（终验轮 B-1 实锤）
+          # CI 覆盖面（ITM-615 补全，2026-09-10）：
+          #   有 .ai 时 = build + test + aot + gate-check + verify-ai-system（含 V23 镜像对内容比对）
+          #     + encoding-gate + doc-consistency-check + tech-debt-scan + test-gate
+          #     + template-gate + assertion-strength-check（后六项 2026-09-10 追加，均可离线运行、无外部依赖）；
+          #   无 .ai 时 = build + test + aot + 根 G1-G3 快速门禁（降级）。
           # unified v2.0（2026-08-20）：gate 步骤自诊断化（CI 实测 exit 2 本地却过——
           # tee 捕获 + CTX 注解通道让失败现场经公开 API 可读）
+          # ITM-616：凭据扫描（主仓脚本，不依赖 .ai）——两个分支都要跑，补 SE2 此前失实的防线。
+          if ! bash scripts/secret-scan.sh 2>&1 | tee ci-secret-scan.log; then
+            echo "::error ::SECRET SCAN FAILED：受跟踪文件发现疑似硬编码凭据"
+            python3 scripts/ci-failed-tests.py secret-scan ci-secret-scan.log || true
+            rm -f ci-secret-scan.log
+            exit 1
+          fi
+          rm -f ci-secret-scan.log
           if [ -d .ai/scripts ]; then
             bash .ai/scripts/verify-ai-system.sh
             bash .ai/scripts/gate-check.sh --allow-dirty
+            # ITM-615：六个离线快检门禁此前只在本地手跑，CI 无守护——追加到 .ai 分支。
+            # 逐个跑并沿用 tee + ci-failed-tests.py 自诊断，任一失败即 exit 1。
+            # flaky-gate.sh 需传 csproj（build + N 次 test，非快速门禁），不纳入。
+            # pipefail 已在块首统一 set（ITM-648）——此处管道退出码不再被 tee 掩码。
+            for ai_gate in encoding-gate doc-consistency-check tech-debt-scan test-gate template-gate assertion-strength-check; do
+              echo "== .ai gate: $ai_gate =="
+              if ! bash ".ai/scripts/$ai_gate.sh" 2>&1 | tee "ci-$ai_gate.log"; then
+                echo "::error ::.ai GATE FAILED: $ai_gate"
+                python3 scripts/ci-failed-tests.py "$ai_gate" "ci-$ai_gate.log" || true
+                rm -f "ci-$ai_gate.log"
+                exit 1
+              fi
+              rm -f "ci-$ai_gate.log"
+            done
           else
             echo "SKIP .ai self-check: .ai 质量系统未随仓库分发"
-            # set -o pipefail 必须：无它则 bash|tee 管道退出码是 tee 的 0——
-            # gate 真实失败被掩码（SHELL-1 教训在本会话的第四次现身，2026-08-20 自首自修）
-            set -o pipefail
+            # pipefail 已在块首统一 set（ITM-648）。
             if ! bash scripts/gate-check.sh 2>&1 | tee ci-gate.log; then
               echo "::error ::ROOT GATE-CHECK FAILED"
               python3 scripts/ci-failed-tests.py gate ci-gate.log || true
@@ -143,8 +177,8 @@ jobs:
     # unified v2.0 Phase 2a：方言实测防线固化——40 断言 × PG/MySQL 从"本机可选跑"升 CI 必跑。
     # 定位是准发布门：路径触发（仅 Store/SQL/DDL/映射面变更），不阻塞 build-and-test 快速反馈。
     # 脚本用根 scripts/dialect-probe.sh（.ai 独立仓不随主仓分发的分发副本，真源 .ai/scripts/）。
-    # 红测欠账（v60 复核仍开放）：mutation 验证需本 job 的 PG/MySQL 服务容器（本机无 Docker
-    # 不可执行）——首次 CI 运行后：临时改坏一个 SqlTemplates 断言确认 job 变红，再还原销账（tasks 2a.4）。
+    # 2a.4 红测已闭环（2026-08-20，metrics `4b9b4ea`：dev 注入→dialect-probe 红→revert 绿）。
+    # mutation 复验需本 job 的 PG/MySQL 服务容器（本机无 Docker 不可执行），实测轴归 CI。
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

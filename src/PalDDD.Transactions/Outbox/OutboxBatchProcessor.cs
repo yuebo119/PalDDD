@@ -18,7 +18,7 @@ public sealed class OutboxBatchProcessor
     // P1 修复（二十一轮）：失败原因入库截断上限——Error 列上限 2048（OutboxDbContext），超长
     // ex.Message 让 MarkDead/ReleaseForRetry 本身失败：ReleaseForRetry 路径 ExecuteUpdate 抛
     // 截断异常中止整批（后续消息饿死）；MarkDead 路径毒实体滞留 ChangeTracker 使同批 MarkProcessed
-    // 全回滚（无限重发永不死信）。对齐 InboxProcessor.MaxFailureReasonLength（十七轮姊妹修复）。
+    // 全回滚（无限重发永不死信）。对齐 InboxProcessor 的 FailureReason.Normalize(ex.Message) 收口（十七轮姊妹修复）。
 
     private readonly IPalOutboxStore _store;
     private readonly Messaging.IMessageBroker _broker;

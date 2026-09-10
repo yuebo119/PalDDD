@@ -108,7 +108,12 @@ internal sealed class IterativeDomainEventDispatcher : IDomainEventDispatcher
                 + "（事件循环防护由 EventId 去重承担——Handler 不产生新入队事件，此上限约束的是初始批量大小）。");
     }
 
-    /// <summary>O(1) 字典查找 → DIM 桥接调用 —— 零反射，完全 AOT 安全</summary>
+    /// <summary>
+    /// O(1) 字典查找 → DIM 桥接调用 —— 零反射，完全 AOT 安全。
+    /// <para>📐 分发契约（V25 探针 b 实测，2026-09-09）：<b>精确运行时类型匹配</b>——
+    /// 以 <c>@event.GetType()</c> 为键查找，派生类型实例不会命中基类的注册 handler，
+    /// 且零日志、零指标、零异常（静默跳过）。派生事件需显式注册自己的 handler。</para>
+    /// </summary>
     private async ValueTask DispatchSingleAsync(Core.DomainEvent @event, CancellationToken ct)
     {
         using var activity = PalActivitySource.StartEventDispatch(@event.GetType().Name);

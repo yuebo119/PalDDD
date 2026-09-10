@@ -25,6 +25,9 @@ internal sealed class SagaTimeoutDetector<TState>
 
     public SagaTimeoutDetector(IReadOnlyList<(string Key, SagaStep Step)> stepsInOrder)
     {
+        // P3 守卫族对齐（SRC-108）：null stepsInOrder 原延迟到 IsTimedOut 的 foreach 才 NRE，
+        // 失败点远离构造入口（对齐 PalOrmUnitOfWork ITM-281 三栈守卫同款口径）
+        ArgumentNullException.ThrowIfNull(stepsInOrder);
         _stepsInOrder = stepsInOrder;
     }
 

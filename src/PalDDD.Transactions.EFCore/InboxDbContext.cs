@@ -21,7 +21,7 @@ public abstract class InboxDbContext(
     DbContextOptions options,
     IPalLogger<InboxDbContext>? logger = null) : DbContext(options), IInboxStore
 {
-    // P3 修复（十七轮）：失败原因入库截断上限（对齐 InboxProcessor.MaxFailureReasonLength）
+    // P3 修复（十七轮）：失败原因入库截断上限（对齐 Core.FailureReason.MaxLength）
     // ——LastError 列上限 2048（见 OnModelCreating），调用方未截断时存储层兜底
     private const int MaxFailureReasonLength = 2000;
 

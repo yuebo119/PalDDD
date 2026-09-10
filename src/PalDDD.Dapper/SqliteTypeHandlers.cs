@@ -86,7 +86,15 @@ public sealed class SqliteDateTimeOffsetTypeHandler : SqlMapper.TypeHandler<Date
             // GetValue 返回 DateTime——此 handler 经 [ModuleInitializer] 全局注册，
             // Dapper 对注册类型把原始盒装值直接喂给 Parse。缺 DateTime 分支时
             // PG/MySQL 读路径全部 InvalidCastException。
-            DateTime dt => new DateTimeOffset(dt, TimeSpan.Zero),
+            // v65 P3：按 Kind 分派（姊妹 SqliteRowFactory.ParseDateTimeOffset 同款）——
+            // 原 `new DateTimeOffset(dt, TimeSpan.Zero)` 对 Kind=Local 抛 ArgumentException；
+            // Utc→零偏移、Local→保留本地偏移、Unspecified→视为 UTC（对齐库内 UTC 存储约定）。
+            DateTime dt => dt.Kind switch
+            {
+                DateTimeKind.Utc => new DateTimeOffset(dt, TimeSpan.Zero),
+                DateTimeKind.Local => new DateTimeOffset(dt),
+                _ => new DateTimeOffset(dt, TimeSpan.Zero)
+            },
             _ => throw new InvalidCastException($"Cannot convert {value.GetType()} to DateTimeOffset")
         };
     }

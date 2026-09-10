@@ -45,7 +45,11 @@ public static class SqliteRowFactory
         return value switch
         {
             PalUlid u => u,
-            string s => PalUlid.Parse(s, CultureInfo.InvariantCulture), // v64 对齐 EventLogRow.ParseUlid/族形态标准
+            string s => PalUlid.Parse(s, CultureInfo.InvariantCulture),
+            // v66 勘正：原注释"对齐 EventLogRow.ParseUlid"失实——DapperEventLog/PalOrmEventLog
+            // 的 ParseUlid 均为 TryParse 容错（脏数据返回 null）；本方法走 Parse 直抛
+            // （FormatException），对齐的仅"显式 InvariantCulture"一点，容错语义相反
+            // （列读取路径脏值即数据契约错误，见上方法头声明）。
             byte[] b when b.Length == 16 => PalUlid.New(new ReadOnlySpan<byte>(b)),
             Guid g => PalUlid.New(g),
             _ => throw new InvalidCastException($"Cannot convert {value.GetType()} to Ulid")
@@ -83,7 +87,16 @@ public static class SqliteRowFactory
         return value switch
         {
             DateTimeOffset dto => dto,
-            DateTime dt => new DateTimeOffset(dt, TimeSpan.Zero),
+            // v65 P3：按 Kind 分派——原 `new DateTimeOffset(dt, TimeSpan.Zero)` 对 Kind=Local 抛
+            // ArgumentException（"Offset must be zero for Local"）。Utc 套零偏移；Local 用
+            // 无参构造保留真实本地偏移（瞬时不变）；Unspecified 视为 UTC 套零偏移（保持既有语义，
+            // 对齐库内 UTC 存储约定）。
+            DateTime dt => dt.Kind switch
+            {
+                DateTimeKind.Utc => new DateTimeOffset(dt, TimeSpan.Zero),
+                DateTimeKind.Local => new DateTimeOffset(dt),
+                _ => new DateTimeOffset(dt, TimeSpan.Zero)
+            },
             string s => DateTimeOffset.Parse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal),
             _ => throw new InvalidCastException($"Cannot convert {value.GetType()} to DateTimeOffset")
         };

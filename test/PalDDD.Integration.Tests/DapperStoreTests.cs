@@ -261,37 +261,44 @@ public sealed class DapperStoreTests
     }
 
     [Test]
-    public async Task Outbox_AddMessage_UsesInjectedTimeProvider(CancellationToken cancellationToken)
+    public async Task Outbox_AddMessage_PersistsDomainCreatedAt(CancellationToken cancellationToken)
     {
-        var now = DateTimeOffset.Parse("2026-06-27T10:00:00Z", CultureInfo.InvariantCulture);
-        var clock = new FixedTimeProvider(now);
-        var store = new DapperOutboxStore(_conn, _dbType, timeProvider: clock);
-        var msg = CreateOutboxMessage("test.event.v1");
+        // ITM-634：created_at 持久化领域赋值 OutboxMessage.CreatedAt（对齐 PalORM/EFCore/InMemory
+        // 三栈）。Store 时钟显式设为与领域值不同的时刻，断言落库值取领域 CreatedAt——原用例
+        // Outbox_AddMessage_UsesInjectedTimeProvider 锁定的恰是被修复的"Store 时钟覆盖"分叉语义。
+        var createdAt = DateTimeOffset.Parse("2026-06-27T10:00:00Z", CultureInfo.InvariantCulture);
+        var storeClock = new FixedTimeProvider(createdAt.AddHours(1));
+        var store = new DapperOutboxStore(_conn, _dbType, timeProvider: storeClock);
+        var msg = CreateOutboxMessage("test.event.v1", createdAt);
 
         store.AddMessage(msg);
 
-        var createdAt = await ReadScalarAsync<DateTimeOffset>(
+        var persisted = await ReadScalarAsync<DateTimeOffset>(
             "SELECT created_at FROM outbox_messages WHERE id=$id",
             ("$id", msg.Id));
-        await Assert.That(createdAt).IsEqualTo(now);
+        await Assert.That(persisted).IsEqualTo(createdAt);
     }
 
     [Test]
-    public async Task Outbox_AddMessagesAsync_UsesInjectedTimeProvider(CancellationToken cancellationToken)
+    public async Task Outbox_AddMessagesAsync_PersistsEachDomainCreatedAt(CancellationToken cancellationToken)
     {
-        var now = DateTimeOffset.Parse("2026-06-27T10:01:00Z", CultureInfo.InvariantCulture);
-        var clock = new FixedTimeProvider(now);
-        var store = new DapperOutboxStore(_conn, _dbType, timeProvider: clock);
-        var messages = Enumerable.Range(0, 2)
-            .Select(i => CreateOutboxMessage($"test.event.v{i}"))
-            .ToList();
+        // ITM-634：批量路径持久化各消息领域 CreatedAt（对齐三栈）——原实现整批用批次起始
+        // Store 时钟覆盖，同批各行时间被抹平为同刻且与领域值分叉。
+        var t0 = DateTimeOffset.Parse("2026-06-27T10:01:00Z", CultureInfo.InvariantCulture);
+        var store = new DapperOutboxStore(_conn, _dbType,
+            timeProvider: new FixedTimeProvider(t0.AddHours(1)));
+        var messages = new List<OutboxMessage>
+        {
+            CreateOutboxMessage("test.event.v0", t0),
+            CreateOutboxMessage("test.event.v1", t0.AddMinutes(5)),
+        };
 
         await store.AddMessagesAsync(messages);
 
         var createdTimes = await ReadScalarsAsync<DateTimeOffset>(
             "SELECT created_at FROM outbox_messages ORDER BY type");
-        foreach (var createdAt in createdTimes)
-            await Assert.That(createdAt).IsEqualTo(now);
+        await Assert.That(createdTimes[0]).IsEqualTo(t0);
+        await Assert.That(createdTimes[1]).IsEqualTo(t0.AddMinutes(5));
     }
 
     [Test]
@@ -1193,13 +1200,14 @@ public sealed class DapperStoreTests
     // 测试辅助
     // ═══════════════════════════════════════════════════════════════
 
-    private static OutboxMessage CreateOutboxMessage(string type) => new()
+    private static OutboxMessage CreateOutboxMessage(string type, DateTimeOffset? createdAt = null) => new()
     {
         Type = type,
         Payload = "test-payload"u8.ToArray(),
         ContentType = "application/json",
         SchemaVersion = 1,
-        Status = OutboxStatus.Pending
+        Status = OutboxStatus.Pending,
+        CreatedAt = createdAt ?? TimeProvider.System.GetUtcNow()
     };
 
     public sealed class TestSagaState : SagaState

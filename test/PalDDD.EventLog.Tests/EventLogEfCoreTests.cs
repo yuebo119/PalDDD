@@ -5,6 +5,10 @@ using PalDDD.Testing;
 using System.Text;
 using PalUlid = ByteAether.Ulid.Ulid;
 
+// ITM-647：本类使用进程级 RecordingActivityListener/RecordingMeterListener（同程序集
+// EventLogTests 同款），并行执行时会捕获其他测试发出的同名 activity/metric 污染断言。
+// [NotInParallel]（无 key）= 不与任何其他测试并行，对齐 ProjectionTests.cs:9 范式。
+[TUnit.Core.NotInParallel]
 public sealed class EventLogEfCoreTests
 {
     private static readonly string[] DefaultStreamNames = ["ordering-order-1", "billing-payment-1"];

@@ -99,6 +99,12 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
     /// 校验 LISTEN/NOTIFY 通道名为合法 PostgreSQL 标识符。
     /// LISTEN/NOTIFY 通道名不可参数化（Npgsql 协议限制），必须字符串拼接，
     /// 故需在入口处做白名单校验防止 SQL 注入（与 PostgreSqlAuditor.QuoteIdentifier 同级防护）。
+    /// <para>
+    /// ITM-636：白名单仅放行 <c>[A-Za-z0-9_]</c>（首字符字母/下划线），拼接时通道名以双引号
+    /// 标识符包裹——PG 对未引号标识符做小写折叠（<c>LISTEN OutboxChannel</c> → <c>outboxchannel</c>），
+    /// 而 <c>pg_notify(text,...)</c> 的通道参数大小写敏感，大写通道名在 LISTEN 侧永收不到；
+    /// 双引号保留用户输入的大小写。白名单已排除引号/分号等转义字符，引号内无注入面。
+    /// </para>
     /// </summary>
     private static void ValidateChannelName(string channelName)
     {
@@ -135,7 +141,8 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
 
                 // 注册 LISTEN
                 await using var cmd = conn.CreateCommand();
-                cmd.CommandText = $"LISTEN {_channelName}";
+                // ITM-636：双引号标识符——避免 PG 未引号标识符小写折叠（见 ValidateChannelName 注释）
+                cmd.CommandText = $"LISTEN \"{_channelName}\"";
                 await cmd.ExecuteNonQueryAsync(stoppingToken).ConfigureAwait(false);
 
                 _logger.Information($"PostgreSQL LISTEN started on channel '{_channelName}'");
@@ -245,7 +252,8 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
                     if (conn.State != System.Data.ConnectionState.Open)
                         await conn.OpenAsync(ct).ConfigureAwait(false);
                     using var cmd = conn.CreateCommand();
-                    cmd.CommandText = $"NOTIFY {_channelName}";
+                    // ITM-636：双引号标识符——与 LISTEN 侧大小写口径一致（见 ValidateChannelName 注释）
+                    cmd.CommandText = $"NOTIFY \"{_channelName}\"";
                     await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
                 }
                 catch

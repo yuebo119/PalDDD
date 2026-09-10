@@ -114,7 +114,7 @@ CREATE TABLE projection_checkpoints (
     projection_name   TEXT    NOT NULL,
     source_name       TEXT    NOT NULL,
     position          TEXT    NOT NULL,             -- 流位置（ULID/数字，按 source 类型；复合主键成员，无默认值）
-    status            INTEGER NOT NULL DEFAULT 0,   -- 0:Idle 1:Processing 2:Completed 3:Failed
+    status            INTEGER NOT NULL DEFAULT 0,   -- 0:Processing 1:Completed 2:Failed（枚举 ProjectionCheckpointStatus）
     updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     lease_until       TIMESTAMP,
     revision          INTEGER NOT NULL DEFAULT 0,   -- 乐观并发控制令牌

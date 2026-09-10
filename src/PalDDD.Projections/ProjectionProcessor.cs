@@ -15,7 +15,7 @@ namespace PalDDD.Projections;
 public sealed class ProjectionProcessor<TMessage>
 {
     // ITM-167 修复：失败原因入库截断（Core.FailureReason.Normalize，2000 上限——与
-    // InboxProcessor/OutboxBatchProcessor 的 MaxFailureReasonLength 同口径）——checkpoint.error
+    // InboxProcessor/OutboxBatchProcessor 同口径）——checkpoint.error
     // 列上限 2048，超长 ex.Message 会让 MarkFailedAsync 的持久化本身失败，掩盖原始投影失败。
 
     private readonly IProjectionHandler<TMessage> _handler;

@@ -19,6 +19,13 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
         => _timeProvider = timeProvider ?? TimeProvider.System;
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// v65 P3（活引用声明）：本方法返回字典内的<b>活引用</b>（与 <see cref="GetByIdAsync"/>
+    /// 一致），非快照克隆——调用方<b>不得变异</b>返回对象的属性：内存栈不校验 Version，
+    /// 直接改 Status/Error 等会绕开乐观锁污染存储态。姊妹 <see cref="LeaseActiveSagasAsync"/>
+    /// 因 fencing 需要经 CloneForLease 产生 successor 实例（Version 换代），与观测查询语义不同。
+    /// 持久化栈（EFCore/Dapper/PalORM）各查询天然物化新实例，无此共享契约。
+    /// </remarks>
     public ValueTask<IReadOnlyList<TState>> GetActiveSagasAsync(int batchSize, CancellationToken ct)
     {
         // ITM-215 修复（三十二轮）：ct 对齐——对照 InMemoryOutbox/InMemoryInbox 均已 ThrowIfCancellationRequested，

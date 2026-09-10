@@ -7,7 +7,7 @@
 > **真源**：
 > - [`conventions.md`](conventions.md) §5（测试规范要点）+ §10.6（TUnit+MTP 4 硬规则）+ §12（性能契约）
 > - [`.ai/test/prompt.md`](../.ai/test/prompt.md)（T1-T14 + T-DDD-1..6 铁律）
-> - [`test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs`](../test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs)（41 测试方法机械守护）
+> - [`test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs`](../test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs)（37 测试方法机械守护——计数锚定见 doc-consistency D12a）
 
 ---
 
@@ -54,7 +54,7 @@
                   ┌──────────────────┐│ ┌──────────────────────┐
                   │ Architecture     ││ │ Core/CQRS/Transactions│
                   │ BoundaryTests    ││ │  单元功能正确性        │
-                  │ 41 方法 89 断言  ││ │ AggregateRoot/Saga/Outbox│
+                  │ 37 方法 89 断言  ││ │ AggregateRoot/Saga/Outbox│
                   └──────────────────┘│ └──────────────────────┘
                                      ╱
                           ┌────────────────────┐
@@ -75,7 +75,7 @@
 | `PalDDD.Projections.EventLog.Tests` | 单元 | EventLog 投影源 + 断点续传 |
 | `PalDDD.Messaging.Tests` | 单元 | IMessageBroker InMemory 实现 + MessageCatalog |
 | `PalDDD.Serialization.Tests` | 单元 | IMessageSerializer + MessageEvolutionPipeline + SchemaVersion |
-| `PalDDD.DependencyInjection.Tests` | 单元 | **ArchitectureBoundaryTests 41 方法机械守护** + DI 注册规范 |
+| `PalDDD.DependencyInjection.Tests` | 单元 | **ArchitectureBoundaryTests 37 方法机械守护** + DI 注册规范 |
 | `PalDDD.Repository.EFCore.Tests` | 集成 | UnitOfWork + OutboxDomainEventInterceptor Scoped |
 | `PalDDD.Hosting.AspNetCore.Tests` | 集成 | ExceptionMiddleware + AspNetCore 中间件链 |
 | `PalDDD.Integration.Tests` | 集成 | Testcontainers 真库（PG/MySQL/SQLite）+ OutboxDbContext 全链路 + Idempotency |
@@ -94,10 +94,10 @@
 
 | 维度 | DDD 约定 |
 |------|---------|
-| **测试框架** | TUnit 1.65.68 + MTP（Microsoft.Testing.Platform） |
+| **测试框架** | TUnit 1.66.27 + MTP（Microsoft.Testing.Platform） |
 | **断言库** | TUnit.Assertions（Fluent 链式） |
 | **属性测试** | TUnit.FsCheck（属性驱动） |
-| **快照测试** | Verify.TUnit 31.28.0（预留，目前 PublicApiSnapshot 自实现） |
+| **快照测试** | Verify.TUnit 32.0.0（预留，目前 PublicApiSnapshot 自实现） |
 | **集成测试** | Testcontainers.*（PG/MySQL/SQLite/RabbitMQ/Kafka） |
 
 > **禁用** `Microsoft.NET.Test.Sdk`（与 TUnit MTP 冲突，conventions §10.6 硬规则）
@@ -106,7 +106,7 @@
 
 ```json
 {
-  "sdk": { "version": "11.0.100-preview.7.26381.103", "rollForward": "latestMajor", "allowPrerelease": true },
+  "sdk": { "version": "11.0.100-rc.1.26425.128", "rollForward": "latestMajor", "allowPrerelease": true },
   "test": { "runner": "Microsoft.Testing.Platform" }
 }
 ```
@@ -402,7 +402,7 @@ dotnet run --project bench/PalDDD.Benchmarks -- --smoke | tee /tmp/after.txt
 
 | 层 | 项目数 | AOT 策略 | 验证 |
 |----|:------:|---------|------|
-| **AOT 核心层** | 显式 8（PalORM×4+Dapper×4）+ 继承 true 22（无 csproj 覆盖即继承全局 true） | `IsAotCompatible=true` | CI aot-verify（PalOrmSample 单入口 publish+run）全绿 |
+| **AOT 核心层** | 显式 8（PalORM×4+Dapper×4）+ 继承 true 14（无 csproj 覆盖即继承全局 true） | `IsAotCompatible=true` | CI aot-verify（PalOrmSample 单入口 publish+run）全绿 |
 | **非 AOT 适配器层** | 14 | 显式 `IsAotCompatible=false`（设计本意） | ArchitectureBoundaryTests `InfrastructureAdapters_AreExplicitlyNonAot` 强制 |
 
 ---
@@ -435,8 +435,8 @@ git status --short
 # 2. 全量构建（0 警告 0 错误）
 dotnet build PalDDD.slnx --no-incremental
 
-# 3. 单元测试全绿
-dotnet test PalDDD.slnx --no-restore --no-build
+# 3. 单元测试全绿——MTP 禁用 slnx 批量（握手 → exit 5），逐测试项目循环
+for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore --no-build; done
 
 # 4. 规范验证（grep 静态检查）
 bash scripts/verify-conventions.sh --quick
@@ -466,7 +466,7 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 | `docs/conventions.md` §12 | 性能契约（零分配快速路径） |
 | `.ai/test/prompt.md` | T1-T14 + T-DDD-1..6 测试铁律 |
 | `test/PalDDD.Testing/TestHelpers.cs` | 共享测试工具（FakeTimeProvider 等） |
-| `test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs` | 41 测试方法机械守护 |
+| `test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs` | 37 测试方法机械守护 |
 | `test/PalDDD.Core.Tests/PublicApiSnapshotTests.cs` | 公共 API 快照 |
 | `test/PalDDD.Core.Tests/Snapshots/*.txt` | 快照基线（评审后提交） |
 | `bench/PalDDD.Benchmarks/Program.cs` | BenchmarkSwitcher + Smoke 模式入口 |
@@ -482,5 +482,5 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 1. **本文件与 conventions §5 同步**：测试约定变更需同时更新两处。
 2. **场景矩阵随项目演化**：新增功能域必须扩矩阵行。
 3. **BenchmarkDotNet 配置变更需评审**：从 `[ShortRunJob]` 切换到其他配置必须在 PR 说明依据。
-4. **DDD 与 ORM 的测试体系差异**：TUnit+MTP（非 xUnit）/ 测试桩内嵌（非 IClassFixture）/ 按行为主题切分 / ArchitectureBoundaryTests 33 方法机械守护。
+4. **DDD 与 ORM 的测试体系差异**：TUnit+MTP（非 xUnit）/ 测试桩内嵌（非 IClassFixture）/ 按行为主题切分 / ArchitectureBoundaryTests 37 方法机械守护。
 5. **统计有效性是硬约束**：Error/Mean > 15% 的基准数据不得用于正式报告或决策。

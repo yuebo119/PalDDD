@@ -43,6 +43,8 @@ public static class PalActivitySource
     }
 
     /// <summary>创建命令分派 Activity</summary>
+    /// <remarks>ITM-627：当前无内部发射点（`Dispatcher.SendAsync` 未接线），保留供外部集成；
+    /// 需命令分发 span 的宿主可自行调用本方法。若后续在框架内接线，请同步 README/architecture 口径。</remarks>
     public static Activity? StartCommandDispatch(string commandName, string handlerName)
         => Start("Command Dispatch",
             ("pal.command", commandName),
@@ -54,6 +56,8 @@ public static class PalActivitySource
             ("pal.event", eventName));
 
     /// <summary>创建 Saga 转换 Activity</summary>
+    /// <remarks>ITM-627：当前无内部发射点（`SagaProcessor` 未接线），保留供外部集成；
+    /// 需 Saga 转换 span 的宿主可自行调用本方法。若后续在框架内接线，请同步 README/architecture 口径。</remarks>
     public static Activity? StartSagaTransition(string sagaType, string fromState, string toState)
         => Start("Saga Transition",
             ("pal.saga", sagaType),

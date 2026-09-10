@@ -82,6 +82,26 @@ public sealed class PostgreSqlMultiHostPortEncodingTests
             .Throws<ArgumentException>();
     }
 
+    [Test]
+    public async Task AddPalNpgsqlDataSourceWithReadWriteSplit_ZeroReplica_BlankPrimaryHost_Throws()
+    {
+        // ITM-635：零副本分支接入单主机列表守卫——原实现绕过校验，空段成为轮询死节点；
+        // 同串传 AddPalNpgsqlDataSource 抛异常，两入口行为分叉。
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalNpgsqlDataSourceWithReadWriteSplit("Host=pg1,,pg2;Username=u;Password=p", []))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalNpgsqlDataSourceWithReadWriteSplit_ZeroReplica_DuplicatePrimaryHost_Throws()
+    {
+        // ITM-635：零副本分支重复条目录入（"pg1,pg1"）fail-fast——与同文件 Failover 查重
+        // 及单主机入口 EnsureNoDuplicateHost 口径一致。
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalNpgsqlDataSourceWithReadWriteSplit("Host=pg1,pg1;Username=u;Password=p", []))
+            .Throws<ArgumentException>();
+    }
+
     // ── v54/v55 守卫回归网 ──
 
     [Test]
@@ -192,5 +212,43 @@ public sealed class PostgreSqlMultiHostPortEncodingTests
                 "Host=[::1];Username=u;Password=p",
                 "Host=[::1]:5433;Username=u;Password=p");
         await Assert.That(services.Count).IsGreaterThan(0);
+    }
+
+    // ── ITM-652：SslMode 第 4 项凭据校验（镜像 MySqlMultiHost v65 P3 F1-3）──
+    // Npgsql 连接串的 SslMode 对主机列表内全部节点统一生效，多主机合并只保留 Host
+    // 条目——standby/replica 显式更严/更宽的 TLS 模式均被静默丢弃（安全配置静默降级
+    // 属高危）。校验发生在 NpgsqlDataSourceBuilder.Build() 前，零网络 IO
+
+    [Test]
+    public async Task AddPalNpgsqlDataSourceWithReadWriteSplit_SslModeMismatch_Throws()
+    {
+        // primary 与 replica SslMode 显式不一致（Require vs Disable）→ ArgumentException
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalNpgsqlDataSourceWithReadWriteSplit(
+                    "Host=pg1;Username=u;Password=p;SslMode=Require",
+                    ["Host=pg-read1;Username=u;Password=p;SslMode=Disable"]))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalNpgsqlDataSourceWithReadWriteSplit_SslModeExplicitSame_DoesNotThrow()
+    {
+        // 显式同值（合法冗余）放行——两侧均显式 Require，非矛盾
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddPalNpgsqlDataSourceWithReadWriteSplit(
+                "Host=pg1;Username=u;Password=p;SslMode=Require",
+                ["Host=pg-read1;Username=u;Password=p;SslMode=Require"]);
+        await Assert.That(services.Count).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task AddPalNpgsqlDataSourceWithFailover_SslModeMismatch_Throws()
+    {
+        // Failover 入口 standby 侧同款拦截（ThrowIfCredentialsMismatch 两调用点之一）
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalNpgsqlDataSourceWithFailover(
+                    "Host=pg1;Username=u;Password=p;SslMode=Require",
+                    "Host=pg2;Username=u;Password=p;SslMode=Disable"))
+            .Throws<ArgumentException>();
     }
 }

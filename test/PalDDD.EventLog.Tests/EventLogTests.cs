@@ -5,6 +5,10 @@ using System.Diagnostics;
 using System.Text;
 using PalUlid = ByteAether.Ulid.Ulid;
 
+// ITM-647：本类多个测试使用进程级 RecordingActivityListener/RecordingMeterListener，
+// 监听器捕获全进程活动/指标——并行执行时其他测试发出的同名 activity/metric 会混入断言。
+// [NotInParallel]（无 key）= 本类测试不与其他任何测试并行，对齐 ProjectionTests.cs:9 范式。
+[TUnit.Core.NotInParallel]
 public sealed class EventLogTests
 {
     private static readonly string[] OrderEventNames = ["orders.order-submitted.v1", "orders.order-paid.v1"];

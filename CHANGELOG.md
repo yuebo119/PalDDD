@@ -19,6 +19,7 @@
 
 ### Documentation 文档
 
+- 新增 ADR-022「分析器诊断与生成器诊断的分层关系 + 稳定名称谓词共享」：三对诊断（PDDD009/PALMSG004、PDDD010/PALMSG005、PDDD011/PALMSG002）维持共存并定性为分层而非冗余；`IsStableName` 谓词收敛为 `src/PalDDD.Shared/StableNameValidation.cs` 链接共享源码（`docs/decisions/022-analyzer-generator-diagnostic-layering.md`）
 - `docs/release.md` 新增 §十二「变更日志生成流程」SOP：Phase 0 常态累积 → P1 事实收集 → P2 事实核验三问 → P3 起草 → P4 校验（机械门禁 + 人工六问）→ P5 转正（先于 tag）→ P6/P7 发布与事后同步，附流程失效回溯条款
 
 ## [2.1.0] — 2026-09-04
@@ -42,7 +43,7 @@
 - **组织重组（零破坏，命名空间不变）**：PalDDD.Transactions 30 文件平铺 → Saga/（18）+ Outbox/（5）+ Inbox/（3）+ 根共享（5）；Analyzers 738 行单文件拆 5 文件（纯搬运，36 测试零回归）
 - **异常口径统一**：解压超限（System 三算法）统一 `InvalidDataException`；畸形 JSON 400 补 ProblemDetails body（三处 400 形态收口）
 - **BulkCopy 11 类型显式映射**（byte[] 不再被 string 列 ToString）；MySQL INSERT IGNORE → `ON DUPLICATE KEY UPDATE`（静默错误降级根治，四处姊妹收口）
-- **默认质量**：库代码 179 处 `await` 全量补 `ConfigureAwait(false)`；mojibake 全仓清零；`IdentityGenerator.IsNumeric` 改 `SpecialType` 判定（extern alias 场景不再静默丢生成）
+- **默认质量**：库代码 179 处 `await` 全量补 `ConfigureAwait(false)`（179 为 v2.1.0 当时补入数的历史快照；现行口径不再锚裸数字计数——该数字随提交漂移曾致文档振荡，机械保证为 PDDD-G12 零违规，见 doc-consistency D12b）；mojibake 全仓清零；`IdentityGenerator.IsNumeric` 改 `SpecialType` 判定（extern alias 场景不再静默丢生成）
 
 ### Deprecated 废弃（`[Obsolete(error: false)]`，v3.0 移除预告）
 
@@ -367,7 +368,7 @@
 - **PG JSONB 路径构建期守卫**（逗号/花括号 fail-fast）；Saga JsonTypeInfo fail-fast（无 jsonTypeInfo 抛异常防 saga_data 静默丢失）
 - **RabbitMQ `mandatory:true`** 无路由消息抛异常不静默丢弃；CI 认证根因修复（Testcontainers 专用账号）
 - **mojibake 全文法根治**（全仓 .cs 清零，28 字符指纹复检零残余）；`*.sh`/`*.py` 强制 LF（仓库级 eol=crlf 曾杀死 CI Linux bash）
-- **库代码 179 处 `await` 全量补 `ConfigureAwait(false)`**；Native 解压 OOM 转 `InvalidDataException`
+- **库代码 179 处 `await` 全量补 `ConfigureAwait(false)`**（179 为 v2.1.0 当时补入数的历史快照；现行口径不锚裸数字计数——随提交漂移，机械保证为 PDDD-G12 零违规）；Native 解压 OOM 转 `InvalidDataException`
 - **Entity.Id/EventId/OccurredOn get-only**（构造后身份不可覆盖）；Hi/Lo 游标事务感知（活动事务不发布内存缓存防回滚分叉）
 - **PDDD009/010/011 解绑 BoundedContext** + CodeFix 版本后缀替换不叠加；EnumGenerator 过滤非 TSelf 字段
 
@@ -454,18 +455,18 @@
 ### 工程基线
 
 - **AOT 分层**：核心层 7 项目 `IsAotCompatible=true`（Core/Serialization/CQRS/EventLog/Idempotency/Projections/Messaging），适配器层 14 项目显式 `false`（EF Core/Kafka/RabbitMQ/MemoryPack/Transactions 等）
-- **零反射红线**：MakeGenericType/Activator.CreateInstance/Assembly.GetTypes/Type.GetType(string) 全禁（ArchitectureBoundaryTests 33 方法机械守护）
+- **零反射红线**：MakeGenericType/Activator.CreateInstance/Assembly.GetTypes/Type.GetType(string) 全禁（ArchitectureBoundaryTests 机械守护；本段为 1.0.0-preview.1 当时 33 方法，2026-09-10 实测 41 方法）
 - **测试框架**：TUnit 1.65.0 + MTP（禁 Microsoft.NET.Test.Sdk）
-- **质量保障**：TreatWarningsAsErrors + AnalysisLevel=latest-all + 21 条 NoWarn 逐条 Justification + MTP 原生 --coverage 覆盖率门禁 + assertion-strength-check 断言强度门禁（替代 Stryker：Stryker 不支持 TUnit/MTP）
-- **规范文档**：conventions.md（1000 行 14 章）+ architecture.md（18 决策）+ 17 ADR + aot.md + performance.md + tutorial.md
+- **质量保障**：TreatWarningsAsErrors + AnalysisLevel=latest-all + 21 条 NoWarn 逐条 Justification（本段为 1.0.0-preview.1 当时值；2026-09-10 实测 22 条）+ MTP 原生 --coverage 覆盖率门禁 + assertion-strength-check 断言强度门禁（替代 Stryker：Stryker 不支持 TUnit/MTP）
+- **规范文档**：conventions.md（1000 行 14 章）+ architecture.md（本段为 1.0.0-preview.1 当时 18 决策）+ 17 ADR（历史值；2026-09-10 实测 22 ADR）+ aot.md + performance.md + tutorial.md
 
 ### 已知限制
 
 - **BenchmarkDotNet 0.15.8 不支持 .NET 11 Preview**：正式 BDN 报告不可生成，用 `--smoke` 模式（100 万次迭代手动计时）作为快速回归
 - **`PalDDD.Transactions` 项目非 AOT 兼容**：Saga 子系统用 MakeGenericMethod/Activator（已带 [RequiresDynamicCode] 标注），主动声明 IsAotCompatible=false
 - **Inbox SQLite TOCTOU 弱保证**：SQLite Inbox 用 INSERT OR IGNORE + SELECT 两步有极小竞态，生产推荐 PostgreSQL
-- **`PalDDD.Core.SourceGen` 待修复**：`ISpecification.cs:218` 的 `_expression.Compile()` 违反 AOT 红线（gate-check PDDD-G8 已发现）
-- **`Idempotency/Projections` 部分文件 ConfigureAwait 缺失**：12 处违规（gate-check PDDD-G12 已发现）
+- **`PalDDD.Core.SourceGen` 待修复**（1.0.0-preview.1 当时状态；2026-09-10 已修复）：`ISpecification.cs:218` 的 `_expression.Compile()` 违反 AOT 红线（gate-check PDDD-G8 已发现）——现编译动作收敛在私有 helper 并带 `[RequiresDynamicCode]`，G8 PASS
+- **`Idempotency/Projections` 部分文件 ConfigureAwait 缺失**（1.0.0-preview.1 当时状态；2026-09-10 已修复）：12 处违规（gate-check PDDD-G12 已发现）——现库代码 await 均带 `ConfigureAwait(false)`，G12 零违规
 
 ---
 
@@ -488,4 +489,4 @@
 2. **变更分类**：`### 新增` / `### 变更` / `### 修复` / `### 移除` / `### 破坏性变更` / `### 安全`（[Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范）。
 3. **每条带 PR 或 commit 引用**：可追溯。
 4. **发布时同步**：升版本同一次提交内同步 `Directory.Build.props` + README badge + tag + 本文件。
-5. **GitHub Release body 来自本文件**：release.yml 自动读取对应版本段落作为 Release 说明。
+5. **GitHub Release body 来自本文件**：release.yml 以 `body_path: CHANGELOG.md` 读取**整份** CHANGELOG 作为 Release 说明（当前实现为全文，非仅对应版本段落）；如需只发版本段落，需在发布流程中另做裁剪。
