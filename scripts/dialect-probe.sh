@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# ⚠ 本文件是 .ai/scripts/dialect-probe.sh 的 CI 分发副本（unified v2.0 Phase 2a，2026-08-20）。
-# 真源在 .ai 独立仓（不随主仓分发）；修改探针断言以 .ai 版为准，改后必须同步重新生成本副本。
+# ⚠ 本文件是 .ai/scripts/dialect-probe.sh 的 CI 分发副本（unified v2.0 Phase 2a，2026-08-20；正文同步 2026-09-09）。
+# 由 .ai 独立仓分发（不随主仓分发）；改探针断言必须同步重新生成本副本。
 # 本副本仅差异：ROOT 定位按根 scripts/ 深度修正（../..→..）；其余逐行一致。
-# 方言实测探针：只允许在显式授权下创建和清理唯一的测试数据库。
+# 方言实测探针（真源：.ai/scripts/dialect-probe.sh；根 scripts/ 副本仅 ROOT 定位行不同）。
+# 只允许在显式授权下创建和清理唯一的测试数据库；凭据从环境变量或配置文件读取，绝不打印连接串。
 # 用法：bash .ai/scripts/dialect-probe.sh --allow-destructive-probe
-# 凭据从环境变量或配置文件读取，绝不打印连接串。
 set -euo pipefail
 
 usage() {
@@ -29,7 +29,6 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # ENV-3（2026-09-09）：python3/python 双探测——Windows 常无 python3 命令名；均缺时探针无法生成/解析
-# （与 .ai 真源同步，2026-09-09）
 PY="$(command -v python3 || command -v python)" || { printf 'FAIL: python/python3 均不可用——探针生成与解析依赖它\n' >&2; exit 1; }
 PROBE_DIR="$(mktemp -d /tmp/palddd-dialect-probe.XXXXXX)"
 trap 'rm -r -- "$PROBE_DIR"' EXIT
