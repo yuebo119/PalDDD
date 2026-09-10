@@ -296,8 +296,8 @@ SDK         : 11.0.100-rc.1.26425.128
 | 验证项 | 结果 |
 |--------|------|
 | Release 构建 | 0 警告 0 错误 |
-| 无外部依赖测试 | 15 项目 1094+ 用例全绿（Core.Tests 298 含 ITM-626 端到端 2 例） |
-| 机械防线 | gate（含新变更集基线）· verify-ai **23/23**（新增 V23 镜像对内容比对）· tech-debt 0 失败 · doc/encoding/template/test-gate 全绿 |
+| 无外部依赖测试 | 14 项目 1098 用例全绿（Core.Tests 298 含 ITM-626 端到端 2 例；Integration.Tests 254 含幽灵租约/RequeueDead 新增）；另 Messaging.Integration.Tests 7 例中 3 skip + 4 broker 不可达（环境性） |
+| 机械防线 | gate **24/24** · verify-ai **23/23**（新增 V23 镜像对内容比对）· tech-debt 0 失败 · doc-consistency 11/11 · encoding 4/4 · template PASS · test-gate 0 失败 · assertion **166/173**（棘轮回落） · secret-scan PASS |
 | **S3 反向验证** | ITM-632：移除修复 → 幽灵租约测试红 → 恢复 → 绿（测试真实锁定） |
 | **ITM-626 双向 mutation** | 移除 `[JsonSerializable]` → 编译失败；断言改错名 → 测试红 |
 | 门禁红测 | fix-completeness guard 错 KEY 现 exit 1；secret-scan 植入伪凭据 exit 1、干净仓库 PASS |
