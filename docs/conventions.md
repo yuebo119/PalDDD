@@ -69,7 +69,7 @@ EF Core / Kafka / RabbitMQ / MemoryPack 等不支持 AOT 的项目**显式覆盖
 
 - **`ValueTask` / `ValueTask<T>` 优先**于 `Task`，热路径零分配
 - **`IsCompletedSuccessfully` 快速路径**：同步完成时直接 `.Result`，避免异步状态机分配
-- **`ConfigureAwait(false)` 全层使用**（基础设施层 143+ 处，NoWarn CA2007）
+- **`ConfigureAwait(false)` 全层使用**（444 处，NoWarn CA2007——2026-09-10 实测；库代码 await 调用均带该后缀）
 - **禁止 `async void`**（ArchitectureBoundaryTests 零容忍）
 
 ### 1.6 null 校验
@@ -266,7 +266,8 @@ AppendAsync_WithStaleExpectedVersion_ThrowsConcurrencyException
 Serialize_NullMessage_ThrowsArgumentNullException
 ```
 
-此约定已由 `ArchitectureBoundaryTests.TestMethods_MustFollowTripleUnderscorePattern` 强制执行。
+此约定已由 `ArchitectureBoundaryTests.TestMethods_MustFollowUnderscorePattern` 强制执行
+（ITM-645 诚实改名：原名 `...TripleUnderscorePattern` 与实断言"≥1 个下划线"不符）。
 
 ### 3.7 文档文件命名
 
@@ -337,7 +338,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-09-04 复验）：212 源文件·36 项目·0 违规（2026-07-02 锚定时 200 文件，Transactions 拆分等增长）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-09-04 复验）：213 源文件·36 项目·0 违规（2026-07-02 锚定时 200 文件，Transactions 拆分等增长）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 
@@ -805,8 +806,8 @@ var body = Expression.AndAlso(
 # 1. 构建（零错误零警告）
 dotnet build PalDDD.slnx
 
-# 2. 测试（零失败）
-dotnet test PalDDD.slnx --no-restore
+# 2. 测试（零失败）——MTP 禁用 slnx 批量（握手 → exit 5），逐测试项目循环
+for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore; done
 
 # 3. 公共 API 变更时更新快照（filter 需在 -- 之后传递给 MTP）
 PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"

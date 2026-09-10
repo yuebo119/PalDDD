@@ -87,6 +87,8 @@ var dispatcher = provider.GetRequiredService<Dispatcher>();
 var orderId = await dispatcher.SendAsync(new CreateOrderCommand("Contoso", 100m));
 ```
 
+> **前提**：Handler 由 `HandlerRegistrar`（`IHostedService`）在**宿主启动时**自动注册并 `Freeze()`。因此需运行在 `IHost` 宿主（`WebApplicationBuilder` / `HostBuilder`）下；纯 `BuildServiceProvider()` 场景（单测/控制台工具）`IHostedService` 不执行，需手动 `AddPalCommandHandler` 后显式触发注册或直接构造 Dispatcher。
+
 ## 定义查询和 handler
 
 ```csharp
@@ -212,9 +214,9 @@ services.AddPalOutbox();
 - `IMessageBroker`
 - `IPalOutboxStore`
 
-`IPalOutboxStore.LeasePendingMessagesAsync` 必须提供原子租约语义。SQL Server EF Core base context 提供了基于 `UPDLOCK` / `READPAST` 的实现。
+`IPalOutboxStore.LeasePendingMessagesAsync` 必须提供原子租约语义。SQL Server EF Core base context 提供了基于 `UPDLOCK` / `READPAST` 的实现（**未验证/实验性**，见下）。
 
-生产环境可从 `PalDDD.Transactions.EFCore` 派生 `OutboxDbContext`，或按方言派生 `SqlServerOutboxDbContext`/`PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`（ADR-012 方言粒度）以复用原子租约获取。适配器会配置 pending 查询索引、payload 必填、trace/correlation 字段长度和错误字段长度；`MarkProcessed` 会清理 lease/retry 状态，`ReleaseForRetry` 会释放 lease 并设置 `NextAttemptAt`。
+生产环境可从 `PalDDD.Transactions.EFCore` 派生 `OutboxDbContext`，或按方言派生 `PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`（ADR-012 方言粒度）以复用原子租约获取。`SqlServerOutboxDbContext` 当前标 `[Obsolete]` 且零测试覆盖，属**实验性/未验证**（v3.0 前评估），生产请优先使用已验证方言。适配器会配置 pending 查询索引、payload 必填、trace/correlation 字段长度和错误字段长度；`MarkProcessed` 会清理 lease/retry 状态，`ReleaseForRetry` 会释放 lease 并设置 `NextAttemptAt`。
 
 Outbox message 可以携带跨上下文追踪元数据：
 
@@ -330,7 +332,7 @@ public sealed class AppEventLogDbContext(DbContextOptions<AppEventLogDbContext> 
 
 services.AddDbContext<AppEventLogDbContext>(options =>
 {
-    options.UseSqlServer(connectionString);
+    options.UseNpgsql(connectionString);   // 示例用已验证方言 PostgreSQL
 });
 services.AddScoped<IEventLog>(sp => sp.GetRequiredService<AppEventLogDbContext>());
 ```

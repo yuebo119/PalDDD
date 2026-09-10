@@ -402,7 +402,7 @@ dotnet run --project bench/PalDDD.Benchmarks -- --smoke | tee /tmp/after.txt
 
 | 层 | 项目数 | AOT 策略 | 验证 |
 |----|:------:|---------|------|
-| **AOT 核心层** | 显式 8（PalORM×4+Dapper×4）+ 继承 true 22（无 csproj 覆盖即继承全局 true） | `IsAotCompatible=true` | CI aot-verify（PalOrmSample 单入口 publish+run）全绿 |
+| **AOT 核心层** | 显式 8（PalORM×4+Dapper×4）+ 继承 true 14（无 csproj 覆盖即继承全局 true） | `IsAotCompatible=true` | CI aot-verify（PalOrmSample 单入口 publish+run）全绿 |
 | **非 AOT 适配器层** | 14 | 显式 `IsAotCompatible=false`（设计本意） | ArchitectureBoundaryTests `InfrastructureAdapters_AreExplicitlyNonAot` 强制 |
 
 ---
@@ -435,8 +435,8 @@ git status --short
 # 2. 全量构建（0 警告 0 错误）
 dotnet build PalDDD.slnx --no-incremental
 
-# 3. 单元测试全绿
-dotnet test PalDDD.slnx --no-restore --no-build
+# 3. 单元测试全绿——MTP 禁用 slnx 批量（握手 → exit 5），逐测试项目循环
+for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore --no-build; done
 
 # 4. 规范验证（grep 静态检查）
 bash scripts/verify-conventions.sh --quick
@@ -482,5 +482,5 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 1. **本文件与 conventions §5 同步**：测试约定变更需同时更新两处。
 2. **场景矩阵随项目演化**：新增功能域必须扩矩阵行。
 3. **BenchmarkDotNet 配置变更需评审**：从 `[ShortRunJob]` 切换到其他配置必须在 PR 说明依据。
-4. **DDD 与 ORM 的测试体系差异**：TUnit+MTP（非 xUnit）/ 测试桩内嵌（非 IClassFixture）/ 按行为主题切分 / ArchitectureBoundaryTests 33 方法机械守护。
+4. **DDD 与 ORM 的测试体系差异**：TUnit+MTP（非 xUnit）/ 测试桩内嵌（非 IClassFixture）/ 按行为主题切分 / ArchitectureBoundaryTests 41 方法机械守护。
 5. **统计有效性是硬约束**：Error/Mean > 15% 的基准数据不得用于正式报告或决策。

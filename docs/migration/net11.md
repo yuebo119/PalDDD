@@ -46,8 +46,8 @@
 src/
   Directory.Build.props                          ← Runtime Async + AOT + net11.0
   Directory.Packages.props                        ← 包升级至 11.0.0-preview.5
-  PalDDD.Serialization.Json/JsonMessageSerializer.cs   ← GetTypeInfo<T>() + Writer 池化
-  PalDDD.Serialization.Json/JsonLinesEventStream.cs    ← [新建] JSON Lines 读写器
+  PalDDD.Serialization/JsonMessageSerializer.cs   ← GetTypeInfo<T>() + Writer 池化
+  PalDDD.Serialization/JsonLinesEventStream.cs     ← [新建] JSON Lines 读写器
   PalDDD.Serialization/MessageDescriptor.cs  ← NameAndVersionComparer
   PalDDD.Serialization/MessageCatalog.cs     ← OrderedDictionary + 保序
   PalDDD.EventLog/EventData.cs                    ← internal byte[] 访问器
