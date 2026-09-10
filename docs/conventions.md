@@ -673,6 +673,10 @@ Infrastructure / Adapters → App-Core → App-Abstractions → Domain
 - 消息名必须含 BC 前缀 + `.v{N}` 后缀
 - ProcessManager / ProjectionHandler 必须 `sealed` + 归属 BC
 
+连同 3 个源生成器的 23 条输入契约诊断（PALMSG001-007 / PALENUM001-009 / PALID001-007），全框架共 **38 条编译期诊断**。
+
+**诊断覆盖门禁**：`test/PalDDD.Core.Tests/DiagnosticCoverageGateTests.cs` 扫描诊断定义源码，断言每条诊断 ID 都出现在某测试的断言表达式中（仅出现在注释里不算）——防止出现"实现了但无测试守护"的诊断。此门禁源于一次 mutation 实证：`PALENUM004`/`PALID003` 长期只有一行"镜像 `PALMSG006`"注释而无断言，破坏其检测实现后测试仍全绿。
+
 ### 8.4 「不做」清单
 
 | 不做 | 原因 |
