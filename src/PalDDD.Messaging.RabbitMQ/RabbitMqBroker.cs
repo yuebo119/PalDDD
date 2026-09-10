@@ -40,6 +40,18 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IAsyncDisposable> _subscriptions = new();
 
     /// <param name="prefetchCount">每消费者 unacked 消息上限（BasicQos prefetch，默认 10）。</param>
+    /// <remarks>
+    /// ⚠️ <b>ITM-639 前置条件——<paramref name="channel"/> 必须启用 publisher confirms</b>：
+    /// <see cref="PublishAsync"/> 使用 <c>mandatory:true</c>，只有 channel 同时启用
+    /// <c>publisherConfirmationsEnabled</c> 与 <c>publisherConfirmationTrackingEnabled</c> 时，
+    /// broker 的 <c>basic.return</c> 才会被客户端转成 <c>RabbitMQ.Client.Exceptions.PublishException</c>；
+    /// 未启用时发布到无绑定队列的 exchange 会静默"成功"，Outbox 随即标记 Processed →
+    /// 消息实际丢失。<br/>
+    /// RabbitMQ.Client 7.x 的 <see cref="IChannel"/> <b>不提供</b>该启用状态的公开探测成员
+    /// （<c>GetNextPublishSequenceNumberAsync</c> 在未启用时同样返回而不抛），框架无法在
+    /// 构造函数内可靠校验——请改用 <see cref="CreateAsync"/> 工厂构造本类型，或自行以
+    /// <see cref="CreateChannelOptions"/> 显式启用后注入本构造函数。
+    /// </remarks>
     public RabbitMqBroker(
         IConnection connection,
         IChannel channel,
@@ -57,6 +69,55 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         _channel = channel;
         _logger = logger;
         _prefetchCount = prefetchCount;
+    }
+
+    // ITM-639：outstanding publisher confirms 上限——对齐 RabbitMQ.Client 文档所述默认
+    // 并发阈值 128，防确认跟踪下未确认消息无界堆积（内存膨胀）。
+    private const int MaxOutstandingConfirms = 128;
+
+    /// <summary>
+    /// ITM-639 推荐构造入口：在 <paramref name="connection"/> 上创建一个已启用 publisher
+    /// confirms（含 confirmation tracking）的 channel，并构造 <see cref="RabbitMqBroker"/>。
+    /// </summary>
+    /// <remarks>
+    /// 使用本工厂可确保 <see cref="PublishAsync"/> 的 <c>mandatory:true</c> 语义生效——
+    /// 发布到无绑定队列的 exchange 会抛 <c>RabbitMQ.Client.Exceptions.PublishException</c>
+    /// 而非静默丢弃。若调用方自行创建 channel，必须同样以
+    /// <see cref="CreateChannelOptions"/>（<c>publisherConfirmationsEnabled:true</c> +
+    /// <c>publisherConfirmationTrackingEnabled:true</c>）创建，否则消息可能丢失。<br/>
+    /// 连接（<paramref name="connection"/>）生命周期仍由调用方管理；本工厂仅创建并（在
+    /// 构造失败时）释放临时 channel，成功构造后 channel 交由 <see cref="RabbitMqBroker.DisposeAsync"/> 释放。
+    /// </remarks>
+    public static async ValueTask<RabbitMqBroker> CreateAsync(
+        IConnection connection,
+        IPalLogger<RabbitMqBroker> logger,
+        IMessageSerializer serializer,
+        IMessageCatalog messageCatalog,
+        ushort prefetchCount = 10,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+
+        // ITM-639：显式启用发布者确认 + 确认跟踪（mandatory 路由失败方可转为 PublishException）。
+        // consumerDispatchConcurrency 传 null——继承连接配置，等价于无参 CreateChannelAsync()
+        // 的消费分发并发度（本 Broker 同一 channel 亦用于订阅，避免隐式改为 1）。
+        var options = new CreateChannelOptions(
+            publisherConfirmationsEnabled: true,
+            publisherConfirmationTrackingEnabled: true,
+            outstandingPublisherConfirmationsRateLimiter: new ThrottlingRateLimiter(MaxOutstandingConfirms),
+            consumerDispatchConcurrency: null);
+        var channel = await connection.CreateChannelAsync(options, ct).ConfigureAwait(false);
+        try
+        {
+            return new RabbitMqBroker(connection, channel, logger, serializer, messageCatalog, prefetchCount);
+        }
+        catch
+        {
+            // 构造失败（logger/serializer/catalog 为 null 等）——已创建的 channel 无人负责，
+            // 就地释放后重抛，避免连接内 channel 泄漏。
+            await channel.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     /// <summary>发布消息到 RabbitMQ Exchange（Fanout 模式）</summary>
@@ -104,8 +165,11 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         var cachedExchange = _cachedExchanges.GetOrAdd(exchange, static name => new CachedString(name));
         // ITM-213 修复（三十二轮）：mandatory:true——无绑定队列时发布抛 PublishException，
         // 不再静默丢弃（原 mandatory:false 使 Outbox 标记 Processed 但消息实际未路由）。
-        // 注意：publisher confirms 需由调用方在注入的 IChannel 上启用
-        // （channel.EnablePublisherConfirmation() 或 CreateChannelAsync 时配置）。
+        // ITM-639：该语义仅在 channel 启用 publisher confirms（含 confirmation tracking）时
+        // 成立——只有 broker 的 basic.return 被客户端转成 PublishException，mandatory 才真正
+        // 生效。推荐用 RabbitMqBroker.CreateAsync 构造（自动启用）；注入自建 channel 时必须
+        // 自行以 CreateChannelOptions(publisherConfirmationsEnabled:true,
+        // publisherConfirmationTrackingEnabled:true) 创建，否则本 await 会静默"成功"。
         await _channel.BasicPublishAsync(
             exchange: cachedExchange,
             routingKey: CachedString.Empty,

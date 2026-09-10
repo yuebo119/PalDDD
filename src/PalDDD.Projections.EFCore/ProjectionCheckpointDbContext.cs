@@ -116,6 +116,17 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
             Entry(checkpoint).State = EntityState.Detached;
             throw;
         }
+        catch
+        {
+            // ITM-632：保存失败（含 OCE 与非 DbUpdate 异常）逃逸前 Detach——checkpoint 在进入
+            // try 前已被 MarkProcessing 变异为 Modified（含 Revision++），异常逃逸后滞留
+            // ChangeTracker 会被下次无关 SaveChanges 提交为从未成功获取的幽灵租约（WHERE
+            // Revision=orig 匹配 DB 真值必成功），锁死该投影位置至 LeaseDuration 过期。
+            // 与上方 DbUpdateException 分支同款 Detach 手法；异常（含 OCE）原样上抛，
+            // 不吞取消、不转成功语义。
+            Entry(checkpoint).State = EntityState.Detached;
+            throw;
+        }
     }
 
     /// <inheritdoc/>
@@ -150,6 +161,14 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         catch (DbUpdateException)
         {
             // v27 P2 修复：非并发瞬时故障上抛前 Detach（与 MarkFailedAsync 同型，样板同上）
+            Entry(checkpoint).State = EntityState.Detached;
+            throw;
+        }
+        catch
+        {
+            // ITM-632：同 TryStartAsync——OCE 及非 DbUpdate 异常逃逸前 Detach，避免已
+            // MarkCompleted 的内存态滞留被后续无关 SaveChanges 提交为幽灵终态；
+            // 异常原样上抛（不吞取消、不改语义）
             Entry(checkpoint).State = EntityState.Detached;
             throw;
         }
@@ -201,6 +220,14 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
             // （Revision 已递增），滞留 ChangeTracker 会使同 scope 下次 TryStart 的 identity
             // resolution 返回内存 Status=Completed 而 DB 未写的实例，误判"已完成"静默跳过
             // （重启/他节点接管后重复投影）——镜像 IdempotencyDbContext 全修样板
+            Entry(checkpoint).State = EntityState.Detached;
+            throw;
+        }
+        catch
+        {
+            // ITM-632：同 MarkCompletedAsync——OCE 及非 DbUpdate 异常逃逸前 Detach，
+            // 避免已 MarkFailed 的内存态（Status=Failed + Error）滞留为幽灵终态；
+            // 异常原样上抛（不吞取消、不改语义）
             Entry(checkpoint).State = EntityState.Detached;
             throw;
         }
@@ -294,6 +321,14 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         {
             Entry(checkpoint).State = EntityState.Detached;
             return null;
+        }
+        catch
+        {
+            // ITM-632：保存失败（含 OCE 与非 DbUpdate 异常）逃逸前 Detach——新建 checkpoint
+            // 已 Add 为 Added，异常逃逸后滞留 ChangeTracker 会被下次无关 SaveChanges 以
+            // INSERT 落库为从未成功获取的幽灵租约；异常原样上抛（不吞取消、不改语义）
+            Entry(checkpoint).State = EntityState.Detached;
+            throw;
         }
     }
 

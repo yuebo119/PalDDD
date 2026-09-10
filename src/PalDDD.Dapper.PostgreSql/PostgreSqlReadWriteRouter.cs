@@ -59,7 +59,11 @@ public sealed class PostgreSqlReadWriteRouter : IAsyncDisposable
 
     /// <summary>
     /// 释放主库和读库数据源持有的连接池。
-    /// DI 注册为 Singleton 时容器自动调用此方法；NpgsqlDataSource 未释放会导致连接泄漏。
+    /// ⚠️ 容器仅释放<b>自己创建</b>的实例：注册必须走工厂重载
+    ///（<c>AddSingleton(sp =&gt; new PostgreSqlReadWriteRouter(...))</c>，见
+    /// <see cref="PostgreSqlReadWriteRouterExtensions.AddPalReadWriteRouter"/>）。
+    /// 实例注册（<c>AddSingleton(router)</c>，ImplementationInstance）下 MS.DI 不接管释放，
+    /// 本方法永不执行、NpgsqlDataSource 连接池静默泄漏（ITM-637）。
     /// </summary>
     public async ValueTask DisposeAsync()
     {
@@ -260,11 +264,15 @@ public static class PostgreSqlReadWriteRouterExtensions
             }
         }
 
-        var router = new PostgreSqlReadWriteRouter(writer, reader);
-        services.AddSingleton(router);
+        // ITM-637 修复：改工厂注册（容器创建实例 → 容器 Dispose 时调用 DisposeAsync）。
+        // 原 `AddSingleton(router)` / `AddSingleton(writer)` 属 ImplementationInstance 注册，
+        // MS.DI 不释放容器未创建的对象——router.DisposeAsync 与 writer/reader 的 NpgsqlDataSource
+        // 连接池在宿主 Dispose 时静默泄漏（子代理探针实测 Disposed=False）。工厂重载下容器
+        // 持有创建权并负责释放。
+        services.AddSingleton(_ => new PostgreSqlReadWriteRouter(writer, reader));
         // 双重注册（router 持有 + 独立注入）经实测无害：NpgsqlDataSource.DisposeAsync 幂等
         // （2026-08-15 file-based app 探针：二次/三次释放均不抛），容器重复释放安全。
-        services.AddSingleton(writer); // 主库可直接注入
+        services.AddSingleton(_ => writer); // 主库可直接注入
 
         return services;
     }

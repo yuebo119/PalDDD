@@ -26,6 +26,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Npgsql;
 using PalDDD.Core.Logging;
@@ -173,13 +174,16 @@ public static class PostgreSqlServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.AddSingleton<IHostedService>(sp =>
+        // ITM-637 姊妹：AddSingleton<IHostedService>(factory) 重复调用会追加多个描述符（多次
+        // 调用启动多个 LISTEN 监听 + 每个 NOTIFY 触发多轮批处理）。改 TryAddEnumerable 按
+        // ServiceType+ImplementationType 去重（对齐 Serialization.Evolution ITM-167 修复）。
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService>(sp =>
             new PostgreSqlOutboxNotifier(
                 sp.GetRequiredService<NpgsqlDataSource>(),
                 sp.GetRequiredService<IServiceScopeFactory>(),
                 sp.GetRequiredService<IPalLogger<PostgreSqlOutboxNotifier>>(),
                 sp.GetService<TimeProvider>(),
-                channelName));
+                channelName)));
 
         return services;
     }
@@ -273,7 +277,10 @@ public static class PostgreSqlServiceCollectionExtensions
                 readerBuilder.ConnectionStringBuilder.MaxAutoPrepare = 20;
             reader = readerBuilder.Build();
         }
-        services.AddSingleton(new PostgreSqlReadWriteRouter(writer, reader));
+        // ITM-637 姊妹修复：工厂注册（容器创建 → 宿主 Dispose 时调用 router.DisposeAsync）。
+        // 原实例注册 `AddSingleton(new PostgreSqlReadWriteRouter(...))` 下 MS.DI 不释放容器
+        // 未创建的对象，writer/reader 连接池静默泄漏（与本类新入口同款缺陷，同批收口）。
+        services.AddSingleton(_ => new PostgreSqlReadWriteRouter(writer, reader));
         return services;
     }
 }

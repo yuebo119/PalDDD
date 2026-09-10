@@ -165,6 +165,12 @@ public class PalOrmSagaMultiDialectTests
     public async Task Saga_PostgreSql_WithJsonTypeInfo_PreservesBusinessFields()
         => await Test_WithJsonTypeInfo_PreservesBusinessFields(await CreatePostgreSqlStoreAsync());
 
+    // ITM-644：补 MySQL 用例——原矩阵 SQLite+PG 两路，同类 InsertNew/GetActive/Lease/乐观锁
+    // 均三方言齐全，仅 jsonTypeInfo 业务字段往返漏 MySQL（CreateMySqlStoreAsync 工厂已存在）。
+    [Test]
+    public async Task Saga_MySql_WithJsonTypeInfo_PreservesBusinessFields()
+        => await Test_WithJsonTypeInfo_PreservesBusinessFields(await CreateMySqlStoreAsync());
+
     private static async Task Test_WithJsonTypeInfo_PreservesBusinessFields<TProvider>(
         (ISagaStateStore<TestSagaState> Store, TestSession<TProvider> Ts) bag)
         where TProvider : IDbProvider

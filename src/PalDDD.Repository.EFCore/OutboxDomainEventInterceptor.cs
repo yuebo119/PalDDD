@@ -38,6 +38,15 @@ namespace PalDDD.Repository.EFCore;
 /// 当前注册方式见 <see cref="ServiceCollectionExtensions.AddPalOutboxUnitOfWork{TContext}"/>，
 /// 使用 <c>TryAddScoped</c> 保证正确生命周期。
 /// <para>
+/// ⛔ <b>禁止与 <c>AddDbContextPool</c> 组合使用（ITM-640）</b>：本类的 <c>_pending</c> 与
+/// <c>_injectedOutboxIds</c> 均为<b>实例级可变状态</b>，其正确性完全依赖"一个 scoped 实例
+/// 仅供单请求独占"这一前提。EF Core 的 <c>AddDbContextPool</c> 在首个 scoped 实例被
+/// <c>DbContextOptions</c> 烘焙后跨请求复用该 options——拦截器实例随 options 被池化共享，
+/// 后续并发请求拿到同一实例，<c>_pending</c>/<c>_injectedOutboxIds</c> 交叉读写，
+/// outbox 行污染或事件丢失。<b>如需连接池化，请改用 <c>AddDbContextPool</c> 之外的
+/// 显式连接池（如 Npgsql 数据源级池），不要池化 DbContext 本身。</b>
+/// </para>
+/// <para>
 /// ⚠️ <b>已知窗口（三十八轮 P2 修复：声明不修）</b>：事件与业务数据的原子性只在单次
 /// SaveChanges 内成立。SaveChanges 成功但外层 UnitOfWork Commit 失败时，领域事件已在
 /// SavedChanges(Async) 中被清空——同一 scope 内重试不会重新产生 outbox 行（业务落库而
@@ -62,7 +71,8 @@ public sealed class OutboxDomainEventInterceptor(
     private readonly Serialization.IMessageSerializer _serializer = serializer ?? throw new ArgumentNullException(nameof(serializer));
     private readonly Serialization.IMessageCatalog _messageCatalog = messageCatalog ?? throw new ArgumentNullException(nameof(messageCatalog));
 
-    /// <summary>当前 SaveChanges 操作收集的领域事件列表 — 非线程安全，依赖 Scoped 生命周期保证单请求独占。</summary>
+    /// <summary>当前 SaveChanges 操作收集的领域事件列表 — 非线程安全，依赖 Scoped 生命周期保证单请求独占。
+    /// 禁止与 <c>AddDbContextPool</c> 组合使用（池化下拦截器实例跨请求共享，见类 remarks ITM-640）。</summary>
     private readonly List<Core.DomainEvent> _pending = [];
 
     /// <summary>ITM-227：本轮由拦截器注入的 OutboxMessage ID——SaveChanges 失败时只 Detach 这些，不影响调用方自己 Add 的消息。</summary>

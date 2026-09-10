@@ -379,7 +379,7 @@ public sealed class SourceGeneratorDirectTests
     {
         var result = RunGeneratorTwoTrees<EnumGeneratorProxy>(
             "using PalDDD.Core;\nnamespace TestDomain;\n[GenerateEnum]\npublic partial class CrossStatus : SmartEnum<CrossStatus, string>\n{\n}",
-            "namespace TestDomain;\npublic partial class CrossStatus : SmartEnum<CrossStatus, string>\n{\n    public static readonly CrossStatus B = new(\"b\", \"B\");\n}");
+            "using PalDDD.Core;\nnamespace TestDomain;\npublic partial class CrossStatus : SmartEnum<CrossStatus, string>\n{\n    public static readonly CrossStatus B = new(\"b\", \"B\");\n}");
 
         var crashed = result.Diagnostics.Any(d => d.Id == "CS8785");
         var source = crashed ? "" : GetGeneratedSource(result, "CrossStatus.g.cs");
@@ -491,6 +491,15 @@ public sealed class SourceGeneratorDirectTests
             """);
 
         await Assert.That(result.Diagnostics.Any(d => d.Id == "PALID004")).IsFalse();
+
+        // ITM-645 补强：Test 名含 BothGenerate，原只断言"无 PALID004"（不证明真产出）——
+        // 此处断言两个同名 FooId（全局 + Dup 命名空间）各自产出独立生成物（hint 无前缀方案）。
+        var generatedPaths = result.Compilation.SyntaxTrees.Select(t => t.FilePath).ToList();
+        await Assert.That(generatedPaths.Any(p =>
+            p.EndsWith("FooId.g.cs", StringComparison.Ordinal)
+            && !p.EndsWith("Dup.FooId.g.cs", StringComparison.Ordinal))).IsTrue();
+        await Assert.That(generatedPaths.Any(p =>
+            p.EndsWith("Dup.FooId.g.cs", StringComparison.Ordinal))).IsTrue();
     }
 
     // ── v53 P1：PALID007 非 partial 包含类型——原落 default 报 PALID001 错误指引 ──

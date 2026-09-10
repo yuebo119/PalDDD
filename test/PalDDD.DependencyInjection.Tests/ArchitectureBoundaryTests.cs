@@ -872,6 +872,19 @@ public sealed class ArchitectureBoundaryTests
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
+    /// DI 扩展方法命名扫描正则（ITM-643 修复）：捕获返回 <c>IServiceCollection</c> 的公共静态方法名，
+    /// 供 <see cref="DependencyInjectionMethods_MustStartWithAddPalPrefix"/> 执行 AddPal* 前缀守护。
+    /// <para>
+    /// 修复前正则 <c>public static .* IServiceCollection ([A-Za-z]+)\(</c> 对合法 C# 恒不匹配——
+    /// 贪婪的 <c>.*</c> 吃掉返回类型后，<c>([A-Za-z]+)\(</c> 的捕获被推到方法参数 <c>services)</c> 上，
+    /// <c>\(</c> 随即失配（实测源码 grep 命中 0），守卫体从不执行、整个命名守护是无声 no-op。
+    /// 现正则锚定 <c>IServiceCollection</c> 之后紧跟方法名（可选泛型参数表），并以 \s*\( 收尾。
+    /// </para>
+    /// </summary>
+    private const string DiMethodPattern =
+        @"public static\s+IServiceCollection\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^>(]*>)?\s*\(";
+
+    /// <summary>
     /// DI 扩展方法必须以 AddPal* 开头。<br/>
     /// 对应 conventions.md §3.5。
     /// </summary>
@@ -888,8 +901,7 @@ public sealed class ArchitectureBoundaryTests
             var source = File.ReadAllText(file);
             // 检查所有 public static 返回 IServiceCollection 的方法
             // 若不以 AddPal/AddOptions/Configure 开头 → 违规
-            var methodPattern = @"public static .* IServiceCollection ([A-Za-z]+)\(";
-            foreach (Match m in Regex.Matches(source, methodPattern))
+            foreach (Match m in Regex.Matches(source, DiMethodPattern))
             {
                 var methodName = m.Groups[1].Value;
                 await Assert.That(
@@ -898,6 +910,41 @@ public sealed class ArchitectureBoundaryTests
                     || methodName.StartsWith("Configure", StringComparison.Ordinal)).IsTrue();
             }
         }
+    }
+
+    /// <summary>
+    /// 扫描器负向自证（ITM-643）：用一个违规 <c>RegisterPalCore(...)</c> 样本证明
+    /// <see cref="DiMethodPattern"/> 能捕获方法名，并用合法 <c>AddPalDDD</c> 证明不误报——
+    /// 修复前正则对任何合法 C# 都零捕获（守卫恒空转，返回 0 命中），此样本会使旧正则失败。
+    /// </summary>
+    [Test]
+    public async Task DiMethodPattern_DetectsNonAddPalReturningIServiceCollection()
+    {
+        const string violating = """
+            public static IServiceCollection RegisterPalCore(this IServiceCollection services)
+            {
+                return services;
+            }
+            """;
+
+        const string compliant = """
+            public static IServiceCollection AddPalDDD(this IServiceCollection services)
+            {
+                return services;
+            }
+            """;
+
+        var offendingNames = Regex.Matches(violating, DiMethodPattern)
+            .Select(m => m.Groups[1].Value)
+            .ToList();
+        await Assert.That(offendingNames).Contains("RegisterPalCore");
+        await Assert.That(offendingNames[0].StartsWith("AddPal", StringComparison.Ordinal)).IsFalse();
+
+        var compliantNames = Regex.Matches(compliant, DiMethodPattern)
+            .Select(m => m.Groups[1].Value)
+            .ToList();
+        await Assert.That(compliantNames).Contains("AddPalDDD");
+        await Assert.That(compliantNames[0].StartsWith("AddPal", StringComparison.Ordinal)).IsTrue();
     }
 
     /// <summary>
@@ -935,7 +982,7 @@ public sealed class ArchitectureBoundaryTests
 
     /// <summary>
     /// 测试方法签名扫描正则（F19 修复：消除参数化方法假阴性），供
-    /// <see cref="TestMethods_MustFollowTripleUnderscorePattern"/> 执行 Method_Scenario
+    /// <see cref="TestMethods_MustFollowUnderscorePattern"/> 执行 Method_Scenario
     /// 下划线格式守护（≥1 个下划线，对应 conventions.md §3.6；排除辅助方法/private/protected、
     /// IDisposable、构造函数、初始化方法、分析器测试）：<br/>
     /// ① 特性块允许多行——[Test] 后可跟 [Arguments]/[MethodDataSource] 等参数化特性行，
@@ -999,8 +1046,10 @@ public sealed class ArchitectureBoundaryTests
         await Assert.That(detected).Contains("BadMultiLineArgumentsName");
     }
 
+    // 诚实命名（ITM-645）：实断言为 ≥1 个下划线（项目约定 Method_Scenario 允许单下划线分段），
+    // 原名 TripleUnderscorePattern 与断言不符——改为 UnderscorePattern。
     [Test]
-    public async Task TestMethods_MustFollowTripleUnderscorePattern()
+    public async Task TestMethods_MustFollowUnderscorePattern()
     {
         var testFiles = Directory.EnumerateFiles(
             Path.Combine(Root, "test"),
@@ -1049,6 +1098,11 @@ public sealed class ArchitectureBoundaryTests
     public async Task PerformanceContract_FrozenDictionaryAndPipelineStateMachineAndRefStruct()
     {
         await Assert.That(File.Exists(Path.Combine(Root, "src/PalDDD.CQRS/PipelineStateMachine.cs"))).IsTrue();
+
+        // ITM-645：Test 名含 FrozenDictionary，补对应断言——Dispatcher 注册表冻结后
+        // 必须走 FrozenDictionary（普通 Dictionary 回归会使 O(1) 只读查找契约失效）。
+        var dispatcher = ReadSource("src/PalDDD.CQRS/Dispatcher.cs");
+        await Assert.That(dispatcher).Contains("FrozenDictionary");
 
         var domainEvents = ReadSource("src/PalDDD.Core/DomainEventEnumerable.cs");
         await Assert.That(domainEvents).Contains("ref struct DomainEventEnumerable");

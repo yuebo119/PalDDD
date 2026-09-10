@@ -76,6 +76,12 @@ public sealed class PublicApiSnapshotTests
                 foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly).OrderBy(static p => p.Name, StringComparer.Ordinal))
                     builder.AppendLine("  " + GetPropertySignature(property));
 
+                foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
+                    .OrderBy(GetMemberSortKey, StringComparer.Ordinal))
+                {
+                    builder.AppendLine("  " + GetFieldSignature(field));
+                }
+
                 foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
                     .Where(static method => !method.IsSpecialName)
                     .OrderBy(GetMemberSortKey, StringComparer.Ordinal))
@@ -112,6 +118,19 @@ public sealed class PublicApiSnapshotTests
     private static string GetPropertySignature(PropertyInfo property)
         => $"property {FormatType(property.PropertyType)} {property.Name}";
 
+    private static string GetFieldSignature(FieldInfo field)
+    {
+        // 字面量（const）带值（如 PalActivitySource.Name）；只读字段（如 PalMetrics 的
+        // Counter<long>、Deleted.No）按 readonly 记类型与名；其余只记类型与名。
+        if (field.IsLiteral)
+            return $"field const {FormatType(field.FieldType)} {field.Name} = {Convert.ToString(field.GetRawConstantValue(), CultureInfo.InvariantCulture)}";
+
+        if (field.IsInitOnly)
+            return $"field {(field.IsStatic ? "static " : "")}readonly {FormatType(field.FieldType)} {field.Name}";
+
+        return $"field {FormatType(field.FieldType)} {field.Name}";
+    }
+
     private static string GetMethodSignature(MethodInfo method)
         => $"method {FormatType(method.ReturnType)} {method.Name}({FormatParameters(method.GetParameters())})";
 
@@ -139,6 +158,9 @@ public sealed class PublicApiSnapshotTests
 
     private static string GetMemberSortKey(MethodBase member)
         => member.Name + "(" + FormatParameters(member.GetParameters()) + ")";
+
+    private static string GetMemberSortKey(FieldInfo field)
+        => field.Name;
 
     private static string Normalize(string value)
         => value.Replace("\r\n", "\n", StringComparison.Ordinal).Trim();

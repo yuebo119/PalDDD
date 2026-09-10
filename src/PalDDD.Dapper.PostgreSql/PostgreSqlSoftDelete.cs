@@ -99,6 +99,13 @@ public static class PostgreSqlSoftDelete
     /// <summary>
     /// 标识符转义 —— 双引号包裹 + 内部双引号翻倍（P2 修复：与 PostgreSqlJsonb.Escape
     /// 统一为标识符语义。此前只翻倍不包裹——含大写/关键字的标识符生成语法错误或歧义）。
+    /// <para>
+    /// v65 P3（schema 限定名声明）：本方法把整个入参当<b>单个标识符</b>包裹——传入
+    /// <c>"schema.table"</c> 会生成 <c>"schema.table"</c>（含点的单一标识符），而 PG 语义下
+    /// 这是名为 <c>schema.table</c> 的表（非 schema 下的 table），查不到目标表。
+    /// 本 API <b>不支持 schema 限定名</b>；需要跨 schema 操作时请自行拼
+    /// <c>$"{Escape(schema)}.{Escape(table)}"</c> 两段转义，或改用带 search_path 的连接。
+    /// </para>
     /// </summary>
     private static string Escape(string s) => $"\"{(s.Contains('"') ? s.Replace("\"", "\"\"") : s)}\"";
 }

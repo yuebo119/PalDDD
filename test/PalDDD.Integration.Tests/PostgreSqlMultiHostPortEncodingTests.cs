@@ -82,6 +82,26 @@ public sealed class PostgreSqlMultiHostPortEncodingTests
             .Throws<ArgumentException>();
     }
 
+    [Test]
+    public async Task AddPalNpgsqlDataSourceWithReadWriteSplit_ZeroReplica_BlankPrimaryHost_Throws()
+    {
+        // ITM-635：零副本分支接入单主机列表守卫——原实现绕过校验，空段成为轮询死节点；
+        // 同串传 AddPalNpgsqlDataSource 抛异常，两入口行为分叉。
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalNpgsqlDataSourceWithReadWriteSplit("Host=pg1,,pg2;Username=u;Password=p", []))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task AddPalNpgsqlDataSourceWithReadWriteSplit_ZeroReplica_DuplicatePrimaryHost_Throws()
+    {
+        // ITM-635：零副本分支重复条目录入（"pg1,pg1"）fail-fast——与同文件 Failover 查重
+        // 及单主机入口 EnsureNoDuplicateHost 口径一致。
+        await Assert.That(() => new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+                .AddPalNpgsqlDataSourceWithReadWriteSplit("Host=pg1,pg1;Username=u;Password=p", []))
+            .Throws<ArgumentException>();
+    }
+
     // ── v54/v55 守卫回归网 ──
 
     [Test]

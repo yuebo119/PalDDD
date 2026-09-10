@@ -40,8 +40,10 @@ public static class SqliteJson
     /// JSON 键名。⚠️ 不得含点号（<c>.</c>）——JSON 路径语法中点号是层级分隔符，
     /// 键名本身含点（如 <c>"a.b"</c>）会被解释为嵌套路径 <c>$.a.b</c>，静默查错位置。
     /// 也不得含双引号（<c>"</c>）——本 API 不支持引号包裹键形式，含引号的键会生成非法路径。
+    /// 也不得含方括号（<c>[</c> <c>]</c>）——SQLite JSON1 路径中它们是数组索引语法
+    ///（如 <c>$.notes[1]</c> 被解释为数组访问而非键名 <c>notes[1]</c>），静默查错位置。
     /// 含此类字符的键请改用原生 SQL 手写引号包裹路径（<c>'$."a.b"'</c> 形式）。
-    /// 三十五轮 D4：违禁字符改为构建期 fail-fast（ArgumentException）而非执行期静默错查。
+    /// 三十五轮 D4 / ITM-284（R45）：违禁字符改为构建期 fail-fast（ArgumentException）而非执行期静默错查。
     /// </param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Extract(string column, string key)
@@ -54,7 +56,7 @@ public static class SqliteJson
     }
 
     /// <summary>提取嵌套 JSON 路径：json_extract(col, '$.a.b.c')</summary>
-    /// <param name="path">路径段数组（每段约束同 <see cref="Extract"/> 的 key：不得含点号或双引号——点号是分隔符；三十五轮 D4 起违禁字符构建期抛出）。</param>
+    /// <param name="path">路径段数组（每段约束同 <see cref="Extract"/> 的 key：不得含点号/双引号/方括号——点号是分隔符、方括号是数组索引语法；三十五轮 D4 / ITM-284 起违禁字符构建期抛出）。</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string ExtractPath(string column, params string[] path)
     {
@@ -70,7 +72,7 @@ public static class SqliteJson
     // ── 类型检查 ──
 
     /// <summary>获取 JSON 字段类型：json_type(col, '$.key') → 'text'/'integer'/...</summary>
-    /// <param name="key">JSON 键名（同 <see cref="Extract"/> 的 key 约束：不得含点号）。</param>
+    /// <param name="key">JSON 键名（同 <see cref="Extract"/> 的 key 约束：不得含点号/双引号/方括号）。</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string Type(string column, string key)
     {
@@ -90,7 +92,7 @@ public static class SqliteJson
     }
 
     /// <summary>检查键是否存在：json_type(col, '$.key') IS NOT NULL</summary>
-    /// <param name="key">JSON 键名（同 <see cref="Extract"/> 的 key 约束：不得含点号）。</param>
+    /// <param name="key">JSON 键名（同 <see cref="Extract"/> 的 key 约束：不得含点号/双引号/方括号）。</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static string HasKey(string column, string key)
         => $"{Type(column, key)} IS NOT NULL";

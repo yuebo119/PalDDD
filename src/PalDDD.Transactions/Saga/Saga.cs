@@ -77,6 +77,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
     private SagaCompensation<TState>? _compensation;
     private SagaTimeoutDetector<TState>? _timeoutDetector;
 
+    // v65 P3（策略快照声明）：_compensation 惰性创建一次——构造时捕获当时的
+    // CompensationPolicy（值快照）；此后修改 CompensationPolicy 不会传导到已缓存的
+    // SagaCompensation 实例（其内部保留旧策略）。_stepsByKey 按引用捕获，注册期新增步骤可见，
+    // 但须在首次 ProcessEventAsync 前完成注册（见 When 的启动期单线程约束）。
     private SagaCompensation<TState> Compensation
         => _compensation ??= new(CompensationPolicy, _stepsByKey);
 
@@ -167,6 +171,12 @@ public abstract class Saga<TState> where TState : SagaState, new()
     ///   <c>IsTimedOut</c>，触发补偿回滚（Status → Compensated）——人工决策超时兜底；<br/>
     /// - <b>未配置 Timeout</b>：显式无限等待——仅人工决策可恢复，超时扫描永不命中。<br/>
     /// 使用 Interrupt 步骤前必须设置本属性。
+    /// <para>
+    /// v65 P3（DI 声明）：本属性为普通读写属性，<b>DI 容器不会自动注入</b>——基础设施在构造
+    /// 编排器时无法感知其类型参数，需调用方显式赋值（<c>saga.SagaManager = manager;</c>，
+    /// 通常在派生构造函数或宿主装配代码中完成，并与 <see cref="ISagaManager"/> 的 DI 单例
+    /// 实例复用）。
+    /// </para>
     /// </summary>
     public ISagaManager? SagaManager { get; set; }
 

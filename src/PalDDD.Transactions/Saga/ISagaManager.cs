@@ -8,6 +8,14 @@ namespace PalDDD.Transactions;
 /// <summary>
 /// Saga 管理器——用于恢复中断的 Saga、查询待决策 Saga、以及执行子 Saga。
 /// </summary>
+/// <remarks>
+/// v65 P3（实现约束声明）：本接口含 <c>internal</c> 成员
+/// <see cref="ExecuteChildSagaNonGenericAsync"/>——C# 的 internal 接口成员使实现类型必须与
+/// 本接口同程序集，<b>程序集外类型无法实现本接口</b>（编译期 CS0535：不能实现 internal 成员）。
+/// 故外部自定义管理器不受支持，<see cref="Saga{TState}.SagaManager"/> 实际只接受框架内实例
+/// （当前唯一实现为 sealed 的 <see cref="DefaultSagaManager"/>）。开放外部实现需在破坏性
+/// 变更中把该成员提升为 public/DIM 默认实现。
+/// </remarks>
 public interface ISagaManager
 {
     /// <summary>

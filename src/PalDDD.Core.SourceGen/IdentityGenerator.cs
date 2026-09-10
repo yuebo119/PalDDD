@@ -703,8 +703,19 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
                         throw new JsonException("Ulid identity JSON value is not a valid Ulid.");
                     return {{name}}.From(escapedUlid);
                 }
-                if (PalUlid.TryParse(reader.ValueSpan, null, out var ulid))
-                    return {{name}}.From(ulid);
+                // ITM-629 修复：ValueSpan 仅对单段 ReadOnlySequence 有效，多段下抛
+                // InvalidOperationException（非 JsonException），破坏 converter 契约并绕过
+                // 上层 catch(JsonException)。HasValueSequence 为真时回退 GetString()+字符串
+                // 重载（走转义腿同款分配路径），否则用 UTF-8 原始切片零分配快路径。
+                if (reader.HasValueSequence)
+                {
+                    if (PalUlid.TryParse(reader.GetString()!, null, out var seqUlid))
+                        return {{name}}.From(seqUlid);
+                }
+                else if (PalUlid.TryParse(reader.ValueSpan, null, out var spanUlid))
+                {
+                    return {{name}}.From(spanUlid);
+                }
                 throw new JsonException("Ulid identity JSON value is not a valid Ulid.");
         """,
         // v25 P3 生成器族：同 Guid 分支——Number token 守卫使坏 token（String/Null 等）抛

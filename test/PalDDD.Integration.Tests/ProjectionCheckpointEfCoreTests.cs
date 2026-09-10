@@ -224,6 +224,38 @@ public sealed class ProjectionCheckpointEfCoreTests
             await db.SaveChangesAsync(cancellationToken)).Throws<DbUpdateException>();
     }
 
+    [Test]
+    public async Task TryStartAsync_CancelledSave_DoesNotLeaveGhostLeaseInChangeTracker(CancellationToken cancellationToken)
+    {
+        // ITM-632 回归：保存失败（此处注入 OCE，等价于真取消在 SaveChanges 内抛 OCE）时，
+        // 已被 MarkProcessing 变异的 checkpoint 必须 Detach——否则滞留 ChangeTracker，
+        // 同 DbContext 后续任意 SaveChangesAsync 会把"从未成功获取的幽灵租约"落库，
+        // 投影位被锁死至 LeaseDuration。SQLite 关系型 provider + EnsureCreated 构造真 schema。
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = new DbContextOptionsBuilder<ThrowingProjectionCheckpointDbContext>()
+            .UseSqlite(connection).Options;
+        var now = DateTimeOffset.Parse("2026-05-30T00:00:00Z", CultureInfo.InvariantCulture);
+
+        await using var db = new ThrowingProjectionCheckpointDbContext(options);
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+        var store = (IProjectionCheckpointStore)db;
+
+        db.ThrowOnNextSave = true;
+        await Assert.That(async () => await store.TryStartAsync(
+            "order-summary", "orders", "42", now, TimeSpan.FromMinutes(5), cancellationToken))
+            .Throws<OperationCanceledException>();
+
+        // 失败后无幽灵态残留 ChangeTracker
+        await Assert.That(db.ChangeTracker.Entries<ProjectionCheckpoint>()).IsEmpty();
+
+        // 后续无关保存不得把幽灵租约落库
+        db.ThrowOnNextSave = false;
+        await db.SaveChangesAsync(cancellationToken);
+        var ghostCount = await db.ProjectionCheckpoints.AsNoTracking().CountAsync(cancellationToken);
+        await Assert.That(ghostCount).IsEqualTo(0);
+    }
+
     private static DbContextOptions<TestProjectionCheckpointDbContext> CreateOptions()
         => new DbContextOptionsBuilder<TestProjectionCheckpointDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture))
@@ -237,4 +269,22 @@ public sealed class ProjectionCheckpointEfCoreTests
 
     private sealed class TestProjectionCheckpointDbContext(DbContextOptions<TestProjectionCheckpointDbContext> options)
         : ProjectionCheckpointDbContext(options);
+
+    /// <summary>ITM-632 探针上下文：下一次 SaveChangesAsync 注入 OperationCanceledException，
+    /// 构造"取消/保存失败"场景验证失败后实体被 Detach（无幽灵租约滞留）。</summary>
+    private sealed class ThrowingProjectionCheckpointDbContext(DbContextOptions<ThrowingProjectionCheckpointDbContext> options)
+        : ProjectionCheckpointDbContext(options)
+    {
+        public bool ThrowOnNextSave { get; set; }
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            if (ThrowOnNextSave)
+            {
+                ThrowOnNextSave = false;
+                throw new OperationCanceledException("simulated cancellation");
+            }
+            return base.SaveChangesAsync(cancellationToken);
+        }
+    }
 }
