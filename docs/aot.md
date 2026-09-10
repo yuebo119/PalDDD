@@ -179,7 +179,7 @@ Dapper 适配项目使用项目级 IL3058 抑制（`<NoWarn>$(NoWarn);IL3058</No
 
 **结论**：Dapper 适配层的 AOT 兼容是假象（NoWarn IL3058 声明），不适用于 Native AOT 发布。推荐使用 PalORM 替代。
 
-所有库代码的 await 调用（2026-09-04 实测 443 处；三十七轮起全量补齐后随评审持续增长）均使用 `ConfigureAwait(false)`。所有时间获取通过 `TimeProvider` 而非 `DateTimeOffset.UtcNow`。
+所有库代码的 await 调用（2026-09-10 实测 444 处；三十七轮起全量补齐后随评审持续增长）均使用 `ConfigureAwait(false)`。所有时间获取通过 `TimeProvider` 而非 `DateTimeOffset.UtcNow`。
 
 ## 检查清单
 

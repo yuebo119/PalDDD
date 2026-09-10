@@ -93,7 +93,7 @@ CREATE TABLE projection_checkpoints (
     projection_name   TEXT    NOT NULL,
     source_name       TEXT    NOT NULL,
     position          TEXT    NOT NULL,
-    status            INTEGER NOT NULL DEFAULT 0,  -- 0:Idle 1:Processing 2:Completed 3:Failed
+    status            INTEGER NOT NULL DEFAULT 0,  -- 0:Processing 1:Completed 2:Failed（枚举 ProjectionCheckpointStatus）
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     lease_until       TIMESTAMPTZ,
     revision          INTEGER NOT NULL DEFAULT 0,

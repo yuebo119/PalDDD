@@ -12,7 +12,7 @@
 
 ---
 
-Pal.DDD standardizes the equality semantics of Entity, allocation-free collection of domain events, lease-lock concurrency and dead-letter recovery of the Outbox, and compensation orchestration with timeout detection for Sagas — into 40 independent NuGet packages. It does not provide `IRepository<T>`, does not define `IIntegrationEvent`, and does not perform assembly scanning. Business code stays pure C#; the framework only delivers infrastructure.
+Pal.DDD standardizes the equality semantics of Entity, allocation-free collection of domain events, lease-lock concurrency and dead-letter recovery of the Outbox, and compensation orchestration with timeout detection for Sagas — into 35 independent NuGet packages. It does not provide `IRepository<T>`, does not define `IIntegrationEvent`, and does not perform assembly scanning. Business code stays pure C#; the framework only delivers infrastructure.
 
 Out of the box: **zero-reflection command dispatch · lease-lock concurrent Outbox · auto-compensating Sagas · immutable EventLog · resumable Projections · compile-time DDD compliance checks.**
 
@@ -649,17 +649,19 @@ PalDDD ships `PalActivitySource` (11 Start methods) + `PalMetrics` (21 telemetry
 
 ```csharp
 // Framework auto-instrumentation (Activity names are semantic short names; Counters use the paldd. prefix):
-// - Dispatcher.SendAsync → Activity "Command Dispatch"
 // - OutboxProcessor → Activity "Outbox Process" + Counter "paldd.outbox.processed" / "paldd.outbox.failed"
-// - SagaProcessor → Activity "Saga Transition"
 // - IdempotencyProcessor → Activity "Idempotency Execute" + Counter "paldd.idempotency.executed" / "paldd.idempotency.cached"
+
+// Reserved (not yet wired, no internal emit sites, kept for external integration):
+// - Dispatcher.SendAsync → Activity "Command Dispatch" (PalActivitySource.StartCommandDispatch)
+// - SagaProcessor → Activity "Saga Transition" (PalActivitySource.StartSagaTransition)
 
 // Your OpenTelemetry configuration only needs to reference the Activity Source:
 services.AddOpenTelemetry()
     .WithTracing(t => t.AddSource("PalDDD"))      // Auto-captures all PalDDD Activities
     .WithMetrics(m => m.AddMeter("PalDDD"));       // Auto-captures all PalDDD Metrics
 
-// Zero manual instrumentation — command dispatch latency, Outbox backlog, Saga compensation count all auto-reported
+// Zero manual instrumentation — Outbox backlog, idempotency hit/skip, Saga compensation count and other wired paths are auto-reported (command dispatch / Saga transition Activities are reserved, see above)
 ```
 
 ### 15. Incremental Migration: Phased Adoption From MediatR
@@ -878,7 +880,7 @@ flowchart TB
 | [Testing](docs/testing.md) | Test pyramid, scenario matrix, BenchmarkDotNet config |
 | [Release SOP](docs/release.md) | Versioning, package scope, CHANGELOG conventions & workflow |
 | [Pitfalls](docs/pitfalls.md) | 82 real-world DDD/AOT/concurrency pitfalls |
-| [Architecture Decisions](docs/decisions/) | 21 ADRs |
+| [Architecture Decisions](docs/decisions/) | 22 ADRs |
 | [Changelog](CHANGELOG.md) | Version history (consumer-facing changes + engineering appendix) |
 
 ---

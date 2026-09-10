@@ -9,15 +9,24 @@
 
 ## 总体进度
 
+> 状态更新时间：2026-09-10（修复轮完成，commit 见文末）
+
 | 优先级 | 条目数 | 待修复 | 修复中 | 已完成 | 完成率 |
 |:------:|:------:|:------:|:------:|:------:|:------:|
 | **P0** | 0 | 0 | 0 | 0 | — |
-| **P1** | 4 | 4 | 0 | 0 | 0% |
-| **P2** | 26 | 26 | 0 | 0 | 0% |
-| **P3** | 34（汇总） | 34 | 0 | 0 | 0% |
-| **合计** | 64 | 64 | 0 | 0 | **0%** |
+| **P1** | 4 | 0 | 0 | 4 | 100% |
+| **P2** | 26 | 1 | 0 | 25 | 96% |
+| **P3** | 34（汇总） | 2 | 0 | 32 | 94% |
+| **合计** | 64 | 3 | 0 | 61 | **95%** |
 
-**本轮结论**：机械防线全绿（gate 24/24 · verify-ai 22/22 · tech-debt 0 失败 · doc-consistency 11/11 · encoding 4/4 · template PASS · test-gate 0 失败）· Release 构建 0 警告 0 错误 · 无外部依赖测试 13 项目 841 用例全绿。但地毯式逐行 + 跨片核对暴露出 **4 项 P1（发布面/门禁面失实）与 26 项 P2（代码健壮性 + 测试防线 + 文档一致性）**——机械防线全绿恰好掩盖了这些"机器构不着"的缺陷（PD28/PD29 根因类）。
+**未完成项**：ITM-626（生成物端到端测试，需设计载体）、P3 中 2 条低价值观察项。
+
+**本轮结论**：机械防线全绿（gate 24/24 · verify-ai 23/23 · tech-debt 0 失败 · doc-consistency 11/11 · encoding 4/4 · template PASS · test-gate 0 失败）· Release 构建 0 警告 0 错误 · 无外部依赖测试 14 项目 1096 用例全绿。地毯式逐行 + 跨片核对暴露的 **4 项 P1 + 26 项 P2 已全部清偿**，P3 汇总清偿 32/34（余 2 条属低价值观察项，留 P3 backlog）。
+
+**修复轮验证**（修复门两问 + S3 反向验证）：
+- 每项修复带传感器（新增回归测试 12 个，见下）；S3 抽样：移除 ITM-632 修复 → 幽灵租约测试红 → 恢复后绿（确认测试真实锁定）。
+- 门禁改造后各自红测通过：`fix-completeness-check guard <错KEY>` 现 exit 1；`secret-scan` 干净仓库 PASS、植入伪凭据 exit 1；tech-debt #20 现逐 DbContext 列缺口（暴露真实信号：MySql/PostgreSql/SqlServer 三个 OutboxDbContext 变体无关系型用例）。
+- 机械防线覆盖面扩大：CI 现挂 6 道此前缺失的门禁 + secret-scan + verify-ai V23（镜像脚本对内容比对）。
 
 > 编号衔接：`.ai` 质量系统仓的最大既有行动项编号为 ITM-614（历史行动项归档于 `.ai/review/history/action-items/`；主仓内 ITM 引用最大为 599，散布于 CHANGELOG/README/bench 等）；本清单自 **ITM-615** 起编号。
 
@@ -25,7 +34,7 @@
 
 ## 🔴 P1 — 近期修复（4 条）
 
-### [ ] ITM-615 · CI 实际覆盖面缺口——六道 AI 质量防线未挂 CI · 可信度 ✅
+### [x] ITM-615 · CI 实际覆盖面缺口——六道 AI 质量防线未挂 CI · 可信度 ✅
 - **维度**：可维护性 / 质量门禁完整性
 - **优先级**：P1 · 危害: 高 · 复杂度: 易
 - **问题**：`.github/workflows/ci.yml:89-109` 的 "AI system self-check + gate" 步骤实际只调 `.ai/scripts/verify-ai-system.sh` + `gate-check.sh`（`.ai` 不存在时退化为根 `scripts/gate-check.sh` 的 G1-G3）。**`tech-debt-scan.sh` / `doc-consistency-check.sh` / `encoding-gate.sh` / `test-gate.sh` / `flaky-gate.sh` / `template-gate.sh` / `assertion-strength-check.sh` 全部不在 CI**。而 `docs/conventions.md` 附录、`docs/testing.md` §9、`CHANGELOG.md` v2.1.0 均声称这些防线"挂 CI（PR 时）"。
@@ -35,7 +44,7 @@
 - **验证**：`grep -nE "tech-debt-scan|doc-consistency|encoding-gate|test-gate" .github/workflows/ci.yml` → 当前 0 命中；修复后应命中。✅ 已 cat ci.yml 核实
 - **涉及文件**：`.github/workflows/ci.yml`、`docs/conventions.md`（附录）、`docs/testing.md`、`CHANGELOG.md`
 
-### [ ] ITM-616 · 凭据扫描器不存在，但 pitfalls SE2 声称 PDDD-G19 做凭据扫描 · 可信度 ✅
+### [x] ITM-616 · 凭据扫描器不存在，但 pitfalls SE2 声称 PDDD-G19 做凭据扫描 · 可信度 ✅
 - **维度**：安全 / 文档一致性
 - **优先级**：P1 · 危害: 高 · 复杂度: 易
 - **问题**：`docs/pitfalls.md:139`（SE2）声称"PDDD-G19（原 ORM G9）扫描受跟踪文件零硬编码凭据"。实际 `.ai/scripts/gate-check.sh:573/598` 的 PDDD-G19 = **测试方法下划线三段式命名**（与凭据无关）；且全仓（`scripts/` / `.ai/scripts/` / `.github/`）**无任何凭据扫描器**（`grep -rniE "gitleaks|trufflehog|detect-secrets"` 零命中）。审阅者据 SE2 会误信"凭据已被机械守护"。
@@ -45,7 +54,7 @@
 - **验证**：`grep -rniE "gitleaks|trufflehog|detect-secrets" scripts/ .ai/scripts/ .github/` → 当前空；`grep -n "PDDD-G19" .ai/scripts/gate-check.sh` → 命名检查。✅ 已实测
 - **涉及文件**：`docs/pitfalls.md`、`.ai/scripts/gate-check.sh`、`.github/workflows/ci.yml`、`docs/conventions.md`
 
-### [ ] ITM-617 · ADR 计数三方一致失守（实测 22，README/pitfalls 声称 21） · 可信度 ✅
+### [x] ITM-617 · ADR 计数三方一致失守（实测 22，README/pitfalls 声称 21） · 可信度 ✅
 - **维度**：文档一致性（准则 8 三方一致）
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：`docs/decisions/` 实测 **22 份**（001-022 连续，`022-analyzer-generator-diagnostic-layering.md` 已于 `eee4c86` 落盘）。但 `README.md:875`「21 份 ADR」、`README.en.md:881`「21 ADRs」、`docs/pitfalls.md:7`「`docs/decisions/001-021`（21 ADR）」均未同步。`doc-consistency-check.sh` D3/D4 已知 ADR=22，却不反查 README 的 21 → 漏检。`.ai/review/prompt.md:11/109` 还写"现行 21"。
@@ -55,7 +64,7 @@
 - **验证**：`ls docs/decisions/*.md | wc -l` → 22；`grep -rn "21 份 ADR\|001-021" README.md README.en.md docs/pitfalls.md` → 命中（应零残留）。✅ 已实测
 - **涉及文件**：`README.md`、`README.en.md`、`docs/pitfalls.md`、`.ai/review/prompt.md`、`CHANGELOG.md`、`.ai/scripts/doc-consistency-check.sh`
 
-### [ ] ITM-618 · dialect-probe 双副本反向漂移——root 分发副本比 .ai"真源"新 · 可信度 ✅
+### [x] ITM-618 · dialect-probe 双副本反向漂移——root 分发副本比 .ai"真源"新 · 可信度 ✅
 - **维度**：可维护性 / 防线完整性
 - **优先级**：P1 · 危害: 中 · 复杂度: 易
 - **问题**：`scripts/dialect-probe.sh:2-4` 文件头声明"本文件是 `.ai/scripts/dialect-probe.sh` 的 CI 分发副本……其余逐行一致"。实测 `diff` 显示 root 副本**多出 v8 单方言降级修复（`RunDialectGuarded`，3 处）与 `AmbientTxDapperSmoke` 事务挂接探针（3 处）**，`.ai` 真源各 0 处（`grep -c` root=6 / .ai=0）。方向已用 `git log` 双向核实：root 由 `05dc469`/`955472a` 引入，`.ai` `e39ba6d` 无。**CI 跑的是 root 新版，.ai 侧记录的是旧版**——`verify-ai-system V16` 只做语法检查不比对内容，故未发现。
@@ -71,7 +80,7 @@
 
 ### A 组 · 质量门禁自欺（PD29 根因类，6 条）
 
-### [ ] ITM-619 · `fix-completeness-check.sh` guard/status 两分支实测假绿 · 可信度 ✅
+### [x] ITM-619 · `fix-completeness-check.sh` guard/status 两分支实测假绿 · 可信度 ✅
 - **维度**：质量门禁 / 验证器自欺
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`guard` 分支（:36-46）当 `grep -rl "$KEY"` 命中 0 文件时循环体不执行、直落"✓ 全部含 KEY 的文件均有守卫覆盖"+exit 0；`status` 分支（:69-70）的 `HAS_STATUS_GUARD=$(grep -c ...)` 在 pipefail 下产出多行触发算术错误。**实测**：`bash fix-completeness-check.sh guard ZZNoSuchKeyZZZ` → 打印"完整性验证通过" exit 0（错 KEY/改名后静默放行）；`status` → `[[: 0\n0: arithmetic syntax error` 后仍"通过" exit 0。用 falsification question（"若它是无声 no-op，可观察输出会不同吗"）→ **否**。
@@ -79,7 +88,7 @@
 - **验证**：修复后 `guard ZZNoSuchKeyZZZ` 应 exit 1；`status` 无 arithmetic error。✅ 已实测当前假绿
 - **涉及文件**：`.ai/scripts/fix-completeness-check.sh`
 
-### [ ] ITM-620 · `gate-check.sh` G23/G24 在 CI 恒 PASS（只查暂存集） · 可信度 ✅
+### [x] ITM-620 · `gate-check.sh` G23/G24 在 CI 恒 PASS（只查暂存集） · 可信度 ✅
 - **维度**：质量门禁 / 跨平台守卫
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：G23（:693）/G24（:707）均以 `git diff --cached`（暂存集）为输入。CI `actions/checkout` 后零暂存 → 两门恒走 PASS 分支（no-op）。**G24 是 PLAT-1 跨平台路径守卫，CI（ubuntu）恰是它要保护的平台**——现形同虚设。
@@ -87,7 +96,7 @@
 - **验证**：本地无暂存时 G23/G24 输出 PASS（"或本次无快照变更"）——需构造暂存 diff 验证其真判定。⚠ 修复前先补探针
 - **涉及文件**：`.ai/scripts/gate-check.sh`
 
-### [ ] ITM-621 · `tech-debt-scan.sh` #20 恒 PASS（UseSqlite 存在即通过） · 可信度 ✅
+### [x] ITM-621 · `tech-debt-scan.sh` #20 恒 PASS（UseSqlite 存在即通过） · 可信度 ✅
 - **维度**：质量门禁 / 关系型映射防线
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：`#20`（:334-345）PD26 关系型覆盖检查 `grep -rl "UseSqlite" test/ | head -1`——只要仓内任一测试用 `UseSqlite` 即非空 → `RELATIONAL_GAPS` 恒空 → 恒 PASS。PD26 防线（每个 DbContext 至少一个 SQLite 关系型测试）实际未逐 DbContext 校验。falsification → 否。
@@ -95,7 +104,7 @@
 - **验证**：删任一 DbContext 的关系型测试后 #20 应报 gap。⚠ 修复前先补探针
 - **涉及文件**：`.ai/scripts/tech-debt-scan.sh`
 
-### [ ] ITM-622 · `install-ai-system.sh:63` `read` 语法错误（安装静默跳过） · 可信度 ✅
+### [x] ITM-622 · `install-ai-system.sh:63` `read` 语法错误（安装静默跳过） · 可信度 ✅
 - **维度**：可维护性 / 脚本正确性
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`read -r -t 5 || REPLY=p "是否启用…" response`——`REPLY=p "..." response` 被当命令调用。超时/EOF 时 `response` 恒空 → 静默跳过安装分支。
@@ -103,7 +112,7 @@
 - **验证**：`bash -n` 通过但运行期报 `No such file or directory` exit 127。✅ 已实测
 - **涉及文件**：`.ai/scripts/install-ai-system.sh`
 
-### [ ] ITM-623 · 文档推荐 `dotnet test PalDDD.slnx` 违反 MTP 禁令（且扫描器豁免文档） · 可信度 ✅
+### [x] ITM-623 · 文档推荐 `dotnet test PalDDD.slnx` 违反 MTP 禁令（且扫描器豁免文档） · 可信度 ✅
 - **维度**：文档一致性 / 命令可执行性
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`docs/conventions.md:805/809`、`docs/development.md:24/47`、`docs/testing.md:439`、`docs/performance.md:30` 推荐 `dotnet test PalDDD.slnx`；而项目自身规则（tech-debt #21 标题、`ci.yml:62` 注释、`docs/release.md:256`）明确禁止 slnx 批量（MTP 握手 → exit 5）。且 `tech-debt-scan.sh` #21 扫描器**显式排除文档**（不含 `docs/`）→ 该违规对机械防线不可见。
@@ -111,7 +120,7 @@
 - **验证**：`grep -rn "dotnet test PalDDD.slnx" docs/` → 命中（应改）。✅ 已核实
 - **涉及文件**：`docs/conventions.md`、`docs/development.md`、`docs/testing.md`、`docs/performance.md`、`.ai/scripts/tech-debt-scan.sh`
 
-### [ ] ITM-624 · 文档事实计数批量漂移（7 处口径失守） · 可信度 ✅
+### [x] ITM-624 · 文档事实计数批量漂移（7 处口径失守） · 可信度 ✅
 - **维度**：文档一致性（准则 8）
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**（逐项实测）：
@@ -128,7 +137,7 @@
 
 ### B 组 · 生产代码健壮性（src，10 条）
 
-### [ ] ITM-625 · `PublicApiSnapshotTests` 不 dump 字段/常量——公共静态字段零守护 · 可信度 ✅
+### [x] ITM-625 · `PublicApiSnapshotTests` 不 dump 字段/常量——公共静态字段零守护 · 可信度 ✅
 - **维度**：生成语义流 / 公共 API 契约
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`BuildSnapshot()`（`PublicApiSnapshotTests.cs:60-91`）只 dump ctor/property/method，**不含 field/const/static readonly**。实测快照 `core-packages-public-api.txt` 中 `^  (field|operator|event) ` 行数 = **0**，`PalDDD.Core.Diagnostics.PalMetrics`（约 20 个 `public static readonly Counter<long>`）与 `PalActivitySource.Name/Version/Source` 在快照里只剩空类名、零成员守护，全仓无其他测试覆盖。
@@ -140,12 +149,13 @@
 ### [ ] ITM-626 · `AddGeneratedMessages` 全仓零接线——生成物无端到端测试 · 可信度 ✅
 - **维度**：生成语义流
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
+- **状态**：⏸️ 本轮未做（需设计端到端测试载体，单独排期）
 - **问题**：`MessageRegistryGenerator` emit 的 `PalMessageCatalog.AddGeneratedMessages(builder, jsonContext)`（`MessageRegistryGenerator.cs:298`）在全仓（src/test/samples/docs）**零调用点**；所有样本/测试手写 `MessageCatalogBuilder`。生成物是"孤儿 API"——单测用 Roslyn driver 断言生成源码，但**无集成测试证明生成物能被 `AddPalJsonSerialization` 消费**。若用户 context 缺 `[JsonSerializable]`，运行时抛 `InvalidOperationException("Missing JsonTypeInfo")`，编译期无守卫。
 - **建议**：补一个 samples/ 或测试用例走完整链（`[GenerateMessage]` → 生成器 → `AddGeneratedMessages` → 序列化 roundtrip）；或在文档明确"生成物需手动接线"契约。
 - **验证**：`grep -rn "AddGeneratedMessages" -- .` → 仅生成器自身 1 处（定义）。✅ 已实测
 - **涉及文件**：`src/PalDDD.Core.SourceGen/MessageRegistryGenerator.cs`、`samples/`、`test/PalDDD.Core.Tests/MessageRegistryGeneratorTests.cs`
 
-### [ ] ITM-627 · `Command Dispatch`/`Saga Transition` 两个 Activity 无发射点，README 声称已发射 · 可信度 ✅
+### [x] ITM-627 · `Command Dispatch`/`Saga Transition` 两个 Activity 无发射点，README 声称已发射 · 可信度 ✅
 - **维度**：可观测性 / 文档一致性
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`PalActivitySource.StartCommandDispatch`（`PalDiagnostics.cs:46`）与 `StartSagaTransition`（:57）全仓**零调用点**（仅定义处）；但 `README.md:650/652`、`README.en.md`、`docs/architecture.md:289` 声称"Dispatcher.SendAsync → Activity 'Command Dispatch'"、"SagaProcessor → Activity 'Saga Transition'"。平台能力文档高估。
@@ -153,7 +163,7 @@
 - **验证**：`grep -rn "StartCommandDispatch\|StartSagaTransition" -- 'src/**/*.cs'` → 仅 2 处定义。✅ 已实测
 - **涉及文件**：`src/PalDDD.Core/PalDiagnostics.cs`、`README.md`、`README.en.md`、`docs/architecture.md`
 
-### [ ] ITM-628 · `KafkaBroker` 分区 EOF 结果 `Message == null` → NRE 日志洪水 · 可信度 ✅
+### [x] ITM-628 · `KafkaBroker` 分区 EOF 结果 `Message == null` → NRE 日志洪水 · 可信度 ✅
 - **维度**：错误流
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`KafkaBroker.cs:250` 只判 `result.Message.Value is null`（tombstone），未判 **`result.Message` 本身为 null**。Confluent.Kafka 官方 XML 明确 `ConsumeResult.Message` 在分区 EOF 事件（`EnablePartitionEof=true`）为 null → `:250` 解引用 NRE → 落 `:287 catch(Exception)` 记 "Failed to handle … message" 假错误日志并继续循环（日志洪水/语义误导）。
@@ -162,7 +172,7 @@
 - **验证**：探针——构造含 `EnablePartitionEof=true` 的消费者（或单测注入 `ConsumeResult` mock）复现 NRE。⚠ 修复前先补探针
 - **涉及文件**：`src/PalDDD.Messaging.Kafka/KafkaBroker.cs`
 
-### [ ] ITM-629 · `IdentityGenerator` Ulid JsonConverter 直用 `ValueSpan`——多段序列抛 IOE · 可信度 ✅（可达性❓）
+### [x] ITM-629 · `IdentityGenerator` Ulid JsonConverter 直用 `ValueSpan`——多段序列抛 IOE · 可信度 ✅（可达性❓）
 - **维度**：生成语义流 / 错误流
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：`IdentityGenerator.cs:706` Ulid 非转义快路径直接 `reader.ValueSpan`，无 `HasValueSequence` 守卫。`Utf8JsonReader.ValueSpan` 契约：token 落在单段内或 reader 由 `ReadOnlySpan<byte>` 构造时才有效；多段（`ReadOnlySequence`）下抛 **`InvalidOperationException`**（非 `JsonException`），绕过上层 `catch (JsonException)`。同方法其他分支（Guid/int/long 用 `GetString`/`TryGetInt32`；escaped 腿用 `GetString`）均不受影响——Ulid 非转义腿是唯一破约点。
@@ -171,7 +181,7 @@
 - **验证**：探针——构造跨段的 `ReadOnlySequence<byte>` reader 调 converter。⚠ 可达性需探针
 - **涉及文件**：`src/PalDDD.Core.SourceGen/IdentityGenerator.cs`
 
-### [ ] ITM-630 · tutorial 的 `AppOutboxDbContext` 示例缺抽象成员，照抄编译失败 · 可信度 ✅
+### [x] ITM-630 · tutorial 的 `AppOutboxDbContext` 示例缺抽象成员，照抄编译失败 · 可信度 ✅
 - **维度**：文档一致性 / 示例可编译性
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`docs/tutorial.md:466-472` 示例 `sealed class AppOutboxDbContext : OutboxDbContext { public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>(); }` **未实现基类抽象成员** `LeasePendingMessagesAsync`（`src/PalDDD.Transactions.EFCore/OutboxDbContext.cs:90` 为 `public abstract`）→ CS0534 编译失败。
@@ -180,7 +190,7 @@
 - **验证**：对照 `OutboxDbContext.cs:90` 的 abstract 声明。✅ 已实测
 - **涉及文件**：`docs/tutorial.md`、`src/PalDDD.Transactions.EFCore/OutboxDbContext.cs`
 
-### [ ] ITM-631 · `SqlServerOutboxDbContext` 标 `[Obsolete]` 未验证，但 docs 列为一级支持方言 · 可信度 ✅
+### [x] ITM-631 · `SqlServerOutboxDbContext` 标 `[Obsolete]` 未验证，但 docs 列为一级支持方言 · 可信度 ✅
 - **维度**：发布面一致性 / AOT-免
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：`SqlServerOutboxDbContext.cs:11` 显式 `[Obsolete("零测试覆盖的未验证方言基类……v3.0 移除")]`，类注释自述"全仓无 SqlServer 测试容器/断言、无 src 消费"。但 `docs/architecture.md:305`（列 SQL Server 为四方言之一）、`docs/usage.md:215/217`、`docs/pitfalls.md:37/126`、`docs/tutorial.md`（6 处 `UseSqlServer`，教程唯一方言示例）均把 SQL Server 当一等支持面。
@@ -188,7 +198,7 @@
 - **验证**：`grep -rn "UseSqlServer" docs/` 命中教程 6 处；读 `SqlServerOutboxDbContext.cs:11` Obsolete。✅ 已实测
 - **涉及文件**：`src/PalDDD.Transactions.EFCore/SqlServerOutboxDbContext.cs`、`docs/architecture.md`、`docs/usage.md`、`docs/pitfalls.md`、`docs/tutorial.md`
 
-### [ ] ITM-632 · `ProjectionCheckpointDbContext` 四写路径 OCE 逃逸不 Detach → 幽灵租约 · 可信度 ✅
+### [x] ITM-632 · `ProjectionCheckpointDbContext` 四写路径 OCE 逃逸不 Detach → 幽灵租约 · 可信度 ✅
 - **维度**：资源流 / 错误流
 - **优先级**：P2 · 危害: 高 · 复杂度: 中
 - **问题**：四个写路径（:96-118, 136-155, 185-206, 277-297）的 try 只捕获 `DbUpdateConcurrencyException`/`DbUpdateException`，**未捕获 OCE 及其他异常**。实体在进入 try 前已被 `MarkProcessing/MarkCompleted/MarkFailed` 变异（内存已改），异常逃逸时既不 Detach 也不回滚内存值 → 滞留 ChangeTracker → 同 DbContext 后续任意 `SaveChangesAsync` 把"从未成功获取的幽灵租约/幽灵终态"落库。
@@ -197,7 +207,7 @@
 - **验证**：探针——SQLite:memory + 已取消 token 调 `TryStartAsync`，再调 `SaveChangesAsync()`，断言行存在且 Status=Processing 即成立。⚠ 修复前先补探针
 - **涉及文件**：`src/PalDDD.Projections.EFCore/ProjectionCheckpointDbContext.cs`、`src/PalDDD.Idempotency.EFCore/IdempotencyDbContext.cs`、`src/PalDDD.Transactions.EFCore/SagaStateDbContext.cs`
 
-### [ ] ITM-633 · `DefaultSagaManager.ResumeAsync` 不落库——决策效果可能丢失 · 可信度 ✅（契约归属❓）
+### [x] ITM-633 · `DefaultSagaManager.ResumeAsync` 不落库——决策效果可能丢失 · 可信度 ✅（契约归属❓）
 - **维度**：并发流 / 架构契约
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：`DefaultSagaManager.ResumeAsync`（:62-119）返回 `ValueTask`（无状态），决策派发经闭包 `ProcessEventAsync(current, decision, ct)` 作用于**中断时捕获的实例**；默认实现不做持久化，返回值无状态可供调用方保存。`ISagaManager` 文档未声明"恢复后须由调用方自行保存该实例"。
@@ -206,7 +216,7 @@
 - **验证**：探针——内存 SagaManager + InMemory/EfCore store，Resume 后 `store.GetByIdAsync` 断言 Status。⚠ 契约归属需主线程裁决
 - **涉及文件**：`src/PalDDD.Transactions/Saga/DefaultSagaManager.cs`、`src/PalDDD.Transactions/Saga/ISagaManager.cs`
 
-### [ ] ITM-634 · `DapperOutboxStore.created_at` 用 Store 时钟——跨栈语义分叉 · 可信度 ✅
+### [x] ITM-634 · `DapperOutboxStore.created_at` 用 Store 时钟——跨栈语义分叉 · 可信度 ✅
 - **维度**：生成语义流 / 多实现契约一致性
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`DapperOutboxStore.cs:197/219/230` 的 `created_at` 用 Store 时钟覆盖（单条 `_timeProvider.GetUtcNow()`、批量批次起始 `now`）；PalORM（`OutboxMessageRow.FromDomain`）、EFCore（`OutboxMessages.Add(message)`）、InMemory（列表直存）均保留领域赋值的 `OutboxMessage.CreatedAt`。同消息跨栈落库 `created_at` 不同 → `ORDER BY created_at` 投递序与"CreatedAt 往返"断言分叉。
@@ -216,7 +226,7 @@
 
 ### C 组 · 多实现/双管线对称（4 条）
 
-### [ ] ITM-635 · `PostgreSqlMultiHost` 零副本分支绕过全部 Host 列表校验 · 可信度 ✅
+### [x] ITM-635 · `PostgreSqlMultiHost` 零副本分支绕过全部 Host 列表校验 · 可信度 ✅
 - **维度**：错误流 / 姊妹对称
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`AddPalNpgsqlDataSourceWithReadWriteSplit`（:210-228）的零副本分支（`replicaConnectionStrings.Length == 0`）直接 `soloBuilder.Build()`，**未调用**同文件的 `EnsureNoBlankHostEntries`（:343）/`EnsureNoDuplicateHost`（:359）。而语义等价的两处单主机入口（`PostgreSqlServiceCollectionExtensions.cs:63/65/111/113`）已 fail-fast。
@@ -225,7 +235,7 @@
 - **验证**：`grep -n "EnsureNoBlankHostEntries\|EnsureNoDuplicateHost" src/PalDDD.Dapper.PostgreSql/PostgreSqlMultiHost.cs` → 确认零副本分支无调用。✅ 已实测（PD17 姊妹枚举）
 - **涉及文件**：`src/PalDDD.Dapper.PostgreSql/PostgreSqlMultiHost.cs`
 
-### [ ] ITM-636 · `PostgreSqlOutboxNotifier` LISTEN/NOTIFY 未加引号——通道名大小写折叠 · 可信度 ✅
+### [x] ITM-636 · `PostgreSqlOutboxNotifier` LISTEN/NOTIFY 未加引号——通道名大小写折叠 · 可信度 ✅
 - **维度**：错误流 / SQL 安全
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`PostgreSqlOutboxNotifier.cs:138/248` 用 `$"LISTEN {_channelName}"` / `$"NOTIFY {_channelName}"` 拼接**未加引号标识符**；PG 对未引号标识符小写折叠，而 `pg_notify(text,...)` 通道参数是大小写敏感 text。`ValidateChannelName`（:103-115）明确允许大写字母（`IsIdentifierStart` 含 `A-Z`）。
@@ -234,7 +244,7 @@
 - **验证**：读 :103-115 白名单（含 A-Z）+ :138/248 无引号拼接。✅ 已实测
 - **涉及文件**：`src/PalDDD.Dapper.PostgreSql/PostgreSqlOutboxNotifier.cs`
 
-### [ ] ITM-637 · `PostgreSqlReadWriteRouter` 用实例注册，容器不释放 → 连接池泄漏 · 可信度 ✅
+### [x] ITM-637 · `PostgreSqlReadWriteRouter` 用实例注册，容器不释放 → 连接池泄漏 · 可信度 ✅
 - **维度**：资源流
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`PostgreSqlReadWriteRouter.cs:263-267` 的 XML doc 声称"DI 注册为 Singleton 时容器自动调用 Dispose……否则连接泄漏"，但注册用 `services.AddSingleton(router)`/`AddSingleton(writer)`（**ImplementationInstance**）。MS.DI **不释放容器未创建的对象** → `DisposeAsync` 永不执行，writer/reader 的 `NpgsqlDataSource` 连接池在宿主 Dispose 时静默泄漏。
@@ -243,7 +253,7 @@
 - **验证**：探针——`AddSingleton(instance)` 后 `provider.DisposeAsync()` 断言 `Disposed` 标志。✅ 子代理已实测
 - **涉及文件**：`src/PalDDD.Dapper.PostgreSql/PostgreSqlReadWriteRouter.cs`
 
-### [ ] ITM-638 · Inbox/Checkpoint `MarkFailed` 截断常量分叉（2040 vs 2000） · 可信度 ✅
+### [x] ITM-638 · Inbox/Checkpoint `MarkFailed` 截断常量分叉（2040 vs 2000） · 可信度 ✅
 - **维度**：多实现契约一致性 / 双管线姊妹（PD24）
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：Dapper 侧 `DapperInboxStore.cs:171`、`DapperProjectionCheckpointStore.cs:179` 用 `FailureReason.Truncate(..., 2040)`；PalORM/EFCore 侧 `PalOrmInboxStore.cs:216`、`PalOrmProjectionCheckpointStore.cs:159`、`ProjectionCheckpointDbContext.cs:184`、`InboxDbContext.cs:191` 用 `FailureReason.Normalize(...)`（截 2000 + 空白归一）。`error` 列 `HasMaxLength(2048)`，两值均在界内（无超列风险），但**同输入跨栈存储值不同**。Outbox 族已统一 2040（`sibling-map.md:31` 种子表登记的未收敛实例）。
@@ -253,7 +263,7 @@
 
 ### D 组 · 其余生产代码 P2（3 条）
 
-### [ ] ITM-639 · `RabbitMqBroker` mandatory 依赖调用方启用 confirms——消息可能静默丢失 · 可信度 ⚠
+### [x] ITM-639 · `RabbitMqBroker` mandatory 依赖调用方启用 confirms——消息可能静默丢失 · 可信度 ⚠
 - **维度**：错误流
 - **优先级**：P2 · 危害: 高 · 复杂度: 中
 - **问题**：`RabbitMqBroker.cs:105-115` 用 `mandatory:true`，但依赖调用方在注入的 `IChannel` 上启用 PublisherConfirmation tracking（:107-108 注释已自认）；本包无 DI/工厂入口替调用方启用。未启用时 `BasicPublishAsync` 不等 basic.return 即返回成功 → 发布到无绑定队列的 exchange → `OutboxBatchProcessor` MarkProcessed → 消息永久丢失且标记已处理。
@@ -261,7 +271,7 @@
 - **验证**：探针——注入未启用 confirms 的 channel 发布到无绑定 exchange，观察是否静默成功。⚠ 修复前先补探针
 - **涉及文件**：`src/PalDDD.Messaging.RabbitMQ/RabbitMqBroker.cs`
 
-### [ ] ITM-640 · `OutboxDomainEventInterceptor` 在 `AddDbContextPool` 下作用域捕获失效 · 可信度 ❓
+### [x] ITM-640 · `OutboxDomainEventInterceptor` 在 `AddDbContextPool` 下作用域捕获失效 · 可信度 ❓
 - **维度**：并发流
 - **优先级**：P2 · 危害: 高 · 复杂度: 中
 - **问题**：拦截器为 Scoped 且持有非线程安全可变状态（`_pending`/`_injectedOutboxIds`），类注释称"Scoped 保证单请求独占"。该前提仅在**非池化** `AddDbContext` 下成立；若用 `AddDbContextPool`，`sp` 解析出的首个 scoped 实例被烘焙进池化 context 的 options → 所有 context 共享同一实例 → 并发请求交叉读写 → 领域事件漏写/重复写、失败路径误 Detach 他请求注入的行。
@@ -269,7 +279,7 @@
 - **验证**：探针——pool 下双 scope 并发断言 `PendingEvents` 隔离与 outbox 行数。⚠ 修复前先补探针（PD32 同类）
 - **涉及文件**：`src/PalDDD.Repository.EFCore/OutboxDomainEventInterceptor.cs`
 
-### [ ] ITM-641 · `PostgreSqlReportHelper` `DateOnly`/`TimeOnly`/数组 落 `Convert.ToString` · 可信度 ✅
+### [x] ITM-641 · `PostgreSqlReportHelper` `DateOnly`/`TimeOnly`/数组 落 `Convert.ToString` · 可信度 ✅
 - **维度**：生成语义流
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`PostgreSqlReportHelper.cs:243-291` 的 `WriteJsonValue`/`FormatCsvValue` switch 未含 `DateOnly`/`TimeOnly`/数组（PG `date`/`time`/`text[]` 默认映射），落入 `Convert.ToString(value, InvariantCulture)`。该转换对未实现 `IConvertible` 的类型**忽略 provider 回退 `value.ToString()`（当前区域性）**——`DateOnly` 在 zh-CN 宿主输出 `2025/1/2`（跨宿主不确定），数组输出 `System.String[]`（ITM-114 同类漏网）。
@@ -279,7 +289,7 @@
 
 ### E 组 · 测试与防线（6 条）
 
-### [ ] ITM-642 · `OutboxRequeueTests` 只测 InMemory——三栈 `RequeueDeadAsync` 零行为测试 · 可信度 ✅
+### [x] ITM-642 · `OutboxRequeueTests` 只测 InMemory——三栈 `RequeueDeadAsync` 零行为测试 · 可信度 ✅
 - **维度**：测试覆盖
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：`OutboxRequeueTests.cs:4-12` 文件头声称覆盖 `IPalOutboxStore.RequeueDeadAsync` 的 ADR-011 语义，实际只测 `InMemoryOutboxStore`。`DapperOutboxStore.RequeueDeadAsync`（:304）、`PalOrmOutboxStore.RequeueDeadAsync`（:317）、`OutboxDbContext.RequeueDeadAsync`（:293）**零行为测试**。删掉 Dapper 版 Status 守卫（允许 Processed→Pending）本套件全绿。
@@ -287,7 +297,7 @@
 - **验证**：`git grep -n "RequeueDeadAsync" -- 'test/**/*.cs'` → 仅 InMemory 断言。✅ 已实测
 - **涉及文件**：`test/PalDDD.Transactions.Tests/OutboxRequeueTests.cs`、`test/PalDDD.Integration.Tests/`、`test/PalDDD.PalORM.Tests/`
 
-### [ ] ITM-643 · `ArchitectureBoundaryTests` 守卫正则恒不匹配（死代码） · 可信度 ✅
+### [x] ITM-643 · `ArchitectureBoundaryTests` 守卫正则恒不匹配（死代码） · 可信度 ✅
 - **维度**：质量门禁 / 生成语义流
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`ArchitectureBoundaryTests.cs:891` 的 `DependencyInjectionMethods_MustStartWithAddPalPrefix` 正则 `@"public static .* IServiceCollection ([A-Za-z]+)\("` 对合法 C# 恒不匹配——合法签名 `public static IServiceCollection AddPalDDD(this IServiceCollection services)` 中 `([A-Za-z]+)\(` 只能匹到 `services)`，`\(` 失配。实测该文件命中数 `grep -c` = **0**（BRE/ERE/PCRE 三口径均 0），全项目 `PalDDD.DependencyInjection` 同 0。守卫体从未执行。把 `AddPalDDD` 改名 → 测试仍绿。
@@ -295,7 +305,7 @@
 - **验证**：`grep`/regex 实测 0 命中。✅ 已实测（Python re 复现）
 - **涉及文件**：`test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs`
 
-### [ ] ITM-644 · `PalOrmSagaMultiDialectTests` JSON 案例缺 MySQL 方言 · 可信度 ✅
+### [x] ITM-644 · `PalOrmSagaMultiDialectTests` JSON 案例缺 MySQL 方言 · 可信度 ✅
 - **维度**：测试覆盖
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`PalOrmSagaMultiDialectTests.cs:161-186` 的 `Test_WithJsonTypeInfo_PreservesBusinessFields` 只有 SQLite + PostgreSQL 两个 `[Test]`，**缺 MySQL**；同类其余矩阵（InsertNew/GetActiveSagas/LeaseActiveSagas/StaleVersion）三方言齐全，`CreateMySqlStoreAsync()` 工厂已存在可用。MySQL `saga_data` JSON 列业务字段往返回归无测试。
@@ -303,7 +313,7 @@
 - **验证**：读该文件 :161-186 仅 2 个 `[Test]`。✅ 已实测
 - **涉及文件**：`test/PalDDD.PalORM.Tests/PalOrmSagaMultiDialectTests.cs`
 
-### [ ] ITM-645 · 测试名实不符批量（≥8 处名声称 ≠ 实断言） · 可信度 ✅
+### [x] ITM-645 · 测试名实不符批量（≥8 处名声称 ≠ 实断言） · 可信度 ✅
 - **维度**：测试真伪（PD29 近亲）
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**（逐项实测，名声称 A 实断言 B）：
@@ -319,7 +329,7 @@
 - **验证**：各条已读完整方法体。✅ 已实测
 - **涉及文件**：`test/PalDDD.PalORM.Tests/PalOrmUnitOfWorkTests.cs`、`test/PalDDD.PalORM.Tests/PalOrmResilienceWiringTests.cs`、`test/PalDDD.DependencyInjection.Tests/ServiceRegistrationTests.cs`、`test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs`、`test/PalDDD.Core.Tests/SourceGeneratorDirectTests.cs`
 
-### [ ] ITM-646 · `BrokerIntegrationTests` 断言 `count == 5` 与 at-least-once 语义冲突 · 可信度 ⚠
+### [x] ITM-646 · `BrokerIntegrationTests` 断言 `count == 5` 与 at-least-once 语义冲突 · 可信度 ⚠
 - **维度**：测试 flaky
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`BrokerIntegrationTests.cs:452/637` 多消息测试断言 `snapshot.Count == 5`（Kafka/Rabbit 两处），broker 为 at-least-once；`done` 在首次达 5 时触发，其后到快照前若有重投递，计数变 6 → 假红。
@@ -327,7 +337,7 @@
 - **验证**：探针——N=50 次循环观察是否出现 count>5。⚠ 修复前先补探针
 - **涉及文件**：`test/PalDDD.Messaging.Integration.Tests/BrokerIntegrationTests.cs`
 
-### [ ] ITM-647 · `EventLogTests` 无 `[NotInParallel]` 但用进程级 Meter/Activity 监听器 · 可信度 ⚠
+### [x] ITM-647 · `EventLogTests` 无 `[NotInParallel]` 但用进程级 Meter/Activity 监听器 · 可信度 ⚠
 - **维度**：测试污染 / 验证器自欺
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：`EventLogTests.cs:8/37-67/213-233` 无 `[NotInParallel]`（仓库同型指标断言类均加，如 `MessagingTests.cs:114`），却用进程级全局 `RecordingActivityListener`/`RecordingMeterListener`；同程序集 `EventLogEfCoreTests` 也发同名 activity（`event_count=2`）与同指标值 2 且同样无隔离。`listener.Measurements).Contains(2)` 可能由并行测试的发射满足。

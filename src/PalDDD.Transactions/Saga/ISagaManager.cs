@@ -25,6 +25,14 @@ public interface ISagaManager
     /// <param name="sagaId">Saga ID</param>
     /// <param name="decision">人工决策数据</param>
     /// <param name="ct">取消令牌</param>
+    /// <remarks>
+    /// ⚠️ ITM-633 契约声明——<b>恢复后的状态不会由本方法自动持久化</b>：默认实现
+    /// （<see cref="DefaultSagaManager"/>）在中断时捕获的 Saga 实例上派发决策，方法返回
+    /// <see cref="ValueTask"/>（无状态）。调用方若要保留恢复结果，必须自行持有该
+    /// Saga 实例引用并调用 <c>ISagaStateStore.SaveChangesAsync</c> 落库，否则 store 中该
+    /// Saga 仍为 <see cref="SagaStatus.AwaitingHumanDecision"/>，决策效果在下次读回时丢失。
+    /// 另：中断条目为进程内字典，多实例部署下决策须路由到中断发生的实例。
+    /// </remarks>
     ValueTask ResumeAsync<TDecision>(PalUlid sagaId, TDecision decision, CancellationToken ct)
         where TDecision : notnull;
 

@@ -80,6 +80,9 @@ DDD 项目分层（对照 conventions §4.2 解决方案分层）：
 |-------|---------|:------:|
 | `PalDDD.Serialization` | `src/PalDDD.Serialization/` | ✅ |
 | `PalDDD.Serialization.Evolution` | `src/PalDDD.Serialization.Evolution/` | ✅ |
+| `PalDDD.Messaging` | `src/PalDDD.Messaging/` | ✅ |
+| `PalDDD.Compression` | `src/PalDDD.Compression/` | ✅ |
+| `PalDDD.Compression.Native` | `src/PalDDD.Compression.Native/` | ✅ |
 
 #### App-Core 层
 
@@ -90,8 +93,6 @@ DDD 项目分层（对照 conventions §4.2 解决方案分层）：
 | `PalDDD.Transactions` | `src/PalDDD.Transactions/` | ✅ |
 | `PalDDD.Idempotency` | `src/PalDDD.Idempotency/` | ✅ |
 | `PalDDD.Projections` | `src/PalDDD.Projections/` | ✅ |
-| `PalDDD.Messaging` | `src/PalDDD.Messaging/` | ✅ |
-| `PalDDD.Compression` | `src/PalDDD.Compression/` | ✅ |
 
 #### Infra-EFCore 层（非 AOT 适配器）
 
@@ -143,7 +144,6 @@ DDD 项目分层（对照 conventions §4.2 解决方案分层）：
 
 | 包 ID | 项目路径 | 公开发布 |
 |-------|---------|:------:|
-| `PalDDD.Compression.Native` | `src/PalDDD.Compression.Native/` | ✅ |
 | `PalDDD.Serialization.MemoryPack` | `src/PalDDD.Serialization.MemoryPack/` | ✅ |
 | `PalDDD.Projections.EventLog` | `src/PalDDD.Projections.EventLog/` | ✅ |
 

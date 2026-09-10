@@ -4,7 +4,7 @@
 >
 > **本文件不是 ORM 302 项陷阱的复制**——ORM 项目（QueryBuilder/ChangeTracker/Schema 迁移/Provider 方言）的踩坑与 DDD 无关。本文件聚焦 DDD 项目实际涉及的领域：事件驱动、最终一致性、分布式事务、Async 异步、AOT 分层、消息序列化、Saga 补偿链。
 >
-> **真源**：`docs/architecture.md`（18 项架构决策）+ `docs/decisions/001-021`（21 ADR）+ `docs/review/action-items-*.md`（ITM 历史缺陷）+ `conventions.md` §10/§12/§14
+> **真源**：`docs/architecture.md`（架构总览 + 稳定性约束）+ `docs/decisions/001-022`（22 ADR）+ `docs/review/action-items-*.md`（ITM 历史缺陷）+ `conventions.md` §10/§12/§14
 >
 > **状态标记**: ✅ 已修复/已实现 · ⚠️ 部分实现 · 🚫 架构层面避开
 
@@ -34,7 +34,7 @@
 | # | 场景·问题·后果 | DDD 对应设计 | 状态 |
 |---|---------------|------------|:----:|
 | **E1** | **场景**：业务操作 → DB INSERT → 直接调 Broker 发送消息 → DB 提交成功 → Broker 不可达 → 消息永久丢失。**问题**：双写非原子，Broker 故障导致事件丢失。**后果**：下游系统永不知道业务发生 | `OutboxDomainEventInterceptor` 在 DbContext.SaveChangesAsync 时把领域事件写入 Outbox 表（同一事务）→ `OutboxProcessor` 后台异步发布。**ADR-001** 采纳方案 B（逐条独立）| ✅ |
-| **E2** | **场景**：多实例后台 `OutboxProcessor` 并发扫描 → 两实例拿到同一行 → 重复发布。**问题**：无锁的 SELECT-then-UPDATE 有竞态窗口。**后果**：下游重复消费 | PG 用 `FOR UPDATE SKIP LOCKED` / SQL Server 用 `UPDLOCK + READPAST` 原子租约（`leased_by` + `leased_until` 字段，schema 含 `idx_outbox_lease` 索引） | ✅ |
+| **E2** | **场景**：多实例后台 `OutboxProcessor` 并发扫描 → 两实例拿到同一行 → 重复发布。**问题**：无锁的 SELECT-then-UPDATE 有竞态窗口。**后果**：下游重复消费 | PG 用 `FOR UPDATE SKIP LOCKED` / SQL Server 用 `UPDLOCK + READPAST` 原子租约（`leased_by` + `leased_until` 字段，schema 含 `idx_outbox_lease` 索引）。注：SQL Server 方言当前标 `[Obsolete]`、零测试覆盖，属实验性支持 | ⚠️ |
 | **E3** | **场景**：Outbox 消息发布失败 → 重试 N 次后置 Dead → 无重投递入口 → ops 直写 `UPDATE status='Pending'`。**问题**：ops 越权重置绕过校验，可能重复发布。**后果**：违反幂等前提 | **ADR-011** 提供框架统一入口 `IPalOutboxStore.RequeueDeadAsync`——**幂等前提是调用方责任**（必须接入 Inbox/Idempotency/天然幂等 handler） | ✅ |
 | **E4** | **场景**：OutboxMessage 负载用 string JSON → 大消息占内存 + 序列化开销。**问题**：字符串负载限制序列化器选择，违反 byte[] 二进制抽象。**后果**：无法切换 MemoryPack 等高效序列化 | `OutboxMessage.Payload` 强制 `byte[]`（`ArchitectureBoundaryTests.OutboxMessage_UsesBinaryPayload` 守护，禁 `public string Content`） | ✅ |
 | **E5** | **场景**：OutboxDomainEventInterceptor 注册为 Singleton → 持有 `_pending` 实例字段 → 多请求并发交叉写入。**问题**：Singleton 生命周期共享状态。**后果**：A 请求的事件被 B 请求提交 | 架构测试 `OutboxDomainEventInterceptor_IsRegisteredAsScoped` 强制 TryAddScoped（ITM-026） | ✅ |
@@ -81,7 +81,7 @@
 | # | 场景·问题·后果 | DDD 对应设计 | 状态 |
 |:--:|---------------|------------|:----:|
 | **A1** | **场景**：`async Task Foo()` → 调用 `OutboxProcessor.ExecuteAsync()` → 忘记 `await`。**问题**：返回 `Task` 而非值 → 后续代码 NullRef。**后果**：生产崩溃 | 所有 API 返回 `ValueTask`/`ValueTask<T>` + TreatWarningsAsErrors + CS4014 警告 | ✅ |
-| **A2** | **场景**：ASP.NET Core → `async` Controller → `_outboxStore.AppendAsync()` → 不 ConfigureAwait(false)。**问题**：同步上下文捕获 → 线程池饥饿。**后果**：高并发慢 | 全层库代码 ConfigureAwait(false)（conventions §1.5，143+ 处）+ PDDD-G12 强制 | ⚠️ 部分违规（gate-check 发现 12 处） |
+| **A2** | **场景**：ASP.NET Core → `async` Controller → `_outboxStore.AppendAsync()` → 不 ConfigureAwait(false)。**问题**：同步上下文捕获 → 线程池饥饿。**后果**：高并发慢 | 全层库代码 ConfigureAwait(false)（conventions §1.5，444 处）+ PDDD-G12 强制 | ✅ |
 | **A3** | **场景**：`async void` → 异常逃逸 → 进程崩溃。**问题**：async void 异常无法捕获。**后果**：服务意外终止 | 🚫 禁止 async void（conventions §1.5 + PDDD-G9 + ArchitectureBoundaryTests） | ✅ |
 | **A4** | **场景**：`PeriodicBackgroundProcessor` 内层 `catch (Exception)` → 捕获下游 CancellationToken 取消（非 host 关停）→ 记为错误日志。**问题**：取消异常被误报为错误。**后果**：日志噪声 + 误判服务健康 | `catch (OperationCanceledException)` 静默分支，仅过滤 host 关停取消（ITM-030，3 处同型：PeriodicBackgroundProcessor/ExceptionMiddleware/HealthCheck） | ✅ |
 | **A5** | **场景**：`catch (Exception)` 不带 `when (ex is not OperationCanceledException)` 过滤 → 取消异常被吞掉 → 上层无法感知取消。**问题**：异常过滤缺失。**后果**：取消语义错误 | conventions §10.3 强制 `when (ex is not OperationCanceledException)`（PDDD-G7 + boundary 守护） | ✅ |
@@ -102,7 +102,7 @@
 | **T3** | **场景**：`Activator.CreateInstance` 动态创建 handler。**问题**：AOT 不兼容。**后果**：发布失败 | 显式 DI 注册 `AddPalCommandHandler<TCmd, TKey, THandler>()` 替代（conventions §1.4） | ✅ |
 | **T4** | **场景**：`Assembly.GetTypes()` 扫描 handler 类型。**问题**：AOT 修剪后类型丢失。**后果**：handler 未注册 | `HandlerRegistrar`（IHostedService）启动期显式注册 → `Dispatcher.Freeze()` 转 FrozenDictionary（ADR-007） | ✅ |
 | **T5** | **场景**：`System.Text.Json` 默认反射路径 → JsonSerializer.Serialize\<T\> 在 AOT 下抛异常。**问题**：反射序列化。**后果**：发布失败 | `[JsonSourceGenerationOptions]` + `[JsonSerializable]` 编译时生成 JsonTypeInfo + `JsonSerializerIsReflectionEnabledByDefault=false`（conventions §1.3） | ✅ |
-| **T6** | **场景**：`Expression.Compile()` 在 ISpecification 编译表达式树。**问题**：AOT 不兼容。**后果**：规约评估失败 | **PDDD-G8 当前发现 ISpecification.cs:218 真实违规**（`_expression.Compile()`）—— **待修复** | ⚠️ |
+| **T6** | **场景**：`Expression.Compile()` 在 ISpecification 编译表达式树。**问题**：AOT 不兼容。**后果**：规约评估失败 | `ISpecification.cs` 编译动作收敛在私有 helper 并带 `[RequiresDynamicCode]` 诚实标注，仅内存求值路径需要动态代码；查询翻译路径 `ToExpression()` 零编译，PDDD-G8 PASS | ✅ |
 | **T7** | **场景**：`Type.GetType(string)` 运行时反射查找类型。**问题**：AOT 修剪。**后果**：返回 null | 用 `typeof(T)` 编译时常量替代（conventions §1.4） | ✅ |
 
 ---
@@ -123,7 +123,7 @@
 
 | # | 场景·问题·后果 | DDD 对应设计 | 状态 |
 |:--:|---------------|------------|:----:|
-| **C1** | **场景**：分布式锁 Redis TTL 太短 → 业务超时 → 锁被其他实例获取 → 双实例并发。**问题**：TTL 锁漏洞。**后果**：并发写 → 数据不一致 | PG 用 `FOR UPDATE SKIP LOCKED`（行级锁 + 连接断开自动释放，无 TTL 问题）；SQL Server 用 `UPDLOCK + READPAST` | ✅ |
+| **C1** | **场景**：分布式锁 Redis TTL 太短 → 业务超时 → 锁被其他实例获取 → 双实例并发。**问题**：TTL 锁漏洞。**后果**：并发写 → 数据不一致 | PG 用 `FOR UPDATE SKIP LOCKED`（行级锁 + 连接断开自动释放，无 TTL 问题）；SQL Server 用 `UPDLOCK + READPAST`（当前标 `[Obsolete]`、零测试覆盖，实验性） | ⚠️ |
 | **C2** | **场景**：Dispatcher.Register 在启动后继续调用 → 与并发 Dispatch 请求竞态。**问题**：Freeze 后修改。**后果**：路由错乱或 ObjectDisposedException | `Dispatcher.Freeze()` 后转 `FrozenDictionary`，禁运行时 Add（ITM-027 XML doc 约束启动期单线程） | ✅ |
 | **C3** | **场景**：InMemoryOutboxStore 用 `lock(object)` → .NET 9+ Lock 性能更好。**问题**：旧锁机制。**后果**：竞争激烈时性能差 | conventions §10.4 + §1.7 强制 `Lock`（.NET 9+） | ✅ |
 | **C4** | **场景**：Dispatcher.Freeze() 与 IMessageBroker.Publish 并发 → 读 FrozenDictionary 与可能的写冲突。**问题**：读写竞态。**后果**：路由错乱 | Freeze() 后只读 FrozenDictionary，写入在启动期完成（启动期单线程约束） | ✅ |
@@ -136,7 +136,7 @@
 | # | 场景·问题·后果 | DDD 对应设计 | 状态 |
 |:--:|---------------|------------|:----:|
 | **SE1** | **场景**：PostgreSqlAuditor 用 `QuoteIdentifier` 转义表名 → 无白名单校验 → 恶意标识符注入 SQL。**问题**：标识符注入。**后果**：SQL 注入 | 标识符白名单校验 + `EscapeLiteral` 分离 + `PurgeOldAuditLogs` 范围校验（ITM-批次3） | ✅ |
-| **SE2** | **场景**：连接串硬编码（`Password=x;Host=y`）→ 入库 → 泄露。**问题**：凭据入库。**后果**：DB 被拖库 | PDDD-G19（原 ORM G9）扫描受跟踪文件零硬编码凭据 | ✅ |
+| **SE2** | **场景**：连接串硬编码（`Password=x;Host=y`）→ 入库 → 泄露。**问题**：凭据入库。**后果**：DB 被拖库 | `scripts/secret-scan.sh`（ITM-616，2026-09-10 落地）：扫描 git 跟踪文件的高置信凭据形态（云密钥前缀 / 连接串内嵌密码 / PEM 私钥块），挂 CI 的 AI self-check 步骤，发现即 exit 1。**注**：`PDDD-G19` 是测试方法命名三段式检查，与凭据无关（勿再误引） | ✅ |
 | **SE3** | **场景**：SQL 注入 → `string.Format` 拼接 SQL。**问题**：字符串拼接。**后果**：注入风险 | 🚫 禁 `string.Format` 拼 SQL；用 SqlTemplates `public const string` + Dapper 参数化（conventions §12.4 + PDDD-G7） | ✅ |
 | **SE4** | **场景**：异常消息/日志含 PII（连接串/患者数据/卡号）。**问题**：PII 泄露。**后果**：合规违规 | 异常消息仅技术描述，连接串脱敏（ITM-D04 已统一 Justification） | ✅ |
 
@@ -198,7 +198,7 @@
 | 消息序列化 & 演化 | 5 | DDD 项目独有 |
 | 并发 & 锁 | 5 | ORM Phase 14/19（DDD 适用） |
 | 安全 & 审计 | 4 | ORM Phase 6/21（DDD 适用） |
-| DDD/Clean Architecture | 7 | DDD 项目独有（architecture.md 18 决策） |
+| DDD/Clean Architecture | 7 | DDD 项目独有（architecture.md 分层边界与稳定性约束） |
 | 诊断 & 可观测性 | 4 | ORM Phase 16/22（DDD 适用） |
 | DDD 实战新增 | 8 | ITM 历史 + ADR |
 | **合计** | **66** | — |
