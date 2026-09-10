@@ -92,7 +92,7 @@ public sealed class DapperOutboxRequeueSqliteTests
         await Assert.That(row.RetryCount).IsEqualTo(7L); // 失败历史保留，不重置
         await Assert.That(row.Error).Contains("requeued by ops-alice");
         await Assert.That(row.Error).DoesNotContain("original failure");
-        await Assert.That(row.NextAttempt).IsNotNull();
+        await Assert.That(row.NextAttempt).IsNotEmpty(); // 重投递写入了下次尝试时间
     }
 
     [Test]
