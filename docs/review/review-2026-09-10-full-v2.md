@@ -211,3 +211,25 @@
 2. **本轮修复轮**：ITM-652（PG SslMode 镜像）+ ITM-651（fixture + PublishException 测试）+ 计数锚（PD34 根治）。
 3. **待环境**：ITM-650 真库探针（CI Testcontainers 或环境可达时）。
 4. **轻量验证轮**后按 PD37 收束（小改小评，不再全量地毯）。
+
+---
+
+## 事后勘误 / 第三轮修复（2026-09-10 追加，正文结论不变）
+
+**修复轮完成**：ITM-648~652（1 P1 + 4 P2）**全部清偿** + P3 批 29/30；清单进度 97%（34/35，余 1 条 RollbackAsync 姊妹收口留下轮）。
+
+**验证要点**：
+| 项 | 结果 |
+|----|------|
+| ITM-648 | `set -o pipefail` 提至 run 块首；探针复验 CAUGHT；探针位置错误（set 在 :120 而 secret-scan 在 :106）已消除 |
+| ITM-649 | UPDATE 改绑 truncatedError；新增回归测试（INSERT 后重塞超长 Error 触发 UPDATE 路径——避免"INSERT 回写后两值相同"的测试失效陷阱） |
+| ITM-650 | 探针测试落盘；**SQLite 实证 token 命中**（疑点在 SQLite 轴不成立）；PG/MySQL 待 CI Testcontainers 首跑裁决 |
+| ITM-651 | fixture 全量切 CreateAsync（4 既有测试自此覆盖 confirms）+ PublishException 测试首次锁定 ITM-213+639 联合语义 |
+| ITM-652 | PG SslMode 第 4 项 + 5 个姊妹测试（PG×3 + MySQL LoadBalance×2）+ MySQL SslMode×2（P3#20 收口） |
+| PD34 根治 | doc-consistency **D12a**（boundary 方法数 37 实测锚，文档 9 处统一）+ **D12b**（ConfigureAwait 去裸数字化 6 处）——双红测验证（改错必 FAIL） |
+| 构建与测试 | Release 0W/0E；16 项目 1260 用例（51 失败全环境性：46 Testcontainers 守卫 + 5 broker AMQP 不可达，与基线同形态）；Integration 265 全绿含新增 11 测试 |
+| 机械防线 | gate 24 · verify-ai 23/23 · **doc-consistency 12/12（D12 新项）** · tech-debt 含新 20a · encoding/template/test-gate/assertion/secret-scan 全绿 |
+
+**上轮修复缺陷第 5 项（修复轮证伪发现）**：上轮 ITM-637 的 `TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService>(factory))` 写法在 MS.DI 下**首次调用即抛 ArgumentException**（factory 注册的 ImplementationType 取委托返回类型 = IHostedService 与 ServiceType 不可区分）——即该修复形态使 `AddPalPostgreSqlOutboxNotifier` 完全不可用（比验证轮清单预设的"第二次静默忽略"更严重）。已改双泛型 `Singleton<IHostedService, PostgreSqlOutboxNotifier>(factory)` 修复。**上轮修复自带缺陷总数：5/64（7.8%）**——验证轮 + 修复轮两轮共抓出 5 项，全部为语义层问题。
+
+**收束判定更新**：机械轴 ✅（12/12 含计数锚）· 静态轴 ✅（P1/P2 全清）· 实测轴 ⏸️（ITM-650 PG/MySQL 探针 + PublishException 集成测试 + 方言探针，三者均待 CI Testcontainers/RabbitMQ）。**本地三轴中两轴全绿，可收束至 CI 验证**。
