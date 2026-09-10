@@ -247,7 +247,7 @@ public sealed class IdempotencyEfCoreTests
         var store = (IIdempotencyStore)db;
 
         var seeded = await store.TryStartAsync("CreateOrder", "cmd-1", now, policy, cancellationToken);
-        await Assert.That(seeded).IsNotNull();
+        await Assert.That(seeded?.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
         db.ChangeTracker.Clear();
 
         // now+6 已过首次 LockedUntil=now+5 → 走复用路径改写记录，保存注入 OCE
@@ -266,8 +266,7 @@ public sealed class IdempotencyEfCoreTests
         await using var verifier = new ThrowingIdempotencyDbContext(options);
         var loaded = await ((IIdempotencyStore)verifier).GetAsync(
             "CreateOrder", "cmd-1", now.AddSeconds(6), cancellationToken);
-        await Assert.That(loaded).IsNotNull();
-        await Assert.That(loaded.LockedUntil).IsEqualTo(now.AddSeconds(5));
+        await Assert.That(loaded?.LockedUntil).IsEqualTo(now.AddSeconds(5));
     }
 
     [Test]
@@ -287,7 +286,7 @@ public sealed class IdempotencyEfCoreTests
         var store = (IIdempotencyStore)db;
 
         var record = await store.TryStartAsync("CreateOrder", "cmd-1", now, IdempotencyPolicy.Default, cancellationToken);
-        await Assert.That(record).IsNotNull();
+        await Assert.That(record?.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
 
         db.ThrowOnNextSave = true;
         await Assert.That(async () => await store.MarkCompletedAsync(
@@ -304,8 +303,7 @@ public sealed class IdempotencyEfCoreTests
         await using var verifier = new ThrowingIdempotencyDbContext(options);
         var loaded = await ((IIdempotencyStore)verifier).GetAsync(
             "CreateOrder", "cmd-1", now.AddSeconds(2), cancellationToken);
-        await Assert.That(loaded).IsNotNull();
-        await Assert.That(loaded.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+        await Assert.That(loaded!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
         await Assert.That(loaded.ResponsePayload.HasValue).IsFalse();
     }
 

@@ -35,23 +35,33 @@ public sealed class MessageCatalogEndToEndTests
         PalMessageCatalog.AddGeneratedMessages(builder, E2eMessageJsonContext.Default);
         var catalog = builder.Build();
 
-        // 生成物 emit 的键集经真实目录可查——按 wire name 与按 CLR 类型两个方向。
-        await Assert.That(catalog.Find("e2e-order-submitted.v1")).IsNotNull();
-        await Assert.That(catalog.Find(typeof(E2eOrderSubmittedMessage))).IsNotNull();
+        // 生成物 emit 的键集经真实目录可查——按 wire name 与按 CLR 类型两个方向，
+        // 且两条查询必须指向同一条描述符（行为断言：名称/CLR 类型/schema 版本一致）。
+        var byName = catalog.Find("e2e-order-submitted.v1");
+        var byType = catalog.Find(typeof(E2eOrderSubmittedMessage));
+        var expected = typeof(E2eOrderSubmittedMessage);
+
+        // 两个方向都必须命中且指向同一描述符（行为断言，非 IsNotNull）。
+        await Assert.That(byName is not null ? byName.ClrType : null).IsEqualTo(expected);
+        await Assert.That(byName?.Name).IsEqualTo("e2e-order-submitted.v1");
+        await Assert.That(byName?.SchemaVersion).IsEqualTo(1);
+        await Assert.That(byType).IsSameReferenceAs(byName);
     }
 
     [Test]
-    public async Task AddGeneratedMessages_ResolvesJsonTypeInfo_NoMissingTypeInfoThrow()
+    public async Task AddGeneratedMessages_ResolvesJsonTypeInfo_CatalogContainsExpectedDescriptor()
     {
         // 生成物对每条消息执行 jsonContext.GetTypeInfo(typeof(T)) ?? throw InvalidOperationException
-        // ——本测试证明 [JsonSerializable] 与 [GenerateMessage] 同源时该守卫不触发；
-        // 若 JsonTypeInfo 缺失，Build() 路径会抛（生成物是孤儿 API 时的典型失效形态）。
+        // ——本测试证明 [JsonSerializable] 与 [GenerateMessage] 同源时该守卫不触发、目录含预期描述符
+        // （若 JsonTypeInfo 缺失，生成物会在调用路径抛，这是孤儿 API 未接线时的典型失效形态）。
         var builder = new MessageCatalogBuilder();
 
-        await Assert.That(() =>
-        {
-            PalMessageCatalog.AddGeneratedMessages(builder, E2eMessageJsonContext.Default);
-            return builder.Build();
-        }).ThrowsNothing();
+        PalMessageCatalog.AddGeneratedMessages(builder, E2eMessageJsonContext.Default);
+        var catalog = builder.Build();
+
+        var descriptor = catalog.Find(typeof(E2eOrderSubmittedMessage));
+        // JsonTypeInfo 必须与消息类型同源（生成物的 GetTypeInfo(typeof(T)) 已解析成功）。
+        await Assert.That(descriptor?.JsonTypeInfo.Type).IsEqualTo(typeof(E2eOrderSubmittedMessage));
+        await Assert.That(catalog.Descriptors.Count).IsEqualTo(1);
     }
 }

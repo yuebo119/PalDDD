@@ -298,8 +298,8 @@ public sealed class SagaStateEfCoreTests
 
         await using var verifier = new ThrowingSagaStateDbContext(options);
         var loaded = await verifier.GetByIdAsync(created.SagaId, cancellationToken);
-        await Assert.That(loaded).IsNotNull();
-        await Assert.That(loaded.LeasedBy).IsNull();
+        await Assert.That(loaded?.SagaId).IsEqualTo(created.SagaId);
+        await Assert.That(loaded!.LeasedBy).IsNull();
         await Assert.That(loaded.LeasedUntil).IsNull();
     }
 
