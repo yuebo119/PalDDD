@@ -341,7 +341,9 @@ public sealed class SagaStateEfCoreTests
     [Test]
     public async Task SQLiteProvider_DateTimeOffsetOrderByAndLeaseComparison_Translates()
     {
-        var conn = new Microsoft.Data.Sqlite.SqliteConnection("DataSource=:memory:");
+        // P3 修复：连接补 await using——:memory: 库随连接存活，原裸 new 未 dispose，
+        // 每次运行泄漏一个 SQLite 连接句柄到 GC 终结器
+        await using var conn = new Microsoft.Data.Sqlite.SqliteConnection("DataSource=:memory:");
         await conn.OpenAsync();
         var options = new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<TestSagaStateDbContext>()
             .UseSqlite(conn).Options;

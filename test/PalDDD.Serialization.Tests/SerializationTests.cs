@@ -442,7 +442,12 @@ public sealed class JsonMessageSerializerPooledTests
             pooled.Serialize(message, descriptor);
         var pooledAlloc = GC.GetAllocatedBytesForCurrentThread() - pooledBaseline;
 
-        await Assert.That(pooledAlloc <= legacyAlloc).IsTrue();
+        // P3 修复（等值边缘宽容化）：.NET 11 STJ 内部已池化，两路径分配几乎相等（见上方注释）——
+        // 严格的 pooled <= legacy 在 GC/线程本地分配抖动下会假红。保留回归方向（池化不得
+        // 显著多分配），允许 10% 比例容差；legacyAlloc 为零分配基线时退化为 1KB 绝对容差
+        //（10_000 次迭代下 1KB 仅 0.1 字节/次，仍能拦住真实的分配回归）
+        var tolerance = Math.Max(legacyAlloc / 10, 1024L);
+        await Assert.That(pooledAlloc <= legacyAlloc + tolerance).IsTrue();
     }
 
     // A2-T3: 并发安全 — 100 线程各 100 次，无数据错乱
@@ -493,7 +498,9 @@ public sealed class MessageDescriptorEqualityComparerTests
         await Assert.That(comparer.Equals(d1, d2)).IsTrue();
         await Assert.That(comparer.GetHashCode(d1)).IsEqualTo(comparer.GetHashCode(d2));
         await Assert.That(comparer.Equals(d1, d3)).IsFalse();
-        await Assert.That(comparer.GetHashCode(d1)).IsNotEqualTo(comparer.GetHashCode(d3));
+        // P3 修复：原此处断言 GetHashCode(d1) != GetHashCode(d3)——HashCode.Combine 契约
+        // 允许不同输入合法碰撞，该不等断言在某次进程随机种子下可假红（flaky）；
+        // 哈希契约只要求"相等对象哈希相等"（上方已断言），不等的方向无契约可验，删除
         await Assert.That(comparer.Equals(d1, d2)).IsEqualTo(d1.Equals(d2));
     }
 

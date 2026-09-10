@@ -246,8 +246,14 @@ public sealed class ServiceRegistrationTests
         var services = new ServiceCollection();
 
         services.AddPalDDD();
+        var firstCount = services.Count;
+        await Assert.That(firstCount).IsGreaterThan(0);
         // 第二次调用不应抛异常（TryAddSingleton 保证幂等）
         services.AddPalDDD();
+
+        // P3 补描述符计数断言：幂等的可验证含义是二次调用零新增——只断言不抛无法
+        // 区分"TryAdd 拒绝"与"静默重复注册"（后者会让 HostedService 双 Registrar）
+        await Assert.That(services.Count).IsEqualTo(firstCount);
 
         using var provider = services.BuildServiceProvider();
         _ = provider.GetRequiredService<Dispatcher>(); // GetRequiredService 失败即抛（恒真断言已删）

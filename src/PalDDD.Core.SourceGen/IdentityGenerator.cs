@@ -709,7 +709,9 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
                 // 重载（走转义腿同款分配路径），否则用 UTF-8 原始切片零分配快路径。
                 if (reader.HasValueSequence)
                 {
-                    if (PalUlid.TryParse(reader.GetString()!, null, out var seqUlid))
+                    // v66 P3：provider 传 null → InvariantCulture（对齐上方 escaped 腿 :702——
+                    // Ulid 字符串解析对 culture 不敏感，行为无差异，仅统一口径）
+                    if (PalUlid.TryParse(reader.GetString()!, CultureInfo.InvariantCulture, out var seqUlid))
                         return {{name}}.From(seqUlid);
                 }
                 else if (PalUlid.TryParse(reader.ValueSpan, null, out var spanUlid))

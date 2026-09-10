@@ -92,6 +92,11 @@ jobs:
 
       - name: AI system self-check + gate
         run: |
+          # ITM-648：set -o pipefail 必须置于本步骤【首个管道调用之前】——GitHub 默认 bash -e
+          # 无 pipefail，`if ! cmd | tee` 管道退出码取 tee 的 0，失败被掩码（SHELL-1 教训
+          # 第五次现身：上轮把 set 放在 :120/:135 的六门禁循环前，漏了 :106 的 secret-scan
+          # 首个调用点——CI 凭据门禁实为 no-op，探针 MASKED/CAUGHT 实锤）。提至块首覆盖全部管道。
+          set -o pipefail
           # .ai/ 是独立 git 仓库（.gitignore 第 95 行），fresh checkout 不存在——
           # 本地装有 .ai 才跑全量自检，否则退化为根目录快速门禁（G1-G3），
           # 避免 CI 在无 .ai 的仓库上必然失败（终验轮 B-1 实锤）
@@ -116,8 +121,7 @@ jobs:
             # ITM-615：六个离线快检门禁此前只在本地手跑，CI 无守护——追加到 .ai 分支。
             # 逐个跑并沿用 tee + ci-failed-tests.py 自诊断，任一失败即 exit 1。
             # flaky-gate.sh 需传 csproj（build + N 次 test，非快速门禁），不纳入。
-            # set -o pipefail 必须：无它则 bash|tee 管道退出码是 tee 的 0——gate 真实失败被掩码（SHELL-1 教训）
-            set -o pipefail
+            # pipefail 已在块首统一 set（ITM-648）——此处管道退出码不再被 tee 掩码。
             for ai_gate in encoding-gate doc-consistency-check tech-debt-scan test-gate template-gate assertion-strength-check; do
               echo "== .ai gate: $ai_gate =="
               if ! bash ".ai/scripts/$ai_gate.sh" 2>&1 | tee "ci-$ai_gate.log"; then
@@ -130,9 +134,7 @@ jobs:
             done
           else
             echo "SKIP .ai self-check: .ai 质量系统未随仓库分发"
-            # set -o pipefail 必须：无它则 bash|tee 管道退出码是 tee 的 0——
-            # gate 真实失败被掩码（SHELL-1 教训在本会话的第四次现身，2026-08-20 自首自修）
-            set -o pipefail
+            # pipefail 已在块首统一 set（ITM-648）。
             if ! bash scripts/gate-check.sh 2>&1 | tee ci-gate.log; then
               echo "::error ::ROOT GATE-CHECK FAILED"
               python3 scripts/ci-failed-tests.py gate ci-gate.log || true

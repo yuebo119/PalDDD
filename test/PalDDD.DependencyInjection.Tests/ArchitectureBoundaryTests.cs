@@ -582,19 +582,15 @@ public sealed class ArchitectureBoundaryTests
                 continue;
 
             var source = File.ReadAllText(file);
-            // 排除注释行——文档引用不代表代码依赖
-            var relevantLines = string.Join('\n', source.Split('\n')
-                .Where(line =>
-                {
-                    var trimmed = line.TrimStart();
-                    return !trimmed.StartsWith("//", StringComparison.Ordinal)
-                           && !trimmed.StartsWith('*')
-                           && !trimmed.StartsWith("/*", StringComparison.Ordinal);
-                }));
+            // P3 修复：注释剥离对齐姊妹守卫（本文件另三处）的 //.*$ 正则——原行级过滤
+            // 只剔除以注释符开头的行，行内尾随注释（如 `// 对齐 PalDDD.Dapper 的形态`）
+            // 中的 token 会被误判为代码依赖；块注释同理按 /* */ 整体剥除
+            var codeOnly = Regex.Replace(source, @"//.*$", "", RegexOptions.Multiline); // 去除行内和整行 // 注释
+            codeOnly = Regex.Replace(codeOnly, @"/\*.*?\*/", "", RegexOptions.Singleline); // 去除 /* */ 块注释
 
             foreach (var token in forbiddenTokens)
             {
-                if (relevantLines.Contains(token, StringComparison.Ordinal))
+                if (codeOnly.Contains(token, StringComparison.Ordinal))
                 {
                     Assert.Fail(
                         $"文件 {Path.GetRelativePath(Root, file)} 包含禁止的基础设施命名空间 '{token}'。");

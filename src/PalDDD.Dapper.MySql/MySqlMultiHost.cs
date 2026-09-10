@@ -62,6 +62,14 @@ public static class MySqlMultiHost
         // Pooling 条件化（v27 N9）：条件化会静默废掉方法名语义，把一种静默覆盖换成另一种
         EnsureNoLoadBalanceConflict(primaryBuilder, MySqlLoadBalance.FailOver,
             nameof(AddPalMySqlDataSourceWithFailover), nameof(primaryConnectionString));
+        // P3#7（v74 F1-2 的 standby 侧缺口收口）：standby 串显式 LoadBalance 值同拦——
+        // 本方法合并只取 primaryBuilder（Server 拼接 + LoadBalance=FailOver 均写 primary 侧），
+        // standby 串的显式策略值被静默丢弃且零警告（"primary 无 LoadBalance + standby 显式
+        // RoundRobin"时 v74 定性过的"静默覆盖"问题在 standby 侧复活）。守卫族双侧对称先例：
+        // 本文件 User/Password/Database/SslMode/Port 比对均为两侧同参、EnsureNoEmbeddedPort
+        // 对 primary/standby 各调一次（v43）——LoadBalance 冲突守卫原为唯一只查单侧者
+        EnsureNoLoadBalanceConflict(standbyBuilder, MySqlLoadBalance.FailOver,
+            nameof(AddPalMySqlDataSourceWithFailover), nameof(standbyConnectionString));
 
         // P2 定案（failover 参数丢弃）：MySQL 连接串的 User/Password/Database
         // 对主机列表内所有节点统一生效——standby 与 primary 不一致时无法表达，

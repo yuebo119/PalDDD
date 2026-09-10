@@ -30,6 +30,9 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="TUnit" />
+    <!-- ITM-650 探针：Inbox 时间戳 token 精度的 PG/MySQL Testcontainers 验证（对齐 PalORM.Tests 同款引用） -->
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Testcontainers.MySql" />
   </ItemGroup>
 
 </Project>

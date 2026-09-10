@@ -62,6 +62,9 @@ public sealed class MessageCatalogEndToEndTests
         var descriptor = catalog.Find(typeof(E2eOrderSubmittedMessage));
         // JsonTypeInfo 必须与消息类型同源（生成物的 GetTypeInfo(typeof(T)) 已解析成功）。
         await Assert.That(descriptor?.JsonTypeInfo.Type).IsEqualTo(typeof(E2eOrderSubmittedMessage));
+        // 计数前提：本程序集（PalDDD.Core.Tests）仅有 E2eOrderSubmittedMessage 一条真实 [GenerateMessage]
+        //（MessageRegistryGeneratorTests 里的标注都在传给 Roslyn driver 的源码字符串内，不参与生成）。
+        // 新增第二条真实 [GenerateMessage] 时须同步把此处的 1 改为实际条数，否则本断言假红。
         await Assert.That(catalog.Descriptors.Count).IsEqualTo(1);
     }
 }

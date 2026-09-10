@@ -474,8 +474,11 @@ public sealed class PipelineBehaviorTests
     }
 
     [Test]
-    public async Task Dispatcher_PipelineBehaviors_ExecuteInOrder()
+    public async Task Dispatcher_SinglePipelineBehavior_WrapsHandler()
     {
+        // P3 诚实化：原名 ExecuteInOrder 但只注册一个 behavior，无"序"可言——多 behavior
+        // 的嵌套顺序由 Dispatcher_MultiplePipelineBehaviors_NestedInRegistrationOrder 锁定，
+        // 本测试守护单 behavior 包裹 handler 各执行一次的入口契约
         var services = new ServiceCollection();
         services.AddSingleton<CreateOrderHandler>();
         services.AddSingleton(typeof(IPipelineBehavior<,>), typeof(CountingBehavior<,>));

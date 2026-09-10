@@ -73,6 +73,10 @@ public static class PostgreSqlReportHelper
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             reader.GetValues(values);
+            // v66 P4 声明（DBNull 分叉，与 JSONL 路径契约不同）：CSV 把 DBNull 归一为 null
+            // 后经下方 `v is null ? ""` 输出空单元格——DB NULL 与零长字符串在 CSV 输出中
+            // 不可区分（CSV 无 null 字面量）；JSONL 侧（ExportJsonLinesAsync）DBNull 是
+            // 整字段缺失（非 JSON null），消费端按"字段不存在"处理。
             for (int i = 0; i < values.Length; i++)
                 values[i] = values[i] is DBNull ? null : values[i];
 
@@ -136,6 +140,10 @@ public static class PostgreSqlReportHelper
             for (int i = 0; i < columns.Length; i++)
             {
                 var val = values[i];
+                // v66 P4 声明（DBNull 分叉，与 CSV 路径契约不同）：NULL 列整字段跳过
+                //（不写 JSON null）——消费端按"字段缺失"而非显式 null 解析；如需
+                // 显式 null 语义应改 WriteNullValue（行为变更，需下游协商）。CSV 侧
+                //（ExportCsvAsync）NULL 输出为空单元格。
                 if (val is DBNull or null) continue;
 
                 jsonWriter.WritePropertyName(columns[i]);
@@ -192,6 +200,9 @@ public static class PostgreSqlReportHelper
 
     /// <summary>使用 COPY TO STDOUT 导出 CSV（最快方式）</summary>
     /// <param name="tableOrQuery">表名或 SELECT 查询。⚠️ 直接插入 COPY 语句——必须为编译期常量或受信任来源，禁止传入用户输入（COPY 语法要求完整 SQL，无法参数化）。</param>
+    /// <returns>恒返回 0——COPY TO 协议只回传字节流不回传行数（与 <see cref="ExportCsvAsync"/>/
+    /// <see cref="ExportJsonLinesAsync"/> 逐行计数的 long 返回契约不同）；需要行数的场景
+    /// 改用 ExportCsvAsync 或先 <c>SELECT count(*)</c>。</returns>
     /// <remarks>
     /// ⚠️ <b>CSV 公式注入无防护（ITM-212 声明·三十二轮）</b>：本方法走服务器端
     /// <c>COPY (...) TO STDOUT</c> 原样转储，<b>不经过</b> <see cref="EscapeCsvSpan(System.ReadOnlySpan{char})"/> 的

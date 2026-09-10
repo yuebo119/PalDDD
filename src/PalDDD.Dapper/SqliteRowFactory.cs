@@ -45,7 +45,11 @@ public static class SqliteRowFactory
         return value switch
         {
             PalUlid u => u,
-            string s => PalUlid.Parse(s, CultureInfo.InvariantCulture), // v64 对齐 EventLogRow.ParseUlid/族形态标准
+            string s => PalUlid.Parse(s, CultureInfo.InvariantCulture),
+            // v66 勘正：原注释"对齐 EventLogRow.ParseUlid"失实——DapperEventLog/PalOrmEventLog
+            // 的 ParseUlid 均为 TryParse 容错（脏数据返回 null）；本方法走 Parse 直抛
+            // （FormatException），对齐的仅"显式 InvariantCulture"一点，容错语义相反
+            // （列读取路径脏值即数据契约错误，见上方法头声明）。
             byte[] b when b.Length == 16 => PalUlid.New(new ReadOnlySpan<byte>(b)),
             Guid g => PalUlid.New(g),
             _ => throw new InvalidCastException($"Cannot convert {value.GetType()} to Ulid")

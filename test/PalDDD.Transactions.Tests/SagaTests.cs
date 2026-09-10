@@ -283,8 +283,11 @@ public class SagaNormalTransitionTests
 public class SagaRetryAndCompensationTests
 {
     [Test]
-    public async Task StepFails_RetriesUpToMaxRetries()
+    public async Task StepFails_ThrowsAggregateException_AfterRetries()
     {
+        // P3 诚实化：原名 RetriesUpToMaxRetries 但本测试只断言最终抛 AggregateException
+        //（重试耗尽本身由姊妹 StepFails_UsesRetryBackoffPolicyPerAttempt 的 Attempts 计数锁定，
+        // 此处不重复——本测试守护"默认策略下失败最终以聚合异常浮现"的入口契约）
         var saga = new TestSaga();
         saga.PublicWhen("Initial", "FailingStep", shouldFail: true);
 
@@ -646,10 +649,12 @@ public class SagaCompensationExceptionCollectionTests
     }
 
     /// <summary>
-    /// 补偿过程中收到取消信号时，OperationCanceledException 立即传播，不收集。
+    /// 入口即已取消的令牌使 OperationCanceledException 立即传播，不收集。
+    /// P3 诚实化：原名"补偿过程中取消"不实——令牌在调用 CompensateAsync 前已取消
+    ///（进门即抛，未进入任何补偿步骤）；"补偿中途取消"是另一场景，本测试不覆盖。
     /// </summary>
     [Test]
-    public async Task CompensationCanceled_PropagatesImmediately()
+    public async Task CompensationCanceled_BeforeStart_PropagatesImmediately()
     {
         var saga = new CancellableCompensationSaga();
         var state = new TestSagaState { CurrentState = "Start" };

@@ -177,7 +177,18 @@ public static class PostgreSqlServiceCollectionExtensions
         // ITM-637 姊妹：AddSingleton<IHostedService>(factory) 重复调用会追加多个描述符（多次
         // 调用启动多个 LISTEN 监听 + 每个 NOTIFY 触发多轮批处理）。改 TryAddEnumerable 按
         // ServiceType+ImplementationType 去重（对齐 Serialization.Evolution ITM-167 修复）。
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService>(sp =>
+        // v66 P1 修复（预设勘正）：原 Singleton<IHostedService>(factory) 单泛型重载在
+        // MS.DI 8.0+ 的 TryAddEnumerable 下【首次调用即抛 ArgumentException】而非"静默去重"
+        // ——反编译证实 GetImplementationType() 对 factory 取委托返回类型（IHostedService），
+        // 与 ServiceType 相同命中 indistinguishable-type 检查（8.0.0/9.0.0/10.0.0/
+        // 11.0.0-preview.6 四版一致）。改双泛型 Singleton<IHostedService, TNotifier>(factory)
+        // 重载：去重键为 (IHostedService, PostgreSqlOutboxNotifier)（对齐 ServiceRegistration.cs
+        // HandlerRegistrar 同款形态），调用即抛消除、重复调用真去重。
+        // ⚠️ 边界声明（channelName 静默以首次为准）：channelName 捕获在工厂闭包内，描述符层
+        // 不可比较——不同 channelName 的第二次调用被去重跳过（首次注册生效）。需要多通道的
+        // 场景应手动注册不同实现类型（TryAddEnumerable 去重键含实现类型）；因"调用即抛"缺陷
+        // 此前该方法实际不可用，无既有调用方依赖任何旧行为。
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, PostgreSqlOutboxNotifier>(sp =>
             new PostgreSqlOutboxNotifier(
                 sp.GetRequiredService<NpgsqlDataSource>(),
                 sp.GetRequiredService<IServiceScopeFactory>(),

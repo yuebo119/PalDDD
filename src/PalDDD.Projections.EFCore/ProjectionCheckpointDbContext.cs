@@ -256,7 +256,21 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         // ExecuteDeleteAsync 在 InMemory provider 上会抛 InvalidOperationException。
         var checkpoints = await matching.ToListAsync(ct).ConfigureAwait(false);
         ProjectionCheckpoints.RemoveRange(checkpoints);
-        await SaveChangesAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // ITM-632：保存失败（含 OCE 与非 DbUpdate 异常）逃逸前 Detach——RemoveRange 已把
+            // 全部匹配条目变异为 Deleted，异常逃逸后滞留 ChangeTracker 会被同 context 下次
+            // 无关 SaveChanges 提交为延迟 DELETE（窗口内他节点重建/新持有的检查点被误删）。
+            // 对齐同文件 TryStartAsync/MarkCompletedAsync/MarkFailedAsync 的 ITM-632 手法；
+            // 异常原样上抛（不吞取消、不改语义）。
+            foreach (var checkpoint in checkpoints)
+                Entry(checkpoint).State = EntityState.Detached;
+            throw;
+        }
     }
 
     /// <summary>配置投影 checkpoint 实体</summary>
