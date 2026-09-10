@@ -1,3 +1,6 @@
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.Text.RegularExpressions;
 
 namespace PalDDD.Core.Tests;
@@ -12,6 +15,8 @@ namespace PalDDD.Core.Tests;
 /// <para>
 /// 判据：诊断 ID 出现在测试源码的断言表达式中（<c>Id == "X"</c> /
 /// <c>Id).IsEqualTo("X")</c> / <c>HasId("X")</c>），仅出现在注释里不算覆盖。
+/// 判定基于 <b>Roslyn 语法树</b>而非文本正则——注释、字符串字面量、条件编译禁用块
+/// 在语法层天然不是表达式节点，跨行调用链也天然成立（见边界矩阵测试）。
 /// </para>
 /// </summary>
 public sealed class DiagnosticCoverageGateTests
@@ -52,6 +57,124 @@ public sealed class DiagnosticCoverageGateTests
         await Assert.That(uncovered).IsEmpty();
     }
 
+    /// <summary>
+    /// HasAssertion 判定边界矩阵——固化"真断言 vs 伪覆盖"的六类形态，防未来改动引入回归。
+    /// <para>2026-09-10 背景（实跑审计第五轮「验证验证者」）：上一版**行级文本匹配**实测出
+    /// 2 处回归（跨行链式断言被判未覆盖 = 假红；同行字符串含 <c>//</c> 时断言被误剥 = 假红）
+    /// 与 3 处未处理边界（块注释 / raw string / <c>#if false</c> 内的 <c>Id == "X"</c> 被判
+    /// 为覆盖 = 假绿）。改用 Roslyn 语法树后五者全部消除，本测试锁定该行为——门禁自身的
+    /// 判定精度从此有回归网。</para>
+    /// </summary>
+    [Test]
+    public async Task HasAssertion_BoundaryMatrix_DistinguishesRealFromFakeCoverage()
+    {
+        const string id = "PALENUM999";
+
+        // ── 真断言：必须判为覆盖（含跨行链式，上一版假红形态）──
+        await Assert.That(HasAssertion($"await Assert.That(d.Id == \"{id}\").IsTrue();", id)).IsTrue();
+        await Assert.That(HasAssertion($"await Assert.That(d.Id).IsEqualTo(\"{id}\");", id)).IsTrue();
+        await Assert.That(HasAssertion($"await Assert.That(d.Id){'\n'}    .IsEqualTo(\"{id}\");", id)).IsTrue();
+        await Assert.That(HasAssertion($"await Assert.That(d.Id).IsEquivalentTo(\"{id}\");", id)).IsTrue();
+        await Assert.That(HasAssertion($"HasId(\"{id}\");", id)).IsTrue();
+        // 同行含 // 的字符串（上一版假红形态）：断言在字符串之后，剥注释不得伤及断言
+        await Assert.That(HasAssertion($"var u = \"http://x\"; await Assert.That(d.Id == \"{id}\").IsTrue();", id)).IsTrue();
+
+        // ── 伪覆盖：必须拒绝（注释 / 文件级字符串 / 条件编译 / 否定）──
+        await Assert.That(HasAssertion($"// Id == \"{id}\"", id)).IsFalse();
+        await Assert.That(HasAssertion($"/* Id == \"{id}\" */", id)).IsFalse();
+        await Assert.That(HasAssertion($"/// <summary>覆盖 Id == \"{id}\"</summary>", id)).IsFalse();
+        await Assert.That(HasAssertion($"var s = \"\"\"{'\n'}Id == \"{id}\"{'\n'}\"\"\";", id)).IsFalse();
+        await Assert.That(HasAssertion($"#if false{'\n'}await Assert.That(d.Id == \"{id}\").IsTrue();{'\n'}#endif", id)).IsFalse();
+        await Assert.That(HasAssertion($"await Assert.That(d.Id == \"{id}\").IsFalse();", id)).IsFalse();
+        await Assert.That(HasAssertion($"await Assert.That(d.Id).IsNotEqualTo(\"{id}\");", id)).IsFalse();
+        // 不相关成员访问：不得因 "Id" 子串误判
+        await Assert.That(HasAssertion($"await Assert.That(other.Value).IsEqualTo(\"{id}\");", id)).IsFalse();
+    }
+
+    /// <summary>
+    /// 断言级覆盖判定（Roslyn 语法树，2026-09-10 重写）——注释/字符串/条件编译禁用块
+    /// 天然不是表达式节点，跨行调用链天然成立；否定断言（证明"不匹配"）不算覆盖。
+    /// </summary>
+    private static bool HasAssertion(string testSource, string id)
+    {
+        var root = CSharpSyntaxTree.ParseText(testSource).GetRoot();
+
+        foreach (var node in root.DescendantNodes())
+        {
+            if (IsNegated(node))
+            {
+                continue;
+            }
+
+            switch (node)
+            {
+                // 形态①：d.Id == "X"（lambda/断言内的相等比较）
+                case BinaryExpressionSyntax binary
+                    when binary.IsKind(SyntaxKind.EqualsExpression)
+                         && IsIdMemberAccess(binary.Left)
+                         && IsStringLiteral(binary.Right, id):
+                    return true;
+
+                // 形态②：Assert.That(d.Id).IsEqualTo("X") / .IsEquivalentTo("X")（含跨行链式）
+                case InvocationExpressionSyntax invocation
+                    when invocation.Expression is MemberAccessExpressionSyntax access
+                         && access.Name.Identifier.Text is "IsEqualTo" or "IsEquivalentTo"
+                         && invocation.ArgumentList.Arguments.Count == 1
+                         && IsStringLiteral(invocation.ArgumentList.Arguments[0].Expression, id)
+                         && MentionsId(access.Expression):
+                    return true;
+
+                // 形态③：HasId("X")（包装式断言辅助）
+                case InvocationExpressionSyntax hasIdInvocation
+                    when hasIdInvocation.Expression is IdentifierNameSyntax identifier
+                         && identifier.Identifier.Text == "HasId"
+                         && hasIdInvocation.ArgumentList.Arguments.Count == 1
+                         && IsStringLiteral(hasIdInvocation.ArgumentList.Arguments[0].Expression, id):
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>表达式是否为 <c>某对象.Id</c> 成员访问。</summary>
+    private static bool IsIdMemberAccess(ExpressionSyntax expression)
+        => expression is MemberAccessExpressionSyntax access
+           && access.Name.Identifier.Text == "Id";
+
+    /// <summary>子树内是否出现 <c>.Id</c> 成员访问（覆盖 <c>Assert.That(x.Id)</c> 链式起点形态）。</summary>
+    private static bool MentionsId(SyntaxNode node)
+        => node.DescendantNodesAndSelf()
+            .OfType<MemberAccessExpressionSyntax>()
+            .Any(access => access.Name.Identifier.Text == "Id");
+
+    /// <summary>表达式是否为值等于 <paramref name="value"/> 的字符串字面量。</summary>
+    private static bool IsStringLiteral(ExpressionSyntax expression, string value)
+        => expression is LiteralExpressionSyntax literal
+           && literal.IsKind(SyntaxKind.StringLiteralExpression)
+           && literal.Token.ValueText == value;
+
+    /// <summary>节点或其祖先链是否处于否定断言（<c>.IsFalse()</c>/<c>.IsNotEqualTo()</c>/<c>!=</c>）之内。</summary>
+    private static bool IsNegated(SyntaxNode node)
+    {
+        for (var current = node; current is not null; current = current.Parent)
+        {
+            if (current is BinaryExpressionSyntax binary && binary.IsKind(SyntaxKind.NotEqualsExpression))
+            {
+                return true;
+            }
+
+            if (current is InvocationExpressionSyntax invocation
+                && invocation.Expression is MemberAccessExpressionSyntax access
+                && access.Name.Identifier.Text is "IsFalse" or "IsNotEqualTo")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>诊断定义源文件（排除 obj/bin 生成物）。</summary>
     private static IEnumerable<string> EnumerateSourceFiles(string directory)
         => Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
@@ -68,44 +191,6 @@ public sealed class DiagnosticCoverageGateTests
     private static IEnumerable<string> ExtractDiagnosticIds(string source)
         => Regex.Matches(source, @"""(PDDD|PALMSG|PALENUM|PALID)\d{3}""")
             .Select(match => match.Value.Trim('"'));
-
-    /// <summary>
-    /// 断言级覆盖判定——剥注释后逐行匹配：注释/XML 文档提及不算，否定形态不算。
-    /// <para>2026-09-10 加固（实跑审计「验证验证者」）：原实现直接对整个源文件跑正则，
-    /// 注释行 / XML doc / 否定断言（<c>.IsFalse()</c>）中的 <c>Id == "X"</c> 均被判为覆盖——
-    /// 与本门禁"仅注释提及不算"的自述判据矛盾（假绿）。现改为逐行剥 <c>//</c> 注释 +
-    /// 排除否定标记后再匹配；白名单补 <c>IsEquivalentTo</c>（等价断言此前被误判为未覆盖）。</para>
-    /// </summary>
-    private static bool HasAssertion(string testSource, string id)
-    {
-        foreach (var rawLine in testSource.Split('\n'))
-        {
-            var line = StripLineComment(rawLine);
-
-            // 否定形态排除：证明"不匹配"的断言不构成覆盖
-            if (line.Contains(".IsFalse()", StringComparison.Ordinal)
-                || line.Contains("IsNotEqualTo", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            if (Regex.IsMatch(line, $@"Id\s*==\s*""{id}""")
-                || Regex.IsMatch(line, $@"Id\s*\)\s*\.Is(?:EquivalentTo|EqualTo)\(\s*""{id}""")
-                || Regex.IsMatch(line, $@"HasId\(\s*""{id}"""))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>剥除行内 <c>//</c> 注释（含 <c>///</c> XML 文档）——注释提及不计为覆盖。</summary>
-    private static string StripLineComment(string line)
-    {
-        var index = line.IndexOf("//", StringComparison.Ordinal);
-        return index >= 0 ? line[..index] : line;
-    }
 
     private static string FindRepositoryRoot()
     {
