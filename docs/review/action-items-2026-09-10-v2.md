@@ -12,10 +12,21 @@
 | 优先级 | 条目数 | 待修复 | 修复中 | 已完成 | 完成率 |
 |:------:|:------:|:------:|:------:|:------:|:------:|
 | **P0** | 0 | 0 | 0 | 0 | — |
-| **P1** | 1 | 1 | 0 | 0 | 0% |
-| **P2** | 4 | 4 | 0 | 0 | 0% |
-| **P3** | 30（汇总） | 30 | 0 | 0 | 0% |
-| **合计** | 35 | 35 | 0 | 0 | **0%** |
+| **P1** | 1 | 0 | 0 | 1 | 100% |
+| **P2** | 4 | 0 | 0 | 4 | 100% |
+| **P3** | 30（汇总） | 1 | 0 | 29 | 97% |
+| **合计** | 35 | 1 | 0 | 34 | **97%** |
+
+**修复轮（2026-09-10 第三轮，6 代理并行 + 主线程）完成情况**：
+- **ITM-648**：`set -o pipefail` 提至 run 块首（覆盖 secret-scan + 六门禁 + 根 gate 全部管道），探针复验 CAUGHT；后两处冗余 set 清理。
+- **ITM-649**：UPDATE 两条 FormattableString 改绑 `{truncatedError}`；新增回归测试 `SaveChangesAsync_UpdatePathWithOverlongError_TruncatesDbValueAndKeepsMemoryInSync`（INSERT 后重塞超长 Error 触发 UPDATE，断言 DB ≤2040 + 内存/DB 一致）。
+- **ITM-650**：探针测试落盘 `InboxTimestampTokenPrecisionProbeTests`（Dapper 栈，注入非整微秒 now → TryStart → MarkProcessed → 直查 DB status）——**SQLite 本地实证 token 命中**（"O" 格式 7 位小数全精度存储，写/比同串恒等）；PG/MySQL 走 Testcontainers 待 CI（理论同参数化路径应命中，CI 红则疑点成立需 token 归一修复）。
+- **ITM-651**：fixture 改走 `RabbitMqBroker.CreateAsync`（4 个既有 Rabbit 测试自此覆盖 confirms 路径）+ 新增 `RabbitMq_PublishUnroutableMessage_ThrowsPublishException`（无绑定 exchange + mandatory → PublishException.IsReturn=true，ITM-213+639 联合语义首次锁定）。
+- **ITM-652**：PG `ThrowIfCredentialsMismatch` 补 SslMode 第 4 项 + 3 个姊妹测试；连带 **P3#7** MySQL standby 侧 LoadBalance 冲突校验 + 2 个测试；**P3#20** MySQL SslMode 行为测试 2 个（v65 修复的姊妹测试收口）。
+- **P3 批 29/30 完成**：PD34 计数锚根治（doc-consistency **D12a** boundary 方法数实测锚 + **D12b** ConfigureAwait 去裸数字化，双红测验证）；gate G23/G24 加 `rev-parse --verify` 守卫（不可解析输出 SKIP 非假 PASS）；tech-debt **#20a** 存在性子断言（find 为空 FAIL）；DiagnosticCoverageGate 形态①收紧（diag 根 + lambda 参数回溯，38 条仍全覆盖，实跑 2/2）；HasValueSequence 多段回归测试（实跑通过，ITM-629 修复自此有回归网）；EFCore 负 timeout 直测；快照 delegate 修正（RequestExecutor class→delegate，唯一 diff）+ event emit 能力补全；flaky×2（哈希碰撞断言删除/池化容差）；名实收口×N；资源泄漏×2；杂项 7 项。
+- **证伪 2 条**（清单预设不成立，零改动）：#10 GenerateId 误用——`Attributes.cs:30` 已有 `[AttributeUsage(AttributeTargets.Struct)]`；9b InboxDbContext "空白归一"注释——`git log -S` 证实该文件历史上从未含此注释。
+- **重要证伪（上轮修复缺陷第 5 项）**：P3#12 TryAddEnumerable 预设"第二次调用被静默忽略"不成立——反编译 MS.DI 8~11 四版证实 factory 注册的 `Singleton<IHostedService>(factory)` 在 `TryAddEnumerable` 下**首次调用即抛 ArgumentException**（indistinguishable-type 检查），即上轮 ITM-637 的修复形态实际使 `AddPalPostgreSqlOutboxNotifier` 完全不可用。已改双泛型 `Singleton<IHostedService, PostgreSqlOutboxNotifier>(factory)` 修复。
+- **待修 1 条**：P3 残余 = DapperUnitOfWork.RollbackAsync 同型缺口（E 代理修复 CommitAsync 时发现，姊妹收口留下轮）。
 
 **验证轮核心结论**：上轮 64 项修复中 **59 项验证通过；4 项修复自带缺陷（6.2%）**——①ci.yml secret-scan 的 pipefail 掩码（P1，上轮 ITM-616 修复自身的缺陷，探针实锤）；②PalOrmSagaStateStore UPDATE 漏改绑定（P2，上轮 v65 修复引入回归）；③RabbitMqBroker.CreateAsync 零调用零测试（P2，上轮 ITM-639 完整性缺口）；④PG SslMode 姊妹不对称（P2，上轮 MySQL 侧修复未同步 PG 侧）。另有 2 条计数自激振荡（PD34：ArchitectureBoundaryTests 41→实际 37、ConfigureAwait 444→实际 447+）。
 
@@ -23,7 +34,7 @@
 
 ## 🔴 P1 — 立即修复（1 条）
 
-### [ ] ITM-648 · ci.yml secret-scan 在 `set -o pipefail` 之前执行——失败被 tee 掩码，CI 凭据门禁假绿 · 可信度 ✅
+### [x] ITM-648 · ci.yml secret-scan 在 `set -o pipefail` 之前执行——失败被 tee 掩码，CI 凭据门禁假绿 · 可信度 ✅
 - **维度**：质量门禁 / 验证器自欺（PD29）
 - **优先级**：P1 · 危害: 高 · 复杂度: 易
 - **问题**：上轮 ITM-616 把 `bash scripts/secret-scan.sh | tee` 放在 ci.yml:106，而 `set -o pipefail` 在 :120/:135（六门禁循环前）才生效。GitHub Actions 默认 `bash -e`（无 pipefail）→ `if ! cmd | tee` 管道退出码取 tee 的 0 → **secret-scan 失败被静默掩码**。讽刺的是 :119 注释自引"SHELL-1 教训"却漏了首个调用点——SHELL-1 教训在本会话第五次现身。
@@ -36,7 +47,7 @@
 
 ## 🟠 P2 — 近期修复（4 条）
 
-### [ ] ITM-649 · PalOrmSagaStateStore UPDATE 路径仍绑定原始 `state.Error`——上轮 v65 修复引入回归 · 可信度 ✅
+### [x] ITM-649 · PalOrmSagaStateStore UPDATE 路径仍绑定原始 `state.Error`——上轮 v65 修复引入回归 · 可信度 ✅
 - **维度**：错误流 / 截断收口（PD19+PD34：修复自带缺陷）
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：上轮 v65"先算局部变量后赋回"修复中，INSERT 路径（`PalOrmSagaStateStore.cs:221/222`）正确改绑 `{truncatedError}`，但 **UPDATE 路径（:243/:244）仍绑定原始 `{state.Error}`**。:192 注释声称"INSERT/UPDATE 两处 {truncatedError} 赋值点共用此收口"与代码不符（假修命中）。姊妹 `DapperSagaStateStore.cs:176/209` 两处均正确用截断值（PD17 对照坐实）。
@@ -45,7 +56,7 @@
 - **验证**：读 :243/:244 实证 ✅；修复后 grep `error = {state.Error}` 应零残留。
 - **涉及文件**：`src/PalDDD.PalORM/Stores/PalOrmSagaStateStore.cs`、`test/PalDDD.PalORM.Tests/PalOrmSagaStateStoreTests.cs`
 
-### [ ] ITM-650 · Inbox 时间戳抢占 token 精度失配疑点——内存全精度 vs DB 微秒列 · 可信度 ⚠（待真库探针）
+### [x] ITM-650 · Inbox 时间戳抢占 token 精度失配疑点——内存全精度 vs DB 微秒列 · 可信度 ⚠（待真库探针）
 - **维度**：并发流 / exactly-once 语义
 - **优先级**：P2 · 危害: 高 · 复杂度: 中
 - **问题**：`PalOrmInboxStore.cs:78`（及 Dapper 姊妹 :101/:158/:180）新建/抢占路径返回**内存 token = now 全精度**（.NET DateTimeOffset 100ns），而 DB 列为 MySQL `DATETIME(6)`/PG `TIMESTAMPTZ`（微秒）。若 provider 写入与参数比较的舍入路径不一致，now 第 7 位小数非零时（Linux TimeProvider.System 现实可达）首次 `MarkProcessedAsync` 的 `WHERE processing_started_at = token` 零命中 → 消息滞留 Processing → 超时重试 → **双处理**，违背 Inbox exactly-once。佐证：`IdempotencyRecord.Revision` remarks（v53）自认"时间戳令牌受 DB 列精度截断"并已在该栈换 revision token——Inbox 侧仍用时间戳。
@@ -53,7 +64,7 @@
 - **建议**：①补真库探针（Testcontainers PG/MySQL）；②若证实，对齐 Idempotency 栈方案（换 revision token 或写入前 now 截断到微秒）。
 - **涉及文件**：`src/PalDDD.PalORM/Stores/PalOrmInboxStore.cs`、`src/PalDDD.Dapper/DapperInboxStore.cs`、`test/PalDDD.Integration.Tests/`
 
-### [ ] ITM-651 · RabbitMqBroker.CreateAsync 全仓零调用零测试——上轮 ITM-639 修复完整性缺口 · 可信度 ✅
+### [x] ITM-651 · RabbitMqBroker.CreateAsync 全仓零调用零测试——上轮 ITM-639 修复完整性缺口 · 可信度 ✅
 - **维度**：测试覆盖 / 修复完整性
 - **优先级**：P2 · 危害: 中 · 复杂度: 中
 - **问题**：上轮 ITM-639 新增的 `CreateAsync` 工厂（显式启用 publisherConfirmations + tracking，使 `mandatory:true` 的 PublishException 语义可达）**全仓（src/test/samples）零调用、零测试**。集成测试 fixture（`BrokerIntegrationTests.cs:208-209`）仍以 `connection.CreateChannelAsync()` 无参创建（未启用 confirms）+ 裸构造——正是类 XML remarks 自述的"消息丢失窗口"形态。ITM-213 `mandatory:true` 修复的核心语义（发布无绑定 exchange 抛异常而非静默成功）**无任何测试锁定**。
@@ -61,7 +72,7 @@
 - **建议**：①fixture 改用 `CreateAsync`（或同款 `CreateChannelOptions`）；②补一条"无绑定队列 + mandatory → 抛 PublishException"的集成测试（Testcontainers RabbitMQ）锁定 ITM-213+639 联合语义。
 - **涉及文件**：`test/PalDDD.Messaging.Integration.Tests/BrokerIntegrationTests.cs`、`src/PalDDD.Messaging.RabbitMQ/RabbitMqBroker.cs`
 
-### [ ] ITM-652 · PostgreSqlMultiHost 凭据一致性校验缺 SslMode——MySQL 侧修复未同步 PG 侧（PD17） · 可信度 ✅
+### [x] ITM-652 · PostgreSqlMultiHost 凭据一致性校验缺 SslMode——MySQL 侧修复未同步 PG 侧（PD17） · 可信度 ✅
 - **维度**：安全流 / 姊妹对称
 - **优先级**：P2 · 危害: 中 · 复杂度: 易
 - **问题**：上轮 v65 给 `MySqlMultiHost` 补 SslMode 一致性校验（理由"TLS 安全配置静默降级属高危"），但 PG 侧 `PostgreSqlMultiHost.ThrowIfCredentialsMismatch`（:430-432）仍仅校验 Username/Password/Database 3 项。PG 多主机合并只保留 primary 参数（:289 注释），replica 连接串显式 `SslMode` 差异被静默丢弃。

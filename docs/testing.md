@@ -7,7 +7,7 @@
 > **真源**：
 > - [`conventions.md`](conventions.md) §5（测试规范要点）+ §10.6（TUnit+MTP 4 硬规则）+ §12（性能契约）
 > - [`.ai/test/prompt.md`](../.ai/test/prompt.md)（T1-T14 + T-DDD-1..6 铁律）
-> - [`test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs`](../test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs)（41 测试方法机械守护）
+> - [`test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs`](../test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs)（37 测试方法机械守护——计数锚定见 doc-consistency D12a）
 
 ---
 
@@ -54,7 +54,7 @@
                   ┌──────────────────┐│ ┌──────────────────────┐
                   │ Architecture     ││ │ Core/CQRS/Transactions│
                   │ BoundaryTests    ││ │  单元功能正确性        │
-                  │ 41 方法 89 断言  ││ │ AggregateRoot/Saga/Outbox│
+                  │ 37 方法 89 断言  ││ │ AggregateRoot/Saga/Outbox│
                   └──────────────────┘│ └──────────────────────┘
                                      ╱
                           ┌────────────────────┐
@@ -75,7 +75,7 @@
 | `PalDDD.Projections.EventLog.Tests` | 单元 | EventLog 投影源 + 断点续传 |
 | `PalDDD.Messaging.Tests` | 单元 | IMessageBroker InMemory 实现 + MessageCatalog |
 | `PalDDD.Serialization.Tests` | 单元 | IMessageSerializer + MessageEvolutionPipeline + SchemaVersion |
-| `PalDDD.DependencyInjection.Tests` | 单元 | **ArchitectureBoundaryTests 41 方法机械守护** + DI 注册规范 |
+| `PalDDD.DependencyInjection.Tests` | 单元 | **ArchitectureBoundaryTests 37 方法机械守护** + DI 注册规范 |
 | `PalDDD.Repository.EFCore.Tests` | 集成 | UnitOfWork + OutboxDomainEventInterceptor Scoped |
 | `PalDDD.Hosting.AspNetCore.Tests` | 集成 | ExceptionMiddleware + AspNetCore 中间件链 |
 | `PalDDD.Integration.Tests` | 集成 | Testcontainers 真库（PG/MySQL/SQLite）+ OutboxDbContext 全链路 + Idempotency |
@@ -466,7 +466,7 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 | `docs/conventions.md` §12 | 性能契约（零分配快速路径） |
 | `.ai/test/prompt.md` | T1-T14 + T-DDD-1..6 测试铁律 |
 | `test/PalDDD.Testing/TestHelpers.cs` | 共享测试工具（FakeTimeProvider 等） |
-| `test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs` | 41 测试方法机械守护 |
+| `test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs` | 37 测试方法机械守护 |
 | `test/PalDDD.Core.Tests/PublicApiSnapshotTests.cs` | 公共 API 快照 |
 | `test/PalDDD.Core.Tests/Snapshots/*.txt` | 快照基线（评审后提交） |
 | `bench/PalDDD.Benchmarks/Program.cs` | BenchmarkSwitcher + Smoke 模式入口 |
@@ -482,5 +482,5 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 1. **本文件与 conventions §5 同步**：测试约定变更需同时更新两处。
 2. **场景矩阵随项目演化**：新增功能域必须扩矩阵行。
 3. **BenchmarkDotNet 配置变更需评审**：从 `[ShortRunJob]` 切换到其他配置必须在 PR 说明依据。
-4. **DDD 与 ORM 的测试体系差异**：TUnit+MTP（非 xUnit）/ 测试桩内嵌（非 IClassFixture）/ 按行为主题切分 / ArchitectureBoundaryTests 41 方法机械守护。
+4. **DDD 与 ORM 的测试体系差异**：TUnit+MTP（非 xUnit）/ 测试桩内嵌（非 IClassFixture）/ 按行为主题切分 / ArchitectureBoundaryTests 37 方法机械守护。
 5. **统计有效性是硬约束**：Error/Mean > 15% 的基准数据不得用于正式报告或决策。

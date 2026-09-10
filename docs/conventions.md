@@ -69,7 +69,7 @@ EF Core / Kafka / RabbitMQ / MemoryPack 等不支持 AOT 的项目**显式覆盖
 
 - **`ValueTask` / `ValueTask<T>` 优先**于 `Task`，热路径零分配
 - **`IsCompletedSuccessfully` 快速路径**：同步完成时直接 `.Result`，避免异步状态机分配
-- **`ConfigureAwait(false)` 全层使用**（444 处，NoWarn CA2007——2026-09-10 实测；库代码 await 调用均带该后缀）
+- **`ConfigureAwait(false)` 全层使用**（库代码 await 调用均显式该后缀——机械保证为本脚本族 PDDD-G12 零违规，NoWarn CA2007；不锚定裸数字计数：该计数随每次提交漂移，曾致 444/447 振荡，PD34 后口径去数字化）
 - **禁止 `async void`**（ArchitectureBoundaryTests 零容忍）
 
 ### 1.6 null 校验
@@ -526,7 +526,7 @@ public sealed class SagaKeyValidationTests { ... }
 
 ### 5.7 架构边界测试
 
-`ArchitectureBoundaryTests.cs`（41 个测试方法 / 89 断言点）将 ADR 和 Clean Architecture 落地为可执行断言：
+`ArchitectureBoundaryTests.cs`（37 个测试方法 / 89 断言点）将 ADR 和 Clean Architecture 落地为可执行断言：
 
 - 项目引用禁令矩阵（`[Theory]` + InlineData）
 - 源码内容关键字禁令（扫描 `.cs`，过滤注释行）

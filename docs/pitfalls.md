@@ -81,7 +81,7 @@
 | # | 场景·问题·后果 | DDD 对应设计 | 状态 |
 |:--:|---------------|------------|:----:|
 | **A1** | **场景**：`async Task Foo()` → 调用 `OutboxProcessor.ExecuteAsync()` → 忘记 `await`。**问题**：返回 `Task` 而非值 → 后续代码 NullRef。**后果**：生产崩溃 | 所有 API 返回 `ValueTask`/`ValueTask<T>` + TreatWarningsAsErrors + CS4014 警告 | ✅ |
-| **A2** | **场景**：ASP.NET Core → `async` Controller → `_outboxStore.AppendAsync()` → 不 ConfigureAwait(false)。**问题**：同步上下文捕获 → 线程池饥饿。**后果**：高并发慢 | 全层库代码 ConfigureAwait(false)（conventions §1.5，444 处）+ PDDD-G12 强制 | ✅ |
+| **A2** | **场景**：ASP.NET Core → `async` Controller → `_outboxStore.AppendAsync()` → 不 ConfigureAwait(false)。**问题**：同步上下文捕获 → 线程池饥饿。**后果**：高并发慢 | 全层库代码 ConfigureAwait(false)（conventions §1.5，全层显式——机械保证 PDDD-G12 零违规，计数口径不锚裸数字） | ✅ |
 | **A3** | **场景**：`async void` → 异常逃逸 → 进程崩溃。**问题**：async void 异常无法捕获。**后果**：服务意外终止 | 🚫 禁止 async void（conventions §1.5 + PDDD-G9 + ArchitectureBoundaryTests） | ✅ |
 | **A4** | **场景**：`PeriodicBackgroundProcessor` 内层 `catch (Exception)` → 捕获下游 CancellationToken 取消（非 host 关停）→ 记为错误日志。**问题**：取消异常被误报为错误。**后果**：日志噪声 + 误判服务健康 | `catch (OperationCanceledException)` 静默分支，仅过滤 host 关停取消（ITM-030，3 处同型：PeriodicBackgroundProcessor/ExceptionMiddleware/HealthCheck） | ✅ |
 | **A5** | **场景**：`catch (Exception)` 不带 `when (ex is not OperationCanceledException)` 过滤 → 取消异常被吞掉 → 上层无法感知取消。**问题**：异常过滤缺失。**后果**：取消语义错误 | conventions §10.3 强制 `when (ex is not OperationCanceledException)`（PDDD-G7 + boundary 守护） | ✅ |

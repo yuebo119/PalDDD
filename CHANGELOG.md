@@ -43,7 +43,7 @@
 - **组织重组（零破坏，命名空间不变）**：PalDDD.Transactions 30 文件平铺 → Saga/（18）+ Outbox/（5）+ Inbox/（3）+ 根共享（5）；Analyzers 738 行单文件拆 5 文件（纯搬运，36 测试零回归）
 - **异常口径统一**：解压超限（System 三算法）统一 `InvalidDataException`；畸形 JSON 400 补 ProblemDetails body（三处 400 形态收口）
 - **BulkCopy 11 类型显式映射**（byte[] 不再被 string 列 ToString）；MySQL INSERT IGNORE → `ON DUPLICATE KEY UPDATE`（静默错误降级根治，四处姊妹收口）
-- **默认质量**：库代码 179 处 `await` 全量补 `ConfigureAwait(false)`（v2.1.0 当时补入数；2026-09-10 库代码累计实测 444 处）；mojibake 全仓清零；`IdentityGenerator.IsNumeric` 改 `SpecialType` 判定（extern alias 场景不再静默丢生成）
+- **默认质量**：库代码 179 处 `await` 全量补 `ConfigureAwait(false)`（179 为 v2.1.0 当时补入数的历史快照；现行口径不再锚裸数字计数——该数字随提交漂移曾致文档振荡，机械保证为 PDDD-G12 零违规，见 doc-consistency D12b）；mojibake 全仓清零；`IdentityGenerator.IsNumeric` 改 `SpecialType` 判定（extern alias 场景不再静默丢生成）
 
 ### Deprecated 废弃（`[Obsolete(error: false)]`，v3.0 移除预告）
 
@@ -368,7 +368,7 @@
 - **PG JSONB 路径构建期守卫**（逗号/花括号 fail-fast）；Saga JsonTypeInfo fail-fast（无 jsonTypeInfo 抛异常防 saga_data 静默丢失）
 - **RabbitMQ `mandatory:true`** 无路由消息抛异常不静默丢弃；CI 认证根因修复（Testcontainers 专用账号）
 - **mojibake 全文法根治**（全仓 .cs 清零，28 字符指纹复检零残余）；`*.sh`/`*.py` 强制 LF（仓库级 eol=crlf 曾杀死 CI Linux bash）
-- **库代码 179 处 `await` 全量补 `ConfigureAwait(false)`**（v2.1.0 当时补入数；2026-09-10 库代码累计实测 444 处）；Native 解压 OOM 转 `InvalidDataException`
+- **库代码 179 处 `await` 全量补 `ConfigureAwait(false)`**（179 为 v2.1.0 当时补入数的历史快照；现行口径不锚裸数字计数——随提交漂移，机械保证为 PDDD-G12 零违规）；Native 解压 OOM 转 `InvalidDataException`
 - **Entity.Id/EventId/OccurredOn get-only**（构造后身份不可覆盖）；Hi/Lo 游标事务感知（活动事务不发布内存缓存防回滚分叉）
 - **PDDD009/010/011 解绑 BoundedContext** + CodeFix 版本后缀替换不叠加；EnumGenerator 过滤非 TSelf 字段
 
