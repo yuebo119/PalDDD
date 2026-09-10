@@ -69,11 +69,43 @@ public sealed class DiagnosticCoverageGateTests
         => Regex.Matches(source, @"""(PDDD|PALMSG|PALENUM|PALID)\d{3}""")
             .Select(match => match.Value.Trim('"'));
 
-    /// <summary>断言级覆盖判定——注释提及不算（三种实际使用的断言写法）。</summary>
+    /// <summary>
+    /// 断言级覆盖判定——剥注释后逐行匹配：注释/XML 文档提及不算，否定形态不算。
+    /// <para>2026-09-10 加固（实跑审计「验证验证者」）：原实现直接对整个源文件跑正则，
+    /// 注释行 / XML doc / 否定断言（<c>.IsFalse()</c>）中的 <c>Id == "X"</c> 均被判为覆盖——
+    /// 与本门禁"仅注释提及不算"的自述判据矛盾（假绿）。现改为逐行剥 <c>//</c> 注释 +
+    /// 排除否定标记后再匹配；白名单补 <c>IsEquivalentTo</c>（等价断言此前被误判为未覆盖）。</para>
+    /// </summary>
     private static bool HasAssertion(string testSource, string id)
-        => Regex.IsMatch(testSource, $@"Id\s*==\s*""{id}""")
-           || Regex.IsMatch(testSource, $@"Id\s*\)\s*\.IsEqualTo\(\s*""{id}""")
-           || Regex.IsMatch(testSource, $@"HasId\(\s*""{id}""");
+    {
+        foreach (var rawLine in testSource.Split('\n'))
+        {
+            var line = StripLineComment(rawLine);
+
+            // 否定形态排除：证明"不匹配"的断言不构成覆盖
+            if (line.Contains(".IsFalse()", StringComparison.Ordinal)
+                || line.Contains("IsNotEqualTo", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (Regex.IsMatch(line, $@"Id\s*==\s*""{id}""")
+                || Regex.IsMatch(line, $@"Id\s*\)\s*\.Is(?:EquivalentTo|EqualTo)\(\s*""{id}""")
+                || Regex.IsMatch(line, $@"HasId\(\s*""{id}"""))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>剥除行内 <c>//</c> 注释（含 <c>///</c> XML 文档）——注释提及不计为覆盖。</summary>
+    private static string StripLineComment(string line)
+    {
+        var index = line.IndexOf("//", StringComparison.Ordinal);
+        return index >= 0 ? line[..index] : line;
+    }
 
     private static string FindRepositoryRoot()
     {
