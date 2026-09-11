@@ -69,8 +69,8 @@ EF Core / Kafka / RabbitMQ / MemoryPack 等不支持 AOT 的项目**显式覆盖
 
 - **`ValueTask` / `ValueTask<T>` 优先**于 `Task`，热路径零分配
 - **`IsCompletedSuccessfully` 快速路径**：同步完成时直接 `.Result`，避免异步状态机分配
-- **`ConfigureAwait(false)` 全层使用**（库代码 await 调用均显式该后缀——机械保证为本脚本族 PDDD-G12 零违规，NoWarn CA2007；不锚定裸数字计数：该计数随每次提交漂移，曾致 444/447 振荡，PD34 后口径去数字化）
-- **禁止 `async void`**（ArchitectureBoundaryTests 零容忍）
+- **`ConfigureAwait(false)` 全层使用**（库代码 await 调用均显式该后缀——机械保证为 `SourceCodeGuardTests` 守卫 4（Roslyn 逐 await 表达式判定，MIG-008 下沉自原 G12 差值计数），NoWarn CA2007；不锚定裸数字计数：该计数随每次提交漂移，曾致 444/447 振荡，PD34 后口径去数字化）
+- **禁止 `async void`**（机械保证为 `SourceCodeGuardTests` 守卫 3——方法/局部函数/显式 void 返回类型 lambda 三形态全覆盖，MIG-T2 下沉自原 G9 并补齐 lambda 形态）
 
 ### 1.6 null 校验
 
@@ -797,7 +797,7 @@ var body = Expression.AndAlso(
 
 - `Dispatcher` 的 `Dictionary` 在 `Freeze()` 后转为 `FrozenDictionary`，**禁止运行时 `Add`**
 - `InMemory*Store` 实现必须用 `Lock` 保护共享状态（`InMemoryOutboxStore` 已遵循）
-- `TimeProvider` 注入是测试确定性契约，**禁止硬编码 `DateTimeOffset.UtcNow`**（用构造函数注入的 `TimeProvider`）
+- `TimeProvider` 注入是测试确定性契约，**禁止硬编码 `DateTimeOffset.UtcNow`**（用构造函数注入的 `TimeProvider`；机械保证为 `SourceCodeGuardTests` 守卫 6——UtcNow 直调 + `TimeProvider.System` 内联均拦截，virtual `GetUtcNow` 时钟默认实现豁免，MIG-T2 下沉自原 G17）
 - `SagaState.CurrentState` 不能包含 `|` 字符（key 分隔符，运行时校验已强制）
 
 ### 10.5 提交前验证（AI Agent 必跑）
@@ -1017,13 +1017,18 @@ dotnet test <target> 2>&1 | tail -5 > /tmp/baseline.txt; echo "exit=$?" >> /tmp/
 
 | 规范 | 执行手段 | 强制级别 |
 |------|---------|:--------:|
-| 零反射 | ArchitectureBoundaryTests 源码扫描 | CI |
+| 零反射 | `SourceCodeGuardTests` 守卫 1/2（Roslyn 判定，MIG-007 下沉自 bash G7/G8） | CI |
+| 异常类型 sealed | `SourceCodeGuardTests` 守卫 5（MIG-T1 下沉自 bash G1；Middleware/Extensions/CodeFix 豁免） | CI |
+| async void / TransactionScope 禁令 | `SourceCodeGuardTests` 守卫 3/6（MIG-T2 下沉自 bash G9/G10） | CI |
+| 时钟注入（TimeProvider） | `SourceCodeGuardTests` 守卫 6（MIG-T2 下沉自 bash G17，含 G17b 内联禁令升格） | CI |
+| AOT 核心层基线（7 项目不显式 false + 全局 props true） | `ArchitectureBoundaryTests.CoreProjects_EnableAotReferenceVerification`（MIG-T3 下沉自 bash G14） | CI |
+| 技术债守卫（SuppressMessage Justification / 方言 SQL 守卫对称 / 姊妹乐观锁对称） | `TechDebtGuardTests`（MIG-010 下沉自 tech-debt-scan #8/#13/#14） | CI |
 | AOT 兼容 | `Directory.Build.props` + `dotnet publish /p:PublishAot=true` | 编译期 + CI |
 | 依赖方向 | ArchitectureBoundaryTests 项目引用矩阵 | CI |
 | DDD 命名 | StrategicDddAnalyzer PDDD001-015 | 编译期 |
 | 零警告 | TreatWarningsAsErrors | 编译期 |
 | 测试覆盖 | MTP 原生 `--coverage`（Cobertura 合并，阈值见 ci-coverage.sh） | CI |
-| 断言强度 | `assertion-strength-check.sh` 棘轮 | CI（PR 时） |
+| 断言强度 | `AssertionStrengthGateTests` 棘轮（MIG-003 下沉自 assertion-strength-check.sh） | CI（PR 时） |
 | 公共 API 快照 | PublicApiSnapshotTests | CI |
 | AI 模板约束 | `.pal/prompts/` 六段结构 | 人工 |
 | AI 编码约束 | Trellis spec 注入 + `scripts/verify-conventions.sh` | 会话 + pre-commit |

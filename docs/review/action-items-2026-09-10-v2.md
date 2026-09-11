@@ -15,7 +15,9 @@
 | **P1** | 1 | 0 | 0 | 1 | 100% |
 | **P2** | 4 | 0 | 0 | 4 | 100% |
 | **P3** | 30（汇总） | 1 | 0 | 29 | 97% |
-| **合计** | 35 | 1 | 0 | 34 | **97%** |
+| **合计** | 35 | 0 | 0 | 35 | **100%** |
+
+**终态更新（2026-09-11）**：最后 1 条 P3（DapperUnitOfWork.RollbackAsync Dispose 后静默 no-op 姊妹收口）已清偿——ObjectDisposedException.ThrowIf 守卫 + RollbackAsync_AfterDispose_ThrowsObjectDisposedException 回归测试（S3 红测：移除守卫必红/还原复绿）。**清单 35/35 = 100% 全清。**
 
 **修复轮（2026-09-10 第三轮，6 代理并行 + 主线程）完成情况**：
 - **ITM-648**：`set -o pipefail` 提至 run 块首（覆盖 secret-scan + 六门禁 + 根 gate 全部管道），探针复验 CAUGHT；后两处冗余 set 清理。

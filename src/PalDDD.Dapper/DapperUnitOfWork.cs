@@ -85,6 +85,11 @@ public sealed class DapperUnitOfWork : IUnitOfWork
 
     public async ValueTask RollbackAsync(CancellationToken ct = default)
     {
+        // ITM-165 姊妹收口（第三轮残余）：Dispose 后 Rollback 同样抛 ObjectDisposedException
+        // （对齐 PalOrmUnitOfWork.RollbackAsync:88 与本类 CommitAsync/BEGIN 守卫）——原静默
+        // return 使"已释放后回滚"不可见；调用方持残留引用误以为已回滚（实际 DisposeAsync
+        // 路径已回滚过或事务根本未激活）。no-op 契约仅保留给"未 Begin"路径（_transaction null）。
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (_transaction is null)
             return;
 

@@ -3,7 +3,7 @@ namespace PalDDD.Integration.Tests;
 using PalDDD.Dapper.PostgreSql;
 
 // TST-119 断言深度声明：本类为字符串级断言深度（SQL 生成正确性——转义/校验/片段拼接）；
-// 真 PostgreSQL 执行验证由 dialect-probe/CI 承载，不在此新增真库测试（环境依赖）。
+// 真 PostgreSQL 执行验证由 DialectProbeTests/CI 承载，不在此新增真库测试（环境依赖）。
 public sealed class PostgreSqlAuditorTests
 {
     [Test]

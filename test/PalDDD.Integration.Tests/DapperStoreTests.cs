@@ -39,7 +39,7 @@ public sealed class DapperStoreTests
     // 三十八轮 P2 备注（方言测试盲区）：原硬编码 Sqlite 使全部 Dapper 测试只跑 SQLite。
     // ⚠️ 当前仅支持 Sqlite——MySQL/PG 分支需配套连接工厂与方言 Schema（CreateSchemaAsync
     // 亦为 SQLite 专用），完整实现属后续任务；在此之前其他值显式失败而非静默错配。
-    // MySQL/PG 路径的自动化验证由 scripts/dialect-probe.sh 承载（40 断言，CI dialect-probe job）。
+    // MySQL/PG 路径的自动化验证由 DialectProbeTests 承载（42 断言，CI dialect-probe job）。
     private static readonly DapperDbType _dbType = ResolveDbType();
 
     private static DapperDbType ResolveDbType()
@@ -49,7 +49,7 @@ public sealed class DapperStoreTests
             return parsed;
         throw new NotSupportedException(
             $"PALDDD_TEST_DAPPER_DB={raw}：DapperStoreTests 当前仅实现 Sqlite 分支（连接工厂/Schema 为 SQLite 专用）。"
-            + "MySQL/PG 路径请运行 scripts/dialect-probe.sh（40 断言）。");
+            + "MySQL/PG 路径由 DialectProbeTests 覆盖（CI Testcontainers）。");
     }
 
     private static bool s_previousUnderscoreSetting;
@@ -224,8 +224,8 @@ public sealed class DapperStoreTests
     // ⚠️ 能力边界（S3 反向验证实证 + 对齐 PalOrmAmbientTransaction 声明）：SQLite 引擎级
     // 事务使同连接命令自动参与活动事务——本测试对"ambient 挂接缺失"不可观测（禁用
     // DapperAmbientTransaction.Set 后测试仍过，已实测）。它验证的是行为语义正确性
-    // （回滚丢弃/提交持久化/边界清理），真正的断链探测器在 scripts/dialect-probe.sh
-    // 的 AmbientTxDapperSmoke（MySQL/PG 严格校验，CI dialect-probe job 承载）。
+    // （回滚丢弃/提交持久化/边界清理），真正的断链探测器在 DialectProbeTests
+    // 的 AmbientTx 族（MySQL/PG 严格校验，CI dialect-probe job 承载）。
     // ─────────────────────────────────────────────────────────────
 
     [Test]

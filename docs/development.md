@@ -60,11 +60,11 @@ PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests/PalDDD.C
 
 ### 断言强度检查（替代 Stryker 突变测试）
 
-仓库不包含 `stryker-config.json`：Stryker.NET 当前不支持 TUnit/MTP，无法在本仓库运行。突变测试职责已由 `.ai/scripts/assertion-strength-check.sh` 替代（断言强度棘轮，基线上限 173，2026-09-04 实测当前 166——只减不增）。
+仓库不包含 `stryker-config.json`：Stryker.NET 当前不支持 TUnit/MTP，无法在本仓库运行。突变测试职责已由 `AssertionStrengthGateTests`（test/PalDDD.DependencyInjection.Tests）替代（断言强度棘轮，基线上限 190——净化算法后真实存量 185 + 余量，只减不增；MIG-003 由 bash 脚本下沉，旧基线 166 为 python 配对漏检口径）。
 
 - **运行**：
   ```bash
-  bash .ai/scripts/assertion-strength-check.sh
+  dotnet test test/PalDDD.DependencyInjection.Tests -- --treenode-filter "/*/*/AssertionStrengthGateTests/*"
   ```
 - **门禁口径**：脚本以非零退出码报告弱断言/零断言测试，CI 与提交前检查使用同一脚本。
 - 新增/修改核心生产代码时，应同步补强对应测试断言，避免"代码分支无测试覆盖"的断言盲区残留。
