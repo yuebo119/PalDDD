@@ -2,8 +2,13 @@
 // sibling-map.cs——姊妹族清单生成器·轴 A 机械枚举（MIG-011d，2026-09-11）
 // 由 .ai/scripts/sibling-map.sh 内嵌 68 行 python 等价迁移为 C#（file-based app）。
 //
-// 用法：在仓库根执行 dotnet run scripts/sibling-map.cs [接口名过滤词]
+// 用法：dotnet run scripts/sibling-map.cs [-- 接口名过滤词]
 //   过滤词大小写不敏感，对接口名做子串匹配（如 Outbox、Idempotency）；缺省输出全部族。
+//
+// MIG-012-B2（2026-09-11）：补齐 .ai/scripts/sibling-map.sh 包装件的仓库根定位——
+//   从当前目录向上找 PalDDD.slnx 并切换后枚举（file-based app 编译进用户临时缓存，
+//   运行时取不到自身 .cs 路径，锚点为 cwd；仓库内任意子目录运行与 bash 包装件一致；
+//   从仓库根运行行为不变）。FILTER 过滤词透传（args[0]）原已支持，包装件仅原样透传。
 //
 // 逻辑（与原 python 版逐项对应）：
 //   1) 类型声明正则解析：class|record|struct|interface + 大写开头的类型名（可带 <T>
@@ -30,6 +35,21 @@ using System.Text.RegularExpressions;
 
 // Windows 控制台默认编码非 UTF-8，中文输出会乱码——对齐 python UTF-8
 Console.OutputEncoding = Encoding.UTF8;
+
+// MIG-012-B2：仓库根定位（等价 sibling-map.sh 包装件 _ai_root_find + cd）——
+// src/ 枚举锚定仓库根，仓库内任意子目录可运行；找不到根时报错退出 2
+//（此前依赖调用方 cd 到仓库根，子目录运行会输出空表）
+{
+    var d = new DirectoryInfo(Environment.CurrentDirectory);
+    while (d is not null && !File.Exists(Path.Combine(d.FullName, "PalDDD.slnx")))
+        d = d.Parent!;
+    if (d is null)
+    {
+        Console.Error.WriteLine("错误：未找到仓库根（向上未发现 PalDDD.slnx）——请在仓库内运行");
+        return 2;
+    }
+    Directory.SetCurrentDirectory(d.FullName);
+}
 
 var filt = args.Length > 0 ? args[0] : "";
 

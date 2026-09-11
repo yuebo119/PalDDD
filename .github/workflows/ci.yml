@@ -94,7 +94,7 @@ jobs:
           # unified v2.0（2026-08-20）：gate 步骤自诊断化（CI 实测 exit 2 本地却过——
           # tee 捕获 + CTX 注解通道让失败现场经公开 API 可读）
           # ITM-616：凭据扫描（主仓脚本，不依赖 .ai）——两个分支都要跑，补 SE2 此前失实的防线。
-          if ! bash scripts/secret-scan.sh 2>&1 | tee ci-secret-scan.log; then
+          if ! dotnet run scripts/secret-scan.cs 2>&1 | tee ci-secret-scan.log; then
             echo "::error ::SECRET SCAN FAILED：受跟踪文件发现疑似硬编码凭据"
             dotnet run scripts/ci-failed-tests.cs secret-scan ci-secret-scan.log || true
             rm -f ci-secret-scan.log
@@ -102,8 +102,8 @@ jobs:
           fi
           rm -f ci-secret-scan.log
           if [ -d .ai/scripts ]; then
-            bash .ai/scripts/verify-ai-system.sh
-            bash .ai/scripts/gate-check.sh --allow-dirty
+            dotnet run scripts/verify-ai.cs
+            dotnet run scripts/gate.cs -- --allow-dirty
             # ITM-615：五个离线快检门禁（原六个，assertion-strength-check 已删——见上 MIG 注释）
             # 此前只在本地手跑，CI 无守护——追加到 .ai 分支。
             # MIG-002/003（2026-09-11）：assertion-strength-check.sh 已删除（判定下沉
@@ -111,20 +111,27 @@ jobs:
             # 薄壳化（判定下沉 DocConsistencyGateTests）保留 D7——两者从循环中移除/保留如常。
             # flaky-gate.sh 需传 csproj（build + N 次 test，非快速门禁），不纳入。
             # pipefail 已在块首统一 set（ITM-648）——此处管道退出码不再被 tee 掩码。
-            for ai_gate in encoding-gate doc-consistency-check tech-debt-scan test-gate template-gate; do
-              echo "== .ai gate: $ai_gate =="
-              if ! bash ".ai/scripts/$ai_gate.sh" 2>&1 | tee "ci-$ai_gate.log"; then
-                echo "::error ::.ai GATE FAILED: $ai_gate"
-                dotnet run scripts/ci-failed-tests.cs "$ai_gate" "ci-$ai_gate.log" || true
-                rm -f "ci-$ai_gate.log"
+            # MIG-012（2026-09-11）：门禁薄壳 bash→C# file-based app（dotnet run 直跑）；
+            # template-gate 保留 bash（单行 dotnet run --project 启动器，迁 .cs 反多一层）。
+            for ai_gate_cs in encoding-gate doc-consistency tech-debt test-gate; do
+              echo "== .ai gate: $ai_gate_cs =="
+              if ! dotnet run "scripts/$ai_gate_cs.cs" 2>&1 | tee "ci-$ai_gate_cs.log"; then
+                echo "::error ::.ai GATE FAILED: $ai_gate_cs"
+                dotnet run scripts/ci-failed-tests.cs -- "$ai_gate_cs" "ci-$ai_gate_cs.log" || true
+                rm -f "ci-$ai_gate_cs.log"
                 exit 1
               fi
-              rm -f "ci-$ai_gate.log"
+              rm -f "ci-$ai_gate_cs.log"
             done
+            if ! bash .ai/scripts/template-gate.sh 2>&1 | tee ci-template-gate.log; then
+              echo "::error ::.ai GATE FAILED: template-gate"
+              exit 1
+            fi
+            rm -f ci-template-gate.log
           else
             echo "SKIP .ai self-check: .ai 质量系统未随仓库分发"
             # pipefail 已在块首统一 set（ITM-648）。
-            if ! bash scripts/gate-check.sh 2>&1 | tee ci-gate.log; then
+            if ! dotnet run scripts/gate-lite.cs 2>&1 | tee ci-gate.log; then
               echo "::error ::ROOT GATE-CHECK FAILED"
               dotnet run scripts/ci-failed-tests.cs gate ci-gate.log || true
               exit 1
