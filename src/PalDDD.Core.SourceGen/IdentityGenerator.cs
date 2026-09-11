@@ -523,7 +523,10 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         // v72 勘正：原同时 emit 非别名 using ByteAether.Ulid——v35 DA2 displayType 分派后
         // 生成模板内裸 Ulid 绝迹（全部经 PalUlid 别名/global::System.Guid 限定），非别名
         // using 零消费方已删（D 片 grep 实证）
-        var ulidUsing = srcType == "Ulid" ? "\r\nusing PalUlid = ByteAether.Ulid.Ulid;" : "";
+        // v66 P3 收尾：换行统一为 "\n"——原 "\r\nusing" 是模板内唯一 CRLF 行，其余行
+        //（open/close/nsDecl 与 raw string 模板体）均为 LF，混合行尾在跨平台 checkout
+        //（autocrlf=input）下产生 diff 噪声；生成物经 Roslyn 归一化编译，行为无差异
+        var ulidUsing = srcType == "Ulid" ? "\nusing PalUlid = ByteAether.Ulid.Ulid;" : "";
 
         // v35 P3（DA2）：模板对 Ulid/Guid 输出裸类型名——用户命名空间含同名类型（class Ulid/
         // class Guid）时裸名解析被遮蔽，生成物编译失败（CS0246/CS1503 落在用户侧同名类型）。
@@ -714,7 +717,10 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
                     if (PalUlid.TryParse(reader.GetString()!, CultureInfo.InvariantCulture, out var seqUlid))
                         return {{name}}.From(seqUlid);
                 }
-                else if (PalUlid.TryParse(reader.ValueSpan, null, out var spanUlid))
+                // v66 P3 收尾（对齐上方 HasValueSequence 腿 :714）：provider 传 null →
+                // InvariantCulture——Ulid 字符串解析对 culture 不敏感，行为无差异，仅统一
+                // 生成模板内 provider 实参口径（escaped 腿/序列腿/span 腿三处一致）
+                else if (PalUlid.TryParse(reader.ValueSpan, CultureInfo.InvariantCulture, out var spanUlid))
                 {
                     return {{name}}.From(spanUlid);
                 }

@@ -103,7 +103,9 @@ jobs:
           # CI 覆盖面（ITM-615 补全，2026-09-10）：
           #   有 .ai 时 = build + test + aot + gate-check + verify-ai-system（含 V23 镜像对内容比对）
           #     + encoding-gate + doc-consistency-check + tech-debt-scan + test-gate
-          #     + template-gate + assertion-strength-check（后六项 2026-09-10 追加，均可离线运行、无外部依赖）；
+          #     + template-gate（五项离线快检循环 2026-09-10 追加，均可离线运行、无外部依赖；
+          #     原第六项 assertion-strength-check 已随 MIG-002 删除，判定下沉
+          #     AssertionStrengthGateTests 随 Test 步骤运行）；
           #   无 .ai 时 = build + test + aot + 根 G1-G3 快速门禁（降级）。
           # unified v2.0（2026-08-20）：gate 步骤自诊断化（CI 实测 exit 2 本地却过——
           # tee 捕获 + CTX 注解通道让失败现场经公开 API 可读）
@@ -118,7 +120,8 @@ jobs:
           if [ -d .ai/scripts ]; then
             bash .ai/scripts/verify-ai-system.sh
             bash .ai/scripts/gate-check.sh --allow-dirty
-            # ITM-615：六个离线快检门禁此前只在本地手跑，CI 无守护——追加到 .ai 分支。
+            # ITM-615：五个离线快检门禁（原六个，assertion-strength-check 已删——见上 MIG 注释）
+            # 此前只在本地手跑，CI 无守护——追加到 .ai 分支。
             # MIG-002/003（2026-09-11）：assertion-strength-check.sh 已删除（判定下沉
             # test/.../AssertionStrengthGateTests.cs，随 Test 步骤运行）；doc-consistency-check.sh
             # 薄壳化（判定下沉 DocConsistencyGateTests）保留 D7——两者从循环中移除/保留如常。

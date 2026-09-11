@@ -40,6 +40,11 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
         int batchSize, int maxRetryCount, CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v20 C-1
+        // ITM-659 守卫族收口：maxRetryCount 非正守卫（batchSize 守卫姊妹，镜像 PalORM/Dapper/
+        // 基类）——非正值使 RetryCount < maxRetryCount 恒假（RetryCount >= 0），查询静默空
+        // 返回无诊断。QueryEligibleAsync 为 GetPending/Lease 两 override 共享入口，一处
+        // 守卫两方法生效（override 不调 base，基类守卫对本派生类死码——v20 C-1 同款形态）
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount);
         var now = GetUtcNow();
         var result = new List<OutboxMessage>(batchSize);
         var skip = 0;

@@ -54,8 +54,13 @@ public sealed class TimestampDefaultsTests
 
     private static System.Reflection.MemberInfo? FindMutableStaticClockMember(Type type)
     {
+        // 字段腿豁免只读形态（P3 批假红向量修复）：static readonly（IsInitOnly）/ const
+        //（IsLiteral）的 TimeProvider 字段是不可变共享默认时钟——不是"可变全局静态时钟"
+        // 反模式的命中目标，计入即假红。
         var field = type.GetFields(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
-            .FirstOrDefault(member => member.FieldType == typeof(TimeProvider));
+            .FirstOrDefault(member => member.FieldType == typeof(TimeProvider)
+                && !member.IsInitOnly
+                && !member.IsLiteral);
         if (field is not null)
             return field;
 
