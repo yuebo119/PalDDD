@@ -12,9 +12,11 @@
 | 优先级 | 条目数 | 待修复 | 已完成 | 完成率 |
 |:------:|:------:|:------:|:------:|:------:|
 | **P0 / P1** | 0 | 0 | 0 | — |
-| **P2** | 7 | 7 | 0 | 0% |
-| **P3** | 30（汇总） | 30 | 0 | 0% |
-| **合计** | 37 | 37 | 0 | **0%** |
+| **P2** | 7 | 0 | 7 | 100% |
+| **P3** | 30（汇总） | 12 | 18 | 60% |
+| **合计** | 37 | 12 | 25 | **68%** |
+
+**修复轮（2026-09-11，3 并行代理 + 主线程）**：7 P2 全清。P3 实修 18/30（其余 12 条为❓探针待环境/声明已固化/等价继承边界——见各项内标注）。
 
 **本轮核心结论**：无 P0/P1。7 条 P2 **全部同属一个主题——"收口完整性"缺口**：上两轮修复与 MIG 迁移的姊妹同步/口径同步不完整（v66 OCE 过滤修复只收口 1/3；上轮 Rollback 测试姊妹漏 Commit 版；MIG 后 README/V2/断言数三处口径漂移）。这一主题本身是历轮"修复自带缺陷"模式的降维延续——从语义错误（前两轮 5 项）降为同步遗漏（本轮 0 项语义错误），质量体系收敛趋势明确。
 
@@ -22,40 +24,40 @@
 
 ## 🟠 P2 — 计划修复（7 条，全部"收口完整性"主题）
 
-### [ ] ITM-653 · Idempotency/ProjectionProcessor 的 MarkCompletedAsync OCE 过滤姊妹残留（v66 修复只收口 1/3）· ✅
+### [x] ITM-{n} · Idempotency/ProjectionProcessor 的 MarkCompletedAsync OCE 过滤姊妹残留（v66 修复只收口 1/3）· ✅
 - **维度**：错误流（v66 修复不完整）
 - **问题**：v66 在 `InboxProcessor.cs:114` 移除了 MarkProcessed 失败 catch 的 `when (not OCE)` 过滤（ITM-092 口径：Mark* 以 `CancellationToken.None` 调用，其 OCE 属存储异常而非取消），但**同构的姊妹两处未同步**：`IdempotencyProcessor.cs:138`、`ProjectionProcessor.cs:111` 的 MarkCompletedAsync 失败 catch 仍带过滤——OCE 逃逸使已成功的 handler 被调用方按取消/重试处理（副作用双执行风险）。
 - **触发路径**：自定义 store 在 None token 下抛 OCE（内部超时包装）→ 过滤放走 → Executed 语义丢失。
 - **修复**：两处移除过滤，对齐 InboxProcessor v66 形态（统一按 pending-confirmation 处理 + 日志）；补姊妹回归测试（mock store 抛 OCE 断言 Executed 返回）。
 - **涉及**：src/PalDDD.Idempotency/IdempotencyProcessor.cs、src/PalDDD.Projections/ProjectionProcessor.cs + 对应测试
 
-### [ ] ITM-654 · CommitAsync_AfterDispose 测试缺失（上轮姊妹收口漏 Commit 版）· ✅
+### [x] ITM-{n} · CommitAsync_AfterDispose 测试缺失（上轮姊妹收口漏 Commit 版）· ✅
 - **维度**：测试覆盖（上轮收口不完整）
 - **问题**：上轮补 `RollbackAsync_AfterDispose_ThrowsObjectDisposedException` 时，姊妹 **Commit 版全仓零测试**（grep 实证：Begin/Rollback 有测、Commit 缺）——`DapperUnitOfWork.CommitAsync:61` 的守卫无回归网。
 - **修复**：镜像补 `CommitAsync_AfterDispose_ThrowsObjectDisposedException`（探针即测试本身）。
 - **涉及**：test/PalDDD.Integration.Tests/DapperUnitOfWorkTests.cs
 
-### [ ] ITM-655 · `.ai/README.md` 6 处旧口径 + V5 判定面升级 · ✅
+### [x] ITM-{n} · `.ai/README.md` 6 处旧口径 + V5 判定面升级 · ✅
 - **问题**：README 6 处仍称"PDDD-G1..G24 全阻断"（实际 gate-check 仅 3 项且 G24 警告级）；**V5 只校验范围终点号故放过**（起点/中段/级别漂移零检测）。
 - **修复**：README 6 处刷新（G22-G24 保留 + 21 项下沉去向）；V5 增 README 行级"保留集"断言（红测：改回旧口径必红）。
 - **涉及**：.ai/README.md、.ai/scripts/verify-ai-system.sh
 
-### [ ] ITM-656 · V2 存在性列表缺 encoding-gate.sh · ✅
+### [x] ITM-{n} · V2 存在性列表缺 encoding-gate.sh · ✅
 - **问题**：encoding-gate 被 engine.md/README/ci.yml 引用，但不在 V2 存在性清单——被误删时 V2/V16 均不红。
 - **修复**：V2 列表补入；核对全清单 vs 实际引用面（同类缺口一次清）。
 - **涉及**：.ai/scripts/verify-ai-system.sh
 
-### [ ] ITM-657 · DialectProbe 断言数 40/42 三方分叉 · ✅
+### [x] ITM-{n} · DialectProbe 断言数 40/42 三方分叉 · ✅
 - **问题**：`.ai/review/prompt.md:40` 写"每方言 20 项共 40"，实际 `DialectProbeTests.cs` 每方言 21 项共 42（文件头与 ci.yml 注释均 42）。
 - **修复**：review prompt 改 42（其余两处已对）。
 - **涉及**：.ai/review/prompt.md
 
-### [ ] ITM-658 · AssertionStrength raw string 净化器不识别 4+ 引号定界 · ✅（当前零影响）
+### [x] ITM-{n} · AssertionStrength raw string 净化器不识别 4+ 引号定界 · ✅（当前零影响）
 - **问题**：行同时 StartsWith/EndsWith `"""` 即判定非 raw——`""""` 包裹的嵌套形态整体漏净化（内部不平衡花括号扰动深度计数）。当前全 test 仅守卫自身用 `""""` 且被排除，**零现实影响**。
 - **修复**：定界识别改为最长引号前缀匹配（`"""`+ 时进入 raw 态并按同长定界退出）；红测加 `""""` 样本。
 - **涉及**：test/PalDDD.DependencyInjection.Tests/AssertionStrengthGateTests.cs
 
-### [ ] ITM-659 · maxRetryCount 负值三栈无守卫（与同方法 batchSize 守卫自相矛盾）· ✅❓
+### [x] ITM-{n} · maxRetryCount 负值三栈无守卫（与同方法 batchSize 守卫自相矛盾）· ✅❓
 - **问题**：负值使 `retry_count < maxRetryCount` 恒假→静默空返回（"无待处理"假象）；同方法 batchSize 非正守卫的立论（"LIMIT 0 静默空返回无诊断"）逐字适用于此。三栈（PalORM :62/101/136、EFCore OutboxDbContext:81、Dapper :111/152/167）0 守卫；管线路径由 Options 覆盖，直调路径裸奔。
 - **修复**：三栈 4+ 处同轮补 `ThrowIfNegativeOrZero`（对齐 batchSize 口径，避免只修一处造新分叉）；直调测试断言负值抛。
 - **涉及**：三栈 Outbox store + 测试

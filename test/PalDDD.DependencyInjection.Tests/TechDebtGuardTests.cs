@@ -675,20 +675,74 @@ public sealed class TechDebtGuardTests
     private const string GuardTestSelfPath = "test/PalDDD.DependencyInjection.Tests/TechDebtGuardTests.cs";
 
     /// <summary>
+    /// #20 ctx 名枚举（双腿并集，P3 批 #20-2）：
+    /// ① glob 腿——*DbContext.cs 文件名（原口径）；
+    /// ② 内容腿——文本级 class/record ... : DbContext 声明的类名——防"类名≠文件名"
+    /// 的 DbContext（如 WeirdNaming.cs 内声明 HiddenDbContext）对 glob 腿不可见、
+    /// 关系型覆盖 gap 账本对其失明。泛型约束 where TContext : DbContext 无 class/record
+    /// 前缀，天然不误报；DbContextBase 等长名由 \b 词边界排除。
+    /// </summary>
+    private static readonly Regex s_dbContextDeclaration =
+        new(@"(?:class|record)\s+(\w+)\s*(?:\([^)]*\))?\s*:\s*[^{]*?\bDbContext\b", RegexOptions.Compiled);
+
+    internal static IEnumerable<string> EnumerateDbContextNames(IEnumerable<(string Path, string Text)> srcFiles)
+    {
+        foreach (var (path, text) in srcFiles)
+        {
+            if (path.EndsWith("DbContext.cs", StringComparison.Ordinal))
+                yield return Path.GetFileNameWithoutExtension(path);
+
+            foreach (Match m in s_dbContextDeclaration.Matches(text))
+                yield return m.Groups[1].Value;
+        }
+    }
+
+    /// <summary>#20 枚举负向自证（红绿矩阵）：glob 腿命中文件名形态；内容腿命中
+    /// "类名≠文件名"形态（旧 glob-only 枚举的漏检点）；泛型约束与无关文件不产出。</summary>
+    [Test]
+    public async Task DbContextEnumeration_CombinesGlobAndContentLegs()
+    {
+        var names = EnumerateDbContextNames(
+        [
+            ("src/PalDDD.Probe/OrderDbContext.cs", "// 仅 glob 腿可见：文件名即 ctx 名"),
+            ("src/PalDDD.Probe/WeirdNaming.cs", "public sealed class HiddenDbContext : DbContext"),
+            ("src/PalDDD.Probe/PrimaryCtor.cs", "public abstract class PrimaryCtorCtx(DbContextOptions options) : DbContext(options)"),
+            ("src/PalDDD.Probe/GenericHost.cs", "public sealed class Repo<TContext> where TContext : DbContext"),
+            ("src/PalDDD.Probe/Other.cs", "// 无 ctx 形态"),
+        ]).ToList();
+
+        await Assert.That(names).Contains("OrderDbContext");      // glob 腿
+        await Assert.That(names).Contains("HiddenDbContext");     // 内容腿（旧实现漏检点）
+        await Assert.That(names).Contains("PrimaryCtorCtx");      // 内容腿：主构造器跨行参数形态
+        await Assert.That(names).DoesNotContain("TContext");      // 泛型约束不误报
+        await Assert.That(names.Count).IsEqualTo(3);
+    }
+
+    /// <summary>
     /// #20 全量判定（含 #20a 扫描面存在性）：逐 DbContext 在 test/ 关系型测试文件中整词匹配；
     /// 实测 gap 集合必须与白名单双向相等——bash 是 allow 级（缺口列出供人工核实、不阻断），
     /// C# 版收紧为活账本：新增 gap（新 DbContext 无关系型用例）红，白名单项补齐也红（提醒缩账本）。
+    /// ctx 枚举为双腿并集（glob *DbContext.cs ∪ 内容 : DbContext 声明），见
+    /// <see cref="EnumerateDbContextNames"/>。
     /// </summary>
     [Test]
     public async Task DbContextRelationalCoverage_GapLedgerStaysExact()
     {
         // #20a 存在性：src 下 *DbContext.cs 可发现（目录改名/移动后不许对空集静默通过）
-        var ctxFiles = Directory.EnumerateFiles(Path.Combine(Root, "src"), "*DbContext.cs", SearchOption.AllDirectories)
+        var globCtxFiles = Directory.EnumerateFiles(Path.Combine(Root, "src"), "*DbContext.cs", SearchOption.AllDirectories)
             .Where(IsNotBuildArtifact)
             .Select(p => Path.GetRelativePath(Root, p).Replace('\\', '/'))
-            .OrderBy(p => p, StringComparer.Ordinal)
             .ToList();
-        await Assert.That(ctxFiles.Count).IsGreaterThan(0);
+        await Assert.That(globCtxFiles.Count).IsGreaterThan(0);
+
+        // 双腿并集：glob 名单 ∪ 内容声明（: DbContext）——防"类名≠文件名"漏检
+        var srcFiles = Directory.EnumerateFiles(Path.Combine(Root, "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(IsNotBuildArtifact)
+            .Select(p => (Path: Path.GetRelativePath(Root, p).Replace('\\', '/'), Text: File.ReadAllText(p)));
+        var ctxNames = EnumerateDbContextNames(srcFiles)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
 
         // 第一遍：test/ 下含关系型提供程序标记的测试文件（bash 同口径的两遍扫描；
         // 排除守卫测试自身——传感器文件含锚字符串，不是被测物，见 GuardTestSelfPath）
@@ -710,10 +764,9 @@ public sealed class TechDebtGuardTests
         // 第二遍：逐 DbContext 整词匹配（bash grep -qwF 同口径）
         var actualGaps = new List<string>();
         var coveredBy = new List<string>();
-        foreach (var ctx in ctxFiles)
+        foreach (var ctxName in ctxNames)
         {
-            var ctxName = Path.GetFileNameWithoutExtension(ctx);
-            var wordPattern = new Regex($@"\b{Regex.Escape(ctxName)}\b", RegexOptions.Compiled);
+            var wordPattern = new Regex($@"\b{Regex.Escape(ctxName)}\b");
             var witness = relationalFiles.FirstOrDefault(f => wordPattern.IsMatch(f.Content));
             if (witness.Content is null)
                 actualGaps.Add(ctxName);

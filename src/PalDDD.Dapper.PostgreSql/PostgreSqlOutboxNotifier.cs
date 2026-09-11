@@ -158,6 +158,12 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
                     // 多个 NOTIFY 只需要一次批处理（一次处理拿走所有 pending），
                     // 多余的并发请求只会竞争 DB 连接池。
                     _logger.Debug($"PostgreSQL NOTIFY received on channel '{_channelName}'");
+                    // P3 声明（gate 零超时边界，不动行为）：WaitAsync(0) 为非阻塞 try-enter——
+                    // gate 被占用时本次 NOTIFY 被丢弃，at-least-once 由三重兜底保证（finally
+                    // 自通知 + PeriodicTimer + 下次外部 NOTIFY）。stoppingToken 取消时本调用
+                    // 抛 TaskCanceledException 且 gate 必未被获取（获取成功返回 true 不抛），
+                    // 无 gate 泄漏——Task.Run 未调度即无 finally 释放义务；异常由外层
+                    // OCE-when-stoppingToken catch 捕获后 break 正常关停。
                     if (await _processGate.WaitAsync(0, stoppingToken).ConfigureAwait(false))
                     {
                         // P2 修复：Task.Run 不再传 stoppingToken——传入时若调度前取消，

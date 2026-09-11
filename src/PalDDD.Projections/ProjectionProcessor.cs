@@ -108,11 +108,17 @@ public sealed class ProjectionProcessor<TMessage>
         {
             await _checkpointStore.MarkCompletedAsync(checkpoint, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
         }
-        catch (Exception markEx) when (markEx is not OperationCanceledException)
+        catch (Exception markEx)
         {
             // 副作用已发生，按 at-least-once 语义返回成功；区分性事件供运维介入。
             // v25 P3 行为族 B7：补日志通道——原仅 Activity.Current?.AddEvent，无 Trace
             // listener 时该信号完全静默；可选 logger 补 Warning（默认 null 不启用）。
+            // ITM-653（v66 镜像 InboxProcessor）：移除原 `when (markEx is not
+            // OperationCanceledException)` 过滤，对齐 ITM-092 口径——MarkCompletedAsync 以
+            // CancellationToken.None 调用，其抛 OCE 属存储异常形态（而非请求级取消传播），
+            // 原过滤让 OCE 逃逸给调用方，而投影 handler 实际已成功——调用方按取消处理
+            // 触发重试重放路径；捕获后统一按 completed-pending-confirmation 处理（与上方
+            // MarkFailedAsync 内层 catch 的不过滤口径对称）。
             System.Diagnostics.Activity.Current?.AddEvent(new(
                 "projection.completed-pending-confirmation",
                 tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = markEx.Message }));

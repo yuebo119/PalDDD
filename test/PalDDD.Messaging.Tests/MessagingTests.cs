@@ -131,7 +131,11 @@ public sealed class IterativeDomainEventDispatcherTests
         await Assert.That(activity.Tags.Single(tag => tag.Key == "pal.event").Value).IsEqualTo(nameof(OrderPlaced));
     }
 
+    // RecordingMeterListener 是进程级监听——并行测试的同名指标会混入 Measurements，
+    // 弱化 Contains(1) 断言的指向性（值 1 可能来自他人）。[NotInParallel] 隔离计量窗口，
+    // 对齐同文件 HandlerCancellation_DoesNotRecordEventHandlerFailedMetric 的方法级范式。
     [Test]
+    [NotInParallel]
     public async Task SingleEvent_RecordsEventHandlerHandledMetric()
     {
         using var listener = new RecordingMeterListener("paldd.event_handlers.handled");
@@ -196,7 +200,9 @@ public sealed class IterativeDomainEventDispatcherTests
         await Assert.That(activity.Status).IsEqualTo(ActivityStatusCode.Error);
     }
 
+    // 同上：进程级 RecordingMeterListener 的计量隔离（P3 批加固）。
     [Test]
+    [NotInParallel]
     public async Task HandlerThrows_RecordsEventHandlerFailedMetric()
     {
         using var listener = new RecordingMeterListener("paldd.event_handlers.failed");

@@ -322,8 +322,14 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
 
     private TState Materialize(SagaStateRow row)
     {
+        // v3 轮姊妹收口（对齐 PalOrmSagaStateStore ITM-228/P3c 同款 fail-fast）：saga_data 为
+        // 字面 "null" JSON 文本时 Deserialize 返回 null——原 `?? new TState` 兜底会静默丢全部
+        // 业务字段、后续 SaveChangesAsync 以空状态覆写扩散损坏。改抛语义化异常；else 分支
+        // （saga_data 列为 NULL 的元数据行）是合法语义，保留兜底。
         var state = row.SagaData is not null && _jsonTypeInfo is not null
-            ? JsonSerializer.Deserialize(row.SagaData, _jsonTypeInfo) ?? new TState { SagaId = row.SagaId, CreatedAt = row.CreatedAt }
+            ? JsonSerializer.Deserialize(row.SagaData, _jsonTypeInfo)
+              ?? throw new InvalidOperationException(
+                  $"Saga {row.SagaId} 的 saga_data 为损坏的 'null' 文本——拒绝静默降级空状态（对齐 PalOrmSagaStateStore fail-fast 契约）。")
             : new TState { SagaId = row.SagaId, CreatedAt = row.CreatedAt };
 
         state.CurrentState = row.CurrentState;

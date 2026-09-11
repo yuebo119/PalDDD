@@ -27,6 +27,10 @@ public abstract class SqlServerOutboxDbContext(DbContextOptions options) : Outbo
         CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v20 C-1：override 不调 base 使基类守卫死码化——四处补齐
+        // ITM-659 守卫族收口：maxRetryCount 非正守卫（batchSize 守卫姊妹，镜像 PalORM/Dapper/
+        // 基类）——非正值使 RetryCount < maxRetryCount 恒假（RetryCount >= 0），SQL 静默空
+        // 返回无诊断（直调路径防御性 fail-fast；Options 层已校验正数）
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount);
         // 优化（二十四轮 OP-5）：可组合 FromSql——分页由 EF SqlServer provider 生成
         // （正确放置 OFFSET…FETCH）。手工分页曾引发八轮 P1（TOP 位置非法）——整类缺陷面消灭
         // 优化（二十五轮 API 扫描 EF-3）：AsNoTracking——只读契约（接口 doc 保证不进
@@ -48,6 +52,7 @@ public abstract class SqlServerOutboxDbContext(DbContextOptions options) : Outbo
         CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v22 C-3：v20 C-1 GetPending 补齐后 Lease 路径漏网
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount); // ITM-659：maxRetryCount 非正守卫（同上 GetPending）
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         // ITM-167 修复：leaseSeconds 边界守卫（同 MySqlOutboxDbContext——防御 Store 直调
         // 路径的负值/超大值，Options 层已校验正数，此处为运行时 fail-fast）。

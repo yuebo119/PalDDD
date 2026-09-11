@@ -360,7 +360,7 @@ csproj 只写 `<Project Sdk>` + `<PackageReference Include="..." />`（无 Versi
 `InternalsVisibleTo` 已移入 csproj `<InternalsVisibleTo Include="..."/>` 项。
 `global using` 别名已移入 csproj `<Using Include="..." Alias="..."/>` 项。
 
-**禁止在 `src/` 中新建 `AssemblyInfo.cs` 或 `GlobalUsings.cs`**。此项由 gate-check.sh G1/G2 守护。
+**禁止在 `src/` 中新建 `AssemblyInfo.cs` 或 `GlobalUsings.cs`**。此项无机械守护（gate-check 与 ArchitectureBoundaryTests 均未覆盖——boundary 测试仅在文档引用扫描中把 AssemblyInfo.cs 列为跳过对象），由评审拦截。
 
 ### 4.7 项目内子目录规范
 
@@ -390,7 +390,7 @@ csproj 只写 `<Project Sdk>` + `<PackageReference Include="..." />`（无 Versi
 □ csproj 是否极简（仅 PackageReference/ProjectReference）？（§4.4）
 ```
 
-此清单由 gate-check.sh G2（文件头格式）+ G3（审计文档命名）部分守护。
+此清单无机械守护（原 gate-check G2/G3 判定已随 MIG 下沉/删除），由评审拦截。
 
 ### 4.9 逐类型文件创建决策矩阵（强制·约定大于配置）
 

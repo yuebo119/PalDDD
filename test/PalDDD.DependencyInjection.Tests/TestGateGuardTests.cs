@@ -134,8 +134,33 @@ public sealed class TestGateGuardTests
         new(@"\[(SimpleJob|(?:Short|Medium|Long)RunJob)", RegexOptions.Compiled);
 
     /// <summary>
+    /// T8 注释判定（P3 批 URL 勘正）：窗口行含 // 或 /* 即视为理由注释；但行含 ://
+    ///（http(s)://、ftp:// 等 URL scheme）时其中的 // 是 URL 组成而非注释形态——
+    /// 旧口径裸 Contains("//") 把纯 URL 行误判为"有理由注释"，对窗口内只有 URL 的
+    /// 作业配置误放行。最简式（行级 Contains 近似，任务书 P3 口径）：行含 :// 整行
+    /// 不作 // 注释论（行内注释附 URL 的形态会偏严计入违规——收紧方向，高召回优先）。
+    /// </summary>
+    internal static bool LineLooksLikeComment(string line) =>
+        (line.Contains("//", StringComparison.Ordinal) && !line.Contains("://", StringComparison.Ordinal))
+        || line.Contains("/*", StringComparison.Ordinal);
+
+    /// <summary>T8 判定器红绿矩阵（负向自证）：纯 URL 行不算理由（旧口径误放行点）；
+    /// 真注释与块注释行仍算。</summary>
+    [Test]
+    public async Task RationaleCommentDetector_HandlesUrlFalsePositive()
+    {
+        // 红形态（旧 Contains("//") 误放行）：窗口行只含 URL——URL 中的 // 不是注释
+        await Assert.That(LineLooksLikeComment("https://learn.microsoft.com/en-us/dotnet/api/benchmarkdotnet")).IsFalse();
+        await Assert.That(LineLooksLikeComment("参考 http://example.com/rationale")).IsFalse();
+        // 绿形态：真注释（// 与 /*）
+        await Assert.That(LineLooksLikeComment("// ShortRun：迭代预算说明")).IsTrue();
+        await Assert.That(LineLooksLikeComment("/* 理由块注释")).IsTrue();
+    }
+
+    /// <summary>
     /// T8 全量判定（扫描面勘正）：bench 全部 .cs 中每个 SimpleJob/RunJob 特性行的前 3 行内
-    /// 必须有注释（// 或 /*）。活跃性断言 ≥1 处——bash 只查 Program.cs 的 SimpleJob，
+    /// 必须有注释（// 或 /*，URL 中的 // 不算——见 <see cref="LineLooksLikeComment"/>）。
+    /// 活跃性断言 ≥1 处——bash 只查 Program.cs 的 SimpleJob，
     /// 该文件早已不含任何 Job 特性，恒空集 PASS = no-op 门（下沉时勘正，对齐 #18 路径勘正先例）。
     /// </summary>
     [Test]
@@ -157,8 +182,7 @@ public sealed class TestGateGuardTests
                 // 前 3 行窗口 [max(0, i-3), i-1]（bash awk 同口径）
                 var windowStart = Math.Max(0, i - 3);
                 var hasComment = Enumerable.Range(windowStart, i - windowStart)
-                    .Any(j => lines[j].Contains("//", StringComparison.Ordinal)
-                              || lines[j].Contains("/*", StringComparison.Ordinal));
+                    .Any(j => LineLooksLikeComment(lines[j]));
                 if (!hasComment)
                     violations.Add($"{file}:{i + 1}");
             }

@@ -30,6 +30,10 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
         CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v20 C-1：override 不调 base 使基类守卫死码化——四处补齐
+        // ITM-659 守卫族收口：maxRetryCount 非正守卫（batchSize 守卫姊妹，镜像 PalORM/Dapper/
+        // 基类）——非正值使 RetryCount < maxRetryCount 恒假（RetryCount >= 0），SQL 静默空
+        // 返回无诊断（直调路径防御性 fail-fast；Options 层已校验正数）
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount);
         // 优化（二十四轮 OP-5）：可组合 FromSql——OrderBy/Take 由 EF 生成 PG LIMIT
         // 优化（二十五轮 API 扫描 EF-2）：AsNoTracking——只读契约（接口 doc 保证不进
         // Mark*+SaveChanges）；违反契约的突变将静默丢失
@@ -50,6 +54,7 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
         CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v22 C-3：v20 C-1 GetPending 补齐后 Lease 路径漏网
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount); // ITM-659：maxRetryCount 非正守卫（同上 GetPending）
         // ITM-081 修复：补 owner 空白校验（对齐 SqlServerOutboxDbContext.LeasePendingMessagesAsync
         // 同款守卫）——缺守卫时空/空白 owner 会写入 "LockedBy" 列，破坏跨方言契约一致
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);

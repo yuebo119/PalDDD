@@ -171,7 +171,7 @@ flowchart TD
 
 | 编号 | 状态 | 任务 | 产出 | 验收标准 |
 |---|---|---|---|---|
-| CT-03 | 待启动 | 对 UNKNOWN 门禁（至少 tech-debt-scan、doc-consistency-check、assertion-strength-check）用 probe-template.sh 各做一次 mutation 定标 | 定标记录 | 已知坏输入必须令门禁失败；发现假绿即修复 |
+| CT-03 | 待启动 | 对 UNKNOWN 门禁用 probe-template.sh 各做一次 mutation 定标（对象刷新至现行：tech-debt-scan 脚本 + 已下沉的 AssertionStrengthGateTests / DocConsistencyGateTests——原 assertion-strength-check 脚本已删、doc-consistency-check 已薄壳，判定真源在 C# 测试） | 定标记录 | 已知坏输入必须令门禁失败；发现假绿即修复 |
 | CT-04 | 待启动 | 台账 CI 化：定标日期列 + 超期校验 | verify-ai-system 或 gate-check 增校验 | 人为改老某行日期，WARN 必须触发 |
 | CT-05 | 待启动 | 定标归档 | `.ai/gate/calibration/` 目录 | 历次定标输入输出可追溯 |
 

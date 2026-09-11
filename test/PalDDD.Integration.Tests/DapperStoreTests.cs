@@ -219,6 +219,21 @@ public sealed class DapperStoreTests
         await Assert.That(pending[0].Status).IsEqualTo(OutboxStatus.Pending);
     }
 
+    [Test]
+    public async Task Outbox_NonPositiveMaxRetryCount_ThrowsArgumentOutOfRange()
+    {
+        // ITM-659 守卫族收口：maxRetryCount 非正守卫——非正值使 retry_count < @maxRetryCount
+        // 恒假（retry_count >= 0），原实现各方言下静默空返回无诊断（直调路径防御性
+        // fail-fast；守卫在 SQL 执行前抛出）。GetPending 与 Lease 两方法同守卫，
+        // PalORM/EFCore 姊妹镜像（PalOrmOutboxStoreTests / OutboxEfCoreTests）。
+        var store = new DapperOutboxStore(_conn, _dbType);
+
+        await Assert.That(async () => await store.GetPendingMessagesAsync(10, -1, default))
+            .Throws<ArgumentOutOfRangeException>();
+        await Assert.That(async () => await store.LeasePendingMessagesAsync(10, "worker-1", TimeSpan.FromMinutes(5), 0, default))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
     // ─────────────────────────────────────────────────────────────
     // 二轮评审 T5：DapperUnitOfWork ambient 事务贯通行为回归。
     // ⚠️ 能力边界（S3 反向验证实证 + 对齐 PalOrmAmbientTransaction 声明）：SQLite 引擎级
