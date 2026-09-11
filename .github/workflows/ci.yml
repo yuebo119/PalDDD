@@ -119,10 +119,12 @@ jobs:
             bash .ai/scripts/verify-ai-system.sh
             bash .ai/scripts/gate-check.sh --allow-dirty
             # ITM-615：六个离线快检门禁此前只在本地手跑，CI 无守护——追加到 .ai 分支。
-            # 逐个跑并沿用 tee + ci-failed-tests.py 自诊断，任一失败即 exit 1。
+            # MIG-002/003（2026-09-11）：assertion-strength-check.sh 已删除（判定下沉
+            # test/.../AssertionStrengthGateTests.cs，随 Test 步骤运行）；doc-consistency-check.sh
+            # 薄壳化（判定下沉 DocConsistencyGateTests）保留 D7——两者从循环中移除/保留如常。
             # flaky-gate.sh 需传 csproj（build + N 次 test，非快速门禁），不纳入。
             # pipefail 已在块首统一 set（ITM-648）——此处管道退出码不再被 tee 掩码。
-            for ai_gate in encoding-gate doc-consistency-check tech-debt-scan test-gate template-gate assertion-strength-check; do
+            for ai_gate in encoding-gate doc-consistency-check tech-debt-scan test-gate template-gate; do
               echo "== .ai gate: $ai_gate =="
               if ! bash ".ai/scripts/$ai_gate.sh" 2>&1 | tee "ci-$ai_gate.log"; then
                 echo "::error ::.ai GATE FAILED: $ai_gate"
@@ -174,42 +176,15 @@ jobs:
         run: ./samples/PalDDD.PalOrmSample/bin/Release/net11.0/linux-x64/publish/PalDDD.PalOrmSample
 
   dialect-probe:
-    # unified v2.0 Phase 2a：方言实测防线固化——40 断言 × PG/MySQL 从"本机可选跑"升 CI 必跑。
-    # 定位是准发布门：路径触发（仅 Store/SQL/DDL/映射面变更），不阻塞 build-and-test 快速反馈。
-    # 脚本用根 scripts/dialect-probe.sh（.ai 独立仓不随主仓分发的分发副本，真源 .ai/scripts/）。
-    # 2a.4 红测已闭环（2026-08-20，metrics `4b9b4ea`：dev 注入→dialect-probe 红→revert 绿）。
-    # mutation 复验需本 job 的 PG/MySQL 服务容器（本机无 Docker 不可执行），实测轴归 CI。
+    # unified v2.0 Phase 2a：方言实测防线固化——断言 × PG/MySQL 从"本机可选跑"升 CI 必跑。
+    # MIG-001（2026-09-11）：bash 探针脚本（双副本）转正为 DialectProbeTests——
+    # test/PalDDD.Integration.Tests/DialectProbeTests.cs（12 测试/42 断言，探针 C# 本体直接
+    # 复用 + 安全守卫逐条迁移：palddd_probe_* 库名白名单/ownership marker/连接串不打印）。
+    # 容器由 Testcontainers 自管（服务容器块随之移除）；原 RunDialectGuarded 单方言降级
+    # 语义由独立测试方法天然满足；AmbientTx 探针保留。
+    # 定位不变：准发布门，路径触发（仅 Store/SQL/DDL/映射面变更），不阻塞快速反馈。
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_ROOT_PASSWORD: root
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1 -proot"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    env:
-      PALDDD_TEST_PG: "Host=localhost;Port=5432;Username=postgres;Password=postgres;Database=postgres"
-      PALDDD_TEST_MYSQL: "Server=localhost;Port=3306;User ID=root;Password=root;Database=mysql"
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -240,6 +215,17 @@ jobs:
         with:
           dotnet-version: '11.0.x'
 
-      - name: Run dialect probe（每方言 20 断言，独立临时库自动清理）
+      - name: Run dialect probe tests（DialectProbeTests，Testcontainers PG/MySQL）
         if: steps.paths.outputs.match == '1'
-        run: bash scripts/dialect-probe.sh --allow-destructive-probe
+        # MTP 手写协议：treenode-filter 在 -- 之后（dotnet test --filter 触发 VSTest 握手 exit 5）
+        # 首跑失败自诊（MIG-001 收口追补）：tee + ci-failed-tests.py 注解通道——GitHub 将
+        # ::error 转 check-run 注解，公开 API 可读（无需 admin 日志权限即可定位失败测试名）。
+        run: |
+          set -o pipefail
+          if ! dotnet test test/PalDDD.Integration.Tests/PalDDD.Integration.Tests.csproj -c Release -- --treenode-filter "/*/*/DialectProbeTests/*" 2>&1 | tee ci-dialect.log; then
+            echo "::error ::DIALECT PROBE TESTS FAILED"
+            python3 scripts/ci-failed-tests.py PalDDD.Integration.Tests ci-dialect.log || true
+            rm -f ci-dialect.log
+            exit 1
+          fi
+          rm -f ci-dialect.log

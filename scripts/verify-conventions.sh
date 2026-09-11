@@ -11,13 +11,21 @@
 # 安装为 git pre-commit hook（仅 grep 检查，秒级）：
 #   git config core.hooksPath .githooks
 #
-# 检查项：
-#   1. 零反射扫描（MakeGenericType / Activator / Assembly.GetTypes / Type.GetType）
-#   2. async void 扫描
-#   3. .Result / .Wait() 扫描（排除 IsCompletedSuccessfully 后）
-#   4. TODO / HACK / FIXME 扫描
-#   5. dotnet build 零错误零警告（--build 或默认模式）
-#   6. dotnet test 零失败（默认模式）
+# 检查项（V5-V7）：
+#   V5. TODO / HACK / FIXME / WORKAROUND 扫描（grep）
+#   V6. dotnet build 零错误零警告（--build 或默认模式）
+#   V7. dotnet test 零失败（默认模式）
+#
+# 已下沉判定（MIG-007/008/009，2026-09-11）：
+#   V1 零反射族（MakeGenericType/Activator/Assembly.GetTypes/Type.GetType）
+#   V2 async void
+#   V3 .Result（仅 IsCompletedSuccessfully 快速路径豁免）
+#   V4 .Wait() / GetAwaiter().GetResult()（PalORM 适配层白名单豁免）
+#   → 全部由 test/PalDDD.Core.Tests/SourceCodeGuardTests.cs 承接（Roslyn 语法树
+#     节点级判定 + 红绿矩阵固化，比本脚本原 grep 文本窗口更强且豁免语义更严）；
+#     与 .ai/scripts/gate-check.sh 的 G7/G8/G11/G12 同源对齐。
+#   ⚠️ --quick 模式不再覆盖上述四项（grep 部分仅剩 V5 TODO 扫描）；
+#     源码守卫由 V7 的 dotnet test 阶段执行（SourceCodeGuardTests）。
 # ═══════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -74,89 +82,9 @@ echo "════════════════════════�
 echo ""
 
 # ── grep 静态检查（所有模式都执行）──────────────────────────────
-
-# MakeGenericType 检查 — 排除已标注 [RequiresDynamicCode]/[RequiresUnreferencedCode] 的行
-MGT_HITS=$(grep -rn --include='*.cs' 'MakeGenericType' "$SRC_DIR" 2>/dev/null \
-    | grep -v '/obj/' | grep -v '/bin/' \
-    | grep -v ':[[:space:]]*//' \
-    | while IFS= read -r line; do
-        file=$(echo "$line" | cut -d: -f1)
-        lineno=$(echo "$line" | cut -d: -f2)
-        # 检查当前行及前 30 行是否有 RequiresDynamicCode/RequiresUnreferencedCode 注解
-        context=$(sed -n "$((lineno-30)),${lineno}p" "$file" 2>/dev/null)
-        if ! echo "$context" | grep -q -e 'RequiresDynamicCode' -e 'RequiresUnreferencedCode'; then
-            echo "$line"
-        fi
-    done || true)
-if [ -n "$MGT_HITS" ]; then
-    echo -e "${RED}❌ 零反射 (MakeGenericType) 违反${NC}"
-    echo "$MGT_HITS" | head -10
-    echo ""
-    FAIL=1
-else
-    echo -e "${GREEN}✅ 零反射 (MakeGenericType) 通过${NC}"
-fi
-
-# Activator.CreateInstance 检查 — 同上
-ACT_HITS=$(grep -rn --include='*.cs' 'Activator\.CreateInstance' "$SRC_DIR" 2>/dev/null \
-    | grep -v '/obj/' | grep -v '/bin/' \
-    | grep -v ':[[:space:]]*//' \
-    | while IFS= read -r line; do
-        file=$(echo "$line" | cut -d: -f1)
-        lineno=$(echo "$line" | cut -d: -f2)
-        context=$(sed -n "$((lineno-5)),${lineno}p" "$file" 2>/dev/null)
-        if ! echo "$context" | grep -q -e 'RequiresDynamicCode' -e 'RequiresUnreferencedCode'; then
-            echo "$line"
-        fi
-    done || true)
-if [ -n "$ACT_HITS" ]; then
-    echo -e "${RED}❌ 零反射 (Activator.CreateInstance) 违反${NC}"
-    echo "$ACT_HITS" | head -10
-    echo ""
-    FAIL=1
-else
-    echo -e "${GREEN}✅ 零反射 (Activator.CreateInstance) 通过${NC}"
-fi
-
-check "零反射 (Assembly.GetTypes)" "Assembly\.GetTypes" "$SRC_DIR"
-check "零反射 (Type.GetType(string))" "Type\.GetType(" "$SRC_DIR"
-
-check "禁止 async void" "async void" "$SRC_DIR"
-
-# .Result 检查（排除 IsCompletedSuccessfully 后的安全路径）
-RESULT_HITS=$(grep -rn --include='*.cs' '\.Result' "$SRC_DIR" 2>/dev/null \
-    | grep -v '/obj/' | grep -v '/bin/' \
-    | grep -v ':[[:space:]]*//' \
-    | while IFS= read -r line; do
-        file=$(echo "$line" | cut -d: -f1)
-        lineno=$(echo "$line" | cut -d: -f2)
-        context=$(sed -n "$((lineno-3)),${lineno}p" "$file" 2>/dev/null)
-        if ! echo "$context" | grep -q 'IsCompletedSuccessfully'; then
-            echo "$line"
-        fi
-    done || true)
-if [ -n "$RESULT_HITS" ]; then
-    echo -e "${RED}❌ .Result 使用（非 IsCompletedSuccessfully 快速路径）${NC}"
-    echo "$RESULT_HITS" | head -5
-    echo ""
-    FAIL=1
-else
-    echo -e "${GREEN}✅ .Result 仅在 IsCompletedSuccessfully 后使用${NC}"
-fi
-
-# .Wait() 检查
-WAIT_HITS=$(grep -rn --include='*.cs' '\.Wait()' "$SRC_DIR" 2>/dev/null \
-    | grep -v '/obj/' | grep -v '/bin/' \
-    | grep -v ':[[:space:]]*//' \
-    || true)
-if [ -n "$WAIT_HITS" ]; then
-    echo -e "${RED}❌ .Wait() 使用${NC}"
-    echo "$WAIT_HITS" | head -5
-    echo ""
-    FAIL=1
-else
-    echo -e "${GREEN}✅ .Wait() 未使用${NC}"
-fi
+# V1-V4（零反射族 / async void / .Result / .Wait）已下沉至
+# test/PalDDD.Core.Tests/SourceCodeGuardTests.cs（Roslyn 语法树判定），
+# 由 V7 的 dotnet test 阶段执行——见文件头部"已下沉判定"说明。
 
 check "禁止 TODO/HACK/FIXME" "TODO\|HACK\|FIXME\|WORKAROUND" "$SRC_DIR"
 

@@ -17,6 +17,8 @@
   <ItemGroup>
     <PackageReference Include="TUnit" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <!-- TechDebtGuardTests（MIG-010 #8 下沉）：SuppressMessage 的 Justification 配对判定用 Roslyn AttributeSyntax 解析 -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
   </ItemGroup>
 
 </Project>
