@@ -2,7 +2,12 @@
 // 用法：
 //   dotnet run scripts/flaky-parse.cs -- <报告根目录> <跑数>          # 分析模式（run_N/**/*.tunit-report.json）
 //   dotnet run scripts/flaky-parse.cs --gen-selftest <目录>          # 生成合成双跑报告（self-test 数据源）
-// 退出码：0=无代码性 flaky；1=检出 code-flaky 或零报告守卫触发。
+//   dotnet run scripts/flaky-parse.cs -- --run <csproj> [--runs N]   # 真跑模式（MIG-012-B2：
+//                                                                    #   dotnet build -c Release + N 次 dotnet test
+//                                                                    #   --results-directory 后进入分析，
+//                                                                    #   等价 .ai/scripts/flaky-gate.sh 真跑段）
+// 退出码：0=无代码性 flaky；1=检出 code-flaky 或零报告守卫触发；2=用法错误。
+// --run 模式下 build 失败透传 dotnet build 退出码（等价 bash set -e 行为）。
 // 等价口径（与原 python 逐条对照）：
 //   P=passed / S=skipped（三十七轮 P2-1：条件性 skip 非 fail）/ F=失败且异常不匹配环境模式 /
 //   E=失败但异常含环境指纹（Npgsql/MySql/Socket/连接拒绝/broker 等 T-DDD-6 口径）；
@@ -11,6 +16,7 @@
 //   零报告 = FAIL（三十七轮 P2-1：runner 崩溃不得静默通过）。
 #pragma warning disable CA1303 // 诊断输出为 CI 控制台英文关键字（FAIL/WARN/SUMMARY 被 bash grep 消费），字面量必要
 
+using System.Diagnostics;
 using System.Text.Json;
 
 var args2 = args.ToList();
@@ -19,12 +25,87 @@ if (args2.Count == 2 && args2[0] == "--gen-selftest")
     GenSelftest(args2[1]);
     return 0;
 }
-if (args2.Count != 2 || !int.TryParse(args2[1], out var runs))
+// MIG-012-B2：--run <csproj> [--runs N] 真跑模式（flaky-gate.sh 真跑段等价），
+// 必须在旧两分支之前判（--run 不是 <报告根> <跑数> 形态）
+if (args2.Count >= 2 && args2[0] == "--run")
 {
-    Console.Error.WriteLine("用法: flaky-parse.cs <报告根> <跑数> | --gen-selftest <目录>");
+    var proj = args2[1];
+    var runs = 2; // 默认与 flaky-gate.sh 一致
+    var i = 2;
+    while (i < args2.Count)
+    {
+        if (args2[i] == "--runs" && i + 1 < args2.Count && int.TryParse(args2[i + 1], out var n))
+        {
+            runs = n;
+            i += 2; // 跳过已消费的 N 值
+        }
+        else
+        {
+            Console.Error.WriteLine("用法: flaky-parse.cs --run <csproj> [--runs N] | <报告根> <跑数> | --gen-selftest <目录>");
+            return 2;
+        }
+    }
+    if (!File.Exists(proj))
+    {
+        Console.Error.WriteLine($"错误：项目文件不存在：{proj}");
+        return 2;
+    }
+    return RunGate(proj, runs);
+}
+if (args2.Count != 2 || !int.TryParse(args2[1], out var runs2))
+{
+    Console.Error.WriteLine("用法: flaky-parse.cs --run <csproj> [--runs N] | <报告根> <跑数> | --gen-selftest <目录>");
     return 2;
 }
-return Analyze(args2[0], runs);
+return Analyze(args2[0], runs2);
+
+// ─── 真跑模式（等价 flaky-gate.sh 主流程：build + N 次 test + analyze）───
+
+static int RunGate(string proj, int runs)
+{
+    // 临时工作目录（等价 mktemp -d /tmp/palddd-flaky.XXXXXX + trap rm -rf EXIT——
+    // finally 保证异常路径同样清理）
+    var work = Path.Combine(Path.GetTempPath(), $"palddd-flaky.{Guid.NewGuid():N}");
+    Directory.CreateDirectory(work);
+    try
+    {
+        Console.WriteLine($"═══════ flaky-gate：{proj} × {runs} 跑 ═══════");
+        var buildRc = Dotnet(["build", proj, "-c", "Release", "--verbosity", "quiet"], redirect: false);
+        if (buildRc != 0) return buildRc; // 等价 set -e：build 失败即退出并透传退出码
+        for (var i = 1; i <= runs; i++)
+        {
+            Console.WriteLine($"── 第 {i}/{runs} 跑 ──");
+            // 测试有失败不中断——flaky 检测正需要观察失败（输出丢弃，等价 >/dev/null 2>&1）
+            _ = Dotnet(["test", proj, "--no-build", "-c", "Release", "--verbosity", "quiet",
+                "--results-directory", Path.Combine(work, $"run_{i}")], redirect: true);
+        }
+        return Analyze(work, runs);
+    }
+    finally
+    {
+        Directory.Delete(work, recursive: true);
+    }
+}
+
+static int Dotnet(string[] arguments, bool redirect)
+{
+    var psi = new ProcessStartInfo("dotnet") { UseShellExecute = false };
+    foreach (var a in arguments) psi.ArgumentList.Add(a);
+    if (redirect)
+    {
+        // 重定向时必须排空两流，防管道缓冲写满子进程阻塞
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        using var p = Process.Start(psi)!;
+        var drainOut = p.StandardOutput.ReadToEndAsync();
+        var drainErr = p.StandardError.ReadToEndAsync();
+        p.WaitForExit();
+        return p.ExitCode;
+    }
+    using var plain = Process.Start(psi)!;
+    plain.WaitForExit();
+    return plain.ExitCode;
+}
 
 static int Analyze(string root, int runs)
 {

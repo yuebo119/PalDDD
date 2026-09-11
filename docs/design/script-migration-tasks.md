@@ -224,3 +224,18 @@
 ### [x] MIG-011{n} · 调用点与文档全量同步
 - ci.yml（2 处 python3）、check-all.sh（若有）、README/development/testing 的 python 引用；
 - verify-ai V2/V16 同步；`grep -rn "python" scripts/ .ai/scripts/ .github/ docs/` 零残留（历史段豁免）。
+
+
+---
+
+## MIG-012 · bash 清零批（2026-09-11 立项 · 用户裁决：全量替换）
+
+> **状态：2026-09-11 完成**——27 个 .cs file-based app（19 新建+3 合一+2 扩展+3 MIG-011）替代 25 个 .sh；bash 仅剩 install-ai-system（死锁豁免）+ template-gate（单行启动器）+ ci.yml run 语法骨架。全部双跑等价验证（diff 归一后逐行一致/计数一致/exit 码一致）；4 个 bash 原版缺陷被迁移过程暴露（sister-axis EXCLUDES 九型全崩/fix-completeness guard 残留假绿/G24 转义恒不命中/((MISSING++)) set-e 死）。论据修正：旧"净亏损"论漏算 bash 语言税（本会话 8+ 实证：pipefail×5/CRLF×2/MSYS×1/子shell/read/arithmetic）；
+> 两旧死锁判定推翻（根 gate-check"零依赖"不成立——降级降的是无 .ai 非无 SDK；verify-ai 同理）。
+> 策略：代理建 .cs 不删 .sh → 主线程统一删+引用同步+V2/V16 新名单（防中途门禁爆）。
+
+### [x] MIG-012-A 批：门禁薄壳 8 件（gate/tech-debt/test-gate/verify-ai/doc-consistency/encoding/verify-conventions/secret-scan → scripts/*.cs）
+### [x] MIG-012-B 批：评审工具 11 件（fix-orchestrator/review-scope/review-gate/fix-completeness/sister-axis/probe-template + 双镜像合一×3 + flaky/sibling 扩展）
+### [x] MIG-012-C 批：CI/发版 5 件（ci-coverage/check-all/gate-lite/changelog-check/changelog-facts）
+### [x] MIG-012-D 收口：统一删 .sh + engine.md(9处)/prompt/ci.yml 引用同步 + V2/V16 名单 + E1 退役评估
+### 不迁：install-ai-system（真死锁：非 .NET 宿主）+ template-gate（已是单行 dotnet run）+ ci.yml run 语法骨架
