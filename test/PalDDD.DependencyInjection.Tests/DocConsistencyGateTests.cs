@@ -173,8 +173,13 @@ public sealed class DocConsistencyGateTests
         var scanTargets = new List<string>();
         scanTargets.AddRange(Directory.EnumerateFiles(RepoPath("docs"), "*.md", SearchOption.AllDirectories));
         scanTargets.Add(RepoPath("README.md"));
-        scanTargets.AddRange(Directory.EnumerateFiles(RepoPath(".ai"), "*.md"));
-        scanTargets.AddRange(Directory.EnumerateFiles(RepoPath(".ai/review"), "*.md"));
+        // .ai 是独立 git 仓库（主仓 .gitignore 排除）——CI fresh checkout 不存在，本地存在才扫
+        // （bash 版 D10 对不存在路径 grep 静默空结果同语义；CI 上 docs 面仍然全量守护）。
+        if (Directory.Exists(RepoPath(".ai")))
+        {
+            scanTargets.AddRange(Directory.EnumerateFiles(RepoPath(".ai"), "*.md"));
+            scanTargets.AddRange(Directory.EnumerateFiles(RepoPath(".ai/review"), "*.md"));
+        }
 
         var stale = new Regex(@"849/849|PalORM\.slnx");
         var narrative = new Regex(@"删除|不套用|迁移|from ORM|版本|v1\.0");

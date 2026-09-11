@@ -218,4 +218,14 @@ jobs:
       - name: Run dialect probe tests（DialectProbeTests，Testcontainers PG/MySQL）
         if: steps.paths.outputs.match == '1'
         # MTP 手写协议：treenode-filter 在 -- 之后（dotnet test --filter 触发 VSTest 握手 exit 5）
-        run: dotnet test test/PalDDD.Integration.Tests/PalDDD.Integration.Tests.csproj -c Release -- --treenode-filter "/*/*/DialectProbeTests/*"
+        # 首跑失败自诊（MIG-001 收口追补）：tee + ci-failed-tests.py 注解通道——GitHub 将
+        # ::error 转 check-run 注解，公开 API 可读（无需 admin 日志权限即可定位失败测试名）。
+        run: |
+          set -o pipefail
+          if ! dotnet test test/PalDDD.Integration.Tests/PalDDD.Integration.Tests.csproj -c Release -- --treenode-filter "/*/*/DialectProbeTests/*" 2>&1 | tee ci-dialect.log; then
+            echo "::error ::DIALECT PROBE TESTS FAILED"
+            python3 scripts/ci-failed-tests.py PalDDD.Integration.Tests ci-dialect.log || true
+            rm -f ci-dialect.log
+            exit 1
+          fi
+          rm -f ci-dialect.log
