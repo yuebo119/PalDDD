@@ -176,6 +176,12 @@ public sealed class ArchitectureBoundaryTests
     public async Task CoreLayer_DoesNotExposeIntegrationEventMarkerOrUpcasterPlaceholders()
     {
         await Assert.That(File.Exists(Path.Combine(Root, "src", "PalDDD.Core", "IIntegrationEvent.cs"))).IsFalse();
+        // 以下两行文件存在性 + IEventUpcaster 字符串断言为 MIG-005 删除 gate-check G13
+        // bash 轨前的等价补强——bash 轨禁文件清单含 IUpcaster.cs/IEventUpcaster.cs，且源码
+        // 扫描含 IEventUpcaster 字符串（"IEventUpcaster" 不含子串 "IUpcaster"——I 后紧跟 E，
+        // 姊妹 DoesNotContain("IUpcaster") 对它放行，删 bash 后必须显式补上）。
+        await Assert.That(File.Exists(Path.Combine(Root, "src", "PalDDD.Core", "IUpcaster.cs"))).IsFalse();
+        await Assert.That(File.Exists(Path.Combine(Root, "src", "PalDDD.Core", "IEventUpcaster.cs"))).IsFalse();
 
         var coreFiles = Directory.EnumerateFiles(
             Path.Combine(Root, "src", "PalDDD.Core"),
@@ -187,6 +193,7 @@ public sealed class ArchitectureBoundaryTests
             var source = File.ReadAllText(file);
             await Assert.That(source).DoesNotContain("IIntegrationEvent");
             await Assert.That(source).DoesNotContain("IUpcaster");
+            await Assert.That(source).DoesNotContain("IEventUpcaster");
         }
     }
 
@@ -475,6 +482,40 @@ public sealed class ArchitectureBoundaryTests
     [Arguments("src/PalDDD.Idempotency", "SqlConnection")]
     [Arguments("src/PalDDD.Projections", "DbContext")]
     [Arguments("src/PalDDD.Projections", "SqlConnection")]
+    // 以下 29 行为 MIG-005 删除 gate-check G2 bash 轨前的等价补强——
+    // bash 轨按 8 层 × 6 关键字全矩阵扫描，C# 轨此前只锚 Core 层全关键字 + 其余层 2 关键字，
+    // 删 bash 后将丢失 SqliteConnection（全 8 层）与 NpgsqlConnection/DbCommand/.Dapper.
+    //（Serialization 等其余 7 层）的源码级检查（csproj 包守卫只拦依赖引入，不拦 BCL 内置
+    // 类型如 DbCommand 的直接使用），故补齐至与 bash 等强的完整矩阵。
+    [Arguments("src/PalDDD.Core", "SqliteConnection")]
+    [Arguments("src/PalDDD.Serialization", "SqliteConnection")]
+    [Arguments("src/PalDDD.CQRS", "SqliteConnection")]
+    [Arguments("src/PalDDD.Messaging", "SqliteConnection")]
+    [Arguments("src/PalDDD.EventLog", "SqliteConnection")]
+    [Arguments("src/PalDDD.Transactions", "SqliteConnection")]
+    [Arguments("src/PalDDD.Idempotency", "SqliteConnection")]
+    [Arguments("src/PalDDD.Projections", "SqliteConnection")]
+    [Arguments("src/PalDDD.Serialization", "NpgsqlConnection")]
+    [Arguments("src/PalDDD.CQRS", "NpgsqlConnection")]
+    [Arguments("src/PalDDD.Messaging", "NpgsqlConnection")]
+    [Arguments("src/PalDDD.EventLog", "NpgsqlConnection")]
+    [Arguments("src/PalDDD.Transactions", "NpgsqlConnection")]
+    [Arguments("src/PalDDD.Idempotency", "NpgsqlConnection")]
+    [Arguments("src/PalDDD.Projections", "NpgsqlConnection")]
+    [Arguments("src/PalDDD.Serialization", "DbCommand")]
+    [Arguments("src/PalDDD.CQRS", "DbCommand")]
+    [Arguments("src/PalDDD.Messaging", "DbCommand")]
+    [Arguments("src/PalDDD.EventLog", "DbCommand")]
+    [Arguments("src/PalDDD.Transactions", "DbCommand")]
+    [Arguments("src/PalDDD.Idempotency", "DbCommand")]
+    [Arguments("src/PalDDD.Projections", "DbCommand")]
+    [Arguments("src/PalDDD.Serialization", ".Dapper.")]
+    [Arguments("src/PalDDD.CQRS", ".Dapper.")]
+    [Arguments("src/PalDDD.Messaging", ".Dapper.")]
+    [Arguments("src/PalDDD.EventLog", ".Dapper.")]
+    [Arguments("src/PalDDD.Transactions", ".Dapper.")]
+    [Arguments("src/PalDDD.Idempotency", ".Dapper.")]
+    [Arguments("src/PalDDD.Projections", ".Dapper.")]
     public async Task DomainAndAppLayers_DoNotContainInfrastructureKeywords(string directory, string keyword)
     {
         var files = Directory.EnumerateFiles(
@@ -507,6 +548,15 @@ public sealed class ArchitectureBoundaryTests
     [Arguments("src/PalDDD.Transactions", "HttpContext")]
     [Arguments("src/PalDDD.EventLog", "HttpContext")]
     [Arguments("src/PalDDD.Messaging", "HttpContext")]
+    // 以下 4 行为 MIG-005 删除 gate-check G3 bash 轨前的等价补强——
+    // bash 轨按 4 层 × {HttpClient, IHttpClientFactory, HttpContext} 全矩阵扫描，
+    // C# 轨此前 Transactions/EventLog/Messaging 缺 IHttpClientFactory、EventLog/Messaging 缺
+    // HttpClient，删 bash 后补齐至等强矩阵。
+    [Arguments("src/PalDDD.Transactions", "IHttpClientFactory")]
+    [Arguments("src/PalDDD.EventLog", "HttpClient")]
+    [Arguments("src/PalDDD.EventLog", "IHttpClientFactory")]
+    [Arguments("src/PalDDD.Messaging", "HttpClient")]
+    [Arguments("src/PalDDD.Messaging", "IHttpClientFactory")]
     public async Task AppLayers_DoNotContainHttpInfrastructureKeywords(string directory, string keyword)
     {
         var files = Directory.EnumerateFiles(
@@ -882,30 +932,97 @@ public sealed class ArchitectureBoundaryTests
 
     /// <summary>
     /// DI 扩展方法必须以 AddPal* 开头。<br/>
-    /// 对应 conventions.md §3.5。
+    /// 对应 conventions.md §3.5。<br/>
+    /// 扫描范围（MIG-005 扩展，承接已删除的 gate-check G18 bash 轨）：
+    /// 全 src 的 <c>*ServiceCollectionExtensions.cs</c>（对齐原 bash 范围——适配层
+    /// Dapper/EFCore/Compression 等的 DI 扩展文件均在守护内）∪ PalDDD.DependencyInjection
+    /// 目录全部 .cs（原 C# 轨范围，含 ServiceRegistration.cs——bash 轨不覆盖它，不可缩小）。
+    /// 例外前缀 AddOptions/Configure/TryAdd 对齐原 bash G18 口径。<br/>
+    /// 同方法内含范围自证与负向自证（不另立测试方法——D12a 计数锚按 [Test] 方法数
+    /// 与文档声称锁定为 37，新增方法会使 doc 声称集漂移）。
     /// </summary>
     [Test]
     public async Task DependencyInjectionMethods_MustStartWithAddPalPrefix()
     {
-        var diFiles = Directory.EnumerateFiles(
-            Path.Combine(Root, "src", "PalDDD.DependencyInjection"),
-            "*.cs",
-            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
+        var scope = EnumerateDiScanScope().ToList();
 
-        foreach (var file in diFiles)
+        // ── 范围自证：适配层（Dapper/Repository.EFCore/Compression）文件必须在扫描面内
+        //（扩展前只扫 DI 目录——适配层 RegisterX 违规方法对守卫不可见）；
+        // 原 C# 轨范围不可缩小：DI 目录（含 ServiceRegistration.cs）仍在扫描面内。
+        await Assert.That(scope.Any(f => f.Contains("PalDDD.Dapper", StringComparison.Ordinal))).IsTrue();
+        await Assert.That(scope.Any(f => f.Contains("PalDDD.Repository.EFCore", StringComparison.Ordinal))).IsTrue();
+        await Assert.That(scope.Any(f => f.Contains("PalDDD.Compression", StringComparison.Ordinal))).IsTrue();
+        await Assert.That(scope.Any(f => f.Contains("PalDDD.DependencyInjection", StringComparison.Ordinal))).IsTrue();
+
+        // ── 主判定：所有扫描文件中的 public static IServiceCollection 方法必须 AddPal* 前缀
+        var scanned = 0;
+        foreach (var file in scope)
         {
+            scanned++;
             var source = File.ReadAllText(file);
-            // 检查所有 public static 返回 IServiceCollection 的方法
-            // 若不以 AddPal/AddOptions/Configure 开头 → 违规
             foreach (Match m in Regex.Matches(source, DiMethodPattern))
             {
                 var methodName = m.Groups[1].Value;
                 await Assert.That(
                     methodName.StartsWith("AddPal", StringComparison.Ordinal)
                     || methodName.StartsWith("AddOptions", StringComparison.Ordinal)
-                    || methodName.StartsWith("Configure", StringComparison.Ordinal)).IsTrue();
+                    || methodName.StartsWith("Configure", StringComparison.Ordinal)
+                    || methodName.StartsWith("TryAdd", StringComparison.Ordinal)).IsTrue();
             }
         }
+
+        // 扫描面存在性断言（防目录改名后守卫对空集静默通过）：
+        // 至少 8 个文件——当前基线为 11 个 *ServiceCollectionExtensions.cs + DI 目录若干。
+        await Assert.That(scanned >= 8).IsTrue();
+
+        // ── 负向自证（红路径可达性）：在真实适配层文件（Dapper）源码上注入违规方法
+        // RegisterDialectSupport 后，DiMethodPattern 必须捕获它且前缀判定必须判违规；
+        // 同时锁定该文件真实存在的 AddPalDapperTransactions 不被误伤（绿路径）。
+        var dapperFile = scope.Single(f => f.EndsWith("DapperServiceCollectionExtensions.cs", StringComparison.Ordinal));
+        var dapperSource = File.ReadAllText(dapperFile);
+
+        var compliantNames = Regex.Matches(dapperSource, DiMethodPattern)
+            .Select(m => m.Groups[1].Value)
+            .ToList();
+        await Assert.That(compliantNames).Contains("AddPalDapperTransactions");
+
+        const string violating = """
+            public static IServiceCollection RegisterDialectSupport(this IServiceCollection services)
+            {
+                return services;
+            }
+            """;
+        var offendingNames = Regex.Matches(dapperSource + violating, DiMethodPattern)
+            .Select(m => m.Groups[1].Value)
+            .ToList();
+        await Assert.That(offendingNames).Contains("RegisterDialectSupport");
+        await Assert.That(offendingNames.Any(n => !IsAllowedDiPrefix(n))).IsTrue();
+    }
+
+    /// <summary>AddPal/AddOptions/Configure/TryAdd 前缀白名单（对齐原 bash G18 例外口径）。</summary>
+    private static bool IsAllowedDiPrefix(string methodName) =>
+        methodName.StartsWith("AddPal", StringComparison.Ordinal)
+        || methodName.StartsWith("AddOptions", StringComparison.Ordinal)
+        || methodName.StartsWith("Configure", StringComparison.Ordinal)
+        || methodName.StartsWith("TryAdd", StringComparison.Ordinal);
+
+    /// <summary>
+    /// G18 扩展后的 DI 扫描范围（<c>*ServiceCollectionExtensions.cs</c> 全 src ∪ DI 目录全部 .cs）。
+    /// 供 <see cref="DependencyInjectionMethods_MustStartWithAddPalPrefix"/> 共用。
+    /// </summary>
+    private static IEnumerable<string> EnumerateDiScanScope()
+    {
+        var sceFiles = Directory.EnumerateFiles(
+            Path.Combine(Root, "src"),
+            "*ServiceCollectionExtensions.cs",
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
+
+        var diDirFiles = Directory.EnumerateFiles(
+            Path.Combine(Root, "src", "PalDDD.DependencyInjection"),
+            "*.cs",
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
+
+        return sceFiles.Concat(diDirFiles).Distinct(StringComparer.Ordinal);
     }
 
     /// <summary>

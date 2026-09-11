@@ -314,9 +314,12 @@ public abstract class EventLogDbContext(
         // 合并为单次 MaxAsync：无事件时返回 -1（NoStream 语义），省去 AnyAsync 预检查的一次 DB 往返。
         // MaxAsync 在 SQL 上翻译为 SELECT MAX(StreamVersion) ... WHERE StreamName=@p，
         // 无匹配行时 MAX 返回 NULL → EF Core 映射为 nullable long，空流落到 default(-1) 分支。
+        // MIG-008：ConfigureAwait 补齐——原裸 await 被旧 G12 文件级差值计数漏检（该文件
+        // 多余 CA 名额抵消），节点级 SourceCodeGuardTests 守卫 4 抓出（偏差账本同步销账）。
         return await Events
             .Where(e => e.StreamName == streamName)
             .MaxAsync(e => (long?)e.StreamVersion, cancellationToken)
+            .ConfigureAwait(false)
             ?? -1;
     }
 
