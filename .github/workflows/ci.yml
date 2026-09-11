@@ -35,26 +35,10 @@ jobs:
           restore-keys: ${{ runner.os }}-nuget-
 
       - name: 依赖漏洞扫描（v54 真门禁——v53 版为 exit-0 no-op；JSON 解析有漏洞即 exit 1，替代 NU19xx 压制下人工审计）
+        # MIG-011b：内嵌 python 判定迁 scripts/vuln-scan.cs（file-based app），逻辑等价
         run: |
           dotnet list package --vulnerable --include-transitive --format json > /tmp/vuln.json
-          python3 - <<'EOF'
-          import json, sys
-          with open('/tmp/vuln.json') as f:
-              data = json.load(f)
-          found = []
-          for project in data.get('projects', []):
-              for fw in project.get('frameworks', []):
-                  for pkg in fw.get('topLevelPackages', []) + fw.get('transitivePackages', []):
-                      if pkg.get('vulnerabilities'):
-                          found.append(f"{pkg['id']}@{pkg.get('resolvedVersion','?')} "
-                                       + ", ".join(v.get('severity','?') for v in pkg['vulnerabilities']))
-          if found:
-              print(f"::error::{len(found)} 个包存在已知漏洞")
-              for line in found:
-                  print(f"  {line}")
-              sys.exit(1)
-          print("漏洞扫描通过：0 个已知漏洞")
-          EOF
+          dotnet run scripts/vuln-scan.cs /tmp/vuln.json
 
       - name: Restore
         run: dotnet restore PalDDD.slnx
@@ -73,7 +57,7 @@ jobs:
             echo "== Testing: $csproj =="
             if ! dotnet test "$csproj" --no-build -c Release --verbosity minimal 2>&1 | tee ci-last-test.log; then
               echo "::error ::FAILED PROJECT: $csproj"
-              python3 scripts/ci-failed-tests.py "$(basename "$csproj" .csproj)" ci-last-test.log || true
+              dotnet run scripts/ci-failed-tests.cs "$(basename "$csproj" .csproj)" ci-last-test.log || true
               rm -f ci-last-test.log
               exit 1
             fi
@@ -112,7 +96,7 @@ jobs:
           # ITM-616：凭据扫描（主仓脚本，不依赖 .ai）——两个分支都要跑，补 SE2 此前失实的防线。
           if ! bash scripts/secret-scan.sh 2>&1 | tee ci-secret-scan.log; then
             echo "::error ::SECRET SCAN FAILED：受跟踪文件发现疑似硬编码凭据"
-            python3 scripts/ci-failed-tests.py secret-scan ci-secret-scan.log || true
+            dotnet run scripts/ci-failed-tests.cs secret-scan ci-secret-scan.log || true
             rm -f ci-secret-scan.log
             exit 1
           fi
@@ -131,7 +115,7 @@ jobs:
               echo "== .ai gate: $ai_gate =="
               if ! bash ".ai/scripts/$ai_gate.sh" 2>&1 | tee "ci-$ai_gate.log"; then
                 echo "::error ::.ai GATE FAILED: $ai_gate"
-                python3 scripts/ci-failed-tests.py "$ai_gate" "ci-$ai_gate.log" || true
+                dotnet run scripts/ci-failed-tests.cs "$ai_gate" "ci-$ai_gate.log" || true
                 rm -f "ci-$ai_gate.log"
                 exit 1
               fi
@@ -142,7 +126,7 @@ jobs:
             # pipefail 已在块首统一 set（ITM-648）。
             if ! bash scripts/gate-check.sh 2>&1 | tee ci-gate.log; then
               echo "::error ::ROOT GATE-CHECK FAILED"
-              python3 scripts/ci-failed-tests.py gate ci-gate.log || true
+              dotnet run scripts/ci-failed-tests.cs gate ci-gate.log || true
               exit 1
             fi
           fi
@@ -221,13 +205,13 @@ jobs:
       - name: Run dialect probe tests（DialectProbeTests，Testcontainers PG/MySQL）
         if: steps.paths.outputs.match == '1'
         # MTP 手写协议：treenode-filter 在 -- 之后（dotnet test --filter 触发 VSTest 握手 exit 5）
-        # 首跑失败自诊（MIG-001 收口追补）：tee + ci-failed-tests.py 注解通道——GitHub 将
+        # 首跑失败自诊（MIG-001 收口追补）：tee + ci-failed-tests.cs 注解通道——GitHub 将
         # ::error 转 check-run 注解，公开 API 可读（无需 admin 日志权限即可定位失败测试名）。
         run: |
           set -o pipefail
           if ! dotnet test test/PalDDD.Integration.Tests/PalDDD.Integration.Tests.csproj -c Release -- --treenode-filter "/*/*/DialectProbeTests/*" 2>&1 | tee ci-dialect.log; then
             echo "::error ::DIALECT PROBE TESTS FAILED"
-            python3 scripts/ci-failed-tests.py PalDDD.Integration.Tests ci-dialect.log || true
+            dotnet run scripts/ci-failed-tests.cs PalDDD.Integration.Tests ci-dialect.log || true
             rm -f ci-dialect.log
             exit 1
           fi
