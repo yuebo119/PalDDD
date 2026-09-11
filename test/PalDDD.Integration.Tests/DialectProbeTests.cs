@@ -418,7 +418,12 @@ internal sealed class DialectProbeSession : IAsyncDisposable
     /// <summary>创建 MySQL 探针会话：一次性容器 → palddd_probe_mysql_* 库 → marker → docs/sql DDL。</summary>
     public static async Task<DialectProbeSession> CreateMySqlAsync(CancellationToken ct = default)
     {
+        // CI 实跑实证（dffd76a 首跑）：MySqlBuilder 默认用户是 "mysql"——MYSQL_USER 只对默认库
+        // 授权，CREATE DATABASE 的 probe 库连接即 Access denied。显式 root 对齐原探针语义
+        //（root 建库/连接，全库权限）；PG 侧默认 postgres 即超级用户无此问题。
         var container = new MySqlBuilder(TestEnvironment.MySqlImage)
+            .WithUsername("root")
+            .WithPassword("palddd-probe-root")
             .WithDatabase($"palddd_test_{Guid.NewGuid():N}")
             .Build();
         // MySQL 管理连接直接复用容器默认库（palddd_test_* 命中白名单；CREATE/DROP DATABASE 不受当前库影响）
