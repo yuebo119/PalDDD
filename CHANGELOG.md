@@ -17,6 +17,11 @@
 - **变更日志事实收集器 `scripts/changelog-facts.sh`**：`changelog-facts.sh <from-tag> [to-ref]` 一次产出 9 段机械可验证事实（提交分布/公共 API 快照 diff/新增诊断/废弃扫描/ADR 与文档增删/依赖变更/测试实测占位/[Unreleased] 原料），每条附可复查命令（`docs/release.md` §十二 Phase 1）
 - **变更日志结构门禁 `scripts/changelog-check.sh`**：C1 [Unreleased] 首位 / C2 tag 与转正段一致性（未转正禁止打 tag）/ C3 分类顺序 / C4 Tests 段预估口径 WARN / C5 分类层内部术语泄漏 WARN——挂入发布前验证清单与打 tag 前核对
 
+### Dependencies 依赖
+
+- PalORM 5.4.0 → 5.5.1（五包同步：Core/SourceGen/Sqlite/PostgreSql/MySql；5.5.1 纯依赖升级——Roslyn 对齐本仓 5.9.0 钉扎、Microsoft.Data.Sqlite.Core 传递依赖 11.0.0-preview.7 → 11.0.0-rc.1、消 SQLitePCLRaw NU1903 High 级漏洞；5.5.0 行为变更点（脱敏信道/外部事务语义/WhereJson 守卫）经 grep 核实本仓零使用）
+- Confluent.Kafka 2.15.0 → 2.15.1（补丁版；librdkafka.redist 传递依赖同步 2.15.1）
+
 ### Documentation 文档
 
 - 新增 ADR-022「分析器诊断与生成器诊断的分层关系 + 稳定名称谓词共享」：三对诊断（PDDD009/PALMSG004、PDDD010/PALMSG005、PDDD011/PALMSG002）维持共存并定性为分层而非冗余；`IsStableName` 谓词收敛为 `src/PalDDD.Shared/StableNameValidation.cs` 链接共享源码（`docs/decisions/022-analyzer-generator-diagnostic-layering.md`）

@@ -158,11 +158,11 @@ InMemory implementations cover all abstract interfaces, so unit tests and protot
 | **PalDDD.Dapper.PostgreSql** | 2.1.0 | Dapper PostgreSQL enhancements: audit / JSONB / sharding / soft delete |
 | **PalDDD.Dapper.MySql** | 2.1.0 | Dapper MySQL enhancements |
 | **PalDDD.Dapper.Sqlite** | 2.1.0 | Dapper SQLite enhancements: TypeHandler / RowFactory / FTS5 |
-| **PalORM.Core** | 5.4.0 | PalORM engine core: DataSession / Provider / RowFactory (underlying dependency of PalDDD.PalORM) |
-| **PalORM.SourceGen** | 5.4.0 | PalORM source generator: compile-time RowFactory / CommandFactory generation (zero reflection) |
-| **PalORM.PostgreSql** | 5.4.0 | PalORM PostgreSQL dialect Provider: RETURNING / COPY |
-| **PalORM.MySql** | 5.4.0 | PalORM MySQL dialect Provider: BulkCopy / multi-value INSERT (5.4 adds resilience configureResilience callback) |
-| **PalORM.Sqlite** | 5.4.0 | PalORM SQLite dialect Provider: FTS5 / JSON1 |
+| **PalORM.Core** | 5.5.1 | PalORM engine core: DataSession / Provider / RowFactory (underlying dependency of PalDDD.PalORM) |
+| **PalORM.SourceGen** | 5.5.1 | PalORM source generator: compile-time RowFactory / CommandFactory generation (zero reflection) |
+| **PalORM.PostgreSql** | 5.5.1 | PalORM PostgreSQL dialect Provider: RETURNING / COPY |
+| **PalORM.MySql** | 5.5.1 | PalORM MySQL dialect Provider: BulkCopy / multi-value INSERT (5.4 adds resilience configureResilience callback) |
+| **PalORM.Sqlite** | 5.5.1 | PalORM SQLite dialect Provider: FTS5 / JSON1 |
 
 ---
 
