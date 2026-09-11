@@ -416,7 +416,7 @@ dotnet run --project bench/PalDDD.Benchmarks -- --smoke | tee /tmp/after.txt
 | `ci.yml` Build & Test | 每次 push/PR | 构建 + 单元 + 集成（Testcontainers）+ 质量门禁 |
 | `ci.yml` AOT | 每次 push/PR | AOT 核心层 publish -p:PublishAot=true |
 | `perf-gate.yml`（待实施） | 每周日 + `[perf]` PR | Smoke 基线 + 回归检测 |
-| `assertion-strength-check.sh` | 每次 PR/本地 | 断言强度棘轮（替代 Stryker；Stryker 不支持 TUnit/MTP） |
+| `AssertionStrengthGateTests`（test/PalDDD.DependencyInjection.Tests） | 每次 PR/本地（dotnet test） | 断言强度棘轮（替代 Stryker；Stryker 不支持 TUnit/MTP；MIG-003 由脚本下沉） |
 
 ### Testcontainers CI 要求
 
@@ -473,7 +473,7 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 | `bench/PalDDD.Benchmarks/FrameworkBenchmarks.cs` | 领域核心基准 |
 | `bench/PalDDD.Benchmarks/InfraBenchmarks.cs` | 基础设施基准 |
 | `scripts/verify-conventions.sh` | 规范验证脚本（三模式） |
-| `.ai/scripts/assertion-strength-check.sh` | 断言强度检查脚本（替代 Stryker） |
+| `AssertionStrengthGateTests.cs` | 断言强度检查测试（替代 Stryker；原 bash 脚本 MIG-003 下沉） |
 
 ---
 

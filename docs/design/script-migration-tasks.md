@@ -11,13 +11,19 @@
 
 | 批次 | 任务数 | 迁移行数 | 量级 | 状态 | 进度 |
 |------|:--:|:--:|:--:|:--:|:--:|
-| **P0 立即** | 1 | 941 | 1 会话 | 待执行 | 0% |
-| **P1 内嵌 Python 双件** | 2 | ~416 | 1 会话 | 待执行 | 0% |
-| **P2 三轨去重批** | 3 | ~377 | 1 会话 | 待执行 | 0% |
-| **P3 Roslyn 能力升级批** | 4 | ~325 | 2 会话 | 待执行 | 0% |
+| **P0 立即** | 1 | 941 | 1 会话 | ✅ 已完成 | 100% |
+| **P1 内嵌 Python 双件** | 2 | ~416 | 1 会话 | ✅ 已完成 | 100% |
+| **P2 三轨去重批** | 3 | ~377 | 1 会话 | ✅ 已完成 | 100% |
+| **P3 Roslyn 能力升级批** | 4 | ~325 | 2 会话 | ✅ 已完成 | 100% |
 | **P4 按触碰登记** | 7 项登记 | ~640 | 摊销 | 触发时执行 | 0% |
 | **不迁移登记** | 23 文件 | ~3,104 | — | 决策已定 | — |
-| **合计** | 10 排期 + 7 登记 | **~1,994 该迁 + 640 按触碰** | **~5 会话** | | **0%** |
+| **合计** | 10 排期 + 7 登记 | **~1,994 该迁 + 640 按触碰** | 实际 1 会话（4 并行代理 + 主线程） | **✅ 排期任务全部完成** | **100%** |
+
+> **实施纪要（2026-09-11，单会话完成全部 10 项）**：波 1 三代理并行（MIG-001/002+003/007+008+009）+ 波 2 一代理（MIG-004+005+006+010）+ 主线程收口（ci.yml/缺陷修复销账/残留清理/docs 同步）。
+> 战果：新增 5 个 C# 门禁测试文件（DialectProbeTests 12/DocConsistencyGateTests 15/AssertionStrengthGateTests 2/SourceCodeGuardTests 11/TechDebtGuardTests 6，共 46 个测试）；删除 3 个 bash 脚本（dialect-probe 双副本 941 行 + assertion-strength 86 行）；gate-check 24→8 项（767→328 行）、tech-debt 23→19 项（413→302 行）、doc-consistency 薄壳（343→73 行）、verify-conventions 删 V1-V4、test-gate 删 T4；boundary 补强 +137 行（G18 全 src 范围 + G2/G3/G13 参数矩阵补全）。
+> **迁移暴露并修复存量缺陷 1 个**：EventLogDbContext.cs:317 裸 await（G12 文件级差值计数的假绿盲区——节点级守卫抓出，已修 + 偏差账本销账）。
+> **基线净化发现**：python 花括号配对漏检 10 个 DialectProbeTests 壳方法（断言在共享辅助方法内），断言强度真实存量 166→185（新基线 190 = 185 + 余量）。
+> 红测全记录：G18 负向自证（RegisterDialectProbe 红）、#8 无 Justification 红、V5 集合红测、D12a 文档数字红、断言超基线红、SourceCodeGuard 24 红绿矩阵 + 临时探针 6 守卫全红（行号精确）、DialectProbe 断言反转红。
 
 每批独立可停；批内任务按依赖排序；全程遵守下方「双轨过渡协议」。
 
@@ -38,7 +44,7 @@
 
 ## P0 · 立即迁移
 
-### [ ] MIG-001 · dialect-probe 双副本转正为 xUnit 多方言测试
+### [x] MIG-001 · dialect-probe 双副本转正为 xUnit 多方言测试
 - **源**：`scripts/dialect-probe.sh`（472）+ `.ai/scripts/dialect-probe.sh`（469）——bash 编排 → 332 行 Python（连接串解析/探活/C# 源码生成）→ C# 探针本体（file-based app，40 项方言断言）
 - **目标**：`test/PalDDD.Integration.Tests/`（或 PalORM.Tests）内新建 `DialectProbeTests`，探针 C# 本体**直接复用**（从生成模板剥离），宿主用 `MultiDialectFixture` 现成范式（Testcontainers 生命周期/环境守卫/连接管理）
 - **该迁依据**：三层嵌套（bash 里 python 写 C# 字符串）；探针本体已是 C#；双副本 + V23 比对整类消失
@@ -56,7 +62,7 @@
 
 ## P1 · 内嵌 Python 双件下沉（表达力溢出实证最强国）
 
-### [ ] MIG-002 · doc-consistency-check D1-D6/D8-D12 下沉（11/12 项）
+### [x] MIG-002 · doc-consistency-check D1-D6/D8-D12 下沉（11/12 项）
 - **源**：`.ai/scripts/doc-consistency-check.sh`（343 行，D1-D12）；内嵌两个 Python 迷你解析器：D12a raw-string 状态机（数 `[Test]` 真实数 vs 文档声称）、D11 XML doc 覆盖窗口状态机
 - **目标**：并入 `test/PalDDD.DependencyInjection.Tests/`（与 boundary 同居）；D12a → 直接引用测试程序集反射计数（比状态机更强，零解析）；D11 → 反射 + XML doc 提取；D1-D6/D8/D9/D10 → 文档文本断言（File.ReadAllText + 断言）
 - **该迁依据**：12 项中 11 项查主仓对象；两个内嵌 Python 解析器 = bash 表达力溢出实证；缺陷史（假 PASS、三次扫描面修正、D12 裸数字振荡即 PD34）
@@ -65,7 +71,7 @@
 - **验收**：①新测试覆盖 11 项且红测（改错一个文档数字 → 红）；②CI 六门禁循环更新（doc-consistency-check.sh 从列表移除或变薄）；③verify-ai V5（引用存在性）同步
 - **量级**：0.5-1 会话
 
-### [ ] MIG-003 · assertion-strength-check 下沉（棘轮断言化）
+### [x] MIG-003 · assertion-strength-check 下沉（棘轮断言化）
 - **源**：`.ai/scripts/assertion-strength-check.sh`（86 行）；Python 花括号配对做方法级断言扫描；`MAX_WEAK=173` 裸数字棘轮
 - **目标**：并入测试项目——Roslyn 解析 `[Test]` 方法体断言形态（与 DiagnosticCoverageGate 的 Roslyn 基建共享）；弱断言基线从裸数字改为**受审常量**（`internal const int MaxWeakAssertions = 166`，变更需评审，与 PublicApiSnapshot 同治理模型）
 - **该迁依据**：死亡 5 周缺陷史（cd 层数错误整体 no-op，弱断言积累至 173，棘轮即为此重置）；Python 配对对字符串内 `}` 误判靠代码风格兜底
@@ -76,21 +82,21 @@
 
 ## P2 · 三轨去重批（纯删 bash 半边，零新判定逻辑）
 
-### [ ] MIG-004 · G19 + T4 双轨删除 + G20 活体 no-op 修复
+### [x] MIG-004 · G19 + T4 双轨删除 + G20 活体 no-op 修复
 - **源**：gate-check G19（perl 命名检查 27 行）+ test-gate T4（awk 命名检查 28 行）+ G20（路径错误的恒 PASS 项 24 行）
 - **目标**：三者直接删除——命名规则的真源 `ArchitectureBoundaryTests.TestMethods_MustFollowUnderscorePattern`（含两层 falsification）独存；G20 的正确防线 `OutboxMessage_UsesBinaryPayload` 已在 boundary
 - **该迁依据**：三轨重复实证（C# 版唯一经 falsification 验证）；**G20 是现存活体缺陷**（bash 检查不存在的路径 `Transactions/OutboxMessage.cs`，恒 PASS）
 - **验收**：①G 表 24→21 项，三方同步（gate/prompt.md G 表、conventions 执行矩阵、verify-ai V5 编号连续性校验更新为 21）；②test-gate 输出不再含 T4；③`git grep "TripleUnderscore"` 仅剩历史文档
 - **量级**：0.25 会话（纯删 + 三方同步）
 
-### [ ] MIG-005 · gate-check 12 项双轨去重（G2-G6/G13/G15/G16/G18/G21）
+### [x] MIG-005 · gate-check 12 项双轨去重（G2-G6/G13/G15/G16/G18/G21）
 - **源**：gate-check 284 行（11 项与 boundary 测试精确双轨）+ G18（25 行）
 - **目标**：删除 bash 侧 11 项；**G18 前置**——先扩 boundary `DependencyInjectionMethods_MustStartWithAddPalPrefix` 扫描范围（DI 目录 → 全 src 的 `*ServiceCollectionExtensions.cs`，对齐 bash 现范围），红测一个适配层违规样本，然后再删 G18
 - **该迁依据**：12 项双轨实锤（boundary 有等价且更强的测试）；G15 的 bash 硬编码名单出过名单腐化（需元审计修复），C# 动态扫描无此风险
 - **验收**：①G 表 21→9 项；②G18 范围扩展的负向自证测试新增；③三方同步；④一轮评审确认无覆盖损失
 - **量级**：0.5 会话
 
-### [ ] MIG-006 · tech-debt #11 删除（诊断计数双轨）
+### [x] MIG-006 · tech-debt #11 删除（诊断计数双轨）
 - **源**：tech-debt-scan #11（13 行，只数 PDDD 子集 ID）
 - **目标**：删除——真源 `DiagnosticCoverageGateTests`（38 条断言级 + 边界矩阵）
 - **该迁依据**：bash 版是 C# 版真子集且已口径分裂（脚本注释被迫解释"16 描述符 vs 15 唯一 ID"歧义）
@@ -101,28 +107,28 @@
 
 ## P3 · Roslyn 能力升级批（新写判定，补主仓零覆盖区）
 
-### [ ] MIG-007 · G7/G8 下沉：Roslyn 反射调用扫描器
+### [x] MIG-007 · G7/G8 下沉：Roslyn 反射调用扫描器
 - **源**：gate-check G7（26 行，4 种反射 API + sed 回看 30 行查豁免注解）+ G8（42 行，Expression.Compile + dynamic，**ITM-073 误豁免缺陷史**——按"文件含 RequiresDynamicCode 字符串"豁免被 SuppressMessage 文案误触发）
 - **目标**：新写 `SourceCodeGuardTests`（建议放 Core.Tests 或新建 QualityGate 测试类）：Roslyn 找 invocation 节点 → 沿语法祖先查 `[RequiresDynamicCode]/[RequiresUnreferencedCode]` attribute 挂载——语义级豁免判定，文本回看窗口的脆弱性整类消失
 - **该迁依据**：主仓零覆盖（StrategicDddAnalyzer 不覆盖此域，bash 是唯一门禁）；AOT 红线（P0 #3）；ITM-073 实锤
 - **验收**：①对全 src 扫描 0 违规（与 G7/G8 现结论等价）；②红测三样本——无豁免反射调用（红）、方法级豁免（绿）、类型级豁免（绿）、**SuppressMessage 文案含关键词但不挂 attribute（必须红——ITM-073 回归样本）**
 - **量级**：1 会话（Roslyn 扫描器 + 样本矩阵）
 
-### [ ] MIG-008 · G11/G12 下沉：阻塞与 ConfigureAwait 扫描器
+### [x] MIG-008 · G11/G12 下沉：阻塞与 ConfigureAwait 扫描器
 - **源**：G11（30 行，`.Result` 3 行回看豁免 + PalORM 路径白名单）+ G12（24 行，perl -0777 剥注释后 await/ConfigureAwait 差值计数——一个方法多次 await 共享一次 ConfigureAwait 时计数口径失真）
 - **目标**：同 MIG-007 扫描器家族：Roslyn 逐 await 表达式判 `.ConfigureAwait` 后缀；`.Result` 判是否在 `IsCompletedSuccessfully` 条件分支内（语义级，跨行 if 可判）
 - **该迁依据**：AI 高频错误区；G12 差值计数是近似口径；负地址 sed 修复史
 - **验收**：全 src 等价 + 红测矩阵（合法 IsCompletedSuccessfully 快路径绿/裸 .Result 红/await 无 ConfigureAwait 红）
 - **量级**：1 会话（与 MIG-007 同批做，扫描器基建共享）
 
-### [ ] MIG-009 · verify-conventions V1-V4 下沉（主仓零覆盖补缺）
+### [x] MIG-009 · verify-conventions V1-V4 下沉（主仓零覆盖补缺）
 - **源**：`scripts/verify-conventions.sh` V1 零反射族（44 行）/ V2 async void（1 行）/ V3-V4 .Result/.Wait（31 行）
 - **目标**：与 MIG-007/008 同一扫描器家族承接（反射族与 G7/G8 合并；async void 与 .Result 并入 MIG-008）——本任务实际是确认覆盖映射 + 删根脚本对应段
 - **该迁依据**：主仓几乎零覆盖（仅单文件弱等价物）——下沉即补缺而非去重
 - **验收**：verify-conventions 剩 V5/V6/V7（纯编排段）；红测矩阵见 MIG-007/008
 - **量级**：0.25 会话（若 MIG-007/008 完成则本任务为收尾）
 
-### [ ] MIG-010 · tech-debt #8/#13/#14 下沉（三个内嵌 Python 判定）
+### [x] MIG-010 · tech-debt #8/#13/#14 下沉（三个内嵌 Python 判定）
 - **源**：#8 SuppressMessage 配对（20 行 python + fail-closed 门）/ #13 方言 SQL 守卫对称（51 行 python，两次 no-op 修复史）/ #14 姊妹乐观锁对称（43 行 python 跨文件语义）
 - **目标**：#8 → Roslyn AttributeSyntax 解析（与 MIG-007 基建同族）；#13/#14 → C# 结构化读取（正则抽 SQL 常量 → 直接解析 `SqlTemplates` 类的 const 表 + 方法块内守卫判定，跨文件语义用符号引用而非文本计数）
 - **该迁依据**：表达力溢出 + no-op 修复史；#14 的 impls 硬编码名单在 C# 可用类型发现替代
@@ -174,7 +180,7 @@
 
 | 任务 | 状态 | 完成日期 | 提交 | 备注 |
 |---|:--:|---|---|---|
-| MIG-001 | ⬜ 待执行 | | | |
+| MIG-001 | ✅ 完成 | 2026-09-11 | 本会话 | |
 | MIG-002 | ⬜ | | | |
 | MIG-003 | ⬜ | | | |
 | MIG-004 | ⬜ | | | |
@@ -184,6 +190,6 @@
 | MIG-008 | ⬜ | | | |
 | MIG-009 | ⬜ | | | |
 | MIG-010 | ⬜ | | | |
-| MIG-T1..T7 | ⬜ 登记 | | | |
+| MIG-T1..T7 | ⬜ 登记（未触发） | | | 触发条件未命中 |
 
 > 多 commit 任务的最后一次提交在正文附累计进度（项目 Git 提交规范 §9.3）。
