@@ -169,7 +169,7 @@ PalORM 是面向 Native AOT 的 .NET 11 微 ORM，通过源生成器在编译期
 
 - **PalDDD.PalORM**：核心层，6 Store + UnitOfWork，`IsAotCompatible=true`，`PublishAot=true` 验证通过。
 - **PalDDD.PalORM.Sqlite / PostgreSql / MySql**：方言包，固化 Provider 类型供 DI 注册，`IsAotCompatible=true`。
-- 底层依赖 PalORM 5.4.0（`PalORM.Core` + `PalORM.SourceGen` + 方言 Provider，5.4 含弹性层 configureResilience 回调）。
+- 底层依赖 PalORM 5.5.1（`PalORM.Core` + `PalORM.SourceGen` + 方言 Provider，5.4 含弹性层 configureResilience 回调）。
 
 PalORM 是推荐的持久化路径——完整链路 Native AOT 支持，取代 Dapper 的反射路径。
 

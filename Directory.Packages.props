@@ -34,13 +34,13 @@
     <PackageVersion Include="Dapper" Version="2.1.79" />
     <PackageVersion Include="Dapper.AOT" Version="1.0.52" />
     <!-- PalORM 适配器 — 面向 Native AOT 的 .NET 11 微 ORM（源生成 + 编译期 SQL，真 AOT 安全）
-         5.4.0 新增 ResilienceExecutor 弹性层（WithRetry/WithCircuitBreaker/ExecuteWithResilience，
-         默认 IsPassThrough 直通）；5.3→5.4 唯一移除 API BuildMySqlUpsertSetClause 本仓零引用 -->
-    <PackageVersion Include="PalORM.Core" Version="5.4.0" />
-    <PackageVersion Include="PalORM.SourceGen" Version="5.4.0" />
-    <PackageVersion Include="PalORM.Sqlite" Version="5.4.0" />
-    <PackageVersion Include="PalORM.PostgreSql" Version="5.4.0" />
-    <PackageVersion Include="PalORM.MySql" Version="5.4.0" />
+         5.5.1 纯依赖升级：Roslyn 对齐本仓 5.9.0 钉扎、Sqlite.Core 升 11 rc.1、消 SQLitePCLRaw NU1903（High）；
+         5.5.0 行为变更（脱敏信道/外部事务语义/WhereJson 方言守卫）本仓零使用，2026-09-11 grep 核实 -->
+    <PackageVersion Include="PalORM.Core" Version="5.5.1" />
+    <PackageVersion Include="PalORM.SourceGen" Version="5.5.1" />
+    <PackageVersion Include="PalORM.Sqlite" Version="5.5.1" />
+    <PackageVersion Include="PalORM.PostgreSql" Version="5.5.1" />
+    <PackageVersion Include="PalORM.MySql" Version="5.5.1" />
     <!-- MemoryPack 二进制序列化（AOT 兼容） -->
     <PackageVersion Include="MemoryPack" Version="1.21.4" />
     <!-- Dapper.FluentMap 已移除 — 改用 Dapper.DefaultTypeMap.MatchNamesWithUnderscores -->
@@ -56,7 +56,7 @@
     <PackageVersion Include="Microsoft.Extensions.Options" Version="11.0.0-rc.1.26425.128" />
     <!-- 消息代理适配器（可选） -->
     <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
-    <PackageVersion Include="Confluent.Kafka" Version="2.15.0" />
+    <PackageVersion Include="Confluent.Kafka" Version="2.15.1" />
     <!-- 测试基础设施 — TUnit（源生成器测试框架 · MTP） -->
     <PackageVersion Include="TUnit" Version="1.66.27" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />

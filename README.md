@@ -158,11 +158,11 @@ InMemory 实现覆盖全部抽象接口，单元测试和原型开发无需外�
 | **PalDDD.Dapper.PostgreSql** | 2.1.0 | Dapper PostgreSQL 增强：审计 / JSONB / 分片 / 软删除 |
 | **PalDDD.Dapper.MySql** | 2.1.0 | Dapper MySQL 增强 |
 | **PalDDD.Dapper.Sqlite** | 2.1.0 | Dapper SQLite 增强：TypeHandler / RowFactory / FTS5 |
-| **PalORM.Core** | 5.4.0 | PalORM 引擎核心：DataSession / Provider / RowFactory（PalDDD.PalORM 的底层依赖） |
-| **PalORM.SourceGen** | 5.4.0 | PalORM 源生成器：编译期生成 RowFactory / CommandFactory（零反射） |
-| **PalORM.PostgreSql** | 5.4.0 | PalORM PostgreSQL 方言 Provider：RETURNING / COPY |
-| **PalORM.MySql** | 5.4.0 | PalORM MySQL 方言 Provider：BulkCopy / 多值 INSERT（5.4 弹性层三 Provider 均支持 configureResilience 回调） |
-| **PalORM.Sqlite** | 5.4.0 | PalORM SQLite 方言 Provider：FTS5 / JSON1 |
+| **PalORM.Core** | 5.5.1 | PalORM 引擎核心：DataSession / Provider / RowFactory（PalDDD.PalORM 的底层依赖） |
+| **PalORM.SourceGen** | 5.5.1 | PalORM 源生成器：编译期生成 RowFactory / CommandFactory（零反射） |
+| **PalORM.PostgreSql** | 5.5.1 | PalORM PostgreSQL 方言 Provider：RETURNING / COPY |
+| **PalORM.MySql** | 5.5.1 | PalORM MySQL 方言 Provider：BulkCopy / 多值 INSERT（5.4 弹性层三 Provider 均支持 configureResilience 回调） |
+| **PalORM.Sqlite** | 5.5.1 | PalORM SQLite 方言 Provider：FTS5 / JSON1 |
 
 ---
 
