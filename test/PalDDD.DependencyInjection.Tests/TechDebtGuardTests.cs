@@ -12,14 +12,25 @@ namespace PalDDD.DependencyInjection.Tests;
 //   #8  SuppressMessage 必带 Justification → 本文件 Roslyn AttributeSyntax 语义级判定
 //   #13 方言 SQL 守卫对称（冲突安全家族） → SqlTemplates/EventLogSql 的 const 常量结构化读取
 //   #14 姊妹实现乐观锁守卫对称 → 姊妹 Store 文件文本模式计数（等价 bash python 口径）
+//   #15 Dapper 全局状态自足 → DapperAotInitializer 非注释行赋值断言（PD21，MIG-T5 下沉）
+//   #16 MySQL IN-LIMIT 禁令 → JOIN 变体模板 + 消费方分派三点存在性（PD22，MIG-T5 下沉）
+//   #17 PG 严格类型防护 → PG 常量 + jsonb CAST + 原生时间参数三点存在性（PD23，MIG-T5 下沉）
+//   #18 失败原因截断守卫对称 → Inbox↔Outbox 双管线 Normalize 调用存在性（PD24，MIG-T5 下沉）
+//   #19 PG naive 时间函数 → src 全扫禁词 AT TIME ZONE（PD25，MIG-T5 下沉）
+//   #20 DbContext 关系型测试覆盖 → 逐 context 枚举 + 已知 gap 活账本（PD26，MIG-T5 下沉）
 //
 // 与 bash/python 版的判定差异（有意收紧，方向为更严）：
 //   #8 bash 只查特性文本内 "Justification" 子串——① 位置参数形态
 //      [SuppressMessage("Cat", "ID", "理由")] 会被误报缺失（BCL 构造器第 3 参数就是
-//      justification）；② MessageId = "…Justification…" 的字面量会误放行。
+//      justification）；② MessageId = "…"Justification…" 的字面量会误放行。
 //      Roslyn 版按参数语义判定：命名参数 Justification 非 null，或第 3 个位置参数非 null。
 //   #13/#14 与 bash python 同口径（正则 + 家族归并 + 计数比较），存在性断言保留
 //      （检查源文件缺失必须 FAIL，不静默空转——元审计脚本#26 教训）。
+//   #15-#18 与 bash 同口径（行级子串/正则存在性 + 计数下限），存在性断言保留（同上）。
+//   #19 与 bash 同口径（禁词行排除注释行与"修复"说明行）。
+//   #20 bash 是 allow 级（缺口列出不阻断）——C# 版收紧为"已知 gap 白名单 == 实测 gap"
+//      活账本双向断言：新 DbContext 无关系型用例 → 红；白名单项补齐用例 → 也红
+//      （提醒缩账本），防止 allow 项无人再看、账本漂移。
 // ═══════════════════════════════════════════════════════════════
 
 public sealed class TechDebtGuardTests
@@ -429,5 +440,298 @@ public sealed class TechDebtGuardTests
         // 绿样本 3：无乐观锁谓词
         var none = Probe("UPDATE t SET x=1 WHERE id=@id;");
         await Assert.That(none).IsEmpty();
+    }
+
+    // ═════════════════════════════════════════════════════════════
+    // #15-#20（MIG-T5 下沉，承接 tech-debt-scan.sh 的 PD21-PD26 守卫）
+    // ═════════════════════════════════════════════════════════════
+
+    /// <summary>存在性断言（元审计脚本#26 同族）：检查源缺失必须 FAIL，不许静默空转。</summary>
+    private static void AssertFilesExist(params string[] relativePaths)
+    {
+        var missing = relativePaths
+            .Where(p => !File.Exists(Path.Combine(Root, p)))
+            .ToList();
+        if (missing.Count > 0)
+            Assert.Fail($"检查源不存在（存在性断言——改名/移动后须更新测试路径清单）: {string.Join(", ", missing)}");
+    }
+
+    /// <summary>目标文件中匹配正则的行数（对齐 bash grep -c 的行计数口径）。</summary>
+    private static int CountMatchingLines(string relativePath, Regex pattern)
+    {
+        return File.ReadLines(Path.Combine(Root, relativePath))
+            .Count(pattern.IsMatch);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // #15：Dapper 全局状态自足（MatchNamesWithUnderscores 在 ModuleInitializer，PD21）
+    // ─────────────────────────────────────────────────────────────
+
+    // bash 同口径 ^[^/]*：行首到匹配之间不得出现 /——注释掉的赋值（// MatchNames...）不算存在
+    private static readonly Regex s_matchNamesWithUnderscores =
+        new(@"^[^/]*MatchNamesWithUnderscores\s*=\s*true", RegexOptions.Compiled);
+
+    /// <summary>
+    /// #15 全量判定：DapperAotInitializer（ModuleInitializer）中必须存在未注释的
+    /// MatchNamesWithUnderscores = true——只在 DI 路径/测试夹具设置时，
+    /// 直连构造（公共构造签名支持）的 snake_case 列会静默映射为空（PD21）。
+    /// </summary>
+    [Test]
+    public async Task DapperGlobalState_IsSelfSufficientInModuleInitializer()
+    {
+        const string source = "src/PalDDD.Dapper/DapperAotInitializer.cs";
+        AssertFilesExist(source);
+
+        var hit = File.ReadLines(Path.Combine(Root, source)).Any(s_matchNamesWithUnderscores.IsMatch);
+        if (!hit)
+            Assert.Fail(
+                $"{source} 缺未注释的 MatchNamesWithUnderscores = true（PD21）——" +
+                "直连构造时 snake_case 列映射静默失效");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // #16：MySQL IN-LIMIT 禁令（JOIN 变体模板 + 消费方分派，PD22）
+    // ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 三点存在性（对齐 bash #16）：模板常量按名匹配（值不经 SqlTemplates 整体呈现），
+    /// 消费方按分派调用匹配。\b 防前缀改名（如 SagaLeaseActiveMySqlV2）误命中。
+    /// </summary>
+    private static readonly (string Path, Regex Anchor, string Role)[] s_mySqlJoinAnchors =
+    [
+        ("src/PalDDD.Dapper/SqlTemplates.cs",
+            new Regex(@"const string SagaLeaseActiveMySql\b", RegexOptions.Compiled),
+            "JOIN 变体模板常量"),
+        ("src/PalDDD.Dapper/DapperOutboxStore.cs",
+            new Regex(@"SqlTemplates\.OutboxLeaseUpdateMySql\b", RegexOptions.Compiled),
+            "Outbox 消费方 JOIN 分派"),
+        ("src/PalDDD.Dapper/DapperSagaStateStore.cs",
+            new Regex(@"SqlTemplates\.SagaLeaseActiveMySql\b", RegexOptions.Compiled),
+            "Saga 消费方 JOIN 分派"),
+    ];
+
+    [Test]
+    public async Task MySqlInLimitJoinVariants_AllAnchorsPresent()
+    {
+        AssertFilesExist(s_mySqlJoinAnchors.Select(a => a.Path).ToArray());
+
+        var missing = s_mySqlJoinAnchors
+            .Where(a => CountMatchingLines(a.Path, a.Anchor) < 1)
+            .Select(a => $"{a.Path}: {a.Role}（{a.Anchor}）")
+            .ToList();
+        if (missing.Count > 0)
+            Assert.Fail(
+                $"MySQL JOIN 变体锚点缺失（PD22——MySQL 不支持 IN (SELECT ... LIMIT)，会报 1235）:\n{string.Join("\n", missing)}");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // #17：PG 严格类型防护（jsonb CAST + 原生时间参数，PD23）
+    // ─────────────────────────────────────────────────────────────
+
+    private static readonly Regex s_pgSagaConstants =
+        new(@"const string Saga(Insert|Update)PG\b", RegexOptions.Compiled);
+
+    /// <summary>
+    /// #17 全量判定（三点，对齐 bash #17）：① SagaInsertPG/SagaUpdatePG 常量按名存在
+    /// （值含 CAST 由其分派+探针验）；② jsonb 写入模板值含 CAST(@data AS jsonb)（≥2 处）；
+    /// ③ ToTimeParam 的 PG 原生参数分派（DapperDbType.PostgreSql =&gt; value）文件 ≥1。
+    /// </summary>
+    [Test]
+    public async Task PgStrictTypeGuards_AllAnchorsPresent()
+    {
+        const string templates = "src/PalDDD.Dapper/SqlTemplates.cs";
+        AssertFilesExist(templates);
+
+        var violations = new List<string>();
+
+        var pgConsts = CountMatchingLines(templates, s_pgSagaConstants);
+        if (pgConsts < 2)
+            violations.Add($"{templates}: Saga(Insert|Update)PG 常量 {pgConsts} 处（需 2——按常量名，值 grep 会被改名残留误判）");
+
+        var pgCast = File.ReadLines(Path.Combine(Root, templates))
+            .Count(l => l.Contains("CAST(@data AS jsonb)", StringComparison.Ordinal));
+        if (pgCast < 2)
+            violations.Add($"{templates}: CAST(@data AS jsonb) {pgCast} 处（需 2）");
+
+        var toTimeFiles = Directory.EnumerateFiles(Path.Combine(Root, "src", "PalDDD.Dapper"), "*.cs", SearchOption.AllDirectories)
+            .Where(IsNotBuildArtifact)
+            .Count(f => File.ReadAllText(f).Contains("DapperDbType.PostgreSql => value", StringComparison.Ordinal));
+        if (toTimeFiles < 1)
+            violations.Add("src/PalDDD.Dapper/*.cs: ToTimeParam PG 原生参数分派（DapperDbType.PostgreSql => value）0 个文件（需 ≥1）");
+
+        if (violations.Count > 0)
+            Assert.Fail($"PG 严格类型防护缺失（PD23——PG 实测报 42804/42883）:\n{string.Join("\n", violations)}");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // #18：失败原因截断守卫对称性（Inbox↔Outbox 双管线，PD24）
+    // ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// #18 全量判定（两点 + 存在性，对齐 bash #18）：两个处理器的 ex.Message 入库前
+    /// 都必须过 Core.FailureReason.Normalize——一个缺失即整批饿死/无限重发（管线姊妹对称）。
+    /// </summary>
+    [Test]
+    public async Task FailureReasonNormalize_SymmetricAcrossPipelines()
+    {
+        string[] sources =
+        [
+            "src/PalDDD.Transactions/Outbox/OutboxBatchProcessor.cs",
+            "src/PalDDD.Transactions/Inbox/InboxProcessor.cs",
+        ];
+        AssertFilesExist(sources);
+
+        var missing = sources
+            .Select(p => (Path: p,
+                Count: File.ReadLines(Path.Combine(Root, p))
+                    .Count(l => l.Contains("FailureReason.Normalize(ex.Message)", StringComparison.Ordinal))))
+            .Where(x => x.Count < 1)
+            .Select(x => $"{x.Path}: {x.Count} 处")
+            .ToList();
+        if (missing.Count > 0)
+            Assert.Fail(
+                $"失败原因归一缺失（PD24——须 Core.FailureReason.Normalize(ex.Message)）:\n{string.Join("\n", missing)}");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // #19：PG naive 时间函数检测（AT TIME ZONE → session tz 漂移，PD25）
+    // ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// #19 判定器（bash 同口径）：行含 AT TIME ZONE 即违规，但注释行
+    /// （// 与 /// 前缀——TrimStart 后 // 已覆盖 ///）与含"修复"的说明行除外。
+    /// </summary>
+    private static List<string> DetectNaiveTimeZoneHits(string relativePath, string[] lines)
+    {
+        var hits = new List<string>();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (!line.Contains("AT TIME ZONE", StringComparison.Ordinal))
+                continue;
+            if (line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+                continue;
+            if (line.Contains("修复", StringComparison.Ordinal))
+                continue;
+            hits.Add($"{relativePath}:{i + 1}");
+        }
+        return hits;
+    }
+
+    [Test]
+    public async Task NaiveTimeZoneUsage_IsAbsentAcrossSrc()
+    {
+        var files = EnumerateSourceFiles();
+        await Assert.That(files.Count).IsGreaterThan(0); // 扫描面存在性
+
+        var hits = files
+            .SelectMany(p => DetectNaiveTimeZoneHits(p, File.ReadAllLines(Path.Combine(Root, p))))
+            .ToList();
+        if (hits.Count > 0)
+            Assert.Fail(
+                $"src 出现 AT TIME ZONE（PD25——naive timestamp 与 timestamptz 比较按 session tz 解释）:\n{string.Join("\n", hits)}");
+    }
+
+    /// <summary>#19 判定器红绿矩阵（负向自证）：命中（红）/ 注释行（绿）/ 修复说明行（绿）。</summary>
+    [Test]
+    public async Task NaiveTimeZoneDetector_MatchesRedGreenMatrix()
+    {
+        var hits = DetectNaiveTimeZoneHits("probe.cs",
+        [
+            "var sql = \"x AT TIME ZONE 'UTC'\";",
+            "// 说明: 旧版曾用 AT TIME ZONE（已废）",
+            "/// <summary>AT TIME ZONE 修复记录</summary>",
+            "var fixed_ = \"at_time_zone\"; // 修复：移除 AT TIME ZONE",
+            "var ok = \"no hit\";",
+        ]);
+        await Assert.That(hits.Count).IsEqualTo(1);
+        await Assert.That(hits[0]).IsEqualTo("probe.cs:1");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // #20：EF Core DbContext 关系型测试覆盖（逐 context 枚举 + gap 活账本，PD26）
+    // ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 已知 gap 白名单（活账本）：三个方言 Outbox 变体暂无关系型用例（bash #20 allow 级口径）。
+    /// 任何一个补齐关系型用例后必须同步移除——集合双向相等断言会强制账本与实况一致。
+    /// </summary>
+    private static readonly string[] s_knownRelationalCoverageGaps =
+    [
+        "MySqlOutboxDbContext",
+        "PostgreSqlOutboxDbContext",
+        "SqlServerOutboxDbContext",
+    ];
+
+    /// <summary>关系型测试文件标记：任一提供程序/建库调用（bash 同口径，无词边界）。</summary>
+    private static readonly Regex s_relationalProviderHint =
+        new("UseSqlite|UseNpgsql|EnsureCreated|SqliteConnection", RegexOptions.Compiled);
+
+    /// <summary>
+    /// 守卫测试自身路径（自指污染排除）：本文件含 s_knownRelationalCoverageGaps 的三个
+    /// ctx 名与 s_relationalProviderHint 的 "SqliteConnection" 锚串——不排除时会把
+    /// 传感器文件自身伪判成"关系型测试文件"，白名单三项恒 covered（首跑实测）。
+    /// </summary>
+    private const string GuardTestSelfPath = "test/PalDDD.DependencyInjection.Tests/TechDebtGuardTests.cs";
+
+    /// <summary>
+    /// #20 全量判定（含 #20a 扫描面存在性）：逐 DbContext 在 test/ 关系型测试文件中整词匹配；
+    /// 实测 gap 集合必须与白名单双向相等——bash 是 allow 级（缺口列出供人工核实、不阻断），
+    /// C# 版收紧为活账本：新增 gap（新 DbContext 无关系型用例）红，白名单项补齐也红（提醒缩账本）。
+    /// </summary>
+    [Test]
+    public async Task DbContextRelationalCoverage_GapLedgerStaysExact()
+    {
+        // #20a 存在性：src 下 *DbContext.cs 可发现（目录改名/移动后不许对空集静默通过）
+        var ctxFiles = Directory.EnumerateFiles(Path.Combine(Root, "src"), "*DbContext.cs", SearchOption.AllDirectories)
+            .Where(IsNotBuildArtifact)
+            .Select(p => Path.GetRelativePath(Root, p).Replace('\\', '/'))
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToList();
+        await Assert.That(ctxFiles.Count).IsGreaterThan(0);
+
+        // 第一遍：test/ 下含关系型提供程序标记的测试文件（bash 同口径的两遍扫描；
+        // 排除守卫测试自身——传感器文件含锚字符串，不是被测物，见 GuardTestSelfPath）
+        var relationalFiles = new List<(string Path, string Content)>();
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(Root, "test"), "*.cs", SearchOption.AllDirectories)
+                     .Where(IsNotBuildArtifact))
+        {
+            var relative = Path.GetRelativePath(Root, file).Replace('\\', '/');
+            if (relative == GuardTestSelfPath)
+                continue;
+            var content = File.ReadAllText(file);
+            if (s_relationalProviderHint.IsMatch(content))
+                relationalFiles.Add((relative, content));
+        }
+
+        // 活跃性：关系型测试文件确实存在（0 个说明提供程序标记全部漂移，锚空转）
+        await Assert.That(relationalFiles.Count).IsGreaterThan(0);
+
+        // 第二遍：逐 DbContext 整词匹配（bash grep -qwF 同口径）
+        var actualGaps = new List<string>();
+        var coveredBy = new List<string>();
+        foreach (var ctx in ctxFiles)
+        {
+            var ctxName = Path.GetFileNameWithoutExtension(ctx);
+            var wordPattern = new Regex($@"\b{Regex.Escape(ctxName)}\b", RegexOptions.Compiled);
+            var witness = relationalFiles.FirstOrDefault(f => wordPattern.IsMatch(f.Content));
+            if (witness.Content is null)
+                actualGaps.Add(ctxName);
+            else
+                coveredBy.Add($"{ctxName} ← {witness.Path}");
+        }
+        actualGaps.Sort(StringComparer.Ordinal);
+
+        var expected = s_knownRelationalCoverageGaps.OrderBy(g => g, StringComparer.Ordinal).ToList();
+        if (!expected.SequenceEqual(actualGaps))
+        {
+            var added = actualGaps.Except(expected).ToList();
+            var resolved = expected.Except(actualGaps).ToList();
+            Assert.Fail(
+                "DbContext 关系型覆盖 gap 账本漂移（PD26——InMemory-only 掩盖映射缺陷）:\n" +
+                $"  新增 gap（补关系型用例，或人工核实后入 s_knownRelationalCoverageGaps）: {string.Join(", ", added)}\n" +
+                $"  已补齐（请从 s_knownRelationalCoverageGaps 移除）: {string.Join(", ", resolved)}\n" +
+                $"  诊断（白名单项 covered-by）: {string.Join("; ", coveredBy.Where(c => resolved.Any(r => c.StartsWith(r, StringComparison.Ordinal))))}");
+        }
     }
 }

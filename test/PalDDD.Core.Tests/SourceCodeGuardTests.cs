@@ -12,6 +12,10 @@ namespace PalDDD.Core.Tests;
 //                                  G8  → 守卫 2（Expression.Compile / dynamic）
 //                                  G11 → 守卫 3（.Result / .Wait / GetAwaiter().GetResult / async void）
 //                                  G12 → 守卫 4（await 必带 ConfigureAwait）
+//                                  G1  → 守卫 5（具体异常类型 sealed，Middleware/Extensions/CodeFix 豁免）
+//                                  G9  → 守卫 3（async void——补显式 void 返回类型的 lambda 形态后完全覆盖）
+//                                  G10 → 守卫 6（TransactionScope 标识符禁令）
+//                                  G17 → 守卫 6（UtcNow 直调 + TimeProvider.System 内联禁令，附注零残留后升格 FAIL）
 //   scripts/verify-conventions.sh  V1（反射族）/ V2（async void）/ V3（.Result）/ V4（.Wait）
 //                                  → 已下沉至本文件同名守卫，脚本仅保留 V5（TODO grep）/ V6（build）/ V7（test）
 //
@@ -24,6 +28,12 @@ namespace PalDDD.Core.Tests;
 //   3. await 按节点级判定 awaited 表达式是否以 ConfigureAwait(...) 结尾
 //      （bash 为文件级 await 数 ≤ CA 数差值计数——裸 await 可被同文件多余 CA 抵消）。
 //      await using / await foreach 语法上不是 AwaitExpression，天然不误报。
+//   4. 守卫 5（G1）：按语法节点判定 public 类型声明，"public record XxxException"
+//      （record 不带 class 关键字）bash 正则只匹配 "record class" 显式形态，此处两种写法均命中；
+//      partial 分部声明逐分部判定（C# 修饰符须跨分部一致，缺 sealed 的分部本身即违规形态）。
+//   5. 守卫 6（G10/G17）：标识符/成员访问节点级判定，天然排除注释与字符串字面量
+//      （bash 只排注释行，字符串中的 TransactionScope/UtcNow 属误报面）；
+//      G17 附注（TimeProvider.System 内联）在 src 零残留后由 WARN 升格为 FAIL 断言。
 // 判定为纯语法层（ParseText，无语义模型/编译引用），保持测试轻量。
 // ═══════════════════════════════════════════════════════════════
 
@@ -273,23 +283,29 @@ public sealed class SourceCodeGuardTests
             return false;
         }
 
-        /// <summary>async void 方法与局部函数声明（对齐 G9/V2 文本模式——async 与 void 相邻仅出现于声明位置）。</summary>
+        /// <summary>async void 声明（方法/局部函数/显式 void 返回类型的 lambda——
+        /// 对齐 G9/V2 文本模式 async+void 相邻的全部合法 C# 书写位置；
+        /// simple lambda 参数不可为 void，无显式返回类型的 async lambda 推断 Task，均天然不在此列）。</summary>
         internal static IEnumerable<Violation> FindAsyncVoidViolations(SourceFileOrPath file)
         {
             var root = file.Tree.GetRoot();
             foreach (var node in root.DescendantNodes()
-                                     .Where(n => n is MethodDeclarationSyntax or LocalFunctionStatementSyntax))
+                                     .Where(n => n is MethodDeclarationSyntax
+                                                 or LocalFunctionStatementSyntax
+                                                 or ParenthesizedLambdaExpressionSyntax))
             {
                 var returnType = node switch
                 {
                     MethodDeclarationSyntax m => m.ReturnType,
                     LocalFunctionStatementSyntax l => l.ReturnType,
+                    ParenthesizedLambdaExpressionSyntax p => p.ReturnType,
                     _ => null,
                 };
                 var modifiers = node switch
                 {
                     MethodDeclarationSyntax m => m.Modifiers,
                     LocalFunctionStatementSyntax l => l.Modifiers,
+                    ParenthesizedLambdaExpressionSyntax p => p.Modifiers,
                     _ => default,
                 };
                 if (!modifiers.Any(SyntaxKind.AsyncKeyword)) continue;
@@ -353,6 +369,116 @@ public sealed class SourceCodeGuardTests
         /// <summary>守卫 4 的扫描排除路径：G12 原 find 排除 *SourceGen*（源生成器项目运行时模板）。</summary>
         public static bool IsExcludedFromGuard4(string relativePath) =>
             relativePath.Contains("SourceGen", StringComparison.Ordinal);
+
+        // ── 守卫 5（G1）：具体异常类型必须 sealed ──
+        // public class/record 且类型名以 Exception 结尾，必须带 sealed 或 abstract 修饰符。
+        // 豁免集对齐 G1 文本口径：类型名或文件路径含 Middleware/Extensions/CodeFix
+        //（bash 行级 grep -v 的输出行 = 路径前缀 + 声明行文本，两者任一命中即豁免）。
+
+        internal static IEnumerable<Violation> FindUnsealedExceptionViolations(SourceFileOrPath file)
+        {
+            foreach (var type in file.Tree.GetRoot().DescendantNodes().OfType<TypeDeclarationSyntax>())
+            {
+                if (type is not (ClassDeclarationSyntax or RecordDeclarationSyntax)) continue;
+                if (!type.Modifiers.Any(SyntaxKind.PublicKeyword)) continue;
+                if (!type.Identifier.ValueText.EndsWith("Exception", StringComparison.Ordinal)) continue;
+                if (type.Modifiers.Any(SyntaxKind.SealedKeyword)) continue;
+                if (type.Modifiers.Any(SyntaxKind.AbstractKeyword)) continue;
+                if (IsExceptionDeclarationExempt(type.Identifier.ValueText, file.Relative)) continue;
+                yield return Make(file, type, "G1",
+                    $"{type.Identifier.ValueText} 具体异常类型未 sealed（Middleware/Extensions/CodeFix 豁免集外）");
+            }
+        }
+
+        /// <summary>G1 豁免集：类型名或文件相对路径含 Middleware/Extensions/CodeFix 任一。</summary>
+        private static bool IsExceptionDeclarationExempt(string typeName, string relativePath) =>
+            typeName.Contains("Middleware", StringComparison.Ordinal)
+            || typeName.Contains("Extensions", StringComparison.Ordinal)
+            || typeName.Contains("CodeFix", StringComparison.Ordinal)
+            || relativePath.Contains("Middleware", StringComparison.Ordinal)
+            || relativePath.Contains("Extensions", StringComparison.Ordinal)
+            || relativePath.Contains("CodeFix", StringComparison.Ordinal);
+
+        // ── 守卫 6（G10+G17）：TransactionScope 禁令 + 时钟直调禁令 ──
+        // G10：任何标识符含 TransactionScope 子串（类型引用/对象创建/家族枚举
+        //  TransactionScopeOption/TransactionScopeAsyncFlowOption）——对齐 bash 子串口径，
+        //  语法树天然排除注释与字符串字面量。
+        // G17：DateTime/DateTimeOffset.UtcNow 成员访问直调（必须注入 TimeProvider）；
+        //  附注 G17b：TimeProvider.System.GetUtcNow/GetTimestamp 内联调用（时钟双轨债务，
+        //  src 零残留后由 bash WARN 升格为 FAIL 断言；virtual 时钟默认实现豁免——
+        //  bash 以行级排除 "virtual DateTimeOffset GetUtcNow" 实现同一豁免：虚方法是
+        //  可测试时钟设计契约（生产默认系统时钟，测试子类覆写注入 FakeTimeProvider，
+        //  见 OutboxDbContext.GetUtcNow 注释），非时钟双轨债务）。
+
+        internal static IEnumerable<Violation> FindTransactionScopeAndClockViolations(SourceFileOrPath file)
+        {
+            var root = file.Tree.GetRoot();
+
+            // G10：TransactionScope 标识符（含限定名 System.Transactions.TransactionScope 的最右段）
+            foreach (var identifier in root.DescendantNodes().OfType<IdentifierNameSyntax>()
+                                           .Where(i => i.Identifier.ValueText.Contains("TransactionScope", StringComparison.Ordinal)))
+            {
+                yield return Make(file, identifier, "G10",
+                    $"{identifier.Identifier.ValueText} 引用 TransactionScope（用 DbContext 事务替代）");
+            }
+
+            // G17 主判定：UtcNow 直调（限定名 System.DateTime.UtcNow 与非限定 DateTime.UtcNow 均命中）
+            foreach (var access in root.DescendantNodes().OfType<MemberAccessExpressionSyntax>()
+                                       .Where(a => a.Name.Identifier.ValueText == "UtcNow"
+                                                && ReceiverRightmostSimpleName(a) is "DateTime" or "DateTimeOffset"))
+            {
+                yield return Make(file, access, "G17",
+                    $"{ReceiverRightmostSimpleName(access)}.UtcNow 硬编码时钟（必须注入 TimeProvider）");
+            }
+
+            // G17 附注（G17b）：TimeProvider.System.GetUtcNow/GetTimestamp 内联——
+            // 三段链 TimeProvider.System.Xxx 精确匹配（裸/限定 TimeProvider 均覆盖），
+            // 不会命中注入实例的 GetUtcNow 调用；virtual 时钟默认实现内的调用豁免
+            foreach (var access in root.DescendantNodes().OfType<MemberAccessExpressionSyntax>()
+                                       .Where(IsInlineSystemClockAccess))
+            {
+                yield return Make(file, access, "G17",
+                    "TimeProvider.System 内联调用（时钟双轨，必须经构造注入的 TimeProvider；virtual 时钟默认实现豁免）");
+            }
+        }
+
+        /// <summary>成员访问接收者的最右简名——表达式位置的限定名 System.DateTimeOffset
+        /// 是 MemberAccess 而非类型位置的 QualifiedName，两形态均取最右段（"DateTimeOffset"）。</summary>
+        private static string? ReceiverRightmostSimpleName(MemberAccessExpressionSyntax access) => access.Expression switch
+        {
+            IdentifierNameSyntax id => id.Identifier.ValueText,
+            MemberAccessExpressionSyntax m => m.Name.Identifier.ValueText,
+            QualifiedNameSyntax q => q.Right.Identifier.ValueText,
+            _ => null,
+        };
+
+        /// <summary>是否为 TimeProvider.System.GetUtcNow/GetTimestamp 内联调用
+        ///（virtual 时钟默认实现内的调用豁免——可测试时钟设计契约，非双轨债务）。</summary>
+        private static bool IsInlineSystemClockAccess(MemberAccessExpressionSyntax access) =>
+            access.Name.Identifier.ValueText is "GetUtcNow" or "GetTimestamp"
+            && access.Expression is MemberAccessExpressionSyntax { Name.Identifier.ValueText: "System" } systemAccess
+            && systemAccess.Expression switch
+            {
+                IdentifierNameSyntax { Identifier.ValueText: "TimeProvider" } => true,
+                // 限定形态 System.TimeProvider.System.GetUtcNow（接收者仍是 ...TimeProvider 段）
+                MemberAccessExpressionSyntax { Name.Identifier.ValueText: "TimeProvider" } => true,
+                QualifiedNameSyntax { Right.Identifier.ValueText: "TimeProvider" } => true,
+                _ => false,
+            }
+            && !IsInsideVirtualClockDefaultImplementation(access);
+
+        /// <summary>调用是否位于 virtual GetUtcNow/GetTimestamp 方法内（对齐 bash 行级排除
+        /// "virtual DateTimeOffset GetUtcNow" 的语义意图——见守卫 6 头注释）。</summary>
+        private static bool IsInsideVirtualClockDefaultImplementation(SyntaxNode node)
+        {
+            for (var ancestor = node.Parent; ancestor is not null; ancestor = ancestor.Parent)
+            {
+                if (ancestor is MethodDeclarationSyntax { Identifier.ValueText: "GetUtcNow" or "GetTimestamp" } method
+                    && method.Modifiers.Any(SyntaxKind.VirtualKeyword))
+                    return true;
+            }
+            return false;
+        }
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -573,6 +699,134 @@ public sealed class SourceCodeGuardTests
             using System.Threading.Tasks;
             class C { async Task M() { await Task.CompletedTask; } }
             """, 0),
+        // G9 下沉补强样本：显式 void 返回类型的 async lambda（事件处理器常见形态）——
+        // bash 文本 async\s+void 命中，下沉前守卫 3 只查方法/局部函数对此形态漏检
+        Case("W10 async void lambda（显式 void 返回类型）必须红",
+            """
+            using System;
+            using System.Threading.Tasks;
+            class C { Action M() => async void () => { await Task.CompletedTask; }; }
+            """, 1),
+        Case("W11 无显式返回类型的 async lambda 推断 Task 不命中",
+            """
+            using System;
+            using System.Threading.Tasks;
+            class C { Func<Task> M() => async () => { await Task.CompletedTask; }; }
+            """, 0),
+    ];
+
+    private static readonly GuardCase[] ExceptionSealingCases =
+    [
+        Case("E1 public class 非 sealed 异常必须红",
+            """
+            public class FooException : System.Exception { }
+            """, 1),
+        Case("E2 public sealed class 异常合规",
+            """
+            public sealed class FooException : System.Exception { }
+            """, 0),
+        Case("E3 public abstract 异常基类豁免",
+            """
+            public abstract class FooException : System.Exception { }
+            """, 0),
+        // bash G1 正则 public\s+(class|record class) 只匹配 "record class" 显式形态，
+        // "public record XxxException" 被漏检——语法节点级判定两种写法均命中（有意收紧）
+        Case("E4 public record（无 class 关键字）非 sealed 必须红（bash 漏检形态）",
+            """
+            public record FooException(string Code) : System.Exception(Code);
+            """, 1),
+        Case("E5 sealed record 异常合规",
+            """
+            public sealed record FooException(string Code) : System.Exception(Code);
+            """, 0),
+        Case("E6 类型名含 Middleware 豁免",
+            """
+            public class TracingMiddlewareException : System.Exception { }
+            """, 0),
+        Case("E7 文件路径含 Middleware 豁免（bash 行输出含路径前缀的等价口径）",
+            """
+            public class FooException : System.Exception { }
+            """, 0, "src/PalDDD.Hosting.AspNetCore/Middleware/FooException.cs"),
+        Case("E7b 文件路径含 CodeFix 豁免",
+            """
+            public class FooException : System.Exception { }
+            """, 0, "src/PalDDD.Analyzers.CodeFixes/Probe.cs"),
+        Case("E8 internal 异常不在扫描面（G1 仅 public）",
+            """
+            internal class FooException : System.Exception { }
+            """, 0),
+        Case("E9 非 Exception 后缀的未密封 public class 不命中",
+            """
+            public class Foo { }
+            """, 0),
+    ];
+
+    private static readonly GuardCase[] TransactionScopeAndClockCases =
+    [
+        Case("T1 new TransactionScope() 必须红",
+            """
+            class C { object M() => new System.Transactions.TransactionScope(); }
+            """, 1),
+        // bash G10 为子串匹配 'TransactionScope'，家族枚举 TransactionScopeOption 同样命中
+        Case("T2 TransactionScope 家族枚举（TransactionScopeOption）也红（对齐 bash 子串口径）",
+            """
+            class C { int M() => (int)System.Transactions.TransactionScopeOption.Required; }
+            """, 1),
+        Case("T3 注释与字符串中的 TransactionScope 不计",
+            """
+            class C
+            {
+                // TransactionScope 已被 DbContext 事务替代
+                string M() => "TransactionScope forbidden";
+            }
+            """, 0),
+        Case("U1 DateTimeOffset.UtcNow 直调必须红",
+            """
+            class C { System.DateTimeOffset M() => System.DateTimeOffset.UtcNow; }
+            """, 1),
+        Case("U2 DateTime.UtcNow 直调必须红",
+            """
+            class C { System.DateTime M() => System.DateTime.UtcNow; }
+            """, 1),
+        Case("U3 非限定 DateTime.UtcNow 同样命中",
+            """
+            class C { System.DateTime M() => DateTime.UtcNow; }
+            """, 1),
+        Case("U4 注入 TimeProvider 的 GetUtcNow 合规",
+            """
+            class C
+            {
+                private readonly System.TimeProvider _clock;
+                public C(System.TimeProvider clock) => _clock = clock;
+                public System.DateTimeOffset M() => _clock.GetUtcNow();
+            }
+            """, 0),
+        // G17b：bash 为 WARN 级债务暴露，src 零残留后升格为 FAIL 断言（gate-check G17 注释既定升级路径）
+        Case("U5 TimeProvider.System.GetUtcNow 内联必须红（G17b 零残留后升格）",
+            """
+            class C { System.DateTimeOffset M() => System.TimeProvider.System.GetUtcNow(); }
+            """, 1),
+        Case("U6 GetUtcNow 重写声明不命中（bash 排除 virtual 声明行的语法级等价）",
+            """
+            abstract class C : System.TimeProvider
+            {
+                public override System.DateTimeOffset GetUtcNow() => default;
+            }
+            """, 0),
+        // 真实 src 形态固化（OutboxDbContext.cs:320 / SagaStateDbContext.cs:43）：virtual 时钟
+        // 默认实现是可测试时钟设计契约（测试子类覆写注入 FakeTimeProvider），bash G17b 以
+        // 行级排除 "virtual DateTimeOffset GetUtcNow" 豁免——语法级等价豁免必须放行此形态
+        Case("U7 virtual GetUtcNow 默认实现的 TimeProvider.System 内联豁免（可测试时钟契约）",
+            """
+            abstract class C
+            {
+                protected virtual System.DateTimeOffset GetUtcNow() => System.TimeProvider.System.GetUtcNow();
+            }
+            """, 0),
+        Case("U8 非 virtual 方法内的 TimeProvider.System.GetTimestamp 仍红",
+            """
+            class C { long M() => System.TimeProvider.System.GetTimestamp(); }
+            """, 1),
     ];
 
     private static readonly GuardCase[] ConfigureAwaitCases =
@@ -795,6 +1049,67 @@ public sealed class SourceCodeGuardTests
         foreach (var testCase in ConfigureAwaitCases)
         {
             var actual = GuardAnalyzer.FindMissingConfigureAwaitViolations(
+                GuardAnalyzer.SourceFileOrPath.Synthetic(testCase.FilePath, CSharpSyntaxTree.ParseText(testCase.Source))).Count();
+            if (actual != testCase.Expected)
+                failures.Add($"样本[{testCase.Name}] 期望 {testCase.Expected} 处违规，实际 {actual} 处");
+        }
+        await Assert.That(failures).IsEmpty();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 守卫 5（G1）：具体异常类型 sealed
+    // ─────────────────────────────────────────────────────────────
+
+    /// <summary>全仓扫描：public 具体异常类型必须 sealed/abstract（conventions §3.2，Middleware/Extensions/CodeFix 豁免）。</summary>
+    [Test]
+    public async Task Guard5_ExceptionTypes_SealedOrAbstractOrExempt()
+    {
+        var violations = Sources.Value
+            .Select(f => GuardAnalyzer.FindUnsealedExceptionViolations(GuardAnalyzer.SourceFileOrPath.From(f)))
+            .SelectMany(v => v)
+            .Select(v => $"{v.File}:{v.Line} [{v.Rule}] {v.Detail}")
+            .ToList();
+        await Assert.That(violations).IsEmpty();
+    }
+
+    [Test]
+    public async Task Guard5_ExemptionMatrix_MatchesExpectedCounts()
+    {
+        var failures = new List<string>();
+        foreach (var testCase in ExceptionSealingCases)
+        {
+            var actual = GuardAnalyzer.FindUnsealedExceptionViolations(
+                GuardAnalyzer.SourceFileOrPath.Synthetic(testCase.FilePath, CSharpSyntaxTree.ParseText(testCase.Source))).Count();
+            if (actual != testCase.Expected)
+                failures.Add($"样本[{testCase.Name}] 期望 {testCase.Expected} 处违规，实际 {actual} 处");
+        }
+        await Assert.That(failures).IsEmpty();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 守卫 6（G10+G17）：TransactionScope 禁令 + 时钟直调禁令
+    // ─────────────────────────────────────────────────────────────
+
+    /// <summary>全仓扫描：src 下零 TransactionScope 引用、零 UtcNow 直调、零 TimeProvider.System 内联
+    ///（conventions §10.4——时钟必须经构造注入的 TimeProvider）。</summary>
+    [Test]
+    public async Task Guard6_TransactionScopeAndHardcodedClock_AbsentInSources()
+    {
+        var violations = Sources.Value
+            .Select(f => GuardAnalyzer.FindTransactionScopeAndClockViolations(GuardAnalyzer.SourceFileOrPath.From(f)))
+            .SelectMany(v => v)
+            .Select(v => $"{v.File}:{v.Line} [{v.Rule}] {v.Detail}")
+            .ToList();
+        await Assert.That(violations).IsEmpty();
+    }
+
+    [Test]
+    public async Task Guard6_ExemptionMatrix_MatchesExpectedCounts()
+    {
+        var failures = new List<string>();
+        foreach (var testCase in TransactionScopeAndClockCases)
+        {
+            var actual = GuardAnalyzer.FindTransactionScopeAndClockViolations(
                 GuardAnalyzer.SourceFileOrPath.Synthetic(testCase.FilePath, CSharpSyntaxTree.ParseText(testCase.Source))).Count();
             if (actual != testCase.Expected)
                 failures.Add($"样本[{testCase.Name}] 期望 {testCase.Expected} 处违规，实际 {actual} 处");

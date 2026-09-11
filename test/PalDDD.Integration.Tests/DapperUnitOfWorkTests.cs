@@ -144,6 +144,17 @@ public sealed class DapperUnitOfWorkTests
     }
 
     [Test]
+    public async Task RollbackAsync_AfterDispose_ThrowsObjectDisposedException()
+    {
+        // ITM-165 姊妹收口（第三轮残余）：Dispose 后 Rollback 不再静默 no-op——对齐
+        // Begin/Commit 守卫与 PalOrmUnitOfWork 三栈口径，调用方持残留引用立即暴露误用。
+        var uow = new DapperUnitOfWork(_connection);
+        await uow.DisposeAsync();
+
+        await Assert.That(async () => await uow.RollbackAsync()).Throws<ObjectDisposedException>();
+    }
+
+    [Test]
     public async Task CommitAsync_WhenCommitThrows_DisposesAndClearsTransaction()
     {
         var tx = new ThrowingDbTransaction();

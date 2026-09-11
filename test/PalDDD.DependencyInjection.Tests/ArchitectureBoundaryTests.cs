@@ -300,6 +300,36 @@ public sealed class ArchitectureBoundaryTests
         var props = ReadSource("Directory.Build.props");
 
         await Assert.That(props).Contains("<VerifyReferenceAotCompatibility>true</VerifyReferenceAotCompatibility>");
+
+        // G14 下沉（MIG-T3，2026-09-11，原 .ai/scripts/gate-check.sh 判定项）：
+        // 7 个 AOT 核心项目 csproj 不得显式声明 IsAotCompatible=false——允许显式 true 或
+        // 无条目（继承 Directory.Build.props 全局 true 基线）。PalDDD.Transactions 因 Saga
+        // 子系统反射（MakeGenericMethod/Activator，已带 [RequiresDynamicCode]）主动声明
+        // false，归非 AOT 适配器层，不在此名单（AOT 分层见 .ai/gate/prompt.md）。
+        // 判定并入本方法而非另立 [Test]——D12a 计数锚锁定 boundary 方法数 37，
+        // 新增方法会使 docs/testing.md 等声称集漂移。
+        var aotCoreProjects = new[]
+        {
+            "PalDDD.Core", "PalDDD.Serialization", "PalDDD.CQRS", "PalDDD.EventLog",
+            "PalDDD.Idempotency", "PalDDD.Projections", "PalDDD.Messaging",
+        };
+        var violations = new List<string>();
+        foreach (var project in aotCoreProjects)
+        {
+            var csprojPath = Path.Combine(Root, "src", project, $"{project}.csproj");
+            if (!File.Exists(csprojPath))
+            {
+                violations.Add($"{project}.csproj 缺失（AOT 核心层名单与实际项目漂移）");
+                continue;
+            }
+            if (File.ReadAllText(csprojPath).Contains("<IsAotCompatible>false</IsAotCompatible>", StringComparison.Ordinal))
+                violations.Add($"{project} 显式声明 IsAotCompatible=false（AOT 核心层禁止）");
+        }
+        await Assert.That(violations).IsEmpty();
+
+        // 全局基线不变式（元审计脚本#32）：Directory.Build.props 必须含 IsAotCompatible=true——
+        // 此前 bash G14 只查各项目显式 false，全局基线被改为 false 时仍全绿（门禁盲区）。
+        await Assert.That(props).Contains("<IsAotCompatible>true</IsAotCompatible>");
     }
 
     [Test]
