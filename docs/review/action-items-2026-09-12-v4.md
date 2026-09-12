@@ -47,7 +47,7 @@
 
 ### [x] ITM-664 · 23 个工具无 --selftest 自测入口 · ✅
 - 仅 4 个有自测（ci-coverage/osc-check/flaky-parse/test-gate）。高危缺自测优先级：verify-ai（23 项校验逻辑最复杂）> gate.cs（git 编排）> tech-debt.cs。
-- **处置**：进 P3 backlog 按触碰补；verify-ai 优先（下次改 V 项时必须带自测）。
+- **处置**：✅ v87 轮清偿——`verify-ai.cs --selftest` 红绿矩阵 14 例（四提取函数共用主流程实现，无复制漂移面），S3 红测实证（破坏 V19 → 自测红 → 还原绿）。
 
 ---
 

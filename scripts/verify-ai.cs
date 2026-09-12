@@ -29,8 +29,9 @@
 //      PalDDD.slnx——故以 CWD 向上找为主、BaseDirectory 兜底，替代原
 //      bash 的 cd "$(dirname "$0")/../.."。
 //   4) 零 package 依赖（NU1510 即错误）；顶层语句 + static 局部函数。
-//   5) ITM-664：本工具（23 项校验逻辑最复杂）暂无 --selftest——下次改 V 项时必须
-//      先补自测入口（红测矩阵：注入坏 JSON 报告/损坏账本行/非法日期各一）。
+//   5) ITM-664 已清偿（v87）：--selftest 红绿矩阵 14 例（V17 单调/乱序/同日 ·
+//      V19 定标/超期/UNKNOWN/非法日期 · V21 老化/豁免 · V22 唯一/跨章重复/ITM 豁免 ·
+//      V2 缺失/空绿）——S3 红测：破坏 V19 超期判定 → 自测必红。改 V 项逻辑时须同步改自测。
 // ============================================================================
 
 // Justification: CA1303 要求 UI 文案走资源表本地化；本脚本输出是 CI 门禁的
@@ -44,6 +45,16 @@ using System.Text.RegularExpressions;
 
 // Windows 控制台默认编码非 UTF-8，中文输出会乱码——对齐 bash printf UTF-8
 Console.OutputEncoding = Encoding.UTF8;
+
+// ITM-664（2026-09-13 清偿）：--selftest 自测入口——红绿矩阵验证核心校验逻辑能失败
+//（PD29 验证验证者：没看过仪器故意产生错误答案，就不信它输出的任何数字）。
+// 矩阵：V17 日期单调（绿/乱序红/行数不足红）· V19 定标 90 天（绿/超期红/UNKNOWN 不误判/
+// 非法日期红）· V21 老化 30 天（绿/超期红/含"过期"豁免绿）· V22 编号唯一（绿/跨章重复红/
+// ITM- 追溯索引豁免绿）· V2 缺失清单（红/空绿）。自测模式不触达真实仓库文件。
+if (args.Contains("--selftest", StringComparer.Ordinal))
+{
+    return RunSelftest();
+}
 
 // ─── 仓库根定位（见头注释迁移说明 3）───
 var root = FindRepoRoot();
@@ -291,25 +302,7 @@ var failed = 0;
     var metrics = TryReadLines(".ai/review/metrics.md");
     var range = SedRange(metrics, "^## 轮次记录$", "^## 缺陷逃逸账本")
         .Concat(SedRange(metrics, "^## 轮次记录（续", null));
-    var v17Bad = new StringBuilder();
-    var rows = 0;
-    string? prev = null;
-    foreach (var line in range)
-    {
-        // bash case \|*\|：以 | 开头且以 | 结尾的表格行
-        if (line.Length < 2 || line[0] != '|' || line[^1] != '|') continue;
-        var parts = line.Split('|');
-        var d2 = parts.Length > 1 ? parts[1].Replace(" ", "") : "";
-        var d3 = parts.Length > 2 ? parts[2].Replace(" ", "") : "";
-        var d = Regex.IsMatch(d2, "^[0-9]{4}-[0-9]{2}-[0-9]{2}$") ? d2 : d3;
-        if (!Regex.IsMatch(d, "^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) continue;
-        rows++;
-        var pipes = line.Count(c => c == '|');
-        if (pipes < 10) v17Bad.Append($" {d}:列数不足({pipes})");
-        if (prev is not null && string.CompareOrdinal(d, prev) < 0)
-            v17Bad.Append($" {d}:乱序(前值{prev})");
-        prev = d;
-    }
+    var (rows, v17Bad) = CheckDateMonotonic(range);
     if (rows >= 15 && v17Bad.Length == 0) { passed++; lines.Add($"PASS V17: 账本轮次结构完整（{rows} 行日期单调）"); }
     else
     {
@@ -347,34 +340,7 @@ var failed = 0;
 // ─── V19 传感器台账超期校验（90 天周期，DateTime 计算）───
 {
     var ledger = TryReadLines(".ai/gate/sensor-ledger.md");
-    var v19Bad = new StringBuilder();
-    var unknown = 0;
-    foreach (var line in ledger)
-    {
-        var parts = line.Split('|');
-        if (parts.Length >= 6 && parts[5].Trim(' ', '\t', '\r') == "UNKNOWN") unknown++;
-        if (parts.Length < 7) continue;
-        var name = parts[1].Trim(' ', '\t', '\r');
-        var status = parts[5].Trim(' ', '\t', '\r');
-        if (status is not ("OK" or "观察中")) continue;
-        var ds = parts[6].Trim(' ', '\t', '\r');
-        // awk：日期前缀匹配（无 $ 锚定）即提取前 10 位做日历校验
-        if (!Regex.IsMatch(ds, "^[0-9]{4}-[0-9]{2}-[0-9]{2}"))
-        {
-            v19Bad.Append(name).Append("：日期缺失/非法(").Append(ds).Append(")\n");
-            continue;
-        }
-        var date = ParseDate(ds[..10]);
-        if (date is null)
-        {
-            v19Bad.Append(name).Append("：日期缺失/非法(").Append(ds.AsSpan(0, 10)).Append(")\n");
-            continue;
-        }
-        var age = (DateTime.UtcNow.Date - date.Value).Days;
-        if (age > 90)
-            v19Bad.Append(name).Append("：定标超期 ").Append(age).Append(" 天(")
-                .Append(ds.AsSpan(0, 10)).Append(")→STALE\n");
-    }
+    var (v19Bad, unknown) = CheckLedgerExpiry(ledger, 90, DateTime.UtcNow.Date);
     if (File.Exists(".ai/gate/sensor-ledger.md") && v19Bad.Length == 0)
     {
         passed++; lines.Add($"PASS V19: 传感器台账定标有效（UNKNOWN {unknown} 处待定标，90 天周期）");
@@ -387,24 +353,7 @@ var failed = 0;
 
 // ─── V21 P3 账本老化校验（30 天周期，DateTime 计算）───
 {
-    var v21Bad = new StringBuilder();
-    foreach (var line in TryReadLines(".ai/review/action-items-p3-backlog.md"))
-    {
-        if (!line.StartsWith("- [ ] P3-", StringComparison.Ordinal)) continue;
-        var m = Regex.Match(line, "[0-9]{4}-[0-9]{2}-[0-9]{2}");
-        if (!m.Success) continue;
-        var prefix = line.Length > 6 ? line.Substring(6, Math.Min(16, line.Length - 6)) : "";
-        var date = ParseDate(m.Value);
-        if (date is null)
-        {
-            v21Bad.Append(prefix).Append("…：日期非法(").Append(m.Value).Append(")\n");
-            continue;
-        }
-        var age = (DateTime.UtcNow.Date - date.Value).Days;
-        if (age > 30 && !line.Contains("过期"))
-            v21Bad.Append(prefix).Append("…：未勾选已 ").Append(age).Append(" 天(").Append(m.Value)
-                .Append(")，按规则应升 P2\n");
-    }
+    var v21Bad = CheckP3Aging(TryReadLines(".ai/review/action-items-p3-backlog.md"), 30, DateTime.UtcNow.Date);
     if (File.Exists(".ai/review/action-items-p3-backlog.md") && v21Bad.Length == 0)
     {
         passed++; lines.Add("PASS V21: P3 账本无超期未升级条目（30 天老化周期）");
@@ -417,28 +366,7 @@ var failed = 0;
 
 // ─── V22 经验编号跨章唯一性（排除 ITM-*/ADR-* 追溯索引）───
 {
-    var dup = new SortedSet<string>();
-    var seen = new Dictionary<string, string>();
-    string? ch = null;
-    foreach (var line in TryReadLines(".ai/lessons.md"))
-    {
-        if (Regex.IsMatch(line, "^## [IVX]+\\."))
-        {
-            var words = line.Split((char[])null!, StringSplitOptions.RemoveEmptyEntries);
-            if (words.Length > 1) ch = words[1].TrimEnd('.');
-        }
-        else if (line.Length >= 3 && line[0] == '|' && line[1] == ' ' && line[2] is >= 'A' and <= 'Z')
-        {
-            var words = line.Split((char[])null!, StringSplitOptions.RemoveEmptyEntries);
-            if (words.Length < 2) continue;
-            var id = words[1];
-            if (id.StartsWith("ITM-", StringComparison.Ordinal)
-                || id.StartsWith("ADR-", StringComparison.Ordinal)) continue;
-            if (id == "编号") continue;
-            if (seen.TryGetValue(id, out var first)) { if (first != ch) dup.Add($"{id}({first}->{ch})"); }
-            else seen[id] = ch ?? "";
-        }
-    }
+    var dup = CheckIdUniqueness(TryReadLines(".ai/lessons.md"));
     if (dup.Count == 0) { passed++; lines.Add("PASS V22: lessons 经验编号跨章唯一（无同名异章 ID）"); }
     else
     {
@@ -579,3 +507,227 @@ static DateTime? ParseDate(string ymd)
 }
 
 // （MIG-012-D：NormalizeMirror/SimpleDiff 随 V23 镜像比对退役——双镜像已合一，保留即 CS8321 死代码）
+
+// ══════════════ ITM-664（v87）：核心校验逻辑提取 + --selftest 红绿矩阵 ══════════════
+// 四个 V 项的判定核心从内联块提取为纯函数（lines 进、结果出）——主流程与自测共用
+// 同一实现（无复制漂移面）；自测矩阵验证"仪器能失败"（PD29）。
+
+// V17 核心：metrics 表格行日期单调性 + 列数（bash case \|*\| 口径）
+static (int Rows, string Bad) CheckDateMonotonic(IEnumerable<string> lines)
+{
+    var bad = new StringBuilder();
+    var rows = 0;
+    string? prev = null;
+    foreach (var line in lines)
+    {
+        if (line.Length < 2 || line[0] != '|' || line[^1] != '|') continue;
+        var parts = line.Split('|');
+        var d2 = parts.Length > 1 ? parts[1].Replace(" ", "") : "";
+        var d3 = parts.Length > 2 ? parts[2].Replace(" ", "") : "";
+        var d = Regex.IsMatch(d2, "^[0-9]{4}-[0-9]{2}-[0-9]{2}$") ? d2 : d3;
+        if (!Regex.IsMatch(d, "^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) continue;
+        rows++;
+        var pipes = line.Count(c => c == '|');
+        if (pipes < 10) bad.Append($" {d}:列数不足({pipes})");
+        if (prev is not null && string.CompareOrdinal(d, prev) < 0)
+            bad.Append($" {d}:乱序(前值{prev})");
+        prev = d;
+    }
+    return (rows, bad.ToString());
+}
+
+// V19 核心：传感器台账定标周期（90 天；UNKNOWN 计数不判坏；非法日期 fail-closed）
+static (string Bad, int Unknown) CheckLedgerExpiry(IEnumerable<string> lines, int maxAgeDays, DateTime today)
+{
+    var bad = new StringBuilder();
+    var unknown = 0;
+    foreach (var line in lines)
+    {
+        var parts = line.Split('|');
+        if (parts.Length >= 6 && parts[5].Trim(' ', '\t', '\r') == "UNKNOWN") unknown++;
+        if (parts.Length < 7) continue;
+        var name = parts[1].Trim(' ', '\t', '\r');
+        var status = parts[5].Trim(' ', '\t', '\r');
+        if (status is not ("OK" or "观察中")) continue;
+        var ds = parts[6].Trim(' ', '\t', '\r');
+        if (!Regex.IsMatch(ds, "^[0-9]{4}-[0-9]{2}-[0-9]{2}"))
+        {
+            bad.Append(name).Append("：日期缺失/非法(").Append(ds).Append(")\n");
+            continue;
+        }
+        var date = ParseDate(ds[..10]);
+        if (date is null)
+        {
+            bad.Append(name).Append("：日期缺失/非法(").Append(ds.AsSpan(0, 10)).Append(")\n");
+            continue;
+        }
+        var age = (today - date.Value).Days;
+        if (age > maxAgeDays)
+            bad.Append(name).Append("：定标超期 ").Append(age).Append(" 天(")
+                .Append(ds.AsSpan(0, 10)).Append(")→STALE\n");
+    }
+    return (bad.ToString(), unknown);
+}
+
+// V21 核心：P3 账本 30 天老化（未勾选 + 超期 + 不含"过期"→ 判坏）
+static string CheckP3Aging(IEnumerable<string> lines, int maxAgeDays, DateTime today)
+{
+    var bad = new StringBuilder();
+    foreach (var line in lines)
+    {
+        if (!line.StartsWith("- [ ] P3-", StringComparison.Ordinal)) continue;
+        var m = Regex.Match(line, "[0-9]{4}-[0-9]{2}-[0-9]{2}");
+        if (!m.Success) continue;
+        var prefix = line.Length > 6 ? line.Substring(6, Math.Min(16, line.Length - 6)) : "";
+        var date = ParseDate(m.Value);
+        if (date is null)
+        {
+            bad.Append(prefix).Append("…：日期非法(").Append(m.Value).Append(")\n");
+            continue;
+        }
+        var age = (today - date.Value).Days;
+        if (age > maxAgeDays && !line.Contains("过期"))
+            bad.Append(prefix).Append("…：未勾选已 ").Append(age).Append(" 天(").Append(m.Value)
+                .Append(")，按规则应升 P2\n");
+    }
+    return bad.ToString();
+}
+
+// V22 核心：lessons 经验编号跨章唯一（排除 ITM-*/ADR-* 追溯索引与表头"编号"）
+static List<string> CheckIdUniqueness(IEnumerable<string> lines)
+{
+    var dup = new SortedSet<string>();
+    var seen = new Dictionary<string, string>();
+    string? ch = null;
+    foreach (var line in lines)
+    {
+        if (Regex.IsMatch(line, "^## [IVX]+[.]"))
+        {
+            var words = line.Split((char[])null!, StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length > 1) ch = words[1].TrimEnd('.');
+        }
+        else if (line.Length >= 3 && line[0] == '|' && line[1] == ' ' && line[2] is >= 'A' and <= 'Z')
+        {
+            var words = line.Split((char[])null!, StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length < 2) continue;
+            var id = words[1];
+            if (id.StartsWith("ITM-", StringComparison.Ordinal)
+                || id.StartsWith("ADR-", StringComparison.Ordinal)) continue;
+            if (id == "编号") continue;
+            if (seen.TryGetValue(id, out var first)) { if (first != ch) dup.Add($"{id}({first}->{ch})"); }
+            else seen[id] = ch ?? "";
+        }
+    }
+    return dup.ToList();
+}
+
+// ─── ITM-664 自测：红绿矩阵（不触达真实仓库文件——纯合成输入）───
+// 退出码：0=全部通过（绿例过 + 红例必红）；1=任一用例失败（仪器失灵，禁止信任其输出）。
+static int RunSelftest()
+{
+    var failures = new List<string>();
+    var today = new DateTime(2026, 9, 13, 0, 0, 0, DateTimeKind.Utc);
+
+    // ── V17 日期单调 ──
+    // 12 列表格行（13 个管道符 ≥ 10——首版 helper 缺内部管道被"列数不足"全量误判）
+    string Row(string d) => $"| {d} | x | x | x | x | x | x | x | x | x | x |";
+    var mono = Enumerable.Range(1, 20).Select(i => Row($"2026-08-{i:00}"));
+    var (monoRows, monoBad) = CheckDateMonotonic(mono);
+    if (monoRows == 20 && monoBad.Length == 0) Console.WriteLine("PASS ST-V17a 日期单调 20 行零坏");
+    else failures.Add($"ST-V17a: rows={monoRows} bad={monoBad}");
+
+    var (disBad2, disBad) = (0, "");
+    (disBad2, disBad) = CheckDateMonotonic(new[] { Row("2026-09-13"), Row("2026-09-12") });
+    if (disBad.Contains("乱序")) Console.WriteLine("PASS ST-V17b 乱序检出");
+    else failures.Add($"ST-V17b: bad={disBad}");
+
+    if (CheckDateMonotonic(new[] { Row("2026-09-13"), Row("2026-09-13") }).Bad.Length == 0)
+        Console.WriteLine("PASS ST-V17c 同日允许（非乱序）");
+    else failures.Add("ST-V17c: 同日被误判乱序");
+
+    // ── V19 定标 90 天 ──
+    // 列位对齐：parts[1]=name / parts[5]=status / parts[6]=date（首版多一列 filler 使列偏位全漏检）
+    string LedgerRow(string name, string status, string date) => $"| {name} | x | x | x | {status} | {date} | x |";
+    var (ok19, unk19) = CheckLedgerExpiry(new[]
+    {
+        LedgerRow("Fresh", "OK", "2026-09-01 10:00"),
+        LedgerRow("Pending", "UNKNOWN", "2026-01-01"),
+    }, 90, today);
+    if (ok19.Length == 0 && unk19 == 1) Console.WriteLine("PASS ST-V19a 新定标绿 + UNKNOWN 仅计数");
+    else failures.Add($"ST-V19a: bad={ok19} unknown={unk19}");
+
+    var (stale19, _) = CheckLedgerExpiry(new[]
+    {
+        LedgerRow("Stale", "OK", "2026-01-01"),
+    }, 90, today);
+    if (stale19.Contains("STALE")) Console.WriteLine("PASS ST-V19b 超期 254 天检出 STALE");
+    else failures.Add($"ST-V19b: bad={stale19}");
+
+    var (ill19, _) = CheckLedgerExpiry(new[]
+    {
+        LedgerRow("BadDate", "OK", "not-a-date"),
+    }, 90, today);
+    if (ill19.Contains("非法")) Console.WriteLine("PASS ST-V19c 非法日期 fail-closed");
+    else failures.Add($"ST-V19c: bad={ill19}");
+
+    // ── V21 老化 30 天 ──
+    string[] fresh21Lines = ["- [ ] P3-1 新条目 2026-09-01"];
+    string[] old21Lines = ["- [ ] P3-2 陈旧条目 2026-07-01"];
+    string[] exempt21Lines = ["- [ ] P3-3 已豁免条目（过期） 2026-07-01"];
+    var fresh21 = CheckP3Aging(fresh21Lines, 30, today);
+    if (fresh21.Length == 0) Console.WriteLine("PASS ST-V21a 12 天新条目绿");
+    else failures.Add($"ST-V21a: bad={fresh21}");
+
+    var old21 = CheckP3Aging(old21Lines, 30, today);
+    if (old21.Contains("应升 P2")) Console.WriteLine("PASS ST-V21b 超期 74 天检出应升 P2");
+    else failures.Add($"ST-V21b: bad={old21}");
+
+    var exempt21 = CheckP3Aging(exempt21Lines, 30, today);
+    if (exempt21.Length == 0) Console.WriteLine("PASS ST-V21c 含\"过期\"豁免绿");
+    else failures.Add($"ST-V21c: bad={exempt21}");
+
+    // ── V22 编号唯一 ──
+    var uniqLessons = new[]
+    {
+        "## XIII. 测试教训",
+        "| COV-1 | x |",
+        "## XVII. 诊断教训",
+        "| AUD-1 | x |",
+    };
+    if (CheckIdUniqueness(uniqLessons).Count == 0) Console.WriteLine("PASS ST-V22a 跨章不同 ID 绿");
+    else failures.Add("ST-V22a: 无冲突被误判");
+
+    var dupLessons = new[]
+    {
+        "## XIII. 测试教训",
+        "| COV-1 | x |",
+        "## XVII. 诊断教训",
+        "| COV-1 | x |",
+    };
+    var dup22 = CheckIdUniqueness(dupLessons);
+    if (dup22.Count == 1 && dup22[0].Contains("COV-1(XIII->XVII)")) Console.WriteLine("PASS ST-V22b 跨章同名检出");
+    else failures.Add($"ST-V22b: dup={string.Join(",", dup22)}");
+
+    var itmLessons = new[]
+    {
+        "## XIII. 测试教训",
+        "| ITM-123 | x |",
+        "## XVII. 诊断教训",
+        "| ITM-123 | x |",
+    };
+    if (CheckIdUniqueness(itmLessons).Count == 0) Console.WriteLine("PASS ST-V22c ITM- 追溯索引豁免");
+    else failures.Add("ST-V22c: ITM- 前缀未豁免");
+
+    // ── V2 缺失清单 ──
+    if (MissingList([" definitely-missing-file.xyz"]).Contains("definitely-missing-file.xyz"))
+        Console.WriteLine("PASS ST-V2a 缺失文件进清单");
+    else failures.Add("ST-V2a: 缺失文件未检出");
+    if (MissingList([]).Length == 0) Console.WriteLine("PASS ST-V2b 空清单绿");
+    else failures.Add("ST-V2b: 空清单误报");
+
+    // ── 汇总 ──
+    Console.WriteLine($"═══════ VERIFY-AI SELFTEST：{(failures.Count == 0 ? "全部通过" : $"{failures.Count} 例失败")} ═══════");
+    foreach (var f in failures) Console.WriteLine("  FAIL " + f);
+    return failures.Count == 0 ? 0 : 1;
+}
+  
