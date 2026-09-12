@@ -212,6 +212,15 @@ else
     Console.WriteLine("  （无 .cs 变更）");
 }
 
+// ITM-669（v88）：本地防线发现必须生成 ITM——CI 不跑评审工具（.ai 独立仓不随主仓分发），
+// 本地防线发现的缺口若无行动项承载，push 后 CI 不可见（CI 子集回路缺失）。修复者必须在
+// 收口前把 ④段/①段发现的未同步项登记为 ITM（docs/review/action-items-*.md），否则该缺口
+// 仅存在于本轮会话记忆中，下轮审计可能重新发现（PD34 振荡）。
+Console.WriteLine();
+Console.WriteLine("── ITM-669 提醒：本地防线发现→ITM 登记（CI 子集回路缺失）──");
+Console.WriteLine("  ④段/①段发现的未同步项 → 登记 docs/review/action-items-*.md（ITM-NNN）；");
+Console.WriteLine("  未登记的缺口 push 后 CI 不可见（本工具不在 CI 跑）→ 下轮审计重发（PD34 振荡源）。");
+
 // 结尾行为原版字面 ${CYAN}...（单引号笔误保真，见头注释等价说明 1）
 Console.WriteLine();
 Console.WriteLine("${CYAN}═══ 编排完成——执行决策归修复者 ═══${NC}");
