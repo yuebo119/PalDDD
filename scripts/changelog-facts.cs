@@ -222,7 +222,9 @@ Console.WriteLine();
 Console.WriteLine("═══ 事实清单结束 → 按 docs/release.md §十二 Phase 2-4 核验/起草/校验 ═══");
 return 0;
 
-// ─── 子进程执行：stdout 捕获（stderr 继承终端——对齐 bash 管道行为）───
+// ─── 子进程执行：stdout 捕获（stderr 继承终端——对齐 bash 管道行为；ITM-663：
+// 不重定向 stderr 是刻意取舍——git 的 stderr 是进度/诊断信息，CI 控制台直出可观察，
+// 且避免双流并行读的复杂度。若未来需捕获 stderr，须 async 双流读防死锁。）───
 static (int Exit, string Output) RunCapture(string fileName, string arguments)
 {
     var info = new ProcessStartInfo(fileName, arguments)
