@@ -1,0 +1,28 @@
+#!/bin/bash
+# pre-push — ITM-671：推送前校验
+# ① main 分支保护（从 .git/hooks/pre-push 迁移——原 hook 因 core.hooksPath
+#    指向不存在的 .githooks 目录而死亡，本次修复）
+# ② gate-lite CI 预览（快速门禁降级路径，~2s）
+set -uo pipefail
+
+# ── ① main 分支保护 ──
+target=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+if [ "$target" = "main" ]; then
+    dev_head=$(git rev-parse dev 2>/dev/null)
+    main_head=$(git rev-parse main 2>/dev/null)
+    if [ "$dev_head" != "$main_head" ]; then
+        echo "⛔ main 落后 dev，请先合并：git checkout main && git merge dev"
+        echo "   （如果不需要合并，说明你在 main 上直接做了修改——这是违规的）"
+        exit 1
+    fi
+fi
+
+# ── ② gate-lite CI 预览 ──
+echo "🔍 gate-lite（CI 降级门禁预览）…"
+if ! dotnet run scripts/gate-lite.cs 2>&1; then
+    echo "⛔ gate-lite 失败"
+    exit 1
+fi
+
+echo "✅ pre-push 通过"
+exit 0
