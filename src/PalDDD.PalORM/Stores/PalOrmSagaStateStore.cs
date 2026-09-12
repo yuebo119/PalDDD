@@ -322,8 +322,8 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
             // 以空状态覆写 DB，损坏从一行扩散到整条 saga；改抛InvalidOperationException
             // 与同文件 SaveChangesAsync 的 ITM-228 同款。注意：下方 else 分支的 new TState
             // 兜底是合法语义（saga_data 为空 = 无 JSON 数据可恢复，仅元数据兜底，不丢已存
-            // 数据），保持不变。姊妹 DapperSagaStateStore.Materialize 的同型兜底未同步收口
-            //（见其声明，后续任务对齐）。
+            // 数据），保持不变。姊妹 DapperSagaStateStore.Materialize 已同步收口（v3 轮
+            // ITM-659 批，同款 fail-fast——v4 轮审计勘正本注释：原文声称"未同步"已过期）。
             state = JsonSerializer.Deserialize(row.SagaData!, _jsonTypeInfo!)
                 ?? throw new InvalidOperationException(
                     $"Saga {row.SagaId} 的 saga_data 列损坏（值为 JSON 字面 'null' 文本），无法恢复业务状态——"

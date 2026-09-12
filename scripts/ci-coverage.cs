@@ -122,6 +122,7 @@ Console.WriteLine("Report: TestResults/coverage-report/index.html");
 return 0;
 
 // ─── 子进程执行：stdout/stderr 继承终端（对齐原脚本未捕获的 dotnet 调用）───
+// ITM-663：stdout/stderr 均继承终端——coverage 工具输出即结果，控制台直出可观察（刻意取舍）
 static int RunInherit(string fileName, string arguments)
 {
     using var process = Process.Start(new ProcessStartInfo(fileName, arguments)
