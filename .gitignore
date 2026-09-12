@@ -60,7 +60,8 @@ ehthumbs.db
 .serena/
 .claude/
 .codex/
-.githooks/
+# .githooks/ 已跟踪（ITM-671：pre-commit/pre-push hook 随仓分发）
+# !.githooks/
 repomix-output.md
 **/repomix-output.md
 tmp/
