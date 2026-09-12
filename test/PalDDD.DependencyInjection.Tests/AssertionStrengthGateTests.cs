@@ -13,7 +13,9 @@ namespace PalDDD.DependencyInjection.Tests;
 /// ArchitectureBoundaryTests 负向自证 raw string 样本里的 [Test] 伪签名（BadParameterizedName、
 /// BadMultiLineArgumentsName）计入基线；净化后天然排除。
 /// ② 花括号配对在净化文本上进行——raw string 内的 { } 不再扰动真实方法体的深度计数。
-/// ③ 无 python 进程依赖（原脚本在 python 缺失时模式 2 直接 FAIL）。</para></summary>
+/// ③ 无 python 进程依赖（原脚本在 python 缺失时模式 2 直接 FAIL）。
+/// ④ 净化器按最长引号定界识别 raw string（ITM-658）——4+ 引号定界（如 """" 包 """
+/// 嵌套形态）不再因内层闭定界提前退出而泄漏外层内容。</para></summary>
 public sealed class AssertionStrengthGateTests
 {
     /// <summary>弱断言总数基线上限（棘轮：只许下调，下调需评审）。
@@ -105,12 +107,40 @@ public sealed class AssertionStrengthGateTests
                 }
             }
             """";
+        // ITM-658 红测样本：4 引号定界包 3 引号内层，且内层闭定界之后仍有伪 [Test] 与
+        // 不平衡 {（在内层 raw 内容中）。旧净化器（只认 """/不记定界长度）在内层 """
+        // 行提前退出 raw 模式——外层内容中的伪 [Test] 暴露为"真实代码"，
+        // Fake_InOuterQuadruple_NotCounted 被提取为无断言方法块 → methods 计数超基线。
+        const string quadrupleQuotedFalsePositive = """""
+            public sealed class Sample
+            {
+                [Test]
+                public async Task Sample_NestsTripleInsideQuadruple()
+                {
+                    const string payload = """"
+                        const string inner = """
+                            var s = "{";
+                            [Test]
+                            public void Fake_InnerTriple_NotCounted()
+                            {
+                            }
+                            """;
+                    [Test]
+                    public void Fake_InOuterQuadruple_NotCounted()
+                    {
+                    }
+                    """";
+                    await Assert.That(payload).IsNotEmpty();
+                }
+            }
+            """"";
 
         var (count, methods) = ScanSources(
         [
             ("isNotNullSample.cs", isNotNullSample),
             ("zeroAssertSample.cs", zeroAssertSample),
             ("rawStringFalsePositive.cs", rawStringFalsePositive),
+            ("quadrupleQuotedFalsePositive.cs", quadrupleQuotedFalsePositive),
         ]);
 
         await Assert.That(count).IsEqualTo(1);
@@ -201,28 +231,34 @@ public sealed class AssertionStrengthGateTests
     }
 
     /// <summary>净化：原始字符串字面量内容与整行 // 注释替换为等长空白（保留换行符与偏移）。
-    /// raw string 状态机与原 D12a python 口径一致：行尾 """ 进入（且非行首），
-    /// 行首 """ 退出。净化保证跨行正则匹配与方法体配对均不受字面量内容扰动。</summary>
+    /// raw string 状态机（ITM-658 修复）：进入行取**行尾最长引号序列**长度 L（4+ 引号定界
+    /// 与 3 引号同轨识别，L ≥ 3 才是 raw string——1/2 引号是普通字符串）；退出行要求
+    /// **行首引号序列与 L 等长**（C# 规范闭定界与开定界等长）。旧口径"行尾进入（且非行首）/
+    /// 行首 &quot;&quot;&quot; 退出"不记定界长度——4 引号包裹内嵌 3 引号时，内层闭定界使状态机
+    /// 提前退出，外层内容中的伪 [Test]/不平衡花括号泄漏为真实代码（红测样本
+    /// Fake_InOuterQuadruple_NotCounted 锁定）。净化保证跨行正则匹配与方法体配对均不受字面量内容扰动。</summary>
     private static string SanitizeRawStringsAndLineComments(string text)
     {
         var lines = text.Split('\n');
         var inRaw = false;
+        var delimiterLength = 0;
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
             var trimmed = line.TrimEnd('\r').Trim();
             if (inRaw)
             {
-                if (trimmed.StartsWith("\"\"\"", StringComparison.Ordinal))
+                if (LeadingQuoteCount(trimmed) == delimiterLength)
                     inRaw = false;
                 lines[i] = BlankPreserveLength(line);
                 continue;
             }
 
-            if (trimmed.EndsWith("\"\"\"", StringComparison.Ordinal) &&
-                !trimmed.StartsWith("\"\"\"", StringComparison.Ordinal))
+            var tailQuotes = TrailingQuoteCount(trimmed);
+            if (tailQuotes >= 3 && LeadingQuoteCount(trimmed) < 3)
             {
                 inRaw = true;
+                delimiterLength = tailQuotes;
                 lines[i] = BlankPreserveLength(line);
                 continue;
             }
@@ -232,6 +268,28 @@ public sealed class AssertionStrengthGateTests
         }
 
         return string.Join('\n', lines);
+    }
+
+    /// <summary>行首连续引号数（闭定界只能出现在行首，允许行内后随 ; 等尾巴）。</summary>
+    private static int LeadingQuoteCount(string trimmed)
+    {
+        var count = 0;
+        while (count < trimmed.Length && trimmed[count] == '"')
+            count++;
+        return count;
+    }
+
+    /// <summary>行尾连续引号数（开定界在赋值行行尾，如 const string x = """"）。</summary>
+    private static int TrailingQuoteCount(string trimmed)
+    {
+        var count = 0;
+        var i = trimmed.Length - 1;
+        while (i >= 0 && trimmed[i] == '"')
+        {
+            count++;
+            i--;
+        }
+        return count;
     }
 
     /// <summary>等长空白化：除换行符（\r\n / \n）外全部替换为空格——净化不破坏任何偏移与行结构。</summary>

@@ -26,6 +26,22 @@ public class PalOrmOutboxStoreTests
     }
 
     [Test]
+    public async Task Outbox_NonPositiveMaxRetryCount_ThrowsArgumentOutOfRange()
+    {
+        // ITM-659 守卫族收口（镜像 DapperStoreTests）：maxRetryCount 非正守卫——非正值使
+        // retry_count < maxRetryCount 恒假（retry_count >= 0），原实现三方言 SQL 下静默
+        // 空返回无诊断（直调路径防御性 fail-fast；守卫在 SQL 执行前抛出）。
+        // GetPending 与 Lease 两方法同守卫（Lease 三处 SQL 分支共用同一谓词）。
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteOutboxStore(session);
+
+        await Assert.That(async () => await store.GetPendingMessagesAsync(10, -1, default))
+            .Throws<ArgumentOutOfRangeException>();
+        await Assert.That(async () => await store.LeasePendingMessagesAsync(10, "worker-1", TimeSpan.FromMinutes(5), 0, default))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
     public async Task Outbox_MarkProcessed()
     {
         await using var session = await PalOrmStoreFixture.CreateAsync();

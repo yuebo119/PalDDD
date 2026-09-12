@@ -165,13 +165,15 @@ public sealed class DocConsistencyGateTests
     }
 
     /// <summary>D10：无过期 ORM 陈述（849/849、PalORM.slnx）。
+    /// 扫描面：docs/ **全部文件**（不限扩展名——对齐 bash grep -R 递归不限后缀口径；
+    /// 此前仅 *.md 时 docs/sql/*.sql 等非 Markdown 文件对守卫不可见）+ README.md。
     /// 排除口径与 bash 一致：.ai/review/history/**、.ai/lessons.md、docs/design/** 不扫；
     /// 含迁移叙事关键词（删除/不套用/迁移/from ORM/版本/v1.0）的行跳过——这些是合法的 ORM 出处陈述。</summary>
     [Test]
     public async Task Docs_HaveNoStaleOrmStatements()
     {
         var scanTargets = new List<string>();
-        scanTargets.AddRange(Directory.EnumerateFiles(RepoPath("docs"), "*.md", SearchOption.AllDirectories));
+        scanTargets.AddRange(Directory.EnumerateFiles(RepoPath("docs"), "*", SearchOption.AllDirectories));
         scanTargets.Add(RepoPath("README.md"));
         // .ai 是独立 git 仓库（主仓 .gitignore 排除）——CI fresh checkout 不存在，本地存在才扫
         // （bash 版 D10 对不存在路径 grep 静默空结果同语义；CI 上 docs 面仍然全量守护）。

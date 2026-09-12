@@ -56,6 +56,10 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         //（镜像同文件姊妹 PalOrmSagaStateStore.GetActiveSagasAsync :71 的 P3 修复形态）——
         // LIMIT 0/负在各方言下静默空返回，无诊断
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        // ITM-659 守卫族收口：maxRetryCount 非正守卫（对齐同方法 batchSize 守卫形态）——
+        // 非正值使 retry_count < maxRetryCount 恒假（retry_count >= 0），三方言下静默
+        // 空返回无诊断（直调路径防御性 fail-fast；Options 层已校验正数）
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount);
         var now = Clock.GetUtcNow();
         // 列名内联到 SQL 字面量（PalORM 要求 FormattableString 类型，字符串拼接会退化为 string）
         var rows = await Session.QueryAsync<OutboxMessageRow>(
@@ -73,6 +77,9 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         //（镜像 EFCore 四方言 LeasePendingMessagesAsync 的 v22 C-3 形态）——
         // 子查询 LIMIT 0/负静默空返回，无诊断
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        // ITM-659 守卫族收口：maxRetryCount 非正守卫（同 GetPendingMessagesAsync——
+        // 本方法三处 SQL 分支共用同一谓词，一处守卫三分支生效）
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount);
         // v25 P3 守卫族：leaseDuration 边界守卫——对照 EFCore 四方言 LeasePendingMessagesAsync
         //（MySql/PG/Sqlite，ITM-167/216 对齐系列）同型漏网——leaseDuration 非正时租约
         // 即刻过期/永不过期语义错乱；TotalSeconds 超过 int.MaxValue 时

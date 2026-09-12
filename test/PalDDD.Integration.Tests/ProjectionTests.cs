@@ -441,6 +441,59 @@ public sealed class ProjectionTests
         await Assert.That(current!.Status).IsEqualTo(ProjectionCheckpointStatus.Processing);
     }
 
+    [Test]
+    public async Task ProcessAsync_MarkCompletedThrowsOce_ReturnsTrueInsteadOfEscaping(CancellationToken cancellationToken)
+    {
+        // ITM-653 回归（v66 镜像 InboxProcessor）：MarkCompletedAsync 以 CancellationToken.None
+        // 调用，其抛 OCE 属存储异常形态而非请求级取消传播——原 `when (not OCE)` 过滤让 OCE
+        // 逃逸给调用方，而投影 handler 实际已成功（副作用已发生），调用方按取消处理会触发
+        // 重试重放路径。移除过滤后按成功（true）返回（completed-pending-confirmation 语义）。
+        var store = new ThrowingOnCompleteCheckpointStore();
+        var handler = new CountingProjectionHandler();
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var context = new ProjectionContext("orders", "pos-oce", DateTimeOffset.UnixEpoch);
+
+        var result = await processor.ProcessAsync(new OrderPlaced(Guid.NewGuid()), context, cancellationToken);
+
+        // 副作用已发生：按成功返回而非 OCE 逃逸（修复前该断言不可达——OCE 直接抛出）
+        await Assert.That(result).IsTrue();
+        await Assert.That(handler.Count).IsEqualTo(1);
+        // 关键：MarkFailedAsync 必须零调用（不得把已成功 checkpoint 标 Failed）
+        await Assert.That(store.MarkFailedCalls).IsEqualTo(0);
+    }
+
+    /// <summary>MarkCompleted 抛存储侧 OCE 的 checkpoint 存储装置 —— ITM-653 测试专用。
+    /// 其余成员为最小直通实现（TryStart 恒放行新 checkpoint，与 InMemory 版语义一致）。</summary>
+    private sealed class ThrowingOnCompleteCheckpointStore : IProjectionCheckpointStore
+    {
+        public int MarkFailedCalls;
+
+        public ValueTask<ProjectionCheckpoint?> GetAsync(
+            string projectionName, string sourceName, string position, CancellationToken ct = default)
+            => ValueTask.FromResult<ProjectionCheckpoint?>(null);
+
+        public ValueTask<ProjectionCheckpoint?> TryStartAsync(
+            string projectionName, string sourceName, string position,
+            DateTimeOffset startedAt, TimeSpan processingTimeout, CancellationToken ct = default)
+            => ValueTask.FromResult<ProjectionCheckpoint?>(new ProjectionCheckpoint(
+                projectionName, sourceName, position, ProjectionCheckpointStatus.Processing, startedAt));
+
+        // None token 语义——处理器调用点恒传 CancellationToken.None，此处抛 OCE 模拟存储侧异常形态
+        public ValueTask MarkCompletedAsync(
+            ProjectionCheckpoint checkpoint, DateTimeOffset completedAt, CancellationToken ct = default)
+            => throw new OperationCanceledException();
+
+        public ValueTask MarkFailedAsync(
+            ProjectionCheckpoint checkpoint, string failureReason, DateTimeOffset failedAt, CancellationToken ct = default)
+        {
+            MarkFailedCalls++;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask ResetAsync(string projectionName, string sourceName, CancellationToken ct = default)
+            => ValueTask.CompletedTask;
+    }
+
     private sealed class InMemoryReplaySource<TMessage>(IReadOnlyList<ReplayEvent<TMessage>> events)
         : IEventReplaySource<TMessage>
     {

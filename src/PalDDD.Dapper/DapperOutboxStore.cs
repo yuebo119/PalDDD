@@ -100,6 +100,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         //（PalOrmOutboxStore.GetPendingMessagesAsync / OutboxDbContext.GetPendingMessagesAsync）——
         // LIMIT 0/负在各方言下静默空返回，无诊断
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        // ITM-659 守卫族收口：maxRetryCount 非正守卫（对齐同方法 batchSize 守卫形态）——
+        // 非正值使 retry_count < @maxRetryCount 恒假（retry_count >= 0），各方言下静默
+        // 空返回无诊断（直调路径防御性 fail-fast；Options 层已校验正数）
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount);
         var now = _timeProvider.GetUtcNow();
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // 🟡 P1 修复 (2026-06-21): 替换 SqlKata.QueryFactory.GetAsync 为纯 Dapper SQL
@@ -120,6 +124,9 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // v30 P3 守卫族：batchSize 非正守卫（同 GetPendingMessagesAsync——PalORM/EFCore 姊妹
         // 的 Lease 路径均已补）；子查询 LIMIT 0/负静默空返回，无诊断
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        // ITM-659 守卫族收口：maxRetryCount 非正守卫（同 GetPendingMessagesAsync——PG/MySQL/
+        // SQLite 三分支共用同一谓词，一处守卫全分支生效）
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount);
         // v27 P3 守卫族（B 片 N3）：leaseDuration 双检守卫（v25/v26 守卫族最后缺口）——镜像
         // DapperSagaStateStore.LeaseActiveSagasAsync 守卫形态。非正租约使租约即刻过期/永不过期
         // 语义错乱（OutboxProcessor 默认配置不触发，此处是直调路径的防御性 fail-fast）；上界

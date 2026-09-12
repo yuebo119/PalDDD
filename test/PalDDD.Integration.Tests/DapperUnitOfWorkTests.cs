@@ -155,6 +155,17 @@ public sealed class DapperUnitOfWorkTests
     }
 
     [Test]
+    public async Task CommitAsync_AfterDispose_ThrowsObjectDisposedException()
+    {
+        // ITM-654（v3 轮）：Begin/Rollback 的 AfterDispose 守卫测试均在，姊妹 Commit 缺失
+        // ——上轮 Rollback 收口时漏了 Commit 版，本测试补齐三守卫回归网。
+        var uow = new DapperUnitOfWork(_connection);
+        await uow.DisposeAsync();
+
+        await Assert.That(async () => await uow.CommitAsync()).Throws<ObjectDisposedException>();
+    }
+
+    [Test]
     public async Task CommitAsync_WhenCommitThrows_DisposesAndClearsTransaction()
     {
         var tx = new ThrowingDbTransaction();

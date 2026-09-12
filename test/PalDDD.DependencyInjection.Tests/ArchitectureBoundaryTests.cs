@@ -76,7 +76,14 @@ public sealed class ArchitectureBoundaryTests
     /// <summary>Core/App 层项目不得引用基础设施实现包。
     /// 动态扫描 src/ 下所有 Core/App 层项目 csproj，禁止引用 Infra 实现包。
     /// Core/App 层定义：非 Infra 适配器、非工具链的领域/应用层项目。
-    /// 避免硬编码项目列表导致新增项目时守护失效。</summary>
+    /// 避免硬编码项目列表导致新增项目时守护失效。
+    /// <para>P3 批缺项裁决（2026-09-11 实测核查）：
+    /// ① PalDDD.Shared——无 csproj（仅目录，被 SourceGen/Analyzers 以 &lt;Compile Include&gt;
+    /// 链接编译 StableNameValidation.cs），本守卫按 csproj 枚举，Shared 永不可见，补入即
+    /// 死条目，故不补；② PalDDD.Projections.EventLog——csproj 仅引用
+    /// EventLog/Projections/Serialization 三个 App/抽象层项目，属 App 层投影适配，
+    /// 保持受禁令；③ PalDDD.Compression——抽象层（实现层 Compression.Native 已在
+    /// infraProjects），保持受禁令。三项均不补 → 禁令面不变（当前全绿无违规）。</para></summary>
     [Test]
     public async Task CoreAndBrokerProjects_DoNotReferenceInfrastructureImplementations()
     {
@@ -94,10 +101,40 @@ public sealed class ArchitectureBoundaryTests
             "PalDDD.Extension", "PalDDD.Base", "PalDDD.Prompts"
         };
 
+        // 受禁令的 Core/App/组合根层项目（漂移哨兵的分类完备集，见下方哨兵断言）
+        var coreAppLayerProjects = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "PalDDD.Core", "PalDDD.Serialization", "PalDDD.CQRS",
+            "PalDDD.EventLog", "PalDDD.Idempotency", "PalDDD.Projections",
+            "PalDDD.Projections.EventLog", "PalDDD.Messaging", "PalDDD.Transactions",
+            "PalDDD.Compression", "PalDDD.DependencyInjection",
+        };
+
         var srcCsprojs = Directory.EnumerateFiles(
             Path.Combine(Root, "src"),
             "*.csproj",
-            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact);
+            SearchOption.AllDirectories).Where(BuildArtifactFilter.IsNotBuildArtifact).ToList();
+
+        // ── 名单与 src 漂移哨兵（P3 批）：防名单腐化与静默漏归类 ──
+        // ① 死条目方向：infraProjects/coreAppLayerProjects 名单项在 src 无对应 csproj
+        //   （项目删除/改名后残留）→ FAIL；
+        // ② 漏归类方向：src 新项目不在任何名单 → FAIL——新增项目必须显式归类
+        //   （Infra 豁免方进 infraProjects；Core/App 受禁方进 coreAppLayerProjects），
+        //   防止新 Infra 适配器被默认当 Core/App 误拦、或反向漏归类使守卫空转。
+        var srcProjectNames = srcCsprojs
+            .Select(p => Path.GetFileNameWithoutExtension(p)!)
+            .ToHashSet(StringComparer.Ordinal);
+        var deadEntries = infraProjects.Concat(coreAppLayerProjects)
+            .Where(p => !srcProjectNames.Contains(p)).ToList();
+        var unclassified = srcProjectNames
+            .Where(p => !infraProjects.Contains(p) && !coreAppLayerProjects.Contains(p)).ToList();
+        if (deadEntries.Count > 0 || unclassified.Count > 0)
+        {
+            Assert.Fail(
+                "infraProjects/coreAppLayerProjects 名单与 src 实况漂移:\n" +
+                $"  死条目（src 已无对应 csproj，请从名单移除）: {string.Join(", ", deadEntries)}\n" +
+                $"  未归类（新 src 项目必须显式进 infraProjects 或 coreAppLayerProjects）: {string.Join(", ", unclassified)}");
+        }
 
         var violations = new List<string>();
         foreach (var csprojPath in srcCsprojs)
@@ -381,7 +418,8 @@ public sealed class ArchitectureBoundaryTests
                 continue;
 
             checkedProjects++;
-            await Assert.That(project).Contains("<IsAotCompatible>false</IsAotCompatible>");
+            // P3 批清理：原 384 行 Contains("<IsAotCompatible>false") 断言恒真——外层 if 已按
+            // 同串过滤，进入循环体的 csproj 必含该串；删除冗余行，保留下方两行真断言。
             await Assert.That(project).Contains("<IsTrimmable>false</IsTrimmable>");
             await Assert.That(project).Contains("<VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>");
         }
@@ -656,9 +694,10 @@ public sealed class ArchitectureBoundaryTests
                 file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
                 continue;
 
-            // 跳过 AssemblyInfo.cs 和已知包含文档引用的文件
+            // 跳过 AssemblyInfo.cs（P3 批清理：原豁免名单含 "DapperDbType.cs"——该文件在
+            // src/PalDDD.Dapper/ 下，不在本测试 8 个 Domain/App 目录扫描面内，属死豁免，删除）
             var fileName = Path.GetFileName(file);
-            if (fileName is "AssemblyInfo.cs" or "DapperDbType.cs")
+            if (fileName is "AssemblyInfo.cs")
                 continue;
 
             var source = File.ReadAllText(file);

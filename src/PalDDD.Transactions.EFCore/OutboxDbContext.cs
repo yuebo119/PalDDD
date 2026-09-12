@@ -70,6 +70,10 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     {
         // v16 姊妹对称：batchSize 非正守卫（对齐 Saga 族）——EF Take(0/负) 空返回静默无诊断
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        // ITM-659 守卫族收口：maxRetryCount 非正守卫（对齐同方法 batchSize 守卫形态，镜像
+        // PalORM/Dapper 姊妹）——非正值使 RetryCount < maxRetryCount 恒假（RetryCount >= 0），
+        // 查询静默空返回无诊断（直调路径防御性 fail-fast；Options 层已校验正数）
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount);
         var now = GetUtcNow();
         // 优化（二十五轮 API 扫描 EF-1）：AsNoTracking 跳过 ChangeTracker 物化（免快照 +
         // 身份解析开销）。只读契约（IPalOutboxStore.GetPendingMessagesAsync doc：

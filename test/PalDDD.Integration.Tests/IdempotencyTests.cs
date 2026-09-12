@@ -463,12 +463,45 @@ public sealed class IdempotencyTests
             a.Events.Any(e => e.Name == "idempotency.completed-pending-confirmation"))).IsTrue();
     }
 
+    [Test]
+    public async Task ExecuteAsync_MarkCompletedThrowsOce_ReturnsExecutedInsteadOfEscaping(CancellationToken cancellationToken)
+    {
+        // ITM-653 回归（v66 镜像 InboxProcessor）：MarkCompletedAsync 以 CancellationToken.None
+        // 调用，其抛 OCE 属存储异常形态而非请求级取消传播——原 `when (not OCE)` 过滤让 OCE
+        // 逃逸给调用方，而 handler 实际已成功（副作用已发生），调用方按取消处理会触发重试
+        // 重放路径。移除过滤后按 Executed 返回（completed-pending-confirmation 语义，
+        // 与 MarkCompletedFails 抛 InvalidOperationException 的既有路径同归宿）。
+        var store = new ThrowingOnCompleteStore
+        {
+            // None token——存储侧抛 OCE 的异常形态（处理器调用点恒传 CancellationToken.None）
+            CompleteException = new OperationCanceledException()
+        };
+        var processor = new IdempotencyProcessor(store);
+
+        var execution = await processor.ExecuteAsync(
+            "CreateOrder",
+            "cmd-oce",
+            _ => ValueTask.FromResult("order-ok"),
+            Serialize,
+            Deserialize,
+            cancellationToken: cancellationToken);
+
+        // 副作用已发生：按 Executed 返回而非 OCE 逃逸（修复前该断言不可达——OCE 直接抛出）
+        await Assert.That(execution.Status).IsEqualTo(IdempotencyExecutionStatus.Executed);
+        // 关键：MarkFailedAsync 必须零调用（不得把已成功记录标 Failed）
+        await Assert.That(store.MarkFailedCalls).IsEqualTo(0);
+    }
+
     /// <summary>MarkCompleted 抛 DB 故障、记录 TryStart 对象与 MarkFailed 调用数的存储 —— ITM-191 测试装置。
     /// TST-203/306b：状态用实例字段（static 可变字段会跨测试串扰并行执行），每测试 new 即隔离。</summary>
     private sealed class ThrowingOnCompleteStore : IIdempotencyStore
     {
         public IdempotencyRecord? LastRecord;
         public int MarkFailedCalls;
+        // ITM-653：MarkCompleted 的抛出形态可注入——默认 InvalidOperationException 保持
+        // ITM-191 既有行为；姊妹回归测试注入 OCE（None token 语义）锁定 v66 过滤移除
+        public Exception CompleteException { get; init; } =
+            new InvalidOperationException("simulated DB failure on complete");
 
         public ValueTask<IdempotencyRecord?> GetAsync(string operationName, string key, DateTimeOffset now, CancellationToken ct = default)
             => ValueTask.FromResult<IdempotencyRecord?>(null);
@@ -484,7 +517,7 @@ public sealed class IdempotencyTests
 
         public ValueTask MarkCompletedAsync(IdempotencyRecord record, ReadOnlyMemory<byte> responsePayload,
             DateTimeOffset completedAt, CancellationToken ct = default)
-            => throw new InvalidOperationException("simulated DB failure on complete");
+            => throw CompleteException;
 
         public ValueTask MarkFailedAsync(IdempotencyRecord record, string failureReason,
             DateTimeOffset failedAt, CancellationToken ct = default)
