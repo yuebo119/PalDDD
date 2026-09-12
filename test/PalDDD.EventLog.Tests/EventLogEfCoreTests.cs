@@ -355,6 +355,10 @@ public sealed class EventLogEfCoreTests
 // P0 验收测试 — StoredEvent byte[] + 转换器消除
 // ═══════════════════════════════════════════════════════════════
 
+// P3 批加固：本类 Append_AllocationPerEvent_Reasonable 用 GC.GetAllocatedBytesForCurrentThread
+// 做分配计量（baseline/取样两点需隔离）——并行测试引发的 GC 活动与线程池调度会干扰计量稳定性，
+// [NotInParallel]（无 key）隔离，对齐同文件 EventLogEfCoreTests 类级范式。
+[TUnit.Core.NotInParallel]
 public sealed class EventLogOptimizedSerializationTests
 {
     // P0-T1: 写入再读出，Payload/Metadata 字节一致

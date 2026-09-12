@@ -33,6 +33,10 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
         CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v20 C-1：override 不调 base 使基类守卫死码化——四处补齐
+        // ITM-659 守卫族收口：maxRetryCount 非正守卫（batchSize 守卫姊妹，镜像 PalORM/Dapper/
+        // 基类）——非正值使 RetryCount < maxRetryCount 恒假（RetryCount >= 0），SQL 静默空
+        // 返回无诊断（直调路径防御性 fail-fast；Options 层已校验正数）
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount);
         // 优化（二十四轮 OP-5）：可组合 FromSql——分页由 EF 生成（删手工 LIMIT）
         // 优化（二十五轮 API 扫描 EF-4）：AsNoTracking——只读契约（接口 doc 保证不进
         // Mark*+SaveChanges）；违反契约的突变将静默丢失
@@ -85,6 +89,7 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
         CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v22 C-3：v20 C-1 GetPending 补齐后 Lease 路径漏网
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount); // ITM-659：maxRetryCount 非正守卫（同上 GetPending）
         // P3 修复（二十六轮验证轮 W1 前在 nit）：owner 空白守卫——对齐 PG（:53）/SqlServer（:43）
         // 的 ITM-081 跨方言对齐（MySQL 漏网）；空 owner 产生无归属租约
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);

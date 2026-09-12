@@ -45,6 +45,19 @@ public sealed class OutboxEfCoreTests
     }
 
     [Test]
+    public async Task GetPendingMessagesAsync_NonPositiveMaxRetryCount_ThrowsArgumentOutOfRange()
+    {
+        // ITM-659 守卫族收口（镜像 DapperStoreTests/PalOrmOutboxStoreTests）：基类 GetPending
+        // 的 maxRetryCount 非正守卫——非正值使 RetryCount < maxRetryCount 恒假（RetryCount
+        // >= 0），EF 查询静默空返回无诊断（直调路径防御性 fail-fast；守卫在查询执行前抛出）。
+        // LeasePendingMessagesAsync 为 abstract（四方言派生类实现），基类守卫不覆盖。
+        await using var db = new TestOutboxDbContext(CreateOptions(), FixedNow);
+
+        await Assert.That(async () => await db.GetPendingMessagesAsync(10, -1, default))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
     public async Task MarkProcessed_ClearsLeaseAndRetryState(CancellationToken cancellationToken)
     {
         await using var db = new TestOutboxDbContext(CreateOptions(), FixedNow);

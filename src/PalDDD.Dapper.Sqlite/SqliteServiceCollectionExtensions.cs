@@ -75,7 +75,19 @@ public static class SqliteServiceCollectionExtensions
             // AddPalSqliteInMemory(sharedCache: true) 作并发出口失实，该重载同样落此 Singleton
             // 单连接分支，不改变并发行为（见其 sharedCache 参数注释）。
             var connection = new SqliteConnection(connectionString);
-            ApplyOptimization(connection, optimize, isMemory);
+            // 工厂半成品泄漏防护：ApplyOptimization 抛出（如 WAL 确认失配的
+            // InvalidOperationException）时连接已 Open 但尚未交给容器，无人 Dispose
+            //（native 句柄滞留至 GC 终结器）。try-catch-dispose-rethrow 最小形态：
+            // 异常原样上抛（注册失败的语义不变），已 Open 连接确定性释放。
+            try
+            {
+                ApplyOptimization(connection, optimize, isMemory);
+            }
+            catch
+            {
+                connection.Dispose();
+                throw;
+            }
             services.AddSingleton(connection);
             services.AddSingleton<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<SqliteConnection>());
         }
@@ -85,7 +97,17 @@ public static class SqliteServiceCollectionExtensions
             services.AddScoped<SqliteConnection>(_ =>
             {
                 var c = new SqliteConnection(connectionString);
-                ApplyOptimization(c, optimize, isMemory);
+                // 同上内存分支——ApplyOptimization 抛时 Dispose 已 Open 连接再抛
+                //（Scoped 工厂抛出时容器不会 Dispose 未成功返回的连接）
+                try
+                {
+                    ApplyOptimization(c, optimize, isMemory);
+                }
+                catch
+                {
+                    c.Dispose();
+                    throw;
+                }
                 return c;
             });
             services.AddScoped<System.Data.Common.DbConnection>(sp => sp.GetRequiredService<SqliteConnection>());

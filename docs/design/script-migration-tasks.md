@@ -194,3 +194,48 @@
 | MIG-T5..T7 | ✅ 可做部分完成 | 2026-09-11 | 本会话 | tech-debt #15-#20+T6/T8/T11+post-fix-check 下沉（TechDebtGuard 6→13 + TestGateGuardTests 新建 4；#20/T6 转活账本；T8 勘正 no-op 门扫错文件；post-fix-check 删除确认零引用）。**维持不迁**：flaky-gate（OSC 有状态跨运行，正确归宿 dotnet tool）、secret-scan（刚经 mutation 验证）、encoding-gate（字节工具天然 shell）——论证见前 |
 
 > 多 commit 任务的最后一次提交在正文附累计进度（项目 Git 提交规范 §9.3）。
+
+
+---
+
+## MIG-011 · Python 清零批（2026-09-11 立项 · 用户裁决）
+
+> **状态：2026-09-11 完成——全仓 Python 归零**（5 个 file-based app：ci-failed-tests/vuln-scan/osc-check/sibling-map/flaky-parse；死脚本 itm-208 删除；等价性双跑/对照/合成红测全过）。依据：用户挑战"零依赖诊断原则"成立——build 失败 ≠ SDK 不可用（诊断步骤在 Setup .NET 后，
+> SDK 必在；本地 .NET 开发机 SDK 必在反而 python3 不一定在）。file-based app 实测可行
+> （零 package，STJ 框架内可用）。目标：**全仓 Python 归零**，语言栈 = C#（判定+诊断+工具）+ bash（编排）。
+
+### [x] MIG-011{n} · ci-failed-tests.py → ci-failed-tests.cs（file-based app）
+- 94 行三通道诊断（TUnit JSON 失败名/日志尾/快照对 diff）→ BCL 等价（System.Text.Json + IO）。
+- 验收：对真实 TUnit 报告样本输出逐字段等价；`grep -rn python3 scripts/ .github/` 调用点零残留。
+
+### [x] MIG-011{n} · ci.yml 漏洞扫描内嵌 python → scripts/vuln-scan.cs
+- ~18 行 JSON 遍历 → file-based app；workflow 改 `dotnet run scripts/vuln-scan.cs`（Setup .NET 已在前）。
+
+### [x] MIG-011{n} · test-gate OSC 检测器（82 行内嵌 python）→ scripts/osc-check.cs
+- 有状态跨运行（state.json 3 次观测+指纹去重）→ file-based app 正确宿主（此前判 dotnet tool 即此）。
+- test-gate.sh 改调 `dotnet run`；保留 --oscillation-selftest 入口等价。
+
+### [x] MIG-011{n} · sibling-map 类型解析（68 行内嵌 python）→ 独立 sibling-map.cs
+- 类型声明解析/partial 合并/传递闭包 → C#（输出 markdown 不变）；sibling-map.sh 变薄编排壳。
+
+### [x] MIG-011{n} · verify-ai 零星 python（11 行）→ 顺手并入
+- V 系零星解析（日期比较等）改 C# 或 bash 内建可表达形态。
+
+### [x] MIG-011{n} · 调用点与文档全量同步
+- ci.yml（2 处 python3）、check-all.sh（若有）、README/development/testing 的 python 引用；
+- verify-ai V2/V16 同步；`grep -rn "python" scripts/ .ai/scripts/ .github/ docs/` 零残留（历史段豁免）。
+
+
+---
+
+## MIG-012 · bash 清零批（2026-09-11 立项 · 用户裁决：全量替换）
+
+> **状态：2026-09-11 完成**——27 个 .cs file-based app（19 新建+3 合一+2 扩展+3 MIG-011）替代 25 个 .sh；bash 仅剩 install-ai-system（死锁豁免）+ template-gate（单行启动器）+ ci.yml run 语法骨架。全部双跑等价验证（diff 归一后逐行一致/计数一致/exit 码一致）；4 个 bash 原版缺陷被迁移过程暴露（sister-axis EXCLUDES 九型全崩/fix-completeness guard 残留假绿/G24 转义恒不命中/((MISSING++)) set-e 死）。论据修正：旧"净亏损"论漏算 bash 语言税（本会话 8+ 实证：pipefail×5/CRLF×2/MSYS×1/子shell/read/arithmetic）；
+> 两旧死锁判定推翻（根 gate-check"零依赖"不成立——降级降的是无 .ai 非无 SDK；verify-ai 同理）。
+> 策略：代理建 .cs 不删 .sh → 主线程统一删+引用同步+V2/V16 新名单（防中途门禁爆）。
+
+### [x] MIG-012-A 批：门禁薄壳 8 件（gate/tech-debt/test-gate/verify-ai/doc-consistency/encoding/verify-conventions/secret-scan → scripts/*.cs）
+### [x] MIG-012-B 批：评审工具 11 件（fix-orchestrator/review-scope/review-gate/fix-completeness/sister-axis/probe-template + 双镜像合一×3 + flaky/sibling 扩展）
+### [x] MIG-012-C 批：CI/发版 5 件（ci-coverage/check-all/gate-lite/changelog-check/changelog-facts）
+### [x] MIG-012-D 收口：统一删 .sh + engine.md(9处)/prompt/ci.yml 引用同步 + V2/V16 名单 + E1 退役评估
+### 不迁：install-ai-system（真死锁：非 .NET 宿主）+ template-gate（已是单行 dotnet run）+ ci.yml run 语法骨架

@@ -316,7 +316,18 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
         TState state;
         if (_jsonTypeInfo is not null && !string.IsNullOrEmpty(row.SagaData))
         {
-            state = JsonSerializer.Deserialize(row.SagaData!, _jsonTypeInfo!) ?? new TState { SagaId = sagaId, CreatedAt = row.CreatedAt };
+            // 对齐 ITM-228 哲学（fail-fast 比静默丢数据更诚实）：saga_data 为字面 "null"
+            // JSON 文本（行损坏/手工写入）时 Deserialize 返回 null——原 `?? new TState` 兜底
+            // 会静默丢弃全部业务字段（CustomerId 等），调用方继续推进后 SaveChangesAsync
+            // 以空状态覆写 DB，损坏从一行扩散到整条 saga；改抛InvalidOperationException
+            // 与同文件 SaveChangesAsync 的 ITM-228 同款。注意：下方 else 分支的 new TState
+            // 兜底是合法语义（saga_data 为空 = 无 JSON 数据可恢复，仅元数据兜底，不丢已存
+            // 数据），保持不变。姊妹 DapperSagaStateStore.Materialize 已同步收口（v3 轮
+            // ITM-659 批，同款 fail-fast——v4 轮审计勘正本注释：原文声称"未同步"已过期）。
+            state = JsonSerializer.Deserialize(row.SagaData!, _jsonTypeInfo!)
+                ?? throw new InvalidOperationException(
+                    $"Saga {row.SagaId} 的 saga_data 列损坏（值为 JSON 字面 'null' 文本），无法恢复业务状态——"
+                    + "降级为空状态会在下次保存时静默清空业务字段，请人工修复该行数据（对齐 ITM-228 口径）。");
         }
         else
         {

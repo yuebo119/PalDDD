@@ -110,6 +110,11 @@ public sealed class DapperUnitOfWork : IUnitOfWork
 
     public async ValueTask DisposeAsync()
     {
+        // P3 声明（check-then-act 并发边界，不动行为）：`if (_disposed) return; _disposed = true;`
+        // 为非原子读改写——真并发双调 DisposeAsync 时两线程可能同时通过检查，双执行下方
+        // 回滚/释放路径（RollbackAsync/DisposeAsync 的幂等 catch 兜底不抛，ambient 清理
+        // 双跑无害）。契约：DisposeAsync 非线程安全，由调用方（DI scope 顺序释放）保证
+        // 单线程调用；_disposed 置位在首个 await 之前，异步挂起不会重开检查窗口。
         if (_disposed)
             return;
 

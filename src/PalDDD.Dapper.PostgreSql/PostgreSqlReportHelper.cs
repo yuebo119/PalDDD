@@ -25,6 +25,14 @@ using System.Text.Json;
 namespace PalDDD.Dapper.PostgreSql;
 
 /// <summary>PostgreSQL 报表/BI 流式查询工具（零反射，AOT 就绪）</summary>
+/// <remarks>
+/// ⚠️ <b>P3 声明（同步文件句柄边界，不动行为）</b>：三个导出方法（ExportCsvAsync/
+/// ExportJsonLinesAsync/CopyToCsvAsync）的输出句柄均为<b>同步构造</b>（StreamWriter/
+/// FileStream 直构，无 useAsync: true）——读取流（Npgsql 流式）为真异步，但落盘写路径
+/// 走同步句柄的异步包装（线程池绑定），高并发导出下存在句柄线程占用；报表/BI 为低频
+/// 运维路径（非热路径），按现有形态保留。ExportJsonLinesAsync 的逐行 jsonWriter.Flush()
+/// 为同步 flush（ITM-215 要求逐行 Reset 的伴生约束），百万行导出有同步落盘等待。
+/// </remarks>
 public static class PostgreSqlReportHelper
 {
     // 预编译 SearchValues — CSV 转义检测零分配

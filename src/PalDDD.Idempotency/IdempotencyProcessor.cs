@@ -135,7 +135,7 @@ public sealed class IdempotencyProcessor
             // （对齐 MarkFailedAsync 的 None——取消丢失完成标记会让重放重复执行副作用）。
             await _store.MarkCompletedAsync(record, payload, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
         }
-        catch (Exception markEx) when (markEx is not OperationCanceledException)
+        catch (Exception markEx)
         {
             // ITM-191 修复（三十轮）：handler 成功但标记失败（DB 故障）——副作用已发生，
             // 不得按通用失败重新标记 Failed 再抛（那会把"已执行"降级为"可重试失败"，
@@ -143,6 +143,12 @@ public sealed class IdempotencyProcessor
             // 语义下状态待确认；对齐 InboxProcessor ITM-180 的管线孪生修复）。
             // v25 P3 行为族 B7：补日志通道——原仅 Activity 事件，无 Trace listener 时该
             // 信号完全静默；可选 logger 补 Warning（默认 null 不启用，对称 ProjectionProcessor）。
+            // ITM-653（v66 镜像 InboxProcessor）：移除原 `when (markEx is not
+            // OperationCanceledException)` 过滤，对齐 ITM-092 口径——MarkCompletedAsync 以
+            // CancellationToken.None 调用，其抛 OCE 属存储异常形态（而非请求级取消传播），
+            // 原过滤让 OCE 逃逸给调用方，而 handler 实际已成功——调用方按取消处理触发
+            // 重试重放路径；捕获后统一按 completed-pending-confirmation 处理（与上方
+            // MarkFailedAsync 内层 catch 的不过滤口径对称）。
             System.Diagnostics.Activity.Current?.AddEvent(new(
                 "idempotency.completed-pending-confirmation",
                 tags: new ActivityTagsCollection { ["error"] = markEx.Message }));

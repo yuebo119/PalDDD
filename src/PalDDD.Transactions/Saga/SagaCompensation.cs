@@ -126,6 +126,12 @@ internal sealed class SagaCompensation<TState>
             }
             catch (OperationCanceledException)
             {
+                // P3 声明（OCE 丢 failures 边界，不动行为）：前序补偿已失败（failures 非空）
+                // 而后续补偿抛 OCE 时，此处 throw 使已收集的 failures 随之丢弃——调用方只见
+                // OCE，AggregateException 不再抛出。取舍：把 OCE 嫁接进 AggregateException
+                // 会改变取消语义优先级（取消应立即传播），且补偿动作的幂等契约（SagaStep.
+                // CompensateAsync remarks）保证重入补偿可再次产生失败信息；保留 OCE 立即
+                // 逃逸的现有语义，运维侧由 SagaCompensationFailed 指标（计数不丢）兜底观测。
                 throw;
             }
             catch (Exception ex)
