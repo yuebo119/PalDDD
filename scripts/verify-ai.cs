@@ -725,6 +725,17 @@ static int RunSelftest()
     if (MissingList([]).Length == 0) Console.WriteLine("PASS ST-V2b 空清单绿");
     else failures.Add("ST-V2b: 空清单误报");
 
+    // ── V5 保留集断言逻辑（ITM-668：G 编号提取与 <22 过滤——用 PDDD-G 前缀匹配实际格式）───
+    var gValid = SortedMatches("PDDD-G22 PDDD-G23 PDDD-G24", "PDDD-G[0-9]+");
+    var gValidOk = gValid.Count == 3 && gValid.All(id => int.Parse(id["PDDD-G".Length..], System.Globalization.CultureInfo.InvariantCulture) >= 22);
+    if (gValidOk) Console.WriteLine("PASS ST-V5a 保留集 {G22,G23,G24} 全 ≥22");
+    else failures.Add($"ST-V5a: gValid={string.Join(",", gValid)}");
+
+    var gStale = SortedMatches("PDDD-G1..G24 全阻断", "PDDD-G[0-9]+");
+    var gStaleOk = gStale.Any(id => int.Parse(id["PDDD-G".Length..], System.Globalization.CultureInfo.InvariantCulture) < 22);
+    if (gStaleOk) Console.WriteLine("PASS ST-V5b 旧口径 G1..G24 范围写法被 <22 过滤捕获");
+    else failures.Add($"ST-V5b: gStale={string.Join(",", gStale)}");
+
     // ── 汇总 ──
     Console.WriteLine($"═══════ VERIFY-AI SELFTEST：{(failures.Count == 0 ? "全部通过" : $"{failures.Count} 例失败")} ═══════");
     foreach (var f in failures) Console.WriteLine("  FAIL " + f);
