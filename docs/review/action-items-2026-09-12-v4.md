@@ -26,7 +26,7 @@
 
 ### [x] ITM-660 · PalOrmSagaStateStore 注释声称"姊妹 Dapper 未同步收口"已过期（实际已收口，注释反向失实） · ✅
 - **维度**：三方一致（注释过期）
-- **问题**：`src/PalDDD.PalORM/Stores/PalOrmSagaStateStore.cs:325-326` 注释声称"姊妹 DapperSagaStateStore.Materialize 的同型兜底未同步收口（见其声明，后续任务对齐）"——**实测 Dapper 侧已于 v3 轮同步收口**（`DapperSagaStateStore.cs:324-330` 有同款 fail-fast + 注释），该注释在收口完成后未回填，反向误导后续维护者去找一个不存在的缺口。
+- **问题**：`PalOrmSagaStateStore.cs`（:325-326）注释声称"姊妹 DapperSagaStateStore.Materialize 的同型兜底未同步收口（见其声明，后续任务对齐）"——**实测 Dapper 侧已于 v3 轮同步收口**（`DapperSagaStateStore.cs:324-330` 有同款 fail-fast + 注释），该注释在收口完成后未回填，反向误导后续维护者去找一个不存在的缺口。
 - **修复**：PalORM :325-326 注释改为"姊妹 DapperSagaStateStore 已同步收口（v3 轮）"。
 - **验证**：grep "未同步收口" src/ 零残留。
 - **涉及文件**：`src/PalDDD.PalORM/Stores/PalOrmSagaStateStore.cs`
@@ -38,7 +38,7 @@
 - **涉及**：.ai/README.md
 
 ### [x] ITM-662 · `.ai/gate/sensor-ledger.md` 2 行传感器指向已删形态 · ✅
-- :14 弱断言棘轮 → 指向已删 `.ai/scripts/assertion-strength-check.sh`（现行：`AssertionStrengthGateTests`）；:18 方言探针 → 指向已删 `.ai/scripts/dialect-probe.sh`（现行：`DialectProbeTests`）。
+- :14 弱断言棘轮 → 指向已删除的断言强度脚本（现行：`AssertionStrengthGateTests`）；:18 方言探针 → 指向已删除的方言探针脚本（现行：`DialectProbeTests`）。
 - **涉及**：.ai/gate/sensor-ledger.md
 
 ### [x] ITM-663 · 4 个工具无 Error 流读取（stderr 继承终端）——低危设计取舍声明 · ✅
