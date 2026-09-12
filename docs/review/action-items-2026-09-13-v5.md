@@ -29,5 +29,5 @@
 ## 待办（跨轮）
 
 1. 子代理配额恢复（9-17）后补 src/test 全量地毯（v4/v5 两轮收缩合并声明）。
-2. ITM-664：verify-ai --selftest 补建（改 V 项时前置）。
+2. ~~ITM-664~~ ✅ v87 轮清偿：verify-ai --selftest 红绿矩阵 14 例（S3 实证）。
 3. main 分支推送（`git -c http.proxy= -c https.proxy= push origin main`，本地代理恢复前用绕过式）。
