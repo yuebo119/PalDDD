@@ -1,0 +1,42 @@
+#!/bin/bash
+# pre-commit — ITM-671：提交前自动跑快速防线（MIG-012 后判定层在 dotnet test 里，
+# 本 hook 补"提交时强制跑"缺口——此前全部依赖自愿执行）。
+# 激活：git config core.hooksPath .githooks（已在仓库配置中）
+# 跳过：git commit --no-verify（不推荐——守卫红了说明代码有问题）
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+cd "$ROOT" || exit 1
+
+FAIL=0
+
+# ── 1. secret-scan（凭据入库拦截，~2s）──
+echo "🔒 secret-scan …"
+if ! dotnet run scripts/secret-scan.cs 2>&1; then
+    echo "⛔ secret-scan 失败——受跟踪文件发现疑似硬编码凭据"
+    FAIL=1
+fi
+
+# ── 2. encoding-gate（编码一致性，~2s）──
+echo "📐 encoding-gate …"
+if ! dotnet run scripts/encoding-gate.cs 2>&1; then
+    echo "⛔ encoding-gate 失败——CRLF/BOM/mojibake"
+    FAIL=1
+fi
+
+# ── 3. guard.cs（7 道守卫 ~22s，仅 .cs 在暂存集时触发——纯文档提交不耗时）──
+if git diff --cached --name-only 2>/dev/null | grep -q '\.cs$'; then
+    echo "🛡 guard.cs（.cs 在暂存集）…"
+    if ! dotnet run scripts/guard.cs 2>&1; then
+        echo "⛔ guard 失败——守卫测试红"
+        FAIL=1
+    fi
+fi
+
+if [ "$FAIL" -ne 0 ]; then
+    echo ""
+    echo "⛔ pre-commit 拦截——跳过检查：git commit --no-verify（不推荐）"
+    exit 1
+fi
+echo "✅ pre-commit 通过"
+exit 0
