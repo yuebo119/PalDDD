@@ -207,6 +207,41 @@ Console.WriteLine();
     else Console.WriteLine("✅ V9 文档命令形态引用的脚本路径均存在");
 }
 
+// ─── V10：文档内部链接必须可解析（2026-09-13 增）───
+// 实测来源：`docs/review/action-items-2026-09-13-v5.md` 引用 `review-2026-09-13-full-v5.md`
+// 而该文件不存在——实际文件名是 09-12，但其标题与报告编号均为 2026-09-13（错在文件名）。
+// V9 只查命令形态引用的脚本路径，不查文档互链，故该断链此前无守护。
+// 精度设计（首版检查器自身的教训）：只查以 `.md` 结尾的目标（排除 `[标注](说明)` 形态，
+// 如 `[事实](代码可查)`），且按**所在文件目录**解析相对路径。
+{
+    var docFiles = new List<string>();
+    foreach (var dir in (string[])["docs"])
+        if (Directory.Exists(dir))
+            docFiles.AddRange(Directory.GetFiles(dir, "*.md", SearchOption.AllDirectories));
+    foreach (var f in (string[])["README.md", "README.en.md", "AGENTS.md", "CHANGELOG.md"])
+        if (File.Exists(f)) docFiles.Add(f);
+
+    var brokenLinks = new List<string>();
+    foreach (var doc in docFiles)
+    {
+        var dir = Path.GetDirectoryName(doc) ?? ".";
+        foreach (var target in ExtractDocLinkTargets(File.ReadLines(doc)))
+        {
+            if (!File.Exists(Path.Combine(dir, target)))
+                brokenLinks.Add($"{ToPosix(doc)} → {target}");
+        }
+    }
+
+    if (brokenLinks.Count > 0)
+    {
+        Console.WriteLine($"❌ V10 文档内部链接断链（{brokenLinks.Count} 处）：");
+        foreach (var b in brokenLinks) Console.WriteLine($"   {b}");
+        Console.WriteLine("   修法：改指向实际文件，或（若文件名本身有误）改名并同步引用处。");
+        fail++;
+    }
+    else Console.WriteLine($"✅ V10 文档内部链接全部可解析（{docFiles.Count} 个文档）");
+}
+
 // ─── --quick 模式：仅 grep 检查，跳过 build/test ───
 if (mode == "--quick")
 {
@@ -380,6 +415,24 @@ static IEnumerable<string> ExtractScriptRefs(string line, Regex[] patterns)
     }
 }
 
+// V10：抽取 markdown 链接目标中**以 .md 结尾**者（去锚点）。
+// 只取 .md 目标是有意为之——项目里有 `[事实](代码可查)` 这类证据标注，
+// 它们不是文件引用；限定扩展名即天然排除，无需维护排除清单。
+static List<string> ExtractDocLinkTargets(IEnumerable<string> lines)
+{
+    var rx = new Regex(@"\]\(([^)\s]+\.md)(?:#[^)]*)?\)");
+    var targets = new List<string>();
+    foreach (var line in lines)
+        foreach (Match m in rx.Matches(line))
+        {
+            var target = m.Groups[1].Value;
+            if (target.StartsWith("http", StringComparison.OrdinalIgnoreCase)) continue;
+            if (target.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)) continue;
+            targets.Add(target);
+        }
+    return targets;
+}
+
 // ══════════════ 自测 ══════════════
 
 static int SelfTest()
@@ -417,6 +470,17 @@ static int SelfTest()
     Case("历史提及「下沉自」被排除", IsHistoricalMention("MIG-003 下沉自 assertion-strength-check.sh"));
     Case("历史提及「已迁移」被排除", IsHistoricalMention("已迁移为 .cs"));
     Case("普通命令不被误排除", !IsHistoricalMention("bash scripts/x.sh --quick"));
+
+    // V10 链接抽取（正例）
+    Case("V10 抽出 .md 链接", ExtractDocLinkTargets(["[a](b.md)"]).Contains("b.md"));
+    Case("V10 抽出相对路径链接", ExtractDocLinkTargets(["[a](../x/b.md)"]).Contains("../x/b.md"));
+    Case("V10 去锚点", ExtractDocLinkTargets(["[a](b.md#sec)"]).Contains("b.md"));
+    // V10 链接抽取（反例——精度来源）
+    Case("V10 不抽 http 链接", ExtractDocLinkTargets(["[a](https://x/y.md)"]).Count == 0);
+    Case("V10 不抽 mailto", ExtractDocLinkTargets(["[a](mailto:x@y.z)"]).Count == 0);
+    Case("V10 不抽非 .md 目标（如 [事实](代码可查) 标注）", ExtractDocLinkTargets(["[事实](代码可查)"]).Count == 0);
+    Case("V10 空行不产目标", ExtractDocLinkTargets(["", "无链接"]).Count == 0);
+    Case("V10 一行多链接全抽", ExtractDocLinkTargets(["[a](a.md) 与 [b](b.md)"]).Count == 2);
 
     Console.WriteLine();
     Console.WriteLine($"SELFTEST {passed}/{total} 通过");
