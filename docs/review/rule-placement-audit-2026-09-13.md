@@ -38,6 +38,7 @@
 | 10 | Windows/Git Bash 下的 AOT 发布命令 | 无 | `conventions.md` 用 `/p:PublishAot=true`，而 MSYS 会把 `/p:` 路径转换为 `p:` → `MSB1008 只能指定一个项目`（本次实测踩中，发布静默失败）；`docs/testing.md`/`performance.md`/`release.md` 均用正确的 `-p:`，只有 conventions 是异类 | ✅ 改为 `-p:` 并写明原因 |
 | 11 | `guard.cs` 是否会被「零测试假绿」击中 | 判定仅看 `p.ExitCode == 0`，不断言测试数 | **已检查并排除**（假设被实测证伪）：用一个不可能匹配的过滤器运行 → **exit 8**（MTP 对「匹配到 0 个测试」的退出码），非 0；对照组真实过滤器 → 总计 15 / exit 0。故测试类被改名后本门禁会报 RED 而非假 GREEN | ✅ 无需改动判定逻辑；已将「该保护依赖 MTP 退出码语义、换运行器须重测」写成 `guard.cs` 内的约束注释 |
 | 12 | **守卫清单自身的完整性**（本地漏跑） | 无（`guard.cs` 硬编码 7 项，无完备性约束） | **实测缺口**：`CompressionGuardTests`（解压炸弹防护：输入上限/损坏输入/输出上限，16 测试）自 v2.1.0 起存在、`CompressionGuardTests.cs:23` 为 `public sealed class`，但 `guard.cs` 创建时（更晚的 v88/ITM-667）未纳入 → **本地 pre-commit 一直不跑这个安全守卫**，而 CI 的全量 `dotnet test` 会跑——正是 ITM-667 立命要消除的本地漏检窗口 | ✅ 二处修：① 登记第 8 道（实测 `CompressionGuard … GREEN`）；② 新增**注册完整性核查**——扫描 `test/` 下守卫命名类（`*GateTests`/`*GuardTests`/`ArchitectureBoundaryTests`）与本清单比对，未登记即红，有意只在 CI 跑者须登记进 `exemptGuardClasses` 并写理由。另补 `--selftest` 14 例（含「清单含 CompressionGuardTests」这条本次修复自身的回归守卫） |
+| 13 | **本地防线的安装缺口**（本轮新增，整轮最严重的一处） | 无（`core.hooksPath` 是本地配置，既无安装脚本也无校验） | **实测缺口**：`.githooks/` 脚本已被跟踪（clone 即获得），但 `core.hooksPath` 是 **git 本地配置、不进版本库** → **新 clone 默认无钩子**，整套本地防线（5 道 pre-commit + pre-push）形同不存在。全仓仅在一处括号注里提过它，**无安装脚本 / 无 clone 安装步骤 / 无任何地方校验是否生效**（本机之所以有效，仅因该 clone 的 `.git/config` 恰好设过） | ✅ 新增根 `Directory.Build.targets` 的 `ConfigureGitHooks` 目标：首次构建时配置，把「记得手动 git config」变成「构建即生效」。约束：仅在未设置时写入（不覆盖既有自定义配置）· `.git` 缺失时跳过 · 失败不阻断构建 · 增量判定避免每次构建起 git 进程。实测三向验证（解除→构建→装回→二次跳过）；`AGENTS.md` 与 `docs/development.md` 同步文档化 |
 
 ---
 
@@ -93,7 +94,8 @@
 | `AotSample` 纳入 CI AOT 矩阵 | 无（已完成） | ✅ **已完成**：本地 win-x64 等价形式 `dotnet publish -p:PublishAot=true` 实测通过（输出 `Generating native code`、产物仅 native exe 无托管 dll、实跑 exit 0 含 CQRS AOT 值类型管道检查），CI 已补 3 步（`aot-verify` job）。覆盖缺口：PalOrmSample 直接引用仅 PalORM.Sqlite，AotSample 引用 Core/Serialization/Transactions/CQRS/DI，二者不重叠 |
 | ~~12 个 src 项目未声明 `IsAotCompatible`~~ **【本项已证伪，见 §七】** | 初审仅 grep 各 csproj 的显式声明，得出「24 声明 / 12 未声明」 | ❌ **假阳性**：根 `Directory.Build.props:46-48` 全局设 `IsAotCompatible=true` / `IsTrimmable=true` / `VerifyReferenceAotCompatibility=true`，未显式声明的项目**继承生效值 true**（`dotnet build -getProperty:IsAotCompatible` 对 `PalDDD.Core` 实测返回 `true`）。且该设计由 `ArchitectureBoundaryTests.CoreProjects_EnableAotReferenceVerification` 断言守护 | ✅ 无需动作；已改为「静态声明计数 ≠ 生效值」的教训（§七） |
 | `docs/` 54 处会话相对表述 | 追溯改写成本高、收益低 | 归档整理时按 `NAMING.md` §七 对照表改写 |
-| 7 份违规命名的评审文档 | 改名会破坏既有交叉引用，属判断问题 | 维护者裁决；改名需 `grep -rn "<旧名>" docs/ README.md` 同步引用 |
+| 7 份违规命名的评审文档 | 无（已完成） | ✅ **已裁决并执行，存量清零**：按规则 5 的**原意**（禁止自我评价，理由是「用版本号区分让读者判断」）分类处置——6 份的 `full` 标示**范围**（全仓轮 vs 局部 `*-bench`），可核验、不表达优劣 → 违反规则文字而非意图 → 细化规则（§四 接纳 `review-` 为现行类型前缀、规则 5 增设范围标记白名单、§七「review≠audit」作废）；1 份 `comprehensive-review-2026-09-13.md` 的 `comprehensive` 属自我评价且类型词不在最前 → 改名为 `review-2026-09-13-architecture.md`（全仓仅 1 处引用） |
+| `guard.cs` 是否也挂 pre-push | 无（已裁决） | ✅ **裁决为不挂**：8 道守卫套件本身就在 CI 的 Test 步骤内，绕过提交门禁的改动仍会被 CI 拦住——pre-push 加挂只把检测提前、不改变「最终会被发现」，而代价是每次 push ~22s。裁决与复核条件已写入 `guard.cs` 头注释 |
 | **文档引用已不存在的 `*.sh`（本次验证期新发现）** | 无（已完成） | ✅ **已完成并机制化**：修正 `conventions.md`/`release.md`/`testing.md`/`CHANGELOG.md` 全部命令形态断链，并由 `verify-conventions.cs` 新增的 **V9**「文档命令形态引用的脚本路径必须存在」机械拦截。**V9 精度经过一轮修整**：首版对真实仓库报 12 处，其中 7 处为误报（5 处来自 `docs/review/` 历史审计记录、2 处为我自己的占位文本 `scripts/xxx.cs`）→ 排除 `docs/review/` 并修正占位文本后归零。全程遵循「低精度门禁比无门禁更坏」（沿 `secret-scan` 设计纪律） |
 
 ---
