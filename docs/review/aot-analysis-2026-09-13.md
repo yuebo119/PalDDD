@@ -2,6 +2,13 @@
 
 > 分析编号：AOT-ANALYSIS-2026-09-13
 > 数据来源：源码逐行审读 + Web 搜索（Microsoft 官方文档 / GitHub Issues / 社区实证）+ PalOrmSample CI NativeAOT publish 实测
+>
+> **⚠️ 2026-09-13 勘正（Dapper.AOT 1.1.0 探针实证，详见 dapper-aot-probe-2026-09-13.md）**：
+> 本文第 1 节障碍表中"TypeHandler 基类迁移（3 个 handler 重写）"前置已被 1.1.0 免除——
+> 声明式 `[Dapper.TypeHandler]` 自带经典 `SqlMapper.TypeHandler<T>` shim（AOT 实跑验证）；
+> 二十五轮 A5 勘正被 1.1.0 官方推翻（旧泛型 `[TypeHandler<,>]` 从未工作）。
+> **真实且唯一的启用障碍是 ct 与拦截器互斥**（直接重载无 ct 参数 / `CommandDefinition`
+> 拦截器拒绝），2026-09-13 用户裁决"铺垫不动"。拦截器接线在 .NET 11 实测正常。
 
 ---
 

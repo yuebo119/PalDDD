@@ -139,7 +139,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         //（Crockford Base32 文本，SQLite TEXT / PG text / MySQL CHAR 列均按纯文本比较，
         // 无方言分派需求——与 ToTimeParam 的时间参数不同）。本文件三处 SagaId 绑定
         //（ GetById / Update / Insert）全方言共用；方法名沿用 DapperAotInitializer 适配器族
-        // 历史命名（见 DapperAotInitializer.cs:48）。
+        // 历史命名（见 DapperAotInitializer.ToSqliteParameter）。
         var row = await conn.QueryFirstOrDefaultAsync<SagaStateRow>(
             new CommandDefinition(SqlTemplates.SagaById, new { id = DapperAotInitializer.ToSqliteParameter(sagaId) }, Tx, cancellationToken: ct)).ConfigureAwait(false);
         return row is null ? null : Materialize(row);
