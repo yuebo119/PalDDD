@@ -439,7 +439,7 @@ if (execution.Status == IdempotencyExecutionStatus.Cached)
 
 同一执行边界还会记录 `paldd.idempotency.executed`、`paldd.idempotency.cached`、`paldd.idempotency.skipped` 和 `paldd.idempotency.failed` metrics，应用层可通过 OpenTelemetry `AddMeter(PalActivitySource.Name)` 采集。
 
-生产环境可从 `PalDDD.Idempotency.EFCore` 派生 `IdempotencyDbContext`，并通过 DI 将该上下文作为 `IIdempotencyStore` 使用。适配器会配置 `(OperationName, Key)` 复合主键、过期时间索引、lease 状态索引和 `UpdatedAt` 并发令牌，用于跨实例幂等消费与 API retry 去重。
+生产环境可从 `PalDDD.Idempotency.EFCore` 派生 `IdempotencyDbContext`，并通过 DI 将该上下文作为 `IIdempotencyStore` 使用。适配器会配置 `(OperationName, Key)` 复合主键、过期时间索引、lease 状态索引和 `Revision` 单调并发令牌（v53 勘正：原称 `UpdatedAt` 时间戳令牌，与代码不符），用于跨实例幂等消费与 API retry 去重。过期记录的物理清理由应用侧负责（框架不启动后台清理任务，仅保证逻辑过期）。
 
 ## 使用 Schema Evolution
 

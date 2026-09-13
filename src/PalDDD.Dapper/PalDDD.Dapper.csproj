@@ -7,7 +7,7 @@
     <Description>Pal.DDD Dapper 持久化适配器（⚠️ AOT 假象：[module:DapperAot] 未启用，走经典 Dapper 反射路径；PalORM 适配层提供真 AOT 替代）— 含 Transaction/EventLog/Projection/Repository</Description>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
-    <NoWarn>$(NoWarn);CA1001;CA2007;CA1062;CA2100;CA2000;CA1849;CA2016;CS1591;CS1573;IL3058;DAP005;CA2255</NoWarn>
+    <NoWarn>$(NoWarn);CA1001;CA2007;CA1062;CA2100;CA2000;CA1849;CA2016;CS1591;CS1573;IL3058;CA2255</NoWarn>
     <!-- Dapper.AOT 1.1.0：铺垫就绪（2026-09-13 探针实证 + 用户裁决"铺垫不动"）。
          二十五轮 A5 勘正二次勘正：旧注释称"1.0.52 的 TypeHandlerAttribute<,> 完整双向面"有误——
          1.1.0 官方证实旧泛型特性从未工作（已 obsolete）；1.1.0 起声明式 [Dapper.TypeHandler]
