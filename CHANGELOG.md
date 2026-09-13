@@ -19,6 +19,7 @@
 - **门禁可信度审计 `scripts/gate-audit.cs`**：静态矩阵（`WIRED` 接线 / `SELFTEST` 自证 / `PROBED` 已探）叠加隔离式变异探针——在系统临时目录建独立 git 仓库注入已知坏输入，断言门禁必须非零退出。覆盖 4 项探针（`secret-scan` 双向、`encoding-gate` 核心判定与 `scripts/` 范围回归）。自带 `--selftest`（5 例，含变异验证可红）。动机：本仓已有两次「门禁假绿」实案（vuln-scan v53 exit-0 no-op；secret-scan 被 tee 掩码），其修复均为一次性人工探针
 - **测试文件改动守卫 `scripts/test-change-guard.cs`**：拦截「暂存集含 `test/**` 修改/删除且无 `src/**` 变更」（改测试修绿签名）。豁免 `ALLOW_TEST_ONLY_CHANGE=1`。已接入 `pre-commit`
 - **XML 良构性守卫 `scripts/xml-guard.cs`**：校验 `.csproj/.props/.slnx/.targets/.xml` 可加载（`--all` 全仓 / 默认暂存集）。已接入 `pre-commit`
+- **`scripts/verify-conventions.cs` 新增 V8/V9 两条静态检查 + `--selftest`**（此前无自证能力）：**V8** 断言 `.pal/prompts/` 9 个模板的必填段齐全（该约束原标注为「人工」，且 `conventions.md` 的「六段结构」表述与实测的 5/6/7 段分布不符）；**V9** 断言文档中「命令形态」引用的脚本路径必须存在（只查 `bash X.sh` / `dotnet run X.cs`，排除 `docs/review/` 历史记录与含「下沉自/已迁移」等词的历史提及，保持高精度）。`--selftest` 12 例含双向负例，并经变异验证可红。已接入 `pre-commit`（`.md` 入暂存集时触发）——该脚本此前是未接线的观察态门禁，本次同时完成接线
 
 ### Changed 变更
 
@@ -28,7 +29,7 @@
 
 - **bench 项目不可加载导致全仓构建失败**：`bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj` 注释内出现 `--`（`CA1031:--verify-persist`），XML 注释禁止连续双连字符 → MSB4025 项目加载失败。该缺陷于 21549d3 引入，并通过全部提交时门禁（`secret-scan`/`encoding-gate`/`guard` 均不校验 XML 良构性）——缺口由新增的 `xml-guard.cs` 关闭
 - **`encoding-gate` E2/E3 覆盖盲区**：E1 覆盖 6 目录而 E2（.cs BOM）/E3（.cs mojibake）仅覆盖 `src test`，`scripts/ samples/ bench/` 下 69 个 `.cs` 不受检查（实测当前 0 违规，属潜在）。已抽 `CsScanRoots` 常量统一为 5 目录，并加范围回归探针
-- **`docs/` 中指向已不存在 `*.sh` 的可执行命令**：MIG-011/012 迁移脚本后文档未全量收口。本次修正主干手册 `docs/conventions.md`、`docs/release.md`、`docs/testing.md`、`CHANGELOG.md` 中的现行命令（改为 `dotnet run scripts/xxx.cs`）。**未全量收口**：`docs/` 中另有 8 行可执行命令与若干机制名指代待处理，清单见 `docs/review/rule-placement-audit-2026-09-13.md` §四
+- **`docs/` 中指向已不存在 `*.sh` 的可执行命令**：MIG-011/012 迁移脚本后文档未全量收口。本次修正主干手册 `docs/conventions.md`、`docs/release.md`、`docs/testing.md`、`CHANGELOG.md` 中的现行命令（统一改为「dotnet run 脚本 .cs」形态）。**并机制化以防再次回归**：`scripts/verify-conventions.cs` 新增 V9「文档命令形态引用的脚本路径必须存在」（只查 `bash X.sh`/`dotnet run X.cs` 命令形态，排除 `docs/review/` 历史记录与含「下沉自/已迁移」等词的历史提及）
 
 ### Dependencies 依赖
 

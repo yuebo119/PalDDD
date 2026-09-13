@@ -925,7 +925,7 @@ grep -rn 'Microsoft\.NET\.Test\.Sdk' --include='*.csproj' --include='*.props' . 
 
 ### 13.1 评审基线强制规则
 
-评审报告首行必须粘贴 `bash scripts/review-snapshot.sh` 的输出。所有断言锚定该快照。禁止采信工具记忆或过期数据。未粘贴 snapshot 的评审视为草稿。
+评审报告首行必须粘贴 `dotnet run scripts/review-snapshot.cs` 的输出。所有断言锚定该快照。禁止采信工具记忆或过期数据。未粘贴 snapshot 的评审视为草稿。
 
 ### 13.2 九条评审纪律（R1~R8 + 新增 R0）
 
@@ -958,7 +958,7 @@ grep -rn 'Microsoft\.NET\.Test\.Sdk' --include='*.csproj' --include='*.props' . 
 
 ### 13.4 任务清单验证
 
-任务清单生成后：标识符存在性验证 → `bash scripts/verify-action-items.sh <file>`；涉及分析器 → 须附 `dotnet build` 命令；外部合并任务 → 逐项 grep 方法名/类名/路径（见 `ACTION_ITEMS_TEMPLATE.md`）。
+任务清单生成后：标识符存在性验证 → `dotnet run scripts/verify-action-items.cs -- <file>`；涉及分析器 → 须附 `dotnet build` 命令；外部合并任务 → 逐项 grep 方法名/类名/路径（见 `ACTION_ITEMS_TEMPLATE.md`）。
 
 ### 13.5 评审模板与报告格式
 

@@ -26,7 +26,7 @@
 
 | # | 规则/意图 | 此前承载 | 实测状态 | 本次处置 |
 |---|----------|---------|---------|---------|
-| 1 | 「验证验证者」：门禁在信任前必须见过它拒绝坏输入 | 无（纯文档规则） | **5/28 脚本有 `--selftest`；0 个被实际注入过坏输入验证** | ✅ 新增 `scripts/gate-audit.cs`：静态矩阵 + 隔离式变异探针，4 项探针 |
+| 1 | 「验证验证者」：门禁在信任前必须见过它拒绝坏输入 | 无（纯文档规则） | **5/28 脚本有 `--selftest`；0 个被实际注入过坏输入验证** | ✅ 新增 `scripts/gate-audit.cs`：静态矩阵 + 隔离式变异探针；另为 `verify-conventions.cs` 补 `--selftest`（12 例，变异验证可红），自证脚本数 5→6 |
 | 2 | 「改测试修绿」应被拦截 | 无 | `.githooks/` 无任何测试文件守卫 | ✅ 新增 `scripts/test-change-guard.cs` + 接入 pre-commit |
 | 3 | 构建输入必须可加载 | 仅靠 CI build 事后兜底 | `21549d3` 在 `.csproj` 注释写 `--` → MSB4025，**全仓构建失败且一路通过所有提交门禁** | ✅ 新增 `scripts/xml-guard.cs` + 接入 pre-commit；修复断构建 |
 | 4 | 编码一致性（BOM/mojibake）全仓覆盖 | `encoding-gate` E2/E3 只扫 `src test` | E1 覆盖 6 目录而 E2/E3 仅 2 目录 → `scripts/ samples/ bench/` 下 **69 个 .cs 在盲区**（当前 0 违规，属潜在） | ✅ 抽 `CsScanRoots` 常量扩至 5 目录 + 加范围回归探针 |
@@ -34,7 +34,7 @@
 | 6 | 单模块覆盖率降幅 ≤5% | 人工核对表格 | 无机械判定 | ⚠️ 已记录可行路径（逐项目 cobertura 已产出），未实现 |
 | 7 | 审计文档的时间视角唯一 | `NAMING.md`（只规范命名） | `docs/` 下 **54 处**「本轮/上轮/下轮」表述，导致范围决策不可复现 | ✅ `NAMING.md` 新增规则 6/7 + 写法对照 |
 | 8 | 审计文档命名规范被执行 | `NAMING.md` | **7 份文件违规**（禁词 `full`/`comprehensive`）；§六 清单所列文件已全部不存在 | ✅ 清单改为命令式；违规登记为显式债务（未改名，避免破坏引用） |
-| 9 | `.pal/prompts/` 结构约束 | `conventions.md` 称「六段结构」，标注为**人工** | 实测 9 个模板段数为 **5/6/7 不等**：7 个为「角色/框架约束/必须遵守/禁止/输出格式」（其中 5 个追加示例段），`bounded-context` 以「项目引用指南」替代「输出格式」，`task-intake` 为验收断言门专用 7 段结构。README 自述「v54 勘正：各模板段数不一」——即该失实表述已被勘正过一次而 conventions 未同步 | ✅ 按实测改写并标注为「人工（机械化候选）」 |
+| 9 | `.pal/prompts/` 结构约束 | `conventions.md` 称「六段结构」，标注为**人工** | 实测 9 个模板段数为 **5/6/7 不等**：7 个为「角色/框架约束/必须遵守/禁止/输出格式」（其中 5 个追加示例段），`bounded-context` 以「项目引用指南」替代「输出格式」，`task-intake` 为验收断言门专用 7 段结构。README 自述「v54 勘正：各模板段数不一」——即该失实表述已被勘正过一次而 conventions 未同步 | ✅ **已从人工转机械**：`verify-conventions.cs` 新增 V8 断言 9 个模板的必填段齐全（只断必填、不限可选段与段序；未登记的新模板只 WARN 不 FAIL）；`conventions.md` 按实测改写 |
 | 10 | Windows/Git Bash 下的 AOT 发布命令 | 无 | `conventions.md` 用 `/p:PublishAot=true`，而 MSYS 会把 `/p:` 路径转换为 `p:` → `MSB1008 只能指定一个项目`（本次实测踩中，发布静默失败）；`docs/testing.md`/`performance.md`/`release.md` 均用正确的 `-p:`，只有 conventions 是异类 | ✅ 改为 `-p:` 并写明原因 |
 
 ---
@@ -92,7 +92,7 @@
 | ~~12 个 src 项目未声明 `IsAotCompatible`~~ **【本项已证伪，见 §七】** | 初审仅 grep 各 csproj 的显式声明，得出「24 声明 / 12 未声明」 | ❌ **假阳性**：根 `Directory.Build.props:46-48` 全局设 `IsAotCompatible=true` / `IsTrimmable=true` / `VerifyReferenceAotCompatibility=true`，未显式声明的项目**继承生效值 true**（`dotnet build -getProperty:IsAotCompatible` 对 `PalDDD.Core` 实测返回 `true`）。且该设计由 `ArchitectureBoundaryTests.CoreProjects_EnableAotReferenceVerification` 断言守护 | ✅ 无需动作；已改为「静态声明计数 ≠ 生效值」的教训（§七） |
 | `docs/` 54 处会话相对表述 | 追溯改写成本高、收益低 | 归档整理时按 `NAMING.md` §七 对照表改写 |
 | 7 份违规命名的评审文档 | 改名会破坏既有交叉引用，属判断问题 | 维护者裁决；改名需 `grep -rn "<旧名>" docs/ README.md` 同步引用 |
-| **文档引用已不存在的 `*.sh`（本次验证期新发现）** | MIG-011/012 迁移了脚本但未全量收口文档。实测 `docs/` 中 48 行引用不存在的 `.sh`：其中 **8 行是可执行命令**（`bash scripts/xxx.sh`）、2 行历史提及（正确保留）、其余为「机制名指代」（如 pitfalls 表格里描述当前守卫）。本次已修 5 处主干（`conventions.md` ×2、`release.md` ×3、`testing.md` ×2），**未全量收口** | 剩余可执行命令集中在 `release.md:310/663/684`、`conventions.md:928/961/1037/1038`、`testing.md:475`、`pitfalls.md:139`。**建议机制化而非手改**：加一条「文档引用的脚本路径必须存在」的检查（同 `xml-guard` 形态），因为它已二次回归（`review-2026-09-11-v3.md` 曾以「MIG 迁移的姊妹同步不完整」为 P2 主题收口过一轮） |
+| **文档引用已不存在的 `*.sh`（本次验证期新发现）** | 无（已完成） | ✅ **已完成并机制化**：修正 `conventions.md`/`release.md`/`testing.md`/`CHANGELOG.md` 全部命令形态断链，并由 `verify-conventions.cs` 新增的 **V9**「文档命令形态引用的脚本路径必须存在」机械拦截。**V9 精度经过一轮修整**：首版对真实仓库报 12 处，其中 7 处为误报（5 处来自 `docs/review/` 历史审计记录、2 处为我自己的占位文本 `scripts/xxx.cs`）→ 排除 `docs/review/` 并修正占位文本后归零。全程遵循「低精度门禁比无门禁更坏」（沿 `secret-scan` 设计纪律） |
 
 ---
 
@@ -110,6 +110,11 @@
 | 文档一致性 | `dotnet run scripts/doc-consistency.cs` | PASS ✅ |
 | 变更日志结构 | `dotnet run scripts/changelog-check.cs` | 5/5 PASS ✅ |
 | 覆盖率 | `dotnet run scripts/ci-coverage.cs` | ❌ 12/16 项目后中断（Docker 缺失）——阈值不可校准，已记录 |
+| AOT 发布与实跑 | `dotnet publish samples/PalDDD.AotSample -c Release -r win-x64 --self-contained -p:PublishAot=true` | ✅ `Generating native code`；产物仅 native exe 无托管 dll；运行 exit 0 含 CQRS 值类型管道检查 |
+| `verify-conventions` 自测（含变异能红） | `dotnet run scripts/verify-conventions.cs -- --selftest` | 12/12；变异后 8/12 红 ✅ |
+| V8/V9 真实仓库判定 | `dotnet run scripts/verify-conventions.cs -- --quick` | V5/V8/V9 全 PASS ✅ |
+| CA1508 假阳性证明 | `dotnet run scripts/verify-conventions.cs -- --build` | 输出「验证通过（--build 模式）」→ `fail == 0` 在该行可达，规则误报成立 ✅ |
+| pre-commit 实际拦截（首次观察） | 本会话提交 `14cc980` 前的首次 commit 尝试 | `secret-scan` 拦截 `scripts/gate-audit.cs:138`（探针需注入可匹配密钥的假值），证明提交时守卫非 no-op ✅ |
 
 ---
 
