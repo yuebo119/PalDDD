@@ -133,7 +133,7 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
 
         // ITM-064：INSERT 冲突已证明记录存在；GetAsync 返回 null 只可能是记录已过期
         // （GetAsync 对 ExpiresAt <= now 返回 null）。过期记录必须重新获取租约
-        // （对齐 EFCore 版 TryReuseRecordAsync 复用语义），否则该 key 在 GC 清理前永久被拒。
+        // （对齐 EFCore 版 TryReuseRecordAsync 复用语义），否则该 key 在应用侧物理清理前永久被拒。
         if (existing is null)
         {
             // 三十七轮 P2-5 → v8 评审 P2-2 修正：过期回收不再排除 Completed——原

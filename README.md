@@ -611,7 +611,7 @@ await projectionRebuilder.RebuildAsync(ct);   // ⚠️ 先清空读模型再全
 
 ### 13. 幂等执行：结果缓存 + Revision CAS 令牌（v2.1.0）
 
-API/命令幂等：同 `(OperationName, Key)` 的重复请求返回缓存结果而非重执行 handler。**Revision CAS 令牌**（v2.1.0）防止 Completed 记录被并发翻转后副作用重执行；过期记录可回收重建（Retention = 可重新执行窗口）。
+API/命令幂等：同 `(OperationName, Key)` 的重复请求返回缓存结果而非重执行 handler。**Revision CAS 令牌**（v2.1.0）防止 Completed 记录被并发翻转后副作用重执行；过期记录可回收重建（Retention = 可重新执行窗口）。过期记录的物理清理由应用侧负责（框架不启动后台清理任务，仅保证逻辑过期）。
 
 ```csharp
 using PalDDD.Idempotency;
@@ -865,6 +865,7 @@ flowchart TB
 | 文档 | 说明 |
 |------|------|
 | [架构说明](docs/architecture.md) | 分层、依赖方向、项目职责 |
+| [幂等设计说明](docs/idempotency-rationale.md) | 为什么这样设计：幂等执行的取舍与边界 |
 | [使用指南](docs/usage.md) | 各组件完整代码示例 |
 | [教程](docs/tutorial.md) | 从零构建 DDD 应用 |
 | [PalORM 适配层](docs/palorm-adapter.md) | 六 Store/固化类/Row DTO 与 PalORM 的映射 |

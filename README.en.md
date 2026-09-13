@@ -612,7 +612,7 @@ await projectionRebuilder.RebuildAsync(ct);   // ⚠️ clears the read model fi
 
 ### 13. Idempotent Execution: Result Caching + Revision CAS Token (v2.1.0)
 
-API/command idempotency: duplicate requests with the same `(OperationName, Key)` return the cached result instead of re-executing the handler. The **Revision CAS token** (v2.1.0) prevents side-effect re-execution after a Completed record is concurrently flipped; expired records are reclaimable (Retention = re-execution window).
+API/command idempotency: duplicate requests with the same `(OperationName, Key)` return the cached result instead of re-executing the handler. The **Revision CAS token** (v2.1.0) prevents side-effect re-execution after a Completed record is concurrently flipped; expired records are reclaimable (Retention = re-execution window). Physical cleanup of expired rows is the application's responsibility (the framework starts no background cleanup task; it only guarantees logical expiry).
 
 ```csharp
 using PalDDD.Idempotency;
@@ -871,6 +871,7 @@ flowchart TB
 | Document | Description |
 |------|------|
 | [Architecture](docs/architecture.md) | Layering, dependency direction, project responsibilities |
+| [Idempotency Rationale](docs/idempotency-rationale.md) | Why it is designed this way: trade-offs and boundaries |
 | [Usage Guide](docs/usage.md) | Complete code examples for each component |
 | [Tutorial](docs/tutorial.md) | Build a DDD application from scratch |
 | [PalORM Adapter](docs/palorm-adapter.md) | Six Stores / fixed classes / Row DTO mapping to PalORM |
