@@ -42,7 +42,8 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
             return null;
 
         // 过期记录视为不存在 —— 但不在读路径中删除（避免读 API 隐含写入与锁竞争）。
-        // 删除是 GC 任务的职责（基于 ExpiresAt 索引批量清理），不嵌入读路径。
+        // 物理删除由应用侧负责（基于 ExpiresAt 索引批量清理，框架不启动该任务；
+        // 口径见 README §13 / docs/architecture.md Idempotency 段），不嵌入读路径。
         if (record.ExpiresAt > now)
             return record;
 
