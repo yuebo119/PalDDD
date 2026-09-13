@@ -47,6 +47,8 @@
 
 - **git hooks 改为构建时自动配置**（新增根 `Directory.Build.targets`）：`.githooks/` 下的守卫脚本**已被跟踪**（clone 即获得），但 `core.hooksPath` 是 **git 本地配置、不进版本库**——新 clone 默认无钩子，于是整套本地防线（5 道 pre-commit 守卫 + pre-push 门禁）形同不存在。全仓此前仅在 `AGENTS.md` 的括号注里提过一次，**无安装脚本、无 clone 安装步骤、无任何地方校验其是否生效**。新增 `ConfigureGitHooks` 目标在**首次构建时**为本 clone 配置 hooksPath，把「记得手动 git config」变成「构建即生效」。设计约束：仅在未设置时写入（**不覆盖**开发者既有自定义 hooksPath）、`.git` 缺失时整目标跳过、git 失败一律 `ContinueOnError` 不阻断构建、以 `.git/config` → `obj/*.stamp` 做增量判定避免每次构建都起 git 进程。**实测**：解除本地配置（模拟新 clone）→ 构建 → 自动装回，二次构建被增量判定跳过。已知无害副作用：首次构建时并行节点各读到「未设置」，提示行与幂等写入会按项目数重复若干次，不做跨进程加锁
 
+- **覆盖率门禁接线**（此前是「脚本就绪但未接线」的已知缺口，阻塞理由为「阈值未校准」）：新增独立 **`coverage` job**——不放 `build-and-test` 内是因为覆盖率需完整再跑一遍测试，放进主 job 会把关键路径拉长近一倍；独立 job 与 `aot-verify`/`dialect-probe` 同构，并行且失败域隔离。job 内先 `dotnet tool restore`：`reportgenerator` 由 `.config/dotnet-tools.json` 钉 5.5.11，**该工具此前 CI 从未还原过，是接线的隐藏前置**。阈值由 **0.65 校准为 0.70**：原值锚定 2026-07-30 基线 67.9%（67.9 − 3 ≈ 65），实测新基线 72.98% 下余量已达约 8pp、失去早期预警意义；按项目原始原则「基线 − 3pp」取 0.70。`ci-coverage.cs` 自测同步更新（11/11）
+
 ### Fixed 修复
 
 - **bench 项目不可加载导致全仓构建失败**：`bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj` 注释内出现 `--`（`CA1031:--verify-persist`），XML 注释禁止连续双连字符 → MSB4025 项目加载失败。该缺陷于 21549d3 引入，并通过全部提交时门禁（`secret-scan`/`encoding-gate`/`guard` 均不校验 XML 良构性）——缺口由新增的 `xml-guard.cs` 关闭
