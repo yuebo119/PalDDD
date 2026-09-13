@@ -8,10 +8,10 @@ set -uo pipefail
 # ── ① main 分支保护 ──
 target=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 if [ "$target" = "main" ]; then
-    dev_head=$(git rev-parse dev 2>/dev/null)
-    main_head=$(git rev-parse main 2>/dev/null)
-    if [ "$dev_head" != "$main_head" ]; then
-        echo "⛔ main 落后 dev，请先合并：git checkout main && git merge dev"
+    # ITM-671 修复：原 `dev_head != main_head` 判断在 merge 后恒真（merge commit ≠ dev commit）
+    # → 合并后 push 也被拦。改为 merge-base --is-ancestor：dev 是否已合入 main。
+    if ! git merge-base --is-ancestor dev main 2>/dev/null; then
+        echo "⛔ dev 未合入 main，请先合并：git checkout main && git merge dev"
         echo "   （如果不需要合并，说明你在 main 上直接做了修改——这是违规的）"
         exit 1
     fi
