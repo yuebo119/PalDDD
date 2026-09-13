@@ -767,7 +767,7 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 | 适配器 | AOT | 数据库 | 覆盖范围 |
 |--------|:--:|:--:|------|
 | **PalDDD.PalORM** | ✅ **真 AOT** | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / **Idempotency** / UnitOfWork（源生成 + 编译期 SQL，[详见适配层文档](docs/palorm-adapter.md)） |
-| PalDDD.Dapper | ✅ 实测 | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / UnitOfWork（`[module:DapperAot]` **已启用**——34 调用点全量拦截器接管，三方言 NativeAOT 二进制实测 13/13；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持，见 [aot.md](docs/aot.md)） |
+| PalDDD.Dapper | ✅ 实测 | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / UnitOfWork（`[module:DapperAot]` **已启用**——34 调用点全量拦截器接管，三方言 NativeAOT 二进制实测 13/13；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持，见 [persistence-aot-status.md](docs/persistence-aot-status.md)） |
 | ~~PalDDD.EntityFrameworkCore~~ | ❌ | ~~PG / MySQL / SQLite~~ | ~~已废弃，源码未入库（OBS-068），被 PalORM 替代~~ |
 
 ### 数据库方言扩展
