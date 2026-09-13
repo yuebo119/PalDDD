@@ -98,7 +98,7 @@ dotnet add package PalDDD.Extension
 # PalORM 持久化 — 推荐，完整链路 Native AOT（源生成 + 编译期 SQL，零反射）
 dotnet add package PalDDD.PalORM.Sqlite          # 或 PostgreSql / MySql
 
-# Dapper 持久化 — 经典手写 SQL（⚠️ 不支持 AOT，逐步弃用）
+# Dapper 持久化 — 经典手写 SQL（Dapper.AOT 拦截器全量启用，封装 API 面三方言 AOT 实测）
 dotnet add package PalDDD.Dapper.PostgreSql
 
 # 消息代理
@@ -154,7 +154,7 @@ InMemory 实现覆盖全部抽象接口，单元测试和原型开发无需外�
 | **PalDDD.PalORM.PostgreSql** | 2.1.0 | PalORM PostgreSQL 方言：RETURNING / COPY |
 | **PalDDD.PalORM.MySql** | 2.1.0 | PalORM MySQL 方言：BulkCopy / 多值 INSERT |
 | **PalDDD.PalORM.Sqlite** | 2.1.0 | PalORM SQLite 方言：FTS5 / JSON1 |
-| **PalDDD.Dapper** | 2.1.0 | Dapper 持久化适配器（⚠️ AOT 假象，逐步弃用） |
+| **PalDDD.Dapper** | 2.1.0 | Dapper 持久化适配器（Dapper.AOT 拦截器全量启用——封装 API 面 AOT 实测，见 aot.md） |
 | **PalDDD.Dapper.PostgreSql** | 2.1.0 | Dapper PostgreSQL 增强：审计 / JSONB / 分片 / 软删除 |
 | **PalDDD.Dapper.MySql** | 2.1.0 | Dapper MySQL 增强 |
 | **PalDDD.Dapper.Sqlite** | 2.1.0 | Dapper SQLite 增强：TypeHandler / RowFactory / FTS5 |
@@ -361,8 +361,8 @@ services.AddPalOrmPostgreSql(connectionString);
 // → COPY 批量写入
 // → 源生成器自动生成 Row DTO 物化代码
 
-// ⚠️ Dapper — AOT 假象（[module:DapperAot] 未启用，运行时走经典反射路径；NoWarn IL3058 声明层面兼容）
-// 仅用于维护已有 Dapper 代码，新项目用 PalORM
+// ✅ Dapper — 调用点级 AOT（[module:DapperAot] 已启用，34 调用点全量拦截器接管，三方言实测 13/13）
+// 边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持（库级上游警告与调用点路径正交）
 
 // ⚠️ CQRS 管道 AOT 陷阱（同主题）：无参开放泛型 AddPalPipelineBehaviors() 在 Native AOT 下
 // 对值类型响应（Unit/int/Guid）触发 AotCannotCreateGenericValueType——AOT 应用改用
@@ -767,7 +767,7 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 | 适配器 | AOT | 数据库 | 覆盖范围 |
 |--------|:--:|:--:|------|
 | **PalDDD.PalORM** | ✅ **真 AOT** | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / **Idempotency** / UnitOfWork（源生成 + 编译期 SQL，[详见适配层文档](docs/palorm-adapter.md)） |
-| PalDDD.Dapper | ⚠️ 假象 | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / UnitOfWork（`[module:DapperAot]` **未启用**——运行时走经典反射路径，AOT 兼容仅声明层面，见 [aot.md](docs/aot.md)；ADR-020 退役路线） |
+| PalDDD.Dapper | ✅ 实测 | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / UnitOfWork（`[module:DapperAot]` **已启用**——34 调用点全量拦截器接管，三方言 NativeAOT 二进制实测 13/13；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持，见 [aot.md](docs/aot.md)） |
 | ~~PalDDD.EntityFrameworkCore~~ | ❌ | ~~PG / MySQL / SQLite~~ | ~~已废弃，源码未入库（OBS-068），被 PalORM 替代~~ |
 
 ### 数据库方言扩展
@@ -825,7 +825,7 @@ src/                         36 源项目 · Clean Architecture（Folder 与 Pal
 ├── App-Abstractions/        Serialization · Messaging · Compression · Compression.Native
 ├── App-Core/                CQRS · EventLog · Idempotency · Projections · Transactions
 ├── Infra-PalORM/            PalORM（真 AOT）· PalORM.Sqlite · PalORM.PostgreSql · PalORM.MySql  ← 推荐
-├── Infra-Dapper/            Dapper · Dapper.PostgreSql · Dapper.MySql · Dapper.Sqlite（⚠️ 逐步弃用）
+├── Infra-Dapper/            Dapper · Dapper.PostgreSql · Dapper.MySql · Dapper.Sqlite（Dapper.AOT 已启用）
 ├── Infra-EFCore/            EventLog.EFCore · Idempotency.EFCore · Projections.EFCore · Repository.EFCore · Transactions.EFCore
 ├── Infra-Serialization/     Projections.EventLog · Serialization.Evolution · Serialization.MemoryPack
 ├── Infra-Messaging/         Messaging.Kafka · Messaging.RabbitMQ
@@ -889,7 +889,7 @@ MediatR 是进程内命令分发器。Pal.DDD 内置与之等价的 Dispatcher +
 MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Service Bus/Amazon SQS）。Pal.DDD 的 Outbox 通过 `IMessageBroker` 抽象适配任意 Broker——你可以注入 MassTransit、Raw RabbitMQ、Kafka 或 InMemory 实现。框架不绑定传输。
 
 **和 EF Core 什么关系？共存还是替代？**
-共存。Pal.DDD 不替代 EF Core——两者解决不同层次的问题。EF Core 负责对象-关系映射和查询；Pal.DDD 负责 DDD 战术模式（Entity、DomainEvent、CQRS 分发、Outbox 投递、Saga 编排）。Pal.DDD 提供 PalORM（推荐，真 AOT）、Dapper（逐步弃用）和 EF Core 三套持久化适配器，选型取决于你的 AOT 需求和查询复杂度。
+共存。Pal.DDD 不替代 EF Core——两者解决不同层次的问题。EF Core 负责对象-关系映射和查询；Pal.DDD 负责 DDD 战术模式（Entity、DomainEvent、CQRS 分发、Outbox 投递、Saga 编排）。Pal.DDD 提供 PalORM（推荐，库级真 AOT）、Dapper（调用点级 AOT，极致 SQL 控制）和 EF Core 三套持久化适配器，选型取决于你的 AOT 需求和查询复杂度。
 
 **可以用在现有项目中吗？渐进式引入？**
 可以。Pal.DDD 的每个 NuGet 包独立可安装。你可以从 `PalDDD.Base`（领域基元）开始，在现有的 Service 层旁边逐步引入 CQRS Dispatcher，再按需添加 Outbox 或 Saga。不需要一次性重写整个项目。
@@ -898,7 +898,7 @@ MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Servi
 依赖 .NET 11 的静态特性（JsonSerializerContext 源生成增强、Runtime Async 状态机优化、新 AOT 分析器），多目标在技术上不可行。详见 [ADR-005](docs/decisions/005-net11-single-target.md)。
 
 **Dapper 和 PalORM 怎么选？**
-如果需要 Native AOT 部署（微服务、CLI 工具、边缘计算）→ 选 **PalORM**（推荐，源生成 + 编译期 SQL，真 AOT）。如果维护已有 Dapper 手写 SQL 代码 → 选 Dapper（⚠️ AOT 假象，逐步弃用）。EF Core 适配器用于 Repository/Outbox/Inbox/Saga 的 DbContext 场景。三者可以在同一个项目中混用——例如 PalORM 做写路径（Outbox/Saga），EF Core 做读路径（Projection）。
+如果需要 Native AOT 部署（微服务、CLI 工具、边缘计算）→ 选 **PalORM**（推荐，源生成 + 编译期 SQL，真 AOT）。如果需要手写 SQL 的极致控制力或维护已有 Dapper 代码 → 选 Dapper（封装 API 面已 AOT 实测）。EF Core 适配器用于 Repository/Outbox/Inbox/Saga 的 DbContext 场景。三者可以在同一个项目中混用——例如 PalORM 做写路径（Outbox/Saga），EF Core 做读路径（Projection）。
 
 **有哪些已知限制？**
 不支持 .NET 8/9/10（单目标 net11.0）。AOT 场景三处限制（源码 `[RequiresDynamicCode]` 诚实声明）：① Saga 的 ChildSaga 子流程分发（`MakeGenericMethod`/`MakeGenericType`，见 `Saga.cs`）与②动态事件路由同源；③ `ISpecification.Compile()` 表达式树编译在 Native AOT 下不受支持——AOT 场景请改用 `ToExpression()` 传给查询提供者。不含内置的 EventStore 快照机制——需要快照策略的项目需要自行实现。

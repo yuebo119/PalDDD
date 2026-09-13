@@ -29,7 +29,7 @@
 
 ## 〇、InMemory 实现族定位（2026-08-26 精炼轮声明）
 
-六个 InMemory 实现（Outbox/Inbox/SagaState/EventLog/Idempotency/Checkpoint）**刻意分散在各抽象包内**（`AddPalDDD` 引 Transactions 即得 InMemoryOutboxStore），不集中为独立 PalDDD.InMemory 包。理由：单元测试/原型零依赖直达（一跳引用）；集中包会形成对全部五个抽象包的反向汇聚依赖（版本耦合 + 测试项目两跳引用）。定位：**单元测试与原型的默认实现**，非生产实现——生产语义请用三栈之一（PalORM AOT 主线 / EFCore 生态线 / Dapper 退役中，见 ADR-020）。
+六个 InMemory 实现（Outbox/Inbox/SagaState/EventLog/Idempotency/Checkpoint）**刻意分散在各抽象包内**（`AddPalDDD` 引 Transactions 即得 InMemoryOutboxStore），不集中为独立 PalDDD.InMemory 包。理由：单元测试/原型零依赖直达（一跳引用）；集中包会形成对全部五个抽象包的反向汇聚依赖（版本耦合 + 测试项目两跳引用）。定位：**单元测试与原型的默认实现**，非生产实现——生产语义请用三栈之一（PalORM AOT 主线 / Dapper 调用点级 AOT / EFCore 生态线，见 ADR-020 2026-09-13 修订）。
 
 ---
 
