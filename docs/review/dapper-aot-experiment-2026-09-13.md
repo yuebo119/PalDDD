@@ -17,7 +17,8 @@
 | JIT 行为回归 | ✅ 无外部依赖 14 项目 1212 全绿 0 失败 |
 | NativeAOT 编译 | ✅ publish 成功（上游库自带 trim 警告按既有口径 NoWarn） |
 | NativeAOT 实跑 | ✅ 探针 sample 13/13 全 PASS（Outbox/EventLog/Idempotency/Saga 四组件 CRUD+blob 往返） |
-| PG / MySQL | ⏳ 本机无 Docker（`docker: command not found`），待 CI 容器 job 补测；拦截器机制与方言无关，Npgsql/MySqlConnector 官方声明 AOT 兼容 |
+| PG 真实库（192.168.200.120, PG 18.4） | ✅ **JIT 13/13 + NativeAOT 二进制 13/13**（外部连接串模式，appsettings.test.local.json 凭据） |
+| MySQL 真实库（192.168.200.120, MySQL 8.4.11） | ✅ **JIT 13/13 + NativeAOT 二进制 13/13** |
 
 **ct 代价（已知且实验目的下显式接受）**：直接重载无 ct 参数，SQL 执行层取消能力消失
 （连接超时兜底；接口签名与连接打开层 ct 保留）。
@@ -46,6 +47,12 @@
    无效（生成器穿透强转读源类型）。
 4. **诊断盲区教训（OPS-3 变体）**：改库后只 `dotnet test --no-build` 测试项目，跑的是
    测试 bin 里**上一次成功构建的旧库 DLL**——两轮"仍 23 失败"假象。必须重建测试项目。
+5. **`DapperIdempotencyStore` 时间参数方言适配缺失（ITM-667 引入，dev 亦存在）**：该 Store
+   时间参数直传 `DateTimeOffset`，PG 真实库上 timestamptz 收到 SQLite TypeHandler 编码的
+   "O" string 直接炸（`Writing values of 'System.String' is not supported ... 'timestamp
+   with time zone'`）——违反姊妹 Store 的 `ToTimeParam` 方言编码约定，且 ITM-667 当时只测了
+   SQLite 分支。本分支已修（补同款 `ToTimeParam`）；**此修复适用于主线 dev（与 AOT 无关的
+   方言缺陷），建议独立回合回移植**。真库实测价值：容器/单方言测试永远抓不到这类缺口。
 
 ## snake_case 列名验证（关键风险点清零）
 
@@ -68,7 +75,9 @@ for csproj in $(find test -name '*.csproj' ! -name 'PalDDD.Testing.csproj' ...);
 
 ## 后续选项（用户裁决）
 
-- **A. 采纳**：合并实验分支到 dev（Dapper 栈 AOT 真兼容 + ct 收缩），CI 加 AOT job
-  + PG/MySQL 容器补测；ADR-020 退役计划需重新评估（Dapper 栈能力上来了）。
+- **A. 采纳**：合并实验分支到 dev（Dapper 栈 AOT 真兼容 + ct 收缩，三方言真库已闭环）；
+  CI 加 AOT job；ADR-020 退役计划需重新评估（Dapper 栈能力上来了）。
+- **A'. 独立回移植**：无论 A/B，第 5 坑的 IdempotencyStore 方言时间参数修复应尽快进 dev
+  （ITM-667 引入的真实方言缺陷，PG/MySQL 下 TryStartAsync 即炸，与 AOT 无关）。
 - **B. 归档**：实验分支保留不合并，报告归档（第 28 轮同款"明确不做"惯例），
   dev 维持铺垫不动；未来 Dapper 栈长寿化或 AOT 部署需求出现时按本报告路径启用。

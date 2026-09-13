@@ -1,22 +1,26 @@
 // ═══════════════════════════════════════════════════════════════
 // 🔬 Dapper 栈 AOT 全链路探针（experiment/dapper-aot-full 实验分支专用）
 // ═══════════════════════════════════════════════════════════════
-// 验证目标：[module: DapperAot] 1.1.0 拦截器接管全部 Dapper 调用点后，
-//   SQLite（NativeAOT publish 二进制）下四组件行为正确：
-//   ① Outbox：AddMessage（含 byte[] Payload → DynamicParameters+DbType.Binary 绕行）
-//      → Lease → MarkProcessed → pending 归零
-//   ② EventLog：AppendAsync（byte[] Payload/Metadata）→ ReadStreamAsync 往返
-//   ③ Idempotency：TryStart → MarkCompleted（byte[] response payload）→ GetAsync 往返
-//   ④ Saga：SaveChanges（jsonTypeInfo 源生成序列化）→ GetById 往返
-// 验证点覆盖：snake_case 列名映射（生成器 NormalizedEquals）、声明式 TypeHandler
-//   （Ulid/Guid/DateTimeOffset）、byte[] blob 往返、Revision CAS。
-// 运行：dotnet run（JIT 对照）→ dotnet publish -r win-x64 /p:PublishAot=true →
-//   bin/Release/net11.0/win-x64/publish/PalDDD.DapperAotProbe.exe（AOT 实测）
+// 验证目标：[module: DapperAot] 1.1.0 拦截器接管全部 Dapper 调用点后，三方言下
+//   四组件（Outbox/EventLog/Idempotency/Saga）行为正确。
+// 用法：
+//   dotnet run --project samples/PalDDD.DapperAotProbe -c Release          # SQLite（:memory:）
+//   dotnet run --project ... -c Release -- --provider Pg                   # 外部 PG
+//   dotnet run --project ... -c Release -- --provider MySql                # 外部 MySQL
+//   dotnet publish -r win-x64 /p:PublishAot=true 后从仓库根实跑二进制        # NativeAOT 实测
+// 外部库凭据解析顺序：PALDDD_TEST_PG / PALDDD_TEST_MYSQL 环境变量 →
+//   appsettings.test.local.json → appsettings.test.json（密码不打印——P0 #1）。
+// DDL 来源：仓库 docs/sql/{dialect}/000_schema.sql（单一事实源，探针不内嵌副本）。
+// 外部库安全约定：只创建六张固定名表，探针结束 DROP IF EXISTS 自清理（测试库约定）。
 
+using System.Data;
+using System.Data.Common;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using Dapper;
 using Microsoft.Data.Sqlite;
+using MySqlConnector;
+using Npgsql;
 using PalDDD.Core;
 using PalDDD.Dapper;
 using PalDDD.EventLog;
@@ -27,43 +31,13 @@ using PalUlid = ByteAether.Ulid.Ulid;
 
 [assembly: DapperAot]
 
-// ═══ 1. 建库建表（DDL 对齐 Integration.Tests 夹具）═══
-var conn = new SqliteConnection("Data Source=:memory:");
-conn.Open();
-
-await conn.ExecuteAsync("""
-    CREATE TABLE outbox_messages (
-        id TEXT PRIMARY KEY, type TEXT NOT NULL, payload BLOB NOT NULL,
-        content_type TEXT NOT NULL DEFAULT 'application/json',
-        schema_version INTEGER NOT NULL DEFAULT 1, status INTEGER NOT NULL DEFAULT 0,
-        processed_at TEXT, next_attempt_at TEXT, retry_count INTEGER NOT NULL DEFAULT 0,
-        error TEXT, locked_by TEXT, locked_until TEXT,
-        created_at TEXT NOT NULL, correlation_id TEXT, causation_id TEXT,
-        trace_parent TEXT, trace_state TEXT);
-    CREATE TABLE events (
-        global_position INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_id TEXT NOT NULL, event_name TEXT NOT NULL, stream_name TEXT NOT NULL,
-        stream_version INTEGER NOT NULL,
-        schema_version INTEGER NOT NULL DEFAULT 1,
-        content_type TEXT NOT NULL DEFAULT 'application/json',
-        payload BLOB NOT NULL, metadata BLOB, recorded_at TEXT NOT NULL,
-        actor_id TEXT, reason TEXT, correlation_id TEXT, causation_id TEXT,
-        trace_parent TEXT, trace_state TEXT);
-    CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
-    CREATE TABLE saga_states (
-        saga_id TEXT PRIMARY KEY, current_state TEXT NOT NULL,
-        status INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
-        completed_at TEXT, error TEXT, error_at TEXT,
-        version INTEGER NOT NULL DEFAULT 0, saga_data TEXT,
-        leased_by TEXT, leased_until TEXT);
-    CREATE TABLE idempotency_records (
-        operation_name TEXT NOT NULL, idempotency_key TEXT NOT NULL,
-        status INTEGER NOT NULL DEFAULT 0, locked_until TEXT NOT NULL,
-        expires_at TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        response_payload BLOB, error TEXT, revision INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY (operation_name, idempotency_key));
-    """);
-Console.WriteLine("schema created");
+// ═══ 参数解析 ═══
+string provider = "Sqlite";
+for (int i = 0; i < args.Length - 1; i++)
+{
+    if (args[i] == "--provider") provider = args[i + 1];
+}
+Console.WriteLine($"═══ Dapper AOT 探针 · provider={provider} ═══");
 
 var checks = new List<(string Name, bool Pass)>();
 void Check(string name, bool pass)
@@ -72,9 +46,65 @@ void Check(string name, bool pass)
     Console.WriteLine($"  {(pass ? "PASS" : "FAIL")}  {name}");
 }
 
-// ═══ 2. Outbox 全链路 ═══
+// ═══ 连接建立 ═══
+DbConnection conn;
+DapperDbType dbType;
+string repoRoot = FindRepoRoot();
+string ddlPath = Path.Combine(repoRoot, "docs", "sql",
+    provider switch { "Pg" => "postgresql", "MySql" => "mysql", _ => "sqlite" }, "000_schema.sql");
+string ddl = File.ReadAllText(ddlPath);
+bool external = provider is "Pg" or "MySql";
+
+switch (provider)
 {
-    var store = new DapperOutboxStore(conn, DapperDbType.Sqlite);
+    case "Pg":
+        conn = new NpgsqlConnection(ResolveExternalCs("PostgreSql", "PALDDD_TEST_PG", repoRoot));
+        dbType = DapperDbType.PostgreSql;
+        break;
+    case "MySql":
+        conn = new MySqlConnection(ResolveExternalCs("MySql", "PALDDD_TEST_MYSQL", repoRoot));
+        dbType = DapperDbType.MySql;
+        break;
+    default:
+        conn = new SqliteConnection("Data Source=:memory:");
+        dbType = DapperDbType.Sqlite;
+        break;
+}
+await conn.OpenAsync().ConfigureAwait(false);
+Console.WriteLine($"连接建立（DDL: {Path.GetFileName(Path.GetDirectoryName(ddlPath))}）");
+
+// ═══ 建表（外部库先 DROP 自清理再建，保证幂等）═══
+if (external)
+{
+    foreach (var t in new[] { "outbox_messages", "inbox_messages", "saga_states", "events", "idempotency_records", "projection_checkpoints" })
+        await conn.ExecuteAsync($"DROP TABLE IF EXISTS {t}").ConfigureAwait(false);
+}
+await conn.ExecuteAsync(ddl).ConfigureAwait(false);
+Console.WriteLine("schema created");
+
+// ═══ 四组件全链路 ═══
+await ProbeOutboxAsync(conn, dbType, Check).ConfigureAwait(false);
+await ProbeEventLogAsync(conn, dbType, Check).ConfigureAwait(false);
+await ProbeIdempotencyAsync(conn, dbType, Check).ConfigureAwait(false);
+await ProbeSagaAsync(conn, dbType, Check).ConfigureAwait(false);
+
+// ═══ 外部库清理 ═══
+if (external)
+{
+    foreach (var t in new[] { "outbox_messages", "inbox_messages", "saga_states", "events", "idempotency_records", "projection_checkpoints" })
+        await conn.ExecuteAsync($"DROP TABLE IF EXISTS {t}").ConfigureAwait(false);
+    Console.WriteLine("外部库表已清理");
+}
+await conn.DisposeAsync().ConfigureAwait(false);
+
+var failed = checks.Count(c => !c.Pass);
+Console.WriteLine($"═══ 探针结束：{checks.Count - failed}/{checks.Count} 通过 ═══");
+return failed == 0 ? 0 : 1;
+
+// ═══ ② Outbox：AddMessage（byte[] Payload → DynamicParameters+DbType.Binary）→ Lease → MarkProcessed ═══
+static async Task ProbeOutboxAsync(DbConnection conn, DapperDbType dbType, Action<string, bool> check)
+{
+    var store = new DapperOutboxStore(conn, dbType);
     var payload = "outbox-payload"u8.ToArray();
     var msg = new OutboxMessage
     {
@@ -86,59 +116,65 @@ void Check(string name, bool pass)
         CreatedAt = TimeProvider.System.GetUtcNow(),
     };
     store.AddMessage(msg);
-    Check("outbox add (byte[] blob)", true);
+    check("outbox add (byte[] blob)", true);
 
     var leased = await store.LeasePendingMessagesAsync(10, "probe-owner",
         TimeSpan.FromMinutes(2), new OutboxOptions().MaxRetryCount, CancellationToken.None).ConfigureAwait(false);
-    Check("outbox lease acquired 1", leased.Count == 1);
-    Check("outbox payload round-trip", leased[0].Payload.SequenceEqual(payload));
+    check("outbox lease acquired 1", leased.Count == 1);
+    check("outbox payload round-trip", leased.Count == 1 && leased[0].Payload.SequenceEqual(payload));
 
     store.MarkProcessed(leased[0], TimeProvider.System.GetUtcNow());
     var pending = await store.GetPendingMessagesAsync(10,
         new OutboxOptions().MaxRetryCount, CancellationToken.None).ConfigureAwait(false);
-    Check("outbox processed terminal", pending.Count == 0);
+    check("outbox processed terminal", pending.Count == 0);
 }
 
-// ═══ 3. EventLog 全链路 ═══
+// ═══ ③ EventLog：AppendAsync（byte[] Payload/Metadata）→ ReadStreamAsync 往返 ═══
+static async Task ProbeEventLogAsync(DbConnection conn, DapperDbType dbType, Action<string, bool> check)
 {
-    var log = new DapperEventLog(conn);
+    var log = new DapperEventLog(conn, dbType: dbType);
     var payload = "{\"k\":1}"u8.ToArray();
     var metadata = "{\"m\":2}"u8.ToArray();
     var evt = new EventData(PalUlid.New(), "probe.event.v1", 1, "application/json",
         payload, metadata, EventAuditMetadata.Empty);
-    await log.AppendAsync("probe-stream", ExpectedStreamVersion.NoStream, [evt],
-        CancellationToken.None).ConfigureAwait(false);
+    var streamName = $"probe-stream-{PalUlid.New().ToString()[..8]}";
+    await log.AppendAsync(streamName,
+        ExpectedStreamVersion.NoStream, [evt], CancellationToken.None).ConfigureAwait(false);
 
     RecordedEvent? read = null;
-    await foreach (var r in log.ReadStreamAsync("probe-stream", cancellationToken: CancellationToken.None).ConfigureAwait(false))
+    await foreach (var r in log.ReadStreamAsync(streamName,
+        cancellationToken: CancellationToken.None).ConfigureAwait(false))
         read = r;
-    Check("eventlog append+read", read is not null);
-    Check("eventlog payload round-trip", read is not null && read.Payload.Span.SequenceEqual(payload));
-    Check("eventlog metadata round-trip", read is not null && read.Metadata.Span.SequenceEqual(metadata));
+    check("eventlog append+read", read is not null);
+    check("eventlog payload round-trip", read is not null && read.Payload.Span.SequenceEqual(payload));
+    check("eventlog metadata round-trip", read is not null && read.Metadata.Span.SequenceEqual(metadata));
 }
 
-// ═══ 4. Idempotency 全链路（byte[] response payload 是绕行方案的关键验证点）═══
+// ═══ ④ Idempotency：TryStart → MarkCompleted（byte[] response）→ GetAsync 往返 ═══
+static async Task ProbeIdempotencyAsync(DbConnection conn, DapperDbType dbType, Action<string, bool> check)
 {
-    var store = new DapperIdempotencyStore(conn, DapperDbType.Sqlite);
+    var store = new DapperIdempotencyStore(conn, dbType);
     var now = DateTimeOffset.UtcNow;
-    var record = await store.TryStartAsync("probe-op", "key-1", now,
+    var record = await store.TryStartAsync("probe-op", $"key-{PalUlid.New()}", now,
         IdempotencyPolicy.Default, CancellationToken.None).ConfigureAwait(false);
-    Check("idempotency try-start", record is not null);
+    check("idempotency try-start", record is not null);
 
     var response = "idempotent-response"u8.ToArray();
     await store.MarkCompletedAsync(record!, response, now.AddSeconds(1)).ConfigureAwait(false);
 
-    var loaded = await store.GetAsync("probe-op", "key-1", now.AddSeconds(1),
+    var loaded = await store.GetAsync("probe-op", record!.Key, now.AddSeconds(1),
         CancellationToken.None).ConfigureAwait(false);
-    Check("idempotency completed status", loaded?.Status == IdempotencyRecordStatus.Completed);
-    Check("idempotency blob round-trip", loaded?.ResponsePayload is not null
+    check("idempotency completed status", loaded?.Status == IdempotencyRecordStatus.Completed);
+    check("idempotency blob round-trip", loaded?.ResponsePayload is not null
         && loaded.ResponsePayload.Value.Span.SequenceEqual(response));
 }
 
-// ═══ 5. Saga 全链路（jsonTypeInfo 源生成序列化）═══
+// ═══ ⑤ Saga：SaveChanges（jsonTypeInfo 源生成序列化）→ GetById 往返 ═══
+static async Task ProbeSagaAsync(DbConnection conn, DapperDbType dbType, Action<string, bool> check)
 {
     var store = new DapperSagaStateStore<ProbeSagaState>(conn,
-        jsonTypeInfo: DapperAotProbeJsonContext.Default.ProbeSagaState);
+        jsonTypeInfo: DapperAotProbeJsonContext.Default.ProbeSagaState,
+        dbType: dbType);
     var state = new ProbeSagaState
     {
         SagaId = PalUlid.New(),
@@ -148,21 +184,57 @@ void Check(string name, bool pass)
         CustomerId = "probe-customer",
     };
     var rows = await store.SaveChangesAsync(state, CancellationToken.None).ConfigureAwait(false);
-    Check("saga insert", rows == 1);
+    check("saga insert", rows == 1);
 
     var loaded = await store.GetByIdAsync(state.SagaId, CancellationToken.None).ConfigureAwait(false);
-    Check("saga loaded", loaded is not null);
-    Check("saga state round-trip", loaded?.CurrentState == "ProbeInitial"
+    check("saga loaded", loaded is not null);
+    check("saga state round-trip", loaded?.CurrentState == "ProbeInitial"
         && loaded?.CustomerId == "probe-customer");
 }
 
-// ═══ 汇总 ═══
-var failed = checks.Count(c => !c.Pass);
-Console.WriteLine($"═══ Dapper AOT 探针：{checks.Count - failed}/{checks.Count} 通过 ═══");
-return failed == 0 ? 0 : 1;
+// ═══ 外部库连接串解析（密码不打印）═══
+static string ResolveExternalCs(string section, string envName, string repoRoot)
+{
+    var env = Environment.GetEnvironmentVariable(envName);
+    if (!string.IsNullOrWhiteSpace(env)) return env;
+
+    foreach (var name in new[] { "appsettings.test.local.json", "appsettings.test.json" })
+    {
+        var path = Path.Combine(repoRoot, name);
+        if (!File.Exists(path)) continue;
+        var cs = ExtractConnectionString(File.ReadAllText(path), section);
+        if (cs is not null) return cs;
+    }
+    throw new InvalidOperationException(
+        $"外部库连接串未找到：设 {envName} 环境变量，或提供 {repoRoot}/appsettings.test.local.json（TestEnvironment.{section}.ConnectionString）");
+}
+
+// 轻量 JSON 提取（探针专用，避免反射序列化保持 AOT 安全）：
+// 在 TestEnvironment.<section> 对象内取 "ConnectionString": "..." 的值。
+static string? ExtractConnectionString(string json, string section)
+{
+    var secIdx = json.IndexOf($"\"{section}\"", StringComparison.Ordinal);
+    if (secIdx < 0) return null;
+    var csIdx = json.IndexOf("\"ConnectionString\"", secIdx, StringComparison.Ordinal);
+    if (csIdx < 0) return null;
+    var colon = json.IndexOf(':', csIdx);
+    var quote1 = json.IndexOf('"', colon);
+    var quote2 = json.IndexOf('"', quote1 + 1);
+    var value = json[(quote1 + 1)..quote2];
+    return string.IsNullOrWhiteSpace(value) ? null : value;
+}
+
+static string FindRepoRoot()
+{
+    var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
+    while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "appsettings.test.json")))
+        dir = dir.Parent;
+    return dir?.FullName ?? Directory.GetCurrentDirectory();
+}
 
 namespace PalDDD.DapperAotProbe
 {
+    /// <summary>探针 Saga 状态（源生成序列化）。</summary>
     internal sealed class ProbeSagaState : SagaState
     {
         public string CustomerId { get; set; } = string.Empty;

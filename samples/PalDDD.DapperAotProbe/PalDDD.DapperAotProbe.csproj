@@ -2,9 +2,10 @@
 
   <PropertyGroup>
     <!-- 🔬 实验分支专用：Dapper 栈 AOT 全链路探针（experiment/dapper-aot-full）
-         用途：dotnet publish -r win-x64 /p:PublishAot=true 后实跑，
-         验证 [module: DapperAot] 拦截器接管下 Outbox/EventLog/Idempotency/Saga 全 CRUD 正确。
-         不在 csproj 固定 PublishAot=true（同 PalOrmSample ITM-157 口径——避免 dotnet build 触发）。 -->
+         用法：dotnet run 默认 SQLite；加 provider 参数（Pg / MySql）走外部库
+         （凭据读 appsettings.test.local.json）；publish 后实跑二进制为 NativeAOT 实测。
+         外部库凭据来自 appsettings.test.local.json（gitignore，不落对话/日志），
+         或 PALDDD_TEST_PG / PALDDD_TEST_MYSQL 环境变量覆盖。 -->
     <IsPackable>false</IsPackable>
     <OutputType>Exe</OutputType>
     <RootNamespace>PalDDD.DapperAotProbe</RootNamespace>
@@ -19,6 +20,8 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="MySqlConnector" />
     <ProjectReference Include="..\..\src\PalDDD.Dapper\PalDDD.Dapper.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Idempotency\PalDDD.Idempotency.csproj" />
   </ItemGroup>
