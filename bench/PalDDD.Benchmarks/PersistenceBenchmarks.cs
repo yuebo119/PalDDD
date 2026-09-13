@@ -41,8 +41,11 @@ public abstract class PersistenceBenchBase
 {
     protected const int BatchSize = 100;
 
+    /// <summary>公开常量(--verify-persist 等验证面复用口径)。</summary>
+    public const int PublicBatchSize = BatchSize;
+
     /// <summary>命名共享内存库连接(cache=shared;多连接同库,首连接为 keeper)。</summary>
-    protected static SqliteConnection OpenSharedMemory(string dbName)
+    public static SqliteConnection OpenSharedMemory(string dbName)
     {
         var conn = new SqliteConnection($"Data Source={dbName};Mode=Memory;Cache=Shared");
         conn.Open();
@@ -50,7 +53,7 @@ public abstract class PersistenceBenchBase
     }
 
     /// <summary>docs/sql/sqlite 小写 schema(Dapper/PalORM 段共用)。</summary>
-    protected static async Task CreateSharedSchemaAsync(SqliteConnection conn)
+    public static async Task CreateSharedSchemaAsync(SqliteConnection conn)
     {
         await global::Dapper.SqlMapper.ExecuteAsync(conn, """
             CREATE TABLE IF NOT EXISTS outbox_messages (
@@ -80,7 +83,7 @@ public abstract class PersistenceBenchBase
             """);
     }
 
-    protected static Task ClearSharedSchemaAsync(SqliteConnection conn)
+    public static Task ClearSharedSchemaAsync(SqliteConnection conn)
         => global::Dapper.SqlMapper.ExecuteAsync(conn,
             "DELETE FROM outbox_messages; DELETE FROM events; DELETE FROM idempotency_records;");
 
@@ -100,6 +103,10 @@ public abstract class PersistenceBenchBase
 
     /// <summary>重灌不变量守卫(镜像 InfraBenchmarks.EnsureFullLease)。</summary>
     protected static void EnsureFullLease(IReadOnlyList<OutboxMessage> msgs)
+        => EnsureFullLeasePublic(msgs);
+
+    /// <summary>守卫公开入口(--verify-persist 验证面直接断言守卫语义)。</summary>
+    public static void EnsureFullLeasePublic(IReadOnlyList<OutboxMessage> msgs)
     {
         if (msgs.Count != BatchSize)
             throw new InvalidOperationException($"应满额租走 {BatchSize} 条,实际 {msgs.Count} 条——重灌不变量被破坏,基准数字失真");
