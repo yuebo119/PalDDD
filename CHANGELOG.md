@@ -31,6 +31,8 @@
 
 - **`scripts/doc-consistency.cs` 补 `--selftest`**（此前无自证能力）：本壳仅保留 D7（`.ai/README.md` 文件地图指向的文件必须存在），判定分两步——正则路径提取与缺失过滤——两步都可能静默失效（提取正则写窄则一条都不匹配、写宽则误报），故抽为纯函数 `ExtractMapEntries`/`MissingMapEntries` 并覆盖 12 例：四类前缀提取（`gate/`/`refine/`/`review/`/`test/`，含数字与连字符）、同行情多次出现、字符集边界（不提取大写、不提取下划线、不提取非 `.md`）、空行、去重与 Ordinal 排序、存在性过滤、空输入。另钉住一处已知宽口径（正则无行首锚定，故 `docs/review/x.md` 中的 `review/x.md` 片段也会被提取——本仓实际写法是相对 `.ai/` 的短路径故不构成问题，但改锚定会无声改变提取集合，需显式改测试）。经变异验证可红（字符集加入 `A-Z` → 11/12）
 
+- **`scripts/gate.cs` 补 `--selftest`**（此前无自证能力）：G23/G24 的判定都是「对 git 输出文本做计数后比对」，计数口径写错即静默放行（G23 漏判 = 公共 API 变更不记录；G24 漏判 = 跨平台守卫在 CI 平台 no-op），故把两处计数抽为纯函数 `G23Counts`/`G24Counts` 并对**合成 git 输出**覆盖 18 例，不需要真实 git fixture。覆盖：`ToLines` 的 CRLF 拆分与非空行计数；G23 的四种组合（快照有/无 × CHANGELOG 有/无）与两处口径差异（快照是**子串**匹配故更长路径亦命中；CHANGELOG 是**整行**匹配故 `docs/CHANGELOG.md` 不计入）与多行计数；G24 的 `WithoutExtension` 变体、归一化字面命中、非新增行不计（`-` 与空格起首）、`+++` 头行、空输出。经变异验证可红（CHANGELOG 整行匹配改子串匹配 → 17/18）。病态样本按自指陷阱一般化规则运行期拼装
+
 ### Changed 变更
 
 - **CI `aot-verify` job 扩为双 sample**：原仅 `PalOrmSample`（直接引用仅 `PalORM.Sqlite`，即只覆盖 PalORM 一条栈）。新增 `AotSample` 的 restore/publish/run 三步——其引用 Core/Serialization/Transactions/CQRS/DependencyInjection 五个主干项目，与前者引用图不重叠。此前主干项目的 AOT 运行时安全无 CI 守卫（`docs/release.md` 自述 AotSample 为「手动 AOT 验证示例」）。本地等价形式（win-x64）已实测：输出 `Generating native code`、产物仅 native exe（无托管 dll）、实跑 exit 0 且含 CQRS AOT 值类型管道检查通过

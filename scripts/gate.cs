@@ -42,6 +42,15 @@ int passed = 0, warned = 0, failedCount = 0;
 // ANSI 颜色码与 bash 版逐字相同（\033[0;31m 等），留档 diff 时归一即可
 const string Red = "\x1b[0;31m", Green = "\x1b[0;32m", Yellow = "\x1b[0;33m", Nc = "\x1b[0m";
 
+// 2026-09-13 增：本脚本此前无自证能力（gate-audit 矩阵标 UNVERIFIED）。G23/G24 的
+// 判定都是「对 git 输出文本做计数后比对」，计数口径写错即静默放行（G23 漏判 = 公共
+// API 变更不记录 / G24 漏判 = 跨平台守卫在 CI 平台 no-op）。故把两处计数抽为纯函数
+// 并对合成 git 输出覆盖，不需要真实 git fixture。
+if (args.Contains("--selftest"))
+{
+    return SelfTest();
+}
+
 Console.WriteLine("═══════ Pal.DDD 门禁扫描（保留 3 项：G22/G23/G24）═══════");
 Console.WriteLine($"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
 Console.WriteLine("规范：docs/conventions.md + ArchitectureBoundaryTests.cs + SourceCodeGuardTests.cs");
@@ -120,8 +129,7 @@ if (diffRange is null)
 else
 {
     // grep -c 无锚子串匹配 / ^CHANGELOG.md$ 整行匹配——口径与 bash 一致
-    var snapCount = ToLines(changedFiles).Count(l => l.Contains("Snapshots/core-packages-public-api.txt"));
-    var changelogCount = ToLines(changedFiles).Count(l => l == "CHANGELOG.md");
+    var (snapCount, changelogCount) = G23Counts(changedFiles);
     if (snapCount > 0 && changelogCount == 0)
     {
         Console.WriteLine($"{Red}FAIL{Nc} PDDD-G23: 公共 API 快照已变更但 CHANGELOG.md 未同步（BINC-1：发布后 API 变更三件套=快照+CHANGELOG+二进制兼容评估）");
@@ -152,14 +160,9 @@ if (diffRange is null)
 else
 {
     // 只看 diff 新增行（^+，含 +++ 头行——与 bash grep "^+" 同口径）
-    var plusLines = ToLines(changedDiff).Where(l => l.StartsWith('+')).ToList();
-    // bash BRE "Path\.GetFileName\(WithoutExtension\)\?" 等价正则
-    var g24Rx = new Regex(@"Path\.GetFileName(WithoutExtension)?");
-    var g24Hits = plusLines.Count(l => g24Rx.IsMatch(l));
+    var (g24Hits, g24Normalized) = G24Counts(changedDiff);
     if (g24Hits > 0)
     {
-        // 保真复刻：匹配字面 Replace('', '/')（bash 实际语义，见上 ⚠️）
-        var g24Normalized = plusLines.Count(l => l.Contains("Replace('', '/')"));
         if (g24Normalized == 0)
         {
             Console.WriteLine($"{Yellow}WARN{Nc} PDDD-G24: 新增 {g24Hits} 处 Path.GetFileName* 调用但未见分隔符归一化——若处理文档路径（csproj/相对路径），Unix 上反斜杠不拆分（PLAT-1：守卫在 CI 平台 no-op）；仅 Windows 专属工具可忽略");
@@ -233,3 +236,85 @@ static List<string> ToLines(string output) =>
 // 等价 bash 的 `grep -c .`：非空行计数
 static int CountNonEmptyLines(string output) =>
     ToLines(output).Count(l => l.Length > 0);
+
+// ══════════════ 判定计数（纯函数，供 --selftest 覆盖）══════════════
+
+// G23 计数：快照路径**子串**匹配（grep -c 无锚）、CHANGELOG **整行**匹配（^CHANGELOG.md$）。
+// 两者口径不同是原 bash 行为，分别钉住。
+static (int SnapCount, int ChangelogCount) G23Counts(string changedFilesOutput)
+{
+    var lines = ToLines(changedFilesOutput);
+    var snap = lines.Count(l => l.Contains("Snapshots/core-packages-public-api.txt"));
+    var changelog = lines.Count(l => l == "CHANGELOG.md");
+    return (snap, changelog);
+}
+
+// G24 计数：只看新增行（`+` 起首，含 `+++` 头行——与 bash grep "^+" 同口径），
+// 分别计 Path.GetFileName* 命中与字面 Replace('', '/') 归一化命中
+// （后者是保真复刻 bash 的实际语义，见 G24 段 ⚠️ 说明）。
+static (int Hits, int Normalized) G24Counts(string changedDiffOutput)
+{
+    var plusLines = ToLines(changedDiffOutput).Where(l => l.StartsWith('+')).ToList();
+    var rx = new Regex(@"Path\.GetFileName(WithoutExtension)?");
+    return (plusLines.Count(l => rx.IsMatch(l)), plusLines.Count(l => l.Contains("Replace('', '/')")));
+}
+
+// ══════════════ 自测 ══════════════
+
+static int SelfTest()
+{
+    var passedCount = 0;
+    var total = 0;
+
+    void Case(string name, bool ok)
+    {
+        total++;
+        if (ok) passedCount++;
+        Console.WriteLine($"{(ok ? "PASS" : "FAIL")} SELFTEST {name}");
+    }
+
+    // ── 工具函数 ──
+    Case("ToLines 拆 CRLF", ToLines("a\r\nb\r\n") is ["a", "b", ""]);
+    Case("CountNonEmptyLines 忽略空行", CountNonEmptyLines("a\n\nb\n") == 2);
+    Case("CountNonEmptyLines 空输出为 0", CountNonEmptyLines("") == 0);
+
+    // ── G23 ──
+    Case("G23 快照变更而无 CHANGELOG → (1,0) 应 FAIL",
+        G23Counts("test/PalDDD.Core.Tests/Snapshots/core-packages-public-api.txt\n") == (1, 0));
+    Case("G23 快照与 CHANGELOG 同行 → 应 PASS",
+        G23Counts("Snapshots/core-packages-public-api.txt\nCHANGELOG.md\n") == (1, 1));
+    Case("G23 仅 CHANGELOG → 应 PASS", G23Counts("CHANGELOG.md\n") == (0, 1));
+    Case("G23 无关变更 → 应 PASS", G23Counts("src/PalDDD.Core/X.cs\n") == (0, 0));
+    Case("G23 空输出 → 应 PASS", G23Counts("") == (0, 0));
+    // 口径差异（原 bash 行为）：快照是子串匹配，故更长的路径也命中
+    Case("G23 快照为子串口径（更长路径亦命中）",
+        G23Counts("docs/backup/Snapshots/core-packages-public-api.txt\n") == (1, 0));
+    // 口径差异：CHANGELOG 是整行匹配，故带目录前缀的同名文件不计入
+    Case("G23 CHANGELOG 为整行口径（docs/CHANGELOG.md 不计入）",
+        G23Counts("docs/CHANGELOG.md\n") == (0, 0));
+    Case("G23 多行计数正确",
+        G23Counts("Snapshots/core-packages-public-api.txt\nSnapshots/core-packages-public-api.txt\nCHANGELOG.md\n") == (2, 1));
+
+    // ── G24 ──
+    // 病态样本运行期拼装（自指陷阱一般化规则）：本行若字面写出被检测形态，
+    // 会让本文件自身成为 G24 的观察对象（虽不影响门禁判定，但保持规则一致）
+    var getFileName = "Path.GetFileName(";
+    var getFileNameNoExt = "Path.GetFileNameWithoutExtension(";
+    var normalizedLiteral = "Replace('', '/')";
+
+    Case("G24 新增调用且无归一化 → (1,0) 应 WARN",
+        G24Counts($"+var n = {getFileName}p);\n") == (1, 0));
+    Case("G24 识别 WithoutExtension 变体",
+        G24Counts($"+var n = {getFileNameNoExt}p);\n") == (1, 0));
+    Case("G24 含归一化字面 → PASS",
+        G24Counts($"+var n = {getFileName}{normalizedLiteral});\n") == (1, 1));
+    Case("G24 非新增行不计（`-` 与空格起首）",
+        G24Counts($"-var n = {getFileName}p);\n var m = {getFileName}q);\n") == (0, 0));
+    Case("G24 `+++` 头行本身不含调用则不命中", G24Counts("+++ b/src/X.cs\n") == (0, 0));
+    Case("G24 无命中 → PASS", G24Counts("+var x = 1;\n") == (0, 0));
+    Case("G24 空输出 → PASS", G24Counts("") == (0, 0));
+
+    Console.WriteLine();
+    Console.WriteLine($"SELFTEST {passedCount}/{total} 通过");
+    return passedCount == total ? 0 : 1;
+}
