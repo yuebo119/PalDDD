@@ -307,7 +307,7 @@ git log -1 --format="%h %s"
 # 2. 确认版本号已更新到目标版本 + CHANGELOG 已转正（§十二 Phase 5——未转正禁止打 tag）
 grep -E "VersionPrefix|VersionSuffix" Directory.Build.props
 grep -E "^## \[" CHANGELOG.md | head -2        # 首行 [Unreleased]，次行 [目标版本]
-bash scripts/changelog-check.sh                # 必须 0 FAIL
+dotnet run scripts/changelog-check.cs                # 必须 0 FAIL
 
 # 3. 打 tag（tag 名格式：v + 版本号，如 v1.1.0）
 git tag v1.1.0
@@ -660,7 +660,7 @@ git commit -m "功能：xxx + 升版本 preview.2"
 ### 12.2 Phase 1——事实收集（发布启动时）
 
 ```bash
-bash scripts/changelog-facts.sh <上一版tag> [HEAD]     # 例: changelog-facts.sh v2.1.0
+dotnet run scripts/changelog-facts.cs -- <上一版tag> [HEAD]     # 例: changelog-facts <tag> v2.1.0
 ```
 
 产出 9 段事实清单：范围与提交分布 / 公共 API 快照 diff / 新增诊断 / 脚本与工作流增删 / 废弃扫描 / ADR 与文档增删 / 依赖变更 / 测试面板实测占位 / 当前 [Unreleased] 原料。
@@ -681,7 +681,7 @@ bash scripts/changelog-facts.sh <上一版tag> [HEAD]     # 例: changelog-facts
 ### 12.5 Phase 4——校验（机械 + 人工六问）
 
 ```bash
-bash scripts/changelog-check.sh    # FAIL=阻断（回 Phase 3）；WARN=人工裁决
+dotnet run scripts/changelog-check.cs    # FAIL=阻断（回 Phase 3）；WARN=人工裁决
 ```
 
 人工六问（逐条答"是"才过）：①每条能回答"对我的影响"？②每个数字有实测/账本口径且标注来源？③每条有锚点（类型/成员/文件）？④每条 Fixed 说清"之前会怎样"？⑤分类层无内部叙事泄漏？⑥头部引用块（范围/兼容性/组织方式）齐备？

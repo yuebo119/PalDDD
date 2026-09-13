@@ -54,6 +54,18 @@ if git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep -qE '\.(c
     fi
 fi
 
+# ── 6. verify-conventions --quick（V5 TODO 扫描 + V8 prompt 模板结构 +
+#       V9 文档命令引用的脚本须存在；仅 .md 在暂存集时触发 ~3s）──
+# V9 来源：MIG-011/012 迁移脚本后文档未收口，该断链类已二次回归（见
+# docs/review/rule-placement-audit-2026-09-13.md），故改为机械拦截。
+if git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep -qE '\.md$'; then
+    echo "📘 verify-conventions --quick（.md 在暂存集）…"
+    if ! dotnet run scripts/verify-conventions.cs -- --quick 2>&1; then
+        echo "⛔ verify-conventions 静态检查未通过"
+        FAIL=1
+    fi
+fi
+
 if [ "$FAIL" -ne 0 ]; then
     echo ""
     echo "⛔ pre-commit 拦截——跳过检查：git commit --no-verify（不推荐）"
