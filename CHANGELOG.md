@@ -35,6 +35,8 @@
 
 - **`scripts/tech-debt.cs` 补 `--selftest`**（此前无自证能力）：判定分两层——`Check` 的三态（FAIL/ALLOW/PASS）与计数口径（路径段排除、行长边界、行级排除）——两层写错都表现为「计数为 0 于是 PASS」，即静默漏报。故把三态判定抽为纯函数 `Verdict`，并为 `LongLines`/`EnumerateCs` 加可选根参数以便对临时目录做真实判定。17 例覆盖：`Verdict` 五种组合（含两条易错边界——`allow` 无命中必须 PASS 而非 ALLOW、未知 `allow` 值与原 bash 一样与 count 无关地判 PASS）；`ContainsSegment` 的段边界（`myobj` 不是 `obj` 段、`objX` 后无斜杠不命中）；`EnumerateCs` 只收 `.cs` + Ordinal 稳定序 + Rel 为 posix + 目录不存在为空；`LongLines` 的 **180/181 行长边界**（含未多报）与路径段排除。经变异验证可红（边界改 181 → 15/17）
 
+- **`scripts/ci-failed-tests.cs` 补 `--selftest`**（此前无自证能力，gate-audit 矩阵最后一项 UNVERIFIED）：三通道都是「从日志/报告里挑出该报的行」，失效形态是**该报的失败没报**——且因调用方一律 `|| true` 兜底，诊断静默丢失不会以非零退出暴露，属最难发现的失效类型。通道 ②的两个窗口判定抽为纯函数 `LogKeywordContexts`/`LogTailWindow` 并覆盖 22 例：关键字命中（最后 15 个窗口，数 `CTX\|` 行）、命中附下一行（下一行空/为末行两种边界）、大小写不敏感、`keys` 八项逐项独立（含 `timed out`/`exit code`/`error(s)` 等含空格与括号者）、普通行不误报；尾部两级窗口（末 120 行 → 去空白 → 最后 30 行）的**先后顺序**用 200 行构造钉住（起点必为第 170 行、早期行不出现）；`Truncate` 的 100 边界。经变异验证可红（15 命中窗口改 16 → 20/22）
+
 ### Changed 变更
 
 - **CI `aot-verify` job 扩为双 sample**：原仅 `PalOrmSample`（直接引用仅 `PalORM.Sqlite`，即只覆盖 PalORM 一条栈）。新增 `AotSample` 的 restore/publish/run 三步——其引用 Core/Serialization/Transactions/CQRS/DependencyInjection 五个主干项目，与前者引用图不重叠。此前主干项目的 AOT 运行时安全无 CI 守卫（`docs/release.md` 自述 AotSample 为「手动 AOT 验证示例」）。本地等价形式（win-x64）已实测：输出 `Generating native code`、产物仅 native exe（无托管 dll）、实跑 exit 0 且含 CQRS AOT 值类型管道检查通过
