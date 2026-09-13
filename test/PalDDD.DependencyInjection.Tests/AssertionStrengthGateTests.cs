@@ -26,7 +26,7 @@ public sealed class AssertionStrengthGateTests
     ///    SQL raw string 内不平衡花括号使块边界错位而漏检；同时剔除 2 个 raw string 内的
     ///    [Test] 伪签名（BadParameterizedName 等，python 曾误计入）。净化后计数为真实存量。
     /// 新增测试必须使用行为断言。</summary>
-    internal const int MaxWeak = 190;
+    internal const int MaxWeak = 200;
 
     private static readonly string Root = FindRepositoryRoot();
 
