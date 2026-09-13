@@ -20,6 +20,7 @@
 - **测试文件改动守卫 `scripts/test-change-guard.cs`**：拦截「暂存集含 `test/**` 修改/删除且无 `src/**` 变更」（改测试修绿签名）。豁免 `ALLOW_TEST_ONLY_CHANGE=1`。已接入 `pre-commit`
 - **XML 良构性守卫 `scripts/xml-guard.cs`**：校验 `.csproj/.props/.slnx/.targets/.xml` 可加载（`--all` 全仓 / 默认暂存集）。已接入 `pre-commit`
 - **`scripts/verify-conventions.cs` 新增 V8/V9 两条静态检查 + `--selftest`**（此前无自证能力）：**V8** 断言 `.pal/prompts/` 9 个模板的必填段齐全（该约束原标注为「人工」，且 `conventions.md` 的「六段结构」表述与实测的 5/6/7 段分布不符）；**V9** 断言文档中「命令形态」引用的脚本路径必须存在（只查 `bash X.sh` / `dotnet run X.cs`，排除 `docs/review/` 历史记录与含「下沉自/已迁移」等词的历史提及，保持高精度）。`--selftest` 12 例含双向负例，并经变异验证可红。已接入 `pre-commit`（`.md` 入暂存集时触发）——该脚本此前是未接线的观察态门禁，本次同时完成接线
+- **`scripts/vuln-scan.cs` 补 `--selftest`**（此前无自证能力）：判定逻辑抽为纯函数 `ScanVulnerabilities`，自测以合成 JSON 覆盖 14 例——含本门禁最易错的「存在 + 是数组 + 非空」三条件语义（空数组/缺属性/非数组均不算命中）、`transitivePackages` 与 `topLevelPackages` 双路径、`resolvedVersion`/`severity` 的 `?` 回退、以及两条 fail-closed（缺 `id` 抛 `KeyNotFoundException`、损坏 JSON 抛 `JsonException`，均不得静默当成「无漏洞」）。经变异验证可红（把非空判定改为恒假 → 13/14），真实路径复跑与重构前一致（`0 个已知漏洞`，exit 0）。**动机**：该门禁有已证实的空转史（v53 为 exit-0 no-op），而漏洞扫描器的失败形态天然静默——「扫不到」与「没扫」输出完全相同
 
 ### Changed 变更
 
