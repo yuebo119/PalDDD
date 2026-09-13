@@ -16,6 +16,24 @@
 dotnet --info
 ```
 
+### git hooks（首次构建自动配置）
+
+提交时守卫与推送门禁脚本在 `.githooks/`（已随版本库分发），但 `core.hooksPath` 是
+**git 本地配置、不进版本库**——新 clone 默认无钩子。根 `Directory.Build.targets` 的
+`ConfigureGitHooks` 目标会在**首次 `dotnet build` 时**为本 clone 配置它：
+
+- 仅在 `core.hooksPath` **未设置**时写入，**不覆盖**你已有的自定义 hooksPath；
+- `.git` 不存在（源码包解压、容器内无 .git）时整个目标跳过，任何失败都不阻断构建。
+
+故「clone → 构建一次」即获得全部本地守卫，无需手动 `git config`。确认是否生效：
+
+```bash
+git config --local --get core.hooksPath   # 期望输出：.githooks
+```
+
+跳过单次提交的守卫：`git commit --no-verify`（不推荐——守卫红了说明代码有问题）。
+钩子清单与各自拦截范围见根 [AGENTS.md](../AGENTS.md) §2。
+
 ## 常用命令
 
 ```bash
