@@ -35,14 +35,14 @@
 
 | 上游特性 | 本仓判定 |
 |---|---|
-| to-one join 优化(EF 11:split query **-29%**/ORDER BY 去冗余 **-22%**) | ✅ GA 后自动受益(读路径 Include/投影,零代码) |
-| no-op CAST 剥离(EF 11) | ✅ GA 后自动受益 |
+| to-one join 优化(EF 11:split query **-29%**/ORDER BY 去冗余 **-22%**) | ➖ 本仓 store 零导航查询(实证:四包无 Include/GroupBy/ComplexProperty)——收益属于**使用导航加载的消费者项目**,GA 后他们零代码受益 |
+| no-op CAST 剥离(EF 11) | ➖ 本仓查询形状(等值/范围谓词)无 CAST 生成场景——同上,收益属消费者 |
 | ExecuteUpdateAsync JSON 列支持(EF 10) | ➖ 未用(本仓无 JSON complex type 映射) |
 | 参数化集合标量展开 + padding(EF 10) | ➖ 未用(本仓 EFCore 无 IN 集合查询;Dapper 栈有但形状不同) |
 | 命名查询过滤器(EF 10) | ➖ 未用(本仓无全局过滤器/软删/多租户 EF 实现) |
 | Complex types EF 10 大扩展(struct/optional/JSON)/ EF 11 TPT-TPC | ➖ 未用(本仓 EFCore 栈映射全部平铺实体) |
 | SQL Server 向量/JSON 类型/全文目录 | ➖ 不适用(本仓 EFCore 面向 PG/MySQL/SQLite) |
-| 迁移 `--add` 一步化 / 快照迁移 ID 分叉预警 / `.config/dotnet-ef.json` | ✅ 对 EFCore 栈消费者的 DX 受益(本仓自身用手写 DDL 体系) |
+| 迁移 `--add` 一步化 / 快照迁移 ID 分叉预警 / `.config/dotnet-ef.json` | ➖ 消费者 DX 受益(本仓自身用手写 DDL 体系,不走 EF 迁移) |
 | Compiled models / precompiled queries | ➖ **有意不用**——本仓 EFCore 栈无冷启动瓶颈报告,预编译只省启动;等上游转正再评估 |
 
 ### PalORM 5.4 / 5.5.x(自研上游,本仓钉 5.5.1)
