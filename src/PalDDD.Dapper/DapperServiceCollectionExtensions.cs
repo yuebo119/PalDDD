@@ -28,6 +28,7 @@
 
 using Microsoft.Extensions.DependencyInjection;
 using PalDDD.Transactions;
+using PalDDD.Idempotency;
 using System.Data.Common;
 
 namespace PalDDD.Dapper;
@@ -104,6 +105,8 @@ public static class DapperServiceCollectionExtensions
         // Scoped 生命周期 — 与 DbConnection 保持一致
         services.AddScoped<IPalOutboxStore, DapperOutboxStore>();
         services.AddScoped<IInboxStore, DapperInboxStore>();
+        // ITM-667：IIdempotencyStore 缺口清偿——Dapper 栈幂等消费模式补齐
+        services.AddScoped<IIdempotencyStore, DapperIdempotencyStore>();
 
         // ISagaStateStore<TState> 是开放泛型 — 运行时由 DI 自动关闭
         services.AddScoped(typeof(ISagaStateStore<>), typeof(DapperSagaStateStore<>));

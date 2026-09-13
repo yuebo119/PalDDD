@@ -10,6 +10,10 @@
   </ItemGroup>
 
   <!-- v54 P2：PalORM 幂等栈 Revision 令牌换代——物化构造/回放恢复 internal 通道的消费方 -->
-  <ItemGroup><InternalsVisibleTo Include="PalDDD.PalORM" /></ItemGroup>
+  <!-- v87：Dapper 幂等栈补齐（ITM-667 缺口清偿）——同款 internal 通道 -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="PalDDD.PalORM" />
+    <InternalsVisibleTo Include="PalDDD.Dapper" />
+  </ItemGroup>
 
 </Project>
