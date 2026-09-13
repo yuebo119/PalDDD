@@ -29,6 +29,8 @@
 
 - **`scripts/gate-lite.cs` 补 `--selftest`**（此前无自证能力）：G1-G3 均为「计数 == 0」判定，模式写细一点即静默漏报违规（与本会话已发现的 `encoding-gate` E2/E3 范围缺口同类）。三个计数函数都接收目录根，故自测对着**临时目录的真实文件**做判定，而非只测纯逻辑。6 例覆盖：G1 的整文件子串语义（sealed 出现在注释里也算通过）与路径过滤（Middleware/Extensions）、并显式钉住一处已知宽口径（正则 `public.*class.*Exception` 是子串匹配，类名含 Exception 的普通类也被计数，方向是多报而非漏报，属 MIG-012 要求保持的原 bash 语义）；G2 的四类合规首行（using/`//`/namespace/空行）与三类排除（obj、bin、SourceGen、Analyzers）各自独立；G3 与 G2 的**排除口径差异**（G3 仅排 obj/bin、不排 SourceGen）；全合规目录三项归零的负向对照；不存在目录退化为 0。开发中自测已真实红过一次（G1 期望值写错，暴露上述子串语义），非空转
 
+- **`scripts/doc-consistency.cs` 补 `--selftest`**（此前无自证能力）：本壳仅保留 D7（`.ai/README.md` 文件地图指向的文件必须存在），判定分两步——正则路径提取与缺失过滤——两步都可能静默失效（提取正则写窄则一条都不匹配、写宽则误报），故抽为纯函数 `ExtractMapEntries`/`MissingMapEntries` 并覆盖 12 例：四类前缀提取（`gate/`/`refine/`/`review/`/`test/`，含数字与连字符）、同行情多次出现、字符集边界（不提取大写、不提取下划线、不提取非 `.md`）、空行、去重与 Ordinal 排序、存在性过滤、空输入。另钉住一处已知宽口径（正则无行首锚定，故 `docs/review/x.md` 中的 `review/x.md` 片段也会被提取——本仓实际写法是相对 `.ai/` 的短路径故不构成问题，但改锚定会无声改变提取集合，需显式改测试）。经变异验证可红（字符集加入 `A-Z` → 11/12）
+
 ### Changed 变更
 
 - **CI `aot-verify` job 扩为双 sample**：原仅 `PalOrmSample`（直接引用仅 `PalORM.Sqlite`，即只覆盖 PalORM 一条栈）。新增 `AotSample` 的 restore/publish/run 三步——其引用 Core/Serialization/Transactions/CQRS/DependencyInjection 五个主干项目，与前者引用图不重叠。此前主干项目的 AOT 运行时安全无 CI 守卫（`docs/release.md` 自述 AotSample 为「手动 AOT 验证示例」）。本地等价形式（win-x64）已实测：输出 `Generating native code`、产物仅 native exe（无托管 dll）、实跑 exit 0 且含 CQRS AOT 值类型管道检查通过
