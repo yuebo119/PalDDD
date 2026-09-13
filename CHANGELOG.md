@@ -20,6 +20,10 @@
 - **测试文件改动守卫 `scripts/test-change-guard.cs`**：拦截「暂存集含 `test/**` 修改/删除且无 `src/**` 变更」（改测试修绿签名）。豁免 `ALLOW_TEST_ONLY_CHANGE=1`。已接入 `pre-commit`
 - **XML 良构性守卫 `scripts/xml-guard.cs`**：校验 `.csproj/.props/.slnx/.targets/.xml` 可加载（`--all` 全仓 / 默认暂存集）。已接入 `pre-commit`
 
+### Changed 变更
+
+- **CI `aot-verify` job 扩为双 sample**：原仅 `PalOrmSample`（直接引用仅 `PalORM.Sqlite`，即只覆盖 PalORM 一条栈）。新增 `AotSample` 的 restore/publish/run 三步——其引用 Core/Serialization/Transactions/CQRS/DependencyInjection 五个主干项目，与前者引用图不重叠。此前主干项目的 AOT 运行时安全无 CI 守卫（`docs/release.md` 自述 AotSample 为「手动 AOT 验证示例」）。本地等价形式（win-x64）已实测：输出 `Generating native code`、产物仅 native exe（无托管 dll）、实跑 exit 0 且含 CQRS AOT 值类型管道检查通过
+
 ### Fixed 修复
 
 - **bench 项目不可加载导致全仓构建失败**：`bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj` 注释内出现 `--`（`CA1031:--verify-persist`），XML 注释禁止连续双连字符 → MSB4025 项目加载失败。该缺陷于 21549d3 引入，并通过全部提交时门禁（`secret-scan`/`encoding-gate`/`guard` 均不校验 XML 良构性）——缺口由新增的 `xml-guard.cs` 关闭
@@ -39,6 +43,7 @@
 - 新增 `docs/review/rule-placement-audit-2026-09-13.md`：按「可脚本化 / 类型化 / 人工判断」三分类审计规则归属，登记 8 项实测承载缺口与本次处置、6 项未完成项与阻塞、完整的验证记录
 - `docs/review/NAMING.md`：新增规则 6/7（**禁止会话相对表述**：`本轮`/`上轮`/`下一轮` → 改绝对日期 + commit；版本号不承载会话语义）+ 写法对照表；§六 手工文件清单改为命令式（原清单所列文件已全部不存在）并登记 7 份违规命名债务；新增可选「主题槽位」`{type}-{date}-{topic}`
 - `docs/test-coverage-baseline.md`：§门禁阈值按实测改写——原表述「已自动化」与实际不符（脚本可运行 ≠ 门禁在运行），补记接线未完成的两个具体阻塞（本机 Docker 缺失致 12/16 项目中断、阈值 0.65 锚定 2026-07-30 旧基线）与四步接线前置序列
+- `docs/conventions.md` §工程约束表三处勘正：① `.pal/prompts/` 由「六段结构」改为按实测的段数分布（9 模板 5/6/7 段不等，`bounded-context` 与 `task-intake` 结构不同）；② AOT 发布命令 `/p:PublishAot=true` → `-p:PublishAot=true`（Git Bash 下 `/p:` 被 MSYS 路径转换致 MSB1008，实测踩中）；③ 补 `AOT 运行时验证` 行记录 CI 双 sample 覆盖；④ `review-snapshot.sh`/`verify-action-items.sh` → `.cs`
 
 ## [2.1.0] — 2026-09-04
 
