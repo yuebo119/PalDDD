@@ -27,6 +27,8 @@
 
 - **`scripts/secret-scan.cs` 补 `--selftest`**（此前无自证能力）：本门禁有已证实的空转史（CI 注释记「ITM-648 凭据门禁实为 no-op」），且三层白名单写松一点即静默放过真实凭据——漏报与「确实没有凭据」输出完全一致。判定抽为纯函数 `JudgeLine`/`BuildPatterns`，自测 16 例覆盖：模式 1 的四类密钥前缀各自独立（AKIA / ghp_ / PEM 块头 / 不误报短前缀与普通文本）；模式 2 的命中与**三层白名单的每一条边界**，其中「短但有数字则命中」是关键边界（该条写松即漏报 `Password=a1` 这类真凭据）；主机键与密码键必须同行共存（仅其一不命中）；`Data Source` 亦识别；两模式同线可各报一次（不短路）；大小写不敏感。经变异验证可红（把白名单第三条的 `&&` 改成 `||` → 15/16，红的正是该边界）。另：所有权重样本改为**运行期拼装**以规避自指陷阱（见下）
 
+- **`scripts/gate-lite.cs` 补 `--selftest`**（此前无自证能力）：G1-G3 均为「计数 == 0」判定，模式写细一点即静默漏报违规（与本会话已发现的 `encoding-gate` E2/E3 范围缺口同类）。三个计数函数都接收目录根，故自测对着**临时目录的真实文件**做判定，而非只测纯逻辑。6 例覆盖：G1 的整文件子串语义（sealed 出现在注释里也算通过）与路径过滤（Middleware/Extensions）、并显式钉住一处已知宽口径（正则 `public.*class.*Exception` 是子串匹配，类名含 Exception 的普通类也被计数，方向是多报而非漏报，属 MIG-012 要求保持的原 bash 语义）；G2 的四类合规首行（using/`//`/namespace/空行）与三类排除（obj、bin、SourceGen、Analyzers）各自独立；G3 与 G2 的**排除口径差异**（G3 仅排 obj/bin、不排 SourceGen）；全合规目录三项归零的负向对照；不存在目录退化为 0。开发中自测已真实红过一次（G1 期望值写错，暴露上述子串语义），非空转
+
 ### Changed 变更
 
 - **CI `aot-verify` job 扩为双 sample**：原仅 `PalOrmSample`（直接引用仅 `PalORM.Sqlite`，即只覆盖 PalORM 一条栈）。新增 `AotSample` 的 restore/publish/run 三步——其引用 Core/Serialization/Transactions/CQRS/DependencyInjection 五个主干项目，与前者引用图不重叠。此前主干项目的 AOT 运行时安全无 CI 守卫（`docs/release.md` 自述 AotSample 为「手动 AOT 验证示例」）。本地等价形式（win-x64）已实测：输出 `Generating native code`、产物仅 native exe（无托管 dll）、实跑 exit 0 且含 CQRS AOT 值类型管道检查通过
