@@ -87,9 +87,14 @@ if (restoreExit != 0) return restoreExit;
 
 // 4. 合并报告（Cobertura 供第 5 步门禁解析，Html 供人工审阅；glob 由 reportgenerator 自行展开）
 Console.WriteLine(">> Merging coverage reports...");
+// ⚠️ 路径缺陷修复(2026-09-14 实测实证):MTP 的 --coverage-output 相对路径基准是
+// 测试结果根(TestResults/),故第 2 步传入 "TestResults/coverage.X.xml" 实际落在
+// TestResults/TestResults/coverage.X.xml——单层 glob "TestResults/coverage.*" 实测
+// "found no matching files"(reportgenerator 退出非零,fail-closed 卡在合并步)。
+// 递归 glob 兼容双层落点(实测合并成功);若未来 MTP 变更落点基准仍兼容。
 var mergeExit = RunInherit("dotnet",
     "tool run reportgenerator" +
-    " -reports:TestResults/coverage.*.cobertura.xml" +
+    " -reports:TestResults/**/coverage.*.cobertura.xml" +
     " -targetdir:TestResults/coverage-report" +
     " -reporttypes:Html;Cobertura");
 if (mergeExit != 0) return mergeExit;
