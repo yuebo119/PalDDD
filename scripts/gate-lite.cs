@@ -22,6 +22,10 @@
 // ============================================================================
 #pragma warning disable CA1303 // 门禁协议输出为固定控制台文案，无本地化需求——沿 flaky-parse.cs 先例
 
+// Justification: CA1031 禁止宽泛 catch；本文件的捕获只出现在 --selftest 的临时目录
+// 清理路径（清理失败不得翻转自测结论）。限定在自测 finally 内。
+#pragma warning disable CA1031
+
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -33,6 +37,14 @@ Console.Out.NewLine = "\n";
 var src = "src";   // 与原脚本 SRC="$ROOT/src" 等价（约定仓库根执行）
 var pass = 0;
 var fail = 0;
+
+// 2026-09-13 增：G1-G3 均为「计数 == 0」判定，模式写细一点就会静默漏报违规
+// （与本会话早前发现的 encoding-gate E2/E3 范围缺口同类）。三个计数函数都接收
+// 目录根，故自测可对着临时目录做真实判定，而非只测纯逻辑。
+if (args.Contains("--selftest"))
+{
+    return SelfTest();
+}
 
 Console.WriteLine("═══ 门禁 ═══");
 
@@ -142,4 +154,90 @@ static IEnumerable<string> SafeEnumerate(Func<IEnumerable<string>> enumerate)
 {
     try { return enumerate(); }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
+}
+
+// ══════════════ 自测（临时目录 + 真实文件，验证 G1/G2/G3 的计数判定与排除口径）══════════════
+
+static int SelfTest()
+{
+    var passed = 0;
+    var total = 0;
+
+    void Case(string name, bool ok)
+    {
+        total++;
+        if (ok) passed++;
+        Console.WriteLine($"{(ok ? "PASS" : "FAIL")} SELFTEST {name}");
+    }
+
+    var tmp = Path.Combine(Path.GetTempPath(), "gate-lite-selftest-" + Guid.NewGuid().ToString("N"));
+
+    // 建文件（自动建目录）
+    static void Put(string root, string relative, string content)
+    {
+        var path = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
+    }
+
+    try
+    {
+        // ── G1：异常类未 sealed/abstract（整文件子串语义 + 路径过滤）──
+        var g1 = Path.Combine(tmp, "g1");
+        Put(g1, "PlainException.cs", "public class PlainException { }\n");
+        Put(g1, "SealedException.cs", "public sealed class SealedException { }\n");
+        Put(g1, "AbstractException.cs", "public abstract class AbstractException { }\n");
+        Put(g1, "Extensions/ExtException.cs", "public class ExtException { }\n");
+        // 已知宽口径：sealed 出现在注释里也算「整文件含 sealed」——原 grep -L 语义即如此，
+        // 此用例把该行为钉住（改宽/改严都必须显式改测试）
+        Put(g1, "CommentSealedException.cs", "// TODO sealed\npublic class CommentSealedException { }\n");
+        Case("G1 只计数「未 sealed/abstract 且路径未过滤」的异常类", G1Count(g1) == 1);
+
+        // G1 的另一处已知宽口径：正则 `public.*class.*Exception` 是**子串**匹配，
+        // 故类名含 Exception 的普通类（并无继承关系）也会被计为违规。方向是「多报」
+        // 而非漏报（对门禁而言是安全方向），且属 MIG-012 要求保持的原 bash 语义，
+        // 故此用例显式钉住该行为而非视为缺陷。
+        var g1Substring = Path.Combine(tmp, "g1-substring");
+        Put(g1Substring, "NotException.cs", "public class NotException { }\n");
+        Case("G1 子串语义：类名含 Exception 的普通类亦被计数（多报方向，已知）", G1Count(g1Substring) == 1);
+
+        // ── G2：文件头（排除 obj/bin/SourceGen/Analyzers）──
+        var g2 = Path.Combine(tmp, "g2");
+        Put(g2, "UsingFirst.cs", "using System;\n");
+        Put(g2, "CommentFirst.cs", "// 头部注释\n");
+        Put(g2, "NamespaceFirst.cs", "namespace X;\n");
+        Put(g2, "EmptyFirst.cs", "\nclass X { }\n");
+        Put(g2, "BadFirst.cs", "var x = 1;\n");
+        Put(g2, "SourceGen/GenFirst.cs", "var y = 2;\n");
+        Put(g2, "Analyzers/AnFirst.cs", "var z = 3;\n");
+        Put(g2, "obj/ObjFirst.cs", "var w = 4;\n");
+        Put(g2, "bin/BinFirst.cs", "var v = 5;\n");
+        Case("G2 只计数首行不合规且未被排除的文件", G2Count(g2) == 1);
+
+        // ── G3：文件名字符集（**仅**排除 obj/bin——与 G2 的排除口径差异是原脚本行为）──
+        var g3 = Path.Combine(tmp, "g3");
+        Put(g3, "Good_Name-1.cs", "class A { }\n");
+        Put(g3, "Bad Name.cs", "class B { }\n");
+        Put(g3, "中文名.cs", "class C { }\n");
+        Put(g3, "SourceGen/Bad Gen.cs", "class D { }\n");
+        Put(g3, "obj/Obj Good.cs", "class E { }\n");
+        Case("G3 计数非 [A-Za-z0-9._-] 文件名，且不排除 SourceGen（口径差异）", G3Count(g3) == 3);
+
+        // 负向对照：全部合规时计数为 0（防「恒计数」型假红）
+        var clean = Path.Combine(tmp, "clean");
+        Put(clean, "Ok.cs", "using System;\npublic sealed class OkException { }\n");
+        Case("负向对照：全合规目录三项均为 0",
+            G1Count(clean) == 0 && G2Count(clean) == 0 && G3Count(clean) == 0);
+
+        // 不存在目录退化为 0（bash find 输出不完整的等价语义）
+        Case("不存在的目录退化为 0", G1Count(Path.Combine(tmp, "missing")) == 0);
+    }
+    finally
+    {
+        try { if (Directory.Exists(tmp)) Directory.Delete(tmp, recursive: true); } catch { /* 清理失败不翻转结论 */ }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"SELFTEST {passed}/{total} 通过");
+    return passed == total ? 0 : 1;
 }
