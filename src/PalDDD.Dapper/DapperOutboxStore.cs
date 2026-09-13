@@ -21,13 +21,13 @@
 //   ｜   2. 原子租约获取（多实例部署时避免重复发布）
 //   ｜   3. 标记已处理/死信/重试
 //
-// AOT 状态（v11 勘正——旧"零反射"块与实际矛盾）：
-//   ⚠️ 运行时经典 Dapper 路径（QueryAsync<T> 物化经 IL 发射，AOT 下退化为反射）——
-//      真 AOT 不可达；csproj IsAotCompatible=true 是"编译无警告"口径而非运行时承诺
-//      （详见 DapperBulkCopy IL2062 注释与 csproj Description）。snake_case 映射
-//      （MatchNamesWithUnderscores）本身是纯字符串操作，但物化整链含反射。
-//   ✅ DapperDbType 枚举分发 / DapperBulkCopy 委托提取 — 这两处确为零反射。
-//   栈级 AOT 策略见 ADR-020（Dapper 退役；Native AOT 场景用 PalORM）。
+// AOT 状态（2026-09-13 实验后勘正——Dapper.AOT 1.1.0 全量启用）：
+//   ✅ 本类全部调用点已被生成拦截器接管（直接重载形状），经典反射路径不再可达；
+//      SQLite/PG 18.4/MySQL 8.4.11 真库 NativeAOT 二进制实测 13/13（探针 sample）。
+//   ✅ DapperDbType 枚举分发 / DapperBulkCopy 委托提取 — 零反射（既有勘正仍成立）。
+//   ⚠️ 边界：库级 Dapper.dll 仍有上游 46 条 AOT 警告（经典路径代码保留但不可达），
+//      绕过本封装直用 Dapper 原生 API 不受 AOT 支持——权威口径见
+//      docs/persistence-aot-status.md；ADR-020 已修订为退役延后。
 //
 // ⚡ 性能：
 //   ✅ 查询使用手写 SQL + Dapper 执行
@@ -107,8 +107,9 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         var now = _timeProvider.GetUtcNow();
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // 🟡 P1 修复 (2026-06-21): 替换 SqlKata.QueryFactory.GetAsync 为纯 Dapper SQL
-        // 直接使用 Dapper.QueryAsync<OutboxMessage>（v10 勘正：走运行时经典 Dapper 路径——
-        // AOT 拦截未启用，与 csproj IsAotCompatible=true 的差异见 DapperBulkCopy IL2062 注释）。
+        // 直接使用 Dapper.QueryAsync<OutboxMessage>（2026-09-13 AOT 实验后勘正：拦截器已
+        // 全量接管——此调用点为生成拦截器目标之一，经典反射路径不再可达，见
+        // docs/review/dapper-aot-experiment-2026-09-13.md）。
         var messages = await conn.QueryAsync<OutboxMessage>(
             
                 SqlTemplates.OutboxSelectPending,
