@@ -33,6 +33,8 @@
 
 - **`scripts/gate.cs` 补 `--selftest`**（此前无自证能力）：G23/G24 的判定都是「对 git 输出文本做计数后比对」，计数口径写错即静默放行（G23 漏判 = 公共 API 变更不记录；G24 漏判 = 跨平台守卫在 CI 平台 no-op），故把两处计数抽为纯函数 `G23Counts`/`G24Counts` 并对**合成 git 输出**覆盖 18 例，不需要真实 git fixture。覆盖：`ToLines` 的 CRLF 拆分与非空行计数；G23 的四种组合（快照有/无 × CHANGELOG 有/无）与两处口径差异（快照是**子串**匹配故更长路径亦命中；CHANGELOG 是**整行**匹配故 `docs/CHANGELOG.md` 不计入）与多行计数；G24 的 `WithoutExtension` 变体、归一化字面命中、非新增行不计（`-` 与空格起首）、`+++` 头行、空输出。经变异验证可红（CHANGELOG 整行匹配改子串匹配 → 17/18）。病态样本按自指陷阱一般化规则运行期拼装
 
+- **`scripts/tech-debt.cs` 补 `--selftest`**（此前无自证能力）：判定分两层——`Check` 的三态（FAIL/ALLOW/PASS）与计数口径（路径段排除、行长边界、行级排除）——两层写错都表现为「计数为 0 于是 PASS」，即静默漏报。故把三态判定抽为纯函数 `Verdict`，并为 `LongLines`/`EnumerateCs` 加可选根参数以便对临时目录做真实判定。17 例覆盖：`Verdict` 五种组合（含两条易错边界——`allow` 无命中必须 PASS 而非 ALLOW、未知 `allow` 值与原 bash 一样与 count 无关地判 PASS）；`ContainsSegment` 的段边界（`myobj` 不是 `obj` 段、`objX` 后无斜杠不命中）；`EnumerateCs` 只收 `.cs` + Ordinal 稳定序 + Rel 为 posix + 目录不存在为空；`LongLines` 的 **180/181 行长边界**（含未多报）与路径段排除。经变异验证可红（边界改 181 → 15/17）
+
 ### Changed 变更
 
 - **CI `aot-verify` job 扩为双 sample**：原仅 `PalOrmSample`（直接引用仅 `PalORM.Sqlite`，即只覆盖 PalORM 一条栈）。新增 `AotSample` 的 restore/publish/run 三步——其引用 Core/Serialization/Transactions/CQRS/DependencyInjection 五个主干项目，与前者引用图不重叠。此前主干项目的 AOT 运行时安全无 CI 守卫（`docs/release.md` 自述 AotSample 为「手动 AOT 验证示例」）。本地等价形式（win-x64）已实测：输出 `Generating native code`、产物仅 native exe（无托管 dll）、实跑 exit 0 且含 CQRS AOT 值类型管道检查通过
