@@ -24,6 +24,11 @@
 
 ### 提交时（`.githooks/pre-commit`，`core.hooksPath=.githooks`）
 
+> **钩子安装是自动的**：`core.hooksPath` 是 git 本地配置（不进版本库），新 clone 默认无钩子。
+> 根 `Directory.Build.targets` 的 `ConfigureGitHooks` 目标在**首次构建时**为本 clone 配置它
+> （仅在其未设置时写入，不覆盖开发者既有配置；非 git 环境跳过）。故「clone 后构建一次」即获得全部本地守卫，
+> 无需手动 `git config`。跳过单次提交：`git commit --no-verify`。
+
 | # | 守卫 | 触发条件 | 拦截什么 |
 |---|------|---------|---------|
 | 1 | `secret-scan` | 每次 | 受跟踪文件里的高置信硬编码凭据 |

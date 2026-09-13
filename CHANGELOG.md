@@ -45,6 +45,8 @@
 
 - **CI `aot-verify` job 扩为双 sample**：原仅 `PalOrmSample`（直接引用仅 `PalORM.Sqlite`，即只覆盖 PalORM 一条栈）。新增 `AotSample` 的 restore/publish/run 三步——其引用 Core/Serialization/Transactions/CQRS/DependencyInjection 五个主干项目，与前者引用图不重叠。此前主干项目的 AOT 运行时安全无 CI 守卫（`docs/release.md` 自述 AotSample 为「手动 AOT 验证示例」）。本地等价形式（win-x64）已实测：输出 `Generating native code`、产物仅 native exe（无托管 dll）、实跑 exit 0 且含 CQRS AOT 值类型管道检查通过
 
+- **git hooks 改为构建时自动配置**（新增根 `Directory.Build.targets`）：`.githooks/` 下的守卫脚本**已被跟踪**（clone 即获得），但 `core.hooksPath` 是 **git 本地配置、不进版本库**——新 clone 默认无钩子，于是整套本地防线（5 道 pre-commit 守卫 + pre-push 门禁）形同不存在。全仓此前仅在 `AGENTS.md` 的括号注里提过一次，**无安装脚本、无 clone 安装步骤、无任何地方校验其是否生效**。新增 `ConfigureGitHooks` 目标在**首次构建时**为本 clone 配置 hooksPath，把「记得手动 git config」变成「构建即生效」。设计约束：仅在未设置时写入（**不覆盖**开发者既有自定义 hooksPath）、`.git` 缺失时整目标跳过、git 失败一律 `ContinueOnError` 不阻断构建、以 `.git/config` → `obj/*.stamp` 做增量判定避免每次构建都起 git 进程。**实测**：解除本地配置（模拟新 clone）→ 构建 → 自动装回，二次构建被增量判定跳过。已知无害副作用：首次构建时并行节点各读到「未设置」，提示行与幂等写入会按项目数重复若干次，不做跨进程加锁
+
 ### Fixed 修复
 
 - **bench 项目不可加载导致全仓构建失败**：`bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj` 注释内出现 `--`（`CA1031:--verify-persist`），XML 注释禁止连续双连字符 → MSB4025 项目加载失败。该缺陷于 21549d3 引入，并通过全部提交时门禁（`secret-scan`/`encoding-gate`/`guard` 均不校验 XML 良构性）——缺口由新增的 `xml-guard.cs` 关闭
@@ -65,6 +67,7 @@
 - `docs/review/NAMING.md`：新增规则 6/7（**禁止会话相对表述**：`本轮`/`上轮`/`下一轮` → 改绝对日期 + commit；版本号不承载会话语义）+ 写法对照表；§六 手工文件清单改为命令式（原清单所列文件已全部不存在）并登记 7 份违规命名债务；新增可选「主题槽位」`{type}-{date}-{topic}`
 - `docs/test-coverage-baseline.md`：§门禁阈值按实测改写——原表述「已自动化」与实际不符（脚本可运行 ≠ 门禁在运行），补记接线未完成的两个具体阻塞（本机 Docker 缺失致 12/16 项目中断、阈值 0.65 锚定 2026-07-30 旧基线）与四步接线前置序列
 - `docs/conventions.md` §工程约束表三处勘正：① `.pal/prompts/` 由「六段结构」改为按实测的段数分布（9 模板 5/6/7 段不等，`bounded-context` 与 `task-intake` 结构不同）；② AOT 发布命令 `/p:PublishAot=true` → `-p:PublishAot=true`（Git Bash 下 `/p:` 被 MSYS 路径转换致 MSB1008，实测踩中）；③ 补 `AOT 运行时验证` 行记录 CI 双 sample 覆盖；④ `review-snapshot.sh`/`verify-action-items.sh` → `.cs`
+- `docs/review/NAMING.md`：**7 份命名冲突已裁决并执行，存量清零**。判据为规则 5 的原意（禁止**自我评价**，理由是「如果一份报告确实比前一份更完整——用版本号区分」）：`full` 在这些文件名里标示**范围**（全仓轮 vs 局部，如 `action-items-*-bench.md`），可核验且不表达优劣 → 6 份违反的是规则**文字**而非**意图**，故细化规则而非改名（§四 接纳 `review-` 为现行类型前缀并说明与 `audit-` 的历史 corpus 关系；规则 5 增设范围标记白名单 `full`；§七 那条「review≠audit」作废）。另 1 份 `comprehensive-review-2026-09-13.md` 的 `comprehensive` 属自我评价**且**类型词不在最前 → 改名为 `review-2026-09-13-architecture.md`，内部评审编号同步改为 `REVIEW-2026-09-13-ARCH`。另新增 §一「主题槽位」`{type}-{date}-{topic}`；`docs/development.md` 增「git hooks（首次构建自动配置）」小节
 
 ## [2.1.0] — 2026-09-04
 
