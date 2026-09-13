@@ -34,6 +34,8 @@
 | 6 | 单模块覆盖率降幅 ≤5% | 人工核对表格 | 无机械判定 | ⚠️ 已记录可行路径（逐项目 cobertura 已产出），未实现 |
 | 7 | 审计文档的时间视角唯一 | `NAMING.md`（只规范命名） | `docs/` 下 **54 处**「本轮/上轮/下轮」表述，导致范围决策不可复现 | ✅ `NAMING.md` 新增规则 6/7 + 写法对照 |
 | 8 | 审计文档命名规范被执行 | `NAMING.md` | **7 份文件违规**（禁词 `full`/`comprehensive`）；§六 清单所列文件已全部不存在 | ✅ 清单改为命令式；违规登记为显式债务（未改名，避免破坏引用） |
+| 9 | `.pal/prompts/` 结构约束 | `conventions.md` 称「六段结构」，标注为**人工** | 实测 9 个模板段数为 **5/6/7 不等**：7 个为「角色/框架约束/必须遵守/禁止/输出格式」（其中 5 个追加示例段），`bounded-context` 以「项目引用指南」替代「输出格式」，`task-intake` 为验收断言门专用 7 段结构。README 自述「v54 勘正：各模板段数不一」——即该失实表述已被勘正过一次而 conventions 未同步 | ✅ 按实测改写并标注为「人工（机械化候选）」 |
+| 10 | Windows/Git Bash 下的 AOT 发布命令 | 无 | `conventions.md` 用 `/p:PublishAot=true`，而 MSYS 会把 `/p:` 路径转换为 `p:` → `MSB1008 只能指定一个项目`（本次实测踩中，发布静默失败）；`docs/testing.md`/`performance.md`/`release.md` 均用正确的 `-p:`，只有 conventions 是异类 | ✅ 改为 `-p:` 并写明原因 |
 
 ---
 
@@ -86,7 +88,7 @@
 |---|---|---|
 | 覆盖率门禁接入 CI | 阈值未校准：本机 Docker 不可用 → 多方言测试失败 → 全局 line-rate 不可测 | 在具备 Docker 的环境跑一次 `dotnet run scripts/ci-coverage.cs` 取真实值 → 校准阈值 → 接线 → 同步三处文档 |
 | 单模块降幅门禁 | 依赖上一项（同一脚本） | 同上 |
-| `AotSample` 纳入 CI AOT 矩阵 | 需先本地验证其 `PublishAot` 能通过（本机未跑，避免提交未经证实的 CI 步骤） | 本地 `dotnet publish samples/PalDDD.AotSample -r linux-x64 /p:PublishAot=true` 通过后接线 |
+| `AotSample` 纳入 CI AOT 矩阵 | 无（已完成） | ✅ **已完成**：本地 win-x64 等价形式 `dotnet publish -p:PublishAot=true` 实测通过（输出 `Generating native code`、产物仅 native exe 无托管 dll、实跑 exit 0 含 CQRS AOT 值类型管道检查），CI 已补 3 步（`aot-verify` job）。覆盖缺口：PalOrmSample 直接引用仅 PalORM.Sqlite，AotSample 引用 Core/Serialization/Transactions/CQRS/DI，二者不重叠 |
 | 12 个 src 项目未声明 `IsAotCompatible` | 补声明会启用分析器警告，在 `TreatWarningsAsErrors` 下可能立即阻断构建，须逐项目评估 | 逐项目添加并构建验证（一次一个，避免级联） |
 | `docs/` 54 处会话相对表述 | 追溯改写成本高、收益低 | 归档整理时按 `NAMING.md` §七 对照表改写 |
 | 7 份违规命名的评审文档 | 改名会破坏既有交叉引用，属判断问题 | 维护者裁决；改名需 `grep -rn "<旧名>" docs/ README.md` 同步引用 |

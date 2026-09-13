@@ -169,6 +169,21 @@ jobs:
         # 产物为 linux-x64 自包含 native binary，直接执行即可（无需 dotnet 命令）。
         run: ./samples/PalDDD.PalOrmSample/bin/Release/net11.0/linux-x64/publish/PalDDD.PalOrmSample
 
+      # 2026-09-13 补：PalOrmSample 的直接 ProjectReference 只有 PalORM.Sqlite，即本 job 此前
+      # 只验证 PalORM 一条栈的 AOT 运行时安全。AotSample 引用 Core/Serialization/Transactions/
+      # CQRS/DependencyInjection 五个主干项目，二者引用图不重叠——不补此步则主干 AOT 无 CI 守卫
+      # （此前仅靠手动 publish，docs/release.md 自述其为「手动 AOT 验证示例」）。
+      # 本地实证（2026-09-13，win-x64 等价形式）：publish 输出 "Generating native code"、
+      # 产物仅 native exe（无托管 dll）、实跑 exit 0 且含 CQRS AOT 值类型管道检查通过。
+      - name: Restore (AotSample)
+        run: dotnet restore samples/PalDDD.AotSample/PalDDD.AotSample.csproj
+
+      - name: PublishAot verify (AotSample)
+        run: dotnet publish samples/PalDDD.AotSample/PalDDD.AotSample.csproj -c Release -r linux-x64 /p:PublishAot=true --verbosity normal
+
+      - name: Run AOT-published binary (AotSample)
+        run: ./samples/PalDDD.AotSample/bin/Release/net11.0/linux-x64/publish/PalDDD.AotSample
+
   dialect-probe:
     # unified v2.0 Phase 2a：方言实测防线固化——断言 × PG/MySQL 从"本机可选跑"升 CI 必跑。
     # MIG-001（2026-09-11）：bash 探针脚本（双副本）转正为 DialectProbeTests——
