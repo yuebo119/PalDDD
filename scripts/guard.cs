@@ -71,6 +71,10 @@ foreach (var (proj, filter, name) in guards)
     var stdout = outTask.Result;
     var errText = errTask.Result;
 
+    // 判定仅看退出码即可，无需断言「测试数 > 0」——已实测（2026-09-13）：
+    // MTP 对「过滤器匹配到 0 个测试」返回 exit 8，而非 0，故测试类被改名后本门禁会
+    // 报 RED 而非假 GREEN（对照组：真实过滤器 总计 15 / exit 0）。
+    // ⚠️ 该保护依赖 MTP 的退出码语义——若将来换回 VSTest 或改测试运行器，必须重测此行为。
     if (p.ExitCode == 0)
     {
         Console.WriteLine("GREEN");

@@ -36,6 +36,7 @@
 | 8 | 审计文档命名规范被执行 | `NAMING.md` | **7 份文件违规**（禁词 `full`/`comprehensive`）；§六 清单所列文件已全部不存在 | ✅ 清单改为命令式；违规登记为显式债务（未改名，避免破坏引用） |
 | 9 | `.pal/prompts/` 结构约束 | `conventions.md` 称「六段结构」，标注为**人工** | 实测 9 个模板段数为 **5/6/7 不等**：7 个为「角色/框架约束/必须遵守/禁止/输出格式」（其中 5 个追加示例段），`bounded-context` 以「项目引用指南」替代「输出格式」，`task-intake` 为验收断言门专用 7 段结构。README 自述「v54 勘正：各模板段数不一」——即该失实表述已被勘正过一次而 conventions 未同步 | ✅ **已从人工转机械**：`verify-conventions.cs` 新增 V8 断言 9 个模板的必填段齐全（只断必填、不限可选段与段序；未登记的新模板只 WARN 不 FAIL）；`conventions.md` 按实测改写 |
 | 10 | Windows/Git Bash 下的 AOT 发布命令 | 无 | `conventions.md` 用 `/p:PublishAot=true`，而 MSYS 会把 `/p:` 路径转换为 `p:` → `MSB1008 只能指定一个项目`（本次实测踩中，发布静默失败）；`docs/testing.md`/`performance.md`/`release.md` 均用正确的 `-p:`，只有 conventions 是异类 | ✅ 改为 `-p:` 并写明原因 |
+| 11 | `guard.cs` 是否会被「零测试假绿」击中 | 判定仅看 `p.ExitCode == 0`，不断言测试数 | **已检查并排除**（假设被实测证伪）：用一个不可能匹配的过滤器运行 → **exit 8**（MTP 对「匹配到 0 个测试」的退出码），非 0；对照组真实过滤器 → 总计 15 / exit 0。故测试类被改名后本门禁会报 RED 而非假 GREEN | ✅ 无需改动判定逻辑；已将「该保护依赖 MTP 退出码语义、换运行器须重测」写成 `guard.cs` 内的约束注释 |
 
 ---
 
