@@ -26,31 +26,45 @@
 
 ## 门禁阈值
 
-- **全局行覆盖率不低于 65%**（阈值口径：2026-07-30 基线 67.9% - 3% 缓冲）。
+- **全局行覆盖率不低于 70%**（阈值口径：2026-09-14 实测基线 72.98% − 3% 缓冲，
+  取整 0.70；沿用项目原始设计原则「基线 − 3pp」）。
   实现脚本为 **`scripts/ci-coverage.cs`**（2026-09-11 由 `ci-coverage.sh` 迁移为
   C# file-based app）：build → 逐项目 `test --coverage` → ReportGenerator 合并 →
   解析合并 Cobertura 的 `line-rate` → 低于阈值退出 1（fail-closed）。阈值可经
-  `COVERAGE_THRESHOLD` 环境变量覆盖；脚本自带 `--selftest`。
+  `COVERAGE_THRESHOLD` 环境变量覆盖；脚本自带 `--selftest`（11 例）。
 
-  **状态（2026-09-13 实测修订）**：脚本**就绪但未接入 CI**——`.github/workflows/`
-  中 grep `coverage` 零命中。此前本行表述为「已自动化」，与实际不符（脚本可运行
-  ≠ 门禁在运行），已按实测改写。接线未完成的**两个具体阻塞**（非仅"耗时长"）：
+  **状态（2026-09-14 已接线）**：`ci.yml` 新增独立 **`coverage` job**（与
+  `aot-verify`/`dialect-probe` 同构，并行、失败域隔离；不放 `build-and-test` 内是
+  因为覆盖率需完整再跑一遍测试，放进主 job 会把关键路径拉长近一倍）。job 内先
+  `dotnet tool restore`（`reportgenerator` 由 `.config/dotnet-tools.json` 钉 5.5.11
+  ——该工具此前 CI 从未还原过，是接线的隐藏前置）。
 
-  1. **本机无法产出全局数字**：`PalDDD.PalORM.Tests` 的 46 项多方言测试要求
-     Testcontainers（`MultiDialectFixture.EnsureTestcontainersRequired`，
-     `test/PalDDD.PalORM.Tests/MultiDialectFixture.cs:92`），本机 Docker 不可用 →
-     脚本在该项目处中断，实测仅 **12/16** 测试项目产出 cobertura。全局 line-rate
-     **本机不可测**。
-  2. **阈值口径未重测**：0.65 锚定 2026-07-30 的 67.9%（见本文首部说明），而项目
-     此后已增长到 37 个 src 项目 / 16 个测试项目。阈值现在可能**恒真**（实际远高于
-     0.65，门禁永不触发）或**恒假**（实际低于 0.65，接上即全红），两种情况都不可
-     直接上线。
+  **阈值校准依据（2026-09-14 实测）**：用 `dotnet test <proj> --coverage
+  --coverage-output-format cobertura` 逐项目产出 16 份 cobertura（含 4 个此前从未
+  跑到的项目：Projections.EventLog / Repository.EFCore / Serialization / Transactions
+  ——经查它们均不依赖 Testcontainers，故本机可跑），然后按 **(文件, 行号) 取并集**
+  计算（等价 ReportGenerator 的合并语义，不能简单相加各文件 line-rate——各次插桩的
+  `lines-valid` 从 1578 到 10371 不等，只覆盖该测试项目加载到的装配集）：
 
-  **接线前置**（按序）：① 在具备 Docker 的环境（CI 或本地启用 Testcontainers）
-  跑一次 `dotnet run scripts/ci-coverage.cs` 取真实 line-rate；② 依据实测值重新
-  校准阈值（并记录取值依据）；③ 在 `ci.yml` 的 `build-and-test` job 追加覆盖率
-  步骤；④ 同提交更新本行状态与 `AGENTS.md` §2 门禁表。
-  在①完成前**不得接线**——否则是为过门禁而调门禁。
+  | 口径 | 值 |
+  |------|-----|
+  | 16/16 项目并集 | **72.98%**（13146 / 18013 行） |
+  | 12/16 项目并集（未补 4 项时） | 66.85%（11881 / 17773） |
+  | 2026-07-30 旧基线 | 67.9% |
+  | 旧阈值 0.65 | 余量约 8pp → 失去早期预警意义 |
+
+  该 72.98% 是**下界**：其中 `PalDDD.PalORM.Tests` 因本机无 Docker（Docker 未安装，
+  非未启动）有 46 项多方言测试未跑完（`MultiDialectFixture.EnsureTestcontainersRequired`
+  按设计对未启用 Testcontainers 的情况抛异常而非静默跳过），CI 上这 46 项会跑，
+  数字会更高。
+
+  **⚠️ 复校准触发**：首次 `coverage` job 运行会给出含 Docker 的完整值（预期 ≥ 0.73）。
+  届时按实测值重校准阈值并同步本表——不要在未读 CI 数字前继续上调。
+
+  **本机限制（已知，非缺陷）**：无 Docker 的机器上 `dotnet run scripts/ci-coverage.cs`
+  会在 `PalDDD.PalORM.Tests` 处中断（该项目的多方言测试要求 Testcontainers）。
+  本地想要完整数字：装 Docker 后设 `PALDDD_TEST_PG=1` / `PALDDD_TEST_MYSQL=1`，
+  或按上表的分步方法只补跑缺失项目再取并集。
 
 - **单模块不允许从当前值下降超过 5%**——未自动化（需逐模块基线快照），靠评审轮人工
   核对上表。自动化的可行路径：`scripts/ci-coverage.cs` 已逐项目产出

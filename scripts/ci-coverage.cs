@@ -8,7 +8,7 @@
 //   dotnet run scripts/ci-coverage.cs -- --selftest 自测：XML 解析 + 阈值路由
 //       单元验证（构造最小 Cobertura XML，不真跑 dotnet coverage）
 //
-// 环境变量：COVERAGE_THRESHOLD——全局行覆盖率阈值（默认 0.65，本地放宽/CI 收紧）
+// 环境变量：COVERAGE_THRESHOLD——全局行覆盖率阈值（默认 0.70，本地放宽/CI 收紧）
 // 产物：TestResults/coverage.<项目名>.cobertura.xml + TestResults/coverage-report/
 // 退出码：0=门禁通过；1=阈值未达/合并报告缺失/解析失败（fail-closed）；
 //         子命令（build/test/restore/合并）失败时透传其退出码（set -e 语义）。
@@ -51,7 +51,7 @@ if (args.Contains("--selftest"))
     return SelfTest();
 }
 
-// 阈值可被环境变量覆盖（本地放宽/CI 收紧）——与原脚本 ${COVERAGE_THRESHOLD:-0.65} 一致
+// 阈值可被环境变量覆盖（本地放宽/CI 收紧）——与原脚本 ${COVERAGE_THRESHOLD:-0.70} 一致
 var (thresholdRaw, threshold) = ReadThreshold();
 if (threshold is null)
 {
@@ -142,11 +142,18 @@ static List<string> FindTestProjects() =>
         .OrderBy(p => p, StringComparer.Ordinal)
         .ToList();
 
-// ─── 阈值读取：环境变量覆盖 + 默认 0.65；非数字返回 null（fail-closed）───
+// ─── 阈值读取：环境变量覆盖 + 默认 0.70；非数字返回 null（fail-closed）───
+// 2026-09-14 由 0.65 上调至 0.70：阈值口径沿用项目原始设计原则「基线 − 3pp 缓冲」，
+// 而原值 0.65 锚定的是 2026-07-30 基线 67.9%（67.9 − 3 ≈ 65）。2026-09-14 实测
+// 16/16 测试项目并集行覆盖率 **72.98%**（13146/18013，Debug 插桩；该值为**下界**——
+// 其中 PalORM.Tests 因本机无 Docker 有 46 项未跑完，CI 上会更高），按同一原则取 0.70。
+// 原 0.65 在新基线下留有约 8pp 余量，等于要一次掉 8 个百分点才触发，已失去早期预警意义。
+// ⚠️ 复校准触发：首次 CI 运行会给出含 Docker 的 16 项目完整值，届时按其值重校准
+// （预期 ≥ 0.73），并同步 docs/test-coverage-baseline.md §门禁阈值。
 static (string Raw, double? Value) ReadThreshold()
 {
     var raw = Environment.GetEnvironmentVariable("COVERAGE_THRESHOLD");
-    if (string.IsNullOrEmpty(raw)) raw = "0.65";
+    if (string.IsNullOrEmpty(raw)) raw = "0.70";
     return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
         ? (raw, value)
         : (raw, null);
@@ -217,9 +224,9 @@ static int SelfTest()
 
         // 用例 6：阈值判定语义（awk a<b 的等价 double 比较：低于才 FAIL，等于通过）
         var rate = double.Parse("0.72", NumberStyles.Float, CultureInfo.InvariantCulture);
-        Case("0.72 >= 0.65 判定通过", !(rate < 0.65));
-        Case("0.50 < 0.65 判定失败", double.Parse("0.50", NumberStyles.Float, CultureInfo.InvariantCulture) < 0.65);
-        Case("0.65 == 0.65 边界通过", !(0.65 < 0.65));
+        Case("0.72 >= 0.70 判定通过", !(rate < 0.70));
+        Case("0.50 < 0.70 判定失败", double.Parse("0.50", NumberStyles.Float, CultureInfo.InvariantCulture) < 0.70);
+        Case("0.70 == 0.70 边界通过", !(0.70 < 0.70));
 
         // 用例 7：阈值环境变量路由
         Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", "0.9");
@@ -227,7 +234,7 @@ static int SelfTest()
         Case("环境变量覆盖阈值 0.9", raw1 == "0.9" && v1 == 0.9);
         Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", null);
         var (raw2, v2) = ReadThreshold();
-        Case("缺省阈值 0.65", raw2 == "0.65" && v2 == 0.65);
+        Case("缺省阈值 0.70", raw2 == "0.70" && v2 == 0.70);
         Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", "abc");
         var (raw3, v3) = ReadThreshold();
         Case("非法阈值 fail-closed", raw3 == "abc" && v3 is null);

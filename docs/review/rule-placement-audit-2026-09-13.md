@@ -89,8 +89,8 @@
 
 | 项 | 阻塞 | 解锁条件 |
 |---|---|---|
-| 覆盖率门禁接入 CI | 阈值未校准：本机 Docker 不可用 → 多方言测试失败 → 全局 line-rate 不可测 | 在具备 Docker 的环境跑一次 `dotnet run scripts/ci-coverage.cs` 取真实值 → 校准阈值 → 接线 → 同步三处文档 |
-| 单模块降幅门禁 | 依赖上一项（同一脚本） | 同上 |
+| 覆盖率门禁接入 CI | 无（2026-09-14 已完成） | ✅ **已完成**：阻塞原是「本机无 Docker → 多方言测试失败 → 全局 line-rate 不可测」。**解法不是装 Docker，而是换测量口径**——Docker 只挡住 `PalDDD.PalORM.Tests` 一个项目，另有 4 个项目（Projections.EventLog/Repository.EFCore/Serialization/Transactions）此前因脚本在该项目处中断而**从未跑到**，经查它们均不依赖 Testcontainers，遂本地补跑并产出其 cobertura，再按 **(文件, 行号) 取并集**（等价 ReportGenerator 合并语义；各文件 `lines-valid` 1578–10371 不等，不能简单相加）算出 **16/16 项目 72.98%**（下界，PalORM 的 46 项未跑完）。阈值按项目原始原则「基线 − 3pp」由 0.65 校准为 **0.70**，`ci.yml` 新增独立 `coverage` job（并行、失败域隔离，避免主 job 关键路径翻倍），并要求先 `dotnet tool restore`——`reportgenerator` 是接线的隐藏前置，CI 此前从未还原过它。另记录复校准触发：首次 CI 运行给出含 Docker 的完整值后按其值重校准 |
+| 单模块降幅门禁 | 依赖上一项（同一脚本） | ⏳ 上一项已解（同脚本已接线），本项仍未实现。可行路径不变：`ci-coverage.cs` 已逐项目产出 cobertura，可解析各文件 `line-rate` 与基线表比对 |
 | `AotSample` 纳入 CI AOT 矩阵 | 无（已完成） | ✅ **已完成**：本地 win-x64 等价形式 `dotnet publish -p:PublishAot=true` 实测通过（输出 `Generating native code`、产物仅 native exe 无托管 dll、实跑 exit 0 含 CQRS AOT 值类型管道检查），CI 已补 3 步（`aot-verify` job）。覆盖缺口：PalOrmSample 直接引用仅 PalORM.Sqlite，AotSample 引用 Core/Serialization/Transactions/CQRS/DI，二者不重叠 |
 | ~~12 个 src 项目未声明 `IsAotCompatible`~~ **【本项已证伪，见 §七】** | 初审仅 grep 各 csproj 的显式声明，得出「24 声明 / 12 未声明」 | ❌ **假阳性**：根 `Directory.Build.props:46-48` 全局设 `IsAotCompatible=true` / `IsTrimmable=true` / `VerifyReferenceAotCompatibility=true`，未显式声明的项目**继承生效值 true**（`dotnet build -getProperty:IsAotCompatible` 对 `PalDDD.Core` 实测返回 `true`）。且该设计由 `ArchitectureBoundaryTests.CoreProjects_EnableAotReferenceVerification` 断言守护 | ✅ 无需动作；已改为「静态声明计数 ≠ 生效值」的教训（§七） |
 | `docs/` 54 处会话相对表述 | 追溯改写成本高、收益低 | 归档整理时按 `NAMING.md` §七 对照表改写 |

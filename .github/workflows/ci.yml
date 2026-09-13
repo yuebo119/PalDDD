@@ -184,6 +184,39 @@ jobs:
       - name: Run AOT-published binary (AotSample)
         run: ./samples/PalDDD.AotSample/bin/Release/net11.0/linux-x64/publish/PalDDD.AotSample
 
+  coverage:
+    # 2026-09-14 接线——此前 `scripts/ci-coverage.cs` 是「脚本就绪但未接线」的已知缺口。
+    # 接线门槛是阈值校准：原 0.65 锚定 2026-07-30 基线 67.9%（67.9 − 3 ≈ 65），与当前
+    # 实际脱节。本次实测 16/16 测试项目并集行覆盖率 **72.98%**（13146/18013，Debug 插桩；
+    # 为下界——PalORM.Tests 仅本机因无 Docker 有 46 项未跑完，CI 上更高），按项目原始
+    # 原则「基线 − 3pp 缓冲」校准阈值为 0.70（见 scripts/ci-coverage.cs ReadThreshold 注释）。
+    # 独立 job 而非 build-and-test 内的一步：覆盖率需完整再跑一遍测试，放进主 job 会把
+    # 关键路径拉长近一倍；独立 job 与 aot-verify / dialect-probe 同构——并行且失败域隔离。
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '11.0.x'
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/Directory.Packages.props', '**/Directory.Build.props') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Restore tools（reportgenerator 由 .config/dotnet-tools.json 钉 5.5.11）
+        # 覆盖率脚本用 `dotnet tool run reportgenerator` 合并 Cobertura；该工具此前 CI 从未还原
+        run: dotnet tool restore
+
+      - name: Coverage gate
+        run: dotnet run scripts/ci-coverage.cs
+
   dialect-probe:
     # unified v2.0 Phase 2a：方言实测防线固化——断言 × PG/MySQL 从"本机可选跑"升 CI 必跑。
     # MIG-001（2026-09-11）：bash 探针脚本（双副本）转正为 DialectProbeTests——
