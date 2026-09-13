@@ -100,4 +100,6 @@ public sealed class SqliteDateTimeOffsetTypeHandler : SqlMapper.TypeHandler<Date
             _ => throw new InvalidCastException($"Cannot convert {value.GetType()} to DateTimeOffset")
         };
     }
+
 }
+

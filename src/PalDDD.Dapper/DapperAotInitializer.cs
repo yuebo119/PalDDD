@@ -28,32 +28,30 @@ using System.Diagnostics.CodeAnalysis;
 using Dapper;
 using PalUlid = ByteAether.Ulid.Ulid;
 
-// 🔧 启用前置清单见文件头（核心项：调用点 CommandDefinition→直接重载，ct 收缩已裁决）
-// [module: DapperAot]
+// 🔬 实验分支（experiment/dapper-aot-full）：全量启用——调用点已全部改直接重载（34 处，
+//    ct 收缩为实验目的显式接受），声明式 TypeHandler 接管，运行时注册退役。
+[module: DapperAot]
 
-// 声明式 TypeHandler（1.1.0 特性）：未启用 DapperAot 时不被消费（探针实证无效无害）；
-// 启用后生成代码据此绑定，替代全局运行时注册（DAP053 指导口径）。
+// 声明式 TypeHandler（1.1.0 特性）：启用后生成代码据此绑定（DAP053 指导口径），
+// 经典 SqlMapper.TypeHandler<T> 经 shim 消费，基类无需迁移。
 [assembly: Dapper.TypeHandler(typeof(PalUlid), typeof(global::PalDDD.Dapper.SqliteUlidTypeHandler))]
 [assembly: Dapper.TypeHandler(typeof(Guid), typeof(global::PalDDD.Dapper.SqliteGuidTypeHandler))]
 [assembly: Dapper.TypeHandler(typeof(DateTimeOffset), typeof(global::PalDDD.Dapper.SqliteDateTimeOffsetTypeHandler))]
 
 namespace PalDDD.Dapper;
 
-/// <summary>Dapper.AOT 编译时 TypeHandler 注册 + AOT 参数适配器</summary>
+/// <summary>Dapper.AOT 全局状态初始化（AOT 模式下仅列名映射，TypeHandler 走声明式）</summary>
 internal static class DapperAotInitializer
 {
     [SuppressMessage("Usage", "CA2255",
-        Justification = "Dapper.AOT 源生成器需要编译时可见的 TypeHandler 注册。模块初始化器确保在首次 Dapper 查询前完成注册。")]
+        Justification = "snake_case 列名映射是绕过 DI 直连构造场景的必要全局状态，模块初始化器保证直连构造自足。")]
     [ModuleInitializer]
     public static void Initialize()
     {
-        SqlMapper.AddTypeHandler(new SqliteUlidTypeHandler());
-        SqlMapper.AddTypeHandler(new SqliteGuidTypeHandler());
-        SqlMapper.AddTypeHandler(new SqliteDateTimeOffsetTypeHandler());
-        // P2 修复（十一轮·实测发现）：snake_case 列名 → PascalCase 属性映射是 Store 层
-        // 正确性的必要全局状态，此前只在 DI 注册路径（DapperServiceCollectionExtensions）
-        // 与测试夹具设置——绕过 DI 直连构造（公共构造签名显式支持）时字符串列静默映射为空。
-        // 与 TypeHandler 同级放 ModuleInitializer，直连构造自足；DI/测试路径重复设置幂等。
+        // 运行时 TypeHandler 注册已退役（声明式 [Dapper.TypeHandler] 接管，见上）。
+        // P2 修复（十一轮·实测发现）保留：snake_case 列名 → PascalCase 属性映射——
+        // ⚠️ 实验验证点：经典 Dapper 消费此全局设置；AOT 生成 RowFactory 是否同样尊重
+        // 尚未实证（snake_case 测试若红即命中此风险，处置见实验报告）。
         global::Dapper.DefaultTypeMap.MatchNamesWithUnderscores = true;
     }
 
