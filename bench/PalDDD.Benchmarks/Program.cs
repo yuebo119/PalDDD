@@ -1,9 +1,5 @@
-using BenchmarkDotNet.Configs;
 using PalDDD.Benchmarks;
-using BenchmarkDotNet.Environments;
-using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Running;
-using BenchmarkDotNet.Validators;
 using PalDDD.Core;
 using System.Diagnostics;
 
@@ -108,7 +104,7 @@ internal static class SmokeBenchmarks
         }
     }
 
-        private sealed class SmokeOrder : AggregateRoot<Guid>
+    private sealed class SmokeOrder : AggregateRoot<Guid>
     {
         public SmokeOrder(Guid id, string name) : base(id) => CustomerName = name;
 

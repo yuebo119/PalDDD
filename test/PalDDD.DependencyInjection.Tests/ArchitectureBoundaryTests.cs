@@ -892,7 +892,8 @@ public sealed class ArchitectureBoundaryTests
     /// 被禁子串，守卫对它们是无声 no-op。
     /// </summary>
     [Test]
-    public async Task CsprojReferenceGuard_DetectsBlindSpotPackages()    {
+    public async Task CsprojReferenceGuard_DetectsBlindSpotPackages()
+    {
         const string maliciousCsproj = """
             <Project Sdk="Microsoft.NET.Sdk">
               <ItemGroup>

@@ -21,11 +21,9 @@
 using BenchmarkDotNet.Attributes;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using PalDDD.Core;
 using PalDDD.Dapper;
 using PalDDD.EventLog;
 using PalDDD.Idempotency;
-using PalDDD.PalORM;
 using PalDDD.PalORM.Sqlite;
 using PalDDD.Transactions;
 using PalORM;

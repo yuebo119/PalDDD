@@ -111,7 +111,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // 全量接管——此调用点为生成拦截器目标之一，经典反射路径不再可达，见
         // docs/review/dapper-aot-experiment-2026-09-13.md）。
         var messages = await conn.QueryAsync<OutboxMessage>(
-            
+
                 SqlTemplates.OutboxSelectPending,
                 new { status = StatusPending, now = ToTimeParam(now), maxRetryCount, n = batchSize },
                 Tx).ConfigureAwait(false);
@@ -151,7 +151,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         if (_dialect.SupportsOutboxReturning)
         {
             var msgs = await conn.QueryAsync<OutboxMessage>(
-                
+
                     // 优化（二十五轮 API 扫描 A-3）：原运行时插值 OutboxLeaseUpdate + $"({leaseSubSql}
                     // FOR UPDATE SKIP LOCKED) RETURNING *" 改为 SqlTemplates 预拼完整常量
                     // OutboxLeaseUpdatePG——消除每次租约的字符串拼接分配，且 SQL 文本稳定，
@@ -170,7 +170,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
                 ? SqlTemplates.OutboxLeaseUpdateMySql
                 : SqlTemplates.OutboxLeaseUpdateSqlite;
             await conn.ExecuteAsync(
-                
+
                     leaseSql,
                     new { owner, until = ToTimeParam(until), now = ToTimeParam(now), maxRetryCount, n = batchSize },
                     Tx).ConfigureAwait(false);
@@ -181,7 +181,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             // 属已知限制（PalORM 已声明同限制）；PG RETURNING 路径（SupportsOutboxReturning
             // 分支）按行锁语义返回刚锁定行，无此窗口。生产多实例建议用 PG 路径。
             var msgs = await conn.QueryAsync<OutboxMessage>(
-                
+
                     SqlTemplates.OutboxSelectByLease,
                     new { owner, until = ToTimeParam(until) },
                     Tx).ConfigureAwait(false);
@@ -328,7 +328,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // P3 修复（八轮评审）：ExecuteAsync 改 CommandDefinition 传 ct——原重载不接收取消令牌，
         // 取消信号在 RequeueDead 执行阶段不可传递；EnsureOpenAsync(ct) 此前已传。
         return await conn.ExecuteAsync(
-            
+
                 SqlTemplates.OutboxRequeueDead,
                 new { audit, next = ToTimeParam(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(messageId) },
                 Tx).ConfigureAwait(false);

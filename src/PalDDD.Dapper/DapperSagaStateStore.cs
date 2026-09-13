@@ -170,7 +170,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         if (existing is not null)
         {
             var rows = await conn.ExecuteAsync(
-                
+
                     // P1 修复（十一轮·实测发现）：PG 的 saga_data JSONB 列需显式 CAST（text→jsonb 无赋值转换）
                     _dbType == DapperDbType.PostgreSql ? SqlTemplates.SagaUpdatePG : SqlTemplates.SagaUpdate,
                     new
@@ -200,7 +200,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         try
         {
             inserted = await conn.ExecuteAsync(
-                
+
                     // P1 修复（十一轮·实测发现）：PG 的 saga_data JSONB 列需显式 CAST（text→jsonb 无赋值转换）
                     _dbType == DapperDbType.PostgreSql ? SqlTemplates.SagaInsertPG : SqlTemplates.SagaInsert,
                     new

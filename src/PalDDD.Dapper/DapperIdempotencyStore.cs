@@ -171,8 +171,12 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         affected = await _connection.ExecuteAsync(reclaimCasSql,
             new
             {
-                OperationName = operationName, Key = key, Status = statusProcessing,
-                LockedUntil = ToTimeParam(lockedUntil), ExpiresAt = ToTimeParam(expiresAt), UpdatedAt = ToTimeParam(now),
+                OperationName = operationName,
+                Key = key,
+                Status = statusProcessing,
+                LockedUntil = ToTimeParam(lockedUntil),
+                ExpiresAt = ToTimeParam(expiresAt),
+                UpdatedAt = ToTimeParam(now),
                 ExpectedRevision = existing.Revision,
                 Completed = (int)IdempotencyRecordStatus.Completed
             },
@@ -236,9 +240,13 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         var affected = await _connection.ExecuteAsync(sql,
             new
             {
-                OperationName = record.OperationName, Key = record.Key,
-                Status = statusFailed, UpdatedAt = failedAt, Error = reason,
-                ExpectedRevision = record.Revision, Completed = statusCompleted
+                OperationName = record.OperationName,
+                Key = record.Key,
+                Status = statusFailed,
+                UpdatedAt = failedAt,
+                Error = reason,
+                ExpectedRevision = record.Revision,
+                Completed = statusCompleted
             },
             Tx).ConfigureAwait(false);
         if (affected > 0)
@@ -264,7 +272,7 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         => value == default ? value : DateTime.SpecifyKind(value.DateTime, DateTimeKind.Utc);
 
 
-/// <summary>Dapper 物化 DTO（public setters 供 Dapper 映射——非领域实体）。
+    /// <summary>Dapper 物化 DTO（public setters 供 Dapper 映射——非领域实体）。
     /// CA1812 抑制：实例化由 Dapper 内部反射完成，编译器不可见。</summary>
     [SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes",
         Justification = "Dapper QueryFirstOrDefaultAsync<T> 通过 AOT 拦截器/物化管线实例化此 DTO，编译器不可见。")]

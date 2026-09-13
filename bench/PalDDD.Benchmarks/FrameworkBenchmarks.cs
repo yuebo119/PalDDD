@@ -62,7 +62,7 @@ public class EntityDomainEventBenchmarks
         return order.HasDomainEvents ? 1 : 0;
     }
 
-        private sealed class Order : AggregateRoot<Guid>
+    private sealed class Order : AggregateRoot<Guid>
     {
         public Order(Guid id, string name) : base(id) => CustomerName = name;
 
