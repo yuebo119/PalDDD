@@ -89,7 +89,7 @@
 | 覆盖率门禁接入 CI | 阈值未校准：本机 Docker 不可用 → 多方言测试失败 → 全局 line-rate 不可测 | 在具备 Docker 的环境跑一次 `dotnet run scripts/ci-coverage.cs` 取真实值 → 校准阈值 → 接线 → 同步三处文档 |
 | 单模块降幅门禁 | 依赖上一项（同一脚本） | 同上 |
 | `AotSample` 纳入 CI AOT 矩阵 | 无（已完成） | ✅ **已完成**：本地 win-x64 等价形式 `dotnet publish -p:PublishAot=true` 实测通过（输出 `Generating native code`、产物仅 native exe 无托管 dll、实跑 exit 0 含 CQRS AOT 值类型管道检查），CI 已补 3 步（`aot-verify` job）。覆盖缺口：PalOrmSample 直接引用仅 PalORM.Sqlite，AotSample 引用 Core/Serialization/Transactions/CQRS/DI，二者不重叠 |
-| 12 个 src 项目未声明 `IsAotCompatible` | 补声明会启用分析器警告，在 `TreatWarningsAsErrors` 下可能立即阻断构建，须逐项目评估 | 逐项目添加并构建验证（一次一个，避免级联） |
+| ~~12 个 src 项目未声明 `IsAotCompatible`~~ **【本项已证伪，见 §七】** | 初审仅 grep 各 csproj 的显式声明，得出「24 声明 / 12 未声明」 | ❌ **假阳性**：根 `Directory.Build.props:46-48` 全局设 `IsAotCompatible=true` / `IsTrimmable=true` / `VerifyReferenceAotCompatibility=true`，未显式声明的项目**继承生效值 true**（`dotnet build -getProperty:IsAotCompatible` 对 `PalDDD.Core` 实测返回 `true`）。且该设计由 `ArchitectureBoundaryTests.CoreProjects_EnableAotReferenceVerification` 断言守护 | ✅ 无需动作；已改为「静态声明计数 ≠ 生效值」的教训（§七） |
 | `docs/` 54 处会话相对表述 | 追溯改写成本高、收益低 | 归档整理时按 `NAMING.md` §七 对照表改写 |
 | 7 份违规命名的评审文档 | 改名会破坏既有交叉引用，属判断问题 | 维护者裁决；改名需 `grep -rn "<旧名>" docs/ README.md` 同步引用 |
 | **文档引用已不存在的 `*.sh`（本次验证期新发现）** | MIG-011/012 迁移了脚本但未全量收口文档。实测 `docs/` 中 48 行引用不存在的 `.sh`：其中 **8 行是可执行命令**（`bash scripts/xxx.sh`）、2 行历史提及（正确保留）、其余为「机制名指代」（如 pitfalls 表格里描述当前守卫）。本次已修 5 处主干（`conventions.md` ×2、`release.md` ×3、`testing.md` ×2），**未全量收口** | 剩余可执行命令集中在 `release.md:310/663/684`、`conventions.md:928/961/1037/1038`、`testing.md:475`、`pitfalls.md:139`。**建议机制化而非手改**：加一条「文档引用的脚本路径必须存在」的检查（同 `xml-guard` 形态），因为它已二次回归（`review-2026-09-11-v3.md` 曾以「MIG 迁移的姊妹同步不完整」为 P2 主题收口过一轮） |
@@ -124,3 +124,33 @@
 
 预期效果：主文件显著变短，且「哪些规则真在起作用」从无法判断变为一眼可查。
 **此为判断项，需你裁决后执行——本次未改动全局文件。**
+
+---
+
+## 七、本次审计自身的两次更正（反向失实教训）
+
+审计者也会失实。两次都在提交前被自查拦下，记录方法而非仅记录结论：
+
+### 更正 1：`IsAotCompatible` 的「未声明」是假阳性
+
+- **误判**：grep 各 `*.csproj` 的显式声明 → 「24 声明 / 12 未声明」，把后者写成缺口。
+- **实际**：根 `Directory.Build.props:46-48` 全局设 `IsAotCompatible=true` /
+  `IsTrimmable=true` / `VerifyReferenceAotCompatibility=true`；未显式声明的项目
+  **继承生效值 true**。用 `dotnet build <proj> -getProperty:IsAotCompatible`
+  对 `PalDDD.Core` 实测返回 `true`。该设计另有
+  `ArchitectureBoundaryTests.CoreProjects_EnableAotReferenceVerification` 守护。
+- **教训**：**静态声明计数 ≠ 生效值**。凡 MSBuild 属性，计数前必须用
+  `-getProperty:` 求值，或至少先查根/目录级 props 的全局设置。与
+  「负向声明不作数」同源：单一检索方法无法区分「真的没有」与「检索面不对」。
+
+### 更正 2：AOT 验证的第一次「成功」是命令错误的产物
+
+- **误判**：第一次 `dotnet publish ... /p:PublishAot=true` 报 exit 0（实为 `| tail`
+  掩码退出码），且目录中存在可运行的 `PalDDD.AotSample.exe`，一度倾向认定已通过。
+- **实际**：Git Bash 的 MSYS 把 `/p:` 路径转换为 `p:` → `MSB1008 只能指定一个项目`，
+  **发布根本没执行**；那个 exe 是此前（19:00）遗留的产物，非本次构建。
+- **更正后结论**：改用 `-p:PublishAot=true` 重跑 → 输出 `Generating native code`、
+  产物仅 native exe（4.4MB，无托管 dll）、实跑 exit 0 且含 CQRS AOT 值类型管道检查
+  → **AOT 确认通过**，AotSample 遂得以接入 CI。
+- **教训**：① 判门禁结果读输出内容，不只看退出码，更不可用管道吞掉退出码；
+  ② 目录里存在产物 ≠ 本次命令产出了它——用时间戳/清理后再跑核实归属。
