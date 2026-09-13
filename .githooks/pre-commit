@@ -33,6 +33,27 @@ if git diff --cached --name-only 2>/dev/null | grep -q '\.cs$'; then
     fi
 fi
 
+# ── 4. test-change-guard（只改测试不改 src = 改测试修绿签名；仅 test/ 的
+#       修改/删除在暂存集时触发。豁免：ALLOW_TEST_ONLY_CHANGE=1）──
+if git diff --cached --name-only --diff-filter=MDR 2>/dev/null | grep -q '^test/'; then
+    echo "🧪 test-change-guard（test/ 有改动）…"
+    if ! dotnet run scripts/test-change-guard.cs 2>&1; then
+        echo "⛔ test-change-guard 拦截——见上方豁免说明"
+        FAIL=1
+    fi
+fi
+
+# ── 5. xml-guard（XML 良构性；仅 xml 系扩展名在暂存集时触发 ~2s）──
+# 实证来源：21549d3 在 .csproj 注释写入 `--` 致全仓构建失败（MSB4025），
+# 而 secret-scan/encoding-gate/guard 均不校验 XML 合法性——该缺口由此关闭。
+if git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep -qE '\.(csproj|props|slnx|targets|xml)$'; then
+    echo "📄 xml-guard（xml 系文件有改动）…"
+    if ! dotnet run scripts/xml-guard.cs 2>&1; then
+        echo "⛔ xml-guard 拦截——XML 非良构，构建会失败"
+        FAIL=1
+    fi
+fi
+
 if [ "$FAIL" -ne 0 ]; then
     echo ""
     echo "⛔ pre-commit 拦截——跳过检查：git commit --no-verify（不推荐）"

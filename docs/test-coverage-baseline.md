@@ -26,8 +26,36 @@
 
 ## 门禁阈值
 
-- **全局行覆盖率不低于 65%**（基线 67.9% - 3% 缓冲）——已自动化：`ci-coverage.sh` 第 5 步解析合并 Cobertura 的 line-rate，低于阈值退出 1（fail-closed，评审 P1-2 修复——此前文档声称门禁但从未实现）。阈值可经 `COVERAGE_THRESHOLD` 环境变量覆盖。CI 流水线集成（ci.yml 调用）为后续项：全量覆盖率收集显著拉长流水线，需维护者裁决。
-- **单模块不允许从当前值下降超过 5%**——未自动化（需逐模块基线快照），靠评审轮人工核对上表；如需自动化需先建立模块级基线文件。
+- **全局行覆盖率不低于 65%**（阈值口径：2026-07-30 基线 67.9% - 3% 缓冲）。
+  实现脚本为 **`scripts/ci-coverage.cs`**（2026-09-11 由 `ci-coverage.sh` 迁移为
+  C# file-based app）：build → 逐项目 `test --coverage` → ReportGenerator 合并 →
+  解析合并 Cobertura 的 `line-rate` → 低于阈值退出 1（fail-closed）。阈值可经
+  `COVERAGE_THRESHOLD` 环境变量覆盖；脚本自带 `--selftest`。
+
+  **状态（2026-09-13 实测修订）**：脚本**就绪但未接入 CI**——`.github/workflows/`
+  中 grep `coverage` 零命中。此前本行表述为「已自动化」，与实际不符（脚本可运行
+  ≠ 门禁在运行），已按实测改写。接线未完成的**两个具体阻塞**（非仅"耗时长"）：
+
+  1. **本机无法产出全局数字**：`PalDDD.PalORM.Tests` 的 46 项多方言测试要求
+     Testcontainers（`MultiDialectFixture.EnsureTestcontainersRequired`，
+     `test/PalDDD.PalORM.Tests/MultiDialectFixture.cs:92`），本机 Docker 不可用 →
+     脚本在该项目处中断，实测仅 **12/16** 测试项目产出 cobertura。全局 line-rate
+     **本机不可测**。
+  2. **阈值口径未重测**：0.65 锚定 2026-07-30 的 67.9%（见本文首部说明），而项目
+     此后已增长到 37 个 src 项目 / 16 个测试项目。阈值现在可能**恒真**（实际远高于
+     0.65，门禁永不触发）或**恒假**（实际低于 0.65，接上即全红），两种情况都不可
+     直接上线。
+
+  **接线前置**（按序）：① 在具备 Docker 的环境（CI 或本地启用 Testcontainers）
+  跑一次 `dotnet run scripts/ci-coverage.cs` 取真实 line-rate；② 依据实测值重新
+  校准阈值（并记录取值依据）；③ 在 `ci.yml` 的 `build-and-test` job 追加覆盖率
+  步骤；④ 同提交更新本行状态与 `AGENTS.md` §2 门禁表。
+  在①完成前**不得接线**——否则是为过门禁而调门禁。
+
+- **单模块不允许从当前值下降超过 5%**——未自动化（需逐模块基线快照），靠评审轮人工
+  核对上表。自动化的可行路径：`scripts/ci-coverage.cs` 已逐项目产出
+  `TestResults/coverage.<项目名>.cobertura.xml`，可解析各文件 `line-rate` 与本表
+  基线比对，缺基线项（新增模块）按"建立基线"处理而非判失败。
 
 ## 覆盖率低的已知原因（非缺陷）
 
