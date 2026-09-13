@@ -39,6 +39,8 @@
 
 - **`scripts/gate-audit.cs` 矩阵判定三处改进**：① **未接线脚本分类化**——此前对一切未接线者判「OBSERVE 未接线——永远不触发」，实测 17 个中 **16 个是按设计手工调用的工具**（`review-snapshot` 供评审粘贴输出、`fix-completeness` 修复提交前跑、`gate-audit` 自身按需跑等），一律报成问题属虚假告警；现改为五态 `OK`/`UNVERIFIED`/`TOOL`/`UNWIRED-GATE`/`REVIEW`，逐条登记工具理由，**17 个告警收敛为 1 个真缺口**（`ci-coverage`）。② **`REVIEW` 桶**：未接线且未登记者单列，使新增脚本必须被显式归类（不放过）。③ 判定抽为纯函数 `ClassifyVerdict` 并补 7 例自测（含「已接线时分类标记不改变结论」的两条边界）。自测 12/12
 
+- **`scripts/verify-conventions.cs` 新增 V10「文档内部链接必须可解析」**（机械化一类此前无守护的缺陷）：实测来源——`docs/review/action-items-2026-09-13-v5.md` 引用 `review-2026-09-13-full-v5.md` 而该文件不存在。深查后**根因是文件名有误而非链接有误**：该文档标题为「第五轮全仓运行（2026-09-13）」、报告编号 `REVIEW-2026-09-13-V5`、基线 `4e53622`，均指 09-13，而同系列 v2/v3/v4 都满足「文件名日期 == 内容日期」，v5 是唯一破例。已 `git mv` 改名为 `review-2026-09-13-full-v5.md` 并同步引用处（全仓仅 NAMING 债务表一处），断链归零。V10 精度经首版教训修正：只查**以 `.md` 结尾**的目标（天然排除项目里 `[事实](代码可查)` 这类证据标注，无需维护排除清单），且按**所在文件目录**解析相对路径（首版按仓库根解析产生 12 条误报）。自测 20 例含 8 条 V10 用例，经变异验证可红（去掉 `.md` 限定 → 18/20）
+
 ### Changed 变更
 
 - **CI `aot-verify` job 扩为双 sample**：原仅 `PalOrmSample`（直接引用仅 `PalORM.Sqlite`，即只覆盖 PalORM 一条栈）。新增 `AotSample` 的 restore/publish/run 三步——其引用 Core/Serialization/Transactions/CQRS/DependencyInjection 五个主干项目，与前者引用图不重叠。此前主干项目的 AOT 运行时安全无 CI 守卫（`docs/release.md` 自述 AotSample 为「手动 AOT 验证示例」）。本地等价形式（win-x64）已实测：输出 `Generating native code`、产物仅 native exe（无托管 dll）、实跑 exit 0 且含 CQRS AOT 值类型管道检查通过

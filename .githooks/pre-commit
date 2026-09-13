@@ -24,7 +24,7 @@ if ! dotnet run scripts/encoding-gate.cs 2>&1; then
     FAIL=1
 fi
 
-# ── 3. guard.cs（7 道守卫 ~22s，仅 .cs 在暂存集时触发——纯文档提交不耗时）──
+# ── 3. guard.cs（8 道守卫 ~22s，仅 .cs 在暂存集时触发——纯文档提交不耗时）──
 if git diff --cached --name-only 2>/dev/null | grep -q '\.cs$'; then
     echo "🛡 guard.cs（.cs 在暂存集）…"
     if ! dotnet run scripts/guard.cs 2>&1; then
