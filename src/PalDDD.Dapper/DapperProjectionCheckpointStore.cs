@@ -47,7 +47,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         ValidateKeyParts(projectionName, sourceName, position);
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
         return await connection.QueryFirstOrDefaultAsync<ProjectionCheckpointRow>(
-            
+
                 SelectOne,
                 new { projectionName, sourceName, position },
                 Tx).ConfigureAwait(false) is { } row
@@ -85,7 +85,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         try
         {
             inserted = await connection.ExecuteAsync(
-                
+
                     _insertSql,
                     new { projectionName, sourceName, position, status = ProjectionCheckpointStatus.Processing, startedAt = ToTimeParam(startedAt), leaseUntil = ToTimeParam(leaseUntil) },
                     Tx).ConfigureAwait(false);
@@ -114,7 +114,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
             return null;
 
         var rows = await connection.ExecuteAsync(
-            
+
                 MarkProcessing,
                 new
                 {
@@ -142,7 +142,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         ArgumentNullException.ThrowIfNull(checkpoint);
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
         var rows = await connection.ExecuteAsync(
-            
+
                 MarkCompleted,
                 new
                 {
@@ -178,7 +178,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
 
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
         var rows = await connection.ExecuteAsync(
-            
+
                 MarkFailed,
                 new
                 {
@@ -205,7 +205,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
 
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
         await connection.ExecuteAsync(
-            
+
                 Reset,
                 new { projectionName, sourceName },
                 Tx).ConfigureAwait(false);
@@ -254,7 +254,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         return false;
     }
 
-/// <summary>
+    /// <summary>
     /// P2 修复（ToMySqlParameter 接线补齐）：按方言选择时间参数格式。
     /// <para>
     /// P2/P3 修复（十七轮）：返回 <c>object</c>（DateTimeOffset 装箱一次）是刻意的收口防线——

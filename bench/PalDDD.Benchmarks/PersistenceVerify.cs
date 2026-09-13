@@ -20,14 +20,9 @@
 // 运行:dotnet run --project bench/PalDDD.Benchmarks -c Release -- --verify-persist
 // 退出码:0=全绿,1=有红。
 
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using PalDDD.Benchmarks;
-using PalDDD.Core;
 using PalDDD.Dapper;
-using PalDDD.EventLog;
 using PalDDD.Idempotency;
-using PalDDD.PalORM;
 using PalDDD.PalORM.Sqlite;
 using PalORM;
 using PalORM.Sqlite;

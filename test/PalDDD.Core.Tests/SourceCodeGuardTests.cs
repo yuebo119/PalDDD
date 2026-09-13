@@ -245,9 +245,9 @@ public sealed class SourceCodeGuardTests
                 {
                     Name.Identifier.ValueText: "GetResult",
                     Expression: InvocationExpressionSyntax
-                {
-                    Expression: MemberAccessExpressionSyntax { Name.Identifier.ValueText: "GetAwaiter" },
-                }
+                    {
+                        Expression: MemberAccessExpressionSyntax { Name.Identifier.ValueText: "GetAwaiter" },
+                    }
                 };
 
                 if (!(isWait || isGetResult)) continue;

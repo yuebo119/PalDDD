@@ -5,7 +5,6 @@ using MySqlConnector;
 using Npgsql;
 using PalDDD.Dapper;
 using PalDDD.EventLog;
-using PalDDD.Projections;
 using PalDDD.Testing;
 using PalDDD.Transactions;
 using Testcontainers.MySql;
@@ -187,8 +186,14 @@ public sealed class DialectProbeTests
         var store = new DapperOutboxStore(conn, dbType, timeProvider: clock);
         var msg = new OutboxMessage
         {
-            Type = "probe.event.v1", Payload = [1, 2, 3], ContentType = "application/json", SchemaVersion = 1,
-            CorrelationId = Ulid.New(), CausationId = Ulid.New(), TraceParent = "00-abc-def-01", TraceState = "probe=1",
+            Type = "probe.event.v1",
+            Payload = [1, 2, 3],
+            ContentType = "application/json",
+            SchemaVersion = 1,
+            CorrelationId = Ulid.New(),
+            CausationId = Ulid.New(),
+            TraceParent = "00-abc-def-01",
+            TraceState = "probe=1",
         };
         store.AddMessage(msg);
 
@@ -326,8 +331,12 @@ public sealed class DialectProbeTests
         await uow.BeginTransactionAsync(default);
         store.AddMessage(new OutboxMessage
         {
-            Type = "probe.ambienttx.v1", Payload = [9], ContentType = "application/json", SchemaVersion = 1,
-            CorrelationId = Ulid.New(), CausationId = Ulid.New(),
+            Type = "probe.ambienttx.v1",
+            Payload = [9],
+            ContentType = "application/json",
+            SchemaVersion = 1,
+            CorrelationId = Ulid.New(),
+            CausationId = Ulid.New(),
         });
         await uow.RollbackAsync(default);
 
