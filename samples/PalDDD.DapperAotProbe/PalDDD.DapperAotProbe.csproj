@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 🔬 实验分支专用：Dapper 栈 AOT 全链路探针（experiment/dapper-aot-full）
+         用途：dotnet publish -r win-x64 /p:PublishAot=true 后实跑，
+         验证 [module: DapperAot] 拦截器接管下 Outbox/EventLog/Idempotency/Saga 全 CRUD 正确。
+         不在 csproj 固定 PublishAot=true（同 PalOrmSample ITM-157 口径——避免 dotnet build 触发）。 -->
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PalDDD.DapperAotProbe</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <!-- IL2104/IL3053:上游 Dapper 2.1.79 程序集自带 trim/AOT 注解警告（其经典路径代码被 ILC 扫到），
+         本探针调用点已全量走拦截器，运行时正确性由实跑判定——与 PalDDD.Dapper NoWarn IL3058 同口径 -->
+    <NoWarn>$(NoWarn);CA1303;CA2254;IL3058;IL2104;IL3053</NoWarn>
+    <InterceptorsPreviewNamespaces>$(InterceptorsPreviewNamespaces);Dapper.AOT</InterceptorsPreviewNamespaces>
+    <InterceptorsNamespaces>$(InterceptorsNamespaces);Dapper.AOT</InterceptorsNamespaces>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <ProjectReference Include="..\..\src\PalDDD.Dapper\PalDDD.Dapper.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Idempotency\PalDDD.Idempotency.csproj" />
+  </ItemGroup>
+
+</Project>

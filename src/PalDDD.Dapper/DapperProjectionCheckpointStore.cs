@@ -47,11 +47,10 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         ValidateKeyParts(projectionName, sourceName, position);
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
         return await connection.QueryFirstOrDefaultAsync<ProjectionCheckpointRow>(
-            new CommandDefinition(
+            
                 SelectOne,
                 new { projectionName, sourceName, position },
-                Tx,
-                cancellationToken: ct)).ConfigureAwait(false) is { } row
+                Tx).ConfigureAwait(false) is { } row
             ? row.ToCheckpoint()
             : null;
     }
@@ -86,11 +85,10 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         try
         {
             inserted = await connection.ExecuteAsync(
-                new CommandDefinition(
+                
                     _insertSql,
                     new { projectionName, sourceName, position, status = ProjectionCheckpointStatus.Processing, startedAt = ToTimeParam(startedAt), leaseUntil = ToTimeParam(leaseUntil) },
-                    Tx,
-                    cancellationToken: ct)).ConfigureAwait(false);
+                    Tx).ConfigureAwait(false);
         }
         catch (DbException ex) when (_dbType == DapperDbType.MySql && IsUniqueConstraintViolation(ex))
         {
@@ -116,7 +114,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
             return null;
 
         var rows = await connection.ExecuteAsync(
-            new CommandDefinition(
+            
                 MarkProcessing,
                 new
                 {
@@ -127,8 +125,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                     leaseUntil = ToTimeParam(leaseUntil),
                     revision = existing.Revision
                 },
-                Tx,
-                cancellationToken: ct)).ConfigureAwait(false);
+                Tx).ConfigureAwait(false);
 
         if (rows == 0)
             return null;
@@ -145,7 +142,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         ArgumentNullException.ThrowIfNull(checkpoint);
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
         var rows = await connection.ExecuteAsync(
-            new CommandDefinition(
+            
                 MarkCompleted,
                 new
                 {
@@ -155,8 +152,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                     completedAt = ToTimeParam(completedAt),
                     checkpoint.Revision
                 },
-                Tx,
-                cancellationToken: ct)).ConfigureAwait(false);
+                Tx).ConfigureAwait(false);
         // P2 修复：乐观并发（WHERE revision=@revision）冲突时 rows=0，DB 状态未变——
         // 不再无条件变更本地对象，避免调用方误以为落库成功（对齐 EFCore 版 detach 语义）
         if (rows > 0)
@@ -182,7 +178,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
 
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
         var rows = await connection.ExecuteAsync(
-            new CommandDefinition(
+            
                 MarkFailed,
                 new
                 {
@@ -193,8 +189,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                     error = failureReason,
                     checkpoint.Revision
                 },
-                Tx,
-                cancellationToken: ct)).ConfigureAwait(false);
+                Tx).ConfigureAwait(false);
         // P2 修复：同 MarkCompletedAsync——并发冲突（rows=0）时不变更本地对象
         if (rows > 0)
             checkpoint.MarkFailed(failureReason, failedAt);
@@ -210,14 +205,56 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
 
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
         await connection.ExecuteAsync(
-            new CommandDefinition(
+            
                 Reset,
                 new { projectionName, sourceName },
-                Tx,
-                cancellationToken: ct)).ConfigureAwait(false);
+                Tx).ConfigureAwait(false);
     }
 
+
     /// <summary>
+    /// 三十八轮 P1 回归修复：判定异常是否为唯一约束冲突（MySQL 1062/1586、PG 23505、SQLite UNIQUE）。
+    /// 仅捕获重复键——其他错误原样上抛。与 DapperInboxStore/DapperEventLog 同型
+    /// （含 SqlServer 2601/2627 分支——v19 B5 勘正：原称"不含"与代码矛盾，分支为跨 provider 鸭子类型防御性保留，与 SagaStateStore 口径统一）。
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075:This",
+        Justification = "Provider 异常鸭子类型判定。裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级）。")]
+    private static bool IsUniqueConstraintViolation(Exception exception)
+    {
+        for (var inner = exception; inner is not null; inner = inner.InnerException)
+        {
+            var type = inner.GetType();
+            var typeName = type.Name;
+
+            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int mysqlNumber
+                && (mysqlNumber == 1062 || mysqlNumber == 1586))
+                return true;
+
+            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
+                && type.GetProperty("SqlState")?.GetValue(inner) is string pgState
+                && pgState == "23505")
+                return true;
+
+            // v25 P3 守卫族：message 使用前防护（镜像 DapperEventLog ITM-188 / DapperSagaStateStore
+            // ITM-192 姊妹形态，PD17）——补 !string.IsNullOrEmpty 防 null/空消息进 Contains
+            var message = inner.Message;
+            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(message)
+                && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // v20 F1：补 SqlServer 2601/2627 分支——v19 B5 注释称含但代码无（EventLog/Saga
+            // 真含），代码侧补齐对齐。DapperDbType 无 SqlServer 值现状下属防御性保留。
+            if (typeName.Equals("SqlException", StringComparison.Ordinal)
+                && type.GetProperty("Number")?.GetValue(inner) is int sqlServerNumber
+                && (sqlServerNumber == 2601 || sqlServerNumber == 2627))
+                return true;
+        }
+        return false;
+    }
+
+/// <summary>
     /// P2 修复（ToMySqlParameter 接线补齐）：按方言选择时间参数格式。
     /// <para>
     /// P2/P3 修复（十七轮）：返回 <c>object</c>（DateTimeOffset 装箱一次）是刻意的收口防线——
@@ -324,8 +361,8 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         """;
 
     [SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes",
-        Justification = "Dapper 运行时通过反射实例化此 DTO 用于 QueryFirstOrDefaultAsync<ProjectionCheckpointRow> 物化。")]
-    private sealed class ProjectionCheckpointRow
+        Justification = "Dapper 运行时通过 AOT 拦截器/物化管线实例化此 DTO 用于 QueryFirstOrDefaultAsync<ProjectionCheckpointRow> 物化。")]
+    internal sealed class ProjectionCheckpointRow
     {
         public string ProjectionName { get; set; } = "";
         public string SourceName { get; set; } = "";
@@ -351,45 +388,4 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                 Error);
     }
 
-    /// <summary>
-    /// 三十八轮 P1 回归修复：判定异常是否为唯一约束冲突（MySQL 1062/1586、PG 23505、SQLite UNIQUE）。
-    /// 仅捕获重复键——其他错误原样上抛。与 DapperInboxStore/DapperEventLog 同型
-    /// （含 SqlServer 2601/2627 分支——v19 B5 勘正：原称"不含"与代码矛盾，分支为跨 provider 鸭子类型防御性保留，与 SagaStateStore 口径统一）。
-    /// </summary>
-    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075:This",
-        Justification = "Provider 异常鸭子类型判定。裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级）。")]
-    private static bool IsUniqueConstraintViolation(Exception exception)
-    {
-        for (var inner = exception; inner is not null; inner = inner.InnerException)
-        {
-            var type = inner.GetType();
-            var typeName = type.Name;
-
-            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
-                && type.GetProperty("Number")?.GetValue(inner) is int mysqlNumber
-                && (mysqlNumber == 1062 || mysqlNumber == 1586))
-                return true;
-
-            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
-                && type.GetProperty("SqlState")?.GetValue(inner) is string pgState
-                && pgState == "23505")
-                return true;
-
-            // v25 P3 守卫族：message 使用前防护（镜像 DapperEventLog ITM-188 / DapperSagaStateStore
-            // ITM-192 姊妹形态，PD17）——补 !string.IsNullOrEmpty 防 null/空消息进 Contains
-            var message = inner.Message;
-            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
-                && !string.IsNullOrEmpty(message)
-                && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            // v20 F1：补 SqlServer 2601/2627 分支——v19 B5 注释称含但代码无（EventLog/Saga
-            // 真含），代码侧补齐对齐。DapperDbType 无 SqlServer 值现状下属防御性保留。
-            if (typeName.Equals("SqlException", StringComparison.Ordinal)
-                && type.GetProperty("Number")?.GetValue(inner) is int sqlServerNumber
-                && (sqlServerNumber == 2601 || sqlServerNumber == 2627))
-                return true;
-        }
-        return false;
-    }
 }
