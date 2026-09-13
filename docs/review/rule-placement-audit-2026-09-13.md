@@ -26,7 +26,7 @@
 
 | # | 规则/意图 | 此前承载 | 实测状态 | 本次处置 |
 |---|----------|---------|---------|---------|
-| 1 | 「验证验证者」：门禁在信任前必须见过它拒绝坏输入 | 无（纯文档规则） | **5/28 脚本有 `--selftest`；0 个被实际注入过坏输入验证** | ✅ 新增 `scripts/gate-audit.cs`：静态矩阵 + 隔离式变异探针；另为 `verify-conventions.cs` 补 `--selftest`（12 例，变异验证可红），自证脚本数 5→6 |
+| 1 | 「验证验证者」：门禁在信任前必须见过它拒绝坏输入 | 无（纯文档规则） | **5/28 脚本有 `--selftest`；0 个被实际注入过坏输入验证** | ✅ 新增 `scripts/gate-audit.cs`：静态矩阵 + 隔离式变异探针；另为 `verify-conventions.cs`（12 例）与 `vuln-scan.cs`（14 例）补 `--selftest`，均经变异验证可红，自证脚本数 5→7 |
 | 2 | 「改测试修绿」应被拦截 | 无 | `.githooks/` 无任何测试文件守卫 | ✅ 新增 `scripts/test-change-guard.cs` + 接入 pre-commit |
 | 3 | 构建输入必须可加载 | 仅靠 CI build 事后兜底 | `21549d3` 在 `.csproj` 注释写 `--` → MSB4025，**全仓构建失败且一路通过所有提交门禁** | ✅ 新增 `scripts/xml-guard.cs` + 接入 pre-commit；修复断构建 |
 | 4 | 编码一致性（BOM/mojibake）全仓覆盖 | `encoding-gate` E2/E3 只扫 `src test` | E1 覆盖 6 目录而 E2/E3 仅 2 目录 → `scripts/ samples/ bench/` 下 **69 个 .cs 在盲区**（当前 0 违规，属潜在） | ✅ 抽 `CsScanRoots` 常量扩至 5 目录 + 加范围回归探针 |
