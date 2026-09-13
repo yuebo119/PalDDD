@@ -1,10 +1,28 @@
+using BenchmarkDotNet.Configs;
+using PalDDD.Benchmarks;
+using BenchmarkDotNet.Environments;
+using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Running;
+using BenchmarkDotNet.Validators;
 using PalDDD.Core;
 using System.Diagnostics;
 
 if (args is ["--smoke"])
 {
     SmokeBenchmarks.Run();
+    return;
+}
+
+// net11-rc runtime moniker 不被 BDN 0.15.8 的 DotNetSdkValidator 识别(GetRuntimeVersion
+// throw NotRecognizedException;验证内嵌在 CsProjCoreToolchain.Validate,且 Switcher 在
+// filter 前对全程序集 case 验证——任何 [ShortRunJob] 类都会触发崩溃)。
+// 解法:--persist 显式跑三栈持久化基准类(逐类 BenchmarkRunner.Run<T> + [InProcess] attribute,
+// InProcessValidator 不查 SDK moniker);其余类走 Switcher(等 BDN 上游补 net11 moniker 恢复)。
+if (args.Contains("--persist", StringComparer.OrdinalIgnoreCase))
+{
+    BenchmarkRunner.Run<DapperPersistenceBenchmarks>();
+    BenchmarkRunner.Run<PalOrmPersistenceBenchmarks>();
+    BenchmarkRunner.Run<EfCorePersistenceBenchmarks>();
     return;
 }
 
