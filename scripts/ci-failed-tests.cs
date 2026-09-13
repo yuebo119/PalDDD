@@ -20,6 +20,15 @@ using System.Text.Json;
 // Python 3 默认 UTF-8 输出，保证跨实现字节级可比
 Console.OutputEncoding = Encoding.UTF8;
 
+// 2026-09-13 增：本脚本此前无自证能力（gate-audit 矩阵标 UNVERIFIED）。三通道都是
+// 「从日志/报告里挑出该报的行」，失效形态是**该报的失败没报**（诊断静默丢失，
+// 而调用方一律 `|| true` 兜底，故不会以非零退出暴露）。通道 ②的两个窗口判定
+// （关键字取最后 15、尾部 120→非空→最后 30）是纯文本处理，抽为纯函数并覆盖。
+if (args.Contains("--selftest"))
+{
+    return SelfTest();
+}
+
 // 参数计数偏移：Python sys.argv[0] 是脚本名（无参数 = len<2、有日志 = len>2），
 // C# args 不含程序名，对应映射为 <1 与 >1
 if (args.Length < 1)
@@ -145,6 +154,25 @@ static int FromLogTail(string logPath)
     }
 
     // 通道 2a：全日志关键字上下文（异常/失败/超时/退出码——不受尾部窗口限制）
+    foreach (var ctx in LogKeywordContexts(lines))
+    {
+        Emit(ctx);
+    }
+
+    // 通道 2b：尾部窗口——最后 120 行里取非空白的最后 30 行
+    var tail = LogTailWindow(lines);
+    foreach (var line in tail)
+    {
+        Emit($"LOG| {line}");
+    }
+
+    return tail.Count;
+}
+
+// 通道 2a 判定（纯函数，供 --selftest 覆盖）：取关键字命中的**最后 15 个**，
+// 每个附其下一行（下一行为空则略）。返回待发射的 "CTX| …" / "CTX+1| …" 行。
+static List<string> LogKeywordContexts(string[] lines)
+{
     string[] keys = ["exception", "failed", "error(s)", "timeout", "timed out", "killed", "exit code", "fatal"];
     var hits = new List<(int Index, string Line)>();
     for (var i = 0; i < lines.Length; i++)
@@ -155,27 +183,25 @@ static int FromLogTail(string logPath)
         }
     }
 
+    var outLines = new List<string>();
     foreach (var (index, line) in hits.Skip(Math.Max(0, hits.Count - 15))) // 只取最后 15 个命中
     {
-        Emit($"CTX| {line}");
+        outLines.Add($"CTX| {line}");
         if (index + 1 < lines.Length && !string.IsNullOrWhiteSpace(lines[index + 1]))
         {
-            Emit($"CTX+1| {lines[index + 1]}");
+            outLines.Add($"CTX+1| {lines[index + 1]}");
         }
     }
-
-    // 通道 2b：尾部窗口——最后 120 行里取非空白的最后 30 行
-    var tail = lines.Skip(Math.Max(0, lines.Length - 120))
-                    .Where(line => !string.IsNullOrWhiteSpace(line))
-                    .TakeLast(30)
-                    .ToList();
-    foreach (var line in tail)
-    {
-        Emit($"LOG| {line}");
-    }
-
-    return tail.Count;
+    return outLines;
 }
+
+// 通道 2b 判定（纯函数）：末 120 行 → 去空白 → 取最后 30 行。
+// 两级窗口的先后顺序影响结果（先截 120 再取非空最后 30），故单独抽出钉住。
+static List<string> LogTailWindow(string[] lines) =>
+    lines.Skip(Math.Max(0, lines.Length - 120))
+         .Where(line => !string.IsNullOrWhiteSpace(line))
+         .TakeLast(30)
+         .ToList();
 
 // ---------------------------------------------------------------- 通道 ③ --
 
@@ -277,4 +303,65 @@ static string PyRepr(string text)
 
     builder.Append(quote);
     return builder.ToString();
+}
+
+// ══════════════ 自测（纯文本判定，不依赖仓库/文件系统）══════════════
+
+static int SelfTest()
+{
+    var passed = 0;
+    var total = 0;
+
+    void Case(string name, bool ok)
+    {
+        total++;
+        if (ok) passed++;
+        Console.WriteLine($"{(ok ? "PASS" : "FAIL")} SELFTEST {name}");
+    }
+
+    // ── 通道 2a：关键字上下文（最后 15 个命中 + 附下一行）──
+    Case("无关键字 → 无 CTX 行", LogKeywordContexts(["all good", "still fine"]).Count == 0);
+    Case("单命中 → 仅 CTX 行（下一行为空）",
+        LogKeywordContexts(["boom Exception here", ""]) is ["CTX| boom Exception here"]);
+    Case("命中且下一行非空 → CTX 与 CTX+1 两行",
+        LogKeywordContexts(["an Exception", "detail line"]) is ["CTX| an Exception", "CTX+1| detail line"]);
+    Case("命中在末行（无下一行）→ 仅 CTX 行（边界）",
+        LogKeywordContexts(["tail fatal"]) is ["CTX| tail fatal"]);
+    Case("关键字大小写不敏感", LogKeywordContexts(["FAILED"]).Count == 1);
+    // keys 覆盖逐项独立性（防某条被摘掉）
+    Case("关键字覆盖 timeout", LogKeywordContexts(["timeout"]).Count == 1);
+    Case("关键字覆盖 timed out", LogKeywordContexts(["timed out"]).Count == 1);
+    Case("关键字覆盖 killed", LogKeywordContexts(["killed"]).Count == 1);
+    Case("关键字覆盖 exit code", LogKeywordContexts(["exit code 1"]).Count == 1);
+    Case("关键字覆盖 fatal", LogKeywordContexts(["fatal"]).Count == 1);
+    Case("关键字覆盖 error(s)", LogKeywordContexts(["0 error(s)"]).Count == 1);
+    Case("普通行不误报", LogKeywordContexts(["building project", "publishing"]).Count == 0);
+
+    // 15 个命中窗口：26 个命中 → 只保留最后 15 个（每条无下一行上下文时 = 15 行）
+    var many = Enumerable.Range(0, 26).Select(i => $"failed {i}").ToArray();
+    var manyCtx = LogKeywordContexts(many);
+    // 注意：此处输入行互为「下一行非空」，故每条命中另附一行 CTX+1——断言须数 CTX| 行数
+    Case("命中数超 15 时只保留最后 15 个（数 CTX| 行）",
+        manyCtx.Count(l => l.StartsWith("CTX| ", StringComparison.Ordinal)) == 15);
+    Case("保留的是最后 15 个（非最前）", manyCtx[0] == "CTX| failed 11" && manyCtx[^1] == "CTX| failed 25");
+
+    // ── 通道 2b：尾部两级窗口 ──
+    Case("空输入 → 空窗口", LogTailWindow([]).Count == 0);
+    Case("空白行被剔除", LogTailWindow(["a", "", "  ", "b"]) is ["a", "b"]);
+    Case("非空行不足 30 → 全取",
+        LogTailWindow(Enumerable.Range(0, 5).Select(i => $"L{i}").ToArray()).Count == 5);
+    // 两级窗口顺序（先截末 120 行、再取非空最后 30 行）：200 行中前 80 行不得出现
+    var big = Enumerable.Range(0, 200).Select(i => i < 80 ? $"EARLY{i}" : $"LATE{i}").ToArray();
+    var window = LogTailWindow(big);
+    Case("两级窗口：先截末 120 行再取最后 30", window.Count == 30);
+    Case("两级窗口：起点为第 170 行", window[0] == "LATE170" && window[^1] == "LATE199");
+    Case("两级窗口：窗口外的早期行不出现", !window.Any(l => l.StartsWith("EARLY", StringComparison.Ordinal)));
+
+    // ── Truncate（快照差异行截断，边界含 100）──
+    Case("Truncate 边界：100 字符原样", Truncate(new string('x', 100)) == new string('x', 100));
+    Case("Truncate 边界：101 字符截到 100", Truncate(new string('x', 101)).Length == 100);
+
+    Console.WriteLine();
+    Console.WriteLine($"SELFTEST {passed}/{total} 通过");
+    return passed == total ? 0 : 1;
 }
