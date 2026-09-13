@@ -32,7 +32,12 @@
     <PackageVersion Include="ByteAether.Ulid" Version="1.4.0" />
     <!-- Dapper 适配器 — SQLite / PostgreSQL / MySQL（AOT 兼容） -->
     <PackageVersion Include="Dapper" Version="2.1.79" />
-    <PackageVersion Include="Dapper.AOT" Version="1.0.52" />
+    <!-- Dapper.AOT 1.1.0（2026-09-13 升级探针实证）：拦截器接线在 .NET 11 已恢复（1.0.52 的
+         InterceptsLocation(line,char) 旧形式失效指控对 1.1.0 不成立——net11 SDK JIT 堆栈走生成代码
+         + NativeAOT 二进制实跑全绿）；TypeHandler 声明式 [Dapper.TypeHandler] 生效（含经典
+         SqlMapper.TypeHandler shim）；CommandDefinition 拼写照 DAP057 拒绝（与 ct 传参互斥，
+         2026-09-13 用户裁决"铺垫不动"，启用路径见 DapperAotInitializer.cs 头注） -->
+    <PackageVersion Include="Dapper.AOT" Version="1.1.0" />
     <!-- PalORM 适配器 — 面向 Native AOT 的 .NET 11 微 ORM（源生成 + 编译期 SQL，真 AOT 安全）
          5.5.1 纯依赖升级：Roslyn 对齐本仓 5.9.0 钉扎、Sqlite.Core 升 11 rc.1、消 SQLitePCLRaw NU1903（High）；
          5.5.0 行为变更（脱敏信道/外部事务语义/WhereJson 方言守卫）本仓零使用，2026-09-11 grep 核实 -->
