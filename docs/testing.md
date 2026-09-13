@@ -439,10 +439,10 @@ dotnet build PalDDD.slnx --no-incremental
 for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore --no-build; done
 
 # 4. 规范验证（grep 静态检查）
-bash scripts/verify-conventions.sh --quick
+dotnet run scripts/verify-conventions.cs -- --quick
 
 # 5. AI 系统门禁（如使用 .ai/）
-bash .ai/scripts/gate-check.sh --allow-dirty
+dotnet run scripts/gate.cs -- --allow-dirty
 
 # 6. 源生成器变更额外验证（如改了 SourceGen）
 PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet build PalDDD.slnx

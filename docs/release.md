@@ -257,13 +257,13 @@ dotnet build PalDDD.slnx -c Release --no-incremental -warnaserror
 for p in $(find test -name "*.Tests.csproj" | sort); do dotnet test "$p" --no-restore --no-build; done # v62：find 生成全 16 项目（原手列 11 项漏 Compression/Core.Abstractions/Messaging.Integration/PalORM/Repository.EFCore）
 
 # 4. 规范验证
-bash scripts/verify-conventions.sh
+dotnet run scripts/verify-conventions.cs
 
 # 5. AI 系统门禁（如使用 .ai/）
-bash .ai/scripts/gate-check.sh --allow-dirty
+dotnet run scripts/gate.cs -- --allow-dirty
 
 # 5.5 变更日志结构门禁（§十二 Phase 4——FAIL 阻断发版）
-bash scripts/changelog-check.sh
+dotnet run scripts/changelog-check.cs
 
 # 6. 本地 pack 验证
 rm -rf /tmp/release-preview && mkdir -p /tmp/release-preview

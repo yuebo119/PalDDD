@@ -3,7 +3,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
-    <!-- CA1031:--verify-persist 的 catch Exception 是验证语义(任何异常=该项 FAIL 记录);
+    <!-- CA1031: verify-persist 的 catch Exception 是验证语义(任何异常=该项 FAIL 记录);
          CA1303:工具项目中文输出;DAP005:基座建表用 raw Dapper 调用未启用 DapperAot(工具非生产) -->
     <NoWarn>$(NoWarn);CA1034;CA1822;CA2007;CA1031;CA1303;DAP005</NoWarn>
     <RunAnalyzersDuringBuild>false</RunAnalyzersDuringBuild>

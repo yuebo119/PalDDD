@@ -38,9 +38,16 @@ Environment.CurrentDirectory = FindRepoRoot();
 
 var fail = 0;
 
+// ─── .cs 扫描根（E2/E3 共用；E1 的目录清单 = 本清单 + ".ai/scripts"）───
+// 2026-09-13：此前 E2/E3 内联写死 ["src","test"]，与 E1 的六目录清单不一致，
+// 导致 scripts/ samples/ bench/ 下 69 个 .cs 落在 BOM/mojibake 检查盲区
+// （由 scripts/gate-audit.cs 的隔离式变异探针发现）。抽常量以防再次漂移。
+string[] CsScanRoots = ["src", "test", "scripts", "bench", "samples"];
+
 Console.WriteLine("═══ 编码一致性门禁 ═══");
 
 // ─── E1: .sh/.py 不混 CRLF（含孤立 CR；.ai 被 gitignore → 直读本地文件防空假绿）───
+// 注：E1 目录清单 = CsScanRoots + ".ai/scripts"（.ai 为独立 git 仓库，仅 E1 覆盖）
 {
     var bad = new List<string>();
     foreach (var dir in (string[])["src", "test", "scripts", ".ai/scripts", "bench", "samples"])
@@ -62,7 +69,7 @@ Console.WriteLine("═══ 编码一致性门禁 ═══");
 // ─── E2: .cs 无 BOM（排除 *.g.cs——源生成器产物可能合法带 BOM）───
 {
     var bad = new List<string>();
-    foreach (var f in EnumerateCsExcludingGenerated("src").Concat(EnumerateCsExcludingGenerated("test")))
+    foreach (var f in CsScanRoots.SelectMany(EnumerateCsExcludingGenerated))
         if (HasUtf8Bom(f))
         {
             bad.Add(ToPosix(f));
@@ -87,7 +94,7 @@ Console.WriteLine("═══ 编码一致性门禁 ═══");
         + "\u9359\u509b\u669f|\u6437|\u02b5\u02be|\u8f2f|\u046d";
     var patterns = moji.Split('|');
     var bad = new List<string>();
-    foreach (var f in EnumerateAllCs("src").Concat(EnumerateAllCs("test")))
+    foreach (var f in CsScanRoots.SelectMany(EnumerateAllCs))
     {
         // 路径含 obj/bin 子串排除（grep -v obj | grep -v bin 的子串语义）
         var posix = ToPosix(f);

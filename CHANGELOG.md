@@ -14,8 +14,17 @@
 
 ### Added 新增
 
-- **变更日志事实收集器 `scripts/changelog-facts.sh`**：`changelog-facts.sh <from-tag> [to-ref]` 一次产出 9 段机械可验证事实（提交分布/公共 API 快照 diff/新增诊断/废弃扫描/ADR 与文档增删/依赖变更/测试实测占位/[Unreleased] 原料），每条附可复查命令（`docs/release.md` §十二 Phase 1）
-- **变更日志结构门禁 `scripts/changelog-check.sh`**：C1 [Unreleased] 首位 / C2 tag 与转正段一致性（未转正禁止打 tag）/ C3 分类顺序 / C4 Tests 段预估口径 WARN / C5 分类层内部术语泄漏 WARN——挂入发布前验证清单与打 tag 前核对
+- **变更日志事实收集器 `scripts/changelog-facts.cs`**：`dotnet run scripts/changelog-facts.cs -- <from-tag> [to-ref]` 一次产出 9 段机械可验证事实（提交分布/公共 API 快照 diff/新增诊断/废弃扫描/ADR 与文档增删/依赖变更/测试实测占位/[Unreleased] 原料），每条附可复查命令（`docs/release.md` §十二 Phase 1）。注：2026-09-11 MIG-012 已由 `.sh` 迁移为 C# file-based app，本行同步为现行形态
+- **变更日志结构门禁 `scripts/changelog-check.cs`**：C1 [Unreleased] 首位 / C2 tag 与转正段一致性（未转正禁止打 tag）/ C3 分类顺序 / C4 Tests 段预估口径 WARN / C5 分类层内部术语泄漏 WARN——挂入发布前验证清单与打 tag 前核对。注：同上，已迁移为 `.cs`
+- **门禁可信度审计 `scripts/gate-audit.cs`**：静态矩阵（`WIRED` 接线 / `SELFTEST` 自证 / `PROBED` 已探）叠加隔离式变异探针——在系统临时目录建独立 git 仓库注入已知坏输入，断言门禁必须非零退出。覆盖 4 项探针（`secret-scan` 双向、`encoding-gate` 核心判定与 `scripts/` 范围回归）。自带 `--selftest`（5 例，含变异验证可红）。动机：本仓已有两次「门禁假绿」实案（vuln-scan v53 exit-0 no-op；secret-scan 被 tee 掩码），其修复均为一次性人工探针
+- **测试文件改动守卫 `scripts/test-change-guard.cs`**：拦截「暂存集含 `test/**` 修改/删除且无 `src/**` 变更」（改测试修绿签名）。豁免 `ALLOW_TEST_ONLY_CHANGE=1`。已接入 `pre-commit`
+- **XML 良构性守卫 `scripts/xml-guard.cs`**：校验 `.csproj/.props/.slnx/.targets/.xml` 可加载（`--all` 全仓 / 默认暂存集）。已接入 `pre-commit`
+
+### Fixed 修复
+
+- **bench 项目不可加载导致全仓构建失败**：`bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj` 注释内出现 `--`（`CA1031:--verify-persist`），XML 注释禁止连续双连字符 → MSB4025 项目加载失败。该缺陷于 21549d3 引入，并通过全部提交时门禁（`secret-scan`/`encoding-gate`/`guard` 均不校验 XML 良构性）——缺口由新增的 `xml-guard.cs` 关闭
+- **`encoding-gate` E2/E3 覆盖盲区**：E1 覆盖 6 目录而 E2（.cs BOM）/E3（.cs mojibake）仅覆盖 `src test`，`scripts/ samples/ bench/` 下 69 个 `.cs` 不受检查（实测当前 0 违规，属潜在）。已抽 `CsScanRoots` 常量统一为 5 目录，并加范围回归探针
+- **`docs/` 中指向已不存在 `*.sh` 的可执行命令**：MIG-011/012 迁移脚本后文档未全量收口。本次修正主干手册 `docs/conventions.md`、`docs/release.md`、`docs/testing.md`、`CHANGELOG.md` 中的现行命令（改为 `dotnet run scripts/xxx.cs`）。**未全量收口**：`docs/` 中另有 8 行可执行命令与若干机制名指代待处理，清单见 `docs/review/rule-placement-audit-2026-09-13.md` §四
 
 ### Dependencies 依赖
 
@@ -26,6 +35,10 @@
 
 - 新增 ADR-022「分析器诊断与生成器诊断的分层关系 + 稳定名称谓词共享」：三对诊断（PDDD009/PALMSG004、PDDD010/PALMSG005、PDDD011/PALMSG002）维持共存并定性为分层而非冗余；`IsStableName` 谓词收敛为 `src/PalDDD.Shared/StableNameValidation.cs` 链接共享源码（`docs/decisions/022-analyzer-generator-diagnostic-layering.md`）
 - `docs/release.md` 新增 §十二「变更日志生成流程」SOP：Phase 0 常态累积 → P1 事实收集 → P2 事实核验三问 → P3 起草 → P4 校验（机械门禁 + 人工六问）→ P5 转正（先于 tag）→ P6/P7 发布与事后同步，附流程失效回溯条款
+- 新增项目级 `AGENTS.md`（agent 操作层，≤150 行）：三条硬红线 + 门禁体系（含接线状态）+ 已知陷阱（4 条实证）+ 编号体系 + 文档地图。定位为**索引而非复制**——编码规范权威出处仍是 `docs/conventions.md`，避免复制漂移
+- 新增 `docs/review/rule-placement-audit-2026-09-13.md`：按「可脚本化 / 类型化 / 人工判断」三分类审计规则归属，登记 8 项实测承载缺口与本次处置、6 项未完成项与阻塞、完整的验证记录
+- `docs/review/NAMING.md`：新增规则 6/7（**禁止会话相对表述**：`本轮`/`上轮`/`下一轮` → 改绝对日期 + commit；版本号不承载会话语义）+ 写法对照表；§六 手工文件清单改为命令式（原清单所列文件已全部不存在）并登记 7 份违规命名债务；新增可选「主题槽位」`{type}-{date}-{topic}`
+- `docs/test-coverage-baseline.md`：§门禁阈值按实测改写——原表述「已自动化」与实际不符（脚本可运行 ≠ 门禁在运行），补记接线未完成的两个具体阻塞（本机 Docker 缺失致 12/16 项目中断、阈值 0.65 锚定 2026-07-30 旧基线）与四步接线前置序列
 
 ## [2.1.0] — 2026-09-04
 

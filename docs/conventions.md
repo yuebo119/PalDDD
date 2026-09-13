@@ -813,7 +813,7 @@ for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' 
 PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
 
 # 4. 规范验证脚本（秒级）
-bash scripts/verify-conventions.sh
+dotnet run scripts/verify-conventions.cs
 ```
 
 ### 10.6 测试框架规则（TUnit + MTP · 强制）
@@ -1027,11 +1027,11 @@ dotnet test <target> 2>&1 | tail -5 > /tmp/baseline.txt; echo "exit=$?" >> /tmp/
 | 依赖方向 | ArchitectureBoundaryTests 项目引用矩阵 | CI |
 | DDD 命名 | StrategicDddAnalyzer PDDD001-015 | 编译期 |
 | 零警告 | TreatWarningsAsErrors | 编译期 |
-| 测试覆盖 | MTP 原生 `--coverage`（Cobertura 合并，阈值见 ci-coverage.sh） | CI |
+| 测试覆盖 | MTP 原生 `--coverage`（Cobertura 合并，阈值见 ci-coverage.cs；CI 接线状态与前置见 docs/test-coverage-baseline.md §门禁阈值） | CI（脚本就绪，接线待阈值校准） |
 | 断言强度 | `AssertionStrengthGateTests` 棘轮（MIG-003 下沉自 assertion-strength-check.sh） | CI（PR 时） |
 | 公共 API 快照 | PublicApiSnapshotTests | CI |
 | AI 模板约束 | `.pal/prompts/` 六段结构 | 人工 |
-| AI 编码约束 | Trellis spec 注入 + `scripts/verify-conventions.sh` | 会话 + pre-commit |
+| AI 编码约束 | Trellis spec 注入 + `scripts/verify-conventions.cs` | 会话 + pre-commit |
 | 性能契约 | BenchmarkDotNet `--smoke` 烟测 | CI |
 | DI 生命周期 | ArchitectureBoundaryTests 配置守护 | CI |
 | 评审纪律 | `scripts/review-snapshot.sh` + `REVIEW_TEMPLATE.md` R0 可信度标注 | 评审时 |
