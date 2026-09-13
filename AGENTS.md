@@ -44,8 +44,8 @@ dotnet run scripts/gate-audit.cs              # 静态矩阵 + 隔离式变异�
 dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 ```
 
-矩阵三维：`WIRED`（是否被 hooks/CI 引用）· `SELFTEST`（是否有 `--selftest`）· `PROBED`（是否被注入过坏输入并确认拒绝）。
-**未接线（OBSERVE）= 永远不触发**；**已接线但无自证（UNVERIFIED）= 退化无人知**。两类都要收敛。
+矩阵五态：`OK`（接线且有自证）· `UNVERIFIED`（接线但无自证 = 退化无人知）· `TOOL`（未接线但按设计手工调用）· `UNWIRED-GATE`（应接线未接 = 真缺口）· `REVIEW`（未接线且未归类，须归入前两者之一）。
+**新增脚本必须归入 TOOL 或 UNWIRED-GATE**——`REVIEW` 桶非空即表示有脚本未经分类。
 
 ### 新增/修改门禁的规程
 

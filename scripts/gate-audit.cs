@@ -77,6 +77,37 @@ var wiredNames = CollectWiredNames(root);
 // 并在跑探针前断言一致（防两处清单漂移，同 E1/E2 目录清单教训）。
 string[] probedGates = ["secret-scan", "encoding-gate"];
 
+// ─── 未接线脚本的分类（2026-09-13 增）───
+// 此前矩阵对一切未接线者判「OBSERVE 未接线——永远不触发」，实测 17 个中 16 个是
+// **按设计手工调用的工具**（定位是「按需运行并读输出」，非「不通过则阻断」），
+// 一律报成问题属虚假告警——17 次狼来了之后，真缺口（ci-coverage）会被淹没。
+// 故逐条登记理由。判据：该脚本是否被设计为某个流程中的人工步骤。
+var manualTools = new Dictionary<string, string>(StringComparer.Ordinal)
+{
+    ["changelog-facts"] = "发布流程 Phase 1 事实收集，按 need 运行",
+    ["changelog-check"] = "发布流程 Phase 4 结构校验，打 tag 前运行",
+    ["check-all"] = "开发者全量自检（format+CA+编译），按需运行",
+    ["fix-completeness"] = "修复提交前运行的姊妹轴覆盖验证",
+    ["fix-orchestrator"] = "guard 失败时输出的修复指引入口",
+    ["flaky-parse"] = "抖动测试日志分析，按需运行",
+    ["gate-audit"] = "门禁审计工具自身（本脚本），按需运行",
+    ["osc-check"] = "由 test-gate 调用的 OSC 翻转检测器",
+    ["probe-template"] = "探针模板生成，按需运行",
+    ["refine-scan"] = "精炼扫描，按需运行",
+    ["review-gate"] = "评审轮次路由决策（全量/增量/跳过）",
+    ["review-scope"] = "评审范围计算，评审前运行",
+    ["review-snapshot"] = "评审快照——评审报告须粘贴其输出（R0 可信度锚）",
+    ["sibling-map"] = "姊妹文件映射，评审辅助",
+    ["sister-axis"] = "姊妹轴对称核查，评审辅助",
+    ["verify-action-items"] = "按参数校验指定清单文件，按需运行",
+};
+
+// 应接线而未接线的（真缺口）——逐条登记原因与解锁条件
+var intendedWire = new Dictionary<string, string>(StringComparer.Ordinal)
+{
+    ["ci-coverage"] = "阈值未校准（本机 Docker 缺失致全局 line-rate 不可测）——前置见 docs/test-coverage-baseline.md §门禁阈值",
+};
+
 var rows = gateFiles
     .Select(name =>
     {
@@ -92,27 +123,30 @@ var rows = gateFiles
 
 Console.WriteLine("=== 门禁可信度矩阵 ===");
 Console.WriteLine($"{"门禁",-24} {"WIRED",-7} {"SELFTEST",-9} {"PROBED",-8} {"退出码",-7} 判定");
-Console.WriteLine(new string('-', 88));
+Console.WriteLine(new string('-', 92));
 foreach (var r in rows)
 {
-    // OBSERVE = 可拒绝但未接线（观察态）；UNVERIFIED = 已接线但无法自证
-    var verdict = (r.Wired, r.SelfTest) switch
-    {
-        (false, _) => "OBSERVE 未接线——永远不触发",
-        (true, false) => "UNVERIFIED 已接线但无自证",
-        (true, true) => "OK",
-    };
+    // OK=接线且有自证；UNVERIFIED=接线但无自证；TOOL=按设计手工调用；
+    // UNWIRED-GATE=应接线未接（真缺口）；REVIEW=未接线也未归类（须归类，不放过新脚本）
+    var verdict = ClassifyVerdict(r.Wired, r.SelfTest, manualTools.ContainsKey(r.Name), intendedWire.ContainsKey(r.Name));
     Console.WriteLine($"{r.Name,-24} {(r.Wired ? "yes" : "-"),-7} {(r.SelfTest ? "yes" : "-"),-9} {(r.Probed ? "yes" : "-"),-8} {(r.DeclaresExitCode ? "yes" : "-"),-7} {verdict}");
 }
 
 var wired = rows.Where(r => r.Wired).ToList();
 var wiredUnverified = wired.Where(r => !r.SelfTest).ToList();
-var orphans = rows.Where(r => !r.Wired).ToList();
+var unwiredTools = rows.Where(r => !r.Wired && manualTools.ContainsKey(r.Name)).ToList();
+var unwiredGaps = rows.Where(r => !r.Wired && intendedWire.ContainsKey(r.Name)).ToList();
+var unclassified = rows.Where(r => !r.Wired && !manualTools.ContainsKey(r.Name) && !intendedWire.ContainsKey(r.Name)).ToList();
 
 Console.WriteLine();
-Console.WriteLine($"合计 {rows.Count} 个脚本：接线 {wired.Count} · 未接线 {orphans.Count}");
+Console.WriteLine($"合计 {rows.Count} 个脚本：接线 {wired.Count} · 未接线 {rows.Count - wired.Count}");
+Console.WriteLine($"接线且有自证（OK）：{wired.Count - wiredUnverified.Count}");
 Console.WriteLine($"接线但无自证（UNVERIFIED）：{wiredUnverified.Count}");
-Console.WriteLine($"可拒绝但未接线（OBSERVE）：{orphans.Count}");
+Console.WriteLine($"未接线·工具（按设计）：{unwiredTools.Count}");
+Console.WriteLine($"未接线·应接未接（缺口）：{unwiredGaps.Count}");
+Console.WriteLine($"未接线·未归类（须归类）：{unclassified.Count}");
+foreach (var g in unwiredGaps) Console.WriteLine($"  缺口：{g.Name} —— {intendedWire[g.Name]}");
+foreach (var u in unclassified) Console.WriteLine($"  未归类：{u.Name}（登记进 manualTools 或 intendedWire）");
 
 if (inventoryOnly)
 {
@@ -326,6 +360,16 @@ static HashSet<string> CollectWiredNames(string repoRoot)
 static bool HasSelfVerification(string gateSource) =>
     gateSource.Contains("--selftest", StringComparison.Ordinal);
 
+// 矩阵判定（纯函数，供 --selftest 覆盖）：接线优先于分类——已接线者只看自证；
+// 未接线者按「是否按设计手工调用」分工具/缺口/未归类三态。未归类单列而不并入
+// 工具，使新脚本必须被显式归类（不放过新增项）。
+static string ClassifyVerdict(bool wired, bool selfTest, bool isTool, bool isIntendedWire) =>
+    wired
+        ? (selfTest ? "OK" : "UNVERIFIED 已接线但无自证")
+        : isTool ? "TOOL 手工调用（按设计）"
+        : isIntendedWire ? "UNWIRED-GATE 应接线未接（缺口）"
+        : "REVIEW 未接线且未归类（须归入 TOOL 或 UNWIRED-GATE）";
+
 static string FindRepoRoot()
 {
     foreach (var start in (string?[])[Environment.CurrentDirectory, AppContext.BaseDirectory])
@@ -368,6 +412,16 @@ static int SelfTest()
     // 隔离仓库契约：.gitignore 必须屏蔽 runfile 产物（否则 git add 会夹带构建产物）
     var expectedIgnore = "dotnet/\nbin/\nobj/\n";
     Case("隔离仓库 .gitignore 覆盖 dotnet/", expectedIgnore.Contains("dotnet/", StringComparison.Ordinal));
+
+    // 矩阵判定（五态，防某一态被合并掉）
+    Case("判定：接线+自证 → OK", ClassifyVerdict(true, true, false, false) == "OK");
+    Case("判定：接线无自证 → UNVERIFIED", ClassifyVerdict(true, false, false, false).StartsWith("UNVERIFIED", StringComparison.Ordinal));
+    Case("判定：未接线且为工具 → TOOL", ClassifyVerdict(false, false, true, false).StartsWith("TOOL", StringComparison.Ordinal));
+    Case("判定：未接线且应接未接 → UNWIRED-GATE", ClassifyVerdict(false, false, false, true).StartsWith("UNWIRED-GATE", StringComparison.Ordinal));
+    Case("判定：未接线且未归类 → REVIEW（不放过新脚本）", ClassifyVerdict(false, false, false, false).StartsWith("REVIEW", StringComparison.Ordinal));
+    // 边界：已接线者不受工具/缺口标记影响（分类只在未接线时生效）
+    Case("判定：已接线时工具标记不改变结论", ClassifyVerdict(true, true, true, true) == "OK");
+    Case("判定：已接线无自证时缺口标记不改变结论", ClassifyVerdict(true, false, false, true).StartsWith("UNVERIFIED", StringComparison.Ordinal));
 
     Console.WriteLine();
     Console.WriteLine($"SELFTEST {passed}/{total} 通过");
