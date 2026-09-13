@@ -45,6 +45,17 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
+    /// <summary>时间参数方言编码（镜像 DapperOutboxStore.ToTimeParam——PG 原生 DateTimeOffset，
+    /// MySQL 无偏移 UTC 串，SQLite "O" 串；SQLite TypeHandler 声明式注册只服务无显式编码的
+    /// 遗留路径，显式编码后 PG timestamptz 不再收 text）。第三份副本——提取重构留主线任务。</summary>
+    private object ToTimeParam(DateTimeOffset value)
+        => _dbType switch
+        {
+            DapperDbType.PostgreSql => value,
+            DapperDbType.MySql => DapperAotInitializer.ToMySqlParameter(value),
+            _ => DapperAotInitializer.ToSqliteParameter(value),
+        };
+
     /// <inheritdoc />
     public async ValueTask<IdempotencyRecord?> GetAsync(
         string operationName, string key, DateTimeOffset now, CancellationToken ct = default)
@@ -104,7 +115,7 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         try
         {
             affected = await _connection.ExecuteAsync(insertSql,
-                new { OperationName = operationName, Key = key, Status = statusProcessing, LockedUntil = lockedUntil, ExpiresAt = expiresAt, UpdatedAt = now },
+                new { OperationName = operationName, Key = key, Status = statusProcessing, LockedUntil = ToTimeParam(lockedUntil), ExpiresAt = ToTimeParam(expiresAt), UpdatedAt = ToTimeParam(now) },
                 Tx).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsUniqueConstraintViolation(ex))
@@ -128,7 +139,7 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
                 WHERE operation_name = @OperationName AND idempotency_key = @Key AND expires_at <= @Now
                 """;
             affected = await _connection.ExecuteAsync(reclaimSql,
-                new { OperationName = operationName, Key = key, Status = statusProcessing, LockedUntil = lockedUntil, ExpiresAt = expiresAt, UpdatedAt = now, Now = now },
+                new { OperationName = operationName, Key = key, Status = statusProcessing, LockedUntil = ToTimeParam(lockedUntil), ExpiresAt = ToTimeParam(expiresAt), UpdatedAt = ToTimeParam(now), Now = ToTimeParam(now) },
                 Tx).ConfigureAwait(false);
             if (affected == 0) return null;
 
@@ -161,7 +172,7 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
             new
             {
                 OperationName = operationName, Key = key, Status = statusProcessing,
-                LockedUntil = lockedUntil, ExpiresAt = expiresAt, UpdatedAt = now,
+                LockedUntil = ToTimeParam(lockedUntil), ExpiresAt = ToTimeParam(expiresAt), UpdatedAt = ToTimeParam(now),
                 ExpectedRevision = existing.Revision,
                 Completed = (int)IdempotencyRecordStatus.Completed
             },
