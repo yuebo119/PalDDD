@@ -692,11 +692,11 @@ Infrastructure / Adapters → App-Core → App-Abstractions → Domain
 | Assembly Scanning | 零反射，Handler 显式注册 |
 | Protobuf 工具链 | 代码优先 vs Schema 优先范式冲突（ADR-002） |
 
-### 8.5 持久化栈策略（ADR-020，维护者裁决 2026-08-26）
+### 8.5 持久化栈策略（ADR-020，2026-09-13 修订：退役延后）
 
-- **终态双栈**：PalORM（AOT 主线）+ EF Core（生态兼容线）；Dapper 栈退役
-- **Dapper 功能冻结**：只修缺陷不加特性；新 Store 能力/新表仅落 PalORM/EFCore 双栈——涉及 Dapper 新特性的 PR 默认拒绝
-- **退役节奏**：v3.0 `[Obsolete]`（同窗口合并 IPalOutboxStore 契约统一+异步化）→ v4.0 移除五包
+- **三栈平等共存**：PalORM（AOT 主线，库级源生成零反射，纯度最高）+ Dapper（手写 SQL，调用点级 AOT——34 调用点全量拦截器接管，三方言真库实测）+ EF Core（生态兼容线）
+- **Dapper 功能冻结解除**：2026-09-13 Dapper.AOT 全量启用后 Dapper 栈恢复能力栈地位；新 Store 能力按三栈姊妹同步惯例落全
+- **原退役节奏（v3.0 `[Obsolete]` → v4.0 移除五包）取消**——前提（调用点迁移成本/常量冲突）被实验实证推翻，见 ADR-020 状态更新
 - 详见 `docs/decisions/020-persistence-stack-retirement-roadmap.md`
 
 ---
