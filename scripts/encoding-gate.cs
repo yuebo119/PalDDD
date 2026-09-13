@@ -28,6 +28,11 @@
 // vuln-scan.cs / verify-ai.cs 先例整文件抑制。
 #pragma warning disable CA1303
 
+// Justification: CA1031 禁止宽泛 catch；本文件的捕获只出现在 --selftest 内，两处用途均为
+// 「异常即结论」而非吞错：① 断言 ReadTextTolerant 对非法 UTF-8 不抛——此处必须能捕获任意
+// 异常类型才能证明该性质；② 临时目录清理失败不得翻转自测结论。限定在自测内。
+#pragma warning disable CA1031
+
 using System.Text;
 
 // Windows 控制台默认编码非 UTF-8，中文输出会乱码——对齐 bash printf UTF-8
@@ -43,6 +48,14 @@ var fail = 0;
 // 导致 scripts/ samples/ bench/ 下 69 个 .cs 落在 BOM/mojibake 检查盲区
 // （由 scripts/gate-audit.cs 的隔离式变异探针发现）。抽常量以防再次漂移。
 string[] CsScanRoots = ["src", "test", "scripts", "bench", "samples"];
+
+// ─── 自测分发（--selftest）───
+// 2026-09-13 增：本门禁的判定全是字节级/指纹级，错一个字节就会「静默放行」而输出
+// 与正常无异（E2 漏检 BOM、E3 漏检 mojibake 都不会有任何可观察差异），故补自证能力。
+if (args.Contains("--selftest"))
+{
+    return SelfTest();
+}
 
 Console.WriteLine("═══ 编码一致性门禁 ═══");
 
@@ -87,12 +100,7 @@ Console.WriteLine("═══ 编码一致性门禁 ═══");
 // ─── E3: .cs 无 mojibake 指纹（UTF-8→GBK 双重编码常见产物）───
 // 指纹为三十六轮 P1-3 扩充的本仓实测产物全集；\uXXXX 转义原因见头注释迁移说明 2
 {
-    var moji = "\u923a|\u93c8\u5d85|\u935a\u5ea1|\u9422\u71b7|\u5a34\u5b2d|\u5bb8\u53c9\u6e41|"
-        + "\u934b\u6ec3|\u93b5\u6d98|\u704f\u5fdb|\u95b0\u5d87\u7586|\u7f01\u581f|\u5bee\u509a|"
-        + "\u6d93\u5d85|\u9363\u3126|\u9422\u3124|\u922b|\u59dd\u30ed|\u9352\u6d98\u7f13|"
-        + "\u741b\u30e5\u4f3f|\u59af\u2103|\u7039\u70b4|\u59ab\u20ac|\u95c5\u65c2|"
-        + "\u9359\u509b\u669f|\u6437|\u02b5\u02be|\u8f2f|\u046d";
-    var patterns = moji.Split('|');
+    var patterns = MojibakeFingerprints();
     var bad = new List<string>();
     foreach (var f in CsScanRoots.SelectMany(EnumerateAllCs))
     {
@@ -196,3 +204,94 @@ static string ReadTextTolerant(string path) =>
 
 // 路径转 posix 正斜杠（对齐 bash find/grep 输出形式）
 static string ToPosix(string path) => path.Replace('\\', '/');
+
+// mojibake 指纹表（单一来源：E3 与 --selftest 共用，避免两份漂移）。
+// 以 \uXXXX 转义书写：若以字面字符写入本文件，本文件自身会命中 E3（自指陷阱，见头注释）。
+static string[] MojibakeFingerprints() =>
+    ("\u923a|\u93c8\u5d85|\u935a\u5ea1|\u9422\u71b7|\u5a34\u5b2d|\u5bb8\u53c9\u6e41|"
+     + "\u934b\u6ec3|\u93b5\u6d98|\u704f\u5fdb|\u95b0\u5d87\u7586|\u7f01\u581f|\u5bee\u509a|"
+     + "\u6d93\u5d85|\u9363\u3126|\u9422\u3124|\u922b|\u59dd\u30ed|\u9352\u6d98\u7f13|"
+     + "\u741b\u30e5\u4f3f|\u59af\u2103|\u7039\u70b4|\u59ab\u20ac|\u95c5\u65c2|"
+     + "\u9359\u509b\u669f|\u6437|\u02b5\u02be|\u8f2f|\u046d").Split('|');
+
+// ══════════════ 自测 ══════════════
+
+static int SelfTest()
+{
+    var passed = 0;
+    var total = 0;
+
+    void Case(string name, bool ok)
+    {
+        total++;
+        if (ok) passed++;
+        Console.WriteLine($"{(ok ? "PASS" : "FAIL")} SELFTEST {name}");
+    }
+
+    // ContainsByte（E1/E4 的判定核心，字节级）
+    Case("ContainsByte 命中 0x0D", ContainsByte([0x61, 0x0D, 0x62], 0x0D));
+    Case("ContainsByte 无 0x0D 时不命中", !ContainsByte("abc\n"u8.ToArray(), 0x0D));
+    Case("ContainsByte 空数组不命中", !ContainsByte([], 0x0D));
+
+    // 临时文件用于 E2/E4 的文件级判定
+    var tmp = Path.Combine(Path.GetTempPath(), "encoding-gate-selftest-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        Directory.CreateDirectory(tmp);
+
+        // E2：HasUtf8Bom —— 三分支（有 BOM / 无 BOM / 短文件边界）
+        var withBom = Path.Combine(tmp, "withbom.cs");
+        File.WriteAllBytes(withBom, [0xEF, 0xBB, 0xBF, .. "var x = 1;\n"u8.ToArray()]);
+        Case("HasUtf8Bom 识别 EF BB BF", HasUtf8Bom(withBom));
+
+        var noBom = Path.Combine(tmp, "nobom.cs");
+        File.WriteAllBytes(noBom, "// 中文注释\nvar x = 1;\n"u8.ToArray());
+        Case("HasUtf8Bom 对无 BOM 文件返回 false（负向对照）", !HasUtf8Bom(noBom));
+
+        var shortFile = Path.Combine(tmp, "short.cs");
+        File.WriteAllBytes(shortFile, [0xEF, 0xBB]); // 仅 2 字节，不足 BOM 长度
+        Case("HasUtf8Bom 对不足 3 字节的文件返回 false（边界）", !HasUtf8Bom(shortFile));
+
+        var emptyFile = Path.Combine(tmp, "empty.cs");
+        File.WriteAllBytes(emptyFile, []);
+        Case("HasUtf8Bom 对空文件返回 false（边界）", !HasUtf8Bom(emptyFile));
+
+        // E1/E4：CR 字节 + ReadTextTolerant 容错
+        var crlf = Path.Combine(tmp, "crlf.sh");
+        File.WriteAllBytes(crlf, "echo hi\r\n"u8.ToArray());
+        Case("CRLF 文件含 0x0D（E1 会命中）", ContainsByte(File.ReadAllBytes(crlf), 0x0D));
+
+        var lf = Path.Combine(tmp, "lf.sh");
+        File.WriteAllBytes(lf, "echo hi\n"u8.ToArray());
+        Case("LF 文件不含 0x0D（E1 放行）", !ContainsByte(File.ReadAllBytes(lf), 0x0D));
+
+        var invalidUtf8 = Path.Combine(tmp, "bad-utf8.cs");
+        File.WriteAllBytes(invalidUtf8, [0x61, 0xC3, 0x28, 0x62]);
+        var tolerantOk = true;
+        try { _ = ReadTextTolerant(invalidUtf8); }
+        catch (Exception) { tolerantOk = false; }
+        Case("ReadTextTolerant 对非法 UTF-8 不抛（对齐 grep 字节语义）", tolerantOk);
+
+        // E3：指纹命中和不命中
+        var fingerprints = MojibakeFingerprints();
+        Case("指纹表非空且无空项", fingerprints.Length > 0 && fingerprints.All(p => p.Length > 0));
+        Case("指纹命中：文本含指纹则被检出",
+            fingerprints.Any(p => ("前缀" + p + "后缀").Contains(p)));
+        Case("指纹不命中：干净中文文本不被误报",
+            !fingerprints.Any(p => "正常的领域事件与聚合根说明".Contains(p)));
+
+        // 自指陷阱回归守卫：本文件自身不得含任何字面指纹
+        // （指纹若以字面字符写入，encoding-gate 会命中自己——头注释记录了该陷阱）
+        var ownSource = ReadTextTolerant(Path.Combine("scripts", "encoding-gate.cs"));
+        Case("自指陷阱：本文件源码不含字面指纹",
+            !fingerprints.Any(p => ownSource.Contains(p)));
+    }
+    finally
+    {
+        try { if (Directory.Exists(tmp)) Directory.Delete(tmp, recursive: true); } catch { /* 清理失败不翻转结论 */ }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"SELFTEST {passed}/{total} 通过");
+    return passed == total ? 0 : 1;
+}
