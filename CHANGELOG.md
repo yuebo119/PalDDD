@@ -37,6 +37,8 @@
 
 - **`scripts/ci-failed-tests.cs` 补 `--selftest`**（此前无自证能力，gate-audit 矩阵最后一项 UNVERIFIED）：三通道都是「从日志/报告里挑出该报的行」，失效形态是**该报的失败没报**——且因调用方一律 `|| true` 兜底，诊断静默丢失不会以非零退出暴露，属最难发现的失效类型。通道 ②的两个窗口判定抽为纯函数 `LogKeywordContexts`/`LogTailWindow` 并覆盖 22 例：关键字命中（最后 15 个窗口，数 `CTX\|` 行）、命中附下一行（下一行空/为末行两种边界）、大小写不敏感、`keys` 八项逐项独立（含 `timed out`/`exit code`/`error(s)` 等含空格与括号者）、普通行不误报；尾部两级窗口（末 120 行 → 去空白 → 最后 30 行）的**先后顺序**用 200 行构造钉住（起点必为第 170 行、早期行不出现）；`Truncate` 的 100 边界。经变异验证可红（15 命中窗口改 16 → 20/22）
 
+- **`scripts/gate-audit.cs` 矩阵判定三处改进**：① **未接线脚本分类化**——此前对一切未接线者判「OBSERVE 未接线——永远不触发」，实测 17 个中 **16 个是按设计手工调用的工具**（`review-snapshot` 供评审粘贴输出、`fix-completeness` 修复提交前跑、`gate-audit` 自身按需跑等），一律报成问题属虚假告警；现改为五态 `OK`/`UNVERIFIED`/`TOOL`/`UNWIRED-GATE`/`REVIEW`，逐条登记工具理由，**17 个告警收敛为 1 个真缺口**（`ci-coverage`）。② **`REVIEW` 桶**：未接线且未登记者单列，使新增脚本必须被显式归类（不放过）。③ 判定抽为纯函数 `ClassifyVerdict` 并补 7 例自测（含「已接线时分类标记不改变结论」的两条边界）。自测 12/12
+
 ### Changed 变更
 
 - **CI `aot-verify` job 扩为双 sample**：原仅 `PalOrmSample`（直接引用仅 `PalORM.Sqlite`，即只覆盖 PalORM 一条栈）。新增 `AotSample` 的 restore/publish/run 三步——其引用 Core/Serialization/Transactions/CQRS/DependencyInjection 五个主干项目，与前者引用图不重叠。此前主干项目的 AOT 运行时安全无 CI 守卫（`docs/release.md` 自述 AotSample 为「手动 AOT 验证示例」）。本地等价形式（win-x64）已实测：输出 `Generating native code`、产物仅 native exe（无托管 dll）、实跑 exit 0 且含 CQRS AOT 值类型管道检查通过
