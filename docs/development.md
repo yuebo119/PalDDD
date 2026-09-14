@@ -134,6 +134,41 @@ git diff --check
 
 只暂存本次任务相关文件。本地开发工具产物（`.claude/`、`.serena/`、`.depwire/` 等）已配置 `.gitignore`，不会被意外提交。
 
+### 推送（代理环境）
+
+本机 git 可能配置了本地代理（`git config --get http.proxy` 查看）。推送配方：
+
+```bash
+# 直连失败（Connection was reset）时：绕本地代理 + HTTP/1.1（HTTP/2 经代理易 reset）
+git -c http.proxy= -c https.proxy= -c http.version=HTTP/1.1 push origin dev
+# 代理可用时直接 git push；代理不可达时它会连 127.0.0.1 失败——两种模式按网络状态二选一
+```
+
+### CI 失败诊断（无需登录）
+
+公开仓库的 Actions 状态与**失败注解**可用 api.github.com 匿名读取——失败 job 的关键错误
+（`ci-failed-tests.cs` 输出的 `::error` 注解含完整堆栈）无需翻日志即可定位：
+
+```bash
+curl -s "https://api.github.com/repos/yuebo119/PalDDD/actions/runs?branch=dev&per_page=3"
+# 拿 run id → 查 jobs：/actions/runs/{id}/jobs（含每个 job 的失败步骤名）
+# 拿 check-run id（= job id）→ 查注解：/check-runs/{id}/annotations（失败细节在此）
+```
+
+实证价值（CI #94）：经注解通道 2 分钟定位根因（`InvalidCastException: Writing values of
+'ProjectionCheckpointStatus'`），免去下载完整日志。
+
+### 驱动敏感参数（Dapper 栈）
+
+Dapper.AOT 拦截器把参数值**直传驱动**，与经典路径的容忍行为不同——以下类型必须显式规范化
+后才可入 SQL 参数（`dapper-param-guard.cs` 在 pre-commit 静态检查枚举一类）：
+
+| 类型 | 规范化 | 不规范的后果（实证） |
+|------|--------|---------------------|
+| 枚举（`*Status` 等） | `(int)` 强转 | PG 抛 `InvalidCastException`（CI #94 根因） |
+| `DateTimeOffset` | `ToTimeParam()`（方言三态） | PG timestamptz 收 text 无法比较（ITM-667 类） |
+| `Ulid` | `ToSqliteParameter()` | 驱动无原生映射 |
+
 ## 新增项目的边界规则
 
 新增核心项目时：
