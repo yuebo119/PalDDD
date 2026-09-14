@@ -8,12 +8,12 @@
 
 | # | 项 | 现状 | 动作 |
 |---|-----|------|------|
-| A1 | **dev 推送** | 4+ 提交未推 origin（你此前"暂缓推送"裁决） | 说一声即推（proxy bypass 方式已验证） |
-| A2 | **ITM-673 Dapper.AOT ct 上游 issue** | 英文草稿就绪（docs/review/dapper-aot-ct-issue-draft.md） | 需你的 GitHub 账号提交（或授权我用 gh） |
-| A3 | **全局 AGENTS.md 规则承载物改造** | 账本 §六建议：每条规则标注 `[脚本]`/`[类型]`/`[人工]`，脚本类压缩为指针 | 判断项，账本明示"未改动全局文件待裁决" |
-| A4 | **encoding-gate E5 工作树行尾防线** | 现状：.md/.csproj/.targets 行尾漂移无机械检测（git autocrlf 自愈，仓库层无危害） | 加则按门禁规程（自测+变异+接 hook）半天可交付 |
-| A5 | **scripts/gate-audit.cs 未提交** | 工作树 untracked（你会话的门禁可信度矩阵工具，矩阵实测全绿：UNWIRED/REVIEW=0） | 决定：提交 + 按账本建议"按需手跑或并入 CI 前段" |
-| A6 | **单模块覆盖率降幅门禁** | 账本 §四 ⏳ 未实现（现只有全局 0.70 阈值）；可行路径已明：ci-coverage 已逐项目产 cobertura，解析与基线表比对 | 立项裁决 |
+| A1 | ~~dev 推送~~ | ✅ **已完成**（2026-09-14）：`08ba7d6..080871c` 43 提交推送 origin（proxy 环境：需 `git -c http.proxy= -c https.proxy= -c http.version=HTTP/1.1 push` 组合，绕本机 127.0.0.1:50001 代理） | — |
+| A2 | ~~ITM-673 Dapper.AOT ct 上游 issue~~ | ✅ **已完成**（2026-09-14）：issue #225 提交 → https://github.com/DapperLib/DapperAOT/issues/225（github MCP 通道，账号 yuebo119） | 跟踪上游回复 |
+| A3 | ~~全局 AGENTS.md 规则承载物改造~~ | ✅ **已完成（索引层）**（2026-09-14）：文件头新增「规则承载物索引」表（20 规则区 → [脚本]/[类型]/[工具]/[人工]）+ 两条已知缺口注记；**正文压缩/移交 references 的深度重构保留为待办判断项**（索引中已注明） | 深度重构待后续裁决 |
+| A4 | ~~encoding-gate E5 工作树行尾防线~~ | ✅ **已完成**（2026-09-14，`7b36c11`）：E5 判定+X 例外清单+自测 21/21+变异验证+gate-audit 探针 5/5 | — |
+| A5 | ~~scripts/gate-audit.cs 未提交~~ | ✅ **实为假脏**（2026-09-14 勘正）：文件已跟踪已提交，"untracked"是过时快照；工作树 M 为行尾归一化（add 即净） | — |
+| A6 | ~~单模块覆盖率降幅门禁~~ | ✅ **已完成**（2026-09-14，`080871c`）：coverage-baseline.json（15 项目）+ ci-coverage Step 6（容差 5pp，epsilon 修正）+ --update-baseline 入口 + 自测 18/18 + 变异 + 端到端数据验证 15/15 | — |
 
 ## B. 排队中（major 窗口 / 触发条件）
 
