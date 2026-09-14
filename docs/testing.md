@@ -440,6 +440,9 @@ for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' 
 
 # 4. 规范验证（grep 静态检查）
 dotnet run scripts/verify-conventions.cs -- --quick
+# 注（ITM-680 收尾，2026-09-14）：--quick 为提交前口径（秒级，仅静态检查）；full（默认）
+# 含全量 build+test，无 Docker 机器测试阶段必红（PalORM 46 项 fail-closed + Messaging 集成
+# 环境失败），仅 CI/有 Docker 环境可全跑——本地看到 full 红先查环境而非代码。
 
 # 5. AI 系统门禁（如使用 .ai/）
 dotnet run scripts/gate.cs -- --allow-dirty
