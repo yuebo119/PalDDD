@@ -77,10 +77,11 @@
   或按上表的分步方法只补跑缺失项目再取并集。
 
 - **基线值来源与复校准**：`coverage-baseline.json` 的 15 个值取自 2026-09-14 本机
-  Debug 插桩产物，属**下界**——`PalDDD.PalORM.Tests` 的多方言测试因本机无 Docker 未跑完，
-  其 line-rate 偏低，故基线偏保守（CI 上更难触发降幅判定，不会造成假红）。首次
-  `coverage` job 运行后应用 CI 完整产物重取基线（`-- --update-baseline`，按上文
-  「基线更新属校准步骤，需评审后提交」）。
+  Debug 插桩产物，属**下界**——`PalDDD.PalORM.Tests` 因本机无 Docker 无 cobertura
+  产物、**未纳入基线**（`UpdateBaseline` 只为有产物的项目写键），其降幅当前不受
+  Step 6 检查。首次 `coverage` job 运行后应用 CI 完整产物重取基线
+  （`-- --update-baseline`，按上文「基线更新属校准步骤，需评审后提交」），
+  届时 PalORM 随产物齐全一并纳入。
 
 > 本文上文「按模块覆盖率」分档表与下文「覆盖率低的已知原因」表均为 **2026-07-30 历史
 > 视角**——其中的百分比已与实际脱节（例如 `Core.SourceGen` 当时记 42.4%，2026-09-14

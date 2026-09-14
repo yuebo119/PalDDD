@@ -122,3 +122,15 @@ done
 ```
 
 **注意**：本报告全部数字为本次真实运行的输出，零缓存；关键判定均规避了 `| tail` 退出码掩码（本仓已知陷阱）。
+
+---
+
+## 七、修复轮闭环（2026-09-14 同日）
+
+本报告 3 项发现（ITM-681~683）已在修复轮全部闭环，明细与验证证据见
+[`docs/review/action-items-2026-09-14-quality-run-v2.md`](action-items-2026-09-14-quality-run-v2.md)。要点：
+
+- **ITM-681（事实修正）**：`docs/usage.md` 表格行与 `CHANGELOG.md` 摘要句的「.NET 11 另增」均改为「两者 .NET 10 已随 `Microsoft.Extensions.Validation` 包发布，.NET 11 起不再标记 experimental」。
+- **ITM-682（状态同步）**：`rule-placement-audit` §二 #5/#6 处置列同步为「✅ 已完成（47c8c24 / 080871c），详见 §四」；"实测状态"列保留 09-13 时点记录。
+- **ITM-683（措辞精确化）**：`test-coverage-baseline.md` 的 PalORM 段改为「未纳入基线（`UpdateBaseline` 只为有产物的项目写键），其降幅当前不受 Step 6 检查」——守护空窗显式写出。
+- 门禁复验：encoding-gate 5/5 · verify-conventions --quick 全过 · changelog-check 5/5 · doc-consistency D7 · verify-action-items 0 缺失。
