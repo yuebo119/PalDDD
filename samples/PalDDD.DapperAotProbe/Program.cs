@@ -82,11 +82,13 @@ if (external)
 await conn.ExecuteAsync(ddl).ConfigureAwait(false);
 Console.WriteLine("schema created");
 
-// ═══ 四组件全链路 ═══
+// ═══ 六组件全链路 ═══
 await ProbeOutboxAsync(conn, dbType, Check).ConfigureAwait(false);
 await ProbeEventLogAsync(conn, dbType, Check).ConfigureAwait(false);
 await ProbeIdempotencyAsync(conn, dbType, Check).ConfigureAwait(false);
 await ProbeSagaAsync(conn, dbType, Check).ConfigureAwait(false);
+await ProbeCheckpointAsync(conn, dbType, Check).ConfigureAwait(false);
+await ProbeInboxAsync(conn, dbType, Check).ConfigureAwait(false);
 
 // ═══ 外部库清理 ═══
 if (external)
@@ -190,6 +192,41 @@ static async Task ProbeSagaAsync(DbConnection conn, DapperDbType dbType, Action<
     check("saga loaded", loaded is not null);
     check("saga state round-trip", loaded?.CurrentState == "ProbeInitial"
         && loaded?.CustomerId == "probe-customer");
+}
+
+// ═══ ⑤ ProjectionCheckpoint:枚举参数 int 化回归守卫(CI #94 根因——2026-09-14 增段)═══
+// 背景:Dapper.AOT 拦截器把 ProjectionCheckpointStatus 枚举直传驱动,PG 拒绝
+// (InvalidCastException);经典路径驱动容忍 → 本地 SQLite 与 CI PG 行为分叉。
+// 修复为显式 (int) 后,本段在真库上锁定该修复(枚举路径任一回归→PG/MySQL 段必红)。
+static async Task ProbeCheckpointAsync(DbConnection conn, DapperDbType dbType, Action<string, bool> check)
+{
+    var store = new DapperProjectionCheckpointStore(conn, dbType);
+    var now = TimeProvider.System.GetUtcNow();
+    var projection = $"probe-{PalUlid.New().ToString()[..8]}";
+    var checkpoint = await store.TryStartAsync(projection, "probe-source", "p-1",
+        now, TimeSpan.FromMinutes(2), CancellationToken.None).ConfigureAwait(false);
+    check("checkpoint try-start (enum param int-ized)", checkpoint is not null);
+    check("checkpoint processing status", checkpoint?.Status == PalDDD.Projections.ProjectionCheckpointStatus.Processing);
+
+    await store.MarkCompletedAsync(checkpoint!, now.AddSeconds(1), CancellationToken.None).ConfigureAwait(false);
+    var loaded = await store.GetAsync(projection, "probe-source", "p-1", CancellationToken.None).ConfigureAwait(false);
+    check("checkpoint completed round-trip", loaded?.Status == PalDDD.Projections.ProjectionCheckpointStatus.Completed);
+}
+
+// ═══ ⑥ Inbox:去重语义全链(枚举/状态写路径)═══
+static async Task ProbeInboxAsync(DbConnection conn, DapperDbType dbType, Action<string, bool> check)
+{
+    var store = new DapperInboxStore(conn, dbType);
+    var now = TimeProvider.System.GetUtcNow();
+    var messageId = $"probe-msg-{PalUlid.New().ToString()[..8]}";
+    var msg = await store.TryStartProcessingAsync("probe-consumer", messageId, now,
+        TimeSpan.FromMinutes(2), CancellationToken.None).ConfigureAwait(false);
+    check("inbox try-start", msg is not null);
+
+    await store.MarkProcessedAsync(msg!, now.AddSeconds(1), CancellationToken.None).ConfigureAwait(false);
+    var again = await store.TryStartProcessingAsync("probe-consumer", messageId, now.AddSeconds(2),
+        TimeSpan.FromMinutes(2), CancellationToken.None).ConfigureAwait(false);
+    check("inbox processed → duplicate start returns null", again is null);
 }
 
 // ═══ 外部库连接串解析（密码不打印）═══
