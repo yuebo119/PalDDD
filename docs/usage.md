@@ -126,6 +126,24 @@ services.AddPalPipelineBehaviors();
 
 > ⚠️ **AOT 注意**：无类型参数重载 `AddPalPipelineBehaviors()` 是开放泛型注册，Native AOT 下值类型响应（`Unit`/`int`/`Guid`）会触发 `AotCannotCreateGenericValueType`。AOT 应用请改用 `AddPalCommandHandler<T...>()` / `AddPalQueryHandler<T...>()`（内部自动闭合注册管道行为），或显式闭合注册 `AddPalPipelineBehaviors<TRequest, TResponse>()`。两种注册先到先得、互斥——旧代码同时调用两者时解析结果收敛为 2 个 behavior，不会重复执行。详见 [aot.md](aot.md)。
 
+### 与 HTTP 请求验证的分工（两层，别混）
+
+Pal.DDD 的验证在 **CQRS 管线**里（`IPalValidator<T>` + `ValidationBehavior`），因此覆盖**所有分发路径**——HTTP 端点、Kafka / RabbitMQ 消费者、后台任务触发的同一条命令都走同一套验证。
+
+HTTP **请求形态**（query / header / body 的必填、长度、范围）是另一层，属宿主应用职责：
+
+| 层 | 负责方 | 机制 |
+|----|--------|------|
+| 请求形态 | 宿主应用（ASP.NET Core 平台） | .NET 10 起内置 Minimal API 验证：宿主侧 `builder.Services.AddValidation()` + `DataAnnotations` 特性（`[Required]` / `[StringLength]` / `[Range]` …）。源生成器驱动，自动发现处理器参数类型并逐端点挂验证过滤器（.NET 11 另增 `SkipValidationAttribute` 跳过指定参数、`ValidatableTypeAttribute` 强制生成静态推导不到的类型信息） |
+| 领域 / 业务规则 | Pal.DDD | `IPalValidator<T>` + `ValidationBehavior`，见上文 |
+
+两种误用都要避免：
+
+- **把业务规则写进端点的 `IEndpointFilter`**：非 HTTP 路径触发的同一条命令会绕过该验证——这正是本框架把验证放在管线而不是端点的原因。
+- **只给请求模型打 `[Required]` 等特性、却不启用 `AddValidation()`**：那些特性**不会生效**。Minimal API 参数不会被平台自动验证，这正是 .NET 10 引入该特性的原因（官方文档明确：未正确注册时请求返回 200 而非期望的 400）。
+
+`AddValidation()` 与 `Microsoft.Extensions.Validation` 是宿主侧的依赖选择，**本框架不引用它们**——框架内验证继续用不绑定任何验证库的 `IPalValidator<T>`。Web SDK 宿主无需额外引包（该 API 随 ASP.NET Core 提供），纯类库需自行引 `Microsoft.Extensions.Validation`。
+
 ## 显式事务边界
 
 CQRS 包不依赖 repository，也不隐式开启数据库事务。需要事务的命令 handler 应直接表达一致性需求：
@@ -509,6 +527,8 @@ app.MapPalHealthChecks("/health");
 ```
 
 异常中间件将 `PalValidationException` 映射为 400，将 `HandlerNotFoundException` 映射为 404，未处理异常映射为 500。
+
+端点映射器（`MapCommand<TCommand>` / `MapCommand<TCommand, TResponse>` / `MapQuery<TQuery, TResult>`）把 HTTP 端点绑定到 CQRS 分发，完整用法见[教程](tutorial.md)；其请求体的**形态验证**（必填/长度/范围）由宿主侧的平台内置验证负责，与框架的 `IPalValidator<T>` 分工见[验证](#验证)一节。
 
 ## Kafka / RabbitMQ
 
