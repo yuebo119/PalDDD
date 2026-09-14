@@ -71,7 +71,8 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 | **`git add -A` + `dotnet run` 产物** | file-based app 的 runfile 产物落在 CWD 相对 `dotnet/`，`-A` 会暂存它们（实测被扫文件数 2 → 32） | 隔离脚本用**显式 `git add <file>`**；`.gitignore` 加 `dotnet/` |
 | **`cmd \| tail` / `tee` 掩码退出码** | GitHub bash 默认无 pipefail，管道退出码取末段 → 门禁假绿（本仓已发生 5 次，最近 ITM-648） | 取 `${PIPESTATUS[0]}`；CI 里 `set -o pipefail` 必须在**首个管道之前** |
 | **「退出码 0」≠ 任务成功** | 我曾以 `\| tail` 运行覆盖率脚本，脚本实际构建失败却报 exit 0 | 判定门禁结果时读**输出内容**，不只看退出码 |
-| **覆盖率门禁形态** | 脚本 `scripts/ci-coverage.cs` 已就绪（fail-closed + `--selftest`），但**未接入 CI**；阈值 0.65 锚定 2026-07-30 旧基线 | 状态与阈值见 [docs/test-coverage-baseline.md](docs/test-coverage-baseline.md) §门禁阈值 |
+| **覆盖率门禁形态** | 脚本 `scripts/ci-coverage.cs` 已接入 CI（独立 coverage job）+ 阈值 0.70（2026-09-14 实测校准）；合并 glob 曾因 MTP 双层落点缺陷卡死（`277bc34` 修复为递归 glob） | 状态与阈值见 [docs/test-coverage-baseline.md](docs/test-coverage-baseline.md) §门禁阈值 |
+| **Agent 用 python/脚本重写源文件 = 行尾污染** | CRLF 仓库被 `newline='\n'` 写成纯 LF（两轮三犯：`4a64fba` 修 1543 处、`277bc34` 又修 255 处）；本仓已全 C# 化（0 个 .py），编辑工具链应向项目标准看齐 | 机械编辑用 **Edit/Write 工具**（原生保留行尾）；必须批量脚本处理时加**字节级验证**（CRLF 计数 == LF 计数，见 `.ai` OPS-9） |
 
 ---
 
