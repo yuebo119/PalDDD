@@ -30,8 +30,18 @@
   取整 0.70；沿用项目原始设计原则「基线 − 3pp」）。
   实现脚本为 **`scripts/ci-coverage.cs`**（2026-09-11 由 `ci-coverage.sh` 迁移为
   C# file-based app）：build → 逐项目 `test --coverage` → ReportGenerator 合并 →
-  解析合并 Cobertura 的 `line-rate` → 低于阈值退出 1（fail-closed）。阈值可经
-  `COVERAGE_THRESHOLD` 环境变量覆盖；脚本自带 `--selftest`（11 例）。
+  解析合并 Cobertura 的 `line-rate` → 低于阈值退出 1（fail-closed）→ **单模块降幅
+  门禁（见下）**。阈值可经 `COVERAGE_THRESHOLD` 环境变量覆盖；脚本自带 `--selftest`
+  （18 例，含全局阈值路由与降幅判定）。
+
+- **单模块覆盖率降幅 ≤5pp**（2026-09-14 增，账本 §四「规则 6」落地）：
+  数据源 `coverage-baseline.json`（15 项目 line-rate 基线，由 `ci-coverage.cs --
+  --update-baseline` 从当前产物生成——基线更新属校准步骤，需评审后提交）。
+  判定：同项目「当前 line-rate vs 基线」降幅 > 5pp（绝对百分点，epsilon 1e-9 吸收
+  浮点噪声；等于容差放行）→ 退出 1。
+  口径边界：**同项目跨时间可比**（同一测试集插桩同一装配集）；**项目间不可比**
+  （各次插桩 lines-valid 从 1578 到 10371 不等——不能横向比较各项目 line-rate）。
+  基线缺失/解析空 → fail-closed；基线有、当前无产物 → WARN 不阻断（CI 全项目有产物）。
 
   **状态（2026-09-14 已接线）**：`ci.yml` 新增独立 **`coverage` job**（与
   `aot-verify`/`dialect-probe` 同构，并行、失败域隔离；不放 `build-and-test` 内是
