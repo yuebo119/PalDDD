@@ -134,7 +134,7 @@ HTTP **请求形态**（query / header / body 的必填、长度、范围）是�
 
 | 层 | 负责方 | 机制 |
 |----|--------|------|
-| 请求形态 | 宿主应用（ASP.NET Core 平台） | .NET 10 起内置 Minimal API 验证：宿主侧 `builder.Services.AddValidation()` + `DataAnnotations` 特性（`[Required]` / `[StringLength]` / `[Range]` …）。源生成器驱动，自动发现处理器参数类型并逐端点挂验证过滤器（.NET 11 另增 `SkipValidationAttribute` 跳过指定参数、`ValidatableTypeAttribute` 强制生成静态推导不到的类型信息） |
+| 请求形态 | 宿主应用（ASP.NET Core 平台） | .NET 10 起内置 Minimal API 验证：宿主侧 `builder.Services.AddValidation()` + `DataAnnotations` 特性（`[Required]` / `[StringLength]` / `[Range]` …）。源生成器驱动，自动发现处理器参数类型并逐端点挂验证过滤器（`SkipValidationAttribute` 跳过指定参数、`ValidatableTypeAttribute` 强制生成静态推导不到的类型信息——两者 .NET 10 已随 `Microsoft.Extensions.Validation` 包发布，.NET 11 起不再标记 experimental） |
 | 领域 / 业务规则 | Pal.DDD | `IPalValidator<T>` + `ValidationBehavior`，见上文 |
 
 两种误用都要避免：
