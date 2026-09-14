@@ -472,7 +472,7 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 | `bench/PalDDD.Benchmarks/Program.cs` | BenchmarkSwitcher + Smoke 模式入口 |
 | `bench/PalDDD.Benchmarks/FrameworkBenchmarks.cs` | 领域核心基准 |
 | `bench/PalDDD.Benchmarks/InfraBenchmarks.cs` | 基础设施基准 |
-| `scripts/verify-conventions.sh` | 规范验证脚本（三模式） |
+| `scripts/verify-conventions.cs` | 规范验证脚本（三模式） |
 | `AssertionStrengthGateTests.cs` | 断言强度检查测试（替代 Stryker；原 bash 脚本 MIG-003 下沉） |
 
 ---

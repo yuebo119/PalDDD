@@ -41,7 +41,7 @@
 
 ### CI（`.github/workflows/ci.yml`）
 
-`build-and-test`（vuln-scan → restore → build → test → secret-scan → verify-ai → gate → encoding/doc-consistency/tech-debt/test-gate → gate-lite）· `aot-verify`（PublishAot + 运行二进制）· **`coverage`（覆盖率阈值门禁 0.70，先 `dotnet tool restore` 取 reportgenerator）** · `path-gate` · `dialect-probe`（Testcontainers PG/MySQL）。
+`build-and-test`（vuln-scan → restore → build → test → secret-scan → dapper-param-guard → verify-ai → gate → encoding/doc-consistency/tech-debt/test-gate → template-gate；无 `.ai` 时降级为 gate-lite）· `aot-verify`（PublishAot + 运行二进制）· **`coverage`（覆盖率阈值门禁 0.70，先 `dotnet tool restore` 取 reportgenerator）** · `dialect-probe`（Testcontainers PG/MySQL；job 内含 Path gate 路径过滤步骤，仅 Store/SQL/DDL/映射面变更触发——非独立 job）。
 
 ### 门禁可信度（改动或新增门禁后必跑）
 

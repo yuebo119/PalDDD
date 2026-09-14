@@ -138,3 +138,17 @@ docker info                      # 本机：command not found
 ```
 
 **注意**：本报告所有数字均为本次真实运行的输出；`verify-conventions full` 测试阶段的 exit code 需用 `${PIPESTATUS[0]}` 或重定向捕获（`dotnet run ... | tail` 会掩码退出码——本仓已知陷阱，本次首跑即被掩码一次，已用重定向复跑确认 exit 1）。
+
+---
+
+## 七、修复轮闭环（2026-09-14 同日）
+
+本报告 6 项发现（ITM-675~680）已在修复轮全部闭环，明细与验证证据见
+[`action-items-2026-09-14-quality-run.md`](action-items-2026-09-14-quality-run.md)。要点：
+
+- **ITM-675**：服务器自行恢复（约 14 时），`Messaging.Integration.Tests` 复测 8/8 通过——5 失败 + 3 跳过全部消解。
+- **ITM-676**：Rabbit 预检升级为 AMQP 协议级握手，S3 反向验证三重——假 TCP 目标旧逻辑误判 `true` / 新逻辑 `false`；真服务器新逻辑 `true`（25ms）；端到端 8/8。
+- **ITM-677/678/679**：D2 状态时间线 · AGENTS.md CI 段校准（path-gate 归位 + dapper-param-guard/template-gate 补全）· 4 处 .sh 引用修正。
+- **ITM-680**：V9 边界裁决为方案②（维持现状），已知边界已登记在 V9 块头注释。
+- 门禁复验：encoding-gate 5/5 · verify-conventions --quick 全过 · guard 8/8 GREEN · check-all 三段全零。
+

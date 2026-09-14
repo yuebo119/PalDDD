@@ -639,7 +639,7 @@ git commit -m "功能：xxx + 升版本 preview.2"
 
 > **定位**：§十一管"写成什么样"（格式），本节管"怎么生成"（流程）。**以后每次发版都按本流程执行。**
 > **核心原则**：事实与措辞分离——机械脚本收集可验证事实，撰写者只做分类与措辞；每条目可回溯到事实源；转正先于 tag。
-> **工具**（2026-09-04 起）：`scripts/changelog-facts.sh`（Phase 1 事实收集）/ `scripts/changelog-check.sh`（Phase 4 结构门禁，挂 §4.1 与 §5.1）。
+> **工具**（2026-09-04 起）：`scripts/changelog-facts.cs`（Phase 1 事实收集）/ `scripts/changelog-check.cs`（Phase 4 结构门禁，挂 §4.1 与 §5.1）。
 
 ### 12.0 流程总览
 
