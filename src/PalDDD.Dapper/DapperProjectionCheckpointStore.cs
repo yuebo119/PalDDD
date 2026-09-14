@@ -87,7 +87,12 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
             inserted = await connection.ExecuteAsync(
 
                     _insertSql,
-                    new { projectionName, sourceName, position, status = ProjectionCheckpointStatus.Processing, startedAt = ToTimeParam(startedAt), leaseUntil = ToTimeParam(leaseUntil) },
+                    // 2026-09-14 CI 修复：枚举参数显式 int 化——Dapper.AOT 生成拦截器把枚举
+                    // 直传驱动，PG 拒绝（InvalidCastException: Writing values of
+                    // 'ProjectionCheckpointStatus' is not supported）；经典路径驱动容忍，
+                    // 本地盲区（DialectProbe 本地 Skip + 探针未覆盖 Checkpoint）由 CI 容器暴露。
+                    // 对齐全 Store 既有模式（Saga `(int)state.Status` 等）。
+                    new { projectionName, sourceName, position, status = (int)ProjectionCheckpointStatus.Processing, startedAt = ToTimeParam(startedAt), leaseUntil = ToTimeParam(leaseUntil) },
                     Tx).ConfigureAwait(false);
         }
         catch (DbException ex) when (_dbType == DapperDbType.MySql && IsUniqueConstraintViolation(ex))
