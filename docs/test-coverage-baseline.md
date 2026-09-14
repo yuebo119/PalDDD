@@ -76,10 +76,16 @@
   本地想要完整数字：装 Docker 后设 `PALDDD_TEST_PG=1` / `PALDDD_TEST_MYSQL=1`，
   或按上表的分步方法只补跑缺失项目再取并集。
 
-- **单模块不允许从当前值下降超过 5%**——未自动化（需逐模块基线快照），靠评审轮人工
-  核对上表。自动化的可行路径：`scripts/ci-coverage.cs` 已逐项目产出
-  `TestResults/coverage.<项目名>.cobertura.xml`，可解析各文件 `line-rate` 与本表
-  基线比对，缺基线项（新增模块）按"建立基线"处理而非判失败。
+- **基线值来源与复校准**：`coverage-baseline.json` 的 15 个值取自 2026-09-14 本机
+  Debug 插桩产物，属**下界**——`PalDDD.PalORM.Tests` 的多方言测试因本机无 Docker 未跑完，
+  其 line-rate 偏低，故基线偏保守（CI 上更难触发降幅判定，不会造成假红）。首次
+  `coverage` job 运行后应用 CI 完整产物重取基线（`-- --update-baseline`，按上文
+  「基线更新属校准步骤，需评审后提交」）。
+
+> 本文上文「按模块覆盖率」分档表与下文「覆盖率低的已知原因」表均为 **2026-07-30 历史
+> 视角**——其中的百分比已与实际脱节（例如 `Core.SourceGen` 当时记 42.4%，2026-09-14
+> 实测 91.7%），保留用于对照当时的判断，**不作为门禁输入**；门禁输入只有
+> `coverage-baseline.json`（逐项目降幅）与合并 Cobertura 的全局 line-rate（全局阈值）。
 
 ## 覆盖率低的已知原因（非缺陷）
 
