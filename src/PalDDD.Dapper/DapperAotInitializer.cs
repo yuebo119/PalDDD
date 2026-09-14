@@ -1,17 +1,25 @@
 // ═══════════════════════════════════════════════════════════════
 // 🚀 DapperAotInitializer — SQLite TypeHandler 注册（AOT 就绪诊断）
 // ═══════════════════════════════════════════════════════════════
-// 💡 设计说明：
-//   ｜ 优化（二十五轮 API 扫描 A5）勘正：旧注释称"Dapper.AOT v1.0.52 存在 TypeHandler
-//   ｜   双向限制，待 v1.0.53+ 修复后启用"——XML 核实 1.0.52 已含完整双向面：
-//   ｜   Dapper.TypeHandler<T>.SetValue(DbParameter, T) / Parse(DbParameter) +
-//   ｜   TypeHandlerAttribute<,>（Dapper.AOT 1.0.52 net8.0 XML 证实），API 前提成立，
-//   ｜   "等上游修复"不成立。
-//   ｜ 真实障碍：本文件注册的三个 handler 继承经典 SqlMapper.TypeHandler<T>——
-//   ｜   Parse(object) 装箱签名，未对齐 AOT 侧 Dapper.TypeHandler<T> 抽象。
-//   ｜ 启用前置：迁移三个 handler 基类 + 全量回归 + NativeAOT 发布实测（迁移列为后续项）。
-//   ｜ 当前通过 [ModuleInitializer] 注册 TypeHandler，经典 Dapper 运行时路径生效。
-//   ｜ Dapper 查询参数中的 Ulid/Guid/DateTimeOffset 已通过 ToSqliteParameter() 手动转为 string。
+// 💡 设计说明（2026-09-13 探针实证更新，Dapper.AOT 1.0.52 → 1.1.0）：
+//   ｜ 1.1.0 实证矩阵（scratch 项目 NativeAOT 二进制实跑，非文档推断）：
+//   ｜   ✅ const 直引 / 实例属性 / switch 选常量三形状全部生成拦截器（属性与 switch
+//   ｜      均被编译期常量追踪——二十五轮顾虑的方言分支形状实际被支持）；
+//   ｜   ✅ 拦截器在 .NET 11 接线（JIT 堆栈走生成代码 + AOT 实跑全绿）——c-sharpcorner
+//   ｜      "1.0.52 拦截器不接线"指控对 1.1.0 不成立；
+//   ｜   ✅ 声明式 [Dapper.TypeHandler] 消费经典 SqlMapper.TypeHandler<T>（shim），
+//   ｜      "迁移三个 handler 基类"前置免除（推翻二十五轮 A5 勘正的基类迁移项）；
+//   ｜   ❌ CommandDefinition 拼写照 DAP057 拒绝不生成拦截器；
+//   ｜   ❌ 带匿名参数的 CommandDefinition 在 NativeAOT 下 PlatformNotSupportedException
+//   ｜      （经典路径参数绑定走 Reflection.Emit，AOT 禁用——"AOT 假象"的运行时根因）。
+//   ｜ 唯一真实启用障碍：ct 只能经 CommandDefinition 传递（直接重载无 ct 参数，CS1739 实证），
+//   ｜   拦截器只支持直接重载——二者互斥。2026-09-13 用户裁决："铺垫不动"（ct 保留，AOT
+//   ｜   需求由 PalORM 栈承担），本文件即铺垫完成态。
+//   ｜ 启用动作清单（未来若重启）：① [module: DapperAot] 启用 ② 全部调用点 CommandDefinition
+//   ｜   → 直接重载（SQL 执行层 ct 收缩，连接超时兜底）③ 删下方运行时注册（声明式接管）
+//   ｜   ④ csproj 移除 NoWarn 的 DAP005 ⑤ NativeAOT 发布实测。
+//   ｜ 双轨现状（探针实证）：未启用 DapperAot 时声明式特性不被消费（无效无害），运行时
+//   ｜   注册是经典路径的必要注册；启用后生成代码改走声明式，运行时注册变冗余可删。
 // ═══════════════════════════════════════════════════════════════
 
 using System.Runtime.CompilerServices;
@@ -20,27 +28,30 @@ using System.Diagnostics.CodeAnalysis;
 using Dapper;
 using PalUlid = ByteAether.Ulid.Ulid;
 
-// 🔧 待三个 handler 迁移至 Dapper.TypeHandler<T>（AOT 侧抽象，Parse(DbParameter) 非装箱签名）
-//    + 全量回归 + NativeAOT 发布实测后启用（二十五轮 API 扫描 A5 勘正，见上）
-// [module: DapperAot]
+// 🔬 实验分支（experiment/dapper-aot-full）：全量启用——调用点已全部改直接重载（34 处，
+//    ct 收缩为实验目的显式接受），声明式 TypeHandler 接管，运行时注册退役。
+[module: DapperAot]
+
+// 声明式 TypeHandler（1.1.0 特性）：启用后生成代码据此绑定（DAP053 指导口径），
+// 经典 SqlMapper.TypeHandler<T> 经 shim 消费，基类无需迁移。
+[assembly: Dapper.TypeHandler(typeof(PalUlid), typeof(global::PalDDD.Dapper.SqliteUlidTypeHandler))]
+[assembly: Dapper.TypeHandler(typeof(Guid), typeof(global::PalDDD.Dapper.SqliteGuidTypeHandler))]
+[assembly: Dapper.TypeHandler(typeof(DateTimeOffset), typeof(global::PalDDD.Dapper.SqliteDateTimeOffsetTypeHandler))]
 
 namespace PalDDD.Dapper;
 
-/// <summary>Dapper.AOT 编译时 TypeHandler 注册 + AOT 参数适配器</summary>
+/// <summary>Dapper.AOT 全局状态初始化（AOT 模式下仅列名映射，TypeHandler 走声明式）</summary>
 internal static class DapperAotInitializer
 {
     [SuppressMessage("Usage", "CA2255",
-        Justification = "Dapper.AOT 源生成器需要编译时可见的 TypeHandler 注册。模块初始化器确保在首次 Dapper 查询前完成注册。")]
+        Justification = "snake_case 列名映射是绕过 DI 直连构造场景的必要全局状态，模块初始化器保证直连构造自足。")]
     [ModuleInitializer]
     public static void Initialize()
     {
-        SqlMapper.AddTypeHandler(new SqliteUlidTypeHandler());
-        SqlMapper.AddTypeHandler(new SqliteGuidTypeHandler());
-        SqlMapper.AddTypeHandler(new SqliteDateTimeOffsetTypeHandler());
-        // P2 修复（十一轮·实测发现）：snake_case 列名 → PascalCase 属性映射是 Store 层
-        // 正确性的必要全局状态，此前只在 DI 注册路径（DapperServiceCollectionExtensions）
-        // 与测试夹具设置——绕过 DI 直连构造（公共构造签名显式支持）时字符串列静默映射为空。
-        // 与 TypeHandler 同级放 ModuleInitializer，直连构造自足；DI/测试路径重复设置幂等。
+        // 运行时 TypeHandler 注册已退役（声明式 [Dapper.TypeHandler] 接管，见上）。
+        // P2 修复（十一轮·实测发现）保留：snake_case 列名 → PascalCase 属性映射——
+        // ⚠️ 实验验证点：经典 Dapper 消费此全局设置；AOT 生成 RowFactory 是否同样尊重
+        // 尚未实证（snake_case 测试若红即命中此风险，处置见实验报告）。
         global::Dapper.DefaultTypeMap.MatchNamesWithUnderscores = true;
     }
 

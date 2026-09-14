@@ -1,0 +1,18 @@
+{
+  "//": "单模块覆盖率基线(A6 降幅门禁,容差 5pp)——键=测试项目名,值=line-rate 基线;由 ci-coverage --update-baseline 更新",
+  "PalDDD.Analyzers.Tests": 0.4366,
+  "PalDDD.CQRS.Tests": 0.3098,
+  "PalDDD.Compression.Tests": 0.8801,
+  "PalDDD.Core.Abstractions.Tests": 0.0132,
+  "PalDDD.Core.Tests": 0.309,
+  "PalDDD.DependencyInjection.Tests": 0.1511,
+  "PalDDD.EventLog.Tests": 0.5426,
+  "PalDDD.Hosting.AspNetCore.Tests": 0.5161,
+  "PalDDD.Integration.Tests": 0.5284,
+  "PalDDD.Messaging.Integration.Tests": 0.3901,
+  "PalDDD.Messaging.Tests": 0.2179,
+  "PalDDD.Projections.EventLog.Tests": 0.3493,
+  "PalDDD.Repository.EFCore.Tests": 0.081,
+  "PalDDD.Serialization.Tests": 0.9275,
+  "PalDDD.Transactions.Tests": 0.4871
+}

@@ -1,9 +1,10 @@
 // ─────────────────────────────────────────────────────────────
 // 📥 DapperInboxStore — 收件箱存储的 Dapper 实现
-//    纯 Dapper SQL + 运行时经典 Dapper 路径（v10 勘正：AOT 拦截未启用，非零反射）
+//    纯 Dapper SQL + Dapper.AOT 拦截器路径（2026-09-13 勘正：34 调用点全量拦截接管，
+//    调用点直接重载已为生成拦截器目标；经典反射路径不再可达）
 // ─────────────────────────────────────────────────────────────
-// AOT 安全性：同 DapperOutboxStore（v10 勘正：运行时经典路径含反射，真 AOT 不可达——
-// 技术依据是 csproj IL2062/IL3058 注释；ADR-020 为退役路线，v11 补注）。
+// AOT 安全性：同 DapperOutboxStore（封装 API 面三方言 NativeAOT 实测 13/13，
+// 边界与库级 46 警告说明见 docs/persistence-aot-status.md；ADR-020 已修订为退役延后）。
 //
 // 💡 什么是收件箱模式（Inbox Pattern）？
 //   ｜ 当服务消费消息队列中的消息时，可能出现"处理成功但确认失败"
@@ -82,8 +83,8 @@ public sealed class DapperInboxStore : IInboxStore
         try
         {
             insertedId = await c.QueryFirstOrDefaultAsync<long?>(
-                new CommandDefinition(_dialect.InboxInsert,
-                    new { c = consumerName, m = messageId, now = ToTimeParam(now) }, Tx, cancellationToken: ct)).ConfigureAwait(false);
+                _dialect.InboxInsert,
+                    new { c = consumerName, m = messageId, now = ToTimeParam(now) }, Tx).ConfigureAwait(false);
         }
         catch (DbException ex) when (_dbType == DapperDbType.MySql && IsUniqueConstraintViolation(ex))
         {
@@ -104,8 +105,8 @@ public sealed class DapperInboxStore : IInboxStore
         }
 
         var existing = await c.QueryFirstOrDefaultAsync<InboxMessage>(
-            new CommandDefinition(SqlTemplates.InboxSelect,
-                new { c = consumerName, m = messageId }, Tx, cancellationToken: ct)).ConfigureAwait(false);
+            SqlTemplates.InboxSelect,
+                new { c = consumerName, m = messageId }, Tx).ConfigureAwait(false);
 
         if (existing is not null)
         {
@@ -115,7 +116,7 @@ public sealed class DapperInboxStore : IInboxStore
                 && (now - existing.ProcessingStartedAt.Value) < processingTimeout) return null;
 
             var rows = await c.ExecuteAsync(
-                new CommandDefinition(SqlTemplates.InboxStartProcessing,
+                SqlTemplates.InboxStartProcessing,
                     new
                     {
                         now = ToTimeParam(now),
@@ -123,7 +124,7 @@ public sealed class DapperInboxStore : IInboxStore
                         // P1 修复（超时接管）：cutoff = now - processingTimeout——超时前的 Processing
                         // 记录可被抢占，刚开始的不可（CAS 由 processing_started_at 原子更新保证）
                         cutoff = ToTimeParam(now - processingTimeout)
-                    }, Tx, cancellationToken: ct)).ConfigureAwait(false);
+                    }, Tx).ConfigureAwait(false);
             if (rows == 0) return null;
 
             // ITM-168 修复：抢占后本地字段同步 DB 真值——原实现只改 Status/Attempts，
@@ -154,8 +155,8 @@ public sealed class DapperInboxStore : IInboxStore
         // 实际失败点在 C# 层：下方 message.ProcessingStartedAt!.Value 先抛 InvalidOperationException
         //（R41 ITM-271 勘正原"SQL 等值比较 NULL 永假"的失实描述——SQL 层不可达）；行为仍 fail-closed。
         await c.ExecuteAsync(
-            new CommandDefinition(SqlTemplates.InboxMarkProcessed,
-                new { at = ToTimeParam(processedAt), id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value) }, Tx, cancellationToken: ct)).ConfigureAwait(false);
+            SqlTemplates.InboxMarkProcessed,
+                new { at = ToTimeParam(processedAt), id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value) }, Tx).ConfigureAwait(false);
     }
 
     public async ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
@@ -176,8 +177,8 @@ public sealed class DapperInboxStore : IInboxStore
         // P2/P3 修复（十七轮）：CommandDefinition 传 ct（见 TryStartProcessingAsync 同款注释）
         // 三十八轮 P2 修复：同 MarkProcessedAsync——processing_started_at 抢占 token 守卫
         await c.ExecuteAsync(
-            new CommandDefinition(SqlTemplates.InboxMarkFailed,
-                new { err = failureReason, id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value) }, Tx, cancellationToken: ct)).ConfigureAwait(false);
+            SqlTemplates.InboxMarkFailed,
+                new { err = failureReason, id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value) }, Tx).ConfigureAwait(false);
     }
 
     /// <summary>

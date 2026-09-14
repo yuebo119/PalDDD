@@ -39,7 +39,7 @@ public sealed class BrokerFixture : IAsyncDisposable
     /// </summary>
     public bool KafkaAvailable { get; private set; } = true;
 
-    /// <summary>RabbitMQ 预检结果（unified v2.0 2026-08-20，对称 KafkaAvailable）——远程路径 TCP 探活，Testcontainers 路径恒 true。</summary>
+    /// <summary>RabbitMQ 预检结果（unified v2.0 2026-08-20，对称 KafkaAvailable；ITM-676 起为 AMQP 协议级握手探测）——远程路径完整握手，Testcontainers 路径恒 true。</summary>
     public bool RabbitAvailable { get; private set; } = true;
     private KafkaContainer? _kafka;
     private RabbitMqContainer? _rabbitMq;
@@ -132,17 +132,31 @@ public sealed class BrokerFixture : IAsyncDisposable
             }
         }
 
-        // unified v2.0（2026-08-20）：RabbitMQ 预检——TCP 探活 host:port（5s），对称 Kafka 预检。
-        // broker 不可达时显式 Skip 而非 19s×3 假失败（本地实测 41s 假失败签名；T-DDD-6 四层防线在 Rabbit 轴的补全）。
+        // unified v2.0（2026-08-20）：RabbitMQ 预检，对称 Kafka 预检。
+        // broker 不可达时显式 Skip 而非假失败（本地实测 41s 假失败签名；T-DDD-6 四层防线在 Rabbit 轴的补全）。
+        // ITM-676（2026-09-14 升级）：原实现只做 TCP 探活，对"TCP 通、AMQP 死"故障模式误判为
+        // 可用——实测 192.168.200.120:5672 端口 12ms 可达但 connection.start 帧永不到达，预检
+        // 判 true 致 5 测试各 18.9s 假失败（D2 记录该故障模式两度出现）。升级为 AMQP 协议级
+        // 探测：完整走一次握手（含凭据），与 Kafka 轴 GetMetadata 深度对称——半坏环境同样
+        // 落入 Skip 而非假失败。
         if (!_rabbitProbed)
         {
             _rabbitProbed = true;
             try
             {
-                using var tcp = new System.Net.Sockets.TcpClient();
-                await tcp.ConnectAsync(_remoteRabbitHost!, _remoteRabbitPort)
-                    .WaitAsync(TimeSpan.FromSeconds(5));
-                RabbitAvailable = tcp.Connected;
+                var probeFactory = new ConnectionFactory
+                {
+                    HostName = _remoteRabbitHost!,
+                    Port = _remoteRabbitPort,
+                    UserName = _rabbitUser,
+                    Password = _rabbitPassword,
+                    AutomaticRecoveryEnabled = false,
+                    RequestedConnectionTimeout = TimeSpan.FromSeconds(5)
+                };
+                // 双层超时：RequestedConnectionTimeout 管 socket 层；CTS 兜住握手阶段的等待
+                using var probeCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await using var probe = await probeFactory.CreateConnectionAsync(probeCts.Token);
+                RabbitAvailable = probe.IsOpen;
             }
 #pragma warning disable CA1031 // Intentionally broad: 环境探测任意失败均视为不可用
             catch
@@ -313,7 +327,7 @@ public sealed class BrokerIntegrationTests
     private void SkipIfRabbitUnavailable()
     {
         if (!Fixture.RabbitAvailable)
-            Skip.Test("RabbitMQ broker 预检失败（TCP 探活不可达）——环境问题，非代码失败。检查服务器 RabbitMQ 服务/网络后重试。（若为远程环境请检查 PALDDD_TEST_RABBIT_* 凭据配置）");
+            Skip.Test("RabbitMQ broker 预检失败（AMQP 握手不可达）——环境问题，非代码失败。检查服务器 RabbitMQ 服务/网络后重试。（若为远程环境请检查 PALDDD_TEST_RABBIT_* 凭据配置）");
     }
 
     /// <summary>

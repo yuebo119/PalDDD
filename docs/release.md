@@ -3,7 +3,7 @@
 > 本规范定义 Pal.DDD 项目从代码变更到 NuGet 发布的标准流程。
 > 所有版本发布（含补丁版/小版本/大版本/Preview）必须遵守。
 >
-> **当前状态**：`VersionPrefix=2.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**2.1.0 已发布**（2026-09-04）。2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正，内容后并入 `[2.1.0]` 段，**CHANGELOG 先行教训第二次**，见 §9 教训 2）。1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`；`[1.1.0]` 段为事后回填）。tag 之后的变更累积在 `[Unreleased]`，下个版本发布前需将 `VersionPrefix` 升位。
+> **当前状态**：`VersionPrefix=2.2.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**2.2.0 已发布**（2026-09-15）。2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）。2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正，内容后并入 `[2.1.0]` 段，**CHANGELOG 先行教训第二次**，见 §9 教训 2）。1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`；`[1.1.0]` 段为事后回填）。tag 之后的变更累积在 `[Unreleased]`，下个版本发布前需将 `VersionPrefix` 升位。
 > **首次发布待办**：本规范第 5/6/9 章在首次实际发布后需补实测教训（参考 ORM 项目 `docs/发布规范.md` §9）。
 
 ---
@@ -257,21 +257,22 @@ dotnet build PalDDD.slnx -c Release --no-incremental -warnaserror
 for p in $(find test -name "*.Tests.csproj" | sort); do dotnet test "$p" --no-restore --no-build; done # v62：find 生成全 16 项目（原手列 11 项漏 Compression/Core.Abstractions/Messaging.Integration/PalORM/Repository.EFCore）
 
 # 4. 规范验证
-bash scripts/verify-conventions.sh
+dotnet run scripts/verify-conventions.cs
 
 # 5. AI 系统门禁（如使用 .ai/）
-bash .ai/scripts/gate-check.sh --allow-dirty
+dotnet run scripts/gate.cs -- --allow-dirty
 
 # 5.5 变更日志结构门禁（§十二 Phase 4——FAIL 阻断发版）
-bash scripts/changelog-check.sh
+dotnet run scripts/changelog-check.cs
 
 # 6. 本地 pack 验证
 rm -rf /tmp/release-preview && mkdir -p /tmp/release-preview
-for proj in $(ls src/); do
-    csproj="src/$proj/$proj.csproj"
-    [ -f "$csproj" ] && dotnet pack "$csproj" -c Release --no-build -o /tmp/release-preview
+# v2.2.0 发布实测修正：原 `for proj in $(ls src/)` 在输出带 `/` 后缀的 shell 环境
+# （Git Bash ls -F 类行为）下拼出错误路径静默空转产出 0 包——改 glob 直接枚举 csproj
+for csproj in src/*/*.csproj; do
+    dotnet pack "$csproj" -c Release --no-build -o /tmp/release-preview --nologo
 done
-ls /tmp/release-preview/*.nupkg | wc -l   # 应等于公开发布包数
+ls /tmp/release-preview/*.nupkg | wc -l   # 应等于 35（公开发布包数，v2.1.0/v2.2.0 均为 35）
 ```
 
 ### 4.2 nuspec 元数据检查
@@ -307,7 +308,7 @@ git log -1 --format="%h %s"
 # 2. 确认版本号已更新到目标版本 + CHANGELOG 已转正（§十二 Phase 5——未转正禁止打 tag）
 grep -E "VersionPrefix|VersionSuffix" Directory.Build.props
 grep -E "^## \[" CHANGELOG.md | head -2        # 首行 [Unreleased]，次行 [目标版本]
-bash scripts/changelog-check.sh                # 必须 0 FAIL
+dotnet run scripts/changelog-check.cs                # 必须 0 FAIL
 
 # 3. 打 tag（tag 名格式：v + 版本号，如 v1.1.0）
 git tag v1.1.0
@@ -639,7 +640,7 @@ git commit -m "功能：xxx + 升版本 preview.2"
 
 > **定位**：§十一管"写成什么样"（格式），本节管"怎么生成"（流程）。**以后每次发版都按本流程执行。**
 > **核心原则**：事实与措辞分离——机械脚本收集可验证事实，撰写者只做分类与措辞；每条目可回溯到事实源；转正先于 tag。
-> **工具**（2026-09-04 起）：`scripts/changelog-facts.sh`（Phase 1 事实收集）/ `scripts/changelog-check.sh`（Phase 4 结构门禁，挂 §4.1 与 §5.1）。
+> **工具**（2026-09-04 起）：`scripts/changelog-facts.cs`（Phase 1 事实收集）/ `scripts/changelog-check.cs`（Phase 4 结构门禁，挂 §4.1 与 §5.1）。
 
 ### 12.0 流程总览
 
@@ -660,7 +661,7 @@ git commit -m "功能：xxx + 升版本 preview.2"
 ### 12.2 Phase 1——事实收集（发布启动时）
 
 ```bash
-bash scripts/changelog-facts.sh <上一版tag> [HEAD]     # 例: changelog-facts.sh v2.1.0
+dotnet run scripts/changelog-facts.cs -- <上一版tag> [HEAD]     # 例: changelog-facts <tag> v2.1.0
 ```
 
 产出 9 段事实清单：范围与提交分布 / 公共 API 快照 diff / 新增诊断 / 脚本与工作流增删 / 废弃扫描 / ADR 与文档增删 / 依赖变更 / 测试面板实测占位 / 当前 [Unreleased] 原料。
@@ -681,7 +682,7 @@ bash scripts/changelog-facts.sh <上一版tag> [HEAD]     # 例: changelog-facts
 ### 12.5 Phase 4——校验（机械 + 人工六问）
 
 ```bash
-bash scripts/changelog-check.sh    # FAIL=阻断（回 Phase 3）；WARN=人工裁决
+dotnet run scripts/changelog-check.cs    # FAIL=阻断（回 Phase 3）；WARN=人工裁决
 ```
 
 人工六问（逐条答"是"才过）：①每条能回答"对我的影响"？②每个数字有实测/账本口径且标注来源？③每条有锚点（类型/成员/文件）？④每条 Fixed 说清"之前会怎样"？⑤分类层无内部叙事泄漏？⑥头部引用块（范围/兼容性/组织方式）齐备？

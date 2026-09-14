@@ -1,3 +1,4 @@
+using System.Data;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using Dapper;
@@ -44,6 +45,17 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
+    /// <summary>时间参数方言编码（镜像 DapperOutboxStore.ToTimeParam——PG 原生 DateTimeOffset，
+    /// MySQL 无偏移 UTC 串，SQLite "O" 串；SQLite TypeHandler 声明式注册只服务无显式编码的
+    /// 遗留路径，显式编码后 PG timestamptz 不再收 text）。第三份副本——提取重构留主线任务。</summary>
+    private object ToTimeParam(DateTimeOffset value)
+        => _dbType switch
+        {
+            DapperDbType.PostgreSql => value,
+            DapperDbType.MySql => DapperAotInitializer.ToMySqlParameter(value),
+            _ => DapperAotInitializer.ToSqliteParameter(value),
+        };
+
     /// <inheritdoc />
     public async ValueTask<IdempotencyRecord?> GetAsync(
         string operationName, string key, DateTimeOffset now, CancellationToken ct = default)
@@ -57,7 +69,7 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
             WHERE operation_name = @OperationName AND idempotency_key = @Key
             """;
         var row = await _connection.QueryFirstOrDefaultAsync<IdempotencyRow>(
-            new CommandDefinition(sql, new { OperationName = operationName, Key = key }, Tx, cancellationToken: ct))
+            sql, new { OperationName = operationName, Key = key }, Tx)
             .ConfigureAwait(false);
         if (row is null) return null;
 
@@ -102,9 +114,9 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         int affected;
         try
         {
-            affected = await _connection.ExecuteAsync(new CommandDefinition(insertSql,
-                new { OperationName = operationName, Key = key, Status = statusProcessing, LockedUntil = lockedUntil, ExpiresAt = expiresAt, UpdatedAt = now },
-                Tx, cancellationToken: ct)).ConfigureAwait(false);
+            affected = await _connection.ExecuteAsync(insertSql,
+                new { OperationName = operationName, Key = key, Status = statusProcessing, LockedUntil = ToTimeParam(lockedUntil), ExpiresAt = ToTimeParam(expiresAt), UpdatedAt = ToTimeParam(now) },
+                Tx).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsUniqueConstraintViolation(ex))
         {
@@ -126,15 +138,15 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
                     error = NULL, response_payload = NULL, revision = revision + 1
                 WHERE operation_name = @OperationName AND idempotency_key = @Key AND expires_at <= @Now
                 """;
-            affected = await _connection.ExecuteAsync(new CommandDefinition(reclaimSql,
-                new { OperationName = operationName, Key = key, Status = statusProcessing, LockedUntil = lockedUntil, ExpiresAt = expiresAt, UpdatedAt = now, Now = now },
-                Tx, cancellationToken: ct)).ConfigureAwait(false);
+            affected = await _connection.ExecuteAsync(reclaimSql,
+                new { OperationName = operationName, Key = key, Status = statusProcessing, LockedUntil = ToTimeParam(lockedUntil), ExpiresAt = ToTimeParam(expiresAt), UpdatedAt = ToTimeParam(now), Now = ToTimeParam(now) },
+                Tx).ConfigureAwait(false);
             if (affected == 0) return null;
 
             // 换代后回读 DB 新 revision
             const string readBackSql = "SELECT revision FROM idempotency_records WHERE operation_name = @OperationName AND idempotency_key = @Key";
-            var newRevision = await _connection.QuerySingleOrDefaultAsync<long>(new CommandDefinition(readBackSql,
-                new { OperationName = operationName, Key = key }, Tx, cancellationToken: ct)).ConfigureAwait(false);
+            var newRevision = await _connection.QuerySingleOrDefaultAsync<long>(readBackSql,
+                new { OperationName = operationName, Key = key }, Tx).ConfigureAwait(false);
 
             return new IdempotencyRecord(operationName, key,
                 IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, newRevision);
@@ -156,15 +168,19 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
             WHERE operation_name = @OperationName AND idempotency_key = @Key
               AND revision = @ExpectedRevision AND status <> @Completed
             """;
-        affected = await _connection.ExecuteAsync(new CommandDefinition(reclaimCasSql,
+        affected = await _connection.ExecuteAsync(reclaimCasSql,
             new
             {
-                OperationName = operationName, Key = key, Status = statusProcessing,
-                LockedUntil = lockedUntil, ExpiresAt = expiresAt, UpdatedAt = now,
+                OperationName = operationName,
+                Key = key,
+                Status = statusProcessing,
+                LockedUntil = ToTimeParam(lockedUntil),
+                ExpiresAt = ToTimeParam(expiresAt),
+                UpdatedAt = ToTimeParam(now),
                 ExpectedRevision = existing.Revision,
                 Completed = (int)IdempotencyRecordStatus.Completed
             },
-            Tx, cancellationToken: ct)).ConfigureAwait(false);
+            Tx).ConfigureAwait(false);
         if (affected == 0) return null;
 
         return new IdempotencyRecord(operationName, key,
@@ -187,14 +203,19 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
             WHERE operation_name = @OperationName AND idempotency_key = @Key
               AND revision = @ExpectedRevision AND status = @Processing
             """;
-        var affected = await _connection.ExecuteAsync(new CommandDefinition(sql,
-            new
-            {
-                OperationName = record.OperationName, Key = record.Key,
-                Status = statusCompleted, UpdatedAt = completedAt, Payload = payloadBytes,
-                ExpectedRevision = record.Revision, Processing = statusProcessing
-            },
-            Tx, cancellationToken: ct)).ConfigureAwait(false);
+        // 🔬 AOT 实验：byte[] 参数走 DynamicParameters + 显式 DbType.Binary——1.1.0 List
+        //    expansion 把匿名对象里的 byte[] 误判为 IN 列表做 PackListParameters 展开
+        //    （SQL 变行值，SQLite "row value misused"）；DynamicParameters 是 1.1.0 官方
+        //    支持路径（按 bag 协议绑定，绕开类型推断误判）。
+        var dp = new DynamicParameters();
+        dp.Add("OperationName", record.OperationName);
+        dp.Add("Key", record.Key);
+        dp.Add("Status", statusCompleted);
+        dp.Add("UpdatedAt", completedAt);
+        dp.Add("Payload", payloadBytes, DbType.Binary);
+        dp.Add("ExpectedRevision", record.Revision);
+        dp.Add("Processing", statusProcessing);
+        var affected = await _connection.ExecuteAsync(sql, dp, Tx).ConfigureAwait(false);
         if (affected > 0)
             record.MarkCompleted(responsePayload, completedAt);
     }
@@ -216,14 +237,18 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
             WHERE operation_name = @OperationName AND idempotency_key = @Key
               AND revision = @ExpectedRevision AND status <> @Completed
             """;
-        var affected = await _connection.ExecuteAsync(new CommandDefinition(sql,
+        var affected = await _connection.ExecuteAsync(sql,
             new
             {
-                OperationName = record.OperationName, Key = record.Key,
-                Status = statusFailed, UpdatedAt = failedAt, Error = reason,
-                ExpectedRevision = record.Revision, Completed = statusCompleted
+                OperationName = record.OperationName,
+                Key = record.Key,
+                Status = statusFailed,
+                UpdatedAt = failedAt,
+                Error = reason,
+                ExpectedRevision = record.Revision,
+                Completed = statusCompleted
             },
-            Tx, cancellationToken: ct)).ConfigureAwait(false);
+            Tx).ConfigureAwait(false);
         if (affected > 0)
             record.MarkFailed(reason, failedAt);
     }
@@ -246,11 +271,12 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
     private static DateTimeOffset ToUtcOrMin(DateTimeOffset value)
         => value == default ? value : DateTime.SpecifyKind(value.DateTime, DateTimeKind.Utc);
 
+
     /// <summary>Dapper 物化 DTO（public setters 供 Dapper 映射——非领域实体）。
     /// CA1812 抑制：实例化由 Dapper 内部反射完成，编译器不可见。</summary>
     [SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes",
-        Justification = "Dapper QueryFirstOrDefaultAsync<T> 通过反射实例化此 DTO，编译器不可见。")]
-    private sealed class IdempotencyRow
+        Justification = "Dapper QueryFirstOrDefaultAsync<T> 通过 AOT 拦截器/物化管线实例化此 DTO，编译器不可见。")]
+    internal sealed class IdempotencyRow
     {
         public string OperationName { get; set; } = "";
         public string IdempotencyKey { get; set; } = "";
@@ -262,4 +288,5 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         public string? Error { get; set; }
         public long Revision { get; set; }
     }
+
 }

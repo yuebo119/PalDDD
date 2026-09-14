@@ -374,7 +374,7 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(source).Contains("RegisterValues");
     }
 
-[Test]
+    [Test]
     public async Task EnumGenerator_CrossFilePartial_CollectsFieldsFromBothTrees()
     {
         var result = RunGeneratorTwoTrees<EnumGeneratorProxy>(
@@ -927,8 +927,8 @@ public sealed class SourceGeneratorDirectTests
     private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics) RunIdentityGenerator(string source)
         => RunGenerator<IdentityGeneratorProxy>(source);
 
-private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics) RunGeneratorTwoTrees<TProxy>(string source1, string source2)
-        where TProxy : IGeneratorProxy, new()
+    private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics) RunGeneratorTwoTrees<TProxy>(string source1, string source2)
+            where TProxy : IGeneratorProxy, new()
     {
         var proxy = new TProxy();
         var parseOptions = CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Preview);

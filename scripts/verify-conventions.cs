@@ -41,13 +41,31 @@ using System.Text.RegularExpressions;
 // Windows 控制台默认编码非 UTF-8，中文/emoji 输出会乱码——对齐 bash echo -e UTF-8
 Console.OutputEncoding = Encoding.UTF8;
 
+// Justification: CA1508 断言 `fail == 0` 恒假（--build/full 路径）。经行为验证为**假阳性**：
+// 该分支可达且被实际走到——`dotnet run scripts/verify-conventions.cs -- --build` 在干净树
+// 上输出「验证通过（--build 模式，跳过 test）」即证明 fail==0 成立。规则在 V8/V9 新增的
+// 条件式 fail++ 之后无法正确归约计数器的取值域。非「关闭警告」，是已核实的误报。
+#pragma warning disable CA1508
+
+// ─── 自测分发（--selftest 不依赖仓库，置于仓库根定位之前）───
+// 2026-09-13 增：此前本脚本无自证能力（gate-audit 矩阵中标 UNVERIFIED），
+// V8/V9 判定逻辑抽为纯函数后由本条覆盖。
+if (args.Contains("--selftest"))
+{
+    return SelfTest();
+}
+
 // ─── 仓库根定位 ───
 var rootDir = FindRepoRoot();
 Environment.CurrentDirectory = rootDir;
 
 // ─── 参数解析（照原版：MODE=第一个参数，默认 full；未知值打 WARN）───
+// 注：白名单需含带前缀形态——调用方一致传 `--quick`/`--build`（见 .githooks、
+// docs/conventions.md、docs/testing.md），而默认值为不带前缀的 "full"。
+// 2026-09-13 修：原白名单写 ("full","quick","build")，导致 `--quick` 恒被判 unknown MODE
+// 而打印假 WARN（判定分支本身用 "--quick" 比较，行为不受影响，只是噪声）。
 var mode = args.Length > 0 ? args[0] : "full";
-if (mode is not ("full" or "quick" or "build"))
+if (mode is not ("full" or "--quick" or "--build"))
     Console.WriteLine($"WARN: unknown MODE: {mode}");
 
 var fail = 0;
@@ -84,6 +102,148 @@ Console.WriteLine();
         fail = 1;
     }
     else Console.WriteLine($"✅ 禁止 TODO/HACK/FIXME 通过");
+}
+
+// ─── V8：.pal/prompts/ 模板结构（2026-09-13 由「人工」约束机械化）───
+// 依据实测：9 个模板段数为 5/6/7 不等——7 个为「角色/框架约束/必须遵守/禁止/输出格式」
+// （其中 5 个另加「示例」段，为可选），bounded-context 以「项目引用指南」替代「输出格式」，
+// task-intake 为验收断言门专用结构。此处只断言**必填段**，不限制可选段与段序。
+{
+    var promptsDir = Path.Combine(rootDir, "src", "PalDDD.Prompts", ".pal", "prompts");
+    // 必填段清单（每项为该模板的最小段集；可选段不入表）
+    var requirements = new (string File, string[] Sections)[]
+    {
+        ("aggregate-root.prompt.md", ["角色", "框架约束", "必须遵守", "禁止", "输出格式"]),
+        ("bounded-context.prompt.md", ["角色", "框架约束", "必须遵守", "禁止", "项目引用指南"]),
+        ("command-handler.prompt.md", ["角色", "框架约束", "必须遵守", "禁止", "输出格式"]),
+        ("domain-event.prompt.md", ["角色", "框架约束", "必须遵守", "禁止", "输出格式"]),
+        ("projection-handler.prompt.md", ["角色", "框架约束", "必须遵守", "禁止", "输出格式"]),
+        ("query-handler.prompt.md", ["角色", "框架约束", "必须遵守", "禁止", "输出格式"]),
+        ("saga-orchestrator.prompt.md", ["角色", "框架约束", "必须遵守", "禁止", "输出格式"]),
+        ("task-intake.prompt.md", ["角色", "档位判据", "必填字段", "验收断言", "断言清单的设计约束", "拒绝路径", "与既有体系的衔接"]),
+        ("value-object.prompt.md", ["角色", "框架约束", "必须遵守", "禁止", "输出格式"]),
+    };
+    var problems = new List<string>();
+    var known = new HashSet<string>(StringComparer.Ordinal);
+    foreach (var fallback in requirements)
+    {
+        known.Add(fallback.File);
+        var path = Path.Combine(promptsDir, fallback.File);
+        if (!File.Exists(path)) { problems.Add($"{fallback.File}：文件不存在"); continue; }
+        var present = SectionNames(File.ReadLines(path));
+        foreach (var section in fallback.Sections)
+            if (!present.Contains(section))
+                problems.Add($"{fallback.File}：缺必填段「{section}」");
+    }
+
+    // 未登记的模板只 WARN 不 FAIL（新增模板须同步本表；避免把「新模板」误判为违规）
+    if (Directory.Exists(promptsDir))
+    {
+        var unregistered = Directory.GetFiles(promptsDir, "*.prompt.md")
+            .Select(Path.GetFileName)
+            .Where(n => n is not null && !known.Contains(n))
+            .Select(n => n!)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
+        foreach (var u in unregistered)
+            Console.WriteLine($"WARN V8 未登记的模板（须同步 requirements 表）：{u}");
+    }
+
+    if (problems.Count > 0)
+    {
+        Console.WriteLine($"❌ V8 .pal/prompts/ 模板缺必填段：");
+        foreach (var p in problems) Console.WriteLine($"   {p}");
+        fail++;
+    }
+    else Console.WriteLine($"✅ V8 .pal/prompts/ 模板必填段齐全（{requirements.Length} 个已登记）");
+}
+
+// ─── V9：文档引用的脚本路径必须存在（MIG 迁移收口已二次回归的类）───
+// 只检查**命令形态**引用（`bash X.sh` / `dotnet run X.cs`）——命令是要执行的，断链必炸；
+// 历史提及（「下沉自 X.sh」「已删除」等）由 IsHistoricalMention 排除，避免误报。
+// 已知边界（ITM-680 裁决 2026-09-14）：反引号/表格形态（`| scripts/x.sh |`、「见 scripts/x.sh」）
+// 不在抽取范围——2026-09-14 全仓实测该类存在 3 处失实（ITM-679 已修）。裁决维持现状（命令形态
+// 优先级更高；反引号形态含历史叙述会推高误报率），该类漂移由评审轮人工发现。
+// 若日后要扩展覆盖：先做全仓误报率实测（需先扩 IsHistoricalMention 关键词面）。
+{
+    var docs = new List<string>();
+    // 范围：docs（**排除 docs/review/**——历史审计记录是时点产物，其引用反映当时状态，
+    // 不追求与当前代码库一致，纳入扫描会产生大量误报并淹没真问题）、.github、根级文档
+    foreach (var dir in (string[])["docs", ".github"])
+        if (Directory.Exists(dir))
+            docs.AddRange(Directory.GetFiles(dir, "*.md", SearchOption.AllDirectories)
+                .Where(f => !ToPosix(f).Contains("/review/", StringComparison.Ordinal)));
+    foreach (var f in (string[])["README.md", "README.en.md", "AGENTS.md", "CHANGELOG.md"])
+        if (File.Exists(f)) docs.Add(f);
+
+    var broken = new List<string>();
+    // 命令形态：`bash X.sh` / `dotnet run X.cs`（引号可选）——这两种形态是要被执行的
+    var refPatterns = new Regex[]
+    {
+        new("bash\\s+\"?([A-Za-z0-9_./-]+\\.sh)\"?"),
+        new("dotnet\\s+run\\s+\"?([A-Za-z0-9_./-]+\\.cs)\"?"),
+    };
+    foreach (var doc in docs)
+    {
+        var posix = ToPosix(doc);
+        var lineno = 0;
+        foreach (var content in File.ReadLines(doc))
+        {
+            lineno++;
+            if (IsHistoricalMention(content)) continue;
+            foreach (var reference in ExtractScriptRefs(content, refPatterns))
+            {
+                // 只校验本仓路径（.ai/ 为独立 git 仓库，其内容不随主仓分发）
+                if (reference.StartsWith(".ai/", StringComparison.Ordinal)) continue;
+                if (!File.Exists(Path.Combine(rootDir, reference)))
+                    broken.Add($"{posix}:{lineno} 引用不存在：{reference}");
+            }
+        }
+    }
+
+    if (broken.Count > 0)
+    {
+        Console.WriteLine($"❌ V9 文档引用了不存在的脚本路径（{broken.Count} 处）：");
+        foreach (var b in broken) Console.WriteLine($"   {b}");
+        Console.WriteLine("   修法：改为现行路径，或若属历史提及则加「下沉自/已删除/迁移自」之一。");
+        fail++;
+    }
+    else Console.WriteLine("✅ V9 文档命令形态引用的脚本路径均存在");
+}
+
+// ─── V10：文档内部链接必须可解析（2026-09-13 增）───
+// 实测来源：`docs/review/action-items-2026-09-13-v5.md` 引用 `review-2026-09-13-full-v5.md`
+// 而该文件不存在——实际文件名是 09-12，但其标题与报告编号均为 2026-09-13（错在文件名）。
+// V9 只查命令形态引用的脚本路径，不查文档互链，故该断链此前无守护。
+// 精度设计（首版检查器自身的教训）：只查以 `.md` 结尾的目标（排除 `[标注](说明)` 形态，
+// 如 `[事实](代码可查)`），且按**所在文件目录**解析相对路径。
+{
+    var docFiles = new List<string>();
+    foreach (var dir in (string[])["docs"])
+        if (Directory.Exists(dir))
+            docFiles.AddRange(Directory.GetFiles(dir, "*.md", SearchOption.AllDirectories));
+    foreach (var f in (string[])["README.md", "README.en.md", "AGENTS.md", "CHANGELOG.md"])
+        if (File.Exists(f)) docFiles.Add(f);
+
+    var brokenLinks = new List<string>();
+    foreach (var doc in docFiles)
+    {
+        var dir = Path.GetDirectoryName(doc) ?? ".";
+        foreach (var target in ExtractDocLinkTargets(File.ReadLines(doc)))
+        {
+            if (!File.Exists(Path.Combine(dir, target)))
+                brokenLinks.Add($"{ToPosix(doc)} → {target}");
+        }
+    }
+
+    if (brokenLinks.Count > 0)
+    {
+        Console.WriteLine($"❌ V10 文档内部链接断链（{brokenLinks.Count} 处）：");
+        foreach (var b in brokenLinks) Console.WriteLine($"   {b}");
+        Console.WriteLine("   修法：改指向实际文件，或（若文件名本身有误）改名并同步引用处。");
+        fail++;
+    }
+    else Console.WriteLine($"✅ V10 文档内部链接全部可解析（{docFiles.Count} 个文档）");
 }
 
 // ─── --quick 模式：仅 grep 检查，跳过 build/test ───
@@ -222,3 +382,111 @@ static (int Rc, string Output) RunCapture(string fileName, string arguments, str
 
 // 路径转 posix 正斜杠（对齐 bash find/grep 输出形式）
 static string ToPosix(string path) => path.Replace('\\', '/');
+
+// ══════════════ V8/V9 判定（纯函数，供 --selftest 覆盖）══════════════
+
+// 段名集合：取 `## ` 标题，截断到首个「（」或「：」——容忍标题后缀
+// （如「框架约束（编译期强制执行）」「必填字段：验收断言工件」）
+static HashSet<string> SectionNames(IEnumerable<string> lines)
+{
+    var names = new HashSet<string>(StringComparer.Ordinal);
+    foreach (var line in lines)
+    {
+        if (!line.StartsWith("## ", StringComparison.Ordinal)) continue;
+        var title = line[3..].Trim();
+        var cut = title.IndexOfAny(['（', '：', '(']);
+        if (cut > 0) title = title[..cut].Trim();
+        if (title.Length > 0) names.Add(title);
+    }
+    return names;
+}
+
+// 历史提及识别：这类行提到旧脚本名是正确的记述，不应判为断链
+static bool IsHistoricalMention(string line) =>
+    line.Contains("下沉自", StringComparison.Ordinal) ||
+    line.Contains("迁移自", StringComparison.Ordinal) ||
+    line.Contains("已删除", StringComparison.Ordinal) ||
+    line.Contains("已迁移", StringComparison.Ordinal) ||
+    line.Contains("随 MIG", StringComparison.Ordinal);
+
+// 抽取命令形态的脚本引用（每个模式取第 1 捕获组）
+static IEnumerable<string> ExtractScriptRefs(string line, Regex[] patterns)
+{
+    foreach (var pattern in patterns)
+    {
+        var m = pattern.Match(line);
+        if (m.Success) yield return m.Groups[1].Value;
+    }
+}
+
+// V10：抽取 markdown 链接目标中**以 .md 结尾**者（去锚点）。
+// 只取 .md 目标是有意为之——项目里有 `[事实](代码可查)` 这类证据标注，
+// 它们不是文件引用；限定扩展名即天然排除，无需维护排除清单。
+static List<string> ExtractDocLinkTargets(IEnumerable<string> lines)
+{
+    var rx = new Regex(@"\]\(([^)\s]+\.md)(?:#[^)]*)?\)");
+    var targets = new List<string>();
+    foreach (var line in lines)
+        foreach (Match m in rx.Matches(line))
+        {
+            var target = m.Groups[1].Value;
+            if (target.StartsWith("http", StringComparison.OrdinalIgnoreCase)) continue;
+            if (target.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)) continue;
+            targets.Add(target);
+        }
+    return targets;
+}
+
+// ══════════════ 自测 ══════════════
+
+static int SelfTest()
+{
+    var passed = 0;
+    var total = 0;
+
+    void Case(string name, bool ok)
+    {
+        total++;
+        if (ok) passed++;
+        Console.WriteLine($"{(ok ? "PASS" : "FAIL")} SELFTEST {name}");
+    }
+
+    // V8 段名提取
+    var names = SectionNames(["# 值对象", "## 角色", "## 框架约束（编译期强制执行）", "### 子段不入集合", "## 必填字段：验收断言工件"]);
+    Case("段名提取含「角色」", names.Contains("角色"));
+    Case("段名截断「（」后缀", names.Contains("框架约束") && !names.Contains("框架约束（编译期强制执行）"));
+    Case("段名截断「：」后缀", names.Contains("必填字段"));
+    Case("三级标题不入集合", !names.Contains("子段不入集合"));
+    Case("无标题文本不入集合", SectionNames(["正文", ""]).Count == 0);
+
+    // V9 引用抽取
+    var patterns = new Regex[]
+    {
+        new("bash\\s+\"?([A-Za-z0-9_./-]+\\.sh)\"?"),
+        new("dotnet\\s+run\\s+\"?([A-Za-z0-9_./-]+\\.cs)\"?"),
+    };
+    Case("抽出 bash 命令引用", ExtractScriptRefs("bash scripts/old.sh --quick", patterns).Contains("scripts/old.sh"));
+    Case("抽出 dotnet run 引用", ExtractScriptRefs("dotnet run scripts/new.cs -- --quick", patterns).Contains("scripts/new.cs"));
+    Case("抽出带引号引用", ExtractScriptRefs("dotnet run \"scripts/a-b.cs\"", patterns).Contains("scripts/a-b.cs"));
+    Case("普通散文不误报", !ExtractScriptRefs("这是 scripts 目录的说明", patterns).Any());
+
+    // V9 历史提及排除
+    Case("历史提及「下沉自」被排除", IsHistoricalMention("MIG-003 下沉自 assertion-strength-check.sh"));
+    Case("历史提及「已迁移」被排除", IsHistoricalMention("已迁移为 .cs"));
+    Case("普通命令不被误排除", !IsHistoricalMention("bash scripts/x.sh --quick"));
+
+    // V10 链接抽取（正例）
+    Case("V10 抽出 .md 链接", ExtractDocLinkTargets(["[a](b.md)"]).Contains("b.md"));
+    Case("V10 抽出相对路径链接", ExtractDocLinkTargets(["[a](../x/b.md)"]).Contains("../x/b.md"));
+    Case("V10 去锚点", ExtractDocLinkTargets(["[a](b.md#sec)"]).Contains("b.md"));
+    // V10 链接抽取（反例——精度来源）
+    Case("V10 不抽 http 链接", ExtractDocLinkTargets(["[a](https://x/y.md)"]).Count == 0);
+    Case("V10 不抽 mailto", ExtractDocLinkTargets(["[a](mailto:x@y.z)"]).Count == 0);
+    Case("V10 不抽非 .md 目标（如 [事实](代码可查) 标注）", ExtractDocLinkTargets(["[事实](代码可查)"]).Count == 0);
+    Case("V10 空行不产目标", ExtractDocLinkTargets(["", "无链接"]).Count == 0);
+    Case("V10 一行多链接全抽", ExtractDocLinkTargets(["[a](a.md) 与 [b](b.md)"]).Count == 2);
+
+    Console.WriteLine();
+    Console.WriteLine($"SELFTEST {passed}/{total} 通过");
+    return passed == total ? 0 : 1;
+}

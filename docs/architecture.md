@@ -294,7 +294,9 @@ Command/API idempotency 通过 `PalActivitySource` 发出 `Idempotency Execute` 
 
 Command/API idempotency 还会通过 `PalMetrics` 记录 `paldd.idempotency.executed`、`paldd.idempotency.cached`、`paldd.idempotency.skipped` 和 `paldd.idempotency.failed`，用于区分真实执行、缓存命中、活动 lease 跳过和 handler 失败。
 
-生产持久化通过可选 `PalDDD.Idempotency.EFCore` 包提供 `IdempotencyDbContext`。它使用 `(OperationName, Key)` 复合主键保证幂等键唯一，使用 `UpdatedAt` optimistic concurrency token 保护过期 lease 复用和完成状态写入；核心 `PalDDD.Idempotency` 包不依赖 EF Core，保持 AOT-first 边界。
+生产持久化通过可选 `PalDDD.Idempotency.EFCore` 包提供 `IdempotencyDbContext`。它使用 `(OperationName, Key)` 复合主键保证幂等键唯一，使用 `Revision` 单调 concurrency token（v53 勘正：原称 `UpdatedAt` 时间戳令牌，与代码不符）保护过期 lease 复用和完成状态写入；核心 `PalDDD.Idempotency` 包不依赖 EF Core，保持 AOT-first 边界。
+
+过期记录的物理清理（删除过期行）不属于框架职责：框架保证逻辑过期（`ExpiresAt` 之后的记录不参与幂等判定，可被新请求复用），应用侧需基于 `ExpiresAt` 索引自行批量清理，框架不启动后台清理任务。
 
 ## Transactions
 

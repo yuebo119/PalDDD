@@ -37,25 +37,20 @@ Console.WriteLine("═══════ Pal.DDD 文档一致性校验（薄壳�
 Console.WriteLine($"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
 Console.WriteLine();
 
+// 2026-09-13 增：本脚本此前无自证能力（gate-audit 矩阵标 UNVERIFIED）。D7 的判定
+// 分两步——路径提取（正则）与缺失过滤——两步都可能静默失效（提取正则写窄则
+// 一条都不匹配、写宽则误报），故抽为纯函数并覆盖。
+if (args.Contains("--selftest"))
+{
+    return SelfTest();
+}
+
 // ── D7: .ai/README.md 文件地图与实际一致 ──
 // 文件地图里列出的 .ai 文件必须存在（与 verify-ai-system V9 互补）。
 // 存在性守卫：.ai/README.md 不存在（CI 无 .ai）→ 空集 → PASS（bash awk 读不到同路径）
 var readme = Path.Combine(ROOT, ".ai", "README.md");
-var mapEntries = new List<string>();
-if (File.Exists(readme))
-{
-    // awk 选行与 grep -oE 提取共用同一模式（行内全部匹配提取，不区分出现次数）
-    var mapRx = new Regex(@"(gate|refine|review|test)/[a-z0-9/-]*\.md");
-    foreach (var line in File.ReadLines(readme))
-        foreach (Match m in mapRx.Matches(line))
-            mapEntries.Add(m.Value);
-}
-// sort -u：Ordinal 字节序排序 + 去重
-var missing = mapEntries
-    .Distinct()
-    .OrderBy(x => x, StringComparer.Ordinal)
-    .Where(f => !File.Exists(Path.Combine(ROOT, ".ai", f)))
-    .ToList();
+var mapEntries = File.Exists(readme) ? ExtractMapEntries(File.ReadLines(readme)) : [];
+var missing = MissingMapEntries(mapEntries, f => File.Exists(Path.Combine(ROOT, ".ai", f)));
 if (missing.Count == 0)
 {
     Console.WriteLine($"{Green}PASS{Nc} D7 .ai/README.md 文件地图与实际一致");
@@ -75,6 +70,70 @@ Console.WriteLine("═══════ 校验完成 ═══════");
 return failedCount > 0 ? 1 : 0;
 
 // ─── 局部函数 ───
+
+// D7 路径提取（纯函数）：行内全部匹配提取，不区分出现次数（对齐 grep -oE 语义）
+static List<string> ExtractMapEntries(IEnumerable<string> lines)
+{
+    var rx = new Regex(@"(gate|refine|review|test)/[a-z0-9/-]*\.md");
+    var entries = new List<string>();
+    foreach (var line in lines)
+        foreach (Match m in rx.Matches(line))
+            entries.Add(m.Value);
+    return entries;
+}
+
+// D7 缺失过滤（纯函数）：去重 + Ordinal 排序（对齐 sort -u）+ 存在性过滤
+static List<string> MissingMapEntries(List<string> entries, Func<string, bool> exists) =>
+    entries.Distinct()
+           .OrderBy(x => x, StringComparer.Ordinal)
+           .Where(f => !exists(f))
+           .ToList();
+
+// ─── 自测 ───
+
+static int SelfTest()
+{
+    var passed = 0;
+    var total = 0;
+
+    void Case(string name, bool ok)
+    {
+        total++;
+        if (ok) passed++;
+        Console.WriteLine($"{(ok ? "PASS" : "FAIL")} SELFTEST {name}");
+    }
+
+    // 提取：正例（四类前缀 + 数字/连字符/斜杠）
+    Case("提取 gate/ 条目", ExtractMapEntries(["| [gate/prompt.md](gate/prompt.md) |"]).Contains("gate/prompt.md"));
+    Case("提取 refine/ 含数字与连字符",
+        ExtractMapEntries(["refine/baseline-unified-v2.md"]).Contains("refine/baseline-unified-v2.md"));
+    Case("提取同行情多次出现",
+        ExtractMapEntries(["review/a.md 见 review/b.md"]).Count == 2);
+
+    // 提取：反例（字符集只含小写与数字/连字符/斜杠）
+    Case("不提取大写路径", ExtractMapEntries(["gate/Prompt.md"]).Count == 0);
+    Case("不提取下划线路径（_ 不在字符集）", ExtractMapEntries(["test/my_file.md"]).Count == 0);
+    Case("不提取非 .md", ExtractMapEntries(["gate/prompt.txt"]).Count == 0);
+    Case("空行不产生条目", ExtractMapEntries(["", "   "]).Count == 0);
+
+    // 已知宽口径：正则无行首锚定，故 docs/review/x.md 中的 review/x.md 也会被提取。
+    // 本仓 .ai/README.md 的实际写法是相对 .ai/ 的短路径，故不构成问题；但该行为需钉住，
+    // 否则将来给正则加锚定会无声改变提取集合。
+    Case("已知宽口径：review/ 片段可从任意路径中截出",
+        ExtractMapEntries(["docs/review/x.md"]).Contains("review/x.md"));
+
+    // 缺失过滤：去重、Ordinal 排序、存在性
+    Case("缺失过滤去重", MissingMapEntries(["a/gate.md", "a/gate.md"], _ => true).Count == 0);
+    Case("缺失过滤返回不存在项",
+        MissingMapEntries(["gate/ok.md", "gate/gone.md"], f => f == "gate/ok.md") is ["gate/gone.md"]);
+    Case("缺失过滤按 Ordinal 排序",
+        MissingMapEntries(["gate/b.md", "gate/a.md"], _ => false) is ["gate/a.md", "gate/b.md"]);
+    Case("空输入无缺失", MissingMapEntries([], _ => false).Count == 0);
+
+    Console.WriteLine();
+    Console.WriteLine($"SELFTEST {passed}/{total} 通过");
+    return passed == total ? 0 : 1;
+}
 
 // 仓库根发现：从本 cs 源文件位置向上找含 PalDDD.slnx 的目录
 static string FindRepoRoot([System.Runtime.CompilerServices.CallerFilePath] string src = "")

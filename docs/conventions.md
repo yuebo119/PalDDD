@@ -692,11 +692,11 @@ Infrastructure / Adapters → App-Core → App-Abstractions → Domain
 | Assembly Scanning | 零反射，Handler 显式注册 |
 | Protobuf 工具链 | 代码优先 vs Schema 优先范式冲突（ADR-002） |
 
-### 8.5 持久化栈策略（ADR-020，维护者裁决 2026-08-26）
+### 8.5 持久化栈策略（ADR-020，2026-09-13 修订：退役延后）
 
-- **终态双栈**：PalORM（AOT 主线）+ EF Core（生态兼容线）；Dapper 栈退役
-- **Dapper 功能冻结**：只修缺陷不加特性；新 Store 能力/新表仅落 PalORM/EFCore 双栈——涉及 Dapper 新特性的 PR 默认拒绝
-- **退役节奏**：v3.0 `[Obsolete]`（同窗口合并 IPalOutboxStore 契约统一+异步化）→ v4.0 移除五包
+- **三栈平等共存**：PalORM（AOT 主线，库级源生成零反射，纯度最高）+ Dapper（手写 SQL，调用点级 AOT——34 调用点全量拦截器接管，三方言真库实测）+ EF Core（生态兼容线）
+- **Dapper 功能冻结解除**：2026-09-13 Dapper.AOT 全量启用后 Dapper 栈恢复能力栈地位；新 Store 能力按三栈姊妹同步惯例落全
+- **原退役节奏（v3.0 `[Obsolete]` → v4.0 移除五包）取消**——前提（调用点迁移成本/常量冲突）被实验实证推翻，见 ADR-020 状态更新
 - 详见 `docs/decisions/020-persistence-stack-retirement-roadmap.md`
 
 ---
@@ -813,7 +813,7 @@ for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' 
 PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
 
 # 4. 规范验证脚本（秒级）
-bash scripts/verify-conventions.sh
+dotnet run scripts/verify-conventions.cs
 ```
 
 ### 10.6 测试框架规则（TUnit + MTP · 强制）
@@ -925,7 +925,7 @@ grep -rn 'Microsoft\.NET\.Test\.Sdk' --include='*.csproj' --include='*.props' . 
 
 ### 13.1 评审基线强制规则
 
-评审报告首行必须粘贴 `bash scripts/review-snapshot.sh` 的输出。所有断言锚定该快照。禁止采信工具记忆或过期数据。未粘贴 snapshot 的评审视为草稿。
+评审报告首行必须粘贴 `dotnet run scripts/review-snapshot.cs` 的输出。所有断言锚定该快照。禁止采信工具记忆或过期数据。未粘贴 snapshot 的评审视为草稿。
 
 ### 13.2 九条评审纪律（R1~R8 + 新增 R0）
 
@@ -958,7 +958,7 @@ grep -rn 'Microsoft\.NET\.Test\.Sdk' --include='*.csproj' --include='*.props' . 
 
 ### 13.4 任务清单验证
 
-任务清单生成后：标识符存在性验证 → `bash scripts/verify-action-items.sh <file>`；涉及分析器 → 须附 `dotnet build` 命令；外部合并任务 → 逐项 grep 方法名/类名/路径（见 `ACTION_ITEMS_TEMPLATE.md`）。
+任务清单生成后：标识符存在性验证 → `dotnet run scripts/verify-action-items.cs -- <file>`；涉及分析器 → 须附 `dotnet build` 命令；外部合并任务 → 逐项 grep 方法名/类名/路径（见 `ACTION_ITEMS_TEMPLATE.md`）。
 
 ### 13.5 评审模板与报告格式
 
@@ -1023,17 +1023,18 @@ dotnet test <target> 2>&1 | tail -5 > /tmp/baseline.txt; echo "exit=$?" >> /tmp/
 | 时钟注入（TimeProvider） | `SourceCodeGuardTests` 守卫 6（MIG-T2 下沉自 bash G17，含 G17b 内联禁令升格） | CI |
 | AOT 核心层基线（7 项目不显式 false + 全局 props true） | `ArchitectureBoundaryTests.CoreProjects_EnableAotReferenceVerification`（MIG-T3 下沉自 bash G14） | CI |
 | 技术债守卫（SuppressMessage Justification / 方言 SQL 守卫对称 / 姊妹乐观锁对称） | `TechDebtGuardTests`（MIG-010 下沉自 tech-debt-scan #8/#13/#14） | CI |
-| AOT 兼容 | `Directory.Build.props` + `dotnet publish /p:PublishAot=true` | 编译期 + CI |
+| AOT 兼容 | `Directory.Build.props` + `dotnet publish -p:PublishAot=true`（Git Bash 下**必须用 `-p:`**——`/p:` 会被 MSYS 路径转换成 `p:` → MSB1008 只能指定一个项目） | 编译期 + CI |
 | 依赖方向 | ArchitectureBoundaryTests 项目引用矩阵 | CI |
 | DDD 命名 | StrategicDddAnalyzer PDDD001-015 | 编译期 |
 | 零警告 | TreatWarningsAsErrors | 编译期 |
-| 测试覆盖 | MTP 原生 `--coverage`（Cobertura 合并，阈值见 ci-coverage.sh） | CI |
+| 测试覆盖 | MTP 原生 `--coverage`（Cobertura 合并，阈值见 ci-coverage.cs；CI 接线状态与前置见 docs/test-coverage-baseline.md §门禁阈值） | CI（脚本就绪，接线待阈值校准） |
 | 断言强度 | `AssertionStrengthGateTests` 棘轮（MIG-003 下沉自 assertion-strength-check.sh） | CI（PR 时） |
 | 公共 API 快照 | PublicApiSnapshotTests | CI |
-| AI 模板约束 | `.pal/prompts/` 六段结构 | 人工 |
-| AI 编码约束 | Trellis spec 注入 + `scripts/verify-conventions.sh` | 会话 + pre-commit |
+| AI 模板约束 | `.pal/prompts/` 结构——**段数并非统一的「六段」**（2026-09-13 实测：9 个模板段数 5/6/7 不等；7 个为「角色/框架约束/必须遵守/禁止/输出格式」，其中 5 个追加「示例」段；`bounded-context` 以「项目引用指南」替代「输出格式」；`task-intake` 为验收断言门专用结构 7 段。README 自述「v54 勘正：各模板段数不一」） | 人工（机械化候选：按模板分组断言必填段存在） |
+| AI 编码约束 | Trellis spec 注入 + `scripts/verify-conventions.cs` | 会话 + pre-commit |
 | 性能契约 | BenchmarkDotNet `--smoke` 烟测 | CI |
 | DI 生命周期 | ArchitectureBoundaryTests 配置守护 | CI |
-| 评审纪律 | `scripts/review-snapshot.sh` + `REVIEW_TEMPLATE.md` R0 可信度标注 | 评审时 |
-| 任务清单验证 | `scripts/verify-action-items.sh` 标识符 + build 命令 + 外部合并 grep | 任务清单生成后 |
+| 评审纪律 | `scripts/review-snapshot.cs` + `REVIEW_TEMPLATE.md` R0 可信度标注 | 评审时 |
+| 任务清单验证 | `scripts/verify-action-items.cs` 标识符 + build 命令 + 外部合并 grep | 任务清单生成后 |
 | AOT 断言动态扫描 | `ArchitectureBoundaryTests.InfrastructureAdapters_AreExplicitlyNonAot` 动态扫描 | CI |
+| AOT 运行时验证 | CI `aot-verify`：PalOrmSample + AotSample **双 sample** publish + 实跑（2026-09-13 补后者——PalOrmSample 只覆盖 PalORM 栈，AotSample 覆盖 Core/Serialization/Transactions/CQRS/DI 五个主干，二者引用图不重叠） | CI |
