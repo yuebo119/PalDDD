@@ -3,7 +3,7 @@
 > 本规范定义 Pal.DDD 项目从代码变更到 NuGet 发布的标准流程。
 > 所有版本发布（含补丁版/小版本/大版本/Preview）必须遵守。
 >
-> **当前状态**：`VersionPrefix=2.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**2.1.0 已发布**（2026-09-04）。2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正，内容后并入 `[2.1.0]` 段，**CHANGELOG 先行教训第二次**，见 §9 教训 2）。1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`；`[1.1.0]` 段为事后回填）。tag 之后的变更累积在 `[Unreleased]`，下个版本发布前需将 `VersionPrefix` 升位。
+> **当前状态**：`VersionPrefix=2.2.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**2.2.0 已发布**（2026-09-15）。2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）。2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正，内容后并入 `[2.1.0]` 段，**CHANGELOG 先行教训第二次**，见 §9 教训 2）。1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`；`[1.1.0]` 段为事后回填）。tag 之后的变更累积在 `[Unreleased]`，下个版本发布前需将 `VersionPrefix` 升位。
 > **首次发布待办**：本规范第 5/6/9 章在首次实际发布后需补实测教训（参考 ORM 项目 `docs/发布规范.md` §9）。
 
 ---
@@ -267,11 +267,12 @@ dotnet run scripts/changelog-check.cs
 
 # 6. 本地 pack 验证
 rm -rf /tmp/release-preview && mkdir -p /tmp/release-preview
-for proj in $(ls src/); do
-    csproj="src/$proj/$proj.csproj"
-    [ -f "$csproj" ] && dotnet pack "$csproj" -c Release --no-build -o /tmp/release-preview
+# v2.2.0 发布实测修正：原 `for proj in $(ls src/)` 在输出带 `/` 后缀的 shell 环境
+# （Git Bash ls -F 类行为）下拼出错误路径静默空转产出 0 包——改 glob 直接枚举 csproj
+for csproj in src/*/*.csproj; do
+    dotnet pack "$csproj" -c Release --no-build -o /tmp/release-preview --nologo
 done
-ls /tmp/release-preview/*.nupkg | wc -l   # 应等于公开发布包数
+ls /tmp/release-preview/*.nupkg | wc -l   # 应等于 35（公开发布包数，v2.1.0/v2.2.0 均为 35）
 ```
 
 ### 4.2 nuspec 元数据检查

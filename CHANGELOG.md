@@ -4,15 +4,75 @@
 日志格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范（完整规则见 [`docs/release.md`](docs/release.md) §十一）：
 **消费者可见变更在上**（Added/Changed/Deprecated/Removed/Fixed/Security + 本项目扩展 Dependencies/Documentation/Tests），**工程过程叙事入附录**；数字必须可验证；`[Unreleased]` 与发布段**同次提交转正、先于 tag**。
 
-> **当前版本**：`VersionPrefix=2.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）
-> **发布状态**：**2.1.0 已发布**（2026-09-04 tag `v2.1.0`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag 之后的所有变更见 `[Unreleased]`。
+> **当前版本**：`VersionPrefix=2.2.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）
+> **发布状态**：**2.2.0 已发布**（2026-09-15 tag `v2.2.0`）；2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag 之后的所有变更见 `[Unreleased]`。
 > **发布规范**：见 [`docs/release.md`](docs/release.md)
 
 ---
 
 ## [Unreleased]
 
+（暂无——2.2.0 发布后的行为变更在此累积）
+
+---
+
+## [2.2.0] — 2026-09-15
+
+> **范围**：`v2.1.0`（2026-09-04，commit 0370c30）→ `v2.2.0`（转正提交），113 个提交。
+> **兼容性**：SemVer Minor——向后兼容。包公共 API 无变化（快照 diff 经逐项核实仅为记录口径修正：delegate 类型标签、枚举成员字段化；无新增/移除诊断、无新增废弃）；依赖大范围升级（EF Core 11 rc.1、Dapper.AOT 1.1.0、PalORM 5.5.1、TUnit 1.66）。
+> **组织方式**：分两层——上方按 Keep a Changelog 分类给出**消费者可见变更**；文末附录保留本版工程过程明细（转正前 `[Unreleased]` 原料原文）。规范见 [`docs/release.md`](docs/release.md) §十一。
+
 ### Added 新增
+
+- **质量门禁脚本全量 C# 化**：`scripts/` 下 30+ 个 bash/Python 脚本迁移为 C# file-based app（零包依赖、`dotnet run` 直跑），删除全部 8 个 `.sh`/`.py`；迁移经后续三轮验证轮背书（全量实跑无功能失败）。动机：跨平台一致（Windows/Git Bash 语义对齐）、可 `--selftest` 自证、消除 Python 工具链依赖
+- **门禁可信度审计 `scripts/gate-audit.cs`**：静态矩阵（接线/自证/已探三轴）+ 隔离式变异探针（临时独立仓库注入坏输入、断言非零退出，6 项覆盖）。动机：本仓两次「门禁假绿」实案（漏洞扫描 exit-0 空转、凭据扫描被管道掩码）此前只靠一次性人工探针，未沉淀为可重复验证
+- **覆盖率双门禁接 CI**：全局阈值 job（阈值 0.70）+ 单模块降幅（`coverage-baseline.json` 15 项目基线 + 容差 5pp 判定 + `--update-baseline` 校准入口）——此前是「脚本就绪但未接线」的已知缺口
+- **发布流程工具**：`scripts/changelog-facts.cs`（9 段机械事实收集：提交分布/公共 API diff/诊断/脚本/废弃/ADR/依赖/测试占位）/ `scripts/changelog-check.cs`（C1-C5 结构门禁：转正一致性/分类顺序/术语泄漏）
+- **提交期守卫三新增**（pre-commit 达 7 道）：`test-change-guard`（拦截「只改测试不改 src」的改测试修绿签名）/ `xml-guard`（XML 良构性）/ `dapper-param-guard`（Dapper 匿名参数枚举直传拦截——PostgreSQL 拒绝该形态）
+- **`--selftest` 覆盖 13 个门禁脚本**：判定抽纯函数 + 正负例 + 变异验证可红；`gate-audit` 矩阵 `UNVERIFIED` 由 9 清零
+- **`verify-conventions` 新增 V8/V9/V10**：模板必填段齐全 / 文档命令引用的脚本路径存在 / 文档内部链接可解析
+- **`encoding-gate` 新增 E5**：源文件行尾 CRLF 一致性（防编辑器/工具链默认 LF 污染工作树）
+
+### Changed 变更
+
+- **CI 验证矩阵扩展**：`aot-verify` 扩为双 sample（主干五项目引用图独立验证，此前仅 PalORM 单栈）；`coverage` 独立 job（`dotnet tool restore` 取 reportgenerator）；`build-and-test` 内门禁循环扩至 encoding/doc-consistency/tech-debt/test-gate + template-gate
+- **git hooks 构建时自动配置**（新增根 `Directory.Build.targets`）：`core.hooksPath` 是 git 本地配置、不进版本库，新 clone 默认无钩子——`ConfigureGitHooks` 目标在首次构建时配置（不覆盖既有自定义配置、`.git` 缺失跳过、增量判定）
+- **RabbitMQ 集成测试预检升级为 AMQP 协议级**：原 TCP 探活对「TCP 通、AMQP 死」半坏环境误判为可用——升级后完整握手探测，半坏环境快速跳过（实测从 5×19s 假失败降为秒级跳过）
+- **覆盖率阈值 0.65 → 0.70**：原值锚定 2026-07-30 旧基线，实测新基线 72.98% 下余量约 8pp 失去早期预警意义；按项目「基线 − 3pp」原则校准
+
+### Fixed 修复
+
+- **构建完整性族**：bench 项目 XML 注释含连续双连字符致全仓构建失败（MSB4025，此前通过全部提交门禁——无 XML 良构校验，缺口由 `xml-guard` 关闭）；`encoding-gate` E2/E3 覆盖盲区（`scripts/samples/bench` 下 69 个 `.cs` 不受 BOM/mojibake 检查）
+- **门禁可信度族**：翻转检测器把「跳过」误归「失败」致环境波动被误报为测试打摆（Kafka 预检跳过与恢复叠加成假翻转）；覆盖率合并 glob 路径缺陷（单层匹配漏 MTP 双层落点，门禁空转）
+- **Dapper 枚举参数族**：Checkpoint 枚举参数直传驱动被 PostgreSQL 拒绝（Dapper.AOT 拦截器行为分叉，本地 SQLite 测试盲区致缺陷直达 CI）——修复 + 提交期守卫前移
+- **文档引用族**：`docs/` 中指向已删除 `*.sh` 的可执行命令与索引引用（脚本迁移后未全量收口）——修正 + V9 机械防回归
+
+### Dependencies 依赖
+
+- **EF Core 11 `preview.7` → `rc.1`**（EntityFrameworkCore/InMemory/Relational/Sqlite）；`Microsoft.Extensions.*` 与 `System.*` 系同步 `11.0.0-rc.1`
+- **Dapper.AOT 1.0.52 → 1.1.0**；**PalORM 5.4.0 → 5.5.1**（五包同步：Core/SourceGen/Sqlite/PostgreSql/MySql；消 SQLitePCLRaw NU1903 High 级漏洞）
+- Confluent.Kafka 2.15.0 → 2.15.1（librdkafka.redist 传递依赖同步）
+- 测试栈：TUnit 1.65.68 → 1.66.27 · Verify.TUnit 31.28.0 → 32.0.0 · Testcontainers 4.14.0 → 4.15.0
+- 死条目清理：`Microsoft.EntityFrameworkCore.SqlServer` / `.Design` / `Npgsql.EntityFrameworkCore.PostgreSQL` / `Pomelo.EntityFrameworkCore.MySql`（均不在用）
+
+### Documentation 文档
+
+- 新增 ADR-022「分析器诊断与生成器诊断的分层关系 + 稳定名称谓词共享」（三对诊断定性为分层而非冗余）
+- `docs/release.md` 新增 §十二「变更日志生成流程」SOP（Phase 0 常态累积 → P1 事实收集 → P2 核验 → P3 起草 → P4 校验 → P5 转正 → P6/P7 发布与事后同步）
+- 新增项目级 `AGENTS.md`（agent 操作层索引：三条硬红线 + 门禁体系 + 已知陷阱 + 文档地图）
+- 新增 `docs/review/` 全仓评审系列（2026-09-10 至 09-14 六轮运行报告与行动项清单）与 `docs/review/open-items-2026-09-14.md` 开放项账本
+- `docs/usage.md` 补「与 HTTP 请求验证的分工」（请求形态 vs 领域规则两层职责）；新增 `docs/persistence-aot-status.md`、`docs/idempotency-rationale.md`
+- 口径勘正族：`NAMING.md` 命名规则 6/7（禁会话相对表述）+ 7 份违规裁决清零；`conventions.md` 工程约束表四处按实测改写；`test-coverage-baseline.md` 按实测校准
+
+### Tests 测试
+
+- 16 项目面板：v2.1.0 基线 1202 → **v2.2.0 实测 1379**（本机 1311 通过 + 54 环境依赖项由 CI Testcontainers 权威执行〔PalORM 多方言 46 + Messaging 集成 8〕+ 14 设计内跳过〔外部连接串优雅降级〕）；净增 177
+- 门禁自证：13 个脚本 `--selftest`（均含变异验证可红）；`gate-audit` 探针 6 项全 PASS
+
+### 附录：工程过程明细（转正前 `[Unreleased]` 原料原文——内部叙事，非消费者变更摘要）
+> 逐轮明细真源 `.ai/review/metrics.md`；本版质量系统轮次 v75-v87。
+
+#### Added 新增（原料原文）
 
 - **变更日志事实收集器 `scripts/changelog-facts.cs`**：`dotnet run scripts/changelog-facts.cs -- <from-tag> [to-ref]` 一次产出 9 段机械可验证事实（提交分布/公共 API 快照 diff/新增诊断/废弃扫描/ADR 与文档增删/依赖变更/测试实测占位/[Unreleased] 原料），每条附可复查命令（`docs/release.md` §十二 Phase 1）。注：2026-09-11 MIG-012 已由 `.sh` 迁移为 C# file-based app，本行同步为现行形态
 - **变更日志结构门禁 `scripts/changelog-check.cs`**：C1 [Unreleased] 首位 / C2 tag 与转正段一致性（未转正禁止打 tag）/ C3 分类顺序 / C4 Tests 段预估口径 WARN / C5 分类层内部术语泄漏 WARN——挂入发布前验证清单与打 tag 前核对。注：同上，已迁移为 `.cs`
@@ -41,7 +101,7 @@
 
 - **`scripts/verify-conventions.cs` 新增 V10「文档内部链接必须可解析」**（机械化一类此前无守护的缺陷）：实测来源——`docs/review/action-items-2026-09-13-v5.md` 引用 `review-2026-09-13-full-v5.md` 而该文件不存在。深查后**根因是文件名有误而非链接有误**：该文档标题为「第五轮全仓运行（2026-09-13）」、报告编号 `REVIEW-2026-09-13-V5`、基线 `4e53622`，均指 09-13，而同系列 v2/v3/v4 都满足「文件名日期 == 内容日期」，v5 是唯一破例。已 `git mv` 改名为 `review-2026-09-13-full-v5.md` 并同步引用处（全仓仅 NAMING 债务表一处），断链归零。V10 精度经首版教训修正：只查**以 `.md` 结尾**的目标（天然排除项目里 `[事实](代码可查)` 这类证据标注，无需维护排除清单），且按**所在文件目录**解析相对路径（首版按仓库根解析产生 12 条误报）。自测 20 例含 8 条 V10 用例，经变异验证可红（去掉 `.md` 限定 → 18/20）
 
-### Changed 变更
+#### Changed 变更（原料原文）
 
 - **CI `aot-verify` job 扩为双 sample**：原仅 `PalOrmSample`（直接引用仅 `PalORM.Sqlite`，即只覆盖 PalORM 一条栈）。新增 `AotSample` 的 restore/publish/run 三步——其引用 Core/Serialization/Transactions/CQRS/DependencyInjection 五个主干项目，与前者引用图不重叠。此前主干项目的 AOT 运行时安全无 CI 守卫（`docs/release.md` 自述 AotSample 为「手动 AOT 验证示例」）。本地等价形式（win-x64）已实测：输出 `Generating native code`、产物仅 native exe（无托管 dll）、实跑 exit 0 且含 CQRS AOT 值类型管道检查通过
 
@@ -49,18 +109,18 @@
 
 - **覆盖率门禁接线**（此前是「脚本就绪但未接线」的已知缺口，阻塞理由为「阈值未校准」）：新增独立 **`coverage` job**——不放 `build-and-test` 内是因为覆盖率需完整再跑一遍测试，放进主 job 会把关键路径拉长近一倍；独立 job 与 `aot-verify`/`dialect-probe` 同构，并行且失败域隔离。job 内先 `dotnet tool restore`：`reportgenerator` 由 `.config/dotnet-tools.json` 钉 5.5.11，**该工具此前 CI 从未还原过，是接线的隐藏前置**。阈值由 **0.65 校准为 0.70**：原值锚定 2026-07-30 基线 67.9%（67.9 − 3 ≈ 65），实测新基线 72.98% 下余量已达约 8pp、失去早期预警意义；按项目原始原则「基线 − 3pp」取 0.70。`ci-coverage.cs` 自测同步更新（11/11）
 
-### Fixed 修复
+#### Fixed 修复（原料原文）
 
 - **bench 项目不可加载导致全仓构建失败**：`bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj` 注释内出现 `--`（`CA1031:--verify-persist`），XML 注释禁止连续双连字符 → MSB4025 项目加载失败。该缺陷于 21549d3 引入，并通过全部提交时门禁（`secret-scan`/`encoding-gate`/`guard` 均不校验 XML 良构性）——缺口由新增的 `xml-guard.cs` 关闭
 - **`encoding-gate` E2/E3 覆盖盲区**：E1 覆盖 6 目录而 E2（.cs BOM）/E3（.cs mojibake）仅覆盖 `src test`，`scripts/ samples/ bench/` 下 69 个 `.cs` 不受检查（实测当前 0 违规，属潜在）。已抽 `CsScanRoots` 常量统一为 5 目录，并加范围回归探针
 - **`docs/` 中指向已不存在 `*.sh` 的可执行命令**：MIG-011/012 迁移脚本后文档未全量收口。本次修正主干手册 `docs/conventions.md`、`docs/release.md`、`docs/testing.md`、`CHANGELOG.md` 中的现行命令（统一改为「dotnet run 脚本 .cs」形态）。**并机制化以防再次回归**：`scripts/verify-conventions.cs` 新增 V9「文档命令形态引用的脚本路径必须存在」（只查 `bash X.sh`/`dotnet run X.cs` 命令形态，排除 `docs/review/` 历史记录与含「下沉自/已迁移」等词的历史提及）
 
-### Dependencies 依赖
+#### Dependencies 依赖（原料原文）
 
 - PalORM 5.4.0 → 5.5.1（五包同步：Core/SourceGen/Sqlite/PostgreSql/MySql；5.5.1 纯依赖升级——Roslyn 对齐本仓 5.9.0 钉扎、Microsoft.Data.Sqlite.Core 传递依赖 11.0.0-preview.7 → 11.0.0-rc.1、消 SQLitePCLRaw NU1903 High 级漏洞；5.5.0 行为变更点（脱敏信道/外部事务语义/WhereJson 守卫）经 grep 核实本仓零使用）
 - Confluent.Kafka 2.15.0 → 2.15.1（补丁版；librdkafka.redist 传递依赖同步 2.15.1）
 
-### Documentation 文档
+#### Documentation 文档（原料原文）
 
 - 新增 ADR-022「分析器诊断与生成器诊断的分层关系 + 稳定名称谓词共享」：三对诊断（PDDD009/PALMSG004、PDDD010/PALMSG005、PDDD011/PALMSG002）维持共存并定性为分层而非冗余；`IsStableName` 谓词收敛为 `src/PalDDD.Shared/StableNameValidation.cs` 链接共享源码（`docs/decisions/022-analyzer-generator-diagnostic-layering.md`）
 - `docs/release.md` 新增 §十二「变更日志生成流程」SOP：Phase 0 常态累积 → P1 事实收集 → P2 事实核验三问 → P3 起草 → P4 校验（机械门禁 + 人工六问）→ P5 转正（先于 tag）→ P6/P7 发布与事后同步，附流程失效回溯条款
