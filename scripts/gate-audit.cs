@@ -212,6 +212,17 @@ var probes = new List<Probe>
                 [0xEF, 0xBB, 0xBF, .. "var x = 1;\n"u8.ToArray()]);
             return ["scripts/bom.cs"];
         }),
+    new(
+        Name: "encoding-gate 拒绝源文件裸 LF（E5 行尾漂移——2026-09-14 增）",
+        Gate: "encoding-gate",
+        ExpectExit: 1,
+        MustContainInStdout: "drifted.md",
+        Setup: dir =>
+        {
+            // E5：.md 纯 LF（或混合）即违规——CRLF 是仓库规范（.gitattributes/.editorconfig）
+            File.WriteAllBytes(Path.Combine(dir, "drifted.md"), "纯 LF 文档\n第二行\n"u8.ToArray());
+            return ["drifted.md"];
+        }),
 };
 
 var probeFails = 0;
