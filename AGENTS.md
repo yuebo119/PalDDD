@@ -37,6 +37,7 @@
 | 4 | `test-change-guard` | `test/` 有修改或删除 | 只改测试不改 `src/`（改测试修绿签名）。豁免：`ALLOW_TEST_ONLY_CHANGE=1` |
 | 5 | `xml-guard` | xml 系扩展名入暂存集 | XML 非良构（`.csproj/.props/.slnx/.targets/.xml`） |
 | 6 | `verify-conventions --quick` | `.md` 入暂存集 | V5 TODO 扫描 · V8 `.pal/prompts/` 模板必填段 · V9 文档命令引用的脚本须存在 |
+| 7 | `dapper-param-guard` | `src/PalDDD.Dapper*/` 入暂存集 | 匿名 Dapper 参数枚举直传（Dapper.AOT 拦截器直传驱动，PG 拒绝——CI #94 根因，2026-09-14 增） |
 
 ### CI（`.github/workflows/ci.yml`）
 

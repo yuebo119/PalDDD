@@ -75,7 +75,7 @@ var wiredNames = CollectWiredNames(root);
 
 // 本次实际探测的门禁——矩阵 PROBED 列与下方探针列表由本数组单向对齐，
 // 并在跑探针前断言一致（防两处清单漂移，同 E1/E2 目录清单教训）。
-string[] probedGates = ["secret-scan", "encoding-gate"];
+string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard"];
 
 // ─── 未接线脚本的分类（2026-09-13 增）───
 // 此前矩阵对一切未接线者判「OBSERVE 未接线——永远不触发」，实测 17 个中 16 个是
@@ -223,15 +223,38 @@ var probes = new List<Probe>
             File.WriteAllBytes(Path.Combine(dir, "drifted.md"), "纯 LF 文档\n第二行\n"u8.ToArray());
             return ["drifted.md"];
         }),
+    new(
+        Name: "dapper-param-guard 拒绝枚举直传（CI #94 根因回归守卫——2026-09-14 增）",
+        Gate: "dapper-param-guard",
+        ExpectExit: 1,
+        MustContainInStdout: "ProjectionCheckpointStatus",
+        Setup: dir =>
+        {
+            // CI #94 真实形态：匿名 Dapper 参数对象内枚举直传（未 (int) 化）
+            Directory.CreateDirectory(Path.Combine(dir, "src", "PalDDD.Dapper"));
+            File.WriteAllText(Path.Combine(dir, "src", "PalDDD.Dapper", "Probe.cs"),
+                "var p = new { status = ProjectionCheckpointStatus.Processing };\n");
+            return ["src/PalDDD.Dapper/Probe.cs"];
+        }),
 };
 
 var probeFails = 0;
 
-// 单向对齐断言：探针列表的 Gate 必须都在 probedGates 内，否则矩阵 PROBED 列会失真
+// 双向对齐断言（2026-09-14 补反向——本守卫开发时实际踩到该缺口）：
+// 正向：探针列表的 Gate 必须都在 probedGates 内（防探针测了未登记的门禁）。
+// 反向：probedGates 每项**必须被至少一个探针覆盖**——只登记不写探针时，
+// 矩阵 PROBED 列显示 yes 而实际从未探测（假绿）。中间态实证：加
+// dapper-param-guard 到 probedGates 后忘插探针，矩阵不报错且 PROBED=yes。
 var drift = probes.Select(p => p.Gate).Distinct().Where(g => !probedGates.Contains(g, StringComparer.Ordinal)).ToList();
 if (drift.Count > 0)
 {
     Console.Error.WriteLine($"ERROR: 探针所测门禁未登记进 probedGates：{string.Join(", ", drift)}——矩阵 PROBED 列会失真");
+    return 2;
+}
+var uncovered = probedGates.Where(g => !probes.Any(p => p.Gate == g)).ToList();
+if (uncovered.Count > 0)
+{
+    Console.Error.WriteLine($"ERROR: probedGates 中以下门禁无对应探针：{string.Join(", ", uncovered)}——PROBED 列将假绿（登记了但从未探测）");
     return 2;
 }
 

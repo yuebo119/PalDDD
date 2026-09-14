@@ -66,6 +66,19 @@ if git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep -qE '\.md
     fi
 fi
 
+# ── 7. dapper-param-guard（Dapper 参数枚举直传静态检查；仅 src/PalDDD.Dapper*/
+#       入暂存集时触发 ~1s）──
+# 来源：CI #94 实证——Dapper.AOT 拦截器把枚举直传驱动，PG 拒绝；本地 SQLite
+# 盲区（DialectProbe Skip + 探针未覆盖）致缺陷直达 CI。修复 ddd9f28 后本检查
+# 前移到提交期（同型再现即拦，不再等 CI）。
+if git diff --cached --name-only 2>/dev/null | grep -qE '^src/PalDDD\.Dapper'; then
+    echo "🔧 dapper-param-guard（Dapper 源码在暂存集）…"
+    if ! dotnet run scripts/dapper-param-guard.cs 2>&1; then
+        echo "⛔ dapper-param-guard 失败——匿名参数含枚举直传（改 (int) 强转）"
+        FAIL=1
+    fi
+fi
+
 if [ "$FAIL" -ne 0 ]; then
     echo ""
     echo "⛔ pre-commit 拦截——跳过检查：git commit --no-verify（不推荐）"
