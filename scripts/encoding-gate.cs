@@ -10,6 +10,14 @@
 //   E2 .cs 文件无 UTF-8 BOM（头 3 字节 EF BB BF；排除 *.g.cs 与 obj/bin）
 //   E3 .cs 文件无 mojibake 指纹（UTF-8→GBK 双重编码产物字符）
 //   E4 .verified.* 文件纯 LF（含 CR 即命中；Verify Linux 拒绝）
+//   E5 源文件行尾 CRLF 一致性（2026-09-14 增）——扩展名清单内文件不得含裸 LF
+//      （0x0A 前无 0x0D），纯 LF 与混合行尾均命中；豁免 .sh/.py（POSIX 规范 LF）
+//      与 *.verified.*（Verify 规范 LF，E1/E4 反向守卫）。
+//      范围取舍：只扫主仓——.ai 为独立仓、独立提交线（其 scripts 由 E1 覆盖），
+//      主仓门禁不被独立仓状态阻塞。排除路径：obj/bin/.git/TestResults/
+//      node_modules/.vs/.serena/.probe-dump（生成/临时目录）。
+//      背景：python 重写源文件造成 CRLF→LF 漂移（4a64fba 修 1543 处、277bc34 修
+//      255 处），此前无机械检测（git autocrlf 可自愈，但工作树字节对编辑器/工具不标准）。
 //
 // 迁移说明：
 //   1) E1/E4 与 bash `od -c | grep '\\r'` 同语义：文件内任意 0x0D 字节即违规
@@ -141,6 +149,32 @@ Console.WriteLine("═══ 编码一致性门禁 ═══");
     else Console.WriteLine("PASS E4 .verified.* 纯 LF");
 }
 
+// ─── E5: 源文件行尾 CRLF 一致性（工作树漂移防线，2026-09-14 增）───
+// 判据/豁免/范围见头注释。枚举用带 skipDirs 的栈遍历（跳过生成目录，避免 .git 拖慢）。
+{
+    var bad = new List<string>();
+    string[] eolExts = [".md", ".cs", ".csproj", ".props", ".targets", ".json", ".yml", ".slnx"];
+    foreach (var f in EnumerateSourceFiles(".", eolExts))
+    {
+        var name = Path.GetFileName(f);
+        if (name.EndsWith(".sh", StringComparison.Ordinal) || name.EndsWith(".py", StringComparison.Ordinal)
+            || name.Contains(".verified.", StringComparison.Ordinal)) continue;
+        var (crlf, bareLf) = CountEol(File.ReadAllBytes(f));
+        if (HasBareLf(crlf, bareLf))
+        {
+            bad.Add(ToPosix(f));
+            if (bad.Count >= 5) break;
+        }
+    }
+    if (bad.Count > 0)
+    {
+        Console.WriteLine($"FAIL E5 源文件含裸 LF 行尾（CRLF 漂移；修复：dotnet run %TEMP%/fix-eol.cs <path>）：");
+        foreach (var f in bad) Console.WriteLine(f);
+        fail++;
+    }
+    else Console.WriteLine("PASS E5 源文件行尾 CRLF 一致");
+}
+
 Console.WriteLine($"═══ 结果：{fail} 失败 ═══");
 return fail == 0 ? 0 : 1;
 
@@ -169,6 +203,41 @@ static bool ContainsByte(byte[] bytes, byte target)
 {
     foreach (var b in bytes) if (b == target) return true;
     return false;
+}
+
+// E5：行尾计数——CRLF 对数与裸 LF 数（0x0A 前无 0x0D）
+static (int Crlf, int BareLf) CountEol(byte[] bytes)
+{
+    int crlf = 0, bareLf = 0;
+    for (int i = 0; i < bytes.Length; i++)
+        if (bytes[i] == (byte)'\n')
+        {
+            if (i > 0 && bytes[i - 1] == (byte)'\r') crlf++;
+            else bareLf++;
+        }
+    return (crlf, bareLf);
+}
+
+// E5：裸 LF 存在即违规（纯 LF 与混合行尾均命中）；纯 CRLF 与空文件放行
+static bool HasBareLf(int crlf, int bareLf) => bareLf > 0;
+
+// E5：源文件枚举——带 skipDirs 的栈遍历（跳过生成/临时目录，避免 .git 拖慢），
+// 扩展名精确匹配（Path.GetExtension 单段语义）
+static IEnumerable<string> EnumerateSourceFiles(string root, string[] extensions)
+{
+    var skipDirs = new HashSet<string>(StringComparer.Ordinal)
+        { "obj", "bin", ".git", "TestResults", "node_modules", ".vs", ".serena", ".probe-dump" };
+    var stack = new Stack<string>();
+    stack.Push(root);
+    while (stack.Count > 0)
+    {
+        var dir = stack.Pop();
+        foreach (var sub in Directory.EnumerateDirectories(dir))
+            if (!skipDirs.Contains(Path.GetFileName(sub))) stack.Push(sub);
+        foreach (var f in Directory.EnumerateFiles(dir))
+            if (extensions.Contains(Path.GetExtension(f), StringComparer.Ordinal))
+                yield return f;
+    }
 }
 
 // UTF-8 BOM 检测（头 3 字节 EF BB BF）
@@ -279,6 +348,15 @@ static int SelfTest()
             fingerprints.Any(p => ("前缀" + p + "后缀").Contains(p)));
         Case("指纹不命中：干净中文文本不被误报",
             !fingerprints.Any(p => "正常的领域事件与聚合根说明".Contains(p)));
+
+        // E5：行尾判定——纯 LF/混合命中,纯 CRLF/空放行
+        Case("CountEol 纯 CRLF", CountEol("a\r\nb\r\n"u8.ToArray()) is (2, 0));
+        Case("CountEol 纯 LF", CountEol("a\nb\n"u8.ToArray()) is (0, 2));
+        Case("CountEol 混合", CountEol("a\r\nb\nc\n"u8.ToArray()) is (1, 2));
+        Case("HasBareLf 纯 LF 命中（E5 违规）", HasBareLf(0, 5));
+        Case("HasBareLf 混合命中（E5 违规）", HasBareLf(10, 2));
+        Case("HasBareLf 纯 CRLF 放行（负向对照）", !HasBareLf(5, 0));
+        Case("HasBareLf 空文件放行（边界）", !HasBareLf(0, 0));
 
         // 自指陷阱回归守卫：本文件自身不得含任何字面指纹
         // （指纹若以字面字符写入，encoding-gate 会命中自己——头注释记录了该陷阱）

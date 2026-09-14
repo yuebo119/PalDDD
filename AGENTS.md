@@ -32,7 +32,7 @@
 | # | 守卫 | 触发条件 | 拦截什么 |
 |---|------|---------|---------|
 | 1 | `secret-scan` | 每次 | 受跟踪文件里的高置信硬编码凭据 |
-| 2 | `encoding-gate` | 每次 | E1 CRLF(.sh/.py) · E2 BOM(.cs) · E3 mojibake(.cs) · E4 .verified 非 LF |
+| 2 | `encoding-gate` | 每次 | E1 CRLF(.sh/.py) · E2 BOM(.cs) · E3 mojibake(.cs) · E4 .verified 非 LF · E5 源文件裸 LF(.md/.cs/.csproj/.targets 等,2026-09-14 增) |
 | 3 | `guard.cs` | `.cs` 入暂存集 | 8 道守卫测试 + 守卫命名类（`*GateTests`/`*GuardTests`/`ArchitectureBoundaryTests`）注册完整性核查 |
 | 4 | `test-change-guard` | `test/` 有修改或删除 | 只改测试不改 `src/`（改测试修绿签名）。豁免：`ALLOW_TEST_ONLY_CHANGE=1` |
 | 5 | `xml-guard` | xml 系扩展名入暂存集 | XML 非良构（`.csproj/.props/.slnx/.targets/.xml`） |
