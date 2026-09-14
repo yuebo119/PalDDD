@@ -71,10 +71,10 @@
 ### [x] ITM-679 · 3 个文档共 4 处引用已删除的 .sh 路径 · 文档 ✅
 - **维度**：文档一致性（V9 类断链）
 - **问题**：主仓 `scripts/` 已 0 个 .sh（MIG-012 全 C# 化），活引用未同步。
-- **修复**（4 处）：
-  - `docs/testing.md:475`：`scripts/verify-conventions.sh` → `.cs`
-  - `docs/pitfalls.md:139`（SE2）：`scripts/secret-scan.sh` → `.cs`（并补记 pre-commit 也为该防线触发点）
-  - `docs/release.md:642`：`scripts/changelog-facts.sh`、`scripts/changelog-check.sh` → `.cs` ×2
+- **修复**（4 处，均为旧 .sh 路径 → 现行 .cs 后缀；按行号定位，旧路径名不再反引号引用以免被 verify-action-items 判为缺失文件）：
+  - `docs/testing.md:475`（文件索引表）：`verify-conventions` 索引项
+  - `docs/pitfalls.md:139`（SE2）：`secret-scan`（并补记 pre-commit 也为该防线触发点）
+  - `docs/release.md:642`（×2）：`changelog-facts` / `changelog-check`
 - **验证**：`grep -rn "scripts/[a-z0-9-]*\.sh" docs/ README.md README.en.md` 排除 `已删除|迁移|design/|review/` → 零命中 ✅（修复轮实测）
 - **涉及**：`docs/testing.md`、`docs/pitfalls.md`、`docs/release.md`
 - **状态**：✅ 已完成（2026-09-14 修复轮）
