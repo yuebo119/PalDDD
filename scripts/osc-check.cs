@@ -11,17 +11,20 @@
 // 输出与退出码与原 python 版逐行一致（test-gate.sh 依赖此格式）：
 //   SKIP  OSC  无 TestResults/*.tunit-report.json（先跑测试再检测）   → exit 0
 //   SKIP  OSC  报告指纹未变（无新观测，不重复计数）                 → exit 0
-//   PASS  OSC  无翻转（观测 N 测试，环境性失败已隔离）               → exit 0
+//   PASS  OSC  无翻转（观测 N 测试，环境性失败与跳过已隔离）         → exit 0
 //   FAIL  OSC  <测试键>: A→B→A（翻转两次=打摆，换方案不加力度）      → exit 1
 //   PASS/FAIL OSC-SELFTEST ...                                      → exit 0/1
 //
 // 迁移说明：
 //   1) 指纹值由 python 的 float 秒改为毫秒整数——python 时代旧 state 首跑必然
 //      指纹不等（等同"报告变了"），重观测一次无害；此后 C# 自洽可正确去重。
-//   2) 环境性失败口径不变（T-DDD-6）：exception 的 type+message 命中 ENV_PAT
-//      → 'E'，不参与翻转判定；真失败 → 'F'；passed → 'P'。
-//   3) 参数化用例聚合口径不变：同 className.methodName 任一 case 真失败 → F，
-//      有环境性失败且无真失败 → E，否则 P。
+//   2) 分类口径（T-DDD-6 + ITM-684）：exception 命中 ENV_PAT → 'E'；status=skipped
+//      → 'S'（环境预检/设计内跳过）；真失败 → 'F'；passed → 'P'。E 与 S 均不参与
+//      翻转判定——2026-09-14 实证：Messaging 预检跳过被旧版误归 F，与环境波动
+//      叠成 F→P→F 假打摆（门禁假红，见 open-items D2 服务器时间线）。
+//   3) 参数化用例聚合（ITM-684 增 S 分支）：任一 case 真失败 → F；有 E 无 F → E；
+//      有 S 无 F/E → S；否则 P。优先级 F > E > S > P（S 与 E 同构：未观测完整即
+//      不参与翻转判定）——旧版 S 落入 else 被写成 P，是本次修复的遗漏点。
 //   4) 零 package 依赖——System.Text.Json 框架内自动可用，不写 #:package
 //      （NU1510 即错误）；写盘用 Utf8JsonWriter（无反射，AOT 分析器友好）。
 // ============================================================================
@@ -59,12 +62,16 @@ string StrOr(JsonElement obj, string name, string dflt)
     return PyStr(v);
 }
 
-// ─── classify：passed → P；异常消息命中 ENV_PAT → E；否则 F ───
+// ─── classify：passed → P；skipped → S；异常消息命中 ENV_PAT → E；否则 F ───
 char Classify(JsonElement t)
 {
-    if (t.TryGetProperty("status", out var st)
-        && st.ValueKind == JsonValueKind.String && st.GetString() == "passed")
-        return 'P';
+    if (t.TryGetProperty("status", out var st) && st.ValueKind == JsonValueKind.String)
+    {
+        var status = st.GetString();
+        if (status == "passed") return 'P';
+        // ITM-684：跳过（环境预检/设计内）独立分类——旧版落 F 与环境波动叠成假打摆
+        if (status == "skipped") return 'S';
+    }
     var msg = "";
     // python: ex = t.get('exception') or {}（缺失/null/空对象 → 无异常消息）
     if (t.TryGetProperty("exception", out var ex) && ex.ValueKind == JsonValueKind.Object)
@@ -79,6 +86,16 @@ char Classify(JsonElement t)
     return 'F';
 }
 
+// ─── Aggregate：参数化用例聚合，优先级 F > E > S > P（ITM-684）───
+// S 与 E 同构：任一 case 未完整观测（跳过/环境失败）即保守聚合，不参与翻转判定
+static char Aggregate(char prev, char s)
+{
+    if (s == 'F' || prev == 'F') return 'F';
+    if (s == 'E' || prev == 'E') return 'E';
+    if (s == 'S' || prev == 'S') return 'S';
+    return 'P';
+}
+
 // ─── observe：追加观测并检测 ABA（同测试状态翻转两次且无 E 参与）───
 List<string> Observe(Dictionary<string, List<string>> hist, Dictionary<string, char> cur)
 {
@@ -90,7 +107,8 @@ List<string> Observe(Dictionary<string, List<string>> hist, Dictionary<string, c
         h.Add(s.ToString());
         if (h.Count > 3) h.RemoveRange(0, h.Count - 3);   // 每测试仅保留最近 3 次观测
         hist[k] = h;
-        if (h.Count == 3 && h[0] == h[2] && h[0] != h[1] && !h.Contains("E"))
+        // E（环境性失败）与 S（跳过）均打断观测连续性，不参与 ABA 判定（ITM-684）
+        if (h.Count == 3 && h[0] == h[2] && h[0] != h[1] && !h.Contains("E") && !h.Contains("S"))
             flags.Add($"{k}: {h[0]}→{h[1]}→{h[2]}（翻转两次=打摆，换方案不加力度）");
     }
     return flags;
@@ -122,13 +140,32 @@ if (selftest)
         ["T1"] = new() { "P", "F" },   // ABA → 必须检出
         ["T2"] = new() { "P", "P" },   // AAA → 不得检出
         ["T3"] = new() { "P", "E" },   // AEA → 环境性失败隔离，不得检出
+        ["T4"] = new() { "S", "P" },   // SPS → 跳过隔离，不得检出（ITM-684 回归守卫）
     };
-    var cur = new Dictionary<string, char> { ["T1"] = 'P', ["T2"] = 'P', ["T3"] = 'P' };
+    var cur = new Dictionary<string, char> { ["T1"] = 'P', ["T2"] = 'P', ["T3"] = 'P', ["T4"] = 'S' };
     var flags = Observe(hist, cur);
-    var ok = flags.Count == 1 && flags[0] == "T1: P→F→P（翻转两次=打摆，换方案不加力度）";
+    var flagsOk = flags.Count == 1 && flags[0] == "T1: P→F→P（翻转两次=打摆，换方案不加力度）";
+
+    // Classify 分类直测（ITM-684）：selftest 此前只覆盖 Observe 判定，S 分支无直测
+    JsonElement Synth(string json) { using var d = JsonDocument.Parse(json); return d.RootElement.Clone(); }
+    var clsOk =
+        Classify(Synth("""{"status":"passed"}""")) == 'P'
+        && Classify(Synth("""{"status":"skipped"}""")) == 'S'
+        && Classify(Synth("""{"status":"failed","exception":{"type":"System.IO.IOException","message":"Npgsql connect timeout"}}""")) == 'E'
+        && Classify(Synth("""{"status":"failed","exception":{"type":"System.InvalidOperationException","message":"boom"}}""")) == 'F';
+
+    // Aggregate 聚合直测（ITM-684）：单条 S 不得被写成 P（旧版缺陷形态）
+    var aggOk =
+        Aggregate('P', 'S') == 'S'
+        && Aggregate('S', 'P') == 'S'
+        && Aggregate('P', 'F') == 'F'
+        && Aggregate('E', 'P') == 'E'
+        && Aggregate('P', 'P') == 'P';
+
+    var ok = flagsOk && clsOk && aggOk;
     Console.WriteLine(ok
-        ? $"PASS OSC-SELFTEST  ABA 检出且 AAA/PEP 不误报"
-        : $"FAIL OSC-SELFTEST  检出异常: {PyListRepr(flags)}");
+        ? $"PASS OSC-SELFTEST  ABA 检出 · AAA/AEA/SPS 不误报 · 分类 P/S/E/F 正确 · 聚合 F>E>S>P"
+        : $"FAIL OSC-SELFTEST  检出异常: flags={PyListRepr(flags)} · clsOk={clsOk} · aggOk={aggOk}");
     return ok ? 0 : 1;
 }
 
@@ -230,9 +267,7 @@ foreach (var r in reports)
                 var key = StrOr(t, "className", "?") + "." + StrOr(t, "methodName", "?");
                 var s = Classify(t);
                 var prev = curObs.TryGetValue(key, out var p) ? p : 'P';
-                if (s == 'F' || prev == 'F') curObs[key] = 'F';
-                else if (s == 'E' || prev == 'E') curObs[key] = 'E';
-                else curObs[key] = 'P';
+                curObs[key] = Aggregate(prev, s);
             }
         }
     }

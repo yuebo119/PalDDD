@@ -39,7 +39,7 @@ public sealed class BrokerFixture : IAsyncDisposable
     /// </summary>
     public bool KafkaAvailable { get; private set; } = true;
 
-    /// <summary>RabbitMQ 预检结果（unified v2.0 2026-08-20，对称 KafkaAvailable）——远程路径 TCP 探活，Testcontainers 路径恒 true。</summary>
+    /// <summary>RabbitMQ 预检结果（unified v2.0 2026-08-20，对称 KafkaAvailable；ITM-676 起为 AMQP 协议级握手探测）——远程路径完整握手，Testcontainers 路径恒 true。</summary>
     public bool RabbitAvailable { get; private set; } = true;
     private KafkaContainer? _kafka;
     private RabbitMqContainer? _rabbitMq;
@@ -327,7 +327,7 @@ public sealed class BrokerIntegrationTests
     private void SkipIfRabbitUnavailable()
     {
         if (!Fixture.RabbitAvailable)
-            Skip.Test("RabbitMQ broker 预检失败（TCP 探活不可达）——环境问题，非代码失败。检查服务器 RabbitMQ 服务/网络后重试。（若为远程环境请检查 PALDDD_TEST_RABBIT_* 凭据配置）");
+            Skip.Test("RabbitMQ broker 预检失败（AMQP 握手不可达）——环境问题，非代码失败。检查服务器 RabbitMQ 服务/网络后重试。（若为远程环境请检查 PALDDD_TEST_RABBIT_* 凭据配置）");
     }
 
     /// <summary>
