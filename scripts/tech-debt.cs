@@ -30,12 +30,25 @@ using System.Text.RegularExpressions;
 // 无本地化需求——沿 osc-check.cs / vuln-scan.cs 先例文件级禁用
 #pragma warning disable CA1303
 
+// Justification: CA1031 禁止宽泛 catch；本文件的捕获只出现在 --selftest 的临时目录
+// 清理路径（清理失败不得翻转自测结论）。限定在自测 finally 内。
+#pragma warning disable CA1031
+
 // Windows 控制台默认编码非 UTF-8，中文输出对齐 bash UTF-8（沿 osc-check.cs 先例）
 Console.OutputEncoding = Encoding.UTF8;
 
 var ROOT = FindRepoRoot();
 
 int pass = 0, fail = 0, allowed = 0, warned = 0;
+
+// 2026-09-13 增：本脚本此前无自证能力（gate-audit 矩阵标 UNVERIFIED）。其判定分两层——
+// Check 的三态（FAIL/ALLOW/PASS）与计数口径（路径段排除、行长边界、行级排除）——两层
+// 写错都表现为「计数为 0 于是 PASS」，即静默漏报。故把判定抽为纯函数并覆盖，
+// 并为 LongLines/EnumerateCs 加可选根参数以便对临时目录做真实判定。
+if (args.Contains("--selftest"))
+{
+    return SelfTest();
+}
 
 Console.WriteLine("═══════════════════════════════════════════");
 Console.WriteLine($" Pal.DDD 技术债扫描 ({DateTime.Now:yyyy-MM-dd HH:mm})");
@@ -212,24 +225,32 @@ return fail > 0 ? 1 : 0;
 void Check(string name, List<string> result, string allow)
 {
     var count = result.Count(l => l.Length > 0);
-    if (allow == "strict" && count > 0)
+    switch (Verdict(allow, count))
     {
-        Console.WriteLine($"FAIL  {name} ({count} 处)");
-        foreach (var l in result.Take(5)) Console.WriteLine($"      {l}");
-        fail++;
-    }
-    else if (allow == "allow" && count > 0)
-    {
-        Console.WriteLine($"ALLOW {name} ({count} 处)");
-        foreach (var l in result.Take(3)) Console.WriteLine($"      {l}");
-        allowed++;
-    }
-    else
-    {
-        Console.WriteLine($"PASS  {name} ({count} 处)");
-        pass++;
+        case "FAIL":
+            Console.WriteLine($"FAIL  {name} ({count} 处)");
+            foreach (var l in result.Take(5)) Console.WriteLine($"      {l}");
+            fail++;
+            break;
+        case "ALLOW":
+            Console.WriteLine($"ALLOW {name} ({count} 处)");
+            foreach (var l in result.Take(3)) Console.WriteLine($"      {l}");
+            allowed++;
+            break;
+        default:
+            Console.WriteLine($"PASS  {name} ({count} 处)");
+            pass++;
+            break;
     }
 }
+
+// Check 的三态判定（纯函数，供 --selftest 覆盖）：
+// strict>0 → FAIL；allow>0 → ALLOW；其余（含 strict/allow 但 count=0）→ PASS。
+// 注意 allow 值非 strict/allow 时与 count 无关地判 PASS——原 bash 语义如此。
+static string Verdict(string allow, int count) =>
+    allow == "strict" && count > 0 ? "FAIL"
+    : allow == "allow" && count > 0 ? "ALLOW"
+    : "PASS";
 
 // 仓库根发现：从本 cs 源文件位置向上找含 PalDDD.slnx 的目录（等价 bash _ai_root_find）
 static string FindRepoRoot([System.Runtime.CompilerServices.CallerFilePath] string src = "")
@@ -279,9 +300,10 @@ static List<string> GrepDirs(string[] topDirs, Func<string, bool> match, string[
 }
 
 // find+awk 超长行等价：路径段排除 + length>180 → "相对路径:行号"
-static List<string> LongLines(string topDir, string[] excludeSegments)
+// rootOverride 供 --selftest 指向临时目录；生产路径传 null 即取仓库根。
+static List<string> LongLines(string topDir, string[] excludeSegments, string? rootOverride = null)
 {
-    var root = FindRepoRoot();
+    var root = rootOverride ?? FindRepoRoot();
     var rows = new List<string>();
     foreach (var f in EnumerateCs(root, topDir))
     {
@@ -337,4 +359,74 @@ static (int ExitCode, string Output) Git(string gitArgs)
     {
         return (-1, "");
     }
+}
+
+// ══════════════ 自测（临时目录 + 真实文件，覆盖三态判定与计数口径）══════════════
+
+static int SelfTest()
+{
+    var passed = 0;
+    var total = 0;
+
+    void Case(string name, bool ok)
+    {
+        total++;
+        if (ok) passed++;
+        Console.WriteLine($"{(ok ? "PASS" : "FAIL")} SELFTEST {name}");
+    }
+
+    // ── Verdict 三态（check() 的判定核心）──
+    Case("strict 有命中 → FAIL", Verdict("strict", 1) == "FAIL");
+    Case("strict 无命中 → PASS", Verdict("strict", 0) == "PASS");
+    Case("allow 有命中 → ALLOW", Verdict("allow", 3) == "ALLOW");
+    Case("allow 无命中 → PASS（不得判 ALLOW）", Verdict("allow", 0) == "PASS");
+    Case("未知 allow 值 + 有命中 → PASS（原 bash 语义，与 count 无关）", Verdict("", 5) == "PASS");
+
+    // ── ContainsSegment（路径段排除，bash -path '*/obj/*' 等价）──
+    Case("段命中 obj/", ContainsSegment("src/A/obj/B.cs", "obj"));
+    Case("段命中多段之一", ContainsSegment("test/X/SourceGen/Y.cs", "obj", "SourceGen"));
+    Case("非段位置不命中（myobj 不是 obj 段）", !ContainsSegment("src/A/myobj/B.cs", "obj"));
+    Case("同名前缀不命中（obj 后无斜杠）", !ContainsSegment("src/A/objX/B.cs", "obj"));
+    Case("无排除段时不命中", !ContainsSegment("src/A/B.cs"));
+
+    var tmp = Path.Combine(Path.GetTempPath(), "tech-debt-selftest-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        static void Put(string root, string relative, string content)
+        {
+            var path = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, content);
+        }
+
+        // ── EnumerateCs：只收 .cs、Ordinal 排序、Rel 为 posix、目录不存在跳过 ──
+        var tree = Path.Combine(tmp, "tree");
+        Put(tree, "src/B/Two.cs", "class Two { }\n");
+        Put(tree, "src/A/One.cs", "class One { }\n");
+        Put(tree, "src/A/NotCs.txt", "not cs\n");
+        var csFiles = EnumerateCs(tree, "src");
+        Case("EnumerateCs 只收 .cs 且 Rel 为 posix 稳定序",
+            csFiles.Select(f => f.Rel).SequenceEqual(["src/A/One.cs", "src/B/Two.cs"]));
+        Case("EnumerateCs 目录不存在时为空", EnumerateCs(tree, "missing").Count == 0);
+
+        // ── LongLines：180 边界 + 路径段排除（rootOverride 指向临时目录）──
+        var lines = Path.Combine(tmp, "lines");
+        Put(lines, "src/Edge180.cs", new string('x', 180) + "\n");
+        Put(lines, "src/Edge181.cs", new string('x', 181) + "\n");
+        Put(lines, "src/obj/Excluded.cs", new string('x', 300) + "\n");
+        var ll = LongLines("src", ["obj"], lines);
+        Case("LongLines 边界：180 不命中", !ll.Any(l => l.Contains("Edge180")));
+        Case("LongLines 边界：181 命中", ll.Any(l => l.Contains("Edge181")));
+        Case("LongLines 路径段排除生效", !ll.Any(l => l.Contains("Excluded")));
+        Case("LongLines 命中数为 1（未多报）", ll.Count == 1);
+        Case("LongLines 目录不存在时为空", LongLines("missing", [], lines).Count == 0);
+    }
+    finally
+    {
+        try { if (Directory.Exists(tmp)) Directory.Delete(tmp, recursive: true); } catch { /* 清理失败不翻转结论 */ }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"SELFTEST {passed}/{total} 通过");
+    return passed == total ? 0 : 1;
 }

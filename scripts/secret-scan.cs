@@ -33,6 +33,14 @@ using System.Text.RegularExpressions;
 // Windows 控制台默认编码非 UTF-8，中文输出会乱码——对齐 bash printf UTF-8
 Console.OutputEncoding = Encoding.UTF8;
 
+// 2026-09-13 增：本门禁有已证实的空转史（CI 注释记「ITM-648 凭据门禁实为 no-op」），
+// 且其三层白名单写松一点就会静默放过真实凭据——漏报与「确实没有凭据」输出一致。
+// 故补自证能力，覆盖两模式判定与白名单的每一条边界（--selftest 不依赖仓库与 git）。
+if (args.Contains("--selftest"))
+{
+    return SelfTest();
+}
+
 // ─── 仓库根定位 ───
 var root = FindRepoRoot();
 
@@ -48,25 +56,7 @@ if (trackedFiles.Count == 0)
 }
 
 var suspects = new List<string>();
-
-// ─── 模式 1：已知云密钥/令牌前缀格式（极高信度，零误报）───
-var keyPattern = new Regex(
-    "AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}"
-    + "|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----");
-
-// ─── 模式 2：连接串内嵌真实密码（SE2 原始场景）───
-// 同一行同时含 主机键(Host=/Server=/Data Source=/数据源) 与 密码键(Password=/Pwd=)
-var connPattern = new Regex("(Host|Server|Data Source|数据源)\\s*=.*(Password|Pwd)\\s*=",
-    RegexOptions.IgnoreCase);
-// 密码值提取（= 后到 ; 或 " 或空白前；可选起始引号）
-var pwdPattern = new Regex("(password|pwd)\\s*=\\s*\"?[^;\", ]+", RegexOptions.IgnoreCase);
-// 白名单 1：占位词整词 / 示例语义子串（大小写不敏感）
-var allow1 = new Regex(
-    "^(test|postgres|root|guest|password|pass|pwd|secret|example|changeme|yourpassword|probe|localhost|none|default)$"
-    + "|example|sample|demo|placeholder|dummy|fake|mock", RegexOptions.IgnoreCase);
-// 白名单 2：示例密码形态（<词>-pass / secret123 / <占位词>NNN）
-var allow2 = new Regex("^([a-z0-9]+-)?pass$|^secret[0-9]+$|^[a-z]+-pass$", RegexOptions.IgnoreCase);
-var digitPattern = new Regex("[0-9]");
+var patterns = BuildPatterns();
 
 foreach (var file in trackedFiles)
 {
@@ -82,21 +72,8 @@ foreach (var file in trackedFiles)
     {
         lineno++;
         var content = line.TrimEnd('\r');
-        // 两模式独立判定（原 bash 为两遍独立循环：同一行可各报一次，不短路）
-        if (keyPattern.IsMatch(content))
-            suspects.Add($"SUSPECT [已知密钥格式] {file}:{lineno}");
-        if (!connPattern.IsMatch(content)) continue;
-
-        // 提取 Password/Pwd 的值（第一个匹配；去掉前缀与可选起始引号）
-        var m = pwdPattern.Match(content);
-        if (!m.Success) continue;
-        var value = Regex.Replace(m.Value, "^[^=]*=\\s*\"?", "");
-        if (value.Length == 0) continue;
-        // 三层白名单：占位词/示例语义 → 示例密码形态 → 无数字且长度 <10
-        if (allow1.IsMatch(value)) continue;
-        if (allow2.IsMatch(value)) continue;
-        if (!digitPattern.IsMatch(value) && value.Length < 10) continue;
-        suspects.Add($"SUSPECT [连接串内嵌密码] {file}:{lineno}");
+        foreach (var mode in JudgeLine(content, patterns))
+            suspects.Add($"SUSPECT [{mode}] {file}:{lineno}");
     }
 }
 
@@ -150,3 +127,108 @@ static List<string> GitLsFiles(string workingDir)
         ? output.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Length > 0).ToList()
         : [];
 }
+
+// ══════════════ 判定（纯函数，供 --selftest 覆盖）══════════════
+
+// 模式集（构造一次，供主循环与自测共用）
+static ScanPatterns BuildPatterns() => new(
+    // 模式 1：已知云密钥/令牌前缀格式（极高信度，零误报）
+    Key: new Regex(
+        "AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}"
+        + "|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    // 模式 2：连接串内嵌真实密码——同行同时含 主机键 与 密码键
+    Conn: new Regex("(Host|Server|Data Source|数据源)\\s*=.*(Password|Pwd)\\s*=", RegexOptions.IgnoreCase),
+    // 密码值提取（= 后到 ; 或 " 或空白前；可选起始引号）
+    Pwd: new Regex("(password|pwd)\\s*=\\s*\"?[^;\", ]+", RegexOptions.IgnoreCase),
+    // 白名单 1：占位词整词 / 示例语义子串（大小写不敏感）
+    Allow1: new Regex(
+        "^(test|postgres|root|guest|password|pass|pwd|secret|example|changeme|yourpassword|probe|localhost|none|default)$"
+        + "|example|sample|demo|placeholder|dummy|fake|mock", RegexOptions.IgnoreCase),
+    // 白名单 2：示例密码形态（<词>-pass / secret123 / <占位词>NNN）
+    Allow2: new Regex("^([a-z0-9]+-)?pass$|^secret[0-9]+$|^[a-z]+-pass$", RegexOptions.IgnoreCase),
+    Digit: new Regex("[0-9]"));
+
+// 判定单行（纯函数）：返回命中的模式名列表，空列表=放行。
+// 两模式独立判定（原 bash 为两遍独立循环：同一行可各报一次，不短路）。
+static List<string> JudgeLine(string content, ScanPatterns p)
+{
+    var hits = new List<string>();
+    if (p.Key.IsMatch(content)) hits.Add("已知密钥格式");
+    if (!p.Conn.IsMatch(content)) return hits;
+
+    // 提取 Password/Pwd 的值（第一个匹配；去掉前缀与可选起始引号）
+    var m = p.Pwd.Match(content);
+    if (!m.Success) return hits;
+    var value = Regex.Replace(m.Value, "^[^=]*=\\s*\"?", "");
+    if (value.Length == 0) return hits;
+    // 三层白名单：占位词/示例语义 → 示例密码形态 → 无数字且长度 <10
+    if (p.Allow1.IsMatch(value)) return hits;
+    if (p.Allow2.IsMatch(value)) return hits;
+    if (!p.Digit.IsMatch(value) && value.Length < 10) return hits;
+    hits.Add("连接串内嵌密码");
+    return hits;
+}
+
+// ══════════════ 自测 ══════════════
+
+static int SelfTest()
+{
+    var passed = 0;
+    var total = 0;
+
+    void Case(string name, bool ok)
+    {
+        total++;
+        if (ok) passed++;
+        Console.WriteLine($"{(ok ? "PASS" : "FAIL")} SELFTEST {name}");
+    }
+
+    var p = BuildPatterns();
+
+    // ─── 「自指陷阱」规避（与 encoding-gate 的 \uXXXX 转义同源）───
+    // 本文件本身就在 secret-scan 的扫描面内（scripts/*.cs）。因此**所有应被检出的
+    // 病态样本必须运行期拼装**，否则本文件源码自身命中——实测：首版用字面量写入
+    // 后，真实运行报 8 处命中全部落在 scripts/secret-scan.cs（本门禁拦住了自己的
+    // 测试数据）。因此密钥值拆前缀、连接串破坏 Host=/Password= 的同行相邻性。
+    static string Join(params string[] parts) => string.Concat(parts);
+    static string ConnLine(string host, string pwd) => Join(host, ";Pass", "word=", pwd);
+
+    var fakeAwsKey = Join("AK", "IA", "IOSFODNN7EXAMPLE");
+    var longPwd = Join("Xk9m", "Q2vB7pLw");
+
+    // 模式 1：已知密钥前缀（各自独立，防某条分支被摘掉）
+    Case("模式1 AWS AKIA", JudgeLine($"var k = \"{fakeAwsKey}\";", p) is ["已知密钥格式"]);
+    Case("模式1 GitHub ghp_", JudgeLine("token = ghp_" + new string('a', 36), p) is ["已知密钥格式"]);
+    Case("模式1 PEM 私钥块头", JudgeLine(Join("-----BEGIN ", "RSA ", "PRIVATE KEY-----"), p) is ["已知密钥格式"]);
+    Case("模式1 不误报普通文本", JudgeLine("这是一个普通的领域事件注释", p).Count == 0);
+    Case("模式1 不误报短 AKIA 前缀", JudgeLine(Join("AK", "IA", "123"), p).Count == 0);
+
+    // 模式 2：命中与白名单三条边界
+    Case("模式2 命中：连接串 + 长密码", JudgeLine(ConnLine("Host=db", longPwd), p) is ["连接串内嵌密码"]);
+    Case("白名单1 占位词整词放行", JudgeLine(ConnLine("Host=db", "test"), p).Count == 0);
+    Case("白名单1 示例语义子串放行", JudgeLine(ConnLine("Host=db", "myExamplePwd"), p).Count == 0);
+    Case("白名单2 示例密码形态放行", JudgeLine(ConnLine("Host=db", Join("secret", "123")), p).Count == 0);
+    Case("白名单3 短且无数字放行", JudgeLine(ConnLine("Host=db", "abc"), p).Count == 0);
+    // 关键边界：短但有数字 → 三层白名单都不覆盖 → 必须命中（写松此处即静默漏报）
+    Case("白名单3 边界：短但有数字则命中", JudgeLine(ConnLine("Host=db", Join("a", "1")), p) is ["连接串内嵌密码"]);
+
+    // 模式 2 前置条件：主机键与密码键必须同行共存
+    Case("仅主机键不命中", JudgeLine("Host=db;User=sa", p).Count == 0);
+    Case("仅密码键不命中", JudgeLine(Join("Pass", "word=", longPwd), p).Count == 0);
+    Case("Data Source 亦识别", JudgeLine(ConnLine("Data Source=s", longPwd), p) is ["连接串内嵌密码"]);
+
+    // 两模式独立：同一行可各报一次（不短路）
+    Case("两模式可同时命中", JudgeLine(ConnLine("Host=db", longPwd) + ";Key=" + fakeAwsKey, p).Count == 2);
+
+    // 大小写不敏感（原实现含 RegexOptions.IgnoreCase）
+    Case("主机键大小写不敏感", JudgeLine(ConnLine("host=db", longPwd), p) is ["连接串内嵌密码"]);
+
+    Console.WriteLine();
+    Console.WriteLine($"SELFTEST {passed}/{total} 通过");
+    return passed == total ? 0 : 1;
+}
+
+// ══════════════ 类型 ══════════════
+
+internal sealed record ScanPatterns(
+    Regex Key, Regex Conn, Regex Pwd, Regex Allow1, Regex Allow2, Regex Digit);

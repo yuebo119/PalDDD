@@ -82,7 +82,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
 
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
         var rows = await conn.QueryAsync<SagaStateRow>(
-            new CommandDefinition(SqlTemplates.SagaActive, new { n = batchSize }, Tx, cancellationToken: ct)).ConfigureAwait(false);
+            SqlTemplates.SagaActive, new { n = batchSize }, Tx).ConfigureAwait(false);
         return rows.Select(Materialize).ToList();
     }
 
@@ -120,7 +120,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
             _ => SqlTemplates.SagaLeaseActive
         };
         await conn.ExecuteAsync(
-            new CommandDefinition(leaseSql, new { owner, until = ToTimeParam(until), now = ToTimeParam(now), n = batchSize }, Tx, cancellationToken: ct)).ConfigureAwait(false);
+            leaseSql, new { owner, until = ToTimeParam(until), now = ToTimeParam(now), n = batchSize }, Tx).ConfigureAwait(false);
 
         // 三十八轮 P3 声明（对齐 OutboxSelectByLease 的 ITM-109 格式）：两步租约回读按
         // (leased_by, leased_until) 匹配——同一 owner 在同一 tick（until 完全相等，如
@@ -128,7 +128,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         // 生产触发条件近乎为零（DATETIME(6) 微秒精度 + 单 owner 串行租约）；PG 走
         // FOR UPDATE SKIP LOCKED 单语句天然免疫。残余窗口由 SagaUpdate 的 version 乐观锁兜底。
         var rows = await conn.QueryAsync<SagaStateRow>(
-            new CommandDefinition(SqlTemplates.SagaSelectByLease, new { owner, until = ToTimeParam(until) }, Tx, cancellationToken: ct)).ConfigureAwait(false);
+            SqlTemplates.SagaSelectByLease, new { owner, until = ToTimeParam(until) }, Tx).ConfigureAwait(false);
         return rows.Select(Materialize).ToList();
     }
 
@@ -139,9 +139,9 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         //（Crockford Base32 文本，SQLite TEXT / PG text / MySQL CHAR 列均按纯文本比较，
         // 无方言分派需求——与 ToTimeParam 的时间参数不同）。本文件三处 SagaId 绑定
         //（ GetById / Update / Insert）全方言共用；方法名沿用 DapperAotInitializer 适配器族
-        // 历史命名（见 DapperAotInitializer.cs:48）。
+        // 历史命名（见 DapperAotInitializer.ToSqliteParameter）。
         var row = await conn.QueryFirstOrDefaultAsync<SagaStateRow>(
-            new CommandDefinition(SqlTemplates.SagaById, new { id = DapperAotInitializer.ToSqliteParameter(sagaId) }, Tx, cancellationToken: ct)).ConfigureAwait(false);
+            SqlTemplates.SagaById, new { id = DapperAotInitializer.ToSqliteParameter(sagaId) }, Tx).ConfigureAwait(false);
         return row is null ? null : Materialize(row);
     }
 
@@ -170,7 +170,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         if (existing is not null)
         {
             var rows = await conn.ExecuteAsync(
-                new CommandDefinition(
+
                     // P1 修复（十一轮·实测发现）：PG 的 saga_data JSONB 列需显式 CAST（text→jsonb 无赋值转换）
                     _dbType == DapperDbType.PostgreSql ? SqlTemplates.SagaUpdatePG : SqlTemplates.SagaUpdate,
                     new
@@ -186,8 +186,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
                         id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
                         v = state.Version
                     },
-                    Tx,
-                    cancellationToken: ct)).ConfigureAwait(false);
+                    Tx).ConfigureAwait(false);
 
             if (rows > 0)
             {
@@ -201,7 +200,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         try
         {
             inserted = await conn.ExecuteAsync(
-                new CommandDefinition(
+
                     // P1 修复（十一轮·实测发现）：PG 的 saga_data JSONB 列需显式 CAST（text→jsonb 无赋值转换）
                     _dbType == DapperDbType.PostgreSql ? SqlTemplates.SagaInsertPG : SqlTemplates.SagaInsert,
                     new
@@ -217,8 +216,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
                         leasedBy = state.LeasedBy,
                         leasedUntil = state.LeasedUntil.HasValue ? ToTimeParam(state.LeasedUntil.Value) : null
                     },
-                    Tx,
-                    cancellationToken: ct)).ConfigureAwait(false);
+                    Tx).ConfigureAwait(false);
         }
         catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
         {
@@ -343,20 +341,24 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         return state;
     }
 
-    [SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes",
-        Justification = "Dapper 运行时通过 QueryAsync<T> 实例化此行类型用于物化。")]
-    private sealed class SagaStateRow
-    {
-        public PalUlid SagaId { get; init; }
-        public string CurrentState { get; init; } = string.Empty;
-        public int Status { get; init; }
-        public DateTimeOffset CreatedAt { get; init; }
-        public DateTimeOffset? CompletedAt { get; init; }
-        public string? Error { get; init; }
-        public DateTimeOffset? ErrorAt { get; init; }
-        public int Version { get; init; }
-        public string? SagaData { get; init; }
-        public string? LeasedBy { get; init; }
-        public DateTimeOffset? LeasedUntil { get; init; }
-    }
+}
+
+// 🔬 AOT 实验分支：原 SagaStateRow 为泛型类内嵌类型，DAP051 拒绝（generic-by-containment，
+//    生成器无法为封闭泛型内的 Row 生成物化代码）——迁出至命名空间级非泛型类型（字段全部
+//    具体类型，不依赖 TState）。internal 可见性。
+[SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes",
+    Justification = "Dapper（AOT 拦截器）编译期引用此行类型生成物化代码。")]
+internal sealed class SagaStateRow
+{
+    public PalUlid SagaId { get; init; }
+    public string CurrentState { get; init; } = string.Empty;
+    public int Status { get; init; }
+    public DateTimeOffset CreatedAt { get; init; }
+    public DateTimeOffset? CompletedAt { get; init; }
+    public string? Error { get; init; }
+    public DateTimeOffset? ErrorAt { get; init; }
+    public int Version { get; init; }
+    public string? SagaData { get; init; }
+    public string? LeasedBy { get; init; }
+    public DateTimeOffset? LeasedUntil { get; init; }
 }

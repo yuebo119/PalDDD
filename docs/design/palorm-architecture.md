@@ -26,7 +26,7 @@
 | **API 数量** | ~40 | 200+ | ~100 | **106** |
 | **参数化** | 匿名对象(运行时反射) | LINQ 表达式 | 内插字符串 | **FormattableString(编译时)** |
 | **AOT 安全** | ❌ (Dapper.AOT 半成品) | ❌ (实验性) | ⚠️ (维护者说"不承诺") | **✅ 全链路** |
-| **源生成器** | Dapper.AOT (v1.0.52) | EF Core Precompiled | 无 | **完整 RowFactory+TypeMapper+Migration** |
+| **源生成器** | Dapper.AOT (v1.1.0，未启用——ct 与拦截器互斥，2026-09-13 探针实证) | EF Core Precompiled | 无 | **完整 RowFactory+TypeMapper+Migration** |
 | **TypeHandler** | 运行时 SqlMapper.AddTypeHandler | 无 | 运行时注册 | **编译时 TypeMapper** |
 | **分配 (1row)** | ~10 (匿名类型+PropertyInfo[]) | ~30 (LINQ+ChangeTracker) | ~20 (Expressions) | **~5 (仅参数值 object[])** |
 | **学习曲线** | 极低 (1天) | 高 (2周) | 中 (3天) | **极低 (1天 —— 类 Dapper API)** |

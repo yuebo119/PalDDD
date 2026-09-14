@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 🔬 实验分支专用：Dapper 栈 AOT 全链路探针（experiment/dapper-aot-full）
+         用法：dotnet run 默认 SQLite；加 provider 参数（Pg / MySql）走外部库
+         （凭据读 appsettings.test.local.json）；publish 后实跑二进制为 NativeAOT 实测。
+         外部库凭据来自 appsettings.test.local.json（gitignore，不落对话/日志），
+         或 PALDDD_TEST_PG / PALDDD_TEST_MYSQL 环境变量覆盖。 -->
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PalDDD.DapperAotProbe</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <!-- IL2104/IL3053:上游 Dapper 2.1.79 程序集自带 trim/AOT 注解警告（其经典路径代码被 ILC 扫到），
+         本探针调用点已全量走拦截器，运行时正确性由实跑判定——与 PalDDD.Dapper NoWarn IL3058 同口径 -->
+    <NoWarn>$(NoWarn);CA1303;CA2254;IL3058;IL2104;IL3053</NoWarn>
+    <InterceptorsPreviewNamespaces>$(InterceptorsPreviewNamespaces);Dapper.AOT</InterceptorsPreviewNamespaces>
+    <InterceptorsNamespaces>$(InterceptorsNamespaces);Dapper.AOT</InterceptorsNamespaces>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="MySqlConnector" />
+    <ProjectReference Include="..\..\src\PalDDD.Dapper\PalDDD.Dapper.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Idempotency\PalDDD.Idempotency.csproj" />
+  </ItemGroup>
+
+</Project>

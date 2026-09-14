@@ -5,10 +5,13 @@
 // 用法（在仓库根执行）：
 //   dotnet run scripts/ci-coverage.cs --            全链路：build → 逐项目
 //       test --coverage → reportgenerator 合并 → line-rate 阈值门禁
+//       → 单模块降幅门禁（baseline ±5pp，2026-09-14 增）
 //   dotnet run scripts/ci-coverage.cs -- --selftest 自测：XML 解析 + 阈值路由
-//       单元验证（构造最小 Cobertura XML，不真跑 dotnet coverage）
+//       + 降幅判定（构造最小 Cobertura XML / 基线解析，不真跑 dotnet coverage）
+//   dotnet run scripts/ci-coverage.cs -- --update-baseline
+//       用当前 TestResults 产物重写 coverage-baseline.json（校准入口；改基线需评审）
 //
-// 环境变量：COVERAGE_THRESHOLD——全局行覆盖率阈值（默认 0.65，本地放宽/CI 收紧）
+// 环境变量：COVERAGE_THRESHOLD——全局行覆盖率阈值（默认 0.70，本地放宽/CI 收紧）
 // 产物：TestResults/coverage.<项目名>.cobertura.xml + TestResults/coverage-report/
 // 退出码：0=门禁通过；1=阈值未达/合并报告缺失/解析失败（fail-closed）；
 //         子命令（build/test/restore/合并）失败时透传其退出码（set -e 语义）。
@@ -36,6 +39,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 
@@ -51,7 +55,13 @@ if (args.Contains("--selftest"))
     return SelfTest();
 }
 
-// 阈值可被环境变量覆盖（本地放宽/CI 收紧）——与原脚本 ${COVERAGE_THRESHOLD:-0.65} 一致
+// ─── 参数路由：--update-baseline（用当前产物重写基线；校准入口）───
+if (args.Contains("--update-baseline"))
+{
+    return UpdateBaseline("coverage-baseline.json", "TestResults");
+}
+
+// 阈值可被环境变量覆盖（本地放宽/CI 收紧）——与原脚本 ${COVERAGE_THRESHOLD:-0.70} 一致
 var (thresholdRaw, threshold) = ReadThreshold();
 if (threshold is null)
 {
@@ -87,9 +97,14 @@ if (restoreExit != 0) return restoreExit;
 
 // 4. 合并报告（Cobertura 供第 5 步门禁解析，Html 供人工审阅；glob 由 reportgenerator 自行展开）
 Console.WriteLine(">> Merging coverage reports...");
+// ⚠️ 路径缺陷修复(2026-09-14 实测实证):MTP 的 --coverage-output 相对路径基准是
+// 测试结果根(TestResults/),故第 2 步传入 "TestResults/coverage.X.xml" 实际落在
+// TestResults/TestResults/coverage.X.xml——单层 glob "TestResults/coverage.*" 实测
+// "found no matching files"(reportgenerator 退出非零,fail-closed 卡在合并步)。
+// 递归 glob 兼容双层落点(实测合并成功);若未来 MTP 变更落点基准仍兼容。
 var mergeExit = RunInherit("dotnet",
     "tool run reportgenerator" +
-    " -reports:TestResults/coverage.*.cobertura.xml" +
+    " -reports:TestResults/**/coverage.*.cobertura.xml" +
     " -targetdir:TestResults/coverage-report" +
     " -reporttypes:Html;Cobertura");
 if (mergeExit != 0) return mergeExit;
@@ -117,10 +132,15 @@ if (double.Parse(lineRateRaw, NumberStyles.Float, CultureInfo.InvariantCulture) 
     return 1;
 }
 
+// 6. 单模块覆盖率降幅门禁（账本 §四「单模块降幅 ≤5%」；2026-09-14 增）
+//    同项目跨时间可比（同一测试集插桩同一装配集）；项目间不可比（lines-valid 各异）
+Console.WriteLine(">> Enforcing per-module coverage drop limit (baseline ±5pp)...");
+var dropExit = EnforceModuleDropLimit("coverage-baseline.json", "TestResults");
+if (dropExit != 0) return dropExit;
+
 Console.WriteLine("=== Coverage complete (gate PASSED) ===");
 Console.WriteLine("Report: TestResults/coverage-report/index.html");
 return 0;
-
 // ─── 子进程执行：stdout/stderr 继承终端（对齐原脚本未捕获的 dotnet 调用）───
 // ITM-663：stdout/stderr 均继承终端——coverage 工具输出即结果，控制台直出可观察（刻意取舍）
 static int RunInherit(string fileName, string arguments)
@@ -142,11 +162,18 @@ static List<string> FindTestProjects() =>
         .OrderBy(p => p, StringComparer.Ordinal)
         .ToList();
 
-// ─── 阈值读取：环境变量覆盖 + 默认 0.65；非数字返回 null（fail-closed）───
+// ─── 阈值读取：环境变量覆盖 + 默认 0.70；非数字返回 null（fail-closed）───
+// 2026-09-14 由 0.65 上调至 0.70：阈值口径沿用项目原始设计原则「基线 − 3pp 缓冲」，
+// 而原值 0.65 锚定的是 2026-07-30 基线 67.9%（67.9 − 3 ≈ 65）。2026-09-14 实测
+// 16/16 测试项目并集行覆盖率 **72.98%**（13146/18013，Debug 插桩；该值为**下界**——
+// 其中 PalORM.Tests 因本机无 Docker 有 46 项未跑完，CI 上会更高），按同一原则取 0.70。
+// 原 0.65 在新基线下留有约 8pp 余量，等于要一次掉 8 个百分点才触发，已失去早期预警意义。
+// ⚠️ 复校准触发：首次 CI 运行会给出含 Docker 的 16 项目完整值，届时按其值重校准
+// （预期 ≥ 0.73），并同步 docs/test-coverage-baseline.md §门禁阈值。
 static (string Raw, double? Value) ReadThreshold()
 {
     var raw = Environment.GetEnvironmentVariable("COVERAGE_THRESHOLD");
-    if (string.IsNullOrEmpty(raw)) raw = "0.65";
+    if (string.IsNullOrEmpty(raw)) raw = "0.70";
     return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
         ? (raw, value)
         : (raw, null);
@@ -175,6 +202,116 @@ static string? ExtractLineRate(string coberturaPath)
         // 读不了/坏 XML → 走 null 路径（原脚本 grep 无匹配 → 空串路径）
     }
     return null;
+}
+
+// ─── 单模块降幅门禁：基线 JSON vs 当前逐项目 cobertura（容差 5pp 绝对降幅）───
+// 基线缺失/解析空 → fail-closed（基线是仓库文件，缺失=仓库异常，不得静默跳过）；
+// 基线有、当前无数据 → WARN（CI 全项目有数据；缺数据不阻断但必须可见）。
+static int EnforceModuleDropLimit(string baselinePath, string resultsRoot)
+{
+    if (!File.Exists(baselinePath))
+    {
+        Console.Error.WriteLine($"ERROR: baseline {baselinePath} not found (fail-closed)");
+        return 1;
+    }
+    var baselines = ReadModuleBaselines(baselinePath);
+    if (baselines.Count == 0)
+    {
+        Console.Error.WriteLine($"ERROR: baseline {baselinePath} parsed empty (fail-closed)");
+        return 1;
+    }
+    var failed = 0;
+    foreach (var (proj, baseline) in baselines)
+    {
+        var currentFile = FindCurrentCobertura(resultsRoot, proj);
+        if (currentFile is null)
+        {
+            Console.WriteLine($"  WARN {proj}: 当前无 cobertura（跳过比对）");
+            continue;
+        }
+        var rateRaw = ExtractLineRate(currentFile);
+        if (rateRaw is null)
+        {
+            Console.Error.WriteLine($"ERROR: {proj} cobertura 解析失败: {currentFile} (fail-closed)");
+            failed++;
+            continue;
+        }
+        var current = double.Parse(rateRaw, NumberStyles.Float, CultureInfo.InvariantCulture);
+        var verdict = CheckModuleDrop(baseline, current);
+        Console.WriteLine($"  {(verdict == 0 ? "PASS" : "FAIL")} {proj}: baseline {baseline.ToString("P2", CultureInfo.InvariantCulture)} → {current.ToString("P2", CultureInfo.InvariantCulture)}（降幅 {((baseline - current) * 100).ToString("F2", CultureInfo.InvariantCulture)}pp）");
+        if (verdict != 0) failed++;
+    }
+    if (failed > 0)
+    {
+        Console.Error.WriteLine($"FAIL: {failed} 个模块覆盖率降幅超过 5pp 容差");
+        return 1;
+    }
+    return 0;
+}
+
+// 纯判定：降幅超过容差（5pp 绝对）即违规——抽纯函数供 --selftest 与变异验证。
+// epsilon（1e-9）吸收浮点噪声：0.80−0.75 在 double 下为 0.050000000000000044，
+// 无 epsilon 时「恰好等于容差」被误判违规（本判定边界语义：等于容差放行——自测用例锁定）。
+static int CheckModuleDrop(double baseline, double current) => baseline - current > 0.05 + 1e-9 ? 1 : 0;
+
+// 基线读取：flat JSON 逐行 "proj": rate（手写解析规避 AOT 反射序列化禁用；"//" 注释行跳过）
+static Dictionary<string, double> ReadModuleBaselines(string path)
+{
+    var result = new Dictionary<string, double>(StringComparer.Ordinal);
+    foreach (var line in File.ReadAllLines(path))
+    {
+        var m = Regex.Match(line, "^\\s*\"([^\"]+)\"\\s*:\\s*([0-9.]+)\\s*,?\\s*$");
+        if (m.Success && !m.Groups[1].Value.StartsWith("//", StringComparison.Ordinal)
+            && double.TryParse(m.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var rate))
+        {
+            result[m.Groups[1].Value] = rate;
+        }
+    }
+    return result;
+}
+
+// 当前项目 cobertura 查找（兼容 MTP 双层落点——277bc34 教训：递归搜索）
+static string? FindCurrentCobertura(string resultsRoot, string project)
+{
+    var name = $"coverage.{project}.cobertura.xml";
+    foreach (var f in Directory.EnumerateFiles(resultsRoot, name, SearchOption.AllDirectories))
+        return f;
+    return null;
+}
+
+// 基线更新入口（--update-baseline）：用当前产物重写基线文件（校准步骤，需评审后提交）
+static int UpdateBaseline(string baselinePath, string resultsRoot)
+{
+    var rates = new SortedDictionary<string, double>(StringComparer.Ordinal);
+    foreach (var f in Directory.EnumerateFiles(resultsRoot, "coverage.*.cobertura.xml", SearchOption.AllDirectories))
+    {
+        var name = Path.GetFileName(f);
+        var proj = name["coverage.".Length..^".cobertura.xml".Length];
+        var rateRaw = ExtractLineRate(f);
+        if (rateRaw is null)
+        {
+            Console.Error.WriteLine($"ERROR: {f} 解析失败，拒绝生成不完整基线 (fail-closed)");
+            return 1;
+        }
+        rates[proj] = Math.Round(double.Parse(rateRaw, NumberStyles.Float, CultureInfo.InvariantCulture), 4);
+    }
+    if (rates.Count == 0)
+    {
+        Console.Error.WriteLine($"ERROR: {resultsRoot} 下无 cobertura 产物，无法生成基线 (fail-closed)");
+        return 1;
+    }
+    var sb = new StringBuilder();
+    sb.AppendLine("{");
+    sb.AppendLine("  \"//\": \"单模块覆盖率基线(A6 降幅门禁,容差 5pp)——键=测试项目名,值=line-rate;由 ci-coverage --update-baseline 更新(校准需评审)\",");
+    var i = 0;
+    foreach (var (proj, rate) in rates)
+        sb.AppendLine($"  \"{proj}\": {rate.ToString(CultureInfo.InvariantCulture)}{(++i < rates.Count ? "," : "")}");
+    sb.Append('}');
+    File.WriteAllText(baselinePath, sb.ToString());
+    Console.WriteLine($"基线已更新：{rates.Count} 项目 → {baselinePath}");
+    foreach (var (proj, rate) in rates)
+        Console.WriteLine($"  {proj}: {rate.ToString("P2", CultureInfo.InvariantCulture)}");
+    return 0;
 }
 
 // ─── 自测：构造最小 Cobertura XML 验证解析 + 阈值路由单元 ───
@@ -217,9 +354,9 @@ static int SelfTest()
 
         // 用例 6：阈值判定语义（awk a<b 的等价 double 比较：低于才 FAIL，等于通过）
         var rate = double.Parse("0.72", NumberStyles.Float, CultureInfo.InvariantCulture);
-        Case("0.72 >= 0.65 判定通过", !(rate < 0.65));
-        Case("0.50 < 0.65 判定失败", double.Parse("0.50", NumberStyles.Float, CultureInfo.InvariantCulture) < 0.65);
-        Case("0.65 == 0.65 边界通过", !(0.65 < 0.65));
+        Case("0.72 >= 0.70 判定通过", !(rate < 0.70));
+        Case("0.50 < 0.70 判定失败", double.Parse("0.50", NumberStyles.Float, CultureInfo.InvariantCulture) < 0.70);
+        Case("0.70 == 0.70 边界通过", !(0.70 < 0.70));
 
         // 用例 7：阈值环境变量路由
         Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", "0.9");
@@ -227,10 +364,26 @@ static int SelfTest()
         Case("环境变量覆盖阈值 0.9", raw1 == "0.9" && v1 == 0.9);
         Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", null);
         var (raw2, v2) = ReadThreshold();
-        Case("缺省阈值 0.65", raw2 == "0.65" && v2 == 0.65);
+        Case("缺省阈值 0.70", raw2 == "0.70" && v2 == 0.70);
         Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", "abc");
         var (raw3, v3) = ReadThreshold();
         Case("非法阈值 fail-closed", raw3 == "abc" && v3 is null);
+
+        // 用例：单模块降幅判定（CheckModuleDrop——容差 5pp 绝对）
+        Case("降幅 2pp 通过", CheckModuleDrop(0.80, 0.78) == 0);
+        Case("降幅 5pp 边界通过(等于容差)", CheckModuleDrop(0.80, 0.75) == 0);
+        Case("降幅 5.1pp 失败", CheckModuleDrop(0.80, 0.749) == 1);
+        Case("覆盖率上升通过(负向对照)", CheckModuleDrop(0.80, 0.85) == 0);
+        Case("零基线(新项目)通过", CheckModuleDrop(0.0, 0.30) == 0);
+
+        // 用例：基线 flat JSON 解析（含注释行跳过 / 尾逗号 / 多项目）
+        var baselineFile = Path.Combine(Path.GetTempPath(), "ci-coverage-selftest-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(baselineFile,
+            "{\n  \"//\": \"comment\",\n  \"PalDDD.Core.Tests\": 0.3090,\n  \"PalDDD.CQRS.Tests\": 0.3098\n}");
+        var parsed = ReadModuleBaselines(baselineFile);
+        Case("基线解析：注释行跳过 + 2 项目", parsed.Count == 2 && parsed.ContainsKey("PalDDD.Core.Tests"));
+        Case("基线解析：值正确", Math.Abs(parsed["PalDDD.CQRS.Tests"] - 0.3098) < 1e-9);
+        File.Delete(baselineFile);
         Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", null);
     }
     finally

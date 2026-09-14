@@ -11,15 +11,14 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.9.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.9.0" />
     <!-- 仓储层依赖 (EF Core 11 RC1) — 多数据库 Provider -->
+    <!-- 2026-09-13 版本核实:EF Core 11 线最新即 rc.1.26425.128(rc.2 未发,GA 预计 2026-11),
+         本仓已在最新版;死条目清理:SqlServer/Design/Npgsql.EF(11.0.0-preview.6)/Pomelo(11.0.0-preview.5)
+         四包零直接引用 + 全解决方案 include-transitive 传递图零命中,删除(区别于二十五轮误删案:
+         该案为活传递钉扎,本案 include-transitive 实锤) -->
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="11.0.0-rc.1.26425.128" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="11.0.0-rc.1.26425.128" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="11.0.0-rc.1.26425.128" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="11.0.0-preview.6" />
-    <!-- Pomelo 11 线最新即 preview.5（2026-09-10 双源核实：NuGet search 无 11 线更新版本）——出 RC 后随 EFCore 系统一升级 -->
-    <PackageVersion Include="Pomelo.EntityFrameworkCore.MySql" Version="11.0.0-preview.5.26302.115" />
     <!-- DI 扩展依赖 (.NET 11 RC1) — 这些包在 net11.0 下自动可用，csproj 中不再显式引用 -->
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="11.0.0-rc.1.26425.128" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="11.0.0-rc.1.26425.128" />
@@ -32,7 +31,12 @@
     <PackageVersion Include="ByteAether.Ulid" Version="1.4.0" />
     <!-- Dapper 适配器 — SQLite / PostgreSQL / MySQL（AOT 兼容） -->
     <PackageVersion Include="Dapper" Version="2.1.79" />
-    <PackageVersion Include="Dapper.AOT" Version="1.0.52" />
+    <!-- Dapper.AOT 1.1.0（2026-09-13 升级探针实证）：拦截器接线在 .NET 11 已恢复（1.0.52 的
+         InterceptsLocation(line,char) 旧形式失效指控对 1.1.0 不成立——net11 SDK JIT 堆栈走生成代码
+         + NativeAOT 二进制实跑全绿）；TypeHandler 声明式 [Dapper.TypeHandler] 生效（含经典
+         SqlMapper.TypeHandler shim）；CommandDefinition 拼写照 DAP057 拒绝（与 ct 传参互斥，
+         2026-09-13 用户裁决"铺垫不动"，启用路径见 DapperAotInitializer.cs 头注） -->
+    <PackageVersion Include="Dapper.AOT" Version="1.1.0" />
     <!-- PalORM 适配器 — 面向 Native AOT 的 .NET 11 微 ORM（源生成 + 编译期 SQL，真 AOT 安全）
          5.5.1 纯依赖升级：Roslyn 对齐本仓 5.9.0 钉扎、Sqlite.Core 升 11 rc.1、消 SQLitePCLRaw NU1903（High）；
          5.5.0 行为变更（脱敏信道/外部事务语义/WhereJson 方言守卫）本仓零使用，2026-09-11 grep 核实 -->

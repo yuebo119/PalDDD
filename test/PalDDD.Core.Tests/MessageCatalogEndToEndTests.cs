@@ -1,5 +1,4 @@
 using System.Text.Json.Serialization;
-using PalDDD.Core;
 using PalDDD.Generated;
 using PalDDD.Serialization;
 

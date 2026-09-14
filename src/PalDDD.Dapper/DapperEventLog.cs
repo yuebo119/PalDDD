@@ -25,6 +25,7 @@
 //   ｜ SQLite → SELECT last_insert_rowid()
 // ─────────────────────────────────────────────────────────────
 
+using System.Data;
 using Dapper;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
@@ -88,8 +89,8 @@ public sealed class DapperEventLog : IEventLog
         // Dapper 连接由调用方持有的设计结果——与 PalORM 版一致）。
         // 1. 乐观并发检查（P0-2 修复：原 expectedVersion.Matches 返回值被丢弃）
         var currentVersion = await _connection.QueryFirstOrDefaultAsync<long?>(
-            new CommandDefinition(EventLogSql.MaxVersion,
-                new { name = streamName }, Tx, cancellationToken: cancellationToken)).ConfigureAwait(false);
+            EventLogSql.MaxVersion,
+                new { name = streamName }, Tx).ConfigureAwait(false);
         if (!expectedVersion.Matches(currentVersion ?? -1))
             throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion ?? -1);
 
@@ -113,26 +114,28 @@ public sealed class DapperEventLog : IEventLog
             long pos;
             try
             {
-                pos = await _connection.QuerySingleAsync<long>(new CommandDefinition(sql, new
-                {
-                    EventId = DapperAotInitializer.ToSqliteParameter(evt.EventId),
-                    EventName = evt.EventName,
-                    StreamName = streamName,
-                    StreamVersion = version++,
-                    SchemaVersion = evt.SchemaVersion,
-                    ContentType = evt.ContentType,
-                    Payload = evt.Payload.ToArray(),
-                    Metadata = evt.Metadata.ToArray(),
-                    RecordedAt = ToTimeParam(now),
-                    // 修复覆盖残留：此前硬编码 null——actor/reason 也从未真正持久化过；
-                    // 现按 EventData.Audit 全量映射 6 字段（对齐 PalORM/EFCore）
-                    ActorId = evt.Audit.ActorId,
-                    Reason = evt.Audit.Reason,
-                    CorrelationId = evt.Audit.CorrelationId?.ToString(),
-                    CausationId = evt.Audit.CausationId?.ToString(),
-                    TraceParent = evt.Audit.TraceParent,
-                    TraceState = evt.Audit.TraceState
-                }, Tx, cancellationToken: cancellationToken)).ConfigureAwait(false);
+                // 🔬 AOT 实验：参数走 DynamicParameters——1.1.0 List expansion 把匿名对象里的
+                //    byte[]（Payload/Metadata）误判为 IN 列表做 PackListParameters 展开（SQL 变
+                //    行值，SQLite "row value misused"）；byte[] 用显式 DbType.Binary。
+                var dp = new DynamicParameters();
+                dp.Add("EventId", DapperAotInitializer.ToSqliteParameter(evt.EventId));
+                dp.Add("EventName", evt.EventName);
+                dp.Add("StreamName", streamName);
+                dp.Add("StreamVersion", version++);
+                dp.Add("SchemaVersion", evt.SchemaVersion);
+                dp.Add("ContentType", evt.ContentType);
+                dp.Add("Payload", evt.Payload.ToArray(), DbType.Binary);
+                dp.Add("Metadata", evt.Metadata.ToArray(), DbType.Binary);
+                dp.Add("RecordedAt", ToTimeParam(now));
+                // 修复覆盖残留：此前硬编码 null——actor/reason 也从未真正持久化过；
+                // 现按 EventData.Audit 全量映射 6 字段（对齐 PalORM/EFCore）
+                dp.Add("ActorId", evt.Audit.ActorId);
+                dp.Add("Reason", evt.Audit.Reason);
+                dp.Add("CorrelationId", evt.Audit.CorrelationId?.ToString());
+                dp.Add("CausationId", evt.Audit.CausationId?.ToString());
+                dp.Add("TraceParent", evt.Audit.TraceParent);
+                dp.Add("TraceState", evt.Audit.TraceState);
+                pos = await _connection.QuerySingleAsync<long>(sql, dp, Tx).ConfigureAwait(false);
             }
             catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
             {
@@ -149,8 +152,7 @@ public sealed class DapperEventLog : IEventLog
                 try
                 {
                     actualVersion = await _connection.QueryFirstOrDefaultAsync<long?>(
-                        new CommandDefinition(EventLogSql.MaxVersion, new { name = streamName }, Tx,
-                            cancellationToken: cancellationToken)).ConfigureAwait(false);
+                        EventLogSql.MaxVersion, new { name = streamName }, Tx).ConfigureAwait(false);
                     requerySucceeded = true;
                 }
                 catch (System.Data.Common.DbException)
@@ -199,7 +201,7 @@ public sealed class DapperEventLog : IEventLog
         using var activity = PalActivitySource.StartEventLogReadStream(streamName, fromVersion);
 
         var rows = await _connection.QueryAsync<EventLogRow>(
-            new CommandDefinition(EventLogSql.ReadStream, new { name = streamName, from = fromVersion, max = maxCount }, Tx, cancellationToken: cancellationToken)).ConfigureAwait(false);
+            EventLogSql.ReadStream, new { name = streamName, from = fromVersion, max = maxCount }, Tx).ConfigureAwait(false);
 
         var read = 0;
         // ITM-167 同款：计数与 metrics 置入 finally——迭代器被消费方提前 Dispose（await
@@ -234,7 +236,7 @@ public sealed class DapperEventLog : IEventLog
         using var activity = PalActivitySource.StartEventLogReadAll(fromPosition);
 
         var rows = await _connection.QueryAsync<EventLogRow>(
-            new CommandDefinition(EventLogSql.ReadAll, new { from = fromPosition, max = maxCount }, Tx, cancellationToken: cancellationToken)).ConfigureAwait(false);
+            EventLogSql.ReadAll, new { from = fromPosition, max = maxCount }, Tx).ConfigureAwait(false);
 
         var read = 0;
         // ITM-167 同款：计数与 metrics 置入 finally + yield 前计数（同 ReadStreamAsync）。

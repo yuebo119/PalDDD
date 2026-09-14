@@ -21,13 +21,13 @@
 //   ｜   2. 原子租约获取（多实例部署时避免重复发布）
 //   ｜   3. 标记已处理/死信/重试
 //
-// AOT 状态（v11 勘正——旧"零反射"块与实际矛盾）：
-//   ⚠️ 运行时经典 Dapper 路径（QueryAsync<T> 物化经 IL 发射，AOT 下退化为反射）——
-//      真 AOT 不可达；csproj IsAotCompatible=true 是"编译无警告"口径而非运行时承诺
-//      （详见 DapperBulkCopy IL2062 注释与 csproj Description）。snake_case 映射
-//      （MatchNamesWithUnderscores）本身是纯字符串操作，但物化整链含反射。
-//   ✅ DapperDbType 枚举分发 / DapperBulkCopy 委托提取 — 这两处确为零反射。
-//   栈级 AOT 策略见 ADR-020（Dapper 退役；Native AOT 场景用 PalORM）。
+// AOT 状态（2026-09-13 实验后勘正——Dapper.AOT 1.1.0 全量启用）：
+//   ✅ 本类全部调用点已被生成拦截器接管（直接重载形状），经典反射路径不再可达；
+//      SQLite/PG 18.4/MySQL 8.4.11 真库 NativeAOT 二进制实测 13/13（探针 sample）。
+//   ✅ DapperDbType 枚举分发 / DapperBulkCopy 委托提取 — 零反射（既有勘正仍成立）。
+//   ⚠️ 边界：库级 Dapper.dll 仍有上游 46 条 AOT 警告（经典路径代码保留但不可达），
+//      绕过本封装直用 Dapper 原生 API 不受 AOT 支持——权威口径见
+//      docs/persistence-aot-status.md；ADR-020 已修订为退役延后。
 //
 // ⚡ 性能：
 //   ✅ 查询使用手写 SQL + Dapper 执行
@@ -107,13 +107,14 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         var now = _timeProvider.GetUtcNow();
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // 🟡 P1 修复 (2026-06-21): 替换 SqlKata.QueryFactory.GetAsync 为纯 Dapper SQL
-        // 直接使用 Dapper.QueryAsync<OutboxMessage>（v10 勘正：走运行时经典 Dapper 路径——
-        // AOT 拦截未启用，与 csproj IsAotCompatible=true 的差异见 DapperBulkCopy IL2062 注释）。
+        // 直接使用 Dapper.QueryAsync<OutboxMessage>（2026-09-13 AOT 实验后勘正：拦截器已
+        // 全量接管——此调用点为生成拦截器目标之一，经典反射路径不再可达，见
+        // docs/review/dapper-aot-experiment-2026-09-13.md）。
         var messages = await conn.QueryAsync<OutboxMessage>(
-            new CommandDefinition(
+
                 SqlTemplates.OutboxSelectPending,
                 new { status = StatusPending, now = ToTimeParam(now), maxRetryCount, n = batchSize },
-                Tx, cancellationToken: ct)).ConfigureAwait(false);
+                Tx).ConfigureAwait(false);
         return messages.AsList();
     }
 
@@ -150,14 +151,14 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         if (_dialect.SupportsOutboxReturning)
         {
             var msgs = await conn.QueryAsync<OutboxMessage>(
-                new CommandDefinition(
+
                     // 优化（二十五轮 API 扫描 A-3）：原运行时插值 OutboxLeaseUpdate + $"({leaseSubSql}
                     // FOR UPDATE SKIP LOCKED) RETURNING *" 改为 SqlTemplates 预拼完整常量
                     // OutboxLeaseUpdatePG——消除每次租约的字符串拼接分配，且 SQL 文本稳定，
                     // 可被 Npgsql MaxAutoPrepare 自动预备（PG 数据源侧已默认启用）。
                     SqlTemplates.OutboxLeaseUpdatePG,
                     new { owner, until = ToTimeParam(until), now = ToTimeParam(now), maxRetryCount, n = batchSize },
-                    Tx, cancellationToken: ct)).ConfigureAwait(false);
+                    Tx).ConfigureAwait(false);
             return msgs.AsList();
         }
         else
@@ -169,10 +170,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
                 ? SqlTemplates.OutboxLeaseUpdateMySql
                 : SqlTemplates.OutboxLeaseUpdateSqlite;
             await conn.ExecuteAsync(
-                new CommandDefinition(
+
                     leaseSql,
                     new { owner, until = ToTimeParam(until), now = ToTimeParam(now), maxRetryCount, n = batchSize },
-                    Tx, cancellationToken: ct)).ConfigureAwait(false);
+                    Tx).ConfigureAwait(false);
 
             // 🔴 P0 修复：按租约标识回读，不重新评估子查询
             // ITM-109 修复（声明，对齐 PalORM P3 声明）：回读按 (locked_by, locked_until)
@@ -180,10 +181,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             // 属已知限制（PalORM 已声明同限制）；PG RETURNING 路径（SupportsOutboxReturning
             // 分支）按行锁语义返回刚锁定行，无此窗口。生产多实例建议用 PG 路径。
             var msgs = await conn.QueryAsync<OutboxMessage>(
-                new CommandDefinition(
+
                     SqlTemplates.OutboxSelectByLease,
                     new { owner, until = ToTimeParam(until) },
-                    Tx, cancellationToken: ct)).ConfigureAwait(false);
+                    Tx).ConfigureAwait(false);
             return msgs.AsList();
         }
     }
@@ -193,24 +194,25 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         ArgumentNullException.ThrowIfNull(message);
         var c = EnsureOpen();
         // P2 修复（七轮评审）：补 correlation/causation/trace 4 列——此前模板加了列但参数对象未传
-        c.Execute(SqlTemplates.OutboxInsert,
-            new
-            {
-                Id = DapperAotInitializer.ToSqliteParameter(message.Id),
-                message.Type,
-                message.Payload,
-                message.ContentType,
-                message.SchemaVersion,
-                // ITM-634 修复（跨栈契约一致）：created_at 持久化领域赋值 OutboxMessage.CreatedAt——
-                // 原实现用 Store 时钟 _timeProvider.GetUtcNow() 覆盖，与 PalORM（OutboxMessageRow.FromDomain）、
-                // EFCore（OutboxMessages.Add(message)）、InMemory（列表直存）三栈保留领域值分叉：
-                // 同消息跨栈落库 created_at 不同，ORDER BY created_at 投递序与 CreatedAt 往返断言随之分叉。
-                CreatedAt = ToTimeParam(message.CreatedAt),
-                CorrelationId = message.CorrelationId?.ToString(),
-                CausationId = message.CausationId?.ToString(),
-                message.TraceParent,
-                message.TraceState
-            }, Tx);
+        // 🔬 AOT 实验：参数走 DynamicParameters——1.1.0 List expansion 把匿名对象里的 byte[]
+        //    Payload 误判为 IN 列表做 PackListParameters 展开（SQL 变行值，SQLite "row value
+        //    misused"）；byte[] 用显式 DbType.Binary（DynamicParameters 是 1.1.0 官方支持路径）。
+        var dp = new DynamicParameters();
+        dp.Add("Id", DapperAotInitializer.ToSqliteParameter(message.Id));
+        dp.Add("Type", message.Type);
+        dp.Add("Payload", message.Payload, DbType.Binary);
+        dp.Add("ContentType", message.ContentType);
+        dp.Add("SchemaVersion", message.SchemaVersion);
+        // ITM-634 修复（跨栈契约一致）：created_at 持久化领域赋值 OutboxMessage.CreatedAt——
+        // 原实现用 Store 时钟 _timeProvider.GetUtcNow() 覆盖，与 PalORM（OutboxMessageRow.FromDomain）、
+        // EFCore（OutboxMessages.Add(message)）、InMemory（列表直存）三栈保留领域值分叉：
+        // 同消息跨栈落库 created_at 不同，ORDER BY created_at 投递序与 CreatedAt 往返断言随之分叉。
+        dp.Add("CreatedAt", ToTimeParam(message.CreatedAt));
+        dp.Add("CorrelationId", message.CorrelationId?.ToString());
+        dp.Add("CausationId", message.CausationId?.ToString());
+        dp.Add("TraceParent", message.TraceParent);
+        dp.Add("TraceState", message.TraceState);
+        c.Execute(SqlTemplates.OutboxInsert, dp, Tx);
     }
 
     /// <summary>批量添加消息 — 自动选择数据库最优批量路径。
@@ -326,10 +328,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // P3 修复（八轮评审）：ExecuteAsync 改 CommandDefinition 传 ct——原重载不接收取消令牌，
         // 取消信号在 RequeueDead 执行阶段不可传递；EnsureOpenAsync(ct) 此前已传。
         return await conn.ExecuteAsync(
-            new CommandDefinition(
+
                 SqlTemplates.OutboxRequeueDead,
                 new { audit, next = ToTimeParam(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(messageId) },
-                Tx, cancellationToken: ct)).ConfigureAwait(false);
+                Tx).ConfigureAwait(false);
     }
 
     public ValueTask<int> SaveChangesAsync(CancellationToken ct) => ValueTask.FromResult(0);

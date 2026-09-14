@@ -1,7 +1,6 @@
 using Dapper;
 #pragma warning disable DAP005 // 测试项目不需要 Dapper.AOT 编译期拦截
 using Microsoft.Data.Sqlite;
-using PalDDD.Core;
 using PalDDD.Dapper;
 using PalDDD.Idempotency;
 

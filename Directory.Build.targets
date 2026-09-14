@@ -1,0 +1,64 @@
+<Project>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       ConfigureGitHooks — 首次构建时为本 clone 配置 git hooks 路径
+       ═══════════════════════════════════════════════════════════════
+       动机（2026-09-13 实证缺口）：
+       `.githooks/pre-commit`（5 道守卫）与 `.githooks/pre-push` 的脚本本身**已被跟踪**，
+       clone 即可获得；但 `core.hooksPath` 是 **git 本地配置，不进版本库**——新 clone
+       默认不设置，于是整套本地防线（密扫/编码/守卫/测试文件/XML 五道 + 推送门禁）
+       形同不存在。全仓此前仅在文档里提过一次（AGENTS.md 的括号注），**无安装脚本、
+       无新 clone 的安装步骤、无任何地方校验其是否生效**。
+       本目标把「记得手动执行 git config」这种自愿步骤变成「构建即生效」的机械步骤——
+       与全仓「能用确定性手段强制的，不写入概率规则」一致。
+
+       设计约束（逐条对应本仓已有的踩坑史）：
+       1. **不覆盖开发者的既有配置**：先读 `core.hooksPath` 当前值，仅在其**未设置**时写入。
+          若开发者已有自定义 hooksPath（如全局钩子管理工具），本目标不动它。
+       2. **非 git 环境不报错**：`.git` 不存在（源码包解压、容器无 .git）时整目标跳过；
+          git 调用一律 ContinueOnError，任何失败都不阻断构建。
+       3. **每 clone 只跑一次**：以 `.git/config` 为 Input、`obj/githooks-configured.stamp`
+          为 Output 做 MSBuild 增量判定——避免每次增量构建都起 git 进程（37 个项目
+          逐个执行会白付 ~0.5s/次）。
+       4. **不做 git commit 相关副作用**：全仓无脚本执行 `git commit`（已 grep 确认），
+          故配置 hooksPath 不会意外触发钩子。
+       5. **已知无害副作用**：首次构建时并行 MSBuild 节点各自读到的都是「未设置」，
+          故提示行与写入会按项目数重复若干次（实测单项目链 3 次；全解决方案最多 37 次）。
+          写入是幂等的（同值），且第二次构建起被增量判定整体跳过。不做跨进程加锁——
+          收益仅为少打几行日志，代价是引入锁文件竞争面。
+       ═══════════════════════════════════════════════════════════════ -->
+
+  <Target Name="ConfigureGitHooks"
+          BeforeTargets="Build"
+          Condition="'$(DesignTimeBuild)' != 'true' and Exists('$(MSBuildThisFileDirectory).git')"
+          Inputs="$(MSBuildThisFileDirectory).git\config"
+          Outputs="$(MSBuildThisFileDirectory)obj\githooks-configured.stamp">
+
+    <!-- 读当前值：未设置时 git 返回非零退出码（区别于「已设为其它的值」） -->
+    <Exec Command="git config --local --get core.hooksPath"
+          WorkingDirectory="$(MSBuildThisFileDirectory)"
+          ConsoleToMSBuild="true"
+          ContinueOnError="true"
+          StandardOutputImportance="low"
+          StandardErrorImportance="low"
+          IgnoreExitCode="true">
+      <Output TaskParameter="ExitCode" PropertyName="GitHooksPathExitCode" />
+    </Exec>
+
+    <MakeDir Directories="$(MSBuildThisFileDirectory)obj" />
+
+    <Exec Command="git config --local core.hooksPath .githooks"
+          WorkingDirectory="$(MSBuildThisFileDirectory)"
+          Condition="'$(GitHooksPathExitCode)' != '0'"
+          ContinueOnError="true"
+          StandardOutputImportance="low"
+          StandardErrorImportance="low" />
+
+    <Message Importance="high"
+             Condition="'$(GitHooksPathExitCode)' != '0'"
+             Text="已配置 git hooks（core.hooksPath=.githooks）——提交/推送守卫生效。若要跳过：git commit --no-verify" />
+
+    <Touch Files="$(MSBuildThisFileDirectory)obj\githooks-configured.stamp" AlwaysCreate="true" />
+  </Target>
+
+</Project>

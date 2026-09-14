@@ -29,7 +29,7 @@
 
 ## 〇、InMemory 实现族定位（2026-08-26 精炼轮声明）
 
-六个 InMemory 实现（Outbox/Inbox/SagaState/EventLog/Idempotency/Checkpoint）**刻意分散在各抽象包内**（`AddPalDDD` 引 Transactions 即得 InMemoryOutboxStore），不集中为独立 PalDDD.InMemory 包。理由：单元测试/原型零依赖直达（一跳引用）；集中包会形成对全部五个抽象包的反向汇聚依赖（版本耦合 + 测试项目两跳引用）。定位：**单元测试与原型的默认实现**，非生产实现——生产语义请用三栈之一（PalORM AOT 主线 / EFCore 生态线 / Dapper 退役中，见 ADR-020）。
+六个 InMemory 实现（Outbox/Inbox/SagaState/EventLog/Idempotency/Checkpoint）**刻意分散在各抽象包内**（`AddPalDDD` 引 Transactions 即得 InMemoryOutboxStore），不集中为独立 PalDDD.InMemory 包。理由：单元测试/原型零依赖直达（一跳引用）；集中包会形成对全部五个抽象包的反向汇聚依赖（版本耦合 + 测试项目两跳引用）。定位：**单元测试与原型的默认实现**，非生产实现——生产语义请用三栈之一（PalORM AOT 主线 / Dapper 调用点级 AOT / EFCore 生态线，见 ADR-020 2026-09-13 修订）。
 
 ---
 
@@ -439,10 +439,13 @@ dotnet build PalDDD.slnx --no-incremental
 for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore --no-build; done
 
 # 4. 规范验证（grep 静态检查）
-bash scripts/verify-conventions.sh --quick
+dotnet run scripts/verify-conventions.cs -- --quick
+# 注（ITM-680 收尾，2026-09-14）：--quick 为提交前口径（秒级，仅静态检查）；full（默认）
+# 含全量 build+test，无 Docker 机器测试阶段必红（PalORM 46 项 fail-closed + Messaging 集成
+# 环境失败），仅 CI/有 Docker 环境可全跑——本地看到 full 红先查环境而非代码。
 
 # 5. AI 系统门禁（如使用 .ai/）
-bash .ai/scripts/gate-check.sh --allow-dirty
+dotnet run scripts/gate.cs -- --allow-dirty
 
 # 6. 源生成器变更额外验证（如改了 SourceGen）
 PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet build PalDDD.slnx
@@ -472,7 +475,7 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 | `bench/PalDDD.Benchmarks/Program.cs` | BenchmarkSwitcher + Smoke 模式入口 |
 | `bench/PalDDD.Benchmarks/FrameworkBenchmarks.cs` | 领域核心基准 |
 | `bench/PalDDD.Benchmarks/InfraBenchmarks.cs` | 基础设施基准 |
-| `scripts/verify-conventions.sh` | 规范验证脚本（三模式） |
+| `scripts/verify-conventions.cs` | 规范验证脚本（三模式） |
 | `AssertionStrengthGateTests.cs` | 断言强度检查测试（替代 Stryker；原 bash 脚本 MIG-003 下沉） |
 
 ---

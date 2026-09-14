@@ -173,11 +173,13 @@ PalORM 是面向 Native AOT 的 .NET 11 微 ORM，通过源生成器在编译期
 
 PalORM 是推荐的持久化路径——完整链路 Native AOT 支持，取代 Dapper 的反射路径。
 
-## Dapper 适配层 — ⚠️ AOT 假象（逐步弃用）
+## Dapper 适配层 — 调用点级 AOT（2026-09-13 实测通过）
 
-Dapper 适配项目使用项目级 IL3058 抑制（`<NoWarn>$(NoWarn);IL3058</NoWarn>`），把 Dapper 的动态能力边界限制在外圈 adapter（全局 `Directory.Build.props` 的 NoWarn 已移除 IL3058，ITM-161）。但 `[module:DapperAot]` 当前未全局启用——Dapper 的 AOT 兼容是声明层面的，实际运行时仍走反射路径。
+Dapper.AOT 1.1.0 全量启用（`[module:DapperAot]` + 34 调用点 `CommandDefinition`→直接重载 + 声明式 TypeHandler 接管运行时注册）。SQLite / PostgreSQL 18.4 / MySQL 8.4.11 真库 NativeAOT 二进制实测各 13/13（四组件全 CRUD + blob 往返）。
 
-**结论**：Dapper 适配层的 AOT 兼容是假象（NoWarn IL3058 声明），不适用于 Native AOT 发布。推荐使用 PalORM 替代。
+**能力边界**：封装 API 面（六接口 × 34 调用点）AOT 实测通过；Dapper.dll 库级非 AOT 干净（上游 46 条警告，全部落在经典反射路径，与拦截器生成代码正交）——绕过封装直用 Dapper 原生 API（`CommandDefinition`/`dynamic`/运行时 `AddTypeHandler`）在 AOT 下不受支持。行为变化：SQL 执行层 ct 不可中断（直接重载无 ct 参数，连接超时兜底）。
+
+详见 `docs/review/dapper-aot-experiment-2026-09-13.md`（实验报告 + 抑制声明审计）。
 
 所有库代码的 await 调用均使用 `ConfigureAwait(false)`（全层显式，机械保证为 PDDD-G12 零违规；计数口径已去裸数字化——该数字随每次提交漂移，锚定裸数字会制造文档振荡，PD34）。所有时间获取通过 `TimeProvider` 而非 `DateTimeOffset.UtcNow`。
 

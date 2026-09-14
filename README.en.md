@@ -4,7 +4,7 @@
 
 **A DDD/CQRS/Event Sourcing infrastructure framework for .NET 11 — zero runtime reflection, complete Native AOT pipeline, no over-abstraction.**
 
-[![NuGet](https://img.shields.io/badge/nuget-v2.1.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
+[![NuGet](https://img.shields.io/badge/nuget-v2.2.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)
 [![CI](https://img.shields.io/badge/build-0_errors_0_warnings-brightgreen)]()
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
@@ -123,41 +123,41 @@ InMemory implementations cover all abstract interfaces, so unit tests and protot
 
 | Package | Version | Description |
 |------|:--:|------|
-| **PalDDD.Base** | 2.1.0 | L1 metapackage: Core + Serialization + Compression + SourceGen + Analyzers |
-| **PalDDD.Extension** | 2.1.0 | L2 metapackage: CQRS + EventLog + Idempotency + Projections + Messaging + Transactions + DI |
-| **PalDDD.Core** | 2.1.0 | Domain core: AggregateRoot / Entity / ValueObject / SmartEnum / DomainEvent / Specification |
-| **PalDDD.Serialization** | 2.1.0 | Serialization abstractions: IMessageSerializer / MessageCatalog / MessageDescriptor |
-| **PalDDD.Serialization.Evolution** | 2.1.0 | Message version evolution: Upcaster / Contract validation |
-| **PalDDD.Serialization.MemoryPack** | 2.1.0 | MemoryPack binary serialization (zero reflection, AOT) |
-| **PalDDD.Compression** | 2.1.0 | Compression abstractions: Brotli / GZip / Deflate (AOT-safe) |
-| **PalDDD.Compression.Native** | 2.1.0 | Native compression: LZ4 / ZStandard (P/Invoke, not AOT-compatible) |
-| **PalDDD.Core.SourceGen** | 2.1.0 | Source generators: IdentityGenerator / EnumGenerator / MessageRegistryGenerator |
-| **PalDDD.Analyzers** | 2.1.0 | Roslyn analyzers: PDDD001-015 compile-time DDD governance diagnostics |
-| **PalDDD.Analyzers.CodeFixes** | 2.1.0 | Code fixes: PDDD008/010/013/015 |
-| **PalDDD.CQRS** | 2.1.0 | Command Query Responsibility Segregation: Dispatcher / Pipeline / Validation / Logging |
-| **PalDDD.EventLog** | 2.1.0 | Event log abstractions: InMemoryEventLog + optimistic concurrency |
-| **PalDDD.EventLog.EFCore** | 2.1.0 | EF Core event log: EventLogDbContext + global bit allocator |
-| **PalDDD.Idempotency** | 2.1.0 | Idempotency abstractions: IdempotencyProcessor + InMemoryStore |
-| **PalDDD.Idempotency.EFCore** | 2.1.0 | EF Core idempotency records: IdempotencyDbContext |
-| **PalDDD.Projections** | 2.1.0 | Projection abstractions: ProjectionProcessor + Checkpoint + Replay |
-| **PalDDD.Projections.EFCore** | 2.1.0 | EF Core projection checkpoint: ProjectionCheckpointDbContext |
-| **PalDDD.Projections.EventLog** | 2.1.0 | EventLog replay source: rebuilds read models from event streams |
-| **PalDDD.Messaging** | 2.1.0 | Message bus abstractions: MessageBrokerBase + DomainEventDispatcher |
-| **PalDDD.Messaging.Kafka** | 2.1.0 | Kafka adapter: based on Confluent.Kafka 2.x |
-| **PalDDD.Messaging.RabbitMQ** | 2.1.0 | RabbitMQ adapter: based on RabbitMQ.Client 7.x |
-| **PalDDD.Transactions** | 2.1.0 | Transactions/Saga: Outbox/Inbox abstractions + InMemoryStore + background processors |
-| **PalDDD.Transactions.EFCore** | 2.1.0 | EF Core transactions: Outbox/Inbox/SagaState DbContext |
-| **PalDDD.DependencyInjection** | 2.1.0 | DI registration entry point: ServiceRegistration + unified AddPal extensions |
-| **PalDDD.Repository.EFCore** | 2.1.0 | EF Core repository: UnitOfWork + DomainEvent interceptor |
-| **PalDDD.Hosting.AspNetCore** | 2.1.0 | ASP.NET Core integration: exception middleware + health checks + Minimal API endpoints |
-| **PalDDD.PalORM** | 2.1.0 | PalORM persistence core: 6 Store + UnitOfWork (true AOT + source generation) |
-| **PalDDD.PalORM.PostgreSql** | 2.1.0 | PalORM PostgreSQL dialect: RETURNING / COPY |
-| **PalDDD.PalORM.MySql** | 2.1.0 | PalORM MySQL dialect: BulkCopy / multi-value INSERT |
-| **PalDDD.PalORM.Sqlite** | 2.1.0 | PalORM SQLite dialect: FTS5 / JSON1 |
-| **PalDDD.Dapper** | 2.1.0 | Dapper persistence adapter (⚠️ AOT facade, being deprecated) |
-| **PalDDD.Dapper.PostgreSql** | 2.1.0 | Dapper PostgreSQL enhancements: audit / JSONB / sharding / soft delete |
-| **PalDDD.Dapper.MySql** | 2.1.0 | Dapper MySQL enhancements |
-| **PalDDD.Dapper.Sqlite** | 2.1.0 | Dapper SQLite enhancements: TypeHandler / RowFactory / FTS5 |
+| **PalDDD.Base** | 2.2.0 | L1 metapackage: Core + Serialization + Compression + SourceGen + Analyzers |
+| **PalDDD.Extension** | 2.2.0 | L2 metapackage: CQRS + EventLog + Idempotency + Projections + Messaging + Transactions + DI |
+| **PalDDD.Core** | 2.2.0 | Domain core: AggregateRoot / Entity / ValueObject / SmartEnum / DomainEvent / Specification |
+| **PalDDD.Serialization** | 2.2.0 | Serialization abstractions: IMessageSerializer / MessageCatalog / MessageDescriptor |
+| **PalDDD.Serialization.Evolution** | 2.2.0 | Message version evolution: Upcaster / Contract validation |
+| **PalDDD.Serialization.MemoryPack** | 2.2.0 | MemoryPack binary serialization (zero reflection, AOT) |
+| **PalDDD.Compression** | 2.2.0 | Compression abstractions: Brotli / GZip / Deflate (AOT-safe) |
+| **PalDDD.Compression.Native** | 2.2.0 | Native compression: LZ4 / ZStandard (P/Invoke, not AOT-compatible) |
+| **PalDDD.Core.SourceGen** | 2.2.0 | Source generators: IdentityGenerator / EnumGenerator / MessageRegistryGenerator |
+| **PalDDD.Analyzers** | 2.2.0 | Roslyn analyzers: PDDD001-015 compile-time DDD governance diagnostics |
+| **PalDDD.Analyzers.CodeFixes** | 2.2.0 | Code fixes: PDDD008/010/013/015 |
+| **PalDDD.CQRS** | 2.2.0 | Command Query Responsibility Segregation: Dispatcher / Pipeline / Validation / Logging |
+| **PalDDD.EventLog** | 2.2.0 | Event log abstractions: InMemoryEventLog + optimistic concurrency |
+| **PalDDD.EventLog.EFCore** | 2.2.0 | EF Core event log: EventLogDbContext + global bit allocator |
+| **PalDDD.Idempotency** | 2.2.0 | Idempotency abstractions: IdempotencyProcessor + InMemoryStore |
+| **PalDDD.Idempotency.EFCore** | 2.2.0 | EF Core idempotency records: IdempotencyDbContext |
+| **PalDDD.Projections** | 2.2.0 | Projection abstractions: ProjectionProcessor + Checkpoint + Replay |
+| **PalDDD.Projections.EFCore** | 2.2.0 | EF Core projection checkpoint: ProjectionCheckpointDbContext |
+| **PalDDD.Projections.EventLog** | 2.2.0 | EventLog replay source: rebuilds read models from event streams |
+| **PalDDD.Messaging** | 2.2.0 | Message bus abstractions: MessageBrokerBase + DomainEventDispatcher |
+| **PalDDD.Messaging.Kafka** | 2.2.0 | Kafka adapter: based on Confluent.Kafka 2.x |
+| **PalDDD.Messaging.RabbitMQ** | 2.2.0 | RabbitMQ adapter: based on RabbitMQ.Client 7.x |
+| **PalDDD.Transactions** | 2.2.0 | Transactions/Saga: Outbox/Inbox abstractions + InMemoryStore + background processors |
+| **PalDDD.Transactions.EFCore** | 2.2.0 | EF Core transactions: Outbox/Inbox/SagaState DbContext |
+| **PalDDD.DependencyInjection** | 2.2.0 | DI registration entry point: ServiceRegistration + unified AddPal extensions |
+| **PalDDD.Repository.EFCore** | 2.2.0 | EF Core repository: UnitOfWork + DomainEvent interceptor |
+| **PalDDD.Hosting.AspNetCore** | 2.2.0 | ASP.NET Core integration: exception middleware + health checks + Minimal API endpoints |
+| **PalDDD.PalORM** | 2.2.0 | PalORM persistence core: 6 Store + UnitOfWork (true AOT + source generation) |
+| **PalDDD.PalORM.PostgreSql** | 2.2.0 | PalORM PostgreSQL dialect: RETURNING / COPY |
+| **PalDDD.PalORM.MySql** | 2.2.0 | PalORM MySQL dialect: BulkCopy / multi-value INSERT |
+| **PalDDD.PalORM.Sqlite** | 2.2.0 | PalORM SQLite dialect: FTS5 / JSON1 |
+| **PalDDD.Dapper** | 2.2.0 | Dapper persistence adapter (⚠️ AOT facade, being deprecated) |
+| **PalDDD.Dapper.PostgreSql** | 2.2.0 | Dapper PostgreSQL enhancements: audit / JSONB / sharding / soft delete |
+| **PalDDD.Dapper.MySql** | 2.2.0 | Dapper MySQL enhancements |
+| **PalDDD.Dapper.Sqlite** | 2.2.0 | Dapper SQLite enhancements: TypeHandler / RowFactory / FTS5 |
 | **PalORM.Core** | 5.5.1 | PalORM engine core: DataSession / Provider / RowFactory (underlying dependency of PalDDD.PalORM) |
 | **PalORM.SourceGen** | 5.5.1 | PalORM source generator: compile-time RowFactory / CommandFactory generation (zero reflection) |
 | **PalORM.PostgreSql** | 5.5.1 | PalORM PostgreSQL dialect Provider: RETURNING / COPY |
@@ -612,7 +612,7 @@ await projectionRebuilder.RebuildAsync(ct);   // ⚠️ clears the read model fi
 
 ### 13. Idempotent Execution: Result Caching + Revision CAS Token (v2.1.0)
 
-API/command idempotency: duplicate requests with the same `(OperationName, Key)` return the cached result instead of re-executing the handler. The **Revision CAS token** (v2.1.0) prevents side-effect re-execution after a Completed record is concurrently flipped; expired records are reclaimable (Retention = re-execution window).
+API/command idempotency: duplicate requests with the same `(OperationName, Key)` return the cached result instead of re-executing the handler. The **Revision CAS token** (v2.1.0) prevents side-effect re-execution after a Completed record is concurrently flipped; expired records are reclaimable (Retention = re-execution window). Physical cleanup of expired rows is the application's responsibility (the framework starts no background cleanup task; it only guarantees logical expiry).
 
 ```csharp
 using PalDDD.Idempotency;
@@ -871,6 +871,7 @@ flowchart TB
 | Document | Description |
 |------|------|
 | [Architecture](docs/architecture.md) | Layering, dependency direction, project responsibilities |
+| [Idempotency Rationale](docs/idempotency-rationale.md) | Why it is designed this way: trade-offs and boundaries |
 | [Usage Guide](docs/usage.md) | Complete code examples for each component |
 | [Tutorial](docs/tutorial.md) | Build a DDD application from scratch |
 | [PalORM Adapter](docs/palorm-adapter.md) | Six Stores / fixed classes / Row DTO mapping to PalORM |
@@ -909,7 +910,7 @@ If you need Native AOT deployment (microservices, CLI tools, edge computing) →
 Does not support .NET 8/9/10 (single target net11.0). Three AOT limitations (honestly declared via source `[RequiresDynamicCode]`): ① Saga ChildSaga child-flow dispatch (`MakeGenericMethod`/`MakeGenericType`, see `Saga.cs`) and ② dynamic event routing share the same root; ③ `ISpecification.Compile()` expression-tree compilation is unsupported under Native AOT — in AOT scenarios use `ToExpression()` and pass it to your query provider instead. No built-in EventStore snapshot mechanism — projects that need a snapshot strategy must implement it themselves.
 
 **Who is using it in production?**
-Pal.DDD is currently at version v2.1.0 (tag v2.1.0 published; CI green after 74 rounds of full-repo review clearance). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with test coverage of 1202 measured cases (16 projects: 1153 local + 49 environment-dependent executed by CI Testcontainers — v2.1.0 measured baseline). You are welcome to try it in non-production environments and provide feedback.
+Pal.DDD is currently at version v2.2.0 (tag v2.2.0 published; CI green after 87 rounds of quality-system review-repair cycles). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with test coverage of 1379 measured cases (16 projects: 1311 local + 54 environment-dependent executed by CI Testcontainers + 14 design-internal skips — v2.2.0 measured baseline). You are welcome to try it in non-production environments and provide feedback.
 
 ---
 

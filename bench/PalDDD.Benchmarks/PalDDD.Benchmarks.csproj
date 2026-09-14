@@ -3,7 +3,9 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
-    <NoWarn>$(NoWarn);CA1034;CA1822;CA2007</NoWarn>
+    <!-- CA1031: verify-persist 的 catch Exception 是验证语义(任何异常=该项 FAIL 记录);
+         CA1303:工具项目中文输出;DAP005:基座建表用 raw Dapper 调用未启用 DapperAot(工具非生产) -->
+    <NoWarn>$(NoWarn);CA1034;CA1822;CA2007;CA1031;CA1303;DAP005</NoWarn>
     <RunAnalyzersDuringBuild>false</RunAnalyzersDuringBuild>
     <!-- Benchmarks 不需要 AOT -->
     <IsAotCompatible>false</IsAotCompatible>
@@ -21,6 +23,12 @@
     <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.EventLog\PalDDD.EventLog.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Dapper\PalDDD.Dapper.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.PalORM\PalDDD.PalORM.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.PalORM.Sqlite\PalDDD.PalORM.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Idempotency\PalDDD.Idempotency.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Transactions.EFCore\PalDDD.Transactions.EFCore.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.EventLog.EFCore\PalDDD.EventLog.EFCore.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Idempotency.EFCore\PalDDD.Idempotency.EFCore.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Dapper.PostgreSql\PalDDD.Dapper.PostgreSql.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Dapper.Sqlite\PalDDD.Dapper.Sqlite.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Compression\PalDDD.Compression.csproj" />
@@ -28,6 +36,7 @@
 
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
   </ItemGroup>
 

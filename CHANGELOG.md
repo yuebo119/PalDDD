@@ -4,28 +4,133 @@
 日志格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范（完整规则见 [`docs/release.md`](docs/release.md) §十一）：
 **消费者可见变更在上**（Added/Changed/Deprecated/Removed/Fixed/Security + 本项目扩展 Dependencies/Documentation/Tests），**工程过程叙事入附录**；数字必须可验证；`[Unreleased]` 与发布段**同次提交转正、先于 tag**。
 
-> **当前版本**：`VersionPrefix=2.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）
-> **发布状态**：**2.1.0 已发布**（2026-09-04 tag `v2.1.0`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag 之后的所有变更见 `[Unreleased]`。
+> **当前版本**：`VersionPrefix=2.2.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）
+> **发布状态**：**2.2.0 已发布**（2026-09-15 tag `v2.2.0`）；2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag 之后的所有变更见 `[Unreleased]`。
 > **发布规范**：见 [`docs/release.md`](docs/release.md)
 
 ---
 
 ## [Unreleased]
 
+（暂无——2.2.0 发布后的行为变更在此累积）
+
+---
+
+## [2.2.0] — 2026-09-15
+
+> **范围**：`v2.1.0`（2026-09-04，commit 0370c30）→ `v2.2.0`（转正提交），113 个提交。
+> **兼容性**：SemVer Minor——向后兼容。包公共 API 无变化（快照 diff 经逐项核实仅为记录口径修正：delegate 类型标签、枚举成员字段化；无新增/移除诊断、无新增废弃）；依赖大范围升级（EF Core 11 rc.1、Dapper.AOT 1.1.0、PalORM 5.5.1、TUnit 1.66）。
+> **组织方式**：分两层——上方按 Keep a Changelog 分类给出**消费者可见变更**；文末附录保留本版工程过程明细（转正前 `[Unreleased]` 原料原文）。规范见 [`docs/release.md`](docs/release.md) §十一。
+
 ### Added 新增
 
-- **变更日志事实收集器 `scripts/changelog-facts.sh`**：`changelog-facts.sh <from-tag> [to-ref]` 一次产出 9 段机械可验证事实（提交分布/公共 API 快照 diff/新增诊断/废弃扫描/ADR 与文档增删/依赖变更/测试实测占位/[Unreleased] 原料），每条附可复查命令（`docs/release.md` §十二 Phase 1）
-- **变更日志结构门禁 `scripts/changelog-check.sh`**：C1 [Unreleased] 首位 / C2 tag 与转正段一致性（未转正禁止打 tag）/ C3 分类顺序 / C4 Tests 段预估口径 WARN / C5 分类层内部术语泄漏 WARN——挂入发布前验证清单与打 tag 前核对
+- **质量门禁脚本全量 C# 化**：`scripts/` 下 30+ 个 bash/Python 脚本迁移为 C# file-based app（零包依赖、`dotnet run` 直跑），删除全部 8 个 `.sh`/`.py`；迁移经后续三轮验证轮背书（全量实跑无功能失败）。动机：跨平台一致（Windows/Git Bash 语义对齐）、可 `--selftest` 自证、消除 Python 工具链依赖
+- **门禁可信度审计 `scripts/gate-audit.cs`**：静态矩阵（接线/自证/已探三轴）+ 隔离式变异探针（临时独立仓库注入坏输入、断言非零退出，6 项覆盖）。动机：本仓两次「门禁假绿」实案（漏洞扫描 exit-0 空转、凭据扫描被管道掩码）此前只靠一次性人工探针，未沉淀为可重复验证
+- **覆盖率双门禁接 CI**：全局阈值 job（阈值 0.70）+ 单模块降幅（`coverage-baseline.json` 15 项目基线 + 容差 5pp 判定 + `--update-baseline` 校准入口）——此前是「脚本就绪但未接线」的已知缺口
+- **发布流程工具**：`scripts/changelog-facts.cs`（9 段机械事实收集：提交分布/公共 API diff/诊断/脚本/废弃/ADR/依赖/测试占位）/ `scripts/changelog-check.cs`（C1-C5 结构门禁：转正一致性/分类顺序/术语泄漏）
+- **提交期守卫三新增**（pre-commit 达 7 道）：`test-change-guard`（拦截「只改测试不改 src」的改测试修绿签名）/ `xml-guard`（XML 良构性）/ `dapper-param-guard`（Dapper 匿名参数枚举直传拦截——PostgreSQL 拒绝该形态）
+- **`--selftest` 覆盖 13 个门禁脚本**：判定抽纯函数 + 正负例 + 变异验证可红；`gate-audit` 矩阵 `UNVERIFIED` 由 9 清零
+- **`verify-conventions` 新增 V8/V9/V10**：模板必填段齐全 / 文档命令引用的脚本路径存在 / 文档内部链接可解析
+- **`encoding-gate` 新增 E5**：源文件行尾 CRLF 一致性（防编辑器/工具链默认 LF 污染工作树）
+
+### Changed 变更
+
+- **CI 验证矩阵扩展**：`aot-verify` 扩为双 sample（主干五项目引用图独立验证，此前仅 PalORM 单栈）；`coverage` 独立 job（`dotnet tool restore` 取 reportgenerator）；`build-and-test` 内门禁循环扩至 encoding/doc-consistency/tech-debt/test-gate + template-gate
+- **git hooks 构建时自动配置**（新增根 `Directory.Build.targets`）：`core.hooksPath` 是 git 本地配置、不进版本库，新 clone 默认无钩子——`ConfigureGitHooks` 目标在首次构建时配置（不覆盖既有自定义配置、`.git` 缺失跳过、增量判定）
+- **RabbitMQ 集成测试预检升级为 AMQP 协议级**：原 TCP 探活对「TCP 通、AMQP 死」半坏环境误判为可用——升级后完整握手探测，半坏环境快速跳过（实测从 5×19s 假失败降为秒级跳过）
+- **覆盖率阈值 0.65 → 0.70**：原值锚定 2026-07-30 旧基线，实测新基线 72.98% 下余量约 8pp 失去早期预警意义；按项目「基线 − 3pp」原则校准
+
+### Fixed 修复
+
+- **构建完整性族**：bench 项目 XML 注释含连续双连字符致全仓构建失败（MSB4025，此前通过全部提交门禁——无 XML 良构校验，缺口由 `xml-guard` 关闭）；`encoding-gate` E2/E3 覆盖盲区（`scripts/samples/bench` 下 69 个 `.cs` 不受 BOM/mojibake 检查）
+- **门禁可信度族**：翻转检测器把「跳过」误归「失败」致环境波动被误报为测试打摆（Kafka 预检跳过与恢复叠加成假翻转）；覆盖率合并 glob 路径缺陷（单层匹配漏 MTP 双层落点，门禁空转）
+- **Dapper 枚举参数族**：Checkpoint 枚举参数直传驱动被 PostgreSQL 拒绝（Dapper.AOT 拦截器行为分叉，本地 SQLite 测试盲区致缺陷直达 CI）——修复 + 提交期守卫前移
+- **文档引用族**：`docs/` 中指向已删除 `*.sh` 的可执行命令与索引引用（脚本迁移后未全量收口）——修正 + V9 机械防回归
 
 ### Dependencies 依赖
+
+- **EF Core 11 `preview.7` → `rc.1`**（EntityFrameworkCore/InMemory/Relational/Sqlite）；`Microsoft.Extensions.*` 与 `System.*` 系同步 `11.0.0-rc.1`
+- **Dapper.AOT 1.0.52 → 1.1.0**；**PalORM 5.4.0 → 5.5.1**（五包同步：Core/SourceGen/Sqlite/PostgreSql/MySql；消 SQLitePCLRaw NU1903 High 级漏洞）
+- Confluent.Kafka 2.15.0 → 2.15.1（librdkafka.redist 传递依赖同步）
+- 测试栈：TUnit 1.65.68 → 1.66.27 · Verify.TUnit 31.28.0 → 32.0.0 · Testcontainers 4.14.0 → 4.15.0
+- 死条目清理：`Microsoft.EntityFrameworkCore.SqlServer` / `.Design` / `Npgsql.EntityFrameworkCore.PostgreSQL` / `Pomelo.EntityFrameworkCore.MySql`（均不在用）
+
+### Documentation 文档
+
+- 新增 ADR-022「分析器诊断与生成器诊断的分层关系 + 稳定名称谓词共享」（三对诊断定性为分层而非冗余）
+- `docs/release.md` 新增 §十二「变更日志生成流程」SOP（Phase 0 常态累积 → P1 事实收集 → P2 核验 → P3 起草 → P4 校验 → P5 转正 → P6/P7 发布与事后同步）
+- 新增项目级 `AGENTS.md`（agent 操作层索引：三条硬红线 + 门禁体系 + 已知陷阱 + 文档地图）
+- 新增 `docs/review/` 全仓评审系列（2026-09-10 至 09-14 六轮运行报告与行动项清单）与 `docs/review/open-items-2026-09-14.md` 开放项账本
+- `docs/usage.md` 补「与 HTTP 请求验证的分工」（请求形态 vs 领域规则两层职责）；新增 `docs/persistence-aot-status.md`、`docs/idempotency-rationale.md`
+- 口径勘正族：`NAMING.md` 命名规则 6/7（禁会话相对表述）+ 7 份违规裁决清零；`conventions.md` 工程约束表四处按实测改写；`test-coverage-baseline.md` 按实测校准
+
+### Tests 测试
+
+- 16 项目面板：v2.1.0 基线 1202 → **v2.2.0 实测 1379**（本机 1311 通过 + 54 环境依赖项由 CI Testcontainers 权威执行〔PalORM 多方言 46 + Messaging 集成 8〕+ 14 设计内跳过〔外部连接串优雅降级〕）；净增 177
+- 门禁自证：13 个脚本 `--selftest`（均含变异验证可红）；`gate-audit` 探针 6 项全 PASS
+
+### 附录：工程过程明细（转正前 `[Unreleased]` 原料原文——内部叙事，非消费者变更摘要）
+> 逐轮明细真源 `.ai/review/metrics.md`；本版质量系统轮次 v75-v87。
+
+#### Added 新增（原料原文）
+
+- **变更日志事实收集器 `scripts/changelog-facts.cs`**：`dotnet run scripts/changelog-facts.cs -- <from-tag> [to-ref]` 一次产出 9 段机械可验证事实（提交分布/公共 API 快照 diff/新增诊断/废弃扫描/ADR 与文档增删/依赖变更/测试实测占位/[Unreleased] 原料），每条附可复查命令（`docs/release.md` §十二 Phase 1）。注：2026-09-11 MIG-012 已由 `.sh` 迁移为 C# file-based app，本行同步为现行形态
+- **变更日志结构门禁 `scripts/changelog-check.cs`**：C1 [Unreleased] 首位 / C2 tag 与转正段一致性（未转正禁止打 tag）/ C3 分类顺序 / C4 Tests 段预估口径 WARN / C5 分类层内部术语泄漏 WARN——挂入发布前验证清单与打 tag 前核对。注：同上，已迁移为 `.cs`
+- **门禁可信度审计 `scripts/gate-audit.cs`**：静态矩阵（`WIRED` 接线 / `SELFTEST` 自证 / `PROBED` 已探）叠加隔离式变异探针——在系统临时目录建独立 git 仓库注入已知坏输入，断言门禁必须非零退出。覆盖 4 项探针（`secret-scan` 双向、`encoding-gate` 核心判定与 `scripts/` 范围回归）。自带 `--selftest`（5 例，含变异验证可红）。动机：本仓已有两次「门禁假绿」实案（vuln-scan v53 exit-0 no-op；secret-scan 被 tee 掩码），其修复均为一次性人工探针
+- **测试文件改动守卫 `scripts/test-change-guard.cs`**：拦截「暂存集含 `test/**` 修改/删除且无 `src/**` 变更」（改测试修绿签名）。豁免 `ALLOW_TEST_ONLY_CHANGE=1`。已接入 `pre-commit`
+- **XML 良构性守卫 `scripts/xml-guard.cs`**：校验 `.csproj/.props/.slnx/.targets/.xml` 可加载（`--all` 全仓 / 默认暂存集）。已接入 `pre-commit`
+- **`scripts/verify-conventions.cs` 新增 V8/V9 两条静态检查 + `--selftest`**（此前无自证能力）：**V8** 断言 `.pal/prompts/` 9 个模板的必填段齐全（该约束原标注为「人工」，且 `conventions.md` 的「六段结构」表述与实测的 5/6/7 段分布不符）；**V9** 断言文档中「命令形态」引用的脚本路径必须存在（只查 `bash X.sh` / `dotnet run X.cs`，排除 `docs/review/` 历史记录与含「下沉自/已迁移」等词的历史提及，保持高精度）。`--selftest` 12 例含双向负例，并经变异验证可红。已接入 `pre-commit`（`.md` 入暂存集时触发）——该脚本此前是未接线的观察态门禁，本次同时完成接线
+- **`scripts/vuln-scan.cs` 补 `--selftest`**（此前无自证能力）：判定逻辑抽为纯函数 `ScanVulnerabilities`，自测以合成 JSON 覆盖 14 例——含本门禁最易错的「存在 + 是数组 + 非空」三条件语义（空数组/缺属性/非数组均不算命中）、`transitivePackages` 与 `topLevelPackages` 双路径、`resolvedVersion`/`severity` 的 `?` 回退、以及两条 fail-closed（缺 `id` 抛 `KeyNotFoundException`、损坏 JSON 抛 `JsonException`，均不得静默当成「无漏洞」）。经变异验证可红（把非空判定改为恒假 → 13/14），真实路径复跑与重构前一致（`0 个已知漏洞`，exit 0）。**动机**：该门禁有已证实的空转史（v53 为 exit-0 no-op），而漏洞扫描器的失败形态天然静默——「扫不到」与「没扫」输出完全相同
+- **`scripts/guard.cs` 补第 8 道守卫 + 注册完整性核查 + `--selftest`**（本地漏检窗口收口）：**实测缺口**——`CompressionGuardTests`（解压炸弹防护：压缩输入上限 / 损坏输入拒绝 / 解压输出上限，16 测试）自 v2.1.0 起存在，但 `guard.cs` 创建时（v88/ITM-667）未将其纳入清单，导致**本地 pre-commit 一直不跑该安全守卫**（CI 的全量 `dotnet test` 会跑，故仅本地漏检）——正是该命令立命要消除的窗口。修法二处：登记为第 8 道（实测 `CompressionGuard … GREEN`）；新增**注册完整性核查**——扫描 `test/` 下守卫命名类（`*GateTests` / `*GuardTests` / `ArchitectureBoundaryTests`）与清单比对，未登记即红（有意只在 CI 跑者须登记进 `exemptGuardClasses` 并写明理由，豁免显式化）；扫描跳过行注释以避免「注释提到旧类名」的误报。`--selftest` 14 例，其中「清单含 CompressionGuardTests」一条是本次修复自身的回归守卫；自测在开发中已实际红过一次（抓出 filter→类名提取用 `Split("/*/")` 会得到 `*/X/*` 的真 bug），对合成变异更有说服力。**该命令此前无自证能力（gate-audit 标 UNVERIFIED）**
+
+- **`scripts/encoding-gate.cs` 补 `--selftest`**（此前无自证能力）：本门禁的判定全是字节级/指纹级，错一个字节即「静默放行」且输出与正常无异（E2 漏检 BOM、E3 漏检 mojibake 都不会有任何可观察差异）。自测 14 例覆盖：`ContainsByte` 的命中/不命中/空数组；`HasUtf8Bom` 的**三分支含边界**（有 BOM / 无 BOM 负向对照 / 仅 2 字节的短文件 / 空文件）；E1 与 E4 的 CR 字节双向；`ReadTextTolerant` 对非法 UTF-8 不抛（对齐 grep 字节语义）；指纹表的非空性、命中与不误报；以及**自指陷阱回归守卫**（断言本文件源码不含任何字面指纹——若指纹以字面字符写入，encoding-gate 会命中自己，该陷阱原先只写在注释里无机械守护）。另将 mojibake 指纹表抽为 `MojibakeFingerprints()` 单一来源供 E3 与自测共用。经变异验证可红（把 BOM 首字节 0xEF 改成 0xEE → 13/14）
+
+- **`scripts/secret-scan.cs` 补 `--selftest`**（此前无自证能力）：本门禁有已证实的空转史（CI 注释记「ITM-648 凭据门禁实为 no-op」），且三层白名单写松一点即静默放过真实凭据——漏报与「确实没有凭据」输出完全一致。判定抽为纯函数 `JudgeLine`/`BuildPatterns`，自测 16 例覆盖：模式 1 的四类密钥前缀各自独立（AKIA / ghp_ / PEM 块头 / 不误报短前缀与普通文本）；模式 2 的命中与**三层白名单的每一条边界**，其中「短但有数字则命中」是关键边界（该条写松即漏报 `Password=a1` 这类真凭据）；主机键与密码键必须同行共存（仅其一不命中）；`Data Source` 亦识别；两模式同线可各报一次（不短路）；大小写不敏感。经变异验证可红（把白名单第三条的 `&&` 改成 `||` → 15/16，红的正是该边界）。另：所有权重样本改为**运行期拼装**以规避自指陷阱（见下）
+
+- **`scripts/gate-lite.cs` 补 `--selftest`**（此前无自证能力）：G1-G3 均为「计数 == 0」判定，模式写细一点即静默漏报违规（与本会话已发现的 `encoding-gate` E2/E3 范围缺口同类）。三个计数函数都接收目录根，故自测对着**临时目录的真实文件**做判定，而非只测纯逻辑。6 例覆盖：G1 的整文件子串语义（sealed 出现在注释里也算通过）与路径过滤（Middleware/Extensions）、并显式钉住一处已知宽口径（正则 `public.*class.*Exception` 是子串匹配，类名含 Exception 的普通类也被计数，方向是多报而非漏报，属 MIG-012 要求保持的原 bash 语义）；G2 的四类合规首行（using/`//`/namespace/空行）与三类排除（obj、bin、SourceGen、Analyzers）各自独立；G3 与 G2 的**排除口径差异**（G3 仅排 obj/bin、不排 SourceGen）；全合规目录三项归零的负向对照；不存在目录退化为 0。开发中自测已真实红过一次（G1 期望值写错，暴露上述子串语义），非空转
+
+- **`scripts/doc-consistency.cs` 补 `--selftest`**（此前无自证能力）：本壳仅保留 D7（`.ai/README.md` 文件地图指向的文件必须存在），判定分两步——正则路径提取与缺失过滤——两步都可能静默失效（提取正则写窄则一条都不匹配、写宽则误报），故抽为纯函数 `ExtractMapEntries`/`MissingMapEntries` 并覆盖 12 例：四类前缀提取（`gate/`/`refine/`/`review/`/`test/`，含数字与连字符）、同行情多次出现、字符集边界（不提取大写、不提取下划线、不提取非 `.md`）、空行、去重与 Ordinal 排序、存在性过滤、空输入。另钉住一处已知宽口径（正则无行首锚定，故 `docs/review/x.md` 中的 `review/x.md` 片段也会被提取——本仓实际写法是相对 `.ai/` 的短路径故不构成问题，但改锚定会无声改变提取集合，需显式改测试）。经变异验证可红（字符集加入 `A-Z` → 11/12）
+
+- **`scripts/gate.cs` 补 `--selftest`**（此前无自证能力）：G23/G24 的判定都是「对 git 输出文本做计数后比对」，计数口径写错即静默放行（G23 漏判 = 公共 API 变更不记录；G24 漏判 = 跨平台守卫在 CI 平台 no-op），故把两处计数抽为纯函数 `G23Counts`/`G24Counts` 并对**合成 git 输出**覆盖 18 例，不需要真实 git fixture。覆盖：`ToLines` 的 CRLF 拆分与非空行计数；G23 的四种组合（快照有/无 × CHANGELOG 有/无）与两处口径差异（快照是**子串**匹配故更长路径亦命中；CHANGELOG 是**整行**匹配故 `docs/CHANGELOG.md` 不计入）与多行计数；G24 的 `WithoutExtension` 变体、归一化字面命中、非新增行不计（`-` 与空格起首）、`+++` 头行、空输出。经变异验证可红（CHANGELOG 整行匹配改子串匹配 → 17/18）。病态样本按自指陷阱一般化规则运行期拼装
+
+- **`scripts/tech-debt.cs` 补 `--selftest`**（此前无自证能力）：判定分两层——`Check` 的三态（FAIL/ALLOW/PASS）与计数口径（路径段排除、行长边界、行级排除）——两层写错都表现为「计数为 0 于是 PASS」，即静默漏报。故把三态判定抽为纯函数 `Verdict`，并为 `LongLines`/`EnumerateCs` 加可选根参数以便对临时目录做真实判定。17 例覆盖：`Verdict` 五种组合（含两条易错边界——`allow` 无命中必须 PASS 而非 ALLOW、未知 `allow` 值与原 bash 一样与 count 无关地判 PASS）；`ContainsSegment` 的段边界（`myobj` 不是 `obj` 段、`objX` 后无斜杠不命中）；`EnumerateCs` 只收 `.cs` + Ordinal 稳定序 + Rel 为 posix + 目录不存在为空；`LongLines` 的 **180/181 行长边界**（含未多报）与路径段排除。经变异验证可红（边界改 181 → 15/17）
+
+- **`scripts/ci-failed-tests.cs` 补 `--selftest`**（此前无自证能力，gate-audit 矩阵最后一项 UNVERIFIED）：三通道都是「从日志/报告里挑出该报的行」，失效形态是**该报的失败没报**——且因调用方一律 `|| true` 兜底，诊断静默丢失不会以非零退出暴露，属最难发现的失效类型。通道 ②的两个窗口判定抽为纯函数 `LogKeywordContexts`/`LogTailWindow` 并覆盖 22 例：关键字命中（最后 15 个窗口，数 `CTX\|` 行）、命中附下一行（下一行空/为末行两种边界）、大小写不敏感、`keys` 八项逐项独立（含 `timed out`/`exit code`/`error(s)` 等含空格与括号者）、普通行不误报；尾部两级窗口（末 120 行 → 去空白 → 最后 30 行）的**先后顺序**用 200 行构造钉住（起点必为第 170 行、早期行不出现）；`Truncate` 的 100 边界。经变异验证可红（15 命中窗口改 16 → 20/22）
+
+- **`scripts/gate-audit.cs` 矩阵判定三处改进**：① **未接线脚本分类化**——此前对一切未接线者判「OBSERVE 未接线——永远不触发」，实测 17 个中 **16 个是按设计手工调用的工具**（`review-snapshot` 供评审粘贴输出、`fix-completeness` 修复提交前跑、`gate-audit` 自身按需跑等），一律报成问题属虚假告警；现改为五态 `OK`/`UNVERIFIED`/`TOOL`/`UNWIRED-GATE`/`REVIEW`，逐条登记工具理由，**17 个告警收敛为 1 个真缺口**（`ci-coverage`）。② **`REVIEW` 桶**：未接线且未登记者单列，使新增脚本必须被显式归类（不放过）。③ 判定抽为纯函数 `ClassifyVerdict` 并补 7 例自测（含「已接线时分类标记不改变结论」的两条边界）。自测 12/12
+
+- **`scripts/verify-conventions.cs` 新增 V10「文档内部链接必须可解析」**（机械化一类此前无守护的缺陷）：实测来源——`docs/review/action-items-2026-09-13-v5.md` 引用 `review-2026-09-13-full-v5.md` 而该文件不存在。深查后**根因是文件名有误而非链接有误**：该文档标题为「第五轮全仓运行（2026-09-13）」、报告编号 `REVIEW-2026-09-13-V5`、基线 `4e53622`，均指 09-13，而同系列 v2/v3/v4 都满足「文件名日期 == 内容日期」，v5 是唯一破例。已 `git mv` 改名为 `review-2026-09-13-full-v5.md` 并同步引用处（全仓仅 NAMING 债务表一处），断链归零。V10 精度经首版教训修正：只查**以 `.md` 结尾**的目标（天然排除项目里 `[事实](代码可查)` 这类证据标注，无需维护排除清单），且按**所在文件目录**解析相对路径（首版按仓库根解析产生 12 条误报）。自测 20 例含 8 条 V10 用例，经变异验证可红（去掉 `.md` 限定 → 18/20）
+
+#### Changed 变更（原料原文）
+
+- **CI `aot-verify` job 扩为双 sample**：原仅 `PalOrmSample`（直接引用仅 `PalORM.Sqlite`，即只覆盖 PalORM 一条栈）。新增 `AotSample` 的 restore/publish/run 三步——其引用 Core/Serialization/Transactions/CQRS/DependencyInjection 五个主干项目，与前者引用图不重叠。此前主干项目的 AOT 运行时安全无 CI 守卫（`docs/release.md` 自述 AotSample 为「手动 AOT 验证示例」）。本地等价形式（win-x64）已实测：输出 `Generating native code`、产物仅 native exe（无托管 dll）、实跑 exit 0 且含 CQRS AOT 值类型管道检查通过
+
+- **git hooks 改为构建时自动配置**（新增根 `Directory.Build.targets`）：`.githooks/` 下的守卫脚本**已被跟踪**（clone 即获得），但 `core.hooksPath` 是 **git 本地配置、不进版本库**——新 clone 默认无钩子，于是整套本地防线（5 道 pre-commit 守卫 + pre-push 门禁）形同不存在。全仓此前仅在 `AGENTS.md` 的括号注里提过一次，**无安装脚本、无 clone 安装步骤、无任何地方校验其是否生效**。新增 `ConfigureGitHooks` 目标在**首次构建时**为本 clone 配置 hooksPath，把「记得手动 git config」变成「构建即生效」。设计约束：仅在未设置时写入（**不覆盖**开发者既有自定义 hooksPath）、`.git` 缺失时整目标跳过、git 失败一律 `ContinueOnError` 不阻断构建、以 `.git/config` → `obj/*.stamp` 做增量判定避免每次构建都起 git 进程。**实测**：解除本地配置（模拟新 clone）→ 构建 → 自动装回，二次构建被增量判定跳过。已知无害副作用：首次构建时并行节点各读到「未设置」，提示行与幂等写入会按项目数重复若干次，不做跨进程加锁
+
+- **覆盖率门禁接线**（此前是「脚本就绪但未接线」的已知缺口，阻塞理由为「阈值未校准」）：新增独立 **`coverage` job**——不放 `build-and-test` 内是因为覆盖率需完整再跑一遍测试，放进主 job 会把关键路径拉长近一倍；独立 job 与 `aot-verify`/`dialect-probe` 同构，并行且失败域隔离。job 内先 `dotnet tool restore`：`reportgenerator` 由 `.config/dotnet-tools.json` 钉 5.5.11，**该工具此前 CI 从未还原过，是接线的隐藏前置**。阈值由 **0.65 校准为 0.70**：原值锚定 2026-07-30 基线 67.9%（67.9 − 3 ≈ 65），实测新基线 72.98% 下余量已达约 8pp、失去早期预警意义；按项目原始原则「基线 − 3pp」取 0.70。`ci-coverage.cs` 自测同步更新（11/11）
+
+#### Fixed 修复（原料原文）
+
+- **bench 项目不可加载导致全仓构建失败**：`bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj` 注释内出现 `--`（`CA1031:--verify-persist`），XML 注释禁止连续双连字符 → MSB4025 项目加载失败。该缺陷于 21549d3 引入，并通过全部提交时门禁（`secret-scan`/`encoding-gate`/`guard` 均不校验 XML 良构性）——缺口由新增的 `xml-guard.cs` 关闭
+- **`encoding-gate` E2/E3 覆盖盲区**：E1 覆盖 6 目录而 E2（.cs BOM）/E3（.cs mojibake）仅覆盖 `src test`，`scripts/ samples/ bench/` 下 69 个 `.cs` 不受检查（实测当前 0 违规，属潜在）。已抽 `CsScanRoots` 常量统一为 5 目录，并加范围回归探针
+- **`docs/` 中指向已不存在 `*.sh` 的可执行命令**：MIG-011/012 迁移脚本后文档未全量收口。本次修正主干手册 `docs/conventions.md`、`docs/release.md`、`docs/testing.md`、`CHANGELOG.md` 中的现行命令（统一改为「dotnet run 脚本 .cs」形态）。**并机制化以防再次回归**：`scripts/verify-conventions.cs` 新增 V9「文档命令形态引用的脚本路径必须存在」（只查 `bash X.sh`/`dotnet run X.cs` 命令形态，排除 `docs/review/` 历史记录与含「下沉自/已迁移」等词的历史提及）
+
+#### Dependencies 依赖（原料原文）
 
 - PalORM 5.4.0 → 5.5.1（五包同步：Core/SourceGen/Sqlite/PostgreSql/MySql；5.5.1 纯依赖升级——Roslyn 对齐本仓 5.9.0 钉扎、Microsoft.Data.Sqlite.Core 传递依赖 11.0.0-preview.7 → 11.0.0-rc.1、消 SQLitePCLRaw NU1903 High 级漏洞；5.5.0 行为变更点（脱敏信道/外部事务语义/WhereJson 守卫）经 grep 核实本仓零使用）
 - Confluent.Kafka 2.15.0 → 2.15.1（补丁版；librdkafka.redist 传递依赖同步 2.15.1）
 
-### Documentation 文档
+#### Documentation 文档（原料原文）
 
 - 新增 ADR-022「分析器诊断与生成器诊断的分层关系 + 稳定名称谓词共享」：三对诊断（PDDD009/PALMSG004、PDDD010/PALMSG005、PDDD011/PALMSG002）维持共存并定性为分层而非冗余；`IsStableName` 谓词收敛为 `src/PalDDD.Shared/StableNameValidation.cs` 链接共享源码（`docs/decisions/022-analyzer-generator-diagnostic-layering.md`）
 - `docs/release.md` 新增 §十二「变更日志生成流程」SOP：Phase 0 常态累积 → P1 事实收集 → P2 事实核验三问 → P3 起草 → P4 校验（机械门禁 + 人工六问）→ P5 转正（先于 tag）→ P6/P7 发布与事后同步，附流程失效回溯条款
+- 新增项目级 `AGENTS.md`（agent 操作层，≤150 行）：三条硬红线 + 门禁体系（含接线状态）+ 已知陷阱（4 条实证）+ 编号体系 + 文档地图。定位为**索引而非复制**——编码规范权威出处仍是 `docs/conventions.md`，避免复制漂移
+- 新增 `docs/review/rule-placement-audit-2026-09-13.md`：按「可脚本化 / 类型化 / 人工判断」三分类审计规则归属，登记 8 项实测承载缺口与本次处置、6 项未完成项与阻塞、完整的验证记录
+- `docs/review/NAMING.md`：新增规则 6/7（**禁止会话相对表述**：`本轮`/`上轮`/`下一轮` → 改绝对日期 + commit；版本号不承载会话语义）+ 写法对照表；§六 手工文件清单改为命令式（原清单所列文件已全部不存在）并登记 7 份违规命名债务；新增可选「主题槽位」`{type}-{date}-{topic}`
+- `docs/test-coverage-baseline.md`：§门禁阈值按实测改写——原表述「已自动化」与实际不符（脚本可运行 ≠ 门禁在运行），补记接线未完成的两个具体阻塞（本机 Docker 缺失致 12/16 项目中断、阈值 0.65 锚定 2026-07-30 旧基线）与四步接线前置序列
+- `docs/conventions.md` §工程约束表三处勘正：① `.pal/prompts/` 由「六段结构」改为按实测的段数分布（9 模板 5/6/7 段不等，`bounded-context` 与 `task-intake` 结构不同）；② AOT 发布命令 `/p:PublishAot=true` → `-p:PublishAot=true`（Git Bash 下 `/p:` 被 MSYS 路径转换致 MSB1008，实测踩中）；③ 补 `AOT 运行时验证` 行记录 CI 双 sample 覆盖；④ `review-snapshot.sh`/`verify-action-items.sh` → `.cs`
+- `docs/review/NAMING.md`：**7 份命名冲突已裁决并执行，存量清零**。判据为规则 5 的原意（禁止**自我评价**，理由是「如果一份报告确实比前一份更完整——用版本号区分」）：`full` 在这些文件名里标示**范围**（全仓轮 vs 局部，如 `action-items-*-bench.md`），可核验且不表达优劣 → 6 份违反的是规则**文字**而非**意图**，故细化规则而非改名（§四 接纳 `review-` 为现行类型前缀并说明与 `audit-` 的历史 corpus 关系；规则 5 增设范围标记白名单 `full`；§七 那条「review≠audit」作废）。另 1 份 `comprehensive-review-2026-09-13.md` 的 `comprehensive` 属自我评价**且**类型词不在最前 → 改名为 `review-2026-09-13-architecture.md`，内部评审编号同步改为 `REVIEW-2026-09-13-ARCH`。另新增 §一「主题槽位」`{type}-{date}-{topic}`；`docs/development.md` 增「git hooks（首次构建自动配置）」小节
+- `docs/usage.md`：`验证` 一节新增「与 HTTP 请求验证的分工（两层，别混）」——此前全 `docs/` 对平台内置的 Minimal API 验证零提及（`AddValidation` / `IEndpointFilter` / `Microsoft.Extensions.Validation` / `IValidatableObject` 全部零命中）。补记两层分工：**请求形态**（query/header/body 的必填长度范围）归宿主侧的 ASP.NET Core 平台（.NET 10 起 `builder.Services.AddValidation()` + `DataAnnotations`，源生成器驱动、逐端点自动挂验证过滤器；`SkipValidationAttribute` / `ValidatableTypeAttribute` 于 .NET 10 随包发布、.NET 11 起不再标记 experimental）；**领域业务规则**归本框架的 `IPalValidator<T>` + `ValidationBehavior`（在 CQRS 管线内，故覆盖 HTTP / 消息消费者 / 后台任务全部路径）。并写明两种误用：把业务规则写进端点 `IEndpointFilter` 会让非 HTTP 路径绕过验证；只打 `[Required]` 而不启用 `AddValidation()` 则那些特性不生效（平台不自动验证 Minimal API 参数——官方文档明确未正确注册时返回 200 而非 400）。框架**不引用** `Microsoft.Extensions.Validation`。`ASP.NET Core 集成` 一节同步补端点映射器指引与该分工的交叉引用
 
 ## [2.1.0] — 2026-09-04
 
