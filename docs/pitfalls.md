@@ -136,7 +136,7 @@
 | # | 场景·问题·后果 | DDD 对应设计 | 状态 |
 |:--:|---------------|------------|:----:|
 | **SE1** | **场景**：PostgreSqlAuditor 用 `QuoteIdentifier` 转义表名 → 无白名单校验 → 恶意标识符注入 SQL。**问题**：标识符注入。**后果**：SQL 注入 | 标识符白名单校验 + `EscapeLiteral` 分离 + `PurgeOldAuditLogs` 范围校验（ITM-批次3） | ✅ |
-| **SE2** | **场景**：连接串硬编码（`Password=x;Host=y`）→ 入库 → 泄露。**问题**：凭据入库。**后果**：DB 被拖库 | `scripts/secret-scan.sh`（ITM-616，2026-09-10 落地）：扫描 git 跟踪文件的高置信凭据形态（云密钥前缀 / 连接串内嵌密码 / PEM 私钥块），挂 CI 的 AI self-check 步骤，发现即 exit 1。**注**：`PDDD-G19` 是测试方法命名三段式检查，与凭据无关（勿再误引） | ✅ |
+| **SE2** | **场景**：连接串硬编码（`Password=x;Host=y`）→ 入库 → 泄露。**问题**：凭据入库。**后果**：DB 被拖库 | `scripts/secret-scan.cs`（ITM-616，2026-09-10 落地）：扫描 git 跟踪文件的高置信凭据形态（云密钥前缀 / 连接串内嵌密码 / PEM 私钥块），挂 CI 的 AI self-check 步骤与 pre-commit，发现即 exit 1。**注**：`PDDD-G19` 是测试方法命名三段式检查，与凭据无关（勿再误引） | ✅ |
 | **SE3** | **场景**：SQL 注入 → `string.Format` 拼接 SQL。**问题**：字符串拼接。**后果**：注入风险 | 🚫 禁 `string.Format` 拼 SQL；用 SqlTemplates `public const string` + Dapper 参数化（conventions §12.4 + PDDD-G7） | ✅ |
 | **SE4** | **场景**：异常消息/日志含 PII（连接串/患者数据/卡号）。**问题**：PII 泄露。**后果**：合规违规 | 异常消息仅技术描述，连接串脱敏（ITM-D04 已统一 Justification） | ✅ |
 
