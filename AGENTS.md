@@ -72,7 +72,7 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 | **`cmd \| tail` / `tee` 掩码退出码** | GitHub bash 默认无 pipefail，管道退出码取末段 → 门禁假绿（本仓已发生 5 次，最近 ITM-648） | 取 `${PIPESTATUS[0]}`；CI 里 `set -o pipefail` 必须在**首个管道之前** |
 | **「退出码 0」≠ 任务成功** | 我曾以 `\| tail` 运行覆盖率脚本，脚本实际构建失败却报 exit 0 | 判定门禁结果时读**输出内容**，不只看退出码 |
 | **覆盖率门禁形态** | 脚本 `scripts/ci-coverage.cs` 已接入 CI（独立 coverage job）+ 阈值 0.70（2026-09-14 实测校准）；合并 glob 曾因 MTP 双层落点缺陷卡死（`277bc34` 修复为递归 glob） | 状态与阈值见 [docs/test-coverage-baseline.md](docs/test-coverage-baseline.md) §门禁阈值 |
-| **Agent 用 python/脚本重写源文件 = 行尾污染** | CRLF 仓库被 `newline='\n'` 写成纯 LF（两轮三犯：`4a64fba` 修 1543 处、`277bc34` 又修 255 处）；本仓已全 C# 化（0 个 .py），编辑工具链应向项目标准看齐 | 机械编辑用 **Edit/Write 工具**（原生保留行尾）；必须批量脚本处理时加**字节级验证**（CRLF 计数 == LF 计数，见 `.ai` OPS-9） |
+| **Agent 脚本默认 C#，禁止 python**（2026-09-14 用户裁决） | Agent 曾用系统 python 重写源文件 → CRLF 写成纯 LF（两轮三犯：`4a64fba` 修 1543 处 .cs、`277bc34` 修 255 处）；本仓已全 C# 化（0 个 .py），工具链不得再引入 Python 面 | **默认 `dotnet run <file>.cs`**（file-based app，与 scripts/ 同标准）；临时脚本放 `%TEMP%`（不继承根 props 的 TreatWarningsAsErrors）；机械编辑优先 **Edit/Write 工具**；C# 批量写文件后做字节级验证（CRLF 计数 == LF 计数，见 `.ai` OPS-9） |
 
 ---
 
