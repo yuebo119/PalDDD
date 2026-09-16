@@ -1175,6 +1175,20 @@ public sealed class SagaStepTests
             timeout: TimeSpan.FromSeconds(-1))).Throws<ArgumentOutOfRangeException>();
     }
 
+    // 全仓扫描修复：负值守卫原先只在构造器里，而 Timeout 是 public init——对象初始化器
+    // 可绕过它。校验下沉到访问器后此路径同样被拒（对齐下方 FanOutStep.PerItemTimeout 的
+    // 访问器校验先例）。
+    [Test]
+    public async Task SagaStep_NegativeTimeoutViaInitializer_ThrowsArgumentOutOfRange()
+    {
+        await Assert.That(() => new SagaStep(
+            "step-init",
+            static (state, evt, ct) => ValueTask.FromResult(state))
+        {
+            Timeout = TimeSpan.FromSeconds(-1),
+        }).Throws<ArgumentOutOfRangeException>();
+    }
+
     [Test]
     public async Task FanOutStep_NegativePerItemTimeout_ThrowsArgumentOutOfRange()
     {

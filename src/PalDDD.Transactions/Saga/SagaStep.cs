@@ -27,6 +27,8 @@ public enum StepDispatchKind
 /// </remarks>
 public class SagaStep
 {
+    private TimeSpan? _timeout;
+
     /// <summary>步骤名称</summary>
     public string Name { get; }
 
@@ -56,7 +58,21 @@ public class SagaStep
     /// 不补偿、不迁移，Saga 以 Active 滞留（快照滞留检测语义）；② 执行路径<b>不内联消费</b>
     /// Timeout——它没有"步骤执行中到点中断"的能力。
     /// </remarks>
-    public TimeSpan? Timeout { get; init; }
+    public TimeSpan? Timeout
+    {
+        get => _timeout;
+        init
+        {
+            // v62 P3：负值超时 fail-fast（对齐 MaxRetries ITM-186——负值使 IsTimedOut 恒真，
+            // 步骤记录后每 tick 立即超时补偿，现象不指向根因）。
+            // 全仓扫描修复：该校验原先只在构造器里，而本属性是 public init——对象初始化器
+            // （new SagaStep(...) { Timeout = 负值 }）可绕过守卫，声明的不变量被架空。
+            // 校验下沉到访问器后覆盖构造器与初始化器两条赋值路径，公共面不变。
+            if (value is { } t && t < TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(Timeout), "Timeout must be non-negative.");
+            _timeout = value;
+        }
+    }
 
     /// <summary>步骤调度类型——子类重写以声明特殊执行路径</summary>
     public virtual StepDispatchKind DispatchKind => StepDispatchKind.Normal;
@@ -67,16 +83,13 @@ public class SagaStep
         Func<SagaState, CancellationToken, ValueTask>? compensate = null,
         TimeSpan? timeout = null)
     {
-        // v62 P3：负值超时 fail-fast（对齐 MaxRetries ITM-186——负值使 IsTimedOut 恒真，
-        // 步骤记录后每 tick 立即超时补偿，现象不指向根因）
-        if (timeout is { } t && t < TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(timeout), "Timeout must be non-negative.");
         // P3 修复：name 入参校验。execute 不校验——FanOut/Child/Dynamic/Interrupt
         // 特殊步骤按既有契约传 null!（防御在 Saga 路由的 DispatchKind 守卫，ITM-069）。
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         Name = name;
         ExecuteAsync = execute;
         CompensateAsync = compensate;
+        // 负值校验已下沉到 Timeout 访问器（覆盖构造器与对象初始化器两条赋值路径）
         Timeout = timeout;
     }
 }
