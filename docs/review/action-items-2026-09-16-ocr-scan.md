@@ -18,12 +18,16 @@
 
 | 判定 | 条数 | 处置 |
 |------|:----:|------|
-| 真实缺陷 | 24 | 已修（ITM-726~749，含全部 4 条 critical） |
-| **已声明的设计决定（误报）** | 12 | 驳回（ITM-750~761）——**记录在此防下轮审计重复提出** |
+| 真实缺陷 | 26 | 已修（ITM-726~749 + 764~765，含全部 4 条 critical） |
+| **已声明的设计决定（误报）** | 15 | 驳回（ITM-750~761 + 766~768）——**记录在此防下轮审计重复提出** |
 | 需裁决 | 2 | 挂起（ITM-762~763），须版本级决定 |
 
+> **补批（同一扫描会话，2026-09-16）**：提交 `d500d31`（amend 后 `1ccdf86`）新增
+> src/ 侧 2 处修复（ITM-764~765）与 3 处驳回（ITM-766~768）。本表与下方进度表为**补批后终值**。
+> 计数勘正：该提交正文曾把驳回总数写成 14（12+3 应为 **15**），已 amend 更正为 15。
+
 **误报规律（供后续使用参考）**：模型在「声明写在文件头/类型头，而非报错调用点」处误报率最高。
-12 条驳回中有 9 条属此模式。使用者看到高危断言时，**先读被指文件的头注释再决定是否动代码**。
+15 条驳回中有 10 条属此模式。使用者看到高危断言时，**先读被指文件的头注释再决定是否动代码**。
 
 > 计数勘正：修复提交正文中曾写「合计 23 处」，按**独立缺陷**逐条拆分后为 **24 处**
 > （`flaky-parse.cs` 的 run_N 崩溃与 groups 崩溃是两个独立调用路径）。本清单以 24 为准。
@@ -36,14 +40,14 @@
 
 | 里程碑 | 条目数 | 待处理 | 已完成 | 完成率 |
 |:------:|:------:|:------:|:------:|:------:|
-| 已修（真实缺陷） | 24 | 0 | 24 | 100% |
-| 驳回（记录依据） | 12 | 0 | 12 | 100% |
+| 已修（真实缺陷） | 26 | 0 | 26 | 100% |
+| 驳回（记录依据） | 15 | 0 | 15 | 100% |
 | 需裁决（版本级决定） | 2 | 2 | 0 | 0% |
-| **合计** | **38** | **2** | **36** | **94.7%** |
+| **合计** | **43** | **2** | **41** | **95.3%** |
 
 ---
 
-## 一、已修条目（ITM-726~749）
+## 一、已修条目（ITM-726~749、764~765）
 
 > 每条的复现/变异/新旧对照证据写在对应提交正文中，此处只列结论与验证方式。
 
@@ -73,13 +77,15 @@
 | 747 | `flaky-parse.cs` `run_N` 缺失抛 `DirectoryNotFoundException`（裸堆栈 exit 127） | 中/易 | `8d0b5ff` | 新旧对照 127 → 告警 + exit 0 |
 | 748 | `flaky-parse.cs` 报告缺 `groups` 抛 `KeyNotFoundException`（裸堆栈 exit 127） | 中/易 | `8d0b5ff` | 新旧对照 127 → 告警 + exit 0 |
 | 749 | `review-gate.cs` 分类表漏判（`scripts/` 等改动判成 SKIP 且文案与实际相反） | 中/易 | `8d0b5ff` | 新旧对照：计数全 0 → 工具/样例 21 · CI/钩子 1 |
+| 764 | `SagaStep.Timeout` 负值守卫被对象初始化器绕过（`public init` 可覆盖构造器校验） | 中/易 | `1ccdf86` | +1 测试 · 变异探针 2 例转红（两条赋值路径同时失守）· 公共 API 快照未变 |
+| 765 | `PeriodicBackgroundProcessor` 失败回调自身抛出打死轮询循环（与本方法的 CA1031 抑制理由相反） | 中/中 | `1ccdf86` | +1 测试（会抛的 `IPalLogger` 桩）· 变异探针 1 例转红 · Transactions 全量 176/176 |
 
 **规程第 4 步**：`gate-audit.cs` 新增 2 条隔离式探针（`secret-scan` 空输入、`gate-lite` 缺 `src/`）
 并登记 `gate-lite` 到 `probedGates`；最终矩阵 16 接线门禁 OK · 0 UNVERIFIED · 0 缺口 · 0 未归类 · 探针 8/8。
 
 ---
 
-## 二、驳回条目（ITM-750~761）— 各附判断依据
+## 二、驳回条目（ITM-750~761、766~768）— 各附判断依据
 
 > **本节的用途**：这 12 条是模型的 critical/high 断言，读码后确认属**已声明的设计决定**。
 > 记录依据是为了避免下轮审计/下一个审查者重新提出——即本仓 AGENTS.md 的
@@ -99,6 +105,9 @@
 | 759 | `Entity.cs` 重发链中（非尾）事件会截断其后事件（静默丢事件） | `src/PalDDD.Core/Entity.cs:49-53` 注释声明「中链实例复用会截断其后事件（**同实例重复发布属调用方误用**，防御性取新链位置）」+「事件不可跨聚合共享」 |
 | 760 | `SagaState.CloneForLease` 浅拷贝致 `StepStartedAt`/`ExecutedStepKeys` 跨实例共享 | `src/PalDDD.Transactions/Saga/SagaState.cs:100-107`「v26 P3 勘正：……并发写安全未保障；**Version fencing 语义不受影响**；**深隔离需后续破坏性变更**（拷贝容器会改变既有共享语义，须随主版本演进）」 |
 | 761 | `Repository.EFCore` 把 Scoped 有状态拦截器烘进更长生命周期注册（captive dependency） | `src/PalDDD.Repository.EFCore/ServiceCollectionExtensions.cs:40-54` 实为 `TryAddScoped<OutboxDomainEventInterceptor>()`，且注释「⛔ 禁止与 `AddDbContextPool` 组合（ITM-640）：Scoped 是硬约束——不得改为 Singleton」 |
+| 766 | MySQL `transaction_isolation` 在 MySQL < 5.7.20 / MariaDB < 11.1 不存在（应为 `tx_isolation`，否则 errno 1193） | 本仓只声明对 **MySQL 8.4.11** 做过真库验证（`docs/aot.md:178`、`docs/persistence-aot-status.md:15`），无旧版本或 MariaDB 支持声明——属**未声明支持面**的推测，改之即扩大支持面承诺 |
+| 767 | `SET SESSION sql_mode = 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION'` 替换整会话模式（丢弃 `ONLY_FULL_GROUP_BY`/`NO_ZERO_DATE` 等） | `src/PalDDD.Dapper.MySql/MySqlPerformanceOptimizer.cs:15` 头注释与 `MySqlServiceCollectionExtensions.cs:259` 的 XML doc 均声明同一取值，且把该取值推荐为 `init_connect`/`my.cnf` 服务器配置——属**声明的取值**（MySQL 语义下声明该取值即等于声明整会话模式）。附证：本仓 SQL 无 `GROUP BY`，宽松模式非承重 |
+| 768 | `MySqlPerformanceOptimizer` 连接态 `State != Open` 的 check-then-act 竞态 | 无并发使用证据（`DbConnection` 本身非线程安全，同一连接跨线程使用属调用方错误）。按 OCR 自身线程安全正负面清单「无多线程调用证据不报」判定 |
 
 ---
 
@@ -141,8 +150,9 @@
 按 `docs/review/ACTION_ITEMS_TEMPLATE.md` 的要求，合并外部（用户/其他 Agent）任务前须逐项 grep 验证。
 本清单来源是 OpenCodeReview 工具产出（外部 Agent），**已验证项**：
 
-- [x] 文件路径 → 38 条涉及的文件全部经 `Read`/`git show` 实读（含 `scripts/` 21 个、`src/PalDDD.Compression` 4 个、
-  `src/PalDDD.Core` 2 个、`src/PalDDD.Transactions` 3 个、`src/PalDDD.Repository.EFCore` 1 个）
+- [x] 文件路径 → 43 条涉及的文件全部经 `Read`/`git show` 实读（含 `scripts/` 21 个、`src/PalDDD.Compression` 4 个、
+  `src/PalDDD.Core` 2 个、`src/PalDDD.Transactions` 5 个、`src/PalDDD.Repository.EFCore` 1 个、
+  `src/PalDDD.Dapper.MySql` 2 个）
 - [x] 方法名/类名 → `CloneForLease`、`ExecuteInTransactionAsync`、`MarkProcessed`、`TryStartAsync`、
   `IsMapExtractionEmpty`、`HasProjectsArray`、`GitShowStaged`、`EnumerateByNameSuffix`、`Worst` 等均经实读确认存在
 - [x] 配置属性 → `COVERAGE_THRESHOLD`、`Directory.Build.props` 的 `TreatWarningsAsErrors` 已 grep 验证
