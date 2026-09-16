@@ -62,9 +62,21 @@ if (targets.Count == 0)
 }
 
 var bad = new List<string>();
+var useStagedContent = !args.Contains("--all");
 foreach (var f in targets)
 {
-    var (ok, error) = ValidateXml(f);
+    // staged 模式必须校验**暂存内容**而非工作树（全仓扫描修复）：`git diff --cached` 给的是
+    // 暂存路径，而原实现 `XDocument.Load(path)` 读的是工作树——`git add` 之后又改文件时
+    // 校验的是错误内容，正是 21549d3「注释含 -- 致全仓构建失败」那类事故的复发路径。
+    var content = useStagedContent ? GitShowStaged(f) : ReadFileOrNull(f);
+    if (content is null)
+    {
+        bad.Add($"{ToPosix(f)} —— 无法读取待校验内容（{(useStagedContent ? "git show 暂存 blob" : "工作树文件")}读取失败）");
+        continue;
+    }
+    // 去 BOM：暂存 blob 可能带 UTF-8 BOM，而 XDocument.Parse 收到字符串形式的 U+FEFF 会报
+    // 「根级别数据无效」——那是编码噪声不是 XML 非良构，不该误判。
+    var (ok, error) = ValidateXmlContent(content.TrimStart('\uFEFF'));
     if (!ok) bad.Add($"{ToPosix(f)} —— {error}");
 }
 
@@ -81,11 +93,12 @@ return 0;
 // ══════════════ 判定 ══════════════
 
 // 良构性判定：解析失败即非良构。返回可读错误（含行列），供提交者直接定位。
-static (bool Ok, string Error) ValidateXml(string path)
+// 入参为**内容**而非路径——staged 模式校验的是 git 暂存 blob（见调用点）。
+static (bool Ok, string Error) ValidateXmlContent(string xml)
 {
     try
     {
-        XDocument.Load(path);
+        XDocument.Parse(xml);
         return (true, "");
     }
     catch (XmlException ex)
@@ -99,6 +112,52 @@ static (bool Ok, string Error) ValidateXml(string path)
     catch (UnauthorizedAccessException ex)
     {
         return (false, $"读取失败：{ex.Message}");
+    }
+}
+
+// 读工作树文件；不可读返回 null（由调用方计入违规——fail-closed，不静默放行）
+static string? ReadFileOrNull(string path)
+{
+    try
+    {
+        return File.ReadAllText(path);
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        return null;
+    }
+}
+
+// 取暂存 blob 内容（`git show :<path>`）；非零退出/git 不可用返回 null（调用方 fail-closed）
+// ⚠️ 必须用无参 ctor + ArgumentList 传全部参数：`ProcessStartInfo("git", "show")` 会填充
+// Arguments，再 Add ArgumentList 即抛 InvalidOperationException（两者互斥）。
+static string? GitShowStaged(string path)
+{
+    var psi = new ProcessStartInfo("git")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        StandardOutputEncoding = Encoding.UTF8,
+        UseShellExecute = false,
+    };
+    psi.ArgumentList.Add("show");
+    psi.ArgumentList.Add($":{path}");
+    try
+    {
+        using var p = Process.Start(psi);
+        if (p is null) return null;
+        // stderr 必须并发排空：RedirectStandardError 是管道，不排空时子进程写满缓冲即与
+        // 父进程的 stdout ReadToEnd 互等（死锁）
+        p.ErrorDataReceived += static (_, _) => { };
+        p.BeginErrorReadLine();
+        var output = p.StandardOutput.ReadToEnd();
+        p.WaitForExit();
+        p.WaitForExit();   // 双调用：确保异步缓冲 flush（沿 check-all.cs 先例）
+        return p.ExitCode == 0 ? output : null;
+    }
+    catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+    {
+        return null;
     }
 }
 
@@ -120,9 +179,14 @@ static List<string> GitStaged()
     {
         using var p = Process.Start(psi);
         if (p is null) return [];
+        // stderr 并发排空：RedirectStandardError 是管道，顺序读（先把 stdout 读尽再读 stderr）
+        // 会在子进程写满 stderr 缓冲时与父进程互等（死锁）。内容仍按原样丢弃（本函数只用
+        // 退出码 + stdout）。全仓扫描修复。
+        p.ErrorDataReceived += static (_, _) => { };
+        p.BeginErrorReadLine();
         var output = p.StandardOutput.ReadToEnd();
-        p.StandardError.ReadToEnd();
         p.WaitForExit();
+        p.WaitForExit();   // 双调用：确保异步缓冲 flush（沿 check-all.cs 先例）
         return p.ExitCode == 0
             ? output.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Length > 0).ToList()
             : [];
@@ -174,27 +238,27 @@ static int SelfTest()
         // 坏例：注释内含 `--`（本轮实证的真实形态）
         var badComment = Path.Combine(tmp, "bad-comment.csproj");
         File.WriteAllText(badComment, "<Project>\n  <!-- CA1031:--verify-persist -->\n</Project>\n");
-        Case("识别注释内含 `--` 的非良构文件", !ValidateXml(badComment).Ok);
+        Case("识别注释内含 `--` 的非良构文件", !ValidateXmlContent(ReadFileOrNull(badComment)!).Ok);
 
         // 坏例：注释以 `-` 结尾
         var badTail = Path.Combine(tmp, "bad-tail.csproj");
         File.WriteAllText(badTail, "<Project>\n  <!-- 结尾破折号 --->\n</Project>\n");
-        Case("识别注释以 `-` 结尾的非良构文件", !ValidateXml(badTail).Ok);
+        Case("识别注释以 `-` 结尾的非良构文件", !ValidateXmlContent(ReadFileOrNull(badTail)!).Ok);
 
         // 坏例：标签未闭合
         var badTag = Path.Combine(tmp, "bad-tag.props");
         File.WriteAllText(badTag, "<Project><PropertyGroup></Project>\n");
-        Case("识别标签未闭合的非良构文件", !ValidateXml(badTag).Ok);
+        Case("识别标签未闭合的非良构文件", !ValidateXmlContent(ReadFileOrNull(badTag)!).Ok);
 
         // 好例：合法注释（单破折号，无 `--`）
         var good = Path.Combine(tmp, "good.csproj");
         File.WriteAllText(good, "<Project>\n  <!-- verify-persist 的 catch 是脚本语义 -->\n  <PropertyGroup />\n</Project>\n");
-        Case("放行合法 XML（负向对照——防判定恒为 false）", ValidateXml(good).Ok);
+        Case("放行合法 XML（负向对照——防判定恒为 false）", ValidateXmlContent(ReadFileOrNull(good)!).Ok);
 
         // 好例：含 CDATA 与转义实体
         var good2 = Path.Combine(tmp, "good2.xml");
         File.WriteAllText(good2, "<root><a><![CDATA[--raw--]]></a></root>\n");
-        Case("放行 CDATA 中的 `--`（CDATA 不受注释限制）", ValidateXml(good2).Ok);
+        Case("放行 CDATA 中的 `--`（CDATA 不受注释限制）", ValidateXmlContent(ReadFileOrNull(good2)!).Ok);
     }
     finally
     {

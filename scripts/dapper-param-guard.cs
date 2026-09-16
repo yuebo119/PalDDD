@@ -80,7 +80,11 @@ static List<(int Line, string Snippet)> FindEnumParams(string text)
 {
     var result = new List<(int, string)>();
     // 匹配 = XxxStatus.Member（= 后紧跟字母开头的类型名；= (int)X 的 ( 天然不匹配）
-    var pattern = new Regex(@"=\s*(?<t>[A-Z]\w*Status\.\w+)", RegexOptions.Compiled);
+    // 全仓扫描修复（假阳性）：原模式 `=\s*[A-Z]\w*Status\.` 未锚定 `=` 左侧，故
+    // `== XxxStatus.Y` / `!= XxxStatus.Y` / `>= XxxStatus.Y` 会从运算符里那个 `=` 起
+    // 匹配——比较运算被判成参数直传。加负向后视排除 `= ! < >` 前缀（`=>`/`+=` 因
+    // `>`/`+` 后不接 [A-Z] 本就不匹配，无需额外处理）。
+    var pattern = new Regex(@"(?<![=!<>])=\s*(?<t>[A-Z]\w*Status\.\w+)", RegexOptions.Compiled);
     int i = 0;
     while (i < text.Length)
     {
@@ -195,6 +199,14 @@ static int SelfTest()
     var numbered = "line1\nline2\nvar p = new { s = OutboxStatus.Pending };\n";
     var found = FindEnumParams(numbered);
     Case("行号折算正确（第 3 行）", found.Count == 1 && found[0].Line == 3);
+
+    // 假阳性回归（全仓扫描修复）：比较运算符被当成参数直传
+    Case("比较运算 == 放行（假阳性回归）",
+        FindEnumParams("var a = new { ok = p.Status == InboxStatus.Processing };").Count == 0);
+    Case("不等 != 放行", FindEnumParams("var a = new { ok = p.Status != InboxStatus.Processing };").Count == 0);
+    Case("大于等于 >= 放行", FindEnumParams("var a = new { ok = p.Status >= SagaStatus.Active };").Count == 0);
+    // 正例对照：同形状的真赋值仍必须命中（防修假阳性时把检出也修掉）
+    Case("真赋值仍命中（对照）", FindEnumParams("var a = new { st = InboxStatus.Processing };").Count == 1);
 
     // 无自指豁免的说明（不设"本文件零命中"用例）：本文件的样本字符串含
     // `new { ... = XxxStatus.Y }` 形态，若对自身文本运行判定会命中——这是
