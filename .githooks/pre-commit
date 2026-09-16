@@ -10,6 +10,23 @@ cd "$ROOT" || exit 1
 
 FAIL=0
 
+# ── 暂存集快照（触发条件判定用）──
+# 为什么不用 `git diff --cached --name-only | grep -q <pat>`：本文件第 6 行
+# `set -o pipefail`，而 `grep -q` 命中即退出并关闭管道，仍在写出的 git 收到
+# SIGPIPE（退出 141）→ 管道整体返回 141 → `if` 判假 → 该守卫被静默跳过。
+# 改动文件多到超过管道缓冲时必现，也就是最该跑守卫的大提交上失效。
+# 改为一次性快照 + bash 内建 glob 匹配：零子进程、无 SIGPIPE 面、少 6 次 git 调用。
+NL=$'\n'
+STAGED="$(git diff --cached --name-only 2>/dev/null || true)"
+STAGED_MDR="$(git diff --cached --name-only --diff-filter=MDR 2>/dev/null || true)"
+STAGED_ACMR="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null || true)"
+ALL="${NL}${STAGED}${NL}"
+MDR="${NL}${STAGED_MDR}${NL}"
+ACMR="${NL}${STAGED_ACMR}${NL}"
+
+# 任一暂存路径以 $1 结尾（$2 为上述带首尾换行的快照，保证按整行边界匹配）
+any_ends_with() { [[ "$2" == *"$1${NL}"* ]]; }
+
 # ── 1. secret-scan（凭据入库拦截，~2s）──
 echo "🔒 secret-scan …"
 if ! dotnet run scripts/secret-scan.cs 2>&1; then
@@ -25,7 +42,7 @@ if ! dotnet run scripts/encoding-gate.cs 2>&1; then
 fi
 
 # ── 3. guard.cs（8 道守卫 ~22s，仅 .cs 在暂存集时触发——纯文档提交不耗时）──
-if git diff --cached --name-only 2>/dev/null | grep -q '\.cs$'; then
+if any_ends_with ".cs" "$ALL"; then
     echo "🛡 guard.cs（.cs 在暂存集）…"
     if ! dotnet run scripts/guard.cs 2>&1; then
         echo "⛔ guard 失败——守卫测试红"
@@ -35,7 +52,7 @@ fi
 
 # ── 4. test-change-guard（只改测试不改 src = 改测试修绿签名；仅 test/ 的
 #       修改/删除在暂存集时触发。豁免：ALLOW_TEST_ONLY_CHANGE=1）──
-if git diff --cached --name-only --diff-filter=MDR 2>/dev/null | grep -q '^test/'; then
+if [[ "$MDR" == *"${NL}test/"* ]]; then
     echo "🧪 test-change-guard（test/ 有改动）…"
     if ! dotnet run scripts/test-change-guard.cs 2>&1; then
         echo "⛔ test-change-guard 拦截——见上方豁免说明"
@@ -46,7 +63,9 @@ fi
 # ── 5. xml-guard（XML 良构性；仅 xml 系扩展名在暂存集时触发 ~2s）──
 # 实证来源：21549d3 在 .csproj 注释写入 `--` 致全仓构建失败（MSB4025），
 # 而 secret-scan/encoding-gate/guard 均不校验 XML 合法性——该缺口由此关闭。
-if git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep -qE '\.(csproj|props|slnx|targets|xml)$'; then
+if any_ends_with ".csproj" "$ACMR" || any_ends_with ".props" "$ACMR" \
+    || any_ends_with ".slnx" "$ACMR" || any_ends_with ".targets" "$ACMR" \
+    || any_ends_with ".xml" "$ACMR"; then
     echo "📄 xml-guard（xml 系文件有改动）…"
     if ! dotnet run scripts/xml-guard.cs 2>&1; then
         echo "⛔ xml-guard 拦截——XML 非良构，构建会失败"
@@ -58,7 +77,7 @@ fi
 #       V9 文档命令引用的脚本须存在；仅 .md 在暂存集时触发 ~3s）──
 # V9 来源：MIG-011/012 迁移脚本后文档未收口，该断链类已二次回归（见
 # docs/review/rule-placement-audit-2026-09-13.md），故改为机械拦截。
-if git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep -qE '\.md$'; then
+if any_ends_with ".md" "$ACMR"; then
     echo "📘 verify-conventions --quick（.md 在暂存集）…"
     if ! dotnet run scripts/verify-conventions.cs -- --quick 2>&1; then
         echo "⛔ verify-conventions 静态检查未通过"
@@ -71,7 +90,7 @@ fi
 # 来源：CI #94 实证——Dapper.AOT 拦截器把枚举直传驱动，PG 拒绝；本地 SQLite
 # 盲区（DialectProbe Skip + 探针未覆盖）致缺陷直达 CI。修复 ddd9f28 后本检查
 # 前移到提交期（同型再现即拦，不再等 CI）。
-if git diff --cached --name-only 2>/dev/null | grep -qE '^src/PalDDD\.Dapper'; then
+if [[ "$ALL" == *"${NL}src/PalDDD.Dapper"* ]]; then
     echo "🔧 dapper-param-guard（Dapper 源码在暂存集）…"
     if ! dotnet run scripts/dapper-param-guard.cs 2>&1; then
         echo "⛔ dapper-param-guard 失败——匿名参数含枚举直传（改 (int) 强转）"
