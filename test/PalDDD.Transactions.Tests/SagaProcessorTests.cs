@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using PalDDD.Core.Logging;
 using PalDDD.Testing;
 using PalUlid = ByteAether.Ulid.Ulid;
@@ -74,6 +75,42 @@ public sealed class SagaProcessorTests
         await processor.StopAsync(cancellationToken);
 
         await Assert.That(store.GetActiveCallCount >= 3).IsTrue();
+    }
+
+    // 全仓扫描修复：失败回调（OnTickFailed → logger.Error）**自身**抛出时，轮询循环仍不得中断。
+    // 基类的 CA1031 抑制理由与 OnTickFailed 的 XML doc 均声明「基类保证循环不中断」，
+    // 但修复前该异常会从 catch 块内逃逸把循环打死——与声明相反。与上一测试的区别：
+    // 上一测试是 store 抛（回调仅记日志），本测试把回调自身也变成抛异常源。
+    [Test]
+    public async Task ExecuteAsync_TickFailedCallbackThrows_DoesNotCrashLoop(CancellationToken cancellationToken)
+    {
+        var store = new ThrowingSagaStore();
+        var scopeFactory = new SagaStubScopeFactory(BuildTimeoutProcessor(store));
+        var options = new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions
+        {
+            PollInterval = TimeSpan.FromMilliseconds(20),
+            TimeoutScanBatchSize = 64
+        });
+        var processor = new SagaProcessor<LifecycleSagaState>(
+            scopeFactory, options, new ThrowingLogger<SagaProcessor<LifecycleSagaState>>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        await processor.StartAsync(cts.Token);
+        await Task.Delay(150, cancellationToken);
+        await processor.StopAsync(cancellationToken);
+
+        // 循环存活 ⇒ 轮询计数继续增长（修复前回调异常逃逸，计数停在第 1 次）
+        await Assert.That(store.GetActiveCallCount >= 3).IsTrue();
+    }
+
+    /// <summary>错误通道即抛的日志器——让 OnTickFailed 自身成为异常源（见上方测试）</summary>
+    private sealed class ThrowingLogger<T> : IPalLogger<T>
+    {
+        public void Debug(string message) { }
+        public void Information(string message) { }
+        public void Warning(string message) { }
+        public void Error(Exception ex, string message) => throw new InvalidOperationException("logger sink failed");
+        public bool IsEnabled(LogLevel level) => true;
     }
 
     [Test]

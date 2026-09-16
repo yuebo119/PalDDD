@@ -62,7 +62,16 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
                     // 内部的 ODE（如 tick 内对象已释放）——_disposed 标志使终止确定性成立。
                     break;
                 }
-                catch (Exception ex) { OnTickFailed(ex); }
+                catch (Exception ex)
+                {
+                    // 全仓扫描修复（契约对齐）：本方法的 CA1031 抑制理由写明「后台轮询循环必须
+                    // 隔离任意异常以防止循环中断」，但 OnTickFailed 自身抛出时（日志 sink 故障、
+                    // 已释放的 logger、指标序列化失败等）异常会从 catch 块内逃逸，把整个轮询循环
+                    // 打死——与声明相反（也与 OnTickFailed 的「基类保证循环不中断」契约相反）。
+                    // 独立隔离该回调调用，使契约成立。空 catch 由本方法的 CA1031 抑制覆盖。
+                    try { OnTickFailed(ex); }
+                    catch { /* 失败回调自身异常不得中断轮询——见上方契约 */ }
+                }
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
