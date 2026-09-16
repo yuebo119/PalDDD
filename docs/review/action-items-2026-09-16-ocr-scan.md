@@ -19,8 +19,8 @@
 | 判定 | 条数 | 处置 |
 |------|:----:|------|
 | 真实缺陷 | 28 | 已修（ITM-726~749 + 764~765 + 769 + 774，含全部 4 条 critical） |
-| **已声明的设计决定（误报）** | 19 | 驳回（ITM-750~761 + 766~768 + 770~773）——**记录在此防下轮审计重复提出** |
-| 已裁决·排队中 | 1 | ITM-762（本清单发现的问题，但**已有 ADR 覆盖**：ADR-020 决策 2 + 状态更新第 5 点，v3.0 窗口执行） |
+| **已声明的设计决定（误报）** | 20 | 驳回（ITM-750~761 + 766~768 + 770~773 + 776）——**记录在此防下轮审计重复提出** |
+| 已裁决·排队中 | 2 | ITM-762 与 ITM-777（同族：跨栈 fencing 契约）——**已有 ADR 覆盖**：ADR-020 决策 2 + 状态更新第 5 点，v3.0 窗口执行 |
 | 需裁决 | 1 | 挂起（ITM-763），决策提案见 `docs/decisions/023-iunitofwork-nested-transaction-semantics.md`（提议） |
 | **待查（核实未完成）** | 1 | ITM-775 —— **反证探针未能区分**，按「不提交无法证明其覆盖的修复」撤回，证据见条目 |
 
@@ -44,11 +44,11 @@
 | 里程碑 | 条目数 | 待处理 | 已完成 | 完成率 |
 |:------:|:------:|:------:|:------:|:------:|
 | 已修（真实缺陷） | 28 | 0 | 28 | 100% |
-| 驳回（记录依据） | 19 | 0 | 19 | 100% |
-| 已裁决·排队中（ADR 已覆盖） | 1 | 0 | 1 | 100% |
+| 驳回（记录依据） | 20 | 0 | 20 | 100% |
+| 已裁决·排队中（ADR 已覆盖） | 2 | 0 | 2 | 100% |
 | 需裁决（提案已就绪） | 1 | 1 | 0 | 0% |
 | 待查（反证未过，未提交） | 1 | 1 | 0 | 0% |
-| **合计** | **50** | **2** | **48** | **96.0%** |
+| **合计** | **52** | **2** | **50** | **96.2%** |
 
 ---
 
@@ -92,7 +92,7 @@
 
 ---
 
-## 二、驳回条目（ITM-750~761、766~768、770~773）— 各附判断依据
+## 二、驳回条目（ITM-750~761、766~768、770~773、776）— 各附判断依据
 
 > **本节的用途**：这 12 条是模型的 critical/high 断言，读码后确认属**已声明的设计决定**。
 > 记录依据是为了避免下轮审计/下一个审查者重新提出——即本仓 AGENTS.md 的
@@ -119,10 +119,11 @@
 | 771 | `DapperUnitOfWork` 提交路径清理非异常安全 | 结构看错：清理**已在 `finally` 内**（ITM-131 修复，`DapperUnitOfWork.cs:66-76`）；残余面仅 `DisposeAsync` 抛滤网外异常类型这一窄边界，而滤网覆盖（`InvalidOperationException`（含 `ObjectDisposedException`）+ `DbException`）是刻意收敛并注释声明的 |
 | 772 | `PalOrmUnitOfWork.DisposeAsync` 的清理不在 `finally` | 同 771 的滤网口径；且注释记载「三十七轮 A4：对齐 CommitAsync/RollbackAsync 的 DisposeAsync 幂等 catch——三处同类两处有防护的不对称」，显示该面已被反复审计并刻意对称化 |
 | 773 | `EventAuditMetadata.Capture` 两次读取 `Activity.Current` | 两次读取位于同一同步表达式的相邻参数位（其间无 await/回调介入），且 `Activity.Current` 是 `AsyncLocal`（执行上下文局部，非跨线程共享可变状态）——不可能观察到不同实例；改为局部变量属风格改进而非缺陷修复 |
+| 776 | `InboxProcessor` 的 processed-pending-confirmation 路径在记录仍为 `Processing` 时返回 `true`（handler 成功但 `MarkProcessedAsync` 失败），且「无独立 reconciler」 | **三重审计过的刻意设计**：`InboxProcessor.cs:114-132` 注释完整记录 ITM-180（handler 已成功→不得降级为可重试失败，否则重试重放副作用）→ v66 P3（移除 OCE 过滤，对齐 ITM-092 口径统一按 pending-confirmation 处理）→ ITM-197（补 `InboxProcessed` 指标，关闭该路径的监控盲区）。「由下一轮循环/监控补正」亦在注释内声明 |
 
 ---
 
-## 三、已裁决·排队中（ITM-762）— 2026-09-16 复核 ADR 后勘正
+## 三、已裁决·排队中（ITM-762、777）— 2026-09-16 复核 ADR 后勘正
 
 > **勘正说明**：本条曾列「需裁决」。2026-09-16 复核 `docs/decisions/` 后发现**已有 ADR 覆盖**，
 > 故改列本节（无需新决策）。以下保留分析以存档。
@@ -143,6 +144,16 @@
   属 v3.0 窗口执行期的实现取舍；届时若需在候选语义间定案，再出 ADR。
 - **涉及文件**：`docs/decisions/020-*.md`、`src/PalDDD.Transactions/Outbox/OutboxStore.cs`、
   `src/PalDDD.Projections/IProjectionCheckpointStore.cs`、`src/PalDDD.Transactions/Saga/ISagaStateStore.cs`
+
+### [x] ITM-777 · `IInboxStore` 的 `MarkProcessedAsync`/`MarkFailedAsync` 缺并发令牌（无 rowversion/Version/ETag、不接收 consumerName） · 可信度 ⚠
+
+- **结论**：**与 ITM-762 同族（跨栈 fencing 契约），已由 ADR-020 裁决并排队至 v3.0 窗口**——非新增决策。
+  接口 remark 另已声明既有防线契约：「生产实现必须提供 (ConsumerName, MessageId) 唯一约束，
+  保证每个消费者的消息只处理一次」（`src/PalDDD.Transactions/Inbox/InboxStore.cs:15-17`），
+  且 Processing 的租约/超时重入语义在同文件与 InboxProcessor 的注释中均有声明。
+- **残留可议点（同 762）**：陈旧写入的检出手段在各栈不统一（有的靠 affected 行数门控、有的靠内存引用守卫）——
+  收敛目标语义属 v3.0 执行期的实现取舍。
+- **涉及文件**：`src/PalDDD.Transactions/Inbox/InboxStore.cs`、各栈 `*InboxStore` 实现、`docs/decisions/020-*.md`
 
 ## 四、需裁决 / 待查条目（ITM-763、775）
 
