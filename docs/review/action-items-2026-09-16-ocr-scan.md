@@ -22,6 +22,7 @@
 | **已声明的设计决定（误报）** | 19 | 驳回（ITM-750~761 + 766~768 + 770~773）——**记录在此防下轮审计重复提出** |
 | 已裁决·排队中 | 1 | ITM-762（本清单发现的问题，但**已有 ADR 覆盖**：ADR-020 决策 2 + 状态更新第 5 点，v3.0 窗口执行） |
 | 需裁决 | 1 | 挂起（ITM-763），决策提案见 `docs/decisions/023-iunitofwork-nested-transaction-semantics.md`（提议） |
+| **待查（核实未完成）** | 1 | ITM-775 —— **反证探针未能区分**，按「不提交无法证明其覆盖的修复」撤回，证据见条目 |
 
 > **补批（同一扫描会话，2026-09-16）**：提交 `d500d31`（amend 后 `1ccdf86`）新增
 > src/ 侧 2 处修复（ITM-764~765）与 3 处驳回（ITM-766~768）。本表与下方进度表为**补批后终值**。
@@ -46,7 +47,8 @@
 | 驳回（记录依据） | 19 | 0 | 19 | 100% |
 | 已裁决·排队中（ADR 已覆盖） | 1 | 0 | 1 | 100% |
 | 需裁决（提案已就绪） | 1 | 1 | 0 | 0% |
-| **合计** | **49** | **1** | **48** | **98.0%** |
+| 待查（反证未过，未提交） | 1 | 1 | 0 | 0% |
+| **合计** | **50** | **2** | **48** | **96.0%** |
 
 ---
 
@@ -142,7 +144,7 @@
 - **涉及文件**：`docs/decisions/020-*.md`、`src/PalDDD.Transactions/Outbox/OutboxStore.cs`、
   `src/PalDDD.Projections/IProjectionCheckpointStore.cs`、`src/PalDDD.Transactions/Saga/ISagaStateStore.cs`
 
-## 四、需裁决条目（ITM-763）— 决策提案见 ADR-023
+## 四、需裁决 / 待查条目（ITM-763、775）
 
 ### [ ] ITM-763 · `IUnitOfWork` 嵌套事务语义：三栈分歧（两栈静默提交外层事务）· 可信度 ✅
 
@@ -165,6 +167,24 @@
   文档三方一致同步 + Release note 行为变更登记。
 - **涉及文件**：`src/PalDDD.Core/IUnitOfWork.cs`、`src/PalDDD.Repository.EFCore/UnitOfWork.cs`、
   `src/PalDDD.Dapper/DapperUnitOfWork.cs`、`src/PalDDD.PalORM/PalOrmUnitOfWork.cs`、`docs/decisions/023-*.md`
+
+### [ ] ITM-775 · `Saga.cs` 动态步骤执行轨迹的写入时机 · 可信度 ❓（核实未完成）
+
+- **模型断言**：`RecordExecutedStep(current, current, stepKey, startedAt)` 位于 ITM-069 的
+  dispatch-kind 校验**之前**（`src/PalDDD.Transactions/Saga/Saga.cs:824`），故被拒绝的 dispatch 也把键写进了
+  `ExecutedStepKeys`；而 `SagaCompensation.cs:29-30`/`:85` 声明「**只补偿实际已执行的步骤，避免补偿未执行步骤**
+  （两个入口均先经 ExecutedStepKeys 过滤）」——即轨迹污染会让补偿补偿未执行的步骤。
+- **已核实为真**：写入时机确在校验之前（`:824` 早于 `:834` 的拒绝分支）；补偿契约原文如上；该拒绝路径
+  **无测试覆盖**（`grep` 全仓为空）。
+- **未能核实**：构造了拒绝路径的测试（Dynamic 步骤路由到 FanOut 特殊步骤 → 应抛 `InvalidOperationException`
+  且键不入轨迹），**测试在修复前后均通过**——即把记录调用移回校验之前，`ExecutedStepKeys` 里**仍无**该键。
+  故「轨迹污染」这一断言**未被证明**，我的因果链存在断点（候选解释：`RecordExecutedStep` 的写入条件依赖
+  状态迁移是否完成；或失败路径会重置/替换轨迹快照）。
+- **处置**：按本仓铁律「没看过仪器故意产生错误答案，就不信它输出的任何数字」，**撤回了修复与测试**
+  （生产代码与测试文件均已 revert，工作树清洁），不提交无法证明其覆盖的改动。
+- **下一步（接手者）**：先读 `RecordExecutedStep` 的实现，确认其写入条件与目标状态实例；再据此构造能区分的探针
+  （必要时直接断言 `state.ExecutedStepKeys` 在拒绝路径上的实际内容，对比成功路径）。
+- **涉及文件**：`src/PalDDD.Transactions/Saga/Saga.cs`（`:824`、`:834`）、`src/PalDDD.Transactions/Saga/SagaCompensation.cs`（`:29-30`、`:85`）
 
 ## 五、外部任务合并检查清单（本清单适用性）
 
