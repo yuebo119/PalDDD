@@ -98,7 +98,15 @@ if (File.Exists(ciFile))
         if (line.Contains("timeout-minutes")) timeouts++;
     }
 }
-if (timeouts < totalJobs)
+if (totalJobs == 0)
+{
+    // 全仓扫描修复（空输入假绿）：ci.yml 缺失/改名时 totalJobs=0、timeouts=0，
+    // `0 < 0` 为假 → 判 PASS「所有 CI job 均有 timeout-minutes（0 个）」——检查实际没跑。
+    // 零 job 亦同（runs-on 正则漂移会让匹配数归零），两类都 fail-closed。
+    Console.WriteLine("FAIL  T-DEF-4  未能从 ci.yml 解析出任何 job（文件缺失或 runs-on 正则漂移）——判定无意义（fail-closed）");
+    failCount++;
+}
+else if (timeouts < totalJobs)
 {
     Console.WriteLine($"FAIL  T-DEF-4  CI 有 {totalJobs} 个 job，仅 {timeouts} 个有 timeout-minutes");
     failCount++;
