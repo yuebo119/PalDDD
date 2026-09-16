@@ -5,7 +5,7 @@
 //
 // 输入：dotnet list package --vulnerable --include-transitive --format json 的输出文件
 // 用法：dotnet run scripts/vuln-scan.cs <vuln.json 路径>
-// 退出码：0=无已知漏洞；1=存在已知漏洞；2=参数缺失。
+// 退出码：0=无已知漏洞；1=存在已知漏洞；2=参数缺失或输入形状异常（根缺 projects 数组）。
 //         JSON 损坏/文件不可读 → 未捕获异常非零退出（与原 Python traceback 语义一致）。
 //
 // 遍历结构：projects[] → frameworks[] → topLevelPackages + transitivePackages →
@@ -40,6 +40,17 @@ if (args.Length < 1)
 }
 
 using var document = JsonDocument.Parse(File.OpenRead(args[0]));
+
+// 全仓扫描修复（输入形状假绿）：`projects` 缺失/非数组时（schema 漂移、传错文件、
+// 截断但仍可解析的 JSON），ScanVulnerabilities 返回空集，与「扫过且干净」的输出
+// 完全相同（头注释已承认本扫描器的失败形态是静默的）。纯函数语义不变（自测已钉住
+// 「缺 projects 不崩且无命中」），在调用方对输入形状 fail-closed。
+if (!HasProjectsArray(document.RootElement))
+{
+    Console.Error.WriteLine("vuln.json 根缺少 projects 数组——输入形状异常，扫描未真正执行（fail-closed）");
+    return 2;
+}
+
 var found = ScanVulnerabilities(document);
 
 if (found.Count > 0)
@@ -85,6 +96,14 @@ static List<string> ScanVulnerabilities(JsonDocument document)
     }
     return found;
 }
+
+// 输入形状判定（纯函数，供 --selftest 覆盖）：根为对象且含 projects 数组。
+// 调用方据此对「schema 漂移/传错文件/截断仍可解析」fail-closed——纯函数
+// ScanVulnerabilities 的语义不变（缺 projects 仍返回空集，其自测已钉住该行为）。
+static bool HasProjectsArray(JsonElement root) =>
+    root.ValueKind == JsonValueKind.Object
+    && root.TryGetProperty("projects", out var projects)
+    && projects.ValueKind == JsonValueKind.Array;
 
 // 枚举 JSON 对象上指定名字的数组属性；缺失或非数组时返回空（等价 Python dict.get(name, [])）。
 static IEnumerable<JsonElement> ArrayOrEmpty(JsonElement parent, string name) =>
@@ -135,6 +154,14 @@ static int SelfTest()
     Case("缺 projects 属性不崩且无命中", Scan("{}").Count == 0);
     Case("projects 非数组无命中", Scan("""{"projects":"x"}""").Count == 0);
     Case("frameworks 缺失无命中", Scan("""{"projects":[{}]}""").Count == 0);
+
+    // 输入形状判定（全仓扫描修复的 fail-closed 路径：纯函数仍返回空集，
+    // 由调用方据 HasProjectsArray 拒绝把「形状异常」解释成「扫过且干净」）
+    Case("形状判定：根对象 + projects 数组 → 可判", HasProjectsArray(JsonElement.Parse("""{"projects":[]}""")));
+    Case("形状判定：缺 projects → 拒绝", !HasProjectsArray(JsonElement.Parse("{}")));
+    Case("形状判定：projects 非数组 → 拒绝", !HasProjectsArray(JsonElement.Parse("""{"projects":"x"}""")));
+    Case("形状判定：根非对象 → 拒绝", !HasProjectsArray(JsonElement.Parse("[]")));
+    Case("形状判定：根为字面量 → 拒绝", !HasProjectsArray(JsonElement.Parse("42")));
 
     // 命中语义（本门禁最易错处：必须「存在 + 数组 + 非空」三者同时成立）
     Case("vulnerabilities 为空数组不算命中",

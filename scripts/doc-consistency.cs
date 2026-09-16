@@ -51,7 +51,16 @@ if (args.Contains("--selftest"))
 var readme = Path.Combine(ROOT, ".ai", "README.md");
 var mapEntries = File.Exists(readme) ? ExtractMapEntries(File.ReadLines(readme)) : [];
 var missing = MissingMapEntries(mapEntries, f => File.Exists(Path.Combine(ROOT, ".ai", f)));
-if (missing.Count == 0)
+// 全仓扫描修复（空输入假绿）：上一条守卫的前提是「.ai 整棵不存在」。若 README **在**
+// 却提取到零条目（地图改格式、路径改写到子目录、字符集不再匹配），missing 同样恒为空
+// → 与「地图全部存在」一样判 PASS，而检查实际没跑。仅对后者 fail-closed，保留既有跳过语义。
+var extractionEmpty = IsMapExtractionEmpty(File.Exists(readme), mapEntries.Count);
+if (extractionEmpty)
+{
+    Console.WriteLine($"{Red}FAIL{Nc} D7 .ai/README.md 存在但提取到 0 条文件地图条目——提取规则与文档格式可能已漂移（fail-closed）");
+    failedCount++;
+}
+else if (missing.Count == 0)
 {
     Console.WriteLine($"{Green}PASS{Nc} D7 .ai/README.md 文件地图与实际一致");
     passedCount++;
@@ -89,6 +98,11 @@ static List<string> MissingMapEntries(List<string> entries, Func<string, bool> e
            .Where(f => !exists(f))
            .ToList();
 
+// D7 空输入判定（纯函数，供 --selftest 与变异验证）：README **存在**却提取到 0 条
+// 条目 → 检查实际没跑（地图改格式/路径改写即触发），必须 fail-closed。
+// 与「README 不存在（CI 无 .ai）」区分：后者保持既有跳过语义（返回 false）。
+static bool IsMapExtractionEmpty(bool readmeExists, int entryCount) => readmeExists && entryCount == 0;
+
 // ─── 自测 ───
 
 static int SelfTest()
@@ -121,6 +135,11 @@ static int SelfTest()
     // 否则将来给正则加锚定会无声改变提取集合。
     Case("已知宽口径：review/ 片段可从任意路径中截出",
         ExtractMapEntries(["docs/review/x.md"]).Contains("review/x.md"));
+
+    // D7 空输入判定（全仓扫描修复的 fail-closed 路径）
+    Case("D7 空输入：README 在且零条目 → fail-closed", IsMapExtractionEmpty(true, 0));
+    Case("D7 负例：README 在且有条目 → 正常判定", !IsMapExtractionEmpty(true, 2));
+    Case("D7 负例：README 不在（CI 无 .ai）→ 保持跳过语义", !IsMapExtractionEmpty(false, 0));
 
     // 缺失过滤：去重、Ordinal 排序、存在性
     Case("缺失过滤去重", MissingMapEntries(["a/gate.md", "a/gate.md"], _ => true).Count == 0);
