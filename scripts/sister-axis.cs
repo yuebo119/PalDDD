@@ -103,8 +103,13 @@ switch (type)
                 .Where(l => !l.Contains("obj") && !l.Contains("///") && !l.Contains("using"))
                 .Where(l => new Regex("public|internal|protected").IsMatch(l)), 20);
         Section("── 缺 ct 传导的 async 调用（无 ct 参数的 await） ──",
+            // 全仓扫描修复（假阴性）：原 `!l.Contains("ct")` 是对整行的 2 字符子串测试，
+            // 会丢掉任何含 "ct" 的行——object / direct / struct / Distinct /
+            // ProjectionCheckpoint 等（均含子串 "ct"）→ 真阳性被静默过滤，报告失真。
+            // 改为标识符级匹配：前后不得为字母数字（故 "ct"、"ct2" 命中，"object" 不命中）。
             Scan(["src"], [".cs"], new Regex("await.*Async\\(\\)"))
-                .Where(l => !l.Contains("ct") && !l.Contains("CancellationToken")
+                .Where(l => !Regex.IsMatch(l, @"(?<![A-Za-z0-9])ct(?![A-Za-z0-9])")
+                         && !l.Contains("CancellationToken")
                          && !l.Contains("tokenSnapshot") && !l.Contains("None")), 10);
         break;
 
