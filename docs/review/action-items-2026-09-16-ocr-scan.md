@@ -13,14 +13,15 @@
 
 **分级**：沿用 `docs/review/ACTION_ITEMS_TEMPLATE.md` 的**危害 × 复杂度**矩阵（P0-P3），与 ITM-685~725 清单可比。
 
-**可信度**：本清单的 38 条**全部经过人工读码核实**（不是模型原始输出）。模型输出共 1514 条，
-本次只核实了其中的 critical 4 条 + 我去重后挑出的可疑项，核实结果三分：
+**可信度**：本清单的 43 条**全部经过人工读码核实**（不是模型原始输出）。模型输出共 1514 条，
+本次只核实了其中的 critical 4 条 + 我去重后挑出的可疑项，核实结果四分：
 
 | 判定 | 条数 | 处置 |
 |------|:----:|------|
 | 真实缺陷 | 26 | 已修（ITM-726~749 + 764~765，含全部 4 条 critical） |
 | **已声明的设计决定（误报）** | 15 | 驳回（ITM-750~761 + 766~768）——**记录在此防下轮审计重复提出** |
-| 需裁决 | 2 | 挂起（ITM-762~763），须版本级决定 |
+| 已裁决·排队中 | 1 | ITM-762（本清单发现的问题，但**已有 ADR 覆盖**：ADR-020 决策 2 + 状态更新第 5 点，v3.0 窗口执行） |
+| 需裁决 | 1 | 挂起（ITM-763），决策提案见 `docs/decisions/023-iunitofwork-nested-transaction-semantics.md`（提议） |
 
 > **补批（同一扫描会话，2026-09-16）**：提交 `d500d31`（amend 后 `1ccdf86`）新增
 > src/ 侧 2 处修复（ITM-764~765）与 3 处驳回（ITM-766~768）。本表与下方进度表为**补批后终值**。
@@ -29,8 +30,9 @@
 **误报规律（供后续使用参考）**：模型在「声明写在文件头/类型头，而非报错调用点」处误报率最高。
 15 条驳回中有 10 条属此模式。使用者看到高危断言时，**先读被指文件的头注释再决定是否动代码**。
 
-> 计数勘正：修复提交正文中曾写「合计 23 处」，按**独立缺陷**逐条拆分后为 **24 处**
-> （`flaky-parse.cs` 的 run_N 崩溃与 groups 崩溃是两个独立调用路径）。本清单以 24 为准。
+> 计数勘正：修复提交正文中曾写「合计 23 处」，按**独立缺陷**逐条拆分后为 24 处
+> （`flaky-parse.cs` 的 run_N 崩溃与 groups 崩溃是两个独立调用路径）；补批再 +2 为 **26 处**。
+> 本清单以 26 为准。
 
 ---
 
@@ -42,8 +44,9 @@
 |:------:|:------:|:------:|:------:|:------:|
 | 已修（真实缺陷） | 26 | 0 | 26 | 100% |
 | 驳回（记录依据） | 15 | 0 | 15 | 100% |
-| 需裁决（版本级决定） | 2 | 2 | 0 | 0% |
-| **合计** | **43** | **2** | **41** | **95.3%** |
+| 已裁决·排队中（ADR 已覆盖） | 1 | 0 | 1 | 100% |
+| 需裁决（提案已就绪） | 1 | 1 | 0 | 0% |
+| **合计** | **43** | **1** | **42** | **97.7%** |
 
 ---
 
@@ -111,41 +114,53 @@
 
 ---
 
-## 三、需裁决条目（ITM-762~763）
+## 三、已裁决·排队中（ITM-762）— 2026-09-16 复核 ADR 后勘正
 
-### [ ] ITM-762 · `OutboxStore`/`IProjectionCheckpointStore` 契约无法表达 fencing · 可信度 ⚠
+> **勘正说明**：本条曾列「需裁决」。2026-09-16 复核 `docs/decisions/` 后发现**已有 ADR 覆盖**，
+> 故改列本节（无需新决策）。以下保留分析以存档。
 
-- **维度**：健壮性 / 架构
-- **优先级**：评估（需 ADR） · 危害: 中 · 复杂度: 难
-- **问题**：`MarkProcessed(record)` / `MarkFailed(record)` 只接收实体，**不带 owner/租约令牌**，
-  故接口层面无法表达「持有者的写入才有效」。`IProjectionCheckpointStore.TryStartAsync` 返回 `null`
-  混合了「已完成应跳过」与「他人持锁」两种语义；`checkpoint` 无可变版本/归属令牌，陈旧写入丢失更新
-  无法表达。多方言 store 与 `ISagaStateStore` 同族。
-- **建议**：随 ITM-719/720（`PalDDD.Transactions` 拆包 / 驱动层设施从 Dapper 包抽出）同一窗口处理——
-  三者都改包边界与签名，分开做会重复破坏兼容性。先出 ADR 定「以 owner 令牌扩签名」还是
-  「引入独立 fencing 包装类型」。
-- **风险**：破坏性公共 API 变更，须随主版本；跨方言 store 实现（EFCore/Dapper/PalORM/InMemory）
-  全部要同步，遗漏一处即产生静默不一致。
-- **验证**：ADR 定案后，逐个方言 store 加「僵尸写入被拒」的并发测试（现有测试未覆盖该路径）。
-- **涉及文件**：`src/PalDDD.Transactions/Outbox/OutboxStore.cs`、`src/PalDDD.Projections/IProjectionCheckpointStore.cs`、
-  `src/PalDDD.Transactions/Saga/ISagaStateStore.cs` 及全部方言实现
+### [x] ITM-762 · `OutboxStore`/`IProjectionCheckpointStore` 契约无法表达 fencing · 可信度 ⚠
 
-### [ ] ITM-763 · `IUnitOfWork.ExecuteInTransactionAsync` 嵌套语义：文档与实现不一致 · 可信度 ✅
+- **结论**：**已被 `docs/decisions/020-persistence-stack-retirement-roadmap.md` 裁决并排队**，非新增决策。
+  依据三处：① 决策 2「**v3.0（破坏性变更窗口）**：……同窗口合并 `IPalOutboxStore` 异步化与
+  **跨栈 fencing 契约统一**（两项均已排队的破坏性变更，一次 major 窗口清偿）」；
+  ② 状态更新（2026-09-13 退役延后）第 5 点「原决策 2 中"v3.0 窗口合并 `IPalOutboxStore` 异步化
+  与契约统一"**不受影响——仍按 major 窗口推进**，仅与退役解绑」；
+  ③ 接口自身预告：`src/PalDDD.Transactions/Outbox/OutboxStore.cs` 类头 XML doc
+  「📣 v3.0 破坏性变更预告（ADR-020，维护者裁决 2026-08-26）」。
+- **模型断言的部分**：`MarkProcessed(record)` 不带 owner 令牌、`TryStartAsync` 返回 `null` 混合两义 ——
+  事实成立，但**已在 ADR-020 的排队范围内**，且 `MarkProcessed` 的 Remarks（ITM-269/272）已登记
+  三栈分歧细节（含「Dapper 内存侧 fencing 弱于 PalORM 的 affected 门控」）。
+- **残留可议点（不构成新决策）**：收敛时的**目标语义**（对未租约消息放行 vs 拒绝）尚未指定 ——
+  属 v3.0 窗口执行期的实现取舍；届时若需在候选语义间定案，再出 ADR。
+- **涉及文件**：`docs/decisions/020-*.md`、`src/PalDDD.Transactions/Outbox/OutboxStore.cs`、
+  `src/PalDDD.Projections/IProjectionCheckpointStore.cs`、`src/PalDDD.Transactions/Saga/ISagaStateStore.cs`
 
-- **维度**：可维护性 / 契约
-- **优先级**：P2 · 危害: 中 · 复杂度: 中
-- **问题**：接口文档称该方法「无条件开启**并提交**事务」，而既有实现在检测到事务已活动时是 no-op
-  （不提交）。调用方按文档理解会在嵌套调用中误判提交边界；反之按实现理解则文档误导。
-- **建议**：二选一并三方同步（代码+文档+注释）：① 文档改为「已有事务时加入当前事务（不提交）」；
-  ② 实现改为显式抛异常禁止嵌套。
-- **风险**：改实现会破坏既有调用方（含本仓测试与样例）；改文档则需确认所有实现确实一致。
-- **验证**：`grep -rn "ExecuteInTransactionAsync" src/ test/ samples/` 逐个实现核对语义，
-  并为嵌套场景补一条断言「嵌套不提交」的测试。
-- **涉及文件**：`src/PalDDD.Core/IUnitOfWork.cs:18`、各 `UnitOfWork` 实现
+## 四、需裁决条目（ITM-763）— 决策提案见 ADR-023
 
----
+### [ ] ITM-763 · `IUnitOfWork` 嵌套事务语义：三栈分歧（两栈静默提交外层事务）· 可信度 ✅
 
-## 四、外部任务合并检查清单（本清单适用性）
+- **维度**：健壮性 / 契约 · **优先级**：P1 · 危害: 高 · 复杂度: 中（危害按「数据原子性」面定级）
+- **问题（较本清单初版更精确）**：不是「文档与实现不一致」的单点问题，而是**三栈对「事务已活动时
+  再次 Begin」的处置分歧，其中两栈造成原子性破坏**：
+
+| 栈 | 事务已活动时 Begin | 位置 | 嵌套 `ExecuteInTransactionAsync` 的后果 |
+|----|------------------|------|--------------------------------------|
+| EF Core | 静默 no-op | `src/PalDDD.Repository.EFCore/UnitOfWork.cs:38` | 内层 Commit **提交外层事务** → 原子性破坏 |
+| Dapper | 抛 `InvalidOperationException`（ITM-088） | `src/PalDDD.Dapper/DapperUnitOfWork.cs:41-43` | fail-fast，无破坏 |
+| PalORM | 幂等 no-op（注释「幂等：已有活动事务」） | `src/PalDDD.PalORM/PalOrmUnitOfWork.cs:47` | 同 EF Core → 原子性破坏 |
+
+  而 `UnitOfWorkExtensions.ExecuteInTransactionAsync`（`src/PalDDD.Core/IUnitOfWork.cs:43-69`）是
+  无条件「Begin → work → SaveChanges → Commit」，其 XML doc 未提及嵌套语义。
+- **决策提案**：`docs/decisions/023-iunitofwork-nested-transaction-semantics.md`（状态：**提议**）——
+  建议**收敛到 fail-fast**（对齐 Dapper 的 ITM-088），并列出 3 个备选方案（统一 no-op / 仅文档化 /
+  接口加 `HasActiveTransaction`）与各自未采纳理由。
+- **需你决定**：采纳哪个方案（A 建议 / B / C / D）。采纳后由我实施：改实现 + 三栈对称测试 +
+  文档三方一致同步 + Release note 行为变更登记。
+- **涉及文件**：`src/PalDDD.Core/IUnitOfWork.cs`、`src/PalDDD.Repository.EFCore/UnitOfWork.cs`、
+  `src/PalDDD.Dapper/DapperUnitOfWork.cs`、`src/PalDDD.PalORM/PalOrmUnitOfWork.cs`、`docs/decisions/023-*.md`
+
+## 五、外部任务合并检查清单（本清单适用性）
 
 按 `docs/review/ACTION_ITEMS_TEMPLATE.md` 的要求，合并外部（用户/其他 Agent）任务前须逐项 grep 验证。
 本清单来源是 OpenCodeReview 工具产出（外部 Agent），**已验证项**：
@@ -161,7 +176,7 @@
 
 ---
 
-## 五、修复后检查清单（沿用 ITM-685~725 清单，未改动）
+## 六、修复后检查清单（沿用 ITM-685~725 清单，未改动）
 
 - [ ] 修改是否引入新的编译期依赖？→ 检查 `.csproj` diff
 - [ ] 修改是否改变现有行为的语义？→ 检查受影响路径
