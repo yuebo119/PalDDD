@@ -118,14 +118,34 @@ static int Analyze(string root, int runs)
     for (var i = 1; i <= runs; i++)
     {
         var map = new Dictionary<string, char>();
-        foreach (var file in Directory.EnumerateFiles(Path.Combine(root, $"run_{i}"),
+        // 移植偏离修复（全仓扫描）：python 的 glob 对不存在的 run_N 返回空列表，而
+        // Directory.EnumerateFiles 会抛 DirectoryNotFoundException——runner 在写出报告前
+        // 崩溃（正是本门禁要抓的场景）时，工具以裸堆栈退出而非给出结论。对齐 python：
+        // 缺目录 = 该跑零报告（零报告总守卫仍会在全缺时 FAIL）。
+        var runDir = Path.Combine(root, $"run_{i}");
+        if (!Directory.Exists(runDir))
+        {
+            Console.WriteLine($"::warning ::run_{i} 目录不存在——该跑零报告（对齐 python glob 语义）");
+            perRun.Add(map);
+            continue;
+        }
+        foreach (var file in Directory.EnumerateFiles(runDir,
                      "*.tunit-report.json", SearchOption.AllDirectories))
         {
             totalReports++;
             JsonDocument doc;
             try { doc = JsonDocument.Parse(File.ReadAllText(file)); }
             catch (JsonException) { continue; } // 坏报告跳过（与原容错一致）
-            foreach (var g in doc.RootElement.GetProperty("groups").EnumerateArray())
+            // 移植偏离修复（全仓扫描）：python `doc.get('groups', [])` 对缺 groups 不抛；
+            // C# GetProperty 会抛 KeyNotFoundException（裸堆栈退出）。本函数对 tests 已用
+            // TryGetProperty（同 .get 语义），groups 属遗漏，补齐并对 schema 漂移可见。
+            if (!doc.RootElement.TryGetProperty("groups", out var groups)
+                || groups.ValueKind != JsonValueKind.Array)
+            {
+                Console.WriteLine($"::warning ::报告缺 groups 数组（schema 漂移？）：{file}");
+                continue;
+            }
+            foreach (var g in groups.EnumerateArray())
             {
                 if (!g.TryGetProperty("tests", out var tests) || tests.ValueKind != JsonValueKind.Array) continue;
                 foreach (var t in tests.EnumerateArray())
