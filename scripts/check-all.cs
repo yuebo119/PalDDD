@@ -77,9 +77,13 @@ static (int Exit, List<string> Lines) RunCapture(string fileName, string argumen
         StandardErrorEncoding = Encoding.UTF8,
     };
     using var process = new Process { StartInfo = info };
+    // 全仓扫描修复（并发）：OutputDataReceived/ErrorDataReceived 由线程池线程并发触发，
+    // 而 List<T>.Add 非线程安全——并发 Add 会丢行（lines 同时喂 ideCount 与 errorCount，
+    // 丢一行 "error CS" 即门禁假绿），扩容路径还可能抛 IndexOutOfRangeException 直接崩进程。
     var lines = new List<string>();
-    process.OutputDataReceived += (_, e) => { if (e.Data is not null) lines.Add(e.Data); };
-    process.ErrorDataReceived += (_, e) => { if (e.Data is not null) lines.Add(e.Data); };
+    var linesGate = new object();
+    process.OutputDataReceived += (_, e) => { if (e.Data is not null) lock (linesGate) lines.Add(e.Data); };
+    process.ErrorDataReceived += (_, e) => { if (e.Data is not null) lock (linesGate) lines.Add(e.Data); };
     process.Start();
     process.BeginOutputReadLine();
     process.BeginErrorReadLine();
