@@ -45,14 +45,25 @@ if (args.Contains("--selftest"))
 var root = FindRepoRoot();
 
 // ─── git ls-files 收集跟踪文件（Process 调用），按扩展名过滤（大小写不敏感）───
-var trackedFiles = GitLsFiles(root)
+// 全仓扫描修复（fail-open）：git 调用失败原本返回空列表，而调用方把空列表渲染成
+// 「PASS 无可扫描的跟踪文件」——git 缺失/非 git 仓库时门禁静默失效却报绿。
+// 现在失败返回 null，调用方据此 fail-closed。
+var trackedAll = GitLsFiles(root);
+if (trackedAll is null)
+{
+    Console.WriteLine("FAIL 无法枚举跟踪文件（git 不可用或 ls-files 非零退出）——凭据扫描未真正执行，拒绝报绿");
+    return 1;
+}
+var trackedFiles = trackedAll
     .Where(f => Regex.IsMatch(f, "\\.(json|cs|sh|py|yml|yaml|props|config|toml|env|xml|ps1|txt|md|csproj)$",
         RegexOptions.IgnoreCase))
     .ToList();
 if (trackedFiles.Count == 0)
 {
-    Console.WriteLine("PASS 无可扫描的跟踪文件");
-    return 0;
+    // 空输入假绿同类修复：git 成功但一个可扫描文件都没有，说明仓库/过滤条件异常，
+    // 此时「0 命中」不构成任何安全结论。协议行走 stdout（同 PASS/SUSPECT，被 grep 消费）。
+    Console.WriteLine("FAIL 受跟踪文件中无任何可扫描扩展名的文件——输入为空，扫描无意义（fail-closed）");
+    return 1;
 }
 
 var suspects = new List<string>();
@@ -109,23 +120,38 @@ static string FindRepoRoot()
     return ""; // 不可达
 }
 
-// git ls-files（Process 调用；非零退出码返回空——非 git 仓库/异常等同无可扫文件）
-static List<string> GitLsFiles(string workingDir)
+// git ls-files（Process 调用）。失败返回 null——与「成功但无文件」的空列表严格区分，
+// 调用方据此 fail-closed（全仓扫描修复，见调用点注释）。
+// 不重定向 stderr：重定向却不排空时，子进程写满 stderr 管道会与父进程的
+// stdout ReadToEnd 互等（经典死锁）；git 的 stderr 是进度/诊断信息，直出更可观察
+// （同 changelog-facts.cs 的 ITM-663 取舍）。
+static List<string>? GitLsFiles(string workingDir)
 {
     var psi = new ProcessStartInfo("git", "ls-files")
     {
         RedirectStandardOutput = true,
-        RedirectStandardError = true,
         StandardOutputEncoding = Encoding.UTF8,
         UseShellExecute = false,
         WorkingDirectory = workingDir,
     };
-    using var p = Process.Start(psi)!;
-    var output = p.StandardOutput.ReadToEnd();
-    p.WaitForExit();
-    return p.ExitCode == 0
-        ? output.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Length > 0).ToList()
-        : [];
+    Process p;
+    try
+    {
+        p = Process.Start(psi)!;
+    }
+    catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+    {
+        Console.Error.WriteLine($"  git 启动失败：{ex.Message}");
+        return null;
+    }
+    using (p)
+    {
+        var output = p.StandardOutput.ReadToEnd();
+        p.WaitForExit();
+        return p.ExitCode == 0
+            ? output.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Length > 0).ToList()
+            : null;
+    }
 }
 
 // ══════════════ 判定（纯函数，供 --selftest 覆盖）══════════════
@@ -222,6 +248,11 @@ static int SelfTest()
 
     // 大小写不敏感（原实现含 RegexOptions.IgnoreCase）
     Case("主机键大小写不敏感", JudgeLine(ConnLine("host=db", longPwd), p) is ["连接串内嵌密码"]);
+
+    // 全仓扫描修复：git 调用失败必须返回 null（区别于「成功但无文件」的空列表）——
+    // 否则调用方把「门禁没跑」渲染成「扫描干净」。用不存在的工作目录触发启动失败。
+    Case("GitLsFiles 启动失败返回 null 而非空列表",
+        GitLsFiles(Path.Combine(Path.GetTempPath(), "secret-scan-no-such-" + Guid.NewGuid().ToString("N"))) is null);
 
     Console.WriteLine();
     Console.WriteLine($"SELFTEST {passed}/{total} 通过");
