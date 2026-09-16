@@ -59,6 +59,16 @@ var testCs = changed.Count(f => Regex.IsMatch(f, "^test/.*\\.cs$"));
 var docs = changed.Count(f => Regex.IsMatch(f, "\\.(md|txt)$|^docs/"));
 var aiMeta = changed.Count(f => Regex.IsMatch(f, "^\\.ai/"));
 var csproj = changed.Count(f => Regex.IsMatch(f, "\\.csproj$|\\.props$|\\.targets$"));
+// 全仓扫描修复（漏判）：原分类表只有 5 类，scripts/**、bench/**、samples/**、.github/**、
+// .githooks/** 的改动一个计数都不增 → 落到末尾 `SKIP — 无需评审（无代码/配置/文档变更）`，
+// 而文案与实际相反（明明有代码/门禁变更）。补「工具/样例代码」与「CI/钩子」两桶，
+// 并统计未命中任何桶的文件数，兜底改为保守档（宁可多评审，不可漏评审）。
+var toolCs = changed.Count(f => Regex.IsMatch(f, "^(scripts|bench|samples)/.*\\.cs$"));
+var ciHooks = changed.Count(f => Regex.IsMatch(f, "^(\\.github/|\\.githooks/)"));
+var classified = changed.Count(f => Regex.IsMatch(f,
+    "^src/.*\\.cs$|^test/.*\\.cs$|\\.(md|txt)$|^docs/|^\\.ai/|\\.csproj$|\\.props$|\\.targets$"
+    + "|^(scripts|bench|samples)/.*\\.cs$|^(\\.github/|\\.githooks/)"));
+var unclassified = changed.Count - classified;
 
 Console.WriteLine();
 Console.WriteLine(" 变更分类：");
@@ -67,6 +77,9 @@ Console.WriteLine($"   test/*.cs     : {testCs}");
 Console.WriteLine($"   docs/md       : {docs}");
 Console.WriteLine($"   .ai/meta      : {aiMeta}");
 Console.WriteLine($"   csproj/props  : {csproj}");
+Console.WriteLine($"   工具/样例 .cs : {toolCs}");
+Console.WriteLine($"   CI/钩子       : {ciHooks}");
+Console.WriteLine($"   未分类        : {unclassified}");
 Console.WriteLine();
 
 // 路由逻辑（顺序判定，命中即返回）
@@ -92,13 +105,31 @@ if (testCs > 0 && srcCs == 0)
     return 0;
 }
 
+if (toolCs > 0 || ciHooks > 0)
+{
+    Console.WriteLine($"{Yellow}→ 增量轮{Nc} — 工具/CI 面变更（scripts|bench|samples 代码、.github/.githooks）");
+    Console.WriteLine("  评审深度：抽查变更脚本 + 其调用点与 gate-audit 矩阵登记");
+    return 0;
+}
+
 if (docs > 0 || aiMeta > 0)
 {
     Console.WriteLine($"{Yellow}→ SKIP{Nc} — 仅文档/元数据变更，无行为影响");
     return 0;
 }
 
-Console.WriteLine($"{Green}→ SKIP{Nc} — 无需评审（无代码/配置/文档变更）");
+if (unclassified > 0)
+{
+    // 保守档（全仓扫描修复）：仍有未能归类的变更时不得判 SKIP——原实现的落点在此，
+    // 且文案断言「无代码/配置/文档变更」，与实际相反。
+    Console.WriteLine($"{Yellow}→ 增量轮{Nc} — {unclassified} 个变更未匹配既有分类（保守档：宁多评审不漏评审）");
+    Console.WriteLine("  建议：确认其影响面后补入本脚本的分类表");
+    return 0;
+}
+
+// 理论上不可达（changed.Count > 0 时每个文件非「命中某桶」即「未分类」，后者已在上方拦下）
+// ——保留为防御性兜底。
+Console.WriteLine($"{Green}→ SKIP{Nc} — 无变更");
 return 0;
 
 // ─── 工具函数 ───
