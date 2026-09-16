@@ -12,7 +12,9 @@
 
 ## [Unreleased]
 
-（暂无——2.2.0 发布后的行为变更在此累积）
+### Changed 变更
+
+- **`IUnitOfWork.BeginTransactionAsync` 在事务已活动时改为抛 `InvalidOperationException`**（决策见 ADR-023）：原 EF Core 与 PalORM 两栈为静默 no-op，而 `ExecuteInTransactionAsync` 是无条件「Begin → work → SaveChanges → Commit」——嵌套调用时内层 Commit 提交的是**外层**事务，导致静默原子性破坏（内层之后的外层工作失去事务保护，外层异常路径的回滚面对已提交事务）。现三栈统一为 fail-fast（对齐 Dapper 既有的 ITM-088 契约），接口与 `ExecuteInTransactionAsync` 文档同步声明「不支持嵌套」。**迁移**：需要在既有事务内执行工作的调用方，请直接执行工作委托或自行编排提交边界，不要嵌套调用本方法。
 
 ---
 

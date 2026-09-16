@@ -14,7 +14,8 @@ namespace PalDDD.Core.Repository;
 /// <summary>工作单元接口 — 事务管理 + SaveChanges</summary>
 public interface IUnitOfWork : IAsyncDisposable
 {
-    /// <summary>当无活动事务时开启数据库事务。</summary>
+    /// <summary>开启数据库事务。<b>事务已活动时抛 <see cref="InvalidOperationException"/></b>
+    /// （ADR-023：三栈统一为 fail-fast，不支持嵌套）。</summary>
     ValueTask BeginTransactionAsync(CancellationToken ct = default);
 
     /// <summary>提交活动事务。</summary>
@@ -39,6 +40,12 @@ public static class UnitOfWorkExtensions
     /// 事务在 <paramref name="work"/> 执行前开启，在 <paramref name="work"/> 完成并调用
     /// <see cref="IUnitOfWork.SaveChangesAsync(CancellationToken)"/> 后提交。
     /// 若 <paramref name="work"/> 抛出异常，事务被回滚。
+    /// <para>
+    /// ⚠️ <b>不支持嵌套（ADR-023）</b>：本方法无条件「开启 → 提交」，故在已活动事务内调用会经
+    /// <see cref="IUnitOfWork.BeginTransactionAsync(CancellationToken)"/> 抛出
+    /// <see cref="InvalidOperationException"/>（三栈一致）。需要在既有事务内执行工作请不要用本方法——
+    /// 直接执行 <paramref name="work"/>，或由调用方自行编排提交边界。
+    /// </para>
     /// </summary>
     public static async ValueTask ExecuteInTransactionAsync(
         this IUnitOfWork uow,

@@ -1,6 +1,6 @@
 # ADR 023：IUnitOfWork 嵌套事务语义 — 三栈分歧的收敛方向
 
-> 状态：**提议（待维护者裁决）**
+> 状态：**已采纳（2026-09-16 维护者指令「完整实施」）**
 > 日期：2026-09-16
 > 关联：ADR-019（IUnitOfWork 归属 Core）、ADR-020（三栈并行策略与跨栈契约分歧的 v3.0 窗口）、
 > ADR-017（Saga 租约乐观并发）、ITM-088（Dapper Begin 前置判活）、
@@ -70,3 +70,16 @@
   行为变更，`IUnitOfWork.cs` 的 doc 同步补嵌套语义段（三方一致红线）。
 - 测试面：三栈各补一条「事务已活动时 Begin 抛出」的对称测试（对齐姊妹对称守卫）。
 - 本仓 dialect-probe / 集成测试若存在嵌套用法需同步调整（当前 grep 未发现）。
+
+---
+
+## 实施记录（2026-09-16）
+
+按本 ADR 的**方案 A** 实施：
+
+- EF Core：`src/PalDDD.Repository.EFCore/UnitOfWork.cs` 的 `BeginTransactionAsync` 由静默 no-op 改为抛 `InvalidOperationException`。
+- PalORM：`src/PalDDD.PalORM/PalOrmUnitOfWork.cs` 同上（原为 `return;` 幂等 no-op）。
+- 文档：`IUnitOfWork.BeginTransactionAsync` 与 `ExecuteInTransactionAsync` 的 XML doc 同步声明「不支持嵌套」；CHANGELOG `[Unreleased]` 登记为行为变更。
+- 测试：三栈各补一条对称用例——EF Core 用 **Sqlite provider**（InMemory 忽略事务，`CurrentTransaction` 恒 null，该分支在 InMemory 下不可达）、PalORM 用 `SqlitePalOrmUnitOfWork`、Dapper 锁住既有 ITM-088 契约。三套件 8/8、7/7、17/17 通过。
+- 变异探针：把两栈改回 `return;` → 两处新用例**均失败**，证明用例可区分（非恒真）。
+- Dapper 栈未改动（其 fail-fast 是 ITM-088 的既有契约，本 ADR 正是向它对齐）。
