@@ -820,9 +820,6 @@ public abstract class Saga<TState> where TState : SagaState, new()
             return current;
         }
 
-        // 记录动态步骤本身
-        RecordExecutedStep(current, current, stepKey, startedAt);
-
         await SafeObserveStartedAsync(observer, current.SagaId, stepKey, ct).ConfigureAwait(false);
 
         // 递归分发到路由步骤（可能也是特殊步骤）
@@ -842,6 +839,13 @@ public abstract class Saga<TState> where TState : SagaState, new()
             await SafeObserveFailedAsync(observer, current.SagaId, stepKey, dispatchEx, ct).ConfigureAwait(false);
             throw dispatchEx;
         }
+
+        // 记录动态步骤本身（ITM-775 修复：原位置在校验**之前**——被 ITM-069 拒绝的 dispatch
+        // 尚未执行任何步骤，却已由 RecordExecutedStep 写入 ExecutedStepKeys（该函数无条件追加
+        // stepKey），而 SagaCompensation 的契约是「只补偿实际已执行的步骤，避免补偿未执行步骤」
+        //（SagaCompensation.cs:29-30、:85）→ 拒绝路径会让补偿补偿一个从未执行的步骤。
+        // 移到校验之后：拒绝路径不再污染轨迹；正常路径记录时机不变（仍在执行循环之前）。
+        RecordExecutedStep(current, current, stepKey, startedAt);
 
         List<Exception> failures = [];
         for (int attempt = 0; attempt <= MaxRetries; attempt++)
