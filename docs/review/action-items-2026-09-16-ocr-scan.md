@@ -18,8 +18,8 @@
 
 | 判定 | 条数 | 处置 |
 |------|:----:|------|
-| 真实缺陷 | 30 | 已修（ITM-726~749 + 764~765 + 769 + 774 + 763 + 775，含全部 4 条 critical） |
-| **已声明的设计决定（误报）** | 20 | 驳回（ITM-750~761 + 766~768 + 770~773 + 776）——**记录在此防下轮审计重复提出** |
+| 真实缺陷 | 33 | 已修（ITM-726~749 + 764~765 + 769 + 774 + 763 + 775 + 778~780，含全部 4 条 critical） |
+| **已声明的设计决定（误报）** | 22 | 驳回（ITM-750~761 + 766~768 + 770~773 + 776 + 781~782）——**记录在此防下轮审计重复提出** |
 | 已裁决·排队中 | 2 | ITM-762 与 ITM-777（同族：跨栈 fencing 契约）——**已有 ADR 覆盖**：ADR-020 决策 2 + 状态更新第 5 点，v3.0 窗口执行 |
 | 需裁决 | 0 | ITM-763 已于 2026-09-16 按 ADR-023 方案 A 实施完毕（见下节标记 [x]） |
 | 待查 | 0 | ITM-775 已结项（详见第四节末的误判纠正记录） |
@@ -43,16 +43,16 @@
 
 | 里程碑 | 条目数 | 待处理 | 已完成 | 完成率 |
 |:------:|:------:|:------:|:------:|:------:|
-| 已修（真实缺陷） | 30 | 0 | 30 | 100% |
-| 驳回（记录依据） | 20 | 0 | 20 | 100% |
+| 已修（真实缺陷） | 33 | 0 | 33 | 100% |
+| 驳回（记录依据） | 22 | 0 | 22 | 100% |
 | 已裁决·排队中（ADR 已覆盖） | 2 | 0 | 2 | 100% |
 | 需裁决（已按 A 实施） | 0 | 0 | 0 | — |
 | 待查（已结项） | 0 | 0 | 0 | — |
-| **合计** | **52** | **0** | **52** | **100%** |
+| **合计** | **57** | **0** | **57** | **100%** |
 
 ---
 
-## 一、已修条目（ITM-726~749、764~765、769、774、775）
+## 一、已修条目（ITM-726~749、764~765、769、774、775、778~780）
 
 > 每条的复现/变异/新旧对照证据写在对应提交正文中，此处只列结论与验证方式。
 
@@ -87,13 +87,16 @@
 | 769 | `PostgreSqlReportHelper` 导出遇 NaN/±Infinity 中途崩溃（`WriteNumberValue` 对非有限值抛 `ArgumentException`，而 PG float4/float8 合法包含之） | 中/易 | `e28acf4` | 新增 2 测试（6 正例 + 3 对照）· 变异探针复现原崩溃异常文本 · 纯函数测试，无需数据库 |
 | 774 | G7 反射守卫漏检 `MakeGenericMethod`（清单只有 `MakeGenericType`，而生产代码 `Saga.cs:663` 在用、两份豁免文案亦以它命名）→ 未标注调用会静默通过 | 中/易 | `8a1d472` | 加 1 个 `isTarget` 分支 + 2 用例（R1b 无豁免必红 / R2b 豁免置零）· SourceCodeGuardTests 15/15 · 变异探针复现「0 处检出」· 提交用 `ALLOW_TEST_ONLY_CHANGE=1` 并写明豁免理由（守卫按设计实现于测试项目，改动方向是加强非修绿） |
 | 775 | 被 ITM-069 拒绝的动态步骤污染执行轨迹（`RecordExecutedStep` 无条件追加键，调用点在校验之前）→ `SagaCompensation` 会补偿从未执行的步骤 | 中/中 | `afa1df2` | **先红后绿**实证（未修时轨迹断言按预期失败）· Transactions 全量 177/177 · 用例前置断言用**异常消息**而非异常类型（上一版弱断言导致非区分性，已纠正） |
+| 778 | `FakeTimeProvider.CreateTimer` 对 `dueTime < 0`（含 `Timeout.InfiniteTimeSpan`）算出**已过期**时刻 → 零增量快进即触发（真实 Timer 语义为永不触发） | 高/易 | `abfd3b2` | +1 用例 · 变异探针（表达式+入列守卫两处都须还原才复现，实证"只改一处不足"）· Core 316/316 · Transactions 177/177 |
+| 779 | `FakeTimeProvider.AdvanceNowAndTriggerTimers` 单回调抛出即中断批次 → 其余已出列计时器永不触发 + 假时钟冻结 | 高/中 | `abfd3b2` | +1 用例（断言三点：原异常按调用栈重抛 / 另一计时器仍触发 / 时钟已推进）· 变异探针转红 |
+| 780 | `FakeTimeProvider._timers` 无同步（SUT 后台线程 CreateTimer × 测试线程快进）→ `InvalidOperationException`/集合损坏；`FakeTimer.Dispose` 不移除条目 → 长跑 worker 累积 | 中/中 | `abfd3b2` | 锁内快照+移除、回调**在锁外**触发（防重进入死锁）· Dispose 同步移除 · 无既有测试依赖原行为（Core+Transactions 全绿） |
 
 **规程第 4 步**：`gate-audit.cs` 新增 2 条隔离式探针（`secret-scan` 空输入、`gate-lite` 缺 `src/`）
 并登记 `gate-lite` 到 `probedGates`；最终矩阵 16 接线门禁 OK · 0 UNVERIFIED · 0 缺口 · 0 未归类 · 探针 8/8。
 
 ---
 
-## 二、驳回条目（ITM-750~761、766~768、770~773、776）— 各附判断依据
+## 二、驳回条目（ITM-750~761、766~768、770~773、776、781~782）— 各附判断依据
 
 > **本节的用途**：这 12 条是模型的 critical/high 断言，读码后确认属**已声明的设计决定**。
 > 记录依据是为了避免下轮审计/下一个审查者重新提出——即本仓 AGENTS.md 的
@@ -121,6 +124,8 @@
 | 772 | `PalOrmUnitOfWork.DisposeAsync` 的清理不在 `finally` | 同 771 的滤网口径；且注释记载「三十七轮 A4：对齐 CommitAsync/RollbackAsync 的 DisposeAsync 幂等 catch——三处同类两处有防护的不对称」，显示该面已被反复审计并刻意对称化 |
 | 773 | `EventAuditMetadata.Capture` 两次读取 `Activity.Current` | 两次读取位于同一同步表达式的相邻参数位（其间无 await/回调介入），且 `Activity.Current` 是 `AsyncLocal`（执行上下文局部，非跨线程共享可变状态）——不可能观察到不同实例；改为局部变量属风格改进而非缺陷修复 |
 | 776 | `InboxProcessor` 的 processed-pending-confirmation 路径在记录仍为 `Processing` 时返回 `true`（handler 成功但 `MarkProcessedAsync` 失败），且「无独立 reconciler」 | **三重审计过的刻意设计**：`InboxProcessor.cs:114-132` 注释完整记录 ITM-180（handler 已成功→不得降级为可重试失败，否则重试重放副作用）→ v66 P3（移除 OCE 过滤，对齐 ITM-092 口径统一按 pending-confirmation 处理）→ ITM-197（补 `InboxProcessed` 指标，关闭该路径的监控盲区）。「由下一轮循环/监控补正」亦在注释内声明 |
+| 781 | `FakeTimeProvider.CreateTimer` 静默丢弃 `period`（周期计时器只触发一次） | `TestHelpers.cs:215` 注释「P3 声明：period 有意忽略——FakeTimer 仅支持一次性到期语义（Saga/Outbox 测试场景不需要周期计时器）」。与 `Change` 抛异常的不对称是有意的（`Change` 被调用说明调用方依赖重设语义） |
+| 782 | `FakeTimer.Change` 抛 `NotSupportedException`（而非返回 false） | `TestHelpers.cs:222-223` 及 `FakeTimeProviderTimerTests.Change_Always_Throws_NotSupported` 锁定：ITM-282（R44）把「恒 false」改为总是抛，避免调用方静默得到 false——属既有契约且已有用例防回退 |
 
 ---
 
