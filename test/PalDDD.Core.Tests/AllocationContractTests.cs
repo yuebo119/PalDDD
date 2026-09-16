@@ -19,6 +19,10 @@ public sealed class AllocationContractTests
 {
     private const int Iterations = 10_000;
 
+    /// <summary>遍历计数落点（观测点）：使 foreach 的结果可被循环外的断言读取，
+    /// 从而切断 JIT 消除整段遍历的路径——见 DomainEvents_Foreach_EnumeratorZeroAllocation。</summary>
+    private static volatile int s_enumeratedSink;
+
     private static long MeasureAllocation(Action action)
     {
         // 预热
@@ -32,6 +36,20 @@ public sealed class AllocationContractTests
         for (var i = 0; i < Iterations; i++)
             action();
         return GC.GetAllocatedBytesForCurrentThread() - baseline;
+    }
+
+    /// <summary>仪器自证（全仓扫描修复）：<see cref="MeasureAllocation"/> 是本文件**所有**断言的
+    /// 唯一裁判，却从未被验证过——若它因任何原因恒返回 0（运行时/GC 模式不符、计数器被重置、
+    /// 动作被搬到别的线程），下面每一条"零分配"断言都会变成**恒真**，整个套件在真实回归上仍全绿。
+    /// 本用例要求它对"必然分配"的动作给出非零且量级正确的读数——仪器能测出坏输入，其读数才可信。</summary>
+    [Test]
+    public async Task MeasureAllocation_PositiveControl_ReportsNonZero()
+    {
+        var alloc = MeasureAllocation(static () => _ = new byte[64]);
+
+        await Assert.That(alloc > 0).IsTrue();
+        // 量级校验：64B × Iterations 的下界（防把"读到一个极小噪声值"误当成通过）
+        await Assert.That(alloc >= 32L * Iterations).IsTrue();
     }
 
     [Test]
@@ -65,8 +83,18 @@ public sealed class AllocationContractTests
 
         var alloc = MeasureAllocation(() =>
         {
-            foreach (var _ in entity.DomainEvents()) { }
+            var seen = 0;
+            foreach (var _ in entity.DomainEvents())
+                seen++;
+            s_enumeratedSink = seen;
         });
+
+        // 仪器自证（全仓扫描修复）：原循环体为空（`{ }`），没有可观测效果——而
+        // DomainEventEnumerable/枚举器正是易被内联的 ref struct 形态，JIT 有权把整段遍历
+        // 消除，于是 `alloc <= 100` 在**从未真正遍历**的情况下也恒真（核心契约形同未测）。
+        // 现改为：循环体计数并经静态观测点写出，再由本断言读回——遍历结果成为可观测值，
+        // 消除路径被切断，且"确实遍历了全部 100 个事件"被显式证明。
+        await Assert.That(s_enumeratedSink).IsEqualTo(100);
 
         // ref struct 枚举器零分配 — 允许微量 GC 噪声（< 100B 总计）
         await Assert.That(alloc <= 100).IsTrue();
