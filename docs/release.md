@@ -433,7 +433,7 @@ dotnet build   # 应成功，无警告
 | 失败 step | 补救 |
 |----------|------|
 | Build/Test 失败 | 修复代码 → 重新合并到 main → 重打 tag（见 8.3） |
-| AOT publish 失败 | 检查 AOT 核心层是否引入反射（PDDD-G8 + gate-check.sh） |
+| AOT publish 失败 | 检查 AOT 核心层是否引入反射（PDDD-G8 + gate.cs） |
 | Pack 失败 | 检查 csproj 改动是否破坏 pack → 修复 → 重打 tag |
 | Push 部分失败 | `--skip-duplicate` 会自动跳过已 push 的包；workflow_dispatch 重发即可 |
 | GitHub Release 创建失败 | 手动在 https://github.com/yuebo119/PalDDD/releases/new 创建 |
@@ -648,7 +648,7 @@ git commit -m "功能：xxx + 升版本 preview.2"
 ```
 常态（Phase 0）          发布启动（Phase 1-5，一次性）           发布（Phase 6）      事后（Phase 7）
 行为变更合入 dev    →    P1 事实收集 → P2 事实核验 → P3 起草  →   P5 转正 → P6 tag   →   P7 事后同步
-[Unreleased] 即时累积    （changelog-facts.sh） （逐条锚点）  （§11.4 模板）  （check+三件套同次提交）  （workflow 生成 Release body）
+[Unreleased] 即时累积    （changelog-facts.cs） （逐条锚点）  （§11.4 模板）  （check+三件套同次提交）  （workflow 生成 Release body）
 ```
 
 ### 12.1 Phase 0——常态累积（行为变更合入 dev 时）
@@ -690,7 +690,7 @@ dotnet run scripts/changelog-check.cs    # FAIL=阻断（回 Phase 3）；WARN=�
 
 ### 12.6 Phase 5——转正（与版本三件套同次提交，先于 tag）
 
-`[Unreleased]` 改题 `[X.Y.Z] — 日期` + 顶部新增空 `[Unreleased]` + 头部"当前版本/发布状态"更新，**与 `Directory.Build.props`/README badge 同一次提交**（§11.3 规则 5）。转正后 `changelog-check.sh` 必须 0 FAIL。
+`[Unreleased]` 改题 `[X.Y.Z] — 日期` + 顶部新增空 `[Unreleased]` + 头部"当前版本/发布状态"更新，**与 `Directory.Build.props`/README badge 同一次提交**（§11.3 规则 5）。转正后 `changelog-check.cs` 必须 0 FAIL。
 
 ### 12.7 Phase 6/7——发布与事后同步
 

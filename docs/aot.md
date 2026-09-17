@@ -1,7 +1,8 @@
 # AOT 与性能约束
 
 > **方言级 AOT publish 验证状态（v13 落档——三方言包 csproj 注释引用的本声明）**：
-> CI aot-verify 仅覆盖 PalOrmSample（Sqlite 链路）。**MySql/PG 方言包的 AOT publish 未经验证**——
+> CI aot-verify 覆盖 PalOrmSample（Sqlite 链路）与 AotSample（Core/Serialization/Transactions 组合链路）。
+> **MySql/PG 方言包的 AOT publish 未经验证**——
 > 技术上继承 PalORM 核心 AOT 能力（源生成零反射），但方言 provider（MySqlConnector/Npgsql）在
 > Native AOT 下的完整链路（连接/SSL/类型映射）无 CI 保障，生产 AOT 部署请以 Sqlite 验证链为参照
 > 并对方言做本地 publish+run 冒烟。

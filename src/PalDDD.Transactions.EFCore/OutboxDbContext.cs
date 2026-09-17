@@ -368,6 +368,8 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         {
             e.HasKey(x => x.Id);
             e.HasIndex(x => new { x.Status, x.NextAttemptAt, x.CreatedAt });
+            // 租约回读谓词（locked_by + locked_until）覆盖索引——审计 2026-09-17 P-2；对齐 docs/sql/*/000_schema.sql idx_outbox_lease_holder
+            e.HasIndex(x => new { x.LockedBy, x.LockedUntil });
             e.Property(x => x.Id).HasConversion(v => v.ToString(), v => PalUlid.Parse(v));
             e.Property(x => x.CorrelationId).HasConversion(v => v.HasValue ? v.Value.ToString() : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
             e.Property(x => x.CausationId).HasConversion(v => v.HasValue ? v.Value.ToString() : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));

@@ -672,6 +672,7 @@ enum PalDDD.Transactions.CompensationPolicy
   field System.Int32 value__
 class PalDDD.Transactions.DefaultSagaManager
   ctor()
+  property System.Int32 InvalidatedCount
   method System.Threading.Tasks.ValueTask<TChildState> ExecuteChildSagaAsync(PalDDD.Transactions.Saga<TChildState> childSaga, TChildState childState, System.Object triggerEvent, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.SagaState>> GetInterruptedSagasAsync(System.Threading.CancellationToken ct)
   method System.Void InvalidateInterrupted(ByteAether.Ulid.Ulid sagaId)
@@ -813,7 +814,7 @@ class PalDDD.Transactions.OutboxOptions
   property System.TimeSpan PollInterval
   property PalDDD.Transactions.IRetryBackoffPolicy RetryBackoffPolicy
 class PalDDD.Transactions.OutboxProcessor
-  ctor(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.OutboxOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.OutboxProcessor> logger, System.Nullable<System.TimeSpan> pollInterval)
+  ctor(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.OutboxOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.OutboxProcessor> logger, System.Nullable<System.TimeSpan> pollInterval, System.TimeProvider timeProvider)
 enum PalDDD.Transactions.OutboxStatus
   field const PalDDD.Transactions.OutboxStatus Dead = 2
   field const PalDDD.Transactions.OutboxStatus Pending = 0
@@ -855,7 +856,7 @@ class PalDDD.Transactions.SagaProcessorOptions
   property System.TimeSpan PollInterval
   property System.Int32 TimeoutScanBatchSize
 class PalDDD.Transactions.SagaProcessor<TState>
-  ctor(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.SagaProcessorOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.SagaProcessor<TState>> logger, System.Nullable<System.TimeSpan> pollInterval)
+  ctor(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.SagaProcessorOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.SagaProcessor<TState>> logger, System.Nullable<System.TimeSpan> pollInterval, System.TimeProvider timeProvider)
 class PalDDD.Transactions.SagaState
   property System.Nullable<System.DateTimeOffset> CompletedAt
   property System.DateTimeOffset CreatedAt

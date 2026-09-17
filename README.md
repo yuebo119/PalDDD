@@ -461,7 +461,7 @@ builder.Services.AddPalJsonSerialization(catalog =>        // 注册 IMessageSer
     catalog.Add(AppJsonContext.Default.OrderCreated, name: "ordering.order-created.v1");  // wire name 显式稳定
     catalog.Add(AppJsonContext.Default.OrderCancelled, name: "ordering.order-cancelled.v1");
 });
-builder.Services.AddSingleton<IMessageBroker>(new MessageBroker());        // InMemory Broker（无参构造）
+builder.Services.AddSingleton<IMessageBroker>(new NullMessageBroker());   // Null broker（默认丢弃——生产环境替换为 Kafka/RabbitMQ 适配器）
 builder.Services.AddSingleton<IPalOutboxStore, InMemoryOutboxStore>();     // InMemory Outbox 存储
 // 时间抽象：注入 FakeTimeProvider（PalDDD.Testing 共享库）→ 租约过期/重试时序确定性可控
 
@@ -723,7 +723,7 @@ builder.Services.AddSingleton<IMessageBroker>(new KafkaBroker(
 // 发布：OutboxProcessor 持租约消息调 broker.PublishAsync——非泛型路径必须传 messageId
 await broker.PublishAsync(message, descriptor, messageId, ct);
 // Outbox 侧以 OutboxMessage.Id 作 messageId，correlation/causation/trace 元数据随 MessagePublishContext 透传
-// Broker 适配器非 AOT（Confluent.Kafka/RabbitMQ.Client 限制，见 AOT 表）；InMemory MessageBroker 用于测试
+// Broker 适配器非 AOT（Confluent.Kafka/RabbitMQ.Client 限制，见 AOT 表）；测试可注册 NullMessageBroker 或自实现 IMessageBroker
 ```
 
 ---
@@ -787,7 +787,7 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 | PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` 全局继承 |
 | PalDDD.CQRS · EventLog · Messaging · Projections · DI | ✅ | 同上 |
 | **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **真 AOT** | 源生成 RowFactory/CommandFactory，`PublishAot=true` 验证通过（[PalOrmSample](samples/PalDDD.PalOrmSample/)） |
-| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ⚠️ 假象 | Dapper.AOT `[module:DapperAot]` 未启用——运行时走经典反射路径，`<NoWarn>IL3058</NoWarn>` 仅声明层面（详见 [AOT 指南](docs/aot.md) 与 [PalORM 适配层文档](docs/palorm-adapter.md)） |
+| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ 实测 | `[module:DapperAot]` 已启用——34 调用点全量拦截器接管，三方言 NativeAOT 二进制实测 13/13；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持（详见 [AOT 指南](docs/aot.md) 与 [persistence-aot-status.md](docs/persistence-aot-status.md)） |
 | PalDDD.Transactions | ❌ | Saga 反射特例（`IsAotCompatible=false`，见 csproj） |
 | ~~PalDDD.EntityFrameworkCore~~ | ❌ | ~~已废弃~~ |
 | PalDDD.Messaging.Kafka · RabbitMQ | ❌ | Confluent.Kafka / RabbitMQ.Client 限制 |
@@ -832,7 +832,7 @@ src/                         36 源项目 · Clean Architecture（Folder 与 Pal
 ├── Hosting/                 DependencyInjection · Hosting.AspNetCore
 └── Metapackages/            Base · Extension · Prompts（Prompts 非包，IsPackable=false）
 
-test/                        16 测试项目（TUnit）· 1202 项实测（本机 1153 + 49 环境依赖项 CI Testcontainers——PalORM.Tests 与 Messaging.Integration.Tests 需 Docker）
+test/                        16 测试项目（TUnit）· 1379 项实测（本机 1311 + 54 环境依赖项 CI Testcontainers + 14 设计内跳过——PalORM.Tests 与 Messaging.Integration.Tests 需 Docker）
 bench/                       BenchmarkDotNet 性能基准
 samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi · AotSample
 docs/                        架构 · 使用指南 · 教程 · ADR
@@ -854,7 +854,7 @@ flowchart TB
     Transactions --> PalORM["PalORM（真 AOT）"]
     EventLog --> PalORM
     Projections --> PalORM
-    Transactions --> Dapper["Dapper（弃用）"]
+    Transactions --> Dapper["Dapper（能力平等栈）"]
     PalORM --> PG[PostgreSql]
     PalORM --> MySQL
     PalORM --> SQLite
@@ -875,6 +875,7 @@ flowchart TB
 | [测试体系](docs/testing.md) | 测试金字塔、场景矩阵、BenchmarkDotNet 配置 |
 | [发布规范](docs/release.md) | 版本管理、包范围、CHANGELOG 规范与生成流程 |
 | [踩坑目录](docs/pitfalls.md) | 82 条 DDD/AOT/并发实战踩坑 |
+| [开发流程](docs/development.md) | 开发环境、Git 钩子、测试运行 |
 | [架构决策](docs/decisions/) | 22 份 ADR |
 | [变更日志](CHANGELOG.md) | 版本历史（消费者变更 + 工程过程附录） |
 

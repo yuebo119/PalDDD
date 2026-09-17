@@ -35,6 +35,15 @@ public sealed class DefaultSagaManager : ISagaManager
     /// <summary>已失效（超时补偿回滚）的 sagaId 集合——拒绝幽灵条目再注册（v27 P2）</summary>
     private readonly ConcurrentDictionary<PalUlid, byte> _invalidated = [];
 
+    /// <summary>
+    /// 已失效（超时补偿回滚）的 sagaId 数量——诊断/测试用（M3-4）。
+    /// <para>
+    /// TTL 清理推迟：本集合只增不减（幂等防御所需，见 <see cref="InvalidateInterrupted"/>），
+    /// 进程生命周期内单调递增。需要有界失效集请在外部实现带 TTL 的包装。
+    /// </para>
+    /// </summary>
+    public int InvalidatedCount => _invalidated.Count;
+
     /// <inheritdoc/>
     /// <remarks>
     /// 默认实现：以决策为事件重新派发到中断时的 Saga 执行管线

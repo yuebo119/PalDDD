@@ -23,6 +23,8 @@ CREATE TABLE outbox_messages (
 );
 CREATE INDEX idx_outbox_status ON outbox_messages(status, next_attempt_at, locked_until);
 CREATE INDEX idx_outbox_created ON outbox_messages(created_at);
+-- 租约回读谓词（locked_by + locked_until）覆盖索引——审计 2026-09-17 P-2
+CREATE INDEX idx_outbox_lease_holder ON outbox_messages(locked_by, locked_until);
 
 CREATE TABLE inbox_messages (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,

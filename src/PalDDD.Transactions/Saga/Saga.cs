@@ -135,9 +135,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
     /// failures 与 AggregateException 均不再到达调用方）。降级为默认 1s（对齐 RetryDelay
     /// 默认 FixedBackoffPolicy(1s) 语义），保证重试循环按原始异常路径继续。
     /// </summary>
-    /// <remarks>Saga 上下文无 IPalLogger（v29 OutboxBatchProcessor 形态的 Warning 分支不可用）——
-    /// 静默降级 + 注释声明可观测性取舍：策略配置错误由后续步骤异常的稳定复现暴露，
-    /// 不叠加新的异常源。</remarks>
+    /// <remarks>M3-5：降级时调用 <see cref="OnRetryDelayComputationFailed"/> 钩子——默认无操作，
+    /// 派生类可重写以接入日志/指标（可观测性扩展点，不改变降级语义）。</remarks>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types",
         Justification = "v30 P3：自定义退避策略的任意计算异常降级为 1s 默认延迟（镜像 v29 OutboxBatchProcessor 同款）——策略故障不得替换/吞掉原始步骤异常。")]
     private TimeSpan ComputeRetryDelaySafely(int attempt)
@@ -146,11 +145,24 @@ public abstract class Saga<TState> where TState : SagaState, new()
         {
             return RetryBackoffPolicy.ComputeDelay(attempt);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            OnRetryDelayComputationFailed(ex);
             return TimeSpan.FromSeconds(1);
         }
     }
+
+    /// <summary>
+    /// 重试延迟计算失败的可观测性钩子——默认无操作（no-op）。M3-5。
+    /// <para>
+    /// <see cref="ComputeRetryDelaySafely"/> 在自定义 <see cref="RetryBackoffPolicy"/> 抛异常时
+    /// 调用本方法，然后降级为 1s 默认延迟。派生类可重写以记录日志/指标；
+    /// <see cref="DefaultSagaManager"/> 或观察者体系可在后续版本接入。
+    /// 重写方法不应抛出异常（会替换原始步骤异常路径）。
+    /// </para>
+    /// </summary>
+    /// <param name="ex">策略计算抛出的异常</param>
+    protected virtual void OnRetryDelayComputationFailed(Exception ex) { }
 
     /// <summary>获取所有已注册的步骤（按注册顺序）</summary>
     protected IReadOnlyList<(string Key, SagaStep Step)> Steps => _stepsInOrder;
