@@ -10,6 +10,10 @@ env:
   DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
 
+# 默认最小权限——各 job 未声明 permissions 时继承此块；upload-artifact 仅需 contents:read
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest

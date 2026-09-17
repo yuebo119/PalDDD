@@ -29,6 +29,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using PalDDD.Transactions;
 using PalDDD.Idempotency;
+using PalDDD.EventLog;
+using PalDDD.Projections;
+using PalDDD.Core.Repository;
 using System.Data.Common;
 
 namespace PalDDD.Dapper;
@@ -110,6 +113,12 @@ public static class DapperServiceCollectionExtensions
 
         // ISagaStateStore<TState> 是开放泛型 — 运行时由 DI 自动关闭
         services.AddScoped(typeof(ISagaStateStore<>), typeof(DapperSagaStateStore<>));
+
+        // 审计 2026-09-17 A-3：补齐与 PalORM 对称的 store 注册面
+        // DapperEventLog / DapperProjectionCheckpointStore / DapperUnitOfWork 此前缺少 DI 路径
+        services.AddScoped<IEventLog, DapperEventLog>();
+        services.AddScoped<IProjectionCheckpointStore, DapperProjectionCheckpointStore>();
+        services.AddScoped<IUnitOfWork, DapperUnitOfWork>();
 
         return services;
     }

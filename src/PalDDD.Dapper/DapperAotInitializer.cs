@@ -12,14 +12,15 @@
 //   ｜   ❌ CommandDefinition 拼写照 DAP057 拒绝不生成拦截器；
 //   ｜   ❌ 带匿名参数的 CommandDefinition 在 NativeAOT 下 PlatformNotSupportedException
 //   ｜      （经典路径参数绑定走 Reflection.Emit，AOT 禁用——"AOT 假象"的运行时根因）。
-//   ｜ 唯一真实启用障碍：ct 只能经 CommandDefinition 传递（直接重载无 ct 参数，CS1739 实证），
-//   ｜   拦截器只支持直接重载——二者互斥。2026-09-13 用户裁决："铺垫不动"（ct 保留，AOT
-//   ｜   需求由 PalORM 栈承担），本文件即铺垫完成态。
-//   ｜ 启用动作清单（未来若重启）：① [module: DapperAot] 启用 ② 全部调用点 CommandDefinition
+//   ｜ 历史障碍（已解除）：ct 只能经 CommandDefinition 传递（直接重载无 ct 参数，CS1739 实证），
+//   ｜   拦截器只支持直接重载——二者互斥。2026-09-13 用户裁决："铺垫不动"；后经实验分支
+//   ｜   （experiment/dapper-aot-full）全量改造，实验分支状态已成为主线当前状态。
+//   ｜ 当前状态（line 33）：[module:DapperAot] 已启用——34 调用点已全部改直接重载（ct 收缩
+//   ｜   为显式接受），声明式 TypeHandler 接管，运行时注册退役。
+//   ｜ 启用动作清单（已完成）：① [module: DapperAot] 启用 ② 全部调用点 CommandDefinition
 //   ｜   → 直接重载（SQL 执行层 ct 收缩，连接超时兜底）③ 删下方运行时注册（声明式接管）
 //   ｜   ④ csproj 移除 NoWarn 的 DAP005 ⑤ NativeAOT 发布实测。
-//   ｜ 双轨现状（探针实证）：未启用 DapperAot 时声明式特性不被消费（无效无害），运行时
-//   ｜   注册是经典路径的必要注册；启用后生成代码改走声明式，运行时注册变冗余可删。
+//   ｜ 双轨现状：启用 DapperAot 后声明式特性被消费（生成代码据此绑定），运行时注册变冗余可删。
 // ═══════════════════════════════════════════════════════════════
 
 using System.Runtime.CompilerServices;

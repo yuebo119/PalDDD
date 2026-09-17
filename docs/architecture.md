@@ -2,7 +2,7 @@
 
 Pal.DDD 采用小型、显式、AOT 友好的 Clean Architecture 分层架构。
 
-> 🤖 **AI 质量防线**：`.ai/` 目录内嵌统一质量体系 v2.1（姊妹防线/传感器台账/编码门禁/修复编排/flaky 检测），详见 `.ai/README.md`。36 个源项目按依赖方向从 Core 到 Infrastructure/Adapters 逐层排列（分层图见 conventions §4.2，含 Infra-PalORM 第三栈）。项目不是应用框架，而是一组可组合的 DDD/CQRS/消息/事务基础设施库。
+> 🤖 **AI 质量防线**（可选外部系统）：`.ai/` 目录内嵌统一质量体系 v2.1（姊妹防线/传感器台账/编码门禁/修复编排/flaky 检测），详见 `.ai/README.md`。**`.ai/` 是可选外部质量系统，全新 clone 可能不存在该目录——CI 在无 `.ai/` 时自动降级为 gate-lite。** 36 个源项目按依赖方向从 Core 到 Infrastructure/Adapters 逐层排列（分层图见 conventions §4.2，含 Infra-PalORM 第三栈）。项目不是应用框架，而是一组可组合的 DDD/CQRS/消息/事务基础设施库。
 
 ## 分层边界
 

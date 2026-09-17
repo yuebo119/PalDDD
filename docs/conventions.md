@@ -822,7 +822,7 @@ dotnet run scripts/verify-conventions.cs
 
 **硬性规则**（违反导致 `dotnet test` 发现零测试或构建冲突）：
 
-1. **禁止引用 `Microsoft.NET.Test.Sdk`** — VSTest 的入口包，与 TUnit 自带的 MTP 冲突。测试项目只引用 `TUnit`（+ 可选 `TUnit.FsCheck`）。覆盖率走 MTP 原生 `--coverage`（见 ci-coverage.sh），不得再引用 coverlet.collector（`--collect` 触发 VSTest 握手 exit 5，已实测弃用）。MTP 运行器 + MSBuild 集成由 TUnit 传递依赖自动引入，无需显式引用。
+1. **禁止引用 `Microsoft.NET.Test.Sdk`** — VSTest 的入口包，与 TUnit 自带的 MTP 冲突。测试项目只引用 `TUnit`（+ 可选 `TUnit.FsCheck`）。覆盖率走 MTP 原生 `--coverage`（见 ci-coverage.cs），不得再引用 coverlet.collector（`--collect` 触发 VSTest 握手 exit 5，已实测弃用）。MTP 运行器 + MSBuild 集成由 TUnit 传递依赖自动引入，无需显式引用。
 2. **`global.json` 必须配 `test.runner=Microsoft.Testing.Platform`** — 这是 .NET 10+ SDK 启用 MTP 原生 `dotnet test` 的官方开关。配好后 `dotnet test` **无需任何额外参数**即可发现并运行测试。本仓库 `global.json` 已配置，勿删除该节点。
 3. **MTP 参数在 `--` 之后** — `dotnet test` 的 `--filter`、`--treenode-filter` 等 MTP 参数需放在 `--` 分隔符后，构建参数在前。
 4. **测试项目属性**（`test/Directory.Build.props` 已条件化设置，勿在单项目重复）：`IsTestProject=true` 时自动启用 `IsTestingPlatformApplication` / `TestingPlatformDotnetTestSupport` / `UseTestingPlatformProtocol`。共享工具库（如 `PalDDD.Testing`，`IsTestProject` 未设）不受影响。
@@ -1027,12 +1027,12 @@ dotnet test <target> 2>&1 | tail -5 > /tmp/baseline.txt; echo "exit=$?" >> /tmp/
 | 依赖方向 | ArchitectureBoundaryTests 项目引用矩阵 | CI |
 | DDD 命名 | StrategicDddAnalyzer PDDD001-015 | 编译期 |
 | 零警告 | TreatWarningsAsErrors | 编译期 |
-| 测试覆盖 | MTP 原生 `--coverage`（Cobertura 合并，阈值见 ci-coverage.cs；CI 接线状态与前置见 docs/test-coverage-baseline.md §门禁阈值） | CI（脚本就绪，接线待阈值校准） |
+| 测试覆盖 | MTP 原生 `--coverage`（Cobertura 合并，阈值 0.70 见 ci-coverage.cs；状态与前置见 docs/test-coverage-baseline.md §门禁阈值） | CI（2026-09-14 接线，阈值 0.70） |
 | 断言强度 | `AssertionStrengthGateTests` 棘轮（MIG-003 下沉自 assertion-strength-check.sh） | CI（PR 时） |
 | 公共 API 快照 | PublicApiSnapshotTests | CI |
 | AI 模板约束 | `.pal/prompts/` 结构——**段数并非统一的「六段」**（2026-09-13 实测：9 个模板段数 5/6/7 不等；7 个为「角色/框架约束/必须遵守/禁止/输出格式」，其中 5 个追加「示例」段；`bounded-context` 以「项目引用指南」替代「输出格式」；`task-intake` 为验收断言门专用结构 7 段。README 自述「v54 勘正：各模板段数不一」） | 人工（机械化候选：按模板分组断言必填段存在） |
 | AI 编码约束 | Trellis spec 注入 + `scripts/verify-conventions.cs` | 会话 + pre-commit |
-| 性能契约 | BenchmarkDotNet `--smoke` 烟测 | CI |
+| 性能契约 | BenchmarkDotNet `--smoke` 烟测 | 本地/人工（未接 CI） |
 | DI 生命周期 | ArchitectureBoundaryTests 配置守护 | CI |
 | 评审纪律 | `scripts/review-snapshot.cs` + `REVIEW_TEMPLATE.md` R0 可信度标注 | 评审时 |
 | 任务清单验证 | `scripts/verify-action-items.cs` 标识符 + build 命令 + 外部合并 grep | 任务清单生成后 |

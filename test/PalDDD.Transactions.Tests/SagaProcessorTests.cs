@@ -35,10 +35,9 @@ public sealed class SagaProcessorTests
     [Test]
     public async Task ExecuteAsync_PollsAtConfiguredInterval(CancellationToken cancellationToken)
     {
-        // P4 修复（九轮验证轮）：真实时钟断言在高载并行下 flaky——250ms 内 50ms 轮询
-        // 理论 4-5 次，高载可能仅 2 次。等待窗口放宽到 400ms 且阈值降为 2。
-        // （轮询周期正确性的最小可区分断言：单次启动不会只轮询 1 次）
+        // 审计 2026-09-17 T-2：原挂钟 400ms 在高载下 flaky——改为 FakeTimeProvider 驱动 tick。
         var store = new CountingSagaStore();
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-17T12:00:00+00:00"));
         var scopeFactory = new SagaStubScopeFactory(BuildTimeoutProcessor(store));
         var options = new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions
         {
@@ -46,11 +45,11 @@ public sealed class SagaProcessorTests
             TimeoutScanBatchSize = 64
         });
         var processor = new SagaProcessor<LifecycleSagaState>(
-            scopeFactory, options, NullPalLogger<SagaProcessor<LifecycleSagaState>>.Instance);
+            scopeFactory, options, NullPalLogger<SagaProcessor<LifecycleSagaState>>.Instance, timeProvider: timeProvider);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await processor.StartAsync(cts.Token);
-        await Task.Delay(400, cancellationToken);
+        await TickUntilAsync(timeProvider, store, minCalls: 2, interval: TimeSpan.FromMilliseconds(50));
         await processor.StopAsync(cancellationToken);
 
         await Assert.That(store.GetActiveCallCount >= 2).IsTrue();
@@ -60,6 +59,7 @@ public sealed class SagaProcessorTests
     public async Task ExecuteAsync_StoreThrows_DoesNotCrashLoop(CancellationToken cancellationToken)
     {
         var store = new ThrowingSagaStore();
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-17T12:00:00+00:00"));
         var scopeFactory = new SagaStubScopeFactory(BuildTimeoutProcessor(store));
         var options = new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions
         {
@@ -67,11 +67,11 @@ public sealed class SagaProcessorTests
             TimeoutScanBatchSize = 64
         });
         var processor = new SagaProcessor<LifecycleSagaState>(
-            scopeFactory, options, NullPalLogger<SagaProcessor<LifecycleSagaState>>.Instance);
+            scopeFactory, options, NullPalLogger<SagaProcessor<LifecycleSagaState>>.Instance, timeProvider: timeProvider);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await processor.StartAsync(cts.Token);
-        await Task.Delay(150, cancellationToken);
+        await TickUntilAsync(timeProvider, store, minCalls: 3, interval: TimeSpan.FromMilliseconds(20));
         await processor.StopAsync(cancellationToken);
 
         await Assert.That(store.GetActiveCallCount >= 3).IsTrue();
@@ -85,6 +85,7 @@ public sealed class SagaProcessorTests
     public async Task ExecuteAsync_TickFailedCallbackThrows_DoesNotCrashLoop(CancellationToken cancellationToken)
     {
         var store = new ThrowingSagaStore();
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-17T12:00:00+00:00"));
         var scopeFactory = new SagaStubScopeFactory(BuildTimeoutProcessor(store));
         var options = new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions
         {
@@ -92,11 +93,11 @@ public sealed class SagaProcessorTests
             TimeoutScanBatchSize = 64
         });
         var processor = new SagaProcessor<LifecycleSagaState>(
-            scopeFactory, options, new ThrowingLogger<SagaProcessor<LifecycleSagaState>>());
+            scopeFactory, options, new ThrowingLogger<SagaProcessor<LifecycleSagaState>>(), timeProvider: timeProvider);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await processor.StartAsync(cts.Token);
-        await Task.Delay(150, cancellationToken);
+        await TickUntilAsync(timeProvider, store, minCalls: 3, interval: TimeSpan.FromMilliseconds(20));
         await processor.StopAsync(cancellationToken);
 
         // 循环存活 ⇒ 轮询计数继续增长（修复前回调异常逃逸，计数停在第 1 次）
@@ -117,6 +118,7 @@ public sealed class SagaProcessorTests
     public async Task StopAsync_TerminatesWithinReasonableTime(CancellationToken cancellationToken)
     {
         var store = new CountingSagaStore();
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-17T12:00:00+00:00"));
         var scopeFactory = new SagaStubScopeFactory(BuildTimeoutProcessor(store));
         var options = new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions
         {
@@ -124,10 +126,10 @@ public sealed class SagaProcessorTests
             TimeoutScanBatchSize = 64
         });
         var processor = new SagaProcessor<LifecycleSagaState>(
-            scopeFactory, options, NullPalLogger<SagaProcessor<LifecycleSagaState>>.Instance);
+            scopeFactory, options, NullPalLogger<SagaProcessor<LifecycleSagaState>>.Instance, timeProvider: timeProvider);
 
         await processor.StartAsync(cancellationToken);
-        await Task.Delay(100, cancellationToken);
+        await TickUntilAsync(timeProvider, store, minCalls: 1, interval: TimeSpan.FromMilliseconds(50));
 
         using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         var stopTask = processor.StopAsync(stopCts.Token);
@@ -140,6 +142,7 @@ public sealed class SagaProcessorTests
     {
         var store = new CountingSagaStore();
         const int expectedBatchSize = 128;
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-17T12:00:00+00:00"));
         var scopeFactory = new SagaStubScopeFactory(BuildTimeoutProcessor(store,
             new SagaProcessorOptions { TimeoutScanBatchSize = expectedBatchSize }));
         var options = new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions
@@ -148,32 +151,43 @@ public sealed class SagaProcessorTests
             TimeoutScanBatchSize = expectedBatchSize
         });
         var processor = new SagaProcessor<LifecycleSagaState>(
-            scopeFactory, options, NullPalLogger<SagaProcessor<LifecycleSagaState>>.Instance);
+            scopeFactory, options, NullPalLogger<SagaProcessor<LifecycleSagaState>>.Instance, timeProvider: timeProvider);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await processor.StartAsync(cts.Token);
-        await Task.Delay(100, cancellationToken);
+        await TickUntilAsync(timeProvider, store, minCalls: 1, interval: TimeSpan.FromMilliseconds(30));
         await processor.StopAsync(cancellationToken);
 
         await Assert.That(store.LastBatchSize == expectedBatchSize).IsTrue();
     }
 
+    /// <summary>确定性 tick：假时钟驱动间隔，真实等待仅用于调度让步。</summary>
+    private static async Task TickUntilAsync(
+        FakeTimeProvider timeProvider,
+        CountingSagaStoreBase store,
+        int minCalls,
+        TimeSpan interval,
+        int timeoutMs = 3000)
+    {
+        var deadline = Environment.TickCount64 + timeoutMs;
+        while (Volatile.Read(ref store.GetActiveCallCount) < minCalls
+               && Environment.TickCount64 < deadline)
+        {
+            timeProvider.AdvanceNowAndTriggerTimers(interval);
+            await Task.Delay(10);
+        }
+    }
+
     // 测试 stub
 
-    /// <summary>计数 Saga store — 返回空列表，记录调用次数与批大小</summary>
-    private sealed class CountingSagaStore : ISagaStateStore<LifecycleSagaState>
+    private abstract class CountingSagaStoreBase : ISagaStateStore<LifecycleSagaState>
     {
         public int GetActiveCallCount;
         public int LastBatchSize;
 
-        public ValueTask<IReadOnlyList<LifecycleSagaState>> GetActiveSagasAsync(int batchSize, CancellationToken ct)
-        {
-            Interlocked.Increment(ref GetActiveCallCount);
-            LastBatchSize = batchSize;
-            return ValueTask.FromResult<IReadOnlyList<LifecycleSagaState>>([]);
-        }
+        public abstract ValueTask<IReadOnlyList<LifecycleSagaState>> GetActiveSagasAsync(int batchSize, CancellationToken ct);
 
-        public ValueTask<IReadOnlyList<LifecycleSagaState>> LeaseActiveSagasAsync(
+        public virtual ValueTask<IReadOnlyList<LifecycleSagaState>> LeaseActiveSagasAsync(
             string owner,
             TimeSpan leaseDuration,
             int batchSize,
@@ -186,28 +200,25 @@ public sealed class SagaProcessorTests
         public ValueTask<int> SaveChangesAsync(LifecycleSagaState state, CancellationToken ct) => new(0);
     }
 
-    /// <summary>抛异常：Saga store 模拟超时检查失败</summary>
-    private sealed class ThrowingSagaStore : ISagaStateStore<LifecycleSagaState>
+    /// <summary>计数 Saga store — 返回空列表，记录调用次数与批大小</summary>
+    private sealed class CountingSagaStore : CountingSagaStoreBase
     {
-        public int GetActiveCallCount;
+        public override ValueTask<IReadOnlyList<LifecycleSagaState>> GetActiveSagasAsync(int batchSize, CancellationToken ct)
+        {
+            Interlocked.Increment(ref GetActiveCallCount);
+            LastBatchSize = batchSize;
+            return ValueTask.FromResult<IReadOnlyList<LifecycleSagaState>>([]);
+        }
+    }
 
-        public ValueTask<IReadOnlyList<LifecycleSagaState>> GetActiveSagasAsync(int batchSize, CancellationToken ct)
+    /// <summary>抛异常：Saga store 模拟超时检查失败</summary>
+    private sealed class ThrowingSagaStore : CountingSagaStoreBase
+    {
+        public override ValueTask<IReadOnlyList<LifecycleSagaState>> GetActiveSagasAsync(int batchSize, CancellationToken ct)
         {
             Interlocked.Increment(ref GetActiveCallCount);
             throw new InvalidOperationException("store failure");
         }
-
-        public ValueTask<IReadOnlyList<LifecycleSagaState>> LeaseActiveSagasAsync(
-            string owner,
-            TimeSpan leaseDuration,
-            int batchSize,
-            CancellationToken ct)
-            => GetActiveSagasAsync(batchSize, ct);
-
-        public ValueTask<LifecycleSagaState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
-            => ValueTask.FromResult<LifecycleSagaState?>(null);
-
-        public ValueTask<int> SaveChangesAsync(LifecycleSagaState state, CancellationToken ct) => new(0);
     }
 
     /// <summary>自定义 IServiceScopeFactory — 返回固定 SagaTimeoutProcessor 实例</summary>
