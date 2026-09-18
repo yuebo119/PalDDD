@@ -24,6 +24,7 @@
 | B3 | **[Obsolete] 6 处移除**（Core Attributes ×2"框架零消费"、SqlServerOutboxDbContext 等，tech-debt WARN 项） | v3.0（移除计划已在注解内声明） |
 | B4 | **覆盖率门禁阈值重校准** | CI accuracy 触发：coverage job 首跑产出含 Docker 的完整值后按其重校准（47c8c24 声明） |
 | B5 | **54 处 docs 会话相对表述改写**（"上一轮/本次"等） | docs 归档整理时按 NAMING.md §七 对照表执行 |
+| B6 | **ITM-787 ChildSaga 车道测试从零补齐**（ProcessEventAsync 级表征：成功路径 / 重试耗尽补偿 / 补偿再失败嵌套 / 每 attempt 重建 state；含 v35 输入通道 public 化的回归——该区域缺陷曾因零测试掩盖数轮） | decision-2026-09-17 裁决 4.5：立即，与 Saga 表征测试 Phase 0 合并排期但独立立项（骨架重构推迟时测试仍强制做） |
 
 ## C. 上游/外部跟踪
 
@@ -45,10 +46,10 @@
 
 - RequestHash 请求指纹（第 28 轮"先不做"，备忘方案已存 cortex）
 - Kafka Produce 批量回调 / ZLogger 结构化门面（第 28 轮裁决，理由在案）
-- ORM 优化 11 项不做清单（orm-optimization-deep-analysis §五：EFCore Compiled Models / PalORM configureResilience / MySQL 预备语句 / 批量 lease / 序列化等，各有反过度优化理由）
+- ORM 优化 11 项不做清单（orm-optimization-deep-analysis §五：EFCore Compiled Models / PalORM configureResilience / MySQL 预备语句 / ~~批量 lease~~（**2026-09-18 翻案**：decision-2026-09-17 裁决实施 EF SQLite 租约批量化——旧结论针对「削弱 fencing」形态，新方案资格检查语句内重估不削弱，且有 medium 基线 + 比值 ≤2× 验收门槛）/ 序列化等，各有反过度优化理由）
 
 ---
 
-**统计**：待裁决 6 · 排队 5 · 跟踪 3 · 环境 3 · 已裁决不做 3 类。
+**统计**：待裁决 6 · 排队 6（2026-09-18 增 B6/ITM-787）· 跟踪 3 · 环境 3 · 已裁决不做 3 类（其一含 2026-09-18 翻案注记）。
 **最近一轮已闭环**：X1 基准（ITM-674）· 覆盖率门禁接线+glob 缺陷修复（47c8c24+277bc34）·
 退役延后（ADR-020）· 真库三方言 AOT 实测 · Agent 脚本 C# 规则（3b31cc0）。

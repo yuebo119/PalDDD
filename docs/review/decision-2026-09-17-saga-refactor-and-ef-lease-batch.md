@@ -8,9 +8,9 @@
 | 项 | 值 |
 |------|------|
 | 落盘日期 | 2026-09-17 |
-| 评审状态 | 已评审（2026-09-18 人工交叉核对 + 反方角色代理实证评审） |
-| 评审记录 | 反方实证四发现：① 方案 B「`"O"` 文本序比较」**实证为错**——Microsoft.Data.Sqlite 11.0.0-rc.1（本仓 Directory.Packages.props:54 钉扎版）把 DateTimeOffset 列写为空格分隔格式，`"O"` 参数使资格谓词恒真（错租，正确性级非性能级）；可行路径为直传原生 DateTimeOffset 参数。② 基准区间上下界仓内有锚（audit-2026-09-15-full.md:290），系 09-13/09-15 两次运行拼接，且该审计 Ratio 5.04 与其引用数字 24,043.8/2,655=9.06 不自洽，验收基线须先复测。③ §2.2 示例 SQL 缺 `ORDER BY`，与三栈已验证版本（SqlTemplates.cs:157 等）不符。④ §2.4 引 ADR-020 v3.0 排期，但该时间表已在 ADR-020:63 取消。①③④为正文修订项待拍板 |
-| 裁决记录 | 待拍板：§4 五项 + 上表①③④ |
+| 评审状态 | 已裁决（2026-09-18 人工交叉核对 + 反方角色代理实证评审 + 用户整体采纳） |
+| 评审记录 | 反方实证四发现：① 方案 B「`"O"` 文本序比较」**实证为错**——Microsoft.Data.Sqlite 11.0.0-rc.1（本仓 Directory.Packages.props:54 钉扎版）把 DateTimeOffset 列写为空格分隔格式，`"O"` 参数使资格谓词恒真（错租，正确性级非性能级）；主线程已独立复现（原生参数命中正确）。② 基准区间上下界仓内有锚（audit-2026-09-15-full.md:290），系 09-13/09-15 两次运行拼接，且该审计 Ratio 5.04 与其引用数字 24,043.8/2,655=9.06 不自洽，验收基线须先复测。③ §2.2 示例 SQL 缺 `ORDER BY`，与三栈已验证版本（SqlTemplates.cs:157 等）不符。④ §2.4 引 ADR-020 v3.0 排期，但该时间表已在 ADR-020:63 取消。①③④已按裁决修订入正文 |
+| 裁决记录 | 2026-09-18 用户整体采纳六项：①③④ 正文修订（原生参数主路径 shape 2 / 补 ORDER BY / ADR-020 引用修正与结论强化）；4.1 表征测试本轮开做；4.2 接受 raw SQL；4.3 验收 = medium 复测基线 + 比值 ≤2× + <8ms 退出条款；4.4 不引入事务包裹（单语句原子性）；4.5 ChildSaga 开 ITM-787。遗留：ORM 优化旧清单「批量 lease 不做」为本裁决翻案，已在 open-items E 节记录 |
 
 ---
 
@@ -19,7 +19,7 @@
 | 项 | 建议 | 一句话理由 |
 |---|---|---|
 | **Saga 四车道完整重构** | **先表征测试，再抽骨架；禁止整管线重写** | 3/4 车道在 `ProcessEventAsync` 层几乎零覆盖，现在重构是「只 Normal 被证明」的无网高危动作 |
-| **EF SQLite 租约批量化** | **可立即做（非破坏性）+ BDN 前后对比；不必等 v3.0** | N+1 是「修复形态」副作用，不是 SQLite 语义必需；Dapper/PalORM 已在同方言用单语句证明正确性 |
+| **EF SQLite 租约批量化** | **spike 前置后可做（非破坏性）；时间参数直传原生 DateTimeOffset；不必等 v3.0** | N+1 是「修复形态」副作用，不是 SQLite 语义必需；Dapper/PalORM 已在同方言用单语句证明正确性；`"O"` 文本参数路径已实证排除（谓词恒真，见锚点表） |
 
 ---
 
@@ -152,12 +152,13 @@ WHERE id IN (
   WHERE status=0 AND retry_count < @n
     AND (next_attempt_at IS NULL OR next_attempt_at <= @now)
     AND (locked_until IS NULL OR locked_until <= @now)
-  LIMIT @batch)
+  ORDER BY created_at LIMIT @batch)
 ```
 
 - SQLite WAL 单写者，语句原子  
 - 并发租约使子查询谓词对已租行失效 → 影响 0 行  
-- **与 Dapper SQLite / PalORM SQLite / MySQL EF 同构**  
+- **与 Dapper SQLite / PalORM SQLite / MySQL EF 同构**（含 `ORDER BY created_at LIMIT`）  
+- 时间参数**直传原生 DateTimeOffset**：Microsoft.Data.Sqlite 对原生参数的谓词行为正确（2026-09-18 主线程复现实验：past/future 各一行，原生参数命中 1 行、`"O"` 文本参数命中 2 行恒真）  
 - 因此：N+1 是当年正确性修复的**形状选择**，不是方言硬约束  
 
 反驳「批量 lease 风险>收益」旧清单：该结论针对**削弱 fencing**；本方案 **不削弱**，只是把资格检查从 N 条语句收成 1 条。
@@ -166,15 +167,15 @@ WHERE id IN (
 
 | | A. LINQ `Id IN` + 等值守卫 | B. Raw SQL IN-subquery（推荐） | C. SELECT+N 事务包裹 | D. EF 内混用 Dapper |
 |--|--|--|--|--|
-| 正确性 | 未租 `LockedUntil==null` OK；过期租约需按原值分组；ITM-261 禁止 `LockedUntil<=now` 下推 | 与 Dapper/PalORM 同契约；时间用 `"O"` 文本序比较 | 同 CAS，另加批次原子性（改变现有 delay-not-loss 语义） | **否决**（违背 ADR-020 三栈独立） |
+| 正确性 | 未租 `LockedUntil==null` OK；过期租约需按原值分组；ITM-261 禁止 `LockedUntil<=now` 下推 | 与 Dapper/PalORM 同契约；时间参数**直传原生 DateTimeOffset**（`"O"` 文本参数已实证排除——谓词恒真） | 同 CAS，另加批次原子性（改变现有 delay-not-loss 语义） | **否决**（违背 ADR-020 三栈独立） |
 | 往返 | 1–几 + 可能回读 | **1**（RETURNING）或 **2**（UPDATE+readback） | 仍是 N | — |
 | 预期 | 全 null 场景接近 Dapper | Lease 预计 ~5–8 ms（约 2× Dapper） | 远达不到 2.6 ms | — |
-| 风险 | 中（部分竞态返回集） | 中低（抄已验证 SQL；EF1002；参数/ct） | 低风险低收益 | 架构风险 |
+| 风险 | 中（部分竞态返回集） | **中**（正确性级坑已识别且有规避路径，方言层细节须 spike 锁定；EF1002；参数/ct） | 低风险低收益 | 架构风险 |
 
 **推荐 B**，形态优先：
 
-1. `UPDATE … WHERE id IN (SELECT …) RETURNING *`（PalORM 形；需验证 EF `FromSqlRaw` 能否物化 UPDATE…RETURNING）  
-2. 失败则 MySQL EF 形：`ExecuteSqlRaw` + `(LockedBy, LockedUntil)` 回读  
+1. **主路径（shape 2）**：`ExecuteSqlRaw` + `(LockedBy, LockedUntil)` 等值守卫回读（MySQL EF 同款两步形态，ITM-109 姊妹先例）  
+2. 探索项（shape 1）：`UPDATE … WHERE id IN (SELECT …) RETURNING *` 单语句物化——`FromSqlRaw` 能否物化 UPDATE…RETURNING 由 spike 验证，成则省一次往返  
 
 **Fencing 契约不变：** 仍用返回的 `LockedUntil` 走 `FencedTarget`；不改 DDL、不改公共 API。
 
@@ -184,31 +185,32 @@ WHERE id IN (
 |---|---|
 | B1 ITM-672 EF Pooling | 否（池化，非租约批量化） |
 | B2 Outbox 异步化 + fencing 统一 | 否（API/签名窗口） |
-| ADR-020 v3.0 | 否 |
+| ADR-020（v3.0 退役时间表已取消，Dapper 为平等第三栈） | 否 |
 
-**本项未被排期，也不需要等 v3.0**——非破坏性、可进 minor。
+**本项未被排期，也不需要等 v3.0**——非破坏性、可进 minor；且 v3.0 时间表已在 ADR-020 取消，「等窗口」已无对象。
 
 ### 2.5 实验设计（实施门槛）
 
-1. **Spike（可丢弃）**：真实 SQLite 文件库上试 `FromSqlRaw(UPDATE…RETURNING)`；不行则 fallback shape 2  
+1. **Spike（可丢弃，两项）**：① EF 层原生 DateTimeOffset 参数传递形态——provider 层已实证原生参数谓词正确，待证 EF（`ExecuteSqlRaw`/`ExecuteUpdateAsync`）是否原样传递不转字符串；② `FromSqlRaw` 能否物化 UPDATE…RETURNING（shape 1 探索项，成则省一次往返）  
 2. **正确性测试（必过）**  
    - 双 owner 并发租约：交集为空  
    - 过期租约回收  
    - 批中取消：不重复、不丢失（delay 语义保持）  
    - 重租后旧 worker `Mark*` 影响 0 行（fencing）  
    - ITM-109 同 tick 回读边角（姊妹栈已接受）  
-3. **BDN**：同 `Outbox_Lease_Batch100` 作业；目标 **EF/Dapper ≤ 2×**（当前 ~5×）  
+   - 时间列写入偏移一致性（lease 链路恒 `GetUtcNow()` +00:00，验证无外部偏移混入）  
+3. **BDN 验收（三段式，2026-09-18 裁决）**：① before 锚 = 实施首步 `--job medium` 跑 `Outbox_Lease_Batch100`（EF/Dapper 同 run）——历史两次 ShortRun 运行差 53%，拼接区间不作基线；② 标准 = 比值 **EF/Dapper ≤ 2×**（比值同 run 环境因子自抵消；百分比改善可被基线选择操纵，弃用）；③ 退出条款 = medium 复测后 EF 基线自身 <8ms 则 N+1 在严谨口径下不显著，重新评估 P-1 严重度后再决定实施  
 4. **P-2 独立**：`QueryEligibleAsync:51-69` 整表分页**不会**被批量化修好，需另案（ITM-261 限制下的内存过滤）  
-5. 语义若要 all-or-nothing，用方案 C 的包裹事务作**单独**变更（会改现有「中途失败=延迟非丢失」声明）
+5. 批次原子性**裁决不引入事务包裹**（2026-09-18）：批量化后整批为单条 UPDATE，SQLite 语句级原子性即 all-or-nothing——「批中第 k 条失败」形态不复存在，原两难自动消解；shape 2 回读窗口由 `(LockedBy, LockedUntil)` 等值守卫过滤（ITM-109 姊妹形态），不混入他实例新租行
 
 ### 2.6 最终裁决
 
 | 问题 | 答案 |
 |---|---|
 | 值得做吗？ | **值得**——热路径 5×，形状已被三栈证明 |
-| 风险高吗？ | **中低**（抄已验证 SQL + 并发/fencing 测试 + BDN）；审计里「高」主要指「无基准就上」 |
-| 必须等 v3.0 吗？ | **不必** |
-| 必须先有基准吗？ | **必须**——没有 before/after 的 5×→2× 无法验收 |
+| 风险高吗？ | **中**（正确性级坑——`"O"` 谓词恒真——已识别且规避路径经实验验证；方言层剩余细节由 spike 锁定 + 并发/fencing 测试 + BDN 三段式验收） |
+| 必须等 v3.0 吗？ | **不必**（v3.0 时间表已取消，无窗口可等） |
+| 必须先有基准吗？ | **必须**——`--job medium` 复测单次自比为唯一合法基线（2026-09-18 裁决），拼接区间不作数 |
 | 与 CAS 正确性冲突吗？ | **不冲突**——资格检查语句内重估，严格对齐 Dapper/PalORM |
 
 ---
@@ -229,11 +231,11 @@ WHERE id IN (
 ```
 并行轨 A（性能）          并行轨 B（可维护性）
 ─────────────────         ─────────────────────
-1. Spike RETURNING        1. FanOut/ChildSaga/Dynamic
-2. 并发+fencing 测试         表征测试
-3. BDN before/after       2. 确认全绿
-4. 合入 minor             3. Option A 从 Normal 起迁
-                          4. 同 PR 禁扩面
+1. medium 复测定基线        1. FanOut/ChildSaga/Dynamic
+2. Spike 参数形态+RETURNING  表征测试（含 ITM-787）
+3. 并发+fencing 测试        2. 确认全绿
+4. BDN 三段式验收          3. Option A 从 Normal 起迁
+5. 合入 minor             4. 同 PR 禁扩面
 ```
 
 **刻意不修 / 推迟：**
@@ -248,13 +250,13 @@ WHERE id IN (
 
 ---
 
-## 4. 开放决策点（需你拍板）
+## 4. 开放决策点（已裁决 2026-09-18）
 
-1. **Saga 表征测试是否本轮立刻开做？**（建议：是——无论骨架何时动，测试本身有独立价值）  
-2. **EF 租约批量化是否接受 raw SQL 逃逸 EF LINQ？**（Dapper/PalORM/MySQL EF 已是先例；若坚持纯 LINQ，只能做方案 A 的受限版）  
-3. **验收是否锁定「Lease ≤ 2× Dapper」？** 还是只要求相对改善 ≥50%？  
-4. **批次原子性（方案 C 事务）要不要？** 会把「中途失败=已租行等过期」改成「整批回滚」——是行为契约变更。  
-5. **ChildSaga 测试 0% 是否单独开 ITM？** 无论是否重构，这是比骨架更尖的正确性空洞。
+1. **Saga 表征测试是否本轮立刻开做？** → **是**。覆盖现状声明经反方评审逐项核实，Phase 0 清单不变；并行轨 A/B 设计维持  
+2. **EF 租约批量化是否接受 raw SQL 逃逸 EF LINQ？** → **接受**。仓内 EF 栈已有先例（MySqlOutboxDbContext 单语句 JOIN-UPDATE）；主路径 shape 2（`ExecuteSqlRaw` + 等值守卫回读），时间参数直传原生 DateTimeOffset  
+3. **验收是否锁定「Lease ≤ 2× Dapper」？** → **锁比值 ≤2×**，且基线 = `--job medium` 复测单次自比（三段式见 §2.5 第 3 条，含 <8ms 退出条款）  
+4. **批次原子性（方案 C 事务）要不要？** → **不要**。批量化后单条 UPDATE 语句级原子即 all-or-nothing，原两难自动消解（见 §2.5 第 5 条）  
+5. **ChildSaga 测试 0% 是否单独开 ITM？** → **是，立即**。已登记 ITM-787（open-items-2026-09-14 B6），与表征测试 Phase 0 合并排期但独立立项——即使骨架重构推迟，测试强制做  
 
 ---
 
@@ -276,7 +278,7 @@ WHERE id IN (
 | 四车道位置 `Saga.cs:408-475/481-559/567-660/796-918`、分派入口 298-320 | Saga.cs:408 | ☒ |
 | Normal 覆盖厚（重试/补偿测试群）；FanOut 仅单元级、ChildSaga 零命中、Dynamic 仅路由拒绝+超时 | SagaTests.cs:286 | ☒ |
 | Dynamic 补偿用 matchedKey、观察者归 stepKey（P3-SRC-603） | Saga.cs:874 | ☒ |
-| 方案 B 时间参数用 `"O"` 文本序比较——**已实证否定**（provider 写空格分隔格式，`"O"` 参数谓词恒真；可行路径：直传原生 DateTimeOffset 参数） | SqlTemplates.cs:140 | ☒ |
+| 原稿方案 B 时间参数用 `"O"` 文本序比较——**已实证否定**（provider 写空格分隔格式，`"O"` 参数谓词恒真；正文已改为直传原生 DateTimeOffset 参数，主线程复现验证） | SqlTemplates.cs:140 | ☒ |
 
 ---
 
