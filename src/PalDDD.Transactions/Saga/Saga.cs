@@ -405,44 +405,52 @@ public abstract class Saga<TState> where TState : SagaState, new()
         }
     }
 
-    private async ValueTask<TState> ExecuteNormalStepAsync(
-        TState current, string stepKey, SagaStep step, object @event,
-        bool wasCompleted, DateTimeOffset startedAt,
-        SagaExecutionObserver? observer, CancellationToken ct)
+    // ═══════════════════════════════════════════════════════════════
+    // 四车道共享重试-补偿骨架（decision-2026-09-17 Option A，2026-09-19 抽取）
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>四车道共享的重试-补偿控制流（Normal/FanOut/ChildSaga/Dynamic 的
+    /// for-attempt 循环与 catch 族唯一实现）。车道差异全部经委托参数化：执行体（attempt）、
+    /// 耗尽文案（exhaustedMessage）、补偿目标（compensateTarget——Dynamic 传路由目标的
+    /// (matchedKey, matchedStep)，其余车道传 (stepKey, step)）。
+    /// <para>
+    /// P3 修复（十七轮）·补偿失败嵌套的唯一权威出处（原四份复制收敛于此）：补偿自身抛出
+    /// 会替换原步骤失败异常向上传播，步骤根因（failures）丢失——catch 后把补偿异常并入
+    /// failures 抛出，外层 AggregateException 同时携带步骤失败与补偿失败（文案后缀
+    /// "and compensation also failed"）。原三份车道内指针注释随本次收敛删除。
+    /// </para>
+    /// <para>
+    /// 观察点边界：SafeObserveStarted 在骨架外（Dynamic 须在 Route/未知 key/ITM-069 检查
+    /// 之后才发射，路由失败不产生 Started 事件）；SafeObserveCompleted 在 attempt 委托内
+    /// （各车道的计时对象与记录键不同——Dynamic 的 Record 用 matchedKey、observe 用 stepKey）；
+    /// SafeObserveFailed 在骨架内（四车道同构 stepKey 归因，含 P3-SRC-603 声明）。
+    /// </para>
+    /// </summary>
+    private async ValueTask<TState> RunRetryLaneAsync(
+        TState current, string stepKey,
+        SagaExecutionObserver? observer,
+        Func<CancellationToken, ValueTask<TState>> attempt,
+        Func<int, string> exhaustedMessage,
+        (string Key, SagaStep Step) compensateTarget,
+        CancellationToken ct)
     {
         List<Exception> failures = [];
-
-        // Emit step started
-        await SafeObserveStartedAsync(observer, current.SagaId, stepKey, ct).ConfigureAwait(false);
-
-        for (int attempt = 0; attempt <= MaxRetries; attempt++)
+        for (int attemptNo = 0; attemptNo <= MaxRetries; attemptNo++)
         {
             try
             {
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                var result = (TState)await step.ExecuteAsync(current, @event, ct).ConfigureAwait(false);
-                sw.Stop();
-
-                if (!wasCompleted && result.Status == SagaStatus.Completed)
-                    PalMetrics.SagaCompleted.Add(1);
-
-                RecordExecutedStep(current, result, stepKey, startedAt);
-
-                // ITM-212：Observer best-effort——Sink 异常不重放业务步骤
-                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct).ConfigureAwait(false);
-
-                return result;
+                return await attempt(ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
                 throw;
             }
-            catch (Exception ex) when (attempt < MaxRetries)
+            catch (Exception ex) when (attemptNo < MaxRetries)
             {
                 // 失败但还有重试次数 — 等待后继续
                 // 使用 Clock（TimeProvider）控制延迟，测试中可注入 FakeTimeProvider 实现确定性重试时序
                 failures.Add(ex);
-                await Task.Delay(ComputeRetryDelaySafely(attempt + 1), Clock, ct).ConfigureAwait(false);
+                await Task.Delay(ComputeRetryDelaySafely(attemptNo + 1), Clock, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -452,26 +460,52 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 // 三十八轮 P3：观察者异常被吞，原始步骤异常 ex 继续传播
                 await SafeObserveFailedAsync(observer, current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
 
-                // P3 修复（十七轮）：补偿自身抛出会替换原步骤失败异常向上传播，步骤根因
-                // （failures）丢失——catch 后把补偿异常并入 failures 抛出，外层
-                // AggregateException 同时携带步骤失败与补偿失败
                 try
                 {
-                    await CompensateExecutedStepsAsync(current, stepKey, step, ct).ConfigureAwait(false);
+                    await CompensateExecutedStepsAsync(current, compensateTarget.Key, compensateTarget.Step, ct).ConfigureAwait(false);
                 }
                 catch (Exception compensationEx) when (compensationEx is not OperationCanceledException)
                 {
                     failures.Add(compensationEx);
                     throw new AggregateException(
-                        $"Saga step '{stepKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}) and compensation also failed. See inner exceptions.",
+                        exhaustedMessage(attemptNo) + " and compensation also failed. See inner exceptions.",
                         failures);
                 }
                 throw new AggregateException(
-                    $"Saga step '{stepKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}). See inner exceptions for each attempt.",
+                    exhaustedMessage(attemptNo) + ". See inner exceptions for each attempt.",
                     failures);
             }
         }
         return current;
+    }
+
+    private async ValueTask<TState> ExecuteNormalStepAsync(
+        TState current, string stepKey, SagaStep step, object @event,
+        bool wasCompleted, DateTimeOffset startedAt,
+        SagaExecutionObserver? observer, CancellationToken ct)
+    {
+        await SafeObserveStartedAsync(observer, current.SagaId, stepKey, ct).ConfigureAwait(false);
+
+        return await RunRetryLaneAsync(current, stepKey, observer,
+            attempt: async token =>
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var result = (TState)await step.ExecuteAsync(current, @event, token).ConfigureAwait(false);
+                sw.Stop();
+
+                if (!wasCompleted && result.Status == SagaStatus.Completed)
+                    PalMetrics.SagaCompleted.Add(1);
+
+                RecordExecutedStep(current, result, stepKey, startedAt);
+
+                // ITM-212：Observer best-effort——Sink 异常不重放业务步骤
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, token).ConfigureAwait(false);
+
+                return result;
+            },
+            exhaustedMessage: attemptNo =>
+                $"Saga step '{stepKey}' failed after {attemptNo + 1} attempts (MaxRetries={MaxRetries})",
+            compensateTarget: (stepKey, step), ct).ConfigureAwait(false);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -487,16 +521,13 @@ public abstract class Saga<TState> where TState : SagaState, new()
             throw new InvalidOperationException(
                 $"Step '{stepKey}' has DispatchKind.FanOut but does not implement IInternalFanOutStep.");
 
-        List<Exception> failures = [];
-
         await SafeObserveStartedAsync(observer, current.SagaId, stepKey, ct).ConfigureAwait(false);
 
-        for (int attempt = 0; attempt <= MaxRetries; attempt++)
-        {
-            try
+        return await RunRetryLaneAsync(current, stepKey, observer,
+            attempt: async token =>
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                var result = await fanOutStep.ExecuteFanOutAsync(current, ct).ConfigureAwait(false);
+                var result = await fanOutStep.ExecuteFanOutAsync(current, token).ConfigureAwait(false);
                 sw.Stop();
 
                 if (!result.AllSucceeded)
@@ -517,45 +548,13 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 RecordExecutedStep(current, current, stepKey, startedAt);
 
-                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct).ConfigureAwait(false);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, token).ConfigureAwait(false);
 
                 return current;
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex) when (attempt < MaxRetries)
-            {
-                failures.Add(ex);
-                await Task.Delay(ComputeRetryDelaySafely(attempt + 1), Clock, ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                failures.Add(ex);
-
-                // 三十八轮 P3：观察者异常被吞，原始步骤异常 ex 继续传播
-                await SafeObserveFailedAsync(observer, current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
-
-                // P3 修复（十七轮）：补偿失败嵌套（见 ExecuteNormalStepAsync 同名修复注释）——
-                // 补偿异常并入 failures 抛出，不吞 FanOut 步骤根因
-                try
-                {
-                    await CompensateExecutedStepsAsync(current, stepKey, step, ct).ConfigureAwait(false);
-                }
-                catch (Exception compensationEx) when (compensationEx is not OperationCanceledException)
-                {
-                    failures.Add(compensationEx);
-                    throw new AggregateException(
-                        $"FanOut step '{stepKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}) and compensation also failed. See inner exceptions.",
-                        failures);
-                }
-                throw new AggregateException(
-                    $"FanOut step '{stepKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}). See inner exceptions.",
-                    failures);
-            }
-        }
-        return current;
+            },
+            exhaustedMessage: attemptNo =>
+                $"FanOut step '{stepKey}' failed after {attemptNo + 1} attempts (MaxRetries={MaxRetries})",
+            compensateTarget: (stepKey, step), ct).ConfigureAwait(false);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -587,15 +586,13 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // 无警告；含 Interrupt 的子 saga 必须显式设 SagaManager（见 InterruptStep 的 HITL 设计注释）。
         var manager = SagaManager ?? new DefaultSagaManager();
 
-        List<Exception> failures = [];
-
         await SafeObserveStartedAsync(observer, current.SagaId, stepKey, ct).ConfigureAwait(false);
 
-        for (int attempt = 0; attempt <= MaxRetries; attempt++)
-        {
-            try
+        return await RunRetryLaneAsync(current, stepKey, observer,
+            attempt: async token =>
             {
-                // Create child state and apply input
+                // 每 attempt 重建 child state（decision §1.4-6 行为锁定：失败重试不复用
+                // 旧实例——CreateChildState 位于循环体内是刻意设计，表征测试在案）
                 var childState = CreateChildState(childStateType);
                 var input = childStep.ExtractInput(current);
 
@@ -603,7 +600,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 var childEvent = new ChildSagaInputEvent(input);
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 var finalChildState = await manager.ExecuteChildSagaNonGenericAsync(
-                    resolved, childState, childEvent, ct).ConfigureAwait(false);
+                    resolved, childState, childEvent, token).ConfigureAwait(false);
                 sw.Stop();
 
                 // Apply child output back to parent
@@ -618,45 +615,13 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 RecordExecutedStep(current, current, stepKey, startedAt);
 
-                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct).ConfigureAwait(false);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, token).ConfigureAwait(false);
 
                 return current;
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex) when (attempt < MaxRetries)
-            {
-                failures.Add(ex);
-                await Task.Delay(ComputeRetryDelaySafely(attempt + 1), Clock, ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                failures.Add(ex);
-
-                // 三十八轮 P3：观察者异常被吞，原始步骤异常 ex 继续传播
-                await SafeObserveFailedAsync(observer, current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
-
-                // P3 修复（十七轮）：补偿失败嵌套（见 ExecuteNormalStepAsync 同名修复注释）——
-                // 补偿异常并入 failures 抛出，不吞 ChildSaga 步骤根因
-                try
-                {
-                    await CompensateExecutedStepsAsync(current, stepKey, step, ct).ConfigureAwait(false);
-                }
-                catch (Exception compensationEx) when (compensationEx is not OperationCanceledException)
-                {
-                    failures.Add(compensationEx);
-                    throw new AggregateException(
-                        $"ChildSaga step '{stepKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}) and compensation also failed. See inner exceptions.",
-                        failures);
-                }
-                throw new AggregateException(
-                    $"ChildSaga step '{stepKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}). See inner exceptions.",
-                    failures);
-            }
-        }
-        return current;
+            },
+            exhaustedMessage: attemptNo =>
+                $"ChildSaga step '{stepKey}' failed after {attemptNo + 1} attempts (MaxRetries={MaxRetries})",
+            compensateTarget: (stepKey, step), ct).ConfigureAwait(false);
     }
 
     /// <summary>通过反射解析子 Saga 编排器（绕过泛型约束——仅用于 AOT 非目标场景）。</summary>
@@ -844,7 +809,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
         {
             // v43 P3：补观测链——SafeObserveStartedAsync（上方）已发射而拒绝路径直接
             // throw 无 OnStepFailed，观察端看到步骤开始后无终态事件（观测链悬空）。
-            // 构造异常先观测后抛出（镜像本方法 catch 内 SafeObserveFailedAsync 形态；
+            // 构造异常先观测后抛出（镜像骨架 catch 内 SafeObserveFailedAsync 形态；
             // stepKey 用 Dynamic 注册键，对齐 P3-SRC-603 归因声明）。
             var dispatchEx = new InvalidOperationException(
                 $"DynamicStep 路由目标 '{matchedKey}' 是 {matchedStep.DispatchKind} 类型步骤，不支持事件路由分发；路由目标必须是普通步骤。");
@@ -859,62 +824,31 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // 移到校验之后：拒绝路径不再污染轨迹；正常路径记录时机不变（仍在执行循环之前）。
         RecordExecutedStep(current, current, stepKey, startedAt);
 
-        List<Exception> failures = [];
-        for (int attempt = 0; attempt <= MaxRetries; attempt++)
-        {
-            try
+        return await RunRetryLaneAsync(current, stepKey, observer,
+            attempt: async token =>
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                var result = (TState)await matchedStep.ExecuteAsync(current, @event, ct).ConfigureAwait(false);
+                var result = (TState)await matchedStep.ExecuteAsync(current, @event, token).ConfigureAwait(false);
                 sw.Stop();
 
                 if (!wasCompleted && result.Status == SagaStatus.Completed)
                     PalMetrics.SagaCompleted.Add(1);
 
+                // P3-SRC-603 的轨迹面：Record 用 matchedKey（实际执行体），
+                // 观察事件用 stepKey（Dynamic 入口归因）——与上方 RecordExecutedStep
+                // 记 stepKey 共同构成双键轨迹（表征测试 Success_RecordsBothKeys 在案）
                 RecordExecutedStep(current, result, matchedKey, startedAt);
 
                 // ITM-212：Observer best-effort——Sink 异常不重放业务步骤
                 // P3-SRC-214：删除冗余 observer null 包裹——SafeObserveCompletedAsync 内部
                 // 已判 null，对齐 Normal/FanOut/ChildSaga 三路径的直调形态
-                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, ct).ConfigureAwait(false);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, token).ConfigureAwait(false);
 
                 return result;
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex) when (attempt < MaxRetries)
-            {
-                failures.Add(ex);
-                await Task.Delay(ComputeRetryDelaySafely(attempt + 1), Clock, ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                failures.Add(ex);
-
-                // 三十八轮 P3：观察者异常被吞，原始步骤异常 ex 继续传播
-                await SafeObserveFailedAsync(observer, current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
-
-                // P3 修复（十七轮）：补偿失败嵌套（见 ExecuteNormalStepAsync 同名修复注释）——
-                // 补偿异常并入 failures 抛出，不吞 Dynamic 路由步骤根因
-                try
-                {
-                    await CompensateExecutedStepsAsync(current, matchedKey, matchedStep, ct).ConfigureAwait(false);
-                }
-                catch (Exception compensationEx) when (compensationEx is not OperationCanceledException)
-                {
-                    failures.Add(compensationEx);
-                    throw new AggregateException(
-                        $"Dynamic step '{stepKey}' routed to '{matchedKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}) and compensation also failed. See inner exceptions.",
-                        failures);
-                }
-                throw new AggregateException(
-                    $"Dynamic step '{stepKey}' routed to '{matchedKey}' failed after {attempt + 1} attempts (MaxRetries={MaxRetries}). See inner exceptions.",
-                    failures);
-            }
-        }
-        return current;
+            },
+            exhaustedMessage: attemptNo =>
+                $"Dynamic step '{stepKey}' routed to '{matchedKey}' failed after {attemptNo + 1} attempts (MaxRetries={MaxRetries})",
+            compensateTarget: (matchedKey, matchedStep), ct).ConfigureAwait(false);
     }
 
     // ═══════════════════════════════════════════════════════════════

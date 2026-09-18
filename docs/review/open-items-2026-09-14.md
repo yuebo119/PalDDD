@@ -19,7 +19,7 @@
 
 | # | 项 | 窗口/触发 |
 |---|-----|----------|
-| B1 | **ITM-672 EFCore Pooling 解锁**（拦截器状态迁 Context 派生字段；基准佐证慢主体在 EF 管道非构造，预期"部分改善"） | v3.0 major 窗口（API 变化） |
+| B1 | **ITM-672 EFCore Pooling 解锁**（拦截器状态迁 Context 派生字段；基准佐证慢主体在 EF 管道非构造，预期"部分改善"） | v3.0 major 窗口（API 变化）。**2026-09-19 优先级提升建议**：Lease 批量化（637e73d）后 Lease 本体已达 Dapper 同量级，EF 栈剩余基准差距的主导项转为重灌/管道成本——本项成为下一步主要杠杆 |
 | B2 | **IPalOutboxStore 异步化 + 跨栈 fencing 契约统一**（吸收 PalORM 同步 DIM 的 GetResult 阻塞） | 同 v3.0 窗口（ADR-020 保留项） |
 | B3 | **[Obsolete] 6 处移除**（Core Attributes ×2"框架零消费"、SqlServerOutboxDbContext 等，tech-debt WARN 项） | v3.0（移除计划已在注解内声明） |
 | B4 | **覆盖率门禁阈值重校准** | CI accuracy 触发：coverage job 首跑产出含 Docker 的完整值后按其重校准（47c8c24 声明） |
@@ -46,7 +46,7 @@
 
 - RequestHash 请求指纹（第 28 轮"先不做"，备忘方案已存 cortex）
 - Kafka Produce 批量回调 / ZLogger 结构化门面（第 28 轮裁决，理由在案）
-- ORM 优化 11 项不做清单（orm-optimization-deep-analysis §五：EFCore Compiled Models / PalORM configureResilience / MySQL 预备语句 / ~~批量 lease~~（**2026-09-18 翻案**：decision-2026-09-17 裁决实施 EF SQLite 租约批量化——旧结论针对「削弱 fencing」形态，新方案资格检查语句内重估不削弱，且有 medium 基线 + 比值 ≤2× 验收门槛）/ 序列化等，各有反过度优化理由）
+- ORM 优化 11 项不做清单（orm-optimization-deep-analysis §五：EFCore Compiled Models / PalORM configureResilience / MySQL 预备语句 / ~~批量 lease~~（**2026-09-18 翻案，2026-09-19 已实施** `637e73d`：decision-2026-09-17 裁决并落地 EF SQLite 租约单语句批量化——旧结论针对「削弱 fencing」形态，新方案资格检查语句内重估不削弱；验收按「Lease 本体达标」改判，详见 decision 锚点表）/ 序列化等，各有反过度优化理由）
 
 ---
 
