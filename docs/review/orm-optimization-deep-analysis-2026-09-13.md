@@ -10,7 +10,7 @@
 
 **可以,但分三个层次**:
 
-1. **已经拿走的**:Dapper 栈本轮拦截器化(JIT 省反射 emit + AOT 全链路)、三栈既有的 ExecuteUpdate/AsNoTracking/COPY 批写/const 模板+MaxAutoPrepare/驱动池化——热路径没有"显然错误"的选择。
+1. **已经拿走的**:Dapper 栈 2026-09-13 轮拦截器化(JIT 省反射 emit + AOT 全链路)、三栈既有的 ExecuteUpdate/AsNoTracking/COPY 批写/const 模板+MaxAutoPrepare/驱动池化——热路径没有"显然错误"的选择。
 2. **还能拿的(有代价)**:一项真机会(EFCore Pooling 解锁)+ 一项上游依赖(Dapper ct 入口)+ 两项 major 窗口项(接口异步化吸收 PalORM 同步阻塞)。共性:**都需要 API 变化或上游动作**,不是本地微调。
 3. **最大的缺口不是优化点,是测量**:三栈至今**没有 BenchmarkDotNet 基准**——本清单所有"微/小/中"量级均为[推断]。充分论证的下一步是先建基准,让后续每笔优化有数字裁判。
 
