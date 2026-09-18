@@ -279,6 +279,7 @@ WHERE id IN (
 | Normal 覆盖厚（重试/补偿测试群）；FanOut 仅单元级、ChildSaga 零命中、Dynamic 仅路由拒绝+超时 | SagaTests.cs:286 | ☒ |
 | Dynamic 补偿用 matchedKey、观察者归 stepKey（P3-SRC-603） | Saga.cs:874 | ☒ |
 | 原稿方案 B 时间参数用 `"O"` 文本序比较——**已实证否定**（provider 写空格分隔格式，`"O"` 参数谓词恒真；正文已改为直传原生 DateTimeOffset 参数，主线程复现验证） | SqlTemplates.cs:140 | ☒ |
+| **before 锚（medium 复测，2026-09-19）**：Dapper 2.919ms / PalORM 2.465ms / EF 13.79ms（MediumRun，15 iter / 2 launch / 10 warmup，EF Error ±1.254ms）——比值 **EF/Dapper = 4.72×**；**退出条款未触发**（EF ≥ 8ms，P-1 有效实施继续）。环境：BDN 0.15.8 InProcessEmit · .NET 11.0.100-rc.1 · Ryzen 9 8945HX（运行 `--persist-medium`） | bench/PalDDD.Benchmarks/Program.cs:34 | ☒ |
 
 ---
 

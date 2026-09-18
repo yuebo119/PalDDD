@@ -24,7 +24,7 @@
 | B3 | **[Obsolete] 6 处移除**（Core Attributes ×2"框架零消费"、SqlServerOutboxDbContext 等，tech-debt WARN 项） | v3.0（移除计划已在注解内声明） |
 | B4 | **覆盖率门禁阈值重校准** | CI accuracy 触发：coverage job 首跑产出含 Docker 的完整值后按其重校准（47c8c24 声明） |
 | B5 | **54 处 docs 会话相对表述改写**（"上一轮/本次"等） | docs 归档整理时按 NAMING.md §七 对照表执行 |
-| B6 | **ITM-787 ChildSaga 车道测试从零补齐**（ProcessEventAsync 级表征：成功路径 / 重试耗尽补偿 / 补偿再失败嵌套 / 每 attempt 重建 state；含 v35 输入通道 public 化的回归——该区域缺陷曾因零测试掩盖数轮） | decision-2026-09-17 裁决 4.5：立即，与 Saga 表征测试 Phase 0 合并排期但独立立项（骨架重构推迟时测试仍强制做） |
+| B6 | **ITM-787 ChildSaga 车道测试从零补齐**（ProcessEventAsync 级表征：成功路径 / 重试耗尽补偿 / 补偿再失败嵌套 / 每 attempt 重建 state；含 v35 输入通道 public 化的回归——该区域缺陷曾因零测试掩盖数轮） | ✅ **已完成**（2026-09-19）：`SagaLaneCharacterizationTests.cs` 三车道 12 用例全绿（FanOut/ChildSaga/Dynamic 各 4），每 attempt 重建 + P3-SRC-603 观察者归因已锁定 |
 
 ## C. 上游/外部跟踪
 
