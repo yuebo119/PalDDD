@@ -367,7 +367,8 @@ public sealed class OutboxSqliteConcurrencyTests
         await using var ctx = new TestSqliteOutboxDbContext(_options);
         await Assert.That(async () =>
             await ((IPalOutboxStore)ctx).LeasePendingMessagesAsync(
-                10, "worker-1", TimeSpan.FromMinutes(2), 5, cts.Token)).ThrowsAny();
+                10, "worker-1", TimeSpan.FromMinutes(2), 5, cts.Token))
+            .Throws<OperationCanceledException>();
 
         await using var reader = new TestSqliteOutboxDbContext(_options);
         var row = await reader.OutboxMessages.SingleAsync(m => m.Id == messageId);
