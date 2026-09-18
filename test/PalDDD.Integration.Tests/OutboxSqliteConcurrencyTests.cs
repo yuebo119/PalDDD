@@ -1,6 +1,8 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using PalDDD.Transactions;
+using System.Data.Common;
 using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Integration.Tests;
@@ -230,6 +232,126 @@ public sealed class OutboxSqliteConcurrencyTests
         await Assert.That(storedText.EndsWith("+00:00", StringComparison.Ordinal)).IsTrue();
     }
 
+    // ── 2026-09-19 GetPending 谓词下推（decision-2026-09-19）前置表征——
+    // 反方发现③：QueryEligibleAsync 的翻页/时间过滤语义此前无 SQLite-EF 生产类
+    // 行为测试（OutboxEfCoreTests 走 InMemory 变体）。以下三用例锁定下推前语义，
+    // 下推后须双态全绿（排序键 Id→CreatedAt 在同进程 ULID 单调下同序）。
+
+    /// <summary>到期取/未来重试不取/活跃租约不取——资格谓词的时间语义。</summary>
+    [Test]
+    public async Task GetPending_ReturnsOnlyEligibleMessages()
+    {
+        var dueId = PalUlid.New();
+        var futureRetryId = PalUlid.New();
+        var activeLeaseId = PalUlid.New();
+        await SeedMessageAsync(dueId, "orders.due");                     // 合格：无租约无重试
+        await SeedMessageAsync(futureRetryId, "orders.future-retry");
+        await SeedMessageAsync(activeLeaseId, "orders.active-lease",
+            lockedBy: "worker-1", lockedUntil: DateTimeOffset.UtcNow.AddMinutes(5));
+
+        // futureRetry 行设未来重试时间 → 不合格
+        await using (var ctx = new TestSqliteOutboxDbContext(_options))
+        {
+            var row = await ctx.OutboxMessages.SingleAsync(m => m.Id == futureRetryId);
+            row.NextAttemptAt = DateTimeOffset.UtcNow.AddMinutes(5);
+            await ctx.SaveChangesAsync();
+        }
+
+        await using var readerCtx = new TestSqliteOutboxDbContext(_options);
+        var pending = await ((IPalOutboxStore)readerCtx).GetPendingMessagesAsync(10, 5, CancellationToken.None);
+
+        var ids = pending.Select(m => m.Id).ToHashSet();
+        await Assert.That(pending).Count().IsEqualTo(1);
+        await Assert.That(ids.Contains(dueId)).IsTrue();
+        await Assert.That(ids.Contains(futureRetryId)).IsFalse();
+        await Assert.That(ids.Contains(activeLeaseId)).IsFalse();
+    }
+
+    /// <summary>batch 上限：3 条合格只返回前 2。</summary>
+    [Test]
+    public async Task GetPending_RespectsBatchLimit()
+    {
+        for (var i = 0; i < 3; i++)
+            await SeedMessageAsync(PalUlid.New(), "orders.batch");
+
+        await using var ctx = new TestSqliteOutboxDbContext(_options);
+        var pending = await ((IPalOutboxStore)ctx).GetPendingMessagesAsync(2, 5, CancellationToken.None);
+
+        await Assert.That(pending).Count().IsEqualTo(2);
+    }
+
+    /// <summary>排序稳定：返回按 Id 升序（现状 ULID 创建序；下推后 CreatedAt 序，
+    /// 同进程两序一致——双态绿即等价性的运行时验证）。</summary>
+    [Test]
+    public async Task GetPending_OrdersByIdAscending_Currently()
+    {
+        var ids = new List<ByteAether.Ulid.Ulid>();
+        for (var i = 0; i < 4; i++)
+        {
+            var id = PalUlid.New();
+            ids.Add(id);
+            await SeedMessageAsync(id, "orders.order");
+        }
+
+        await using var ctx = new TestSqliteOutboxDbContext(_options);
+        var pending = await ((IPalOutboxStore)ctx).GetPendingMessagesAsync(10, 5, CancellationToken.None);
+
+        var returned = pending.Select(m => m.Id).ToList();
+        await Assert.That(returned).Count().IsEqualTo(4);
+        await Assert.That(returned.OrderBy(i => i, Comparer<ByteAether.Ulid.Ulid>.Default)
+            .SequenceEqual(returned)).IsTrue();
+    }
+
+    /// <summary>SQL 次数锁定：下推后 GetPending 恒发 1 条命令（decision-2026-09-19
+    /// 伸缩性验收的结构性形态——原 QueryEligibleAsync 翻页形态为 O(表/batchSize) 条；
+    /// 防回归到逐页物化）。</summary>
+    [Test]
+    public async Task GetPending_SingleSqlCommand_RegardlessOfFutureRows()
+    {
+        var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+        try
+        {
+            var counter = new CommandCountingInterceptor();
+            var options = new DbContextOptionsBuilder<TestSqliteOutboxDbContext>()
+                .UseSqlite(connection)
+                .AddInterceptors(counter)
+                .Options;
+            await using (var db = new TestSqliteOutboxDbContext(options))
+                await db.Database.EnsureCreatedAsync();
+
+            // 全未来重试的表（稳态退避形态）：原翻页形态会逐页扫全表（每页 1 条命令）
+            await using (var seed = new TestSqliteOutboxDbContext(
+                new DbContextOptionsBuilder<TestSqliteOutboxDbContext>().UseSqlite(connection).Options))
+            {
+                for (var i = 0; i < 300; i++)
+                {
+                    seed.OutboxMessages.Add(new OutboxMessage
+                    {
+                        Id = PalUlid.New(),
+                        Type = "orders.future",
+                        Payload = [1],
+                        CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+                        Status = OutboxStatus.Pending,
+                        NextAttemptAt = DateTimeOffset.UtcNow.AddHours(1),
+                    });
+                }
+                await seed.SaveChangesAsync();
+            }
+
+            counter.Reset();
+            await using (var ctx = new TestSqliteOutboxDbContext(options))
+            {
+                var pending = await ((IPalOutboxStore)ctx).GetPendingMessagesAsync(100, 5, CancellationToken.None);
+                await Assert.That(pending).IsEmpty();
+            }
+            await Assert.That(counter.ExecutedCommands).IsEqualTo(1);        }
+        finally
+        {
+            await connection.DisposeAsync();
+        }
+    }
+
     /// <summary>种子一条 Pending 消息；可选预置租约字段（终态写测试聚焦语义的直建租约形态——见类尾 ITM-261 勘正注释）。</summary>
     private async ValueTask SeedMessageAsync(
         PalUlid id,
@@ -261,6 +383,23 @@ public sealed class OutboxSqliteConcurrencyTests
     // SQLite provider 下不可翻译（== 可译、<= 与 ORDER BY 均抛）。src 侧已改为分页物化 + 内存
     // 时间过滤 + OrderBy(Id)（ULID 字典序=创建序）——Lease 互斥测试已恢复直调生产路径（无 Skip）；
     // MarkProcessed/ReleaseForRetry/fencing 回归保留直接种子租约字段形态（终态写仍走生产路径）。
+    /// <summary>SQL 命令计数拦截器（GetPending_SingleSqlCommand 的结构性验收用；
+    /// 只计数读路径——ToListAsync 走 ReaderExecutingAsync，同步重载不会被异步路径调用）。</summary>
+    private sealed class CommandCountingInterceptor : DbCommandInterceptor
+    {
+        private int _count;
+        public int ExecutedCommands => _count;
+        public void Reset() => _count = 0;
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            _count++;
+            return ValueTask.FromResult(result);
+        }
+    }
+
     private sealed class TestSqliteOutboxDbContext(DbContextOptions<TestSqliteOutboxDbContext> options)
         : SqliteOutboxDbContext(options);
 }
