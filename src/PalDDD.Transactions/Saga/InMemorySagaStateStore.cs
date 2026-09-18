@@ -86,11 +86,13 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
             // 原实现原地直写字典条目（调用方与存储共享同一引用）：worker A 租约到期后
             // worker B 重租同一实例，A 的 SaveChangesAsync 无任何校验即可覆盖 B 的活跃
             // 租约（僵尸写回），且"0 行 = 乐观锁冲突"契约路径恒不可达。TState 为抽象用户
-            // 子类无法 new——经 CloneForLease（MemberwiseClone + 集合深拷贝，非反射）产生
-            // 后继实例替换字典条目；Version 递增作为 fencing 代（重租即换代，旧持有者
-            // Version 必然落后，其 SaveChangesAsync 见下方不匹配返回 0）。
-            // M3-3：CloneForLease 已深拷贝 StepStartedAt/ExecutedStepKeys——新旧实例
-            // 不共享可变容器，并发写安全。
+            // 子类无法 new——经 CloneForLease（MemberwiseClone，非反射）产生后继实例替换
+            // 字典条目；Version 递增作为 fencing 代（重租即换代，旧持有者 Version 必然
+            // 落后，其 SaveChangesAsync 见下方不匹配返回 0）。
+            // ⚠️ v26 P3：CloneForLease 为浅拷贝——新旧实例共享 StepStartedAt/ExecutedStepKeys
+            // 容器，并发写安全未保障（僵尸与新持有者并发写集合可抛）；Version fencing
+            // 不受影响（标量隔离）。深隔离需后续破坏性变更，详见 SagaState.CloneForLease remarks
+            //（含 2026-09-19 M3-3 回滚勘正：僵尸执行过的步骤必须能被后继者补偿）。
             var leased = new List<TState>(active.Count);
             foreach (var state in active)
             {
