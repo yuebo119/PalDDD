@@ -53,7 +53,7 @@ class PalDDD.Core.BoundedContextAttribute
   property System.String Name
 struct PalDDD.Core.Deleted
   ctor(System.Boolean Value)
-  property System.Boolean Value
+  property System.Boolean Value [init]
   field static readonly PalDDD.Core.Deleted No
   field static readonly PalDDD.Core.Deleted Yes
   method System.Void Deconstruct(System.Boolean& Value)
@@ -63,7 +63,7 @@ struct PalDDD.Core.Deleted
   method System.String ToString()
 struct PalDDD.Core.DeletedTime
   ctor(System.Nullable<System.DateTimeOffset> Value)
-  property System.Nullable<System.DateTimeOffset> Value
+  property System.Nullable<System.DateTimeOffset> Value [init]
   field static readonly PalDDD.Core.DeletedTime Never
   method System.Void Deconstruct(System.Nullable`1[[System.DateTimeOffset, System.Private.CoreLib, Version=11.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]& Value)
   method System.Boolean Equals(PalDDD.Core.DeletedTime other)
@@ -141,8 +141,8 @@ class PalDDD.Core.GenerateIdAttribute
   property System.Type IdType
 class PalDDD.Core.GenerateMessageAttribute
   ctor()
-  property System.String Name
-  property System.Int32 SchemaVersion
+  property System.String Name [init]
+  property System.Int32 SchemaVersion [init]
 interface PalDDD.Core.IDomainEvent
   property System.String EventName
 interface PalDDD.Core.IPalIdentity<TKey>
@@ -174,8 +174,8 @@ class PalDDD.Core.Logging.NullPalLogger<T>
   method System.Void Warning(System.String message)
 struct PalDDD.Core.PalValidationError
   ctor(System.String PropertyName, System.String Message)
-  property System.String Message
-  property System.String PropertyName
+  property System.String Message [init]
+  property System.String PropertyName [init]
   method System.Void Deconstruct(System.String& PropertyName, System.String& Message)
   method System.Boolean Equals(PalDDD.Core.PalValidationError other)
   method System.Boolean Equals(System.Object obj)
@@ -202,7 +202,7 @@ static class PalDDD.Core.Repository.UnitOfWorkExtensions
   method System.Threading.Tasks.ValueTask ExecuteInTransactionAsync(PalDDD.Core.Repository.IUnitOfWork uow, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> work, System.Threading.CancellationToken ct)
 struct PalDDD.Core.RowVersion
   ctor(System.Int32 Value)
-  property System.Int32 Value
+  property System.Int32 Value [init]
   method System.Void Deconstruct(System.Int32& Value)
   method System.Boolean Equals(PalDDD.Core.RowVersion other)
   method System.Boolean Equals(System.Object obj)
@@ -230,7 +230,7 @@ struct PalDDD.Core.Unit
   method System.String ToString()
 struct PalDDD.Core.UpdateTime
   ctor(System.DateTimeOffset Value)
-  property System.DateTimeOffset Value
+  property System.DateTimeOffset Value [init]
   method System.Void Deconstruct(System.DateTimeOffset& Value)
   method System.Boolean Equals(PalDDD.Core.UpdateTime other)
   method System.Boolean Equals(System.Object obj)
@@ -264,11 +264,11 @@ static class PalDDD.DependencyInjection.ServiceRegistration
 # PalDDD.EventLog
 struct PalDDD.EventLog.AppendEventsResult
   ctor(System.String StreamName, System.Int64 FirstStreamVersion, System.Int64 LastStreamVersion, System.Int64 FirstGlobalPosition, System.Int64 LastGlobalPosition)
-  property System.Int64 FirstGlobalPosition
-  property System.Int64 FirstStreamVersion
-  property System.Int64 LastGlobalPosition
-  property System.Int64 LastStreamVersion
-  property System.String StreamName
+  property System.Int64 FirstGlobalPosition [init]
+  property System.Int64 FirstStreamVersion [init]
+  property System.Int64 LastGlobalPosition [init]
+  property System.Int64 LastStreamVersion [init]
+  property System.String StreamName [init]
   method System.Void Deconstruct(System.String& StreamName, System.Int64& FirstStreamVersion, System.Int64& LastStreamVersion, System.Int64& FirstGlobalPosition, System.Int64& LastGlobalPosition)
   method System.Boolean Equals(PalDDD.EventLog.AppendEventsResult other)
   method System.Boolean Equals(System.Object obj)
@@ -353,8 +353,8 @@ enum PalDDD.Idempotency.IdempotencyExecutionStatus
   field System.Int32 value__
 class PalDDD.Idempotency.IdempotencyExecution<TResult>
   ctor(PalDDD.Idempotency.IdempotencyExecutionStatus Status, TResult Result)
-  property TResult Result
-  property PalDDD.Idempotency.IdempotencyExecutionStatus Status
+  property TResult Result [init]
+  property PalDDD.Idempotency.IdempotencyExecutionStatus Status [init]
   method PalDDD.Idempotency.IdempotencyExecution<TResult> <Clone>$()
   method System.Void Deconstruct(PalDDD.Idempotency.IdempotencyExecutionStatus& Status, TResult& Result)
   method System.Boolean Equals(PalDDD.Idempotency.IdempotencyExecution<TResult> other)
@@ -364,8 +364,8 @@ class PalDDD.Idempotency.IdempotencyExecution<TResult>
 class PalDDD.Idempotency.IdempotencyPolicy
   ctor()
   property PalDDD.Idempotency.IdempotencyPolicy Default
-  property System.TimeSpan ProcessingTimeout
-  property System.TimeSpan Retention
+  property System.TimeSpan ProcessingTimeout [init]
+  property System.TimeSpan Retention [init]
   method PalDDD.Idempotency.IdempotencyPolicy <Clone>$()
   method System.Boolean Equals(PalDDD.Idempotency.IdempotencyPolicy other)
   method System.Boolean Equals(System.Object obj)
@@ -439,11 +439,11 @@ static class PalDDD.Messaging.MessageConsumeContext+HeaderNames
   field const System.String TraceState = tracestate
 struct PalDDD.Messaging.MessagePublishContext
   ctor(System.Nullable<ByteAether.Ulid.Ulid> CorrelationId, System.Nullable<ByteAether.Ulid.Ulid> CausationId, System.String TraceParent, System.String TraceState)
-  property System.Nullable<ByteAether.Ulid.Ulid> CausationId
-  property System.Nullable<ByteAether.Ulid.Ulid> CorrelationId
+  property System.Nullable<ByteAether.Ulid.Ulid> CausationId [init]
+  property System.Nullable<ByteAether.Ulid.Ulid> CorrelationId [init]
   property PalDDD.Messaging.MessagePublishContext Empty
-  property System.String TraceParent
-  property System.String TraceState
+  property System.String TraceParent [init]
+  property System.String TraceState [init]
   method System.Void Deconstruct(System.Nullable`1[[ByteAether.Ulid.Ulid, ByteAether.Ulid, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]& CorrelationId, System.Nullable`1[[ByteAether.Ulid.Ulid, ByteAether.Ulid, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]& CausationId, System.String& TraceParent, System.String& TraceState)
   method System.Boolean Equals(PalDDD.Messaging.MessagePublishContext other)
   method System.Boolean Equals(System.Object obj)
@@ -511,13 +511,13 @@ class PalDDD.Projections.ProjectionRebuilder<TMessage>
   method System.Threading.Tasks.ValueTask<System.Int32> ReplayAsync(System.Threading.CancellationToken ct)
 struct PalDDD.Projections.ReplayAuditMetadata
   ctor(System.String ActorId, System.String Reason, System.Nullable<ByteAether.Ulid.Ulid> CorrelationId, System.Nullable<ByteAether.Ulid.Ulid> CausationId, System.String TraceParent, System.String TraceState)
-  property System.String ActorId
-  property System.Nullable<ByteAether.Ulid.Ulid> CausationId
-  property System.Nullable<ByteAether.Ulid.Ulid> CorrelationId
+  property System.String ActorId [init]
+  property System.Nullable<ByteAether.Ulid.Ulid> CausationId [init]
+  property System.Nullable<ByteAether.Ulid.Ulid> CorrelationId [init]
   property PalDDD.Projections.ReplayAuditMetadata Empty
-  property System.String Reason
-  property System.String TraceParent
-  property System.String TraceState
+  property System.String Reason [init]
+  property System.String TraceParent [init]
+  property System.String TraceState [init]
   method System.Void Deconstruct(System.String& ActorId, System.String& Reason, System.Nullable`1[[ByteAether.Ulid.Ulid, ByteAether.Ulid, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]& CorrelationId, System.Nullable`1[[ByteAether.Ulid.Ulid, ByteAether.Ulid, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]& CausationId, System.String& TraceParent, System.String& TraceState)
   method System.Boolean Equals(PalDDD.Projections.ReplayAuditMetadata other)
   method System.Boolean Equals(System.Object obj)
@@ -686,8 +686,8 @@ class PalDDD.Transactions.ExponentialBackoffPolicy
 struct PalDDD.Transactions.FanOutResult<TResult>
   ctor(System.Collections.Generic.IReadOnlyList<TResult> Completed, System.Collections.Generic.IReadOnlyList<System.ValueTuple<TResult, System.Exception>> Failed)
   property System.Boolean AllSucceeded
-  property System.Collections.Generic.IReadOnlyList<TResult> Completed
-  property System.Collections.Generic.IReadOnlyList<System.ValueTuple<TResult, System.Exception>> Failed
+  property System.Collections.Generic.IReadOnlyList<TResult> Completed [init]
+  property System.Collections.Generic.IReadOnlyList<System.ValueTuple<TResult, System.Exception>> Failed [init]
   method System.Void Deconstruct(IReadOnlyList`1& Completed, IReadOnlyList`1& Failed)
   method System.Boolean Equals(PalDDD.Transactions.FanOutResult<TResult> other)
   method System.Boolean Equals(System.Object obj)
@@ -696,8 +696,8 @@ struct PalDDD.Transactions.FanOutResult<TResult>
 class PalDDD.Transactions.FanOutStep<TItem, TResult>
   ctor(System.String key, System.Func<PalDDD.Transactions.SagaState, System.Collections.Generic.IReadOnlyList<TItem>> selector, System.Func<TItem, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<TResult>> executor, System.Func<PalDDD.Transactions.SagaState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> compensate, System.Nullable<System.TimeSpan> timeout, System.Int32 maxConcurrency)
   property PalDDD.Transactions.StepDispatchKind DispatchKind
-  property System.Int32 MaxConcurrency
-  property System.Nullable<System.TimeSpan> PerItemTimeout
+  property System.Int32 MaxConcurrency [init]
+  property System.Nullable<System.TimeSpan> PerItemTimeout [init]
 class PalDDD.Transactions.FixedBackoffPolicy
   ctor(System.TimeSpan delay)
   method System.TimeSpan ComputeDelay(System.Int32 attempt)
@@ -755,10 +755,10 @@ class PalDDD.Transactions.InMemorySagaStateStore<TState>
 class PalDDD.Transactions.InboxMessage
   ctor()
   property System.Int32 Attempts
-  property System.String ConsumerName
-  property System.Int64 Id
+  property System.String ConsumerName [init]
+  property System.Int64 Id [init]
   property System.String LastError
-  property System.String MessageId
+  property System.String MessageId [init]
   property System.Nullable<System.DateTimeOffset> ProcessedAt
   property System.Nullable<System.DateTimeOffset> ProcessingStartedAt
   property System.DateTimeOffset ReceivedAt
@@ -787,23 +787,23 @@ class PalDDD.Transactions.OutboxBatchProcessor
   method System.Threading.Tasks.ValueTask ProcessBatchAsync(System.Threading.CancellationToken ct)
 class PalDDD.Transactions.OutboxMessage
   ctor()
-  property System.Nullable<ByteAether.Ulid.Ulid> CausationId
-  property System.String ContentType
-  property System.Nullable<ByteAether.Ulid.Ulid> CorrelationId
-  property System.DateTimeOffset CreatedAt
+  property System.Nullable<ByteAether.Ulid.Ulid> CausationId [init]
+  property System.String ContentType [init]
+  property System.Nullable<ByteAether.Ulid.Ulid> CorrelationId [init]
+  property System.DateTimeOffset CreatedAt [init]
   property System.String Error
-  property ByteAether.Ulid.Ulid Id
+  property ByteAether.Ulid.Ulid Id [init]
   property System.String LockedBy
   property System.Nullable<System.DateTimeOffset> LockedUntil
   property System.Nullable<System.DateTimeOffset> NextAttemptAt
-  property System.Byte[] Payload
+  property System.Byte[] Payload [init]
   property System.Nullable<System.DateTimeOffset> ProcessedAt
   property System.Int32 RetryCount
-  property System.Int32 SchemaVersion
+  property System.Int32 SchemaVersion [init]
   property PalDDD.Transactions.OutboxStatus Status
-  property System.String TraceParent
-  property System.String TraceState
-  property System.String Type
+  property System.String TraceParent [init]
+  property System.String TraceState [init]
+  property System.String Type [init]
 class PalDDD.Transactions.OutboxOptions
   ctor()
   property System.Int32 BatchSize
@@ -824,8 +824,8 @@ class PalDDD.Transactions.PeriodicBackgroundProcessor
   method System.Void Dispose()
 struct PalDDD.Transactions.SagaCompensationStarted
   ctor(ByteAether.Ulid.Ulid SagaId, System.String StepKey)
-  property ByteAether.Ulid.Ulid SagaId
-  property System.String StepKey
+  property ByteAether.Ulid.Ulid SagaId [init]
+  property System.String StepKey [init]
   method System.Void Deconstruct(ByteAether.Ulid.Ulid& SagaId, System.String& StepKey)
   method System.Boolean Equals(PalDDD.Transactions.SagaCompensationStarted other)
   method System.Boolean Equals(System.Object obj)
@@ -859,17 +859,17 @@ class PalDDD.Transactions.SagaProcessor<TState>
   ctor(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.SagaProcessorOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.SagaProcessor<TState>> logger, System.Nullable<System.TimeSpan> pollInterval, System.TimeProvider timeProvider)
 class PalDDD.Transactions.SagaState
   property System.Nullable<System.DateTimeOffset> CompletedAt
-  property System.DateTimeOffset CreatedAt
+  property System.DateTimeOffset CreatedAt [init]
   property System.String CurrentState
   property System.String Error
   property System.Nullable<System.DateTimeOffset> ErrorAt
-  property System.Collections.ObjectModel.Collection<System.String> ExecutedStepKeys
+  property System.Collections.ObjectModel.Collection<System.String> ExecutedStepKeys [init]
   property System.String InterruptReason
   property System.String LeasedBy
   property System.Nullable<System.DateTimeOffset> LeasedUntil
-  property ByteAether.Ulid.Ulid SagaId
+  property ByteAether.Ulid.Ulid SagaId [init]
   property PalDDD.Transactions.SagaStatus Status
-  property System.Collections.Generic.Dictionary<System.String, System.DateTimeOffset> StepStartedAt
+  property System.Collections.Generic.Dictionary<System.String, System.DateTimeOffset> StepStartedAt [init]
   property System.Int32 Version
   field const System.String CompensatedStateName = Compensated
   field const System.String CompensationFailedStateName = CompensationFailed
@@ -884,9 +884,9 @@ enum PalDDD.Transactions.SagaStatus
   field System.Int32 value__
 struct PalDDD.Transactions.SagaStatusChanged
   ctor(ByteAether.Ulid.Ulid SagaId, PalDDD.Transactions.SagaStatus OldStatus, PalDDD.Transactions.SagaStatus NewStatus)
-  property PalDDD.Transactions.SagaStatus NewStatus
-  property PalDDD.Transactions.SagaStatus OldStatus
-  property ByteAether.Ulid.Ulid SagaId
+  property PalDDD.Transactions.SagaStatus NewStatus [init]
+  property PalDDD.Transactions.SagaStatus OldStatus [init]
+  property ByteAether.Ulid.Ulid SagaId [init]
   method System.Void Deconstruct(ByteAether.Ulid.Ulid& SagaId, PalDDD.Transactions.SagaStatus& OldStatus, PalDDD.Transactions.SagaStatus& NewStatus)
   method System.Boolean Equals(PalDDD.Transactions.SagaStatusChanged other)
   method System.Boolean Equals(System.Object obj)
@@ -898,12 +898,12 @@ class PalDDD.Transactions.SagaStep
   property PalDDD.Transactions.StepDispatchKind DispatchKind
   property System.Func<PalDDD.Transactions.SagaState, System.Object, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<PalDDD.Transactions.SagaState>> ExecuteAsync
   property System.String Name
-  property System.Nullable<System.TimeSpan> Timeout
+  property System.Nullable<System.TimeSpan> Timeout [init]
 struct PalDDD.Transactions.SagaStepCompleted
   ctor(ByteAether.Ulid.Ulid SagaId, System.String StepKey, System.TimeSpan Duration)
-  property System.TimeSpan Duration
-  property ByteAether.Ulid.Ulid SagaId
-  property System.String StepKey
+  property System.TimeSpan Duration [init]
+  property ByteAether.Ulid.Ulid SagaId [init]
+  property System.String StepKey [init]
   method System.Void Deconstruct(ByteAether.Ulid.Ulid& SagaId, System.String& StepKey, System.TimeSpan& Duration)
   method System.Boolean Equals(PalDDD.Transactions.SagaStepCompleted other)
   method System.Boolean Equals(System.Object obj)
@@ -911,9 +911,9 @@ struct PalDDD.Transactions.SagaStepCompleted
   method System.String ToString()
 struct PalDDD.Transactions.SagaStepFailed
   ctor(ByteAether.Ulid.Ulid SagaId, System.String StepKey, System.String ErrorMessage)
-  property System.String ErrorMessage
-  property ByteAether.Ulid.Ulid SagaId
-  property System.String StepKey
+  property System.String ErrorMessage [init]
+  property ByteAether.Ulid.Ulid SagaId [init]
+  property System.String StepKey [init]
   method System.Void Deconstruct(ByteAether.Ulid.Ulid& SagaId, System.String& StepKey, System.String& ErrorMessage)
   method System.Boolean Equals(PalDDD.Transactions.SagaStepFailed other)
   method System.Boolean Equals(System.Object obj)
@@ -921,8 +921,8 @@ struct PalDDD.Transactions.SagaStepFailed
   method System.String ToString()
 struct PalDDD.Transactions.SagaStepStarted
   ctor(ByteAether.Ulid.Ulid SagaId, System.String StepKey)
-  property ByteAether.Ulid.Ulid SagaId
-  property System.String StepKey
+  property ByteAether.Ulid.Ulid SagaId [init]
+  property System.String StepKey [init]
   method System.Void Deconstruct(ByteAether.Ulid.Ulid& SagaId, System.String& StepKey)
   method System.Boolean Equals(PalDDD.Transactions.SagaStepStarted other)
   method System.Boolean Equals(System.Object obj)
