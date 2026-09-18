@@ -1,5 +1,4 @@
 using PalDDD.Benchmarks;
-using BenchmarkDotNet.Columns;
 using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Diagnosers;
 using BenchmarkDotNet.Filters;

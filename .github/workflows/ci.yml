@@ -50,6 +50,12 @@ jobs:
       - name: Build
         run: dotnet build PalDDD.slnx --no-restore -c Release
 
+      - name: Format verify
+        # 2026-09-19 增（盲区收口）：IDE0005 等格式违规此前只由手工 check-all 拦截
+        # （gate-audit 矩阵中 check-all = TOOL 手工调用），3c887c7 的未用 using 直达
+        # 主干。--verify-no-changes 只校验不改写；须在 Build 之后（需先还原/编译）。
+        run: dotnet format style PalDDD.slnx --verify-no-changes
+
       - name: Test (unit + integration)
         # MTP 手写协议：dotnet test 一次只跑一个测试项目（多项目/--collect 批量触发
         # VSTest 握手 → exit 5，本地已实测复现）；PalDDD.Testing 为支持库非测试项目
