@@ -1,7 +1,7 @@
 # Pal.DDD 综合评审报告 — 十维度 × DDD/Clean Architecture 全景
 
 > 评审编号：REVIEW-2026-09-13-ARCH（原 `REVIEW-COMPREHENSIVE-2026-09-13`；2026-09-13 文件名由 `comprehensive-review-2026-09-13.md` 改为 `review-2026-09-13-architecture.md`，编号同步更名——原名含主观褒义词 `comprehensive` 且类型词不在最前，违 NAMING.md 规则 5 与规则 1）
-> 评审方法：五轮全仓循环（v81-v87）实证数据 + MIG-011/012 脚本化全量审计 + 本轮架构级深读
+> 评审方法：五轮全仓循环（v81-v87）实证数据 + MIG-011/012 脚本化全量审计 + 2026-09-13 arch 轮架构级深读
 > 评审范围：36 src 项目 / 213 文件 / 32,300 行 | 17 test 项目 / 113 文件 / 33,015 行 | 28 C# 工具 | 58 文档 | .ai 质量系统
 > 基线：`dcd2f57`（dev，含 ITM-671 hooks）
 

@@ -19,12 +19,12 @@
 - **issue 草稿**:docs/review/dapper-aot-ct-issue-draft.md
 - **裁决**:跟踪上游;本仓不动。
 
-## ITM-674|X1:三栈持久化基准建立 ✅(本轮完成)
+## ITM-674|X1:三栈持久化基准建立 ✅(2026-09-13 X1 基准轮完成)
 
 - bench/PalDDD.Benchmarks/PersistenceBenchmarks.cs(三栈 × 5 基准)
 - 首批数字:docs/review/bench-baseline-2026-09-13.md
 - 后续纪律:三栈改动跑同口径对比;裁决级决策用 --job medium 复测。
 
-## 附带清偿(本轮)
+## 附带清偿(2026-09-13 X1 基准轮)
 
 - DapperOutboxStore/DapperInboxStore 三处"AOT 拦截未启用"实验后残留注释(见 ab30dd6)。
