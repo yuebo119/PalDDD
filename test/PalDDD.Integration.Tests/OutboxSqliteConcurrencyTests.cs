@@ -352,6 +352,29 @@ public sealed class OutboxSqliteConcurrencyTests
         }
     }
 
+    /// <summary>批中取消：预取消令牌使 Lease 抛取消异常且零行被租——单语句原子性下
+    /// 不存在"部分租约"中间态（decision-2026-09-17 §2.5-2「批中取消不重复不丢失」
+    /// 在批量化形态下的正确性锁定：语句未执行或原子回滚，二选一无中间态）。</summary>
+    [Test]
+    public async Task LeasePending_CanceledBeforeExecution_NoPartialLease()
+    {
+        var messageId = PalUlid.New();
+        await SeedMessageAsync(messageId, "orders.cancel-probe");
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await using var ctx = new TestSqliteOutboxDbContext(_options);
+        await Assert.That(async () =>
+            await ((IPalOutboxStore)ctx).LeasePendingMessagesAsync(
+                10, "worker-1", TimeSpan.FromMinutes(2), 5, cts.Token)).ThrowsAny();
+
+        await using var reader = new TestSqliteOutboxDbContext(_options);
+        var row = await reader.OutboxMessages.SingleAsync(m => m.Id == messageId);
+        await Assert.That(row.LockedBy).IsNull();
+        await Assert.That(row.Status).IsEqualTo(OutboxStatus.Pending); // 未租未丢，下 tick 可再租
+    }
+
     /// <summary>种子一条 Pending 消息；可选预置租约字段（终态写测试聚焦语义的直建租约形态——见类尾 ITM-261 勘正注释）。</summary>
     private async ValueTask SeedMessageAsync(
         PalUlid id,
