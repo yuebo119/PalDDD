@@ -1,5 +1,11 @@
 using PalDDD.Benchmarks;
+using BenchmarkDotNet.Columns;
+using BenchmarkDotNet.Configs;
+using BenchmarkDotNet.Diagnosers;
+using BenchmarkDotNet.Filters;
+using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Running;
+using BenchmarkDotNet.Toolchains.InProcess.Emit;
 using PalDDD.Core;
 using System.Diagnostics;
 
@@ -24,6 +30,24 @@ if (args.Contains("--persist", StringComparer.OrdinalIgnoreCase))
     BenchmarkRunner.Run<DapperPersistenceBenchmarks>();
     BenchmarkRunner.Run<PalOrmPersistenceBenchmarks>();
     BenchmarkRunner.Run<EfCorePersistenceBenchmarks>();
+    return 0;
+}
+
+// decision-2026-09-17 §2.5 验收三段式（2026-09-19 增）：before 锚须 medium 口径
+// 单次自比——历史两次 ShortRun 运行差 53%，拼接区间不作基线。显式 ManualConfig
+// （Job.Medium + InProcess + MemoryDiagnoser + Lease filter），不依赖类 attribute
+// 隐式默认，口径随 BDN artifacts 完整落盘。走 Run<T> 而非 Switcher（同 --persist
+// 理由：Switcher 对全程序集验证 net11 moniker 必崩）。
+if (args.Contains("--persist-medium", StringComparer.OrdinalIgnoreCase))
+{
+    var leaseOnly = ManualConfig.Create(DefaultConfig.Instance)
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddDiagnoser(MemoryDiagnoser.Default)
+        .AddFilter(new NameFilter(name =>
+            name.Contains("Outbox_Lease_Batch100", StringComparison.Ordinal)));
+    BenchmarkRunner.Run<DapperPersistenceBenchmarks>(leaseOnly);
+    BenchmarkRunner.Run<PalOrmPersistenceBenchmarks>(leaseOnly);
+    BenchmarkRunner.Run<EfCorePersistenceBenchmarks>(leaseOnly);
     return 0;
 }
 
