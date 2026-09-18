@@ -21,72 +21,57 @@ namespace PalDDD.Transactions;
 /// <c>(LockedBy, LockedUntil)</c> 等值守卫取回（ITM-109 姊妹先例），不重跑资格子查询。
 /// </para>
 /// <para>
-/// ⚠️ <b>租约谓词的 UTC 前提</b>：时间列 TEXT 文本序比较在偏移一致时等于时间序——
-/// 本栈 lease 链路时间源恒 <c>GetUtcNow()</c>（+00:00）自洽；外部写入非零偏移的
-/// <c>NextAttemptAt</c>/<c>LockedUntil</c> 会破坏文本序（详见 OutboxSqliteConcurrencyTests
-/// 的 LockedUntilUtc 前提锁定测试）。
+/// ⚠️ <b>租约/查询谓词的 UTC 前提</b>：时间列 TEXT 文本序比较在偏移一致时等于时间序——
+/// 本栈 lease 链路时间源恒 <c>GetUtcNow()</c>（+00:00）自洽；<c>NextAttemptAt</c>/
+/// <c>LockedUntil</c> 的时间谓词与 <c>GetPendingMessagesAsync</c> 下推 SQL 的
+/// <c>ORDER BY CreatedAt</c>（2026-09-19 增读的列——CreatedAt 由消息构造方写入，
+/// 默认 GetUtcNow，init 属性可显式传非零偏移）共享该前提；外部写入非零偏移会破坏
+/// 文本序（详见 OutboxSqliteConcurrencyTests 的 LockedUntilUtc 前提锁定测试）。
 /// </para>
 /// </remarks>
 public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDbContext(options)
 {
-    /// <summary>按资格条件分页查询到期消息（GetPending/Lease 共用，恒 AsNoTracking）。
-    /// <para>
-    /// 三十九轮 ITM-261 修复：EF Core 11 preview7 的 SQLite provider 不能翻译 DateTimeOffset 的
-    /// <b>有序</b>比较（<c>&lt;=</c>）——等值比较可翻译（MarkProcessed/FencedTarget 的租约守卫不受影响），
-    /// 因此 <c>NextAttemptAt &lt;= now</c> / <c>LockedUntil &lt;= now</c> 必须物化后内存过滤。
-    /// 分页循环保证"时间过滤先于 Take"：首页全为未来重试/未到期租约时继续翻页直至填满
-    /// batchSize 或耗尽（此前被测试本地重写遮蔽，重写版"SQL Take 后内存过滤"会少取批次）。
-    /// </para>
-    /// <para>
-    /// ⚠️ v26 P3 声明（翻页耗尽）：稳态退避重试下最坏全表分页扫描（页数=表/batchSize）——
-    /// 所有候选行均为未来重试/活跃租约时逐页取完整表（时间过滤在内存，(Status, NextAttemptAt,
-    /// CreatedAt) 索引无法提前裁剪未到期行）；批量退避表膨胀时考虑索引化到期时间列的
-    /// 后续优化（需方言侧支持 DateTimeOffset 有序比较的查询形态，突破 ITM-261 限制方可下推）。
-    /// </para>
-    /// </summary>
-    private async Task<List<OutboxMessage>> QueryEligibleAsync(
-        int batchSize, int maxRetryCount, CancellationToken ct)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v20 C-1
-        // ITM-659 守卫族收口：maxRetryCount 非正守卫（batchSize 守卫姊妹，镜像 PalORM/Dapper/
-        // 基类）——非正值使 RetryCount < maxRetryCount 恒假（RetryCount >= 0），查询静默空
-        // 返回无诊断。2026-09-19 批量化后本方法仅服务 GetPending（Lease 走单语句 SQL 并
-        // 自带同款守卫——LeasePendingMessagesAsync 内），口径同步。
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount);
-        var now = GetUtcNow();
-        var result = new List<OutboxMessage>(batchSize);
-        var skip = 0;
-        while (result.Count < batchSize)
-        {
-            // v26 P3：删除 asNoTracking 死分支——两调用点（GetPending/Lease）均传 true，
-            // false 分支零调用方；恒 AsNoTracking（只读契约 + Lease 的 CAS 候选路径）
-            var page = await OutboxMessages.AsNoTracking()
-                .Where(m => m.Status == OutboxStatus.Pending && m.RetryCount < maxRetryCount)
-                // ITM-261 续：EF SQLite 对 DateTimeOffset 连 ORDER BY 也不支持（"does not support
-                // expressions of type 'DateTimeOffset' in ORDER BY clauses"）——改按 Id 排序：
-                // ULID 的 Crockford Base32 字典序即创建时间序（规范级 sortable guarantee），
-                // 与 CreatedAt 排序语义等价（均为创建序，分页确定性不受影响）。
-                .OrderBy(m => m.Id)
-                .Skip(skip).Take(batchSize)
-                .ToListAsync(ct).ConfigureAwait(false);
-            if (page.Count == 0) break;
-            result.AddRange(page.Where(m =>
-                (m.NextAttemptAt is null || m.NextAttemptAt <= now)
-                && (m.LockedUntil is null || m.LockedUntil <= now)));
-            skip += batchSize;
-        }
-        if (result.Count > batchSize) result.RemoveRange(batchSize, result.Count - batchSize);
-        return result;
-    }
-
     /// <inheritdoc/>
     public override async ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(
         int batchSize,
         int maxRetryCount,
         CancellationToken ct)
+    {
+        // 守卫：随 2026-09-19 谓词下推从 QueryEligibleAsync 移入（override 完全替换基类
+        // virtual，基类守卫对本派生类不可达——ITM-659 形态）；字面量 0 对应
+        // OutboxStatus.Pending（ITM-659：非正 maxRetryCount 使谓词恒假，静默空返回无诊断）
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount);
+
+        var now = GetUtcNow();
+
+        // 谓词下推（decision-2026-09-19，取代原 QueryEligibleAsync 的"整页物化+内存时间
+        // 过滤+翻页填满"形态）：资格谓词与 Lease 单语句的子查询逐字同族，ITM-261（EF LINQ
+        // 不能翻译 DateTimeOffset 有序比较/排序）不适用于手写 SQL；时间参数直传原生
+        // DateTimeOffset（与写入格式自洽——ExecuteSqlAsync 路径 spike 已证，FromSqlRaw
+        // 非组合式物化由 decision-2026-09-19 前置二 spike 验证：SQL 内谓词+ORDER BY+LIMIT
+        // 直接 ToListAsync 可行、实体完整映射）。
+        // 排序键 CreatedAt：对齐 Lease 与三栈 GetPending 先例（Dapper/PalORM/EF-MySQL 均
+        // SQL 内 ORDER BY created_at）；原 Id 序（ULID 创建序）与本序在单进程下一致
+        //（表征测试 GetPending_OrdersByIdAscending 双态绿）。非组合式调用——FromSqlRaw 后
+        // 不再接 Where/OrderBy（组合会触发 ITM-261 翻译），仅 AsNoTracking + ToListAsync。
         // 优化（二十五轮 API 扫描 EF-5）：AsNoTracking——只读契约（接口 doc 保证不进
-        // Mark*+SaveChanges）；违反契约的突变将静默丢失
-        => await QueryEligibleAsync(batchSize, maxRetryCount, ct).ConfigureAwait(false);
+        // Mark*+SaveChanges）；违反契约的突变将静默丢失。
+        // 伸缩性边界（反方发现④，决策文档在案）：OR 谓词下 (Status,NextAttemptAt,CreatedAt)
+        // 索引第三列不保序——SQL 内可能单次全扫+临时 B-tree 排序；本形态消除的是 N 页往返
+        // 与逐页重复物化（O(表·页数)→单语句），非"与表大小无关"。
+        return await OutboxMessages
+            .FromSqlRaw("""
+                SELECT * FROM OutboxMessages
+                WHERE Status = 0 AND RetryCount < {0}
+                  AND (NextAttemptAt IS NULL OR NextAttemptAt <= {1})
+                  AND (LockedUntil IS NULL OR LockedUntil <= {1})
+                ORDER BY CreatedAt
+                LIMIT {2}
+                """, maxRetryCount, now, batchSize)
+            .AsNoTracking()
+            .ToListAsync(ct).ConfigureAwait(false);
+    }
 
     /// <inheritdoc/>
     public override async ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
@@ -116,7 +101,7 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
         var until = now.Add(leaseDuration);
 
         // 单语句批量租约（decision-2026-09-17 裁决 shape 2，2026-09-19 实施）：
-        // 资格谓词在子查询内重估（与 QueryEligibleAsync 的过滤条件同一谓词族），
+        // 资格谓词在子查询内重估（与 GetPendingMessagesAsync 下推 SQL 的谓词同一族），
         // SQLite WAL 单写者串行化 UPDATE——并发租约使谓词对已租行失效，语义与
         // Dapper SQLite / PalORM SQLite 的单语句形态同契约。三点前提均经 2026-09-19
         // spike 验证：① ExecuteSqlInterpolated 的原生 DateTimeOffset 参数与 EF
