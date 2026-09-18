@@ -70,9 +70,7 @@ public abstract class SagaState
     public int Version { get; set; }
 
     /// <summary>各步骤开始执行的时间戳（用于精确超时计算，而非从 Saga 创建时间起算）</summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2227",
-        Justification = "CloneForLease 深拷贝与持久化反序列化均需可替换集合实例；init-only 无法在 MemberwiseClone 后换引用。")]
-    public Dictionary<string, DateTimeOffset> StepStartedAt { get; set; } = [];
+    public Dictionary<string, DateTimeOffset> StepStartedAt { get; init; } = [];
 
     /// <summary>补偿失败或死信时的错误信息 — 非空表示补偿未成功完成</summary>
     public string? Error { get; set; }
@@ -90,31 +88,31 @@ public abstract class SagaState
     /// <see cref="CompensationPolicy.Backward"/> 逆序遍历（最后执行的先回滚）、
     /// <see cref="CompensationPolicy.Forward"/> 正序遍历。v39 P3 勘正声明：补偿按执行序
     /// 而非注册序（注册顺序的 List 供超时检测使用，与本列表无关）</summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2227",
-        Justification = "CloneForLease 深拷贝与持久化反序列化均需可替换集合实例；init-only 无法在 MemberwiseClone 后换引用。")]
-    public Collection<string> ExecutedStepKeys { get; set; } = [];
+    public Collection<string> ExecutedStepKeys { get; init; } = [];
 
     /// <summary>中断原因 — HITL 中断时记录等待人工决策的原因</summary>
     public string? InterruptReason { get; set; }
 
     /// <summary>
-    /// 创建当前状态的租约后继克隆（v25 P3 行为族 B1；M3-3 深拷贝修正）——供
-    /// <see cref="InMemorySagaStateStore{TState}"/> 的 successor 租约替换使用
-    /// （对齐 InMemoryOutboxStore 的 ITM-174 模式）。
+    /// 创建当前状态的成员级浅拷贝（v25 P3 行为族 B1）——供 <see cref="InMemorySagaStateStore{TState}"/>
+    /// 的 successor 租约替换使用（对齐 InMemoryOutboxStore 的 ITM-174 模式）。
     /// <see cref="object.MemberwiseClone"/> 为 CLR 内在方法（非反射，AOT 安全），拷贝全部
-    /// 实例字段（含子类字段）。
+    /// 实例字段（含子类字段）。⚠️ v26 P3 勘正：<see cref="StepStartedAt"/>/<see cref="ExecutedStepKeys"/>
+    /// 为 init-only 属性，浅拷贝后新旧实例共享集合容器——<b>并发写安全未保障</b>（旧持有者僵尸
+    /// 与新持有者并发执行时对共享容器的并发读写可抛，如 Dictionary 枚举中修改）；
+    /// <b>Version fencing 语义不受影响</b>（标量字段 Status/Version/LeasedBy 等已隔离，
+    /// 僵尸的 SaveChangesAsync 因 Version 落后返回 0）；<b>深隔离需后续破坏性变更</b>
+    /// （拷贝容器会改变既有共享语义，须随主版本演进）。当前共享语义下，步骤执行轨迹
+    /// （集合内容）属"事实记录"而非租约保护状态，旧持有者的步骤记录反映到 successor
+    /// 语义可接受（其确实执行过该步骤——该步骤的副作用已发生，补偿必须覆盖它；
+    /// 补偿幂等是 <see cref="SagaStep"/> 的既有契约，重复补偿可容忍，漏补偿无兜底）。
     /// <para>
-    /// M3-3 深拷贝：可变集合容器（<see cref="StepStartedAt"/> / <see cref="ExecutedStepKeys"/>）
-    /// 在克隆时创建新实例并复制内容——租约持有者与后继者不再共享可变状态，并发写安全。
-    /// 标量字段（Status/Version/LeasedBy 等）经 MemberwiseClone 天然隔离。
+    /// 📌 2026-09-19 勘正（M3-3 回滚）：审计 2026-09-17 的 M3-3 曾把本方法改为集合深拷贝
+    /// （并临时把两属性 init→set），但该翻转把失败模式从「并发写可抛（可见，走死信）」
+    /// 换成「僵尸执行的步骤从后继者补偿轨迹中**静默消失**（漏补偿，无兜底）」——
+    /// 未回应 v26 声明的取舍即翻转语义，且未经决策记录。现回滚为 v26 声明的浅拷贝；
+    /// 深隔离若要做，随 v3.0 窗口（ADR-020 契约统一批次）先出 ADR 再动。
     /// </para>
     /// </summary>
-    internal SagaState CloneForLease()
-    {
-        var clone = (SagaState)MemberwiseClone();
-        // 深拷贝可变集合——旧持有者僵尸与新持有者并发写共享容器可抛（Dictionary 枚举中修改等）
-        clone.StepStartedAt = new Dictionary<string, DateTimeOffset>(StepStartedAt);
-        clone.ExecutedStepKeys = new Collection<string>([.. ExecutedStepKeys]);
-        return clone;
-    }
+    internal SagaState CloneForLease() => (SagaState)MemberwiseClone();
 }
