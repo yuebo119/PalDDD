@@ -74,9 +74,12 @@ if any_ends_with ".csproj" "$ACMR" || any_ends_with ".props" "$ACMR" \
 fi
 
 # ── 6. verify-conventions --quick（V5 TODO 扫描 + V8 prompt 模板结构 +
-#       V9 文档命令引用的脚本须存在；仅 .md 在暂存集时触发 ~3s）──
+#       V9 文档命令引用的脚本须存在 + V11 决策文档三必填段与锚点格式；
+#       仅 .md 在暂存集时触发 ~3s）──
 # V9 来源：MIG-011/012 迁移脚本后文档未收口，该断链类已二次回归（见
 # docs/review/rule-placement-audit-2026-09-13.md），故改为机械拦截。
+# V11 来源（2026-09-18）：decision-2026-09-17 实证——基准区间上界引用「审计归档」
+# 无仓内锚、决策文档不在任何评审触发面；模板 docs/review/DECISION_TEMPLATE.md。
 if any_ends_with ".md" "$ACMR"; then
     echo "📘 verify-conventions --quick（.md 在暂存集）…"
     if ! dotnet run scripts/verify-conventions.cs -- --quick 2>&1; then
