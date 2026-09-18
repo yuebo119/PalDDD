@@ -5,9 +5,8 @@
 //   IEventLog → DapperEventLog
 //   IProjectionCheckpointStore → DapperProjectionCheckpointStore
 //   IUnitOfWork → DapperUnitOfWork
-// 使用 SQLite :memory: — 零外部依赖。
+// 使用 SQLite :memory: — 零外部依赖（连接由 DI 扩展按连接串自建，本文件不直接引用 Sqlite 类型）。
 
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using PalDDD.Core.Repository;
 using PalDDD.Dapper;
