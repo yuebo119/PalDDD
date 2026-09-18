@@ -407,6 +407,58 @@ public sealed class OutboxSqliteConcurrencyTests
     // SQLite provider 下不可翻译（== 可译、<= 与 ORDER BY 均抛）。src 侧已改为分页物化 + 内存
     // 时间过滤 + OrderBy(Id)（ULID 字典序=创建序）——Lease 互斥测试已恢复直调生产路径（无 Skip）；
     // MarkProcessed/ReleaseForRetry/fencing 回归保留直接种子租约字段形态（终态写仍走生产路径）。
+    /// <summary>ITM-109 同 tick 回读（姊妹栈已接受语义的运行时锁定，decision-2026-09-17 §2.5-2）：
+    /// 冻结时钟下同 owner 连续两次 Lease 得相同 until——第二次的 (LockedBy, LockedUntil)
+    /// 等值守卫回读把第一批一并带回（守卫不带批次标识，Dapper/PalORM 同款接受形态——
+    /// 调用方不得假设"第二次返回集 = 第二次新租集"）。锁定此行为防止未来无声变更契约。</summary>
+    [Test]
+    public async Task LeasePending_SameTickTwoBatches_SecondReadbackIncludesFirstBatch()
+    {
+        var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync();
+        try
+        {
+            var frozen = DateTimeOffset.UtcNow;
+            var options = new DbContextOptionsBuilder<FrozenClockOutboxDbContext>()
+                .UseSqlite(connection).Options;
+            await using (var db = new FrozenClockOutboxDbContext(options) { FrozenUtc = frozen })
+                await db.Database.EnsureCreatedAsync();
+
+            var ids = Enumerable.Range(0, 4).Select(_ => PalUlid.New()).ToList();
+            await using (var seed = new TestSqliteOutboxDbContext(
+                new DbContextOptionsBuilder<TestSqliteOutboxDbContext>().UseSqlite(connection).Options))
+            {
+                foreach (var id in ids)
+                    seed.OutboxMessages.Add(new OutboxMessage
+                    {
+                        Id = id, Type = "orders.same-tick", Payload = [1],
+                        CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-5), Status = OutboxStatus.Pending,
+                    });
+                await seed.SaveChangesAsync();
+            }
+
+            await using var first = new FrozenClockOutboxDbContext(options) { FrozenUtc = frozen };
+            var firstLeased = await ((IPalOutboxStore)first).LeasePendingMessagesAsync(
+                2, "worker-1", TimeSpan.FromMinutes(2), 5, CancellationToken.None);
+            await Assert.That(firstLeased).Count().IsEqualTo(2);
+
+            // 同 tick 第二次：谓词租到剩余 2 条（UPDATE 影响新行），但回读按同 until
+            // 等值命中全部 4 条——第一批对第二次可见（ITM-109 接受语义）
+            await using var second = new FrozenClockOutboxDbContext(options) { FrozenUtc = frozen };
+            var secondLeased = await ((IPalOutboxStore)second).LeasePendingMessagesAsync(
+                2, "worker-1", TimeSpan.FromMinutes(2), 5, CancellationToken.None);
+
+            await Assert.That(secondLeased).Count().IsEqualTo(4);
+            var firstIds = firstLeased.Select(m => m.Id).ToHashSet();
+            await Assert.That(secondLeased.All(m => firstIds.Contains(m.Id) || ids.Contains(m.Id))).IsTrue();
+            await Assert.That(secondLeased.Select(m => m.Id).ToHashSet().SetEquals(ids)).IsTrue();
+        }
+        finally
+        {
+            await connection.DisposeAsync();
+        }
+    }
+
     /// <summary>SQL 命令计数拦截器（GetPending_SingleSqlCommand 的结构性验收用；
     /// 只计数读路径——ToListAsync 走 ReaderExecutingAsync，同步重载不会被异步路径调用）。</summary>
     private sealed class CommandCountingInterceptor : DbCommandInterceptor
@@ -422,6 +474,15 @@ public sealed class OutboxSqliteConcurrencyTests
             _count++;
             return ValueTask.FromResult(result);
         }
+    }
+
+    /// <summary>冻结时钟 DbContext（ITM-109 同 tick 用例——override 生产虚方法
+    /// GetUtcNow 构造确定性同 until，无需注入 TimeProvider 基建）。</summary>
+    private sealed class FrozenClockOutboxDbContext(DbContextOptions<FrozenClockOutboxDbContext> options)
+        : SqliteOutboxDbContext(options)
+    {
+        public DateTimeOffset FrozenUtc { get; init; }
+        protected override DateTimeOffset GetUtcNow() => FrozenUtc;
     }
 
     private sealed class TestSqliteOutboxDbContext(DbContextOptions<TestSqliteOutboxDbContext> options)
