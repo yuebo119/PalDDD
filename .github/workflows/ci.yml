@@ -51,8 +51,8 @@ jobs:
         run: dotnet build PalDDD.slnx --no-restore -c Release
 
       - name: Format verify
-        # 2026-09-19 增（盲区收口）：IDE0005 等格式违规此前只由手工 check-all 拦截
-        # （gate-audit 矩阵中 check-all = TOOL 手工调用），3c887c7 的未用 using 直达
+        # 2026-09-19 增（盲区收口）：IDE0005 等格式违规此前只由手工全量自检脚本拦截
+        # （gate-audit 矩阵中该脚本 = TOOL 手工调用），3c887c7 的未用 using 直达
         # 主干。--verify-no-changes 只校验不改写；须在 Build 之后（需先还原/编译）。
         run: dotnet format style PalDDD.slnx --verify-no-changes
 
