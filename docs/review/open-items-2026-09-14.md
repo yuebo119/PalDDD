@@ -23,7 +23,7 @@
 | B2 | **IPalOutboxStore 异步化 + 跨栈 fencing 契约统一**（吸收 PalORM 同步 DIM 的 GetResult 阻塞） | 同 v3.0 窗口（ADR-020 保留项） |
 | B3 | **[Obsolete] 6 处移除**（Core Attributes ×2"框架零消费"、SqlServerOutboxDbContext 等，tech-debt WARN 项） | v3.0（移除计划已在注解内声明） |
 | B4 | **覆盖率门禁阈值重校准** | CI accuracy 触发：coverage job 首跑产出含 Docker 的完整值后按其重校准（47c8c24 声明） |
-| B5 | **54 处 docs 会话相对表述改写**（"上一轮/本次"等） | docs 归档整理时按 NAMING.md §七 对照表执行 |
+| B5 | ~~54 处 docs 会话相对表述改写~~（"上一轮/本次"等） | ✅ **已完成**（2026-09-19，`40f7701`）：19 文件约 150 处改写为绝对表述（实测含误报由执行时甄别），NAMING §七对照表执行，mention 类保留 |
 | B6 | **ITM-787 ChildSaga 车道测试从零补齐**（ProcessEventAsync 级表征：成功路径 / 重试耗尽补偿 / 补偿再失败嵌套 / 每 attempt 重建 state；含 v35 输入通道 public 化的回归——该区域缺陷曾因零测试掩盖数轮） | ✅ **已完成**（2026-09-19）：`SagaLaneCharacterizationTests.cs` 三车道 12 用例全绿（FanOut/ChildSaga/Dynamic 各 4），每 attempt 重建 + P3-SRC-603 观察者归因已锁定 |
 
 ## C. 上游/外部跟踪
@@ -50,6 +50,6 @@
 
 ---
 
-**统计**（2026-09-19 复核修正）：待裁决 0（A 节 6 项全部 ✅）· 排队 5（B6/ITM-787 已于 2026-09-19 完成，`4e0a135`）· 跟踪 3 · 环境 3 · 已裁决不做 3 类（其一含翻案并已实施注记，`637e73d`）。
+**统计**（2026-09-19 复核修正）：待裁决 0（A 节 6 项全部 ✅）· 排队 4（B6/ITM-787 ✓、B5 ✓ 均于 2026-09-19 完成；余 B1+B2 同批捆绑 major 窗口、B3 跟随 major、B4 待推送后 CI coverage 数据）· 跟踪 3 · 环境 3 · 已裁决不做 3 类（其一含翻案并已实施注记，`637e73d`）。
 **最近一轮已闭环**：X1 基准（ITM-674）· 覆盖率门禁接线+glob 缺陷修复（47c8c24+277bc34）·
 退役延后（ADR-020）· 真库三方言 AOT 实测 · Agent 脚本 C# 规则（3b31cc0）。
