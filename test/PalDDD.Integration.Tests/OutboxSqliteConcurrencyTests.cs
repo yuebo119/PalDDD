@@ -165,6 +165,71 @@ public sealed class OutboxSqliteConcurrencyTests
         await Assert.That(final.Status).IsEqualTo(OutboxStatus.Pending);
     }
 
+    // ── 2026-09-19 批量化（decision-2026-09-17 shape 2）回归三联 ──
+
+    /// <summary>批量分割：4 条消息两 worker 各租 2——交集为空、合并覆盖全部
+    /// （单语句资格谓词子查询重估的互斥语义，对齐 Dapper/PalORM 同款测试）。</summary>
+    [Test]
+    public async Task LeasePending_BatchSplitAcrossWorkers_NoIntersection()
+    {
+        var ids = Enumerable.Range(0, 4).Select(_ => PalUlid.New()).ToList();
+        foreach (var id in ids)
+            await SeedMessageAsync(id, "orders.created.v1");
+
+        await using var firstCtx = new TestSqliteOutboxDbContext(_options);
+        var firstLeased = await ((IPalOutboxStore)firstCtx).LeasePendingMessagesAsync(
+            2, "worker-1", TimeSpan.FromMinutes(2), 5, CancellationToken.None);
+        await using var secondCtx = new TestSqliteOutboxDbContext(_options);
+        var secondLeased = await ((IPalOutboxStore)secondCtx).LeasePendingMessagesAsync(
+            2, "worker-2", TimeSpan.FromMinutes(2), 5, CancellationToken.None);
+
+        await Assert.That(firstLeased).Count().IsEqualTo(2);
+        await Assert.That(secondLeased).Count().IsEqualTo(2);
+        var firstIds = firstLeased.Select(m => m.Id).ToHashSet();
+        await Assert.That(secondLeased.All(m => !firstIds.Contains(m.Id))).IsTrue();
+        var union = firstLeased.Select(m => m.Id).Concat(secondLeased.Select(m => m.Id)).ToHashSet();
+        await Assert.That(union.SetEquals(ids)).IsTrue();
+    }
+
+    /// <summary>过期租约回收：LockedUntil 已过期的行对新一轮租约可见（谓词
+    /// <c>LockedUntil IS NULL OR LockedUntil &lt;= now</c> 的回收路径）。</summary>
+    [Test]
+    public async Task LeasePending_ExpiredLease_RecoversMessage()
+    {
+        var messageId = PalUlid.New();
+        await SeedMessageAsync(messageId, "orders.created.v1",
+            lockedBy: "worker-dead", lockedUntil: DateTimeOffset.UtcNow.AddMinutes(-1));
+
+        await using var ctx = new TestSqliteOutboxDbContext(_options);
+        var leased = await ((IPalOutboxStore)ctx).LeasePendingMessagesAsync(
+            10, "worker-new", TimeSpan.FromMinutes(2), 5, CancellationToken.None);
+
+        await Assert.That(leased).Count().IsEqualTo(1);
+        await Assert.That(leased[0].Id).IsEqualTo(messageId);
+        await Assert.That(leased[0].LockedBy).IsEqualTo("worker-new"); // 守卫回读带出租约标识
+    }
+
+    /// <summary>UTC 前提锁定：lease 写入的 LockedUntil 存储文本偏移恒 +00:00——
+    /// 时间列文本序比较等于时间序的前提（类头 remarks 的 UTC 前提，机器本地时区
+    /// 为 +08:00 仍须成立，因时间源恒 GetUtcNow）。</summary>
+    [Test]
+    public async Task LeasePending_LockedUntilStoredAsUtc_TextOrderSound()
+    {
+        var messageId = PalUlid.New();
+        await SeedMessageAsync(messageId, "orders.created.v1");
+
+        await using var ctx = new TestSqliteOutboxDbContext(_options);
+        var leased = await ((IPalOutboxStore)ctx).LeasePendingMessagesAsync(
+            10, "worker-1", TimeSpan.FromMinutes(2), 5, CancellationToken.None);
+        await Assert.That(leased).Count().IsEqualTo(1);
+
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT LockedUntil FROM OutboxMessages WHERE Id = $id";
+        cmd.Parameters.AddWithValue("$id", messageId.ToString());
+        var storedText = (string)cmd.ExecuteScalar()!;
+        await Assert.That(storedText.EndsWith("+00:00", StringComparison.Ordinal)).IsTrue();
+    }
+
     /// <summary>种子一条 Pending 消息；可选预置租约字段（终态写测试聚焦语义的直建租约形态——见类尾 ITM-261 勘正注释）。</summary>
     private async ValueTask SeedMessageAsync(
         PalUlid id,

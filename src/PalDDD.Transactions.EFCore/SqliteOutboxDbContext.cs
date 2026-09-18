@@ -4,19 +4,27 @@ namespace PalDDD.Transactions;
 
 /// <summary>SQLite outbox store — single-writer, no lock hints needed (WAL mode).</summary>
 /// <remarks>
-/// <b>租约原子性（评审 P1-3 修复）</b>：SQLite 不支持 <c>FOR UPDATE SKIP LOCKED</c>，
-/// 旧实现"SELECT 跟踪 → 内存改 → SaveChanges"三步分离，两实例可同时读到同一批
-/// Pending 消息并各自写入租约（重复发布）。现改为逐条 CAS 条件更新：
-/// <c>ExecuteUpdateAsync</c> 以 <c>Id + Status==Pending + LockedUntil==原值</c> 为守卫
-/// （等值比较在 EF SQLite 可翻译——ITM-261 实证仅有序比较不可翻译），
-/// SQLite WAL 单写者串行化 UPDATE——后写实例守卫不匹配、影响 0 行、该消息被丢弃，
-/// 与 MySQL/Dapper 栈的 (locked_by, locked_until) 双守卫语义对齐。
+/// <b>租约原子性（评审 P1-3 修复 → 2026-09-19 批量化，decision-2026-09-17）</b>：
+/// SQLite 不支持 <c>FOR UPDATE SKIP LOCKED</c>，历史实现先后经历两代——
+/// ①"SELECT 跟踪 → 内存改 → SaveChanges"三步分离（两实例可重复租约，正确性缺陷）；
+/// ②逐条 CAS 条件更新（<c>ExecuteUpdateAsync</c> 等值守卫，N 次往返的 N+1 形态）。
+/// 现为<b>单语句批量租约</b>：<c>UPDATE … WHERE Id IN (子查询内重估资格谓词) ORDER BY
+/// CreatedAt LIMIT batch</c>，SQLite WAL 单写者串行化 UPDATE，资格谓词对已租行失效即丢弃，
+/// 与 Dapper SQLite / PalORM SQLite / MySQL EF 的单语句形态同契约（ADR-020 三栈姊妹）。
+/// 时间参数直传原生 DateTimeOffset——与 EF SaveChanges 写入格式自洽（2026-09-19 spike
+/// 实证：谓词不恒真、等值守卫回读命中）；<c>"O"</c> 文本参数路径已实证排除（provider 写
+/// 空格分隔格式，"O" 参数使谓词恒真——错租，正确性级）。
 /// <para>
-/// ⚠️ <b>批次语义（二轮评审验证轮披露）</b>：逐条 UPDATE 无显式包围事务——批次第 k 条
-/// 抛异常（如 SQLITE_BUSY）时，已租的 0..k-1 条成为"已租未发布"，异常上抛至后台循环，
-/// 这些消息需等 LeaseDuration 过期后由下一 tick 重租重试（<b>延迟，非丢失/重复</b>——
-/// CAS 守卫保证不重复发布）。租约方法不包含在调用方的 SaveChanges 事务中属预期行为：
-/// 租约的存活期本就应超越单次业务事务。
+/// ⚠️ <b>批次语义（2026-09-19 随批量化变更）</b>：整批为单条 UPDATE，语句级原子即
+/// all-or-nothing——原逐条形态"批中第 k 条失败时已租的 0..k-1 条等租约过期重试（延迟
+/// 非丢失）"的窗口不复存在（decision §2.5-5 裁决：原两难自动消解）。回读按
+/// <c>(LockedBy, LockedUntil)</c> 等值守卫取回（ITM-109 姊妹先例），不重跑资格子查询。
+/// </para>
+/// <para>
+/// ⚠️ <b>租约谓词的 UTC 前提</b>：时间列 TEXT 文本序比较在偏移一致时等于时间序——
+/// 本栈 lease 链路时间源恒 <c>GetUtcNow()</c>（+00:00）自洽；外部写入非零偏移的
+/// <c>NextAttemptAt</c>/<c>LockedUntil</c> 会破坏文本序（详见 OutboxSqliteConcurrencyTests
+/// 的 LockedUntilUtc 前提锁定测试）。
 /// </para>
 /// </remarks>
 public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDbContext(options)
@@ -42,8 +50,8 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v20 C-1
         // ITM-659 守卫族收口：maxRetryCount 非正守卫（batchSize 守卫姊妹，镜像 PalORM/Dapper/
         // 基类）——非正值使 RetryCount < maxRetryCount 恒假（RetryCount >= 0），查询静默空
-        // 返回无诊断。QueryEligibleAsync 为 GetPending/Lease 两 override 共享入口，一处
-        // 守卫两方法生效（override 不调 base，基类守卫对本派生类死码——v20 C-1 同款形态）
+        // 返回无诊断。2026-09-19 批量化后本方法仅服务 GetPending（Lease 走单语句 SQL 并
+        // 自带同款守卫——LeasePendingMessagesAsync 内），口径同步。
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount);
         var now = GetUtcNow();
         var result = new List<OutboxMessage>(batchSize);
@@ -99,33 +107,48 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
             throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration must be greater than zero.");
         if (leaseDuration.TotalSeconds > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for the lease LockedUntil value.");
-        var until = GetUtcNow().Add(leaseDuration);
-        // 评审 P1-3 修复：租约不再走"SELECT 跟踪 → 内存改 → SaveChanges"（三步分离，
-        // 两实例可同时租约同一批——见类头 remarks）。改为无跟踪读 + 逐条 CAS：
-        // ExecuteUpdateAsync 的 WHERE 守卫（Id 等值 + Status==Pending + LockedUntil==读到的原值）
-        // 全部为等值比较，EF SQLite 可翻译（ITM-261：仅 DateTimeOffset 有序比较不可翻译）。
-        // LockedUntil 等值即版本守卫——另一实例先一步写入租约后本条影响 0 行，消息丢弃。
-        var candidates = await QueryEligibleAsync(batchSize, maxRetryCount, ct).ConfigureAwait(false);
+        // 守卫随 2026-09-19 批量化从 QueryEligibleAsync 移入（Lease 不再走该共享入口，
+        // ITM-659 守卫族对本方法的覆盖不得因此丢失）；字面量 0 对应 OutboxStatus.Pending
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount);
 
-        var leased = new List<OutboxMessage>(candidates.Count);
-        foreach (var msg in candidates)
-        {
-            var originalLockedUntil = msg.LockedUntil;
-            var affected = await OutboxMessages
-                .Where(m => m.Id == msg.Id
-                         && m.Status == OutboxStatus.Pending
-                         && m.LockedUntil == originalLockedUntil)
-                .ExecuteUpdateAsync(
-                    s => s.SetProperty(m => m.LockedBy, owner)
-                          .SetProperty(m => m.LockedUntil, until),
-                    ct).ConfigureAwait(false);
-            if (affected > 0)
-            {
-                msg.LockedBy = owner;
-                msg.LockedUntil = until;
-                leased.Add(msg);
-            }
-        }
+        var now = GetUtcNow();
+        var until = now.Add(leaseDuration);
+
+        // 单语句批量租约（decision-2026-09-17 裁决 shape 2，2026-09-19 实施）：
+        // 资格谓词在子查询内重估（与 QueryEligibleAsync 的过滤条件同一谓词族），
+        // SQLite WAL 单写者串行化 UPDATE——并发租约使谓词对已租行失效，语义与
+        // Dapper SQLite / PalORM SQLite 的单语句形态同契约。三点前提均经 2026-09-19
+        // spike 验证：① ExecuteSqlInterpolated 的原生 DateTimeOffset 参数与 EF
+        // SaveChanges 写入格式自洽（空格分隔 TEXT，谓词不恒真）；② 等值守卫回读
+        // 命中；③ EF LINQ 不能翻译 DateTimeOffset 有序比较（ITM-261）不适用于手写
+        // SQL——文本序比较在 raw SQL 内合法。
+        // ORDER BY CreatedAt：对齐 Dapper/PalORM/MySQL-EF 三栈先例（SqlTemplates OutboxLeaseUpdateSqlite
+        // 同款）；ITM-261 只限 LINQ 的 ORDER BY 翻译。ULID Id 序与创建序等价（QueryEligibleAsync 注释），
+        // 故与 GetPending 路径（Id 序分页）语义一致。
+        // ExecuteSqlAsync（EF 11 统一形态，FormattableString 重载自动参数化——
+        // ExecuteSqlInterpolatedAsync 已标 Obsolete）
+        await Database.ExecuteSqlAsync($"""
+            UPDATE OutboxMessages
+            SET LockedBy = {owner}, LockedUntil = {until}
+            WHERE Id IN (
+                SELECT Id FROM OutboxMessages
+                WHERE Status = 0 AND RetryCount < {maxRetryCount}
+                  AND (NextAttemptAt IS NULL OR NextAttemptAt <= {now})
+                  AND (LockedUntil IS NULL OR LockedUntil <= {now})
+                ORDER BY CreatedAt
+                LIMIT {batchSize})
+            """, ct).ConfigureAwait(false);
+
+        // 等值守卫回读（Dapper/PalORM 同款两步形态，ITM-109 姊妹先例）：按租约标识取回，
+        // 不重跑资格子查询——同 tick 并发时另一 worker 的行 owner 不同不会混入；
+        // 同 owner 同 until 的两次租约会互相可见（姊妹栈已接受语义）。
+        // 等值比较 LINQ 可翻译（ITM-261：仅 DateTimeOffset 有序比较不可翻译）；
+        // ORDER BY Id 因 ITM-261 对 DateTimeOffset 排序翻译的限制走 ULID 创建序。
+        var leased = await OutboxMessages.AsNoTracking()
+            .Where(m => m.LockedBy == owner && m.LockedUntil == until)
+            .OrderBy(m => m.Id)
+            .ToListAsync(ct).ConfigureAwait(false);
         return leased;
     }
 }

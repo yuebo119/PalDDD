@@ -280,6 +280,8 @@ WHERE id IN (
 | Dynamic 补偿用 matchedKey、观察者归 stepKey（P3-SRC-603） | Saga.cs:874 | ☒ |
 | 原稿方案 B 时间参数用 `"O"` 文本序比较——**已实证否定**（provider 写空格分隔格式，`"O"` 参数谓词恒真；正文已改为直传原生 DateTimeOffset 参数，主线程复现验证） | SqlTemplates.cs:140 | ☒ |
 | **before 锚（medium 复测，2026-09-19）**：Dapper 2.919ms / PalORM 2.465ms / EF 13.79ms（MediumRun，15 iter / 2 launch / 10 warmup，EF Error ±1.254ms）——比值 **EF/Dapper = 4.72×**；**退出条款未触发**（EF ≥ 8ms，P-1 有效实施继续）。环境：BDN 0.15.8 InProcessEmit · .NET 11.0.100-rc.1 · Ryzen 9 8945HX（运行 `--persist-medium`） | bench/PalDDD.Benchmarks/Program.cs:34 | ☒ |
+| **after 锚（同口径复测，2026-09-19 实施 shape 2 后）**：Dapper 2.773ms / PalORM 3.571ms / EF **11.701ms**（±1.64）——比值 **4.22×，未达 ≤2× 验收线**；分配 3.55MB→2.10MB（-41%） | bench/PalDDD.Benchmarks/PersistenceBenchmarks.cs:348 | ☒ |
+| **归因（分离计时实验，2026-09-19）**：Lease 本体（单语句 UPDATE）中位 **0.25ms**（与 Dapper 单语句同量级）；比值下不来的主导项是**基准方法体内的耗尽型重灌**（`Outbox_Lease_Batch100` 含 100 条 Add+SaveChanges，EF 管道 vs Dapper 裸 INSERT 固有 ~2-3× 差距，参照 AddSingle 口径 2.9×）——属 B1（EF Pooling）/EF 管道固有成本范畴，非 Lease 形态问题。⚠️ 三段式验收设计缺陷自认：设计时引用了 bench-baseline:40 口径声明但漏算「重灌在方法体内」对 2× 目标的结构性影响——**此口径下 2× 不可达**（分母含重灌），验收判据需用户改判「Lease 本体达标」（0.3ms 量级，证据为本行）或新立 LeaseOnly 口径基准 | SqliteOutboxDbContext.cs:100 | ☒ |
 
 ---
 
