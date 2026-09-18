@@ -282,6 +282,8 @@ WHERE id IN (
 | **before 锚（medium 复测，2026-09-19）**：Dapper 2.919ms / PalORM 2.465ms / EF 13.79ms（MediumRun，15 iter / 2 launch / 10 warmup，EF Error ±1.254ms）——比值 **EF/Dapper = 4.72×**；**退出条款未触发**（EF ≥ 8ms，P-1 有效实施继续）。环境：BDN 0.15.8 InProcessEmit · .NET 11.0.100-rc.1 · Ryzen 9 8945HX（运行 `--persist-medium`） | bench/PalDDD.Benchmarks/Program.cs:34 | ☒ |
 | **after 锚（同口径复测，2026-09-19 实施 shape 2 后）**：Dapper 2.773ms / PalORM 3.571ms / EF **11.701ms**（±1.64）——比值 **4.22×，未达 ≤2× 验收线**；分配 3.55MB→2.10MB（-41%） | bench/PalDDD.Benchmarks/PersistenceBenchmarks.cs:348 | ☒ |
 | **归因（分离计时实验，2026-09-19）**：Lease 本体（单语句 UPDATE）中位 **0.25ms**（与 Dapper 单语句同量级）；比值下不来的主导项是**基准方法体内的耗尽型重灌**（`Outbox_Lease_Batch100` 含 100 条 Add+SaveChanges，EF 管道 vs Dapper 裸 INSERT 固有 ~2-3× 差距，参照 AddSingle 口径 2.9×）——属 B1（EF Pooling）/EF 管道固有成本范畴，非 Lease 形态问题。⚠️ 三段式验收设计缺陷自认：设计时引用了 bench-baseline:40 口径声明但漏算「重灌在方法体内」对 2× 目标的结构性影响——**此口径下 2× 不可达**（分母含重灌），验收判据需用户改判「Lease 本体达标」（0.3ms 量级，证据为本行）或新立 LeaseOnly 口径基准 | SqliteOutboxDbContext.cs:100 | ☒ |
+| **spike ② 结论（2026-09-19 补做，shape 1 探索项）**：ADO 与 EF `FromSqlRaw` 物化 `UPDATE…RETURNING` 双可行（spike 实测各 2 行、实体完整）——但**裁决不切换**（维持 shape 2）：收益仅省回读往返 ~0.4ms（占 500ms 轮询 0.08%，不可感知）；shape 1 为 EF 栈独有形态（MySQL 无 RETURNING 必须两步），切换造成三栈形态分叉，shape 2 等值守卫与 Dapper/PalORM 逐字同构是架构对齐价值 | 仓内无验证（%TEMP% spike 脚本实测） | ☒ |
+| **ITM-109 同 tick 回读用例（2026-09-19 补做）**：冻结时钟（override GetUtcNow）下同 owner 两次 Lease 同 until——第二次守卫回读带回全部 4 条（第一批 2 + 新租 2），运行时锁定「同 tick 复用可见」的姊妹栈接受语义 | OutboxSqliteConcurrencyTests.cs:223 | ☒ |
 
 ---
 
