@@ -143,7 +143,16 @@ public sealed class PublicApiSnapshotTests
         => $"ctor({FormatParameters(constructor.GetParameters())})";
 
     private static string GetPropertySignature(PropertyInfo property)
-        => $"property {FormatType(property.PropertyType)} {property.Name}";
+        // 访问器级破坏对快照可见（2026-09-19 增，盲区收口）：init→set 这类破坏性变更
+        // 此前对快照**不可见**（3c887c7 的 M3-3 实证——两个集合属性被 init→set，快照零变化）。
+        // init-only 判定：编译器把 init 实现为带 IsExternalInit modreq 的 setter。
+        => $"property {FormatType(property.PropertyType)} {property.Name}"
+           + (IsInitOnly(property) ? " [init]" : "");
+
+    private static bool IsInitOnly(PropertyInfo property)
+        => property.SetMethod?.ReturnParameter
+            .GetRequiredCustomModifiers()
+            .Any(static t => t.FullName == "System.Runtime.CompilerServices.IsExternalInit") == true;
 
     private static string GetFieldSignature(FieldInfo field)
     {
