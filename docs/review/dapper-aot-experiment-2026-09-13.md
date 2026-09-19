@@ -20,8 +20,8 @@ AOT 实测通过；Dapper 库本身（Dapper.dll）仍非 AOT 干净，库级「
 | JIT 行为回归 | ✅ 无外部依赖 14 项目 1212 全绿 0 失败 |
 | NativeAOT 编译 | ✅ publish 成功（上游库自带 trim 警告按既有口径 NoWarn） |
 | NativeAOT 实跑 | ✅ 探针 sample 13/13 全 PASS（Outbox/EventLog/Idempotency/Saga 四组件 CRUD+blob 往返） |
-| PG 真实库（192.168.200.120, PG 18.4） | ✅ **JIT 13/13 + NativeAOT 二进制 13/13**（外部连接串模式，appsettings.test.local.json 凭据） |
-| MySQL 真实库（192.168.200.120, MySQL 8.4.11） | ✅ **JIT 13/13 + NativeAOT 二进制 13/13** |
+| PG 真实库（<INTERNAL_TEST_HOST>, PG 18.4） | ✅ **JIT 13/13 + NativeAOT 二进制 13/13**（外部连接串模式，appsettings.test.local.json 凭据） |
+| MySQL 真实库（<INTERNAL_TEST_HOST>, MySQL 8.4.11） | ✅ **JIT 13/13 + NativeAOT 二进制 13/13** |
 
 **ct 代价（已知且实验目的下显式接受）**：直接重载无 ct 参数，SQL 执行层取消能力消失
 （连接超时兜底；接口签名与连接打开层 ct 保留）。

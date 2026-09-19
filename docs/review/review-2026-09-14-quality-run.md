@@ -2,7 +2,7 @@
 
 > 基线 commit：`e51d48b`（dev 分支，工作树运行前/运行后均干净）
 > 运行方式：本机（Windows 10 x64）逐脚本真实执行，零缓存复用；16 个门禁脚本 + 14 个测试项目 + 2 个环境受限项目全量实跑
-> 机器环境：无 Docker（`docker: command not found`）；`appsettings.test.local.json` 指向内网服务器 192.168.200.120（已 gitignore，未入库）
+> 机器环境：无 Docker（`docker: command not found`）；`appsettings.test.local.json` 指向内网服务器 <INTERNAL_TEST_HOST>（已 gitignore，未入库）
 
 ---
 
@@ -54,7 +54,7 @@
 
 **实测证据链**（多方法交叉）：
 
-1. 隔离探针（`%TEMP%` 独立脚本）实测 `192.168.200.120:5672`：TCP 连接 **12ms 成功**（`connected=True`）。
+1. 隔离探针（`%TEMP%` 独立脚本）实测 `<INTERNAL_TEST_HOST>:5672`：TCP 连接 **12ms 成功**（`connected=True`）。
 2. 测试失败堆栈显示 AMQP 协议握手超时：`connection.start was never received, likely due to a network timeout` → `BrokerUnreachableException`，每次失败固定约 18.9s。
 3. Kafka 轴对比：`GetMetadata` 协议级探测失败 → 3 个 Kafka 测试**跳过**而非失败（信息："Kafka broker 预检失败——环境问题，非代码失败"）。
 
@@ -76,7 +76,7 @@
 
 ### F3（P2·文档）open-items D2"当前就绪"声明与本次实测矛盾
 
-`open-items-2026-09-14.md:41`（D2）称 192.168.200.120"当前就绪，全部实测通过"。本次实测：RabbitMQ AMQP 无响应、Kafka GetMetadata 失败——**该声明已不再成立**。按"跨会话核实"纪律，环境状态类声明的有效期短，建议改为带时间戳的观测记录（"截至 X 时实测通过"）或直接删除结论句。
+`open-items-2026-09-14.md:41`（D2）称 <INTERNAL_TEST_HOST>"当前就绪，全部实测通过"。本次实测：RabbitMQ AMQP 无响应、Kafka GetMetadata 失败——**该声明已不再成立**。按"跨会话核实"纪律，环境状态类声明的有效期短，建议改为带时间戳的观测记录（"截至 X 时实测通过"）或直接删除结论句。
 
 ### F4（P3·文档）AGENTS.md 的 `path-gate` 表述与 CI 实际结构不符
 

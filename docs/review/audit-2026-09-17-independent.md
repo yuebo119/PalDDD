@@ -201,10 +201,10 @@ graph TB
 ### 3.3 安全
 
 **S-1　工作树存在真实内网凭据（未跟踪）　高　[事实]**
-`appsettings.test.local.json` 含 `192.168.200.120` 的 PG/MySQL/RabbitMQ 口令，`UseTestcontainers=false`。文件被 `.gitignore:94` 忽略且未跟踪——当前卫生正确，但距泄漏仅一次 `git add -f`。`secret-scan` 按设计不看未跟踪文件。样本代码会自动加载该文件（`DapperAotProbe/Program.cs` 相关路径）。
+`appsettings.test.local.json` 含 `<INTERNAL_TEST_HOST>` 的 PG/MySQL/RabbitMQ 口令，`UseTestcontainers=false`。文件被 `.gitignore:94` 忽略且未跟踪——当前卫生正确，但距泄漏仅一次 `git add -f`。`secret-scan` 按设计不看未跟踪文件。样本代码会自动加载该文件（`DapperAotProbe/Program.cs` 相关路径）。
 
 **S-2　历史凭据泄漏未确认轮换　高　[事实+待人工确认]**
-ITM-108/AUD-001：历史提交曾含 `192.168.1.100` 真实口令，处置为「仅记录」，未重写历史、未记录轮换。任何持有 clone 者可从历史恢复。**需所有者确认口令是否已轮换**。
+ITM-108/AUD-001：历史提交曾含 `<INTERNAL_TEST_HOST_LEGACY>` 真实口令，处置为「仅记录」，未重写历史、未记录轮换。任何持有 clone 者可从历史恢复。**需所有者确认口令是否已轮换**。
 
 **S-3　NU1900–1904 全局 NoWarn　中　[事实]**
 `Directory.Build.props:41,45`。本地 build 零 CVE 信号；依赖 CI `vuln-scan.cs`（该脚本曾有过 exit-0 假绿事故，已修复）。属「有意双路径」，但开发者侧静默。
@@ -514,7 +514,7 @@ ADR-020 已裁决 Dapper 转「能力平等栈」；`README.md:857` mermaid 仍�
 
 ## 六、开放问题（需所有者裁决）
 
-1. **历史凭据是否已轮换？**（ITM-108 / 192.168.1.100；工作树 192.168.200.120 是否共用口令？）
+1. **历史凭据是否已轮换？**（ITM-108 / <INTERNAL_TEST_HOST_LEGACY>；工作树 <INTERNAL_TEST_HOST> 是否共用口令？）
 2. **产品意图：外部采用 vs 内部工具？** 若外部，AGPL-or-later 与 RC SDK 钉版会系统性限制采用；是否考虑 dual-license 或多 TFM？
 3. **Dapper AOT 的最终口径？** 当前代码已启用但多处文案未启用——是「保持启用并改文案」，还是「实验分支回滚」？（影响 M1-1 方向）
 4. **EF Core 栈的产品地位？** ADR-020 推荐 PalORM；EF 栈是长期一等公民还是过渡？影响 M2-4（EF 租约优化）优先级。

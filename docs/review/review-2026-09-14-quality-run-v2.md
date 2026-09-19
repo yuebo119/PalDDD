@@ -3,7 +3,7 @@
 > 基线 commit：`b2ae2ec`（dev 分支，工作树运行前后均干净）
 > 运行方式：22 个门禁/工具脚本 + 16 个测试项目全真实执行，零缓存复用
 > 对比基准：[`review-2026-09-14-quality-run.md`](review-2026-09-14-quality-run.md)（首轮，基线 e51d48b）
-> 机器环境：无 Docker；内网服务器 192.168.200.120 2026-09-14 v2 轮实测**健康**（Kafka/RabbitMQ 全通）
+> 机器环境：无 Docker；内网服务器 <INTERNAL_TEST_HOST> 2026-09-14 v2 轮实测**健康**（Kafka/RabbitMQ 全通）
 
 ---
 
