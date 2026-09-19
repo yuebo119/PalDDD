@@ -31,6 +31,7 @@ using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using PalUlid = ByteAether.Ulid.Ulid;
+using static PalDDD.Dapper.DapperSqlErrorClassifier;
 
 using PalDDD.Core.Diagnostics;
 using PalDDD.EventLog;
@@ -274,58 +275,9 @@ public sealed class DapperEventLog : IEventLog
             _ => DapperAotInitializer.ToSqliteParameter(value)
         };
 
-    /// <summary>
-    /// 判定 DbException 是否为唯一约束冲突（跨 provider 鸭子类型，P2 修复引入）。
-    /// <para>与 EFCore 侧 EventLogDbContext 的实现对齐（ITM-003 同型，作用于原生 DbException）。</para>
-    /// </summary>
-    [UnconditionalSuppressMessage("Trimming", "IL2075:This",
-        Justification = "Provider 异常鸭子类型判定（与 EFCore 侧同型）。裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级，不崩溃），并发冲突仅失去统一异常类型。")]
-    private static bool IsUniqueConstraintViolation(System.Data.Common.DbException exception)
-    {
-        for (var inner = (Exception)exception; inner is not null; inner = inner.InnerException)
-        {
-            var type = inner.GetType();
-            var typeName = type.Name;
-
-            // PostgreSQL: Npgsql.PostgresException.SqlState == "23505"
-            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
-                && type.GetProperty("SqlState")?.GetValue(inner) is string sqlState
-                && sqlState == "23505")
-            {
-                return true;
-            }
-
-            // MySQL: MySqlException.Number == 1062（ER_DUP_ENTRY）或 1586
-            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
-                && type.GetProperty("Number")?.GetValue(inner) is int mysqlNumber
-                && (mysqlNumber == 1062 || mysqlNumber == 1586))
-            {
-                return true;
-            }
-
-            // SQL Server: SqlException.Number == 2601 或 2627
-            if (typeName.Equals("SqlException", StringComparison.Ordinal)
-                && type.GetProperty("Number")?.GetValue(inner) is int sqlServerNumber
-                && (sqlServerNumber == 2601 || sqlServerNumber == 2627))
-            {
-                return true;
-            }
-
-            // SQLite: Microsoft.Data.Sqlite.SqliteException 消息包含 "UNIQUE constraint"
-            // ITM-188 修复（二十九轮）：补 SqliteException 类型限定（镜像 EFCore/PalORM
-            // 姊妹，PD17）——裸消息匹配会把文案恰好含该词组的非唯一约束异常（如业务错误
-            // 文本含 "UNIQUE constraint"）误判为并发冲突 → 走 requery 分类路径，掩盖真实数据错误。
-            var message = inner.Message;
-            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
-                && !string.IsNullOrEmpty(message)
-                && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    // ITM-796（2026-09-19）：IsUniqueConstraintViolation 私有副本（DbException 签名）
+    // 收口至 DapperSqlErrorClassifier（码集并集）——IL2075 抑制随类迁移；
+    // 调用点经 using static 解析至类成员
 
     /// <summary>
     /// Dapper 读取 DTO — 桥接 PascalCase 列名到 RecordedEvent 的 internal 构造路径。<br/>

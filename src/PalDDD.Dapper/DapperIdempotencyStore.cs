@@ -4,6 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using Dapper;
 using PalDDD.Core;
 using PalDDD.Idempotency;
+using static PalDDD.Dapper.DapperSqlErrorClassifier;
 
 namespace PalDDD.Dapper;
 
@@ -253,19 +254,10 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
             record.MarkFailed(reason, failedAt);
     }
 
-    /// <summary>唯一约束冲突判定（按方言：PG 23505 / MySQL 1062 / SQLite 19/2067）。</summary>
-    private static bool IsUniqueConstraintViolation(Exception ex)
-    {
-        while (ex is not null)
-        {
-            if (ex is Npgsql.PostgresException pg) return pg.SqlState == "23505";
-            if (ex is MySqlConnector.MySqlException mySql) return mySql.Number is 1062 or 1022;
-            if (ex is Microsoft.Data.Sqlite.SqliteException sqlite)
-                return sqlite.SqliteErrorCode is 19 or 2067;
-            ex = ex.InnerException!;
-        }
-        return false;
-    }
+    // ITM-796（2026-09-19）：原强类型判定（MySQL 1062/1022、SQLite 19/2067 码）收口至
+    // DapperSqlErrorClassifier（鸭子形态，码集并集含本版 1022/19/2067——分类行为兼容：
+    // 首个命中分支的短路语义不变，新增的 1586/SqlServer 分支只在原返回 false 的
+    // 异常上可能多判 true，方向为更多冲突被识别）
 
     /// <summary>ITM-242 口径：UTC 归一化（MySQL DATETIME Kind=Unspecified → offset 0）。</summary>
     private static DateTimeOffset ToUtcOrMin(DateTimeOffset value)
