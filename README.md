@@ -758,9 +758,9 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 ### 消息基础设施
 | 组件 | 核心机制 |
 |------|---------|
-| **Outbox** | 数据库事务内原子写入消息行，租约锁 + token fencing（(LockedBy, LockedUntil) 完整匹配拒绝旧 worker，LockedUntil 单调变化免 DDL）多实例并发发布，指数退避重试，死信队列 + 操作重注入 |
+| **Outbox** | 数据库事务内原子写入消息行，租约锁 + token fencing（(LockedBy, LockedUntil) 完整匹配拒绝旧 worker，LockedUntil 单调变化免 DDL）多实例并发发布，指数退避重试，死信队列 + 操作重注入（重试上限 `MaxRetryCount` 可配，重投须幂等消费——运维入口见 [usage.md](docs/usage.md) 死信语义段） |
 | **Inbox** | `(ConsumerName, MessageId)` 复合唯一约束，四态生命周期（Pending → Processing → Processed/Failed），僵尸记录超时回收 |
-| **Saga** | 显式状态/事件转换注册 → FrozenDictionary 查找，可配置重试+退避，None/Backward/Forward 三种补偿策略（**补偿范围与顺序以执行序 ExecutedStepKeys 为准，非注册序**），超时检测后台服务（含 AwaitingHumanDecision 中断态兜底扫描），人工审批中断+恢复 |
+| **Saga** | 显式状态/事件转换注册 → FrozenDictionary 查找，可配置重试+退避，None/Backward/Forward 三种补偿策略（**补偿范围与顺序以执行序 ExecutedStepKeys 为准，非注册序**），超时检测后台服务（含 AwaitingHumanDecision 中断态兜底扫描），人工审批中断+恢复，FanOut 并行子任务（⚠️ **整批 attempt 级重试——executor 必须幂等**，见 `FanOutStep` 重放语义声明） |
 | **EventLog** | 命名流 + 乐观并发（ExpectedStreamVersion），全局单调递增位置，`RehydrateFromBytes` 零拷贝读取路径 |
 | **Idempotency** | `(OperationName, Key)` 幂等执行 + 结果 payload 缓存（Executed/Cached/Skipped 三态），**Revision CAS 令牌**防 Completed 翻转后副作用重执行（v2.1.0），过期记录可回收重建 |
 | **Projection** | `IProjectionCheckpointStore` 断点存储，`EventLogReplaySource<T>` 全量重放，独立于存储适配器 |
@@ -878,7 +878,7 @@ flowchart TB
 | [发布规范](docs/release.md) | 版本管理、包范围、CHANGELOG 规范与生成流程 |
 | [踩坑目录](docs/pitfalls.md) | 82 条 DDD/AOT/并发实战踩坑 |
 | [开发流程](docs/development.md) | 开发环境、Git 钩子、测试运行 |
-| [架构决策](docs/decisions/) | 22 份 ADR |
+| [架构决策](docs/decisions/) | 24 份 ADR |
 | [变更日志](CHANGELOG.md) | 版本历史（消费者变更 + 工程过程附录） |
 
 ---

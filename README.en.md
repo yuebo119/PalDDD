@@ -759,9 +759,9 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 ### Messaging Infrastructure
 | Component | Core Mechanism |
 |------|---------|
-| **Outbox** | Atomic message row write within the DB transaction, lease lock + token fencing ((LockedBy, LockedUntil) full-match rejects stale workers; LockedUntil monotonic, no DDL) for multi-instance concurrent publishing, exponential backoff retry, dead-letter queue + operation re-injection |
+| **Outbox** | Atomic message row write within the DB transaction, lease lock + token fencing ((LockedBy, LockedUntil) full-match rejects stale workers; LockedUntil monotonic, no DDL) for multi-instance concurrent publishing, exponential backoff retry, dead-letter queue + operation re-injection (retry cap `MaxRetryCount` configurable; re-injection requires idempotent consumers — see the dead-letter ops section in [usage.md](docs/usage.md)) |
 | **Inbox** | `(ConsumerName, MessageId)` composite unique constraint, four-state lifecycle (Pending → Processing → Processed/Failed), zombie record timeout reclaim |
-| **Saga** | Explicit state/event transition registration → FrozenDictionary lookup, configurable retry+backoff, None/Backward/Forward compensation strategies (**compensation scope and order follow the execution sequence via ExecutedStepKeys, not registration order**), timeout detection background service (including AwaitingHumanDecision interrupted-state fallback scanning), manual approval interrupt+resume |
+| **Saga** | Explicit state/event transition registration → FrozenDictionary lookup, configurable retry+backoff, None/Backward/Forward compensation strategies (**compensation scope and order follow the execution sequence via ExecutedStepKeys, not registration order**), timeout detection background service (including AwaitingHumanDecision interrupted-state fallback scanning), manual approval interrupt+resume, FanOut parallel subtasks (⚠️ **whole-batch attempt-level retry — executors must be idempotent**; see the `FanOutStep` replay-semantics declaration) |
 | **EventLog** | Named streams + optimistic concurrency (ExpectedStreamVersion), global monotonically increasing position, `RehydrateFromBytes` zero-copy read path |
 | **Idempotency** | `(OperationName, Key)` idempotent execution + result payload caching (Executed/Cached/Skipped), **Revision CAS token** prevents side-effect re-execution after Completed flip (v2.1.0), expired records reclaimable |
 | **Projection** | `IProjectionCheckpointStore` checkpoint persistence, `EventLogReplaySource<T>` full replay, independent of the storage adapter |
@@ -882,7 +882,7 @@ flowchart TB
 | [Release SOP](docs/release.md) | Versioning, package scope, CHANGELOG conventions & workflow |
 | [Pitfalls](docs/pitfalls.md) | 82 real-world DDD/AOT/concurrency pitfalls |
 | [Development](docs/development.md) | Dev environment, Git hooks, test running |
-| [Architecture Decisions](docs/decisions/) | 22 ADRs |
+| [Architecture Decisions](docs/decisions/) | 24 ADRs |
 | [Changelog](CHANGELOG.md) | Version history (consumer-facing changes + engineering appendix) |
 
 ---
