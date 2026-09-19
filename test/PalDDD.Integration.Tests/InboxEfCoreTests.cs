@@ -51,6 +51,90 @@ public sealed class InboxEfCoreTests
         await Assert.That(loaded.ProcessingStartedAt).IsEqualTo(now);
     }
 
+    /// <summary>F1 回归（第五十四轮片4，2026-09-19）：A 终态化后 B 的超时抢占必须被
+    /// DB 端 status 守卫拒绝——修复前 B 用旧令牌快照把已 Processed 行翻回 Processing
+    /// （handler 重复执行，破坏「只处理一次」）。时序：A TryStart（t0）→ A MarkProcessed
+    /// （令牌不变）→ B 持 t0 快照 TryStart（超时窗口已过）→ 必须 null 且 DB 仍 Processed。
+    /// SQLite 内存库承载（ExecuteUpdate 的 DB 端守卫在 InMemory provider 不生效）。</summary>
+    [Test]
+    public async Task Takeover_AfterTerminalMarkProcessed_RejectedByDbStatusGuard(CancellationToken cancellationToken)
+    {
+        using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = CreateSqliteOptions(connection);
+        var t0 = DateTimeOffset.Parse("2026-05-31T00:00:00Z", CultureInfo.InvariantCulture);
+        await using (var init = new TestInboxDbContext(options))
+            await init.Database.EnsureCreatedAsync(cancellationToken);
+
+        // A 消费者：启动处理并成功终态化（MarkProcessed 不改令牌——F1 时序核心）
+        InboxMessage aSnapshot;
+        await using (var a = new TestInboxDbContext(options))
+        {
+            aSnapshot = (await ((IInboxStore)a).TryStartProcessingAsync(
+                "orders", "msg-f1", t0, TimeSpan.FromMinutes(5), cancellationToken))!;
+            await ((IInboxStore)a).MarkProcessedAsync(aSnapshot, t0.AddSeconds(1), cancellationToken);
+        }
+
+        // B 消费者：持 t0 快照（ProcessingStartedAt 未变），超时窗口已过 → 抢占尝试
+        await using (var b = new TestInboxDbContext(options))
+        {
+            var bTaken = await ((IInboxStore)b).TryStartProcessingAsync(
+                "orders", "msg-f1", t0.AddMinutes(10), TimeSpan.FromMinutes(5), cancellationToken);
+
+            // DB 端 status 守卫拒绝——B 让位（修复前 B 会拿到该行并复活它）
+            await Assert.That(bTaken).IsNull();
+        }
+
+        // DB 终局：仍 Processed（未被翻回 Processing）——「只处理一次」承诺保持
+        await using (var verify = new TestInboxDbContext(options))
+        {
+            var row = await verify.InboxMessages.SingleAsync(
+                x => x.ConsumerName == "orders" && x.MessageId == "msg-f1", cancellationToken);
+            await Assert.That(row.Status).IsEqualTo(InboxStatus.Processed);
+        }
+    }
+
+    /// <summary>F1b 回归：终态写带 DB 端 status=Processing 守卫——过期引用对 Failed 行的
+    /// MarkProcessed 不再生效（affected=0 → 行保持 Failed，姊妹栈 SQL status 守卫同语义）。</summary>
+    [Test]
+    public async Task MarkProcessed_FromStaleSnapshotOfFailedRow_DoesNotOverwrite(CancellationToken cancellationToken)
+    {
+        using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = CreateSqliteOptions(connection);
+        var t0 = DateTimeOffset.Parse("2026-05-31T00:00:00Z", CultureInfo.InvariantCulture);
+        await using (var init = new TestInboxDbContext(options))
+            await init.Database.EnsureCreatedAsync(cancellationToken);
+
+        InboxMessage snapshot;
+        await using (var a = new TestInboxDbContext(options))
+        {
+            snapshot = (await ((IInboxStore)a).TryStartProcessingAsync(
+                "orders", "msg-f1b", t0, TimeSpan.FromMinutes(5), cancellationToken))!;
+        }
+
+        // 他者将行推进为 Failed（同令牌——MarkFailed 走同守卫路径）
+        await using (var other = new TestInboxDbContext(options))
+        {
+            var fresh = await other.InboxMessages.SingleAsync(
+                x => x.ConsumerName == "orders" && x.MessageId == "msg-f1b", cancellationToken);
+            await ((IInboxStore)other).MarkFailedAsync(fresh, "boom", cancellationToken);
+        }
+
+        // A 用过期快照（Status 仍是 Processing 内存态）MarkProcessed → DB 守卫拒绝
+        await using (var a2 = new TestInboxDbContext(options))
+        {
+            await ((IInboxStore)a2).MarkProcessedAsync(snapshot, t0.AddSeconds(2), cancellationToken);
+        }
+
+        await using (var verify = new TestInboxDbContext(options))
+        {
+            var row = await verify.InboxMessages.SingleAsync(
+                x => x.ConsumerName == "orders" && x.MessageId == "msg-f1b", cancellationToken);
+            await Assert.That(row.Status).IsEqualTo(InboxStatus.Failed); // 未被过期终态翻写
+        }
+    }
+
     [Test]
     public async Task TryStartProcessingAsync_ReturnsNullWhenProcessingLeaseIsStillActive(CancellationToken cancellationToken)
     {
@@ -82,7 +166,12 @@ public sealed class InboxEfCoreTests
     [Test]
     public async Task TryStartProcessingAsync_ReusesFailedMessage(CancellationToken cancellationToken)
     {
-        await using var db = new TestInboxDbContext(CreateOptions());
+        // F1 迁移（2026-09-19）：InMemory 不支持 ExecuteUpdate（抢占/终态写已改 DB 端
+        // 守卫形态）——SQLite 内存库承载，行为断言不变
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        await using var db = new TestInboxDbContext(CreateSqliteOptions(connection));
+        await db.Database.EnsureCreatedAsync(cancellationToken);
         var store = (IInboxStore)db;
         var now = DateTimeOffset.Parse("2026-05-31T00:00:00Z", CultureInfo.InvariantCulture);
         var record = await store.TryStartProcessingAsync(
@@ -111,7 +200,11 @@ public sealed class InboxEfCoreTests
     [Test]
     public async Task MarkProcessedAsync_PreventsDuplicateProcessing(CancellationToken cancellationToken)
     {
-        await using var db = new TestInboxDbContext(CreateOptions());
+        // F1 迁移（2026-09-19）：同上——SQLite 承载（ExecuteUpdate DB 端守卫）
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        await using var db = new TestInboxDbContext(CreateSqliteOptions(connection));
+        await db.Database.EnsureCreatedAsync(cancellationToken);
         var store = (IInboxStore)db;
         var now = DateTimeOffset.Parse("2026-05-31T00:00:00Z", CultureInfo.InvariantCulture);
         var record = await store.TryStartProcessingAsync(
@@ -140,7 +233,12 @@ public sealed class InboxEfCoreTests
     [Test]
     public async Task MarkFailedAsync_DoesNotOverwriteRecordCompletedByAnotherProcessor(CancellationToken cancellationToken)
     {
-        var options = CreateOptions();
+        // F1 迁移（2026-09-19）：SQLite 承载（多 context 共享连接）
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = CreateSqliteOptions(connection);
+        await using (var init = new TestInboxDbContext(options))
+            await init.Database.EnsureCreatedAsync(cancellationToken);
         var now = DateTimeOffset.Parse("2026-05-31T00:00:00Z", CultureInfo.InvariantCulture);
         InboxMessage staleRecord;
 
@@ -185,7 +283,12 @@ public sealed class InboxEfCoreTests
     [Test]
     public async Task TryStartProcessingAsync_PreemptsZombieRecordAfterTimeout(CancellationToken cancellationToken)
     {
-        var options = CreateOptions();
+        // F1 迁移（2026-09-19）：SQLite 承载（ExecuteUpdate DB 端守卫）
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = CreateSqliteOptions(connection);
+        await using (var init = new TestInboxDbContext(options))
+            await init.Database.EnsureCreatedAsync(cancellationToken);
         var startedAt = DateTimeOffset.Parse("2026-05-31T00:00:00Z", CultureInfo.InvariantCulture);
 
         await using (var first = new TestInboxDbContext(options))

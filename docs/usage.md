@@ -236,6 +236,14 @@ services.AddPalOutbox();
 
 生产环境可从 `PalDDD.Transactions.EFCore` 派生 `OutboxDbContext`，或按方言派生 `PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`（ADR-012 方言粒度）以复用原子租约获取。`SqlServerOutboxDbContext` 当前标 `[Obsolete]` 且零测试覆盖，属**实验性/未验证**（v3.0 前评估），生产请优先使用已验证方言。适配器会配置 pending 查询索引、payload 必填、trace/correlation 字段长度和错误字段长度；`MarkProcessed` 会清理 lease/retry 状态，`ReleaseForRetry` 会释放 lease 并设置 `NextAttemptAt`。
 
+### 死信语义与运维（F4 补，2026-09-19）
+
+消息投递失败（broker 不可达、反序列化失败、类型未注册）时按指数退避重试；**重试耗尽（默认 `MaxRetryCount = 10`，经 `AddPalOutbox` 的 options 可配）后消息进入 `Dead` 状态并停止投递**——这是静默停止，不会抛异常到宿主。运维要点：
+
+- **查看死信**：查询 `IPalOutboxStore`（各栈 `outbox_messages` 表 `status = 2` 即 Dead，`error` 字段含最后失败原因，`retry_count` 可达上限值）。
+- **重新投递**：`RequeueDeadAsync(messageId, retriedBy)` 把 Dead 行重置为 Pending（清租约、`retry_count` 保留失败历史）。⚠️ **幂等前提**：下游消费者必须幂等——重投的消息可能已部分处理过（at-least-once 语义，ADR-011）。
+- **调整重试上限**：`services.AddPalOutbox(o => o.MaxRetryCount = 5)`（`OutboxOptions`，启动期校验）。
+
 Outbox message 可以携带跨上下文追踪元数据：
 
 ```csharp

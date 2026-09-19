@@ -836,7 +836,7 @@ src/                         36 源项目 · Clean Architecture（Folder 与 Pal
 
 test/                        16 测试项目（TUnit）· 1379 项实测（本机 1311 + 54 环境依赖项 CI Testcontainers + 14 设计内跳过——PalORM.Tests 与 Messaging.Integration.Tests 需 Docker）
 bench/                       BenchmarkDotNet 性能基准
-samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi · AotSample
+samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi · AotSample · DapperAotProbe（实验探针，不在 slnx/CI——见 docs/review/dapper-aot-experiment-2026-09-13.md）
 docs/                        架构 · 使用指南 · 教程 · ADR
 ```
 
