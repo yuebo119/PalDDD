@@ -2,6 +2,10 @@
 
   <PropertyGroup>
     <RootNamespace>PalDDD.Hosting.AspNetCore</RootNamespace>
+    <!-- 三 false 显式覆盖（第五十三轮注记补出处）：传导性覆盖——引用链上的
+         PalDDD.Transactions 为 IsAotCompatible=false（ChildSaga 反射面），本项目
+         传递该状态；本项目自身代码为 AOT 友好设计（源生成 JSON 上下文 +
+         EndpointExtensions 强制调用方传 metadata）。非项目 AGENTS.md §1 清单成员 -->
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>
     <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>

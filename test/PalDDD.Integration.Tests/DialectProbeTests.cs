@@ -288,9 +288,12 @@ public sealed class DialectProbeTests
             await store.TryStartProcessingAsync("probe-consumer", "probe-msg-1", clock.AddSeconds(2), TimeSpan.FromMinutes(5), default))
             .IsNull();
 
-        // #16「Inbox 超时接管（timeout=0）可重入」
+        // #16「Inbox 超时接管（timeout=0）可重入」——第五十三轮勘正：原版对新 id
+        //（probe-msg-stale）断言，走的是 INSERT 首插分支（超时参数不参与），非区分性；
+        // 真语义是对**已 Processing** 的记录以 timeout=0 重入（DapperInboxStore 超时
+        // 抢占分支）。probe-msg-2 在 #14 已 Processing，此处重入应成功。
         await Assert.That(
-            await store.TryStartProcessingAsync("probe-consumer", "probe-msg-stale", clock, TimeSpan.Zero, default))
+            await store.TryStartProcessingAsync("probe-consumer", "probe-msg-2", clock.AddSeconds(3), TimeSpan.Zero, default))
             .IsNotNull();
     }
 

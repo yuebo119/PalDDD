@@ -1,6 +1,6 @@
 # ADR 008：SagaCompensation / SagaTimeoutDetector 维持 internal sealed
 
-> 状态：已采纳  
+> 状态：已采纳（正文一处事实声明失实，第五十三轮勘正注记 2026-09-19：`Saga<TState>.CompensateExecutedStepsAsync` 现为 `private`（骨架收敛后经 RunRetryLaneAsync 调用），公共委托面为 `CompensateAsync` 与 `IsTimedOut` 两项——决策本体「维持 internal sealed 不暴露」不受影响）  
 > 日期：2026-06-29  
 
 ## 背景
