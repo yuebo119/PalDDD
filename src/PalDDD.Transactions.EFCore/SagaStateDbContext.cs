@@ -199,6 +199,15 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
         //（Error=null 是"未出错"语义，Normalize 会归一为 "(no message)" 破坏之），
         // 含 UTF-16 代理对守卫（末位高代理回退一位）。
         state.Error = Core.FailureReason.Truncate(state.Error, 2040);
+
+        // F3 修复（第五十四轮片4，2026-09-19）：未跟踪的新实体（调用方未 Add/Attach）在
+        // ChangeTracker 中无变更 → SaveChanges 零写入却返回 1，谎报「写入生效」（违反
+        // ISagaStateStore :44-46 契约「1=写入生效；0=目标行不存在」）。对齐契约：Detached
+        // 状态直接返回 0（Dapper/PalORM 的自查 UPSERT 对新行真 INSERT，等价语义是
+        // 「未见跟踪中的行 = 未写入」——正常管线 SagaProcessor 只保存已加载实体不受影响）
+        if (Entry(state).State == EntityState.Detached)
+            return 0;
+
         try
         {
             await SaveChangesAsync(ct).ConfigureAwait(false);

@@ -26,9 +26,15 @@ if (args.Contains("--verify-persist", StringComparer.OrdinalIgnoreCase))
 
 if (args.Contains("--persist", StringComparer.OrdinalIgnoreCase))
 {
-    BenchmarkRunner.Run<DapperPersistenceBenchmarks>();
-    BenchmarkRunner.Run<PalOrmPersistenceBenchmarks>();
-    BenchmarkRunner.Run<EfCorePersistenceBenchmarks>();
+    // 片3-P2-1 修复（2026-09-19 第五十四轮）：--persist 也传显式 InProcess config——
+    // 原依赖类 [InProcess] attribute（已随本修复移除），避免 attribute 与 ManualConfig
+    // 叠加产生双 job（BDN 0.15.8 实测：config 合并对 jobs 是 union 不去重）
+    var inProcessOnly = ManualConfig.Create(DefaultConfig.Instance)
+        .AddJob(Job.InProcess.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddDiagnoser(MemoryDiagnoser.Default);
+    BenchmarkRunner.Run<DapperPersistenceBenchmarks>(inProcessOnly);
+    BenchmarkRunner.Run<PalOrmPersistenceBenchmarks>(inProcessOnly);
+    BenchmarkRunner.Run<EfCorePersistenceBenchmarks>(inProcessOnly);
     return 0;
 }
 

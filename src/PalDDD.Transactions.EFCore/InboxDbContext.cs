@@ -130,28 +130,37 @@ public abstract class InboxDbContext(
             return null;
         }
 
+        // F1 修复（第五十四轮片4，2026-09-19）：抢占写入从 SaveChanges（仅并发令牌守卫）
+        // 改 ExecuteUpdate 带 DB 端 status 守卫——原实现中 MarkProcessedAsync 不修改
+        // ProcessingStartedAt（终态化后令牌不失效），B 的抢占 UPDATE 在 A 已 Processed 后
+        // 仍匹配令牌 → 已处理行被翻回 Processing + handler 重复执行（破坏「只处理一次」
+        // 承诺）。姊妹栈（Dapper SqlTemplates InboxTakeOver :217 / PalOrmInboxStore :162）
+        // 的 SQL WHERE status 守卫在同窗口拒绝。对齐守卫集：排除 Processed（Pending/
+        // Failed/Processing 均可抢）；超时复核不可下推（ITM-261 有序比较限制），读取时
+        // 已判定 + 令牌等值守卫覆盖本场景。令牌等值可翻译（ITM-261：等值可译）。
+        var originalStartedAt = record.ProcessingStartedAt;
+        var affected = await InboxMessages
+            .Where(x => x.Id == record.Id
+                && x.ProcessingStartedAt == originalStartedAt
+                && x.Status != InboxStatus.Processed)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.Status, InboxStatus.Processing)
+                .SetProperty(x => x.Attempts, x => x.Attempts + 1)
+                .SetProperty(x => x.ProcessingStartedAt, now)
+                .SetProperty(x => x.LastError, (string?)null),
+                ct).ConfigureAwait(false);
+        if (affected == 0)
+        {
+            // 并发令牌失配或行已 Processed（F1 窗口）——他人已推进，本消费者让位
+            Entry(record).State = EntityState.Detached;
+            return null;
+        }
+
+        // DB 已推进，同步内存快照（调用方持有返回实体）
         record.Status = InboxStatus.Processing;
         record.Attempts++;
         record.LastError = null;
         record.ProcessingStartedAt = now;
-        try
-        {
-            await SaveChangesAsync(ct).ConfigureAwait(false);
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            Entry(record).State = EntityState.Detached;
-            return null;
-        }
-        catch (DbUpdateException)
-        {
-            // v26 P2/P3 修复：抢占路径非并发瞬时故障上抛前 Detach——record 已被变异为
-            // Modified（Status=Processing 等四项），滞留 ChangeTracker 会被下次无关
-            // SaveChanges 提交为幽灵 Processing 态（镜像 IdempotencyDbContext 三十八轮
-            // P2 全修样板；v10 P3-1 只修了第一个 SaveChanges 新建路径）
-            Entry(record).State = EntityState.Detached;
-            throw;
-        }
 
         return record;
     }
@@ -229,29 +238,33 @@ public abstract class InboxDbContext(
 
     private async ValueTask SaveTerminalStateAsync(InboxMessage message, CancellationToken ct)
     {
-        try
+        // F1b 修复（第五十四轮片4，2026-09-19）：终态写从 SaveChanges（仅并发令牌）改
+        // ExecuteUpdate 带 DB 端 status=Processing 守卫——原实现的守卫是内存态
+        // message.Status（MarkProcessedAsync :168 前置检查），持有过期引用的调用方可把
+        // Failed 行翻 Processed（姊妹栈 SQL status=1 守卫拒绝）。对齐 Dapper
+        // SqlTemplates :226/:235 与 PalOrmInboxStore :190/:224 的 WHERE 形态。
+        // 令牌等值可翻译（ITM-261）；affected=0 = 行已被并发推进，Detach 让位（与原
+        // DbUpdateConcurrencyException 分支同语义，Warning 保留）。
+        var affected = await InboxMessages
+            .Where(x => x.Id == message.Id
+                && x.ProcessingStartedAt == message.ProcessingStartedAt
+                && x.Status == InboxStatus.Processing)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.Status, message.Status == InboxStatus.Processed
+                    ? InboxStatus.Processed
+                    : InboxStatus.Failed)
+                .SetProperty(x => x.ProcessedAt, message.ProcessedAt)
+                .SetProperty(x => x.LastError, message.LastError),
+                ct).ConfigureAwait(false);
+
+        // v25 P3 行为族 B6 语义保留：终态路径后 Detach（不残留 ChangeTracker）
+        Entry(message).State = EntityState.Detached;
+
+        if (affected == 0)
         {
-            await SaveChangesAsync(ct).ConfigureAwait(false);
-            // v25 P3 行为族 B6：保存成功后 Detach（与 IdempotencyDbContext B5 同族修复；
-            // 镜像 ProjectionCheckpointDbContext:115-118）——终态已落库，长驻 ChangeTracker
-            // 不残留本条目（无界增长）；后续对同一 message 的 Mark* 自带 AttachIfDetached 兜底。
-            Entry(message).State = EntityState.Detached;
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            // 记录被另一个消费者修改（例如被僵尸回收路径抢占）。
-            // 我们尝试写入的终态现在已经过时 —— 分离实体并将此
+            // 记录被另一个消费者修改（例如被僵尸回收路径抢占）——分离实体并将此
             // 作为警告上报，以便运维人员关联同一 MessageId 上的并发处理。
-            Entry(message).State = EntityState.Detached;
             _logger?.Warning($"Inbox: terminal state for message {message.MessageId} (consumer {message.ConsumerName}) was overwritten by a concurrent processor; the record is detached without persisting the local terminal state.");
-        }
-        catch (DbUpdateException)
-        {
-            // v27 P2 修复：非并发瞬时故障上抛前 Detach——message 已被变异为 Modified（终态
-            // 字段），滞留 ChangeTracker 会被下次无关 SaveChanges 幽灵提交（镜像
-            // IdempotencyDbContext.SaveTerminalStateAsync 三十八轮全修样板）
-            Entry(message).State = EntityState.Detached;
-            throw;
         }
     }
 

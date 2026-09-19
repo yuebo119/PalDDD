@@ -109,6 +109,10 @@ public sealed class DapperEventLog : IEventLog
 
         long firstGlobalPos = 0;
         long lastGlobalPos = 0; // P1 修复（四轮评审）：循环内跟踪，替代算术推导
+        // F7 声明（第五十四轮片4，2026-09-19）：events 含 null 元素时循环内 NRE（evt.EventId
+        // 解引用）——与 PalOrmEventLog.cs:74-76 同分叉同声明（省一次遍历，失败点相同仅异常
+        // 类型不同）；EF 栈是逐元素 ThrowIfNull 的 ArgumentException。行为 2:1 已知，三方
+        // 对齐属独立变更（若做，对齐方向为入口统一 ThrowIfNull）
         for (int i = 0; i < events.Count; i++)
         {
             var evt = events[i];
