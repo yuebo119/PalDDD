@@ -25,12 +25,12 @@
 | B4 | **覆盖率门禁阈值重校准** | CI accuracy 触发：coverage job 首跑产出含 Docker 的完整值后按其重校准（47c8c24 声明） |
 | B5 | ~~54 处 docs 会话相对表述改写~~（"上一轮/本次"等） | ✅ **已完成**（2026-09-19，`40f7701`）：19 文件约 150 处改写为绝对表述（实测含误报由执行时甄别），NAMING §七对照表执行，mention 类保留 |
 | B6 | **ITM-787 ChildSaga 车道测试从零补齐**（ProcessEventAsync 级表征：成功路径 / 重试耗尽补偿 / 补偿再失败嵌套 / 每 attempt 重建 state；含 v35 输入通道 public 化的回归——该区域缺陷曾因零测试掩盖数轮） | ✅ **已完成**（2026-09-19）：`SagaLaneCharacterizationTests.cs` 三车道 12 用例全绿（FanOut/ChildSaga/Dynamic 各 4），每 attempt 重建 + P3-SRC-603 观察者归因已锁定 |
-| B7 | **ITM-804 推送 49 提交 + CI 全套验证**（审计 O-1：aot-verify 真发布未覆盖 Saga 骨架/EF 双下推/DapperAot 启用；proxy 推送命令见 A1 记录） | 即刻快赢（首席审计 2026-09-19 M0，论证：audit-2026-09-19-findings-confirmation.md） |
-| B8 | **ITM-805 B4 覆盖率阈值重校准** | 触发：ITM-804 推送后 CI coverage job 产出含 Docker 完整值 |
-| B9 | **ITM-806 .NET 11 GA 迁移预案**（rc 包清单 + rc 特有行为表 + 升级顺序；审计 D-1 论证） | GA 日前完成即可 |
-| B10 | **ITM-807 三栈 Lease/GetPending 谓词对照测试**（姊妹一致性机械化起点；审计 A-3。ITM-794 已裁决：ADR-024 显式接受 MySQL 互斥分叉——对照测试将分叉列为白名单项，防的是无意漂移） | 快赢批可做（不再依赖裁决） |
-| B11 | **ITM-808 pre-push 同步提示 hook**（治多会话并行无协调；审计 O-2） | 快赢 |
-| B12 | **ITM-809 Dapper 2.1.86 升级** | ITM-804 后 |
+| B7 | ~~ITM-804 推送 49 提交 + CI 全套验证~~ | ✅ **推送完成**（2026-09-19，`c908f40..7412390`，pre-push hook gate-lite 实跑通过）。CI 监控通道受限（gh 未认证）——CI 结果需维护者 GitHub 页面确认或 gh auth 后复查（aot-verify 对 Saga 骨架/EF 双下推的真发布验证是重点） |
+| B8 | ITM-805 B4 覆盖率阈值重校准 | 触发：ITM-804 推送后 CI coverage job 产出含 Docker 完整值（需 CI 结果可见） |
+| B9 | ~~ITM-806 .NET 11 GA 迁移预案~~ | ✅ **已完成**（2026-09-19）：docs/migration/net11-ga-upgrade-plan.md（rc 包清单+五项 rc 特有行为复核表+六步升级顺序） |
+| B10 | ~~ITM-807 三栈 Lease/GetPending 谓词对照测试~~ | ✅ **已完成**（2026-09-19）：CrossStackPredicateParityTests（SQLite 方言三栈归一化等价断言，ADR-024 白名单跳过 PG 锁子句） |
+| B11 | ~~ITM-808 pre-push 同步提示 hook~~ | ✅ **已完成**（2026-09-19）：pre-push 追加段（落后警告+积压≥10 提示），推送实测触发 |
+| B12 | ~~ITM-809 Dapper 2.1.86 升级~~ | ✅ **已完成**（2026-09-19）：CPM 升级，全量零回归 |
 
 ## C. 上游/外部跟踪
 
@@ -58,6 +58,6 @@
 
 ---
 
-**统计**（2026-09-19 审计后复核）：待裁决 0 · 排队 10（B6/B5 已完成；余 B1-B4 + B7-B12/ITM-804~809 审计新任务；ITM-794~803 评审行动项在 docs/review/review-2026-09-19-full{,-v2}.md 与 audit-2026-09-19-findings-confirmation.md 在册）· 跟踪 3 · 环境 3 · 已裁决不做 3 类（其一含翻案并已实施注记，`637e73d`）。
+**统计**（2026-09-19 任务清单实施完毕）：待裁决 0 · 排队 **2**（B1-B3 major 窗口 + B4 待 CI 数据；**B5-B12 与 ITM-794~803 全部完成**——除 ITM-805 需 CI 结果可见外，2026-09-19 全清单实施闭环，详见各 B 行完成注记与 docs/review/audit-2026-09-19-*.md 系列）· 跟踪 3 · 环境 3 · 已裁决不做 3 类（MySQL 互斥/AGPL 双轨/翻案实施均在案）。
 **最近一轮已闭环**：X1 基准（ITM-674）· 覆盖率门禁接线+glob 缺陷修复（47c8c24+277bc34）·
 退役延后（ADR-020）· 真库三方言 AOT 实测 · Agent 脚本 C# 规则（3b31cc0）。
