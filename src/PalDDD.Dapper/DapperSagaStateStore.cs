@@ -236,8 +236,18 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
     // DapperSqlErrorClassifier（码集并集；SqlServer 防御分支与 v13 口径统一注释
     // 随类迁移）——IL2075 抑制随类迁移，调用点经 using static 解析
 
-    private string? SerializeState(TState state)
-        => _jsonTypeInfo is null ? null : JsonSerializer.Serialize(state, _jsonTypeInfo);
+    /// <summary>序列化 saga_data 快照。未注册 JsonTypeInfo 时 fail-fast（对齐 PalORM
+    /// ITM-228 同位置修复，decision-2026-09-19-saga-snapshot-failfast）——原「静默返回
+    /// null」使 saga_data 写 NULL、业务字段全部丢失且无诊断，跨栈契约分叉已收口。</summary>
+    private string SerializeState(TState state)
+    {
+        if (_jsonTypeInfo is null)
+            throw new InvalidOperationException(
+                $"DapperSagaStateStore<TState> requires JsonTypeInfo<TState> to persist saga_data. " +
+                "Register with AddPalDapperSagaSnapshot(jsonTypeInfo) or pass it to the constructor. " +
+                "Without it, SaveChangesAsync silently drops all business fields (ITM-228 / decision-2026-09-19).");
+        return JsonSerializer.Serialize(state, _jsonTypeInfo);
+    }
 
     /// <summary>
     /// P2 修复（八轮评审）：按方言选择时间参数格式（与 DapperOutboxStore.ToTimeParam 同型统一）——

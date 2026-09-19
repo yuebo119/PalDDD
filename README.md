@@ -374,6 +374,8 @@ services.AddPalOrmPostgreSql(connectionString);
 
 Saga 用显式状态/事件转换注册 + FrozenDictionary 查找——不依赖反射，AOT 安全。支持三种补偿策略和超时自动检测。
 
+> ⚠️ **Dapper 持久化快照必传**：`DapperSagaStateStore<TState>` 未注册 source-generated `JsonTypeInfo<TState>` 时 `SaveChangesAsync` 会 fail-fast 抛异常（2026-09-19 起；此前版本静默把业务字段写 NULL——数据丢失缺陷已收口）。注册：`services.AddPalDapperSagaSnapshot(jsonTypeInfo)`。详见 [usage.md](docs/usage.md)。
+
 ```csharp
 public sealed class OrderSaga : Saga<OrderSagaState>
 {
