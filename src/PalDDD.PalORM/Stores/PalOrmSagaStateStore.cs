@@ -180,7 +180,9 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
     /// <inheritdoc />
     public async ValueTask<int> SaveChangesAsync(TState state, CancellationToken ct)
     {
-        // ITM-163 修复：补 state null 守卫（对齐 InMemorySagaStateStore/DapperSagaStateStore/SagaStateDbContext）
+        // ITM-163 修复：补 state null 守卫（对齐 InMemorySagaStateStore/DapperSagaStateStore/
+        // SagaStateDbContext——三方对齐于 2026-09-19 第五十四轮 F2 补齐：EF 侧此前缺失本守卫，
+        // 原注释的三方声明在当时是失实的）
         ArgumentNullException.ThrowIfNull(state);
 
         // v29 P3（S9，镜像 v28 DapperSagaStateStore 的 Q1 形态）：存储层截断兜底——error 列

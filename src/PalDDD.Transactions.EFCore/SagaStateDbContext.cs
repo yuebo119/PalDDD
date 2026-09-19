@@ -185,6 +185,11 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
     /// </remarks>
     async ValueTask<int> ISagaStateStore<TState>.SaveChangesAsync(TState state, CancellationToken ct)
     {
+        // F2 勘正（第五十四轮片4，2026-09-19）：补 ITM-163 null state 守卫——原实现
+        // null 时抛 NRE（首行即 state.Error 解引用），Dapper/PalORM 均抛 ArgumentNull；
+        // PalOrmSagaStateStore.cs:183 的三方对齐注释声称含本类，实为失实声明
+        ArgumentNullException.ThrowIfNull(state);
+
         // v29 P3（S10，镜像 v28 DapperSagaStateStore / v29 PalOrmSagaStateStore 的 Q1 形态）：
         // 存储层截断兜底——Error 列 HasMaxLength(2048)（本类 OnModelCreating），超长 ex.Message
         //（含大 payload 的序列化错误）会让终态保存本身抛 DbUpdateException 掩盖原始异常
