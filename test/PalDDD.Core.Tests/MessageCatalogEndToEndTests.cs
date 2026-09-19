@@ -1,6 +1,5 @@
 using System.Text.Json.Serialization;
 using PalDDD.Generated;
-using PalDDD.Serialization;
 
 namespace PalDDD.Core.Tests;
 
