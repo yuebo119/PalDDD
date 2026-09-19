@@ -11,6 +11,11 @@ using System.Text.Json.Serialization;
 [JsonSerializable(typeof(OrderPlaced))]
 internal sealed partial class EventLogReplayJsonContext : JsonSerializerContext;
 
+// ITM-802（2026-09-19）：[NotInParallel] 并行注记——本类的指标断言（listener.
+// Measurements.Contains）依赖进程级 Meter 状态，类级并行下其他测试类的同名指标
+// 会混入（RecordingActivityListener remarks 勘正在案，范式先例 EventLogTests/
+// MessagingTests 的 ITM-647 形态）
+[TUnit.Core.NotInParallel]
 public sealed class EventLogReplaySourceTests
 {
     private static readonly string[] DefaultPositionValues = ["0", "1"];
