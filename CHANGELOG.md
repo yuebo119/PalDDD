@@ -14,6 +14,8 @@
 
 ### Changed 变更
 
+- **`DapperSagaStateStore<TState>.SaveChangesAsync` 在未注册 `JsonTypeInfo<TState>` 时改为抛 `InvalidOperationException`**（⚠️ 破坏性变更，决策见 `docs/review/decision-2026-09-19-saga-snapshot-failfast.md`）：原实现静默把 `saga_data` 写 NULL——Saga 的全部业务字段（CustomerId 等派生状态）在持久化中丢失且无异常/无日志/无启动诊断；重启恢复只还原元数据。现对齐 PalORM 栈同位置修复（ITM-228）fail-fast，异常消息含注册指引。**迁移**：DI 路径 `services.AddPalDapperSagaSnapshot(jsonTypeInfo)` 或构造函数第三参传入 source-generated `JsonTypeInfo<TState>`（见 `docs/usage.md` ⚠️ 段）。EF 栈用 source-generated converter，不受影响。
+
 - **`IUnitOfWork.BeginTransactionAsync` 在事务已活动时改为抛 `InvalidOperationException`**（决策见 ADR-023）：原 EF Core 与 PalORM 两栈为静默 no-op，而 `ExecuteInTransactionAsync` 是无条件「Begin → work → SaveChanges → Commit」——嵌套调用时内层 Commit 提交的是**外层**事务，导致静默原子性破坏（内层之后的外层工作失去事务保护，外层异常路径的回滚面对已提交事务）。现三栈统一为 fail-fast（对齐 Dapper 既有的 ITM-088 契约），接口与 `ExecuteInTransactionAsync` 文档同步声明「不支持嵌套」。**迁移**：需要在既有事务内执行工作的调用方，请直接执行工作委托或自行编排提交边界，不要嵌套调用本方法。
 
 ---

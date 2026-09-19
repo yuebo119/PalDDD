@@ -297,7 +297,9 @@ var processed = await inbox.TryProcessAsync(
 
 ## 使用 Saga EF Core Store
 
-生产环境可引用 `PalDDD.Transactions.EFCore` 程序集，`using PalDDD.Transactions;` 后派生 `SagaStateDbContext<TState>`，并通过 DI 将该上下文作为 `ISagaStateStore<TState>` 使用。适配器会配置 `SagaId` 主键、active/lease 查询索引、`Version` 并发令牌，并用 source-generated JSON converter 持久化 `StepStartedAt` 和 `ExecutedStepKeys`，避免 reflection-based serialization fallback。Dapper 适配器需要完整快照时，构造 `DapperSagaStateStore<TState>` 时传入 source-generated `JsonTypeInfo<TState>`，即可把派生状态写入 `saga_data`。
+生产环境可引用 `PalDDD.Transactions.EFCore` 程序集，`using PalDDD.Transactions;` 后派生 `SagaStateDbContext<TState>`，并通过 DI 将该上下文作为 `ISagaStateStore<TState>` 使用。适配器会配置 `SagaId` 主键、active/lease 查询索引、`Version` 并发令牌，并用 source-generated JSON converter 持久化 `StepStartedAt` 和 `ExecutedStepKeys`，避免 reflection-based serialization fallback。
+
+> ⚠️ **Dapper 栈快照是必传项而非可选项**（decision-2026-09-19-saga-snapshot-failfast）：`DapperSagaStateStore<TState>` 不注册 `JsonTypeInfo<TState>` 时，`SaveChangesAsync` 会**抛异常**（fail-fast）——未注册的旧版本会静默把 `saga_data` 写 NULL（业务字段全部丢失，2026-09-19 收口）。注册方式：DI 路径 `services.AddPalDapperSagaSnapshot(jsonTypeInfo)`，或构造函数第三参直传。EF 栈用 source-generated converter，无此项要求。
 
 ## 使用 EventLog
 

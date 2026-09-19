@@ -701,10 +701,31 @@ public sealed class DapperStoreTests
     // DapperSagaStateStore 测试
     // ═══════════════════════════════════════════════════════════════
 
+    /// <summary>M1-1（decision-2026-09-19-saga-snapshot-failfast）：未注册 JsonTypeInfo
+    /// 时 SaveChangesAsync fail-fast——原「静默写 NULL 丢业务字段」（v2 审计 A-1）已收口，
+    /// 异常带修复指引（对齐 PalORM ITM-228 同型）。断言消息子串锚定指引可操作性。</summary>
+    [Test]
+    public async Task Saga_SaveChangesAsync_WithoutJsonTypeInfo_FailsFastWithGuidance(CancellationToken cancellationToken)
+    {
+        var store = new DapperSagaStateStore<TestSagaState>(_conn); // 故意不传——被测路径
+        var state = new TestSagaState
+        {
+            SagaId = PalUlid.New(),
+            CurrentState = "Initial",
+            Status = SagaStatus.Active,
+            CreatedAt = TimeProvider.System.GetUtcNow()
+        };
+
+        var ex = await Assert.That(async () =>
+            await store.SaveChangesAsync(state, cancellationToken)).Throws<InvalidOperationException>();
+        await Assert.That(ex!.Message.Contains("requires JsonTypeInfo", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(ex!.Message.Contains("AddPalDapperSagaSnapshot", StringComparison.Ordinal)).IsTrue();
+    }
+
     [Test]
     public async Task Saga_SaveChangesAsync_InsertNew(CancellationToken cancellationToken)
     {
-        var store = new DapperSagaStateStore<TestSagaState>(_conn);
+        var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);
         var state = new TestSagaState
         {
             SagaId = PalUlid.New(),
@@ -725,7 +746,7 @@ public sealed class DapperStoreTests
     [Test]
     public async Task Saga_SaveChangesAsync_Upsert(CancellationToken cancellationToken)
     {
-        var store = new DapperSagaStateStore<TestSagaState>(_conn);
+        var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);
         var sagaId = PalUlid.New();
         var state = new TestSagaState
         {
@@ -754,7 +775,7 @@ public sealed class DapperStoreTests
     [Test]
     public async Task Saga_GetActiveSagas_ReturnsOnlyActiveStates(CancellationToken cancellationToken)
     {
-        var store = new DapperSagaStateStore<TestSagaState>(_conn);
+        var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);
         var now = TimeProvider.System.GetUtcNow();
         await store.SaveChangesAsync(new TestSagaState
         {
@@ -806,7 +827,7 @@ public sealed class DapperStoreTests
         // 在 [..2040] 切片点恰落在高代理上时（'a'*2039 + 🎉 长度 2041），守卫回退一位
         // 防孤立高代理入库（镜像 FailureReasonTests.Normalize/Truncate 同名用例形态；
         // INSERT 与 UPDATE 共用方法开头收口，测 INSERT 路径即可覆盖）
-        var store = new DapperSagaStateStore<TestSagaState>(_conn);
+        var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);
         var state = new TestSagaState
         {
             SagaId = PalUlid.New(),
