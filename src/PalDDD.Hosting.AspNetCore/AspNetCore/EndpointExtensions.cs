@@ -33,8 +33,10 @@ public static class EndpointExtensions
         return endpoints.MapPost(pattern, async context =>
         {
             // 反序列化段（ITM-799 收口，2026-09-19）：415/畸形 JSON/验证异常/空 body
-            // 四种错误的编排原在 MapCommand/MapQuery 两处逐字重复（约 40 行）——
-            // 收口为 ReadJsonBodyOrWriteErrorAsync 单一出处，错误语义注释随迁
+            // 四种错误的编排原在 MapCommand 两个重载（MapCommand 与
+            // MapCommand<TCommand,TResponse>）逐字重复（约 40 行）——R54 勘正：原注释
+            // 误写为「MapCommand/MapQuery」，MapQuery 是 GET 无反序列化段——收口为
+            // ReadJsonBodyOrWriteErrorAsync 单一出处，错误语义注释随迁
             var (ok, cmd) = await ReadJsonBodyOrWriteErrorAsync(context, commandJsonTypeInfo).ConfigureAwait(false);
             if (!ok) return;
 

@@ -14,10 +14,9 @@ namespace PalDDD.Dapper;
 internal static class DapperSqlErrorClassifier
 {
     /// <summary>唯一约束冲突判定（内层异常链逐层下钻）。
-    /// 码集并集：PG 23505 / MySQL 1062+1586+1022 / SQLite 19+2067 码（message
-    /// 限定兜底——裸消息匹配会把文案恰含该词组的非唯一异常误判，ITM-188/192 族
-    /// 勘正保留类型限定）/ SqlServer 2601+2627（v20 F1 防御性保留——DapperDbType
-    /// 无 SqlServer 值现状下不删，避免恢复该方言时的静默漏判）。</summary>
+    /// 码集：PG 23505 / MySQL 1062+1586+1022 / SQLite 类型限定 message（基码 19 覆盖
+    /// 全部约束家族不可用作唯一判据，R54-P2-1 勘正）/ SqlServer 2601+2627（v20 F1
+    /// 防御性保留——DapperDbType 无 SqlServer 值现状下不删）。</summary>
     [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075:This",
         Justification = "Provider 异常鸭子类型判定（原四处私有副本的 IL2075 抑制随 ITM-796 收口迁移至此）。裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级）。")]
     internal static bool IsUniqueConstraintViolation(Exception exception)
@@ -39,11 +38,12 @@ internal static class DapperSqlErrorClassifier
 
             if (typeName.Equals("SqliteException", StringComparison.Ordinal))
             {
-                if (type.GetProperty("SqliteErrorCode")?.GetValue(inner) is int sqliteCode
-                    && sqliteCode is 19 or 2067)
-                    return true;
-                // message 兜底（v25 P3 守卫族：null/空消息不进 Contains）——码不可得
-                //（版本差异/包装异常）时的保守补充，类型已限定
+                // R54-P2-1 勘正（2026-09-19 第五十四轮片1，四码探针实证）：SqliteErrorCode
+                // 基码对全部 SQLITE_CONSTRAINT 家族恒 19（NOT NULL=19/1299、UNIQUE=19/2067、
+                // CHECK=19/275、PK=19/1555）——码判定会把 NOT NULL/CHECK 违规误判为唯一冲突，
+                // 正是 ITM-188/192 勘正明令防的「掩盖真实数据错误」。2067 只存在于
+                // SqliteExtendedErrorCode 属性（基码属性上永不出现）。故 SQLite 仅保留
+                // 类型限定的 message 匹配（与原 EventLog/Saga 副本逐字等价）。
                 var message = inner.Message;
                 if (!string.IsNullOrEmpty(message)
                     && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))

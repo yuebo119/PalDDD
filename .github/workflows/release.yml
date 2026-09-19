@@ -121,7 +121,10 @@ jobs:
           echo "Package count: $COUNT (expected $EXPECTED)"
 
       - name: Push to NuGet.org
-        if: ${{ env.NUGET_API_KEY != '' }}
+        # R54-P1-1 勘正（2026-09-19 第五十四轮片1）：补 skip-nuget 接线——原条件只查
+        # key 存在，「勾选 skip-nuget + 有 key」时 35 包照推（input 唯一有实际作用的
+        # 场景完全失效，不可逆公开副作用）
+        if: ${{ env.NUGET_API_KEY != '' && inputs.skip-nuget != true }}
         run: |
           set -euo pipefail
           PUSHED=0
