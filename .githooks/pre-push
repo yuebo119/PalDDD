@@ -2,7 +2,8 @@
 # pre-push — ITM-671：推送前校验
 # ① main 分支保护（从 .git/hooks/pre-push 迁移——原 hook 因 core.hooksPath
 #    指向不存在的 .githooks 目录而死亡，本次修复）
-# ② gate-lite CI 预览（快速门禁降级路径，~2s）
+# ② 同步提示（ITM-808：多会话/多批次积压的验证债可见性，信息性）
+# ③ gate-lite CI 预览（快速门禁降级路径，~2s）
 set -uo pipefail
 
 # ── ① main 分支保护 ──
@@ -17,7 +18,20 @@ if [ "$target" = "main" ]; then
     fi
 fi
 
-# ── ② gate-lite CI 预览 ──
+# ── ② 同步提示（ITM-808，2026-09-19：信息性不阻断）──
+# 治「多批次并行开发后长时间不推送」的验证债：本地积压越多，CI（尤其
+# aot-verify 真发布）对积压代码的验证缺口越大（首席审计 O-1：曾实测积压 49 提交）。
+upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)
+if [ -n "$upstream" ]; then
+    _ahead=$(git rev-list --count "$upstream..HEAD" 2>/dev/null || echo 0)
+    _behind=$(git rev-list --count "HEAD..$upstream" 2>/dev/null || echo 0)
+    [ "$_behind" -gt 0 ] && \
+        echo "⚠️  pre-push：本地落后 $upstream $_behind 个提交——推送可能被拒或需先 rebase（多会话并行写冲突风险，open-items O-2）。"
+    [ "$_ahead" -ge 10 ] && \
+        echo "⚠️  pre-push：本次推送承载 $_ahead 个积压提交——CI（含 aot-verify 真发布）将首次验证这批代码，失败排查面较大；建议日常小批推送。"
+fi
+
+# ── ③ gate-lite CI 预览 ──
 echo "🔍 gate-lite（CI 降级门禁预览）…"
 if ! dotnet run scripts/gate-lite.cs 2>&1; then
     echo "⛔ gate-lite 失败"
