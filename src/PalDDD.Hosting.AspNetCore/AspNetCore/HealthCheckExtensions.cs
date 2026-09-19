@@ -58,7 +58,9 @@ public static class HealthCheckExtensions
 
     internal static async Task WriteHealthResponseAsync(HttpContext context, HealthReport report, TimeProvider clock)
     {
-        context.Response.ContentType = "application/json";
+        // ITM-800（2026-09-19）：删除手动 ContentType 赋值——WriteAsJsonAsync(contentType:null)
+        // 用框架默认 "application/json; charset=utf-8" 覆盖此设置（死代码）；行为由
+        // WriteHealthResponse_FinalContentTypeIsFrameworkDefault_NotManualSet 测试锁定
         var response = new PalHealthResponse(
             report.Status.ToString(),
             clock.GetUtcNow(),
