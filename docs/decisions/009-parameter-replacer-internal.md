@@ -1,6 +1,6 @@
 # ADR 009：`ParameterReplacer` 维持 internal 不下沉为公共工具
 
-> 状态：已采纳  
+> 状态：已采纳（引用位置过时，ITM-803 勘正注记 2026-09-19：:39 引"AGENTS.md 表达式树组合规约"——条目现位于 docs/conventions.md（禁止 Expression.Invoke），内容在案仅位置漂移）  
 > 日期：2026-06-29  
 
 ## 背景

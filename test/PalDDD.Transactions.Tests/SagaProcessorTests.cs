@@ -299,10 +299,17 @@ public sealed class SagaProcessorTests
         var persisted = await store.GetByIdAsync(state.SagaId, ct);
         await Assert.That(persisted!.Status).IsEqualTo(SagaStatus.Compensated);
 
-        // 迟到决策：必须可见失败且副作用不施加
-        await Assert.That(async () =>
+        // 迟到决策：必须可见失败且副作用不施加。
+        // ITM-801（2026-09-19）：补消息子串——裸 Throws<IOE> 非区分性（未注册/终态/
+        // 已失效多路径同类型）。本场景实际走"无已注册的中断条目"路径（CheckTimeouts
+        // 补偿后条目已被清理，DIAG 实证），终态分支是条目滞留时的姊妹路径——两子串
+        // 取一即锚定"可见失败"语义
+        var ex = await Assert.That(async () =>
             await manager.ResumeAsync(state.SagaId, new TimeoutApprove(true), ct))
             .Throws<InvalidOperationException>();
+        await Assert.That(
+            ex!.Message.Contains("无已注册的中断条目", StringComparison.Ordinal)
+            || ex!.Message.Contains("已处于终态", StringComparison.Ordinal)).IsTrue();
         await Assert.That(state.CurrentState).IsNotEqualTo("Approved");
     }
 

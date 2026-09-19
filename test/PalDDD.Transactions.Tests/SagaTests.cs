@@ -396,7 +396,10 @@ public class SagaTimeoutTests
         var timedOut = saga.IsTimedOut(state, DateTimeOffset.UtcNow, out var steps);
 
         await Assert.That(timedOut).IsTrue();
-        await Assert.That(steps).IsNotEmpty();
+        // ITM-801（2026-09-19）：步骤级断言——裸 IsNotEmpty 非区分性（镜像姊妹
+        // DynamicStepTimeoutProbeTests 的 Count+Name 强断言形态）
+        await Assert.That(steps).Count().IsEqualTo(1);
+        await Assert.That(steps[0].Name).IsEqualTo("Slow");
     }
 }
 
