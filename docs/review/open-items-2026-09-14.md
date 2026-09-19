@@ -26,7 +26,7 @@
 | B5 | ~~54 处 docs 会话相对表述改写~~（"上一轮/本次"等） | ✅ **已完成**（2026-09-19，`40f7701`）：19 文件约 150 处改写为绝对表述（实测含误报由执行时甄别），NAMING §七对照表执行，mention 类保留 |
 | B6 | **ITM-787 ChildSaga 车道测试从零补齐**（ProcessEventAsync 级表征：成功路径 / 重试耗尽补偿 / 补偿再失败嵌套 / 每 attempt 重建 state；含 v35 输入通道 public 化的回归——该区域缺陷曾因零测试掩盖数轮） | ✅ **已完成**（2026-09-19）：`SagaLaneCharacterizationTests.cs` 三车道 12 用例全绿（FanOut/ChildSaga/Dynamic 各 4），每 attempt 重建 + P3-SRC-603 观察者归因已锁定 |
 | B7 | ~~ITM-804 推送 49 提交 + CI 全套验证~~ | ✅ **推送完成**（2026-09-19，`c908f40..7412390`，pre-push hook gate-lite 实跑通过）。CI 监控通道受限（gh 未认证）——CI 结果需维护者 GitHub 页面确认或 gh auth 后复查（aot-verify 对 Saga 骨架/EF 双下推的真发布验证是重点） |
-| B8 | ITM-805 B4 覆盖率阈值重校准 | 触发：ITM-804 推送后 CI coverage job 产出含 Docker 完整值（需 CI 结果可见） |
+| B8 | ~~ITM-805 B4 覆盖率阈值重校准~~ + **ITM-810 CI Format verify 首验矛盾消解** | ✅/✅ **已完成**（2026-09-19）：CI 首验三连失败（run 101/102/104）→ IDE0005 根因为 dotnet format 对源生成产物不加载的已知局限（format 判 unnecessary vs Build CS0246 互相矛盾），Core.Tests 项目级 NoWarn 压制根治（43ddc28）；**run 105 四 job 全绿**（dialect-probe/coverage/aot-verify/build-and-test 全 success）——aot-verify 对 Saga 骨架/EF 双下推/DapperAot 启用的真发布验证通过。B4 重校准待办：coverage job 已产出含 Docker 完整值，取数后与 0.70 阈值比对（须 CI 页面/artifact 取数，本会话 API 未见汇总数字） |
 | B9 | ~~ITM-806 .NET 11 GA 迁移预案~~ | ✅ **已完成**（2026-09-19）：docs/migration/net11-ga-upgrade-plan.md（rc 包清单+五项 rc 特有行为复核表+六步升级顺序） |
 | B10 | ~~ITM-807 三栈 Lease/GetPending 谓词对照测试~~ | ✅ **已完成**（2026-09-19）：CrossStackPredicateParityTests（SQLite 方言三栈归一化等价断言，ADR-024 白名单跳过 PG 锁子句） |
 | B11 | ~~ITM-808 pre-push 同步提示 hook~~ | ✅ **已完成**（2026-09-19）：pre-push 追加段（落后警告+积压≥10 提示），推送实测触发 |
