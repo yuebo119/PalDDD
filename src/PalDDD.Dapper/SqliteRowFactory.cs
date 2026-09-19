@@ -21,8 +21,11 @@ namespace PalDDD.Dapper;
 
 /// <summary>SQLite Dapper RowFactory — 将 TEXT 列映射到 Guid/Ulid/DateTimeOffset。</summary>
 /// <remarks>
-/// ⚠️ AOT 状态：[module:DapperAot] 当前未启用——经典 Dapper 运行时路径生效，非 NativeAOT 兼容。<br/>
-/// PalORM 适配层（PalDDD.PalORM）提供真 AOT 替代路径。
+/// ⚠️ AOT 状态：[module:DapperAot] 已启用（experiment/dapper-aot-full，见文件头注与
+/// DapperAotInitializer.cs）——拦截器生成代码接管后本 RowFactory 仅服务拦截器未覆盖的
+/// 手动物化路径。<br/>
+/// 边界：绕过封装直用 Dapper 原生 API 在 NativeAOT 下不受支持——PalORM 适配层
+///（PalDDD.PalORM）为另一 AOT 路径。
 /// </remarks>
 public static class SqliteRowFactory
 {

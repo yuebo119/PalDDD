@@ -345,7 +345,8 @@ public sealed class OutboxSqliteConcurrencyTests
                 var pending = await ((IPalOutboxStore)ctx).GetPendingMessagesAsync(100, 5, CancellationToken.None);
                 await Assert.That(pending).IsEmpty();
             }
-            await Assert.That(counter.ExecutedCommands).IsEqualTo(1);        }
+            await Assert.That(counter.ExecutedCommands).IsEqualTo(1);
+        }
         finally
         {
             await connection.DisposeAsync();
@@ -469,7 +470,6 @@ public sealed class OutboxSqliteConcurrencyTests
 
             await Assert.That(secondLeased).Count().IsEqualTo(4);
             var firstIds = firstLeased.Select(m => m.Id).ToHashSet();
-            await Assert.That(secondLeased.All(m => firstIds.Contains(m.Id) || ids.Contains(m.Id))).IsTrue();
             await Assert.That(secondLeased.Select(m => m.Id).ToHashSet().SetEquals(ids)).IsTrue();
         }
         finally
