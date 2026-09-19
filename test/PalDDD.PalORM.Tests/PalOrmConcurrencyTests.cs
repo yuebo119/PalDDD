@@ -44,6 +44,33 @@ public class PalOrmConcurrencyTests
         await session.ExecuteAsync($"CREATE TABLE IF NOT EXISTS idempotency_records (operation_name TEXT NOT NULL, idempotency_key TEXT NOT NULL, status INTEGER NOT NULL, locked_until TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL, response_payload TEXT, error TEXT, revision INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (operation_name, idempotency_key))", ct);
     }
 
+    /// <summary>三栈 owner 守卫行为对照 · PalORM 侧（2026-09-19 系统优化增）——与 EF 侧
+    /// LeasePending_NonPositiveBatchOrMaxRetry / Dapper 侧 Outbox_BlankOwner 同型，三栈同红
+    /// 同绿：owner 空白在 SQL 执行前抛 ArgumentException（ITM-081/216 系列，v22 C-2）。
+    /// 源码守卫在位（PalOrmOutboxStore.cs:75）但此前无行为锁定——防未来移除守卫静默漂移。</summary>
+    [Test]
+    public async Task Outbox_BlankOwner_ThrowsArgumentNullAcrossStacks()
+    {
+        var dbPath = $"blankowner_{Guid.NewGuid():N}.db";
+        try
+        {
+            await using var session = await CreateSharedFileSessionAsync(dbPath);
+            await InitSchemaAsync(session);
+            var store = new SqliteOutboxStore(session);
+
+            await Assert.That(async () =>
+                await store.LeasePendingMessagesAsync(10, "", TimeSpan.FromMinutes(5), 10, default))
+                .Throws<ArgumentException>();
+            await Assert.That(async () =>
+                await store.LeasePendingMessagesAsync(10, "   ", TimeSpan.FromMinutes(5), 10, default))
+                .Throws<ArgumentException>();
+        }
+        finally
+        {
+            if (File.Exists(dbPath)) try { File.Delete(dbPath); } catch { /* 连接池延迟释放，Guid 命名不冲突 */ }
+        }
+    }
+
     /// <summary>
     /// Outbox LeasePending 多 worker 并发 —— 验证无重复分配。
     /// <para>100 条 Pending 消息 + 10 个 worker（每个独立 DataSession），Task.WhenAll 并发。</para>

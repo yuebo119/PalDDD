@@ -223,7 +223,7 @@ public sealed class DapperStoreTests
     public async Task Outbox_NonPositiveMaxRetryCount_ThrowsArgumentOutOfRange()
     {
         // ITM-659 守卫族收口：maxRetryCount 非正守卫——非正值使 retry_count < @maxRetryCount
-        // 恒假（retry_count >= 0），原实现各方言下静默空返回无诊断（直调路径防御性
+        // 恒假（RetryCount >= 0），原实现各方言下静默空返回无诊断（直调路径防御性
         // fail-fast；守卫在 SQL 执行前抛出）。GetPending 与 Lease 两方法同守卫，
         // PalORM/EFCore 姊妹镜像（PalOrmOutboxStoreTests / OutboxEfCoreTests）。
         var store = new DapperOutboxStore(_conn, _dbType);
@@ -232,6 +232,24 @@ public sealed class DapperStoreTests
             .Throws<ArgumentOutOfRangeException>();
         await Assert.That(async () => await store.LeasePendingMessagesAsync(10, "worker-1", TimeSpan.FromMinutes(5), 0, default))
             .Throws<ArgumentOutOfRangeException>();
+    }
+
+    /// <summary>三栈 owner 守卫行为对照 · Dapper 侧（2026-09-19 系统优化增）——与 EF 侧
+    /// LeasePending_NonPositiveBatchOrMaxRetry / PalORM 侧同型，三栈同红同绿：owner 空白
+    /// 在三栈均须 SQL 执行前抛 ArgumentException（ITM-081/216/167 对齐系列，v22 C-2）。
+    /// 源码守卫在位但此前仅 EF 侧有行为锁定——本测试补齐对照面（第八流：行为一致性由
+    /// 测试守护，防未来单栈移除守卫静默漂移）。</summary>
+    [Test]
+    public async Task Outbox_BlankOwner_ThrowsArgumentNullAcrossStacks()
+    {
+        var store = new DapperOutboxStore(_conn, _dbType);
+
+        await Assert.That(async () =>
+            await store.LeasePendingMessagesAsync(10, "", TimeSpan.FromMinutes(5), 10, default))
+            .Throws<ArgumentException>();
+        await Assert.That(async () =>
+            await store.LeasePendingMessagesAsync(10, "   ", TimeSpan.FromMinutes(5), 10, default))
+            .Throws<ArgumentException>();
     }
 
     // ─────────────────────────────────────────────────────────────
