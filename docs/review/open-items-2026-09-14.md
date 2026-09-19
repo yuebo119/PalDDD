@@ -19,7 +19,7 @@
 
 | # | 项 | 窗口/触发 |
 |---|-----|----------|
-| B1 | **ITM-672 EFCore Pooling 解锁**（拦截器状态迁 Context 派生字段；基准佐证慢主体在 EF 管道非构造，预期"部分改善"） | v3.0 major 窗口（API 变化）。**2026-09-19 优先级提升建议**：Lease 批量化（637e73d）后 Lease 本体已达 Dapper 同量级，EF 栈剩余基准差距的主导项转为重灌/管道成本——本项成为下一步主要杠杆 |
+| B1 | **ITM-672 EFCore Pooling 解锁**（拦截器状态迁 Context 派生字段） | v3.0 major 窗口（API 变化，与 B2 捆绑裁决维持）。**2026-09-19 优先级提升建议已实测撤回**：Pooling 对照实验（同日，%TEMP% spike 60 轮）——AddDbContext vs AddDbContextPool 同负载中位 10.68→10.21ms，**收益仅 4.4%（0.47ms）**；Lease 基准 11.70ms 的差距主体在 SaveChanges 管道（EF 上游，Pooling 不解决），"B1 是剩余差距主杠杆"的假设不成立。bench-baseline 09-13 的"部分改善"预期得到更弱确认 |
 | B2 | **IPalOutboxStore 异步化 + 跨栈 fencing 契约统一**（吸收 PalORM 同步 DIM 的 GetResult 阻塞） | 同 v3.0 窗口（ADR-020 保留项） |
 | B3 | **[Obsolete] 6 处移除**（Core Attributes ×2"框架零消费"、SqlServerOutboxDbContext 等，tech-debt WARN 项） | v3.0（移除计划已在注解内声明） |
 | B4 | **覆盖率门禁阈值重校准** | CI accuracy 触发：coverage job 首跑产出含 Docker 的完整值后按其重校准（47c8c24 声明） |
@@ -28,7 +28,7 @@
 | B7 | **ITM-804 推送 49 提交 + CI 全套验证**（审计 O-1：aot-verify 真发布未覆盖 Saga 骨架/EF 双下推/DapperAot 启用；proxy 推送命令见 A1 记录） | 即刻快赢（首席审计 2026-09-19 M0，论证：audit-2026-09-19-findings-confirmation.md） |
 | B8 | **ITM-805 B4 覆盖率阈值重校准** | 触发：ITM-804 推送后 CI coverage job 产出含 Docker 完整值 |
 | B9 | **ITM-806 .NET 11 GA 迁移预案**（rc 包清单 + rc 特有行为表 + 升级顺序；审计 D-1 论证） | GA 日前完成即可 |
-| B10 | **ITM-807 三栈 Lease/GetPending 谓词对照测试**（姊妹一致性机械化起点；审计 A-3） | 与 ITM-794 裁决同批规划 |
+| B10 | **ITM-807 三栈 Lease/GetPending 谓词对照测试**（姊妹一致性机械化起点；审计 A-3。ITM-794 已裁决：ADR-024 显式接受 MySQL 互斥分叉——对照测试将分叉列为白名单项，防的是无意漂移） | 快赢批可做（不再依赖裁决） |
 | B11 | **ITM-808 pre-push 同步提示 hook**（治多会话并行无协调；审计 O-2） | 快赢 |
 | B12 | **ITM-809 Dapper 2.1.86 升级** | ITM-804 后 |
 
@@ -50,6 +50,8 @@
 
 ## E. 已裁决不做（记录在案，勿重提）
 
+- MySQL 三栈租约互斥统一（**ITM-794，2026-09-19 用户裁决「显式接受」**——ADR-024 在案：两侧取舍各有成立面（Dapper/PalORM 保 8.0.18 以下兼容矩阵、EF 保互斥），fencing + at-least-once 幂等分层兜底；消费方指引见 ADR-024 §消费方指引）
+- AGPL-3.0-or-later 商业双轨（**2026-09-19 用户裁决「社区项目」**——项目定位社区框架，AGPL 维持，不引入商业授权双轨）
 - RequestHash 请求指纹（第 28 轮"先不做"，备忘方案已存 cortex）
 - Kafka Produce 批量回调 / ZLogger 结构化门面（第 28 轮裁决，理由在案）
 - ORM 优化 11 项不做清单（orm-optimization-deep-analysis §五：EFCore Compiled Models / PalORM configureResilience / MySQL 预备语句 / ~~批量 lease~~（**2026-09-18 翻案，2026-09-19 已实施** `637e73d`：decision-2026-09-17 裁决并落地 EF SQLite 租约单语句批量化——旧结论针对「削弱 fencing」形态，新方案资格检查语句内重估不削弱；验收按「Lease 本体达标」改判，详见 decision 锚点表）/ 序列化等，各有反过度优化理由）

@@ -100,7 +100,7 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 | AOT 现状与约束 | `docs/aot.md`、`docs/design/` |
 | 用法与教程 | `docs/usage.md`、`docs/tutorial.md` |
 | 测试策略与基线 | `docs/testing.md`、`docs/test-coverage-baseline.md` |
-| 已定的架构决策（含被否决方案） | `docs/decisions/`（23 份 ADR，2026-09-16 ADR-023 增） |
+| 已定的架构决策（含被否决方案） | `docs/decisions/`（24 份 ADR，2026-09-19 ADR-024 增） |
 | 历轮评审与清单 | `docs/review/`（含 `NAMING.md` 命名约定与索引） |
 | 迁移与发布 | `docs/migration/`、`docs/release.md` |
 | 已知坑 | `docs/pitfalls.md` |
