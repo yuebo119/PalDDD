@@ -8,6 +8,11 @@ on:
       version:
         description: 'Version to release (must match Directory.Build.props)'
         required: true
+      skip-nuget:
+        description: 'Only create GitHub Release with nupkg attachments, do NOT push to NuGet.org (explicit opt-out, M3-9)'
+        required: false
+        type: boolean
+        default: false
 
 env:
   DOTNET_NOLOGO: true
@@ -136,11 +141,20 @@ jobs:
             exit 1
           fi
 
-      - name: NuGet push skipped (secret missing)
-        if: ${{ env.NUGET_API_KEY == '' }}
+      - name: NuGet push skipped (secret missing) — fail
+        if: ${{ env.NUGET_API_KEY == '' && inputs.skip-nuget != true }}
         run: |
-          # v60: explicit silent-skip warning (GitHub Release still created with nupkg attachments, half-success state is visible)
-          echo "::warning::NUGET_API_KEY is not configured - 35 packages were NOT pushed to NuGet.org"
+          # M3-9（v2 审计 O-4，2026-09-19）：原 v60 形态仅 ::warning:: 且 GitHub Release
+          # 照建——「发布成功」可等于「0 个包发布」（假成功）。tag/手动触发均为显式
+          # 发布意图，缺 key 应 fail 而非静默跳过。逃生门：手动触发时显式勾选
+          # skip-nuget（只建 Release 附包、不推 NuGet 的模式成为显式选择）。
+          echo "::error::NUGET_API_KEY is not configured - 35 packages were NOT pushed to NuGet.org. If you intentionally want a Release-only run (no NuGet push), re-run with the skip-nuget input set to true."
+          exit 1
+
+      - name: NuGet push intentionally skipped (explicit opt-out)
+        if: ${{ env.NUGET_API_KEY == '' && inputs.skip-nuget == true }}
+        run: |
+          echo "::warning::NuGet push intentionally skipped (skip-nuget=true) - GitHub Release will be created with nupkg attachments only."
 
       - name: Create GitHub Release
         if: github.event_name == 'push'
