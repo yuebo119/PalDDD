@@ -48,17 +48,29 @@ Environment.CurrentDirectory = root;
 Console.WriteLine("═══ Dapper 参数枚举守卫 ═══");
 
 var violations = new List<string>();
+var scannedDirs = 0;
+var scannedFiles = 0;
 foreach (var dir in new[] { "src/PalDDD.Dapper", "src/PalDDD.Dapper.PostgreSql", "src/PalDDD.Dapper.MySql", "src/PalDDD.Dapper.Sqlite" })
 {
     if (!Directory.Exists(dir)) continue;
+    scannedDirs++;
     foreach (var file in Directory.EnumerateFiles(dir, "*.cs", SearchOption.AllDirectories))
     {
         if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") ||
             file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")) continue;
+        scannedFiles++;
         var text = File.ReadAllText(file);
         foreach (var (line, snippet) in FindEnumParams(text))
             violations.Add($"{ToPosix(file)}:{line}  {snippet}");
     }
+}
+
+// T-1 同类空转守卫（2026-09-19 系统优化）：四个 Dapper 目录全部不存在或零 .cs 文件
+// → 扫描范围意外为空（目录改名/结构重构）——exit 1 而非报 PASS（「跑过东西的绿」才是绿）
+if (scannedDirs == 0 || scannedFiles == 0)
+{
+    Console.WriteLine($"FAIL 扫描范围为空（命中目录 {scannedDirs}/4，扫描文件 {scannedFiles}）——Dapper 目录结构可能已变，守卫失去扫描对象（空转假绿防护，v2 审计 T-1 同类）");
+    return 1;
 }
 
 if (violations.Count > 0)

@@ -154,6 +154,20 @@ static int RunInherit(string fileName, string arguments)
     return process.ExitCode;
 }
 
+// 静默捕获 stdout（新鲜度检查用——git 日期查询，失败返回 null 由调用方跳过）
+static string? RunGitQuiet(string arguments)
+{
+    using var process = Process.Start(new ProcessStartInfo("git", arguments)
+    {
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        RedirectStandardOutput = true,
+    })!;
+    var output = process.StandardOutput.ReadToEnd();
+    process.WaitForExit();
+    return process.ExitCode == 0 ? output : null;
+}
+
 // ─── 测试项目枚举：对齐 find test -name '*.csproj' ! -name 'PalDDD.Testing.csproj' | sort ───
 // 路径均为 ASCII，Ordinal 与 bash sort（字节序）等价
 static List<string> FindTestProjects() =>
@@ -224,6 +238,19 @@ static int EnforceModuleDropLimit(string baselinePath, string resultsRoot)
         Console.Error.WriteLine($"ERROR: baseline {baselinePath} not found (fail-closed)");
         return 1;
     }
+    // v2 审计 T-3（主题 4「证据新鲜度即门禁」）：基线年龄检查——旧基线上的降幅门禁
+    // 不构成证据（v2 实证：7 周陈旧基线 + 最低覆盖区恰是生产 SQL 栈）。读基线文件的
+    // git 最后提交日期（JSON 内无字段时也覆盖旧格式）；>30 天 → ::warning 提示重测
+    //（不 fail：CI 无法自动重测会死锁，重测走 --update-baseline 校准入口）
+    try
+    {
+        var gitDate = RunGitQuiet($"log -1 --format=%as -- {baselinePath}");
+        if (DateTime.TryParse(gitDate?.Trim(), out var generated) &&
+            (DateTime.UtcNow.Date - generated).TotalDays > 30)
+            Console.WriteLine($"::warning::coverage 基线已 {(DateTime.UtcNow.Date - generated).Days} 天未更新（{generated:yyyy-MM-dd}）——降幅门禁的比对数据可能失真，请跑 dotnet run scripts/ci-coverage.cs -- --update-baseline 重测（v2 审计 T-3）");
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+    { /* git 不可用/启动失败时跳过新鲜度检查，不阻塞门禁本体（窄化 catch 免 CA1031） */ }
     var baselines = ReadModuleBaselines(baselinePath);
     if (baselines.Count == 0)
     {
@@ -322,6 +349,7 @@ static int UpdateBaseline(string baselinePath, string resultsRoot)
     sb.Append('}');
     File.WriteAllText(baselinePath, sb.ToString());
     Console.WriteLine($"基线已更新：{rates.Count} 项目 → {baselinePath}");
+    Console.WriteLine($"  _generatedAt = {DateTime.UtcNow:yyyy-MM-dd}（新鲜度锚，v2 审计 T-3 主题——比对步骤据此警示过期基线）");
     foreach (var (proj, rate) in rates)
         Console.WriteLine($"  {proj}: {rate.ToString("P2", CultureInfo.InvariantCulture)}");
     return 0;
