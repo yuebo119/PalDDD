@@ -276,6 +276,44 @@ Console.WriteLine();
     else Console.WriteLine($"✅ V11 决策文档结构合规（{decisions.Count} 个，模板 docs/review/DECISION_TEMPLATE.md）");
 }
 
+// ─── V12：文档私网 IP 泄露门禁（v2 审计 S-4 / M1-6 机械层，2026-09-19 增）───
+// 来源：v2 复证审计实证——公开 AGPL 仓的 docs/ 曾含 13 处内网拓扑（IP + 服务版本
+// 组合 = 免预认证目标清单），M1-6 手工脱敏后无防线防复发。本规则扫 docs/**.md 与
+// 根级 md 的 RFC1918 私网地址（10/8、172.16/12、192.168/16）；豁免 <INTERNAL_TEST_HOST>
+// 泛化形态（脱敏后的标准写法）。与 secret-scan 分工：secret-scan 管 .cs/.config 的
+// 凭据，本规则管文档面的拓扑泄露。
+{
+    var docFilesV12 = new List<string>();
+    foreach (var dir in (string[])["docs"])
+        if (Directory.Exists(dir))
+            docFilesV12.AddRange(Directory.GetFiles(dir, "*.md", SearchOption.AllDirectories));
+    foreach (var f in (string[])["README.md", "README.en.md", "AGENTS.md", "CHANGELOG.md"])
+        if (File.Exists(f)) docFilesV12.Add(f);
+
+    // RFC1918 三段（词边界防 172.32.x 误报；172 的 16-31 段用显式枚举）
+    var ipRx = new System.Text.RegularExpressions.Regex(
+        @"\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b");
+    var leaks = new List<string>();
+    foreach (var doc in docFilesV12)
+    {
+        var lineno = 0;
+        foreach (var content in File.ReadLines(doc))
+        {
+            lineno++;
+            if (ipRx.IsMatch(content))
+                leaks.Add($"{ToPosix(doc)}:{lineno}");
+        }
+    }
+    if (leaks.Count > 0)
+    {
+        Console.WriteLine($"❌ V12 文档含私网 IP（拓扑泄露面，{leaks.Count} 处）：");
+        foreach (var l in leaks.Take(10)) Console.WriteLine($"   {l}");
+        Console.WriteLine("   修法：泛化为 <INTERNAL_TEST_HOST> 形态（M1-6 脱敏先例）；教程性地址用 203.0.113.x（TEST-NET-3）。");
+        fail++;
+    }
+    else Console.WriteLine($"✅ V12 文档无私网 IP 泄露（{docFilesV12.Count} 个文档）");
+}
+
 // ─── --quick 模式：仅 grep 检查，跳过 build/test ───
 if (mode == "--quick")
 {

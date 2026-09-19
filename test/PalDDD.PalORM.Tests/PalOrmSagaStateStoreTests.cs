@@ -51,6 +51,24 @@ public class PalOrmSagaStateStoreTests
         await Assert.That(leaseStart >= before.AddSeconds(-5) && leaseStart <= DateTimeOffset.UtcNow.AddSeconds(5)).IsTrue();
     }
 
+    /// <summary>跨栈快照行为对照 · PalORM 侧（2026-09-19 系统优化增，镜像 Dapper 侧
+    /// Saga_SaveChangesAsync_WithoutJsonTypeInfo_FailsFastWithGuidance）——两栈同红同绿
+    /// 即「未注册 JsonTypeInfo → fail-fast 带指引」契约的行为对照测试化（第八流视角：
+    /// 同契约失败模式一致性由测试守护而非纪律）。PalORM 本就是 ITM-228 正解侧——本测试
+    /// 防的是该 fail-fast 被未来「顺手优化」移除时 Dapper/PalORM 静默分叉复活。</summary>
+    [Test]
+    public async Task SaveChangesAsync_WithoutJsonTypeInfo_FailsFastWithGuidance()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteSagaStateStore<StoreTestSagaState>(session); // 故意不传——被测路径
+
+        var ex = await Assert.That(async () =>
+            await store.SaveChangesAsync(new StoreTestSagaState { CurrentState = "Active" }, default))
+            .Throws<InvalidOperationException>();
+        await Assert.That(ex!.Message.Contains("requires JsonTypeInfo", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(ex!.Message.Contains("AddPalSagaStore", StringComparison.Ordinal)).IsTrue();
+    }
+
     [Test]
     public async Task GetActiveSagasAsync_ReadsUtcWallClockTimestamp_WithoutLocalOffsetDrift()
     {
