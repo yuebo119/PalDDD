@@ -16,8 +16,9 @@
 //   ｜   Scoped 生命周期确保每个请求/事务使用独立连接。
 //   ｜   实际的连接池由数据库驱动（Npgsql/MySqlConnector）在底层管理。
 //
-// ⚠️ v18 B2 勘正（原"全 AOT 安全"为 DapperAot 启用前旧口径）：运行时经典 Dapper 路径
-// 含反射，csproj IsAotCompatible=true 是编译无警告口径——详见 csproj Description 与 IL2062 注释。
+// ⚠️ v18 B2 勘正（2026-09-19 随 experiment/dapper-aot-full 再更新）：[module:DapperAot]
+// 已启用，34 调用点拦截器接管（调用点级 NativeAOT）；边界不变——绕过封装直用 Dapper
+// 原生 API 仍不在 AOT 支持面，csproj Description 与 IL2062 注释为权威口径。
 //   ✅ Dapper.DefaultTypeMap.MatchNamesWithUnderscores — 纯字符串转换（PascalCase→snake_case），零反射
 //   ✅ DapperDbType 枚举（Singleton）— 编译时已知值，零运行时开销
 //   ✅ DbConnection（Scoped）— ADO.NET 原生连接，非托管资源，AOT 安全
@@ -63,8 +64,12 @@ public static class DapperServiceCollectionExtensions
     /// <b>与 PalORM 适配器的编码契约（2026-08-22 统一后现状）</b>：
     /// outbox/inbox status 列两栈均为 <b>int 枚举值</b>（三十八轮统一），
     /// payload 系列列两栈均为<b>原生二进制</b>（BYTEA/LONGBLOB/BLOB，随 PalORM 5.3 统一）——
-    /// 表结构与编码已兼容。跨栈共用同一物理表虽无编码障碍，但两栈租约/重试行为
-    /// 未经完整回归验证，<b>仍建议同一库选定单一适配器族</b>。
+    /// 表结构与编码已兼容。<b>⚠️ 时间列（next_attempt_at/locked_until）的 TEXT 编码两栈
+    /// 不兼容</b>（2026-09-19 第五十二轮评审实证维度）：Dapper 落库为 <c>"O"</c> 格式（带 T
+    /// 分隔），EF/PalORM SQLite 落库为 Microsoft.Data.Sqlite 原生空格分隔格式——跨栈混用
+    /// 同一 SQLite 物理表时文本序时间比较错乱（EF 侧 spike 实证 "O" 参数使资格谓词恒真，
+    /// 正确性级）。跨栈共用同一物理表虽无编码障碍，但租约/重试行为与时间列编码均未跨栈
+    /// 验证，<b>仍建议同一库选定单一适配器族</b>。
     /// </para>
     /// </summary>
     /// <param name="services">DI 服务集合</param>
