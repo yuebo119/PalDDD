@@ -376,6 +376,25 @@ public sealed class OutboxSqliteConcurrencyTests
         await Assert.That(row.Status).IsEqualTo(OutboxStatus.Pending); // 未租未丢，下 tick 可再租
     }
 
+    /// <summary>SQLite override 自带守卫专测（第五十二轮评审补——InMemory 侧
+    /// OutboxEfCoreTests 测的是基类守卫，override 的守卫随 2026-09-19 批量化从
+    /// QueryEligibleAsync 迁入后无专测，ITM-659 覆盖不得因迁移丢失）。</summary>
+    [Test]
+    [Arguments(0)]
+    [Arguments(-1)]
+    public async Task LeasePending_NonPositiveBatchOrMaxRetry_Throws(int batchSize)
+    {
+        await using var ctx = new TestSqliteOutboxDbContext(_options);
+        await Assert.That(async () =>
+            await ((IPalOutboxStore)ctx).LeasePendingMessagesAsync(
+                batchSize, "w", TimeSpan.FromMinutes(2), 5, CancellationToken.None))
+            .Throws<ArgumentOutOfRangeException>();
+        await Assert.That(async () =>
+            await ((IPalOutboxStore)ctx).GetPendingMessagesAsync(
+                10, batchSize, CancellationToken.None))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
     /// <summary>种子一条 Pending 消息；可选预置租约字段（终态写测试聚焦语义的直建租约形态——见类尾 ITM-261 勘正注释）。</summary>
     private async ValueTask SeedMessageAsync(
         PalUlid id,

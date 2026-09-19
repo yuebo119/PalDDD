@@ -6,9 +6,11 @@
 
 ## 为什么
 
-Outbox 租约回读谓词 `WHERE locked_by = … AND locked_until < …`（及各栈对应的
-重租/回收查询）此前无覆盖索引，全表扫描随 outbox_messages 增长线性劣化。
-`(locked_by, locked_until)` 复合索引覆盖该谓词（审计 2026-09-17 P-2）。
+Outbox 租约回读谓词 `WHERE locked_by = … AND locked_until = …`（(owner, until) 等值守卫
+取回本次租约，Dapper `OutboxSelectByLease` / PalORM MySQL 回读 / EF SQLite LINQ 回读同形；
+资格子查询中的 `locked_until <= …` 谓词同样命中本索引前缀）此前无覆盖索引，全表扫描随
+outbox_messages 增长线性劣化。`(locked_by, locked_until)` 复合索引覆盖该谓词族
+（审计 2026-09-17 P-2）。
 
 ## 存量库升级语句
 

@@ -420,8 +420,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
     /// "and compensation also failed"）。原三份车道内指针注释随本次收敛删除。
     /// </para>
     /// <para>
-    /// 观察点边界：SafeObserveStarted 在骨架外（Dynamic 须在 Route/未知 key/ITM-069 检查
-    /// 之后才发射，路由失败不产生 Started 事件）；SafeObserveCompleted 在 attempt 委托内
+    /// 观察点边界：SafeObserveStarted 在骨架外（Dynamic 在 Route/未知 key 检查之后、
+    /// ITM-069 dispatch 校验之前发射——路由失败不产生 Started 事件；被 ITM-069 拒绝的
+    /// 路径有 Started，由 v43 P3 补发配对 Failed）；SafeObserveCompleted 在 attempt 委托内
     /// （各车道的计时对象与记录键不同——Dynamic 的 Record 用 matchedKey、observe 用 stepKey）；
     /// SafeObserveFailed 在骨架内（四车道同构 stepKey 归因，含 P3-SRC-603 声明）。
     /// </para>
@@ -646,6 +647,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
     /// <summary>通过反射创建子 Saga 状态实例（仅用于 AOT 非目标场景）。</summary>
     [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode("Child state instantiation relies on Activator.CreateInstance; provide a factory for AOT.")]
+    [System.Diagnostics.CodeAnalysis.RequiresDynamicCode("Activator.CreateInstance(Type) invokes runtime constructor binding; not compatible with native AOT.")]
     private static SagaState CreateChildState(Type childStateType)
     {
         var instance = Activator.CreateInstance(childStateType)

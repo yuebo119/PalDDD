@@ -85,9 +85,10 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
         // 缺守卫时空/空白 owner 写入 LockedBy 列破坏跨方言契约一致
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         // 三十八轮 P3 修复：补齐三姊妹已有守卫（ITM-081/167/216 对齐系列漏网项）——
-        // leaseDuration 非正时租约即刻过期/永不过期语义错乱；TotalSeconds 超过 int.MaxValue
-        // 时 until = now.Add(leaseDuration) 的秒数语义溢出。Options 层已校验正数，
-        // 此处是 Store 直调路径的防御性 fail-fast（与 MySqlOutboxDbContext 同款）。
+        // leaseDuration 非正时租约即刻过期/永不过期语义错乱。Options 层已校验正数，
+        // 此处是 Store 直调路径的防御性 fail-fast（与 MySqlOutboxDbContext 同款；上界
+        // 守卫为跨方言防御一致性保留——MySQL/PG EF 栈仍以秒粒度换算 leaseDuration，
+        // 本 SQLite 栈 2026-09-19 批量化后直传原生 DateTimeOffset 参数已无秒数转换）。
         if (leaseDuration <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration must be greater than zero.");
         if (leaseDuration.TotalSeconds > int.MaxValue)

@@ -27,8 +27,12 @@ public static class SqlitePalOrmExtensions
     /// <b>与 Dapper 适配器的编码契约（2026-08-22 统一后现状）</b>：
     /// outbox/inbox status 列两栈均为 <b>int 枚举值</b>（三十八轮统一），
     /// payload 系列列两栈均为<b>原生二进制</b>（BLOB/BYTEA/LONGBLOB，随 PalORM 5.3
-    /// 原生 byte[] 支持统一）——表结构与编码已兼容。跨栈共用同一物理表虽无编码障碍，
-    /// 但两栈租约/重试行为未经完整回归验证，<b>仍建议同一库选定单一适配器族</b>。
+    /// 原生 byte[] 支持统一）——表结构与编码已兼容。<b>⚠️ 时间列（next_attempt_at/
+    /// locked_until）的 TEXT 编码与 Dapper 栈不兼容</b>（2026-09-19 第五十二轮评审实证
+    /// 维度）：本栈与 EF SQLite 落库为 Microsoft.Data.Sqlite 原生空格分隔格式，Dapper 落库
+    /// 为 <c>"O"</c> 格式——跨栈混用同一 SQLite 物理表时文本序时间比较错乱（正确性级）。
+    /// 跨栈共用同一物理表虽无编码障碍，但租约/重试行为与时间列编码均未跨栈验证，
+    /// <b>仍建议同一库选定单一适配器族</b>。
     /// </para>
     /// <para>
     /// <b>DI 工厂 sync-over-async</b>：<see cref="DataSession{TProvider}"/>.<c>CreateAsync</c> 是异步方法，

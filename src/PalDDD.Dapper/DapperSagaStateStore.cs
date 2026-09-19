@@ -16,7 +16,8 @@
 // 💡 UPSERT 语义：
 //   ｜ SaveChangesAsync 内部先查询后决定：存在→UPDATE（版本号自增），不存在→INSERT
 // ─────────────────────────────────────────────────────────────
-//   ✅ Dapper.AOT SG 未启用——经典反射(三十七轮勘正) QueryAsync<TState>/ExecuteAsync 拦截。
+//   ✅ Dapper.AOT 已启用（experiment/dapper-aot-full）——QueryAsync<TState>/ExecuteAsync
+//     调用点经拦截器生成代码接管（三十七轮勘正的经典反射口径已随启用退役）。
 //   ✅ 原生 SQL — 所有 DML 在编译时确定。
 // ─────────────────────────────────────────────────────────────
 
