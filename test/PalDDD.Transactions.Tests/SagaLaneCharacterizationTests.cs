@@ -63,7 +63,12 @@ public class FanOutLaneTests
         await Assert.That(sink.Events.All(e => e.StepKey == "Start")).IsTrue();
     }
 
-    /// <summary>部分失败驱动车道重试：首 attempt item2 失败 → AggEx → 整体重试全成功返回</summary>
+    /// <summary>部分失败驱动车道重试：首 attempt item2 失败 → AggEx → 整体重试全成功返回。
+    /// ⚠️ 本测试同时是 <b>整批重放契约的表征锁定</b>（v2 审计 A-3 / M0-2，2026-09-19）：
+    /// ExecutedItems.Count == 3 断言「已成功子任务在重试 attempt 被重新执行」——
+    /// 重试粒度 = 整批而非子项（FanOutStep XML 契约「重放语义」段，M1-2 声明）。
+    /// 若未来实现改为子项粒度（v3.0 计划），本断言将红——届时契约声明与测试同步更新，
+    /// 禁止静默漂移。</summary>
     [Test]
     public async Task PartialFailure_RetriesThenSucceeds(CancellationToken ct)
     {
@@ -72,8 +77,12 @@ public class FanOutLaneTests
 
         var result = await saga.ProcessEventAsync(state, new object(), ct);
 
-        // 首 attempt item1 成功 + item2 抛，重试 item1/item2 均成功（fan 整体重放）
+        // 整批重放锁定：items=[1,2]，首 attempt item1 成功 + item2 抛 → 重试 attempt
+        // 对 item1 **再次执行**（1,1,2 共 3 次）——这正是「executor 必须幂等」契约的
+        // 机制根源（成功子任务的外部副作用会重复）
         await Assert.That(saga.ExecutedItems).Count().IsEqualTo(3);
+        await Assert.That(saga.ExecutedItems.Count(i => i == 1)).IsEqualTo(2); // item1 执行 2 次（M0-2 显式断言）
+        await Assert.That(saga.ExecutedItems.Count(i => i == 2)).IsEqualTo(1);
         await Assert.That(saga.CompensationLog).Count().IsEqualTo(0);
     }
 

@@ -159,10 +159,12 @@ public sealed class DefaultSagaManager : ISagaManager
     }
 
     /// <inheritdoc/>
+    /// <remarks>M1-5（v2 审计 A-5，2026-09-19）：本实现**恒返回空列表**且接口含
+    /// internal 成员无法被外部替换——运营待办查询须经 ISagaStateStore 按状态过滤，
+    /// 详见接口 remarks 的完整表态。此处不抛 NotSupportedException：空返回的调用方
+    ///（如健康探测）不应崩，误用面由接口层 ⚠️ 声明拦截。</remarks>
     public ValueTask<IReadOnlyList<SagaState>> GetInterruptedSagasAsync(CancellationToken ct)
     {
-        // 默认实现无法持久化查询——返回空列表。
-        // 生产环境应替换为数据库查询实现。
         return new([]);
     }
 

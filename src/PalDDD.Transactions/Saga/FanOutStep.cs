@@ -37,6 +37,18 @@ internal interface IInternalFanOutStep
 /// PerItemTimeout 触发 → 该项记为 <see cref="TimeoutException"/> 失败；
 /// executor 自身抛出的非外部 OCE（内部超时/子 CTS 取消）→ 该项记为失败，不中止整体。
 /// </para>
+/// <para>
+/// ⚠️ <b>重放语义（M1-2 声明，v2 审计 A-3，2026-09-19）</b>：重试发生在
+/// <b>整批（attempt）粒度而非子项粒度</b>——任一子任务失败使本步骤进入编排器的
+/// 重试循环（<see cref="Saga{TState}"/> 骨架的 for-attempt）时，下一 attempt 对
+/// <b>全部</b>子任务重新执行 <c>executor</c>，<b>包括上一 attempt 已成功的子任务</b>
+///（完成标记是单次 attempt 的局部状态，不跨 attempt 保留）。
+/// 因此 <b>executor 必须自身幂等</b>——扣款/发货/通知类外部副作用会因整批重放
+/// 重复执行。子项粒度的进度记录属 v3.0 契约面（需 SagaState 快照格式演进，
+/// 见 ADR-020 窗口清单）；当前版本的使用方须以幂等 executor 兜底。
+/// 该行为由 <c>SagaLaneCharacterizationTests.PartialFailure_RetriesThenSucceeds</c>
+/// 表征锁定（ExecutedItems.Count == 3 断言整批重放）。
+/// </para>
 /// </remarks>
 public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
     where TItem : notnull
