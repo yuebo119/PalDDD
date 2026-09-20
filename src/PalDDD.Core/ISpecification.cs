@@ -259,7 +259,14 @@ internal sealed class ExpressionSpecification<T> : ISpecification<T>
         var compiled = Volatile.Read(ref _compiled);
         if (compiled is null)
         {
-            Interlocked.CompareExchange(ref _compiled, Compile(_expression), null);
+            // 审计 2026-09-20 Q5：原写法 `Interlocked.CompareExchange(ref _compiled,
+            // Compile(_expression), null)` 把 Compile()（Expression.Compile，IL 发射，
+            // 本方法最贵操作）写在 CompareExchange 的实参里——它在比较**之前**无条件求值，
+            // 并发首调时两个线程各编译一份、其中一份被丢弃。改为本地变量：仅当确认
+            // _compiled 仍为 null 的那一个线程真正编译（失败的那次编译仍是必要成本，
+            // 但至少不再每个进入线程都编译）。
+            var fresh = Compile(_expression);
+            Interlocked.CompareExchange(ref _compiled, fresh, null);
             compiled = Volatile.Read(ref _compiled);
         }
         return compiled(entity);
