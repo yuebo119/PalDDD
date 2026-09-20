@@ -766,11 +766,15 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 | **Projection** | `IProjectionCheckpointStore` 断点存储，`EventLogReplaySource<T>` 全量重放，独立于存储适配器 |
 
 ### 持久化适配器
+
+> **三栈长期共存声明（2026-09-20 裁决）**：PalORM / Dapper / EF Core 三套适配器**平等支持、长期共存**——无废弃计划。选择依据是场景（AOT 要求 / SQL 控制力 / 生态需求），而非某栈即将退役。五组 Store 能力（Outbox / Inbox / Saga / EventLog / Projection Checkpoint）三栈全量覆盖且行为一致（租约/fencing/守卫同契约，跨栈行为由对照测试守护）；行为差异的显式声明见 [ADR-024](docs/decisions/024-mysql-lease-mutex-divergence-accept.md) 与各 Store remarks。
+
 | 适配器 | AOT | 数据库 | 覆盖范围 |
 |--------|:--:|:--:|------|
 | **PalDDD.PalORM** | ✅ **真 AOT** | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / **Idempotency** / UnitOfWork（源生成 + 编译期 SQL，[详见适配层文档](docs/palorm-adapter.md)） |
-| PalDDD.Dapper | ✅ 实测 | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / UnitOfWork（`[module:DapperAot]` **已启用**——34 调用点全量拦截器接管，三方言 NativeAOT 二进制实测 13/13；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持，见 [persistence-aot-status.md](docs/persistence-aot-status.md)） |
-| ~~PalDDD.EntityFrameworkCore~~ | ❌ | ~~PG / MySQL / SQLite~~ | ~~已废弃，源码未入库（OBS-068），被 PalORM 替代~~ |
+| PalDDD.Dapper | ✅ 实测 | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / **Idempotency** / UnitOfWork（`[module:DapperAot]` **已启用**——34 调用点全量拦截器接管，三方言 NativeAOT 二进制实测 13/13；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持，见 [persistence-aot-status.md](docs/persistence-aot-status.md)） |
+| **PalDDD.*.EFCore**（5 项目） | ❌ 设计取舍 | PG / MySQL / SQLite（SqlServer 实验性 `[Obsolete]`） | Outbox / Inbox / Saga / EventLog / Idempotency / Projection Checkpoint / Repository+UnitOfWork（`PalDDD.Transactions.EFCore` 四方言派生 DbContext + `EventLog.EFCore` / `Idempotency.EFCore` / `Projections.EFCore` / `Repository.EFCore`——为需要 **EF 生态**的用户保留：Migration / LINQ 查询 / Interceptor / ChangeTracker） |
+| ~~PalDDD.EntityFrameworkCore~~（旧包） | ❌ | — | ~~已废弃，源码未入库（OBS-068）——注意区别于上行的五个现行 `*.EFCore` 项目~~ |
 
 ### 数据库方言扩展
 | 方言 | 特有能力 |
@@ -791,7 +795,8 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 | **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **真 AOT** | 源生成 RowFactory/CommandFactory，`PublishAot=true` 验证通过（[PalOrmSample](samples/PalDDD.PalOrmSample/)） |
 | PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ 实测 | `[module:DapperAot]` 已启用——34 调用点全量拦截器接管，三方言 NativeAOT 二进制实测 13/13；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持（详见 [AOT 指南](docs/aot.md) 与 [persistence-aot-status.md](docs/persistence-aot-status.md)） |
 | PalDDD.Transactions | ❌ | Saga 反射特例（`IsAotCompatible=false`，见 csproj） |
-| ~~PalDDD.EntityFrameworkCore~~ | ❌ | ~~已废弃~~ |
+| **PalDDD.\*.EFCore（5 项目）** | ❌ | EF Core 客户端限制 + Saga 反射特例传导——**设计取舍非废弃**，EF 生态用户正常使用（运行时 JIT 编译） |
+| ~~PalDDD.EntityFrameworkCore~~（旧包） | ❌ | ~~已废弃~~ |
 | PalDDD.Messaging.Kafka · RabbitMQ | ❌ | Confluent.Kafka / RabbitMQ.Client 限制 |
 | PalDDD.Hosting.AspNetCore | ❌ | FrameworkReference 限制 |
 
@@ -900,8 +905,8 @@ MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Servi
 **为什么要单目标 net11.0？**
 依赖 .NET 11 的静态特性（JsonSerializerContext 源生成增强、Runtime Async 状态机优化、新 AOT 分析器），多目标在技术上不可行。详见 [ADR-005](docs/decisions/005-net11-single-target.md)。
 
-**Dapper 和 PalORM 怎么选？**
-如果需要 Native AOT 部署（微服务、CLI 工具、边缘计算）→ 选 **PalORM**（推荐，源生成 + 编译期 SQL，真 AOT）。如果需要手写 SQL 的极致控制力或维护已有 Dapper 代码 → 选 Dapper（封装 API 面已 AOT 实测）。EF Core 适配器用于 Repository/Outbox/Inbox/Saga 的 DbContext 场景。三者可以在同一个项目中混用——例如 PalORM 做写路径（Outbox/Saga），EF Core 做读路径（Projection）。
+**三套持久化适配器（PalORM / Dapper / EF Core）怎么选？**
+三栈**平等支持、长期共存**（2026-09-20 裁决，无废弃计划）。按主诉求选：AOT 发布 + 编译期类型安全 → **PalORM**（源生成 SQL，真 AOT）；极致 SQL 控制力 / 手写 SQL / 已有 Dapper 存量代码 → **Dapper**（调用点级 AOT，三方言实测）；需要 **EF 生态**（Migration、LINQ 查询、Interceptor、ChangeTracker）→ **EF Core** 五项目（`Transactions.EFCore` 覆盖 Outbox/Inbox/Saga，另有 EventLog/Idempotency/Projections/Repository）。三者可在同一项目中混用——例如 PalORM 做写路径（Outbox/Saga），EF Core 做读路径（Projection）。完整对比见上方「持久化适配器」表与 [palorm-adapter.md](docs/palorm-adapter.md) 三轨定位。
 
 **有哪些已知限制？**
 不支持 .NET 8/9/10（单目标 net11.0）。AOT 场景三处限制（源码 `[RequiresDynamicCode]` 诚实声明）：① Saga 的 ChildSaga 子流程分发（`MakeGenericMethod`/`MakeGenericType`，见 `Saga.cs`）与②动态事件路由同源；③ `ISpecification.Compile()` 表达式树编译在 Native AOT 下不受支持——AOT 场景请改用 `ToExpression()` 传给查询提供者。不含内置的 EventStore 快照机制——需要快照策略的项目需要自行实现。
