@@ -61,6 +61,10 @@ if (args.Contains("--update-baseline"))
     return UpdateBaseline("coverage-baseline.json", "TestResults");
 }
 
+// ─── 参数路由：--enforce-only（仅跑第 5/6 步门禁，跳过 build/test/merge）───
+// 用途：① 隔离式变异探针（gate-audit 的 ci-coverage 探针预置合并报告后直达阈值判定，
+// 否则前四步在空仓必然失败，探针永远到不了被测逻辑——等于没探）；② 本地复跑门禁
+// 判定而不用重跑整个测试套件。合并报告不存在时 fail-closed（与第 5 步同口径）。
 // 阈值可被环境变量覆盖（本地放宽/CI 收紧）——与原脚本 ${COVERAGE_THRESHOLD:-0.70} 一致
 var (thresholdRaw, threshold) = ReadThreshold();
 if (threshold is null)
@@ -68,6 +72,17 @@ if (threshold is null)
     Console.Error.WriteLine($"ERROR: COVERAGE_THRESHOLD 非数字: {thresholdRaw}");
     return 1;
 }
+
+// ─── 参数路由：--enforce-only（仅跑第 5/6 步门禁，跳过 build/test/merge）───
+// 用途：① 隔离式变异探针（gate-audit 的 ci-coverage 探针预置合并报告后直达阈值判定，
+// 否则前四步在空仓必然失败，探针永远到不了被测逻辑——等于没探）；② 本地复跑门禁
+// 判定而不用重跑整个测试套件。合并报告不存在时 fail-closed（与第 5 步同口径）。
+if (args.Contains("--enforce-only"))
+{
+    Console.WriteLine(">> --enforce-only: skipping build/test/merge (using existing merged report)");
+}
+else
+{
 
 Console.WriteLine("=== Pal.DDD CI Coverage ===");
 
@@ -108,6 +123,7 @@ var mergeExit = RunInherit("dotnet",
     " -targetdir:TestResults/coverage-report" +
     " -reporttypes:Html;Cobertura");
 if (mergeExit != 0) return mergeExit;
+}
 
 // 5. 全局行覆盖率门禁（fail-closed，评审 P1-2）
 //    解析合并后 Cobertura 顶层 <coverage line-rate="0.xxx">——该值是
