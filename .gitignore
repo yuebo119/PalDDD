@@ -97,6 +97,16 @@ palddd-palorm-sample.db
 appsettings.test.local.json
 test/*/appsettings.json
 
+# 密钥与证书（审计 2026-09-20 S7：防强名称密钥/本地证书误提交的第二道防线）
+*.snk
+*.pfx
+*.p12
+*.keystore
+*.jks
+.env
+.env.*
+!.env.example
+
 # AI 质量系统独立 git 仓库（不在 PalDDD 仓库中跟踪）
 research/
 .probe-dump/
