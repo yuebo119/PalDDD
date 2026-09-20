@@ -14,6 +14,8 @@
 
 ### Changed 变更
 
+- **`OutboxOptions.MaxDegreeOfParallelism`（新增，默认 1）与 `OutboxBatchProcessor` 构造新增可选 `IServiceScopeFactory` 参数**（C1，perf-opt-sweep）：并行度 >1 时批内消息按分区交由 per-worker scope（独立 store/DbContext 实例）并行「反序列化 → 发布 → 标记」——吞吐随并行度提升；租约/fencing 互斥不受影响。**前提**：broker 发布须线程安全（Kafka 天然支持；RabbitMQ 单 channel 并发发布须验证）；消费方幂等。直构造 `OutboxBatchProcessor` 的调用方不受影响（scopeFactory 为可选尾参；并行度 >1 且缺失时运行期 fail-fast 并给出指引）。
+- **新增发件箱指标 `paldd.outbox.dead`（死信独立计数）与 `paldd.outbox.persist_failed`（状态持久化失败计数）**（R1/R2）：原死信合并在 `paldd.outbox.failed` 中积压不可见；原 `processed` 计数含持久化失败条目（与 DB 真相漂移）。现死信独立可见、`processed` 仅含落库成功条目。**迁移**：基于 `paldd.outbox.failed` 建立的告警规则无需变更（该计数语义不变）；建议新增基于 `dead` 的死信积压告警。
 - **`DapperSagaStateStore<TState>.SaveChangesAsync` 在未注册 `JsonTypeInfo<TState>` 时改为抛 `InvalidOperationException`**（⚠️ 破坏性变更，决策见 `docs/review/decision-2026-09-19-saga-snapshot-failfast.md`）：原实现静默把 `saga_data` 写 NULL——Saga 的全部业务字段（CustomerId 等派生状态）在持久化中丢失且无异常/无日志/无启动诊断；重启恢复只还原元数据。现对齐 PalORM 栈同位置修复（ITM-228）fail-fast，异常消息含注册指引。**迁移**：DI 路径 `services.AddPalDapperSagaSnapshot(jsonTypeInfo)` 或构造函数第三参传入 source-generated `JsonTypeInfo<TState>`（见 `docs/usage.md` ⚠️ 段）。EF 栈用 source-generated converter，不受影响。
 
 - **`IUnitOfWork.BeginTransactionAsync` 在事务已活动时改为抛 `InvalidOperationException`**（决策见 ADR-023）：原 EF Core 与 PalORM 两栈为静默 no-op，而 `ExecuteInTransactionAsync` 是无条件「Begin → work → SaveChanges → Commit」——嵌套调用时内层 Commit 提交的是**外层**事务，导致静默原子性破坏（内层之后的外层工作失去事务保护，外层异常路径的回滚面对已提交事务）。现三栈统一为 fail-fast（对齐 Dapper 既有的 ITM-088 契约），接口与 `ExecuteInTransactionAsync` 文档同步声明「不支持嵌套」。**迁移**：需要在既有事务内执行工作的调用方，请直接执行工作委托或自行编排提交边界，不要嵌套调用本方法。

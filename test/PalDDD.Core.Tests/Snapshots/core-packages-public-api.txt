@@ -98,7 +98,9 @@ static class PalDDD.Core.Diagnostics.PalMetrics
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> InboxFailed
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> InboxProcessed
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> InboxSkipped
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> OutboxDead
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> OutboxFailed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> OutboxPersistFailed
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> OutboxProcessed
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> ProjectionFailed
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> ProjectionReplayed
@@ -783,7 +785,7 @@ class PalDDD.Transactions.InterruptStep
   property PalDDD.Transactions.StepDispatchKind DispatchKind
   property System.String InterruptReason
 class PalDDD.Transactions.OutboxBatchProcessor
-  ctor(PalDDD.Transactions.IPalOutboxStore store, PalDDD.Messaging.IMessageBroker broker, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.OutboxOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.OutboxBatchProcessor> logger, System.TimeProvider timeProvider)
+  ctor(PalDDD.Transactions.IPalOutboxStore store, PalDDD.Messaging.IMessageBroker broker, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.OutboxOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.OutboxBatchProcessor> logger, System.TimeProvider timeProvider, Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory)
   method System.Threading.Tasks.ValueTask ProcessBatchAsync(System.Threading.CancellationToken ct)
 class PalDDD.Transactions.OutboxMessage
   ctor()
@@ -809,6 +811,7 @@ class PalDDD.Transactions.OutboxOptions
   property System.Int32 BatchSize
   property System.TimeSpan LeaseDuration
   property System.String LeaseOwner
+  property System.Int32 MaxDegreeOfParallelism
   property System.Int32 MaxRetryCount
   property System.TimeSpan MaxRetryDelay
   property System.TimeSpan PollInterval
