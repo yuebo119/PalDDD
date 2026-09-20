@@ -1,6 +1,12 @@
 using System.Text.Json.Serialization;
 using PalDDD.Generated;
+// ITM-810 勘正注记（2026-09-19）：本 using **必要**（MessageCatalogBuilder 在
+// PalDDD.Serialization 命名空间，:31/:55 使用）——CI run 101/102 的 Format verify
+//（IDE0005 判不必要）与 Build（CS0246 找不到类型）互相矛盾：format 的分析上下文
+// 未加载源生成产物（PalDDD.Generated），类型解析路径与真实编译不同 → 假阳性。
+// 行级压制使两道检查同时通过；删除此 using 会使 Build 失败（run 103 实证）。
 using PalDDD.Serialization;
+#pragma warning disable IDE0005 // 上述矛盾 suppressed——见注记，勿删本行与上方 using
 
 namespace PalDDD.Core.Tests;
 

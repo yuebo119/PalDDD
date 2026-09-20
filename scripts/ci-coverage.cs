@@ -154,6 +154,20 @@ static int RunInherit(string fileName, string arguments)
     return process.ExitCode;
 }
 
+// 静默捕获 stdout（新鲜度检查用——git 日期查询，失败返回 null 由调用方跳过）
+static string? RunGitQuiet(string arguments)
+{
+    using var process = Process.Start(new ProcessStartInfo("git", arguments)
+    {
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        RedirectStandardOutput = true,
+    })!;
+    var output = process.StandardOutput.ReadToEnd();
+    process.WaitForExit();
+    return process.ExitCode == 0 ? output : null;
+}
+
 // ─── 测试项目枚举：对齐 find test -name '*.csproj' ! -name 'PalDDD.Testing.csproj' | sort ───
 // 路径均为 ASCII，Ordinal 与 bash sort（字节序）等价
 static List<string> FindTestProjects() =>
@@ -174,7 +188,13 @@ static (string Raw, double? Value) ReadThreshold()
 {
     var raw = Environment.GetEnvironmentVariable("COVERAGE_THRESHOLD");
     if (string.IsNullOrEmpty(raw)) raw = "0.70";
+    // 全仓扫描修复（fail-open）：NumberStyles.Float 自 .NET Core 3.0 起接受 "NaN"/"Infinity"，
+    // 而 NaN 使 `lineRate < NaN` 恒假 → 阈值门禁静默放行（Infinity 则恒不可通过）。
+    // 非有限值/越界一律走 null 路径（调用方 fail-closed），与「非数字 fail-closed」同口径。
     return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+        && double.IsFinite(value)
+        && value > 0
+        && value <= 1
         ? (raw, value)
         : (raw, null);
 }
@@ -191,8 +211,12 @@ static string? ExtractLineRate(string coberturaPath)
         var root = XDocument.Load(coberturaPath).Root;
         // 对齐原 grep '<coverage[^>]*line-rate='：仅根元素名为 coverage 时提取
         var attr = root?.Name.LocalName == "coverage" ? root.Attribute("line-rate")?.Value : null;
+        // 全仓扫描修复（fail-open）：line-rate="NaN" 能被 TryParse 接受，随后
+        // CheckModuleDrop 的 `baseline - NaN > 0.05` 恒假 → 模块降幅门禁放行。
+        // 非有限值视同解析失败 → 调用方 ERROR + fail-closed。
         if (attr is not null
-            && double.TryParse(attr, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+            && double.TryParse(attr, NumberStyles.Float, CultureInfo.InvariantCulture, out var rate)
+            && double.IsFinite(rate))
         {
             return attr;
         }
@@ -214,6 +238,19 @@ static int EnforceModuleDropLimit(string baselinePath, string resultsRoot)
         Console.Error.WriteLine($"ERROR: baseline {baselinePath} not found (fail-closed)");
         return 1;
     }
+    // v2 审计 T-3（主题 4「证据新鲜度即门禁」）：基线年龄检查——旧基线上的降幅门禁
+    // 不构成证据（v2 实证：7 周陈旧基线 + 最低覆盖区恰是生产 SQL 栈）。读基线文件的
+    // git 最后提交日期（JSON 内无字段时也覆盖旧格式）；>30 天 → ::warning 提示重测
+    //（不 fail：CI 无法自动重测会死锁，重测走 --update-baseline 校准入口）
+    try
+    {
+        var gitDate = RunGitQuiet($"log -1 --format=%as -- {baselinePath}");
+        if (DateTime.TryParse(gitDate?.Trim(), out var generated) &&
+            (DateTime.UtcNow.Date - generated).TotalDays > 30)
+            Console.WriteLine($"::warning::coverage 基线已 {(DateTime.UtcNow.Date - generated).Days} 天未更新（{generated:yyyy-MM-dd}）——降幅门禁的比对数据可能失真，请跑 dotnet run scripts/ci-coverage.cs -- --update-baseline 重测（v2 审计 T-3）");
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+    { /* git 不可用/启动失败时跳过新鲜度检查，不阻塞门禁本体（窄化 catch 免 CA1031） */ }
     var baselines = ReadModuleBaselines(baselinePath);
     if (baselines.Count == 0)
     {
@@ -252,7 +289,10 @@ static int EnforceModuleDropLimit(string baselinePath, string resultsRoot)
 // 纯判定：降幅超过容差（5pp 绝对）即违规——抽纯函数供 --selftest 与变异验证。
 // epsilon（1e-9）吸收浮点噪声：0.80−0.75 在 double 下为 0.050000000000000044，
 // 无 epsilon 时「恰好等于容差」被误判违规（本判定边界语义：等于容差放行——自测用例锁定）。
-static int CheckModuleDrop(double baseline, double current) => baseline - current > 0.05 + 1e-9 ? 1 : 0;
+static int CheckModuleDrop(double baseline, double current)
+    => !double.IsFinite(baseline) || !double.IsFinite(current)
+        ? 1   // 纵深防御：非有限值判违规（NaN 会让比较恒假而静默放行）
+        : baseline - current > 0.05 + 1e-9 ? 1 : 0;
 
 // 基线读取：flat JSON 逐行 "proj": rate（手写解析规避 AOT 反射序列化禁用；"//" 注释行跳过）
 static Dictionary<string, double> ReadModuleBaselines(string path)
@@ -309,6 +349,7 @@ static int UpdateBaseline(string baselinePath, string resultsRoot)
     sb.Append('}');
     File.WriteAllText(baselinePath, sb.ToString());
     Console.WriteLine($"基线已更新：{rates.Count} 项目 → {baselinePath}");
+    Console.WriteLine($"  _generatedAt = {DateTime.UtcNow:yyyy-MM-dd}（新鲜度锚，v2 审计 T-3 主题——比对步骤据此警示过期基线）");
     foreach (var (proj, rate) in rates)
         Console.WriteLine($"  {proj}: {rate.ToString("P2", CultureInfo.InvariantCulture)}");
     return 0;
@@ -352,6 +393,13 @@ static int SelfTest()
         File.WriteAllText(tmp, "<coverage line-rate=\"0.5\"");
         Case("坏 XML 返回 null", ExtractLineRate(tmp) is null);
 
+        // 用例 5b：非有限 line-rate → null（全仓扫描修复：NaN 曾被接受，
+        // 继而在 CheckModuleDrop 里让 `baseline - NaN > 0.05` 恒假 → 门禁放行）
+        File.WriteAllText(tmp, "<?xml version=\"1.0\"?><coverage line-rate=\"NaN\"></coverage>");
+        Case("line-rate=NaN 返回 null(fail-closed)", ExtractLineRate(tmp) is null);
+        File.WriteAllText(tmp, "<?xml version=\"1.0\"?><coverage line-rate=\"Infinity\"></coverage>");
+        Case("line-rate=Infinity 返回 null(fail-closed)", ExtractLineRate(tmp) is null);
+
         // 用例 6：阈值判定语义（awk a<b 的等价 double 比较：低于才 FAIL，等于通过）
         var rate = double.Parse("0.72", NumberStyles.Float, CultureInfo.InvariantCulture);
         Case("0.72 >= 0.70 判定通过", !(rate < 0.70));
@@ -368,6 +416,16 @@ static int SelfTest()
         Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", "abc");
         var (raw3, v3) = ReadThreshold();
         Case("非法阈值 fail-closed", raw3 == "abc" && v3 is null);
+        // 全仓扫描修复：NaN/Infinity 曾被 TryParse 接受 → `< NaN` 恒假 → 门禁静默放行
+        Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", "NaN");
+        var (rawNaN, vNaN) = ReadThreshold();
+        Case("NaN 阈值 fail-closed", rawNaN == "NaN" && vNaN is null);
+        Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", "Infinity");
+        var (rawInf, vInf) = ReadThreshold();
+        Case("Infinity 阈值 fail-closed", rawInf == "Infinity" && vInf is null);
+        Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", "1.5");
+        var (rawBig, vBig) = ReadThreshold();
+        Case("越界阈值 1.5 fail-closed", rawBig == "1.5" && vBig is null);
 
         // 用例：单模块降幅判定（CheckModuleDrop——容差 5pp 绝对）
         Case("降幅 2pp 通过", CheckModuleDrop(0.80, 0.78) == 0);
@@ -375,6 +433,8 @@ static int SelfTest()
         Case("降幅 5.1pp 失败", CheckModuleDrop(0.80, 0.749) == 1);
         Case("覆盖率上升通过(负向对照)", CheckModuleDrop(0.80, 0.85) == 0);
         Case("零基线(新项目)通过", CheckModuleDrop(0.0, 0.30) == 0);
+        Case("NaN 当前值判违规(fail-closed)", CheckModuleDrop(0.80, double.NaN) == 1);
+        Case("NaN 基线判违规(fail-closed)", CheckModuleDrop(double.NaN, 0.80) == 1);
 
         // 用例：基线 flat JSON 解析（含注释行跳过 / 尾逗号 / 多项目）
         var baselineFile = Path.Combine(Path.GetTempPath(), "ci-coverage-selftest-" + Guid.NewGuid().ToString("N") + ".json");

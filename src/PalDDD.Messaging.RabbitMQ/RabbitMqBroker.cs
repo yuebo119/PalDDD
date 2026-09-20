@@ -69,6 +69,11 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         _channel = channel;
         _logger = logger;
         _prefetchCount = prefetchCount;
+
+        // L5（perf-opt-sweep，2026-09-20）：发布超时指引——框架不包装 PublishAsync 超时
+        //（透传调用方 ct）；半坏 broker 下的等待时长由注入的 IConnection/ChannelOptions
+        // 控制（publisher confirmations + continuation timeout，见 CreateChannelOptions
+        // 使用方配置）。此处仅声明，不改写使用方的连接配置。
     }
 
     // ITM-639：outstanding publisher confirms 上限——对齐 RabbitMQ.Client 文档所述默认

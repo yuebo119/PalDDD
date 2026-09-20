@@ -224,8 +224,10 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     /// v43 P2：无租约分支补 <c>Status == Pending</c> 终态守卫（与 <see cref="ReleaseForRetry"/>
     /// 的 v33 P3 守卫同形态，该轮三栈收口参照了 RequeueDead 的 Status 守卫形态但 Mark* 未纳入）——
     /// 无租约直呼语义是"未租行的终态化"（Pending 行才可终态化），原守卫可把 Dead 翻 Processed、
-    /// Processed 翻 Dead（FencedTarget 三方法共享，一处修复同时收口）。持租分支不受影响：
-    /// 租约只落在 Pending 行上，持租处理中的行恒为 Pending。</remarks>
+    /// Processed 翻 Dead（FencedTarget 三方法共享，一处修复同时收口）。<br/>
+    /// ITM-797（2026-09-19）：持租分支同补 <c>Status == Pending</c>——理论不可达（租约只落
+    /// Pending 行）但统一三方法守卫口径，消除"同文件两种守卫形态"的回归温床（对齐 Dapper/
+    /// PalORM 姊妹的持租分支 status=0 守卫形态，SqlTemplates.cs:71/81 族）。</remarks>
     private IQueryable<OutboxMessage> FencedTarget(OutboxMessage message)
     {
         var originalOwner = message.LockedBy;
@@ -238,7 +240,9 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
             // v43 P2：无租约分支补 Status == Pending 终态守卫——未租行中仅 Pending 可被
             // Mark*/ReleaseForRetry 推进（对齐 ReleaseForRetry v33 P3 守卫形态）
             ? target.Where(m => m.LockedBy == null && m.RetryCount == originalRetry && m.Status == OutboxStatus.Pending)
-            : target.Where(m => m.LockedBy == originalOwner && m.LockedUntil == originalUntil && m.RetryCount == originalRetry);
+            // ITM-797：持租分支补 Status 守卫（口径统一；理论不可达行不受影响）
+            : target.Where(m => m.LockedBy == originalOwner && m.LockedUntil == originalUntil
+                && m.RetryCount == originalRetry && m.Status == OutboxStatus.Pending);
     }
 
     /// <inheritdoc/>
@@ -368,6 +372,8 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         {
             e.HasKey(x => x.Id);
             e.HasIndex(x => new { x.Status, x.NextAttemptAt, x.CreatedAt });
+            // 租约回读谓词（locked_by + locked_until）覆盖索引——审计 2026-09-17 P-2；对齐 docs/sql/*/000_schema.sql idx_outbox_lease_holder
+            e.HasIndex(x => new { x.LockedBy, x.LockedUntil });
             e.Property(x => x.Id).HasConversion(v => v.ToString(), v => PalUlid.Parse(v));
             e.Property(x => x.CorrelationId).HasConversion(v => v.HasValue ? v.Value.ToString() : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
             e.Property(x => x.CausationId).HasConversion(v => v.HasValue ? v.Value.ToString() : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));

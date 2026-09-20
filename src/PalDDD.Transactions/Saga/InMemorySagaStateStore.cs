@@ -91,7 +91,8 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
             // 落后，其 SaveChangesAsync 见下方不匹配返回 0）。
             // ⚠️ v26 P3：CloneForLease 为浅拷贝——新旧实例共享 StepStartedAt/ExecutedStepKeys
             // 容器，并发写安全未保障（僵尸与新持有者并发写集合可抛）；Version fencing
-            // 不受影响（标量隔离）。深隔离需后续破坏性变更，详见 SagaState.CloneForLease remarks。
+            // 不受影响（标量隔离）。深隔离需后续破坏性变更，详见 SagaState.CloneForLease remarks
+            //（含 2026-09-19 M3-3 回滚勘正：僵尸执行过的步骤必须能被后继者补偿）。
             var leased = new List<TState>(active.Count);
             foreach (var state in active)
             {

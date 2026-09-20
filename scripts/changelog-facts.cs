@@ -74,7 +74,7 @@ Console.WriteLine("## 1 范围与提交分布");
 Console.WriteLine($"- 范围：{from}({fromCommit.Trim()}) → {to}（{toHash}），共 {count} 个提交");
 Console.WriteLine($"- 复查: git log --oneline {from}..{to}");
 Console.WriteLine("- 类型分布（提交主题前缀，供 Fixed/Added 分族参考）：");
-var (_, subjects) = RunCapture("git", $"log --pretty=format:%s {from}..{to}");
+var subjects = CaptureSection($"log --pretty=format:%s {from}..{to}");
 // sed -E 's/[：:].*//'：删除首个全角/半角冒号及之后 → 前缀；无冒号保留原行
 // （空主题提交保留空前缀参与计数——bash 管道不滤空行）
 foreach (var line in PrefixHistogram(SplitLines(subjects)))
@@ -86,7 +86,7 @@ Console.WriteLine();
 // ── 2 公共 API 变更（快照 diff，核心 12 程序集口径）────────────
 const string snap = "test/PalDDD.Core.Tests/Snapshots/core-packages-public-api.txt";
 Console.WriteLine("## 2 公共 API 变更（快照口径：核心 12 程序集；Analyzers 诊断见段 3）");
-var (_, diffSnap) = RunCapture("git", $"diff {from}..{to} -- {snap}");
+var diffSnap = CaptureSection($"diff {from}..{to} -- {snap}");
 var versionRx = new Regex("Version=2\\.[0-9]");   // grep -v 'Version=2\.[0-9]' 排除口径
 var apiDiff = NonEmptyLines(diffSnap)
     .Where(l => (l.StartsWith('+') || l.StartsWith('-'))
@@ -107,7 +107,7 @@ Console.WriteLine();
 
 // ── 3 新增分析器诊断（线索级，需打开 descriptor 核对语义）────────
 Console.WriteLine("## 3 新增分析器诊断（线索，起草前须读 PalDiagnostics.cs 对应 descriptor）");
-var (_, diffDiag) = RunCapture("git", $"diff {from}..{to} -- src/PalDDD.Core/PalDiagnostics.cs");
+var diffDiag = CaptureSection($"diff {from}..{to} -- src/PalDDD.Core/PalDiagnostics.cs");
 var diagRx = new Regex("PAL[A-Z]+[0-9]{3}");
 var diags = NonEmptyLines(diffDiag)
     .Where(l => l.StartsWith('+') && !l.StartsWith("+++", StringComparison.Ordinal) && diagRx.IsMatch(l))
@@ -127,7 +127,7 @@ Console.WriteLine();
 
 // ── 4 脚本 / 工作流增删 ───────────────────────────────────────
 Console.WriteLine("## 4 脚本与工作流增删（A=新增 D=删除）");
-var (_, wf) = RunCapture("git", $"diff --name-status {from}..{to} -- scripts/ .github/workflows/");
+var wf = CaptureSection($"diff --name-status {from}..{to} -- scripts/ .github/workflows/");
 var wfLines = NonEmptyLines(wf);
 if (wfLines.Count > 0)
 {
@@ -141,7 +141,7 @@ Console.WriteLine();
 
 // ── 5 废弃扫描 ───────────────────────────────────────────────
 Console.WriteLine("## 5 废弃扫描（diff 新增 [Obsolete] 行——仅供定位，语义须读原文件核实）");
-var (_, diffSrc) = RunCapture("git", $"diff {from}..{to} -- src/");
+var diffSrc = CaptureSection($"diff {from}..{to} -- src/");
 var obs = NonEmptyLines(diffSrc)
     .Where(l => l.StartsWith('+') && !l.StartsWith("+++", StringComparison.Ordinal) && l.Contains("[Obsolete"))
     .ToList();
@@ -159,7 +159,7 @@ Console.WriteLine();
 // ── 6 ADR 与文档增删 ─────────────────────────────────────────
 Console.WriteLine("## 6 ADR 与文档增删");
 // *.md 经 bash 裸 glob 展开为根目录 .md 文件列表（见 ExpandRootMdGlob 注释）
-var (_, docs) = RunCapture("git", $"diff --name-status {from}..{to} -- docs/ {ExpandRootMdGlob()}");
+var docs = CaptureSection($"diff --name-status {from}..{to} -- docs/ {ExpandRootMdGlob()}");
 var docsLines = NonEmptyLines(docs);
 if (docsLines.Count > 0)
 {
@@ -173,7 +173,7 @@ Console.WriteLine();
 
 // ── 7 依赖变更 ───────────────────────────────────────────────
 Console.WriteLine("## 7 依赖变更（Directory.Packages.props + 适配层引用）");
-var (_, diffDeps) = RunCapture("git", $"diff {from}..{to} -- Directory.Packages.props");
+var diffDeps = CaptureSection($"diff {from}..{to} -- Directory.Packages.props");
 var depsRx = new Regex("PackageVersion|PalORM");
 var deps = NonEmptyLines(diffDeps)
     .Where(l => (l.StartsWith('+') || l.StartsWith('-'))
@@ -221,6 +221,20 @@ Console.WriteLine("    （完整段自查: sed -n '/^## \\[Unreleased\\]/,/^## \
 Console.WriteLine();
 Console.WriteLine("═══ 事实清单结束 → 按 docs/release.md §十二 Phase 2-4 核验/起草/校验 ═══");
 return 0;
+
+// ─── 段 2-7 的 git 查询：退出码不参与判定（保持头注释声明的「|| true 兜底不阻断」
+// 迁移等价契约，退出码语义不变），但把失败变成**可见**的——原实现把查询失败
+// （空输出）与真正「无变更」渲染成同一行文案，使用者无法分辨（全仓扫描修复，
+// 属可见性补强而非语义变更）。───
+static string CaptureSection(string arguments)
+{
+    var (exit, output) = RunCapture("git", arguments);
+    if (exit != 0)
+    {
+        Console.Error.WriteLine($"  WARN 段查询 `git {arguments}` 退出码 {exit}——本段按「无变更」渲染，可能不可信");
+    }
+    return output;
+}
 
 // ─── 子进程执行：stdout 捕获（stderr 继承终端——对齐 bash 管道行为；ITM-663：
 // 不重定向 stderr 是刻意取舍——git 的 stderr 是进度/诊断信息，CI 控制台直出可观察，

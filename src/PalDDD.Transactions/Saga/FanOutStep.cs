@@ -37,12 +37,25 @@ internal interface IInternalFanOutStep
 /// PerItemTimeout 触发 → 该项记为 <see cref="TimeoutException"/> 失败；
 /// executor 自身抛出的非外部 OCE（内部超时/子 CTS 取消）→ 该项记为失败，不中止整体。
 /// </para>
+/// <para>
+/// ⚠️ <b>重放语义（M1-2 声明，v2 审计 A-3，2026-09-19）</b>：重试发生在
+/// <b>整批（attempt）粒度而非子项粒度</b>——任一子任务失败使本步骤进入编排器的
+/// 重试循环（<see cref="Saga{TState}"/> 骨架的 for-attempt）时，下一 attempt 对
+/// <b>全部</b>子任务重新执行 <c>executor</c>，<b>包括上一 attempt 已成功的子任务</b>
+///（完成标记是单次 attempt 的局部状态，不跨 attempt 保留）。
+/// 因此 <b>executor 必须自身幂等</b>——扣款/发货/通知类外部副作用会因整批重放
+/// 重复执行。子项粒度的进度记录属 v3.0 契约面（需 SagaState 快照格式演进，
+/// 见 ADR-020 窗口清单）；当前版本的使用方须以幂等 executor 兜底。
+/// 该行为由 <c>SagaLaneCharacterizationTests.PartialFailure_RetriesThenSucceeds</c>
+/// 表征锁定（ExecutedItems.Count == 3 断言整批重放）。
+/// </para>
 /// </remarks>
 public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
     where TItem : notnull
 {
     private readonly Func<SagaState, IReadOnlyList<TItem>> _selector;
     private readonly Func<TItem, CancellationToken, ValueTask<TResult>> _executor;
+    private readonly SemaphoreSlim _concurrencyGate; // M2：构造期缓存（见 ctor 注释）
 
     /// <inheritdoc/>
     public override StepDispatchKind DispatchKind => StepDispatchKind.FanOut;
@@ -111,6 +124,14 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
         // （见属性声明），执行时校验仅作纵深防御保留。
         ArgumentOutOfRangeException.ThrowIfNegative(maxConcurrency);
         MaxConcurrency = maxConcurrency > 0 ? maxConcurrency : Environment.ProcessorCount;
+        // M2（perf-opt-sweep，2026-09-20）：信号量缓存的实例字段——原每 per-call 分配
+        //（高频 Saga 场景 ns 级分配税）；MaxConcurrency init 后不可变，构造期建一次。
+        // 不实现 IDisposable：本类无生命周期端点，SemaphoreSlim 在未物化 WaitHandle
+        // 时无 OS 句柄可泄（全仓无 AvailableWaitHandle 访问）。
+        _concurrencyGate = new SemaphoreSlim(MaxConcurrency);
+        // 不实现 IDisposable：本类无生命周期端点，SemaphoreSlim 在未物化 WaitHandle
+        // 时无 OS 句柄可泄（全仓无 AvailableWaitHandle 访问）。
+        _concurrencyGate = new SemaphoreSlim(MaxConcurrency);
     }
 
     /// <summary>执行 Fan-out：并行分发所有子任务，收集完成项与失败项。</summary>
@@ -133,7 +154,7 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
         // 即时校验并归一化，十七轮构造参数路径同样前置校验）。本行按纵深防御保留（构造函数
         // 路径与 init setter 均已保证 >0；此校验防未来新增写入点）。
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxConcurrency);
-        using var semaphore = new SemaphoreSlim(MaxConcurrency);
+        var semaphore = _concurrencyGate; // M2：构造期缓存的实例信号量（原每 per-call 分配）
         var results = new TResult?[items.Count];
         // P2 定案（可空结果过滤）：以完成标记收集而非非空过滤——TResult 为可空引用类型
         // 且子任务合法返回 null 时，旧实现把成功结果误判丢弃（Completed 少计）。

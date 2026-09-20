@@ -115,9 +115,12 @@ foreach (var (proj, filter, name) in guards)
     {
         Console.WriteLine("RED");
         failedGuards.Add(name);
-        // 输出失败详情（截取最后 15 行——TUnit 失败摘要在尾部）
-        var tail = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)[..Math.Min(15, stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length)];
-        foreach (var l in tail) Console.WriteLine($"    {l.Trim()}");
+        // 输出失败详情（取**最后** 15 行——TUnit 失败摘要在尾部）
+        // 全仓扫描修复：原实现是 `[..Math.Min(15, …)]`，取的是前 15 行，与本注释相反——
+        // RED 时只打印编译/头部噪声，真正的失败用例与断言信息（在尾部）被丢弃；
+        // 且同一表达式调用 Split 两次（两次分配 + 两次扫描），一并消除。
+        var allLines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var l in allLines[Math.Max(0, allLines.Length - 15)..]) Console.WriteLine($"    {l.Trim()}");
         if (errText.Length > 0) Console.WriteLine($"    [stderr] {errText.Trim()[..Math.Min(200, errText.Trim().Length)]}");
     }
 }

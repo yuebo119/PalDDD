@@ -241,8 +241,14 @@ static string Run(string fileName, string arguments)
         StandardErrorEncoding = Encoding.UTF8,
     };
     using var p = Process.Start(psi)!;
+    // stderr 必须并发排空：RedirectStandardError 是管道，不排空时子进程写满缓冲即与
+    // 父进程的 stdout ReadToEnd 互等（dotnet run/MSBuild 在 stderr 上输出很吵，最易触发）。
+    // 内容按头注释契约丢弃，仅消费掉缓冲。
+    p.ErrorDataReceived += static (_, _) => { };
+    p.BeginErrorReadLine();
     var text = p.StandardOutput.ReadToEnd();
     p.WaitForExit();
+    p.WaitForExit();   // 双调用：确保异步缓冲 flush（沿 check-all.cs 先例）
     return text;
 }
 

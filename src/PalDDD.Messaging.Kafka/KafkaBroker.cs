@@ -46,6 +46,10 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(consumerConfig);
         ArgumentNullException.ThrowIfNull(logger);
 
+        // L5（perf-opt-sweep，2026-09-20）：发布超时指引——框架不加超时包装（透传调用方
+        // ct），半坏 broker 下 ProduceAsync 的等待时长由本 config 的 librdkafka 属性控制：
+        // message.timeout.ms（默认 300s，建议按业务 SLO 显式设置）+ delivery.timeout.ms。
+        producerConfig.MessageTimeoutMs ??= 30_000;
         _producer = new ProducerBuilder<string, byte[]>(producerConfig).Build();
         _consumerConfig = consumerConfig;
         _logger = logger;

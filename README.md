@@ -4,7 +4,7 @@
 
 **面向 .NET 11 的 DDD/CQRS/Event Sourcing 基础设施框架 —— 零运行时反射、Native AOT 链路完整、无过度抽象。**
 
-[![NuGet](https://img.shields.io/badge/nuget-v2.2.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
+[![NuGet](https://img.shields.io/badge/nuget-v3.0.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)
 [![CI](https://img.shields.io/badge/build-0_errors_0_warnings-brightgreen)]()
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
@@ -123,41 +123,41 @@ InMemory 实现覆盖全部抽象接口，单元测试和原型开发无需外�
 
 | 包 | 版本 | 说明 |
 |------|:--:|------|
-| **PalDDD.Base** | 2.2.0 | L1 元包：Core + Serialization + Compression + SourceGen + Analyzers |
-| **PalDDD.Extension** | 2.2.0 | L2 元包：CQRS + EventLog + Idempotency + Projections + Messaging + Transactions + DI |
-| **PalDDD.Core** | 2.2.0 | 领域核心：AggregateRoot / Entity / ValueObject / SmartEnum / DomainEvent / Specification |
-| **PalDDD.Serialization** | 2.2.0 | 序列化抽象：IMessageSerializer / MessageCatalog / MessageDescriptor |
-| **PalDDD.Serialization.Evolution** | 2.2.0 | 消息版本演化：Upcaster / Contract 验证 |
-| **PalDDD.Serialization.MemoryPack** | 2.2.0 | MemoryPack 二进制序列化（零反射、AOT） |
-| **PalDDD.Compression** | 2.2.0 | 压缩抽象：Brotli / GZip / Deflate（AOT 安全） |
-| **PalDDD.Compression.Native** | 2.2.0 | 原生压缩：LZ4 / ZStandard（P/Invoke，不可 AOT） |
-| **PalDDD.Core.SourceGen** | 2.2.0 | 源生成器：IdentityGenerator / EnumGenerator / MessageRegistryGenerator |
-| **PalDDD.Analyzers** | 2.2.0 | Roslyn 分析器：PDDD001-015 编译期 DDD 治理诊断 |
-| **PalDDD.Analyzers.CodeFixes** | 2.2.0 | 代码修复：PDDD008/010/013/015 |
-| **PalDDD.CQRS** | 2.2.0 | 命令查询职责分离：Dispatcher / Pipeline / Validation / Logging |
-| **PalDDD.EventLog** | 2.2.0 | 事件日志抽象：InMemoryEventLog + 乐观并发 |
-| **PalDDD.EventLog.EFCore** | 2.2.0 | EF Core 事件日志：EventLogDbContext + 全局位分配器 |
-| **PalDDD.Idempotency** | 2.2.0 | 幂等性抽象：IdempotencyProcessor + InMemoryStore |
-| **PalDDD.Idempotency.EFCore** | 2.2.0 | EF Core 幂等记录：IdempotencyDbContext |
-| **PalDDD.Projections** | 2.2.0 | 投影抽象：ProjectionProcessor + Checkpoint + Replay |
-| **PalDDD.Projections.EFCore** | 2.2.0 | EF Core 投影检查点：ProjectionCheckpointDbContext |
-| **PalDDD.Projections.EventLog** | 2.2.0 | EventLog 回放源：从事件流重建读模型 |
-| **PalDDD.Messaging** | 2.2.0 | 消息总线抽象：MessageBrokerBase + DomainEventDispatcher |
-| **PalDDD.Messaging.Kafka** | 2.2.0 | Kafka 适配：基于 Confluent.Kafka 2.x |
-| **PalDDD.Messaging.RabbitMQ** | 2.2.0 | RabbitMQ 适配：基于 RabbitMQ.Client 7.x |
-| **PalDDD.Transactions** | 2.2.0 | 事务/Saga：Outbox/Inbox 抽象 + InMemoryStore + 后台处理器 |
-| **PalDDD.Transactions.EFCore** | 2.2.0 | EF Core 事务：Outbox/Inbox/SagaState DbContext |
-| **PalDDD.DependencyInjection** | 2.2.0 | DI 注册入口：ServiceRegistration + AddPal 统一扩展 |
-| **PalDDD.Repository.EFCore** | 2.2.0 | EF Core 仓储：UnitOfWork + DomainEvent 拦截器 |
-| **PalDDD.Hosting.AspNetCore** | 2.2.0 | ASP.NET Core 集成：异常中间件 + 健康检查 + Minimal API 端点 |
-| **PalDDD.PalORM** | 2.2.0 | PalORM 持久化核心：6 Store + UnitOfWork（真 AOT + 源生成） |
-| **PalDDD.PalORM.PostgreSql** | 2.2.0 | PalORM PostgreSQL 方言：RETURNING / COPY |
-| **PalDDD.PalORM.MySql** | 2.2.0 | PalORM MySQL 方言：BulkCopy / 多值 INSERT |
-| **PalDDD.PalORM.Sqlite** | 2.2.0 | PalORM SQLite 方言：FTS5 / JSON1 |
-| **PalDDD.Dapper** | 2.2.0 | Dapper 持久化适配器（Dapper.AOT 拦截器全量启用——封装 API 面 AOT 实测，见 aot.md） |
-| **PalDDD.Dapper.PostgreSql** | 2.2.0 | Dapper PostgreSQL 增强：审计 / JSONB / 分片 / 软删除 |
-| **PalDDD.Dapper.MySql** | 2.2.0 | Dapper MySQL 增强 |
-| **PalDDD.Dapper.Sqlite** | 2.2.0 | Dapper SQLite 增强：TypeHandler / RowFactory / FTS5 |
+| **PalDDD.Base** | 3.0.0 | L1 元包：Core + Serialization + Compression + SourceGen + Analyzers |
+| **PalDDD.Extension** | 3.0.0 | L2 元包：CQRS + EventLog + Idempotency + Projections + Messaging + Transactions + DI |
+| **PalDDD.Core** | 3.0.0 | 领域核心：AggregateRoot / Entity / ValueObject / SmartEnum / DomainEvent / Specification |
+| **PalDDD.Serialization** | 3.0.0 | 序列化抽象：IMessageSerializer / MessageCatalog / MessageDescriptor |
+| **PalDDD.Serialization.Evolution** | 3.0.0 | 消息版本演化：Upcaster / Contract 验证 |
+| **PalDDD.Serialization.MemoryPack** | 3.0.0 | MemoryPack 二进制序列化（零反射、AOT） |
+| **PalDDD.Compression** | 3.0.0 | 压缩抽象：Brotli / GZip / Deflate（AOT 安全） |
+| **PalDDD.Compression.Native** | 3.0.0 | 原生压缩：LZ4 / ZStandard（P/Invoke，不可 AOT） |
+| **PalDDD.Core.SourceGen** | 3.0.0 | 源生成器：IdentityGenerator / EnumGenerator / MessageRegistryGenerator |
+| **PalDDD.Analyzers** | 3.0.0 | Roslyn 分析器：PDDD001-015 编译期 DDD 治理诊断 |
+| **PalDDD.Analyzers.CodeFixes** | 3.0.0 | 代码修复：PDDD008/010/013/015 |
+| **PalDDD.CQRS** | 3.0.0 | 命令查询职责分离：Dispatcher / Pipeline / Validation / Logging |
+| **PalDDD.EventLog** | 3.0.0 | 事件日志抽象：InMemoryEventLog + 乐观并发 |
+| **PalDDD.EventLog.EFCore** | 3.0.0 | EF Core 事件日志：EventLogDbContext + 全局位分配器 |
+| **PalDDD.Idempotency** | 3.0.0 | 幂等性抽象：IdempotencyProcessor + InMemoryStore |
+| **PalDDD.Idempotency.EFCore** | 3.0.0 | EF Core 幂等记录：IdempotencyDbContext |
+| **PalDDD.Projections** | 3.0.0 | 投影抽象：ProjectionProcessor + Checkpoint + Replay |
+| **PalDDD.Projections.EFCore** | 3.0.0 | EF Core 投影检查点：ProjectionCheckpointDbContext |
+| **PalDDD.Projections.EventLog** | 3.0.0 | EventLog 回放源：从事件流重建读模型 |
+| **PalDDD.Messaging** | 3.0.0 | 消息总线抽象：MessageBrokerBase + DomainEventDispatcher |
+| **PalDDD.Messaging.Kafka** | 3.0.0 | Kafka 适配：基于 Confluent.Kafka 2.x |
+| **PalDDD.Messaging.RabbitMQ** | 3.0.0 | RabbitMQ 适配：基于 RabbitMQ.Client 7.x |
+| **PalDDD.Transactions** | 3.0.0 | 事务/Saga：Outbox/Inbox 抽象 + InMemoryStore + 后台处理器 |
+| **PalDDD.Transactions.EFCore** | 3.0.0 | EF Core 事务：Outbox/Inbox/SagaState DbContext |
+| **PalDDD.DependencyInjection** | 3.0.0 | DI 注册入口：ServiceRegistration + AddPal 统一扩展 |
+| **PalDDD.Repository.EFCore** | 3.0.0 | EF Core 仓储：UnitOfWork + DomainEvent 拦截器 |
+| **PalDDD.Hosting.AspNetCore** | 3.0.0 | ASP.NET Core 集成：异常中间件 + 健康检查 + Minimal API 端点 |
+| **PalDDD.PalORM** | 3.0.0 | PalORM 持久化核心：6 Store + UnitOfWork（真 AOT + 源生成） |
+| **PalDDD.PalORM.PostgreSql** | 3.0.0 | PalORM PostgreSQL 方言：RETURNING / COPY |
+| **PalDDD.PalORM.MySql** | 3.0.0 | PalORM MySQL 方言：BulkCopy / 多值 INSERT |
+| **PalDDD.PalORM.Sqlite** | 3.0.0 | PalORM SQLite 方言：FTS5 / JSON1 |
+| **PalDDD.Dapper** | 3.0.0 | Dapper 持久化适配器（Dapper.AOT 拦截器全量启用——封装 API 面 AOT 实测，见 aot.md） |
+| **PalDDD.Dapper.PostgreSql** | 3.0.0 | Dapper PostgreSQL 增强：审计 / JSONB / 分片 / 软删除 |
+| **PalDDD.Dapper.MySql** | 3.0.0 | Dapper MySQL 增强 |
+| **PalDDD.Dapper.Sqlite** | 3.0.0 | Dapper SQLite 增强：TypeHandler / RowFactory / FTS5 |
 | **PalORM.Core** | 5.5.1 | PalORM 引擎核心：DataSession / Provider / RowFactory（PalDDD.PalORM 的底层依赖） |
 | **PalORM.SourceGen** | 5.5.1 | PalORM 源生成器：编译期生成 RowFactory / CommandFactory（零反射） |
 | **PalORM.PostgreSql** | 5.5.1 | PalORM PostgreSQL 方言 Provider：RETURNING / COPY |
@@ -374,6 +374,8 @@ services.AddPalOrmPostgreSql(connectionString);
 
 Saga 用显式状态/事件转换注册 + FrozenDictionary 查找——不依赖反射，AOT 安全。支持三种补偿策略和超时自动检测。
 
+> ⚠️ **Dapper 持久化快照必传**：`DapperSagaStateStore<TState>` 未注册 source-generated `JsonTypeInfo<TState>` 时 `SaveChangesAsync` 会 fail-fast 抛异常（2026-09-19 起；此前版本静默把业务字段写 NULL——数据丢失缺陷已收口）。注册：`services.AddPalDapperSagaSnapshot(jsonTypeInfo)`。详见 [usage.md](docs/usage.md)。
+
 ```csharp
 public sealed class OrderSaga : Saga<OrderSagaState>
 {
@@ -461,7 +463,7 @@ builder.Services.AddPalJsonSerialization(catalog =>        // 注册 IMessageSer
     catalog.Add(AppJsonContext.Default.OrderCreated, name: "ordering.order-created.v1");  // wire name 显式稳定
     catalog.Add(AppJsonContext.Default.OrderCancelled, name: "ordering.order-cancelled.v1");
 });
-builder.Services.AddSingleton<IMessageBroker>(new MessageBroker());        // InMemory Broker（无参构造）
+builder.Services.AddSingleton<IMessageBroker>(new NullMessageBroker());   // Null broker（默认丢弃——生产环境替换为 Kafka/RabbitMQ 适配器）
 builder.Services.AddSingleton<IPalOutboxStore, InMemoryOutboxStore>();     // InMemory Outbox 存储
 // 时间抽象：注入 FakeTimeProvider（PalDDD.Testing 共享库）→ 租约过期/重试时序确定性可控
 
@@ -723,7 +725,7 @@ builder.Services.AddSingleton<IMessageBroker>(new KafkaBroker(
 // 发布：OutboxProcessor 持租约消息调 broker.PublishAsync——非泛型路径必须传 messageId
 await broker.PublishAsync(message, descriptor, messageId, ct);
 // Outbox 侧以 OutboxMessage.Id 作 messageId，correlation/causation/trace 元数据随 MessagePublishContext 透传
-// Broker 适配器非 AOT（Confluent.Kafka/RabbitMQ.Client 限制，见 AOT 表）；InMemory MessageBroker 用于测试
+// Broker 适配器非 AOT（Confluent.Kafka/RabbitMQ.Client 限制，见 AOT 表）；测试可注册 NullMessageBroker 或自实现 IMessageBroker
 ```
 
 ---
@@ -756,9 +758,9 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 ### 消息基础设施
 | 组件 | 核心机制 |
 |------|---------|
-| **Outbox** | 数据库事务内原子写入消息行，租约锁 + token fencing（(LockedBy, LockedUntil) 完整匹配拒绝旧 worker，LockedUntil 单调变化免 DDL）多实例并发发布，指数退避重试，死信队列 + 操作重注入 |
+| **Outbox** | 数据库事务内原子写入消息行，租约锁 + token fencing（(LockedBy, LockedUntil) 完整匹配拒绝旧 worker，LockedUntil 单调变化免 DDL）多实例并发发布，指数退避重试，死信队列 + 操作重注入（重试上限 `MaxRetryCount` 可配，重投须幂等消费——运维入口见 [usage.md](docs/usage.md) 死信语义段） |
 | **Inbox** | `(ConsumerName, MessageId)` 复合唯一约束，四态生命周期（Pending → Processing → Processed/Failed），僵尸记录超时回收 |
-| **Saga** | 显式状态/事件转换注册 → FrozenDictionary 查找，可配置重试+退避，None/Backward/Forward 三种补偿策略（**补偿范围与顺序以执行序 ExecutedStepKeys 为准，非注册序**），超时检测后台服务（含 AwaitingHumanDecision 中断态兜底扫描），人工审批中断+恢复 |
+| **Saga** | 显式状态/事件转换注册 → FrozenDictionary 查找，可配置重试+退避，None/Backward/Forward 三种补偿策略（**补偿范围与顺序以执行序 ExecutedStepKeys 为准，非注册序**），超时检测后台服务（含 AwaitingHumanDecision 中断态兜底扫描），人工审批中断+恢复，FanOut 并行子任务（⚠️ **整批 attempt 级重试——executor 必须幂等**，见 `FanOutStep` 重放语义声明） |
 | **EventLog** | 命名流 + 乐观并发（ExpectedStreamVersion），全局单调递增位置，`RehydrateFromBytes` 零拷贝读取路径 |
 | **Idempotency** | `(OperationName, Key)` 幂等执行 + 结果 payload 缓存（Executed/Cached/Skipped 三态），**Revision CAS 令牌**防 Completed 翻转后副作用重执行（v2.1.0），过期记录可回收重建 |
 | **Projection** | `IProjectionCheckpointStore` 断点存储，`EventLogReplaySource<T>` 全量重放，独立于存储适配器 |
@@ -787,7 +789,7 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 | PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` 全局继承 |
 | PalDDD.CQRS · EventLog · Messaging · Projections · DI | ✅ | 同上 |
 | **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **真 AOT** | 源生成 RowFactory/CommandFactory，`PublishAot=true` 验证通过（[PalOrmSample](samples/PalDDD.PalOrmSample/)） |
-| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ⚠️ 假象 | Dapper.AOT `[module:DapperAot]` 未启用——运行时走经典反射路径，`<NoWarn>IL3058</NoWarn>` 仅声明层面（详见 [AOT 指南](docs/aot.md) 与 [PalORM 适配层文档](docs/palorm-adapter.md)） |
+| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ 实测 | `[module:DapperAot]` 已启用——34 调用点全量拦截器接管，三方言 NativeAOT 二进制实测 13/13；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持（详见 [AOT 指南](docs/aot.md) 与 [persistence-aot-status.md](docs/persistence-aot-status.md)） |
 | PalDDD.Transactions | ❌ | Saga 反射特例（`IsAotCompatible=false`，见 csproj） |
 | ~~PalDDD.EntityFrameworkCore~~ | ❌ | ~~已废弃~~ |
 | PalDDD.Messaging.Kafka · RabbitMQ | ❌ | Confluent.Kafka / RabbitMQ.Client 限制 |
@@ -832,9 +834,9 @@ src/                         36 源项目 · Clean Architecture（Folder 与 Pal
 ├── Hosting/                 DependencyInjection · Hosting.AspNetCore
 └── Metapackages/            Base · Extension · Prompts（Prompts 非包，IsPackable=false）
 
-test/                        16 测试项目（TUnit）· 1202 项实测（本机 1153 + 49 环境依赖项 CI Testcontainers——PalORM.Tests 与 Messaging.Integration.Tests 需 Docker）
+test/                        16 测试项目（TUnit）· 1379 项实测（本机 1311 + 54 环境依赖项 CI Testcontainers + 14 设计内跳过——PalORM.Tests 与 Messaging.Integration.Tests 需 Docker）
 bench/                       BenchmarkDotNet 性能基准
-samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi · AotSample
+samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi · AotSample · DapperAotProbe（实验探针，不在 slnx/CI——见 docs/review/dapper-aot-experiment-2026-09-13.md）
 docs/                        架构 · 使用指南 · 教程 · ADR
 ```
 
@@ -854,7 +856,7 @@ flowchart TB
     Transactions --> PalORM["PalORM（真 AOT）"]
     EventLog --> PalORM
     Projections --> PalORM
-    Transactions --> Dapper["Dapper（弃用）"]
+    Transactions --> Dapper["Dapper（能力平等栈）"]
     PalORM --> PG[PostgreSql]
     PalORM --> MySQL
     PalORM --> SQLite
@@ -875,7 +877,8 @@ flowchart TB
 | [测试体系](docs/testing.md) | 测试金字塔、场景矩阵、BenchmarkDotNet 配置 |
 | [发布规范](docs/release.md) | 版本管理、包范围、CHANGELOG 规范与生成流程 |
 | [踩坑目录](docs/pitfalls.md) | 82 条 DDD/AOT/并发实战踩坑 |
-| [架构决策](docs/decisions/) | 22 份 ADR |
+| [开发流程](docs/development.md) | 开发环境、Git 钩子、测试运行 |
+| [架构决策](docs/decisions/) | 24 份 ADR |
 | [变更日志](CHANGELOG.md) | 版本历史（消费者变更 + 工程过程附录） |
 
 ---

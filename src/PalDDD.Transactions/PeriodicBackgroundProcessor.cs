@@ -17,21 +17,24 @@ namespace PalDDD.Transactions;
 
 /// <summary>
 /// 定时轮询后台服务基类。<br/>
-/// 封装 PeriodicTimer 生命周期 + 循环 + 异常隔离，子类只需实现每轮逻辑。
+/// 封装轮询生命周期 + 循环 + 异常隔离，子类只需实现每轮逻辑。
 /// </summary>
 public abstract partial class PeriodicBackgroundProcessor : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly PeriodicTimer _timer;
+    private readonly TimeSpan _pollInterval;
+    private readonly TimeProvider _timeProvider;
     private volatile bool _disposed; // v19 P2 + v20 volatile：Dispose 线程写/循环线程读的 stale 窗口收口
 
     protected PeriodicBackgroundProcessor(
         IServiceScopeFactory scopeFactory,
-        TimeSpan pollInterval)
+        TimeSpan pollInterval,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         _scopeFactory = scopeFactory;
-        _timer = new PeriodicTimer(pollInterval);
+        _pollInterval = pollInterval;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     protected IServiceScopeFactory ScopeFactory => _scopeFactory;
@@ -42,8 +45,20 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
     {
         try
         {
-            while (await _timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+            // 审计 2026-09-17 T-2：原 PeriodicTimer 不接受 TimeProvider，测试只能挂钟等待。
+            // 改为 Task.Delay(interval, timeProvider, ct)——生产行为等价（系统时钟），
+            // 测试可注入 FakeTimeProvider 实现确定性 tick。
+            while (!stoppingToken.IsCancellationRequested)
             {
+                try
+                {
+                    await Task.Delay(_pollInterval, _timeProvider, stoppingToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
                 try { await ExecuteTickAsync(stoppingToken).ConfigureAwait(false); }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
                 // ITM-166 修复（声明）：此分支为 OCE 吞弃的边界声明——当前 ExecuteTickAsync
@@ -55,26 +70,25 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
                 catch (OperationCanceledException) { /* 下游取消但 Host 未关停，静默忽略（见上方边界声明） */ }
                 catch (ObjectDisposedException) when (_disposed)
                 {
-                    // v20 A-P3-1 机理勘正：WaitForNextTickAsync 位于 while 条件不在内层 try，
-                    // 其 ODE 由外层 catch (ObjectDisposedException) when (_disposed) 归类
-                    //（v25 P3 行为族 B3 补齐——此前无匹配分支，逃逸给 Host 日志；仍不可能
-                    // 形成无限循环，异常本身已使循环离开）。本分支守护的是 ExecuteTickAsync
-                    // 内部的 ODE（如 tick 内对象已释放）——_disposed 标志使终止确定性成立。
+                    // v20 A-P3-1 机理勘正：Dispose 与等待/执行竞态——_disposed 为 true
+                    // 证明由本服务停机引发，归类为正常退出（对齐上方 OCE 分支）。
                     break;
                 }
-                catch (Exception ex) { OnTickFailed(ex); }
+                catch (Exception ex)
+                {
+                    // 全仓扫描修复（契约对齐）：本方法的 CA1031 抑制理由写明「后台轮询循环必须
+                    // 隔离任意异常以防止循环中断」，但 OnTickFailed 自身抛出时（日志 sink 故障、
+                    // 已释放的 logger、指标序列化失败等）异常会从 catch 块内逃逸，把整个轮询循环
+                    // 打死——与声明相反（也与 OnTickFailed 的「基类保证循环不中断」契约相反）。
+                    // 独立隔离该回调调用，使契约成立。空 catch 由本方法的 CA1031 抑制覆盖。
+                    try { OnTickFailed(ex); }
+                    catch { /* 失败回调自身异常不得中断轮询——见上方契约 */ }
+                }
             }
-        }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-        {
-            // Host 停止会取消 WaitForNextTickAsync，这是后台循环的正常退出路径。
         }
         catch (ObjectDisposedException) when (_disposed)
         {
-            // v25 P3 行为族 B3：Dispose 与 WaitForNextTickAsync 的竞态窗口——_timer 已被
-            // Dispose 时 WaitForNextTickAsync 从 while 条件处抛 ODE，此前无匹配分支逃逸
-            // 给 Host 日志（与 OCE 正常停机路径形态分叉）。_disposed 为 true 证明由本服务
-            // 停机引发，归类为正常退出（对齐上方 OCE 分支）；非停机期 ODE 不满足过滤器，仍上抛。
+            // 停机期 ODE 正常退出。
         }
     }
 
@@ -87,7 +101,6 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
     public override void Dispose()
     {
         _disposed = true;
-        _timer.Dispose();
         GC.SuppressFinalize(this);
         base.Dispose();
     }

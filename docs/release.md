@@ -3,7 +3,7 @@
 > 本规范定义 Pal.DDD 项目从代码变更到 NuGet 发布的标准流程。
 > 所有版本发布（含补丁版/小版本/大版本/Preview）必须遵守。
 >
-> **当前状态**：`VersionPrefix=2.2.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**2.2.0 已发布**（2026-09-15）。2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）。2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正，内容后并入 `[2.1.0]` 段，**CHANGELOG 先行教训第二次**，见 §9 教训 2）。1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`；`[1.1.0]` 段为事后回填）。tag 之后的变更累积在 `[Unreleased]`，下个版本发布前需将 `VersionPrefix` 升位。
+> **当前状态**：`VersionPrefix=3.0.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**2.2.0 已发布**（2026-09-15）。2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）。2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正，内容后并入 `[2.1.0]` 段，**CHANGELOG 先行教训第二次**，见 §9 教训 2）。1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`；`[1.1.0]` 段为事后回填）。tag 之后的变更累积在 `[Unreleased]`，下个版本发布前需将 `VersionPrefix` 升位。
 > **首次发布待办**：本规范第 5/6/9 章在首次实际发布后需补实测教训（参考 ORM 项目 `docs/发布规范.md` §9）。
 
 ---
@@ -433,7 +433,7 @@ dotnet build   # 应成功，无警告
 | 失败 step | 补救 |
 |----------|------|
 | Build/Test 失败 | 修复代码 → 重新合并到 main → 重打 tag（见 8.3） |
-| AOT publish 失败 | 检查 AOT 核心层是否引入反射（PDDD-G8 + gate-check.sh） |
+| AOT publish 失败 | 检查 AOT 核心层是否引入反射（PDDD-G8 + gate.cs） |
 | Pack 失败 | 检查 csproj 改动是否破坏 pack → 修复 → 重打 tag |
 | Push 部分失败 | `--skip-duplicate` 会自动跳过已 push 的包；workflow_dispatch 重发即可 |
 | GitHub Release 创建失败 | 手动在 https://github.com/yuebo119/PalDDD/releases/new 创建 |
@@ -480,6 +480,7 @@ git push origin v1.1.0
 | 2 | 发布时 `[Unreleased]` 未转正 `[2.0.0]` 段（同款教训第二次）——tag 打完 CHANGELOG 头部仍指向上版 | 2.0.0（2026-08-23） | §5.1 步骤 2 增加核对项：`grep "^## " CHANGELOG.md` 首段必须是 `[Unreleased]` + 新 `[版本号]` 段；升版本同次提交内完成转正（见 2.1.0 发布提交形态） |
 | 3 | release.yml pack 阶段 TreatWarningsAsErrors 阻塞（NU5104 preview 依赖/NU5128 元包无 lib 均为预期） | 2.0.0 发布流水线（main a115c22/ae0c912/64c4d3d 三连修） | 构建阶段 `-warnaserror` 与 pack 阶段分离；NoWarn 命令行属性保底（Directory.Build.props 的 NoWarn 在 CI pack 阶段偶不生效） |
 | 4 | Dapper 四包 + EFCore 五包 + DependencyInjection 共 10 项目曾因 NU5104 未 pack（包数断言抓出） | 同上 | §6.2 step 7 包数量断言 35（防漏发的机械防线） |
+| 5 | §4.1 #6 pack 循环 `for proj in $(ls src/)` 在输出带 `/` 后缀的 shell 环境（Git Bash `ls -F` 类行为）下拼错路径**静默空转 0 包**（无报错、无失败计数） | 2.2.0（2026-09-15） | 命令改 glob 直接枚举 `src/*/*.csproj`（不依赖 `ls` 行为）；**教训 4 的包数断言 35 正是本次空转的探测器**（0 ≠ 35 暴露） |
 
 预期可能踩的坑（基于 ORM 项目经验预判）：
 
@@ -647,7 +648,7 @@ git commit -m "功能：xxx + 升版本 preview.2"
 ```
 常态（Phase 0）          发布启动（Phase 1-5，一次性）           发布（Phase 6）      事后（Phase 7）
 行为变更合入 dev    →    P1 事实收集 → P2 事实核验 → P3 起草  →   P5 转正 → P6 tag   →   P7 事后同步
-[Unreleased] 即时累积    （changelog-facts.sh） （逐条锚点）  （§11.4 模板）  （check+三件套同次提交）  （workflow 生成 Release body）
+[Unreleased] 即时累积    （changelog-facts.cs） （逐条锚点）  （§11.4 模板）  （check+三件套同次提交）  （workflow 生成 Release body）
 ```
 
 ### 12.1 Phase 0——常态累积（行为变更合入 dev 时）
@@ -689,7 +690,7 @@ dotnet run scripts/changelog-check.cs    # FAIL=阻断（回 Phase 3）；WARN=�
 
 ### 12.6 Phase 5——转正（与版本三件套同次提交，先于 tag）
 
-`[Unreleased]` 改题 `[X.Y.Z] — 日期` + 顶部新增空 `[Unreleased]` + 头部"当前版本/发布状态"更新，**与 `Directory.Build.props`/README badge 同一次提交**（§11.3 规则 5）。转正后 `changelog-check.sh` 必须 0 FAIL。
+`[Unreleased]` 改题 `[X.Y.Z] — 日期` + 顶部新增空 `[Unreleased]` + 头部"当前版本/发布状态"更新，**与 `Directory.Build.props`/README badge 同一次提交**（§11.3 规则 5）。转正后 `changelog-check.cs` 必须 0 FAIL。
 
 ### 12.7 Phase 6/7——发布与事后同步
 

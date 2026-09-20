@@ -18,7 +18,9 @@ CREATE TABLE outbox_messages (
     trace_parent    VARCHAR(255),
     trace_state     VARCHAR(512),  -- 三十七轮 C2：对齐 EFCore MaxLength(512)
     INDEX idx_outbox_status (status, next_attempt_at, locked_until),
-    INDEX idx_outbox_created (created_at)
+    INDEX idx_outbox_created (created_at),
+    -- 租约回读谓词（locked_by + locked_until）覆盖索引——审计 2026-09-17 P-2
+    INDEX idx_outbox_lease_holder (locked_by, locked_until)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE inbox_messages (

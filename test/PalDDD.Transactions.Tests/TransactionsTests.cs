@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using PalDDD.Core.Logging;
 using PalDDD.Messaging;
 using PalDDD.Serialization;
@@ -275,6 +276,193 @@ public sealed class OutboxBatchProcessorTests
         await Assert.That(store.MarkProcessedCalled).IsTrue();
     }
 
+    // ─── 毒消息死信路径（审计 2026-09-17 T-1）──────────────────
+    // 此前 store.MarkDead 有测，处理器层死信转换无测——回归后消息永久重投且套件全绿。
+
+    [Test]
+    public async Task ProcessBatchAsync_TypeNotInCatalog_MarksDead(CancellationToken cancellationToken)
+    {
+        var payload = "unknown-type-payload"u8.ToArray();
+        var message = new OutboxMessage
+        {
+            Type = "orders.never-registered.v1",
+            Payload = payload,
+            ContentType = ContentTypes.Json,
+            SchemaVersion = 1
+        };
+        var store = new SingleMessageOutboxStore(message, allowFailureTransitions: true);
+        var logger = new CapturingLogger<OutboxBatchProcessor>();
+        var processor = new OutboxBatchProcessor(
+            store,
+            new ThrowingMessageBroker(),
+            new FixedMessageSerializer(payload, new OrderCreatedIntegrationEvent()),
+            MessageCatalog.Empty,
+            new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions()),
+            logger);
+
+        await processor.ProcessBatchAsync(cancellationToken);
+
+        await Assert.That(message.Status).IsEqualTo(OutboxStatus.Dead);
+        await Assert.That(message.Error).Contains("not registered in MessageCatalog");
+        await Assert.That(store.SaveChangesCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ProcessBatchAsync_DeserializeReturnsNull_MarksDead(CancellationToken cancellationToken)
+    {
+        var builder = new MessageCatalogBuilder();
+        var descriptor = builder.Add(
+            TransactionsJsonContext.Default.OrderCreatedIntegrationEvent,
+            name: "orders.order-created.v1");
+        var catalog = builder.Build();
+        var payload = "serialized-order-created-event"u8.ToArray();
+        var message = new OutboxMessage
+        {
+            Type = descriptor.Name,
+            Payload = payload,
+            ContentType = descriptor.ContentType,
+            SchemaVersion = descriptor.SchemaVersion
+        };
+        var store = new SingleMessageOutboxStore(message, allowFailureTransitions: true);
+        var processor = new OutboxBatchProcessor(
+            store,
+            new ThrowingMessageBroker(),
+            new NullDeserializeSerializer(),
+            catalog,
+            new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions()),
+            NullPalLogger<OutboxBatchProcessor>.Instance);
+
+        await processor.ProcessBatchAsync(cancellationToken);
+
+        await Assert.That(message.Status).IsEqualTo(OutboxStatus.Dead);
+        await Assert.That(message.Error).Contains("Deserialization returned null");
+        await Assert.That(store.MarkDeadCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ProcessBatchAsync_MarkDeadThrows_DoesNotAbortBatch(CancellationToken cancellationToken)
+    {
+        var builder = new MessageCatalogBuilder();
+        var descriptor = builder.Add(
+            TransactionsJsonContext.Default.OrderCreatedIntegrationEvent,
+            name: "orders.order-created.v1");
+        var catalog = builder.Build();
+        var poison = new OutboxMessage
+        {
+            Type = descriptor.Name,
+            Payload = "poison"u8.ToArray(),
+            ContentType = descriptor.ContentType,
+            SchemaVersion = descriptor.SchemaVersion,
+            RetryCount = 99
+        };
+        var healthy = new OutboxMessage
+        {
+            Type = descriptor.Name,
+            Payload = "healthy"u8.ToArray(),
+            ContentType = descriptor.ContentType,
+            SchemaVersion = descriptor.SchemaVersion
+        };
+        var store = new PoisonThenHealthyOutboxStore(poison, healthy);
+        var logger = new CapturingLogger<OutboxBatchProcessor>();
+        var broker = new FirstFailsThenSucceedsBroker();
+        var payload = "healthy"u8.ToArray();
+        var processor = new OutboxBatchProcessor(
+            store,
+            broker,
+            new FixedMessageSerializer(payload, new OrderCreatedIntegrationEvent()),
+            catalog,
+            new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions { MaxRetryCount = 1 }),
+            logger);
+
+        await processor.ProcessBatchAsync(cancellationToken);
+
+        // 毒消息 MarkDead 自身抛异常：不得中止整批，健康消息仍应发布
+        await Assert.That(broker.SuccessCount).IsEqualTo(1);
+        await Assert.That(healthy.Status).IsEqualTo(OutboxStatus.Processed);
+        await Assert.That(poison.Status).IsNotEqualTo(OutboxStatus.Processed);
+    }
+
+    [Test]
+    public async Task ProcessBatchAsync_BackoffPolicyThrows_FallsBackToOneSecondAndReleases(CancellationToken cancellationToken)
+    {
+        var builder = new MessageCatalogBuilder();
+        var descriptor = builder.Add(
+            TransactionsJsonContext.Default.OrderCreatedIntegrationEvent,
+            name: "orders.order-created.v1");
+        var catalog = builder.Build();
+        var payload = "serialized-order-created-event"u8.ToArray();
+        var message = new OutboxMessage
+        {
+            Type = descriptor.Name,
+            Payload = payload,
+            ContentType = descriptor.ContentType,
+            SchemaVersion = descriptor.SchemaVersion
+        };
+        var store = new SingleMessageOutboxStore(message, allowFailureTransitions: true);
+        var logger = new CapturingLogger<OutboxBatchProcessor>();
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-17T12:00:00+00:00"));
+        var now = timeProvider.GetUtcNow();
+        var processor = new OutboxBatchProcessor(
+            store,
+            new ThrowingMessageBroker(),
+            new FixedMessageSerializer(payload, new OrderCreatedIntegrationEvent()),
+            catalog,
+            new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
+            {
+                MaxRetryCount = 5,
+                RetryBackoffPolicy = new ThrowingBackoffPolicy()
+            }),
+            logger,
+            timeProvider);
+
+        await processor.ProcessBatchAsync(cancellationToken);
+
+        await Assert.That(message.Status).IsEqualTo(OutboxStatus.Pending);
+        await Assert.That(store.ReleaseForRetryCount).IsEqualTo(1);
+        await Assert.That(store.LastNextAttemptAt).IsEqualTo(now + TimeSpan.FromSeconds(1));
+        await Assert.That(logger.WarningCount).IsGreaterThanOrEqualTo(1);
+    }
+
+    [Test]
+    public async Task ProcessBatchAsync_ReleaseForRetryThrows_DoesNotAbortBatch(CancellationToken cancellationToken)
+    {
+        var builder = new MessageCatalogBuilder();
+        var descriptor = builder.Add(
+            TransactionsJsonContext.Default.OrderCreatedIntegrationEvent,
+            name: "orders.order-created.v1");
+        var catalog = builder.Build();
+        var poison = new OutboxMessage
+        {
+            Type = descriptor.Name,
+            Payload = "poison"u8.ToArray(),
+            ContentType = descriptor.ContentType,
+            SchemaVersion = descriptor.SchemaVersion,
+            RetryCount = 0
+        };
+        var healthy = new OutboxMessage
+        {
+            Type = descriptor.Name,
+            Payload = "healthy"u8.ToArray(),
+            ContentType = descriptor.ContentType,
+            SchemaVersion = descriptor.SchemaVersion
+        };
+        var store = new PoisonThenHealthyOutboxStore(poison, healthy, failRelease: true);
+        var broker = new FirstFailsThenSucceedsBroker();
+        var payload = "healthy"u8.ToArray();
+        var processor = new OutboxBatchProcessor(
+            store,
+            broker,
+            new FixedMessageSerializer(payload, new OrderCreatedIntegrationEvent()),
+            catalog,
+            new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions { MaxRetryCount = 10 }),
+            NullPalLogger<OutboxBatchProcessor>.Instance);
+
+        await processor.ProcessBatchAsync(cancellationToken);
+
+        await Assert.That(broker.SuccessCount).IsEqualTo(1);
+        await Assert.That(healthy.Status).IsEqualTo(OutboxStatus.Processed);
+    }
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Sonar", "S927", Justification = "测试 stub 参数名与接口不一致，避免遮蔽构造函数参数。")]
     private sealed class SingleMessageOutboxStore(
         OutboxMessage message,
@@ -282,6 +470,10 @@ public sealed class OutboxBatchProcessorTests
         bool cancelSaveChanges = false) : IPalOutboxStore
     {
         public bool MarkProcessedCalled { get; private set; }
+        public int MarkDeadCount { get; private set; }
+        public int ReleaseForRetryCount { get; private set; }
+        public int SaveChangesCount { get; private set; }
+        public DateTimeOffset? LastNextAttemptAt { get; private set; }
 
         public ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([message]);
@@ -316,6 +508,7 @@ public sealed class OutboxBatchProcessorTests
                 throw new InvalidOperationException("The message should publish successfully.");
             }
 
+            MarkDeadCount++;
             outboxMessage.Status = OutboxStatus.Dead;
             outboxMessage.Error = failureReason;
             outboxMessage.ProcessedAt = deadAt;
@@ -328,6 +521,8 @@ public sealed class OutboxBatchProcessorTests
                 throw new InvalidOperationException("The message should publish successfully.");
             }
 
+            ReleaseForRetryCount++;
+            LastNextAttemptAt = nextAttemptAt;
             outboxMessage.Status = OutboxStatus.Pending;
             outboxMessage.Error = failureReason;
             outboxMessage.NextAttemptAt = nextAttemptAt;
@@ -337,9 +532,143 @@ public sealed class OutboxBatchProcessorTests
             => ValueTask.FromResult(0);
 
         public ValueTask<int> SaveChangesAsync(CancellationToken ct)
-            => cancelSaveChanges
+        {
+            SaveChangesCount++;
+            return cancelSaveChanges
                 ? throw new OperationCanceledException("Save canceled.", ct)
                 : ValueTask.FromResult(1);
+        }
+    }
+
+    /// <summary>毒消息在前：MarkDead/ReleaseForRetry 按配置抛异常；健康消息在后可正常发布。</summary>
+    private sealed class PoisonThenHealthyOutboxStore(
+        OutboxMessage poison,
+        OutboxMessage healthy,
+        bool failRelease = false) : IPalOutboxStore
+    {
+        public ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
+            => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([poison, healthy]);
+
+        public ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(
+            int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
+            => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([poison, healthy]);
+
+        public void AddMessage(OutboxMessage outboxMessage)
+            => throw new InvalidOperationException("The test store is read-only.");
+
+        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
+            => throw new InvalidOperationException("The test store is read-only.");
+
+        public void MarkProcessed(OutboxMessage outboxMessage, DateTimeOffset processedAt)
+        {
+            outboxMessage.Status = OutboxStatus.Processed;
+            outboxMessage.ProcessedAt = processedAt;
+        }
+
+        public void MarkDead(OutboxMessage outboxMessage, string failureReason, DateTimeOffset deadAt)
+            => throw new InvalidOperationException("Simulated MarkDead persistence failure.");
+
+        public void ReleaseForRetry(OutboxMessage outboxMessage, string failureReason, DateTimeOffset nextAttemptAt)
+        {
+            if (failRelease)
+                throw new InvalidOperationException("Simulated ReleaseForRetry persistence failure.");
+            outboxMessage.Status = OutboxStatus.Pending;
+            outboxMessage.Error = failureReason;
+            outboxMessage.NextAttemptAt = nextAttemptAt;
+        }
+
+        public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)
+            => ValueTask.FromResult(0);
+
+        public ValueTask<int> SaveChangesAsync(CancellationToken ct) => ValueTask.FromResult(1);
+    }
+
+    private sealed class NullDeserializeSerializer : IMessageSerializer
+    {
+        public string ContentType => ContentTypes.Json;
+
+        public ReadOnlyMemory<byte> Serialize<TMessage>(TMessage message, MessageDescriptor? descriptor = null) => default;
+
+        public ReadOnlyMemory<byte> Serialize(object message, MessageDescriptor descriptor) => default;
+
+        public object? Deserialize(ReadOnlySpan<byte> payload, MessageDescriptor descriptor) => null;
+
+        public TMessage? Deserialize<TMessage>(ReadOnlySpan<byte> payload, MessageDescriptor descriptor) => default;
+    }
+
+    private sealed class ThrowingBackoffPolicy : IRetryBackoffPolicy
+    {
+        public TimeSpan ComputeDelay(int retryCount)
+            => throw new InvalidOperationException("Backoff policy failure.");
+    }
+
+    private sealed class CountingMessageBroker : IMessageBroker
+    {
+        public int PublishCount { get; private set; }
+
+        public ValueTask PublishAsync<TMessage>(TMessage message, CancellationToken ct = default)
+            => throw new InvalidOperationException("Outbox should use the descriptor-based publish overload.");
+
+        public ValueTask PublishAsync(object message, MessageDescriptor descriptor, PalUlid messageId, CancellationToken ct = default)
+            => throw new InvalidOperationException("Outbox should pass MessagePublishContext.");
+
+        public ValueTask PublishAsync(
+            object message,
+            MessageDescriptor descriptor,
+            PalUlid messageId,
+            MessagePublishContext context,
+            CancellationToken ct = default)
+        {
+            PublishCount++;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
+            Func<TMessage, CancellationToken, ValueTask> handler,
+            CancellationToken ct = default)
+            => throw new InvalidOperationException("Subscribe is not used in this test.");
+    }
+
+    /// <summary>首次 Publish 抛异常（毒消息），后续成功（健康消息）。</summary>
+    private sealed class FirstFailsThenSucceedsBroker : IMessageBroker
+    {
+        private int _calls;
+        public int SuccessCount { get; private set; }
+
+        public ValueTask PublishAsync<TMessage>(TMessage message, CancellationToken ct = default)
+            => throw new InvalidOperationException("Outbox should use the descriptor-based publish overload.");
+
+        public ValueTask PublishAsync(object message, MessageDescriptor descriptor, PalUlid messageId, CancellationToken ct = default)
+            => throw new InvalidOperationException("Outbox should pass MessagePublishContext.");
+
+        public ValueTask PublishAsync(
+            object message,
+            MessageDescriptor descriptor,
+            PalUlid messageId,
+            MessagePublishContext context,
+            CancellationToken ct = default)
+        {
+            if (Interlocked.Increment(ref _calls) == 1)
+                throw new InvalidOperationException("Simulated broker failure for poison message.");
+            SuccessCount++;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
+            Func<TMessage, CancellationToken, ValueTask> handler,
+            CancellationToken ct = default)
+            => throw new InvalidOperationException("Subscribe is not used in this test.");
+    }
+
+    private sealed class CapturingLogger<T> : IPalLogger<T>
+    {
+        public int WarningCount { get; private set; }
+
+        public void Debug(string message) { }
+        public void Information(string message) { }
+        public void Warning(string message) => WarningCount++;
+        public void Error(Exception ex, string message) { }
+        public bool IsEnabled(LogLevel level) => true;
     }
 
     private sealed class RecordingMessageBroker : IMessageBroker
@@ -1173,6 +1502,20 @@ public sealed class SagaStepTests
             "step-1",
             static (state, evt, ct) => ValueTask.FromResult(state),
             timeout: TimeSpan.FromSeconds(-1))).Throws<ArgumentOutOfRangeException>();
+    }
+
+    // 全仓扫描修复：负值守卫原先只在构造器里，而 Timeout 是 public init——对象初始化器
+    // 可绕过它。校验下沉到访问器后此路径同样被拒（对齐下方 FanOutStep.PerItemTimeout 的
+    // 访问器校验先例）。
+    [Test]
+    public async Task SagaStep_NegativeTimeoutViaInitializer_ThrowsArgumentOutOfRange()
+    {
+        await Assert.That(() => new SagaStep(
+            "step-init",
+            static (state, evt, ct) => ValueTask.FromResult(state))
+        {
+            Timeout = TimeSpan.FromSeconds(-1),
+        }).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]

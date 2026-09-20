@@ -233,7 +233,13 @@ static (int Exit, string Output) RunCapture(string fileName, string arguments)
     };
     using var process = new Process { StartInfo = info };
     process.Start();
+    // stderr 必须**并发排空**：.NET 的 RedirectStandardError 是管道——不同于 bash 的
+    // `>/dev/null` 直写空设备，不排空时子进程写满管道缓冲会与父进程的 stdout
+    // ReadToEnd 互等（死锁，子进程不退则一起挂住）。内容按原契约丢弃，仅消费掉缓冲。
+    process.ErrorDataReceived += static (_, _) => { };
+    process.BeginErrorReadLine();
     var output = process.StandardOutput.ReadToEnd();
     process.WaitForExit();
+    process.WaitForExit();   // 双调用：确保异步缓冲 flush（沿 check-all.cs 先例）
     return (process.ExitCode, output);
 }

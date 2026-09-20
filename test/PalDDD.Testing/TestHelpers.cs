@@ -3,6 +3,9 @@ using PalDDD.Core.Diagnostics;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+// 全限定会踩 C# 名字解析陷阱：本文件内的类型继承 TimeProvider，裸 `System` 会解析到
+// 继承来的静态属性 TimeProvider.System（而非命名空间）——故用 using 引入短名。
+using System.Runtime.ExceptionServices;
 
 namespace PalDDD.Testing;
 
@@ -12,10 +15,11 @@ namespace PalDDD.Testing;
 
 /// <summary>Records OpenTelemetry Activity events for test assertions.</summary>
 /// <remarks>
-/// 📐 <b>跨测试项目隔离设计</b>：TUnit 类级并行 + MTP 多项目并行会同时运行不同测试项目，全局 <c>ActivitySource</c>
-/// 的 listener 会收到所有项目的 activity。本类在构造时记录时间戳，<c>ActivityStopped</c>
-/// 回调中过滤 <c>StartTimeUtc</c> 早于构造时间的残留 activity，确保只收集本 listener
-/// 创建后产生的 activity——无需依赖 <c>[Collection]</c> 序列化即可跨项目隔离。
+/// 📐 <b>隔离边界（第五十三轮 P2-2 勘正——原"无需 [Collection] 即跨项目隔离"声明过强）</b>：
+/// 时间戳过滤（只收构造后产生的 activity）仅排除<b>构造前残留</b>；跨<b>进程</b>（MTP 多项目）
+/// 的隔离由进程边界天然保证，与本过滤无关。<b>同进程内 TUnit 类级并行下，其他测试类
+/// 产生的新 activity 仍会混入</b>——断言同名 activity/metric 的测试必须加
+/// <c>[NotInParallel]</c>（范式先例：EventLogTests ITM-647、MessagingTests——省略即 flaky）。
 /// </remarks>
 public sealed class RecordingActivityListener : IDisposable
 {
@@ -113,6 +117,13 @@ public sealed class FakeTimeProvider : TimeProvider
     private DateTimeOffset _now;
     private long _timestamp;
     private readonly List<FakeTimer> _timers = [];
+    // 保护 _timers 与时钟字段（_now/_timestamp）的并发访问（SUT 后台线程
+    // CreateTimer/GetUtcNow × 测试线程快进/Advance——第五十三轮 P2-1 收口：原实现
+    // 只锁 _timers，_now 为两字段 DateTimeOffset struct 撕裂读理论可达，DueTime 按
+    // 旧时钟计算的可见性窗口同场景）——见 AdvanceNowAndTriggerTimers 的锁内
+    // 快照+移除+推进、CreateTimer 的锁内 Add、FakeTimer.Dispose。
+    // 回调一律在**锁外**触发（回调内创建计时器是声明允许的形态，持锁会重进入死锁）。
+    private readonly object _timersLock = new();
 
     public FakeTimeProvider(DateTimeOffset initial)
     {
@@ -120,25 +131,37 @@ public sealed class FakeTimeProvider : TimeProvider
         _timestamp = initial.Ticks;
     }
 
-    public override DateTimeOffset GetUtcNow() => _now;
+    public override DateTimeOffset GetUtcNow()
+    {
+        lock (_timersLock) return _now;
+    }
 
-    public override long GetTimestamp() => _timestamp;
+    public override long GetTimestamp()
+    {
+        lock (_timersLock) return _timestamp;
+    }
 
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
     /// <summary>推进时间（不触发计时器回调）</summary>
     public void Advance(TimeSpan delta)
     {
-        _now = _now.Add(delta);
-        _timestamp += delta.Ticks;
+        lock (_timersLock)
+        {
+            _now = _now.Add(delta);
+            _timestamp += delta.Ticks;
+        }
     }
 
     /// <summary>设置精确时间（不触发计时器回调）</summary>
     public void Set(DateTimeOffset now)
     {
-        var delta = now - _now;
-        _now = now;
-        _timestamp += delta.Ticks;
+        lock (_timersLock)
+        {
+            var delta = now - _now;
+            _now = now;
+            _timestamp += delta.Ticks;
+        }
     }
 
     /// <summary>
@@ -155,49 +178,87 @@ public sealed class FakeTimeProvider : TimeProvider
     /// </para>
     /// </summary>
     /// <param name="delta">快进的时间量</param>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types",
+        Justification = "必须隔离**任意**回调异常以跑完整个到期批次并推进时钟——否则一处断言失败会让其余已出列的计时器永不再触发、假时钟冻结；异常在批次末尾按原调用栈重抛，非吞弃。")]
     public void AdvanceNowAndTriggerTimers(TimeSpan delta)
     {
-        var threshold = _now.Add(delta);
-
-        // 收集所有在阈值之前到期的计时器（避免回调中修改集合）
-        var expired = new List<FakeTimer>();
-        foreach (var timer in _timers)
+        // 收集**并移除**到期计时器 + 阈值计算：同一把锁内完成（第五十三轮 P2-1：
+        // _now 读取原在锁外；全仓扫描修复：原实现无同步，SUT 的后台线程 CreateTimer
+        // 与本扫描并发修改 List → InvalidOperationException / 集合损坏）。回调在
+        // **锁外**触发——回调内创建计时器是既有声明允许的形态，持锁调用会重进入死锁。
+        List<FakeTimer> expired;
+        DateTimeOffset threshold;
+        lock (_timersLock)
         {
-            if (timer.DueTime <= threshold)
-                expired.Add(timer);
+            threshold = _now.Add(delta);
+            expired = [.. _timers.Where(t => t.DueTime <= threshold)];
+            foreach (var t in expired)
+                _timers.Remove(t);
         }
+
         // P2 修复（十轮·盲区评审）：按 DueTime 升序触发——对齐真实 Timer 的到期序语义，
         // 此前按注册序触发，后注册但先到期的计时器会晚于后到期者执行
         expired.Sort(static (a, b) => a.DueTime.CompareTo(b.DueTime));
 
-        // 移除到期计时器
-        foreach (var t in expired)
-            _timers.Remove(t);
-
-        // 批量触发回调（在移除后进行，避免回调中注册新计时器的重进入问题）
+        // 批量触发回调（在移除后进行，避免回调中注册新计时器的重进入问题）。
+        // 回调异常隔离（全仓扫描修复）：原实现中任一回调抛出即中断批次——其余**已从
+        // _timers 移除**的到期计时器永不触发，且末尾的时间推进被跳过（假时钟冻结），
+        // 把一处断言失败放大成"计时器再不上场 + 时钟不走"的难查状态。
+        // 现：全部到期计时器都触发、时钟必定推进，异常在批次末尾按原始调用栈重抛
+        //（多个则 AggregateException）。
+        List<Exception>? failures = null;
         foreach (var t in expired)
         {
-            if (!t.IsCancelled)
+            if (t.IsCancelled)
+                continue;
+            try
             {
                 t.Callback(t.State);
             }
+            catch (Exception ex)
+            {
+                (failures ??= []).Add(ex);
+            }
         }
 
-        // 无论是否有计时器到期，时间必须推进到阈值
-        _now = threshold;
-        _timestamp = threshold.Ticks;
+        // 无论是否有计时器到期、回调是否抛出，时间必须推进到阈值（锁内——第五十三轮 P2-1）
+        lock (_timersLock)
+        {
+            _now = threshold;
+            _timestamp = threshold.Ticks;
+        }
+
+        if (failures is { Count: 1 })
+            ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        else if (failures is { Count: > 1 })
+            throw new AggregateException("FakeTimeProvider: 多个计时器回调抛出（批次已全部执行）。", failures);
     }
 
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         // P3 声明：period 有意忽略——FakeTimer 仅支持一次性到期语义（Saga/Outbox 测试场景不需要周期计时器）。
-        var timer = new FakeTimer(callback, state, _now + dueTime);
-        _timers.Add(timer);
-        return timer;
+        // 全仓扫描修复（假时钟语义）：dueTime < 0（含 Timeout.InfiniteTimeSpan）在真实 Timer 下
+        // 表示**永不触发**，而原实现 `_now + dueTime` 得到一个**已过期**的时刻 → 下一次
+        // AdvanceNowAndTriggerTimers（即使 delta 为零）立即触发它。租约/取消路径的
+        // `Task.Delay(Timeout.Infinite, timeProvider, ct)` 正是该形态。
+        // 第五十三轮 P2-1：DueTime 基准时钟的读取与 Add 收进锁内（原在锁外读 _now，
+        // 与测试线程快进并发时按旧时钟计算）。
+        lock (_timersLock)
+        {
+            var timer = new FakeTimer(
+                this, callback, state,
+                dueTime >= TimeSpan.Zero ? _now + dueTime : DateTimeOffset.MaxValue);
+            if (dueTime >= TimeSpan.Zero)
+            {
+                _timers.Add(timer);
+            }
+            return timer;
+        }
     }
 
     private sealed class FakeTimer : ITimer
     {
+        private readonly FakeTimeProvider _owner;
         private int _cancelled;
 
         public TimerCallback Callback { get; }
@@ -205,8 +266,9 @@ public sealed class FakeTimeProvider : TimeProvider
         public DateTimeOffset DueTime { get; }
         public bool IsCancelled => Volatile.Read(ref _cancelled) == 1;
 
-        public FakeTimer(TimerCallback callback, object? state, DateTimeOffset dueTime)
+        public FakeTimer(FakeTimeProvider owner, TimerCallback callback, object? state, DateTimeOffset dueTime)
         {
+            _owner = owner;
             Callback = callback;
             State = state;
             DueTime = dueTime;
@@ -225,6 +287,13 @@ public sealed class FakeTimeProvider : TimeProvider
         public void Dispose()
         {
             Interlocked.Exchange(ref _cancelled, 1);
+            // 全仓扫描修复（泄漏）：原实现只置取消位，计时器仍留在 _timers 直到其 DueTime
+            // 被某次快进扫过——远期到期（或永不触发）的已释放计时器永不回收，长跑测试 worker
+            // 持续累积。此处同步移除（若已被快照移除过则为 no-op；永不触发者从未入列）。
+            lock (_owner._timersLock)
+            {
+                _owner._timers.Remove(this);
+            }
         }
 
         public ValueTask DisposeAsync()

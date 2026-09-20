@@ -35,8 +35,14 @@ public sealed class UnitOfWork<TContext> : IUnitOfWork
     {
         // ITM-284（R45）：三栈 disposed 守卫对齐（PalOrm 3/3、Dapper 1/3、EFCore 原 0/3）
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_context.Database.CurrentTransaction is null)
-            await _context.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        // ADR-023（嵌套事务语义收敛到 fail-fast，对齐 Dapper 的 ITM-088）：原为
+        // `if (CurrentTransaction is null)` 静默 no-op——嵌套调用下内层 Commit 会提交**外层**
+        // 事务（CommitAsync 提交的是"当前活动事务"），造成静默原子性破坏
+        //（ExecuteInTransactionAsync 是无条件 Begin/work/SaveChanges/Commit）。
+        if (_context.Database.CurrentTransaction is not null)
+            throw new InvalidOperationException(
+                "BeginTransactionAsync 在事务已激活时被再次调用——请先 CommitAsync/RollbackAsync 结束当前事务。");
+        await _context.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>

@@ -106,6 +106,23 @@ public sealed class HealthCheckExtensionsTests
         await Assert.That(document.RootElement.GetProperty("timestamp").GetDateTimeOffset()).IsEqualTo(timestamp);
     }
 
+    /// <summary>ITM-800（2026-09-19）：WriteAsJsonAsync(contentType:null) 用框架默认
+    /// "application/json; charset=utf-8" **覆盖**此前手动设置——原 :61 的手动
+    /// ContentType 赋值是死代码（已删）。本测试锁定删除后的可观察行为：最终
+    /// ContentType 为框架默认（含 charset），响应体合法 JSON。</summary>
+    [Test]
+    public async Task WriteHealthResponse_FinalContentTypeIsFrameworkDefault_NotManualSet()
+    {
+        var context = new DefaultHttpContext();
+        context.Response.Body = new MemoryStream();
+        var report = new HealthReport(new Dictionary<string, HealthReportEntry>(), HealthStatus.Healthy, TimeSpan.Zero);
+
+        await HealthCheckExtensions.WriteHealthResponseAsync(context, report, new FixedTimeProvider(DateTimeOffset.UtcNow));
+
+        await Assert.That(context.Response.ContentType)
+            .IsEqualTo("application/json; charset=utf-8");
+    }
+
     [Test]
     public async Task AddPalHealthChecks_NullServices_Throws()
     {

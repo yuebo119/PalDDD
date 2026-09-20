@@ -175,6 +175,11 @@ public sealed class SourceCodeGuardTests
                 var isTarget = name switch
                 {
                     "MakeGenericType" => true,                       // 任意接收者（对齐 G7 文本模式）
+                    // 全仓扫描修复（防线缺口）：MakeGenericMethod 与 MakeGenericType 同属「构造
+                    // 泛型实例/方法」的 AOT 阻断类，且本仓生产代码已在用（Saga.cs:663，其所在
+                    // 方法带 [RequiresDynamicCode]）；原清单漏列该项，未标注的 MakeGenericMethod
+                    // 会静默通过。名字在 BCL 中唯一（仅 MethodInfo.MakeGenericMethod），无假阳性面。
+                    "MakeGenericMethod" => true,                     // 任意接收者（同上）
                     "CreateInstance" => ReceiverSimpleName(access) == "Activator",
                     "GetTypes" => ReceiverSimpleName(access) == "Assembly",
                     "GetType" => ReceiverSimpleName(access) == "Type",
@@ -501,6 +506,24 @@ public sealed class SourceCodeGuardTests
             {
                 [RequiresDynamicCode("_probe")]
                 object M(Type t) => typeof(List<>).MakeGenericType(t);
+            }
+            """, 0),
+        // 全仓扫描修复：MakeGenericMethod 与 MakeGenericType 同族（生产代码 Saga.cs:663 在用），
+        // 补正例/负例锁住该分支，防未来从清单中脱落。
+        Case("R1b 无豁免 MakeGenericMethod 必须红",
+            """
+            using System;
+            using System.Reflection;
+            class C { object M(MethodInfo mi, Type t) => mi.MakeGenericMethod(t); }
+            """, 1),
+        Case("R2b 方法级 [RequiresDynamicCode] 豁免 MakeGenericMethod",
+            """
+            using System;
+            using System.Reflection;
+            class C
+            {
+                [RequiresDynamicCode("_probe")]
+                object M(MethodInfo mi, Type t) => mi.MakeGenericMethod(t);
             }
             """, 0),
         Case("R3 方法级全限定 [RequiresUnreferencedCode] 豁免",

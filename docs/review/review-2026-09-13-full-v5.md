@@ -10,11 +10,11 @@
 
 **评审结论**：0 P0/P1/P2。发现 2 项 P3（**1 项提交污染已立即修复** + 1 项验证器朴素边界微调）——四轮收敛轨迹延伸至**零新代码缺陷、零注释过期**，问题载体降至「构建流程卫生」与「验证器已知边界」。
 
-| 指标 | v5 本轮 | v4 | 趋势 |
+| 指标 | 2026-09-13 v5 轮 | 2026-09-12 v4 轮 | 趋势 |
 |------|:--:|:--:|:----:|
 | P0/P1/P2 | 0/0/0 | 0/0/1 | ↓ |
 | P3 | 2 | 4 | ↓ |
-| 上轮修复验证（ITM-660~664） | **5/5 通过** | — | — |
+| 2026-09-12 v4 轮修复验证（ITM-660~664） | **5/5 通过** | — | — |
 | 证伪 | 1（verify-action-items 3 MISSING 实为描述性提及） | 4 | — |
 
 ## 五轮收敛总轨迹
@@ -33,7 +33,7 @@
 ### [x] ITM-665 · v4 提交（4e53622）混入 .qa-run 临时文件 9 个 · ✅
 - **维度**：构建流程卫生
 - **优先级**：P3 · 危害: 低 · 复杂度: 易
-- **问题**：v4 收口 `git add -A` 无差别暂存，把审计工作区临时文件（brief-common.md + 8 个分片清单）提交进仓库。本轮 git status 首查即捕获（` D` 9 行）。
+- **问题**：v4 收口 `git add -A` 无差别暂存，把审计工作区临时文件（brief-common.md + 8 个分片清单）提交进仓库。2026-09-13 v5 轮 git status 首查即捕获（` D` 9 行）。
 - **修复**：`git rm -r --cached .qa-run/` + 工作树清理。**验证**：`git ls-files .qa-run/` 零输出。
 - **教训映射**：OPS 系（lessons XVIII）——`git add -A` 在审计会话中的风险已在 v85 优化登记，本例是其实证。
 
@@ -64,11 +64,11 @@
 | Core/FailureReason | ITM-638 收口注释 | ✅ Normalize/Truncate 分族语义声明与实现一致 |
 | PalORM/Stores/PalOrmEventLog | v66 ConfigureAwait 补齐 | ✅ 两处 await foreach 在位 |
 | Projections.EFCore/ProjectionCheckpointDbContext（test 抽样） | ITM-632 回归网 | ✅ ChangeTracker 空 + 落库计数双断言有效 |
-| PalORM/Stores/PalOrmSagaStateStore | ITM-660 注释回填 | ✅ 已回填（本轮 grep 验证），发现原注释与 Dapper 现状的时序矛盾已消 |
+| PalORM/Stores/PalOrmSagaStateStore | ITM-660 注释回填 | ✅ 已回填（2026-09-13 v5 轮 grep 验证），发现原注释与 Dapper 现状的时序矛盾已消 |
 | Repository.EFCore/OutboxDomainEventInterceptor | 抽查 | ✅ |
 | Core/PalDiagnostics | ITM-627 保留声明 | ✅ |
 
-**上轮修复验证（ITM-660~664）**：5/5 通过——660 注释回填在位（grep=1）；661 README 零残留（grep=0）；662 sensor-ledger 现行指向（grep=1）；663/664 注释/登记在位（grep=1）。
+**2026-09-12 v4 轮修复验证（ITM-660~664）**：5/5 通过——660 注释回填在位（grep=1）；661 README 零残留（grep=0）；662 sensor-ledger 现行指向（grep=1）；663/664 注释/登记在位（grep=1）。
 
 ## 第三部分：收束判定
 
@@ -76,6 +76,6 @@
 |----|:--:|
 | 机械轴 | ✅（27 工具回归 + 全套防线绿） |
 | 静态轴 | ✅（0 新代码缺陷；2 P3 同轮清偿） |
-| 实测轴 | ✅（CI run 34661346188 三 job 背书持续有效；本轮无 Store/DDL 变更） |
+| 实测轴 | ✅（CI run 34661346188 三 job 背书持续有效；2026-09-13 v5 轮无 Store/DDL 变更） |
 
-**三轴全绿 → 五轮循环正式收束**。质量体系当前状态：判定层 62+ C# 测试 + 工具层 27 file-based app + 编排层 2 bash（install-ai-system 死锁豁免 + template-gate 启动器）+ 知识层 lessons 18 章 + 误判库 PD1-39。**下轮全量地毯待子代理配额恢复（9-17）后补**——v4/v5 两轮收缩合并声明。
+**三轴全绿 → 五轮循环正式收束**。质量体系当前状态：判定层 62+ C# 测试 + 工具层 27 file-based app + 编排层 2 bash（install-ai-system 死锁豁免 + template-gate 启动器）+ 知识层 lessons 18 章 + 误判库 PD1-39。**全量地毯待子代理配额 2026-09-17 恢复后补**——v4/v5 两轮收缩合并声明。

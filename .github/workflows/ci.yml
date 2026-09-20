@@ -10,6 +10,10 @@ env:
   DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
 
+# 默认最小权限——各 job 未声明 permissions 时继承此块；upload-artifact 仅需 contents:read
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -46,14 +50,26 @@ jobs:
       - name: Build
         run: dotnet build PalDDD.slnx --no-restore -c Release
 
+      - name: Format verify
+        # 2026-09-19 增（盲区收口）：IDE0005 等格式违规此前只由手工全量自检脚本拦截
+        # （gate-audit 矩阵中该脚本 = TOOL 手工调用），3c887c7 的未用 using 直达
+        # 主干。--verify-no-changes 只校验不改写；须在 Build 之后（需先还原/编译）。
+        run: dotnet format style PalDDD.slnx --verify-no-changes
+
       - name: Test (unit + integration)
         # MTP 手写协议：dotnet test 一次只跑一个测试项目（多项目/--collect 批量触发
         # VSTest 握手 → exit 5，本地已实测复现）；PalDDD.Testing 为支持库非测试项目
         # 失败自诊断（unified v2.0，2026-08-20）：失败项目的 TUnit JSON 报告解析为
-        # ::error 控制台注解——GitHub 将其转为 check-run 注解，公开 API 可读（无需认证下载日志）。
+        # ::error 控制台注解——GitHub 将其转为 check-run 注记，公开 API 可读（无需认证下载日志）。
+        # 空转断言（v2 审计 M0-1 / T-1，2026-09-19）：glob 失效 / 全量 skip 时循环
+        # 零次或部分执行 → 步骤必须红（「跑过东西的绿」才是绿）。ran==total 禁静默
+        # 跳过（比硬下界 17 耐项目数漂移）；套件非空由「发现失败即 exit」的既有
+        # 逻辑 + 每项目必有测试的仓规共同守护。
         run: |
           set -euo pipefail
-          for csproj in $(find test -name '*.csproj' ! -name 'PalDDD.Testing.csproj' | sort); do
+          mapfile -t projects < <(find test -name '*.csproj' ! -name 'PalDDD.Testing.csproj' | sort)
+          ran=0
+          for csproj in "${projects[@]}"; do
             echo "== Testing: $csproj =="
             if ! dotnet test "$csproj" --no-build -c Release --verbosity minimal 2>&1 | tee ci-last-test.log; then
               echo "::error ::FAILED PROJECT: $csproj"
@@ -61,7 +77,13 @@ jobs:
               rm -f ci-last-test.log
               exit 1
             fi
+            ran=$((ran + 1))
           done
+          if [[ ${#projects[@]} -eq 0 || $ran -ne ${#projects[@]} ]]; then
+            echo "::error ::TEST STEP SPUN EMPTY: projects=${#projects[@]} ran=$ran — glob 失效或循环被跳过（v2 审计 T-1）"
+            exit 1
+          fi
+          echo "✅ $ran / ${#projects[@]} test projects executed"
         env:
           # CI 环境：Testcontainers 自动启动 PG/MySQL/Kafka/RabbitMQ
           PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS: '0'
@@ -255,7 +277,12 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" != "push" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
             echo "match=1" >> "$GITHUB_OUTPUT"; exit 0   # PR/首推/force-push 退化为全跑
           fi
-          if git diff --name-only "$BEFORE" HEAD | grep -qE '(PalDDD\.Dapper|docs/sql/|Store|SqlTemplates)'; then
+          # M3-10（v2 审计 O-5，2026-09-19）：原裸词 `Store` 匹配任何含 Store 的路径——
+          # 目录改名（Store→Repository）时无声关闭探针。改锚定形态：Dapper 全前缀 +
+          # PalORM Stores 目录 + SQL 文件 + SqlTemplates + EF 映射面（DbContext）。
+          # 旧形态误触发的 InMemoryOutboxStore 等非 SQL 面变更不再触发（探针测 Dapper
+          # 方言 SQL，与 InMemory 无关）；真触发面不小于旧形态
+          if git diff --name-only "$BEFORE" HEAD | grep -qE '(src/PalDDD\.Dapper|src/PalDDD\.[^/]+/Stores?/|docs/sql/|\.sql$|SqlTemplates|DbContext)'; then
             echo "match=1" >> "$GITHUB_OUTPUT"
           else
             echo "match=0" >> "$GITHUB_OUTPUT"

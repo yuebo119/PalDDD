@@ -36,12 +36,12 @@
 | 3 | `guard.cs` | `.cs` 入暂存集 | 8 道守卫测试 + 守卫命名类（`*GateTests`/`*GuardTests`/`ArchitectureBoundaryTests`）注册完整性核查 |
 | 4 | `test-change-guard` | `test/` 有修改或删除 | 只改测试不改 `src/`（改测试修绿签名）。豁免：`ALLOW_TEST_ONLY_CHANGE=1` |
 | 5 | `xml-guard` | xml 系扩展名入暂存集 | XML 非良构（`.csproj/.props/.slnx/.targets/.xml`） |
-| 6 | `verify-conventions --quick` | `.md` 入暂存集 | V5 TODO 扫描 · V8 `.pal/prompts/` 模板必填段 · V9 文档命令引用的脚本须存在 |
+| 6 | `verify-conventions --quick` | `.md` 入暂存集 | V5 TODO 扫描 · V8 `.pal/prompts/` 模板必填段 · V9 文档命令引用的脚本须存在 · V11 决策文档三必填段与锚点格式（2026-09-18 增） |
 | 7 | `dapper-param-guard` | `src/PalDDD.Dapper*/` 入暂存集 | 匿名 Dapper 参数枚举直传（Dapper.AOT 拦截器直传驱动，PG 拒绝——CI #94 根因，2026-09-14 增） |
 
 ### CI（`.github/workflows/ci.yml`）
 
-`build-and-test`（vuln-scan → restore → build → test → secret-scan → dapper-param-guard → verify-ai → gate → encoding/doc-consistency/tech-debt/test-gate → template-gate；无 `.ai` 时降级为 gate-lite）· `aot-verify`（PublishAot + 运行二进制）· **`coverage`（覆盖率阈值门禁 0.70，先 `dotnet tool restore` 取 reportgenerator）** · `dialect-probe`（Testcontainers PG/MySQL；job 内含 Path gate 路径过滤步骤，仅 Store/SQL/DDL/映射面变更触发——非独立 job）。
+`build-and-test`（vuln-scan → restore → build → **format-verify**（`dotnet format style --verify-no-changes`，8e97e9c 增） → test → secret-scan → dapper-param-guard → verify-ai → gate → encoding/doc-consistency/tech-debt/test-gate → template-gate；无 `.ai` 时降级为 gate-lite）· `aot-verify`（PublishAot + 运行二进制）· **`coverage`（覆盖率阈值门禁 0.70，先 `dotnet tool restore` 取 reportgenerator）** · `dialect-probe`（Testcontainers PG/MySQL；job 内含 Path gate 路径过滤步骤，仅 Store/SQL/DDL/映射面变更触发——非独立 job）。
 
 ### 门禁可信度（改动或新增门禁后必跑）
 
@@ -74,6 +74,7 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 | **「退出码 0」≠ 任务成功** | 我曾以 `\| tail` 运行覆盖率脚本，脚本实际构建失败却报 exit 0 | 判定门禁结果时读**输出内容**，不只看退出码 |
 | **覆盖率门禁形态** | 脚本 `scripts/ci-coverage.cs` 已接入 CI（独立 coverage job）+ 阈值 0.70（2026-09-14 实测校准）；合并 glob 曾因 MTP 双层落点缺陷卡死（`277bc34` 修复为递归 glob） | 状态与阈值见 [docs/test-coverage-baseline.md](docs/test-coverage-baseline.md) §门禁阈值 |
 | **Agent 脚本默认 C#，禁止 python**（2026-09-14 用户裁决） | Agent 曾用系统 python 重写源文件 → CRLF 写成纯 LF（两轮三犯：`4a64fba` 修 1543 处 .cs、`277bc34` 修 255 处）；本仓已全 C# 化（0 个 .py），工具链不得再引入 Python 面。**Write 工具新建文件默认 LF**——新建后须跑行尾修复（`dotnet run %TEMP%/fix-eol.cs <path>` 或字节级校验） | **默认 `dotnet run <file>.cs`**（file-based app，与 scripts/ 同标准）；临时脚本放 `%TEMP%`（不继承根 props 的 TreatWarningsAsErrors）；机械编辑优先 **Edit/Write 工具**；**任何写文件后做字节级验证**（CRLF 计数 == LF 计数，见 `.ai` OPS-9） |
+| **审计/扫描条目命中代码内声明注释**（2026-09-19 增，M3-3 实证） | 审计 2026-09-17 的 M3-3 评「风险: 低」并实施——但它命中的 `SagaState.CloneForLease` 有 v26 P3 勘正声明（浅拷贝共享是有意取舍：僵尸执行过的步骤必须能被后继者补偿），实施时**删掉了声明而非回应声明**，失败模式被静默翻转（并发写可抛 → 漏补偿无兜底），且 `init`→`set` 公共 API 破坏对快照不可见。2026-09-19 已回滚（含勘正注释） | 改动前 grep 目标代码的声明注释（「P定案 / 勘正 / ADR / 取舍 / 联动约束」字样）；命中即**先落 `docs/review/decision-*.md`**（V11 门禁管其结构）回应该声明的理由，同提交再改代码；**禁止删除声明注释来"通过"**。机械层（staged diff 删除含声明字样行时要求决策文档在暂存集）为待办 |
 
 ---
 
@@ -99,7 +100,7 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 | AOT 现状与约束 | `docs/aot.md`、`docs/design/` |
 | 用法与教程 | `docs/usage.md`、`docs/tutorial.md` |
 | 测试策略与基线 | `docs/testing.md`、`docs/test-coverage-baseline.md` |
-| 已定的架构决策（含被否决方案） | `docs/decisions/`（22 份 ADR） |
+| 已定的架构决策（含被否决方案） | `docs/decisions/`（24 份 ADR，2026-09-19 ADR-024 增） |
 | 历轮评审与清单 | `docs/review/`（含 `NAMING.md` 命名约定与索引） |
 | 迁移与发布 | `docs/migration/`、`docs/release.md` |
 | 已知坑 | `docs/pitfalls.md` |

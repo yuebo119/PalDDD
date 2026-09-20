@@ -32,57 +32,13 @@ public static class EndpointExtensions
 
         return endpoints.MapPost(pattern, async context =>
         {
-            // v40 P3：非 JSON Content-Type 的 POST 原由 ReadFromJsonAsync 抛
-            // InvalidOperationException（非 JsonException）逃逸为 500——语义应为
-            // 415 Unsupported Media Type（RFC 9110 §15.5.16，对齐 ASP.NET Core MVC
-            // [ApiController] 的 Content-Type 约束行为），带 ProblemDetails 形态体
-            if (!context.Request.HasJsonContentType())
-            {
-                context.Response.StatusCode = StatusCodes.Status415UnsupportedMediaType;
-                await context.Response.WriteAsJsonAsync(
-                    ValidationProblemResponseFactory.CreateUnsupportedContentType(),
-                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-                    contentType: null).ConfigureAwait(false);
-                return;
-            }
-            TCommand? cmd;
-            try
-            {
-                cmd = await context.Request.ReadFromJsonAsync(
-                    commandJsonTypeInfo,
-                    context.RequestAborted).ConfigureAwait(false);
-            }
-            catch (System.Text.Json.JsonException)
-            {
-                // P3 修复：畸形 JSON 是用户输入错误 → 400 而非未捕获 500
-                // v8 对齐：补 ProblemDetails body（原裸 400 与验证 400 形态分叉，客户端拿不到错误明细）
-                // v31 P3：泛化文案——ex.Message 含 .NET 内部类型名/JSON 路径与字节位置，
-                // 向任意 HTTP 客户端暴露实现细节（对齐 P3-SRC-107 HandlerNotFound 收窄口径）
-                context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await context.Response.WriteAsJsonAsync(
-                    ValidationProblemResponseFactory.CreateInvalidBody("Request body is not valid JSON."),
-                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-                    contentType: null).ConfigureAwait(false);
-                return;
-            }
-            catch (PalDDD.CQRS.PalValidationException ex)
-            {
-                // P2 修复：验证失败异常映射 400（框架意图与实现一致化）
-                // ITM-283（R45）：统一走 Factory 带 ProblemDetails body——原裸 400 与
-                // 派发段（ITM-168）形态分叉（自定义 JsonConverter 抛此异常时客户端拿不到错误明细）
-                await WriteValidationProblemAsync(context, ex).ConfigureAwait(false);
-                return;
-            }
-            if (cmd is null)
-            {
-                // v9 E1：空 body 裸 400 是第三处形态分叉——统一 ProblemDetails（对齐 ITM-283/v8 畸形 JSON）
-                context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await context.Response.WriteAsJsonAsync(
-                    ValidationProblemResponseFactory.CreateInvalidBody("Request body is required."),
-                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-                    contentType: null).ConfigureAwait(false);
-                return;
-            }
+            // 反序列化段（ITM-799 收口，2026-09-19）：415/畸形 JSON/验证异常/空 body
+            // 四种错误的编排原在 MapCommand 两个重载（MapCommand 与
+            // MapCommand<TCommand,TResponse>）逐字重复（约 40 行）——R54 勘正：原注释
+            // 误写为「MapCommand/MapQuery」，MapQuery 是 GET 无反序列化段——收口为
+            // ReadJsonBodyOrWriteErrorAsync 单一出处，错误语义注释随迁
+            var (ok, cmd) = await ReadJsonBodyOrWriteErrorAsync(context, commandJsonTypeInfo).ConfigureAwait(false);
+            if (!ok) return;
 
             var dispatcher = context.RequestServices.GetRequiredService<CQRS.Dispatcher>();
             var ct = context.RequestAborted;
@@ -91,7 +47,7 @@ public static class EndpointExtensions
                 // ITM-091 修复：SendAsync 纳入本地 try——PalValidationException 由 Dispatcher 派发时
                 // 抛出（原 catch 仅覆盖 ReadFromJsonAsync），此前验证失败会逃逸为 500；
                 // JsonException catch 语义保持不变（仍只覆盖反序列化）
-                await dispatcher.SendAsync(cmd, ct).ConfigureAwait(false);
+                await dispatcher.SendAsync(cmd!, ct).ConfigureAwait(false);
             }
             catch (PalDDD.CQRS.PalValidationException ex)
             {
@@ -119,57 +75,9 @@ public static class EndpointExtensions
 
         return endpoints.MapPost(pattern, async context =>
         {
-            // v40 P3：非 JSON Content-Type 的 POST 原由 ReadFromJsonAsync 抛
-            // InvalidOperationException（非 JsonException）逃逸为 500——语义应为
-            // 415 Unsupported Media Type（RFC 9110 §15.5.16，对齐 ASP.NET Core MVC
-            // [ApiController] 的 Content-Type 约束行为），带 ProblemDetails 形态体
-            if (!context.Request.HasJsonContentType())
-            {
-                context.Response.StatusCode = StatusCodes.Status415UnsupportedMediaType;
-                await context.Response.WriteAsJsonAsync(
-                    ValidationProblemResponseFactory.CreateUnsupportedContentType(),
-                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-                    contentType: null).ConfigureAwait(false);
-                return;
-            }
-            TCommand? cmd;
-            try
-            {
-                cmd = await context.Request.ReadFromJsonAsync(
-                    commandJsonTypeInfo,
-                    context.RequestAborted).ConfigureAwait(false);
-            }
-            catch (System.Text.Json.JsonException)
-            {
-                // P3 修复：畸形 JSON 是用户输入错误 → 400 而非未捕获 500
-                // v8 对齐：补 ProblemDetails body（原裸 400 与验证 400 形态分叉，客户端拿不到错误明细）
-                // v31 P3：泛化文案——ex.Message 含 .NET 内部类型名/JSON 路径与字节位置，
-                // 向任意 HTTP 客户端暴露实现细节（对齐 P3-SRC-107 HandlerNotFound 收窄口径）
-                context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await context.Response.WriteAsJsonAsync(
-                    ValidationProblemResponseFactory.CreateInvalidBody("Request body is not valid JSON."),
-                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-                    contentType: null).ConfigureAwait(false);
-                return;
-            }
-            catch (PalDDD.CQRS.PalValidationException ex)
-            {
-                // P2 修复：验证失败异常映射 400（框架意图与实现一致化）
-                // ITM-283（R45）：统一走 Factory 带 ProblemDetails body——原裸 400 与
-                // 派发段（ITM-168）形态分叉（自定义 JsonConverter 抛此异常时客户端拿不到错误明细）
-                await WriteValidationProblemAsync(context, ex).ConfigureAwait(false);
-                return;
-            }
-            if (cmd is null)
-            {
-                // v9 E1：空 body 裸 400 是第三处形态分叉——统一 ProblemDetails（对齐 ITM-283/v8 畸形 JSON）
-                context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await context.Response.WriteAsJsonAsync(
-                    ValidationProblemResponseFactory.CreateInvalidBody("Request body is required."),
-                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-                    contentType: null).ConfigureAwait(false);
-                return;
-            }
+            // 反序列化段（ITM-799 收口）：错误编排走 ReadJsonBodyOrWriteErrorAsync 单一出处
+            var (ok, cmd) = await ReadJsonBodyOrWriteErrorAsync(context, commandJsonTypeInfo).ConfigureAwait(false);
+            if (!ok) return;
 
             var dispatcher = context.RequestServices.GetRequiredService<CQRS.Dispatcher>();
             var ct = context.RequestAborted;
@@ -179,7 +87,7 @@ public static class EndpointExtensions
                 // ITM-091 修复：SendAsync 纳入本地 try——PalValidationException 由 Dispatcher 派发时
                 // 抛出（原 catch 仅覆盖 ReadFromJsonAsync），此前验证失败会逃逸为 500；
                 // JsonException catch 语义保持不变（仍只覆盖反序列化）
-                result = await dispatcher.SendAsync(cmd, ct).ConfigureAwait(false);
+                result = await dispatcher.SendAsync(cmd!, ct).ConfigureAwait(false);
             }
             catch (PalDDD.CQRS.PalValidationException ex)
             {
@@ -269,6 +177,66 @@ public static class EndpointExtensions
                 contentType: null,
                 cancellationToken: ct).ConfigureAwait(false);
         });
+    }
+
+    /// <summary>读取 JSON 请求体，错误时写入对应错误响应并返回 (false, null)。
+    /// ITM-799（2026-09-19）：415/畸形 JSON/验证异常/空 body 四种错误编排原在
+    /// MapCommand/MapQuery 两处逐字重复（约 40 行）——收口为单一出处，历史注释随迁。</summary>
+    private static async Task<(bool Success, TCommand? Command)> ReadJsonBodyOrWriteErrorAsync<TCommand>(
+        HttpContext context, JsonTypeInfo<TCommand> commandJsonTypeInfo)
+    {
+        // v40 P3：非 JSON Content-Type 的 POST 原由 ReadFromJsonAsync 抛
+        // InvalidOperationException（非 JsonException）逃逸为 500——语义应为
+        // 415 Unsupported Media Type（RFC 9110 §15.5.16，对齐 ASP.NET Core MVC
+        // [ApiController] 的 Content-Type 约束行为），带 ProblemDetails 形态体
+        if (!context.Request.HasJsonContentType())
+        {
+            context.Response.StatusCode = StatusCodes.Status415UnsupportedMediaType;
+            await context.Response.WriteAsJsonAsync(
+                ValidationProblemResponseFactory.CreateUnsupportedContentType(),
+                PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                contentType: null).ConfigureAwait(false);
+            return (false, default);
+        }
+        TCommand? cmd;
+        try
+        {
+            cmd = await context.Request.ReadFromJsonAsync(
+                commandJsonTypeInfo,
+                context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // P3 修复：畸形 JSON 是用户输入错误 → 400 而非未捕获 500
+            // v8 对齐：补 ProblemDetails body（原裸 400 与验证 400 形态分叉，客户端拿不到错误明细）
+            // v31 P3：泛化文案——ex.Message 含 .NET 内部类型名/JSON 路径与字节位置，
+            // 向任意 HTTP 客户端暴露实现细节（对齐 P3-SRC-107 HandlerNotFound 收窄口径）
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsJsonAsync(
+                ValidationProblemResponseFactory.CreateInvalidBody("Request body is not valid JSON."),
+                PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                contentType: null).ConfigureAwait(false);
+            return (false, default);
+        }
+        catch (PalDDD.CQRS.PalValidationException ex)
+        {
+            // P2 修复：验证失败异常映射 400（框架意图与实现一致化）
+            // ITM-283（R45）：统一走 Factory 带 ProblemDetails body——原裸 400 与
+            // 派发段（ITM-168）形态分叉（自定义 JsonConverter 抛此异常时客户端拿不到错误明细）
+            await WriteValidationProblemAsync(context, ex).ConfigureAwait(false);
+            return (false, default);
+        }
+        if (cmd is null)
+        {
+            // v9 E1：空 body 裸 400 是第三处形态分叉——统一 ProblemDetails（对齐 ITM-283/v8 畸形 JSON）
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsJsonAsync(
+                ValidationProblemResponseFactory.CreateInvalidBody("Request body is required."),
+                PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                contentType: null).ConfigureAwait(false);
+            return (false, default);
+        }
+        return (true, cmd);
     }
 
     /// <summary>写入 400 + ValidationProblemResponse 体（ITM-283：反序列化段与派发段统一形态——

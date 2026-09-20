@@ -5,11 +5,11 @@
 //
 // 💡 本类提供静态解析方法——供手动调用或经典 Dapper 路径使用。
 //
-// ⚠️ AOT 状态：[module:DapperAot] 当前未启用（注释禁用，见 DapperAotInitializer.cs 头注
-//   启用动作清单；2026-09-13 探针实证 ct 与拦截器互斥，用户裁决"铺垫不动"）。
-//   TypeHandler 通过 [ModuleInitializer] 注册，经典 Dapper 运行时路径生效。
-//   带参数的 CommandDefinition 调用在 NativeAOT 下炸（参数绑定走 Reflection.Emit），
-//   PalORM 适配层（PalDDD.PalORM）提供真 AOT 路径替代。
+// ⚠️ AOT 状态：[module:DapperAot] **已启用**（experiment/dapper-aot-full 实验分支全量，
+//   34 调用点改直接重载 + 声明式 [Dapper.TypeHandler] 接管，见 DapperAotInitializer.cs）。
+//   历史脉络：2026-09-13 探针实证 ct 与拦截器互斥曾裁决"铺垫不动"，实验分支以调用点
+//   全量迁移解锁。边界：绕过封装直用 Dapper 原生 API（含带参数的 CommandDefinition
+//   经典路径）在 NativeAOT 下仍不受支持——PalORM 适配层（PalDDD.PalORM）为另一 AOT 路径。
 // ─────────────────────────────────────────────────────────────────────
 
 using Dapper;
@@ -21,8 +21,11 @@ namespace PalDDD.Dapper;
 
 /// <summary>SQLite Dapper RowFactory — 将 TEXT 列映射到 Guid/Ulid/DateTimeOffset。</summary>
 /// <remarks>
-/// ⚠️ AOT 状态：[module:DapperAot] 当前未启用——经典 Dapper 运行时路径生效，非 NativeAOT 兼容。<br/>
-/// PalORM 适配层（PalDDD.PalORM）提供真 AOT 替代路径。
+/// ⚠️ AOT 状态：[module:DapperAot] 已启用（experiment/dapper-aot-full，见文件头注与
+/// DapperAotInitializer.cs）——拦截器生成代码接管后本 RowFactory 仅服务拦截器未覆盖的
+/// 手动物化路径。<br/>
+/// 边界：绕过封装直用 Dapper 原生 API 在 NativeAOT 下不受支持——PalORM 适配层
+///（PalDDD.PalORM）为另一 AOT 路径。
 /// </remarks>
 public static class SqliteRowFactory
 {

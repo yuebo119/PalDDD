@@ -4,15 +4,21 @@
 日志格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范（完整规则见 [`docs/release.md`](docs/release.md) §十一）：
 **消费者可见变更在上**（Added/Changed/Deprecated/Removed/Fixed/Security + 本项目扩展 Dependencies/Documentation/Tests），**工程过程叙事入附录**；数字必须可验证；`[Unreleased]` 与发布段**同次提交转正、先于 tag**。
 
-> **当前版本**：`VersionPrefix=2.2.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）
-> **发布状态**：**2.2.0 已发布**（2026-09-15 tag `v2.2.0`）；2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag 之后的所有变更见 `[Unreleased]`。
+> **当前版本**：`VersionPrefix=3.0.0` / `VersionSuffix=`（空——见 `Directory.Build.props`；3.0.0 升位依据：M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务均属行为破坏性变更）
+> **发布状态**：2.2.0 已发布（2026-09-15 tag `v2.2.0`）；2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag 之后的所有变更见 `[Unreleased]`。
 > **发布规范**：见 [`docs/release.md`](docs/release.md)
 
 ---
 
 ## [Unreleased]
 
-（暂无——2.2.0 发布后的行为变更在此累积）
+### Changed 变更
+
+- **`OutboxOptions.MaxDegreeOfParallelism`（新增，默认 1）与 `OutboxBatchProcessor` 构造新增可选 `IServiceScopeFactory` 参数**（C1，perf-opt-sweep）：并行度 >1 时批内消息按分区交由 per-worker scope（独立 store/DbContext 实例）并行「反序列化 → 发布 → 标记」——吞吐随并行度提升；租约/fencing 互斥不受影响。**前提**：broker 发布须线程安全（Kafka 天然支持；RabbitMQ 单 channel 并发发布须验证）；消费方幂等。直构造 `OutboxBatchProcessor` 的调用方不受影响（scopeFactory 为可选尾参；并行度 >1 且缺失时运行期 fail-fast 并给出指引）。
+- **新增发件箱指标 `paldd.outbox.dead`（死信独立计数）与 `paldd.outbox.persist_failed`（状态持久化失败计数）**（R1/R2）：原死信合并在 `paldd.outbox.failed` 中积压不可见；原 `processed` 计数含持久化失败条目（与 DB 真相漂移）。现死信独立可见、`processed` 仅含落库成功条目。**迁移**：基于 `paldd.outbox.failed` 建立的告警规则无需变更（该计数语义不变）；建议新增基于 `dead` 的死信积压告警。
+- **`DapperSagaStateStore<TState>.SaveChangesAsync` 在未注册 `JsonTypeInfo<TState>` 时改为抛 `InvalidOperationException`**（⚠️ 破坏性变更，决策见 `docs/review/decision-2026-09-19-saga-snapshot-failfast.md`）：原实现静默把 `saga_data` 写 NULL——Saga 的全部业务字段（CustomerId 等派生状态）在持久化中丢失且无异常/无日志/无启动诊断；重启恢复只还原元数据。现对齐 PalORM 栈同位置修复（ITM-228）fail-fast，异常消息含注册指引。**迁移**：DI 路径 `services.AddPalDapperSagaSnapshot(jsonTypeInfo)` 或构造函数第三参传入 source-generated `JsonTypeInfo<TState>`（见 `docs/usage.md` ⚠️ 段）。EF 栈用 source-generated converter，不受影响。
+
+- **`IUnitOfWork.BeginTransactionAsync` 在事务已活动时改为抛 `InvalidOperationException`**（决策见 ADR-023）：原 EF Core 与 PalORM 两栈为静默 no-op，而 `ExecuteInTransactionAsync` 是无条件「Begin → work → SaveChanges → Commit」——嵌套调用时内层 Commit 提交的是**外层**事务，导致静默原子性破坏（内层之后的外层工作失去事务保护，外层异常路径的回滚面对已提交事务）。现三栈统一为 fail-fast（对齐 Dapper 既有的 ITM-088 契约），接口与 `ExecuteInTransactionAsync` 文档同步声明「不支持嵌套」。**迁移**：需要在既有事务内执行工作的调用方，请直接执行工作委托或自行编排提交边界，不要嵌套调用本方法。
 
 ---
 

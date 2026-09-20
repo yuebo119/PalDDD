@@ -48,6 +48,15 @@ if (args.Contains("--selftest"))
 
 Console.WriteLine("═══ 门禁 ═══");
 
+// 前置守卫（全仓扫描修复）：G1-G3 都是「计数 == 0 即 ✅」，输入为空则判定恒真。
+// 原版在 src/ 缺失（非仓库根运行、目录被改名）或其中无 .cs 时给出三个 ✅ + exit 0——
+// 门禁静默失效却报绿。此处显式 fail-closed，代价是修掉「空输入假绿」这一整类。
+if (!Directory.Exists(src) || !Directory.EnumerateFiles(src, "*.cs", SearchOption.AllDirectories).Any())
+{
+    Console.WriteLine($"❌ 前置失败：{src}/ 不存在或不含 .cs——G1-G3 计数将恒为 0，判定无意义（约定在仓库根执行）");
+    return 1;
+}
+
 Check("G1 异常sealed", G1Count(src));
 Check("G2 文件头", G2Count(src));
 Check("G3 文件命名", G3Count(src));

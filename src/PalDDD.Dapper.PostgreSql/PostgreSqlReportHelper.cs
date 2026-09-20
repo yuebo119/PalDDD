@@ -259,13 +259,22 @@ public static class PostgreSqlReportHelper
 
     // ── 辅助方法 ──
 
-    private static void WriteJsonValue(Utf8JsonWriter writer, object value)
+    // 内部可见供测试（沿 EscapeCsvSpan 先例）：本方法为纯函数，可脱离数据库验证
+    internal static void WriteJsonValue(Utf8JsonWriter writer, object value)
     {
         switch (value)
         {
             case string s: writer.WriteStringValue(s); break;
             case long l: writer.WriteNumberValue(l); break;
             case int i: writer.WriteNumberValue(i); break;
+            // 全仓扫描修复（崩溃路径）：PG 的 float4/float8 合法包含 NaN/±Infinity，而
+            // Utf8JsonWriter.WriteNumberValue 对非有限值抛 ArgumentException——导出含此类值的
+            // 行会中途崩溃。JSON 规范无这两个字面量，故按 .NET 既有约定
+            // （JsonNumberHandling.AllowNamedFloatingPointLiterals）写成命名字符串，
+            // 拼写与 PG 自身字面量一致（'NaN'/'Infinity'/'-Infinity'）。
+            case double d when !double.IsFinite(d):
+                writer.WriteStringValue(double.IsNaN(d) ? "NaN" : d > 0 ? "Infinity" : "-Infinity");
+                break;
             case double d: writer.WriteNumberValue(d); break;
             case decimal m: writer.WriteNumberValue(m); break;
             case bool b: writer.WriteBooleanValue(b); break;
@@ -275,6 +284,10 @@ public static class PostgreSqlReportHelper
             // ITM-114 修复：byte[] → Base64（原 default 分支输出 "System.Byte[]"）；
             // float 单独处理（float 装箱不匹配 double 分支，原落入 default 变字符串）
             case byte[] bytes: writer.WriteStringValue(Convert.ToBase64String(bytes)); break;
+            // 非有限值同 double 分支（全仓扫描修复，见上方说明）
+            case float f when !float.IsFinite(f):
+                writer.WriteStringValue(float.IsNaN(f) ? "NaN" : f > 0 ? "Infinity" : "-Infinity");
+                break;
             case float f: writer.WriteNumberValue(f); break;
             // ITM-189 修复（二十九轮）：其余整数族补数值分支——uint/ulong/short/ushort/
             // byte/sbyte 装箱不匹配 long/int（值类型装箱类型敏感），原落 default 被
