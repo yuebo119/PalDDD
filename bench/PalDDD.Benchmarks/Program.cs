@@ -45,14 +45,26 @@ if (args.Contains("--persist", StringComparer.OrdinalIgnoreCase))
 // 理由：Switcher 对全程序集验证 net11 moniker 必崩）。
 if (args.Contains("--persist-medium", StringComparer.OrdinalIgnoreCase))
 {
+    // P2（perf-run-2026-09-20）：medium 报告写独立目录——原形态覆盖全量报告
+    // github.md（裁决数字无处查）。归档纪律：medium 数字入 docs/performance.md
+    // 时带日期，artifacts-medium 目录留存原始报告。
     var leaseOnly = ManualConfig.Create(DefaultConfig.Instance)
         .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance))
         .AddDiagnoser(MemoryDiagnoser.Default)
+        .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-medium"))
         .AddFilter(new NameFilter(name =>
             name.Contains("Outbox_Lease_Batch100", StringComparison.Ordinal)));
     BenchmarkRunner.Run<DapperPersistenceBenchmarks>(leaseOnly);
     BenchmarkRunner.Run<PalOrmPersistenceBenchmarks>(leaseOnly);
     BenchmarkRunner.Run<EfCorePersistenceBenchmarks>(leaseOnly);
+    return 0;
+}
+
+// P1（perf-run-2026-09-20）：Saga 车道基准锚——ProcessEventAsync 编排开销
+// （Normal 基线 / FanOut items=4），供骨架优化与 v3.0 子项粒度改造做回归比对。
+if (args.Contains("--saga", StringComparer.OrdinalIgnoreCase))
+{
+    BenchmarkRunner.Run<SagaLaneBenchmarks>();
     return 0;
 }
 
