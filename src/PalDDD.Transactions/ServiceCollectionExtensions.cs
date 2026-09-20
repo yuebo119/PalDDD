@@ -31,6 +31,9 @@ public static class ServiceCollectionExtensions
             // v9 修复：显式置 null 时 OutboxBatchProcessor 的 catch 块内 NRE（RetryBackoffPolicy.ComputeDelay
             // 在 catch 内再次抛出且不被同类 catch 捕获）——逐 tick 整批中止、已租约消息滞留 LeaseDuration
             .Validate(static options => options.RetryBackoffPolicy is not null, "Outbox retry backoff policy is required.")
+            // C1（perf-opt-sweep）：发布并行度守卫——负值无意义；scopeFactory 缺失的
+            // 直构造场景在并行路径运行期 fail-fast（探针测试在案）
+            .Validate(static options => options.MaxDegreeOfParallelism >= 1, "Outbox MaxDegreeOfParallelism must be at least 1.")
             .ValidateOnStart();
         services.TryAddScoped<OutboxBatchProcessor>();
         services.AddHostedService<OutboxProcessor>();

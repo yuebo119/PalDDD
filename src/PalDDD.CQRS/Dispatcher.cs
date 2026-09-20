@@ -72,7 +72,13 @@ public sealed class Dispatcher
             // Register（公共 API）或自定义 HostedService 注册部分 handler 后派发——空表不冻结
             // 已兜掉启动崩溃，部分注册冻结仍会 ODE（Register 抛 ObjectDisposedException）；
             // 规避方式：保证全部注册先于首个命令派发（如注册完成后才启动派发方 HostedService）。
-            if (_entries.Count == 0) return _entries.ToFrozenDictionary();
+            if (_entries.Count == 0)
+            {
+                // M4（perf-opt-sweep，2026-09-20）：空表返回共享的静态空冻结字典——原每次
+                // 派发临时 ToFrozenDictionary()（启动窗口内每命令一次分配）。不缓存 _entries
+                // 的语义保留（后续 Register 仍可正常进行）
+                return FrozenDictionary<Type, HandlerEntry>.Empty;
+            }
             Volatile.Write(ref _frozen, _entries.ToFrozenDictionary());
             _entries = null!;
             return _frozen;

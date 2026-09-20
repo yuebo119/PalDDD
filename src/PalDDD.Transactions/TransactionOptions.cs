@@ -78,6 +78,19 @@ public sealed class OutboxOptions
     /// </para>
     /// </summary>
     public string LeaseOwner { get; set; } = LeaseOwnerFactory.Create();
+
+    /// <summary>
+    /// 发布并行度 — 批内消息的并行发布 worker 数（默认 1 = 串行，兼容既有行为）。
+    /// <para>
+    /// ⚠️ C1（perf-opt-sweep，2026-09-20）：<c>&gt;1</c> 时批内消息按分区交由
+    /// per-worker scope（独立 store/DbContext 实例）并行「反序列化 → 发布 → 标记」。
+    /// 前提：① broker 发布须线程安全（Kafka producer 天然支持；RabbitMQ 单 channel
+    /// 并发发布须验证 IChannel 7.x 语义）；② 消费方幂等（并行加速下乱序提交概率上升）。
+    /// 租约/fencing 互斥不受影响——各 worker 的 Mark* 走各自 store 实例，fencing 守卫
+    /// 逐消息独立。启动期经 <c>ValidateOnStart</c> 校验 ≥ 1。
+    /// </para>
+    /// </summary>
+    public int MaxDegreeOfParallelism { get; set; } = 1;
 }
 
 /// <summary>收件箱幂等性运行时选项。</summary>
