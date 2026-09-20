@@ -29,6 +29,8 @@ public static class Program
         app.MapCommand<CreateOrderCmd, OrderId>("/orders", AppJsonContext.Default.CreateOrderCmd, AppJsonContext.Default.OrderId);
         // ITM-156：/orders/{id}/items 的 {id} 从未被读取——AddItemCmd 的 OrderId 来自 body；
         // 路由改为 /orders/items（body 传 OrderId），路由清单同步。
+        // M3-10：生产部署应链式挂 .RequireAuthorization()（需先 AddAuthentication/AddAuthorization），
+        // 例如：app.MapCommand<CreateOrderCmd, OrderId>(...).RequireAuthorization();
         app.MapCommand<AddItemCmd>("/orders/items", AppJsonContext.Default.AddItemCmd);
         // 示例从路由值直接 Parse：非法 Guid 会抛 FormatException 并经全局异常中间件映射为 500。
         // 生产代码应 Guid.TryParse 并在失败时返回 400（或走 RouteValues 绑定 + 验证管道）。

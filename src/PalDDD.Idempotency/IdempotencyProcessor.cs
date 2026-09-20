@@ -198,7 +198,7 @@ public sealed class IdempotencyProcessor
         }
     }
 
-    private static IdempotencyExecution<TResult> GetExistingResult<TResult>(
+    private IdempotencyExecution<TResult> GetExistingResult<TResult>(
         IdempotencyRecord record,
         Func<ReadOnlyMemory<byte>, TResult> deserializeResult)
     {
@@ -207,6 +207,8 @@ public sealed class IdempotencyProcessor
             // 三十八轮 P3 修复：schema 漂移产生毒载荷时原样抛反序列化异常，该 key 在整个
             // 保留窗口内每次命中都抛——降级为 Skipped（与 Completed 无 payload 同款路径），
             // 调用方按既有"无缓存结果"分支处理；Activity 留痕供诊断。
+            // R5（第五十四轮片3，2026-09-20）：补 Warning——原仅 Activity 事件，无 logger
+            // 依赖的宿主零可见（方法由 static 改实例以触达 _logger，调用点均实例方法无破坏）
             try
             {
                 return new IdempotencyExecution<TResult>(
@@ -218,6 +220,8 @@ public sealed class IdempotencyProcessor
                 System.Diagnostics.Activity.Current?.AddEvent(new(
                     "idempotency.cached-payload-deserialize-failed",
                     tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = ex.Message }));
+                _logger?.Warning(
+                    $"Idempotency: cached payload deserialization failed (poisoned payload, schema drift?) — degrading to Skipped; error: {ex.Message}");
                 return new IdempotencyExecution<TResult>(IdempotencyExecutionStatus.Skipped, default);
             }
         }

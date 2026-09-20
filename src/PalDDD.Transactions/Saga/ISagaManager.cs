@@ -39,6 +39,14 @@ public interface ISagaManager
     /// <summary>
     /// 获取所有处于 <see cref="SagaStatus.AwaitingHumanDecision"/> 状态的 Saga。
     /// </summary>
+    /// <remarks>
+    /// ⚠️ <b>M1-5 表态（v2 审计 A-5，2026-09-19）：默认实现恒返回空列表</b>——
+    /// <see cref="DefaultSagaManager"/> 为进程内实现，无持久化查询能力；且本接口含
+    /// internal 成员，外部程序集无法提供替代实现。当前架构下 HITL 运营待办查询
+    /// <b>不经由此 API</b>——生产运营面须直接查询 Saga 状态存储
+    ///（<c>ISagaStateStore</c> 按 <see cref="SagaState.Status"/> 过滤）。
+    /// 误信本 API 的空返回 = 误判「无人工待办」（静默假空）。
+    /// </remarks>
     ValueTask<IReadOnlyList<SagaState>> GetInterruptedSagasAsync(CancellationToken ct);
 
     /// <summary>

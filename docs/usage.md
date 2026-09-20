@@ -219,6 +219,8 @@ services.AddPalMemoryPackSerialization(catalog =>
 
 ## 使用 Outbox
 
+> ⚠️ **事务前提（TX1，2026-09-20）**：Outbox 模式的原子性由「业务数据写入与消息行写入在**同一数据库事务**内提交」保证——这是**使用方职责**：调用方必须在业务 DbContext 事务/UnitOfWork 内写入 outbox 消息行（`AddMessage` + 同事务 `SaveChanges`），框架的后台发布器只负责事务提交后的可靠投递。若消息行与业务数据不同事务，将失去 exactly-once-write 保证（业务回滚但消息已入队 → 幽灵消息）。
+
 ```csharp
 using PalDDD.Transactions;
 
@@ -235,6 +237,14 @@ services.AddPalOutbox();
 `IPalOutboxStore.LeasePendingMessagesAsync` 必须提供原子租约语义。SQL Server EF Core base context 提供了基于 `UPDLOCK` / `READPAST` 的实现（**未验证/实验性**，见下）。
 
 生产环境可从 `PalDDD.Transactions.EFCore` 派生 `OutboxDbContext`，或按方言派生 `PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`（ADR-012 方言粒度）以复用原子租约获取。`SqlServerOutboxDbContext` 当前标 `[Obsolete]` 且零测试覆盖，属**实验性/未验证**（v3.0 前评估），生产请优先使用已验证方言。适配器会配置 pending 查询索引、payload 必填、trace/correlation 字段长度和错误字段长度；`MarkProcessed` 会清理 lease/retry 状态，`ReleaseForRetry` 会释放 lease 并设置 `NextAttemptAt`。
+
+### 死信语义与运维（F4 补，2026-09-19）
+
+消息投递失败（broker 不可达、反序列化失败、类型未注册）时按指数退避重试；**重试耗尽（默认 `MaxRetryCount = 10`，经 `AddPalOutbox` 的 options 可配）后消息进入 `Dead` 状态并停止投递**——这是静默停止，不会抛异常到宿主。运维要点：
+
+- **查看死信**：查询 `IPalOutboxStore`（各栈 `outbox_messages` 表 `status = 2` 即 Dead，`error` 字段含最后失败原因，`retry_count` 可达上限值）。
+- **重新投递**：`RequeueDeadAsync(messageId, retriedBy)` 把 Dead 行重置为 Pending（清租约、`retry_count` 保留失败历史）。⚠️ **幂等前提**：下游消费者必须幂等——重投的消息可能已部分处理过（at-least-once 语义，ADR-011）。
+- **调整重试上限**：`services.AddPalOutbox(o => o.MaxRetryCount = 5)`（`OutboxOptions`，启动期校验）。
 
 Outbox message 可以携带跨上下文追踪元数据：
 
@@ -297,7 +307,9 @@ var processed = await inbox.TryProcessAsync(
 
 ## 使用 Saga EF Core Store
 
-生产环境可引用 `PalDDD.Transactions.EFCore` 程序集，`using PalDDD.Transactions;` 后派生 `SagaStateDbContext<TState>`，并通过 DI 将该上下文作为 `ISagaStateStore<TState>` 使用。适配器会配置 `SagaId` 主键、active/lease 查询索引、`Version` 并发令牌，并用 source-generated JSON converter 持久化 `StepStartedAt` 和 `ExecutedStepKeys`，避免 reflection-based serialization fallback。Dapper 适配器需要完整快照时，构造 `DapperSagaStateStore<TState>` 时传入 source-generated `JsonTypeInfo<TState>`，即可把派生状态写入 `saga_data`。
+生产环境可引用 `PalDDD.Transactions.EFCore` 程序集，`using PalDDD.Transactions;` 后派生 `SagaStateDbContext<TState>`，并通过 DI 将该上下文作为 `ISagaStateStore<TState>` 使用。适配器会配置 `SagaId` 主键、active/lease 查询索引、`Version` 并发令牌，并用 source-generated JSON converter 持久化 `StepStartedAt` 和 `ExecutedStepKeys`，避免 reflection-based serialization fallback。
+
+> ⚠️ **Dapper 栈快照是必传项而非可选项**（decision-2026-09-19-saga-snapshot-failfast）：`DapperSagaStateStore<TState>` 不注册 `JsonTypeInfo<TState>` 时，`SaveChangesAsync` 会**抛异常**（fail-fast）——未注册的旧版本会静默把 `saga_data` 写 NULL（业务字段全部丢失，2026-09-19 收口）。注册方式：DI 路径 `services.AddPalDapperSagaSnapshot(jsonTypeInfo)`，或构造函数第三参直传。EF 栈用 source-generated converter，无此项要求。
 
 ## 使用 EventLog
 

@@ -42,6 +42,18 @@ public sealed class DapperUnitOfWorkTests
         await Assert.That(uow.Transaction).IsNotNull();
     }
 
+    // ADR-023：本栈的 fail-fast（ITM-088）现为三栈统一语义——补显式用例锁住，
+    // 防未来"为兼容嵌套"把它改回幂等 no-op（那会让 ExecuteInTransactionAsync 静默提交外层事务）。
+    [Test]
+    public async Task BeginTransactionAsync_WhenAlreadyActive_Throws(CancellationToken cancellationToken)
+    {
+        await using var uow = new DapperUnitOfWork(_connection);
+        await uow.BeginTransactionAsync(cancellationToken);
+
+        await Assert.That(async () => await uow.BeginTransactionAsync(cancellationToken))
+            .Throws<InvalidOperationException>();
+    }
+
     [Test]
     public async Task CommitAsync_CommitsAndClearsTransaction(CancellationToken cancellationToken)
     {

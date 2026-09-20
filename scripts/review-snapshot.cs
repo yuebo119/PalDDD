@@ -139,8 +139,13 @@ static string Git(params string[] arguments)
     };
     foreach (var a in arguments) psi.ArgumentList.Add(a);
     using var p = Process.Start(psi)!;
+    // stderr 必须并发排空：RedirectStandardError 是管道，不排空时 git（大仓库/损坏对象库
+    // 时 stderr 输出量大）写满缓冲即与父进程的 stdout ReadToEnd 互等（死锁）。
+    p.ErrorDataReceived += static (_, _) => { };
+    p.BeginErrorReadLine();
     var output = p.StandardOutput.ReadToEnd().Trim();
     p.WaitForExit();
+    p.WaitForExit();   // 双调用：确保异步缓冲 flush（沿 check-all.cs 先例）
     return output;
 }
 

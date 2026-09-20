@@ -37,6 +37,26 @@ public sealed class UnitOfWorkTests
         await uow.CommitAsync(cancellationToken);
     }
 
+    // ADR-023：嵌套 Begin 统一 fail-fast（对齐 Dapper ITM-088）。修复前 EFCore 为静默 no-op，
+    // 而 ExecuteInTransactionAsync 是无条件「Begin → Commit」→ 嵌套时内层 Commit 提交的是
+    // **外层**事务（CommitAsync 提交"当前活动事务"），静默原子性破坏。
+    // ⚠️ 本用例必须用关系型 provider：InMemory 忽略事务（CurrentTransaction 恒 null），
+    // "事务已活动"在 InMemory 下不可达（上一用例正是该 provider 的现状锁）。
+    [Test]
+    public async Task BeginTransactionAsync_WhenAlreadyActive_Throws(CancellationToken cancellationToken)
+    {
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = new DbContextOptionsBuilder<TestDbContext>().UseSqlite(connection).Options;
+        await using var context = new TestDbContext(options);
+        var uow = new UnitOfWork<TestDbContext>(context);
+
+        await uow.BeginTransactionAsync(cancellationToken);
+
+        await Assert.That(async () => await uow.BeginTransactionAsync(cancellationToken))
+            .Throws<InvalidOperationException>();
+    }
+
     [Test]
     public async Task CommitAsync_NoActiveTransaction_DoesNotThrow(CancellationToken cancellationToken)
     {

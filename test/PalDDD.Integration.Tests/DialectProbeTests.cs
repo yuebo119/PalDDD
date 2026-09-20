@@ -51,7 +51,7 @@ namespace PalDDD.Integration.Tests;
 /// 会 ResetTypeHandlers——交错执行会产生 SQLite TEXT→DateTimeOffset 映射竞态，同组串行防御。
 /// </remarks>
 [TUnit.Core.NotInParallel("dapper-global")]
-public sealed class DialectProbeTests
+public sealed partial class DialectProbeTests
 {
     // ─── PostgreSQL 六族 ────────────────────────────────────────
 
@@ -248,7 +248,7 @@ public sealed class DialectProbeTests
     /// <summary>原探针 SagaSmoke——3 项断言。</summary>
     private static async Task SagaSmokeAsync(DbConnection conn, DapperDbType dbType)
     {
-        var store = new DapperSagaStateStore<ProbeSagaState>(conn, dbType: dbType);
+        var store = new DapperSagaStateStore<ProbeSagaState>(conn, dbType: dbType, jsonTypeInfo: ProbeSagaJsonContext.Default.ProbeSagaState);
         var state = new ProbeSagaState { CurrentState = "Waiting" };
 
         // #9「Saga INSERT 1 行」
@@ -288,9 +288,12 @@ public sealed class DialectProbeTests
             await store.TryStartProcessingAsync("probe-consumer", "probe-msg-1", clock.AddSeconds(2), TimeSpan.FromMinutes(5), default))
             .IsNull();
 
-        // #16「Inbox 超时接管（timeout=0）可重入」
+        // #16「Inbox 超时接管（timeout=0）可重入」——第五十三轮勘正：原版对新 id
+        //（probe-msg-stale）断言，走的是 INSERT 首插分支（超时参数不参与），非区分性；
+        // 真语义是对**已 Processing** 的记录以 timeout=0 重入（DapperInboxStore 超时
+        // 抢占分支）。probe-msg-2 在 #14 已 Processing，此处重入应成功。
         await Assert.That(
-            await store.TryStartProcessingAsync("probe-consumer", "probe-msg-stale", clock, TimeSpan.Zero, default))
+            await store.TryStartProcessingAsync("probe-consumer", "probe-msg-2", clock.AddSeconds(3), TimeSpan.Zero, default))
             .IsNotNull();
     }
 
@@ -346,8 +349,13 @@ public sealed class DialectProbeTests
             .Because($"泄漏 {leaked.Count} 条（store 未挂接 UoW 事务）");
     }
 
-    /// <summary>探针 Saga 测试状态（原探针 ProbeSagaState 同款：无快照序列化，仅标量列）。</summary>
-    private sealed class ProbeSagaState : SagaState;
+    /// <summary>探针 Saga 测试状态（原探针 ProbeSagaState 同款：无快照序列化，仅标量列）。
+    /// 2026-09-19（decision-saga-snapshot-failfast）：快照未注册时 SaveChangesAsync 已
+    /// fail-fast——探针构造补传 JsonTypeInfo（探针校验租约/插入标量列，快照内容非探针目标）。</summary>
+    private sealed partial class ProbeSagaState : SagaState;
+
+    [System.Text.Json.Serialization.JsonSerializable(typeof(ProbeSagaState))]
+    private sealed partial class ProbeSagaJsonContext : System.Text.Json.Serialization.JsonSerializerContext;
 }
 
 /// <summary>

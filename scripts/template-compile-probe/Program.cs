@@ -63,6 +63,13 @@ foreach (var template in templates)
 }
 
 Console.WriteLine($"编译块总数: {totalBlocks}（输出格式段 + 示例段）");
+// 全仓扫描修复（空输入假绿）：模板缺失或围栏格式变更时 totalBlocks=0，failures 同样为空
+// → 判 PASS「全部代码块可编译」，而实际一个块都没编译。显式 fail-closed。
+if (totalBlocks == 0)
+{
+    Console.WriteLine("TEMPLATE-GATE: FAIL（未提取到任何代码块——模板缺失或围栏格式已变更，探针未真正执行）");
+    return 1;
+}
 if (failures.Count == 0)
 {
     Console.WriteLine("TEMPLATE-GATE: PASS（全部代码块可编译）");
@@ -76,10 +83,13 @@ return 1;
 
 static string FindRoot()
 {
-    var dir = new DirectoryInfo(AppContext.BaseDirectory);
-    while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "PalDDD.slnx")))
-        dir = dir.Parent!;
-    return dir!.FullName;
+    // 全仓扫描修复：原先 `dir.Parent!` 走到根后 dir 为 null，`dir!.FullName` 抛裸 NRE——
+    // 从意外目录运行时只得到堆栈。改为显式错误信息（未捕获异常仍为非零退出，fail-closed）。
+    for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+    {
+        if (File.Exists(Path.Combine(dir.FullName, "PalDDD.slnx"))) return dir.FullName;
+    }
+    throw new InvalidOperationException("未找到仓库根（向上无 PalDDD.slnx）——请在仓库内运行");
 }
 
 internal static class Probe

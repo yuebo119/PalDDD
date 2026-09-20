@@ -17,6 +17,10 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<OutboxOptions>()
             .Validate(static options => options.BatchSize > 0, "Outbox batch size must be greater than zero.")
+            // M3-11（v2 审计 S-6，2026-09-19）：上界守卫——无上界时配置放大为单 tick
+            // 全表搬移（Lease/GetPending 的 LIMIT {batchSize} 直通），内存与租约窗口
+            // 同步放大。10_000 上界按 100ms 级 DB 往返的合理吞吐天花板校准（可按需调整）
+            .Validate(static options => options.BatchSize <= 10_000, "Outbox batch size must not exceed 10000 (single-tick full-table sweep guard).")
             .Validate(static options => options.LeaseDuration > TimeSpan.Zero, "Outbox lease duration must be greater than zero.")
             .Validate(static options => options.PollInterval > TimeSpan.Zero, "Outbox poll interval must be greater than zero.")
             .Validate(static options => options.MaxRetryCount > 0, "Outbox max retry count must be greater than zero.")
@@ -27,6 +31,9 @@ public static class ServiceCollectionExtensions
             // v9 修复：显式置 null 时 OutboxBatchProcessor 的 catch 块内 NRE（RetryBackoffPolicy.ComputeDelay
             // 在 catch 内再次抛出且不被同类 catch 捕获）——逐 tick 整批中止、已租约消息滞留 LeaseDuration
             .Validate(static options => options.RetryBackoffPolicy is not null, "Outbox retry backoff policy is required.")
+            // C1（perf-opt-sweep）：发布并行度守卫——负值无意义；scopeFactory 缺失的
+            // 直构造场景在并行路径运行期 fail-fast（探针测试在案）
+            .Validate(static options => options.MaxDegreeOfParallelism >= 1, "Outbox MaxDegreeOfParallelism must be at least 1.")
             .ValidateOnStart();
         services.TryAddScoped<OutboxBatchProcessor>();
         services.AddHostedService<OutboxProcessor>();
@@ -67,6 +74,8 @@ public static class ServiceCollectionExtensions
         services.AddOptions<SagaProcessorOptions>()
             .Validate(static options => options.PollInterval > TimeSpan.Zero, "Saga poll interval must be greater than zero.")
             .Validate(static options => options.TimeoutScanBatchSize > 0, "Saga timeout scan batch size must be greater than zero.")
+            // M3-11（v2 审计 S-6）：同 Outbox BatchSize 的上界守卫（超时扫描整批物化）
+            .Validate(static options => options.TimeoutScanBatchSize <= 10_000, "Saga timeout scan batch size must not exceed 10000.")
             // P3 修复（八轮）：补租约参数校验——LeaseDuration<=0 会让租约永不过期/立即过期，
             // LeaseOwner 为空则租约无法归属（与 AddPalOutbox 的校验集对齐）
             .Validate(static options => options.LeaseDuration > TimeSpan.Zero, "Saga lease duration must be greater than zero.")

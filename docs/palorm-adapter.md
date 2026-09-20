@@ -12,7 +12,7 @@ PalDDD 同时维护三套 ORM 适配层，按场景选择：
 
 | 适配层 | 定位 | 何时选 | AOT |
 |---|---|---|---|
-| **PalDDD.Dapper** | 手写 SQL + Dapper.AOT 声明（但 `[module:DapperAot]` 实际禁用，靠 NoWarn 假装兼容） | 维护遗留，逐步弃用 | ⚠️ 假象（NoWarn IL3058） |
+| **PalDDD.Dapper** | 手写 SQL + Dapper.AOT 拦截器（`[module:DapperAot]` **已启用**，experiment/dapper-aot-full，34 调用点生成代码接管） | 手写 SQL / 极致性能与控制力 | ✅ 调用点级 NativeAOT（三方言实测；边界：绕过封装直用原生 API 不受支持） |
 | ~~`PalDDD.EntityFrameworkCore`~~ | ~~全功能 + EF Core 11 + 反射重~~ | ~~需要 Migration / LINQ / ChangeTracker~~ | ~~❌ 全员 `IsAotCompatible=false`~~ |
 | **PalDDD.PalORM** | PalORM 源生成 + 编译期 SQL + 真 AOT | AOT 发布 / 高性能 / 编译期类型安全 | ✅ **真 AOT**（`PublishAot=true` 验证） |
 

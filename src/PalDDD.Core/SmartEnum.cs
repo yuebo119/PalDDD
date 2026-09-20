@@ -31,6 +31,19 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
     // v36 P3：All 的缓存容器（引用类型）——消除 Dictionary.Values 每次访问的装箱
     private static IReadOnlyCollection<TSelf>? s_all;
 
+    // M3-8：RegisterValues 整批丢弃（CompareExchange 失败）的累计次数——internal 诊断信号，
+    // 测试经 InternalsVisibleTo 访问。只增不减，进程生命周期内单调。
+    private static int s_registrationConflictCount;
+
+    /// <summary>
+    /// RegisterValues 整批丢弃（后到注册被 <c>Interlocked.CompareExchange</c> 拒绝）的累计次数——M3-8。
+    /// <para>
+    /// internal 而非 public：避免扩大公共 API 面（PublicApiSnapshotTests 金标）。
+    /// 测试项目经 InternalsVisibleTo 访问。值只增不减；&gt;0 表示存在双注册冲突（后到整批静默丢弃）。
+    /// </para>
+    /// </summary>
+    internal static int RegistrationConflictCount => Volatile.Read(ref s_registrationConflictCount);
+
     /// <summary>不可变枚举值——构造后只读，相等性与哈希的唯一依据。</summary>
     public TValue Value { get; }
     /// <summary>显示名——name 省略时回退 value.ToString()；显式空白或兜底产出空白时构造必抛。</summary>
@@ -153,7 +166,10 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
         // 三十七轮口径勘正：双注册场景（用户手写 + 生成器 emit 并存）行为是"首者胜"——
         // CompareExchange 保留先到者的完整值集，后到者整批静默丢弃（测试 RegisterValues_CalledTwice 锁定此行为）。
         // 注意：后到者中的新值不会合并也不会报错；如需扩展值集请在首次注册时包含所有值。
-        Interlocked.CompareExchange(ref s_values, dict.ToFrozenDictionary(), null);
+        // M3-8：CompareExchange 失败（后到整批丢弃）时递增内部冲突计数器——诊断信号，
+        // 不改变首者胜语义、不抛异常、不扩大公共 API。
+        if (Interlocked.CompareExchange(ref s_values, dict.ToFrozenDictionary(), null) is not null)
+            Interlocked.Increment(ref s_registrationConflictCount);
     }
 
     // ═══════════════════════════════════════════════════════════════

@@ -185,6 +185,11 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
     /// </remarks>
     async ValueTask<int> ISagaStateStore<TState>.SaveChangesAsync(TState state, CancellationToken ct)
     {
+        // F2 勘正（第五十四轮片4，2026-09-19）：补 ITM-163 null state 守卫——原实现
+        // null 时抛 NRE（首行即 state.Error 解引用），Dapper/PalORM 均抛 ArgumentNull；
+        // PalOrmSagaStateStore.cs:183 的三方对齐注释声称含本类，实为失实声明
+        ArgumentNullException.ThrowIfNull(state);
+
         // v29 P3（S10，镜像 v28 DapperSagaStateStore / v29 PalOrmSagaStateStore 的 Q1 形态）：
         // 存储层截断兜底——Error 列 HasMaxLength(2048)（本类 OnModelCreating），超长 ex.Message
         //（含大 payload 的序列化错误）会让终态保存本身抛 DbUpdateException 掩盖原始异常
@@ -194,6 +199,15 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
         //（Error=null 是"未出错"语义，Normalize 会归一为 "(no message)" 破坏之），
         // 含 UTF-16 代理对守卫（末位高代理回退一位）。
         state.Error = Core.FailureReason.Truncate(state.Error, 2040);
+
+        // F3 修复（第五十四轮片4，2026-09-19）：未跟踪的新实体（调用方未 Add/Attach）在
+        // ChangeTracker 中无变更 → SaveChanges 零写入却返回 1，谎报「写入生效」（违反
+        // ISagaStateStore :44-46 契约「1=写入生效；0=目标行不存在」）。对齐契约：Detached
+        // 状态直接返回 0（Dapper/PalORM 的自查 UPSERT 对新行真 INSERT，等价语义是
+        // 「未见跟踪中的行 = 未写入」——正常管线 SagaProcessor 只保存已加载实体不受影响）
+        if (Entry(state).State == EntityState.Detached)
+            return 0;
+
         try
         {
             await SaveChangesAsync(ct).ConfigureAwait(false);

@@ -1,7 +1,7 @@
 # Pal.DDD 行动项清单 — 第三轮全仓运行（MIG 迁移后验证轮）2026-09-11
 
 > 来源报告：[`review-2026-09-11-full-v3.md`](review-2026-09-11-full-v3.md)
-> 基线 commit：`a80283b`（dev = main `17b2726` 内容）· 全仓重扫 + **MIG 迁移验证**（新门禁 7 文件逐行 + 三方映射逐项 + 上两轮全部改动面敌对复查）
+> 基线 commit：`a80283b`（dev = main `17b2726` 内容）· 全仓重扫 + **MIG 迁移验证**（新门禁 7 文件逐行 + 三方映射逐项 + 2026-09-10 v1/v2 两轮全部改动面敌对复查）
 > 生成方式：机械防线新形态全套 + 11 个并行子代理真读（src 5 片 215 文件 + test 4 片 113 文件 + 新门禁专项 + 三方一致性专项）+ 主线程裁决
 > 编号衔接：自 **ITM-653** 起。
 
@@ -18,7 +18,7 @@
 
 **修复轮（2026-09-11，3 并行代理 + 主线程）**：7 P2 全清。P3 实修 18/30（其余 12 条为❓探针待环境/声明已固化/等价继承边界——见各项内标注）。
 
-**本轮核心结论**：无 P0/P1。7 条 P2 **全部同属一个主题——"收口完整性"缺口**：上两轮修复与 MIG 迁移的姊妹同步/口径同步不完整（v66 OCE 过滤修复只收口 1/3；上轮 Rollback 测试姊妹漏 Commit 版；MIG 后 README/V2/断言数三处口径漂移）。这一主题本身是历轮"修复自带缺陷"模式的降维延续——从语义错误（前两轮 5 项）降为同步遗漏（本轮 0 项语义错误），质量体系收敛趋势明确。
+**2026-09-11 v3 轮核心结论**：无 P0/P1。7 条 P2 **全部同属一个主题——"收口完整性"缺口**：2026-09-10 v1/v2 两轮修复与 MIG 迁移的姊妹同步/口径同步不完整（v66 OCE 过滤修复只收口 1/3；2026-09-10 v2 轮 Rollback 测试姊妹漏 Commit 版；MIG 后 README/V2/断言数三处口径漂移）。这一主题本身是历轮"修复自带缺陷"模式的降维延续——从语义错误（2026-09-10 v1/v2 两轮 5 项）降为同步遗漏（2026-09-11 v3 轮 0 项语义错误），质量体系收敛趋势明确。
 
 ---
 
@@ -31,9 +31,9 @@
 - **修复**：两处移除过滤，对齐 InboxProcessor v66 形态（统一按 pending-confirmation 处理 + 日志）；补姊妹回归测试（mock store 抛 OCE 断言 Executed 返回）。
 - **涉及**：src/PalDDD.Idempotency/IdempotencyProcessor.cs、src/PalDDD.Projections/ProjectionProcessor.cs + 对应测试
 
-### [x] ITM-{n} · CommitAsync_AfterDispose 测试缺失（上轮姊妹收口漏 Commit 版）· ✅
-- **维度**：测试覆盖（上轮收口不完整）
-- **问题**：上轮补 `RollbackAsync_AfterDispose_ThrowsObjectDisposedException` 时，姊妹 **Commit 版全仓零测试**（grep 实证：Begin/Rollback 有测、Commit 缺）——`DapperUnitOfWork.CommitAsync:61` 的守卫无回归网。
+### [x] ITM-{n} · CommitAsync_AfterDispose 测试缺失（2026-09-10 v2 轮姊妹收口漏 Commit 版）· ✅
+- **维度**：测试覆盖（2026-09-10 v2 轮收口不完整）
+- **问题**：2026-09-10 v2 轮补 `RollbackAsync_AfterDispose_ThrowsObjectDisposedException` 时，姊妹 **Commit 版全仓零测试**（grep 实证：Begin/Rollback 有测、Commit 缺）——`DapperUnitOfWork.CommitAsync:61` 的守卫无回归网。
 - **修复**：镜像补 `CommitAsync_AfterDispose_ThrowsObjectDisposedException`（探针即测试本身）。
 - **涉及**：test/PalDDD.Integration.Tests/DapperUnitOfWorkTests.cs
 

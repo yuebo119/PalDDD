@@ -80,4 +80,18 @@ public class PalOrmUnitOfWorkTests
         var count = await session.ScalarAsync<long>($"SELECT COUNT(*) FROM outbox_messages");
         await Assert.That(count).IsEqualTo(1L);
     }
+
+    // ADR-023：嵌套 Begin 统一 fail-fast（对齐 Dapper ITM-088）——修复前为静默 no-op，
+    // 而 ExecuteInTransactionAsync 是无条件「Begin → Commit」，嵌套会让内层提交**外层**事务
+    //（原子性破坏）。三栈对称用例之一。
+    [Test]
+    public async Task BeginTransactionAsync_WhenAlreadyActive_Throws()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        await using var uow = new SqlitePalOrmUnitOfWork(session);
+        await uow.BeginTransactionAsync();
+
+        await Assert.That(async () => await uow.BeginTransactionAsync())
+            .Throws<InvalidOperationException>();
+    }
 }

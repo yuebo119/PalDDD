@@ -3,7 +3,7 @@
 > 基线 commit：`b2ae2ec`（dev 分支，工作树运行前后均干净）
 > 运行方式：22 个门禁/工具脚本 + 16 个测试项目全真实执行，零缓存复用
 > 对比基准：[`review-2026-09-14-quality-run.md`](review-2026-09-14-quality-run.md)（首轮，基线 e51d48b）
-> 机器环境：无 Docker；内网服务器 192.168.200.120 本轮实测**健康**（Kafka/RabbitMQ 全通）
+> 机器环境：无 Docker；内网服务器 <INTERNAL_TEST_HOST> 2026-09-14 v2 轮实测**健康**（Kafka/RabbitMQ 全通）
 
 ---
 
@@ -11,7 +11,7 @@
 
 **22 项运行：21 项全绿 · 1 项红灯（PalORM.Tests 46 项，无 Docker，D1 在案）· 0 代码级缺陷 · 3 项新发现（1 项 P2 + 2 项 P3，均为文档类）。**
 
-- **红灯收敛**：首轮 2 项红（Messaging 集成 5 失败 3 跳过 + PalORM 46 失败）→ 本轮仅 PalORM 1 项。`verify-conventions full` 的测试阶段同步从「2 项目红」收敛为「1 项目红」——ITM-676 预检修复 + 服务器恢复的双重实证。
+- **红灯收敛**：首轮 2 项红（Messaging 集成 5 失败 3 跳过 + PalORM 46 失败）→ 2026-09-14 v2 轮仅 PalORM 1 项。`verify-conventions full` 的测试阶段同步从「2 项目红」收敛为「1 项目红」——ITM-676 预检修复 + 服务器恢复的双重实证。
 - **首轮 6 项修复的回归验证全部有效**（§三）：Messaging 集成 8/8 · `.sh` 引用零残留 · `path-gate` 零残留 · 预检协议级探测在位。
 - **新发现全部为文档精确性类**（§四），其中 1 项为**事实错误**（P2）：两份文档称 `.NET 11 另增` 两个验证 attribute，与官方文档（.NET 10 已发布 experimental，.NET 11 转正）不符。
 
@@ -38,9 +38,9 @@
 | 17 | vuln-scan | ✅ | 0 漏洞 |
 | 18 | ci-coverage --selftest | ✅ 18/18 | 次轮新增跑（含降幅判定纯函数 18 例） |
 | 19 | review-snapshot | ✅ | b2ae2ec：源项目 36 · 测试项目 16 · 源文件 214 · 测试文件 114 · 架构测试 44 · 诊断 15 · AOT true 8 / false 14 |
-| 20 | sibling-map / sister-axis / review-scope / refine-scan | ✅ | 工具可用（sister-axis 需轴参数，本轮无修复任务未展开） |
+| 20 | sibling-map / sister-axis / review-scope / refine-scan | ✅ | 工具可用（sister-axis 需轴参数，2026-09-14 v2 轮无修复任务未展开） |
 | 21 | 16 个测试项目 | ✅ 15 绿 | 1379 测试：1325 通过 · 14 跳过 · 详见 §三.1 |
-| 22 | Messaging.Integration.Tests | ✅ 8/8 | **首轮为 5 失败 3 跳过 → 本轮全跑全过** |
+| 22 | Messaging.Integration.Tests | ✅ 8/8 | **首轮为 5 失败 3 跳过 → 2026-09-14 v2 轮全跑全过** |
 
 ## 三、首轮修复回归验证
 
@@ -64,7 +64,7 @@
 | ITM-679（.sh 引用） | `grep -rn "scripts/*.sh" docs/testing.md docs/pitfalls.md docs/release.md` | ✅ 零残留 |
 | ITM-680（V9 边界登记） | verify-conventions --quick | ✅ V9 PASS |
 
-## 四、本轮新发现（3 项，均为文档类）
+## 四、2026-09-14 v2 轮新发现（3 项，均为文档类）
 
 ### F-1（P2·事实错误）`.NET 11 另增` 两个验证 attribute——与官方文档不符
 
@@ -102,7 +102,7 @@
 | 覆盖率基线键数 | 15（json）· 测试项目 16 → 差 PalORM（F-3） | ⚠️ 见 F-3 |
 | review-snapshot 计数 | 与 b2ae2ec 一致（HEAD 匹配） | ✅ |
 | 工作树 | 运行前后均干净 | ✅ |
-| `| tail` 掩码陷阱 | 本轮所有关键判定均用重定向或 `${PIPESTATUS[0]}` 捕获真实退出码 | ✅ 未重蹈 |
+| `| tail` 掩码陷阱 | 2026-09-14 v2 轮所有关键判定均用重定向或 `${PIPESTATUS[0]}` 捕获真实退出码 | ✅ 未重蹈 |
 
 ## 六、复现命令
 

@@ -75,7 +75,7 @@ var wiredNames = CollectWiredNames(root);
 
 // 本次实际探测的门禁——矩阵 PROBED 列与下方探针列表由本数组单向对齐，
 // 并在跑探针前断言一致（防两处清单漂移，同 E1/E2 目录清单教训）。
-string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard"];
+string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "gate-lite", "verify-conventions"];
 
 // ─── 未接线脚本的分类（2026-09-13 增）───
 // 此前矩阵对一切未接线者判「OBSERVE 未接线——永远不触发」，实测 17 个中 16 个是
@@ -187,6 +187,23 @@ var probes = new List<Probe>
             File.WriteAllText(Path.Combine(dir, "clean.cs"), "var k = \"hello\";\n");
             return ["clean.cs"];
         }),
+    // 全仓扫描修复的 fail-closed 路径探针：暂存集为空时（harness 只建 PalDDD.slnx，
+    // 它不在 secret-scan 的可扫描扩展名内），原实现打印 PASS + exit 0——门禁没真正
+    // 执行却报「干净」；修复后必须非零退出并给出显式 FAIL。
+    new(
+        Name: "secret-scan 空输入 fail-closed（零可扫描文件不得报 PASS）",
+        Gate: "secret-scan",
+        ExpectExit: 1,
+        MustContainInStdout: "输入为空",
+        Setup: _ => []),
+    // 全仓扫描修复的 fail-closed 路径探针：无 src/ 时 G1-G3 计数恒为 0，
+    // 原实现给出三个 ✅ + exit 0（空输入假绿）；修复后必须非零退出。
+    new(
+        Name: "gate-lite 缺 src/ fail-closed（计数恒 0 不得判绿）",
+        Gate: "gate-lite",
+        ExpectExit: 1,
+        MustContainInStdout: "前置失败",
+        Setup: _ => []),
     new(
         Name: "encoding-gate 拒绝 src/ 下 .cs UTF-8 BOM（核心判定）",
         Gate: "encoding-gate",
@@ -235,6 +252,22 @@ var probes = new List<Probe>
             File.WriteAllText(Path.Combine(dir, "src", "PalDDD.Dapper", "Probe.cs"),
                 "var p = new { status = ProjectionCheckpointStatus.Processing };\n");
             return ["src/PalDDD.Dapper/Probe.cs"];
+        }),
+    new(
+        Name: "verify-conventions 拒绝缺段决策文档（V11——2026-09-18 增）",
+        Gate: "verify-conventions",
+        ExpectExit: 1,
+        MustContainInStdout: "decision-bad.md",
+        Setup: dir =>
+        {
+            // V11 形态回归：三必填段全缺——决策文档「落盘即免检」缺口的机械拦截
+            //（2026-09-17 decision 文档实证：无锚引用 + 不在任何评审触发面）。
+            // 注：探针以无参（full 模式）运行，隔离目录空 slnx 的 build 失败同为
+            // exit 1，但 stdout 含 decision-bad.md 仅当 V11 真拦截——断言语义完整。
+            Directory.CreateDirectory(Path.Combine(dir, "docs", "review"));
+            File.WriteAllText(Path.Combine(dir, "docs", "review", "decision-bad.md"),
+                "# 决策论证：探针\n\n## 结论\n无必填段。\n");
+            return ["docs/review/decision-bad.md"];
         }),
 };
 

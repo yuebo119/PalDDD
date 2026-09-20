@@ -115,7 +115,6 @@ public abstract class PersistenceBenchBase
 // Dapper 栈(拦截器路径;连接注入式构造)
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
-[InProcess]
 public class DapperPersistenceBenchmarks : PersistenceBenchBase
 {
     private SqliteConnection _conn = null!;
@@ -187,7 +186,6 @@ public class DapperPersistenceBenchmarks : PersistenceBenchBase
 // PalORM 栈(Sqlite 方言固化中间类;DataSession 自建连接——共享内存库同库)
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
-[InProcess]
 public class PalOrmPersistenceBenchmarks : PersistenceBenchBase
 {
     private SqliteConnection _keeper = null!;
@@ -275,7 +273,6 @@ public sealed class BenchIdempotencyDbContext(DbContextOptions<BenchIdempotencyD
     : IdempotencyDbContext(options);
 
 [MemoryDiagnoser]
-[InProcess]
 public class EfCorePersistenceBenchmarks : PersistenceBenchBase
 {
     private SqliteConnection _outboxConn = null!;

@@ -12,10 +12,10 @@ namespace PalDDD.Transactions.Tests;
 // 📤 OutboxProcessor 后台服务生命周期测试
 // ═══════════════════════════════════════════════════════════════
 // OutboxBatchProcessor 已有完整批处理单元测试，本文件只覆盖循环层：
-// 1. 启动后按 PollInterval 轮询
+// 1. 启动后按 PollInterval 轮询（FakeTimeProvider 驱动，确定性）
 // 2. 批处理异常不崩溃循环（CA1031 隔离）
 // 3. 停止令牌优雅终止
-// 4. 空队列不空转（依赖 PeriodicTimer 间隔）
+// 4. 空队列不空转（依赖轮询间隔）
 // ═══════════════════════════════════════════════════════════════
 
 public sealed class OutboxProcessorTests
@@ -24,6 +24,7 @@ public sealed class OutboxProcessorTests
     public async Task ExecuteAsync_PollsAtConfiguredInterval(CancellationToken cancellationToken)
     {
         var store = new CountingOutboxStore();
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-17T12:00:00+00:00"));
         var scopeFactory = new StubScopeFactory(BuildBatchProcessor(store));
         var options = new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
         {
@@ -31,15 +32,13 @@ public sealed class OutboxProcessorTests
             BatchSize = 10,
             MaxRetryCount = 3
         });
-        var processor = new OutboxProcessor(scopeFactory, options, NullPalLogger<OutboxProcessor>.Instance);
+        var processor = new OutboxProcessor(scopeFactory, options, NullPalLogger<OutboxProcessor>.Instance, timeProvider: timeProvider);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await processor.StartAsync(cts.Token);
-        await Task.Delay(250, cancellationToken);
+        await TickUntilAsync(timeProvider, store, minLeases: 2, interval: TimeSpan.FromMilliseconds(50));
         await processor.StopAsync(cancellationToken);
 
-        // ITM-278（R43）：250ms/50ms 理论 4-5 次，高载并行下可能仅 2 次——对齐 SagaProcessorTests
-        // 九轮的同型放宽（其注释在案），阈值降为 >=2 消除 CI 假红窗口
         await Assert.That(store.LeaseCallCount >= 2).IsTrue();
     }
 
@@ -47,17 +46,18 @@ public sealed class OutboxProcessorTests
     public async Task ExecuteAsync_BatchThrows_DoesNotCrashLoop(CancellationToken cancellationToken)
     {
         var store = new ThrowingOutboxStore();
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-17T12:00:00+00:00"));
         var scopeFactory = new StubScopeFactory(BuildBatchProcessor(store));
         var options = new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
         {
             PollInterval = TimeSpan.FromMilliseconds(20),
             MaxRetryCount = 3
         });
-        var processor = new OutboxProcessor(scopeFactory, options, NullPalLogger<OutboxProcessor>.Instance);
+        var processor = new OutboxProcessor(scopeFactory, options, NullPalLogger<OutboxProcessor>.Instance, timeProvider: timeProvider);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await processor.StartAsync(cts.Token);
-        await Task.Delay(150, cancellationToken);
+        await TickUntilAsync(timeProvider, store, minLeases: 3, interval: TimeSpan.FromMilliseconds(20));
         await processor.StopAsync(cancellationToken);
 
         await Assert.That(store.LeaseCallCount >= 3).IsTrue();
@@ -67,16 +67,17 @@ public sealed class OutboxProcessorTests
     public async Task StopAsync_TerminatesWithinReasonableTime(CancellationToken cancellationToken)
     {
         var store = new CountingOutboxStore();
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-17T12:00:00+00:00"));
         var scopeFactory = new StubScopeFactory(BuildBatchProcessor(store));
         var options = new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
         {
             PollInterval = TimeSpan.FromMilliseconds(50),
             MaxRetryCount = 3
         });
-        var processor = new OutboxProcessor(scopeFactory, options, NullPalLogger<OutboxProcessor>.Instance);
+        var processor = new OutboxProcessor(scopeFactory, options, NullPalLogger<OutboxProcessor>.Instance, timeProvider: timeProvider);
 
         await processor.StartAsync(cancellationToken);
-        await Task.Delay(100, cancellationToken);
+        await TickUntilAsync(timeProvider, store, minLeases: 1, interval: TimeSpan.FromMilliseconds(50));
 
         using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         var stopTask = processor.StopAsync(stopCts.Token);
@@ -88,20 +89,20 @@ public sealed class OutboxProcessorTests
     public async Task ExecuteAsync_EmptyQueue_StillPollsOnSchedule(CancellationToken cancellationToken)
     {
         var store = new CountingOutboxStore();
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-17T12:00:00+00:00"));
         var scopeFactory = new StubScopeFactory(BuildBatchProcessor(store));
         var options = new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
         {
             PollInterval = TimeSpan.FromMilliseconds(40),
             MaxRetryCount = 3
         });
-        var processor = new OutboxProcessor(scopeFactory, options, NullPalLogger<OutboxProcessor>.Instance);
+        var processor = new OutboxProcessor(scopeFactory, options, NullPalLogger<OutboxProcessor>.Instance, timeProvider: timeProvider);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await processor.StartAsync(cts.Token);
-        await Task.Delay(200, cancellationToken);
+        await TickUntilAsync(timeProvider, store, minLeases: 2, interval: TimeSpan.FromMilliseconds(40));
         await processor.StopAsync(cancellationToken);
 
-        // ITM-278：200ms/40ms 余量 2 倍稍紧——同型对齐放宽
         await Assert.That(store.LeaseCallCount >= 2).IsTrue();
         await Assert.That(store.MarkProcessedCount).IsEqualTo(0);
     }
@@ -110,26 +111,47 @@ public sealed class OutboxProcessorTests
     public async Task ExecuteAsync_CancellationDuringTick_ContinuesWhenStopTokenIsNotCancelled(CancellationToken cancellationToken)
     {
         // 💡 下游 lease 抛 OperationCanceledException(非 stoppingToken) 时，
-        //   ｜ PeriodicBackgroundProcessor 视为「下游取消但 Host 未关停」——静默忽略，不记 error。
-        //   ｜ 因此应断言循环继续轮询（LeaseCallCount >= 2），且 ErrorCount == 0。
+        //   ｜ 轮询循环视为「下游取消但 Host 未关停」——静默忽略，不记 error。
         var store = new CancellingOutboxStore();
         var logger = new CapturingLogger<OutboxProcessor>();
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-17T12:00:00+00:00"));
         var scopeFactory = new StubScopeFactory(BuildBatchProcessor(store));
         var options = new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
         {
             PollInterval = TimeSpan.FromMilliseconds(20),
             MaxRetryCount = 3
         });
-        var processor = new OutboxProcessor(scopeFactory, options, logger);
+        var processor = new OutboxProcessor(scopeFactory, options, logger, timeProvider: timeProvider);
 
-        await processor.StartAsync(cancellationToken);
-        await Task.Delay(100, cancellationToken);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await processor.StartAsync(cts.Token);
+        await TickUntilAsync(timeProvider, store, minLeases: 2, interval: TimeSpan.FromMilliseconds(20));
 
         using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await processor.StopAsync(stopCts.Token);
 
         await Assert.That(store.LeaseCallCount >= 2).IsTrue();
         await Assert.That(logger.ErrorCount).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// 确定性 tick：反复 AdvanceNowAndTriggerTimers + 短 yield，直到租约次数达标。
+    /// 真实等待仅用于调度让步，不承担轮询间隔语义（间隔由假时钟驱动）。
+    /// </summary>
+    private static async Task TickUntilAsync(
+        FakeTimeProvider timeProvider,
+        CountingOutboxStoreBase store,
+        int minLeases,
+        TimeSpan interval,
+        int timeoutMs = 3000)
+    {
+        var deadline = Environment.TickCount64 + timeoutMs;
+        while (Volatile.Read(ref store.LeaseCallCount) < minLeases
+               && Environment.TickCount64 < deadline)
+        {
+            timeProvider.AdvanceNowAndTriggerTimers(interval);
+            await Task.Delay(10);
+        }
     }
 
     // ─── 辅助：构造 OutboxBatchProcessor（绕过 DI 反射构造）────────
@@ -164,19 +186,14 @@ public sealed class OutboxProcessorTests
 
     // ─── 测试 stub ──────────────────────────────────────────────
 
-    private sealed class CountingOutboxStore : IPalOutboxStore
+    private abstract class CountingOutboxStoreBase : IPalOutboxStore
     {
         public int LeaseCallCount;
         public int MarkProcessedCount;
 
-        public ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
-            => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
+        public abstract ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct);
 
-        public ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
-        {
-            Interlocked.Increment(ref LeaseCallCount);
-            return ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
-        }
+        public abstract ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct);
 
         public void AddMessage(OutboxMessage message)
         { }
@@ -197,68 +214,40 @@ public sealed class OutboxProcessorTests
         public ValueTask<int> SaveChangesAsync(CancellationToken ct) => new(0);
     }
 
-    private sealed class ThrowingOutboxStore : IPalOutboxStore
+    private sealed class CountingOutboxStore : CountingOutboxStoreBase
     {
-        public int LeaseCallCount;
+        public override ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
+            => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
 
-        public ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
+        public override ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
+        {
+            Interlocked.Increment(ref LeaseCallCount);
+            return ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
+        }
+    }
+
+    private sealed class ThrowingOutboxStore : CountingOutboxStoreBase
+    {
+        public override ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
             => throw new InvalidOperationException("store failure");
 
-        public ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
+        public override ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
         {
             Interlocked.Increment(ref LeaseCallCount);
             throw new InvalidOperationException("lease failure");
         }
-
-        public void AddMessage(OutboxMessage message)
-        { }
-
-        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages) => new(0);
-
-        public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
-        { }
-
-        public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
-        { }
-
-        public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
-        { }
-
-        public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct) => new(0);
-
-        public ValueTask<int> SaveChangesAsync(CancellationToken ct) => new(0);
     }
 
-    private sealed class CancellingOutboxStore : IPalOutboxStore
+    private sealed class CancellingOutboxStore : CountingOutboxStoreBase
     {
-        public int LeaseCallCount;
-
-        public ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
+        public override ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
 
-        public ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
+        public override ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
         {
             Interlocked.Increment(ref LeaseCallCount);
             throw new OperationCanceledException(ct);
         }
-
-        public void AddMessage(OutboxMessage message)
-        { }
-
-        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages) => new(0);
-
-        public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
-        { }
-
-        public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
-        { }
-
-        public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
-        { }
-
-        public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct) => new(0);
-
-        public ValueTask<int> SaveChangesAsync(CancellationToken ct) => new(0);
     }
 
     private sealed class StubSerializer : IMessageSerializer

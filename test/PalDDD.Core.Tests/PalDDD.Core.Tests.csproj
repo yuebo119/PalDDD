@@ -6,6 +6,13 @@
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- ITM-810（2026-09-19）：本项目依赖 MessageRegistryGenerator 源生成产物
+        （PalDDD.Generated），而 dotnet format 的分析上下文不加载生成物——引用
+         生成命名空间的 using（PalDDD.Generated/PalDDD.Serialization）被 IDE0005
+         误判 unnecessary（CI run 101/102/104 三次实证，行级压制会打地鼠）。
+         编译正确性由 TreatWarningsAsErrors + Build 步骤守护，IDE0005 卫生提示
+         在本项目失效为可接受代价；其余 15 项目保持检查。 -->
+    <NoWarn>$(NoWarn);IDE0005</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

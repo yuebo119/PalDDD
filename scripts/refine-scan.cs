@@ -63,6 +63,15 @@ if (Directory.Exists(src))
     files.Sort((a, b) => string.CompareOrdinal(a.Path, b.Path)); // 确定性（grep 顺序不进计数）
 }
 
+// 全仓扫描修复（空输入假绿）：src/ 不存在（非仓库根运行、目录改名）或其中无 .cs 时，
+// 下方所有统计恒为 0，报告与「扫过且干净」逐行相同——本工具此前只有 return 0 一条
+// 退出路径，调用方无法分辨。输入为空即非零退出。
+if (files.Count == 0)
+{
+    Console.Error.WriteLine($"FAIL {src}/ 不存在或其中无 .cs——扫描输入为空，报告无意义（fail-closed，约定在仓库根执行）");
+    return 1;
+}
+
 // 整行（grep -rn 输出形态）：路径:行号:内容
 var allLines = files
     .SelectMany(f => f.Lines.Select((line, i) => (Path: f.Path, No: i + 1, Content: line)))

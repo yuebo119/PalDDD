@@ -36,6 +36,7 @@ using System.Data.Common;
 using PalDDD.Core;
 
 using PalDDD.Transactions;
+using static PalDDD.Dapper.DapperSqlErrorClassifier;
 namespace PalDDD.Dapper;
 
 public sealed class DapperInboxStore : IInboxStore
@@ -74,8 +75,9 @@ public sealed class DapperInboxStore : IInboxStore
         if (processingTimeout < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
-        // P2/P3 修复（十七轮）：全部查询/执行改 CommandDefinition 传递 ct（对齐 DapperOutboxStore.RequeueDeadAsync 模式）——
-        // 原重载不接收取消令牌，取消信号只在 EnsureOpenAsync 阶段可传递，SQL 执行阶段不可取消
+        // ct 传递口径（M1-3 勘正 2026-09-19）：原「改 CommandDefinition 传递 ct」为十七轮方案，
+        // 已被 2026-09-13 裁决推翻（拦截器下 DAP057 + NativeAOT 异常，34 调用点改直接重载——
+        // 现行口径见 DapperAotInitializer.cs:15-22，勿按旧注释「恢复」）。
         // 三十八轮 P1 回归修复：MySQL 路径 InboxInsertMySql 为普通 INSERT——唯一约束冲突抛
         // MySqlException(1062)，捕获后转下方 existing 回查分支（Processed 判断/超时抢占语义恢复可达）。
         // PG（RETURNING）/SQLite（INSERT OR IGNORE）路径冲突不抛异常，此 catch 仅 MySQL 可达。
@@ -148,7 +150,6 @@ public sealed class DapperInboxStore : IInboxStore
         // ITM-163 修复：补 message null 守卫（对齐 InMemoryInboxStore/InboxDbContext 同款）
         ArgumentNullException.ThrowIfNull(message);
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
-        // P2/P3 修复（十七轮）：CommandDefinition 传 ct（见 TryStartProcessingAsync 同款注释）
         // 三十八轮 P2 修复（ITM-210 Inbox 姊妹）：processing_started_at 抢占 token 守卫——
         // 被抢占的旧 worker token 不匹配零命中，不覆盖新 worker 的行；affected=0 时
         // 零内存变异（对齐 Outbox ITM-210 语义）。ProcessingStartedAt 为 null 属调用方误用——
@@ -174,7 +175,6 @@ public sealed class DapperInboxStore : IInboxStore
         // "未出错"语义，空白归一会破坏该语义（见 FailureReason.Truncate 文档）。
         failureReason = FailureReason.Normalize(failureReason);
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
-        // P2/P3 修复（十七轮）：CommandDefinition 传 ct（见 TryStartProcessingAsync 同款注释）
         // 三十八轮 P2 修复：同 MarkProcessedAsync——processing_started_at 抢占 token 守卫
         await c.ExecuteAsync(
             SqlTemplates.InboxMarkFailed,
@@ -207,45 +207,7 @@ public sealed class DapperInboxStore : IInboxStore
         return c;
     }
 
-    /// <summary>
-    /// 三十八轮 P1 回归修复：判定异常是否为唯一约束冲突（MySQL 1062/1586、PG 23505、SQLite UNIQUE）。
-    /// 仅捕获重复键——其他错误原样上抛。与 DapperEventLog/DapperSagaStateStore 同型
-    /// （含 SqlServer 2601/2627 分支——v19 B5 勘正：原称"不含"与代码矛盾，分支为跨 provider 鸭子类型防御性保留，与 SagaStateStore 口径统一）。
-    /// </summary>
-    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2075:This",
-        Justification = "Provider 异常鸭子类型判定。裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级）。")]
-    private static bool IsUniqueConstraintViolation(Exception exception)
-    {
-        for (var inner = exception; inner is not null; inner = inner.InnerException)
-        {
-            var type = inner.GetType();
-            var typeName = type.Name;
-
-            if (typeName.Equals("MySqlException", StringComparison.Ordinal)
-                && type.GetProperty("Number")?.GetValue(inner) is int mysqlNumber
-                && (mysqlNumber == 1062 || mysqlNumber == 1586))
-                return true;
-
-            if (typeName.Equals("PostgresException", StringComparison.Ordinal)
-                && type.GetProperty("SqlState")?.GetValue(inner) is string pgState
-                && pgState == "23505")
-                return true;
-
-            // v25 P3 守卫族：message 使用前防护（镜像 DapperEventLog ITM-188 / DapperSagaStateStore
-            // ITM-192 姊妹形态，PD17）——补 !string.IsNullOrEmpty 防 null/空消息进 Contains
-            var message = inner.Message;
-            if (typeName.Equals("SqliteException", StringComparison.Ordinal)
-                && !string.IsNullOrEmpty(message)
-                && message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            // v20 F1：补 SqlServer 2601/2627 分支——v19 B5 注释称含但代码无（EventLog/Saga
-            // 真含），代码侧补齐对齐。DapperDbType 无 SqlServer 值现状下属防御性保留。
-            if (typeName.Equals("SqlException", StringComparison.Ordinal)
-                && type.GetProperty("Number")?.GetValue(inner) is int sqlServerNumber
-                && (sqlServerNumber == 2601 || sqlServerNumber == 2627))
-                return true;
-        }
-        return false;
-    }
+    // ITM-796（2026-09-19）：IsUniqueConstraintViolation 私有副本收口至
+    // DapperSqlErrorClassifier（码集并集：MySQL 1062/1586/1022、PG 23505、SQLite
+    // 19/2067 码+message 兜底、SqlServer 2601/2627）——IL2075 抑制随类迁移
 }

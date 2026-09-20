@@ -183,6 +183,16 @@ public static class PalMetrics
     public static readonly Counter<long> OutboxFailed = Meter.CreateCounter<long>(
         "paldd.outbox.failed", description: "发件箱处理失败数");
 
+    /// <summary>发件箱死信数（重试耗尽 + 类型未注册 + 反序列化空）——独立于 failed，
+    /// 死信积压可见性（R1，2026-09-19）</summary>
+    public static readonly Counter<long> OutboxDead = Meter.CreateCounter<long>(
+        "paldd.outbox.dead", description: "发件箱死信数（重试耗尽，停止投递）");
+
+    /// <summary>发件箱状态持久化失败数——Mark 已内存尝试但未落库（R2 指标漂移修正：
+    /// processed 计数不再混入此类条目）</summary>
+    public static readonly Counter<long> OutboxPersistFailed = Meter.CreateCounter<long>(
+        "paldd.outbox.persist_failed", description: "发件箱状态持久化失败数（下轮轮询重试）");
+
     /// <summary>收件箱处理成功数</summary>
     public static readonly Counter<long> InboxProcessed = Meter.CreateCounter<long>(
         "paldd.inbox.processed", description: "收件箱成功处理数");

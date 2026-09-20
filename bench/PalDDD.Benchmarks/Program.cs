@@ -1,5 +1,10 @@
 using PalDDD.Benchmarks;
+using BenchmarkDotNet.Configs;
+using BenchmarkDotNet.Diagnosers;
+using BenchmarkDotNet.Filters;
+using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Running;
+using BenchmarkDotNet.Toolchains.InProcess.Emit;
 using PalDDD.Core;
 using System.Diagnostics;
 
@@ -21,9 +26,45 @@ if (args.Contains("--verify-persist", StringComparer.OrdinalIgnoreCase))
 
 if (args.Contains("--persist", StringComparer.OrdinalIgnoreCase))
 {
-    BenchmarkRunner.Run<DapperPersistenceBenchmarks>();
-    BenchmarkRunner.Run<PalOrmPersistenceBenchmarks>();
-    BenchmarkRunner.Run<EfCorePersistenceBenchmarks>();
+    // 片3-P2-1 修复（2026-09-19 第五十四轮）：--persist 也传显式 InProcess config——
+    // 原依赖类 [InProcess] attribute（已随本修复移除），避免 attribute 与 ManualConfig
+    // 叠加产生双 job（BDN 0.15.8 实测：config 合并对 jobs 是 union 不去重）
+    var inProcessOnly = ManualConfig.Create(DefaultConfig.Instance)
+        .AddJob(Job.InProcess.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddDiagnoser(MemoryDiagnoser.Default);
+    BenchmarkRunner.Run<DapperPersistenceBenchmarks>(inProcessOnly);
+    BenchmarkRunner.Run<PalOrmPersistenceBenchmarks>(inProcessOnly);
+    BenchmarkRunner.Run<EfCorePersistenceBenchmarks>(inProcessOnly);
+    return 0;
+}
+
+// decision-2026-09-17 §2.5 验收三段式（2026-09-19 增）：before 锚须 medium 口径
+// 单次自比——历史两次 ShortRun 运行差 53%，拼接区间不作基线。显式 ManualConfig
+// （Job.Medium + InProcess + MemoryDiagnoser + Lease filter），不依赖类 attribute
+// 隐式默认，口径随 BDN artifacts 完整落盘。走 Run<T> 而非 Switcher（同 --persist
+// 理由：Switcher 对全程序集验证 net11 moniker 必崩）。
+if (args.Contains("--persist-medium", StringComparer.OrdinalIgnoreCase))
+{
+    // P2（perf-run-2026-09-20）：medium 报告写独立目录——原形态覆盖全量报告
+    // github.md（裁决数字无处查）。归档纪律：medium 数字入 docs/performance.md
+    // 时带日期，artifacts-medium 目录留存原始报告。
+    var leaseOnly = ManualConfig.Create(DefaultConfig.Instance)
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddDiagnoser(MemoryDiagnoser.Default)
+        .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-medium"))
+        .AddFilter(new NameFilter(name =>
+            name.Contains("Outbox_Lease_Batch100", StringComparison.Ordinal)));
+    BenchmarkRunner.Run<DapperPersistenceBenchmarks>(leaseOnly);
+    BenchmarkRunner.Run<PalOrmPersistenceBenchmarks>(leaseOnly);
+    BenchmarkRunner.Run<EfCorePersistenceBenchmarks>(leaseOnly);
+    return 0;
+}
+
+// P1（perf-run-2026-09-20）：Saga 车道基准锚——ProcessEventAsync 编排开销
+// （Normal 基线 / FanOut items=4），供骨架优化与 v3.0 子项粒度改造做回归比对。
+if (args.Contains("--saga", StringComparer.OrdinalIgnoreCase))
+{
+    BenchmarkRunner.Run<SagaLaneBenchmarks>();
     return 0;
 }
 

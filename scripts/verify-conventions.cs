@@ -7,11 +7,14 @@
 //   dotnet run scripts/verify-conventions.cs -- --quick    # 仅 grep 静态检查（秒级）
 //   dotnet run scripts/verify-conventions.cs -- --build    # grep + build（不含 test）
 //
-// 检查项（V5-V7，与原 bash 逐项对应）：
+// 检查项（V5-V7，与原 bash 逐项对应；V8-V11 为后续机械化增项）：
 //   V5. TODO / HACK / FIXME / WORKAROUND 扫描（行级正则）
 //   V6. dotnet build 零错误零警告（Process 调用 + 输出解析，双语锚定口径）
 //   V7. dotnet test 零失败（逐项目执行——MTP 协议：slnx 批量触发 VSTest 握手
 //       exit 5，2026-08-16 终验轮 B-3 实测复现；PalDDD.Testing 为支持库非测试项目）
+//   V11. docs/review/decision-*.md 三必填段（消费状态/证据锚点表/开放决策点）
+//       + 锚点表数据行必含 `文件.md:行号` 或 `文件.cs:行号` 锚（2026-09-18 增，
+//       模板 docs/review/DECISION_TEMPLATE.md）
 //
 // 已下沉判定（MIG-007/008/009，与原 bash 头注释一致）：
 //   V1 零反射族 / V2 async void / V3 .Result / V4 .Wait() 由
@@ -246,6 +249,71 @@ Console.WriteLine();
     else Console.WriteLine($"✅ V10 文档内部链接全部可解析（{docFiles.Count} 个文档）");
 }
 
+// ─── V11：决策文档模板结构（decision-*.md 三必填段 + 锚点表锚点格式，2026-09-18 增）───
+// 来源：decision-2026-09-17 实证——基准区间上界引用「审计归档」无仓内锚，评审无法回查；
+// 且决策文档此前不在任何评审触发面（重启条件只枚举代码信号），落盘即免检。
+// 判定：三必填段（消费状态/证据锚点表/开放决策点）+ 锚点表数据行须含
+// `文件.md:行号` 或 `文件.cs:行号` 锚。段匹配用 H2 行 Contains（容忍编号前缀与标题后缀）。
+// 模板：docs/review/DECISION_TEMPLATE.md；空集（无 decision-*.md）PASS。
+{
+    var decisionDir = Path.Combine(rootDir, "docs", "review");
+    List<string> decisions = Directory.Exists(decisionDir)
+        ? [.. Directory.GetFiles(decisionDir, "decision-*.md").OrderBy(f => f, StringComparer.Ordinal)]
+        : [];
+    var problems = new List<string>();
+    foreach (var doc in decisions)
+    {
+        foreach (var p in CheckDecisionDoc(File.ReadLines(doc)))
+            problems.Add($"{Path.GetFileName(doc)}：{p}");
+    }
+    if (problems.Count > 0)
+    {
+        Console.WriteLine($"❌ V11 决策文档缺必填段或缺来源锚：");
+        foreach (var p in problems) Console.WriteLine($"   {p}");
+        Console.WriteLine("   修法：按 docs/review/DECISION_TEMPLATE.md 补齐三段；锚点表声明须带 文件.md:行号 或 文件.cs:行号。");
+        fail++;
+    }
+    else Console.WriteLine($"✅ V11 决策文档结构合规（{decisions.Count} 个，模板 docs/review/DECISION_TEMPLATE.md）");
+}
+
+// ─── V12：文档私网 IP 泄露门禁（v2 审计 S-4 / M1-6 机械层，2026-09-19 增）───
+// 来源：v2 复证审计实证——公开 AGPL 仓的 docs/ 曾含 13 处内网拓扑（IP + 服务版本
+// 组合 = 免预认证目标清单），M1-6 手工脱敏后无防线防复发。本规则扫 docs/**.md 与
+// 根级 md 的 RFC1918 私网地址（10/8、172.16/12、192.168/16）；豁免 <INTERNAL_TEST_HOST>
+// 泛化形态（脱敏后的标准写法）。与 secret-scan 分工：secret-scan 管 .cs/.config 的
+// 凭据，本规则管文档面的拓扑泄露。
+{
+    var docFilesV12 = new List<string>();
+    foreach (var dir in (string[])["docs"])
+        if (Directory.Exists(dir))
+            docFilesV12.AddRange(Directory.GetFiles(dir, "*.md", SearchOption.AllDirectories));
+    foreach (var f in (string[])["README.md", "README.en.md", "AGENTS.md", "CHANGELOG.md"])
+        if (File.Exists(f)) docFilesV12.Add(f);
+
+    // RFC1918 三段（词边界防 172.32.x 误报；172 的 16-31 段用显式枚举）
+    var ipRx = new System.Text.RegularExpressions.Regex(
+        @"\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b");
+    var leaks = new List<string>();
+    foreach (var doc in docFilesV12)
+    {
+        var lineno = 0;
+        foreach (var content in File.ReadLines(doc))
+        {
+            lineno++;
+            if (ipRx.IsMatch(content))
+                leaks.Add($"{ToPosix(doc)}:{lineno}");
+        }
+    }
+    if (leaks.Count > 0)
+    {
+        Console.WriteLine($"❌ V12 文档含私网 IP（拓扑泄露面，{leaks.Count} 处）：");
+        foreach (var l in leaks.Take(10)) Console.WriteLine($"   {l}");
+        Console.WriteLine("   修法：泛化为 <INTERNAL_TEST_HOST> 形态（M1-6 脱敏先例）；教程性地址用 203.0.113.x（TEST-NET-3）。");
+        fail++;
+    }
+    else Console.WriteLine($"✅ V12 文档无私网 IP 泄露（{docFilesV12.Count} 个文档）");
+}
+
 // ─── --quick 模式：仅 grep 检查，跳过 build/test ───
 if (mode == "--quick")
 {
@@ -437,6 +505,60 @@ static List<string> ExtractDocLinkTargets(IEnumerable<string> lines)
     return targets;
 }
 
+// V11：决策文档结构判定——三必填段 + 锚点表数据行必含 文件.md:行号 / 文件.cs:行号 锚。
+// 段判定用 H2 行 Contains（容忍「## 4. 开放决策点（需你拍板）」类编号前缀/标题后缀）。
+static List<string> CheckDecisionDoc(IEnumerable<string> lines)
+{
+    var problems = new List<string>();
+    var headings = new List<string>();
+    foreach (var line in lines)
+        if (line.StartsWith("## ", StringComparison.Ordinal))
+            headings.Add(line);
+    foreach (var required in (string[])["消费状态", "证据锚点表", "开放决策点"])
+        if (!headings.Any(h => h.Contains(required, StringComparison.Ordinal)))
+            problems.Add($"缺必填段「{required}」");
+    if (headings.Any(h => h.Contains("证据锚点表", StringComparison.Ordinal)))
+    {
+        var anchorRx = new Regex(@"[A-Za-z0-9_./-]+\.(?:md|cs):\d+");
+        foreach (var (lineno, row) in AnchorTableRows(lines))
+        {
+            // 豁免「仓内未定位/仓内无验证」申报行——模板规定的如实申报形态（查不到
+            // 出处时留 ☐），拦它会逼出假锚；正例行不会误含这两个专词。
+            if (row.Contains("仓内未定位", StringComparison.Ordinal) ||
+                row.Contains("仓内无验证", StringComparison.Ordinal)) continue;
+            if (!anchorRx.IsMatch(row))
+                problems.Add($"锚点表第 {lineno} 行缺来源锚（须含 文件.md:行号 或 文件.cs:行号）");
+        }
+    }
+    return problems;
+}
+
+// V11：锚点表段内的数据行（段内首个 | 行为表头、|---| 形态为分隔行，均不计入）
+static List<(int LineNo, string Text)> AnchorTableRows(IEnumerable<string> lines)
+{
+    var rows = new List<(int, string)>();
+    var inSection = false;
+    var seenHeader = false;
+    var lineno = 0;
+    foreach (var line in lines)
+    {
+        lineno++;
+        var trimmed = line.TrimStart();
+        if (trimmed.StartsWith("## ", StringComparison.Ordinal))
+        {
+            if (inSection) break;
+            inSection = trimmed.Contains("证据锚点表", StringComparison.Ordinal);
+            seenHeader = false;
+            continue;
+        }
+        if (!inSection || !trimmed.StartsWith('|')) continue;
+        if (!seenHeader) { seenHeader = true; continue; }
+        if (Regex.IsMatch(trimmed, @"^\|[\s:|-]+\|$")) continue;
+        rows.Add((lineno, trimmed));
+    }
+    return rows;
+}
+
 // ══════════════ 自测 ══════════════
 
 static int SelfTest()
@@ -485,6 +607,54 @@ static int SelfTest()
     Case("V10 不抽非 .md 目标（如 [事实](代码可查) 标注）", ExtractDocLinkTargets(["[事实](代码可查)"]).Count == 0);
     Case("V10 空行不产目标", ExtractDocLinkTargets(["", "无链接"]).Count == 0);
     Case("V10 一行多链接全抽", ExtractDocLinkTargets(["[a](a.md) 与 [b](b.md)"]).Count == 2);
+
+    // V11 决策文档结构（正例——编号前缀与标题后缀均容忍）
+    var okDecision = new[]
+    {
+        "# 决策论证：X",
+        "## 0. 消费状态",
+        "| 项 | 值 |",
+        "|---|---|",
+        "| 评审状态 | 未评审 |",
+        "## 证据锚点表（关键声明回查）",
+        "| 关键声明 | 来源锚 | 核对 |",
+        "|---|---|---|",
+        "| EF Lease 15.7ms | bench-baseline-2026-09-13.md:16 | ☒ |",
+        "| 逐行 CAS 现状 | SqliteOutboxDbContext.cs:108 | ☒ |",
+        "## 4. 开放决策点（需拍板）",
+        "1. 待定",
+    };
+    Case("V11 合规文档零问题", CheckDecisionDoc(okDecision).Count == 0);
+    // V11 决策文档结构（反例——无锚引用即 2026-09-17 实证形态）
+    var noAnchor = new[]
+    {
+        "# 决策论证：X",
+        "## 消费状态",
+        "## 证据锚点表",
+        "| 关键声明 | 来源锚 | 核对 |",
+        "|---|---|---|",
+        "| EF 上界 24.0ms | 审计归档 | ☐ |",
+        "## 开放决策点",
+    };
+    var noAnchorProblems = CheckDecisionDoc(noAnchor);
+    Case("V11 无锚数据行被报", noAnchorProblems.Any(p => p.Contains("缺来源锚")));
+    Case("V11 无锚报行号", noAnchorProblems.Any(p => p.Contains("第 6 行")));
+    Case("V11 三段全缺报 3 处", CheckDecisionDoc(["# 决策论证：X", "正文"]).Count == 3);
+    Case("V11 表头与分隔行不计入", AnchorTableRows(okDecision).Count == 2);
+    // V11 豁免形态：「仓内未定位/仓内无验证」是模板规定的如实申报（首版实跑被自身
+    // 存量文档拦截的实证——逼出假锚比留 ☐ 更糟）
+    var declared = new[]
+    {
+        "# 决策论证：X",
+        "## 消费状态",
+        "## 证据锚点表",
+        "| 关键声明 | 来源锚 | 核对 |",
+        "|---|---|---|",
+        "| 上界 24.0ms | 仓内未定位（引「审计归档」无锚） | ☐ |",
+        "| 文本序前提 | 仓内无验证（spike 首项） | ☐ |",
+        "## 开放决策点",
+    };
+    Case("V11 如实申报行豁免", CheckDecisionDoc(declared).Count == 0);
 
     Console.WriteLine();
     Console.WriteLine($"SELFTEST {passed}/{total} 通过");

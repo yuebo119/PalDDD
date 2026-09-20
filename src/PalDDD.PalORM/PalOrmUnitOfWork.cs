@@ -44,7 +44,12 @@ public class PalOrmUnitOfWork<TProvider> : IUnitOfWork
     public async ValueTask BeginTransactionAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_transaction is not null) return;  // 幂等：已有活动事务
+        // ADR-023（嵌套事务语义收敛到 fail-fast，对齐 Dapper 的 ITM-088）：原为 `return;`
+        // 幂等 no-op——嵌套调用下内层 Commit 会提交**外层**事务，造成静默原子性破坏
+        //（ExecuteInTransactionAsync 是无条件 Begin/work/SaveChanges/Commit）。
+        if (_transaction is not null)
+            throw new InvalidOperationException(
+                "BeginTransactionAsync 在事务已激活时被再次调用——请先 CommitAsync/RollbackAsync 结束当前事务。");
 
         // PalORM DataSession 已 Open 连接（构造时打开），BeginTransactionAsync 直接 begin
         _transaction = await _session.BeginTransactionAsync(ct: ct).ConfigureAwait(false);

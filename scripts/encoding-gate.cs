@@ -72,7 +72,7 @@ Console.WriteLine("═══ 编码一致性门禁 ═══");
 {
     var bad = new List<string>();
     foreach (var dir in (string[])["src", "test", "scripts", ".ai/scripts", "bench", "samples"])
-        foreach (var f in EnumerateByExtension(dir, [ ".sh", ".py" ]))
+        foreach (var f in EnumerateByNameSuffix(dir, [ ".sh", ".py" ]))
             if (ContainsByte(File.ReadAllBytes(f), 0x0D))
             {
                 bad.Add(ToPosix(f));
@@ -134,7 +134,7 @@ Console.WriteLine("═══ 编码一致性门禁 ═══");
 // ─── E4: .verified.* 行尾 LF ───
 {
     var bad = new List<string>();
-    foreach (var f in EnumerateByExtension("test", [ ".verified.txt", ".verified.json" ]))
+    foreach (var f in EnumerateByNameSuffix("test", [ ".verified.txt", ".verified.json" ]))
         if (ContainsByte(File.ReadAllBytes(f), 0x0D))
         {
             bad.Add(ToPosix(f));
@@ -250,10 +250,13 @@ static bool HasUtf8Bom(string path)
 }
 
 // 递归收集指定扩展名文件（find -name 语义；目录缺失跳过 = bash stderr 吞掉）
-static IEnumerable<string> EnumerateByExtension(string root, string[] extensions) =>
+// 按**文件名后缀**枚举（不用 Path.GetExtension——它只返回最后一个点段，
+// 故 ".verified.txt" 这类两段后缀永远匹配不上，E4 曾因此整段空转且恒打印 PASS）。
+// 单段后缀（".cs"/".sh"）下两种语义等价，故 E1/E4 共用本函数。
+static IEnumerable<string> EnumerateByNameSuffix(string root, string[] suffixes) =>
     Directory.Exists(root)
         ? Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-            .Where(f => extensions.Contains(Path.GetExtension(f), StringComparer.Ordinal))
+            .Where(f => suffixes.Any(s => Path.GetFileName(f).EndsWith(s, StringComparison.Ordinal)))
         : [];
 
 // .cs 全量（含 obj/bin——E3 的排除在调用侧按路径子串过滤，对齐 grep -v 语义）

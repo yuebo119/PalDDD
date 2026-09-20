@@ -24,7 +24,7 @@
 
 ## 🟡 P1 — 环境（1 条，已闭环）
 
-### [x] ITM-675 · 192.168.200.120 RabbitMQ 服务器 AMQP 层无响应 · 环境 ✅
+### [x] ITM-675 · <INTERNAL_TEST_HOST> RabbitMQ 服务器 AMQP 层无响应 · 环境 ✅
 - **维度**：环境（本机集成测试阻塞）
 - **问题**：RabbitMQ 服务器 TCP 5672 端口可达（实测 12ms），但 AMQP 协议握手无响应（`connection.start` 帧 18.9s 超时）→ `Messaging.Integration.Tests` 5 个 Rabbit 测试各 ~19s 假失败。
 - **证据**：① 隔离探针 TCP 探活 `connected=True` 12ms；② 失败堆栈 `connection.start was never received`；③ Kafka 轴协议级预检识别环境问题 → 3 测试正确跳过（对照）。
@@ -50,7 +50,7 @@
 
 ### [x] ITM-677 · open-items D2 环境声明更新（"当前就绪"已失实） · 文档 ✅
 - **维度**：文档一致性 / 跨会话数据准确性
-- **问题**：`open-items-2026-09-14.md:41`（D2）称 192.168.200.120"当前就绪，全部实测通过"；分析轮实测 RabbitMQ / Kafka 均不达标（ITM-675）——状态声明有效期短。
+- **问题**：`open-items-2026-09-14.md:41`（D2）称 <INTERNAL_TEST_HOST>"当前就绪，全部实测通过"；分析轮实测 RabbitMQ / Kafka 均不达标（ITM-675）——状态声明有效期短。
 - **修复**：D2 改为"**状态不稳定，使用前先实测**"并记录 2026-09-14 三次变动时间线（早间通过 → 13 时半坏（ITM-675）→ 约 14 时恢复 8/8），保留"半坏特征 = TCP 开、协议无响应"的识别口径。
 - **验证**：`grep -n "当前就绪" docs/review/open-items-2026-09-14.md` → 零残留 ✅
 - **涉及**：`docs/review/open-items-2026-09-14.md`
@@ -89,7 +89,7 @@
 
 ---
 
-## 附：本轮排除项（已核实为设计内行为，勿重提）
+## 附：2026-09-14 quality-run 轮排除项（已核实为设计内行为，勿重提）
 
 | 项 | 结论 |
 |----|------|

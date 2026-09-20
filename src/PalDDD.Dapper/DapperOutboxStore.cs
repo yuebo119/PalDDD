@@ -325,8 +325,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         var now = _timeProvider.GetUtcNow();
         var audit = $"requeued by {retriedBy} at {now:O}";
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
-        // P3 修复（八轮评审）：ExecuteAsync 改 CommandDefinition 传 ct——原重载不接收取消令牌，
-        // 取消信号在 RequeueDead 执行阶段不可传递；EnsureOpenAsync(ct) 此前已传。
+        // ct 传递口径（M1-3 勘正 2026-09-19）：原「改 CommandDefinition 传 ct」为八轮方案，
+        // 已被 2026-09-13 裁决推翻——Dapper.AOT 拦截器下 CommandDefinition 触发 DAP057 +
+        // NativeAOT PlatformNotSupportedException，34 调用点已改**直接重载**（ct 显式收缩
+        // 为实验目的接受），现行口径见 DapperAotInitializer.cs:15-22。勿按旧注释「恢复」。
         return await conn.ExecuteAsync(
 
                 SqlTemplates.OutboxRequeueDead,
