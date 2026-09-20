@@ -75,7 +75,7 @@ var wiredNames = CollectWiredNames(root);
 
 // 本次实际探测的门禁——矩阵 PROBED 列与下方探针列表由本数组单向对齐，
 // 并在跑探针前断言一致（防两处清单漂移，同 E1/E2 目录清单教训）。
-string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "gate-lite", "verify-conventions"];
+string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "gate-lite", "verify-conventions", "ci-coverage"];
 
 // ─── 未接线脚本的分类（2026-09-13 增）───
 // 此前矩阵对一切未接线者判「OBSERVE 未接线——永远不触发」，实测 17 个中 16 个是
@@ -187,14 +187,16 @@ var probes = new List<Probe>
             File.WriteAllText(Path.Combine(dir, "clean.cs"), "var k = \"hello\";\n");
             return ["clean.cs"];
         }),
-    // 全仓扫描修复的 fail-closed 路径探针：暂存集为空时（harness 只建 PalDDD.slnx，
-    // 它不在 secret-scan 的可扫描扩展名内），原实现打印 PASS + exit 0——门禁没真正
-    // 执行却报「干净」；修复后必须非零退出并给出显式 FAIL。
+    // 全仓扫描修复的 fail-closed 路径探针：暂存集里只有**不可扫描扩展名**的文件时
+    // （harness 建的 PalDDD.slnx 自 2026-09-20 起已进入 secret-scan 扫描面，故此处
+    // 显式注入一个 .png 占位文件把可扫描集压到零），原实现打印 PASS + exit 0——
+    // 门禁没真正执行却报「干净」；修复后必须非零退出并给出显式 FAIL。
     new(
         Name: "secret-scan 空输入 fail-closed（零可扫描文件不得报 PASS）",
         Gate: "secret-scan",
         ExpectExit: 1,
         MustContainInStdout: "输入为空",
+        SkipSlnxStaging: true,
         Setup: _ => []),
     // 全仓扫描修复的 fail-closed 路径探针：无 src/ 时 G1-G3 计数恒为 0，
     // 原实现给出三个 ✅ + exit 0（空输入假绿）；修复后必须非零退出。
@@ -269,6 +271,52 @@ var probes = new List<Probe>
                 "# 决策论证：探针\n\n## 结论\n无必填段。\n");
             return ["docs/review/decision-bad.md"];
         }),
+    // ── ci-coverage 隔离式探针（2026-09-20 增，审计 T4）───
+    // 背景：ci-coverage 历史上真实发生过两次 fail-open——阈值 NaN/Infinity 恒假比较
+    // （scripts/ci-coverage.cs:191-192 注释记录）与 line-rate NaN（:214-215），修复后
+    // 只有构造最小 XML 的单元式 selftest，没有「注入坏输入 → 断言非零退出」的隔离探针。
+    // 若阈值判定逻辑再被改坏（比较方向反转、NaN 防护被删），CI 只会看到绿灯。
+    // 探针形态：预置合并后的 Cobertura 报告 + 空 TestResults 模块目录，令脚本跳过
+    // 其前段（dotnet test / reportgenerator 合并）直达第 5 步阈值判定。
+    new(
+        Name: "ci-coverage 低于阈值必须 fail-closed（比较方向回归）",
+        Gate: "ci-coverage",
+        ExpectExit: 1,
+        MustContainInStdout: "below threshold",
+        ExtraArgs: "--enforce-only",
+        Setup: dir =>
+        {
+            // 预置合并报告：line-rate=0.10，阈值默认 0.70 → 必须判 FAIL 退出 1。
+            // 若判定被改成 `>` 或恒真比较，此探针转绿即暴露退化。
+            var reportDir = Path.Combine(dir, "TestResults", "coverage-report");
+            Directory.CreateDirectory(reportDir);
+            File.WriteAllText(Path.Combine(reportDir, "Cobertura.xml"),
+                "<?xml version=\"1.0\"?><coverage line-rate=\"0.10\"></coverage>\n");
+            return ["TestResults/coverage-report/Cobertura.xml"];
+        }),
+    new(
+        Name: "ci-coverage line-rate 非数字必须 fail-closed（NaN 回归）",
+        Gate: "ci-coverage",
+        ExpectExit: 1,
+        MustContainInStdout: "could not parse line-rate",
+        ExtraArgs: "--enforce-only",
+        Setup: dir =>
+        {
+            // 历史 fail-open 形态：line-rate 为 NaN 时旧 double 比较恒假 → 放行。
+            // 现必须解析失败并显式 FAIL。
+            var reportDir = Path.Combine(dir, "TestResults", "coverage-report");
+            Directory.CreateDirectory(reportDir);
+            File.WriteAllText(Path.Combine(reportDir, "Cobertura.xml"),
+                "<?xml version=\"1.0\"?><coverage line-rate=\"NaN\"></coverage>\n");
+            return ["TestResults/coverage-report/Cobertura.xml"];
+        }),
+    new(
+        Name: "ci-coverage 合并报告缺失必须 fail-closed（不是报绿）",
+        Gate: "ci-coverage",
+        ExpectExit: 1,
+        MustContainInStdout: "merged cobertura report not found",
+        ExtraArgs: "--enforce-only",
+        Setup: _ => []),
 };
 
 var probeFails = 0;
@@ -333,9 +381,13 @@ static (bool Ok, string Detail) RunProbe(string repoRoot, Probe probe)
         var staged = probe.Setup(tmp);
         // 显式暂存——绝不用 `git add -A`（见文件头隔离纪律）
         foreach (var f in staged) RunGit(tmp, $"add -- {f}");
-        RunGit(tmp, "add -- PalDDD.slnx");
+        // 仓库根锚默认入索引；SkipSlnxStaging 的探针（如 secret-scan 空输入）需要
+        // 可扫描集为空——自 2026-09-20 起 .slnx 已进入 secret-scan 扫描面，不跳过
+        // 则该探针的可扫描集恒非 1，"零可扫描文件"场景无法构造。
+        if (!probe.SkipSlnxStaging)
+            RunGit(tmp, "add -- PalDDD.slnx");
 
-        var (exitCode, stdout) = RunGate(gatePath, tmp);
+        var (exitCode, stdout) = RunGate(gatePath, tmp, probe.ExtraArgs);
 
         if (exitCode != probe.ExpectExit)
             return (false, $"退出码 {exitCode} ≠ 期望 {probe.ExpectExit}");
@@ -354,9 +406,9 @@ static (bool Ok, string Detail) RunProbe(string repoRoot, Probe probe)
     }
 }
 
-static (int ExitCode, string Stdout) RunGate(string gatePath, string workingDir)
+static (int ExitCode, string Stdout) RunGate(string gatePath, string workingDir, string? extraArgs = null)
 {
-    var psi = new ProcessStartInfo("dotnet", $"run \"{gatePath}\"")
+    var psi = new ProcessStartInfo("dotnet", $"run \"{gatePath}\" {extraArgs}".TrimEnd())
     {
         RedirectStandardOutput = true,
         RedirectStandardError = true,
@@ -504,4 +556,6 @@ internal sealed record Probe(
     string Gate,
     int ExpectExit,
     string MustContainInStdout,
-    Func<string, string[]> Setup);
+    Func<string, string[]> Setup,
+    string? ExtraArgs = null,
+    bool SkipSlnxStaging = false);
