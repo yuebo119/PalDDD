@@ -118,8 +118,12 @@ public class PalOrmEventLog<TProvider> : IEventLog
                 StreamVersion = streamVersion,
                 SchemaVersion = e.SchemaVersion,
                 ContentType = e.ContentType,
-                Payload = e.Payload.ToArray(),
-                Metadata = e.Metadata.ToArray(),
+                // v65 P3 零拷贝路径（对齐 StoredEvent.From 与 DapperEventLog 用法）：PayloadArray/
+                // MetadataArray 是 EventData 构造期 ToArray 得到的同一数组实例，EventData 构造后
+                // 不可变（公开 API 契约，EventData.cs:60-73 声明 internal 消费方只读不写），
+                // InsertAsync 仅读取后立即发送——免去每事件 payload/metadata 各一次防御性拷贝。
+                Payload = e.PayloadArray,
+                Metadata = e.MetadataArray,
                 RecordedAt = now,
                 ActorId = e.Audit.ActorId,
                 Reason = e.Audit.Reason,
