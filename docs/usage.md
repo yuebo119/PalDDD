@@ -240,6 +240,21 @@ services.AddPalOutbox();
 
 生产环境可从 `PalDDD.Transactions.EFCore` 派生 `OutboxDbContext`，或按方言派生 `PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`（ADR-012 方言粒度）以复用原子租约获取。`SqlServerOutboxDbContext` 当前标 `[Obsolete]` 且零测试覆盖，属**实验性/未验证**（v3.0 前评估），生产请优先使用已验证方言。适配器会配置 pending 查询索引、payload 必填、trace/correlation 字段长度和错误字段长度；`MarkProcessed` 会清理 lease/retry 状态，`ReleaseForRetry` 会释放 lease 并设置 `NextAttemptAt`。
 
+EF 栈的 `IPalOutboxStore` / `IInboxStore` / `ISagaStateStore<T>` / `IIdempotencyStore` / `IProjectionCheckpointStore` 由各适配器包的 `AddPal*EfCore` 扩展注册（与 Dapper/PalORM 栈的 `AddPal*` 入口对称）。这些扩展**不**注册 `DbContext` 本身（provider 选择权在调用方），需与 `AddDbContext` 配套：
+
+```csharp
+services.AddPalOutboxEfCore<AppOutboxDbContext>();       // IPalOutboxStore
+services.AddPalInboxEfCore<AppInboxDbContext>();         // IInboxStore
+services.AddPalSagaStateEfCore<AppSagaDbContext, OrderSagaState>();  // ISagaStateStore<T>
+services.AddPalIdempotencyEfCore<AppIdempotencyDbContext>();         // IIdempotencyStore
+services.AddPalProjectionsEfCore<AppProjectionDbContext>();          // IProjectionCheckpointStore
+
+services.AddDbContext<AppOutboxDbContext>(o => o.UseNpgsql(connectionString));
+// ... 其余上下文同理
+```
+
+Store 映射的生命周期为 **Scoped**，与 `AddDbContext` 默认一致（`DbContext` 非线程安全，不得 Singleton）。
+
 ### 死信语义与运维（F4 补，2026-09-19）
 
 消息投递失败（broker 不可达、反序列化失败、类型未注册）时按指数退避重试；**重试耗尽（默认 `MaxRetryCount = 10`，经 `AddPalOutbox` 的 options 可配）后消息进入 `Dead` 状态并停止投递**——这是静默停止，不会抛异常到宿主。运维要点：
@@ -364,15 +379,23 @@ await eventLog.AppendAsync(
 using Microsoft.EntityFrameworkCore;
 using PalDDD.EventLog;
 
-public sealed class AppEventLogDbContext(DbContextOptions<AppEventLogDbContext> options)
-    : EventLogDbContext(options);
+// ⚠️ 派生上下文必须显式接收并转发 reserver——否则每实例新建一个，Hi/Lo chunk 缓存
+// 永不跨请求共享（每次 append 都走 allocator 行 SELECT + CAS UPDATE，且每次消耗
+// 整个 chunk 的位置）。详见下方 AddPalEventLogEfCore 说明。
+public sealed class AppEventLogDbContext(
+    DbContextOptions<AppEventLogDbContext> options,
+    EventLogPositionReserver reserver)
+    : EventLogDbContext(options, positionReserver: reserver);
 
+services.AddPalEventLogEfCore<AppEventLogDbContext>();   // 把 reserver 注册为 Singleton
 services.AddDbContext<AppEventLogDbContext>(options =>
 {
     options.UseNpgsql(connectionString);   // 示例用已验证方言 PostgreSQL
 });
 services.AddScoped<IEventLog>(sp => sp.GetRequiredService<AppEventLogDbContext>());
 ```
+
+`AddPalEventLogEfCore<TContext>()` 把 `EventLogPositionReserver` 注册为 **Singleton**（`TryAdd` 语义，不覆盖调用方自己的注册）。EF Core 经 `ActivatorUtilities` 从 DI 解析派生上下文的构造参数，因此注册后所有请求上下文共享同一 chunk 缓存——这正是 Hi/Lo 分配器的设计前提。区块大小可调：`AddPalEventLogEfCore<AppEventLogDbContext>(chunkSize: 500)`。
 
 适配器会配置 `GlobalPosition` 主键、`(StreamName, StreamVersion)` 唯一索引和 `EventId` 唯一索引，并持久化 payload、metadata、审计字段和 trace context。`GlobalPosition` 由 `EventLogPositionReserver` 的 Hi/Lo 段分配器管理，而非数据库自增 identity。分配器缓存 chunk（默认 100 个位置）在进程内，仅当 chunk 耗尽时通过乐观 CAS（Revision 并发令牌）更新持久化 allocator 行；关系型 provider 下 append 使用默认隔离级别（ReadCommitted），stream 级别并发由唯一索引保障。
 
