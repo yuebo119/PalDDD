@@ -54,7 +54,7 @@
                   ┌──────────────────┐│ ┌──────────────────────┐
                   │ Architecture     ││ │ Core/CQRS/Transactions│
                   │ BoundaryTests    ││ │  单元功能正确性        │
-                  │ 37 方法 89 断言  ││ │ AggregateRoot/Saga/Outbox│
+                  │ 37 方法 99 断言  ││ │ AggregateRoot/Saga/Outbox│
                   └──────────────────┘│ └──────────────────────┘
                                      ╱
                           ┌────────────────────┐
@@ -97,7 +97,7 @@
 | **测试框架** | TUnit 1.66.27 + MTP（Microsoft.Testing.Platform） |
 | **断言库** | TUnit.Assertions（Fluent 链式） |
 | **属性测试** | TUnit.FsCheck（属性驱动） |
-| **快照测试** | Verify.TUnit 32.0.0（预留，目前 PublicApiSnapshot 自实现） |
+| **快照测试** | Verify.TUnit 32.0.0（已用于 Hosting.AspNetCore.Tests 的 ExceptionMiddleware，3 个 `.verified.txt` 基线；公共 API 快照另由自实现 PublicApiSnapshot 承载） |
 | **集成测试** | Testcontainers.*（PG/MySQL/SQLite/RabbitMQ/Kafka） |
 
 > **禁用** `Microsoft.NET.Test.Sdk`（与 TUnit MTP 冲突，conventions §10.6 硬规则）
