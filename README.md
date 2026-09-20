@@ -912,7 +912,7 @@ MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Servi
 不支持 .NET 8/9/10（单目标 net11.0）。AOT 场景三处限制（源码 `[RequiresDynamicCode]` 诚实声明）：① Saga 的 ChildSaga 子流程分发（`MakeGenericMethod`/`MakeGenericType`，见 `Saga.cs`）与②动态事件路由同源；③ `ISpecification.Compile()` 表达式树编译在 Native AOT 下不受支持——AOT 场景请改用 `ToExpression()` 传给查询提供者。不含内置的 EventStore 快照机制——需要快照策略的项目需要自行实现。
 
 **生产环境有谁在用？**
-Pal.DDD 当前版本 v2.2.0（tag v2.2.0 发布；八十七轮质量系统评审-修复循环清偿后 CI 全绿）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 1379 项实测用例（16 项目：本机 1311 通过 + 54 环境依赖项由 CI Testcontainers 权威执行 + 14 设计内跳过——v2.2.0 实测口径）。欢迎在非生产环境中试用并反馈。
+Pal.DDD 当前版本 v3.0.0（tag v3.0.0 发布，SemVer Major：两处行为破坏性变更均为静默错误转 fail-fast，见 CHANGELOG `[3.0.0]` 段迁移指引）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 1379 项实测用例（16 项目：本机 1311 通过 + 54 环境依赖项由 CI Testcontainers 权威执行 + 14 设计内跳过——v2.2.0 实测口径）。欢迎在非生产环境中试用并反馈。
 
 ---
 
