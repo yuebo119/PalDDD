@@ -240,7 +240,7 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | **Inbox 幂等**（SQLite TOCTOU/PG ON CONFLICT） | ✅ | ✅ | — | InboxProcessorTests + InboxMessageTests（Transactions.Tests） |
 | **Outbox 原子租约**（FOR UPDATE SKIP LOCKED） | — | ✅ | — | Integration.Tests |
 | **CQRS Dispatcher Freeze** | ✅ | — | — | DispatcherTests |
-| **Pipeline 状态机**（零分配） | ✅ | — | — | AllocationContractTests |
+| **Pipeline 派发预算**（每请求 &lt;500B） | ✅ | — | — | CqrsTests.Dispatcher_QueryAsync_NoHandlerOverhead_BaselineAllocation |
 | **MessageCatalog 不可变** | ✅ | — | — | AotContractTests |
 | **MessageEvolutionPipeline** | ✅ | — | — | SerializationTests |
 | **Projection 断点续传** | ✅ | ⚠ | — | EventLogReplaySourceTests（Projections.EventLog.Tests） |
@@ -268,7 +268,7 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | 契约 | 不可改为 | 真源 |
 |------|---------|------|
 | `ValueTask` + `IsCompletedSuccessfully` | `Task`（同步完成零分配） | conventions §12.1 |
-| `PipelineStateMachine`（~40B 可重用） | 闭包链（N×72B） | conventions §12.1 |
+| `PipelineStateMachine`（每请求 ~40B，Dispatcher 为 Singleton 故不可跨请求重用） | 闭包链（N×72B） | conventions §12.1 |
 | `FrozenDictionary` | `Dictionary`/`ConcurrentDictionary` | conventions §1.7 |
 | `ref struct` 枚举器（DomainEventEnumerable） | `IEnumerable<T>` | conventions §12.1 |
 | 单链表事件存储 | `List<DomainEvent>` | conventions §12.1 |

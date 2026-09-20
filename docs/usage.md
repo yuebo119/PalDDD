@@ -221,6 +221,8 @@ services.AddPalMemoryPackSerialization(catalog =>
 
 > ⚠️ **事务前提（TX1，2026-09-20）**：Outbox 模式的原子性由「业务数据写入与消息行写入在**同一数据库事务**内提交」保证——这是**使用方职责**：调用方必须在业务 DbContext 事务/UnitOfWork 内写入 outbox 消息行（`AddMessage` + 同事务 `SaveChanges`），框架的后台发布器只负责事务提交后的可靠投递。若消息行与业务数据不同事务，将失去 exactly-once-write 保证（业务回滚但消息已入队 → 幽灵消息）。
 
+> ⚠️ **跨栈误配警示（2026-09-20 补）**：EF 业务上下文配 Dapper/PalORM 的 `IPalOutboxStore` 时，`AddMessage` 是**即时 INSERT**——无活动 ambient 事务即独立自动提交，与业务写入**不在同一事务**：业务回滚后 outbox 行仍在（孤儿消息）。这是跨栈混配的误配场景，不是默认路径（默认 EF + EF 流里 outbox 行进同一 `SaveChanges` 事务）。要么保持栈一致，要么确保 Dapper/PalORM store 与业务写入共享同一 `IUnitOfWork`/`DbTransaction`。
+
 ```csharp
 using PalDDD.Transactions;
 
@@ -350,6 +352,11 @@ await eventLog.AppendAsync(
 ```
 
 读取时，`ReadStreamAsync` 按 stream version 回放单流事件，`ReadAllAsync` 按 global position 回放全局事件。生产 store 必须把 expected version 检查实现为原子操作，避免并发写入丢失更新。
+
+> ⚠️ **两种消费路径的提交序约束（2026-09-20 补）**：
+> - **`ReadStreamAsync` 的 stream version 流内严格连续**，是检查点消费的安全路径。
+> - **`ReadAllAsync` 的 global position 分配序可与事务提交序倒挂**：事务 A 先分配到低位、事务 B 后分配到高位但先提交时，按全局位置推进检查点的消费方读到 B 的高位即推进，A 提交后其事件被永久跳过。EF 栈因分配器行锁使并发分配串行化而不可达；**PalORM/Dapper 栈的 global position 为 DB 自增（自增不加行锁），该窗口可达**（两栈已分别以 v29 P3 声明）。用全局位置做检查点时，要求各追加方提交延迟相近，或改用 `ReadStreamAsync`。
+> - **Dapper/PalORM 栈的批量追加在未传事务时，中途失败会留下前半批**（部分写入，`DapperEventLog` P2 定案声明）——批量追加必须包在调用方事务内；EF 栈内部事务自动回滚，不受此影响。
 
 生产环境可从 `PalDDD.EventLog.EFCore` 派生 `EventLogDbContext`，并通过 DI 将该上下文作为 `IEventLog` 使用：
 

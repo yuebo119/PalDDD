@@ -85,7 +85,11 @@ public sealed class OutboxOptions
     /// ⚠️ C1（perf-opt-sweep，2026-09-20）：<c>&gt;1</c> 时批内消息按分区交由
     /// per-worker scope（独立 store/DbContext 实例）并行「反序列化 → 发布 → 标记」。
     /// 前提：① broker 发布须线程安全（Kafka producer 天然支持；RabbitMQ 单 channel
-    /// 并发发布须验证 IChannel 7.x 语义）；② 消费方幂等（并行加速下乱序提交概率上升）。
+    /// 并发发布已核实——RabbitMQ.Client 7.x 的 publisher-confirms 由 channel 内部
+    /// <c>_confirmSemaphore</c> 仅护帧发送段、确认等待按发布序号键的 ConcurrentDictionary
+    /// 不串行，官方集成测试 <c>TestFloodPublishing</c> 以 8 个并发 Task 在同一共享 channel
+    /// 发布；注意 <c>MaxOutstandingConfirms</c> 仅在 <c>CreateAsync</c> 工厂路径生效，
+    /// 注入单 channel 的构造路径无该限流器）；② 消费方幂等（并行加速下乱序提交概率上升）。
     /// 租约/fencing 互斥不受影响——各 worker 的 Mark* 走各自 store 实例，fencing 守卫
     /// 逐消息独立。启动期经 <c>ValidateOnStart</c> 校验 ≥ 1。
     /// </para>
