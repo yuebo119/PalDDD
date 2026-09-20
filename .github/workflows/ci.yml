@@ -3,8 +3,24 @@ name: CI
 on:
   push:
     branches: [main, dev]
+    # 审计 2026-09-20 M2-3：tag 推送触发全量门禁。此前 tag 发布路径只跑 release.yml 的
+    # build+test+AOT+pack，不跑 secret-scan/format-verify/coverage/encoding-gate/
+    # doc-consistency/tech-debt/test-gate——发布验证强度低于日常 push。若 tag 从未经 CI
+    # 的 commit 打出（本地 git tag + push 完全可能），带缺陷的包会以"已发布"状态流出。
+    # 现 tag 触发与 push/PR 相同的完整门禁矩阵，release.yml 的 pack/push 因此建立在
+    # 已验证的 commit 上。
+    tags: ['v*']
   pull_request:
     branches: [main, dev]
+  # 审计 2026-09-20 O2：补 workflow_dispatch——CI 失败后此前必须推空提交才能重跑
+  workflow_dispatch:
+
+# 审计 2026-09-20 O2：补 concurrency 组。此前连续推送会并行跑满 4 个 job
+# （含 40 分钟 coverage + 20 分钟 aot-verify），runner 配额与反馈延迟都被放大；
+# 同组新推送取消旧的在途运行（release.yml 已有同款配置，此处对齐）。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   DOTNET_NOLOGO: true

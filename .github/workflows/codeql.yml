@@ -1,0 +1,59 @@
+name: CodeQL
+
+# 审计 2026-09-20 O2 补：此前无任何 SAST——vuln-scan 只跑
+# `dotnet list package --vulnerable`（已声明依赖的已知 CVE），不扫自身代码的
+# 注入/反序列化/路径遍历类问题。对一个公开仓库的框架库，这是供应链面的缺口。
+#
+# 语言集：csharp（actions 无自定义脚本，无需扫）。查询集用默认 security-and-quality
+# （含 CWE 类注入、不安全反序列化、资源泄漏）——项目零反射约束下反序列化面很窄，
+# 主要价值在 SQL 注入与异常处理类规则的历史回归。
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  schedule:
+    # 每周一 10:00（Asia/Shanghai ≈ 02:00 UTC）全量扫一次——捕获新规则对历史代码的命中
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: read
+      security-events: write  # 上传 SARIF 到 Security 标签页所必需
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: csharp
+          # 默认 security-and-quality 查询集；build-command 由 autobuild 处理
+          # （MSBuild 工程，.NET SDK 由 setup-dotnet 提供）
+          queries: security-and-quality
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '11.0.x'
+
+      - name: Build
+        run: dotnet build PalDDD.slnx --nologo -v q
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:csharp"
