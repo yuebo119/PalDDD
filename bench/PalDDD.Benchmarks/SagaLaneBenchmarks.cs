@@ -11,8 +11,9 @@
 //
 // 用法：dotnet run --project bench/PalDDD.Benchmarks -c Release -- --saga
 // ─────────────────────────────────────────────────────────────
+// ITM-810 同型勘正（2026-09-20 CI 首验）：IDE0005 判 PalDDD.Benchmarks 的 using 冗余
+//（本文件无 namespace 声明，类型在全局命名空间，该 using 自我引用无意义）
 using BenchmarkDotNet.Attributes;
-using PalDDD.Benchmarks;
 using PalDDD.Transactions;
 
 [MemoryDiagnoser]
