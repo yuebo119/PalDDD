@@ -28,7 +28,14 @@ public sealed class DynamicStep : SagaStep
     /// </summary>
     /// <param name="key">步骤 key</param>
     /// <param name="router">路由函数——根据当前状态返回下一步骤 key</param>
-    /// <param name="compensate">补偿动作（可选）</param>
+    /// <param name="compensate">
+    /// 补偿动作（可选）。⚠️ <b>调用时机契约</b>：本步骤的 <paramref name="compensate"/> 会在两种情况下被调用——
+    /// ① 路由目标步骤执行<b>成功</b>后（本步骤键已记入 <see cref="SagaState.ExecutedStepKeys"/>，见双键轨迹）；
+    /// ② 路由目标步骤<b>重试耗尽失败</b>时（本步骤键同样已在轨迹中，与目标步骤的补偿一并执行，目标步骤优先）。
+    /// 因 <see cref="DynamicStep"/> 自身不执行业务动作（<c>execute</c> 为 null），此补偿的语义是回滚
+    /// <paramref name="router"/> 路由决策产生的副作用（如状态标记、预占资源），而非回滚一次业务执行。
+    /// 表征测试 <c>DynamicLaneTests.Exhausted_CompensatesTarget_ObserverSeesDynamicKey</c> 锁定该形态。
+    /// </param>
     public DynamicStep(
         string key,
         Func<SagaState, string> router,

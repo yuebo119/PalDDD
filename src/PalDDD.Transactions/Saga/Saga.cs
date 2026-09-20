@@ -824,6 +824,15 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // stepKey），而 SagaCompensation 的契约是「只补偿实际已执行的步骤，避免补偿未执行步骤」
         //（SagaCompensation.cs:29-30、:85）→ 拒绝路径会让补偿补偿一个从未执行的步骤。
         // 移到校验之后：拒绝路径不再污染轨迹；正常路径记录时机不变（仍在执行循环之前）。
+        //
+        // ⚠️ 失败路径的轨迹语义（2026-09-20 审计 A2 回应，非缺陷）：本键在**执行前**记录，故路由目标
+        // 重试耗尽失败时 dynKey 仍在 ExecutedStepKeys 中，CompensateExecutedStepsAsync 会连带调用
+        // DynamicStep 自身的 compensate（目标步骤补偿优先，见 :466 的 failedStep 优先回滚）。这是
+        // 刻意设计而非疏漏：DynamicStep 不执行业务动作，其 compensate 的语义是回滚 router 路由决策
+        // 的副作用；P3-SRC-603 双键轨迹的完整形态由表征测试
+        // DynamicLaneTests.Exhausted_CompensatesTarget_ObserverSeesDynamicKey 锁定（断言
+        // CompensationLog 含 target-compensated 与 dyn-compensated 两项）。若要改为"失败路径不记
+        // dynKey"，须先出决策文档回应本声明与该表征测试，随 v3.0 契约窗口一并处理。
         RecordExecutedStep(current, current, stepKey, startedAt);
 
         return await RunRetryLaneAsync(current, stepKey, observer,
