@@ -184,8 +184,13 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
                 // 后按连接丢失同款重连路径处理
                 // v17 F-B-2 补：消息措辞明确"非停机请求的 OCE"（内部超时转换等），与上方
                 // stoppingToken 分支（真关停）区分，避免日志误导排障方向
-                _logger.Warning($"PostgreSQL NOTIFY wait cancelled without stop request (internal timeout/conversion): {oce.Message}, reconnecting...");
-                await Task.Delay(TimeSpan.FromSeconds(1), CancellationToken.None).ConfigureAwait(false);
+                // R6（第五十四轮片3，2026-09-20）：纳入退避计数——原固定 1s 且计数不增，
+                // 内部超时反复时 1 次/秒重连风暴
+                _reconnectAttempts++;
+                _logger.Warning($"PostgreSQL NOTIFY wait cancelled without stop request (internal timeout/conversion): {oce.Message}, reconnecting (attempt {_reconnectAttempts})...");
+                var oceDelay = (int)Math.Min(30_000, 1_000 * Math.Pow(2, Math.Min(_reconnectAttempts, 30)));
+                try { await Task.Delay(TimeSpan.FromMilliseconds(oceDelay), CancellationToken.None).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -262,9 +267,11 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
                     cmd.CommandText = $"NOTIFY \"{_channelName}\"";
                     await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
                 }
-                catch
+                catch (Exception selfWakeEx)
                 {
-                    // 自唤醒失败不影响主流程；外部 NOTIFY 或下次插入仍会触发。
+                    // R4（第五十四轮片3，2026-09-20）：自唤醒失败补 Warning——原裸 catch 零可见。
+                    // 不影响主流程：外部 NOTIFY 或下次插入仍会触发
+                    _logger.Warning($"PostgreSQL outbox self-wake NOTIFY failed (external NOTIFY or next insert will still trigger): {selfWakeEx.Message}");
                 }
             }
 

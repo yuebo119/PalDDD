@@ -88,6 +88,7 @@ public sealed class OutboxBatchProcessor
         var processed = 0;
         var dead = 0;
         var retried = 0;
+        var persistFailed = 0;
 
         try
         {
@@ -102,7 +103,9 @@ public sealed class OutboxBatchProcessor
                     {
                         _store.MarkDead(msg, Core.FailureReason.Normalize($"Type '{msg.Type}' not registered in MessageCatalog"), now);
                         checked { dead++; }
-                        await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false);
+                        PalMetrics.OutboxDead.Add(1); // R1：死信独立计数（不再混入 failed）
+                        if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
+                            checked { persistFailed++; } // R2：未落库，dead 计数含漂移——独立可见
                         continue;
                     }
 
@@ -111,7 +114,9 @@ public sealed class OutboxBatchProcessor
                     {
                         _store.MarkDead(msg, Core.FailureReason.Normalize("Deserialization returned null"), now);
                         checked { dead++; }
-                        await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false);
+                        PalMetrics.OutboxDead.Add(1);
+                        if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
+                            checked { persistFailed++; }
                         continue;
                     }
 
@@ -123,7 +128,12 @@ public sealed class OutboxBatchProcessor
                     await _broker.PublishAsync(@event, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
                     _store.MarkProcessed(msg, now);
                     checked { processed++; }
-                    await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false);
+                    // R2：持久化失败时从 processed 退回并计入 persistFailed——指标与 DB 真相一致
+                    if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
+                    {
+                        checked { processed--; persistFailed++; }
+                        PalMetrics.OutboxPersistFailed.Add(1);
+                    }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -168,6 +178,7 @@ public sealed class OutboxBatchProcessor
                             _logger.Warning($"Outbox: MarkDead for {msg.Id} failed: {markEx.Message}");
                         }
                         checked { dead++; }
+                        PalMetrics.OutboxDead.Add(1); // R1：死信独立计数
                     }
                     else
                     {
@@ -185,7 +196,8 @@ public sealed class OutboxBatchProcessor
                     // v35 P3（EA2）：日志用进入失败路径时的快照 +1（本次为第 N 次失败）——
                     // 原读 msg.RetryCount + 1 在 InMemory 栈 ReleaseForRetry 就地递增后偏大 1
                     _logger.Warning($"Outbox: message {msg.Id} processing failed at retry {retryAtFailure + 1}: {ex.Message}");
-                    await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false);
+                    if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
+                        checked { persistFailed++; } // R2：Mark 已尝试未落库，独立可见
                 }
             }
         }
@@ -202,23 +214,28 @@ public sealed class OutboxBatchProcessor
             activity?.SetTag("pal.outbox.processed", processed);
             activity?.SetTag("pal.outbox.dead", dead);
             activity?.SetTag("pal.outbox.retried", retried);
+            activity?.SetTag("pal.outbox.persist_failed", persistFailed);
             PalMetrics.OutboxProcessed.Add(processed);
             PalMetrics.OutboxFailed.Add(dead + retried);
         }
     }
 
-    /// <summary>逐条持久化 — 每条消息处理后立即 SaveChanges，避免批次回滚</summary>
-    private async ValueTask PersistSingleAsync(PalUlid messageId, CancellationToken ct)
+    /// <summary>逐条持久化 — 每条消息处理后立即 SaveChanges，避免批次回滚。
+    /// R2 修正（2026-09-20）：失败时调用方以 persistFailed 计数（不再混入 processed——
+    /// 指标与 DB 真相一致：processed 仅含落库成功的条目）。</summary>
+    private async ValueTask<bool> PersistSingleAsync(PalUlid messageId, CancellationToken ct)
     {
         try
         {
             await _store.SaveChangesAsync(ct).ConfigureAwait(false);
+            return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // 单条持久化失败 — 下轮轮询会重试
             // 最坏情况：消息被多处理一次（幂等消费需在 Handler 中保证）
             _logger.Warning($"Outbox: state persistence for {messageId} failed: {ex.Message}. Next poll will retry using last persisted state.");
+            return false;
         }
     }
 }
