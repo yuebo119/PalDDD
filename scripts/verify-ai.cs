@@ -62,7 +62,7 @@ Environment.CurrentDirectory = root;
 
 var lines = new List<string>
 {
-    "═══════ .ai 系统一致性校验（Pal.DDD · V1-V24）═══════",
+    "═══════ .ai 系统一致性校验（Pal.DDD · V1-V25）═══════",
     $"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}",
     "",
 };
@@ -527,6 +527,36 @@ var failed = 0;
     }
 }
 
+// ─── V25 .ai 文档命令形态与死引用（2026-09-21 实践驱动新增）───
+// **为什么有这个门禁（实践实证，非推测）**：审计修复 22 项时，F-07/F-09 手工校准了
+// engine/fix-protocol/charter/README 的命令形态；修完当场再 grep，**又抓到我漏看的
+// 6 处同类失实**（test/prompt.md:266 `bash scripts/test-gate.cs`、lessons.md:40 与
+// README.md:7/109-112 的已删 `.ai/scripts/*.sh`）。结论：该类失败（MIG-012 迁移后
+// 遗留的旧命令形态）**手工修复不收敛**——每次只修"知道的那几处"，新阅读处必再发现。
+// 必须机械固化，与 V19 路径校验（传感器台账）构成"指针层"双闸。
+// 判定两类：
+//   ① 命令形态错：`bash scripts/X.cs` / `bash .ai/scripts/X.cs`——bash 不能执行 C#
+//      file-based app（Gates 真身自 MIG-012 起是 .cs，须 dotnet run）；
+//   ② 死引用：文档引用 `.ai/scripts/X.sh` 或 `scripts/X.sh` 而该文件不存在。
+// 排除：history/ 归档（历史档案如实保留旧形态）；含历史标记的行（勘正/原写/已删/
+// 已退役/旧形态/历史版本——F-NN 勘正注有意引用旧形态以说明改了什么）。
+{
+    var v25Bad = CheckAiDocCommandForms(root);
+    if (v25Bad.Count == 0)
+    {
+        var aiMdCount = Directory.Exists(Path.Combine(root, ".ai"))
+            ? Directory.GetFiles(Path.Combine(root, ".ai"), "*.md", SearchOption.AllDirectories)
+                .Count(f => !f.Contains($"{Path.DirectorySeparatorChar}history{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            : 0;
+        passed++; lines.Add($"PASS V25: .ai 文档命令形态与引用完好（{aiMdCount} 个文档，无 bash-.cs 误用、无死引用）");
+    }
+    else
+    {
+        var shown = v25Bad.Count > 15 ? string.Join("；", v25Bad.Take(15)) + $"；…等 {v25Bad.Count} 处" : string.Join("；", v25Bad);
+        failed++; lines.Add($"FAIL V25: .ai 文档命令形态/死引用 {v25Bad.Count} 处（{shown}）——改为 dotnet run 或删死引用");
+    }
+}
+
 lines.Add("");
 lines.Add($"通过：{passed}  失败：{failed}  总计：{passed + failed}");
 lines.Add("═══════ 校验完成 ═══════");
@@ -801,6 +831,67 @@ static string CheckLedgerSensorPaths(IEnumerable<string> lines, string repoRoot)
     return bad.ToString();
 }
 
+// V25 核心（2026-09-21 实践驱动）：扫描 .ai 下非 history 的 .md，检出两类指针失实。
+// 提取为纯函数供主流程与 --selftest 共用（selftest 用临时目录注入坏样本）。
+//   ① 命令形态错：`bash scripts/X.cs` / `bash .ai/scripts/X.cs`（bash 不能跑 .cs）；
+//   ② 死引用：`.ai/scripts/X.sh` 或 `scripts/X.sh` 指向不存在的文件。
+// 排除：history/ 归档；含历史标记的行（勘正/原写/已删/退役/旧形态/历史版本/反例 等
+// ——F-NN 勘正注与 KFP 反例记录有意引用旧形态以说明当时发生了什么）。
+static List<string> CheckAiDocCommandForms(string repoRoot)
+{
+    var bad = new List<string>();
+    var aiDir = Path.Combine(repoRoot, ".ai");
+    if (!Directory.Exists(aiDir)) return bad;
+
+    var aiMd = Directory.GetFiles(aiDir, "*.md", SearchOption.AllDirectories)
+        .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}history{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+        .ToList();
+    // 死引用判定的真源：两个 scripts 目录的现存文件名集
+    var aiScripts = Directory.Exists(Path.Combine(aiDir, "scripts"))
+        ? Directory.GetFiles(Path.Combine(aiDir, "scripts")).Select(Path.GetFileName).ToHashSet(StringComparer.Ordinal)
+        : new HashSet<string?>();
+    var rootScripts = Directory.Exists(Path.Combine(repoRoot, "scripts"))
+        ? Directory.GetFiles(Path.Combine(repoRoot, "scripts")).Select(Path.GetFileName).ToHashSet(StringComparer.Ordinal)
+        : new HashSet<string?>();
+
+    foreach (var file in aiMd)
+    {
+        var rel = Path.GetRelativePath(repoRoot, file).Replace('\\', '/');
+        var lineno = 0;
+        foreach (var raw in File.ReadAllLines(file, Encoding.UTF8))
+        {
+            lineno++;
+            var line = raw;
+            if (line.Contains("勘正", StringComparison.Ordinal)
+                || line.Contains("原写", StringComparison.Ordinal)
+                || line.Contains("原引用", StringComparison.Ordinal)
+                || line.Contains("已删", StringComparison.Ordinal)
+                || line.Contains("已退役", StringComparison.Ordinal)
+                || line.Contains("旧形态", StringComparison.Ordinal)
+                || line.Contains("历史版本", StringComparison.Ordinal)
+                || line.Contains("退役", StringComparison.Ordinal)
+                || line.Contains("反例", StringComparison.Ordinal)
+                || Regex.IsMatch(line, @"原.{0,6}(bash|命令|引用)"))
+                continue;
+
+            // ① bash 跑 .cs
+            if (Regex.IsMatch(line, @"bash\s+(?:\.ai/)?scripts/[A-Za-z0-9_-]+\.cs"))
+                bad.Add($"{rel}:{lineno} bash 执行 .cs（Gates 是 C# file-based app，须 dotnet run）");
+
+            // ② .ai/scripts/X.sh 死引用
+            foreach (Match m in Regex.Matches(line, @"\.ai/scripts/([A-Za-z0-9_-]+\.sh)"))
+                if (!aiScripts.Contains(m.Groups[1].Value))
+                    bad.Add($"{rel}:{lineno} 引用已删脚本 .ai/scripts/{m.Groups[1].Value}");
+
+            // ②' 根 scripts/X.sh 死引用
+            foreach (Match m in Regex.Matches(line, @"(?<!\.ai/)\bscripts/([A-Za-z0-9_-]+\.sh)"))
+                if (!rootScripts.Contains(m.Groups[1].Value) && !aiScripts.Contains(m.Groups[1].Value))
+                    bad.Add($"{rel}:{lineno} 引用不存在脚本 scripts/{m.Groups[1].Value}");
+        }
+    }
+    return bad;
+}
+
 // 单个路径 token 的存在性判定（含 `…` glob 与裸文件名回退）
 static bool SensorPathExists(string token, string repoRoot)
 {
@@ -990,6 +1081,42 @@ static int RunSelftest()
     if (pathClassName.Length == 0) Console.WriteLine("PASS ST-V19j 无扩展名类名不误判");
     else failures.Add($"ST-V19j: {pathClassName}");
 
+    // ── V25 .ai 文档命令形态与死引用（2026-09-21 实践驱动）──
+    // 实践实证：F-07/F-09 手工校准命令形态后当场再 grep 又抓到 6 处同类，机械化后
+    // 一次抓 32 处——手工修复不收敛，必须门禁固化。红测覆盖三类判定 + 两类排除。
+    var v25Dir = Path.Combine(Path.GetTempPath(), "verify-ai-v25-" + Guid.NewGuid().ToString("N")[..8]);
+    try
+    {
+        Directory.CreateDirectory(Path.Combine(v25Dir, ".ai", "scripts"));
+        Directory.CreateDirectory(Path.Combine(v25Dir, "scripts"));
+        // 现存脚本（真源）：.ai/scripts 两个 bash + 根 scripts 一个 .cs
+        File.WriteAllText(Path.Combine(v25Dir, ".ai", "scripts", "install-ai-system.sh"), "#!/bin/bash\n");
+        File.WriteAllText(Path.Combine(v25Dir, ".ai", "scripts", "template-gate.sh"), "#!/bin/bash\n");
+        File.WriteAllText(Path.Combine(v25Dir, "scripts", "verify-ai.cs"), "// gate\n");
+
+        var v25Doc = Path.Combine(v25Dir, ".ai", "probe.md");
+        File.WriteAllLines(v25Doc, V25Samples.Bad);
+        var v25Bad = CheckAiDocCommandForms(v25Dir);
+        if (v25Bad.Count == 3 && v25Bad.Any(b => b.Contains("bash 执行 .cs"))
+            && v25Bad.Any(b => b.Contains("gate-check.sh"))
+            && v25Bad.Any(b => b.Contains("verify-conventions.sh")))
+            Console.WriteLine("PASS ST-V25a 三类失实检出（bash-.cs / 已删 .ai .sh / 不存在根 .sh）");
+        else failures.Add($"ST-V25a: 期望 3 处，实得 {v25Bad.Count}（{string.Join(" | ", v25Bad)}）");
+
+        // 负向：只有正常形态与历史标记时零检出
+        File.WriteAllLines(v25Doc, V25Samples.Clean);
+        var v25Clean = CheckAiDocCommandForms(v25Dir);
+        if (v25Clean.Count == 0) Console.WriteLine("PASS ST-V25b 正常形态与历史标记行零误判");
+        else failures.Add($"ST-V25b: {string.Join(" | ", v25Clean)}");
+    }
+    finally
+    {
+        // 清理失败不掩盖探针结论（临时目录，失败无副作用）
+        try { if (Directory.Exists(v25Dir)) Directory.Delete(v25Dir, recursive: true); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
     // ── V21 老化 30 天 ──
     string[] fresh21Lines = ["- [ ] P3-1 新条目 2026-09-01"];
     string[] old21Lines = ["- [ ] P3-2 陈旧条目 2026-07-01"];
@@ -1062,3 +1189,26 @@ static int RunSelftest()
     return failures.Count == 0 ? 0 : 1;
 }
   
+
+// V25 selftest 样本（类型声明须位于顶层语句之后——top-level program 规则）
+internal static class V25Samples
+{
+    // 坏样本：三类失实各一 + 历史标记两行 + 正常行一
+    internal static readonly string[] Bad =
+    [
+        "用法：bash scripts/verify-ai.cs",                 // ① bash 跑 .cs → 抓
+        "见 `.ai/scripts/gate-check.sh` 说明",             // ② 已删 .sh → 抓
+        "运行 `scripts/verify-conventions.sh`",            // ②' 根 .sh 不存在 → 抓
+        "勘正：原写 `bash scripts/gate.cs`（已改）",        // 历史标记 → 放行
+        "反例：当时 `scripts/publish-main.sh` 强推 main",   // 反例记录 → 放行
+        "正确形态：dotnet run scripts/verify-ai.cs",        // 正常行 → 放行
+    ];
+
+    // 干净样本：正常形态 + 历史标记（应零检出）
+    internal static readonly string[] Clean =
+    [
+        "dotnet run scripts/verify-ai.cs",
+        "勘正：原写 bash scripts/gate.cs",
+        "反例：当时 .ai/scripts/gate-check.sh 强推",
+    ];
+}
