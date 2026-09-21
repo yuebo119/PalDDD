@@ -61,6 +61,8 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 4. 向 `scripts/gate-audit.cs` 追加隔离式探针（注入坏输入 → 断言非零退出），并登记 `probedGates`。
 5. 接入 `.githooks/pre-commit`（带触发条件，避免无谓耗时）与/或 `ci.yml`。
 6. 同提交更新 `docs/conventions.md` 或本文件的门禁表。
+7. **对真实仓库跑一次变异**（2026-09-21 实践新增，第 3 步只验自测、本步验门禁）：把仓库里某个真实数据改坏 → 跑门禁 → 确认 FAIL 且报错精确 → 还原。
+   实证：V25 的 selftest 全过，但对真实 `.ai/` 首跑即抓 **32 处**失实——selftest 用注入样本，真实数据的形态复杂度（一行多引用、跨文件计数、历史标记混排）只有真跑才暴露。**两步不可互相替代**。
 
 ---
 
