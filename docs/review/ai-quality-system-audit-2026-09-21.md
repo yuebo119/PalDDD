@@ -129,55 +129,68 @@
 
 | ID | 任务 | 位置 | 验收标准 | 工作量 | 风险 | 进度 |
 |---|---|---|---|---|---|---|
-| F-01 | 修安装器死链：前置检查改挂现行文件（`lessons.md` + 根 `scripts/verify-ai.cs`）或直接删该检查；同步 L60/L101-106/L129-138 文案与复制清单 | `.ai/scripts/install-ai-system.sh:45,60,101-106,129-138` | 干净目标目录按用法 A 跑通，退出码 0 且落盘预期文件集 | S | 低 | 待修复 |
-| F-02 | 传感器台账路径校准：L12-17 五个传感器改指根 `scripts/*.cs`，`:35` 非阻断扫描器整节同步；删首行 `PROBE-NONEXISTENT` 残留 | `.ai/gate/sensor-ledger.md:12-17,35` | 台账每行"传感器"列指向的文件真实存在（可机械校验） | S | 低 | 待修复 |
-| F-03 | 给 V19 或新 V 项加**传感器路径存在性校验**；同步 `gate/prompt.md:35,36,44,114,117,120,127` 的已删脚本与 `bash scripts/gate.cs` 错误命令形态 | `scripts/verify-ai.cs`（V19）、`.ai/gate/prompt.md` | 变异实验：把台账某行改成不存在路径 → verify-ai 必红；基线当前 6 处失实从红起步 | M | 中（V19 逻辑变更须同步 selftest） | 待修复 |
+| F-01 | 修安装器死链：前置检查改挂现行文件（`lessons.md` + 根 `scripts/verify-ai.cs`）或直接删该检查；同步 L60/L101-106/L129-138 文案与复制清单 | `.ai/scripts/install-ai-system.sh:45,60,101-106,129-138` | 干净目标目录按用法 A 跑通，退出码 0 且落盘预期文件集 | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-02 | 传感器台账路径校准：L12-17 五个传感器改指根 `scripts/*.cs`，`:35` 非阻断扫描器整节同步；删首行 `PROBE-NONEXISTENT` 残留 | `.ai/gate/sensor-ledger.md:12-17,35` | 台账每行"传感器"列指向的文件真实存在（可机械校验） | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-03 | 给 V19 或新 V 项加**传感器路径存在性校验**；同步 `gate/prompt.md:35,36,44,114,117,120,127` 的已删脚本与 `bash scripts/gate.cs` 错误命令形态 | `scripts/verify-ai.cs`（V19）、`.ai/gate/prompt.md` | 变异实验：把台账某行改成不存在路径 → verify-ai 必红；基线当前 6 处失实从红起步 | M | 中（V19 逻辑变更须同步 selftest） | **已完成**（ab70b12 主仓 + .ai 子仓） |
 
 ### P1 · 数据与指针失实（6 项）
 
 | ID | 任务 | 位置 | 验收标准 | 工作量 | 风险 | 进度 |
 |---|---|---|---|---|---|---|
-| F-04 | CI `.ai` 分支处置：要么把 6 个门禁真正接入 CI（`.ai` 随分发或改判"本地专用"从矩阵摘除），要么修 `CollectWiredNames` 排除注释行、要求出现于可执行位置 | `.github/workflows/ci.yml:152`、`scripts/gate-audit.cs:448-476` | 矩阵 WIRED 列与实际触发面一致；gate-audit 自身的假阳性接线消失 | M | 中 | 待修复 |
-| F-05 | PD 计数收敛：删全部 prose 计数只留门禁输出，或把 V7 从"下限"改为"prose 声称 == 实测"；统一 KFP 头/README/engine/charter/v51/metrics/sensor-ledger 七处口径 | `scripts/verify-ai.cs:176` + `.ai/` 内 11 处 | 任意一处 prose 计数与实测不符 → verify-ai 必红 | M | 低 | 待修复 |
-| F-06 | 同步 test/prompt.md 覆盖率阈值到 0.70/72.98%，V14 改校验"门禁阈值"行而非任意百分比 | `.ai/test/prompt.md:125-126`、`scripts/verify-ai.cs:261` | prompt 阈值与基线文档一致；V14 输出现行阈值 | S | 低 | 待修复 |
-| F-07 | 协议命令面校准：`bash scripts/*.cs` → `dotnet run`；删/改已迁移已删脚本引用；同步 charter 四件套登记 | `.ai/review/engine.md:13,16,135,347,358`、`fix-protocol.md:21,35,38,75`、`review-charter-v2.md:188-191` | 协议中每条命令都可执行（可机械校验命令形态） | M | 低 | 待修复 |
-| F-08 | 三条过期"事实"声明复审并改标注：P1 曲线近五轮 ≤1、姊妹类唯一持续 P1 产地、覆盖率 65%/67.9% | `docs/design/unified-quality-system.md:37`、`.ai/review/sibling-map.md:4`、`.ai/test/prompt.md:125` | 三条声明或改标注、或补复审机制（如"每 5 轮重验一次"） | S | 低 | 待修复 |
-| F-09 | README 脚本清单与三处计数勘正：`.ai/scripts/` 20 个 → 2 个；ADR 22 → 24；lessons I-XVI → I-XVIII；版本号 v1.0 → 实际 | `.ai/README.md:12,24,46,51,66,98,127,140,164,170,173`、`lessons.md:6` | README 文件地图与实际目录逐一吻合 | S | 低 | 待修复 |
+| F-04 | CI `.ai` 分支处置：要么把 6 个门禁真正接入 CI（`.ai` 随分发或改判"本地专用"从矩阵摘除），要么修 `CollectWiredNames` 排除注释行、要求出现于可执行位置 | `.github/workflows/ci.yml:152`、`scripts/gate-audit.cs:448-476` | 矩阵 WIRED 列与实际触发面一致；gate-audit 自身的假阳性接线消失 | M | 中 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-05 | PD 计数收敛：删全部 prose 计数只留门禁输出，或把 V7 从"下限"改为"prose 声称 == 实测"；统一 KFP 头/README/engine/charter/v51/metrics/sensor-ledger 七处口径 | `scripts/verify-ai.cs:176` + `.ai/` 内 11 处 | 任意一处 prose 计数与实测不符 → verify-ai 必红 | M | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-06 | 同步 test/prompt.md 覆盖率阈值到 0.70/72.98%，V14 改校验"门禁阈值"行而非任意百分比 | `.ai/test/prompt.md:125-126`、`scripts/verify-ai.cs:261` | prompt 阈值与基线文档一致；V14 输出现行阈值 | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-07 | 协议命令面校准：`bash scripts/*.cs` → `dotnet run`；删/改已迁移已删脚本引用；同步 charter 四件套登记 | `.ai/review/engine.md:13,16,135,347,358`、`fix-protocol.md:21,35,38,75`、`review-charter-v2.md:188-191` | 协议中每条命令都可执行（可机械校验命令形态） | M | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-08 | 三条过期"事实"声明复审并改标注：P1 曲线近五轮 ≤1、姊妹类唯一持续 P1 产地、覆盖率 65%/67.9% | `docs/design/unified-quality-system.md:37`、`.ai/review/sibling-map.md:4`、`.ai/test/prompt.md:125` | 三条声明或改标注、或补复审机制（如"每 5 轮重验一次"） | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-09 | README 脚本清单与三处计数勘正：`.ai/scripts/` 20 个 → 2 个；ADR 22 → 24；lessons I-XVI → I-XVIII；版本号 v1.0 → 实际 | `.ai/README.md:12,24,46,51,66,98,127,140,164,170,173`、`lessons.md:6` | README 文件地图与实际目录逐一吻合 | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
 
 ### P2 · 协议与覆盖缺口（8 项）
 
 | ID | 任务 | 位置 | 验收标准 | 工作量 | 风险 | 进度 |
 |---|---|---|---|---|---|---|
-| F-10 | 章程/修复规范接入入口：prompt.md 或 engine.md 增加对二者的引用，使其不再是孤儿文档 | `.ai/review/prompt.md`、`engine.md` | 按 prompt.md 执行的代理能 reach 轮次分级与修复完备性规范 | S | 低 | 待修复 |
-| F-11 | 收束判据统一：三套数值（gate 22/22 / 连续 5 轮零 / 连续 3 轮 ≤5）收敛为一个，其余标为历史版本 | `.ai/review/engine.md:33-35`、`review-charter-v2.md:222-225`、`known-false-positives.md:514` | "何时可以收束"只有一个答案 | S | 低 | 待修复 |
-| F-12 | 修复门两问埋点恢复：metrics 台账补 v76-v91 共 16 轮记录，或明确废止该台账并删 engine.md:38 要求 | `.ai/review/metrics.md:167-173,440-455`、`engine.md:38` | 台账有数据或要求已删（不留空头声明） | S | 低 | 待修复 |
-| F-13 | 轮次号↔报告文件存在性纳入机械校验（新 V 项或扩 V17）：v12/v14/v15/v17/v24 及 08-27..09-09 约 50 轮补报告或销号 | `scripts/verify-ai.cs`、`.ai/review/history/reports/` | metrics 每个轮次号都有对应报告文件（或显式豁免） | M | 中 | 待修复 |
-| F-14 | perspective-stats 处置：要么开始采集（评审报告收口时按流计数），要么从 engine.md:301 的指标清单摘除 | `.ai/review/perspective-stats.md:20-28`、`engine.md:301` | 不留"结构上不可采集却被指为数据源"的指标 | S | 低 | 待修复 |
-| F-15 | sibling-map 恢复维护：补 IIdempotencyStore 第 7 实现、ICompressor/IMessageSerializer 轴 B 条目；v88-v91 姊妹类复发按规则入表 | `.ai/review/sibling-map.md:15-20,28-36,84-95` | 实跑 `sibling-map.cs` 输出与快照一致；增长规则有最新留痕 | S | 低 | 待修复 |
-| F-16 | P4 级正式化或禁用：在 engine.md/prompt.md 的优先级体系补 P4 定义与处置规则，或把报告层 P4 改写为 P3 | `.ai/review/engine.md:261-267`、`prompt.md:192-198`、`review-2026-08-22-full-carpet-v3..v7.md:12`、`v16.md:33` | 优先级体系与报告层用词一致 | S | 低 | 待修复 |
-| F-17 | 勾销状态单轨化：修 action-items-2026-08-17 的 18 个 `### [ ]` 头与回填节矛盾；明确 p3-backlog 与 ITM-794~803 双池的状态真源 | `.ai/review/history/action-items/action-items-2026-08-17.md`、`action-items-p3-backlog.md` | 机械读数与事实一致；V21 覆盖现行池 | S | 低 | 待修复 |
+| F-10 | 章程/修复规范接入入口：prompt.md 或 engine.md 增加对二者的引用，使其不再是孤儿文档 | `.ai/review/prompt.md`、`engine.md` | 按 prompt.md 执行的代理能 reach 轮次分级与修复完备性规范 | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-11 | 收束判据统一：三套数值（gate 22/22 / 连续 5 轮零 / 连续 3 轮 ≤5）收敛为一个，其余标为历史版本 | `.ai/review/engine.md:33-35`、`review-charter-v2.md:222-225`、`known-false-positives.md:514` | "何时可以收束"只有一个答案 | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-12 | 修复门两问埋点恢复：metrics 台账补 v76-v91 共 16 轮记录，或明确废止该台账并删 engine.md:38 要求 | `.ai/review/metrics.md:167-173,440-455`、`engine.md:38` | 台账有数据或要求已删（不留空头声明） | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-13 | 轮次号↔报告文件存在性纳入机械校验（新 V 项或扩 V17）：v12/v14/v15/v17/v24 及 08-27..09-09 约 50 轮补报告或销号 | `scripts/verify-ai.cs`、`.ai/review/history/reports/` | metrics 每个轮次号都有对应报告文件（或显式豁免） | M | 中 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-14 | perspective-stats 处置：要么开始采集（评审报告收口时按流计数），要么从 engine.md:301 的指标清单摘除 | `.ai/review/perspective-stats.md:20-28`、`engine.md:301` | 不留"结构上不可采集却被指为数据源"的指标 | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-15 | sibling-map 恢复维护：补 IIdempotencyStore 第 7 实现、ICompressor/IMessageSerializer 轴 B 条目；v88-v91 姊妹类复发按规则入表 | `.ai/review/sibling-map.md:15-20,28-36,84-95` | 实跑 `sibling-map.cs` 输出与快照一致；增长规则有最新留痕 | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-16 | P4 级正式化或禁用：在 engine.md/prompt.md 的优先级体系补 P4 定义与处置规则，或把报告层 P4 改写为 P3 | `.ai/review/engine.md:261-267`、`prompt.md:192-198`、`review-2026-08-22-full-carpet-v3..v7.md:12`、`v16.md:33` | 优先级体系与报告层用词一致 | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-17 | 勾销状态单轨化：修 action-items-2026-08-17 的 18 个 `### [ ]` 头与回填节矛盾；明确 p3-backlog 与 ITM-794~803 双池的状态真源 | `.ai/review/history/action-items/action-items-2026-08-17.md`、`action-items-p3-backlog.md` | 机械读数与事实一致；V21 覆盖现行池 | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
 
 ### P3 · 卫生（5 项）
 
 | ID | 任务 | 位置 | 验收标准 | 工作量 | 风险 | 进度 |
 |---|---|---|---|---|---|---|
-| F-18 | 删 2 对字节级重复归档报告 | `.ai/review/history/reports/audit-2026-08-16{,-4e5437f}.md`、`audit-2026-08-16-r2{,-d502b75}.md` | 83 → 81 份，无 md5 重复 | S | 低 | 待修复 |
-| F-19 | v51 五处计数勘正（gate 3 项/verify-ai 23 项、MaxWeak 200、清偿总数统一、测试数 1358） | `.ai/review/lessons-learned-v51.md:3,126,180,214,237-241,308,311` | 与实测一致 | S | 低 | 待修复 |
-| F-20 | KFP 数字漂移勘正（PD10/PD11 的"4 处" → 7 处）；tech-debt #14-#20 映射表改指 TechDebtGuardTests | `.ai/review/known-false-positives.md:72-92` 及 PD10/PD11 条目 | 与实测一致 | S | 低 | 待修复 |
-| F-21 | 删或重做 system-template 旧版分叉副本与 python3 硬依赖模板 | `.ai/system-template/install-ai-system.sh`、`tech-debt-scan.sh.template:2,16`、`INSTALL.md:29,48-50,56,61-63`、`AGENTS.md.template:11,30` | 模板与现行安装器一致；无 python3 依赖 | M | 低 | 待修复 |
-| F-22 | lessons.md 章题日期与版本号勘正（XIII 章题 2026-07-30 vs 内容至 08-20；版本 v1.0 vs v2.3） | `.ai/lessons.md:6,461` | 版本号与章题日期反映实际内容 | S | 低 | 待修复 |
+| F-18 | 删 2 对字节级重复归档报告 | `.ai/review/history/reports/audit-2026-08-16{,-4e5437f}.md`、`audit-2026-08-16-r2{,-d502b75}.md` | 83 → 81 份，无 md5 重复 | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-19 | v51 五处计数勘正（gate 3 项/verify-ai 23 项、MaxWeak 200、清偿总数统一、测试数 1358） | `.ai/review/lessons-learned-v51.md:3,126,180,214,237-241,308,311` | 与实测一致 | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-20 | KFP 数字漂移勘正（PD10/PD11 的"4 处" → 7 处）；tech-debt #14-#20 映射表改指 TechDebtGuardTests | `.ai/review/known-false-positives.md:72-92` 及 PD10/PD11 条目 | 与实测一致 | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-21 | 删或重做 system-template 旧版分叉副本与 python3 硬依赖模板 | `.ai/system-template/install-ai-system.sh`、`tech-debt-scan.sh.template:2,16`、`INSTALL.md:29,48-50,56,61-63`、`AGENTS.md.template:11,30` | 模板与现行安装器一致；无 python3 依赖 | M | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
+| F-22 | lessons.md 章题日期与版本号勘正（XIII 章题 2026-07-30 vs 内容至 08-20；版本 v1.0 vs v2.3） | `.ai/lessons.md:6,461` | 版本号与章题日期反映实际内容 | S | 低 | **已完成**（ab70b12 主仓 + .ai 子仓） |
 
-### 进度汇总
+### 进度汇总（2026-09-21 完结）
 
-| 优先级 | 任务数 | 已完成 | 进行中 | 待修复 |
+| 优先级 | 任务数 | 已完成 | 进行中 | **已完成**（ab70b12 主仓 + .ai 子仓） |
 |---|---|---|---|---|
-| P0 系统能力失效 | 3 | 0 | 0 | 3 |
-| P1 数据与指针失实 | 6 | 0 | 0 | 6 |
-| P2 协议与覆盖缺口 | 8 | 0 | 0 | 8 |
-| P3 卫生 | 5 | 0 | 0 | 5 |
-| **合计** | **22** | **0** | **0** | **22** |
+| P0 系统能力失效 | 3 | **3** | 0 | 0 |
+| P1 数据与指针失实 | 6 | **6** | 0 | 0 |
+| P2 协议与覆盖缺口 | 8 | **8** | 0 | 0 |
+| P3 卫生 | 5 | **5** | 0 | 0 |
+| **合计** | **22** | **22** | **0** | **0** |
 
-**建议执行顺序**：F-01（安装器，S 级且解除分发阻断）→ F-02+F-03（台账与 V19 存在性，一组）→ F-05+F-06（计数与阈值，机械可验）→ F-04（CI/矩阵，需设计决策）→ 其余按优先级。F-03 与 F-13 是仅有的两个"中"风险项（改 V 项逻辑须同步 `--selftest` 红绿矩阵）。
+**执行记录**：按建议顺序全部完成，分两个提交落地——主仓 `ab70b12`（F-03/F-04/F-05/F-06/F-13 五项需改脚本与 CI 的）+ `.ai` 子仓（其余 17 项知识层 + 安装器 E1 行尾修正）。每项均在相应文件留 `F-NN 勘正` 注，可逐条追溯。
+
+**落地后的验证状态**：
+- `verify-ai` 由 23 项扩为 **24 项**（新增 V24 轮次号↔报告校验），24/24 全过
+- `verify-ai --selftest` 全过（V19 路径存在性新增 7 例红测）
+- `gate-audit` 12/12 探针通过；矩阵接线 17→**16**（消除 gate-audit 自身假阳性），0 UNVERIFIED / 0 未归类
+- V7/V14/V19/V24 四项均经"改坏→必红→还原"变异验证（非只跑正例）
+- 安装器实测：干净目标目录落盘 45 文件（含 32 个 C# Gates），退出码 0
+- 主仓构建 0 警告 0 错误；Core/Transactions/EventLog/Integration/DI/Messaging 六套件零失败
+
+**遗留（不在本清单，需产品决策）**：
+1. `.ai` 是否纳入 CI 阻断层——当前是"本地工具 + 随 PalDDD 分发的模板"，CI 恒假分支已注释说明；若要升 CI 需先去掉 `.gitignore:68`（见审计报告开放问题 1）
+2. NuGet 包签名 / OIDC trusted publishing 需在 nuget.org 账号侧配置，非仓库内改动
+3. v53-v91 共 39 个轮次报告未归档——已由 V24 的"归档缺口声明"机制如实登记（单一真源），v92 起必须归档否则 V24 FAIL
 
 ---
 
