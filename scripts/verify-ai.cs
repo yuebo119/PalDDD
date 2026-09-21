@@ -62,7 +62,7 @@ Environment.CurrentDirectory = root;
 
 var lines = new List<string>
 {
-    "═══════ .ai 系统一致性校验（Pal.DDD · V1-V23）═══════",
+    "═══════ .ai 系统一致性校验（Pal.DDD · V1-V24）═══════",
     $"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}",
     "",
 };
@@ -156,7 +156,7 @@ var failed = 0;
     }
 }
 
-// ─── V7 误判知识库双源口径（完整版 ≥37 条；速版覆盖到完整版最大 PD 号）───
+// ─── V7 误判知识库双源口径（完整版条数 + 速版覆盖到完整版最大 PD 号 + F-05 prose 等值）───
 {
     var kb = TryReadLines(".ai/review/known-false-positives.md");
     var fullNums = kb.Select(l => Regex.Match(l, "^### 模式 PD([0-9]+)：") is { Success: true } m
@@ -173,14 +173,45 @@ var failed = 0;
     var kbQuickMax = quickNums.Count > 0 ? quickNums.Max() : 0;
     // bash 语义：kb_max 无匹配默认 99（恒假）、kb_quick_max 无匹配默认 0
     var kbMaxBash = fullNums.Count > 0 ? kbMax : 99;
-    if (kbFull >= 37 && kbQuickMax >= kbMaxBash)
+
+    // F-05（2026-09-21，审计 H2）：prose 计数等值校验。
+    // 原判据 `kbFull >= 37` 是**下限**——PD 涨到 39 时全部 prose 计数（KFP 头/README/
+    // engine/charter/v51/metrics/sensor-ledger 共 11 处）静默过期而门禁全绿，实测出现
+    // 33/37/39/45 四种口径并存。现从这些 prose 行提取"声称的 PD 最大号/模式总数"，
+    // 与实测比对：不一致即 FAIL（修 prose 或修知识库，二选一，不留静默漂移）。
+    // 声称形态：`至 PD{N}` / `PD1-PD{N}` / `共 {M} 模式` / `{M} 模式含速版`。
+    // 累计校验过的 prose 声明数（PASS 行的可观测口径）。
+    var proseChecked = 0;
+    var kbRepoRoot = root;
+    foreach (var (file, claims) in new (string File, List<(string Kind, int Value)>)[]
     {
-        passed++; lines.Add($"PASS V7: 误判知识库完整（完整版 {kbFull} 条 · 速版覆盖至 PD{kbQuickMax}=最大号）");
+        (".ai/README.md", ExtractProsePdClaimsFromFile(Path.Combine(kbRepoRoot, ".ai", "README.md"))),
+        (".ai/review/engine.md", ExtractProsePdClaimsFromFile(Path.Combine(kbRepoRoot, ".ai", "review", "engine.md"))),
+        (".ai/review/review-charter-v2.md", ExtractProsePdClaimsFromFile(Path.Combine(kbRepoRoot, ".ai", "review", "review-charter-v2.md"))),
+        (".ai/review/lessons-learned-v51.md", ExtractProsePdClaimsFromFile(Path.Combine(kbRepoRoot, ".ai", "review", "lessons-learned-v51.md"))),
+    })
+    {
+        foreach (var (kind, value) in claims)
+        {
+            var actual = kind == "maxPd" ? kbMax : 8 + kbMax;
+            if (value != actual)
+            {
+                failed++; lines.Add($"FAIL V7: {file} 的 prose 计数声称 {kind}={value}，实测 {kind}={actual}（PD 最大号 {kbMax}，模式总数 {8 + kbMax}）");
+                goto v7Done;
+            }
+            proseChecked++;
+        }
+    }
+
+    if (kbFull >= 8 && kbQuickMax >= kbMaxBash)
+    {
+        passed++; lines.Add($"PASS V7: 误判知识库完整（完整版 {kbFull} 条 · 速版覆盖至 PD{kbQuickMax}=最大号 · prose 计数 {proseChecked} 处与实测一致）");
     }
     else
     {
-        failed++; lines.Add($"FAIL V7: 误判知识库不完整（完整版 {kbFull} 条(需≥37) · 速版至 PD{kbQuickMax}(需≥PD{(fullNums.Count > 0 ? kbMax.ToString() : "?")})——防速版断链）");
+        failed++; lines.Add($"FAIL V7: 误判知识库不完整（完整版 {kbFull} 条 · 速版至 PD{kbQuickMax}(需≥PD{(fullNums.Count > 0 ? kbMax.ToString() : "?")})——防速版断链）");
     }
+    v7Done: ;
 }
 
 // ─── V8 视角发现率账本存在且六流以上有记录 ───
@@ -256,14 +287,52 @@ var failed = 0;
 }
 
 // ─── V14 覆盖率基线文档存在（行覆盖率数值 + 门禁阈值）───
+// F-06（2026-09-21，审计 H3）：原实现 `Regex.Match(text, "[0-9]+\.[0-9]+%")` 抓文档中
+// **第一个百分比**——那是 2026-07-30 旧基线 67.9%，门禁输出自己显示旧数；而现行门禁
+// 阈值是 0.70（docs/test-coverage-baseline.md:29-30）。现改为提取"门禁阈值"行的数值
+// 并与 scripts/ci-coverage.cs 的默认阈值比对（双源一致），同时仍校验行覆盖率数值存在。
 {
     var text = TryReadText("docs/test-coverage-baseline.md");
-    var covLine = Regex.Match(text, "[0-9]+\\.[0-9]+%").Value;
-    if (File.Exists("docs/test-coverage-baseline.md")
-        && Regex.IsMatch(text, "Line coverage|行覆盖率")
-        && Regex.IsMatch(text, "门禁|threshold", RegexOptions.IgnoreCase))
+    // 只取「## 门禁阈值」节到下一个二级标题之间的内容——避免误抓历史陈述
+    // （如"旧阈值 0.65"在阈值校准依据表里，属被取代的旧值）。
+    var gateSection = SedRange(text.Split('\n'), @"^##\s*门禁阈值", @"^##\s").ToList();
+    var gateText = string.Join('\n', gateSection);
+    // 门禁阈值口径：节内形如「阈值 0.70」/「取整 0.70」/「不低于 70%」/「threshold 0.70」。
+    // 两种书写形态（小数 0.70 与百分比 70%）统一归一为小数后比对。
+    var docThreshold = Regex.Match(gateText, @"(?:阈值|threshold|取整)\s*[：:]?\s*(0\.\d+)", RegexOptions.IgnoreCase);
+    var docPercent = Regex.Match(gateText, @"不低于\s*(\d+)\s*%", RegexOptions.IgnoreCase);
+    // ci-coverage.cs 的默认阈值（COVERAGE_THRESHOLD 环境变量缺省值）
+    var gateThreshold = Regex.Match(
+        TryReadText("scripts/ci-coverage.cs"),
+        @"COVERAGE_THRESHOLD[^\n]*?(?:默认|default)\s*(0\.\d+)", RegexOptions.IgnoreCase);
+    if (!gateThreshold.Success)
+        gateThreshold = Regex.Match(TryReadText("scripts/ci-coverage.cs"), @"threshold\s*[=:]\s*(0\.\d+)", RegexOptions.IgnoreCase);
+
+    var hasLineRate = Regex.IsMatch(text, "[0-9]+\\.[0-9]+%");
+    // 归一化：百分比形态（如 "70"）转小数（0.70），小数形态原样
+    static string? NormalizeThreshold(Match m)
     {
-        passed++; lines.Add($"PASS V14: 覆盖率基线存在（{covLine}）");
+        if (!m.Success) return null;
+        var raw = m.Groups[1].Value;
+        if (raw.Contains('.')) return raw;
+        return (int.Parse(raw, System.Globalization.CultureInfo.InvariantCulture) / 100.0)
+            .ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+    }
+    var docVal = NormalizeThreshold(docThreshold) ?? NormalizeThreshold(docPercent);
+    var gateVal = NormalizeThreshold(gateThreshold);
+    var thresholdConsistent = docVal is not null && gateVal is not null && docVal == gateVal;
+
+    if (File.Exists("docs/test-coverage-baseline.md")
+        && hasLineRate
+        && Regex.IsMatch(text, "Line coverage|行覆盖率")
+        && thresholdConsistent)
+    {
+        passed++; lines.Add($"PASS V14: 覆盖率基线存在（含行覆盖率数值 · 门禁阈值 {docVal} 与 ci-coverage.cs 一致）");
+    }
+    else if (File.Exists("docs/test-coverage-baseline.md") && hasLineRate && !thresholdConsistent)
+    {
+        failed++; lines.Add(
+            $"FAIL V14: 门禁阈值双源不一致（docs/test-coverage-baseline.md 阈值 {docVal ?? "未提取到"} vs scripts/ci-coverage.cs {gateVal ?? "未提取到"}）");
     }
     else
     {
@@ -337,17 +406,21 @@ var failed = 0;
     }
 }
 
-// ─── V19 传感器台账超期校验（90 天周期，DateTime 计算）───
+// ─── V19 传感器台账超期校验（90 天周期，DateTime 计算 + F-03 路径存在性）───
 {
     var ledger = TryReadLines(".ai/gate/sensor-ledger.md");
     var (v19Bad, unknown) = CheckLedgerExpiry(ledger, 90, DateTime.UtcNow.Date);
-    if (File.Exists(".ai/gate/sensor-ledger.md") && v19Bad.Length == 0)
+    // F-03：传感器路径存在性（原盲区——台账指向已删脚本而门禁全绿）
+    var v19PathBad = CheckLedgerSensorPaths(ledger, root);
+    if (File.Exists(".ai/gate/sensor-ledger.md") && v19Bad.Length == 0 && v19PathBad.Length == 0)
     {
-        passed++; lines.Add($"PASS V19: 传感器台账定标有效（UNKNOWN {unknown} 处待定标，90 天周期）");
+        passed++; lines.Add($"PASS V19: 传感器台账定标有效（UNKNOWN {unknown} 处待定标，90 天周期，路径 {CountLedgerSensorRows(ledger)} 行全存在）");
     }
     else
     {
-        failed++; lines.Add($"FAIL V19: 传感器台账超期/异常（{(v19Bad.Length > 0 ? v19Bad.ToString() : "台账缺失")}）");
+        var detail = v19Bad.Length > 0 ? v19Bad.ToString()
+            : v19PathBad.Length > 0 ? v19PathBad.ToString() : "台账缺失";
+        failed++; lines.Add($"FAIL V19: 传感器台账超期/路径失实（{detail}）");
     }
 }
 
@@ -381,6 +454,77 @@ var failed = 0;
     // 单一 .cs（scripts/*.cs 从 CWD 向上找仓库根，天然无 ROOT 定位差异）——镜像漂移类
     // 问题在结构上不可再发生。保留 V23 编号与 PASS 输出（V 计数口径不变），判定恒过。
     passed++; lines.Add("PASS V23: 镜像脚本对已合一（MIG-012-B2 双镜像退役，结构上无漂移面）");
+}
+
+// ─── V24 轮次号↔报告文件存在性（F-13，2026-09-21 审计 M4）───
+// 背景：metrics.md 有 39 个轮次（v53-v91）在 .ai/review/history/reports 与主仓
+// docs/review 两地均无报告文件——"验证轮抓出假修"这类核心产出只剩一行摘要，不可回放。
+// V17 只校验 metrics 表格内日期单调，发现不了"轮次号↔报告文件"的对应断裂。
+// 口径：metrics 轮次表里每个 v{n} 轮次，须存在文件名含 "-v{n}" 的报告；缺文件即 FAIL。
+// **归档缺口声明机制**：缺口允许在 metrics「轮次记录」节用 `归档缺口声明：v{A}-v{B}`
+// 显式登记（单一真源）。V24 比对「声明区间展开集 == 实测缺失集」：相等 → PASS（缺口
+// 如实文档化而非隐性丢失）；不等 → FAIL 并列差异（声明外有缺口 = 新轮次未归档；
+// 声明内有报告 = 声明过期需缩区）。这样缺口被记录，同时任何新缺口仍被机械捕获。
+{
+    var metricsLines = TryReadLines(".ai/review/metrics.md");
+    var reportsDir = Path.Combine(root, ".ai", "review", "history", "reports");
+    var reportNames = Directory.Exists(reportsDir)
+        ? Directory.GetFiles(reportsDir, "*.md").Select(Path.GetFileNameWithoutExtension).ToList()
+        : new List<string?>();
+    // 也认主仓 docs/review/ 的报告（v88 起的轮次报告落在那儿）
+    var docsReviewDir = Path.Combine(root, "docs", "review");
+    if (Directory.Exists(docsReviewDir))
+        reportNames.AddRange(Directory.GetFiles(docsReviewDir, "*.md").Select(Path.GetFileNameWithoutExtension));
+
+    var missing = new List<int>();
+    var checkedCount = 0;
+    foreach (var line in metricsLines)
+    {
+        var m = Regex.Match(line, @"^\|\s*v([0-9]+)\s*\|");
+        if (!m.Success) continue;
+        if (line.Contains("无报告", StringComparison.Ordinal)) continue;   // 显式豁免
+        var n = int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        checkedCount++;
+        // 文件名须含 "-v{n}" 或 "-v{n}-"（如 review-2026-08-26-full-carpet-v10-verification）
+        var hit = reportNames.Any(r => r is not null
+            && (r.Contains($"-v{n}", StringComparison.Ordinal)
+                || r.Contains($"-v{n}-", StringComparison.Ordinal)));
+        if (!hit) missing.Add(n);
+    }
+
+    // 解析归档缺口声明行里的 `v{A}-v{B}` 区间（可多个）
+    var declared = new HashSet<int>();
+    foreach (var line in metricsLines)
+    {
+        if (!line.Contains("归档缺口声明", StringComparison.Ordinal)) continue;
+        foreach (Match dm in Regex.Matches(line, @"v([0-9]+)\s*-\s*v([0-9]+)"))
+        {
+            var lo = int.Parse(dm.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+            var hi = int.Parse(dm.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture);
+            for (var i = lo; i <= hi; i++) declared.Add(i);
+        }
+    }
+    var missingSet = missing.ToHashSet();
+    var undeclared = missingSet.Where(n => !declared.Contains(n)).OrderBy(n => n).ToList();
+    var staleDeclared = declared.Where(n => !missingSet.Contains(n)).OrderBy(n => n).ToList();
+
+    if (missingSet.Count == 0)
+    {
+        passed++; lines.Add($"PASS V24: 轮次号↔报告文件对应完整（{checkedCount} 个 v 轮次全部有报告）");
+    }
+    else if (undeclared.Count == 0 && staleDeclared.Count == 0)
+    {
+        passed++; lines.Add($"PASS V24: 轮次号↔报告文件对应（{checkedCount} 轮中 {missingSet.Count} 个缺口已由归档缺口声明登记 v{missingSet.Min()}-v{missingSet.Max()}，声明与实测一致）");
+    }
+    else
+    {
+        var parts = new List<string>();
+        if (undeclared.Count > 0)
+            parts.Add($"{undeclared.Count} 个未登记缺口（v{string.Join(" v", undeclared.Take(20))}{(undeclared.Count > 20 ? " …" : "")}）");
+        if (staleDeclared.Count > 0)
+            parts.Add($"声明过期 {staleDeclared.Count} 个（v{string.Join(" v", staleDeclared.Take(20))} 已有报告，应缩小区间）");
+        failed++; lines.Add($"FAIL V24: 轮次报告缺口与归档声明不一致（{string.Join("；", parts)}）——补报告、登记缺口或修正声明区间");
+    }
 }
 
 lines.Add("");
@@ -537,6 +681,10 @@ static (int Rows, string Bad) CheckDateMonotonic(IEnumerable<string> lines)
 }
 
 // V19 核心：传感器台账定标周期（90 天；UNKNOWN 计数不判坏；非法日期 fail-closed）
+// F-03（2026-09-21，审计 S2）：加**传感器路径存在性**校验。原实现只验日期——
+// MIG-012 后台账 5+1 个传感器指向已删 `.ai/scripts/*.sh`，实测把某行改成
+// `PROBE-NONEXISTENT.sh` 仍 23/23 全过（"对着空气 OK"）。现解析"传感器"列的
+// 路径 token 并断言文件真实存在。
 static (string Bad, int Unknown) CheckLedgerExpiry(IEnumerable<string> lines, int maxAgeDays, DateTime today)
 {
     var bad = new StringBuilder();
@@ -567,6 +715,139 @@ static (string Bad, int Unknown) CheckLedgerExpiry(IEnumerable<string> lines, in
                 .Append(ds.AsSpan(0, 10)).Append(")→STALE\n");
     }
     return (bad.ToString(), unknown);
+}
+
+// V19 附属：统计台账中被校验路径的传感器行数（PASS 行的可观测口径）
+static int CountLedgerSensorRows(IEnumerable<string> lines)
+{
+    var n = 0;
+    foreach (var line in lines)
+    {
+        var parts = line.Split('|');
+        if (parts.Length < 7) continue;
+        if (parts[5].Trim(' ', '\t', '\r') is not ("OK" or "观察中")) continue;
+        n++;
+    }
+    return n;
+}
+
+// F-05：从文本行提取"声称的 PD 计数"。两种 kind：
+//   maxPd  — `至 PD37` / `PD1-PD37` / `PD1-PD{N}`（声称的最大 PD 号）
+//   total  — `共 45 模式` / `45 模式含速版` / `{M} 模式`（声称的模式总数）
+// 只取当前有效声明行；历史记录（history/ 归档、metrics 历史轮次行）由调用方传入的
+// 文件范围天然排除——本函数只处理调用方给定的行集。
+static List<(string Kind, int Value)> ExtractProsePdClaims(IEnumerable<string> lines)
+{
+    var claims = new List<(string, int)>();
+    foreach (var line in lines)
+    {
+        foreach (Match m in Regex.Matches(line, @"至\s*PD([0-9]+)"))
+            claims.Add(("maxPd", int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)));
+        foreach (Match m in Regex.Matches(line, @"PD1-PD([0-9]+)"))
+            claims.Add(("maxPd", int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)));
+        foreach (Match m in Regex.Matches(line, @"共\s*([0-9]+)\s*模式"))
+            claims.Add(("total", int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)));
+        foreach (Match m in Regex.Matches(line, @"([0-9]+)\s*模式含速版"))
+            claims.Add(("total", int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)));
+    }
+    return claims;
+}
+
+// F-05：从单个文件读取并提取 prose 计数（文件不存在返回空列表）
+static List<(string Kind, int Value)> ExtractProsePdClaimsFromFile(string path)
+    => File.Exists(path) ? ExtractProsePdClaims(File.ReadAllLines(path, Encoding.UTF8)) : new List<(string, int)>();
+
+// F-03 路径存在性：从台账"传感器"列提取路径 token，断言文件真实存在。
+// 解析规则（按优先级）：
+//   ① 反引号包裹的 token（最可靠，台账主要形态）
+//   ② 形如 `scripts/x.cs` / `test/.../x.cs` / `.ai/...` 的裸 token
+//   ③ 反引号内的裸文件名（如 `known-false-positives.md`）→ 依次尝试
+//      <root>/.ai/review/<name>、<root>/.ai/<name>、<root>/<name>
+// `…`（省略号）转 glob：`test/…/ArchitectureBoundaryTests.cs` → 递归查找文件名。
+// 无法解析为路径的 token（自然语言描述、`dotnet build` 等）跳过——只验"像路径的"。
+static string CheckLedgerSensorPaths(IEnumerable<string> lines, string repoRoot)
+{
+    var bad = new StringBuilder();
+    foreach (var line in lines)
+    {
+        var parts = line.Split('|');
+        if (parts.Length < 7) continue;
+        var name = parts[1].Trim(' ', '\t', '\r');
+        var status = parts[5].Trim(' ', '\t', '\r');
+        if (status is not ("OK" or "观察中")) continue;
+
+        // 收集候选路径 token：反引号内 + 裸路径形态。
+        // 列位：parts[1]=关切 / parts[2]=**传感器**（路径所在列）/ parts[5]=定标状态 / parts[6]=日期
+        var candidates = new List<string>();
+        foreach (Match m in Regex.Matches(parts[2], "`([^`]+)`"))
+        {
+            // 反引号内可能含参数（`scripts/verify-ai.cs --selftest`）或命令前缀
+            // （`dotnet run scripts/verify-ai.cs`）——按空白切段，只取"像路径"的段。
+            foreach (var seg in m.Groups[1].Value.Split(' ', '\t'))
+                if (LooksLikePath(seg)) candidates.Add(seg.Trim());
+        }
+        foreach (Match m in Regex.Matches(parts[2],
+            @"(?<![\w/`.-])((?:\.ai/|scripts/|test/|docs/)[\w./…-]+\.(?:cs|md|sh|json))"))
+            candidates.Add(m.Groups[1].Value);
+
+        foreach (var token in candidates)
+        {
+            if (SensorPathExists(token, repoRoot)) continue;
+            // 反引号内可能是自然语言（如 `dotnet build`）——含空白或不像路径则跳过
+            if (token.Contains(' ') && !token.Contains('/')) continue;
+            bad.Append(name).Append("：传感器路径不存在(").Append(token).Append(")\n");
+        }
+    }
+    return bad.ToString();
+}
+
+// 单个路径 token 的存在性判定（含 `…` glob 与裸文件名回退）
+static bool SensorPathExists(string token, string repoRoot)
+{
+    // 绝对/相对明确路径
+    var direct = token.Replace('/', Path.DirectorySeparatorChar);
+    var abs = Path.IsPathRooted(direct) ? direct : Path.Combine(repoRoot, direct);
+    if (File.Exists(abs)) return true;
+
+    // `…` 省略号：转为按文件名递归查找（如 test/…/ArchitectureBoundaryTests.cs）
+    if (token.Contains('…'))
+    {
+        var fileName = Path.GetFileName(token.Replace('…', 'x'));
+        var searchRoot = repoRoot;
+        var seg = token.Split('/')[0];
+        if (seg is "test" or "src" or "docs" or "scripts")
+        {
+            var sub = Path.Combine(repoRoot, seg);
+            if (Directory.Exists(sub)) searchRoot = sub;
+        }
+        return Directory.EnumerateFiles(searchRoot, fileName, SearchOption.AllDirectories).Any();
+    }
+
+    // 裸文件名：按台账文件的常见邻位回退
+    if (!token.Contains('/'))
+    {
+        foreach (var dir in new[]
+        {
+            Path.Combine(repoRoot, ".ai", "review"),
+            Path.Combine(repoRoot, ".ai"),
+            Path.Combine(repoRoot, "docs"),
+            repoRoot,
+        })
+        {
+            if (File.Exists(Path.Combine(dir, token.Replace('/', Path.DirectorySeparatorChar)))) return true;
+        }
+    }
+    return false;
+}
+
+// 判定 token 是否"像路径"（供反引号内容切段后筛选）：
+// 含目录分隔符，或带已知文件扩展名。排除 `dotnet build`、`DiagnosticCoverageGateTests`
+// （类名）、`V1-V23`（编号）等非路径描述——它们不应参与存在性校验。
+static bool LooksLikePath(string seg)
+{
+    if (string.IsNullOrWhiteSpace(seg)) return false;
+    if (seg.Contains('/') || seg.Contains('\\')) return true;
+    return Regex.IsMatch(seg, @"\.(cs|md|sh|json|csproj|slnx)$", RegexOptions.IgnoreCase);
 }
 
 // V21 核心：P3 账本 30 天老化（未勾选 + 超期 + 不含"过期"→ 判坏）
@@ -669,6 +950,45 @@ static int RunSelftest()
     }, 90, today);
     if (ill19.Contains("非法")) Console.WriteLine("PASS ST-V19c 非法日期 fail-closed");
     else failures.Add($"ST-V19c: bad={ill19}");
+
+    // ── F-03 传感器路径存在性（审计 S2：原 V19 只查日期不查路径）──
+    // 红测语义：指向不存在文件必须 FAIL（修复前台账 5+1 个传感器指向已删 .sh 却全绿）。
+    // 注：RunSelftest 是 static 局部函数，不能引用顶层 root——本地调 FindRepoRoot()。
+    var stRoot = FindRepoRoot();
+    var pathOkRow = new[] { "| 真传感器 | `scripts/verify-ai.cs` | x | x | OK | 2026-09-01 | x |" };
+    var pathBadReal = CheckLedgerSensorPaths(pathOkRow, stRoot);
+    if (pathBadReal.Length == 0) Console.WriteLine("PASS ST-V19d 现存文件路径放行");
+    else failures.Add($"ST-V19d: {pathBadReal}");
+
+    var ghostRow = new[] { "| 幽灵传感器 | `scripts/verify-ai-system-PROBE-NONEXISTENT.cs` | x | x | OK | 2026-09-01 | x |" };
+    var pathBadGhost = CheckLedgerSensorPaths(ghostRow, stRoot);
+    if (pathBadGhost.Contains("PROBE-NONEXISTENT")) Console.WriteLine("PASS ST-V19e 幽灵路径检出");
+    else failures.Add($"ST-V19e: {pathBadGhost}");
+
+    var globGhostRow = new[] { "| glob 传感器 | `test/…/NoSuchTestFile.cs` | x | x | OK | 2026-09-01 | x |" };
+    var pathBadGlob = CheckLedgerSensorPaths(globGhostRow, stRoot);
+    if (pathBadGlob.Contains("NoSuchTestFile")) Console.WriteLine("PASS ST-V19f 省略号 glob 幽灵检出");
+    else failures.Add($"ST-V19f: {pathBadGlob}");
+
+    var globOkRow = new[] { "| glob 真传感器 | `test/…/ArchitectureBoundaryTests.cs` | x | x | OK | 2026-09-01 | x |" };
+    var pathOkGlob = CheckLedgerSensorPaths(globOkRow, stRoot);
+    if (pathOkGlob.Length == 0) Console.WriteLine("PASS ST-V19g 省略号 glob 现存文件放行");
+    else failures.Add($"ST-V19g: {pathOkGlob}");
+
+    var langRow = new[] { "| 自然语言 | `dotnet build` | x | x | OK | 2026-09-01 | x |" };
+    var pathNaturalLang = CheckLedgerSensorPaths(langRow, stRoot);
+    if (pathNaturalLang.Length == 0) Console.WriteLine("PASS ST-V19h 非路径描述不误判");
+    else failures.Add($"ST-V19h: {pathNaturalLang}");
+
+    var argRow = new[] { "| 带参路径 | `scripts/verify-ai.cs --selftest` | x | x | OK | 2026-09-01 | x |" };
+    var pathWithArg = CheckLedgerSensorPaths(argRow, stRoot);
+    if (pathWithArg.Length == 0) Console.WriteLine("PASS ST-V19i 反引号内含参数只取路径段");
+    else failures.Add($"ST-V19i: {pathWithArg}");
+
+    var classNameRow = new[] { "| 类名 | `DiagnosticCoverageGateTests` | x | x | OK | 2026-09-01 | x |" };
+    var pathClassName = CheckLedgerSensorPaths(classNameRow, stRoot);
+    if (pathClassName.Length == 0) Console.WriteLine("PASS ST-V19j 无扩展名类名不误判");
+    else failures.Add($"ST-V19j: {pathClassName}");
 
     // ── V21 老化 30 天 ──
     string[] fresh21Lines = ["- [ ] P3-1 新条目 2026-09-01"];
