@@ -470,9 +470,60 @@ static HashSet<string> CollectWiredNames(string repoRoot)
     var text = corpus.ToString();
 
     foreach (var s in scripts)
-        if (text.Contains(s, StringComparison.Ordinal)) names.Add(s);
+    {
+        // F-04（2026-09-21，审计 H1）：原实现用全文 `text.Contains(s)` 子串匹配——
+        // **注释里提到名字即判接线**。实证：gate-audit 自身仅因 ci.yml 一句注释
+        // （原文写"TOOL 手工调用"）即显示 WIRED=yes，矩阵结论与它读取的注释自相矛盾。
+        // 现按行剥离注释后匹配三种可执行形态：
+        //   ① `dotnet run scripts/<name>.cs`（含引号/--project/-- 参数变体）
+        //   ② 循环变量展开：`for x in a b c; do ... dotnet run "scripts/$x.cs"`
+        //      （ci.yml 的五门禁循环即此形态——名字以循环项出现，非字面调用）
+        //   ③ 钩子中的 `dotnet run scripts/<name>.cs`
+        if (AppearsAsExecutableInvocation(text, s)) names.Add(s);
+    }
 
     return names;
+}
+
+// F-04：判定脚本名是否以"可执行调用"形态出现（剥离注释后）。
+// 匹配形态：① `dotnet run scripts/<name>.cs`（可含引号、--project、-- 分隔的参数）；
+// ② 循环变量展开（`for x in a b c` 中名字作为循环项，配合 `dotnet run "scripts/$x.cs"`）；
+// ③ 钩子中的 `dotnet run scripts/<name>.cs`。裸名字提及（注释/文档）不算。
+static bool AppearsAsExecutableInvocation(string text, string scriptName)
+{
+    foreach (var rawLine in text.Split('\n'))
+    {
+        var line = rawLine.TrimEnd('\r');
+        // 剥离整行注释
+        if (line.TrimStart().StartsWith('#')) continue;
+        // 剥离行尾注释（YAML/hook 注释均为 `#`；本仓 CI 无把 `#` 写进字符串的用法，
+        // 误剥的后果只是漏判接线，方向安全）
+        var commentIdx = line.IndexOf(" #", StringComparison.Ordinal);
+        if (commentIdx >= 0) line = line[..commentIdx];
+
+        // 形态①③：dotnet run 直调
+        if (line.Contains("dotnet", StringComparison.Ordinal)
+            && line.Contains("run", StringComparison.Ordinal)
+            && (line.Contains($"scripts/{scriptName}.cs", StringComparison.Ordinal)
+                || line.Contains($"scripts\\{scriptName}.cs", StringComparison.Ordinal)
+                || line.Contains($"{scriptName}.cs", StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        // 形态②：循环项（`for ai_gate_cs in encoding-gate tech-debt test-gate;`）
+        if (line.Contains(" in ", StringComparison.Ordinal) && line.Contains(';'))
+        {
+            var afterIn = line[(line.IndexOf(" in ", StringComparison.Ordinal) + 4)..];
+            var items = afterIn.Split(' ', '\t', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var item in items)
+            {
+                var clean = item.Trim().TrimEnd(';', '"', '\'');
+                if (clean == scriptName) return true;
+            }
+        }
+    }
+    return false;
 }
 
 // 自证能力：脚本是否处理 --selftest（约定式自测入口）
