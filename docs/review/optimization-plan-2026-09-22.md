@@ -11,7 +11,32 @@
 
 ---
 
-## 一、综合诊断
+## 〇、实施进度台账（2026-09-22）
+
+| 波次 | 任务 | 状态 | 提交 |
+|---|---|---|---|
+| W0 | T-01 解 E5 阻断 | **已完成** | `f51b2fb` |
+| W0 | T-02 删 `ci.yml` 死分支 + 改叙事 | **已完成** | `c3d59d4` |
+| W0 | T-03 `gate-audit` REVIEW 判红 + 接 CI | **已完成** | `c3d59d4` |
+| W1 | T-04 三门禁 + `gate.cs` 接入 CI | **已完成**（覆盖面比计划扩大：`gate.cs` 实测不依赖 `.ai`，一并接入） | `c3d59d4` |
+| W1 | T-36 接线判定边界修正 | **已完成**（提前实施：实施中发现活的子串假阳性） | `c3d59d4` |
+| W7 | T-35a `verify-ai` 接入 pre-commit | **已完成**（T-35 的主仓半部） | `c3d59d4` |
+| W2 | T-09 删外部库测试路径 | **已完成** | `317d394` |
+| W1 | T-05 补隔离变异探针 | 待做 | — |
+| W2 | T-06 / T-38 v3.0 承诺兑现 + 期限校验 | 待做（T-06 为 L） | — |
+| W2 | T-07 许可口径 / T-08 版本计数口径 | 待做（均 S） | — |
+| W3–W7 | 其余 27 项 | 待做 | — |
+
+**实施中发现并已修正的两处计划假设偏差**（记录以免下轮重踩）：
+
+1. **`gate.cs` 被误置于 `.ai` 分支**——实测它不依赖 `.ai`（仅 2 处迁移注释，对照 `verify-ai.cs` 的 49 处），其 G23（API 快照↔CHANGELOG）与 G24 是主仓关切。已一并接入 CI，故 T-04 的覆盖面比原计划多一项。
+2. **T-36 的假接线是活的**——删死分支后 `gate` 仍显示 `WIRED=yes`，唯一来源是 `gate-audit.cs:517` 的子串匹配（`encoding-gate.cs` 命中 `gate.cs`）。已修为边界判定（`HasBareScriptRef`），故 T-36 从"待做"提前为"已完成"。
+
+**当前本地已知遗留**：`appsettings.test.local.json`（未跟踪）仍为 `UseTestcontainers=false`，故 `PalDDD.PalORM.Tests` 的多方言测试仍硬拒 46 项。T-17 会把该路径统一为 skip。
+
+**验证基线（三次提交均在 pre-commit 端到端通过）**：`encoding-gate` E1–E5 全 PASS · `gate-audit` 自测 17/17 · 探针 12/12 · 矩阵 17 接线 / 0 UNVERIFIED / 0 未归类 / exit 0 · `verify-ai` 25/25 · `guard.cs` 8/8 GREEN · `MultiDialectSafetyTests` 11/11。
+
+---
 
 ### 1.1 约束不在代码质量
 
