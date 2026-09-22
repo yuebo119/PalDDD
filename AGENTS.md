@@ -55,6 +55,7 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 **新增脚本必须归入 TOOL 或 UNWIRED-GATE**——`REVIEW` 桶非空即表示有脚本未经分类。
 **退出码（2026-09-22 T-03 增）**：`REVIEW` 桶非空 → 退出 1，已接 CI（矩阵自身的退化防线）。此前矩阵恒 `return 0`，退化只能靠人工读。`UNWIRED-GATE` 单列不阻断——待接门禁属人工裁决，登记 `intendedWire` 或改判 `TOOL`。
 **接线判定口径（2026-09-22 T-36 修）**：按「可执行调用形态」匹配且要求名字边界——修前 `encoding-gate.cs` 会把 `gate` 误判为已接线（子串假阳性），即"检测假接线的工具自身有假接线"。
+**探针隔离策略（2026-09-22 T-05 增）**：两种根解析策略决定门禁能否被隔离探针覆盖——**CWD 系**（`secret-scan`/`test-change-guard`/`verify-conventions`/`dapper-param-guard`）直接从隔离目录运行即可；**CallerFilePath 系**（`gate`/`tech-debt`/`doc-consistency`/`test-gate`）按**源文件位置**向上找仓库根，直接跑会扫到脚本所在的真实仓库、注入被完全忽略（实测：注入未跟踪文件与 TODO 注释后三门禁仍全绿）。此类探针须置 `CopyScriptIntoIsolation: true`，夹具会复制脚本进隔离目录并暂存（暂存是必需的：否则复制件自己就是"未跟踪 1"，会让 `gate` 的 G22 在干净输入下也变红，正向探针假绿）。
 
 ### 新增/修改门禁的规程
 
