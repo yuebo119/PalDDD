@@ -148,11 +148,19 @@ Console.WriteLine($"未接线·未归类（须归类）：{unclassified.Count}")
 foreach (var g in unwiredGaps) Console.WriteLine($"  缺口：{g.Name} —— {intendedWire[g.Name]}");
 foreach (var u in unclassified) Console.WriteLine($"  未归类：{u.Name}（登记进 manualTools 或 intendedWire）");
 
+// 2026-09-22 T-03：矩阵自身的退化防线。原实现恒 return 0，导致「新脚本未归类」这类退化
+// 在 CI 中不可见（矩阵只能人工读＝观察态无 owner）。口径：REVIEW 桶非空即红——"不放过新
+// 脚本"本就是下方 ClassifyVerdict 的既有承诺。UNWIRED-GATE 单列为缺口但暂不阻断：部分
+// 门禁按设计待接，登记 intendedWire 或改判 TOOL 属人工裁决，机械面不替人做这个决定。
+var matrixExit = MatrixExitCode(unclassified.Count);
+if (matrixExit != 0)
+    Console.Error.WriteLine($"FAIL 门禁矩阵存在 {unclassified.Count} 个未归类脚本——REVIEW 桶非空，须归入 manualTools 或 intendedWire。");
+
 if (inventoryOnly)
 {
     Console.WriteLine();
     Console.WriteLine("（--inventory 模式：跳过探针）");
-    return 0;
+    return matrixExit;
 }
 
 // ══════════════ 2. 变异探针（隔离仓库，真实注入坏输入）══════════════
@@ -356,7 +364,7 @@ if (probeFails > 0)
 
 Console.WriteLine("PASS 全部探针通过：被探测门禁已证明能拒绝坏输入。");
 Console.WriteLine($"注意：矩阵中 PROBED 为 '-' 的门禁可信度仍未验证（本次仅探测 {probedGates.Length} 个）。加探针＝向 probes 列表追加一条并登记 probedGates。");
-return 0;
+return matrixExit;
 
 // ══════════════ 探针执行 ══════════════
 
@@ -506,7 +514,7 @@ static bool AppearsAsExecutableInvocation(string text, string scriptName)
             && line.Contains("run", StringComparison.Ordinal)
             && (line.Contains($"scripts/{scriptName}.cs", StringComparison.Ordinal)
                 || line.Contains($"scripts\\{scriptName}.cs", StringComparison.Ordinal)
-                || line.Contains($"{scriptName}.cs", StringComparison.Ordinal)))
+                || HasBareScriptRef(line, scriptName)))
         {
             return true;
         }
@@ -522,6 +530,24 @@ static bool AppearsAsExecutableInvocation(string text, string scriptName)
                 if (clean == scriptName) return true;
             }
         }
+    }
+    return false;
+}
+
+// T-36（2026-09-22）：裸引用边界判定。F-04 的第三子句原为 `line.Contains($"{scriptName}.cs")`，
+// **无边界** ⇒ `encoding-gate.cs` 会把 `gate` 判为已接线（实测：死分支删除后 `gate` 仍显示
+// WIRED=yes，唯一来源是 pre-commit 的 encoding-gate 行——检测假接线的工具自身有假接线）。
+// 改为要求名字前一个字符不是标识符字符（字母/数字/下划线/连字符）。
+static bool HasBareScriptRef(string line, string scriptName)
+{
+    var needle = scriptName + ".cs";
+    var idx = 0;
+    while ((idx = line.IndexOf(needle, idx, StringComparison.Ordinal)) >= 0)
+    {
+        if (idx == 0) return true;
+        var prev = line[idx - 1];
+        if (!char.IsLetterOrDigit(prev) && prev != '_' && prev != '-') return true;
+        idx += needle.Length;
     }
     return false;
 }
@@ -579,6 +605,14 @@ static int SelfTest()
     Case("接线判定命中变量插值形态", wiredCorpus.Contains("encoding-gate", StringComparison.Ordinal));
     Case("接线判定不误报未出现名", !wiredCorpus.Contains("sibling-map", StringComparison.Ordinal));
 
+    // T-36（2026-09-22）：子串假阳性——`encoding-gate.cs` 不得把 `gate` 判为已接线。正负例各一。
+    Case("接线判定：encoding-gate.cs 不把 gate 判为接线（子串假阳性）",
+        !AppearsAsExecutableInvocation("          if ! dotnet run scripts/encoding-gate.cs 2>&1; then", "gate"));
+    Case("接线判定：scripts/gate.cs 仍判接线（负向对照）",
+        AppearsAsExecutableInvocation("dotnet run scripts/gate.cs -- --allow-dirty", "gate"));
+    Case("接线判定：bare 形态 gate.cs 判接线（边界为引号）",
+        AppearsAsExecutableInvocation("dotnet run \"gate.cs\"", "gate"));
+
     // 隔离仓库契约：.gitignore 必须屏蔽 runfile 产物（否则 git add 会夹带构建产物）
     var expectedIgnore = "dotnet/\nbin/\nobj/\n";
     Case("隔离仓库 .gitignore 覆盖 dotnet/", expectedIgnore.Contains("dotnet/", StringComparison.Ordinal));
@@ -593,10 +627,18 @@ static int SelfTest()
     Case("判定：已接线时工具标记不改变结论", ClassifyVerdict(true, true, true, true) == "OK");
     Case("判定：已接线无自证时缺口标记不改变结论", ClassifyVerdict(true, false, false, true).StartsWith("UNVERIFIED", StringComparison.Ordinal));
 
+    // 矩阵退出码（2026-09-22 T-03）：正例/反例各一——防「恒零」的假绿判定器
+    Case("退出码：REVIEW 桶非空 → 非零（矩阵退化可红）", MatrixExitCode(1) != 0);
+    Case("退出码：REVIEW 桶为空 → 零（负向对照）", MatrixExitCode(0) == 0);
+
     Console.WriteLine();
     Console.WriteLine($"SELFTEST {passed}/{total} 通过");
     return passed == total ? 0 : 1;
 }
+
+// 矩阵退出码（2026-09-22 T-03）：抽为纯函数以便自测覆盖正负例。
+// 只对 REVIEW（未归类）判红；UNWIRED-GATE 需人工裁决，不机械阻断。
+static int MatrixExitCode(int unclassifiedCount) => unclassifiedCount > 0 ? 1 : 0;
 
 // ══════════════ 类型 ══════════════
 

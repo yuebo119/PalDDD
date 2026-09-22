@@ -33,15 +33,16 @@
 |---|------|---------|---------|
 | 1 | `secret-scan` | 每次 | 受跟踪文件里的高置信硬编码凭据 |
 | 2 | `encoding-gate` | 每次 | E1 CRLF(.sh/.py) · E2 BOM(.cs) · E3 mojibake(.cs) · E4 .verified 非 LF · E5 源文件裸 LF(.md/.cs/.csproj/.targets 等,2026-09-14 增) |
-| 3 | `guard.cs` | `.cs` 入暂存集 | 8 道守卫测试 + 守卫命名类（`*GateTests`/`*GuardTests`/`ArchitectureBoundaryTests`）注册完整性核查 |
-| 4 | `test-change-guard` | `test/` 有修改或删除 | 只改测试不改 `src/`（改测试修绿签名）。豁免：`ALLOW_TEST_ONLY_CHANGE=1` |
-| 5 | `xml-guard` | xml 系扩展名入暂存集 | XML 非良构（`.csproj/.props/.slnx/.targets/.xml`） |
-| 6 | `verify-conventions --quick` | `.md` 入暂存集 | V5 TODO 扫描 · V8 `.pal/prompts/` 模板必填段 · V9 文档命令引用的脚本须存在 · V11 决策文档三必填段与锚点格式（2026-09-18 增） |
-| 7 | `dapper-param-guard` | `src/PalDDD.Dapper*/` 入暂存集 | 匿名 Dapper 参数枚举直传（Dapper.AOT 拦截器直传驱动，PG 拒绝——CI #94 根因，2026-09-14 增） |
+| 3 | `verify-ai` | 检测到 `.ai/` 目录时每次 | V1–V25 系统一致性（账本/传感器台账/提示词/死引用/命令形态）。2026-09-22 T-35 增：`.ai` 裁决为独立 git 库 ⇒ 永不进 CI，此前无任何自动执行路径 |
+| 4 | `guard.cs` | `.cs` 入暂存集 | 8 道守卫测试 + 守卫命名类（`*GateTests`/`*GuardTests`/`ArchitectureBoundaryTests`）注册完整性核查 |
+| 5 | `test-change-guard` | `test/` 有修改或删除 | 只改测试不改 `src/`（改测试修绿签名）。豁免：`ALLOW_TEST_ONLY_CHANGE=1` |
+| 6 | `xml-guard` | xml 系扩展名入暂存集 | XML 非良构（`.csproj/.props/.slnx/.targets/.xml`） |
+| 7 | `verify-conventions --quick` | `.md` 入暂存集 | V5 TODO 扫描 · V8 `.pal/prompts/` 模板必填段 · V9 文档命令引用的脚本须存在 · V11 决策文档三必填段与锚点格式（2026-09-18 增） |
+| 8 | `dapper-param-guard` | `src/PalDDD.Dapper*/` 入暂存集 | 匿名 Dapper 参数枚举直传（Dapper.AOT 拦截器直传驱动，PG 拒绝——CI #94 根因，2026-09-14 增） |
 
 ### CI（`.github/workflows/ci.yml`）
 
-`build-and-test`（vuln-scan → restore → build → **format-verify**（`dotnet format style --verify-no-changes`，8e97e9c 增） → test → secret-scan → dapper-param-guard → verify-ai → gate → encoding/doc-consistency/tech-debt/test-gate → template-gate；无 `.ai` 时降级为 gate-lite）· `aot-verify`（PublishAot + 运行二进制）· **`coverage`（覆盖率阈值门禁 0.70，先 `dotnet tool restore` 取 reportgenerator）** · `dialect-probe`（Testcontainers PG/MySQL；job 内含 Path gate 路径过滤步骤，仅 Store/SQL/DDL/映射面变更触发——非独立 job）。
+`build-and-test`（vuln-scan → restore → build → **format-verify**（`dotnet format style --verify-no-changes`，8e97e9c 增） → test → secret-scan → dapper-param-guard → doc-consistency → encoding-gate/tech-debt/test-gate 循环 → `gate.cs`（G22/G23/G24）→ `gate-audit --inventory` → gate-lite。**2026-09-22 T-02/T-04**：`.ai` 恒假分支已删，主仓门禁全部无条件执行；`verify-ai`/`template-gate` 因 `.ai` 独立裁决永不进 CI，改由 pre-commit 与 `.ai` 仓钩子承担）· `aot-verify`（PublishAot + 运行二进制）· **`coverage`（覆盖率阈值门禁 0.70，先 `dotnet tool restore` 取 reportgenerator）** · `dialect-probe`（Testcontainers PG/MySQL；job 内含 Path gate 路径过滤步骤，仅 Store/SQL/DDL/映射面变更触发——非独立 job）。
 
 ### 门禁可信度（改动或新增门禁后必跑）
 
@@ -52,6 +53,8 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 
 矩阵五态：`OK`（接线且有自证）· `UNVERIFIED`（接线但无自证 = 退化无人知）· `TOOL`（未接线但按设计手工调用）· `UNWIRED-GATE`（应接线未接 = 真缺口）· `REVIEW`（未接线且未归类，须归入前两者之一）。
 **新增脚本必须归入 TOOL 或 UNWIRED-GATE**——`REVIEW` 桶非空即表示有脚本未经分类。
+**退出码（2026-09-22 T-03 增）**：`REVIEW` 桶非空 → 退出 1，已接 CI（矩阵自身的退化防线）。此前矩阵恒 `return 0`，退化只能靠人工读。`UNWIRED-GATE` 单列不阻断——待接门禁属人工裁决，登记 `intendedWire` 或改判 `TOOL`。
+**接线判定口径（2026-09-22 T-36 修）**：按「可执行调用形态」匹配且要求名字边界——修前 `encoding-gate.cs` 会把 `gate` 误判为已接线（子串假阳性），即"检测假接线的工具自身有假接线"。
 
 ### 新增/修改门禁的规程
 
