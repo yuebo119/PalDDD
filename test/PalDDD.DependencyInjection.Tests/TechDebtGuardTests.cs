@@ -787,4 +787,136 @@ public sealed class TechDebtGuardTests
                 $"  诊断（白名单项 covered-by）: {string.Join("; ", coveredBy.Where(c => resolved.Any(r => c.StartsWith(r, StringComparison.Ordinal))))}");
         }
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // #21 版本承诺期限一致性（T-38，2026-09-22 增）
+    // ─────────────────────────────────────────────────────────────
+    // 来源：09-21 审计 C1 + 本轮核验 N-1。5 处"v3.0 窗口"承诺在 3.0.0 已 tag 之后仍写
+    // "v3.0 移除/统一/更名"，而 VersionPrefix 已是 3.0.0。承诺过期的伤害来自"文案与版本
+    // 现实矛盾"本身，且靠人同步不收敛——同型已发生过一次：v51 计数勘正把 21 改成 24 后，
+    // 1 小时 34 分钟后 V25 落地即令其过期（独立复核报告 §3.4）。
+    // 判据：src 内 vX.Y 出现在承诺语境（移除/窗口/预告/破坏性变更）时，X.Y 必须**严格大于**
+    // VersionPrefix。历史叙述（"v2.1.0 补齐…"）与非语义版本（"v35 P2 修复"）不命中。
+    // 已知缺口用**活账本**（对齐 #20 PD26 模式）：白名单 == 实测集双向断言——
+    // 新增过期承诺 → 红（必须登记或修复）；账本项修好未销号 → 也红（提醒缩账本）。
+
+    /// <summary>承诺语境：版本号后 24 字符内出现这些词，即视为对未来的承诺（而非历史叙述）。</summary>
+    private static readonly Regex VersionPromisePattern = new(
+        @"v(\d+)\.(\d+)[^\r\n]{0,24}?(移除|窗口|预告|破坏性变更)",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// 已知过期承诺活账本（T-38）。13 条**按行**登记（其中 OutboxStore.cs:14/:15 是同一处
+    /// 承诺跨两行，故 13 行 = 12 处逻辑承诺）。当前对应裁决 2 待兑现的"v3.0 窗口"欠账；
+    /// T-06 兑现后必须逐项移除此处，否则断言会提醒销号。
+    /// </summary>
+    private static readonly string[] s_knownExpiredPromises =
+    [
+        "src/PalDDD.Core/Attributes.cs:128",
+        "src/PalDDD.Core/Attributes.cs:93",
+        "src/PalDDD.Dapper/DapperOutboxStore.cs:234",
+        "src/PalDDD.DependencyInjection/ServiceRegistration.cs:69",
+        "src/PalDDD.PalORM/Stores/PalOrmEventLog.cs:41",
+        "src/PalDDD.Transactions.EFCore/OutboxDbContext.cs:40",
+        "src/PalDDD.Transactions.EFCore/SqlServerOutboxDbContext.cs:11",
+        "src/PalDDD.Transactions.EFCore/SqlServerOutboxDbContext.cs:8",
+        "src/PalDDD.Transactions/Outbox/OutboxStore.cs:14",
+        "src/PalDDD.Transactions/Outbox/OutboxStore.cs:15",
+        "src/PalDDD.Transactions/Saga/DefaultSagaManager.cs:68",
+        "src/PalDDD.Transactions/Saga/Saga.cs:835",
+        "src/PalDDD.Transactions/Saga/SagaState.cs:114",
+    ];
+
+    /// <summary>T-38 判定器（纯函数，供红绿矩阵覆盖）：该行是否为"已过期"的版本承诺。</summary>
+    private static bool IsExpiredVersionPromise(string line, int currentMajor, int currentMinor)
+    {
+        var match = VersionPromisePattern.Match(line);
+        if (!match.Success) return false;
+
+        // 历史叙述排除：版本号前紧邻"已/早/曾"表示动作**已完成**（如"已在 v0.2.0 移除"），
+        // 不是对未来的承诺。实测全 src 只有一处命中该形态
+        // （Repository.EFCore/ServiceCollectionExtensions.cs:17），是唯一的假阳性来源。
+        var prefixStart = Math.Max(0, match.Index - 3);
+        var prefix = line[prefixStart..match.Index];
+        if (prefix.Contains('已') || prefix.Contains('早') || prefix.Contains('曾')) return false;
+
+        var major = int.Parse(match.Groups[1].Value);
+        var minor = int.Parse(match.Groups[2].Value);
+        return major < currentMajor || (major == currentMajor && minor <= currentMinor);
+    }
+
+    /// <summary>从 Directory.Build.props 读取 VersionPrefix 的 major/minor（版本真源，不硬编码）。</summary>
+    private static (int Major, int Minor) ReadCurrentVersion()
+    {
+        var props = File.ReadAllText(Path.Combine(Root, "Directory.Build.props"));
+        var match = Regex.Match(props, @"<VersionPrefix>(\d+)\.(\d+)");
+        if (!match.Success)
+            throw new InvalidOperationException("Directory.Build.props 未找到 VersionPrefix——T-38 判定器的版本真源缺失。");
+        return (int.Parse(match.Groups[1].Value), int.Parse(match.Groups[2].Value));
+    }
+
+    [Test]
+    public async Task VersionPromises_AreNotExpired()
+    {
+        var files = EnumerateSourceFiles();
+        await Assert.That(files.Count).IsGreaterThan(0); // 扫描面存在性（防仓库根定位错误后空转）
+
+        var (major, minor) = ReadCurrentVersion();
+        var actual = new List<string>();
+        var promiseLines = 0;
+        foreach (var relative in files)
+        {
+            var lines = File.ReadAllLines(Path.Combine(Root, relative));
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (!VersionPromisePattern.IsMatch(lines[i])) continue;
+                promiseLines++;
+                if (IsExpiredVersionPromise(lines[i], major, minor))
+                    actual.Add($"{relative}:{i + 1}");
+            }
+        }
+
+        // 活跃性：src 内确实存在版本承诺语境（0 说明正则口径漂移，锚空转）
+        await Assert.That(promiseLines).IsGreaterThan(0);
+
+        actual.Sort(StringComparer.Ordinal);
+        var expected = s_knownExpiredPromises.OrderBy(x => x, StringComparer.Ordinal).ToList();
+        if (!expected.SequenceEqual(actual))
+        {
+            var added = actual.Except(expected).ToList();
+            var resolved = expected.Except(actual).ToList();
+            Assert.Fail(
+                $"版本承诺账本漂移（VersionPrefix={major}.{minor}）:\n" +
+                $"  新增过期承诺（修复文案或改期，或人工核实后入 s_knownExpiredPromises）: {string.Join(", ", added)}\n" +
+                $"  已过期项消失（请从 s_knownExpiredPromises 移除）: {string.Join(", ", resolved)}");
+        }
+    }
+
+    /// <summary>T-38 判定器红绿矩阵（负向自证）：三种真实承诺形态 + 边界为红；未来窗口与历史叙述为绿。</summary>
+    [Test]
+    public async Task VersionPromiseDetector_MatchesRedGreenMatrix()
+    {
+        // 红：当前版本（3.0）及更早的承诺——三种 src 内真实形态 + 更早版本边界
+        await Assert.That(IsExpiredVersionPromise(
+            "[Obsolete(\"框架自身零消费——v3.0 移除；需要标记语义请在应用层自定义 attribute。\")]", 3, 0)).IsTrue();
+        await Assert.That(IsExpiredVersionPromise(
+            "/// 📣 <b>v3.0 破坏性变更预告（ADR-020，维护者裁决 2026-08-26）</b>：本接口的两项已排队", 3, 0)).IsTrue();
+        await Assert.That(IsExpiredVersionPromise(
+            "/// 更名属破坏性变更，随 v3.0 契约窗口处理。", 3, 0)).IsTrue();
+        await Assert.That(IsExpiredVersionPromise("// v2.2 窗口内移除该重载", 3, 0)).IsTrue();
+
+        // 绿：承诺版本严格大于当前（未来窗口合法）
+        await Assert.That(IsExpiredVersionPromise("// v4.0 移除该 API", 3, 0)).IsFalse();
+        // 绿：历史叙述——有版本号但无承诺语境关键词
+        await Assert.That(IsExpiredVersionPromise(
+            "<!-- v2.1.0 补齐 SOP §4.2 必须字段（v2.0.0 及之前未配置） -->", 3, 0)).IsFalse();
+        // 绿：非语义版本（ITM/轮次号形态，无点号）
+        await Assert.That(IsExpiredVersionPromise("// v35 P2 修复：internal→public", 3, 0)).IsFalse();
+        // 绿：历史叙述——版本号前紧邻"已"，动作已完成而非承诺（实测唯一假阳性形态）
+        await Assert.That(IsExpiredVersionPromise(
+            "/// <c>DispatchingDomainEventInterceptor</c> 已在 v0.2.0 移除——其 AT-MOST-ONCE 语义导致", 3, 0)).IsFalse();
+        // 绿：关键词距版本号超过 24 字符窗口（同句承诺才判定）
+        await Assert.That(IsExpiredVersionPromise(
+            "// v3.0 是当前版本；此处插入足够长的无关内容以确保关键词距离超过阈值，最后才提窗口。", 3, 0)).IsFalse();
+    }
 }
