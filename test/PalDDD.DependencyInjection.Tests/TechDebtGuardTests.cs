@@ -919,4 +919,42 @@ public sealed class TechDebtGuardTests
         await Assert.That(IsExpiredVersionPromise(
             "// v3.0 是当前版本；此处插入足够长的无关内容以确保关键词距离超过阈值，最后才提窗口。", 3, 0)).IsFalse();
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // #22 观察态到期（T-24，2026-09-22 增）
+    // ─────────────────────────────────────────────────────────────
+    // 规则来源：AGENTS.md Code Review「静默控制问句」——观察态（WARN / 高假阳性 / dry-run）
+    // 必须有 owner 与过期时间。否则它会永久存在且无人再看，退化为"看起来在管"的静默 no-op
+    // （判据：若它是无声 no-op，任何可观察输出会不同吗）。
+    // 本仓当前三处观察态在此登记；到期未处置即红——要么修复后销号，要么显式续期并写明理由。
+
+    private static readonly (string Item, string Owner, string ExpiresOn, string Action)[] s_observationStates =
+    [
+        ("tech-debt.cs Obsolete 残留 WARN（6 处）", "框架维护者", "2026-12-31",
+            "随 T-06 v3.0 承诺兑现一并清除；清除后本项销号"),
+        ("gate.cs G24 Path.GetFileName* WARN（2 处）", "框架维护者", "2026-12-31",
+            "已核实为假阳性（输入来自 Directory.GetFiles，两侧平台分隔符均正确）；待改进门禁启发式后销号"),
+        ("refine-scan.cs 高假阳性簇（M2 ?? throw / M3 public {get;} / O1 new Dictionary<>）", "框架维护者", "2026-12-31",
+            "工具自身已标注「命中数≠可改数」，属提示性扫描；待逐条核实后销号或转为清单"),
+    ];
+
+    [Test]
+    public async Task ObservationStates_AreNotExpired()
+    {
+        // 账本存在性（防登记表被清空后空转）
+        await Assert.That(s_observationStates.Length).IsGreaterThan(0);
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var expired = s_observationStates
+            .Where(s => DateOnly.Parse(s.ExpiresOn) < today)
+            .Select(s => $"{s.Item}\n      owner: {s.Owner} · 到期: {s.ExpiresOn}\n      处置: {s.Action}")
+            .ToList();
+
+        if (expired.Count > 0)
+        {
+            Assert.Fail(
+                $"观察态已到期未处置（T-24，{expired.Count} 项）——修复后销号，或显式续期并写明理由：\n    " +
+                string.Join("\n    ", expired));
+        }
+    }
 }
