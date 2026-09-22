@@ -12,9 +12,11 @@
       ═══════════════════════════════════════════════════════════
       NoWarn 抑制列表 — 逐条 Justification
       ═══════════════════════════════════════════════════════════
-      实际生效 22 条（<NoWarn> 行去重计数）：CA1062/CA2007/CA1307/CA1305/CA2100/
+      实际生效 18 条（<NoWarn> 行去重计数）：CA1062/CA2007/CA1307/CA1305/CA2100/
       CA2016/CA1721/CA1512/CA1849/CA2000/CA1001/CA1725（12）+ CS1591/CS1573/
-      CS1570/CS8620（4）+ NU1900-1904（5）+ NU5104（1）。
+      CS1570/CS8620（4）+ NU1900（1）+ NU5104（1）。
+      另有 2 条**非 NoWarn 抑制**：NU1901/NU1902 走 <WarningsNotAsErrors>（保留可见、
+      不阻断）；NU1903/NU1904 不抑制（高/严重漏洞随 TreatWarningsAsErrors 阻断构建）。
       下方另列 CA1031——它**不在全局 NoWarn 内**，由各 catch 点 [SuppressMessage] 精确抑制，
       此处列出仅为说明整体抑制策略，勿计入 NoWarn 条数。
       框架库与业务应用不同：公共 API 的参数校验由调用方（应用层）负责，
@@ -38,11 +40,21 @@
       CS1573  参数缺少 XML 文档 — 同 CS1591，内部成员不强制
       CS1570  XML 文档格式错误 — 中文注释偶发触发，不影响生成
       CS8620  泛型协变/逆变隐式转换 — DIM 桥接的 Func<ValueTask<T>> 转换无法消除，框架内部已验证安全
-      NU1900/1901/1902/1903/1904  NuGet 包漏洞/版本告警 — 已手动审计并升级传递依赖（Humanizer/System.Reflection），误报已评估
+      NU1900  无法与包源通信获取漏洞数据 — **环境条件而非漏洞发现**（官方定义："Error communicating
+              with package source, while getting vulnerability information"）。抑制它使离线/包源
+              故障时不误伤构建；真实漏洞由 NU1901-1904 经 WarningsNotAsErrors 单独处置（见下）。
+      NU1901/1902  低/中危漏洞 — 经 <WarningsNotAsErrors> 保留为**可见警告**、不阻断构建
+              （对齐微软官方对 TreatWarningsAsErrors 用户的建议）。2026-09-22 T-12 前为全局 NoWarn，
+              即完全静默；实测移除后构建 0 警告 0 错误 ⇒ 该抑制此前未在承重。
+      NU1903/1904  高/严重漏洞 — **不抑制也不豁免**，经 TreatWarningsAsErrors 直接成为构建错误
+              （高危及以上必须阻断发布）。
       NU5104  稳定版包含预发布依赖 — .NET 11 TFM 的 NuGet 包（Microsoft.Data.Sqlite/Npgsql/MySqlConnector 等）当前仅有 preview 版本可用；所有 PalDDD 包需随 .NET 11 GA 后统一升级为稳定依赖并移除此抑制
       ═══════════════════════════════════════════════════════════
     -->
-    <NoWarn>$(NoWarn);CA1062;CA2007;CA1307;CA1305;CA2100;CA2016;CA1721;CA1512;CA1849;CA2000;CA1001;CA1725;CS1591;CS1573;CS1570;CS8620;NU1900;NU1901;NU1902;NU1903;NU1904;NU5104</NoWarn>
+    <NoWarn>$(NoWarn);CA1062;CA2007;CA1307;CA1305;CA2100;CA2016;CA1721;CA1512;CA1849;CA2000;CA1001;CA1725;CS1591;CS1573;CS1570;CS8620;NU1900;NU5104</NoWarn>
+    <!-- T-12（2026-09-22）：低/中危漏洞告警保留可见但不阻断构建（官方建议形态）。高/严重（NU1903/1904）
+         不在豁免列表内 ⇒ 随 TreatWarningsAsErrors 成为构建错误。 -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902</WarningsNotAsErrors>
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
     <VerifyReferenceAotCompatibility>true</VerifyReferenceAotCompatibility>
