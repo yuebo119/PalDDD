@@ -75,7 +75,8 @@ var wiredNames = CollectWiredNames(root);
 
 // 本次实际探测的门禁——矩阵 PROBED 列与下方探针列表由本数组单向对齐，
 // 并在跑探针前断言一致（防两处清单漂移，同 E1/E2 目录清单教训）。
-string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "gate-lite", "verify-conventions", "ci-coverage"];
+string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "gate-lite", "verify-conventions", "ci-coverage",
+    "gate", "tech-debt", "doc-consistency", "test-gate", "verify-ai"];
 
 // ─── 未接线脚本的分类（2026-09-13 增）───
 // 此前矩阵对一切未接线者判「OBSERVE 未接线——永远不触发」，实测 17 个中 16 个是
@@ -325,6 +326,67 @@ var probes = new List<Probe>
         MustContainInStdout: "merged cobertura report not found",
         ExtraArgs: "--enforce-only",
         Setup: _ => []),
+
+    // ── T-05（2026-09-22）：补 6 个门禁的隔离变异探针 ──
+    // 前 4 条为 CallerFilePath 系（需 CopyScriptIntoIsolation，理由见 RunProbe 注释）；
+    // 后 2 条为 CWD 系，直接跑即可。末条为负向对照（防探针因错误原因变绿）。
+    new(
+        Name: "gate 拒绝未跟踪改动（G22）",
+        Gate: "gate",
+        ExpectExit: 1,
+        MustContainInStdout: "PDDD-G22",
+        CopyScriptIntoIsolation: true,
+        Setup: dir =>
+        {
+            File.WriteAllText(Path.Combine(dir, "loose.txt"), "untracked\n");
+            return [];   // 故意不暂存 → G22 命中
+        }),
+    new(
+        Name: "gate 放行干净输入（负向对照）",
+        Gate: "gate",
+        ExpectExit: 0,
+        MustContainInStdout: "失败：0",
+        CopyScriptIntoIsolation: true,
+        Setup: _ => []),
+    new(
+        Name: "tech-debt 拒绝 src 内 TODO 注释",
+        Gate: "tech-debt",
+        ExpectExit: 1,
+        MustContainInStdout: "TODO/HACK/FIXME",
+        CopyScriptIntoIsolation: true,
+        Setup: dir =>
+        {
+            var src = Path.Combine(dir, "src");
+            Directory.CreateDirectory(src);
+            File.WriteAllText(Path.Combine(src, "Probe.cs"), "// TODO: gate-audit 探针注入\n");
+            return ["src/Probe.cs"];
+        }),
+    new(
+        Name: "doc-consistency 拒绝文件地图死链（D7）",
+        Gate: "doc-consistency",
+        ExpectExit: 1,
+        MustContainInStdout: "D7",
+        CopyScriptIntoIsolation: true,
+        Setup: dir =>
+        {
+            var ai = Path.Combine(dir, ".ai");
+            Directory.CreateDirectory(ai);
+            File.WriteAllText(Path.Combine(ai, "README.md"), "gate/nonexistent.md\n");
+            return [".ai/README.md"];
+        }),
+    new(
+        Name: "test-gate 在缺 ci.yml 时 fail-closed（T-DEF-4）",
+        Gate: "test-gate",
+        ExpectExit: 1,
+        MustContainInStdout: "T-DEF-4",
+        CopyScriptIntoIsolation: true,
+        Setup: _ => []),
+    new(
+        Name: "verify-ai 在缺 .ai 时 fail-closed（V1）",
+        Gate: "verify-ai",
+        ExpectExit: 1,
+        MustContainInStdout: "FAIL V1",
+        Setup: _ => []),
 };
 
 var probeFails = 0;
@@ -393,14 +455,34 @@ static (bool Ok, string Detail) RunProbe(string repoRoot, Probe probe)
         // 可扫描集为空——自 2026-09-20 起 .slnx 已进入 secret-scan 扫描面，不跳过
         // 则该探针的可扫描集恒非 1，"零可扫描文件"场景无法构造。
         if (!probe.SkipSlnxStaging)
+        {
             RunGit(tmp, "add -- PalDDD.slnx");
+            // T-05（2026-09-22）：夹具写入的 .gitignore 也必须入索引——否则它自己就是
+            // "未跟踪 1"，使 gate 的 G22 在**干净输入**下也变红：负向对照恒失败，更糟的是
+            // 正向探针（注入未跟踪文件）会因错误原因变绿。实测即此形态（stdout 尾部
+            // "外仓有未提交改动（未暂存 0 + 未跟踪 1）" 在无注入时同样出现）。
+            RunGit(tmp, "add -- .gitignore");
+        }
 
-        var (exitCode, stdout) = RunGate(gatePath, tmp, probe.ExtraArgs);
+        // T-05（2026-09-22）：CallerFilePath 系门禁（gate / tech-debt / doc-consistency /
+        // test-gate）用**源文件位置**向上找仓库根，与 cwd 无关——直接跑会扫到脚本所在的
+        // 真实仓库，注入被完全忽略（实测：在隔离目录注入未跟踪文件与 TODO 注释，三门禁仍全绿）。
+        // 把脚本复制进隔离目录再跑，CallerFilePath 即解析到隔离目录。复制件必须暂存：
+        // 否则它自己就是"未跟踪文件"，会让 gate 的 G22 探针因错误原因变红。
+        var effectiveGatePath = gatePath;
+        if (probe.CopyScriptIntoIsolation)
+        {
+            effectiveGatePath = Path.Combine(tmp, Path.GetFileName(gatePath));
+            File.Copy(gatePath, effectiveGatePath, overwrite: true);
+            RunGit(tmp, $"add -- {Path.GetFileName(gatePath)}");
+        }
+
+        var (exitCode, stdout) = RunGate(effectiveGatePath, tmp, probe.ExtraArgs);
 
         if (exitCode != probe.ExpectExit)
-            return (false, $"退出码 {exitCode} ≠ 期望 {probe.ExpectExit}");
+            return (false, $"退出码 {exitCode} ≠ 期望 {probe.ExpectExit}｜stdout 尾部：{Tail(stdout, 320)}");
         if (!stdout.Contains(probe.MustContainInStdout, StringComparison.Ordinal))
-            return (false, $"输出未含「{probe.MustContainInStdout}」——探针可能未真正扫到注入文件");
+            return (false, $"输出未含「{probe.MustContainInStdout}」——探针可能未真正扫到注入文件｜stdout 尾部：{Tail(stdout, 320)}");
 
         return (true, "");
     }
@@ -412,6 +494,13 @@ static (bool Ok, string Detail) RunProbe(string repoRoot, Probe probe)
     {
         try { if (Directory.Exists(tmp)) Directory.Delete(tmp, recursive: true); } catch { /* 清理失败不掩盖探针结论 */ }
     }
+}
+
+// 探针失败时的输出尾部（截断显示）——只报"退出码不符"无法定位门禁为何变红。
+static string Tail(string text, int max)
+{
+    var trimmed = text.Replace("\r", "").TrimEnd();
+    return trimmed.Length <= max ? trimmed : "…" + trimmed[^max..];
 }
 
 static (int ExitCode, string Stdout) RunGate(string gatePath, string workingDir, string? extraArgs = null)
@@ -651,4 +740,5 @@ internal sealed record Probe(
     string MustContainInStdout,
     Func<string, string[]> Setup,
     string? ExtraArgs = null,
-    bool SkipSlnxStaging = false);
+    bool SkipSlnxStaging = false,
+    bool CopyScriptIntoIsolation = false);
