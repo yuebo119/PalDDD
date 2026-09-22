@@ -33,7 +33,8 @@ public static class MultiDialectFixture
 
     public static async Task<TestSession<PostgreSqlProvider>> CreatePostgreSqlAsync(CancellationToken ct = default)
     {
-        EnsureTestcontainersRequired(TestEnvironment.UsePostgreSqlTestcontainers, "PostgreSQL");
+        Skip.Unless(TestEnvironment.UsePostgreSqlTestcontainers,
+            SkipReason("PostgreSQL", "当前配置未启用 Testcontainers"));
         var database = $"palddd_test_{Guid.NewGuid():N}";
         var marker = Guid.NewGuid().ToString("N");
         var container = new PostgreSqlBuilder(TestEnvironment.PostgreSqlImage)
@@ -41,9 +42,22 @@ public static class MultiDialectFixture
             .Build();
         DataSession<PostgreSqlProvider>? session = null;
 
+        // T-17：Docker 不可达守卫。必须在下方主 try 之外——Skip 信号若被外层 catch 捕获，
+        // 会被包装成 AggregateException，TUnit 即不再识别为 skip（对齐 ITM-650 探针守卫位置）。
         try
         {
             await container.StartAsync(ct);
+        }
+#pragma warning disable CA1031 // 故意宽：Docker 不可达需捕获任意异常（对齐 ITM-650 探针守卫模式）
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+            await container.DisposeAsync();
+            Skip.Test(SkipReason("PostgreSQL", "Docker/Testcontainers 不可达"));
+        }
+
+        try
+        {
             var connectionString = container.GetConnectionString();
             EnsureSingleDatabaseAlias(connectionString, database, "PostgreSQL");
             session = await DataSession<PostgreSqlProvider>.CreateAsync(DbOptions.Development(connectionString), ct);
@@ -62,7 +76,8 @@ public static class MultiDialectFixture
 
     public static async Task<TestSession<MySqlProvider>> CreateMySqlAsync(CancellationToken ct = default)
     {
-        EnsureTestcontainersRequired(TestEnvironment.UseMySqlTestcontainers, "MySQL");
+        Skip.Unless(TestEnvironment.UseMySqlTestcontainers,
+            SkipReason("MySQL", "当前配置未启用 Testcontainers"));
         var database = $"palddd_test_{Guid.NewGuid():N}";
         var marker = Guid.NewGuid().ToString("N");
         var container = new MySqlBuilder(TestEnvironment.MySqlImage)
@@ -70,9 +85,21 @@ public static class MultiDialectFixture
             .Build();
         DataSession<MySqlProvider>? session = null;
 
+        // T-17：Docker 不可达守卫（位置与理由同 CreatePostgreSqlAsync）。
         try
         {
             await container.StartAsync(ct);
+        }
+#pragma warning disable CA1031 // 故意宽：Docker 不可达需捕获任意异常（对齐 ITM-650 探针守卫模式）
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+            await container.DisposeAsync();
+            Skip.Test(SkipReason("MySQL", "Docker/Testcontainers 不可达"));
+        }
+
+        try
+        {
             var connectionString = container.GetConnectionString();
             EnsureSingleDatabaseAlias(connectionString, database, "MySQL");
             session = await DataSession<MySqlProvider>.CreateAsync(DbOptions.Development(connectionString), ct);
@@ -89,14 +116,22 @@ public static class MultiDialectFixture
         }
     }
 
-    internal static void EnsureTestcontainersRequired(bool useTestcontainers, string provider)
-    {
-        if (!useTestcontainers)
-        {
-            throw new InvalidOperationException(
-                $"{provider} 多方言 Fixture 禁止连接或清理外部数据库；必须启用 Testcontainers。");
-        }
-    }
+    /// <summary>
+    /// T-17（2026-09-22 裁决 4 配套）：多方言测试在 Testcontainers 未启用时应**跳过而非硬拒**。
+    /// </summary>
+    /// <remarks>
+    /// 原实现（`EnsureTestcontainersRequired`）抛 `InvalidOperationException`，与
+    /// `Integration.Tests` 的 `Skip.Test` 语义不对称：同一台机器同一配置下，探针 12 项跳过、
+    /// 本套件 46 项硬红（148 项中），并使 `ci-coverage` 本地不可闭环。
+    /// 裁决后统一为 skip。安全前提：外部库路径已在 T-09 删除（连接串属性零消费者 +
+    /// `PALDDD_TEST_ALLOW_DESTRUCTIVE_CLEANUP` 零引用），故不存在"静默连外部库"的危险，
+    /// 原硬拒所防的情形已不可达。
+    /// </remarks>
+    internal static bool ShouldSkipWithoutTestcontainers(bool useTestcontainers) => !useTestcontainers;
+
+    /// <summary>T-17：多方言测试的跳过理由（对齐 Integration.Tests 的环境守卫措辞）。</summary>
+    internal static string SkipReason(string provider, string cause) =>
+        $"{provider} 多方言测试仅走 Testcontainers（对齐禁外部库裁决）；{cause}，跳过。";
 
     /// <summary>
     /// 时间戳往返守护网断言（ITM-245）：DB 物化读回的时间与写入基准时刻的<b>绝对时刻</b>差值
