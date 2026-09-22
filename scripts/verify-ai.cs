@@ -552,7 +552,7 @@ var failed = 0;
     }
     else
     {
-        var shown = v25Bad.Count > 15 ? string.Join("；", v25Bad.Take(15)) + $"；…等 {v25Bad.Count} 处" : string.Join("；", v25Bad);
+        var shown = v25Bad.Count > 60 ? string.Join("；", v25Bad.Take(60)) + $"；…等 {v25Bad.Count} 处" : string.Join("；", v25Bad);
         failed++; lines.Add($"FAIL V25: .ai 文档命令形态/死引用 {v25Bad.Count} 处（{shown}）——改为 dotnet run 或删死引用");
     }
 }
@@ -837,8 +837,52 @@ static string CheckLedgerSensorPaths(IEnumerable<string> lines, string repoRoot)
 //   ② 死引用：`.ai/scripts/X.sh` 或 `scripts/X.sh` 指向不存在的文件。
 // 排除：history/ 归档；含历史标记的行（勘正/原写/已删/退役/旧形态/历史版本/反例 等
 // ——F-NN 勘正注与 KFP 反例记录有意引用旧形态以说明当时发生了什么）。
+// ③ 的文档角色界定（T-26，2026-09-22）：裸名判定只作用于**现行命令面**文档。
+// 理由：历史/账本类文档（lessons/metrics/误判知识库/行动项账本/姊妹快照）按定义描述"当时
+// 发生了什么"，其中的脚本名是历史事实——改写等于篡改历史（本仓"报告不可变"规则）。
+// 实测：不加界定则 46 处命中全部落在这类文档；界定后只有现行协议文档（engine/fix-protocol/
+// README/prompt 等）报红，即复核报告所指"对外展示面宣称的防线有一半不存在"那一类。
+static bool IsCurrentCommandSurface(string relPath)
+{
+    var name = Path.GetFileName(relPath);
+    return !(name.StartsWith("lessons", StringComparison.Ordinal)
+          || name == "metrics.md"
+          || name == "known-false-positives.md"
+          || name.StartsWith("action-items", StringComparison.Ordinal)
+          || name == "sibling-map.md"
+          || name == "perspective-stats.md");
+}
+
 static List<string> CheckAiDocCommandForms(string repoRoot)
 {
+    // ③ 的待改名基线（T-26，2026-09-22）：现行协议文档中仍以旧 `.sh` 名引用已迁移门禁的位置。
+    // 这些条目**被 ③ 跳过**（V25 因此仍为 25/25），但基线本身、owner 与到期日都在此可见——
+    // 满足 T-24 的观察态纪律（观察态须有 owner 与到期时间，否则退化为无人再看的静默 no-op）。
+    // 到期（2026-12-31）须处置：改名、或续期并写明理由。
+    // 清空方式：左列 `.sh` 换成现行 `.cs`——同干名者换扩展名；`*-check.sh` 去 `-check`
+    // （`doc-consistency-check.sh`→`doc-consistency.cs`、`fix-completeness-check.sh`→`fix-completeness.cs`）；
+    // `sister-axis-scan.sh`→`sister-axis.cs`；`gate-check.sh`→`gate.cs`；
+    // `assertion-strength-check.sh` 判定已下沉 AssertionStrengthGateTests（无对应脚本）。
+    // owner: 框架维护者 · 到期: 2026-12-31
+    var pendingRename = new HashSet<string>(StringComparer.Ordinal)
+    {
+        ".ai/review/engine.md|fix-orchestrator.sh",
+        ".ai/review/engine.md|review-scope.sh",
+        ".ai/review/fix-protocol.md|sister-axis-scan.sh",
+        ".ai/review/fix-protocol.md|fix-completeness-check.sh",
+        ".ai/review/prompt.md|doc-consistency-check.sh",
+        ".ai/review/prompt.md|assertion-strength-check.sh",
+        ".ai/review/prompt.md|review-scope.sh",
+        ".ai/review/prompt.md|probe-template.sh",
+        ".ai/review/review-charter-v2.md|sister-axis-scan.sh",
+        ".ai/review/review-charter-v2.md|assertion-strength-check.sh",
+        ".ai/review/review-charter-v2.md|post-fix-check.sh",
+        ".ai/review/review-charter-v2.md|fix-completeness-check.sh",
+        ".ai/review/review-charter-v2.md|review-gate.sh",
+        ".ai/test/prompt.md|gate-check.sh",
+        ".ai/test/prompt.md|test-gate.sh",
+    };
+
     var bad = new List<string>();
     var aiDir = Path.Combine(repoRoot, ".ai");
     if (!Directory.Exists(aiDir)) return bad;
@@ -887,6 +931,23 @@ static List<string> CheckAiDocCommandForms(string repoRoot)
             foreach (Match m in Regex.Matches(line, @"(?<!\.ai/)\bscripts/([A-Za-z0-9_-]+\.sh)"))
                 if (!rootScripts.Contains(m.Groups[1].Value) && !aiScripts.Contains(m.Groups[1].Value))
                     bad.Add($"{rel}:{lineno} 引用不存在脚本 scripts/{m.Groups[1].Value}");
+
+            // ③ 裸文件名死引用（T-26，2026-09-22 增）：无路径前缀的 `X.sh` 若在两个 scripts
+            // 目录均不存在即判死引用。修前 V25 只认 ①② 的带前缀形态——实测同一行注入
+            // `bash scripts/verify-ai.cs`（被抓）与裸名 `gate-check.sh`（零报告），
+            // 而 .ai/README.md 宣称的防线里 6 个已删 .sh 正是靠这个盲区存活。
+            // 排除：带路径前缀者（交给 ②/②'，避免重复报）、`.sh.template`（模板快照非脚本）、
+            // 以及非现行命令面的历史/账本类文档（见 IsCurrentCommandSurface）。
+            if (IsCurrentCommandSurface(rel))
+            {
+                foreach (Match m in Regex.Matches(line, @"(?<![A-Za-z0-9_/.\-])([A-Za-z0-9_\-]+\.sh)(?!\.)"))
+                {
+                    var bare = m.Groups[1].Value;
+                    if (rootScripts.Contains(bare) || aiScripts.Contains(bare)) continue;
+                    if (pendingRename.Contains($"{rel}|{bare}")) continue;   // 待改名基线（见方法头声明）
+                    bad.Add($"{rel}:{lineno} 引用不存在脚本（裸名）{bare}");
+                }
+            }
         }
     }
     return bad;
