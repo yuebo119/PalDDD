@@ -47,9 +47,25 @@
 | W7 | T-37 跨仓契约版本锚 | **已完成**（`doc-consistency` 增 D13 + `.ai` 侧声明） | `a94f601` + `.ai` `1dc3b1f` |
 | W2 | T-06 v3.0 承诺兑现 | 待做（L，需先做 T-13） | — |
 | W6 | T-23 分类器合并 | **已结项**（处置 ③：维持重复记为既定成本 + 类文档加注"五处的射程"） | `ff1fe37` |
+| W5 | T-21 去墙钟 | **分类已定标**（见下），实际目标集 ≈7 处而非 22 处；转换待做 | 本次提交 |
 | W3–W7 | 其余 10 项 | 待做 | — |
 
-**进度：27 / 38 项（71%）· 主仓 31 个提交 + `.ai` 仓 7 个提交**
+**进度：27 / 38 项（71%）· 主仓 32 个提交 + `.ai` 仓 7 个提交**
+
+**T-21 的定标（"22 处 `Task.Delay`"是混合体，实测分类）**：
+
+| 类别 | 处数 | 处置 |
+|---|---|---|
+| **假阳性**：`SourceCodeGuardTests` 的 raw string 坏样本（`class C { async Task M() { await Task.Delay(1); } }` 是**文本**，不是等待） | 2 | 不动 |
+| **合理**：`BrokerIntegrationTests` 等真实 broker 就绪等待 | 7 | 不动（无 fake 面可替） |
+| 待核：`TestHelpers.cs` 测试基础设施 | 4 | 逐处判断 |
+| **真目标**：`SagaProcessorTests`(2) / `OutboxProcessorTests`(2) / `FanOutStepTests`(2) / `TransactionsTests`(1) | ≈7 | 注入 `FakeTimeProvider` 推进时间替代 Delay |
+| 其他（`FakeTimeProviderTimerTests` 1 / `CqrsTests` 1） | 2 | 待核 |
+
+**关键前提已就位**：`OutboxProcessor` 构造函数**已接受 `TimeProvider? timeProvider`**
+（`OutboxProcessor.cs:35`），计时经基类 `PeriodicBackgroundProcessor` 走该 provider——
+故真目标集的转换是"注入 fake 并推进"的机械改动，无需改生产代码。**未做**：7 处转换各需
+读懂该测试的等待语义并验证推进后行为等价，超出本轮可验证范围。
 
 **T-23 的最终处置（处置 ③，经用户"按最优方案处理"授权）**：跨项目重复**经核验无法合并**
 （四链唯一共同祖先是领域内核，不能依赖 EF Core）；且 `SqlErrorClassifier.cs:10` 的"五处"
