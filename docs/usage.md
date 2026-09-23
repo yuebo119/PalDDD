@@ -221,6 +221,8 @@ services.AddPalMemoryPackSerialization(catalog =>
 
 > ⚠️ **事务前提（TX1，2026-09-20）**：Outbox 模式的原子性由「业务数据写入与消息行写入在**同一数据库事务**内提交」保证——这是**使用方职责**：调用方必须在业务 DbContext 事务/UnitOfWork 内写入 outbox 消息行（`AddMessage` + 同事务 `SaveChanges`），框架的后台发布器只负责事务提交后的可靠投递。若消息行与业务数据不同事务，将失去 exactly-once-write 保证（业务回滚但消息已入队 → 幽灵消息）。
 
+> ⚠️ **跨栈误配警示（2026-09-20 补）**：EF 业务上下文配 Dapper/PalORM 的 `IPalOutboxStore` 时，`AddMessage` 是**即时 INSERT**——无活动 ambient 事务即独立自动提交，与业务写入**不在同一事务**：业务回滚后 outbox 行仍在（孤儿消息）。这是跨栈混配的误配场景，不是默认路径（默认 EF + EF 流里 outbox 行进同一 `SaveChanges` 事务）。要么保持栈一致，要么确保 Dapper/PalORM store 与业务写入共享同一 `IUnitOfWork`/`DbTransaction`。
+
 ```csharp
 using PalDDD.Transactions;
 
@@ -237,6 +239,21 @@ services.AddPalOutbox();
 `IPalOutboxStore.LeasePendingMessagesAsync` 必须提供原子租约语义。SQL Server EF Core base context 提供了基于 `UPDLOCK` / `READPAST` 的实现（**未验证/实验性**，见下）。
 
 生产环境可从 `PalDDD.Transactions.EFCore` 派生 `OutboxDbContext`，或按方言派生 `PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`（ADR-012 方言粒度）以复用原子租约获取。`SqlServerOutboxDbContext` 当前标 `[Obsolete]` 且零测试覆盖，属**实验性/未验证**（v3.0 前评估），生产请优先使用已验证方言。适配器会配置 pending 查询索引、payload 必填、trace/correlation 字段长度和错误字段长度；`MarkProcessed` 会清理 lease/retry 状态，`ReleaseForRetry` 会释放 lease 并设置 `NextAttemptAt`。
+
+EF 栈的 `IPalOutboxStore` / `IInboxStore` / `ISagaStateStore<T>` / `IIdempotencyStore` / `IProjectionCheckpointStore` 由各适配器包的 `AddPal*EfCore` 扩展注册（与 Dapper/PalORM 栈的 `AddPal*` 入口对称）。这些扩展**不**注册 `DbContext` 本身（provider 选择权在调用方），需与 `AddDbContext` 配套：
+
+```csharp
+services.AddPalOutboxEfCore<AppOutboxDbContext>();       // IPalOutboxStore
+services.AddPalInboxEfCore<AppInboxDbContext>();         // IInboxStore
+services.AddPalSagaStateEfCore<AppSagaDbContext, OrderSagaState>();  // ISagaStateStore<T>
+services.AddPalIdempotencyEfCore<AppIdempotencyDbContext>();         // IIdempotencyStore
+services.AddPalProjectionsEfCore<AppProjectionDbContext>();          // IProjectionCheckpointStore
+
+services.AddDbContext<AppOutboxDbContext>(o => o.UseNpgsql(connectionString));
+// ... 其余上下文同理
+```
+
+Store 映射的生命周期为 **Scoped**，与 `AddDbContext` 默认一致（`DbContext` 非线程安全，不得 Singleton）。
 
 ### 死信语义与运维（F4 补，2026-09-19）
 
@@ -351,21 +368,34 @@ await eventLog.AppendAsync(
 
 读取时，`ReadStreamAsync` 按 stream version 回放单流事件，`ReadAllAsync` 按 global position 回放全局事件。生产 store 必须把 expected version 检查实现为原子操作，避免并发写入丢失更新。
 
+> ⚠️ **两种消费路径的提交序约束（2026-09-20 补）**：
+> - **`ReadStreamAsync` 的 stream version 流内严格连续**，是检查点消费的安全路径。
+> - **`ReadAllAsync` 的 global position 分配序可与事务提交序倒挂**：事务 A 先分配到低位、事务 B 后分配到高位但先提交时，按全局位置推进检查点的消费方读到 B 的高位即推进，A 提交后其事件被永久跳过。EF 栈因分配器行锁使并发分配串行化而不可达；**PalORM/Dapper 栈的 global position 为 DB 自增（自增不加行锁），该窗口可达**（两栈已分别以 v29 P3 声明）。用全局位置做检查点时，要求各追加方提交延迟相近，或改用 `ReadStreamAsync`。
+> - **Dapper/PalORM 栈的批量追加在未传事务时，中途失败会留下前半批**（部分写入，`DapperEventLog` P2 定案声明）——批量追加必须包在调用方事务内；EF 栈内部事务自动回滚，不受此影响。
+
 生产环境可从 `PalDDD.EventLog.EFCore` 派生 `EventLogDbContext`，并通过 DI 将该上下文作为 `IEventLog` 使用：
 
 ```csharp
 using Microsoft.EntityFrameworkCore;
 using PalDDD.EventLog;
 
-public sealed class AppEventLogDbContext(DbContextOptions<AppEventLogDbContext> options)
-    : EventLogDbContext(options);
+// ⚠️ 派生上下文必须显式接收并转发 reserver——否则每实例新建一个，Hi/Lo chunk 缓存
+// 永不跨请求共享（每次 append 都走 allocator 行 SELECT + CAS UPDATE，且每次消耗
+// 整个 chunk 的位置）。详见下方 AddPalEventLogEfCore 说明。
+public sealed class AppEventLogDbContext(
+    DbContextOptions<AppEventLogDbContext> options,
+    EventLogPositionReserver reserver)
+    : EventLogDbContext(options, positionReserver: reserver);
 
+services.AddPalEventLogEfCore<AppEventLogDbContext>();   // 把 reserver 注册为 Singleton
 services.AddDbContext<AppEventLogDbContext>(options =>
 {
     options.UseNpgsql(connectionString);   // 示例用已验证方言 PostgreSQL
 });
 services.AddScoped<IEventLog>(sp => sp.GetRequiredService<AppEventLogDbContext>());
 ```
+
+`AddPalEventLogEfCore<TContext>()` 把 `EventLogPositionReserver` 注册为 **Singleton**（`TryAdd` 语义，不覆盖调用方自己的注册）。EF Core 经 `ActivatorUtilities` 从 DI 解析派生上下文的构造参数，因此注册后所有请求上下文共享同一 chunk 缓存——这正是 Hi/Lo 分配器的设计前提。区块大小可调：`AddPalEventLogEfCore<AppEventLogDbContext>(chunkSize: 500)`。
 
 适配器会配置 `GlobalPosition` 主键、`(StreamName, StreamVersion)` 唯一索引和 `EventId` 唯一索引，并持久化 payload、metadata、审计字段和 trace context。`GlobalPosition` 由 `EventLogPositionReserver` 的 Hi/Lo 段分配器管理，而非数据库自增 identity。分配器缓存 chunk（默认 100 个位置）在进程内，仅当 chunk 耗尽时通过乐观 CAS（Revision 并发令牌）更新持久化 allocator 行；关系型 provider 下 append 使用默认隔离级别（ReadCommitted），stream 级别并发由唯一索引保障。
 

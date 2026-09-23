@@ -887,7 +887,7 @@ grep -rn 'Microsoft\.NET\.Test\.Sdk' --include='*.csproj' --include='*.props' . 
 | 契约 | 不可改为 | 原因 |
 |------|---------|------|
 | `ValueTask` + `IsCompletedSuccessfully` | `Task` | 同步完成零分配 |
-| `PipelineStateMachine`（~40B 可重用） | 闭包链（N×72B） | 每请求消除闭包分配 |
+| `PipelineStateMachine`（每请求 ~40B，Dispatcher 为 Singleton 故不可跨请求重用） | 闭包链（N×72B） | 每请求消除闭包分配 |
 | `FrozenDictionary` | `Dictionary` / `ConcurrentDictionary` | O(1) 查找 + 零 GC |
 | `ref struct` 枚举器（`DomainEventEnumerable`） | `IEnumerable<T>` | 栈分配，零装箱 |
 | 单链表事件存储（`_head`/`_tail`） | `List<DomainEvent>` | 无事件时零分配 |

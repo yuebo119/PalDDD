@@ -54,7 +54,7 @@
                   ┌──────────────────┐│ ┌──────────────────────┐
                   │ Architecture     ││ │ Core/CQRS/Transactions│
                   │ BoundaryTests    ││ │  单元功能正确性        │
-                  │ 37 方法 89 断言  ││ │ AggregateRoot/Saga/Outbox│
+                  │ 37 方法 99 断言  ││ │ AggregateRoot/Saga/Outbox│
                   └──────────────────┘│ └──────────────────────┘
                                      ╱
                           ┌────────────────────┐
@@ -97,7 +97,7 @@
 | **测试框架** | TUnit 1.66.27 + MTP（Microsoft.Testing.Platform） |
 | **断言库** | TUnit.Assertions（Fluent 链式） |
 | **属性测试** | TUnit.FsCheck（属性驱动） |
-| **快照测试** | Verify.TUnit 32.0.0（预留，目前 PublicApiSnapshot 自实现） |
+| **快照测试** | Verify.TUnit 32.0.0（已用于 Hosting.AspNetCore.Tests 的 ExceptionMiddleware，3 个 `.verified.txt` 基线；公共 API 快照另由自实现 PublicApiSnapshot 承载） |
 | **集成测试** | Testcontainers.*（PG/MySQL/SQLite/RabbitMQ/Kafka） |
 
 > **禁用** `Microsoft.NET.Test.Sdk`（与 TUnit MTP 冲突，conventions §10.6 硬规则）
@@ -240,7 +240,7 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | **Inbox 幂等**（SQLite TOCTOU/PG ON CONFLICT） | ✅ | ✅ | — | InboxProcessorTests + InboxMessageTests（Transactions.Tests） |
 | **Outbox 原子租约**（FOR UPDATE SKIP LOCKED） | — | ✅ | — | Integration.Tests |
 | **CQRS Dispatcher Freeze** | ✅ | — | — | DispatcherTests |
-| **Pipeline 状态机**（零分配） | ✅ | — | — | AllocationContractTests |
+| **Pipeline 派发预算**（每请求 &lt;500B） | ✅ | — | — | CqrsTests.Dispatcher_QueryAsync_NoHandlerOverhead_BaselineAllocation |
 | **MessageCatalog 不可变** | ✅ | — | — | AotContractTests |
 | **MessageEvolutionPipeline** | ✅ | — | — | SerializationTests |
 | **Projection 断点续传** | ✅ | ⚠ | — | EventLogReplaySourceTests（Projections.EventLog.Tests） |
@@ -268,7 +268,7 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | 契约 | 不可改为 | 真源 |
 |------|---------|------|
 | `ValueTask` + `IsCompletedSuccessfully` | `Task`（同步完成零分配） | conventions §12.1 |
-| `PipelineStateMachine`（~40B 可重用） | 闭包链（N×72B） | conventions §12.1 |
+| `PipelineStateMachine`（每请求 ~40B，Dispatcher 为 Singleton 故不可跨请求重用） | 闭包链（N×72B） | conventions §12.1 |
 | `FrozenDictionary` | `Dictionary`/`ConcurrentDictionary` | conventions §1.7 |
 | `ref struct` 枚举器（DomainEventEnumerable） | `IEnumerable<T>` | conventions §12.1 |
 | 单链表事件存储 | `List<DomainEvent>` | conventions §12.1 |

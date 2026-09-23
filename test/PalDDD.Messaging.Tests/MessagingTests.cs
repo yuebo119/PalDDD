@@ -279,5 +279,12 @@ public sealed class NullMessageBrokerTests
 
         await disposable.DisposeAsync();
         await disposable.DisposeAsync(); // 不应抛出
+
+        // 审计 2026-09-20 T7：原实现只验证"调两次不抛"（执行即通过，对行为锁定零贡献）。
+        // 补可观测契约断言：NullMessageBroker 的订阅返回 NullAsyncDisposable 单例——
+        // 即"订阅被忽略"是显式行为而非偶然。用 GetType 名称断言而非反射私有字段
+        // （NullMessageBroker 无订阅容器，反射猜字段名会造出假断言）。
+        var typeName = disposable.GetType().Name;
+        await Assert.That(typeName).Contains("NullAsyncDisposable");
     }
 }

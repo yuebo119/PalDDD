@@ -15,24 +15,24 @@ public static class TestEnvironment
 {
     private static readonly TestConfig _config = Load();
 
-    /// <summary>PG 连接串（环境变量 PALDDD_TEST_PG 覆盖）。仅供非 Fixture 测试配置读取。</summary>
-    public static string PostgreSqlConnectionString =>
-        Environment.GetEnvironmentVariable("PALDDD_TEST_PG") ?? _config.PostgreSql?.ConnectionString ?? DefaultPg;
-
-    /// <summary>是否应由 Fixture 启动 PostgreSQL Testcontainers。</summary>
+    /// <summary>是否应由 Fixture 启动 PostgreSQL Testcontainers。仅由配置决定——环境变量不参与。</summary>
+    /// <remarks>
+    /// 2026-09-22 T-09（裁决 3）：原实现把 `PALDDD_TEST_PG` 环境变量的存在解释为"禁用
+    /// Testcontainers"，与 MultiDialectFixture「禁止连接或清理外部数据库」的硬拒冲突——
+    /// 设了环境变量只会让 fixture 抛异常，形成死路（且原连接串属性零消费者）。外部库路径
+    /// 已删除：需要连真实外部实例的验证走显式 opt-in 探针（见 samples/PalDDD.DapperAotProbe
+    /// 直接读环境变量），不经由测试配置隐式回退。
+    /// </remarks>
     public static bool UsePostgreSqlTestcontainers =>
-        ResolveUseTestcontainers(_config.PostgreSql?.UseTestcontainers, Environment.GetEnvironmentVariable("PALDDD_TEST_PG"));
+        ResolveUseTestcontainers(_config.PostgreSql?.UseTestcontainers);
 
     /// <summary>PostgreSQL Testcontainers 镜像。</summary>
     public static string PostgreSqlImage => _config.PostgreSql?.Image ?? "postgres:18-alpine";
 
-    /// <summary>MySQL 连接串（环境变量 PALDDD_TEST_MYSQL 覆盖）。仅供非 Fixture 测试配置读取。</summary>
-    public static string MySqlConnectionString =>
-        Environment.GetEnvironmentVariable("PALDDD_TEST_MYSQL") ?? _config.MySql?.ConnectionString ?? DefaultMySql;
-
-    /// <summary>是否应由 Fixture 启动 MySQL Testcontainers。</summary>
+    /// <summary>是否应由 Fixture 启动 MySQL Testcontainers。仅由配置决定——环境变量不参与。</summary>
+    /// <remarks>同 <see cref="UsePostgreSqlTestcontainers"/>：2026-09-22 T-09 删除外部库隐式回退路径。</remarks>
     public static bool UseMySqlTestcontainers =>
-        ResolveUseTestcontainers(_config.MySql?.UseTestcontainers, Environment.GetEnvironmentVariable("PALDDD_TEST_MYSQL"));
+        ResolveUseTestcontainers(_config.MySql?.UseTestcontainers);
 
     /// <summary>MySQL Testcontainers 镜像。</summary>
     public static string MySqlImage => _config.MySql?.Image ?? "mysql:8.4";
@@ -112,10 +112,11 @@ public static class TestEnvironment
         return true;
     }
 
-    /// <summary>按显式配置、连接串覆盖和默认值决定是否启动 Testcontainers。</summary>
-    public static bool ResolveUseTestcontainers(bool? configuredValue, string? connectionStringOverride)
+    /// <summary>按显式配置决定是否启动 Testcontainers；未配置时默认启用（CI 与本地统一路径）。</summary>
+    /// <remarks>2026-09-22 T-09：删除 <c>connectionStringOverride</c> 参数——连接串不再参与判定。</remarks>
+    public static bool ResolveUseTestcontainers(bool? configuredValue)
     {
-        return configuredValue ?? string.IsNullOrWhiteSpace(connectionStringOverride);
+        return configuredValue ?? true;
     }
 
     /// <summary>验证配置文件可读取且 JSON 结构有效；供纯逻辑测试使用。</summary>
@@ -142,8 +143,6 @@ public static class TestEnvironment
     }
 
     // ── 默认值（没有配置文件时使用 Testcontainers）──
-    private const string DefaultPg = "Host=localhost;Port=5432;Username=test;Password=test;Database=palddd_test";
-    private const string DefaultMySql = "Server=localhost;Port=3306;UserID=root;Password=test;Database=palddd_test";
     private const string DefaultKafka = "localhost:9092";
     private const string DefaultRabbitHost = "localhost";
 
@@ -210,7 +209,6 @@ public static class TestEnvironment
         if (!env.TryGetProperty(name, out var db)) return null;
         return new DbConfig
         {
-            ConnectionString = ReadString(db, "ConnectionString"),
             UseTestcontainers = ReadBoolean(db, "UseTestcontainers", true),
             Image = ReadString(db, "Image")
         };
@@ -307,7 +305,6 @@ public static class TestEnvironment
 
     private sealed class DbConfig
     {
-        public string? ConnectionString { get; init; }
         public bool UseTestcontainers { get; init; } = true;
         public string? Image { get; init; }
     }

@@ -100,7 +100,8 @@ Console.WriteLine("  1. dotnet build PalDDD.slnx -c Release --verbosity quiet   
 Console.WriteLine("  2. dotnet test <受影响项目> -c Release --verbosity quiet      # 定向测试");
 if (changed.Count > 0)
 {
-    // 变更路径中的 test/<项目>/ 前缀去重排序，各自列首个 csproj（等价 ls ${d}*.csproj | head -1）
+    // 变更路径中的 test/<项目>/ 前缀去重排序，各自列首个 csproj。
+    // Directory.EnumerateFiles 返回的路径已含 topDir 前缀（如 test/X/X.csproj），直接打印即可。
     var testDirs = changed
         .SelectMany(f => Regex.Matches(f, "test/[^/]+/").Select(m => m.Value))
         .Distinct()
@@ -112,11 +113,11 @@ if (changed.Count > 0)
                 .OrderBy(p => p, StringComparer.Ordinal)
                 .FirstOrDefault() ?? ""
             : "";
-        Console.WriteLine($"     → {d}{csproj.Replace('\\', '/')}");
+        Console.WriteLine($"     → {csproj.Replace('\\', '/')}");
     }
 }
-Console.WriteLine("  3. bash .ai/scripts/verify-ai-system.sh                       # 系统一致性");
-Console.WriteLine("  4. bash .ai/scripts/gate-check.sh                             # 架构门禁");
+Console.WriteLine("  3. dotnet run scripts/verify-ai.cs                            # 系统一致性（.ai 存在时）");
+Console.WriteLine("  4. dotnet run scripts/gate.cs -- --allow-dirty                # 架构门禁（G22/G23/G24）");
 Console.WriteLine("  5. git add <相关文件> && git commit -m '修复：<描述>'");
 
 // ── ④ 同构模式姊妹收口核查（v85 新增，2026-09-11）──

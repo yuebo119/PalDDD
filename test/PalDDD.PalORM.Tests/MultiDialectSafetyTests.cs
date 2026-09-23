@@ -47,10 +47,12 @@ public sealed class MultiDialectSafetyTests
     }
 
     [Test]
-    public async Task ExternalFixture_DisabledTestcontainers_IsRejected()
+    public async Task ExternalFixture_DisabledTestcontainers_SkipsInsteadOfFailing()
     {
-        await Assert.That(() => MultiDialectFixture.EnsureTestcontainersRequired(false, "PostgreSQL"))
-            .Throws<InvalidOperationException>();
+        // T-17（2026-09-22）：契约由"硬拒"改为"跳过"——原断言 Throws<InvalidOperationException>
+        // 锁定的是旧语义。改为纯函数正负例：未启用 Testcontainers 即应跳过，启用则不跳过。
+        await Assert.That(MultiDialectFixture.ShouldSkipWithoutTestcontainers(false)).IsTrue();
+        await Assert.That(MultiDialectFixture.ShouldSkipWithoutTestcontainers(true)).IsFalse();
     }
 
     [Test]

@@ -244,11 +244,21 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
     }
 
     /// <summary>
-    /// 判定传入 message 是否仍为列表当前持有的活跃租约实例。
+    /// 判定传入 message 是否可被标记（仍为列表内的当前实例）。
     /// 对齐 InMemoryInboxStore.IsCurrentLeaseHolder 守卫强度：引用一致（未被 successor
-    /// 替换）+ 仍处租约中（LockedBy 非空）——不校验 LockedUntil 是否过期：真库语义
+    /// 替换）——不校验 LockedUntil 是否过期：真库语义
     /// （DapperOutboxStore.MarkProcessed 仅 WHERE id AND locked_by）允许处理时长超过
     /// 租约期限时仍标记（须在 <see cref="_lock"/> 内调用）。
+    /// <para>
+    /// <b>T-15（2026-09-22）：不再要求 LockedBy 非空</b>——原条件使 InMemory **拒绝三栈
+    /// 都接受的输入**（未租约消息）。三栈对未租约直呼的行为一致为"放行"（PalORM/Dapper 的
+    /// owner-null SQL 分支命中即 UPDATE；EF 的 `OutboxDbContext.cs:110-114` 明写该路径是
+    /// **运维/测试路径**的有意能力并配双守卫）。InMemory 是测试替身，比生产更严格会制造
+    /// "测试红而生产绿"的反向偏差——替身应接受生产会接受的。ITM-174 的僵尸标记保护
+    /// 由 `_messages.Contains(..., ReferenceEqualityComparer.Instance)` 承载：successor
+    /// 替换后旧引用不在列表中，仍被门控。保留 `Status == Pending`（对齐 EF 的终态守卫）。
+    /// 矩阵与决策依据见 `docs/review/three-stack-contract-matrix-2026-09-22.md`。
+    /// </para>
     /// </summary>
     private bool IsCurrentLeaseHolder(OutboxMessage message)
         // P3-SRC-105（R44 ITM-280 勘正动机）：O(1) 谓词前置短路——实际命中场景是终态重复
@@ -265,7 +275,6 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore
         // 与姊妹 InMemoryInboxStore/InMemoryIdempotencyStore/InMemoryProjectionCheckpointStore
         // 的 ReferenceEquals/显式引用字典形态（三姊妹轴唯一漏网处）
         => message.Status == OutboxStatus.Pending
-            && message.LockedBy is not null
             && _messages.Contains(message, ReferenceEqualityComparer.Instance);
 
     private List<OutboxMessage> QueryPending(int batchSize, int maxRetryCount)

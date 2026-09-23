@@ -135,10 +135,12 @@ public sealed class BrokerFixture : IAsyncDisposable
         // unified v2.0（2026-08-20）：RabbitMQ 预检，对称 Kafka 预检。
         // broker 不可达时显式 Skip 而非假失败（本地实测 41s 假失败签名；T-DDD-6 四层防线在 Rabbit 轴的补全）。
         // ITM-676（2026-09-14 升级）：原实现只做 TCP 探活，对"TCP 通、AMQP 死"故障模式误判为
-        // 可用——实测 192.168.200.120:5672 端口 12ms 可达但 connection.start 帧永不到达，预检
+        // 可用——实测某内网测试主机 AMQP 端口 12ms 可达但 connection.start 帧永不到达，预检
         // 判 true 致 5 测试各 18.9s 假失败（D2 记录该故障模式两度出现）。升级为 AMQP 协议级
         // 探测：完整走一次握手（含凭据），与 Kafka 轴 GetMetadata 深度对称——半坏环境同样
         // 落入 Skip 而非假失败。
+        // 审计 2026-09-20 S2：原注释含真实内网 IP 与端口（拓扑泄露面），已按
+        // verify-conventions V12 建议泛化为 <INTERNAL_TEST_HOST> 形态。
         if (!_rabbitProbed)
         {
             _rabbitProbed = true;

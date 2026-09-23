@@ -59,7 +59,7 @@ namespace PalDDD.Repository.EFCore;
 /// SaveChanges 的 try 块之前，见 <see cref="WriteEventsToOutbox"/> 注释）——本拦截器已
 /// 注入的 outbox 行将滞留 ChangeTracker 至同 scope 重试（双行风险）。单拦截器（本框架
 /// 推荐配置，AddPalOutboxUnitOfWork 默认）下链上唯一异常源是本拦截器自身，已由 v34
-/// 注入循环自清理域覆盖；多拦截器场景的清理挂钩方案 v3.0 收敛。
+/// 注入循环自清理域覆盖；多拦截器场景的清理挂钩方案 v4.0 收敛。
 /// </para>
 /// </remarks>
 public sealed class OutboxDomainEventInterceptor(
@@ -220,7 +220,7 @@ public sealed class OutboxDomainEventInterceptor(
         // sync/async 两路共用本方法天然闭合
         // v38 P3 声明：本自清理域只覆盖"本拦截器自身抛异常"路径——多拦截器配置下其他
         // 拦截器在 SavingChanges 抛异常时 SaveChangesFailed 同样不可达且无自清理挂钩，
-        // 已注入行滞留至同 scope 重试；详见类 remarks（多拦截器场景 v3.0 收敛）。
+        // 已注入行滞留至同 scope 重试；详见类 remarks（多拦截器场景 v4.0 收敛）。
         try
         {
             foreach (var evt in events)

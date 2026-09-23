@@ -33,25 +33,27 @@ public sealed class StrategicMetadataAttributeTests
 
     // ═══════════════════════════════════════════════════════════════
     // 废弃契约（精炼裁决 2026-08-26）——DomainCapability/AggregateName 框架零消费，
-    // [Obsolete(DiagnosticOnly)] 指向 v3.0 移除。反射断言（不实例化，避免 CS0618）。
+    // [Obsolete] 指向移除版本。反射断言（不实例化，避免 CS0618）。
+    // T-06（2026-09-22）：移除窗口由 v3.0 **改指 v4.0**——原承诺在 3.0.0 已发布后过期，
+    // 按建议与接口异步化捆进同一 major（不拆两次 breaking）。断言与测试名同步。
     // ═══════════════════════════════════════════════════════════════
 
     [Test]
-    public async Task DomainCapabilityAttribute_MarkedObsoleteForV3Removal()
+    public async Task DomainCapabilityAttribute_MarkedObsoleteForV4Removal()
     {
         var obsolete = typeof(DomainCapabilityAttribute).GetCustomAttribute<ObsoleteAttribute>();
         await Assert.That(obsolete).IsNotNull();
         await Assert.That(obsolete!.IsError).IsFalse();
-        await Assert.That(obsolete.Message).Contains("v3.0");
+        await Assert.That(obsolete.Message).Contains("v4.0");
     }
 
     [Test]
-    public async Task AggregateNameAttribute_MarkedObsoleteForV3Removal()
+    public async Task AggregateNameAttribute_MarkedObsoleteForV4Removal()
     {
         var obsolete = typeof(AggregateNameAttribute).GetCustomAttribute<ObsoleteAttribute>();
         await Assert.That(obsolete).IsNotNull();
         await Assert.That(obsolete!.IsError).IsFalse();
-        await Assert.That(obsolete.Message).Contains("v3.0");
+        await Assert.That(obsolete.Message).Contains("v4.0");
     }
 
     // ═══════════════════════════════════════════════════════════════

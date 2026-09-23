@@ -45,7 +45,7 @@ public sealed class ProjectionProcessor<TMessage>
         // v27 P3 勘正：原注释"允许 TimeSpan.Zero：租约即刻过期"与实现矛盾——
         // default(TimeSpan) == Zero，下方 `processingTimeout == default ? 5min : ...`
         // 把显式 Zero 替换为 5 分钟默认，"即刻过期"语义当前不可达；如需支持须改用
-        // nullable 参数（TimeSpan?，破坏性变更留 v3.0）。仅勘正注释，不改行为。
+        // nullable 参数（TimeSpan?，破坏性变更留 v4.0）。仅勘正注释，不改行为。
         if (processingTimeout < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
 

@@ -65,7 +65,7 @@ public sealed class DefaultSagaManager : ISagaManager
     /// 失效发生前通过（条目尚未移除），决策派发进入 Saga 管线与补偿并发执行；失效集写入后
     /// 新决策才经"无已注册条目"检查可见失败。
     /// v26/v27 修复族只关闭了"补偿完成后"半边（迟到决策经失效集/终态检查可见失败），
-    /// "补偿进行中"半边仍敞开。框架级根治需 manager 侧租约 fencing（v3.0 接口窗口）；
+    /// "补偿进行中"半边仍敞开。框架级根治需 manager 侧租约 fencing（v4.0 接口窗口）；
     /// 调用方对配 Timeout 的 HITL 步骤应保证决策与扫描周期错开。
     /// </remarks>
     public async ValueTask ResumeAsync<TDecision>(

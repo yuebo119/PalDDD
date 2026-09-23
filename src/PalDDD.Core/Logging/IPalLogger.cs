@@ -17,7 +17,7 @@ namespace PalDDD.Core.Logging;
 /// "IPalLogger 门面接收纯字符串消息，模板由调用方构造"）</b>：message 按 .NET 日志模板
 /// 解析——花括号 <c>{...}</c> 被下游（MEL/ZLogger）视为结构化槽位而非字面量，输出字面
 /// 花括号需转义（<c>{{</c> / <c>}}</c>）。结构化参数请用带参重载而非向 message 拼接——
-/// 当前接口未提供带参重载（接口扩展属破坏性变更，随 v3.0 一并裁决），结构化参数场景
+/// 当前接口未提供带参重载（接口扩展属破坏性变更，随 v4.0 一并裁决），结构化参数场景
 /// 暂走底层 <c>ILogger&lt;T&gt;</c>。
 /// </remarks>
 public interface IPalLogger<T>

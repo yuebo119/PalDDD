@@ -37,7 +37,7 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         try
         {
             // 注：接口 IPalOutboxStore.AddMessagesAsync 无 CancellationToken 参数（v23 轮已
-            // 裁决接口异步化属 v3.0 破坏性变更），取消信号不传播为已知契约限制
+            // 裁决接口异步化属 v4.0 破坏性变更），取消信号不传播为已知契约限制
             return await SaveChangesAsync().ConfigureAwait(false);
         }
         catch (DbUpdateException)

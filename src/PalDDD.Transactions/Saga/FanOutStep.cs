@@ -44,7 +44,7 @@ internal interface IInternalFanOutStep
 /// <b>全部</b>子任务重新执行 <c>executor</c>，<b>包括上一 attempt 已成功的子任务</b>
 ///（完成标记是单次 attempt 的局部状态，不跨 attempt 保留）。
 /// 因此 <b>executor 必须自身幂等</b>——扣款/发货/通知类外部副作用会因整批重放
-/// 重复执行。子项粒度的进度记录属 v3.0 契约面（需 SagaState 快照格式演进，
+/// 重复执行。子项粒度的进度记录属 v4.0 契约面（需 SagaState 快照格式演进，
 /// 见 ADR-020 窗口清单）；当前版本的使用方须以幂等 executor 兜底。
 /// 该行为由 <c>SagaLaneCharacterizationTests.PartialFailure_RetriesThenSucceeds</c>
 /// 表征锁定（ExecutedItems.Count == 3 断言整批重放）。
@@ -246,7 +246,7 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
 /// <param name="Completed">成功完成的子任务结果</param>
 /// <param name="Failed">失败的子任务（含异常信息）。⚠️ v34 P3 勘正：Item 恒为 default——
 /// 失败子任务未产生结果，定位靠 <paramref name="Failed"/> 元组的 Error 异常消息；携带
-/// 失败输入项属 v3.0 接口扩展</param>
+/// 失败输入项属 v4.0 接口扩展</param>
 public readonly record struct FanOutResult<TResult>(
     IReadOnlyList<TResult> Completed,
     IReadOnlyList<(TResult? Item, Exception Error)> Failed)

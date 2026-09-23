@@ -112,7 +112,7 @@ flowchart BT
     AppAbstractions --> Domain
 ```
 
-## 新增组件（v0.1.0）
+## 早期版本新增组件（v0.1.0）
 
 | 组件 | 层 | 说明 |
 |------|:--:|------|
@@ -154,6 +154,16 @@ flowchart BT
 | `PalDDD.Hosting.AspNetCore` | Web hosting helpers、异常处理中间件、健康检查。 |
 | `PalDDD.Messaging.Kafka` | Kafka broker adapter。 |
 | `PalDDD.Messaging.RabbitMQ` | RabbitMQ broker adapter。 |
+| `PalDDD.Idempotency.EFCore` | EF Core idempotency store 持久化（唯一约束冲突分类 + 幂等记录）。 |
+| `PalDDD.Projections.EFCore` | EF Core projection checkpoint store 持久化。 |
+| `PalDDD.Compression` | 压缩抽象（`ICompressor` / `ICompressionProvider`）+ 算法与级别枚举 + DI 注册。 |
+| `PalDDD.Compression.Native` | 原生压缩器实现（`NativeCompressors`）+ DI 注册。 |
+| `PalDDD.PalORM` | PalORM 战略栈：`PalOrmUnitOfWork`、ambient transaction、Outbox/Inbox/Saga/EventLog Store 与 SqlErrorClassifier。 |
+| `PalDDD.PalORM.PostgreSql` | PalORM PostgreSQL 方言扩展。 |
+| `PalDDD.PalORM.MySql` | PalORM MySQL 方言扩展。 |
+| `PalDDD.PalORM.Sqlite` | PalORM SQLite 方言扩展。 |
+| `PalDDD.Base` | 基础元包 —— 最小编程模型：领域基元 + 序列化 + 压缩 + 源生成 + 编译时分析器。 |
+| `PalDDD.Extension` | 扩展元包 —— 全量 DDD 能力：CQRS + 事件日志 + 幂等 + 投影 + 消息 + 事务 + DI 装配。 |
 
 ## 依赖方向
 
