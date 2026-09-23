@@ -148,8 +148,10 @@ public static class PalActivitySource
 /// EventsConsumed/OutboxPending/SagaActive/BehaviorDuration）——声明但框架零调用，
 /// 误导用户认为会产出数据。需要这些指标时在调用方自行 Meter.CreateCounter 并 Add。
 /// <para>
-/// 📐 <b>零 tag 设计声明（v25 P3 勘正族 C11 · ITM-229 精神显式化）</b>：全部 21 个活 Counter（v72 勘正：v71 增 SagaScanFailed 后计数未同步）
-/// 有意零 tag——框架层零分配纪律（无 tag 的 <c>Add(T)</c> 是零额外分配路径，带 tag 调用引入
+/// 📐 <b>零 tag 设计声明（v25 P3 勘正族 C11 · ITM-229 精神显式化）</b>：全部 23 个活 Counter
+/// （计数沿革：v71 增 SagaScanFailed；v72 勘正同步为当时计数；v3.0.0 增
+/// <c>paldd.outbox.dead</c> 与 <c>paldd.outbox.persist_failed</c> 后此处计数再次未同步，
+/// 2026-09-23 复查修正为 23）有意零 tag——框架层零分配纪律（无 tag 的 <c>Add(T)</c> 是零额外分配路径，带 tag 调用引入
 /// 键值对构造开销）+ 指标基数安全（事件类型/投影名/流名等维度随业务无界增长，tag 化会造成
 /// 时序库基数爆炸）。调用方需要维度时用自身 <c>Meter.CreateCounter</c> 自建带 tag Counter；
 /// Activity 侧 <c>pal.event</c> / <c>pal.projection.name</c> 等 tag 已提供 trace 维度。

@@ -175,6 +175,8 @@ public sealed class CreateOrderHandler(IUnitOfWork unitOfWork)
 
 如果使用 `OutboxDomainEventInterceptor`，领域事件会在 `SaveChanges` 事务中写入 Outbox，再由后台 processor 发布。不要把事务策略藏在 request attribute 中，也不要把 EF Core 的查询能力包进通用 `IRepository<T>`；需要封装持久化时，定义面向业务语义的专用仓储或直接使用应用 `DbContext`。
 
+> ⚠️ **不支持嵌套事务（3.0.0 起三栈统一 fail-fast，ADR-023）**：事务已活动时再调 `BeginTransactionAsync` 会抛 `InvalidOperationException`（此前 EF Core 与 PalORM 两栈为静默 no-op——嵌套调用时内层 `CommitAsync` 提交的是外层事务，导致静默原子性破坏）。需要在既有事务内执行工作的调用方，请直接执行工作委托或自行编排提交边界，不要嵌套调用本方法。
+
 ## 注册 JSON 消息序列化
 
 ```csharp
@@ -238,7 +240,9 @@ services.AddPalOutbox();
 
 `IPalOutboxStore.LeasePendingMessagesAsync` 必须提供原子租约语义。SQL Server EF Core base context 提供了基于 `UPDLOCK` / `READPAST` 的实现（**未验证/实验性**，见下）。
 
-生产环境可从 `PalDDD.Transactions.EFCore` 派生 `OutboxDbContext`，或按方言派生 `PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`（ADR-012 方言粒度）以复用原子租约获取。`SqlServerOutboxDbContext` 当前标 `[Obsolete]` 且零测试覆盖，属**实验性/未验证**（v3.0 前评估），生产请优先使用已验证方言。适配器会配置 pending 查询索引、payload 必填、trace/correlation 字段长度和错误字段长度；`MarkProcessed` 会清理 lease/retry 状态，`ReleaseForRetry` 会释放 lease 并设置 `NextAttemptAt`。
+生产环境可从 `PalDDD.Transactions.EFCore` 派生 `OutboxDbContext`，或按方言派生 `PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`（ADR-012 方言粒度）以复用原子租约获取。`SqlServerOutboxDbContext` 当前标 `[Obsolete]`（源码声明 v4.0 移除）且零测试覆盖，属**实验性/未验证**，生产请优先使用已验证方言。适配器会配置 pending 查询索引、payload 必填、trace/correlation 字段长度和错误字段长度；`MarkProcessed` 会清理 lease/retry 状态，`ReleaseForRetry` 会释放 lease 并设置 `NextAttemptAt`。⚠️ **Dapper 栈 `MarkProcessed` 被租约 token 拒阻时不改写入参对象**（3.1.0 起与 PalORM 一致）：此前被拒路径会把传入消息对象的租约字段清空，使调用方持有的对象与数据库实际状态不一致。
+
+**并行发布（3.0.0 起）**：`OutboxOptions.MaxDegreeOfParallelism`（默认 1，经 `AddPalOutbox(o => o.MaxDegreeOfParallelism = n)` 配置）>1 时，批内消息按分区交由 per-worker scope（独立 store/DbContext 实例）并行完成「反序列化 → 发布 → 标记」，吞吐随并行度提升；租约/fencing 互斥不受影响。**前提**：① broker 发布须线程安全（Kafka producer 天然支持；RabbitMQ 单 channel 并发发布的 7.x 语义已核实——publisher-confirms 仅护帧发送段、确认等待不串行）；② 消费方幂等（并行加速下乱序提交概率上升）。直构造 `OutboxBatchProcessor` 的调用方不受影响（`IServiceScopeFactory` 为可选尾参；并行度 >1 且缺失时运行期 fail-fast 并给出指引）。
 
 EF 栈的 `IPalOutboxStore` / `IInboxStore` / `ISagaStateStore<T>` / `IIdempotencyStore` / `IProjectionCheckpointStore` 由各适配器包的 `AddPal*EfCore` 扩展注册（与 Dapper/PalORM 栈的 `AddPal*` 入口对称）。这些扩展**不**注册 `DbContext` 本身（provider 选择权在调用方），需与 `AddDbContext` 配套：
 
@@ -292,7 +296,7 @@ builder.Services.AddOpenTelemetry()
 
 `Outbox Process` span 包含 `pal.outbox.batch_size`、`pal.outbox.processed`、`pal.outbox.dead` 和 `pal.outbox.retried` 标签。
 
-同一批处理还会记录 `paldd.outbox.processed` 和 `paldd.outbox.failed` metrics，应用层可通过 OpenTelemetry `AddMeter(PalActivitySource.Name)` 采集。
+同一批处理还会记录 `paldd.outbox.processed` 和 `paldd.outbox.failed` metrics，应用层可通过 OpenTelemetry `AddMeter(PalActivitySource.Name)` 采集。重试耗尽进入死信的消息另有独立的 `paldd.outbox.dead` 计数（3.0.0 起，建议按它建死信积压告警）；`paldd.outbox.persist_failed` 计数状态持久化失败（标记已尝试但未落库，下轮轮询重试）。
 
 ## 使用 Inbox
 

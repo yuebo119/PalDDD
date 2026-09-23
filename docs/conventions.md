@@ -338,7 +338,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-09-04 复验）：213 源文件·36 项目·0 违规（2026-07-02 锚定时 200 文件，Transactions 拆分等增长）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-09-23 复验）：219 源文件·36 项目·0 违规（2026-09-04 锚定时 213 文件，Transactions 拆分等增长）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 
@@ -526,7 +526,7 @@ public sealed class SagaKeyValidationTests { ... }
 
 ### 5.7 架构边界测试
 
-`ArchitectureBoundaryTests.cs`（37 个测试方法 / 89 断言点）将 ADR 和 Clean Architecture 落地为可执行断言：
+`ArchitectureBoundaryTests.cs`（37 个测试方法 / 99 断言点）将 ADR 和 Clean Architecture 落地为可执行断言：
 
 - 项目引用禁令矩阵（`[Theory]` + InlineData）
 - 源码内容关键字禁令（扫描 `.cs`，过滤注释行）
@@ -818,7 +818,7 @@ dotnet run scripts/verify-conventions.cs
 
 ### 10.6 测试框架规则（TUnit + MTP · 强制）
 
-> **背景**：本框架统一使用 **TUnit 1.66.27**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.3.3**。不使用 VSTest。
+> **背景**：本框架统一使用 **TUnit 1.69.0**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.4.1**。不使用 VSTest。
 
 **硬性规则**（违反导致 `dotnet test` 发现零测试或构建冲突）：
 
@@ -907,6 +907,7 @@ grep -rn 'Microsoft\.NET\.Test\.Sdk' --include='*.csproj' --include='*.props' . 
 - 写入路径（`EventData` 构造）：`ToArray()` 防御性拷贝（安全优先）
 - 读取路径（`RehydrateFromBytes`）：引用赋值（性能优先）
 - **禁止在读取路径调用 `ToArray()`**（会破坏零拷贝契约）
+- Dapper/PalORM 栈的 EventLog 批量追加复用 `EventData` 构造期已拷贝的 internal 数组（3.1.0 起，不再对每事件 payload/metadata 各做一次防御性拷贝——每事件省 2 次数组分配，行为不变；`EventData` 构造后不可变是公开 API 契约）
 
 ### 12.4 SQL 模板编译时常量
 

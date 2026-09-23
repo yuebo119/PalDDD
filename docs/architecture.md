@@ -2,7 +2,7 @@
 
 Pal.DDD 采用小型、显式、AOT 友好的 Clean Architecture 分层架构。
 
-> 🤖 **AI 质量防线**（可选外部系统）：`.ai/` 目录内嵌统一质量体系 v2.1（姊妹防线/传感器台账/编码门禁/修复编排/flaky 检测），详见 `.ai/README.md`。**`.ai/` 是可选外部质量系统，全新 clone 可能不存在该目录——CI 在无 `.ai/` 时自动降级为 gate-lite。** 36 个源项目按依赖方向从 Core 到 Infrastructure/Adapters 逐层排列（分层图见 conventions §4.2，含 Infra-PalORM 第三栈）。项目不是应用框架，而是一组可组合的 DDD/CQRS/消息/事务基础设施库。
+> 🤖 **AI 质量防线**（可选外部系统）：`.ai/` 目录内嵌统一质量体系 v2.3（姊妹防线/传感器台账/编码门禁/修复编排/flaky 检测），详见 `.ai/README.md`。**`.ai/` 是可选外部质量系统，全新 clone 可能不存在该目录——CI 在无 `.ai/` 时自动降级为 gate-lite。** 36 个源项目按依赖方向从 Core 到 Infrastructure/Adapters 逐层排列（分层图见 conventions §4.2，含 Infra-PalORM 第三栈）。项目不是应用框架，而是一组可组合的 DDD/CQRS/消息/事务基础设施库。
 
 ## 分层边界
 
@@ -130,11 +130,11 @@ flowchart BT
 | --- | --- |
 | `PalDDD.Core` | 实体、聚合根、领域事件、值对象、智能枚举、源码生成器标记。 |
 | `PalDDD.Analyzers` | bounded context、领域模型、process manager、projection handler 和领域事件消息契约的编译期治理规则。 |
-| `PalDDD.Analyzers.CodeFixes` | 上述 PDDD001-015 规则的代码自动修复。 |
+| `PalDDD.Analyzers.CodeFixes` | 部分 PDDD001-015 规则的代码自动修复（PDDD008 消息上下文前缀 / PDDD010 版本后缀 / PDDD013 投影上下文前缀 / PDDD015 事件名对齐）。 |
 | `PalDDD.Core.SourceGen` | 生成强类型 ID、智能枚举注册、消息目录辅助代码。 |
 | `PalDDD.CQRS` | 请求模型、handler、dispatcher、验证/日志 pipeline behaviors。 |
 | `PalDDD.DependencyInjection` | AOT-safe 显式 DI 注册 API（`AddPalDDD`、`AddPalCommandHandler<T,...>` 等）。 |
-| `PalDDD.Prompts` | 元包 + AI 提示模板（`.pal/prompts/` 8 个 `.prompt.md` + 1 个 `README.md`，共 9 份）。 |
+| `PalDDD.Prompts` | 元包 + AI 提示模板（`.pal/prompts/` 9 个 `.prompt.md` + 1 个 `README.md`，共 10 份）。 |
 | `PalDDD.EventLog` | append-only 事件日志、审计元数据、乐观并发和有序回放抽象。 |
 | `PalDDD.EventLog.EFCore` | EF Core durable event log base context。 |
 | `PalDDD.Messaging` | 领域事件派发、broker 抽象（进程内 EventBus 已移除，统一 Outbox 模式）。 |
@@ -316,11 +316,11 @@ Command/API idempotency 还会通过 `PalMetrics` 记录 `paldd.idempotency.exec
 
 Outbox 批处理同时通过 `PalActivitySource` 发出 `Outbox Process` activity，包含实际 batch size、processed、dead 和 retried 计数标签。库只产生 `ActivitySource` telemetry，不绑定 OpenTelemetry exporter；应用层通过 Aspire Service Defaults 或 OpenTelemetry `AddSource(PalActivitySource.Name)` 负责采集。
 
-Outbox 批处理还会通过 `PalMetrics` 记录 `paldd.outbox.processed` 与 `paldd.outbox.failed`，使发布吞吐、重试和死信路径可以在不解析日志的情况下被告警和看板聚合。
+Outbox 批处理还会通过 `PalMetrics` 记录 `paldd.outbox.processed` 与 `paldd.outbox.failed`；重试耗尽转入死信的消息由独立的 `paldd.outbox.dead` 计数（3.0.0 起与 `failed` 分离，死信积压可直接告警），标记已尝试但未落库的条目由 `paldd.outbox.persist_failed` 计数（`processed` 不再混入此类，与 DB 真相一致）。发布吞吐、重试和死信路径因此可以在不解析日志的情况下被告警和看板聚合。
 
 生产持久化通过可选 `PalDDD.Transactions.EFCore` 包提供 `OutboxDbContext` 与四方言 base context（`SqlServerOutboxDbContext`/`PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`，ADR-012）。通用 base context 负责状态映射、pending 查询过滤、成功/死亡/重试状态转换；SQL Server base context 使用 `UPDLOCK` / `READPAST` 在数据库内原子获取 lease，避免多实例重复发布。核心 `PalDDD.Transactions` 包只依赖 `IPalOutboxStore` 抽象。
 
-> ⚠️ **方言支持状态**：SQL Server（`SqlServerOutboxDbContext`）当前标 `[Obsolete]`、**零测试覆盖、未验证**，属**实验性**支持（v3.0 前评估是否移除）；生产推荐使用已验证方言 SQLite / PostgreSQL / MySQL。
+> ⚠️ **方言支持状态**：SQL Server（`SqlServerOutboxDbContext`）当前标 `[Obsolete]`（源码声明 v4.0 移除）、**零测试覆盖、未验证**，属**实验性**支持；生产推荐使用已验证方言 SQLite / PostgreSQL / MySQL。
 
 ### Inbox
 

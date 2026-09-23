@@ -63,7 +63,7 @@
 │  ✅ 消息兼容 → Schema Evolution 显式升级管道 + 编译期版本校验       │
 │  ✅ AOT 兼容 → 源码生成器 + 泛型 + JsonTypeInfo 零反射             │
 │  ✅ 编译期防错 → Analyzer 15 条诊断规则，写错代码直接编译不过      │
-│  ✅ 可观测 → 21 个预定义指标 + 11 种 Activity，零配置              │
+│  ✅ 可观测 → 23 个预定义指标 + 11 种 Activity，零配置              │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -108,9 +108,9 @@
 | **零 DateTime.UtcNow** | ❌（30+ 处） | ❌（100+ 处） | ❌（5+ 处） | **✅ 0 处** |
 | **并发模型** | Lease | Saga + Retry | 无状态 | **Hi/Lo + CAS + Lease + Revision** |
 | **EF Core 解耦** | ❌ 耦合 | ❌ 耦合 | ✅ 无 EF | **✅ 完全可选** |
-| **OpenTelemetry** | ⚠️ 部分 | ✅ | ⚠️ 部分 | **✅ 全链路 21 指标** |
+| **OpenTelemetry** | ⚠️ 部分 | ✅ | ⚠️ 部分 | **✅ 全链路 23 指标** |
 | **包大小** | ~50MB | ~120MB | ~500KB | **~2MB** |
-| **测试覆盖** | ⚠️ 部分 | ⚠️ 部分 | ✅ | **✅ 1379 实测（16 项目：本机 1311 + 54 CI Testcontainers + 14 设计内跳过）** |
+| **测试覆盖** | ⚠️ 部分 | ⚠️ 部分 | ✅ | **✅ 1490 实测（16 项目，2026-09-23：本机 1430 通过 + 60 项无 Docker 跳过由 CI Testcontainers 执行）** |
 
 ### 核心优势一句话
 
@@ -443,6 +443,8 @@ public async ValueTask<OrderId> HandleAsync(CreateOrderCommand command, Cancella
     return id;
 }
 ```
+
+**事务已活动时禁止嵌套 `BeginTransactionAsync`**（3.0.0 起三栈统一 fail-fast，ADR-023）：内层 Commit 会提交外层事务、造成静默原子性破坏。需要在外层事务内做事的，直接执行工作委托，不要嵌套。
 
 **为什么不提供通用 IRepository<T>？** 通用 Repository 要么暴露 `IQueryable`（AOT 不兼容），要么提供的查询方法太少。实践中直接用 `DbContext` 最灵活。`IUnitOfWork` 只封装事务边界，不做查询。
 
@@ -877,14 +879,14 @@ app.Run();
 
 ### 4.14 可观测性：指标与追踪
 
-**框架解决的问题：** 生产环境出问题了，你先要知道的是：命令执行了多少？失败了几个？发件箱积压了多少？Pal.DDD 内建了 21 个 OpenTelemetry 指标和 11 种 Activity，零配置即可采集。
+**框架解决的问题：** 生产环境出问题了，你先要知道的是：命令执行了多少？失败了几个？发件箱积压了多少？Pal.DDD 内建了 23 个 OpenTelemetry 指标和 11 种 Activity，零配置即可采集。
 
 ```csharp
 // 一行代码接入
 builder.Services.AddOpenTelemetry()
     .WithMetrics(meterProviderBuilder =>
         meterProviderBuilder
-            .AddMeter("PalDDD")                          // 内建 21 个指标
+            .AddMeter("PalDDD")                          // 内建 23 个指标
             .AddPrometheusExporter())
     .WithTracing(tracerProviderBuilder =>
         tracerProviderBuilder
@@ -892,7 +894,7 @@ builder.Services.AddOpenTelemetry()
             .AddConsoleExporter());
 ```
 
-**内建的 21 个指标**（ITM-229 移除 7 个无记录路径死指标后的现行清单）：
+**内建的 23 个指标**（ITM-229 移除 7 个无记录路径死指标后的现行清单；死信指标 3.0.0 起从 `failed` 独立）：
 
 ```
 paldd.event_handlers.handled     // 事件处理器成功调用数
@@ -901,6 +903,8 @@ paldd.eventlog.appended          // 事件日志追加数
 paldd.eventlog.read              // 事件日志读取数
 paldd.outbox.processed           // 发件箱成功处理数
 paldd.outbox.failed              // 发件箱失败数
+paldd.outbox.dead                // 发件箱死信数（重试耗尽，停止投递——3.0.0 起独立计数）
+paldd.outbox.persist_failed      // 发件箱状态持久化失败数（标记未落库，下轮重试）
 paldd.inbox.processed            // 收件箱成功数
 paldd.inbox.skipped              // 收件箱去重跳过数
 paldd.inbox.failed               // 收件箱失败数
@@ -925,8 +929,8 @@ paldd.saga.scan_failed           // Saga 扫描失败数（v2.1.0 新增）
 所有运行时类型路由都通过编译时注册的 `FrozenDictionary` + 显式的泛型代码路径完成。
 
 ```bash
-# 以 AOT 方式发布示例项目
-dotnet publish samples/PalDDD.AotSample -c Release -r win-x64
+# 以 AOT 方式发布示例项目（Git Bash 下必须用 -p:——/p: 会被 MSYS 转换为 p: 致 MSB1008）
+dotnet publish samples/PalDDD.AotSample -c Release -r win-x64 -p:PublishAot=true
 
 # 检查你的项目（启用 AOT 分析）
 # 在 csproj 中添加：
