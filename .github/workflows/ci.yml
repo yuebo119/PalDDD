@@ -15,9 +15,16 @@ on:
   # 审计 2026-09-20 O2：补 workflow_dispatch——CI 失败后此前必须推空提交才能重跑
   workflow_dispatch:
 
-# 审计 2026-09-20 O2：补 concurrency 组。此前连续推送会并行跑满 4 个 job
-# （含 40 分钟 coverage + 20 分钟 aot-verify），runner 配额与反馈延迟都被放大；
-# 同组新推送取消旧的在途运行（release.yml 已有同款配置，此处对齐）。
+# 审计 2026-09-20 O2：补 concurrency 组。此前连续推送会并行跑满 4 个 job，
+# runner 配额与反馈延迟都被放大；同组新推送取消旧的在途运行（release.yml 已有同款配置，此处对齐）。
+# ⚡ 实测耗时（2026-09-23 从 run 35505559608 的步骤级数据取，非估值）：
+#   整轮墙钟 ≈ 10 分钟（4 job 并行 ⇒ 墙钟 = 最慢 job，不是总和）
+#   build-and-test 584s：vuln-scan 39 + restore 4 + build 43 + format 34 + **test 438** + 门禁 7 + 开销 16
+#   coverage       612s：**Coverage gate 单步 591** + 开销 21
+#   aot-verify      63s · dialect-probe 6s（路径门控未触发时）/ ~146s（触发时）
+#   ⇒ 唯一的墙钟瓶颈是"串行跑 16 个测试项目"，且被两个 job 各做一遍（裸跑 + 插桩）。
+#     门禁脚本步骤仅 7s，不是瓶颈；本文件旧注释曾写"40 分钟 coverage + 20 分钟 aot-verify"，
+#     系过期估值（实测 10m12s / 63s），已按实测勘正——避免据此误判 CI 成本。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -84,22 +91,46 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t projects < <(find test -name '*.csproj' ! -name 'PalDDD.Testing.csproj' | sort)
-          ran=0
+          # ⚡ 并行化（2026-09-23）：本步骤实测 438s，占 build-and-test 的 75%，是唯一墙钟瓶颈。
+          # 并行度 **保守起步 = 2**：仓库有墙钟敏感测试（如 OutboxProcessorTests 的
+          # `WhenAny(stopTask, Delay(3s))` 超时护栏，见 T-21 注记「残余风险仅极慢 runner 上误报」），
+          # 并行加剧 CPU 争用正好踩该点——故先小步，观察若干轮无 flaky 后再上调（改此常量即可）。
+          # 三条既有安全属性全部保留：① MTP 一次一个项目（仍逐次 dotnet test 调用）；
+          # ② 逐项目失败 → ::error 注解 + ci-failed-tests.cs 诊断；③ ran+failed==total 空转断言。
+          # 变化：并发下**不再 fail-fast**（原实现首败即 exit，其余失败被掩盖）——改为跑完全部
+          # 再汇总，逐项目报出，最后按 failed>0 退出非零。
+          jobs=2
+          rm -rf ci-test-results; mkdir -p ci-test-results
           for csproj in "${projects[@]}"; do
-            echo "== Testing: $csproj =="
-            if ! dotnet test "$csproj" --no-build -c Release --verbosity minimal 2>&1 | tee ci-last-test.log; then
-              echo "::error ::FAILED PROJECT: $csproj"
-              dotnet run scripts/ci-failed-tests.cs "$(basename "$csproj" .csproj)" ci-last-test.log || true
-              rm -f ci-last-test.log
-              exit 1
-            fi
-            ran=$((ran + 1))
+            base=$(basename "$csproj" .csproj)
+            (
+              set +e   # 子 shell 内关 errexit，否则 dotnet 失败会跳过退出码落盘
+              dotnet test "$csproj" --no-build -c Release --verbosity minimal \
+                > "ci-test-results/$base.log" 2>&1
+              echo $? > "ci-test-results/$base.exit"
+            ) &
+            while [[ $(jobs -rp | wc -l) -ge $jobs ]]; do wait -n || true; done
           done
-          if [[ ${#projects[@]} -eq 0 || $ran -ne ${#projects[@]} ]]; then
-            echo "::error ::TEST STEP SPUN EMPTY: projects=${#projects[@]} ran=$ran — glob 失效或循环被跳过（v2 审计 T-1）"
+          wait || true
+          ran=0; failed=0
+          for csproj in "${projects[@]}"; do
+            base=$(basename "$csproj" .csproj)
+            code=$(cat "ci-test-results/$base.exit" 2>/dev/null || echo "missing")
+            if [[ "$code" == "0" ]]; then
+              ran=$((ran + 1))
+            else
+              failed=$((failed + 1))
+              echo "::error ::FAILED PROJECT: $csproj (exit=$code)"
+              tail -40 "ci-test-results/$base.log" 2>/dev/null || true
+              dotnet run scripts/ci-failed-tests.cs "$base" "ci-test-results/$base.log" || true
+            fi
+          done
+          if [[ ${#projects[@]} -eq 0 || $((ran + failed)) -ne ${#projects[@]} ]]; then
+            echo "::error ::TEST STEP SPUN EMPTY: projects=${#projects[@]} ran=$ran failed=$failed — glob 失效或循环被跳过（v2 审计 T-1）"
             exit 1
           fi
-          echo "✅ $ran / ${#projects[@]} test projects executed"
+          echo "✅ $ran / ${#projects[@]} test projects passed（failed=$failed，并行度=$jobs）"
+          [[ $failed -eq 0 ]] || exit 1
         env:
           # CI 环境：Testcontainers 自动启动 PG/MySQL/Kafka/RabbitMQ
           PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS: '0'
