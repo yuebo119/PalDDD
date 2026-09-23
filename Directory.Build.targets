@@ -28,9 +28,12 @@
           收益仅为少打几行日志，代价是引入锁文件竞争面。
        ═══════════════════════════════════════════════════════════════ -->
 
+  <!-- CI 跳过（2026-09-23 实测）：CI 不提交，本地钩子在那里无意义；而并发构建会让多个项目
+       同时写 .git/config，Exec 的 ContinueOnError 只会把它降级为 MSB3073 警告，release
+       步骤的 -warnaserror 再将该警告升级为构建失败——v3.1.0 首发发布即卡在此处。 -->
   <Target Name="ConfigureGitHooks"
           BeforeTargets="Build"
-          Condition="'$(DesignTimeBuild)' != 'true' and Exists('$(MSBuildThisFileDirectory).git')"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(GITHUB_ACTIONS)' != 'true' and Exists('$(MSBuildThisFileDirectory).git')"
           Inputs="$(MSBuildThisFileDirectory).git\config"
           Outputs="$(MSBuildThisFileDirectory)obj\githooks-configured.stamp">
 

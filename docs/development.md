@@ -23,7 +23,11 @@ dotnet --info
 `ConfigureGitHooks` 目标会在**首次 `dotnet build` 时**为本 clone 配置它：
 
 - 仅在 `core.hooksPath` **未设置**时写入，**不覆盖**你已有的自定义 hooksPath；
-- `.git` 不存在（源码包解压、容器内无 .git）时整个目标跳过，任何失败都不阻断构建。
+- `.git` 不存在（源码包解压、容器内无 .git）时整个目标跳过，任何失败都不阻断构建；
+- **CI 环境（`GITHUB_ACTIONS=true`）整个目标跳过**：CI 不提交，本地钩子在那里没有作用；
+  且并发构建会让多个项目同时写 `.git/config`，`Exec` 的 `ContinueOnError` 只能把它降级为
+  MSB3073 **警告**，而 release 步骤的 `-warnaserror` 会把该警告再升级成构建失败（2026-09-23
+  实测：v3.1.0 首发发布卡在此处——「失败不阻断构建」在该路径上原已失效）。
 
 故「clone → 构建一次」即获得全部本地守卫，无需手动 `git config`。确认是否生效：
 
