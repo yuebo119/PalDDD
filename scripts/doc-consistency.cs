@@ -33,7 +33,7 @@ var ROOT = FindRepoRoot();
 int passedCount = 0, failedCount = 0;
 const string Red = "\x1b[0;31m", Green = "\x1b[0;32m", Nc = "\x1b[0m";
 
-Console.WriteLine("═══════ Pal.DDD 文档一致性校验（薄壳：D1-D6/D8-D12 已下沉测试，本壳仅 D7）═══════");
+Console.WriteLine("═══════ Pal.DDD 文档一致性校验（薄壳：D1-D6/D8-D12 已下沉测试，本壳 D7 + D13）═══════");
 Console.WriteLine($"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
 Console.WriteLine();
 
@@ -70,6 +70,49 @@ else
     // bash 口径：missing 为前导空格 + 空格连接串（"$missing .ai/$f" 拼接产物）
     Console.WriteLine($"{Red}FAIL{Nc} D7 文件地图指向不存在的文件： {string.Join(" ", missing.Select(f => $".ai/{f}"))}");
     failedCount++;
+}
+
+// ── D13: 跨仓契约版本锚（T-37，2026-09-22 增）──
+// 两仓互相引用（主仓 scripts/verify-ai.cs 校验 .ai 内容；.ai 的 prompt/engine 描述主仓门禁），
+// 但独立版本化、无同步机制。**引用层**一致性已有守护（verify-ai V2 校验 .ai 提示词引用的主仓
+// 脚本存在、V19 校验传感器台账路径、V25 校验命令形态）；**残余缺口是契约本身的版本**——
+// 当跨仓契约变化（.ai 文档需描述的脚本集/命令形态/账本结构改变）时，没有任何东西要求两侧同步。
+// 本项是 tripwire：两侧各声明一个契约版本号，不一致即红。存在性守卫同 D7（CI 无 .ai → PASS）。
+const int ExpectedCrossRepoContractVersion = 1;
+if (!File.Exists(readme))
+{
+    Console.WriteLine($"{Green}PASS{Nc} D13 跨仓契约版本锚（无 .ai 独立仓，跳过）");
+    passedCount++;
+}
+else
+{
+    var declaredContract = ExtractCrossRepoContractVersion(File.ReadLines(readme));
+    if (declaredContract is null)
+    {
+        Console.WriteLine($"{Red}FAIL{Nc} D13 .ai/README.md 存在但未声明跨仓契约版本（缺「跨仓契约版本」行）——fail-closed");
+        failedCount++;
+    }
+    else if (declaredContract != ExpectedCrossRepoContractVersion)
+    {
+        Console.WriteLine($"{Red}FAIL{Nc} D13 跨仓契约版本不一致：.ai 声明 {declaredContract}，主仓期望 {ExpectedCrossRepoContractVersion}——两侧同步升位或修正");
+        failedCount++;
+    }
+    else
+    {
+        Console.WriteLine($"{Green}PASS{Nc} D13 跨仓契约版本一致（{declaredContract}）");
+        passedCount++;
+    }
+}
+
+// D13 提取器（纯函数）：从 .ai/README.md 解析「跨仓契约版本：N」声明；未声明返回 null。
+static int? ExtractCrossRepoContractVersion(IEnumerable<string> lines)
+{
+    foreach (var line in lines)
+    {
+        var m = Regex.Match(line, @"跨仓契约版本\**\s*[:：]\s*([0-9]+)");
+        if (m.Success && int.TryParse(m.Groups[1].Value, out var v)) return v;
+    }
+    return null;
 }
 
 Console.WriteLine();
