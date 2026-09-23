@@ -63,9 +63,23 @@
 | 其他（`FakeTimeProviderTimerTests` 1 / `CqrsTests` 1） | 2 | 待核 |
 
 **关键前提已就位**：`OutboxProcessor` 构造函数**已接受 `TimeProvider? timeProvider`**
-（`OutboxProcessor.cs:35`），计时经基类 `PeriodicBackgroundProcessor` 走该 provider——
-故真目标集的转换是"注入 fake 并推进"的机械改动，无需改生产代码。**未做**：7 处转换各需
-读懂该测试的等待语义并验证推进后行为等价，超出本轮可验证范围。
+（`OutboxProcessor.cs:35`），计时经基类 `PeriodicBackgroundProcessor` 走该 provider；
+且测试**已在用** `FakeTimeProvider` + `AdvanceNowAndTriggerTimers`。
+
+**二次定标（读代码后，"真目标"再缩水）**：那 ≈7 处并非"朴素可替换的轮询"，两种形态各有理由：
+
+1. **超时护栏**（如 `OutboxProcessorTests.cs:84` 的 `WhenAny(stopTask, Task.Delay(3s))`）——
+   只在**失败路径**触发，正常路径不耗时。它是"停止必须在 3s 内完成否则测试失败"的**上界断言**，
+   不是轮询等待。替换成 fake 时间不可行（`StopAsync` 的真实异步工作不由 provider 驱动）；
+   残余风险仅"极慢 runner 上误报"，属**边界收紧问题**而非"去墙钟"。
+2. **调度让出**（如 `:153` 的 `TickUntilAsync` 内 `await Task.Delay(10)`）——该辅助**已经在推进
+   fake 时间**，10ms 是给后台处理器的异步工作**真实的调度机会**。改成 `Task.Yield()` 会失去
+   这个语义（Yield 只让出续体，不保证后台线程被调度），可能**引入** flakiness 而非消除。
+
+**结论**：T-21 的"22 处墙钟耦合"主要是前提误判——真正的 fake 时间基础设施已在用，
+残余是①超时护栏的上界（可放宽或标注排除轴）与②调度让出的必要性说明。**未做**：把①的
+上界从 3s 放宽/改为按机器校准、给②加"为何需要真实让出"的注释——两者都需逐处判断，
+且①的改动方向（放宽多少）缺少测量依据（需 CI 慢 runner 数据）。
 
 **T-23 的最终处置（处置 ③，经用户"按最优方案处理"授权）**：跨项目重复**经核验无法合并**
 （四链唯一共同祖先是领域内核，不能依赖 EF Core）；且 `SqlErrorClassifier.cs:10` 的"五处"
