@@ -31,7 +31,7 @@
     <ProjectReference Include="..\PalDDD.Core.SourceGen\PalDDD.Core.SourceGen.csproj" PrivateAssets="build;analyzers" />
     <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" PrivateAssets="build;analyzers" />
     <ProjectReference Include="..\PalDDD.Serialization\PalDDD.Serialization.csproj" PrivateAssets="build;analyzers" />
-    <PackageReference Include="ByteAether.Ulid" Version="1.4.0" PrivateAssets="build;analyzers" />
+    <PackageReference Include="ByteAether.Ulid" Version="1.4.1" PrivateAssets="build;analyzers" />
   </ItemGroup>
 
 </Project>
