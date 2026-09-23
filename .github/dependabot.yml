@@ -22,9 +22,9 @@ updates:
     # `SponsorCheck error SC021` 报错，**所有消费 Verify 的构建当场中断**。
     # 2026-09-23 Dependabot PR #2 实证：build-and-test / coverage / CodeQL analyze
     # 三处同时红，根因只有这一个（CodeQL 也要编译）。
-    # 「声明开源豁免 / 赞助 / 停在 32.x」属维护者裁决（豁免声明是事实性承诺，
-    # 不由 agent 代签），故先钉住 33 线不自动升位；裁决后删除本规则，
-    # 或改在 Directory.Build.props 声明 Verify_SponsorshipExemption。
+    # 【已裁决 · 2026-09-23 维护者】停在 32.x：本项目只使用开源依赖，不接带商业
+    # 许可门的库——豁免声明、赞助、Verify_SponsorshipLicenseIgnored 三条路都不走。
+    # 若该线重新开源或出现等价的纯开源替代，再删除本规则并升位。
     ignore:
       - dependency-name: "Verify.TUnit"
         versions: [">= 33.0.0"]
