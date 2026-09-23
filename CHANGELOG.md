@@ -4,16 +4,23 @@
 日志格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范（完整规则见 [`docs/release.md`](docs/release.md) §十一）：
 **消费者可见变更在上**（Added/Changed/Deprecated/Removed/Fixed/Security + 本项目扩展 Dependencies/Documentation/Tests），**工程过程叙事入附录**；数字必须可验证；`[Unreleased]` 与发布段**同次提交转正、先于 tag**。
 
-> **当前版本**：`VersionPrefix=3.0.0` / `VersionSuffix=`（空——见 `Directory.Build.props`；3.0.0 升位依据：M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务均属行为破坏性变更）
-> **发布状态**：3.0.0 已发布（2026-09-20 tag `v3.0.0`，SemVer Major——M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务 fail-fast 两处行为破坏性变更）；2.2.0 已于 2026-09-15 发布（tag `v2.2.0`）；2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag `v3.0.0` 之后的变更见 `[Unreleased]`。
+> **当前版本**：`VersionPrefix=3.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`；3.1.0 升位依据：两处三栈行为对齐属**放宽/对齐**而非转严，故为 Minor；3.0.0 的升位依据是 M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务的"静默错误转 fail-fast"，性质不同）
+> **发布状态**：3.1.0 已发布（2026-09-23，tag `v3.1.0` → 本提交，SemVer Minor——三栈行为对齐 + 版本承诺守卫类变更，无破坏性 API 变更）；3.0.0 已发布（2026-09-20 tag `v3.0.0`，SemVer Major——M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务 fail-fast 两处行为破坏性变更）；2.2.0 已于 2026-09-15 发布（tag `v2.2.0`）；2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag `v3.1.0` 之后的变更见 `[Unreleased]`。
 > **发布规范**：见 [`docs/release.md`](docs/release.md)
 
 ---
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-09-23
+
+> **组织方式**：分两层——上方按 Keep a Changelog 分类给出**消费者可见变更**；文末附录保留本版工程过程明细（转正前 `[Unreleased]` 原料原文）。规范见 [`docs/release.md`](docs/release.md) §十一。
+
 ### Changed 变更
 
+- **`InMemoryOutboxStore.MarkProcessed` 对未租约消息改为放行**（与其余三栈对齐）：此前对**从未租约**的消息直呼标记会被静默忽略（不标记、不报错），而 PalORM / Dapper / EF 三栈对该输入一律放行——InMemory 作为测试替身比生产更严格，会让测试与生产行为背离。**行为变更**：该输入现在正常标记；对已被其他 worker 重租的消息仍拒绝标记（原保护不变）。
+- **`DapperOutboxStore.MarkProcessed` 在被拒时不再改写入参对象**：当标记因租约 token 不匹配被拒（未影响任何行）时，此前会把传入消息对象的租约字段清空，使调用方持有的对象与数据库实际状态不一致。**行为变更**：被拒路径下入参对象保持原样（与 PalORM 一致）。
+- **`[Obsolete]` 标注的移除版本由 v3.0 改为 v4.0**：`DomainCapabilityAttribute`、`AggregateNameAttribute`、`SqlServerOutboxDbContext` 及若干接口备注此前标注"v3.0 移除"，但 3.0.0 已发布而未移除。现统一改指 **4.0**（与接口异步化合并为同一次破坏性变更，不再分两次）。**消费者可见**：编译器与编辑器显示的过时提示文案随之变化。
 - **EventLog 写路径零拷贝**（性能）：`DapperEventLog`/`PalOrmEventLog` 的批量追加不再对每事件 payload/metadata 各做一次防御性 `ToArray()`，改用 `EventData` 构造期已拷贝的 internal 数组（v65 P3 已声明的零拷贝路径，与 `StoredEvent` 同机制；`EventData` 构造后不可变是公开 API 契约）。每事件省 2 次数组分配，1KB 级 payload 按万事件/秒计约 20MB/s GC 垃圾。行为不变（`InternalsVisibleTo` 已授权两包）。
 
 ### Documentation 文档
@@ -21,6 +28,19 @@
 - **`docs/usage.md` 补三处调用方契约警示**：`ReadAllAsync` 全局位置的提交序倒挂约束（EF 栈因分配器行锁不可达，PalORM/Dapper 自增路径可达且已分别声明）；Dapper/PalORM 无事务时批量追加留前半批；EF 业务上下文混配 Dapper/PalORM outbox store 的孤儿消息误配场景。
 - **`docs/testing.md` 与 `docs/conventions.md` 勘正 `PipelineStateMachine` 描述**：原称「~40B 可重用」与 `Dispatcher.cs` 实际「每请求新建（Dispatcher 为 Singleton 故不可跨请求重用）」矛盾；`testing.md` 的测试归属从 `AllocationContractTests`（实为 Core 分配契约）勘正为 `CqrsTests.Dispatcher_QueryAsync_NoHandlerOverhead_BaselineAllocation`。
 - **`TransactionOptions.MaxDegreeOfParallelism` remarks 结掉 RabbitMQ 开放前置**：记录上述 7.x 语义核实结论与 `MaxOutstandingConfirms` 仅在 `CreateAsync` 路径生效的限制。
+
+### Tests 测试
+
+- **多方言测试在无 Testcontainers 时由硬失败改为跳过**：此前未启用 Testcontainers（或 Docker 不可达）时多方言夹具直接抛异常，使该测试项目在本机环境下整批红且覆盖率门禁本地无法闭环；现改为跳过并给出可读原因，与集成探针的既有语义一致。安全前提是外部数据库隐式回退路径已删除（相关连接串属性零消费者）。
+- **新增未租约标记的契约测试**：锁住上述 `InMemoryOutboxStore` 的行为变更（经变异验证：改回原判定条件即精确红在该断言）。
+
+### 附录：工程过程明细（转正前 `[Unreleased]` 原料原文——内部叙事，非消费者变更摘要）
+
+- **版本承诺期限守卫**：src 内 `vX.Y` 出现在承诺语境（移除/窗口/预告/破坏性变更）时 `X.Y` 必须严格大于 `VersionPrefix`，否则门禁红；配套活账本（白名单 == 实测集双向断言）——首次运行即抓出 **13 处**过期承诺，人工审阅只找到 5 处。落地：`TechDebtGuardTests.VersionPromises_AreNotExpired`。
+- **跨仓契约版本锚**：`.ai` 独立仓声明契约版本、主仓校验一致（`doc-consistency.cs` D13，tripwire）。引用层一致性原已由 `verify-ai` 的 V2/V19/V25 守护，本项补的是"契约版本本身无同步机制"这一残余缺口。
+- **观察态到期守卫**：三处观察态（`tech-debt` Obsolete WARN / `gate` G24 WARN / `refine-scan` 高假阳性）登记 owner + 到期日 + 处置建议，到期未处置即红（`TechDebtGuardTests.ObservationStates_AreNotExpired`）。
+- **三栈契约对齐的实现细节**（消费者可忽略）：`InMemoryOutboxStore.IsCurrentLeaseHolder` 去掉 `&& message.LockedBy is not null`，保留 `Status == Pending`（对齐 EFCore 的终态守卫）；ITM-174 的僵尸标记保护由 `_messages.Contains(..., ReferenceEqualityComparer.Instance)` 承载，未受影响（successor 替换后旧引用不在列表，仍被门控）。Dapper 侧改为消费 `affected`、仅 `> 0` 时清租约字段；SQL 侧 fencing 未变（仍传 owner/until/retryCount 三 token）；原 `P3-SRC-301` 声明保留并追加决策回应，决策文档 `docs/review/decision-2026-09-22-dapper-markprocessed-lease-clear.md`。
+- **v3.0 → v4.0 改期的范围**：24 处 / 18 文件，含 3 处 `[Obsolete]`、10 处接口契约 Remarks、2 个 `.pal/prompts/*.prompt.md` 与若干实现注释。
 
 ---
 
