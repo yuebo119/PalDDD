@@ -60,6 +60,29 @@ fencing 守卫**（ITM-174：被 successor 重租后的旧引用标记静默忽�
 **另记一条独立观察（非分歧）**：四栈对"被门控的标记"都无返回值/无信号。若要"误用可观测"，
 那是**新增能力**（如 `bool TryMarkProcessed` 或诊断计数器），不是对齐既有行为——属独立设计项。
 
+**三次修正（读 `DapperOutboxStore.cs:248-266` 后）：Dapper 的 SQL 门控是齐的，差异在内存写回**
+
+Dapper **传了完整 token**（`owner = message.LockedBy, until = LeaseUntilParam(message),
+retryCount = message.RetryCount`）⇒ **SQL 侧 fencing 与 PalORM 同级**——上一版矩阵的
+"Dapper 需补齐门控"**不成立**。真正的差异在**被拒标记（affected=0）后的内存写回**，且已有
+**显式声明**（`P3-SRC-301`）：
+
+| 栈 | 被拒标记后的入参对象 | 依据 |
+|---|---|---|
+| PalORM | **不写回**（affected>0 才全套回写）——对象保持"仍持租" | 实现 |
+| Dapper | **无条件清租约字段**（`LockedBy=null; LockedUntil=null`）但**不回写 Status** | `:257-265`，P3-SRC-301 声明 |
+| InMemory | 门控即 return——对象不变 | `IsCurrentLeaseHolder` 守卫 |
+
+**声明已给出处置**：`P3-SRC-301` 明写"affected 返回值不消费——与原语义一致"，且"调用方
+（`OutboxBatchProcessor`）不读该状态故**无实害**"。
+
+**判断**：Dapper 无条件清租约字段意味着——被拒标记后其本地对象**声称租约已释放，而 DB 行
+仍持有该租约**。声明说不读故无实害，但这是"声明在、强制未建"的又一处（§1.2）。**对齐做法**
+（消费 `affected`，仅 `>0` 时清租约字段）**会推翻该声明**——按 AGENTS.md §3（命中声明注释须
+先落决策文档回应，**禁止删声明来"通过"**），须**先写决策文档再改代码，同一提交**。
+
+**故本格转为"需决策文档"**，不在实施流里直接改（直接改它等于删掉声明）。
+
 ### 2.2 `SaveChangesAsync()` —— 同一接口名下的语义
 
 | 栈 | 当前行为 | 证据 |
