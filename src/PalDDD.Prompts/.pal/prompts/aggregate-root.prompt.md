@@ -18,7 +18,7 @@
 - 强类型 ID 通过 `[GenerateId(typeof(Guid))] partial record struct XxxId` 声明（源码生成器自动生成 `IPalIdentity<T>`、`JsonConverter`、`TypeConverter`）
 - 领域事件通过 `RaiseEvent()` 添加到内部单链表（O(1) 追加，零堆分配）
 - `[BoundedContext("ordering")]` 标注限界上下文
-- ~~[AggregateName]~~ 已废弃（v3.0 移除，框架零消费）——不再标注
+- ~~[AggregateName]~~ 已废弃（v4.0 移除，框架零消费）——不再标注
 
 ## 禁止
 - ❌ 不使用 `IRepository<T>` — `DbContext` 就是 UoW+Repository

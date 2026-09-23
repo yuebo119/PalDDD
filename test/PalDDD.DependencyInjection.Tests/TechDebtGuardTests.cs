@@ -806,25 +806,12 @@ public sealed class TechDebtGuardTests
         RegexOptions.Compiled);
 
     /// <summary>
-    /// 已知过期承诺活账本（T-38）。13 条**按行**登记（其中 OutboxStore.cs:14/:15 是同一处
-    /// 承诺跨两行，故 13 行 = 12 处逻辑承诺）。当前对应裁决 2 待兑现的"v3.0 窗口"欠账；
-    /// T-06 兑现后必须逐项移除此处，否则断言会提醒销号。
+    /// 已知过期承诺活账本（T-38）。**2026-09-22 清空**：13 条"v3.0 窗口"承诺已按
+    /// DECISION-2026-09-22 的处置**改指 4.0 窗口**（与接口异步化捆进同一 major，不拆两次
+    /// breaking），故实测集为空——活账本按设计要求同步销号（守卫报"已过期项消失"即是此意）。
     /// </summary>
     private static readonly string[] s_knownExpiredPromises =
     [
-        "src/PalDDD.Core/Attributes.cs:128",
-        "src/PalDDD.Core/Attributes.cs:93",
-        "src/PalDDD.Dapper/DapperOutboxStore.cs:234",
-        "src/PalDDD.DependencyInjection/ServiceRegistration.cs:69",
-        "src/PalDDD.PalORM/Stores/PalOrmEventLog.cs:41",
-        "src/PalDDD.Transactions.EFCore/OutboxDbContext.cs:40",
-        "src/PalDDD.Transactions.EFCore/SqlServerOutboxDbContext.cs:11",
-        "src/PalDDD.Transactions.EFCore/SqlServerOutboxDbContext.cs:8",
-        "src/PalDDD.Transactions/Outbox/OutboxStore.cs:14",
-        "src/PalDDD.Transactions/Outbox/OutboxStore.cs:15",
-        "src/PalDDD.Transactions/Saga/DefaultSagaManager.cs:68",
-        "src/PalDDD.Transactions/Saga/Saga.cs:835",
-        "src/PalDDD.Transactions/Saga/SagaState.cs:114",
     ];
 
     /// <summary>T-38 判定器（纯函数，供红绿矩阵覆盖）：该行是否为"已过期"的版本承诺。</summary>

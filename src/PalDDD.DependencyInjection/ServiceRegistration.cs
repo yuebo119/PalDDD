@@ -66,7 +66,7 @@ public static class ServiceRegistration
     /// 基础设施**——序列化、持久化（Dapper/PalORM/EFCore）、消息代理（Kafka/RabbitMQ）、
     /// 压缩均需调用方按需显式注册。这是刻意设计（避免框架替用户选定持久化与消息栈），
     /// 但名字容易让人误以为一键到位。测试 <c>AddPalFullStack_EqualsCoreStackWithoutInfrastructureAdapters</c>
-    /// 锁定该等价性。更名属破坏性变更，随 v3.0 契约窗口处理。
+    /// 锁定该等价性。更名属破坏性变更，随 v4.0 契约窗口处理。
     /// </para>
     /// </remarks>
     public static IServiceCollection AddPalFullStack(this IServiceCollection services)
