@@ -24,14 +24,18 @@ updates:
       prefix: "依赖"
     # 预览线单独分组：GA 清偿是有意识的批量动作（见 Directory.Packages.props NU5104
     # 理由），日常 PR 不主动碰 .NET 11 rc 线
+    # ⚠️ update-types 的取值是 minor/patch/major——**不是** ignore 规则的
+    # version-update:semver-* 词表（两处 schema 不同）。2026-09-23 修复：
+    # 原写 version-update:semver-patch/minor，Dependabot 解析报
+    # "invalid details"（该错误只在配置落到**默认分支**时才现身，故 dev 上长期未暴露）。
     groups:
       dotnet-preview:
         patterns:
           - "Microsoft.*"
           - "System.*"
         update-types:
-          - version-update:semver-patch
-          - version-update:semver-minor
+          - patch
+          - minor
       third-party-stable:
         patterns:
           - "*"
