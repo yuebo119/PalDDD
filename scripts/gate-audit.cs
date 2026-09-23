@@ -407,6 +407,23 @@ var probes = new List<Probe>
         ExpectExit: 1,
         MustContainInStdout: "FAIL V1",
         Setup: _ => []),
+    new(
+        Name: "verify-conventions 拒绝文档中的死脚本引用（V9——T-30/M11 增）",
+        Gate: "verify-conventions",
+        ExpectExit: 1,
+        MustContainInStdout: "probe-deadref.md",
+        Setup: dir =>
+        {
+            // M11（复核报告 §3.5）：修前本门禁的探针只有 V11 一条——V9 的 glob 或排除列表
+            // 若被改坏，12/12 探针依旧全绿。本探针注入一条命令形态死引用，锁住 V9 的拦截能力。
+            // 同 V11 探针：以无参（full 模式）运行，隔离目录空 slnx 的 build 失败同为 exit 1，
+            // 但 stdout 含注入文件名仅当 V9 真拦截——断言语义完整。
+            var docs = Path.Combine(dir, "docs");
+            Directory.CreateDirectory(docs);
+            File.WriteAllText(Path.Combine(docs, "probe-deadref.md"),
+                "# 探针文档\n\n执行 `dotnet run scripts/nonexistent-probe.cs` 完成校验。\n");
+            return ["docs/probe-deadref.md"];
+        }),
 };
 
 var probeFails = 0;
