@@ -48,9 +48,30 @@
 | W2 | T-06 v3.0 承诺兑现 | 待做（L，需先做 T-13） | — |
 | W6 | T-23 分类器合并 | **已结项**（处置 ③：维持重复记为既定成本 + 类文档加注"五处的射程"） | `ff1fe37` |
 | W5 | T-19 薄模块覆盖率口径 | **已结项**（不设模块阈值；低值由度量单位解释，文档加注四案例） | `73cbe82` |
-| W3–W7 | 其余 10 项 | 待做 | — |
+| W3 | T-10 锁文件 + locked-mode | **经实验受阻**（见下）——需先定位是哪一项目不支持 | 本次提交 |
+| W3–W7 | 其余 9 项 | 待做 | — |
 
-**进度：28 / 38 项（74%）· 主仓 34 个提交 + `.ai` 仓 7 个提交**
+**进度：28 / 38 项（74%）+ 1 项受阻定标 · 主仓 35 个提交 + `.ai` 仓 7 个提交**
+
+**T-10 的实验结论（受阻，附可复现证据）**
+
+按计划开启 `RestorePackagesWithLockFile=true`（Directory.Build.props）后执行 `dotnet restore PalDDD.slnx`：
+
+```
+error MSB4181: "RestoreTask" 任务返回了 false，但未记录错误。 [C:\ai\claude\Pal.DDD\PalDDD.slnx]
+RESTORE_EXIT=1
+```
+
+**且生成 0 个 `packages.lock.json`**。还原该属性后 `dotnet restore` 立即恢复 `exit 0`
+（工作树已精确还原，无残留）。即：**在本 SDK（11.0.100-rc.1.26425.128）与本项目集上，
+开启锁文件会直接破坏还原**，而错误信息不透明（"未记录错误"）。
+
+**下一步诊断（未做）**：逐项目 `dotnet restore <csproj>` 隔离，定位是哪一项目无法产出锁文件
+（候选：`PalDDD.Prompts` 元包、或带 `PrivateAssets="build;analyzers"` 的 SourceGen/Analyzers
+引用——锁文件对这类引用的处理可能不完整）。**定位后才能判断**：是单项目需排除，还是该
+SDK 的 RC 阶段缺陷需等 GA。
+
+**T-10 的验收（CI `--locked-mode`）因此暂不可达**——在还原本身失败的前提下，锁文件无从生成。
 
 **T-19 的核验结论**：审计 T1 [高]"薄模块覆盖率过低"与计划 T-19 的 per-module floor
 **都建立在本文档已明确警告不可比的口径上**——`docs/test-coverage-baseline.md:42-43` 早已声明
