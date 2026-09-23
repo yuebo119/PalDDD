@@ -82,10 +82,14 @@ jobs:
         run: |
           set -euo pipefail
           echo "Checking CI conclusion for $SHA ..."
+          # 只取【已完成】里的最新一次（v3.1.0 首发实测的竞态）：tag 推送会再触发一次
+          # 同 SHA 的 ci.yml，其 build-and-test 若仍在跑，conclusion 为 null；原 `head -1`
+          # 取到它，就把「分支推送上已经全绿」误判为非 success，发布被无谓拒绝。
           CONCLUSION=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
-            --jq '.check_runs[] | select(.name == "build-and-test") | .conclusion' | head -1)
+            --jq '[.check_runs[] | select(.name == "build-and-test" and .status == "completed")]
+                  | sort_by(.completed_at) | if length == 0 then "" else last.conclusion end')
           if [ -z "$CONCLUSION" ]; then
-            echo "ERROR: no build-and-test check run found for $SHA — CI 未对本 commit 运行，拒绝发布。"
+            echo "ERROR: no completed build-and-test check run found for $SHA — 本 commit 的 CI 未运行或尚未跑完，拒绝发布。"
             echo "请先推送该 commit 到 main/dev 或对 tag 触发 CI，确认全量门禁通过后再发布。"
             exit 1
           fi
