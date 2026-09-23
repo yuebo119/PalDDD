@@ -46,9 +46,34 @@
 | W7 | T-31 V17 列数判定修正 | **已完成**（识别 `\|` 转义 + 界限 `<10` → `{12,13}`） | `afa2d97` |
 | W7 | T-37 跨仓契约版本锚 | **已完成**（`doc-consistency` 增 D13 + `.ai` 侧声明） | `a94f601` + `.ai` `1dc3b1f` |
 | W2 | T-06 v3.0 承诺兑现 | 待做（L，需先做 T-13） | — |
-| W3–W7 | 其余 12 项 | 待做 | — |
+| W6 | T-23 分类器合并 | **经核验架构受阻**（见下）——转架构决策，非实施项 | 本次提交 |
+| W3–W7 | 其余 11 项 | 待做 | — |
 
-**进度：26 / 38 项（68%）· 主仓 28 个提交 + `.ai` 仓 7 个提交**
+**进度：26 / 38 项（68%）+ 1 项转决策（T-23）· 主仓 29 个提交 + `.ai` 仓 7 个提交**
+
+**T-23 的核验结论：审计 C4 的建议缺少未声明的前提（架构受阻）**
+
+C4 评 [中] 并建议"合并 `IsUniqueConstraintViolation` 到共享分类器"。本轮实测引用图：
+
+```
+PalDDD.EventLog.EFCore      → PalDDD.EventLog      → PalDDD.Core
+PalDDD.Idempotency.EFCore   → PalDDD.Idempotency   → PalDDD.Core
+PalDDD.Projections.EFCore   → PalDDD.Projections   → PalDDD.Core
+PalDDD.Transactions.EFCore  → PalDDD.Transactions  → PalDDD.Core (+Messaging/Serialization)
+```
+
+四个 EFCore 项目**互不共享任何 PalDDD 引用**；四条领域链的**唯一共同祖先是 `PalDDD.Core`**。
+而分类器基于 `DbUpdateException`，需要 EF Core —— 属基础设施依赖，按本仓红线
+「领域层不依赖基础设施」（AGENTS.md §1）**不能放进 `PalDDD.Core`**。
+
+**结论：不存在既被四者共同引用、又合法依赖 EF Core 的落点。** 三条出路各有代价：
+① 新建共享 EFCore 工具项目（增加一个发布包，与本仓"抽象克制"取向相悖）；
+② 让三条链依赖 `PalDDD.Transactions.EFCore`（姊妹依赖，EventLog 不该依赖 Transactions）；
+③ 维持重复，把 6 份 ~40 行分类器记为**严格分层的既定成本**。
+
+**这是架构决策不是实施项**——①会改变发布包集合（35 → 36 包），②会改变分层依赖方向，
+两者都触及红线与对外契约，不应由实施流单方面决定。**建议倾向 ③**：重复的是约 40 行
+纯判定逻辑，而分层独立性是本仓的核心卖点。
 
 **剩余 12 项**：W2 1（T-06 L）· W3 2（T-10/T-11，需外部环境）· W4 3（T-13/T-14/T-15，
 需先写契约）· W5 4（T-18~T-21，需 CI/Docker）· W6 1（T-23 分类器 7 合 1）· W7 1（T-25 L）。
