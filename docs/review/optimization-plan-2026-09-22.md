@@ -50,11 +50,33 @@
 | W5 | T-19 薄模块覆盖率口径 | **已结项**（不设模块阈值；低值由度量单位解释，文档加注四案例） | `73cbe82` |
 | W3 | T-10 锁文件 + locked-mode | **经实验受阻**（见下）——需先定位是哪一项目不支持 | `783150d` |
 | W4 | T-13 三栈契约矩阵 | **已完成**（T-15/T-06 的前置工作面；经两轮修正，矩阵无空格） | `92d59c3`、`26aea3b`、`0f62ff5` |
-| W4 | T-15 三栈统一 | **进行中**：InMemory 未租约对齐三栈 **已完成**（含契约测试 + 变异验证）；Dapper 弱门控待做 | `9cbf2b5` |
-| W4 | T-06 v3.0 承诺兑现 | 待做（依赖 T-15 完成） | — |
+| W4 | T-15 三栈统一 | **已完成两格**：InMemory 未租约对齐（`9cbf2b5`）+ Dapper 消费 affected（`c182da6`，含决策文档） | `9cbf2b5`、`c182da6` |
+| W2 | T-06 v3.0 承诺兑现 | **工单已测准**（见下），待实施 | 本次提交 |
 | W3–W7 | 其余 6 项 | 待做 | — |
 
-**进度：30 / 38 项（79%）· 主仓 41 个提交 + `.ai` 仓 7 个提交**
+**进度：31 / 38 项（82%）· 主仓 44 个提交 + `.ai` 仓 7 个提交**
+
+### T-06 的精确工单（本轮实测使用面，可直接照此实施）
+
+删 3 个死 API（全部为**公共 API 删除 = breaking**，用户已授权；因 `VersionPrefix=3.0.0`，
+删除须记入 CHANGELOG 的 Breaking 段，下次发布须为 4.0）：
+
+| # | 目标 | 使用面（实测） | 连带改动 |
+|---|---|---|---|
+| 1 | `DomainCapabilityAttribute`（`src/PalDDD.Core/Attributes.cs:94`，含上方 XML doc） | 仅 `test/PalDDD.Core.Tests/StrategicMetadataAttributeTests.cs:40-42` 的 Obsolete 断言测试 | 删该测试 |
+| 2 | `AggregateNameAttribute`（`src/PalDDD.Core/Attributes.cs:129`，含上方 XML doc） | 仅 `StrategicMetadataAttributeTests.cs:49` 的同类测试 | 删该测试 |
+| 3 | `SqlServerOutboxDbContext`（`src/PalDDD.Transactions.EFCore/SqlServerOutboxDbContext.cs` 整文件） | 无代码引用；**2 处注释对照**（`PostgreSqlOutboxDbContext.cs:58,61`）需改指他处或删括注 | 删文件 + 改 2 处注释 |
+
+**必做的连带（否则门禁红）**：
+- **`TechDebtGuardTests` 的 `s_knownExpiredPromises` 活账本**：3 条指向上述 API
+  （`src/PalDDD.Core/Attributes.cs:93`、`:128`、`src/PalDDD.Transactions.EFCore/SqlServerOutboxDbContext.cs:11`）
+  ——删除后账本必须同步销号，否则 T-38 的守卫会报"已过期项消失"（**这正是活账本的设计意图**，
+  它会主动提醒；不必手动 grep）
+- **公共 API 快照**：`test/PalDDD.Core.Tests/Snapshots/core-packages-public-api.txt` 需刷新
+  （`PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1` + **人工评审 diff**，见维护规则 8）
+- **CHANGELOG**：Breaking 段记录 3 处移除（**G23 强制快照↔CHANGELOG 同步**，不写则门禁红）
+- 三栈契约统一与异步化（原 T-06 的另两项）**已由 T-15 两格覆盖主要部分**；接口异步化
+  （`AddMessage`/`MarkProcessed` 等改异步签名）仍属未做，建议独立立项而非并入本工单
 
 **T-15 首步（InMemory 对齐）的关键判断**：采纳选项 A（宽放行）。依据是三栈对未租约消息
 一致放行且 EF 的 Remarks 明写该路径是**运维/测试路径的有意能力**（配双守卫）——InMemory 是
