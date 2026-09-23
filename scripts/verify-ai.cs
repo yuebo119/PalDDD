@@ -476,23 +476,8 @@ var failed = 0;
     if (Directory.Exists(docsReviewDir))
         reportNames.AddRange(Directory.GetFiles(docsReviewDir, "*.md").Select(Path.GetFileNameWithoutExtension));
 
-    var missing = new List<int>();
-    var checkedCount = 0;
-    foreach (var line in metricsLines)
-    {
-        var m = Regex.Match(line, @"^\|\s*v([0-9]+)\s*\|");
-        if (!m.Success) continue;
-        if (line.Contains("无报告", StringComparison.Ordinal)) continue;   // 显式豁免
-        var n = int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
-        checkedCount++;
-        // 文件名须含 "-v{n}" 或 "-v{n}-"（如 review-2026-08-26-full-carpet-v10-verification）
-        var hit = reportNames.Any(r => r is not null
-            && (r.Contains($"-v{n}", StringComparison.Ordinal)
-                || r.Contains($"-v{n}-", StringComparison.Ordinal)));
-        if (!hit) missing.Add(n);
-    }
-
-    // 解析归档缺口声明行里的 `v{A}-v{B}` 区间（可多个）
+    // 解析归档缺口声明行里的 `v{A}-v{B}` 区间（可多个）——提前到行扫描之前：
+    // T-28（2026-09-22）起"无报告"豁免须与声明联动，故需先有 declared。
     var declared = new HashSet<int>();
     foreach (var line in metricsLines)
     {
@@ -504,17 +489,52 @@ var failed = 0;
             for (var i = lo; i <= hi; i++) declared.Add(i);
         }
     }
+
+    var missing = new List<int>();
+    var checkedCount = 0;
+    var unregisteredExempt = new List<int>();
+    foreach (var line in metricsLines)
+    {
+        var m = Regex.Match(line, @"^\|\s*v([0-9]+)\s*\|");
+        if (!m.Success) continue;
+        var n = int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        // T-28（2026-09-22）：原实现 `if (line.Contains("无报告")) continue;` 位于 checkedCount++
+        // 之前——任一轮次行写上"无报告"三字即**永久免检**：无需登记、无上限、无闭合期限。
+        // 现改为与归档缺口声明联动：写了"无报告"却未落在声明区间内 ⇒ 计入未登记豁免并 FAIL。
+        if (line.Contains("无报告", StringComparison.Ordinal))
+        {
+            if (!declared.Contains(n)) unregisteredExempt.Add(n);
+            continue;
+        }
+        checkedCount++;
+        // 文件名须含 "-v{n}" 或 "-v{n}-"（如 review-2026-08-26-full-carpet-v10-verification）
+        var hit = reportNames.Any(r => r is not null
+            && (r.Contains($"-v{n}", StringComparison.Ordinal)
+                || r.Contains($"-v{n}-", StringComparison.Ordinal)));
+        if (!hit) missing.Add(n);
+    }
+
+    // 覆盖边界（T-28）：本判定只认**首格为 vN** 的行。轮次号写在"类型"列的旧时代行
+    // （形如 `全量（v26 六片完整）`）结构上不可见——实测 34 轮（v14/v15/v17-v51）既无报告
+    // 也不在声明区间。此处显式报出该边界，使 PASS 不再暗示"全部轮次已核对"。
+    var eraRows = metricsLines.Count(l =>
+        Regex.IsMatch(l, @"^\|\s*20[0-9]{2}-") && Regex.IsMatch(l, @"\bv[0-9]+"));
+
     var missingSet = missing.ToHashSet();
     var undeclared = missingSet.Where(n => !declared.Contains(n)).OrderBy(n => n).ToList();
     var staleDeclared = declared.Where(n => !missingSet.Contains(n)).OrderBy(n => n).ToList();
 
-    if (missingSet.Count == 0)
+    if (unregisteredExempt.Count > 0)
     {
-        passed++; lines.Add($"PASS V24: 轮次号↔报告文件对应完整（{checkedCount} 个 v 轮次全部有报告）");
+        failed++; lines.Add($"FAIL V24: 「无报告」豁免未与归档缺口声明联动（v{string.Join(" v", unregisteredExempt.Take(20))}）——写了豁免必须同步登记声明区间");
+    }
+    else if (missingSet.Count == 0)
+    {
+        passed++; lines.Add($"PASS V24: 轮次号↔报告文件对应完整（{checkedCount} 个 v 轮次全部有报告；另有 {eraRows} 行时代列行不在面内，见覆盖边界说明）");
     }
     else if (undeclared.Count == 0 && staleDeclared.Count == 0)
     {
-        passed++; lines.Add($"PASS V24: 轮次号↔报告文件对应（{checkedCount} 轮中 {missingSet.Count} 个缺口已由归档缺口声明登记 v{missingSet.Min()}-v{missingSet.Max()}，声明与实测一致）");
+        passed++; lines.Add($"PASS V24: 轮次号↔报告文件对应（{checkedCount} 轮中 {missingSet.Count} 个缺口已由归档缺口声明登记 v{missingSet.Min()}-v{missingSet.Max()}，声明与实测一致；另有 {eraRows} 行时代列行不在面内）");
     }
     else
     {
