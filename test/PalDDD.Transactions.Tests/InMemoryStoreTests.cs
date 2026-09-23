@@ -59,6 +59,27 @@ public sealed class InMemoryStoreTests
         await Assert.That(leasedMsg.Status).IsEqualTo(OutboxStatus.Processed);
     }
 
+    /// <summary>
+    /// T-15（2026-09-22）契约：**未租约直呼 MarkProcessed 应放行**（对齐三栈）。
+    /// 三栈对未租约消息一致放行（PalORM/Dapper 的 owner-null SQL 分支命中即 UPDATE；
+    /// EF 的 `OutboxDbContext.cs:110-114` 明写该路径是运维/测试路径的有意能力并配双守卫）。
+    /// 修前 InMemory 因 `LockedBy is not null` 条件拒绝该输入——测试替身比生产更严格，
+    /// 制造"测试红而生产绿"的反向偏差。依据见
+    /// `docs/review/three-stack-contract-matrix-2026-09-22.md`。
+    /// </summary>
+    [Test]
+    public async Task InMemoryOutboxStore_UnleasedMarkProcessed_Succeeds_AligningThreeStacks()
+    {
+        var store = new InMemoryOutboxStore();
+        var msg = new OutboxMessage { Type = "test", Payload = [1], ContentType = "application/json", SchemaVersion = 1 };
+        store.AddMessage(msg);
+        await Assert.That(msg.LockedBy).IsNull();   // 前提：从未租约
+
+        store.MarkProcessed(msg, DateTimeOffset.UtcNow);
+
+        await Assert.That(msg.Status).IsEqualTo(OutboxStatus.Processed);
+    }
+
     [Test]
     public async Task InMemoryOutboxStore_ReleaseForRetry_IncrementsRetryCount(CancellationToken cancellationToken)
     {
