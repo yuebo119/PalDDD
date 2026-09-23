@@ -28,9 +28,9 @@
     <!-- ZLogger — 零分配结构化日志（构建于 M.E.Logging 之上） -->
     <PackageVersion Include="ZLogger" Version="2.5.10" />
     <!-- ByteAether.Ulid — 时间排序唯一标识符（AOT 兼容 · RFC 9562 合规） -->
-    <PackageVersion Include="ByteAether.Ulid" Version="1.4.0" />
+    <PackageVersion Include="ByteAether.Ulid" Version="1.4.1" />
     <!-- Dapper 适配器 — SQLite / PostgreSQL / MySQL（AOT 兼容）。2.1.86（ITM-809，2026-09-19 补丁级升级） -->
-    <PackageVersion Include="Dapper" Version="2.1.86" />
+    <PackageVersion Include="Dapper" Version="2.1.89" />
     <!-- Dapper.AOT 1.1.0（2026-09-13 升级探针实证）：拦截器接线在 .NET 11 已恢复（1.0.52 的
          InterceptsLocation(line,char) 旧形式失效指控对 1.1.0 不成立——net11 SDK JIT 堆栈走生成代码
          + NativeAOT 二进制实跑全绿）；TypeHandler 声明式 [Dapper.TypeHandler] 生效（含经典
@@ -62,13 +62,13 @@
     <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
     <PackageVersion Include="Confluent.Kafka" Version="2.15.1" />
     <!-- 测试基础设施 — TUnit（源生成器测试框架 · MTP） -->
-    <PackageVersion Include="TUnit" Version="1.66.27" />
+    <PackageVersion Include="TUnit" Version="1.69.0" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <!-- 属性测试 — FsCheck + TUnit 集成 -->
     <PackageVersion Include="FsCheck" Version="3.4.0" />
-    <PackageVersion Include="TUnit.FsCheck" Version="1.66.27" />
+    <PackageVersion Include="TUnit.FsCheck" Version="1.69.0" />
     <!-- 快照测试 — Verify + TUnit 集成 -->
-    <PackageVersion Include="Verify.TUnit" Version="32.0.0" />
+    <PackageVersion Include="Verify.TUnit" Version="32.0.1" />
     <!-- 集成测试 — Testcontainers -->
     <PackageVersion Include="Testcontainers.Kafka" Version="4.15.0" />
     <PackageVersion Include="Testcontainers.RabbitMq" Version="4.15.0" />
