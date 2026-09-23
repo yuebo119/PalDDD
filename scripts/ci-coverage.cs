@@ -92,17 +92,42 @@ var buildExit = RunInherit("dotnet", "build PalDDD.slnx --nologo -v q");
 if (buildExit != 0) return buildExit;
 
 // 2. 测试 + 覆盖率收集（MTP 手写协议——见头注释迁移说明 2）
+// ⚡ 并行化（2026-09-23）：本步骤实测 591s，是整轮 CI 的**唯一关键路径**（coverage 647s >
+// build-and-test 505s）——墙钟提速的最后一个杠杆（build-and-test 侧的 Test 循环已并行化）。
+// 并行度保守起步 = 2，理由同 ci.yml 的 Test 步骤：仓库有墙钟敏感的超时护栏
+// （OutboxProcessorTests 的 WhenAny(stopTask, Delay(3s))，见 T-21 注记），争用加剧可能触发
+// 误报；稳定若干轮后可上调此常量。
+// 语义保留与变化：① 任一项目失败 → 整体返回其退出码（**不再 fail-fast**——并发下 fail-fast
+// 会掩盖其余失败，改为跑完全部再汇总，与 ci.yml 的 Test 步骤同款）；② 每项目 cobertura
+// 文件名按项目名唯一 ⇒ 并行写互不冲突；③ 输出改为**逐项目捕获后按序打印**——并发下继承
+// stdout 会交错，失败日志无法归属到项目。
 Console.WriteLine(">> Running tests with coverage...");
 Directory.CreateDirectory("TestResults");
-foreach (var csproj in FindTestProjects())
+var testProjects = FindTestProjects().ToList();
+const int coverageParallelism = 2;
+var covResults = new (string Name, int Exit, string Output)[testProjects.Count];
+Parallel.For(0, testProjects.Count,
+    new ParallelOptions { MaxDegreeOfParallelism = coverageParallelism },
+    i =>
+    {
+        var name = Path.GetFileNameWithoutExtension(testProjects[i]);
+        covResults[i] = RunOne(testProjects[i], name);
+    });
+foreach (var r in covResults)
 {
-    var name = Path.GetFileNameWithoutExtension(csproj);
-    Console.WriteLine($">> {name}");
-    var testExit = RunInherit("dotnet",
+    Console.WriteLine($">> {r.Name}: exit={r.Exit}");
+    if (r.Output.Length > 0) Console.WriteLine(r.Output);
+}
+var failedTest = covResults.FirstOrDefault(r => r.Exit != 0);
+if (failedTest.Name is not null) return failedTest.Exit;
+
+static (string Name, int Exit, string Output) RunOne(string csproj, string name)
+{
+    var (exit, output) = RunCapture("dotnet",
         $"test {csproj} --nologo --no-build -v q --coverage" +
         $" --coverage-output TestResults/coverage.{name}.cobertura.xml" +
         " --coverage-output-format cobertura");
-    if (testExit != 0) return testExit;
+    return (name, exit, output);
 }
 
 // 3. 恢复本地工具清单（固定 ReportGenerator 版本，见 .config/dotnet-tools.json）
@@ -157,6 +182,32 @@ if (dropExit != 0) return dropExit;
 Console.WriteLine("=== Coverage complete (gate PASSED) ===");
 Console.WriteLine("Report: TestResults/coverage-report/index.html");
 return 0;
+// ─── 子进程执行：stdout/stderr 捕获返回（并行循环专用）───
+// 与 RunInherit 的区别：并发下继承终端会让各项目输出交错，失败日志无法归属到项目——
+// 故改为逐项目捕获、由调用方按序打印。
+// stderr 必须**并发排空**：RedirectStandardError 是管道，不排空时子进程写满缓冲即与父进程的
+// stdout ReadToEnd 互等（沿 fix-orchestrator.cs 的同款教训——dotnet 在 stderr 上输出很吵）。
+static (int ExitCode, string Output) RunCapture(string fileName, string arguments)
+{
+    var psi = new ProcessStartInfo(fileName, arguments)
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        StandardOutputEncoding = Encoding.UTF8,
+        StandardErrorEncoding = Encoding.UTF8,
+    };
+    using var process = Process.Start(psi)!;
+    var stderr = new StringBuilder();
+    process.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
+    process.BeginErrorReadLine();
+    var stdout = process.StandardOutput.ReadToEnd();
+    process.WaitForExit();
+    process.WaitForExit();   // 双调用：确保异步缓冲 flush（沿 check-all.cs 先例）
+    return (process.ExitCode, stdout + stderr);
+}
+
 // ─── 子进程执行：stdout/stderr 继承终端（对齐原脚本未捕获的 dotnet 调用）───
 // ITM-663：stdout/stderr 均继承终端——coverage 工具输出即结果，控制台直出可观察（刻意取舍）
 static int RunInherit(string fileName, string arguments)
