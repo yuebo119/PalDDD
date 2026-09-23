@@ -78,6 +78,26 @@ var wiredNames = CollectWiredNames(root);
 string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "gate-lite", "verify-conventions", "ci-coverage",
     "gate", "tech-debt", "doc-consistency", "test-gate", "verify-ai"];
 
+// 门禁覆盖形态声明（T-34，2026-09-22）：每个**已探针**门禁必须在此声明它覆盖哪些形态。
+// 为什么是机械要求而非文档建议：V25 的实证——一个已接线、能红、报错精确到行的门禁，
+// 对它本该抓的形态（裸文件名）**完全失明**（T-26 补上后当场抓出 46 处）。加门禁 ≠ 加覆盖面，
+// 声明覆盖形态 = 同时声明**不覆盖什么**。
+// 断言：probedGates 每项必须在此有条目（缺失即 ERROR 退出），故新增探针时无法绕过本声明。
+var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
+{
+    ["secret-scan"] = "硬编码凭据模式（含零可扫描文件 fail-closed）",
+    ["encoding-gate"] = "E1-E5 编码形态（CRLF/BOM/mojibake/verified LF/源文件裸 LF）",
+    ["dapper-param-guard"] = "匿名 Dapper 参数枚举直传（CI #94 根因）",
+    ["gate-lite"] = "根目录快速门禁（缺 src/ fail-closed）",
+    ["verify-conventions"] = "V5 TODO / V8 模板段 / V9 命令引用 / V10 文档互链 / V11 决策文档 / V12 私网 IP",
+    ["ci-coverage"] = "覆盖率阈值比较方向 / NaN / 合并报告缺失（三者 fail-closed）",
+    ["gate"] = "G22 工作树清洁 / G23 API 快照↔CHANGELOG / G24 路径分隔符归一化",
+    ["tech-debt"] = "Obsolete / TODO-HACK-FIXME / Console 于 src / 空 catch / tab / 超长行 / 测试数 / 版本统一 / slnx 成员",
+    ["doc-consistency"] = "D7 .ai/README.md 文件地图（其余 D1-D6/D8-D12 已下沉 C# 测试）",
+    ["test-gate"] = "T1-T12 测试规范 / T-DEF-1 薄壳缺失 / T-DEF-4 CI job timeout / OSC 同测试翻转",
+    ["verify-ai"] = "V1-V25 系统一致性（含命令形态三子类：bash-.cs / 带前缀死引用 / 裸名死引用）",
+};
+
 // ─── 未接线脚本的分类（2026-09-13 增）───
 // 此前矩阵对一切未接线者判「OBSERVE 未接线——永远不触发」，实测 17 个中 16 个是
 // **按设计手工调用的工具**（定位是「按需运行并读输出」，非「不通过则阻断」），
@@ -408,6 +428,19 @@ if (uncovered.Count > 0)
     Console.Error.WriteLine($"ERROR: probedGates 中以下门禁无对应探针：{string.Join(", ", uncovered)}——PROBED 列将假绿（登记了但从未探测）");
     return 2;
 }
+
+// T-34（2026-09-22）：已探针门禁必须声明覆盖形态——未声明即 ERROR（新增探针无法绕过）。
+var undeclaredForms = probedGates.Where(g => !gateForms.ContainsKey(g)).ToList();
+if (undeclaredForms.Count > 0)
+{
+    Console.Error.WriteLine($"ERROR: 以下已探针门禁未在 gateForms 声明覆盖形态：{string.Join(", ", undeclaredForms)}——加门禁 ≠ 加覆盖面，声明覆盖形态即声明不覆盖什么");
+    return 2;
+}
+
+Console.WriteLine();
+Console.WriteLine("=== 门禁覆盖形态声明（T-34）===");
+foreach (var g in probedGates.OrderBy(x => x, StringComparer.Ordinal))
+    Console.WriteLine($"  {g,-22} {gateForms[g]}");
 
 foreach (var probe in probes)
 {
