@@ -1,0 +1,54 @@
+# Dependabot — 审计 2026-09-20 O2 补
+# 此前 .github/ 只有 ci.yml 与 release.yml，无依赖 renovate：对一个要发布 35 个
+# NuGet 包的框架库，依赖更新全靠人工。vuln-scan 只覆盖已声明依赖的已知 CVE，
+# 不主动提出升级 PR。
+#
+# 分组策略：微软预览线（11.0.0-rc.1）单独一组——GA 清偿（NU5104 抑制移除）是
+# 一次性批量动作，不应被日常更新 PR 反复触碰；第三方稳定线一组，可小步快跑。
+
+version: 2
+
+updates:
+  # NuGet 依赖（中央包管理：Directory.Packages.props 是唯一版本来源）
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "依赖"
+    # 预览线单独分组：GA 清偿是有意识的批量动作（见 Directory.Packages.props NU5104
+    # 理由），日常 PR 不主动碰 .NET 11 rc 线
+    groups:
+      dotnet-preview:
+        patterns:
+          - "Microsoft.*"
+          - "System.*"
+        update-types:
+          - version-update:semver-patch
+          - version-update:semver-minor
+      third-party-stable:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "Microsoft.*"
+          - "System.*"
+
+  # GitHub Actions 版本
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "CI"

@@ -56,8 +56,19 @@ public static class ServiceRegistration
         return services.AddPalDDD().AddPalPipelineBehaviors().AddPalIdentity();
     }
 
-    /// <summary>注册 PalDDD 默认栈；当前等价于 <see cref="AddPalCoreStack"/>。</summary>
-    /// <remarks>为新用户提供低认知入口，同时不越过 Clean Architecture 边界自动引用基础设施适配器。</remarks>
+    /// <summary>
+    /// 注册 PalDDD 默认栈；当前等价于 <see cref="AddPalCoreStack"/>。
+    /// </summary>
+    /// <remarks>
+    /// 为新用户提供低认知入口，同时不越过 Clean Architecture 边界自动引用基础设施适配器。
+    /// <para>
+    /// ⚠️ <b>名不副实声明（审计 2026-09-20 A9）</b>：本方法名为 "FullStack" 但**不注册任何
+    /// 基础设施**——序列化、持久化（Dapper/PalORM/EFCore）、消息代理（Kafka/RabbitMQ）、
+    /// 压缩均需调用方按需显式注册。这是刻意设计（避免框架替用户选定持久化与消息栈），
+    /// 但名字容易让人误以为一键到位。测试 <c>AddPalFullStack_EqualsCoreStackWithoutInfrastructureAdapters</c>
+    /// 锁定该等价性。更名属破坏性变更，随 v4.0 契约窗口处理。
+    /// </para>
+    /// </remarks>
     public static IServiceCollection AddPalFullStack(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);

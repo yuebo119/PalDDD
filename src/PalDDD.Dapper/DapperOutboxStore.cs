@@ -231,7 +231,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // 其自身的批次起始 now——长批次尾部消息的重试时间提前（漂移=批耗时）；受 batchSize 上限
         // 约束可接受。本方法现不再取批次时钟，该漂移属处理器时间语义。
         // v8 声明：接口 IPalOutboxStore.AddMessagesAsync 无 CancellationToken 参数，本路径
-        // 无法响应取消——v3.0 契约窗口（ADR-020）随接口异步化一并补。
+        // 无法响应取消——v4.0 契约窗口（ADR-020）随接口异步化一并补。
         var conn = await EnsureOpenAsync().ConfigureAwait(false);
         // P2 修复（八轮评审 PD17）：批量路径补 correlation/causation/trace 4 追踪列——
         // 单条路径 AddMessage（七轮）已补，批量漏列导致追踪链在批量写入时丢失；
@@ -252,17 +252,27 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // P1 修复（八轮评审）：时间参数统一走 ToTimeParam——ToSqliteParameter 产出 "O" string，
         // PG 下 timestamptz 列收 text 参数无比较/赋值运算符（详见 ToTimeParam 的 PG 分支注释）
         // 三十四轮 ITM-210 token 化：补租约 token 参数（owner/until 调用时快照；无租约时均传
-        // null → SQL 走 locked_by IS NULL 分支）。affected 返回值不消费——与原语义一致
-        //（token 拒绝时 DB 行不变，内存入参仍按下方 ITM-130 同步清租约字段）。
+        // null → SQL 走 locked_by IS NULL 分支）。
         // P3-SRC-301 声明：affected=0（token 拒绝）时内存对象仅清租约字段不回写 Status——
         // 与 InMemory 版（守卫内联设 Processed）/PalORM 版（affected>0 才全套回写）的分叉属
         // ITM-210 历史语义，调用方（OutboxBatchProcessor）不读该状态故无实害。
-        c.Execute(SqlTemplates.OutboxMarkProcessed,
+        // ⚠️ 2026-09-22 决策（DECISION-2026-09-22-dapper-markprocessed-lease-clear）：
+        // 上述"无实害"前提**已核实成立**（OutboxBatchProcessor.cs:183-184 只计数不读入参），
+        // 但分叉与同文件 ITM-130 的既定意图（"对齐 EFCore/PalORM/InMemory 三姊妹的对象字段
+        // 语义"）相矛盾——不消费 affected 使该意图只完成一半。现按 ITM-130 方向补齐：
+        // **消费 affected，仅 >0 时清租约字段**——被拒标记后入参对象不再声称"租约已释放而
+        // DB 行仍持有"（OutboxMessage 是公共 API 入参，框架无法约束应用层自定义处理器不读）。
+        // PalORM 同形（PalOrmOutboxStore.cs:182-183 "affected=0 时零内存变异"）。
+        var affected = c.Execute(SqlTemplates.OutboxMarkProcessed,
             new { at = ToTimeParam(processedAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message), retryCount = message.RetryCount }, Tx); // P1 修复（八轮评审）：时间参数走 ToTimeParam；三十四轮 ITM-210：租约 token 参数；v37 P3：retry_count fencing 快照
         // ITM-130 修复：SQL 清除 DB 租约列后同步入参——调用方读入参不应再见陈旧持有者
-        // （对齐 EFCore/PalORM/InMemory 三姊妹的对象字段语义）
-        message.LockedBy = null;
-        message.LockedUntil = null;
+        // （对齐 EFCore/PalORM/InMemory 三姊妹的对象字段语义）。被拒（affected=0）时保持
+        // 入参不变——与 PalORM 的"零内存变异"对齐。
+        if (affected > 0)
+        {
+            message.LockedBy = null;
+            message.LockedUntil = null;
+        }
     }
 
     public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)

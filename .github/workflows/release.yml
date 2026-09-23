@@ -66,6 +66,35 @@ jobs:
           fi
           echo "Version match: $PROPS_VERSION"
 
+      # 审计 2026-09-20 M2-3：tag 触发时校验对应 commit 的 CI 已通过。
+      # 背景：tag 发布路径此前只跑本 workflow 的 build+test+AOT+pack，不跑
+      # secret-scan/format-verify/coverage/encoding-gate/doc-consistency/tech-debt/
+      # test-gate（这些只在 ci.yml 的 build-and-test 里）。本地 `git tag` + push 可打出
+      # 从未经 CI 的 commit 的 tag，带缺陷的包会以"已发布"状态流出。
+      # 双管齐下：① ci.yml 已增加 tag 触发（跑全量门禁矩阵）；② 本步在 pack 前查
+      # 该 commit 的 CI 结论，tag 路径下必须是 success 才继续。
+      # workflow_dispatch 手动发布跳过该检查（显式人工意图，可能是重跑/补发）。
+      - name: Verify CI passed for this commit (tag releases only)
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          echo "Checking CI conclusion for $SHA ..."
+          CONCLUSION=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
+            --jq '.check_runs[] | select(.name == "build-and-test") | .conclusion' | head -1)
+          if [ -z "$CONCLUSION" ]; then
+            echo "ERROR: no build-and-test check run found for $SHA — CI 未对本 commit 运行，拒绝发布。"
+            echo "请先推送该 commit 到 main/dev 或对 tag 触发 CI，确认全量门禁通过后再发布。"
+            exit 1
+          fi
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "ERROR: CI conclusion for $SHA is '$CONCLUSION' (not success) — 拒绝发布。"
+            exit 1
+          fi
+          echo "CI passed for $SHA (build-and-test: success)"
+
       - name: Restore
         run: dotnet restore PalDDD.slnx
 

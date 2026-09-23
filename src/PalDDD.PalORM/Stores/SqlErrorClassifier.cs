@@ -13,6 +13,16 @@ namespace PalDDD.PalORM.Stores;
 /// 覆盖四 Provider：MySQL 1062/1586、PostgreSQL 23505、SQLite UNIQUE、SqlServer 2601/2627。
 /// 仅判定重复键——其他错误由调用方原样上抛。Provider 异常按类型名鸭子类型判定，
 /// <see cref="PropertyCache"/> 缓存反射属性消除逐次 GetProperty 开销。
+/// <para>
+/// ⚠️ <b>"五处"的射程（2026-09-22 T-23 加注）</b>：上文"五处同型实现"指本类收敛的
+/// **PalORM 栈内部** 5 处（列于上文各 Store）。跨项目另有同型实现——4 个 EFCore Context
+/// （EventLog/Idempotency/Projections/Transactions）+ Dapper SqlErrorClassifier——**未合并，
+/// 且经核验无法合并**：四条 EFCore 链互不共享 PalDDD 引用，唯一共同祖先是领域内核
+/// <c>PalDDD.Core</c>，而本判定基于 <c>DbUpdateException</c> 需 EF Core（基础设施依赖），
+/// 按「领域层不依赖基础设施」红线不能落位。合并的唯一出路是新增共享 EFCore 项目（改变发布
+/// 包集合）或引入姊妹依赖（改变分层方向），**重复约 40 行纯判定逻辑是严格分层的既定成本**。
+/// 详见 <c>docs/review/optimization-plan-2026-09-22.md</c> §T-23。
+/// </para>
 /// </remarks>
 internal static class SqlErrorClassifier
 {

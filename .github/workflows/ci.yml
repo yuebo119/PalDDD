@@ -3,8 +3,24 @@ name: CI
 on:
   push:
     branches: [main, dev]
+    # 审计 2026-09-20 M2-3：tag 推送触发全量门禁。此前 tag 发布路径只跑 release.yml 的
+    # build+test+AOT+pack，不跑 secret-scan/format-verify/coverage/encoding-gate/
+    # doc-consistency/tech-debt/test-gate——发布验证强度低于日常 push。若 tag 从未经 CI
+    # 的 commit 打出（本地 git tag + push 完全可能），带缺陷的包会以"已发布"状态流出。
+    # 现 tag 触发与 push/PR 相同的完整门禁矩阵，release.yml 的 pack/push 因此建立在
+    # 已验证的 commit 上。
+    tags: ['v*']
   pull_request:
     branches: [main, dev]
+  # 审计 2026-09-20 O2：补 workflow_dispatch——CI 失败后此前必须推空提交才能重跑
+  workflow_dispatch:
+
+# 审计 2026-09-20 O2：补 concurrency 组。此前连续推送会并行跑满 4 个 job
+# （含 40 分钟 coverage + 20 分钟 aot-verify），runner 配额与反馈延迟都被放大；
+# 同组新推送取消旧的在途运行（release.yml 已有同款配置，此处对齐）。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   DOTNET_NOLOGO: true
@@ -103,19 +119,21 @@ jobs:
           # 第五次现身：上轮把 set 放在 :120/:135 的六门禁循环前，漏了 :106 的 secret-scan
           # 首个调用点——CI 凭据门禁实为 no-op，探针 MASKED/CAUGHT 实锤）。提至块首覆盖全部管道。
           set -o pipefail
-          # .ai/ 是独立 git 仓库（.gitignore 第 95 行），fresh checkout 不存在——
-          # 本地装有 .ai 才跑全量自检，否则退化为根目录快速门禁（G1-G3），
-          # 避免 CI 在无 .ai 的仓库上必然失败（终验轮 B-1 实锤）
-          # CI 覆盖面（ITM-615 补全，2026-09-10）：
-          #   有 .ai 时 = build + test + aot + gate-check + verify-ai-system（含 V23 镜像对内容比对）
-          #     + encoding-gate + doc-consistency-check + tech-debt-scan + test-gate
-          #     + template-gate（五项离线快检循环 2026-09-10 追加，均可离线运行、无外部依赖；
-          #     原第六项 assertion-strength-check 已随 MIG-002 删除，判定下沉
-          #     AssertionStrengthGateTests 随 Test 步骤运行）；
-          #   无 .ai 时 = build + test + aot + 根 G1-G3 快速门禁（降级）。
+          # .ai/ 是独立 git 仓库（.gitignore:68 `/.ai`），fresh checkout 不存在。
+          # 2026-09-22 裁决：`.ai` **保持独立 git 库**（不入库、不转 submodule）。
+          # 据此删除原 `if [ -d .ai/scripts ]` 分支（T-02）——该分支在 CI 恒假，
+          # 保留它会让本文件看起来跑了六门禁，而实际只跑降级门禁（静默 no-op 形态）。
+          # CI 覆盖面（T-04 后，全部无条件执行）：
+          #   secret-scan → dapper-param-guard → doc-consistency → encoding-gate /
+          #   tech-debt / test-gate 循环 → gate-audit --inventory → gate-lite
+          # 覆盖面边界（由 .ai 独立性决定，永不进 CI）：verify-ai / gate / template-gate
+          #   依赖 .ai 内容，改由 .githooks/pre-commit 与 .ai 仓自身钩子承担（优化方案 T-35）。
+          # 历史：F-04 勘正（2026-09-21）首次指出该分支恒假；ITM-615（2026-09-10）曾把
+          # 四门禁追加进该分支，实为无效接线。gate-audit 矩阵的 WIRED 判定仍会把恒假分支
+          # 内的调用计为接线（T-36 待修）。
           # unified v2.0（2026-08-20）：gate 步骤自诊断化（CI 实测 exit 2 本地却过——
           # tee 捕获 + CTX 注解通道让失败现场经公开 API 可读）
-          # ITM-616：凭据扫描（主仓脚本，不依赖 .ai）——两个分支都要跑，补 SE2 此前失实的防线。
+          # ITM-616：凭据扫描（主仓脚本，不依赖 .ai）——补 SE2 此前失实的防线。
           if ! dotnet run scripts/secret-scan.cs 2>&1 | tee ci-secret-scan.log; then
             echo "::error ::SECRET SCAN FAILED：受跟踪文件发现疑似硬编码凭据"
             dotnet run scripts/ci-failed-tests.cs secret-scan ci-secret-scan.log || true
@@ -125,7 +143,7 @@ jobs:
           rm -f ci-secret-scan.log
           # dapper-param-guard（2026-09-14 增）：Dapper 参数枚举直传静态检查——
           # CI #94 根因（Dapper.AOT 拦截器直传驱动，PG 拒绝枚举）的前移防线；
-          # 主仓脚本不依赖 .ai，两个分支都要跑（纵深：防 --no-verify 绕过 pre-commit）。
+          # 主仓脚本不依赖 .ai（纵深：防 --no-verify 绕过 pre-commit）。
           if ! dotnet run scripts/dapper-param-guard.cs 2>&1 | tee ci-dapper-param-guard.log; then
             echo "::error ::DAPPER PARAM GUARD FAILED：匿名 Dapper 参数含枚举直传（改 (int) 强转）"
             dotnet run scripts/ci-failed-tests.cs dapper-param-guard ci-dapper-param-guard.log || true
@@ -133,42 +151,61 @@ jobs:
             exit 1
           fi
           rm -f ci-dapper-param-guard.log
-          if [ -d .ai/scripts ]; then
-            dotnet run scripts/verify-ai.cs
-            dotnet run scripts/gate.cs -- --allow-dirty
-            # ITM-615：五个离线快检门禁（原六个，assertion-strength-check 已删——见上 MIG 注释）
-            # 此前只在本地手跑，CI 无守护——追加到 .ai 分支。
-            # MIG-002/003（2026-09-11）：assertion-strength-check.sh 已删除（判定下沉
-            # test/.../AssertionStrengthGateTests.cs，随 Test 步骤运行）；doc-consistency-check.sh
-            # 薄壳化（判定下沉 DocConsistencyGateTests）保留 D7——两者从循环中移除/保留如常。
-            # flaky-gate.sh 需传 csproj（build + N 次 test，非快速门禁），不纳入。
-            # pipefail 已在块首统一 set（ITM-648）——此处管道退出码不再被 tee 掩码。
-            # MIG-012（2026-09-11）：门禁薄壳 bash→C# file-based app（dotnet run 直跑）；
-            # template-gate 保留 bash（单行 dotnet run --project 启动器，迁 .cs 反多一层）。
-            for ai_gate_cs in encoding-gate doc-consistency tech-debt test-gate; do
-              echo "== .ai gate: $ai_gate_cs =="
-              if ! dotnet run "scripts/$ai_gate_cs.cs" 2>&1 | tee "ci-$ai_gate_cs.log"; then
-                echo "::error ::.ai GATE FAILED: $ai_gate_cs"
-                dotnet run scripts/ci-failed-tests.cs -- "$ai_gate_cs" "ci-$ai_gate_cs.log" || true
-                rm -f "ci-$ai_gate_cs.log"
-                exit 1
-              fi
-              rm -f "ci-$ai_gate_cs.log"
-            done
-            if ! bash .ai/scripts/template-gate.sh 2>&1 | tee ci-template-gate.log; then
-              echo "::error ::.ai GATE FAILED: template-gate"
-              exit 1
-            fi
-            rm -f ci-template-gate.log
-          else
-            echo "SKIP .ai self-check: .ai 质量系统未随仓库分发"
-            # pipefail 已在块首统一 set（ITM-648）。
-            if ! dotnet run scripts/gate-lite.cs 2>&1 | tee ci-gate.log; then
-              echo "::error ::ROOT GATE-CHECK FAILED"
-              dotnet run scripts/ci-failed-tests.cs gate ci-gate.log || true
-              exit 1
-            fi
+          # F-04：doc-consistency 是**主仓**脚本（scripts/doc-consistency.cs），不依赖 .ai——
+          # 原实现在恒假的 .ai 分支内，CI 从未跑过。已提到分支外（2026-09-21）。
+          if ! dotnet run scripts/doc-consistency.cs 2>&1 | tee ci-doc-consistency.log; then
+            echo "::error ::DOC CONSISTENCY FAILED：文档口径与代码不一致"
+            rm -f ci-doc-consistency.log
+            exit 1
           fi
+          rm -f ci-doc-consistency.log
+          # T-04（2026-09-22）：三门禁从恒假分支提出，fresh checkout 必跑。前提已核验：
+          # 三者对 .ai 的引用均带 Directory.Exists 守卫（encoding-gate.cs:256-260 的
+          # EnumerateByNameSuffix、tech-debt.cs:330 的 ShFilesIn、osc-check.cs:281 自建目录），
+          # 目录缺失即静默跳过，不产生假红。
+          # 纵深意义：pre-commit 可被 --no-verify 跳过，此处是补偿扫描（审计 T5）。
+          # MIG-002/003（2026-09-11）：assertion-strength-check.sh 已删除（判定下沉
+          # test/.../AssertionStrengthGateTests.cs，随 Test 步骤运行）；doc-consistency-check.sh
+          # 薄壳化（判定下沉 DocConsistencyGateTests）保留 D7——两者从循环中移除/保留如常。
+          # flaky-gate.sh 需传 csproj（build + N 次 test，非快速门禁），不纳入。
+          # pipefail 已在块首统一 set（ITM-648）——此处管道退出码不再被 tee 掩码。
+          # MIG-012（2026-09-11）：门禁薄壳 bash→C# file-based app（dotnet run 直跑）。
+          for repo_gate in encoding-gate tech-debt test-gate; do
+            echo "== gate: $repo_gate =="
+            if ! dotnet run "scripts/$repo_gate.cs" 2>&1 | tee "ci-$repo_gate.log"; then
+              echo "::error ::GATE FAILED: $repo_gate"
+              dotnet run scripts/ci-failed-tests.cs -- "$repo_gate" "ci-$repo_gate.log" || true
+              rm -f "ci-$repo_gate.log"
+              exit 1
+            fi
+            rm -f "ci-$repo_gate.log"
+          done
+          # T-04 扩展（2026-09-22）：gate.cs 实测**不依赖 .ai**（仅 2 处迁移注释；对照
+          # verify-ai.cs 有 49 处 .ai 引用），历史上被误置于恒假分支。其 G23（公共 API 快照
+          # ↔CHANGELOG 同步）与 G24（路径分隔符归一化）是主仓关切，应当进 CI。
+          # --allow-dirty 保留原语义（CI workspace 有构建产物与 TestResults）。
+          if ! dotnet run scripts/gate.cs -- --allow-dirty 2>&1 | tee ci-gate-cs.log; then
+            echo "::error ::GATE FAILED: gate.cs（G22/G23/G24）"
+            dotnet run scripts/ci-failed-tests.cs gate ci-gate-cs.log || true
+            rm -f ci-gate-cs.log
+            exit 1
+          fi
+          rm -f ci-gate-cs.log
+          # T-03（2026-09-22）：门禁可信度矩阵自身的退化防线——REVIEW（未归类）桶非空即红。
+          # 用 --inventory（快，跳过探针）；探针版留给 nightly。
+          if ! dotnet run scripts/gate-audit.cs -- --inventory 2>&1 | tee ci-gate-audit.log; then
+            echo "::error ::GATE AUDIT FAILED：门禁矩阵存在未归类脚本（REVIEW 桶非空）"
+            rm -f ci-gate-audit.log
+            exit 1
+          fi
+          rm -f ci-gate-audit.log
+          # 根目录快速门禁（原仅在无 .ai 分支跑，现无条件跑）
+          if ! dotnet run scripts/gate-lite.cs 2>&1 | tee ci-gate.log; then
+            echo "::error ::ROOT GATE-CHECK FAILED"
+            dotnet run scripts/ci-failed-tests.cs gate ci-gate.log || true
+            exit 1
+          fi
+          rm -f ci-gate.log
 
   aot-verify:
     runs-on: ubuntu-latest

@@ -1270,14 +1270,14 @@ dotnet publish samples/PalDDD.AotSample -c Release -r win-x64 -p:PublishAot=true
 
 ## 十五、许可证 & 社区
 
-- **许可证**: MIT (与 PalDDD 一致)
+- **许可证**: AGPL-3.0-only（nuspec 实测：PalORM.Core / SourceGen / PostgreSql / MySql / Sqlite 五包一致）
 - **源码托管**: GitHub (pal-ddd/palorm)
 - **文档站**: palorm.dev
 - **NuGet**: PalORM.Core, PalORM.SourceGen, PalORM.PostgreSql, PalORM.MySql, PalORM.Sqlite, PalORM.Testing
 
 ---
 
-**PalORM — .NET 首个全链路 AOT 安全的现代化 ORM。106 API · 295 坑规避 · 97/100 · 12 周 · 6 NuGet · 3 Provider · MIT。**
+**PalORM — .NET 首个全链路 AOT 安全的现代化 ORM。106 API · 295 坑规避 · 97/100 · 12 周 · 6 NuGet · 3 Provider · AGPL-3.0-only。**
 
 
 ---
@@ -1426,7 +1426,7 @@ A: 添加 PalORM NuGet 包, 替换 `conn.QueryAsync<T>(sql, new {})` → `db.Que
 A: PostgreSQL (Npgsql), MySQL (MySqlConnector), SQLite (Microsoft.Data.Sqlite)。通过 IDbProvider 接口 (C# 11 static abstract) 可扩展任意 ADO.NET Provider。
 
 ### Q9: PalORM 是否开源？
-A: MIT 许可证。计划托管于 GitHub (pal-ddd/palorm)。
+A: AGPL-3.0-only。计划托管于 GitHub (pal-ddd/palorm)。
 
 ### Q10: PalORM 的名字有什么含义？
 A: Pal = Pattern-Ahead Language。前缀继承自 PalDDD 生态。Pal 在拉丁语中意为"伙伴", 在中文中与"防护"同音——PalORM 在编译时就"防护"了运行时错误。
@@ -2014,7 +2014,7 @@ public void Incremental_RebuildOnlyChangedTypes()
 
 ---
 
-**PalORM — .NET 首个全链路 AOT 安全的现代化 ORM。106 API · 295 坑规避 · 97/100 · 12 周 · 6 NuGet · 3 Provider · MIT。**
+**PalORM — .NET 首个全链路 AOT 安全的现代化 ORM。106 API · 295 坑规避 · 97/100 · 12 周 · 6 NuGet · 3 Provider · AGPL-3.0-only。**
 
 
 

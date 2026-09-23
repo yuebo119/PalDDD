@@ -36,6 +36,8 @@ git config --local --get core.hooksPath   # 期望输出：.githooks
 
 ## 常用命令
 
+> ⚠️ **Docker 前提**：`test/PalDDD.PalORM.Tests` 与 `test/PalDDD.Integration.Tests` 的方言族测试经 Testcontainers 拉取 PG/MySQL 镜像；未运行 Docker 时这些测试** fail-closed 抛异常而非跳过**（设计如此，防误连外部库）。首次 clone 请先启动 Docker，或先只跑不依赖容器的项目（`PalDDD.Core.Tests`/`PalDDD.Transactions.Tests`/`PalDDD.Serialization.Tests` 等）。无 Docker 时 `PalORM.Tests` 约 46 项失败属预期，非代码缺陷。
+
 ```bash
 dotnet restore PalDDD.slnx
 dotnet build PalDDD.slnx --no-restore
@@ -78,7 +80,7 @@ PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests/PalDDD.C
 
 ### 断言强度检查（替代 Stryker 突变测试）
 
-仓库不包含 `stryker-config.json`：Stryker.NET 当前不支持 TUnit/MTP，无法在本仓库运行。突变测试职责已由 `AssertionStrengthGateTests`（test/PalDDD.DependencyInjection.Tests）替代（断言强度棘轮，基线上限 190——净化算法后真实存量 185 + 余量，只减不增；MIG-003 由 bash 脚本下沉，旧基线 166 为 python 配对漏检口径）。
+仓库不包含 `stryker-config.json`：Stryker.NET 当前不支持 TUnit/MTP，无法在本仓库运行。突变测试职责已由 `AssertionStrengthGateTests`（test/PalDDD.DependencyInjection.Tests）替代（断言强度棘轮，基线上限 200——`08ba7d6`（Dapper 栈补齐 IIdempotencyStore）由 190 上调至 200，真实存量见该测试运行输出的 `isNotNullCount + zeroAssertMethods` 合计，只减不增；MIG-003 由 bash 脚本下沉，旧基线 166 为 python 配对漏检口径）。
 
 - **运行**：
   ```bash

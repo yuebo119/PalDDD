@@ -661,9 +661,14 @@ await sagaStateStore.SaveChangesAsync(newState, ct);
 
 ```csharp
 // 注册 EF Core EventLog 存储
-public sealed class AppEventLogDbContext(DbContextOptions<AppEventLogDbContext> options)
-    : EventLogDbContext(options);
+// ⚠️ 派生上下文必须显式接收并转发 reserver（否则 Hi/Lo chunk 缓存不跨请求共享，
+// 每次 append 都走 allocator 行且消耗整个 chunk 的位置）
+public sealed class AppEventLogDbContext(
+    DbContextOptions<AppEventLogDbContext> options,
+    EventLogPositionReserver reserver)
+    : EventLogDbContext(options, positionReserver: reserver);
 
+builder.Services.AddPalEventLogEfCore<AppEventLogDbContext>();   // reserver 注册为 Singleton
 builder.Services.AddDbContext<AppEventLogDbContext>(options =>
     options.UseNpgsql(connectionString));
 builder.Services.AddScoped<IEventLog>(sp =>

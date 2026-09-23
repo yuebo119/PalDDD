@@ -41,6 +41,19 @@ if ! dotnet run scripts/encoding-gate.cs 2>&1; then
     FAIL=1
 fi
 
+# ── 2b. verify-ai（V1-V25 系统自检，~2s；仅 .ai 存在时跑）──
+# 2026-09-22 T-35：`.ai` 裁决为独立 git 库 ⇒ verify-ai 永不进 CI（其唯一调用点在 ci.yml
+# 的 `.ai` 恒假分支内，该分支已随 T-02 删除）。此前它**没有任何自动执行路径**——不在 CI、
+# 不在 pre-commit、不在 pre-push，25 项检查全靠人工自愿调用。此处给它真正的执行面：
+# 本机存在 .ai 时随每次提交运行（.ai 是独立库，clone 主仓无此目录，故加守卫）。
+if [ -d .ai ]; then
+    echo "🧭 verify-ai（V1-V25，检测到 .ai）…"
+    if ! dotnet run scripts/verify-ai.cs 2>&1; then
+        echo "⛔ verify-ai 失败——.ai 系统一致性校验未通过"
+        FAIL=1
+    fi
+fi
+
 # ── 3. guard.cs（8 道守卫 ~22s，仅 .cs 在暂存集时触发——纯文档提交不耗时）──
 if any_ends_with ".cs" "$ALL"; then
     echo "🛡 guard.cs（.cs 在暂存集）…"

@@ -75,7 +75,28 @@ var wiredNames = CollectWiredNames(root);
 
 // 本次实际探测的门禁——矩阵 PROBED 列与下方探针列表由本数组单向对齐，
 // 并在跑探针前断言一致（防两处清单漂移，同 E1/E2 目录清单教训）。
-string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "gate-lite", "verify-conventions"];
+string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "gate-lite", "verify-conventions", "ci-coverage",
+    "gate", "tech-debt", "doc-consistency", "test-gate", "verify-ai"];
+
+// 门禁覆盖形态声明（T-34，2026-09-22）：每个**已探针**门禁必须在此声明它覆盖哪些形态。
+// 为什么是机械要求而非文档建议：V25 的实证——一个已接线、能红、报错精确到行的门禁，
+// 对它本该抓的形态（裸文件名）**完全失明**（T-26 补上后当场抓出 46 处）。加门禁 ≠ 加覆盖面，
+// 声明覆盖形态 = 同时声明**不覆盖什么**。
+// 断言：probedGates 每项必须在此有条目（缺失即 ERROR 退出），故新增探针时无法绕过本声明。
+var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
+{
+    ["secret-scan"] = "硬编码凭据模式（含零可扫描文件 fail-closed）",
+    ["encoding-gate"] = "E1-E5 编码形态（CRLF/BOM/mojibake/verified LF/源文件裸 LF）",
+    ["dapper-param-guard"] = "匿名 Dapper 参数枚举直传（CI #94 根因）",
+    ["gate-lite"] = "根目录快速门禁（缺 src/ fail-closed）",
+    ["verify-conventions"] = "V5 TODO / V8 模板段 / V9 命令引用 / V10 文档互链 / V11 决策文档 / V12 私网 IP",
+    ["ci-coverage"] = "覆盖率阈值比较方向 / NaN / 合并报告缺失（三者 fail-closed）",
+    ["gate"] = "G22 工作树清洁 / G23 API 快照↔CHANGELOG / G24 路径分隔符归一化",
+    ["tech-debt"] = "Obsolete / TODO-HACK-FIXME / Console 于 src / 空 catch / tab / 超长行 / 测试数 / 版本统一 / slnx 成员",
+    ["doc-consistency"] = "D7 .ai/README.md 文件地图（其余 D1-D6/D8-D12 已下沉 C# 测试）",
+    ["test-gate"] = "T1-T12 测试规范 / T-DEF-1 薄壳缺失 / T-DEF-4 CI job timeout / OSC 同测试翻转",
+    ["verify-ai"] = "V1-V25 系统一致性（含命令形态三子类：bash-.cs / 带前缀死引用 / 裸名死引用）",
+};
 
 // ─── 未接线脚本的分类（2026-09-13 增）───
 // 此前矩阵对一切未接线者判「OBSERVE 未接线——永远不触发」，实测 17 个中 16 个是
@@ -148,11 +169,19 @@ Console.WriteLine($"未接线·未归类（须归类）：{unclassified.Count}")
 foreach (var g in unwiredGaps) Console.WriteLine($"  缺口：{g.Name} —— {intendedWire[g.Name]}");
 foreach (var u in unclassified) Console.WriteLine($"  未归类：{u.Name}（登记进 manualTools 或 intendedWire）");
 
+// 2026-09-22 T-03：矩阵自身的退化防线。原实现恒 return 0，导致「新脚本未归类」这类退化
+// 在 CI 中不可见（矩阵只能人工读＝观察态无 owner）。口径：REVIEW 桶非空即红——"不放过新
+// 脚本"本就是下方 ClassifyVerdict 的既有承诺。UNWIRED-GATE 单列为缺口但暂不阻断：部分
+// 门禁按设计待接，登记 intendedWire 或改判 TOOL 属人工裁决，机械面不替人做这个决定。
+var matrixExit = MatrixExitCode(unclassified.Count);
+if (matrixExit != 0)
+    Console.Error.WriteLine($"FAIL 门禁矩阵存在 {unclassified.Count} 个未归类脚本——REVIEW 桶非空，须归入 manualTools 或 intendedWire。");
+
 if (inventoryOnly)
 {
     Console.WriteLine();
     Console.WriteLine("（--inventory 模式：跳过探针）");
-    return 0;
+    return matrixExit;
 }
 
 // ══════════════ 2. 变异探针（隔离仓库，真实注入坏输入）══════════════
@@ -187,14 +216,16 @@ var probes = new List<Probe>
             File.WriteAllText(Path.Combine(dir, "clean.cs"), "var k = \"hello\";\n");
             return ["clean.cs"];
         }),
-    // 全仓扫描修复的 fail-closed 路径探针：暂存集为空时（harness 只建 PalDDD.slnx，
-    // 它不在 secret-scan 的可扫描扩展名内），原实现打印 PASS + exit 0——门禁没真正
-    // 执行却报「干净」；修复后必须非零退出并给出显式 FAIL。
+    // 全仓扫描修复的 fail-closed 路径探针：暂存集里只有**不可扫描扩展名**的文件时
+    // （harness 建的 PalDDD.slnx 自 2026-09-20 起已进入 secret-scan 扫描面，故此处
+    // 显式注入一个 .png 占位文件把可扫描集压到零），原实现打印 PASS + exit 0——
+    // 门禁没真正执行却报「干净」；修复后必须非零退出并给出显式 FAIL。
     new(
         Name: "secret-scan 空输入 fail-closed（零可扫描文件不得报 PASS）",
         Gate: "secret-scan",
         ExpectExit: 1,
         MustContainInStdout: "输入为空",
+        SkipSlnxStaging: true,
         Setup: _ => []),
     // 全仓扫描修复的 fail-closed 路径探针：无 src/ 时 G1-G3 计数恒为 0，
     // 原实现给出三个 ✅ + exit 0（空输入假绿）；修复后必须非零退出。
@@ -269,6 +300,130 @@ var probes = new List<Probe>
                 "# 决策论证：探针\n\n## 结论\n无必填段。\n");
             return ["docs/review/decision-bad.md"];
         }),
+    // ── ci-coverage 隔离式探针（2026-09-20 增，审计 T4）───
+    // 背景：ci-coverage 历史上真实发生过两次 fail-open——阈值 NaN/Infinity 恒假比较
+    // （scripts/ci-coverage.cs:191-192 注释记录）与 line-rate NaN（:214-215），修复后
+    // 只有构造最小 XML 的单元式 selftest，没有「注入坏输入 → 断言非零退出」的隔离探针。
+    // 若阈值判定逻辑再被改坏（比较方向反转、NaN 防护被删），CI 只会看到绿灯。
+    // 探针形态：预置合并后的 Cobertura 报告 + 空 TestResults 模块目录，令脚本跳过
+    // 其前段（dotnet test / reportgenerator 合并）直达第 5 步阈值判定。
+    new(
+        Name: "ci-coverage 低于阈值必须 fail-closed（比较方向回归）",
+        Gate: "ci-coverage",
+        ExpectExit: 1,
+        MustContainInStdout: "below threshold",
+        ExtraArgs: "--enforce-only",
+        Setup: dir =>
+        {
+            // 预置合并报告：line-rate=0.10，阈值默认 0.70 → 必须判 FAIL 退出 1。
+            // 若判定被改成 `>` 或恒真比较，此探针转绿即暴露退化。
+            var reportDir = Path.Combine(dir, "TestResults", "coverage-report");
+            Directory.CreateDirectory(reportDir);
+            File.WriteAllText(Path.Combine(reportDir, "Cobertura.xml"),
+                "<?xml version=\"1.0\"?><coverage line-rate=\"0.10\"></coverage>\n");
+            return ["TestResults/coverage-report/Cobertura.xml"];
+        }),
+    new(
+        Name: "ci-coverage line-rate 非数字必须 fail-closed（NaN 回归）",
+        Gate: "ci-coverage",
+        ExpectExit: 1,
+        MustContainInStdout: "could not parse line-rate",
+        ExtraArgs: "--enforce-only",
+        Setup: dir =>
+        {
+            // 历史 fail-open 形态：line-rate 为 NaN 时旧 double 比较恒假 → 放行。
+            // 现必须解析失败并显式 FAIL。
+            var reportDir = Path.Combine(dir, "TestResults", "coverage-report");
+            Directory.CreateDirectory(reportDir);
+            File.WriteAllText(Path.Combine(reportDir, "Cobertura.xml"),
+                "<?xml version=\"1.0\"?><coverage line-rate=\"NaN\"></coverage>\n");
+            return ["TestResults/coverage-report/Cobertura.xml"];
+        }),
+    new(
+        Name: "ci-coverage 合并报告缺失必须 fail-closed（不是报绿）",
+        Gate: "ci-coverage",
+        ExpectExit: 1,
+        MustContainInStdout: "merged cobertura report not found",
+        ExtraArgs: "--enforce-only",
+        Setup: _ => []),
+
+    // ── T-05（2026-09-22）：补 6 个门禁的隔离变异探针 ──
+    // 前 4 条为 CallerFilePath 系（需 CopyScriptIntoIsolation，理由见 RunProbe 注释）；
+    // 后 2 条为 CWD 系，直接跑即可。末条为负向对照（防探针因错误原因变绿）。
+    new(
+        Name: "gate 拒绝未跟踪改动（G22）",
+        Gate: "gate",
+        ExpectExit: 1,
+        MustContainInStdout: "PDDD-G22",
+        CopyScriptIntoIsolation: true,
+        Setup: dir =>
+        {
+            File.WriteAllText(Path.Combine(dir, "loose.txt"), "untracked\n");
+            return [];   // 故意不暂存 → G22 命中
+        }),
+    new(
+        Name: "gate 放行干净输入（负向对照）",
+        Gate: "gate",
+        ExpectExit: 0,
+        MustContainInStdout: "失败：0",
+        CopyScriptIntoIsolation: true,
+        Setup: _ => []),
+    new(
+        Name: "tech-debt 拒绝 src 内 TODO 注释",
+        Gate: "tech-debt",
+        ExpectExit: 1,
+        MustContainInStdout: "TODO/HACK/FIXME",
+        CopyScriptIntoIsolation: true,
+        Setup: dir =>
+        {
+            var src = Path.Combine(dir, "src");
+            Directory.CreateDirectory(src);
+            File.WriteAllText(Path.Combine(src, "Probe.cs"), "// TODO: gate-audit 探针注入\n");
+            return ["src/Probe.cs"];
+        }),
+    new(
+        Name: "doc-consistency 拒绝文件地图死链（D7）",
+        Gate: "doc-consistency",
+        ExpectExit: 1,
+        MustContainInStdout: "D7",
+        CopyScriptIntoIsolation: true,
+        Setup: dir =>
+        {
+            var ai = Path.Combine(dir, ".ai");
+            Directory.CreateDirectory(ai);
+            File.WriteAllText(Path.Combine(ai, "README.md"), "gate/nonexistent.md\n");
+            return [".ai/README.md"];
+        }),
+    new(
+        Name: "test-gate 在缺 ci.yml 时 fail-closed（T-DEF-4）",
+        Gate: "test-gate",
+        ExpectExit: 1,
+        MustContainInStdout: "T-DEF-4",
+        CopyScriptIntoIsolation: true,
+        Setup: _ => []),
+    new(
+        Name: "verify-ai 在缺 .ai 时 fail-closed（V1）",
+        Gate: "verify-ai",
+        ExpectExit: 1,
+        MustContainInStdout: "FAIL V1",
+        Setup: _ => []),
+    new(
+        Name: "verify-conventions 拒绝文档中的死脚本引用（V9——T-30/M11 增）",
+        Gate: "verify-conventions",
+        ExpectExit: 1,
+        MustContainInStdout: "probe-deadref.md",
+        Setup: dir =>
+        {
+            // M11（复核报告 §3.5）：修前本门禁的探针只有 V11 一条——V9 的 glob 或排除列表
+            // 若被改坏，12/12 探针依旧全绿。本探针注入一条命令形态死引用，锁住 V9 的拦截能力。
+            // 同 V11 探针：以无参（full 模式）运行，隔离目录空 slnx 的 build 失败同为 exit 1，
+            // 但 stdout 含注入文件名仅当 V9 真拦截——断言语义完整。
+            var docs = Path.Combine(dir, "docs");
+            Directory.CreateDirectory(docs);
+            File.WriteAllText(Path.Combine(docs, "probe-deadref.md"),
+                "# 探针文档\n\n执行 `dotnet run scripts/nonexistent-probe.cs` 完成校验。\n");
+            return ["docs/probe-deadref.md"];
+        }),
 };
 
 var probeFails = 0;
@@ -291,6 +446,19 @@ if (uncovered.Count > 0)
     return 2;
 }
 
+// T-34（2026-09-22）：已探针门禁必须声明覆盖形态——未声明即 ERROR（新增探针无法绕过）。
+var undeclaredForms = probedGates.Where(g => !gateForms.ContainsKey(g)).ToList();
+if (undeclaredForms.Count > 0)
+{
+    Console.Error.WriteLine($"ERROR: 以下已探针门禁未在 gateForms 声明覆盖形态：{string.Join(", ", undeclaredForms)}——加门禁 ≠ 加覆盖面，声明覆盖形态即声明不覆盖什么");
+    return 2;
+}
+
+Console.WriteLine();
+Console.WriteLine("=== 门禁覆盖形态声明（T-34）===");
+foreach (var g in probedGates.OrderBy(x => x, StringComparer.Ordinal))
+    Console.WriteLine($"  {g,-22} {gateForms[g]}");
+
 foreach (var probe in probes)
 {
     var (ok, detail) = RunProbe(root, probe);
@@ -308,7 +476,7 @@ if (probeFails > 0)
 
 Console.WriteLine("PASS 全部探针通过：被探测门禁已证明能拒绝坏输入。");
 Console.WriteLine($"注意：矩阵中 PROBED 为 '-' 的门禁可信度仍未验证（本次仅探测 {probedGates.Length} 个）。加探针＝向 probes 列表追加一条并登记 probedGates。");
-return 0;
+return matrixExit;
 
 // ══════════════ 探针执行 ══════════════
 
@@ -333,14 +501,38 @@ static (bool Ok, string Detail) RunProbe(string repoRoot, Probe probe)
         var staged = probe.Setup(tmp);
         // 显式暂存——绝不用 `git add -A`（见文件头隔离纪律）
         foreach (var f in staged) RunGit(tmp, $"add -- {f}");
-        RunGit(tmp, "add -- PalDDD.slnx");
+        // 仓库根锚默认入索引；SkipSlnxStaging 的探针（如 secret-scan 空输入）需要
+        // 可扫描集为空——自 2026-09-20 起 .slnx 已进入 secret-scan 扫描面，不跳过
+        // 则该探针的可扫描集恒非 1，"零可扫描文件"场景无法构造。
+        if (!probe.SkipSlnxStaging)
+        {
+            RunGit(tmp, "add -- PalDDD.slnx");
+            // T-05（2026-09-22）：夹具写入的 .gitignore 也必须入索引——否则它自己就是
+            // "未跟踪 1"，使 gate 的 G22 在**干净输入**下也变红：负向对照恒失败，更糟的是
+            // 正向探针（注入未跟踪文件）会因错误原因变绿。实测即此形态（stdout 尾部
+            // "外仓有未提交改动（未暂存 0 + 未跟踪 1）" 在无注入时同样出现）。
+            RunGit(tmp, "add -- .gitignore");
+        }
 
-        var (exitCode, stdout) = RunGate(gatePath, tmp);
+        // T-05（2026-09-22）：CallerFilePath 系门禁（gate / tech-debt / doc-consistency /
+        // test-gate）用**源文件位置**向上找仓库根，与 cwd 无关——直接跑会扫到脚本所在的
+        // 真实仓库，注入被完全忽略（实测：在隔离目录注入未跟踪文件与 TODO 注释，三门禁仍全绿）。
+        // 把脚本复制进隔离目录再跑，CallerFilePath 即解析到隔离目录。复制件必须暂存：
+        // 否则它自己就是"未跟踪文件"，会让 gate 的 G22 探针因错误原因变红。
+        var effectiveGatePath = gatePath;
+        if (probe.CopyScriptIntoIsolation)
+        {
+            effectiveGatePath = Path.Combine(tmp, Path.GetFileName(gatePath));
+            File.Copy(gatePath, effectiveGatePath, overwrite: true);
+            RunGit(tmp, $"add -- {Path.GetFileName(gatePath)}");
+        }
+
+        var (exitCode, stdout) = RunGate(effectiveGatePath, tmp, probe.ExtraArgs);
 
         if (exitCode != probe.ExpectExit)
-            return (false, $"退出码 {exitCode} ≠ 期望 {probe.ExpectExit}");
+            return (false, $"退出码 {exitCode} ≠ 期望 {probe.ExpectExit}｜stdout 尾部：{Tail(stdout, 320)}");
         if (!stdout.Contains(probe.MustContainInStdout, StringComparison.Ordinal))
-            return (false, $"输出未含「{probe.MustContainInStdout}」——探针可能未真正扫到注入文件");
+            return (false, $"输出未含「{probe.MustContainInStdout}」——探针可能未真正扫到注入文件｜stdout 尾部：{Tail(stdout, 320)}");
 
         return (true, "");
     }
@@ -354,9 +546,16 @@ static (bool Ok, string Detail) RunProbe(string repoRoot, Probe probe)
     }
 }
 
-static (int ExitCode, string Stdout) RunGate(string gatePath, string workingDir)
+// 探针失败时的输出尾部（截断显示）——只报"退出码不符"无法定位门禁为何变红。
+static string Tail(string text, int max)
 {
-    var psi = new ProcessStartInfo("dotnet", $"run \"{gatePath}\"")
+    var trimmed = text.Replace("\r", "").TrimEnd();
+    return trimmed.Length <= max ? trimmed : "…" + trimmed[^max..];
+}
+
+static (int ExitCode, string Stdout) RunGate(string gatePath, string workingDir, string? extraArgs = null)
+{
+    var psi = new ProcessStartInfo("dotnet", $"run \"{gatePath}\" {extraArgs}".TrimEnd())
     {
         RedirectStandardOutput = true,
         RedirectStandardError = true,
@@ -418,9 +617,78 @@ static HashSet<string> CollectWiredNames(string repoRoot)
     var text = corpus.ToString();
 
     foreach (var s in scripts)
-        if (text.Contains(s, StringComparison.Ordinal)) names.Add(s);
+    {
+        // F-04（2026-09-21，审计 H1）：原实现用全文 `text.Contains(s)` 子串匹配——
+        // **注释里提到名字即判接线**。实证：gate-audit 自身仅因 ci.yml 一句注释
+        // （原文写"TOOL 手工调用"）即显示 WIRED=yes，矩阵结论与它读取的注释自相矛盾。
+        // 现按行剥离注释后匹配三种可执行形态：
+        //   ① `dotnet run scripts/<name>.cs`（含引号/--project/-- 参数变体）
+        //   ② 循环变量展开：`for x in a b c; do ... dotnet run "scripts/$x.cs"`
+        //      （ci.yml 的五门禁循环即此形态——名字以循环项出现，非字面调用）
+        //   ③ 钩子中的 `dotnet run scripts/<name>.cs`
+        if (AppearsAsExecutableInvocation(text, s)) names.Add(s);
+    }
 
     return names;
+}
+
+// F-04：判定脚本名是否以"可执行调用"形态出现（剥离注释后）。
+// 匹配形态：① `dotnet run scripts/<name>.cs`（可含引号、--project、-- 分隔的参数）；
+// ② 循环变量展开（`for x in a b c` 中名字作为循环项，配合 `dotnet run "scripts/$x.cs"`）；
+// ③ 钩子中的 `dotnet run scripts/<name>.cs`。裸名字提及（注释/文档）不算。
+static bool AppearsAsExecutableInvocation(string text, string scriptName)
+{
+    foreach (var rawLine in text.Split('\n'))
+    {
+        var line = rawLine.TrimEnd('\r');
+        // 剥离整行注释
+        if (line.TrimStart().StartsWith('#')) continue;
+        // 剥离行尾注释（YAML/hook 注释均为 `#`；本仓 CI 无把 `#` 写进字符串的用法，
+        // 误剥的后果只是漏判接线，方向安全）
+        var commentIdx = line.IndexOf(" #", StringComparison.Ordinal);
+        if (commentIdx >= 0) line = line[..commentIdx];
+
+        // 形态①③：dotnet run 直调
+        if (line.Contains("dotnet", StringComparison.Ordinal)
+            && line.Contains("run", StringComparison.Ordinal)
+            && (line.Contains($"scripts/{scriptName}.cs", StringComparison.Ordinal)
+                || line.Contains($"scripts\\{scriptName}.cs", StringComparison.Ordinal)
+                || HasBareScriptRef(line, scriptName)))
+        {
+            return true;
+        }
+
+        // 形态②：循环项（`for ai_gate_cs in encoding-gate tech-debt test-gate;`）
+        if (line.Contains(" in ", StringComparison.Ordinal) && line.Contains(';'))
+        {
+            var afterIn = line[(line.IndexOf(" in ", StringComparison.Ordinal) + 4)..];
+            var items = afterIn.Split(' ', '\t', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var item in items)
+            {
+                var clean = item.Trim().TrimEnd(';', '"', '\'');
+                if (clean == scriptName) return true;
+            }
+        }
+    }
+    return false;
+}
+
+// T-36（2026-09-22）：裸引用边界判定。F-04 的第三子句原为 `line.Contains($"{scriptName}.cs")`，
+// **无边界** ⇒ `encoding-gate.cs` 会把 `gate` 判为已接线（实测：死分支删除后 `gate` 仍显示
+// WIRED=yes，唯一来源是 pre-commit 的 encoding-gate 行——检测假接线的工具自身有假接线）。
+// 改为要求名字前一个字符不是标识符字符（字母/数字/下划线/连字符）。
+static bool HasBareScriptRef(string line, string scriptName)
+{
+    var needle = scriptName + ".cs";
+    var idx = 0;
+    while ((idx = line.IndexOf(needle, idx, StringComparison.Ordinal)) >= 0)
+    {
+        if (idx == 0) return true;
+        var prev = line[idx - 1];
+        if (!char.IsLetterOrDigit(prev) && prev != '_' && prev != '-') return true;
+        idx += needle.Length;
+    }
+    return false;
 }
 
 // 自证能力：脚本是否处理 --selftest（约定式自测入口）
@@ -476,6 +744,14 @@ static int SelfTest()
     Case("接线判定命中变量插值形态", wiredCorpus.Contains("encoding-gate", StringComparison.Ordinal));
     Case("接线判定不误报未出现名", !wiredCorpus.Contains("sibling-map", StringComparison.Ordinal));
 
+    // T-36（2026-09-22）：子串假阳性——`encoding-gate.cs` 不得把 `gate` 判为已接线。正负例各一。
+    Case("接线判定：encoding-gate.cs 不把 gate 判为接线（子串假阳性）",
+        !AppearsAsExecutableInvocation("          if ! dotnet run scripts/encoding-gate.cs 2>&1; then", "gate"));
+    Case("接线判定：scripts/gate.cs 仍判接线（负向对照）",
+        AppearsAsExecutableInvocation("dotnet run scripts/gate.cs -- --allow-dirty", "gate"));
+    Case("接线判定：bare 形态 gate.cs 判接线（边界为引号）",
+        AppearsAsExecutableInvocation("dotnet run \"gate.cs\"", "gate"));
+
     // 隔离仓库契约：.gitignore 必须屏蔽 runfile 产物（否则 git add 会夹带构建产物）
     var expectedIgnore = "dotnet/\nbin/\nobj/\n";
     Case("隔离仓库 .gitignore 覆盖 dotnet/", expectedIgnore.Contains("dotnet/", StringComparison.Ordinal));
@@ -490,10 +766,18 @@ static int SelfTest()
     Case("判定：已接线时工具标记不改变结论", ClassifyVerdict(true, true, true, true) == "OK");
     Case("判定：已接线无自证时缺口标记不改变结论", ClassifyVerdict(true, false, false, true).StartsWith("UNVERIFIED", StringComparison.Ordinal));
 
+    // 矩阵退出码（2026-09-22 T-03）：正例/反例各一——防「恒零」的假绿判定器
+    Case("退出码：REVIEW 桶非空 → 非零（矩阵退化可红）", MatrixExitCode(1) != 0);
+    Case("退出码：REVIEW 桶为空 → 零（负向对照）", MatrixExitCode(0) == 0);
+
     Console.WriteLine();
     Console.WriteLine($"SELFTEST {passed}/{total} 通过");
     return passed == total ? 0 : 1;
 }
+
+// 矩阵退出码（2026-09-22 T-03）：抽为纯函数以便自测覆盖正负例。
+// 只对 REVIEW（未归类）判红；UNWIRED-GATE 需人工裁决，不机械阻断。
+static int MatrixExitCode(int unclassifiedCount) => unclassifiedCount > 0 ? 1 : 0;
 
 // ══════════════ 类型 ══════════════
 
@@ -504,4 +788,7 @@ internal sealed record Probe(
     string Gate,
     int ExpectExit,
     string MustContainInStdout,
-    Func<string, string[]> Setup);
+    Func<string, string[]> Setup,
+    string? ExtraArgs = null,
+    bool SkipSlnxStaging = false,
+    bool CopyScriptIntoIsolation = false);

@@ -41,6 +41,15 @@
   浮点噪声；等于容差放行）→ 退出 1。
   口径边界：**同项目跨时间可比**（同一测试集插桩同一装配集）；**项目间不可比**
   （各次插桩 lines-valid 从 1578 到 10371 不等——不能横向比较各项目 line-rate）。
+  **低值不是缺口（2026-09-22 T-19 加注）**：基线下端的极端值均由"度量单位"而非覆盖缺口解释，
+  不应据此设模块阈值（对不可比的量设阈值会诱导为达标而写的测试）：
+  - `PalDDD.Core.Abstractions.Tests` **1.32%**：其 src 项目**已不存在**（`PalDDD.Abstractions`
+    早先拆分归还各层，见该测试项目头注）；该测试项目只做低层类型契约（ContentTypes 常量 /
+    IUnitOfWork 扩展方法，8 个测试），却引用 `PalDDD.Core` + `PalDDD.Serialization` +
+    `PalDDD.Transactions` 三个大装配集 ⇒ 插桩分母大、分子极小，1.32% 是必然结果。
+  - `PalDDD.Repository.EFCore.Tests` 8.1% / `DependencyInjection.Tests` 15.11% /
+    `Messaging.Tests` 21.79% 同理：测试面窄而装配集大。
+  - 真正的覆盖信号是**同项目跨时间的降幅**（Step 6 的 5pp 棘轮），不是跨项目的绝对值。
   基线缺失/解析空 → fail-closed；基线有、当前无产物 → WARN 不阻断（CI 全项目有产物）。
 
   **状态（2026-09-14 已接线）**：`ci.yml` 新增独立 **`coverage` job**（与
@@ -73,8 +82,11 @@
 
   **本机限制（已知，非缺陷）**：无 Docker 的机器上 `dotnet run scripts/ci-coverage.cs`
   会在 `PalDDD.PalORM.Tests` 处中断（该项目的多方言测试要求 Testcontainers）。
-  本地想要完整数字：装 Docker 后设 `PALDDD_TEST_PG=1` / `PALDDD_TEST_MYSQL=1`，
+  本地想要完整数字：装 Docker 后重跑即可（Testcontainers 自动启动容器）；
   或按上表的分步方法只补跑缺失项目再取并集。
+  **注意**：设 `PALDDD_TEST_PG` / `PALDDD_TEST_MYSQL` 环境变量**不会**启用外部库路径——
+  那两个变量只被 `samples/PalDDD.DapperAotProbe` 这类显式探针读取；测试侧仅支持
+  Testcontainers（2026-09-22 T-09 删除外部库隐式回退，见 `appsettings.test.json` 注释）。
 
 - **基线值来源与复校准**：`coverage-baseline.json` 的 15 个值取自 2026-09-14 本机
   Debug 插桩产物，属**下界**——`PalDDD.PalORM.Tests` 因本机无 Docker 无 cobertura

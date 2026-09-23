@@ -129,8 +129,12 @@ public sealed class DapperEventLog : IEventLog
                 dp.Add("StreamVersion", version++);
                 dp.Add("SchemaVersion", evt.SchemaVersion);
                 dp.Add("ContentType", evt.ContentType);
-                dp.Add("Payload", evt.Payload.ToArray(), DbType.Binary);
-                dp.Add("Metadata", evt.Metadata.ToArray(), DbType.Binary);
+                // v65 P3 零拷贝路径（对齐 StoredEvent.From 用法）：PayloadArray/MetadataArray
+                // 是 EventData 构造期 ToArray 得到的同一数组实例，EventData 构造后不可变（公开
+                // API 契约，EventData.cs:60-73 声明 internal 消费方只读不写），Dapper 仅读取
+                // 后立即发送——免去每事件 payload/metadata 各一次防御性拷贝。
+                dp.Add("Payload", evt.PayloadArray, DbType.Binary);
+                dp.Add("Metadata", evt.MetadataArray, DbType.Binary);
                 dp.Add("RecordedAt", ToTimeParam(now));
                 // 修复覆盖残留：此前硬编码 null——actor/reason 也从未真正持久化过；
                 // 现按 EventData.Audit 全量映射 6 字段（对齐 PalORM/EFCore）

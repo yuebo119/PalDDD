@@ -77,8 +77,13 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         await _producer.ProduceAsync(descriptor.Name, new Message<string, byte[]>
         {
             Key = key,
-            // Serialize 契约返回 ReadOnlyMemory<byte>，Message.Value 需 byte[]——此处 ToArray
-            // 是必要转换非冗余拷贝（ReadOnlyMemory 底层即单次 ToArray 产物，无双重拷贝）
+            // Serialize 契约返回 ReadOnlyMemory<byte>，Message.Value 需 byte[]。
+            // 勘正（2026-09-20）：本处 ToArray 是序列化器 ToArray（JsonMessageSerializer
+            // WrittenSpan.ToArray）之后的**第二次**托管拷贝，非"无双重拷贝"（ReadOnlyMemory<T>
+            // .ToArray() 恒拷贝，已实测三种内存形态 ReferenceEquals 均为 false）。
+            // 不可消除：Confluent.Kafka 2.15.1 的 ISerializer<T>.Serialize 返回 byte[]
+            // （反射实证），改用 IProducer<string, ReadOnlyMemory<byte>> + 自定义序列化器
+            // 只会把该拷贝移入序列化器，净收益为零；librdkafka 内部仍需一次拷贝。
             Value = value.ToArray(),
             Headers = CreateHeaders(context)
         }, ct).ConfigureAwait(false);

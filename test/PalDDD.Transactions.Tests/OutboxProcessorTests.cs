@@ -150,6 +150,12 @@ public sealed class OutboxProcessorTests
                && Environment.TickCount64 < deadline)
         {
             timeProvider.AdvanceNowAndTriggerTimers(interval);
+            // T-21 定标（2026-09-22）：这里的 10ms **不是轮询等待，是调度让出**——推进 fake 时间
+            // 只触发 timer 回调的**调度**，处理器侧的异步工作（Lease→计数）仍需真实线程被调度
+            // 才能推进。故不可改成 `Task.Yield()`：Yield 只让出续体、不保证后台线程获得时间片，
+            // 会把"等真实调度"变成"空转"，反而**引入** flaky（原"去墙钟"清单把它列为待改项
+            // 属前提误判——该清单里 2 处是 raw string 坏样本文本、7 处是 broker 就绪等待）。
+            // 若未来要消除它，须改的是处理器的调度模型（如改为同步驱动），不是替换这一行。
             await Task.Delay(10);
         }
     }

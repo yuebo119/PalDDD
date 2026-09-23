@@ -33,15 +33,16 @@
 |---|------|---------|---------|
 | 1 | `secret-scan` | 每次 | 受跟踪文件里的高置信硬编码凭据 |
 | 2 | `encoding-gate` | 每次 | E1 CRLF(.sh/.py) · E2 BOM(.cs) · E3 mojibake(.cs) · E4 .verified 非 LF · E5 源文件裸 LF(.md/.cs/.csproj/.targets 等,2026-09-14 增) |
-| 3 | `guard.cs` | `.cs` 入暂存集 | 8 道守卫测试 + 守卫命名类（`*GateTests`/`*GuardTests`/`ArchitectureBoundaryTests`）注册完整性核查 |
-| 4 | `test-change-guard` | `test/` 有修改或删除 | 只改测试不改 `src/`（改测试修绿签名）。豁免：`ALLOW_TEST_ONLY_CHANGE=1` |
-| 5 | `xml-guard` | xml 系扩展名入暂存集 | XML 非良构（`.csproj/.props/.slnx/.targets/.xml`） |
-| 6 | `verify-conventions --quick` | `.md` 入暂存集 | V5 TODO 扫描 · V8 `.pal/prompts/` 模板必填段 · V9 文档命令引用的脚本须存在 · V11 决策文档三必填段与锚点格式（2026-09-18 增） |
-| 7 | `dapper-param-guard` | `src/PalDDD.Dapper*/` 入暂存集 | 匿名 Dapper 参数枚举直传（Dapper.AOT 拦截器直传驱动，PG 拒绝——CI #94 根因，2026-09-14 增） |
+| 3 | `verify-ai` | 检测到 `.ai/` 目录时每次 | V1–V25 系统一致性（账本/传感器台账/提示词/死引用/命令形态）。2026-09-22 T-35 增：`.ai` 裁决为独立 git 库 ⇒ 永不进 CI，此前无任何自动执行路径 |
+| 4 | `guard.cs` | `.cs` 入暂存集 | 8 道守卫测试 + 守卫命名类（`*GateTests`/`*GuardTests`/`ArchitectureBoundaryTests`）注册完整性核查 |
+| 5 | `test-change-guard` | `test/` 有修改或删除 | 只改测试不改 `src/`（改测试修绿签名）。豁免：`ALLOW_TEST_ONLY_CHANGE=1` |
+| 6 | `xml-guard` | xml 系扩展名入暂存集 | XML 非良构（`.csproj/.props/.slnx/.targets/.xml`） |
+| 7 | `verify-conventions --quick` | `.md` 入暂存集 | V5 TODO 扫描 · V8 `.pal/prompts/` 模板必填段 · V9 文档命令引用的脚本须存在 · V11 决策文档三必填段与锚点格式（2026-09-18 增） |
+| 8 | `dapper-param-guard` | `src/PalDDD.Dapper*/` 入暂存集 | 匿名 Dapper 参数枚举直传（Dapper.AOT 拦截器直传驱动，PG 拒绝——CI #94 根因，2026-09-14 增） |
 
 ### CI（`.github/workflows/ci.yml`）
 
-`build-and-test`（vuln-scan → restore → build → **format-verify**（`dotnet format style --verify-no-changes`，8e97e9c 增） → test → secret-scan → dapper-param-guard → verify-ai → gate → encoding/doc-consistency/tech-debt/test-gate → template-gate；无 `.ai` 时降级为 gate-lite）· `aot-verify`（PublishAot + 运行二进制）· **`coverage`（覆盖率阈值门禁 0.70，先 `dotnet tool restore` 取 reportgenerator）** · `dialect-probe`（Testcontainers PG/MySQL；job 内含 Path gate 路径过滤步骤，仅 Store/SQL/DDL/映射面变更触发——非独立 job）。
+`build-and-test`（vuln-scan → restore → build → **format-verify**（`dotnet format style --verify-no-changes`，8e97e9c 增） → test → secret-scan → dapper-param-guard → doc-consistency → encoding-gate/tech-debt/test-gate 循环 → `gate.cs`（G22/G23/G24）→ `gate-audit --inventory` → gate-lite。**2026-09-22 T-02/T-04**：`.ai` 恒假分支已删，主仓门禁全部无条件执行；`verify-ai`/`template-gate` 因 `.ai` 独立裁决永不进 CI，改由 pre-commit 与 `.ai` 仓钩子承担）· `aot-verify`（PublishAot + 运行二进制）· **`coverage`（覆盖率阈值门禁 0.70，先 `dotnet tool restore` 取 reportgenerator）** · `dialect-probe`（Testcontainers PG/MySQL；job 内含 Path gate 路径过滤步骤，仅 Store/SQL/DDL/映射面变更触发——非独立 job）。
 
 ### 门禁可信度（改动或新增门禁后必跑）
 
@@ -52,15 +53,20 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 
 矩阵五态：`OK`（接线且有自证）· `UNVERIFIED`（接线但无自证 = 退化无人知）· `TOOL`（未接线但按设计手工调用）· `UNWIRED-GATE`（应接线未接 = 真缺口）· `REVIEW`（未接线且未归类，须归入前两者之一）。
 **新增脚本必须归入 TOOL 或 UNWIRED-GATE**——`REVIEW` 桶非空即表示有脚本未经分类。
+**退出码（2026-09-22 T-03 增）**：`REVIEW` 桶非空 → 退出 1，已接 CI（矩阵自身的退化防线）。此前矩阵恒 `return 0`，退化只能靠人工读。`UNWIRED-GATE` 单列不阻断——待接门禁属人工裁决，登记 `intendedWire` 或改判 `TOOL`。
+**接线判定口径（2026-09-22 T-36 修）**：按「可执行调用形态」匹配且要求名字边界——修前 `encoding-gate.cs` 会把 `gate` 误判为已接线（子串假阳性），即"检测假接线的工具自身有假接线"。
+**探针隔离策略（2026-09-22 T-05 增）**：两种根解析策略决定门禁能否被隔离探针覆盖——**CWD 系**（`secret-scan`/`test-change-guard`/`verify-conventions`/`dapper-param-guard`）直接从隔离目录运行即可；**CallerFilePath 系**（`gate`/`tech-debt`/`doc-consistency`/`test-gate`）按**源文件位置**向上找仓库根，直接跑会扫到脚本所在的真实仓库、注入被完全忽略（实测：注入未跟踪文件与 TODO 注释后三门禁仍全绿）。此类探针须置 `CopyScriptIntoIsolation: true`，夹具会复制脚本进隔离目录并暂存（暂存是必需的：否则复制件自己就是"未跟踪 1"，会让 `gate` 的 G22 在干净输入下也变红，正向探针假绿）。
 
 ### 新增/修改门禁的规程
 
 1. 写 `scripts/<name>.cs`（file-based app，零 package 依赖），声明 `退出码` 语义。
 2. 带 `--selftest`：判定逻辑抽成纯函数，自测含**正例与负例**（防「判定恒真」的假绿）。
 3. 用变异验证自测**能红**：翻转判定 → 跑 `--selftest` → 确认 FAIL → 恢复。
-4. 向 `scripts/gate-audit.cs` 追加隔离式探针（注入坏输入 → 断言非零退出），并登记 `probedGates`。
+4. 向 `scripts/gate-audit.cs` 追加隔离式探针（注入坏输入 → 断言非零退出），登记 `probedGates`，**并在 `gateForms` 声明本门禁覆盖哪些形态**（T-34，2026-09-22 增；未声明即矩阵 ERROR 退出 2）。形态声明的价值是同时声明**不覆盖什么**——V25 实证：一个已接线、能红、报错精确到行的门禁，对它本该抓的形态（裸文件名）完全失明，T-26 补上后当场抓出 46 处。探针的隔离方式取决于门禁的根解析策略（见下「探针隔离策略」）。
 5. 接入 `.githooks/pre-commit`（带触发条件，避免无谓耗时）与/或 `ci.yml`。
 6. 同提交更新 `docs/conventions.md` 或本文件的门禁表。
+7. **对真实仓库跑一次变异**（2026-09-21 实践新增，第 3 步只验自测、本步验门禁）：把仓库里某个真实数据改坏 → 跑门禁 → 确认 FAIL 且报错精确 → 还原。
+   实证：V25 的 selftest 全过，但对真实 `.ai/` 首跑即抓 **32 处**失实——selftest 用注入样本，真实数据的形态复杂度（一行多引用、跨文件计数、历史标记混排）只有真跑才暴露。**两步不可互相替代**。
 
 ---
 

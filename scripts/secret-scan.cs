@@ -54,8 +54,14 @@ if (trackedAll is null)
     Console.WriteLine("FAIL 无法枚举跟踪文件（git 不可用或 ls-files 非零退出）——凭据扫描未真正执行，拒绝报绿");
     return 1;
 }
+// 可扫描扩展名白名单——审计 2026-09-20 S1：原白名单只覆盖 14 类，`.slnx`/`.targets`/
+// `.cake`/`.http`/`.jsonc`/`.psm1`/`.psd1`/`.sln`/`.editorconfig` 等配置与脚本载体不在
+// 扫描面——真实凭据若写进 `.http` 请求文件的 Authorization 头或 `.cake` 构建脚本的连接串，
+// 门禁输出与"确实没有凭据"完全一致（静默漏报）。本轮补齐配置与脚本载体。
+// 注意：本白名单只决定"哪些文件被读"，判定强度仍由 BuildPatterns() 的三层白名单
+// （占位符/示例值/文档措辞）决定——扩展名放宽不会把占位符误判为泄露。
 var trackedFiles = trackedAll
-    .Where(f => Regex.IsMatch(f, "\\.(json|cs|sh|py|yml|yaml|props|config|toml|env|xml|ps1|txt|md|csproj)$",
+    .Where(f => Regex.IsMatch(f, "\\.(json|jsonc|cs|sh|py|yml|yaml|props|targets|config|toml|env|xml|ps1|psm1|psd1|txt|md|csproj|slnx|sln|cake|http|editorconfig)$",
         RegexOptions.IgnoreCase))
     .ToList();
 if (trackedFiles.Count == 0)
@@ -159,9 +165,13 @@ static List<string>? GitLsFiles(string workingDir)
 // 模式集（构造一次，供主循环与自测共用）
 static ScanPatterns BuildPatterns() => new(
     // 模式 1：已知云密钥/令牌前缀格式（极高信度，零误报）
+    // 审计 2026-09-20 S1 补充：Bearer/JWT 形态。`.http` 请求文件的 Authorization 头是
+    // 真实凭据的高发载体（原白名单既不含 .http 扩展名也不含该形态，双重漏报）；
+    // JWT 的 eyJ 前缀 + 三段 base64url 结构信度足够高，且文档/示例极少长这样。
     Key: new Regex(
         "AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}"
-        + "|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+        + "|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+        + "|eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}"),
     // 模式 2：连接串内嵌真实密码——同行同时含 主机键 与 密码键
     Conn: new Regex("(Host|Server|Data Source|数据源)\\s*=.*(Password|Pwd)\\s*=", RegexOptions.IgnoreCase),
     // 密码值提取（= 后到 ; 或 " 或空白前；可选起始引号）
@@ -226,6 +236,13 @@ static int SelfTest()
     Case("模式1 AWS AKIA", JudgeLine($"var k = \"{fakeAwsKey}\";", p) is ["已知密钥格式"]);
     Case("模式1 GitHub ghp_", JudgeLine("token = ghp_" + new string('a', 36), p) is ["已知密钥格式"]);
     Case("模式1 PEM 私钥块头", JudgeLine(Join("-----BEGIN ", "RSA ", "PRIVATE KEY-----"), p) is ["已知密钥格式"]);
+    // JWT 形态（2026-09-20 S1）：三段 base64url 结构。自指陷阱规避同上方——头两段
+    // 运行期拼装（eyJ 是 base64('{"') 的固定前缀，写进本文件会被自身门禁命中）。
+    Case("模式1 JWT 三段结构", JudgeLine(
+        $"Authorization: Bearer {Join("ey", "JhbGciOiJIUzI1NiJ9")}.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N", p)
+        is ["已知密钥格式"]);
+    Case("模式1 JWT 两段不命中", JudgeLine(
+        Join("ey", "JhbGciOiJIUzI1NiJ9") + ".eyJzdWIiOiIxMjM0NTY3ODkwIn0", p).Count == 0);
     Case("模式1 不误报普通文本", JudgeLine("这是一个普通的领域事件注释", p).Count == 0);
     Case("模式1 不误报短 AKIA 前缀", JudgeLine(Join("AK", "IA", "123"), p).Count == 0);
 
