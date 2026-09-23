@@ -18,6 +18,16 @@ updates:
       time: "09:00"
       timezone: "Asia/Shanghai"
     open-pull-requests-limit: 5
+    # Verify 33+ 在构建期加了一道 SponsorCheck 许可门：未声明许可属性即
+    # `SponsorCheck error SC021` 报错，**所有消费 Verify 的构建当场中断**。
+    # 2026-09-23 Dependabot PR #2 实证：build-and-test / coverage / CodeQL analyze
+    # 三处同时红，根因只有这一个（CodeQL 也要编译）。
+    # 「声明开源豁免 / 赞助 / 停在 32.x」属维护者裁决（豁免声明是事实性承诺，
+    # 不由 agent 代签），故先钉住 33 线不自动升位；裁决后删除本规则，
+    # 或改在 Directory.Build.props 声明 Verify_SponsorshipExemption。
+    ignore:
+      - dependency-name: "Verify.TUnit"
+        versions: [">= 33.0.0"]
     labels:
       - dependencies
     commit-message:
