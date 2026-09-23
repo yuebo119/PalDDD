@@ -721,13 +721,32 @@ static (int Rows, string Bad) CheckDateMonotonic(IEnumerable<string> lines)
         var d = Regex.IsMatch(d2, "^[0-9]{4}-[0-9]{2}-[0-9]{2}$") ? d2 : d3;
         if (!Regex.IsMatch(d, "^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) continue;
         rows++;
-        var pipes = line.Count(c => c == '|');
-        if (pipes < 10) bad.Append($" {d}:列数不足({pipes})");
+        // T-31（2026-09-22）：原实现 `line.Count(c => c == '|')` **不识别转义**——单元格内的
+        // `\|`（markdown 表格内的合法转义，如实测 v80 备注格里的 grep 正则示例）会被算作
+        // 列分隔符，使该行看似 14 列。改为只数**未转义**竖线。
+        // 界限收紧：竖线数 = 列数 + 1（markdown 行首尾各一）。口径对齐 metrics.md:22 的声明
+        // （表头 11 列为初版、v68 起行内 12 列），故合法集为 {12,13}（=11/12 列）。
+        // 原 `< 10` 既放过 13+ 的畸形行，也无法发现形态漂移。
+        var pipes = CountUnescapedPipes(line);
+        if (pipes is not (12 or 13)) bad.Append($" {d}:列数异常({pipes} 竖线，合法集 12/13=11/12 列)");
         if (prev is not null && string.CompareOrdinal(d, prev) < 0)
             bad.Append($" {d}:乱序(前值{prev})");
         prev = d;
     }
     return (rows, bad.ToString());
+}
+
+// T-31：未转义竖线计数（`\|` 是 markdown 表格内的合法转义，不计为列分隔符）
+static int CountUnescapedPipes(string line)
+{
+    var n = 0;
+    for (var i = 0; i < line.Length; i++)
+    {
+        if (line[i] != '|') continue;
+        if (i > 0 && line[i - 1] == '\\') continue;
+        n++;
+    }
+    return n;
 }
 
 // V19 核心：传感器台账定标周期（90 天；UNKNOWN 计数不判坏；非法日期 fail-closed）
