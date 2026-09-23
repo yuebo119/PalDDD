@@ -34,7 +34,7 @@ namespace PalDDD.EventLog;
 /// 游标）→ <b>每次 AppendAsync 都 SELECT+UPDATE 分配器行</b>。因此"区块大小为 N 时只有
 /// 1/N 的追加触及分配器行、其余零数据库往返"在关系型栈当前<b>不成立</b>——Hi/Lo 批量
 /// 收益仅 EF InMemory 路径（无事务包装）生效。行为正确但类头性能声明与实现不符；
-/// 收益兑现需 v3.0（事务外预分配或 DDL 层序列）。
+/// 收益兑现需 v4.0（事务外预分配或 DDL 层序列）。
 /// </para>
 /// <para>
 /// 区块耗尽时使用乐观并发（通过 <see cref="EventLogGlobalPositionAllocator.Revision"/> 的 CAS）。

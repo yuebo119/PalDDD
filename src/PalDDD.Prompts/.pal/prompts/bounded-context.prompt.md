@@ -36,7 +36,7 @@ services.AddPalCommandHandler<AddItemCmd, Unit, AddItemHandler>();
 services.AddPalQueryHandler<GetOrderQry, OrderDto?, GetOrderHandler>();
 
 // 事件处理器 — 显式注册
-services.AddScoped<ProjectionProcessor<OrderSubmitted>>(); // 投影管线（Handler 经 DI 注入；框架投影注册扩展为 v3.0 待办）
+services.AddScoped<ProjectionProcessor<OrderSubmitted>>(); // 投影管线（Handler 经 DI 注入；框架投影注册扩展为 v4.0 待办）
 
 // 序列化 — 选择 JSON 或 MemoryPack
 services.AddPalJsonSerialization(catalog =>

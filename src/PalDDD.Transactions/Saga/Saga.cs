@@ -832,7 +832,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // 的副作用；P3-SRC-603 双键轨迹的完整形态由表征测试
         // DynamicLaneTests.Exhausted_CompensatesTarget_ObserverSeesDynamicKey 锁定（断言
         // CompensationLog 含 target-compensated 与 dyn-compensated 两项）。若要改为"失败路径不记
-        // dynKey"，须先出决策文档回应本声明与该表征测试，随 v3.0 契约窗口一并处理。
+        // dynKey"，须先出决策文档回应本声明与该表征测试，随 v4.0 契约窗口一并处理。
         RecordExecutedStep(current, current, stepKey, startedAt);
 
         return await RunRetryLaneAsync(current, stepKey, observer,

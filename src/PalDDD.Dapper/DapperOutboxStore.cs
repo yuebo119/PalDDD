@@ -231,7 +231,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // 其自身的批次起始 now——长批次尾部消息的重试时间提前（漂移=批耗时）；受 batchSize 上限
         // 约束可接受。本方法现不再取批次时钟，该漂移属处理器时间语义。
         // v8 声明：接口 IPalOutboxStore.AddMessagesAsync 无 CancellationToken 参数，本路径
-        // 无法响应取消——v3.0 契约窗口（ADR-020）随接口异步化一并补。
+        // 无法响应取消——v4.0 契约窗口（ADR-020）随接口异步化一并补。
         var conn = await EnsureOpenAsync().ConfigureAwait(false);
         // P2 修复（八轮评审 PD17）：批量路径补 correlation/causation/trace 4 追踪列——
         // 单条路径 AddMessage（七轮）已补，批量漏列导致追踪链在批量写入时丢失；

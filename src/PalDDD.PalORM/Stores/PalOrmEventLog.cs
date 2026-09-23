@@ -38,7 +38,7 @@ namespace PalDDD.PalORM.Stores;
 /// （EventLogDbContext）在同场景用 eventIdExists 探测区分 EventId 撞库与流推进两因；
 /// 本栈与 Dapper 对齐为单一并发判定（重查 <c>MAX(stream_version) &gt;= 失败事件版本</c> 即转
 /// EventStreamConcurrencyException）——event_id 撞库 + 并发推进同窗叠加时误译为并发异常
-/// （调用方重试经版本预检自然收敛），接受此权衡；v3.0 对齐窗口。
+/// （调用方重试经版本预检自然收敛），接受此权衡；v4.0 对齐窗口。
 /// </para>
 /// </summary>
 public class PalOrmEventLog<TProvider> : IEventLog

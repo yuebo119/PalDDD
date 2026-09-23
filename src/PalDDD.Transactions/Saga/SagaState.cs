@@ -111,7 +111,7 @@ public abstract class SagaState
     /// （并临时把两属性 init→set），但该翻转把失败模式从「并发写可抛（可见，走死信）」
     /// 换成「僵尸执行的步骤从后继者补偿轨迹中**静默消失**（漏补偿，无兜底）」——
     /// 未回应 v26 声明的取舍即翻转语义，且未经决策记录。现回滚为 v26 声明的浅拷贝；
-    /// 深隔离若要做，随 v3.0 窗口（ADR-020 契约统一批次）先出 ADR 再动。
+    /// 深隔离若要做，随 v4.0 窗口（ADR-020 契约统一批次）先出 ADR 再动。
     /// </para>
     /// </summary>
     internal SagaState CloneForLease() => (SagaState)MemberwiseClone();
