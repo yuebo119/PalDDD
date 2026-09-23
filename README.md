@@ -128,7 +128,7 @@ InMemory 实现覆盖全部抽象接口，单元测试和原型开发无需外�
 | **PalDDD.Core** | 3.1.0 | 领域核心：AggregateRoot / Entity / ValueObject / SmartEnum / DomainEvent / Specification |
 | **PalDDD.Serialization** | 3.1.0 | 序列化抽象：IMessageSerializer / MessageCatalog / MessageDescriptor |
 | **PalDDD.Serialization.Evolution** | 3.1.0 | 消息版本演化：Upcaster / Contract 验证 |
-| **PalDDD.Serialization.MemoryPack** | 3.1.0 | MemoryPack 二进制序列化（零反射、AOT） |
+| **PalDDD.Serialization.MemoryPack** | 3.1.0 | MemoryPack 二进制序列化（零反射；适配层显式 IsAotCompatible=false，待全链路验证） |
 | **PalDDD.Compression** | 3.1.0 | 压缩抽象：Brotli / GZip / Deflate（AOT 安全） |
 | **PalDDD.Compression.Native** | 3.1.0 | 原生压缩：LZ4 / ZStandard（P/Invoke，不可 AOT） |
 | **PalDDD.Core.SourceGen** | 3.1.0 | 源生成器：IdentityGenerator / EnumGenerator / MessageRegistryGenerator |
@@ -346,6 +346,12 @@ public sealed class CreateOrderHandler(IOrderRepository orders) : ICommandHandle
 // 双守卫：租约被其他 worker 重租后旧快照 UPDATE 影响 0 行（affected=0 零内存变异），
 // 旧 worker 的迟到标记无法覆盖新持有者——重复投递/终态翻转两个窗口同时关闭。
 
+// 行为对齐（v3.1.0）：InMemoryOutboxStore.MarkProcessed 对从未租约的消息由静默忽略改为
+// 正常标记（与 PalORM / Dapper / EF 三栈一致——测试替身此前进于生产，会让测试与生产行为背离）；
+// DapperOutboxStore.MarkProcessed 在租约 token 不匹配被拒（0 行受影响）时不再清空传入消息对象的
+// 租约字段——调用方持有的对象与数据库实际状态保持一致（与 PalORM 一致）。被其他 worker 重租的
+// 消息仍一律拒绝标记，原保护不变。
+
 // 消费侧幂等：Inbox 防重复处理
 services.AddPalInbox();  // (ConsumerName, MessageId) 复合唯一约束
 ```
@@ -562,6 +568,9 @@ services.AddPalOrmPostgreSql(connectionString);
 // EventLog 自动可用：PalOrmEventLog<PostgreSqlProvider>
 
 // 追加事件（乐观并发 — 版本冲突抛 EventStreamConcurrencyException；期望版本经工厂构造，无 int 隐式转换）
+// v3.1.0 写路径零拷贝：DapperEventLog/PalOrmEventLog 批量附加不再逐事件对 payload/metadata 做
+// 防御性 ToArray——改用 EventData 构造期已拷贝的 internal 数组（每事件省 2 次数组分配；
+// EventData 构造后不可变是公开 API 契约，行为不变）
 // EventData 七参构造（audit 必填非空——审计元数据是强制语义）：
 var result = await eventLog.AppendAsync("order-01HXY...", ExpectedStreamVersion.NoStream, new[]
 {
@@ -645,7 +654,7 @@ switch (execution.Status)
 
 ### 14. 可观测性：内建 OpenTelemetry，零配置
 
-PalDDD 在所有关键路径内置了 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（21 个遥测 instrument，v72 勘正计数）——不需要手写埋点。
+PalDDD 在所有关键路径内置了 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（23 个遥测 instrument）——不需要手写埋点。
 
 ```csharp
 // 框架自动埋点（Activity 名为语义短名；Counter 统一 paldd. 前缀——4 个字母 p-a-l-d-d）：
@@ -739,7 +748,7 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 | DomainEvent | abstract 基类 + 用户侧 `sealed` 声明（PDDD012 强制），`static abstract EventName` 编译期契约（PDDD015 强制与 `[GenerateMessage].Name` 一致） |
 | IValueObject / SmartEnum | 值对象抽象（`IValueObject` 结构相等语义，ADR-003 保留）；`SmartEnum<TSelf,TValue>` FrozenDictionary O(1) FromValue（强类型 ID 走源生成器表 `[GenerateId]`） |
 | ISpecification | ExpressionVisitor 参数替换组合 And/Or/Not，与 EF Core LINQ 完全兼容 |
-| 诊断 | 内建 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（21 个遥测 instrument，v72 勘正计数） |
+| 诊断 | 内建 `PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（23 个遥测 instrument） |
 
 ### 源生成器（编译期，零运行时反射）
 | 生成器 | 产出 | 配套诊断 |
@@ -839,7 +848,7 @@ src/                         36 源项目 · Clean Architecture（Folder 与 Pal
 ├── Hosting/                 DependencyInjection · Hosting.AspNetCore
 └── Metapackages/            Base · Extension · Prompts（Prompts 非包，IsPackable=false）
 
-test/                        16 测试项目（TUnit）· 1379 项实测（本机 1311 + 54 环境依赖项 CI Testcontainers + 14 设计内跳过——PalORM.Tests 与 Messaging.Integration.Tests 需 Docker）
+test/                        16 测试项目（TUnit）· 1490 项实测（1430 通过 + 60 项无 Docker 跳过；2026-09-23 本机全量实测——PalORM.Tests 与 Messaging.Integration.Tests 需 Docker）
 bench/                       BenchmarkDotNet 性能基准
 samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi · AotSample · DapperAotProbe（实验探针，不在 slnx/CI——见 docs/review/dapper-aot-experiment-2026-09-13.md）
 docs/                        架构 · 使用指南 · 教程 · ADR
@@ -912,7 +921,7 @@ MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Servi
 不支持 .NET 8/9/10（单目标 net11.0）。AOT 场景三处限制（源码 `[RequiresDynamicCode]` 诚实声明）：① Saga 的 ChildSaga 子流程分发（`MakeGenericMethod`/`MakeGenericType`，见 `Saga.cs`）与②动态事件路由同源；③ `ISpecification.Compile()` 表达式树编译在 Native AOT 下不受支持——AOT 场景请改用 `ToExpression()` 传给查询提供者。不含内置的 EventStore 快照机制——需要快照策略的项目需要自行实现。
 
 **生产环境有谁在用？**
-Pal.DDD 当前版本 v3.1.0（tag v3.1.0 发布，SemVer Minor：三栈 Outbox 行为对齐与版本承诺守卫类变更，无破坏性 API 变更，见 CHANGELOG `[3.1.0]` 段）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 1379 项实测用例（16 项目：本机 1311 通过 + 54 环境依赖项由 CI Testcontainers 权威执行 + 14 设计内跳过——v2.2.0 实测口径）。欢迎在非生产环境中试用并反馈。
+Pal.DDD 当前版本 v3.1.0（tag v3.1.0 发布，SemVer Minor：三栈 Outbox 行为对齐、EventLog 写路径零拷贝、[Obsolete] 移除版本由 v3.0 改指 v4.0 与版本承诺守卫类变更，无破坏性 API 变更，见 CHANGELOG `[3.1.0]` 段）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 1490 项实测用例（16 项目：1430 通过 + 60 项无 Docker 跳过——2026-09-23 本机全量实测口径）。欢迎在非生产环境中试用并反馈。
 
 ---
 

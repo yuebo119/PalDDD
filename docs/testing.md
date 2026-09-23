@@ -31,6 +31,8 @@
 
 六个 InMemory 实现（Outbox/Inbox/SagaState/EventLog/Idempotency/Checkpoint）**刻意分散在各抽象包内**（`AddPalDDD` 引 Transactions 即得 InMemoryOutboxStore），不集中为独立 PalDDD.InMemory 包。理由：单元测试/原型零依赖直达（一跳引用）；集中包会形成对全部五个抽象包的反向汇聚依赖（版本耦合 + 测试项目两跳引用）。定位：**单元测试与原型的默认实现**，非生产实现——生产语义请用三栈之一（PalORM AOT 主线 / Dapper 调用点级 AOT / EFCore 生态线，见 ADR-020 2026-09-13 修订）。
 
+> **三栈行为对齐（3.1.0）**：`InMemoryOutboxStore.MarkProcessed` 对**从未租约**的消息由静默忽略改为正常标记（此前比生产三栈更严格，会让测试与生产行为背离）；对已被其他 worker 重租的消息仍拒绝标记（僵尸标记保护由引用相等性检查承载，未受影响）。Dapper 侧同版对齐：`MarkProcessed` 被租约 token 拒阻时不再清空入参消息对象的租约字段。
+
 ---
 
 ## 一、测试金字塔
@@ -94,10 +96,10 @@
 
 | 维度 | DDD 约定 |
 |------|---------|
-| **测试框架** | TUnit 1.66.27 + MTP（Microsoft.Testing.Platform） |
+| **测试框架** | TUnit 1.69.0 + MTP（Microsoft.Testing.Platform） |
 | **断言库** | TUnit.Assertions（Fluent 链式） |
 | **属性测试** | TUnit.FsCheck（属性驱动） |
-| **快照测试** | Verify.TUnit 32.0.0（已用于 Hosting.AspNetCore.Tests 的 ExceptionMiddleware，3 个 `.verified.txt` 基线；公共 API 快照另由自实现 PublicApiSnapshot 承载） |
+| **快照测试** | Verify.TUnit 32.0.1（已用于 Hosting.AspNetCore.Tests 的 ExceptionMiddleware，3 个 `.verified.txt` 基线；公共 API 快照另由自实现 PublicApiSnapshot 承载） |
 | **集成测试** | Testcontainers.*（PG/MySQL/SQLite/RabbitMQ/Kafka） |
 
 > **禁用** `Microsoft.NET.Test.Sdk`（与 TUnit MTP 冲突，conventions §10.6 硬规则）
@@ -402,7 +404,7 @@ dotnet run --project bench/PalDDD.Benchmarks -- --smoke | tee /tmp/after.txt
 
 | 层 | 项目数 | AOT 策略 | 验证 |
 |----|:------:|---------|------|
-| **AOT 核心层** | 显式 8（PalORM×4+Dapper×4）+ 继承 true 14（无 csproj 覆盖即继承全局 true） | `IsAotCompatible=true` | CI aot-verify（PalOrmSample 单入口 publish+run）全绿 |
+| **AOT 核心层** | 显式 8（PalORM×4+Dapper×4）+ 继承 true 14（无 csproj 覆盖即继承全局 true） | `IsAotCompatible=true` | CI aot-verify（PalOrmSample + AotSample 双 sample publish + 实跑二进制）全绿 |
 | **非 AOT 适配器层** | 14 | 显式 `IsAotCompatible=false`（设计本意） | ArchitectureBoundaryTests `InfrastructureAdapters_AreExplicitlyNonAot` 强制 |
 
 ---
@@ -413,8 +415,11 @@ dotnet run --project bench/PalDDD.Benchmarks -- --smoke | tee /tmp/after.txt
 
 | Workflow | 触发条件 | 作用 |
 |----------|---------|------|
-| `ci.yml` Build & Test | 每次 push/PR | 构建 + 单元 + 集成（Testcontainers）+ 质量门禁 |
-| `ci.yml` AOT | 每次 push/PR | AOT 核心层 publish -p:PublishAot=true |
+| `ci.yml` build-and-test | 每次 push（main/dev/tag）/PR + workflow_dispatch | vuln-scan → restore → build → format-verify → 逐项目 test（MTP 一次一项目）→ secret-scan/dapper-param-guard/doc-consistency → encoding-gate/tech-debt/test-gate 循环 → gate（G22/G23/G24）→ gate-audit --inventory → gate-lite |
+| `ci.yml` aot-verify | 同上 | PalOrmSample + AotSample **双 sample** publish `-p:PublishAot=true` + 实跑 native 二进制 |
+| `ci.yml` coverage | 同上 | 全局行覆盖率阈值 0.70 + 单模块降幅 ≤5pp（`coverage-baseline.json`） |
+| `ci.yml` dialect-probe | push/PR，路径门控（仅 Store/SQL/DDL/映射面变更；PR 全跑） | DialectProbeTests（Testcontainers PG/MySQL 真库） |
+| `codeql.yml` | push（main/dev）/PR + 每周一 schedule + workflow_dispatch | CodeQL 静态安全分析 |
 | `perf-gate.yml`（待实施） | 每周日 + `[perf]` PR | Smoke 基线 + 回归检测 |
 | `AssertionStrengthGateTests`（test/PalDDD.DependencyInjection.Tests） | 每次 PR/本地（dotnet test） | 断言强度棘轮（替代 Stryker；Stryker 不支持 TUnit/MTP；MIG-003 由脚本下沉） |
 
@@ -441,8 +446,8 @@ for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' 
 # 4. 规范验证（grep 静态检查）
 dotnet run scripts/verify-conventions.cs -- --quick
 # 注（ITM-680 收尾，2026-09-14）：--quick 为提交前口径（秒级，仅静态检查）；full（默认）
-# 含全量 build+test，无 Docker 机器测试阶段必红（PalORM 46 项 fail-closed + Messaging 集成
-# 环境失败），仅 CI/有 Docker 环境可全跑——本地看到 full 红先查环境而非代码。
+# 含全量 build+test，无 Docker 机器上方言族测试（PalORM 多方言 46 项 + Integration 14 项）
+# 自动跳过而非失败（3.1.0 起，T-17 统一 skip 策略），本地看到 full 红先查环境而非代码。
 
 # 5. AI 系统门禁（如使用 .ai/）
 dotnet run scripts/gate.cs -- --allow-dirty

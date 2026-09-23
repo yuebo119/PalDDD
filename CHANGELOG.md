@@ -12,6 +12,10 @@
 
 ## [Unreleased]
 
+### Documentation 文档
+
+- **全仓文档与真实实现对齐**（3.1.0 之后口径）：架构文档的质量体系版本、诊断数 21→23、prompt 模板数 9→10、Outbox 指标补 `paldd.outbox.dead`/`persist_failed`、TUnit/MTP 版本、GitHub Actions 模板改为 ci.yml 实际形态、CI 触发表对齐 4 job 实态、测试计数口径 1379→1490（2026-09-23 全量实测 1430 通过 + 60 项无 Docker 跳过）；补写 3.1.0 消费者可见变更（Outbox 三栈对齐、EventLog 写路径零拷贝）与 3.0.0 的 UoW fail-fast / `MaxDegreeOfParallelism` 警示；`IPalOutboxStore` 的 v4.0 预告与 `PalDiagnostics` 的计数器勘正注释同步更新。
+
 ### Dependencies 依赖
 
 - **`Verify.TUnit` 钉在 32.x（Dependabot 忽略 33+）**：Verify 33 起在构建期强制检查许可属性（SponsorCheck，未声明即中断构建），属带商业许可门的依赖。**已裁决（2026-09-23）：本项目只使用开源依赖，不接此类许可门**，故停在最后一个无该门的 32.x 线（其补丁仍自动跟进）。影响面仅测试基础设施，包内容与运行时行为不变。

@@ -3,7 +3,7 @@
 > **基线日期**：2026-07-30
 > **基线 commit**：`db47e22`（feature/palorm-adapter）
 > **测试总数**：850（全绿）——**基线时点值**
-> **当前规模**（2026-09-14 v2.2.0）：16 项目 1379 用例（本机 1311 通过 + 54 环境依赖项由 CI Testcontainers 执行 + 14 设计内跳过）；本文余下覆盖率数字均为 2026-07-30 基线，未随测试增长重测
+> **当前规模**（2026-09-23，本机全量实测）：16 项目 1490 用例（1430 通过 + 60 项无 Docker 跳过——PalORM 多方言 46 项 + Integration 14 项，由 CI Testcontainers 执行）；本文余下覆盖率数字均为 2026-07-30 基线，未随测试增长重测
 > **覆盖率工具**：dotnet-coverage 18.9.0 + ReportGenerator 5.5.11
 
 ## 总览
@@ -73,24 +73,24 @@
   | 旧阈值 0.65 | 余量约 8pp → 失去早期预警意义 |
 
   该 72.98% 是**下界**：其中 `PalDDD.PalORM.Tests` 因本机无 Docker（Docker 未安装，
-  非未启动）有 46 项多方言测试未跑完（`MultiDialectFixture.EnsureTestcontainersRequired`
-  按设计对未启用 Testcontainers 的情况抛异常而非静默跳过），CI 上这 46 项会跑，
+  非未启动）有 46 项多方言测试未跑（3.1.0 起 `MultiDialectFixture` 对未启用
+  Testcontainers 的情况 `Skip.Unless` 跳过而非抛异常，见 T-17 裁决），CI 上这 46 项会跑，
   数字会更高。
 
   **⚠️ 复校准触发**：首次 `coverage` job 运行会给出含 Docker 的完整值（预期 ≥ 0.73）。
   届时按实测值重校准阈值并同步本表——不要在未读 CI 数字前继续上调。
 
   **本机限制（已知，非缺陷）**：无 Docker 的机器上 `dotnet run scripts/ci-coverage.cs`
-  会在 `PalDDD.PalORM.Tests` 处中断（该项目的多方言测试要求 Testcontainers）。
-  本地想要完整数字：装 Docker 后重跑即可（Testcontainers 自动启动容器）；
+  会在 `PalDDD.PalORM.Tests` 处少 46 项多方言覆盖（该项目的多方言测试要求 Testcontainers，
+  未启用时整体跳过、不产出插桩数据）。本地想要完整数字：装 Docker 后重跑即可（Testcontainers 自动启动容器）；
   或按上表的分步方法只补跑缺失项目再取并集。
   **注意**：设 `PALDDD_TEST_PG` / `PALDDD_TEST_MYSQL` 环境变量**不会**启用外部库路径——
   那两个变量只被 `samples/PalDDD.DapperAotProbe` 这类显式探针读取；测试侧仅支持
   Testcontainers（2026-09-22 T-09 删除外部库隐式回退，见 `appsettings.test.json` 注释）。
 
 - **基线值来源与复校准**：`coverage-baseline.json` 的 15 个值取自 2026-09-14 本机
-  Debug 插桩产物，属**下界**——`PalDDD.PalORM.Tests` 因本机无 Docker 无 cobertura
-  产物、**未纳入基线**（`UpdateBaseline` 只为有产物的项目写键），其降幅当前不受
+  Debug 插桩产物，属**下界**——`PalDDD.PalORM.Tests` 因本机无 Docker 多方言测试跳过、
+  无 cobertura 产物、**未纳入基线**（`UpdateBaseline` 只为有产物的项目写键），其降幅当前不受
   Step 6 检查。首次 `coverage` job 运行后应用 CI 完整产物重取基线
   （`-- --update-baseline`，按上文「基线更新属校准步骤，需评审后提交」），
   届时 PalORM 随产物齐全一并纳入。

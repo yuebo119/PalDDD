@@ -12,7 +12,7 @@
 
 ---
 
-Pal.DDD standardizes the equality semantics of Entity, allocation-free collection of domain events, lease-lock concurrency and dead-letter recovery of the Outbox, and compensation orchestration with timeout detection for Sagas — into 35 independent NuGet packages. It does not provide `IRepository<T>`, does not define `IIntegrationEvent`, and does not perform assembly scanning. Business code stays pure C#; the framework only delivers infrastructure.
+Pal.DDD standardizes the equality semantics of Entity, allocation-free collection of domain events, lease-lock concurrency and dead-letter recovery of the Outbox, and compensation orchestration with timeout detection for Sagas — into 35 independent NuGet packages (plus 5 third-party PalORM engine packages; see the list at the end). It does not provide `IRepository<T>`, does not define `IIntegrationEvent`, and does not perform assembly scanning. Business code stays pure C#; the framework only delivers infrastructure.
 
 Out of the box: **zero-reflection command dispatch · lease-lock concurrent Outbox · auto-compensating Sagas · immutable EventLog · resumable Projections · compile-time DDD compliance checks.**
 
@@ -128,7 +128,7 @@ InMemory implementations cover all abstract interfaces, so unit tests and protot
 | **PalDDD.Core** | 3.1.0 | Domain core: AggregateRoot / Entity / ValueObject / SmartEnum / DomainEvent / Specification |
 | **PalDDD.Serialization** | 3.1.0 | Serialization abstractions: IMessageSerializer / MessageCatalog / MessageDescriptor |
 | **PalDDD.Serialization.Evolution** | 3.1.0 | Message version evolution: Upcaster / Contract validation |
-| **PalDDD.Serialization.MemoryPack** | 3.1.0 | MemoryPack binary serialization (zero reflection, AOT) |
+| **PalDDD.Serialization.MemoryPack** | 3.1.0 | MemoryPack binary serialization (zero reflection; the adapter declares IsAotCompatible=false, pending full-chain verification) |
 | **PalDDD.Compression** | 3.1.0 | Compression abstractions: Brotli / GZip / Deflate (AOT-safe) |
 | **PalDDD.Compression.Native** | 3.1.0 | Native compression: LZ4 / ZStandard (P/Invoke, not AOT-compatible) |
 | **PalDDD.Core.SourceGen** | 3.1.0 | Source generators: IdentityGenerator / EnumGenerator / MessageRegistryGenerator |
@@ -349,6 +349,14 @@ public sealed class CreateOrderHandler(IOrderRepository orders) : ICommandHandle
 // mutation) — a late marker from the old worker cannot override the new holder, closing both the
 // duplicate-delivery and terminal-flip windows.
 
+// Behavior alignment (v3.1.0): InMemoryOutboxStore.MarkProcessed now marks never-leased messages
+// instead of silently ignoring them (aligned with the PalORM / Dapper / EF stacks — the test double
+// was previously stricter than production, diverging test behavior from production). When a mark is
+// rejected on lease-token mismatch (0 rows affected), DapperOutboxStore.MarkProcessed no longer
+// clears the lease fields of the passed-in message object — the caller's object stays consistent
+// with the actual DB state (aligned with PalORM). Messages re-leased by another worker are still
+// always rejected; the original protection is unchanged.
+
 // Consumer-side idempotency: Inbox prevents duplicate processing
 services.AddPalInbox();  // Composite unique constraint on (ConsumerName, MessageId)
 ```
@@ -561,7 +569,11 @@ services.AddPalOrmPostgreSql(connectionString);
 // EventLog is automatically available: PalOrmEventLog<PostgreSqlProvider>
 
 // Append events (optimistic concurrency — throws EventStreamConcurrencyException on conflict;
-// expected version via factory). EventData has a 7-parameter ctor (audit is required non-null):
+// expected version via factory). Write-path zero-copy (v3.1.0): DapperEventLog/PalOrmEventLog batch
+// appends no longer take a defensive ToArray per event for payload/metadata — they use the internal
+// array already copied at EventData construction (saves 2 array allocations per event; EventData is
+// immutable after construction, a public API contract; behavior unchanged).
+// EventData has a 7-parameter ctor (audit is required non-null):
 var result = await eventLog.AppendAsync("order-01HXY...", ExpectedStreamVersion.NoStream, new[]
 {
     new EventData(
@@ -645,7 +657,7 @@ switch (execution.Status)
 
 ### 14. Observability: Built-In OpenTelemetry, Zero Configuration
 
-PalDDD ships `PalActivitySource` (11 Start methods) + `PalMetrics` (21 telemetry instruments) built into all critical paths — no manual instrumentation needed.
+PalDDD ships `PalActivitySource` (11 Start methods) + `PalMetrics` (23 telemetry instruments) built into all critical paths — no manual instrumentation needed.
 
 ```csharp
 // Framework auto-instrumentation (Activity names are semantic short names; Counters use the paldd. prefix):
@@ -740,7 +752,7 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 | DomainEvent | abstract base class + user-side `sealed` declarations (enforced by PDDD012), `static abstract EventName` compile-time contract (PDDD015 enforces consistency with `[GenerateMessage].Name`) |
 | IValueObject / SmartEnum | Value-object abstraction (`IValueObject` structural equality, retained per ADR-003); `SmartEnum<TSelf,TValue>` FrozenDictionary O(1) FromValue (strongly-typed IDs go through the `[GenerateId]` source generator) |
 | ISpecification | ExpressionVisitor parameter substitution composes And/Or/Not, fully compatible with EF Core LINQ |
-| Diagnostics | Built-in `PalActivitySource` (11 Start methods) + `PalMetrics` (21 telemetry instruments) |
+| Diagnostics | Built-in `PalActivitySource` (11 Start methods) + `PalMetrics` (23 telemetry instruments) |
 
 ### Source Generators (compile-time, zero runtime reflection)
 | Generator | Output | Companion diagnostics |
@@ -767,11 +779,15 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 | **Projection** | `IProjectionCheckpointStore` checkpoint persistence, `EventLogReplaySource<T>` full replay, independent of the storage adapter |
 
 ### Persistence Adapters
+
+> **Three-stack long-term coexistence declaration (2026-09-20 ruling)**: the PalORM / Dapper / EF Core adapters are **equally supported and coexist long-term** — no retirement plan. The choice is by scenario (AOT requirements / SQL control / ecosystem needs), not by which stack is retiring. Five Store capabilities (Outbox / Inbox / Saga / EventLog / Projection Checkpoint) are fully covered across all three stacks with consistent behavior (same lease/fencing/guard contracts, cross-stack behavior guarded by parity tests); explicit declarations of behavioral differences are in [ADR-024](docs/decisions/024-mysql-lease-mutex-divergence-accept.md) and each Store's remarks.
+
 | Adapter | AOT | Database | Coverage |
 |--------|:--:|:--:|------|
 | **PalDDD.PalORM** | ✅ **True AOT** | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / **Idempotency** / UnitOfWork (source generation + compile-time SQL, [see adapter docs](docs/palorm-adapter.md)) |
-| PalDDD.Dapper | ✅ Measured | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / UnitOfWork (`[module:DapperAot]` **enabled** — 34 call-site interceptors, three-dialect NativeAOT measured 13/13; boundary: bypassing wrappers to raw Dapper API is not AOT-safe, see [aot.md](docs/aot.md)) |
-| ~~PalDDD.EntityFrameworkCore~~ | ❌ | ~~PG / MySQL / SQLite~~ | ~~Deprecated, source not committed (OBS-068), replaced by PalORM~~ |
+| PalDDD.Dapper | ✅ Measured | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / **Idempotency** / UnitOfWork (`[module:DapperAot]` **enabled** — 34 call-site interceptors, three-dialect NativeAOT measured 13/13; boundary: bypassing wrappers to raw Dapper API is not AOT-safe, see [aot.md](docs/aot.md)) |
+| **PalDDD.*.EFCore** (5 projects) | ❌ Design trade-off | PG / MySQL / SQLite (SqlServer experimental `[Obsolete]`) | Outbox / Inbox / Saga / EventLog / Idempotency / Projection Checkpoint / Repository+UnitOfWork (`PalDDD.Transactions.EFCore` four-dialect derived DbContext + `EventLog.EFCore` / `Idempotency.EFCore` / `Projections.EFCore` / `Repository.EFCore` — retained for users who need the **EF ecosystem**: Migration / LINQ queries / Interceptor / ChangeTracker) |
+| ~~PalDDD.EntityFrameworkCore~~ (old package) | ❌ | — | ~~Deprecated, source not committed (OBS-068) — distinct from the five current `*.EFCore` projects above~~ |
 
 ### Database Dialect Extensions
 | Dialect | Unique Capabilities |
@@ -792,6 +808,7 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 | **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **True AOT** | Source-generated RowFactory/CommandFactory, `PublishAot=true` verification passed ([PalOrmSample](samples/PalDDD.PalOrmSample/)) |
 | PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ Measured | `[module:DapperAot]` enabled — 34 call-site interceptors, three-dialect NativeAOT measured 13/13; boundary: bypassing wrappers to raw Dapper API is not AOT-safe (see [AOT guide](docs/aot.md) and [persistence-aot-status.md](docs/persistence-aot-status.md)) |
 | PalDDD.Transactions | ❌ | Saga reflection exception (`IsAotCompatible=false`, see csproj) |
+| **PalDDD.*.EFCore (5 projects)** | ❌ | EF Core client limitations + the Saga reflection exception — **a design trade-off, not deprecation**; normal use for the EF Core ecosystem (runtime JIT) |
 | ~~PalDDD.EntityFrameworkCore~~ | ❌ | ~~Deprecated~~ |
 | PalDDD.Messaging.Kafka · RabbitMQ | ❌ | Confluent.Kafka / RabbitMQ.Client limitations |
 | PalDDD.Hosting.AspNetCore | ❌ | FrameworkReference limitations |
@@ -835,9 +852,9 @@ src/                         36 source projects · Clean Architecture (folders m
 ├── Hosting/                 DependencyInjection · Hosting.AspNetCore
 └── Metapackages/            Base · Extension · Prompts (Prompts is not a package, IsPackable=false)
 
-test/                        16 test projects (TUnit) · 1379 measured tests (1311 local + 54 environment-dependent via CI Testcontainers + 14 design-internal skips — PalORM.Tests & Messaging.Integration.Tests need Docker)
+test/                        16 test projects (TUnit) · 1490 measured tests (1430 passes + 60 skipped without Docker — full-suite measurement on 2026-09-23; PalORM.Tests & Messaging.Integration.Tests need Docker)
 bench/                       BenchmarkDotNet performance benchmarks
-samples/                     PalOrmSample (AOT verification) · ECommerce · MinimalApi · AotSample
+samples/                     PalOrmSample (AOT verification) · ECommerce · MinimalApi · AotSample · DapperAotProbe (experimental probe, not in slnx/CI — see docs/review/dapper-aot-experiment-2026-09-13.md)
 docs/                        Architecture · Usage guide · Tutorial · ADR
 ```
 
@@ -904,14 +921,14 @@ Yes. Every NuGet package in Pal.DDD is independently installable. You can start 
 **Why target only net11.0?**
 It relies on .NET 11 static features (JsonSerializerContext source-generation enhancements, Runtime Async state machine optimizations, new AOT analyzers); multi-targeting is technically infeasible. See [ADR-005](docs/decisions/005-net11-single-target.md) for details.
 
-**How to choose between Dapper and PalORM?**
-If you need Native AOT deployment (microservices, CLI tools, edge computing) → choose **PalORM** (recommended, source generation + compile-time SQL, true AOT). If you are maintaining existing hand-written Dapper SQL code → choose Dapper (call-site-level Native AOT enabled, ADR-020 capability-parity stack; boundary: bypassing wrappers to raw Dapper API is not AOT-safe). The EF Core adapter is for Repository/Outbox/Inbox/Saga DbContext scenarios. The three can be mixed in the same project — for example, PalORM for the write path (Outbox/Saga) and EF Core for the read path (Projection).
+**How to choose between the three persistence adapters (PalORM / Dapper / EF Core)?**
+The three stacks are **equally supported and coexist long-term** (2026-09-20 ruling, no retirement plan). Pick by primary need: AOT publishing + compile-time type safety → **PalORM** (source-generated SQL, true AOT); maximum SQL control / hand-written SQL / existing Dapper code → **Dapper** (call-site-level AOT, three-dialect measured); the **EF Core ecosystem** (Migration, LINQ queries, Interceptor, ChangeTracker) → the **EF Core** five projects (`Transactions.EFCore` covers Outbox/Inbox/Saga, plus EventLog/Idempotency/Projections/Repository). The three can be mixed in the same project — for example, PalORM for the write path (Outbox/Saga) and EF Core for the read path (Projection). Full comparison in the "Persistence Adapters" table above and [palorm-adapter.md](docs/palorm-adapter.md).
 
 **What are the known limitations?**
 Does not support .NET 8/9/10 (single target net11.0). Three AOT limitations (honestly declared via source `[RequiresDynamicCode]`): ① Saga ChildSaga child-flow dispatch (`MakeGenericMethod`/`MakeGenericType`, see `Saga.cs`) and ② dynamic event routing share the same root; ③ `ISpecification.Compile()` expression-tree compilation is unsupported under Native AOT — in AOT scenarios use `ToExpression()` and pass it to your query provider instead. No built-in EventStore snapshot mechanism — projects that need a snapshot strategy must implement it themselves.
 
 **Who is using it in production?**
-Pal.DDD is currently at version v3.1.0 (tag v3.1.0 published; SemVer minor: three-stack Outbox behavior alignment and version-promise guards, no breaking API changes — see the `[3.1.0]` section in CHANGELOG). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with 1379 measured test cases (16 projects: 1311 local passes + 54 environment-dependent cases authoritatively executed by CI Testcontainers + 14 design-internal skips — the v2.2.0 measurement basis). You are welcome to try it in non-production environments and provide feedback.
+Pal.DDD is currently at version v3.1.0 (tag v3.1.0 published; SemVer minor: three-stack Outbox behavior alignment, EventLog write-path zero-copy, `[Obsolete]` removal versions re-targeted from v3.0 to v4.0, and version-promise guards, no breaking API changes — see the `[3.1.0]` section in CHANGELOG). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with 1490 measured test cases (16 projects: 1430 passes + 60 skipped without Docker — the 2026-09-23 full-suite measurement basis). You are welcome to try it in non-production environments and provide feedback.
 
 ---
 

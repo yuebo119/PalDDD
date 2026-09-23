@@ -13,9 +13,11 @@ namespace PalDDD.Transactions;
 /// <para>
 /// 📣 <b>v4.0 破坏性变更预告（ADR-020，维护者裁决 2026-08-26）</b>：本接口的两项已排队
 /// 破坏性变更合并到 v4.0 窗口执行——① <b>跨栈 fencing 契约统一</b>：对未租约消息
-/// MarkProcessed 的三栈分歧行为（PalORM/Dapper 放行 vs InMemory 拒绝，见
-/// <see cref="MarkProcessed"/> Remarks）收敛为统一语义；② <b>异步化</b>：AddMessage/
-/// MarkProcessed/MarkDead/ReleaseForRetry 等同步方法改异步签名（PalORM 栈 7 处
+/// MarkProcessed 的三栈分歧（PalORM/Dapper/EF 放行 vs InMemory 拒绝）已在 **3.1.0**
+/// 由 InMemory 对齐放行解除（见 <see cref="MarkProcessed"/> Remarks）；剩余统一面是
+/// fencing 强度本身——Dapper 受影响行数为正时仅清租约字段、不回写 Status/ProcessedAt
+/// （InMemory/EF 内联全套回写），v4.0 收敛为一致的门控与内存回写语义；② <b>异步化</b>：
+/// AddMessage/MarkProcessed/MarkDead/ReleaseForRetry 等同步方法改异步签名（PalORM 栈 7 处
 /// sync-over-async 的根因）。实现者请在 v4.0 前关注迁移指引。
 /// </para>
 /// </remarks>
@@ -48,11 +50,15 @@ public interface IPalOutboxStore
     /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。
     /// <para>
     /// ⚠️ <b>前置条件（ITM-269 声明；ITM-272 勘正 Dapper 阵营）</b>：应传入 <see cref="LeasePendingMessagesAsync"/>
-    /// 返回的租约实例。对<b>未租约</b>消息（LockedBy=null）直接标记的三栈真实行为：
-    /// PalORM/Dapper 栈<b>放行</b>（owner-null SQL 分支命中即 UPDATE——Dapper 内存侧仅清租约字段不回写
-    /// Status，fencing 弱于 PalORM 的 affected 门控）；InMemory 栈<b>拒绝</b>（引用守卫静默 no-op、零变异
-    /// 零报错）。处理管线一律走 Lease 路径；GetPending 观测结果原则上不构成标记资格——
-    /// 例外：租约已过期且未被他人重租的消息经 token 分支仍可标记成功（原 worker 过期后完成属合理语义）。
+    /// 返回的租约实例。对<b>未租约</b>消息（LockedBy=null）直接标记：<b>四栈一致放行</b>
+    /// （3.1.0 T-15 起，InMemory 原"拒绝"已对齐——PalORM/Dapper/EF 的 owner-null SQL 分支
+    /// 命中即 UPDATE，EF 的 <c>OutboxDbContext</c> 明写该路径是运维/测试路径的有意能力；
+    /// InMemory 保留 <c>Status == Pending</c> 终态守卫与引用相等性僵尸标记保护）。对已被其他
+    /// worker 重租的消息（successor 替换）仍拒绝标记。剩余 fencing 强度差：Dapper 受影响行数为正时
+    /// 仅清租约字段、不回写 Status/ProcessedAt（InMemory/EF 内联全套回写）——调用方
+    /// （OutboxBatchProcessor）不读入参故无实害，v4.0 统一。处理管线一律走 Lease 路径；
+    /// GetPending 观测结果原则上不构成标记资格——例外：租约已过期且未被他人重租的消息经
+    /// token 分支仍可标记成功（原 worker 过期后完成属合理语义）。
     /// </para></remarks>
     void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt);
 

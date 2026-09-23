@@ -40,7 +40,7 @@ git config --local --get core.hooksPath   # 期望输出：.githooks
 
 ## 常用命令
 
-> ⚠️ **Docker 前提**：`test/PalDDD.PalORM.Tests` 与 `test/PalDDD.Integration.Tests` 的方言族测试经 Testcontainers 拉取 PG/MySQL 镜像；未运行 Docker 时这些测试** fail-closed 抛异常而非跳过**（设计如此，防误连外部库）。首次 clone 请先启动 Docker，或先只跑不依赖容器的项目（`PalDDD.Core.Tests`/`PalDDD.Transactions.Tests`/`PalDDD.Serialization.Tests` 等）。无 Docker 时 `PalORM.Tests` 约 46 项失败属预期，非代码缺陷。
+> ⚠️ **Docker 前提**：`test/PalDDD.PalORM.Tests` 与 `test/PalDDD.Integration.Tests` 的方言族测试经 Testcontainers 拉取 PG/MySQL 镜像；未运行 Docker 时这些测试**跳过而非失败**（3.1.0 起由硬失败改为跳过，给出可读原因；安全前提是外部数据库隐式回退路径已删除）。首次 clone 请先启动 Docker，或先只跑不依赖容器的项目（`PalDDD.Core.Tests`/`PalDDD.Transactions.Tests`/`PalDDD.Serialization.Tests` 等）。
 
 ```bash
 dotnet restore PalDDD.slnx
@@ -95,24 +95,22 @@ PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests/PalDDD.C
 
 ### Testcontainers 集成测试 CI 配置
 
-Kafka / RabbitMQ / PostgreSQL / MySQL / SQLite 五个 Broker 与数据库集成测试基于 [Testcontainers](https://dotnet.testcontainers.org/)，需 Docker 环境接入。GitHub Actions 接入模板（PR 动态合并自 `.github/workflows/`，ADR-010 采纳）：
+Kafka / RabbitMQ / PostgreSQL / MySQL / SQLite 五个 Broker 与数据库集成测试基于 [Testcontainers](https://dotnet.testcontainers.org/)，需 Docker 环境接入。本仓 `.github/workflows/ci.yml` 的实际形态（ADR-010 采纳的容器自管方案）：
 
 ```yaml
 jobs:
-  integration-tests:
-    runs-on: ubuntu-latest
-    services:
-      docker:
-        image: docker:dind
-        options: --privileged
+  build-and-test:
+    runs-on: ubuntu-latest        # GitHub runner 预装 Docker daemon，无需 services 块
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '11.0.x'
       - run: dotnet restore PalDDD.slnx
-      - run: dotnet test test/PalDDD.Messaging.Integration.Tests/PalDDD.Messaging.Integration.Tests.csproj -- --filter "Category=Integration"
-      - run: dotnet test test/PalDDD.Integration.Tests/PalDDD.Integration.Tests.csproj -- --filter "Category=Integration"
+      # MTP 手写协议：逐测试项目 dotnet test（一次只跑一个项目）；
+      # 无 Docker 时方言族测试自动跳过，不会误连外部库
+      - run: |
+          for p in $(find test -name '*.Tests.csproj' | sort); do dotnet test "$p" --no-restore; done
 ```
 
 要点：
@@ -120,7 +118,7 @@ jobs:
 - Testcontainers 自动拉起容器并暴露随机端口，无需预置 service container；仅需 runner 支持 Docker daemon。
 - Windows runner 不支持 Testcontainers，集成测试 CI 必须在 `ubuntu-latest` 上运行。
 - 单元测试（不依赖 Docker）仍可跨平台运行，可拆为独立 job 在 PR 触发；集成测试建议 nightly / 合并到 main 时触发以缩短 PR 周转。
-- 本地预跑：`docker info` 确保 Docker Desktop 已启动，再执行 `dotnet test <csproj> -- --filter "Category=Integration"`。
+- 本地预跑：`docker info` 确保 Docker Desktop 已启动，再执行 `dotnet test <csproj> --no-restore`（无 Docker 时方言族测试自动跳过，按可读的跳过原因区分环境缺失与代码缺陷）。
 
 修改 package 或 restore assets 后先运行：
 

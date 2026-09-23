@@ -4,7 +4,6 @@
 > 所有版本发布（含补丁版/小版本/大版本/Preview）必须遵守。
 >
 > **当前状态**：`VersionPrefix=3.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**3.1.0 已发布**（tag `v3.1.0` → 本提交，2026-09-23）。**3.0.0 已发布**（tag `v3.0.0`→`39fff08`，2026-09-20）。**2.2.0 已发布**（2026-09-15）。2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）。2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正，内容后并入 `[2.1.0]` 段，**CHANGELOG 先行教训第二次**，见 §9 教训 2）。1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`；`[1.1.0]` 段为事后回填）。tag 之后的变更累积在 `[Unreleased]`，下个版本发布前需将 `VersionPrefix` 升位。
-> **首次发布待办**：本规范第 5/6/9 章在首次实际发布后需补实测教训（参考 ORM 项目 `docs/发布规范.md` §9）。
 
 ---
 
@@ -34,9 +33,9 @@
 ```xml
 <!-- Directory.Build.props（唯一版本源） -->
 <PropertyGroup>
-    <VersionPrefix>1.1.0</VersionPrefix>
+    <VersionPrefix>3.1.0</VersionPrefix>
     <VersionSuffix></VersionSuffix>
-    <!-- 最终 Version = 1.1.0 -->
+    <!-- 最终 Version = 3.1.0 -->
 </PropertyGroup>
 ```
 
@@ -181,7 +180,7 @@ DDD 项目分层（对照 conventions §4.2 解决方案分层）：
 | `PalDDD.Prompts` | 1.1.0 | AI 代码生成模板，非运行时库 | `<IsPackable>false</IsPackable>`，NuGet 包 Unlist |
 | `PalDDD.Testing` | 1.1.0（已 Unlist） | 测试基础设施，仅项目内部用 | `<IsPackable>false</IsPackable>`，NuGet 包保持 Unlist |
 | `PalORM.Testing` | 5.0.0（已 Unlist） | PalORM 测试基础设施 | NuGet 包保持 Unlist |
-| `PalDDD.AotSample` | 未发布 | 手动 AOT 验证示例（CI 的 AOT publish 覆盖见 PalOrmSample，见 `.github/workflows/ci.yml` aot-verify job） | `<IsPackable>false</IsPackable>` |
+| `PalDDD.AotSample` | 未发布 | 手动 AOT 验证示例（CI aot-verify job 的 publish + 实跑覆盖 PalOrmSample 与 AotSample，见 `.github/workflows/ci.yml`） | `<IsPackable>false</IsPackable>` |
 | `PalDDD.ECommerce` | 未发布 | 电商场景示例代码 | `<IsPackable>false</IsPackable>` |
 
 **判定规则**：以下三类项目永不打包——
@@ -285,7 +284,7 @@ unzip -p /tmp/release-preview/PalDDD.Core.*.nupkg '*.nuspec' | grep -E "<(id|ver
 
 **必须字段**：
 - `<id>` 正确（如 `PalDDD.Core`）
-- `<version>` 与 `Directory.Build.props` 一致（如 `1.1.0`）
+- `<version>` 与 `Directory.Build.props` 一致（如 `3.1.0`）
 - `<projectUrl>` 指向 `https://github.com/yuebo119/PalDDD`
 - `<repository url=... commit=.../>` 含 commit hash（证明 SourceLink 生效）
 - `<releaseNotes>` 指向 CHANGELOG.md
@@ -310,9 +309,9 @@ grep -E "VersionPrefix|VersionSuffix" Directory.Build.props
 grep -E "^## \[" CHANGELOG.md | head -2        # 首行 [Unreleased]，次行 [目标版本]
 dotnet run scripts/changelog-check.cs                # 必须 0 FAIL
 
-# 3. 打 tag（tag 名格式：v + 版本号，如 v1.1.0）
-git tag v1.1.0
-git push origin v1.1.0
+# 3. 打 tag（tag 名格式：v + 版本号，如 v3.1.0）
+git tag v3.1.0
+git push origin v3.1.0
 
 # 4. 观察 Actions 运行
 # https://github.com/yuebo119/PalDDD/actions/workflows/release.yml
@@ -356,7 +355,7 @@ on:
 | 2 | Verify version matches props | tag 版本 vs Directory.Build.props | 不一致 → exit（防误发） |
 | 3 | Restore + Build | 全量构建，warnings as errors | 编译失败 → exit |
 | 4 | Unit + Integration tests | 单步骤全 16 测试项目（含 Testcontainers PG/MySQL/RabbitMQ/Kafka，v62 勘正：原拆两步与 workflow 实态不符） | 测试失败 → exit |
-| 5 | AOT publish 验证 | PalOrmSample 单入口 `dotnet publish -p:PublishAot=true` + 实跑（v60 勘正：原"7 项目"与 workflow 实态不符——release.yml/ci.yml 均 1 项目 publish+run） | AOT 失败 → exit |
+| 5 | AOT publish 验证 | release.yml：PalOrmSample 单入口 `dotnet publish -p:PublishAot=true` + 实跑（ci.yml 的 aot-verify job 另覆盖 AotSample，共双 sample——二者引用图不重叠） | AOT 失败 → exit |
 | 6 | Pack | 全部公开发布项目 | pack 失败 → exit |
 | 7 | Verify package count | 断言 nupkg 数 = 发布清单总数 | 数量不对 → exit（防漏发） |
 | 8 | Push to NuGet.org | `--skip-duplicate` + 推送计数断言（v60 加）| push 失败/计数不符 → exit |
@@ -409,7 +408,7 @@ gh run list --workflow=release.yml --limit 1
 
 访问 https://github.com/yuebo119/PalDDD/releases：
 
-- ✅ Release 标题 = tag 名（如 `v1.1.0`）
+- ✅ Release 标题 = tag 名（如 `v3.1.0`）
 - ✅ Body 来自 CHANGELOG.md
 - ✅ Assets 含全部 nupkg 文件
 
@@ -418,8 +417,8 @@ gh run list --workflow=release.yml --limit 1
 ```bash
 mkdir /tmp/palddd-consumer-test && cd /tmp/palddd-consumer-test
 dotnet new console
-dotnet add package PalDDD.Base --version 1.1.0
-dotnet add package PalDDD.Extension --version 1.1.0
+dotnet add package PalDDD.Base --version 3.1.0
+dotnet add package PalDDD.Extension --version 3.1.0
 dotnet restore
 dotnet build   # 应成功，无警告
 ```
@@ -468,9 +467,6 @@ git push origin v1.1.0
 ---
 
 ## 九、发布实践教训
-
-> ⚠️ **教训待补**：DDD 项目 **1.1.0 已于 2026-07-31 发布**（NuGet.org + tag `v1.1.0`），但发布时未按本规范同次提交 CHANGELOG `[1.1.0]` 段——该段为 2026-08-21 事后回填。此为第 1 条实测教训：**CHANGELOG 先行，tag 后打**。
-> 后续发布在此章节继续补充实测教训（参考 ORM 项目 `docs/发布规范.md` §9 的 9 条 v5.0.0 教训）。
 
 **实测教训清单**：
 
@@ -527,7 +523,7 @@ git commit -m "功能：xxx + 升版本 preview.2"
 
 ```bash
 # 移除 VersionSuffix，升 VersionPatch
-# <VersionPrefix>1.1.0</VersionPrefix> → 1.0.1
+# <VersionPrefix>1.0.0</VersionPrefix> → 1.0.1
 # 删除 <VersionSuffix>preview.N</VersionSuffix>
 ```
 
