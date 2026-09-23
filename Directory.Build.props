@@ -27,7 +27,13 @@
       CA2007  ConfigureAwait(false) — DDD 框架不绑定 SynchronizationContext，库代码不应 ConfigureAwait(true)（默认）。全层已显式 ConfigureAwait(false)，此规则噪声大于价值
       CA1307  指定 StringComparison — 已在关键路径用 StringComparison.Ordinal，剩余字符串比较为显示/日志场景，文化敏感可接受
       CA1305  指定 IFormatProvider — Ulid.Parse 在 EFCore/Dapper/PalORM/Projections 多项目用于解析持久化标识符，标识符格式与区域设置无关；逐处传递 InvariantCulture 的收益低于噪声（ITM-161 实测全解决方案 build 需要此抑制）
-      CA2100  SQL 注入审查 — 所有 SQL 通过 SqlTemplates 常量 + Dapper 参数化，无字符串拼接注入风险
+      CA2100  SQL 注入审查 — 值侧一律参数化（SqlTemplates 常量 + `@params` / PalORM FormattableString）；
+              标识符侧确有字符串插值（如 DapperBulkCopy 拼表名/列名、PostgreSqlSoftDelete 拼
+              UPDATE），但两条路径都在**公共入口**做严格标识符校验/转义后才拼接
+              （DapperBulkCopy.BulkInsertAsync → ValidateIdentifier/ValidateColumns：
+              首字符须字母或下划线、其余字母数字下划线、拒绝任意 SQL 片段；PostgreSqlSoftDelete
+              对 table/column 走 Escape）。2026-09-22 T-16 勘正：原文"无字符串拼接注入风险"
+              失实——存在拼接，安全性来自入口校验而非"无拼接"。
       CA2016  CancellationToken 传递 — 少数 fire-and-forget 后台路径有意不传递 ct（如 PeriodicTimer 独立取消）
       CA1721  属性名与类型名冲突 — 如 OutboxMessage.Status / OutboxStatus，领域语义优先于命名规则
       CA1512  ThrowHelpers 替代 throw new — 框架需携带上下文信息，ArgumentException.ThrowIfNullOrWhiteSpace 已在适用处使用
