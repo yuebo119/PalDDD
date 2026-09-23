@@ -26,12 +26,21 @@ T-13 的验收（计划原文）："同一套断言跑 InMemory/Dapper/Sqlite/Pa
 | PalORM | **放行**，且受 affected-rows 门控（fencing 最强） | `OutboxStore.cs` `MarkProcessed` Remarks：ITM-269 声明 |
 | Dapper | **放行**，但"内存侧仅清租约字段不回写 Status"（fencing 弱于 PalORM 的 affected 门控） | 同上（ITM-272 **勘正 Dapper 阵营**——原声明把 Dapper 与 PalORM 并列，实测更弱） |
 | InMemory | **拒绝**——引用守卫静默 no-op、零变异、零报错 | 同上 |
-| EF | **待核实** | 实现存在于 `src/PalDDD.Transactions.EFCore/OutboxDbContext.cs:116`，本轮未展开读取（见 §四） |
+| EF | **放行**，附两道守卫：须仍为 `Pending`（v43 P2 终态守卫）且 `RetryCount` 与入参快照一致（v30/v33 P3）；持租分支另以 `LockedUntil` 作 **fencing token**（免 DDL 加列） | `OutboxDbContext.cs:110-114`（Remarks）+ `:116-154`（实现，本轮已读） |
 
-**契约要求（目标语义，T-15 执行）**：处理管线一律走 `LeasePendingMessagesAsync` 返回的租约；
-`MarkProcessed` 对未租约消息应**显式失败**（而非放行或静默 no-op）——InMemory 的"静默 no-op"
-是本仓明令的反模式（判据：若它是无声 no-op，任何可观察输出会不同吗）。例外保留：租约已过期
-且未被他人重租的消息经 token 分支仍可标记成功（原 worker 过期后完成属合理语义）。
+**格局修正（本轮读 EF 实现后）**：这不是"三栈分歧"，而是 **PalORM / Dapper / EF 三栈一致
+放行（各带门控）+ InMemory 单独拒绝（静默 no-op）**。这一修正**改变了 T-15 的方向**——
+
+**契约要求（目标语义，T-15 执行）**：以三栈既有的**"门控放行"为规范**，而不是让三栈改成拒绝：
+
+- PalORM：affected-rows 门控（fencing 最强）—— 规范形态
+- EF：`LockedUntil` fencing token + 终态守卫 + RetryCount 快照守卫 —— 已达标
+- Dapper：**弱项**，"内存侧仅清租约字段不回写 Status"（ITM-272）—— **需补齐门控**
+- InMemory：**唯一异类**，把"静默 no-op 拒绝"改为**显式失败**（本仓明令静默 no-op 是反模式，
+  判据：若它是无声 no-op，任何可观察输出会不同吗）
+
+即 T-15 的实际改动面是 **1 栈补齐门控（Dapper）+ 1 栈改显式（InMemory）**，而非"四栈统一"。
+例外保留：租约已过期且未被他人重租的消息经 token 分支仍可标记成功（原 worker 过期后完成属合理语义）。
 
 ### 2.2 `SaveChangesAsync()` —— 同一接口名下的语义
 
@@ -72,8 +81,8 @@ T-13 的验收（计划原文）："同一套断言跑 InMemory/Dapper/Sqlite/Pa
 
 ## 四、未核实项（诚实声明）
 
-- **EF 的 `MarkProcessed` 对未租约消息的行为**：本轮未读取实现（预算所限）。**它是矩阵里
-  唯一的空格**，T-15 开工前必须先补这一格——否则"统一到最强语义"会漏掉一栈。
+- ~~EF 的 `MarkProcessed` 对未租约消息的行为~~：**已于本轮补齐**（放行 + 终态/快照守卫 +
+  `LockedUntil` fencing token，见 §2.1）。**矩阵已无空格。**
 - **SQLite 栈**：矩阵按"方言栈"归类（Dapper/PalORM 各有 Sqlite 方言），未单列——其行为
   应与其所属栈一致，但**未经逐方言核实**。
 - 本矩阵全部内容来自**代码内既有声明**（ITM-269/ITM-272/ADR-024），未做运行期实测；
