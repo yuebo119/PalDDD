@@ -91,7 +91,7 @@ var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
     ["gate-lite"] = "根目录快速门禁（缺 src/ fail-closed）",
     ["verify-conventions"] = "V5 TODO / V8 模板段 / V9 命令引用 / V10 文档互链 / V11 决策文档 / V12 私网 IP",
     ["ci-coverage"] = "覆盖率阈值比较方向 / NaN / 合并报告缺失（三者 fail-closed）",
-    ["gate"] = "G22 工作树清洁 / G23 API 快照↔CHANGELOG / G24 路径分隔符归一化",
+    ["gate"] = "G22 工作树清洁 / G23 快照↔CHANGELOG 同提交耦合（暂存/发布窗口/HEAD~1 三级变更集口径，含快照在更早提交而末提交只补 CHANGELOG 的跨提交洗白形态） / G24 路径分隔符归一化",
     ["tech-debt"] = "Obsolete / TODO-HACK-FIXME / Console 于 src / 空 catch / tab / 超长行 / 测试数 / 版本统一 / slnx 成员",
     ["doc-consistency"] = "D7 .ai/README.md 文件地图（其余 D1-D6/D8-D12 已下沉 C# 测试）",
     ["test-gate"] = "T1-T12 测试规范 / T-DEF-1 薄壳缺失 / T-DEF-4 CI job timeout / OSC 同测试翻转",
@@ -362,6 +362,30 @@ var probes = new List<Probe>
             return [];   // 故意不暂存 → G22 命中
         }),
     new(
+        Name: "gate 拒绝快照变更无同提交 CHANGELOG（G23——跨提交洗白形态，2026-09-25 增）",
+        Gate: "gate",
+        ExpectExit: 1,
+        MustContainInStdout: "PDDD-G23",
+        CopyScriptIntoIsolation: true,
+        CommitBeforeRun: true,
+        Setup: dir =>
+        {
+            // 构造「快照变更 + CHANGELOG 未变更 + 事件只发生在最后一次提交」的
+            // **已提交**夹具（G23 已提交路径的判定对象）：
+            //   提交1 仅基座（slnx + .gitignore + gate.cs 复制件——复制件若留在暂存集，
+            //     gate 的暂存优先口径会连它一起当变更集，注入的快照提交反而看不到）；
+            //   提交2 只加公共 API 快照（test/.../Snapshots/core-packages-public-api.txt），
+            //     CHANGELOG 不出现——HEAD~1..HEAD 树差里快照在、CHANGELOG 不在。
+            // 注意不打 tag：隔离夹具无版本 tag 时 gate 回落 HEAD~1..HEAD（第三次回落），
+            // 覆盖「取不到 tag」分支；tag 优先分支由 selftest 的 ResolveChangeRange
+            // 正例钉住（纯函数，无需 git 夹具）。
+            var snapDir = Path.Combine(dir, "test", "PalDDD.Core.Tests", "Snapshots");
+            Directory.CreateDirectory(snapDir);
+            File.WriteAllText(Path.Combine(snapDir, "core-packages-public-api.txt"),
+                "PalDDD public API snapshot (probe fixture)\n");
+            return ["test/PalDDD.Core.Tests/Snapshots/core-packages-public-api.txt"];
+        }),
+    new(
         Name: "gate 放行干净输入（负向对照）",
         Gate: "gate",
         ExpectExit: 0,
@@ -500,7 +524,12 @@ static (bool Ok, string Detail) RunProbe(string repoRoot, Probe probe)
 
         var staged = probe.Setup(tmp);
         // 显式暂存——绝不用 `git add -A`（见文件头隔离纪律）
-        foreach (var f in staged) RunGit(tmp, $"add -- {f}");
+        // CommitBeforeRun 的探针（G23 已提交路径）例外：Setup 注入文件必须等基座提交后
+        // 再单独提交，才能构造「最后一次提交只改该文件」的形态——混进基座会让 gate 的
+        // HEAD~1..HEAD 树差里同时出现 slnx/.gitignore/gate.cs 复制件，虽不直接破坏判定，
+        // 但"事件只发生在最后一次提交"的语义不纯（旧口径只查 HEAD~1..HEAD，混入即失真）。
+        if (!probe.CommitBeforeRun)
+            foreach (var f in staged) RunGit(tmp, $"add -- {f}");
         // 仓库根锚默认入索引；SkipSlnxStaging 的探针（如 secret-scan 空输入）需要
         // 可扫描集为空——自 2026-09-20 起 .slnx 已进入 secret-scan 扫描面，不跳过
         // 则该探针的可扫描集恒非 1，"零可扫描文件"场景无法构造。
@@ -517,7 +546,7 @@ static (bool Ok, string Detail) RunProbe(string repoRoot, Probe probe)
         // T-05（2026-09-22）：CallerFilePath 系门禁（gate / tech-debt / doc-consistency /
         // test-gate）用**源文件位置**向上找仓库根，与 cwd 无关——直接跑会扫到脚本所在的
         // 真实仓库，注入被完全忽略（实测：在隔离目录注入未跟踪文件与 TODO 注释，三门禁仍全绿）。
-        // 把脚本复制进隔离目录再跑，CallerFilePath 即解析到隔离目录。复制件必须暂存：
+        // 把脚本复制进隔离目录再跑，CallerFilePath 即解析到隔离目录。复制件必须进基座提交：
         // 否则它自己就是"未跟踪文件"，会让 gate 的 G22 探针因错误原因变红。
         var effectiveGatePath = gatePath;
         if (probe.CopyScriptIntoIsolation)
@@ -525,6 +554,18 @@ static (bool Ok, string Detail) RunProbe(string repoRoot, Probe probe)
             effectiveGatePath = Path.Combine(tmp, Path.GetFileName(gatePath));
             File.Copy(gatePath, effectiveGatePath, overwrite: true);
             RunGit(tmp, $"add -- {Path.GetFileName(gatePath)}");
+        }
+
+        // CommitBeforeRun（2026-09-25 增，服务 G23 已提交路径探针）：先把基座（slnx +
+        // .gitignore + gate.cs 复制件）落成提交1，再把 Setup 注入文件单独提交为提交2
+        // ——gate 的「暂存优先」口径会把任何未提交暂存项当变更集，注入文件若留在暂存集，
+        // gate 判定的是暂存内容而不是提交历史；两次提交则保证 HEAD~1..HEAD 树差里
+        // **只有**注入文件（"事件只发生在最后一次提交"）。提交身份已在上方 config 配好。
+        if (probe.CommitBeforeRun)
+        {
+            RunGit(tmp, "commit -q -m fixture-base");
+            foreach (var f in staged) RunGit(tmp, $"add -- {f}");
+            if (staged.Length > 0) RunGit(tmp, "commit -q -m fixture-change");
         }
 
         var (exitCode, stdout) = RunGate(effectiveGatePath, tmp, probe.ExtraArgs);
@@ -791,4 +832,5 @@ internal sealed record Probe(
     Func<string, string[]> Setup,
     string? ExtraArgs = null,
     bool SkipSlnxStaging = false,
-    bool CopyScriptIntoIsolation = false);
+    bool CopyScriptIntoIsolation = false,
+    bool CommitBeforeRun = false);

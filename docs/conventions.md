@@ -812,6 +812,14 @@ for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' 
 # 3. 公共 API 变更时更新快照（filter 需在 -- 之后传递给 MTP）
 PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
 
+# 3.5 快照变更必须同提交带 CHANGELOG.md——G23（BINC-1 三真源：快照+CHANGELOG+二进制兼容评估）
+# 判定口径（2026-09-25 修订为发布语义）：G23 的变更集按发布范围取——暂存集（pre-commit）
+# > HEAD 可达的最近 v* tag 到 HEAD 的全部提交（git describe --tags --abbrev=0 --match v*）>
+# HEAD~1..HEAD（取不到 tag 时回落）；且判定是**逐提交同集耦合**：窗口内任一提交改了快照
+# 而未在同一提交改 CHANGELOG.md 即 FAIL。旧口径（只看最后一次提交的合计）下，快照提交未带
+# CHANGELOG 触发的红可被随后一个只补 CHANGELOG 的提交洗白（本仓 v3.1.0 窗口实证）。
+dotnet run scripts/gate.cs -- --allow-dirty
+
 # 4. 规范验证脚本（秒级）
 dotnet run scripts/verify-conventions.cs
 ```
