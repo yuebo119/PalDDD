@@ -54,8 +54,10 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 矩阵五态：`OK`（接线且有自证）· `UNVERIFIED`（接线但无自证 = 退化无人知）· `TOOL`（未接线但按设计手工调用）· `UNWIRED-GATE`（应接线未接 = 真缺口）· `REVIEW`（未接线且未归类，须归入前两者之一）。
 **新增脚本必须归入 TOOL 或 UNWIRED-GATE**——`REVIEW` 桶非空即表示有脚本未经分类。
 **退出码（2026-09-22 T-03 增）**：`REVIEW` 桶非空 → 退出 1，已接 CI（矩阵自身的退化防线）。此前矩阵恒 `return 0`，退化只能靠人工读。`UNWIRED-GATE` 单列不阻断——待接门禁属人工裁决，登记 `intendedWire` 或改判 `TOOL`。
+**G23 判定口径（2026-09-25 修订为发布语义）**：`gate.cs` 的 G23（公共 API 快照 ↔ CHANGELOG 同步，BINC-1 三真源）变更集按发布范围取——暂存集（pre-commit 语义）优先；否则 HEAD 可达的最近 `v*` tag 到 HEAD 之间的全部提交（`git describe --tags --abbrev=0 --match v*`，describe 而非全局 `git tag --sort`：只认 HEAD 可达的"最近"tag，旧分支上取全局最高版本会拿到不可达基线）；取不到 tag（孤儿/浅克隆/无 tag）回落 `HEAD~1..HEAD`，皆不可解析则显式 SKIP。判定为**逐提交同集耦合**：窗口内任一提交改了快照而未**同一提交**改 `CHANGELOG.md` 即 FAIL。修前口径（只看最后一次提交的合计）可被"补一个只改 CHANGELOG 的提交"无条件洗白——本仓实证：v3.0.0→v3.1.0 窗口 `11a4f2d` 只改快照、`b0feaa7` 只补 CHANGELOG，旧口径在补记提交上转绿。G22 仍按工作树判定、G24 同步扩到同一窗口（WARN 级，净差新增行）。
 **接线判定口径（2026-09-22 T-36 修）**：按「可执行调用形态」匹配且要求名字边界——修前 `encoding-gate.cs` 会把 `gate` 误判为已接线（子串假阳性），即"检测假接线的工具自身有假接线"。
 **探针隔离策略（2026-09-22 T-05 增）**：两种根解析策略决定门禁能否被隔离探针覆盖——**CWD 系**（`secret-scan`/`test-change-guard`/`verify-conventions`/`dapper-param-guard`）直接从隔离目录运行即可；**CallerFilePath 系**（`gate`/`tech-debt`/`doc-consistency`/`test-gate`）按**源文件位置**向上找仓库根，直接跑会扫到脚本所在的真实仓库、注入被完全忽略（实测：注入未跟踪文件与 TODO 注释后三门禁仍全绿）。此类探针须置 `CopyScriptIntoIsolation: true`，夹具会复制脚本进隔离目录并暂存（暂存是必需的：否则复制件自己就是"未跟踪 1"，会让 `gate` 的 G22 在干净输入下也变红，正向探针假绿）。
+**已提交历史夹具（2026-09-25 增，服务 G23）**：判定对象是提交历史而非暂存集时，探针还须置 `CommitBeforeRun: true`——夹具先落基座提交（slnx + .gitignore + gate.cs 复制件），再把注入文件单独提交为最后一次提交。不先提交会让 `gate` 的「暂存优先」口径把复制件与未提交注入都当变更集，注入的提交路径反而不可见。
 
 ### 新增/修改门禁的规程
 

@@ -5,9 +5,20 @@
 // （ArchitectureBoundaryTests 37 方法 + SourceCodeGuardTests 守卫 1-6），
 // 本脚本仅保留 C# 测试对 git 状态天然不可见的"变更集编排"三项，职责边界不变。
 //
-// 用法：dotnet run scripts/gate.cs -- [--allow-dirty]
+// 用法：dotnet run scripts/gate.cs -- [--allow-dirty] [--selftest]
 //   --allow-dirty：跳过 G22 工作树脏检查（与 bash 版同参同名）
+//   --selftest：判定逻辑单元自测（纯函数正负例，不触碰 git）
 // 退出码：0=通过（FAIL=0）；1=有 FAIL 项（WARN/SKIP 不阻断）。
+//
+// 变更集口径（2026-09-25 修订，发布语义）：
+//   G23/G24 的变更集不再只看最后一次提交，而是三级回落——① 有暂存 → --cached
+//   （pre-commit 语义优先）；② 否则 HEAD 可达的最近 v* tag → f"{tag}..HEAD"
+//   （发布语义：HEAD 到上一个版本 tag 之间的全部提交）；③ tag 不可解析
+//   （无 tag/浅克隆/孤儿分支）且 HEAD~1 可解析 → HEAD~1..HEAD（ITM-620 原回落）；
+//   ④ 皆不可解析 → 显式 SKIP。G23 判定随之从「范围合计」改为「逐提交同集耦合」
+//   （快照与 CHANGELOG 必须在同一提交/同一次暂存内同时出现）——范围合计形态可被
+//   「补一个只改 CHANGELOG 的提交」无条件洗白（本仓实证见 G23 段注释）。
+//   详见下方「变更集基线」与「PDDD-G23」两段注释。
 //
 // 等价迁移说明（相对 .ai/scripts/gate-check.sh）：
 //   1) git 调用改为 System.Diagnostics.Process（工作目录=仓库根）。仓库根从本 cs
@@ -103,41 +114,78 @@ else
     }
 }
 
-// ═══ 变更集基线（ITM-620 修复，2026-09-10）═══
-// G23/G24 优先本地暂存集（pre-commit 语义）；为空回退 HEAD~1..HEAD（CI/已提交场景）。
-// HEAD~1 不可解析（孤儿分支跟踪/初始提交/浅克隆 depth=1）时显式 SKIP（计入 WARNED）
-// ——不引入对 CI 环境变量的依赖（github.event.before 基线方案留待 CI workflow 改造）。
-string? diffRange;
-if (!string.IsNullOrWhiteSpace(Git("diff --cached --name-only").Output))
-    diffRange = "--cached";
-else if (Git("rev-parse --verify -q HEAD~1").ExitCode == 0)
-    diffRange = "HEAD~1..HEAD";
-else
-    diffRange = null;
+// ═══ 变更集基线（2026-09-25 修订为发布语义；ITM-620 于 2026-09-10 立基）═══
+// 三级回落，判定抽为纯函数 ResolveChangeRange（输入 = git 探测结果，输出 = 范围）：
+//   ① 暂存集非空 → "--cached"（pre-commit 语义优先：即将落盘的内容才是判定对象）
+//   ② 否则 HEAD 可达的最近 v* tag → f"{tag}..HEAD"（发布语义：HEAD 到上一个版本
+//      tag 之间的全部提交，而非只看最后一次提交——"只看最后一次"让快照提交未带
+//      CHANGELOG 触发的红可被随后一个只改 CHANGELOG 的提交洗白，G23 沦为可被
+//      「再提交一次」无条件绕过的装饰门禁，详见 PDDD-G23 段注释）
+//   ③ tag 不可解析（无 v* tag/浅克隆/孤儿分支）且 HEAD~1 可解析 → "HEAD~1..HEAD"
+//      （ITM-620 原回落：单棵树对一棵树，保留 merge 感知的树差形态）
+//   ④ 皆不可解析 → None → G23/G24 显式 SKIP（计入 WARNED，绝不假 PASS）
+// tag 探测用 describe --tags --abbrev=0 --match v*：describe 只返回 HEAD 可达的
+// tag（"最近"而非"全局最高版本"——在自旧 tag 拉出的分支上取全局最新 tag 会拿到
+// 不可达基线），--match v* 排除非版本 tag；describe 失败即视为无 tag，绝不报错。
+// describe 成功后仍以 rev-parse 复核一次（防非常规 tag 对象），不指向 commit 视同无 tag。
+var stagedNames = Git("diff --cached --name-only").Output;
+var describe = Git("describe --tags --abbrev=0 --match v*");
+string? releaseTag = describe.ExitCode == 0 && !string.IsNullOrWhiteSpace(describe.Output)
+    ? describe.Output.Trim()
+    : null;
+if (releaseTag is not null && Git($"rev-parse --verify --quiet {releaseTag}^{{commit}}").ExitCode != 0)
+    releaseTag = null;
 
-var changedFiles = diffRange is null ? "" : Git($"diff --name-only {diffRange}").Output;
-var changedDiff = diffRange is null ? "" : Git($"diff -U0 {diffRange}").Output;
+var range = ResolveChangeRange(
+    stagedNonEmpty: !string.IsNullOrWhiteSpace(stagedNames),
+    releaseTag: releaseTag,
+    headParentResolvable: Git("rev-parse --verify -q HEAD~1").ExitCode == 0);
+
+// 范围是否可解析的唯一判定点（G23/G24 共用——同一条件不写两遍，改口径只改一处）
+bool hasChangeSet = range.Kind != ChangeRangeKind.None;
+
+// G23 的纯函数输入：逐提交变更文件清单文本（段分隔符 \x1e = git --format=%x1e）。
+//   Release 模式**必须逐提交**（git log --no-merges --name-only）——树差把整个窗口
+//     汇成一份，"快照提交未带 CHANGELOG"与"随后补记的 CHANGELOG 提交"同窗即被洗白
+//     （本仓实证：v3.1.0 窗口 11a4f2d 只改快照、b0feaa7 只补 CHANGELOG）；
+//   Staged/Head 模式是单一判定单元（暂存集 / 一棵树对一棵树），拼为单记录文本。
+// G24 的纯函数输入：范围内的新增行 diff（-U0），与 G23 共用同一范围口径。
+string? setsText = range.Kind switch
+{
+    ChangeRangeKind.Staged => SingleSetText("staged", stagedNames),
+    ChangeRangeKind.Head => SingleSetText("HEAD~1..HEAD", Git("diff --name-only HEAD~1..HEAD").Output),
+    ChangeRangeKind.Release => Git($"log --no-merges --name-only --format={GateAnchors.LogSetFormat} {range.Spec}").Output,
+    _ => null,
+};
+var changedDiff = hasChangeSet ? Git($"diff -U0 {range.Spec}").Output : "";
 
 // ═══ PDDD-G23：公共 API 变更三件套（lessons XV BINC-1）═══
-// 快照（Snapshots/core-packages-public-api.txt）变更的变更集必须同时包含 CHANGELOG.md
-// ——公共 API 变更不记录 = 三个真源（代码/快照/CHANGELOG）失同步。
-if (diffRange is null)
+// 判定口径（2026-09-25 修订为「逐提交同集耦合」）：变更集（发布窗口 / 暂存集）内
+// **任一提交**改了公共 API 快照（Snapshots/core-packages-public-api.txt，子串匹配）
+// 而未在**同一提交**改 CHANGELOG.md（整行匹配）→ FAIL。
+// 为什么不能是范围合计（旧口径，ITM-620 后长期如此）：合计只问"窗口内两样都在"，
+// 于是"快照提交未带 CHANGELOG → G23 红"可被随后一个**只改 CHANGELOG** 的提交洗白
+// ——本仓实证：v3.0.0→v3.1.0 窗口内 11a4f2d 只改快照（API 版本行），b0feaa7 只补
+// CHANGELOG（提交信息自述 BINC-1 三真源），合计口径在 b0feaa7 上转绿。门禁因此没有
+// 真正保证快照变更在发布前被记录。三真源 = 快照 + CHANGELOG + 二进制兼容评估，
+// 必须同集落盘（同一提交 / 同一次暂存）才算记录。
+if (!hasChangeSet)
 {
-    Console.WriteLine($"{Yellow}SKIP{Nc} PDDD-G23: 变更集基线不可解析（无暂存且 HEAD~1 不存在——孤儿分支/初始提交/浅克隆），不判定快照同步（非 PASS）");
+    Console.WriteLine($"{Yellow}SKIP{Nc} PDDD-G23: 变更集基线不可解析（无暂存、无可达 v* tag、HEAD~1 不可解析——孤儿分支/初始提交/浅克隆），不判定快照同步（非 PASS）");
     warned++;
 }
 else
 {
-    // grep -c 无锚子串匹配 / ^CHANGELOG.md$ 整行匹配——口径与 bash 一致
-    var (snapCount, changelogCount) = G23Counts(changedFiles);
-    if (snapCount > 0 && changelogCount == 0)
+    // 快照子串匹配 / CHANGELOG 整行匹配的口径与 bash 一致，抽在纯函数 G23Judge 内
+    var (violates, offender) = G23Judge(setsText!);
+    if (violates)
     {
-        Console.WriteLine($"{Red}FAIL{Nc} PDDD-G23: 公共 API 快照已变更但 CHANGELOG.md 未同步（BINC-1：发布后 API 变更三件套=快照+CHANGELOG+二进制兼容评估）");
+        Console.WriteLine($"{Red}FAIL{Nc} PDDD-G23: 公共 API 快照变更未与 CHANGELOG.md 同提交记录（提交 {offender}；BINC-1：快照+CHANGELOG+二进制兼容评估三真源须同集，窗口合计口径可被补记提交洗白）");
         failedCount++;
     }
     else
     {
-        Console.WriteLine($"{Green}PASS{Nc} PDDD-G23: 公共 API 快照与 CHANGELOG 同步（或本次无快照变更）");
+        Console.WriteLine($"{Green}PASS{Nc} PDDD-G23: 公共 API 快照与 CHANGELOG 同提交同步（或本次无快照变更）");
         passed++;
     }
 }
@@ -145,14 +193,16 @@ else
 // ═══ PDDD-G24：跨平台路径守卫（lessons XV PLAT-1）═══
 // 新增的 Path.GetFileName*/GetFullPath 调用若处理 csproj/XML 等文档路径，必须先归一化
 // 分隔符——Unix 上反斜杠不是分隔符，Windows 验证过的守卫在 CI (ubuntu) 上可能永不命中。
-// 警告级（Windows 专属工具代码不误伤）。
+// 警告级（Windows 专属工具代码不误伤）。变更集口径与 G23 完全一致（同一次范围解析）：
+// 暂存 → 发布窗口 tag..HEAD → HEAD~1..HEAD；窗口变大只增加召回面，不改变判定形状
+// （hits>0 且归一化字面同在窗口内仍 PASS），且本项为 WARN 级不阻断。
 //
 // ⚠️ 保真复刻说明（MIG-012-A1 迁移时发现的原 bash 缺陷）：
 // bash 版模式 "Replace('\\', '/')" 经双引号转义为 Replace('\', '/')，GNU BRE 把
 // \' 解析为字面单引号 → 实际匹配的是空参数形态 Replace('', '/')，与 C# 源码真实
 // 归一化写法 Replace('\\', '/') 错位——实际恒不命中，效果 = 新增 Path.GetFileName*
 // 即恒 WARN。本复刻保持字面匹配（行为等价），是否修复为真实检测交主线程裁决。
-if (diffRange is null)
+if (!hasChangeSet)
 {
     Console.WriteLine($"{Yellow}SKIP{Nc} PDDD-G24: 变更集基线不可解析（无暂存且 HEAD~1 不存在——孤儿分支/初始提交/浅克隆），不判定路径归一化（非 PASS）");
     warned++;
@@ -237,16 +287,59 @@ static List<string> ToLines(string output) =>
 static int CountNonEmptyLines(string output) =>
     ToLines(output).Count(l => l.Length > 0);
 
-// ══════════════ 判定计数（纯函数，供 --selftest 覆盖）══════════════
+// ══════════════ 判定（纯函数，供 --selftest 覆盖）══════════════
+// 注：锚点常量 / 范围枚举 / 记录类型等**成员声明**集中在文件末尾——顶级语句与局部
+// 函数必须位于类型声明之前（CS8803），故不插在局部函数之间。
 
-// G23 计数：快照路径**子串**匹配（grep -c 无锚）、CHANGELOG **整行**匹配（^CHANGELOG.md$）。
-// 两者口径不同是原 bash 行为，分别钉住。
-static (int SnapCount, int ChangelogCount) G23Counts(string changedFilesOutput)
+// ── 变更集范围解析（G23/G24 共用；三级回落语义见上方「变更集基线」注释）──
+static ChangeRange ResolveChangeRange(bool stagedNonEmpty, string? releaseTag, bool headParentResolvable)
 {
-    var lines = ToLines(changedFilesOutput);
-    var snap = lines.Count(l => l.Contains("Snapshots/core-packages-public-api.txt"));
-    var changelog = lines.Count(l => l == "CHANGELOG.md");
-    return (snap, changelog);
+    // ① 暂存优先（pre-commit 语义）：tag 范围只覆盖已提交内容，看不到即将落盘的改动
+    if (stagedNonEmpty) return new ChangeRange(ChangeRangeKind.Staged, "--cached");
+    // ② 发布语义：HEAD 到 HEAD 可达的最近 v* tag 之间的全部提交
+    if (!string.IsNullOrWhiteSpace(releaseTag))
+        return new ChangeRange(ChangeRangeKind.Release, $"{releaseTag.Trim()}..HEAD");
+    // ③ ITM-620 原回落：单棵树对一棵树（merge 感知）
+    if (headParentResolvable) return new ChangeRange(ChangeRangeKind.Head, "HEAD~1..HEAD");
+    // ④ 皆不可解析：上层显式 SKIP（绝不假 PASS）
+    return ChangeRange.None;
+}
+
+// ── G23 逐提交同集耦合判定（BINC-1；锚点常量与记录类型见文件末尾 GateAnchors）──
+
+// 单记录文本（Staged / Head 模式用）：首行必须是记录标签——解析器取每段首行作为
+// 记录身份、不参与口径判定，缺了它第一行文件会被误当标签而漏判。
+static string SingleSetText(string label, string nameOnlyOutput) => $"{GateAnchors.SetSeparator}{label}\n{nameOnlyOutput}";
+
+// 解析逐提交清单文本 → 记录列表。空行跳过（git 在格式行与文件行之间有空行；
+// merge 提交已被 --no-merges 排除；空提交/仅 mode 变更产生无文件记录，天然不违规）。
+static List<CommitSet> ParseCommitSets(string setsText)
+{
+    var sets = new List<CommitSet>();
+    foreach (var segment in setsText.Split(GateAnchors.SetSeparator))
+    {
+        var lines = ToLines(segment).Where(l => l.Length > 0).ToList();
+        if (lines.Count == 0) continue;
+        sets.Add(new CommitSet(lines[0], lines.Skip(1).ToList()));
+    }
+    return sets;
+}
+
+// G23 判定（文本级入口）：输入 = 逐提交变更文件清单文本（changedFiles 文本的逐提交
+// 形态），配置 = 两个锚点口径。违规 = 任一记录改了快照而未**同记录**改 CHANGELOG，
+// 返回首个违规记录身份（提交 hash / "staged" / "HEAD~1..HEAD"）供 FAIL 行定位。
+// 为什么逐记录而不是范围合计：合计口径下"快照提交未带 CHANGELOG"可被随后一个只改
+// CHANGELOG 的提交洗白（本仓 v3.1.0 窗口实证，见 PDDD-G23 段注释）。
+static (bool Violates, string Offender) G23Judge(string setsText,
+    string snapshotMarker = GateAnchors.Snapshot, string changelogMarker = GateAnchors.Changelog)
+{
+    foreach (var (hash, files) in ParseCommitSets(setsText))
+    {
+        var snap = files.Count(f => f.Contains(snapshotMarker, StringComparison.Ordinal));
+        var changelog = files.Count(f => f == changelogMarker);
+        if (snap > 0 && changelog == 0) return (true, hash);
+    }
+    return (false, "");
 }
 
 // G24 计数：只看新增行（`+` 起首，含 `+++` 头行——与 bash grep "^+" 同口径），
@@ -278,22 +371,59 @@ static int SelfTest()
     Case("CountNonEmptyLines 忽略空行", CountNonEmptyLines("a\n\nb\n") == 2);
     Case("CountNonEmptyLines 空输出为 0", CountNonEmptyLines("") == 0);
 
-    // ── G23 ──
-    Case("G23 快照变更而无 CHANGELOG → (1,0) 应 FAIL",
-        G23Counts("test/PalDDD.Core.Tests/Snapshots/core-packages-public-api.txt\n") == (1, 0));
-    Case("G23 快照与 CHANGELOG 同行 → 应 PASS",
-        G23Counts("Snapshots/core-packages-public-api.txt\nCHANGELOG.md\n") == (1, 1));
-    Case("G23 仅 CHANGELOG → 应 PASS", G23Counts("CHANGELOG.md\n") == (0, 1));
-    Case("G23 无关变更 → 应 PASS", G23Counts("src/PalDDD.Core/X.cs\n") == (0, 0));
-    Case("G23 空输出 → 应 PASS", G23Counts("") == (0, 0));
-    // 口径差异（原 bash 行为）：快照是子串匹配，故更长的路径也命中
+    // ── G23（BINC-1 逐提交同集耦合）──
+    var rs = GateAnchors.SetSeparator;
+    // 正例：快照与 CHANGELOG 同集（同一提交 / 同一次暂存）
+    Case("G23 快照与 CHANGELOG 同提交 → PASS",
+        !G23Judge($"{rs}aaa\nSnapshots/core-packages-public-api.txt\nCHANGELOG.md\n").Violates);
+    Case("G23 仅 CHANGELOG → PASS", !G23Judge($"{rs}aaa\nCHANGELOG.md\n").Violates);
+    Case("G23 无关变更 → PASS", !G23Judge($"{rs}aaa\nsrc/PalDDD.Core/X.cs\n").Violates);
+    Case("G23 空输出 → PASS", !G23Judge("").Violates);
+    // 负例：快照在同集、CHANGELOG 不在同集
+    Case("G23 快照变更无同提交 CHANGELOG → FAIL",
+        G23Judge($"{rs}aaa\ntest/PalDDD.Core.Tests/Snapshots/core-packages-public-api.txt\n").Violates);
+    // 负例（本仓真实事故形态）：快照变更在更早提交、最后一次提交只改 CHANGELOG。
+    // 旧口径（窗口合计两样都在）在补记提交上转绿；逐提交同集口径必须红在快照提交上。
+    Case("G23 快照在更早提交、末提交只补 CHANGELOG → FAIL（跨提交洗白形态，旧口径放过）",
+        G23Judge($"{rs}11a4f2d\ntest/PalDDD.Core.Tests/Snapshots/core-packages-public-api.txt\n{rs}b0feaa7\nCHANGELOG.md\n") is (true, "11a4f2d"));
+    // 负例：多提交中任一快照提交缺同集 CHANGELOG，且报出该提交
+    Case("G23 多提交中间快照提交缺 CHANGELOG → FAIL 且定位到该提交",
+        G23Judge($"{rs}a1\nsrc/A.cs\n{rs}b2\nCHANGELOG.md\n{rs}c3\nSnapshots/core-packages-public-api.txt\n") is (true, "c3"));
+    // 正例：单记录文本（staged / HEAD~1 树差）——首行标签不参与口径判定
+    Case("G23 单记录文本（staged 标签行不误判）",
+        !G23Judge(SingleSetText("staged", "Snapshots/core-packages-public-api.txt\nCHANGELOG.md\n")).Violates);
+    Case("G23 单记录文本缺 CHANGELOG → FAIL",
+        G23Judge(SingleSetText("HEAD~1..HEAD", "Snapshots/core-packages-public-api.txt\n")) is (true, "HEAD~1..HEAD"));
+    // 口径差异（钉住原 bash 行为）：快照子串匹配——更长路径亦命中
     Case("G23 快照为子串口径（更长路径亦命中）",
-        G23Counts("docs/backup/Snapshots/core-packages-public-api.txt\n") == (1, 0));
-    // 口径差异：CHANGELOG 是整行匹配，故带目录前缀的同名文件不计入
+        G23Judge($"{rs}aaa\ndocs/backup/Snapshots/core-packages-public-api.txt\n").Violates);
+    // 口径差异：CHANGELOG 整行匹配——带目录前缀的同名文件不计入（快照提交仍判违规）
     Case("G23 CHANGELOG 为整行口径（docs/CHANGELOG.md 不计入）",
-        G23Counts("docs/CHANGELOG.md\n") == (0, 0));
-    Case("G23 多行计数正确",
-        G23Counts("Snapshots/core-packages-public-api.txt\nSnapshots/core-packages-public-api.txt\nCHANGELOG.md\n") == (2, 1));
+        G23Judge($"{rs}aaa\nSnapshots/core-packages-public-api.txt\ndocs/CHANGELOG.md\n").Violates);
+
+    // ── 变更集范围解析（三级回落，发布语义）──
+    Case("范围：暂存优先（有暂存即 --cached，tag 不参与）",
+        ResolveChangeRange(stagedNonEmpty: true, releaseTag: "v3.1.0", headParentResolvable: true)
+            == new ChangeRange(ChangeRangeKind.Staged, "--cached"));
+    Case("范围：无暂存 + 有 tag → tag..HEAD（发布语义）",
+        ResolveChangeRange(false, "v3.1.0", true) == new ChangeRange(ChangeRangeKind.Release, "v3.1.0..HEAD"));
+    Case("范围：无暂存 + 无 tag → HEAD~1..HEAD（ITM-620 回落）",
+        ResolveChangeRange(false, null, true) == new ChangeRange(ChangeRangeKind.Head, "HEAD~1..HEAD"));
+    Case("范围：无暂存 + 无 tag + HEAD~1 不可解析 → None（上层 SKIP，绝不假 PASS）",
+        ResolveChangeRange(false, null, false) == new ChangeRange(ChangeRangeKind.None, ""));
+    Case("范围：空白 tag 视同无 tag",
+        ResolveChangeRange(false, "   ", true) == new ChangeRange(ChangeRangeKind.Head, "HEAD~1..HEAD"));
+    Case("范围：tag 前后空白被裁剪",
+        ResolveChangeRange(false, "  v3.1.0\n", true) == new ChangeRange(ChangeRangeKind.Release, "v3.1.0..HEAD"));
+    // 解析：逐提交分段 + 单记录文本
+    var parsed = ParseCommitSets($"{rs}aaa\nsrc/A.cs\n{rs}bbb\nCHANGELOG.md\n");
+    Case("解析：逐提交分段（首行 hash + 文件行）",
+        parsed.Count == 2 && parsed[0].Hash == "aaa" && parsed[0].Files.Count == 1
+        && parsed[0].Files[0] == "src/A.cs" && parsed[1].Hash == "bbb" && parsed[1].Files[0] == "CHANGELOG.md");
+    var single = ParseCommitSets(SingleSetText("staged", "a.cs\nb.cs\n"));
+    Case("解析：单记录文本首行是标签、其余是文件",
+        single.Count == 1 && single[0].Hash == "staged" && single[0].Files.Count == 2 && single[0].Files[1] == "b.cs");
+    Case("解析：空文本 → 无记录", ParseCommitSets("").Count == 0);
 
     // ── G24 ──
     // 病态样本运行期拼装（自指陷阱一般化规则）：本行若字面写出被检测形态，
@@ -318,3 +448,37 @@ static int SelfTest()
     Console.WriteLine($"SELFTEST {passedCount}/{total} 通过");
     return passedCount == total ? 0 : 1;
 }
+
+// ══════════════ 成员声明区 ══════════════
+// 集中置于文件末尾：顶级语句与局部函数必须位于类型声明之前（CS8803）；
+// 常量收进静态类（顶级语句之后的裸 const 会成为局部量，局部函数引用即 CS0841）。
+
+// G23 三真源锚点（BINC-1）：
+//   公共 API 快照路径——**子串**匹配，钉住 bash grep -c 无锚口径（更长路径如
+//     docs/backup/Snapshots/core-packages-public-api.txt 同样命中）；
+//   CHANGELOG 根文件——**整行**匹配，钉住 bash ^CHANGELOG.md$ 口径
+//     （docs/CHANGELOG.md 是另一份文档，不计入）。
+static class GateAnchors
+{
+    public const string Snapshot = "Snapshots/core-packages-public-api.txt";
+    public const string Changelog = "CHANGELOG.md";
+    // 段分隔符 RS (0x1e)：git --format=%x1e 每个提交输出一个；拼单记录文本时同样以它开头
+    public const string SetSeparator = "\x1e";
+    // git log 的格式串（%x1e 分段 + %H 记录身份）——传给 git 的字面量，不经过 shell
+    public const string LogSetFormat = "%x1e%H";
+}
+
+// 变更集范围（G23/G24 共用；三级回落语义见上方「变更集基线」注释）：
+//   Staged  = --cached（暂存集，pre-commit 语义）
+//   Release = v3.1.0..HEAD（发布窗口：HEAD 到 HEAD 可达的最近 v* tag）
+//   Head    = HEAD~1..HEAD（无 tag 时的 ITM-620 回落，树差形态）
+//   None    = 皆不可解析（上层显式 SKIP，绝不假 PASS）
+enum ChangeRangeKind { Staged, Release, Head, None }
+
+sealed record ChangeRange(ChangeRangeKind Kind, string Spec)
+{
+    public static readonly ChangeRange None = new(ChangeRangeKind.None, "");
+}
+
+// 一个提交（或一次暂存）内的变更文件清单；Hash 是提交 hash 或记录标签。
+sealed record CommitSet(string Hash, IReadOnlyList<string> Files);

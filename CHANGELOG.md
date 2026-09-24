@@ -12,6 +12,10 @@
 
 ## [Unreleased]
 
+### Changed 变更
+
+- **公开 API 快照与发布记录的同步判定收紧**：此前只在「最后一次提交」的范围内校验公开 API 快照变更是否同步记录了 CHANGELOG——那意味着只要在快照变更之后再补一个只改 CHANGELOG 的提交，这道校验就被绕过（本仓 3.1.0 首发时实际发生过这种洗白）。现改为按发布窗口（当前提交到上一个版本 tag 之间）**逐个提交**校验：哪个提交动了公开 API 快照却没同步记录，就报出哪个提交。影响仅限构建与评审纪律——包内容、运行时行为、公共 API 表面均不变。
+
 ### Documentation 文档
 
 - **全仓文档与真实实现对齐**（3.1.0 之后口径）：架构文档的质量体系版本、诊断数 21→23、prompt 模板数 9→10、Outbox 指标补 `paldd.outbox.dead`/`persist_failed`、TUnit/MTP 版本、GitHub Actions 模板改为 ci.yml 实际形态、CI 触发表对齐 4 job 实态、测试计数口径 1379→1490（2026-09-23 全量实测 1430 通过 + 60 项无 Docker 跳过）；补写 3.1.0 消费者可见变更（Outbox 三栈对齐、EventLog 写路径零拷贝）与 3.0.0 的 UoW fail-fast / `MaxDegreeOfParallelism` 警示；`IPalOutboxStore` 的 v4.0 预告与 `PalDiagnostics` 的计数器勘正注释同步更新。
