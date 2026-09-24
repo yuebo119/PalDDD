@@ -31,7 +31,7 @@ public class PalOrmResilienceWiringTests
         await using var sp = BuildProvider(null);
         var session = sp.GetRequiredService<DataSession<SqliteProvider>>();
 
-        var one = await session.ScalarAsync<long>($"SELECT 1", default);
+        var one = await session.ScalarAsync<long>($"SELECT 1", ct: default);
         await Assert.That(one).IsEqualTo(1L);
     }
 
@@ -49,7 +49,7 @@ public class PalOrmResilienceWiringTests
 
         await Assert.That(applied).IsTrue();
 
-        var one = await session.ScalarAsync<long>($"SELECT 1", default);
+        var one = await session.ScalarAsync<long>($"SELECT 1", ct: default);
         await Assert.That(one).IsEqualTo(1L);
     }
 
@@ -72,7 +72,7 @@ public class PalOrmResilienceWiringTests
             $"INSERT INTO resilience_probe (note) VALUES ('direct-write')", default);
         await Assert.That(inserted).IsEqualTo(1);
 
-        var count = await session.ScalarAsync<long>($"SELECT COUNT(*) FROM resilience_probe", default);
+        var count = await session.ScalarAsync<long>($"SELECT COUNT(*) FROM resilience_probe", ct: default);
         await Assert.That(count).IsEqualTo(1L);
     }
 

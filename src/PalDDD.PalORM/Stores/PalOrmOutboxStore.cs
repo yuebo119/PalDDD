@@ -64,7 +64,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         // 列名内联到 SQL 字面量（PalORM 要求 FormattableString 类型，字符串拼接会退化为 string）
         var rows = await Session.QueryAsync<OutboxMessageRow>(
             $"SELECT id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state FROM outbox_messages WHERE status = {(int)OutboxStatus.Pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}",
-            ct).ConfigureAwait(false);
+            ct: ct).ConfigureAwait(false);
         return rows.Select(r => r.ToDomain()).ToList();
     }
 
@@ -106,14 +106,14 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
             {
                 var rows = await Session.QueryAsync<OutboxMessageRow>(
                     $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize} FOR UPDATE SKIP LOCKED) RETURNING id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state",
-                    ct).ConfigureAwait(false);
+                    ct: ct).ConfigureAwait(false);
                 return rows.Select(r => r.ToDomain()).ToList();
             }
             else
             {
                 var rows = await Session.QueryAsync<OutboxMessageRow>(
                     $"UPDATE outbox_messages SET locked_by = {owner}, locked_until = {until} WHERE id IN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}) RETURNING id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state",
-                    ct).ConfigureAwait(false);
+                    ct: ct).ConfigureAwait(false);
                 return rows.Select(r => r.ToDomain()).ToList();
             }
         }
@@ -144,7 +144,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
                 ct).ConfigureAwait(false);
             var rows = await Session.QueryAsync<OutboxMessageRow>(
                 $"SELECT id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state FROM outbox_messages WHERE locked_by = {owner} AND locked_until = {until} ORDER BY created_at",
-                ct).ConfigureAwait(false);
+                ct: ct).ConfigureAwait(false);
             return rows.Select(r => r.ToDomain()).ToList();
         }
     }

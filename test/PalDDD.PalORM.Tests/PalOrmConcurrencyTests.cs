@@ -264,10 +264,10 @@ public class PalOrmConcurrencyTests
             store1.MarkProcessed(staleMsg, DateTimeOffset.UtcNow);
 
             var status = await session1.ScalarAsync<long>(
-                $"SELECT status FROM outbox_messages WHERE id = {staleMsg.Id.ToString()}", default);
+                $"SELECT status FROM outbox_messages WHERE id = {staleMsg.Id.ToString()}", ct: default);
             await Assert.That(status).IsNotEqualTo((long)OutboxStatus.Processed);
             var currentOwner = await session1.ScalarAsync<string>(
-                $"SELECT locked_by FROM outbox_messages WHERE id = {staleMsg.Id.ToString()}", default);
+                $"SELECT locked_by FROM outbox_messages WHERE id = {staleMsg.Id.ToString()}", ct: default);
             await Assert.That(currentOwner).IsEqualTo("new-worker"); // 新租约未被旧写清除
         }
         finally
