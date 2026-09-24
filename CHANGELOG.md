@@ -18,6 +18,8 @@
 
 ### Dependencies 依赖
 
+- **PalORM 五包 5.5.1 → 5.6.0（2026-09-25 升位，消费者可见）**：五包同步升位，下一版 nuspec 的 PalORM 声明随之上移。5.6.0 为性能轮（写路径 −53%、UPSERT 分配 −28%），上游 CHANGELOG 声明 SemVer Minor 无破坏性变更，但**实测其 `QueryAsync`/`QueryFirstAsync`/`QuerySingleAsync`/`ScalarAsync`/`QueryAsyncEnumerable` 五个读入口在第 2 位插入了 `bool readFromReplica = false`**（读副本路由）——对既有位置传参的调用是破坏性签名变更，上游未在 CHANGELOG 记载，编译期即报 CS1503。本仓 11 处调用点改用命名参数 `ct:` 消解（语义等价于 5.5.1：`readFromReplica` 取默认 false）。两处已声明的行为微变经核实不命中本仓（`InsertAsync` 显式主键路径的返回值全测试零断言；`CommandSqlSet.Insert` 全仓零引用）。**升级脚本/下游消费者注意**：若以位置参数传递 `CancellationToken`，升到 5.6.0 会编译失败。
+- **`Microsoft.Data.SqlClient` 7.0.2 → 7.1.0**：7.1.0 已于 2026-09-18 转稳定发布，原"停 7.0.2"的依据（7.1.0-preview3 build 26238 早于 RC1 26425 属过时 preview 线）失效。该条为**零引用中央声明**（ITM-711，全仓无 `PackageReference` 消费），升位不影响产物。
 - **`Verify.TUnit` 钉在 32.x（Dependabot 忽略 33+）**：Verify 33 起在构建期强制检查许可属性（SponsorCheck，未声明即中断构建），属带商业许可门的依赖。**已裁决（2026-09-23）：本项目只使用开源依赖，不接此类许可门**，故停在最后一个无该门的 32.x 线（其补丁仍自动跟进）。影响面仅测试基础设施，包内容与运行时行为不变。
 - **依赖升位（Dependabot #3）**：`ByteAether.Ulid` 1.4.0 → 1.4.1、`Dapper` 2.1.86 → 2.1.89——这两项随包发布，**消费者可见**（3.1.0 的 nuspec 里 ULID 声明为 `1.4.0`、Dapper 声明为 `2.1.86`，下一版起随之上移）；`TUnit`/`TUnit.FsCheck` 1.66.27 → 1.69.0、`Verify.TUnit` 32.0.0 → 32.0.1 属测试期依赖，不进产物。
 

@@ -65,7 +65,7 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
             // 注：QueryFirstAsync<T> 约束 T:class，不接受值类型；用 ScalarAsync<long?> 取标量
             var newId = await Session.ScalarAsync<long?>(
                 $"INSERT INTO inbox_messages (message_id, consumer_name, status, received_at, processing_started_at, attempts) VALUES ({messageId}, {consumerName}, {statusProcessing}, {now}, {now}, 1) ON CONFLICT (consumer_name, message_id) DO NOTHING RETURNING id",
-                ct).ConfigureAwait(false);
+                ct: ct).ConfigureAwait(false);
             if (newId is long id)
             {
                 return new InboxMessage
@@ -106,7 +106,7 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
                 // 语义化异常，加固不可达路径
                 var newId = await Session.ScalarAsync<long?>(
                     $"SELECT id FROM inbox_messages WHERE consumer_name = {consumerName} AND message_id = {messageId}",
-                    ct).ConfigureAwait(false);
+                    ct: ct).ConfigureAwait(false);
                 if (newId is null)
                     throw new InvalidOperationException(
                         $"INSERT 成功但回查 id 不存在（consumer_name={consumerName}, message_id={messageId}）——可能被并发 DELETE");
@@ -134,7 +134,7 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         // 至多一行，FirstOrDefault 无歧义。
         var existing = (await Session.QueryAsync<InboxMessageRow>(
             $"SELECT id, message_id, consumer_name, status, received_at, processed_at, processing_started_at, attempts, last_error FROM inbox_messages WHERE consumer_name = {consumerName} AND message_id = {messageId}",
-            ct).ConfigureAwait(false)).FirstOrDefault();
+            ct: ct).ConfigureAwait(false)).FirstOrDefault();
         if (existing is null)
         {
             // 回查无行（极罕见，如并发 DELETE）—— 返回 null 让调用方重试
