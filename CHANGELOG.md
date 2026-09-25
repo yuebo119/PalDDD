@@ -18,7 +18,7 @@
 
 ### Changed 变更
 
-- **原生压缩解压路径改为流式 decoder（解压炸弹防护时序改善）**：`LZ4Compressor`/`ZStandardCompressor`/`OpenZLCompressor` 的 `Decompress` 从「一次性全量分配 → 返回后检查上限」改为 `LZ4Decoder`/`ZstandardDecoder` span 循环（形态对齐本仓既有 `BrotliCompressor`），输出累计每轮即校验 `MaxOutputBytes`，**超限的下一轮立即中止**——上限检查先于后续分配生效，而非等全量解压完成。**消费者可见的行为差异**：超限输入现在在解压过程中途抛 `InvalidDataException`（异常类型不变，消息含算法名与上限值），不再先承受一次大额分配；输入上限（8MB）与输出上限（64MB）数值、异常契约、round-trip 结果均不变。原声明「此限制受外部库 API 设计约束，无法在适配层修复」经包内 API 实测**失实**，已一并修正。
+- **原生压缩解压路径改为流式 decoder（解压炸弹防护时序改善）**：`LZ4Compressor`/`ZStandardCompressor`/`OpenZLCompressor` 的 `Decompress` 从「一次性全量分配 → 返回后检查上限」改为 `LZ4Decoder`/`ZstandardDecoder` span 循环（形态对齐本仓既有 `BrotliCompressor`），输出累计每轮即校验 `MaxOutputBytes`，**超限的下一轮立即中止**——上限检查先于后续分配生效，而非等全量解压完成。**消费者可见的行为差异**：① 超限输入（正常载荷超 64MB 上限）仍在解压过程中途抛 `InvalidDataException`（类型不变，消息含算法名与上限值），不再先承受一次大额分配；② **损坏/截断压缩帧的失败路径异常类型变更**——原实现透传上游的 `InvalidOperationException`（LZ4 "Invalid LZ4 frame."）或 `ZstandardException`，现统一转为 `InvalidDataException`（`解压失败：{status}`）；捕获上述原异常类型处理损坏数据的下游需同步调整；③ 正常路径内存峰值为 2×输入（首轮 `GetSpan(2×input)`，8MB 输入上限下 ≤16MB）——原实现为渐进增长，此代价为本方案取舍。输入上限（8MB）与输出上限（64MB）数值与 round-trip 结果不变。原声明「此限制受外部库 API 设计约束，无法在适配层修复」经包内 API 实测**失实**，已一并修正。
 
 - **公开 API 快照与发布记录的同步判定收紧**：此前只在「最后一次提交」的范围内校验公开 API 快照变更是否同步记录了 CHANGELOG——那意味着只要在快照变更之后再补一个只改 CHANGELOG 的提交，这道校验就被绕过（本仓 3.1.0 首发时实际发生过这种洗白）。现改为按发布窗口（当前提交到上一个版本 tag 之间）**逐个提交**校验：哪个提交动了公开 API 快照却没同步记录，就报出哪个提交。影响仅限构建与评审纪律——包内容、运行时行为、公共 API 表面均不变。
 
@@ -30,6 +30,9 @@
 
 ### Tests 测试
 
+- **二轮审计：FsCheck 属性测试接入 `[FsCheckProperty]`（`BackoffPolicyPropertyTests` 3 处）**：`TUnit.FsCheck` 此前被 2 个 csproj 引用却零消费。迁移后失败 seed 直接进 TUnit 报告、`Replay`/`MaxTest` 声明式可配；生成域经自定义 Arbitrary 收敛到与原手写 `Gen.Choose` 完全相同的有界区间，迭代数沿用默认 100——语义与覆盖面不变，测试数不变。`PropertyTests` 的 7 处复杂生成器（SelectMany/元组组合）保留手写 `Prop.ForAll`（迁移成本大于收益）。
+- **二轮审计：两个竞态测试加 `[Repeat(5)]`**（`SmartEnumTests.ConcurrentReads_All_*`、`OutboxSqliteConcurrencyTests.LeasePending_SequentialWorkers_*`）：竞态类测试单次通过可能只是采样侥幸，重复执行把偶发交错变必现信号。**TUnit Repeat 语义为"额外再跑 5 次"共 6 实例**，两测试净增 +10 测试实例（总计数 1492→1502，文档已同步）。
+- **二轮审计勘正：首版 `HasCount` 建议撤销**——`HasCount(int)` 在 TUnit 1.69.0 已标 `[Obsolete]`（推荐 `Count().IsEqualTo`），按首版建议替换 80 处会在 `TreatWarningsAsErrors` 下编译失败；现有 `Assert.That(x.Count).IsEqualTo(n)` 是合法形态维持不变。教训已写入审计报告：API 面核验必须含 Obsolete 状态，"存在"≠"推荐"。
 - **`VerifyChecks.Run()` 约定自检**（新增 `VerifyChecksTests`）：Verify 官方约定的机器检查——ModuleInitializer 位置、命名、received 产物处理一旦偏离官方形态即失败，而非等某次快照比对异常才暴露。首跑即抓出两处真实缺口并已修复：`.gitignore` 缺 `*.received.*`（快照失败产物可被误提交）、`.editorconfig` 缺 `[*.{received,verified}.{txt}]` 段（其段头内层花括号是官方文案原样，过不了 Verify 的切片解析，勿"简化"）。测试数 +1。
 - **ITM-261 canary**（`OutboxSqliteConcurrencyTests`）：EF11 RC1 探针实测确认 SQLite provider 仍不翻译 `DateTimeOffset` 范围比较与排序，而本仓 `SqliteOutboxDbContext` 的 raw SQL 谓词下推与 Lease 单语句正建立在该限制上。canary 锁住这两条——**若 EF 后续修复翻译则转红，即 GA 复核信号**（GA 计划 §三.1 提前完成，GA 日仅需复跑）。测试数 +1。
 

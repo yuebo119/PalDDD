@@ -32,7 +32,10 @@ public sealed class OutboxSqliteConcurrencyTests
         await _connection.DisposeAsync();
     }
 
+    // Repeat(5)：租约互斥是并发正确性核心——单次顺序双 worker 通过对时序侥幸敏感，
+    // 重复执行降低采样侥幸面（:memory: SQLite，重复成本毫秒级）。
     [Test]
+    [Repeat(5)]
     public async Task LeasePending_SequentialWorkers_SecondGetsNoMessage()
     {
         var messageId = PalUlid.New();

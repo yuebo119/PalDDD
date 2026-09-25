@@ -852,7 +852,7 @@ src/                         36 source projects · Clean Architecture (folders m
 ├── Hosting/                 DependencyInjection · Hosting.AspNetCore
 └── Metapackages/            Base · Extension · Prompts (Prompts is not a package, IsPackable=false)
 
-test/                        16 test projects (TUnit) · 1492 measured tests (1424 passes + 68 skipped — full-suite measurement on 2026-09-25; skips are Docker/Testcontainers dependencies and local broker prechecks, PalORM.Tests & Messaging.Integration.Tests need Docker)
+test/                        16 test projects (TUnit) · 1502 measured tests (1434 passes + 68 skipped — full-suite measurement on 2026-09-25; skips are Docker/Testcontainers dependencies and local broker prechecks, PalORM.Tests & Messaging.Integration.Tests need Docker)
 bench/                       BenchmarkDotNet performance benchmarks
 samples/                     PalOrmSample (AOT verification) · ECommerce · MinimalApi · AotSample · DapperAotProbe (experimental probe, not in slnx/CI — see docs/review/dapper-aot-experiment-2026-09-13.md)
 docs/                        Architecture · Usage guide · Tutorial · ADR
@@ -928,7 +928,7 @@ The three stacks are **equally supported and coexist long-term** (2026-09-20 rul
 Does not support .NET 8/9/10 (single target net11.0). Three AOT limitations (honestly declared via source `[RequiresDynamicCode]`): ① Saga ChildSaga child-flow dispatch (`MakeGenericMethod`/`MakeGenericType`, see `Saga.cs`) and ② dynamic event routing share the same root; ③ `ISpecification.Compile()` expression-tree compilation is unsupported under Native AOT — in AOT scenarios use `ToExpression()` and pass it to your query provider instead. No built-in EventStore snapshot mechanism — projects that need a snapshot strategy must implement it themselves.
 
 **Who is using it in production?**
-Pal.DDD is currently at version v3.1.0 (tag v3.1.0 published; SemVer minor: three-stack Outbox behavior alignment, EventLog write-path zero-copy, `[Obsolete]` removal versions re-targeted from v3.0 to v4.0, and version-promise guards, no breaking API changes — see the `[3.1.0]` section in CHANGELOG). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with 1492 measured test cases (16 projects: 1424 passes + 68 skipped — the 2026-09-25 full-suite measurement basis). You are welcome to try it in non-production environments and provide feedback.
+Pal.DDD is currently at version v3.1.0 (tag v3.1.0 published; SemVer minor: three-stack Outbox behavior alignment, EventLog write-path zero-copy, `[Obsolete]` removal versions re-targeted from v3.0 to v4.0, and version-promise guards, no breaking API changes — see the `[3.1.0]` section in CHANGELOG). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with 1502 measured test cases (16 projects: 1434 passes + 68 skipped — the 2026-09-25 full-suite measurement basis). You are welcome to try it in non-production environments and provide feedback.
 
 ---
 

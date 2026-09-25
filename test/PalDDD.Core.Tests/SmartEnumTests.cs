@@ -132,8 +132,11 @@ public sealed class SmartEnumTests
     // 并发读取测试 — 初始化后 FrozenDictionary 读操作线程安全
     // ═══════════════════════════════════════════════════════════════
 
-    /// <summary>多线程并发读取 All 属性 — 初始化后 FrozenDictionary 是不可变的</summary>
+    /// <summary>多线程并发读取 All 属性 — 初始化后 FrozenDictionary 是不可变的。
+    /// Repeat(5)：竞态类测试单次通过可能是采样侥幸，重复执行把偶发交错变必现信号
+    /// （纯内存测试，重复成本近零）。</summary>
     [Test]
+    [Repeat(5)]
     public async Task ConcurrentReads_All_ReturnsConsistentResults()
     {
         var barrier = new Barrier(4);
