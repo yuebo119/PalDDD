@@ -73,6 +73,17 @@ if [[ "$MDR" == *"${NL}test/"* ]]; then
     fi
 fi
 
+# ── 4b. new-skip-guard（test/**.cs 新增 Skip 标注 = 以 Skip 修绿的隐性形态，
+#        Pal 会话审计 2026-09-25 立法；净增口径，test/**.cs 在暂存集时触发。
+#        豁免：ALLOW_NEW_SKIP=1 + 提交信息写理由与到期日）──
+if [[ "$ACMR" == *"${NL}test/"*".cs"* ]]; then
+    echo "🚫 new-skip-guard（test/ .cs 有改动）…"
+    if ! dotnet run scripts/new-skip-guard.cs 2>&1; then
+        echo "⛔ new-skip-guard 拦截——新增强 [Skip] 须豁免并写到期日，或改为修 src"
+        FAIL=1
+    fi
+fi
+
 # ── 5. xml-guard（XML 良构性；仅 xml 系扩展名在暂存集时触发 ~2s）──
 # 实证来源：21549d3 在 .csproj 注释写入 `--` 致全仓构建失败（MSB4025），
 # 而 secret-scan/encoding-gate/guard 均不校验 XML 合法性——该缺口由此关闭。

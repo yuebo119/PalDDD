@@ -264,6 +264,12 @@ dotnet run scripts/gate.cs -- --allow-dirty
 # 5.5 变更日志结构门禁（§十二 Phase 4——FAIL 阻断发版）
 dotnet run scripts/changelog-check.cs
 
+# 5.6 沉寂面抽查（2026-09-25 增，Pal 会话审计立法）：差分评审对长期未变更的
+# 文件结构性失明（审计实证：28 处门禁存量假绿全部集中在 MIG-012 后未动的文件，
+# 直到一次无锚点全量普查才暴露）。发布 tag 前对 Top 沉寂文件做定向抽查——
+# 数字只导航，抽查深度由当轮评审裁决，不必全量普查。
+dotnet run scripts/review-coverage-report.cs -- --top 15 --min-days 30
+
 # 6. 本地 pack 验证
 rm -rf /tmp/release-preview && mkdir -p /tmp/release-preview
 # v2.2.0 发布实测修正：原 `for proj in $(ls src/)` 在输出带 `/` 后缀的 shell 环境
