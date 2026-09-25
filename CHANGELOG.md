@@ -35,6 +35,7 @@
 - **公共 API 快照覆盖扩展至数据面适配层**（+19 程序集，`decision-2026-09-25-publicapi-snapshot-scope-expansion`）：原 11 程序集范围决策的两个前提经对抗复核实证失效（G23 只校验快照内程序集——数据面 public API 变更零机械防线；基线实测增量 652 行）。快照宿主自 `PalDDD.Core.Tests` 迁至 `PalDDD.Integration.Tests`（后者在架构守卫的 Infra 白名单内——Domain 测试项目被 `DomainTests_DoNotReferenceInfrastructureImplementations` 禁止引用 Infra 实现，实测拦截）。编译时组件与零代码 Metapackage 不纳入。
 - **PalORM 三方言弹性回调的熔断作用域声明**：上游 5.6.0 XML 明示 Scoped 会话下会话级熔断「默认阈值 5 几乎不可能达到，熔断器形同虚设」——`AddPalOrm*` 的 `configureResilience` XML doc 补声明：启用 `WithCircuitBreaker` 必须同步在传入的 `DbOptions` 上设 `CircuitBreakerScope = Process`（`DataSession` 不暴露 Options，回调内不可达）。
 - **引用库最新特性使用审计**（`docs/review/feature-usage-audit-2026-09-25.md`）：55 个中央包按库族分 5 组审计，逐条特性附官方来源与 grep 证据；记录结构性结论（本仓 EF 走 raw SQL、PalORM 走 FormattableString 窄路径，故多数新特性零接触面）、5 项已实施、5 项待裁决（读副本路由 / 熔断作用域 / span 压缩编码 / broker tracing / 连接池预热）、以及含历史否决项在内的不建议清单。
+- **CI test 步骤新增 skipped 计数聚合披露**（源自 zcode 会话历史全量审计 2026-09-25，`~/.zcode/references/AI_QUALITY_PALDDD_AUDIT_2026-09-25.md`）：测试面板排除与 Skip 数不披露曾把「Skip 16」报成「Skip 9」、45 个 Testcontainers 测试长期不在"12 项目面板全绿"的口径外——现汇总行强制披露 skipped 总数（尽力提取无命中记 0，不做硬断言；Skip 棘轮阈值因本地/CI 跳过构成波动暂缓立法，先让数字可见）。影响仅限构建与评审纪律，包内容与运行时行为不变。
 
 - **全仓文档与真实实现对齐**（3.1.0 之后口径）：架构文档的质量体系版本、诊断数 21→23、prompt 模板数 9→10、Outbox 指标补 `paldd.outbox.dead`/`persist_failed`、TUnit/MTP 版本、GitHub Actions 模板改为 ci.yml 实际形态、CI 触发表对齐 4 job 实态、测试计数口径 1379→1490（2026-09-23 全量实测 1430 通过 + 60 项无 Docker 跳过）；补写 3.1.0 消费者可见变更（Outbox 三栈对齐、EventLog 写路径零拷贝）与 3.0.0 的 UoW fail-fast / `MaxDegreeOfParallelism` 警示；`IPalOutboxStore` 的 v4.0 预告与 `PalDiagnostics` 的计数器勘正注释同步更新。
 

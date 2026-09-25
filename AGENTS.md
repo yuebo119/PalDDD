@@ -86,6 +86,8 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 | **覆盖率门禁形态** | 脚本 `scripts/ci-coverage.cs` 已接入 CI（独立 coverage job）+ 阈值 0.70（2026-09-14 实测校准）；合并 glob 曾因 MTP 双层落点缺陷卡死（`277bc34` 修复为递归 glob） | 状态与阈值见 [docs/test-coverage-baseline.md](docs/test-coverage-baseline.md) §门禁阈值 |
 | **Agent 脚本默认 C#，禁止 python**（2026-09-14 用户裁决） | Agent 曾用系统 python 重写源文件 → CRLF 写成纯 LF（两轮三犯：`4a64fba` 修 1543 处 .cs、`277bc34` 修 255 处）；本仓已全 C# 化（0 个 .py），工具链不得再引入 Python 面。**Write 工具新建文件默认 LF**——新建后须跑行尾修复（`dotnet run %TEMP%/fix-eol.cs <path>` 或字节级校验） | **默认 `dotnet run <file>.cs`**（file-based app，与 scripts/ 同标准）；临时脚本放 `%TEMP%`（不继承根 props 的 TreatWarningsAsErrors）；机械编辑优先 **Edit/Write 工具**；**任何写文件后做字节级验证**（CRLF 计数 == LF 计数，见 `.ai` OPS-9） |
 | **审计/扫描条目命中代码内声明注释**（2026-09-19 增，M3-3 实证） | 审计 2026-09-17 的 M3-3 评「风险: 低」并实施——但它命中的 `SagaState.CloneForLease` 有 v26 P3 勘正声明（浅拷贝共享是有意取舍：僵尸执行过的步骤必须能被后继者补偿），实施时**删掉了声明而非回应声明**，失败模式被静默翻转（并发写可抛 → 漏补偿无兜底），且 `init`→`set` 公共 API 破坏对快照不可见。2026-09-19 已回滚（含勘正注释） | 改动前 grep 目标代码的声明注释（「P定案 / 勘正 / ADR / 取舍 / 联动约束」字样）；命中即**先落 `docs/review/decision-*.md`**（V11 门禁管其结构）回应该声明的理由，同提交再改代码；**禁止删除声明注释来"通过"**。机械层（staged diff 删除含声明字样行时要求决策文档在暂存集）为待办 |
+| **SQL 字符串内嵌 `--` 注释自噬**（2026-09-25 增，会话审计实证；XML 版 B3.1 的 SQL 同族） | 勘正注释 `-- v72：删…谓词` 写进单行 SQL 字符串字面量内 → `--` 到语句尾全部被数据库当注释，`AND locked_until` 双条件守卫退化为单条件，租约 fencing 丢失（P3 → P1 回归） | 勘正/变更说明禁入 SQL 字符串字面量；改 SQL 时 diff 必须核对谓词完整性；机械扫描（src 内字符串字面量含 `--`）为待办门禁 |
+| **测试面板/Skip 排除不披露**（2026-09-25 增，会话审计实证） | 「12 项目面板全绿」未声明 PalORM.Tests（45 个 Testcontainers 测试）长期排除；Skip 16 个报成 9 个；方言测试本地 Skip 使「全绿」口径漂移（PD38 同族） | 声称全绿必须同时披露 Skip 数与排除面板；CI test 步骤已聚合 skipped 计数（2026-09-25 增）；验证修复须指认锁定测试（红→绿），面板全绿不可替代 |
 
 ---
 
