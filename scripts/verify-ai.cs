@@ -141,10 +141,12 @@ var failed = 0;
 }
 
 // ─── V6 公共 API 快照防线：测试存在 + 快照基线非空 ───
+// 2026-09-25 路径随迁：快照宿主自 Core.Tests 迁 Integration.Tests（快照覆盖扩展需引用
+// Infra 实现，Domain 测试项目被架构守卫禁止——decision-2026-09-25-publicapi-snapshot-scope-expansion）
 {
-    var apiOk = File.Exists("test/PalDDD.Core.Tests/PublicApiSnapshotTests.cs");
-    var snapFile = Directory.Exists("test/PalDDD.Core.Tests/Snapshots")
-        ? Directory.EnumerateFiles("test/PalDDD.Core.Tests/Snapshots", "*.txt").FirstOrDefault() : null;
+    var apiOk = File.Exists("test/PalDDD.Integration.Tests/PublicApiSnapshotTests.cs");
+    var snapFile = Directory.Exists("test/PalDDD.Integration.Tests/Snapshots")
+        ? Directory.EnumerateFiles("test/PalDDD.Integration.Tests/Snapshots", "*.txt").FirstOrDefault() : null;
     var snapLines = snapFile is not null ? CountNewlines(File.ReadAllBytes(snapFile)) : 0;
     if (apiOk && snapLines >= 50)
     {

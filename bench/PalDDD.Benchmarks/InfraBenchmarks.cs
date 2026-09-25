@@ -299,15 +299,22 @@ public class ConfigurationBenchmarks
 
 // ═══════════════════════════════════════════════════════════
 // 压缩基准 — Brotli span 直压 / GZip Stream 对比（16KB 典型消息负载）
+// 2026-09-25 扩展：GZip 解压 + Deflate 双向——原生压缩器流式 decoder 改造
+// 的量具先行（PERF 纪律：改造前后同机同参对比，<5% 默认不采纳）
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
-[ShortRunJob]
+// ⚠️ 无 [ShortRunJob]：--compression 入口已传显式 InProcess ManualConfig，类级 job
+// attribute 会与之 union 叠加出双 job——ShortRun 的 CsProjCoreToolchain 在 net11-rc
+// moniker 上触发 DotNetSdkValidator 崩溃（--persist 修复先例同款，见 Program.cs 注释）
 public class CompressionBenchmarks
 {
     private ICompressor _brotli = null!;
     private ICompressor _gzip = null!;
+    private ICompressor _deflate = null!;
     private byte[] _payload = null!;
     private ReadOnlyMemory<byte> _brotliCompressed;
+    private byte[] _gzipCompressed = null!;
+    private byte[] _deflateCompressed = null!;
 
     [GlobalSetup]
     public void Setup()
@@ -317,12 +324,15 @@ public class CompressionBenchmarks
         var provider = services.BuildServiceProvider().GetRequiredService<ICompressionProvider>();
         _brotli = provider.GetCompressor(CompressionAlgorithm.Brotli);
         _gzip = provider.GetCompressor(CompressionAlgorithm.GZip);
+        _deflate = provider.GetCompressor(CompressionAlgorithm.Deflate);
 
         _payload = new byte[16 * 1024];
         for (int i = 0; i < _payload.Length; i++)
             _payload[i] = (byte)(i * 7 % 256);
 
         _brotliCompressed = _brotli.Compress(_payload);
+        _gzipCompressed = _gzip.Compress(_payload).ToArray();
+        _deflateCompressed = _deflate.Compress(_payload).ToArray();
     }
 
     [Benchmark(Baseline = true)]
@@ -333,4 +343,13 @@ public class CompressionBenchmarks
 
     [Benchmark]
     public ReadOnlyMemory<byte> GZip_Compress_16KB() => _gzip.Compress(_payload);
+
+    [Benchmark]
+    public byte[] GZip_Decompress_16KB() => _gzip.Decompress(_gzipCompressed.AsSpan());
+
+    [Benchmark]
+    public ReadOnlyMemory<byte> Deflate_Compress_16KB() => _deflate.Compress(_payload);
+
+    [Benchmark]
+    public byte[] Deflate_Decompress_16KB() => _deflate.Decompress(_deflateCompressed.AsSpan());
 }

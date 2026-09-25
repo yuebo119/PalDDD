@@ -27,6 +27,11 @@
     <ProjectReference Include="..\..\src\PalDDD.Projections.EventLog\PalDDD.Projections.EventLog.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Serialization.Evolution\PalDDD.Serialization.Evolution.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
+    <!-- 2026-09-25：PublicApiSnapshotTests 及其 Snapshots/ 迁至 PalDDD.Integration.Tests——
+         快照覆盖扩展（decision-2026-09-25-publicapi-snapshot-scope-expansion）需引用数据面
+         适配层程序集，而本测试项目作为 Domain 测试被 ArchitectureBoundaryTests 禁止引用
+         Infra 实现（DomainTests_DoNotReferenceInfrastructureImplementations 实测拦截）。
+         Integration.Tests 在守卫白名单内，为快照宿主的正确归属 -->
     <ProjectReference Include="..\PalDDD.Testing\PalDDD.Testing.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Core.SourceGen\PalDDD.Core.SourceGen.csproj"
                       OutputItemType="Analyzer"

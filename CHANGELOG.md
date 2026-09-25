@@ -14,9 +14,14 @@
 
 ### Added 新增
 
+- **PalORM 连接池启动期预热入口（三方言，消费者可见）**：`AddPalOrmSqlite/PostgreSql/MySql` 新增可选参数 `prewarmConnectionCount`（默认 0 = 行为不变）——大于 0 时注册 `PalOrmPreWarmHostedService<TProvider>`（新增公共类型），宿主启动期执行上游 `DataSession<TProvider>.PreWarmAsync` 逐条灌暖连接（远程建连实测 ~8.5 ms/条，上游 XML）。物理连接进 ADO.NET 进程级共享池（按连接串键控），预热 options 与 DI 工厂共用同一实例保证同池；**失败降级启动**（记 Warning 不炸 host，fail-fast 需求由调用方自调 PreWarmAsync）；SQLite 上游契约为空操作（传值无害，保持三方言对称）。生产场景须与 `DbOptions.MinPoolSize` 配合（只预热不设下限会被空闲修剪清空，上游 XML 明示）。该类型落入扩展后的公共 API 快照覆盖。
 - **MySQL 数据源新增 builder 配置重载**（`AddPalMySqlDataSource(cs, applyOptimization, Action<MySqlDataSourceBuilder>?)`）：在 `Build()` 前注入自定义配置，使 MySqlConnector 2.6 的 `ConfigureTracing`（OTel 语义约定、traceparent 下发）等 builder 级能力对调用方可达——此前 MySQL 侧无任何入口可摸到 builder，该能力结构性不可达。**新增重载而非改签名**，既有调用方二进制与源码均不受影响；PG 姊妹入口本就有 `Action<NpgsqlDataSourceBuilder>`，此为方言间对齐。
+- **PalORM 读副本路由标注（消费者可用，行为可选）**：`PalOrmEventLog` 两个纯读流（ReadStreamAsync/ReadAllAsync）与 `PalOrmOutboxStore.GetPendingMessagesAsync`（租约前置候选读）三处读点标注 `readFromReplica: true`（PalORM 5.6.0 读副本路由能力）。**未配置 `DbOptions.ReadConnectionString` 时行为逐位不变**（上游契约回落主库）；配置后纯读点可路由副本，4 个 read-after-write 敏感点（版本预检 ×2、回查、租约回读）保持主库。正确性边界已声明于代码注释：候选读走副本最多产生无害空批，租约原子裁决恒在主库。
 
 ### Changed 变更
+
+- **GZip/Deflate 解压 span decoder 改造经测量否决（已回滚，零产物变化）**：按 PERF 纪律量具先行——新增 `--compression` 基准入口（含 GZip/Deflate 解压档）测得改造后分配确定性劣化 +34%/+35%（`ArrayBufferWriter` 增长序列超省掉的 `MemoryStream`，两轮逐字节一致、真回滚后逐字节还原）、耗时在噪声带内无改善。改造不落地，**数据与结论留档 `docs/performance.md` 防未来重复提议**（.NET decoder 优化或大负载场景可凭已入库的基准复测）。包内容与运行时行为不变。
+- **RabbitMQ 内建 tracing 共存语义文档化**（源码级结论，反编译 7.2.2）：客户端经 W3C `DistributedContextPropagator` 注入/提取的 header 键与本仓 `traceparent` 同键；**宿主未注册 ActivityListener 时客户端 tracing 完全不激活**（`HasListeners()` 短路），本仓手工头行为不变；注册 listener 后消费侧先读本仓头建链（链条衔接正确），发布侧 Activity.Current 链会覆盖 outbox 还原头——需保留原始上下文者可自定义 `RabbitMQActivitySource.ContextInjector`。结论落 `RabbitMqBroker` XML doc。
 
 - **原生压缩解压路径改为流式 decoder（解压炸弹防护时序改善）**：`LZ4Compressor`/`ZStandardCompressor`/`OpenZLCompressor` 的 `Decompress` 从「一次性全量分配 → 返回后检查上限」改为 `LZ4Decoder`/`ZstandardDecoder` span 循环（形态对齐本仓既有 `BrotliCompressor`），输出累计每轮即校验 `MaxOutputBytes`，**超限的下一轮立即中止**——上限检查先于后续分配生效，而非等全量解压完成。**消费者可见的行为差异**：① 超限输入（正常载荷超 64MB 上限）仍在解压过程中途抛 `InvalidDataException`（类型不变，消息含算法名与上限值），不再先承受一次大额分配；② **损坏/截断压缩帧的失败路径异常类型变更**——原实现透传上游的 `InvalidOperationException`（LZ4 "Invalid LZ4 frame."）或 `ZstandardException`，现统一转为 `InvalidDataException`（`解压失败：{status}`）；捕获上述原异常类型处理损坏数据的下游需同步调整；③ 正常路径内存峰值为 2×输入（首轮 `GetSpan(2×input)`，8MB 输入上限下 ≤16MB）——原实现为渐进增长，此代价为本方案取舍。输入上限（8MB）与输出上限（64MB）数值与 round-trip 结果不变。原声明「此限制受外部库 API 设计约束，无法在适配层修复」经包内 API 实测**失实**，已一并修正。
 
@@ -24,6 +29,8 @@
 
 ### Documentation 文档
 
+- **公共 API 快照覆盖扩展至数据面适配层**（+19 程序集，`decision-2026-09-25-publicapi-snapshot-scope-expansion`）：原 11 程序集范围决策的两个前提经对抗复核实证失效（G23 只校验快照内程序集——数据面 public API 变更零机械防线；基线实测增量 652 行）。快照宿主自 `PalDDD.Core.Tests` 迁至 `PalDDD.Integration.Tests`（后者在架构守卫的 Infra 白名单内——Domain 测试项目被 `DomainTests_DoNotReferenceInfrastructureImplementations` 禁止引用 Infra 实现，实测拦截）。编译时组件与零代码 Metapackage 不纳入。
+- **PalORM 三方言弹性回调的熔断作用域声明**：上游 5.6.0 XML 明示 Scoped 会话下会话级熔断「默认阈值 5 几乎不可能达到，熔断器形同虚设」——`AddPalOrm*` 的 `configureResilience` XML doc 补声明：启用 `WithCircuitBreaker` 必须同步在传入的 `DbOptions` 上设 `CircuitBreakerScope = Process`（`DataSession` 不暴露 Options，回调内不可达）。
 - **引用库最新特性使用审计**（`docs/review/feature-usage-audit-2026-09-25.md`）：55 个中央包按库族分 5 组审计，逐条特性附官方来源与 grep 证据；记录结构性结论（本仓 EF 走 raw SQL、PalORM 走 FormattableString 窄路径，故多数新特性零接触面）、5 项已实施、5 项待裁决（读副本路由 / 熔断作用域 / span 压缩编码 / broker tracing / 连接池预热）、以及含历史否决项在内的不建议清单。
 
 - **全仓文档与真实实现对齐**（3.1.0 之后口径）：架构文档的质量体系版本、诊断数 21→23、prompt 模板数 9→10、Outbox 指标补 `paldd.outbox.dead`/`persist_failed`、TUnit/MTP 版本、GitHub Actions 模板改为 ci.yml 实际形态、CI 触发表对齐 4 job 实态、测试计数口径 1379→1490（2026-09-23 全量实测 1430 通过 + 60 项无 Docker 跳过）；补写 3.1.0 消费者可见变更（Outbox 三栈对齐、EventLog 写路径零拷贝）与 3.0.0 的 UoW fail-fast / `MaxDegreeOfParallelism` 警示；`IPalOutboxStore` 的 v4.0 预告与 `PalDiagnostics` 的计数器勘正注释同步更新。

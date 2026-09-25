@@ -1,5 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using PalDDD.Core.Logging;
 using PalDDD.Core.Repository;
 using PalDDD.EventLog;
 using PalDDD.Idempotency;
@@ -58,22 +60,40 @@ public static class SqlitePalOrmExtensions
     /// <para>v53 P3 次序语义：DI 工厂中 CreateAsync 先于回调执行，本会话的<b>首个连接建立</b>
     /// 永远发生在弹性配置之前（连接重试是 CreateAsync 自有循环）——回调配置的连接重试
     /// 仅对后续重连生效，首个连接使用 DbOptions 默认弹性。</para>
+    /// <para>⚠️ 熔断作用域声明（2026-09-25 特性审计，上游 5.6.0 XML 契约）：本仓 DataSession
+    /// 注册为 <b>Scoped</b>（一请求一会话）——上游明示该形态下会话级熔断「默认阈值 5 几乎
+    /// 不可能达到，熔断器形同虚设」。启用 <c>WithCircuitBreaker</c> 时<b>必须</b>同步在传入的
+    /// <paramref name="options"/> 上设 <c>CircuitBreakerScope = CircuitBreakerScope.Process</c>
+    /// （DataSession 不暴露 Options，回调内不可达，只能在构造期设置）；未传 options 时先构造
+    /// <c>DbOptions.Development/Production(...)</c> 设好作用域再传入。</para>
+    /// </param>
+    /// <param name="prewarmConnectionCount">
+    /// 启动期连接池预热条数（0 = 默认，不预热）。&gt;0 时经
+    /// <see cref="PalOrmPreWarmHostedService{TProvider}"/> 在宿主启动期执行
+    /// <see cref="DataSession{TProvider}.PreWarmAsync"/>；失败降级启动（记 Warning，不炸 host）。
+    /// 生产场景与 <c>options.MinPoolSize</c> 配合（只预热不设下限会被空闲修剪清空，上游 XML 明示）。
+    /// SQLite 无池：上游契约为空操作，传值无害（保持三方言对称）。
     /// </param>
     public static IServiceCollection AddPalOrmSqlite(
         this IServiceCollection services,
         string connectionString,
         DbOptions? options = null,
         TimeProvider? clock = null,
-        Action<DataSession<SqliteProvider>>? configureResilience = null)
+        Action<DataSession<SqliteProvider>>? configureResilience = null,
+        int prewarmConnectionCount = 0)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
 
+        // 解析最终 DbOptions——工厂与预热共用同一实例（预热经 TProvider.CreateConnection
+        // Open/Dispose 进出的是 ADO.NET 进程级共享池，按连接串键控；同连接串才落在 DI
+        // 会话的底层池上，预热才有效）
+        var resolvedOptions = options ?? DbOptions.Development(connectionString);
+
         // Scoped DataSession（同步阻塞创建，仅在请求起始）
         services.AddScoped(sp =>
         {
-            var opts = options ?? DbOptions.Development(connectionString);
-            var session = DataSession<SqliteProvider>.CreateAsync(opts, default).GetAwaiter().GetResult();
+            var session = DataSession<SqliteProvider>.CreateAsync(resolvedOptions, default).GetAwaiter().GetResult();
             // v53 P2：回调异常时释放已打开的会话——CreateAsync 创建并打开连接（PalORM 5.4
             // XML doc），工厂委托抛异常则容器从未接管返回值，物理连接滞留至 GC（同模式
             // 先例：PostgreSqlSharding ITM-085"Build 中途抛错 DisposeAsync 永不被调用"）
@@ -118,6 +138,18 @@ public static class SqlitePalOrmExtensions
         services.AddScoped<IProjectionCheckpointStore, SqliteProjectionCheckpointStore>();
         services.AddScoped<IIdempotencyStore, SqliteIdempotencyStore>();
         services.AddScoped<IUnitOfWork, SqlitePalOrmUnitOfWork>();
+
+        // 启动期连接池预热（2026-09-25 特性审计裁决项）：prewarmConnectionCount > 0 时注册
+        // hosted 包装（Singleton工厂内从容器取可选日志面，缺省由服务内 NullPalLogger 兜底）。
+        // SQLite 上游契约为无操作，注册无害（保持三方言对称）。
+        if (prewarmConnectionCount > 0)
+        {
+            services.AddSingleton<IHostedService>(sp =>
+                new PalOrmPreWarmHostedService<SqliteProvider>(
+                    resolvedOptions,
+                    prewarmConnectionCount,
+                    sp.GetService<IPalLogger<PalOrmPreWarmHostedService<SqliteProvider>>>()));
+        }
 
         return services;
     }

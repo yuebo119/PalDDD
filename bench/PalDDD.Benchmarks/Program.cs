@@ -68,6 +68,17 @@ if (args.Contains("--saga", StringComparer.OrdinalIgnoreCase))
     return 0;
 }
 
+// 2026-09-25 特性审计三轮：压缩路径基准（GZip/Deflate span 编码器改造的量具先行，
+// InProcess 显式 config 同 --persist 理由）。
+if (args.Contains("--compression", StringComparer.OrdinalIgnoreCase))
+{
+    var inProcessOnly = ManualConfig.Create(DefaultConfig.Instance)
+        .AddJob(Job.InProcess.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddDiagnoser(MemoryDiagnoser.Default);
+    BenchmarkRunner.Run<CompressionBenchmarks>(inProcessOnly);
+    return 0;
+}
+
 BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 
 return 0;

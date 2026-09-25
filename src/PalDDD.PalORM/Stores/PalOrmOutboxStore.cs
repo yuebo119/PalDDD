@@ -62,9 +62,13 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount);
         var now = Clock.GetUtcNow();
         // 列名内联到 SQL 字面量（PalORM 要求 FormattableString 类型，字符串拼接会退化为 string）
+        // 读副本标注（2026-09-25 特性审计裁决）：本查询为租约**前置候选读**，非 read-after-write
+        // 敏感点——读到副本陈旧候选（已处理仍显示 Pending）只会让主库 Lease 的原子 UPDATE
+        // 谓词不命中而返回 0 行（无害空批）；正确性由主库租约裁决保证。上游契约：未配置
+        // ReadConnectionString 时逐位回落主库。Lease/回查等敏感点保持默认 false（见 :109/:116/:147）。
         var rows = await Session.QueryAsync<OutboxMessageRow>(
             $"SELECT id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state FROM outbox_messages WHERE status = {(int)OutboxStatus.Pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}",
-            ct: ct).ConfigureAwait(false);
+            readFromReplica: true, ct: ct).ConfigureAwait(false);
         return rows.Select(r => r.ToDomain()).ToList();
     }
 

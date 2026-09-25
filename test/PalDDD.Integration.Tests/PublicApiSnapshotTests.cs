@@ -1,3 +1,4 @@
+using PalDDD.Core;
 using PalDDD.CQRS;
 using PalDDD.DependencyInjection;
 using PalDDD.EventLog;
@@ -12,13 +13,17 @@ using System.Globalization;
 using System.Reflection;
 using System.Text;
 
-namespace PalDDD.Core.Tests;
+namespace PalDDD.Integration.Tests;
 
 public sealed class PublicApiSnapshotTests
 {
-    // 范围决策（刻意）：核心 11 程序集——适配层（Dapper/PalORM/EFCore 族）公共面由其
-    // 各自集成测试与编译消费锁定，不纳入本快照；快照范围扩大需评审 PublicApiSnapshot
-    // 基线成本（基线文件体积与每次公共面变更的更新负担）。
+    // 范围决策（2026-09-25 扩展，decision-2026-09-25-publicapi-snapshot-scope-expansion）：
+    // 原范围为核心 11 程序集——适配层（Dapper/PalORM/EFCore 族）不纳入（原文：「公共面由其
+    // 各自集成测试与编译消费锁定；快照范围扩大需评审基线成本」）。二轮对抗复核实证该前提
+    // 失效：G23 只校验快照内程序集，数据面程序集的 public API 变更无任何机械防线（本轮
+    // MySQL configure 重载正落盲区）。现扩展至全部公开发布包的程序集（+19）；编译时组件
+    // （Analyzers 族 / Core.SourceGen，非运行时公共面）与零代码 Metapackage（Base/Extension，
+    // 无程序集）不纳入。诊断覆盖已由 DiagnosticCoverage 独立承载。
     private static readonly Assembly[] Assemblies =
     [
         typeof(AggregateRoot<>).Assembly,       // PalDDD.Core
@@ -33,7 +38,27 @@ public sealed class PublicApiSnapshotTests
         // 同为 PalDDD.Core——快照 PalDDD.Core 段被 dump 两遍（218 行重复），快照体积虚增 47%。
         typeof(IMessageSerializer).Assembly,    // PalDDD.Serialization
         typeof(MessageContractManifest).Assembly, // PalDDD.Serialization.Evolution
-        typeof(Saga<>).Assembly                 // PalDDD.Transactions
+        typeof(Saga<>).Assembly,                // PalDDD.Transactions
+        // ── 数据面适配层（2026-09-25 扩展，全用完全限定避免同名歧义；多包复用父命名空间）──
+        typeof(global::PalDDD.Compression.CompressionProvider).Assembly,            // PalDDD.Compression
+        typeof(global::PalDDD.Compression.NativeCompressionServiceCollectionExtensions).Assembly, // PalDDD.Compression.Native（复用父命名空间）
+        typeof(global::PalDDD.Serialization.MemoryPack.MemoryPackMessageSerializer).Assembly, // PalDDD.Serialization.MemoryPack
+        typeof(global::PalDDD.EventLog.StoredEvent).Assembly,                       // PalDDD.EventLog.EFCore（复用父命名空间）
+        typeof(global::PalDDD.Idempotency.IdempotencyDbContext).Assembly,           // PalDDD.Idempotency.EFCore（复用父命名空间）
+        typeof(global::PalDDD.Projections.ProjectionCheckpointDbContext).Assembly,  // PalDDD.Projections.EFCore（复用父命名空间）
+        typeof(global::PalDDD.Repository.EFCore.UnitOfWork<>).Assembly,             // PalDDD.Repository.EFCore
+        typeof(global::PalDDD.Transactions.MySqlOutboxDbContext).Assembly,          // PalDDD.Transactions.EFCore（复用父命名空间）
+        typeof(global::PalDDD.Hosting.AspNetCore.ExceptionMiddleware).Assembly,    // PalDDD.Hosting.AspNetCore
+        typeof(global::PalDDD.Dapper.DapperOutboxStore).Assembly,                   // PalDDD.Dapper
+        typeof(global::PalDDD.Dapper.MySql.MySqlMultiHost).Assembly,                // PalDDD.Dapper.MySql
+        typeof(global::PalDDD.Dapper.PostgreSql.PostgreSqlAuditor).Assembly,        // PalDDD.Dapper.PostgreSql
+        typeof(global::PalDDD.Dapper.Sqlite.SqliteServiceCollectionExtensions).Assembly, // PalDDD.Dapper.Sqlite
+        typeof(global::PalDDD.PalORM.PalOrmPreWarmHostedService<>).Assembly,        // PalDDD.PalORM
+        typeof(global::PalDDD.PalORM.MySql.MySqlPalOrmExtensions).Assembly,         // PalDDD.PalORM.MySql
+        typeof(global::PalDDD.PalORM.PostgreSql.PostgreSqlPalOrmExtensions).Assembly, // PalDDD.PalORM.PostgreSql
+        typeof(global::PalDDD.PalORM.Sqlite.SqlitePalOrmExtensions).Assembly,       // PalDDD.PalORM.Sqlite
+        typeof(global::PalDDD.Messaging.Kafka.KafkaBroker).Assembly,                // PalDDD.Messaging.Kafka
+        typeof(global::PalDDD.Messaging.RabbitMQ.RabbitMqBroker).Assembly           // PalDDD.Messaging.RabbitMQ
     ];
 
     [Test]
