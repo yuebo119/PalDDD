@@ -44,6 +44,17 @@
 | **RabbitMQ `RabbitMQActivitySource` 内建 OTel** | broker 发布/消费 span 目前完全缺失（`PalActivitySource` 19 处无一覆盖）；DLL 探针确认 API 存在 | 有**待实测的冲突点**：客户端 `ContextInjector` 自动注入的 traceparent（来自 `Activity.Current`）与本仓从 outbox 持久化还原的 `MessagePublishContext.TraceParent` 可能同键冲突，谁覆盖谁需先写集成测试 |
 | **PalORM `PreWarmAsync` + `WithPool` 生产配置面** | 三方言现用 `DbOptions.Development(...)`，无预热/池参数入口 | 上游宣称远程建连 ~8.5ms/条（**上游数字，本仓未实测**）；`Development`→`Production` 改默认属对外契约变更，须裁决 |
 
+### 三轮实施形态（2026-09-25，用户裁决「按最优方案实施」后 5 项全落地）
+
+| 项 | 实施形态 |
+|---|---|
+| 读副本路由 | 3 个非敏感读点标注 `readFromReplica: true`（EventLog 纯读流 ×2 + Outbox 候选读）——未配置 `ReadConnectionString` 时上游契约保证逐位回落主库，零行为变化；4 个敏感点保持 false 并注释边界论证（候选读走副本最多无害空批，租约裁决恒主库） |
+| 熔断作用域 | 三方言 `configureResilience` XML doc 补强制声明（Scoped 形态下启用熔断必须同步 `CircuitBreakerScope=Process`，且只能在构造期 `DbOptions` 上设——`DataSession` 不暴露 Options，反射探针确认） |
+| 连接池预热 | 新增 `PalOrmPreWarmHostedService<TProvider>`（public）+ 三方言 `prewarmConnectionCount` 参数（默认 0 不变；失败降级启动记 Warning；SQLite 上游契约空操作）。关键语义经上游源码确认：预热进 ADO.NET 进程级共享池（按连接串键控），预热 options 与 DI 工厂同实例保证同池 |
+| RabbitMQ tracing | 源码级冲突分析替代 broker 集成测试（反编译 7.2.2——`HasListeners()` 短路使无 listener 场景零影响，确定性结论强于实测单次采样）：无 listener 时本仓手工头是唯一事实源；有 listener 时同键覆盖发生在 Extract 之后链条衔接正确；结论落 `RabbitMqBroker` XML doc + 自定义 Injector 出口声明 |
+| GZip span 编码 | **量具先行 → 测量否决 → 已回滚**：`--compression` 基准入口（含 GZip/Deflate 解压档）三轮实测——分配确定性劣化 +34%/+35%（改造后两轮逐字节一致、真回滚逐字节还原），耗时在噪声带内无改善；按 PERF 纪律（<5% 不做、劣化必回滚）不落地，数据留档 `docs/performance.md` 防重复提议。量具（`--compression` 基准档）入库留存 |
+| 快照覆盖扩展 | `decision-2026-09-25-publicapi-snapshot-scope-expansion` 回应原范围声明；+19 程序集；宿主迁 `Integration.Tests`（架构守卫白名单——Core.Tests 作 Domain 测试被实测拦截，机械防线按设计工作）；基线 +652 行 |
+
 ---
 
 ## 四、高价值但本轮未实施（改动面 / 成本说明）

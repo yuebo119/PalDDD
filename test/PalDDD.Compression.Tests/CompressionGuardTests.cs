@@ -125,7 +125,7 @@ public sealed class CompressionGuardTests
         // 前置：炸弹压缩体必须低于输入上限，确保走到的是输出上限检查
         await Assert.That(compressed.Length).IsLessThan(DecompressionGuard.MaxCompressedInputBytes);
 
-        // System 三算法逐块检查（Brotli totalWritten / GZip+Deflate CopyWithLimit）→
+        // System 三算法逐块检查（Brotli totalWritten / GZip+Deflate span decoder 逐块）→
         // InvalidDataException（v2.1.0 发布验证勘正：v70 已统一解压异常为 InvalidDataException，
         // 本测试原断言 IOException 是 v62"面板漏列 Compression 项目"残留的 stale 期望；
         // 对齐 :135 Native 版同款异常口径）

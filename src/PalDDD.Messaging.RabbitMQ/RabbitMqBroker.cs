@@ -20,6 +20,22 @@ namespace PalDDD.Messaging.RabbitMQ;
 /// 消息按事件类型名路由到同名 Exchange（Fanout 模式）。<br/>
 /// SubscribeAsync 完全异步——零 Task.Run，零 sync-over-async 死锁风险。
 /// </remarks>
+/// <remarks>
+/// <b>内置 tracing 与本仓手工 traceparent 头的共存语义</b>（2026-09-25 特性审计，源码级结论
+/// ——反编译 RabbitMQ.Client 7.2.2 RabbitMQActivitySource）：
+/// <para>客户端内建 tracing（<c>RabbitMQActivitySource.ContextInjector/ContextExtractor</c>）
+/// 经 <see cref="System.Diagnostics.DistributedContextPropagator.Current"/>（W3C）注入/提取，
+/// header 键即 <c>"traceparent"</c>——与本仓 <see cref="MessageConsumeContext.HeaderNames.TraceParent"/>
+/// <b>同键</b>。两条共存规则（均有源码短路保证）：</para>
+/// <para>① <b>宿主未注册 ActivityListener 时客户端 tracing 完全不激活</b>
+/// （<c>BasicPublish/Deliver/BasicGet</c> 均以 <c>HasListeners()</c> 短路返回 null，注入与提取
+/// 不会执行）——本仓手工头是唯一传播事实源，行为与本仓 3.1.0 语义逐位一致；</para>
+/// <para>② <b>宿主注册 listener 后</b>，消费侧 <c>ContextExtractor</c> 在建链时先读到的是
+/// 消息到达时头部里的本仓值（出站时序：本仓 <c>CreateHeaders</c> 先写、客户端 Injector 后写
+/// 同键覆盖）——W3C 链条衔接正确；发布侧 OutboxProcessor 的 Activity.Current 链会覆盖本仓
+/// 还原的原始发布上下文头。若业务需保留 outbox 原始上下文而非 outbox 投递 activity 链，
+/// 请自定义 <c>RabbitMQActivitySource.ContextInjector</c>（先取本仓头再透传）。</para>
+/// </remarks>
 [SuppressMessage("Design", "CA1031:Do not catch general exception types",
     Justification = "Broker 消费回调需记录毒消息失败并执行合理 nack，需捕获 Exception 基类。")]
 public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
