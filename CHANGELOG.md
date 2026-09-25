@@ -12,13 +12,26 @@
 
 ## [Unreleased]
 
+### Added 新增
+
+- **MySQL 数据源新增 builder 配置重载**（`AddPalMySqlDataSource(cs, applyOptimization, Action<MySqlDataSourceBuilder>?)`）：在 `Build()` 前注入自定义配置，使 MySqlConnector 2.6 的 `ConfigureTracing`（OTel 语义约定、traceparent 下发）等 builder 级能力对调用方可达——此前 MySQL 侧无任何入口可摸到 builder，该能力结构性不可达。**新增重载而非改签名**，既有调用方二进制与源码均不受影响；PG 姊妹入口本就有 `Action<NpgsqlDataSourceBuilder>`，此为方言间对齐。
+
 ### Changed 变更
+
+- **原生压缩解压路径改为流式 decoder（解压炸弹防护时序改善）**：`LZ4Compressor`/`ZStandardCompressor`/`OpenZLCompressor` 的 `Decompress` 从「一次性全量分配 → 返回后检查上限」改为 `LZ4Decoder`/`ZstandardDecoder` span 循环（形态对齐本仓既有 `BrotliCompressor`），输出累计每轮即校验 `MaxOutputBytes`，**超限的下一轮立即中止**——上限检查先于后续分配生效，而非等全量解压完成。**消费者可见的行为差异**：超限输入现在在解压过程中途抛 `InvalidDataException`（异常类型不变，消息含算法名与上限值），不再先承受一次大额分配；输入上限（8MB）与输出上限（64MB）数值、异常契约、round-trip 结果均不变。原声明「此限制受外部库 API 设计约束，无法在适配层修复」经包内 API 实测**失实**，已一并修正。
 
 - **公开 API 快照与发布记录的同步判定收紧**：此前只在「最后一次提交」的范围内校验公开 API 快照变更是否同步记录了 CHANGELOG——那意味着只要在快照变更之后再补一个只改 CHANGELOG 的提交，这道校验就被绕过（本仓 3.1.0 首发时实际发生过这种洗白）。现改为按发布窗口（当前提交到上一个版本 tag 之间）**逐个提交**校验：哪个提交动了公开 API 快照却没同步记录，就报出哪个提交。影响仅限构建与评审纪律——包内容、运行时行为、公共 API 表面均不变。
 
 ### Documentation 文档
 
+- **引用库最新特性使用审计**（`docs/review/feature-usage-audit-2026-09-25.md`）：55 个中央包按库族分 5 组审计，逐条特性附官方来源与 grep 证据；记录结构性结论（本仓 EF 走 raw SQL、PalORM 走 FormattableString 窄路径，故多数新特性零接触面）、5 项已实施、5 项待裁决（读副本路由 / 熔断作用域 / span 压缩编码 / broker tracing / 连接池预热）、以及含历史否决项在内的不建议清单。
+
 - **全仓文档与真实实现对齐**（3.1.0 之后口径）：架构文档的质量体系版本、诊断数 21→23、prompt 模板数 9→10、Outbox 指标补 `paldd.outbox.dead`/`persist_failed`、TUnit/MTP 版本、GitHub Actions 模板改为 ci.yml 实际形态、CI 触发表对齐 4 job 实态、测试计数口径 1379→1490（2026-09-23 全量实测 1430 通过 + 60 项无 Docker 跳过）；补写 3.1.0 消费者可见变更（Outbox 三栈对齐、EventLog 写路径零拷贝）与 3.0.0 的 UoW fail-fast / `MaxDegreeOfParallelism` 警示；`IPalOutboxStore` 的 v4.0 预告与 `PalDiagnostics` 的计数器勘正注释同步更新。
+
+### Tests 测试
+
+- **`VerifyChecks.Run()` 约定自检**（新增 `VerifyChecksTests`）：Verify 官方约定的机器检查——ModuleInitializer 位置、命名、received 产物处理一旦偏离官方形态即失败，而非等某次快照比对异常才暴露。首跑即抓出两处真实缺口并已修复：`.gitignore` 缺 `*.received.*`（快照失败产物可被误提交）、`.editorconfig` 缺 `[*.{received,verified}.{txt}]` 段（其段头内层花括号是官方文案原样，过不了 Verify 的切片解析，勿"简化"）。测试数 +1。
+- **ITM-261 canary**（`OutboxSqliteConcurrencyTests`）：EF11 RC1 探针实测确认 SQLite provider 仍不翻译 `DateTimeOffset` 范围比较与排序，而本仓 `SqliteOutboxDbContext` 的 raw SQL 谓词下推与 Lease 单语句正建立在该限制上。canary 锁住这两条——**若 EF 后续修复翻译则转红，即 GA 复核信号**（GA 计划 §三.1 提前完成，GA 日仅需复跑）。测试数 +1。
 
 ### Dependencies 依赖
 

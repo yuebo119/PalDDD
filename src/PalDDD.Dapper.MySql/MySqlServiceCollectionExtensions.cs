@@ -48,6 +48,22 @@ public static class MySqlServiceCollectionExtensions
         this IServiceCollection services,
         string connectionString,
         bool applyOptimization = true)
+        => AddPalMySqlDataSource(services, connectionString, applyOptimization, configure: null);
+
+    /// <summary>
+    /// 注册 MySqlDataSource 并在 <see cref="MySqlDataSourceBuilder.Build"/> 前注入自定义配置。
+    /// <para>与 PG 姊妹入口 <c>AddPalMySqlDataSource(..., Action&lt;NpgsqlDataSourceBuilder&gt;)</c>
+    /// 对齐——MySQL 侧 MySqlConnector 2.6 起的 <c>ConfigureTracing</c>（OTel 语义约定、
+    /// traceparent 下发）等 builder 级能力需经此钩子可达；无自定义需求用无参重载即可。</para>
+    /// </summary>
+    /// <param name="connectionString">MySQL 连接字符串</param>
+    /// <param name="applyOptimization">是否应用 InnoDB 性能优化（默认 true）</param>
+    /// <param name="configure">builder 自定义配置（tracing/凭据插件等），Build 前执行</param>
+    public static IServiceCollection AddPalMySqlDataSource(
+        this IServiceCollection services,
+        string connectionString,
+        bool applyOptimization,
+        Action<MySqlDataSourceBuilder>? configure)
     {
         ArgumentNullException.ThrowIfNull(services);
         // v72：删冗余 ThrowIfNull（ThrowIfNullOrWhiteSpace 对 null 已抛 ANE——对齐 PG 姊妹 v34 声明）
@@ -88,6 +104,10 @@ public static class MySqlServiceCollectionExtensions
             }.ConnectionString;
 
         var builder = new MySqlDataSourceBuilder(connectionString);
+
+        // 配置钩子：Build 前执行，使 MySqlConnector 2.6 的 ConfigureTracing 等 builder 级
+        // 能力对调用方可达（此前无任何入口可摸到 builder，新特性结构性不可达）
+        configure?.Invoke(builder);
 
         // MySqlDataSource 自动使用 ILoggerFactory（无需手动传递）
         var dataSource = builder.Build();
@@ -137,8 +157,8 @@ public static class MySqlServiceCollectionExtensions
     /// <remarks>⚠️ <b>ITM-276（R43）：applyOptimization 参数在本 Legacy 路径实际不生效</b>——
     /// 优化 SET SESSION 打在临时连接上，Dispose 归池后被 ResetConnections=true（MySqlConnector 默认）
     /// 清除，后续 Scoped 工厂从池取的连接不继承任何会话优化。有效的优化路径是
-    /// <see cref="AddPalMySqlDataSource"/>（数据源级配置在建连时逐连接应用）。
-    /// v36 P3 补差异：空白连接串无注册时 fail-fast——新入口 <see cref="AddPalMySqlDataSource"/>
+    /// <see cref="AddPalMySqlDataSource(IServiceCollection, string, bool)"/>（数据源级配置在建连时逐连接应用）。
+    /// v36 P3 补差异：空白连接串无注册时 fail-fast——新入口 <see cref="AddPalMySqlDataSource(IServiceCollection, string, bool)"/>
     /// 已有 <c>ArgumentException.ThrowIfNullOrWhiteSpace</c> 守卫（v33），本入口 null/空白串
     /// 原样传入 MySqlConnection 构造，失败延迟到建连（Open）时抛 provider 专属异常，与本包
     /// 其余注册入口的统一 ArgumentException 口径不一致；本 Obsolete 入口不再补守卫

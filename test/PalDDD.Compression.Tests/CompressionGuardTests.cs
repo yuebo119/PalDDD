@@ -7,14 +7,15 @@ namespace PalDDD.Compression.Tests;
 // ═══════════════════════════════════════════════════════════════
 // ① 压缩输入上限（8MB，DecompressionGuard.MaxCompressedInputBytes）
 // ② 损坏输入拒绝（InvalidDataException）
-// ③ 解压输出上限（64MB，System 版逐块检查 / Native 版返回后检查）
+// ③ 解压输出上限（64MB，System 版与 Native 版均逐块检查）
 //
 // P2 修复（十七轮）：上限常量直接引用 DecompressionGuard（已 public）——
 // 消除本地数字副本的漂移风险（单一事实源）；本文件用真实量级数据端到端验证
 // （组③峰值瞬时内存约 130MB）。若未来需要低成本回归，建议把上限做成可注入
 // 选项（IOptions<DecompressionGuardOptions>），本文件即可改用小上限。
-// Native 三算法（LZ4/ZStandard/OpenZL）的解压输出上限为"返回后检查"——
-// 已知限制见 NativeCompressors.DecompressionGuard XML doc，此处仅验证检查会触发。
+// Native 三算法（LZ4/ZStandard/OpenZL）已改走流式 decoder，输出累计每轮即校验上限
+//（形态对齐 System 版 Brotli）；本组断言"超限必抛"，并经变异验证（把上限检查
+// 置为恒不触发 → 本组精确变红）。
 // ═══════════════════════════════════════════════════════════════
 
 /// <summary>
@@ -143,7 +144,7 @@ public sealed class CompressionGuardTests
 
         await Assert.That(compressed.Length).IsLessThan(DecompressionGuard.MaxCompressedInputBytes);
 
-        // Native 版输出检查在 Decompress 返回后 → InvalidDataException（已知限制：先分配后检查）
+        // Native 版流式解压每轮即校验上限 → 超限立即抛 InvalidDataException（不等全量分配）
         await Assert.That(() => compressor.Decompress(compressed.Span)).Throws<InvalidDataException>();
     }
 

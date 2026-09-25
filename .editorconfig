@@ -24,6 +24,19 @@ indent_size = 2
 [*.md]
 trim_trailing_whitespace = false
 
+# Verify 快照基线（VerifyChecks 约定自检要求）：基线与失败产物统一 LF + BOM，
+# 与 encoding-gate E4（.verified.* 纯 LF）同向；本仓 3 个 .verified.txt 实测已带 BOM。
+# 段头的内层花括号形态 {txt} 是 Verify 官方推荐文案原样（editorconfig 分组语法，
+# 与 .txt 等价），VerifyChecks.HasAllExtensions 按该形态解析——勿"简化"为 .txt。
+[*.{received,verified}.{txt}]
+charset = utf-8-bom
+end_of_line = lf
+indent_size = unset
+indent_style = unset
+insert_final_newline = false
+tab_width = unset
+trim_trailing_whitespace = false
+
 [*.{cs,csx}]
 # 全部 IDE 规则设为 none —— 框架不强制编辑器样式偏好
 dotnet_diagnostic.IDE.severity = none
