@@ -897,7 +897,7 @@ flowchart TB
 | [Performance Records](docs/performance.md) | Benchmark data |
 | [Testing](docs/testing.md) | Test pyramid, scenario matrix, BenchmarkDotNet config |
 | [Release SOP](docs/release.md) | Versioning, package scope, CHANGELOG conventions & workflow |
-| [Pitfalls](docs/pitfalls.md) | 82 real-world DDD/AOT/concurrency pitfalls |
+| [Pitfalls](docs/pitfalls.md) | 83 real-world DDD/AOT/concurrency pitfalls |
 | [Development](docs/development.md) | Dev environment, Git hooks, test running |
 | [Architecture Decisions](docs/decisions/) | 24 ADRs |
 | [Changelog](CHANGELOG.md) | Version history (consumer-facing changes + engineering appendix) |
