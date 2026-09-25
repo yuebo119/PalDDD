@@ -1,5 +1,6 @@
 {
   "//": "单模块覆盖率基线(A6 降幅门禁,容差 5pp)——键=测试项目名,值=line-rate 基线;由 ci-coverage --update-baseline 更新",
+  "//PalDDD.Integration.Tests重录": "0.5284→0.3815,2026-09-25,来源 CI run 36128788289(379 项 0 失败 0 跳过);理由与分摊见 docs/test-coverage-baseline.md §基线重录记录",
   "PalDDD.Analyzers.Tests": 0.4366,
   "PalDDD.CQRS.Tests": 0.3098,
   "PalDDD.Compression.Tests": 0.8801,
@@ -8,7 +9,7 @@
   "PalDDD.DependencyInjection.Tests": 0.1511,
   "PalDDD.EventLog.Tests": 0.5426,
   "PalDDD.Hosting.AspNetCore.Tests": 0.5161,
-  "PalDDD.Integration.Tests": 0.5284,
+  "PalDDD.Integration.Tests": 0.3815,
   "PalDDD.Messaging.Integration.Tests": 0.3901,
   "PalDDD.Messaging.Tests": 0.2179,
   "PalDDD.Projections.EventLog.Tests": 0.3493,

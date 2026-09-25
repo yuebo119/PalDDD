@@ -3,7 +3,7 @@
 > **基线日期**：2026-07-30
 > **基线 commit**：`db47e22`（feature/palorm-adapter）
 > **测试总数**：850（全绿）——**基线时点值**
-> **当前规模**（2026-09-25，本机全量实测）：16 项目 1502 用例（1434 通过 + 68 跳过——60 项 Docker/Testcontainers 依赖：PalORM 多方言 46 项 + Integration 14 项，由 CI Testcontainers 执行；另 8 项 Messaging.Integration 的 RabbitMQ broker 本机 AMQP 预检不可达。较 1492 的净增 +10 来自两个竞态测试的 `[Repeat(5)]`——TUnit Repeat 语义为"额外再跑 5 次"共 6 实例）；本文余下覆盖率数字均为 2026-07-30 基线，未随测试增长重测
+> **当前规模**（2026-09-25，本机全量实测）：16 项目 1502 用例（1434 通过 + 68 跳过——60 项 Docker/Testcontainers 依赖：PalORM 多方言 46 项 + Integration 14 项，由 CI Testcontainers 执行；另 8 项 Messaging.Integration 的 RabbitMQ broker 本机 AMQP 预检不可达。较 1492 的净增 +10 来自两个竞态测试的 `[Repeat(5)]`——TUnit Repeat 语义为"额外再跑 5 次"共 6 实例）；本文余下覆盖率数字均为 2026-07-30 基线，未随测试增长重测（§基线重录记录的单模块重录值除外）
 > **覆盖率工具**：dotnet-coverage 18.9.0 + ReportGenerator 5.5.11
 
 ## 总览
@@ -94,11 +94,62 @@
   Step 6 检查。首次 `coverage` job 运行后应用 CI 完整产物重取基线
   （`-- --update-baseline`，按上文「基线更新属校准步骤，需评审后提交」），
   届时 PalORM 随产物齐全一并纳入。
+  **例外（2026-09-25）**：`PalDDD.Integration.Tests` 一项已按 CI 实测重录，非 2026-09-14 本机产物，
+  见下 §基线重录记录。
 
 > 本文上文「按模块覆盖率」分档表与下文「覆盖率低的已知原因」表均为 **2026-07-30 历史
 > 视角**——其中的百分比已与实际脱节（例如 `Core.SourceGen` 当时记 42.4%，2026-09-14
 > 实测 91.7%），保留用于对照当时的判断，**不作为门禁输入**；门禁输入只有
 > `coverage-baseline.json`（逐项目降幅）与合并 Cobertura 的全局 line-rate（全局阈值）。
+
+## 基线重录记录
+
+> 沿上文「基线更新属校准步骤，需评审后提交」：本节逐条记录 `coverage-baseline.json` 的重录，
+> 只登记事实与依据，不改写上文的历史数字。旧值与当前值不可比（违反「同一测试集插桩同一装配集」）
+> 才构成重录理由；可比且在 5pp 容差内的不重录。
+
+| 重录日期 | 对象 | 旧值 → 新值 | 来源 | 理由 |
+|:--:|------|:--:|------|------|
+| 2026-09-25 | `PalDDD.Integration.Tests` | 0.5284 → **0.3815** | CI run `36128788289` coverage job（2026-09-25，379 项 0 失败 0 跳过） | 快照宿主迁入改变插桩装配集，旧基线与当前不可比（下详） |
+
+### 2026-09-25 `PalDDD.Integration.Tests`：快照宿主迁入致插桩装配集变化
+
+- **重录理由**：提交 `6f8270b` 把 `PublicApiSnapshotTests.cs`（652 行金标快照）自
+  `PalDDD.Core.Tests` 迁入本测试项目（快照扩展需引用数据面适配层，而 Core.Tests 作 Domain
+  测试被 `DomainTests_DoNotReferenceInfrastructureImplementations` 拦截）。csproj 随迁一次新增
+  **17 个直接 `ProjectReference`**（csproj +20 行 = 17 行引用 + 3 行说明注释）：CQRS、
+  DependencyInjection、EventLog、EventLog.EFCore、Messaging、Messaging.Kafka、
+  Messaging.RabbitMQ、Projections.EventLog、Compression、Compression.Native、
+  Serialization.MemoryPack、Hosting.AspNetCore、PalORM 及其三方言、Repository.EFCore。
+  其中 **15 个装配集此前未被本测试项目插桩**（EventLog、Messaging 因 Dapper→EventLog、
+  Transactions→Messaging 早已传递在册），故插桩装配集由 **16 → 31**——31 为当前 Cobertura
+  实测装配集数；16 为改动前直接引用 14 项的传递闭包（传递插桩行为由 `PalDDD.CQRS.Tests` 只
+  直接引用 CQRS 却含 Core 行实证），并经分母对账印证。单项目 `lines-valid`
+  **10463 → 16080（+53.7%）**。
+  「同一测试集插桩同一装配集」的前提已不成立 ⇒ 旧值与当前值不可比，按降幅判红是误报，故重录。
+
+- **降幅分摊**（本机前后两轮同口径实测，按装配集聚合 Cobertura；本机合计 17.46pp，
+  扣除起点/终点口径差后对账到 CI 的 14.69pp）：
+
+  | 分项 | 本机口径贡献 | 依据 |
+  |------|:--:|------|
+  | 插桩装配集变大 | **16.27pp（93.2%）** | 新增 15 个装配集 5468 行进分母（占增幅 5617 行的 97%），仅 265 行被覆盖 |
+  | `6f8270b` 新增源码未覆盖 | **0.43pp（2.5%）** | 该提交 `src/` 净增 184 行（RabbitMQ/PalORM 七文件），全部落在新增装配集内、0 覆盖，占新分母 1.14% |
+  | 既有 16 装配集内变化 | 0.76pp（4.3%） | 净增约 149 行（`src/` 净 +32，其余为生成代码随工具版本漂移[推断]），覆盖 5724 → 5725 |
+  | 本机前后两轮合计 | 17.46pp | 54.71% → 37.25%（2026-09-23 与 2026-09-25 各一轮） |
+  | − 旧基线起点差 | −1.87pp | 旧值 0.5284 低于改动前本机实测 0.5471 |
+  | − CI 终点差 | −0.90pp | CI 跑了本机无 Docker 跳过的 14 项集成测试，故 0.3815 高于本机 0.3725 |
+  | = CI 报告降幅 | **14.69pp** | 52.84% → 38.15% |
+
+  结论：**约九成降幅由插桩装配集变大解释，新增源码本身只占约 2.5%**——新增引用把一批
+  从未被本测试项目插桩的既有代码拉进分母，其覆盖本就由各自的测试项目承担；余量为基线起点
+  与测试环境（Docker）口径差。
+
+- **待办（新代码补测后基线应上调）**：新入的 15 个装配集当前仅 `PalDDD.PalORM` 有 15.72% 覆盖，
+  其余 14 个为 0%（CQRS、Compression、Compression.Native、DependencyInjection、EventLog.EFCore、
+  Hosting.AspNetCore、Messaging.Kafka、Messaging.RabbitMQ、PalORM 三方言、Projections.EventLog、
+  Repository.EFCore、Serialization.MemoryPack）——本测试项目只把它们拉进插桩范围，未执行其代码
+  路径。为这批装配集补测后应重录并**上调 0.3815**（上调不受 5pp 降幅门禁限制）。
 
 ## 覆盖率低的已知原因（非缺陷）
 
