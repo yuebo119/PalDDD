@@ -10,12 +10,13 @@
 ## 一、结论先行
 
 1. **版本维度已无空间**：10 个基础设施包经 NuGet flat-container 实查全部已是最新稳定版；微软 rc 线 `11.0.0-rc.1.26425.128` 为该线最新（rc.2 未发）。差距全在**特性采用率**。
-2. **运行时级特性利用充分**：`runtime-async=on`、`GetTypeInfo<T>` 14 处、`EqualityComparer.Create` 3 处、`System.Threading.Lock` 9 处、`TimeProvider` 38 文件、`SearchValues`、C# 12/13 特性（主构造 49、集合表达式、`params ReadOnlySpan`、`OverloadResolutionPriority`）均有落地。
-3. **结构性结论（决定多数"未使用"的性质）**：
-   - **本仓 EF 用法是 raw SQL + 投影**，EF Core 11 头条特性零落点：`Include`=0、`AsSplitQuery`=0、`GroupBy`(EF)=0、`UseSqlServer`=0、`MigrateAsync`=0、complex types=0。
+2. **运行时级特性利用充分**：`runtime-async=on`、`GetTypeInfo<T>` 14 处（src+test 泛型口径；src 实际调用 5 处 + SourceGen 模板 1 处——二轮复核补充口径标注）、`EqualityComparer.Create` 3 处（src+test 口径；src 调用 1 处 `MessageDescriptor.cs:69`）、`System.Threading.Lock` 9 处、`TimeProvider` 38 文件、`SearchValues`、C# 12/13 特性（主构造 49、集合表达式、`params ReadOnlySpan`、`OverloadResolutionPriority`）均有落地。
+3. **结构性结论（决定多数"未使用"的性质；2026-09-25 二轮对抗复核勘正 EF 刻画）**：
+   - **本仓 EF 用法是「raw SQL + 投影 + DB 端批量写」**，EF Core 11 头条特性零落点：`Include`=0、`AsSplitQuery`=0、`GroupBy`(EF)=0、`UseSqlServer`=0、`MigrateAsync`=0、complex types=0。勘正：首版刻画漏掉 **`ExecuteUpdateAsync`/`ExecuteDeleteAsync` 共 4 处真实调用**（EF7 引入的 DB 端批量写，分布 `OutboxDbContext:314`/`InboxDbContext:146,252`/`ProjectionCheckpointDbContext:251`）——「EF 无写路径」类推断不成立，批量写路径已在用。
    - **本仓 PalORM 适配层几乎完全绕过实体 CRUD 与 QueryBuilder**：`Session.ExecuteAsync` 30 次 / `QueryAsync<T>` 5 / `ScalarAsync` 4 / `QueryAsyncEnumerable` 2 / `InsertAsync` 2 / `BulkInsertAsync` 1，而 `GetAsync`/`UpdateAsync`/`DeleteAsync`/`From<T>()` **全为 0**——所有挂在 QueryBuilder 上的能力（`WhereIn`/`ForEachAsync`/`WithCache`/`ToPageAsync`/`GridReader`/Auto Tagging）**结构性零接触面**。
 4. **真正值得动手的是 5 处真实缺口**（已实施），而非"用上某个新 API"。多数未用项属"本仓无对应场景"或"触及既有声明/已否决决策"。
-5. **本次首跑即抓到 3 个真实问题**：压缩侧失实声明（安全正确性）、`.gitignore` 缺 Verify 产物规则、`.editorconfig` 缺 Verify 段。
+5. **本次首跑即抓到 3 个真实问题**：压缩侧失实声明（安全正确性）、`.gitignore` 缺 Verify 产物规则、`.editorconfig` 缺 Verify 段。二轮对抗复核另抓到 1 个消费者可见失实：CHANGELOG 曾声称压缩改造"异常契约不变"，实际**失败路径**（损坏帧）异常类型已由上游 `InvalidOperationException`/`ZstandardException` 统一转为 `InvalidDataException`，已勘正。
+6. **公共 API 快照保护盲区（复核发现，待办登记）**：`PublicApiSnapshotTests` 快照只覆盖 12 个程序集，**不含 PalDDD.Dapper.MySql/PostgreSql/Compression.Native 等数据面程序集**——这些程序集的 public API 变更不进 G23 快照↔CHANGELOG 逐提交校验（本批 MySQL `configure` 重载正落在盲区内，靠 CHANGELOG 自觉补记）。扩展快照覆盖属门禁变更，需另轮裁决。
 
 ---
 
@@ -49,9 +50,9 @@
 
 | 项 | 价值 | 成本 | 说明 |
 |---|---|---|---|
-| **`Assert.That(x.Count).IsEqualTo(n)` → `HasCount(n)`** | 失败消息从"期望 1 实际 2"升级为集合内容+计数，断言强度不降反升；`HasCount` 0 使用 vs 候选 **80 处** | **33 个文件**（最多 5 处/文件），逐文件 Read+Edit | 已抽验主体全部为集合类型（`events`/`leased`/`listener.Measurements`/`catalog.Descriptors` 等），无标量误伤；过 `AssertionStrengthGateTests`（棘轮只统计 `IsNotNull` 与零断言方法） |
-| **FsCheck 接入 `[FsCheckProperty]`** | `TUnit.FsCheck` 被 2 个 csproj 引用却 **0 消费**；换来 seed 一键重放 + TUnit 统一失败报告 | 半天（10 处 `Prop.ForAll(...).QuickCheckThrowOnFailure()` 改写 + `Replay`/`MaxTest` 配置） | 现属性测试无确定性重放能力（`Config.Default`/`WithReplay`/`WithMaxTest` 均 0 使用） |
-| **并发测试加 `[Repeat(n)]`** | 把偶发竞态变必现；`[Repeat]` 0 使用 | 10 分钟 | 首选 `SmartEnumTests.ConcurrentReads_*`、`OutboxSqliteConcurrencyTests.LeasePending_SequentialWorkers_*`；纯内存测试成本近零 |
+| ~~`Assert.That(x.Count).IsEqualTo(n)` → `HasCount(n)`~~ **【已勘正撤销，2026-09-25 二轮】** | — | — | **本条建议方向错误**：`HasCount(int)` 在 TUnit 1.69.0 已标 `[Obsolete]`（CS0618：「Use `Count().IsEqualTo(expectedCount)` instead」），按建议替换 80 处会直接撞 `TreatWarningsAsErrors` 编译失败。首版只核验了 `HasCount` 在包 XML 中**存在**，未核验其 Obsolete 状态——**"存在"≠"推荐"**，API 面核验必须含 Obsolete/实验性标记。现有 `Assert.That(x.Count).IsEqualTo(n)`（对 int 属性断言）是合法形态，维持不变 |
+| **FsCheck 接入 `[FsCheckProperty]`** 【已实施 2026-09-25 二轮】 | `TUnit.FsCheck` 被 2 个 csproj 引用却 **0 消费**；换来 seed 一键重放 + TUnit 统一失败报告 | 已落地：`BackoffPolicyPropertyTests` 3 处迁移（生成域经自定义 Arbitrary 收敛到与原 `Gen.Choose` 完全相同的有界区间，迭代数沿用默认 100，语义不变）；`PropertyTests` 的 7 处复杂生成器（SelectMany/元组组合）保留手写——迁移成本大于收益 | 3/3 绿，测试数不变 |
+| **并发测试加 `[Repeat(n)]`** 【已实施 2026-09-25 二轮】 | 把偶发竞态变必现；`[Repeat]` 0 使用 | 已落地：`SmartEnumTests.ConcurrentReads_*` 与 `OutboxSqliteConcurrencyTests.LeasePending_SequentialWorkers_*` 各 `[Repeat(5)]`。**TUnit Repeat 语义为"额外再跑 5 次"共 6 实例**——两测试净增 +10 测试实例（计数 1492→1502 已同步文档） | 全绿 |
 | **`Skip.Unless` + 自定义 `[RequiresDocker]`** | 12 处 `if (!x) Skip.Test(...)` 收敛为声明式；`Skip.Unless` 仅 2 处 | 1-2 小时 | 消除 4 个文件重复的环境守卫模板 |
 | **BDN `[StatisticalTestColumn]`** | 8 处 baseline 比对现靠人眼读 `github.md`，与 PERF 纪律的"噪声地板/显著性"要求不对齐 | 半天（含 docs/performance.md 口径同步） | 需同步列数说明 |
 
@@ -91,6 +92,7 @@
 
 ## 六、局限与标注
 
+- **二轮对抗复核（2026-09-25，反编译级）总评 B+**：核心结构性结论、5 项实施功能正确性、变异验证真实性全部站住（`Include` 81 命中全为 Dapper.AOT 生成物、`lock`+`Lock` 类型组合正确、CA2007 为项目级豁免、PalORM `GetAsync`=0 口径成立）；4 处勘正已全部落实——① EF 刻画补 `ExecuteUpdateAsync`/`ExecuteDeleteAsync` 4 处（见结论 3）；② 两处数字补口径标注（见结论 2）；③ CHANGELOG「异常契约不变」失实已勘正（失败路径异常类型已变更，见 CHANGELOG Changed 节）；④ 公共 API 快照盲区披露（见结论 6）。
 - **性能数字全部是上游 CHANGELOG 宣称值，本仓一次未测**（PalORM 5.6.0 的 −53%/−41%/−76% 等）[事实]。
 - A 项收益是**安全时序改善**（上限检查前移），非性能优化；未做性能 A/B（契约不变、无回归即可）。
 - `CircuitBreakerScope` 写入 API 形态未在 `DbOptions` member 列表中找到直接 setter → 实施前需再查 [推断]。
