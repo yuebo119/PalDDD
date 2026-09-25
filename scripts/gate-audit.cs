@@ -76,7 +76,8 @@ var wiredNames = CollectWiredNames(root);
 // 本次实际探测的门禁——矩阵 PROBED 列与下方探针列表由本数组单向对齐，
 // 并在跑探针前断言一致（防两处清单漂移，同 E1/E2 目录清单教训）。
 string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "gate-lite", "verify-conventions", "ci-coverage",
-    "gate", "tech-debt", "doc-consistency", "test-gate", "verify-ai", "config-policy", "license-policy", "count-audit"];
+    "gate", "tech-debt", "doc-consistency", "test-gate", "verify-ai", "config-policy", "license-policy", "count-audit",
+    "new-skip-guard"];
 
 // 门禁覆盖形态声明（T-34，2026-09-22）：每个**已探针**门禁必须在此声明它覆盖哪些形态。
 // 为什么是机械要求而非文档建议：V25 的实证——一个已接线、能红、报错精确到行的门禁，
@@ -102,6 +103,11 @@ var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
     // 故如实声明为不覆盖，不拿探针数量冒充覆盖面（T-34 的本意）。
     ["license-policy"] = "隔离探针覆盖两极：禁令命中（包+版本下限，与许可字符串正交）必红、白名单放行必绿（负向对照）；**不覆盖**：非白名单表达式 / 文件型许可未登记 gap / gap 到期 三类 FAIL，以及空输入·依赖图失败·nuspec 缺失三条 fail-closed 路径——这些由 --selftest 的 59 断言覆盖",
     ["count-audit"] = "README*/docs 计数声明失实（16 推导项 × 数字+关键词声明形态正则，扫描面排除 review·decisions·migration·design；fail-closed：推导 0 值/异常/缺依赖文件即红、扫描面零声明即红）；**不覆盖**：测试用例数（需 dotnet test 实测）、架构测试方法数 37（D12a 反射锚已守）、pitfalls 分章统计行与 CHANGELOG 历史数字、PAL 子系列区间（由总数项间接覆盖）",
+    // new-skip-guard 的隔离探针钉住两极（净增拦截 / 干净放行）+ 对称判定的洗白形态
+    // （删 1 加 1 改 reason = 净 0 放行）。**不覆盖**：字符串字面量内的 Skip 文本
+    // （元测试形态，diff 对称与豁免兜底）；行内 // 剥除的漏报路径（方向安全）——
+    // 由 --selftest 的 13 断言覆盖。
+    ["new-skip-guard"] = "test/**.cs 新增 Skip 标注四形态（[Skip( / Skip = \" / .Skip(\" / Skip.If(）净增拦截；干净文件放行；删 1 加 1 的 reason 修改放行（对称判定，防搬掩护洗白）；LINQ .Skip(1) 不误伤；**不覆盖**：字符串字面量内 Skip 文本（豁免兜底）",
 };
 
 // ─── 未接线脚本的分类（2026-09-13 增）───
@@ -127,6 +133,7 @@ var manualTools = new Dictionary<string, string>(StringComparer.Ordinal)
     ["sibling-map"] = "姊妹文件映射，评审辅助",
     ["sister-axis"] = "姊妹轴对称核查，评审辅助",
     ["verify-action-items"] = "按参数校验指定清单文件，按需运行",
+    ["review-coverage-report"] = "沉寂面报告（2026-09-25 增，Pal 会话审计立法）：git 沉寂时长推导定向抽查池，发布前/大迁移收尾后人工运行并读数字——报告工具无「失败」语义，退出码恒 0",
 };
 
 // 应接线而未接线的（真缺口）——逐条登记原因与解锁条件
@@ -561,6 +568,55 @@ var probes = new List<Probe>
         ExpectExit: 0,
         MustContainInStdout: "PASS count-audit",
         Setup: dir => SetupCountAuditFixture(dir, injectFalseClaim: false)),
+    // ── new-skip-guard 隔离探针（2026-09-25 增，Pal 会话审计立法：Skip 修绿的静态拦截）。
+    // CWD 系门禁（FindRepoRoot 以 cwd 向上找 PalDDD.slnx）→ 隔离目录直接跑。
+    new(
+        Name: "new-skip-guard 拒绝 test/** 新增 [Skip 标注（净增）",
+        Gate: "new-skip-guard",
+        ExpectExit: 1,
+        MustContainInStdout: "FAIL 检测到 test/** 新增 Skip 标注",
+        Setup: dir =>
+        {
+            var d = Path.Combine(dir, "test", "Fake.Tests");
+            Directory.CreateDirectory(d);
+            File.WriteAllText(Path.Combine(d, "SkippedProbe.cs"),
+                "[Skip(\"flaky 排查\")]\npublic class SkippedProbe { }\n");
+            return ["test/Fake.Tests/SkippedProbe.cs"];
+        }),
+    new(
+        Name: "new-skip-guard 放行无 Skip 的干净测试文件（负向对照）",
+        Gate: "new-skip-guard",
+        ExpectExit: 0,
+        MustContainInStdout: "PASS",
+        Setup: dir =>
+        {
+            var d = Path.Combine(dir, "test", "Fake.Tests");
+            Directory.CreateDirectory(d);
+            File.WriteAllText(Path.Combine(d, "CleanProbe.cs"),
+                "public class CleanProbe\n{\n    [Test]\n    public void Ok() { Assert.That(1).IsEqualTo(1); }\n}\n");
+            return ["test/Fake.Tests/CleanProbe.cs"];
+        }),
+    // 对称判定探针：删 1 加 1（改 reason）= 净 0 必须放行——防「搬掩护」绕过：
+    // 若判定只看新增不看删除，把 [Skip("a")] 改成 [Skip("b")] 会被误拦，反之
+    // 若只看数量相等会被「删 1 加 3」洗白（selftest 已覆盖净增侧，此探针钉住放行侧）。
+    // 基座文件须先落提交：RunProbe 对返回列表只 add 不 commit，无基座提交时
+    // 暂存 diff 是全量新增（净 +1）而非修改（净 0），探针形态构造不出来。
+    new(
+        Name: "new-skip-guard 放行 reason 修改（删 1 加 1 净 0）",
+        Gate: "new-skip-guard",
+        ExpectExit: 0,
+        MustContainInStdout: "PASS",
+        Setup: dir =>
+        {
+            var d = Path.Combine(dir, "test", "Fake.Tests");
+            Directory.CreateDirectory(d);
+            var p = Path.Combine(d, "RenamedSkip.cs");
+            File.WriteAllText(p, "[Skip(\"old reason\")]\npublic class RenamedSkip { }\n");
+            RunGit(dir, "add -- test/Fake.Tests/RenamedSkip.cs");
+            RunGit(dir, "commit -q -m skip-base");
+            File.WriteAllText(p, "[Skip(\"new reason\")]\npublic class RenamedSkip { }\n");
+            return ["test/Fake.Tests/RenamedSkip.cs"];
+        }),
 };
 
 // count-audit 探针夹具：最小可推导仓库（16 项推导全部 >0 才会走到声明扫描）。
