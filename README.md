@@ -890,7 +890,7 @@ flowchart TB
 | [性能记录](docs/performance.md) | 基准测试数据 |
 | [测试体系](docs/testing.md) | 测试金字塔、场景矩阵、BenchmarkDotNet 配置 |
 | [发布规范](docs/release.md) | 版本管理、包范围、CHANGELOG 规范与生成流程 |
-| [踩坑目录](docs/pitfalls.md) | 82 条 DDD/AOT/并发实战踩坑 |
+| [踩坑目录](docs/pitfalls.md) | 83 条 DDD/AOT/并发实战踩坑 |
 | [开发流程](docs/development.md) | 开发环境、Git 钩子、测试运行 |
 | [架构决策](docs/decisions/) | 24 份 ADR |
 | [变更日志](CHANGELOG.md) | 版本历史（消费者变更 + 工程过程附录） |

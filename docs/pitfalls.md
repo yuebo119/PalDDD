@@ -183,12 +183,13 @@
 | **PD6** | Dispatcher.Register 冻结后非线程安全 → Freeze() 转 FrozenDictionary 后禁运行时 Add | ITM-027 |
 | **PD7** | TUnit/MTP `-e` 环境变量误判 → global.json runner 配置问题，`-e` 多余 → 诊断三步骤 S3 反向验证 | conventions §14 |
 | **PD8** | DIM 类型级契约误判（S2326 IRequest/ICommand / S3246 IEventHandler\<TEvent\> 逆变）→ SuppressMessage 带 Justification | git 3b26afd / fa1cbf8 |
+| **PD9** | 依赖升位的上游「无破坏性变更」声明不可信——PalORM 5.5.1→5.6.0 上游 CHANGELOG 称 SemVer Minor 无破坏性，实测五个读入口在第 2 位插入 `bool readFromReplica = false`，以位置参数传 `CancellationToken` 的调用编译期 CS1503（本仓 11 处命中，改命名参数 `ct:` 消解）→ **破坏性只有全量编译 + 测试能证**，依赖升位 PR 必须全量 CI 绿再合，不采信上游声明 | 实测 2026-09-25（CHANGELOG [Unreleased] Dependencies） |
 
 ---
 
 ## 统计
 
-> 第一至九章共 66 条；第十章 PalORM 适配层另有 16 条（PALORM-SG1-5/RT1-5/MYSQL1-3/CSHARP1-2/SEC1），全文共 82 条（2026-09-04 勘正统计口径）。
+> 第一至九章共 67 条；第十章 PalORM 适配层另有 16 条（PALORM-SG1-5/RT1-5/MYSQL1-3/CSHARP1-2/SEC1），全文共 83 条（2026-09-04 勘正统计口径，2026-09-25 增补 PD9）。
 
 | 章节 | 条数 | 来源 |
 |------|:----:|------|
@@ -200,8 +201,8 @@
 | 安全 & 审计 | 4 | ORM Phase 6/21（DDD 适用） |
 | DDD/Clean Architecture | 7 | DDD 项目独有（architecture.md 分层边界与稳定性约束） |
 | 诊断 & 可观测性 | 4 | ORM Phase 16/22（DDD 适用） |
-| DDD 实战新增 | 8 | ITM 历史 + ADR |
-| **合计** | **66** | — |
+| DDD 实战新增 | 9 | ITM 历史 + ADR |
+| **合计** | **67** | — |
 
 ---
 
