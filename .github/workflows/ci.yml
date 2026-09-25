@@ -112,9 +112,17 @@ jobs:
             while [[ $(jobs -rp | wc -l) -ge $jobs ]]; do wait -n || true; done
           done
           wait || true
-          ran=0; failed=0
+          ran=0; failed=0; skipped=0
           for csproj in "${projects[@]}"; do
             base=$(basename "$csproj" .csproj)
+            # Skip 披露（Pal 会话审计 2026-09-25）：测试面板排除/Skip 数不披露曾把
+            # 「Skip 16」报成「Skip 9」、45 个 Testcontainers 测试长期不在面板——
+            # 数字先可见再谈阈值（Skip 棘轮因本地/CI 跳过构成波动暂缓立法）。
+            # 尽力提取：无命中记 0，不做硬断言。grep 空命中 exit 1 由 || true 兜底
+            # （本步 set -euo pipefail，赋值命令替换失败会中断整个步骤）。
+            s=$(grep -oE 'Skipped: [0-9]+' "ci-test-results/$base.log" 2>/dev/null \
+                | grep -oE '[0-9]+' | awk '{t+=$1} END{print t+0}' || true)
+            skipped=$((skipped + ${s:-0}))
             code=$(cat "ci-test-results/$base.exit" 2>/dev/null || echo "missing")
             if [[ "$code" == "0" ]]; then
               ran=$((ran + 1))
@@ -129,7 +137,7 @@ jobs:
             echo "::error ::TEST STEP SPUN EMPTY: projects=${#projects[@]} ran=$ran failed=$failed — glob 失效或循环被跳过（v2 审计 T-1）"
             exit 1
           fi
-          echo "✅ $ran / ${#projects[@]} test projects passed（failed=$failed，并行度=$jobs）"
+          echo "✅ $ran / ${#projects[@]} test projects passed（failed=$failed，skipped=$skipped，并行度=$jobs）"
           [[ $failed -eq 0 ]] || exit 1
         env:
           # CI 环境：Testcontainers 自动启动 PG/MySQL/Kafka/RabbitMQ
