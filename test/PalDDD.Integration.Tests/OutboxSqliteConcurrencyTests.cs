@@ -478,6 +478,27 @@ public sealed class OutboxSqliteConcurrencyTests
         }
     }
 
+    /// <summary>ITM-261 canary——EF11 RC1 预检（2026-09-25 探针实测）：SQLite provider 仍不
+    /// 翻译 DateTimeOffset 有序比较/排序。本仓 <c>SqliteOutboxDbContext</c> 的 raw SQL 谓词下推
+    /// 与 Lease 单语句正建立在该限制之上（decision-2026-09-19）。</summary>
+    /// <remarks>本测试**期望上游限制存在**：若 EF 后续版本修复翻译，此处转红即是 GA 复核信号
+    /// ——届时评估 GetPending/Lease 是否还原 LINQ 形态（GA 计划 §三.1），而非直接改判本测试为 bug。
+    /// 等值比较不受限（可译），故下方只锁范围谓词与排序两条。</remarks>
+    [Test]
+    public async Task Sqlite_DateTimeOffsetRangeAndOrdering_StillUntranslatable_Itm261Canary()
+    {
+        using var db = new TestSqliteOutboxDbContext(_options);
+        var now = DateTimeOffset.UtcNow;
+
+        // ① 范围谓词：GetPending/Lease 的 `LockedUntil <= {now}` 走 LINQ 时不可翻译
+        await Assert.That(() => db.OutboxMessages.Where(m => m.LockedUntil <= now).ToQueryString())
+            .Throws<InvalidOperationException>();
+
+        // ② 排序：Lease/GetPending 的 `ORDER BY CreatedAt` 不可翻译（文本序仅在 raw SQL 内合法）
+        await Assert.That(() => db.OutboxMessages.OrderBy(m => m.CreatedAt).ToQueryString())
+            .Throws<NotSupportedException>();
+    }
+
     /// <summary>SQL 命令计数拦截器（GetPending_SingleSqlCommand 的结构性验收用；
     /// 只计数读路径——ToListAsync 走 ReaderExecutingAsync，同步重载不会被异步路径调用）。</summary>
     private sealed class CommandCountingInterceptor : DbCommandInterceptor

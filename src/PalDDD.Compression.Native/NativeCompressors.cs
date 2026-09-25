@@ -1,3 +1,4 @@
+using System.Buffers;
 using NativeCompressions;
 
 namespace PalDDD.Compression;
@@ -8,11 +9,9 @@ namespace PalDDD.Compression;
 // 解压炸弹防护常量（八轮评审 P3 单一事实源）：本程序集直接引用 PalDDD.Compression 的
 // public DecompressionGuard 常量（此前存在双副本，MaxOutputBytes/MaxDecompressedOutputBytes
 // 命名与值需人工对齐，有漂移风险）。
-// ⚠️ 已知限制（六轮评审声明）：LZ4/ZStandard/OpenZL 的原生库 API 为一次性
-// 全量分配——输出上限检查在 Decompress 返回后执行，恶意载荷可能在检查生效前触发
-// 超大分配（LZ4 膨胀比约 255:1、Zstd 更高）。输入 8MB 上限是最有效的防线；
-// 需要流式输出检查的场景请使用 SystemCompressor（Brotli/GZip/Deflate 均为逐块检查）。
-// 此限制受外部库 API 设计约束，无法在适配层修复。
+// 三个压缩器的 Decompress 均走流式 decoder（LZ4Decoder/ZstandardDecoder span 原语），
+// 与 SystemCompressor 的 Brotli 路径同构：输出累计每轮即校验 MaxOutputBytes，
+// 超限的下一轮立即中止——上限检查先于后续分配生效，而非全量解压完成之后。
 
 /// <summary>
 /// LZ4 压缩器 — 基于 NativeCompressions (Cysharp) 的原生绑定。
@@ -47,22 +46,41 @@ internal sealed class LZ4Compressor : ICompressor
         if (compressed.Length > DecompressionGuard.MaxCompressedInputBytes)
             throw new System.IO.InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
-        // ITM-219 修复：OOM → 受控 InvalidDataException——NativeCompressions 内部全量分配，
-        // 恶意载荷在输出检查生效前可能触发 OOM。catch 转为可处理的受控异常而非进程崩溃。
+
+        // 流式 span 直解（形态对齐同库 BrotliCompressor.Decompress）：免输入 ToArray 拷贝，
+        // 输出走增长缓冲；每轮 Advance 后即校验上限，超限立即中止——不再等全量分配完成。
+        // ITM-219 修复保留：单轮缓冲增长仍可能触发 OOM，catch 转为可处理的受控异常而非进程崩溃。
         // v38 P3：补 ex 内层异常保根因堆栈（ITM-219 只声明行为权衡未覆盖可诊断性）。
-        byte[] result;
         try
         {
-            result = LZ4.Decompress(compressed);
+            using var decoder = new LZ4Decoder();
+            var buffer = new ArrayBufferWriter<byte>();
+            var source = compressed;
+            long totalWritten = 0;
+
+            while (true)
+            {
+                Span<byte> destination = buffer.GetSpan(Math.Max(4096, source.Length * 2));
+                OperationStatus status = decoder.Decompress(source, destination, out int bytesConsumed, out int bytesWritten);
+                buffer.Advance(bytesWritten);
+                totalWritten += bytesWritten;
+                source = source.Slice(bytesConsumed);
+
+                if (totalWritten > DecompressionGuard.MaxOutputBytes)
+                    throw new System.IO.InvalidDataException($"LZ4 解压输出超过安全上限 {DecompressionGuard.MaxOutputBytes:N0} 字节（疑似解压炸弹）。");
+
+                if (status == OperationStatus.Done) break;
+                if (status == OperationStatus.DestinationTooSmall) continue;
+                throw new System.IO.InvalidDataException($"LZ4 解压失败：{status}");
+            }
+
+            return buffer.WrittenSpan.ToArray();
         }
         catch (OutOfMemoryException ex)
         {
             throw new System.IO.InvalidDataException(
                 $"LZ4 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。", ex);
         }
-        if (result.Length > DecompressionGuard.MaxOutputBytes)
-            throw new System.IO.InvalidDataException($"解压输出 {result.Length:N0} 字节超过安全上限（疑似解压炸弹）。");
-        return result;
     }
 
     private static int MapLevel(CompressionLevel level) => level switch
@@ -104,21 +122,40 @@ internal sealed class ZStandardCompressor : ICompressor
         if (compressed.Length > DecompressionGuard.MaxCompressedInputBytes)
             throw new System.IO.InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
-        // ITM-219：OOM → 受控 InvalidDataException（同 LZ4 路径）
+
+        // 流式 span 直解（形态对齐同库 BrotliCompressor.Decompress）：每轮 Advance 后即校验上限，
+        // 超限立即中止——不再等全量分配完成。ITM-219：OOM → 受控异常（同 LZ4 路径）。
         // v38 P3：补 ex 内层异常保根因堆栈（ITM-219 只声明行为权衡未覆盖可诊断性）。
-        byte[] result;
         try
         {
-            result = Zstandard.Decompress(compressed);
+            using var decoder = new ZstandardDecoder();
+            var buffer = new ArrayBufferWriter<byte>();
+            var source = compressed;
+            long totalWritten = 0;
+
+            while (true)
+            {
+                Span<byte> destination = buffer.GetSpan(Math.Max(4096, source.Length * 2));
+                OperationStatus status = decoder.Decompress(source, destination, out int bytesConsumed, out int bytesWritten);
+                buffer.Advance(bytesWritten);
+                totalWritten += bytesWritten;
+                source = source.Slice(bytesConsumed);
+
+                if (totalWritten > DecompressionGuard.MaxOutputBytes)
+                    throw new System.IO.InvalidDataException($"ZStandard 解压输出超过安全上限 {DecompressionGuard.MaxOutputBytes:N0} 字节（疑似解压炸弹）。");
+
+                if (status == OperationStatus.Done) break;
+                if (status == OperationStatus.DestinationTooSmall) continue;
+                throw new System.IO.InvalidDataException($"ZStandard 解压失败：{status}");
+            }
+
+            return buffer.WrittenSpan.ToArray();
         }
         catch (OutOfMemoryException ex)
         {
             throw new System.IO.InvalidDataException(
                 $"ZStandard 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。", ex);
         }
-        if (result.Length > DecompressionGuard.MaxOutputBytes)
-            throw new System.IO.InvalidDataException($"解压输出 {result.Length:N0} 字节超过安全上限（疑似解压炸弹）。");
-        return result;
     }
 
     private static int MapLevel(CompressionLevel level) => level switch
@@ -170,12 +207,34 @@ internal sealed class OpenZLCompressor : ICompressor
         if (compressed.Length > DecompressionGuard.MaxCompressedInputBytes)
             throw new System.IO.InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
-        // ITM-219：OOM → 受控 InvalidDataException（同 LZ4 路径）
+
+        // 流式 span 直解（形态对齐同库 BrotliCompressor.Decompress）：每轮 Advance 后即校验上限，
+        // 超限立即中止——不再等全量分配完成。ITM-219：OOM → 受控异常（同 LZ4 路径）。
         // v38 P3：补 ex 内层异常保根因堆栈（ITM-219 只声明行为权衡未覆盖可诊断性）。
-        byte[] result;
         try
         {
-            result = Zstandard.Decompress(compressed);
+            using var decoder = new ZstandardDecoder();
+            var buffer = new ArrayBufferWriter<byte>();
+            var source = compressed;
+            long totalWritten = 0;
+
+            while (true)
+            {
+                Span<byte> destination = buffer.GetSpan(Math.Max(4096, source.Length * 2));
+                OperationStatus status = decoder.Decompress(source, destination, out int bytesConsumed, out int bytesWritten);
+                buffer.Advance(bytesWritten);
+                totalWritten += bytesWritten;
+                source = source.Slice(bytesConsumed);
+
+                if (totalWritten > DecompressionGuard.MaxOutputBytes)
+                    throw new System.IO.InvalidDataException($"OpenZL 解压输出超过安全上限 {DecompressionGuard.MaxOutputBytes:N0} 字节（疑似解压炸弹）。");
+
+                if (status == OperationStatus.Done) break;
+                if (status == OperationStatus.DestinationTooSmall) continue;
+                throw new System.IO.InvalidDataException($"OpenZL 解压失败：{status}");
+            }
+
+            return buffer.WrittenSpan.ToArray();
         }
         catch (OutOfMemoryException ex)
         {
@@ -184,9 +243,6 @@ internal sealed class OpenZLCompressor : ICompressor
             throw new System.IO.InvalidDataException(
                 $"OpenZL 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。", ex);
         }
-        if (result.Length > DecompressionGuard.MaxOutputBytes)
-            throw new System.IO.InvalidDataException($"解压输出 {result.Length:N0} 字节超过安全上限（疑似解压炸弹）。");
-        return result;
     }
 
     private static int MapLevel(CompressionLevel level) => level switch

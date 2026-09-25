@@ -848,7 +848,7 @@ src/                         36 源项目 · Clean Architecture（Folder 与 Pal
 ├── Hosting/                 DependencyInjection · Hosting.AspNetCore
 └── Metapackages/            Base · Extension · Prompts（Prompts 非包，IsPackable=false）
 
-test/                        16 测试项目（TUnit）· 1490 项实测（1430 通过 + 60 项无 Docker 跳过；2026-09-23 本机全量实测——PalORM.Tests 与 Messaging.Integration.Tests 需 Docker）
+test/                        16 测试项目（TUnit）· 1492 项实测（1424 通过 + 68 跳过；2026-09-25 本机全量实测——跳过项为 Docker/Testcontainers 依赖与本机 broker 预检，PalORM.Tests 与 Messaging.Integration.Tests 需 Docker）
 bench/                       BenchmarkDotNet 性能基准
 samples/                     PalOrmSample（AOT 验证）· ECommerce · MinimalApi · AotSample · DapperAotProbe（实验探针，不在 slnx/CI——见 docs/review/dapper-aot-experiment-2026-09-13.md）
 docs/                        架构 · 使用指南 · 教程 · ADR
@@ -921,7 +921,7 @@ MassTransit 是分布式消息总线，绑定特定传输（RabbitMQ/Azure Servi
 不支持 .NET 8/9/10（单目标 net11.0）。AOT 场景三处限制（源码 `[RequiresDynamicCode]` 诚实声明）：① Saga 的 ChildSaga 子流程分发（`MakeGenericMethod`/`MakeGenericType`，见 `Saga.cs`）与②动态事件路由同源；③ `ISpecification.Compile()` 表达式树编译在 Native AOT 下不受支持——AOT 场景请改用 `ToExpression()` 传给查询提供者。不含内置的 EventStore 快照机制——需要快照策略的项目需要自行实现。
 
 **生产环境有谁在用？**
-Pal.DDD 当前版本 v3.1.0（tag v3.1.0 发布，SemVer Minor：三栈 Outbox 行为对齐、EventLog 写路径零拷贝、[Obsolete] 移除版本由 v3.0 改指 v4.0 与版本承诺守卫类变更，无破坏性 API 变更，见 CHANGELOG `[3.1.0]` 段）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 1490 项实测用例（16 项目：1430 通过 + 60 项无 Docker 跳过——2026-09-23 本机全量实测口径）。欢迎在非生产环境中试用并反馈。
+Pal.DDD 当前版本 v3.1.0（tag v3.1.0 发布，SemVer Minor：三栈 Outbox 行为对齐、EventLog 写路径零拷贝、[Obsolete] 移除版本由 v3.0 改指 v4.0 与版本承诺守卫类变更，无破坏性 API 变更，见 CHANGELOG `[3.1.0]` 段）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试覆盖 1492 项实测用例（16 项目：1424 通过 + 68 跳过——2026-09-25 本机全量实测口径）。欢迎在非生产环境中试用并反馈。
 
 ---
 

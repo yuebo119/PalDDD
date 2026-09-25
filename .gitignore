@@ -38,6 +38,10 @@ test-results/
 BenchmarkDotNet.Artifacts/
 **/BenchmarkDotNet.Artifacts/
 
+# Verify 快照比对失败产物（比对未过时生成，审阅后应删除——VerifyChecks 自检要求）
+*.received.*
+*.received/
+
 ## ── 诊断 / 日志 ──
 *.log
 # GitHub Actions 运行器日志（手动下载的排查产物，不入库）

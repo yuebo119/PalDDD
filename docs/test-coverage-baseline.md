@@ -3,7 +3,7 @@
 > **基线日期**：2026-07-30
 > **基线 commit**：`db47e22`（feature/palorm-adapter）
 > **测试总数**：850（全绿）——**基线时点值**
-> **当前规模**（2026-09-23，本机全量实测）：16 项目 1490 用例（1430 通过 + 60 项无 Docker 跳过——PalORM 多方言 46 项 + Integration 14 项，由 CI Testcontainers 执行）；本文余下覆盖率数字均为 2026-07-30 基线，未随测试增长重测
+> **当前规模**（2026-09-25，本机全量实测）：16 项目 1492 用例（1424 通过 + 68 跳过——60 项 Docker/Testcontainers 依赖：PalORM 多方言 46 项 + Integration 14 项，由 CI Testcontainers 执行；另 8 项 Messaging.Integration 的 RabbitMQ broker 本机 AMQP 预检不可达）；本文余下覆盖率数字均为 2026-07-30 基线，未随测试增长重测
 > **覆盖率工具**：dotnet-coverage 18.9.0 + ReportGenerator 5.5.11
 
 ## 总览

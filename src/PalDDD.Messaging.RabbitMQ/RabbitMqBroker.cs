@@ -3,6 +3,7 @@ using PalDDD.Serialization;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using RabbitMQ.Client.Exceptions;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using PalUlid = ByteAether.Ulid.Ulid;
@@ -175,13 +176,27 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         // 生效。推荐用 RabbitMqBroker.CreateAsync 构造（自动启用）；注入自建 channel 时必须
         // 自行以 CreateChannelOptions(publisherConfirmationsEnabled:true,
         // publisherConfirmationTrackingEnabled:true) 创建，否则本 await 会静默"成功"。
-        await _channel.BasicPublishAsync(
-            exchange: cachedExchange,
-            routingKey: CachedString.Empty,
-            mandatory: true,
-            basicProperties: CreateProperties(descriptor, messageId, context),
-            body: body,
-            cancellationToken: ct).ConfigureAwait(false);
+        try
+        {
+            await _channel.BasicPublishAsync(
+                exchange: cachedExchange,
+                routingKey: CachedString.Empty,
+                mandatory: true,
+                basicProperties: CreateProperties(descriptor, messageId, context),
+                body: body,
+                cancellationToken: ct).ConfigureAwait(false);
+        }
+        catch (PublishReturnException ex)
+        {
+            // 路由失败诊断（7.2.0 的 basic.return 专用异常）：基类 PublishException 只有
+            // 泛化消息，缺 exchange/routingKey/replyCode/replyText——NO_ROUTE 排障原本要回
+            // broker 端查。此处仅补日志后原样重抛，重试与 Outbox 语义不变（ITM-213 的
+            // mandatory:true 契约不受影响）。
+            _logger.Warning(
+                $"Message not routed (NO_ROUTE) to exchange {ex.Exchange}, routingKey={ex.RoutingKey}, " +
+                $"reply={ex.ReplyCode} {ex.ReplyText}: {descriptor.ClrType.Name}");
+            throw;
+        }
 
         // 优化（二十五轮 Z-1）：同 KafkaBroker——Debug 级门控免白做插值
         if (_logger.IsEnabled(LogLevel.Debug))

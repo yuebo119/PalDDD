@@ -51,6 +51,10 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
         // DateTimeOffset（与写入格式自洽——ExecuteSqlAsync 路径 spike 已证，FromSqlRaw
         // 非组合式物化由 decision-2026-09-19 前置二 spike 验证：SQL 内谓词+ORDER BY+LIMIT
         // 直接 ToListAsync 可行、实体完整映射）。
+        // EF11 RC1 预检回填（2026-09-25 探针实测，GA 计划 §三.1 提前完成）：ITM-261 仍成立——
+        // Where(LockedUntil <= now) 抛 InvalidOperationException（不可翻译）、OrderBy(CreatedAt)
+        // 抛 NotSupportedException（SQLite 不支持 DateTimeOffset 排序）、等值 == 可译。
+        // raw SQL 形态继续正确；可翻译性一旦变化由 OutboxSqliteConcurrencyTests 的 canary 转红。
         // 排序键 CreatedAt：对齐 Lease 与三栈 GetPending 先例（Dapper/PalORM/EF-MySQL 均
         // SQL 内 ORDER BY created_at）；原 Id 序（ULID 创建序）与本序在单进程下一致
         //（表征测试 GetPending_OrdersByIdAscending 双态绿）。非组合式调用——FromSqlRaw 后
