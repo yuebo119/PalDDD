@@ -3,7 +3,7 @@
 > 本规范定义 Pal.DDD 项目从代码变更到 NuGet 发布的标准流程。
 > 所有版本发布（含补丁版/小版本/大版本/Preview）必须遵守。
 >
-> **当前状态**：`VersionPrefix=3.1.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**3.1.0 已发布**（tag `v3.1.0` → 本提交，2026-09-23）。**3.0.0 已发布**（tag `v3.0.0`→`39fff08`，2026-09-20）。**2.2.0 已发布**（2026-09-15）。2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）。2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正，内容后并入 `[2.1.0]` 段，**CHANGELOG 先行教训第二次**，见 §9 教训 2）。1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`；`[1.1.0]` 段为事后回填）。tag 之后的变更累积在 `[Unreleased]`，下个版本发布前需将 `VersionPrefix` 升位。
+> **当前状态**：`VersionPrefix=3.2.0` / `VersionSuffix=`（空——见 `Directory.Build.props`）。**3.2.0 已发布**（tag `v3.2.0` → 本提交，2026-09-25）。**3.1.0 已发布**（tag `v3.1.0`，2026-09-23）。**3.0.0 已发布**（tag `v3.0.0`→`39fff08`，2026-09-20）。**2.2.0 已发布**（2026-09-15）。2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）。2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正，内容后并入 `[2.1.0]` 段，**CHANGELOG 先行教训第二次**，见 §9 教训 2）。1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`；`[1.1.0]` 段为事后回填）。tag 之后的变更累积在 `[Unreleased]`，下个版本发布前需将 `VersionPrefix` 升位。
 
 ---
 
@@ -33,9 +33,9 @@
 ```xml
 <!-- Directory.Build.props（唯一版本源） -->
 <PropertyGroup>
-    <VersionPrefix>3.1.0</VersionPrefix>
+    <VersionPrefix>3.2.0</VersionPrefix>
     <VersionSuffix></VersionSuffix>
-    <!-- 最终 Version = 3.1.0 -->
+    <!-- 最终 Version = 3.2.0 -->
 </PropertyGroup>
 ```
 
@@ -290,7 +290,7 @@ unzip -p /tmp/release-preview/PalDDD.Core.*.nupkg '*.nuspec' | grep -E "<(id|ver
 
 **必须字段**：
 - `<id>` 正确（如 `PalDDD.Core`）
-- `<version>` 与 `Directory.Build.props` 一致（如 `3.1.0`）
+- `<version>` 与 `Directory.Build.props` 一致（如 `3.2.0`）
 - `<projectUrl>` 指向 `https://github.com/yuebo119/PalDDD`
 - `<repository url=... commit=.../>` 含 commit hash（证明 SourceLink 生效）
 - `<releaseNotes>` 指向 CHANGELOG.md
@@ -315,9 +315,9 @@ grep -E "VersionPrefix|VersionSuffix" Directory.Build.props
 grep -E "^## \[" CHANGELOG.md | head -2        # 首行 [Unreleased]，次行 [目标版本]
 dotnet run scripts/changelog-check.cs                # 必须 0 FAIL
 
-# 3. 打 tag（tag 名格式：v + 版本号，如 v3.1.0）
-git tag v3.1.0
-git push origin v3.1.0
+# 3. 打 tag（tag 名格式：v + 版本号，如 v3.2.0）
+git tag v3.2.0
+git push origin v3.2.0
 
 # 4. 观察 Actions 运行
 # https://github.com/yuebo119/PalDDD/actions/workflows/release.yml
@@ -414,7 +414,7 @@ gh run list --workflow=release.yml --limit 1
 
 访问 https://github.com/yuebo119/PalDDD/releases：
 
-- ✅ Release 标题 = tag 名（如 `v3.1.0`）
+- ✅ Release 标题 = tag 名（如 `v3.2.0`）
 - ✅ Body 来自 CHANGELOG.md
 - ✅ Assets 含全部 nupkg 文件
 
@@ -423,8 +423,8 @@ gh run list --workflow=release.yml --limit 1
 ```bash
 mkdir /tmp/palddd-consumer-test && cd /tmp/palddd-consumer-test
 dotnet new console
-dotnet add package PalDDD.Base --version 3.1.0
-dotnet add package PalDDD.Extension --version 3.1.0
+dotnet add package PalDDD.Base --version 3.2.0
+dotnet add package PalDDD.Extension --version 3.2.0
 dotnet restore
 dotnet build   # 应成功，无警告
 ```
