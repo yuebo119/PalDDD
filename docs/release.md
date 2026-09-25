@@ -309,6 +309,9 @@ unzip -p /tmp/release-preview/PalDDD.Core.*.nupkg '*.nuspec' | grep -E "<(id|ver
 git checkout main
 git pull origin main
 git log -1 --format="%h %s"
+# 1.5 确认 tag 将指向的 SHA（即上面 git log -1 的合并提交）已有 completed/success 的
+#     build-and-test（PR 全绿 ≠ 该 SHA 绿——PR 检查跑在 head SHA 上，见 §九 教训 6）：
+#     gh api repos/yuebo119/PalDDD/commits/<SHA>/check-runs --jq '.check_runs[] | select(.name=="build-and-test") | {status,conclusion}'
 
 # 2. 确认版本号已更新到目标版本 + CHANGELOG 已转正（§十二 Phase 5——未转正禁止打 tag）
 grep -E "VersionPrefix|VersionSuffix" Directory.Build.props
@@ -483,6 +486,7 @@ git push origin v1.1.0
 | 3 | release.yml pack 阶段 TreatWarningsAsErrors 阻塞（NU5104 preview 依赖/NU5128 元包无 lib 均为预期） | 2.0.0 发布流水线（main a115c22/ae0c912/64c4d3d 三连修） | 构建阶段 `-warnaserror` 与 pack 阶段分离；NoWarn 命令行属性保底（Directory.Build.props 的 NoWarn 在 CI pack 阶段偶不生效） |
 | 4 | Dapper 四包 + EFCore 五包 + DependencyInjection 共 10 项目曾因 NU5104 未 pack（包数断言抓出） | 同上 | §6.2 step 7 包数量断言 35（防漏发的机械防线） |
 | 5 | §4.1 #6 pack 循环 `for proj in $(ls src/)` 在输出带 `/` 后缀的 shell 环境（Git Bash `ls -F` 类行为）下拼错路径**静默空转 0 包**（无报错、无失败计数） | 2.2.0（2026-09-15） | 命令改 glob 直接枚举 `src/*/*.csproj`（不依赖 `ls` 行为）；**教训 4 的包数断言 35 正是本次空转的探测器**（0 ≠ 35 暴露） |
+| 6 | PR 检查绿在 head SHA，但 tag 打在**合并提交**（新 SHA）上，该 SHA 的 build-and-test 尚未跑完 → release.yml「Verify CI passed」步查 0 条已完成检查而拒绝发布（M2-3 防线按设计生效，零包推送、无半成品；API 重跑该 run 即过） | 3.2.0（2026-09-25 首发被拒，同日重跑成功） | §5.1 步骤 1.5：打 tag 前确认 **tag 将指向的 SHA**（合并后的 main HEAD）已有 `completed/success` 的 build-and-test——PR 全绿 ≠ 该 SHA 绿；等 CI 收敛再打 tag，或首发被拒后重跑 run（无需动 tag） |
 
 预期可能踩的坑（基于 ORM 项目经验预判）：
 
