@@ -114,6 +114,54 @@ if [[ "$ALL" == *"${NL}src/PalDDD.Dapper"* ]]; then
     fi
 fi
 
+# ── 8. config-policy（配置文件策略：dependabot 词表/结构 + Directory.Build
+#       Exec 构建期副作用；仅 .github/dependabot.yml 或 Directory.Build.* 入
+#       暂存时触发 ~2s）──
+# 来源1：dependabot groups.update-types 误用 ignore 词表（version-update:semver-*
+#   是 ignore 规则的词表）——该 schema 错误只在配置落到默认分支时由 Dependabot
+#   配置检查报出，dev 上长期不暴露，直至 main 上失败（两处词表不同，本仓实证）。
+# 来源2：Directory.Build.targets 的 ConfigureGitHooks 并发写 .git/config，Exec
+#   失败被 ContinueOnError 降级为 MSB3073 警告、release 的 -warnaserror 再升级
+#   为错误——v3.1.0 首发发布链当场中断（已修：Target 带 GITHUB_ACTIONS 跳过）。
+# 触发用 $ALL（含删除 D）：策略文件被删也触发，门禁 fail-closed 报"须显式裁决"。
+if any_ends_with ".github/dependabot.yml" "$ALL" || any_ends_with "Directory.Build.props" "$ALL" \
+    || any_ends_with "Directory.Build.targets" "$ALL"; then
+    echo "⚙️ config-policy（dependabot/Directory.Build 有改动）…"
+    if ! dotnet run scripts/config-policy.cs 2>&1; then
+        echo "⛔ config-policy 拦截——dependabot 词表/结构或 Directory.Build Exec 副作用违规"
+        FAIL=1
+    fi
+fi
+
+# ── 9. license-policy（依赖许可策略；仅 Directory.Packages.props 或 *.csproj
+#       入暂存时触发 ~3s——触发面即"依赖清单被改动"的那一面）──
+# 来源：2026-09-25 裁决「所有引用的库必须是开源的许可，不使用商业许可」。
+# 与 2026-09-23 Verify.TUnit 停 32.x 的裁决同源（dependabot ignore 注释 +
+# CHANGELOG Dependencies 段）：此前该裁决只活在文档里，升包不会被拦。
+# 为什么触发面是包清单：许可由 nuspec 决定，而 nuspec 只随包清单/版本变化。
+if any_ends_with "Directory.Packages.props" "$ALL" || any_ends_with ".csproj" "$ALL"; then
+    echo "📜 license-policy（包清单有改动）…"
+    if ! dotnet run scripts/license-policy.cs 2>&1; then
+        echo "⛔ license-policy 拦截——非白名单许可 / 禁令命中 / gap 到期 / 无法判定（见上方明细）"
+        FAIL=1
+    fi
+fi
+
+# ── 10. count-audit（文档计数声明与源码推导一致；仅 README*.md 或 docs/** 入
+#       暂存时触发 ~3s——触发面即"写计数声明的那一面"）──
+# 来源：2026-09-25 文档清扫实证计数静默漂移（断言点 89→99、ADR 22→24、prompt
+#   模板 9→10 等）只能靠 165 次人工工具调用才找全；推导真值门禁化后，改文档时
+#   "写了但不真"的声明即在提交期被拦（声明缺失不算错——PD34 去数字化口径）。
+# 触发用 $ACMR：删除声明文件无声明可失实，不触发；src 侧漂移由 CI 无条件跑兜底。
+if any_ends_with "README.md" "$ACMR" || any_ends_with "README.en.md" "$ACMR" \
+    || [[ "$ACMR" == *"${NL}docs/"* ]]; then
+    echo "🔢 count-audit（文档计数声明核对）…"
+    if ! dotnet run scripts/count-audit.cs 2>&1; then
+        echo "⛔ count-audit 拦截——计数声明与推导真值不一致（或推导失败 fail-closed）"
+        FAIL=1
+    fi
+fi
+
 if [ "$FAIL" -ne 0 ]; then
     echo ""
     echo "⛔ pre-commit 拦截——跳过检查：git commit --no-verify（不推荐）"

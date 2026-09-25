@@ -76,7 +76,7 @@ var wiredNames = CollectWiredNames(root);
 // 本次实际探测的门禁——矩阵 PROBED 列与下方探针列表由本数组单向对齐，
 // 并在跑探针前断言一致（防两处清单漂移，同 E1/E2 目录清单教训）。
 string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "gate-lite", "verify-conventions", "ci-coverage",
-    "gate", "tech-debt", "doc-consistency", "test-gate", "verify-ai"];
+    "gate", "tech-debt", "doc-consistency", "test-gate", "verify-ai", "config-policy", "license-policy", "count-audit"];
 
 // 门禁覆盖形态声明（T-34，2026-09-22）：每个**已探针**门禁必须在此声明它覆盖哪些形态。
 // 为什么是机械要求而非文档建议：V25 的实证——一个已接线、能红、报错精确到行的门禁，
@@ -96,6 +96,12 @@ var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
     ["doc-consistency"] = "D7 .ai/README.md 文件地图（其余 D1-D6/D8-D12 已下沉 C# 测试）",
     ["test-gate"] = "T1-T12 测试规范 / T-DEF-1 薄壳缺失 / T-DEF-4 CI job timeout / OSC 同测试翻转",
     ["verify-ai"] = "V1-V25 系统一致性（含命令形态三子类：bash-.cs / 带前缀死引用 / 裸名死引用）",
+    ["config-policy"] = "A dependabot groups/ignore 双词表混用 / versions·labels·prefix·interval 缺失或空 / 未知上下文且注释不误报；B Directory.Build Exec 缺 IgnoreExitCode 且 Target 无 GITHUB_ACTIONS 跳过（行式校验，非完整 YAML 解析器）",
+    // license-policy 的两极由隔离探针钉住（禁令命中必红 / 白名单放行必绿）；其余判定面
+    // 只在 selftest 覆盖——隔离目录没有真实 nuspec 缓存，构造不出「非白名单许可」的夹具，
+    // 故如实声明为不覆盖，不拿探针数量冒充覆盖面（T-34 的本意）。
+    ["license-policy"] = "隔离探针覆盖两极：禁令命中（包+版本下限，与许可字符串正交）必红、白名单放行必绿（负向对照）；**不覆盖**：非白名单表达式 / 文件型许可未登记 gap / gap 到期 三类 FAIL，以及空输入·依赖图失败·nuspec 缺失三条 fail-closed 路径——这些由 --selftest 的 59 断言覆盖",
+    ["count-audit"] = "README*/docs 计数声明失实（16 推导项 × 数字+关键词声明形态正则，扫描面排除 review·decisions·migration·design；fail-closed：推导 0 值/异常/缺依赖文件即红、扫描面零声明即红）；**不覆盖**：测试用例数（需 dotnet test 实测）、架构测试方法数 37（D12a 反射锚已守）、pitfalls 分章统计行与 CHANGELOG 历史数字、PAL 子系列区间（由总数项间接覆盖）",
 };
 
 // ─── 未接线脚本的分类（2026-09-13 增）───
@@ -448,7 +454,160 @@ var probes = new List<Probe>
                 "# 探针文档\n\n执行 `dotnet run scripts/nonexistent-probe.cs` 完成校验。\n");
             return ["docs/probe-deadref.md"];
         }),
+    // ── config-policy 隔离探针（2026-09-25 增，两事故实践出处：dependabot 双
+    // schema 词表混用只在默认分支现身 + 构建期 Exec 副作用经 -warnaserror 打断
+    // v3.1.0 发布链）。CWD 系门禁（FindRepoRoot 以 Environment.CurrentDirectory
+    // 优先）→ 直接在隔离目录跑，无需 CopyScriptIntoIsolation。三探针分别钉住：
+    // A 词表拦截、B 豁免缺失拦截、干净输入放行（负向对照，防因错误原因变绿）。
+    new(
+        Name: "config-policy 拒绝 groups 词表混用 ignore 词表（dependabot 两处 schema 不同）",
+        Gate: "config-policy",
+        ExpectExit: 1,
+        MustContainInStdout: ".github/dependabot.yml",
+        Setup: dir =>
+        {
+            var gh = Path.Combine(dir, ".github");
+            Directory.CreateDirectory(gh);
+            File.WriteAllText(Path.Combine(gh, "dependabot.yml"),
+                "version: 2\nupdates:\n  - package-ecosystem: nuget\n    directory: \"/\"\n    schedule:\n      interval: weekly\n    labels:\n      - dependencies\n    groups:\n      bad:\n        patterns:\n          - \"*\"\n        update-types:\n          - version-update:semver-patch\n");
+            // B 的载体文件必须合法——否则违规清单混入 B，"因 A 而红"的断言语义失真
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.props"), "<Project>\n</Project>\n");
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.targets"), "<Project>\n</Project>\n");
+            return [".github/dependabot.yml", "Directory.Build.props", "Directory.Build.targets"];
+        }),
+    new(
+        Name: "config-policy 拒绝无 IgnoreExitCode 且 Target 无 CI 跳过的 Exec",
+        Gate: "config-policy",
+        ExpectExit: 1,
+        MustContainInStdout: "Directory.Build.targets",
+        Setup: dir =>
+        {
+            var gh = Path.Combine(dir, ".github");
+            Directory.CreateDirectory(gh);
+            // A 的载体配置必须合法（labels/interval 齐备、无 ignore/groups）
+            File.WriteAllText(Path.Combine(gh, "dependabot.yml"),
+                "version: 2\nupdates:\n  - package-ecosystem: nuget\n    schedule:\n      interval: weekly\n    labels:\n      - dependencies\n");
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.props"), "<Project>\n</Project>\n");
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.targets"),
+                "<Project>\n  <Target Name=\"Bad\" BeforeTargets=\"Build\">\n    <Exec Command=\"git config --local core.hooksPath .githooks\" />\n  </Target>\n</Project>\n");
+            return [".github/dependabot.yml", "Directory.Build.props", "Directory.Build.targets"];
+        }),
+    new(
+        Name: "config-policy 放行干净配置（负向对照）",
+        Gate: "config-policy",
+        ExpectExit: 0,
+        MustContainInStdout: "PASS",
+        Setup: dir =>
+        {
+            var gh = Path.Combine(dir, ".github");
+            Directory.CreateDirectory(gh);
+            File.WriteAllText(Path.Combine(gh, "dependabot.yml"),
+                "version: 2\nupdates:\n  - package-ecosystem: nuget\n    schedule:\n      interval: weekly\n    labels:\n      - dependencies\n    commit-message:\n      prefix: \"依赖\"\n");
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.props"), "<Project>\n</Project>\n");
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.targets"),
+                "<Project>\n  <Target Name=\"ConfigureGitHooks\" Condition=\"'$(GITHUB_ACTIONS)' != 'true'\">\n    <Exec Command=\"git config --local core.hooksPath .githooks\" />\n  </Target>\n</Project>\n");
+            return [".github/dependabot.yml", "Directory.Build.props", "Directory.Build.targets"];
+        }),
+    // ── license-policy 隔离探针（2026-09-25 增，裁决「所有引用的库必须是开源的许可」
+    // 落成机械门禁的两极）。CWD 系门禁（FindRepoRootOrNull 以 Environment.CurrentDirectory
+    // 优先向上找 PalDDD.slnx）→ 直接在隔离目录跑，无需 CopyScriptIntoIsolation。
+    // 排序是语义的一部分：禁令判定排在 `dotnet list` **之前**——隔离夹具的 slnx 是
+    // 空文件，`dotnet list` 在那里必然退化成还原失败（exit 1），先判禁令才能断言
+    // 「这次拒绝来自许可策略」而不是「来自 I/O 失败」（否则正向探针假绿）。
+    new(
+        Name: "license-policy 拒绝禁令包（Verify.TUnit 33+ · SponsorCheck 商业门）",
+        Gate: "license-policy",
+        ExpectExit: 1,
+        MustContainInStdout: "FAIL [禁令]",
+        Setup: dir =>
+        {
+            File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"),
+                "<Project>\n  <ItemGroup>\n    <PackageVersion Include=\"Verify.TUnit\" Version=\"33.0.1\" />\n  </ItemGroup>\n</Project>\n");
+            return ["Directory.Packages.props"];
+        }),
+    // 负向对照：防正向探针因「门禁对任何输入都失败」而变绿。夹具两处细节：
+    // ① 空 slnx 换成合法空解决方案——否则 `dotnet list` 还原失败，门禁恒红；
+    // ② 包取 Dapper 2.1.89（本仓声明依赖，restore 后必在本机 NuGet 缓存）并带显式版本
+    //    ——这样判定集非空、nuspec 可离线取证（MIT），门禁才真跑通到判定结束。
+    new(
+        Name: "license-policy 放行白名单许可（负向对照）",
+        Gate: "license-policy",
+        ExpectExit: 0,
+        MustContainInStdout: "全部通过",
+        Setup: dir =>
+        {
+            File.WriteAllText(Path.Combine(dir, "PalDDD.slnx"), "<Solution></Solution>\n");
+            Directory.CreateDirectory(Path.Combine(dir, "lib"));
+            File.WriteAllText(Path.Combine(dir, "lib", "Lib.csproj"),
+                "<Project>\n  <ItemGroup>\n    <PackageReference Include=\"Dapper\" Version=\"2.1.89\" />\n  </ItemGroup>\n</Project>\n");
+            return ["PalDDD.slnx", "lib/Lib.csproj"];
+        }),
+    // ── count-audit 隔离探针（2026-09-25 增，2026-09-25 文档清扫实证「计数静默漂移
+    // 只能靠 165 次人工工具调用发现」的机械防线）。CWD 系门禁（FindRepoRoot 以
+    // Environment.CurrentDirectory 优先向上找 PalDDD.slnx）→ 直接在隔离目录跑，
+    // 无需 CopyScriptIntoIsolation。正向钉「与推导不一致的声明必红且报出真值差」，
+    // 负向对照钉「真值一致的声明放行」——防探针因「门禁对任何输入都失败」而变绿。
+    // 夹具必须让 16 项推导全部 >0（fail-closed 语义下任一推导为 0 都会先红，
+    // 正向探针就会因错误原因变绿），细节见 SetupCountAuditFixture 注释。
+    new(
+        Name: "count-audit 拒绝与推导不一致的计数声明（999 vs 1）",
+        Gate: "count-audit",
+        ExpectExit: 1,
+        MustContainInStdout: "声明 999 vs 推导 1",
+        Setup: dir => SetupCountAuditFixture(dir, injectFalseClaim: true)),
+    new(
+        Name: "count-audit 放行与推导一致的计数声明（负向对照）",
+        Gate: "count-audit",
+        ExpectExit: 0,
+        MustContainInStdout: "PASS count-audit",
+        Setup: dir => SetupCountAuditFixture(dir, injectFalseClaim: false)),
 };
+
+// count-audit 探针夹具：最小可推导仓库（16 项推导全部 >0 才会走到声明扫描）。
+// 关键构造：① App.csproj 无 IsPackable=false → 可打包包数 = 1，README 里 999
+// 个包的假声明对之失实；② App.Tests.csproj 带 IsPackable=false → 不污染可打包包数；
+// ③ PalDiagnostics.cs 含注释行 Meter.CreateCounter<（考注释过滤）+ 真行 +
+// 四前缀引号 ID；④ pitfalls.md 一行粗体 ID（一至九章）+ 一行 PALORM-*（第十章）；
+// ⑤ ArchitectureBoundaryTests.cs 一处 await Assert.That；⑥ 负向 README 用与真值
+// 一致的声明（1 个包）——同时把「扫描面零声明」的 fail-closed 排除在外。
+static string[] SetupCountAuditFixture(string dir, bool injectFalseClaim)
+{
+    var staged = new List<string>();
+
+    void Put(string rel, string content)
+    {
+        var path = Path.Combine(dir, rel);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
+        staged.Add(rel);
+    }
+
+    Put("src/App/App.csproj",
+        "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>net11.0</TargetFramework>\n  </PropertyGroup>\n</Project>\n");
+    Put("test/App.Tests/App.Tests.csproj",
+        "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>net11.0</TargetFramework>\n    <IsPackable>false</IsPackable>\n  </PropertyGroup>\n</Project>\n");
+    Put("src/App/.pal/prompts/a.prompt.md", "# Prompt\n");
+    Put("src/App/PalDiagnostics.cs",
+        "using System.Diagnostics.Metrics;\n"
+        + "internal static class PalDiagnostics\n"
+        + "{\n"
+        + "    /// <summary>见 <c>Meter.CreateCounter</c> 文档</summary>\n"
+        + "    public static readonly Counter<long> C = Meter.CreateCounter<long>(\"probe\");\n"
+        + "    public static Activity? StartFoo() => null;\n"
+        + "    private const string A = \"PDDD001\";\n"
+        + "    private const string B = \"PALID001\";\n"
+        + "    private const string C = \"PALMSG001\";\n"
+        + "    private const string D = \"PALENUM001\";\n"
+        + "}\n");
+    Put("docs/decisions/001-fixture.md", "# 夹具 ADR\n");
+    Put("docs/pitfalls.md", "# 夹具踩坑\n\n| # | x |\n|---|---|\n| **E1** | 行 |\n| PALORM-SG1 | 行 |\n");
+    Put("test/App.Tests/ArchitectureBoundaryTests.cs",
+        "internal sealed class ArchitectureBoundaryTests\n{\n    public async System.Threading.Tasks.Task Fixture()\n    {\n        await Assert.That(true);\n    }\n}\n");
+    Put("README.md", injectFalseClaim
+        ? "# 夹具\n\n本库以 999 个独立 NuGet 包发布。\n"
+        : "# 夹具\n\n本库以 1 个独立 NuGet 包发布。\n");
+    return [.. staged];
+}
 
 var probeFails = 0;
 

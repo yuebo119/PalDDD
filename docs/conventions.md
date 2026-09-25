@@ -338,7 +338,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-09-23 复验）：219 源文件·36 项目·0 违规（2026-09-04 锚定时 213 文件，Transactions 拆分等增长）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-09-25 复验）：220 源文件·36 项目·0 违规（2026-09-04 锚定时 213 文件，Transactions 拆分等增长）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 
@@ -1041,6 +1041,9 @@ dotnet test <target> 2>&1 | tail -5 > /tmp/baseline.txt; echo "exit=$?" >> /tmp/
 | 公共 API 快照 | PublicApiSnapshotTests | CI |
 | AI 模板约束 | `.pal/prompts/` 结构——**段数并非统一的「六段」**（2026-09-13 实测：9 个模板段数 5/6/7 不等；7 个为「角色/框架约束/必须遵守/禁止/输出格式」，其中 5 个追加「示例」段；`bounded-context` 以「项目引用指南」替代「输出格式」；`task-intake` 为验收断言门专用结构 7 段。README 自述「v54 勘正：各模板段数不一」） | 人工（机械化候选：按模板分组断言必填段存在） |
 | AI 编码约束 | Trellis spec 注入 + `scripts/verify-conventions.cs` | 会话 + pre-commit |
+| 配置文件策略 | `scripts/config-policy.cs`（A：dependabot `groups`/`ignore` 双词表与 `versions`/`labels`/`prefix`/`interval` 必填项，行式校验非完整 YAML 解析；B：根 `Directory.Build.*` 每处 `<Exec>` 须 `IgnoreExitCode` 或 Target 带 `GITHUB_ACTIONS` 跳过，防构建期副作用经 `-warnaserror` 打断发布链——2026-09-25 增） | pre-commit（文件入暂存时）+ CI |
+| 依赖许可 | `scripts/license-policy.cs`（deny-by-default 白名单 = OSI/FSF 认可的 SPDX 表达式 + 包级禁令 `Verify`/`Verify.TUnit` ≥ 33 + 有期限的 gap 台账；证据取自本机 NuGet 缓存 nuspec，取不到即 fail-closed——裁决 2026-09-25「所有引用的库必须是开源的许可，不使用商业许可」） | pre-commit（`Directory.Packages.props`/`*.csproj` 入暂存时）+ CI |
+| 文档计数一致性 | `scripts/count-audit.cs`（16 项推导真值——可打包包数/项目数/prompt/遥测计数器/诊断 ID/ADR/踩坑条目/断言点/源文件数等，推导表在脚本内=单一真源不建台账；扫描面 README*/docs 排除 `review`/`decisions`/`migration`/`design` 历史目录，声明写了必须与推导一致、缺失不算错（PD34），失实报 `文件:行号：声明 X vs 推导 Y`；推导 0 值/异常/依赖文件缺失 fail-closed。退出码 0/1/2（2=自测失败）；`--selftest` 41 例正负例，变异翻转声明判定后 26/41 红、恢复 41/41；gate-audit 2 条隔离探针——2026-09-25 增） | pre-commit（`README*.md`/`docs/**` 入暂存时）+ CI |
 | 性能契约 | BenchmarkDotNet `--smoke` 烟测 | 本地/人工（未接 CI） |
 | DI 生命周期 | ArchitectureBoundaryTests 配置守护 | CI |
 | 评审纪律 | `scripts/review-snapshot.cs` + `REVIEW_TEMPLATE.md` R0 可信度标注 | 评审时 |

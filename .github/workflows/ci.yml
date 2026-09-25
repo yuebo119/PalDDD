@@ -155,8 +155,9 @@ jobs:
           # 据此删除原 `if [ -d .ai/scripts ]` 分支（T-02）——该分支在 CI 恒假，
           # 保留它会让本文件看起来跑了六门禁，而实际只跑降级门禁（静默 no-op 形态）。
           # CI 覆盖面（T-04 后，全部无条件执行）：
-          #   secret-scan → dapper-param-guard → doc-consistency → encoding-gate /
-          #   tech-debt / test-gate 循环 → gate-audit --inventory → gate-lite
+          #   secret-scan → dapper-param-guard → doc-consistency → config-policy →
+          #   license-policy → count-audit → encoding-gate / tech-debt / test-gate 循环
+          #   → gate-audit --inventory → gate-lite
           # 覆盖面边界（由 .ai 独立性决定，永不进 CI）：verify-ai / gate / template-gate
           #   依赖 .ai 内容，改由 .githooks/pre-commit 与 .ai 仓自身钩子承担（优化方案 T-35）。
           # 历史：F-04 勘正（2026-09-21）首次指出该分支恒假；ITM-615（2026-09-10）曾把
@@ -190,6 +191,39 @@ jobs:
             exit 1
           fi
           rm -f ci-doc-consistency.log
+          # config-policy（2026-09-25 增）：配置文件策略门禁——dependabot 双词表/结构
+          # 必填项（groups vs ignore 两处 schema 词表不同，错值只在默认分支由
+          # Dependabot 报出）+ 根 Directory.Build.* 的 Exec 构建期副作用（每处须
+          # IgnoreExitCode 或 GITHUB_ACTIONS 跳过二者居一，防 -warnaserror 打断发布链）。
+          if ! dotnet run scripts/config-policy.cs 2>&1 | tee ci-config-policy.log; then
+            echo "::error ::CONFIG POLICY FAILED：dependabot 词表/结构或 Directory.Build Exec 违规"
+            rm -f ci-config-policy.log
+            exit 1
+          fi
+          rm -f ci-config-policy.log
+          # license-policy（2026-09-25 增）：依赖许可策略门禁——2026-09-25 裁决
+          # 「所有引用的库必须是开源的许可，不使用商业许可」的机械执行层（与
+          # 2026-09-23 Verify.TUnit 停 32.x 同源）。deny-by-default 白名单 + 包级
+          # 禁令 + 有期限的 gap 台账；nuspec 缺失/推不出 SPDX 即 fail-closed。
+          # 放在 Restore/Build 之后：判定集取自 `dotnet list --include-transitive`
+          # 且要读本机 NuGet 缓存的 nuspec，两者都以已还原为前提。
+          if ! dotnet run scripts/license-policy.cs 2>&1 | tee ci-license-policy.log; then
+            echo "::error ::LICENSE POLICY FAILED：非白名单许可 / 禁令命中 / gap 到期 / 无法判定"
+            rm -f ci-license-policy.log
+            exit 1
+          fi
+          rm -f ci-license-policy.log
+          # count-audit（2026-09-25 增）：文档计数声明与源码推导一致——2026-09-25 文档
+          # 清扫实证计数静默漂移（断言点 89→99、ADR 22→24、prompt 模板 9→10 等）只能
+          # 靠 165 次人工工具调用才找全；推导真值门禁化，README/docs 里"写了但不真"
+          # 的声明即在 CI 拦下。纯文件系统读取，与相邻门禁块同格式；纵深：pre-commit
+          # 触发面仅 README*/docs 变更且可被 --no-verify 跳过，此处无条件补偿。
+          if ! dotnet run scripts/count-audit.cs 2>&1 | tee ci-count-audit.log; then
+            echo "::error ::COUNT AUDIT FAILED：文档计数声明与源码推导不一致"
+            rm -f ci-count-audit.log
+            exit 1
+          fi
+          rm -f ci-count-audit.log
           # T-04（2026-09-22）：三门禁从恒假分支提出，fresh checkout 必跑。前提已核验：
           # 三者对 .ai 的引用均带 Directory.Exists 守卫（encoding-gate.cs:256-260 的
           # EnumerateByNameSuffix、tech-debt.cs:330 的 ShFilesIn、osc-check.cs:281 自建目录），
