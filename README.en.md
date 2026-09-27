@@ -2,48 +2,58 @@
 
 **English** | [中文](README.md)
 
-**A DDD/CQRS/Event Sourcing infrastructure framework for .NET 11 — zero runtime reflection, complete Native AOT pipeline, no over-abstraction.**
+**A DDD/CQRS/Event Sourcing infrastructure framework for .NET 11: zero runtime reflection, complete Native AOT pipeline, no over-abstraction.**
 
 [![NuGet](https://img.shields.io/badge/nuget-v3.2.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)
-[![CI](https://img.shields.io/badge/build-0_errors_0_warnings-brightgreen)]()
+[![CI](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml)
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
 
 ---
 
-Pal.DDD standardizes the equality semantics of Entity, allocation-free collection of domain events, lease-lock concurrency and dead-letter recovery of the Outbox, and compensation orchestration with timeout detection for Sagas — into 35 independent NuGet packages (plus 5 third-party PalORM engine packages; see the list at the end). It does not provide `IRepository<T>`, does not define `IIntegrationEvent`, and does not perform assembly scanning. Business code stays pure C#; the framework only delivers infrastructure.
+Pal.DDD standardizes the equality semantics of Entity, allocation-free collection of domain events, lease-lock concurrency and dead-letter recovery of the Outbox, and compensation orchestration with timeout detection for Sagas — into 35 independent NuGet packages (plus 5 third-party PalORM engine packages; see the [Package List](#package-list)). It does not provide `IRepository<T>`, does not define `IIntegrationEvent`, and does not perform assembly scanning: business code stays pure C#, and the framework only delivers infrastructure.
 
-Out of the box: **zero-reflection command dispatch · lease-lock concurrent Outbox · auto-compensating Sagas · immutable EventLog · resumable Projections · compile-time DDD compliance checks.**
+| NuGet packages | Compile-time diagnostics | Persistence stacks | Measured tests |
+|:---:|:---:|:---:|:---:|
+| **35** | **38** | **3** | **1502**¹ |
+
+¹ 16 test projects, full-suite local measurement on 2026-09-25: 1434 passed + 68 skipped — 60 Docker-dependent (PalORM multi-dialect 46 + Integration 14, executed by CI Testcontainers) + 8 unreachable local broker prechecks; PalORM.Tests and Messaging.Integration.Tests require Docker.
+
+---
+
+## Contents
+
+- [Features](#features)
+- [Comparison with Existing Solutions](#comparison-with-existing-solutions)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [Performance](#performance)
+- [AOT Compatibility](#aot-compatibility)
+- [Feature Matrix](#feature-matrix)
+- [Package List](#package-list)
+- [Project Structure](#project-structure)
+- [Documentation](#documentation)
+- [FAQ](#faq)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
-## Core Values
+## Features
 
-### Complete Implementation of DDD Tactical Patterns
+**Complete DDD tactical patterns, no over-abstraction**. Full coverage of Entity / AggregateRoot / DomainEvent / ValueObject / SmartEnum / Specification / Saga / EventLog / Projection. DbContext *is* the Unit of Work + Repository; DomainEvent *is* the integration event; `AddPalCommandHandler<T>` replaces assembly scanning. The framework eliminates duplication instead of adding indirection.
 
-Full coverage of Entity / AggregateRoot / DomainEvent / ValueObject / SmartEnum / Specification / Saga / EventLog / Projection, with no over-abstraction — no `IRepository<T>`, no `IIntegrationEvent`, no assembly scanning.
+**AOT as a first-class citizen**. `IsAotCompatible=true` is enforced across the core layer; PalORM generates RowFactory/CommandFactory at compile time via source generators, achieving a fully Native AOT pipeline (`PublishAot=true` verified); non-AOT-safe third-party dependencies (EF Core, Kafka, RabbitMQ) are isolated within adapter projects that explicitly declare `IsAotCompatible=false` (see [AOT Compatibility](#aot-compatibility)). AOT is not an add-on — it is an architectural decision about startup latency, memory footprint, and deployment safety.
 
-DbContext *is* the Unit of Work + Repository. DomainEvent *is* the integration event. `AddPalCommandHandler<T>` replaces assembly scanning. The framework should not invent concepts to wrap existing ones — it should eliminate duplication, not add indirection.
+**Architectural constraints enforced at compile time**. 38 compile-time diagnostics check domain-model compliance: 15 strategic Roslyn analyzers (PDDD001-015) plus 23 source-generator diagnostics (PALID001-007 / PALMSG001-007 / PALENUM001-009). A DomainEvent not declared `sealed`, a ProcessManager missing `[BoundedContext]`, or a message contract name that violates the lowercase-kebab convention fails at compile time. Constraints do not depend on documentation discipline or Code Review memory.
 
-### AOT as a First-Class Citizen
+**Lease-lock concurrent Outbox**. Message rows are written atomically within the database transaction; row-level leases on `(LockedBy, LockedUntil)` plus token fencing enable multi-instance concurrent publishing: once a lease expires, the stale worker's UPDATE is rejected on token mismatch — zero loss, zero duplication, no distributed lock. Dead-letter queue with operation re-injection and exponential-backoff retry.
 
-DIM bridging eliminates reflection, source generators register types, FrozenDictionary replaces dictionary lookups, and the three properties (`IsAotCompatible` / `IsTrimmable` / `VerifyReferenceAotCompatibility`) are made transparent for non-AOT projects.
+**Zero-allocation hot paths**. ref struct singly-linked-list event enumerator (zero-allocation foreach), FrozenDictionary routing, ValueTask + `IsCompletedSuccessfully` zero-heap synchronous completion. Zero allocation is not a comment claim: AllocationContractTests assert budgets at runtime with `GC.GetAllocatedBytesForCurrentThread` (single event append ≤130B/iter, measured ~120B).
 
-`IsAotCompatible=true` is enforced across the core layer and the PalORM adapter layer. PalORM generates RowFactory/CommandFactory at compile time via source generators, achieving a fully Native AOT pipeline. Non-AOT-safe third-party dependencies (EF Core, Kafka, RabbitMQ) are isolated within adapter projects that explicitly declare `IsAotCompatible=false`. AOT is not an add-on — it is an architectural decision about startup latency, memory footprint, and deployment safety.
-
-### Performance Contracts Engineered In
-
-- **Zero-allocation fast path**: `ValueTask` + `IsCompletedSuccessfully` achieves zero heap allocation on synchronous completion
-- **Zero-closure pipeline**: `PipelineStateMachine` replaces closure chains, only ~40B per request
-- **Zero-copy reads**: `RehydrateFromBytes` assigns by reference, eliminating 2 `ToArray` calls
-- **ref struct enumerator**: `DomainEventEnumerable` provides singly-linked-list O(1) append, zero-allocation foreach
-
-### Architectural Constraints Enforced at Compile Time
-
-38 compile-time diagnostics check domain model compliance: 15 strategic Roslyn analyzers (PDDD001-015) plus 23 source-generator diagnostics (PALID001-007 identity / PALMSG001-007 message registry / PALENUM001-009 smart enums). A DomainEvent not declared `sealed` → compile error. A ProcessManager missing `[BoundedContext]` → compile error. A message contract name that does not follow the lowercase-kebab convention → compile warning. Constraints no longer depend on documentation discipline or Code Review memory — the compiler replaces both.
-
----
+**Built-in observability**. `PalActivitySource` (11 Start methods) + `PalMetrics` (23 telemetry instruments) are pre-embedded on critical paths; your OpenTelemetry configuration only needs to reference the Source to capture everything (command dispatch / Saga transition Activities are reserved, not yet wired).
 
 ## Comparison with Existing Solutions
 
@@ -54,61 +64,26 @@ DIM bridging eliminates reflection, source generators register types, FrozenDict
 | **EventStoreDB / Marten** | Event store | Provides the `IEventLog` abstraction; the storage layer can be swapped for Dapper or EF Core implementations. No vendor lock-in. |
 | **Hand-written DDD** | Fully custom | Eliminates the repeated implementation of Entity, DomainEvent, Dispatcher, Outbox, and Saga in every project. Infrastructure should not be differentiating code. |
 
----
-
 ## Installation
 
-### Option 1: Metapackage (recommended for a quick start)
-
-```xml
-<!-- L1 base metapackage: domain core + serialization + compression + source generation + compile-time analyzers -->
-<PackageReference Include="PalDDD.Base" />
-
-<!-- L2 full metapackage: CQRS + event log + idempotency + projections + messaging + transactions + DI -->
-<PackageReference Include="PalDDD.Extension" />
-
-<!-- Choose one persistence adapter as needed -->
-<PackageReference Include="PalDDD.PalORM.Sqlite" />  <!-- or PostgreSql / MySql / Dapper -->
-```
-
-### Option 2: Reference packages on demand (precise dependency control)
-
-```xml
-<!-- Only the domain core -->
-<PackageReference Include="PalDDD.Core" />
-
-<!-- Add CQRS -->
-<PackageReference Include="PalDDD.CQRS" />
-
-<!-- Add Outbox/Saga transactions -->
-<PackageReference Include="PalDDD.Transactions" />
-<PackageReference Include="PalDDD.Transactions.EFCore" />
-
-<!-- Add Kafka messaging -->
-<PackageReference Include="PalDDD.Messaging.Kafka" />
-```
-
-### CLI Installation
+Requirement: .NET SDK 11.
 
 ```bash
-# Metapackage approach
+# Metapackages (recommended for a quick start)
+# L1 base metapackage: domain core + serialization + compression + source generation + compile-time analyzers
 dotnet add package PalDDD.Base
+# L2 full metapackage: CQRS + event log + idempotency + projections + messaging + transactions + DI
 dotnet add package PalDDD.Extension
 
-# PalORM persistence — recommended, full-pipeline Native AOT (source generation + compile-time SQL, zero reflection)
-dotnet add package PalDDD.PalORM.Sqlite          # or PostgreSql / MySql
-
-# Dapper persistence — classic hand-written SQL (call-site-level Native AOT enabled, ADR-020 capability-parity stack)
-dotnet add package PalDDD.Dapper.PostgreSql
-
-# Message brokers
+# Pick one persistence adapter
+dotnet add package PalDDD.PalORM.Sqlite       # recommended, full-pipeline Native AOT (or PostgreSql / MySql)
+dotnet add package PalDDD.Dapper.PostgreSql   # classic hand-written SQL (Dapper.AOT interceptors fully enabled)
+# Message brokers (optional)
 dotnet add package PalDDD.Messaging.Kafka
 dotnet add package PalDDD.Messaging.RabbitMQ
 ```
 
-InMemory implementations cover all abstract interfaces, so unit tests and prototyping require no external dependencies.
-
-### Scenario Recommendations
+Verify with `dotnet list package` — the PalDDD packages should be listed. All abstract interfaces have InMemory implementations, so unit tests and prototyping require no external dependencies.
 
 | Scenario | Recommended References |
 |------|---------|
@@ -117,54 +92,7 @@ InMemory implementations cover all abstract interfaces, so unit tests and protot
 | Domain model only | Core + Serialization |
 | Simple CRUD API | Core + CQRS + Repository.EFCore + Hosting.AspNetCore |
 
----
-
-## NuGet Package List (35 PalDDD packages + 5 third-party PalORM dependencies)
-
-| Package | Version | Description |
-|------|:--:|------|
-| **PalDDD.Base** | 3.2.0 | L1 metapackage: Core + Serialization + Compression + SourceGen + Analyzers |
-| **PalDDD.Extension** | 3.2.0 | L2 metapackage: CQRS + EventLog + Idempotency + Projections + Messaging + Transactions + DI |
-| **PalDDD.Core** | 3.2.0 | Domain core: AggregateRoot / Entity / ValueObject / SmartEnum / DomainEvent / Specification |
-| **PalDDD.Serialization** | 3.2.0 | Serialization abstractions: IMessageSerializer / MessageCatalog / MessageDescriptor |
-| **PalDDD.Serialization.Evolution** | 3.2.0 | Message version evolution: Upcaster / Contract validation |
-| **PalDDD.Serialization.MemoryPack** | 3.2.0 | MemoryPack binary serialization (zero reflection; the adapter declares IsAotCompatible=false, pending full-chain verification) |
-| **PalDDD.Compression** | 3.2.0 | Compression abstractions: Brotli / GZip / Deflate (AOT-safe) |
-| **PalDDD.Compression.Native** | 3.2.0 | Native compression: LZ4 / ZStandard (P/Invoke, not AOT-compatible) |
-| **PalDDD.Core.SourceGen** | 3.2.0 | Source generators: IdentityGenerator / EnumGenerator / MessageRegistryGenerator |
-| **PalDDD.Analyzers** | 3.2.0 | Roslyn analyzers: PDDD001-015 compile-time DDD governance diagnostics |
-| **PalDDD.Analyzers.CodeFixes** | 3.2.0 | Code fixes: PDDD008/010/013/015 |
-| **PalDDD.CQRS** | 3.2.0 | Command Query Responsibility Segregation: Dispatcher / Pipeline / Validation / Logging |
-| **PalDDD.EventLog** | 3.2.0 | Event log abstractions: InMemoryEventLog + optimistic concurrency |
-| **PalDDD.EventLog.EFCore** | 3.2.0 | EF Core event log: EventLogDbContext + global bit allocator |
-| **PalDDD.Idempotency** | 3.2.0 | Idempotency abstractions: IdempotencyProcessor + InMemoryStore |
-| **PalDDD.Idempotency.EFCore** | 3.2.0 | EF Core idempotency records: IdempotencyDbContext |
-| **PalDDD.Projections** | 3.2.0 | Projection abstractions: ProjectionProcessor + Checkpoint + Replay |
-| **PalDDD.Projections.EFCore** | 3.2.0 | EF Core projection checkpoint: ProjectionCheckpointDbContext |
-| **PalDDD.Projections.EventLog** | 3.2.0 | EventLog replay source: rebuilds read models from event streams |
-| **PalDDD.Messaging** | 3.2.0 | Message bus abstractions: MessageBrokerBase + DomainEventDispatcher |
-| **PalDDD.Messaging.Kafka** | 3.2.0 | Kafka adapter: based on Confluent.Kafka 2.x |
-| **PalDDD.Messaging.RabbitMQ** | 3.2.0 | RabbitMQ adapter: based on RabbitMQ.Client 7.x |
-| **PalDDD.Transactions** | 3.2.0 | Transactions/Saga: Outbox/Inbox abstractions + InMemoryStore + background processors |
-| **PalDDD.Transactions.EFCore** | 3.2.0 | EF Core transactions: Outbox/Inbox/SagaState DbContext |
-| **PalDDD.DependencyInjection** | 3.2.0 | DI registration entry point: ServiceRegistration + unified AddPal extensions |
-| **PalDDD.Repository.EFCore** | 3.2.0 | EF Core repository: UnitOfWork + DomainEvent interceptor |
-| **PalDDD.Hosting.AspNetCore** | 3.2.0 | ASP.NET Core integration: exception middleware + health checks + Minimal API endpoints |
-| **PalDDD.PalORM** | 3.2.0 | PalORM persistence core: 6 Store + UnitOfWork (true AOT + source generation) |
-| **PalDDD.PalORM.PostgreSql** | 3.2.0 | PalORM PostgreSQL dialect: RETURNING / COPY |
-| **PalDDD.PalORM.MySql** | 3.2.0 | PalORM MySQL dialect: BulkCopy / multi-value INSERT |
-| **PalDDD.PalORM.Sqlite** | 3.2.0 | PalORM SQLite dialect: FTS5 / JSON1 |
-| **PalDDD.Dapper** | 3.2.0 | Dapper persistence adapter (call-site-level Native AOT enabled, ADR-020 capability-parity stack) |
-| **PalDDD.Dapper.PostgreSql** | 3.2.0 | Dapper PostgreSQL enhancements: audit / JSONB / sharding / soft delete |
-| **PalDDD.Dapper.MySql** | 3.2.0 | Dapper MySQL enhancements |
-| **PalDDD.Dapper.Sqlite** | 3.2.0 | Dapper SQLite enhancements: TypeHandler / RowFactory / FTS5 |
-| **PalORM.Core** | 5.6.0 | PalORM engine core: DataSession / Provider / RowFactory (underlying dependency of PalDDD.PalORM) |
-| **PalORM.SourceGen** | 5.6.0 | PalORM source generator: compile-time RowFactory / CommandFactory generation (zero reflection) |
-| **PalORM.PostgreSql** | 5.6.0 | PalORM PostgreSQL dialect Provider: RETURNING / COPY |
-| **PalORM.MySql** | 5.6.0 | PalORM MySQL dialect Provider: BulkCopy / multi-value INSERT (5.4 adds resilience configureResilience callback) |
-| **PalORM.Sqlite** | 5.6.0 | PalORM SQLite dialect Provider: FTS5 / JSON1 |
-
----
+For precise dependency control, skip the metapackages and reference individual packages from the [Package List](#package-list) (XML form: `<PackageReference Include="PalDDD.Core" />`).
 
 ## Quick Start
 
@@ -239,7 +167,8 @@ public sealed class CreateOrderHandler(IUnitOfWork uow) : ICommandHandler<Create
 ### DI Registration and Dispatch
 
 ```csharp
-// 1. Register the core stack (Dispatcher + Pipeline + Identity; serialization/analyzers still registered explicitly by their own packages)
+// 1. Register the core stack (Dispatcher + Pipeline + Identity; serialization/persistence/brokers are
+//    NOT included — register them explicitly from their own packages, see AddPalCoreStack remarks)
 services.AddPalCoreStack();
 
 // 2. Register command handlers (compile-time type constants, no assembly scanning)
@@ -254,78 +183,26 @@ services.AddPalOutbox();
 // 5. Dispatch the command (⚠️ Handler registration is Host-driven — HandlerRegistrar scans and
 //    registers handlers at Host startup; register via builder.Services and dispatch after app start.
 //    Fetching the Dispatcher from a bare ServiceCollection and calling SendAsync throws
-//    HandlerNotFound — see the Chinese tutorial §3 for a complete runnable example)
+//    HandlerNotFound — see the tutorial §3 for a complete runnable example)
 var orderId = await dispatcher.SendAsync(new CreateOrder("Alice", 99.9m));
 ```
 
----
+For a step-by-step path from scratch, see the [Tutorial](docs/tutorial.md).
 
-## Best Practices
+## Usage
 
-> The following practices highlight the core strengths of Pal.DDD: **zero-reflection AOT, compile-time governance, lease-lock concurrency, source-generator IDs**.
+The five most common scenarios follow. Complete code examples for every component are in the [Usage Guide](docs/usage.md).
 
-### 1. Strongly-Typed IDs: Compile-Time Generation, Zero Reflection, AOT-Safe
-
-Pal.DDD uses a source generator to produce `From` / `New` / `Parse` / `JsonConverter` / `TypeConverter` at compile time — zero reflection at runtime.
-
-```csharp
-using ByteAether.Ulid;   // Framework source alias is PalUlid = ByteAether.Ulid.Ulid; examples use the real type
-
-// ✅ [GenerateId] triggers the IdentityGenerator source generator
-// Generates ISpanParsable + JsonConverter + TypeConverter at compile time
-[GenerateId(typeof(Ulid))]         // Ulid (total ordering suits event sourcing; the framework treats all five types equally)
-public readonly partial record struct OrderId;
-
-[GenerateId(typeof(Guid))]          // Guid
-public readonly partial record struct CustomerId;
-
-[GenerateId(typeof(int))]           // int (database auto-increment)
-public readonly partial record struct OrderNumber;
-
-// Usage: compile-time-generated methods are directly available
-var id = OrderId.New();              // Ulid/Guid auto-generated
-var parsed = OrderId.Parse("01HXY...", null);
-var someUlid = Ulid.New();           // Underlying type matching [GenerateId(typeof(Ulid))]
-var fromDb = OrderId.From(someUlid);
-```
-
-### 2. Compile-Time DDD Governance: 38 Diagnostics (15 Strategic Analyzers + 23 Source-Generator Diagnostics)
-
-Pal.DDD does not rely on Code Review memory — **38 compile-time diagnostics** intercept non-compliant code: 15 strategic Roslyn analyzers (PDDD001-015) + 23 source-generator diagnostics (PALID001-007 identity / PALMSG001-007 message registry / PALENUM001-009 smart enums — v2.1.0 adds PALID007 accessibility chain and PALENUM009 containing-type partial).
-
-```csharp
-// ✅ Domain event host must be a sealed class (a record inheriting the non-record DomainEvent fails CS8864)
-//    A class host must be [BoundedContext]-annotated (PDDD001 Error) and sealed (PDDD012 Error)
-[BoundedContext("ordering")]
-public sealed class OrderCreated : DomainEvent, IDomainEvent { ... }
-
-// ❌ Forgot sealed — direct compile error
-public class OrderCreated : DomainEvent, IDomainEvent { ... }  // PDDD012 + PDDD001 (missing BoundedContext)
-
-// ✅ Message name lowercase-kebab + .vN — PDDD009/PDDD010 compile warnings
-[GenerateMessage(Name = "ordering.order-created.v1")]
-
-// ✅ Projections/ProcessManager must be annotated with [BoundedContext] — PDDD004 Error (IProjectionHandler implementations)
-[BoundedContext("ordering")]
-public sealed class OrderProjection : IProjectionHandler<OrderCreated> { ... }
-
-// ❌ [GenerateId] target missing partial — source generator fails directly
-[GenerateId(typeof(Ulid))]
-public readonly record struct OrderId;  // PALID002 (non-partial record struct; generated code cannot merge)
-```
-
-### 3. Lease-Lock Concurrent Outbox: Multi-Instance Without Duplicate Delivery
-
-The Outbox uses database row-level lease locks to enable concurrent publishing across multiple instances — the `(LockedBy, LockedUntil)` pair acts as a fencing token (`LockedUntil` changes monotonically with each lease, no DDL column needed); once a lease expires, the stale worker's UPDATE is rejected on token mismatch. Zero message loss, zero duplication, no distributed lock required.
+### Outbox: Lease-Lock Concurrency, Multi-Instance Without Duplicate Delivery
 
 ```csharp
 // Registration: Outbox + background processor auto-polling
 services.AddPalOrmPostgreSql(connectionString);
-services.AddPalOutbox();
+services.AddPalOutbox();   // ⚠️ Registers processor/Options ONLY — Store/serializer/Catalog/Broker are
+                           // registered by the caller (see usage.md "Use Outbox")
 
-// Command handler (template form: inject repository → Add → SaveChangesAsync)
-// → The interceptor atomically writes the Outbox message row on DB commit (EF Core stack:
-//   OutboxDomainEventInterceptor hooks SavingChanges) → OutboxProcessor background publish
+// Command handler: the interceptor atomically writes the Outbox message row on DB commit;
+// OutboxProcessor acquires leases in the background and publishes
 public sealed class CreateOrderHandler(IOrderRepository orders) : ICommandHandler<CreateOrder, OrderId>
 {
     public async ValueTask<OrderId> HandleAsync(CreateOrder cmd, CancellationToken ct)
@@ -333,58 +210,26 @@ public sealed class CreateOrderHandler(IOrderRepository orders) : ICommandHandle
         var order = Order.Create(cmd.Name, cmd.Amount);
         orders.Add(order);                          // ⚠️ explicit Add required — the interceptor only sees tracked entities
         await orders.SaveChangesAsync(ct).ConfigureAwait(false);
-        return order.Id;                            // At-least-once delivery guaranteed for the message
+        return order.Id;                            // At-least-once delivery guaranteed
     }
 }
 // ⚠️ Stack semantics: interceptor Outbox writes are EF Core stack (Repository.EFCore) behavior; the
 // PalORM stack's UnitOfWork.SaveChangesAsync has no ChangeTracker (no-op) — the PalORM path adds
 // outbox messages explicitly on the business side or mixes stacks (ADR-020: EF Core write path +
-// PalORM read path is the official combination). AddPalOutbox registers processor/Options only —
-// Store/serializer/Catalog/Broker are registered by the caller (see usage.md "Use Outbox").
+// PalORM read path is the official combination).
 
-// Publish-side token fencing (v2.1.0, unified across all three stacks): OutboxProcessor holds
-// the lease snapshot (owner, lockedUntil) when calling MarkProcessed/MarkDead — the terminal-write
-// SQL carries AND locked_by = @owner AND locked_until = @until as a dual guard: once the lease is
-// re-acquired by another worker, the stale snapshot's UPDATE affects 0 rows (zero in-memory
-// mutation) — a late marker from the old worker cannot override the new holder, closing both the
-// duplicate-delivery and terminal-flip windows.
-
-// Behavior alignment (v3.1.0): InMemoryOutboxStore.MarkProcessed now marks never-leased messages
-// instead of silently ignoring them (aligned with the PalORM / Dapper / EF stacks — the test double
-// was previously stricter than production, diverging test behavior from production). When a mark is
-// rejected on lease-token mismatch (0 rows affected), DapperOutboxStore.MarkProcessed no longer
-// clears the lease fields of the passed-in message object — the caller's object stays consistent
-// with the actual DB state (aligned with PalORM). Messages re-leased by another worker are still
-// always rejected; the original protection is unchanged.
+// Publish-side token fencing (unified across all three stacks): OutboxProcessor holds the lease
+// snapshot (owner, lockedUntil) when calling MarkProcessed/MarkDead — the terminal-write SQL carries
+// AND locked_by = @owner AND locked_until = @until as a dual guard: once the lease is re-acquired by
+// another worker, the stale snapshot's UPDATE affects 0 rows; a late marker cannot override the new holder.
 
 // Consumer-side idempotency: Inbox prevents duplicate processing
 services.AddPalInbox();  // Composite unique constraint on (ConsumerName, MessageId)
 ```
 
-### 4. Complete Native AOT Pipeline: PalORM Source-Generated SQL
+### Saga: Explicit State Machine + Compensation Orchestration + Timeout Detection
 
-PalORM generates RowFactory / CommandFactory at compile time — SQL is determined at compile time, with zero runtime reflection and zero `IL.Emit`. `PublishAot=true` verification passes.
-
-```csharp
-// ✅ PalORM — compile-time SQL generation, true AOT
-services.AddPalOrmPostgreSql(connectionString);
-// → INSERT ... ON CONFLICT DO NOTHING RETURNING id (PG single-statement atomic lease)
-// → COPY bulk write
-// → Source generator auto-generates Row DTO materialization code
-
-// ✅ Dapper — call-site-level Native AOT ([module:DapperAot] enabled, 34 call-site interceptors, 13/13 measured across three dialects)
-// Boundary: bypassing wrappers to raw Dapper API is not AOT-safe; ADR-020 capability-parity stack
-
-// ⚠️ CQRS pipeline AOT trap (same theme): the parameterless open-generic AddPalPipelineBehaviors()
-// triggers AotCannotCreateGenericValueType for value-type responses (Unit/int/Guid) under Native AOT —
-// AOT apps use AddPalCommandHandler<T...> (registers closed pipelines internally) or the explicit
-// AddPalPipelineBehaviors<TRequest, TResponse>(); the two registrations are first-wins and mutually exclusive.
-// Validation pipeline: IPalValidator<T> + AddScoped; failures throw PalValidationException
-```
-
-### 5. Saga Compensation Orchestration: Explicit State Machine + Timeout Detection
-
-Saga uses explicit state/event transition registration + FrozenDictionary lookup — no reflection dependency, AOT-safe. Supports three compensation strategies and automatic timeout detection.
+> ⚠️ **Dapper persistence snapshot is mandatory**: without a registered source-generated `JsonTypeInfo<TState>`, `DapperSagaStateStore<TState>`'s `SaveChangesAsync` fails fast with an exception (earlier versions silently wrote business fields as NULL; that data-loss defect is closed). Register via `services.AddPalDapperSagaSnapshot(jsonTypeInfo)`. See [usage.md](docs/usage.md).
 
 ```csharp
 public sealed class OrderSaga : Saga<OrderSagaState>
@@ -418,161 +263,12 @@ services.AddPalSaga<OrderSagaState, OrderSaga>();
 // → SagaProcessor background polling + SagaTimeoutDetector timeout scanning
 ```
 
-### 6. Zero-Allocation Hot Paths: Performance Contracts Engineered In
+### EventLog and Projection: Event Sourcing with Resumable Checkpoints
 
-Zero allocation on the core path is not a comment claim — it is verified at runtime with `GC.GetAllocatedBytesForCurrentThread` assertions.
-
-```csharp
-using PalDDD.Core;
-
-// ✅ DomainEvent foreach — ref struct enumerator, zero heap allocation
-foreach (var e in aggregate.DomainEvents())  // DomainEventEnumerable: ref struct
-    await handler(e, ct);
-
-// ✅ FrozenDictionary lookup — O(1) zero reflection
-[GenerateEnum]
-public sealed partial class OrderStatus : SmartEnum<OrderStatus, string>
-{
-    public static readonly OrderStatus Pending = new("pending", "待处理");
-    public static readonly OrderStatus Shipped = new("shipped", "已发货");
-    public static readonly OrderStatus Delivered = new("delivered", "已送达");
-    private OrderStatus(string value, string displayName) : base(value, displayName) { }
-}
-
-var status = OrderStatus.FromValue("pending");  // TValue=string, so FromValue's argument type is string
-
-// Real AllocationContractTests assertion set (not claims):
-// single event append ≤130B/iter (measured ~120B, budget with headroom) | foreach enumeration ≤100B
-// | multiple appends without List reallocation | ClearDomainEvents zero-alloc | ValueObject Create zero-heap-alloc
-
-// ISpecification dual path (AOT-critical): after And/Or/Not composition —
-var spec = ActiveOrders.And(BigAmount);
-var matches = spec.IsSatisfiedBy(order);   // ⚠️ in-memory path uses Expression.Compile — unsupported under Native AOT
-var expr = spec.ToExpression();           // ✅ AOT path: convert to an expression for EF Core / PalORM query providers
-```
-
-### 7. InMemory Testing: Full-Pipeline Coverage With Zero External Dependencies
-
-All abstract interfaces have InMemory implementations — unit tests require no database / Kafka / RabbitMQ.
+EventLog provides named streams + optimistic concurrency + a global monotonically increasing position; Projections consume events from the EventLog to rebuild read models, with checkpoint persistence guaranteeing resumption after restart.
 
 ```csharp
-var builder = Host.CreateApplicationBuilder(args);
-builder.Services.AddPalCoreStack();
-builder.Services.AddPalCommandHandler<CreateOrder, Unit, CreateOrderHandler>();
-builder.Services.AddPalOutbox();             // registers processor/Options (NOT the store!)
-builder.Services.AddPalInbox();
-builder.Services.AddPalSaga<OrderSagaState, OrderSaga>();
-// ⚠️ The four dependencies must be registered separately (AddPalOutbox doesn't include them):
-builder.Services.AddPalJsonSerialization(catalog =>        // registers IMessageSerializer + IMessageCatalog (tutorial form)
-{
-    catalog.Add(AppJsonContext.Default.OrderCreated, name: "ordering.order-created.v1");
-    catalog.Add(AppJsonContext.Default.OrderCancelled, name: "ordering.order-cancelled.v1");
-});
-builder.Services.AddSingleton<IMessageBroker>(new NullMessageBroker());   // Null broker (discards — replace with Kafka/RabbitMQ adapter for production)
-builder.Services.AddSingleton<IPalOutboxStore, InMemoryOutboxStore>();
-// Time abstraction: inject FakeTimeProvider (PalDDD.Testing) → deterministic lease-expiry/retry timing
-
-var host = builder.Build();
-await host.StartAsync();  // Starts HandlerRegistrar (marker consumption + Dispatcher freeze)
-```
-
-### 8. Bounded Context Isolation: Compile-Time Annotation + Analyzer Enforcement
-
-PalDDD uses `[BoundedContext]` to mark domain ownership: PDDD001 (Error) enforces that domain events/aggregates must declare their context, and PDDD004 (Error) enforces it for IProjectionHandler implementations — preventing illegal references across domain boundaries.
-
-```csharp
-// ✅ Aggregate root annotated with BoundedContext — analyzer knows which domain it belongs to
-[BoundedContext("ordering")]
-public sealed class Order : AggregateRoot<OrderId> { ... }
-
-[BoundedContext("inventory")]
-public sealed class StockItem : AggregateRoot<StockItemId> { ... }
-
-// ✅ Domain events/aggregates/projections must be annotated with BoundedContext — PDDD001 (domain classes)/PDDD004 (IProjectionHandler implementations)
-[BoundedContext("ordering")]
-public sealed class Order : AggregateRoot<OrderId> { ... }
-
-[BoundedContext("ordering")]
-public sealed class OrderProjection : IProjectionHandler<OrderCreated> { ... }
-
-// ❌ Forgot annotation — direct compile error
-public sealed class OrderProjection : IProjectionHandler<OrderCreated> { ... }  // PDDD004
-```
-
-### 9. Multi-Tenancy: Session-Level Tenant Filter (PalORM `[TenantAware]`)
-
-PalORM's `[TenantAware]` annotates the **entity class** (not a property) and pairs with `DataSession.WithTenant()` — regular queries on annotated entities automatically append `WHERE tenant_id = @value`: no interceptors, no hand-written conditions per SQL.
-
-```csharp
-using ByteAether.Ulid;
-using PalORM;
-
-// ✅ Class-level annotation on the Row DTO (real PalORM usage; DDL needs a tenant_id column —
-//    the NOT NULL constraint requires it to be assigned before insert)
-[TenantAware]
-public sealed class OrderRow
-{
-    [Column("id")] public Ulid Id { get; init; }
-    [Column("customer_name")] public string CustomerName { get; init; }
-    [Column("tenant_id")] public string TenantId { get; init; }
-}
-
-// Set the tenant on the session (synchronous fluent method returning DataSession — do NOT await)
-// → queries on annotated entities auto-append the filter ([SoftDelete] uses the same mechanism)
-session.WithTenant("tenant-a");
-// ⚠️ Write contract (PalORM ITM-599): Insert/BulkInsert do not auto-fill tenant values — assign
-// TenantId explicitly when constructing entities; WithTenant only affects query filtering.
-// Recommended session scope: Scoped (one DataSession per request, palorm-adapter decision 7).
-var orders = await session.Query<OrderRow>()
-    .Where(r => r.Status == "pending");   // generated SQL automatically contains AND tenant_id = @tenantFilter
-
-// ⚠️ Exemption warning (PalORM contract): the raw-SQL entries QueryAsyncEnumerable /
-// QueryMultipleAsync bypass automatic filtering — a tenant session can read all tenants' data
-// through them. SQL must carry the tenant_id condition itself, or use the filter-protected
-// query-builder entry.
-```
-
-### 10. Message Version Evolution: V1→V2 Auto-Upgrade (Framework Built-In)
-
-> **Serialization prerequisite**: `AddPalJsonSerialization(catalog => ...)` (default, AOT-safe) vs `AddPalMemoryPackSerialization` (faster but the adapter is non-AOT) — both register into the same `IMessageSerializer` singleton slot; **the later registration overwrites the earlier one**. Switching changes the ContentType; historical payload compatibility must be assessed (see usage.md "Serialization").
-
-Most DDD frameworks do not ship built-in message version evolution. PalDDD's `[GenerateMessage]` + Upcaster pipeline makes version migration a compile-time check + runtime automatic conversion.
-
-```csharp
-// Evolution messages are pure message contracts (plain records, no DomainEvent inheritance) —
-// domain events and message contracts are layered separately
-public sealed record OrderSubmittedV1(Guid OrderId, decimal Amount);
-public sealed record OrderSubmittedV2(Guid OrderId, decimal Amount, string? CouponCode);
-
-// ① Startup contract validation — incomplete adjacent-version paths refuse to start (PalPlatformVerificationException)
-services.AddPalMessageContractVerification(b => b.Add<OrderSubmittedV1, OrderSubmittedV2>(
-    AppJsonContext.Default.OrderSubmittedV1, AppJsonContext.Default.OrderSubmittedV2,
-    old => new OrderSubmittedV2(old.OrderId, old.Amount, null)));
-
-// ② Runtime upgrade pipeline — explicit consumer-side chain (adjacent versions only)
-var oldDescriptor = MessageDescriptor.Create(AppJsonContext.Default.OrderSubmittedV1, "order-submitted", 1);
-var currentDescriptor = MessageDescriptor.Create(AppJsonContext.Default.OrderSubmittedV2, "order-submitted", 2);
-var pipeline = new MessageEvolutionBuilder()
-    .Add<OrderSubmittedV1, OrderSubmittedV2>(oldDescriptor, currentDescriptor,
-        old => new OrderSubmittedV2(old.OrderId, old.Amount, null))
-    .Build();
-var current = pipeline.Upgrade(payload.Span, oldDescriptor, currentDescriptor, serializer);
-```
-
-### 11. EventLog Event Sourcing: Named Streams + Optimistic Concurrency + Global Monotonic Increase
-
-EventLog provides the core storage for event sourcing — Named Streams + optimistic concurrency version control + a global position allocator guarantees event ordering.
-
-```csharp
-// Register EventLog
-services.AddPalOrmPostgreSql(connectionString);
-// EventLog is automatically available: PalOrmEventLog<PostgreSqlProvider>
-
-// Append events (optimistic concurrency — throws EventStreamConcurrencyException on conflict;
-// expected version via factory). Write-path zero-copy (v3.1.0): DapperEventLog/PalOrmEventLog batch
-// appends no longer take a defensive ToArray per event for payload/metadata — they use the internal
-// array already copied at EventData construction (saves 2 array allocations per event; EventData is
-// immutable after construction, a public API contract; behavior unchanged).
+// Append events (optimistic concurrency — throws EventStreamConcurrencyException on conflict)
 // EventData has a 7-parameter ctor (audit is required non-null):
 var result = await eventLog.AppendAsync("order-01HXY...", ExpectedStreamVersion.NoStream, new[]
 {
@@ -582,38 +278,28 @@ var result = await eventLog.AppendAsync("order-01HXY...", ExpectedStreamVersion.
         payload, ReadOnlyMemory<byte>.Empty,
         EventAuditMetadata.Capture(actorId: "user-123", reason: "submit order", correlationId: corrId))
 }, ct);
-// First write uses NoStream; subsequent appends use Exact(result.LastStreamVersion)
+// First write uses NoStream; subsequent appends use ExpectedStreamVersion.Exact(result.LastStreamVersion)
 
-// Read a stream (IAsyncEnumerable — consume with await foreach)
+// Read a stream (IAsyncEnumerable)
 await foreach (var e in eventLog.ReadStreamAsync("order-01HXY...", ct)) { ... }
 
-// Global ordered read (IAsyncEnumerable — each event carries a globally increasing Position for Projection resumption)
+// Global ordered read (each event carries a globally increasing Position for Projection resumption)
 await foreach (var e in eventLog.ReadAllAsync(checkpoint, ct)) { ... }
 ```
-
-### 12. Projection Resumption: Rebuild Read Models via Full EventLog Replay
-
-Projections consume events from EventLog and update read models; checkpoint persistence guarantees resumption from the interruption point after a restart — independent of the storage adapter.
 
 ```csharp
 using PalDDD.Projections;
 
-// Register the projection handler (IProjectionCheckpointStore is registered by the persistence adapter)
-services.AddPalOrmPostgreSql(connectionString);
-services.AddScoped<IProjectionHandler<OrderCreated>, OrderProjection>();
-
-// Projection implementation — must be [BoundedContext]-annotated (PDDD004 Error for IProjectionHandler implementations)
+// Projection implementation — must be [BoundedContext]-annotated (PDDD004 Error, IProjectionHandler implementations)
 [BoundedContext("ordering")]
 public sealed class OrderProjection : IProjectionHandler<OrderCreated>
 {
     public string ProjectionName => "ordering.order-view";
 
     public ValueTask ProjectAsync(OrderCreated evt, ProjectionContext context, CancellationToken ct = default)
-    {
-        // Update the read model (materialized view / cache / search index)
-        return _readStore.UpsertAsync(evt.OrderId, new OrderView(evt.Name, evt.Amount), ct);
-    }
+        => _readStore.UpsertAsync(evt.OrderId, new OrderView(evt.Name, evt.Amount), ct);
 }
+// Registration: plain DI for the handler + checkpoint store registered by the persistence adapter
 // Checkpoint semantics: (ProjectionName, SourceName, Position) composite key + monotonic Revision token
 
 // Two replay modes: ReplayAsync incremental (recommended safe mode — old data intact on failure)
@@ -622,160 +308,103 @@ await projectionRebuilder.ReplayAsync(ct);    // resume incremental events from 
 await projectionRebuilder.RebuildAsync(ct);   // ⚠️ clears the read model first, then replays in full
 ```
 
-### 13. Idempotent Execution: Result Caching + Revision CAS Token (v2.1.0)
-
-API/command idempotency: duplicate requests with the same `(OperationName, Key)` return the cached result instead of re-executing the handler. The **Revision CAS token** (v2.1.0) prevents side-effect re-execution after a Completed record is concurrently flipped; expired records are reclaimable (Retention = re-execution window). Physical cleanup of expired rows is the application's responsibility (the framework starts no background cleanup task; it only guarantees logical expiry).
+### Compile-Time DDD Governance: Errors Stopped at Compile Time
 
 ```csharp
-using PalDDD.Idempotency;
+// ✅ Domain event host must be a sealed class (a record inheriting the non-record DomainEvent fails CS8864)
+//    A class host must be [BoundedContext]-annotated (PDDD001 Error) and sealed (PDDD012 Error)
+[BoundedContext("ordering")]
+public sealed class OrderCreated : DomainEvent, IDomainEvent { ... }
 
-// Registration (no convenience extension — manual, mirroring the tutorial): IIdempotencyStore
-// comes from the persistence adapter (EFCore IdempotencyDbContext / PalORM PalOrmIdempotencyStore /
-// InMemory with zero dependencies)
-services.AddScoped<IIdempotencyStore>(sp => sp.GetRequiredService<AppIdempotencyDbContext>());
-services.AddScoped<IdempotencyProcessor>();   // ctor-injected store (+optional TimeProvider/IPalLogger)
+// ❌ Forgot sealed — direct compile error
+public class OrderCreated : DomainEvent, IDomainEvent { ... }  // PDDD012 + PDDD001 (missing BoundedContext)
 
-// Real API: ExecuteAsync<TResult>(operationName, key, handler, serialize, deserialize)
-var execution = await idempotency.ExecuteAsync(
-    "order.create", orderKey,
-    handler: async ct => await CreateOrderExpensivelyAsync(cmd, ct),   // runs only on first execution
-    serializeResult: r => JsonSerializer.SerializeToUtf8Bytes(r, OrderJsonTypeInfo),
-    deserializeResult: b => JsonSerializer.Deserialize<OrderResult>(b, OrderJsonTypeInfo)!,
-    cancellationToken: ct);
+// ✅ Message name lowercase-kebab + .vN — PDDD009/PDDD010 compile warnings
+[GenerateMessage(Name = "ordering.order-created.v1")]
 
-// Three states (IdempotencyExecutionStatus):
-switch (execution.Status)
-{
-    case IdempotencyExecutionStatus.Executed: // first real execution
-        return execution.Result!;
-    case IdempotencyExecutionStatus.Cached:   // duplicate request → cached payload (zero side effects)
-        return execution.Result!;
-    case IdempotencyExecutionStatus.Skipped:  // another request holds the lease → retry later
-        return Results.Accepted();
-}
+// ❌ [GenerateId] target missing partial — source generator fails directly
+[GenerateId(typeof(Ulid))]
+public readonly record struct OrderId;  // PALID002 (non-partial record struct; generated code cannot merge)
 ```
 
-### 14. Observability: Built-In OpenTelemetry, Zero Configuration
+### Message Version Evolution: V1→V2 Auto-Upgrade
 
-PalDDD ships `PalActivitySource` (11 Start methods) + `PalMetrics` (23 telemetry instruments) built into all critical paths — no manual instrumentation needed.
+> **Serialization prerequisite**: `AddPalJsonSerialization(catalog => ...)` (default, AOT-safe) vs `AddPalMemoryPackSerialization` (faster but the adapter is non-AOT) — both register into the same `IMessageSerializer` singleton slot; the later registration overwrites the earlier one. Switching changes the ContentType; historical payload compatibility must be assessed.
 
 ```csharp
-// Framework auto-instrumentation (Activity names are semantic short names; Counters use the paldd. prefix):
-// - OutboxProcessor → Activity "Outbox Process" + Counter "paldd.outbox.processed" / "paldd.outbox.failed"
-// - IdempotencyProcessor → Activity "Idempotency Execute" + Counter "paldd.idempotency.executed" / "paldd.idempotency.cached"
+// Evolution messages are pure message contracts (plain records, no DomainEvent inheritance)
+public sealed record OrderSubmittedV1(Guid OrderId, decimal Amount);
+public sealed record OrderSubmittedV2(Guid OrderId, decimal Amount, string? CouponCode);
 
-// Reserved (not yet wired, no internal emit sites, kept for external integration):
-// - Dispatcher.SendAsync → Activity "Command Dispatch" (PalActivitySource.StartCommandDispatch)
-// - SagaProcessor → Activity "Saga Transition" (PalActivitySource.StartSagaTransition)
+// ① Startup contract validation — incomplete adjacent-version paths refuse to start (PalPlatformVerificationException)
+services.AddPalMessageContractVerification(b => b.Add<OrderSubmittedV1, OrderSubmittedV2>(
+    AppJsonContext.Default.OrderSubmittedV1, AppJsonContext.Default.OrderSubmittedV2,
+    old => new OrderSubmittedV2(old.OrderId, old.Amount, null)));
 
-// Your OpenTelemetry configuration only needs to reference the Activity Source:
-services.AddOpenTelemetry()
-    .WithTracing(t => t.AddSource("PalDDD"))      // Auto-captures all PalDDD Activities
-    .WithMetrics(m => m.AddMeter("PalDDD"));       // Auto-captures all PalDDD Metrics
-
-// Zero manual instrumentation — Outbox backlog, idempotency hit/skip, Saga compensation count and other wired paths are auto-reported (command dispatch / Saga transition Activities are reserved, see above)
+// ② Runtime upgrade pipeline — explicit consumer-side chain (adjacent versions only)
+var pipeline = new MessageEvolutionBuilder()
+    .Add<OrderSubmittedV1, OrderSubmittedV2>(oldDescriptor, currentDescriptor,
+        old => new OrderSubmittedV2(old.OrderId, old.Amount, null))
+    .Build();
+var current = pipeline.Upgrade(payload.Span, oldDescriptor, currentDescriptor, serializer);  // v1 payload → v2 instance
 ```
 
-### 15. Incremental Migration: Phased Adoption From MediatR
+More usage is in the [Usage Guide](docs/usage.md): idempotent execution (Revision CAS token), multi-tenant filtering (`[TenantAware]`, see the [PalORM adapter docs](docs/palorm-adapter.md)), InMemory full-pipeline testing (zero external dependencies), ASP.NET Core Minimal API endpoints, and Kafka / RabbitMQ integration.
 
-Every NuGet package in PalDDD is independently installable — no need to rewrite the entire project at once.
+## Performance
 
-```csharp
-// Step 1: Introduce only domain primitives (replace hand-written Entity / ValueObject)
-// dotnet add package PalDDD.Core
-public sealed class Order : AggregateRoot<OrderId> { ... }  // Replaces hand-written Entity base class
+> ⚠️ The following are `--smoke` smoke-test data (Stopwatch + GC allocation, single run; 2026-06-28, Windows 10 x64, .NET SDK 11.0.100-preview.5, BenchmarkDotNet 0.15.8), not formal BenchmarkDotNet reports — the latest visible BDN 0.15.8 does not produce a formal report on this toolchain. Smoke tests are for trend checking and cannot replace statistically rigorous benchmarking.
 
-// Step 2: Introduce CQRS dispatch (replace MediatR)
-// dotnet add package PalDDD.CQRS
-services.AddPalCommandHandler<CreateOrder, OrderId, CreateOrderHandler>();
-// MediatR's IRequest → PalDDD's ICommand
-// MediatR's IRequestHandler → PalDDD's ICommandHandler
+| Operation | Count | Elapsed | Allocation |
+|------|:---:|------|:--:|
+| PalValidationResult.Success | 1M | 14.12 ms | 88 B |
+| SmartEnum.FromValue (FrozenDictionary) | 1M | 18.78 ms | 40 B |
+| PalValidationResult.Failed | 1M | 41.10 ms | 40,000,040 B |
+| Entity.RaiseEvent (singly-linked-list append) | 1M | 124.80 ms | 128,000,256 B |
 
-// Step 3: Add Outbox / Saga / Projection as needed
-// dotnet add package PalDDD.Transactions
-services.AddPalOutbox();  // A capability MediatR lacks
+Verification command:
 
-// Incremental migration: legacy code keeps using MediatR, new features use PalDDD, both coexist without conflict
+```bash
+dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj -- --smoke
 ```
 
-### 16. ASP.NET Core Integration: Minimal API Endpoints + Exception Contract + Health Checks
+For full data and the BenchmarkDotNet historical baseline, see [Performance Records](docs/performance.md).
 
-`PalDDD.Hosting.AspNetCore` maps commands/queries directly to Minimal API endpoints — JsonTypeInfo is mandatory (AOT-safe), with a built-in exception mapping contract.
+## AOT Compatibility
 
-```csharp
-var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddPalCoreStack();
-builder.Services.AddPalCommandHandler<CreateOrder, OrderId, CreateOrderHandler>();
-builder.Services.AddPalHealthChecks();       // Broker + Outbox health checks (call before Build)
+| Layer | Status | Description |
+|----|:--:|------|
+| PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` globally inherited |
+| PalDDD.CQRS · EventLog · Messaging · Projections · DI | ✅ | Same as above |
+| **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **True AOT** | Source-generated RowFactory/CommandFactory, `PublishAot=true` verification passed ([PalOrmSample](samples/PalDDD.PalOrmSample/)) |
+| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ Measured | `[module:DapperAot]` enabled — 34 call-site interceptors, three-dialect NativeAOT measured 13/13; boundary: bypassing wrappers to raw Dapper API is not AOT-safe |
+| PalDDD.Transactions | ❌ | Saga reflection exception (`IsAotCompatible=false`, see csproj) |
+| **PalDDD.*.EFCore (5 projects)** | ❌ | EF Core client limitations + the Saga reflection exception — a design trade-off, not deprecation; normal use for the EF ecosystem (runtime JIT) |
+| ~~PalDDD.EntityFrameworkCore~~ (old package) | ❌ | ~~Deprecated, source not committed (OBS-068) — distinct from the five current `*.EFCore` projects above~~ |
+| PalDDD.Messaging.Kafka · RabbitMQ | ❌ | Confluent.Kafka / RabbitMQ.Client limitations |
+| PalDDD.Hosting.AspNetCore | ❌ | FrameworkReference limitations |
 
-var app = builder.Build();
-app.UsePalExceptionHandler();                 // must be first: PalValidationException→400+errors[], HandlerNotFound→404, others→500 (no internal message leakage)
-app.MapPalHealthChecks();                     // GET /health
-
-// Command endpoint (dual JsonTypeInfo overload — responses require the response JsonTypeInfo)
-app.MapCommand<CreateOrder, OrderId>("/orders",
-    AppJsonContext.Default.CreateOrder, AppJsonContext.Default.OrderId);
-
-// Query endpoint (bindQuery delegate binds from HttpContext; exceptions inside follow the unified contract)
-app.MapQuery<GetOrderQuery, OrderDto>("/orders/{orderId}",
-    ctx => new GetOrderQuery(OrderId.Parse(ctx.Request.RouteValues["orderId"]?.ToString() ?? "")),
-    AppJsonContext.Default.OrderDto);
-```
-
-### 17. Kafka / RabbitMQ Broker Integration: Explicit Construction, No DI Magic
-
-The two broker adapters ship **no convenience AddPal extension** — explicit construction (5 parameters: transport configs ×2 + logger + serializer + catalog), transparent and controllable assembly.
-
-```csharp
-// Kafka (RabbitMQ is isomorphic: RabbitMqBroker(RabbitMqBrokerConfig, ConsumerConfig, logger, serializer, catalog))
-builder.Services.AddSingleton<IMessageBroker>(new KafkaBroker(
-    new ProducerConfig { BootstrapServers = "kafka:9092" },
-    new ConsumerConfig { BootstrapServers = "kafka:9092", GroupId = "ordering" },
-    NullPalLogger<KafkaBroker>.Instance,
-    serializer, catalog));   // IMessageSerializer + IMessageCatalog from AddPalJsonSerialization
-
-// Publishing: the OutboxProcessor calls broker.PublishAsync for leased messages — the non-generic
-// path requires a messageId
-await broker.PublishAsync(message, descriptor, messageId, ct);
-// The Outbox side uses OutboxMessage.Id as messageId; correlation/causation/trace metadata flows via MessagePublishContext
-// Broker adapters are non-AOT (Confluent.Kafka/RabbitMQ.Client limits, see the AOT table); for tests register NullMessageBroker or your own IMessageBroker
-```
-
----
+`IsAotCompatible=true` + 0 warnings ≠ runtime safety: AOT compatibility claims require `PublishAot` plus running the published binary. See the [AOT guide](docs/aot.md), [persistence AOT status](docs/persistence-aot-status.md), and [PalORM adapter docs](docs/palorm-adapter.md).
 
 ## Feature Matrix
 
-### Domain Modeling
-| Component | Implementation Strategy |
-|------|---------|
-| Entity / AggregateRoot | Singly-linked-list event storage, supports zero-allocation `foreach` enumeration, thread-safe event collection |
-| DomainEvent | abstract base class + user-side `sealed` declarations (enforced by PDDD012), `static abstract EventName` compile-time contract (PDDD015 enforces consistency with `[GenerateMessage].Name`) |
-| IValueObject / SmartEnum | Value-object abstraction (`IValueObject` structural equality, retained per ADR-003); `SmartEnum<TSelf,TValue>` FrozenDictionary O(1) FromValue (strongly-typed IDs go through the `[GenerateId]` source generator) |
-| ISpecification | ExpressionVisitor parameter substitution composes And/Or/Not, fully compatible with EF Core LINQ |
-| Diagnostics | Built-in `PalActivitySource` (11 Start methods) + `PalMetrics` (23 telemetry instruments) |
+### Source Generators (compile time, zero runtime reflection)
 
-### Source Generators (compile-time, zero runtime reflection)
 | Generator | Output | Companion diagnostics |
 |-----------|--------|----------------------|
 | IdentityGenerator | `New`/`From`/`Parse`/`TryParse` + JsonConverter/TypeConverter + ISpanParsable | PALID001-007 |
 | EnumGenerator | SmartEnum registration code (FrozenDictionary O(1)) | PALENUM001-009 |
 | MessageRegistryGenerator | MessageCatalog registration + GetTypeInfo bridge | PALMSG001-007 |
 
-### CQRS
-| Component | Implementation Strategy |
-|------|---------|
-| Dispatcher | FrozenDictionary routing table, `IHandler.HandleAsync` DIM bridging, zero MakeGenericType |
-| PipelineBehavior | Open generic + closed generic dual registration (closed `AddPalPipelineBehaviors<TRequest, TResponse>()` keeps value-type pipelines Native AOT safe), built-in ValidationBehavior + LoggingBehavior |
-| Handler Registration | `AddPalCommandHandler<T>` compile-time type constants, no assembly scanning |
-
 ### Messaging Infrastructure
+
 | Component | Core Mechanism |
 |------|---------|
-| **Outbox** | Atomic message row write within the DB transaction, lease lock + token fencing ((LockedBy, LockedUntil) full-match rejects stale workers; LockedUntil monotonic, no DDL) for multi-instance concurrent publishing, exponential backoff retry, dead-letter queue + operation re-injection (retry cap `MaxRetryCount` configurable; re-injection requires idempotent consumers — see the dead-letter ops section in [usage.md](docs/usage.md)) |
+| **Outbox** | Atomic write within the DB transaction + lease lock + token fencing for multi-instance concurrent publishing, exponential-backoff retry, dead-letter queue + operation re-injection (retry cap `MaxRetryCount` configurable; re-injection requires idempotent consumers — see the dead-letter ops section in [usage.md](docs/usage.md)) |
 | **Inbox** | `(ConsumerName, MessageId)` composite unique constraint, four-state lifecycle (Pending → Processing → Processed/Failed), zombie record timeout reclaim |
-| **Saga** | Explicit state/event transition registration → FrozenDictionary lookup, configurable retry+backoff, None/Backward/Forward compensation strategies (**compensation scope and order follow the execution sequence via ExecutedStepKeys, not registration order**), timeout detection background service (including AwaitingHumanDecision interrupted-state fallback scanning), manual approval interrupt+resume, FanOut parallel subtasks (⚠️ **whole-batch attempt-level retry — executors must be idempotent**; see the `FanOutStep` replay-semantics declaration) |
+| **Saga** | Explicit state/event transition registration → FrozenDictionary lookup, None/Backward/Forward compensation strategies (**compensation scope and order follow the execution sequence via ExecutedStepKeys, not registration order**), timeout detection background service (including AwaitingHumanDecision interrupted-state fallback scanning), manual approval interrupt+resume, FanOut parallel subtasks (⚠️ **whole-batch attempt-level retry — executors must be idempotent**; see the `FanOutStep` replay-semantics declaration) |
 | **EventLog** | Named streams + optimistic concurrency (ExpectedStreamVersion), global monotonically increasing position, `RehydrateFromBytes` zero-copy read path |
-| **Idempotency** | `(OperationName, Key)` idempotent execution + result payload caching (Executed/Cached/Skipped), **Revision CAS token** prevents side-effect re-execution after Completed flip (v2.1.0), expired records reclaimable |
+| **Idempotency** | `(OperationName, Key)` idempotent execution + result payload caching (Executed/Cached/Skipped), Revision CAS token prevents side-effect re-execution after Completed flip, expired records reclaimable |
 | **Projection** | `IProjectionCheckpointStore` checkpoint persistence, `EventLogReplaySource<T>` full replay, independent of the storage adapter |
 
 ### Persistence Adapters
@@ -785,57 +414,35 @@ await broker.PublishAsync(message, descriptor, messageId, ct);
 | Adapter | AOT | Database | Coverage |
 |--------|:--:|:--:|------|
 | **PalDDD.PalORM** | ✅ **True AOT** | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / **Idempotency** / UnitOfWork (source generation + compile-time SQL, [see adapter docs](docs/palorm-adapter.md)) |
-| PalDDD.Dapper | ✅ Measured | PG / MySQL / SQLite | Outbox / Inbox / Saga / EventLog / Projection / **Idempotency** / UnitOfWork (`[module:DapperAot]` **enabled** — 34 call-site interceptors, three-dialect NativeAOT measured 13/13; boundary: bypassing wrappers to raw Dapper API is not AOT-safe, see [aot.md](docs/aot.md)) |
-| **PalDDD.*.EFCore** (5 projects) | ❌ Design trade-off | PG / MySQL / SQLite (SqlServer experimental `[Obsolete]`) | Outbox / Inbox / Saga / EventLog / Idempotency / Projection Checkpoint / Repository+UnitOfWork (`PalDDD.Transactions.EFCore` four-dialect derived DbContext + `EventLog.EFCore` / `Idempotency.EFCore` / `Projections.EFCore` / `Repository.EFCore` — retained for users who need the **EF ecosystem**: Migration / LINQ queries / Interceptor / ChangeTracker) |
-| ~~PalDDD.EntityFrameworkCore~~ (old package) | ❌ | — | ~~Deprecated, source not committed (OBS-068) — distinct from the five current `*.EFCore` projects above~~ |
+| PalDDD.Dapper | ✅ Measured | PG / MySQL / SQLite | Same seven capabilities (`[module:DapperAot]` fully enabled; boundary see [AOT Compatibility](#aot-compatibility)) |
+| **PalDDD.*.EFCore** (5 projects) | ❌ Design trade-off | PG / MySQL / SQLite (SqlServer experimental `[Obsolete]`) | Outbox / Inbox / Saga / EventLog / Idempotency / Projection Checkpoint / Repository+UnitOfWork (retained for users who need the **EF ecosystem**: Migration / LINQ queries / Interceptor / ChangeTracker) |
+| ~~PalDDD.EntityFrameworkCore~~ (old package) | ❌ | — | ~~Deprecated, source not committed (OBS-068)~~ |
 
 ### Database Dialect Extensions
+
 | Dialect | Unique Capabilities |
 |------|---------|
-| PostgreSQL | **Multi-host failover** (Failover primary/standby merge) and **read/write splitting** (ReadWriteRouter dual data sources: writes to primary + load-balanced replica reads), COPY bulk write, Pipeline single-round-trip batching, LISTEN/NOTIFY event push, consistent-hashing sharding, JSONB operators, soft delete, audit log |
+| PostgreSQL | Multi-host failover (Failover primary/standby merge) and read/write splitting (ReadWriteRouter dual data sources: writes to primary + load-balanced replica reads), COPY bulk write, Pipeline single-round-trip batching, LISTEN/NOTIFY event push, consistent-hashing sharding, JSONB operators, soft delete, audit log |
 | MySQL | Multi-host failover (FailOver/RoundRobin/LeastConnections, explicit LoadBalance conflict fail-fast), InnoDB session tuning (lock timeout, isolation level, SQL mode), connection-pool session survival guidance (ConnectionReset=false) |
 | SQLite | WAL mode + PRAGMA optimization (three-tier tuning), FTS5 full-text search, JSON1 functions |
-| All three dialects | Connection-string fail-fast at registration time: IPv6 four-quadrant validation (bracketed/bare forms), embedded-port syntax interception, blank/duplicate host-list entry detection — config errors surface at registration, not at connection time (v2.1.0) |
+| All three dialects | Connection-string fail-fast at registration time: IPv6 four-quadrant validation (bracketed/bare forms), embedded-port syntax interception, blank/duplicate host-list entry detection — config errors surface at registration, not at connection time |
 
----
+## Package List
 
-## AOT Compatibility
+PalDDD ships 35 packages of its own plus 5 third-party PalORM engine packages (`PalORM.Core` · `PalORM.SourceGen` · `PalORM.PostgreSql` · `PalORM.MySql` · `PalORM.Sqlite`, independent version line). The per-package release list and versions are in the [release package scope](docs/release.md); the current version is authoritative on the [NuGet](https://www.nuget.org/packages/PalDDD.Base) badge and in the [CHANGELOG](CHANGELOG.md).
 
-| Layer | Status | Description |
-|----|:--:|------|
-| PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` globally inherited |
-| PalDDD.CQRS · EventLog · Messaging · Projections · DI | ✅ | Same as above |
-| **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **True AOT** | Source-generated RowFactory/CommandFactory, `PublishAot=true` verification passed ([PalOrmSample](samples/PalDDD.PalOrmSample/)) |
-| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ Measured | `[module:DapperAot]` enabled — 34 call-site interceptors, three-dialect NativeAOT measured 13/13; boundary: bypassing wrappers to raw Dapper API is not AOT-safe (see [AOT guide](docs/aot.md) and [persistence-aot-status.md](docs/persistence-aot-status.md)) |
-| PalDDD.Transactions | ❌ | Saga reflection exception (`IsAotCompatible=false`, see csproj) |
-| **PalDDD.*.EFCore (5 projects)** | ❌ | EF Core client limitations + the Saga reflection exception — **a design trade-off, not deprecation**; normal use for the EF Core ecosystem (runtime JIT) |
-| ~~PalDDD.EntityFrameworkCore~~ | ❌ | ~~Deprecated~~ |
-| PalDDD.Messaging.Kafka · RabbitMQ | ❌ | Confluent.Kafka / RabbitMQ.Client limitations |
-| PalDDD.Hosting.AspNetCore | ❌ | FrameworkReference limitations |
-
-See the [AOT guide](docs/aot.md) and [PalORM adapter docs](docs/palorm-adapter.md) for details.
-
----
-
-## Performance
-
-> ⚠️ The following are `--smoke` smoke-test data (Stopwatch + GC allocation, single run), not formal BenchmarkDotNet reports. BenchmarkDotNet has compatibility issues with the current .NET 11 Preview toolchain; the formal benchmark report will be added once BDN releases a compatible version. Smoke tests are for trend checking and cannot replace statistically rigorous benchmarking.
-
-| Operation | Count | Elapsed | Allocation |
-|------|:--:|------|:--:|
-| PalValidationResult.Success | 1M | 15.06 ms | 88 B |
-| SmartEnum.FromValue (FrozenDictionary) | 1M | 19.01 ms | 40 B |
-| PalValidationResult.Failed | 1M | 43.41 ms | ~40 MB |
-| Entity.RaiseEvent (singly-linked-list append) | 1M | 148.45 ms | ~128 MB |
-
-Verification command:
-```bash
-dotnet run --configuration Release --project bench/PalDDD.Benchmarks -- --smoke
-```
-
-For full data and the BenchmarkDotNet historical baseline, see [Performance Records](docs/performance.md).
-
----
+| Layer | Packages |
+|----|----|
+| Domain (pure domain layer) | PalDDD.Core · PalDDD.Core.SourceGen · PalDDD.Analyzers · PalDDD.Analyzers.CodeFixes |
+| App-Abstractions | PalDDD.Serialization · PalDDD.Serialization.Evolution · PalDDD.Serialization.MemoryPack · PalDDD.Messaging · PalDDD.Compression · PalDDD.Compression.Native |
+| App-Core | PalDDD.CQRS · PalDDD.EventLog · PalDDD.Idempotency · PalDDD.Projections · PalDDD.Transactions |
+| Infra-PalORM (recommended) | PalDDD.PalORM · PalDDD.PalORM.PostgreSql · PalDDD.PalORM.MySql · PalDDD.PalORM.Sqlite |
+| Infra-Dapper | PalDDD.Dapper · PalDDD.Dapper.PostgreSql · PalDDD.Dapper.MySql · PalDDD.Dapper.Sqlite |
+| Infra-EFCore | PalDDD.Transactions.EFCore · PalDDD.EventLog.EFCore · PalDDD.Idempotency.EFCore · PalDDD.Projections.EFCore · PalDDD.Repository.EFCore |
+| Infra-Serialization | PalDDD.Projections.EventLog |
+| Infra-Messaging | PalDDD.Messaging.Kafka · PalDDD.Messaging.RabbitMQ |
+| Hosting | PalDDD.DependencyInjection · PalDDD.Hosting.AspNetCore |
+| Metapackages | PalDDD.Base (L1) · PalDDD.Extension (L2) |
 
 ## Project Structure
 
@@ -852,9 +459,9 @@ src/                         36 source projects · Clean Architecture (folders m
 ├── Hosting/                 DependencyInjection · Hosting.AspNetCore
 └── Metapackages/            Base · Extension · Prompts (Prompts is not a package, IsPackable=false)
 
-test/                        16 test projects (TUnit) · 1502 measured tests (1434 passes + 68 skipped — full-suite measurement on 2026-09-25; skips are Docker/Testcontainers dependencies and local broker prechecks, PalORM.Tests & Messaging.Integration.Tests need Docker)
+test/                        16 test projects (TUnit; measurement basis in footnote ¹ at the top)
 bench/                       BenchmarkDotNet performance benchmarks
-samples/                     PalOrmSample (AOT verification) · ECommerce · MinimalApi · AotSample · DapperAotProbe (experimental probe, not in slnx/CI — see docs/review/dapper-aot-experiment-2026-09-13.md)
+samples/                     PalOrmSample (AOT verification) · ECommerce · MinimalApi · AotSample · DapperAotProbe (experimental probe, not in slnx/CI)
 docs/                        Architecture · Usage guide · Tutorial · ADR
 ```
 
@@ -880,17 +487,14 @@ flowchart TB
     PalORM --> SQLite
 ```
 
-
----
-
 ## Documentation
 
 | Document | Description |
 |------|------|
 | [Architecture](docs/architecture.md) | Layering, dependency direction, project responsibilities |
-| [Idempotency Rationale](docs/idempotency-rationale.md) | Why it is designed this way: trade-offs and boundaries |
 | [Usage Guide](docs/usage.md) | Complete code examples for each component |
 | [Tutorial](docs/tutorial.md) | Build a DDD application from scratch |
+| [Idempotency Rationale](docs/idempotency-rationale.md) | Why it is designed this way: trade-offs and boundaries |
 | [PalORM Adapter](docs/palorm-adapter.md) | Six Stores / fixed classes / Row DTO mapping to PalORM |
 | [Engineering Conventions](docs/conventions.md) | Naming, file organization, DI, AOT |
 | [AOT Guide](docs/aot.md) | Native AOT rules and checklist |
@@ -902,35 +506,29 @@ flowchart TB
 | [Architecture Decisions](docs/decisions/) | 24 ADRs |
 | [Changelog](CHANGELOG.md) | Version history (consumer-facing changes + engineering appendix) |
 
----
-
 ## FAQ
 
 **What is the relationship with MediatR?**
-MediatR is an in-process command dispatcher. Pal.DDD ships an equivalent Dispatcher + PipelineBehavior, and on top of that provides Outbox, Inbox, Saga, EventLog, and Projection. If you only need command dispatch, Pal.DDD's CQRS layer can replace MediatR. If you also need reliable message delivery and Saga orchestration, Pal.DDD provides the entire chain.
+MediatR is an in-process command dispatcher. Pal.DDD ships an equivalent Dispatcher + PipelineBehavior, and on top of that provides Outbox, Inbox, Saga, EventLog, and Projection. If you only need command dispatch, the CQRS layer can replace MediatR; if you also need reliable message delivery and Saga orchestration, Pal.DDD provides the entire chain. For the relationship with MassTransit, see the [comparison table](#comparison-with-existing-solutions): the framework does not bind a transport — the Outbox adapts to any Broker via the `IMessageBroker` abstraction.
 
-**What is the relationship with MassTransit?**
-MassTransit is a distributed message bus bound to specific transports (RabbitMQ/Azure Service Bus/Amazon SQS). Pal.DDD's Outbox adapts to any Broker via the `IMessageBroker` abstraction — you can inject MassTransit, raw RabbitMQ, Kafka, or an InMemory implementation. The framework does not bind to a transport.
+**What is the relationship with EF Core? How to choose between the three persistence stacks?**
+Coexist, not replace. EF Core handles object-relational mapping and queries; Pal.DDD handles DDD tactical patterns. The three stacks are equally supported and coexist long-term (2026-09-20 ruling). Pick by primary need: AOT publishing + compile-time type safety → **PalORM** (source-generated SQL, true AOT); maximum SQL control or existing Dapper code → **Dapper** (call-site-level AOT, three-dialect measured); the **EF Core ecosystem** (Migration, LINQ, Interceptor, ChangeTracker) → the **EF Core** five projects. The three can be mixed in one project: PalORM for the write path (Outbox/Saga) + EF Core for the read path (Projection) is the official combination.
 
-**What is the relationship with EF Core? Coexist or replace?**
-Coexist. Pal.DDD does not replace EF Core — the two solve problems at different layers. EF Core handles object-relational mapping and queries; Pal.DDD handles DDD tactical patterns (Entity, DomainEvent, CQRS dispatch, Outbox delivery, Saga orchestration). Pal.DDD provides three sets of persistence adapters — PalORM (recommended, true AOT), Dapper (ADR-020 capability-parity stack, call-site-level Native AOT enabled), and EF Core — and the choice depends on your AOT requirements and query complexity.
-
-**Can it be used in existing projects? Incremental adoption?**
-Yes. Every NuGet package in Pal.DDD is independently installable. You can start with `PalDDD.Base` (domain primitives), gradually introduce the CQRS Dispatcher alongside your existing Service layer, and add Outbox or Saga as needed. There is no need to rewrite the entire project at once.
+**Can it be adopted incrementally into an existing project?**
+Yes. Every NuGet package is independently installable: start with `PalDDD.Base` (domain primitives), gradually introduce the CQRS Dispatcher alongside your existing Service layer, and add Outbox or Saga as needed — no one-shot rewrite. Legacy code keeps using MediatR, new features use Pal.DDD, and both coexist without conflict.
 
 **Why target only net11.0?**
 It relies on .NET 11 static features (JsonSerializerContext source-generation enhancements, Runtime Async state machine optimizations, new AOT analyzers); multi-targeting is technically infeasible. See [ADR-005](docs/decisions/005-net11-single-target.md) for details.
 
-**How to choose between the three persistence adapters (PalORM / Dapper / EF Core)?**
-The three stacks are **equally supported and coexist long-term** (2026-09-20 ruling, no retirement plan). Pick by primary need: AOT publishing + compile-time type safety → **PalORM** (source-generated SQL, true AOT); maximum SQL control / hand-written SQL / existing Dapper code → **Dapper** (call-site-level AOT, three-dialect measured); the **EF Core ecosystem** (Migration, LINQ queries, Interceptor, ChangeTracker) → the **EF Core** five projects (`Transactions.EFCore` covers Outbox/Inbox/Saga, plus EventLog/Idempotency/Projections/Repository). The three can be mixed in the same project — for example, PalORM for the write path (Outbox/Saga) and EF Core for the read path (Projection). Full comparison in the "Persistence Adapters" table above and [palorm-adapter.md](docs/palorm-adapter.md).
-
 **What are the known limitations?**
-Does not support .NET 8/9/10 (single target net11.0). Three AOT limitations (honestly declared via source `[RequiresDynamicCode]`): ① Saga ChildSaga child-flow dispatch (`MakeGenericMethod`/`MakeGenericType`, see `Saga.cs`) and ② dynamic event routing share the same root; ③ `ISpecification.Compile()` expression-tree compilation is unsupported under Native AOT — in AOT scenarios use `ToExpression()` and pass it to your query provider instead. No built-in EventStore snapshot mechanism — projects that need a snapshot strategy must implement it themselves.
+Does not support .NET 8/9/10 (single target net11.0). Three AOT limitations (honestly declared via source `[RequiresDynamicCode]`): ① Saga ChildSaga child-flow dispatch (`MakeGenericMethod`/`MakeGenericType`, see `Saga.cs`) and ② dynamic event routing share the same root; ③ `ISpecification.Compile()` expression-tree compilation is unsupported under Native AOT — in AOT scenarios use `ToExpression()` and pass it to your query provider (the in-memory path `IsSatisfiedBy` uses `Expression.Compile`, unsupported under Native AOT). No built-in EventStore snapshot mechanism — projects that need a snapshot strategy must implement it themselves. CQRS pipeline note: the parameterless open-generic `AddPalPipelineBehaviors()` triggers `AotCannotCreateGenericValueType` for value-type responses under Native AOT; AOT apps use `AddPalCommandHandler<T...>` or the explicit `AddPalPipelineBehaviors<TRequest, TResponse>()` (the two registrations are first-wins and mutually exclusive).
 
 **Who is using it in production?**
-Pal.DDD is currently at version v3.2.0 (tag v3.2.0 published; SemVer minor: three new backward-compatible public APIs — connection-pool prewarm entry, MySQL builder overload, read-replica annotations — plus unified decompression exception type for corrupted frames, no breaking API changes — see the `[3.2.0]` section in CHANGELOG). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects, with 1502 measured test cases (16 projects: 1434 passes + 68 skipped — the 2026-09-25 full-suite measurement basis). You are welcome to try it in non-production environments and provide feedback.
+Current version v3.2.0 (tag v3.2.0 published; SemVer minor: three new backward-compatible public APIs — connection-pool prewarm entry, MySQL builder overload, read-replica annotations — plus a unified decompression exception type for corrupted frames, no breaking API changes; see the `[3.2.0]` section in CHANGELOG). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects; the test measurement basis is in footnote ¹ at the top. You are welcome to try it in non-production environments and provide feedback.
 
----
+## Contributing
+
+Issues and PRs are welcome. The first build after cloning automatically configures the pre-commit hooks (`core.hooksPath=.githooks`; 12 local guards take effect automatically; skip once with `git commit --no-verify`). Please run the relevant test suites before submitting; changes touching public APIs must synchronize the API snapshot and CHANGELOG within the same commit. For the dev environment and test commands, see [Development](docs/development.md).
 
 ## License
 
@@ -938,4 +536,4 @@ Pal.DDD is currently at version v3.2.0 (tag v3.2.0 published; SemVer minor: thre
 
 Copyright (C) 2026 PalDDD
 
-This project uses the AGPL-3.0-or-later license. AGPL v3 adds Section 13 (network interaction clause) on top of GPL v3 — when providing services over a network, you must make the complete source code of the modified version available to users. See the [LICENSE](LICENSE) file or <https://www.gnu.org/licenses/agpl-3.0.html> for details.
+This project uses the AGPL-3.0-or-later license. AGPL v3 adds Section 13 (network interaction clause) on top of GPL v3: when providing services over a network, you must make the complete source code of the modified version available to users. See the [LICENSE](LICENSE) file or <https://www.gnu.org/licenses/agpl-3.0.html> for details.
