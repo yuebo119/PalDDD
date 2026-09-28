@@ -44,11 +44,11 @@
          本仓两处消费点（PalOrmOutboxStore.AddMessage 丢弃返回值、PalOrmEventLog 走自增主键回填路径）
          均不依赖"物化新实例"，且全测试零 InsertAsync 返回值断言；② CommandSqlSet.Insert 字段恢复
          发射——本仓 grep CommandSqlSet 零命中 -->
-    <PackageVersion Include="PalORM.Core" Version="5.6.0" />
-    <PackageVersion Include="PalORM.SourceGen" Version="5.6.0" />
-    <PackageVersion Include="PalORM.Sqlite" Version="5.6.0" />
-    <PackageVersion Include="PalORM.PostgreSql" Version="5.6.0" />
-    <PackageVersion Include="PalORM.MySql" Version="5.6.0" />
+    <PackageVersion Include="PalORM.Core" Version="5.9.0" />
+    <PackageVersion Include="PalORM.SourceGen" Version="5.9.0" />
+    <PackageVersion Include="PalORM.Sqlite" Version="5.9.0" />
+    <PackageVersion Include="PalORM.PostgreSql" Version="5.9.0" />
+    <PackageVersion Include="PalORM.MySql" Version="5.9.0" />
     <!-- MemoryPack 二进制序列化（AOT 兼容） -->
     <PackageVersion Include="MemoryPack" Version="1.21.4" />
     <!-- Dapper.FluentMap 已移除 — 改用 Dapper.DefaultTypeMap.MatchNamesWithUnderscores -->
@@ -68,11 +68,11 @@
     <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
     <PackageVersion Include="Confluent.Kafka" Version="2.15.1" />
     <!-- 测试基础设施 — TUnit（源生成器测试框架 · MTP） -->
-    <PackageVersion Include="TUnit" Version="1.69.0" />
+    <PackageVersion Include="TUnit" Version="1.70.1" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <!-- 属性测试 — FsCheck + TUnit 集成 -->
     <PackageVersion Include="FsCheck" Version="3.4.0" />
-    <PackageVersion Include="TUnit.FsCheck" Version="1.69.0" />
+    <PackageVersion Include="TUnit.FsCheck" Version="1.70.1" />
     <!-- 快照测试 — Verify + TUnit 集成 -->
     <PackageVersion Include="Verify.TUnit" Version="32.0.1" />
     <!-- 集成测试 — Testcontainers -->
