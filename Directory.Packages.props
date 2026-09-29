@@ -1,7 +1,9 @@
 <Project>
 
 <!-- 中央包管理 — 统一 NuGet 版本（.NET 11 RC1 线；2026-09-10 全量升级：微软官方包/传递钉扎升至 11.0.0-rc.1.26425.128，第三方升最新稳定版；
-       2026-09-25 增量升位：PalORM ×5 → 5.6.0、SqlClient → 7.1.0；Verify.TUnit 按 2026-09-23 裁决停 32.x，BDN/Unsafe 仅 preview 不升） -->
+       2026-09-25 增量升位：PalORM ×5 → 5.6.0、SqlClient → 7.1.0；2026-09-29 全量核新：11 线 rc.2 未发维持 rc.1，
+       第三方全量核对仅 PalORM ×5 → 6.1.0（主版本线）与 TUnit/TUnit.FsCheck → 1.71.0 可升，其余均已在最新稳定版；
+       Verify.TUnit 按 2026-09-23 裁决停 32.x（license-policy 禁 ≥33），BDN/Unsafe 仅 preview 不升，Platforms 8.0 后停更） -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
@@ -39,16 +41,14 @@
          2026-09-13 用户裁决"铺垫不动"，启用路径见 DapperAotInitializer.cs 头注） -->
     <PackageVersion Include="Dapper.AOT" Version="1.1.0" />
     <!-- PalORM 适配器 — 面向 Native AOT 的 .NET 11 微 ORM（源生成 + 编译期 SQL，真 AOT 安全）
-         5.6.0 性能轮（2026-09-24 发布）：SemVer Minor、CHANGELOG 声明无破坏性变更，产品包依赖面零变化。
-         两处行为微变经本仓核实不命中：① InsertAsync 显式主键且全列可插时改返回传入实体同一引用——
-         本仓两处消费点（PalOrmOutboxStore.AddMessage 丢弃返回值、PalOrmEventLog 走自增主键回填路径）
-         均不依赖"物化新实例"，且全测试零 InsertAsync 返回值断言；② CommandSqlSet.Insert 字段恢复
-         发射——本仓 grep CommandSqlSet 零命中 -->
-    <PackageVersion Include="PalORM.Core" Version="5.6.0" />
-    <PackageVersion Include="PalORM.SourceGen" Version="5.6.0" />
-    <PackageVersion Include="PalORM.Sqlite" Version="5.6.0" />
-    <PackageVersion Include="PalORM.PostgreSql" Version="5.6.0" />
-    <PackageVersion Include="PalORM.MySql" Version="5.6.0" />
+         6.1.0（2026-09-29 升位，主版本线 5.6.0 → 6.1.0 跨 5.7/5.8/5.9/6.0.0/6.0.1）：NuGet 无
+         releaseNotes 渠道（registration API 仅固定描述），按 PD9 破坏性只有编译+测试能证——
+         升位实证见 CHANGELOG [Unreleased] Dependencies 段与适配层注释 -->
+    <PackageVersion Include="PalORM.Core" Version="6.1.0" />
+    <PackageVersion Include="PalORM.SourceGen" Version="6.1.0" />
+    <PackageVersion Include="PalORM.Sqlite" Version="6.1.0" />
+    <PackageVersion Include="PalORM.PostgreSql" Version="6.1.0" />
+    <PackageVersion Include="PalORM.MySql" Version="6.1.0" />
     <!-- MemoryPack 二进制序列化（AOT 兼容） -->
     <PackageVersion Include="MemoryPack" Version="1.21.4" />
     <!-- Dapper.FluentMap 已移除 — 改用 Dapper.DefaultTypeMap.MatchNamesWithUnderscores -->
@@ -68,11 +68,11 @@
     <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
     <PackageVersion Include="Confluent.Kafka" Version="2.15.1" />
     <!-- 测试基础设施 — TUnit（源生成器测试框架 · MTP） -->
-    <PackageVersion Include="TUnit" Version="1.69.0" />
+    <PackageVersion Include="TUnit" Version="1.71.0" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <!-- 属性测试 — FsCheck + TUnit 集成 -->
     <PackageVersion Include="FsCheck" Version="3.4.0" />
-    <PackageVersion Include="TUnit.FsCheck" Version="1.69.0" />
+    <PackageVersion Include="TUnit.FsCheck" Version="1.71.0" />
     <!-- 快照测试 — Verify + TUnit 集成 -->
     <PackageVersion Include="Verify.TUnit" Version="32.0.1" />
     <!-- 集成测试 — Testcontainers -->

@@ -96,7 +96,7 @@
 
 | 维度 | DDD 约定 |
 |------|---------|
-| **测试框架** | TUnit 1.69.0 + MTP（Microsoft.Testing.Platform） |
+| **测试框架** | TUnit 1.71.0 + MTP（Microsoft.Testing.Platform） |
 | **断言库** | TUnit.Assertions（Fluent 链式） |
 | **属性测试** | TUnit.FsCheck（属性驱动） |
 | **快照测试** | Verify.TUnit 32.0.1（已用于 Hosting.AspNetCore.Tests 的 ExceptionMiddleware，3 个 `.verified.txt` 基线；公共 API 快照另由自实现 PublicApiSnapshot 承载） |

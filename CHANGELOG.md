@@ -12,6 +12,12 @@
 
 ## [Unreleased]
 
+### Dependencies 依赖
+
+- **PalORM 五包 5.6.0 → 6.1.0（2026-09-29 升位，消费者可见）**：五包同步升位（主版本线，跨 5.7/5.8/5.9/6.0.0/6.0.1），下一版 nuspec 的 PalORM 声明随之上移。上游无 releaseNotes 渠道（NuGet registration API 仅固定描述），按 PD9 纪律以编译+测试实证破坏面：Release 全量构建 0 警告 0 错误（编译面零破坏——5.6.0 引入的 `readFromReplica` 第 2 位参数本仓已全部命名参数化，无新破坏面暴露）；全量测试面板 1502 项 0 失败 = 1434 通过 + 68 环境跳过（60 Docker + 8 broker），与 3.2.0 基线逐项一致；XML 契约复核——`PreWarmAsync` 预热语义、`readFromReplica` 回落主库契约（READ-002）、会话级熔断「默认阈值 5 形同虚设」叙述在 6.1.0 XML 原样在，5 处适配层注释的版本注记同提交升号。
+- **`TUnit` / `TUnit.FsCheck` 1.69.0 → 1.71.0**：测试期依赖，不进产物。MTP 传递解析仍为 2.4.1，`docs/conventions.md` §10.6 与 `docs/testing.md` 版本行同提交更新。
+- **全量核新结论（2026-09-29，NuGet flatcontainer/`dotnet list package --outdated` 双源实测）**：微软官方包 11 线 rc.2 未发，EF Core ×4 + Extensions ×5 + System 系钉扎维持 `11.0.0-rc.1.26425.128`（GA 预计 2026-11）；其余第三方均已在最新稳定版（SqlClient 7.1.0 / Dapper 2.1.89 / Dapper.AOT 1.1.0 / Npgsql 10.0.3 / MySqlConnector 2.6.2 / RabbitMQ.Client 7.2.2 / Confluent.Kafka 2.15.1 / MemoryPack 1.21.4 / ZLogger 2.5.10 / ByteAether.Ulid 1.4.1 / Testcontainers 4.15.0 / FsCheck 3.4.0 / BenchmarkDotNet 0.15.8 / NativeCompressions 0.6.1 / SQLitePCLRaw 3.0.5 / Humanizer.Core 3.0.10 / System.* 4.x-6.x 钉扎线 / Roslyn 5.9.0）；`Verify.TUnit` 最新 33.1.5 依 2026-09-23 裁决**不升**（license-policy 包级禁令 ≥33，SponsorCheck 商业许可门）。
+
 ---
 
 ## [3.2.0] — 2026-09-25
