@@ -57,22 +57,24 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
         // raw SQL 形态继续正确；可翻译性一旦变化由 OutboxSqliteConcurrencyTests 的 canary 转红。
         // 排序键 CreatedAt：对齐 Lease 与三栈 GetPending 先例（Dapper/PalORM/EF-MySQL 均
         // SQL 内 ORDER BY created_at）；原 Id 序（ULID 创建序）与本序在单进程下一致
-        //（表征测试 GetPending_OrdersByIdAscending 双态绿）。非组合式调用——FromSqlRaw 后
+        //（表征测试 GetPending_OrdersByIdAscending 双态绿）。非组合式调用——FromSql 后
         // 不再接 Where/OrderBy（组合会触发 ITM-261 翻译），仅 AsNoTracking + ToListAsync。
         // 优化（二十五轮 API 扫描 EF-5）：AsNoTracking——只读契约（接口 doc 保证不进
         // Mark*+SaveChanges）；违反契约的突变将静默丢失。
         // 伸缩性边界（反方发现④，决策文档在案）：OR 谓词下 (Status,NextAttemptAt,CreatedAt)
         // 索引第三列不保序——SQL 内可能单次全扫+临时 B-tree 排序；本形态消除的是 N 页往返
         // 与逐页重复物化（O(表·页数)→单语句），非"与表大小无关"。
+        // FromSql 全参数化形态（2026-10-08 审计对齐：插值孔逐孔生成 DbParameter，注入面收窄；
+        // 时间参数为应用侧 DateTimeOffset，与写入格式自洽，见上方 ToTimeParam 族注释）
         return await OutboxMessages
-            .FromSqlRaw("""
+            .FromSql($"""
                 SELECT * FROM OutboxMessages
-                WHERE Status = 0 AND RetryCount < {0}
-                  AND (NextAttemptAt IS NULL OR NextAttemptAt <= {1})
-                  AND (LockedUntil IS NULL OR LockedUntil <= {1})
+                WHERE Status = 0 AND RetryCount < {maxRetryCount}
+                  AND (NextAttemptAt IS NULL OR NextAttemptAt <= {now})
+                  AND (LockedUntil IS NULL OR LockedUntil <= {now})
                 ORDER BY CreatedAt
-                LIMIT {2}
-                """, maxRetryCount, now, batchSize)
+                LIMIT {batchSize}
+                """)
             .AsNoTracking()
             .ToListAsync(ct).ConfigureAwait(false);
     }

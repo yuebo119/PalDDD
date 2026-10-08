@@ -49,7 +49,7 @@ public static class MySqlPalOrmExtensions
     /// <para>v53 P3 次序语义：DI 工厂中 CreateAsync 先于回调执行，本会话的<b>首个连接建立</b>
     /// 永远发生在弹性配置之前（连接重试是 CreateAsync 自有循环）——回调配置的连接重试
     /// 仅对后续重连生效，首个连接使用 DbOptions 默认弹性。</para>
-    /// <para>⚠️ 熔断作用域声明（2026-09-25 特性审计，上游 5.6.0 XML 契约）：本仓 DataSession
+    /// <para>⚠️ 熔断作用域声明（2026-09-25 特性审计，上游 6.3.1 XML 契约）：本仓 DataSession
     /// 注册为 <b>Scoped</b>（一请求一会话）——上游明示该形态下会话级熔断「默认阈值 5 几乎
     /// 不可能达到，熔断器形同虚设」。启用 <c>WithCircuitBreaker</c> 时<b>必须</b>同步在传入的
     /// <paramref name="options"/> 上设 <c>CircuitBreakerScope = CircuitBreakerScope.Process</c>

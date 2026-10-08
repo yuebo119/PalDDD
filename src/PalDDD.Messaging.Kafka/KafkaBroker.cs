@@ -17,7 +17,10 @@ namespace PalDDD.Messaging.Kafka;
 /// 使用 Confluent.Kafka 2.x。<br/>
 /// 消息按类型名路由到同名 Topic。<br/>
 /// 使用显式消息 ID 作为消息 Key 保证可追踪性。<br/>
-/// 消费循环在后台线程运行（Confluent.Kafka 的 Consume 为同步阻塞 API，必须用 Task.Run）。
+/// 消费循环在后台线程运行（Confluent.Kafka 的 Consume 为同步阻塞 API，必须用 Task.Run）。<br/>
+/// 后台事件可观测（2026-10-08 审计对齐）：producer/consumer 均接线 ErrorHandler/StatisticsHandler/
+/// LogHandler——librdkafka 后台线程的错误/日志/统计此前结构性不可见；致命错误走 Error（携带
+/// KafkaException），自愈类错误走 Warning，统计 JSON 需 config 显式设 StatisticsIntervalMs 才回调（Debug 门控）。
 /// </remarks>
 [SuppressMessage("Design", "CA1031:Do not catch general exception types",
     Justification = "Broker 消费循环需记录毒消息失败并继续或优雅关停，需捕获 Exception 基类。")]
@@ -50,9 +53,38 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         // ct），半坏 broker 下 ProduceAsync 的等待时长由本 config 的 librdkafka 属性控制：
         // message.timeout.ms（默认 300s，建议按业务 SLO 显式设置）+ delivery.timeout.ms。
         producerConfig.MessageTimeoutMs ??= 30_000;
-        _producer = new ProducerBuilder<string, byte[]>(producerConfig).Build();
-        _consumerConfig = consumerConfig;
         _logger = logger;
+        // 审计对齐（2026-10-08 全量 API 审计 P2）：官方示例标配三 handler——producer 的
+        // 后台事件（librdkafka 线程上的错误/日志/统计）此前结构性不可见
+        _producer = new ProducerBuilder<string, byte[]>(producerConfig)
+            .SetErrorHandler((_, e) => LogKafkaError("producer", e))
+            .SetStatisticsHandler((_, json) =>
+            {
+                if (_logger.IsEnabled(LogLevel.Debug)) _logger.Debug($"Kafka producer statistics: {json}");
+            })
+            .SetLogHandler((_, m) => LogLibrdkafkaLog("producer", m))
+            .Build();
+        _consumerConfig = consumerConfig;
+    }
+
+    // 审计对齐（2026-10-08）：Kafka 后台事件观测——producer/consumer 共用。
+    // librdkafka 的后台错误多为其自愈机制的事件流（临时失联/再平衡中途态），非致命走 Warning；
+    // IsFatal 才升 Error（IPalLogger.Error 契约必须携带异常，包装为 KafkaException）。
+    private void LogKafkaError(string role, Error error)
+    {
+        if (error.IsFatal)
+            _logger.Error(new KafkaException(error), $"Kafka {role} 致命错误 [{error.Code}] {error.Reason}");
+        else
+            _logger.Warning($"Kafka {role} 后台错误 [{error.Code}] {error.Reason}（librdkafka 自愈机制处理，不中断客户端）");
+    }
+
+    private void LogLibrdkafkaLog(string role, LogMessage message)
+    {
+        // SyslogLevel ≤ Warning（syslog 严重级 4）为告警级；Notice/Info/Debug 走 Debug 不刷屏
+        if (message.Level <= SyslogLevel.Warning)
+            _logger.Warning($"Kafka {role} librdkafka [{message.Level}] {message.Message}（{message.Name}）");
+        else
+            _logger.Debug($"Kafka {role} librdkafka {message.Message}（{message.Name}）");
     }
 
     /// <summary>发布消息到 Kafka Topic</summary>
@@ -81,8 +113,8 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             // 勘正（2026-09-20）：本处 ToArray 是序列化器 ToArray（JsonMessageSerializer
             // WrittenSpan.ToArray）之后的**第二次**托管拷贝，非"无双重拷贝"（ReadOnlyMemory<T>
             // .ToArray() 恒拷贝，已实测三种内存形态 ReferenceEquals 均为 false）。
-            // 不可消除：Confluent.Kafka 2.15.1 的 ISerializer<T>.Serialize 返回 byte[]
-            // （反射实证），改用 IProducer<string, ReadOnlyMemory<byte>> + 自定义序列化器
+            // 不可消除：Confluent.Kafka 2.16.0 的 ISerializer<T>.Serialize 返回 byte[]
+            // （反射实证，2026-10-08 升位复核），改用 IProducer<string, ReadOnlyMemory<byte>> + 自定义序列化器
             // 只会把该拷贝移入序列化器，净收益为零；librdkafka 内部仍需一次拷贝。
             Value = value.ToArray(),
             Headers = CreateHeaders(context)
@@ -155,7 +187,14 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         IConsumer<string, byte[]> consumer;
         try
         {
-            consumer = new ConsumerBuilder<string, byte[]>(_consumerConfig).Build();
+            consumer = new ConsumerBuilder<string, byte[]>(_consumerConfig)
+                .SetErrorHandler((_, e) => LogKafkaError("consumer", e))
+                .SetStatisticsHandler((_, json) =>
+                {
+                    if (_logger.IsEnabled(LogLevel.Debug)) _logger.Debug($"Kafka consumer statistics: {json}");
+                })
+                .SetLogHandler((_, m) => LogLibrdkafkaLog("consumer", m))
+                .Build();
         }
         catch
         {

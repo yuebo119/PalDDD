@@ -97,10 +97,12 @@ public class CrossStackPredicateParityTests
     private static string EfPendingSql()
     {
         var text = File.ReadAllText(FindRepoRoot("src/PalDDD.Transactions.EFCore/SqliteOutboxDbContext.cs"));
-        // GetPending 走 FromSqlRaw(sql, params) 复合参数形态（{0}/{1}/{2} 字面占位，非 $ 插值）
-        var api = text.IndexOf("FromSqlRaw(\"\"\"", StringComparison.Ordinal);
+        // GetPending 走 FromSql($""" 插值孔形态（2026-10-08 审计对齐：FromSqlRaw {N} 位置占位
+        // 迁移为 FormattableString 命名孔；Normalize 第 42 行对两种形态统一归一 ?，与 PalORM
+        // 命名孔形态同构）
+        var api = text.IndexOf("FromSql($\"\"\"", StringComparison.Ordinal);
         var start = text.IndexOf("SELECT * FROM OutboxMessages", api, StringComparison.Ordinal);
-        var anchor = "LIMIT {2}";
+        var anchor = "LIMIT {batchSize}";
         var end = text.IndexOf(anchor, start, StringComparison.Ordinal);
         return text[start..(end + anchor.Length)];
     }
