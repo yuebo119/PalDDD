@@ -367,14 +367,14 @@ var current = pipeline.Upgrade(payload.Span, oldDescriptor, currentDescriptor, s
 
 ## 性能
 
-> ⚠️ 以下为 `--smoke` 烟测数据（Stopwatch + GC 分配，单次运行；2026-06-28，Windows 10 x64，.NET SDK 11.0.100-preview.5，BenchmarkDotNet 0.15.8），非正式 BenchmarkDotNet 报告——当前可见最新 BDN 0.15.8 在该工具链下未生成正式报告。烟测只用于趋势检查，不能替代统计严谨的基准测试。
+> ⚠️ 以下为 `--smoke` 烟测数据（Stopwatch + GC 分配；2026-10-08，Windows 10 x64，.NET SDK 11.0.100-rc.1，BenchmarkDotNet 0.15.8）。耗时为 3 轮中位（同日极差 ±5%，跨 SDK 轮差可达 ±20%——计时只作趋势）；分配逐轮逐字节稳定，`--smoke` 对分配做预算断言（超限退出码非 0）。正式报告经 InProcess 模式产出（`--framework` / `--infra` / `--persist*` 等，15 个基准类全覆盖）。
 
-| 操作 | 次数 | 耗时 | 分配 |
+| 操作 | 次数 | 耗时（3 轮中位） | 分配 |
 |------|:--:|------|:--:|
-| PalValidationResult.Success | 1M | 14.12 ms | 88 B |
-| SmartEnum.FromValue（FrozenDictionary） | 1M | 18.78 ms | 40 B |
-| PalValidationResult.Failed | 1M | 41.10 ms | 40,000,040 B |
-| Entity.RaiseEvent（单链表追加） | 1M | 124.80 ms | 128,000,256 B |
+| PalValidationResult.Success | 1M | 33.00 ms | 0.000 B/op |
+| SmartEnum.FromValue（FrozenDictionary） | 1M | 24.54 ms | 0.000 B/op |
+| PalValidationResult.Failed | 1M | 39.25 ms | 40.000 B/op |
+| Entity.RaiseEvent（单链表追加） | 1M | 152.84 ms | 128.001 B/op |
 
 验证命令：
 
@@ -382,7 +382,7 @@ var current = pipeline.Upgrade(payload.Span, oldDescriptor, currentDescriptor, s
 dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj -- --smoke
 ```
 
-完整数据及 BenchmarkDotNet 历史基线见[性能记录](docs/performance.md)。
+完整数据、MediumRun 正式基线与历史归档见[性能记录](docs/performance.md)。
 
 ## AOT 兼容性
 

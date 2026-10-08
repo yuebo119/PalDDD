@@ -251,17 +251,23 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 
 ### 3.2 性能基准矩阵
 
-| 操作类型 | Smoke 模式 | BDN 正式 | 配置 | 状态 |
+| 操作类型 | Smoke 模式 | BDN 正式 | 入口模式 | 状态 |
 |---------|:---:|:---:|------|:---:|
-| Entity 领域事件追加 | ✅ | ✅ | `[ShortRunJob]+[MemoryDiagnoser]` | ✅ |
-| ValueObject 创建 | ✅ | ✅ | 同上 | ✅ |
-| SmartEnum 查找 | ✅ | ✅ | 同上 | ✅ |
-| Validation 规约 | ✅ | ✅ | 同上 | ✅ |
-| Outbox 吞吐 | ✅ | ✅ | 同上 | ✅ |
-| EventLog 写入 | ✅ | ✅ | 同上 | ✅ |
-| SagaState 持久化 | ✅ | ✅ | 同上 | ✅ |
-| SQL 生成（Dapper） | ✅ | ✅ | 同上 | ✅ |
-| 配置初始化 | ✅ | ✅ | 同上 | ✅ |
+| Entity 领域事件追加 | ✅ | ✅ | `--framework`（MediumRun InProcess） | ✅ |
+| Entity 创建/GetHashCode | — | ✅ | `--framework` | ✅ |
+| ValueObject 创建 | ✅ | ✅ | `--framework` | ✅ |
+| SmartEnum 查找 | ✅ | ✅ | `--framework` | ✅ |
+| Validation 规约 | ✅ | ✅ | `--framework` | ✅ |
+| Outbox 吞吐 | ✅ | ✅ | `--infra` | ✅ |
+| EventLog 写入 | ✅ | ✅ | `--infra` | ✅ |
+| SagaState 持久化 | ✅ | ✅ | `--infra` | ✅ |
+| SQL 生成（Dapper） | ✅ | ✅ | `--infra` | ✅ |
+| 配置初始化 | ✅ | ✅ | `--infra` | ✅ |
+| 压缩编解码（Brotli/GZip/Deflate） | — | ✅ | `--compression`（单车道 A/B） | ✅ |
+| 持久化三栈批量（Dapper/PalOrm/EfCore 真库） | — | ✅ | `--persist` / `--persist-medium`（Lease 锚） | ✅ |
+| Saga 编排车道（Normal 基线 / FanOut） | — | ✅ | `--saga` | ✅ |
+
+> **「BDN 正式」的口径（2026-10-08 起生效）**：指 InProcess 显式 job 模式产出的正式报告（上表入口列）。默认 Switcher 入口（`dotnet run --project bench/...` 不带参数）在 BDN 上游补 net11 moniker 前于本工具链不可用（DotNetSdkValidator 崩溃，根因与绕行详见 `Program.cs` 头注）；GA 后可试恢复默认入口并按需恢复类级 job 注解。
 
 ### 3.3 数据规模矩阵
 
@@ -284,17 +290,22 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 
 ### 4.1 DDD 实际偏好（与 ORM 不同）
 
+> **2026-10-08 更新**：类级 `[ShortRunJob]` 已全部移除——BDN 0.15.8 对 jobs 是 union 不去重，类级 job 与模式级 ManualConfig 叠加出双 job，CsProj 工具链 job 在 net11-rc moniker 上触发 DotNetSdkValidator 崩溃（`--persist` 五十四轮先例同款，详见 `bench/PalDDD.Benchmarks/Program.cs` 头注）。运行口径统一由模式级显式 job 提供，**15 个基准类**（Framework 5 + Infra 6 + Persistence 3 + SagaLane 1）全量可出正式报告。
+
 | 配置 | DDD 使用场景 | ORM 使用场景 |
-|------|------------|------------|
-| `[ShortRunJob]` + `[MemoryDiagnoser]` | **全部 11 个 benchmark 类**（Framework 5 + Infra 6，统一双标注） | 不使用 |
+|------|------------|------|
+| 模式级 ManualConfig：`Job.MediumRun` + InProcessEmitToolchain + `[MemoryDiagnoser]` | `--framework` / `--infra` / `--persist-medium`（正式报告，15 类全覆盖） | 不使用 |
+| 模式级 ManualConfig：`Job.InProcess` | `--persist` / `--compression`（快速与单车道 A/B） | 不使用 |
+| 类级 `[InProcess]` attribute | SagaLaneBenchmarks（`--saga`，单类无叠加风险） | 不使用 |
+| ~~类级 `[ShortRunJob]`~~ | **已移除**（2026-10-08，双 job 崩溃见上注） | 不使用 |
 | `[SimpleJob]` 三档（快速 1/3/5 / 标准 3/5/10 / 严格 5/10/15） | **未使用** | 偏好（grep 实证） |
-| `[BenchmarkCategory]` | **未使用**（按文件分类 Framework/Infra） | 使用（按操作分类） |
+| `[BenchmarkCategory]` | **未使用**（按文件分类 Framework/Infra/Persistence/SagaLane） | 使用（按操作分类） |
 | `[Params]` | **未使用**（用 const 或字段） | 使用（参数化扫描） |
 | `[Benchmark(Baseline = true)]` | 少数方法标注 | 使用 |
 
 ### 4.2 配置层级（参考）
 
-> DDD 当前统一用 `[ShortRunJob]`。如需提升统计可信度，可参考 ORM 三档：
+> DDD 当前由模式级 ManualConfig 统一供 job（正式档 `Job.MediumRun` InProcess，快速档 `Job.InProcess`，见 §4.1）。如需调整统计可信度，可参考 ORM 三档：
 
 | 层级 | 配置 | 适用场景 | 统计可信度 |
 |------|------|---------|:---:|
@@ -308,9 +319,9 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 dotnet run --project bench/PalDDD.Benchmarks -- --smoke
 ```
 
-100 万次迭代手动计时（Stopwatch + `GC.GetAllocatedBytesForCurrentThread`），不依赖 BenchmarkDotNet 引擎。
+100 万次迭代手动计时（Stopwatch + `GC.GetAllocatedBytesForCurrentThread`），不依赖 BenchmarkDotNet 引擎。**2026-10-08 起带分配预算断言**：Success/FromValue ≤1 B/op、Failed ≤50 B/op、RaiseEvent ≤140 B/op（rc.1 实测校准；预算语义对齐 AllocationContractTests——上界含余量只拦大幅回归），超限退出码 1，可直接用作人工 TOOL 门禁（conventions §10.6 口径，未接 CI）。
 
-> **重要**：BenchmarkDotNet 0.15.8 不支持 .NET 11 Preview，本机 BDN 校验可能只输出 `Validating benchmarks:` 未生成正式报告。**`--smoke` 是 .NET 11 Preview 下唯一可信的快速回归手段**。待 .NET 11 GA 后切回标准 BDN 报告。
+> **重要**：BenchmarkDotNet 0.15.8 不识别 net11-rc runtime moniker，默认 Switcher 入口在本工具链崩溃（根因详见 `Program.cs` 头注）。正式报告经 InProcess 显式模式产出（`--framework`/`--infra`/`--persist*`/`--saga`/`--compression`，见 §4.1）；`--smoke` 定位是**秒级成本的趋势检查 + 分配预算判定**，计时为单轮无统计效力，不替代正式报告。待 .NET 11 GA 且 BDN 发适配版后试恢复默认入口。
 
 ---
 
@@ -489,6 +500,6 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 
 1. **本文件与 conventions §5 同步**：测试约定变更需同时更新两处。
 2. **场景矩阵随项目演化**：新增功能域必须扩矩阵行。
-3. **BenchmarkDotNet 配置变更需评审**：从 `[ShortRunJob]` 切换到其他配置必须在 PR 说明依据。
+3. **BenchmarkDotNet 配置变更需评审**：模式级 job/迭代参数的调整（如 MediumRun 降档 ShortRun）必须在 PR 说明依据。
 4. **DDD 与 ORM 的测试体系差异**：TUnit+MTP（非 xUnit）/ 测试桩内嵌（非 IClassFixture）/ 按行为主题切分 / ArchitectureBoundaryTests 37 方法机械守护。
 5. **统计有效性是硬约束**：Error/Mean > 15% 的基准数据不得用于正式报告或决策。

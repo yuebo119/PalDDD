@@ -10,8 +10,7 @@ using System.Diagnostics;
 
 if (args is ["--smoke"])
 {
-    SmokeBenchmarks.Run();
-    return 0;
+    return SmokeBenchmarks.Run();
 }
 
 // net11-rc runtime moniker 不被 BDN 0.15.8 的 DotNetSdkValidator 识别(GetRuntimeVersion
@@ -79,6 +78,41 @@ if (args.Contains("--compression", StringComparer.OrdinalIgnoreCase))
     return 0;
 }
 
+// 2026-10-08 性能测试系统优化：--framework / --infra——InProcess 旁路扩到 Framework 5 类
+// 与 Infra 6 类。此前 11 类仅有 [ShortRunJob] attribute 形态，只能走默认 Switcher 入口，
+// 而 Switcher 在 net11-rc 工具链必崩（见顶部 moniker 注释），正式报告实际不可得，
+// testing.md §3.2「BDN 正式」列长期纸面 ✅。本两模式把该列落地。口径对齐
+// --persist-medium（decision-2026-09-17 §2.5：medium 单次自比，ShortRun 历史 53%
+// 跨轮差不入基线），artifacts 同落 artifacts-medium（归档纪律：数字入 performance.md 带日期）。
+static IConfig MediumInProcessConfig()
+    => ManualConfig.Create(DefaultConfig.Instance)
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddDiagnoser(MemoryDiagnoser.Default)
+        .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-medium"));
+
+if (args.Contains("--framework", StringComparer.OrdinalIgnoreCase))
+{
+    var medium = MediumInProcessConfig();
+    BenchmarkRunner.Run<EntityDomainEventBenchmarks>(medium);
+    BenchmarkRunner.Run<ValueObjectBenchmarks>(medium);
+    BenchmarkRunner.Run<SmartEnumBenchmarks>(medium);
+    BenchmarkRunner.Run<ValidationBenchmarks>(medium);
+    BenchmarkRunner.Run<EntityCreationBenchmarks>(medium);
+    return 0;
+}
+
+if (args.Contains("--infra", StringComparer.OrdinalIgnoreCase))
+{
+    var medium = MediumInProcessConfig();
+    BenchmarkRunner.Run<OutboxThroughputBenchmarks>(medium);
+    BenchmarkRunner.Run<EventLogBenchmarks>(medium);
+    BenchmarkRunner.Run<SagaStateBenchmarks>(medium);
+    BenchmarkRunner.Run<SqlGenBenchmarks>(medium);
+    BenchmarkRunner.Run<ConfigurationBenchmarks>(medium);
+    BenchmarkRunner.Run<CompressionBenchmarks>(medium);
+    return 0;
+}
+
 BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 
 return 0;
@@ -87,23 +121,42 @@ internal static class SmokeBenchmarks
 {
     private const int Iterations = 1_000_000;
 
-    public static void Run()
+    // 分配预算（B/op，2026-10-08 rc.1 校准；基线实测：Success 0.000088 / Failed 40.000 /
+    // FromValue 0.00004 / RaiseEvent 128.001）。预算语义对齐 AllocationContractTests：
+    // 上界含安全余量，只拦截大幅回归（误引入容器扩容/装箱量级），精确预算由正式基准承载。
+    // 超限退出码 1——使 smoke 具备人工 TOOL 门禁资格（conventions §10.6 口径，未接 CI）。
+    public static int Run()
     {
         Console.WriteLine($"PalDDD benchmark smoke run: {Iterations:N0} iterations");
         _ = SmokeStatus.Pending;
-        Measure("PalValidationResult.Success", static () => PalValidationResult.Success());
-        Measure("PalValidationResult.Failed", static () => PalValidationResult.Failed("Prop", "Error message"));
-        Measure("SmartEnum.FromValue", static () => SmokeStatus.FromValue("shipped"));
-        MeasureAction("Entity.RaiseEvent", static () =>
+        var failures = new List<string>();
+
+        Measure("PalValidationResult.Success", budgetBytesPerOp: 1.0,
+            static () => PalValidationResult.Success(), failures);
+        Measure("PalValidationResult.Failed", budgetBytesPerOp: 50.0,
+            static () => PalValidationResult.Failed("Prop", "Error message"), failures);
+        Measure("SmartEnum.FromValue", budgetBytesPerOp: 1.0,
+            static () => SmokeStatus.FromValue("shipped"), failures);
+        MeasureAction("Entity.RaiseEvent", budgetBytesPerOp: 140.0, static () =>
         {
             var order = new SmokeOrder(Guid.NewGuid(), "Test");
             order.Complete();
-        });
+        }, failures);
+
+        if (failures.Count > 0)
+        {
+            Console.Error.WriteLine($"⛔ smoke 分配预算超标 {failures.Count} 项：{string.Join("；", failures)}");
+            return 1;
+        }
+
+        Console.WriteLine("✅ smoke 分配预算 4/4 通过（预算语义：上界含余量，只拦截大幅回归）");
+        return 0;
     }
 
     // 口径（ITM-171）：以下计时/分配均为 Iterations 次调用的总量；
     // 单次调用 = 总量 / Iterations（下方输出同时给出 ns/op 与 B/op）。
-    private static void Measure<T>(string name, Func<T> action)
+    // 2026-10-08：增预算参数——计时仍为趋势观察（单轮无统计效力），分配为判定项。
+    private static void Measure<T>(string name, double budgetBytesPerOp, Func<T> action, List<string> failures)
     {
         GC.Collect();
         GC.WaitForPendingFinalizers();
@@ -117,12 +170,16 @@ internal static class SmokeBenchmarks
         var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - startBytes;
 
         var totalMs = stopwatch.Elapsed.TotalMilliseconds;
+        var bytesPerOp = allocatedBytes / (double)Iterations;
         Console.WriteLine(
             $"{name}: {totalMs:N2} ms / {Iterations:N0} = {totalMs / Iterations * 1_000_000:N2} ns/op, " +
-            $"{allocatedBytes:N0} B / {Iterations:N0} = {allocatedBytes / (double)Iterations:F3} B/op");
+            $"{allocatedBytes:N0} B / {Iterations:N0} = {bytesPerOp:F3} B/op — " +
+            $"{(bytesPerOp <= budgetBytesPerOp ? "✅ 预算内" : "⛔ 超预算")} {budgetBytesPerOp} B/op");
+        if (bytesPerOp > budgetBytesPerOp)
+            failures.Add($"{name}: {bytesPerOp:F3} B/op > {budgetBytesPerOp} B/op");
     }
 
-    private static void MeasureAction(string name, Action action)
+    private static void MeasureAction(string name, double budgetBytesPerOp, Action action, List<string> failures)
     {
         GC.Collect();
         GC.WaitForPendingFinalizers();
@@ -136,9 +193,13 @@ internal static class SmokeBenchmarks
         var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - startBytes;
 
         var totalMs = stopwatch.Elapsed.TotalMilliseconds;
+        var bytesPerOp = allocatedBytes / (double)Iterations;
         Console.WriteLine(
             $"{name}: {totalMs:N2} ms / {Iterations:N0} = {totalMs / Iterations * 1_000_000:N2} ns/op, " +
-            $"{allocatedBytes:N0} B / {Iterations:N0} = {allocatedBytes / (double)Iterations:F3} B/op");
+            $"{allocatedBytes:N0} B / {Iterations:N0} = {bytesPerOp:F3} B/op — " +
+            $"{(bytesPerOp <= budgetBytesPerOp ? "✅ 预算内" : "⛔ 超预算")} {budgetBytesPerOp} B/op");
+        if (bytesPerOp > budgetBytesPerOp)
+            failures.Add($"{name}: {bytesPerOp:F3} B/op > {budgetBytesPerOp} B/op");
     }
 
     private sealed class SmokeStatus : SmartEnum<SmokeStatus, string>

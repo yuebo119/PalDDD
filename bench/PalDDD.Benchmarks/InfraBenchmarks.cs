@@ -23,7 +23,9 @@ namespace PalDDD.Benchmarks;
 // LeasePending/LeaseAndMarkAll 为耗尽型操作，每 invoke 含重灌成本（见方法注释）
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
-[ShortRunJob]
+// ⚠️ 无 [ShortRunJob]：--infra 入口传显式 MediumRun InProcess ManualConfig，类级 job
+// attribute 会与之 union 叠加出双 job——CsProj 工具链 job 在 net11-rc moniker 上触发
+// DotNetSdkValidator 崩溃（--persist/--compression 修复先例同款，见 Program.cs 注释）
 public class OutboxThroughputBenchmarks
 {
     private InMemoryOutboxStore _store = null!;
@@ -117,7 +119,9 @@ public class OutboxThroughputBenchmarks
 // EventLog 事件追加 + 流式读取基准
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
-[ShortRunJob]
+// ⚠️ 无 [ShortRunJob]：--infra 入口传显式 MediumRun InProcess ManualConfig，类级 job
+// attribute 会与之 union 叠加出双 job——CsProj 工具链 job 在 net11-rc moniker 上触发
+// DotNetSdkValidator 崩溃（--persist/--compression 修复先例同款，见 Program.cs 注释）
 public class EventLogBenchmarks
 {
     private InMemoryEventLog _log = null!;
@@ -173,7 +177,9 @@ public class EventLogBenchmarks
 // Saga 状态持久化基准
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
-[ShortRunJob]
+// ⚠️ 无 [ShortRunJob]：--infra 入口传显式 MediumRun InProcess ManualConfig，类级 job
+// attribute 会与之 union 叠加出双 job——CsProj 工具链 job 在 net11-rc moniker 上触发
+// DotNetSdkValidator 崩溃（--persist/--compression 修复先例同款，见 Program.cs 注释）
 public class SagaStateBenchmarks
 {
     private InMemorySagaStateStore<BenchSagaState> _store = null!;
@@ -231,7 +237,9 @@ public class SagaStateBenchmarks
 // SQL 生成工具性能基准（静态方法，无 IO）
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
-[ShortRunJob]
+// ⚠️ 无 [ShortRunJob]：--infra 入口传显式 MediumRun InProcess ManualConfig，类级 job
+// attribute 会与之 union 叠加出双 job——CsProj 工具链 job 在 net11-rc moniker 上触发
+// DotNetSdkValidator 崩溃（--persist/--compression 修复先例同款，见 Program.cs 注释）
 public class SqlGenBenchmarks
 {
     [Benchmark(Baseline = true)]
@@ -279,7 +287,9 @@ public class SqlGenBenchmarks
 // DI/Dapper 配置基准
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
-[ShortRunJob]
+// ⚠️ 无 [ShortRunJob]：--infra 入口传显式 MediumRun InProcess ManualConfig，类级 job
+// attribute 会与之 union 叠加出双 job——CsProj 工具链 job 在 net11-rc moniker 上触发
+// DotNetSdkValidator 崩溃（--persist/--compression 修复先例同款，见 Program.cs 注释）
 public class ConfigurationBenchmarks
 {
     [Benchmark]
