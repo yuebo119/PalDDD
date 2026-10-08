@@ -373,14 +373,14 @@ More usage is in the [Usage Guide](docs/usage.md): idempotent execution (Revisio
 
 ## Performance
 
-> ⚠️ The following are `--smoke` smoke-test data (Stopwatch + GC allocation, single run; 2026-06-28, Windows 10 x64, .NET SDK 11.0.100-preview.5, BenchmarkDotNet 0.15.8), not formal BenchmarkDotNet reports — the latest visible BDN 0.15.8 does not produce a formal report on this toolchain. Smoke tests are for trend checking and cannot replace statistically rigorous benchmarking.
+> ⚠️ The following are `--smoke` smoke-test data (Stopwatch + GC allocation; 2026-10-08, Windows 10 x64, .NET SDK 11.0.100-rc.1, BenchmarkDotNet 0.15.8). Elapsed times are medians of 3 runs (same-day range ±5%; cross-SDK runs can differ ±20% — timing is trend-only); allocations are byte-stable across runs, and `--smoke` asserts allocation budgets (non-zero exit code on breach). Formal reports are produced via the InProcess modes (`--framework` / `--infra` / `--persist*`, covering all 15 benchmark classes).
 
-| Operation | Count | Elapsed | Allocation |
-|------|:---:|------|:--:|
-| PalValidationResult.Success | 1M | 14.12 ms | 88 B |
-| SmartEnum.FromValue (FrozenDictionary) | 1M | 18.78 ms | 40 B |
-| PalValidationResult.Failed | 1M | 41.10 ms | 40,000,040 B |
-| Entity.RaiseEvent (singly-linked-list append) | 1M | 124.80 ms | 128,000,256 B |
+| Operation | Count | Elapsed (median of 3) | Allocation |
+|------|:--:|------|:--:|
+| PalValidationResult.Success | 1M | 33.00 ms | 0.000 B/op |
+| SmartEnum.FromValue (FrozenDictionary) | 1M | 24.54 ms | 0.000 B/op |
+| PalValidationResult.Failed | 1M | 39.25 ms | 40.000 B/op |
+| Entity.RaiseEvent (singly-linked-list append) | 1M | 152.84 ms | 128.001 B/op |
 
 Verification command:
 
@@ -388,7 +388,7 @@ Verification command:
 dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj -- --smoke
 ```
 
-For full data and the BenchmarkDotNet historical baseline, see [Performance Records](docs/performance.md).
+For full data, the MediumRun formal baselines, and the historical archive, see [Performance Records](docs/performance.md).
 
 ## AOT Compatibility
 
