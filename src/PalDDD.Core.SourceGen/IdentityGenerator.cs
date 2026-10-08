@@ -344,6 +344,10 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                     // 重复挂 attribute 的具体声明——不参与相等（位置随编辑漂移）
                     Location: context.TargetNode.GetLocation());
             })
+            // O27（2026-10-08）：增量管道的 transform 输出节点默认 ReferenceEqualityComparer，
+            // IdGenInfo 的手写值等值（八轮评审 P3 修复）不会被自动采用——显式声明值比较器
+            // 启用按值命中（形态对齐 PalORM PalORMGenerator v5.0 实测）。
+            .WithComparer(EqualityComparer<IdGenInfo>.Default)
             .WithTrackingName("IdentityGenerator_Candidates")
             .Where(static info => info is not null)!;
 
