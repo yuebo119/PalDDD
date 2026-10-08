@@ -683,7 +683,7 @@ static string ToPosix(string path) => path.Replace('\\', '/');
 // bash -n 语法检查（Process 调 bash；退出码 0=语法通过）
 static int RunBashSyntaxCheck(string script)
 {
-    var psi = new ProcessStartInfo("bash", "-n " + script)
+    var psi = new ProcessStartInfo(ResolveBash(), "-n " + script)
     {
         RedirectStandardOutput = true,
         RedirectStandardError = true,
@@ -692,6 +692,25 @@ static int RunBashSyntaxCheck(string script)
     using var p = Process.Start(psi)!;
     p.WaitForExit();
     return p.ExitCode;
+}
+
+// bash 可执行解析——CreateProcess 搜索序（应用目录→CWD→System32→Windows→PATH）中
+// System32 的 WSL bash.exe 桩（未装发行版即报错 exit 1，UTF-16 输出）会压过 PATH 里的
+// Git bash，V16 对语法完好的 .sh 假阳性 FAIL（2026-10-03 机漂移实证：System32\bash.exe
+// 该日生成，09-29 提交尚绿、10-08 起 V16 恒红）。显式按 PATH 找非 System32/SystemWOW64
+// 的 bash.exe；找不到（Linux/CI/无 Git）回落 "bash" 维持原解析。
+static string ResolveBash()
+{
+    var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
+    foreach (var dir in pathEnv.Split(';', StringSplitOptions.RemoveEmptyEntries))
+    {
+        if (dir.Contains("System32", StringComparison.OrdinalIgnoreCase) ||
+            dir.Contains("SystemWOW64", StringComparison.OrdinalIgnoreCase))
+            continue;
+        var candidate = Path.Combine(dir.Trim(), "bash.exe");
+        if (File.Exists(candidate)) return candidate;
+    }
+    return "bash";
 }
 
 // 日历合法性（含闰年；等价 awk Dim()）→ 非法返回 null
