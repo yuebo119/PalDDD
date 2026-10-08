@@ -321,20 +321,28 @@ public class CompressionBenchmarks
     private ICompressor _brotli = null!;
     private ICompressor _gzip = null!;
     private ICompressor _deflate = null!;
+    private ICompressor _lz4 = null!;
+    private ICompressor _zstd = null!;
     private byte[] _payload = null!;
     private ReadOnlyMemory<byte> _brotliCompressed;
     private byte[] _gzipCompressed = null!;
     private byte[] _deflateCompressed = null!;
+    private byte[] _lz4Compressed = null!;
+    private byte[] _zstdCompressed = null!;
 
     [GlobalSetup]
     public void Setup()
     {
         var services = new ServiceCollection();
-        services.AddPalCompression();
+        // 2026-10-08 缺口补齐：AddPalCompressionNative 自足（内部先 TryAdd 基础层），
+        // 同一 Provider 同时供 System 三算法与原生 LZ4/ZStandard——五算法同负载同 Provider 可比
+        services.AddPalCompressionNative();
         var provider = services.BuildServiceProvider().GetRequiredService<ICompressionProvider>();
         _brotli = provider.GetCompressor(CompressionAlgorithm.Brotli);
         _gzip = provider.GetCompressor(CompressionAlgorithm.GZip);
         _deflate = provider.GetCompressor(CompressionAlgorithm.Deflate);
+        _lz4 = provider.GetCompressor(CompressionAlgorithm.LZ4);
+        _zstd = provider.GetCompressor(CompressionAlgorithm.ZStandard);
 
         _payload = new byte[16 * 1024];
         for (int i = 0; i < _payload.Length; i++)
@@ -343,6 +351,8 @@ public class CompressionBenchmarks
         _brotliCompressed = _brotli.Compress(_payload);
         _gzipCompressed = _gzip.Compress(_payload).ToArray();
         _deflateCompressed = _deflate.Compress(_payload).ToArray();
+        _lz4Compressed = _lz4.Compress(_payload).ToArray();
+        _zstdCompressed = _zstd.Compress(_payload).ToArray();
     }
 
     [Benchmark(Baseline = true)]
@@ -362,4 +372,18 @@ public class CompressionBenchmarks
 
     [Benchmark]
     public byte[] Deflate_Decompress_16KB() => _deflate.Decompress(_deflateCompressed.AsSpan());
+
+    // 2026-10-08 缺口补齐：原生绑定（PalDDD.Compression.Native，NativeCompressions 1.0.1）
+    // 与 System 三算法同口径对照——README 宣传的 LZ4/ZStandard 此前零基准
+    [Benchmark]
+    public ReadOnlyMemory<byte> LZ4_Compress_16KB() => _lz4.Compress(_payload);
+
+    [Benchmark]
+    public byte[] LZ4_Decompress_16KB() => _lz4.Decompress(_lz4Compressed.AsSpan());
+
+    [Benchmark]
+    public ReadOnlyMemory<byte> ZStandard_Compress_16KB() => _zstd.Compress(_payload);
+
+    [Benchmark]
+    public byte[] ZStandard_Decompress_16KB() => _zstd.Decompress(_zstdCompressed.AsSpan());
 }

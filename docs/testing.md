@@ -258,12 +258,14 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | ValueObject 创建 | ✅ | ✅ | `--framework` | ✅ |
 | SmartEnum 查找 | ✅ | ✅ | `--framework` | ✅ |
 | Validation 规约 | ✅ | ✅ | `--framework` | ✅ |
+| CQRS 分发链（零行为 vs 单直通行为） | — | ✅ | `--app`（2026-10-08 缺口补齐） | ✅ |
+| 消息序列化（源生成 JSON 序列化/反序列化/Catalog 查找） | — | ✅ | `--app`（2026-10-08 缺口补齐） | ✅ |
 | Outbox 吞吐 | ✅ | ✅ | `--infra` | ✅ |
 | EventLog 写入 | ✅ | ✅ | `--infra` | ✅ |
 | SagaState 持久化 | ✅ | ✅ | `--infra` | ✅ |
 | SQL 生成（Dapper） | ✅ | ✅ | `--infra` | ✅ |
 | 配置初始化 | ✅ | ✅ | `--infra` | ✅ |
-| 压缩编解码（Brotli/GZip/Deflate） | — | ✅ | `--compression`（单车道 A/B） | ✅ |
+| 压缩编解码（Brotli/GZip/Deflate/LZ4/ZStandard，16KB 同负载） | — | ✅ | `--compression`（单车道 A/B）·`--infra`（五算法同 Provider 对照） | ✅ |
 | 持久化三栈批量（Dapper/PalOrm/EfCore 真库） | — | ✅ | `--persist` / `--persist-medium`（Lease 锚） | ✅ |
 | Saga 编排车道（Normal 基线 / FanOut） | — | ✅ | `--saga` | ✅ |
 
@@ -290,16 +292,16 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 
 ### 4.1 DDD 实际偏好（与 ORM 不同）
 
-> **2026-10-08 更新**：类级 `[ShortRunJob]` 已全部移除——BDN 0.15.8 对 jobs 是 union 不去重，类级 job 与模式级 ManualConfig 叠加出双 job，CsProj 工具链 job 在 net11-rc moniker 上触发 DotNetSdkValidator 崩溃（`--persist` 五十四轮先例同款，详见 `bench/PalDDD.Benchmarks/Program.cs` 头注）。运行口径统一由模式级显式 job 提供，**15 个基准类**（Framework 5 + Infra 6 + Persistence 3 + SagaLane 1）全量可出正式报告。
+> **2026-10-08 更新**：类级 `[ShortRunJob]` 已全部移除——BDN 0.15.8 对 jobs 是 union 不去重，类级 job 与模式级 ManualConfig 叠加出双 job，CsProj 工具链 job 在 net11-rc moniker 上触发 DotNetSdkValidator 崩溃（`--persist` 五十四轮先例同款，详见 `bench/PalDDD.Benchmarks/Program.cs` 头注）。运行口径统一由模式级显式 job 提供，**17 个基准类**（Framework 5 + App 2 + Infra 6 + Persistence 3 + SagaLane 1）全量可出正式报告（App 2 类为 2026-10-08 缺口补齐轮新增：CQRS 分发链与消息序列化）。
 
 | 配置 | DDD 使用场景 | ORM 使用场景 |
 |------|------------|------|
-| 模式级 ManualConfig：`Job.MediumRun` + InProcessEmitToolchain + `[MemoryDiagnoser]` | `--framework` / `--infra` / `--persist-medium`（正式报告，15 类全覆盖） | 不使用 |
+| 模式级 ManualConfig：`Job.MediumRun` + InProcessEmitToolchain + `[MemoryDiagnoser]` | `--framework` / `--app` / `--infra` / `--persist-medium`（正式报告，17 类全覆盖） | 不使用 |
 | 模式级 ManualConfig：`Job.InProcess` | `--persist` / `--compression`（快速与单车道 A/B） | 不使用 |
 | 类级 `[InProcess]` attribute | SagaLaneBenchmarks（`--saga`，单类无叠加风险） | 不使用 |
 | ~~类级 `[ShortRunJob]`~~ | **已移除**（2026-10-08，双 job 崩溃见上注） | 不使用 |
 | `[SimpleJob]` 三档（快速 1/3/5 / 标准 3/5/10 / 严格 5/10/15） | **未使用** | 偏好（grep 实证） |
-| `[BenchmarkCategory]` | **未使用**（按文件分类 Framework/Infra/Persistence/SagaLane） | 使用（按操作分类） |
+| `[BenchmarkCategory]` | **未使用**（按文件分类 Framework/App/Infra/Persistence/SagaLane） | 使用（按操作分类） |
 | `[Params]` | **未使用**（用 const 或字段） | 使用（参数化扫描） |
 | `[Benchmark(Baseline = true)]` | 少数方法标注 | 使用 |
 
@@ -321,7 +323,7 @@ dotnet run --project bench/PalDDD.Benchmarks -- --smoke
 
 100 万次迭代手动计时（Stopwatch + `GC.GetAllocatedBytesForCurrentThread`），不依赖 BenchmarkDotNet 引擎。**2026-10-08 起带分配预算断言**：Success/FromValue ≤1 B/op、Failed ≤50 B/op、RaiseEvent ≤140 B/op（rc.1 实测校准；预算语义对齐 AllocationContractTests——上界含余量只拦大幅回归），超限退出码 1，可直接用作人工 TOOL 门禁（conventions §10.6 口径，未接 CI）。
 
-> **重要**：BenchmarkDotNet 0.15.8 不识别 net11-rc runtime moniker，默认 Switcher 入口在本工具链崩溃（根因详见 `Program.cs` 头注）。正式报告经 InProcess 显式模式产出（`--framework`/`--infra`/`--persist*`/`--saga`/`--compression`，见 §4.1）；`--smoke` 定位是**秒级成本的趋势检查 + 分配预算判定**，计时为单轮无统计效力，不替代正式报告。待 .NET 11 GA 且 BDN 发适配版后试恢复默认入口。
+> **重要**：BenchmarkDotNet 0.15.8 不识别 net11-rc runtime moniker，默认 Switcher 入口在本工具链崩溃（根因详见 `Program.cs` 头注）。正式报告经 InProcess 显式模式产出（`--framework`/`--app`/`--infra`/`--persist*`/`--saga`/`--compression`，见 §4.1）；`--smoke` 定位是**秒级成本的趋势检查 + 分配预算判定**，计时为单轮无统计效力，不替代正式报告。待 .NET 11 GA 且 BDN 发适配版后试恢复默认入口。
 
 ---
 

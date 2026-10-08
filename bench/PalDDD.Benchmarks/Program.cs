@@ -113,6 +113,17 @@ if (args.Contains("--infra", StringComparer.OrdinalIgnoreCase))
     return 0;
 }
 
+// 2026-10-08 缺口补齐轮：--app——CQRS 分发链（零行为基线 vs 单直通行为，PipelineStateMachine
+// 编排开销的增量可见）+ 消息序列化（源生成 JSON 序列化/反序列化/Catalog 查找）。评估确认
+// 两车道是消息发布路径缺位面：分发此前仅有 <500B 分配契约，序列化零数据。
+if (args.Contains("--app", StringComparer.OrdinalIgnoreCase))
+{
+    var medium = MediumInProcessConfig();
+    BenchmarkRunner.Run<DispatcherBenchmarks>(medium);
+    BenchmarkRunner.Run<SerializationBenchmarks>(medium);
+    return 0;
+}
+
 BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 
 return 0;
