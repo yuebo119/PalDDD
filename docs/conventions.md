@@ -826,7 +826,7 @@ dotnet run scripts/verify-conventions.cs
 
 ### 10.6 测试框架规则（TUnit + MTP · 强制）
 
-> **背景**：本框架统一使用 **TUnit 1.69.0**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.4.1**。不使用 VSTest。
+> **背景**：本框架统一使用 **TUnit 1.73.5**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.5.0**（TUnit 传递解析，2026-10-08 实测；TUnit 1.71.0 时代为 2.4.1）。不使用 VSTest。
 
 **硬性规则**（违反导致 `dotnet test` 发现零测试或构建冲突）：
 

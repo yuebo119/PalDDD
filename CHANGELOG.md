@@ -12,6 +12,29 @@
 
 ## [Unreleased]
 
+### Changed 变更
+
+- **Kafka 后台事件可观测（消费者可见的日志行为增强，无公共 API 变化）**：`KafkaBroker` 的 producer/consumer 构造接线官方示例标配三 handler（2026-10-08 全量 API 审计 P2 对齐）——`SetErrorHandler`（致命错误升 Error 携带 `KafkaException`；librdkafka 自愈类错误走 Warning）/ `SetLogHandler`（`SyslogLevel` ≤ Warning 走 Warning，Notice/Info/Debug 走 Debug）/ `SetStatisticsHandler`（Debug 门控，仅在 config 显式设 `StatisticsIntervalMs` 时回调，默认关闭）。此前 librdkafka 后台线程的错误/日志/统计结构性不可见。
+- **EF Outbox 两处 `FromSqlRaw` → `FromSql`（行为等价，注入面收窄）**：`MySqlOutboxDbContext.LeasePendingMessagesAsync` 回读与 `SqliteOutboxDbContext.GetPendingMessagesAsync`——`{N}` 位置占位符迁移为 FormattableString 插值孔（EF 逐孔生成 DbParameter），EF1002 豁免注记随迁移移除；`CrossStackPredicateParityTests` 的源码切片锚同步（归一化规则本就统一 `{N}`/`{name}` 两种形态，断言语义不变——迁移后 EF 与 PalORM 命名孔形态同构）。其余 5 处维持 `FromSqlRaw`：内联方言时钟表达式（`NOW()`/`SYSDATETIMEOFFSET()`/`UTC_TIMESTAMP()` 属 DB 时钟设计决策，FormattableString 形态无法参数化内联 SQL 文本），既有 EF1002 豁免注记在案。
+- **bench 项目分析器开启**：移除 `RunAnalyzersDuringBuild=false`（原值使 BDN 0.15.7+ 的 Roslyn 用法分析器——基准类结构/`[Params]`/单一 baseline 校验——失效）；开启当场命中 `SagaLaneBenchmarks.cs` 5 个全局命名空间类型（CA1050），按仓库惯例迁入 `PalDDD.Benchmarks` 命名空间（`Program.cs` 既有 `using` 即解析，零引用改动），ITM-810 时代的全局命名空间勘正注记随形态废止一并更新。
+
+### Dependencies 依赖
+
+- **PalORM 五包 6.1.0 → 6.3.1（2026-10-08 升位，消费者可见）**：五包同步升位（6.x 线内，跨 6.2.0/6.3.0/6.3.1 九日三连发），下一版 nuspec 的 PalORM 声明随之上移。上游无 releaseNotes 渠道，按 PD9 纪律以编译+测试实证破坏面：Release 全量构建 0 警告 0 错误；全量测试面板 1502 项 0 失败 = 1434 通过 + 68 环境跳过（60 Docker/容器 + 8 broker），与 3.2.0 基线逐项一致；XML 契约复核——`PreWarmAsync` 预热语义、会话级熔断「默认阈值 5 形同虚设」叙述在 6.3.1 XML 原样在；`readFromReplica` 回落主库契约（READ-002）由 6.3.1 新读路由助手 `CreateReadRoutedCommandAsync`（上游 ARCH-001 收口，2026-10-06）继承并明示 opt-in 教义不回归，本仓纯读流用法（无事务无并行作用域）落「否则主连接」分支语义不变，6 处适配层注释版本注记同提交升号。
+- **`TUnit` / `TUnit.FsCheck` 1.71.0 → 1.73.5**：测试期依赖，不进产物。MTP 传递解析 2.4.1 → 2.5.0（实测），`docs/conventions.md` §10.6 与 `docs/testing.md` 版本行同提交更新。
+- **`Confluent.Kafka` 2.15.1 → 2.16.0（消费者可见）**：Kafka 适配器依赖声明随 nuspec 上移。`ISerializer<T>.Serialize` 返回 `byte[]` 的不可消除双重拷贝理由经 2.16.0 反射实证仍成立。
+- **`NativeCompressions` 0.6.1 → 1.0.1（消费者可见）**：压缩原生绑定适配器依赖上移，0.x 线转 1.0 稳定线。`LZ4.GetMaxCompressedLength` 的 Int32/UIntPtr 双重载在 1.0.1 反射实证仍在，显式 UIntPtr 调用路径不变；往返与守卫测试全绿。
+- **`Microsoft.Data.SqlClient` 7.1.0 → 7.1.1**：零引用中央声明（全仓无 `PackageReference` 消费），升位不影响产物。
+- **全量核新结论（2026-10-08，NuGet flatcontainer/`dotnet list package --outdated` 双源实测）**：微软官方包 11 线 rc.2 仍未发，EF Core ×4 + Extensions ×5 + System 系钉扎维持 `11.0.0-rc.1.26425.128`（GA 预计 2026-11）；其余第三方均已在最新稳定版（Dapper 2.1.89 / Dapper.AOT 1.1.0 / Npgsql 10.0.3 / MySqlConnector 2.6.2 / RabbitMQ.Client 7.2.2 / MemoryPack 1.21.4 / ZLogger 2.5.10 / ByteAether.Ulid 1.4.1 / Testcontainers 4.15.0 / FsCheck 3.4.0 / SQLitePCLRaw 3.0.5 / Humanizer.Core 3.0.10 / System.* 4.x-6.x 钉扎线 / Roslyn 5.9.0）；`Verify.TUnit` 最新 33.3.2 依 2026-09-23 裁决**不升**（license-policy 包级禁令 ≥33，SponsorCheck 商业许可门）；`BenchmarkDotNet` 0.16.0-preview.2、`ByteAether.Ulid` 1.4.2-rc.0、`System.Runtime.CompilerServices.Unsafe` 7.0.0-preview 线仅预发布不升。
+- **PalORM 五包 5.6.0 → 6.1.0（2026-09-29 升位，消费者可见）**：五包同步升位（主版本线，跨 5.7/5.8/5.9/6.0.0/6.0.1），下一版 nuspec 的 PalORM 声明随之上移。上游无 releaseNotes 渠道（NuGet registration API 仅固定描述），按 PD9 纪律以编译+测试实证破坏面：Release 全量构建 0 警告 0 错误（编译面零破坏——5.6.0 引入的 `readFromReplica` 第 2 位参数本仓已全部命名参数化，无新破坏面暴露）；全量测试面板 1502 项 0 失败 = 1434 通过 + 68 环境跳过（60 Docker + 8 broker），与 3.2.0 基线逐项一致；XML 契约复核——`PreWarmAsync` 预热语义、`readFromReplica` 回落主库契约（READ-002）、会话级熔断「默认阈值 5 形同虚设」叙述在 6.1.0 XML 原样在，5 处适配层注释的版本注记同提交升号。
+- **`TUnit` / `TUnit.FsCheck` 1.69.0 → 1.71.0（2026-09-29）**：测试期依赖，不进产物。MTP 传递解析仍为 2.4.1，`docs/conventions.md` §10.6 与 `docs/testing.md` 版本行同提交更新。
+- **全量核新结论（2026-09-29，NuGet flatcontainer/`dotnet list package --outdated` 双源实测）**：微软官方包 11 线 rc.2 未发，EF Core ×4 + Extensions ×5 + System 系钉扎维持 `11.0.0-rc.1.26425.128`（GA 预计 2026-11）；其余第三方均已在最新稳定版（SqlClient 7.1.0 / Dapper 2.1.89 / Dapper.AOT 1.1.0 / Npgsql 10.0.3 / MySqlConnector 2.6.2 / RabbitMQ.Client 7.2.2 / Confluent.Kafka 2.15.1 / MemoryPack 1.21.4 / ZLogger 2.5.10 / ByteAether.Ulid 1.4.1 / Testcontainers 4.15.0 / FsCheck 3.4.0 / BenchmarkDotNet 0.15.8 / NativeCompressions 0.6.1 / SQLitePCLRaw 3.0.5 / Humanizer.Core 3.0.10 / System.* 4.x-6.x 钉扎线 / Roslyn 5.9.0）；`Verify.TUnit` 最新 33.1.5 依 2026-09-23 裁决**不升**（license-policy 包级禁令 ≥33，SponsorCheck 商业许可门）。
+
+### Tests 测试
+
+- **FanOut 探针并发竞态修复（表征测试基础设施，非产品代码）**：`FanOutLaneSaga` 探针的 `ItemAttempts`/`ExecutedItems`/`CompensationLog` 为裸 `Dictionary`/`List`，而 `FanOutStep` 契约并行调用 executor（`Task.Run`+`WhenAll`）——面板负载下竞态丢写（`ItemAttempts` 丢 key → item2 误判首试再抛 → 多一轮整批重放 → `ExecutedItems` 4≠3），`PartialFailure_RetriesThenSucceeds` 于 2026-10-08 升位面板实证偶发红一次（隔离复跑 3 次不复现）。修复：三集合写入收敛到探针内锁，表征语义（整批重放 3 次执行断言）不变。产品代码 `FanOutStep` 自身经审查无同类问题（`errors` 已有锁、`results`/`completedFlags` 按索引隔离）。
+- **`PalDDD.Core.Tests` 移除冗余 `TUnit.FsCheck` 引用**：该项目 `PropertyTests.cs` 用纯 FsCheck 核心 API（`Prop.ForAll`+`QuickCheckThrowOnFailure`），`FsCheck` 直接引用已在位；`[FsCheckProperty]` 属性用法仅存在于 `Transactions.Tests`——集成包在该项目零使用（2026-10-08 全量 API 审计清理）。
+
 ---
 
 ## [3.2.0] — 2026-09-25

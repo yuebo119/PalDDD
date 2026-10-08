@@ -10,7 +10,7 @@ namespace PalDDD.PalORM;
 /// 由 <c>AddPalOrm*</c> 在 <c>prewarmConnectionCount &gt; 0</c> 时注册，通常无需手动使用）。
 /// </summary>
 /// <remarks>
-/// <para><b>语义</b>（上游 5.6.0 XML 契约）：逐条打开 <paramref name="connectionCount"/> 条连接
+/// <para><b>语义</b>（上游 6.3.1 XML 契约）：逐条打开 <paramref name="connectionCount"/> 条连接
 /// 随即归还池，使首批查询命中暖连接而非新建物理连接。物理连接池为 ADO.NET 进程级共享池
 /// （按连接串键控）——预热所用 <paramref name="options"/> 必须与 DI 工厂最终生效的 options
 /// 同连接串（<c>AddPalOrm*</c> 内部保证同一实例），否则预热落空。</para>
