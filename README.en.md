@@ -4,7 +4,7 @@
 
 **A DDD/CQRS/Event Sourcing infrastructure framework for .NET 11: zero runtime reflection, complete Native AOT pipeline, no over-abstraction.**
 
-[![NuGet](https://img.shields.io/badge/nuget-v3.2.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
+[![NuGet](https://img.shields.io/badge/nuget-v3.3.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)
 [![CI](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml)
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
@@ -18,7 +18,7 @@ Pal.DDD standardizes the equality semantics of Entity, allocation-free collectio
 |:---:|:---:|:---:|:---:|
 | **35** | **38** | **3** | **1502**¹ |
 
-¹ 16 test projects, full-suite local measurement on 2026-09-25: 1434 passed + 68 skipped — 60 Docker-dependent (PalORM multi-dialect 46 + Integration 14, executed by CI Testcontainers) + 8 unreachable local broker prechecks; PalORM.Tests and Messaging.Integration.Tests require Docker.
+¹ 16 test projects, full-suite local measurement on 2026-10-08: 1434 passed + 68 skipped — 60 Docker-dependent (PalORM multi-dialect 46 + Integration 14, executed by CI Testcontainers) + 8 unreachable local broker prechecks; PalORM.Tests and Messaging.Integration.Tests require Docker.
 
 ---
 
@@ -524,7 +524,7 @@ It relies on .NET 11 static features (JsonSerializerContext source-generation en
 Does not support .NET 8/9/10 (single target net11.0). Three AOT limitations (honestly declared via source `[RequiresDynamicCode]`): ① Saga ChildSaga child-flow dispatch (`MakeGenericMethod`/`MakeGenericType`, see `Saga.cs`) and ② dynamic event routing share the same root; ③ `ISpecification.Compile()` expression-tree compilation is unsupported under Native AOT — in AOT scenarios use `ToExpression()` and pass it to your query provider (the in-memory path `IsSatisfiedBy` uses `Expression.Compile`, unsupported under Native AOT). No built-in EventStore snapshot mechanism — projects that need a snapshot strategy must implement it themselves. CQRS pipeline note: the parameterless open-generic `AddPalPipelineBehaviors()` triggers `AotCannotCreateGenericValueType` for value-type responses under Native AOT; AOT apps use `AddPalCommandHandler<T...>` or the explicit `AddPalPipelineBehaviors<TRequest, TResponse>()` (the two registrations are first-wins and mutually exclusive).
 
 **Who is using it in production?**
-Current version v3.2.0 (tag v3.2.0 published; SemVer minor: three new backward-compatible public APIs — connection-pool prewarm entry, MySQL builder overload, read-replica annotations — plus a unified decompression exception type for corrupted frames, no breaking API changes; see the `[3.2.0]` section in CHANGELOG). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects; the test measurement basis is in footnote ¹ at the top. You are welcome to try it in non-production environments and provide feedback.
+Current version v3.3.0 (tag v3.3.0 published; SemVer minor: zero public API changes and no breaking behavior changes — the release carries consumer-visible dependency upgrades (PalORM 6.3.1 / Confluent.Kafka 2.16.0 / NativeCompressions 1.0.1) plus Kafka broker background observability; see the `[3.3.0]` section in CHANGELOG). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects; the test measurement basis is in footnote ¹ at the top. You are welcome to try it in non-production environments and provide feedback.
 
 ## Contributing
 
