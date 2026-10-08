@@ -129,6 +129,11 @@ internal sealed class FanOutLaneSaga : Saga<FanOutLaneProbeState>
     private readonly bool _failCompensate;
     private readonly int _failItem;
 
+    // 并行探针注记（2026-10-08）：FanOutStep 契约并行调用 executor（Task.Run+WhenAll），
+    // 三集合被并行触碰——裸 Dictionary/List 曾在面板负载下竞态丢写（ItemAttempts 丢 key →
+    // item2 误判首试再抛 → 多一轮整批重放 → ExecutedItems 4≠3，PartialFailure_RetriesThenSucceeds
+    // 偶发红，2026-10-08 升位面板实证一次）；写入全部收敛 _probeGate，断言在 await 之后读侧无竞态。
+    private readonly object _probeGate = new();
     public List<int> ExecutedItems { get; } = [];
     public Dictionary<int, int> ItemAttempts { get; } = [];
     public List<string> CompensationLog { get; } = [];
@@ -145,17 +150,24 @@ internal sealed class FanOutLaneSaga : Saga<FanOutLaneProbeState>
             selector: _ => [1, 2],
             executor: (item, _) =>
             {
-                // 尝试计数含失败（否则失败的 item 恒 seen==0，重试永不通过）
-                var attempts = ItemAttempts.TryGetValue(item, out var n) ? n : 0;
-                ItemAttempts[item] = attempts + 1;
+                // 尝试计数含失败（否则失败的 item 恒 seen==0，重试永不通过）；
+                // 读写均入 _probeGate（FanOut 契约并行调用 executor，裸容器竞态见类头注记）
+                int attempts;
+                lock (_probeGate)
+                {
+                    attempts = ItemAttempts.TryGetValue(item, out var n) ? n : 0;
+                    ItemAttempts[item] = attempts + 1;
+                }
                 if ((_failItem == 0 || item == _failItem) && (_failItem == 0 || attempts == 0))
                     throw new InvalidOperationException($"fan item {item} boom");
-                ExecutedItems.Add(item);
+                lock (_probeGate)
+                    ExecutedItems.Add(item);
                 return ValueTask.FromResult(true);
             },
             compensate: (_, _) =>
             {
-                CompensationLog.Add("fan-compensated");
+                lock (_probeGate)
+                    CompensationLog.Add("fan-compensated");
                 if (_failCompensate) throw new InvalidOperationException("fan compensate boom");
                 return ValueTask.CompletedTask;
             }));

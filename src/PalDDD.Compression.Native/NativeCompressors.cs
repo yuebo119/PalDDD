@@ -26,7 +26,8 @@ internal sealed class LZ4Compressor : ICompressor
 
         // 显式转 UIntPtr：NativeCompressions 0.6.1 的 LZ4.GetMaxCompressedLength(int)
         // 在 .NET 11 Preview 下因 int→UIntPtr 隐式转换触发重载解析 bug 导致栈溢出。
-        // 直接用 UIntPtr 重载绕过包装层的递归。
+        // 直接用 UIntPtr 重载绕过包装层的递归。1.0.1 升位复核（2026-10-08）：int 重载仍在，
+        // 显式 UIntPtr 限定维持直连原生重载路径；往返与守卫测试面板覆盖。
         var maxSize = LZ4.GetMaxCompressedLength((nuint)data.Length);
         var destination = new byte[maxSize];
 
