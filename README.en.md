@@ -43,7 +43,7 @@ Pal.DDD standardizes the equality semantics of Entity, allocation-free collectio
 
 ## Features
 
-**Complete DDD tactical patterns, no over-abstraction**. Full coverage of Entity / AggregateRoot / DomainEvent / ValueObject / SmartEnum / Specification / Saga / EventLog / Projection. DbContext *is* the Unit of Work + Repository; DomainEvent *is* the integration event; `AddPalCommandHandler<T>` replaces assembly scanning. The framework eliminates duplication instead of adding indirection.
+**Complete DDD tactical patterns, no over-abstraction**. Full coverage of Entity / AggregateRoot / DomainEvent / ValueObject / SmartEnum / Specification / Saga / EventLog / Projection. DbContext *is* the Unit of Work + Repository; DomainEvent *is* the integration event; `AddPalCommandHandler<T>` replaces assembly scanning. The framework eliminates duplication instead of adding indirection. Validation is result-based (`IPalValidator` + `PalValidationResult`, not exception-driven) and layered separately from HTTP request validation (see the [Usage Guide](docs/usage.md)).
 
 **AOT as a first-class citizen**. `IsAotCompatible=true` is enforced across the core layer; PalORM generates RowFactory/CommandFactory at compile time via source generators, achieving a fully Native AOT pipeline (`PublishAot=true` verified); non-AOT-safe third-party dependencies (EF Core, Kafka, RabbitMQ) are isolated within adapter projects that explicitly declare `IsAotCompatible=false` (see [AOT Compatibility](#aot-compatibility)). AOT is not an add-on — it is an architectural decision about startup latency, memory footprint, and deployment safety.
 
@@ -51,18 +51,36 @@ Pal.DDD standardizes the equality semantics of Entity, allocation-free collectio
 
 **Lease-lock concurrent Outbox**. Message rows are written atomically within the database transaction; row-level leases on `(LockedBy, LockedUntil)` plus token fencing enable multi-instance concurrent publishing: once a lease expires, the stale worker's UPDATE is rejected on token mismatch — zero loss, zero duplication, no distributed lock. Dead-letter queue with operation re-injection and exponential-backoff retry.
 
+**Consumer-side idempotency chain**. Inbox prevents duplicate consumption with a `(ConsumerName, MessageId)` composite unique constraint + four-state lifecycle; Idempotency provides `(OperationName, Key)` idempotent execution: Executed/Cached/Skipped three states + result payload caching, with a Revision CAS token preventing side-effect re-execution after a Completed flip.
+
+**Full-scope Saga orchestration**. Explicit state machines + None/Backward/Forward compensation strategies (scope and order follow the execution sequence `ExecutedStepKeys`), timeout-detection background scanning (including the `AwaitingHumanDecision` interrupted-state fallback scan), manual approval interrupt+resume, FanOut parallel subtasks, and ChildSaga child-flow orchestration (reflection limitations honestly declared at the AOT boundary).
+
 **Zero-allocation hot paths**. ref struct singly-linked-list event enumerator (zero-allocation foreach), FrozenDictionary routing, ValueTask + `IsCompletedSuccessfully` zero-heap synchronous completion. Zero allocation is not a comment claim: AllocationContractTests assert budgets at runtime with `GC.GetAllocatedBytesForCurrentThread` (single event append ≤130B/iter, measured ~120B).
 
+**Message version evolution with startup contract verification**. `MessageEvolutionBuilder` builds adjacent-version step-by-step upgrade pipelines (executed explicitly on the consumer side); `AddPalMessageContractVerification` verifies upgrade-path completeness at startup (an incomplete chain refuses to start with `PalPlatformVerificationException`). Serialization is pluggable: JSON (AOT-safe, default) vs MemoryPack (faster, adapter not AOT).
+
+**Pluggable compression**. `ICompressionProvider` / `ICompressor` abstractions with two implementations: the System built-in compressor and the native LZ4/ZStandard binding (`PalDDD.Compression.Native`, AOT-safe), swappable via DI.
+
 **Built-in observability**. `PalActivitySource` (11 Start methods) + `PalMetrics` (23 telemetry instruments) are pre-embedded on critical paths; your OpenTelemetry configuration only needs to reference the Source to capture everything (command dispatch / Saga transition Activities are reserved, not yet wired).
+
+**Three persistence stacks, chosen by scenario**. PalORM (true AOT, source-generated SQL) / Dapper (call-site-level AOT, hand-written SQL) / EF Core (Migration/LINQ/ChangeTracker ecosystem) coexist equally long-term with no retirement plan; five Store capabilities are fully covered across all three stacks, with behavior guarded by cross-stack parity tests ([ADR-020](docs/decisions/020-persistence-stack-retirement-roadmap.md), [ADR-024](docs/decisions/024-mysql-lease-mutex-divergence-accept.md)); ambient transactions and explicit transaction boundaries are supported.
+
+**Deep dialect adaptation**. PostgreSQL read/write splitting + multi-host failover, COPY bulk write, Pipeline single round-trip, LISTEN/NOTIFY push, consistent-hashing sharding, JSONB operators; MySQL multi-host load balancing (FailOver/RoundRobin/LeastConnections) and InnoDB session tuning; SQLite WAL/FTS5/JSON1. Connection-string errors fail fast at registration (IPv6 four-quadrant, embedded-port, host-list validation), not deferred to connection time. Multi-tenant filtering (`[TenantAware]`) comes from the PalORM engine (see the [adapter docs](docs/palorm-adapter.md)).
+
+**Full-pipeline InMemory testing and hosting integration**. All six Store types have InMemory implementations and the default message broker is `NullMessageBroker`, so unit tests need zero external dependencies (`PalDDD.Testing` provides test primitives); the ASP.NET Core integration ships `MapCommand`/`MapQuery` Minimal API endpoint mapping, `UsePalExceptionHandler` global exception middleware, `AddPalHealthChecks` health checks, and `AddPalLogging` logging integration.
 
 ## Comparison with Existing Solutions
 
 | Solution | Positioning | Pal.DDD's Incremental Value |
 |------|------|:---------------|
-| **MediatR** | In-process command/query dispatch | Adds Outbox, Inbox, Saga, EventLog, Projection. Dispatch is the starting point, not the endpoint. |
-| **MassTransit / NServiceBus** | Distributed message bus | Not bound to a specific transport. The Outbox adapts to any Broker via the `IMessageBroker` abstraction. Message ownership stays on the application side. |
-| **EventStoreDB / Marten** | Event store | Provides the `IEventLog` abstraction; the storage layer can be swapped for Dapper or EF Core implementations. No vendor lock-in. |
+| **MediatR** | In-process command/query dispatch | Adds Outbox, Inbox, Saga, EventLog, Projection, and idempotent execution. Dispatch is the starting point, not the endpoint. Handler registration uses compile-time type constants (`AddPalCommandHandler<T>`) with no assembly scanning; the synchronous-completion path is zero-heap. |
+| **MassTransit / NServiceBus** | Distributed message bus | Not bound to a specific transport. The Outbox adapts to any Broker via the `IMessageBroker` abstraction, and persistence is swappable across three stacks (PalORM/Dapper/EF Core). Message ownership stays on the application side. |
+| **EventStoreDB / Marten** | Event store | Provides the `IEventLog` abstraction; the storage layer can be swapped for PalORM, Dapper, or EF Core implementations, with optimistic concurrency and a globally increasing Position. No vendor lock-in. |
+| **ABP Framework** | Full-stack DDD application framework (module system, layered templates, authorization, prebuilt UI conventions) | Pal.DDD delivers only infrastructure primitives: no forced base classes, no directory conventions, no module system; business code stays pure C#. Packages can be adopted incrementally and coexist with an existing Service layer. |
+| **dotnetcore/CAP** | Distributed event bus + local message table (Outbox delivery reliability) | Beyond delivery reliability, it completes the tactical layer: aggregate roots/domain events, Saga compensation orchestration, EventLog, Projection checkpoint resumption, compile-time governance, and the AOT pipeline. |
 | **Hand-written DDD** | Fully custom | Eliminates the repeated implementation of Entity, DomainEvent, Dispatcher, Outbox, and Saga in every project. Infrastructure should not be differentiating code. |
+
+Framework boundary: only DDD/CQRS/Event Sourcing infrastructure primitives are provided; application-framework responsibilities (module system, authorization, UI conventions) are deliberately out of scope, and application-layer composition stays entirely with the host.
 
 ## Installation
 
@@ -230,6 +248,8 @@ services.AddPalInbox();  // Composite unique constraint on (ConsumerName, Messag
 ### Saga: Explicit State Machine + Compensation Orchestration + Timeout Detection
 
 > ⚠️ **Dapper persistence snapshot is mandatory**: without a registered source-generated `JsonTypeInfo<TState>`, `DapperSagaStateStore<TState>`'s `SaveChangesAsync` fails fast with an exception (earlier versions silently wrote business fields as NULL; that data-loss defect is closed). Register via `services.AddPalDapperSagaSnapshot(jsonTypeInfo)`. See [usage.md](docs/usage.md).
+>
+> Three-stack snapshot registration: the PalORM stack offers same-semantics convenience registrations `AddPalOrmSqliteSagaSnapshot<TState>` / `AddPalOrmPostgreSqlSagaSnapshot<TState>` / `AddPalOrmMySqlSagaSnapshot<TState>` (missing registration fails fast the same way); the EF Core stack uses `AddPalSagaStateEfCore`. See [usage.md](docs/usage.md) for all three stacks.
 
 ```csharp
 public sealed class OrderSaga : Saga<OrderSagaState>
@@ -481,7 +501,11 @@ flowchart TB
     Transactions --> PalORM["PalORM (true AOT)"]
     EventLog --> PalORM
     Projections --> PalORM
+    Idempotency --> PalORM
     Transactions --> Dapper["Dapper (capability parity)"]
+    EventLog --> Dapper
+    Projections --> Dapper
+    Idempotency --> Dapper
     PalORM --> PG[PostgreSql]
     PalORM --> MySQL
     PalORM --> SQLite
