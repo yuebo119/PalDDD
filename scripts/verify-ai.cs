@@ -3,7 +3,7 @@
 // 由 .ai/scripts/verify-ai-system.sh（447 行）等价迁移为 C#（dotnet file-based app）。
 //
 // 用法：dotnet run scripts/verify-ai.cs
-// 退出码：0=23 项全过；1=任一失败；2=仓库根定位失败。
+// 退出码：0=27 项全过；1=任一失败；2=仓库根定位失败。
 //
 // 23 项检查与原 bash 逐项对应：
 //   V1 引擎/双 profile/工具提示词齐全          V13 lessons 含 SPD 系列 + 误判防治
@@ -18,6 +18,12 @@
 //   V10 机械防线测试文件齐全                   V22 lessons 经验编号跨章唯一
 //   V11 metrics 账本结构完整                   V23 镜像脚本对归一化比对
 //   V12 编译期诊断全表面 ≥38 条
+// 后续增项（不再与 bash 版对应）：
+//   V24 轮次↔报告对账 + 归档缺口声明（T-28）   V25 .ai 文档命令形态与死引用（T-26）
+//   V26 lessons 版本对账（标题==README 版本节末项，防 F-22 同族版本漂移）
+//   V27 test spec 声明==实测（README 四系统表 T/T-DDD 区间 vs prompt 实测 + lessons I 章铁律计数）
+//   V28 .ai/scripts/*.sh pipefail 强制（防新 .sh 缺 pipefail 被管道吞码）
+//   V29 复发根因未闭环督办（WARN 级——metrics 复发根因表状态非 ✅ 行输出督办清单，不拦截）
 //
 // 迁移说明：
 //   1) 输出格式与原 bash 逐行一致（双跑归一时间行后 diff 验证）；FAIL 详情中
@@ -29,9 +35,13 @@
 //      PalDDD.slnx——故以 CWD 向上找为主、BaseDirectory 兜底，替代原
 //      bash 的 cd "$(dirname "$0")/../.."。
 //   4) 零 package 依赖（NU1510 即错误）；顶层语句 + static 局部函数。
-//   5) ITM-664 已清偿（v87）：--selftest 红绿矩阵 14 例（V17 单调/乱序/同日 ·
+//   5) ITM-664 已清偿（v87）：--selftest 红绿矩阵（V17 单调/乱序/同日 ·
 //      V19 定标/超期/UNKNOWN/非法日期 · V21 老化/豁免 · V22 唯一/跨章重复/ITM 豁免 ·
-//      V2 缺失/空绿）——S3 红测：破坏 V19 超期判定 → 自测必红。改 V 项逻辑时须同步改自测。
+//      V2 缺失/空绿 · V26 版本一致/漂移可达 · V27 声明==实测/双漂移检出 ·
+//      V29 全闭环/未闭环检出——ST-V27b 首跑抓出标题行恒漏提取的真 bug，红例即战果）。
+//      V28 判定为单行 Contains + 目录枚举，无独立纯函数，自测面由变异验证承担
+//      （注入无 pipefail 的 .sh → 跑 → 必红）。
+//      改 V 项逻辑时须同步改自测。
 // ============================================================================
 
 // Justification: CA1303 要求 UI 文案走资源表本地化；本脚本输出是 CI 门禁的
@@ -62,12 +72,13 @@ Environment.CurrentDirectory = root;
 
 var lines = new List<string>
 {
-    "═══════ .ai 系统一致性校验（Pal.DDD · V1-V25）═══════",
+    "═══════ .ai 系统一致性校验（Pal.DDD · V1-V29）═══════",
     $"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}",
     "",
 };
 var passed = 0;
 var failed = 0;
+var warned = 0; // WARN 级（V29 督办）：计入显示不计入失败——督办语义是"提醒补载体"不是"拦截"
 
 // ─── V1 引擎 + 双 profile + 工具提示词与模板齐全 ───
 {
@@ -579,8 +590,89 @@ var failed = 0;
     }
 }
 
+// ─── V26 lessons 版本对账（2026-10-08 增，源 PalORM V16 思路 DDD 化）───
+// **为什么有这个门禁**：DDD 的 F-22 勘正实证——lessons 标题停在旧版本号而章节已增长，
+// 漂移靠人工审计才发现（PalORM 同族 B103：续登改表不改标题）。版本号有双写面
+// （lessons 标题 + README 版本节），双写面必须机械对账。
+// 判据：lessons.md 标题版本 == README.md 版本节最后一项（单一事实单一真源互为镜像）。
+{
+    var lessonsVer = ExtractLessonsTitleVersion(TryReadLines(".ai/lessons.md"));
+    var readmeVer = ExtractReadmeLatestVersion(TryReadLines(".ai/README.md"));
+    if (lessonsVer.Length > 0 && readmeVer.Length > 0 && lessonsVer == readmeVer)
+    {
+        passed++; lines.Add($"PASS V26: lessons 版本对账一致（v{lessonsVer} == README 版本节末项）");
+    }
+    else
+    {
+        failed++; lines.Add($"FAIL V26: lessons 版本漂移（lessons 标题 v{lessonsVer} vs README 版本节末项 v{readmeVer}）——两侧同提交对齐");
+    }
+}
+
+// ─── V27 test spec 声明==实测（2026-10-08 增，源 PalORM V18 思路 DDD 化）───
+// **为什么有这个门禁**：README 四系统表曾声明 "T1-T14 + T-DDD-1..6" 而 test/prompt.md
+// 实际已到 T20（本次会话实测发现的真漂移）——续登铁律不改 README 声明与 PalORM T-DEF
+// 区间漂移（B103 同族）同形态。判据三组（任一不等即 FAIL）：
+//   ① README 四系统表 test 行的 T 区间上限 == test/prompt.md 实测最大 T 编号
+//   ② 同行 T-DDD 区间上限 == 实测最大 T-DDD 编号
+//   ③ lessons.md I 章标题「N 条铁律」== 表格行数（ORM V18 第四判据对应物）
+{
+    var v27Bad = CheckTestSpecConsistency(
+        TryReadText(".ai/README.md"), TryReadText(".ai/test/prompt.md"), TryReadLines(".ai/lessons.md"));
+    if (v27Bad.Count == 0)
+    {
+        passed++; lines.Add("PASS V27: test spec 声明==实测（README 区间 / lessons 铁律计数 三组对账一致）");
+    }
+    else
+    {
+        failed++; lines.Add($"FAIL V27: test spec 声明漂移 {v27Bad.Count} 处（{string.Join("；", v27Bad)}）——声明与实测同提交对齐");
+    }
+}
+
+// ─── V28 .ai/scripts/*.sh pipefail 强制（2026-10-08 增，源 PalORM V22）───
+// **为什么有这个门禁**：管道中段失败被吞是本仓与 ORM 共享的实战教训（DDD 曾发生
+// secret-scan pipefail 被 tee 掩码 5 次，AGENTS.md 已记载）。主暴露面已由 MIG-012
+// 迁移 C# 结构性消解，但残留/新增 .sh 仍须钉住——现状 2 个 .sh 均合规（set -euo pipefail），
+// 本项防的是未来新 .sh 缺 pipefail 无门禁可抓。
+// 判定锚定 `set ... pipefail` 行而非全文 Contains——变异探针实证：探针注释里出现
+// "pipefail" 字样即可骗过全文匹配（注释不是声明）。
+{
+    var shDir = Path.Combine(root, ".ai", "scripts");
+    var shFiles = Directory.Exists(shDir)
+        ? Directory.GetFiles(shDir, "*.sh").Order().ToArray()
+        : [];
+    var noPipefail = shFiles
+        .Where(f => !Regex.IsMatch(TryReadText(f), @"(?m)^\s*set\s+[^#\r\n]*pipefail"))
+        .ToList();
+    if (noPipefail.Count == 0)
+    {
+        passed++; lines.Add($"PASS V28: .ai 脚本 pipefail 完备（{shFiles.Length} 个 .sh 全有 set 行声明）");
+    }
+    else
+    {
+        failed++; lines.Add($"FAIL V28: 缺 set-pipefail 的 .sh {noPipefail.Count} 个（{string.Join("、", noPipefail.Select(Path.GetFileName))}）——加 set -euo pipefail 或 set -o pipefail");
+    }
+}
+
+// ─── V29 复发根因未闭环督办（WARN 级，2026-10-08 增，源 PalORM V21 思路 DDD 化）───
+// **为什么有这个门禁**：「同类根因必须有机械防线」在 DDD 是明文规则（metrics 复发根因
+// 表头声明"每类复发必须有对应机械防线"），但无执行载体——状态 ⚠️ 的未闭环族无人督办。
+// PalORM B107 同源：复发阈值规则设立后无载体，族仍复发到第五次。
+// 语义：WARN 不拦截（对齐 ORM V21 告警型设计）——命中族要么补机械载体，要么更新状态
+// 附依据后消警。状态列以 ✅ 开头视为闭环，⚠️/其他为督办对象。
+{
+    var openItems = CheckRecurrenceOpenItems(TryReadLines(".ai/review/metrics.md"));
+    if (openItems.Count == 0)
+    {
+        passed++; lines.Add("PASS V29: 复发根因全部闭环（状态列全 ✅）");
+    }
+    else
+    {
+        warned++; lines.Add($"WARN V29: 复发根因未闭环 {openItems.Count} 族督办（{string.Join("；", openItems)}）——补机械载体或更新状态附依据");
+    }
+}
+
 lines.Add("");
-lines.Add($"通过：{passed}  失败：{failed}  总计：{passed + failed}");
+lines.Add($"通过：{passed}  警告：{warned}  失败：{failed}  总计：{passed + warned + failed}");
 lines.Add("═══════ 校验完成 ═══════");
 foreach (var l in lines) Console.WriteLine(l);
 return failed == 0 ? 0 : 1;
@@ -1106,12 +1198,124 @@ static List<string> CheckIdUniqueness(IEnumerable<string> lines)
             var id = words[1];
             if (id.StartsWith("ITM-", StringComparison.Ordinal)
                 || id.StartsWith("ADR-", StringComparison.Ordinal)) continue;
-            if (id == "编号") continue;
+            // 表头列名不是经验编号——中文"编号"与英文"ID"双形态豁免
+            //（"ID" 形态 2026-10-08 增：lessons XVIII/XIX 两章表头同为 | ID | 时
+            //  双章同名触发假冲突，单章存在时不暴露——盲区由第二例揭示）
+            if (id == "编号" || id == "ID") continue;
             if (seen.TryGetValue(id, out var first)) { if (first != ch) dup.Add($"{id}({first}->{ch})"); }
             else seen[id] = ch ?? "";
         }
     }
     return dup.ToList();
+}
+
+// V26 核心：lessons 标题版本（首个 `Pal.DDD AI 规范化系统 v{X.Y}` 命中即标题行）
+static string ExtractLessonsTitleVersion(string[] lines)
+{
+    foreach (var line in lines)
+    {
+        var m = Regex.Match(line, @"Pal\.DDD AI 规范化系统 v(\d+\.\d+)");
+        if (m.Success) return m.Groups[1].Value;
+    }
+    return "";
+}
+
+// V26 核心：README 版本号取最大（版本节倒序排列、最新在最上——语义取"最新"而非"最后出现行"，
+// 与行序解耦后对未来改正序排列也鲁棒）
+static string ExtractReadmeLatestVersion(string[] lines)
+{
+    var best = "";
+    Version? bestVer = null;
+    foreach (var line in lines)
+    {
+        foreach (Match m in Regex.Matches(line, @"\*\*v(\d+\.\d+)\*\*"))
+        {
+            if (Version.TryParse(m.Groups[1].Value, out var v) && (bestVer is null || v > bestVer))
+            {
+                bestVer = v;
+                best = m.Groups[1].Value;
+            }
+        }
+    }
+    return best;
+}
+
+// V27 核心：test spec 三组对账（README T 区间 / README T-DDD 区间 / lessons I 章铁律计数）。
+// T 实测取 test/prompt.md 全文最大 T 编号（引用行 "T1-T14" 产生的低编号不影响 max）；
+// T-DEF/T-DDD 与 T 是不同编号族——`\bT(\d+)\b` 对 "T-DDD" 不匹配（T 后非数字）。
+// README 声明面 = **同时含** T 区间与 T-DDD 区间的行（四系统表 + 文件地图）；
+// 单独的 "T1-T12"（test-gate 覆盖面子集描述）与版本历史节 "T1-T14" 不在对账面内。
+static List<string> CheckTestSpecConsistency(string readmeText, string testPromptText, string[] lessonsLines)
+{
+    var bad = new List<string>();
+    var inv = System.Globalization.CultureInfo.InvariantCulture;
+
+    var maxT = 0;
+    foreach (Match m in Regex.Matches(testPromptText, @"\bT(\d+)\b"))
+        maxT = Math.Max(maxT, int.Parse(m.Groups[1].Value, inv));
+    var maxDdd = 0;
+    foreach (Match m in Regex.Matches(testPromptText, @"\bT-DDD-(\d+)\b"))
+        maxDdd = Math.Max(maxDdd, int.Parse(m.Groups[1].Value, inv));
+
+    foreach (var line in readmeText.Split('\n'))
+    {
+        var mT = Regex.Match(line, @"T1-T(\d+)");
+        var mD = Regex.Match(line, @"T-DDD-1\.\.(\d+)");
+        if (!mT.Success || !mD.Success) continue;
+        if (maxT > 0 && int.Parse(mT.Groups[1].Value, inv) != maxT)
+            bad.Add($"README 声明 T1-T{mT.Groups[1].Value} vs 实测最大 T{maxT}");
+        if (maxDdd > 0 && int.Parse(mD.Groups[1].Value, inv) != maxDdd)
+            bad.Add($"README 声明 T-DDD-1..{mD.Groups[1].Value} vs 实测最大 T-DDD-{maxDdd}");
+    }
+
+    // lessons I 章标题「N 条铁律」== 表格数字行数（构建时机表等非数字行不匹配）
+    var inCh1 = false;
+    var declaredIron = 0;
+    var ironRows = 0;
+    foreach (var line in lessonsLines)
+    {
+        if (line.StartsWith("## ", StringComparison.Ordinal))
+        {
+            inCh1 = Regex.IsMatch(line, @"^## I\. ");
+            // 声明数字在标题行自身——提取必须在标题分支内做（首版放 else if 使标题行恒漏提取）
+            if (inCh1)
+            {
+                var m = Regex.Match(line, @"AI 协作 (\d+) 条铁律");
+                if (m.Success) declaredIron = int.Parse(m.Groups[1].Value, inv);
+            }
+            continue;
+        }
+        if (inCh1 && Regex.IsMatch(line, @"^\| \d+ \|")) ironRows++;
+    }
+    if (declaredIron > 0 && declaredIron != ironRows)
+        bad.Add($"lessons I 章标题 {declaredIron} 条铁律 vs 实测 {ironRows} 行");
+
+    return bad;
+}
+
+// V29 核心：复发根因分类参照表中状态非 ✅ 开头的未闭环族（督办清单）。
+// 列结构 `| 根因类 | PD | 机械防线 | 状态 |`——状态取倒数第二列（行尾 ` |` 前一列）；
+// 表头行与分隔行（- 开头）跳过。
+static List<string> CheckRecurrenceOpenItems(string[] metricsLines)
+{
+    var open = new List<string>();
+    var inSection = false;
+    foreach (var line in metricsLines)
+    {
+        if (line.StartsWith("## ", StringComparison.Ordinal))
+        {
+            inSection = line.StartsWith("## 复发根因分类参照", StringComparison.Ordinal);
+            continue;
+        }
+        if (!inSection || line.Length == 0 || line[0] != '|') continue;
+        var parts = line.Split('|');
+        if (parts.Length < 3) continue;
+        var name = parts[1].Trim();
+        var status = parts[^2].Trim();
+        if (name.Length == 0 || name == "根因类" || name.StartsWith('-')) continue;
+        if (!status.StartsWith('✅', StringComparison.Ordinal)) open.Add(name);
+    }
+    return open;
 }
 
 // ─── ITM-664 自测：红绿矩阵（不触达真实仓库文件——纯合成输入）───
@@ -1303,6 +1507,60 @@ static int RunSelftest()
     var gStaleOk = gStale.Any(id => int.Parse(id["PDDD-G".Length..], System.Globalization.CultureInfo.InvariantCulture) < 22);
     if (gStaleOk) Console.WriteLine("PASS ST-V5b 旧口径 G1..G24 范围写法被 <22 过滤捕获");
     else failures.Add($"ST-V5b: gStale={string.Join(",", gStale)}");
+
+    // ── V26 版本对账（绿/漂移可达）──
+    var v26Lessons = new[] { "# Pal.DDD AI 规范化系统 v2.4", "## I. AI 协作 14 条铁律（不可违反）" };
+    var v26Readme = new[] { "## 版本", "", "- **v2.4**（2026-10-08，现行）：x", "- **v2.3**（2026-09-11）：y", "- **v2.0**（2026-08-16）：z" };
+    if (ExtractLessonsTitleVersion(v26Lessons) == "2.4" && ExtractReadmeLatestVersion(v26Readme) == "2.4")
+        Console.WriteLine("PASS ST-V26a 版本一致绿（倒序版本节取最大）");
+    else failures.Add($"ST-V26a: lessons={ExtractLessonsTitleVersion(v26Lessons)} readme={ExtractReadmeLatestVersion(v26Readme)}");
+
+    var v26ReadmeStale = new[] { "- **v2.3**（2026-09-11）：y" };
+    if (ExtractReadmeLatestVersion(v26ReadmeStale) == "2.3")
+        Console.WriteLine("PASS ST-V26b README 旧版本可提取（v2.3 ≠ 标题 v2.4 → FAIL 路径可达）");
+    else failures.Add("ST-V26b: README 版本提取恒空或恒同（漂移不可检出）");
+
+    // ── V27 test spec 对账（声明==实测绿 / 声明漂移红 / 铁律计数红 / 覆盖面行豁免）──
+    var v27OkReadme = "| test | **test**：T1-T24 + T-DDD-1..6 铁律 | x |\n| gate 覆盖面 | 测试规范门禁（T1-T12 子集） |（单独 T 区间行不进对账面）|";
+    var v27OkPrompt = "| T24 | 前提唯一性由构造保证 |\n| T-DDD-6 | 四层防线 |\n引用 T1-T14 与 T-DDD-1..5 不影响 max";
+    var v27OkLessons = new[] { "## I. AI 协作 2 条铁律", "| 1 | a |", "| 2 | b |", "## II. 下章" };
+    var v27Ok = CheckTestSpecConsistency(v27OkReadme, v27OkPrompt, v27OkLessons);
+    if (v27Ok.Count == 0) Console.WriteLine("PASS ST-V27a 声明==实测绿（引用低编号与覆盖面行不干扰）");
+    else failures.Add($"ST-V27a: {string.Join("；", v27Ok)}");
+
+    var v27DriftReadme = "| test | **test**：T1-T14 + T-DDD-1..6 铁律 | x |";
+    var v27DriftPrompt = "| T20 | 可观测性声明 |";
+    var v27DriftLessons = new[] { "## I. AI 协作 3 条铁律", "| 1 | a |", "| 2 | b |" };
+    var v27Drift = CheckTestSpecConsistency(v27DriftReadme, v27DriftPrompt, v27DriftLessons);
+    if (v27Drift.Count == 2 && v27Drift[0].Contains("T14") && v27Drift[0].Contains("T20")
+        && v27Drift[1].Contains("3 条铁律") && v27Drift[1].Contains("2 行"))
+        Console.WriteLine("PASS ST-V27b 声明漂移 + 铁律计数漂移双双检出");
+    else failures.Add($"ST-V27b: {string.Join("；", v27Drift)}");
+
+    // ── V29 复发督办（全闭环绿 / 未闭环检出）──
+    var v29ClosedInput = new[]
+    {
+        "## 复发根因分类参照",
+        "| 根因类 | PD | 机械防线 | 状态 |",
+        "|--------|:--:|---------|:----:|",
+        "| 姊妹修一半 | PD17 | sibling-map | ✅ 已下沉 |",
+        "## 下一节",
+    };
+    var v29Closed = CheckRecurrenceOpenItems(v29ClosedInput);
+    if (v29Closed.Count == 0) Console.WriteLine("PASS ST-V29a 全 ✅ 状态零督办（表头/分隔行不误报）");
+    else failures.Add($"ST-V29a: {string.Join("；", v29Closed)}");
+
+    var v29OpenInput = new[]
+    {
+        "## 复发根因分类参照",
+        "| 修复自激振荡 | PD34/37 | 流程 | ⚠️ 流程 |",
+        "| 验证器自欺 | PD29 | 红测纪律 | ✅ 已下沉 |",
+        "## 下一节",
+    };
+    var v29Open = CheckRecurrenceOpenItems(v29OpenInput);
+    if (v29Open.Count == 1 && v29Open[0].Contains("修复自激振荡"))
+        Console.WriteLine("PASS ST-V29b ⚠️ 未闭环族检出督办（✅ 行不进清单）");
+    else failures.Add($"ST-V29b: {string.Join("；", v29Open)}");
 
     // ── 汇总 ──
     Console.WriteLine($"═══════ VERIFY-AI SELFTEST：{(failures.Count == 0 ? "全部通过" : $"{failures.Count} 例失败")} ═══════");

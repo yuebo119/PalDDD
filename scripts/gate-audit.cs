@@ -96,7 +96,7 @@ var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
     ["tech-debt"] = "Obsolete / TODO-HACK-FIXME / Console 于 src / 空 catch / tab / 超长行 / 测试数 / 版本统一 / slnx 成员",
     ["doc-consistency"] = "D7 .ai/README.md 文件地图（其余 D1-D6/D8-D12 已下沉 C# 测试）",
     ["test-gate"] = "T1-T12 测试规范 / T-DEF-1 薄壳缺失 / T-DEF-4 CI job timeout / OSC 同测试翻转",
-    ["verify-ai"] = "V1-V25 系统一致性（含命令形态三子类：bash-.cs / 带前缀死引用 / 裸名死引用）",
+    ["verify-ai"] = "V1-V25 系统一致性（含命令形态三子类：bash-.cs / 带前缀死引用 / 裸名死引用）+ V26-V29（2026-10-08 增：lessons 版本对账 / test spec 声明==实测含 lessons I 章铁律计数 / .sh set 行 pipefail 锚定 / 复发根因未闭环 WARN 督办——V26/V27/V28 已对真实仓库变异验证双向红绿，V29 为 WARN 级无 FAIL 分支、其检出面由 selftest ST-V29b 承担）",
     ["config-policy"] = "A dependabot groups/ignore 双词表混用 / versions·labels·prefix·interval 缺失或空 / 未知上下文且注释不误报；B Directory.Build Exec 缺 IgnoreExitCode 且 Target 无 GITHUB_ACTIONS 跳过（行式校验，非完整 YAML 解析器）",
     // license-policy 的两极由隔离探针钉住（禁令命中必红 / 白名单放行必绿）；其余判定面
     // 只在 selftest 覆盖——隔离目录没有真实 nuspec 缓存，构造不出「非白名单许可」的夹具，
