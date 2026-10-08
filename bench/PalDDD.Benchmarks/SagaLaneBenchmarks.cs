@@ -11,10 +11,13 @@
 //
 // 用法：dotnet run --project bench/PalDDD.Benchmarks -c Release -- --saga
 // ─────────────────────────────────────────────────────────────
-// ITM-810 同型勘正（2026-09-20 CI 首验）：IDE0005 判 PalDDD.Benchmarks 的 using 冗余
-//（本文件无 namespace 声明，类型在全局命名空间，该 using 自我引用无意义）
+// ITM-810 勘正废止（2026-10-08 审计对齐）：开启 BDN 分析器后 CA1050 命中，本文件
+// 类型自全局命名空间迁入 PalDDD.Benchmarks（Program.cs 既有 using 即解析，零引用改动）；
+// 原勘正（IDE0005 判 using 自我引用冗余）随全局命名空间形态一并废止。
 using BenchmarkDotNet.Attributes;
 using PalDDD.Transactions;
+
+namespace PalDDD.Benchmarks;
 
 [MemoryDiagnoser]
 [InProcess]

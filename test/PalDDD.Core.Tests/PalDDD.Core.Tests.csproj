@@ -41,8 +41,10 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     <PackageReference Include="TUnit" />
+    <!-- FsCheck 直接引用（PropertyTests 用纯 FsCheck 核心 API：Prop.ForAll + QuickCheckThrowOnFailure，
+         无 [FsCheckProperty] 属性用法——TUnit.FsCheck 集成包为冗余引用，2026-10-08 审计清理；
+         [FsCheckProperty] 用法仅存在于 Transactions.Tests） -->
     <PackageReference Include="FsCheck" />
-    <PackageReference Include="TUnit.FsCheck" />
   </ItemGroup>
 
 </Project>
