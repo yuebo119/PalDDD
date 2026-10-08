@@ -4,20 +4,28 @@
 日志格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范（完整规则见 [`docs/release.md`](docs/release.md) §十一）：
 **消费者可见变更在上**（Added/Changed/Deprecated/Removed/Fixed/Security + 本项目扩展 Dependencies/Documentation/Tests），**工程过程叙事入附录**；数字必须可验证；`[Unreleased]` 与发布段**同次提交转正、先于 tag**。
 
-> **当前版本**：`VersionPrefix=3.2.0` / `VersionSuffix=`（空——见 `Directory.Build.props`；3.2.0 升位依据：新增 3 项公共 API 均向后兼容（预热参数带默认值 / 新增重载 / 可选标注），公开 API 快照 653 行新增、1 行删除（唯一删除为程序集版本引用 3.1.0.0 → 3.2.0.0），唯一争点（压缩损坏帧异常类型统一为 `InvalidDataException`）经裁决按破坏面量级定为 Minor，非 Major；3.1.0 的升位依据是两处三栈行为对齐属**放宽/对齐**而非转严，故为 Minor；3.0.0 的升位依据是 M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务的"静默错误转 fail-fast"，性质不同）
-> **发布状态**：3.2.0 已发布（2026-09-25，tag `v3.2.0` → 本提交，SemVer Minor——新增公共 API 向后兼容 + 压缩错误路径异常类型统一，快照 653+/1−（唯一删除为版本引用行）无签名破坏）；3.1.0 已发布（2026-09-23，tag `v3.1.0`，SemVer Minor——三栈行为对齐 + 版本承诺守卫类变更，无破坏性 API 变更）；3.0.0 已发布（2026-09-20 tag `v3.0.0`，SemVer Major——M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务 fail-fast 两处行为破坏性变更）；2.2.0 已于 2026-09-15 发布（tag `v2.2.0`）；2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag `v3.2.0` 之后的变更见 `[Unreleased]`。
+> **当前版本**：`VersionPrefix=3.3.0` / `VersionSuffix=`（空——见 `Directory.Build.props`；3.3.0 升位依据：零公共 API 变化（快照唯一差异为程序集版本引用行 3.2.0.0 → 3.3.0.0）、无破坏性行为变更，变更面为依赖消费者可见上移（PalORM 五包跨上游主版本线 5.6.0→6.3.1 / Confluent.Kafka 2.16.0 / NativeCompressions 跨 1.0 稳定线 1.0.1）与 Kafka broker 后台可观测增强，按 release.md 判据「向后兼容的功能增强」定为 Minor；3.2.0 升位依据：新增 3 项公共 API 均向后兼容（预热参数带默认值 / 新增重载 / 可选标注），公开 API 快照 653 行新增、1 行删除（唯一删除为程序集版本引用 3.1.0.0 → 3.2.0.0），唯一争点（压缩损坏帧异常类型统一为 `InvalidDataException`）经裁决按破坏面量级定为 Minor，非 Major；3.1.0 的升位依据是两处三栈行为对齐属**放宽/对齐**而非转严，故为 Minor；3.0.0 的升位依据是 M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务的"静默错误转 fail-fast"，性质不同）
+> **发布状态**：3.3.0 已发布（2026-10-08，tag `v3.3.0` → 本提交，SemVer Minor——零公共 API 变更（快照唯一差异为版本引用行 3.2.0.0 → 3.3.0.0），变更面为依赖消费者可见上移与 Kafka 后台可观测增强，无破坏性变更）；3.2.0 已发布（2026-09-25，tag `v3.2.0` → 本提交，SemVer Minor——新增公共 API 向后兼容 + 压缩错误路径异常类型统一，快照 653+/1−（唯一删除为版本引用行）无签名破坏）；3.1.0 已发布（2026-09-23，tag `v3.1.0`，SemVer Minor——三栈行为对齐 + 版本承诺守卫类变更，无破坏性 API 变更）；3.0.0 已发布（2026-09-20 tag `v3.0.0`，SemVer Major——M1-1 Dapper Saga 快照 fail-fast 与 ADR-023 UoW 嵌套事务 fail-fast 两处行为破坏性变更）；2.2.0 已于 2026-09-15 发布（tag `v2.2.0`）；2.1.0 已于 2026-09-04 发布（tag `v2.1.0`→`0370c30`）；2.0.0 已于 2026-08-23 发布（tag `v2.0.0`→`a115c22`——发布时 CHANGELOG 的 `[Unreleased]` 未转正为 `[2.0.0]` 段，该段内容已并入 `[2.1.0]`，与 1.1.0 同款教训第二次，见 §九 教训 2）；1.1.0 已于 2026-07-31 发布（tag `v1.1.0`→`b4d532f`，事后回填）。tag `v3.3.0` 之后的变更见 `[Unreleased]`。
 > **发布规范**：见 [`docs/release.md`](docs/release.md)
 
 ---
 
 ## [Unreleased]
 
+---
+
+## [3.3.0] — 2026-10-08
+
+> **范围**：`v3.2.0`（2026-09-25，`c37376b`）→ `v3.3.0`（本提交），12 个提交。
+> **兼容性**：SemVer Minor——零公共 API 变更（快照 1613 行唯一差异为程序集版本引用行 `Version=3.2.0.0` → `Version=3.3.0.0`，30 个程序集零类型/成员/签名增删改，无破坏性行为变更）；变更面为消费者可见依赖上移（PalORM 五包跨上游主版本线 5.6.0→6.3.1、`Confluent.Kafka` 2.16.0、`NativeCompressions` 跨 1.0 稳定线 1.0.1）与 Kafka broker 后台可观测增强、EF Outbox 查询参数化形态收窄（行为等价）。
+> **组织方式**：分两层——上方按 Keep a Changelog 分类给出**消费者可见变更**；文末附录保留本版工程过程明细（转正前 `[Unreleased]` 原料原文）。规范见 [`docs/release.md`](docs/release.md) §十一。
+
 ### Changed 变更
 
-- **工程脚本层全 C# 收口（git hooks 判定层迁移 + .ai 侧最后两个 .sh 退役）**：① `.githooks/pre-commit`（182 行 bash）全部逻辑迁 `scripts/hook-pre-commit.cs`（暂存集快照一次性内存匹配——原版 SIGPIPE 教训的形态性消解 + 触发条件 selftest 红绿矩阵）；`.githooks/pre-push`（42 行）迁 `scripts/hook-pre-push.cs`；钩子文件退化为 3 行 shell 启动器（git hook 机制要求 shell 引导，属机制下限）。② `.ai/scripts/template-gate.sh` 迁主仓 `scripts/template-gate.cs`（判定真源本就是 template-compile-probe 工程）；`install-ai-system.sh`（250 行）迁 `.ai/scripts/install-ai-system.cs` v3（`--source` 参数化 + 非交互默认 N）——MIG-012 时代"宿主无 .NET"不迁裁决翻案（门禁真身全为 dotnet run 后该约束失效，见 docs/design/script-migration-tasks.md 翻案记录）。③ `.gitattributes` 补 `.githooks/* eol=lf`（主仓与 .ai 双侧）——无扩展名 hook 此前被 `* eol=crlf` 兜住，新 clone 会 CRLF 化 hook 致 bash 死（*.sh 同型死法，存量隐患顺手修复）。④ 登记面同步：gate-audit manualTools 增 template-gate、verify-ai V2 名单全 .cs 化、跨仓契约版本 1→2（D13 双侧）。受跟踪文件脚本语言面：主仓与 .ai 全部零 .sh/.py/.mjs，唯余 3 行 × 3 的 hook 启动器与 CI step 引导语法（机制不可消除面）。
+- **包版本 `3.2.0` → `3.3.0`（SemVer Minor）**：公开 API 快照全量差异 1 行——为唯一的程序集版本引用行（`Version=3.2.0.0` → `Version=3.3.0.0`，位于 `Saga.IsTimedOut` 参数 `IReadOnlyList<SagaStep>` 的程序集限定名内），30 个程序集零类型/成员/签名增删改，本版无破坏性 API 变更。程序集标识随版本变化，强命名引用与绑定重定向需按 3.3.0 更新。
+
 - **Kafka 后台事件可观测（消费者可见的日志行为增强，无公共 API 变化）**：`KafkaBroker` 的 producer/consumer 构造接线官方示例标配三 handler（2026-10-08 全量 API 审计 P2 对齐）——`SetErrorHandler`（致命错误升 Error 携带 `KafkaException`；librdkafka 自愈类错误走 Warning）/ `SetLogHandler`（`SyslogLevel` ≤ Warning 走 Warning，Notice/Info/Debug 走 Debug）/ `SetStatisticsHandler`（Debug 门控，仅在 config 显式设 `StatisticsIntervalMs` 时回调，默认关闭）。此前 librdkafka 后台线程的错误/日志/统计结构性不可见。
 - **EF Outbox 两处 `FromSqlRaw` → `FromSql`（行为等价，注入面收窄）**：`MySqlOutboxDbContext.LeasePendingMessagesAsync` 回读与 `SqliteOutboxDbContext.GetPendingMessagesAsync`——`{N}` 位置占位符迁移为 FormattableString 插值孔（EF 逐孔生成 DbParameter），EF1002 豁免注记随迁移移除；`CrossStackPredicateParityTests` 的源码切片锚同步（归一化规则本就统一 `{N}`/`{name}` 两种形态，断言语义不变——迁移后 EF 与 PalORM 命名孔形态同构）。其余 5 处维持 `FromSqlRaw`：内联方言时钟表达式（`NOW()`/`SYSDATETIMEOFFSET()`/`UTC_TIMESTAMP()` 属 DB 时钟设计决策，FormattableString 形态无法参数化内联 SQL 文本），既有 EF1002 豁免注记在案。
-- **bench 项目分析器开启**：移除 `RunAnalyzersDuringBuild=false`（原值使 BDN 0.15.7+ 的 Roslyn 用法分析器——基准类结构/`[Params]`/单一 baseline 校验——失效）；开启当场命中 `SagaLaneBenchmarks.cs` 5 个全局命名空间类型（CA1050），按仓库惯例迁入 `PalDDD.Benchmarks` 命名空间（`Program.cs` 既有 `using` 即解析，零引用改动），ITM-810 时代的全局命名空间勘正注记随形态废止一并更新。
 
 ### Dependencies 依赖
 
@@ -33,8 +41,14 @@
 
 ### Tests 测试
 
+- **测试面板 16 项目 Release 全量实测（2026-10-08，本机）**：总计 1502 = 1434 通过 + 0 失败 + 68 跳过；68 项跳过全部为 Testcontainers 方言/消息面（本机 Docker 不可达时按 T-17 跳过策略执行，`release.yml` 发布流水线全量复跑为权威口径）。上版基线 1502（2026-09-25 实测，构成逐项一致）。
 - **FanOut 探针并发竞态修复（表征测试基础设施，非产品代码）**：`FanOutLaneSaga` 探针的 `ItemAttempts`/`ExecutedItems`/`CompensationLog` 为裸 `Dictionary`/`List`，而 `FanOutStep` 契约并行调用 executor（`Task.Run`+`WhenAll`）——面板负载下竞态丢写（`ItemAttempts` 丢 key → item2 误判首试再抛 → 多一轮整批重放 → `ExecutedItems` 4≠3），`PartialFailure_RetriesThenSucceeds` 于 2026-10-08 升位面板实证偶发红一次（隔离复跑 3 次不复现）。修复：三集合写入收敛到探针内锁，表征语义（整批重放 3 次执行断言）不变。产品代码 `FanOutStep` 自身经审查无同类问题（`errors` 已有锁、`results`/`completedFlags` 按索引隔离）。
 - **`PalDDD.Core.Tests` 移除冗余 `TUnit.FsCheck` 引用**：该项目 `PropertyTests.cs` 用纯 FsCheck 核心 API（`Prop.ForAll`+`QuickCheckThrowOnFailure`），`FsCheck` 直接引用已在位；`[FsCheckProperty]` 属性用法仅存在于 `Transactions.Tests`——集成包在该项目零使用（2026-10-08 全量 API 审计清理）。
+
+### 附录：工程过程明细（转正前 `[Unreleased]` 原料原文——内部叙事，非消费者变更摘要）
+
+- **工程脚本层全 C# 收口（git hooks 判定层迁移 + .ai 侧最后两个 .sh 退役）**：① `.githooks/pre-commit`（182 行 bash）全部逻辑迁 `scripts/hook-pre-commit.cs`（暂存集快照一次性内存匹配——原版 SIGPIPE 教训的形态性消解 + 触发条件 selftest 红绿矩阵）；`.githooks/pre-push`（42 行）迁 `scripts/hook-pre-push.cs`；钩子文件退化为 3 行 shell 启动器（git hook 机制要求 shell 引导，属机制下限）。② `.ai/scripts/template-gate.sh` 迁主仓 `scripts/template-gate.cs`（判定真源本就是 template-compile-probe 工程）；`install-ai-system.sh`（250 行）迁 `.ai/scripts/install-ai-system.cs` v3（`--source` 参数化 + 非交互默认 N）——MIG-012 时代"宿主无 .NET"不迁裁决翻案（门禁真身全为 dotnet run 后该约束失效，见 docs/design/script-migration-tasks.md 翻案记录）。③ `.gitattributes` 补 `.githooks/* eol=lf`（主仓与 .ai 双侧）——无扩展名 hook 此前被 `* eol=crlf` 兜住，新 clone 会 CRLF 化 hook 致 bash 死（*.sh 同型死法，存量隐患顺手修复）。④ 登记面同步：gate-audit manualTools 增 template-gate、verify-ai V2 名单全 .cs 化、跨仓契约版本 1→2（D13 双侧）。受跟踪文件脚本语言面：主仓与 .ai 全部零 .sh/.py/.mjs，唯余 3 行 × 3 的 hook 启动器与 CI step 引导语法（机制不可消除面）。
+- **bench 项目分析器开启**：移除 `RunAnalyzersDuringBuild=false`（原值使 BDN 0.15.7+ 的 Roslyn 用法分析器——基准类结构/`[Params]`/单一 baseline 校验——失效）；开启当场命中 `SagaLaneBenchmarks.cs` 5 个全局命名空间类型（CA1050），按仓库惯例迁入 `PalDDD.Benchmarks` 命名空间（`Program.cs` 既有 `using` 即解析，零引用改动），ITM-810 时代的全局命名空间勘正注记随形态废止一并更新。
 
 ---
 
