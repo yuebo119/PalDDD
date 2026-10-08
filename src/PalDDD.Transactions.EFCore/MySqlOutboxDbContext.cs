@@ -133,18 +133,15 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
 
         // 步骤 2：按精确租约标识 (owner, until) 回读——AsNoTracking 物化（v26 P3：Mark* 已是
         // FencedTarget + ExecuteUpdate 直写，无跟踪消费方，见 remarks）；
-        // {0}/{1} 为 FromSqlRaw 字面参数占位符（值全部参数化，无用户输入拼接——EF1002 豁免）
-#pragma warning disable EF1002
+        // FromSql 全参数化形态（2026-10-08 审计对齐：FromSqlRaw {N} 位置占位符 → FormattableString
+        // 插值孔，EF 逐孔生成 DbParameter，注入面收窄；本调用纯应用侧参数，无方言时钟内联需求）
         return await OutboxMessages
-            .FromSqlRaw(
-                """
+            .FromSql($"""
                 SELECT * FROM OutboxMessages
-                WHERE LockedBy = {0} AND LockedUntil = {1}
+                WHERE LockedBy = {owner} AND LockedUntil = {until}
                 ORDER BY CreatedAt
-                """,
-                owner, until)
+                """)
             .AsNoTracking()
             .ToListAsync(ct).ConfigureAwait(false);
-#pragma warning restore EF1002
     }
 }

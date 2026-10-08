@@ -6,7 +6,9 @@
     <!-- CA1031: verify-persist 的 catch Exception 是验证语义(任何异常=该项 FAIL 记录);
          CA1303:工具项目中文输出;DAP005:基座建表用 raw Dapper 调用未启用 DapperAot(工具非生产) -->
     <NoWarn>$(NoWarn);CA1034;CA1822;CA2007;CA1031;CA1303;DAP005</NoWarn>
-    <RunAnalyzersDuringBuild>false</RunAnalyzersDuringBuild>
+    <!-- RunAnalyzersDuringBuild=false 移除（2026-10-08 审计对齐）：原值使 BDN 0.15.7+ 的
+         Roslyn 用法分析器（基准类结构/[Params]/单一 baseline 校验）失效；NoWarn 清单已显式
+         豁免工具项目噪声，分析器保持开启吃 BDN 诊断面 -->
     <!-- Benchmarks 不需要 AOT -->
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>
