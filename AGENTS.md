@@ -24,6 +24,8 @@
 
 ### 提交时（`.githooks/pre-commit`，`core.hooksPath=.githooks`）
 
+> **判定层已 C# 化（2026-10-08）**：钩子文件是 3 行 shell 启动器（git hook 机制要求可执行文件由 shell 引导），全部编排逻辑在 `scripts/hook-pre-commit.cs`（触发条件判定 + 门禁序列）；pre-push 同构（`scripts/hook-pre-push.cs`）。
+
 > **钩子安装是自动的**：`core.hooksPath` 是 git 本地配置（不进版本库），新 clone 默认无钩子。
 > 根 `Directory.Build.targets` 的 `ConfigureGitHooks` 目标在**首次构建时**为本 clone 配置它
 > （仅在其未设置时写入，不覆盖开发者既有配置；非 git 环境跳过；CI 跳过——CI 不提交，且并发构建会争用 `.git/config` 锁）。故「clone 后构建一次」即获得全部本地守卫，

@@ -78,7 +78,8 @@ else
 // 脚本存在、V19 校验传感器台账路径、V25 校验命令形态）；**残余缺口是契约本身的版本**——
 // 当跨仓契约变化（.ai 文档需描述的脚本集/命令形态/账本结构改变）时，没有任何东西要求两侧同步。
 // 本项是 tripwire：两侧各声明一个契约版本号，不一致即红。存在性守卫同 D7（CI 无 .ai → PASS）。
-const int ExpectedCrossRepoContractVersion = 1;
+// v2（2026-10-08）：.ai 侧脚本全 C# 化（安装器/模板门禁/hook 入口 .sh → .cs + 钩子判定层迁移）。
+const int ExpectedCrossRepoContractVersion = 2;
 if (!File.Exists(readme))
 {
     Console.WriteLine($"{Green}PASS{Nc} D13 跨仓契约版本锚（无 .ai 独立仓，跳过）");
