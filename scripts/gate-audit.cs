@@ -134,6 +134,9 @@ var manualTools = new Dictionary<string, string>(StringComparer.Ordinal)
     ["sister-axis"] = "姊妹轴对称核查，评审辅助",
     ["verify-action-items"] = "按参数校验指定清单文件，按需运行",
     ["review-coverage-report"] = "沉寂面报告（2026-09-25 增，Pal 会话审计立法）：git 沉寂时长推导定向抽查池，发布前/大迁移收尾后人工运行并读数字——报告工具无「失败」语义，退出码恒 0",
+    // 2026-10-08 C# 化增补：hook-pre-commit/hook-pre-push 由 .githooks 启动器引用（接线扫描
+    // 识别为 WIRED，不进本表）；template-gate 无 .githooks/CI 引用点（.ai 侧文档引用不算接线），按设计人工按需。
+    ["template-gate"] = "AI 模板编译探针门禁（2026-10-08 自 .ai/scripts/template-gate.sh C# 化迁入；.pal/prompts 模板改动后人工运行——.ai 独立裁决不进 CI）",
 };
 
 // 应接线而未接线的（真缺口）——逐条登记原因与解锁条件
@@ -848,6 +851,12 @@ static void RunGit(string workingDir, string arguments)
 // 采用「名字出现即视为接线」的宽松口径——CI 的门禁循环用变量插值
 // （for g in encoding-gate doc-consistency ...）无法用字面路径匹配，
 // 收紧口径反而会漏判真实接线。
+// 2026-10-08 增补扫描源两个 hook 真身（scripts/hook-pre-*.cs）：hook 判定层迁入
+// scripts/ 后，.githooks 只剩 3 行启动器（仅引用 hook-pre-commit 一个名字）——
+// guard/verify-ai 等门禁的接线点变为 hook 真身的 RunGate 调用，不补扫它们会使
+// 这些门禁全部误落 REVIEW 桶（迁移当日实测）。口径限定 hook 真身两个文件而非
+// 全部 scripts/*.cs 互扫——脚本间任意提及算接线会污染 TOOL 桶（首版实测 40/40
+// 全 WIRED，manualTools 语义尽失）。
 static HashSet<string> CollectWiredNames(string repoRoot)
 {
     var names = new HashSet<string>(StringComparer.Ordinal);
@@ -858,6 +867,13 @@ static HashSet<string> CollectWiredNames(string repoRoot)
 
     var wfDir = Path.Combine(repoRoot, ".github", "workflows");
     if (Directory.Exists(wfDir)) files.AddRange(Directory.GetFiles(wfDir, "*.yml"));
+
+    var scriptsDir = Path.Combine(repoRoot, "scripts");
+    foreach (var hookReal in (string[])["hook-pre-commit.cs", "hook-pre-push.cs"])
+    {
+        var p = Path.Combine(scriptsDir, hookReal);
+        if (File.Exists(p)) files.Add(p);
+    }
 
     var scripts = Directory.GetFiles(Path.Combine(repoRoot, "scripts"), "*.cs")
         .Select(Path.GetFileNameWithoutExtension)
@@ -910,6 +926,15 @@ static bool AppearsAsExecutableInvocation(string text, string scriptName)
             && (line.Contains($"scripts/{scriptName}.cs", StringComparison.Ordinal)
                 || line.Contains($"scripts\\{scriptName}.cs", StringComparison.Ordinal)
                 || HasBareScriptRef(line, scriptName)))
+        {
+            return true;
+        }
+
+        // 形态④（2026-10-08）：C# 编排真身内的调用参数——RunGate("scripts/<name>.cs", …)。
+        // hook 判定层迁入 scripts/hook-pre-commit.cs 后，门禁接线点从 bash 的
+        // `dotnet run scripts/x.cs` 变为该形态；引号+左括号边界，注释行已剥除不误配。
+        if (line.Contains($"(\"scripts/{scriptName}.cs\"", StringComparison.Ordinal)
+            || line.Contains($"(\"scripts\\{scriptName}.cs\"", StringComparison.Ordinal))
         {
             return true;
         }

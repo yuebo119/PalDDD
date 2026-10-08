@@ -238,4 +238,4 @@
 ### [x] MIG-012-B 批：评审工具 11 件（fix-orchestrator/review-scope/review-gate/fix-completeness/sister-axis/probe-template + 双镜像合一×3 + flaky/sibling 扩展）
 ### [x] MIG-012-C 批：CI/发版 5 件（ci-coverage/check-all/gate-lite/changelog-check/changelog-facts）
 ### [x] MIG-012-D 收口：统一删 .sh + engine.md(9处)/prompt/ci.yml 引用同步 + V2/V16 名单 + E1 退役评估
-### 不迁：install-ai-system（真死锁：非 .NET 宿主）+ template-gate（已是单行 dotnet run）+ ci.yml run 语法骨架
+### ~~不迁：install-ai-system（真死锁：非 .NET 宿主）+ template-gate（已是单行 dotnet run）~~ → **2026-10-08 翻案收口**：install-ai-system 的"宿主无 .NET"死锁论证已随 MIG-012 失效（机械门禁真身全为 dotnet run 的 .cs，安装后必然需要 .NET SDK，安装时使用不构成新增约束）——迁 `.ai/scripts/install-ai-system.cs`（v3，--source 参数化）；template-gate 迁主仓 `scripts/template-gate.cs`；同批迁移三处 git hook 判定层（.githooks/pre-commit 182 行 → scripts/hook-pre-commit.cs、pre-push 42 行 → hook-pre-push.cs、.ai/.githooks/pre-commit → .ai/scripts/hook-pre-commit.cs），钩子文件退化为 3 行 shell 启动器（git hook 机制要求可执行文件由 shell 引导，dotnet 无法直接充当——启动器是机制下限而非逻辑残留）。ci.yml run 语法骨架维持不迁（GitHub Actions 的 step 引导语法）。跨仓契约随升 v2（D13）。
