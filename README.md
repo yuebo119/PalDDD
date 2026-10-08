@@ -43,7 +43,7 @@ Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox
 
 ## 特性
 
-**DDD 战术模式完整落地**。Entity / AggregateRoot / DomainEvent / ValueObject / SmartEnum / Specification / Saga / EventLog / Projection 全覆盖，且无过度抽象。DbContext *是* 工作单元+仓储，DomainEvent *是* 集成事件，`AddPalCommandHandler<T>` 替代装配扫描：框架消除重复，不增加间接层。
+**DDD 战术模式完整落地**。Entity / AggregateRoot / DomainEvent / ValueObject / SmartEnum / Specification / Saga / EventLog / Projection 全覆盖，且无过度抽象。DbContext *是* 工作单元+仓储，DomainEvent *是* 集成事件，`AddPalCommandHandler<T>` 替代装配扫描：框架消除重复，不增加间接层。验证走结果式 `IPalValidator` + `PalValidationResult`（非异常流），与 HTTP 请求验证分层分工（见[使用指南](docs/usage.md)）。
 
 **AOT 是一等公民**。核心层 `IsAotCompatible=true` 强制执行；PalORM 通过源生成器在编译期生成 RowFactory/CommandFactory，实现完整链路 Native AOT（`PublishAot=true` 验证通过）；EF Core、Kafka、RabbitMQ 等非 AOT 安全依赖隔离在显式声明 `IsAotCompatible=false` 的适配器项目中（见 [AOT 兼容性](#aot-兼容性)）。AOT 不是附加功能，它是启动延迟、内存占用和部署安全性的架构决策。
 
@@ -51,18 +51,36 @@ Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox
 
 **租约锁并发 Outbox**。消息行在数据库事务内原子写入，`(LockedBy, LockedUntil)` 行级租约 + token fencing 支撑多实例并发发布：旧 worker 租约失效后其 UPDATE 因 token 不匹配被拒绝，零丢失零重复，无需分布式锁。死信队列 + 操作重注入，指数退避重试。
 
+**消费侧幂等链**。Inbox 以 `(ConsumerName, MessageId)` 复合唯一约束 + 四态生命周期防重复消费；Idempotency 提供 `(OperationName, Key)` 幂等执行：Executed/Cached/Skipped 三态 + 结果 payload 缓存，Revision CAS 令牌防 Completed 翻转后副作用重执行。
+
+**Saga 编排全覆盖**。显式状态机 + None/Backward/Forward 三种补偿策略（范围与顺序以执行序 `ExecutedStepKeys` 为准），超时检测后台扫描（含 `AwaitingHumanDecision` 中断态兜底扫描），人工审批中断+恢复，FanOut 并行子任务，ChildSaga 子流程编排（反射限制在 AOT 边界诚实声明）。
+
 **零分配热路径**。ref struct 单链表事件枚举器（foreach 零分配）、FrozenDictionary 路由查找、ValueTask + `IsCompletedSuccessfully` 同步完成零堆分配。零分配不是注释声称：AllocationContractTests 用 `GC.GetAllocatedBytesForCurrentThread` 在运行时断言预算（追加单事件 ≤130B/iter，实测 ~120B）。
 
+**消息版本演化与启动期契约验证**。`MessageEvolutionBuilder` 构建相邻版本逐步升级管线（消费侧显式执行），`AddPalMessageContractVerification` 在启动期校验升级路径完整性（链不完整拒绝启动，抛 `PalPlatformVerificationException`）。序列化可插拔：JSON（AOT 安全，默认）与 MemoryPack（更快，适配层非 AOT）。
+
+**可插拔压缩**。`ICompressionProvider` / `ICompressor` 抽象带两套实现：System 内置压缩与原生 LZ4/ZStandard 绑定（`PalDDD.Compression.Native`，AOT 安全），经 DI 替换。
+
 **内建可观测性**。`PalActivitySource`（11 个 Start 方法）+ `PalMetrics`（23 个遥测 instrument）预埋在关键路径，OpenTelemetry 配置只需引用 Source 即得全量遥测（命令分发/Saga 转换 Activity 为预留，尚未接线）。
+
+**三栈持久化，按场景选型**。PalORM（真 AOT，源生成 SQL）/ Dapper（调用点级 AOT，手写 SQL）/ EF Core（Migration/LINQ/ChangeTracker 生态）平等共存、无废弃计划；五组 Store 能力三栈全量覆盖、行为由跨栈对照测试守护（[ADR-020](docs/decisions/020-persistence-stack-retirement-roadmap.md)、[ADR-024](docs/decisions/024-mysql-lease-mutex-divergence-accept.md)）；支持环境事务与显式事务边界。
+
+**数据库方言深度适配**。PostgreSQL 读写分离 + 多主机故障转移、COPY 批量写入、Pipeline 单往返、LISTEN/NOTIFY 推送、一致性哈希分片、JSONB 操作符；MySQL 多主机负载均衡（FailOver/RoundRobin/LeastConnections）与 InnoDB 会话调优；SQLite WAL/FTS5/JSON1。连接串错误在注册期 fail-fast（IPv6 四象限、内嵌端口、主机列表校验），不延迟到建连。多租户过滤（`[TenantAware]`）由 PalORM 引擎提供（见[适配层文档](docs/palorm-adapter.md)）。
+
+**全链路 InMemory 测试与托管集成**。六类 Store 均有 InMemory 实现，消息 Broker 缺省 `NullMessageBroker`，单元测试零外部依赖（`PalDDD.Testing` 提供测试基元）；ASP.NET Core 集成提供 `MapCommand`/`MapQuery` Minimal API 端点映射、`UsePalExceptionHandler` 全局异常中间件、`AddPalHealthChecks` 健康检查与 `AddPalLogging` 日志集成。
 
 ## 与现有方案的差异
 
 | 方案 | 定位 | Pal.DDD 的增量 |
 |------|------|:---------------|
-| **MediatR** | 进程内命令/查询分发 | 增加 Outbox、Inbox、Saga、EventLog、Projection。分发是起点，不是终点。 |
-| **MassTransit / NServiceBus** | 分布式消息总线 | 不绑定特定传输。Outbox 通过 `IMessageBroker` 抽象适配任意 Broker。消息所有权在应用侧。 |
-| **EventStoreDB / Marten** | 事件存储 | 提供 `IEventLog` 抽象，存储层可替换为 Dapper 或 EF Core 实现。不锁定供应商。 |
+| **MediatR** | 进程内命令/查询分发 | 增加 Outbox、Inbox、Saga、EventLog、Projection、幂等执行。分发是起点，不是终点。Handler 注册用 `AddPalCommandHandler<T>` 编译期类型常量，无装配扫描；同步完成路径零堆分配。 |
+| **MassTransit / NServiceBus** | 分布式消息总线 | 不绑定特定传输。Outbox 通过 `IMessageBroker` 抽象适配任意 Broker，持久化三栈（PalORM/Dapper/EF Core）可替换。消息所有权在应用侧。 |
+| **EventStoreDB / Marten** | 事件存储 | 提供 `IEventLog` 抽象，存储层可替换为 PalORM、Dapper 或 EF Core 实现，带乐观并发与全局递增 Position。不锁定供应商。 |
+| **ABP Framework** | 全栈 DDD 应用框架（模块系统、分层模板、权限、预建 UI 约定） | Pal.DDD 只做基础设施原语：无强制基类、无目录约定、无模块系统，业务代码保持纯 C#；按包渐进引入，与既有 Service 层共存。 |
+| **dotnetcore/CAP** | 分布式事件总线 + 本地消息表（Outbox 消息可达） | 在消息可达之上补齐战术层：聚合根/领域事件、Saga 补偿编排、EventLog、Projection 断点续传、编译期治理与 AOT 链路。 |
 | **手写 DDD** | 完全定制 | 消除每个项目中 Entity、DomainEvent、Dispatcher、Outbox、Saga 的重复实现。基础设施不应成为差异化代码。 |
+
+框架边界：只提供 DDD/CQRS/Event Sourcing 基础设施原语，不接管应用框架职责（模块系统、权限体系、UI 约定一概不做），应用层组合方式完全由宿主决定。
 
 ## 安装
 
@@ -225,6 +243,8 @@ services.AddPalInbox();  // (ConsumerName, MessageId) 复合唯一约束
 ### Saga：显式状态机 + 补偿编排 + 超时检测
 
 > ⚠️ **Dapper 持久化快照必传**：`DapperSagaStateStore<TState>` 未注册 source-generated `JsonTypeInfo<TState>` 时 `SaveChangesAsync` 会 fail-fast 抛异常（此前版本静默把业务字段写 NULL，数据丢失缺陷已收口）。注册：`services.AddPalDapperSagaSnapshot(jsonTypeInfo)`。详见 [usage.md](docs/usage.md)。
+>
+> 三栈快照注册口径：PalORM 栈同语义便捷注册 `AddPalOrmSqliteSagaSnapshot<TState>` / `AddPalOrmPostgreSqlSagaSnapshot<TState>` / `AddPalOrmMySqlSagaSnapshot<TState>`（未注册同样 fail-fast）；EF Core 栈用 `AddPalSagaStateEfCore`。三栈配置详见 [usage.md](docs/usage.md)。
 
 ```csharp
 public sealed class OrderSaga : Saga<OrderSagaState>
@@ -475,7 +495,11 @@ flowchart TB
     Transactions --> PalORM["PalORM（真 AOT）"]
     EventLog --> PalORM
     Projections --> PalORM
+    Idempotency --> PalORM
     Transactions --> Dapper["Dapper（能力平等栈）"]
+    EventLog --> Dapper
+    Projections --> Dapper
+    Idempotency --> Dapper
     PalORM --> PG[PostgreSql]
     PalORM --> MySQL
     PalORM --> SQLite
