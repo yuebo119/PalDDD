@@ -25,3 +25,8 @@
 # 即死，2026-08-20 CI 自诊断注解实锤"set: pipefail: invalid option name"）
 *.sh text eol=lf
 *.py text eol=lf
+
+# git hooks 强制 LF（2026-10-08 增）：hooks 无扩展名，被上方 `* text=auto eol=crlf`
+# 兜住——新 clone 会把 hook checkout 成 CRLF，bash 在 CRLF 下死（同 *.sh 死法）。
+# 本机老 checkout 未复现，新 clone 必现；hook C# 化时一并钉住。
+.githooks/* text eol=lf

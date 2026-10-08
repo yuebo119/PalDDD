@@ -17,7 +17,12 @@
 #pragma warning disable CA1303 // 诊断输出为 CI 控制台英文关键字（FAIL/WARN/SUMMARY 被 bash grep 消费），字面量必要
 
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
+
+// Windows 控制台默认编码非 UTF-8，中文段（环境性提示等）经管道重定向会乱码——
+// 对齐 verify-ai.cs 等脚本惯例（2026-10-08 全面运行轮补齐）
+Console.OutputEncoding = Encoding.UTF8;
 
 var args2 = args.ToList();
 if (args2.Count == 2 && args2[0] == "--gen-selftest")
