@@ -383,11 +383,25 @@ if (fail == 0)
     foreach (var csproj in csprojs)
     {
         Console.WriteLine($"  测试: {csproj}");
-        var (rc, _) = RunCapture("dotnet", $"test {csproj} --no-restore --no-build", rootDir);
+        var (rc, output) = RunCapture("dotnet", $"test {csproj} --no-restore --no-build", rootDir);
         if (rc != 0)
         {
-            Console.WriteLine($"❌ {csproj} 测试失败");
-            testFail = 1;
+            // MTP 退出码 8 = 零测试运行（2026-10-08 修复）：全部用例被 Skip 时（如 broker
+            // 面板项目在无 broker 本机 8/8 Skip），MTP 以退出码 8 结束而非 0——原版按
+            // rc!=0 一律判失败，使全量模式在无 Docker/broker 环境恒红（Messaging.Integration
+            // 实测）。「零测试运行 + 失败: 0」双判据 = 环境性全跳过（环境失败≠代码失败，
+            // T-DDD-6 ①口径；CI 有服务端时该批用例真跑）。计数断言兜底：真失败不会被
+            // 误判为跳过。文案匹配为 MTP 中文输出——本脚本全量模式仅本地使用（CI 恒 --quick）。
+            if (rc == 8 && output.Contains("运行了零个测试", StringComparison.Ordinal)
+                && Regex.IsMatch(output, @"失败:\s*0"))
+            {
+                Console.WriteLine($"  ⏭ {csproj} 全部用例环境性跳过（零运行，退出码 8）——CI 有服务端时真跑");
+            }
+            else
+            {
+                Console.WriteLine($"❌ {csproj} 测试失败");
+                testFail = 1;
+            }
         }
     }
     if (testFail == 0) Console.WriteLine($"✅ dotnet test 零失败（全部测试项目逐个执行）");
