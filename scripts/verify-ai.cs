@@ -92,7 +92,8 @@ var warned = 0; // WARN 级（V29 督办）：计入显示不计入失败——�
 }
 
 // ─── V2 提示词引用的权威文档与脚本存在 ───
-// MIG-012-D 收口（2026-09-11）：.sh 全删后名单改为 .cs file-based app + 永久保留的两 .sh。
+// MIG-012-D 收口（2026-09-11）：.sh 全删后名单改为 .cs file-based app。
+// 2026-10-08 C# 化收口：.ai 侧最后两个 .sh（安装器/模板门禁）亦迁 C#，名单全 .cs 化。
 {
     var missing = MissingList([
         "docs/conventions.md", "docs/architecture.md", "docs/pitfalls.md", "docs/testing.md",
@@ -105,7 +106,8 @@ var warned = 0; // WARN 级（V29 督办）：计入显示不计入失败——�
         "scripts/verify-action-items.cs", "scripts/review-snapshot.cs", "scripts/refine-scan.cs",
         "scripts/changelog-check.cs", "scripts/changelog-facts.cs", "scripts/check-all.cs",
         "scripts/ci-coverage.cs", "scripts/ci-failed-tests.cs", "scripts/vuln-scan.cs",
-        ".ai/scripts/install-ai-system.sh", ".ai/scripts/template-gate.sh",
+        "scripts/hook-pre-commit.cs", "scripts/hook-pre-push.cs", "scripts/template-gate.cs",
+        ".ai/scripts/hook-pre-commit.cs", ".ai/scripts/install-ai-system.cs",
     ]);
     if (missing.Length == 0) { passed++; lines.Add("PASS V2: 提示词引用的文档与脚本全部存在"); }
     else { failed++; lines.Add($"FAIL V2: 被引用文件缺失（{missing}）"); }
