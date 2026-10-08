@@ -157,6 +157,10 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
                     hasExplicitName,
                     locationInfo);
             })
+            // O27（2026-10-08）：增量管道的 transform 输出节点默认 ReferenceEqualityComparer，
+            // MessageInfo 的 LocationInfo 值等值范式不会被自动采用——显式声明值比较器
+            // 启用按值命中（形态对齐 PalORM PalORMGenerator v5.0 实测）。
+            .WithComparer(EqualityComparer<MessageInfo>.Default)
             .WithTrackingName("MessageRegistryGenerator_Candidates");
 
         context.RegisterSourceOutput(candidates.Collect(), static (spc, messages) =>
