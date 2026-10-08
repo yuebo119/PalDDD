@@ -17,11 +17,17 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- SMP-104：移除 PalDDD.CQRS / Serialization / Messaging 三个零使用引用——
-         基准代码（FrameworkBenchmarks/InfraBenchmarks/Program）经 grep 确认无任何
-         上述三命名空间的 using 或全限定引用；Outbox 基准用的 OutboxMessage/InMemoryOutboxStore
-         （InMemoryInboxStore 实际零引用——ITM-286 勘正） -->
+    <!-- SMP-104 原注释（移除零使用引用）2026-10-08 部分翻案：CQRS/Serialization/
+         DependencyInjection 随 app 车道（DispatcherBenchmarks/SerializationBenchmarks，
+         入口参数见 Program.cs）恢复引用——恢复时点三者均真实使用（grep using 可证）；
+         Messaging 仍零使用保持移除。
+         Outbox 基准用的 OutboxMessage/InMemoryOutboxStore（InMemoryInboxStore 实际零引用——ITM-286 勘正） -->
     <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.CQRS\PalDDD.CQRS.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.DependencyInjection\PalDDD.DependencyInjection.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Serialization\PalDDD.Serialization.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Compression\PalDDD.Compression.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Compression.Native\PalDDD.Compression.Native.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.EventLog\PalDDD.EventLog.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Dapper\PalDDD.Dapper.csproj" />
@@ -33,7 +39,6 @@
     <ProjectReference Include="..\..\src\PalDDD.Idempotency.EFCore\PalDDD.Idempotency.EFCore.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Dapper.PostgreSql\PalDDD.Dapper.PostgreSql.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Dapper.Sqlite\PalDDD.Dapper.Sqlite.csproj" />
-    <ProjectReference Include="..\..\src\PalDDD.Compression\PalDDD.Compression.csproj" />
   </ItemGroup>
 
   <ItemGroup>
