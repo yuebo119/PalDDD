@@ -59,7 +59,7 @@ namespace PalDDD.Dapper;
 /// ⚠️ <b>连接生命周期</b>：<paramref name="connection"/> 由 DI 容器管理（通常为 Scoped），
 /// 调用方不应调用 <c>Close()</c>/<c>Dispose()</c>。EnsureOpen/EnsureOpenAsync 仅确保连接状态，不拥有连接所有权。
 /// </remarks>
-public sealed class DapperOutboxStore : IPalOutboxStore
+public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxStore
 {
     private readonly DbConnection _connection;
     private readonly DapperDbType _dbType;

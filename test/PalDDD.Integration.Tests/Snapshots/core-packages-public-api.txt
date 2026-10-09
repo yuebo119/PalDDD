@@ -1325,6 +1325,8 @@ class PalDDD.Transactions.FanOutStep<TItem, TResult>
 class PalDDD.Transactions.FixedBackoffPolicy
   ctor(System.TimeSpan delay)
   method System.TimeSpan ComputeDelay(System.Int32 attempt)
+interface PalDDD.Transactions.IImmediateWriteOutboxStore
+  method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages)
 interface PalDDD.Transactions.IInboxStore
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Transactions.InboxMessage message, System.String failureReason, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.InboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)

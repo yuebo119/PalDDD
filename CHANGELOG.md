@@ -12,7 +12,11 @@
 
 ## [Unreleased]
 
+### Added
+- **`PalDDD.Transactions.IImmediateWriteOutboxStore`（公共接口新增，向后兼容）**：立即写 Outbox store 的强化契约——声明 `AddMessagesAsync` 的全部写入在调用内立即完成（对 store 自身连接/事务），不依赖也不触发调用方的 SaveChanges。`DapperOutboxStore` / `InMemoryOutboxStore` / `PalOrmOutboxStore<TProvider>` 已实现（既有公共方法同时满足两接口，零新增成员）；EF 栈 `OutboxDbContext` 刻意不实现（其写入延迟到上下文 SaveChanges，且 `AddMessagesAsync` 内嵌自持 SaveChangesAsync）。公共 API 快照 +2 行。
+
 ### Changed
+- **Outbox 拦截器异步路径对立即写 store 批量化（消费者可见的执行形态变化）**：`OutboxDomainEventInterceptor.SavingChangesAsync` 对 `IImmediateWriteOutboxStore` 分派单次 `AddMessagesAsync` 批量写入——多事件保存从 k 次单条合并为 1 次批量（PG 单 COPY 往返，收益量级见 `docs/performance.md` AddBatch5 基准 3.5×/3.8×），并消除原逐条同步写在远程库上对异步调用线程的往返级阻塞（PG ~609μs/条/线程）。EF store 组合与同步 `SaveChanges()` 钩子维持逐条路径原语义；写入行内容与事务边界不变；失败清理镜像既有 v34 P2 自清理域。
 - **EventLog 单事件 Any 版本追加在 PG 上改单语句原子形态（行为等价的性能变更，仅 PostgreSQL）**：`DapperEventLog.AppendAsync` 在单事件 + `ExpectedStreamVersion.Any` + PostgreSQL 时改走 `INSERT..SELECT` 单语句——服务端原子计算 `MAX(stream_version)+1` 并 `RETURNING` 取回位置与版本（原路径 MAX 预查 + INSERT 两次往返），同步消除该子路径的检查-写入竞态窗口。实测 PG 写路径 -15%（968→820μs）；MySQL/SQLite 维持原路径（实测无收益/反向劣化，方言门控依据见 `DapperEventLog` 快路径注释）。并发冲突的异常语义不变（版本位竞争转 `EventStreamConcurrencyException`、EventId 重复原样上抛）。
 - **Outbox 单条插入执行层去 Dapper 化（内部变更，无公共 API 变化）**：`DapperOutboxStore.AddMessage` 改原生 ADO 命令直发（参数值与方言转换与原 DynamicParameters 形态一致，SQL 不变）——单条插入分配 -19.7%（10.53→8.46KB/op）、SQLite 计时 -12~17%。
 - **MySQL 小批量批量写入改参数化多行 VALUES（部署要求放宽，消费者可见）**：`DapperOutboxStore.AddMessagesAsync`（经 `DapperBulkCopy`）在 ≤16 行时改走单语句参数化多行 VALUES 插入——此前小批量与大批量统一走 MySqlBulkCopy（LOAD DATA LOCAL INFILE），被迫要求连接串 `AllowLoadLocalInfile=True` + 服务端 `local_infile=1`；该要求现仅约束 >16 行的大批量路径。真库 MySQL 8.4.11 实测 k=5 批量写入从 5×单条耗时降为 3.8×（2,072μs vs 7,969μs）；行数守卫与既有 LOAD DATA 路径对齐（非全量写入显式抛错）。

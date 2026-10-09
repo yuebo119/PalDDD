@@ -21,7 +21,7 @@ namespace PalDDD.Transactions;
 /// 测试中可传入 <c>FakeTimeProvider</c> 实现确定性租约过期/重试时序，
 /// 与 <c>OutboxBatchProcessor</c>、<c>SagaTimeoutProcessor</c>、<c>OutboxDbContext.GetUtcNow()</c> 的时间抽象设计对齐。
 /// </remarks>
-public sealed class InMemoryOutboxStore : IPalOutboxStore
+public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutboxStore
 {
     private readonly Lock _lock = new();
     private readonly List<OutboxMessage> _messages = [];
