@@ -127,6 +127,19 @@ Inbox 口径注：三方法为 1-op / 3-op / 2-op 捆绑（重复拒绝必然含
 > **MySQL Dapper 栈 N≥2 全部 InnoDB 死锁**（`Deadlock found when trying to get lock`，3 处实录）：根因是 ADR-024 显式接受的「Dapper/PalORM MySQL 租约无锁子句 last-writer-wins」——ADR 记录的风险形态是重复投递窗口，**死锁异常是其并发后果的新实证（ADR 未记录过）**，是否补记 ADR/登记缺陷属用户裁决面，本账本只实录不改动。多实例 MySQL Dapper/PalORM 部署的实际可用性由此存疑（需消费方幂等之外再加死锁重试），EF 栈 SKIP LOCKED 形态见 ADR-024 指引。
 > **SQLite 25× busy 平台期**（见上文并发车道注）。零重复不变量在 PG 全部 wave 成立；MySQL 串行 wave 成立、并发 wave 死锁异常先于守卫触发。
 
+PalORM 栈（2026-10-08 ⑦ 残余补齐，PG/MySQL 同 wslc 路径）：
+
+| 基准 | PG | MySQL |
+|---|---:|---:|
+| Outbox_GetPending_Batch100 | 16.485 ms（Error 1.4% ✓） | 744.8 μs（Error 6.6% 环境敏感带） |
+| Outbox_Lease_Batch100（含重灌 100） | 113.265 ms（Error 2% ✓） | 520.898 ms（Error 2.4% ✓） |
+| Drain_Sequential | 45.245 ms（Error 19.8% ⚠趋势） | 90.150 ms（Error 4.5% ✓） |
+| Drain_4Workers | 22.521 ms（Error 6%，**加速 2.0×**） | **NA：InnoDB 死锁** |
+| Drain_8Workers | 23.788 ms（Error 5.1%，加速 1.9×） | **NA：InnoDB 死锁** |
+| SeedOnly_800 | 9.255 ms（Error 2.9% ✓） | 18.123 ms（Error 13.2% 环境敏感带） |
+
+> PalORM 栈注：① **PG 真并行成立**（4W/8W 稳定 ~2×，不变量全 wave 通过）——与 Dapper PG 互相印证 SKIP LOCKED 形态。② **MySQL PalORM 与 Dapper 同形态死锁**（N≥2 全 NA）——ADR-024「Dapper/PalORM 双栈无锁子句」的并发后果在两栈双双实证，裁决面证据完整。③ 吞吐量级显著慢于 Dapper（GetPending 16.5ms vs 665μs）——PalORM 会话/源生成路径的每次操作开销更高，属栈间真实差异（编译期 SQL 换运行时开销的取舍面），单机 SQLite 车道的「PalORM 2.465ms vs Dapper 2.919ms 反超」结论**不外推**到网络库。④ **形态实录**：`DataSession<T>` 单活跃操作限制（非线程安全）——共享单会话多 worker 并发抛「already has an active database operation」，多实例形态 = 每实例独立会话（本车道实现形态，亦是部署结论）。
+
 Infra（`--infra`，全 InMemory fixture）：
 
 | 基准 | Mean | Error | Allocated |
@@ -196,7 +209,7 @@ Infra（`--infra`，全 InMemory fixture）：
 1. ~~等 BenchmarkDotNet 支持当前 .NET 11 后用默认入口重新生成全部 benchmark 类结果~~（2026-10-08 大部分消解：17 类经 InProcess 显式模式全部可出正式报告；残余 = 默认 Switcher 入口与类级 job 注解的恢复，待 BDN 上游补 net11 moniker 或 .NET 11 GA 后实测，见 `docs/migration/net11-ga-upgrade-plan.md` 步骤 3）。
 2. SmartEnum.FromValue/TryFromValue 两项 Error/Mean >15%（ns 级固有抖动）：如需正式引用其计时，提升配置（严格档 5/10/15）复测；当前以零分配事实为准。
 3. 保留 `--smoke` 作为秒级趋势检查 + 分配预算判定（2026-10-08 起带断言）；计时为单轮无统计效力，不替代正式报告。
-4. **特性面缺口登记（2026-10-08 缺口补齐轮盘点，防「27 类全覆盖」被误读为特性面全覆盖）**：~~① Outbox 并发车道~~（落地）；~~② Inbox 编排层~~（落地）；~~③ Projection 吞吐~~（落地，`--coverage`）；~~④ 消息演化管线~~（落地）；~~⑤ Specification 内存路径~~（落地，零分配 ~1.7ns 实证）；~~⑥ Hosting 每请求开销~~（落地）；~~⑧ 端到端单命令链路~~（落地 InMemory 框架开销层口径——真库端到端含 DB I/O 由各持久化车道分面覆盖，全链路真库形态仍可后续扩展）；⑦ PG/MySQL 车道首轮真跑完成（Dapper 栈，多实例租约三形态见 PG/MySQL 真库基线段；PG 并发组 Error >15% 点值待严格档复测、8W 回落形态待复测）——**残余仅剩⑦**：PG/MySQL 上 PalORM/EFCore 栈扩展（现仅 Dapper；EF MySQL 栈的 SKIP LOCKED 并发形态是 ADR-024 指引的验证缺口，建议随死锁实证的裁决一并处理）与方言特性车道（COPY 批量已隐含在 AddMessagesAsync 种子路径，Pipeline 批处理/LISTEN-NOTIFY 推送/读写分离路由仍无专项）。
+4. **特性面缺口登记（2026-10-08 缺口补齐轮盘点，防「28 类全覆盖」被误读为特性面全覆盖）**：~~① Outbox 并发车道~~（落地）；~~② Inbox 编排层~~（落地）；~~③ Projection 吞吐~~（落地，`--coverage`）；~~④ 消息演化管线~~（落地）；~~⑤ Specification 内存路径~~（落地，零分配 ~1.7ns 实证）；~~⑥ Hosting 每请求开销~~（落地）；~~⑧ 端到端单命令链路~~（落地 InMemory 框架开销层口径——真库端到端含 DB I/O 由各持久化车道分面覆盖）；⑦ Dapper+PalORM 两栈 PG/MySQL 真跑完成（多实例租约三形态 + PalORM 会话非线程安全 + MySQL 双栈死锁实证，见 PG/MySQL 真库基线段）——**残余两项**：① EF 栈 PG/MySQL 车道：EF 方言驱动是消费侧自带（src 仅引用 provider 无关 Relational），bench 补车道须恢复中央包死条目（Npgsql.EF/Pomelo）并过 license-policy 许可门；EF MySQL SKIP LOCKED 是 ADR-024 指引的验证缺口，建议随死锁裁决同批处理；② 方言特性车道：COPY 批量已隐含在 AddMessagesAsync 种子路径，Pipeline 批处理/LISTEN-NOTIFY 推送/读写分离路由仍无专项（需 PG 容器 + 异步形态设计）。另：PG Dapper 并发组 Error >15% 点值待严格档复测、8W 回落形态待复测。
 
 ## 发布判断
 
