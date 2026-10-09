@@ -271,6 +271,45 @@ Infra（`--infra`，全 InMemory fixture）：
 
 复跑环境实录两则（容器环境态，非基准缺陷）：① MySQL 就绪探针竞态——`mysqladmin ping` 不校验凭据，首启 init 窗口内即回 alive，随后认证 SQL 报 Access denied（`&&` 链断在基准启动前）；探针必须带认证（`mysql -uroot -p… -e "SELECT 1"`）。② wslc rabbit 容器偶发首启即死（WSLC_E_CONTAINER_NOT_RUNNING，重起即好）；RABBITMQ_DEFAULT_USER/PASSWORD env 凭据未生效坑再次复现（用户已建但 authenticate_user 报 invalid credentials，change_password 显式重置后 Success）。
 
+## 优化轮（2026-10-09 深夜）：C5/C6/C2' 三项落地 + 旋钮实验三组
+
+> 前置：全模式复跑（上节）定位的靶点经探针核实后实施。探针裁决四条：处理器轮询已是单跳原子租约（无合并空间）；EF 租约路径已是 FromSqlRaw + AsNoTracking + FencedTarget ExecuteUpdate 形态（无 ExecuteUpdate 化空间）；序列化器已有 ThreadStatic writer/buffer 池（buffer 池化无空间）；拦截器多事件批化评估后**缓做**（EF store 的 `AddMessagesAsync` 内嵌 `SaveChangesAsync`，SavingChanges 相位调用构成 EF 重入陷阱，且 k=1 主路径零收益——登记 v4.0 契约窗口候选），Dispatcher scope 免除需新增公共 API 且收益 ~50ns（不做）。实施三项：C5 分发快路径 / C6 压缩缓冲池化 / C2' MySQL 小批量 VALUES 单往返。每项验证三段：改后同轮 A/B → **S3 反向验证**（stash 回 HEAD 同晚重跑，全部列逐字节退回基线——机器漂移排除，因子归因闭合）。
+
+C5 零行为分发快路径（`Dispatcher.ExecutePipelineAsync`：空管道直呼 handler，省状态机实例与 ExecuteNextAsync 方法组委托两笔分配；语义与状态机空路径逐字一致）：
+
+| 基准 | 改前（S3-HEAD 同晚） | 改后 | 差 |
+|---|---:|---:|---|
+| SendAsync_NoBehavior | 171.8 ns / 216 B | 159.4 ns / **160 B** | 计时 -7% / 分配 -26% |
+| SendAsync_OneBehavior（对照组） | 250.6 ns / 432 B | 229.3 ns / 432 B | 分配逐字节不变 |
+
+> MediatR 对照组同轮不变——零行为分配 160 B 已低于 MediatR 12.5.0 同口径的 224 B（裸分发计时仍 MediatR 快 ~40%，引用口径不变：MediatR 无基础设施层）。`--compare` 同轮四点：零行为 168.4 ns/160 B vs 117.6 ns/224 B；单行为 249.9/432 vs 211.1/528。连带：`--qps` dispatch 8 线程 28.3M→38.6M ops/s（跨晚口径，趋势级）。
+
+C6 压缩缓冲池化（LZ4/ZStandard：Compress scratch 改 `ArrayPool` 租借、Decompress 增长缓冲改共用 ThreadStatic 槽——镜像 JsonMessageSerializer 池先例含峰值驻留权衡；v13 裁剪拷贝决策保留，返回值仍为精确尺寸独立数组）：
+
+| 基准（16KB 负载） | 改前（S3-HEAD 同晚） | 改后 | 差 |
+|---|---:|---:|---|
+| LZ4_Compress | 5.98 μs / 16,816 B | 5.49 μs / **376 B** | 分配 -97.8% |
+| ZStandard_Compress | 6.53 μs / 16,832 B | 5.90 μs / **304 B** | 分配 -98.2% |
+| LZ4_Decompress | 2.31 μs / 45,232 B | 1.52 μs / **16,488 B** | 分配 -64% / 计时 -34% |
+| ZStandard_Decompress | 3.56 μs / 45,232 B | 2.30 μs / **16,488 B** | 分配 -64% / 计时 -35% |
+| Brotli 两项（对照组，不在改动面） | 25.6 μs/304 B、13.8 μs/45,185 B | 同值 | 逐字节不变 |
+
+C2' MySQL 小批量 VALUES 单往返（`DapperBulkCopy`：≤16 行路由参数化多行 VALUES 单语句，>16 行维持 MySqlBulkCopy/LOAD DATA；小批量不再要求 `AllowLoadLocalInfile`——部署要求放宽，消费方可见变更见 CHANGELOG；值转换镜像 ConvertForMySql、事务 fail-fast 与行数守卫对齐既有路径）。新增 AddBatch5 基准项（k=5 多事件保存典型形态）：
+
+| 车道 | AddBatch5（k 条单往返） | 5×AddSingle 对照 | 批化收益 |
+|---|---:|---:|---:|
+| PG（COPY，postgres:18.6） | 863.0 μs（E3.8%） | 5×609.3 = 3,046 μs | **3.5×** |
+| MySQL（VALUES 新路径，8.4.11） | 2,072.4 μs（E4.3%） | 5×1,593.7 = 7,969 μs | **3.8×** |
+| SQLite（事务内批，共享内存库） | 84.0 μs（E2.0%） | 5×51.7 = 258 μs | 3.1× |
+
+> VALUES 路径真库实证：行为校验内联（返回行数必须 ==5，两项基准各跑 30 次迭代全过）、死锁 0、`DialectProbeTests` 补 3 条批量写入覆盖（CI Testcontainers 双方言跑）；两条远程车道其余 21 项与同晚 stock 复跑逐项同值（回归面干净）。
+
+旋钮实验三组（同晚五连跑 A/B，容器组间同晚对照）：
+
+1. **Server GC（`DOTNET_gcServer=1`，--qps harness）**：chain 场景 8 线程 1.79M→**4.64M ops/s（+159%）**、4 线程 +80%——4 线程平台期在 Server GC 下消失；代价：dispatch 场景 8 线程 28.3M→19.9M（-30%，分配轻负载下 Server GC 反而吃亏）。**GC 模式按负载选型**：消息链路类重分配负载选 Server GC；库不替应用决策，属部署文档级结论。
+2. **PG 旋钮**：`synchronous_commit=off` 对吞吐五项零影响（AddSingle 606→613μs 等，本地容器 fsync 近零成本环境测不出该旋钮——生产磁盘环境收益不可本地证伪，负结果如实登记）。**连接串 `Max Auto Prepare=64`：PalORM GetPending 14.7→6.7 ms（-55%，两侧 Error<1%）**、Dapper 对照不变——「PalORM PG GetPending 慢 Dapper 20×」的一半由未启用预编译解释（部署建议：PalORM PG 栈连接串加 `Max Auto Prepare=64`；Drain 波段该轮反向变慢属单轮观察，标记待复测）。
+3. **MySQL `innodb_flush_log_at_trx_commit=2`（吞吐五项）**：写路径 **-24~-31%**（AddSingle 1,527→1,148μs、Lease 170.4→118.0ms、Idempotency 3,513→2,498μs），读路径 GetPending 对照不变（归因方向正确）；崩窗丢最近 ~1s 事务的持久性权衡须部署侧决策后启用。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |

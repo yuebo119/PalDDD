@@ -166,6 +166,20 @@ public class DapperPersistenceBenchmarks : PersistenceBenchBase
     public void Outbox_AddSingle()
         => _outbox.AddMessage(NewOutboxMessage());
 
+    // C2'（2026-10-09 优化轮）：k=5 批量写入（多事件保存典型形态）——PG 单 COPY 往返 /
+    // MySQL VALUES 单往返（≤16 行路由，2026-10-09 起）/ SQLite 事务内批；与 AddSingle
+    // 对照即「k 条单往返 vs k 次单条」的批化收益。行为校验：返回行数必须等于 5
+    [Benchmark]
+    public async ValueTask<int> Outbox_AddBatch5()
+    {
+        var messages = new OutboxMessage[5];
+        for (var i = 0; i < 5; i++)
+            messages[i] = NewOutboxMessage();
+        var count = await _outbox.AddMessagesAsync(messages);
+        if (count != 5) throw new InvalidOperationException($"AddMessagesAsync {count} != 5——批量路径行为校验失败");
+        return count;
+    }
+
     [Benchmark]
     public async ValueTask EventLog_AppendSingle()
         => await _eventLog.AppendAsync("bench-stream", ExpectedStreamVersion.Any,
