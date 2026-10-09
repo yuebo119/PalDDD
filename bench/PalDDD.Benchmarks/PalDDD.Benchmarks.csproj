@@ -39,12 +39,20 @@
     <ProjectReference Include="..\..\src\PalDDD.Idempotency.EFCore\PalDDD.Idempotency.EFCore.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Dapper.PostgreSql\PalDDD.Dapper.PostgreSql.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Dapper.Sqlite\PalDDD.Dapper.Sqlite.csproj" />
+    <!-- 2026-10-08 缺口清单第⑦项：远程方言车道引用——TestEnvironment 镜像单一真源
+         （postgres:18-alpine / mysql:8.4 默认），Testing 仅依赖 Core 无包拖带 -->
+    <ProjectReference Include="..\..\test\PalDDD.Testing\PalDDD.Testing.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <!-- 远程方言车道（persist-pg/persist-mysql 入口）：容器与驱动对齐 dialect-probe -->
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Testcontainers.MySql" />
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="MySqlConnector" />
   </ItemGroup>
 
 </Project>

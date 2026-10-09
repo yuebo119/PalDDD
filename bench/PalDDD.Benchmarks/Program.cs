@@ -105,6 +105,7 @@ if (args.Contains("--infra", StringComparer.OrdinalIgnoreCase))
 {
     var medium = MediumInProcessConfig();
     BenchmarkRunner.Run<OutboxThroughputBenchmarks>(medium);
+    BenchmarkRunner.Run<InboxThroughputBenchmarks>(medium);
     BenchmarkRunner.Run<EventLogBenchmarks>(medium);
     BenchmarkRunner.Run<SagaStateBenchmarks>(medium);
     BenchmarkRunner.Run<SqlGenBenchmarks>(medium);
@@ -132,6 +133,47 @@ if (args.Contains("--concurrency", StringComparer.OrdinalIgnoreCase))
     var medium = MediumInProcessConfig();
     BenchmarkRunner.Run<OutboxConcurrencyInMemoryBenchmarks>(medium);
     BenchmarkRunner.Run<OutboxConcurrencyDapperSqliteBenchmarks>(medium);
+    return 0;
+}
+
+// 2026-10-08 特性面缺口清单第⑦项：persist-pg / persist-mysql——PG/MySQL 网络真库车道
+//（Testcontainers 一次性容器 + DDL 真源 docs/sql/{dialect}/000_schema.sql，镜像真源
+// PalDDD.Testing/TestEnvironment；承接多实例租约残余：并发 wave 在 PG FOR UPDATE
+// SKIP LOCKED / MySQL GET_LOCK 互斥发散 ADR-024 上的真实形态）。Docker/WSL 不可达 →
+// 报错退出码 2，不静默跳过（TOOL 人工运行语义，区别于测试侧 Skip.Test 环境守卫）。
+if (args.Contains("--persist-pg", StringComparer.OrdinalIgnoreCase))
+    return await RunRemoteDialectAsync(isPostgreSql: true);
+
+if (args.Contains("--persist-mysql", StringComparer.OrdinalIgnoreCase))
+    return await RunRemoteDialectAsync(isPostgreSql: false);
+
+static async Task<int> RunRemoteDialectAsync(bool isPostgreSql)
+{
+    RemoteDialectBenchSession session;
+    try
+    {
+        session = await RemoteDialectBenchSession.CreateAsync(isPostgreSql);
+    }
+#pragma warning disable CA1031 // 意图性宽捕获：容器不可达是环境态而非代码缺陷，明确报错退出
+    catch (Exception ex)
+#pragma warning restore CA1031
+    {
+        Console.Error.WriteLine(
+            $"⛔ {(isPostgreSql ? "PostgreSQL" : "MySQL")} 容器不可达（需 Docker/WSL 环境，参考 CI dialect-probe）：{ex.Message}");
+        return 2;
+    }
+
+    await using (session)
+    {
+        RemoteDialectBenchState.Connection = session.Connection;
+        RemoteDialectBenchState.ConnectionString = session.ConnectionString;
+        RemoteDialectBenchState.DbType = session.DbType;
+        var medium = MediumInProcessConfig();
+        BenchmarkRunner.Run<DapperRemoteOutboxThroughputBenchmarks>(medium);
+        BenchmarkRunner.Run<DapperRemoteOutboxConcurrencyBenchmarks>(medium);
+        RemoteDialectBenchState.Connection = null;
+        RemoteDialectBenchState.ConnectionString = null;
+    }
     return 0;
 }
 

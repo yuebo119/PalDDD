@@ -262,6 +262,8 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | 消息序列化（源生成 JSON 序列化/反序列化/Catalog 查找） | — | ✅ | `--app`（2026-10-08 缺口补齐） | ✅ |
 | Outbox 吞吐 | ✅ | ✅ | `--infra` | ✅ |
 | Outbox 并发租约争用（N worker=1/2/4/8，InMemory 簿记层 + Dapper SQLite 真库层，每 wave 零重复不变量守卫） | — | ✅ | `--concurrency`（2026-10-08 缺口补齐） | ✅ |
+| Inbox 编排层（InMemory：首投/重复拒绝/完整生命周期） | — | ✅ | `--infra`（2026-10-08 缺口补齐） | ✅ |
+| PG/MySQL 网络真库 Dapper Outbox（吞吐 + 并发 wave；Testcontainers 容器随模式起停） | — | ✅ | `--persist-pg` / `--persist-mysql`（2026-10-08 建成；容器不可达报错退出码 2） | ✅（本机无 Docker 环境时真跑待容器环境，fail-fast 路径已验证） |
 | EventLog 写入 | ✅ | ✅ | `--infra` | ✅ |
 | SagaState 持久化 | ✅ | ✅ | `--infra` | ✅ |
 | SQL 生成（Dapper） | ✅ | ✅ | `--infra` | ✅ |
@@ -293,16 +295,16 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 
 ### 4.1 DDD 实际偏好（与 ORM 不同）
 
-> **2026-10-08 更新**：类级 `[ShortRunJob]` 已全部移除——BDN 0.15.8 对 jobs 是 union 不去重，类级 job 与模式级 ManualConfig 叠加出双 job，CsProj 工具链 job 在 net11-rc moniker 上触发 DotNetSdkValidator 崩溃（`--persist` 五十四轮先例同款，详见 `bench/PalDDD.Benchmarks/Program.cs` 头注）。运行口径统一由模式级显式 job 提供，**19 个基准类**（Framework 5 + App 2 + Infra 6 + Persistence 3 + SagaLane 1 + Concurrency 2）全量可出正式报告（App 2 类与 Concurrency 2 类为 2026-10-08 缺口补齐轮新增：CQRS 分发链、消息序列化、Outbox N worker 租约争用）。
+> **2026-10-08 更新**：类级 `[ShortRunJob]` 已全部移除——BDN 0.15.8 对 jobs 是 union 不去重，类级 job 与模式级 ManualConfig 叠加出双 job，CsProj 工具链 job 在 net11-rc moniker 上触发 DotNetSdkValidator 崩溃（`--persist` 五十四轮先例同款，详见 `bench/PalDDD.Benchmarks/Program.cs` 头注）。运行口径统一由模式级显式 job 提供，**22 个基准类**（Framework 5 + App 2 + Infra 7 + Persistence 3 + SagaLane 1 + Concurrency 2 + Remote 2）全量可出正式报告（2026-10-08 缺口补齐轮新增：CQRS 分发链、消息序列化、Outbox N worker 租约争用、Inbox 编排层、PG/MySQL 网络真库车道）。
 
 | 配置 | DDD 使用场景 | ORM 使用场景 |
 |------|------------|------|
-| 模式级 ManualConfig：`Job.MediumRun` + InProcessEmitToolchain + `[MemoryDiagnoser]` | `--framework` / `--app` / `--infra` / `--concurrency` / `--persist-medium`（正式报告，19 类全覆盖） | 不使用 |
+| 模式级 ManualConfig：`Job.MediumRun` + InProcessEmitToolchain + `[MemoryDiagnoser]` | `--framework` / `--app` / `--infra` / `--concurrency` / `--persist-pg` / `--persist-mysql` / `--persist-medium`（正式报告，22 类全覆盖） | 不使用 |
 | 模式级 ManualConfig：`Job.InProcess` | `--persist` / `--compression`（快速与单车道 A/B） | 不使用 |
 | 类级 `[InProcess]` attribute | SagaLaneBenchmarks（`--saga`，单类无叠加风险） | 不使用 |
 | ~~类级 `[ShortRunJob]`~~ | **已移除**（2026-10-08，双 job 崩溃见上注） | 不使用 |
 | `[SimpleJob]` 三档（快速 1/3/5 / 标准 3/5/10 / 严格 5/10/15） | **未使用** | 偏好（grep 实证） |
-| `[BenchmarkCategory]` | **未使用**（按文件分类 Framework/App/Infra/Persistence/SagaLane/Concurrency） | 使用（按操作分类） |
+| `[BenchmarkCategory]` | **未使用**（按文件分类 Framework/App/Infra/Persistence/SagaLane/Concurrency/Remote） | 使用（按操作分类） |
 | `[Params]` | **未使用**（用 const 或字段） | 使用（参数化扫描） |
 | `[Benchmark(Baseline = true)]` | 少数方法标注 | 使用 |
 
