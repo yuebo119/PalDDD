@@ -188,6 +188,13 @@ static async Task<int> RunRemoteDialectAsync(bool isPostgreSql)
         BenchmarkRunner.Run<DapperRemoteOutboxThroughputBenchmarks>(medium);
         BenchmarkRunner.Run<DapperRemoteOutboxConcurrencyBenchmarks>(medium);
         BenchmarkRunner.Run<PalOrmRemoteOutboxBenchmarks>(medium);
+        // 方言专属车道：PG 跑方言特性（Pipeline/Router/LISTEN-NOTIFY）；MySQL 跑 EF 栈
+        // 租约 SQL 形态（SKIP LOCKED 派生表互斥验证——EF 栈级车道待上游 Provider 出
+        // EF 11 rc 配套版，2026-10-09 实证见类头注）
+        if (isPostgreSql)
+            BenchmarkRunner.Run<PgDialectFeaturesBenchmarks>(medium);
+        else
+            BenchmarkRunner.Run<MySqlSkipLockedShapeBenchmarks>(medium);
         RemoteDialectBenchState.Connection = null;
         RemoteDialectBenchState.ConnectionString = null;
     }

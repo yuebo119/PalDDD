@@ -263,7 +263,9 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | Outbox 吞吐 | ✅ | ✅ | `--infra` | ✅ |
 | Outbox 并发租约争用（N worker=1/2/4/8，InMemory 簿记层 + Dapper SQLite 真库层，每 wave 零重复不变量守卫） | — | ✅ | `--concurrency`（2026-10-08 缺口补齐） | ✅ |
 | Inbox 编排层（InMemory：首投/重复拒绝/完整生命周期） | — | ✅ | `--infra`（2026-10-08 缺口补齐） | ✅ |
-| PG/MySQL 网络真库 Dapper + PalORM Outbox（吞吐 + 并发 wave；Testcontainers 或 wslc 外部实例双路径） | — | ✅ | `--persist-pg` / `--persist-mysql`（2026-10-08 双栈真跑完成：wslc 路径 `PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` + palddd_bench 库名守卫；Testcontainers 路径留给 Docker 环境，容器不可达报错退出码 2） | ✅（首轮数字、MySQL 双栈死锁实录与 PalORM 会话非线程安全实录见 performance.md；EF 栈车道与方言特性车道登记为残余） |
+| PG/MySQL 网络真库 Dapper + PalORM Outbox（吞吐 + 并发 wave；Testcontainers 或 wslc 外部实例双路径） | — | ✅ | `--persist-pg` / `--persist-mysql`（2026-10-08 双栈真跑完成：wslc 路径 `PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` + palddd_bench 库名守卫；Testcontainers 路径留给 Docker 环境，容器不可达报错退出码 2） | ✅（首轮数字、MySQL 双栈死锁实录与 PalORM 会话非线程安全实录见 performance.md） |
+| EF 栈租约 SQL 形态（JOIN 派生表 SKIP LOCKED 互斥验证，MySQL） | — | ✅ | `--persist-mysql`（2026-10-09；EF 栈级车道待上游 Provider 出 EF 11 rc 配套版，SQL 形态为其等价物） | ✅（零死锁+互斥不变量+1.75× 加速，已补记 ADR-024） |
+| PG 方言特性（Pipeline 单往返批处理/读写分离路由/LISTEN-NOTIFY 往返） | — | ✅ | `--persist-pg`（2026-10-09；COPY 隐含在种子路径） | ✅ |
 | Projection 吞吐（处理器全周期 + 断点存储直测，InMemory） | — | ✅ | `--coverage`（2026-10-08 缺口补齐） | ✅ |
 | 消息演化管线（V1→V2 单跳 vs V1→V3 链式） | — | ✅ | `--coverage` | ✅ |
 | Specification 内存路径（IsSatisfiedBy/ToExpression） | — | ✅ | `--coverage` | ✅ |
@@ -300,7 +302,7 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 
 ### 4.1 DDD 实际偏好（与 ORM 不同）
 
-> **2026-10-08 更新**：类级 `[ShortRunJob]` 已全部移除——BDN 0.15.8 对 jobs 是 union 不去重，类级 job 与模式级 ManualConfig 叠加出双 job，CsProj 工具链 job 在 net11-rc moniker 上触发 DotNetSdkValidator 崩溃（`--persist` 五十四轮先例同款，详见 `bench/PalDDD.Benchmarks/Program.cs` 头注）。运行口径统一由模式级显式 job 提供，**28 个基准类**（Framework 5 + App 2 + Infra 7 + Persistence 3 + SagaLane 1 + Concurrency 2 + Remote 3 + Coverage 5）全量可出正式报告（2026-10-08 缺口补齐轮新增：CQRS 分发链、消息序列化、Outbox N worker 租约争用、Inbox 编排层、PG/MySQL 网络真库 Dapper+PalORM 双栈、Projection 吞吐、消息演化、Specification 内存路径、Hosting 每请求开销、端到端链路）。
+> **2026-10-08 更新**：类级 `[ShortRunJob]` 已全部移除——BDN 0.15.8 对 jobs 是 union 不去重，类级 job 与模式级 ManualConfig 叠加出双 job，CsProj 工具链 job 在 net11-rc moniker 上触发 DotNetSdkValidator 崩溃（`--persist` 五十四轮先例同款，详见 `bench/PalDDD.Benchmarks/Program.cs` 头注）。运行口径统一由模式级显式 job 提供，**30 个基准类**（Framework 5 + App 2 + Infra 7 + Persistence 3 + SagaLane 1 + Concurrency 2 + Remote 5 + Coverage 5）全量可出正式报告（2026-10-08/09 缺口补齐轮新增：CQRS 分发链、消息序列化、Outbox N worker 租约争用、Inbox 编排层、PG/MySQL 网络真库 Dapper+PalORM 双栈、EF 租约 SQL 形态、PG 方言特性、Projection 吞吐、消息演化、Specification 内存路径、Hosting 每请求开销、端到端链路）。
 
 | 配置 | DDD 使用场景 | ORM 使用场景 |
 |------|------------|------|
