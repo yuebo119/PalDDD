@@ -12,6 +12,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **MySQL 租约双模板——版本探测启用 SKIP LOCKED（ADR-025，消费者可见的行为变更，仅 MySQL ≥8.0.18 非 MariaDB）**：Dapper/PalORM 栈的 MySQL Outbox 租约在探测到 MySQL ≥8.0.18（与 EF 栈声明对齐）时改用 JOIN 派生表 `FOR UPDATE SKIP LOCKED` 模板——多实例并发租约从「InnoDB 死锁异常 + last-writer-wins 双租窗口」（ADR-024 接受的现状，2026-10-08 基准车道 8 处死锁实录）变为「零死锁 + 互斥」（`MySqlSkipLockedShapeBenchmarks` 同库实测：互斥不变量全波通过、串行→8 worker 加速 1.75×）。MySQL <8.0.18 / MariaDB / 探测失败回退原无锁模板，行为与既往逐字一致（fail-safe 判定见 `PalDDD.Transactions.MySqlLeasePolicy`，新增公共 API：该策略类 + `SqlTemplates.OutboxLeaseUpdateMySqlSkipLocked` 常量）。经 `OutboxProcessor`/`SagaProcessor` 消费的用户注意：处理器模板自带 tick 异常隔离，旧形态下死锁本就 tick 级自愈；新形态消除的是死锁与双租窗口本身。
+
 ---
 
 ## [3.3.0] — 2026-10-08

@@ -143,14 +143,51 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
             // FormattableString 路径每个格式参数只绑一个 DbParameter（BindFormattableParameters），
             // WhereIn 仅存在于 QueryBuilder 实体路径（无法表达此 UPDATE+JOIN 手写 SQL），改动面大，
             // 待 PalORM 支持 IN 参数化后与 Saga 路径统一修。
-            await Session.ExecuteAsync(
-                $"UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}) AS sub ON t.id = sub.id SET t.locked_by = {owner}, t.locked_until = {until}",
-                ct).ConfigureAwait(false);
+            //
+            // ADR-025（2026-10-09）修订：MySQL ≥8.0.18（非 MariaDB）在派生表内加 FOR UPDATE
+            // SKIP LOCKED——无锁形态的并发后果是 InnoDB 死锁异常（ADR-024 补记实证一），
+            // SKIP LOCKED 形态同库实测零死锁+互斥+1.75× 加速（MySqlSkipLockedShapeBenchmarks）；
+            // 旧版/MariaDB/探测失败回退无锁 JOIN（MySqlLeasePolicy fail-safe，行为与
+            // ADR-024 接受的现状逐字一致）。v13/v43 分叉声明对回退路径继续有效。
+            // 实现注：锁子句是 SQL 字面量，不能经 FormattableString 插值孔传递（每孔绑一个
+            // DbParameter——上方已知限制同源），故 if/else 双完整模板（对齐本文件 PG/SQLite 分支风格）。
+            var skipLocked = await MySqlSupportsSkipLockedAsync(ct).ConfigureAwait(false);
+            FormattableString leaseSql = skipLocked
+                ? (FormattableString)$"UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize} FOR UPDATE SKIP LOCKED) AS sub ON t.id = sub.id SET t.locked_by = {owner}, t.locked_until = {until}"
+                : (FormattableString)$"UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status = {pending} AND retry_count < {maxRetryCount} AND (next_attempt_at IS NULL OR next_attempt_at <= {now}) AND (locked_until IS NULL OR locked_until <= {now}) ORDER BY created_at LIMIT {batchSize}) AS sub ON t.id = sub.id SET t.locked_by = {owner}, t.locked_until = {until}";
+            await Session.ExecuteAsync(leaseSql, ct).ConfigureAwait(false);
             var rows = await Session.QueryAsync<OutboxMessageRow>(
                 $"SELECT id, type, payload, content_type, schema_version, status, retry_count, created_at, processed_at, next_attempt_at, locked_by, locked_until, error, correlation_id, causation_id, trace_parent, trace_state FROM outbox_messages WHERE locked_by = {owner} AND locked_until = {until} ORDER BY created_at",
                 ct: ct).ConfigureAwait(false);
             return rows.Select(r => r.ToDomain()).ToList();
         }
+    }
+
+    /// <summary>
+    /// MySQL 版本探测（ADR-025）：首次 MySQL 租约时 SELECT VERSION() 一次并缓存于本实例——
+    /// DataSession 不暴露连接 ServerVersion 属性，QueryAsync 标量探针是可用通道；store 每
+    /// DI scope 一个实例，探测成本 = 每 scope 一次额外往返（与 GetPending 轮询同量级）。
+    /// 探测失败（映射不支持/连接异常）按空串处理 → fail-safe 回退无锁模板。
+    /// </summary>
+    private string? _mySqlServerVersion;
+
+    private async Task<bool> MySqlSupportsSkipLockedAsync(CancellationToken ct)
+    {
+        if (_mySqlServerVersion is null)
+        {
+            try
+            {
+                var versions = await Session.QueryAsync<VersionProbeRow>($"SELECT VERSION() AS v, VERSION() AS v2", ct: ct).ConfigureAwait(false);
+                _mySqlServerVersion = versions.FirstOrDefault()?.v ?? "";
+            }
+#pragma warning disable CA1031 // 探测失败按空串处理（fail-safe 回退无锁模板），不中断租约路径
+            catch (Exception)
+#pragma warning restore CA1031
+            {
+                _mySqlServerVersion = "";
+            }
+        }
+        return Transactions.MySqlLeasePolicy.UseSkipLocked(_mySqlServerVersion);
     }
 
     /// <inheritdoc />

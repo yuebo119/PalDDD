@@ -1,9 +1,11 @@
 # ADR 024：MySQL 三栈租约互斥分叉 — 显式接受现状
 
-> 状态：**已采纳（2026-09-19 用户裁决「显式接受」）**
+> 状态：**已采纳（2026-09-19 用户裁决「显式接受」）——2026-10-09 起「不统一」决策对
+> MySQL ≥8.0.18 部分被 ADR-025 修订（版本探测双模板启用 SKIP LOCKED）；<8.0.18 与
+> MariaDB 行为本决策继续有效**
 > 日期：2026-09-19
 > 关联：ADR-020（三栈并行策略）、ADR-017（Saga 租约乐观并发）、ITM-794（首席审计 A-1，
-> 论证：`docs/review/audit-2026-09-19-findings-confirmation.md`）
+> 论证：`docs/review/audit-2026-09-19-findings-confirmation.md`）、ADR-025（修订）
 
 ## 背景
 
@@ -68,6 +70,16 @@ EF preview 精确版本、Pomelo 无 11 线，2026-10-09 实证）后可升级�
 
 - **多实例 Dapper/PalORM MySQL**：幂等消费（原要求）**+ 死锁重试**（本补重新增，见实证一）；
   或直接采用实证二验证过的 EF 形态锁（自加派生表锁改造模板即可，见原指引第二条）。
+
+### 运维语义勘正（2026-10-09 补）
+
+「死锁重试」的实际适用面需精确化：`OutboxProcessor`/`SagaProcessor` 共享的
+`PeriodicBackgroundProcessor` 模板自带每 tick 异常隔离（tick 失败不中断循环，下一轮询
+周期自然重试）——**经处理器消费的用户对死锁已具备 tick 级自愈，无需额外代码**；
+该要求仅适用于直连 `IPalOutboxStore.LeasePendingMessagesAsync` 的调用方。
+另：本 ADR 的分叉现状已被 ADR-025（2026-10-09）在 MySQL ≥8.0.18 段修订为
+SKIP LOCKED 双模板——死锁与双租窗口在该版本段均已消除，本补记指引对 <8.0.18/MariaDB
+回退路径继续有效。
 
 ## 被否决方案
 

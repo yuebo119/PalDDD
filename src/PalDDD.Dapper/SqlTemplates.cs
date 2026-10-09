@@ -131,6 +131,19 @@ public static class SqlTemplates
         + " ORDER BY created_at LIMIT @n) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until";
 
     /// <summary>
+    /// MySQL ≥8.0.18 专用原子租约获取 — JOIN 派生表 FOR UPDATE SKIP LOCKED（ADR-025，2026-10-09）。<br/>
+    /// 形态与 EF 栈 MySqlOutboxDbContext 步骤 1 同源（MySqlSkipLockedShapeBenchmarks 实测：8.4.11 上
+    /// 零死锁 + 互斥不变量全波通过 + 串行→8W 加速 1.75×）；启用判定见
+    /// <see cref="Transactions.MySqlLeasePolicy"/>（旧版/MariaDB/解析失败回退上方无锁模板，
+    /// 行为与 ADR-024 接受的现状逐字一致）。PD17 姊妹同步口径：PalOrmOutboxStore MySQL 分支同款。
+    /// </summary>
+    public const string OutboxLeaseUpdateMySqlSkipLocked =
+        "UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
+        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
+        + " AND (locked_until IS NULL OR locked_until<=@now)"
+        + " ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until";
+
+    /// <summary>
     /// PG 专用原子租约获取 — 单语句 UPDATE ... RETURNING *（子查询 FOR UPDATE SKIP LOCKED）。<br/>
     /// 优化（二十五轮 API 扫描 A-3）：预拼完整编译期常量——原实现为 DapperOutboxStore 运行时插值
     /// <c>OutboxLeaseUpdate + $"({leaseSubSql} FOR UPDATE SKIP LOCKED) RETURNING *"</c>，
