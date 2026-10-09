@@ -6,11 +6,11 @@
 
 ## 当前结论
 
-2026-10-08 性能测试系统优化后，**17 个基准类（Framework 5 + App 2 + Infra 6 + Persistence 3 + SagaLane 1）全部具备正式报告入口**：`--framework` / `--app` / `--infra` / `--persist` / `--persist-medium` / `--saga` / `--compression` 以模式级 ManualConfig（`Job.MediumRun` + InProcessEmitToolchain + MemoryDiagnoser）绕过 net11-rc moniker 限制（默认 Switcher 入口仍不可用；根因与 jobs-union 双 job 坑详见 `bench/PalDDD.Benchmarks/Program.cs` 头注——类级 `[ShortRunJob]` 已全部移除，同 `--persist` 五十四轮先例）。`--smoke` 新增分配预算断言（Success/FromValue ≤1、Failed ≤50、RaiseEvent ≤140 B/op，超限退出码 1；变异验红实证：预算压至 1 时 RaiseEvent 判 ⛔ 退出码 1）。
+2026-10-08 性能测试系统优化后，**19 个基准类（Framework 5 + App 2 + Infra 6 + Persistence 3 + SagaLane 1 + Concurrency 2）全部具备正式报告入口**：`--framework` / `--app` / `--infra` / `--concurrency` / `--persist` / `--persist-medium` / `--saga` / `--compression` 以模式级 ManualConfig（`Job.MediumRun` + InProcessEmitToolchain + MemoryDiagnoser）绕过 net11-rc moniker 限制（默认 Switcher 入口仍不可用；根因与 jobs-union 双 job 坑详见 `bench/PalDDD.Benchmarks/Program.cs` 头注——类级 `[ShortRunJob]` 已全部移除，同 `--persist` 五十四轮先例）。`--smoke` 新增分配预算断言（Success/FromValue ≤1、Failed ≤50、RaiseEvent ≤140 B/op，超限退出码 1；变异验红实证：预算压至 1 时 RaiseEvent 判 ⛔ 退出码 1）。
 
-**同日缺口补齐轮**：新增 `--app` 车道（DispatcherBenchmarks + SerializationBenchmarks——CQRS 分发链与消息序列化此前是消息发布路径的两大缺位面：分发仅有 <500B 分配契约无计时，序列化零数据）；CompressionBenchmarks 补 LZ4/ZStandard 原生绑定四项（同一 Provider 五算法同负载可比，此前 README 宣传的原生绑定零基准）。「17 类全覆盖」指**运行入口覆盖**，特性面仍非全覆盖——剩余缺口见「未完成项」清单。
+**同日缺口补齐轮**：新增 `--app` 车道（DispatcherBenchmarks + SerializationBenchmarks——CQRS 分发链与消息序列化此前是消息发布路径的两大缺位面：分发仅有 <500B 分配契约无计时，序列化零数据）；CompressionBenchmarks 补 LZ4/ZStandard 原生绑定四项（同一 Provider 五算法同负载可比，此前 README 宣传的原生绑定零基准）；`--concurrency` 车道（Outbox N worker 租约争用，InMemory 簿记层 + Dapper SQLite 真库层）把「多实例并发发布零丢失零重复」从正确性主张升级为性能数据——**不变量每 wave 成立（800/800 精确租走、零重复守卫全程未触发），性能形态两层分化**：InMemory 8 worker 退化 1.5×（锁竞争正常量级），Dapper SQLite 多连接并发退化 **25×**（158ms vs 串行 6.2ms——busy 等待升级延迟所致，单机 SQLite 单写者的真实最坏形态；多实例部署的租约性能主张应由 PG/MySQL 车道验证，仍缺）。「19 类全覆盖」指**运行入口覆盖**，特性面仍非全覆盖——剩余缺口见「未完成项」清单。
 
-统计有效性自评（testing.md §五判据套用首轮实测）：绝大多数基准 Error/Mean < 5%（App 车道与框架微基准全部 <1%）；5~15% 可接受带若干项（Outbox.AddSingleMessage 12%、Configuration.Pg 11%、SmartEnum.AllValues 5% 等，报告标注环境敏感）；**>15% 统计无效 2 项**——SmartEnum.FromValue_Known 24.8% / TryFromValue_Valid 25.9%（ns 级零分配操作的固有抖动，判定以零分配事实为准，引用其计时时需先提升配置）；ValueObject 三项为 ZeroMeasurement（BDN 标注与空方法不可区分，值即 ~0）。Medium 口径跨跑稳定性：`--framework` 二跑关键值跨跑差 AddSingleEvent 0.7% / Create 1.6% / Success 3.5%（对照 ShortRun 历史 53% 跨轮差，medium 裁决实证成立）。
+统计有效性自评（testing.md §五判据套用首轮实测）：绝大多数基准 Error/Mean < 5%（App 车道与框架微基准全部 <1%）；5~15% 可接受带若干项（Outbox.AddSingleMessage 12%、Configuration.Pg 11%、SmartEnum.AllValues 5%、并发 InMemory 4W 13.4% 等，报告标注环境敏感）；**>15% 统计无效 2 项**——SmartEnum.FromValue_Known 24.8% / TryFromValue_Valid 25.9%（ns 级零分配操作的固有抖动，判定以零分配事实为准，引用其计时时需先提升配置）；ValueObject 三项为 ZeroMeasurement（BDN 标注与空方法不可区分，值即 ~0）。Medium 口径跨跑稳定性：`--framework` 二跑关键值跨跑差 AddSingleEvent 0.7% / Create 1.6% / Success 3.5%（对照 ShortRun 历史 53% 跨轮差，medium 裁决实证成立）。
 
 另：SmartEnum 三方法（FromValue/TryFromValue/AllValues）历史产物 NA 的根因已修——基类继承的静态方法调用不触发派生类静态构造器，注册未执行即调用；`[GlobalSetup]` 触碰静态字段强制注册先于全部基准（根因注释见 FrameworkBenchmarks.cs）。
 
@@ -60,6 +60,26 @@ App（`--app`，2026-10-08 缺口补齐轮新增；命令实例复用只测分�
 
 > 分发口径注：216B/次含响应对象（BenchResult record）+ 每请求 scope + 快路径状态机，与 CqrsTests 的 <500B 分配契约一致且余量充足；单直通行为增量 +92.6 ns / +216B，与 Dispatcher.ExecutePipelineAsync remarks 声明的「每行为一次委托分配 + 状态机 ~40B」口径吻合。Catalog 查找零分配（FrozenDictionary 路径）由 MemoryDiagnoser 实证。
 
+Outbox 并发车道（`--concurrency`，每 wave = 清场 + 种子 800 条 + N worker 并发抢租至清空；每 wave 断言零重复不变量）：
+
+| 基准（InMemory 层） | Mean | Ratio | Allocated |
+|---|---:|---:|---:|
+| Drain_Sequential | 412.49 μs | 1.00 | 1,023.76 KB |
+| Drain_2Workers | 446.26 μs | 1.08 | 1,071.46 KB |
+| Drain_4Workers | 593.71 μs（Error 13.4%，环境敏感带） | 1.44 | 1,166.74 KB |
+| Drain_8Workers | 619.51 μs | 1.50 | 1,357.32 KB |
+| SeedOnly_800（减法锚） | 80.34 μs | 0.20 | 275.66 KB |
+
+| 基准（Dapper SQLite 真库层） | Mean | Ratio | Allocated |
+|---|---:|---:|---:|
+| Drain_Sequential | 6.205 ms | 1.00 | 2.21 MB |
+| Drain_2Workers | 158.389 ms | **25.57** | 2.21 MB |
+| Drain_4Workers | 159.337 ms | **25.72** | 2.23 MB |
+| Drain_8Workers | 159.530 ms | **25.75** | 2.25 MB |
+| SeedOnly_800（减法锚） | 1.905 ms | 0.31 | 1.48 MB |
+
+> 并发车道注（2026-10-08 缺口清单第 ① 项落地）：**正确性主张在并发实测下成立**——每 wave 断言 800/800 精确租走，零重复守卫全程未触发（重叠租约或漏租即抛）。性能形态两层分化：InMemory 层锁竞争退化有界（8W +50%，同步完成 ValueTask 下锁持有短）；**Dapper SQLite 多连接并发退化 25×**（~158ms 平台期，与 worker 数 2/4/8 无关）——根因是 SQLite busy 等待的升级延迟序列（1/2/5/10/15/20/25/…100ms 递增 sleep），共享缓存多写者互撞即进入该序列；这是单机 SQLite 单写者的真实最坏形态，**多实例部署的租约性能主张（FOR UPDATE SKIP LOCKED 类真并发）须由 PG/MySQL 车道验证，当前无数据**。操作性结论：SQLite 栈多实例并发不可作为性能方案（单实例轮询即可），InMemory 层的多 worker 开销在有界范围内。
+
 Infra（`--infra`，全 InMemory fixture）：
 
 | 基准 | Mean | Error | Allocated |
@@ -101,6 +121,7 @@ Infra（`--infra`，全 InMemory fixture）：
 | `--framework` 正式基线（2026-10-08） | `dotnet run -c Release --project bench/PalDDD.Benchmarks -- --framework` | 通过（4:15，5 类 18 项基准；二跑复验 4:12，关键值跨跑差 ≤3.5%）；SmartEnum 三方法 NA→有效数字（GlobalSetup 修复同批验证） |
 | `--infra` 正式基线（2026-10-08） | `dotnet run -c Release --project bench/PalDDD.Benchmarks -- --infra` | 通过（4:32，6 类 23 项基准全 InMemory fixture，零 NA）；缺口补齐轮复跑（7:02，压缩类扩至五算法 10 项）通过 |
 | `--app` 正式基线（2026-10-08 缺口补齐轮） | `dotnet run -c Release --project bench/PalDDD.Benchmarks -- --app` | 通过（DispatcherBenchmarks 2 项 + SerializationBenchmarks 4 项，全部 Error/Mean <1%；分发 216B/次与 <500B 契约一致、单行为增量 +216B 与 PipelineStateMachine remarks 口径吻合） |
+| `--concurrency` 正式基线（2026-10-08 缺口清单第①项） | `dotnet run -c Release --project bench/PalDDD.Benchmarks -- --concurrency` | 通过（两类 10 项；零重复不变量每 wave 成立 800/800；发现 SQLite 多连接并发 25× 退化平台期与 InMemory 有界退化 1.5×，结论见并发车道注） |
 | Native AOT 发布 | `dotnet publish samples/PalDDD.AotSample/PalDDD.AotSample.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishAot=true` | 通过 |
 | 全解决方案构建 | `dotnet build PalDDD.slnx --no-restore` | 通过；0 warning / 0 error |
 | 全测试项目测试 | `for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' \| sort); do dotnet test "$p" --no-restore; done`（MTP 禁用 slnx 批量——握手 → exit 5） | 通过；869 passed / 2 failed / 6 skipped（历史快照：2026-06-28；2026-09-25 实测：16 项目 1502 用例 = 本机 1434 通过 + 68 跳过——60 项 Docker 依赖（PalORM 多方言 46 + Integration 14）由 CI Testcontainers 执行，另 8 项本机 RabbitMQ 预检不可达） |
@@ -122,7 +143,7 @@ Infra（`--infra`，全 InMemory fixture）：
 1. ~~等 BenchmarkDotNet 支持当前 .NET 11 后用默认入口重新生成全部 benchmark 类结果~~（2026-10-08 大部分消解：17 类经 InProcess 显式模式全部可出正式报告；残余 = 默认 Switcher 入口与类级 job 注解的恢复，待 BDN 上游补 net11 moniker 或 .NET 11 GA 后实测，见 `docs/migration/net11-ga-upgrade-plan.md` 步骤 3）。
 2. SmartEnum.FromValue/TryFromValue 两项 Error/Mean >15%（ns 级固有抖动）：如需正式引用其计时，提升配置（严格档 5/10/15）复测；当前以零分配事实为准。
 3. 保留 `--smoke` 作为秒级趋势检查 + 分配预算判定（2026-10-08 起带断言）；计时为单轮无统计效力，不替代正式报告。
-4. **特性面缺口登记（2026-10-08 缺口补齐轮盘点，防「17 类全覆盖」被误读为特性面全覆盖）**：仍无基准的特性按优先级——① Outbox 并发车道（N=2/4/8 worker 租约争用下的吞吐与延迟曲线，多实例并发目前只有正确性测试）；② Inbox 编排层（ITM-286 勘正后仍缺）；③ Projection 处理器/断点续传吞吐；④ 消息演化 Upgrade 管线（仅单元）；⑤ Specification 内存路径（Expression.Compile 敏感点）；⑥ Hosting 每请求开销（MapCommand/异常中间件）；⑦ PG/MySQL 网络真库车道（现仅 SQLite 单机文件，「三栈差距」结论只在 SQLite 成立）与方言特性（COPY/Pipeline/LISTEN-NOTIFY/读写分离）；⑧ 端到端单命令链路（Dispatcher→序列化→UoW→Outbox 全链路）。
+4. **特性面缺口登记（2026-10-08 缺口补齐轮盘点，防「19 类全覆盖」被误读为特性面全覆盖）**：~~① Outbox 并发车道~~（2026-10-08 同日落地：InMemory + Dapper SQLite 两层 + 零重复不变量守卫，见并发车道注；残余并入 ⑦——PG/MySQL 的并发租约形态待网络真库车道）；仍缺按优先级——② Inbox 编排层（ITM-286 勘正后仍缺）；③ Projection 处理器/断点续传吞吐；④ 消息演化 Upgrade 管线（仅单元）；⑤ Specification 内存路径（Expression.Compile 敏感点）；⑥ Hosting 每请求开销（MapCommand/异常中间件）；⑦ PG/MySQL 网络真库车道（现仅 SQLite 单机文件，「三栈差距」与「多实例租约」两结论都只在 SQLite 成立）与方言特性（COPY/Pipeline/LISTEN-NOTIFY/读写分离）；⑧ 端到端单命令链路（Dispatcher→序列化→UoW→Outbox 全链路）。
 
 ## 发布判断
 
