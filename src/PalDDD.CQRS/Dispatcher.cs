@@ -209,6 +209,9 @@ public sealed class Dispatcher
         // v33 P3 勘正：原注释"用集合表达式 + ToImmutableArray 简洁清晰"与实现不符——
         // 实际是 Select 转型链 + ToImmutableArray（DI 多服务枚举来自 GetServices，
         // 无法写成集合表达式字面量）。behavior 数量通常 ≤2（Validation+Logging）。
+        // P8 探针（2026-10-10 优化轮）：曾试「IEnumerable<T> 数组直判空零分配进快路径」——
+        // 实测零行为分配 160B 纹丝不动（靶分配本不存在：MS DI 空 IEnumerable 走缓存数组，
+        // Select/ToImmutableArray 的空物化未计入 per-op 列），无收益即回退，留此勘误防重提
         var matching = allBehaviors.Select(b => (IPipelineBehavior)b).ToImmutableArray();
 
         var handler = (IHandler)services.GetRequiredService<THandler>();

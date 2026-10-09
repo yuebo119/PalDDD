@@ -310,6 +310,30 @@ C2' MySQL 小批量 VALUES 单往返（`DapperBulkCopy`：≤16 行路由参数�
 2. **PG 旋钮**：`synchronous_commit=off` 对吞吐五项零影响（AddSingle 606→613μs 等，本地容器 fsync 近零成本环境测不出该旋钮——生产磁盘环境收益不可本地证伪，负结果如实登记）。**连接串 `Max Auto Prepare=64`：PalORM GetPending 14.7→6.7 ms（-55%，两侧 Error<1%）**、Dapper 对照不变——「PalORM PG GetPending 慢 Dapper 20×」的一半由未启用预编译解释（部署建议：PalORM PG 栈连接串加 `Max Auto Prepare=64`；Drain 波段该轮反向变慢属单轮观察，标记待复测）。
 3. **MySQL `innodb_flush_log_at_trx_commit=2`（吞吐五项）**：写路径 **-24~-31%**（AddSingle 1,527→1,148μs、Lease 170.4→118.0ms、Idempotency 3,513→2,498μs），读路径 GetPending 对照不变（归因方向正确）；崩窗丢最近 ~1s 事务的持久性权衡须部署侧决策后启用。
 
+## 优化轮三（2026-10-10 凌晨）：I/D 两项落地，P7/P8 探针否决，P8 实证回退
+
+> 前两轮后剩余靶点的再裁决。探针否决两条：P7 序列化零拷贝直通——`Serialize+ToArray` 与 `SerializeToUtf8Bytes` 分配结构相同（池内写 + 一次终数组），无收益，避免一次无意义的 API 变更；P8 空行为数组直判——实施后实测零行为分配 160B 纹丝不动（MS DI 空 IEnumerable 走缓存数组，靶分配本不存在），**无收益即回退**，Dispatcher 留勘误注防重提。落地两项均过 S3（stash 回 HEAD 同晚复测 PG：EventLog 退回 967μs、AddSingle 退回 617μs，因子归因坐实；对照组 AddBatch5 同带不变）。
+
+I：EventLog 单事件 Any 版本单往返（仅 PG 门控）——`INSERT..SELECT` 子查询服务端原子计算 `COALESCE(MAX(stream_version),-1)+1` 并 `RETURNING` 双列，读+插单往返并消除该子路径 TOCTOU 窗口；k>1 与非 Any 版本走原路径，冲突分类（EventId 重复原样上抛 / 版本位竞争转并发异常 / PG aborted 事务保守上抛）对齐既有 catch 意图。**方言门控依据（三方言同轮实测）**：
+
+| 方言 | 原路径（S3-HEAD） | 快路径 | 差 | 裁决 |
+|---|---:|---:|---:|---|
+| PG（网络往返主导） | 967.2 μs（E2.9%） | **820.3 μs**（E2.6%） | **-15%** | 启用 |
+| MySQL | 2,020 μs（E6.1% 带） | 1,912 μs（E6.8% 带） | -5.3%（噪声带内） | 不启用（原路径） |
+| SQLite（本地往返≈0） | 111.8~123.7 μs | 161.1 μs | **+44% 劣化** | 不启用（原路径） |
+
+> 教训入账：单往返优化只在往返主导的形态下成立——SQLite 本地「往返免费」，子查询复杂度反超省下的往返；MySQL 省一往返被写路径成本稀释。锁定测试：DapperStoreTests +2（Any 单事件慢路径行为 + EventId 重复冲突分类），DialectProbeTests EventLog 段 +Any 断言（CI 双方言，路径无关）。
+
+D：Outbox 单条插入执行层去 Dapper 化（`AddMessage` 改原生 ADO 命令直发，参数值与方言转换逐一对齐原 DynamicParameters 形态，SQL 模板不变）：
+
+| 基准 | 改前（昨夜 after） | 改后 | 差 |
+|---|---:|---:|---|
+| SQLite Outbox_AddSingle | 51.67 μs / 10.53 KB | **42.69~45.50 μs / 8.13~8.46 KB** | 计时 -12~17% / 分配 **-19.7%** |
+| PG Outbox_AddSingle | 609.3 μs | 578.9 μs | -5%（RTT 稀释，S3 退化回 617 佐证） |
+| 对照：PalORM 栈 AddSingle（不在改动面） | 10.65 KB | 10.65 KB | 逐字节不变 |
+
+> 分配勘误：原推断「10.5KB 主要来自 Dapper 机械层」仅部分成立——去 Dapper 后仍余 ~8.4KB（SQLite 驱动/命令内部 + 基准侧 NewOutboxMessage），D 的真实贡献为 -2.07KB；以分配列实证裁决而非推断，保留。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
