@@ -135,7 +135,16 @@ Inbox 口径注：三方法为 1-op / 3-op / 2-op 捆绑（重复拒绝必然含
 > **MySQL ≥8.0.18（ADR-025 修订后）双栈真并行**：死锁归零、互斥成立（见复跑注）；**<8.0.18/MariaDB 回退路径**维持 ADR-024 现状——无锁 last-writer-wins 形态的并发后果是 InnoDB 死锁异常（3 处实录，ADR-024 补记实证一），消费方需幂等消费 + 死锁重试（处理器用户 tick 级自愈，见 ADR-024 运维语义勘正）。
 > **SQLite 25× busy 平台期**（见上文并发车道注）。零重复不变量在 PG 全部 wave 与 MySQL 修订后全部 wave 成立。
 
-PalORM 栈（2026-10-08 ⑦ 残余补齐，PG/MySQL 同 wslc 路径）：
+PalORM 栈远程车道（含 EventLog/Idempotency 口袋补齐，2026-10-09 后段，同 wslc 路径）：
+
+| 基准 | PG（Dapper / PalORM） | MySQL（Dapper / PalORM） |
+|---|---:|---:|
+| EventLog_AppendSingle | 917.5 μs（E 3.0%）/ 1,129.7 μs（E 11.5% 带） | 2,019.1 μs（E 7.1% 带）/ 2,157.5 μs（E 5.3% 带） |
+| Idempotency_TryStart_Completed | 1,236.6 μs（E 1.9%）/ 1,371.2 μs（E 5.5% 带） | 3,661.8 μs（E 7.7% 带）/ 3,587.4 μs（E 4.3% 带） |
+
+> EventLog/Idempotency 口袋注（2026-10-09）：口径同 SQLite 三栈车道（Append Any 版本 + TryStart 唯一键全周期）；两类远程吞吐类（原名 Outbox）自本轮起覆盖三 Store 能力，类名沿用不改（避免报告文件名/文档面漂移，范围已在类头注明）。**基准缺陷实录**：首版 `DapperEventLog` 漏传第三参 dbType（默认 Sqlite）——PG 报 42804（timestamptz/text）、MySQL 报 last_insert_rowid 不存在，两库同根因不同表象，修后复跑四格全出数；属基准侧缺陷非产品缺陷（产品 `ToTimeParam` PG 路径传原生 DateTimeOffset，正确）。PG 追加约为 MySQL 一半（往返次数同为 2，差在驱动/服务端写路径）。
+
+PalORM 栈 Outbox（2026-10-08 ⑦ 残余补齐，PG/MySQL 同 wslc 路径）：
 
 | 基准 | PG | MySQL |
 |---|---:|---:|
@@ -239,7 +248,7 @@ Infra（`--infra`，全 InMemory fixture）：
 1. ~~等 BenchmarkDotNet 支持当前 .NET 11 后用默认入口重新生成全部 benchmark 类结果~~（2026-10-08 大部分消解：17 类经 InProcess 显式模式全部可出正式报告；残余 = 默认 Switcher 入口与类级 job 注解的恢复，待 BDN 上游补 net11 moniker 或 .NET 11 GA 后实测，见 `docs/migration/net11-ga-upgrade-plan.md` 步骤 3）。
 2. SmartEnum.FromValue/TryFromValue 两项 Error/Mean >15%（ns 级固有抖动）：如需正式引用其计时，提升配置（严格档 5/10/15）复测；当前以零分配事实为准。
 3. 保留 `--smoke` 作为秒级趋势检查 + 分配预算判定（2026-10-08 起带断言）；计时为单轮无统计效力，不替代正式报告。
-4. **特性面缺口登记（2026-10-09 收尾轮，防「30 类全覆盖」被误读为特性面全覆盖）**：~~①~⑤⑧~~（全部落地）；⑦ 四栈/方言面收尾——Dapper+PalORM 双栈 PG/MySQL 真跑 ✓、EF 栈**租约 SQL 形态**验证 ✓（`MySqlSkipLockedShapeBenchmarks`：零死锁+互斥+1.75× 加速）、PG 方言特性 ✓（Pipeline 单往返/读写分离路由/LISTEN-NOTIFY 往返，COPY 隐含在种子路径）。**死锁已裁决并落地（ADR-025）**：版本探测双模板使 Dapper/PalORM MySQL ≥8.0.18 进入 SKIP LOCKED 形态（复跑双栈死锁归零，见 ADR-025 落地复跑注），ADR-024 对 <8.0.18/MariaDB 回退路径继续有效。**登记残余（三项，均有上游/量纲理由）**：① EF 栈级车道待 Npgsql.EF/Pomelo 出 EF 11 rc 配套版（2026-10-09 实证 NU1107/NU1102，SQL 形态车道先行为其等价物）；② `PostgreSqlOutboxNotifier` 服务化推送延迟（LISTEN-NOTIFY 底层能力已测 461μs；服务化形态属异步服务量纲，归集成测试）；③ **mysql:8.0.17 旧版镜像回归**（ADR-025 后续动作 2：验证回退模板行为与现状逐字一致，需拉取旧版镜像）。另：PG Dapper 并发组 Error >15% 点值待严格档复测、8W 回落形态待复测；READ COMMITTED 对照实验留档于 ADR-025 被否决方案。
+4. **特性面缺口登记（2026-10-09 收尾轮，防「30 类全覆盖」被误读为特性面全覆盖）**：~~①~⑤⑧~~（全部落地）；⑦ 四栈/方言面收尾——Dapper+PalORM 双栈 PG/MySQL 真跑 ✓ + **EventLog/Idempotency 真库层补齐 ✓**（2026-10-09 后段：双栈四格全出数，见 EventLog/Idempotency 口袋注）、EF 栈**租约 SQL 形态**验证 ✓（`MySqlSkipLockedShapeBenchmarks`：零死锁+互斥+1.75× 加速）、PG 方言特性 ✓（Pipeline 单往返/读写分离路由/LISTEN-NOTIFY 往返，COPY 隐含在种子路径）。**死锁已裁决并落地（ADR-025）**：版本探测双模板使 Dapper/PalORM MySQL ≥8.0.18 进入 SKIP LOCKED 形态（复跑双栈死锁归零，见 ADR-025 落地复跑注），ADR-024 对 <8.0.18/MariaDB 回退路径继续有效。**登记残余（四项，均有上游/量纲理由）**：① EF 栈级车道待 Npgsql.EF/Pomelo 出 EF 11 rc 配套版（2026-10-09 实证 NU1107/NU1102，SQL 形态车道先行为其等价物）；② `PostgreSqlOutboxNotifier` 服务化推送延迟（LISTEN-NOTIFY 底层能力已测 461μs；服务化形态属异步服务量纲，归集成测试）；③ **mysql:8.0.17 旧版镜像回归**（ADR-025 后续动作 2：验证回退模板行为与现状逐字一致，需拉取旧版镜像）；④ broker 发布路径（Kafka/RabbitMQ 需 broker 环境，正确性已由 Messaging.Integration 覆盖，性能归有 broker 环境时补）。另：PG Dapper 并发组 Error >15% 点值待严格档复测、8W 回落形态待复测；READ COMMITTED 对照实验留档于 ADR-025 被否决方案。
 
 ## 发布判断
 
