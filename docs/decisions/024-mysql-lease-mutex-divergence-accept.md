@@ -38,6 +38,37 @@ MySQL 派生表锁的版本兼容矩阵（8.0.18 以下行为差异）；EF 栈�
   自行在 Dapper/PalORM 的 SqlTemplates 基础上添加派生表锁（模板是 public const，可复制改造）。
 - SQLite/PG 方言不受本决策影响（SQLite 单写者天然互斥；PG 三栈一致 SKIP LOCKED）。
 
+## 补记（2026-10-09）：并发实证与指引补强
+
+> 背景：2026-10-08/09 性能基准系统补齐 Outbox 并发车道（`bench/PalDDD.Benchmarks`
+> `--concurrency`/`--persist-mysql`，数字与实录见 `docs/performance.md`「并发车道注」
+> 与「PG/MySQL 网络真库基线」段），本决策描述的行为首次获得受控并发实测。
+> **本补记只补充风险实证与消费方指引，不改变「显式接受分叉」的决策本身。**
+
+### 实证一：无锁子句形态的并发后果是死锁异常，不止重复投递窗口
+
+本决策背景段记录的风险形态是 last-writer-wins 下的**重复投递窗口**。实测（MySQL 8.4.11，
+wslc 容器，N=2/4/8 worker 并发租约，800 条种子/波）：**Dapper 与 PalORM 两栈的并发租约
+全部以 InnoDB 死锁异常失败**（`Deadlock found when trying to get lock`，两轮共 8 处实录），
+而非静默双执行——无锁子句形态在并发写竞争下先触发死锁检测，异常中断先于重复投递发生。
+消费方含义：多实例 Dapper/PalORM MySQL 部署除幂等消费外，**还必须对死锁异常
+（MySqlException 0x80004005）实现重试**，否则发布循环中断。
+
+### 实证二：EF 栈 SKIP LOCKED 形态的互斥声明获验证
+
+本决策指引「需要强互斥的 MySQL 场景选 EF 栈」的验证缺口（2026-10-09 之前无并发数据）
+已闭合：EF 栈步骤 1 租约 SQL（JOIN 派生表 `FOR UPDATE SKIP LOCKED`）在 MySQL 8.4.11
+直跑实测（形态逐字保留，标识符适配基线表）——**N=2/4/8 全部零死锁、UPDATE 受影响行数
+之和恒等于种子数（互斥不变量全波通过）、串行 92ms → 8 worker 53ms 真加速**。
+注：EF 栈级基准车道待上游出 EF 11 rc 配套 Provider（Npgsql.EF 11 线仅 preview 且钉死
+EF preview 精确版本、Pomelo 无 11 线，2026-10-09 实证）后可升级；SQL 形态车道见
+`MySqlSkipLockedShapeBenchmarks` 类头注。
+
+### 指引补强（在原三 bullets 之上追加）
+
+- **多实例 Dapper/PalORM MySQL**：幂等消费（原要求）**+ 死锁重试**（本补重新增，见实证一）；
+  或直接采用实证二验证过的 EF 形态锁（自加派生表锁改造模板即可，见原指引第二条）。
+
 ## 被否决方案
 
 - **统一为 SKIP LOCKED**（ITM-794 原始选项 A）：收窄 Dapper/PalORM 的 MySQL 版本

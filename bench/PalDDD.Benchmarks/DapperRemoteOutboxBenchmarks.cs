@@ -13,6 +13,7 @@ using BenchmarkDotNet.Attributes;
 using MySqlConnector;
 using Npgsql;
 using PalDDD.Dapper;
+using PalDDD.Dapper.PostgreSql;
 using PalDDD.Testing;
 using PalDDD.Transactions;
 using PalORM;
@@ -515,5 +516,301 @@ public class PalOrmRemoteOutboxBenchmarks : PersistenceBenchBase
             throw new InvalidOperationException(
                 $"并发租约不变量破坏：{workers} worker 租走 {leased} ≠ 种子 {TotalMessages}");
         return leased;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// EF 栈租约 SQL 形态车道（MySQL，2026-10-09 缺口清单⑦收尾）
+// EF 栈级车道当前不可行（2026-10-09 实证：上游无 EF 11 rc.1 配套 Provider——
+// Npgsql.EF 11 线仅 preview 且钉死 EF preview 精确版本与仓 rc.1 冲突 NU1107、
+// Pomelo 无 11 线 NU1102，即当初死条目清理注释「待出 RC 后跟进」的真因）。
+// ADR-024 指引「需要强互斥的 MySQL 场景选 EF 栈（SKIP LOCKED）」的验证对象是
+// SQL 形态（MySqlOutboxDbContext 步骤 1：JOIN 派生表 FOR UPDATE SKIP LOCKED）——
+// 本车道逐字保留该锁语义直跑（标识符适配 snake_case 基线表），以 UPDATE 受影响
+// 行数之和证明互斥：SUM == 种子数 ⇔ 零重复零丢失。Provider 出 RC 后可升级为栈级车道。
+// ═══════════════════════════════════════════════════════════
+[MemoryDiagnoser]
+// ⚠️ 无 job attribute：persist-mysql 入口模式级 ManualConfig（同文件头注）
+public class MySqlSkipLockedShapeBenchmarks : PersistenceBenchBase
+{
+    private const int TotalMessages = 800;
+    private DbConnection _keeper = null!;
+    private DbConnection[] _workerConns = null!;
+    private DapperOutboxStore _seedStore = null!;
+
+    // MySqlOutboxDbContext.LeasePendingMessagesAsync 步骤 1 逐字迁移（{N} 占位符 →
+    // @named 参数；表/列名适配 snake_case 基线表；FOR UPDATE SKIP LOCKED 锁语义不变）
+    private const string LeaseSql = """
+        UPDATE outbox_messages t
+        JOIN (
+            SELECT id FROM outbox_messages
+            WHERE status = 0 AND retry_count < @maxRetry
+              AND (next_attempt_at IS NULL OR next_attempt_at <= @now)
+              AND (locked_until IS NULL OR locked_until <= @now)
+            ORDER BY created_at
+            LIMIT @n FOR UPDATE SKIP LOCKED
+        ) AS sub ON t.id = sub.id
+        SET t.locked_by = @owner, t.locked_until = @until
+        """;
+
+    [GlobalSetup]
+    public void GlobalSetup()
+    {
+        var cs = RemoteDialectBenchState.ConnectionString
+            ?? throw new InvalidOperationException("远程方言基准须经 persist-mysql 入口运行（缺容器注入）");
+        if (RemoteDialectBenchState.DbType != DapperDbType.MySql)
+            throw new InvalidOperationException("SKIP LOCKED 形态车道仅限 --persist-mysql");
+
+        _keeper = new MySqlConnection(cs);
+        _keeper.Open();
+        _seedStore = new DapperOutboxStore(_keeper, DapperDbType.MySql);
+
+        _workerConns = new DbConnection[8];
+        for (var w = 0; w < 8; w++)
+        {
+            _workerConns[w] = new MySqlConnection(cs);
+            _workerConns[w].Open();
+        }
+    }
+
+    [GlobalCleanup]
+    public void GlobalCleanup()
+    {
+        foreach (var conn in _workerConns) conn.Dispose();
+        _keeper.Dispose();
+    }
+
+    [Benchmark(Baseline = true)]
+    public async Task<int> Drain_Sequential() => await DrainWaveAsync(1);
+
+    [Benchmark]
+    public async Task<int> Drain_4Workers() => await DrainWaveAsync(4);
+
+    [Benchmark]
+    public async Task<int> Drain_8Workers() => await DrainWaveAsync(8);
+
+    /// <summary>减法锚：清场 + 批量种子（无租约）。口径与 Drain_N 的清场/种子段一致。</summary>
+    [Benchmark]
+    public async Task<int> SeedOnly_800()
+    {
+        await ClearOutboxAsync();
+        return await _seedStore.AddMessagesAsync(BuildSeed());
+    }
+
+    private static List<OutboxMessage> BuildSeed()
+    {
+        var messages = new List<OutboxMessage>(TotalMessages);
+        for (var i = 0; i < TotalMessages; i++)
+            messages.Add(NewOutboxMessage());
+        return messages;
+    }
+
+    private async Task ClearOutboxAsync()
+    {
+        await using var cmd = _keeper.CreateCommand();
+        cmd.CommandText = "DELETE FROM outbox_messages";
+        await cmd.ExecuteNonQueryAsync(default);
+    }
+
+    private async Task<int> DrainWaveAsync(int workers)
+    {
+        await ClearOutboxAsync();
+        await _seedStore.AddMessagesAsync(BuildSeed());
+
+        var tasks = new Task<int>[workers];
+        for (var w = 0; w < workers; w++)
+        {
+            var conn = _workerConns[w];
+            var owner = $"worker-{w}";
+            tasks[w] = Task.Run(async () =>
+            {
+                var leased = 0;
+                while (true)
+                {
+                    await using var cmd = conn.CreateCommand();
+                    cmd.CommandText = LeaseSql;
+                    AddParameters(cmd, owner);
+                    var affected = await cmd.ExecuteNonQueryAsync(default);
+                    if (affected == 0) break;
+                    leased += affected;
+                }
+                return leased;
+            });
+        }
+
+        var results = await Task.WhenAll(tasks);
+        var total = 0;
+        foreach (var c in results) total += c;
+
+        // 互斥不变量：受影响行数之和 == 种子数 ⇔ SKIP LOCKED 派生表互斥成立
+        //（重叠租约则 > 种子数，漏租则 < 种子数；死锁则异常先于此守卫——与 Dapper 栈对照点）
+        if (total != TotalMessages)
+            throw new InvalidOperationException(
+                $"SKIP LOCKED 互斥不变量破坏：{workers} worker 合计 {total} ≠ 种子 {TotalMessages}");
+        return total;
+    }
+
+    private static void AddParameters(DbCommand cmd, string owner)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var p = cmd.CreateParameter();
+        p.ParameterName = "@maxRetry"; p.Value = 10; cmd.Parameters.Add(p);
+        p = cmd.CreateParameter();
+        p.ParameterName = "@now"; p.Value = now; cmd.Parameters.Add(p);
+        p = cmd.CreateParameter();
+        p.ParameterName = "@n"; p.Value = BatchSize; cmd.Parameters.Add(p);
+        p = cmd.CreateParameter();
+        p.ParameterName = "@owner"; p.Value = owner; cmd.Parameters.Add(p);
+        p = cmd.CreateParameter();
+        p.ParameterName = "@until"; p.Value = now.Add(TimeSpan.FromSeconds(30)); cmd.Parameters.Add(p);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// PG 方言特性车道（2026-10-09 缺口清单⑦收尾；仅 --persist-pg 运行）
+// Pipeline 批处理（单往返 vs 逐条对照）/ 读写分离路由决策 / LISTEN-NOTIFY 往返。
+// NOTIFIER 说明：PostgreSqlOutboxNotifier 是 BackgroundService 包装，推送延迟属
+// 异步服务量纲——本车道直接测其底层能力（原生 LISTEN/NOTIFY 往返），包装开销由
+// 集成测试承载。
+// ═══════════════════════════════════════════════════════════
+[MemoryDiagnoser]
+// ⚠️ 无 job attribute：persist-pg 入口模式级 ManualConfig（同文件头注）
+public class PgDialectFeaturesBenchmarks : PersistenceBenchBase
+{
+    private NpgsqlConnection _keeper = null!;
+    private NpgsqlConnection _listener = null!;
+    private NpgsqlConnection _notifySender = null!;
+    private PostgreSqlReadWriteRouter _router = null!;
+    private volatile TaskCompletionSource<bool>? _notifySignal;
+
+    [GlobalSetup]
+    public async Task GlobalSetup()
+    {
+        var cs = RemoteDialectBenchState.ConnectionString
+            ?? throw new InvalidOperationException("远程方言基准须经 persist-pg 入口运行（缺容器注入）");
+        if (RemoteDialectBenchState.DbType != DapperDbType.PostgreSql)
+            throw new InvalidOperationException("PG 方言特性车道仅限 --persist-pg");
+
+        _keeper = new NpgsqlConnection(cs);
+        await _keeper.OpenAsync();
+
+        // Pipeline 批处理连接
+        _notifySender = new NpgsqlConnection(cs);
+        await _notifySender.OpenAsync();
+
+        // LISTEN 通道：监听连接常开 + 事件转发到逐 op 的 TCS
+        _listener = new NpgsqlConnection(cs);
+        await _listener.OpenAsync();
+        _listener.Notification += (_, _) => _notifySignal?.TrySetResult(true);
+        await using (var cmd = _listener.CreateCommand())
+        {
+            cmd.CommandText = "LISTEN bench_notify_ch";
+            await cmd.ExecuteNonQueryAsync(default);
+        }
+
+        // 读写分离路由：双数据源（无真实副本时同库——测路由决策与池获取成本）
+        _router = new PostgreSqlReadWriteRouter(
+            NpgsqlDataSource.Create(cs), NpgsqlDataSource.Create(cs));
+    }
+
+    [GlobalCleanup]
+    public async Task GlobalCleanup()
+    {
+        await _router.DisposeAsync();
+        _listener.Dispose();
+        _notifySender.Dispose();
+        _keeper.Dispose();
+    }
+
+    private async Task ClearOutboxAsync()
+    {
+        await using var cmd = _keeper.CreateCommand();
+        cmd.CommandText = "DELETE FROM outbox_messages";
+        await cmd.ExecuteNonQueryAsync(default);
+    }
+
+    // Pipeline 批处理：100 条 INSERT 一次往返（NpgsqlPipeline.Add ×100 → ExecuteAsync）
+    [Benchmark(Baseline = true)]
+    public async Task<int> Pipeline_BatchInsert100()
+    {
+        await ClearOutboxAsync();
+        await using var pipeline = new PostgreSqlPipeline(_notifySender);
+        for (var i = 0; i < BatchSize; i++)
+        {
+            var m = NewOutboxMessage();
+            pipeline.Add(
+                "INSERT INTO outbox_messages (id, type, payload, content_type, schema_version, status, created_at) "
+                + "VALUES (@id, @type, @payload, @ct, @sv, @st, @ca)",
+                new NpgsqlParameter("id", m.Id.ToString()),
+                new NpgsqlParameter("type", m.Type),
+                new NpgsqlParameter("payload", m.Payload),
+                new NpgsqlParameter("ct", m.ContentType),
+                new NpgsqlParameter("sv", m.SchemaVersion),
+                new NpgsqlParameter("st", (int)m.Status),
+                new NpgsqlParameter("ca", m.CreatedAt));
+        }
+        return await pipeline.ExecuteAsync(default);
+    }
+
+    // 对照：同 100 条逐条往返（差值即单往返批处理的净收益；含清场）
+    [Benchmark]
+    public async Task<int> Sequential_Insert100_Control()
+    {
+        await ClearOutboxAsync();
+        for (var i = 0; i < BatchSize; i++)
+        {
+            var m = NewOutboxMessage();
+            await using var cmd = _notifySender.CreateCommand();
+            cmd.CommandText =
+                "INSERT INTO outbox_messages (id, type, payload, content_type, schema_version, status, created_at) "
+                + "VALUES (@id, @type, @payload, @ct, @sv, @st, @ca)";
+            cmd.Parameters.AddWithValue("id", m.Id.ToString());
+            cmd.Parameters.AddWithValue("type", m.Type);
+            cmd.Parameters.AddWithValue("payload", m.Payload);
+            cmd.Parameters.AddWithValue("ct", m.ContentType);
+            cmd.Parameters.AddWithValue("sv", m.SchemaVersion);
+            cmd.Parameters.AddWithValue("st", (int)m.Status);
+            cmd.Parameters.AddWithValue("ca", m.CreatedAt);
+            await cmd.ExecuteNonQueryAsync(default);
+        }
+        return BatchSize;
+    }
+
+    // 读写分离路由决策 + 连接池获取（获取即还——真实形态由中间件按请求借还）
+    [Benchmark]
+    public int Router_GetWriter()
+    {
+        var conn = _router.GetWriter();
+        conn.Dispose();
+        return 0;
+    }
+
+    [Benchmark]
+    public int Router_GetReader()
+    {
+        var conn = _router.GetReader();
+        conn.Dispose();
+        return 0;
+    }
+
+    // LISTEN/NOTIFY 往返（PostgreSqlOutboxNotifier 底层能力）：PG 协议语义——通知随
+    // 监听连接的下一次命令结果冲刷投递（空闲连接不主动推送），NOTIFY 后跟一次冲刷读
+    // 触发 Notification 事件；口径 = 发送 + 冲刷读 + 事件到达
+    [Benchmark]
+    public async Task<bool> ListenNotify_Roundtrip()
+    {
+        _notifySignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using (var cmd = _notifySender.CreateCommand())
+        {
+            cmd.CommandText = "NOTIFY bench_notify_ch, 'bench'";
+            await cmd.ExecuteNonQueryAsync(default);
+        }
+        await using (var flush = _listener.CreateCommand())
+        {
+            flush.CommandText = "SELECT 1";
+            await flush.ExecuteNonQueryAsync(default);
+        }
+        var received = await _notifySignal.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        return received;
     }
 }
