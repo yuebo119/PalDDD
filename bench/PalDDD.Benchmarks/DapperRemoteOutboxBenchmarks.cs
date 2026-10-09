@@ -15,6 +15,11 @@ using Npgsql;
 using PalDDD.Dapper;
 using PalDDD.Testing;
 using PalDDD.Transactions;
+using PalORM;
+using PalORM.MySql;
+using PalORM.PostgreSql;
+using PalDDD.PalORM.MySql;
+using PalDDD.PalORM.PostgreSql;
 using Testcontainers.MySql;
 using Testcontainers.PostgreSql;
 
@@ -355,6 +360,157 @@ public class DapperRemoteOutboxConcurrencyBenchmarks : PersistenceBenchBase
 
         // 零重复不变量：同 OutboxConcurrencyBenchmarks——多实例租约主张的直接守卫，
         // 在 PG（FOR UPDATE SKIP LOCKED）/MySQL（ADR-024 互斥发散）上验证
+        if (leased != TotalMessages)
+            throw new InvalidOperationException(
+                $"并发租约不变量破坏：{workers} worker 租走 {leased} ≠ 种子 {TotalMessages}");
+        return leased;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// PalORM 栈远程车道（2026-10-08 ⑦ 残余：PG/MySQL 栈扩展）
+// 口径对齐 Dapper 远程车道。⚠️ 实测形态约束（首跑实录）：DataSession 单活跃操作
+// 限制（非线程安全）——共享单会话多 worker 并发抛「already has an active database
+// operation」；多实例形态 = 每 worker 独立 DataSession + store（本车道实现形态，
+// 亦是 PalORM 多实例部署的实测结论）。并发 wave 2W 点裁剪（1/4/8 跨形态）。
+// ═══════════════════════════════════════════════════════════
+[MemoryDiagnoser]
+// ⚠️ 无 job attribute：persist-pg/persist-mysql 入口模式级 ManualConfig（同文件头注）
+public class PalOrmRemoteOutboxBenchmarks : PersistenceBenchBase
+{
+    private const int TotalMessages = 800;
+    private DbConnection _keeper = null!;
+    private IPalOutboxStore[] _workerStores = null!;
+    private List<IAsyncDisposable> _sessions = null!;
+    private bool _isPostgreSql;
+
+    [GlobalSetup]
+    public async Task GlobalSetup()
+    {
+        var cs = RemoteDialectBenchState.ConnectionString
+            ?? throw new InvalidOperationException("远程方言基准须经 persist-pg/persist-mysql 入口运行（缺容器注入）");
+        _isPostgreSql = RemoteDialectBenchState.DbType == DapperDbType.PostgreSql;
+        _keeper = _isPostgreSql ? new NpgsqlConnection(cs) : new MySqlConnection(cs);
+        _keeper.Open();
+
+        // 每 worker 独立 DataSession（单会话非线程安全——类头注实测实录）
+        _workerStores = new IPalOutboxStore[8];
+        _sessions = new List<IAsyncDisposable>(8);
+        for (var w = 0; w < 8; w++)
+        {
+            if (_isPostgreSql)
+            {
+                var session = await DataSession<PostgreSqlProvider>.CreateAsync(DbOptions.Development(cs), default);
+                _sessions.Add(session);
+                _workerStores[w] = new PostgreSqlOutboxStore(session);
+            }
+            else
+            {
+                var session = await DataSession<MySqlProvider>.CreateAsync(DbOptions.Development(cs), default);
+                _sessions.Add(session);
+                _workerStores[w] = new MySqlOutboxStore(session);
+            }
+        }
+    }
+
+    [GlobalCleanup]
+    public async Task GlobalCleanup()
+    {
+        foreach (var session in _sessions)
+            await session.DisposeAsync();
+        _keeper.Dispose();
+    }
+
+    [IterationSetup]
+    public async Task Setup()
+    {
+        await ClearOutboxAsync();
+        for (var i = 0; i < BatchSize; i++)
+            await _workerStores[0].AddMessagesAsync([NewOutboxMessage()]);
+    }
+
+    [Benchmark(Baseline = true)]
+    public async ValueTask<int> Outbox_GetPending_Batch100()
+    {
+        var msgs = await _workerStores[0].GetPendingMessagesAsync(BatchSize, 10, default);
+        if (msgs.Count != BatchSize)
+            throw new InvalidOperationException($"GetPending {msgs.Count} != {BatchSize}");
+        return msgs.Count;
+    }
+
+    [Benchmark]
+    public async ValueTask<int> Outbox_Lease_Batch100()
+    {
+        var msgs = await _workerStores[0].LeasePendingMessagesAsync(BatchSize, "bench",
+            TimeSpan.FromSeconds(30), 10, default);
+        EnsureFullLease(msgs);
+        for (var i = 0; i < BatchSize; i++)
+            await _workerStores[0].AddMessagesAsync([NewOutboxMessage()]);
+        return msgs.Count;
+    }
+
+    [Benchmark]
+    public async Task<int> Drain_Sequential() => await DrainWaveAsync(1);
+
+    [Benchmark]
+    public async Task<int> Drain_4Workers() => await DrainWaveAsync(4);
+
+    [Benchmark]
+    public async Task<int> Drain_8Workers() => await DrainWaveAsync(8);
+
+    /// <summary>减法锚：清场 + 批量种子（无租约）。口径与 Drain_N 的清场/种子段一致。</summary>
+    [Benchmark]
+    public async Task<int> SeedOnly_800()
+    {
+        await ClearOutboxAsync();
+        return await _workerStores[0].AddMessagesAsync(BuildSeed());
+    }
+
+    private static List<OutboxMessage> BuildSeed()
+    {
+        var messages = new List<OutboxMessage>(TotalMessages);
+        for (var i = 0; i < TotalMessages; i++)
+            messages.Add(NewOutboxMessage());
+        return messages;
+    }
+
+    private async Task ClearOutboxAsync()
+    {
+        await using var cmd = _keeper.CreateCommand();
+        cmd.CommandText = "DELETE FROM outbox_messages";
+        await cmd.ExecuteNonQueryAsync(default);
+    }
+
+    private async Task<int> DrainWaveAsync(int workers)
+    {
+        await ClearOutboxAsync();
+        await _workerStores[0].AddMessagesAsync(BuildSeed());
+
+        // 每 worker 独立会话 + store（PalORM 多实例形态）
+        var tasks = new Task<int>[workers];
+        for (var w = 0; w < workers; w++)
+        {
+            var store = _workerStores[w];
+            var owner = $"worker-{w}";
+            tasks[w] = Task.Run(async () =>
+            {
+                var count = 0;
+                while (true)
+                {
+                    var batch = await store.LeasePendingMessagesAsync(
+                        BatchSize, owner, TimeSpan.FromSeconds(30), 10, default);
+                    if (batch.Count == 0) break;
+                    count += batch.Count;
+                }
+                return count;
+            });
+        }
+
+        var results = await Task.WhenAll(tasks);
+        var leased = 0;
+        foreach (var c in results) leased += c;
+
+        // 零重复不变量：同 Dapper 远程车道（ADR-024 PalORM 侧 MySQL 无锁子句的并发实证点）
         if (leased != TotalMessages)
             throw new InvalidOperationException(
                 $"并发租约不变量破坏：{workers} worker 租走 {leased} ≠ 种子 {TotalMessages}");

@@ -187,6 +187,7 @@ static async Task<int> RunRemoteDialectAsync(bool isPostgreSql)
         var medium = MediumInProcessConfig();
         BenchmarkRunner.Run<DapperRemoteOutboxThroughputBenchmarks>(medium);
         BenchmarkRunner.Run<DapperRemoteOutboxConcurrencyBenchmarks>(medium);
+        BenchmarkRunner.Run<PalOrmRemoteOutboxBenchmarks>(medium);
         RemoteDialectBenchState.Connection = null;
         RemoteDialectBenchState.ConnectionString = null;
     }
