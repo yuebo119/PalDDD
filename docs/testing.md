@@ -263,7 +263,7 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | Outbox 吞吐 | ✅ | ✅ | `--infra` | ✅ |
 | Outbox 并发租约争用（N worker=1/2/4/8，InMemory 簿记层 + Dapper SQLite 真库层，每 wave 零重复不变量守卫） | — | ✅ | `--concurrency`（2026-10-08 缺口补齐） | ✅ |
 | Inbox 编排层（InMemory：首投/重复拒绝/完整生命周期） | — | ✅ | `--infra`（2026-10-08 缺口补齐） | ✅ |
-| PG/MySQL 网络真库 Dapper Outbox（吞吐 + 并发 wave；Testcontainers 容器随模式起停） | — | ✅ | `--persist-pg` / `--persist-mysql`（2026-10-08 建成；容器不可达报错退出码 2） | ✅（本机无 Docker 环境时真跑待容器环境，fail-fast 路径已验证） |
+| PG/MySQL 网络真库 Dapper Outbox（吞吐 + 并发 wave；Testcontainers 或 wslc 外部实例双路径） | — | ✅ | `--persist-pg` / `--persist-mysql`（2026-10-08 真跑完成：wslc 路径 `PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` + palddd_bench 库名守卫；Testcontainers 路径留给 Docker 环境，容器不可达报错退出码 2） | ✅（首轮数字与 MySQL 并发死锁实录见 performance.md） |
 | EventLog 写入 | ✅ | ✅ | `--infra` | ✅ |
 | SagaState 持久化 | ✅ | ✅ | `--infra` | ✅ |
 | SQL 生成（Dapper） | ✅ | ✅ | `--infra` | ✅ |
