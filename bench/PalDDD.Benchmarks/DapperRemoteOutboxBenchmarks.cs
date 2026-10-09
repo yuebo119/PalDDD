@@ -14,6 +14,9 @@ using MySqlConnector;
 using Npgsql;
 using PalDDD.Dapper;
 using PalDDD.Dapper.PostgreSql;
+using PalDDD.EventLog;
+using PalDDD.Idempotency;
+using PalUlid = ByteAether.Ulid.Ulid;
 using PalDDD.Testing;
 using PalDDD.Transactions;
 using PalORM;
@@ -203,6 +206,8 @@ internal sealed class RemoteDialectBenchSession : IAsyncDisposable
 public class DapperRemoteOutboxThroughputBenchmarks : PersistenceBenchBase
 {
     private DapperOutboxStore _store = null!;
+    private DapperEventLog _eventLog = null!;
+    private DapperIdempotencyStore _idempotency = null!;
 
     [GlobalSetup]
     public void GlobalSetup()
@@ -211,12 +216,17 @@ public class DapperRemoteOutboxThroughputBenchmarks : PersistenceBenchBase
         if (RemoteDialectBenchState.Connection is null)
             throw new InvalidOperationException("远程方言基准须经 persist-pg/persist-mysql 入口运行（缺容器注入）");
         _store = new DapperOutboxStore(RemoteDialectBenchState.Connection, RemoteDialectBenchState.DbType);
+        // EventLog/Idempotency 口袋补齐（2026-10-09）：与 Outbox 共享主连接（单线程吞吐类无并发争用）。
+        // ⚠️ DapperEventLog 的 dbType 是第三参且默认 Sqlite——首版漏传致 PG/MySQL 走 SQLite 模板
+        //（PG 42804 timestamptz/text、MySQL last_insert_rowid 不存在，两库同根因），修后复跑
+        _eventLog = new DapperEventLog(RemoteDialectBenchState.Connection, dbType: RemoteDialectBenchState.DbType);
+        _idempotency = new DapperIdempotencyStore(RemoteDialectBenchState.Connection, RemoteDialectBenchState.DbType);
     }
 
     [IterationSetup]
     public async Task Setup()
     {
-        await ClearOutboxAsync();
+        await ClearAllAsync();
         for (var i = 0; i < BatchSize; i++)
             _store.AddMessage(NewOutboxMessage());
     }
@@ -246,10 +256,29 @@ public class DapperRemoteOutboxThroughputBenchmarks : PersistenceBenchBase
     public void Outbox_AddSingle()
         => _store.AddMessage(NewOutboxMessage());
 
-    private static async Task ClearOutboxAsync()
+    // EventLog 追加单事件（乐观并发 Any 形态；口径同 DapperPersistenceBenchmarks）
+    [Benchmark]
+    public async ValueTask EventLog_AppendSingle()
+        => await _eventLog.AppendAsync("bench-stream", ExpectedStreamVersion.Any,
+            [NewEventData()], default);
+
+    // 幂等全周期：TryStart（唯一键）+ MarkCompleted（口径同 SQLite 三栈车道）
+    [Benchmark]
+    public async ValueTask Idempotency_TryStart_Completed()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var key = PalUlid.New().ToString();
+        var record = await _idempotency.TryStartAsync("bench-op", key, now, IdempotencyPolicy.Default, default);
+        if (record is null)
+            throw new InvalidOperationException("TryStart 返回 null（唯一键不应冲突）");
+        await _idempotency.MarkCompletedAsync(record, "resp"u8.ToArray(), now.AddSeconds(1));
+    }
+
+    // 三表全清（EventLog/Idempotency 口袋补齐起 outbox/events/idempotency_records）
+    private static async Task ClearAllAsync()
     {
         await using var cmd = RemoteDialectBenchState.Connection!.CreateCommand();
-        cmd.CommandText = "DELETE FROM outbox_messages";
+        cmd.CommandText = "DELETE FROM outbox_messages; DELETE FROM events; DELETE FROM idempotency_records";
         await cmd.ExecuteNonQueryAsync(default);
     }
 }
@@ -384,6 +413,9 @@ public class PalOrmRemoteOutboxBenchmarks : PersistenceBenchBase
     private IPalOutboxStore[] _workerStores = null!;
     private List<IAsyncDisposable> _sessions = null!;
     private bool _isPostgreSql;
+    // EventLog/Idempotency 口袋补齐（2026-10-09）：专用会话（吞吐单线程），接口类型分派
+    private IEventLog? _eventLog;
+    private IIdempotencyStore? _idempotency;
 
     [GlobalSetup]
     public async Task GlobalSetup()
@@ -412,6 +444,22 @@ public class PalOrmRemoteOutboxBenchmarks : PersistenceBenchBase
                 _workerStores[w] = new MySqlOutboxStore(session);
             }
         }
+
+        // EventLog/Idempotency 专用会话（复用 worker 0 的会话族；接口按方言动态分派）
+        if (_isPostgreSql)
+        {
+            var session = await DataSession<PostgreSqlProvider>.CreateAsync(DbOptions.Development(cs), default);
+            _sessions.Add(session);
+            _eventLog = new PostgreSqlEventLog(session);
+            _idempotency = new PostgreSqlIdempotencyStore(session);
+        }
+        else
+        {
+            var session = await DataSession<MySqlProvider>.CreateAsync(DbOptions.Development(cs), default);
+            _sessions.Add(session);
+            _eventLog = new MySqlEventLog(session);
+            _idempotency = new MySqlIdempotencyStore(session);
+        }
     }
 
     [GlobalCleanup]
@@ -426,8 +474,35 @@ public class PalOrmRemoteOutboxBenchmarks : PersistenceBenchBase
     public async Task Setup()
     {
         await ClearOutboxAsync();
+        await ClearAuxTablesAsync();
         for (var i = 0; i < BatchSize; i++)
             await _workerStores[0].AddMessagesAsync([NewOutboxMessage()]);
+    }
+
+    // EventLog 追加单事件（乐观并发 Any 形态；口径同 SQLite 三栈车道）
+    [Benchmark]
+    public async ValueTask EventLog_AppendSingle()
+        => await _eventLog!.AppendAsync("bench-stream", ExpectedStreamVersion.Any,
+            [NewEventData()], default);
+
+    // 幂等全周期：TryStart（唯一键）+ MarkCompleted（口径同 SQLite 三栈车道）
+    [Benchmark]
+    public async ValueTask Idempotency_TryStart_Completed()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var key = PalUlid.New().ToString();
+        var record = await _idempotency!.TryStartAsync("bench-op", key, now, IdempotencyPolicy.Default, default);
+        if (record is null)
+            throw new InvalidOperationException("TryStart 返回 null（唯一键不应冲突）");
+        await _idempotency.MarkCompletedAsync(record, "resp"u8.ToArray(), now.AddSeconds(1));
+    }
+
+    // events/idempotency_records 清场（EventLog/Idempotency 口袋补齐；outbox 由 ClearOutboxAsync 负责）
+    private async Task ClearAuxTablesAsync()
+    {
+        await using var cmd = _keeper.CreateCommand();
+        cmd.CommandText = "DELETE FROM events; DELETE FROM idempotency_records";
+        await cmd.ExecuteNonQueryAsync(default);
     }
 
     [Benchmark(Baseline = true)]

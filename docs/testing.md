@@ -263,7 +263,7 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | Outbox 吞吐 | ✅ | ✅ | `--infra` | ✅ |
 | Outbox 并发租约争用（N worker=1/2/4/8，InMemory 簿记层 + Dapper SQLite 真库层，每 wave 零重复不变量守卫） | — | ✅ | `--concurrency`（2026-10-08 缺口补齐） | ✅ |
 | Inbox 编排层（InMemory：首投/重复拒绝/完整生命周期） | — | ✅ | `--infra`（2026-10-08 缺口补齐） | ✅ |
-| PG/MySQL 网络真库 Dapper + PalORM Outbox（吞吐 + 并发 wave；Testcontainers 或 wslc 外部实例双路径） | — | ✅ | `--persist-pg` / `--persist-mysql`（2026-10-08 双栈真跑完成：wslc 路径 `PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` + palddd_bench 库名守卫；Testcontainers 路径留给 Docker 环境，容器不可达报错退出码 2） | ✅（首轮数字、MySQL 双栈死锁实录与 PalORM 会话非线程安全实录见 performance.md） |
+| PG/MySQL 网络真库 Dapper + PalORM Outbox/EventLog/Idempotency（吞吐 + 并发 wave；Testcontainers 或 wslc 外部实例双路径） | — | ✅ | `--persist-pg` / `--persist-mysql`（2026-10-08 双栈真跑完成 + 2026-10-09 EventLog/Idempotency 口袋补齐：wslc 路径 `PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` + palddd_bench 库名守卫；Testcontainers 路径留给 Docker 环境，容器不可达报错退出码 2） | ✅（数字、MySQL 双栈死锁实录与 PalORM 会话非线程安全实录见 performance.md；吞吐类覆盖三 Store 能力，类名沿用 Outbox 见账本注） |
 | EF 栈租约 SQL 形态（JOIN 派生表 SKIP LOCKED 互斥验证，MySQL） | — | ✅ | `--persist-mysql`（2026-10-09；EF 栈级车道待上游 Provider 出 EF 11 rc 配套版，SQL 形态为其等价物） | ✅（零死锁+互斥不变量+1.75× 加速，已补记 ADR-024） |
 | PG 方言特性（Pipeline 单往返批处理/读写分离路由/LISTEN-NOTIFY 往返） | — | ✅ | `--persist-pg`（2026-10-09；COPY 隐含在种子路径） | ✅ |
 | Projection 吞吐（处理器全周期 + 断点存储直测，InMemory） | — | ✅ | `--coverage`（2026-10-08 缺口补齐） | ✅ |
