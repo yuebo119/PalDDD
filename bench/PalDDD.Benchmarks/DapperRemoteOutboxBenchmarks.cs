@@ -47,6 +47,17 @@ internal sealed class RemoteDialectBenchSession : IAsyncDisposable
 
     public static async Task<RemoteDialectBenchSession> CreateAsync(bool isPostgreSql, CancellationToken ct = default)
     {
+        // 显式 opt-in 外部实例（WSLC/手工容器环境——Testcontainers 走 Docker Remote API，
+        // 无法直连 wslc 运行时；对齐 samples/PalDDD.DapperAotProbe 读环境变量先例）：
+        // 连接串来自 PALDDD_BENCH_PG_CONN / PALDDD_BENCH_MYSQL_CONN，容器生命周期由外部
+        // 管理（例：wslc run -d --name palddd-bench-pg -p 127.0.0.1:15432:5432 …）。
+        // 库名白名单守卫 palddd_bench 前缀：基准 wave 会 DELETE 全表，拒连非专用库。
+        var external = isPostgreSql
+            ? Environment.GetEnvironmentVariable("PALDDD_BENCH_PG_CONN")
+            : Environment.GetEnvironmentVariable("PALDDD_BENCH_MYSQL_CONN");
+        if (!string.IsNullOrWhiteSpace(external))
+            return await CreateExternalAsync(external, isPostgreSql, ct);
+
         // 库名带 palddd_bench_ 前缀 + 随机后缀（容器即沙箱，无探针侧 ownership marker 仪式）
         if (isPostgreSql)
         {
@@ -92,6 +103,56 @@ internal sealed class RemoteDialectBenchSession : IAsyncDisposable
                 throw;
             }
         }
+    }
+
+    private static async Task<RemoteDialectBenchSession> CreateExternalAsync(string connectionString, bool isPostgreSql, CancellationToken ct)
+    {
+        EnsureBenchDatabase(connectionString);
+
+        DbConnection conn = isPostgreSql
+            ? new NpgsqlConnection(connectionString)
+            : new MySqlConnection(connectionString);
+        await conn.OpenAsync(ct);
+        try
+        {
+            // DDL 非幂等（PG/MySQL 均无 IF NOT EXISTS）：表已存在即跳过建表——专用 bench 库
+            // 上语义为「已建过」；schema 漂移由后续 store 操作 fail-fast 暴露
+            if (!await OutboxTableExistsAsync(conn, isPostgreSql))
+                await ApplyDdlAsync(conn, isPostgreSql ? "docs/sql/postgresql/000_schema.sql" : "docs/sql/mysql/000_schema.sql", ct);
+            return new RemoteDialectBenchSession(
+                NoopDisposable.Instance, conn, connectionString,
+                isPostgreSql ? DapperDbType.PostgreSql : DapperDbType.MySql);
+        }
+        catch
+        {
+            await conn.DisposeAsync();
+            throw;
+        }
+    }
+
+    private static void EnsureBenchDatabase(string connectionString)
+    {
+        var database = (string?)new DbConnectionStringBuilder { ConnectionString = connectionString }["Database"];
+        if (string.IsNullOrWhiteSpace(database))
+            throw new InvalidOperationException("外部连接串缺少 Database= 段（库名守卫需要）");
+        if (!database.StartsWith("palddd_bench", StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"外部实例库名守卫失败：{database} 不以 palddd_bench 开头——基准 wave 会清空表，拒连非专用库");
+    }
+
+    private static async Task<bool> OutboxTableExistsAsync(DbConnection conn, bool isPostgreSql)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = isPostgreSql
+            ? "SELECT 1 FROM information_schema.tables WHERE table_name = 'outbox_messages'"
+            : "SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'outbox_messages'";
+        return await cmd.ExecuteScalarAsync(default) is not null;
+    }
+
+    private sealed class NoopDisposable : IAsyncDisposable
+    {
+        public static readonly NoopDisposable Instance = new();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     /// <summary>按方言开新连接（并发车道 worker 各持独立连接 = 真实多实例形态）。</summary>
@@ -208,7 +269,7 @@ public class DapperRemoteOutboxConcurrencyBenchmarks : PersistenceBenchBase
         _workerStores = new DapperOutboxStore[8];
         for (var w = 0; w < 8; w++)
         {
-            _workerConns[w] = OpenWorker();
+            _workerConns[w] = OpenKeeper();
             _workerStores[w] = new DapperOutboxStore(_workerConns[w], RemoteDialectBenchState.DbType);
         }
     }
@@ -245,13 +306,6 @@ public class DapperRemoteOutboxConcurrencyBenchmarks : PersistenceBenchBase
         DbConnection conn = RemoteDialectBenchState.DbType == DapperDbType.PostgreSql
             ? new NpgsqlConnection(RemoteDialectBenchState.ConnectionString!)
             : new MySqlConnection(RemoteDialectBenchState.ConnectionString!);
-        conn.Open();
-        return conn;
-    }
-
-    private static DbConnection OpenWorker()
-    {
-        var conn = OpenKeeper();
         conn.Open();
         return conn;
     }

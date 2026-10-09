@@ -159,7 +159,9 @@ static async Task<int> RunRemoteDialectAsync(bool isPostgreSql)
 #pragma warning restore CA1031
     {
         Console.Error.WriteLine(
-            $"⛔ {(isPostgreSql ? "PostgreSQL" : "MySQL")} 容器不可达（需 Docker/WSL 环境，参考 CI dialect-probe）：{ex.Message}");
+            $"⛔ {(isPostgreSql ? "PostgreSQL" : "MySQL")} 容器不可达（需 Docker/WSL 环境，参考 CI dialect-probe）：{ex.Message}\n" +
+            $"   替代路径：环境变量 {(isPostgreSql ? "PALDDD_BENCH_PG_CONN" : "PALDDD_BENCH_MYSQL_CONN")} 指向外部实例连接串" +
+            $"（库名须 palddd_bench 前缀；wslc 容器环境用此路径，容器生命周期外部管理）");
         return 2;
     }
 

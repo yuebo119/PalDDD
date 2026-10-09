@@ -8,7 +8,7 @@
 
 2026-10-08 性能测试系统优化后，**22 个基准类（Framework 5 + App 2 + Infra 7 + Persistence 3 + SagaLane 1 + Concurrency 2 + Remote 2）全部具备正式报告入口**：`--framework` / `--app` / `--infra` / `--concurrency` / `--persist-pg` / `--persist-mysql` / `--persist` / `--persist-medium` / `--saga` / `--compression` 以模式级 ManualConfig（`Job.MediumRun` + InProcessEmitToolchain + MemoryDiagnoser）绕过 net11-rc moniker 限制（默认 Switcher 入口仍不可用；根因与 jobs-union 双 job 坑详见 `bench/PalDDD.Benchmarks/Program.cs` 头注——类级 `[ShortRunJob]` 已全部移除，同 `--persist` 五十四轮先例）。`--smoke` 新增分配预算断言（Success/FromValue ≤1、Failed ≤50、RaiseEvent ≤140 B/op，超限退出码 1；变异验红实证：预算压至 1 时 RaiseEvent 判 ⛔ 退出码 1）。
 
-**同日缺口补齐轮**：新增 `--app` 车道（DispatcherBenchmarks + SerializationBenchmarks——CQRS 分发链与消息序列化此前是消息发布路径的两大缺位面：分发仅有 <500B 分配契约无计时，序列化零数据）；CompressionBenchmarks 补 LZ4/ZStandard 原生绑定四项（同一 Provider 五算法同负载可比，此前 README 宣传的原生绑定零基准）；`--concurrency` 车道（Outbox N worker 租约争用，InMemory 簿记层 + Dapper SQLite 真库层）把「多实例并发发布零丢失零重复」从正确性主张升级为性能数据——**不变量每 wave 成立（800/800 精确租走、零重复守卫全程未触发），性能形态两层分化**：InMemory 8 worker 退化 1.5×（锁竞争正常量级），Dapper SQLite 多连接并发退化 **25×**（158ms vs 串行 6.2ms——busy 等待升级延迟所致，单机 SQLite 单写者的真实最坏形态）。**后续追加**：Inbox 编排层入 `--infra`（首投 163ns/600B、重复拒绝 3-op 236ns，Error <2%）；`--persist-pg` / `--persist-mysql` 网络真库车道建成（Testcontainers 4.15 + DDL 真源 docs/sql + 镜像真源 TestEnvironment，吞吐与并发 wave 两类八项）——**本机无 Docker/WSL 环境，fail-fast 路径已验证（报错退出码 2），首轮数字待容器环境**（多实例租约在 PG FOR UPDATE SKIP LOCKED / MySQL ADR-024 互斥发散上的真实形态由该车道承接）。「22 类全覆盖」指**运行入口覆盖**，特性面仍非全覆盖——剩余缺口见「未完成项」清单。
+**同日缺口补齐轮**：新增 `--app` 车道（DispatcherBenchmarks + SerializationBenchmarks——CQRS 分发链与消息序列化此前是消息发布路径的两大缺位面：分发仅有 <500B 分配契约无计时，序列化零数据）；CompressionBenchmarks 补 LZ4/ZStandard 原生绑定四项（同一 Provider 五算法同负载可比，此前 README 宣传的原生绑定零基准）；`--concurrency` 车道（Outbox N worker 租约争用，InMemory 簿记层 + Dapper SQLite 真库层）把「多实例并发发布零丢失零重复」从正确性主张升级为性能数据——**不变量每 wave 成立（800/800 精确租走、零重复守卫全程未触发），性能形态两层分化**：InMemory 8 worker 退化 1.5×（锁竞争正常量级），Dapper SQLite 多连接并发退化 **25×**（158ms vs 串行 6.2ms——busy 等待升级延迟所致，单机 SQLite 单写者的真实最坏形态）。**后续追加**：Inbox 编排层入 `--infra`（首投 163ns/600B、重复拒绝 3-op 236ns，Error <2%）；`--persist-pg` / `--persist-mysql` 网络真库车道**建成并完成首轮真跑**（wslc 外部实例路径：`PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` 环境变量 + 库名 palddd_bench 白名单守卫，Testcontainers 路径保留给 Docker 环境）——多实例租约三形态落地：**PG 真并行（4W 中位 ~2.8×）/ MySQL Dapper 栈 N≥2 InnoDB 死锁（ADR-024 取舍的并发新实证）/ SQLite 25× busy 平台期**，详见 PG/MySQL 真库基线段。「22 类全覆盖」指**运行入口覆盖**，特性面仍非全覆盖——剩余缺口见「未完成项」清单。
 
 统计有效性自评（testing.md §五判据套用首轮实测）：绝大多数基准 Error/Mean < 5%（App 车道与框架微基准全部 <1%）；5~15% 可接受带若干项（Outbox.AddSingleMessage 12%、Configuration.Pg 11%、SmartEnum.AllValues 5%、并发 InMemory 4W 13.4% 等，报告标注环境敏感）；**>15% 统计无效 2 项**——SmartEnum.FromValue_Known 24.8% / TryFromValue_Valid 25.9%（ns 级零分配操作的固有抖动，判定以零分配事实为准，引用其计时时需先提升配置）；ValueObject 三项为 ZeroMeasurement（BDN 标注与空方法不可区分，值即 ~0）。Medium 口径跨跑稳定性：`--framework` 二跑关键值跨跑差 AddSingleEvent 0.7% / Create 1.6% / Success 3.5%（对照 ShortRun 历史 53% 跨轮差，medium 裁决实证成立）。
 
@@ -82,6 +82,33 @@ Outbox 并发车道（`--concurrency`，每 wave = 清场 + 种子 800 条 + N w
 
 Inbox 口径注：三方法为 1-op / 3-op / 2-op 捆绑（重复拒绝必然含首投+标记，无法单独测拒绝对端），均含 per-invoke store 重建（ITM-246 教训口径）；600B/528B 含 store + InboxMessage + 记录分配。
 
+## PG/MySQL 网络真库基线（2026-10-08 首轮，wslc 一次性容器 + `PALDDD_BENCH_*_CONN` 外部实例路径）
+
+> 环境：postgres:18.6 / mysql:8.4.11（wslc 本地镜像，旁路端口经 WSL NAT 到 127.0.0.1）；AddSingle ~0.6-1.6ms/条 即网络往返量级，与 SQLite 共享内存库（μs 级）口径差三个数量级属预期。Lease_Batch100 口径含重灌 100 条单条插入（同 SQLite 车道口径），网络下由重灌主导。
+
+吞吐（Dapper 栈）：
+
+| 基准 | PG（postgres:18.6） | MySQL（8.4.11） |
+|---|---:|---:|
+| Outbox_GetPending_Batch100 | 665.4 μs（Error 21% ⚠统计无效） | 664.7 μs（Error 2.6% ✓） |
+| Outbox_Lease_Batch100（含重灌 100） | 58.40 ms（Error 0.8% ✓） | 173.65 ms（Error 1.7% ✓） |
+| Outbox_AddSingle | 641.3 μs（Error 7.8% 环境敏感带） | 1,609.7 μs（Error 3.9% ✓） |
+
+并发 wave（每 wave 种子 800 + N worker 抢租 + 零重复不变量）：
+
+| 基准 | PG | MySQL |
+|---|---:|---:|
+| Drain_Sequential | 128.80 ms（中位 146.70） | 63.62 ms（Error 1.1% ✓） |
+| Drain_2Workers | 102.35 ms（中位 78.97） | **NA：InnoDB 死锁** |
+| Drain_4Workers | 79.24 ms（中位 52.00） | **NA：InnoDB 死锁** |
+| Drain_8Workers | 153.05 ms（中位 140.94） | **NA：InnoDB 死锁** |
+| SeedOnly_800 | 26.59 ms（Error 2.3% ✓） | 18.71 ms（Error 3.2% ✓） |
+
+> **三形态对照（缺口⑦的核心产出）**：同一并发 wave 在三种库上的真实形态——
+> **PG 三栈一致 SKIP LOCKED → 真并行**：中位数序 4W(52ms) < 2W(79ms) < 串行(147ms)，4 worker 中位加速 ~2.8×；但 PG 并发组 Error 25~33%（>15% 统计无效带），只可引中位数趋势、不可引点值，如需点值须升严格档复测。8W 回落（中位 141ms）疑连接数/种子争用，待复测。
+> **MySQL Dapper 栈 N≥2 全部 InnoDB 死锁**（`Deadlock found when trying to get lock`，3 处实录）：根因是 ADR-024 显式接受的「Dapper/PalORM MySQL 租约无锁子句 last-writer-wins」——ADR 记录的风险形态是重复投递窗口，**死锁异常是其并发后果的新实证（ADR 未记录过）**，是否补记 ADR/登记缺陷属用户裁决面，本账本只实录不改动。多实例 MySQL Dapper/PalORM 部署的实际可用性由此存疑（需消费方幂等之外再加死锁重试），EF 栈 SKIP LOCKED 形态见 ADR-024 指引。
+> **SQLite 25× busy 平台期**（见上文并发车道注）。零重复不变量在 PG 全部 wave 成立；MySQL 串行 wave 成立、并发 wave 死锁异常先于守卫触发。
+
 Infra（`--infra`，全 InMemory fixture）：
 
 | 基准 | Mean | Error | Allocated |
@@ -129,6 +156,7 @@ Infra（`--infra`，全 InMemory fixture）：
 | `--concurrency` 正式基线（2026-10-08 缺口清单第①项） | `dotnet run -c Release --project bench/PalDDD.Benchmarks -- --concurrency` | 通过（两类 10 项；零重复不变量每 wave 成立 800/800；发现 SQLite 多连接并发 25× 退化平台期与 InMemory 有界退化 1.5×，结论见并发车道注） |
 | `--infra` 三跑含 Inbox 车道（2026-10-08 缺口清单第②项） | `dotnet run -c Release --project bench/PalDDD.Benchmarks -- --infra` | 通过（7:28，7 类 30 项；Inbox 三项 Error/Mean <2%，数字入基线表） |
 | `--persist-pg` fail-fast 路径（2026-10-08 缺口清单第⑦项） | `dotnet run -c Release --project bench/PalDDD.Benchmarks -- --persist-pg` | 本机（无 Docker/WSL）按设计报错退出码 2（「容器不可达」+ Docker endpoint 明细）——TOOL 人工语义不静默跳过；容器环境下的真跑数字待补记 |
+| `--persist-pg` / `--persist-mysql` 真跑（2026-10-08，wslc 外部实例路径） | wslc 起一次性容器（postgres:18.6 / mysql:8.4.11，旁路端口 15432/13306，库名 palddd_bench_local 前缀守卫命中）+ 环境变量 `PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` | **首轮真库数字落地**：PG 8 项 3:24 exit 0；MySQL 复跑 8 项中 5 项有效 + 并发 N≥2 三项 InnoDB 死锁实录（3 处 0x80004005，见 PG/MySQL 基线注）。MySQL 首跑全红属库的显式安全门（批量导入要求 `AllowLoadLocalInfile=True` 由调用方显式决策 + 服务端 local_infile=1）——一次性容器上合规开启后复跑；修一处 bench 缺陷（OpenKeeper 重构后 OpenWorker 双重 Open） |
 | Native AOT 发布 | `dotnet publish samples/PalDDD.AotSample/PalDDD.AotSample.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishAot=true` | 通过 |
 | 全解决方案构建 | `dotnet build PalDDD.slnx --no-restore` | 通过；0 warning / 0 error |
 | 全测试项目测试 | `for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' \| sort); do dotnet test "$p" --no-restore; done`（MTP 禁用 slnx 批量——握手 → exit 5） | 通过；869 passed / 2 failed / 6 skipped（历史快照：2026-06-28；2026-09-25 实测：16 项目 1502 用例 = 本机 1434 通过 + 68 跳过——60 项 Docker 依赖（PalORM 多方言 46 + Integration 14）由 CI Testcontainers 执行，另 8 项本机 RabbitMQ 预检不可达） |
@@ -150,7 +178,7 @@ Infra（`--infra`，全 InMemory fixture）：
 1. ~~等 BenchmarkDotNet 支持当前 .NET 11 后用默认入口重新生成全部 benchmark 类结果~~（2026-10-08 大部分消解：17 类经 InProcess 显式模式全部可出正式报告；残余 = 默认 Switcher 入口与类级 job 注解的恢复，待 BDN 上游补 net11 moniker 或 .NET 11 GA 后实测，见 `docs/migration/net11-ga-upgrade-plan.md` 步骤 3）。
 2. SmartEnum.FromValue/TryFromValue 两项 Error/Mean >15%（ns 级固有抖动）：如需正式引用其计时，提升配置（严格档 5/10/15）复测；当前以零分配事实为准。
 3. 保留 `--smoke` 作为秒级趋势检查 + 分配预算判定（2026-10-08 起带断言）；计时为单轮无统计效力，不替代正式报告。
-4. **特性面缺口登记（2026-10-08 缺口补齐轮盘点，防「22 类全覆盖」被误读为特性面全覆盖）**：~~① Outbox 并发车道~~（2026-10-08 落地：InMemory + Dapper SQLite 两层 + 零重复不变量守卫）；~~② Inbox 编排层~~（2026-10-08 落地：InMemory 三项入 `--infra`）；⑦ PG/MySQL 车道**量具已建成**（`--persist-pg`/`--persist-mysql`：Testcontainers + DDL 真源 + 镜像真源，吞吐与并发 wave 两类八项/方言），**首轮数字待 Docker/WSL 容器环境**（本机 fail-fast 已验证）；仍缺按优先级——③ Projection 处理器/断点续传吞吐；④ 消息演化 Upgrade 管线（仅单元）；⑤ Specification 内存路径（Expression.Compile 敏感点）；⑥ Hosting 每请求开销（MapCommand/异常中间件）；⑦ 残余：PG/MySQL 上 PalORM/EFCore 栈扩展（现仅 Dapper）与方言特性（COPY/Pipeline/LISTEN-NOTIFY/读写分离）；⑧ 端到端单命令链路（Dispatcher→序列化→UoW→Outbox 全链路）。
+4. **特性面缺口登记（2026-10-08 缺口补齐轮盘点，防「22 类全覆盖」被误读为特性面全覆盖）**：~~① Outbox 并发车道~~（2026-10-08 落地：InMemory + Dapper SQLite 两层 + 零重复不变量守卫）；~~② Inbox 编排层~~（2026-10-08 落地：InMemory 三项入 `--infra`）；⑦ PG/MySQL 车道**首轮真跑完成**（wslc 外部实例路径，多实例租约三形态见 PG/MySQL 真库基线段；PG 并发组 Error >15% 点值待严格档复测、8W 回落形态待复测）；仍缺按优先级——③ Projection 处理器/断点续传吞吐；④ 消息演化 Upgrade 管线（仅单元）；⑤ Specification 内存路径（Expression.Compile 敏感点）；⑥ Hosting 每请求开销（MapCommand/异常中间件）；⑦ 残余：PG/MySQL 上 PalORM/EFCore 栈扩展（现仅 Dapper，EF MySQL 栈的 SKIP LOCKED 并发形态是 ADR-024 指引的验证缺口）与方言特性（COPY/Pipeline/LISTEN-NOTIFY/读写分离）；⑧ 端到端单命令链路（Dispatcher→序列化→UoW→Outbox 全链路）。
 
 ## 发布判断
 
