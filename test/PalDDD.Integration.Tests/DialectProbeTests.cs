@@ -217,6 +217,30 @@ public sealed partial class DialectProbeTests
         // #5「Outbox MarkProcessed 后无 pending」
         store.MarkProcessed(leased[0], clock.GetUtcNow());
         await Assert.That(await store.GetPendingMessagesAsync(10, 10, default)).IsEmpty();
+
+        // C2'（2026-10-09 优化轮）：批量写入 3 条（≤16 行阈值带）——MySQL 走新参数化多行
+        // VALUES 路径、PG 走 COPY，两侧行数守卫 + 追踪列回读为锁定测试（改前该覆盖缺失，
+        // MySQL 小批量路径仅有 SQLite 侧同族测试无法覆盖方言 SQL）
+        var batch = new List<OutboxMessage>();
+        for (var i = 0; i < 3; i++)
+        {
+            batch.Add(new OutboxMessage
+            {
+                Type = $"probe.batch.v{i}",
+                Payload = [1, 2, 3],
+                ContentType = "application/json",
+                SchemaVersion = 1,
+                CorrelationId = Ulid.New(),
+                CausationId = Ulid.New(),
+                TraceParent = "00-abc-def-01",
+                TraceState = "probe=1",
+            });
+        }
+        await Assert.That(await store.AddMessagesAsync(batch)).IsEqualTo(3);
+        var batchPending = await store.GetPendingMessagesAsync(10, 10, default);
+        await Assert.That(batchPending.Count).IsEqualTo(3);
+        await Assert.That(batchPending[0].CorrelationId).IsEqualTo(batch[0].CorrelationId);
+        await Assert.That(batchPending[0].TraceParent).IsEqualTo("00-abc-def-01");
     }
 
     /// <summary>原探针 EventLogSmoke——3 项断言（冲突分类含异常类型鉴别）。</summary>

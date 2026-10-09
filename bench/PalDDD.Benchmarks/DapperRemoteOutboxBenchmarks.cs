@@ -256,6 +256,20 @@ public class DapperRemoteOutboxThroughputBenchmarks : PersistenceBenchBase
     public void Outbox_AddSingle()
         => _store.AddMessage(NewOutboxMessage());
 
+    // C2'（2026-10-09 优化轮）：k=5 批量写入（多事件保存典型形态）——PG 单 COPY 往返 /
+    // MySQL VALUES 单往返（≤16 行路由，2026-10-09 起）；与 AddSingle 对照即批化收益。
+    // 行为校验：返回行数必须等于 5（VALUES/COPY 路径行数守卫的端到端实证）
+    [Benchmark]
+    public async ValueTask<int> Outbox_AddBatch5()
+    {
+        var messages = new OutboxMessage[5];
+        for (var i = 0; i < 5; i++)
+            messages[i] = NewOutboxMessage();
+        var count = await _store.AddMessagesAsync(messages);
+        if (count != 5) throw new InvalidOperationException($"AddMessagesAsync {count} != 5——批量路径行为校验失败");
+        return count;
+    }
+
     // EventLog 追加单事件（乐观并发 Any 形态；口径同 DapperPersistenceBenchmarks）
     [Benchmark]
     public async ValueTask EventLog_AppendSingle()

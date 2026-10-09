@@ -13,6 +13,29 @@ namespace PalDDD.Compression;
 // 与 SystemCompressor 的 Brotli 路径同构：输出累计每轮即校验 MaxOutputBytes，
 // 超限的下一轮立即中止——上限检查先于后续分配生效，而非全量解压完成之后。
 
+// C6（2026-10-09 优化轮）：解压增长缓冲的线程槽池——三压缩器共用一个 ThreadStatic 槽，
+// 免每调用 new ArrayBufferWriter 及其倍增分配。权衡镜像 JsonMessageSerializer 的
+// ThreadStatic 池先例（含峰值驻留声明）：缓冲按历史峰值容量保留，线程退出才回收；
+// 输出上限受 DecompressionGuard.MaxOutputBytes 约束，单线程峰值驻留有界。
+// 非重入：单线程内嵌套 Decompress（自定义流内回调）会清空外层缓冲——与序列化器池
+// 同款约束，本 API 形态（同步直解）无嵌套路径。
+internal static class DecompressBufferPool
+{
+    [ThreadStatic]
+    private static ArrayBufferWriter<byte>? _writer;
+
+    /// <summary>取本线程的解压缓冲（复用前 Clear；异常残留由下一次 Rent 的 Clear 清除）。</summary>
+    public static ArrayBufferWriter<byte> Rent()
+    {
+        var writer = _writer;
+        if (writer is null)
+            _writer = writer = new ArrayBufferWriter<byte>();
+        else
+            writer.Clear();
+        return writer;
+    }
+}
+
 /// <summary>
 /// LZ4 压缩器 — 基于 NativeCompressions (Cysharp) 的原生绑定。
 /// </summary>
@@ -28,16 +51,25 @@ internal sealed class LZ4Compressor : ICompressor
         // 在 .NET 11 Preview 下因 int→UIntPtr 隐式转换触发重载解析 bug 导致栈溢出。
         // 直接用 UIntPtr 重载绕过包装层的递归。1.0.1 升位复核（2026-10-08）：int 重载仍在，
         // 显式 UIntPtr 限定维持直连原生重载路径；往返与守卫测试面板覆盖。
-        var maxSize = LZ4.GetMaxCompressedLength((nuint)data.Length);
-        var destination = new byte[maxSize];
-
-        var options = LZ4CompressionOptions.Default with
+        var maxSize = (int)LZ4.GetMaxCompressedLength((nuint)data.Length);
+        // C6（2026-10-09 优化轮）：scratch 改 ArrayPool 租借——原每调用 new byte[maxSize]
+        // 为压缩分配大头（16KB 输入实测 16.8KB/op）；v13 裁剪拷贝决策保留（返回值仍为
+        // 精确尺寸的独立数组），仅 scratch 不再每次分配
+        var destination = ArrayPool<byte>.Shared.Rent(maxSize);
+        try
         {
-            CompressionLevel = MapLevel(level),
-        };
+            var options = LZ4CompressionOptions.Default with
+            {
+                CompressionLevel = MapLevel(level),
+            };
 
-        var written = LZ4.Compress(data, destination, options);
-        return destination.AsSpan(0, written).ToArray(); // v13：裁剪拷贝对齐 BrotliCompressor——ReadOnlyMemory 会持住整个 maxSize 超分配数组（8MB 输入 LZ4 上界 ~8MB+ 的 LoH 驻留）
+            var written = LZ4.Compress(data, destination, options);
+            return destination.AsSpan(0, written).ToArray(); // v13：裁剪拷贝对齐 BrotliCompressor——ReadOnlyMemory 会持住整个 maxSize 超分配数组（8MB 输入 LZ4 上界 ~8MB+ 的 LoH 驻留）
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(destination);
+        }
     }
 
     public byte[] Decompress(ReadOnlySpan<byte> compressed)
@@ -55,7 +87,7 @@ internal sealed class LZ4Compressor : ICompressor
         try
         {
             using var decoder = new LZ4Decoder();
-            var buffer = new ArrayBufferWriter<byte>();
+            var buffer = DecompressBufferPool.Rent(); // C6（2026-10-09 优化轮）：线程槽复用，见 DecompressBufferPool 头注
             var source = compressed;
             long totalWritten = 0;
 
@@ -104,16 +136,23 @@ internal sealed class ZStandardCompressor : ICompressor
     {
         if (data.IsEmpty) return Array.Empty<byte>();
 
-        var maxSize = Zstandard.GetMaxCompressedLength((nuint)data.Length);
-        var destination = new byte[maxSize];
-
-        var options = ZstandardCompressionOptions.Default with
+        var maxSize = (int)Zstandard.GetMaxCompressedLength((nuint)data.Length);
+        // C6（2026-10-09 优化轮）：scratch 改 ArrayPool 租借（同 LZ4 路径，v13 裁剪决策保留）
+        var destination = ArrayPool<byte>.Shared.Rent(maxSize);
+        try
         {
-            CompressionLevel = MapLevel(level),
-        };
+            var options = ZstandardCompressionOptions.Default with
+            {
+                CompressionLevel = MapLevel(level),
+            };
 
-        var written = Zstandard.Compress(data, destination, options);
-        return destination.AsSpan(0, written).ToArray(); // v13：裁剪拷贝对齐 BrotliCompressor——ReadOnlyMemory 会持住整个 maxSize 超分配数组（8MB 输入 ZStd 上界 ~8MB+ 的 LoH 驻留）
+            var written = Zstandard.Compress(data, destination, options);
+            return destination.AsSpan(0, written).ToArray(); // v13：裁剪拷贝对齐 BrotliCompressor——ReadOnlyMemory 会持住整个 maxSize 超分配数组（8MB 输入 ZStd 上界 ~8MB+ 的 LoH 驻留）
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(destination);
+        }
     }
 
     public byte[] Decompress(ReadOnlySpan<byte> compressed)
@@ -127,10 +166,12 @@ internal sealed class ZStandardCompressor : ICompressor
         // 流式 span 直解（形态对齐同库 BrotliCompressor.Decompress）：每轮 Advance 后即校验上限，
         // 超限立即中止——不再等全量分配完成。ITM-219：OOM → 受控异常（同 LZ4 路径）。
         // v38 P3：补 ex 内层异常保根因堆栈（ITM-219 只声明行为权衡未覆盖可诊断性）。
+        // C6（2026-10-09 优化轮）：增长缓冲改 DecompressBufferPool 线程槽复用（原每调用
+        // new ArrayBufferWriter 及倍增序列为解压分配大头）；异常残留由下一次 Rent 的 Clear 清除
         try
         {
             using var decoder = new ZstandardDecoder();
-            var buffer = new ArrayBufferWriter<byte>();
+            var buffer = DecompressBufferPool.Rent();
             var source = compressed;
             long totalWritten = 0;
 
@@ -189,16 +230,23 @@ internal sealed class OpenZLCompressor : ICompressor
 
         // OpenZL 当前使用 Zstandard 作为底层实现，
         // 后续 NativeCompressions 版本会提供专用的 OpenZL API。
-        var maxSize = Zstandard.GetMaxCompressedLength((nuint)data.Length);
-        var destination = new byte[maxSize];
-
-        var options = ZstandardCompressionOptions.Default with
+        var maxSize = (int)Zstandard.GetMaxCompressedLength((nuint)data.Length);
+        // C6（2026-10-09 优化轮）：scratch 改 ArrayPool 租借（同 ZStandard 路径，v13 裁剪决策保留）
+        var destination = ArrayPool<byte>.Shared.Rent(maxSize);
+        try
         {
-            CompressionLevel = MapLevel(level),
-        };
+            var options = ZstandardCompressionOptions.Default with
+            {
+                CompressionLevel = MapLevel(level),
+            };
 
-        var written = Zstandard.Compress(data, destination, options);
-        return destination.AsSpan(0, written).ToArray(); // v13：裁剪拷贝对齐 BrotliCompressor——ReadOnlyMemory 会持住整个 maxSize 超分配数组（ZStd/OpenZL 同为 Zstd 字节格式）
+            var written = Zstandard.Compress(data, destination, options);
+            return destination.AsSpan(0, written).ToArray(); // v13：裁剪拷贝对齐 BrotliCompressor——ReadOnlyMemory 会持住整个 maxSize 超分配数组（ZStd/OpenZL 同为 Zstd 字节格式）
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(destination);
+        }
     }
 
     public byte[] Decompress(ReadOnlySpan<byte> compressed)
@@ -215,7 +263,7 @@ internal sealed class OpenZLCompressor : ICompressor
         try
         {
             using var decoder = new ZstandardDecoder();
-            var buffer = new ArrayBufferWriter<byte>();
+            var buffer = DecompressBufferPool.Rent(); // C6（2026-10-09 优化轮）：线程槽复用，见 DecompressBufferPool 头注
             var source = compressed;
             long totalWritten = 0;
 

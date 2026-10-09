@@ -213,6 +213,12 @@ public sealed class Dispatcher
 
         var handler = (IHandler)services.GetRequiredService<THandler>();
 
+        // C5（2026-10-09 优化轮）：零行为快路径——空管道下状态机首步即直呼 handler，
+        // 此处直接返回等价 ValueTask，省状态机实例与 ExecuteNextAsync 方法组委托两次
+        // 分配（实测零行为 216B/op 中约半数为该两笔）；语义与状态机空路径逐字一致
+        if (matching.IsEmpty)
+            return await handler.HandleAsync(request, ct).ConfigureAwait(false);
+
         var pipeline = new PipelineStateMachine();
         pipeline.Reset(matching, handler, request, ct);
         // ITM-218 修复（三十二轮）：补 ConfigureAwait(false)（见 SendAsync）

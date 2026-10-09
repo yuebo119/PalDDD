@@ -205,7 +205,8 @@ public static class DapperBulkCopy
     /// <summary>
     /// MySQL BulkCopy 批量导入。<br/>
     /// 💡 MySqlBulkCopy 使用 MySQL 原生的 LOAD DATA INFILE 协议，比逐行 INSERT 快约 10 倍。<br/>
-    /// ⚡ 需要连接字符串包含 <c>AllowLoadLocalInfile=True</c>。<br/>
+    /// ⚡ 大批量（&gt; <see cref="MySqlMultiRowInsertRowThreshold"/> 行）需要连接字符串包含
+    /// <c>AllowLoadLocalInfile=True</c>；小批量自动路由多行 VALUES（C2'，2026-10-09），无此要求。<br/>
     /// 🛡️ 检查 <see cref="MySqlBulkCopyResult.Warnings"/> 防止静默数据截断。<br/>
     /// ⚠️ v35 P3：列类型按首个非空值采样（ITM-214 跨行首个非空值口径）——跨行同列异型
     ///（如首行 int、后续 long）时 DataTable 列定型为首个非空值的类型，不兼容值延迟到
@@ -220,12 +221,20 @@ public static class DapperBulkCopy
     {
         var myConn = (MySqlConnection)conn;
 
+        // C2'（2026-10-09 优化轮）：小批量路由到参数化多行 VALUES——单往返且无
+        // AllowLoadLocalInfile 部署要求（LOAD DATA 的安全门由调用方显式决策，小批量
+        // 不应被迫继承该要求）；阈值覆盖领域保存多事件典型形态（k=1~5）。大批量仍走
+        // MySqlBulkCopy（LOAD DATA 在数百行以上量级占优）
+        if (items.Count <= MySqlMultiRowInsertRowThreshold)
+            return await MySqlMultiRowValuesAsync(conn, table, cols, items, extractor, transaction, ct).ConfigureAwait(false);
+
         // P3 修复（二十一轮）：AllowLoadLocalInfile 前提从注释升级为运行时检测——
         // MySqlBulkCopy 走 LOAD DATA LOCAL INFILE 协议，MySqlConnector 连接串缺
         // AllowLoadLocalInfile=true 时 WriteToServerAsync 抛晦涩的协议异常（或静默零行）。
         // 不自动开启（该选项涉及服务端 local_infile 权限面，须由调用方显式决策）。
         // 检测放在 MySQL 批量路径入口而非 AddPalMySqlDataSource DI 入口——前提仅批量路径
         // 需要，DI 入口抛异常会误伤不使用 bulk copy 的应用启动。
+        // C2' 注：本检查现仅约束大批量（LOAD DATA）路径——小批量已改走 VALUES，无此要求
         if (!new MySqlConnectionStringBuilder(myConn.ConnectionString).AllowLoadLocalInfile)
             throw new InvalidOperationException(
                 "MySQL 批量导入要求连接字符串包含 'AllowLoadLocalInfile=True'（MySqlBulkCopy 走 LOAD DATA LOCAL INFILE 协议）。" +
@@ -314,6 +323,70 @@ public static class DapperBulkCopy
                 $"MySqlBulkCopy 仅插入 {result.RowsInserted}/{items.Count} 行（非全量，可能含被忽略/重复键行）。");
 
         return result.RowsInserted;
+    }
+
+    /// <summary>
+    /// C2'（2026-10-09 优化轮）：MySQL 小批量路由阈值——≤ 此行数走参数化多行 VALUES
+    /// （单往返、无 AllowLoadLocalInfile 要求），超过走 MySqlBulkCopy（LOAD DATA）。
+    /// 取值依据：领域保存多事件典型形态 k=1~5 + 小批量种子；16×11 列=176 参数，
+    /// 远离 MySQL 单语句 65535 参数上界。
+    /// </summary>
+    private const int MySqlMultiRowInsertRowThreshold = 16;
+
+    /// <summary>
+    /// C2'（2026-10-09 优化轮）：MySQL 参数化多行 VALUES 插入——单语句单往返。
+    /// 动机：原批量路径统一走 MySqlBulkCopy（LOAD DATA），小批量被迫继承其
+    /// AllowLoadLocalInfile + local_infile=1 部署要求，而多行 VALUES 是标准 SQL、
+    /// 无额外权限面。参数走 ADO 原生 CreateParameter（不经 Dapper 拦截器，
+    /// dapper-param-guard 的匿名参数枚举直传形态在本路径不出现）。
+    /// </summary>
+    private static async Task<int> MySqlMultiRowValuesAsync<T>(
+        DbConnection conn, string table, string[] cols,
+        IReadOnlyList<T> items, Func<T, object?[]> extractor, DbTransaction? transaction, CancellationToken ct)
+    {
+        // 外部事务类型校验（镜像 MySqlBulkAsync 的 MySqlTransaction fail-fast）；
+        // 单语句自原子，未传事务时无需自建（autocommit 单语句即一次提交）
+        var mysqlTx = transaction as MySqlTransaction
+            ?? (transaction is null
+                ? null
+                : throw new ArgumentException(
+                    $"MySQL 多行 VALUES 插入要求事务为 MySqlTransaction，实际为 {transaction.GetType().Name}。",
+                    nameof(transaction)));
+
+        var colList = string.Join(", ", cols);
+        var rows = new string[items.Count];
+        for (var r = 0; r < items.Count; r++)
+        {
+            var placeholders = new string[cols.Length];
+            for (var c = 0; c < cols.Length; c++)
+                placeholders[c] = $"@r{r}c{c}";
+            rows[r] = "(" + string.Join(", ", placeholders) + ")";
+        }
+        var sql = $"INSERT INTO {table} ({colList}) VALUES {string.Join(", ", rows)}";
+
+        await using var cmd = conn.CreateCommand();
+        cmd.Transaction = mysqlTx;
+        cmd.CommandText = sql;
+        for (var r = 0; r < items.Count; r++)
+        {
+            var values = extractor(items[r]);
+            for (var c = 0; c < cols.Length; c++)
+            {
+                var param = cmd.CreateParameter();
+                param.ParameterName = $"@r{r}c{c}";
+                // P2（八轮评审）同款显式转换：Ulid→string / DateTimeOffset→UtcDateTime /
+                // decimal→Invariant 字符串——镜像 MySqlBulkAsync 的 DataTable 填充口径
+                param.Value = ConvertForMySql(values[c]) ?? DBNull.Value;
+                cmd.Parameters.Add(param);
+            }
+        }
+
+        var affected = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        // 行数守卫（镜像 ITM-197 语义）：非全量写入显式暴露而非静默成功
+        if (affected != items.Count)
+            throw new InvalidOperationException(
+                $"MySQL 多行 VALUES 仅插入 {affected}/{items.Count} 行（非全量，可能含被忽略/重复键行）。");
+        return affected;
     }
 
     /// <summary>
