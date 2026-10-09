@@ -27,7 +27,7 @@ namespace PalDDD.PalORM.Stores;
 /// 防御方向分叉（PalORM 更严）。仅手工构造 OutboxMessage 直调可达（正常 Lease 恒
 /// 同写 owner+until），按更严方向保留。</para>
 /// </summary>
-public class PalOrmOutboxStore<TProvider> : IPalOutboxStore
+public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutboxStore
     where TProvider : IDbProvider
 {
     /// <summary>共享的 Scoped 数据库会话（事务自动传播源）。</summary>

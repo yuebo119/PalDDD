@@ -170,6 +170,63 @@ public sealed class OutboxDomainEventInterceptorTests
         await Assert.That(store.AddedMessages[0].SchemaVersion).IsEqualTo(TestDescriptor.SchemaVersion);
     }
 
+    // 轮四（2026-10-10）：立即写 store 的分派锁定——marker store 在 SavingChangesAsync
+    // 走单次 AddMessagesAsync 批量（含全部事件、零逐条 AddMessage），同步钩子（无异步
+    // 可用）维持逐条路径。改前两路径均逐条（批量断言红），构成红→绿锁定
+    [Test]
+    public async Task SavingChangesAsync_ImmediateStore_SingleBatchCallWithAllEvents(CancellationToken cancellationToken)
+    {
+        var store = new RecordingImmediateOutboxStore();
+        var serializer = new PassthroughSerializer();
+        var catalog = new SingleDescriptorCatalog(TestDescriptor);
+        var interceptor = new OutboxDomainEventInterceptor(store, serializer, catalog);
+        var options = new DbContextOptionsBuilder<TestDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
+            .AddInterceptors(interceptor)
+            .Options;
+
+        await using var context = new TestDbContext(options);
+        var entity = new TestEntity { Id = 1, Name = "alpha" };
+        entity.AppendEventDirectly(new TestDomainEvent());
+        entity.AppendEventDirectly(new TestDomainEvent());
+        entity.AppendEventDirectly(new TestDomainEvent());
+        context.TestEntities.Add(entity);
+
+        await context.SaveChangesAsync(cancellationToken);
+
+        await Assert.That(store.Batches).Count().IsEqualTo(1);
+        await Assert.That(store.Batches[0]).Count().IsEqualTo(3);
+        await Assert.That(store.AddedViaSingle).Count().IsEqualTo(0);
+        await Assert.That(store.Batches[0][0].Type).IsEqualTo(TestDescriptor.Name);
+        await Assert.That(store.Batches[0][2].SchemaVersion).IsEqualTo(TestDescriptor.SchemaVersion);
+    }
+
+    [Test]
+    public async Task SavingChanges_SyncHook_OnImmediateStore_StillPerEvent(CancellationToken cancellationToken)
+    {
+        var store = new RecordingImmediateOutboxStore();
+        var serializer = new PassthroughSerializer();
+        var catalog = new SingleDescriptorCatalog(TestDescriptor);
+        var interceptor = new OutboxDomainEventInterceptor(store, serializer, catalog);
+        var options = new DbContextOptionsBuilder<TestDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
+            .AddInterceptors(interceptor)
+            .Options;
+
+        await using var context = new TestDbContext(options);
+        var entity = new TestEntity { Id = 1, Name = "alpha" };
+        entity.AppendEventDirectly(new TestDomainEvent());
+        entity.AppendEventDirectly(new TestDomainEvent());
+        context.TestEntities.Add(entity);
+
+        context.SaveChanges();
+
+        await Assert.That(store.AddedViaSingle).Count().IsEqualTo(2);
+        await Assert.That(store.Batches).Count().IsEqualTo(0);
+    }
+
     [Test]
     public async Task SavingChanges_WhenSaveFails_KeepsDomainEventsOnEntity(CancellationToken cancellationToken)
     {
@@ -211,6 +268,41 @@ public sealed class OutboxDomainEventInterceptorTests
         public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
         {
             AddedMessages.AddRange(messages);
+            return ValueTask.FromResult(messages.Count);
+        }
+
+        public ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
+            => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
+
+        public ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
+            => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
+
+        public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
+        { }
+
+        public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
+        { }
+
+        public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
+        { }
+
+        public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct) => ValueTask.FromResult(0);
+
+        public ValueTask<int> SaveChangesAsync(CancellationToken ct) => ValueTask.FromResult(0);
+    }
+
+    /// <summary>轮四（2026-10-10）：IImmediateWriteOutboxStore 标注的记录 store——分路径记账（单条 vs 批量）。</summary>
+    internal sealed class RecordingImmediateOutboxStore : IPalOutboxStore, PalDDD.Transactions.IImmediateWriteOutboxStore
+    {
+        public List<OutboxMessage> AddedViaSingle { get; } = [];
+
+        public List<IReadOnlyList<OutboxMessage>> Batches { get; } = [];
+
+        public void AddMessage(OutboxMessage message) => AddedViaSingle.Add(message);
+
+        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
+        {
+            Batches.Add(messages);
             return ValueTask.FromResult(messages.Count);
         }
 

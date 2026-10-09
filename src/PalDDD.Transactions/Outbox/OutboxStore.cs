@@ -97,3 +97,29 @@ public interface IPalOutboxStore
     /// </remarks>
     ValueTask<int> SaveChangesAsync(CancellationToken ct);
 }
+
+/// <summary>
+/// 立即写 Outbox store——<see cref="IPalOutboxStore.AddMessagesAsync"/> 语义在「立即执行」上的强化契约
+///（优化轮四，2026-10-10）。
+/// <para>
+/// 实现方声明：本方法的全部写入在调用内立即完成（对 store 自身连接/事务），不依赖、也不触发
+/// 调用方的 <c>SaveChanges</c>——因此可在 EF <c>SavingChanges(Async)</c> 拦截相位安全调用
+///（<c>OutboxDomainEventInterceptor</c> 的异步批量路径据此分派：立即写族多事件合并单次调用
+/// 并消除逐条同步写在远程库上的往返级线程阻塞）。
+/// </para>
+/// <para>
+/// <b>OutboxDbContext（EF 栈）刻意不实现本接口</b>：其 <c>AddMessage</c> 是 ChangeTracker
+/// 跟踪添加（写入延迟到上下文自身的 SaveChanges），且其 <c>AddMessagesAsync</c> 内嵌自持
+/// <c>SaveChangesAsync</c>——在拦截相位调用构成 EF 重入（SaveChanges-in-SavingChanges，
+/// 未定义行为）。拦截器对其实例维持逐条 <c>AddMessage</c> 跟踪路径。
+/// </para>
+/// <para>
+/// 成员签名与 <see cref="IPalOutboxStore.AddMessagesAsync"/> 完全一致——实现类的既有公共
+/// <c>AddMessagesAsync</c> 同时满足两接口（单一方法映射），标注本接口即完成契约声明。
+/// </para>
+/// </summary>
+public interface IImmediateWriteOutboxStore
+{
+    /// <summary>立即批量写入并返回写入行数——语义与 <see cref="IPalOutboxStore.AddMessagesAsync"/> 一致，叠加「立即执行、无调用方 SaveChanges 依赖」契约。</summary>
+    ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages);
+}

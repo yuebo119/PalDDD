@@ -334,6 +334,28 @@ D：Outbox 单条插入执行层去 Dapper 化（`AddMessage` 改原生 ADO 命�
 
 > 分配勘误：原推断「10.5KB 主要来自 Dapper 机械层」仅部分成立——去 Dapper 后仍余 ~8.4KB（SQLite 驱动/命令内部 + 基准侧 NewOutboxMessage），D 的真实贡献为 -2.07KB；以分配列实证裁决而非推断，保留。
 
+## 优化轮四（2026-10-10）：拦截器异步路径批量化（IImmediateWriteOutboxStore 契约分派）
+
+> 前三轮登记的「拦截器多事件批化缓做」本轮以契约分派形态安全落地。根因回顾：EF store 的
+> `AddMessagesAsync` 内嵌自持 `SaveChangesAsync`，在 SavingChanges 相位调用构成 EF 重入——
+> 但该陷阱只属于延迟写族。解法：新增公共接口 `IImmediateWriteOutboxStore`（重声明同名
+> `AddMessagesAsync`，单一方法同时满足两接口，实现类零新增方法），Dapper/InMemory/PalORM
+> 三栈标注（立即写语义），EF `OutboxDbContext` 刻意不标注。拦截器 `SavingChangesAsync`
+> 据此分派：立即写族单次 `AddMessagesAsync` 批量（消息构造提取 `BuildOutboxMessage` 单一
+> 来源，自清理域镜像 v34 P2 形态），EF store 与同步钩子维持逐条路径原语义。
+
+收益（消费方可见的执行形态变化）：
+1. **多事件保存批化**：立即写族 k 事件从 k 次单条写合并为 1 次批量（PG 单 COPY 往返），
+   收益量级即上文 AddBatch5 基准（PG 3.5× / MySQL 3.8× / SQLite 3.1×）。
+2. **异步路径解阻塞**：原 `SavingChangesAsync` 逐条调用同步 `AddMessage`，远程库上每事件
+   对异步调用线程阻塞一个往返（PG ~609μs/条）；批量路径为真异步，消除线程池阻塞
+   （吞吐影响为 [推断]，量级取决于并发与线程池压力，正确性由锁定测试保障）。
+
+验证：锁定测试红→绿（`SavingChangesAsync_ImmediateStore_SingleBatchCallWithAllEvents`：
+marker store 单次批量含全部事件、零逐条；同步钩子对 marker store 仍逐条）；**S3/红证明**
+（翻掉分派因子后该测试转红、恢复后转绿，因子归因坐实）；非 marker 路径既有测试原样通过
+（回归锁定）；16 面板全绿（快照 +2 行恰为新增接口）；公共 API 快照再生提交。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
