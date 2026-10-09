@@ -60,6 +60,12 @@
     <PackageReference Include="Testcontainers.MySql" />
     <PackageReference Include="Npgsql" />
     <PackageReference Include="MySqlConnector" />
+    <!-- 2026-10-09 新维度轮：横向对比车道——MediatR 锚定 12.5.0（13 转商业许可，
+         Apache-2.0 白名单内）；CAP 8.4.1 全家 MIT（发布对比经 PALDDD_BENCH_CAP opt-in） -->
+    <PackageReference Include="MediatR" />
+    <PackageReference Include="DotNetCore.CAP" />
+    <PackageReference Include="DotNetCore.CAP.RabbitMQ" />
+    <PackageReference Include="DotNetCore.CAP.MySql" />
     <!-- 2026-10-08 缺口清单第⑥项：Hosting 每请求开销车道需要 ASP.NET Core 抽象面
          （DefaultHttpContext/ApplicationBuilder/RouteEndpoint，FrameworkReference 零包新增） -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

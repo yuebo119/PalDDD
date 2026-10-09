@@ -13,6 +13,27 @@ if (args is ["--smoke"])
     return SmokeBenchmarks.Run();
 }
 
+// 2026-10-09 新维度轮①：--qps——绝对 QPS 并行量具（非 BDN，1/4/8 线程 × dispatch/chain
+// 两场景，每格 3s 实测聚合 ops/sec；口径趋势级，同日同机可比）。
+if (args is ["--qps"])
+{
+    return QpsHarness.Run();
+}
+
+// 2026-10-09 新维度轮②：--compare——横向对比（MediatR 12.5.0 同进程同 harness 四点对照；
+// CAP 发布对比经 PALDDD_BENCH_CAP 环境变量 opt-in，见 CapComparisonBenchmarks 头注）。
+if (args.Contains("--compare", StringComparer.OrdinalIgnoreCase))
+{
+    var medium = MediumInProcessConfig();
+    BenchmarkRunner.Run<MediatRComparisonBenchmarks>(medium);
+    if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PALDDD_BENCH_CAP_MYSQL"))
+        && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PALDDD_BENCH_CAP_RABBIT")))
+        BenchmarkRunner.Run<CapComparisonBenchmarks>(medium);
+    else
+        Console.WriteLine("⏭ CAP 对比跳过（需 PALDDD_BENCH_CAP_MYSQL + PALDDD_BENCH_CAP_RABBIT 环境变量，见 CapComparisonBenchmarks 头注）");
+    return 0;
+}
+
 // net11-rc runtime moniker 不被 BDN 0.15.8 的 DotNetSdkValidator 识别(GetRuntimeVersion
 // throw NotRecognizedException;验证内嵌在 CsProjCoreToolchain.Validate,且 Switcher 在
 // filter 前对全程序集 case 验证——任何 [ShortRunJob] 类都会触发崩溃)。

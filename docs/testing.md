@@ -271,6 +271,9 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | Specification 内存路径（IsSatisfiedBy/ToExpression） | — | ✅ | `--coverage` | ✅ |
 | Hosting 每请求开销（终端基线/异常中间件直通/MapCommand 端点全周期，DefaultHttpContext 无网络栈） | — | ✅ | `--coverage` | ✅ |
 | 端到端单命令链路（分发→序列化→Outbox 落入，InMemory 框架开销层） | — | ✅ | `--coverage` | ✅ |
+| MediatR 横向对比（12.5.0 同进程四点：零行为/单行为 × 双框架） | — | ✅ | `--compare`（2026-10-09 新维度轮；引用须带完整口径——MediatR 是纯分发器无基础设施层） | ✅ |
+| CAP 横向对比（DotNetCore.CAP 8.4.1，RabbitMQ 传输 + MySQL cap.published，同语义路径对位） | — | ✅ | `--compare` + `PALDDD_BENCH_CAP_MYSQL`/`PALDDD_BENCH_CAP_RABBIT`（一次性容器，2026-10-09 新维度轮） | ✅ |
+| 绝对 QPS（1/4/8 线程 × dispatch/chain 聚合吞吐，非 BDN 专门 harness） | ✅（--smoke 级趋势） | —（harness 形态） | `--qps`（2026-10-09 新维度轮；多线程聚合不可由单线程 ns/op 外推） | ✅ |
 | EventLog 写入 | ✅ | ✅ | `--infra` | ✅ |
 | SagaState 持久化 | ✅ | ✅ | `--infra` | ✅ |
 | SQL 生成（Dapper） | ✅ | ✅ | `--infra` | ✅ |
