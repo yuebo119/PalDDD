@@ -124,6 +124,17 @@ if (args.Contains("--app", StringComparer.OrdinalIgnoreCase))
     return 0;
 }
 
+// 2026-10-08 特性面缺口清单第 ① 项：--concurrency——Outbox N worker 租约争用
+// （InMemory 簿记层 + Dapper SQLite 真库层，每 wave 带零重复不变量守卫）。
+// 「多实例并发发布零丢失零重复」从正确性主张升级为性能数据。
+if (args.Contains("--concurrency", StringComparer.OrdinalIgnoreCase))
+{
+    var medium = MediumInProcessConfig();
+    BenchmarkRunner.Run<OutboxConcurrencyInMemoryBenchmarks>(medium);
+    BenchmarkRunner.Run<OutboxConcurrencyDapperSqliteBenchmarks>(medium);
+    return 0;
+}
+
 BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 
 return 0;
