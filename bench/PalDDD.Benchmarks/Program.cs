@@ -147,6 +147,20 @@ if (args.Contains("--persist-pg", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--persist-mysql", StringComparer.OrdinalIgnoreCase))
     return await RunRemoteDialectAsync(isPostgreSql: false);
 
+// 2026-10-08 缺口清单第③④⑤⑥⑧项：--coverage——Projection 吞吐 / 消息演化管线 /
+// Specification 内存路径 / Hosting 每请求开销 / 端到端单命令链路（全部零外部依赖，
+// 端到端与 Hosting 为框架开销层口径：InMemory store / DefaultHttpContext，无网络与 DB）。
+if (args.Contains("--coverage", StringComparer.OrdinalIgnoreCase))
+{
+    var medium = MediumInProcessConfig();
+    BenchmarkRunner.Run<ProjectionBenchmarks>(medium);
+    BenchmarkRunner.Run<MessageEvolutionBenchmarks>(medium);
+    BenchmarkRunner.Run<SpecificationBenchmarks>(medium);
+    BenchmarkRunner.Run<EndToEndChainBenchmarks>(medium);
+    BenchmarkRunner.Run<HostingBenchmarks>(medium);
+    return 0;
+}
+
 static async Task<int> RunRemoteDialectAsync(bool isPostgreSql)
 {
     RemoteDialectBenchSession session;

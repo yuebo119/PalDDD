@@ -82,6 +82,24 @@ Outbox 并发车道（`--concurrency`，每 wave = 清场 + 种子 800 条 + N w
 
 Inbox 口径注：三方法为 1-op / 3-op / 2-op 捆绑（重复拒绝必然含首投+标记，无法单独测拒绝对端），均含 per-invoke store 重建（ITM-246 教训口径）；600B/528B 含 store + InboxMessage + 记录分配。
 
+## Coverage 五车道基线（2026-10-08 缺口清单 ③④⑤⑥⑧ 落地，`--coverage`，全零外部依赖）
+
+| 基准 | Mean | Error | Allocated |
+|---|---:|---:|---:|
+| Projection.ProcessAsync_FullCycle（TryStart+handler+MarkCompleted） | 572.8 ns | 11.09 ns | 168 B |
+| Projection.Checkpoint_TryStartComplete_Cycle（断点存储直测） | 484.5 ns | 16.06 ns | 144 B |
+| Evolution.Upgrade_SingleHop_V1toV2 | 284.0 ns | 8.26 ns | 224 B |
+| Evolution.ChainUpgrade_V1toV3（两跳链） | 292.1 ns | 2.59 ns | 288 B |
+| Specification.IsSatisfiedBy_Match / NoMatch | 1.683 / 1.870 ns | ~0.03 ns | **0 B** |
+| Specification.ToExpression_Access | 0.4662 ns | 0.0383 ns | - |
+| EndToEnd.FullChain_NoBehavior（分发→序列化→Outbox 落入，InMemory） | 470.4 ns | 4.86 ns | 968 B |
+| EndToEnd.FullChain_OneBehavior | 595.1 ns | 6.25 ns | 1,184 B |
+| Hosting.Terminal_Only（DefaultHttpContext 终端基线） | 412.5 ns | 8.83 ns | 1.41 KB |
+| Hosting.ExceptionMiddleware_Passthrough | 441.4 ns | 9.72 ns | 1.41 KB |
+| Hosting.MapCommand_Endpoint_Invoke（JSON 反序列化+分发+响应序列化） | 2,543.3 ns | 11.56 ns | 3.51 KB |
+
+> 五车道注（2026-10-08）：① Specification 内存路径**零分配 ~1.7ns**——Expression.Compile 在规约构造期一次完成，IsSatisfiedBy 走缓存委托调用；README「AOT 已知限制③」的内存路径由此量化为非热区。② 演化链式（V1→V3 两跳）仅比单跳 +3%/+64B——成本在反/序列化对而非转换器跳数，多级演化的边际开销可忽略。③ 端到端 InMemory 链 470ns/968B 给出「框架开销层」单命令全链路基线（分发+序列化+Outbox 落入；不含 DB I/O——真库形态见各持久化车道）。④ 异常中间件直通 +29ns（+7%）/请求；MapCommand 端点全周期 2.5μs/3.5KB（含 JSON 双向，Error 0.5%）。⑤ 演化契约实录：升级步必须同 wire name + 递增 schemaVersion（管线校验「stable wire name」——首跑用 .v1/.v2 命名被拒，属 API 契约的基准侧实录）。
+
 ## PG/MySQL 网络真库基线（2026-10-08 首轮，wslc 一次性容器 + `PALDDD_BENCH_*_CONN` 外部实例路径）
 
 > 环境：postgres:18.6 / mysql:8.4.11（wslc 本地镜像，旁路端口经 WSL NAT 到 127.0.0.1）；AddSingle ~0.6-1.6ms/条 即网络往返量级，与 SQLite 共享内存库（μs 级）口径差三个数量级属预期。Lease_Batch100 口径含重灌 100 条单条插入（同 SQLite 车道口径），网络下由重灌主导。
@@ -178,7 +196,7 @@ Infra（`--infra`，全 InMemory fixture）：
 1. ~~等 BenchmarkDotNet 支持当前 .NET 11 后用默认入口重新生成全部 benchmark 类结果~~（2026-10-08 大部分消解：17 类经 InProcess 显式模式全部可出正式报告；残余 = 默认 Switcher 入口与类级 job 注解的恢复，待 BDN 上游补 net11 moniker 或 .NET 11 GA 后实测，见 `docs/migration/net11-ga-upgrade-plan.md` 步骤 3）。
 2. SmartEnum.FromValue/TryFromValue 两项 Error/Mean >15%（ns 级固有抖动）：如需正式引用其计时，提升配置（严格档 5/10/15）复测；当前以零分配事实为准。
 3. 保留 `--smoke` 作为秒级趋势检查 + 分配预算判定（2026-10-08 起带断言）；计时为单轮无统计效力，不替代正式报告。
-4. **特性面缺口登记（2026-10-08 缺口补齐轮盘点，防「22 类全覆盖」被误读为特性面全覆盖）**：~~① Outbox 并发车道~~（2026-10-08 落地：InMemory + Dapper SQLite 两层 + 零重复不变量守卫）；~~② Inbox 编排层~~（2026-10-08 落地：InMemory 三项入 `--infra`）；⑦ PG/MySQL 车道**首轮真跑完成**（wslc 外部实例路径，多实例租约三形态见 PG/MySQL 真库基线段；PG 并发组 Error >15% 点值待严格档复测、8W 回落形态待复测）；仍缺按优先级——③ Projection 处理器/断点续传吞吐；④ 消息演化 Upgrade 管线（仅单元）；⑤ Specification 内存路径（Expression.Compile 敏感点）；⑥ Hosting 每请求开销（MapCommand/异常中间件）；⑦ 残余：PG/MySQL 上 PalORM/EFCore 栈扩展（现仅 Dapper，EF MySQL 栈的 SKIP LOCKED 并发形态是 ADR-024 指引的验证缺口）与方言特性（COPY/Pipeline/LISTEN-NOTIFY/读写分离）；⑧ 端到端单命令链路（Dispatcher→序列化→UoW→Outbox 全链路）。
+4. **特性面缺口登记（2026-10-08 缺口补齐轮盘点，防「27 类全覆盖」被误读为特性面全覆盖）**：~~① Outbox 并发车道~~（落地）；~~② Inbox 编排层~~（落地）；~~③ Projection 吞吐~~（落地，`--coverage`）；~~④ 消息演化管线~~（落地）；~~⑤ Specification 内存路径~~（落地，零分配 ~1.7ns 实证）；~~⑥ Hosting 每请求开销~~（落地）；~~⑧ 端到端单命令链路~~（落地 InMemory 框架开销层口径——真库端到端含 DB I/O 由各持久化车道分面覆盖，全链路真库形态仍可后续扩展）；⑦ PG/MySQL 车道首轮真跑完成（Dapper 栈，多实例租约三形态见 PG/MySQL 真库基线段；PG 并发组 Error >15% 点值待严格档复测、8W 回落形态待复测）——**残余仅剩⑦**：PG/MySQL 上 PalORM/EFCore 栈扩展（现仅 Dapper；EF MySQL 栈的 SKIP LOCKED 并发形态是 ADR-024 指引的验证缺口，建议随死锁实证的裁决一并处理）与方言特性车道（COPY 批量已隐含在 AddMessagesAsync 种子路径，Pipeline 批处理/LISTEN-NOTIFY 推送/读写分离路由仍无专项）。
 
 ## 发布判断
 

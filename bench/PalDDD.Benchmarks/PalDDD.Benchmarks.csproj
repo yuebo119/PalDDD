@@ -4,8 +4,9 @@
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <!-- CA1031: verify-persist 的 catch Exception 是验证语义(任何异常=该项 FAIL 记录);
-         CA1303:工具项目中文输出;DAP005:基座建表用 raw Dapper 调用未启用 DapperAot(工具非生产) -->
-    <NoWarn>$(NoWarn);CA1034;CA1822;CA2007;CA1031;CA1303;DAP005</NoWarn>
+         CA1303:工具项目中文输出;DAP005:基座建表用 raw Dapper 调用未启用 DapperAot(工具非生产);
+         CA1812:DI 泛型注册实例化的 handler/behavior 分析器不可见(FeatureBenchmarks 假阳性) -->
+    <NoWarn>$(NoWarn);CA1034;CA1822;CA2007;CA1031;CA1303;DAP005;CA1812</NoWarn>
     <!-- RunAnalyzersDuringBuild=false 移除（2026-10-08 审计对齐）：原值使 BDN 0.15.7+ 的
          Roslyn 用法分析器（基准类结构/[Params]/单一 baseline 校验）失效；NoWarn 清单已显式
          豁免工具项目噪声，分析器保持开启吃 BDN 诊断面 -->
@@ -28,6 +29,9 @@
     <ProjectReference Include="..\..\src\PalDDD.Serialization\PalDDD.Serialization.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Compression\PalDDD.Compression.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Compression.Native\PalDDD.Compression.Native.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Projections\PalDDD.Projections.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Serialization.Evolution\PalDDD.Serialization.Evolution.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Hosting.AspNetCore\PalDDD.Hosting.AspNetCore.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.EventLog\PalDDD.EventLog.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Dapper\PalDDD.Dapper.csproj" />
@@ -47,12 +51,16 @@
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <!-- 2026-10-08：Microsoft.Extensions.DependencyInjection 显式引用随 FrameworkReference
+         引入被 NU1510 判冗余移除（Framework 自带 DI 抽象面） -->
     <!-- 远程方言车道（persist-pg/persist-mysql 入口）：容器与驱动对齐 dialect-probe -->
     <PackageReference Include="Testcontainers.PostgreSql" />
     <PackageReference Include="Testcontainers.MySql" />
     <PackageReference Include="Npgsql" />
     <PackageReference Include="MySqlConnector" />
+    <!-- 2026-10-08 缺口清单第⑥项：Hosting 每请求开销车道需要 ASP.NET Core 抽象面
+         （DefaultHttpContext/ApplicationBuilder/RouteEndpoint，FrameworkReference 零包新增） -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
 </Project>

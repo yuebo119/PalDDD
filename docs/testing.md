@@ -264,6 +264,11 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | Outbox 并发租约争用（N worker=1/2/4/8，InMemory 簿记层 + Dapper SQLite 真库层，每 wave 零重复不变量守卫） | — | ✅ | `--concurrency`（2026-10-08 缺口补齐） | ✅ |
 | Inbox 编排层（InMemory：首投/重复拒绝/完整生命周期） | — | ✅ | `--infra`（2026-10-08 缺口补齐） | ✅ |
 | PG/MySQL 网络真库 Dapper Outbox（吞吐 + 并发 wave；Testcontainers 或 wslc 外部实例双路径） | — | ✅ | `--persist-pg` / `--persist-mysql`（2026-10-08 真跑完成：wslc 路径 `PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` + palddd_bench 库名守卫；Testcontainers 路径留给 Docker 环境，容器不可达报错退出码 2） | ✅（首轮数字与 MySQL 并发死锁实录见 performance.md） |
+| Projection 吞吐（处理器全周期 + 断点存储直测，InMemory） | — | ✅ | `--coverage`（2026-10-08 缺口补齐） | ✅ |
+| 消息演化管线（V1→V2 单跳 vs V1→V3 链式） | — | ✅ | `--coverage` | ✅ |
+| Specification 内存路径（IsSatisfiedBy/ToExpression） | — | ✅ | `--coverage` | ✅ |
+| Hosting 每请求开销（终端基线/异常中间件直通/MapCommand 端点全周期，DefaultHttpContext 无网络栈） | — | ✅ | `--coverage` | ✅ |
+| 端到端单命令链路（分发→序列化→Outbox 落入，InMemory 框架开销层） | — | ✅ | `--coverage` | ✅ |
 | EventLog 写入 | ✅ | ✅ | `--infra` | ✅ |
 | SagaState 持久化 | ✅ | ✅ | `--infra` | ✅ |
 | SQL 生成（Dapper） | ✅ | ✅ | `--infra` | ✅ |
@@ -295,16 +300,16 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 
 ### 4.1 DDD 实际偏好（与 ORM 不同）
 
-> **2026-10-08 更新**：类级 `[ShortRunJob]` 已全部移除——BDN 0.15.8 对 jobs 是 union 不去重，类级 job 与模式级 ManualConfig 叠加出双 job，CsProj 工具链 job 在 net11-rc moniker 上触发 DotNetSdkValidator 崩溃（`--persist` 五十四轮先例同款，详见 `bench/PalDDD.Benchmarks/Program.cs` 头注）。运行口径统一由模式级显式 job 提供，**22 个基准类**（Framework 5 + App 2 + Infra 7 + Persistence 3 + SagaLane 1 + Concurrency 2 + Remote 2）全量可出正式报告（2026-10-08 缺口补齐轮新增：CQRS 分发链、消息序列化、Outbox N worker 租约争用、Inbox 编排层、PG/MySQL 网络真库车道）。
+> **2026-10-08 更新**：类级 `[ShortRunJob]` 已全部移除——BDN 0.15.8 对 jobs 是 union 不去重，类级 job 与模式级 ManualConfig 叠加出双 job，CsProj 工具链 job 在 net11-rc moniker 上触发 DotNetSdkValidator 崩溃（`--persist` 五十四轮先例同款，详见 `bench/PalDDD.Benchmarks/Program.cs` 头注）。运行口径统一由模式级显式 job 提供，**27 个基准类**（Framework 5 + App 2 + Infra 7 + Persistence 3 + SagaLane 1 + Concurrency 2 + Remote 2 + Coverage 5）全量可出正式报告（2026-10-08 缺口补齐轮新增：CQRS 分发链、消息序列化、Outbox N worker 租约争用、Inbox 编排层、PG/MySQL 网络真库车道、Projection 吞吐、消息演化、Specification 内存路径、Hosting 每请求开销、端到端链路）。
 
 | 配置 | DDD 使用场景 | ORM 使用场景 |
 |------|------------|------|
-| 模式级 ManualConfig：`Job.MediumRun` + InProcessEmitToolchain + `[MemoryDiagnoser]` | `--framework` / `--app` / `--infra` / `--concurrency` / `--persist-pg` / `--persist-mysql` / `--persist-medium`（正式报告，22 类全覆盖） | 不使用 |
+| 模式级 ManualConfig：`Job.MediumRun` + InProcessEmitToolchain + `[MemoryDiagnoser]` | `--framework` / `--app` / `--infra` / `--concurrency` / `--coverage` / `--persist-pg` / `--persist-mysql` / `--persist-medium`（正式报告，27 类全覆盖） | 不使用 |
 | 模式级 ManualConfig：`Job.InProcess` | `--persist` / `--compression`（快速与单车道 A/B） | 不使用 |
 | 类级 `[InProcess]` attribute | SagaLaneBenchmarks（`--saga`，单类无叠加风险） | 不使用 |
 | ~~类级 `[ShortRunJob]`~~ | **已移除**（2026-10-08，双 job 崩溃见上注） | 不使用 |
 | `[SimpleJob]` 三档（快速 1/3/5 / 标准 3/5/10 / 严格 5/10/15） | **未使用** | 偏好（grep 实证） |
-| `[BenchmarkCategory]` | **未使用**（按文件分类 Framework/App/Infra/Persistence/SagaLane/Concurrency/Remote） | 使用（按操作分类） |
+| `[BenchmarkCategory]` | **未使用**（按文件分类 Framework/App/Infra/Persistence/SagaLane/Concurrency/Remote/Coverage） | 使用（按操作分类） |
 | `[Params]` | **未使用**（用 const 或字段） | 使用（参数化扫描） |
 | `[Benchmark(Baseline = true)]` | 少数方法标注 | 使用 |
 
