@@ -100,6 +100,63 @@ Inbox 口径注：三方法为 1-op / 3-op / 2-op 捆绑（重复拒绝必然含
 
 > 五车道注（2026-10-08）：① Specification 内存路径**零分配 ~1.7ns**——Expression.Compile 在规约构造期一次完成，IsSatisfiedBy 走缓存委托调用；README「AOT 已知限制③」的内存路径由此量化为非热区。② 演化链式（V1→V3 两跳）仅比单跳 +3%/+64B——成本在反/序列化对而非转换器跳数，多级演化的边际开销可忽略。③ 端到端 InMemory 链 470ns/968B 给出「框架开销层」单命令全链路基线（分发+序列化+Outbox 落入；不含 DB I/O——真库形态见各持久化车道）。④ 异常中间件直通 +29ns（+7%）/请求；MapCommand 端点全周期 2.5μs/3.5KB（含 JSON 双向，Error 0.5%）。⑤ 演化契约实录：升级步必须同 wire name + 递增 schemaVersion（管线校验「stable wire name」——首跑用 .v1/.v2 命名被拒，属 API 契约的基准侧实录）。
 
+## 横向对比与绝对 QPS（2026-10-09 新维度轮：`--compare` / `--qps`）
+
+> 新维度背景：此前四轮评估的覆盖面结论不包含「跨框架对比」与「多线程聚合吞吐」——
+> BDN 单线程 ns/op 不可直接外推多线程聚合（锁竞争/分配压力/GC 并发），跨框架亦无
+> 同 harness 数据。本轮两个专门量具补齐。
+
+### MediatR 对比（`--compare`，MediatR 12.5.0 vs PalDDD 3.3.0，同进程同 harness 四点）
+
+> MediatR 锚定 12.5.0：13.0.0 起转商业许可，对齐本仓开源许可裁决。公平性：同 handler
+> 形态（同步完成、每次 new 结果含 Guid）、同管道形态（零行为+单直通）、同 MediumRun
+> InProcess 同轮执行。⚠️ 引用须带完整口径：MediatR 是纯进程内分发器（无 Outbox/Saga/
+> EventLog），此对比只回答「分发层开销」——PalDDD 的增量价值在分发之外（见 README 对比表）。
+
+| 基准 | PalDDD | MediatR 12.5.0 | 差距 |
+|---|---:|---:|---|
+| 零行为分发 | 183.9 ns / 216 B（E1.8%） | **125.9 ns** / 224 B（E2.6%） | MediatR 快 ~31% |
+| 单直通行为 | 270.0 ns / 432 B（E0.5%） | **216.3 ns** / 528 B（E1.7%） | MediatR 快 ~20%，PalDDD 分配少 18% |
+
+> MediatR 分发裸快 20~31%（同步完成的内联优化更深）；但 PalDDD 的 IsCompletedSuccessfully
+> 零堆路径在**分配**上占优（单行为 432B vs 528B），且自带租约 Outbox/Saga/EventLog 等
+> MediatR 没有的基础设施——「分发是起点不是终点」的 README 主张与实测一致。
+> 引用边界：两轮 PalDDD 数字（183.9/270.0 vs 此前 188.2/280.8）为跨进程 JIT 状态波动，
+> 同轮内比值可信。
+
+### CAP 对比（`--compare` + `PALDDD_BENCH_CAP_*`，DotNetCore.CAP 8.4.1，MIT）
+
+> 公平口径：两侧同为「同步写本地消息表 + 后台异步送 broker」——CAP.PublishAsync 内联
+> 写 cap.published 行并入队后台 sender（RabbitMQ 传输）；PalDDD 侧为序列化+outbox_messages
+> 写行（MySQL 真库同容器；broker 投递由 OutboxProcessor 后台负责，语义对位 CAP sender）。
+> 一次性容器：rabbitmq 4.3.6-management（独立 bench 用户）+ mysql 8.4.11。
+
+| 基准 | Mean | Allocated |
+|---|---:|---:|
+| CAP.PublishAsync（RabbitMQ 传输 + MySQL cap.published 表） | **5.054 ms**（E6.2% 环境敏感带） | 24.44 KB |
+| PalDDD 序列化+OutboxAdd（MySQL outbox_messages 表） | **1.872 ms**（E7.6% 环境敏感带） | 10.36 KB |
+
+> PalDDD 同语义路径快 **2.7×**（1.87ms vs 5.05ms）、分配少 **58%**（10.36KB vs 24.44KB）。
+> 口径注：两侧各自的序列化器均在被测路径内（CAP 用自带 JSON 序列化，PalDDD 用源生成
+> JSON——各自生态的真实成本，非第三方差异剔除后的纯 SQL 差）；CAP 的消息送 RabbitMQ 在
+> 后台异步完成、PalDDD 的送 broker 同样在 OutboxProcessor 后台——「消息表写入+入队」
+> 对位公平。Error 6~8% 属 5-15% 环境敏感带（真库网络往返主导）。
+
+### 绝对 QPS（`--qps` harness，非 BDN：1/4/8 线程 × 3s 实测聚合）
+
+| 场景 | 1 线程 | 4 线程 | 8 线程 |
+|---|---:|---:|---:|
+| dispatch（纯分发，零行为） | **4.87M ops/s**（205 ns/op） | **19.76M ops/s**（202 ns/op） | **33.15M ops/s**（241 ns/op） |
+| chain（分发→序列化→Outbox 落入→SaveChanges，InMemory） | **1.06M ops/s**（941 ns/op） | 1.61M ops/s（2488 ns/op） | 1.55M ops/s（5152 ns/op） |
+
+> QPS 注（趋势级，单轮实测）：① dispatch 多线程近线性扩展到 4 线程（19.8M=4×4.9M），
+> 8 线程 +68%（33.2M）——分配压力与 GC 并发下仍保持高聚合。② **chain 场景 4 线程即到
+> 平台期**（1.6M，4→8 线程不再增长，ns/op 退化 2488→5152）——逐 op 的 store 重建+序列化
+> 分配使 Gen0 压力饱和，多线程下 GC 成为瓶颈。InMemory 框架层口径（无 DB I/O），真库
+> 场景瓶颈在数据库不在框架（见并发车道）。③ 与单线程 BDN 数字互验：dispatch 205 ns/op
+> ≈ BDN 184~196ns（harness 含循环与 Stopwatch 开销差，量级一致）；chain 941 ns/op ≈
+> BDN 470ns 的 2×——ThreadLocal 访问+逐 op store 重建的并行形态差，口径各自注明。
+
 ## PG/MySQL 网络真库基线（2026-10-08 首轮，wslc 一次性容器 + `PALDDD_BENCH_*_CONN` 外部实例路径）
 
 > 环境：postgres:18.6 / mysql:8.4.11（wslc 本地镜像，旁路端口经 WSL NAT 到 127.0.0.1）；AddSingle ~0.6-1.6ms/条 即网络往返量级，与 SQLite 共享内存库（μs 级）口径差三个数量级属预期。Lease_Batch100 口径含重灌 100 条单条插入（同 SQLite 车道口径），网络下由重灌主导。

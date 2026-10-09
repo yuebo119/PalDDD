@@ -63,6 +63,13 @@
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
     <PackageVersion Include="SQLitePCLRaw.core" Version="3.0.5" />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
+    <!-- 2026-10-09 横向对比轮：bench 对比车道消费——MediatR 锚定 12.x 最后开源线
+         （13.0.0 起 Lucky Penny 商业许可，对齐 license-policy「禁商业许可」裁决；
+         12.5.0 nuspec 为 Apache-2.0 白名单内）；CAP 全家 MIT -->
+    <PackageVersion Include="MediatR" Version="12.5.0" />
+    <PackageVersion Include="DotNetCore.CAP" Version="8.4.1" />
+    <PackageVersion Include="DotNetCore.CAP.RabbitMQ" Version="8.4.1" />
+    <PackageVersion Include="DotNetCore.CAP.MySql" Version="8.4.1" />
     <PackageVersion Include="MySqlConnector" Version="2.6.2" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="11.0.0-rc.1.26425.128" />
     <!-- 消息代理适配器（可选） -->
