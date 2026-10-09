@@ -261,6 +261,16 @@ Infra（`--infra`，全 InMemory fixture）：
 
 > 压缩车道注（2026-10-08 缺口补齐轮，五算法同一 Provider 同负载 16KB）：原生 LZ4/ZStandard 压缩比 GZip 快 ~2.2×、解压快 ~1.1~1.4×，但**分配高一个量级**（压缩 16.8KB vs GZip 1.6KB/op——原生绑定直接分配输出缓冲）。「LZ4 极速适合热路径」的快成立，分配敏感性场景需权衡。Brotli 计时跨轮漂移较大（22.7~27.1 μs，重 CPU 负载受机器状态影响），引用以 artifacts 报告为准；GZip/Deflate 解压分配 33,704/33,648 B 与 2026-09-25 回滚留档逐字节一致。
 
+## 全模式复跑与环境漂移实证（2026-10-09 晚，91c7aa9 终态）
+
+> 新维度轮落地后对 HEAD 做全入口串行复跑：13 个运行模式 15 次运行（`--compare` 两跑：MediatR-only 与 CAP opt-in）、161 项 BDN 基准（含 MediatR 四点同晚复跑）+ smoke 4 断言 + QPS 6 格，20:41~22:26 严格串行（模式间不并行，避免互相污染测量）。基准进程全部 exit 0、MySQL 三栈死锁计数 0（全日志 grep 零命中）、wslc 容器零残留、工作树零污染。两次运行未直接达 exit 0（`--persist-mysql` 首跑、`--compare`+CAP 首跑）均为容器环境态且发生在基准进程启动之前，诊断后复跑成功（实录见本节末）。日志与退出码台账：`%TEMP%/palddd-bench-20261009/`；正式报告同落 artifacts-medium（31 份 github.md）。
+
+结构性结论全部复现，无回归信号（对照上文各段基线）：MySQL ADR-025 双栈死锁归零+真并行（Dapper 8W Ratio 0.64、PalORM 4W 1.6×、EF 形态 8W 1.8×，Error ≤4%）；PG PalORM 真并行 1.5×、Dapper 并发中位 8W 加速 ~2.3×（组内 Error >15% 按纪律只引中位）；SQLite 多连接 busy 平台期 28.3×（首轮 25.7×）；InMemory 并发退化有界 8W 1.50；Pipeline 批插 9.3×（历史区间 8.6~16.2× 内）；Specification 零分配 ~1.7ns；MediatR 两轮复跑比值稳定（零行为 0.68~0.70、单行为 1.16~1.19；PalDDD 单行为分配 432B vs 528B 少 18%）；CAP 同轮快 2.2×、分配少 61%（首轮 2.7×/58%，比值量级一致；PalDDD 侧本轮 Error 16.4% 略超无效线，点值谨慎引用，比值与分配可引）；QPS chain 4 线程平台期复现；GZip/Deflate 解压分配 33,704/33,648 B 与 2026-09-25 回滚基线逐字节一致；smoke 四分配值跨三轮（06-28/10-08/10-09）逐字节一致。
+
+**环境漂移实证（同晚计时层整体上移，非代码回归）**：受影响面三处——infra OutboxThroughput（较 10-08 基线上移 ~1.6~1.7× 且 Error 进 8~16% 带：LeasePending 62.4→115.6μs、GetPending 22.4→37.6μs、LeaseAndMarkAll 126.6→212.1μs）；CAP 对比绝对值（CAP 5.05→10.63ms、PalDDD 1.87→4.81ms，~2×）；QPS 绝对值（-7%~-15%）。判定证据链三层：① 受影响车道跨模式同向漂移，同晚其余车道（framework/app/coverage/saga 等）计时与基线偏差 ≤6%；② 全部车道分配列逐字节稳定（分配不受机器负载影响，「分配可判定、计时只作趋势」分层第四次实证）；③ 同轮比值全部与基线一致，且构成本文各基线段（10-08/10-09 日间）与本次复跑（10-09 晚）的不同日同代码对照。引用边界：当晚绝对计时引用须带环境标签，跨日计时对比不作回归结论；比值与分配列可跨轮引用。
+
+复跑环境实录两则（容器环境态，非基准缺陷）：① MySQL 就绪探针竞态——`mysqladmin ping` 不校验凭据，首启 init 窗口内即回 alive，随后认证 SQL 报 Access denied（`&&` 链断在基准启动前）；探针必须带认证（`mysql -uroot -p… -e "SELECT 1"`）。② wslc rabbit 容器偶发首启即死（WSLC_E_CONTAINER_NOT_RUNNING，重起即好）；RABBITMQ_DEFAULT_USER/PASSWORD env 凭据未生效坑再次复现（用户已建但 authenticate_user 报 invalid credentials，change_password 显式重置后 Success）。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
@@ -288,6 +298,7 @@ Infra（`--infra`，全 InMemory fixture）：
 | 全解决方案构建 | `dotnet build PalDDD.slnx --no-restore` | 通过；0 warning / 0 error |
 | 全测试项目测试 | `for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' \| sort); do dotnet test "$p" --no-restore; done`（MTP 禁用 slnx 批量——握手 → exit 5） | 通过；869 passed / 2 failed / 6 skipped（历史快照：2026-06-28；2026-09-25 实测：16 项目 1502 用例 = 本机 1434 通过 + 68 跳过——60 项 Docker 依赖（PalORM 多方言 46 + Integration 14）由 CI Testcontainers 执行，另 8 项本机 RabbitMQ 预检不可达） |
 | 压缩解压 span decoder A/B（`--compression` 基准，InProcess，16KB 负载） | `dotnet run -c Release --project bench/PalDDD.Benchmarks -- --compression`（改造前/后各两轮 + 真回滚验证一轮） | **改造否决，已回滚**（2026-09-25 特性审计三轮）：分配确定性劣化——GZip 解压 33,704→45,296 B（+34%）、Deflate 33,648→45,264 B（+35%），改造后两轮逐字节一致、回滚后逐字节还原（ArrayBufferWriter 增长序列超省掉的 MemoryStream）；耗时在噪声带内无改善（改造前自身跨轮 3.120→3.805(Median)/4.464 us，对照组 Brotli/GZip-Compress ±3% 稳定证可比）。**留档防重复提议**：`.NET 11 GZipDecoder/DeflateDecoder` 相对 `GZipStream+CopyWithLimit` 在本负载形态下无收益——未来 .NET decoder 优化或大负载场景可凭本基准复测（量具已入 bench） |
+| 全模式串行复跑（2026-10-09 晚，91c7aa9） | 13 模式 15 次运行全入口：smoke/qps/compare×2(MediatR-only+CAP opt-in)/framework/app/infra/concurrency/coverage/persist/saga/compression/persist-medium/persist-pg/persist-mysql | 通过：基准进程 15/15 exit 0（2 次容器环境态失败诊断后复跑达标）、161 项基准无 NA、MySQL 三栈死锁 0、wslc 容器零残留；结构性结论全部复现无回归；同晚计时层漂移实证与引用边界见「全模式复跑与环境漂移实证」段 |
 
 ## 已有 BenchmarkDotNet 产物
 
