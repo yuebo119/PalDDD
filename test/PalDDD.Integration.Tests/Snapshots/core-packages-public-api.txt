@@ -355,6 +355,7 @@ static class PalDDD.Dapper.SqlTemplates
   field const System.String OutboxInsert = INSERT INTO outbox_messages (id,type,payload,content_type,schema_version,status,created_at, correlation_id, causation_id, trace_parent, trace_state) VALUES (@Id,@Type,@Payload,@ContentType,@SchemaVersion,0,@CreatedAt, @CorrelationId, @CausationId, @TraceParent, @TraceState)
   field const System.String OutboxLeaseUpdate = UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN 
   field const System.String OutboxLeaseUpdateMySql = UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount AND (next_attempt_at IS NULL OR next_attempt_at<=@now) AND (locked_until IS NULL OR locked_until<=@now) ORDER BY created_at LIMIT @n) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until
+  field const System.String OutboxLeaseUpdateMySqlSkipLocked = UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount AND (next_attempt_at IS NULL OR next_attempt_at<=@now) AND (locked_until IS NULL OR locked_until<=@now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until
   field const System.String OutboxLeaseUpdatePG = UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN (SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount AND (next_attempt_at IS NULL OR next_attempt_at<=@now) AND (locked_until IS NULL OR locked_until<=@now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *
   field const System.String OutboxLeaseUpdateSqlite = UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN (SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount AND (next_attempt_at IS NULL OR next_attempt_at<=@now) AND (locked_until IS NULL OR locked_until<=@now) ORDER BY created_at LIMIT @n)
   field const System.String OutboxMarkDead = UPDATE outbox_messages SET status=2,error=@reason,processed_at=@at,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND retry_count=@retryCount AND status=0 AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))
@@ -919,6 +920,10 @@ class PalDDD.PalORM.Models.OutboxMessageRow
   property System.String Type
   method PalDDD.PalORM.Models.OutboxMessageRow FromDomain(PalDDD.Transactions.OutboxMessage m)
   method PalDDD.Transactions.OutboxMessage ToDomain()
+class PalDDD.PalORM.Models.VersionProbeRow
+  ctor()
+  property System.String v
+  property System.String v2
 class PalDDD.PalORM.PalOrmPreWarmHostedService<TProvider>
   ctor(PalORM.DbOptions options, System.Int32 connectionCount, PalDDD.Core.Logging.IPalLogger<PalDDD.PalORM.PalOrmPreWarmHostedService<TProvider>> logger)
   method System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken cancellationToken)
@@ -1401,6 +1406,9 @@ class PalDDD.Transactions.InterruptStep
   property System.Type DecisionType
   property PalDDD.Transactions.StepDispatchKind DispatchKind
   property System.String InterruptReason
+static class PalDDD.Transactions.MySqlLeasePolicy
+  field const System.String MinimumSkipLockedVersion = 8.0.18
+  method System.Boolean UseSkipLocked(System.String serverVersion)
 class PalDDD.Transactions.OutboxBatchProcessor
   ctor(PalDDD.Transactions.IPalOutboxStore store, PalDDD.Messaging.IMessageBroker broker, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.OutboxOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.OutboxBatchProcessor> logger, System.TimeProvider timeProvider, Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory)
   method System.Threading.Tasks.ValueTask ProcessBatchAsync(System.Threading.CancellationToken ct)

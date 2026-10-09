@@ -166,9 +166,20 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             // P1 修复（十一轮·实测发现）：MySQL 不支持 UPDATE ... WHERE id IN (SELECT ... LIMIT)
             // （真实库实测报 1235）——JOIN 形态替代（对齐 PalORM 版）；SQLite 支持子查询内 LIMIT 保持原状
             // 优化（二十五轮 API 扫描 A-3）：SQLite 路径同步常量化（原 OutboxLeaseUpdate + $"({leaseSubSql})"）
-            var leaseSql = _dbType == DapperDbType.MySql
-                ? SqlTemplates.OutboxLeaseUpdateMySql
-                : SqlTemplates.OutboxLeaseUpdateSqlite;
+            // ADR-025（2026-10-09）：MySQL ≥8.0.18（非 MariaDB）启用派生表 SKIP LOCKED 模板——
+            // 无锁形态的并发后果是 InnoDB 死锁异常（ADR-024 补记实证一）；旧版/MariaDB/
+            // 解析失败回退无锁模板（MySqlLeasePolicy fail-safe，行为与 ADR-024 现状逐字一致）
+            string leaseSql;
+            if (_dbType == DapperDbType.MySql)
+            {
+                leaseSql = MySqlLeasePolicy.UseSkipLocked(_connection.ServerVersion)
+                    ? SqlTemplates.OutboxLeaseUpdateMySqlSkipLocked
+                    : SqlTemplates.OutboxLeaseUpdateMySql;
+            }
+            else
+            {
+                leaseSql = SqlTemplates.OutboxLeaseUpdateSqlite;
+            }
             await conn.ExecuteAsync(
 
                     leaseSql,
