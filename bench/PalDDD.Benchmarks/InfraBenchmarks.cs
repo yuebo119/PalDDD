@@ -116,6 +116,57 @@ public class OutboxThroughputBenchmarks
 }
 
 // ═══════════════════════════════════════════════════════════
+// Inbox 吞吐基准 — InMemory 编排层（2026-10-08 缺口清单第②项，ITM-286 勘正后补位）
+// 口径对齐 OutboxThroughputBenchmarks：per-invoke 重建 store（ITM-246/152 教训——
+// Processed 记录永不移除，复用 store 使字典无限增长，逐 invoke 重建保证恒定状态）。
+// 三方法为 1-op / 3-op / 2-op 捆绑口径（重复拒绝必然含首次投递+标记，Cycle=首投+标记）。
+// ═══════════════════════════════════════════════════════════
+[MemoryDiagnoser]
+// ⚠️ 无 job attribute 注：同 OutboxThroughputBenchmarks 头注（--infra 模式级 ManualConfig）
+public class InboxThroughputBenchmarks
+{
+    private static readonly DateTimeOffset Now = DateTimeOffset.UtcNow;
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
+
+    // 1-op 口径：空 store 首投（原子 create-or-reject 的热路径）
+    [Benchmark(Baseline = true)]
+    public async Task<InboxMessage?> TryStart_FirstDelivery()
+    {
+        var store = new InMemoryInboxStore();
+        var message = await store.TryStartProcessingAsync("bench", NewMessageId(), Now, Timeout, default);
+        if (message is null)
+            throw new InvalidOperationException("空 store 首投不应返回 null");
+        return message;
+    }
+
+    // 3-op 口径：首投 + MarkProcessed + 同键重投被拒（消费侧幂等去重的完整判定路径）
+    [Benchmark]
+    public async Task<int> TryStart_DuplicateAfterProcessed()
+    {
+        var store = new InMemoryInboxStore();
+        var messageId = NewMessageId();
+        var first = await store.TryStartProcessingAsync("bench", messageId, Now, Timeout, default);
+        await store.MarkProcessedAsync(first!, Now, default);
+        var duplicate = await store.TryStartProcessingAsync("bench", messageId, Now, Timeout, default);
+        if (duplicate is not null)
+            throw new InvalidOperationException("Processed 后同键重投应返回 null（幂等去重失效）");
+        return 0;
+    }
+
+    // 2-op 口径：首投 + 标记完成（单消息完整生命周期）
+    [Benchmark]
+    public async Task<long> TryStartAndMarkProcessed_Cycle()
+    {
+        var store = new InMemoryInboxStore();
+        var message = await store.TryStartProcessingAsync("bench", NewMessageId(), Now, Timeout, default);
+        await store.MarkProcessedAsync(message!, Now, default);
+        return message!.Id;
+    }
+
+    private static string NewMessageId() => $"m-{Guid.NewGuid():N}";
+}
+
+// ═══════════════════════════════════════════════════════════
 // EventLog 事件追加 + 流式读取基准
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
