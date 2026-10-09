@@ -84,6 +84,73 @@ public sealed class DapperEventLog : IEventLog
         //（并发冲突等异常路径不计数，与 EFCore/PalORM 姊妹一致）
         using var activity = PalActivitySource.StartEventLogAppend(streamName, events.Count);
 
+        // I（2026-10-10 优化轮，r3 实证后收窄为 PG 门控）：单事件 Any 版本原子追加快路径——
+        // INSERT..SELECT 子查询在服务端原子计算 MAX(stream_version)+1，读+插单往返（原路径
+        // MAX 预查 + INSERT 两次往返），同时消除该子路径的 TOCTOU 窗口。**方言门控依据
+        //（2026-10-10 三方言实测）**：PG -15%（968→820μs，E2.6% ✓，网络往返主导收益成立）；
+        // MySQL -5.3% 但 E6.8%（噪声带内，证据不足，不启用）；SQLite +44% 反向劣化
+        //（本地往返近零，省往返收益被子查询复杂度反超）——故仅 PG 走本路径，MySQL/SQLite
+        // 维持原路径不变。Any 语义 = 接受任意当前版本，无守卫谓词、永不空插；并发竞争由
+        // (stream_name, stream_version) 唯一索引兜底，冲突分类对齐下方既有 catch 的意图
+        //（EventId 重复原样上抛、版本位竞争转并发异常；PG aborted 事务下分类查询自败，
+        // 保守上抛原始冲突异常——外层事务回滚，不产生误判）。k>1 / 非 Any 版本走原路径不变。
+        if (events.Count == 1 && expectedVersion.Kind == ExpectedStreamVersionKind.Any
+            && _dbType == DapperDbType.PostgreSql)
+        {
+            var evt = events[0]!;
+            var nowFast = _timeProvider.GetUtcNow();
+            // 参数形态镜像下方慢路径（byte[] 显式 DbType.Binary 的 AOT 实验结论同源），
+            // 唯一差异：StreamVersion 不传（服务端原子计算）
+            var dpFast = new DynamicParameters();
+            dpFast.Add("EventId", DapperAotInitializer.ToSqliteParameter(evt.EventId));
+            dpFast.Add("EventName", evt.EventName);
+            dpFast.Add("StreamName", streamName);
+            dpFast.Add("SchemaVersion", evt.SchemaVersion);
+            dpFast.Add("ContentType", evt.ContentType);
+            dpFast.Add("Payload", evt.PayloadArray, DbType.Binary);
+            dpFast.Add("Metadata", evt.MetadataArray, DbType.Binary);
+            dpFast.Add("RecordedAt", ToTimeParam(nowFast));
+            dpFast.Add("ActorId", evt.Audit.ActorId);
+            dpFast.Add("Reason", evt.Audit.Reason);
+            dpFast.Add("CorrelationId", evt.Audit.CorrelationId?.ToString());
+            dpFast.Add("CausationId", evt.Audit.CausationId?.ToString());
+            dpFast.Add("TraceParent", evt.Audit.TraceParent);
+            dpFast.Add("TraceState", evt.Audit.TraceState);
+            var sqlFast = EventLogSql.AppendSingleAnyPG;
+            try
+            {
+                var row = await _connection.QuerySingleAsync<AppendSingleRow>(sqlFast, dpFast, Tx).ConfigureAwait(false);
+                PalMetrics.EventLogAppended.Add(1);
+                return new AppendEventsResult(
+                    streamName, row.StreamVersion, row.StreamVersion, row.GlobalPosition, row.GlobalPosition);
+            }
+            catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
+            {
+                var idExists = false;
+                long? actualVersion = null;
+                var classifySucceeded = false;
+                try
+                {
+                    idExists = await _connection.QuerySingleAsync<int>(
+                        EventLogSql.EventIdExists, new { id = evt.EventId }, Tx).ConfigureAwait(false) > 0;
+                    actualVersion = await _connection.QueryFirstOrDefaultAsync<long?>(
+                        EventLogSql.MaxVersion, new { name = streamName }, Tx).ConfigureAwait(false);
+                    classifySucceeded = true;
+                }
+                catch (System.Data.Common.DbException)
+                {
+                    // 分类查询自败（如 PG aborted 事务 25P02）——放弃分类，原始冲突异常上抛
+                }
+                if (classifySucceeded)
+                {
+                    if (idExists)
+                        throw;
+                    throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);
+                }
+                throw;
+            }
+        }
+
         // 📐 事务契约（P2 定案声明）：批量追加的原子性由调用方事务保证——传入
         // Tx 则整批可回滚；未传时中途失败会留下前半批（部分写入）。
         // EFCore 版在内部事务中自动回滚，Dapper 版依赖外部 UoW（两版契约差异是
@@ -332,5 +399,18 @@ public sealed class DapperEventLog : IEventLog
             => value is not null && PalUlid.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var ulid)
                 ? ulid
                 : (PalUlid?)null;
+    }
+
+    /// <summary>
+    /// I（2026-10-10 优化轮）：单事件 Any 快路径的回读行——三方言模板以显式 PascalCase
+    /// 别名对齐（PG RETURNING 别名 / MySQL/SQLite 聚合单行 SELECT 别名），不依赖
+    /// MatchNamesWithUnderscores 全局开关。
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1812",
+        Justification = "Dapper QuerySingleAsync<T> 运行时反射物化（与同文件 EventRow 同路径），分析器不可见")]
+    private sealed class AppendSingleRow
+    {
+        public long GlobalPosition { get; init; }
+        public long StreamVersion { get; init; }
     }
 }

@@ -204,26 +204,40 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     {
         ArgumentNullException.ThrowIfNull(message);
         var c = EnsureOpen();
-        // P2 修复（七轮评审）：补 correlation/causation/trace 4 列——此前模板加了列但参数对象未传
-        // 🔬 AOT 实验：参数走 DynamicParameters——1.1.0 List expansion 把匿名对象里的 byte[]
-        //    Payload 误判为 IN 列表做 PackListParameters 展开（SQL 变行值，SQLite "row value
-        //    misused"）；byte[] 用显式 DbType.Binary（DynamicParameters 是 1.1.0 官方支持路径）。
-        var dp = new DynamicParameters();
-        dp.Add("Id", DapperAotInitializer.ToSqliteParameter(message.Id));
-        dp.Add("Type", message.Type);
-        dp.Add("Payload", message.Payload, DbType.Binary);
-        dp.Add("ContentType", message.ContentType);
-        dp.Add("SchemaVersion", message.SchemaVersion);
+        // D（2026-10-10 优化轮）：执行层去 Dapper 化——原生 ADO 命令直发。Dapper Execute
+        // 的参数机械层（DynamicParameters 装配 + 命令包装 + 参数绑定）是单条插入的分配大头
+        //（SQLite 单条实测 10.53KB/op）；参数值与方言转换与原 DynamicParameters 形态逐一对齐
+        //（P2 七轮 4 追踪列补齐与 ITM-634 领域 CreatedAt 语义保持——见 CreatedAt 行注释），
+        // SQL 模板不变（status 仍为字面量 0）。byte[] 经原生 provider 类型推断绑定二进制
+        //（原 DbType.Binary 显式标注的等价形态）；null 统一转 DBNull。
+        using var cmd = c.CreateCommand();
+        cmd.Transaction = Tx;
+        cmd.CommandText = SqlTemplates.OutboxInsert;
+        AddParam(cmd, "Id", DapperAotInitializer.ToSqliteParameter(message.Id));
+        AddParam(cmd, "Type", message.Type);
+        AddParam(cmd, "Payload", message.Payload);
+        AddParam(cmd, "ContentType", message.ContentType);
+        AddParam(cmd, "SchemaVersion", message.SchemaVersion);
         // ITM-634 修复（跨栈契约一致）：created_at 持久化领域赋值 OutboxMessage.CreatedAt——
-        // 原实现用 Store 时钟 _timeProvider.GetUtcNow() 覆盖，与 PalORM（OutboxMessageRow.FromDomain）、
-        // EFCore（OutboxMessages.Add(message)）、InMemory（列表直存）三栈保留领域值分叉：
-        // 同消息跨栈落库 created_at 不同，ORDER BY created_at 投递序与 CreatedAt 往返断言随之分叉。
-        dp.Add("CreatedAt", ToTimeParam(message.CreatedAt));
-        dp.Add("CorrelationId", message.CorrelationId?.ToString());
-        dp.Add("CausationId", message.CausationId?.ToString());
-        dp.Add("TraceParent", message.TraceParent);
-        dp.Add("TraceState", message.TraceState);
-        c.Execute(SqlTemplates.OutboxInsert, dp, Tx);
+        // 与 PalORM（OutboxMessageRow.FromDomain）、EFCore（OutboxMessages.Add(message)）、
+        // InMemory（列表直存）三栈保留领域值一致：同消息跨栈落库 created_at 相同，
+        // ORDER BY created_at 投递序与 CreatedAt 往返断言跨栈成立。
+        AddParam(cmd, "CreatedAt", ToTimeParam(message.CreatedAt));
+        AddParam(cmd, "CorrelationId", message.CorrelationId?.ToString());
+        AddParam(cmd, "CausationId", message.CausationId?.ToString());
+        AddParam(cmd, "TraceParent", message.TraceParent);
+        AddParam(cmd, "TraceState", message.TraceState);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>D（2026-10-10 优化轮）：原生 ADO 参数装配——null 统一 DBNull，其余按值类型由
+    /// provider 推断（byte[]→二进制 / string→文本 / int→整型 / DateTimeOffset→PG timestamptz）。</summary>
+    private static void AddParam(System.Data.Common.DbCommand cmd, string name, object? value)
+    {
+        var p = cmd.CreateParameter();
+        p.ParameterName = name;
+        p.Value = value ?? DBNull.Value;
+        cmd.Parameters.Add(p);
     }
 
     /// <summary>批量添加消息 — 自动选择数据库最优批量路径。

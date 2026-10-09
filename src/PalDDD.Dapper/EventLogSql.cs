@@ -30,12 +30,28 @@ internal static class EventLogSql
     public const string InsertSqlite =
         "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES (@EventId, @EventName, @StreamName, @StreamVersion, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState); SELECT last_insert_rowid();";
 
-    /// <summary>
-    /// 按流名和版本读取事件。<br/>
+    /// <summary>按流名和版本读取事件。<br/>
     /// 💡 LIMIT @max 由调用方传入 maxCount（ITM-063：此前参数被静默忽略）。
     /// </summary>
     public const string ReadStream =
         "SELECT * FROM events WHERE stream_name = @name AND stream_version >= @from ORDER BY stream_version LIMIT @max";
+
+    /// <summary>
+    /// I（2026-10-10 优化轮，仅 PG 启用）：单事件 Any 版本原子追加——INSERT..SELECT 子查询
+    /// 在服务端原子计算 COALESCE(MAX(stream_version),-1)+1，读+插单往返（原路径 MAX 预查 +
+    /// INSERT 两次往返）。Any 语义无守卫谓词、永不空插；并发竞争由 (stream_name, stream_version)
+    /// 唯一索引兜底。别名显式 PascalCase，不依赖 MatchNamesWithUnderscores 全局开关。
+    /// MySQL/SQLite 同语义模板经 2026-10-10 实测不启用（MySQL -5.3% E6.8% 噪声带、
+    /// SQLite +44% 反向劣化——本地往返近零时子查询复杂度反超省往返收益），未保留。
+    /// </summary>
+    public const string AppendSingleAnyPG =
+        "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
+        "SELECT @EventId, @EventName, @StreamName, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) + 1, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState " +
+        "RETURNING global_position AS \"GlobalPosition\", stream_version AS \"StreamVersion\"";
+
+    /// <summary>EventId 存在性探查（快路径唯一约束冲突的分类依据：存在 = EventId 重复原样上抛，不存在 = 版本位竞争）。</summary>
+    public const string EventIdExists =
+        "SELECT COUNT(*) FROM events WHERE event_id = @id";
 
     /// <summary>
     /// 按全局位置读取所有事件。<br/>

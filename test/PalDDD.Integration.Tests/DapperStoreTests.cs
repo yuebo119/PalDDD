@@ -1181,6 +1181,59 @@ public sealed class DapperStoreTests
     }
 
     [Test]
+    public async Task EventLog_AppendAsync_AnyVersionSingleEvent_AppendsAtMaxPlusOne(CancellationToken cancellationToken)
+    {
+        // I（2026-10-10 优化轮）：单事件 Any 追加行为锁定——SQLite 走原路径（快路径经
+        // 2026-10-10 三方言实测仅 PG 启用，见 DapperEventLog 快路径门控注释），本测试锁定
+        // Any 语义的慢路径形态：连续追加依次落在 MAX+1，结果流版本与全局位置单调。
+        // PG 快路径的行为断言在 DialectProbeTests.EventLogSmokeAsync（CI Testcontainers）
+        var log = new DapperEventLog(_conn, null, _dbType);
+        var r1 = await log.AppendAsync("any-fast-stream", ExpectedStreamVersion.NoStream,
+            [new EventData(PalUlid.New(), "test.event.v1", 1, "application/json",
+                "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty)],
+            cancellationToken);
+        await Assert.That(r1.FirstStreamVersion).IsEqualTo(0);
+
+        var r2 = await log.AppendAsync("any-fast-stream", ExpectedStreamVersion.Any,
+            [new EventData(PalUlid.New(), "test.event.v2", 1, "application/json",
+                "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty)],
+            cancellationToken);
+        await Assert.That(r2.FirstStreamVersion).IsEqualTo(1);
+        await Assert.That(r2.LastStreamVersion).IsEqualTo(1);
+        await Assert.That(r2.LastGlobalPosition).IsGreaterThan(r1.FirstGlobalPosition);
+
+        var r3 = await log.AppendAsync("any-fast-stream", ExpectedStreamVersion.Any,
+            [new EventData(PalUlid.New(), "test.event.v3", 1, "application/json",
+                "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty)],
+            cancellationToken);
+        await Assert.That(r3.FirstStreamVersion).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task EventLog_AppendAsync_AnyFastPath_DuplicateEventId_RethrowsRaw(CancellationToken cancellationToken)
+    {
+        // I（2026-10-10 优化轮）：Any 追加的 EventId 重复冲突分类锁定（SQLite 慢路径形态；
+        // PG 快路径同分类逻辑在 DialectProbeTests 验证）——event_id 唯一索引命中时原样上抛
+        // 原始异常（镜像慢路径 BatchDuplicateEventId 的分类意图），不得误译为
+        // EventStreamConcurrencyException。前置声明同 TST-202：生产默认 schema 无 event_id
+        // 唯一索引时本路径不触发，本测试自建索引验证
+        await using (var indexCommand = _conn.CreateCommand())
+        {
+            indexCommand.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id)";
+            await indexCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var log = new DapperEventLog(_conn, null, _dbType);
+        var duplicated = new EventData(PalUlid.New(), "test.event.v1", 1, "application/json",
+            "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty);
+        var r1 = await log.AppendAsync("any-dup-stream", ExpectedStreamVersion.Any, [duplicated], cancellationToken);
+        await Assert.That(EventsWritten(r1)).IsEqualTo(1);
+
+        _ = await Assert.ThrowsAsync<Microsoft.Data.Sqlite.SqliteException>(async () =>
+            await log.AppendAsync("any-dup-stream", ExpectedStreamVersion.Any, [duplicated], cancellationToken));
+    }
+
+    [Test]
     public async Task EventLog_AppendAsync_BatchDuplicateEventId_ThrowsOriginalNotConcurrency(CancellationToken cancellationToken)
     {
         // P3 回归（九轮）：批内两条事件共享 EventId 时，冲突重查的分类基线是"本批已写入的

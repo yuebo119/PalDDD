@@ -267,6 +267,18 @@ public sealed partial class DialectProbeTests
         // = 通过；抛其他异常 = 失败（含异常类型鉴别）。ThrowsAsync 泛型精确匹配该分类。
         await Assert.ThrowsAsync<EventStreamConcurrencyException>(async () =>
             await log.AppendAsync("probe-stream", ExpectedStreamVersion.Exact(0), events, default));
+
+        // I（2026-10-10 优化轮）：单事件 Any 追加行为断言（PG 走快路径 INSERT..SELECT 原子算
+        // 版本、MySQL 走原路径——断言路径无关）：probe-stream 已有 #6 批写入的 2 个事件，
+        // 连续两次 Any 追加应依次落 version 2/3
+        var any1 = new EventData(Ulid.New(), "probe.event.v1", 1, "application/json",
+            new ReadOnlyMemory<byte>([3]), new ReadOnlyMemory<byte>([3]), audit);
+        var anyR1 = await log.AppendAsync("probe-stream", ExpectedStreamVersion.Any, [any1], default);
+        await Assert.That(anyR1.FirstStreamVersion).IsEqualTo(2);
+        var any2 = new EventData(Ulid.New(), "probe.event.v1", 1, "application/json",
+            new ReadOnlyMemory<byte>([4]), new ReadOnlyMemory<byte>([4]), audit);
+        var anyR2 = await log.AppendAsync("probe-stream", ExpectedStreamVersion.Any, [any2], default);
+        await Assert.That(anyR2.FirstStreamVersion).IsEqualTo(3);
     }
 
     /// <summary>原探针 SagaSmoke——3 项断言。</summary>
