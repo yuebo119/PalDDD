@@ -24,7 +24,7 @@ if (args is ["--qps"])
 // CAP 发布对比经 PALDDD_BENCH_CAP 环境变量 opt-in，见 CapComparisonBenchmarks 头注）。
 if (args.Contains("--compare", StringComparer.OrdinalIgnoreCase))
 {
-    var medium = MediumInProcessConfig();
+    var medium = ModeConfig(args);
     BenchmarkRunner.Run<MediatRComparisonBenchmarks>(medium);
     if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PALDDD_BENCH_CAP_MYSQL"))
         && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PALDDD_BENCH_CAP_RABBIT")))
@@ -112,18 +112,32 @@ if (args.Contains("--compression", StringComparer.OrdinalIgnoreCase))
 // testing.md §3.2「BDN 正式」列长期纸面 ✅。本两模式把该列落地。口径对齐
 // --persist-medium（decision-2026-09-17 §2.5：medium 单次自比，ShortRun 历史 53%
 // 跨轮差不入基线），artifacts 同落 artifacts-medium（归档纪律：数字入 performance.md 带日期）。
-// 2026-10-10 Q2：--strict——严格档（引用级数字专用）：对环境敏感噪声类加密采样
-// （迭代 15→40、预热 10→20、launch 2→3），压 Error 半置信区间；口径注：ns/op 语义不变
-// 但与 medium 档数字分列（账本引用 strict 数字须带档位标签）。
-// 覆盖类：OutboxThroughputBenchmarks（infra E13~18% 四轮一贯环境敏感带）+
-// SmartEnumBenchmarks（ns 级固有抖动，历史 11~25% 带）。其余类 medium 档已 <5% 无需加密。
-if (args.Contains("--strict", StringComparer.OrdinalIgnoreCase))
-{
-    var strict = ManualConfig.Create(DefaultConfig.Instance)
+// 2026-10-10 Q2：--strict——严格档（引用级数字专用）：加密采样（迭代 15→40、预热 10→20、
+// launch 2→3）压 Error 半置信区间。**专项治理轮全局化：--strict 可叠加到任意模式**
+// （如 `--persist-pg --strict`、`--infra --strict`）——普查（515 读数/83 基准/两日）定位的
+// 高频 Error 族（PG GetPending 42 轮 13 次 >5%、Drain 波段 28 轮 9~12 次、infra 四项、
+// SmartEnum）全部经加密采样受益；ns/op 语义不变，账本引用 strict 数字须带档位标签。
+// 无其他模式参数时默认跑两类既有严格档（OutboxThroughput + SmartEnum）。
+static IConfig StrictInProcessConfig()
+    => ManualConfig.Create(DefaultConfig.Instance)
         .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance)
             .WithIterationCount(40).WithWarmupCount(20).WithLaunchCount(3))
         .AddDiagnoser(MemoryDiagnoser.Default)
         .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-strict"));
+
+static IConfig ModeConfig(string[] args)
+    => args.Contains("--strict", StringComparer.OrdinalIgnoreCase)
+        ? StrictInProcessConfig()
+        : MediumInProcessConfig();
+
+static bool HasStrict(string[] args) => args.Contains("--strict", StringComparer.OrdinalIgnoreCase);
+
+static bool IsStrictOnlyRun(string[] args)
+    => HasStrict(args) && args.Count(a => a.StartsWith("--", StringComparison.Ordinal)) == 1;
+
+if (IsStrictOnlyRun(args))
+{
+    var strict = StrictInProcessConfig();
     BenchmarkRunner.Run<OutboxThroughputBenchmarks>(strict);
     BenchmarkRunner.Run<SmartEnumBenchmarks>(strict);
     return 0;
@@ -137,7 +151,7 @@ static IConfig MediumInProcessConfig()
 
 if (args.Contains("--framework", StringComparer.OrdinalIgnoreCase))
 {
-    var medium = MediumInProcessConfig();
+    var medium = ModeConfig(args);
     BenchmarkRunner.Run<EntityDomainEventBenchmarks>(medium);
     BenchmarkRunner.Run<ValueObjectBenchmarks>(medium);
     BenchmarkRunner.Run<SmartEnumBenchmarks>(medium);
@@ -148,7 +162,7 @@ if (args.Contains("--framework", StringComparer.OrdinalIgnoreCase))
 
 if (args.Contains("--infra", StringComparer.OrdinalIgnoreCase))
 {
-    var medium = MediumInProcessConfig();
+    var medium = ModeConfig(args);
     BenchmarkRunner.Run<OutboxThroughputBenchmarks>(medium);
     BenchmarkRunner.Run<InboxThroughputBenchmarks>(medium);
     BenchmarkRunner.Run<EventLogBenchmarks>(medium);
@@ -164,7 +178,7 @@ if (args.Contains("--infra", StringComparer.OrdinalIgnoreCase))
 // 两车道是消息发布路径缺位面：分发此前仅有 <500B 分配契约，序列化零数据。
 if (args.Contains("--app", StringComparer.OrdinalIgnoreCase))
 {
-    var medium = MediumInProcessConfig();
+    var medium = ModeConfig(args);
     BenchmarkRunner.Run<DispatcherBenchmarks>(medium);
     BenchmarkRunner.Run<SerializationBenchmarks>(medium);
     return 0;
@@ -175,7 +189,7 @@ if (args.Contains("--app", StringComparer.OrdinalIgnoreCase))
 // 「多实例并发发布零丢失零重复」从正确性主张升级为性能数据。
 if (args.Contains("--concurrency", StringComparer.OrdinalIgnoreCase))
 {
-    var medium = MediumInProcessConfig();
+    var medium = ModeConfig(args);
     BenchmarkRunner.Run<OutboxConcurrencyInMemoryBenchmarks>(medium);
     BenchmarkRunner.Run<OutboxConcurrencyDapperSqliteBenchmarks>(medium);
     return 0;
@@ -187,17 +201,17 @@ if (args.Contains("--concurrency", StringComparer.OrdinalIgnoreCase))
 // SKIP LOCKED / MySQL GET_LOCK 互斥发散 ADR-024 上的真实形态）。Docker/WSL 不可达 →
 // 报错退出码 2，不静默跳过（TOOL 人工运行语义，区别于测试侧 Skip.Test 环境守卫）。
 if (args.Contains("--persist-pg", StringComparer.OrdinalIgnoreCase))
-    return await RunRemoteDialectAsync(isPostgreSql: true);
+    return await RunRemoteDialectAsync(isPostgreSql: true, ModeConfig(args));
 
 if (args.Contains("--persist-mysql", StringComparer.OrdinalIgnoreCase))
-    return await RunRemoteDialectAsync(isPostgreSql: false);
+    return await RunRemoteDialectAsync(isPostgreSql: false, ModeConfig(args));
 
 // 2026-10-08 缺口清单第③④⑤⑥⑧项：--coverage——Projection 吞吐 / 消息演化管线 /
 // Specification 内存路径 / Hosting 每请求开销 / 端到端单命令链路（全部零外部依赖，
 // 端到端与 Hosting 为框架开销层口径：InMemory store / DefaultHttpContext，无网络与 DB）。
 if (args.Contains("--coverage", StringComparer.OrdinalIgnoreCase))
 {
-    var medium = MediumInProcessConfig();
+    var medium = ModeConfig(args);
     BenchmarkRunner.Run<ProjectionBenchmarks>(medium);
     BenchmarkRunner.Run<MessageEvolutionBenchmarks>(medium);
     BenchmarkRunner.Run<SpecificationBenchmarks>(medium);
@@ -206,7 +220,7 @@ if (args.Contains("--coverage", StringComparer.OrdinalIgnoreCase))
     return 0;
 }
 
-static async Task<int> RunRemoteDialectAsync(bool isPostgreSql)
+static async Task<int> RunRemoteDialectAsync(bool isPostgreSql, IConfig config)
 {
     RemoteDialectBenchSession session;
     try
@@ -229,17 +243,18 @@ static async Task<int> RunRemoteDialectAsync(bool isPostgreSql)
         RemoteDialectBenchState.Connection = session.Connection;
         RemoteDialectBenchState.ConnectionString = session.ConnectionString;
         RemoteDialectBenchState.DbType = session.DbType;
-        var medium = MediumInProcessConfig();
-        BenchmarkRunner.Run<DapperRemoteOutboxThroughputBenchmarks>(medium);
-        BenchmarkRunner.Run<DapperRemoteOutboxConcurrencyBenchmarks>(medium);
-        BenchmarkRunner.Run<PalOrmRemoteOutboxBenchmarks>(medium);
+        // 专项治理轮：config 由调用方传入（medium 或叠加 --strict 的严格档——普查定位
+        // PG GetPending/Drain 波段为最高频 Error 族，strict 加密采样对其收窄）
+        BenchmarkRunner.Run<DapperRemoteOutboxThroughputBenchmarks>(config);
+        BenchmarkRunner.Run<DapperRemoteOutboxConcurrencyBenchmarks>(config);
+        BenchmarkRunner.Run<PalOrmRemoteOutboxBenchmarks>(config);
         // 方言专属车道：PG 跑方言特性（Pipeline/Router/LISTEN-NOTIFY）；MySQL 跑 EF 栈
         // 租约 SQL 形态（SKIP LOCKED 派生表互斥验证——EF 栈级车道待上游 Provider 出
         // EF 11 rc 配套版，2026-10-09 实证见类头注）
         if (isPostgreSql)
-            BenchmarkRunner.Run<PgDialectFeaturesBenchmarks>(medium);
+            BenchmarkRunner.Run<PgDialectFeaturesBenchmarks>(config);
         else
-            BenchmarkRunner.Run<MySqlSkipLockedShapeBenchmarks>(medium);
+            BenchmarkRunner.Run<MySqlSkipLockedShapeBenchmarks>(config);
         RemoteDialectBenchState.Connection = null;
         RemoteDialectBenchState.ConnectionString = null;
     }

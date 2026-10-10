@@ -19,14 +19,18 @@ harness 形态可参考，见 performance.md）。
 
 ## 二、PostgreSQL
 
-### 2.1 连接串 `Max Auto Prepare=64`（PalORM 栈强烈建议）
+### 2.1 连接串 `Max Auto Prepare=64`（PalORM 栈——确定性降级为「加速到达稳态」，见下）
 
-- **实测**：PalORM 栈 GetPending 14.7→6.7ms（**-55%**，两侧 Error<1%）；Dapper 栈对照组不变
-  （Dapper 已走即时计划）。「PalORM PG GetPending 慢 Dapper ~20×」的约一半由未启用预编译
-  解释，其余为 PalORM 会话/物化固有开销。
-- **启用**：PalORM 栈（`PalDDD.PalORM.PostgreSql`）的连接串追加 `Max Auto Prepare=64`。
-- **权衡**：预编译语句缓存占用服务端 plan cache（64 条上限有界）；对 Dapper/EF 栈无收益
-  也无害（Dapper 实测对照组不变）。
+- **历史实测**：medium 档下 PalORM 栈 GetPending 14.7ms（无旋钮）→ 6.7ms（加旋钮，-55%）；
+  Dapper 栈对照组不变。
+- **2026-10-10 专项治理轮新证据（结论降级）**：strict 档（迭代 40/预热 20/launch 3）**无旋钮**
+  实测 GetPending **685μs（E4.5%）**——比 medium+旋钮（1.5ms）更快。四个条件的全序列
+  （14.7ms 无旋钮 medium → 6.7ms 旋钮 medium → 1.5ms 旋钮 medium → 685μs 无旋钮 strict）
+  说明**采样深度与预热到达率是更主导的变量**：Npgsql/PalORM 的语句计划随重复执行进入稳态，
+  medium 15 迭代可能欠采样稳态段。旋钮的真实贡献（是否仅加速到达稳态 vs 稳态本身也提速）
+  **待 strict A/B（旋钮 vs 无旋钮双 strict 轮）定论**。
+- **当前建议**：PalORM 栈加 `Max Auto Prepare=64` 无害（对照组 Dapper 不受影响），可先行启用；
+  但引用级数字一律以 strict 档为准（带档位标签），不再以 medium 档差值引用旋钮收益。
 
 ### 2.2 `synchronous_commit=off`（写延迟换持久性窗口，谨慎）
 
