@@ -165,34 +165,44 @@ internal static class QpsHarness
         GC.WaitForPendingFinalizers();
         GC.Collect();
 
-        var counts = new long[threads];
-        var threadsArr = new Thread[threads];
-        for (var t = 0; t < threads; t++)
+        // 专项治理轮（2026-10-10）：单轮 3s 是趋势级口径，跨轮波动不可分离——改 3 轮取中位
+        // 并报区间（min~max），单轮离群（后台负载窗口）不再主导读数；中位数与历史单轮值同量纲
+        const int rounds = 3;
+        var roundQps = new double[rounds];
+        for (var r = 0; r < rounds; r++)
         {
-            var idx = t;
-            threadsArr[t] = new Thread(() =>
+            var counts = new long[threads];
+            var threadsArr = new Thread[threads];
+            for (var t = 0; t < threads; t++)
             {
-                long c = 0;
-                var end = DateTime.UtcNow.AddSeconds(seconds);
-                while (DateTime.UtcNow < end)
+                var idx = t;
+                threadsArr[t] = new Thread(() =>
                 {
-                    op();
-                    c++;
-                }
-                counts[idx] = c;
-            });
+                    long c = 0;
+                    var end = DateTime.UtcNow.AddSeconds(seconds);
+                    while (DateTime.UtcNow < end)
+                    {
+                        op();
+                        c++;
+                    }
+                    counts[idx] = c;
+                });
+            }
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            foreach (var th in threadsArr) th.Start();
+            foreach (var th in threadsArr) th.Join();
+            sw.Stop();
+
+            var total = 0L;
+            foreach (var c in counts) total += c;
+            roundQps[r] = total / sw.Elapsed.TotalSeconds;
         }
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        foreach (var th in threadsArr) th.Start();
-        foreach (var th in threadsArr) th.Join();
-        sw.Stop();
-
-        var total = 0L;
-        foreach (var c in counts) total += c;
-        var qps = total / sw.Elapsed.TotalSeconds;
+        Array.Sort(roundQps);
+        var median = roundQps[rounds / 2];
         Console.WriteLine(
-            $"{scenario,-8} threads={threads} : {total:N0} ops / {sw.Elapsed.TotalSeconds:F2}s = {qps:N0} ops/s（{1_000_000_000 / (qps / threads):F0} ns/op/线程）");
+            $"{scenario,-8} threads={threads} : 中位 {median:N0} ops/s（{rounds} 轮，区间 {roundQps[0]:N0}~{roundQps[^1]:N0}；{1_000_000_000 / (median / threads):F0} ns/op/线程）");
     }
 
     private sealed class ChainHandler : PalHandlerIface

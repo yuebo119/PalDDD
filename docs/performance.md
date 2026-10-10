@@ -388,6 +388,26 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 > **重要勘正（入账）**：上午全量报告 infra 车道「94.7/36.3/197.9μs」读数被 strict 复测证明为**采样噪声膨胀而非真实性能**（medium 15 迭代在忙窗口采到慢样本拉高均值，40 迭代×3 launch 回归真值）——2026-10-09 晚记录的 infra「计时上移 ~1.65×」漂移属同族现象，该轮结论修正为「medium 采样噪声」，非机器状态系统性变化。引用级数字一律以 strict 档为准（带档位标签）；medium 档定位为趋势与分配判定。
 
+## Error 专项治理轮（2026-10-10 下午二：普查→归因→治理→验证）
+
+> 方法：单位感知解析器扫两日全部 31 份日志（515 行读数/83 基准），跨轮聚合 >5% 频率；
+> 按频率归因分类，逐族治理并实测验证。
+
+**四族分类（频率降序）**：
+
+| 族 | 成员（跨轮 >5% 频次） | 根因 | 治理 | 验证结果 |
+|---|---|---|---|---|
+| A 网络方差族 | PG Dapper GetPending（42 轮 13 次）、PG Drain/Seed 波段（28 轮 9~12 次）、CAP 侧 PalDDD（3 轮 3 次） | 网络往返抖动 + **多峰分布**（strict 实证：Drain_Sequential 中位 151 vs 均值 139、StdDev 76ms，BDN MultimodalDistribution 警告四处） | strict 加密采样 + 中位数口径 | 吞吐类收窄：GetPending E21→5.1%、Lease/AddSingle/AddBatch5/EventLog/Idempotency 全部 E<2%；**Drain 波段不收窄（E17~21%）——多峰是真实形态不是采样不足，引用一律中位数** |
+| B 采样不足族 | infra OutboxThroughput 四项（AddSingleMessage g15×2 等）、SmartEnum.FromValue（历史 25% 带） | medium 15 迭代在忙窗口欠采样 | strict（前轮已落地，本轮全局化） | 四项 E12~18%→0.5~5.4%、FromValue E1.2%，且均值回归真值（前轮已录） |
+| C 量纲下界族 | ValueObject 四项（E60~150%） | Mean ~0.001ns 处时钟分辨率除近零均值——BDN ZeroMeasurement 标注项 | 口径声明（不适用加密） | 账本已标注「值即 ~0、判定以零分配为准」，维持 |
+| D 低频带族 | DapperConfig_CreatePg/Sharding/ReadStream/Catalog_FindByName 等（各 1~2 次 5~15%） | 单次忙窗口，无跨轮复现 | 不专项治理（复现时 strict 复测） | 本轮 medium 大多回到 <5% |
+
+**治理落地**：①`--strict` 全局化——任意模式可叠加（`--persist-pg --strict` 已验证、`--infra --strict` 等，Program.cs ModeConfig 单点分派 + 远程方言传参）；②QPS harness 多轮中位——单轮 3s 改 3 轮取中位并报区间（dispatch 4T 轮间 ±0.5% 稳定；chain 8T ±11% 波动从隐藏变为实测，GC 平台期的真实形态）；③CAP 前置检查门（前轮）。
+
+**PG strict 附加发现**：PalORM GetPending 无旋钮 strict 实测 **685μs（E4.5%）**——四条件序列（14.7 无旋钮 medium → 6.7 旋钮 medium → 1.5 旋钮 medium → 685μs 无旋钮 strict）说明采样深度是更主导变量，MaxAutoPrepare 结论降级为「加速到达稳态」待 strict A/B 定论（deployment-performance.md §2.1 已同步修正）。
+
+**残余（登记）**：Drain 多峰波段（结构性，中位数口径已纪律化）；ValueObject 量纲下界（口径声明）；PG strict A/B（旋钮定论）；MySQL 族近两轮全 <8% 未加密（频率驱动的优先级裁决）。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
