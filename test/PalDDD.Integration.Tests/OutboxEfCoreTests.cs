@@ -14,7 +14,7 @@ public sealed class OutboxEfCoreTests
         var store = (IPalOutboxStore)db;
         var message = CreateMessage("orders.submitted", FixedNow);
 
-        store.AddMessage(message);
+        await store.AddMessageAsync(message);
         await store.SaveChangesAsync(cancellationToken);
 
         db.ChangeTracker.Clear();
@@ -72,7 +72,7 @@ public sealed class OutboxEfCoreTests
         db.OutboxMessages.Add(message);
         await db.SaveChangesAsync(cancellationToken);
 
-        store.MarkProcessed(message, FixedNow.AddSeconds(1));
+        await store.MarkProcessedAsync(message, FixedNow.AddSeconds(1));
         await store.SaveChangesAsync(cancellationToken);
         db.ChangeTracker.Clear();
 
@@ -108,7 +108,7 @@ public sealed class OutboxEfCoreTests
 
         var snapshot = await db.OutboxMessages.AsNoTracking().SingleAsync(m => m.Id == seeded.Id, cancellationToken);
         var processedAt = FixedNow.AddSeconds(3);
-        store.MarkProcessed(snapshot, processedAt);
+        await store.MarkProcessedAsync(snapshot, processedAt);
 
         await Assert.That(snapshot.Status).IsEqualTo(OutboxStatus.Processed);
         await Assert.That(snapshot.ProcessedAt).IsEqualTo(processedAt);
@@ -137,7 +137,7 @@ public sealed class OutboxEfCoreTests
         await db.SaveChangesAsync(cancellationToken);
 
         var nextAttemptAt = FixedNow.AddMinutes(3);
-        store.ReleaseForRetry(message, "broker failed", nextAttemptAt);
+        await store.ReleaseForRetryAsync(message, "broker failed", nextAttemptAt);
         // 模拟 OutboxBatchProcessor.PersistSingleAsync：ReleaseForRetry 已直写 SQL，
         // 无 tracked 修改时此处为 no-op（不再抛 RetryCount 并发令牌假冲突）
         await store.SaveChangesAsync(cancellationToken);
@@ -179,7 +179,7 @@ public sealed class OutboxEfCoreTests
         await db.SaveChangesAsync(cancellationToken);
 
         // 过期持有者 worker-1（入参 message 的内存快照）的释放尝试：守卫拒绝
-        store.ReleaseForRetry(message, "broker failed", FixedNow.AddMinutes(3));
+        await store.ReleaseForRetryAsync(message, "broker failed", FixedNow.AddMinutes(3));
         db.ChangeTracker.Clear();
 
         var loaded = await db.OutboxMessages.SingleAsync(cancellationToken);

@@ -191,29 +191,32 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
     }
 
     /// <inheritdoc />
-    public void AddMessage(OutboxMessage message)
+    public async ValueTask AddMessageAsync(OutboxMessage message, CancellationToken ct = default)
     {
         // ITM-163 修复：补 message null 守卫（对齐 InMemoryOutboxStore）
         ArgumentNullException.ThrowIfNull(message);
         // InsertAsync 对 [Key(AutoIncrement=false)] 的 Ulid 主键不回填 —— 实体已带 Id。
         // created_at 由领域对象在构造时赋值（init-only，Store 不覆盖）。
+        // v4.0 ③（ADR-026）：原同步 AddMessage 内部对 Session.InsertAsync 阻塞桥接
+        //（GetAwaiter().GetResult()）——接口异步化后桥接删除，直连异步原语
         var row = OutboxMessageRow.FromDomain(message);
-        Session.InsertAsync(row, default).AsTask().GetAwaiter().GetResult();
+        await Session.InsertAsync(row, ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public async ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
+    public async ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default)
     {
         // ITM-163 修复：补 messages null 守卫（对齐 InMemoryOutboxStore/OutboxDbContext）
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
         var rows = messages.Select(OutboxMessageRow.FromDomain).ToList();
         // BulkInsertAsync 自动选方言最优路径（PG COPY / MySQL BulkCopy / SQLite 多值 INSERT）
-        return (int)await Session.BulkInsertAsync(rows, batchSize: 1000, ct: default).ConfigureAwait(false);
+        // v4.0 ④（ADR-026）：ct 传播进批量路径
+        return (int)await Session.BulkInsertAsync(rows, batchSize: 1000, ct: ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
+    public async ValueTask MarkProcessedAsync(OutboxMessage message, DateTimeOffset processedAt, CancellationToken ct = default)
     {
         // ITM-163 修复：补 message null 守卫（对齐 InMemoryOutboxStore/OutboxDbContext）
         ArgumentNullException.ThrowIfNull(message);
@@ -224,6 +227,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         // 时零内存变异（镜像 ReleaseForRetry 模式，对齐 OutboxProcessor 的"视为已处理"语义）。
         // ⚠️ SET/WHERE 只插值"值"（参数位合法）；SQL 片段变量会被 PalORM 整体参数化成
         // SET @pN 语法错误（十七轮实证，见 PalOrmSagaStateStore PD18 注释）。
+        // v4.0 ③（ADR-026）：同步阻塞桥（GetAwaiter().GetResult()）删除，直连异步原语
         var id = message.Id.ToString();
         var retry = message.RetryCount;
         var owner = message.LockedBy;
@@ -232,16 +236,16 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         // v44 P2：Status 终态守卫（镜像 v43 EFCore FencedTarget 收口——防 Dead↔Processed 翻转）
         var statusPending = (int)OutboxStatus.Pending;
         var affected = owner is null
-            ? Session.ExecuteAsync(
+            ? await Session.ExecuteAsync(
                 $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by IS NULL",
-                default).AsTask().GetAwaiter().GetResult()
-            : Session.ExecuteAsync(
+                ct).ConfigureAwait(false)
+            : await Session.ExecuteAsync(
                 // v74 P1 修复：v72 勘正说明曾以 SQL 行内注释（--）误嵌本字符串——单行 SQL 中
                 // -- 到语句末尾全部被数据库当注释，AND locked_until 谓词随之失效（同 owner
                 // 重租后旧快照终态写放行，探针实证红）；注释移出字符串，(locked_by, locked_until)
                 // 双谓词恢复（形态对齐姊妹 ReleaseForRetry 单次双谓词）
                 $"UPDATE outbox_messages SET status = {statusProcessed}, processed_at = {processedAt}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} AND locked_until = {until}",
-                default).AsTask().GetAwaiter().GetResult();
+                ct).ConfigureAwait(false);
         if (affected > 0)
         {
             message.Status = OutboxStatus.Processed;
@@ -254,7 +258,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
     }
 
     /// <inheritdoc />
-    public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
+    public async ValueTask MarkDeadAsync(OutboxMessage message, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default)
     {
         // ITM-163 修复：补 message null + failureReason 空白守卫（对齐 InMemoryOutboxStore/OutboxDbContext）
         ArgumentNullException.ThrowIfNull(message);
@@ -268,6 +272,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         var reason = FailureReason.Truncate(failureReason, 2040);
         // 三十四轮 ITM-210 token 化：同 MarkProcessed——retry_count 乐观锁 + 租约 token 双守卫
         //（SET/WHERE 只插值"值"；SQL 片段变量会被 PalORM 整体参数化成语法错误，见 MarkProcessed 注释）
+        // v4.0 ③（ADR-026）：同步阻塞桥删除，直连异步原语
         var id = message.Id.ToString();
         var retry = message.RetryCount;
         var owner = message.LockedBy;
@@ -275,14 +280,14 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         var statusDead = (int)OutboxStatus.Dead;
         var statusPending = (int)OutboxStatus.Pending;
         var affected = owner is null
-            ? Session.ExecuteAsync(
+            ? await Session.ExecuteAsync(
                 $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by IS NULL",
-                default).AsTask().GetAwaiter().GetResult()
-            : Session.ExecuteAsync(
+                ct).ConfigureAwait(false)
+            : await Session.ExecuteAsync(
                 // v74 P1 修复：同 MarkProcessed——v72 勘正说明曾误嵌 SQL 字符串（-- 注释吞掉
                 // AND locked_until 谓词，同 owner 重租旧写放行）；双谓词恢复
                 $"UPDATE outbox_messages SET status = {statusDead}, error = {reason}, processed_at = {deadAt}, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id = {id} AND retry_count = {retry} AND status = {statusPending} AND locked_by = {owner} AND locked_until = {until}",
-                default).AsTask().GetAwaiter().GetResult();
+                ct).ConfigureAwait(false);
         if (affected > 0)
         {
             message.Status = OutboxStatus.Dead;
@@ -295,7 +300,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
     }
 
     /// <inheritdoc />
-    public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
+    public async ValueTask ReleaseForRetryAsync(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt, CancellationToken ct = default)
     {
         // ITM-163 修复：补 message null + failureReason 空白守卫（对齐 InMemoryOutboxStore/OutboxDbContext）
         ArgumentNullException.ThrowIfNull(message);
@@ -343,12 +348,12 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         // 旧写不命中（affected=0，走下方既有门控零内存变异）。
         var retry = message.RetryCount;
         var affected = leaseOwner is null
-            ? Session.ExecuteAsync(
+            ? await Session.ExecuteAsync(
                 $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {reason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND status = {statusPending} AND retry_count = {retry} AND (locked_by IS NULL)",
-                default).AsTask().GetAwaiter().GetResult()
-            : Session.ExecuteAsync(
+                ct).ConfigureAwait(false)
+            : await Session.ExecuteAsync(
                 $"UPDATE outbox_messages SET status = {statusPending}, processed_at = NULL, error = {reason}, next_attempt_at = {nextAttemptAt}, retry_count = retry_count + 1, locked_by = NULL, locked_until = NULL WHERE id = {id} AND status = {statusPending} AND retry_count = {retry} AND locked_by = {leaseOwner} AND locked_until = {leaseUntil}",
-                default).AsTask().GetAwaiter().GetResult();
+                ct).ConfigureAwait(false); // v4.0 ③（ADR-026）：同步阻塞桥删除，直连异步原语
         if (affected > 0)
         {
             message.Status = OutboxStatus.Pending;

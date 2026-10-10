@@ -106,14 +106,15 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
     }
 
     /// <inheritdoc/>
-    public void AddMessage(OutboxMessage message)
+    public ValueTask AddMessageAsync(OutboxMessage message, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
         lock (_lock) { _messages.Add(message); }
+        return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc/>
-    public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
+    public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(messages);
         lock (_lock)
@@ -149,7 +150,7 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
     }
 
     /// <inheritdoc/>
-    public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
+    public ValueTask MarkProcessedAsync(OutboxMessage message, DateTimeOffset processedAt, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
         // P2 修复：三个状态变更方法与同文件其余 7 个方法对齐持锁，
@@ -160,7 +161,7 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
             // （对齐 InMemoryInboxStore.IsCurrentLeaseHolder）。被 successor 替换后的
             // 旧引用（租约被其他 worker 重租）标记静默忽略，不覆盖新持有者状态。
             if (!IsCurrentLeaseHolder(message))
-                return;
+                return ValueTask.CompletedTask;
 
             message.ProcessedAt = processedAt;
             message.Status = OutboxStatus.Processed;
@@ -169,17 +170,18 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
             message.LockedBy = null;
             message.LockedUntil = null;
         }
+        return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc/>
-    public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
+    public ValueTask MarkDeadAsync(OutboxMessage message, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         lock (_lock)
         {
             if (!IsCurrentLeaseHolder(message))
-                return;
+                return ValueTask.CompletedTask;
 
             message.ProcessedAt = deadAt;
             message.Status = OutboxStatus.Dead;
@@ -188,17 +190,18 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
             message.LockedBy = null;
             message.LockedUntil = null;
         }
+        return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc/>
-    public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
+    public ValueTask ReleaseForRetryAsync(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         lock (_lock)
         {
             if (!IsCurrentLeaseHolder(message))
-                return;
+                return ValueTask.CompletedTask;
 
             message.RetryCount++;
             message.Status = OutboxStatus.Pending;
@@ -208,6 +211,7 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
             message.LockedBy = null;
             message.LockedUntil = null;
         }
+        return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc/>

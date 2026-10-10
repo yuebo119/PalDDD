@@ -229,11 +229,11 @@ public sealed class CreateOrderHandler(IOrderRepository orders) : ICommandHandle
 }
 // ⚠️ 栈语义：拦截器写 Outbox 是 EF Core 栈（Repository.EFCore）行为；PalORM 栈的
 // UnitOfWork.SaveChangesAsync 无 ChangeTracker（no-op）——PalORM 路径在业务侧显式
-// AddMessage(outboxMessage) 或混用 EF Core 仓储（ADR-020 三栈可混用，写路径 EF Core +
+// await AddMessageAsync(outboxMessage) 或混用 EF Core 仓储（ADR-020 三栈可混用，写路径 EF Core +
 // 查路径 PalORM 是官方组合）。
 
 // 发布侧 token fencing（三栈统一）：OutboxProcessor 持租约快照 (owner, lockedUntil)
-// 调 MarkProcessed/MarkDead——终态写 SQL 带 AND locked_by = @owner AND locked_until = @until
+// 调 MarkProcessedAsync/MarkDeadAsync——终态写 SQL 带 AND locked_by = @owner AND locked_until = @until
 // 双守卫：租约被其他 worker 重租后旧快照 UPDATE 影响 0 行，迟到标记无法覆盖新持有者。
 
 // 消费侧幂等：Inbox 防重复处理
@@ -522,6 +522,7 @@ flowchart TB
 | [踩坑目录](docs/pitfalls.md) | 83 条 DDD/AOT/并发实战踩坑 |
 | [开发流程](docs/development.md) | 开发环境、Git 钩子、测试运行 |
 | [架构决策](docs/decisions/) | 26 份 ADR |
+| [部署性能旋钮](docs/deployment-performance.md) | GC 选型 / PG·MySQL 服务端旋钮实测与权衡 |
 | [变更日志](CHANGELOG.md) | 版本历史（消费者变更 + 工程过程附录） |
 
 ## FAQ

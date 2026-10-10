@@ -486,22 +486,23 @@ public sealed class OutboxBatchProcessorTests
             CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([message]);
 
-        public void AddMessage(OutboxMessage outboxMessage)
+        public ValueTask AddMessageAsync(OutboxMessage outboxMessage, CancellationToken ct = default)
             => throw new InvalidOperationException("The test store is read-only.");
 
-        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
+        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default)
             => throw new InvalidOperationException("The test store is read-only.");
 
-        public void MarkProcessed(OutboxMessage outboxMessage, DateTimeOffset processedAt)
+        public ValueTask MarkProcessedAsync(OutboxMessage outboxMessage, DateTimeOffset processedAt, CancellationToken ct = default)
         {
             if (!ReferenceEquals(message, outboxMessage))
                 throw new InvalidOperationException("Expected same reference.");
             MarkProcessedCalled = true;
             outboxMessage.Status = OutboxStatus.Processed;
             outboxMessage.ProcessedAt = processedAt;
+            return ValueTask.CompletedTask;
         }
 
-        public void MarkDead(OutboxMessage outboxMessage, string failureReason, DateTimeOffset deadAt)
+        public ValueTask MarkDeadAsync(OutboxMessage outboxMessage, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default)
         {
             if (!allowFailureTransitions)
             {
@@ -512,9 +513,10 @@ public sealed class OutboxBatchProcessorTests
             outboxMessage.Status = OutboxStatus.Dead;
             outboxMessage.Error = failureReason;
             outboxMessage.ProcessedAt = deadAt;
+            return ValueTask.CompletedTask;
         }
 
-        public void ReleaseForRetry(OutboxMessage outboxMessage, string failureReason, DateTimeOffset nextAttemptAt)
+        public ValueTask ReleaseForRetryAsync(OutboxMessage outboxMessage, string failureReason, DateTimeOffset nextAttemptAt, CancellationToken ct = default)
         {
             if (!allowFailureTransitions)
             {
@@ -526,6 +528,7 @@ public sealed class OutboxBatchProcessorTests
             outboxMessage.Status = OutboxStatus.Pending;
             outboxMessage.Error = failureReason;
             outboxMessage.NextAttemptAt = nextAttemptAt;
+            return ValueTask.CompletedTask;
         }
 
         public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)
@@ -553,28 +556,30 @@ public sealed class OutboxBatchProcessorTests
             int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([poison, healthy]);
 
-        public void AddMessage(OutboxMessage outboxMessage)
+        public ValueTask AddMessageAsync(OutboxMessage outboxMessage, CancellationToken ct = default)
             => throw new InvalidOperationException("The test store is read-only.");
 
-        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
+        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default)
             => throw new InvalidOperationException("The test store is read-only.");
 
-        public void MarkProcessed(OutboxMessage outboxMessage, DateTimeOffset processedAt)
+        public ValueTask MarkProcessedAsync(OutboxMessage outboxMessage, DateTimeOffset processedAt, CancellationToken ct = default)
         {
             outboxMessage.Status = OutboxStatus.Processed;
             outboxMessage.ProcessedAt = processedAt;
+            return ValueTask.CompletedTask;
         }
 
-        public void MarkDead(OutboxMessage outboxMessage, string failureReason, DateTimeOffset deadAt)
+        public ValueTask MarkDeadAsync(OutboxMessage outboxMessage, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default)
             => throw new InvalidOperationException("Simulated MarkDead persistence failure.");
 
-        public void ReleaseForRetry(OutboxMessage outboxMessage, string failureReason, DateTimeOffset nextAttemptAt)
+        public ValueTask ReleaseForRetryAsync(OutboxMessage outboxMessage, string failureReason, DateTimeOffset nextAttemptAt, CancellationToken ct = default)
         {
             if (failRelease)
                 throw new InvalidOperationException("Simulated ReleaseForRetry persistence failure.");
             outboxMessage.Status = OutboxStatus.Pending;
             outboxMessage.Error = failureReason;
             outboxMessage.NextAttemptAt = nextAttemptAt;
+            return ValueTask.CompletedTask;
         }
 
         public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)

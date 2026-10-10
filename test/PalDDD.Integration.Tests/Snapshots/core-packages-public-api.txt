@@ -1,7 +1,6 @@
 # PalDDD.CQRS
 class PalDDD.CQRS.Dispatcher
-  ctor(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory)
-  ctor(System.IServiceProvider rootProvider)
+  ctor(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, System.IServiceProvider rootProvider)
   method System.Threading.Tasks.ValueTask<System.Object> ExecutePipelineAsync(System.IServiceProvider services, PalDDD.CQRS.IBaseRequest request, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TResponse> QueryAsync(PalDDD.CQRS.IQuery<TResponse> q, System.Threading.CancellationToken ct)
   method System.Void Register()
@@ -312,13 +311,13 @@ class PalDDD.Dapper.DapperInboxStore
   method System.Threading.Tasks.ValueTask<PalDDD.Transactions.InboxMessage> TryStartProcessingAsync(System.String consumerName, System.String messageId, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 class PalDDD.Dapper.DapperOutboxStore
   ctor(System.Data.Common.DbConnection connection, PalDDD.Dapper.DapperDbType dbType, System.Data.Common.DbTransaction transaction, System.TimeProvider timeProvider)
-  method System.Void AddMessage(PalDDD.Transactions.OutboxMessage message)
-  method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages)
+  method System.Threading.Tasks.ValueTask AddMessageAsync(PalDDD.Transactions.OutboxMessage message, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> GetPendingMessagesAsync(System.Int32 batchSize, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> LeasePendingMessagesAsync(System.Int32 batchSize, System.String owner, System.TimeSpan leaseDuration, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
-  method System.Void MarkDead(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt)
-  method System.Void MarkProcessed(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt)
-  method System.Void ReleaseForRetry(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt)
+  method System.Threading.Tasks.ValueTask MarkDeadAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask ReleaseForRetryAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> RequeueDeadAsync(ByteAether.Ulid.Ulid messageId, System.DateTimeOffset nextAttemptAt, System.String retriedBy, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(System.Threading.CancellationToken ct)
 class PalDDD.Dapper.DapperProjectionCheckpointStore
@@ -955,13 +954,13 @@ class PalDDD.PalORM.Stores.PalOrmInboxStore<TProvider>
   method System.Threading.Tasks.ValueTask<PalDDD.Transactions.InboxMessage> TryStartProcessingAsync(System.String consumerName, System.String messageId, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 class PalDDD.PalORM.Stores.PalOrmOutboxStore<TProvider>
   ctor(PalORM.DataSession<TProvider> session, System.TimeProvider clock)
-  method System.Void AddMessage(PalDDD.Transactions.OutboxMessage message)
-  method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages)
+  method System.Threading.Tasks.ValueTask AddMessageAsync(PalDDD.Transactions.OutboxMessage message, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> GetPendingMessagesAsync(System.Int32 batchSize, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> LeasePendingMessagesAsync(System.Int32 batchSize, System.String owner, System.TimeSpan leaseDuration, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
-  method System.Void MarkDead(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt)
-  method System.Void MarkProcessed(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt)
-  method System.Void ReleaseForRetry(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt)
+  method System.Threading.Tasks.ValueTask MarkDeadAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask ReleaseForRetryAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> RequeueDeadAsync(ByteAether.Ulid.Ulid messageId, System.DateTimeOffset nextAttemptAt, System.String retriedBy, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(System.Threading.CancellationToken ct)
 class PalDDD.PalORM.Stores.PalOrmProjectionCheckpointStore<TProvider>
@@ -1328,20 +1327,20 @@ class PalDDD.Transactions.FixedBackoffPolicy
   ctor(System.TimeSpan delay)
   method System.TimeSpan ComputeDelay(System.Int32 attempt)
 interface PalDDD.Transactions.IImmediateWriteOutboxStore
-  method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages)
+  method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.IInboxStore
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Transactions.InboxMessage message, System.String failureReason, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.InboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<PalDDD.Transactions.InboxMessage> TryStartProcessingAsync(System.String consumerName, System.String messageId, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.IPalOutboxStore
   field const System.Int32 DefaultMaxRetryCount = 10
-  method System.Void AddMessage(PalDDD.Transactions.OutboxMessage message)
-  method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages)
+  method System.Threading.Tasks.ValueTask AddMessageAsync(PalDDD.Transactions.OutboxMessage message, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> GetPendingMessagesAsync(System.Int32 batchSize, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> LeasePendingMessagesAsync(System.Int32 batchSize, System.String owner, System.TimeSpan leaseDuration, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
-  method System.Void MarkDead(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt)
-  method System.Void MarkProcessed(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt)
-  method System.Void ReleaseForRetry(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt)
+  method System.Threading.Tasks.ValueTask MarkDeadAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask ReleaseForRetryAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> RequeueDeadAsync(ByteAether.Ulid.Ulid messageId, System.DateTimeOffset nextAttemptAt, System.String retriedBy, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.IRetryBackoffPolicy
@@ -1364,13 +1363,13 @@ class PalDDD.Transactions.InMemoryInboxStore
   method System.Threading.Tasks.ValueTask<PalDDD.Transactions.InboxMessage> TryStartProcessingAsync(System.String consumerName, System.String messageId, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.InMemoryOutboxStore
   ctor(System.TimeProvider timeProvider)
-  method System.Void AddMessage(PalDDD.Transactions.OutboxMessage message)
-  method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages)
+  method System.Threading.Tasks.ValueTask AddMessageAsync(PalDDD.Transactions.OutboxMessage message, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> GetPendingMessagesAsync(System.Int32 batchSize, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> LeasePendingMessagesAsync(System.Int32 batchSize, System.String owner, System.TimeSpan leaseDuration, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
-  method System.Void MarkDead(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt)
-  method System.Void MarkProcessed(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt)
-  method System.Void ReleaseForRetry(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt)
+  method System.Threading.Tasks.ValueTask MarkDeadAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask ReleaseForRetryAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> RequeueDeadAsync(ByteAether.Ulid.Ulid messageId, System.DateTimeOffset nextAttemptAt, System.String retriedBy, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(System.Threading.CancellationToken ct)
 class PalDDD.Transactions.InMemorySagaStateStore<TState>
@@ -1598,9 +1597,9 @@ class PalDDD.Transactions.OutboxDbContext
   property Microsoft.EntityFrameworkCore.DbSet<PalDDD.Transactions.OutboxMessage> OutboxMessages
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> GetPendingMessagesAsync(System.Int32 batchSize, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> LeasePendingMessagesAsync(System.Int32 batchSize, System.String owner, System.TimeSpan leaseDuration, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
-  method System.Void MarkDead(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt)
-  method System.Void MarkProcessed(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt)
-  method System.Void ReleaseForRetry(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt)
+  method System.Threading.Tasks.ValueTask MarkDeadAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask ReleaseForRetryAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> RequeueDeadAsync(ByteAether.Ulid.Ulid messageId, System.DateTimeOffset nextAttemptAt, System.String retriedBy, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.PostgreSqlOutboxDbContext
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> GetPendingMessagesAsync(System.Int32 batchSize, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)

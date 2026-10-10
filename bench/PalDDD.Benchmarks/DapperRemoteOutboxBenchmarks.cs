@@ -228,7 +228,7 @@ public class DapperRemoteOutboxThroughputBenchmarks : PersistenceBenchBase
     {
         await ClearAllAsync();
         for (var i = 0; i < BatchSize; i++)
-            _store.AddMessage(NewOutboxMessage());
+            await _store.AddMessageAsync(NewOutboxMessage());
     }
 
     [Benchmark(Baseline = true)]
@@ -248,13 +248,13 @@ public class DapperRemoteOutboxThroughputBenchmarks : PersistenceBenchBase
             TimeSpan.FromSeconds(30), 10, default);
         EnsureFullLease(msgs);
         for (var i = 0; i < BatchSize; i++)
-            _store.AddMessage(NewOutboxMessage());
+            await _store.AddMessageAsync(NewOutboxMessage());
         return msgs.Count;
     }
 
     [Benchmark]
-    public void Outbox_AddSingle()
-        => _store.AddMessage(NewOutboxMessage());
+    public async Task Outbox_AddSingle()
+        => await _store.AddMessageAsync(NewOutboxMessage());
 
     // C2'（2026-10-09 优化轮）：k=5 批量写入（多事件保存典型形态）——PG 单 COPY 往返 /
     // MySQL VALUES 单往返（≤16 行路由，2026-10-09 起）；与 AddSingle 对照即批化收益。

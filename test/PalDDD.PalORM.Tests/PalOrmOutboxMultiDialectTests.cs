@@ -31,7 +31,7 @@ public class PalOrmOutboxMultiDialectTests
         var store = new SqliteOutboxStore(session.Session);
 
         var msg = CreateMessage("sqlite.event");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         var pending = await store.GetPendingMessagesAsync(10, 5, default);
         await Assert.That(pending).Count().IsEqualTo(1);
@@ -44,7 +44,7 @@ public class PalOrmOutboxMultiDialectTests
         await using var session = await MultiDialectFixture.CreateSqliteAsync();
         var store = new SqliteOutboxStore(session.Session);
         var before = DateTimeOffset.UtcNow;
-        store.AddMessage(CreateMessage("sqlite.lease"));
+        await store.AddMessageAsync(CreateMessage("sqlite.lease"));
 
         var leaseDuration = TimeSpan.FromMinutes(5);
         var leased = await store.LeasePendingMessagesAsync(10, "w1", leaseDuration, 10, default);
@@ -66,8 +66,8 @@ public class PalOrmOutboxMultiDialectTests
         await using var session = await MultiDialectFixture.CreateSqliteAsync();
         var store = new SqliteOutboxStore(session.Session);
         var msg = CreateMessage("sqlite.processed");
-        store.AddMessage(msg);
-        store.MarkProcessed(msg, DateTimeOffset.UtcNow);
+        await store.AddMessageAsync(msg);
+        await store.MarkProcessedAsync(msg, DateTimeOffset.UtcNow);
 
         var pending = await store.GetPendingMessagesAsync(10, 5, default);
         await Assert.That(pending).IsEmpty();
@@ -82,7 +82,7 @@ public class PalOrmOutboxMultiDialectTests
         var store = new PostgreSqlOutboxStore(session.Session);
 
         var msg = CreateMessage("pg.event");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         var pending = await store.GetPendingMessagesAsync(10, 5, default);
         await Assert.That(pending).Count().IsEqualTo(1);
@@ -96,7 +96,7 @@ public class PalOrmOutboxMultiDialectTests
         await using var session = await MultiDialectFixture.CreatePostgreSqlAsync();
         var store = new PostgreSqlOutboxStore(session.Session);
         var before = DateTimeOffset.UtcNow;
-        store.AddMessage(CreateMessage("pg.lease"));
+        await store.AddMessageAsync(CreateMessage("pg.lease"));
 
         var leaseDuration = TimeSpan.FromMinutes(5);
         var leased = await store.LeasePendingMessagesAsync(10, "w1", leaseDuration, 10, default);
@@ -116,8 +116,8 @@ public class PalOrmOutboxMultiDialectTests
         await using var session = await MultiDialectFixture.CreatePostgreSqlAsync();
         var store = new PostgreSqlOutboxStore(session.Session);
         var msg = CreateMessage("pg.processed");
-        store.AddMessage(msg);
-        store.MarkProcessed(msg, DateTimeOffset.UtcNow);
+        await store.AddMessageAsync(msg);
+        await store.MarkProcessedAsync(msg, DateTimeOffset.UtcNow);
 
         var pending = await store.GetPendingMessagesAsync(10, 5, default);
         await Assert.That(pending).IsEmpty();
@@ -132,7 +132,7 @@ public class PalOrmOutboxMultiDialectTests
         var store = new MySqlOutboxStore(session.Session);
 
         var msg = CreateMessage("mysql.event");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         var pending = await store.GetPendingMessagesAsync(10, 5, default);
         await Assert.That(pending).Count().IsEqualTo(1);
@@ -146,7 +146,7 @@ public class PalOrmOutboxMultiDialectTests
         await using var session = await MultiDialectFixture.CreateMySqlAsync();
         var store = new MySqlOutboxStore(session.Session);
         var before = DateTimeOffset.UtcNow;
-        store.AddMessage(CreateMessage("mysql.lease"));
+        await store.AddMessageAsync(CreateMessage("mysql.lease"));
 
         var leaseDuration = TimeSpan.FromMinutes(5);
         var leased = await store.LeasePendingMessagesAsync(10, "w1", leaseDuration, 10, default);
@@ -166,8 +166,8 @@ public class PalOrmOutboxMultiDialectTests
         await using var session = await MultiDialectFixture.CreateMySqlAsync();
         var store = new MySqlOutboxStore(session.Session);
         var msg = CreateMessage("mysql.processed");
-        store.AddMessage(msg);
-        store.MarkProcessed(msg, DateTimeOffset.UtcNow);
+        await store.AddMessageAsync(msg);
+        await store.MarkProcessedAsync(msg, DateTimeOffset.UtcNow);
 
         var pending = await store.GetPendingMessagesAsync(10, 5, default);
         await Assert.That(pending).IsEmpty();

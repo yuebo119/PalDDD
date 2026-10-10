@@ -263,9 +263,13 @@ public sealed class OutboxDomainEventInterceptorTests
     {
         public List<OutboxMessage> AddedMessages { get; } = [];
 
-        public void AddMessage(OutboxMessage message) => AddedMessages.Add(message);
+        public ValueTask AddMessageAsync(OutboxMessage message, CancellationToken ct = default)
+        {
+            AddedMessages.Add(message);
+            return ValueTask.CompletedTask;
+        }
 
-        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
+        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default)
         {
             AddedMessages.AddRange(messages);
             return ValueTask.FromResult(messages.Count);
@@ -277,14 +281,11 @@ public sealed class OutboxDomainEventInterceptorTests
         public ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
 
-        public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
-        { }
+        public ValueTask MarkDeadAsync(OutboxMessage message, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default) => ValueTask.CompletedTask;
 
-        public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
-        { }
+        public ValueTask MarkProcessedAsync(OutboxMessage message, DateTimeOffset processedAt, CancellationToken ct = default) => ValueTask.CompletedTask;
 
-        public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
-        { }
+        public ValueTask ReleaseForRetryAsync(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt, CancellationToken ct = default) => ValueTask.CompletedTask;
 
         public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct) => ValueTask.FromResult(0);
 
@@ -298,9 +299,13 @@ public sealed class OutboxDomainEventInterceptorTests
 
         public List<IReadOnlyList<OutboxMessage>> Batches { get; } = [];
 
-        public void AddMessage(OutboxMessage message) => AddedViaSingle.Add(message);
+        public ValueTask AddMessageAsync(OutboxMessage message, CancellationToken ct = default)
+        {
+            AddedViaSingle.Add(message);
+            return ValueTask.CompletedTask;
+        }
 
-        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
+        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default)
         {
             Batches.Add(messages);
             return ValueTask.FromResult(messages.Count);
@@ -312,14 +317,11 @@ public sealed class OutboxDomainEventInterceptorTests
         public ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
 
-        public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
-        { }
+        public ValueTask MarkDeadAsync(OutboxMessage message, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default) => ValueTask.CompletedTask;
 
-        public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
-        { }
+        public ValueTask MarkProcessedAsync(OutboxMessage message, DateTimeOffset processedAt, CancellationToken ct = default) => ValueTask.CompletedTask;
 
-        public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
-        { }
+        public ValueTask ReleaseForRetryAsync(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt, CancellationToken ct = default) => ValueTask.CompletedTask;
 
         public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct) => ValueTask.FromResult(0);
 

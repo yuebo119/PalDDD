@@ -237,7 +237,7 @@ public sealed class DispatcherTests
     public async Task InstanceRegistration_ZeroBehavior_ReturnsResult()
     {
         var sp = CreateProvider();
-        var dispatcher = new Dispatcher(sp);
+        var dispatcher = new Dispatcher(sp.GetRequiredService<IServiceScopeFactory>(), sp);
         dispatcher.Register<CreateOrderCommand, Guid, CreateOrderHandler>(
             sp.GetRequiredService<CreateOrderHandler>());
 
@@ -257,7 +257,7 @@ public sealed class DispatcherTests
         services.AddSingleton<DeleteOrderHandler>();
         var sp = services.BuildServiceProvider();
         var root = new CountingScopeRoot(sp);
-        var dispatcher = new Dispatcher(root);
+        var dispatcher = new Dispatcher(root.Proxy, root);
         dispatcher.Register<CreateOrderCommand, Guid, CreateOrderHandler>(
             sp.GetRequiredService<CreateOrderHandler>());
         dispatcher.Register<DeleteOrderCommand, Unit, DeleteOrderHandler>();
@@ -279,7 +279,7 @@ public sealed class DispatcherTests
         services.AddSingleton(behavior);
         services.AddSingleton<IPipelineBehavior<CreateOrderCommand, Guid>>(behavior);
         var sp = services.BuildServiceProvider();
-        var dispatcher = new Dispatcher(sp);
+        var dispatcher = new Dispatcher(sp.GetRequiredService<IServiceScopeFactory>(), sp);
         dispatcher.Register<CreateOrderCommand, Guid, CreateOrderHandler>(
             sp.GetRequiredService<CreateOrderHandler>());
 

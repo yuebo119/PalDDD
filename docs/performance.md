@@ -356,6 +356,20 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 （翻掉分派因子后该测试转红、恢复后转绿，因子归因坐实）；非 marker 路径既有测试原样通过
 （回归锁定）；16 面板全绿（快照 +2 行恰为新增接口）；公共 API 快照再生提交。
 
+## v4.0 契约窗口实施（2026-10-10，ADR-026 ①②③④ 全部落地）
+
+> 规划与设计裁决见 ADR-026；①scope 免除实测 167.8ns/160B → **108.1ns/32B**（分配 -80% 计时
+> -36%，低于 MediatR 12.5.0 零行为口径的 117.6ns/224B）；②fencing 统一含实施期 refinement
+> （Dapper MarkDead 守卫缺口 + EF 跟踪态守卫，详见 ADR-026）；③④接口异步化破坏面 129 调用
+> 点全链转换（PalORM 7 处同步阻塞桥全部删除，sync-over-async 桥面收敛为拦截器同步钩子 1 处
+> 文档化形态——G11 门禁以「ADR-026 标记门控豁免」放行该单点，意外桥仍拦）。实施期实录三则：
+> ①G23 抓出快照/CHANGELOG 逐提交分离（①②重组为单提交修复，历史重组经推送状态核验为纯本地）；
+> ②双公共构造在 MS DI 激活二义（IServiceScopeFactory/IServiceProvider 恒可解析，DI 测试实证）
+> → 收敛单构造可选参 `Dispatcher(IServiceScopeFactory, IServiceProvider?)`；③批量重替换首轮
+> 反引用语法错误污染 21 文件（serena `$!n` 语法），git 恢复后 dry-run 复核重做——批量机械
+> 替换必须先 dry-run 的纪律再实证。全量验证：16 面板 15 过 + 1 全跳零失败、快照再生（差异恰为
+> 异步签名面）、部署旋钮沉淀 [docs/deployment-performance.md](deployment-performance.md)。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |

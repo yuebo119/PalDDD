@@ -221,9 +221,9 @@ services.AddPalMemoryPackSerialization(catalog =>
 
 ## 使用 Outbox
 
-> ⚠️ **事务前提（TX1，2026-09-20）**：Outbox 模式的原子性由「业务数据写入与消息行写入在**同一数据库事务**内提交」保证——这是**使用方职责**：调用方必须在业务 DbContext 事务/UnitOfWork 内写入 outbox 消息行（`AddMessage` + 同事务 `SaveChanges`），框架的后台发布器只负责事务提交后的可靠投递。若消息行与业务数据不同事务，将失去 exactly-once-write 保证（业务回滚但消息已入队 → 幽灵消息）。
+> ⚠️ **事务前提（TX1，2026-09-20）**：Outbox 模式的原子性由「业务数据写入与消息行写入在**同一数据库事务**内提交」保证——这是**使用方职责**：调用方必须在业务 DbContext 事务/UnitOfWork 内写入 outbox 消息行（v4.0 ③ 起为 `await AddMessageAsync` + 同事务 `SaveChanges`），框架的后台发布器只负责事务提交后的可靠投递。若消息行与业务数据不同事务，将失去 exactly-once-write 保证（业务回滚但消息已入队 → 幽灵消息）。
 
-> ⚠️ **跨栈误配警示（2026-09-20 补）**：EF 业务上下文配 Dapper/PalORM 的 `IPalOutboxStore` 时，`AddMessage` 是**即时 INSERT**——无活动 ambient 事务即独立自动提交，与业务写入**不在同一事务**：业务回滚后 outbox 行仍在（孤儿消息）。这是跨栈混配的误配场景，不是默认路径（默认 EF + EF 流里 outbox 行进同一 `SaveChanges` 事务）。要么保持栈一致，要么确保 Dapper/PalORM store 与业务写入共享同一 `IUnitOfWork`/`DbTransaction`。
+> ⚠️ **跨栈误配警示（2026-09-20 补）**：EF 业务上下文配 Dapper/PalORM 的 `IPalOutboxStore` 时，`AddMessageAsync` 是**即时 INSERT**——无活动 ambient 事务即独立自动提交，与业务写入**不在同一事务**：业务回滚后 outbox 行仍在（孤儿消息）。这是跨栈混配的误配场景，不是默认路径（默认 EF + EF 流里 outbox 行进同一 `SaveChanges` 事务）。要么保持栈一致，要么确保 Dapper/PalORM store 与业务写入共享同一 `IUnitOfWork`/`DbTransaction`。
 
 ```csharp
 using PalDDD.Transactions;
@@ -240,7 +240,7 @@ services.AddPalOutbox();
 
 `IPalOutboxStore.LeasePendingMessagesAsync` 必须提供原子租约语义。SQL Server EF Core base context 提供了基于 `UPDLOCK` / `READPAST` 的实现（**未验证/实验性**，见下）。
 
-生产环境可从 `PalDDD.Transactions.EFCore` 派生 `OutboxDbContext`，或按方言派生 `PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`（ADR-012 方言粒度）以复用原子租约获取。`SqlServerOutboxDbContext` 当前标 `[Obsolete]`（源码声明 v4.0 移除）且零测试覆盖，属**实验性/未验证**，生产请优先使用已验证方言。适配器会配置 pending 查询索引、payload 必填、trace/correlation 字段长度和错误字段长度；`MarkProcessed` 会清理 lease/retry 状态，`ReleaseForRetry` 会释放 lease 并设置 `NextAttemptAt`。⚠️ **Dapper 栈 `MarkProcessed` 被租约 token 拒阻时不改写入参对象**（3.1.0 起与 PalORM 一致）：此前被拒路径会把传入消息对象的租约字段清空，使调用方持有的对象与数据库实际状态不一致。
+生产环境可从 `PalDDD.Transactions.EFCore` 派生 `OutboxDbContext`，或按方言派生 `PostgreSqlOutboxDbContext`/`MySqlOutboxDbContext`/`SqliteOutboxDbContext`（ADR-012 方言粒度）以复用原子租约获取。`SqlServerOutboxDbContext` 当前标 `[Obsolete]`（源码声明 v4.0 移除）且零测试覆盖，属**实验性/未验证**，生产请优先使用已验证方言。适配器会配置 pending 查询索引、payload 必填、trace/correlation 字段长度和错误字段长度；`MarkProcessedAsync` 会清理 lease/retry 状态，`ReleaseForRetryAsync` 会释放 lease 并设置 `NextAttemptAt`。终态写的 fencing 契约自 v4.0 ②（ADR-026）跨栈统一：租约 token 拒绝时零 DB 写 + 零内存变异；成功时 DB 全套更新 + 入参对象全套回写（EF 栈仅对 Detached 快照回写，跟踪实体自动跳过——并发令牌守卫）。
 
 **并行发布（3.0.0 起）**：`OutboxOptions.MaxDegreeOfParallelism`（默认 1，经 `AddPalOutbox(o => o.MaxDegreeOfParallelism = n)` 配置）>1 时，批内消息按分区交由 per-worker scope（独立 store/DbContext 实例）并行完成「反序列化 → 发布 → 标记」，吞吐随并行度提升；租约/fencing 互斥不受影响。**前提**：① broker 发布须线程安全（Kafka producer 天然支持；RabbitMQ 单 channel 并发发布的 7.x 语义已核实——publisher-confirms 仅护帧发送段、确认等待不串行）；② 消费方幂等（并行加速下乱序提交概率上升）。直构造 `OutboxBatchProcessor` 的调用方不受影响（`IServiceScopeFactory` 为可选尾参；并行度 >1 且缺失时运行期 fail-fast 并给出指引）。
 

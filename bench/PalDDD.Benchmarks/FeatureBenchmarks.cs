@@ -221,7 +221,7 @@ public class EndToEndChainBenchmarks
         {
             var orderId = Guid.NewGuid();
             var payload = _serializer.Serialize(new ChainOrderPlaced(orderId, cmd.Name, cmd.Amount));
-            Store.AddMessage(new OutboxMessage
+            await Store.AddMessageAsync(new OutboxMessage
             {
                 Type = "bench.chain.v1",
                 Payload = payload.ToArray(),

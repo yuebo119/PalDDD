@@ -33,8 +33,8 @@ public sealed class Dispatcher
 {
     private readonly IServiceScopeFactory _scopeFactory;
     // v4.0 ①（ADR-026）：根容器引用——实例注册路径的行为解析源（免 per-request scope）。
-    // 仅经 Dispatcher(IServiceProvider) 构造重载赋值；经典构造（IServiceScopeFactory）下为
-    // null，实例注册在该形态抛 InvalidOperationException（见 Register 实例重载守卫）
+    // 构造第二参注入（DI 组装自动提供）；仅工厂构造（手构兼容形态）下为 null，
+    // 实例注册在该形态抛 InvalidOperationException（见 Register 实例重载守卫）
     private readonly IServiceProvider? _rootProvider;
     private Dictionary<Type, HandlerEntry> _entries = [];
     private FrozenDictionary<Type, HandlerEntry>? _frozen;
@@ -89,23 +89,20 @@ public sealed class Dispatcher
         }
     }
 
-    public Dispatcher(IServiceScopeFactory scopeFactory)
+    /// <summary>
+    /// 构造分发器。<paramref name="rootProvider"/> 非空时启用实例注册路径
+    ///（<see cref="Register{TRequest,TResponse,THandler}(THandler)"/>——免 per-request scope，
+    /// 行为从根容器解析）。DI 组装（AddPalDDD 系）自动注入根容器；经典手构（仅工厂）下
+    /// 实例注册抛 <see cref="InvalidOperationException"/>。
+    /// v4.0 ①（ADR-026）实施期形态修正：首版双公共构造（IServiceScopeFactory / IServiceProvider）
+    /// 在 MS DI 激活下二义（两者恒可解析，DI 测试实证）——收敛为单构造可选参，未发布零破坏。
+    /// </summary>
+    public Dispatcher(IServiceScopeFactory scopeFactory, IServiceProvider? rootProvider = null)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
 
         _scopeFactory = scopeFactory;
-    }
-
-    /// <summary>
-    /// v4.0 ①（ADR-026）：以根容器构造——启用实例注册路径（<see cref="Register{TRequest,TResponse,THandler}(THandler)"/>）。
-    /// 根容器同时是 scope 工厂来源（DI 注册形态的派发路径不变，仍走 per-request scope）。
-    /// </summary>
-    public Dispatcher(IServiceProvider rootProvider)
-    {
-        ArgumentNullException.ThrowIfNull(rootProvider);
-
         _rootProvider = rootProvider;
-        _scopeFactory = rootProvider.GetRequiredService<IServiceScopeFactory>();
     }
 
     /// <summary>
@@ -161,9 +158,8 @@ public sealed class Dispatcher
     /// ⚠️ <b>契约约束</b>：实例注册隐含「handler 无 scoped 依赖、行为（IPipelineBehavior）以
     /// 单例注册于根容器」——<b>scoped 注册的行为与 handler 依赖在本路径不可见</b>（根容器解析
     /// 语义）。需要 scoped 依赖的 handler 请使用 DI 注册形态（<see cref="Register{TRequest,TResponse,THandler}()"/>，
-    /// per-request scope 派发）。本重载要求经 <see cref="Dispatcher(IServiceProvider)"/> 构造
-    ///（经典 <see cref="Dispatcher(IServiceScopeFactory)"/> 构造无根容器引用，调用时抛
-    /// <see cref="InvalidOperationException"/>）。
+    /// per-request scope 派发）。本重载要求构造时提供根容器（<see cref="Dispatcher(IServiceScopeFactory, IServiceProvider?)"/>
+    /// 第二参非空；仅工厂构造下调用抛 <see cref="InvalidOperationException"/>）。
     /// </para>
     /// <para>同 <see cref="Register(Type, Type, Type, RequestExecutor, Boolean)"/> 的启动期单线程/冻结前
     /// 调用约束与后者静默覆盖语义。</para>
@@ -175,8 +171,8 @@ public sealed class Dispatcher
         ArgumentNullException.ThrowIfNull(handlerInstance);
         if (_rootProvider is null)
             throw new InvalidOperationException(
-                "实例注册要求 Dispatcher 经 Dispatcher(IServiceProvider) 构造（根容器是行为解析源）。"
-                + "请改用该构造重载，或对需要 scoped 依赖的 handler 使用 DI 注册形态 Register<TRequest, TResponse, THandler>()。");
+                "实例注册要求 Dispatcher 构造时提供根容器（Dispatcher(IServiceScopeFactory, IServiceProvider?) 第二参——根容器是行为解析源）。"
+                + "请改用该构造形态，或对需要 scoped 依赖的 handler 使用 DI 注册形态 Register<TRequest, TResponse, THandler>()。");
         // 闭包捕获 handler 实例——注册期一次性分配，派发期零额外捕获分配
         RequestExecutor executor = (services, request, ct) =>
             ExecuteInstancePipelineAsync<TRequest, TResponse, THandler>(services, request, ct, handlerInstance);

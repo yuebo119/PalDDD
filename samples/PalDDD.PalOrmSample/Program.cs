@@ -33,7 +33,7 @@ var msg = new OutboxMessage
     ContentType = "application/json",
     SchemaVersion = 1,
 };
-outbox.AddMessage(msg);
+await outbox.AddMessageAsync(msg);
 Console.WriteLine($"[OK] Outbox.AddMessage: Id={msg.Id}, Status={msg.Status}");
 
 // 步骤 2：租约获取——处理管线的标准路径（ITM-269：GetPendingMessagesAsync 按 IPalOutboxStore
@@ -44,7 +44,7 @@ if (leased.Count != 1) throw new InvalidOperationException($"Expected 1 leased, 
 Console.WriteLine($"[OK] Outbox.Lease: Count={leased.Count}, Owner={leased[0].LockedBy}");
 
 // 步骤 3：MarkProcessed（传租约返回的实例 + 终态断言——成功时原地改写入参状态，token 拒绝时零变异）
-outbox.MarkProcessed(leased[0], DateTimeOffset.UtcNow);
+await outbox.MarkProcessedAsync(leased[0], DateTimeOffset.UtcNow);
 if (leased[0].Status != OutboxStatus.Processed) throw new InvalidOperationException($"MarkProcessed rejected (Status={leased[0].Status})");
 Console.WriteLine($"[OK] Outbox.MarkProcessed: Status={leased[0].Status}");
 
@@ -52,7 +52,7 @@ Console.WriteLine($"[OK] Outbox.MarkProcessed: Status={leased[0].Status}");
 var uow = new SqlitePalOrmUnitOfWork(db);
 await uow.BeginTransactionAsync();
 var msg2 = new OutboxMessage { Id = Ulid.New(), Type = "tx.event.v1", Payload = System.Text.Encoding.UTF8.GetBytes("[]") };
-outbox.AddMessage(msg2);
+await outbox.AddMessageAsync(msg2);
 await uow.CommitAsync();
 
 var allPending = await outbox.GetPendingMessagesAsync(10, 5, default);
@@ -62,7 +62,7 @@ Console.WriteLine($"[OK] Transaction commit: msg2 visible");
 // 步骤 5：事务回滚
 await uow.BeginTransactionAsync();
 var msg3 = new OutboxMessage { Id = Ulid.New(), Type = "rollback.event.v1", Payload = System.Text.Encoding.UTF8.GetBytes("[]") };
-outbox.AddMessage(msg3);
+await outbox.AddMessageAsync(msg3);
 await uow.RollbackAsync();
 
 var afterRollback = await outbox.GetPendingMessagesAsync(10, 5, default);

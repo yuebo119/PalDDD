@@ -36,7 +36,7 @@ public class OutboxThroughputBenchmarks
     // 调用数万次，租约型基准首个 invoke 即满额租走 100 条，后续 invoke 恒为空扫描，
     // ns/op 被稀释失真。现改为方法体内满额租走后立即重灌（见 ReseedStore 与各方法注释）。
     [IterationSetup]
-    public void Setup() => ReseedStore();
+    public void Setup() => ReseedStore().GetAwaiter().GetResult(); // v4.0 ③：BDN IterationSetup 须同步签名——不计量路径单点阻塞桥
 
     [IterationCleanup]
     public void Cleanup()
@@ -50,12 +50,12 @@ public class OutboxThroughputBenchmarks
     /// 永不移除，追加会使 _messages 线性增长，QueryPending 扫描成本随 invoke 次数漂移；
     /// 新建保证每次租约面对恒定 100 条 backlog，扫描口径稳定。
     /// </summary>
-    private void ReseedStore()
+    private async Task ReseedStore()
     {
         _store = new InMemoryOutboxStore();
         for (int i = 0; i < BatchSize; i++)
         {
-            _store.AddMessage(new OutboxMessage
+            await _store.AddMessageAsync(new OutboxMessage
             {
                 Type = "OrderCreated",
                 Payload = "{}"u8.ToArray(),
@@ -80,7 +80,7 @@ public class OutboxThroughputBenchmarks
     {
         var msgs = await _store.LeasePendingMessagesAsync(BatchSize, "bench", TimeSpan.FromSeconds(30), 10, default);
         EnsureFullLease(msgs);
-        ReseedStore();
+        await ReseedStore();
         return msgs.Count;
     }
 
@@ -102,13 +102,13 @@ public class OutboxThroughputBenchmarks
         EnsureFullLease(msgs);
         var now = DateTimeOffset.UtcNow;
         foreach (var m in msgs)
-            _store.MarkProcessed(m, now);
-        ReseedStore();
+            await _store.MarkProcessedAsync(m, now);
+        await ReseedStore();
     }
 
     [Benchmark]
-    public void AddSingleMessage()
-        => _store.AddMessage(new OutboxMessage
+    public async Task AddSingleMessage()
+        => await _store.AddMessageAsync(new OutboxMessage
         {
             Type = "OrderCreated",
             Payload = "{}"u8.ToArray()

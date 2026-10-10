@@ -172,13 +172,13 @@ namespace PalDDD.Benchmarks
                 var outbox = new DapperOutboxStore(conn, DapperDbType.Sqlite);
                 var payload = "verify-payload"u8.ToArray();
                 var msg = NewMessage(payload);
-                outbox.AddMessage(msg);
+                await outbox.AddMessageAsync(msg);
 
                 var leased = await outbox.LeasePendingMessagesAsync(10, "verify",
                     TimeSpan.FromMinutes(2), 10, default);
                 bool leaseOk = leased.Count == 1 && leased[0].Payload.SequenceEqual(payload);
 
-                outbox.MarkProcessed(leased[0], TimeProvider.System.GetUtcNow());
+                await outbox.MarkProcessedAsync(leased[0], TimeProvider.System.GetUtcNow());
                 var pending = await outbox.GetPendingMessagesAsync(10, 10, default);
                 Check("V6 Dapper 租约满额+blob 往返+终态", leaseOk && pending.Count == 0,
                     $"lease={leaseOk}, pendingAfterTerminal={pending.Count}");
@@ -208,7 +208,7 @@ namespace PalDDD.Benchmarks
                         TimeSpan.FromMinutes(2), 10, default);
                     bool leaseOk = leased.Count == 1 && leased[0].Payload.SequenceEqual(payload);
 
-                    outbox.MarkProcessed(leased[0], TimeProvider.System.GetUtcNow());
+                    await outbox.MarkProcessedAsync(leased[0], TimeProvider.System.GetUtcNow());
                     var pending = await outbox.GetPendingMessagesAsync(10, 10, default);
 
                     var idem = new SqliteIdempotencyStore(session);
@@ -257,7 +257,7 @@ namespace PalDDD.Benchmarks
                     var leased = await outbox.LeasePendingMessagesAsync(10, "verify",
                         TimeSpan.FromMinutes(2), 10, default);
                     bool leaseOk = leased.Count == 1 && leased[0].Payload.SequenceEqual("verify-payload"u8.ToArray());
-                    outbox.MarkProcessed(leased[0], TimeProvider.System.GetUtcNow());
+                    await outbox.MarkProcessedAsync(leased[0], TimeProvider.System.GetUtcNow());
                     await outbox.SaveChangesAsync();
                     var pending = await outbox.GetPendingMessagesAsync(10, 10, default);
 
