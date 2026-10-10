@@ -32,6 +32,10 @@ public delegate ValueTask<object?> RequestExecutor(IServiceProvider services, IB
 public sealed class Dispatcher
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    // v4.0 ①（ADR-026）：根容器引用——实例注册路径的行为解析源（免 per-request scope）。
+    // 仅经 Dispatcher(IServiceProvider) 构造重载赋值；经典构造（IServiceScopeFactory）下为
+    // null，实例注册在该形态抛 InvalidOperationException（见 Register 实例重载守卫）
+    private readonly IServiceProvider? _rootProvider;
     private Dictionary<Type, HandlerEntry> _entries = [];
     private FrozenDictionary<Type, HandlerEntry>? _frozen;
     private readonly Lock _freezeLock = new();
@@ -93,6 +97,18 @@ public sealed class Dispatcher
     }
 
     /// <summary>
+    /// v4.0 ①（ADR-026）：以根容器构造——启用实例注册路径（<see cref="Register{TRequest,TResponse,THandler}(THandler)"/>）。
+    /// 根容器同时是 scope 工厂来源（DI 注册形态的派发路径不变，仍走 per-request scope）。
+    /// </summary>
+    public Dispatcher(IServiceProvider rootProvider)
+    {
+        ArgumentNullException.ThrowIfNull(rootProvider);
+
+        _rootProvider = rootProvider;
+        _scopeFactory = rootProvider.GetRequiredService<IServiceScopeFactory>();
+    }
+
+    /// <summary>
     /// 注册请求类型到预生成 executor 的映射（启动时调用）。<br/>
     /// ⚠️ <b>调用约束</b>：
     /// <para>
@@ -101,7 +117,7 @@ public sealed class Dispatcher
     /// 3. <b>由 HandlerRegistrar 自动调用</b>：Handler 注册由 HandlerMarker + HandlerRegistrar（IHostedService）在启动时触发，应用层通常无需手动调用。
     /// </para>
     /// </summary>
-    public void Register(Type requestType, Type handlerType, Type responseType, RequestExecutor executor)
+    public void Register(Type requestType, Type handlerType, Type responseType, RequestExecutor executor, bool needsScope = true)
     {
         ArgumentNullException.ThrowIfNull(requestType);
         ArgumentNullException.ThrowIfNull(handlerType);
@@ -122,12 +138,12 @@ public sealed class Dispatcher
         // 两者均无法靠 null 守卫拦截，根因是违反"启动期单线程注册"契约本身。
         ObjectDisposedException.ThrowIf(_entries is null, this);
 
-        _entries[requestType] = new HandlerEntry(handlerType, responseType, executor);
+        _entries[requestType] = new HandlerEntry(handlerType, responseType, executor, needsScope);
     }
 
     /// <summary>
     /// 注册请求类型到 Handler 类型的映射（泛型 AOT 安全路径）。<br/>
-    /// ⚠️ 同 <see cref="Register(Type, Type, Type, RequestExecutor)"/> 的启动期单线程调用约束。
+    /// ⚠️ 同 <see cref="Register(Type, Type, Type, RequestExecutor, Boolean)"/> 的启动期单线程调用约束。
     /// <para>v53 P3 覆盖语义声明：同一 requestType 重复 Register 为<b>后者静默覆盖</b>
     /// （索引器赋值语义，手动分阶段注册场景的刻意替换用法）；DI 装配路径的重复冲突
     /// 检测在 ServiceRegistration 层快速失败（ITM-220），不经本方法。</para>
@@ -136,6 +152,60 @@ public sealed class Dispatcher
         where TRequest : IRequest<TResponse>
         where THandler : class, IHandler
         => Register(typeof(TRequest), typeof(THandler), typeof(TResponse), ExecutePipelineAsync<TRequest, TResponse, THandler>);
+
+    /// <summary>
+    /// v4.0 ①（ADR-026）：实例注册——直接绑定 handler 实例，派发路径<b>不经 per-request scope</b>
+    /// （handler 即注册实例，行为从根容器解析）。免 scope 使零行为分发降至 ~64B 级
+    ///（DI 注册形态 160B 中的最大剩余项即 scope 创建，优化轮实测）。
+    /// <para>
+    /// ⚠️ <b>契约约束</b>：实例注册隐含「handler 无 scoped 依赖、行为（IPipelineBehavior）以
+    /// 单例注册于根容器」——<b>scoped 注册的行为与 handler 依赖在本路径不可见</b>（根容器解析
+    /// 语义）。需要 scoped 依赖的 handler 请使用 DI 注册形态（<see cref="Register{TRequest,TResponse,THandler}()"/>，
+    /// per-request scope 派发）。本重载要求经 <see cref="Dispatcher(IServiceProvider)"/> 构造
+    ///（经典 <see cref="Dispatcher(IServiceScopeFactory)"/> 构造无根容器引用，调用时抛
+    /// <see cref="InvalidOperationException"/>）。
+    /// </para>
+    /// <para>同 <see cref="Register(Type, Type, Type, RequestExecutor, Boolean)"/> 的启动期单线程/冻结前
+    /// 调用约束与后者静默覆盖语义。</para>
+    /// </summary>
+    public void Register<TRequest, TResponse, THandler>(THandler handlerInstance)
+        where TRequest : IRequest<TResponse>
+        where THandler : class, IHandler
+    {
+        ArgumentNullException.ThrowIfNull(handlerInstance);
+        if (_rootProvider is null)
+            throw new InvalidOperationException(
+                "实例注册要求 Dispatcher 经 Dispatcher(IServiceProvider) 构造（根容器是行为解析源）。"
+                + "请改用该构造重载，或对需要 scoped 依赖的 handler 使用 DI 注册形态 Register<TRequest, TResponse, THandler>()。");
+        // 闭包捕获 handler 实例——注册期一次性分配，派发期零额外捕获分配
+        RequestExecutor executor = (services, request, ct) =>
+            ExecuteInstancePipelineAsync<TRequest, TResponse, THandler>(services, request, ct, handlerInstance);
+        Register(typeof(TRequest), typeof(THandler), typeof(TResponse), executor, needsScope: false);
+    }
+
+    /// <summary>
+    /// v4.0 ①（ADR-026）：实例管道执行——handler 为绑定实例（无 DI 解析），行为从传入的
+    /// 根容器解析；空行为快路径同 DI 形态（C5），状态机路径同构。
+    /// </summary>
+    private static async ValueTask<object?> ExecuteInstancePipelineAsync<TRequest, TResponse, THandler>(
+        IServiceProvider services,
+        IBaseRequest request,
+        CancellationToken ct,
+        THandler handler)
+        where TRequest : IRequest<TResponse>
+        where THandler : class, IHandler
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var allBehaviors = services.GetServices<IPipelineBehavior<TRequest, TResponse>>();
+        var matching = allBehaviors.Select(b => (IPipelineBehavior)b).ToImmutableArray();
+        if (matching.IsEmpty)
+            return await handler.HandleAsync(request, ct).ConfigureAwait(false);
+
+        var pipeline = new PipelineStateMachine();
+        pipeline.Reset(matching, handler, request, ct);
+        return await pipeline.ExecuteNextAsync().ConfigureAwait(false);
+    }
 
     /// <summary>发送命令（无返回值）— 同步完成零分配</summary>
     public ValueTask SendAsync(ICommand cmd, CancellationToken ct = default)
@@ -187,6 +257,11 @@ public sealed class Dispatcher
         if (!GetFrozenEntries().TryGetValue(requestType, out var entry))
             throw new HandlerNotFoundException(requestType);
 
+        // v4.0 ①（ADR-026）：实例注册路径免 scope——handler 即注册实例、行为从根容器解析，
+        // 无 per-request scope 创建（零行为分发 160B 中的最大剩余项）
+        if (!entry.NeedsScope)
+            return await entry.Executor(_rootProvider!, request, ct).ConfigureAwait(false);
+
         using var scope = _scopeFactory.CreateScope();
         var services = scope.ServiceProvider;
         // ITM-218 修复（三十二轮）：补 ConfigureAwait(false)（见 SendAsync）
@@ -237,5 +312,6 @@ public sealed class Dispatcher
     // v65 P3（未消费参数声明）：HandlerType/ResponseType 当前仅由本类构造写入、执行路径
     // 只读 Executor——两字段为诊断/未来扩展保留（如冻结表内省、重复注册报错携带类型），
     // 属刻意保留的诊断元数据而非死代码；删除会使冻结表丢失请求→handler 的类型映射。
-    private sealed record HandlerEntry(Type HandlerType, Type ResponseType, RequestExecutor Executor);
+    // v4.0 ①（ADR-026）：NeedsScope=false 标记实例注册路径（免 per-request scope 派发）
+    private sealed record HandlerEntry(Type HandlerType, Type ResponseType, RequestExecutor Executor, bool NeedsScope);
 }

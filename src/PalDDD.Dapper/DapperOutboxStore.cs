@@ -290,11 +290,16 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         // PalORM 同形（PalOrmOutboxStore.cs:182-183 "affected=0 时零内存变异"）。
         var affected = c.Execute(SqlTemplates.OutboxMarkProcessed,
             new { at = ToTimeParam(processedAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message), retryCount = message.RetryCount }, Tx); // P1 修复（八轮评审）：时间参数走 ToTimeParam；三十四轮 ITM-210：租约 token 参数；v37 P3：retry_count fencing 快照
-        // ITM-130 修复：SQL 清除 DB 租约列后同步入参——调用方读入参不应再见陈旧持有者
-        // （对齐 EFCore/PalORM/InMemory 三姊妹的对象字段语义）。被拒（affected=0）时保持
-        // 入参不变——与 PalORM 的"零内存变异"对齐。
+        // v4.0 ②（ADR-026 fencing 统一）：成功（affected>0）入参全套回写——原「仅清租约两字段」
+        // 是 DECISION-2026-09-22 的半步形态，本轮完成其 ITM-130「三姊妹对象字段语义对齐」
+        // 意图的另一半，统一为 PalORM/InMemory 全套六字段（EF 同轮对齐）；拒绝（affected=0）
+        // 时零内存变异（不变）
         if (affected > 0)
         {
+            message.Status = OutboxStatus.Processed;
+            message.ProcessedAt = processedAt;
+            message.Error = null;
+            message.NextAttemptAt = null;
             message.LockedBy = null;
             message.LockedUntil = null;
         }
@@ -312,14 +317,21 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         // 截断点同款）
         failureReason = FailureReason.Truncate(failureReason, 2040);
         var c = EnsureOpen();
-        // P3-SRC-301 声明（同 MarkProcessed）：affected=0（token 拒绝）时内存对象仅清租约字段
-        // 不回写 Status——与 InMemory 版（守卫内联设 Dead）/PalORM 版（affected>0 才全套回写）
-        // 的分叉属 ITM-210 历史语义，调用方（OutboxBatchProcessor）不读该状态故无实害。
-        c.Execute(SqlTemplates.OutboxMarkDead,
+        // v4.0 ②（ADR-026 fencing 统一）：补 affected 消费——原实现无条件清入参租约两字段
+        //（SQL 有 fencing 守卫但返回值被丢弃，token 拒绝后入参仍声称已释放，守卫缺口级分叉）；
+        // 统一为「成功（affected>0）全套六字段回写、拒绝零内存变异」（对齐 MarkProcessed 同轮
+        // 形态与 PalORM/InMemory 契约）
+        var affected = c.Execute(SqlTemplates.OutboxMarkDead,
             new { reason = failureReason, at = ToTimeParam(deadAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message), retryCount = message.RetryCount }, Tx); // P1 修复（八轮评审）：时间参数走 ToTimeParam；三十四轮 ITM-210：租约 token 参数；v37 P3：retry_count fencing 快照
-        // ITM-130 修复：SQL 清除 DB 租约列后同步入参（对齐 EFCore/PalORM/InMemory 三姊妹）
-        message.LockedBy = null;
-        message.LockedUntil = null;
+        if (affected > 0)
+        {
+            message.Status = OutboxStatus.Dead;
+            message.ProcessedAt = deadAt;
+            message.Error = failureReason;
+            message.NextAttemptAt = null;
+            message.LockedBy = null;
+            message.LockedUntil = null;
+        }
     }
 
     public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)

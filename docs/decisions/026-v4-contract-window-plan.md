@@ -47,6 +47,13 @@ LockedBy/LockedUntil 两字段」升为全套回写——完成 DECISION-2026-09
 （OutboxBatchProcessor 只计数），全套回写使应用层自定义处理器读入参不再见半态。
 EF/PalORM/InMemory 已是该形态（验证后不改）。SQL 模板不变（DB 侧本就全套 SET）。
 
+**实施期 refinement（2026-10-10，测试实证）**：真值表比规划时更三向——Dapper MarkDead
+原连 affected 都不消费（token 拒绝后仍无条件清入参租约，守卫缺口级分叉，同轮收口）；
+EF 主路径原零入参回写且其 ReleaseForRetry remarks 声明了跟踪实体并发令牌假冲突保护
+（既有测试 `ReleaseForRetry_ClearsLeaseAndSchedulesNextAttempt` 在首轮实现下实证了该
+冲突）。EF 栈最终形态：**跟踪态守卫——仅 Detached 快照回写**（主消费者 OutboxBatchProcessor
+传 AsNoTracking 租约快照，统一契约在主路径成立；跟踪实体自动跳过回写保持令牌安全）。
+
 ### ③ 接口异步化：IPalOutboxStore 四同步方法改异步签名（破坏性变更）
 
 ```csharp

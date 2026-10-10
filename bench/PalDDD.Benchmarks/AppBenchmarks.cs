@@ -21,6 +21,7 @@ public class DispatcherBenchmarks
 {
     private Dispatcher _noBehavior = null!;
     private Dispatcher _oneBehavior = null!;
+    private Dispatcher _instanceNoBehavior = null!;
     private static readonly BenchCommand Command = new("bench-order", 99.9m);
 
     [GlobalSetup]
@@ -40,6 +41,13 @@ public class DispatcherBenchmarks
         withBehavior.AddSingleton<IPipelineBehavior<BenchCommand, BenchResult>, PassThroughBehavior>();
         _oneBehavior = new Dispatcher(withBehavior.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>());
         _oneBehavior.Register<BenchCommand, BenchResult, BenchCommandHandler>();
+
+        // v4.0 ①（ADR-026）：实例注册路径——根容器构造 + 实例绑定，免 per-request scope
+        //（DI 注册形态 160B 中的最大剩余项即 scope 创建；行为从根容器解析，本例零行为）
+        var instanceProvider = plain.BuildServiceProvider();
+        _instanceNoBehavior = new Dispatcher(instanceProvider);
+        _instanceNoBehavior.Register<BenchCommand, BenchResult, BenchCommandHandler>(
+            instanceProvider.GetRequiredService<BenchCommandHandler>());
     }
 
     [Benchmark(Baseline = true)]
@@ -47,6 +55,10 @@ public class DispatcherBenchmarks
 
     [Benchmark]
     public ValueTask<BenchResult> SendAsync_OneBehavior() => _oneBehavior.SendAsync(Command);
+
+    // v4.0 ①：实例注册免 scope 分发——与 NoBehavior 同 handler 同命令，唯一差异是派发路径
+    [Benchmark]
+    public ValueTask<BenchResult> SendAsync_InstanceNoBehavior() => _instanceNoBehavior.SendAsync(Command);
 
     public sealed record BenchCommand(string Name, decimal Amount) : ICommand<BenchResult>;
 
