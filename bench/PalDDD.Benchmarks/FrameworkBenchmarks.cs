@@ -97,22 +97,42 @@ public class EntityDomainEventBenchmarks
 // DotNetSdkValidator 崩溃（--persist/--compression 修复先例同款，见 Program.cs 注释）
 public class ValueObjectBenchmarks
 {
+    // Error 专项治理轮二（2026-10-10）：三项历史 E60~150% 的根因是「快于可测量」——
+    // readonly record struct 单 int 尺寸全程寄存器化（0.0002~0.0017ns < 计时器分辨率），
+    // Error% 是分辨率除近零均值的放大，非抖动。治法：单 invoke 折叠 10 万次放大可测信号。
+    // ⚠️ 读数单位 = 每 10 万次（与治理前的 per-op 零测量值不可比——那些值本身就是分辨率噪声）；
+    // BDN 0.15.8 无 OperationsPerInvoke 属性（DLL/XML 双源查证无此类，防捏造），故以方法内
+    // 循环 + 本注释声明口径。per-op 含循环体赋值折叠成本（结构体拷贝级，跨轮一致可比）。
+    private const int OpsPerInvoke = 100_000;
+
     [Benchmark]
     public ValueObject<int> Create_Int()
-        => new(42);
+    {
+        ValueObject<int> acc = default;
+        for (var i = 0; i < OpsPerInvoke; i++)
+            acc = new(42);
+        return acc;
+    }
 
     [Benchmark]
     public int ImplicitConversion()
     {
-        ValueObject<int> vo = new(99);
-        return vo; // 隐式转换
+        var acc = 0;
+        for (var i = 0; i < OpsPerInvoke; i++)
+        {
+            ValueObject<int> vo = new(99);
+            acc = vo; // 隐式转换
+        }
+        return acc;
     }
 
     [Benchmark]
     public RowVersion Next_RowVersion()
     {
         var v = new RowVersion(1);
-        return v.Next();
+        for (var i = 0; i < OpsPerInvoke; i++)
+            v = v.Next();
+        return v;
     }
 }
 
@@ -229,11 +249,17 @@ public class EntityCreationBenchmarks
     public int GetHashCode_Compute()
         => new TestEntity(_id, "test").GetHashCode();
 
+    // Error 专项治理轮二：同 ValueObjectBenchmarks 折叠放大（单 invoke = 10 万次，读数单位见其注释）
     [Benchmark]
     public bool IsTransient_Check()
     {
-        var entity = new TestEntity(Guid.Empty, "test");
-        return entity.IsTransient();
+        var acc = false;
+        for (var i = 0; i < 100_000; i++)
+        {
+            var entity = new TestEntity(Guid.Empty, "test");
+            acc = entity.IsTransient();
+        }
+        return acc;
     }
 
     public sealed class TestEntity : Entity<Guid>

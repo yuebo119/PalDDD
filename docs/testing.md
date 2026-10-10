@@ -310,7 +310,7 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | 配置 | DDD 使用场景 | ORM 使用场景 |
 |------|------------|------|
 | 模式级 ManualConfig：`Job.MediumRun` + InProcessEmitToolchain + `[MemoryDiagnoser]` | `--framework` / `--app` / `--infra` / `--concurrency` / `--coverage` / `--persist-pg` / `--persist-mysql` / `--persist-medium`（正式报告，27 类全覆盖） | 不使用 |
-| 模式级 ManualConfig：`Job.MediumRun` 加密采样（迭代 40/预热 20/launch 3） | `--strict`（2026-10-10 增、同日专项治理轮全局化：**可叠加到任意模式**，如 `--infra --strict` / `--persist-pg --strict`；无其他模式参数时默认跑 OutboxThroughput+SmartEnum 两类。Error 12~18%→0.5~5.4% 且均值回归真值；strict 数字入账须带档位标签） | 不使用 |
+| 模式级 ManualConfig：`Job.MediumRun` 加密采样（迭代 40/预热 20/launch 3） | `--strict`（2026-10-10 增、同日专项治理轮全局化：**可叠加到任意模式**，如 `--infra --strict` / `--persist-pg --strict`；无其他模式参数时默认跑 OutboxThroughput+SmartEnum 两类。Error 12~18%→0.5~5.4% 且均值回归真值；strict 数字入账须带档位标签。**时长预期**：采样量为 medium 4×，实测分段耗时约为 medium 的 3~4×——framework ~29min / infra ~39min / app ~16min / persist-×-strict ~30-39min（medium 分别 17/12/5/9min）——非卡死判据：日志 WorkloadActual 单调递增即健康，多段链串行叠加属预期） | 不使用 |
 | 模式级 ManualConfig：`Job.InProcess` | `--persist` / `--compression`（快速与单车道 A/B） | 不使用 |
 | 类级 `[InProcess]` attribute | SagaLaneBenchmarks（`--saga`，单类无叠加风险） | 不使用 |
 | ~~类级 `[ShortRunJob]`~~ | **已移除**（2026-10-08，双 job 崩溃见上注） | 不使用 |

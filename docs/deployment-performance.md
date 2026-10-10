@@ -19,18 +19,24 @@ harness 形态可参考，见 performance.md）。
 
 ## 二、PostgreSQL
 
-### 2.1 连接串 `Max Auto Prepare=64`（PalORM 栈——确定性降级为「加速到达稳态」，见下）
+### 2.1 连接串 `Max Auto Prepare`（**strict A/B 定论：不推荐默认启用**）
 
-- **历史实测**：medium 档下 PalORM 栈 GetPending 14.7ms（无旋钮）→ 6.7ms（加旋钮，-55%）；
-  Dapper 栈对照组不变。
-- **2026-10-10 专项治理轮新证据（结论降级）**：strict 档（迭代 40/预热 20/launch 3）**无旋钮**
-  实测 GetPending **685μs（E4.5%）**——比 medium+旋钮（1.5ms）更快。四个条件的全序列
-  （14.7ms 无旋钮 medium → 6.7ms 旋钮 medium → 1.5ms 旋钮 medium → 685μs 无旋钮 strict）
-  说明**采样深度与预热到达率是更主导的变量**：Npgsql/PalORM 的语句计划随重复执行进入稳态，
-  medium 15 迭代可能欠采样稳态段。旋钮的真实贡献（是否仅加速到达稳态 vs 稳态本身也提速）
-  **待 strict A/B（旋钮 vs 无旋钮双 strict 轮）定论**。
-- **当前建议**：PalORM 栈加 `Max Auto Prepare=64` 无害（对照组 Dapper 不受影响），可先行启用；
-  但引用级数字一律以 strict 档为准（带档位标签），不再以 medium 档差值引用旋钮收益。
+- **strict A/B 实测（2026-10-10 下午，同日同机双容器轮，40 迭代/20 预热/3 launch 稳态）**：
+
+| 指标（PalORM 栈） | 无旋钮 strict | 旋钮 strict | 差 |
+|---|---:|---:|---|
+| GetPending_Batch100 | 685μs（E4.5%） | 738μs（E2.2%） | 无收益（持平偏差带内） |
+| Lease_Batch100 | 98.0ms | 177.1ms | **旋钮慢 1.8×** |
+| EventLog_AppendSingle | 1,022μs | 1,694μs | **慢 1.7×** |
+| Idempotency 全周期 | 1,425μs | 2,925μs | **慢 2.1×** |
+| Dapper AddSingle | 630μs | 1,255μs | **慢 2.0×** |
+| Dapper GetPending | 746μs | 491μs | 快 34%（唯一改善项） |
+
+- **结论修正史**：首轮 medium 档测得「PalORM 14.7→6.7ms（-55%）」→ 专项治理轮降级为「加速
+  到达稳态」→ 本轮 strict A/B **定论：稳态下无读收益且写路径显著变慢**。历史「收益」全部是
+  medium 15 迭代欠采样期的语句计划冷启动效应（Npgsql auto-prepare 阈值 5 次执行，把冷计划
+  段压缩进了采样窗）。**默认不启用**；读极重写极轻的负载可试，但须以自身 strict A/B 验证
+  （唯一改善形态：Dapper 同形 SELECT 重复查询 +34%）。
 
 ### 2.2 `synchronous_commit=off`（写延迟换持久性窗口，谨慎）
 

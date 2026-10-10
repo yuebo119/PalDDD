@@ -408,6 +408,27 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **残余（登记）**：Drain 多峰波段（结构性，中位数口径已纪律化）；ValueObject 量纲下界（口径声明）；PG strict A/B（旋钮定论）；MySQL 族近两轮全 <8% 未加密（频率驱动的优先级裁决）。
 
+## Error 专项治理轮二（2026-10-10 下午三：折叠修复 + 全模式 strict 验证 + 旋钮 A/B 定论）
+
+> 上轮残余四项全部处置：量纲下界族修复、D 族 strict 压缩、MySQL strict 补测、旋钮 strict A/B 定论。
+
+**① ValueObject 族修复（根因修正：非 DCE，是「快于可测量」）**：三项基准返回值本就被 BDN 消费（无死代码消除），真根因是 readonly record struct 单 int 尺寸全程寄存器化（0.0002~0.0017ns < 计时器分辨率）。治法：单 invoke 折叠 10 万次放大可测信号（⚠️ BDN 0.15.8 无 OperationsPerInvoke——DLL/XML 双源查证，防捏造——方法内循环 + 注释声明口径，读数单位=每 10 万次）：
+
+| 基准 | 修复前 | strict 修复后 | 附带收获 |
+|---|---:|---:|---|
+| Create_Int | 0.0009ns（E88.9%） | 20.18μs/10万次（**E0.12%**） | — |
+| ImplicitConversion | 0.0002ns（E150%） | 20.21μs/10万（**E0.17%**） | — |
+| Next_RowVersion | 0.0010ns（E60%） | 20.29μs/10万（**E0.10%**） | — |
+| IsTransient_Check | 0.0017ns（E64.7%） | 273.2μs/10万=2.73ns/op（**E0.32%**） | **首次可见真实形态**：56B/op 分配（类实体），零测量期不可见 |
+
+**② D 族 strict 压缩验证**：infra 七项 5~18%→0.8~4.5%（ReadStream E3.1%、Sharding E1.3/2.8%、DapperConfig E4.5%）；app 全项 <1.5%（Catalog_FindByName E23.5% 带压到 E0.4%）；唯 LeasePending 残 E8.2%（中位 86 vs 均值 100，63KB/op 的 Gen0 停顿多峰倾向，归中位数口径族）。
+
+**③ MySQL strict（频率第二方言族）**：吞吐六项 E1.3~5.1%（medium 带 2~10%）、Drain 波段 E1.3~5.8%、PalORM 全项 <5%——MySQL 族在 strict 下整体进入可引用带。
+
+**④ PG 旋钮 strict A/B 定论（deployment-performance.md §2.1 已同步改写）**：稳态下旋钮对 PalORM 读路径无收益（685 vs 738μs）、写路径全面变慢（Lease 1.8×、EventLog 1.7×、Idempotency 2.1×、Dapper AddSingle 2.0×）、唯一改善 Dapper GetPending +34%。**结论：默认不启用**；历史 medium 档「-55% 收益」全部是欠采样期的冷计划压缩效应。
+
+**残余（终态登记）**：多峰族（PG Drain 波段/infra LeasePending——结构性，中位数口径纪律化，这是测量学边界非缺陷）；CAP 侧 E6~16% 带未 strict（需双容器，频率低未排期）。**83 基准终态：strict 档下除多峰族外全部 <5.2%。**
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
