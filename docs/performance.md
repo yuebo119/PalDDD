@@ -451,6 +451,49 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **LeasePending 专项取证（治理轮三补录，「真实多峰」定性再修正）**：逐迭代 WorkloadActual 取证否证了 GC 停顿噪声假说——同文件同分配量的 LeaseAndMarkAll 全程平稳 137~147μs（E0.8%）却唯 LeasePending 有形态切换，且三 launch 形态各异（L1 第 20 迭代快→慢阶跃持续到底、L2 全程快、L3 慢→快），排除固定调用计数机制（分层编译/PGO 阈值应每 launch 同位）与 CPU 频率机制（同窗的 LeaseAndMarkAll 应同步变慢而未变）。**判别实验（DOTNET_gcServer=1 strict）**：E 8.2→5.4%，形态未消——GC 模式非根因。**定性收口：进程级形态切换（快 78μs/慢 145μs 双稳态，切换时刻随 launch 随机）**，机制未隔离（候选：workstation GC 分配上下文与后台线程交互/OS 调度迁移；隔离需 dotnet-trace 级取证，对测试夹具层基准性价比不足）。**处置：终态登记，引用中位数（86μs）**；历史四轮读数 65.7/94.7/100/95μs 均值漂移与中位差同源。教训与 Drain 案同款：先排除方法学（本轮已排除清场伪影与 GC 模式），剩余形态切换证据在案，不称「已修复」。
 
+## 全量复跑轮（2026-10-10 晚：12 车道 strict 全量真跑 + v4.0 发布对比总表）
+
+> 背景：v4.0 契约窗口（ADR-026 四项 + 拦截器批化）落地后的首次全量 strict 真跑，双目标：全车道数字刷新 + 发布说明单表融合（CHANGELOG `[Unreleased]` Documentation 节）。环境：Win10 x64 / .NET 11.0.0-rc.1 / BDN 0.15.8 InProcess strict（40 迭代 20 预热 3 launch；coverage 例外见发现②）；wslc 一次性容器 postgres:18.6（15432）/ mysql:8.4.11（13306）/ CAP 专用 mysql 8.4.11（13307）/ rabbitmq:4.3.6-management（15732——5673/5675 撞 Windows TCP 保留段 5606-5705 被 WSAEACCES 吞掉，AMQP 口改 15732；rabbit env 凭据未生效按既证 runbook `change_password` 显式重置后 `authenticate_user` 通过）。12 条车道全部 exit 0（`--compression` 含于 `--infra` 车道；`--persist-medium` 锚点本轮未跑）；除下列发现/偏移外，全部读数与 strict 账本同带。
+
+**发现① MySQL 多表 TRUNCATE 基准缺陷（本轮修复 cbf68c5）**：治理轮三迁移（61e3c79）把远程车道清场 DELETE→TRUNCATE 时注释称「PG/MySQL 均支持 TRUNCATE 多表语法」——**有误**：多表逗号形态是 PG 专有，MySQL 的 TRUNCATE 仅接受单表。本轮 `--persist-mysql --strict` 首跑实证：Dapper 吞吐（6 项）与 PalORM（8 项）两类 GlobalSetup 即抛 SQL 语法错（near ', events, idempotency_records'）全 NA（并发类与 SKIP LOCKED 类清场单表不受影响、正常出数）；PG 同语句正常。修复=逐表执行（`ClearAllAsync` 三表 / `ClearAuxTablesAsync` 两表改循环），修复后重跑 4 类零 NA exit 0。教训：方言能力假设须双方言真跑验证——「下轮生效」的变更首跑即验证点，昨日若同日跑 MySQL 就不会把错误注释带过夜。
+
+**发现② coverage × strict 车道级不兼容**：`--coverage --strict` 首撞 InProcessEmitExecutor 单基准 5 分钟硬上限——Projection 类 ns 级 op 被 BDN 自动放大至 1,048,576 ops/迭代 ×（20 预热 + 40 迭代）× 3 launch 全在单进程内串行，超限抛「takes too long to run」整车道中止。处置：coverage 维持 medium 档（本轮 medium 5 类全过，数字与账本同带）。strict 全局化的适用边界自此明确：慢基准类（ms 级 op）不受影响，ns 级快类被自动放大迭代倍数时受限——`--strict` 全局化承诺不含 coverage 车道。
+
+**发现③ MySQL TRUNCATE 时代首组并发数字（方法学时代注）**：TRUNCATE 在 MySQL 是 DDL（隐式提交 + 表重建），逐迭代清场成本远高于 PG——SeedOnly_800 从 DELETE 时代 18.7ms 升至 **110.8ms**（PG 同语义 9.4ms 与 DELETE 时代持平），Drain 波段绝对值同被抬高（串行 207.6ms vs DELETE 时代 61.3ms）。**两时代绝对值不可比**（PG 侧同款勘正纪律的 MySQL 延伸）；同轮内并发比值有效：8W/串行 = Dapper 0.85 / EF 形态 0.85 / PalORM 0.86，**死锁零复现**（ADR-025 SKIP LOCKED 双模板在 strict 40×3 采样深度下互斥不变量全波通过）。
+
+**方向性偏移登记（待归因 [推断]）**：PalORM 远程 EventLog/Idempotency 双方言一致约 2× 慢于 10-09 账本——EventLog PG 2,187.9μs（账本 1,129.7）/ MySQL 5,126.1μs（2,157.5）；Idempotency PG 3,210.1μs（1,371.2）/ MySQL 8,963.9μs（3,587.4）。同轮 Dapper 侧无此形态（EventLog PG +15% / MySQL +26% 属环境带），Dispatcher（188→155ns）与 InMemory EventLog（6.8→4.2μs）反向变快。v4.0 全链异步化后首次全量 strict，候选=异步化/拦截器契约分派对 PalORM 路径的副作用；**未做专项 A/B，不构成回归结论**，登记待单独立项归因。
+
+**远程双栈吞吐（strict，本轮读数）**：
+
+| 基准 | PG Dapper | PG PalORM | MySQL Dapper | MySQL PalORM |
+|---|---:|---:|---:|---:|
+| Outbox_GetPending_Batch100 | 481.4 μs（E2.5%） | 493.1 μs（E2.0%） | 658.3 μs（E2.2%） | 797.9 μs（E2.9%） |
+| Outbox_Lease_Batch100 | 63.2 ms（E1.0%） | 174.7 ms（E0.7%） | 172.0 ms（E0.7%） | 534.0 ms（E1.0%） |
+| Outbox_AddSingle | 630.4 μs（E1.6%） | — | 1,730.6 μs（E2.2%） | — |
+| Outbox_AddBatch5 | 846.4 μs（E1.9%） | — | 2,073.8 μs（E2.2%） | — |
+| EventLog_AppendSingle | 1,051.1 μs（E2.3%） | 2,187.9 μs（E6.5%） | 2,549.3 μs（E2.5%） | 5,126.1 μs（E7.2%） |
+| Idempotency_TryStart_Completed | 1,522.6 μs（E1.5%） | 3,210.1 μs（E8.7%） | 3,871.8 μs（E1.9%） | 8,963.9 μs（E5.5%） |
+
+（与 10-09 账本对照：Dapper 六项全部同带；PalORM Outbox 三项同带（GetPending 685→493μs 属跨日带）；PalORM EventLog/Idempotency 见偏移登记。AddBatch5 批化收益：PG 846.4μs vs 5×单条 3,152μs = 3.7×、MySQL 2,073.8μs vs 8,653μs = 4.2×，与优化轮 C2' 的 3.5×/3.8× 同带。）
+
+**并发形态（strict，比值 = 相对各自串行；清场 PG/MySQL 均为 TRUNCATE 时代）**：
+
+| 栈/库 | 串行 | 8W | 8W/串行 | 零重复不变量 |
+|---|---:|---:|---:|---|
+| PG Dapper（TRUNCATE 时代第二轮） | 23.24 ms | 20.71 ms | 0.89 | 全波通过 |
+| PG PalORM | 32.11 ms | 20.36 ms | 0.63 | 全波通过 |
+| MySQL Dapper（TRUNCATE 时代首组） | 207.6 ms | 174.1 ms | 0.85 | 全波通过、零死锁 |
+| MySQL EF SKIP LOCKED 形态直跑 | 207.0 ms | 174.8 ms | 0.85 | 全波通过 |
+| MySQL PalORM | 204.8 ms | 176.0 ms | 0.86 | 全波通过 |
+| SQLite Dapper（本地车道） | 5.57 ms | 160.0 ms | 28.7 | 全波通过（busy 平台期） |
+| InMemory 簿记层 | 391.5 μs | 602.0 μs | 1.54 | 全波通过 |
+
+（PG 形态与治理轮三 TRUNCATE 时代结论一致：清洁态并发增益有界（~1.1×）；MySQL 首组 TRUNCATE 时代比值 0.85 与 PG 同款「种子/清场主导、并发增益有界」形态。）
+
+**其余车道与账本核对结论**（关键项，全表见会话原始快照）：MediatR 四点同带（零行为 173.1ns/160B vs 134.5ns/224B——MediatR 计时快 22%、本仓分配少 29%；单行为 268.9/432 vs 224.3/528——快 17%/少 18%）；CAP 双点同带（2.035ms/10.38KB vs 4.788ms/25.02KB，快 2.35×/分配少 58%，与治理轮三 strict 1.859/4.763 同带，PalDDD 侧带 Multimodal 警告 mValue 2.9 引中位 1.920ms）；框架微基准同带（AddSingle 116.0ns/72B、Create 3.65ns/56B、SmartEnum.FromValue 6.17ns 零分配、折叠三项 20.06~20.14μs/10 万次 E≤0.2%、IsTransient 2.55ns/56B）；infra 30 项同带（GetPending 21.7μs E0.5%、AddSingle 1.90μs、LeasePending 中位 63.7μs、LeaseAndMarkAll 中位 123.9μs——两项多峰族中位口径维持；Inbox 155.9~221.6ns、EventLog 追加 4.17μs、压缩五算法 LZ4 5.78μs/376B、ZStd 6.26μs/304B 池化形态维持）；app 同带（Dispatcher 154.6/236.2/106.3ns——实例路径 106.3ns/32B 与 ADR-026 ① 实测 108.1ns/32B 同带；序列化 73.0/303.9ns、Catalog 7.77/2.17ns 零分配）；SQLite 三栈（Dapper AddSingle 41.6μs / Lease 1.93ms、PalORM 同带、EF 2.2~4.3× 慢——「SQLite 栈 PalORM≈Dapper 反超结论不外推网络库」维持）；coverage（medium）5 类同带（端到端 466.1/581.3ns、Hosting MapCommand 2,500.3ns/3.45KB、Specification 1.67ns 零分配）；Saga（Normal 168.7ns/368B、FanOut(4) 3.13μs/3,064B）；QPS（dispatch 1T 5.4M / 4T 20.3M / 8T 34.8M ops/s、chain 1.0M/1.6M/1.8M——**chain 4 线程平台期结论第三次复现**）；PG 方言特性（Pipeline 批插 6.18ms vs 逐条 139.7ms = **22.7×**，刷新历史区间 8.6~16.2× 的上界——Pipeline 侧 8.8→6.2ms 变快、对照侧持平；Router 42ns；LISTEN-NOTIFY 454μs 中位 413μs）；smoke 4/4 预算内退出码 0。
+
+**发布对比总表**：单表融合版入 CHANGELOG `[Unreleased]` Documentation 节（v4.0 发布随 tag 转正为发布说明），口径注与本段互引，不在此重复。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
@@ -479,6 +522,7 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 | 全测试项目测试 | `for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' \| sort); do dotnet test "$p" --no-restore; done`（MTP 禁用 slnx 批量——握手 → exit 5） | 通过；869 passed / 2 failed / 6 skipped（历史快照：2026-06-28；2026-09-25 实测：16 项目 1502 用例 = 本机 1434 通过 + 68 跳过——60 项 Docker 依赖（PalORM 多方言 46 + Integration 14）由 CI Testcontainers 执行，另 8 项本机 RabbitMQ 预检不可达） |
 | 压缩解压 span decoder A/B（`--compression` 基准，InProcess，16KB 负载） | `dotnet run -c Release --project bench/PalDDD.Benchmarks -- --compression`（改造前/后各两轮 + 真回滚验证一轮） | **改造否决，已回滚**（2026-09-25 特性审计三轮）：分配确定性劣化——GZip 解压 33,704→45,296 B（+34%）、Deflate 33,648→45,264 B（+35%），改造后两轮逐字节一致、回滚后逐字节还原（ArrayBufferWriter 增长序列超省掉的 MemoryStream）；耗时在噪声带内无改善（改造前自身跨轮 3.120→3.805(Median)/4.464 us，对照组 Brotli/GZip-Compress ±3% 稳定证可比）。**留档防重复提议**：`.NET 11 GZipDecoder/DeflateDecoder` 相对 `GZipStream+CopyWithLimit` 在本负载形态下无收益——未来 .NET decoder 优化或大负载场景可凭本基准复测（量具已入 bench） |
 | 全模式串行复跑（2026-10-09 晚，91c7aa9） | 13 模式 15 次运行全入口：smoke/qps/compare×2(MediatR-only+CAP opt-in)/framework/app/infra/concurrency/coverage/persist/saga/compression/persist-medium/persist-pg/persist-mysql | 通过：基准进程 15/15 exit 0（2 次容器环境态失败诊断后复跑达标）、161 项基准无 NA、MySQL 三栈死锁 0、wslc 容器零残留；结构性结论全部复现无回归；同晚计时层漂移实证与引用边界见「全模式复跑与环境漂移实证」段 |
+| 全量 strict 复跑（2026-10-10 晚，cbf68c5 同轮） | 12 条车道：persist-pg / persist-mysql（TRUNCATE 修复后重跑）/ compare（MediatR+CAP 双容器）/ framework / infra / app / concurrency 均 strict + coverage medium + persist / saga / qps / smoke；wslc 四容器（PG/双 MySQL/rabbit）跑后零残留 | 通过：全部 exit 0；MySQL 重跑后零 NA；死锁零复现；数字入「全量复跑轮」段，发布单表入 CHANGELOG `[Unreleased]`；两项新登记见「未完成项」5 |
 
 ## 已有 BenchmarkDotNet 产物
 
@@ -497,6 +541,7 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 2. SmartEnum.FromValue/TryFromValue 两项 Error/Mean >15%（ns 级固有抖动）：如需正式引用其计时，提升配置（严格档 5/10/15）复测；当前以零分配事实为准。
 3. 保留 `--smoke` 作为秒级趋势检查 + 分配预算判定（2026-10-08 起带断言）；计时为单轮无统计效力，不替代正式报告。
 4. **特性面缺口登记（2026-10-09 收尾轮，防「30 类全覆盖」被误读为特性面全覆盖）**：~~①~⑤⑧~~（全部落地）；⑦ 四栈/方言面收尾——Dapper+PalORM 双栈 PG/MySQL 真跑 ✓ + **EventLog/Idempotency 真库层补齐 ✓**（2026-10-09 后段：双栈四格全出数，见 EventLog/Idempotency 口袋注）、EF 栈**租约 SQL 形态**验证 ✓（`MySqlSkipLockedShapeBenchmarks`：零死锁+互斥+1.75× 加速）、PG 方言特性 ✓（Pipeline 单往返/读写分离路由/LISTEN-NOTIFY 往返，COPY 隐含在种子路径）。**死锁已裁决并落地（ADR-025）**：版本探测双模板使 Dapper/PalORM MySQL ≥8.0.18 进入 SKIP LOCKED 形态（复跑双栈死锁归零，见 ADR-025 落地复跑注），ADR-024 对 <8.0.18/MariaDB 回退路径继续有效。**登记残余（四项，均有上游/量纲理由）**：① EF 栈级车道待 Npgsql.EF/Pomelo 出 EF 11 rc 配套版（2026-10-09 实证 NU1107/NU1102，SQL 形态车道先行为其等价物）；② `PostgreSqlOutboxNotifier` 服务化推送延迟（LISTEN-NOTIFY 底层能力已测 461μs；服务化形态属异步服务量纲，归集成测试）；③ **mysql:8.0.17 旧版镜像回归**（ADR-025 后续动作 2：验证回退模板行为与现状逐字一致，需拉取旧版镜像）；④ broker 发布路径（Kafka/RabbitMQ 需 broker 环境，正确性已由 Messaging.Integration 覆盖，性能归有 broker 环境时补）。另：PG Dapper 并发组 Error >15% 点值待严格档复测、8W 回落形态待复测；READ COMMITTED 对照实验留档于 ADR-025 被否决方案。
+5. **全量复跑轮新登记（2026-10-10）**：① coverage × strict 车道级不兼容——InProcess 单基准 5 分钟硬上限对 ns 级快类（自动放大至百万 ops/迭代）不适用，处置 = coverage 恒 medium 档（发现②，本轮 medium 实测通过）；② PalORM 远程 EventLog/Idempotency 约 2× 偏移待专项 A/B 归因（候选 v4.0 异步化副作用，不构成回归结论，见「全量复跑轮」偏移登记）。
 
 ## 发布判断
 

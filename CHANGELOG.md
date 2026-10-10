@@ -26,6 +26,28 @@
 - **三项热路径分配优化（无公共 API 变化，2026-10-09 优化轮）**：① CQRS 零行为分发快路径——空行为管道直呼 handler，`SendAsync` 零行为 216→160 B/op（-26%），分配已低于 MediatR 12.5.0 同口径的 224 B（单行为对照组逐字节不变）；② LZ4/ZStandard 压缩 scratch 改 `ArrayPool` 租借、解压增长缓冲改 ThreadStatic 复用——16KB 负载压缩 16,816/16,832→376/304 B/op（-98%）、解压 45,232→16,488 B/op（-64%，计时同步 -34%），Brotli 对照组逐字节不变；③ 上两项经 S3 反向验证（移除因子同晚复跑）各列逐字节退回基线，归因闭合。基准数字与验证记录见 [docs/performance.md](docs/performance.md)「优化轮」段。
 - **MySQL 租约双模板——版本探测启用 SKIP LOCKED（ADR-025，消费者可见的行为变更，仅 MySQL ≥8.0.18 非 MariaDB）**：Dapper/PalORM 栈的 MySQL Outbox 租约在探测到 MySQL ≥8.0.18（与 EF 栈声明对齐）时改用 JOIN 派生表 `FOR UPDATE SKIP LOCKED` 模板——多实例并发租约从「InnoDB 死锁异常 + last-writer-wins 双租窗口」（ADR-024 接受的现状，2026-10-08 基准车道 8 处死锁实录）变为「零死锁 + 互斥」（`MySqlSkipLockedShapeBenchmarks` 同库实测：互斥不变量全波通过、串行→8 worker 加速 1.75×）。MySQL <8.0.18 / MariaDB / 探测失败回退原无锁模板，行为与既往逐字一致（fail-safe 判定见 `PalDDD.Transactions.MySqlLeasePolicy`，新增公共 API：该策略类 + `SqlTemplates.OutboxLeaseUpdateMySqlSkipLocked` 常量）。经 `OutboxProcessor`/`SagaProcessor` 消费的用户注意：处理器模板自带 tick 异常隔离，旧形态下死锁本就 tick 级自愈；新形态消除的是死锁与双租窗口本身。
 
+### Documentation 文档
+
+- **v4.0 性能对比总表（2026-10-10 全量真跑实测，单表融合）**：环境与口径 = Win10 x64 / .NET 11.0.0-rc.1 / BenchmarkDotNet 0.15.8 InProcess / strict 严格档（40 迭代 × 3 launch；coverage 维度为 medium 档——该车道与 strict 存在 InProcess 单基准时长上限冲突）/ wslc 一次性真库容器 postgres:18.6、mysql:8.4.11、rabbitmq:4.3.6；12 条车道全部 exit 0。本表数字均为同日同机同 harness 读数（日内比值可直接引用）；分车道完整表、Error 区间与方法学注见 [docs/performance.md](docs/performance.md)「全量复跑轮」段。
+
+  | 维度 | 场景（口径） | 本仓读数 | 对照 | 实测结论 |
+  |---|---|---|---|---|
+  | 分发层 | 零行为分发（DI scope 路径） | 173.1 ns / 160 B | MediatR 12.5.0：134.5 ns / 224 B | MediatR 计时快 22%；本仓分配少 29% |
+  | 分发层 | 单直通行为 | 268.9 ns / 432 B | MediatR：224.3 ns / 528 B | MediatR 快 17%；本仓分配少 18% |
+  | 分发层 | 实例注册路径（v4.0 新增，免 scope） | 106.3 ns / 32 B | 本仓 DI 路径 154.6 ns / 160 B | 计时 -31%、分配 -80% |
+  | 发布路径 | 同语义「序列化 + 本地消息表写入 + 后台送 broker 入队」（MySQL 真库 + RabbitMQ） | 2.035 ms / 10.38 KB | CAP 8.4.1：4.788 ms / 25.02 KB | **快 2.35×、分配少 58%** |
+  | Outbox 读 | GetPending 100 条（Dapper / PalORM） | PG：481.4 μs / 493.1 μs | MySQL：658.3 / 797.9 μs；SQLite 三栈（含 EF）：437.6 / 476.8 / 950.1 μs | 网络库约为 SQLite 十倍量级（往返主导） |
+  | Outbox 租约 | Lease 100 条（Dapper / PalORM） | PG：63.2 ms / 174.7 ms | MySQL：172.0 ms / 534.0 ms | PG 真并行形态占优（SKIP LOCKED 同款） |
+  | Outbox 写 | 单条插入（Dapper） | PG：630.4 μs | MySQL：1,730.6 μs；SQLite：41.6 μs | 同上量级差 |
+  | Outbox 写 | 5 条批量一往返（Dapper） | PG：846.4 μs | 5× 单条 3,152 μs | **批量化 3.7×**（MySQL 侧 4.2×） |
+  | EventLog | 单事件追加（Dapper / PalORM） | PG：1.05 ms / 2.19 ms | MySQL：2.55 ms / 5.13 ms | PG 约为 MySQL 一半 |
+  | 幂等 | TryStart→MarkCompleted 全周期（Dapper / PalORM） | PG：1.52 ms / 3.21 ms | MySQL：3.87 ms / 8.96 ms | PG 约为 MySQL 一半 |
+  | 并发租约 | 800 条波 8 worker（Dapper，每波零重复断言） | PG：串行 23.2 ms → 8W 20.7 ms | MySQL（SKIP LOCKED）：207.6 → 174.1 ms；SQLite：5.6 → 160.0 ms | PG/MySQL **零死锁真并行**；SQLite busy 平台期 28×（多实例部署不可用） |
+  | 并发租约 | InMemory 簿记层 | 391.5 μs → 602.0 μs（8W） | — | 锁竞争有界退化 1.5× |
+  | 绝对 QPS | dispatch 纯分发（1/4/8 线程，3s×3 轮中位） | 5.4M / 20.3M / 34.8M ops/s | chain 场景：1.0M / 1.6M / 1.8M ops/s | dispatch 近线性至 4 线程；chain 4 线程平台期（Gen0 饱和） |
+  | 压缩 | 16KB LZ4（池化输出缓冲） | 5.78 μs / 376 B | GZip 15.07 μs / 1,624 B | 快 2.6×；较池化前 16.8KB 分配 **-98%** |
+  | PG 批处理 | Pipeline 100 条单往返批插 | 6.18 ms | 同 100 条逐条往返 139.7 ms | **22.7×** |
+
 ---
 
 ## [3.3.0] — 2026-10-08
