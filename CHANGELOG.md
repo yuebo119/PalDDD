@@ -48,6 +48,11 @@
   | 压缩 | 16KB LZ4（池化输出缓冲） | 5.78 μs / 376 B | GZip 15.07 μs / 1,624 B | 快 2.6×；较池化前 16.8KB 分配 **-98%** |
   | PG 批处理 | Pipeline 100 条单往返批插 | 6.18 ms | 同 100 条逐条往返 139.7 ms | **22.7×** |
 
+### Dependencies 依赖
+
+- **全量升级（2026-10-11，`dotnet list --outdated` 实测盘点）**：PalORM 五包 6.3.1 → **6.4.0**（6.x 线内，PD9 纪律：Release 全量构建 0 警告 0 错误 + 16 项目测试面板 0 失败 68 环境跳过与 3.3.0 基线逐项一致 + 三契约 6.4.0 XML 复核——PreWarmAsync 逐条灌暖语义、会话级熔断作用域、readFromReplica 未配置回落主库（READ-002 opt-in 教义 6.4.0 XML 新增「不回归」明示），6 处适配层注释同提交升号）；NativeCompressions 1.0.1 → **1.1.0**（1.0 线内补丁位，编译+往返测试实证）；TUnit / TUnit.FsCheck 1.73.5 → **1.73.19**（测试期，MTP 传递解析 2.5.0 → 2.5.1，conventions §10.6 与 testing.md 版本行同提交更新）；Testcontainers 四包 4.15.0 → **4.16.0**（测试期，方言/消息面本机跳过由 CI 执行口径不变）；CAP 三包 8.4.1 → **10.0.2**（bench 对比车道专用——MIT nuspec 实证、net10 组依赖 M.E.* 10.0.0 低于本仓 rc.1 钉扎无冲突、编译零改动；**对比锚随最新线，CAP 对比数字待容器环境复测换锚**（performance.md 现行 2.35×/58% 数字锚定 8.4.1，引用须带版本标签））。
+- **钉扎维持（裁决不变）**：MediatR 维持 **12.5.0**（13.0.0 起 Lucky Penny 商业许可，license-policy 禁商业裁决；bench 对比锚）；Verify.TUnit 维持 **32.0.1**（license-policy 包级禁令 ≥33，SponsorCheck 商业门）；微软官方 11 线维持 **11.0.0-rc.1.26425.128**（2026-10-11 `--outdated` 实测 rc.2/GA 仍未发，EF Core ×4 + Extensions + System 钉扎线）；BenchmarkDotNet 0.15.8（0.16.0-preview.2 仅预发布不升）。
+
 ---
 
 ## [3.3.0] — 2026-10-08
