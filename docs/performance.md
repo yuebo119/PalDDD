@@ -370,6 +370,24 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 > 替换必须先 dry-run 的纪律再实证。全量验证：16 面板 15 过 + 1 全跳零失败、快照再生（差异恰为
 > 异步签名面）、部署旋钮沉淀 [docs/deployment-performance.md](deployment-performance.md)。
 
+## 测量面增强（2026-10-10 下午）：CAP 前置检查门 + strict 严格档
+
+> 背景：上午全量复跑中 CAP 首跑以「连接重试风暴」形态产出 3s/op 静默垃圾且 exit 0（rabbit 凭据竞态：节点就绪前 add_user 被吞）。两项测量面增强根治该类问题并回应 Error 收窄需求。
+
+**CAP 前置检查门**（`CapComparisonBenchmarks.GlobalSetup`）：真实 AMQP 连接预检 rabbit 认证，失败抛指向 runbook 的异常；配套 `--compare` 分支消费 BDN Summary（`Report.Success=false` 即 return 1——BenchmarkRunner 不因基准失败置非零退出码，曾使垃圾数字 exit 0 静默通过，这是重试风暴形态的另一半根因）。红证明：rabbit 不可达 + 错误凭据 → **exit 1、双基准行全 NA 零数字产出**、消息含既证 runbook（env 建用户 → 节点就绪后 change_password → authenticate_user 验证），快速失败替代 8 分钟垃圾。
+
+**strict 严格档**（`--strict`，OutboxThroughput + SmartEnum 两类，迭代 15→40/预热 10→20/launch 2→3）：
+
+| 基准 | medium（同日上午） | strict（同日下午） | 效果 |
+|---|---:|---:|---|
+| LeasePending_Batch100 | 94.7 μs（E13.2%） | **65.7 μs（E3.6%）** | Error 3.7×↓，均值回归账本真值 62.4μs |
+| GetPending_Batch100 | 36.3 μs（E12.3%） | **22.8 μs（E0.5%）** | 24×↓，真值 22.4μs |
+| LeaseAndMarkAll_Batch100 | 197.9 μs（E18.4%） | **124.6 μs（E0.6%）** | 30×↓，真值 126.6μs |
+| AddSingleMessage | 4.30 μs（E16.2%） | **2.99 μs（E5.4%）** | 3×↓，真值 2.72μs |
+| SmartEnum.FromValue_Known | 5.77 ns（E3.9%，历史带 11~25%） | **5.88 ns（E1.2%）** | 历史 25% 带问题在 strict 档终结 |
+
+> **重要勘正（入账）**：上午全量报告 infra 车道「94.7/36.3/197.9μs」读数被 strict 复测证明为**采样噪声膨胀而非真实性能**（medium 15 迭代在忙窗口采到慢样本拉高均值，40 迭代×3 launch 回归真值）——2026-10-09 晚记录的 infra「计时上移 ~1.65×」漂移属同族现象，该轮结论修正为「medium 采样噪声」，非机器状态系统性变化。引用级数字一律以 strict 档为准（带档位标签）；medium 档定位为趋势与分配判定。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |

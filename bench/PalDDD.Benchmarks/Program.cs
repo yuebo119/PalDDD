@@ -28,7 +28,14 @@ if (args.Contains("--compare", StringComparer.OrdinalIgnoreCase))
     BenchmarkRunner.Run<MediatRComparisonBenchmarks>(medium);
     if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PALDDD_BENCH_CAP_MYSQL"))
         && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PALDDD_BENCH_CAP_RABBIT")))
-        BenchmarkRunner.Run<CapComparisonBenchmarks>(medium);
+    {
+        // 2026-10-10 前置检查门配套：BDN BenchmarkRunner 不因基准失败（如 GlobalSetup 抛出）
+        // 置非零进程退出码——曾使重试风暴垃圾数字以 exit 0 静默通过。此处消费 Summary
+        // 判定失败并返回 1（Report.Success=false 覆盖 setup 异常/执行异常两形态）
+        var capSummary = BenchmarkRunner.Run<CapComparisonBenchmarks>(medium);
+        if (capSummary.Reports.Any(r => !r.Success))
+            return 1;
+    }
     else
         Console.WriteLine("⏭ CAP 对比跳过（需 PALDDD_BENCH_CAP_MYSQL + PALDDD_BENCH_CAP_RABBIT 环境变量，见 CapComparisonBenchmarks 头注）");
     return 0;
@@ -105,6 +112,23 @@ if (args.Contains("--compression", StringComparer.OrdinalIgnoreCase))
 // testing.md §3.2「BDN 正式」列长期纸面 ✅。本两模式把该列落地。口径对齐
 // --persist-medium（decision-2026-09-17 §2.5：medium 单次自比，ShortRun 历史 53%
 // 跨轮差不入基线），artifacts 同落 artifacts-medium（归档纪律：数字入 performance.md 带日期）。
+// 2026-10-10 Q2：--strict——严格档（引用级数字专用）：对环境敏感噪声类加密采样
+// （迭代 15→40、预热 10→20、launch 2→3），压 Error 半置信区间；口径注：ns/op 语义不变
+// 但与 medium 档数字分列（账本引用 strict 数字须带档位标签）。
+// 覆盖类：OutboxThroughputBenchmarks（infra E13~18% 四轮一贯环境敏感带）+
+// SmartEnumBenchmarks（ns 级固有抖动，历史 11~25% 带）。其余类 medium 档已 <5% 无需加密。
+if (args.Contains("--strict", StringComparer.OrdinalIgnoreCase))
+{
+    var strict = ManualConfig.Create(DefaultConfig.Instance)
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance)
+            .WithIterationCount(40).WithWarmupCount(20).WithLaunchCount(3))
+        .AddDiagnoser(MemoryDiagnoser.Default)
+        .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-strict"));
+    BenchmarkRunner.Run<OutboxThroughputBenchmarks>(strict);
+    BenchmarkRunner.Run<SmartEnumBenchmarks>(strict);
+    return 0;
+}
+
 static IConfig MediumInProcessConfig()
     => ManualConfig.Create(DefaultConfig.Instance)
         .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance))

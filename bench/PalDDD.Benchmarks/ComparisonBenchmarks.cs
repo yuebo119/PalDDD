@@ -266,6 +266,35 @@ public class CapComparisonBenchmarks
         var rabbitParts = rabbit.Split(':');
         var (host, port, user, pass) = (rabbitParts[0], int.Parse(rabbitParts[1]), rabbitParts[2], rabbitParts[3]);
 
+        // 前置检查门（2026-10-10 全量复跑实录）：rabbit 凭据竞态（env 用户未生效/节点未就绪
+        // 即 add_user 失败被吞）曾使 CAP 侧以「连接重试风暴」形态产出 3s/op 的静默垃圾数字
+        // 且 exit 0——无效环境必须快速失败。此处用真实 AMQP 连接预检认证，失败抛指向
+        // runbook 的异常（BDN 对 GlobalSetup 抛异常的基准报错非零退出）。
+        // 既证 runbook（本机 wslc 形态）：①容器启动即带 RABBITMQ_DEFAULT_USER/PASSWORD env
+        // 建用户；②等节点就绪（sleep 25 级）后 rabbitmqctl change_password 显式重置（env 凭据
+        // 可能未生效，2026-10-09 实录）；③rabbitmqctl authenticate_user 验证通过才跑基准。
+        // 反面形态（2026-10-10 首跑实录）：节点就绪前 add_user 静默失败 + 认证探针永不通过
+        // → 本检查门将拦截（替代曾经的 3s/op 重试风暴）
+        var preflight = new RabbitMQ.Client.ConnectionFactory
+        {
+            HostName = host,
+            Port = port,
+            UserName = user,
+            Password = pass,
+            AutomaticRecoveryEnabled = false,
+        };
+        try
+        {
+            await using var probe = await preflight.CreateConnectionAsync("palddd-bench-cap-preflight").ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"CAP 对比前置检查失败：rabbit {host}:{port} 认证不可达（{ex.GetType().Name}: {ex.Message}）。"
+                + "既证 runbook：容器 env 建用户 → 节点就绪后 rabbitmqctl change_password 重置 → authenticate_user 验证"
+                + "（详见 CapComparisonBenchmarks 类头注）。本检查门使无效环境快速失败，不产出重试风暴形态的无效数字。");
+        }
+
         // CAP 侧（8.4.1：MySQL 存储 + RabbitMQ 传输；显式启动 hosted services——无 Host 环境。
         // AddLogging 满足 CAP 内部 ILogger<T> 依赖——纯 ServiceProvider 不带默认日志设施）
         var services = new ServiceCollection();
