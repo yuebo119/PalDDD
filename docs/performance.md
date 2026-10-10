@@ -429,6 +429,26 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **残余（终态登记）**：多峰族（PG Drain 波段/infra LeasePending——结构性，中位数口径纪律化，这是测量学边界非缺陷）；CAP 侧 E6~16% 带未 strict（需双容器，频率低未排期）。**83 基准终态：strict 档下除多峰族外全部 <5.2%。**
 
+## Error 专项治理轮三（2026-10-10 傍晚：Drain 多峰根因修复 + CAP strict——「结构性」定性被推翻）
+
+> 前两轮把 PG Drain 波段定性为「结构性多峰、真实系统行为、中位数口径即完备处置」。本轮对该定性做根因假设检验并**推翻它**：多峰的慢模式是**基准方法学伪影**——清场用 DELETE，每波产生约 3200 死元组（800 插入+800×2 更新+800 删除），40 迭代 × 3 launch 累积触发 autovacuum 间歇干扰。改 TRUNCATE（即时回收、每迭代起始状态恒定）后同日 strict A/B：
+
+| Dapper 并发（PG strict） | DELETE 时代 | TRUNCATE 时代 | 变化 |
+|---|---:|---:|---|
+| Drain_Sequential | 138.60ms（E16.9%） | **25.20ms（E1.9%）** | 快 5.5×、Error 收 9× |
+| Drain_2Workers | 110.51ms（E20.7%） | 22.53ms（E4.3%） | 快 4.9× |
+| Drain_4Workers | 77.75ms（E24.4%） | 23.07ms（**E0.4%**） | 快 3.4× |
+| Drain_8Workers | 63.52ms（E15.6%） | 21.54ms（**E0.8%**） | 快 2.9× |
+| SeedOnly_800 | 36.93ms（E3.4%） | 9.55ms（E1.6%） | 快 3.9× |
+
+> **三重意义**：①Error：最高频的 A 族（Drain 波段跨两日 >15% 计 30+ 次）从根上消失，全项进入引用带（<4.3%）；②**性能真相**：PG 并发清空的真实耗时是 21~25ms——DELETE 时代的 63~139ms 含累积死元组扫描与 autovacuum 干扰，那是基准伪影非产品行为；PG Dapper 栈并发真并行的加速比在清洁状态下为 8W ~1.17×（25.2→21.5ms），此前「~2.8×」的量级来自带伪影的旧方法学，引用并发加速比须以 TRUNCATE 时代为准；③吞吐五项无回归（GetPending 527μs/Lease 65.5ms 与 DELETE 时代同带）。PalORM 波段同收窄（Seq E3.7→1.8%、8W E8.2→3.7%）。
+> **勘正链**：治理轮一录「Drain 多峰=真实形态」→ 本轮证伪为方法学伪影。账本勘正：凡引 DELETE 时代的 Drain/SeedOnly 数字（含 2026-10-08/09 全部并发波段与「三形态对照」段的 PG 列加速比）须标注「DELETE 方法学时代，含死元组伪影」。
+> 方法学变更声明：Drain/SeedOnly 与 DELETE 时代数字不可直接比；MySQL 远程车道同文件同改（下轮生效同规则）。
+
+**CAP strict（最后一族补测）**：PalDDD_SerializeAndOutboxAdd **1.859ms（E3.4%）**（medium 带 E6~16% 终结）、CAP 侧 4.763ms（E3.0%）——双侧进引用带，比值 2.56×/分配少 57% 与 medium 时代一致。
+
+**Error 终态（83 基准）**：strict 档下唯一残项 infra LeasePending（E8.2%，InMemory 测试栈的 Gen0 停顿多峰，中位数口径）——**其余全部 <5%**，其中大多数 0.1~4%。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
