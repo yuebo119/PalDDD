@@ -289,10 +289,17 @@ public class DapperRemoteOutboxThroughputBenchmarks : PersistenceBenchBase
     }
 
     // 三表全清（EventLog/Idempotency 口袋补齐起 outbox/events/idempotency_records）
+    // Error 专项治理轮三（2026-10-10）：DELETE → TRUNCATE——Drain 波段多峰的根因假设是
+    // 基准方法学内的死元组累积：每波 800 插入 + 800×2 更新（租约+标记）+ 800 删除 ≈ 3200
+    // 死元组 × 40 迭代 × 3 launch，autovacuum 间歇触发制造慢模式（同日 strict 实证 Drain
+    // StdDev 76ms/多峰警告四处）。TRUNCATE 即时回收空间使每迭代起始状态恒定。
+    // ⚠️ 方法学变更：Drain/SeedOnly 数字与 DELETE 时代不可直接比（旧值含累积死元组开销
+    // 与 autovacuum 干扰——那是基准伪影非产品行为）；A/B 判据为 Error 是否实质收窄。
+    // PG/MySQL 均支持 TRUNCATE 多表语法；本文件仅远程方言车道可达（SQLite 本地车道另文件）。
     private static async Task ClearAllAsync()
     {
         await using var cmd = RemoteDialectBenchState.Connection!.CreateCommand();
-        cmd.CommandText = "DELETE FROM outbox_messages; DELETE FROM events; DELETE FROM idempotency_records";
+        cmd.CommandText = "TRUNCATE outbox_messages, events, idempotency_records";
         await cmd.ExecuteNonQueryAsync(default);
     }
 }
@@ -370,7 +377,7 @@ public class DapperRemoteOutboxConcurrencyBenchmarks : PersistenceBenchBase
     private async Task ClearOutboxAsync()
     {
         await using var cmd = _keeper.CreateCommand();
-        cmd.CommandText = "DELETE FROM outbox_messages";
+        cmd.CommandText = "TRUNCATE outbox_messages";
         await cmd.ExecuteNonQueryAsync(default);
     }
 
@@ -515,7 +522,7 @@ public class PalOrmRemoteOutboxBenchmarks : PersistenceBenchBase
     private async Task ClearAuxTablesAsync()
     {
         await using var cmd = _keeper.CreateCommand();
-        cmd.CommandText = "DELETE FROM events; DELETE FROM idempotency_records";
+        cmd.CommandText = "TRUNCATE events, idempotency_records";
         await cmd.ExecuteNonQueryAsync(default);
     }
 
@@ -567,7 +574,7 @@ public class PalOrmRemoteOutboxBenchmarks : PersistenceBenchBase
     private async Task ClearOutboxAsync()
     {
         await using var cmd = _keeper.CreateCommand();
-        cmd.CommandText = "DELETE FROM outbox_messages";
+        cmd.CommandText = "TRUNCATE outbox_messages";
         await cmd.ExecuteNonQueryAsync(default);
     }
 
@@ -697,7 +704,7 @@ public class MySqlSkipLockedShapeBenchmarks : PersistenceBenchBase
     private async Task ClearOutboxAsync()
     {
         await using var cmd = _keeper.CreateCommand();
-        cmd.CommandText = "DELETE FROM outbox_messages";
+        cmd.CommandText = "TRUNCATE outbox_messages";
         await cmd.ExecuteNonQueryAsync(default);
     }
 
@@ -814,7 +821,7 @@ public class PgDialectFeaturesBenchmarks : PersistenceBenchBase
     private async Task ClearOutboxAsync()
     {
         await using var cmd = _keeper.CreateCommand();
-        cmd.CommandText = "DELETE FROM outbox_messages";
+        cmd.CommandText = "TRUNCATE outbox_messages";
         await cmd.ExecuteNonQueryAsync(default);
     }
 
