@@ -86,6 +86,39 @@ public sealed class OutboxEfCoreTests
     }
 
     [Test]
+    public async Task MarkProcessed_DetachedSnapshot_FullInMemoryRewrite(CancellationToken cancellationToken)
+    {
+        // v4.0 ②（ADR-026 fencing 统一）锁定：Detached 快照（处理器主路径形态——租约
+        // AsNoTracking 物化）成功后全套六字段回写；跟踪实体自动跳过（令牌假冲突守卫，
+        // 既有测试 MarkProcessed_ClearsLeaseAndRetryState 锁定原语义不变）
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        await using var db = new TestOutboxDbContext(CreateSqliteOptions(connection), FixedNow);
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+        var store = (IPalOutboxStore)db;
+        var seeded = CreateMessage(
+            "orders.detached",
+            FixedNow,
+            lockedBy: "worker-1",
+            lockedUntil: FixedNow.AddMinutes(2),
+            error: "old failure");
+        db.OutboxMessages.Add(seeded);
+        await db.SaveChangesAsync(cancellationToken);
+        db.ChangeTracker.Clear(); // 快照形态：后续对象与跟踪器解绑
+
+        var snapshot = await db.OutboxMessages.AsNoTracking().SingleAsync(m => m.Id == seeded.Id, cancellationToken);
+        var processedAt = FixedNow.AddSeconds(3);
+        store.MarkProcessed(snapshot, processedAt);
+
+        await Assert.That(snapshot.Status).IsEqualTo(OutboxStatus.Processed);
+        await Assert.That(snapshot.ProcessedAt).IsEqualTo(processedAt);
+        await Assert.That(snapshot.Error).IsNull();
+        await Assert.That(snapshot.NextAttemptAt).IsNull();
+        await Assert.That(snapshot.LockedBy).IsNull();
+        await Assert.That(snapshot.LockedUntil).IsNull();
+    }
+
+    [Test]
     public async Task ReleaseForRetry_ClearsLeaseAndSchedulesNextAttempt(CancellationToken cancellationToken)
     {
         // P2 修复（八轮）：ReleaseForRetry 改用 ExecuteUpdate 直写 SQL——

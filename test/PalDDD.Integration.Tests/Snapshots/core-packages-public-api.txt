@@ -1,10 +1,12 @@
 # PalDDD.CQRS
 class PalDDD.CQRS.Dispatcher
   ctor(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory)
+  ctor(System.IServiceProvider rootProvider)
   method System.Threading.Tasks.ValueTask<System.Object> ExecutePipelineAsync(System.IServiceProvider services, PalDDD.CQRS.IBaseRequest request, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TResponse> QueryAsync(PalDDD.CQRS.IQuery<TResponse> q, System.Threading.CancellationToken ct)
   method System.Void Register()
-  method System.Void Register(System.Type requestType, System.Type handlerType, System.Type responseType, PalDDD.CQRS.RequestExecutor executor)
+  method System.Void Register(System.Type requestType, System.Type handlerType, System.Type responseType, PalDDD.CQRS.RequestExecutor executor, System.Boolean needsScope)
+  method System.Void Register(THandler handlerInstance)
   method System.Threading.Tasks.ValueTask SendAsync(PalDDD.CQRS.ICommand cmd, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TResponse> SendAsync(PalDDD.CQRS.ICommand<TResponse> cmd, System.Threading.CancellationToken ct)
 class PalDDD.CQRS.HandlerNotFoundException

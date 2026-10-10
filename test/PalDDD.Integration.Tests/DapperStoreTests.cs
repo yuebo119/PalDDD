@@ -401,6 +401,14 @@ public sealed class DapperStoreTests
         store.MarkProcessed(target, processedAt);
         await store.SaveChangesAsync(cancellationToken);
 
+        // v4.0 ②（ADR-026 fencing 统一）锁定：成功后入参全套六字段回写（原仅清租约两字段）
+        await Assert.That(target.Status).IsEqualTo(OutboxStatus.Processed);
+        await Assert.That(target.ProcessedAt).IsEqualTo(processedAt);
+        await Assert.That(target.Error).IsNull();
+        await Assert.That(target.NextAttemptAt).IsNull();
+        await Assert.That(target.LockedBy).IsNull();
+        await Assert.That(target.LockedUntil).IsNull();
+
         var after = await store.GetPendingMessagesAsync(10, new OutboxOptions().MaxRetryCount, cancellationToken);
         await Assert.That(after).IsEmpty();
     }
@@ -427,6 +435,12 @@ public sealed class DapperStoreTests
             ("$id", idParam));
 
         store.MarkProcessed(staleMsg, TimeProvider.System.GetUtcNow());
+
+        // v4.0 ②（ADR-026 fencing 统一）锁定：token 拒绝时零内存变异（Status 仍 Pending、
+        // 租约快照字段保持调用时值——原 MarkProcessed 已合规，MarkDead 此前无条件清租约已同轮收口）
+        await Assert.That(staleMsg.Status).IsEqualTo(OutboxStatus.Pending);
+        await Assert.That(staleMsg.LockedBy).IsEqualTo("stale-worker");
+        await Assert.That(staleMsg.LockedUntil).IsNotNull();
 
         // 三十八轮统一（状态列 int 化）：断言改读数值——OutboxStatus.Processed=1
         var status = await ReadScalarAsync<long>(

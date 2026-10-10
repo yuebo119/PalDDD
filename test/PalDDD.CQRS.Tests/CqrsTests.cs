@@ -232,6 +232,95 @@ public sealed class DispatcherTests
         await Assert.That(result).IsEqualTo($"Order:{orderId}");
     }
 
+    // v4.0 ①（ADR-026）：实例注册路径——免 per-request scope 派发的行为锁定
+    [Test]
+    public async Task InstanceRegistration_ZeroBehavior_ReturnsResult()
+    {
+        var sp = CreateProvider();
+        var dispatcher = new Dispatcher(sp);
+        dispatcher.Register<CreateOrderCommand, Guid, CreateOrderHandler>(
+            sp.GetRequiredService<CreateOrderHandler>());
+
+        var result = await dispatcher.SendAsync(new CreateOrderCommand("Instance", 50m));
+
+        await Assert.That(result).IsNotEqualTo(Guid.Empty);
+    }
+
+    [Test]
+    public async Task InstanceRegistration_DoesNotCreateScope()
+    {
+        // scope 计数锁定：DI 注册形态派发创建 1 个 scope；实例注册派发零 scope 创建。
+        // 拦截在根 provider 层（MS DI 的 IServiceScopeFactory 是引擎服务，用户注册无法
+        // 覆盖——scope-probe 实证 resolved!=注册实例，故经 IServiceProvider 包装拦截）
+        var services = new ServiceCollection();
+        services.AddSingleton<CreateOrderHandler>();
+        services.AddSingleton<DeleteOrderHandler>();
+        var sp = services.BuildServiceProvider();
+        var root = new CountingScopeRoot(sp);
+        var dispatcher = new Dispatcher(root);
+        dispatcher.Register<CreateOrderCommand, Guid, CreateOrderHandler>(
+            sp.GetRequiredService<CreateOrderHandler>());
+        dispatcher.Register<DeleteOrderCommand, Unit, DeleteOrderHandler>();
+
+        await dispatcher.SendAsync(new DeleteOrderCommand(Guid.NewGuid()));
+        await Assert.That(root.Proxy.ScopeCount).IsEqualTo(1);
+
+        await dispatcher.SendAsync(new CreateOrderCommand("Instance", 1m));
+        await Assert.That(root.Proxy.ScopeCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task InstanceRegistration_RootSingletonBehavior_Applies()
+    {
+        // 契约锁定：行为以单例注册于根容器时在实例路径生效（根容器解析语义）
+        var behavior = new PipelineBehaviorTests.CountingBehavior<CreateOrderCommand, Guid>();
+        var services = new ServiceCollection();
+        services.AddSingleton<CreateOrderHandler>();
+        services.AddSingleton(behavior);
+        services.AddSingleton<IPipelineBehavior<CreateOrderCommand, Guid>>(behavior);
+        var sp = services.BuildServiceProvider();
+        var dispatcher = new Dispatcher(sp);
+        dispatcher.Register<CreateOrderCommand, Guid, CreateOrderHandler>(
+            sp.GetRequiredService<CreateOrderHandler>());
+
+        await dispatcher.SendAsync(new CreateOrderCommand("WithBehavior", 1m));
+
+        await Assert.That(behavior.BeforeCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task InstanceRegistration_WithoutRootCtor_Throws()
+    {
+        var sp = CreateProvider();
+        var dispatcher = new Dispatcher(sp.GetRequiredService<IServiceScopeFactory>());
+
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            dispatcher.Register<CreateOrderCommand, Guid, CreateOrderHandler>(
+                sp.GetRequiredService<CreateOrderHandler>()));
+    }
+
+    /// <summary>v4.0 ①：scope 创建计数夹具——根 provider 包装层拦截 IServiceScopeFactory
+    ///（引擎服务不可经用户注册覆盖，探针实证）；仅测试锁定用。</summary>
+    public sealed class CountingScopeRoot(IServiceProvider inner) : IServiceProvider
+    {
+        public CountingScopeFactoryProxy Proxy { get; } = new(inner.GetRequiredService<IServiceScopeFactory>());
+
+        public object? GetService(Type serviceType)
+            => serviceType == typeof(IServiceScopeFactory) ? Proxy : inner.GetService(serviceType);
+    }
+
+    /// <summary>v4.0 ①：scope 创建计数代理（仅测试锁定用——DI 形态派发创建 scope，实例路径不创建）。</summary>
+    public sealed class CountingScopeFactoryProxy(IServiceScopeFactory inner) : IServiceScopeFactory
+    {
+        public int ScopeCount { get; private set; }
+
+        public IServiceScope CreateScope()
+        {
+            ScopeCount++;
+            return inner.CreateScope();
+        }
+    }
+
     [Test]
     public async Task UnregisteredRequest_ThrowsInvalidOperation()
     {
