@@ -295,12 +295,18 @@ public class DapperRemoteOutboxThroughputBenchmarks : PersistenceBenchBase
     // StdDev 76ms/多峰警告四处）。TRUNCATE 即时回收空间使每迭代起始状态恒定。
     // ⚠️ 方法学变更：Drain/SeedOnly 数字与 DELETE 时代不可直接比（旧值含累积死元组开销
     // 与 autovacuum 干扰——那是基准伪影非产品行为）；A/B 判据为 Error 是否实质收窄。
-    // PG/MySQL 均支持 TRUNCATE 多表语法；本文件仅远程方言车道可达（SQLite 本地车道另文件）。
+    // 多表逗号 TRUNCATE 是 PG 专有语法，MySQL 仅接受单表（2026-10-10 MySQL strict 首跑
+    // 实证：GlobalSetup 即抛 SQL 语法错 near ', events, idempotency_records'，吞吐/PalORM
+    // 两类全 NA）——逐表执行，两方言通用。本文件仅远程方言车道可达（SQLite 本地车道另文件）。
     private static async Task ClearAllAsync()
     {
-        await using var cmd = RemoteDialectBenchState.Connection!.CreateCommand();
-        cmd.CommandText = "TRUNCATE outbox_messages, events, idempotency_records";
-        await cmd.ExecuteNonQueryAsync(default);
+        string[] tables = ["outbox_messages", "events", "idempotency_records"];
+        foreach (var table in tables)
+        {
+            await using var cmd = RemoteDialectBenchState.Connection!.CreateCommand();
+            cmd.CommandText = $"TRUNCATE {table}";
+            await cmd.ExecuteNonQueryAsync(default);
+        }
     }
 }
 
@@ -518,12 +524,17 @@ public class PalOrmRemoteOutboxBenchmarks : PersistenceBenchBase
         await _idempotency.MarkCompletedAsync(record, "resp"u8.ToArray(), now.AddSeconds(1));
     }
 
-    // events/idempotency_records 清场（EventLog/Idempotency 口袋补齐；outbox 由 ClearOutboxAsync 负责）
+    // events/idempotency_records 清场（EventLog/Idempotency 口袋补齐；outbox 由 ClearOutboxAsync
+    // 负责）。逐表 TRUNCATE：MySQL 不支持多表逗号语法（见 ClearAllAsync 注）
     private async Task ClearAuxTablesAsync()
     {
-        await using var cmd = _keeper.CreateCommand();
-        cmd.CommandText = "TRUNCATE events, idempotency_records";
-        await cmd.ExecuteNonQueryAsync(default);
+        string[] tables = ["events", "idempotency_records"];
+        foreach (var table in tables)
+        {
+            await using var cmd = _keeper.CreateCommand();
+            cmd.CommandText = $"TRUNCATE {table}";
+            await cmd.ExecuteNonQueryAsync(default);
+        }
     }
 
     [Benchmark(Baseline = true)]
