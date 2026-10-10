@@ -215,7 +215,7 @@ internal static class QpsHarness
             var orderId = Guid.NewGuid();
             var payload = _serializer.Serialize(new QpsChainPlaced(orderId, cmd.Name, cmd.Amount));
             var store = Store.Value!;
-            store.AddMessage(new OutboxMessage
+            await store.AddMessageAsync(new OutboxMessage
             {
                 Type = "bench.chain.v1",
                 Payload = payload.ToArray(),
@@ -332,10 +332,10 @@ public class CapComparisonBenchmarks
 
     // PalDDD 对位：序列化 + outbox_messages 写行（broker 投递由 OutboxProcessor 后台负责）
     [Benchmark]
-    public void PalDDD_SerializeAndOutboxAdd()
+    public async Task PalDDD_SerializeAndOutboxAdd()
     {
         var payload = _serializer.Serialize(new QpsChainPlaced(Guid.NewGuid(), "cmp", 42m));
-        _palOutbox.AddMessage(new OutboxMessage
+        await _palOutbox.AddMessageAsync(new OutboxMessage
         {
             Type = "bench.cap.v1",
             Payload = payload.ToArray(),

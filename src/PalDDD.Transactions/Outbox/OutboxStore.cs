@@ -41,11 +41,13 @@ public interface IPalOutboxStore
         int maxRetryCount,
         CancellationToken ct);
 
-    /// <summary>添加新消息到发件箱</summary>
-    void AddMessage(OutboxMessage message);
+    /// <summary>添加新消息到发件箱。<br/>v4.0 ③（ADR-026）：同步 <c>AddMessage</c> 已删除，
+    /// 改异步签名（消除 PalORM 栈 sync-over-async 根因；迁移：调用点 <c>await</c> 化）。</summary>
+    ValueTask AddMessageAsync(OutboxMessage message, CancellationToken ct = default);
 
-    /// <summary>批量添加消息 — 实现应选择数据库最优批量路径（COPY/BulkCopy/事务批处理）</summary>
-    ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages);
+    /// <summary>批量添加消息 — 实现应选择数据库最优批量路径（COPY/BulkCopy/事务批处理）。<br/>
+    /// v4.0 ④（ADR-026）：补 <c>CancellationToken</c>（v8 声明的契约缺口收口）。</summary>
+    ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default);
 
     /// <summary>标记消息发布成功。</summary>
     /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。
@@ -55,21 +57,23 @@ public interface IPalOutboxStore
     /// （3.1.0 T-15 起，InMemory 原"拒绝"已对齐——PalORM/Dapper/EF 的 owner-null SQL 分支
     /// 命中即 UPDATE，EF 的 <c>OutboxDbContext</c> 明写该路径是运维/测试路径的有意能力；
     /// InMemory 保留 <c>Status == Pending</c> 终态守卫与引用相等性僵尸标记保护）。对已被其他
-    /// worker 重租的消息（successor 替换）仍拒绝标记。剩余 fencing 强度差：Dapper 受影响行数为正时
-    /// 仅清租约字段、不回写 Status/ProcessedAt（InMemory/EF 内联全套回写）——调用方
-    /// （OutboxBatchProcessor）不读入参故无实害，v4.0 统一。处理管线一律走 Lease 路径；
+    /// worker 重租的消息（successor 替换）仍拒绝标记。fencing 统一契约（v4.0 ②，ADR-026）：
+    /// 门控拒绝零 DB 写 + 零内存变异；成功后入参全套六字段回写（EF 栈仅对 Detached 快照
+    /// 回写，跟踪实体自动跳过——并发令牌守卫，见各实现 remarks）。处理管线一律走 Lease 路径；
     /// GetPending 观测结果原则上不构成标记资格——例外：租约已过期且未被他人重租的消息经
     /// token 分支仍可标记成功（原 worker 过期后完成属合理语义）。
     /// </para></remarks>
-    void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt);
+    ValueTask MarkProcessedAsync(OutboxMessage message, DateTimeOffset processedAt, CancellationToken ct = default);
 
     /// <summary>标记消息不可恢复。</summary>
-    /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。</remarks>
-    void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt);
+    /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。
+    /// v4.0 ③（ADR-026）：异步化，fencing 契约同 <see cref="MarkProcessedAsync"/>。</remarks>
+    ValueTask MarkDeadAsync(OutboxMessage message, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default);
 
     /// <summary>释放租约并等待下次重试。</summary>
-    /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。</remarks>
-    void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt);
+    /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。
+    /// v4.0 ③（ADR-026）：异步化，fencing 契约同 <see cref="MarkProcessedAsync"/>。</remarks>
+    ValueTask ReleaseForRetryAsync(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt, CancellationToken ct = default);
 
     /// <summary>
     /// 将一条死信消息重新投递（状态从 <c>Dead</c> 改为 <c>Pending</c>），供 ops 在死信根因消除后批量重投使用。<br/>
@@ -121,6 +125,7 @@ public interface IPalOutboxStore
 /// </summary>
 public interface IImmediateWriteOutboxStore
 {
-    /// <summary>立即批量写入并返回写入行数——语义与 <see cref="IPalOutboxStore.AddMessagesAsync"/> 一致，叠加「立即执行、无调用方 SaveChanges 依赖」契约。</summary>
-    ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages);
+    /// <summary>立即批量写入并返回写入行数——语义与 <see cref="IPalOutboxStore.AddMessagesAsync"/> 一致
+    ///（含 v4.0 ④ 的 <c>CancellationToken</c>），叠加「立即执行、无调用方 SaveChanges 依赖」契约。</summary>
+    ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default);
 }

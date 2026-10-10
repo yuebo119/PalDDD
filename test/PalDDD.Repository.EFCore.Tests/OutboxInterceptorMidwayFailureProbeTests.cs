@@ -169,19 +169,25 @@ public sealed class OutboxInterceptorMidwayFailureProbeTests
         /// <summary>已成功注入（Add 进 ChangeTracker）的消息</summary>
         public List<OutboxMessage> InjectedMessages { get; } = [];
 
-        public void AddMessage(OutboxMessage message)
+        public ValueTask AddMessageAsync(OutboxMessage message, CancellationToken ct = default)
+        {
+            AddCore(message);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default)
+        {
+            foreach (var message in messages)
+                AddCore(message);
+            return ValueTask.FromResult(messages.Count);
+        }
+
+        private void AddCore(OutboxMessage message)
         {
             var call = _calls++;
             if (call == _throwOnCall)
                 throw new InvalidOperationException("outbox store failure (probe)");
             InjectedMessages.Add(message);
-        }
-
-        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
-        {
-            foreach (var message in messages)
-                AddMessage(message);
-            return ValueTask.FromResult(messages.Count);
         }
 
         public ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
@@ -190,11 +196,11 @@ public sealed class OutboxInterceptorMidwayFailureProbeTests
         public ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);
 
-        public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt) { }
+        public ValueTask MarkDeadAsync(OutboxMessage message, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default) => ValueTask.CompletedTask;
 
-        public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt) { }
+        public ValueTask MarkProcessedAsync(OutboxMessage message, DateTimeOffset processedAt, CancellationToken ct = default) => ValueTask.CompletedTask;
 
-        public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt) { }
+        public ValueTask ReleaseForRetryAsync(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt, CancellationToken ct = default) => ValueTask.CompletedTask;
 
         public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)
             => ValueTask.FromResult(0);

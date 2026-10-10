@@ -155,7 +155,7 @@ public sealed class OutboxBatchProcessor
                 var descriptor = _messageCatalog.Find(msg.Type, msg.SchemaVersion);
                 if (descriptor is null)
                 {
-                    _store.MarkDead(msg, Core.FailureReason.Normalize($"Type '{msg.Type}' not registered in MessageCatalog"), now);
+                    await _store.MarkDeadAsync(msg, Core.FailureReason.Normalize($"Type '{msg.Type}' not registered in MessageCatalog"), now, ct).ConfigureAwait(false);
                     checked { dead++; }
                     PalMetrics.OutboxDead.Add(1); // R1：死信独立计数（不再混入 failed）
                     if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
@@ -166,7 +166,7 @@ public sealed class OutboxBatchProcessor
                 var @event = _serializer.Deserialize(msg.Payload, descriptor);
                 if (@event is null)
                 {
-                    _store.MarkDead(msg, Core.FailureReason.Normalize("Deserialization returned null"), now);
+                    await _store.MarkDeadAsync(msg, Core.FailureReason.Normalize("Deserialization returned null"), now, ct).ConfigureAwait(false);
                     checked { dead++; }
                     PalMetrics.OutboxDead.Add(1);
                     if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
@@ -180,7 +180,7 @@ public sealed class OutboxBatchProcessor
                     msg.TraceParent,
                     msg.TraceState);
                 await _broker.PublishAsync(@event, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
-                _store.MarkProcessed(msg, now);
+                await _store.MarkProcessedAsync(msg, now, ct).ConfigureAwait(false);
                 checked { processed++; }
                 // R2：持久化失败时从 processed 退回并计入 persistFailed——指标与 DB 真相一致
                 if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
@@ -224,7 +224,7 @@ public sealed class OutboxBatchProcessor
                     // （此处主异常不向上传播，Data 信息需日志兜底可见），主异常优先。
                     try
                     {
-                        _store.MarkDead(msg, failureReason, now);
+                        await _store.MarkDeadAsync(msg, failureReason, now, ct).ConfigureAwait(false);
                     }
                     catch (Exception markEx)
                     {
@@ -238,7 +238,7 @@ public sealed class OutboxBatchProcessor
                 {
                     try
                     {
-                        _store.ReleaseForRetry(msg, failureReason, nextAttemptAt);
+                        await _store.ReleaseForRetryAsync(msg, failureReason, nextAttemptAt, ct).ConfigureAwait(false);
                     }
                     catch (Exception markEx)
                     {

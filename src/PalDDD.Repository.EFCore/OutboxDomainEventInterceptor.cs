@@ -93,13 +93,13 @@ public sealed class OutboxDomainEventInterceptor(
         DomainEventCollector.Collect(eventData.Context, _pending);
         // 轮四（2026-10-10）：异步路径分派——立即写 store（Dapper/PalORM/InMemory，
         // IImmediateWriteOutboxStore）走单次异步批量（多事件合并单往返 + 消除逐条同步写的
-        // 往返级线程阻塞）；EF store（延迟写族）维持逐条同步路径（原语义，其 AddMessagesAsync
-        // 内嵌自持 SaveChangesAsync，拦截相位调用构成 EF 重入——见接口注释）。同步钩子
-        // SavingChanges 无异步可用，两类 store 均走原逐条路径
+        // 往返级线程阻塞）；EF store（延迟写族）走逐条异步路径（v4.0 ③：跟踪添加同步完成）。
+        // 同步钩子 SavingChanges 无异步可用，两类 store 均走 WriteEventsToOutbox 的
+        // 单点阻塞桥（v4.0 ③ 文档化形态）
         if (_pending.Count > 0 && _outboxStore is Transactions.IImmediateWriteOutboxStore immediate)
-            await WriteEventsToOutboxImmediateAsync(eventData.Context, _pending, immediate).ConfigureAwait(false);
-        else
-            WriteEventsToOutbox(eventData.Context, _pending);
+            await WriteEventsToOutboxImmediateAsync(eventData.Context, _pending, immediate, cancellationToken).ConfigureAwait(false);
+        else if (_pending.Count > 0)
+            await WriteEventsToOutboxAsync(eventData.Context, _pending).ConfigureAwait(false);
         return await base.SavingChangesAsync(eventData, result, cancellationToken).ConfigureAwait(false);
     }
 
@@ -234,7 +234,11 @@ public sealed class OutboxDomainEventInterceptor(
             foreach (var evt in events)
             {
                 var msg = BuildOutboxMessage(evt);
-                _outboxStore.AddMessage(msg);
+                // v4.0 ③（ADR-026）：接口异步化后的同步钩子单点阻塞桥——无同步上下文宿主
+                //（ASP.NET Core/控制台）安全；classic sync-context 宿主请改用 SaveChangesAsync
+                //（迁移指引见 CHANGELOG）。EF store 的 AddMessageAsync 为跟踪添加（同步完成），
+                // 桥实际零阻塞；立即写 store（Dapper/PalORM）真异步——桥为文档化阻塞点
+                _outboxStore.AddMessageAsync(msg).AsTask().GetAwaiter().GetResult();
                 _injectedOutboxIds.Add(msg.Id);
             }
         }
@@ -271,7 +275,8 @@ public sealed class OutboxDomainEventInterceptor(
     private async Task WriteEventsToOutboxImmediateAsync(
         Microsoft.EntityFrameworkCore.DbContext? context,
         List<Core.DomainEvent> events,
-        Transactions.IImmediateWriteOutboxStore immediateStore)
+        Transactions.IImmediateWriteOutboxStore immediateStore,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -282,8 +287,42 @@ public sealed class OutboxDomainEventInterceptor(
                 messages.Add(msg);
                 _injectedOutboxIds.Add(msg.Id);
             }
-            // v8 声明同源：接口批量方法无 CancellationToken（v4.0 契约窗口随接口异步化一并补）
-            _ = await immediateStore.AddMessagesAsync(messages).ConfigureAwait(false);
+            // v4.0 ④（ADR-026）：接口已带 CancellationToken——异步钩子传播真实 token
+            _ = await immediateStore.AddMessagesAsync(messages, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception original)
+        {
+            try
+            {
+                RemoveInjectedOutboxMessages(context);
+            }
+            catch (Exception cleanupEx)
+            {
+                original.Data["PalOutboxCleanupFailure"] = cleanupEx.ToString();
+            }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// v4.0 ③（ADR-026）：异步钩子的逐条路径（EF store 等延迟写族）——每事件
+    /// <see cref="Transactions.IPalOutboxStore.AddMessageAsync"/> 真异步（EF 实现为跟踪添加
+    /// 同步完成），自清理域同 <see cref="WriteEventsToOutbox"/>（v34 P2 同款）。
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
+        Justification = "部分注入清理必须对任意异常免疫（同 WriteEventsToOutbox v35 P3 形态）。")]
+    private async Task WriteEventsToOutboxAsync(
+        Microsoft.EntityFrameworkCore.DbContext? context,
+        IReadOnlyList<Core.DomainEvent> events)
+    {
+        try
+        {
+            foreach (var evt in events)
+            {
+                var msg = BuildOutboxMessage(evt);
+                await _outboxStore.AddMessageAsync(msg).ConfigureAwait(false);
+                _injectedOutboxIds.Add(msg.Id);
+            }
         }
         catch (Exception original)
         {

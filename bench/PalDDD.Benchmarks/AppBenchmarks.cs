@@ -45,7 +45,7 @@ public class DispatcherBenchmarks
         // v4.0 ①（ADR-026）：实例注册路径——根容器构造 + 实例绑定，免 per-request scope
         //（DI 注册形态 160B 中的最大剩余项即 scope 创建；行为从根容器解析，本例零行为）
         var instanceProvider = plain.BuildServiceProvider();
-        _instanceNoBehavior = new Dispatcher(instanceProvider);
+        _instanceNoBehavior = new Dispatcher(instanceProvider.GetRequiredService<IServiceScopeFactory>(), instanceProvider);
         _instanceNoBehavior.Register<BenchCommand, BenchResult, BenchCommandHandler>(
             instanceProvider.GetRequiredService<BenchCommandHandler>());
     }

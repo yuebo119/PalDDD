@@ -34,7 +34,7 @@ public class OutboxStaleTokenUntilLegTests
             {
                 await setup.ExecuteAsync($"CREATE TABLE IF NOT EXISTS outbox_messages (id TEXT PRIMARY KEY, type TEXT NOT NULL, payload TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT 'application/json', schema_version INTEGER NOT NULL DEFAULT 1, status INTEGER NOT NULL DEFAULT 0, retry_count INTEGER NOT NULL DEFAULT 0, error TEXT, created_at TEXT NOT NULL, processed_at TEXT, next_attempt_at TEXT, locked_by TEXT, locked_until TEXT, correlation_id TEXT, causation_id TEXT, trace_parent TEXT, trace_state TEXT)", default);
                 var s = new SqliteOutboxStore(setup);
-                s.AddMessage(new OutboxMessage
+                await s.AddMessageAsync(new OutboxMessage
                 {
                     Id = Ulid.New(),
                     Type = "probe.event.v1",
@@ -61,7 +61,7 @@ public class OutboxStaleTokenUntilLegTests
             }
 
             // 旧快照 (w1, T1) 终态写——locked_until 谓词生效则 affected=0
-            store1.MarkProcessed(stale, DateTimeOffset.UtcNow);
+            await store1.MarkProcessedAsync(stale, DateTimeOffset.UtcNow);
 
             var status = await session1.ScalarAsync<long>(
                 $"SELECT status FROM outbox_messages WHERE id = {stale.Id.ToString()}", ct: default);
@@ -94,7 +94,7 @@ public class OutboxStaleTokenUntilLegTests
             {
                 await setup.ExecuteAsync($"CREATE TABLE IF NOT EXISTS outbox_messages (id TEXT PRIMARY KEY, type TEXT NOT NULL, payload TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT 'application/json', schema_version INTEGER NOT NULL DEFAULT 1, status INTEGER NOT NULL DEFAULT 0, retry_count INTEGER NOT NULL DEFAULT 0, error TEXT, created_at TEXT NOT NULL, processed_at TEXT, next_attempt_at TEXT, locked_by TEXT, locked_until TEXT, correlation_id TEXT, causation_id TEXT, trace_parent TEXT, trace_state TEXT)", default);
                 var s = new SqliteOutboxStore(setup);
-                s.AddMessage(new OutboxMessage
+                await s.AddMessageAsync(new OutboxMessage
                 {
                     Id = Ulid.New(),
                     Type = "probe.event.v1",
@@ -116,7 +116,7 @@ public class OutboxStaleTokenUntilLegTests
                     default);
             }
 
-            store1.MarkDead(stale, "probe-reason", DateTimeOffset.UtcNow);
+            await store1.MarkDeadAsync(stale, "probe-reason", DateTimeOffset.UtcNow);
 
             var status = await session1.ScalarAsync<long>(
                 $"SELECT status FROM outbox_messages WHERE id = {stale.Id.ToString()}", ct: default);

@@ -140,7 +140,7 @@ public class DapperPersistenceBenchmarks : PersistenceBenchBase
         _eventLog = new DapperEventLog(_conn);
         _idempotency = new DapperIdempotencyStore(_conn, DapperDbType.Sqlite);
         for (int i = 0; i < BatchSize; i++)
-            _outbox.AddMessage(NewOutboxMessage());
+            await _outbox.AddMessageAsync(NewOutboxMessage());
     }
 
     [Benchmark(Baseline = true)]
@@ -158,13 +158,13 @@ public class DapperPersistenceBenchmarks : PersistenceBenchBase
             TimeSpan.FromSeconds(30), 10, default);
         EnsureFullLease(msgs);
         for (int i = 0; i < BatchSize; i++)
-            _outbox.AddMessage(NewOutboxMessage());
+            await _outbox.AddMessageAsync(NewOutboxMessage());
         return msgs.Count;
     }
 
     [Benchmark]
-    public void Outbox_AddSingle()
-        => _outbox.AddMessage(NewOutboxMessage());
+    public async Task Outbox_AddSingle()
+        => await _outbox.AddMessageAsync(NewOutboxMessage());
 
     // C2'（2026-10-09 优化轮）：k=5 批量写入（多事件保存典型形态）——PG 单 COPY 往返 /
     // MySQL VALUES 单往返（≤16 行路由，2026-10-09 起）/ SQLite 事务内批；与 AddSingle

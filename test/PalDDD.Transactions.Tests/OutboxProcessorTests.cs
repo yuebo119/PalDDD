@@ -201,19 +201,22 @@ public sealed class OutboxProcessorTests
 
         public abstract ValueTask<IReadOnlyList<OutboxMessage>> LeasePendingMessagesAsync(int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct);
 
-        public void AddMessage(OutboxMessage message)
-        { }
+        public ValueTask AddMessageAsync(OutboxMessage message, CancellationToken ct = default)
+            => ValueTask.CompletedTask;
 
-        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages) => new(0);
+        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default) => new(0);
 
-        public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
-            => Interlocked.Increment(ref MarkProcessedCount);
+        public ValueTask MarkProcessedAsync(OutboxMessage message, DateTimeOffset processedAt, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref MarkProcessedCount);
+            return ValueTask.CompletedTask;
+        }
 
-        public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
-        { }
+        public ValueTask MarkDeadAsync(OutboxMessage message, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default)
+            => ValueTask.CompletedTask;
 
-        public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
-        { }
+        public ValueTask ReleaseForRetryAsync(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt, CancellationToken ct = default)
+            => ValueTask.CompletedTask;
 
         public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct) => new(0);
 

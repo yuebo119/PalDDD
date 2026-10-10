@@ -195,7 +195,7 @@ public sealed partial class DialectProbeTests
             TraceParent = "00-abc-def-01",
             TraceState = "probe=1",
         };
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         // #1「Outbox GetPending 返回 1 条」
         var pending = await store.GetPendingMessagesAsync(10, 10, default);
@@ -215,7 +215,7 @@ public sealed partial class DialectProbeTests
         await Assert.That(leased[0].LockedBy).IsEqualTo("probe-owner");
 
         // #5「Outbox MarkProcessed 后无 pending」
-        store.MarkProcessed(leased[0], clock.GetUtcNow());
+        await store.MarkProcessedAsync(leased[0], clock.GetUtcNow());
         await Assert.That(await store.GetPendingMessagesAsync(10, 10, default)).IsEmpty();
 
         // C2'（2026-10-09 优化轮）：批量写入 3 条（≤16 行阈值带）——MySQL 走新参数化多行
@@ -368,7 +368,7 @@ public sealed partial class DialectProbeTests
         var store = new DapperOutboxStore(conn, dbType);
         await using var uow = new DapperUnitOfWork(conn);
         await uow.BeginTransactionAsync(default);
-        store.AddMessage(new OutboxMessage
+        await store.AddMessageAsync(new OutboxMessage
         {
             Type = "probe.ambienttx.v1",
             Payload = [9],
