@@ -37,7 +37,7 @@
 | --- | --- | --- |
 | smoke 分配断言 | `-- --smoke`（退出码 1 即红） | 每次跑测 |
 | Medium 水位对照 | `--framework` / `--app` / `--infra` 复跑 | 节点审计 |
-| 回归自动归因 | EPSL perf-bisect（设计稿：C:\Users\Andy\ZCodeProject\perf-template\audit\bisect-design.md） | 门禁红且复测确认非环境态 |
+| 回归自动归因 | EPSL perf-bisect（设计稿：~/.zcode/perf-template/audit/bisect-design.md） | 门禁红且复测确认非环境态 |
 
 ## 6. 修订触发
 
