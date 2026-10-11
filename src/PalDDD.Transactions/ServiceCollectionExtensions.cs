@@ -34,6 +34,8 @@ public static class ServiceCollectionExtensions
             // C1（perf-opt-sweep）：发布并行度守卫——负值无意义；scopeFactory 缺失的
             // 直构造场景在并行路径运行期 fail-fast（探针测试在案）
             .Validate(static options => options.MaxDegreeOfParallelism >= 1, "Outbox MaxDegreeOfParallelism must be at least 1.")
+            // T3.1（2026-10-11 优化实施轮）：发布确认流水线窗口守卫——负值无意义（1 = 串行默认）
+            .Validate(static options => options.MaxInFlightPublishes >= 1, "Outbox MaxInFlightPublishes must be at least 1.")
             .ValidateOnStart();
         services.TryAddScoped<OutboxBatchProcessor>();
         services.AddHostedService<OutboxProcessor>();

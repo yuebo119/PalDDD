@@ -535,6 +535,16 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 > **T1.2 端到端定论：积压排空 56×（5,072ms → 90ms，RatioSD 8%）**——旧形态下 5.07s 中 4.5s 是纯批间睡眠，批处理净工作仅 ~80ms（9 批 × ~9ms）；自适应形态吞吐上限被真实工作接管。RTT=20 档的 25.5s 中 20s 是逐条发布确认的串行等待（1000 × 20ms）——**T3.1 流水线化的理论收益上限即此（~4.6×）**；RTT=0 档的 ~90μs/msg 净工作即 **T2.1 批量标记的收益锚**（现标记段为逐条 UPDATE）。首跑实录：medium 采样撞 InProcess 单基准 5 分钟上限（与 coverage×strict 同族的车道级不兼容，多秒级 op 专属），改专用采样档后双类 exit 0 零守卫违规。
 
+**T3.1 发布确认流水线化（`OutboxOptions.MaxInFlightPublishes`，默认 1 = 串行逐字不变；>1 启用 FIFO 窗口，标记顺序保启动序，失败语义逐项镜像串行路径，锁定测试三件三连绿）——量具 A/B 定论（窗口 16）**：
+
+| RTT（假 broker 确认延迟） | 窗口 1（串行基线） | 窗口 16（流水线） | 收益 |
+|---|---:|---:|---:|
+| 0ms | 98.2 ms | 105.8 ms | 无损无益（RTT 为零时窗口无意义；分配 4.24→4.35MB +2.6% 为窗口队列与任务包装） |
+| 1ms | 10,052 ms | **776 ms** | **12.9×** |
+| 20ms | 25,647 ms | **1,971 ms** | **13.0×** |
+
+> **定论：broker 确认往返主导的投递形态下，流水线窗口收益 ~13×**（超过 T0.2 时估算的 4.6× 理论上限——窗口跨整批预发 + 标记与发布重叠的双重效应；RTT=1 档的串行基线 10s 系 Windows Task.Delay(1ms) 实际粒度 ~10ms 所致，相对收益不受影响）。同轮节奏对照复测：Adaptive1ms 88.75ms vs Fixed500 5,080ms（57.3×，与 T0.2 定论同带）。**推荐形态：远程 broker 部署开窗口 16~64（消费方具备 Inbox 幂等前提；Kafka 须 enable.idempotence 保序，语义声明见 OutboxOptions.MaxInFlightPublishes XML doc）**；本地/零延迟 broker 维持默认 1。
+
 **T2.2 移植否决（PalORM EventLog PG 单语句 Any 追加——零收益回退，防重复提议留档）**：照 Dapper 侧同款实现 INSERT..SELECT..RETURNING 快路径（Ulid 裸传 Npgsql 参数首跑即抛 InvalidCastException，修为字符串后快路径确认激活——分配形态变化 10.2→11.4KB 为证），PG strict 实测 **2,188μs（E10.8%）vs 两往返原路径 2,072~2,273μs 同带，零收益且分配略高 → 回退**。**附带勘正（T0.1 转正结论修正）**：单语句不降耗时直接证伪「PalORM 慢 Dapper 2× 的主因是两往返形态」——真因是 **PalORM 会话路径的每往返开销本身**（同库同 SQL：PalORM 单往返 ~2.2ms / 双往返 ~2.2ms vs Dapper 单往返 ~0.5ms、双往返 ~0.98ms），方向在 DataSession 层或基准夹具连接形态（LeaseOnly 同证：PalORM 单往返租约 2.3~2.6ms vs Dapper 1.6~1.7ms），未隔离——归 PalORM 上游适配层调查项，本仓库内无改靶（对齐 P7/P8 探针否决先例：否决即回退不留死代码）。Dapper 侧快路径维持不变（其 -15% 收益在往返主导形态成立）。附带沉淀：Any 版本跨方言行为等价测试三件 + EventId 重复分类测试入 PalORM.Tests（对原路径同样有效的回归网）。
 
 ## 历史烟测归档（2026-06-28，SDK preview.5）
