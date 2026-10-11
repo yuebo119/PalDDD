@@ -1441,6 +1441,7 @@ class PalDDD.Transactions.OutboxOptions
   property System.TimeSpan LeaseDuration
   property System.String LeaseOwner
   property System.Int32 MaxDegreeOfParallelism
+  property System.Int32 MaxInFlightPublishes
   property System.Int32 MaxRetryCount
   property System.TimeSpan MaxRetryDelay
   property System.TimeSpan PollInterval

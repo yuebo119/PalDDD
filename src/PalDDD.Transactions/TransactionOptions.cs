@@ -100,6 +100,24 @@ public sealed class OutboxOptions
     /// </para>
     /// </summary>
     public int MaxDegreeOfParallelism { get; set; } = 1;
+
+    /// <summary>
+    /// 发布确认流水线窗口（T3.1，2026-10-11 优化实施轮）——分区内同时处于 in-flight 的
+    /// 发布确认数上限。<b>默认 1 = 串行逐条确认（既有行为逐字不变）</b>；<c>&gt;1</c> 启用
+    /// FIFO 流水线：broker 确认往返不再逐条串行相乘（收益量级见 performance.md 投递吞吐段：
+    /// RTT 主导场景为窗口量级）。
+    /// <para>
+    /// ⚠️ 语义边界：①分区内<b>标记顺序仍按启动序</b>（RabbitMQ 单 channel 帧序由
+    /// <c>_confirmSemaphore</c> 天然保序；Kafka producer 队列保序，但<b>重试乱序须启用
+    /// enable.idempotence 才有保证</b>）；消费方应具备 Inbox 幂等，乱序窗口随本值增大。
+    /// ②失败路径（退避重试/死信）与串行形态逐项一致。③broker 线程安全前提与
+    /// <see cref="MaxDegreeOfParallelism"/> 同（Kafka producer 天然多路 / RabbitMQ.Client 7.x
+    /// 共享 channel 并发发布已核实）。④与 <see cref="MaxDegreeOfParallelism"/> 正交：
+    /// 后者分 worker（各自串行窗口），本值在每个 worker 的分区内生效。启动期经
+    /// <c>ValidateOnStart</c> 校验 ≥ 1。
+    /// </para>
+    /// </summary>
+    public int MaxInFlightPublishes { get; set; } = 1;
 }
 
 /// <summary>收件箱幂等性运行时选项。</summary>

@@ -41,6 +41,10 @@ public class OutboxDeliveryDrainBenchmarks : PersistenceBenchBase
     [Params(0, 1, 20)]
     public int RttMs { get; set; }
 
+    /// <summary>T3.1 发布确认流水线窗口 A/B：1 = 串行（现状基线），16 = FIFO 流水线。</summary>
+    [Params(1, 16)]
+    public int InFlight { get; set; }
+
     private SqliteConnection _conn = null!;
     private DapperOutboxStore _store = null!;
     private FakeDelayBroker _broker = null!;
@@ -62,7 +66,11 @@ public class OutboxDeliveryDrainBenchmarks : PersistenceBenchBase
         _broker = new FakeDelayBroker(TimeSpan.FromMilliseconds(RttMs), _serializer, catalog);
         _processor = new OutboxBatchProcessor(
             _store, _broker, _serializer, catalog,
-            new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions { BatchSize = 100 }),
+            new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
+            {
+                BatchSize = 100,
+                MaxInFlightPublishes = InFlight,
+            }),
             NullPalLogger<OutboxBatchProcessor>.Instance);
     }
 
