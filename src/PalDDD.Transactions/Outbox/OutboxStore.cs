@@ -11,15 +11,15 @@ namespace PalDDD.Transactions;
 /// 生产实现必须提供原子租约获取语义，避免多实例重复发布。<br/>
 /// EF Core / SQL Server 实现由 PalDDD.Transactions.EFCore 适配包提供。
 /// <para>
-/// 📣 <b>v4.0 破坏性变更预告（ADR-020 → ADR-026，维护者裁决 2026-08-26 / 2026-10-10）</b>：
-/// ① <b>跨栈 fencing 契约统一</b>——**已执行（ADR-026 ②，2026-10-10）**：三栈终态写
-/// （MarkProcessed/MarkDead/ReleaseForRetry）统一为「门控拒绝（租约 token 失配/非当前
+/// 📣 <b>已在 v4.0 执行的破坏性变更（ADR-020 → ADR-026，维护者裁决 2026-08-26 / 2026-10-10）</b>：
+/// ① <b>跨栈 fencing 契约统一</b>——已执行（ADR-026 ②，2026-10-10）：三栈终态写
+/// （MarkProcessedAsync/MarkDeadAsync/ReleaseForRetryAsync）统一为「门控拒绝（租约 token 失配/非当前
 /// 持有者）→ 零 DB 写 + 零内存变异；成功（affected&gt;0）→ DB 全套更新 + 入参对象全套
 /// 六字段回写」。历史分叉（Dapper 成功仅回写租约两字段、MarkDead 无视守卫无条件清租约、
 /// EF 主路径零入参回写）同轮收口；EF 跟踪实体的并发令牌边界见各实现 remarks。
-/// ② <b>异步化</b>：AddMessage/MarkProcessed/MarkDead/ReleaseForRetry 等同步方法改异步
-/// 签名 + AddMessagesAsync 补 CancellationToken（PalORM 栈 7 处 sync-over-async 的根因）——
-/// 排队中（ADR-026 ③④）。实现者请在 v4.0 前关注迁移指引。
+/// ② <b>异步化</b>——已执行（ADR-026 ③④，2026-10-10）：AddMessage/MarkProcessed/MarkDead/
+/// ReleaseForRetry 同步方法删除改异步签名 + AddMessagesAsync 补 CancellationToken（PalORM 栈
+/// 7 处 sync-over-async 清零）。迁移指引见 CHANGELOG [4.0.0] Changed [Breaking] 条目。
 /// </para>
 /// </remarks>
 public interface IPalOutboxStore

@@ -4,7 +4,7 @@
 
 **A DDD/CQRS/Event Sourcing infrastructure framework for .NET 11: zero runtime reflection, complete Native AOT pipeline, no over-abstraction.**
 
-[![NuGet](https://img.shields.io/badge/nuget-v3.3.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
+[![NuGet](https://img.shields.io/badge/nuget-v4.0.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)
 [![CI](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml)
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
@@ -549,7 +549,7 @@ It relies on .NET 11 static features (JsonSerializerContext source-generation en
 Does not support .NET 8/9/10 (single target net11.0). Three AOT limitations (honestly declared via source `[RequiresDynamicCode]`): ① Saga ChildSaga child-flow dispatch (`MakeGenericMethod`/`MakeGenericType`, see `Saga.cs`) and ② dynamic event routing share the same root; ③ `ISpecification.Compile()` expression-tree compilation is unsupported under Native AOT — in AOT scenarios use `ToExpression()` and pass it to your query provider (the in-memory path `IsSatisfiedBy` uses `Expression.Compile`, unsupported under Native AOT). No built-in EventStore snapshot mechanism — projects that need a snapshot strategy must implement it themselves. CQRS pipeline note: the parameterless open-generic `AddPalPipelineBehaviors()` triggers `AotCannotCreateGenericValueType` for value-type responses under Native AOT; AOT apps use `AddPalCommandHandler<T...>` or the explicit `AddPalPipelineBehaviors<TRequest, TResponse>()` (the two registrations are first-wins and mutually exclusive).
 
 **Who is using it in production?**
-Current version v3.3.0 (tag v3.3.0 published; SemVer minor: zero public API changes and no breaking behavior changes — the release carries consumer-visible dependency upgrades (PalORM 6.3.1 / Confluent.Kafka 2.16.0 / NativeCompressions 1.0.1) plus Kafka broker background observability; see the `[3.3.0]` section in CHANGELOG). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects; the test measurement basis is in footnote ¹ at the top. You are welcome to try it in non-production environments and provide feedback.
+Current version v4.0.0 (tag v4.0.0 published; SemVer major — the ADR-026 contract window: `IPalOutboxStore` four sync methods removed in favor of async signatures (breaking; migration map in the `[4.0.0]` Changed [Breaking] entry of CHANGELOG), cross-stack fencing contract unified for terminal outbox writes, `Dispatcher` instance-registration path plus `IImmediateWriteOutboxStore`/`ISagaLeaseBatchStore` added, MySQL ≥8.0.18 lease SKIP LOCKED, PalORM 6.4.1 dependency uplift and the EPSL performance-fix family; public API snapshot +46/−25). The core layers (Entity, DomainEvent, CQRS Dispatcher, Outbox, Inbox) have been validated in the integration test suites of multiple internal projects; the test measurement basis is in footnote ¹ at the top. If you implement `IPalOutboxStore` yourself, read the CHANGELOG migration notes before upgrading. You are welcome to try it in non-production environments and provide feedback.
 
 ## Contributing
 

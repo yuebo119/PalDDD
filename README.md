@@ -4,7 +4,7 @@
 
 **面向 .NET 11 的 DDD/CQRS/Event Sourcing 基础设施框架：零运行时反射、Native AOT 链路完整、无过度抽象。**
 
-[![NuGet](https://img.shields.io/badge/nuget-v3.3.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
+[![NuGet](https://img.shields.io/badge/nuget-v4.0.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)
 [![CI](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml/badge.svg)](https://github.com/yuebo119/PalDDD/actions/workflows/ci.yml)
 [![AOT](https://img.shields.io/badge/Native_AOT-✅_Core_+_PalORM-green)](docs/aot.md)
@@ -543,7 +543,7 @@ MediatR 是进程内命令分发器。Pal.DDD 内置与之等价的 Dispatcher +
 不支持 .NET 8/9/10（单目标 net11.0）。AOT 场景三处限制（源码 `[RequiresDynamicCode]` 诚实声明）：① Saga 的 ChildSaga 子流程分发（`MakeGenericMethod`/`MakeGenericType`，见 `Saga.cs`）与②动态事件路由同源；③ `ISpecification.Compile()` 表达式树编译在 Native AOT 下不受支持，AOT 场景改用 `ToExpression()` 传给查询提供者（内存路径 `IsSatisfiedBy` 走 `Expression.Compile`，Native AOT 下不支持）。不含内置 EventStore 快照机制，需要快照策略的项目自行实现。CQRS 管道注意：无参开放泛型 `AddPalPipelineBehaviors()` 在 Native AOT 下对值类型响应触发 `AotCannotCreateGenericValueType`，AOT 应用改用 `AddPalCommandHandler<T...>` 或显式 `AddPalPipelineBehaviors<TRequest, TResponse>()`（两种注册先到先得互斥）。
 
 **生产环境有谁在用？**
-当前版本 v3.3.0（tag v3.3.0 发布，SemVer Minor：零公共 API 变更、无破坏性行为变更——变更面为依赖消费者可见上移（PalORM 6.3.1 / Confluent.Kafka 2.16.0 / NativeCompressions 1.0.1）与 Kafka broker 后台可观测增强，见 CHANGELOG `[3.3.0]` 段）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试口径见文首速览表脚注¹。欢迎在非生产环境中试用并反馈。
+当前版本 v4.0.0（tag v4.0.0 发布，SemVer Major——ADR-026 契约窗口：`IPalOutboxStore` 四同步方法异步化（签名破坏，迁移映射见 CHANGELOG `[4.0.0]` Changed [Breaking] 条）、Outbox 终态写 fencing 契约跨栈统一、`Dispatcher` 实例注册路径与 `IImmediateWriteOutboxStore`/`ISagaLeaseBatchStore` 新增、MySQL ≥8.0.18 租约 SKIP LOCKED、PalORM 6.4.1 依赖上移与 EPSL 性能修复族；公共 API 快照 +46/−25）。核心层（Entity、DomainEvent、CQRS Dispatcher、Outbox、Inbox）在多个内部项目的集成测试套件中验证通过，测试口径见文首速览表脚注¹。自定义 `IPalOutboxStore` 实现方升级前请先读 CHANGELOG 迁移说明。欢迎在非生产环境中试用并反馈。
 
 ## 贡献
 

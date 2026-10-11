@@ -39,8 +39,9 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         OutboxMessages.AddRange(messages);
         try
         {
-            // 注：接口 IPalOutboxStore.AddMessagesAsync 无 CancellationToken 参数（v23 轮已
-            // 裁决接口异步化属 v4.0 破坏性变更），取消信号不传播为已知契约限制
+            // 注：v8/v23 声明的「接口无 CancellationToken 参数、取消信号不传播」契约限制
+            // 已在 v4.0 收口（ADR-026 ④：AddMessagesAsync 签名收 ct）；本 EF 实现的
+            // SaveChangesAsync 保持无参调用（ct 不下发 EF 管线，与拦截器批量路径传 default 同款口径）
             return await SaveChangesAsync().ConfigureAwait(false);
         }
         catch (DbUpdateException)
