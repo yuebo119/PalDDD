@@ -461,7 +461,20 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **发现③ MySQL TRUNCATE 时代首组并发数字（方法学时代注）**：TRUNCATE 在 MySQL 是 DDL（隐式提交 + 表重建），逐迭代清场成本远高于 PG——SeedOnly_800 从 DELETE 时代 18.7ms 升至 **110.8ms**（PG 同语义 9.4ms 与 DELETE 时代持平），Drain 波段绝对值同被抬高（串行 207.6ms vs DELETE 时代 61.3ms）。**两时代绝对值不可比**（PG 侧同款勘正纪律的 MySQL 延伸）；同轮内并发比值有效：8W/串行 = Dapper 0.85 / EF 形态 0.85 / PalORM 0.86，**死锁零复现**（ADR-025 SKIP LOCKED 双模板在 strict 40×3 采样深度下互斥不变量全波通过）。
 
-**方向性偏移登记（待归因 [推断]）**：PalORM 远程 EventLog/Idempotency 双方言一致约 2× 慢于 10-09 账本——EventLog PG 2,187.9μs（账本 1,129.7）/ MySQL 5,126.1μs（2,157.5）；Idempotency PG 3,210.1μs（1,371.2）/ MySQL 8,963.9μs（3,587.4）。同轮 Dapper 侧无此形态（EventLog PG +15% / MySQL +26% 属环境带），Dispatcher（188→155ns）与 InMemory EventLog（6.8→4.2μs）反向变快。v4.0 全链异步化后首次全量 strict，候选=异步化/拦截器契约分派对 PalORM 路径的副作用；**未做专项 A/B，不构成回归结论**，登记待单独立项归因。
+**方向性偏移登记（待归因 [推断]）→ 已归因收口（2026-10-11 优化实施轮 M1，本段为登记原文，结论见下方「T0.1 归因结论」）**：PalORM 远程 EventLog/Idempotency 双方言一致约 2× 慢于 10-09 账本——EventLog PG 2,187.9μs（账本 1,129.7）/ MySQL 5,126.1μs（2,157.5）；Idempotency PG 3,210.1μs（1,371.2）/ MySQL 8,963.9μs（3,587.4）。同轮 Dapper 侧无此形态（EventLog PG +15% / MySQL +26% 属环境带），Dispatcher（188→155ns）与 InMemory EventLog（6.8→4.2μs）反向变快。v4.0 全链异步化后首次全量 strict，候选=异步化/拦截器契约分派对 PalORM 路径的副作用；**未做专项 A/B，不构成回归结论**，登记待单独立项归因。
+
+**T0.1 归因结论（2026-10-11，三重判别实验，定性：参照系勘正，无回归）**：
+
+| 判别 | 实验 | 结果 |
+|---|---|---|
+| ① 清场语句单变量 A/B | 同日同容器，TRUNCATE→DELETE 临时改（S3 后还原） | 只回收 15~20%（PalORM EventLog 2072→1723μs、Idempotency 3335→2876μs）——**否证 TRUNCATE 主因假说** |
+| ② 参照提交本尊复跑 | worktree 检出 33f4dba（治轮二手记 1022/1425μs 的代码状态：DELETE 形态 + PalORM 6.3.1）当天 strict 重跑 | **2273/3133μs**——与本轮 dev 三次独立读数（2072/2188/2273）同带，**1022/1425μs 在其本尊提交上不可复现** |
+| ③ 环境稳定性对照 | Dapper 锚点跨三天比对 | 逐字节稳定：EventLog DELETE 822.0μs ≈ 优化轮三 strict 820μs；AddSingle 630.4 ≈ 630μs——排除机器/容器环境漂移 |
+
+- **定性收口：无产品回归、无上游包回归（PalORM 6.3.1↔6.4.0 同带）——「2× 偏移」是对不可复现参照系的误比**。治轮二旋钮表无旋基线（1022/1425μs，n=1，双容器轮）与 10-09 medium 原值（1129.7μs）均不可复现；可复现稳态 = PalORM EventLog ~1.7ms（DELETE 清场）/ ~2.1-2.3ms（TRUNCATE）、Idempotency ~2.9ms（DELETE）/ ~3.1-3.3ms（TRUNCATE）。
+- **结构性结论转正**：PalORM EventLog/Idempotency 慢 Dapper 约 2×（同日 DELETE 对照 1723/2876 vs 822/1394μs）为真实差距，形态根因 = PalORM 追加仍是 MAX 预查+INSERT 两往返（`PalOrmEventLog.cs` 类头声明）vs Dapper PG 单语句快路径——**T2.2 移植单语句 Any 追加预期回收差距的大部，优先级上调**。
+- **方法学登记（TRUNCATE 侧效应，引用须带清场形态标签）**：TRUNCATE 使 aux 表（events/idempotency_records）逐迭代页冷化，EventLog/Idempotency 较 DELETE 形态系统性 +8~28%（Dapper EventLog 822→1051μs +28%、PalORM EventLog 1723→2072 +20%、PalORM Idempotency 2876→3335 +16%）；Drain/SeedOnly 波段维持既有两时代声明。
+- **勘正链**：全量复跑轮「偏移登记待归因」→ 本轮证伪为参照系问题。治轮二旋钮表（deployment-performance.md §2.1）的 EventLog 1,022μs / Idempotency 1,425μs / Lease 98.0ms 三格无旋基线为**不可复现读数**（2026-10-11 判别）——旋钮 A/B 属同轮对内比较，**方向性结论（写路径变慢 1.7~2.1×）不受影响**，绝对基线值不再引用。
 
 **远程双栈吞吐（strict，本轮读数）**：
 
@@ -541,7 +554,7 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 2. SmartEnum.FromValue/TryFromValue 两项 Error/Mean >15%（ns 级固有抖动）：如需正式引用其计时，提升配置（严格档 5/10/15）复测；当前以零分配事实为准。
 3. 保留 `--smoke` 作为秒级趋势检查 + 分配预算判定（2026-10-08 起带断言）；计时为单轮无统计效力，不替代正式报告。
 4. **特性面缺口登记（2026-10-09 收尾轮，防「30 类全覆盖」被误读为特性面全覆盖）**：~~①~⑤⑧~~（全部落地）；⑦ 四栈/方言面收尾——Dapper+PalORM 双栈 PG/MySQL 真跑 ✓ + **EventLog/Idempotency 真库层补齐 ✓**（2026-10-09 后段：双栈四格全出数，见 EventLog/Idempotency 口袋注）、EF 栈**租约 SQL 形态**验证 ✓（`MySqlSkipLockedShapeBenchmarks`：零死锁+互斥+1.75× 加速）、PG 方言特性 ✓（Pipeline 单往返/读写分离路由/LISTEN-NOTIFY 往返，COPY 隐含在种子路径）。**死锁已裁决并落地（ADR-025）**：版本探测双模板使 Dapper/PalORM MySQL ≥8.0.18 进入 SKIP LOCKED 形态（复跑双栈死锁归零，见 ADR-025 落地复跑注），ADR-024 对 <8.0.18/MariaDB 回退路径继续有效。**登记残余（四项，均有上游/量纲理由）**：① EF 栈级车道待 Npgsql.EF/Pomelo 出 EF 11 rc 配套版（2026-10-09 实证 NU1107/NU1102，SQL 形态车道先行为其等价物）；② `PostgreSqlOutboxNotifier` 服务化推送延迟（LISTEN-NOTIFY 底层能力已测 461μs；服务化形态属异步服务量纲，归集成测试）；③ **mysql:8.0.17 旧版镜像回归**（ADR-025 后续动作 2：验证回退模板行为与现状逐字一致，需拉取旧版镜像）；④ broker 发布路径（Kafka/RabbitMQ 需 broker 环境，正确性已由 Messaging.Integration 覆盖，性能归有 broker 环境时补）。另：PG Dapper 并发组 Error >15% 点值待严格档复测、8W 回落形态待复测；READ COMMITTED 对照实验留档于 ADR-025 被否决方案。
-5. **全量复跑轮新登记（2026-10-10）**：① coverage × strict 车道级不兼容——InProcess 单基准 5 分钟硬上限对 ns 级快类（自动放大至百万 ops/迭代）不适用，处置 = coverage 恒 medium 档（发现②，本轮 medium 实测通过）；② PalORM 远程 EventLog/Idempotency 约 2× 偏移待专项 A/B 归因（候选 v4.0 异步化副作用，不构成回归结论，见「全量复跑轮」偏移登记）。
+5. **全量复跑轮新登记（2026-10-10）**：① coverage × strict 车道级不兼容——InProcess 单基准 5 分钟硬上限对 ns 级快类（自动放大至百万 ops/迭代）不适用，处置 = coverage 恒 medium 档（发现②，本轮 medium 实测通过）；~~② PalORM 远程 EventLog/Idempotency 约 2× 偏移待专项 A/B 归因~~（**2026-10-11 T0.1 归因收口：参照系勘正非回归**，见「T0.1 归因结论」段；结构性 2× 差距转正为 T2.2 优化靶点——PalORM 单语句 Any 追加移植）。
 
 ## 发布判断
 
