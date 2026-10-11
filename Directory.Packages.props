@@ -5,7 +5,11 @@
        2026-10-08 全量核新（双源实测）：11 线 rc.2 仍未发维持 rc.1，PalORM ×5 → 6.3.1（6.2/6.3/6.3.1 九日三连发）、
        TUnit/TUnit.FsCheck → 1.73.5、Confluent.Kafka → 2.16.0、NativeCompressions → 1.0.1（跨 1.0 稳定线）、
        SqlClient → 7.1.1（零引用声明级）；Verify.TUnit 按 2026-09-23 裁决停 32.x（license-policy 禁 ≥33），
-       BDN（0.16.0-preview.2）/Ulid（1.4.2-rc.0）/Unsafe（7.0.0-preview 线）仅预发布不升，Platforms 8.0 后停更） -->
+       BDN（0.16.0-preview.2）/Ulid（1.4.2-rc.0）/Unsafe（7.0.0-preview 线）仅预发布不升，Platforms 8.0 后停更；
+       2026-10-11 全量升级：PalORM ×5 → 6.4.0、NativeCompressions → 1.1.0、TUnit/TUnit.FsCheck → 1.73.19、
+       Testcontainers ×4 → 4.16.0、CAP ×3 → 10.0.2（MIT nuspec 实证，bench 对比锚随最新线）；MediatR 维持
+       12.5.0（13+ 商业许可）、Verify.TUnit 维持 32.0.1（禁令）、微软 11 线维持 rc.1（rc.2/GA 未发）；
+       2026-10-11 同日二升：PalORM ×5 → 6.4.1（f57076b 后当日新发补丁位，契约复核+面板同带） -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
@@ -43,14 +47,14 @@
          2026-09-13 用户裁决"铺垫不动"，启用路径见 DapperAotInitializer.cs 头注） -->
     <PackageVersion Include="Dapper.AOT" Version="1.1.0" />
     <!-- PalORM 适配器 — 面向 Native AOT 的 .NET 11 微 ORM（源生成 + 编译期 SQL，真 AOT 安全）
-         6.3.1（2026-10-08 升位，6.x 线内 6.1.0 → 6.3.1 跨 6.2.0/6.3.0/6.3.1 九日三连发）：NuGet 无
+         6.4.1（2026-10-11 同日二升，6.x 线内 6.4.0 → 6.4.1 补丁位）：NuGet 无
          releaseNotes 渠道（registration API 仅固定描述），按 PD9 破坏性只有编译+测试能证——
          升位实证见 CHANGELOG [Unreleased] Dependencies 段与适配层注释 -->
-    <PackageVersion Include="PalORM.Core" Version="6.3.1" />
-    <PackageVersion Include="PalORM.SourceGen" Version="6.3.1" />
-    <PackageVersion Include="PalORM.Sqlite" Version="6.3.1" />
-    <PackageVersion Include="PalORM.PostgreSql" Version="6.3.1" />
-    <PackageVersion Include="PalORM.MySql" Version="6.3.1" />
+    <PackageVersion Include="PalORM.Core" Version="6.4.1" />
+    <PackageVersion Include="PalORM.SourceGen" Version="6.4.1" />
+    <PackageVersion Include="PalORM.Sqlite" Version="6.4.1" />
+    <PackageVersion Include="PalORM.PostgreSql" Version="6.4.1" />
+    <PackageVersion Include="PalORM.MySql" Version="6.4.1" />
     <!-- MemoryPack 二进制序列化（AOT 兼容） -->
     <PackageVersion Include="MemoryPack" Version="1.21.4" />
     <!-- Dapper.FluentMap 已移除 — 改用 Dapper.DefaultTypeMap.MatchNamesWithUnderscores -->
@@ -63,24 +67,31 @@
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
     <PackageVersion Include="SQLitePCLRaw.core" Version="3.0.5" />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
+    <!-- 2026-10-09 横向对比轮：bench 对比车道消费——MediatR 锚定 12.x 最后开源线
+         （13.0.0 起 Lucky Penny 商业许可，对齐 license-policy「禁商业许可」裁决；
+         12.5.0 nuspec 为 Apache-2.0 白名单内）；CAP 全家 MIT -->
+    <PackageVersion Include="MediatR" Version="12.5.0" />
+    <PackageVersion Include="DotNetCore.CAP" Version="10.0.2" />
+    <PackageVersion Include="DotNetCore.CAP.RabbitMQ" Version="10.0.2" />
+    <PackageVersion Include="DotNetCore.CAP.MySql" Version="10.0.2" />
     <PackageVersion Include="MySqlConnector" Version="2.6.2" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="11.0.0-rc.1.26425.128" />
     <!-- 消息代理适配器（可选） -->
     <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
     <PackageVersion Include="Confluent.Kafka" Version="2.16.0" />
     <!-- 测试基础设施 — TUnit（源生成器测试框架 · MTP） -->
-    <PackageVersion Include="TUnit" Version="1.73.5" />
+    <PackageVersion Include="TUnit" Version="1.73.19" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <!-- 属性测试 — FsCheck + TUnit 集成 -->
     <PackageVersion Include="FsCheck" Version="3.4.0" />
-    <PackageVersion Include="TUnit.FsCheck" Version="1.73.5" />
+    <PackageVersion Include="TUnit.FsCheck" Version="1.73.19" />
     <!-- 快照测试 — Verify + TUnit 集成 -->
     <PackageVersion Include="Verify.TUnit" Version="32.0.1" />
     <!-- 集成测试 — Testcontainers -->
-    <PackageVersion Include="Testcontainers.Kafka" Version="4.15.0" />
-    <PackageVersion Include="Testcontainers.RabbitMq" Version="4.15.0" />
-    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.15.0" />
-    <PackageVersion Include="Testcontainers.MySql" Version="4.15.0" />
+    <PackageVersion Include="Testcontainers.Kafka" Version="4.16.0" />
+    <PackageVersion Include="Testcontainers.RabbitMq" Version="4.16.0" />
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.16.0" />
+    <PackageVersion Include="Testcontainers.MySql" Version="4.16.0" />
 
     <!-- 传递依赖版本覆盖 — System 包最新版本 -->
     <!-- P2 恢复（二十六轮验证轮 W2）：下列五条是 CentralPackageTransitivePinningEnabled=true 激活的
@@ -105,7 +116,7 @@
     <!-- 传递依赖版本固定 — 覆盖过时的传递依赖 -->
     <PackageVersion Include="System.Reflection.Metadata" Version="11.0.0-rc.1.26425.128" />
     <!-- 原生压缩绑定 — LZ4 / ZStandard (Cysharp)。NativeCompressions.OpenZL 已移除（八轮评审：零使用的死依赖）；
-         1.0.1（2026-10-08 升位）：0.x 线转 1.0 稳定线，破坏面由编译+往返测试实证（NativeCompressionTests） -->
-    <PackageVersion Include="NativeCompressions" Version="1.0.1" />
+         1.1.0（2026-10-11 升位）：1.0 线内补丁位升级，破坏面由编译+往返测试实证（NativeCompressionTests） -->
+    <PackageVersion Include="NativeCompressions" Version="1.1.0" />
   </ItemGroup>
 </Project>

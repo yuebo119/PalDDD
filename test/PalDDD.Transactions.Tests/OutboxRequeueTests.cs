@@ -34,7 +34,7 @@ public class OutboxRequeueTests
     {
         var store = new InMemoryOutboxStore();
         var msg = MakeDeadMessage();
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         // nextAttempt 设为过去时间，确保 GetPendingMessagesAsync 能取到（条件：next_attempt_at <= now）
         var nextAttempt = DateTimeOffset.UtcNow.AddSeconds(-1);
@@ -57,7 +57,7 @@ public class OutboxRequeueTests
         var store = new InMemoryOutboxStore();
         var msg = MakeDeadMessage();
         msg.Status = OutboxStatus.Pending;
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         var rows = await store.RequeueDeadAsync(msg.Id, DateTimeOffset.UtcNow, "ops-alice", default);
 
@@ -72,7 +72,7 @@ public class OutboxRequeueTests
         var store = new InMemoryOutboxStore();
         var msg = MakeDeadMessage();
         msg.Status = OutboxStatus.Processed;
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         var rows = await store.RequeueDeadAsync(msg.Id, DateTimeOffset.UtcNow, "ops-alice", default);
 
@@ -96,7 +96,7 @@ public class OutboxRequeueTests
     {
         var store = new InMemoryOutboxStore();
         var msg = MakeDeadMessage(retryCount: 7);
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         await store.RequeueDeadAsync(msg.Id, DateTimeOffset.UtcNow.AddSeconds(-1), "ops-alice", default);
 
@@ -111,7 +111,7 @@ public class OutboxRequeueTests
     {
         var store = new InMemoryOutboxStore();
         var msg = MakeDeadMessage();
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         await store.RequeueDeadAsync(msg.Id, DateTimeOffset.UtcNow.AddSeconds(-1), "ops-bob", default);
 
@@ -129,7 +129,7 @@ public class OutboxRequeueTests
     {
         var store = new InMemoryOutboxStore();
         var msg = MakeDeadMessage();
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         await Assert.That(async () =>
             await store.RequeueDeadAsync(msg.Id, DateTimeOffset.UtcNow, retriedBy, default).AsTask()).Throws<ArgumentException>();
@@ -140,7 +140,7 @@ public class OutboxRequeueTests
     {
         var store = new InMemoryOutboxStore();
         var msg = MakeDeadMessage();
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         await Assert.That(async () =>
             await store.RequeueDeadAsync(msg.Id, DateTimeOffset.UtcNow, null!, default).AsTask()).Throws<ArgumentNullException>();

@@ -1,5 +1,6 @@
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using PalORM;
@@ -35,7 +36,7 @@ namespace PalDDD.PalORM.Stores;
 /// 未挂 cmd.Transaction 的命令抛 InvalidOperationException（MySqlConnector 严格校验）。
 /// </para>
 /// </summary>
-public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
+public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>
     where TProvider : IDbProvider
     where TState : SagaState, new()
 {
@@ -210,12 +211,36 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
                 "Register with AddPalSagaStore<TState>(jsonTypeInfo) or pass it to the constructor. " +
                 "Without it, SaveChangesAsync silently drops all business fields (ITM-228).");
 
-        var existing = await GetByIdAsync(state.SagaId, ct).ConfigureAwait(false);
-
+        // EPSL 地毯审计 2026-10-11 B-3：UPDATE 先行——原「GetByIdAsync 全行 SELECT + 全量
+        // 反序列化做存在性判断」把 O(快照大小) 的传输与 JSON 成本花在只做 null 判断的结果上
+        //（与 DapperSagaStateStore 同款改造）。0 行时轻量存在性探测（COUNT raw command）
+        // 区分「版本冲突」（行在 → 返回 0）与「新行」（INSERT 路径）；行为三态等价。
         // saga_data：STJ 手写序列化（开放泛型 TState，[OwnedJson] 不可用）
         var jsonData = JsonSerializer.Serialize(state, _jsonTypeInfo);
 
-        if (existing is null)
+        // P2 修复（乐观锁快照）：expectedVersion 取调用方加载时的 state.Version（内存快照），
+        // 而非本次新读的 existing.Version（DB 最新快照）——后者使"加载后被他人改过"的窗口
+        // 检测失效（本次读到的已是 bump 后版本，比较恒过，退化为最后写者胜）。
+        // 与 EFCore 版 Version concurrency token（内存快照比对）语义对齐。
+        var expectedVersion = state.Version;
+        var affected = await Session.ExecuteAsync(
+            RequiresJsonbCast
+                ? (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {truncatedError}, error_at = {state.ErrorAt}, saga_data = CAST({jsonData} AS jsonb), leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}"
+                : (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {truncatedError}, error_at = {state.ErrorAt}, saga_data = {jsonData}, leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}",
+            ct).ConfigureAwait(false);
+        if (affected > 0)
+        {
+            state.Version++;
+            state.Error = truncatedError; // v65 P3：rows>0（DB 已更新）才回写调用方对象
+            return affected;
+        }
+
+        // B-3：轻量存在性探测（raw command，COUNT 无数据传输；ITM-243 挂接环境事务）
+        await using var probe = CreateRawCommand();
+        probe.CommandText = "SELECT COUNT(1) FROM saga_states WHERE saga_id = @p0";
+        AddParam(probe, "@p0", state.SagaId.ToString());
+        var exists = Convert.ToInt64(await probe.ExecuteScalarAsync(ct).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture) > 0;
+        if (!exists)
         {
             // P2 修复（八轮）：并发插入同一新 Saga 的 TOCTOU 兜底（与 DapperSagaStateStore 对齐）——
             // PalORM Session.ExecuteAsync 直透底层 provider 异常（DataSession.Query.cs 无包装），
@@ -240,22 +265,36 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>
             return inserted;
         }
 
-        // P2 修复（乐观锁快照）：expectedVersion 取调用方加载时的 state.Version（内存快照），
-        // 而非本次新读的 existing.Version（DB 最新快照）——后者使"加载后被他人改过"的窗口
-        // 检测失效（本次读到的已是 bump 后版本，比较恒过，退化为最后写者胜）。
-        // 与 EFCore 版 Version concurrency token（内存快照比对）语义对齐。
-        var expectedVersion = state.Version;
-        var affected = await Session.ExecuteAsync(
-            RequiresJsonbCast
-                ? (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {truncatedError}, error_at = {state.ErrorAt}, saga_data = CAST({jsonData} AS jsonb), leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}"
-                : (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {truncatedError}, error_at = {state.ErrorAt}, saga_data = {jsonData}, leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}",
-            ct).ConfigureAwait(false);
-        if (affected > 0)
+        // 行在但版本不匹配 = 乐观锁冲突（他实例已写同一 Saga）——契约返回 0
+        return 0;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// EPSL 地毯审计 2026-10-11 B-1：raw command 单语句批量释放（手动 @pN IN 列表——
+    /// PalORM FormattableString 路径不支持集合参数化，见 LeaseActiveSagasAsync 已知限制声明；
+    /// ITM-243 挂接环境事务）。批量上限 = 扫描 batchSize（默认 256）+ 1 个 owner 参数，
+    /// 三方言占位符上限（SQLite 999 / MySQL、PG 65535）内。
+    /// </remarks>
+    public async ValueTask<int> ReleaseLeasesAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return 0;
+
+        await using var cmd = CreateRawCommand();
+        var sb = new StringBuilder("UPDATE saga_states SET leased_by = NULL, leased_until = NULL, version = version + 1 WHERE leased_by = @p0 AND saga_id IN (@p1");
+        AddParam(cmd, "@p0", owner);
+        AddParam(cmd, "@p1", sagas[0].SagaId.ToString());
+        for (var i = 1; i < sagas.Count; i++)
         {
-            state.Version++;
-            state.Error = truncatedError; // v65 P3：rows>0（DB 已更新）才回写调用方对象
+            var name = $"@p{i + 1}";
+            sb.Append(", ").Append(name);
+            AddParam(cmd, name, sagas[i].SagaId.ToString());
         }
-        return affected;
+        sb.Append(')');
+        cmd.CommandText = sb.ToString();
+        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>从 DbDataReader 读取多行 Saga。</summary>

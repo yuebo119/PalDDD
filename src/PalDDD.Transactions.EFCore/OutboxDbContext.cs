@@ -19,14 +19,17 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
 
     /// <inheritdoc/>
-    void IPalOutboxStore.AddMessage(OutboxMessage message)
+    ValueTask IPalOutboxStore.AddMessageAsync(OutboxMessage message, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(message); // v13 姊妹对称：对齐 AddMessagesAsync/InMemory/PalORM 单条守卫（ITM-163 漏网）
         OutboxMessages.Add(message);
+        // 跟踪添加无 I/O——同步完成（v4.0 ③ ADR-026 异步化：写入延迟到上下文 SaveChanges
+        // 的既有语义不变，仅签名异步化）
+        return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc/>
-    async ValueTask<int> IPalOutboxStore.AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
+    async ValueTask<int> IPalOutboxStore.AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
@@ -36,8 +39,9 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         OutboxMessages.AddRange(messages);
         try
         {
-            // 注：接口 IPalOutboxStore.AddMessagesAsync 无 CancellationToken 参数（v23 轮已
-            // 裁决接口异步化属 v4.0 破坏性变更），取消信号不传播为已知契约限制
+            // 注：v8/v23 声明的「接口无 CancellationToken 参数、取消信号不传播」契约限制
+            // 已在 v4.0 收口（ADR-026 ④：AddMessagesAsync 签名收 ct）；本 EF 实现的
+            // SaveChangesAsync 保持无参调用（ct 不下发 EF 管线，与拦截器批量路径传 default 同款口径）
             return await SaveChangesAsync().ConfigureAwait(false);
         }
         catch (DbUpdateException)
@@ -113,7 +117,7 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     /// 与入参快照一致时放行（v30 P3 补快照
     /// 守卫；v33 P3 起持租分支同要求 RetryCount 快照一致，见 <see cref="FencedTarget"/>）。
     /// </remarks>
-    public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
+    public async ValueTask MarkProcessedAsync(OutboxMessage message, DateTimeOffset processedAt, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
 
@@ -121,16 +125,29 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         {
             // ITM-283（R45）：token 拒绝（affected=0 且无异常）提前 return——原兜底查询用同款
             // FencedTarget 守卫必然返回 null，纯冗余 DB 往返；兜底仅 provider 不支持路径需要。
-            // v41 P3 清理：原 `if (affected > 0) return;` 后紧跟无条件 return，恒死分支删除
-            //（affected>0 与 =0 均提前返回，语义不变），返回值不再接收
-            FencedTarget(message)
-                .ExecuteUpdate(s => s
+            // v4.0 ②（ADR-026 fencing 统一）：affected 复收——成功（>0）入参全套六字段回写
+            //（统一为 PalORM/InMemory/Dapper 同轮契约；拒绝时零内存变异）。主消费者
+            // OutboxBatchProcessor 传入的是 AsNoTracking 租约快照（v26 P3），回写安全
+            var affected = await FencedTarget(message)
+                .ExecuteUpdateAsync(s => s
                     .SetProperty(m => m.ProcessedAt, processedAt)
                     .SetProperty(m => m.Status, OutboxStatus.Processed)
                     .SetProperty(m => m.Error, (string?)null)
                     .SetProperty(m => m.NextAttemptAt, (DateTimeOffset?)null)
                     .SetProperty(m => m.LockedBy, (string?)null)
-                    .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null));
+                    .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null), ct).ConfigureAwait(false);
+            // 跟踪态守卫：仅 Detached 快照回写——跟踪实体回写会置 Modified态，后续
+            // SaveChangesAsync 二次 UPDATE 与 ExecuteUpdate 已落库的行撞 RetryCount 并发令牌
+            //（既有测试 ReleaseForRetry_ClearsLeaseAndSchedulesNextAttempt 实证的假冲突形态）
+            if (affected > 0 && Entry(message).State == Microsoft.EntityFrameworkCore.EntityState.Detached)
+            {
+                message.Status = OutboxStatus.Processed;
+                message.ProcessedAt = processedAt;
+                message.Error = null;
+                message.NextAttemptAt = null;
+                message.LockedBy = null;
+                message.LockedUntil = null;
+            }
             return;
         }
         catch (InvalidOperationException)
@@ -140,7 +157,7 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
 
         // 兜底路径：仅 provider 不支持 ExecuteUpdate 时到达（ITM-283 收窄）
         {
-            var tracked = FencedTarget(message).FirstOrDefault();
+            var tracked = await FencedTarget(message).FirstOrDefaultAsync(ct).ConfigureAwait(false);
             if (tracked is not null)
             {
                 tracked.ProcessedAt = processedAt;
@@ -149,16 +166,26 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
                 tracked.NextAttemptAt = null;
                 tracked.LockedBy = null;
                 tracked.LockedUntil = null;
+                // v4.0 ②（ADR-026）：兜底路径同套入参回写（统一契约；同主路径跟踪态守卫）
+                if (Entry(message).State == Microsoft.EntityFrameworkCore.EntityState.Detached)
+                {
+                    message.Status = OutboxStatus.Processed;
+                    message.ProcessedAt = processedAt;
+                    message.Error = null;
+                    message.NextAttemptAt = null;
+                    message.LockedBy = null;
+                    message.LockedUntil = null;
+                }
             }
         }
     }
 
     /// <inheritdoc/>
     /// <remarks>
-    /// ITM-210 修复（三十二轮守卫 → 三十四轮 token 化）：同 <see cref="MarkProcessed"/>——
+    /// ITM-210 修复（三十二轮守卫 → 三十四轮 token 化）：同 <see cref="MarkProcessedAsync"/>——
     /// 租约 token 匹配守卫 + 非关系型回退。
     /// </remarks>
-    public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
+    public async ValueTask MarkDeadAsync(OutboxMessage message, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
@@ -172,14 +199,26 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         {
             // ITM-283：同 MarkProcessed——token 拒绝提前 return，兜底仅 provider 不支持。
             // v41 P3 清理：同款死 if（`if (affected > 0) return;` + 无条件 return）删除
-            FencedTarget(message)
-                .ExecuteUpdate(s => s
+            // ITM-283：同 MarkProcessed——token 拒绝提前 return，兜底仅 provider 不支持。
+            // v4.0 ②（ADR-026 fencing 统一）：affected 复收 + 成功入参全套回写（同 MarkProcessed 形态）
+            var affected = await FencedTarget(message)
+                .ExecuteUpdateAsync(s => s
                     .SetProperty(m => m.ProcessedAt, deadAt)
                     .SetProperty(m => m.Status, OutboxStatus.Dead)
                     .SetProperty(m => m.Error, error)
                     .SetProperty(m => m.NextAttemptAt, (DateTimeOffset?)null)
                     .SetProperty(m => m.LockedBy, (string?)null)
-                    .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null));
+                    .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null), ct).ConfigureAwait(false);
+            // 跟踪态守卫（同 MarkProcessed）：仅 Detached 快照回写
+            if (affected > 0 && Entry(message).State == Microsoft.EntityFrameworkCore.EntityState.Detached)
+            {
+                message.Status = OutboxStatus.Dead;
+                message.ProcessedAt = deadAt;
+                message.Error = error;
+                message.NextAttemptAt = null;
+                message.LockedBy = null;
+                message.LockedUntil = null;
+            }
             return;
         }
         catch (InvalidOperationException)
@@ -189,7 +228,7 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
 
         // 兜底路径：同 MarkProcessed（清理原 `!translated || true` 恒真条件）
         {
-            var tracked = FencedTarget(message).FirstOrDefault();
+            var tracked = await FencedTarget(message).FirstOrDefaultAsync(ct).ConfigureAwait(false);
             if (tracked is not null)
             {
                 tracked.ProcessedAt = deadAt;
@@ -198,6 +237,16 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
                 tracked.NextAttemptAt = null;
                 tracked.LockedBy = null;
                 tracked.LockedUntil = null;
+                // v4.0 ②（ADR-026）：兜底路径同套入参回写（统一契约；同主路径跟踪态守卫）
+                if (Entry(message).State == Microsoft.EntityFrameworkCore.EntityState.Detached)
+                {
+                    message.Status = OutboxStatus.Dead;
+                    message.ProcessedAt = deadAt;
+                    message.Error = error;
+                    message.NextAttemptAt = null;
+                    message.LockedBy = null;
+                    message.LockedUntil = null;
+                }
             }
         }
     }
@@ -221,7 +270,7 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     /// 局部变量，lambda 不再引用可变实体属性；持旧 RetryCount 快照的调用方在行被并发推进后
     /// 其写不再命中。本方法为
     /// MarkProcessed/MarkDead/ReleaseForRetry 三方法共享目标集，一处守卫三方法生效。<br/>
-    /// v43 P2：无租约分支补 <c>Status == Pending</c> 终态守卫（与 <see cref="ReleaseForRetry"/>
+    /// v43 P2：无租约分支补 <c>Status == Pending</c> 终态守卫（与 <see cref="ReleaseForRetryAsync"/>
     /// 的 v33 P3 守卫同形态，该轮三栈收口参照了 RequeueDead 的 Status 守卫形态但 Mark* 未纳入）——
     /// 无租约直呼语义是"未租行的终态化"（Pending 行才可终态化），原守卫可把 Dead 翻 Processed、
     /// Processed 翻 Dead（FencedTarget 三方法共享，一处修复同时收口）。<br/>
@@ -251,14 +300,18 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     /// 升级为租约 token 守卫（<c>(LockedBy, LockedUntil)</c> 标识对匹配，见
     /// <see cref="FencedTarget"/>）——租约过期被重租/释放后，旧 worker 的失败释放影响 0 行，
     /// 不再清掉新租约或误增 retry_count。<br/>
-    /// RetryCount 递增与状态变更在同一 SQL 内原子完成；入参 <paramref name="message"/>
-    /// 不被修改——若其为 ChangeTracker 跟踪实体，同步改内存会在后续 SaveChangesAsync
-    /// 因 RetryCount 并发令牌失配抛出假冲突。<br/>
+    /// RetryCount 递增与状态变更在同一 SQL 内原子完成。<br/>
+    /// **v4.0 ②（ADR-026 fencing 统一）**：成功（affected&gt;0）且入参为 <b>Detached 快照</b>
+    /// 时全套回写（含 <c>RetryCount+1</c>，对齐 Dapper/PalORM/InMemory 统一契约；拒绝零内存
+    /// 变异）。<b>跟踪实体入参自动跳过回写</b>（跟踪态守卫）：回写会置 Modified 态，后续
+    /// SaveChangesAsync 的二次 UPDATE 与已落库行撞 RetryCount 并发令牌（既有测试实证的
+    /// 假冲突形态）。主消费者（OutboxBatchProcessor）传入 AsNoTracking 租约快照（v26 P3），
+    /// 走回写分支统一契约成立。<br/>
     /// ⚠️ <b>Provider 约束（九轮评审声明）</b>：<c>ExecuteUpdate</c> 需要关系型 provider
     /// （SQLite/PG/MySQL/SqlServer 等）；EF InMemory/Cosmos 不支持，本方法会抛
     /// <see cref="InvalidOperationException"/>——非关系型测试场景请用 Dapper/PalORM/InMemory 适配器。
     /// </remarks>
-    public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
+    public async ValueTask ReleaseForRetryAsync(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
@@ -269,20 +322,34 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         // v30 P3：改经 FailureReason.Truncate 共享收口（代理对守卫，见 MarkDead 注释）
         var error = FailureReason.Truncate(failureReason, 2040);
 
-        FencedTarget(message)
+        // v4.0 ②（ADR-026 fencing 统一）：affected 复收 + 成功入参全套回写（对齐 Dapper/PalORM
+        // 同方法形态；拒绝零内存变异）。跟踪实体的令牌失配边界见 remarks
+        var affected = await FencedTarget(message)
             // v33 P3：Status == Pending 守卫——无租约直呼（运维/测试路径）时防把 Processed/Dead
             // 行复活为 Pending（对齐同族 RequeueDeadAsync 的 Status == Dead 守卫；三栈同轮收口：
             // PalOrmOutboxStore.ReleaseForRetry / Dapper SqlTemplates.OutboxReleaseForRetry 同款）。
             // 合法持租路径不误伤：租约只落在 Pending 行上，持租处理中的行恒为 Pending。
             .Where(m => m.Status == OutboxStatus.Pending)
-            .ExecuteUpdate(s => s
+            .ExecuteUpdateAsync(s => s
                 .SetProperty(m => m.RetryCount, m => m.RetryCount + 1)
                 .SetProperty(m => m.Status, OutboxStatus.Pending)
                 .SetProperty(m => m.ProcessedAt, (DateTimeOffset?)null)
                 .SetProperty(m => m.Error, error)
                 .SetProperty(m => m.NextAttemptAt, nextAttemptAt)
                 .SetProperty(m => m.LockedBy, (string?)null)
-                .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null));
+                .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null), ct).ConfigureAwait(false);
+        if (affected > 0 && Entry(message).State == Microsoft.EntityFrameworkCore.EntityState.Detached)
+        {
+            // 跟踪态守卫（同 Mark*）：仅 Detached 快照回写——跟踪实体回写 RetryCount+1 会在
+            // 后续 SaveChangesAsync 撞并发令牌（九轮假冲突形态，既有测试实证）
+            message.Status = OutboxStatus.Pending;
+            message.ProcessedAt = null;
+            message.Error = error;
+            message.NextAttemptAt = nextAttemptAt;
+            message.RetryCount += 1;
+            message.LockedBy = null;
+            message.LockedUntil = null;
+        }
     }
 
     /// <inheritdoc/>

@@ -30,7 +30,7 @@ public abstract class SagaStateDbContext<
         | DynamicallyAccessedMemberTypes.PublicProperties
         | DynamicallyAccessedMemberTypes.NonPublicProperties
         | DynamicallyAccessedMemberTypes.Interfaces)]
-TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
+TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>
     where TState : SagaState
 {
     /// <summary>Saga 状态表</summary>
@@ -245,6 +245,40 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>
                 Entry(state).State = EntityState.Detached;
             throw;
         }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// EPSL 地毯审计 2026-10-11 B-1：ExecuteUpdateAsync 单语句批量释放——绕过变更跟踪器
+    ///（免逐实体 DetectChanges 的 O(跟踪数) 扫描与 B 次往返）。⚠️ 与跟踪器的交互陷阱
+    ///（同文件 v27/v28 Detach 纪律的批量版）：ExecuteUpdate 直写 DB 后，租约期被跟踪的
+    /// 本批实体仍滞留 ChangeTracker 且为 Modified（租约路径已变异 LeasedBy/LeasedUntil +
+    /// BumpVersion 递增）——不 Detach 则：① DB version 已被本语句再 +1，跟踪实体的
+    /// original Version 落后，同 scope 后续任意 SaveChanges 触发
+    /// <see cref="DbUpdateConcurrencyException"/>；② 滞留变异会被后续保存幽灵提交。
+    /// 故成功后全批 Detach（含 0 行路径——DB 已换代，跟踪快照同样作废）。
+    /// </remarks>
+    public async ValueTask<int> ReleaseLeasesAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return 0;
+
+        var ids = sagas.Select(static s => s.SagaId).ToList();
+        var affected = await SagaStates
+            .Where(s => s.LeasedBy == owner && ids.Contains(s.SagaId))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(s => s.LeasedBy, (string?)null)
+                .SetProperty(s => s.LeasedUntil, (DateTimeOffset?)null)
+                .SetProperty(s => s.Version, s => s.Version + 1), ct).ConfigureAwait(false);
+
+        foreach (var saga in sagas)
+        {
+            var entry = Entry(saga);
+            if (entry.State != EntityState.Detached)
+                entry.State = EntityState.Detached;
+        }
+        return affected;
     }
 
     /// <summary>

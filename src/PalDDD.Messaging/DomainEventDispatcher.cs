@@ -73,21 +73,29 @@ internal sealed class IterativeDomainEventDispatcher : IDomainEventDispatcher
         foreach (var @event in events)
             ArgumentNullException.ThrowIfNull(@event);
 
-        var queue = new Queue<Core.DomainEvent>(events);
-        var processed = new HashSet<Guid>(); // 防止循环事件
+        // EPSL 地毯审计 2026-10-11 B-6：移除 new Queue(events) 整份拷贝与单事件路径的
+        // HashSet——:35/:102 语义声明 Handler 不产生新入队事件，队列在生命周期内恒为
+        // 初始列表的纯副本，按下标迭代 IReadOnlyList 等价（fail-fast 上限判 events.Count）。
+        // v17 哨兵 throw 的守卫对象（再入队行为变更）随 Queue 一并结构性消失：入口
+        // events.Count > MaxIterations fail-fast（三十八轮 P2）已完整覆盖该上限语义
+        //（约束初始批量大小），去重由 EventId 承担，二者均保留。
         var maxIterations = _options.MaxIterations;
-
-        // 三十八轮 P2 修复：入口 fail-fast——原实现先派发 maxIterations 个再抛异常，
-        // 前 N 个 handler 已产生完整副作用后整体报失败，重试会导致二次派发。
-        // 去重后仍超上限的只可能是初始批量本身过大（Handler 不产生新入队事件）。
-        if (queue.Count > maxIterations)
+        if (events.Count > maxIterations)
             throw new InvalidOperationException(
-                $"Domain event initial batch size ({queue.Count}) exceeds MaxIterations ({maxIterations}) — refusing to partially dispatch. "
+                $"Domain event initial batch size ({events.Count}) exceeds MaxIterations ({maxIterations}) — refusing to partially dispatch. "
                 + "Split the batch or raise DomainEventDispatcherOptions.MaxIterations.");
 
-        for (int i = 0; i < maxIterations && queue.Count > 0; i++)
+        if (events.Count == 1)
         {
-            var @event = queue.Dequeue();
+            // 单事件（最常见形态）：无循环可能，免 HashSet 分配直派
+            await DispatchSingleAsync(events[0], ct).ConfigureAwait(false);
+            return;
+        }
+
+        var processed = new HashSet<Guid>(); // 防止循环事件（多事件路径）
+        for (int i = 0; i < events.Count; i++)
+        {
+            var @event = events[i];
             if (!processed.Add(@event.EventId))
             {
                 // 循环事件检测 — 记录 Warning 以便诊断
@@ -98,14 +106,6 @@ internal sealed class IterativeDomainEventDispatcher : IDomainEventDispatcher
 
             await DispatchSingleAsync(@event, ct).ConfigureAwait(false);
         }
-
-        // v17 论证成文：正常语义下此处不可达——入口 :76 已 fail-fast 初始批量，循环每迭代
-        // 必 Dequeue 一个且 Handler 不产生新入队事件（:35 语义声明）。保留 throw 作为未来
-        // 入队行为变更的哨兵（而非删除），误触发时错误信息可直接定位 MaxIterations 配置。
-        if (queue.Count > 0)
-            throw new InvalidOperationException(
-                $"Domain event dispatch exceeded MaxIterations ({maxIterations}): initial batch size {events.Count} 超过上限"
-                + "（事件循环防护由 EventId 去重承担——Handler 不产生新入队事件，此上限约束的是初始批量大小）。");
     }
 
     /// <summary>

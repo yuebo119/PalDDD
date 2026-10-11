@@ -34,7 +34,7 @@ using PalDDD.Transactions;
 using static PalDDD.Dapper.DapperSqlErrorClassifier;
 namespace PalDDD.Dapper;
 
-public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
+public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>
     where TState : SagaState, new()
 {
     private readonly DbConnection _connection;
@@ -166,70 +166,100 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>
         // MarkFailedAsync 的"rows>0 才变异"形态；UPDATE/INSERT 两处 err 赋值点共用截断值。
         var truncatedError = FailureReason.Truncate(state.Error, 2040);
 
-        var existing = await GetByIdAsync(state.SagaId, ct).ConfigureAwait(false);
+        // EPSL 地毯审计 2026-10-11 B-3：UPDATE 先行——原「全行 SELECT + 全量反序列化
+        //（GetByIdAsync→Materialize）做存在性判断」把 O(快照大小) 的网络传输与 JSON
+        // 反序列化花在只做 null 判断的结果上（扫描器非超时释放路径每 saga 一次）。
+        // 新形态：乐观锁 UPDATE 先行；0 行时轻量存在性探测（COUNT，无数据传输）区分
+        // 「版本冲突」（行在 → 返回 0）与「新行」（INSERT 路径）。行为等价
+        ///（0/1/并发插入异常三态不变）；新行路径多一次探测往返（Saga 创建为冷路径）。
         var sagaData = SerializeState(state);
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
-        if (existing is not null)
+        var rows = await conn.ExecuteAsync(
+
+                // P1 修复（十一轮·实测发现）：PG 的 saga_data JSONB 列需显式 CAST（text→jsonb 无赋值转换）
+                _dbType == DapperDbType.PostgreSql ? SqlTemplates.SagaUpdatePG : SqlTemplates.SagaUpdate,
+                new
+                {
+                    cs = state.CurrentState,
+                    st = (int)state.Status,
+                    ca = state.CompletedAt.HasValue ? ToTimeParam(state.CompletedAt.Value) : null,
+                    err = truncatedError,
+                    ea = state.ErrorAt.HasValue ? ToTimeParam(state.ErrorAt.Value) : null,
+                    data = sagaData,
+                    leasedBy = state.LeasedBy,
+                    leasedUntil = state.LeasedUntil.HasValue ? ToTimeParam(state.LeasedUntil.Value) : null,
+                    id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
+                    v = state.Version
+                },
+                Tx).ConfigureAwait(false);
+
+        if (rows > 0)
         {
-            var rows = await conn.ExecuteAsync(
-
-                    // P1 修复（十一轮·实测发现）：PG 的 saga_data JSONB 列需显式 CAST（text→jsonb 无赋值转换）
-                    _dbType == DapperDbType.PostgreSql ? SqlTemplates.SagaUpdatePG : SqlTemplates.SagaUpdate,
-                    new
-                    {
-                        cs = state.CurrentState,
-                        st = (int)state.Status,
-                        ca = state.CompletedAt.HasValue ? ToTimeParam(state.CompletedAt.Value) : null,
-                        err = truncatedError,
-                        ea = state.ErrorAt.HasValue ? ToTimeParam(state.ErrorAt.Value) : null,
-                        data = sagaData,
-                        leasedBy = state.LeasedBy,
-                        leasedUntil = state.LeasedUntil.HasValue ? ToTimeParam(state.LeasedUntil.Value) : null,
-                        id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
-                        v = state.Version
-                    },
-                    Tx).ConfigureAwait(false);
-
-            if (rows > 0)
-            {
-                state.Version++;
-                state.Error = truncatedError; // v38 P3：rows>0（DB 已更新）才回写调用方对象
-            }
+            state.Version++;
+            state.Error = truncatedError; // v38 P3：rows>0（DB 已更新）才回写调用方对象
             return rows;
         }
 
-        int inserted;
-        try
+        var exists = await conn.ExecuteScalarAsync<long>(
+            SqlTemplates.SagaExists, new { id = DapperAotInitializer.ToSqliteParameter(state.SagaId) }, Tx).ConfigureAwait(false) > 0;
+        if (!exists)
         {
-            inserted = await conn.ExecuteAsync(
 
-                    // P1 修复（十一轮·实测发现）：PG 的 saga_data JSONB 列需显式 CAST（text→jsonb 无赋值转换）
-                    _dbType == DapperDbType.PostgreSql ? SqlTemplates.SagaInsertPG : SqlTemplates.SagaInsert,
-                    new
-                    {
-                        id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
-                        cs = state.CurrentState,
-                        st = (int)state.Status,
-                        ca = ToTimeParam(state.CreatedAt),
-                        completedAt = state.CompletedAt.HasValue ? ToTimeParam(state.CompletedAt.Value) : null,
-                        err = truncatedError,
-                        ea = state.ErrorAt.HasValue ? ToTimeParam(state.ErrorAt.Value) : null,
-                        data = sagaData,
-                        leasedBy = state.LeasedBy,
-                        leasedUntil = state.LeasedUntil.HasValue ? ToTimeParam(state.LeasedUntil.Value) : null
-                    },
-                    Tx).ConfigureAwait(false);
+            int inserted;
+            try
+            {
+                inserted = await conn.ExecuteAsync(
+
+                        // P1 修复（十一轮·实测发现）：PG 的 saga_data JSONB 列需显式 CAST（text→jsonb 无赋值转换）
+                        _dbType == DapperDbType.PostgreSql ? SqlTemplates.SagaInsertPG : SqlTemplates.SagaInsert,
+                        new
+                        {
+                            id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
+                            cs = state.CurrentState,
+                            st = (int)state.Status,
+                            ca = ToTimeParam(state.CreatedAt),
+                            completedAt = state.CompletedAt.HasValue ? ToTimeParam(state.CompletedAt.Value) : null,
+                            err = truncatedError,
+                            ea = state.ErrorAt.HasValue ? ToTimeParam(state.ErrorAt.Value) : null,
+                            data = sagaData,
+                            leasedBy = state.LeasedBy,
+                            leasedUntil = state.LeasedUntil.HasValue ? ToTimeParam(state.LeasedUntil.Value) : null
+                        },
+                        Tx).ConfigureAwait(false);
+            }
+            catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
+            {
+                // P2 修复：并发插入同一新 Saga 的 TOCTOU 兜底——唯一约束冲突转换为
+                // 语义化并发异常（而非原始 provider 异常），调用方重读后走 UPDATE 路径即可
+                throw new InvalidOperationException(
+                    $"Saga {state.SagaId} 被并发实例同时创建（主键冲突）——请重新加载后以 UPDATE 保存。", ex);
+            }
+            if (inserted > 0)
+                state.Error = truncatedError; // v38 P3：INSERT 已落库才回写调用方对象（失败路径经异常上抛不达此处）
+            return inserted;
         }
-        catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
-        {
-            // P2 修复：并发插入同一新 Saga 的 TOCTOU 兜底——唯一约束冲突转换为
-            // 语义化并发异常（而非原始 provider 异常），调用方重读后走 UPDATE 路径即可
-            throw new InvalidOperationException(
-                $"Saga {state.SagaId} 被并发实例同时创建（主键冲突）——请重新加载后以 UPDATE 保存。", ex);
-        }
-        if (inserted > 0)
-            state.Error = truncatedError; // v38 P3：INSERT 已落库才回写调用方对象（失败路径经异常上抛不达此处）
-        return inserted;
+
+        // 行在但版本不匹配 = 乐观锁冲突（他实例已写同一 Saga）——契约返回 0
+        return 0;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// EPSL 地毯审计 2026-10-11 B-1：单语句批量释放（<see cref="SqlTemplates.SagaReleaseLeases"/>，
+    /// IN 列表 + leased_by 守卫 + 换代）；原逐 saga SaveChangesAsync 每条两往返
+    ///（B-3 修复前的存在性全行 SELECT + UPDATE）且随快照大小线性反序列化。
+    /// </remarks>
+    public async ValueTask<int> ReleaseLeasesAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return 0;
+
+        var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var ids = new string[sagas.Count];
+        for (var i = 0; i < sagas.Count; i++)
+            ids[i] = (string)DapperAotInitializer.ToSqliteParameter(sagas[i].SagaId);
+        return await conn.ExecuteAsync(SqlTemplates.SagaReleaseLeases, new { owner, ids }, Tx).ConfigureAwait(false);
     }
 
     // ITM-796（2026-09-19）：IsUniqueConstraintViolation 私有副本收口至

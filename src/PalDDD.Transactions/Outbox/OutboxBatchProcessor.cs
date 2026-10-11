@@ -63,6 +63,18 @@ public sealed class OutboxBatchProcessor
 
     /// <summary>处理一个已租约的批次。</summary>
     public async ValueTask ProcessBatchAsync(CancellationToken ct)
+        => await ProcessBatchCoreAsync(ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// 处理一个已租约的批次并返回积压信号（T1.2，2026-10-11 优化实施轮）：返回 true =
+    /// 本轮租到了满批（<c>messages.Count ≥ BatchSize</c>，表内可能仍有积压），调用方
+    ///（OutboxProcessor）据此进入自适应排空——立即续批不等轮询间隔；false = 未满批，
+    /// 正常按 PollInterval 轮询。与 <see cref="ProcessBatchAsync"/> 共用同一核心，仅多回传信号。
+    /// </summary>
+    public async ValueTask<bool> ProcessBatchWithBacklogAsync(CancellationToken ct)
+        => await ProcessBatchCoreAsync(ct).ConfigureAwait(false);
+
+    private async ValueTask<bool> ProcessBatchCoreAsync(CancellationToken ct)
     {
         var options = _options.CurrentValue;
         // now 是批次原子时间戳——本批次内所有 MarkProcessed/MarkDead/ReleaseForRetry 共用同一时刻，
@@ -135,12 +147,18 @@ public sealed class OutboxBatchProcessor
         activity?.SetTag("pal.outbox.persist_failed", totals.PersistFailed);
         PalMetrics.OutboxProcessed.Add(totals.Processed);
         PalMetrics.OutboxFailed.Add(totals.Dead + totals.Retried);
+        return messages.Count >= options.BatchSize;
     }
 
     /// <summary>分区内逐条处理（C1 抽取：原串行循环体原样迁移，计数经结构体返回）。</summary>
     private async ValueTask<PartitionCounters> ProcessPartitionAsync(
         IEnumerable<OutboxMessage> messages, OutboxOptions options, DateTimeOffset now, CancellationToken ct)
     {
+        // T3.1（2026-10-11 优化实施轮）：窗口 >1 时分区内改走 FIFO 流水线形态（发布确认
+        // 不再逐条串行相乘）；默认 1 走下方原串行体（逐字不变，零额外开销）
+        if (options.MaxInFlightPublishes > 1)
+            return await ProcessPartitionPipelinedAsync(messages, options, now, ct).ConfigureAwait(false);
+
         var processed = 0;
         var dead = 0;
         var retried = 0;
@@ -155,7 +173,7 @@ public sealed class OutboxBatchProcessor
                 var descriptor = _messageCatalog.Find(msg.Type, msg.SchemaVersion);
                 if (descriptor is null)
                 {
-                    _store.MarkDead(msg, Core.FailureReason.Normalize($"Type '{msg.Type}' not registered in MessageCatalog"), now);
+                    await _store.MarkDeadAsync(msg, Core.FailureReason.Normalize($"Type '{msg.Type}' not registered in MessageCatalog"), now, ct).ConfigureAwait(false);
                     checked { dead++; }
                     PalMetrics.OutboxDead.Add(1); // R1：死信独立计数（不再混入 failed）
                     if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
@@ -166,7 +184,7 @@ public sealed class OutboxBatchProcessor
                 var @event = _serializer.Deserialize(msg.Payload, descriptor);
                 if (@event is null)
                 {
-                    _store.MarkDead(msg, Core.FailureReason.Normalize("Deserialization returned null"), now);
+                    await _store.MarkDeadAsync(msg, Core.FailureReason.Normalize("Deserialization returned null"), now, ct).ConfigureAwait(false);
                     checked { dead++; }
                     PalMetrics.OutboxDead.Add(1);
                     if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
@@ -180,7 +198,7 @@ public sealed class OutboxBatchProcessor
                     msg.TraceParent,
                     msg.TraceState);
                 await _broker.PublishAsync(@event, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
-                _store.MarkProcessed(msg, now);
+                await _store.MarkProcessedAsync(msg, now, ct).ConfigureAwait(false);
                 checked { processed++; }
                 // R2：持久化失败时从 processed 退回并计入 persistFailed——指标与 DB 真相一致
                 if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
@@ -224,7 +242,7 @@ public sealed class OutboxBatchProcessor
                     // （此处主异常不向上传播，Data 信息需日志兜底可见），主异常优先。
                     try
                     {
-                        _store.MarkDead(msg, failureReason, now);
+                        await _store.MarkDeadAsync(msg, failureReason, now, ct).ConfigureAwait(false);
                     }
                     catch (Exception markEx)
                     {
@@ -238,7 +256,7 @@ public sealed class OutboxBatchProcessor
                 {
                     try
                     {
-                        _store.ReleaseForRetry(msg, failureReason, nextAttemptAt);
+                        await _store.ReleaseForRetryAsync(msg, failureReason, nextAttemptAt, ct).ConfigureAwait(false);
                     }
                     catch (Exception markEx)
                     {
@@ -253,6 +271,136 @@ public sealed class OutboxBatchProcessor
                 if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
                     checked { persistFailed++; } // R2：Mark 已尝试未落库，独立可见
             }
+        }
+
+        return new PartitionCounters(processed, dead, retried, persistFailed);
+    }
+
+    /// <summary>
+    /// T3.1（2026-10-11 优化实施轮）：发布确认流水线化——窗口 &gt;1 时的分区内处理形态。
+    /// FIFO 窗口保序：发布按分区内顺序启动（RabbitMQ 单 channel 帧序由 _confirmSemaphore
+    /// 天然保序；Kafka producer 队列保序，重试乱序须 enable.idempotence，见
+    /// <see cref="OutboxOptions.MaxInFlightPublishes"/> 声明），出窗完成处理也按启动序——
+    /// 标记顺序与串行路径一致。每消息语义与串行路径逐项对齐（发布/标记同 try、失败走
+    /// 退避重试/死信、PersistSingle 计数口径），<b>改动须双侧同步</b>。
+    /// </summary>
+    private async ValueTask<PartitionCounters> ProcessPartitionPipelinedAsync(
+        IEnumerable<OutboxMessage> messages, OutboxOptions options, DateTimeOffset now, CancellationToken ct)
+    {
+        var processed = 0;
+        var dead = 0;
+        var retried = 0;
+        var persistFailed = 0;
+
+        async ValueTask HandleDeadAsync(OutboxMessage msg, string reason)
+        {
+            await _store.MarkDeadAsync(msg, Core.FailureReason.Normalize(reason), now, ct).ConfigureAwait(false);
+            checked { dead++; }
+            PalMetrics.OutboxDead.Add(1);
+            if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
+                checked { persistFailed++; }
+        }
+
+        async ValueTask HandleOutcomeAsync(OutboxMessage msg, Task publish)
+        {
+            try
+            {
+                await publish.ConfigureAwait(false);
+                await _store.MarkProcessedAsync(msg, now, ct).ConfigureAwait(false);
+                checked { processed++; }
+                if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
+                {
+                    checked { processed--; persistFailed++; }
+                    PalMetrics.OutboxPersistFailed.Add(1);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // 失败语义逐项镜像串行路径（快照/退避降级/标记错误挂 Data/PersistSingle）——
+                // 口径注释见串行路径同型段，改动双侧同步
+                var retryAtFailure = msg.RetryCount;
+                TimeSpan delay;
+                try
+                {
+                    delay = options.RetryBackoffPolicy.ComputeDelay(msg.RetryCount + 1);
+                }
+                catch (Exception delayEx)
+                {
+                    delay = TimeSpan.FromSeconds(1);
+                    _logger.Warning($"Outbox: retry backoff computation failed for message {msg.Id}, falling back to 1s delay: {delayEx.Message}");
+                }
+                var nextAttemptAt = now + delay;
+                var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
+                if (msg.RetryCount + 1 >= options.MaxRetryCount)
+                {
+                    try
+                    {
+                        await _store.MarkDeadAsync(msg, failureReason, now, ct).ConfigureAwait(false);
+                    }
+                    catch (Exception markEx)
+                    {
+                        ex.Data["MarkError"] = markEx.Message;
+                        _logger.Warning($"Outbox: MarkDead for {msg.Id} failed: {markEx.Message}");
+                    }
+                    checked { dead++; }
+                    PalMetrics.OutboxDead.Add(1);
+                }
+                else
+                {
+                    try
+                    {
+                        await _store.ReleaseForRetryAsync(msg, failureReason, nextAttemptAt, ct).ConfigureAwait(false);
+                    }
+                    catch (Exception markEx)
+                    {
+                        ex.Data["MarkError"] = markEx.Message;
+                        _logger.Warning($"Outbox: ReleaseForRetry for {msg.Id} failed: {markEx.Message}");
+                    }
+                    checked { retried++; }
+                }
+                _logger.Warning($"Outbox: message {msg.Id} processing failed at retry {retryAtFailure + 1}: {ex.Message}");
+                if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
+                    checked { persistFailed++; }
+            }
+        }
+
+        var window = new Queue<(OutboxMessage Message, Task Publish)>();
+        foreach (var msg in messages)
+        {
+            // 预处理（目录/反序列化失败即死信，不入窗）——镜像串行路径前置段
+            var descriptor = _messageCatalog.Find(msg.Type, msg.SchemaVersion);
+            if (descriptor is null)
+            {
+                await HandleDeadAsync(msg, $"Type '{msg.Type}' not registered in MessageCatalog").ConfigureAwait(false);
+                continue;
+            }
+            var @event = _serializer.Deserialize(msg.Payload, descriptor);
+            if (@event is null)
+            {
+                await HandleDeadAsync(msg, "Deserialization returned null").ConfigureAwait(false);
+                continue;
+            }
+            var publishContext = new Messaging.MessagePublishContext(
+                msg.CorrelationId, msg.CausationId, msg.TraceParent, msg.TraceState);
+
+            // 窗口满先收队头（维持上限——队头出窗保标记启动序）
+            while (window.Count >= options.MaxInFlightPublishes)
+            {
+                var oldest = window.Dequeue();
+                await HandleOutcomeAsync(oldest.Message, oldest.Publish).ConfigureAwait(false);
+            }
+
+            // 发布任务热启动（异常流入 Task，出窗侧统一处理——发布与标记同 try 的语义
+            // 由 HandleOutcomeAsync 承载）；任务体仅转发 broker 调用
+            window.Enqueue((msg, PublishCoreAsync()));
+
+            async Task PublishCoreAsync()
+                => await _broker.PublishAsync(@event!, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
+        }
+        while (window.Count > 0)
+        {
+            var entry = window.Dequeue();
+            await HandleOutcomeAsync(entry.Message, entry.Publish).ConfigureAwait(false);
         }
 
         return new PartitionCounters(processed, dead, retried, persistFailed);

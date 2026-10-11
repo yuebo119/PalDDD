@@ -59,7 +59,7 @@ namespace PalDDD.Dapper;
 /// ⚠️ <b>连接生命周期</b>：<paramref name="connection"/> 由 DI 容器管理（通常为 Scoped），
 /// 调用方不应调用 <c>Close()</c>/<c>Dispose()</c>。EnsureOpen/EnsureOpenAsync 仅确保连接状态，不拥有连接所有权。
 /// </remarks>
-public sealed class DapperOutboxStore : IPalOutboxStore
+public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxStore
 {
     private readonly DbConnection _connection;
     private readonly DapperDbType _dbType;
@@ -166,9 +166,20 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             // P1 修复（十一轮·实测发现）：MySQL 不支持 UPDATE ... WHERE id IN (SELECT ... LIMIT)
             // （真实库实测报 1235）——JOIN 形态替代（对齐 PalORM 版）；SQLite 支持子查询内 LIMIT 保持原状
             // 优化（二十五轮 API 扫描 A-3）：SQLite 路径同步常量化（原 OutboxLeaseUpdate + $"({leaseSubSql})"）
-            var leaseSql = _dbType == DapperDbType.MySql
-                ? SqlTemplates.OutboxLeaseUpdateMySql
-                : SqlTemplates.OutboxLeaseUpdateSqlite;
+            // ADR-025（2026-10-09）：MySQL ≥8.0.18（非 MariaDB）启用派生表 SKIP LOCKED 模板——
+            // 无锁形态的并发后果是 InnoDB 死锁异常（ADR-024 补记实证一）；旧版/MariaDB/
+            // 解析失败回退无锁模板（MySqlLeasePolicy fail-safe，行为与 ADR-024 现状逐字一致）
+            string leaseSql;
+            if (_dbType == DapperDbType.MySql)
+            {
+                leaseSql = MySqlLeasePolicy.UseSkipLocked(_connection.ServerVersion)
+                    ? SqlTemplates.OutboxLeaseUpdateMySqlSkipLocked
+                    : SqlTemplates.OutboxLeaseUpdateMySql;
+            }
+            else
+            {
+                leaseSql = SqlTemplates.OutboxLeaseUpdateSqlite;
+            }
             await conn.ExecuteAsync(
 
                     leaseSql,
@@ -189,30 +200,43 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         }
     }
 
-    public void AddMessage(OutboxMessage message)
+    public async ValueTask AddMessageAsync(OutboxMessage message, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
-        var c = EnsureOpen();
-        // P2 修复（七轮评审）：补 correlation/causation/trace 4 列——此前模板加了列但参数对象未传
-        // 🔬 AOT 实验：参数走 DynamicParameters——1.1.0 List expansion 把匿名对象里的 byte[]
-        //    Payload 误判为 IN 列表做 PackListParameters 展开（SQL 变行值，SQLite "row value
-        //    misused"）；byte[] 用显式 DbType.Binary（DynamicParameters 是 1.1.0 官方支持路径）。
-        var dp = new DynamicParameters();
-        dp.Add("Id", DapperAotInitializer.ToSqliteParameter(message.Id));
-        dp.Add("Type", message.Type);
-        dp.Add("Payload", message.Payload, DbType.Binary);
-        dp.Add("ContentType", message.ContentType);
-        dp.Add("SchemaVersion", message.SchemaVersion);
+        // D（2026-10-10 优化轮）+ v4.0 ③（ADR-026 异步化）：执行层原生 ADO 直发（去 Dapper
+        // 机械层，单条插入分配 -19.7%）且真异步（ExecuteNonQueryAsync）——原同步 AddMessage
+        // 已删除。参数值与方言转换与原 DynamicParameters 形态逐一对齐（P2 七轮 4 追踪列
+        // 补齐与 ITM-634 领域 CreatedAt 语义保持——见 CreatedAt 行注释），SQL 模板不变
+        //（status 仍为字面量 0）。byte[] 经原生 provider 类型推断绑定二进制；null 统一转 DBNull。
+        var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        using var cmd = c.CreateCommand();
+        cmd.Transaction = Tx;
+        cmd.CommandText = SqlTemplates.OutboxInsert;
+        AddParam(cmd, "Id", DapperAotInitializer.ToSqliteParameter(message.Id));
+        AddParam(cmd, "Type", message.Type);
+        AddParam(cmd, "Payload", message.Payload);
+        AddParam(cmd, "ContentType", message.ContentType);
+        AddParam(cmd, "SchemaVersion", message.SchemaVersion);
         // ITM-634 修复（跨栈契约一致）：created_at 持久化领域赋值 OutboxMessage.CreatedAt——
-        // 原实现用 Store 时钟 _timeProvider.GetUtcNow() 覆盖，与 PalORM（OutboxMessageRow.FromDomain）、
-        // EFCore（OutboxMessages.Add(message)）、InMemory（列表直存）三栈保留领域值分叉：
-        // 同消息跨栈落库 created_at 不同，ORDER BY created_at 投递序与 CreatedAt 往返断言随之分叉。
-        dp.Add("CreatedAt", ToTimeParam(message.CreatedAt));
-        dp.Add("CorrelationId", message.CorrelationId?.ToString());
-        dp.Add("CausationId", message.CausationId?.ToString());
-        dp.Add("TraceParent", message.TraceParent);
-        dp.Add("TraceState", message.TraceState);
-        c.Execute(SqlTemplates.OutboxInsert, dp, Tx);
+        // 与 PalORM（OutboxMessageRow.FromDomain）、EFCore（OutboxMessages.Add(message)）、
+        // InMemory（列表直存）三栈保留领域值一致：同消息跨栈落库 created_at 相同，
+        // ORDER BY created_at 投递序与 CreatedAt 往返断言跨栈成立。
+        AddParam(cmd, "CreatedAt", ToTimeParam(message.CreatedAt));
+        AddParam(cmd, "CorrelationId", message.CorrelationId?.ToString());
+        AddParam(cmd, "CausationId", message.CausationId?.ToString());
+        AddParam(cmd, "TraceParent", message.TraceParent);
+        AddParam(cmd, "TraceState", message.TraceState);
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>D（2026-10-10 优化轮）：原生 ADO 参数装配——null 统一 DBNull，其余按值类型由
+    /// provider 推断（byte[]→二进制 / string→文本 / int→整型 / DateTimeOffset→PG timestamptz）。</summary>
+    private static void AddParam(System.Data.Common.DbCommand cmd, string name, object? value)
+    {
+        var p = cmd.CreateParameter();
+        p.ParameterName = name;
+        p.Value = value ?? DBNull.Value;
+        cmd.Parameters.Add(p);
     }
 
     /// <summary>批量添加消息 — 自动选择数据库最优批量路径。
@@ -220,7 +244,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore
     /// BulkInsertAsync 贯通三方言（PG COPY 自动入连接事务；MySQL 显式挂接；SQLite 挂接外部
     /// 事务不 Commit）。未开启事务时行为不变。</para>
     /// </summary>
-    public async ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
+    public async ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
@@ -230,8 +254,8 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // ⚠️ v16 声明（下游漂移，与本方法无关仍成立）：OutboxBatchProcessor 的 nextAttemptAt 基于
         // 其自身的批次起始 now——长批次尾部消息的重试时间提前（漂移=批耗时）；受 batchSize 上限
         // 约束可接受。本方法现不再取批次时钟，该漂移属处理器时间语义。
-        // v8 声明：接口 IPalOutboxStore.AddMessagesAsync 无 CancellationToken 参数，本路径
-        // 无法响应取消——v4.0 契约窗口（ADR-020）随接口异步化一并补。
+        // v8 声明的「接口 AddMessagesAsync 无 CancellationToken 参数、本路径无法响应取消」缺口
+        // 已在 v4.0 补齐（ADR-026 ④）：接口收 ct，本方法签名收参并经直接重载传播（M1-3 口径：收缩连接打开阶段）。
         var conn = await EnsureOpenAsync().ConfigureAwait(false);
         // P2 修复（八轮评审 PD17）：批量路径补 correlation/causation/trace 4 追踪列——
         // 单条路径 AddMessage（七轮）已补，批量漏列导致追踪链在批量写入时丢失；
@@ -242,13 +266,13 @@ public sealed class DapperOutboxStore : IPalOutboxStore
             messages,
             m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, StatusPending, m.CreatedAt,
                 m.CorrelationId?.ToString(), m.CausationId?.ToString(), m.TraceParent, m.TraceState],
-            Tx).ConfigureAwait(false);
+            Tx, ct).ConfigureAwait(false); // v4.0 ④（ADR-026）：ct 传播进批量路径
     }
 
-    public void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt)
+    public async ValueTask MarkProcessedAsync(OutboxMessage message, DateTimeOffset processedAt, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
-        var c = EnsureOpen();
+        var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // P1 修复（八轮评审）：时间参数统一走 ToTimeParam——ToSqliteParameter 产出 "O" string，
         // PG 下 timestamptz 列收 text 参数无比较/赋值运算符（详见 ToTimeParam 的 PG 分支注释）
         // 三十四轮 ITM-210 token 化：补租约 token 参数（owner/until 调用时快照；无租约时均传
@@ -263,19 +287,26 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // **消费 affected，仅 >0 时清租约字段**——被拒标记后入参对象不再声称"租约已释放而
         // DB 行仍持有"（OutboxMessage 是公共 API 入参，框架无法约束应用层自定义处理器不读）。
         // PalORM 同形（PalOrmOutboxStore.cs:182-183 "affected=0 时零内存变异"）。
-        var affected = c.Execute(SqlTemplates.OutboxMarkProcessed,
-            new { at = ToTimeParam(processedAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message), retryCount = message.RetryCount }, Tx); // P1 修复（八轮评审）：时间参数走 ToTimeParam；三十四轮 ITM-210：租约 token 参数；v37 P3：retry_count fencing 快照
-        // ITM-130 修复：SQL 清除 DB 租约列后同步入参——调用方读入参不应再见陈旧持有者
-        // （对齐 EFCore/PalORM/InMemory 三姊妹的对象字段语义）。被拒（affected=0）时保持
-        // 入参不变——与 PalORM 的"零内存变异"对齐。
+        // ct 传递口径（M1-3 勘正同源）：Dapper 调用走直接重载不传 ct（CommandDefinition 形态
+        // 被 2026-09-13 裁决推翻），接口 ct 仅收缩连接打开阶段
+        var affected = await c.ExecuteAsync(SqlTemplates.OutboxMarkProcessed,
+            new { at = ToTimeParam(processedAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message), retryCount = message.RetryCount }, Tx).ConfigureAwait(false); // P1 修复（八轮评审）：时间参数走 ToTimeParam；三十四轮 ITM-210：租约 token 参数；v37 P3：retry_count fencing 快照
+        // v4.0 ②（ADR-026 fencing 统一）：成功（affected>0）入参全套回写——原「仅清租约两字段」
+        // 是 DECISION-2026-09-22 的半步形态，本轮完成其 ITM-130「三姊妹对象字段语义对齐」
+        // 意图的另一半，统一为 PalORM/InMemory 全套六字段（EF 同轮对齐）；拒绝（affected=0）
+        // 时零内存变异（不变）
         if (affected > 0)
         {
+            message.Status = OutboxStatus.Processed;
+            message.ProcessedAt = processedAt;
+            message.Error = null;
+            message.NextAttemptAt = null;
             message.LockedBy = null;
             message.LockedUntil = null;
         }
     }
 
-    public void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt)
+    public async ValueTask MarkDeadAsync(OutboxMessage message, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
@@ -286,30 +317,37 @@ public sealed class DapperOutboxStore : IPalOutboxStore
         // 代理对（超长含 emoji 的消息），末位高代理回退一位防孤立高代理入库（S1 五处
         // 截断点同款）
         failureReason = FailureReason.Truncate(failureReason, 2040);
-        var c = EnsureOpen();
-        // P3-SRC-301 声明（同 MarkProcessed）：affected=0（token 拒绝）时内存对象仅清租约字段
-        // 不回写 Status——与 InMemory 版（守卫内联设 Dead）/PalORM 版（affected>0 才全套回写）
-        // 的分叉属 ITM-210 历史语义，调用方（OutboxBatchProcessor）不读该状态故无实害。
-        c.Execute(SqlTemplates.OutboxMarkDead,
-            new { reason = failureReason, at = ToTimeParam(deadAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message), retryCount = message.RetryCount }, Tx); // P1 修复（八轮评审）：时间参数走 ToTimeParam；三十四轮 ITM-210：租约 token 参数；v37 P3：retry_count fencing 快照
-        // ITM-130 修复：SQL 清除 DB 租约列后同步入参（对齐 EFCore/PalORM/InMemory 三姊妹）
-        message.LockedBy = null;
-        message.LockedUntil = null;
+        var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        // v4.0 ②（ADR-026 fencing 统一）：补 affected 消费——原实现无条件清入参租约两字段
+        //（SQL 有 fencing 守卫但返回值被丢弃，token 拒绝后入参仍声称已释放，守卫缺口级分叉）；
+        // 统一为「成功（affected>0）全套六字段回写、拒绝零内存变异」（对齐 MarkProcessed 同轮
+        // 形态与 PalORM/InMemory 契约）
+        var affected = await c.ExecuteAsync(SqlTemplates.OutboxMarkDead,
+            new { reason = failureReason, at = ToTimeParam(deadAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message), retryCount = message.RetryCount }, Tx).ConfigureAwait(false); // P1 修复（八轮评审）：时间参数走 ToTimeParam；三十四轮 ITM-210：租约 token 参数；v37 P3：retry_count fencing 快照
+        if (affected > 0)
+        {
+            message.Status = OutboxStatus.Dead;
+            message.ProcessedAt = deadAt;
+            message.Error = failureReason;
+            message.NextAttemptAt = null;
+            message.LockedBy = null;
+            message.LockedUntil = null;
+        }
     }
 
-    public void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt)
+    public async ValueTask ReleaseForRetryAsync(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
         // P3-TST-601：同 MarkDead——存储层兜底截断（v29 P3：经 FailureReason.Truncate
         // 共享收口，含 UTF-16 代理对守卫，见 MarkDead 注释）
         failureReason = FailureReason.Truncate(failureReason, 2040);
-        var c = EnsureOpen();
+        var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // P2 修复（八轮评审）：补租约守卫（对齐 PalORM 版 PalOrmOutboxStore）——租约过期被其他 worker
         // 抢占后，原 worker 的失败释放不再清掉新 worker 的锁或误增 retry_count；三十四轮 ITM-210
         // 升级为 token 完全匹配（owner/until 调用时快照，无租约时均传 null 走 IS NULL 分支）。
-        var affected = c.Execute(SqlTemplates.OutboxReleaseForRetry,
-            new { reason = failureReason, next = ToTimeParam(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message), retryCount = message.RetryCount }, Tx); // v37 P3：retry_count fencing 快照（PD17 姊妹同步，v33 Status 守卫之外的另一半）
+        var affected = await c.ExecuteAsync(SqlTemplates.OutboxReleaseForRetry,
+            new { reason = failureReason, next = ToTimeParam(nextAttemptAt), id = DapperAotInitializer.ToSqliteParameter(message.Id), owner = message.LockedBy, until = LeaseUntilParam(message), retryCount = message.RetryCount }, Tx).ConfigureAwait(false); // v37 P3：retry_count fencing 快照（PD17 姊妹同步，v33 Status 守卫之外的另一半）
         // ITM-130 修复：SQL 成功（affected>0）后同步入参到 DB 终态（对齐 PalORM ReleaseForRetry
         // 成功路径）；守卫拒绝（affected=0，租约已被他人持有）时零变异——保持 PalORM 零变异语义。
         if (affected > 0)

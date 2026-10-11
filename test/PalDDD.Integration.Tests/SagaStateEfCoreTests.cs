@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using PalDDD.Transactions;
 using System.Collections.ObjectModel;
 using System.Globalization;
+using PalUlid = ByteAether.Ulid.Ulid;
 
 public sealed class SagaStateEfCoreTests
 {
@@ -263,6 +264,55 @@ public sealed class SagaStateEfCoreTests
         // 末字符必须是完整 'a'（高代理回退一位），长度 2039 而非 2040
         await Assert.That(loaded.Error!.Length).IsEqualTo(2039);
         await Assert.That(char.IsHighSurrogate(loaded.Error[^1])).IsFalse();
+    }
+
+    /// <summary>B-1（EPSL 地毯审计 2026-10-11）：ExecuteUpdateAsync 单语句批量释放——
+    /// owner 守卫 + 换代 + 滞留跟踪实体全批 Detach（幽灵写陷阱的行为锁定：
+    /// ExecuteUpdate 直写 DB 后被跟踪的 Modified 实体若未 Detach，同 context 后续
+    /// SaveChanges 会因 Version 令牌失配抛并发——Detach 配套是本实现的组成部分）。</summary>
+    [Test]
+    public async Task ReleaseLeasesAsync_Sqlite_BatchWithOwnerGuardAndDetach(CancellationToken cancellationToken)
+    {
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var options = CreateSqliteOptions(connection);
+
+        PalUlid id1;
+        await using (var seed = new TestSagaStateDbContext(options))
+        {
+            await seed.Database.EnsureCreatedAsync(cancellationToken);
+            var s1 = CreateState("Initial", FixedNow);
+            var s2 = CreateState("Initial", FixedNow);
+            seed.SagaStates.Add(s1);
+            seed.SagaStates.Add(s2);
+            await seed.SaveChangesAsync(cancellationToken);
+            id1 = s1.SagaId;
+        }
+
+        await using var worker = new TestSagaStateDbContext(options);
+        var leased = await worker.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        await Assert.That(leased.Count).IsEqualTo(2);
+
+        var empty = await worker.ReleaseLeasesAsync("owner-A", [], cancellationToken);
+        await Assert.That(empty).IsEqualTo(0);
+
+        // 他 owner 释放：0 行（leased_by 守卫）
+        var foreign = await worker.ReleaseLeasesAsync("owner-B", leased, cancellationToken);
+        await Assert.That(foreign).IsEqualTo(0);
+
+        var released = await worker.ReleaseLeasesAsync("owner-A", leased, cancellationToken);
+        await Assert.That(released).IsEqualTo(2);
+
+        // DB 终值（新 context 读）：租约清空 + 换代（插入 0 → 租约 +1 → 释放 +1）
+        await using var verifier = new TestSagaStateDbContext(options);
+        var final = await verifier.GetByIdAsync(id1, cancellationToken);
+        await Assert.That(final!.LeasedBy).IsNull();
+        await Assert.That(final.Version).IsEqualTo(2);
+
+        // Detach 纪律锁定：本批实体不得滞留 ChangeTracker（任何非 Detached 状态都是幽灵写隐患）
+        var tracked = worker.ChangeTracker.Entries<TestSagaState>()
+            .Count(e => e.State != Microsoft.EntityFrameworkCore.EntityState.Detached);
+        await Assert.That(tracked).IsEqualTo(0);
     }
 
     [Test]

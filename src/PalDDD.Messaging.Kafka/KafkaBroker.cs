@@ -126,21 +126,27 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             _logger.Debug($"Published {descriptor.ClrType.Name} to Kafka topic {descriptor.Name}, key={key}");
     }
 
-    private static Headers CreateHeaders(MessagePublishContext context)
+    // EPSL 地毯审计 2026-10-11 B-5：默认发布路径（无追踪上下文，PublishAsync 恒传
+    // MessagePublishContext.Empty）此前无条件 new Headers()——空对象随每条消息分配
+    //（~70B/条）。Confluent.Kafka 的 Message.Headers 默认 null 且 ProduceAsync 接受
+    // null（客户端不发头字段，wire 语义等价）——改为按需构造，任一头值存在才建。
+    // 消费侧对位：FromKafkaHeaders 无表/空表直返 null，FromHeaders(null) 走空头快路径。
+    internal static Headers? CreateHeaders(MessagePublishContext context)
     {
         // P2 修复（八轮评审）：键名与消费端 MessageConsumeContext.FromHeaders 共用常量，锁读写两侧一致
-        var headers = new Headers();
-        AddHeader(headers, MessageConsumeContext.HeaderNames.TraceParent, context.TraceParent);
-        AddHeader(headers, MessageConsumeContext.HeaderNames.TraceState, context.TraceState);
-        AddHeader(headers, MessageConsumeContext.HeaderNames.CorrelationId, context.CorrelationId?.ToString());
-        AddHeader(headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString());
+        Headers? headers = null;
+        AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceParent, context.TraceParent);
+        AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceState, context.TraceState);
+        AddHeader(ref headers, MessageConsumeContext.HeaderNames.CorrelationId, context.CorrelationId?.ToString());
+        AddHeader(ref headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString());
         return headers;
     }
 
-    private static void AddHeader(Headers headers, string name, string? value)
+    private static void AddHeader(ref Headers? headers, string name, string? value)
     {
-        if (!string.IsNullOrWhiteSpace(value))
-            headers.Add(name, Encoding.UTF8.GetBytes(value));
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+        (headers ??= new Headers()).Add(name, Encoding.UTF8.GetBytes(value));
     }
 
     /// <summary>异步订阅消息 — 适配到带消费上下文的重载（context 恒为 null，零破坏）</summary>
@@ -310,7 +316,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                         if (message is not null)
                         {
                             // P2 修复（八轮评审）：消费端还原追踪头——写侧 CreateHeaders 的镜像
-                            var consumeContext = MessageConsumeContext.FromHeaders(ToHeaderMap(result.Message.Headers));
+                            // C-11（EPSL 地毯审计 2026-10-11）：单趟遍历 Confluent Headers 直产
+                            // 已解码字典（原 ToHeaderMap 中间字典 + FromHeaders 二次物化消除）
+                            var consumeContext = FromKafkaHeaders(result.Message.Headers);
                             await handler((TMessage)message, consumeContext, tokenSnapshot).ConfigureAwait(false);
                         }
                         else
@@ -396,18 +404,23 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
     }
 
     /// <summary>
-    /// Confluent.Kafka Headers（Key/Value 结构集合）转字典视图——
-    /// 供 <see cref="MessageConsumeContext.FromHeaders"/> 统一提取（重复键后者覆盖）。
+    /// Confluent.Kafka Headers → 消费上下文（C-11 单趟形态）——IHeader 枚举直产已解码字典，
+    /// 键名/解码语义与 <see cref="MessageConsumeContext.FromHeaders"/> 一致：空字节值解码为
+    /// null、重复键后者覆盖、未知键保留在 Headers 视图；无头返回 null（消费回调收到 null
+    /// context 表示消息未携带追踪元数据）。Kafka 无 BasicProperties correlation 兜底（恒 null）。
     /// </summary>
-    private static Dictionary<string, object?>? ToHeaderMap(Headers? headers)
+    private static MessageConsumeContext? FromKafkaHeaders(Headers? headers)
     {
         if (headers is null || headers.Count == 0)
             return null;
 
-        Dictionary<string, object?> map = new(StringComparer.Ordinal);
+        Dictionary<string, string?> decoded = new(StringComparer.Ordinal);
         foreach (var header in headers)
-            map[header.Key] = header.GetValueBytes(); // IHeader API：Key + GetValueBytes()（无 Value 属性）
-        return map;
+        {
+            var bytes = header.GetValueBytes(); // IHeader API：Key + GetValueBytes()（无 Value 属性）
+            decoded[header.Key] = bytes.Length == 0 ? null : Encoding.UTF8.GetString(bytes);
+        }
+        return MessageConsumeContext.FromDecodedHeaders(decoded, null);
     }
 
     /// <summary>释放 Broker：先释放全部订阅，再 Flush 排空在途消息，最后释放 producer。</summary>

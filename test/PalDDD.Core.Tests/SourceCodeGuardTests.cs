@@ -258,10 +258,22 @@ public sealed class SourceCodeGuardTests
                 if (!(isWait || isGetResult)) continue;
                 if (IsPalOrmAdapterPath(file.Relative))
                     continue; // PalORM 适配层：接口同步签名约束下的合法 sync-over-async
+                // v4.0 ③（ADR-026）标记门控豁免：语句前导注释显式携带 "ADR-026" 的单点
+                // 文档化阻塞桥放行（EF 拦截器同步钩子——同步 SaveChanges 支持的刻意桥）；
+                // 意外桥（无标记）仍拦。PalORM 适配层的历史白名单在 v4.0 接口异步化后
+                // 理论无使用（7 处桥已拆），路径豁免保留为零成本兼容面
+                if (HasAdr026Marker(invocation))
+                    continue;
                 yield return Make(file, invocation, "G11",
                     $"{(isWait ? ".Wait()" : "GetAwaiter().GetResult()")} 同步阻塞异步（PalORM 适配层外禁止）");
             }
         }
+
+        /// <summary>v4.0 ③（ADR-026）：阻塞调用所在语句的前导注释是否显式携带 ADR-026 决策标记。</summary>
+        private static bool HasAdr026Marker(InvocationExpressionSyntax invocation)
+            => invocation.FirstAncestorOrSelf<Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax>()
+                ?.GetLeadingTrivia().ToFullString()
+                .Contains("ADR-026", StringComparison.Ordinal) ?? false;
 
         /// <summary>.Result 节点是否位于某个 if 的 then 分支内，且该 if 条件引用 IsCompletedSuccessfully。</summary>
         private static bool IsInsideCompletedSuccessfullyBranch(SyntaxNode node)

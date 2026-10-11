@@ -41,6 +41,62 @@ public sealed class GeneratedIdentityTests
         await Assert.That(result).IsEqualTo(id);
     }
 
+    // ── B-2（EPSL 地毯审计 2026-10-11）：Guid 读路径三腿零分配 ──
+
+    [Test]
+    public async Task GuidIdentity_JsonDFormat_ZeroAllocation()
+    {
+        // 框架写侧恒产 D 格式——快路径（Utf8Parser 直解）零分配；旧码 GetString() 每读
+        // 一次 ~90B 字符串分配（本测试在旧码下红）
+        var json = "\"3d58a70e-cb5c-4abc-9693-a765f8fb4a88\""u8;
+        var converter = new CustomerIdJsonConverter();
+        CustomerId sink = default;
+
+        for (var i = 0; i < 1_000; i++) // 预热
+        {
+            var reader = new Utf8JsonReader(json);
+            reader.Read();
+            sink = converter.Read(ref reader, typeof(CustomerId), JsonSerializerOptions.Default);
+        }
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        var baseline = GC.GetAllocatedBytesForCurrentThread();
+        const int iterations = 10_000;
+        for (var i = 0; i < iterations; i++)
+        {
+            var reader = new Utf8JsonReader(json);
+            reader.Read();
+            sink = converter.Read(ref reader, typeof(CustomerId), JsonSerializerOptions.Default);
+        }
+        var alloc = GC.GetAllocatedBytesForCurrentThread() - baseline;
+        _ = sink;
+
+        // Utf8JsonReader 为 ref struct 栈分配；From(Guid) 为 record struct——零分配 + 微噪声余量
+        await Assert.That(alloc <= 64).IsTrue();
+    }
+
+    [Test]
+    public async Task GuidIdentity_JsonNonDFormats_StillAccepted()
+    {
+        // 格式兼容集行为锁定：Utf8Parser 仅支持 'D'，N/B/P 格式经回退腿（字符串路径）
+        // 保持旧码接受面——快路径改造不得收窄格式集
+        var converter = new CustomerIdJsonConverter();
+        var expected = Guid.Parse("3d58a70e-cb5c-4abc-9693-a765f8fb4a88");
+
+        await Assert.That(ReadJson(converter, "\"3d58a70ecb5c4abc9693a765f8fb4a88\""u8).Value).IsEqualTo(expected);   // N
+        await Assert.That(ReadJson(converter, "\"{3d58a70e-cb5c-4abc-9693-a765f8fb4a88}\""u8).Value).IsEqualTo(expected); // B
+        await Assert.That(ReadJson(converter, "\"(3d58a70e-cb5c-4abc-9693-a765f8fb4a88)\""u8).Value).IsEqualTo(expected); // P
+    }
+
+    private static CustomerId ReadJson(CustomerIdJsonConverter converter, ReadOnlySpan<byte> json)
+    {
+        var reader = new Utf8JsonReader(json);
+        reader.Read();
+        return converter.Read(ref reader, typeof(CustomerId), JsonSerializerOptions.Default);
+    }
+
     [Test]
     public async Task GeneratedTypeConverter_ConvertsFromString()
     {

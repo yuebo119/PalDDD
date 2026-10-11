@@ -23,7 +23,9 @@ namespace PalDDD.Benchmarks;
 // LeasePending/LeaseAndMarkAll 为耗尽型操作，每 invoke 含重灌成本（见方法注释）
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
-[ShortRunJob]
+// ⚠️ 无 [ShortRunJob]：--infra 入口传显式 MediumRun InProcess ManualConfig，类级 job
+// attribute 会与之 union 叠加出双 job——CsProj 工具链 job 在 net11-rc moniker 上触发
+// DotNetSdkValidator 崩溃（--persist/--compression 修复先例同款，见 Program.cs 注释）
 public class OutboxThroughputBenchmarks
 {
     private InMemoryOutboxStore _store = null!;
@@ -34,7 +36,7 @@ public class OutboxThroughputBenchmarks
     // 调用数万次，租约型基准首个 invoke 即满额租走 100 条，后续 invoke 恒为空扫描，
     // ns/op 被稀释失真。现改为方法体内满额租走后立即重灌（见 ReseedStore 与各方法注释）。
     [IterationSetup]
-    public void Setup() => ReseedStore();
+    public void Setup() => ReseedStore().GetAwaiter().GetResult(); // v4.0 ③：BDN IterationSetup 须同步签名——不计量路径单点阻塞桥
 
     [IterationCleanup]
     public void Cleanup()
@@ -48,12 +50,12 @@ public class OutboxThroughputBenchmarks
     /// 永不移除，追加会使 _messages 线性增长，QueryPending 扫描成本随 invoke 次数漂移；
     /// 新建保证每次租约面对恒定 100 条 backlog，扫描口径稳定。
     /// </summary>
-    private void ReseedStore()
+    private async Task ReseedStore()
     {
         _store = new InMemoryOutboxStore();
         for (int i = 0; i < BatchSize; i++)
         {
-            _store.AddMessage(new OutboxMessage
+            await _store.AddMessageAsync(new OutboxMessage
             {
                 Type = "OrderCreated",
                 Payload = "{}"u8.ToArray(),
@@ -78,7 +80,7 @@ public class OutboxThroughputBenchmarks
     {
         var msgs = await _store.LeasePendingMessagesAsync(BatchSize, "bench", TimeSpan.FromSeconds(30), 10, default);
         EnsureFullLease(msgs);
-        ReseedStore();
+        await ReseedStore();
         return msgs.Count;
     }
 
@@ -100,13 +102,13 @@ public class OutboxThroughputBenchmarks
         EnsureFullLease(msgs);
         var now = DateTimeOffset.UtcNow;
         foreach (var m in msgs)
-            _store.MarkProcessed(m, now);
-        ReseedStore();
+            await _store.MarkProcessedAsync(m, now);
+        await ReseedStore();
     }
 
     [Benchmark]
-    public void AddSingleMessage()
-        => _store.AddMessage(new OutboxMessage
+    public async Task AddSingleMessage()
+        => await _store.AddMessageAsync(new OutboxMessage
         {
             Type = "OrderCreated",
             Payload = "{}"u8.ToArray()
@@ -114,10 +116,63 @@ public class OutboxThroughputBenchmarks
 }
 
 // ═══════════════════════════════════════════════════════════
+// Inbox 吞吐基准 — InMemory 编排层（2026-10-08 缺口清单第②项，ITM-286 勘正后补位）
+// 口径对齐 OutboxThroughputBenchmarks：per-invoke 重建 store（ITM-246/152 教训——
+// Processed 记录永不移除，复用 store 使字典无限增长，逐 invoke 重建保证恒定状态）。
+// 三方法为 1-op / 3-op / 2-op 捆绑口径（重复拒绝必然含首次投递+标记，Cycle=首投+标记）。
+// ═══════════════════════════════════════════════════════════
+[MemoryDiagnoser]
+// ⚠️ 无 job attribute 注：同 OutboxThroughputBenchmarks 头注（--infra 模式级 ManualConfig）
+public class InboxThroughputBenchmarks
+{
+    private static readonly DateTimeOffset Now = DateTimeOffset.UtcNow;
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
+
+    // 1-op 口径：空 store 首投（原子 create-or-reject 的热路径）
+    [Benchmark(Baseline = true)]
+    public async Task<InboxMessage?> TryStart_FirstDelivery()
+    {
+        var store = new InMemoryInboxStore();
+        var message = await store.TryStartProcessingAsync("bench", NewMessageId(), Now, Timeout, default);
+        if (message is null)
+            throw new InvalidOperationException("空 store 首投不应返回 null");
+        return message;
+    }
+
+    // 3-op 口径：首投 + MarkProcessed + 同键重投被拒（消费侧幂等去重的完整判定路径）
+    [Benchmark]
+    public async Task<int> TryStart_DuplicateAfterProcessed()
+    {
+        var store = new InMemoryInboxStore();
+        var messageId = NewMessageId();
+        var first = await store.TryStartProcessingAsync("bench", messageId, Now, Timeout, default);
+        await store.MarkProcessedAsync(first!, Now, default);
+        var duplicate = await store.TryStartProcessingAsync("bench", messageId, Now, Timeout, default);
+        if (duplicate is not null)
+            throw new InvalidOperationException("Processed 后同键重投应返回 null（幂等去重失效）");
+        return 0;
+    }
+
+    // 2-op 口径：首投 + 标记完成（单消息完整生命周期）
+    [Benchmark]
+    public async Task<long> TryStartAndMarkProcessed_Cycle()
+    {
+        var store = new InMemoryInboxStore();
+        var message = await store.TryStartProcessingAsync("bench", NewMessageId(), Now, Timeout, default);
+        await store.MarkProcessedAsync(message!, Now, default);
+        return message!.Id;
+    }
+
+    private static string NewMessageId() => $"m-{Guid.NewGuid():N}";
+}
+
+// ═══════════════════════════════════════════════════════════
 // EventLog 事件追加 + 流式读取基准
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
-[ShortRunJob]
+// ⚠️ 无 [ShortRunJob]：--infra 入口传显式 MediumRun InProcess ManualConfig，类级 job
+// attribute 会与之 union 叠加出双 job——CsProj 工具链 job 在 net11-rc moniker 上触发
+// DotNetSdkValidator 崩溃（--persist/--compression 修复先例同款，见 Program.cs 注释）
 public class EventLogBenchmarks
 {
     private InMemoryEventLog _log = null!;
@@ -173,7 +228,9 @@ public class EventLogBenchmarks
 // Saga 状态持久化基准
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
-[ShortRunJob]
+// ⚠️ 无 [ShortRunJob]：--infra 入口传显式 MediumRun InProcess ManualConfig，类级 job
+// attribute 会与之 union 叠加出双 job——CsProj 工具链 job 在 net11-rc moniker 上触发
+// DotNetSdkValidator 崩溃（--persist/--compression 修复先例同款，见 Program.cs 注释）
 public class SagaStateBenchmarks
 {
     private InMemorySagaStateStore<BenchSagaState> _store = null!;
@@ -231,7 +288,9 @@ public class SagaStateBenchmarks
 // SQL 生成工具性能基准（静态方法，无 IO）
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
-[ShortRunJob]
+// ⚠️ 无 [ShortRunJob]：--infra 入口传显式 MediumRun InProcess ManualConfig，类级 job
+// attribute 会与之 union 叠加出双 job——CsProj 工具链 job 在 net11-rc moniker 上触发
+// DotNetSdkValidator 崩溃（--persist/--compression 修复先例同款，见 Program.cs 注释）
 public class SqlGenBenchmarks
 {
     [Benchmark(Baseline = true)]
@@ -279,7 +338,9 @@ public class SqlGenBenchmarks
 // DI/Dapper 配置基准
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
-[ShortRunJob]
+// ⚠️ 无 [ShortRunJob]：--infra 入口传显式 MediumRun InProcess ManualConfig，类级 job
+// attribute 会与之 union 叠加出双 job——CsProj 工具链 job 在 net11-rc moniker 上触发
+// DotNetSdkValidator 崩溃（--persist/--compression 修复先例同款，见 Program.cs 注释）
 public class ConfigurationBenchmarks
 {
     [Benchmark]
@@ -311,20 +372,28 @@ public class CompressionBenchmarks
     private ICompressor _brotli = null!;
     private ICompressor _gzip = null!;
     private ICompressor _deflate = null!;
+    private ICompressor _lz4 = null!;
+    private ICompressor _zstd = null!;
     private byte[] _payload = null!;
     private ReadOnlyMemory<byte> _brotliCompressed;
     private byte[] _gzipCompressed = null!;
     private byte[] _deflateCompressed = null!;
+    private byte[] _lz4Compressed = null!;
+    private byte[] _zstdCompressed = null!;
 
     [GlobalSetup]
     public void Setup()
     {
         var services = new ServiceCollection();
-        services.AddPalCompression();
+        // 2026-10-08 缺口补齐：AddPalCompressionNative 自足（内部先 TryAdd 基础层），
+        // 同一 Provider 同时供 System 三算法与原生 LZ4/ZStandard——五算法同负载同 Provider 可比
+        services.AddPalCompressionNative();
         var provider = services.BuildServiceProvider().GetRequiredService<ICompressionProvider>();
         _brotli = provider.GetCompressor(CompressionAlgorithm.Brotli);
         _gzip = provider.GetCompressor(CompressionAlgorithm.GZip);
         _deflate = provider.GetCompressor(CompressionAlgorithm.Deflate);
+        _lz4 = provider.GetCompressor(CompressionAlgorithm.LZ4);
+        _zstd = provider.GetCompressor(CompressionAlgorithm.ZStandard);
 
         _payload = new byte[16 * 1024];
         for (int i = 0; i < _payload.Length; i++)
@@ -333,6 +402,8 @@ public class CompressionBenchmarks
         _brotliCompressed = _brotli.Compress(_payload);
         _gzipCompressed = _gzip.Compress(_payload).ToArray();
         _deflateCompressed = _deflate.Compress(_payload).ToArray();
+        _lz4Compressed = _lz4.Compress(_payload).ToArray();
+        _zstdCompressed = _zstd.Compress(_payload).ToArray();
     }
 
     [Benchmark(Baseline = true)]
@@ -352,4 +423,18 @@ public class CompressionBenchmarks
 
     [Benchmark]
     public byte[] Deflate_Decompress_16KB() => _deflate.Decompress(_deflateCompressed.AsSpan());
+
+    // 2026-10-08 缺口补齐：原生绑定（PalDDD.Compression.Native，NativeCompressions 1.0.1）
+    // 与 System 三算法同口径对照——README 宣传的 LZ4/ZStandard 此前零基准
+    [Benchmark]
+    public ReadOnlyMemory<byte> LZ4_Compress_16KB() => _lz4.Compress(_payload);
+
+    [Benchmark]
+    public byte[] LZ4_Decompress_16KB() => _lz4.Decompress(_lz4Compressed.AsSpan());
+
+    [Benchmark]
+    public ReadOnlyMemory<byte> ZStandard_Compress_16KB() => _zstd.Compress(_payload);
+
+    [Benchmark]
+    public byte[] ZStandard_Decompress_16KB() => _zstd.Decompress(_zstdCompressed.AsSpan());
 }

@@ -118,11 +118,20 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 | AOT 现状与约束 | `docs/aot.md`、`docs/design/` |
 | 用法与教程 | `docs/usage.md`、`docs/tutorial.md` |
 | 测试策略与基线 | `docs/testing.md`、`docs/test-coverage-baseline.md` |
+| **性能预算契约（EPSL）** | `perf-budgets.md`（根目录；分配判定层预算，与既有 `--smoke` 断言对齐） |
+| **性能台账（勿重开/明确不做）** | `.ai/perf-ledger.md`（提性能建议前必查，防重复提案） |
+| **性能实测记录** | `docs/performance.md`（22 基准类、真库车道、统计有效性自评） |
 | 已定的架构决策（含被否决方案） | `docs/decisions/`（24 份 ADR，2026-09-19 ADR-024 增） |
 | 历轮评审与清单 | `docs/review/`（含 `NAMING.md` 命名约定与索引） |
 | 迁移与发布 | `docs/migration/`、`docs/release.md` |
 | 已知坑 | `docs/pitfalls.md` |
 | 门禁可信度 | `dotnet run scripts/gate-audit.cs` 的矩阵输出 |
+
+### 性能工程（EPSL v1.1，2026-10-11 接入）
+
+- 性能深挖只按触发条件启动（门禁红 / 量级 10× / 新负载类型 / SLO 烧穿 / 阶段边界 / 项目完成），其余场合禁全量地毯扫描；触发后按四阶段 SOP：门禁先行 → 自动归因 → 分片深读 → 强制收敛（方案 `~/.zcode/references/EXTREME_PERF_SYSTEM.md`；SOP 独立件 `~/.zcode/perf-template/audit/carpet-audit-sop.md`）。
+- AI 性能分析四红线：抽查"核实/无一处"论断；负结论带检索口径；过 ADR 与 perf-ledger 比对；继承论断独立复验。
+- 量具分层与项目既有体系同构：分配可作判定、计时只作趋势（两轮跨 SDK 实证，`docs/performance.md`）。
 
 ---
 

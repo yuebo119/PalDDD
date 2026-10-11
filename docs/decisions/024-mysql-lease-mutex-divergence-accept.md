@@ -1,9 +1,11 @@
 # ADR 024：MySQL 三栈租约互斥分叉 — 显式接受现状
 
-> 状态：**已采纳（2026-09-19 用户裁决「显式接受」）**
+> 状态：**已采纳（2026-09-19 用户裁决「显式接受」）——2026-10-09 起「不统一」决策对
+> MySQL ≥8.0.18 部分被 ADR-025 修订（版本探测双模板启用 SKIP LOCKED）；<8.0.18 与
+> MariaDB 行为本决策继续有效**
 > 日期：2026-09-19
 > 关联：ADR-020（三栈并行策略）、ADR-017（Saga 租约乐观并发）、ITM-794（首席审计 A-1，
-> 论证：`docs/review/audit-2026-09-19-findings-confirmation.md`）
+> 论证：`docs/review/audit-2026-09-19-findings-confirmation.md`）、ADR-025（修订）
 
 ## 背景
 
@@ -37,6 +39,47 @@ MySQL 派生表锁的版本兼容矩阵（8.0.18 以下行为差异）；EF 栈�
 - **需要强互斥的 MySQL 场景**：选 EF 栈（SKIP LOCKED），或升级至 MySQL 8.0.18+ 后
   自行在 Dapper/PalORM 的 SqlTemplates 基础上添加派生表锁（模板是 public const，可复制改造）。
 - SQLite/PG 方言不受本决策影响（SQLite 单写者天然互斥；PG 三栈一致 SKIP LOCKED）。
+
+## 补记（2026-10-09）：并发实证与指引补强
+
+> 背景：2026-10-08/09 性能基准系统补齐 Outbox 并发车道（`bench/PalDDD.Benchmarks`
+> `--concurrency`/`--persist-mysql`，数字与实录见 `docs/performance.md`「并发车道注」
+> 与「PG/MySQL 网络真库基线」段），本决策描述的行为首次获得受控并发实测。
+> **本补记只补充风险实证与消费方指引，不改变「显式接受分叉」的决策本身。**
+
+### 实证一：无锁子句形态的并发后果是死锁异常，不止重复投递窗口
+
+本决策背景段记录的风险形态是 last-writer-wins 下的**重复投递窗口**。实测（MySQL 8.4.11，
+wslc 容器，N=2/4/8 worker 并发租约，800 条种子/波）：**Dapper 与 PalORM 两栈的并发租约
+全部以 InnoDB 死锁异常失败**（`Deadlock found when trying to get lock`，两轮共 8 处实录），
+而非静默双执行——无锁子句形态在并发写竞争下先触发死锁检测，异常中断先于重复投递发生。
+消费方含义：多实例 Dapper/PalORM MySQL 部署除幂等消费外，**还必须对死锁异常
+（MySqlException 0x80004005）实现重试**，否则发布循环中断。
+
+### 实证二：EF 栈 SKIP LOCKED 形态的互斥声明获验证
+
+本决策指引「需要强互斥的 MySQL 场景选 EF 栈」的验证缺口（2026-10-09 之前无并发数据）
+已闭合：EF 栈步骤 1 租约 SQL（JOIN 派生表 `FOR UPDATE SKIP LOCKED`）在 MySQL 8.4.11
+直跑实测（形态逐字保留，标识符适配基线表）——**N=2/4/8 全部零死锁、UPDATE 受影响行数
+之和恒等于种子数（互斥不变量全波通过）、串行 92ms → 8 worker 53ms 真加速**。
+注：EF 栈级基准车道待上游出 EF 11 rc 配套 Provider（Npgsql.EF 11 线仅 preview 且钉死
+EF preview 精确版本、Pomelo 无 11 线，2026-10-09 实证）后可升级；SQL 形态车道见
+`MySqlSkipLockedShapeBenchmarks` 类头注。
+
+### 指引补强（在原三 bullets 之上追加）
+
+- **多实例 Dapper/PalORM MySQL**：幂等消费（原要求）**+ 死锁重试**（本补重新增，见实证一）；
+  或直接采用实证二验证过的 EF 形态锁（自加派生表锁改造模板即可，见原指引第二条）。
+
+### 运维语义勘正（2026-10-09 补）
+
+「死锁重试」的实际适用面需精确化：`OutboxProcessor`/`SagaProcessor` 共享的
+`PeriodicBackgroundProcessor` 模板自带每 tick 异常隔离（tick 失败不中断循环，下一轮询
+周期自然重试）——**经处理器消费的用户对死锁已具备 tick 级自愈，无需额外代码**；
+该要求仅适用于直连 `IPalOutboxStore.LeasePendingMessagesAsync` 的调用方。
+另：本 ADR 的分叉现状已被 ADR-025（2026-10-09）在 MySQL ≥8.0.18 段修订为
+SKIP LOCKED 双模板——死锁与双租窗口在该版本段均已消除，本补记指引对 <8.0.18/MariaDB
+回退路径继续有效。
 
 ## 被否决方案
 

@@ -91,7 +91,15 @@ public sealed class OutboxDomainEventInterceptor(
 
         _pending.Clear();
         DomainEventCollector.Collect(eventData.Context, _pending);
-        WriteEventsToOutbox(eventData.Context, _pending);
+        // 轮四（2026-10-10）：异步路径分派——立即写 store（Dapper/PalORM/InMemory，
+        // IImmediateWriteOutboxStore）走单次异步批量（多事件合并单往返 + 消除逐条同步写的
+        // 往返级线程阻塞）；EF store（延迟写族）走逐条异步路径（v4.0 ③：跟踪添加同步完成）。
+        // 同步钩子 SavingChanges 无异步可用，两类 store 均走 WriteEventsToOutbox 的
+        // 单点阻塞桥（v4.0 ③ 文档化形态）
+        if (_pending.Count > 0 && _outboxStore is Transactions.IImmediateWriteOutboxStore immediate)
+            await WriteEventsToOutboxImmediateAsync(eventData.Context, _pending, immediate, cancellationToken).ConfigureAwait(false);
+        else if (_pending.Count > 0)
+            await WriteEventsToOutboxAsync(eventData.Context, _pending).ConfigureAwait(false);
         return await base.SavingChangesAsync(eventData, result, cancellationToken).ConfigureAwait(false);
     }
 
@@ -225,36 +233,12 @@ public sealed class OutboxDomainEventInterceptor(
         {
             foreach (var evt in events)
             {
-                var descriptor = _messageCatalog.Find(evt.GetType())
-                    ?? throw new InvalidOperationException(
-                        $"Domain event '{evt.GetType().FullName}' is not registered in MessageCatalog.");
-                var payload = _serializer.Serialize((object)evt, descriptor);
-                // P1 修复（七轮评审）：evt 静态类型是 abstract DomainEvent——泛型重载
-                // Serialize<DomainEvent>(evt, descriptor) 绑定基类 JsonTypeInfo 与派生 descriptor
-                // 不匹配（InvalidCastException）。显式 (object) 强转走非泛型 Serialize(object, descriptor)
-                // 用派生 JsonTypeInfo，与读侧（KafkaBroker/RabbitMqBroker 用 object 声明）对称。
-                var msg = new Transactions.OutboxMessage
-                {
-                    Type = descriptor.Name,
-                    Payload = payload.ToArray(),
-                    ContentType = _serializer.ContentType,
-                    SchemaVersion = descriptor.SchemaVersion,
-                    // ITM-103 修复：CausationId 不再自指——原 `CausationId = evt.EventId` 使 outbox 行
-                    // 的因果链自环（"事件由自身引起"），下游消费方按 causation 追踪时断链。
-                    // 本层无父事件追踪（DomainEvent 不含触发者 ID），诚实值为 null；
-                    // 有父链语义的调用方应在构造 OutboxMessage 时显式赋值。
-                    // v36 P3（镜像 v35 EA4 在 EventAuditMetadata.TraceParent 的格式前提声明）：
-                    // TraceParent 取自 Activity.Current?.Id，其格式跟随 Activity.IdFormat——
-                    // 假定 W3C（.NET 5+ 默认 DefaultIdFormat 为 W3C）。宿主若全局改用 Hierarchical
-                    //（Activity.DefaultIdFormat = ActivityIdFormat.Hierarchical），写入值为
-                    // hierarchical 格式（|... 形态）而非 W3C traceparent（00-... 四段），下游
-                    // 按 W3C 解析将失真；跨格式环境需在宿主统一 IdFormat 或消费侧按前缀判别。
-                    CausationId = null,
-                    TraceParent = Activity.Current?.Id,
-                    TraceState = Activity.Current?.TraceStateString,
-                    Status = Transactions.OutboxStatus.Pending
-                };
-                _outboxStore.AddMessage(msg);
+                var msg = BuildOutboxMessage(evt);
+                // v4.0 ③（ADR-026）：接口异步化后的同步钩子单点阻塞桥——无同步上下文宿主
+                //（ASP.NET Core/控制台）安全；classic sync-context 宿主请改用 SaveChangesAsync
+                //（迁移指引见 CHANGELOG）。EF store 的 AddMessageAsync 为跟踪添加（同步完成），
+                // 桥实际零阻塞；立即写 store（Dapper/PalORM）真异步——桥为文档化阻塞点
+                _outboxStore.AddMessageAsync(msg).AsTask().GetAwaiter().GetResult();
                 _injectedOutboxIds.Add(msg.Id);
             }
         }
@@ -275,6 +259,117 @@ public sealed class OutboxDomainEventInterceptor(
             }
             throw;
         }
+    }
+
+    /// <summary>
+    /// 轮四（2026-10-10）：立即写 store 的异步批量路径——序列化全部事件后单次
+    /// <see cref="Transactions.IImmediateWriteOutboxStore.AddMessagesAsync"/>（Dapper 栈
+    /// PG 单 COPY 往返，批化收益见 AddBatch5 基准 3.5×/3.8×；SQLite/MySQL 同语义单语句），
+    /// 消除原逐条同步写在远程库上对异步调用线程的往返级阻塞。自清理域镜像
+    /// <see cref="WriteEventsToOutbox"/>（v34 P2 同款：失败 Detach 半成品后重抛原始异常；
+    /// 序列化阶段零写入、批量调用为单语句原子，失败时无半批驻留 ChangeTracker——立即写
+    /// 族不经 ChangeTracker，清理仍对称执行以覆盖 EF store 被误标注等防御场景）。
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
+        Justification = "部分注入清理必须对任意异常免疫（同 WriteEventsToOutbox v35 P3 形态）。")]
+    private async Task WriteEventsToOutboxImmediateAsync(
+        Microsoft.EntityFrameworkCore.DbContext? context,
+        List<Core.DomainEvent> events,
+        Transactions.IImmediateWriteOutboxStore immediateStore,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var messages = new List<Transactions.OutboxMessage>(events.Count);
+            foreach (var evt in events)
+            {
+                var msg = BuildOutboxMessage(evt);
+                messages.Add(msg);
+                _injectedOutboxIds.Add(msg.Id);
+            }
+            // v4.0 ④（ADR-026）：接口已带 CancellationToken——异步钩子传播真实 token
+            _ = await immediateStore.AddMessagesAsync(messages, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception original)
+        {
+            try
+            {
+                RemoveInjectedOutboxMessages(context);
+            }
+            catch (Exception cleanupEx)
+            {
+                original.Data["PalOutboxCleanupFailure"] = cleanupEx.ToString();
+            }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// v4.0 ③（ADR-026）：异步钩子的逐条路径（EF store 等延迟写族）——每事件
+    /// <see cref="Transactions.IPalOutboxStore.AddMessageAsync"/> 真异步（EF 实现为跟踪添加
+    /// 同步完成），自清理域同 <see cref="WriteEventsToOutbox"/>（v34 P2 同款）。
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
+        Justification = "部分注入清理必须对任意异常免疫（同 WriteEventsToOutbox v35 P3 形态）。")]
+    private async Task WriteEventsToOutboxAsync(
+        Microsoft.EntityFrameworkCore.DbContext? context,
+        IReadOnlyList<Core.DomainEvent> events)
+    {
+        try
+        {
+            foreach (var evt in events)
+            {
+                var msg = BuildOutboxMessage(evt);
+                await _outboxStore.AddMessageAsync(msg).ConfigureAwait(false);
+                _injectedOutboxIds.Add(msg.Id);
+            }
+        }
+        catch (Exception original)
+        {
+            try
+            {
+                RemoveInjectedOutboxMessages(context);
+            }
+            catch (Exception cleanupEx)
+            {
+                original.Data["PalOutboxCleanupFailure"] = cleanupEx.ToString();
+            }
+            throw;
+        }
+    }
+
+    /// <summary>领域事件 → OutboxMessage 构造（轮四提取：同步逐条路径与异步批量路径共用，消息形态单一来源）。</summary>
+    private Transactions.OutboxMessage BuildOutboxMessage(Core.DomainEvent evt)
+    {
+        var descriptor = _messageCatalog.Find(evt.GetType())
+            ?? throw new InvalidOperationException(
+                $"Domain event '{evt.GetType().FullName}' is not registered in MessageCatalog.");
+        var payload = _serializer.Serialize((object)evt, descriptor);
+        // P1 修复（七轮评审）：evt 静态类型是 abstract DomainEvent——泛型重载
+        // Serialize<DomainEvent>(evt, descriptor) 绑定基类 JsonTypeInfo 与派生 descriptor
+        // 不匹配（InvalidCastException）。显式 (object) 强转走非泛型 Serialize(object, descriptor)
+        // 用派生 JsonTypeInfo，与读侧（KafkaBroker/RabbitMqBroker 用 object 声明）对称。
+        return new Transactions.OutboxMessage
+        {
+            Type = descriptor.Name,
+            Payload = payload.ToArray(),
+            ContentType = _serializer.ContentType,
+            SchemaVersion = descriptor.SchemaVersion,
+            // ITM-103 修复：CausationId 不再自指——原 `CausationId = evt.EventId` 使 outbox 行
+            // 的因果链自环（"事件由自身引起"），下游消费方按 causation 追踪时断链。
+            // 本层无父事件追踪（DomainEvent 不含触发者 ID），诚实值为 null；
+            // 有父链语义的调用方应在构造 OutboxMessage 时显式赋值。
+            // v36 P3（镜像 v35 EA4 在 EventAuditMetadata.TraceParent 的格式前提声明）：
+            // TraceParent 取自 Activity.Current?.Id，其格式跟随 Activity.IdFormat——
+            // 假定 W3C（.NET 5+ 默认 DefaultIdFormat 为 W3C）。宿主若全局改用 Hierarchical
+            //（Activity.DefaultIdFormat = ActivityIdFormat.Hierarchical），写入值为
+            // hierarchical 格式（|... 形态）而非 W3C traceparent（00-... 四段），下游
+            // 按 W3C 解析将失真；跨格式环境需在宿主统一 IdFormat 或消费侧按前缀判别。
+            CausationId = null,
+            TraceParent = Activity.Current?.Id,
+            TraceState = Activity.Current?.TraceStateString,
+            Status = Transactions.OutboxStatus.Pending
+        };
     }
 }
 

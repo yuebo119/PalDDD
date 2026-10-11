@@ -14,7 +14,7 @@ public sealed class OutboxEfCoreTests
         var store = (IPalOutboxStore)db;
         var message = CreateMessage("orders.submitted", FixedNow);
 
-        store.AddMessage(message);
+        await store.AddMessageAsync(message);
         await store.SaveChangesAsync(cancellationToken);
 
         db.ChangeTracker.Clear();
@@ -72,7 +72,7 @@ public sealed class OutboxEfCoreTests
         db.OutboxMessages.Add(message);
         await db.SaveChangesAsync(cancellationToken);
 
-        store.MarkProcessed(message, FixedNow.AddSeconds(1));
+        await store.MarkProcessedAsync(message, FixedNow.AddSeconds(1));
         await store.SaveChangesAsync(cancellationToken);
         db.ChangeTracker.Clear();
 
@@ -83,6 +83,39 @@ public sealed class OutboxEfCoreTests
         await Assert.That(loaded.LockedBy).IsNull();
         await Assert.That(loaded.LockedUntil).IsNull();
         await Assert.That(loaded.Error).IsNull();
+    }
+
+    [Test]
+    public async Task MarkProcessed_DetachedSnapshot_FullInMemoryRewrite(CancellationToken cancellationToken)
+    {
+        // v4.0 ②（ADR-026 fencing 统一）锁定：Detached 快照（处理器主路径形态——租约
+        // AsNoTracking 物化）成功后全套六字段回写；跟踪实体自动跳过（令牌假冲突守卫，
+        // 既有测试 MarkProcessed_ClearsLeaseAndRetryState 锁定原语义不变）
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        await using var db = new TestOutboxDbContext(CreateSqliteOptions(connection), FixedNow);
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+        var store = (IPalOutboxStore)db;
+        var seeded = CreateMessage(
+            "orders.detached",
+            FixedNow,
+            lockedBy: "worker-1",
+            lockedUntil: FixedNow.AddMinutes(2),
+            error: "old failure");
+        db.OutboxMessages.Add(seeded);
+        await db.SaveChangesAsync(cancellationToken);
+        db.ChangeTracker.Clear(); // 快照形态：后续对象与跟踪器解绑
+
+        var snapshot = await db.OutboxMessages.AsNoTracking().SingleAsync(m => m.Id == seeded.Id, cancellationToken);
+        var processedAt = FixedNow.AddSeconds(3);
+        await store.MarkProcessedAsync(snapshot, processedAt);
+
+        await Assert.That(snapshot.Status).IsEqualTo(OutboxStatus.Processed);
+        await Assert.That(snapshot.ProcessedAt).IsEqualTo(processedAt);
+        await Assert.That(snapshot.Error).IsNull();
+        await Assert.That(snapshot.NextAttemptAt).IsNull();
+        await Assert.That(snapshot.LockedBy).IsNull();
+        await Assert.That(snapshot.LockedUntil).IsNull();
     }
 
     [Test]
@@ -104,7 +137,7 @@ public sealed class OutboxEfCoreTests
         await db.SaveChangesAsync(cancellationToken);
 
         var nextAttemptAt = FixedNow.AddMinutes(3);
-        store.ReleaseForRetry(message, "broker failed", nextAttemptAt);
+        await store.ReleaseForRetryAsync(message, "broker failed", nextAttemptAt);
         // 模拟 OutboxBatchProcessor.PersistSingleAsync：ReleaseForRetry 已直写 SQL，
         // 无 tracked 修改时此处为 no-op（不再抛 RetryCount 并发令牌假冲突）
         await store.SaveChangesAsync(cancellationToken);
@@ -146,7 +179,7 @@ public sealed class OutboxEfCoreTests
         await db.SaveChangesAsync(cancellationToken);
 
         // 过期持有者 worker-1（入参 message 的内存快照）的释放尝试：守卫拒绝
-        store.ReleaseForRetry(message, "broker failed", FixedNow.AddMinutes(3));
+        await store.ReleaseForRetryAsync(message, "broker failed", FixedNow.AddMinutes(3));
         db.ChangeTracker.Clear();
 
         var loaded = await db.OutboxMessages.SingleAsync(cancellationToken);

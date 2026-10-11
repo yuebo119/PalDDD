@@ -133,6 +133,12 @@ TState>
             throw;
         }
 
+        // EPSL 地毯审计 2026-10-11 B-1：非超时 Saga 的租约释放收集到环后单语句批量执行
+        //（常态路径原为逐 saga SaveChangesAsync——每条一往返，Dapper 栈叠加 B-3 修复前的
+        // 存在性全行预查，EF 栈叠加全跟踪实体 DetectChanges）；存储未实现
+        // ISagaLeaseBatchStore 时保持逐条路径逐字不变（自定义存储向后兼容）。
+        List<TState>? pendingRelease = null;
+
         foreach (var sagaState in activeSagas)
         {
             // P3 修复：单条 Saga 处理失败不中断剩余——否则后续 Saga 的租约需等
@@ -232,15 +238,24 @@ TState>
                 {
                     // P0-FIX-3: 非超时 Saga 也必须释放租约 —— 否则超时检测平均延迟 = LeaseDuration（2 分钟）
                     // 而非 PollInterval（30 秒），多实例下该 Saga 对其他实例不可见
-                    sagaState.LeasedBy = null;
-                    sagaState.LeasedUntil = null;
-                    // P2 修复（取消路径对称）：同上——终态写入不响应取消
-                    var releaseSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
-                    if (releaseSaved == 0)
+                    if (_store is ISagaLeaseBatchStore<TState>)
                     {
-                        // P3 修复（八轮）：0 行 = 乐观锁冲突——租约释放未落库（LeaseDuration 到期兜底），
-                        // 记 Warning 与补偿路径对齐
-                        _logger.Warning($"Saga {sagaState.SagaId} lease release save affected 0 rows (optimistic concurrency conflict); lease will expire by LeaseDuration");
+                        // B-1 批量路径：环后单语句释放（leased_by 守卫 + 换代在存储侧完成，
+                        // 此处不变异内存对象——InMemory 栈由存储变异字典条目保持一致性）
+                        (pendingRelease ??= new List<TState>(activeSagas.Count)).Add(sagaState);
+                    }
+                    else
+                    {
+                        sagaState.LeasedBy = null;
+                        sagaState.LeasedUntil = null;
+                        // P2 修复（取消路径对称）：同上——终态写入不响应取消
+                        var releaseSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
+                        if (releaseSaved == 0)
+                        {
+                            // P3 修复（八轮）：0 行 = 乐观锁冲突——租约释放未落库（LeaseDuration 到期兜底），
+                            // 记 Warning 与补偿路径对齐
+                            _logger.Warning($"Saga {sagaState.SagaId} lease release save affected 0 rows (optimistic concurrency conflict); lease will expire by LeaseDuration");
+                        }
                     }
                 }
             }
@@ -252,6 +267,27 @@ TState>
             {
                 // 租约靠 LeaseDuration 兜底过期；记录后继续处理下一条
                 _logger.Error(ex, $"Saga {sagaState.SagaId} timeout check failed; lease will expire by LeaseDuration");
+            }
+        }
+
+        // B-1 收口：单语句批量释放。终态写入不响应取消（对齐逐条路径的 CancellationToken.None）；
+        // 失败隔离镜像逐条路径的 per-saga catch——失败仅记日志不上抛（tick 韧性保持），未释放
+        // 租约靠 LeaseDuration 到期释放（与逐条路径单条失败的语义一致）。
+        if (pendingRelease is not null)
+        {
+            try
+            {
+                var batchStore = (ISagaLeaseBatchStore<TState>)_store;
+                var released = await batchStore.ReleaseLeasesAsync(options.LeaseOwner, pendingRelease, CancellationToken.None).ConfigureAwait(false);
+                if (released < pendingRelease.Count)
+                {
+                    // 冲突信号粒度由逐 saga 收粗为批计数（B-1 已裁决取舍，见 ISagaLeaseBatchStore remarks）
+                    _logger.Warning($"Saga lease batch release affected {released}/{pendingRelease.Count} rows (optimistic concurrency conflicts); unreleased leases will expire by LeaseDuration");
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.Error(ex, $"Saga lease batch release failed ({pendingRelease.Count} sagas); leases will expire by LeaseDuration");
             }
         }
     }

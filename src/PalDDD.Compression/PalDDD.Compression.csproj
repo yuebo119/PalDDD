@@ -9,4 +9,11 @@
     <NoWarn>$(NoWarn);CA1812;CA1716</NoWarn>
   </PropertyGroup>
 
+  <!-- DecompressBufferPool（internal）为两程序集共用的跨程序集单一事实源：
+       Native 的 LZ4/ZStd/OpenZL 与本程序集的 Brotli 解压共用同一线程槽池（对齐
+       DecompressionGuard public 常量先例；池无公共 API 面，IVT 即可，不入公共快照） -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="PalDDD.Compression.Native" />
+  </ItemGroup>
+
 </Project>

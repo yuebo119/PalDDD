@@ -96,7 +96,7 @@
 
 | 维度 | DDD 约定 |
 |------|---------|
-| **测试框架** | TUnit 1.73.5 + MTP（Microsoft.Testing.Platform） |
+| **测试框架** | TUnit 1.73.19 + MTP（Microsoft.Testing.Platform） |
 | **断言库** | TUnit.Assertions（Fluent 链式） |
 | **属性测试** | TUnit.FsCheck（属性驱动） |
 | **快照测试** | Verify.TUnit 32.0.1（已用于 Hosting.AspNetCore.Tests 的 ExceptionMiddleware，3 个 `.verified.txt` 基线；公共 API 快照另由自实现 PublicApiSnapshot 承载） |
@@ -251,17 +251,39 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 
 ### 3.2 性能基准矩阵
 
-| 操作类型 | Smoke 模式 | BDN 正式 | 配置 | 状态 |
+| 操作类型 | Smoke 模式 | BDN 正式 | 入口模式 | 状态 |
 |---------|:---:|:---:|------|:---:|
-| Entity 领域事件追加 | ✅ | ✅ | `[ShortRunJob]+[MemoryDiagnoser]` | ✅ |
-| ValueObject 创建 | ✅ | ✅ | 同上 | ✅ |
-| SmartEnum 查找 | ✅ | ✅ | 同上 | ✅ |
-| Validation 规约 | ✅ | ✅ | 同上 | ✅ |
-| Outbox 吞吐 | ✅ | ✅ | 同上 | ✅ |
-| EventLog 写入 | ✅ | ✅ | 同上 | ✅ |
-| SagaState 持久化 | ✅ | ✅ | 同上 | ✅ |
-| SQL 生成（Dapper） | ✅ | ✅ | 同上 | ✅ |
-| 配置初始化 | ✅ | ✅ | 同上 | ✅ |
+| Entity 领域事件追加 | ✅ | ✅ | `--framework`（MediumRun InProcess） | ✅ |
+| Entity 创建/GetHashCode | — | ✅ | `--framework` | ✅ |
+| ValueObject 创建 | ✅ | ✅ | `--framework` | ✅ |
+| SmartEnum 查找 | ✅ | ✅ | `--framework` | ✅ |
+| Validation 规约 | ✅ | ✅ | `--framework` | ✅ |
+| CQRS 分发链（零行为 vs 单直通行为） | — | ✅ | `--app`（2026-10-08 缺口补齐） | ✅ |
+| 消息序列化（源生成 JSON 序列化/反序列化/Catalog 查找） | — | ✅ | `--app`（2026-10-08 缺口补齐） | ✅ |
+| Outbox 吞吐 | ✅ | ✅ | `--infra` | ✅ |
+| Outbox 并发租约争用（N worker=1/2/4/8，InMemory 簿记层 + Dapper SQLite 真库层，每 wave 零重复不变量守卫） | — | ✅ | `--concurrency`（2026-10-08 缺口补齐） | ✅ |
+| Inbox 编排层（InMemory：首投/重复拒绝/完整生命周期） | — | ✅ | `--infra`（2026-10-08 缺口补齐） | ✅ |
+| PG/MySQL 网络真库 Dapper + PalORM Outbox/EventLog/Idempotency（吞吐 + 并发 wave；Testcontainers 或 wslc 外部实例双路径） | — | ✅ | `--persist-pg` / `--persist-mysql`（2026-10-08 双栈真跑完成 + 2026-10-09 EventLog/Idempotency 口袋补齐：wslc 路径 `PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` + palddd_bench 库名守卫；Testcontainers 路径留给 Docker 环境，容器不可达报错退出码 2） | ✅（数字、MySQL 双栈死锁实录与 PalORM 会话非线程安全实录见 performance.md；吞吐类覆盖三 Store 能力，类名沿用 Outbox 见账本注） |
+| EF 栈租约 SQL 形态（JOIN 派生表 SKIP LOCKED 互斥验证，MySQL） | — | ✅ | `--persist-mysql`（2026-10-09；EF 栈级车道待上游 Provider 出 EF 11 rc 配套版，SQL 形态为其等价物） | ✅（零死锁+互斥不变量+1.75× 加速，已补记 ADR-024） |
+| PG 方言特性（Pipeline 单往返批处理/读写分离路由/LISTEN-NOTIFY 往返） | — | ✅ | `--persist-pg`（2026-10-09；COPY 隐含在种子路径） | ✅ |
+| Projection 吞吐（处理器全周期 + 断点存储直测，InMemory） | — | ✅ | `--coverage`（2026-10-08 缺口补齐） | ✅ |
+| 消息演化管线（V1→V2 单跳 vs V1→V3 链式） | — | ✅ | `--coverage` | ✅ |
+| Specification 内存路径（IsSatisfiedBy/ToExpression） | — | ✅ | `--coverage` | ✅ |
+| Hosting 每请求开销（终端基线/异常中间件直通/MapCommand 端点全周期，DefaultHttpContext 无网络栈） | — | ✅ | `--coverage` | ✅ |
+| 端到端单命令链路（分发→序列化→Outbox 落入，InMemory 框架开销层） | — | ✅ | `--coverage` | ✅ |
+| MediatR 横向对比（12.5.0 同进程四点：零行为/单行为 × 双框架） | — | ✅ | `--compare`（2026-10-09 新维度轮；引用须带完整口径——MediatR 是纯分发器无基础设施层） | ✅ |
+| CAP 横向对比（DotNetCore.CAP 10.0.2，RabbitMQ 传输 + MySQL cap.published，同语义路径对位；2026-10-11 升级换锚，结论与 8.4.1 时代同带跨主版本稳定） | — | ✅ | `--compare` + `PALDDD_BENCH_CAP_MYSQL`/`PALDDD_BENCH_CAP_RABBIT`（一次性容器，2026-10-09 新维度轮） | ✅ |
+| 投递吞吐端到端（SQLite 真库标记 + 假 broker RTT 矩阵 0/1/20ms + T1.2 排空节奏对照；排空 1000 条积压墙钟口径） | — | ✅ | `--delivery`（2026-10-11 优化实施轮 T0.2；专用采样档 5 迭代/3 预热/1 launch——多秒级 op 撞 InProcess 单基准 5 分钟上限，medium 不可用，同 coverage×strict 车道级形态；T2.1/T3.1 的 A/B 基线） | ✅（数字见 performance.md 优化实施轮段） |
+| 绝对 QPS（1/4/8 线程 × dispatch/chain 聚合吞吐，非 BDN 专门 harness） | ✅（--smoke 级趋势） | —（harness 形态） | `--qps`（2026-10-09 新维度轮；多线程聚合不可由单线程 ns/op 外推） | ✅ |
+| EventLog 写入 | ✅ | ✅ | `--infra` | ✅ |
+| SagaState 持久化 | ✅ | ✅ | `--infra` | ✅ |
+| SQL 生成（Dapper） | ✅ | ✅ | `--infra` | ✅ |
+| 配置初始化 | ✅ | ✅ | `--infra` | ✅ |
+| 压缩编解码（Brotli/GZip/Deflate/LZ4/ZStandard，16KB 同负载） | — | ✅ | `--compression`（单车道 A/B）·`--infra`（五算法同 Provider 对照） | ✅ |
+| 持久化三栈批量（Dapper/PalOrm/EfCore 真库） | — | ✅ | `--persist` / `--persist-medium`（Lease 锚） | ✅ |
+| Saga 编排车道（Normal 基线 / FanOut） | — | ✅ | `--saga` | ✅ |
+
+> **「BDN 正式」的口径（2026-10-08 起生效）**：指 InProcess 显式 job 模式产出的正式报告（上表入口列）。默认 Switcher 入口（`dotnet run --project bench/...` 不带参数）在 BDN 上游补 net11 moniker 前于本工具链不可用（DotNetSdkValidator 崩溃，根因与绕行详见 `Program.cs` 头注）；GA 后可试恢复默认入口并按需恢复类级 job 注解。
 
 ### 3.3 数据规模矩阵
 
@@ -284,17 +306,23 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 
 ### 4.1 DDD 实际偏好（与 ORM 不同）
 
+> **2026-10-08 更新**：类级 `[ShortRunJob]` 已全部移除——BDN 0.15.8 对 jobs 是 union 不去重，类级 job 与模式级 ManualConfig 叠加出双 job，CsProj 工具链 job 在 net11-rc moniker 上触发 DotNetSdkValidator 崩溃（`--persist` 五十四轮先例同款，详见 `bench/PalDDD.Benchmarks/Program.cs` 头注）。运行口径统一由模式级显式 job 提供，**30 个基准类**（Framework 5 + App 2 + Infra 7 + Persistence 3 + SagaLane 1 + Concurrency 2 + Remote 5 + Coverage 5）全量可出正式报告（2026-10-08/09 缺口补齐轮新增：CQRS 分发链、消息序列化、Outbox N worker 租约争用、Inbox 编排层、PG/MySQL 网络真库 Dapper+PalORM 双栈、EF 租约 SQL 形态、PG 方言特性、Projection 吞吐、消息演化、Specification 内存路径、Hosting 每请求开销、端到端链路）。
+
 | 配置 | DDD 使用场景 | ORM 使用场景 |
-|------|------------|------------|
-| `[ShortRunJob]` + `[MemoryDiagnoser]` | **全部 11 个 benchmark 类**（Framework 5 + Infra 6，统一双标注） | 不使用 |
+|------|------------|------|
+| 模式级 ManualConfig：`Job.MediumRun` + InProcessEmitToolchain + `[MemoryDiagnoser]` | `--framework` / `--app` / `--infra` / `--concurrency` / `--coverage` / `--persist-pg` / `--persist-mysql` / `--persist-medium`（正式报告，27 类全覆盖） | 不使用 |
+| 模式级 ManualConfig：`Job.MediumRun` 加密采样（迭代 40/预热 20/launch 3） | `--strict`（2026-10-10 增、同日专项治理轮全局化：**可叠加到任意模式**，如 `--infra --strict` / `--persist-pg --strict`；无其他模式参数时默认跑 OutboxThroughput+SmartEnum 两类。Error 12~18%→0.5~5.4% 且均值回归真值；strict 数字入账须带档位标签。**时长预期**：采样量为 medium 4×，实测分段耗时约为 medium 的 3~4×——framework ~29min / infra ~39min / app ~16min / persist-×-strict ~30-39min（medium 分别 17/12/5/9min）——非卡死判据：日志 WorkloadActual 单调递增即健康，多段链串行叠加属预期） | 不使用 |
+| 模式级 ManualConfig：`Job.InProcess` | `--persist` / `--compression`（快速与单车道 A/B） | 不使用 |
+| 类级 `[InProcess]` attribute | SagaLaneBenchmarks（`--saga`，单类无叠加风险） | 不使用 |
+| ~~类级 `[ShortRunJob]`~~ | **已移除**（2026-10-08，双 job 崩溃见上注） | 不使用 |
 | `[SimpleJob]` 三档（快速 1/3/5 / 标准 3/5/10 / 严格 5/10/15） | **未使用** | 偏好（grep 实证） |
-| `[BenchmarkCategory]` | **未使用**（按文件分类 Framework/Infra） | 使用（按操作分类） |
+| `[BenchmarkCategory]` | **未使用**（按文件分类 Framework/App/Infra/Persistence/SagaLane/Concurrency/Remote/Coverage） | 使用（按操作分类） |
 | `[Params]` | **未使用**（用 const 或字段） | 使用（参数化扫描） |
 | `[Benchmark(Baseline = true)]` | 少数方法标注 | 使用 |
 
 ### 4.2 配置层级（参考）
 
-> DDD 当前统一用 `[ShortRunJob]`。如需提升统计可信度，可参考 ORM 三档：
+> DDD 当前由模式级 ManualConfig 统一供 job（正式档 `Job.MediumRun` InProcess，快速档 `Job.InProcess`，见 §4.1）。如需调整统计可信度，可参考 ORM 三档：
 
 | 层级 | 配置 | 适用场景 | 统计可信度 |
 |------|------|---------|:---:|
@@ -308,9 +336,9 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 dotnet run --project bench/PalDDD.Benchmarks -- --smoke
 ```
 
-100 万次迭代手动计时（Stopwatch + `GC.GetAllocatedBytesForCurrentThread`），不依赖 BenchmarkDotNet 引擎。
+100 万次迭代手动计时（Stopwatch + `GC.GetAllocatedBytesForCurrentThread`），不依赖 BenchmarkDotNet 引擎。**2026-10-08 起带分配预算断言**：Success/FromValue ≤1 B/op、Failed ≤50 B/op、RaiseEvent ≤140 B/op（rc.1 实测校准；预算语义对齐 AllocationContractTests——上界含余量只拦大幅回归），超限退出码 1，可直接用作人工 TOOL 门禁（conventions §10.6 口径，未接 CI）。
 
-> **重要**：BenchmarkDotNet 0.15.8 不支持 .NET 11 Preview，本机 BDN 校验可能只输出 `Validating benchmarks:` 未生成正式报告。**`--smoke` 是 .NET 11 Preview 下唯一可信的快速回归手段**。待 .NET 11 GA 后切回标准 BDN 报告。
+> **重要**：BenchmarkDotNet 0.15.8 不识别 net11-rc runtime moniker，默认 Switcher 入口在本工具链崩溃（根因详见 `Program.cs` 头注）。正式报告经 InProcess 显式模式产出（`--framework`/`--app`/`--infra`/`--concurrency`/`--persist*`/`--saga`/`--compression`，见 §4.1）；`--smoke` 定位是**秒级成本的趋势检查 + 分配预算判定**，计时为单轮无统计效力，不替代正式报告。待 .NET 11 GA 且 BDN 发适配版后试恢复默认入口。
 
 ---
 
@@ -489,6 +517,6 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 
 1. **本文件与 conventions §5 同步**：测试约定变更需同时更新两处。
 2. **场景矩阵随项目演化**：新增功能域必须扩矩阵行。
-3. **BenchmarkDotNet 配置变更需评审**：从 `[ShortRunJob]` 切换到其他配置必须在 PR 说明依据。
+3. **BenchmarkDotNet 配置变更需评审**：模式级 job/迭代参数的调整（如 MediumRun 降档 ShortRun）必须在 PR 说明依据。
 4. **DDD 与 ORM 的测试体系差异**：TUnit+MTP（非 xUnit）/ 测试桩内嵌（非 IClassFixture）/ 按行为主题切分 / ArchitectureBoundaryTests 37 方法机械守护。
 5. **统计有效性是硬约束**：Error/Mean > 15% 的基准数据不得用于正式报告或决策。
