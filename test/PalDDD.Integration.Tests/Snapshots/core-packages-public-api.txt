@@ -926,8 +926,8 @@ class PalDDD.PalORM.Models.OutboxMessageRow
   method PalDDD.Transactions.OutboxMessage ToDomain()
 class PalDDD.PalORM.Models.VersionProbeRow
   ctor()
-  property System.String v
-  property System.String v2
+  property System.String V
+  property System.String V2
 class PalDDD.PalORM.PalOrmPreWarmHostedService<TProvider>
   ctor(PalORM.DbOptions options, System.Int32 connectionCount, PalDDD.Core.Logging.IPalLogger<PalDDD.PalORM.PalOrmPreWarmHostedService<TProvider>> logger)
   method System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken cancellationToken)
