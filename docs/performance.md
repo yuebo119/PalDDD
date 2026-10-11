@@ -535,6 +535,8 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 > **T1.2 端到端定论：积压排空 56×（5,072ms → 90ms，RatioSD 8%）**——旧形态下 5.07s 中 4.5s 是纯批间睡眠，批处理净工作仅 ~80ms（9 批 × ~9ms）；自适应形态吞吐上限被真实工作接管。RTT=20 档的 25.5s 中 20s 是逐条发布确认的串行等待（1000 × 20ms）——**T3.1 流水线化的理论收益上限即此（~4.6×）**；RTT=0 档的 ~90μs/msg 净工作即 **T2.1 批量标记的收益锚**（现标记段为逐条 UPDATE）。首跑实录：medium 采样撞 InProcess 单基准 5 分钟上限（与 coverage×strict 同族的车道级不兼容，多秒级 op 专属），改专用采样档后双类 exit 0 零守卫违规。
 
+**T2.2 移植否决（PalORM EventLog PG 单语句 Any 追加——零收益回退，防重复提议留档）**：照 Dapper 侧同款实现 INSERT..SELECT..RETURNING 快路径（Ulid 裸传 Npgsql 参数首跑即抛 InvalidCastException，修为字符串后快路径确认激活——分配形态变化 10.2→11.4KB 为证），PG strict 实测 **2,188μs（E10.8%）vs 两往返原路径 2,072~2,273μs 同带，零收益且分配略高 → 回退**。**附带勘正（T0.1 转正结论修正）**：单语句不降耗时直接证伪「PalORM 慢 Dapper 2× 的主因是两往返形态」——真因是 **PalORM 会话路径的每往返开销本身**（同库同 SQL：PalORM 单往返 ~2.2ms / 双往返 ~2.2ms vs Dapper 单往返 ~0.5ms、双往返 ~0.98ms），方向在 DataSession 层或基准夹具连接形态（LeaseOnly 同证：PalORM 单往返租约 2.3~2.6ms vs Dapper 1.6~1.7ms），未隔离——归 PalORM 上游适配层调查项，本仓库内无改靶（对齐 P7/P8 探针否决先例：否决即回退不留死代码）。Dapper 侧快路径维持不变（其 -15% 收益在往返主导形态成立）。附带沉淀：Any 版本跨方言行为等价测试三件 + EventId 重复分类测试入 PalORM.Tests（对原路径同样有效的回归网）。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
