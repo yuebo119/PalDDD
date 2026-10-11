@@ -54,6 +54,13 @@ public sealed class MessageConsumeContext(
         IEnumerable<KeyValuePair<string, object?>>? headers,
         string? correlationId = null)
     {
+        // EPSL 地毯审计 2026-10-11 A-1：空入参快路径——headers 为 null 且无兜底 correlation
+        // 直接返回 null。这是本框架默认消费形态（无追踪消息：KafkaBroker.FromKafkaHeaders
+        // 无表/空表直返 null），原形态字典构造先于空判短路，每条消费消息白付一次分配。语义
+        // 与原「decoded.Count == 0 且无兜底」短路一致，非 null 路径零改动。
+        if (headers is null && correlationId is null)
+            return null;
+
         // v16/v17 文档化：headers 的 key 由 broker 库保证非 null（null key 时下方索引器抛 ANE——框架边界外输入，不防御）
         var decoded = new Dictionary<string, string?>(StringComparer.Ordinal);
         if (headers is not null)
@@ -62,6 +69,19 @@ public sealed class MessageConsumeContext(
                 decoded[key] = DecodeHeaderValue(value);
         }
 
+        if (decoded.Count == 0 && correlationId is null)
+            return null;
+
+        return FromDecodedHeaders(decoded, correlationId);
+    }
+
+    /// <summary>
+    /// C-11（EPSL 地毯审计 2026-10-11）：已解码头的上下文构造——KafkaBroker 消费路径单趟
+    /// 遍历 Confluent Headers 直产已解码字典（免 ToHeaderMap 中间字典的双重物化），与
+    /// <see cref="FromHeaders"/> 共享尾部映射（键提取 + correlation 兜底）单一来源。
+    /// </summary>
+    internal static MessageConsumeContext? FromDecodedHeaders(Dictionary<string, string?> decoded, string? correlationId)
+    {
         if (decoded.Count == 0 && correlationId is null)
             return null;
 

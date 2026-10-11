@@ -13,6 +13,6 @@
   <ItemGroup>
     </ItemGroup>
 
-  <ItemGroup><InternalsVisibleTo Include="PalDDD.DependencyInjection"/><InternalsVisibleTo Include="PalDDD.Messaging.Tests"/></ItemGroup>
+  <ItemGroup><InternalsVisibleTo Include="PalDDD.DependencyInjection"/><InternalsVisibleTo Include="PalDDD.Messaging.Tests"/><InternalsVisibleTo Include="PalDDD.Messaging.Kafka"/></ItemGroup>
   <ItemGroup><Using Include="PalDDD.Core" Alias="Core"/></ItemGroup>
 </Project>

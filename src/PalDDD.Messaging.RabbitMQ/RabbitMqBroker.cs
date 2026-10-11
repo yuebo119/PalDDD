@@ -233,20 +233,25 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             Headers = CreateHeaders(context)
         };
 
-    private static Dictionary<string, object?> CreateHeaders(MessagePublishContext context)
+    // EPSL 地毯审计 2026-10-11 B-5：同 KafkaBroker——默认发布路径（Empty 上下文）此前
+    // 无条件 new Dictionary（~48B/条随消息分配）；RabbitMQ.Client 的
+    // BasicProperties.Headers 为 null 时客户端不写头字段（wire 语义等价）——按需构造。
+    // 消费侧对位：FromHeaders(null 头, correlation 兜底) 走空头快路径。
+    internal static Dictionary<string, object?>? CreateHeaders(MessagePublishContext context)
     {
         // P2 修复（八轮评审）：键名与消费端 MessageConsumeContext.FromHeaders 共用常量，锁读写两侧一致
-        var headers = new Dictionary<string, object?>(StringComparer.Ordinal);
-        AddHeader(headers, MessageConsumeContext.HeaderNames.TraceParent, context.TraceParent);
-        AddHeader(headers, MessageConsumeContext.HeaderNames.TraceState, context.TraceState);
-        AddHeader(headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString());
+        Dictionary<string, object?>? headers = null;
+        AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceParent, context.TraceParent);
+        AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceState, context.TraceState);
+        AddHeader(ref headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString());
         return headers;
     }
 
-    private static void AddHeader(Dictionary<string, object?> headers, string name, string? value)
+    private static void AddHeader(ref Dictionary<string, object?>? headers, string name, string? value)
     {
-        if (!string.IsNullOrWhiteSpace(value))
-            headers.Add(name, Encoding.UTF8.GetBytes(value));
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+        (headers ??= new Dictionary<string, object?>(StringComparer.Ordinal)).Add(name, Encoding.UTF8.GetBytes(value));
     }
 
     /// <summary>异步订阅消息 — 适配到带消费上下文的重载（context 恒为 null，零破坏）</summary>

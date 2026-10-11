@@ -1,6 +1,7 @@
 // ─────────────────────────────────────────────────────────────
 // 📥 InboxProcessor — (ConsumerName,MessageId) 幂等消费
 // ─────────────────────────────────────────────────────────────
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PalDDD.Core.Diagnostics;
 using PalDDD.Core.Logging;
@@ -92,7 +93,10 @@ public sealed class InboxProcessor
         {
             activity?.SetTag("pal.inbox.result", "skipped");
             PalMetrics.InboxSkipped.Add(1);
-            _logger.Information($"Inbox: message {messageId} is already processed or processing, skipping");
+            // EPSL 地毯审计 2026-10-11 A-2：插值字符串在调用前求值，Information 关闭时守卫
+            // 免每消息的字符串分配（IsEnabled 的文档化用途，见 IPalLogger）
+            if (_logger.IsEnabled(LogLevel.Information))
+                _logger.Information($"Inbox: message {messageId} is already processed or processing, skipping");
             return false;
         }
 
@@ -131,7 +135,9 @@ public sealed class InboxProcessor
             }
             activity?.SetTag("pal.inbox.result", "processed");
             PalMetrics.InboxProcessed.Add(1);
-            _logger.Information($"Inbox: message {messageId} processed successfully");
+            // A-2 同款守卫（成功路径与跳过路径同为每消息热路径）
+            if (_logger.IsEnabled(LogLevel.Information))
+                _logger.Information($"Inbox: message {messageId} processed successfully");
             return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

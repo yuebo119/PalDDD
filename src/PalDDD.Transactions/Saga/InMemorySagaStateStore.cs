@@ -7,7 +7,7 @@ namespace PalDDD.Transactions;
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>内存 Saga 状态存储 — 用于测试和单进程原型。</summary>
-public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
+public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>
     where TState : SagaState
 {
     private readonly Lock _lock = new();
@@ -154,5 +154,37 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>
             _states[state.SagaId] = state;
             return ValueTask.FromResult(1);
         }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// EPSL 地毯审计 2026-10-11 B-1：镜像 <see cref="SaveChangesAsync"/> 的 Version fencing
+    /// 形态——字典当前条目与传入快照版本一致且仍归本 owner 持有（未被 successor 抢占、
+    /// 未被保存换代）才释放；释放即一次写入 = Version 换代（对齐持久化栈 version+1）。
+    /// 变异字典条目（current）而非传入快照——两者在扫描路径同引用，直调路径以字典为准。
+    /// </remarks>
+    public ValueTask<int> ReleaseLeasesAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        ct.ThrowIfCancellationRequested();
+
+        var released = 0;
+        lock (_lock)
+        {
+            foreach (var saga in sagas)
+            {
+                if (_states.TryGetValue(saga.SagaId, out var current)
+                    && current.Version == saga.Version
+                    && string.Equals(current.LeasedBy, owner, StringComparison.Ordinal))
+                {
+                    current.LeasedBy = null;
+                    current.LeasedUntil = null;
+                    current.Version++;
+                    released++;
+                }
+            }
+        }
+        return ValueTask.FromResult(released);
     }
 }

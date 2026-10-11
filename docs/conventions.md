@@ -338,7 +338,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-10-09 复验）：222 源文件·36 项目·0 违规（2026-09-25 为 220 文件，ADR-025 双模板新增 MySqlLeasePolicy/VersionProbeRow 两文件）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-10-11 复验）：223 源文件·36 项目·0 违规（2026-10-09 为 222 文件，EPSL 修复轮新增 DecompressBufferPool 一文件——池上移 PalDDD.Compression 为跨程序集单一事实源）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 

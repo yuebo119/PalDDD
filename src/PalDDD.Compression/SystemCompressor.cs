@@ -81,9 +81,10 @@ internal sealed class BrotliCompressor : ICompressor
             throw new InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
 
-        // span 直解：免输入 ToArray 拷贝，输出走增长缓冲，无 MemoryStream 分配
+        // span 直解：免输入 ToArray 拷贝，输出走增长缓冲（DecompressBufferPool 线程槽，
+        // EPSL 地毯审计 2026-10-11 A-3 接入——与 LZ4/ZStd 的 C6 形态对齐），无 MemoryStream 分配
         using var decoder = new BrotliDecoder();
-        var buffer = new ArrayBufferWriter<byte>();
+        var buffer = DecompressBufferPool.Rent();
         var source = compressed;
         long totalWritten = 0;
 

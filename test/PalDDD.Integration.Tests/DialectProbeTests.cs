@@ -253,7 +253,21 @@ public sealed partial class DialectProbeTests
             new(Ulid.New(), "probe.event.v1", 1, "application/json", new ReadOnlyMemory<byte>([1]), new ReadOnlyMemory<byte>([1]), audit),
             new(Ulid.New(), "probe.event.v1", 1, "application/json", new ReadOnlyMemory<byte>([2]), new ReadOnlyMemory<byte>([2]), audit),
         };
-        await log.AppendAsync("probe-stream", ExpectedStreamVersion.NoStream, events, default);
+        var batchResult = await log.AppendAsync("probe-stream", ExpectedStreamVersion.NoStream, events, default);
+        // B-4（EPSL 地毯审计 2026-10-11）：k>1 批量追加版本跨度断言（PG 走多行
+        // VALUES+RETURNING 批路径、MySQL/SQLite 走逐条路径——断言路径无关）
+        await Assert.That(batchResult.LastStreamVersion - batchResult.FirstStreamVersion).IsEqualTo(events.Count - 1);
+        await Assert.That(batchResult.LastGlobalPosition >= batchResult.FirstGlobalPosition).IsTrue();
+
+        // B-4 批内 EventId 重复：原样上抛 DbException（非并发异常——无外部写入者时
+        // 冲突必为 EventId 唯一索引撞；PG 批路径单语句原子整批不入库）
+        var dupId = Ulid.New();
+        await Assert.ThrowsAsync<System.Data.Common.DbException>(async () =>
+            await log.AppendAsync("probe-dup-stream", ExpectedStreamVersion.NoStream, new List<EventData>
+            {
+                new(dupId, "probe.event.v1", 1, "application/json", new ReadOnlyMemory<byte>([5]), new ReadOnlyMemory<byte>([5]), audit),
+                new(dupId, "probe.event.v1", 1, "application/json", new ReadOnlyMemory<byte>([6]), new ReadOnlyMemory<byte>([6]), audit),
+            }, default));
 
         // #6「EventLog Append→Read 2 条」
         var read = new List<RecordedEvent>();

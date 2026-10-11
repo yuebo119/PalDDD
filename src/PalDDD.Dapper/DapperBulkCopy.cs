@@ -48,6 +48,12 @@ namespace PalDDD.Dapper;
 /// </summary>
 public static class DapperBulkCopy
 {
+    // C-15（EPSL 地毯审计 2026-10-11）：AllowLoadLocalInfile 判定按连接实例缓存
+    //（ConditionalWeakTable——连接串含凭据不以字符串驻留静态表；长连接复用免每次
+    // 全量解析连接串只为读一个布尔）。见 MySqlBulkAsync 入口检测的使用点。
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<MySqlConnection, System.Runtime.CompilerServices.StrongBox<bool>>
+        s_allowLoadLocalInfileByConnection = new();
+
     /// <summary>
     /// 批量插入实体（按数据库类型自动分发到最优实现）。<br/>
     /// 💡 泛型参数 <typeparamref name="T"/> 不产生运行时类型检查——所有类型信息由调用者 lambda 提供。
@@ -235,7 +241,11 @@ public static class DapperBulkCopy
         // 检测放在 MySQL 批量路径入口而非 AddPalMySqlDataSource DI 入口——前提仅批量路径
         // 需要，DI 入口抛异常会误伤不使用 bulk copy 的应用启动。
         // C2' 注：本检查现仅约束大批量（LOAD DATA）路径——小批量已改走 VALUES，无此要求
-        if (!new MySqlConnectionStringBuilder(myConn.ConnectionString).AllowLoadLocalInfile)
+        // C-15：判定经上方类级 CWT 缓存（首查解析，长连接复用免重复解析）
+        var allowLoadLocalInfile = s_allowLoadLocalInfileByConnection.GetValue(
+            myConn,
+            static c => new System.Runtime.CompilerServices.StrongBox<bool>(new MySqlConnectionStringBuilder(c.ConnectionString).AllowLoadLocalInfile)).Value;
+        if (!allowLoadLocalInfile)
             throw new InvalidOperationException(
                 "MySQL 批量导入要求连接字符串包含 'AllowLoadLocalInfile=True'（MySqlBulkCopy 走 LOAD DATA LOCAL INFILE 协议）。" +
                 "请在构造 MySqlConnection/MySqlDataSource 的连接串中显式添加该选项，并确认 MySQL 服务端 local_infile=1。" +

@@ -46,3 +46,25 @@ public interface ISagaStateStore<TState> where TState : SagaState
     /// 统一 EF/Dapper/内存三实现的返回值语义，避免调用方按 0 行误判或漏判冲突）。</returns>
     ValueTask<int> SaveChangesAsync(TState state, CancellationToken ct);
 }
+
+/// <summary>
+/// Saga 租约批量释放能力（EPSL 地毯审计 2026-10-11 B-1，能力子接口——对齐
+/// <c>IImmediateWriteOutboxStore</c> 先例：不破坏 <see cref="ISagaStateStore{TState}"/> 既有实现方）。
+/// <para>超时扫描器对未超时 Saga 的租约释放（<c>SagaTimeoutProcessor.CheckTimeoutsAsync</c>
+/// 非超时分支的常态路径）由此前的逐 saga <see cref="ISagaStateStore{TState}.SaveChangesAsync"/>
+///（每 saga 一次 DB 往返 + 全量快照序列化；EF 栈还叠加全跟踪实体的 DetectChanges）改为
+/// 单语句批量释放：仅清租约列并换代（version+1），以 <c>leased_by = owner</c> 为防抢占守卫
+/// ——租约已被他实例抢占（重租换代）或已终态保存时，该行正确退化为不匹配（计入 0 行）。</para>
+/// <para>⚠️ <b>已裁决取舍</b>：冲突信号粒度由「逐 saga Warning」收粗为「批次计数 Warning」
+///（expected 与 affected 的差值，无法定位具体 saga）——P3（八轮）声明的排障信号保留、
+/// 粒度收粗；需要逐条定位时存储未实现本接口即回落逐条路径。</para>
+/// </summary>
+public interface ISagaLeaseBatchStore<TState> : ISagaStateStore<TState> where TState : SagaState
+{
+    /// <summary>批量释放本 owner 持有的 Saga 租约（仅租约列 + 换代，不写业务字段）。</summary>
+    /// <param name="owner">租约持有者（与 <see cref="ISagaStateStore{TState}.LeaseActiveSagasAsync"/> 的 owner 一致）。</param>
+    /// <param name="sagas">待释放的 Saga 状态列表（只消费其 <see cref="SagaState.SagaId"/>；Dapper 栈按 Ulid 文本绑定）。</param>
+    /// <param name="ct">取消令牌（终态写入语义下调用方传 <see cref="CancellationToken.None"/>）。</param>
+    /// <returns>实际释放行数（<c>0 ≤ n ≤ sagas.Count</c>；<c>sagas.Count - n</c> = 被抢占/已换代的冲突数）。</returns>
+    ValueTask<int> ReleaseLeasesAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct);
+}
