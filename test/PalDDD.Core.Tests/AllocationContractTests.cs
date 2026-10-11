@@ -42,10 +42,15 @@ public sealed class AllocationContractTests
     /// 唯一裁判，却从未被验证过——若它因任何原因恒返回 0（运行时/GC 模式不符、计数器被重置、
     /// 动作被搬到别的线程），下面每一条"零分配"断言都会变成**恒真**，整个套件在真实回归上仍全绿。
     /// 本用例要求它对"必然分配"的动作给出非零且量级正确的读数——仪器能测出坏输入，其读数才可信。</summary>
+    // 逃生槽（CI run 38149487218 实证，2026-10-11）：`_ = new byte[64]` 的丢弃分配在 Linux
+    // Release + 分层 PGO 下可被 JIT 死存储消除（Messaging.Tests 同款对照组该轮 CI 红、本地
+    // Windows 绿——平台分叉）。静态槽写入强制分配可观测，本文件与该处同款修复。
+    private static byte[]? s_allocSink;
+
     [Test]
     public async Task MeasureAllocation_PositiveControl_ReportsNonZero()
     {
-        var alloc = MeasureAllocation(static () => _ = new byte[64]);
+        var alloc = MeasureAllocation(static () => s_allocSink = new byte[64]);
 
         await Assert.That(alloc > 0).IsTrue();
         // 量级校验：64B × Iterations 的下界（防把"读到一个极小噪声值"误当成通过）
