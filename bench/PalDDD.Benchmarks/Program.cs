@@ -184,6 +184,23 @@ if (args.Contains("--app", StringComparer.OrdinalIgnoreCase))
     return 0;
 }
 
+// 2026-10-11 优化实施轮 T0.2：--delivery——投递吞吐端到端量具（SQLite 真库标记 +
+// 假 broker RTT 矩阵 0/1/20ms + T1.2 排空节奏对照），排空 1000 条积压的墙钟口径；
+// T2.1 批量标记 / T3.1 确认流水线的同轮 A/B 基线。专用采样档（5 迭代/3 预热/1 launch，
+// artifacts-delivery）：基准体为多秒级 op（RTT=20 档单次排空 ≈ 20s），medium 采样
+//（15×2）撞 InProcess 单基准 5 分钟硬上限（同 coverage×strict 车道级不兼容形态）。
+if (args.Contains("--delivery", StringComparer.OrdinalIgnoreCase))
+{
+    var delivery = ManualConfig.Create(DefaultConfig.Instance)
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance)
+            .WithIterationCount(5).WithWarmupCount(3).WithLaunchCount(1))
+        .AddDiagnoser(MemoryDiagnoser.Default)
+        .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-delivery"));
+    BenchmarkRunner.Run<OutboxDeliveryDrainBenchmarks>(delivery);
+    BenchmarkRunner.Run<OutboxDeliveryCadenceBenchmarks>(delivery);
+    return 0;
+}
+
 // 2026-10-08 特性面缺口清单第 ① 项：--concurrency——Outbox N worker 租约争用
 // （InMemory 簿记层 + Dapper SQLite 真库层，每 wave 带零重复不变量守卫）。
 // 「多实例并发发布零丢失零重复」从正确性主张升级为性能数据。
