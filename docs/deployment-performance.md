@@ -32,6 +32,11 @@ harness 形态可参考，见 performance.md）。
 | Dapper AddSingle | 630μs | 1,255μs | **慢 2.0×** |
 | Dapper GetPending | 746μs | 491μs | 快 34%（唯一改善项） |
 
+> ⚠️ 勘正脚注（2026-10-11 T0.1 判别，见 performance.md「T0.1 归因结论」）：Lease/EventLog/Idempotency
+> 三行**无旋钮基线绝对值不可复现**（本尊提交重跑为 177ms/2,273μs/3,133μs，n=1 快偏读数）——本表
+> 的有效引用面是**比值列**（同轮对内比较，旋钮使写路径变慢的方向性结论成立）；GetPending/Dapper
+> 两行基线可复现（685/746/630μs 均与后续轮一致）。
+
 - **结论修正史**：首轮 medium 档测得「PalORM 14.7→6.7ms（-55%）」→ 专项治理轮降级为「加速
   到达稳态」→ 本轮 strict A/B **定论：稳态下无读收益且写路径显著变慢**。历史「收益」全部是
   medium 15 迭代欠采样期的语句计划冷启动效应（Npgsql auto-prepare 阈值 5 次执行，把冷计划
