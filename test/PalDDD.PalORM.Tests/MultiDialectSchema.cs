@@ -29,6 +29,10 @@ public static class MultiDialectSchema
         "CREATE TABLE saga_states (saga_id TEXT PRIMARY KEY, current_state TEXT NOT NULL, status INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, completed_at TEXT, error TEXT, error_at TEXT, version INTEGER NOT NULL DEFAULT 0, saga_data TEXT, leased_by TEXT, leased_until TEXT)",
         "CREATE TABLE events (global_position INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, event_name TEXT NOT NULL, stream_name TEXT NOT NULL, stream_version INTEGER NOT NULL, schema_version INTEGER NOT NULL DEFAULT 1, content_type TEXT NOT NULL DEFAULT 'application/json', payload BLOB NOT NULL, metadata BLOB, recorded_at TEXT NOT NULL, actor_id TEXT, reason TEXT, correlation_id TEXT, causation_id TEXT, trace_parent TEXT, trace_state TEXT)",
         "CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version)",
+        // 2026-10-11 CI 实证补齐：event_id 唯一索引是 EventId 重复分类契约的物理前提（Dapper 侧
+        // DapperStoreTests 既有；本文件头注「对齐需双改」的漏改半边——缺它时重复 EventId 落不同
+        // stream_version 直接插入成功，DuplicateEventId_ThrowsOriginal 断言红）
+        "CREATE UNIQUE INDEX idx_events_event_id ON events(event_id)",
         "CREATE TABLE projection_checkpoints (projection_name TEXT NOT NULL, source_name TEXT NOT NULL, position TEXT NOT NULL, status INTEGER NOT NULL, updated_at TEXT NOT NULL, lease_until TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, error TEXT, PRIMARY KEY (projection_name, source_name, position))",
         "CREATE TABLE idempotency_records (operation_name TEXT NOT NULL, idempotency_key TEXT NOT NULL, status INTEGER NOT NULL, locked_until TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL, response_payload BLOB, error TEXT, revision INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (operation_name, idempotency_key))",
     ];
@@ -44,6 +48,8 @@ public static class MultiDialectSchema
         """CREATE TABLE saga_states (saga_id TEXT PRIMARY KEY, current_state TEXT NOT NULL, status INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL, completed_at TIMESTAMPTZ, error TEXT, error_at TIMESTAMPTZ, version INTEGER NOT NULL DEFAULT 0, saga_data TEXT, leased_by TEXT, leased_until TIMESTAMPTZ)""",
         """CREATE TABLE events (global_position BIGSERIAL PRIMARY KEY, event_id TEXT NOT NULL, event_name TEXT NOT NULL, stream_name TEXT NOT NULL, stream_version BIGINT NOT NULL, schema_version INTEGER NOT NULL DEFAULT 1, content_type TEXT NOT NULL DEFAULT 'application/json', payload BYTEA NOT NULL, metadata BYTEA, recorded_at TIMESTAMPTZ NOT NULL, actor_id TEXT, reason TEXT, correlation_id TEXT, causation_id TEXT, trace_parent TEXT, trace_state TEXT)""",
         """CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version)""",
+        // 同 SQLite 段注：event_id 唯一索引补齐（2026-10-11 CI 实证，对齐 Dapper 侧）
+        """CREATE UNIQUE INDEX idx_events_event_id ON events(event_id)""",
         """CREATE TABLE projection_checkpoints (projection_name TEXT NOT NULL, source_name TEXT NOT NULL, position TEXT NOT NULL, status INTEGER NOT NULL, updated_at TIMESTAMPTZ NOT NULL, lease_until TIMESTAMPTZ NOT NULL, revision BIGINT NOT NULL DEFAULT 0, error TEXT, PRIMARY KEY (projection_name, source_name, position))""",
         """CREATE TABLE idempotency_records (operation_name TEXT NOT NULL, idempotency_key TEXT NOT NULL, status INTEGER NOT NULL, locked_until TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL, response_payload BYTEA, error TEXT, revision BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (operation_name, idempotency_key))""",
     ];
@@ -57,6 +63,8 @@ public static class MultiDialectSchema
         "CREATE TABLE saga_states (saga_id VARCHAR(32) PRIMARY KEY, current_state VARCHAR(128) NOT NULL, status INT NOT NULL DEFAULT 0, created_at DATETIME(6) NOT NULL, completed_at DATETIME(6) NULL, error TEXT NULL, error_at DATETIME(6) NULL, version INT NOT NULL DEFAULT 0, saga_data TEXT NULL, leased_by VARCHAR(64) NULL, leased_until DATETIME(6) NULL)",
         "CREATE TABLE events (global_position BIGINT AUTO_INCREMENT PRIMARY KEY, event_id VARCHAR(32) NOT NULL, event_name VARCHAR(255) NOT NULL, stream_name VARCHAR(255) NOT NULL, stream_version BIGINT NOT NULL, schema_version INT NOT NULL DEFAULT 1, content_type VARCHAR(64) NOT NULL DEFAULT 'application/json', payload LONGBLOB NOT NULL, metadata LONGBLOB NULL, recorded_at DATETIME(6) NOT NULL, actor_id VARCHAR(128) NULL, reason VARCHAR(255) NULL, correlation_id VARCHAR(32) NULL, causation_id VARCHAR(32) NULL, trace_parent VARCHAR(128) NULL, trace_state TEXT NULL)",
         "CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version)",
+        // 同 SQLite 段注：event_id 唯一索引补齐（2026-10-11 CI 实证，对齐 Dapper 侧）
+        "CREATE UNIQUE INDEX idx_events_event_id ON events(event_id)",
         "CREATE TABLE projection_checkpoints (projection_name VARCHAR(128) NOT NULL, source_name VARCHAR(128) NOT NULL, position VARCHAR(255) NOT NULL, status INT NOT NULL, updated_at DATETIME(6) NOT NULL, lease_until DATETIME(6) NOT NULL, revision BIGINT NOT NULL DEFAULT 0, error TEXT NULL, PRIMARY KEY (projection_name, source_name, position))",
         "CREATE TABLE idempotency_records (operation_name VARCHAR(128) NOT NULL, idempotency_key VARCHAR(255) NOT NULL, status INT NOT NULL, locked_until DATETIME(6) NOT NULL, expires_at DATETIME(6) NOT NULL, updated_at DATETIME(6) NOT NULL, response_payload LONGBLOB NULL, error TEXT NULL, revision BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (operation_name, idempotency_key))",
     ];

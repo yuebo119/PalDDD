@@ -178,7 +178,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
             try
             {
                 var versions = await Session.QueryAsync<VersionProbeRow>($"SELECT VERSION() AS v, VERSION() AS v2", ct: ct).ConfigureAwait(false);
-                _mySqlServerVersion = versions.FirstOrDefault()?.v ?? "";
+                _mySqlServerVersion = versions.FirstOrDefault()?.V ?? "";
             }
 #pragma warning disable CA1031 // 探测失败按空串处理（fail-safe 回退无锁模板），不中断租约路径
             catch (Exception)

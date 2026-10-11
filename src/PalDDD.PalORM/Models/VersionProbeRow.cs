@@ -13,12 +13,14 @@ namespace PalDDD.PalORM.Models;
 [Table("sys_version_probe")]
 public sealed partial class VersionProbeRow
 {
-    /// <summary>服务器版本串（如 "8.4.11"），兼作实体键列（探测只读，永不插入）。</summary>
+    /// <summary>服务器版本串（如 "8.4.11"），兼作实体键列（探测只读，永不插入）。
+    /// 属性名 V/v2 大写起头循 IDE1006 命名规则（CI format-verify 实证，2026-10-11）；
+    /// SQL 列别名仍为小写 v/v2，经 [Column] 映射（探测 SQL：SELECT VERSION() AS v）。</summary>
     [Key(AutoIncrement = false)]
     [Column("v")]
-    public string? v { get; set; }
+    public string? V { get; set; }
 
     /// <summary>第二版本列——PALORM024 要求实体至少一个可更新非键列（探测只读，仅占位）。</summary>
     [Column("v2")]
-    public string? v2 { get; set; }
+    public string? V2 { get; set; }
 }

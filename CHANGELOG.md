@@ -15,7 +15,7 @@
 ## [4.0.0] — 2026-10-11
 
 > **范围**：`v3.3.0`（2026-10-08，`c1c4886`）→ `v4.0.0`（本提交），39 个提交（`git log v3.3.0..HEAD`——v3.3.0 tag 打在 main 合并提交上，dev 侧等价窗口即此）。
-> **兼容性**：SemVer Major。破坏面三处：① `IPalOutboxStore` 四个同步方法（`AddMessage`/`MarkProcessed`/`MarkDead`/`ReleaseForRetry`）删除、`AddMessagesAsync` 补 `ct` 尾参（ADR-026 ③④，自定义实现方须迁移，映射见 Changed [Breaking] 条）；② `Dispatcher.Register(Type,Type,Type,RequestExecutor)` 加 `needsScope` 尾参（直调该重载须补参，`AddPalCqrs` 等 DI 扩展路径不受影响）；③ Outbox 终态写 fencing 契约跨栈统一（Dapper 半回写→全套、EF 零回写→Detached 快照全套，ADR-026 ②）。公共 API 快照 +46/−25（排除程序集版本引用行，1613 → 1634 行）。新增面全部向后兼容（实例注册重载 / `IImmediateWriteOutboxStore` / `ISagaLeaseBatchStore<TState>` / `MySqlLeasePolicy` / `ProcessBatchWithBacklogAsync` / `MaxInFlightPublishes`）。
+> **兼容性**：SemVer Major。破坏面三处：① `IPalOutboxStore` 四个同步方法（`AddMessage`/`MarkProcessed`/`MarkDead`/`ReleaseForRetry`）删除、`AddMessagesAsync` 补 `ct` 尾参（ADR-026 ③④，自定义实现方须迁移，映射见 Changed [Breaking] 条）；② `Dispatcher.Register(Type,Type,Type,RequestExecutor)` 加 `needsScope` 尾参（直调该重载须补参，`AddPalCqrs` 等 DI 扩展路径不受影响）；③ Outbox 终态写 fencing 契约跨栈统一（Dapper 半回写→全套、EF 零回写→Detached 快照全套，ADR-026 ②）。公共 API 快照 +48/−27（排除程序集版本引用行，1613 → 1634 行；含 CI 首轮 format-verify 修复的 `VersionProbeRow` 属性 v/v2 → V/V2 命名合规改名——类型为本版新增未发布，零消费影响）。新增面全部向后兼容（实例注册重载 / `IImmediateWriteOutboxStore` / `ISagaLeaseBatchStore<TState>` / `MySqlLeasePolicy` / `ProcessBatchWithBacklogAsync` / `MaxInFlightPublishes`）。
 > **组织方式**：按 Keep a Changelog 分类给出**消费者可见变更**（本版无独立工程过程附录——过程叙事已内联于各条目）；规范见 [`docs/release.md`](docs/release.md) §十一。
 
 ### Added
@@ -84,7 +84,8 @@
 
 ### Tests 测试
 
-- **16 项目面板 0 失败（2026-10-11，v4.0.0 版本位 + 快照再生后 §4.1 实测）**：1548 用例 = 1477 通过 + 71 环境跳过（构成 = 方言 Testcontainers 63 + broker 容器 8，与 4e1af12 本机无 Docker 基线 68+3 一致；容器面由 CI dialect-probe 权威判定）；Release 全量构建 0 警告 0 错误（`--no-incremental -warnaserror`）；本地 pack 35 包 + §4.2 nuspec 元数据检查通过。版本窗口内新增锁定测试：OutboxPublishPipeliningTests（流水线三件）/ SagaLeaseBatchReleaseTests（批量释放）/ MySqlLeasePolicyTests（版本探测）/ GeneratedIdentityTests（Guid 三腿）/ OutboxInterceptorMidwayFailureProbeTests 扩展（批量化中途失败）。
+- **16 项目面板 0 失败（2026-10-11，v4.0.0 版本位 + 快照再生后 §4.1 实测）**：1550 用例 = 1478 通过 + 72 环境跳过（构成 = 方言 Testcontainers 64 + broker 容器 8；容器面由 CI dialect-probe 权威判定）；Release 全量构建 0 警告 0 错误（`--no-incremental -warnaserror`）；本地 pack 35 包 + §4.2 nuspec 元数据检查通过。版本窗口内新增锁定测试：OutboxPublishPipeliningTests（流水线三件）/ SagaLeaseBatchReleaseTests（批量释放）/ MySqlLeasePolicyTests（版本探测）/ GeneratedIdentityTests（Guid 三腿）/ OutboxInterceptorMidwayFailureProbeTests 扩展（批量化中途失败）/ EventLog 重复 EventId 分类测试（三方言）。
+- **CI 首轮（run 38148094954，v4.0 窗口 42 提交首次 CI 化）暴露两处测试基建缺口并同轮修复**：① format-verify 5 处存量违规——`VersionProbeRow` 属性 v/v2 命名改 V/V2（IDE1006，[Column] 映射保持 SQL 别名小写）+ 三处多余 using（ComparisonBenchmarks 别名 / MySqlLeasePolicyTests / OutboxPublishPipeliningTests），本地 `dotnet format style --verify-no-changes` 复核绿；② PalORM 测试栈 MultiDialectSchema 缺 `event_id` 唯一索引（EventId 重复分类契约的物理前提，文件头注「对齐需双改」的漏改半边，Dapper 侧 DapperStoreTests 既有）——补齐三方言索引 + 补 SQLite/MySQL 重复测试变体，SQLite 变体本地红（无索引断言红）→绿（补索引后过）证明在案，PG 变体即 CI 首轮失败项由复跑验证。
 
 ---
 

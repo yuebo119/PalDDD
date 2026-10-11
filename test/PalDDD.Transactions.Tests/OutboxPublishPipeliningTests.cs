@@ -3,7 +3,6 @@ using PalDDD.Core.Logging;
 using PalDDD.Messaging;
 using PalDDD.Serialization;
 using PalDDD.Testing;
-using PalDDD.Transactions;
 using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions.Tests;

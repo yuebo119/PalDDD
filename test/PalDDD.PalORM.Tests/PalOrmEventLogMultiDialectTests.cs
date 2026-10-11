@@ -161,6 +161,14 @@ public class PalOrmEventLogMultiDialectTests
     public async Task EventLog_PostgreSql_AppendSingleAny_DuplicateEventId_ThrowsOriginal()
         => await Test_AppendSingleAny_DuplicateEventId_ThrowsOriginal(await MultiDialectFixture.CreatePostgreSqlAsync());
 
+    [Test]
+    public async Task EventLog_Sqlite_AppendSingleAny_DuplicateEventId_ThrowsOriginal()
+        => await Test_AppendSingleAny_DuplicateEventId_ThrowsOriginal(await MultiDialectFixture.CreateSqliteAsync());
+
+    [Test]
+    public async Task EventLog_MySql_AppendSingleAny_DuplicateEventId_ThrowsOriginal()
+        => await Test_AppendSingleAny_DuplicateEventId_ThrowsOriginal(await MultiDialectFixture.CreateMySqlAsync());
+
     private static async Task Test_AppendSingleAny_DuplicateEventId_ThrowsOriginal<TProvider>(TestSession<TProvider> ts)
         where TProvider : IDbProvider
     {

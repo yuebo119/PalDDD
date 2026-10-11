@@ -19,7 +19,6 @@ using PalDDD.Dapper;
 using PalDDD.Serialization;
 using PalDDD.Serialization.Json;
 using PalDDD.Transactions;
-using MediatRCommand = MediatR.IRequest<PalDDD.Benchmarks.MediatRResult>;
 using MediatRBehavior = MediatR.IPipelineBehavior<PalDDD.Benchmarks.MediatRCommand, PalDDD.Benchmarks.MediatRResult>;
 using MediatRHandlerIface = MediatR.IRequestHandler<PalDDD.Benchmarks.MediatRCommand, PalDDD.Benchmarks.MediatRResult>;
 using PalBehavior = PalDDD.CQRS.IPipelineBehavior<PalDDD.Benchmarks.CmpCommand, PalDDD.Benchmarks.CmpResult>;

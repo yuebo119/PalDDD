@@ -1,5 +1,3 @@
-using PalDDD.Transactions;
-
 namespace PalDDD.Transactions.Tests;
 
 // ═══════════════════════════════════════════════════════════
