@@ -507,6 +507,23 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **发布对比总表**：单表融合版入 CHANGELOG `[Unreleased]` Documentation 节（v4.0 发布随 tag 转正为发布说明），口径注与本段互引，不在此重复。
 
+## 优化实施轮（2026-10-11：包升级全量 + T0.1 归因 + T0.3 纯租约量具 + T1.2 自适应排空）
+
+> 背景：用户令「升级包至最新 + 按优化方案完整实施」。本段承接上表任务清单 M1/M2。包升级（PalORM ×5 → 6.4.0、CAP ×3 → 10.0.2、TUnit 1.73.19、Testcontainers 4.16.0、NativeCompressions 1.1.0；MediatR/Verify.TUnit 维持许可钉扎，f57076b）经 16 项目面板 0 失败验证，PalORM 三契约 6.4.0 XML 复核在案，全部车道数字与升级前同带（PalORM EventLog 2072μs ≈ 升级前 2188μs 同带）。
+
+**T0.1 归因结论**：见上段（参照系勘正，无回归；PalORM 2× 为结构性差距 → T2.2 优先级上调）。
+
+**T0.3 纯租约量具（LeaseOnly_100：IterationSetup 保证 100 行 pending，基准体只租不灌）**：
+
+| 栈（PG strict，TRUNCATE 清场形态） | Lease_Batch100（含重灌，历史口径） | **LeaseOnly_100（纯租约）** | GetPending_100（同批读对照） |
+|---|---:|---:|---:|
+| Dapper | 66.0 ms | **1,687.5 μs（E1.8%）** | 532.1 μs |
+| PalORM | 172.1 ms | **2,338.1 μs（E5.6%）** | 505.7 μs |
+
+> 结论：①历史 Lease_Batch100 读数的 **97%+ 是体内重灌 100 单条的噪声**（Dapper 66.0ms 中租约仅占 1.7ms、PalORM 172.1ms 中占 2.3ms）——T2.1 批量标记的收益锚点应以 LeaseOnly 为基线；②纯租约双栈差 **1.39×**（远小于 Lease_Batch100 口径暗示的 2.6×——重灌路径放大了栈差）；③租约为同批读的 3.2~4.6×（100 行版本写入 + 全列 RETURNING 回读的真实成本）；④清场形态标签：IterationSetup 每迭代 TRUNCATE + 重灌，租约命中的是冷化页——DELETE 形态读数会更低（见 T0.1 段 TRUNCATE 侧效应）。
+
+**T1.2 自适应排空（代码 + 锁定测试，吞吐量化待 T0.2 量具）**：`PeriodicBackgroundProcessor` 循环改为「上轮满批 → 1ms 让步续批；否则按间隔」，`OutboxOptions.PollInterval` 改每轮热读（冷快照声明废止，XML doc 同步）。锁定测试三件（满批 1ms 续批 / 未满批守间隔 / 热读生效）改前红证明：旧循环下满批件与热读件结构性红、不变量件绿；新码三连绿零抖动（206/206 ×3）。公共 API 快照 +1 行（`ProcessBatchWithBacklogAsync`）。**积压排空吞吐预期从 100/(tick+500ms) 升到 100/tick**——绝对数字待 T0.2 投递吞吐量具落成后同轮实测入账。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
