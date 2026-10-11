@@ -23,6 +23,7 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly TimeSpan _pollInterval;
+    private readonly Func<TimeSpan>? _pollIntervalProvider; // T1.2：热读形态（非 null 时每轮取当前值）
     private readonly TimeProvider _timeProvider;
     private volatile bool _disposed; // v19 P2 + v20 volatile：Dispose 线程写/循环线程读的 stale 窗口收口
 
@@ -37,7 +38,41 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
+    /// <summary>
+    /// 热读轮询间隔构造形态（T1.2，2026-10-11 优化实施轮）：间隔由 provider 每轮动态提供
+    ///（IOptionsMonitor.CurrentValue 热更新即时生效），替代构造期一次定格的冷快照形态。
+    /// </summary>
+    protected PeriodicBackgroundProcessor(
+        IServiceScopeFactory scopeFactory,
+        Func<TimeSpan> pollIntervalProvider,
+        TimeProvider? timeProvider = null)
+    {
+        ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(pollIntervalProvider);
+        _scopeFactory = scopeFactory;
+        _pollIntervalProvider = pollIntervalProvider;
+        _pollInterval = TimeSpan.Zero; // 不参与（provider 非 null 分支恒走 provider）
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
+    /// <summary>本轮轮询等待的当前间隔（热读形态生效点）。</summary>
+    private TimeSpan CurrentPollInterval => _pollIntervalProvider?.Invoke() ?? _pollInterval;
+
     protected IServiceScopeFactory ScopeFactory => _scopeFactory;
+
+    /// <summary>
+    /// 子类在 <see cref="ExecuteTickAsync"/> 返回前报告「本轮拿到了满批（可能还有积压）」——
+    /// 为 true 时基类跳过整轮轮询间隔、仅让步 DrainTickDelay 后立即续批（自适应排空，
+    /// T1.2）；为 false（含异常路径的默认值）时按 CurrentPollInterval 正常轮询。
+    /// 默认 false = 既有子类（SagaProcessor 等）行为逐位不变。
+    /// </summary>
+    protected virtual bool TickHasPendingWork => false;
+
+    /// <summary>
+    /// 排空模式的批间让步：仅用于避免连续满批时的零延迟忙转（每轮 tick 本身含真实
+    /// DB I/O，毫秒级），不是退避语义——满批即视为有积压，全速排空。
+    /// </summary>
+    private static readonly TimeSpan DrainTickDelay = TimeSpan.FromMilliseconds(1);
 
     [SuppressMessage("Design", "CA1031:Do not catch general exception",
         Justification = "后台轮询循环必须隔离任意异常以防止循环中断；OperationCanceledException 已由前两个 catch 分支处理，此分支兜底非取消异常并回调 OnTickFailed。")]
@@ -48,11 +83,16 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
             // 审计 2026-09-17 T-2：原 PeriodicTimer 不接受 TimeProvider，测试只能挂钟等待。
             // 改为 Task.Delay(interval, timeProvider, ct)——生产行为等价（系统时钟），
             // 测试可注入 FakeTimeProvider 实现确定性 tick。
+            // T1.2（2026-10-11 优化实施轮）：自适应排空——上一轮满批（TickHasPendingWork）
+            // 时仅让步 DrainTickDelay 立即续批（积压期吞吐从 batchSize/(tick+interval) 提到
+            // batchSize/tick），否则按 CurrentPollInterval 轮询（热读形态在 provider 构造下生效）。
             while (!stoppingToken.IsCancellationRequested)
             {
+                var drainNext = TickHasPendingWork;
+                var interval = drainNext ? DrainTickDelay : CurrentPollInterval;
                 try
                 {
-                    await Task.Delay(_pollInterval, _timeProvider, stoppingToken).ConfigureAwait(false);
+                    await Task.Delay(interval, _timeProvider, stoppingToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {

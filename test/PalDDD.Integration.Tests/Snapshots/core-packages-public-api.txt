@@ -1415,6 +1415,7 @@ static class PalDDD.Transactions.MySqlLeasePolicy
 class PalDDD.Transactions.OutboxBatchProcessor
   ctor(PalDDD.Transactions.IPalOutboxStore store, PalDDD.Messaging.IMessageBroker broker, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.OutboxOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.OutboxBatchProcessor> logger, System.TimeProvider timeProvider, Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory)
   method System.Threading.Tasks.ValueTask ProcessBatchAsync(System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Boolean> ProcessBatchWithBacklogAsync(System.Threading.CancellationToken ct)
 class PalDDD.Transactions.OutboxMessage
   ctor()
   property System.Nullable<ByteAether.Ulid.Ulid> CausationId [init]

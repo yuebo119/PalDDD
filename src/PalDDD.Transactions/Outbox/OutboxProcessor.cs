@@ -26,6 +26,7 @@ namespace PalDDD.Transactions;
 public sealed class OutboxProcessor : PeriodicBackgroundProcessor
 {
     private readonly IPalLogger<OutboxProcessor> _logger;
+    private bool _lastTickFullBatch; // T1.2：上一轮满批信号（ExecuteTickAsync 内赋值，基类循环经 TickHasPendingWork 读取）
 
     public OutboxProcessor(
         IServiceScopeFactory scopeFactory,
@@ -48,19 +49,29 @@ public sealed class OutboxProcessor : PeriodicBackgroundProcessor
                logger is null
                    ? throw new ArgumentNullException(nameof(logger))
                    : scopeFactory,
+               // T1.2（2026-10-11 优化实施轮）：改热读 provider 构造形态——PollInterval 经
+               // IOptionsMonitor 每轮取当前值，运行时热更新即时生效（原冷快照声明就此废止，
+               // OutboxOptions.PollInterval XML doc 同步）。守卫形态不变：options 为 null 时
+               // 仍在 base 体求值前抛出（provider lambda 不会执行）；显式 pollInterval 覆盖
+               // 值经 lambda 捕获恒定返回，等价旧形态。
                options is null
                    ? throw new ArgumentNullException(nameof(options))
-                   : pollInterval ?? options.CurrentValue.PollInterval,
+                   : () => pollInterval ?? options!.CurrentValue.PollInterval,
                timeProvider)
     {
         _logger = logger;
     }
 
+    // T1.2：满批信号上浮——基类循环据此进入自适应排空（满批立即续批）。
+    // 方法首行置 false：异常路径不带出上一轮的陈旧 true。
+    protected override bool TickHasPendingWork => Volatile.Read(ref _lastTickFullBatch);
+
     protected override async ValueTask ExecuteTickAsync(CancellationToken ct)
     {
+        Volatile.Write(ref _lastTickFullBatch, false);
         using var scope = ScopeFactory.CreateScope();
         var processor = scope.ServiceProvider.GetRequiredService<OutboxBatchProcessor>();
-        await processor.ProcessBatchAsync(ct).ConfigureAwait(false);
+        Volatile.Write(ref _lastTickFullBatch, await processor.ProcessBatchWithBacklogAsync(ct).ConfigureAwait(false));
     }
 
     protected override void OnTickFailed(Exception ex)

@@ -63,6 +63,18 @@ public sealed class OutboxBatchProcessor
 
     /// <summary>处理一个已租约的批次。</summary>
     public async ValueTask ProcessBatchAsync(CancellationToken ct)
+        => await ProcessBatchCoreAsync(ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// 处理一个已租约的批次并返回积压信号（T1.2，2026-10-11 优化实施轮）：返回 true =
+    /// 本轮租到了满批（<c>messages.Count ≥ BatchSize</c>，表内可能仍有积压），调用方
+    ///（OutboxProcessor）据此进入自适应排空——立即续批不等轮询间隔；false = 未满批，
+    /// 正常按 PollInterval 轮询。与 <see cref="ProcessBatchAsync"/> 共用同一核心，仅多回传信号。
+    /// </summary>
+    public async ValueTask<bool> ProcessBatchWithBacklogAsync(CancellationToken ct)
+        => await ProcessBatchCoreAsync(ct).ConfigureAwait(false);
+
+    private async ValueTask<bool> ProcessBatchCoreAsync(CancellationToken ct)
     {
         var options = _options.CurrentValue;
         // now 是批次原子时间戳——本批次内所有 MarkProcessed/MarkDead/ReleaseForRetry 共用同一时刻，
@@ -135,6 +147,7 @@ public sealed class OutboxBatchProcessor
         activity?.SetTag("pal.outbox.persist_failed", totals.PersistFailed);
         PalMetrics.OutboxProcessed.Add(totals.Processed);
         PalMetrics.OutboxFailed.Add(totals.Dead + totals.Retried);
+        return messages.Count >= options.BatchSize;
     }
 
     /// <summary>分区内逐条处理（C1 抽取：原串行循环体原样迁移，计数经结构体返回）。</summary>
