@@ -549,6 +549,30 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **T2.2 移植否决（PalORM EventLog PG 单语句 Any 追加——零收益回退，防重复提议留档）**：照 Dapper 侧同款实现 INSERT..SELECT..RETURNING 快路径（Ulid 裸传 Npgsql 参数首跑即抛 InvalidCastException，修为字符串后快路径确认激活——分配形态变化 10.2→11.4KB 为证），PG strict 实测 **2,188μs（E10.8%）vs 两往返原路径 2,072~2,273μs 同带，零收益且分配略高 → 回退**。**附带勘正（T0.1 转正结论修正）**：单语句不降耗时直接证伪「PalORM 慢 Dapper 2× 的主因是两往返形态」——真因是 **PalORM 会话路径的每往返开销本身**（同库同 SQL：PalORM 单往返 ~2.2ms / 双往返 ~2.2ms vs Dapper 单往返 ~0.5ms、双往返 ~0.98ms），方向在 DataSession 层或基准夹具连接形态（LeaseOnly 同证：PalORM 单往返租约 2.3~2.6ms vs Dapper 1.6~1.7ms），未隔离——归 PalORM 上游适配层调查项，本仓库内无改靶（对齐 P7/P8 探针否决先例：否决即回退不留死代码）。Dapper 侧快路径维持不变（其 -15% 收益在往返主导形态成立）。附带沉淀：Any 版本跨方言行为等价测试三件 + EventId 重复分类测试入 PalORM.Tests（对原路径同样有效的回归网）。
 
+## EPSL 修复轮（2026-10-11 晚：地毯审计 A/B/C 批 15 项落地，报告 docs/review/epsl-carpet-2026-10-11.md）
+
+> 背景：同日地毯审计轮（222/222 深读、18 候选）后用户令「根据报告完整修复」。A 批 3 + B 批 6 + C 批 6 落地（B7 投影窗口化检查点移交——特性级变更需重建驱动配合；C 项 #12/#13/#16 登记不做带理由，见报告修复轮段）。全部行为等价变更配锁定测试（分配断言旧码红→新码绿，或行为锁定含启用态对照）。
+
+**A3 Brotli 解压池化**（接入 DecompressBufferPool，池上移 PalDDD.Compression 单一事实源 + Native IVT 消费）：
+
+| 基准（--compression，16KB 负载） | 改前（账本 strict 锚） | 改后 | 差 |
+|---|---:|---:|---|
+| Brotli_Decompress | 45,185 B（13.8~14.4 μs） | **16,440 B / 13.75 μs** | 分配 **-64%**，计时同带 |
+| 对照：LZ4/ZStd_Decompress（既有池化形态） | 16,488 B | 同带 | 逐字节同量级——三算法解压分配形态归一 |
+
+**B4 EventLog k>1 PG 批量化**（多行 VALUES+RETURNING 单往返；postgres:18.6 wslc 同容器同日配对 A/B，行为守卫：版本跨度==k-1 内嵌基准断言）：
+
+| 基准（PG medium 配对） | 改前（逐条往返） | 改后（批路径） | 差 |
+|---|---:|---:|---|
+| EventLog_AppendBatch5（k=5） | 3,726.2 μs / 48,224 B | **1,345.2 μs / 42,216 B** | **快 2.77× / 分配 -12%** |
+| 对照：EventLog_AppendSingle（k=1，未触碰路径） | 1,039.9 μs | 1,105.0 μs | 同带（日内噪声） |
+
+> 与 Outbox AddBatch5 批化锚（PG 3.5×/MySQL 3.8×）同量级；k=5 批内 5 次往返收 1 次的机制印证。方言门控：k=1 与 MySQL/SQLite 维持原路径（EventLog Any 快路径三方言实测先例同款口径）；冲突分类等价（单语句原子 + MaxVersion 重查分类，方言探针补批内 EventId 重复断言，CI 双方言跑）。
+
+**单元分配锁定（旧码红→新码绿，仪器含正例对照）**：FromHeaders(null) 0 B（旧 ~80B/次）；Brotli 解压预算 18KB/op（旧 45KB）；Guid ID JSON 读 D 格式 0 B（旧 ~90B/次，N/B/P 回退腿行为锁定）；DomainEventDispatcher 单事件 ≤700B/迭代（旧 851B——构成：宿主 ActivityListener 下真实 Activity ~440B + Debug async 状态机类 ~140B，生产无监听为零，bench app 车道 154.6ns/160B 佐证）；InboxProcessor 禁用态零 Information 调用（启用态双路径照常的对照锁定）。
+
+**B1/B3（Saga 存储往返结构，机制入账无计时 A/B）**：B1 批量释放把超时扫描非超时分支的 B 次「往返 + 全量快照序列化（Dapper 叠加存在性全行反序列化 / EF 叠加 DetectChanges 扫描）」收为单语句单往返（leased_by 守卫 + 换代；EF 栈 ExecuteUpdate + 全批 Detach——跟踪器幽灵写陷阱的行为锁定测试在案）；B3 把 Save 常见路径 2 往返收 1（UPDATE 先行 + 0 行 COUNT 探测，新行冷路径 2→3）。四栈 SQLite 真库行为测试 + 处理器接线红证明（旧处理器零调用能力接口）在案；EF 栈车道待上游 Provider（既有登记），SQL 计数探针属其解除后的补测项。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |

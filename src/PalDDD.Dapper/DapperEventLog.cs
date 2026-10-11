@@ -26,6 +26,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using System.Data;
+using System.Text;
 using Dapper;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
@@ -174,6 +175,18 @@ public sealed class DapperEventLog : IEventLog
             _ => EventLogSql.InsertSqlite
         };
 
+        // B-4（EPSL 地毯审计 2026-10-11）：PG k>1 多行 VALUES + RETURNING 单往返——原 k 次
+        // INSERT..RETURNING 各一往返（批化锚对照 Outbox AddBatch5）。k=1 与非 PG 方言维持
+        // 下方逐条路径逐字不变（MySQL/SQLite 自增无多行 RETURNING 语义——方言门控三方言
+        // 实测定案先例见上方 Any 单语句快路径）。冲突分类等价：多行 INSERT 单语句原子
+        //（任一行违反唯一索引整批不入库），冲突后重查 MaxVersion——高于预检查快照即外部
+        // 并发写入者（转统一并发异常），等于快照即批内/存量 EventId 重复（原样上抛，
+        // 与逐条路径的 P3 九轮分类同构）。
+        if (_dbType == DapperDbType.PostgreSql && events.Count > 1 && events.Count <= PostgreSqlBatchRowLimit)
+        {
+            return await AppendPostgreSqlBatchAsync(streamName, expectedVersion, currentVersion, version, now, events).ConfigureAwait(false);
+        }
+
         long firstGlobalPos = 0;
         long lastGlobalPos = 0; // P1 修复（四轮评审）：循环内跟踪，替代算术推导
         // F7 声明（第五十四轮片4，2026-09-19）：events 含 null 元素时循环内 NRE（evt.EventId
@@ -254,6 +267,90 @@ public sealed class DapperEventLog : IEventLog
         PalMetrics.EventLogAppended.Add(events.Count);
         return new AppendEventsResult(
             streamName, firstVersion, version - 1, firstGlobalPos, lastGlobalPos);
+    }
+
+    /// <summary>PG 多行批插入行数上限——13 个每行参数 × 行数 + 共享参数须低于 PG 65535 占位符上限（4000 行 = 52002 参数）。</summary>
+    private const int PostgreSqlBatchRowLimit = 4000;
+
+    /// <summary>
+    /// B-4（EPSL 地毯审计 2026-10-11）：PG k&gt;1 多行 VALUES + RETURNING 批量追加——
+    /// k 次 INSERT..RETURNING 往返收为单往返；RETURNING 行序与 VALUES 序的关系 PG 未作
+    /// 保证，first/last 全局位置取返回集合的 Min/Max（序无关，与逐条路径的「first=首行、
+    /// last=末行」在单语句内等价——同语句内序列值单调）。
+    /// </summary>
+    private async Task<AppendEventsResult> AppendPostgreSqlBatchAsync(
+        string streamName,
+        ExpectedStreamVersion expectedVersion,
+        long? currentVersion,
+        long firstVersion,
+        DateTimeOffset now,
+        IReadOnlyList<EventData> events)
+    {
+        // F7 同款声明：events 含 null 元素时此处 NRE（evt.EventId 解引用），失败点与逐条路径相同
+        var dp = new DynamicParameters();
+        dp.Add("StreamName", streamName);
+        dp.Add("RecordedAt", ToTimeParam(now));
+
+        var sb = new StringBuilder(320 + events.Count * 236)
+            .Append("INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES ");
+        for (var i = 0; i < events.Count; i++)
+        {
+            var evt = events[i];
+            var p = $"b{i}_";
+            if (i > 0)
+                sb.Append(", ");
+            sb.Append("(@").Append(p).Append("eid, @").Append(p).Append("en, @StreamName, @").Append(p)
+              .Append("sv, @").Append(p).Append("scv, @").Append(p).Append("ct, @").Append(p)
+              .Append("pl, @").Append(p).Append("md, @RecordedAt, @").Append(p).Append("aid, @").Append(p)
+              .Append("rs, @").Append(p).Append("cid, @").Append(p).Append("cau, @").Append(p)
+              .Append("tp, @").Append(p).Append("ts)");
+
+            dp.Add(p + "eid", DapperAotInitializer.ToSqliteParameter(evt.EventId));
+            dp.Add(p + "en", evt.EventName);
+            dp.Add(p + "sv", firstVersion + i);
+            dp.Add(p + "scv", evt.SchemaVersion);
+            dp.Add(p + "ct", evt.ContentType);
+            // v65 P3 零拷贝口径同逐条路径：PayloadArray/MetadataArray 为 EventData 构造期数组，只读直传
+            dp.Add(p + "pl", evt.PayloadArray, DbType.Binary);
+            dp.Add(p + "md", evt.MetadataArray, DbType.Binary);
+            dp.Add(p + "aid", evt.Audit.ActorId);
+            dp.Add(p + "rs", evt.Audit.Reason);
+            dp.Add(p + "cid", evt.Audit.CorrelationId?.ToString());
+            dp.Add(p + "cau", evt.Audit.CausationId?.ToString());
+            dp.Add(p + "tp", evt.Audit.TraceParent);
+            dp.Add(p + "ts", evt.Audit.TraceState);
+        }
+        sb.Append(" RETURNING global_position");
+
+        List<long> positions;
+        try
+        {
+            positions = (await _connection.QueryAsync<long>(sb.ToString(), dp, Tx).ConfigureAwait(false)).ToList();
+        }
+        catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            // 单语句原子（整批不入库）：重查 MaxVersion 分类——高于预检查快照 = 外部并发
+            // 写入者；等于快照 = 批内/存量 EventId 重复（原样上抛）。PG aborted 事务
+            //（25P02）下分类查询自败——保守上抛原始冲突异常（与逐条路径同款）。
+            long? actualVersion = null;
+            var requerySucceeded = false;
+            try
+            {
+                actualVersion = await _connection.QueryFirstOrDefaultAsync<long?>(
+                    EventLogSql.MaxVersion, new { name = streamName }, Tx).ConfigureAwait(false);
+                requerySucceeded = true;
+            }
+            catch (System.Data.Common.DbException)
+            {
+            }
+            if (requerySucceeded && (actualVersion ?? -1) > (currentVersion ?? -1))
+                throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);
+            throw;
+        }
+
+        PalMetrics.EventLogAppended.Add(events.Count);
+        return new AppendEventsResult(
+            streamName, firstVersion, firstVersion + events.Count - 1, positions.Min(), positions.Max());
     }
 
     public async IAsyncEnumerable<RecordedEvent> ReadStreamAsync(

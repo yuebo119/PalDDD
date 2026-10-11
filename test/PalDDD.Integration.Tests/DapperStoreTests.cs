@@ -775,6 +775,52 @@ public sealed class DapperStoreTests
         await Assert.That(loaded.Status).IsEqualTo(SagaStatus.Active);
     }
 
+    /// <summary>B-1（EPSL 地毯审计 2026-10-11）：IN 列表单语句批量释放——owner 守卫 +
+    /// 换代 + 他 owner 行不受扰（SQLite 本地验证；IN + 单 UPDATE 三方言通用无分派面）。</summary>
+    [Test]
+    public async Task Saga_ReleaseLeasesAsync_BatchWithOwnerGuard(CancellationToken cancellationToken)
+    {
+        var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);
+        var s1 = new TestSagaState
+        {
+            SagaId = PalUlid.New(),
+            CurrentState = "Initial",
+            Status = SagaStatus.Active,
+            CreatedAt = TimeProvider.System.GetUtcNow()
+        };
+        var s2 = new TestSagaState
+        {
+            SagaId = PalUlid.New(),
+            CurrentState = "Initial",
+            Status = SagaStatus.Active,
+            CreatedAt = TimeProvider.System.GetUtcNow()
+        };
+        await store.SaveChangesAsync(s1, cancellationToken);
+        await store.SaveChangesAsync(s2, cancellationToken);
+
+        var leasedA = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        await Assert.That(leasedA.Count).IsEqualTo(2);
+        // 全部归 A 持有后 B 租约空批
+        var leasedB = await store.LeaseActiveSagasAsync("owner-B", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        await Assert.That(leasedB.Count).IsEqualTo(0);
+
+        var empty = await store.ReleaseLeasesAsync("owner-A", [], cancellationToken);
+        await Assert.That(empty).IsEqualTo(0);
+
+        // 他 owner 释放：0 行（leased_by 守卫）
+        var foreign = await store.ReleaseLeasesAsync("owner-B", leasedA, cancellationToken);
+        await Assert.That(foreign).IsEqualTo(0);
+
+        var released = await store.ReleaseLeasesAsync("owner-A", leasedA, cancellationToken);
+        await Assert.That(released).IsEqualTo(2);
+
+        var r1 = await store.GetByIdAsync(s1.SagaId, cancellationToken);
+        await Assert.That(r1!.LeasedBy).IsNull();
+        await Assert.That(r1.Version).IsEqualTo(2); // 插入 0（DB 默认）→ 租约 +1 → 释放 +1
+        var r2 = await store.GetByIdAsync(s2.SagaId, cancellationToken);
+        await Assert.That(r2!.LeasedBy).IsNull();
+    }
+
     [Test]
     public async Task Saga_SaveChangesAsync_Upsert(CancellationToken cancellationToken)
     {

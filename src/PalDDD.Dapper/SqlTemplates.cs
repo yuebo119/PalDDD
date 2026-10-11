@@ -373,4 +373,19 @@ public static class SqlTemplates
     /// <summary>PG 专用 Saga 更新 — saga_data 同 SagaInsertPG 的 jsonb CAST。</summary>
     public const string SagaUpdatePG =
         "UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=CAST(@data AS jsonb),leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v";
+
+    /// <summary>
+    /// 批量释放本 owner 的 Saga 租约（EPSL 地毯审计 2026-10-11 B-1）——仅租约列 + 换代，
+    /// 不写业务字段；<c>leased_by=@owner</c> 守卫防抢占（租约被他实例重租换代或已终态保存时
+    /// 该行正确退化为不匹配）。三方言通用（IN 列表 + 单 UPDATE，无方言分派面）。
+    /// </summary>
+    public const string SagaReleaseLeases =
+        "UPDATE saga_states SET leased_by=NULL, leased_until=NULL, version=version+1 WHERE leased_by=@owner AND saga_id IN @ids";
+
+    /// <summary>
+    /// Saga 存在性探测（EPSL 地毯审计 2026-10-11 B-3）——SaveChangesAsync 的 UPDATE 先行
+    /// 形态下区分「版本冲突」（行在 → 返回 0）与「新行」（INSERT 路径）；COUNT 无数据传输。
+    /// </summary>
+    public const string SagaExists =
+        "SELECT COUNT(1) FROM saga_states WHERE saga_id=@id";
 }

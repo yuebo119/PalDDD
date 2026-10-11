@@ -288,6 +288,20 @@ public class DapperRemoteOutboxThroughputBenchmarks : PersistenceBenchBase
         => await _eventLog.AppendAsync("bench-stream", ExpectedStreamVersion.Any,
             [NewEventData()], default);
 
+    // B-4（EPSL 地毯审计 2026-10-11）：EventLog k=5 批量追加（多事件提交典型形态，对照
+    // Outbox_AddBatch5 的批化收益锚）——PG 多行 VALUES+RETURNING 单往返；与
+    // EventLog_AppendSingle×5 对照即批化收益。行为校验：版本跨度必须 ==4（k-1）。
+    [Benchmark]
+    public async ValueTask<long> EventLog_AppendBatch5()
+    {
+        var events = new[] { NewEventData(), NewEventData(), NewEventData(), NewEventData(), NewEventData() };
+        var result = await _eventLog.AppendAsync("bench-stream-batch5", ExpectedStreamVersion.Any, events, default);
+        if (result.LastStreamVersion - result.FirstStreamVersion != events.Length - 1)
+            throw new InvalidOperationException(
+                $"EventLog 批量追加版本跨度 {result.LastStreamVersion - result.FirstStreamVersion} != {events.Length - 1}——行为校验失败");
+        return result.LastGlobalPosition;
+    }
+
     // 幂等全周期：TryStart（唯一键）+ MarkCompleted（口径同 SQLite 三栈车道）
     [Benchmark]
     public async ValueTask Idempotency_TryStart_Completed()

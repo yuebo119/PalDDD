@@ -18,8 +18,12 @@ public sealed partial class StrategicDddAnalyzer
     {
         // ITM-123 修复：PDDD005 仅对 class 生效——[GenerateMessage] 为 AttributeTargets.Class，
         // struct 事件不可消解（与 PDDD001 的 struct 排除对称）
+        // C-17（EPSL 地毯审计 2026-10-11）：IsDomainEventType 单轮单次求值——原两段条件各自
+        // 调用（基类链 + AllInterfaces 全名比对 ×2），IDE 增量分析每次编辑重跑双倍；两处
+        // 条件集合相同，求值序无副作用，合并零行为差。
+        var isDomainEventType = IsDomainEventType(type);
         if (type.TypeKind == TypeKind.Class
-            && IsDomainEventType(type)
+            && isDomainEventType
             && generateMessage is null)
         {
             context.ReportDiagnostic(Diagnostic.Create(
@@ -28,7 +32,7 @@ public sealed partial class StrategicDddAnalyzer
                 type.Name));
         }
 
-        if (IsDomainEventType(type)
+        if (isDomainEventType
             && type.TypeKind == TypeKind.Class
             && !type.IsSealed)
         {

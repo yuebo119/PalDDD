@@ -13,28 +13,10 @@ namespace PalDDD.Compression;
 // 与 SystemCompressor 的 Brotli 路径同构：输出累计每轮即校验 MaxOutputBytes，
 // 超限的下一轮立即中止——上限检查先于后续分配生效，而非全量解压完成之后。
 
-// C6（2026-10-09 优化轮）：解压增长缓冲的线程槽池——三压缩器共用一个 ThreadStatic 槽，
-// 免每调用 new ArrayBufferWriter 及其倍增分配。权衡镜像 JsonMessageSerializer 的
-// ThreadStatic 池先例（含峰值驻留声明）：缓冲按历史峰值容量保留，线程退出才回收；
-// 输出上限受 DecompressionGuard.MaxOutputBytes 约束，单线程峰值驻留有界。
-// 非重入：单线程内嵌套 Decompress（自定义流内回调）会清空外层缓冲——与序列化器池
-// 同款约束，本 API 形态（同步直解）无嵌套路径。
-internal static class DecompressBufferPool
-{
-    [ThreadStatic]
-    private static ArrayBufferWriter<byte>? _writer;
-
-    /// <summary>取本线程的解压缓冲（复用前 Clear；异常残留由下一次 Rent 的 Clear 清除）。</summary>
-    public static ArrayBufferWriter<byte> Rent()
-    {
-        var writer = _writer;
-        if (writer is null)
-            _writer = writer = new ArrayBufferWriter<byte>();
-        else
-            writer.Clear();
-        return writer;
-    }
-}
+// C6（2026-10-09 优化轮）：解压增长缓冲的线程槽池 DecompressBufferPool——三压缩器共用
+// 一个 ThreadStatic 槽，免每调用 new ArrayBufferWriter 及其倍增分配。2026-10-11（EPSL
+// 地毯审计 A-3）池上移至 PalDDD.Compression 程序集（Brotli 接入同一池，单一事实源），
+// 本程序集经 InternalsVisibleTo 消费，调用点零变化。权衡与约束声明见池类头注。
 
 /// <summary>
 /// LZ4 压缩器 — 基于 NativeCompressions (Cysharp) 的原生绑定。

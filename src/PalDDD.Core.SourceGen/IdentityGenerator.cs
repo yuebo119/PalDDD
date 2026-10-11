@@ -681,13 +681,38 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
         // v33 P2 补全：token 守卫只堵了类型半边——token 类型正确但格式非法时
         // GetGuid/GetInt32/GetInt64 仍抛 FormatException（Learn 官方文档独立异常条目），
         // 非 JsonException，契约破裂。三分支补 TryParse/TryGet 形态（镜像 Ulid 分支）。
-        "Guid" => $"""
+        // EPSL 地毯审计 2026-10-11 B-2：读路径三腿零分配（镜像下方 Ulid 腿的 B2 形态）——
+        // 非转义单段字符串走 Utf8Parser 的 'D' 格式直解（本仓写侧 WriteStringValue(Guid)
+        // 恒产 D 格式，框架往返全量覆盖快路径）；'D' 失配回退 GetString()+TryParse(string)
+        //（原路径）——Utf8Parser 的 Guid 重载仅支持 'D' 格式（DLL/XML 双源查证防捏造），
+        // 直接替换会静默收窄既有 N/B/P 接受面，回退腿保格式兼容集逐字不变。
+        // 转义字符串/多段 sequence 同 Ulid 腿回退字符串重载（值路径含不可 UTF-8 直解形态）。
+        // 含字面块花括号，插值定界符升格 $$（同 Ulid 腿 v34 P2 注）。
+        // v35 P3（DA2）：Guid 裸名 → global::System.Guid（遮蔽防护，同 NewBody）保留。
+        "Guid" => $$"""
                 if (reader.TokenType != JsonTokenType.String)
                     throw new JsonException("Guid identity JSON value must be a JSON string.");
-                // v35 P3（DA2）：Guid 裸名 → global::System.Guid（遮蔽防护，同 NewBody）
-                if (!global::System.Guid.TryParse(reader.GetString(), out var guidValue))
-                    throw new JsonException("Guid identity JSON value is not a valid Guid.");
-                return {name}.From(guidValue);
+                if (reader.ValueIsEscaped)
+                {
+                    if (!global::System.Guid.TryParse(reader.GetString(), out var escapedGuid))
+                        throw new JsonException("Guid identity JSON value is not a valid Guid.");
+                    return {{name}}.From(escapedGuid);
+                }
+                if (reader.HasValueSequence)
+                {
+                    if (global::System.Guid.TryParse(reader.GetString(), out var seqGuid))
+                        return {{name}}.From(seqGuid);
+                }
+                else if (System.Buffers.Text.Utf8Parser.TryParse(reader.ValueSpan, out global::System.Guid guidValue, out int bytesConsumed, 'D'))
+                {
+                    return {{name}}.From(guidValue);
+                }
+                else if (global::System.Guid.TryParse(reader.GetString(), out var fallbackGuid))
+                {
+                    // N/B/P 等非 D 格式（外部产出）——字符串路径保持既有接受面
+                    return {{name}}.From(fallbackGuid);
+                }
+                throw new JsonException("Guid identity JSON value is not a valid Guid.");
         """,
         // 优化（二十五轮 API 扫描 B2）：读路径原为 GetString()（必然堆分配）+ Parse(string)——
         // 非转义字符串（绝大多数）直接 reader.ValueSpan（UTF-8 原始切片）TryParse 零分配；

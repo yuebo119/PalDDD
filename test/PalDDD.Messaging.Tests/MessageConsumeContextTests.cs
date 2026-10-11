@@ -133,4 +133,43 @@ public sealed class MessageConsumeContextTests
         await Assert.That(MessageConsumeContext.HeaderNames.CorrelationId).IsEqualTo("x-correlation-id");
         await Assert.That(MessageConsumeContext.HeaderNames.CausationId).IsEqualTo("x-causation-id");
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ⚡ 分配契约（EPSL 地毯审计 2026-10-11 A-1）
+    // FromHeaders(null) 是本框架默认消费路径——KafkaBroker.FromKafkaHeaders 无表/空表直返 null、
+    // RabbitMQ 无头消息同样落到 null 入参——每条消费消息一次调用，空入参必须零分配。
+    // 旧码形态：字典构造在空判短路之前，每调用 ~80B（本测试在该形态下红）。
+    // ═══════════════════════════════════════════════════════════════
+
+    private const int AllocationIterations = 10_000;
+
+    private static long MeasureAllocation(Action action)
+    {
+        action();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        var baseline = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < AllocationIterations; i++)
+            action();
+        return GC.GetAllocatedBytesForCurrentThread() - baseline;
+    }
+
+    [Test]
+    public async Task MeasureAllocation_PositiveControl_ReportsNonZero()
+    {
+        // 仪器自证（对齐 Core.Tests AllocationContractTests 先例）：裁判先证明能测出分配，
+        // 否则下方零分配断言可能恒真
+        var alloc = MeasureAllocation(static () => _ = new byte[64]);
+        await Assert.That(alloc >= 32L * AllocationIterations).IsTrue();
+    }
+
+    [Test]
+    public async Task FromHeaders_NullHeadersZeroFallback_ZeroAllocation()
+    {
+        var alloc = MeasureAllocation(static () => _ = MessageConsumeContext.FromHeaders(headers: null));
+
+        // 允许微量 GC 噪声（< 100B 总计）；旧码的空 Dictionary ~80B × 10k 迭代在此预算下红
+        await Assert.That(alloc <= 100).IsTrue();
+    }
 }

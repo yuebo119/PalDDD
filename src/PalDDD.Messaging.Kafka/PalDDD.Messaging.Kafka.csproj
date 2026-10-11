@@ -15,6 +15,12 @@
 
   <ItemGroup>
     <PackageReference Include="Confluent.Kafka" />
-    </ItemGroup>
+  </ItemGroup>
+
+  <!-- CreateHeaders（internal，B-5 按需构造）的空入参/行为锁定测试在 Messaging.Integration.Tests
+       （broker 工程单测归属集成侧——领域测试项目不引用 Infra 实现工程，ArchitectureBoundaryTests 门禁） -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="PalDDD.Messaging.Integration.Tests" />
+  </ItemGroup>
 
 </Project>
