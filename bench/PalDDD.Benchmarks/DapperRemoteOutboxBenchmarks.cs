@@ -252,6 +252,18 @@ public class DapperRemoteOutboxThroughputBenchmarks : PersistenceBenchBase
         return msgs.Count;
     }
 
+    // T0.3（2026-10-11 优化实施轮）：纯租约——把产品租约从 Lease_Batch100 的体内重灌噪声中分离
+    //（总读数的绝对主导是 100 次单条重插，租约本身 = 单往返 UPDATE..RETURNING SKIP LOCKED）。
+    // IterationSetup 每次调用前已保证 100 行 pending，基准体只租不灌，读数即产品租约延迟。
+    [Benchmark]
+    public async ValueTask<int> Outbox_LeaseOnly_100()
+    {
+        var msgs = await _store.LeasePendingMessagesAsync(BatchSize, "bench",
+            TimeSpan.FromSeconds(30), 10, default);
+        EnsureFullLease(msgs);
+        return msgs.Count;
+    }
+
     [Benchmark]
     public async Task Outbox_AddSingle()
         => await _store.AddMessageAsync(NewOutboxMessage());
@@ -554,6 +566,17 @@ public class PalOrmRemoteOutboxBenchmarks : PersistenceBenchBase
         EnsureFullLease(msgs);
         for (var i = 0; i < BatchSize; i++)
             await _workerStores[0].AddMessagesAsync([NewOutboxMessage()]);
+        return msgs.Count;
+    }
+
+    // T0.3（2026-10-11 优化实施轮）：纯租约——口径同 Dapper 类 LeaseOnly（只租不灌，
+    // IterationSetup 已保证 100 行 pending），双栈租约延迟的直接对照。
+    [Benchmark]
+    public async ValueTask<int> Outbox_LeaseOnly_100()
+    {
+        var msgs = await _workerStores[0].LeasePendingMessagesAsync(BatchSize, "bench",
+            TimeSpan.FromSeconds(30), 10, default);
+        EnsureFullLease(msgs);
         return msgs.Count;
     }
 
