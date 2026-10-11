@@ -155,12 +155,18 @@ public sealed class MessageConsumeContextTests
         return GC.GetAllocatedBytesForCurrentThread() - baseline;
     }
 
+    // 逃生槽（CI run 38149487218 实证，2026-10-11）：`_ = new byte[64]` 的丢弃分配在 Linux
+    // Release + 分层 PGO 下可被 JIT 死存储消除——对照组测得 0 触发下限断言红（Windows 不消，
+    // 本地绿 CI 红的平台分叉）。静态槽写入强制分配可观测，两处对照组（本文件与 Core.Tests
+    // AllocationContractTests 先例）同款修复。
+    private static byte[]? s_allocSink;
+
     [Test]
     public async Task MeasureAllocation_PositiveControl_ReportsNonZero()
     {
         // 仪器自证（对齐 Core.Tests AllocationContractTests 先例）：裁判先证明能测出分配，
         // 否则下方零分配断言可能恒真
-        var alloc = MeasureAllocation(static () => _ = new byte[64]);
+        var alloc = MeasureAllocation(static () => s_allocSink = new byte[64]);
         await Assert.That(alloc >= 32L * AllocationIterations).IsTrue();
     }
 
