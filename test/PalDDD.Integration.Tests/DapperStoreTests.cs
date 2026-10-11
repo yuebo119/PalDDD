@@ -211,7 +211,7 @@ public sealed class DapperStoreTests
         var store = new DapperOutboxStore(_conn, _dbType);
         var msg = CreateOutboxMessage("test.event.v1");
 
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         var pending = await store.GetPendingMessagesAsync(10, new OutboxOptions().MaxRetryCount, cancellationToken);
         await Assert.That(pending).Count().IsEqualTo(1);
@@ -269,7 +269,7 @@ public sealed class DapperStoreTests
         await using var uow = new DapperUnitOfWork(_conn);
 
         await uow.BeginTransactionAsync(cancellationToken);
-        store.AddMessage(CreateOutboxMessage("tx.rollback.v1"));
+        await store.AddMessageAsync(CreateOutboxMessage("tx.rollback.v1"));
         await uow.RollbackAsync(cancellationToken);
 
         // 回滚后消息不可见——若 store 未挂接 UoW 事务（断链），写入已自动提交、此处查到 1 条
@@ -284,11 +284,11 @@ public sealed class DapperStoreTests
         await using var uow = new DapperUnitOfWork(_conn);
 
         await uow.BeginTransactionAsync(cancellationToken);
-        store.AddMessage(CreateOutboxMessage("tx.commit.v1"));
+        await store.AddMessageAsync(CreateOutboxMessage("tx.commit.v1"));
         await uow.CommitAsync(cancellationToken);
 
         // 提交后持久化且 ambient 通道已清空（后续写入不再误挂已终结事务）
-        store.AddMessage(CreateOutboxMessage("tx.after-commit.v1"));
+        await store.AddMessageAsync(CreateOutboxMessage("tx.after-commit.v1"));
         var pending = await store.GetPendingMessagesAsync(10, new OutboxOptions().MaxRetryCount, cancellationToken);
         await Assert.That(pending.Count).IsEqualTo(2);
     }
@@ -304,7 +304,7 @@ public sealed class DapperStoreTests
         var store = new DapperOutboxStore(_conn, _dbType, timeProvider: storeClock);
         var msg = CreateOutboxMessage("test.event.v1", createdAt);
 
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         var persisted = await ReadScalarAsync<DateTimeOffset>(
             "SELECT created_at FROM outbox_messages WHERE id=$id",
@@ -361,7 +361,7 @@ public sealed class DapperStoreTests
     public async Task Outbox_LeasePendingMessages_AtomicAcquisition(CancellationToken cancellationToken)
     {
         var store = new DapperOutboxStore(_conn, _dbType);
-        store.AddMessage(CreateOutboxMessage("a.v1"));
+        await store.AddMessageAsync(CreateOutboxMessage("a.v1"));
 
         var leased = await store.LeasePendingMessagesAsync(
             10, "test-owner", TimeSpan.FromMinutes(5), new OutboxOptions().MaxRetryCount, cancellationToken);
@@ -376,7 +376,7 @@ public sealed class DapperStoreTests
     {
         var store = new DapperOutboxStore(_conn, _dbType);
         var msg = CreateOutboxMessage("a.v1");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         // 第一次租约获取
         await store.LeasePendingMessagesAsync(
@@ -393,13 +393,21 @@ public sealed class DapperStoreTests
     {
         var store = new DapperOutboxStore(_conn, _dbType);
         var msg = CreateOutboxMessage("a.v1");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
         var pending = await store.GetPendingMessagesAsync(10, new OutboxOptions().MaxRetryCount, cancellationToken);
         var target = pending[0];
 
         var processedAt = TimeProvider.System.GetUtcNow();
-        store.MarkProcessed(target, processedAt);
+        await store.MarkProcessedAsync(target, processedAt);
         await store.SaveChangesAsync(cancellationToken);
+
+        // v4.0 ②（ADR-026 fencing 统一）锁定：成功后入参全套六字段回写（原仅清租约两字段）
+        await Assert.That(target.Status).IsEqualTo(OutboxStatus.Processed);
+        await Assert.That(target.ProcessedAt).IsEqualTo(processedAt);
+        await Assert.That(target.Error).IsNull();
+        await Assert.That(target.NextAttemptAt).IsNull();
+        await Assert.That(target.LockedBy).IsNull();
+        await Assert.That(target.LockedUntil).IsNull();
 
         var after = await store.GetPendingMessagesAsync(10, new OutboxOptions().MaxRetryCount, cancellationToken);
         await Assert.That(after).IsEmpty();
@@ -411,7 +419,7 @@ public sealed class DapperStoreTests
         // 三十四轮 ITM-210 租约 token 回归：租约被重租（locked_until 变化 = 新 token）后，
         // 旧 worker 终态写必须影响 0 行——原裸 WHERE id=@id 对重租/同 owner 复用零防护
         var store = new DapperOutboxStore(_conn, _dbType);
-        store.AddMessage(CreateOutboxMessage("fence.v1"));
+        await store.AddMessageAsync(CreateOutboxMessage("fence.v1"));
         var leased = await store.LeasePendingMessagesAsync(
             10, "stale-worker", TimeSpan.FromMinutes(5), new OutboxOptions().MaxRetryCount, cancellationToken);
         await Assert.That(leased).Count().IsEqualTo(1);
@@ -426,7 +434,13 @@ public sealed class DapperStoreTests
             ("$until", DateTimeOffset.UtcNow.AddMinutes(10).ToString("O", CultureInfo.InvariantCulture)),
             ("$id", idParam));
 
-        store.MarkProcessed(staleMsg, TimeProvider.System.GetUtcNow());
+        await store.MarkProcessedAsync(staleMsg, TimeProvider.System.GetUtcNow());
+
+        // v4.0 ②（ADR-026 fencing 统一）锁定：token 拒绝时零内存变异（Status 仍 Pending、
+        // 租约快照字段保持调用时值——原 MarkProcessed 已合规，MarkDead 此前无条件清租约已同轮收口）
+        await Assert.That(staleMsg.Status).IsEqualTo(OutboxStatus.Pending);
+        await Assert.That(staleMsg.LockedBy).IsEqualTo("stale-worker");
+        await Assert.That(staleMsg.LockedUntil).IsNotNull();
 
         // 三十八轮统一（状态列 int 化）：断言改读数值——OutboxStatus.Processed=1
         var status = await ReadScalarAsync<long>(
@@ -442,11 +456,11 @@ public sealed class DapperStoreTests
     {
         var store = new DapperOutboxStore(_conn, _dbType);
         var msg = CreateOutboxMessage("a.v1");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
         var pending = await store.GetPendingMessagesAsync(10, new OutboxOptions().MaxRetryCount, cancellationToken);
 
         var deadAt = TimeProvider.System.GetUtcNow();
-        store.MarkDead(pending[0], "permanent failure", deadAt);
+        await store.MarkDeadAsync(pending[0], "permanent failure", deadAt);
 
         var after = await store.GetPendingMessagesAsync(10, new OutboxOptions().MaxRetryCount, cancellationToken);
         await Assert.That(after).IsEmpty();
@@ -457,7 +471,7 @@ public sealed class DapperStoreTests
     {
         var store = new DapperOutboxStore(_conn, _dbType);
         var msg = CreateOutboxMessage("a.v1");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
         var leasedList = await store.LeasePendingMessagesAsync(
             10, "owner-1", TimeSpan.FromMinutes(5), new OutboxOptions().MaxRetryCount, cancellationToken);
         await Assert.That(leasedList).Count().IsEqualTo(1);
@@ -466,7 +480,7 @@ public sealed class DapperStoreTests
             "UPDATE outbox_messages SET error='old', next_attempt_at=$next WHERE id=$id",
             ("$next", TimeProvider.System.GetUtcNow().AddMinutes(1)),
             ("$id", msg.Id));
-        store.MarkProcessed(leased, TimeProvider.System.GetUtcNow());
+        await store.MarkProcessedAsync(leased, TimeProvider.System.GetUtcNow());
 
         var row = await ReadOutboxCleanupStateAsync(msg.Id);
         await Assert.That(row.Error).IsNull();
@@ -480,7 +494,7 @@ public sealed class DapperStoreTests
     {
         var store = new DapperOutboxStore(_conn, _dbType);
         var msg = CreateOutboxMessage("a.v1");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
         var leasedList = await store.LeasePendingMessagesAsync(
             10, "owner-1", TimeSpan.FromMinutes(5), new OutboxOptions().MaxRetryCount, cancellationToken);
         await Assert.That(leasedList).Count().IsEqualTo(1);
@@ -489,7 +503,7 @@ public sealed class DapperStoreTests
             "UPDATE outbox_messages SET next_attempt_at=$next WHERE id=$id",
             ("$next", TimeProvider.System.GetUtcNow().AddMinutes(1)),
             ("$id", msg.Id));
-        store.MarkDead(leased, "permanent", TimeProvider.System.GetUtcNow());
+        await store.MarkDeadAsync(leased, "permanent", TimeProvider.System.GetUtcNow());
 
         var row = await ReadOutboxCleanupStateAsync(msg.Id);
         await Assert.That(row.NextAttemptAt).IsNull();
@@ -502,11 +516,11 @@ public sealed class DapperStoreTests
     {
         var store = new DapperOutboxStore(_conn, _dbType);
         var msg = CreateOutboxMessage("a.v1");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
         var pending = await store.GetPendingMessagesAsync(10, new OutboxOptions().MaxRetryCount, cancellationToken);
 
         var nextAttempt = TimeProvider.System.GetUtcNow().AddSeconds(30);
-        store.ReleaseForRetry(pending[0], "transient failure", nextAttempt);
+        await store.ReleaseForRetryAsync(pending[0], "transient failure", nextAttempt);
 
         // 由于 next_attempt_at 在未来，GetPendingMessagesAsync 不应返回
         var after = await store.GetPendingMessagesAsync(10, new OutboxOptions().MaxRetryCount, cancellationToken);
@@ -518,7 +532,7 @@ public sealed class DapperStoreTests
     {
         var store = new DapperOutboxStore(_conn, _dbType);
         var msg = CreateOutboxMessage("a.v1");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         // 重试 10 次，每次 ReleaseForRetry 在 SQL 中原子递增 RetryCount
         // 默认 MaxRetryCount=10，达到上限后不再返回待处理消息
@@ -528,7 +542,7 @@ public sealed class DapperStoreTests
             if (pending.Count == 0) break;
             var target = pending[0];
 
-            store.ReleaseForRetry(target, $"retry {i + 1}",
+            await store.ReleaseForRetryAsync(target, $"retry {i + 1}",
                 TimeProvider.System.GetUtcNow().AddMilliseconds(-1));
         }
 
@@ -547,12 +561,12 @@ public sealed class DapperStoreTests
     {
         var store = new DapperOutboxStore(_conn, _dbType);
         var msg = CreateOutboxMessage("a.v1");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         var pending = await store.GetPendingMessagesAsync(10, 1, cancellationToken);
         await Assert.That(pending).Count().IsEqualTo(1);
         var target = pending[0];
-        store.ReleaseForRetry(target, "retry 1", TimeProvider.System.GetUtcNow().AddMilliseconds(-1));
+        await store.ReleaseForRetryAsync(target, "retry 1", TimeProvider.System.GetUtcNow().AddMilliseconds(-1));
 
         var final = await store.GetPendingMessagesAsync(10, 1, cancellationToken);
         await Assert.That(final).IsEmpty();
@@ -759,6 +773,52 @@ public sealed class DapperStoreTests
         await Assert.That(loaded).IsNotNull();
         await Assert.That(loaded.CurrentState).IsEqualTo("Initial");
         await Assert.That(loaded.Status).IsEqualTo(SagaStatus.Active);
+    }
+
+    /// <summary>B-1（EPSL 地毯审计 2026-10-11）：IN 列表单语句批量释放——owner 守卫 +
+    /// 换代 + 他 owner 行不受扰（SQLite 本地验证；IN + 单 UPDATE 三方言通用无分派面）。</summary>
+    [Test]
+    public async Task Saga_ReleaseLeasesAsync_BatchWithOwnerGuard(CancellationToken cancellationToken)
+    {
+        var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);
+        var s1 = new TestSagaState
+        {
+            SagaId = PalUlid.New(),
+            CurrentState = "Initial",
+            Status = SagaStatus.Active,
+            CreatedAt = TimeProvider.System.GetUtcNow()
+        };
+        var s2 = new TestSagaState
+        {
+            SagaId = PalUlid.New(),
+            CurrentState = "Initial",
+            Status = SagaStatus.Active,
+            CreatedAt = TimeProvider.System.GetUtcNow()
+        };
+        await store.SaveChangesAsync(s1, cancellationToken);
+        await store.SaveChangesAsync(s2, cancellationToken);
+
+        var leasedA = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        await Assert.That(leasedA.Count).IsEqualTo(2);
+        // 全部归 A 持有后 B 租约空批
+        var leasedB = await store.LeaseActiveSagasAsync("owner-B", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        await Assert.That(leasedB.Count).IsEqualTo(0);
+
+        var empty = await store.ReleaseLeasesAsync("owner-A", [], cancellationToken);
+        await Assert.That(empty).IsEqualTo(0);
+
+        // 他 owner 释放：0 行（leased_by 守卫）
+        var foreign = await store.ReleaseLeasesAsync("owner-B", leasedA, cancellationToken);
+        await Assert.That(foreign).IsEqualTo(0);
+
+        var released = await store.ReleaseLeasesAsync("owner-A", leasedA, cancellationToken);
+        await Assert.That(released).IsEqualTo(2);
+
+        var r1 = await store.GetByIdAsync(s1.SagaId, cancellationToken);
+        await Assert.That(r1!.LeasedBy).IsNull();
+        await Assert.That(r1.Version).IsEqualTo(2); // 插入 0（DB 默认）→ 租约 +1 → 释放 +1
+        var r2 = await store.GetByIdAsync(s2.SagaId, cancellationToken);
+        await Assert.That(r2!.LeasedBy).IsNull();
     }
 
     [Test]
@@ -1178,6 +1238,59 @@ public sealed class DapperStoreTests
             cancellationToken);
         await Assert.That(EventsWritten(r2)).IsEqualTo(1);
         await Assert.That(r2.FirstStreamVersion).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task EventLog_AppendAsync_AnyVersionSingleEvent_AppendsAtMaxPlusOne(CancellationToken cancellationToken)
+    {
+        // I（2026-10-10 优化轮）：单事件 Any 追加行为锁定——SQLite 走原路径（快路径经
+        // 2026-10-10 三方言实测仅 PG 启用，见 DapperEventLog 快路径门控注释），本测试锁定
+        // Any 语义的慢路径形态：连续追加依次落在 MAX+1，结果流版本与全局位置单调。
+        // PG 快路径的行为断言在 DialectProbeTests.EventLogSmokeAsync（CI Testcontainers）
+        var log = new DapperEventLog(_conn, null, _dbType);
+        var r1 = await log.AppendAsync("any-fast-stream", ExpectedStreamVersion.NoStream,
+            [new EventData(PalUlid.New(), "test.event.v1", 1, "application/json",
+                "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty)],
+            cancellationToken);
+        await Assert.That(r1.FirstStreamVersion).IsEqualTo(0);
+
+        var r2 = await log.AppendAsync("any-fast-stream", ExpectedStreamVersion.Any,
+            [new EventData(PalUlid.New(), "test.event.v2", 1, "application/json",
+                "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty)],
+            cancellationToken);
+        await Assert.That(r2.FirstStreamVersion).IsEqualTo(1);
+        await Assert.That(r2.LastStreamVersion).IsEqualTo(1);
+        await Assert.That(r2.LastGlobalPosition).IsGreaterThan(r1.FirstGlobalPosition);
+
+        var r3 = await log.AppendAsync("any-fast-stream", ExpectedStreamVersion.Any,
+            [new EventData(PalUlid.New(), "test.event.v3", 1, "application/json",
+                "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty)],
+            cancellationToken);
+        await Assert.That(r3.FirstStreamVersion).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task EventLog_AppendAsync_AnyFastPath_DuplicateEventId_RethrowsRaw(CancellationToken cancellationToken)
+    {
+        // I（2026-10-10 优化轮）：Any 追加的 EventId 重复冲突分类锁定（SQLite 慢路径形态；
+        // PG 快路径同分类逻辑在 DialectProbeTests 验证）——event_id 唯一索引命中时原样上抛
+        // 原始异常（镜像慢路径 BatchDuplicateEventId 的分类意图），不得误译为
+        // EventStreamConcurrencyException。前置声明同 TST-202：生产默认 schema 无 event_id
+        // 唯一索引时本路径不触发，本测试自建索引验证
+        await using (var indexCommand = _conn.CreateCommand())
+        {
+            indexCommand.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id)";
+            await indexCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var log = new DapperEventLog(_conn, null, _dbType);
+        var duplicated = new EventData(PalUlid.New(), "test.event.v1", 1, "application/json",
+            "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty);
+        var r1 = await log.AppendAsync("any-dup-stream", ExpectedStreamVersion.Any, [duplicated], cancellationToken);
+        await Assert.That(EventsWritten(r1)).IsEqualTo(1);
+
+        _ = await Assert.ThrowsAsync<Microsoft.Data.Sqlite.SqliteException>(async () =>
+            await log.AppendAsync("any-dup-stream", ExpectedStreamVersion.Any, [duplicated], cancellationToken));
     }
 
     [Test]

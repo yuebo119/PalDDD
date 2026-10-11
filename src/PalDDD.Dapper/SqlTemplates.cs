@@ -131,6 +131,19 @@ public static class SqlTemplates
         + " ORDER BY created_at LIMIT @n) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until";
 
     /// <summary>
+    /// MySQL ≥8.0.18 专用原子租约获取 — JOIN 派生表 FOR UPDATE SKIP LOCKED（ADR-025，2026-10-09）。<br/>
+    /// 形态与 EF 栈 MySqlOutboxDbContext 步骤 1 同源（MySqlSkipLockedShapeBenchmarks 实测：8.4.11 上
+    /// 零死锁 + 互斥不变量全波通过 + 串行→8W 加速 1.75×）；启用判定见
+    /// <see cref="Transactions.MySqlLeasePolicy"/>（旧版/MariaDB/解析失败回退上方无锁模板，
+    /// 行为与 ADR-024 接受的现状逐字一致）。PD17 姊妹同步口径：PalOrmOutboxStore MySQL 分支同款。
+    /// </summary>
+    public const string OutboxLeaseUpdateMySqlSkipLocked =
+        "UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
+        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
+        + " AND (locked_until IS NULL OR locked_until<=@now)"
+        + " ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until";
+
+    /// <summary>
     /// PG 专用原子租约获取 — 单语句 UPDATE ... RETURNING *（子查询 FOR UPDATE SKIP LOCKED）。<br/>
     /// 优化（二十五轮 API 扫描 A-3）：预拼完整编译期常量——原实现为 DapperOutboxStore 运行时插值
     /// <c>OutboxLeaseUpdate + $"({leaseSubSql} FOR UPDATE SKIP LOCKED) RETURNING *"</c>，
@@ -360,4 +373,19 @@ public static class SqlTemplates
     /// <summary>PG 专用 Saga 更新 — saga_data 同 SagaInsertPG 的 jsonb CAST。</summary>
     public const string SagaUpdatePG =
         "UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=CAST(@data AS jsonb),leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v";
+
+    /// <summary>
+    /// 批量释放本 owner 的 Saga 租约（EPSL 地毯审计 2026-10-11 B-1）——仅租约列 + 换代，
+    /// 不写业务字段；<c>leased_by=@owner</c> 守卫防抢占（租约被他实例重租换代或已终态保存时
+    /// 该行正确退化为不匹配）。三方言通用（IN 列表 + 单 UPDATE，无方言分派面）。
+    /// </summary>
+    public const string SagaReleaseLeases =
+        "UPDATE saga_states SET leased_by=NULL, leased_until=NULL, version=version+1 WHERE leased_by=@owner AND saga_id IN @ids";
+
+    /// <summary>
+    /// Saga 存在性探测（EPSL 地毯审计 2026-10-11 B-3）——SaveChangesAsync 的 UPDATE 先行
+    /// 形态下区分「版本冲突」（行在 → 返回 0）与「新行」（INSERT 路径）；COUNT 无数据传输。
+    /// </summary>
+    public const string SagaExists =
+        "SELECT COUNT(1) FROM saga_states WHERE saga_id=@id";
 }

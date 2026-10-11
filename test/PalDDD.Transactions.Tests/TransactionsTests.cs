@@ -486,22 +486,23 @@ public sealed class OutboxBatchProcessorTests
             CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([message]);
 
-        public void AddMessage(OutboxMessage outboxMessage)
+        public ValueTask AddMessageAsync(OutboxMessage outboxMessage, CancellationToken ct = default)
             => throw new InvalidOperationException("The test store is read-only.");
 
-        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
+        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default)
             => throw new InvalidOperationException("The test store is read-only.");
 
-        public void MarkProcessed(OutboxMessage outboxMessage, DateTimeOffset processedAt)
+        public ValueTask MarkProcessedAsync(OutboxMessage outboxMessage, DateTimeOffset processedAt, CancellationToken ct = default)
         {
             if (!ReferenceEquals(message, outboxMessage))
                 throw new InvalidOperationException("Expected same reference.");
             MarkProcessedCalled = true;
             outboxMessage.Status = OutboxStatus.Processed;
             outboxMessage.ProcessedAt = processedAt;
+            return ValueTask.CompletedTask;
         }
 
-        public void MarkDead(OutboxMessage outboxMessage, string failureReason, DateTimeOffset deadAt)
+        public ValueTask MarkDeadAsync(OutboxMessage outboxMessage, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default)
         {
             if (!allowFailureTransitions)
             {
@@ -512,9 +513,10 @@ public sealed class OutboxBatchProcessorTests
             outboxMessage.Status = OutboxStatus.Dead;
             outboxMessage.Error = failureReason;
             outboxMessage.ProcessedAt = deadAt;
+            return ValueTask.CompletedTask;
         }
 
-        public void ReleaseForRetry(OutboxMessage outboxMessage, string failureReason, DateTimeOffset nextAttemptAt)
+        public ValueTask ReleaseForRetryAsync(OutboxMessage outboxMessage, string failureReason, DateTimeOffset nextAttemptAt, CancellationToken ct = default)
         {
             if (!allowFailureTransitions)
             {
@@ -526,6 +528,7 @@ public sealed class OutboxBatchProcessorTests
             outboxMessage.Status = OutboxStatus.Pending;
             outboxMessage.Error = failureReason;
             outboxMessage.NextAttemptAt = nextAttemptAt;
+            return ValueTask.CompletedTask;
         }
 
         public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)
@@ -553,28 +556,30 @@ public sealed class OutboxBatchProcessorTests
             int batchSize, string owner, TimeSpan leaseDuration, int maxRetryCount, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([poison, healthy]);
 
-        public void AddMessage(OutboxMessage outboxMessage)
+        public ValueTask AddMessageAsync(OutboxMessage outboxMessage, CancellationToken ct = default)
             => throw new InvalidOperationException("The test store is read-only.");
 
-        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages)
+        public ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default)
             => throw new InvalidOperationException("The test store is read-only.");
 
-        public void MarkProcessed(OutboxMessage outboxMessage, DateTimeOffset processedAt)
+        public ValueTask MarkProcessedAsync(OutboxMessage outboxMessage, DateTimeOffset processedAt, CancellationToken ct = default)
         {
             outboxMessage.Status = OutboxStatus.Processed;
             outboxMessage.ProcessedAt = processedAt;
+            return ValueTask.CompletedTask;
         }
 
-        public void MarkDead(OutboxMessage outboxMessage, string failureReason, DateTimeOffset deadAt)
+        public ValueTask MarkDeadAsync(OutboxMessage outboxMessage, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default)
             => throw new InvalidOperationException("Simulated MarkDead persistence failure.");
 
-        public void ReleaseForRetry(OutboxMessage outboxMessage, string failureReason, DateTimeOffset nextAttemptAt)
+        public ValueTask ReleaseForRetryAsync(OutboxMessage outboxMessage, string failureReason, DateTimeOffset nextAttemptAt, CancellationToken ct = default)
         {
             if (failRelease)
                 throw new InvalidOperationException("Simulated ReleaseForRetry persistence failure.");
             outboxMessage.Status = OutboxStatus.Pending;
             outboxMessage.Error = failureReason;
             outboxMessage.NextAttemptAt = nextAttemptAt;
+            return ValueTask.CompletedTask;
         }
 
         public ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)
@@ -1078,6 +1083,45 @@ public sealed class InboxProcessorTests
         await Assert.That(calls).IsEqualTo(1);
     }
 
+    // EPSL 地毯审计 2026-10-11 A-2：Information 级日志关闭时，成功/跳过两条消费热路径
+    // 不得调用 Information（调用点插值字符串在调用前已求值，禁用态也挡不住每消息
+    // ~150-250B 分配）——锁定 IsEnabled 守卫（旧码无守卫，本测试红）。
+    [Test]
+    public async Task TryProcessAsync_DisabledInformationLog_SkipsLogCallsOnHotPaths()
+    {
+        var logger = new LevelGatedLogger(informationEnabled: false);
+        var store = new DuplicateAwareInboxStore();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions()),
+            logger,
+            TimeProvider.System);
+
+        // 成功路径（首投）+ 跳过路径（重复投递）各一条
+        await processor.TryProcessAsync("orders", "message-1", static (_, _) => ValueTask.CompletedTask, "payload", CancellationToken.None);
+        await processor.TryProcessAsync("orders", "message-1", static (_, _) => ValueTask.CompletedTask, "payload", CancellationToken.None);
+
+        await Assert.That(logger.InformationCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryProcessAsync_EnabledInformationLog_StillLogsBothPaths()
+    {
+        // 行为锁定对照：守卫不得吞掉启用态日志——成功与跳过各一条 Information
+        var logger = new LevelGatedLogger(informationEnabled: true);
+        var store = new DuplicateAwareInboxStore();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions()),
+            logger,
+            TimeProvider.System);
+
+        await processor.TryProcessAsync("orders", "message-1", static (_, _) => ValueTask.CompletedTask, "payload", CancellationToken.None);
+        await processor.TryProcessAsync("orders", "message-1", static (_, _) => ValueTask.CompletedTask, "payload", CancellationToken.None);
+
+        await Assert.That(logger.InformationCount).IsEqualTo(2);
+    }
+
     private sealed class RecordingInboxStore : IInboxStore
     {
         private InboxMessage? _message;
@@ -1189,6 +1233,18 @@ public sealed class InboxProcessorTests
             message.Status = InboxStatus.Failed;
             message.LastError = failureReason;
         }
+    }
+
+    /// <summary>Information 级可开关的间谍日志器——A-2 守卫测试专用（其余级别恒启用不干扰）。</summary>
+    private sealed class LevelGatedLogger(bool informationEnabled) : IPalLogger<InboxProcessor>
+    {
+        public int InformationCount { get; private set; }
+
+        public void Debug(string message) { }
+        public void Information(string message) => InformationCount++;
+        public void Warning(string message) { }
+        public void Error(Exception ex, string message) { }
+        public bool IsEnabled(LogLevel level) => level != LogLevel.Information || informationEnabled;
     }
 }
 

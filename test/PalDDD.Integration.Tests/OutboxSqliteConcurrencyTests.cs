@@ -69,7 +69,7 @@ public sealed class OutboxSqliteConcurrencyTests
         var msg = await processorCtx.OutboxMessages.SingleAsync(
             m => m.Id == messageId, cancellationToken);
 
-        store.MarkProcessed(msg, DateTimeOffset.UtcNow);
+        await store.MarkProcessedAsync(msg, DateTimeOffset.UtcNow);
         await store.SaveChangesAsync(cancellationToken);
 
         await using var readerCtx = new TestSqliteOutboxDbContext(_options);
@@ -93,7 +93,7 @@ public sealed class OutboxSqliteConcurrencyTests
         var msg = await ctx.OutboxMessages.SingleAsync(
             m => m.Id == messageId, cancellationToken);
 
-        store.ReleaseForRetry(msg, "broker timeout", DateTimeOffset.UtcNow.AddSeconds(30));
+        await store.ReleaseForRetryAsync(msg, "broker timeout", DateTimeOffset.UtcNow.AddSeconds(30));
         await store.SaveChangesAsync(cancellationToken);
 
         await using var readerCtx = new TestSqliteOutboxDbContext(_options);
@@ -129,7 +129,7 @@ public sealed class OutboxSqliteConcurrencyTests
         await ctx2.SaveChangesAsync(cancellationToken);
 
         // 旧 worker 终态写——token 失配应影响 0 行
-        store1.MarkProcessed(staleMsg, DateTimeOffset.UtcNow);
+        await store1.MarkProcessedAsync(staleMsg, DateTimeOffset.UtcNow);
 
         await using var readerCtx = new TestSqliteOutboxDbContext(_options);
         var final = await readerCtx.OutboxMessages.SingleAsync(
@@ -162,7 +162,7 @@ public sealed class OutboxSqliteConcurrencyTests
         await ctx2.SaveChangesAsync(cancellationToken);
 
         // 旧 worker 终态写——持租 token 非空但行未租，必须影响 0 行
-        store1.MarkProcessed(staleMsg, DateTimeOffset.UtcNow);
+        await store1.MarkProcessedAsync(staleMsg, DateTimeOffset.UtcNow);
 
         await using var readerCtx = new TestSqliteOutboxDbContext(_options);
         var final = await readerCtx.OutboxMessages.SingleAsync(

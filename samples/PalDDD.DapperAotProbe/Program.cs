@@ -117,7 +117,7 @@ static async Task ProbeOutboxAsync(DbConnection conn, DapperDbType dbType, Actio
         Status = OutboxStatus.Pending,
         CreatedAt = TimeProvider.System.GetUtcNow(),
     };
-    store.AddMessage(msg);
+    await store.AddMessageAsync(msg);
     check("outbox add (byte[] blob)", true);
 
     var leased = await store.LeasePendingMessagesAsync(10, "probe-owner",
@@ -125,7 +125,7 @@ static async Task ProbeOutboxAsync(DbConnection conn, DapperDbType dbType, Actio
     check("outbox lease acquired 1", leased.Count == 1);
     check("outbox payload round-trip", leased.Count == 1 && leased[0].Payload.SequenceEqual(payload));
 
-    store.MarkProcessed(leased[0], TimeProvider.System.GetUtcNow());
+    await store.MarkProcessedAsync(leased[0], TimeProvider.System.GetUtcNow());
     var pending = await store.GetPendingMessagesAsync(10,
         new OutboxOptions().MaxRetryCount, CancellationToken.None).ConfigureAwait(false);
     check("outbox processed terminal", pending.Count == 0);

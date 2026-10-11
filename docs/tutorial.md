@@ -513,8 +513,8 @@ while (true)
         // 3. 发布到 Kafka/RabbitMQ
         await _broker.PublishAsync(@event, descriptor, msg.Id, ct);
 
-        // 4. 标记成功
-        _store.MarkProcessed(msg, now);
+        // 4. 标记成功（v4.0 ③ 异步化）
+        await _store.MarkProcessedAsync(msg, now, ct);
         await _store.SaveChangesAsync(ct);
     }
 }

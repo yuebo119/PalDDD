@@ -17,7 +17,7 @@ public class PalOrmOutboxStoreTests
         var store = new SqliteOutboxStore(session);
         var msg = CreateOutboxMessage("test.event.v1");
 
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         var pending = await store.GetPendingMessagesAsync(batchSize: 10, maxRetryCount: 5, ct: default);
         await Assert.That(pending).Count().IsEqualTo(1);
@@ -47,9 +47,9 @@ public class PalOrmOutboxStoreTests
         await using var session = await PalOrmStoreFixture.CreateAsync();
         var store = new SqliteOutboxStore(session);
         var msg = CreateOutboxMessage("test.event.v2");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
-        store.MarkProcessed(msg, DateTimeOffset.UtcNow);
+        await store.MarkProcessedAsync(msg, DateTimeOffset.UtcNow);
 
         var pending = await store.GetPendingMessagesAsync(10, 5, default);
         await Assert.That(pending).IsEmpty();
@@ -61,9 +61,9 @@ public class PalOrmOutboxStoreTests
         await using var session = await PalOrmStoreFixture.CreateAsync();
         var store = new SqliteOutboxStore(session);
         var msg = CreateOutboxMessage("test.dead");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
-        store.MarkDead(msg, "network timeout", DateTimeOffset.UtcNow);
+        await store.MarkDeadAsync(msg, "network timeout", DateTimeOffset.UtcNow);
 
         var pending = await store.GetPendingMessagesAsync(10, 5, default);
         await Assert.That(pending).IsEmpty();
@@ -74,7 +74,7 @@ public class PalOrmOutboxStoreTests
     {
         await using var session = await PalOrmStoreFixture.CreateAsync();
         var store = new SqliteOutboxStore(session);
-        store.AddMessage(CreateOutboxMessage("lease.test"));
+        await store.AddMessageAsync(CreateOutboxMessage("lease.test"));
 
         var leased = await store.LeasePendingMessagesAsync(10, "worker-1", TimeSpan.FromMinutes(5), 10, default);
 
@@ -87,7 +87,7 @@ public class PalOrmOutboxStoreTests
     {
         await using var session = await PalOrmStoreFixture.CreateAsync();
         var store = new SqliteOutboxStore(session);
-        store.AddMessage(CreateOutboxMessage("concurrent.test"));
+        await store.AddMessageAsync(CreateOutboxMessage("concurrent.test"));
 
         // 第一次 Lease 成功
         var first = await store.LeasePendingMessagesAsync(10, "worker-1", TimeSpan.FromMinutes(5), 10, default);
@@ -104,11 +104,11 @@ public class PalOrmOutboxStoreTests
         await using var session = await PalOrmStoreFixture.CreateAsync();
         var store = new SqliteOutboxStore(session);
         var msg = CreateOutboxMessage("retry.test");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         // ReleaseForRetry 设置 next_attempt_at 为未来 → GetPending 应为空
         var future = DateTimeOffset.UtcNow.AddMinutes(5);
-        store.ReleaseForRetry(msg, "transient error", future);
+        await store.ReleaseForRetryAsync(msg, "transient error", future);
 
         var pending = await store.GetPendingMessagesAsync(10, 5, default);
         await Assert.That(pending).IsEmpty();
@@ -121,12 +121,12 @@ public class PalOrmOutboxStoreTests
         await using var session = await PalOrmStoreFixture.CreateAsync();
         var store = new SqliteOutboxStore(session);
         var msg = CreateOutboxMessage("dlq.test");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         // 循环 10 次重试到上限 —— 第 11 次 GetPending 应过滤掉
         for (var i = 0; i < 10; i++)
         {
-            store.ReleaseForRetry(msg, $"attempt {i + 1}", DateTimeOffset.UtcNow.AddSeconds(-1));  // 过去时间，立即可见
+            await store.ReleaseForRetryAsync(msg, $"attempt {i + 1}", DateTimeOffset.UtcNow.AddSeconds(-1));  // 过去时间，立即可见
         }
 
         await Assert.That(msg.RetryCount).IsEqualTo(10);
@@ -170,8 +170,8 @@ public class PalOrmOutboxStoreTests
         var store = new SqliteOutboxStore(session);
         var msg = CreateOutboxMessage("requeue.dead");
         msg.RetryCount = 7; // 失败历史（MarkDead 不重置 retry_count）
-        store.AddMessage(msg);
-        store.MarkDead(msg, "original failure", DateTimeOffset.UtcNow);
+        await store.AddMessageAsync(msg);
+        await store.MarkDeadAsync(msg, "original failure", DateTimeOffset.UtcNow);
 
         var nextAttempt = DateTimeOffset.UtcNow.AddSeconds(-1);
         var rows = await store.RequeueDeadAsync(msg.Id, nextAttempt, "ops-alice", default);
@@ -191,7 +191,7 @@ public class PalOrmOutboxStoreTests
         await using var session = await PalOrmStoreFixture.CreateAsync();
         var store = new SqliteOutboxStore(session);
         var msg = CreateOutboxMessage("requeue.pending");
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         var rows = await store.RequeueDeadAsync(msg.Id, DateTimeOffset.UtcNow, "ops-alice", default);
 
@@ -206,8 +206,8 @@ public class PalOrmOutboxStoreTests
         await using var session = await PalOrmStoreFixture.CreateAsync();
         var store = new SqliteOutboxStore(session);
         var msg = CreateOutboxMessage("requeue.processed");
-        store.AddMessage(msg);
-        store.MarkProcessed(msg, DateTimeOffset.UtcNow);
+        await store.AddMessageAsync(msg);
+        await store.MarkProcessedAsync(msg, DateTimeOffset.UtcNow);
 
         var rows = await store.RequeueDeadAsync(msg.Id, DateTimeOffset.UtcNow, "ops-alice", default);
 
@@ -224,8 +224,8 @@ public class PalOrmOutboxStoreTests
         await using var session = await PalOrmStoreFixture.CreateAsync();
         var store = new SqliteOutboxStore(session);
         var msg = CreateOutboxMessage("requeue.blank");
-        store.AddMessage(msg);
-        store.MarkDead(msg, "original failure", DateTimeOffset.UtcNow);
+        await store.AddMessageAsync(msg);
+        await store.MarkDeadAsync(msg, "original failure", DateTimeOffset.UtcNow);
 
         await Assert.That(async () =>
             await store.RequeueDeadAsync(msg.Id, DateTimeOffset.UtcNow, retriedBy, default).AsTask())

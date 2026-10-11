@@ -51,7 +51,7 @@ var outboxMsg = new OutboxMessage
     ContentType = descriptor.ContentType,
     SchemaVersion = descriptor.SchemaVersion
 };
-outboxStore.AddMessage(outboxMsg);
+await outboxStore.AddMessageAsync(outboxMsg);
 var pending = await outboxStore.LeasePendingMessagesAsync(10, "aot-sample", TimeSpan.FromMinutes(2), new OutboxOptions().MaxRetryCount, CancellationToken.None).ConfigureAwait(false);
 Check("outbox lease + process", pending.Count == 1);
 // ITM-265（R40）：MarkProcessed 必须传租约返回的实例——InMemory 租约会创建 successor 对象，
@@ -60,7 +60,7 @@ Check("outbox lease + process", pending.Count == 1);
 // owner-null 直标分支仅 PalORM/Dapper 放行（ITM-272 勘正），样本不走该分支。
 // ITM-268（R41）：先 Check 后索引——空租约时 pending[0] 直接抛 IndexOutOfRange 会绕过
 // Check 的 failures 累计机制。
-outboxStore.MarkProcessed(pending[0], DateTimeOffset.UtcNow);
+await outboxStore.MarkProcessedAsync(pending[0], DateTimeOffset.UtcNow);
 // 终验（ITM-268 修正）：断言租约实例的终态而非查询侧不可见——R40 版的 GetPending==0 是恒真
 //（标记被拒时 successor 持未过期租约，租约过滤本来就把租约中的消息排除出 GetPending，两态皆绿）。
 // MarkProcessed 成功时原地改写入参状态为 Processed；被引用守卫拒绝时 no-op、状态仍 Pending。

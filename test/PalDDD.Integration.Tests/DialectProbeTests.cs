@@ -195,7 +195,7 @@ public sealed partial class DialectProbeTests
             TraceParent = "00-abc-def-01",
             TraceState = "probe=1",
         };
-        store.AddMessage(msg);
+        await store.AddMessageAsync(msg);
 
         // #1「Outbox GetPending 返回 1 条」
         var pending = await store.GetPendingMessagesAsync(10, 10, default);
@@ -215,8 +215,32 @@ public sealed partial class DialectProbeTests
         await Assert.That(leased[0].LockedBy).IsEqualTo("probe-owner");
 
         // #5「Outbox MarkProcessed 后无 pending」
-        store.MarkProcessed(leased[0], clock.GetUtcNow());
+        await store.MarkProcessedAsync(leased[0], clock.GetUtcNow());
         await Assert.That(await store.GetPendingMessagesAsync(10, 10, default)).IsEmpty();
+
+        // C2'（2026-10-09 优化轮）：批量写入 3 条（≤16 行阈值带）——MySQL 走新参数化多行
+        // VALUES 路径、PG 走 COPY，两侧行数守卫 + 追踪列回读为锁定测试（改前该覆盖缺失，
+        // MySQL 小批量路径仅有 SQLite 侧同族测试无法覆盖方言 SQL）
+        var batch = new List<OutboxMessage>();
+        for (var i = 0; i < 3; i++)
+        {
+            batch.Add(new OutboxMessage
+            {
+                Type = $"probe.batch.v{i}",
+                Payload = [1, 2, 3],
+                ContentType = "application/json",
+                SchemaVersion = 1,
+                CorrelationId = Ulid.New(),
+                CausationId = Ulid.New(),
+                TraceParent = "00-abc-def-01",
+                TraceState = "probe=1",
+            });
+        }
+        await Assert.That(await store.AddMessagesAsync(batch)).IsEqualTo(3);
+        var batchPending = await store.GetPendingMessagesAsync(10, 10, default);
+        await Assert.That(batchPending.Count).IsEqualTo(3);
+        await Assert.That(batchPending[0].CorrelationId).IsEqualTo(batch[0].CorrelationId);
+        await Assert.That(batchPending[0].TraceParent).IsEqualTo("00-abc-def-01");
     }
 
     /// <summary>原探针 EventLogSmoke——3 项断言（冲突分类含异常类型鉴别）。</summary>
@@ -229,7 +253,21 @@ public sealed partial class DialectProbeTests
             new(Ulid.New(), "probe.event.v1", 1, "application/json", new ReadOnlyMemory<byte>([1]), new ReadOnlyMemory<byte>([1]), audit),
             new(Ulid.New(), "probe.event.v1", 1, "application/json", new ReadOnlyMemory<byte>([2]), new ReadOnlyMemory<byte>([2]), audit),
         };
-        await log.AppendAsync("probe-stream", ExpectedStreamVersion.NoStream, events, default);
+        var batchResult = await log.AppendAsync("probe-stream", ExpectedStreamVersion.NoStream, events, default);
+        // B-4（EPSL 地毯审计 2026-10-11）：k>1 批量追加版本跨度断言（PG 走多行
+        // VALUES+RETURNING 批路径、MySQL/SQLite 走逐条路径——断言路径无关）
+        await Assert.That(batchResult.LastStreamVersion - batchResult.FirstStreamVersion).IsEqualTo(events.Count - 1);
+        await Assert.That(batchResult.LastGlobalPosition >= batchResult.FirstGlobalPosition).IsTrue();
+
+        // B-4 批内 EventId 重复：原样上抛 DbException（非并发异常——无外部写入者时
+        // 冲突必为 EventId 唯一索引撞；PG 批路径单语句原子整批不入库）
+        var dupId = Ulid.New();
+        await Assert.ThrowsAsync<System.Data.Common.DbException>(async () =>
+            await log.AppendAsync("probe-dup-stream", ExpectedStreamVersion.NoStream, new List<EventData>
+            {
+                new(dupId, "probe.event.v1", 1, "application/json", new ReadOnlyMemory<byte>([5]), new ReadOnlyMemory<byte>([5]), audit),
+                new(dupId, "probe.event.v1", 1, "application/json", new ReadOnlyMemory<byte>([6]), new ReadOnlyMemory<byte>([6]), audit),
+            }, default));
 
         // #6「EventLog Append→Read 2 条」
         var read = new List<RecordedEvent>();
@@ -243,6 +281,18 @@ public sealed partial class DialectProbeTests
         // = 通过；抛其他异常 = 失败（含异常类型鉴别）。ThrowsAsync 泛型精确匹配该分类。
         await Assert.ThrowsAsync<EventStreamConcurrencyException>(async () =>
             await log.AppendAsync("probe-stream", ExpectedStreamVersion.Exact(0), events, default));
+
+        // I（2026-10-10 优化轮）：单事件 Any 追加行为断言（PG 走快路径 INSERT..SELECT 原子算
+        // 版本、MySQL 走原路径——断言路径无关）：probe-stream 已有 #6 批写入的 2 个事件，
+        // 连续两次 Any 追加应依次落 version 2/3
+        var any1 = new EventData(Ulid.New(), "probe.event.v1", 1, "application/json",
+            new ReadOnlyMemory<byte>([3]), new ReadOnlyMemory<byte>([3]), audit);
+        var anyR1 = await log.AppendAsync("probe-stream", ExpectedStreamVersion.Any, [any1], default);
+        await Assert.That(anyR1.FirstStreamVersion).IsEqualTo(2);
+        var any2 = new EventData(Ulid.New(), "probe.event.v1", 1, "application/json",
+            new ReadOnlyMemory<byte>([4]), new ReadOnlyMemory<byte>([4]), audit);
+        var anyR2 = await log.AppendAsync("probe-stream", ExpectedStreamVersion.Any, [any2], default);
+        await Assert.That(anyR2.FirstStreamVersion).IsEqualTo(3);
     }
 
     /// <summary>原探针 SagaSmoke——3 项断言。</summary>
@@ -332,7 +382,7 @@ public sealed partial class DialectProbeTests
         var store = new DapperOutboxStore(conn, dbType);
         await using var uow = new DapperUnitOfWork(conn);
         await uow.BeginTransactionAsync(default);
-        store.AddMessage(new OutboxMessage
+        await store.AddMessageAsync(new OutboxMessage
         {
             Type = "probe.ambienttx.v1",
             Payload = [9],

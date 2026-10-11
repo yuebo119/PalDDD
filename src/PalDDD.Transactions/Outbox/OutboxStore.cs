@@ -11,14 +11,15 @@ namespace PalDDD.Transactions;
 /// 生产实现必须提供原子租约获取语义，避免多实例重复发布。<br/>
 /// EF Core / SQL Server 实现由 PalDDD.Transactions.EFCore 适配包提供。
 /// <para>
-/// 📣 <b>v4.0 破坏性变更预告（ADR-020，维护者裁决 2026-08-26）</b>：本接口的两项已排队
-/// 破坏性变更合并到 v4.0 窗口执行——① <b>跨栈 fencing 契约统一</b>：对未租约消息
-/// MarkProcessed 的三栈分歧（PalORM/Dapper/EF 放行 vs InMemory 拒绝）已在 **3.1.0**
-/// 由 InMemory 对齐放行解除（见 <see cref="MarkProcessed"/> Remarks）；剩余统一面是
-/// fencing 强度本身——Dapper 受影响行数为正时仅清租约字段、不回写 Status/ProcessedAt
-/// （InMemory/EF 内联全套回写），v4.0 收敛为一致的门控与内存回写语义；② <b>异步化</b>：
-/// AddMessage/MarkProcessed/MarkDead/ReleaseForRetry 等同步方法改异步签名（PalORM 栈 7 处
-/// sync-over-async 的根因）。实现者请在 v4.0 前关注迁移指引。
+/// 📣 <b>已在 v4.0 执行的破坏性变更（ADR-020 → ADR-026，维护者裁决 2026-08-26 / 2026-10-10）</b>：
+/// ① <b>跨栈 fencing 契约统一</b>——已执行（ADR-026 ②，2026-10-10）：三栈终态写
+/// （MarkProcessedAsync/MarkDeadAsync/ReleaseForRetryAsync）统一为「门控拒绝（租约 token 失配/非当前
+/// 持有者）→ 零 DB 写 + 零内存变异；成功（affected&gt;0）→ DB 全套更新 + 入参对象全套
+/// 六字段回写」。历史分叉（Dapper 成功仅回写租约两字段、MarkDead 无视守卫无条件清租约、
+/// EF 主路径零入参回写）同轮收口；EF 跟踪实体的并发令牌边界见各实现 remarks。
+/// ② <b>异步化</b>——已执行（ADR-026 ③④，2026-10-10）：AddMessage/MarkProcessed/MarkDead/
+/// ReleaseForRetry 同步方法删除改异步签名 + AddMessagesAsync 补 CancellationToken（PalORM 栈
+/// 7 处 sync-over-async 清零）。迁移指引见 CHANGELOG [4.0.0] Changed [Breaking] 条目。
 /// </para>
 /// </remarks>
 public interface IPalOutboxStore
@@ -40,11 +41,13 @@ public interface IPalOutboxStore
         int maxRetryCount,
         CancellationToken ct);
 
-    /// <summary>添加新消息到发件箱</summary>
-    void AddMessage(OutboxMessage message);
+    /// <summary>添加新消息到发件箱。<br/>v4.0 ③（ADR-026）：同步 <c>AddMessage</c> 已删除，
+    /// 改异步签名（消除 PalORM 栈 sync-over-async 根因；迁移：调用点 <c>await</c> 化）。</summary>
+    ValueTask AddMessageAsync(OutboxMessage message, CancellationToken ct = default);
 
-    /// <summary>批量添加消息 — 实现应选择数据库最优批量路径（COPY/BulkCopy/事务批处理）</summary>
-    ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages);
+    /// <summary>批量添加消息 — 实现应选择数据库最优批量路径（COPY/BulkCopy/事务批处理）。<br/>
+    /// v4.0 ④（ADR-026）：补 <c>CancellationToken</c>（v8 声明的契约缺口收口）。</summary>
+    ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default);
 
     /// <summary>标记消息发布成功。</summary>
     /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。
@@ -54,21 +57,23 @@ public interface IPalOutboxStore
     /// （3.1.0 T-15 起，InMemory 原"拒绝"已对齐——PalORM/Dapper/EF 的 owner-null SQL 分支
     /// 命中即 UPDATE，EF 的 <c>OutboxDbContext</c> 明写该路径是运维/测试路径的有意能力；
     /// InMemory 保留 <c>Status == Pending</c> 终态守卫与引用相等性僵尸标记保护）。对已被其他
-    /// worker 重租的消息（successor 替换）仍拒绝标记。剩余 fencing 强度差：Dapper 受影响行数为正时
-    /// 仅清租约字段、不回写 Status/ProcessedAt（InMemory/EF 内联全套回写）——调用方
-    /// （OutboxBatchProcessor）不读入参故无实害，v4.0 统一。处理管线一律走 Lease 路径；
+    /// worker 重租的消息（successor 替换）仍拒绝标记。fencing 统一契约（v4.0 ②，ADR-026）：
+    /// 门控拒绝零 DB 写 + 零内存变异；成功后入参全套六字段回写（EF 栈仅对 Detached 快照
+    /// 回写，跟踪实体自动跳过——并发令牌守卫，见各实现 remarks）。处理管线一律走 Lease 路径；
     /// GetPending 观测结果原则上不构成标记资格——例外：租约已过期且未被他人重租的消息经
     /// token 分支仍可标记成功（原 worker 过期后完成属合理语义）。
     /// </para></remarks>
-    void MarkProcessed(OutboxMessage message, DateTimeOffset processedAt);
+    ValueTask MarkProcessedAsync(OutboxMessage message, DateTimeOffset processedAt, CancellationToken ct = default);
 
     /// <summary>标记消息不可恢复。</summary>
-    /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。</remarks>
-    void MarkDead(OutboxMessage message, string failureReason, DateTimeOffset deadAt);
+    /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。
+    /// v4.0 ③（ADR-026）：异步化，fencing 契约同 <see cref="MarkProcessedAsync"/>。</remarks>
+    ValueTask MarkDeadAsync(OutboxMessage message, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default);
 
     /// <summary>释放租约并等待下次重试。</summary>
-    /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。</remarks>
-    void ReleaseForRetry(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt);
+    /// <remarks>实现必须清空 <c>LockedBy</c> 和 <c>LockedUntil</c> 字段，确保租约显式释放、不被观测到陈旧持有者。
+    /// v4.0 ③（ADR-026）：异步化，fencing 契约同 <see cref="MarkProcessedAsync"/>。</remarks>
+    ValueTask ReleaseForRetryAsync(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt, CancellationToken ct = default);
 
     /// <summary>
     /// 将一条死信消息重新投递（状态从 <c>Dead</c> 改为 <c>Pending</c>），供 ops 在死信根因消除后批量重投使用。<br/>
@@ -96,4 +101,31 @@ public interface IPalOutboxStore
     /// - <b>内存实现</b>（<c>InMemoryOutboxStore</c>）：无操作，数据即时生效。
     /// </remarks>
     ValueTask<int> SaveChangesAsync(CancellationToken ct);
+}
+
+/// <summary>
+/// 立即写 Outbox store——<see cref="IPalOutboxStore.AddMessagesAsync"/> 语义在「立即执行」上的强化契约
+///（优化轮四，2026-10-10）。
+/// <para>
+/// 实现方声明：本方法的全部写入在调用内立即完成（对 store 自身连接/事务），不依赖、也不触发
+/// 调用方的 <c>SaveChanges</c>——因此可在 EF <c>SavingChanges(Async)</c> 拦截相位安全调用
+///（<c>OutboxDomainEventInterceptor</c> 的异步批量路径据此分派：立即写族多事件合并单次调用
+/// 并消除逐条同步写在远程库上的往返级线程阻塞）。
+/// </para>
+/// <para>
+/// <b>OutboxDbContext（EF 栈）刻意不实现本接口</b>：其 <c>AddMessage</c> 是 ChangeTracker
+/// 跟踪添加（写入延迟到上下文自身的 SaveChanges），且其 <c>AddMessagesAsync</c> 内嵌自持
+/// <c>SaveChangesAsync</c>——在拦截相位调用构成 EF 重入（SaveChanges-in-SavingChanges，
+/// 未定义行为）。拦截器对其实例维持逐条 <c>AddMessage</c> 跟踪路径。
+/// </para>
+/// <para>
+/// 成员签名与 <see cref="IPalOutboxStore.AddMessagesAsync"/> 完全一致——实现类的既有公共
+/// <c>AddMessagesAsync</c> 同时满足两接口（单一方法映射），标注本接口即完成契约声明。
+/// </para>
+/// </summary>
+public interface IImmediateWriteOutboxStore
+{
+    /// <summary>立即批量写入并返回写入行数——语义与 <see cref="IPalOutboxStore.AddMessagesAsync"/> 一致
+    ///（含 v4.0 ④ 的 <c>CancellationToken</c>），叠加「立即执行、无调用方 SaveChanges 依赖」契约。</summary>
+    ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default);
 }

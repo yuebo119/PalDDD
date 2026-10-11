@@ -84,10 +84,20 @@ foreach (var line in PrefixHistogram(SplitLines(subjects)))
 Console.WriteLine();
 
 // ── 2 公共 API 变更（快照 diff，核心 12 程序集口径）────────────
-const string snap = "test/PalDDD.Core.Tests/Snapshots/core-packages-public-api.txt";
+// 路径守卫（2026-10-11 修复）：原 const 指向 test/PalDDD.Core.Tests/Snapshots/（陈旧路径，
+// git diff 对不存在的 pathspec 退出码 0 + 空输出）→ 段 2 恒渲染「（无变更）」——v4.0
+// 发版 Phase 2 核验实证：快照实有 +46/−25（IPalOutboxStore 异步化破坏性变更族）而工具
+// 报无变更，假阴性。守卫用 cat-file -e 验证 <to> 提交内该路径存在，漂移即显式报错退出。
+const string snap = "test/PalDDD.Integration.Tests/Snapshots/core-packages-public-api.txt";
 Console.WriteLine("## 2 公共 API 变更（快照口径：核心 12 程序集；Analyzers 诊断见段 3）");
+var (snapProbeExit, _) = RunCapture("git", $"cat-file -e {to}:{snap}");
+if (snapProbeExit != 0)
+{
+    Console.WriteLine($"    ❌ 快照路径 {snap} 在 {to} 不存在——段 2 无法判定，禁止按「无变更」起草（修 snap 常量）");
+    return 2;
+}
 var diffSnap = CaptureSection($"diff {from}..{to} -- {snap}");
-var versionRx = new Regex("Version=2\\.[0-9]");   // grep -v 'Version=2\.[0-9]' 排除口径
+var versionRx = new Regex("Version=[0-9]+\\.[0-9]");   // 排除程序集版本引用行（原 Version=2\. 时代残留，2026-10-11 通用化）
 var apiDiff = NonEmptyLines(diffSnap)
     .Where(l => (l.StartsWith('+') || l.StartsWith('-'))
         && !(l.StartsWith("++", StringComparison.Ordinal) || l.StartsWith("--", StringComparison.Ordinal)))

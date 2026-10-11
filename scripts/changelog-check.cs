@@ -107,8 +107,19 @@ if (latest is null)
 else
 {
     latestLine = latest.Value.No;
-    // 其后第一个 "### 附录" 行（/^### 附录/ 行首匹配）
-    for (var i = latestLine.Value; i < lines.Length; i++)   // i 为 0 基，行号 i+1 > latestLine
+    // 先取硬边界：下一个 ## [ 行 ?? 总行数
+    foreach (var h in headingLines)
+    {
+        if (h.No > latestLine) { endLine = h.No; break; }
+    }
+    endLine ??= lines.Length;
+    // 其后第一个 "### 附录" 行（/^### 附录/ 行首匹配）——只在本段内找（2026-10-11 修复：
+    // 原实现先全域找附录再无条件覆盖 endLine，当最新段无附录而更旧段有附录时，会把
+    // 旧段的附录行当成最新段的边界，C3 把两段分类拼接误报顺序违反、C4/C5 区间同步
+    // 受染——v4.0 转正实证：[4.0.0] 无附录、[3.3.0] 有附录，C3 实际输出含 [3.3.0] 的
+    // Changed/Dependencies/Tests 三段。附录搜索上界 = 硬边界（0 基排他，对齐 Take 语义））
+    var searchUpper = endLine.Value - 1;
+    for (var i = latestLine.Value; i < searchUpper; i++)   // i 为 0 基，行号 i+1 > latestLine
     {
         if (lines[i].StartsWith("### 附录", StringComparison.Ordinal))
         {
@@ -116,12 +127,7 @@ else
             break;
         }
     }
-    // END_LINE = 附录行 ?? 下一个 ## [ 行 ?? 总行数（三重兜底对齐）
-    foreach (var h in headingLines)
-    {
-        if (h.No > latestLine) { endLine = h.No; break; }
-    }
-    endLine ??= lines.Length;
+    // END_LINE = 附录行（若在本段内）?? 硬边界（三重兜底对齐）
     if (appendixLine is not null) endLine = appendixLine;
 
     // 提取区间 [latestLine, endLine] 内的 ^### [A-Za-z]+ 分类名（grep -oE + sed 去前缀）

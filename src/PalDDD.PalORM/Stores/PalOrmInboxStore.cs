@@ -86,30 +86,24 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
             // 三十七轮 A1 曾改为 ON DUPLICATE KEY UPDATE id = id + affected>0 判断新插入——
             // 但 MySqlConnector 默认 UseAffectedRows=false 报告 found rows，冲突时也返回 1，
             // 伪造 Processing 记录绕过 Processed/超时/抢占分支（幂等破坏）。
-            // 现对齐 PalOrmIdempotencyStore ITM-228 同款模式：冲突抛 1062 → affected=0 → 回查分支。
-            var affected = 0;
+            // 现对齐 PalOrmIdempotencyStore ITM-228 同款模式：冲突抛 1062 → 回查分支。
+            // C-14（EPSL 地毯审计 2026-10-11）：INSERT 尾随 SELECT LAST_INSERT_ID() 单命令
+            // 单往返（对齐 Dapper 姊妹 SqlTemplates.InboxInsertMySql 形态）——原「INSERT 后
+            // 按 (consumer_name, message_id) 回查 id」新消息路径多付一次往返。
+            long? newId;
             try
             {
-                affected = await Session.ExecuteAsync(
-                    $"INSERT INTO inbox_messages (message_id, consumer_name, status, received_at, processing_started_at, attempts) VALUES ({messageId}, {consumerName}, {statusProcessing}, {now}, {now}, 1)",
-                    ct).ConfigureAwait(false);
+                newId = await Session.ScalarAsync<long?>(
+                    $"INSERT INTO inbox_messages (message_id, consumer_name, status, received_at, processing_started_at, attempts) VALUES ({messageId}, {consumerName}, {statusProcessing}, {now}, {now}, 1); SELECT LAST_INSERT_ID();",
+                    ct: ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
             {
-                affected = 0; // 唯一约束冲突——记录已存在，非错误
+                newId = null; // 唯一约束冲突——记录已存在，非错误（落入下方回查分支）
             }
-            if (affected > 0)
+            if (newId is not null)
             {
-                // 新插入成功 —— 查回自增 id。P3-SRC-212：改 ScalarAsync<long?>（对齐上方
-                // PG/SQLite 路径的可空标量形态）——行不存在时（INSERT 成功后被并发 DELETE，
-                // 实际不可达）原非空断言会抛 InvalidCastException 掩盖真实根因；显式判空抛
-                // 语义化异常，加固不可达路径
-                var newId = await Session.ScalarAsync<long?>(
-                    $"SELECT id FROM inbox_messages WHERE consumer_name = {consumerName} AND message_id = {messageId}",
-                    ct: ct).ConfigureAwait(false);
-                if (newId is null)
-                    throw new InvalidOperationException(
-                        $"INSERT 成功但回查 id 不存在（consumer_name={consumerName}, message_id={messageId}）——可能被并发 DELETE");
+                // INSERT 成功且同命令返回自增 id；null 判保留 P3-SRC-212 语义（防御不可达路径）
                 return new InboxMessage
                 {
                     Id = newId.Value,

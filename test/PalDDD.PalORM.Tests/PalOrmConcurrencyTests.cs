@@ -91,7 +91,7 @@ public class PalOrmConcurrencyTests
                 var setupStore = new SqliteOutboxStore(setupSession);
                 for (var i = 0; i < 100; i++)
                 {
-                    setupStore.AddMessage(new OutboxMessage
+                    await setupStore.AddMessageAsync(new OutboxMessage
                     {
                         Id = Ulid.New(),
                         Type = $"concurrent.event.{i}",
@@ -236,7 +236,7 @@ public class PalOrmConcurrencyTests
             {
                 await InitSchemaAsync(setupSession);
                 var setupStore = new SqliteOutboxStore(setupSession);
-                setupStore.AddMessage(new OutboxMessage
+                await setupStore.AddMessageAsync(new OutboxMessage
                 {
                     Id = Ulid.New(),
                     Type = "fence.event.v1",
@@ -261,7 +261,7 @@ public class PalOrmConcurrencyTests
             }
 
             // 旧 worker 终态写——token 失配应影响 0 行
-            store1.MarkProcessed(staleMsg, DateTimeOffset.UtcNow);
+            await store1.MarkProcessedAsync(staleMsg, DateTimeOffset.UtcNow);
 
             var status = await session1.ScalarAsync<long>(
                 $"SELECT status FROM outbox_messages WHERE id = {staleMsg.Id.ToString()}", ct: default);

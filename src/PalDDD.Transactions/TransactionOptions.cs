@@ -30,13 +30,18 @@ public sealed class OutboxOptions
     public TimeSpan LeaseDuration { get; set; } = TimeSpan.FromMinutes(2);
 
     /// <summary>
-    /// 轮询间隔 — OutboxProcessor 的 PeriodicTimer 周期。
+    /// 轮询间隔 — OutboxProcessor 的轮询周期。
     /// <para>
-    /// ⚠️ <b>冷快照声明（二十四轮）</b>：仅在 Processor 构造时读取一次（<c>PeriodicTimer</c>
-    /// 间隔构造后固定），运行时经配置热更新本值<b>不生效</b>，需重启进程；同组的
-    /// <see cref="BatchSize"/>/<see cref="LeaseDuration"/>/<see cref="LeaseOwner"/>/
-    /// <see cref="MaxRetryCount"/> 经 <c>IOptionsMonitor.CurrentValue</c> 每 tick 热读取，
-    /// 热更新即时生效（v35 P3 补记：MaxRetryCount 属热更新组，语义见其属性声明）。
+    /// ✅ <b>热读声明（T1.2，2026-10-11 优化实施轮）</b>：经 DI 注册（<c>AddPalOutbox</c>）时，
+    /// 本值<b>每轮热读取</b>（<c>IOptionsMonitor.CurrentValue</c>），运行时配置热更新即时生效
+    /// ——原「构造期一次定格的冷快照（热更新不生效需重启）」声明废止。直构并传显式
+    /// <c>pollInterval</c> 覆盖值的形态恒用覆盖值。同组的 <c>BatchSize</c>/<c>LeaseDuration</c>/
+    /// <c>LeaseOwner</c>/<c>MaxRetryCount</c> 一直为每 tick 热读取。
+    /// </para>
+    /// <para>
+    /// ⚠️ <b>自适应排空（同轮）</b>：上一轮租到满批时下一轮<b>不等本间隔</b>、仅让步 1ms 即续批
+    ///（积压排空吞吐从 batchSize/(tick+interval) 提升到 batchSize/tick）；未满批才按本间隔轮询。
+    /// 本值因此是「空/浅队列的检测节奏」而非「最大吞吐节奏」——调大它不再压低积压排空速度。
     /// </para>
     /// </summary>
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromMilliseconds(500);
@@ -95,6 +100,24 @@ public sealed class OutboxOptions
     /// </para>
     /// </summary>
     public int MaxDegreeOfParallelism { get; set; } = 1;
+
+    /// <summary>
+    /// 发布确认流水线窗口（T3.1，2026-10-11 优化实施轮）——分区内同时处于 in-flight 的
+    /// 发布确认数上限。<b>默认 1 = 串行逐条确认（既有行为逐字不变）</b>；<c>&gt;1</c> 启用
+    /// FIFO 流水线：broker 确认往返不再逐条串行相乘（收益量级见 performance.md 投递吞吐段：
+    /// RTT 主导场景为窗口量级）。
+    /// <para>
+    /// ⚠️ 语义边界：①分区内<b>标记顺序仍按启动序</b>（RabbitMQ 单 channel 帧序由
+    /// <c>_confirmSemaphore</c> 天然保序；Kafka producer 队列保序，但<b>重试乱序须启用
+    /// enable.idempotence 才有保证</b>）；消费方应具备 Inbox 幂等，乱序窗口随本值增大。
+    /// ②失败路径（退避重试/死信）与串行形态逐项一致。③broker 线程安全前提与
+    /// <see cref="MaxDegreeOfParallelism"/> 同（Kafka producer 天然多路 / RabbitMQ.Client 7.x
+    /// 共享 channel 并发发布已核实）。④与 <see cref="MaxDegreeOfParallelism"/> 正交：
+    /// 后者分 worker（各自串行窗口），本值在每个 worker 的分区内生效。启动期经
+    /// <c>ValidateOnStart</c> 校验 ≥ 1。
+    /// </para>
+    /// </summary>
+    public int MaxInFlightPublishes { get; set; } = 1;
 }
 
 /// <summary>收件箱幂等性运行时选项。</summary>

@@ -20,7 +20,7 @@ public sealed class OutboxConcurrencyTests
         // 种入 10 条消息
         for (var i = 0; i < 10; i++)
         {
-            store.AddMessage(new OutboxMessage
+            await store.AddMessageAsync(new OutboxMessage
             {
                 Id = PalUlid.New(),
                 Type = "test.event.v1",
@@ -49,7 +49,7 @@ public sealed class OutboxConcurrencyTests
     public async Task LeasePending_MoreWorkersThanMessages_OnlyOneWorkerGetsMessage()
     {
         var store = new InMemoryOutboxStore();
-        store.AddMessage(new OutboxMessage
+        await store.AddMessageAsync(new OutboxMessage
         {
             Id = PalUlid.New(),
             Type = "test.single.v1",

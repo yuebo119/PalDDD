@@ -338,7 +338,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-09-25 复验）：220 源文件·36 项目·0 违规（2026-09-04 锚定时 213 文件，Transactions 拆分等增长）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-10-11 复验）：223 源文件·36 项目·0 违规（2026-10-09 为 222 文件，EPSL 修复轮新增 DecompressBufferPool 一文件——池上移 PalDDD.Compression 为跨程序集单一事实源）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 
@@ -826,7 +826,7 @@ dotnet run scripts/verify-conventions.cs
 
 ### 10.6 测试框架规则（TUnit + MTP · 强制）
 
-> **背景**：本框架统一使用 **TUnit 1.73.5**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.5.0**（TUnit 传递解析，2026-10-08 实测；TUnit 1.71.0 时代为 2.4.1）。不使用 VSTest。
+> **背景**：本框架统一使用 **TUnit 1.73.19**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.5.1**（TUnit 传递解析，2026-10-11 实测；TUnit 1.71.0 时代为 2.4.1、1.73.5 时代为 2.5.0）。不使用 VSTest。
 
 **硬性规则**（违反导致 `dotnet test` 发现零测试或构建冲突）：
 
