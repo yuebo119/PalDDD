@@ -516,6 +516,7 @@ flowchart TB
 | Document | Description |
 |------|------|
 | [Architecture](docs/architecture.md) | Layering, dependency direction, project responsibilities |
+| [Feature Panorama](docs/features.md) | Full feature inventory across all 36 projects (source-derived, with type anchors) |
 | [Usage Guide](docs/usage.md) | Complete code examples for each component |
 | [Tutorial](docs/tutorial.md) | Build a DDD application from scratch |
 | [Idempotency Rationale](docs/idempotency-rationale.md) | Why it is designed this way: trade-offs and boundaries |
