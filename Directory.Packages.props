@@ -70,7 +70,7 @@
     <!-- 2026-10-09 横向对比轮：bench 对比车道消费——MediatR 锚定 12.x 最后开源线
          （13.0.0 起 Lucky Penny 商业许可，对齐 license-policy「禁商业许可」裁决；
          12.5.0 nuspec 为 Apache-2.0 白名单内）；CAP 全家 MIT -->
-    <PackageVersion Include="MediatR" Version="12.5.0" />
+    <PackageVersion Include="MediatR" Version="14.2.0" />
     <PackageVersion Include="DotNetCore.CAP" Version="10.0.2" />
     <PackageVersion Include="DotNetCore.CAP.RabbitMQ" Version="10.0.2" />
     <PackageVersion Include="DotNetCore.CAP.MySql" Version="10.0.2" />
@@ -80,11 +80,11 @@
     <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
     <PackageVersion Include="Confluent.Kafka" Version="2.16.0" />
     <!-- 测试基础设施 — TUnit（源生成器测试框架 · MTP） -->
-    <PackageVersion Include="TUnit" Version="1.73.19" />
+    <PackageVersion Include="TUnit" Version="1.74.0" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <!-- 属性测试 — FsCheck + TUnit 集成 -->
     <PackageVersion Include="FsCheck" Version="3.4.0" />
-    <PackageVersion Include="TUnit.FsCheck" Version="1.73.19" />
+    <PackageVersion Include="TUnit.FsCheck" Version="1.74.0" />
     <!-- 快照测试 — Verify + TUnit 集成 -->
     <PackageVersion Include="Verify.TUnit" Version="32.0.1" />
     <!-- 集成测试 — Testcontainers -->
