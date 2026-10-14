@@ -21,7 +21,7 @@ namespace PalDDD.Transactions;
 /// 测试中可传入 <c>FakeTimeProvider</c> 实现确定性租约过期/重试时序，
 /// 与 <c>OutboxBatchProcessor</c>、<c>SagaTimeoutProcessor</c>、<c>OutboxDbContext.GetUtcNow()</c> 的时间抽象设计对齐。
 /// </remarks>
-public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutboxStore
+public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutboxStore, IBatchMarkOutboxStore
 {
     private readonly Lock _lock = new();
     private readonly List<OutboxMessage> _messages = [];
@@ -188,6 +188,46 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
     }
 
     /// <inheritdoc/>
+    /// <summary>批量标记发布成功（R4/P0-2，ADR-027）——契约见 <see cref="IBatchMarkOutboxStore"/>；
+    /// 本栈按 <see cref="IsCurrentLeaseHolder"/> 逐条守卫（与逐条路径等价 fencing），全命中才
+    /// 计入返回值；死信/重试路径仍走逐条方法。</summary>
+    public ValueTask<int> MarkProcessedBatchAsync(IReadOnlyList<OutboxMessage> messages, DateTimeOffset processedAt, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        ct.ThrowIfCancellationRequested();
+        if (messages.Count == 0) return ValueTask.FromResult(0);
+
+        var affected = 0;
+        lock (_lock)
+        {
+            foreach (var message in messages)
+            {
+                ArgumentNullException.ThrowIfNull(message);
+                if (!IsCurrentLeaseHolder(message))
+                    continue;
+
+                message.ProcessedAt = processedAt;
+                message.Status = OutboxStatus.Processed;
+                message.Error = null;
+                message.NextAttemptAt = null;
+                message.LockedBy = null;
+                message.LockedUntil = null;
+
+                // R1（P2-7）：Processed 终态按引用移除（同逐条路径 MarkProcessedAsync）
+                for (int i = 0; i < _messages.Count; i++)
+                {
+                    if (ReferenceEquals(_messages[i], message))
+                    {
+                        _messages.RemoveAt(i);
+                        break;
+                    }
+                }
+                affected++;
+            }
+        }
+        return ValueTask.FromResult(affected);
+    }
+
     public ValueTask MarkDeadAsync(OutboxMessage message, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);

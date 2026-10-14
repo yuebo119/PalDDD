@@ -118,6 +118,25 @@ public sealed class OutboxOptions
     /// </para>
     /// </summary>
     public int MaxInFlightPublishes { get; set; } = 1;
+
+    /// <summary>
+    /// 终态标记批量化阈值（R4/P0-2，ADR-027，2026-10-14 性能实施轮）——成功路径的
+    /// MarkProcessed 累积到本值后经 <c>IBatchMarkOutboxStore.MarkProcessedBatchAsync</c>
+    /// 单语句批量写（按 RetryCount 分组，组数 = 批内去重重试计数数）。<b>默认 1 = 逐条
+    /// 标记（既有行为逐字不变）</b>；<c>&gt;1</c> 启用批量：标记往返从每消息 1 次降为
+    /// 每批（组）1 次——远程 DB 上与 T3.1 流水线化同为主吞吐杠杆（T0.2 量具实测逐条
+    /// 确认串行化占投递耗时 80% @RTT20ms）。
+    /// <para>
+    /// ⚠️ 语义边界：①标记时点从「发布后立即」延迟到「累积满阈值/批末」（崩溃窗口内
+    /// 已发布未标记的消息经租约过期重投——at-least-once 契约内，重复窗口随本值增大，
+    /// 消费方应具备 Inbox 幂等，与 <see cref="MaxInFlightPublishes"/> 同族声明）；②需
+    /// store 实现 <c>IBatchMarkOutboxStore</c>（Dapper/EF Core/InMemory 实现；PalORM 栈
+    /// 暂未实现自动回落逐条）；③失败路径（死信/重试释放）仍逐条即时标记不变；
+    /// ④分区内标记批序 = 租约序（保序声明同 T3.1）。启动期经 <c>ValidateOnStart</c>
+    /// 校验 ≥ 1。单语句组内行数上限 400（SQLite 参数上限 999 防御，实现内分块）。
+    /// </para>
+    /// </summary>
+    public int BatchMarkThreshold { get; set; } = 1;
 }
 
 /// <summary>收件箱幂等性运行时选项。</summary>

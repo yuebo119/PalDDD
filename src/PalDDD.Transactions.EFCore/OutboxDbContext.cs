@@ -13,7 +13,7 @@ namespace PalDDD.Transactions;
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:Members annotated with RequiresDynamicCode require dynamic access",
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
-public abstract class OutboxDbContext(DbContextOptions options) : DbContext(options), IPalOutboxStore
+public abstract class OutboxDbContext(DbContextOptions options) : DbContext(options), IPalOutboxStore, IBatchMarkOutboxStore
 {
     /// <summary>发件箱消息表</summary>
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
@@ -179,6 +179,82 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
             }
         }
     }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// 批量终态写（R4/P0-2，ADR-027，2026-10-14）：按 <c>RetryCount</c> 分组逐组
+    /// <c>ExecuteUpdate</c>（组数 = 批内去重重试计数数，常态 1）——守卫集与
+    /// <see cref="FencedTarget"/> 逐条形态逐字等价（<c>Ids.Contains + RetryCount 快照 +
+    /// (LockedBy, LockedUntil) token + Status=Pending</c>），非窄化。组内 400 行分块
+    ///（SQLite 参数上限 999 防御）。EF InMemory 等 ExecuteUpdate 不支持的 provider 不适用
+    ///（本方法属关系型批量路径，与逐条方法的非关系型回退不同——批量化消费者
+    /// OutboxBatchProcessor 仅在 store 实现 IBatchMarkOutboxStore 时启用，测试栈用
+    /// InMemory/Dapper 适配器）。全命中（affected == 批大小）才回写内存（部分拒绝零回写）。
+    /// </remarks>
+    public async ValueTask<int> MarkProcessedBatchAsync(IReadOnlyList<OutboxMessage> messages, DateTimeOffset processedAt, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        if (messages.Count == 0) return 0;
+
+        // 同租约校验（契约前提防御）：批内 LockedBy/LockedUntil 同值且非空
+        var owner = messages[0].LockedBy;
+        var until = messages[0].LockedUntil;
+        if (owner is null || until is null)
+            throw new InvalidOperationException(
+                "MarkProcessedBatchAsync requires leased messages (LockedBy/LockedUntil non-null) — batch inputs must come from a single LeasePendingMessagesAsync result.");
+        foreach (var message in messages)
+        {
+            ArgumentNullException.ThrowIfNull(message);
+            if (message.LockedBy != owner || message.LockedUntil != until)
+                throw new InvalidOperationException(
+                    "MarkProcessedBatchAsync requires a single-lease batch — all messages must share the same LockedBy/LockedUntil (mixed-lease batches are not supported).");
+        }
+
+        var total = 0;
+        // 按 RetryCount 分组（快照等值可下推单组 WHERE RetryCount == rc）+ 组内 400 行分块
+        foreach (var group in messages.GroupBy(static m => m.RetryCount))
+        {
+            var ids = group.Select(static m => m.Id).ToArray();
+            for (var start = 0; start < ids.Length; start += OutboxBatchMarkChunkRows)
+            {
+                var chunk = ids.Skip(start).Take(OutboxBatchMarkChunkRows).ToArray();
+                total += await OutboxMessages
+                    .Where(m => chunk.Contains(m.Id)
+                        && m.RetryCount == group.Key
+                        && m.LockedBy == owner
+                        && m.LockedUntil == until
+                        && m.Status == OutboxStatus.Pending)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(m => m.ProcessedAt, processedAt)
+                        .SetProperty(m => m.Status, OutboxStatus.Processed)
+                        .SetProperty(m => m.Error, (string?)null)
+                        .SetProperty(m => m.NextAttemptAt, (DateTimeOffset?)null)
+                        .SetProperty(m => m.LockedBy, (string?)null)
+                        .SetProperty(m => m.LockedUntil, (DateTimeOffset?)null), ct).ConfigureAwait(false);
+            }
+        }
+
+        // 全命中才回写（部分拒绝时无法逐行定位被拒者，保守零回写——对齐接口契约）；
+        // 跟踪态守卫同逐条路径：仅 Detached 快照回写（处理器传入 AsNoTracking 租约快照）
+        if (total == messages.Count)
+        {
+            foreach (var message in messages)
+            {
+                if (Entry(message).State != Microsoft.EntityFrameworkCore.EntityState.Detached)
+                    continue;
+                message.Status = OutboxStatus.Processed;
+                message.ProcessedAt = processedAt;
+                message.Error = null;
+                message.NextAttemptAt = null;
+                message.LockedBy = null;
+                message.LockedUntil = null;
+            }
+        }
+        return total;
+    }
+
+    /// <summary>批量标记单语句组内行数上限——SQLite 参数上限 999（每行 1 参数 + 共享守卫参数）的防御分块。</summary>
+    private const int OutboxBatchMarkChunkRows = 400;
 
     /// <inheritdoc/>
     /// <remarks>

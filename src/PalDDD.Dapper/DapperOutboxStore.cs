@@ -59,7 +59,7 @@ namespace PalDDD.Dapper;
 /// ⚠️ <b>连接生命周期</b>：<paramref name="connection"/> 由 DI 容器管理（通常为 Scoped），
 /// 调用方不应调用 <c>Close()</c>/<c>Dispose()</c>。EnsureOpen/EnsureOpenAsync 仅确保连接状态，不拥有连接所有权。
 /// </remarks>
-public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxStore
+public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxStore, IBatchMarkOutboxStore
 {
     private readonly DbConnection _connection;
     private readonly DapperDbType _dbType;
@@ -373,6 +373,77 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
             message.ProcessedAt = null;
         }
     }
+
+    /// <summary>批量标记发布成功（R4/P0-2，ADR-027）——契约见 <c>IBatchMarkOutboxStore</c>；
+    /// 按 RetryCount 分组单语句（fencing 守卫与逐条 <see cref="MarkProcessedAsync"/> 逐字等价），
+    /// 组内 400 行分块（SQLite 参数上限 999 防御）；全命中才回写内存（部分拒绝零回写）。</summary>
+    public async ValueTask<int> MarkProcessedBatchAsync(IReadOnlyList<OutboxMessage> messages, DateTimeOffset processedAt, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        if (messages.Count == 0) return 0;
+
+        // 同租约校验（契约前提防御）：批内 LockedBy/LockedUntil 同值且非空——
+        // 正常管线不可达（批输入恒来自单次 LeasePendingMessagesAsync 结果）
+        var owner = messages[0].LockedBy;
+        var until = messages[0].LockedUntil;
+        if (owner is null || until is null)
+            throw new InvalidOperationException(
+                "MarkProcessedBatchAsync requires leased messages (LockedBy/LockedUntil non-null) — batch inputs must come from a single LeasePendingMessagesAsync result.");
+        foreach (var message in messages)
+        {
+            ArgumentNullException.ThrowIfNull(message);
+            if (message.LockedBy != owner || message.LockedUntil != until)
+                throw new InvalidOperationException(
+                    "MarkProcessedBatchAsync requires a single-lease batch — all messages must share the same LockedBy/LockedUntil (mixed-lease batches are not supported).");
+        }
+
+        var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var total = 0;
+        // 按 RetryCount 分组（快照等值可下推单条 WHERE retry_count=@rc）+ 组内 400 行分块
+        foreach (var group in messages.GroupBy(static m => m.RetryCount))
+        {
+            var ids = group.Select(static m => m.Id).ToArray();
+            for (var start = 0; start < ids.Length; start += OutboxBatchMarkChunkRows)
+            {
+                var count = Math.Min(OutboxBatchMarkChunkRows, ids.Length - start);
+                var dp = new DynamicParameters();
+                dp.Add("at", ToTimeParam(processedAt));
+                dp.Add("rc", group.Key);
+                dp.Add("owner", owner);
+                dp.Add("until", ToTimeParam(until.Value));
+                var sb = new System.Text.StringBuilder(240 + count * 14)
+                    .Append(SqlTemplates.OutboxMarkProcessedBatchUpdate)
+                    .Append('(');
+                for (var i = 0; i < count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    var name = $"id{start + i}";
+                    sb.Append('@').Append(name);
+                    dp.Add(name, DapperAotInitializer.ToSqliteParameter(ids[start + i]));
+                }
+                sb.Append(") AND retry_count=@rc AND status=0 AND locked_by=@owner AND locked_until=@until");
+                total += await c.ExecuteAsync(sb.ToString(), dp, Tx).ConfigureAwait(false);
+            }
+        }
+
+        // 全命中才回写（部分拒绝时无法逐行定位被拒者，保守零回写——对齐接口契约）
+        if (total == messages.Count)
+        {
+            foreach (var message in messages)
+            {
+                message.Status = OutboxStatus.Processed;
+                message.ProcessedAt = processedAt;
+                message.Error = null;
+                message.NextAttemptAt = null;
+                message.LockedBy = null;
+                message.LockedUntil = null;
+            }
+        }
+        return total;
+    }
+
+    /// <summary>批量标记单语句组内行数上限——SQLite 参数上限 999（每行 1 参数 + 共享 4 参数）的防御分块。</summary>
+    private const int OutboxBatchMarkChunkRows = 400;
 
     public async ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)
     {

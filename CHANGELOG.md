@@ -12,6 +12,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`IBatchMarkOutboxStore` 终态批量标记（ADR-027，R4/P0-2，公共 API 新增 +7 行纯增量，T2.1 收益锚立项）**：新能力接口 `MarkProcessedBatchAsync(messages, processedAt, ct)` → 受影响行数——成功路径的 `MarkProcessedAsync` 批量化（N 条已发布消息按 RetryCount 分组单语句，标记往返 N 次 → 组数次）。实现：`DapperOutboxStore` / `OutboxDbContext` 族（EF）/ `InMemoryOutboxStore`；**PalORM 栈暂不实现**（until 参数编码须与上游租约绑定逐字节一致的方言验证面，ADR-027 延后段）。fencing 守卫与逐条路径逐字等价（`(Id, RetryCount)` 快照 + 租约 token + Status=Pending，分组形态三实现同构零窄化）；同租约批前提防御（混批/未租批 fail-fast）；全命中才内存六字段回写、部分拒绝零回写。配套 `OutboxOptions.BatchMarkThreshold`（默认 1 = 逐条路径逐字不变，opt-in 启用；语义边界与 `MaxInFlightPublishes` 同族：标记时点延迟到满阈值/批末，at-least-once 契约内重复窗口随阈值增大，消费方需 Inbox 幂等；失败路径恒逐条即时；冲刷失败镜像逐条路径退避重投；串行与 T3.1 流水线两路径同款接入）。动机与量具锚：T0.2 实测 RTT20ms 档逐条确认串行化占投递耗时 80%。锁定测试：处理器集成五件（`OutboxBatchMarkProcessorTests`）+ InMemory fencing 三件 + Dapper/EF SQLite 真库八件（`OutboxBatchMarkSqliteTests`，本地实跑）。快照 +7 行零删除。
+
 ### Changed 变更
 
 - **R3 Saga 步骤执行分配族（2026-10-14 性能实施轮第三批，零公共 API 变化、行为逐字保持）**：① 四车道（Normal/FanOut/ChildSaga/Dynamic）步骤计时改 `Stopwatch.GetTimestamp`/`GetElapsedTime` 静态对——原 `Stopwatch.StartNew()` 每步骤执行分配一个 Stopwatch 对象（~40B）；② `RunRetryLaneAsync` 的 `failures` 列表惰性建——原成功路径（常态）每次调用无条件分配空 List（~32B），首个失败再建；③ `RecordExecutedStep` 的 `StepStartedAt` 改 `TryAdd` 单哈希查找（原 ContainsKey+索引器双查）。实测（--saga MediumRun）：Normal 车道 368→**296 B/op（-19.6%）**、FanOut 3,064→**2,991 B/op**（两笔预测值 72B 恰好兑现）；计时 192.2ns 在跨轮漂移带内（计时为趋势层）。撤销项留档：RunRetryLane 闭包重构与 MakeKey 缓存——Saga 步骤为 DB 主导业务操作，两项占比 <5%（PERF_MANAGED_DISCIPLINE），且 Saga 为行为最密集核心文件（补偿/观察者/重试契约），收益/风险比不成立。
