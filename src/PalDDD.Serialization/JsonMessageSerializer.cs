@@ -44,6 +44,13 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     private static ArrayBufferWriter<byte>? _tlsBufferWriter;
 
     /// <summary>
+    /// TLS 缓冲驻留上限（R9/P2-1，2026-10-14 性能实施轮）——历史峰值超过本值（256KB）的
+    /// 缓冲在下次入口被弃槽重建（256B 起步），把「按历史峰值无限驻留」收敛为有界驻留
+    /// （长驻线程 × 峰值 的稳态 RSS 压到 阈值 × 线程数 内）；小载荷常态不触发（零额外成本）。
+    /// </summary>
+    private const int MaxResidentBufferBytes = 256 * 1024;
+
+    /// <summary>
     /// 使用默认构造路径创建序列化器。<br/>
     /// 泛型方法通过 <c>(JsonTypeInfo&lt;TMessage&gt;)descriptor.JsonTypeInfo</c>
     /// 强制转换获取 metadata，对引用类型无额外开销。
@@ -150,7 +157,7 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         // v27 P3：本路径与 SerializePooled 共用同一 ThreadStatic 池——同样非重入安全
         // （converter 内回调同线程 Serialize 会清空外层缓冲，详见类头重入限制声明）。
         var bufferWriter = _tlsBufferWriter;
-        if (bufferWriter is null)
+        if (bufferWriter is null || bufferWriter.Capacity > MaxResidentBufferBytes) // R9/P2-1：超阈值弃槽重建
         {
             bufferWriter = new ArrayBufferWriter<byte>(256);
             _tlsBufferWriter = bufferWriter;
@@ -262,7 +269,7 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage> typeInfo)
     {
         var bufferWriter = _tlsBufferWriter;
-        if (bufferWriter is null)
+        if (bufferWriter is null || bufferWriter.Capacity > MaxResidentBufferBytes) // R9/P2-1：超阈值弃槽重建（同非泛型路径）
         {
             bufferWriter = new ArrayBufferWriter<byte>(256);
             _tlsBufferWriter = bufferWriter;

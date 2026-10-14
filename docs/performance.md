@@ -590,6 +590,14 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **移交后续轮**（本方案已定设计、未实施）：P0-3 回放高水位（per-position 检查点的连续前缀语义 + 四栈接口，需 ADR）；P0-4 EF Saga 租约方言下推（ExecuteUpdate 四方言）；P1-1 序列化 IBufferWriter 直写（公共 API 扩面 + 三 broker 联动）；P2-1/2/3 池驻留三项；微项打包（ISpanFormattable/Analyzer 零分配/五处 IsUniqueConstraintViolation 收口等）。
 
+## 全量重读性能实施轮续（2026-10-14：R6/R8/R9）
+
+**R6 投影增量回放续读**（8f4ba70，ADR-028，P0-3）：双能力接口（`IResumableProjectionCheckpointStore` + `IResumableEventReplaySource`）把 `ReplayAsync` 从 **O(全流长度) 降为 O(增量)**（已完成前缀零 payload 重读、零逐事件 checkpoint 探查）。语义三态=最小未完成洞位（保「仅处理缺失/失败检查点」契约逐字一致）/全完成 max+1/无行 null；EF 实现实测发现 SQLite provider 不翻译 `Convert.ToInt64(string)`（TRANSLATION-PROBE 判红），落最小投影两列客户端聚合回退。**变异红证明在案**（砍续读分支 RequestedFromPosition/OfferedCount 判红）。九件锁定（Integration 386/386）。
+
+**R8 序列化直写**（9900fae，ADR-029，P1-1）：`IMessageSerializer` 加 `Serialize(object, descriptor, IBufferWriter<byte>)` DIM（自定义实现零迁移）+ Json 覆写真直写（池化 Utf8JsonWriter Reset(destination)，输出逐位一致）+ RabbitMqBroker TLS 直传 WrittenMemory——消除每消息全载荷 ToArray 分配+拷贝。**变异红证明**：覆写体替换回退 → 零分配断言判红（56B/op 载荷拷贝）恢复绿。Kafka 不改（byte[] 契约）；MemoryPack 暂不覆写（1.21.4 无 (writer, Type, object) 重载，本地编译实证）。调用形态约束：DIM 经具体类型不可见（CS1501 实证）。
+
+**R9 池驻留 + 微项**：① TLS 缓冲阈值弃槽四处（JsonMessageSerializer 两路径/JsonLinesEventWriter/RabbitMq Broker body——历史峰值 >256KB 下次入口重建，驻留从「历史峰值」收敛为有界）；② 解压首轮 GetSpan 提示上限 64KB（`DecompressionGuard.InitialBlockHintBytes`，Brotli+LZ4/ZStd/OpenZL 四处——原 max(4096, len*2) 在 8MB 输入下首轮 16MB 过量提交固化进线程槽峰值；改后峰值容量=「≥ 实际输出的最近倍增」）。撤销两项留档：**D-F9 ISpanFormattable 生成 ID 实测证伪撤销**（net11-rc1 三形态对照：插值 111 / ToString 80 / 手动 TryFormat 80 B/op——DefaultInterpolatedStringHandler 对结构体经 ISpanFormattable 的装箱未消除，插值反向劣化 +31B；勘正注释留生成器 ToStringBody 处防重开）；RabbitMQ per-delivery CTS 池化（linked CTS 无法 TryReset 复用，语义保持需自定义 CTS 子类，~72B/消息不值）；五处 IsUniqueConstraintViolation 收口（跨 4 程序集 InternalsVisibleTo 链 + 冲突冷路径，收益不成立）。Analyzer 零分配化（D-F5）移交（IDE/CI 编译期面，独立轮次）。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |

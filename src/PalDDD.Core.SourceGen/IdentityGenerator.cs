@@ -641,6 +641,14 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
     // 原模板统一生成 Value.ToString()!，null.ToString() 抛 NullReferenceException；
     // string 的 ToString() 返回自身，?? 空合并等价且零分配。值类型分支保持原样
     //（?? 对非可空值类型不编译，模板必须按 srcType 分支）
+    //
+    // ⚠️ 勿重开（R9/D-F9，2026-10-14 性能实施轮实测证伪后撤销）：曾为生成 Id 追加
+    // ISpanFormattable 实现（期望 $"" 插值走 TryFormat span 快路径省中间串分配）。
+    // Core.Tests 三形态对照实测（net11-rc1）：插值 111 B/op / ToString 80 B/op /
+    // 手动 TryFormat 80 B/op——DefaultInterpolatedStringHandler 对本形态结构体经
+    // ISpanFormattable 的装箱未消除（差值恰 32B 箱体），插值路径反向劣化 +31B。
+    // 本仓唯一受益面（插值）为负收益，接口腿（JSON 路径）现有实现直用底层
+    // Value.TryFormat 不经包装类型——整体撤销。待运行时消除该装箱后再评估。
     private static string ToStringBody(string srcType) => srcType switch
     {
         "string" => "public override string ToString() => Value ?? string.Empty;",

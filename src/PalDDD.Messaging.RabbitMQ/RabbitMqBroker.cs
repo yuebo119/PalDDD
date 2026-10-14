@@ -151,6 +151,10 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     [ThreadStatic]
     private static System.Buffers.ArrayBufferWriter<byte>? _tlsBodyWriter;
 
+    /// <summary>TLS body 缓冲驻留上限（R9/P2-1）——超阈值弃槽重建（256B 起步），
+    /// 驻留从「历史峰值」收敛为有界。</summary>
+    private const int MaxResidentBodyBytes = 256 * 1024;
+
     /// <summary>发布消息到 RabbitMQ Exchange（Fanout 模式）</summary>
     public override async ValueTask PublishAsync(
         object message,
@@ -193,7 +197,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         // R8/P1-1：IBufferWriter 直写 + WrittenMemory 直传（免精确尺寸 ToArray 拷贝）；
         // 入口 Clear 兼作异常路径复位（发布抛出后下次调用从干净缓冲开始）
         var bodyWriter = _tlsBodyWriter;
-        if (bodyWriter is null)
+        if (bodyWriter is null || bodyWriter.Capacity > MaxResidentBodyBytes) // R9/P2-1：超阈值弃槽重建
         {
             bodyWriter = new System.Buffers.ArrayBufferWriter<byte>(256);
             _tlsBodyWriter = bodyWriter;

@@ -68,10 +68,14 @@ public sealed class JsonLinesEventWriter
     [ThreadStatic]
     private static System.Buffers.ArrayBufferWriter<byte>? _tlsBuffer;
 
+    /// <summary>TLS 缓冲驻留上限（R9/P2-1）——超阈值弃槽重建（256B 起步），
+    /// 驻留从「历史峰值」收敛为有界（详见 JsonMessageSerializer 同款常量声明）。</summary>
+    private const int MaxResidentBufferBytes = 256 * 1024;
+
     private static System.Buffers.ArrayBufferWriter<byte> GetOrCreateBufferWriter()
     {
         var buf = _tlsBuffer;
-        if (buf is null)
+        if (buf is null || buf.Capacity > MaxResidentBufferBytes) // R9/P2-1：超阈值弃槽重建
         {
             buf = new System.Buffers.ArrayBufferWriter<byte>(256);
             _tlsBuffer = buf;
