@@ -178,6 +178,41 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// R8/P1-1（ADR-029）：直写零拷贝形态——池化 <c>Utf8JsonWriter</c> 经
+    /// <c>Reset(destination)</c> 直接写入调用方缓冲，免除内存重载返回前的
+    /// <c>WrittenSpan.ToArray()</c> 精确分配 + 整载荷拷贝。输出字节与内存重载逐位一致。
+    /// 与 <see cref="Serialize(object, MessageDescriptor)"/> 共用同一 TLS Writer——
+    /// 同款非重入限制（类头声明）；本方法不触碰 TLS BufferWriter（缓冲归调用方）。
+    /// </remarks>
+    public void Serialize(object message, MessageDescriptor descriptor, System.Buffers.IBufferWriter<byte> destination)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentNullException.ThrowIfNull(descriptor);
+        ArgumentNullException.ThrowIfNull(destination);
+
+        // ClrType 一致性守卫（对齐 Serialize(object, descriptor) v39 P3 同款）
+        if (message.GetType() != descriptor.ClrType)
+            throw new ArgumentException(
+                $"The descriptor is registered for CLR type '{descriptor.ClrType.FullName}' but the message runtime type is '{message.GetType().FullName}'. Pass a descriptor registered for the message type.",
+                nameof(message));
+
+        var writer = _tlsWriter;
+        if (writer is null)
+        {
+            writer = new Utf8JsonWriter(destination);
+            _tlsWriter = writer;
+        }
+        else
+        {
+            writer.Reset(destination);
+        }
+
+        System.Text.Json.JsonSerializer.Serialize(writer, message, descriptor.JsonTypeInfo);
+        writer.Flush();
+    }
+
+    /// <inheritdoc />
     public object? Deserialize(ReadOnlySpan<byte> payload, MessageDescriptor descriptor)
     {
         ArgumentNullException.ThrowIfNull(descriptor);

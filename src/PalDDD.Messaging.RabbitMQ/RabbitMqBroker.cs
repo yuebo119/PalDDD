@@ -142,6 +142,15 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         }
     }
 
+    // R8/P1-1（ADR-029，2026-10-14 性能实施轮）：发布路径的 TLS body 缓冲——序列化经
+    // IBufferWriter 直写重载写入本缓冲，BasicPublishAsync(body: WrittenMemory) 直传零拷贝
+    // （免原 Serialize(object, descriptor) 返回前的精确尺寸 ToArray 分配+整载荷拷贝），
+    // await 完成后入口 Clear 复用。语义前提：RabbitMQ.Client 7 在 BasicPublishAsync 完成
+    // 前已消费 body（AMQP 帧组装即拷贝进帧缓冲——confirm 追踪只存序号不存载荷），
+    // 返回后客户端不再持有该内存。缓冲按历史峰值驻留（对齐序列化器 TLS 池权衡，C-F7 族）。
+    [ThreadStatic]
+    private static System.Buffers.ArrayBufferWriter<byte>? _tlsBodyWriter;
+
     /// <summary>发布消息到 RabbitMQ Exchange（Fanout 模式）</summary>
     public override async ValueTask PublishAsync(
         object message,
@@ -181,7 +190,19 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             throw;
         }
 
-        var body = Serializer.Serialize(message, descriptor);
+        // R8/P1-1：IBufferWriter 直写 + WrittenMemory 直传（免精确尺寸 ToArray 拷贝）；
+        // 入口 Clear 兼作异常路径复位（发布抛出后下次调用从干净缓冲开始）
+        var bodyWriter = _tlsBodyWriter;
+        if (bodyWriter is null)
+        {
+            bodyWriter = new System.Buffers.ArrayBufferWriter<byte>(256);
+            _tlsBodyWriter = bodyWriter;
+        }
+        else
+        {
+            bodyWriter.Clear();
+        }
+        Serializer.Serialize(message, descriptor, bodyWriter);
         // 优化（二十五轮 R-1）：CachedString 重载——缓存 exchange 名的 UTF-8 字节表示
         // （免每发布 string→bytes 编码分配；XML 证实 BasicPublishAsync(CachedString,...) 存在）
         var cachedExchange = _cachedExchanges.GetOrAdd(exchange, static name => new CachedString(name));
@@ -199,7 +220,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 routingKey: CachedString.Empty,
                 mandatory: true,
                 basicProperties: CreateProperties(descriptor, messageId, context),
-                body: body,
+                body: bodyWriter.WrittenMemory,
                 cancellationToken: ct).ConfigureAwait(false);
         }
         catch (PublishReturnException ex)
