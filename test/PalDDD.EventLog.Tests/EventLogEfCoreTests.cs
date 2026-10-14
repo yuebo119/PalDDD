@@ -314,6 +314,33 @@ public sealed class EventLogEfCoreTests
         await Assert.That(events[0].EventName).IsEqualTo("orders.order-submitted.v1");
     }
 
+    [Test]
+    public async Task AppendAsync_OnRelationalProvider_ChunkPositionsConsecutiveWithinChunk()
+    {
+        // R5（P0-1，2026-10-14 性能实施轮）锁定测试：预留前移出事务后，Hi/Lo chunk 的
+        // 内存游标跨追加复用——同一上下文连续 3 次单事件追加的 GlobalPosition 连续
+        //（+1/+2，chunk=100 内不再每次重取整块）。旧形态（Reserve 在事务存活期内 →
+        // hasActiveTransaction 降级分支不发布内存游标 → 每次追加重取整块）位置为
+        // 1/101/201（稀疏 100×、每次多付分配器 2 往返）——本断言在旧码上红、新码绿
+        //（红证明：git stash 该修复后本测试三次断言首败于 +1）。
+        var options = CreateSqliteOptions();
+        await using var db = new TestEventLogDbContext(options);
+        await db.Database.EnsureCreatedAsync();
+
+        var r1 = await db.AppendAsync(
+            "ordering-chunk-1", ExpectedStreamVersion.NoStream,
+            [CreateEvent(PalUlid.New(), "orders.a.v1", "p1")]);
+        var r2 = await db.AppendAsync(
+            "ordering-chunk-1", ExpectedStreamVersion.Exact(0),
+            [CreateEvent(PalUlid.New(), "orders.b.v1", "p2")]);
+        var r3 = await db.AppendAsync(
+            "ordering-chunk-1", ExpectedStreamVersion.Exact(1),
+            [CreateEvent(PalUlid.New(), "orders.c.v1", "p3")]);
+
+        await Assert.That(r2.FirstGlobalPosition).IsEqualTo(r1.FirstGlobalPosition + 1);
+        await Assert.That(r3.FirstGlobalPosition).IsEqualTo(r1.FirstGlobalPosition + 2);
+    }
+
     private static EventData CreateEvent(PalUlid eventId, string name, string payload)
         => new(
             eventId,
