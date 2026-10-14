@@ -83,6 +83,13 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
             "Ensure the type is registered with [MemoryPackable] and a MemoryPack generator.");
     }
 
+    // R8/P1-1（ADR-029，2026-10-14）：本实现**不覆写**直写重载 Serialize(object, descriptor,
+    // IBufferWriter<byte>)——MemoryPack 1.21.4 的 IBufferWriter 重载仅有泛型形态
+    //（Serialize<T>(writer, value)），无 (writer, Type, object) 非 AOT 路径对应重载
+    //（本地编译实证 CS1501/CS1503）；T=object 泛型动态序列化语义未经探针验证（P0 #4
+    // 纪律不臆测）。走接口 DIM 默认回退（内存形态 + 单次拷贝进 destination），语义与
+    // 非泛型内存重载严格一致；原生直写待验证后跟进（ADR-029 延后段）。
+
     /// <inheritdoc />
     /// <remarks>
     /// ITM-167 声明（非泛型路径）：本重载以 <c>MemoryPackSerializer.Deserialize(descriptor.ClrType, payload)</c>

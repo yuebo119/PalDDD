@@ -1192,6 +1192,7 @@ interface PalDDD.Serialization.IMessageSerializer
   method System.Object Deserialize(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor)
   method TMessage Deserialize(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor)
   method System.ReadOnlyMemory<System.Byte> Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor)
+  method System.Void Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, System.Buffers.IBufferWriter<System.Byte> destination)
   method System.ReadOnlyMemory<System.Byte> Serialize(TMessage message, PalDDD.Serialization.MessageDescriptor descriptor)
 class PalDDD.Serialization.Json.JsonLinesEventReader
   ctor()
@@ -1206,6 +1207,7 @@ class PalDDD.Serialization.Json.JsonMessageSerializer
   method System.Object Deserialize(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor)
   method TMessage Deserialize(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor)
   method System.ReadOnlyMemory<System.Byte> Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor)
+  method System.Void Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, System.Buffers.IBufferWriter<System.Byte> destination)
   method System.ReadOnlyMemory<System.Byte> Serialize(TMessage message, PalDDD.Serialization.MessageDescriptor descriptor)
 static class PalDDD.Serialization.Json.ServiceCollectionExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalJsonSerialization(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Action<PalDDD.Serialization.MessageCatalogBuilder> configureCatalog)
