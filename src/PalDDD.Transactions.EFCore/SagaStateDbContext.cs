@@ -369,14 +369,20 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
 
     private static int DictionaryHashCode(Dictionary<string, DateTimeOffset>? value)
     {
-        var hash = new HashCode();
-        if (value is not null)
-            foreach (var item in value.OrderBy(static x => x.Key, StringComparer.Ordinal))
-            {
-                hash.Add(item.Key, StringComparer.Ordinal);
-                hash.Add(item.Value);
-            }
-        return hash.ToHashCode();
+        // R1（B-F9，2026-10-14 性能实施轮）：无排序聚合——原 OrderBy 每次 DetectChanges 对每个
+        // 被跟踪 Saga 的字典快照分配排序枚举器（O(n log n) CPU + 迭代器分配）；per-entry
+        // 哈希的加法聚合与顺序无关，分布略逊于排序序列哈希但相等性语义不变
+        //（DictionaryEquals 与本 hash 同为顺序无关，相等字典必得相等和）
+        if (value is null) return 0;
+        var hash = 0;
+        foreach (var item in value)
+        {
+            var entry = new HashCode();
+            entry.Add(item.Key, StringComparer.Ordinal);
+            entry.Add(item.Value);
+            hash += entry.ToHashCode();
+        }
+        return hash;
     }
 
     private static Dictionary<string, DateTimeOffset> CloneDictionary(Dictionary<string, DateTimeOffset>? value)

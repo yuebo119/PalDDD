@@ -12,6 +12,10 @@
 
 ## [Unreleased]
 
+### Changed 变更
+
+- **R1 性能快赢族（2026-10-14 全量重读性能实施轮第一批，九处内部优化，零公共 API 变化、行为逐字保持）**：① `PalActivitySource.StartOutboxProcess`/`StartEventLogAppend` 补 `HasListeners` 守卫前置——旧码 int tag 在实参元组构造处装箱（遥测全关时 24 B/op 纯浪费），守卫前置后 0（smoke 新增两条 ≤1 B/op 断言，旧码 24.000/24.002 判红实证；断言落 bench 进程——测试宿主订阅全局 ActivitySource 使测试侧零分配断言结构性不可行）；② `PipelineStateMachine` next 委托构造期缓存一次（每请求 1 笔替代每行为 1 笔 ~64B）；③ `Dispatcher` 行为物化改数组协变直取（免 `Select+ToImmutableArray` 迭代器/builder 链，1+ 行为场景每请求 ~100-150B）；④ `LoggingBehavior` 失败分支补 `IsEnabled(Error)` 门（对齐既有 Debug 门形态）；⑤ LZ4/ZStd/OpenZL 压缩 options 三档静态缓存（原 record `with` 每调用分配）；⑥ `JsonLinesEventReader` 单字节换行检测改 `IndexOf` 直检（原单元素 SearchValues 无 SIMD 优势）；⑦ `DapperOutboxStore` MySQL SKIP LOCKED 版本判定按连接 CWT 缓存（原每租约解析 ServerVersion 串，镜像 C-15 先例）；⑧ `InMemoryOutboxStore` Processed 终态按引用移除（原 `_messages` 只增不减使租约扫描随历史处理量线性劣化；Dead 保留——RequeueDead 运维入口依赖）；⑨ EF Inbox 首查询/冲突回查 `AsNoTracking`（全部写路径经 Add/ExecuteUpdate，无跟踪消费方）、EF Saga `StepStartedAt` 字典哈希去 OrderBy（DetectChanges 每快照省 O(n log n) 排序）、EF MySQL 租约回读补 `LIMIT`（同 tick 混入截断在本批内）。
+
 ### Dependencies 依赖
 
 - **全量升级（2026-10-11 三升，v4.0.0 发布后核新，`dotnet list --outdated` 双通道实测）**：PalORM 五包 6.4.1 → **6.5.0**（次版本线；XML diff 1090 行实证变更面为上游 internal 基础设施族——新增 `DataSessionPool<T>` 会话池化、`EntityInfoCache` 实体元数据缓存、`QueryBuilderShared`/`PooledCts` 等，三契约文本逐字未动复核（PreWarmAsync 灌暖/会话级熔断作用域/readFromReplica 回落主库与 READ-002 教义），适配层对全部变更类型零消费；PD9 纪律：Release 0W0E + 16 项目面板 0 失败 + 6 处适配层注释与 deployment-performance.md 契约引用同提交升号）；ByteAether.Ulid 1.4.1 → **1.4.2**（rc 转稳定，解除「仅预发布不升」钉扎；元包 PalDDD.Base/Extension 字面版本同步——元包走 `ManagePackageVersionsCentrally=false` 需双改）；TUnit / TUnit.FsCheck 1.73.19 → **1.75.0**（MTP 传递维持 2.5.1，conventions §10.6 与 testing.md 版本行同提交更新）；微软 11 线 rc.1 → **11.0.0-rc.2.26504.105**（rc.2 已发，18 处中央钉扎全量 + Extension 元包两处字面版本；flatcontainer 逐包验证九包同批在案；SDK 维持 rc.1——API go-live 冻结故 rc.2 包对 rc.1 运行时逐位兼容由面板实证，SDK/GA 统一升位随 2026-11 GA 轮评估；global.json 头注同步）。

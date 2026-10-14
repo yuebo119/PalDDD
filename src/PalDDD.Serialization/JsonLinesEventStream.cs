@@ -105,15 +105,13 @@ public sealed class JsonLinesEventWriter
 /// <summary>
 /// JSON Lines (.jsonl) 逐行反序列化器。<br/>
 /// 一次读取整块 payload，按 \n 拆分，每行独立反序列化为一条事件。<br/>
-/// 使用 <see cref="SearchValues{Byte}"/> 硬件加速换行检测（SIMD）。
+/// 换行检测走单字节 <c>IndexOf</c> 向量化快速路径（R1/C-F10——原单元素 SearchValues 无 SIMD 优势）。
 /// </summary>
 // v40 P3：Reader 区域独立声明 CA1822 豁免（设计为实例 API，同 Writer 类注释）——
 // 原实现经文件尾 restore 前的宽作用域连带豁免，见文件尾收窄说明
 #pragma warning disable CA1822 // Mark members as static — 设计为实例 API 供未来 DI/状态管理
 public sealed class JsonLinesEventReader
 {
-    private static readonly SearchValues<byte> s_newline = SearchValues.Create("\n"u8);
-
     /// <summary>从 JSON Lines payload 中逐行反序列化出所有事件。</summary>
     /// <param name="payload">UTF-8 JSON Lines 数据，事件间以 \n 分隔</param>
     /// <param name="typeInfo">源生成的强类型 metadata</param>
@@ -122,6 +120,9 @@ public sealed class JsonLinesEventReader
     /// P3 修复（十七轮）· 契约声明：行内容为 JSON <c>null</c> 字面量时<b>静默跳过</b>
     /// （<c>Deserialize</c> 返回 null 不入结果，不抛错、不产生占位项）；空行
     /// （连续 \n）同样跳过。调用方不应依赖 null 行产生任何可观察效应。
+    /// <para>R1（C-F10，2026-10-14 性能实施轮）：单字节换行检测改 <c>IndexOf((byte)'\n')</c>
+    /// 直调——.NET 8+ 对单字节 IndexOf 已有向量化快速路径，原单元素 SearchValues 经
+    /// 委托间接层量级持平或略慢（微 CPU 项，SIMD 优势需多字节集合）。</para>
     /// </remarks>
     public IReadOnlyList<TMessage> DeserializeAll<TMessage>(
         ReadOnlyMemory<byte> payload,
@@ -145,7 +146,7 @@ public sealed class JsonLinesEventReader
         while (start < span.Length)
         {
             var remaining = span.Slice(start);
-            var idx = remaining.IndexOfAny(s_newline);
+            var idx = remaining.IndexOf((byte)'\n'); // R1（C-F10）：单字节直检（原 s_newline SearchValues 已删）
             var lineLen = idx < 0 ? remaining.Length : idx;
 
             if (lineLen > 0)

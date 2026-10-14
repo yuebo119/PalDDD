@@ -17,6 +17,7 @@
 | Validation.Success 分配 | ≤ 1 B/op | `--smoke` 断言（实测 0.000） | Program.cs 退出码执法 |
 | Validation.Failed 分配 | ≤ 50 B/op | 同上（实测 40.000） | 同上 |
 | Entity.RaiseEvent 分配 | ≤ 140 B/op | 同上（实测 128.001） | 同上 |
+| Start* 遥测入口（无 listener）分配 | ≤ 1 B/op | 同上（R1 轮 2026-10-14 增：实测 0.000/0.002；旧码 24.000/24.002 B/op 装箱判红实证；断言落 bench 进程——测试宿主订阅全局 ActivitySource 使 HasListeners 恒真，零分配断言在测试宿主结构性不可行） | 同上 |
 | 框架热路径水位 | AddSingleEvent 116.8ns/72B、Create 3.70ns/56B 等（2026-10-08 Medium 首轮） | MediumRun + InProcess + MemoryDiagnoser；跨轮差 <5% 实证 | `--framework` 复跑对照 |
 | 统计有效性 | Error/Mean <5% 判定可用；>15% 统计无效（现有 2 项 SmartEnum ns 级，判定以零分配事实为准） | performance.md §自评 | 引用计时前先查自评表 |
 

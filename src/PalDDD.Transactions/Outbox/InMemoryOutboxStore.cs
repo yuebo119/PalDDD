@@ -169,6 +169,20 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
             message.NextAttemptAt = null;
             message.LockedBy = null;
             message.LockedUntil = null;
+
+            // R1（P2-7，2026-10-14 性能实施轮）：Processed 终态清除——本栈定位测试/单进程，
+            // 原实现 Processed/Dead 永久滞留使 _messages 无界增长且每次租约的 QueryPending
+            // 全表 LINQ 扫描随历史处理量线性劣化。Processed 是只读终态（拾取谓词永不再命中、
+            // RequeueDeadAsync 只作用于 Dead），按引用移除安全；Dead 保留（运维重排入口依赖）。
+            // 显式 ReferenceEquals 对齐 v74 契约（防未来值等值重写使旧引用误删 successor）。
+            for (int i = 0; i < _messages.Count; i++)
+            {
+                if (ReferenceEquals(_messages[i], message))
+                {
+                    _messages.RemoveAt(i);
+                    break;
+                }
+            }
         }
         return ValueTask.CompletedTask;
     }
