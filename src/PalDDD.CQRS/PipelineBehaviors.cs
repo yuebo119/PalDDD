@@ -121,8 +121,14 @@ internal sealed class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<T
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            var elapsed = _timeProvider.GetElapsedTime(start).TotalMilliseconds;
-            _logger.Error(ex, $"Request {typeof(TRequest).Name}: failed after {elapsed:F2}ms");
+            // R1（A-F7，2026-10-14 性能实施轮）：失败分支补 IsEnabled 门——原 Error 插值
+            //（double 格式化 + 拼接）无条件分配，Error 级关闭/NullLogger 时纯浪费（对齐
+            // 上方两处 Debug 门的既有形态，语义等价：门内关闭时日志本就被丢弃）
+            if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Error))
+            {
+                var elapsed = _timeProvider.GetElapsedTime(start).TotalMilliseconds;
+                _logger.Error(ex, $"Request {typeof(TRequest).Name}: failed after {elapsed:F2}ms");
+            }
             throw;
         }
     }

@@ -19,6 +19,23 @@ namespace PalDDD.Compression;
 // 本程序集经 InternalsVisibleTo 消费，调用点零变化。权衡与约束声明见池类头注。
 
 /// <summary>
+/// R1（C-F6，2026-10-14 性能实施轮）：压缩 options 三档静态缓存——record 的
+/// <c>with</c> 每次调用分配新实例（~100-200B/次），级别枚举仅三档、Default 基准恒定，
+/// 构造期定格三份后按档索引取用。record 不可变 ⇒ 跨线程/跨调用复用安全。
+/// LZ4 与 ZStandard（含 OpenZL 底层同款）两组共六份。
+/// </summary>
+internal static class NativeCompressionOptionsCache
+{
+    public static readonly LZ4CompressionOptions Lz4Fastest = LZ4CompressionOptions.Default with { CompressionLevel = 0 };
+    public static readonly LZ4CompressionOptions Lz4Balanced = LZ4CompressionOptions.Default with { CompressionLevel = 6 };
+    public static readonly LZ4CompressionOptions Lz4SmallestSize = LZ4CompressionOptions.Default with { CompressionLevel = 12 };
+
+    public static readonly ZstandardCompressionOptions ZstdFastest = ZstandardCompressionOptions.Default with { CompressionLevel = 1 };
+    public static readonly ZstandardCompressionOptions ZstdBalanced = ZstandardCompressionOptions.Default with { CompressionLevel = 3 };
+    public static readonly ZstandardCompressionOptions ZstdSmallestSize = ZstandardCompressionOptions.Default with { CompressionLevel = 19 };
+}
+
+/// <summary>
 /// LZ4 压缩器 — 基于 NativeCompressions (Cysharp) 的原生绑定。
 /// </summary>
 internal sealed class LZ4Compressor : ICompressor
@@ -40,9 +57,12 @@ internal sealed class LZ4Compressor : ICompressor
         var destination = ArrayPool<byte>.Shared.Rent(maxSize);
         try
         {
-            var options = LZ4CompressionOptions.Default with
+            // R1（C-F6）：options 三档静态缓存（原 with 每调用分配）
+            var options = level switch
             {
-                CompressionLevel = MapLevel(level),
+                CompressionLevel.Fastest => NativeCompressionOptionsCache.Lz4Fastest,
+                CompressionLevel.SmallestSize => NativeCompressionOptionsCache.Lz4SmallestSize,
+                _ => NativeCompressionOptionsCache.Lz4Balanced,
             };
 
             var written = LZ4.Compress(data, destination, options);
@@ -97,14 +117,7 @@ internal sealed class LZ4Compressor : ICompressor
                 $"LZ4 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。", ex);
         }
     }
-
-    private static int MapLevel(CompressionLevel level) => level switch
-    {
-        CompressionLevel.Fastest => 0,
-        CompressionLevel.Balanced => 6,
-        CompressionLevel.SmallestSize => 12,
-        _ => 6,
-    };
+    // R1（C-F6）：MapLevel 已删——级别映射并入 NativeCompressionOptionsCache 三档静态缓存
 }
 
 /// <summary>
@@ -123,9 +136,12 @@ internal sealed class ZStandardCompressor : ICompressor
         var destination = ArrayPool<byte>.Shared.Rent(maxSize);
         try
         {
-            var options = ZstandardCompressionOptions.Default with
+            // R1（C-F6）：options 三档静态缓存（原 with 每调用分配）
+            var options = level switch
             {
-                CompressionLevel = MapLevel(level),
+                CompressionLevel.Fastest => NativeCompressionOptionsCache.ZstdFastest,
+                CompressionLevel.SmallestSize => NativeCompressionOptionsCache.ZstdSmallestSize,
+                _ => NativeCompressionOptionsCache.ZstdBalanced,
             };
 
             var written = Zstandard.Compress(data, destination, options);
@@ -181,14 +197,7 @@ internal sealed class ZStandardCompressor : ICompressor
                 $"ZStandard 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。", ex);
         }
     }
-
-    private static int MapLevel(CompressionLevel level) => level switch
-    {
-        CompressionLevel.Fastest => 1,
-        CompressionLevel.Balanced => 3,
-        CompressionLevel.SmallestSize => 19,
-        _ => 3,
-    };
+    // R1（C-F6）：MapLevel 已删——级别映射并入 NativeCompressionOptionsCache 三档静态缓存
 }
 
 /// <summary>
@@ -217,9 +226,12 @@ internal sealed class OpenZLCompressor : ICompressor
         var destination = ArrayPool<byte>.Shared.Rent(maxSize);
         try
         {
-            var options = ZstandardCompressionOptions.Default with
+            // R1（C-F6）：options 三档静态缓存（原 with 每调用分配；OpenZL 底层同 Zstandard）
+            var options = level switch
             {
-                CompressionLevel = MapLevel(level),
+                CompressionLevel.Fastest => NativeCompressionOptionsCache.ZstdFastest,
+                CompressionLevel.SmallestSize => NativeCompressionOptionsCache.ZstdSmallestSize,
+                _ => NativeCompressionOptionsCache.ZstdBalanced,
             };
 
             var written = Zstandard.Compress(data, destination, options);
@@ -275,12 +287,5 @@ internal sealed class OpenZLCompressor : ICompressor
                 $"OpenZL 解压输出超出可用内存（疑似解压炸弹，输入 {compressed.Length:N0} 字节）。", ex);
         }
     }
-
-    private static int MapLevel(CompressionLevel level) => level switch
-    {
-        CompressionLevel.Fastest => 1,
-        CompressionLevel.Balanced => 3,
-        CompressionLevel.SmallestSize => 19,
-        _ => 3,
-    };
+    // R1（C-F6）：MapLevel 已删——级别映射并入 NativeCompressionOptionsCache 三档静态缓存
 }

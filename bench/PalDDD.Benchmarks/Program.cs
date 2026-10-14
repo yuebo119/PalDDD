@@ -308,13 +308,23 @@ internal static class SmokeBenchmarks
             order.Complete();
         }, failures);
 
+        // R1（P1-4，2026-10-14 性能实施轮）：遥测关闭（bench 进程无 ActivityListener）时
+        // Start* 入口零分配——旧码 int tag 实参装箱 ~24B/op（v8 勘正），守卫前置后 0；
+        // 预算 1（含噪声余量，对齐 Success/FromValue 口径）。锁定测试载体说明：测试宿主
+        //（TUnit/MTP）订阅全局 ActivitySource 使 HasListeners 恒真，零分配断言只能在
+        // 无宿主进程成立（EPSL「测试宿主 ActivityListener」坑），故落本进程而非 xUnit 侧。
+        Measure("PalActivitySource.StartOutboxProcess(no listener)", budgetBytesPerOp: 1.0,
+            static () => PalDDD.Core.Diagnostics.PalActivitySource.StartOutboxProcess(100), failures);
+        Measure("PalActivitySource.StartEventLogAppend(no listener)", budgetBytesPerOp: 1.0,
+            static () => PalDDD.Core.Diagnostics.PalActivitySource.StartEventLogAppend("stream-1", 3), failures);
+
         if (failures.Count > 0)
         {
             Console.Error.WriteLine($"⛔ smoke 分配预算超标 {failures.Count} 项：{string.Join("；", failures)}");
             return 1;
         }
 
-        Console.WriteLine("✅ smoke 分配预算 4/4 通过（预算语义：上界含余量，只拦截大幅回归）");
+        Console.WriteLine("✅ smoke 分配预算 6/6 通过（预算语义：上界含余量，只拦截大幅回归）");
         return 0;
     }
 

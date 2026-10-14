@@ -54,7 +54,10 @@ public abstract class InboxDbContext(
         // 口径不变：仅禁负值。
         if (processingTimeout < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
-        var record = await InboxMessages.SingleOrDefaultAsync(
+        // R1（B-F5，2026-10-14 性能实施轮）：首查询 AsNoTracking——本方法全部后续写路径
+        // 均不依赖跟踪（新建走 Add 新实例、抢占/终态走 ExecuteUpdate），跟踪查询使幂等命中
+        // 路径白付快照+身份解析成本再手动 Detach（:120/:129/:155 三处兜底）。冲突回查同款。
+        var record = await InboxMessages.AsNoTracking().SingleOrDefaultAsync(
             x => x.ConsumerName == consumerName && x.MessageId == messageId, ct).ConfigureAwait(false);
 
         if (record is null)
@@ -98,7 +101,7 @@ public abstract class InboxDbContext(
                 var requerySucceeded = false;
                 try
                 {
-                    record = await InboxMessages.SingleOrDefaultAsync(
+                    record = await InboxMessages.AsNoTracking().SingleOrDefaultAsync(
                         x => x.ConsumerName == consumerName && x.MessageId == messageId, ct).ConfigureAwait(false);
                     requerySucceeded = true;
                 }

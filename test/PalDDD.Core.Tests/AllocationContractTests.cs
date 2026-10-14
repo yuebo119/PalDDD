@@ -203,3 +203,9 @@ public sealed class AllocationContractTests
         await Assert.That(alloc <= 100).IsTrue();
     }
 }
+
+// R1（P1-4，2026-10-14）勘正留档：Start* 入口的「无 listener 零分配」锁定测试**不能**落本
+// 项目——测试宿主（TUnit/MTP）订阅全局 ActivitySource 使 HasListeners 恒真（本地实测），
+// 零分配断言结构性必红（EPSL「测试宿主 ActivityListener」坑）。锁定载体为 bench 进程
+//（无宿主监听器）：bench/PalDDD.Benchmarks/Program.cs 的 --smoke 两条
+// PalActivitySource.Start* 预算断言（旧码装箱 ~24B/op 判红、新码 0 过）。

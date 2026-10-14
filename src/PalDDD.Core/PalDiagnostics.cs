@@ -65,9 +65,13 @@ public static class PalActivitySource
             ("pal.saga.to", toState));
 
     /// <summary>创建发件箱处理 Activity</summary>
+    /// <remarks>R1（P1-4，2026-10-14 性能实施轮）：int tag 的装箱发生在实参元组构造（先于
+    /// <see cref="Start"/> 调用求值），守卫必须置于本方法内先于实参构造，方能消掉
+    /// 遥测关闭时每批 24B 的纯装箱浪费（v8 勘正声明的「listener 关闭也装箱」自此收口）。</remarks>
     public static Activity? StartOutboxProcess(int batchSize)
-        => Start("Outbox Process",
-            ("pal.outbox.batch_size", batchSize));
+        => Source.HasListeners()
+            ? Start("Outbox Process", ("pal.outbox.batch_size", batchSize))
+            : null;
 
     /// <summary>创建收件箱幂等消费 Activity</summary>
     /// <remarks>P3-SRC-605（R45）：messageId 参数自 ITM-229 移除高基数 tag 后不再产生任何
@@ -100,10 +104,12 @@ public static class PalActivitySource
 
     /// <summary>创建事件日志追加 Activity</summary>
     /// <remarks>v25 P3 指标族（D5）：streamName 参数自移除高基数 tag 后不再产生任何
-    /// 遥测输出——保留仅为源兼容；后续破坏性版本将收参。</remarks>
+    /// 遥测输出——保留仅为源兼容；后续破坏性版本将收参。
+    /// R1（P1-4）：同 <see cref="StartOutboxProcess"/>——eventCount 的装箱守卫前置到实参构造之前。</remarks>
     public static Activity? StartEventLogAppend(string streamName, int eventCount)
-        => Start("EventLog Append",
-            ("pal.eventlog.event_count", eventCount));
+        => Source.HasListeners()
+            ? Start("EventLog Append", ("pal.eventlog.event_count", eventCount))
+            : null;
     // ITM-229 后续（v25 P3 指标族）：移除 pal.eventlog.stream——流名含聚合 ID（如
     // ordering-order-3f9a…），高基数且含业务 ID，命中 ITM-229 清理标准
 

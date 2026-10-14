@@ -76,6 +76,14 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
     // docs/sql DDL 同步）。编译期常量保留原优化意图——避免热路径枚举格式化分配。
     private const int StatusPending = 0;
 
+    // R1（P2-5，2026-10-14 性能实施轮）：MySQL SKIP LOCKED 版本判定按连接实例缓存
+    //（ConditionalWeakTable，镜像 DapperBulkCopy C-15 先例）——UseSkipLocked 每次租约
+    // Split 版本串（string[] 分配 + 解析 CPU），长连接复用免重复解析；CWT 弱键随连接
+    // 回收，连接串/版本串不以字符串形态驻留静态表。重连换版本服务器的边缘场景与 C-15
+    // 同取舍（连接实例不变则判定不刷新，接受）。
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DbConnection, System.Runtime.CompilerServices.StrongBox<bool>>
+        s_mysqlSkipLockedByConnection = new();
+
     /// <param name="transaction">可选共享事务（用于 UnitOfWork 模式）</param>
     public DapperOutboxStore(
         DbConnection connection,
@@ -172,7 +180,11 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
             string leaseSql;
             if (_dbType == DapperDbType.MySql)
             {
-                leaseSql = MySqlLeasePolicy.UseSkipLocked(_connection.ServerVersion)
+                // R1（P2-5）：判定经 CWT 按连接缓存（原每租约解析 ServerVersion 串）
+                var skipLocked = s_mysqlSkipLockedByConnection.GetValue(
+                    _connection,
+                    static c => new System.Runtime.CompilerServices.StrongBox<bool>(MySqlLeasePolicy.UseSkipLocked(c.ServerVersion))).Value;
+                leaseSql = skipLocked
                     ? SqlTemplates.OutboxLeaseUpdateMySqlSkipLocked
                     : SqlTemplates.OutboxLeaseUpdateMySql;
             }
