@@ -12,6 +12,11 @@
 
 ## [Unreleased]
 
+### Dependencies 依赖
+
+- **全量升级（2026-10-11 三升，v4.0.0 发布后核新，`dotnet list --outdated` 双通道实测）**：PalORM 五包 6.4.1 → **6.5.0**（次版本线；XML diff 1090 行实证变更面为上游 internal 基础设施族——新增 `DataSessionPool<T>` 会话池化、`EntityInfoCache` 实体元数据缓存、`QueryBuilderShared`/`PooledCts` 等，三契约文本逐字未动复核（PreWarmAsync 灌暖/会话级熔断作用域/readFromReplica 回落主库与 READ-002 教义），适配层对全部变更类型零消费；PD9 纪律：Release 0W0E + 16 项目面板 0 失败 + 6 处适配层注释与 deployment-performance.md 契约引用同提交升号）；ByteAether.Ulid 1.4.1 → **1.4.2**（rc 转稳定，解除「仅预发布不升」钉扎；元包 PalDDD.Base/Extension 字面版本同步——元包走 `ManagePackageVersionsCentrally=false` 需双改）；TUnit / TUnit.FsCheck 1.73.19 → **1.75.0**（MTP 传递维持 2.5.1，conventions §10.6 与 testing.md 版本行同提交更新）；微软 11 线 rc.1 → **11.0.0-rc.2.26504.105**（rc.2 已发，18 处中央钉扎全量 + Extension 元包两处字面版本；flatcontainer 逐包验证九包同批在案；SDK 维持 rc.1——API go-live 冻结故 rc.2 包对 rc.1 运行时逐位兼容由面板实证，SDK/GA 统一升位随 2026-11 GA 轮评估；global.json 头注同步）。
+- **钉扎维持（核新后复核）**：MediatR 维持 **12.5.0**（现最新 14.2.0，13.0.0 起 Lucky Penny 商业许可，license-policy 禁商业裁决；bench 对比锚）；Verify.TUnit 维持 **32.0.1**（现最新 33.3.3，license-policy 包级禁令 ≥33）；CAP 维持 **10.0.2**（10.1.0-preview 仅预发布不升）；BenchmarkDotNet 0.15.8（0.16.0-preview.2 仅预发布不升）。
+
 ## [4.0.0] — 2026-10-11
 
 > **范围**：`v3.3.0`（2026-10-08，`c1c4886`）→ `v4.0.0`（本提交），39 个提交（`git log v3.3.0..HEAD`——v3.3.0 tag 打在 main 合并提交上，dev 侧等价窗口即此）。
