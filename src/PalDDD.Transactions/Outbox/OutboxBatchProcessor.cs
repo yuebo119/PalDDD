@@ -164,112 +164,150 @@ public sealed class OutboxBatchProcessor
         var retried = 0;
         var persistFailed = 0;
 
-        foreach (var msg in messages)
+        // R4/P0-2（ADR-027）：终态标记批量化 opt-in——阈值 >1 且 store 实现 IBatchMarkOutboxStore
+        // 时成功路径累积批量标记（默认 1 走逐条路径逐字不变）；失败路径（死信/重试释放）恒逐条
+        var batchMark = options.BatchMarkThreshold > 1 && _store is IBatchMarkOutboxStore batchStore ? batchStore : null;
+        List<OutboxMessage>? markPending = batchMark is null ? null : new List<OutboxMessage>(Math.Min(options.BatchMarkThreshold, 64));
+
+        try
         {
-            try
+            foreach (var msg in messages)
             {
-                // ITM-217 修复：按存储的 SchemaVersion 解析——Find(name) 返回最新版本，
-                // 旧版 payload 被新版 descriptor 解释会产生错误字段/反序列化失败。
-                var descriptor = _messageCatalog.Find(msg.Type, msg.SchemaVersion);
-                if (descriptor is null)
-                {
-                    await _store.MarkDeadAsync(msg, Core.FailureReason.Normalize($"Type '{msg.Type}' not registered in MessageCatalog"), now, ct).ConfigureAwait(false);
-                    checked { dead++; }
-                    PalMetrics.OutboxDead.Add(1); // R1：死信独立计数（不再混入 failed）
-                    if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
-                        checked { persistFailed++; } // R2：未落库，dead 计数含漂移——独立可见
-                    continue;
-                }
-
-                var @event = _serializer.Deserialize(msg.Payload, descriptor);
-                if (@event is null)
-                {
-                    await _store.MarkDeadAsync(msg, Core.FailureReason.Normalize("Deserialization returned null"), now, ct).ConfigureAwait(false);
-                    checked { dead++; }
-                    PalMetrics.OutboxDead.Add(1);
-                    if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
-                        checked { persistFailed++; }
-                    continue;
-                }
-
-                var publishContext = new Messaging.MessagePublishContext(
-                    msg.CorrelationId,
-                    msg.CausationId,
-                    msg.TraceParent,
-                    msg.TraceState);
-                await _broker.PublishAsync(@event, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
-                await _store.MarkProcessedAsync(msg, now, ct).ConfigureAwait(false);
-                checked { processed++; }
-                // R2：持久化失败时从 processed 退回并计入 persistFailed——指标与 DB 真相一致
-                if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
-                {
-                    checked { processed--; persistFailed++; }
-                    PalMetrics.OutboxPersistFailed.Add(1);
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // v35 P3（EA2）：进入失败路径即捕获 RetryCount 快照——下方 ReleaseForRetry
-                // 在 InMemory 栈就地递增 msg.RetryCount（EF 栈则不动内存对象），末尾日志若
-                // 再读 msg.RetryCount + 1 会跨栈不一致（InMemory 偏大 1）。快照在所有
-                // Mark*/Release 之前取值，日志与 delay 计算（本快照 +1）口径统一
-                var retryAtFailure = msg.RetryCount;
-                // RetryCount 由 Store.ReleaseForRetry 在内部递增并与状态一同持久化，
-                // 确保计数与状态原子一致（P0 修复：消除增量-持久化窗口）。
-                // 退避延迟由 IRetryBackoffPolicy 计算（默认指数 2^n，上限 64s，可选抖动）。
-                // v29 P3：ComputeDelay 抛异常会跳过 MarkDead/ReleaseForRetry（消息状态滞留
-                // 租约直到过期，重试链断）——包 try-catch 降级默认延迟 1s + Warning，保证
-                // 标记路径始终执行（对齐 v9 观察者隔离修复的运行期半面：策略故障不阻断主流程）
-                TimeSpan delay;
                 try
                 {
-                    delay = options.RetryBackoffPolicy.ComputeDelay(msg.RetryCount + 1);
+                    // ITM-217 修复：按存储的 SchemaVersion 解析——Find(name) 返回最新版本，
+                    // 旧版 payload 被新版 descriptor 解释会产生错误字段/反序列化失败。
+                    var descriptor = _messageCatalog.Find(msg.Type, msg.SchemaVersion);
+                    if (descriptor is null)
+                    {
+                        await _store.MarkDeadAsync(msg, Core.FailureReason.Normalize($"Type '{msg.Type}' not registered in MessageCatalog"), now, ct).ConfigureAwait(false);
+                        checked { dead++; }
+                        PalMetrics.OutboxDead.Add(1); // R1：死信独立计数（不再混入 failed）
+                        if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
+                            checked { persistFailed++; } // R2：未落库，dead 计数含漂移——独立可见
+                        continue;
+                    }
+
+                    var @event = _serializer.Deserialize(msg.Payload, descriptor);
+                    if (@event is null)
+                    {
+                        await _store.MarkDeadAsync(msg, Core.FailureReason.Normalize("Deserialization returned null"), now, ct).ConfigureAwait(false);
+                        checked { dead++; }
+                        PalMetrics.OutboxDead.Add(1);
+                        if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
+                            checked { persistFailed++; }
+                        continue;
+                    }
+
+                    var publishContext = new Messaging.MessagePublishContext(
+                        msg.CorrelationId,
+                        msg.CausationId,
+                        msg.TraceParent,
+                        msg.TraceState);
+                    await _broker.PublishAsync(@event, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
+                    if (batchMark is null)
+                    {
+                        await _store.MarkProcessedAsync(msg, now, ct).ConfigureAwait(false);
+                        checked { processed++; }
+                        // R2：持久化失败时从 processed 退回并计入 persistFailed——指标与 DB 真相一致
+                        if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
+                        {
+                            checked { processed--; persistFailed++; }
+                            PalMetrics.OutboxPersistFailed.Add(1);
+                        }
+                    }
+                    else
+                    {
+                        // R4/P0-2：成功路径累积批量标记（标记时点延迟到满阈值/批末——at-least-once
+                        // 契约内的重复窗口声明见 OutboxOptions.BatchMarkThreshold）
+                        markPending!.Add(msg);
+                        if (markPending.Count >= options.BatchMarkThreshold)
+                        {
+                            var flushed = markPending.Count;
+                            if (await TryFlushBatchMarkAsync(batchMark, markPending, now, options, ct).ConfigureAwait(false))
+                                checked { processed += flushed; }
+                            else
+                                checked { retried += flushed; }
+                        }
+                    }
                 }
-                catch (Exception delayEx)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    delay = TimeSpan.FromSeconds(1);
-                    _logger.Warning($"Outbox: retry backoff computation failed for message {msg.Id}, falling back to 1s delay: {delayEx.Message}");
-                }
-                var nextAttemptAt = now + delay;
-                // P1 修复（二十一轮）：入库前截断（日志行保留完整消息）——机理见类头常量注释
-                var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
-                if (msg.RetryCount + 1 >= options.MaxRetryCount)
-                {
-                    // v43 P3（ITM-092 管线孪生，镜像 InboxProcessor 同型修复）：标记自身
-                    // 失败（DB 栈标记路径故障）不得替换 broker 失败根因、不得中止整批——
-                    // 原裸调抛出会使上游把标记错误当业务失败处理且同批后续消息饿死。
-                    // 标记错误挂主异常 Data（InboxProcessor 同键形态）+ Warning 留痕
-                    // （此处主异常不向上传播，Data 信息需日志兜底可见），主异常优先。
+                    // v35 P3（EA2）：进入失败路径即捕获 RetryCount 快照——下方 ReleaseForRetry
+                    // 在 InMemory 栈就地递增 msg.RetryCount（EF 栈则不动内存对象），末尾日志若
+                    // 再读 msg.RetryCount + 1 会跨栈不一致（InMemory 偏大 1）。快照在所有
+                    // Mark*/Release 之前取值，日志与 delay 计算（本快照 +1）口径统一
+                    var retryAtFailure = msg.RetryCount;
+                    // RetryCount 由 Store.ReleaseForRetry 在内部递增并与状态一同持久化，
+                    // 确保计数与状态原子一致（P0 修复：消除增量-持久化窗口）。
+                    // 退避延迟由 IRetryBackoffPolicy 计算（默认指数 2^n，上限 64s，可选抖动）。
+                    // v29 P3：ComputeDelay 抛异常会跳过 MarkDead/ReleaseForRetry（消息状态滞留
+                    // 租约直到过期，重试链断）——包 try-catch 降级默认延迟 1s + Warning，保证
+                    // 标记路径始终执行（对齐 v9 观察者隔离修复的运行期半面：策略故障不阻断主流程）
+                    TimeSpan delay;
                     try
                     {
-                        await _store.MarkDeadAsync(msg, failureReason, now, ct).ConfigureAwait(false);
+                        delay = options.RetryBackoffPolicy.ComputeDelay(msg.RetryCount + 1);
                     }
-                    catch (Exception markEx)
+                    catch (Exception delayEx)
                     {
-                        ex.Data["MarkError"] = markEx.Message;
-                        _logger.Warning($"Outbox: MarkDead for {msg.Id} failed: {markEx.Message}");
+                        delay = TimeSpan.FromSeconds(1);
+                        _logger.Warning($"Outbox: retry backoff computation failed for message {msg.Id}, falling back to 1s delay: {delayEx.Message}");
                     }
-                    checked { dead++; }
-                    PalMetrics.OutboxDead.Add(1); // R1：死信独立计数
+                    var nextAttemptAt = now + delay;
+                    // P1 修复（二十一轮）：入库前截断（日志行保留完整消息）——机理见类头常量注释
+                    var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
+                    if (msg.RetryCount + 1 >= options.MaxRetryCount)
+                    {
+                        // v43 P3（ITM-092 管线孪生，镜像 InboxProcessor 同型修复）：标记自身
+                        // 失败（DB 栈标记路径故障）不得替换 broker 失败根因、不得中止整批——
+                        // 原裸调抛出会使上游把标记错误当业务失败处理且同批后续消息饿死。
+                        // 标记错误挂主异常 Data（InboxProcessor 同键形态）+ Warning 留痕
+                        //（此处主异常不向上传播，Data 信息需日志兜底可见），主异常优先。
+                        try
+                        {
+                            await _store.MarkDeadAsync(msg, failureReason, now, ct).ConfigureAwait(false);
+                        }
+                        catch (Exception markEx)
+                        {
+                            ex.Data["MarkError"] = markEx.Message;
+                            _logger.Warning($"Outbox: MarkDead for {msg.Id} failed: {markEx.Message}");
+                        }
+                        checked { dead++; }
+                        PalMetrics.OutboxDead.Add(1); // R1：死信独立计数
+                    }
+                    else
+                    {
+                        try
+                        {
+                            await _store.ReleaseForRetryAsync(msg, failureReason, nextAttemptAt, ct).ConfigureAwait(false);
+                        }
+                        catch (Exception markEx)
+                        {
+                            ex.Data["MarkError"] = markEx.Message;
+                            _logger.Warning($"Outbox: ReleaseForRetry for {msg.Id} failed: {markEx.Message}");
+                        }
+                        checked { retried++; }
+                    }
+                    // v35 P3（EA2）：日志用进入失败路径时的快照 +1（本次为第 N 次失败）——
+                    // 原读 msg.RetryCount + 1 在 InMemory 栈 ReleaseForRetry 就地递增后偏大 1
+                    _logger.Warning($"Outbox: message {msg.Id} processing failed at retry {retryAtFailure + 1}: {ex.Message}");
+                    if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
+                        checked { persistFailed++; } // R2：Mark 已尝试未落库，独立可见
                 }
+            }
+        }
+        finally
+        {
+            // R4/P0-2：批末冲刷残留累积（含 OCE 关停路径——已发布消息按逐条路径同语义标记；
+            // 终态写不响应本次取消，对齐失败路径的 CancellationToken.None 口径）
+            if (markPending is { Count: > 0 })
+            {
+                var flushed = markPending.Count;
+                if (await TryFlushBatchMarkAsync(batchMark!, markPending, now, options, CancellationToken.None).ConfigureAwait(false))
+                    checked { processed += flushed; }
                 else
-                {
-                    try
-                    {
-                        await _store.ReleaseForRetryAsync(msg, failureReason, nextAttemptAt, ct).ConfigureAwait(false);
-                    }
-                    catch (Exception markEx)
-                    {
-                        ex.Data["MarkError"] = markEx.Message;
-                        _logger.Warning($"Outbox: ReleaseForRetry for {msg.Id} failed: {markEx.Message}");
-                    }
-                    checked { retried++; }
-                }
-                // v35 P3（EA2）：日志用进入失败路径时的快照 +1（本次为第 N 次失败）——
-                // 原读 msg.RetryCount + 1 在 InMemory 栈 ReleaseForRetry 就地递增后偏大 1
-                _logger.Warning($"Outbox: message {msg.Id} processing failed at retry {retryAtFailure + 1}: {ex.Message}");
-                if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
-                    checked { persistFailed++; } // R2：Mark 已尝试未落库，独立可见
+                    checked { retried += flushed; }
             }
         }
 
@@ -292,6 +330,10 @@ public sealed class OutboxBatchProcessor
         var retried = 0;
         var persistFailed = 0;
 
+        // R4/P0-2（ADR-027）：成功路径批量标记 opt-in（同串行路径；批序 = 出窗序 = 启动序）
+        var batchMark = options.BatchMarkThreshold > 1 && _store is IBatchMarkOutboxStore batchStore ? batchStore : null;
+        List<OutboxMessage>? markPending = batchMark is null ? null : new List<OutboxMessage>(Math.Min(options.BatchMarkThreshold, 64));
+
         async ValueTask HandleDeadAsync(OutboxMessage msg, string reason)
         {
             await _store.MarkDeadAsync(msg, Core.FailureReason.Normalize(reason), now, ct).ConfigureAwait(false);
@@ -306,12 +348,28 @@ public sealed class OutboxBatchProcessor
             try
             {
                 await publish.ConfigureAwait(false);
-                await _store.MarkProcessedAsync(msg, now, ct).ConfigureAwait(false);
-                checked { processed++; }
-                if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
+                if (batchMark is null)
                 {
-                    checked { processed--; persistFailed++; }
-                    PalMetrics.OutboxPersistFailed.Add(1);
+                    await _store.MarkProcessedAsync(msg, now, ct).ConfigureAwait(false);
+                    checked { processed++; }
+                    if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
+                    {
+                        checked { processed--; persistFailed++; }
+                        PalMetrics.OutboxPersistFailed.Add(1);
+                    }
+                }
+                else
+                {
+                    // R4/P0-2：批量标记累积（成功路径；失败路径落下方 catch 逐条处置不变）
+                    markPending!.Add(msg);
+                    if (markPending.Count >= options.BatchMarkThreshold)
+                    {
+                        var flushed = markPending.Count;
+                        if (await TryFlushBatchMarkAsync(batchMark, markPending, now, options, ct).ConfigureAwait(false))
+                            checked { processed += flushed; }
+                        else
+                            checked { retried += flushed; }
+                    }
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -365,45 +423,107 @@ public sealed class OutboxBatchProcessor
         }
 
         var window = new Queue<(OutboxMessage Message, Task Publish)>();
-        foreach (var msg in messages)
+        try
         {
-            // 预处理（目录/反序列化失败即死信，不入窗）——镜像串行路径前置段
-            var descriptor = _messageCatalog.Find(msg.Type, msg.SchemaVersion);
-            if (descriptor is null)
+            foreach (var msg in messages)
             {
-                await HandleDeadAsync(msg, $"Type '{msg.Type}' not registered in MessageCatalog").ConfigureAwait(false);
-                continue;
+                // 预处理（目录/反序列化失败即死信，不入窗）——镜像串行路径前置段
+                var descriptor = _messageCatalog.Find(msg.Type, msg.SchemaVersion);
+                if (descriptor is null)
+                {
+                    await HandleDeadAsync(msg, $"Type '{msg.Type}' not registered in MessageCatalog").ConfigureAwait(false);
+                    continue;
+                }
+                var @event = _serializer.Deserialize(msg.Payload, descriptor);
+                if (@event is null)
+                {
+                    await HandleDeadAsync(msg, "Deserialization returned null").ConfigureAwait(false);
+                    continue;
+                }
+                var publishContext = new Messaging.MessagePublishContext(
+                    msg.CorrelationId, msg.CausationId, msg.TraceParent, msg.TraceState);
+
+                // 窗口满先收队头（维持上限——队头出窗保标记启动序）
+                while (window.Count >= options.MaxInFlightPublishes)
+                {
+                    var oldest = window.Dequeue();
+                    await HandleOutcomeAsync(oldest.Message, oldest.Publish).ConfigureAwait(false);
+                }
+
+                // 发布任务热启动（异常流入 Task，出窗侧统一处理——发布与标记同 try 的语义
+                // 由 HandleOutcomeAsync 承载）；任务体仅转发 broker 调用
+                window.Enqueue((msg, PublishCoreAsync()));
+
+                async Task PublishCoreAsync()
+                    => await _broker.PublishAsync(@event!, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
             }
-            var @event = _serializer.Deserialize(msg.Payload, descriptor);
-            if (@event is null)
+            while (window.Count > 0)
             {
-                await HandleDeadAsync(msg, "Deserialization returned null").ConfigureAwait(false);
-                continue;
+                var entry = window.Dequeue();
+                await HandleOutcomeAsync(entry.Message, entry.Publish).ConfigureAwait(false);
             }
-            var publishContext = new Messaging.MessagePublishContext(
-                msg.CorrelationId, msg.CausationId, msg.TraceParent, msg.TraceState);
-
-            // 窗口满先收队头（维持上限——队头出窗保标记启动序）
-            while (window.Count >= options.MaxInFlightPublishes)
-            {
-                var oldest = window.Dequeue();
-                await HandleOutcomeAsync(oldest.Message, oldest.Publish).ConfigureAwait(false);
-            }
-
-            // 发布任务热启动（异常流入 Task，出窗侧统一处理——发布与标记同 try 的语义
-            // 由 HandleOutcomeAsync 承载）；任务体仅转发 broker 调用
-            window.Enqueue((msg, PublishCoreAsync()));
-
-            async Task PublishCoreAsync()
-                => await _broker.PublishAsync(@event!, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
         }
-        while (window.Count > 0)
+        finally
         {
-            var entry = window.Dequeue();
-            await HandleOutcomeAsync(entry.Message, entry.Publish).ConfigureAwait(false);
+            // R4/P0-2：批末冲刷残留累积（含 OCE 关停路径；终态写不响应取消——对齐串行路径）
+            if (markPending is { Count: > 0 })
+            {
+                var flushed = markPending.Count;
+                if (await TryFlushBatchMarkAsync(batchMark!, markPending, now, options, CancellationToken.None).ConfigureAwait(false))
+                    checked { processed += flushed; }
+                else
+                    checked { retried += flushed; }
+            }
         }
 
         return new PartitionCounters(processed, dead, retried, persistFailed);
+    }
+
+    /// <summary>
+    /// R4/P0-2（ADR-027）：批量标记冲刷——成功返回 true（调用方 processed += 批大小）；
+    /// 失败（DB 故障等）镜像逐条路径 MarkProcessed 抛出的处置（逐条退避释放重投）后返回
+    /// false（调用方 retried += 批大小）。部分 fencing 拒绝（affected &lt; 批大小，无异常）
+    /// 不视为失败——processed 计数沿用逐条路径的漂移口径（R2 独立可见）。调用返回时
+    /// <paramref name="pending"/> 已清空。
+    /// </summary>
+    private async ValueTask<bool> TryFlushBatchMarkAsync(
+        IBatchMarkOutboxStore batchStore, List<OutboxMessage> pending, DateTimeOffset now, OutboxOptions options, CancellationToken ct)
+    {
+        try
+        {
+            await batchStore.MarkProcessedBatchAsync(pending, now, ct).ConfigureAwait(false);
+            pending.Clear();
+            return true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.Warning($"Outbox: batch mark failed for {pending.Count} published message(s), releasing each for retry: {ex.Message}");
+            foreach (var msg in pending)
+            {
+                TimeSpan delay;
+                try
+                {
+                    delay = options.RetryBackoffPolicy.ComputeDelay(msg.RetryCount + 1);
+                }
+                catch (Exception delayEx)
+                {
+                    delay = TimeSpan.FromSeconds(1);
+                    _logger.Warning($"Outbox: retry backoff computation failed for message {msg.Id}, falling back to 1s delay: {delayEx.Message}");
+                }
+                var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
+                try
+                {
+                    await _store.ReleaseForRetryAsync(msg, failureReason, now + delay, ct).ConfigureAwait(false);
+                }
+                catch (Exception markEx)
+                {
+                    ex.Data["MarkError"] = markEx.Message;
+                    _logger.Warning($"Outbox: ReleaseForRetry for {msg.Id} failed: {markEx.Message}");
+                }
+            }
+            pending.Clear();
+            return false;
+        }
     }
 
     /// <summary>分区处理计数（C1 并行聚合单元——class 使 lock 聚合合法；量级 4 int）。</summary>

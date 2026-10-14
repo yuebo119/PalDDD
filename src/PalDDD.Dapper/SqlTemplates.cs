@@ -71,6 +71,18 @@ public static class SqlTemplates
         "UPDATE outbox_messages SET status=1,processed_at=@at,error=NULL,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND retry_count=@retryCount AND status=0 AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
 
     /// <summary>
+    /// 批量标记已处理——UPDATE 子句前缀（R4/P0-2，ADR-027，2026-10-14 性能实施轮）。
+    /// 调用方（DapperOutboxStore.MarkProcessedBatchAsync）按 RetryCount 分组拼接：
+    /// <c>... WHERE id IN (@id0,@id1,…) AND retry_count=@rc AND status=0 AND locked_by=@owner AND locked_until=@until</c>
+    /// ——fencing 守卫与 <see cref="OutboxMarkProcessed"/> 逐条形态
+    /// 逐字等价（(id, retry_count) 快照 + (owner, until) 租约 token + status 终态守卫），
+    /// SET 子句六字段与 <see cref="OutboxMarkProcessed"/> 一致（共享本常量前缀防漂移）。
+    /// 组内行数上限 400（SQLite 参数上限 999 防御，实现内分块）。
+    /// </summary>
+    public const string OutboxMarkProcessedBatchUpdate =
+        "UPDATE outbox_messages SET status=1,processed_at=@at,error=NULL,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id IN ";
+
+    /// <summary>
     /// 标记消息为"死信"。<br/>
     /// 💡 死信意味着消息不可恢复——需要人工介入。<br/>
     /// 三十四轮 ITM-210 token 化：同 <see cref="OutboxMarkProcessed"/> 的租约 token 守卫。<br/>

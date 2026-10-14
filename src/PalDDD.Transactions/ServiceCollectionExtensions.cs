@@ -36,6 +36,8 @@ public static class ServiceCollectionExtensions
             .Validate(static options => options.MaxDegreeOfParallelism >= 1, "Outbox MaxDegreeOfParallelism must be at least 1.")
             // T3.1（2026-10-11 优化实施轮）：发布确认流水线窗口守卫——负值无意义（1 = 串行默认）
             .Validate(static options => options.MaxInFlightPublishes >= 1, "Outbox MaxInFlightPublishes must be at least 1.")
+            // R4/P0-2（ADR-027，2026-10-14）：终态标记批量化阈值守卫——负值/零无意义（1 = 逐条默认）
+            .Validate(static options => options.BatchMarkThreshold >= 1, "Outbox BatchMarkThreshold must be at least 1.")
             .ValidateOnStart();
         services.TryAddScoped<OutboxBatchProcessor>();
         services.AddHostedService<OutboxProcessor>();
