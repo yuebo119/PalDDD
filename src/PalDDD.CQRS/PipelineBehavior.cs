@@ -43,6 +43,8 @@ public interface IPipelineBehavior<TRequest, TResponse> : IPipelineBehavior
     /// （传给泛型 <see cref="HandleAsync(TRequest,System.Threading.CancellationToken,System.Func{System.Threading.Tasks.ValueTask{TResponse}})"/> 的 async lambda 闭包 + Func 委托）。
     /// 快路径（task 已成功完成）的实际收益仅是跳过 AwaitAndBox 状态机的装箱分配，
     /// 非零分配；异步路径另按需分配状态机。
+    /// <para>R2（A-F2，2026-10-14）：内置 Validation/Logging 行为已显式实现本非泛型接口
+    /// 绕过 DIM 桥（免闭包+Func 两笔/请求）——本默认桥仅服务用户自定义行为。</para>
     /// </remarks>
     ValueTask<object?> IPipelineBehavior.HandleAsync(IBaseRequest request, CancellationToken ct, Func<ValueTask<object?>> next)
     {

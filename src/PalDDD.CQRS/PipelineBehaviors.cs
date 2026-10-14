@@ -48,6 +48,28 @@ internal sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavio
 
     public async ValueTask<TResponse> HandleAsync(TRequest request, CancellationToken ct, Func<ValueTask<TResponse>> next)
     {
+        var errors = Validate(request);
+        if (errors is { Count: > 0 })
+            throw new PalValidationException([.. errors]);
+
+        return await next().ConfigureAwait(false);
+    }
+
+    // R2（A-F2，2026-10-14 性能实施轮）：显式非泛型实现——内置行为经管道热路径时免 DIM 桥
+    // 的闭包+Func 两笔分配（PipelineBehavior.cs v25 勘正自认形态）。验证同步完成、next
+    // 直转发零额外分配；结果 object? 透传不转型（底部桥的箱对象原样上浮，Unit 链路免
+    // 拆箱-再装箱往返）。与泛型路径共用 Validate 核心，改动须双侧同步。
+    ValueTask<object?> IPipelineBehavior.HandleAsync(IBaseRequest request, CancellationToken ct, Func<ValueTask<object?>> next)
+    {
+        var errors = Validate((TRequest)request);
+        if (errors is { Count: > 0 })
+            throw new PalValidationException([.. errors]);
+        return next();
+    }
+
+    /// <summary>验证核心（泛型/非泛型两路径共用单一来源）。</summary>
+    private List<Core.PalValidationError>? Validate(TRequest request)
+    {
         List<Core.PalValidationError>? errors = null;
         foreach (var validator in _validators)
         {
@@ -71,11 +93,7 @@ internal sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavio
                     errors.AddRange(result.Errors);
             }
         }
-
-        if (errors is { Count: > 0 })
-            throw new PalValidationException([.. errors]);
-
-        return await next().ConfigureAwait(false);
+        return errors;
     }
 }
 
@@ -121,9 +139,44 @@ internal sealed class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<T
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // R1（A-F7，2026-10-14 性能实施轮）：失败分支补 IsEnabled 门——原 Error 插值
+            // R1（A-F7）：失败分支补 IsEnabled 门——原 Error 插值
             //（double 格式化 + 拼接）无条件分配，Error 级关闭/NullLogger 时纯浪费（对齐
             // 上方两处 Debug 门的既有形态，语义等价：门内关闭时日志本就被丢弃）
+            if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Error))
+            {
+                var elapsed = _timeProvider.GetElapsedTime(start).TotalMilliseconds;
+                _logger.Error(ex, $"Request {typeof(TRequest).Name}: failed after {elapsed:F2}ms");
+            }
+            throw;
+        }
+    }
+
+    // R2（A-F2，2026-10-14 性能实施轮）：显式非泛型实现——免 DIM 桥闭包+Func 两笔分配。
+    // 耗时日志的 try/catch 需跨 await，落实例异步方法（logger/timeProvider 为 this 字段
+    // 直读、TRequest 为泛型常量——零闭包捕获；同步完成路径 async ValueTask 无挂起零分配）。
+    // 与泛型路径行为逐项对齐（dispatching 日志/计时/成功与失败日志门），改动须双侧同步。
+    ValueTask<object?> IPipelineBehavior.HandleAsync(IBaseRequest request, CancellationToken ct, Func<ValueTask<object?>> next)
+    {
+        if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
+            _logger.Debug($"Request {typeof(TRequest).Name}: dispatching");
+        return LogAndDispatchAsync(next);
+    }
+
+    private async ValueTask<object?> LogAndDispatchAsync(Func<ValueTask<object?>> next)
+    {
+        var start = _timeProvider.GetTimestamp();
+        try
+        {
+            var result = await next().ConfigureAwait(false);
+            var elapsed = _timeProvider.GetElapsedTime(start).TotalMilliseconds;
+
+            if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
+                _logger.Debug($"Request {typeof(TRequest).Name}: completed in {elapsed:F2}ms");
+
+            return result;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
             if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Error))
             {
                 var elapsed = _timeProvider.GetElapsedTime(start).TotalMilliseconds;
