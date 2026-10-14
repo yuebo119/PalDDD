@@ -18,6 +18,16 @@ public static class DecompressionGuard
     /// 膨胀至 8GB；64MB 覆盖合法消息负载解压后的量级，超限抛 InvalidDataException 防炸内存（v72 勘正——v70 统一后 doc 未同步）。</summary>
     public const int MaxOutputBytes = 64 * 1024 * 1024;
 
+    /// <summary>
+    /// 解压增长缓冲的首轮 GetSpan 提交上限（R9/P2-2，2026-10-14 性能实施轮）——
+    /// 原首轮提示 <c>max(4096, len*2)</c> 在超大压缩输入下按 2× 立即提交（8MB 输入首轮
+    /// 16MB），而实际解压比可能远低于 2×，过量提交随 DecompressBufferPool 线程槽的
+    /// 历史峰值驻留固化（长驻线程数 × 峰值）。改为首轮提交 ≤ 64KB、后续由 ArrayBufferWriter
+    /// 几何增长按需扩容（DestinationTooSmall 循环自然承接）——峰值容量收敛为「≥ 实际输出
+    /// 的最近倍增」，内存占用从 2×输入 上界改为 输出量级上界。
+    /// </summary>
+    public const int InitialBlockHintBytes = 64 * 1024;
+
     /// <summary>带上限的流拷贝——超限抛 InvalidDataException（防高膨胀率炸弹；v72 同步 v70 统一）。</summary>
     internal static void CopyWithLimit(Stream source, MemoryStream destination)
     {
@@ -90,7 +100,9 @@ internal sealed class BrotliCompressor : ICompressor
 
         while (true)
         {
-            Span<byte> destination = buffer.GetSpan(Math.Max(4096, source.Length * 2));
+            // R9/P2-2：首轮提示上限 64KB（原 max(4096, len*2) 在超大输入下 2× 过量提交，
+            // 驻留随线程槽峰值固化）——后续按需几何增长
+            Span<byte> destination = buffer.GetSpan(Math.Min(DecompressionGuard.InitialBlockHintBytes, Math.Max(4096, source.Length * 2)));
             OperationStatus status = decoder.Decompress(source, destination, out int bytesConsumed, out int bytesWritten);
             buffer.Advance(bytesWritten);
             totalWritten += bytesWritten;

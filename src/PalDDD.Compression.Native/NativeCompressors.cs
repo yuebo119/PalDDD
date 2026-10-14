@@ -95,7 +95,7 @@ internal sealed class LZ4Compressor : ICompressor
 
             while (true)
             {
-                Span<byte> destination = buffer.GetSpan(Math.Max(4096, source.Length * 2));
+                Span<byte> destination = buffer.GetSpan(Math.Min(DecompressionGuard.InitialBlockHintBytes, Math.Max(4096, source.Length * 2))); // R9/P2-2：首轮提示 ≤64KB，后续几何增长（同 Brotli 路径）
                 OperationStatus status = decoder.Decompress(source, destination, out int bytesConsumed, out int bytesWritten);
                 buffer.Advance(bytesWritten);
                 totalWritten += bytesWritten;
@@ -175,7 +175,7 @@ internal sealed class ZStandardCompressor : ICompressor
 
             while (true)
             {
-                Span<byte> destination = buffer.GetSpan(Math.Max(4096, source.Length * 2));
+                Span<byte> destination = buffer.GetSpan(Math.Min(DecompressionGuard.InitialBlockHintBytes, Math.Max(4096, source.Length * 2))); // R9/P2-2：首轮提示 ≤64KB，后续几何增长（同 Brotli 路径）
                 OperationStatus status = decoder.Decompress(source, destination, out int bytesConsumed, out int bytesWritten);
                 buffer.Advance(bytesWritten);
                 totalWritten += bytesWritten;
@@ -263,7 +263,7 @@ internal sealed class OpenZLCompressor : ICompressor
 
             while (true)
             {
-                Span<byte> destination = buffer.GetSpan(Math.Max(4096, source.Length * 2));
+                Span<byte> destination = buffer.GetSpan(Math.Min(DecompressionGuard.InitialBlockHintBytes, Math.Max(4096, source.Length * 2))); // R9/P2-2：首轮提示 ≤64KB，后续几何增长（同 Brotli 路径）
                 OperationStatus status = decoder.Decompress(source, destination, out int bytesConsumed, out int bytesWritten);
                 buffer.Advance(bytesWritten);
                 totalWritten += bytesWritten;
