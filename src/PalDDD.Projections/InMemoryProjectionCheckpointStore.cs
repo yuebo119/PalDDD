@@ -7,7 +7,7 @@ namespace PalDDD.Projections;
 // 内存检查点存储
 // ─────────────────────────────────────────────────────────────
 
-public sealed class InMemoryProjectionCheckpointStore : IProjectionCheckpointStore
+public sealed class InMemoryProjectionCheckpointStore : IProjectionCheckpointStore, IResumableProjectionCheckpointStore
 {
     private readonly Lock _lock = new();
     private readonly Dictionary<Key, ProjectionCheckpoint> _checkpoints = [];
@@ -178,6 +178,45 @@ public sealed class InMemoryProjectionCheckpointStore : IProjectionCheckpointSto
         }
 
         return ValueTask.CompletedTask;
+    }
+
+    /// <summary>增量回放续读位置（R6/P0-3，ADR-028）——语义见
+    /// <see cref="IResumableProjectionCheckpointStore"/>（最小未完成位置 / 最大完成位置 +1 / null 三态；
+    /// 非数值 Position 出现即返回 null 回退全量）。</summary>
+    public ValueTask<string?> GetResumePositionAsync(
+        string projectionName,
+        string sourceName,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
+
+        long? firstIncomplete = null;
+        long? maxAny = null;
+        lock (_lock)
+        {
+            foreach (var key in _checkpoints.Keys)
+            {
+                if (key.ProjectionName != projectionName || key.SourceName != sourceName)
+                    continue;
+                // 数值契约：管线内 Position 恒为数值串；非数值（手工构造/异源）→ 回退全量
+                if (!long.TryParse(key.Position, System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture, out var position))
+                    return ValueTask.FromResult<string?>(null);
+
+                maxAny = maxAny is null || position > maxAny ? position : maxAny;
+                if (_checkpoints[key].Status != ProjectionCheckpointStatus.Completed
+                    && (firstIncomplete is null || position < firstIncomplete))
+                    firstIncomplete = position;
+            }
+        }
+
+        // 三态：首个未完成洞位 / 全完成时 max+1 / 无行 null
+        var resume = firstIncomplete ?? (maxAny is { } max ? max + 1 : (long?)null);
+        return ValueTask.FromResult(resume is { } value
+            ? value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : null);
     }
 
     private static void ValidateKeyParts(string projectionName, string sourceName, string position)

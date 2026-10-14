@@ -12,7 +12,7 @@ namespace PalDDD.Projections;
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:Members annotated with RequiresDynamicCode require dynamic access",
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
-public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : DbContext(options), IProjectionCheckpointStore
+public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : DbContext(options), IProjectionCheckpointStore, IResumableProjectionCheckpointStore
 {
     /// <summary>投影 checkpoint 表</summary>
     public DbSet<ProjectionCheckpoint> ProjectionCheckpoints => Set<ProjectionCheckpoint>();
@@ -271,6 +271,80 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
                 Entry(checkpoint).State = EntityState.Detached;
             throw;
         }
+    }
+
+    /// <summary>增量回放续读位置（R6/P0-3，ADR-028）——语义详见
+    /// <see cref="IResumableProjectionCheckpointStore"/>。两档执行：服务端聚合优先
+    /// （<c>Convert.ToInt64(string)</c> 经 EF 翻译为方言 CAST——PG/SqlServer 族支持；
+    /// 实测 SQLite provider 不翻译），翻译失败回退<b>最小投影客户端聚合</b>（仅取
+    /// Position/Status 两列轻量行、AsNoTracking 零跟踪——无 payload 物化，仍免全流重读）。
+    /// 数值 CAST 失败（脏数据）返回 null 回退全量回放。</summary>
+    public async ValueTask<string?> GetResumePositionAsync(
+        string projectionName,
+        string sourceName,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
+
+        try
+        {
+            var firstIncomplete = await ProjectionCheckpoints
+                .AsNoTracking()
+                .Where(x => x.ProjectionName == projectionName
+                    && x.SourceName == sourceName
+                    && x.Status != ProjectionCheckpointStatus.Completed)
+                .MinAsync(x => (long?)Convert.ToInt64(x.Position), ct)
+                .ConfigureAwait(false);
+            if (firstIncomplete is { } incomplete)
+                return incomplete.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            var max = await ProjectionCheckpoints
+                .AsNoTracking()
+                .Where(x => x.ProjectionName == projectionName && x.SourceName == sourceName)
+                .MaxAsync(x => (long?)Convert.ToInt64(x.Position), ct)
+                .ConfigureAwait(false);
+            return max is { } value
+                ? (value + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : null;
+        }
+        catch (System.Data.Common.DbException)
+        {
+            // 数值 CAST 失败（如 PG 对非数值 Position 串 22007 族）——续读是优化面，
+            // 回退全量回放（语义兜底恒安全，对齐 Dapper 实现同款口径）
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            // LINQ→SQL 翻译失败（SQLite provider 不映射 Convert.ToInt64(string)，实测）——
+            // 落下方最小投影客户端聚合（非全量回放：检查点行远轻于事件行）
+        }
+
+        // 回退档：最小投影客户端聚合——两列轻量行 + AsNoTracking（零跟踪残留、零 payload）
+        var rows = await ProjectionCheckpoints
+            .AsNoTracking()
+            .Where(x => x.ProjectionName == projectionName && x.SourceName == sourceName)
+            .Select(x => new { x.Position, x.Status })
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        long? minIncomplete = null;
+        long? maxAny = null;
+        foreach (var row in rows)
+        {
+            if (!long.TryParse(row.Position, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var rowPosition))
+                return null; // 非数值 Position——回退全量回放
+            maxAny = maxAny is null || rowPosition > maxAny ? rowPosition : maxAny;
+            if (row.Status != ProjectionCheckpointStatus.Completed
+                && (minIncomplete is null || rowPosition < minIncomplete))
+                minIncomplete = rowPosition;
+        }
+
+        var resume = minIncomplete ?? (maxAny is { } maxRow ? maxRow + 1 : (long?)null);
+        return resume is { } resumeValue
+            ? resumeValue.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : null;
     }
 
     /// <summary>配置投影 checkpoint 实体</summary>
