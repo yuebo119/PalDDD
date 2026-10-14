@@ -52,20 +52,36 @@ public abstract class EventLogDbContext(
 
         using var activity = PalActivitySource.StartEventLogAppend(streamName, events.Count);
 
+        // R5（P0-1，2026-10-14 性能实施轮）：版本校验与位置预留前移到事务外（关系型在
+        // BeginTransaction 之前）——修复 v33 P3 勘正的「关系型路径 Hi/Lo 批量收益失效」：
+        // 原形态 Reserve 在事务存活期内执行，AllocateNewChunkAsync 恒走
+        // hasActiveTransaction 降级分支（_initialized=false 不发布内存游标）→ 每次
+        // AppendAsync 都 SELECT+UPDATE 分配器行（恒 6 往返）。前移后预留经自身
+        // SaveChanges 自持提交，内存游标与持久化 allocator 恒一致（ITM-226 场景 (a) 化：
+        // 事件事务回滚只留间隙——类头声明为既定可接受；场景 (b) 的内存超前自此不可达），
+        // Hi/Lo 批量收益兑现：1/N 追加付分配器 2 往返，其余稳态 4 往返（BeginTx+MAX+INSERT+Commit）。
+        // 版本校验移出事务不改变并发语义：非串行化读下本就是乐观检查，TOCTOU 由
+        // (StreamName, StreamVersion) 唯一索引兜底（与原形态同一守卫，窗口宽度无实质差异）。
+        // 失败路径语义变化声明：版本不匹配抛并发异常前已消耗预留位置（间隙，ReadAll >= 过滤兼容）。
+        var actualVersion = await GetActualStreamVersionAsync(streamName, cancellationToken)
+            .ConfigureAwait(false);
+        if (!expectedVersion.Matches(actualVersion))
+            throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion);
+        var firstGlobalPosition = await ReserveGlobalPositionsAsync(events.Count, cancellationToken)
+            .ConfigureAwait(false);
+
         if (Database.IsRelational())
         {
-            // Hi/Lo 分配消除了全局序列化瓶颈：
-            // 位置预留由 EventLogPositionReserver 处理（进程内 chunk 缓存 + 乐观 CAS），
-            // 因此不再需要 Serializable 隔离级别来保护分配器行。流级别的并发由
-            // (StreamName, StreamVersion) 唯一索引 + 下方 DbUpdateException 捕获来保证。
-            // 使用默认隔离级别（大多数 provider 上为 ReadCommitted）允许
-            // 对不同流的并发追加并行执行。
+            // 流级并发由 (StreamName, StreamVersion) 唯一索引 + 下方 DbUpdateException 捕获保证；
+            // 默认隔离级别（大多数 provider 为 ReadCommitted）允许对不同流的并发追加并行执行。
             await using var transaction = await Database
                 .BeginTransactionAsync(cancellationToken)
                 .ConfigureAwait(false);
             var result = await AppendCoreAsync(
                 streamName,
                 expectedVersion,
+                actualVersion + 1,
+                firstGlobalPosition,
                 events,
                 cancellationToken)
                 .ConfigureAwait(false);
@@ -77,6 +93,8 @@ public abstract class EventLogDbContext(
         var inMemoryResult = await AppendCoreAsync(
             streamName,
             expectedVersion,
+            actualVersion + 1,
+            firstGlobalPosition,
             events,
             cancellationToken)
             .ConfigureAwait(false);
@@ -207,15 +225,14 @@ public abstract class EventLogDbContext(
     private async ValueTask<AppendEventsResult> AppendCoreAsync(
         string streamName,
         ExpectedStreamVersion expectedVersion,
+        long firstStreamVersion,
+        long firstGlobalPosition,
         IReadOnlyList<EventData> events,
         CancellationToken cancellationToken)
     {
-        var actualVersion = await GetActualStreamVersionAsync(streamName, cancellationToken).ConfigureAwait(false);
-        if (!expectedVersion.Matches(actualVersion))
-            throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion);
-
-        var firstStreamVersion = actualVersion + 1;
-        var firstGlobalPosition = await ReserveGlobalPositionsAsync(events.Count, cancellationToken).ConfigureAwait(false);
+        // R5（P1-1）：版本校验与位置预留由调用方（AppendAsync）在事务外前置完成——
+        // 本方法只负责事件构建/落库/冲突分类；firstStreamVersion/firstGlobalPosition 为
+        // 前置阶段产物直传
         var now = _timeProvider.GetUtcNow();
 
         for (var i = 0; i < events.Count; i++)
