@@ -14,6 +14,8 @@
 
 ### Changed 变更
 
+- **R2 CQRS 管道分配族（2026-10-14 性能实施轮第二批，零公共 API 变化、行为逐字保持）**：① 内置 `ValidationBehavior`/`LoggingBehavior` 显式实现非泛型 `IPipelineBehavior.HandleAsync`——管道热路径免 DIM 桥的闭包+Func 两笔/请求分配（v25 勘正自认形态收口；Validation 非异步直转发零额外分配、Logging 落实例异步方法零闭包捕获；两路径与泛型体行为逐项对齐、验证核心共用单一来源）；② `ICommandHandler`/`IQueryHandler` DIM 桥的 Unit 响应装箱消除——`UnitBox.Shared` 单例箱 + `typeof` 特判经 JIT 值类型实例化折叠（Unit 实例化不再装箱、非 Unit 实例化分支整体消除，同步/异步两路径同款）。实测（--app MediumRun，同机对照基线 268.9ns/432B）：单行为路径 **225.5ns / 360B（计时 -16%、分配 -16.7%）**；零行为路径 160B 持平（该基准命令为引用类型响应，无装箱路径，符合预期）。
+
 - **R1 性能快赢族（2026-10-14 全量重读性能实施轮第一批，九处内部优化，零公共 API 变化、行为逐字保持）**：① `PalActivitySource.StartOutboxProcess`/`StartEventLogAppend` 补 `HasListeners` 守卫前置——旧码 int tag 在实参元组构造处装箱（遥测全关时 24 B/op 纯浪费），守卫前置后 0（smoke 新增两条 ≤1 B/op 断言，旧码 24.000/24.002 判红实证；断言落 bench 进程——测试宿主订阅全局 ActivitySource 使测试侧零分配断言结构性不可行）；② `PipelineStateMachine` next 委托构造期缓存一次（每请求 1 笔替代每行为 1 笔 ~64B）；③ `Dispatcher` 行为物化改数组协变直取（免 `Select+ToImmutableArray` 迭代器/builder 链，1+ 行为场景每请求 ~100-150B）；④ `LoggingBehavior` 失败分支补 `IsEnabled(Error)` 门（对齐既有 Debug 门形态）；⑤ LZ4/ZStd/OpenZL 压缩 options 三档静态缓存（原 record `with` 每调用分配）；⑥ `JsonLinesEventReader` 单字节换行检测改 `IndexOf` 直检（原单元素 SearchValues 无 SIMD 优势）；⑦ `DapperOutboxStore` MySQL SKIP LOCKED 版本判定按连接 CWT 缓存（原每租约解析 ServerVersion 串，镜像 C-15 先例）；⑧ `InMemoryOutboxStore` Processed 终态按引用移除（原 `_messages` 只增不减使租约扫描随历史处理量线性劣化；Dead 保留——RequeueDead 运维入口依赖）；⑨ EF Inbox 首查询/冲突回查 `AsNoTracking`（全部写路径经 Add/ExecuteUpdate，无跟踪消费方）、EF Saga `StepStartedAt` 字典哈希去 OrderBy（DetectChanges 每快照省 O(n log n) 排序）、EF MySQL 租约回读补 `LIMIT`（同 tick 混入截断在本批内）。
 
 ### Dependencies 依赖
