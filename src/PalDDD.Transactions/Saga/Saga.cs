@@ -324,8 +324,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
     private static void RecordExecutedStep(TState current, TState result, string stepKey, DateTimeOffset startedAt)
     {
-        if (!result.StepStartedAt.ContainsKey(stepKey))
-            result.StepStartedAt[stepKey] = startedAt;
+        // R3（P1-3）：TryAdd 单哈希查找替代 ContainsKey+索引器双查（语义等价：已存在不覆盖）
+        result.StepStartedAt.TryAdd(stepKey, startedAt);
 
         foreach (var key in current.ExecutedStepKeys)
             if (!result.ExecutedStepKeys.Contains(key))
@@ -435,7 +435,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
         (string Key, SagaStep Step) compensateTarget,
         CancellationToken ct)
     {
-        List<Exception> failures = [];
+        // R3（P1-3，2026-10-14 性能实施轮）：failures 惰性建——成功路径（常态）原每次调用
+        // 无条件分配空 List（~32B/步），首个失败再建；throw 点此前必有 Add，非空可证。
+        List<Exception>? failures = null;
         for (int attemptNo = 0; attemptNo <= MaxRetries; attemptNo++)
         {
             try
@@ -450,13 +452,13 @@ public abstract class Saga<TState> where TState : SagaState, new()
             {
                 // 失败但还有重试次数 — 等待后继续
                 // 使用 Clock（TimeProvider）控制延迟，测试中可注入 FakeTimeProvider 实现确定性重试时序
-                failures.Add(ex);
+                (failures ??= []).Add(ex);
                 await Task.Delay(ComputeRetryDelaySafely(attemptNo + 1), Clock, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // 所有重试耗尽 — 补偿所有已成功执行的步骤（含当前步骤如果有补偿）
-                failures.Add(ex);
+                (failures ??= []).Add(ex);
 
                 // 三十八轮 P3：观察者异常被吞，原始步骤异常 ex 继续传播
                 await SafeObserveFailedAsync(observer, current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
@@ -490,9 +492,11 @@ public abstract class Saga<TState> where TState : SagaState, new()
         return await RunRetryLaneAsync(current, stepKey, observer,
             attempt: async token =>
             {
-                var sw = System.Diagnostics.Stopwatch.StartNew();
+                // R3（P1-3）：GetTimestamp/GetElapsedTime 静态对替代 Stopwatch.StartNew——
+                // 后者每步骤执行分配一个 Stopwatch 对象（~40B），计时语义逐字等价
+                var startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
                 var result = (TState)await step.ExecuteAsync(current, @event, token).ConfigureAwait(false);
-                sw.Stop();
+                var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp);
 
                 if (!wasCompleted && result.Status == SagaStatus.Completed)
                     PalMetrics.SagaCompleted.Add(1);
@@ -500,7 +504,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 RecordExecutedStep(current, result, stepKey, startedAt);
 
                 // ITM-212：Observer best-effort——Sink 异常不重放业务步骤
-                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, token).ConfigureAwait(false);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, elapsed, token).ConfigureAwait(false);
 
                 return result;
             },
@@ -527,9 +531,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
         return await RunRetryLaneAsync(current, stepKey, observer,
             attempt: async token =>
             {
-                var sw = System.Diagnostics.Stopwatch.StartNew();
+                // R3（P1-3）：GetTimestamp/GetElapsedTime 替代 Stopwatch.StartNew（同 Normal 车道）
+                var startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
                 var result = await fanOutStep.ExecuteFanOutAsync(current, token).ConfigureAwait(false);
-                sw.Stop();
+                var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp);
 
                 if (!result.AllSucceeded)
                 {
@@ -549,7 +554,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 RecordExecutedStep(current, current, stepKey, startedAt);
 
-                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, token).ConfigureAwait(false);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, elapsed, token).ConfigureAwait(false);
 
                 return current;
             },
@@ -599,10 +604,11 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 // Execute child saga via non-generic dispatch (avoids dynamic keyword)
                 var childEvent = new ChildSagaInputEvent(input);
-                var sw = System.Diagnostics.Stopwatch.StartNew();
+                // R3（P1-3）：GetTimestamp/GetElapsedTime 替代 Stopwatch.StartNew（同 Normal 车道）
+                var startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
                 var finalChildState = await manager.ExecuteChildSagaNonGenericAsync(
                     resolved, childState, childEvent, token).ConfigureAwait(false);
-                sw.Stop();
+                var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp);
 
                 // Apply child output back to parent
                 childStep.ApplyOutput(current, finalChildState);
@@ -616,7 +622,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 RecordExecutedStep(current, current, stepKey, startedAt);
 
-                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, token).ConfigureAwait(false);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, elapsed, token).ConfigureAwait(false);
 
                 return current;
             },
@@ -838,9 +844,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
         return await RunRetryLaneAsync(current, stepKey, observer,
             attempt: async token =>
             {
-                var sw = System.Diagnostics.Stopwatch.StartNew();
+                // R3（P1-3）：GetTimestamp/GetElapsedTime 替代 Stopwatch.StartNew（同 Normal 车道）
+                var startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
                 var result = (TState)await matchedStep.ExecuteAsync(current, @event, token).ConfigureAwait(false);
-                sw.Stop();
+                var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp);
 
                 if (!wasCompleted && result.Status == SagaStatus.Completed)
                     PalMetrics.SagaCompleted.Add(1);
@@ -853,7 +860,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 // ITM-212：Observer best-effort——Sink 异常不重放业务步骤
                 // P3-SRC-214：删除冗余 observer null 包裹——SafeObserveCompletedAsync 内部
                 // 已判 null，对齐 Normal/FanOut/ChildSaga 三路径的直调形态
-                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, token).ConfigureAwait(false);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, elapsed, token).ConfigureAwait(false);
 
                 return result;
             },
