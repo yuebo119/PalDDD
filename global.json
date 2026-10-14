@@ -7,5 +7,5 @@
   "test": {
     "runner": "Microsoft.Testing.Platform"
   },
-  "_comment": "ITM-060：SDK 已锁定 .NET 11 RC1（go-live 许可，API 冻结；2026-09-10 用户批准升级）。包线已随同升级（微软官方包/传递钉扎至 11.0.0-rc.1.26425.128，第三方升至最新稳定版）；Npgsql Provider（preview.6）/Pomelo（preview.5，其 11 线即此最新）待出 RC 后跟进。GA 后清偿 NU5104 抑制并重评 TFM。"
+  "_comment": "ITM-060：SDK 锁定 .NET 11 rc.1（go-live 许可，API 冻结；2026-09-10 用户批准升级）。包线 2026-10-11 升至 11.0.0-rc.2.26504.105（rc.2 已发，flatcontainer 逐包验证；API 冻结故对 rc.1 运行时逐位兼容由面板实证），SDK/GA 统一升位随 2026-11 GA 轮评估；Npgsql Provider（preview.6）/Pomelo（preview.5，其 11 线即此最新）待出 RC 后跟进。GA 后清偿 NU5104 抑制并重评 TFM。"
 }

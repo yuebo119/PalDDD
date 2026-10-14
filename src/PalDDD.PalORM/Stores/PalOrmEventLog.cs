@@ -212,8 +212,8 @@ public class PalOrmEventLog<TProvider> : IEventLog
             // v66 P3：ConfigureAwait(false) 补齐（对齐文件内其余 await）——库代码避免捕获
             // 调用方 SyncContext；对 IAsyncEnumerable 用 ConfiguredAsyncEnumerable 扩展。
             // 读副本标注（2026-09-25 特性审计裁决）：纯读流无 read-after-write 依赖——
-            // 上游契约（6.4.1 XML 复核，2026-10-11；6.4.0 同日/10-08/09-25 前核）：readFromReplica=true 且未配置 ReadConnectionString 时
-            // 逐位回落主库（未配置=行为不变）；配置后本读流可走副本。6.4.0 ARCH-001 读路由收口（READ-002 opt-in 教义 6.4.1 XML 明示不回归，与 6.4.0 逐字同文）
+            // 上游契约（6.5.0 XML 复核，2026-10-11 三升；6.4.x 系列前核）：readFromReplica=true 且未配置 ReadConnectionString 时
+            // 逐位回落主库（未配置=行为不变）；配置后本读流可走副本。6.4.0 ARCH-001 读路由收口（READ-002 opt-in 教义 6.5.0 XML 明示不回归，与 6.4.x 逐字同文）
             // （2026-10-06）后 opt-in 教义明示不回归（CreateReadRoutedCommandAsync 分支③——本调用无事务无并行作用域）。
             await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(readStreamSql, readFromReplica: true, ct: cancellationToken).ConfigureAwait(false))
             {

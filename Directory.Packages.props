@@ -1,6 +1,6 @@
 <Project>
 
-<!-- 中央包管理 — 统一 NuGet 版本（.NET 11 RC1 线；2026-09-10 全量升级：微软官方包/传递钉扎升至 11.0.0-rc.1.26425.128，第三方升最新稳定版；
+<!-- 中央包管理 — 统一 NuGet 版本（.NET 11 RC1 线；2026-09-10 全量升级：微软官方包/传递钉扎升至 11.0.0-rc.2.26504.105，第三方升最新稳定版；
        2026-09-29 全量核新：PalORM ×5 → 6.1.0（主版本线）、TUnit/TUnit.FsCheck → 1.71.0；
        2026-10-08 全量核新（双源实测）：11 线 rc.2 仍未发维持 rc.1，PalORM ×5 → 6.3.1（6.2/6.3/6.3.1 九日三连发）、
        TUnit/TUnit.FsCheck → 1.73.5、Confluent.Kafka → 2.16.0、NativeCompressions → 1.0.1（跨 1.0 稳定线）、
@@ -9,7 +9,12 @@
        2026-10-11 全量升级：PalORM ×5 → 6.4.0、NativeCompressions → 1.1.0、TUnit/TUnit.FsCheck → 1.73.19、
        Testcontainers ×4 → 4.16.0、CAP ×3 → 10.0.2（MIT nuspec 实证，bench 对比锚随最新线）；MediatR 维持
        12.5.0（13+ 商业许可）、Verify.TUnit 维持 32.0.1（禁令）、微软 11 线维持 rc.1（rc.2/GA 未发）；
-       2026-10-11 同日二升：PalORM ×5 → 6.4.1（f57076b 后当日新发补丁位，契约复核+面板同带） -->
+       2026-10-11 同日二升：PalORM ×5 → 6.4.1（f57076b 后当日新发补丁位，契约复核+面板同带）；
+       2026-10-11 三升（v4.0.0 发布后窗口）：PalORM ×5 → 6.5.0（次版本线，契约复核见适配层注释）、
+       ByteAether.Ulid → 1.4.2（rc 转稳定）、TUnit/TUnit.FsCheck → 1.75.0、微软 11 线 rc.1 → rc.2.26504.105
+       （包线钉扎全量随 rc.2；SDK 维持 rc.1——API 已 go-live 冻结，rc.2 包对 rc.1 运行时逐位兼容由面板实证，
+       SDK/GA 统一升位随 2026-11 GA 轮评估）；MediatR 14.2.0/Verify.TUnit 33.3.3 维持禁令，CAP 10.1.0-preview/
+       BDN 0.16.0-preview.2 仅预发布不升 -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
@@ -19,25 +24,26 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.9.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.9.0" />
-    <!-- 仓储层依赖 (EF Core 11 RC1) — 多数据库 Provider -->
+    <!-- 仓储层依赖 (EF Core 11 rc.2 线) — 多数据库 Provider -->
     <!-- 2026-09-13 版本核实:EF Core 11 线最新即 rc.1.26425.128(rc.2 未发,GA 预计 2026-11),
          本仓已在最新版;死条目清理:SqlServer/Design/Npgsql.EF(11.0.0-preview.6)/Pomelo(11.0.0-preview.5)
          四包零直接引用 + 全解决方案 include-transitive 传递图零命中,删除(区别于二十五轮误删案:
-         该案为活传递钉扎,本案 include-transitive 实锤) -->
-    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="11.0.0-rc.1.26425.128" />
-    <!-- DI 扩展依赖 (.NET 11 RC1) — 这些包在 net11.0 下自动可用，csproj 中不再显式引用 -->
-    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="Microsoft.Extensions.Logging" Version="11.0.0-rc.1.26425.128" />
+         该案为活传递钉扎,本案 include-transitive 实锤)；2026-10-11 三升 rc.2 已发（26504.105 批，
+         全钉扎同批，flatcontainer 逐包验证后替换） -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="11.0.0-rc.2.26504.105" />
+    <!-- DI 扩展依赖 (.NET 11 rc.2) — 这些包在 net11.0 下自动可用，csproj 中不再显式引用 -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="11.0.0-rc.2.26504.105" />
     <!-- ZLogger — 零分配结构化日志（构建于 M.E.Logging 之上） -->
     <PackageVersion Include="ZLogger" Version="2.5.10" />
     <!-- ByteAether.Ulid — 时间排序唯一标识符（AOT 兼容 · RFC 9562 合规） -->
-    <PackageVersion Include="ByteAether.Ulid" Version="1.4.1" />
+    <PackageVersion Include="ByteAether.Ulid" Version="1.4.2" />
     <!-- Dapper 适配器 — SQLite / PostgreSQL / MySQL（AOT 兼容）。2.1.86（ITM-809，2026-09-19 补丁级升级） -->
     <PackageVersion Include="Dapper" Version="2.1.89" />
     <!-- Dapper.AOT 1.1.0（2026-09-13 升级探针实证）：拦截器接线在 .NET 11 已恢复（1.0.52 的
@@ -47,14 +53,14 @@
          2026-09-13 用户裁决"铺垫不动"，启用路径见 DapperAotInitializer.cs 头注） -->
     <PackageVersion Include="Dapper.AOT" Version="1.1.0" />
     <!-- PalORM 适配器 — 面向 Native AOT 的 .NET 11 微 ORM（源生成 + 编译期 SQL，真 AOT 安全）
-         6.4.1（2026-10-11 同日二升，6.x 线内 6.4.0 → 6.4.1 补丁位）：NuGet 无
+         6.5.0（2026-10-11 三升，次版本线 6.4.1 → 6.5.0）：NuGet 无
          releaseNotes 渠道（registration API 仅固定描述），按 PD9 破坏性只有编译+测试能证——
          升位实证见 CHANGELOG [Unreleased] Dependencies 段与适配层注释 -->
-    <PackageVersion Include="PalORM.Core" Version="6.4.1" />
-    <PackageVersion Include="PalORM.SourceGen" Version="6.4.1" />
-    <PackageVersion Include="PalORM.Sqlite" Version="6.4.1" />
-    <PackageVersion Include="PalORM.PostgreSql" Version="6.4.1" />
-    <PackageVersion Include="PalORM.MySql" Version="6.4.1" />
+    <PackageVersion Include="PalORM.Core" Version="6.5.0" />
+    <PackageVersion Include="PalORM.SourceGen" Version="6.5.0" />
+    <PackageVersion Include="PalORM.Sqlite" Version="6.5.0" />
+    <PackageVersion Include="PalORM.PostgreSql" Version="6.5.0" />
+    <PackageVersion Include="PalORM.MySql" Version="6.5.0" />
     <!-- MemoryPack 二进制序列化（AOT 兼容） -->
     <PackageVersion Include="MemoryPack" Version="1.21.4" />
     <!-- Dapper.FluentMap 已移除 — 改用 Dapper.DefaultTypeMap.MatchNamesWithUnderscores -->
@@ -62,7 +68,7 @@
     <!-- SqlClient 7.1.1（2026-10-08 升位）：7.1.0 于 2026-09-18 转稳定后 9 日补丁版；零引用中央声明
          （全仓无 PackageReference 消费，见 ITM-711），升位只影响声明版本 -->
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.1.1" />
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="11.0.0-rc.1.26425.128" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="11.0.0-rc.2.26504.105" />
     <!-- SQLite 引擎（传递依赖显式固定，确保构建可重现） -->
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
     <PackageVersion Include="SQLitePCLRaw.core" Version="3.0.5" />
@@ -75,16 +81,16 @@
     <PackageVersion Include="DotNetCore.CAP.RabbitMQ" Version="10.0.2" />
     <PackageVersion Include="DotNetCore.CAP.MySql" Version="10.0.2" />
     <PackageVersion Include="MySqlConnector" Version="2.6.2" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="11.0.0-rc.1.26425.128" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="11.0.0-rc.2.26504.105" />
     <!-- 消息代理适配器（可选） -->
     <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
     <PackageVersion Include="Confluent.Kafka" Version="2.16.0" />
     <!-- 测试基础设施 — TUnit（源生成器测试框架 · MTP） -->
-    <PackageVersion Include="TUnit" Version="1.73.19" />
+    <PackageVersion Include="TUnit" Version="1.75.0" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <!-- 属性测试 — FsCheck + TUnit 集成 -->
     <PackageVersion Include="FsCheck" Version="3.4.0" />
-    <PackageVersion Include="TUnit.FsCheck" Version="1.73.19" />
+    <PackageVersion Include="TUnit.FsCheck" Version="1.75.0" />
     <!-- 快照测试 — Verify + TUnit 集成 -->
     <PackageVersion Include="Verify.TUnit" Version="32.0.1" />
     <!-- 集成测试 — Testcontainers -->
@@ -99,22 +105,22 @@
          CodePages/Humanizer、BenchmarkDotNet 依赖 CodeDom/Management）。二十五轮误判为死条目删除，
          致 7 项目传递依赖回退 1-2 个主版本。教训：CPM 死条目判定必须查传递图，
          仅 grep 直接引用在传递钉扎开启时不充分 -->
-    <PackageVersion Include="System.Threading.RateLimiting" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="System.Text.Encoding.CodePages" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="System.CodeDom" Version="11.0.0-rc.1.26425.128" />
-    <PackageVersion Include="System.Management" Version="11.0.0-rc.1.26425.128" />
+    <PackageVersion Include="System.Threading.RateLimiting" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="System.Text.Encoding.CodePages" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="System.CodeDom" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="System.Management" Version="11.0.0-rc.2.26504.105" />
     <PackageVersion Include="Humanizer.Core" Version="3.0.10" />
-    <PackageVersion Include="System.Collections.Immutable" Version="11.0.0-rc.1.26425.128" />
+    <PackageVersion Include="System.Collections.Immutable" Version="11.0.0-rc.2.26504.105" />
     <PackageVersion Include="System.Buffers" Version="4.6.1" />
     <PackageVersion Include="System.Memory" Version="4.6.3" />
     <PackageVersion Include="System.Numerics.Vectors" Version="4.6.1" />
     <PackageVersion Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" />
     <PackageVersion Include="System.Threading.Tasks.Extensions" Version="4.6.3" />
-    <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="11.0.0-rc.1.26425.128" />
+    <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="11.0.0-rc.2.26504.105" />
     <!-- Platforms 包 8.0 后停更（2026-09-10 restore 实测 NU1102 证实：最新即 8.0.0-preview.7.23375.6，勿再升） -->
     <PackageVersion Include="Microsoft.NETCore.Platforms" Version="8.0.0-preview.7.23375.6" />
     <!-- 传递依赖版本固定 — 覆盖过时的传递依赖 -->
-    <PackageVersion Include="System.Reflection.Metadata" Version="11.0.0-rc.1.26425.128" />
+    <PackageVersion Include="System.Reflection.Metadata" Version="11.0.0-rc.2.26504.105" />
     <!-- 原生压缩绑定 — LZ4 / ZStandard (Cysharp)。NativeCompressions.OpenZL 已移除（八轮评审：零使用的死依赖）；
          1.1.0（2026-10-11 升位）：1.0 线内补丁位升级，破坏面由编译+往返测试实证（NativeCompressionTests） -->
     <PackageVersion Include="NativeCompressions" Version="1.1.0" />
