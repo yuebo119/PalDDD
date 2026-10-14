@@ -573,6 +573,23 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **B1/B3（Saga 存储往返结构，机制入账无计时 A/B）**：B1 批量释放把超时扫描非超时分支的 B 次「往返 + 全量快照序列化（Dapper 叠加存在性全行反序列化 / EF 叠加 DetectChanges 扫描）」收为单语句单往返（leased_by 守卫 + 换代；EF 栈 ExecuteUpdate + 全批 Detach——跟踪器幽灵写陷阱的行为锁定测试在案）；B3 把 Save 常见路径 2 往返收 1（UPDATE 先行 + 0 行 COUNT 探测，新行冷路径 2→3）。四栈 SQLite 真库行为测试 + 处理器接线红证明（旧处理器零调用能力接口）在案；EF 栈车道待上游 Provider（既有登记），SQL 计数探针属其解除后的补测项。
 
+## 全量重读性能实施轮（2026-10-14：R1~R5 五批，含三项 P0 结构修复）
+
+> 来源：全量重读性能审计（本人精读五扇区 + 四只读子代理扇区深读，热路径 100% 覆盖）。
+> 产出方案四级分级后按序实施，本段只记实测与机制入账；细节见 CHANGELOG [Unreleased] 与 ADR-027。
+
+**R1 快赢族九项**（9a3b59e）：Start* 遥测入口无 listener 零分配（smoke 新增两断言，**红证明 stash 循环在案：旧码 24.000/24.002 B/op 装箱判红、新码 0.002/0.000 过**）；状态机 next 委托每请求 1 笔（原每行为 1×~64B）；Dispatcher 行为物化数组协变直取（免 Select+ToImmutableArray 链）；LoggingBehavior Error 门；LZ4/ZStd options 三档缓存；单字节 IndexOf；Dapper MySQL 版本判定 CWT 缓存；InMemory Outbox Processed 终态清除（治无界增长）；EF Inbox AsNoTracking/EF Saga 字典哈希去排序/EF MySQL 回读 LIMIT。撤销留档：SQLite WAL 一次化（文件重建边界 + <5% 纪律）。
+
+**R2 CQRS 管道分配族**（98e31e0）：内置行为显式非泛型实现（免 DIM 桥闭包+Func）+ Unit 单例箱（typeof JIT 折叠）。--app 实测（MediumRun，对照基线 2026-10-11 轮 268.9ns/432B）：**单行为 225.5ns/360B（计时 -16%、分配 -16.7%）**；零行为 160B 持平（该基准引用类型响应无装箱路径，符合预期）。
+
+**R3 Saga 步骤分配族**（e23d565）：四车道计时静态化 + failures 惰性建 + TryAdd。--saga 实测：**Normal 368→296 B/op（-19.6%）、FanOut 3,064→2,991 B/op**（Stopwatch ~40B + 空 List ~32B 两笔预测恰好兑现）；计时 192.2ns 跨轮漂移带内。撤销留档：RunRetryLane 闭包重构与 MakeKey 缓存（DB 主导 <5% + 行为最密集文件风险）。
+
+**R4 Outbox 终态批量标记**（ADR-027，P0-2/T2.1 锚立项）：`IBatchMarkOutboxStore` 能力接口 + `BatchMarkThreshold` opt-in（默认 1 逐条逐字不变）。机制：成功路径标记往返 N 次 → 组数次（按 RetryCount 分组单语句，fencing 守卫与逐条逐字等价零窄化）；fencing 部分拒绝行为锁定（Dapper/EF SQLite 真库 raw 行断言）；处理器批序=租约序（T3.1 保序族）。量级锚：T0.2 已实测 RTT20ms 逐条确认串行化占 80%——批量启用后标记侧串行相乘收敛（待 --delivery 车道 threshold 参数化 A/B 定量，Not-Tested 登记）。PalORM 栈延后（until 编码与上游租约绑定逐字节一致的方言验证面）。
+
+**R5 EF EventLog Hi/Lo 修复**（848e839，P0-1）：版本校验+位置预留前移出事务。机制入账：稳态追加 **4 次 DB 往返（原恒 6，-33%）**、1/N 追加付分配器 2 次、GlobalPosition 连续无稀疏（原按 chunk 稀疏 100×）。**红绿双向锁定**（SQLite 真库 ChunkPositionsConsecutiveWithinChunk：stash 旧码 +100 稀疏判红 Expected 1 found 100、新码 +1 连续绿）；ITM-226 场景 (a) 化正确性声明在案（事件事务回滚只留间隙，既定可接受）。
+
+**移交后续轮**（本方案已定设计、未实施）：P0-3 回放高水位（per-position 检查点的连续前缀语义 + 四栈接口，需 ADR）；P0-4 EF Saga 租约方言下推（ExecuteUpdate 四方言）；P1-1 序列化 IBufferWriter 直写（公共 API 扩面 + 三 broker 联动）；P2-1/2/3 池驻留三项；微项打包（ISpanFormattable/Analyzer 零分配/五处 IsUniqueConstraintViolation 收口等）。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
