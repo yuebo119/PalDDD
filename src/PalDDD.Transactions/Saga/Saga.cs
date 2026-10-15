@@ -327,9 +327,19 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // R3（P1-3）：TryAdd 单哈希查找替代 ContainsKey+索引器双查（语义等价：已存在不覆盖）
         result.StepStartedAt.TryAdd(stepKey, startedAt);
 
-        foreach (var key in current.ExecutedStepKeys)
-            if (!result.ExecutedStepKeys.Contains(key))
-                result.ExecutedStepKeys.Add(key);
+        // A6（S1 轮，2026-10-15）：同实例合轨守卫——六调用点中五处传 (current, current)
+        // （FanOut/ChildSaga/Interrupt/Dynamic 立即车道等，步骤原地改状态），旧形态对每个
+        // 已执行 key 做一次线性 Contains（同实例下必然命中、零添加），k 次执行累计 O(k²)
+        // 次字符串比较。同实例时只剩 stepKey 的存在性判定。
+        // 跨实例合并（Normal/Dynamic 车道 result 为新实例）改 HashSet 去重——O(k) 替代
+        // O(k²)，该路径非常态（每 saga 每步一次），一次分配换平方级比较下降。
+        if (!ReferenceEquals(current, result))
+        {
+            var existing = new HashSet<string>(result.ExecutedStepKeys, StringComparer.Ordinal);
+            foreach (var key in current.ExecutedStepKeys)
+                if (existing.Add(key))
+                    result.ExecutedStepKeys.Add(key);
+        }
 
         if (!result.ExecutedStepKeys.Contains(stepKey))
             result.ExecutedStepKeys.Add(stepKey);
@@ -636,7 +646,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
     [System.Diagnostics.CodeAnalysis.RequiresDynamicCode("Uses MakeGenericMethod for generic method dispatch; not compatible with native AOT.")]
     private object? ResolveChildSagaByType(Type childStateType)
     {
-        // Try the generic ResolveChildSaga first via reflection
+        // A8（S1 轮，2026-10-15）：非泛型查找静态缓存一次 + MakeGenericMethod 结果按子状态
+        // 类型缓存——原每 attempt 一次 GetMethod + MakeGenericMethod + Invoke，查找与构造
+        // 部分按类型稳定对应，缓存消重复成本（Invoke 语义不变）。
         var method = typeof(Saga<TState>).GetMethod(
             nameof(ResolveChildSaga),
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,
@@ -644,12 +656,16 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
         if (method is not null)
         {
-            var generic = method.MakeGenericMethod(childStateType);
+            var generic = ResolveChildSagaGenericByStateType.GetOrAdd(childStateType, static (t, m) => m.MakeGenericMethod(t), method);
             return generic.Invoke(this, null);
         }
 
         return null;
     }
+
+    // A8（S1 轮）：MakeGenericMethod 结果按子状态类型缓存（Saga<TState> 每闭合泛型一份，
+    // ChildSaga 每 attempt 原各一次构造）。
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, System.Reflection.MethodInfo> ResolveChildSagaGenericByStateType = new();
 
     /// <summary>通过反射创建子 Saga 状态实例（仅用于 AOT 非目标场景）。</summary>
     [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode("Child state instantiation relies on Activator.CreateInstance; provide a factory for AOT.")]

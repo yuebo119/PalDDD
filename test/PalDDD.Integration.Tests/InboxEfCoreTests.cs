@@ -443,6 +443,98 @@ public sealed class InboxEfCoreTests
         await Assert.That(duplicate).IsNull();
     }
 
+    /// <summary>
+    /// A9（S1 轮，2026-10-15）：Inbox 直插优先的语句计数锁定——关系型 provider 上新消息
+    /// TryStart 由 2 往返（预 SELECT miss + INSERT）降为 1（INSERT；SQLite 的 identity
+    /// 回填经 INSERT…RETURNING 同命令完成）。SQLite 真库 + DbCommandInterceptor 命令计数
+    /// （EnsureCreated 的 DDL 经 Reset 隔离）。红证明：还原预 SELECT 形态后本测试判红
+    /// （SELECT 1 + INSERT 1）。
+    /// </summary>
+    [Test]
+    public async Task TryStartProcessingAsync_NewMessage_OnRelationalProvider_InsertsWithoutPreselect(CancellationToken cancellationToken)
+    {
+        using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var counter = new InboxStatementCounter();
+        var options = new DbContextOptionsBuilder<TestInboxDbContext>()
+            .UseSqlite(connection)
+            .AddInterceptors(counter)
+            .Options;
+        await using (var init = new TestInboxDbContext(options))
+            await init.Database.EnsureCreatedAsync(cancellationToken);
+        counter.Reset();
+
+        await using var db = new TestInboxDbContext(options);
+        var store = (IInboxStore)db;
+        var record = await store.TryStartProcessingAsync(
+            "orders",
+            "message-stmt",
+            DateTimeOffset.Parse("2026-05-31T00:00:00Z", CultureInfo.InvariantCulture),
+            TimeSpan.FromMinutes(5),
+            cancellationToken);
+
+        await Assert.That(record).IsNotNull();
+        // 新消息路径：0 SELECT + 1 INSERT（旧形态：SELECT miss 1 + INSERT 1）
+        await Assert.That(counter.SelectCount).IsEqualTo(0);
+        await Assert.That(counter.InsertCount).IsEqualTo(1);
+    }
+
+    /// <summary>命令文本计数器（A9）：SELECT/INSERT 语句数——跨 Reader/NonQuery 全部拦截点
+    /// 登记（镜像 SagaStateEfCoreLeasePushdownTests 的 SqlStatementCounter 形态）。</summary>
+    private sealed class InboxStatementCounter : DbCommandInterceptor
+    {
+        private int _select;
+        private int _insert;
+
+        public int SelectCount => Volatile.Read(ref _select);
+        public int InsertCount => Volatile.Read(ref _insert);
+
+        public void Reset()
+        {
+            Volatile.Write(ref _select, 0);
+            Volatile.Write(ref _insert, 0);
+        }
+
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result)
+        {
+            Record(command);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            Record(command);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        public override InterceptionResult<int> NonQueryExecuting(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result)
+        {
+            Record(command);
+            return base.NonQueryExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            Record(command);
+            return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        private void Record(DbCommand command)
+        {
+            var text = command.CommandText.AsSpan().TrimStart();
+            if (text.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+                Interlocked.Increment(ref _select);
+            else if (text.StartsWith("INSERT", StringComparison.OrdinalIgnoreCase))
+                Interlocked.Increment(ref _insert);
+        }
+    }
+
     private static DbContextOptions<TestInboxDbContext> CreateOptions()
         => new DbContextOptionsBuilder<TestInboxDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture))
