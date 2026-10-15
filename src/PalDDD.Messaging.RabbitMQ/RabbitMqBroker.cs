@@ -142,18 +142,24 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         }
     }
 
-    // R8/P1-1（ADR-029，2026-10-14 性能实施轮）：发布路径的 TLS body 缓冲——序列化经
-    // IBufferWriter 直写重载写入本缓冲，BasicPublishAsync(body: WrittenMemory) 直传零拷贝
-    // （免原 Serialize(object, descriptor) 返回前的精确尺寸 ToArray 分配+整载荷拷贝），
-    // await 完成后入口 Clear 复用。语义前提：RabbitMQ.Client 7 在 BasicPublishAsync 完成
-    // 前已消费 body（AMQP 帧组装即拷贝进帧缓冲——confirm 追踪只存序号不存载荷），
-    // 返回后客户端不再持有该内存。缓冲按历史峰值驻留（对齐序列化器 TLS 池权衡，C-F7 族）。
-    [ThreadStatic]
-    private static System.Buffers.ArrayBufferWriter<byte>? _tlsBodyWriter;
+    // A2（2026-10-15 性能实施轮）：发布路径的 body 缓冲——每发布从 ArrayPool 租借，
+    // 序列化经 IBufferWriter 直写重载写入，BasicPublishAsync(body: WrittenMemory)
+    // 直传，await 完成后归还（using 保证异常路径同样归还）。
+    //
+    // 租借形态取代 R8 的 ThreadStatic 直传，原因是后者存在静默数据损坏风险（官方源码
+    // 实证，RabbitMQ.Client 7.2.2）：BasicPublishCoreAsync（Channel.BasicPublish.cs）
+    // 在 MaybeAcquirePublisherConfirmationLockAsync（outstanding confirms 超过
+    // ThrottlingRateLimiter 上限即挂起，CreateAsync 默认上限 128）与
+    // MaybeEnforceFlowControlAsync（broker connection.blocked 时挂起）两个 await
+    // 之后，才经 SessionBase.TransmitAsync → SerializeToFrames 同步拷贝 body。
+    // 窗口内 body 仍指向调用方缓冲：同线程流水线发布（Outbox MaxInFlightPublishes>1）
+    // 的下一次入口 Clear 会抹掉尚待拷贝的内容，帧照常组装、confirm 照常成功，消息静默
+    // 错内容。原注释「BasicPublishAsync 完成前已消费 body」只覆盖拷贝发生的事实，
+    // 不覆盖拷贝时点晚于两个可挂起点的事实。租借把缓冲生命周期收敛到单次发布调用内，
+    // 共享可变状态消除（rent/return 约 40ns，对比帧损坏可接受）。
 
-    /// <summary>TLS body 缓冲驻留上限（R9/P2-1）——超阈值弃槽重建（256B 起步），
-    /// 驻留从「历史峰值」收敛为有界。</summary>
-    private const int MaxResidentBodyBytes = 256 * 1024;
+    /// <summary>body 缓冲初始租借容量——覆盖常见消息尺寸，减少倍增成长次数。</summary>
+    private const int InitialBodyBufferBytes = 4096;
 
     /// <summary>发布消息到 RabbitMQ Exchange（Fanout 模式）</summary>
     public override async ValueTask PublishAsync(
@@ -194,18 +200,9 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             throw;
         }
 
-        // R8/P1-1：IBufferWriter 直写 + WrittenMemory 直传（免精确尺寸 ToArray 拷贝）；
-        // 入口 Clear 兼作异常路径复位（发布抛出后下次调用从干净缓冲开始）
-        var bodyWriter = _tlsBodyWriter;
-        if (bodyWriter is null || bodyWriter.Capacity > MaxResidentBodyBytes) // R9/P2-1：超阈值弃槽重建
-        {
-            bodyWriter = new System.Buffers.ArrayBufferWriter<byte>(256);
-            _tlsBodyWriter = bodyWriter;
-        }
-        else
-        {
-            bodyWriter.Clear();
-        }
+        // A2：IBufferWriter 直写 + WrittenMemory 直传（免精确尺寸 ToArray 拷贝）；
+        // using 保证发布抛出后缓冲归还池（池化 writer 无 Clear 复位需求，天然干净入口）
+        using var bodyWriter = new PooledBodyWriter(InitialBodyBufferBytes);
         Serializer.Serialize(message, descriptor, bodyWriter);
         // 优化（二十五轮 R-1）：CachedString 重载——缓存 exchange 名的 UTF-8 字节表示
         // （免每发布 string→bytes 编码分配；XML 证实 BasicPublishAsync(CachedString,...) 存在）
@@ -546,6 +543,51 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         {
             _logger.Warning($"BasicCancel failed (channel closed?): {queueName}, consumerTag={consumerTag}: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// A2（2026-10-15）：按发布租借的 body 写入器——序列化直写进 ArrayPool 租用的数组，
+    /// 超越容量时按倍增继续租借（旧数组就地归还），Dispose 归还当前数组。<br/>
+    /// 替代 ThreadStatic 直传形态的共享可变状态（损坏机理见 <see cref="InitialBodyBufferBytes"/>
+    /// 处注释）：每次发布独占缓冲至 await 完成，同线程流水线发布互不干扰。
+    /// </summary>
+    internal sealed class PooledBodyWriter : System.Buffers.IBufferWriter<byte>, IDisposable
+    {
+        private byte[] _buffer;
+        private int _written;
+
+        public PooledBodyWriter(int initialCapacity)
+            => _buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(Math.Max(256, initialCapacity));
+
+        /// <summary>已写入内容（不复制，随下次 Advance/Dispose 失效——调用方须在 Dispose 前消费完毕）。</summary>
+        public ReadOnlyMemory<byte> WrittenMemory => _buffer.AsMemory(0, _written);
+
+        public void Advance(int count) => _written += count;
+
+        public Memory<byte> GetMemory(int sizeHint = 0)
+        {
+            EnsureCapacity(sizeHint);
+            return _buffer.AsMemory(_written);
+        }
+
+        public Span<byte> GetSpan(int sizeHint = 0)
+        {
+            EnsureCapacity(sizeHint);
+            return _buffer.AsSpan(_written);
+        }
+
+        private void EnsureCapacity(int sizeHint)
+        {
+            if (sizeHint <= 0) sizeHint = 1;
+            var required = _written + sizeHint;
+            if (required <= _buffer.Length) return;
+            var next = System.Buffers.ArrayPool<byte>.Shared.Rent(Math.Max(required, _buffer.Length * 2));
+            _buffer.AsSpan(0, _written).CopyTo(next);
+            System.Buffers.ArrayPool<byte>.Shared.Return(_buffer);
+            _buffer = next;
+        }
+
+        public void Dispose() => System.Buffers.ArrayPool<byte>.Shared.Return(_buffer);
     }
 
     private sealed class AsyncSubscription(Func<Task> unsubscribe) : IAsyncDisposable
