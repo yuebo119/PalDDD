@@ -17,6 +17,20 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
     /// <summary>投影 checkpoint 表</summary>
     public DbSet<ProjectionCheckpoint> ProjectionCheckpoints => Set<ProjectionCheckpoint>();
 
+    // A5（S1 轮，2026-10-15）：固定形状单行查询编译化——EF Core 每次执行都把表达式树
+    // 重新翻译成 SQL（无自动计划缓存；EF.CompileAsyncQuery 的官方存在理由即消除重复
+    // 编译开销）。两个查询是投影路径每消息的固定形状热点（读路径 AsNoTracking、
+    // TryStart 跟踪查询两形态分别编译，跟踪语义随委托固化）。按 IModel 引用各缓存一份
+    // 委托：编译委托与单一模型绑定（EF 官方约束），同上下文类型跨 provider 模型实例
+    // 不同，按模型分持。
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        Microsoft.EntityFrameworkCore.Metadata.IModel,
+        Func<ProjectionCheckpointDbContext, string, string, string, CancellationToken, Task<ProjectionCheckpoint?>>> GetCheckpointNoTrackingByModel = new();
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        Microsoft.EntityFrameworkCore.Metadata.IModel,
+        Func<ProjectionCheckpointDbContext, string, string, string, CancellationToken, Task<ProjectionCheckpoint?>>> GetCheckpointTrackedByModel = new();
+
     /// <inheritdoc/>
     /// <remarks>
     /// 三十八轮 P3 修复：变更追踪无界增长——长驻 scope 下每次查询的跟踪条目滞留
@@ -31,13 +45,15 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
     {
         ValidateKeyParts(projectionName, sourceName, position);
 
-        return await ProjectionCheckpoints
-            .AsNoTracking()
-            .SingleOrDefaultAsync(
-                x => x.ProjectionName == projectionName
-                    && x.SourceName == sourceName
-                    && x.Position == position,
-                ct).ConfigureAwait(false);
+        // A5（S1 轮）：读路径走按模型缓存的编译委托（AsNoTracking 形态随委托固化）
+        return await GetCheckpointNoTrackingByModel.GetOrAdd(Model, static _ =>
+            EF.CompileAsyncQuery<ProjectionCheckpointDbContext, string, string, string, ProjectionCheckpoint?>(
+                (ctx, projectionName, sourceName, position, ct) => ctx.ProjectionCheckpoints
+                    .AsNoTracking()
+                    .SingleOrDefault(
+                        x => x.ProjectionName == projectionName
+                            && x.SourceName == sourceName
+                            && x.Position == position)))(this, projectionName, sourceName, position, ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -65,11 +81,15 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         if (processingTimeout < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
 
-        var checkpoint = await ProjectionCheckpoints.SingleOrDefaultAsync(
-            x => x.ProjectionName == projectionName
-                && x.SourceName == sourceName
-                && x.Position == position,
-            ct).ConfigureAwait(false);
+        // A5（S1 轮）：跟踪查询走按模型缓存的编译委托（僵尸回收分支的 MarkProcessing
+        // 突变依赖 ChangeTracker 持久化，保持跟踪形态；编译只固化查询形状，跟踪语义不变）
+        var checkpoint = await GetCheckpointTrackedByModel.GetOrAdd(Model, static _ =>
+            EF.CompileAsyncQuery<ProjectionCheckpointDbContext, string, string, string, ProjectionCheckpoint?>(
+                (ctx, projectionName, sourceName, position, ct) => ctx.ProjectionCheckpoints
+                    .SingleOrDefault(
+                        x => x.ProjectionName == projectionName
+                            && x.SourceName == sourceName
+                            && x.Position == position)))(this, projectionName, sourceName, position, ct).ConfigureAwait(false);
 
         if (checkpoint is null)
             return await TryCreateCheckpointAsync(projectionName, sourceName, position, startedAt, processingTimeout, ct).ConfigureAwait(false);
