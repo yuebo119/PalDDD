@@ -29,4 +29,9 @@
     <None Include="$(OutputPath)\$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" />
   </ItemGroup>
 
+  <!-- R10（D-F5，2026-10-15）：分配探针测试直调符号比对族谓词（内部可见性） -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="PalDDD.Analyzers.Tests" />
+  </ItemGroup>
+
 </Project>

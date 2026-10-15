@@ -156,7 +156,7 @@ public sealed partial class StrategicDddAnalyzer
                     continue;
                 }
                 var matchesProjection = property.Name == "ProjectionName"
-                    || property.ExplicitInterfaceImplementations.Any(p => p.Name == "ProjectionName");
+                    || HasExplicitInterfaceImplementationNamed(property, "ProjectionName");
                 if (!matchesProjection)
                     continue;
 
@@ -278,7 +278,7 @@ public sealed partial class StrategicDddAnalyzer
                 continue;
             }
             var matchesTarget = property.Name == propertyName
-                || property.ExplicitInterfaceImplementations.Any(p => p.Name == propertyName);
+                || HasExplicitInterfaceImplementationNamed(property, propertyName);
             if (!matchesTarget)
                 continue;
 
@@ -348,39 +348,170 @@ public sealed partial class StrategicDddAnalyzer
         return null;
     }
 
-    private static bool MetadataNameEquals(INamedTypeSymbol type, string metadataName)
-        => GetFullMetadataName(type) == metadataName;
-
-    private static string GetFullMetadataName(INamedTypeSymbol type)
+    // R10（D-F5，2026-10-15 性能实施轮）：零分配元数据名比对——IDE 增量分析热路径。
+    // 原实现每次比对经 GetFullMetadataName 构造全名串（命名空间 ToDisplayString 分配 +
+    // ContainingType 链逐级 '+' 拼接分配），而该比对在每类型分析中发生数十次
+    //（基类链 × 接口集 × attribute 集逐候选比对）；现按符号结构逐段对照常量
+    // metadataName，全程零字符串构造。语义与旧全名串比对逐字等价：命名空间链
+    //（自外向内，'.' 分隔）+ ContainingType 链（自外向内，'+' 分隔——ITM-220 嵌套名
+    // 防顶层同名碰撞）+ 自身 MetadataName（含泛型元数 `n）；global 命名空间无前缀段
+    //（v26 P3 分支，含 ContainingType 链照拼）。对照矩阵（嵌套/顶层碰撞/泛型/global）
+    // 由 AnalyzerAllocationTests 锁定。
+    internal static bool MetadataNameEquals(INamedTypeSymbol type, string metadataName)
     {
-        // ITM-220 修复（三十二轮）：嵌套类型拼 ContainingType 链（Ns.Outer+Inner）——
-        // MetadataName 仅返回最内层简名，原实现使嵌套 Inner 与顶层 Ns.Inner 元数据名碰撞
-        // v26 P3：global 命名空间分支同样拼 ContainingType 链——原实现直接 return
-        // type.MetadataName 简名，global 嵌套类型（global::Outer.Inner）返回 "Inner"，
-        // 与 MetadataNameEquals 的全名比对及嵌套类型语义均失真；拼接逻辑前移为两分支共用
-        var name = type.MetadataName;
-        var containing = type.ContainingType;
-        while (containing is not null)
+        var pos = 0;
+        return MatchNamespaceTree(type.ContainingNamespace, metadataName, ref pos)
+            && MatchTypeTree(type, metadataName, ref pos)
+            && pos == metadataName.Length;
+    }
+
+    /// <summary>自最外层命名空间向内逐段匹配（段间 '.'）。</summary>
+    private static bool MatchNamespaceTree(INamespaceSymbol? ns, string expected, ref int pos)
+    {
+        if (ns is null || ns.IsGlobalNamespace)
+            return true;
+
+        return MatchNamespaceTree(ns.ContainingNamespace, expected, ref pos)
+            && MatchSegment(ns.Name, expected, ref pos)
+            && ConsumeSeparator(expected, ref pos, '.');
+    }
+
+    /// <summary>自最外层 ContainingType 向内逐段匹配（段间 '+'，最内层为自身）。</summary>
+    private static bool MatchTypeTree(INamedTypeSymbol type, string expected, ref int pos)
+    {
+        if (type.ContainingType is { } containing)
         {
-            name = containing.MetadataName + "+" + name;
-            containing = containing.ContainingType;
+            if (!MatchTypeTree(containing, expected, ref pos)
+                || !ConsumeSeparator(expected, ref pos, '+'))
+            {
+                return false;
+            }
         }
 
-        var containingNamespace = type.ContainingNamespace;
-        if (containingNamespace is null || containingNamespace.IsGlobalNamespace)
-            return name;
+        // MetadataName 等价形态（零分配）：Name + arity>0 时的 "`{Arity}"——Roslyn 的
+        // MetadataName 对泛型源符号每次访问重新构造 arity 串（探针实测 40B/次，本方法的
+        // 零分配断言最初正被该属性判红），故逐段比对不经该属性
+        if (!MatchSegment(type.Name, expected, ref pos))
+            return false;
+        if (type.Arity == 0)
+            return true;
+        return ConsumeSeparator(expected, ref pos, '`') && MatchArity(type.Arity, expected, ref pos);
+    }
 
-        return containingNamespace.ToDisplayString() + "." + name;
+    /// <summary>匹配十进制元数（"`n" 的 n 段，前向逐位）。</summary>
+    private static bool MatchArity(int arity, string expected, ref int pos)
+    {
+        var digits = 1;
+        var divisor = 1;
+        for (var value = arity; value >= 10; value /= 10)
+        {
+            digits++;
+            divisor *= 10;
+        }
+
+        if (expected.Length - pos < digits)
+            return false;
+
+        for (var place = divisor; place > 0; place /= 10)
+        {
+            if (expected[pos] != (char)('0' + arity / place % 10))
+                return false;
+            pos++;
+        }
+
+        return true;
+    }
+
+    private static bool MatchSegment(string segment, string expected, ref int pos)
+    {
+        if (expected.Length - pos < segment.Length)
+            return false;
+
+        for (var i = 0; i < segment.Length; i++)
+        {
+            if (expected[pos + i] != segment[i])
+                return false;
+        }
+
+        pos += segment.Length;
+        return true;
+    }
+
+    private static bool ConsumeSeparator(string expected, ref int pos, char separator)
+    {
+        if (pos < expected.Length && expected[pos] == separator)
+        {
+            pos++;
+            return true;
+        }
+
+        return false;
+    }
+
+    // R10（D-F5）：显式接口实现按名查找——原调用点（TryGetProjectionName /
+    // TryGetLiteralFromTypeMembers）用 ExplicitInterfaceImplementations.Any(闭包)，
+    // 每方法调用各分配一个闭包对象；手写循环零分配（语义逐字等价：任一显式实现的
+    // 简单名命中即真——v57 P1/v58 的显式实现匹配语义不变）。
+    internal static bool HasExplicitInterfaceImplementationNamed(IPropertySymbol property, string name)
+    {
+        foreach (var implementation in property.ExplicitInterfaceImplementations)
+        {
+            if (implementation.Name == name)
+                return true;
+        }
+
+        return false;
     }
 
     // ADR 022：实现收敛至 PalDDD.Shared/StableNameValidation.cs（与 PalDDD.Core.SourceGen
     // 链接编译同一份源码）——原两处逐字重复副本存在漂移风险，本方法仅作调用点适配。
     private static bool IsStableName(string? value) => StableNameValidation.IsStable(value);
 
-    private static bool BelongsToBoundedContext(string messageName, string boundedContext)
+    // R10（D-F5）：零分配上下文归属判定——原实现 boundedContext + "." 每次调用分配一个
+    // 前缀串（每消息类型比对路径必过）；语义逐字等价：序数相等，或后随 '.' 的序数前缀
+    //（拼接形态 StartsWith(ctx + ".") 拆为 StartsWith(ctx) + 点字符对照）。
+    internal static bool BelongsToBoundedContext(string messageName, string boundedContext)
         => StringComparer.Ordinal.Equals(messageName, boundedContext)
-           || messageName.StartsWith(boundedContext + ".", StringComparison.Ordinal);
+           || (messageName.Length > boundedContext.Length
+               && messageName.StartsWith(boundedContext, StringComparison.Ordinal)
+               && messageName[boundedContext.Length] == '.');
 
-    private static bool HasVersionSuffix(string messageName, int schemaVersion)
-        => messageName.EndsWith(".v" + schemaVersion, StringComparison.Ordinal);
+    // R10（D-F5）：零分配版本后缀判定——原实现 ".v" + schemaVersion 每次调用分配一个
+    // 后缀串；改为尾段逐位对照十进制形态（含负号腿——int 全域与字符串拼接形态等价，
+    // 调用方已门控 schemaVersion >= 1，负形态为防御性等价保留）。前导零形态天然拒绝
+    //（"x.v01" 与版本 1 不等价，与拼接形态一致——由 AnalyzerAllocationTests 锁定）。
+    internal static bool HasVersionSuffix(string messageName, int schemaVersion)
+    {
+        var isNegative = schemaVersion < 0;
+        var magnitude = isNegative ? -(long)schemaVersion : schemaVersion;
+        var digits = 1;
+        for (var value = magnitude; value >= 10; value /= 10)
+            digits++;
+
+        var numberStart = messageName.Length - digits;
+        if (numberStart < 0)
+            return false;
+
+        // 数字段之前：负号腿先吃 '-'，随后（两腿同款）必须恰为 '.' 'v'
+        var prefixEnd = numberStart;
+        if (isNegative)
+        {
+            prefixEnd = numberStart - 1;
+            if (prefixEnd < 0 || messageName[prefixEnd] != '-')
+                return false;
+        }
+
+        if (prefixEnd < 2 || messageName[prefixEnd - 1] != 'v' || messageName[prefixEnd - 2] != '.')
+            return false;
+
+        var remaining = magnitude;
+        for (var i = messageName.Length - 1; i >= numberStart; i--)
+        {
+            if (messageName[i] != (char)('0' + remaining % 10))
+                return false;
+            remaining /= 10;
+        }
+
+        return true;
+    }
 }
