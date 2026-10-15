@@ -3,7 +3,9 @@
 // ─────────────────────────────────────────────────────────────
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
+using Microsoft.EntityFrameworkCore.Metadata;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using PalUlid = ByteAether.Ulid.Ulid;
@@ -81,6 +83,19 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
 
         var now = GetUtcNow();
         var leasedUntil = now.Add(leaseDuration);
+
+        // R7（EPSL 地毯审计 2026-10-11 P0-4，2026-10-15 性能实施轮）：SQLite 单语句租约下推——
+        // v23 C1 起的"翻页物化 + 内存过滤 + 逐行 UPDATE"退化根因是 ITM-261（EF SQLite LINQ
+        // 不能翻译 DateTimeOffset 有序比较），而手写 SQL 不受其限（decision-2026-09-17
+        // shape 2 已在 SqliteOutboxDbContext 落地同族单语句租约，本案是其 Saga 面延续）。
+        // 本路径固定 2 条语句（集合式 UPDATE + 等值守卫回读）与批次大小无关（旧形态：一页
+        // 查询 + N 条逐行 UPDATE，且头部被活跃租约占满时叠加 O(跳过页) 次翻页往返）。
+        // 非 SQLite provider（含 InMemory）保底走下方跟踪分页路径；PG/MySQL/SQL Server 的
+        // 等价下推待 EF 真库车道（上游 provider 未发布 rc 线版本——既有登记，见
+        // docs/review/decision-2026-10-15-saga-lease-sqlite-single-statement.md）。
+        if (UsesSingleStatementSqliteLease())
+            return await LeaseViaSingleStatementSqliteAsync(owner, now, leasedUntil, batchSize, ct).ConfigureAwait(false);
+
         // v25 P2-1：翻页循环防饥饿（镜像 SqliteOutboxDbContext.QueryEligibleAsync 三十九轮形态）——
         // v23 C1 把 LeasedUntil 过滤移到内存后，头部 batchSize 条全为他实例活跃租约时
         // 单页 Take 每 tick 租 0 条（SagaId 序=创建序，老 Saga 恒占头部）；循环翻页
@@ -138,8 +153,9 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         {
             // ITM-066：多实例同批租约互撞（Version 令牌）。SaveChanges 是原子操作，
             // 抛出即本轮无任何写入——视为"未获取租约"返回空，下轮重试，
-            // 避免整轮 tick 失败退化为撞租约轮盘。跨方言 FOR UPDATE SKIP LOCKED
-            // 单语句原子租约改造（SQLite 不支持）需后续 ADR。
+            // 避免整轮 tick 失败退化为撞租约轮盘。单语句原子租约改造沿革：SQLite 已由
+            // R7（2026-10-15）落地（见 UsesSingleStatementSqliteLease 分支）；本兜底
+            // 服务于保底路径（PG/MySQL/SQL Server 待真库车道，InMemory 无并发语义）。
             foreach (var state in states)
                 Entry(state).State = EntityState.Detached;
             return [];
@@ -169,6 +185,106 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         }
         return states;
     }
+
+    /// <summary>
+    /// 单语句租约启用判定（R7）：仅 SQLite provider——按 <c>Database.ProviderName</c> 精确匹配
+    ///（Microsoft.EntityFrameworkCore.Sqlite 注册的 provider 名），不引具体 provider 包
+    ///（本适配包 csproj 零 provider 依赖）。SQL 形态（UPDATE…WHERE IN(SELECT…ORDER BY LIMIT)）
+    /// 为 SQLite 语法；其它方言的等价形态（PG 同族 / MySQL JOIN 两步）待真库车道开线后加。
+    /// </summary>
+    private bool UsesSingleStatementSqliteLease()
+        => Database.IsRelational()
+            && string.Equals(Database.ProviderName, "Microsoft.EntityFrameworkCore.Sqlite", StringComparison.Ordinal);
+
+    /// <summary>
+    /// SQLite 单语句租约（R7）：集合式 UPDATE + 等值守卫回读。语义与跟踪分页路径逐项对齐——
+    /// 资格（Status ∈ {Active, AwaitingHumanDecision} 且 LeasedUntil 空/到期）、租约即换代
+    ///（Version 同语句 +1，对齐 v53 P2 四栈契约）、批次上限、SagaId 序；差异：原子性由单条
+    /// SQL 承担（无部分写入，无需 ITM-066/632 的 Detach 兜底——本路径不经 ChangeTracker）。
+    /// </summary>
+    private async ValueTask<IReadOnlyList<TState>> LeaseViaSingleStatementSqliteAsync(
+        string owner,
+        DateTimeOffset now,
+        DateTimeOffset leasedUntil,
+        int batchSize,
+        CancellationToken ct)
+    {
+        // 资格谓词在子查询内评估（与 Dapper/PalORM/Outbox 三栈同契约形态），ORDER BY + LIMIT
+        // 作用于过滤后集合——v25 P2-1 的"头部活跃租约占满窗口致饥饿"在谓词下推下结构性不成立
+        await Database.ExecuteSqlAsync(
+            BuildSingleStatementLeaseCommand(owner, now, leasedUntil, batchSize), ct).ConfigureAwait(false);
+
+        // 等值守卫回读（不重跑资格子查询）：按精确租约标识 (owner, until) 取回本批——同一 owner
+        // 同 tick 两次租约混批属姊妹栈既有已知限制（PalORM/EF-MySql 同款声明在案）。
+        // ⚠️ 保持跟踪（非 AsNoTracking）：租约返回实体的消费方（SagaTimeoutProcessor 补偿路径）
+        // 经 ISagaStateStore.SaveChangesAsync(state) 直存依赖 ChangeTracker（Detached→0 契约，
+        // 见本类显式实现）；Version 已在 SQL 内换代，物化值即 DB 真值（Unchanged），后续变更
+        // 保存的 WHERE Version=orig 与新行值匹配
+        return await SagaStates
+            .Where(s => s.LeasedBy == owner
+                && s.LeasedUntil == leasedUntil
+                && (s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision))
+            .OrderBy(s => s.SagaId)
+            .ToListAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>构造单语句租约命令（R7，SQLite 形态）——标识符取自 EF 模型映射（用户级
+    /// HasColumnName/ToTable 重映射同样生效；缺映射即异常而非静默回落属性名），值全部经
+    /// FormattableStringFactory 参数化（无字面量拼接注入面）。SQL 形态对齐
+    /// SqliteOutboxDbContext.LeasePendingMessagesAsync（decision-2026-09-17 shape 2 族）
+    /// 与 Dapper/PalORM 的 SagaLeaseActive。</summary>
+    private FormattableString BuildSingleStatementLeaseCommand(
+        string owner,
+        DateTimeOffset now,
+        DateTimeOffset leasedUntil,
+        int batchSize)
+    {
+        var entityType = Model.FindEntityType(typeof(TState))
+            ?? throw new InvalidOperationException($"Entity type '{typeof(TState).FullName}' is not mapped in this model.");
+        var table = QuoteSqliteIdentifier(entityType.GetTableName()
+            ?? throw new InvalidOperationException($"Entity type '{typeof(TState).FullName}' has no table mapping."));
+        if (entityType.GetSchema() is { } schema)
+            table = QuoteSqliteIdentifier(schema) + "." + table;
+
+        var sagaIdColumn = QuoteSqliteIdentifier(ColumnName(entityType, nameof(SagaState.SagaId)));
+        var statusColumn = QuoteSqliteIdentifier(ColumnName(entityType, nameof(SagaState.Status)));
+        var leasedByColumn = QuoteSqliteIdentifier(ColumnName(entityType, nameof(SagaState.LeasedBy)));
+        var leasedUntilColumn = QuoteSqliteIdentifier(ColumnName(entityType, nameof(SagaState.LeasedUntil)));
+        var versionColumn = QuoteSqliteIdentifier(ColumnName(entityType, nameof(SagaState.Version)));
+
+        // {{…}} 是标识符插值（表/列名为受信标识符，已加引号）；{N} 是 FormattableStringFactory
+        // 占位符（值全部参数化）。DateTimeOffset 参数直传原生形态——与 EF 写入格式自洽由
+        // SqliteOutboxDbContext 的 2026-09-19 spike（谓词不恒真 + 等值回读命中）与本案
+        // 回归网双重实证
+        var format = $$"""
+            UPDATE {{table}}
+            SET {{leasedByColumn}} = {0}, {{leasedUntilColumn}} = {1}, {{versionColumn}} = {{versionColumn}} + 1
+            WHERE {{sagaIdColumn}} IN (
+                SELECT {{sagaIdColumn}} FROM {{table}}
+                WHERE {{statusColumn}} IN ({2}, {3})
+                  AND ({{leasedUntilColumn}} IS NULL OR {{leasedUntilColumn}} <= {4})
+                ORDER BY {{sagaIdColumn}}
+                LIMIT {5})
+            """;
+        return FormattableStringFactory.Create(
+            format,
+            owner,
+            leasedUntil,
+            (int)SagaStatus.Active,
+            (int)SagaStatus.AwaitingHumanDecision,
+            now,
+            batchSize);
+    }
+
+    /// <summary>列名解析（EF 模型映射）——缺映射即异常而非静默回落属性名（重映射下会生成错误 SQL）。</summary>
+    private static string ColumnName(IEntityType entityType, string propertyName)
+        => entityType.FindProperty(propertyName)?.GetColumnName()
+            ?? throw new InvalidOperationException($"Property '{propertyName}' has no column mapping in the model.");
+
+    /// <summary>SQL 标识符加引号（双引号 + 双引号转义——SQLite/PG 标准形态；MySQL 反引号与
+    /// SQL Server 方括号待对应车道开线日加入）。</summary>
+    private static string QuoteSqliteIdentifier(string identifier)
+        => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 
     /// <inheritdoc/>
     public async ValueTask<TState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
