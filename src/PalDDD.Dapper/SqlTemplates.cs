@@ -186,6 +186,22 @@ public static class SqlTemplates
         + " AND (locked_until IS NULL OR locked_until<=@now)"
         + " ORDER BY created_at LIMIT @n)";
 
+    /// <summary>
+    /// A12（S1 轮，2026-10-15）：SQLite 单语句原子租约——<see cref="OutboxLeaseUpdateSqlite"/>
+    /// 加 RETURNING *（Microsoft.Data.Sqlite 支持 UPDATE..RETURNING，3.35+；仓内 EventLog
+    /// InsertSqlite 单行 RETURNING 与 PalORM SQLite 租约同形态均在用）。相对两步形态
+    /// （UPDATE + <see cref="OutboxSelectByLease"/> 回读）：省回读往返，且按行锁语义返回
+    /// 刚锁定行——<see cref="OutboxSelectByLease"/> 注释中 ITM-109 的同 tick 混批窗口
+    /// （回读按 (locked_by, locked_until) 匹配会带回上一批遗留行）在此形态下不存在，
+    /// 与 PG 路径同语义。列集与 SELECT * 一致（Dapper 映射 OutboxMessage 同形）。
+    /// </summary>
+    public const string OutboxLeaseUpdateSqliteReturning =
+        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN "
+        + "(SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
+        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
+        + " AND (locked_until IS NULL OR locked_until<=@now)"
+        + " ORDER BY created_at LIMIT @n) RETURNING *";
+
     /// <summary>按 ID 批量查询（用于 PG RETURNING * 替代路径）。
     /// ⚠️ 三十八轮 P3 标注：当前无内部引用（二十五轮常量化残留）；框架库公共 const 面向外部
     /// 消费方保留，删除前须按代码价值判定六项核查。另勘正原注释错字 "RETURING"。</summary>

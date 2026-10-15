@@ -150,7 +150,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
 
         // ⚡ 跨数据库 UPDATE + RETURN 语法
         //    PG：UPDATE ... RETURNING * — 单次 SQL 原子租约获取 + 回读
-        //    非 PG：两步——UPDATE 锁定后，按 locked_by/until 回读精确匹配本次租约
+        //    A12（S1 轮，2026-10-15）：SQLite 亦改单语句 UPDATE ... RETURNING *
+        //    （Microsoft.Data.Sqlite 支持，3.35+）——省回读往返，且消除 ITM-109 的
+        //    同 tick 混批窗口（回读按 (locked_by, locked_until) 匹配会带回上一批遗留行）
+        //    非 PG/MySQL：两步——UPDATE 锁定后，按 locked_by/until 回读精确匹配本次租约
         //    🔴 P0 修复 (2026-06-21)：原实现第二步重新执行子查询，由于 locked_until 已被更新，
         //    子查询条件 (locked_until<=now) 会把刚锁定行排除，导致结果集为空。
         //    改用 OutboxSelectByLease 按租约标识回读，消除并发窗口。
@@ -169,7 +172,19 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
                     Tx).ConfigureAwait(false);
             return msgs.AsList();
         }
-        else
+        if (_dbType == DapperDbType.Sqlite)
+        {
+            // A12（S1 轮）：SQLite 单语句租约——UPDATE ... RETURNING * 一次完成锁定与回读。
+            // 相对两步形态：省 OutboxSelectByLease 回读往返；按行锁语义返回刚锁定行，
+            // ITM-109 同 tick 混批窗口（两步回读按租约标识匹配会带回上一批遗留行）在此
+            // 形态下不存在，与 PG 路径同语义。零匹配时返回空集（QueryAsync 空结果）。
+            var msgs = await conn.QueryAsync<OutboxMessage>(
+                    SqlTemplates.OutboxLeaseUpdateSqliteReturning,
+                    new { owner, until = ToTimeParam(until), now = ToTimeParam(now), maxRetryCount, n = batchSize },
+                    Tx).ConfigureAwait(false);
+            return msgs.AsList();
+        }
+
         {
             // P1 修复（十一轮·实测发现）：MySQL 不支持 UPDATE ... WHERE id IN (SELECT ... LIMIT)
             // （真实库实测报 1235）——JOIN 形态替代（对齐 PalORM 版）；SQLite 支持子查询内 LIMIT 保持原状
