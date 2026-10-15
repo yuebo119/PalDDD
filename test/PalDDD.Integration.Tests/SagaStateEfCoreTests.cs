@@ -321,14 +321,15 @@ public sealed class SagaStateEfCoreTests
         // ITM-632 回归：租约保存失败（此处注入 OCE）时，已被变异（LeasedBy/LeasedUntil +
         // BumpVersion）的 Saga 必须全批 Detach——否则滞留 ChangeTracker，后续无关
         // SaveChangesAsync 会把"从未成功获取的幽灵租约"落库（WHERE Version=orig 必命中），
-        // 无主锁死这批 Saga 至 LeaseDuration。SQLite 关系型 provider + EnsureCreated。
-        await using var connection = new SqliteConnection("DataSource=:memory:");
-        await connection.OpenAsync(cancellationToken);
+        // 无主锁死这批 Saga 至 LeaseDuration。
+        // R7（2026-10-15）：Provider 由 SQLite 改 InMemory——SQLite 已改走单语句原生 SQL
+        // 租约（不经 SaveChanges，无幽灵态可产生，注入点不存在），本用例锁定的 ITM-632
+        // 保护现属"跟踪分页回退路径"（InMemory 与 PG/MySQL/SQL Server 待上游 provider
+        // 的一方）的回归网。
         var options = new DbContextOptionsBuilder<ThrowingSagaStateDbContext>()
-            .UseSqlite(connection).Options;
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture)).Options;
 
         await using var db = new ThrowingSagaStateDbContext(options);
-        await db.Database.EnsureCreatedAsync(cancellationToken);
         var created = CreateState("Active", DateTimeOffset.UtcNow);
         db.SagaStates.Add(created);
         await db.SaveChangesAsync(cancellationToken);
@@ -403,7 +404,8 @@ public sealed class SagaStateEfCoreTests
         db.SagaStates.Add(new TestSagaState { SagaId = ByteAether.Ulid.Ulid.New().ToString(), CurrentState = "A", Status = SagaStatus.Active });
         await db.SaveChangesAsync();
 
-        // 通过实际 Store 方法（修复后走 OrderBy(SagaId) + 物化过滤）
+        // 通过实际 Store 方法（观测查询走 OrderBy(SagaId)；R7 后 Lease 走 SQLite
+        // 单语句下推——本探针继续覆盖两方法的 SQLite provider 可执行性）
         var store = (PalDDD.Transactions.ISagaStateStore<TestSagaState>)db;
         var active = await store.GetActiveSagasAsync(5, CancellationToken.None);
         await Assert.That(active.Count).IsEqualTo(1);

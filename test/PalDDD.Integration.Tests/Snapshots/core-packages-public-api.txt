@@ -64,6 +64,7 @@ class PalDDD.Compression.CompressionProvider
 static class PalDDD.Compression.CompressionServiceCollectionExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalCompression(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
 static class PalDDD.Compression.DecompressionGuard
+  field const System.Int32 InitialBlockHintBytes = 65536
   field const System.Int32 MaxCompressedInputBytes = 8388608
   field const System.Int32 MaxOutputBytes = 67108864
 interface PalDDD.Compression.ICompressionProvider

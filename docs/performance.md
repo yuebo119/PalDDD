@@ -598,6 +598,10 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **R9 池驻留 + 微项**：① TLS 缓冲阈值弃槽四处（JsonMessageSerializer 两路径/JsonLinesEventWriter/RabbitMq Broker body——历史峰值 >256KB 下次入口重建，驻留从「历史峰值」收敛为有界）；② 解压首轮 GetSpan 提示上限 64KB（`DecompressionGuard.InitialBlockHintBytes`，Brotli+LZ4/ZStd/OpenZL 四处——原 max(4096, len*2) 在 8MB 输入下首轮 16MB 过量提交固化进线程槽峰值；改后峰值容量=「≥ 实际输出的最近倍增」）。撤销两项留档：**D-F9 ISpanFormattable 生成 ID 实测证伪撤销**（net11-rc1 三形态对照：插值 111 / ToString 80 / 手动 TryFormat 80 B/op——DefaultInterpolatedStringHandler 对结构体经 ISpanFormattable 的装箱未消除，插值反向劣化 +31B；勘正注释留生成器 ToStringBody 处防重开）；RabbitMQ per-delivery CTS 池化（linked CTS 无法 TryReset 复用，语义保持需自定义 CTS 子类，~72B/消息不值）；五处 IsUniqueConstraintViolation 收口（跨 4 程序集 InternalsVisibleTo 链 + 冲突冷路径，收益不成立）。Analyzer 零分配化（D-F5）移交（IDE/CI 编译期面，独立轮次）。
 
+## 全量重读性能实施轮续二（2026-10-15：R7 Saga 租约 SQLite 单语句下推）
+
+**R7 EF Saga 租约单语句下推**（P0-4 移交项清算；决策论证 docs/review/decision-2026-10-15-saga-lease-sqlite-single-statement.md）：`SagaStateDbContext.LeaseActiveSagasAsync` 在 SQLite provider 下改走集合式单语句 UPDATE（资格谓词子查询 + ORDER BY + LIMIT + `version=version+1` 同句换代）+(owner, until) 等值守卫回读——**整批固定 2 条语句与批次大小无关**（原跟踪分页形态：一页全实体物化查询 + N 条逐行 UPDATE，头部活跃租约堆积时叠加 O(跳过页) 翻页往返；含 saga_data 大列的未选中行同样被物化）。**语句计数判别器红证明在案**（旧码批 5 → 5 条 UPDATE 判红、新码 1 条绿）；语义锁定三件（活跃租约跳过/过期接管换代/AWD 纳入）+ 饥饿消除（batchSize=1 头部占满仍取窗口外）+ 跟踪契约（补偿路径 `ISagaStateStore.SaveChangesAsync(state)` 直存端到端）；ITM-632 幽灵租约用例迁 InMemory 锁定回退路径保护。**范围收敛声明**：EF 栈 rc.2 线无 PG/MySQL provider 包（本地/CI 均无真库车道），方言下推留待车道（PG 形态=标识符引用差异、MySQL 需 JOIN 两步，SQL 形态已在案）；其余 provider 保底路径逐字不变。验证：Release 全量构建 0W0E + 16 项目面板 **1581 = 1509 过 + 72 跳 0 失败** + format-verify/encoding-gate 绿。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
