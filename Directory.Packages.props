@@ -14,7 +14,8 @@
        ByteAether.Ulid → 1.4.2（rc 转稳定）、TUnit/TUnit.FsCheck → 1.75.0、微软 11 线 rc.1 → rc.2.26504.105
        （包线钉扎全量随 rc.2；SDK 维持 rc.1——API 已 go-live 冻结，rc.2 包对 rc.1 运行时逐位兼容由面板实证，
        SDK/GA 统一升位随 2026-11 GA 轮评估）；MediatR 14.2.0/Verify.TUnit 33.3.3 维持禁令，CAP 10.1.0-preview/
-       BDN 0.16.0-preview.2 仅预发布不升 -->
+       BDN 0.16.0-preview.2 仅预发布不升；
+       2026-10-15 核新（性能实施轮 R1~R10 后窗口）：NativeCompressions → 1.2.0（唯一可升项，往返测试实证） -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
@@ -122,7 +123,7 @@
     <!-- 传递依赖版本固定 — 覆盖过时的传递依赖 -->
     <PackageVersion Include="System.Reflection.Metadata" Version="11.0.0-rc.2.26504.105" />
     <!-- 原生压缩绑定 — LZ4 / ZStandard (Cysharp)。NativeCompressions.OpenZL 已移除（八轮评审：零使用的死依赖）；
-         1.1.0（2026-10-11 升位）：1.0 线内补丁位升级，破坏面由编译+往返测试实证（NativeCompressionTests） -->
-    <PackageVersion Include="NativeCompressions" Version="1.1.0" />
+         1.2.0（2026-10-15 升位）：1.x 线内次版本，破坏面由编译+往返测试实证（NativeCompressionTests） -->
+    <PackageVersion Include="NativeCompressions" Version="1.2.0" />
   </ItemGroup>
 </Project>
