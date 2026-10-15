@@ -12,12 +12,17 @@
 //
 // 两类：
 //   OutboxDeliveryDrainBenchmarks —— RTT 矩阵（0/1/20ms）× T1.2 自适应排空形态；
-//     用途：T2.1 批量标记 / T3.1 确认流水线的同轮 A/B 基线（标记段现状 = 逐条 UPDATE）。
+//     用途：T2.1 批量标记（BatchMarkThreshold A/B）/ T3.1 确认流水线的同轮 A/B 基线。
 //   OutboxDeliveryCadenceBenchmarks —— RTT=0 下的批间节奏对照：
 //     Adaptive（T1.2 形态，批间 1ms）vs Fixed500（旧形态，批间 500ms 固定间隔）——
 //     T1.2 收益的端到端量化（差异主要显形于批处理耗时 << 间隔的形态，故固定 RTT=0）。
 //
 // ⚠️ 无 job attribute：--delivery 入口模式级 ManualConfig（同 Program.cs 头注约定）。
+//
+// ⚠️ RTT=20 × InFlight=1 格边界（2026-10-15 实证）：本机 Task.Delay(20) ≈ 31ms
+//（Windows 15.6ms 定时器粒度），单 op ~33s × 8 次逼近 BDN InProcess 单基准 5 分钟
+// 硬上限——慢机上整轮可能在该格失败（本轮实测即如此，前 8 格数据有效）。A/B 取数
+// 可先看 RTT=0/1 子集；该格科学价值低（发布延迟主导，标记段占比 ~0.04%）。
 
 using BenchmarkDotNet.Attributes;
 using Microsoft.Data.Sqlite;
@@ -45,6 +50,14 @@ public class OutboxDeliveryDrainBenchmarks : PersistenceBenchBase
     [Params(1, 16)]
     public int InFlight { get; set; }
 
+    /// <summary>
+    /// R4/P0-2（ADR-027）终态批量标记阈值 A/B：1 = 逐条路径（默认基线，逐字不变），
+    /// 16 = 满阈值分组单语句标记（阈值语义见 <see cref="OutboxOptions.BatchMarkThreshold"/>：
+    /// 标记时点延迟到满阈值/批末，at-least-once 契约内重复窗口随阈值增大；失败路径恒逐条）。
+    /// </summary>
+    [Params(1, 16)]
+    public int BatchMark { get; set; }
+
     private SqliteConnection _conn = null!;
     private DapperOutboxStore _store = null!;
     private FakeDelayBroker _broker = null!;
@@ -70,6 +83,7 @@ public class OutboxDeliveryDrainBenchmarks : PersistenceBenchBase
             {
                 BatchSize = 100,
                 MaxInFlightPublishes = InFlight,
+                BatchMarkThreshold = BatchMark,
             }),
             NullPalLogger<OutboxBatchProcessor>.Instance);
     }

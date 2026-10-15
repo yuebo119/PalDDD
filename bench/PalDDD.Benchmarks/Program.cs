@@ -87,6 +87,23 @@ if (args.Contains("--persist-medium", StringComparer.OrdinalIgnoreCase))
     return 0;
 }
 
+// R4/P0-2（ADR-027，2026-10-15）：--persist-mark——标记段成本与分组效率（本地 SQLite
+// 口径，解释 --delivery 车道 BatchMarkThreshold A/B 的本地零差：标记往返 μs 级，
+// 收益形态在远程库网络 RTT 上——本机无 Docker，真库车道不可跑）。medium 口径
+// （μs 级 op 需统计有效性），独立 artifacts 目录归档。
+if (args.Contains("--persist-mark", StringComparer.OrdinalIgnoreCase))
+{
+    var markOnly = ManualConfig.Create(DefaultConfig.Instance)
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddDiagnoser(MemoryDiagnoser.Default)
+        .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-mark"))
+        .AddFilter(new NameFilter(name =>
+            name.Contains("Mark_PerRow100", StringComparison.Ordinal)
+            || name.Contains("Mark_Batch100", StringComparison.Ordinal)));
+    BenchmarkRunner.Run<OutboxMarkPathBenchmarks>(markOnly);
+    return 0;
+}
+
 // P1（perf-run-2026-09-20）：Saga 车道基准锚——ProcessEventAsync 编排开销
 // （Normal 基线 / FanOut items=4），供骨架优化与 v3.0 子项粒度改造做回归比对。
 if (args.Contains("--saga", StringComparer.OrdinalIgnoreCase))
