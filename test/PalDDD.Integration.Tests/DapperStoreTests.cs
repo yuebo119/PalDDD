@@ -1216,6 +1216,72 @@ public sealed class DapperStoreTests
         await Assert.That(result.FirstStreamVersion).IsEqualTo(0);
     }
 
+    /// <summary>
+    /// A12（S1 轮，2026-10-15）：SQLite k&gt;1 多行 VALUES + RETURNING 批量化——单语句完成
+    /// k 事件追加（原 k 次 INSERT..RETURNING 各一往返）。锁定行为：版本连续、位置首末
+    /// 正确（min/max 口径行序无关）、读回全量，与逐条路径语义等价。
+    /// </summary>
+    [Test]
+    public async Task EventLog_AppendAsync_BatchMultipleEvents(CancellationToken cancellationToken)
+    {
+        var log = new DapperEventLog(_conn, null, _dbType);
+        var events = new List<EventData>();
+        for (var i = 0; i < 3; i++)
+        {
+            events.Add(new EventData(
+                PalUlid.New(),
+                $"test.event.v{i}",
+                schemaVersion: 1,
+                contentType: "application/json",
+                payload: "{}"u8.ToArray(),
+                metadata: "{}"u8.ToArray(),
+                audit: EventAuditMetadata.Empty));
+        }
+
+        var result = await log.AppendAsync(
+            "batch-stream", ExpectedStreamVersion.NoStream, events,
+            cancellationToken);
+
+        await Assert.That(EventsWritten(result)).IsEqualTo(3);
+        await Assert.That(result.FirstStreamVersion).IsEqualTo(0);
+        await Assert.That(result.LastStreamVersion).IsEqualTo(2);
+        await Assert.That(result.LastGlobalPosition).IsGreaterThan(result.FirstGlobalPosition);
+
+        var read = new List<RecordedEvent>();
+        await foreach (var e in log.ReadStreamAsync("batch-stream", cancellationToken: cancellationToken))
+            read.Add(e);
+        await Assert.That(read.Count).IsEqualTo(3);
+        await Assert.That(read[0].EventName).IsEqualTo("test.event.v0");
+        await Assert.That(read[2].EventName).IsEqualTo("test.event.v2");
+    }
+
+    /// <summary>
+    /// A12（S1 轮）：SQLite 单语句租约（UPDATE..RETURNING）消除同 tick 混批窗口——固定时钟
+    /// 下同一 owner 连续两次租约（同 until），第二次只返回本句新锁定行；两步回读形态
+    /// （按 (locked_by, locked_until) 匹配）会带回上一批遗留行致重复投递（ITM-109 已知
+    /// 限制，PG RETURNING 路径无此窗口，本测试把 SQLite 拉到同语义）。
+    /// </summary>
+    [Test]
+    public async Task Outbox_LeasePendingMessages_SameTickSecondLease_NoStaleRows(CancellationToken cancellationToken)
+    {
+        var clock = new FixedTimeProvider(DateTimeOffset.Parse("2026-06-27T10:00:00Z", CultureInfo.InvariantCulture));
+        var store = new DapperOutboxStore(_conn, _dbType, timeProvider: clock);
+        await store.AddMessageAsync(CreateOutboxMessage("a.v1"));
+        await store.AddMessageAsync(CreateOutboxMessage("b.v1"));
+
+        var first = await store.LeasePendingMessagesAsync(
+            1, "owner-1", TimeSpan.FromMinutes(5), new OutboxOptions().MaxRetryCount, cancellationToken);
+        await Assert.That(first).Count().IsEqualTo(1);
+
+        // 同一 tick（FixedTimeProvider → 同 until）同 owner 第二次租约
+        var second = await store.LeasePendingMessagesAsync(
+            1, "owner-1", TimeSpan.FromMinutes(5), new OutboxOptions().MaxRetryCount, cancellationToken);
+
+        await Assert.That(second).Count().IsEqualTo(1);
+        // 关键判别：第二次返回另一条（本句新锁定），不是第一条重复（两步回读形态的窗口）
+        await Assert.That(second[0].Type).IsNotEqualTo(first[0].Type);
+    }
+
     [Test]
     public async Task EventLog_AppendAsync_ConcurrencyCheck(CancellationToken cancellationToken)
     {

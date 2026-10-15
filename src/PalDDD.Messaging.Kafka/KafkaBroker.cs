@@ -37,6 +37,19 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
     // ITM-217 修复（三十二轮）：DisposeAsync 幂等门（对照 KafkaSubscription._disposed）
     private int _disposed;
 
+    // A13（S1 轮，2026-10-15）：发布路径 TLS body 缓冲——序列化经 IBufferWriter 直写
+    // 重载写入本缓冲，只留 Confluent Message.Value 的 byte[] 契约必需的一次 ToArray。
+    // 原形态走内存重载 Serialize(object, descriptor)，其在返回前做 WrittenSpan.ToArray
+    // （第一次分配+整载荷拷贝），发布处 value.ToArray() 是第二次——直写消除第一次，
+    // 每消息省一次全载荷分配 + memcpy。与 RabbitMqBroker 的池化租借形态不同：本处
+    // ToArray 产出的独立数组在 await 前已定型（无跨 await 共享缓冲引用），TLS 复用安全。
+    // 驻留上限对齐 JsonMessageSerializer 的 MaxResidentBufferBytes 取舍（R9 同族）。
+    [ThreadStatic]
+    private static System.Buffers.ArrayBufferWriter<byte>? _tlsBodyWriter;
+
+    /// <summary>TLS body 缓冲驻留上限——超阈值弃槽重建（256B 起步），驻留收敛为有界。</summary>
+    private const int MaxResidentBodyBytes = 256 * 1024;
+
     public KafkaBroker(
         ProducerConfig producerConfig,
         ConsumerConfig consumerConfig,
@@ -104,7 +117,20 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         ArgumentOutOfRangeException.ThrowIfEqual(messageId, default);
 
         var key = messageId.ToString();
-        var value = Serializer.Serialize(message, descriptor);
+        // A13（S1 轮）：IBufferWriter 直写 + 单次 ToArray（Confluent byte[] 契约必需）——
+        // 消除内存重载返回前的第一次 WrittenSpan.ToArray 分配+整载荷拷贝
+        var bodyWriter = _tlsBodyWriter;
+        if (bodyWriter is null || bodyWriter.Capacity > MaxResidentBodyBytes)
+        {
+            bodyWriter = new System.Buffers.ArrayBufferWriter<byte>(256);
+            _tlsBodyWriter = bodyWriter;
+        }
+        else
+        {
+            bodyWriter.Clear();
+        }
+        Serializer.Serialize(message, descriptor, bodyWriter);
+        var value = bodyWriter.WrittenMemory.ToArray();
 
         await _producer.ProduceAsync(descriptor.Name, new Message<string, byte[]>
         {
@@ -113,6 +139,10 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             // 勘正（2026-09-20）：本处 ToArray 是序列化器 ToArray（JsonMessageSerializer
             // WrittenSpan.ToArray）之后的**第二次**托管拷贝，非"无双重拷贝"（ReadOnlyMemory<T>
             // .ToArray() 恒拷贝，已实测三种内存形态 ReferenceEquals 均为 false）。
+            // A13（S1 轮，2026-10-15）勘正：序列器侧第一次拷贝已消除（上方改直写 TLS
+            // 缓冲），本处 ToArray 现为唯一一次托管拷贝——Confluent ISerializer<T>
+            // 契约为 byte[]，改用 IProducer<string, ReadOnlyMemory<byte>> 只会把该拷贝
+            // 移入序列化器，净收益为零；librdkafka 内部仍需一次拷贝。
             // 不可消除：Confluent.Kafka 2.16.0 的 ISerializer<T>.Serialize 返回 byte[]
             // （反射实证，2026-10-08 升位复核），改用 IProducer<string, ReadOnlyMemory<byte>> + 自定义序列化器
             // 只会把该拷贝移入序列化器，净收益为零；librdkafka 内部仍需一次拷贝。

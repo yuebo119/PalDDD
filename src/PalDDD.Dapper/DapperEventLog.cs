@@ -176,15 +176,21 @@ public sealed class DapperEventLog : IEventLog
         };
 
         // B-4（EPSL 地毯审计 2026-10-11）：PG k>1 多行 VALUES + RETURNING 单往返——原 k 次
-        // INSERT..RETURNING 各一往返（批化锚对照 Outbox AddBatch5）。k=1 与非 PG 方言维持
-        // 下方逐条路径逐字不变（MySQL/SQLite 自增无多行 RETURNING 语义——方言门控三方言
-        // 实测定案先例见上方 Any 单语句快路径）。冲突分类等价：多行 INSERT 单语句原子
-        //（任一行违反唯一索引整批不入库），冲突后重查 MaxVersion——高于预检查快照即外部
-        // 并发写入者（转统一并发异常），等于快照即批内/存量 EventId 重复（原样上抛，
-        // 与逐条路径的 P3 九轮分类同构）。
-        if (_dbType == DapperDbType.PostgreSql && events.Count > 1 && events.Count <= PostgreSqlBatchRowLimit)
+        // INSERT..RETURNING 各一往返（批化锚对照 Outbox AddBatch5）。冲突分类等价：多行
+        // INSERT 单语句原子（任一行违反唯一索引整批不入库），冲突后重查 MaxVersion——高于
+        // 预检查快照即外部并发写入者（转统一并发异常），等于快照即批内/存量 EventId 重复
+        //（原样上抛，与逐条路径的 P3 九轮分类同构）。
+        // A12（S1 轮，2026-10-15）：门控扩展 SQLite——B-4 原注释「MySQL/SQLite 自增无多行
+        // RETURNING 语义」对 SQLite 不成立：多行 VALUES + RETURNING 是 SQL 标准形态
+        //（3.35+），Microsoft.Data.Sqlite 支持（仓内 InsertSqlite 单行 RETURNING 与 PalORM
+        // SQLite 租约 UPDATE..RETURNING 均在用）；其引用的「三方言实测定案」是
+        // INSERT..SELECT 子查询形态（Any 单语句快路径，SQLite +44% 劣化不启用），与多行
+        // VALUES 形态不同，不构成对本形态的否决。MySQL 维持逐条（无 RETURNING + 自增
+        // 连续性在 innodb_autoinc_lock_mode=2 下不保证，位置回查需 2 次额外往返，仅 k≥4
+        // 净胜——登记延后）。
+        if (events.Count > 1 && events.Count <= BatchRowLimit(_dbType))
         {
-            return await AppendPostgreSqlBatchAsync(streamName, expectedVersion, currentVersion, version, now, events).ConfigureAwait(false);
+            return await AppendEventBatchAsync(streamName, expectedVersion, currentVersion, version, now, events).ConfigureAwait(false);
         }
 
         long firstGlobalPos = 0;
@@ -272,13 +278,28 @@ public sealed class DapperEventLog : IEventLog
     /// <summary>PG 多行批插入行数上限——13 个每行参数 × 行数 + 共享参数须低于 PG 65535 占位符上限（4000 行 = 52002 参数）。</summary>
     private const int PostgreSqlBatchRowLimit = 4000;
 
+    /// <summary>A12（S1 轮，2026-10-15）：SQLite 批量化行上限——多行 VALUES + RETURNING
+    /// 为 SQL 标准形态（3.35+，Microsoft.Data.Sqlite 支持；仓内 InsertSqlite 单行
+    /// RETURNING 与 PalORM SQLite 租约 UPDATE..RETURNING 均在用）。行数按 SQLite 变量数
+    /// 999 防御：每行 13 参 + 2 共享参（StreamName/RecordedAt），64 行 = 834 &lt; 999。</summary>
+    private const int SqliteBatchRowLimit = 64;
+
+    /// <summary>A12（S1 轮）：批量化行上限按方言取——PG 4000（驱动/服务端批能力），
+    /// SQLite 64（变量数 999 防御），MySQL 等 0（不批量化，走逐条路径）。</summary>
+    private static int BatchRowLimit(DapperDbType dbType) => dbType switch
+    {
+        DapperDbType.PostgreSql => PostgreSqlBatchRowLimit,
+        DapperDbType.Sqlite => SqliteBatchRowLimit,
+        _ => 0,
+    };
+
     /// <summary>
     /// B-4（EPSL 地毯审计 2026-10-11）：PG k&gt;1 多行 VALUES + RETURNING 批量追加——
     /// k 次 INSERT..RETURNING 往返收为单往返；RETURNING 行序与 VALUES 序的关系 PG 未作
     /// 保证，first/last 全局位置取返回集合的 Min/Max（序无关，与逐条路径的「first=首行、
     /// last=末行」在单语句内等价——同语句内序列值单调）。
     /// </summary>
-    private async Task<AppendEventsResult> AppendPostgreSqlBatchAsync(
+    private async Task<AppendEventsResult> AppendEventBatchAsync(
         string streamName,
         ExpectedStreamVersion expectedVersion,
         long? currentVersion,

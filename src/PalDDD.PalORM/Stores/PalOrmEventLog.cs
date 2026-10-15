@@ -91,21 +91,141 @@ public class PalOrmEventLog<TProvider> : IEventLog
         if (!expectedVersion.Matches(currentVersion))
             throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion);
 
-        // 步骤 2：循环 INSERT —— 每个事件一条 SQL（与 Dapper 实现一致；非批量）
-        // 注：GlobalPosition 为 DB 自增，InsertAsync 自动回填；firstGlobalPos 记录首条返回的全局位置
-        // PALORM005 循环告警 —— EventLog 语义要求每事件独立 GlobalPosition + StreamVersion 递增，
-        // 无法用 BulkInsert（批量 INSERT 无法保证 GlobalPosition 单调有序 + RETURNING 每行）。
-        // ITM-075 修复：TOCTOU 窗口（步骤 1 预检后并发写入撞 (stream_name, stream_version)
-        // 唯一索引）此前抛裸 provider 异常——Dapper（DapperEventLog）与 EFCore（EventLogDbContext）
-        // 均翻译为 EventStreamConcurrencyException，调用方按该异常重试的契约在本实现失效。
-        // 现补同型翻译：唯一约束冲突 → 重查实际版本再分类（对齐 Dapper 八轮修复逻辑——
-        // 批内 EventId 重复原样上抛，并发写入转统一并发异常）；非唯一约束异常原样上抛。
-        // 事务契约声明（对齐 DapperEventLog "P2 定案"）：批量追加的原子性由调用方事务保证；
-        // 中途失败会留下前半批（部分写入），与 Dapper 版一致。
-#pragma warning disable PALORM005 // 事件溯源语义要求循环 INSERT，非 N+1 反模式
+        // 步骤 2：事件 INSERT
+        // A11（S1 轮，2026-10-15）：多行 VALUES 批量化——原逐事件 Session.InsertAsync 使
+        // k 事件 append 付 k 次往返（加 MAX 预检共 k+1）。PG/SQLite
+        // （TProvider.SupportsReturningClause）改多行 INSERT ... RETURNING 单语句（共 2
+        // 往返）；PALORM005 告警注释声称「批量 INSERT 无法保证 GlobalPosition 单调有序 +
+        // RETURNING 每行」——返回值只需首末位置，取 min/max 即可，行序映射不成立的要求。
+        // MySQL 等无 RETURNING 方言维持逐行 InsertAsync（多行批化的位置回查需 2 次额外
+        // 往返，仅 k≥4 净胜——登记延后；自增值连续性在 innodb_autoinc_lock_mode=2 下不
+        // 保证，first+k-1 推导不成立）。
         var now = _clock.GetUtcNow();
+        long firstGlobalPos;
+        long lastGlobalPos;
+        if (TProvider.SupportsReturningClause)
+        {
+            (firstGlobalPos, lastGlobalPos) = await InsertBatchWithReturningAsync(
+                streamName, expectedVersion, currentVersion, events, now, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            (firstGlobalPos, lastGlobalPos) = await InsertRowByRowAsync(
+                streamName, expectedVersion, currentVersion, events, now, cancellationToken).ConfigureAwait(false);
+        }
+
+        var firstStreamVersion = currentVersion + 1;
+        var lastStreamVersion = currentVersion + events.Count;
+        // lastGlobalPos 已在循环内每次更新（不再用 firstGlobalPos + count - 1 推导）
+        // v36 P3：写侧 metrics（对齐 EventLogDbContext/InMemoryEventLog 的 EventLogAppended）
+        PalMetrics.EventLogAppended.Add(events.Count);
+        return new AppendEventsResult(streamName, firstStreamVersion, lastStreamVersion, firstGlobalPos, lastGlobalPos);
+    }
+
+    /// <summary>
+    /// A11（S1 轮，2026-10-15）：多行 VALUES INSERT ... RETURNING（PG/SQLite）——k 事件由
+    /// k 次往返降为 1 次（加 MAX 预检共 2）。RETURNING 全部列映射 EventLogRow，取
+    /// GlobalPosition 的 min/max 作首末（返回值只需首末，行序映射非必需——PALORM005 的
+    /// 「无法保证单调有序」顾虑对 min/max 口径不成立）。冲突分类（ITM-075）与逐行形态
+    /// 同款：唯一索引冲突 → 重查 MAX 分类（并发写入转统一并发异常 / 否则原样上抛），
+    /// 批粒度用本批首事件版本作门槛（INSERT 原子失败，无部分写入）。
+    /// </summary>
+    private async ValueTask<(long First, long Last)> InsertBatchWithReturningAsync(
+        string streamName,
+        ExpectedStreamVersion expectedVersion,
+        long currentVersion,
+        IReadOnlyList<EventData> events,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        // 列序与 EventLogRow 映射一致（global_position 自增除外）；Ulid 列按
+        // UlidStringConverter 的 26 字符字符串存储形态直传字符串
+        var sql = new System.Text.StringBuilder(
+            "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES ");
+        var args = new List<object?>(events.Count * 15);
+        for (var i = 0; i < events.Count; i++)
+        {
+            var e = events[i];
+            if (i > 0) sql.Append(", ");
+            sql.Append('(');
+            object?[] values =
+            [
+                e.EventId.ToString(), e.EventName, streamName, currentVersion + 1 + i,
+                e.SchemaVersion, e.ContentType, e.PayloadArray, e.MetadataArray,
+                now, e.Audit.ActorId, e.Audit.Reason,
+                e.Audit.CorrelationId?.ToString(), e.Audit.CausationId?.ToString(),
+                e.Audit.TraceParent, e.Audit.TraceState
+            ];
+            for (var c = 0; c < values.Length; c++)
+            {
+                if (c > 0) sql.Append(", ");
+                sql.Append('{').Append(args.Count).Append('}');
+                args.Add(values[c]);
+            }
+            sql.Append(')');
+        }
+        sql.Append(" RETURNING global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state");
+
+        List<EventLogRow> inserted;
+        try
+        {
+            inserted = await Session.QueryAsync<EventLogRow>(
+                FormattableStringFactory.Create(sql.ToString(), args.ToArray()), ct: ct).ConfigureAwait(false);
+        }
+        catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
+        {
+            // ITM-075（批粒度）：预检后并发写入兜底——重查实际版本，命中并发写入
+            // （>= 本批首事件版本 currentVersion+1）转统一并发异常；否则（如批内
+            // EventId 重复）原样上抛。v34 P3 声明的单一并发判定局限在批粒度同款成立
+            long? actualVersion = null;
+            var requerySucceeded = false;
+            try
+            {
+                actualVersion = await Session.ScalarAsync<long?>(
+                    $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
+                    ct: ct).ConfigureAwait(false);
+                requerySucceeded = true;
+            }
+            catch (DbException)
+            {
+                // 重查失败（如 PG aborted 事务）——放弃分类，走原始异常上抛
+            }
+            if (requerySucceeded && (actualVersion ?? -1) >= currentVersion + 1)
+                throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);
+            throw;
+        }
+
+        if (inserted.Count == 0)
+            throw new InvalidOperationException(
+                $"Batch INSERT ... RETURNING returned no rows for stream '{streamName}' ({events.Count} event(s) submitted).");
+
+        var first = long.MaxValue;
+        var last = long.MinValue;
+        foreach (var row in inserted)
+        {
+            if (row.GlobalPosition < first) first = row.GlobalPosition;
+            if (row.GlobalPosition > last) last = row.GlobalPosition;
+        }
+        return (first, last);
+    }
+
+    /// <summary>
+    /// 逐行 INSERT 回退路径（MySQL 等无 RETURNING 方言）——原循环形态原样保留：
+    /// InsertAsync 对自增主键自动回填 GlobalPosition（MySQL 经 LAST_INSERT_ID），
+    /// firstGlobalPos 记录首条返回、lastGlobalPos 每次更新（不用算术推导——并发下
+    /// GlobalPosition 非连续）。冲突分类（ITM-075）与原形态逐字一致。
+    /// </summary>
+    private async ValueTask<(long First, long Last)> InsertRowByRowAsync(
+        string streamName,
+        ExpectedStreamVersion expectedVersion,
+        long currentVersion,
+        IReadOnlyList<EventData> events,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+#pragma warning disable PALORM005 // 无 RETURNING 方言的逐行回退（批量位置回查需 2 次额外往返，仅 k≥4 净胜）
         long firstGlobalPos = 0;
-        long lastGlobalPos = 0;  // P1 修复：循环内每次更新，不用推导
+        long lastGlobalPos = 0;
         for (var i = 0; i < events.Count; i++)
         {
             var e = events[i];
@@ -127,34 +247,26 @@ public class PalOrmEventLog<TProvider> : IEventLog
                 RecordedAt = now,
                 ActorId = e.Audit.ActorId,
                 Reason = e.Audit.Reason,
-                // P2 定案：审计 4 字段补齐持久化（此前仅 EFCore 版持久化，PalORM 版导出时追踪链断）
                 CorrelationId = e.Audit.CorrelationId?.ToString(),
                 CausationId = e.Audit.CausationId?.ToString(),
                 TraceParent = e.Audit.TraceParent,
                 TraceState = e.Audit.TraceState,
             };
-            // InsertAsync 对自增主键自动回填 GlobalPosition（PG/SQLite 经 RETURNING，MySQL 经 LAST_INSERT_ID）
             EventLogRow inserted;
             try
             {
-                inserted = await Session.InsertAsync(row, cancellationToken).ConfigureAwait(false);
+                inserted = await Session.InsertAsync(row, ct).ConfigureAwait(false);
             }
             catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
             {
-                // ITM-075：预检后并发写入兜底——唯一索引冲突转为统一并发异常（对齐 Dapper/EFCore）。
-                // 分类逻辑镜像 Dapper 八轮修复：批内前序 INSERT 已推进 MaxVersion（同事务可见），
-                // 失败事件的赋值版本（streamVersion）未落库——重查实际版本，命中并发写入则转
-                // EventStreamConcurrencyException，否则（如批内 EventId 重复）原样上抛。
-                // v34 P3 声明：本判定为单一并发判定，不区分 EventId 撞库与流推进两因
-                // （EFCore 姊妹经 eventIdExists 探测区分）——两因同窗叠加时误译为并发异常，
-                // 重试经版本预检自然收敛；权衡声明见类头"ITM-075 分类局限"。
+                // ITM-075：与批量化路径同款的冲突分类（逐行粒度用本事件版本作门槛）
                 long? actualVersion = null;
                 var requerySucceeded = false;
                 try
                 {
                     actualVersion = await Session.ScalarAsync<long?>(
                         $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
-                        ct: cancellationToken).ConfigureAwait(false);
+                        ct: ct).ConfigureAwait(false);
                     requerySucceeded = true;
                 }
                 catch (DbException)
@@ -166,16 +278,10 @@ public class PalOrmEventLog<TProvider> : IEventLog
                 throw;
             }
             if (i == 0) firstGlobalPos = inserted.GlobalPosition;
-            lastGlobalPos = inserted.GlobalPosition;  // P1 修复：不用算术推导（并发下 GlobalPosition 非连续）
+            lastGlobalPos = inserted.GlobalPosition;
         }
 #pragma warning restore PALORM005
-
-        var firstStreamVersion = currentVersion + 1;
-        var lastStreamVersion = currentVersion + events.Count;
-        // lastGlobalPos 已在循环内每次更新（不再用 firstGlobalPos + count - 1 推导）
-        // v36 P3：写侧 metrics（对齐 EventLogDbContext/InMemoryEventLog 的 EventLogAppended）
-        PalMetrics.EventLogAppended.Add(events.Count);
-        return new AppendEventsResult(streamName, firstStreamVersion, lastStreamVersion, firstGlobalPos, lastGlobalPos);
+        return (firstGlobalPos, lastGlobalPos);
     }
 
     /// <inheritdoc />
