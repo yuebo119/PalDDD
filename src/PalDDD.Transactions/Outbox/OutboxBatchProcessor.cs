@@ -117,8 +117,12 @@ public sealed class OutboxBatchProcessor
                 throw new InvalidOperationException(
                     "Outbox MaxDegreeOfParallelism > 1 requires IServiceScopeFactory — " +
                     "register OutboxBatchProcessor via DI (AddPalOutbox) or pass scopeFactory to the constructor.");
-            var partitions = System.Linq.Enumerable.Chunk(
-                messages, (int)Math.Ceiling(messages.Count / (double)dop));
+            // A1（2026-10-15 性能实施轮）：chunkSize 下限 1——空租约（队列排空后每轮常态）
+            // 下 Math.Ceiling(0/dop)=0 使 Chunk 首行抛 ArgumentOutOfRangeException，被
+            // PeriodicBackgroundProcessor 兜底 catch 吞掉只记 OnTickFailed，排空后持续
+            // 噪音且每轮失败信号污染。空批经 Chunk 产生零分区，ForEachAsync 空转。
+            var chunkSize = Math.Max(1, (int)Math.Ceiling(messages.Count / (double)dop));
+            var partitions = System.Linq.Enumerable.Chunk(messages, chunkSize);
             var aggregate = new PartitionCounters(0, 0, 0, 0);
             await Parallel.ForEachAsync(
                 partitions,
