@@ -131,7 +131,6 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
         _concurrencyGate = new SemaphoreSlim(MaxConcurrency);
         // 不实现 IDisposable：本类无生命周期端点，SemaphoreSlim 在未物化 WaitHandle
         // 时无 OS 句柄可泄（全仓无 AvailableWaitHandle 访问）。
-        _concurrencyGate = new SemaphoreSlim(MaxConcurrency);
     }
 
     /// <summary>执行 Fan-out：并行分发所有子任务，收集完成项与失败项。</summary>
@@ -162,58 +161,16 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
         List<(TResult?, Exception)> errors = [];
         var tasks = new Task[items.Count];
 
+        // A7（S1 轮，2026-10-15）：去 Task.Run——每子项一次线程池跳转（工作项 + Task
+        // 对象 + 大捕获闭包）对 I/O 型执行体（_executor 签名 Func<TItem, CT,
+        // ValueTask<TResult>> 的典型形态）没有并行收益，只增加分配与调度延迟。改本地
+        // async 方法直接启动：执行体在信号量内首个 await 前同步运行，之后各自挂起，
+        // 并发度由信号量与执行体的异步等待点决定（与 Task.Run 形态的并发语义一致）。
+        // 取消语义对齐：Task.Run(ct) 的预取消不启动，直呼形态由 WaitAsync(ct) 的取消
+        // 任务等价 surfacing（WhenAll 抛同一 OCE）。
         for (int i = 0; i < items.Count; i++)
         {
-            var idx = i;
-            var item = items[i];
-            tasks[i] = Task.Run(async () =>
-            {
-                // v35 P3（EA1）勘正：Release 与 Wait 的配对依赖本行位于下方 try 块<b>之外</b>这一
-                // 结构事实——WaitAsync(ct) 抛 OCE（外部取消）时异常直接传播，不进入 try/finally，
-                // 不会执行 Release（未 acquire 即未 Release，无幽灵计数）。若未来把本行挪入
-                // try 块，finally 的无条件 Release 将在 Wait 失败路径上产生幽灵 +1（信号量计数
-                // 超 MaxConcurrency，后续 Release 抛 SemaphoreFullException）——届时必须引入
-                // acquired 标志配对。当前结构配对正确，仅以注释固化前提，不做行为改动。
-                await semaphore.WaitAsync(ct).ConfigureAwait(false);
-                using var cts = PerItemTimeout.HasValue
-                    ? CancellationTokenSource.CreateLinkedTokenSource(ct)
-                    : null;
-                try
-                {
-                    if (cts is not null)
-                        cts.CancelAfter(PerItemTimeout!.Value);
-                    var token = cts?.Token ?? ct;
-                    results[idx] = await _executor(item, token).ConfigureAwait(false);
-                    completedFlags[idx] = true;
-                }
-                catch (OperationCanceledException) when (cts is not null && cts.IsCancellationRequested && !ct.IsCancellationRequested)
-                {
-                    // PerItemTimeout 触发的超时（linked CTS 取消，但外部 ct 未取消）：
-                    // 转为失败而非静默丢弃——调用方需感知子任务超时（ITM-001）。
-                    lock (errors)
-                        errors.Add((default, new TimeoutException(
-                            $"FanOut 子任务 [{idx}] 超过 PerItemTimeout {PerItemTimeout!.Value.TotalMilliseconds}ms")));
-                }
-                catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
-                {
-                    // v65 P3：executor 自身抛出的 OCE（内部超时/自建子 CTS 取消/第三方库取消信号），
-                    // 既非外部 ct 取消、也非上方 PerItemTimeout 分支——原实现使其逃逸 Task，
-                    // Task.WhenAll 后在编排器被当作整体取消（单个子任务自取消中止整条 FanOut）。
-                    // 按"该项失败"收集（对齐文件头"部分失败不阻断其他子任务"的设计契约）；
-                    // 外部 ct 真取消时本分支过滤为假，OCE 照常传播（保留取消语义）。
-                    lock (errors)
-                        errors.Add((default, ex));
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    lock (errors)
-                        errors.Add((default, ex));
-                }
-                finally
-                {
-                    semaphore.Release();
-                }
-            }, ct);
+            tasks[i] = RunItemAsync(i, items[i]);
         }
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
@@ -228,6 +185,55 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
         return new FanOutResult<TResult>(
             completed.ToArray(),
             errors.AsReadOnly());
+
+        async Task RunItemAsync(int idx, TItem item)
+        {
+            // v35 P3（EA1）勘正：Release 与 Wait 的配对依赖本行位于下方 try 块<b>之外</b>这一
+            // 结构事实——WaitAsync(ct) 抛 OCE（外部取消）时异常直接传播，不进入 try/finally，
+            // 不会执行 Release（未 acquire 即未 Release，无幽灵计数）。若未来把本行挪入
+            // try 块，finally 的无条件 Release 将在 Wait 失败路径上产生幽灵 +1（信号量计数
+            // 超 MaxConcurrency，后续 Release 抛 SemaphoreFullException）——届时必须引入
+            // acquired 标志配对。当前结构配对正确，仅以注释固化前提，不做行为改动。
+            await semaphore.WaitAsync(ct).ConfigureAwait(false);
+            using var cts = PerItemTimeout.HasValue
+                ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                : null;
+            try
+            {
+                if (cts is not null)
+                    cts.CancelAfter(PerItemTimeout!.Value);
+                var token = cts?.Token ?? ct;
+                results[idx] = await _executor(item, token).ConfigureAwait(false);
+                completedFlags[idx] = true;
+            }
+            catch (OperationCanceledException) when (cts is not null && cts.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                // PerItemTimeout 触发的超时（linked CTS 取消，但外部 ct 未取消）：
+                // 转为失败而非静默丢弃——调用方需感知子任务超时（ITM-001）。
+                lock (errors)
+                    errors.Add((default, new TimeoutException(
+                        $"FanOut 子任务 [{idx}] 超过 PerItemTimeout {PerItemTimeout!.Value.TotalMilliseconds}ms")));
+            }
+            catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+            {
+                // v65 P3：executor 自身抛出的 OCE（内部超时/自建子 CTS 取消/第三方库取消信号），
+                // 既非外部 ct 取消、也非上方 PerItemTimeout 分支——原实现使其逃逸 Task，
+                // Task.WhenAll 后在编排器被当作整体取消（单个子任务自取消中止整条 FanOut）。
+                // 按"该项失败"收集（对齐文件头"部分失败不阻断其他子任务"的设计契约）；
+                // 外部 ct 真取消时本分支过滤为假，OCE 照常传播（保留取消语义）。
+                lock (errors)
+                    errors.Add((default, ex));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                lock (errors)
+                    errors.Add((default, ex));
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        }
     }
 
     /// <summary>非泛型调度入口 — 映射到 object? 结果。</summary>
