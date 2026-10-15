@@ -584,7 +584,7 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **R3 Saga 步骤分配族**（e23d565）：四车道计时静态化 + failures 惰性建 + TryAdd。--saga 实测：**Normal 368→296 B/op（-19.6%）、FanOut 3,064→2,991 B/op**（Stopwatch ~40B + 空 List ~32B 两笔预测恰好兑现）；计时 192.2ns 跨轮漂移带内。撤销留档：RunRetryLane 闭包重构与 MakeKey 缓存（DB 主导 <5% + 行为最密集文件风险）。
 
-**R4 Outbox 终态批量标记**（ADR-027，P0-2/T2.1 锚立项）：`IBatchMarkOutboxStore` 能力接口 + `BatchMarkThreshold` opt-in（默认 1 逐条逐字不变）。机制：成功路径标记往返 N 次 → 组数次（按 RetryCount 分组单语句，fencing 守卫与逐条逐字等价零窄化）；fencing 部分拒绝行为锁定（Dapper/EF SQLite 真库 raw 行断言）；处理器批序=租约序（T3.1 保序族）。量级锚：T0.2 已实测 RTT20ms 逐条确认串行化占 80%——批量启用后标记侧串行相乘收敛（待 --delivery 车道 threshold 参数化 A/B 定量，Not-Tested 登记）。PalORM 栈延后（until 编码与上游租约绑定逐字节一致的方言验证面）。
+**R4 Outbox 终态批量标记**（ADR-027，P0-2/T2.1 锚立项）：`IBatchMarkOutboxStore` 能力接口 + `BatchMarkThreshold` opt-in（默认 1 逐条逐字不变）。机制：成功路径标记往返 N 次 → 组数次（按 RetryCount 分组单语句，fencing 守卫与逐条逐字等价零窄化）；fencing 部分拒绝行为锁定（Dapper/EF SQLite 真库 raw 行断言）；处理器批序=租约序（T3.1 保序族）。量级锚：T0.2 已实测 RTT20ms 逐条确认串行化占 80%——批量启用后标记侧串行相乘收敛（2026-10-15 --delivery 车道 A/B 补测：本地 SQLite 端到端零显著差，标记段 μs 级占排空 ~8% 是成因；收益形态在远程库 RTT——见「R4 补测」段）。PalORM 栈延后（until 编码与上游租约绑定逐字节一致的方言验证面）。
 
 **R5 EF EventLog Hi/Lo 修复**（848e839，P0-1）：版本校验+位置预留前移出事务。机制入账：稳态追加 **4 次 DB 往返（原恒 6，-33%）**、1/N 追加付分配器 2 次、GlobalPosition 连续无稀疏（原按 chunk 稀疏 100×）。**红绿双向锁定**（SQLite 真库 ChunkPositionsConsecutiveWithinChunk：stash 旧码 +100 稀疏判红 Expected 1 found 100、新码 +1 连续绿）；ITM-226 场景 (a) 化正确性声明在案（事件事务回滚只留间隙，既定可接受）。
 
@@ -605,6 +605,12 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 ## 全量重读性能实施轮续三（2026-10-15：R10 Analyzer 零分配化 D-F5）
 
 **R10 分析器符号比对族零分配**（D-F5 移交项清算，IDE 增量分析编译期面）：`StrategicDddAnalyzer` 热路径谓词去分配——**实测红绿双向**（旧形态等价体注入判红 → 新实现绿，B/op）：`MetadataNameEquals` **68.8 → 0.0012**（原每次比对经 GetFullMetadataName 构造全名串；改造中发现 Roslyn `MetadataName` 属性对泛型符号每次访问重建 arity 串——探针实测 40B/次，连结构比对自身最初也被该属性判红，改 `Name`+`Arity` 逐段匹配闭环）；显式接口实现按名查找 **80.0 → 0.0024**（闭包 Any → 手写循环）；`BelongsToBoundedContext` **40 → 0**；`HasVersionSuffix` **32 → 0**（拼接 → 字符级对照，int 全域等价）。每类型分析数十次此类比对（基类链/接口集/attribute 集逐候选），据此去分配面随编译期间类型数线性。语义矩阵由 `AnalyzerAllocationTests` 锁定（嵌套名/顶层碰撞/泛型元数/global 命名空间/前导零版本/负号腿）+ 既有 47 用例零回归；载具为 InternalsVisibleTo 测试程序集直调内部谓词（量具同 R9 口径：预热 + 2 万次操作均值 <1 B/op）。诊断上报路径（`ImmutableDictionary`/`Diagnostic.Create`）按需分配属冷路径（仅违规时），不纳入。验证：Release 全量构建 0W0E + 16 项目面板 **1585 = 1513 过 + 72 跳 0 失败**。
+
+## R4 批量标记 --delivery 车道 A/B 补测（2026-10-15）
+
+**R4/P0-2 收益量化（ADR-027 移交项：--delivery 车道 threshold 参数化 A/B）**：`OutboxDeliveryDrainBenchmarks` 新增 `BatchMark` 参数（1 = 逐条默认基线 / 16 = 满阈值分组单语句），矩阵 RTT 0/1/20 × InFlight 1/16 × BatchMark 1/16，口径 = SQLite 真库 + 假 broker 排空 1000 条墙钟（medium 档 5 迭代/3 预热）。**实测结论：本地端到端零显著差**——RTT=0 四格 162.3~172.2 ms/op 全在噪声带内（BatchMark16/1 比值 0.97 / 1.04 / 1.00 / 0.99，StdDev 量级 ~5%）；RTT=1 四格由发布延迟主导（Windows `Task.Delay` 15.6ms 粒度，串行档 ~17s/op，标记段占比可忽略）。RTT=20 四格未跑完：该格本机 ~33s/op × 8 次撞 BDN InProcess 单基准 5 分钟硬上限（既有车道限制，非本轮引入；按已测标记段成本推算其占比 ~0.04%，零差为确定性结论）。
+
+**解释性量具（--persist-mark，新增 `OutboxMarkPathBenchmarks`，20 轮 × 100 条/op 放大到 ms 级）**：标记段本身收益真实——逐条 `MarkProcessedAsync` vs 满 100 单语句组（SQLite 真库，medium 档）：**26.46ms → 14.49ms（Ratio 0.55，StdDev 1.10/0.26ms），即 13.2μs/条 → 7.25μs/条（1.83×）**；分配 7.81MB → 3.37MB/op（3.9KB → 1.7KB/条，Dapper 逐条 DynamicParameters 形态）。但标记段仅占本地排空 ~8%（13.2μs / ~165μs 每 msg），批量节省 5.98μs/条 ≈ 端到端 3.6%（低于噪声带）——端到端零差由此解释，非无收益。**收益形态在远程库**：PG/MySQL 每标记 = 网络 RTT（本地基线锚：PG 单插入 630μs / MySQL 1730μs 量级），1000 条标记往返从 1000 次收为 62 次分组语句；真库车道需 Docker（本机无）未跑——登记 Not-Tested，量级按锚点推算：串行确认档显著、流水线档部分隐藏于发布 RTT 之后。
 
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 

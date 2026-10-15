@@ -197,6 +197,81 @@ public class DapperPersistenceBenchmarks : PersistenceBenchBase
 }
 
 // ═══════════════════════════════════════════════════════════
+// 标记段成本与分组效率（R4/P0-2，ADR-027，--persist-mark 量具，2026-10-15）
+// ═══════════════════════════════════════════════════════════
+/// <summary>
+/// 终态标记两种形态的本地成本对照：逐条 <c>MarkProcessedAsync</c> vs
+/// <c>MarkProcessedBatchAsync</c> 满 100 单语句组。每 op 做 <see cref="Rounds"/> 轮
+/// 「租约 100 + 标记」——单轮 μs 级操作放大到 ms 级满足 BDN 最小迭代时间建议
+/// （单轮版实测 1.67ms / 943μs，统计有效性不足故放大）。
+/// 用途：解释 --delivery 车道 BatchMarkThreshold A/B 的本地零差——本地 SQLite 标记往返
+/// μs 级、占端到端排空（~165μs/msg）比例低；收益形态在远程库（每标记=网络 RTT），
+/// 真库车道需 Docker（本机无）未跑，见 docs/performance.md R4 补测段。
+/// 行为守卫：每轮租约满批（EnsureFullLease）+ 批量标记影响行数==100。
+/// </summary>
+[MemoryDiagnoser]
+public class OutboxMarkPathBenchmarks : PersistenceBenchBase
+{
+    private const int Rounds = 20;
+
+    private SqliteConnection _conn = null!;
+    private DapperOutboxStore _outbox = null!;
+
+    [GlobalSetup]
+    public async Task GlobalSetup()
+    {
+        _conn = OpenSharedMemory("benchmarkmark");
+        await CreateSharedSchemaAsync(_conn);
+    }
+
+    [GlobalCleanup]
+    public void GlobalCleanup() => _conn.Dispose();
+
+    [IterationSetup]
+    public async Task Setup()
+    {
+        await ClearSharedSchemaAsync(_conn);
+        _outbox = new DapperOutboxStore(_conn, DapperDbType.Sqlite);
+        for (var i = 0; i < BatchSize * Rounds; i++)
+            await _outbox.AddMessageAsync(NewOutboxMessage());
+    }
+
+    [Benchmark(Baseline = true)]
+    public async ValueTask<int> Mark_PerRow100_x20Rounds()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var marked = 0;
+        for (var r = 0; r < Rounds; r++)
+        {
+            var msgs = await _outbox.LeasePendingMessagesAsync(BatchSize, "bench-mark",
+                TimeSpan.FromSeconds(30), 10, default);
+            EnsureFullLease(msgs);
+            for (var i = 0; i < msgs.Count; i++)
+                await _outbox.MarkProcessedAsync(msgs[i], now, default);
+            marked += msgs.Count;
+        }
+        return marked;
+    }
+
+    [Benchmark]
+    public async ValueTask<int> Mark_Batch100_x20Rounds()
+    {
+        var marked = 0;
+        for (var r = 0; r < Rounds; r++)
+        {
+            var msgs = await _outbox.LeasePendingMessagesAsync(BatchSize, "bench-mark",
+                TimeSpan.FromSeconds(30), 10, default);
+            EnsureFullLease(msgs);
+            var affected = await _outbox.MarkProcessedBatchAsync(msgs, DateTimeOffset.UtcNow, default);
+            if (affected != BatchSize)
+                throw new InvalidOperationException($"MarkProcessedBatch {affected} != {BatchSize}——批量路径行为校验失败");
+            marked += affected;
+        }
+        return marked;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
 // PalORM 栈(Sqlite 方言固化中间类;DataSession 自建连接——共享内存库同库)
 // ═══════════════════════════════════════════════════════════
 [MemoryDiagnoser]
