@@ -602,6 +602,10 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **R7 EF Saga 租约单语句下推**（P0-4 移交项清算；决策论证 docs/review/decision-2026-10-15-saga-lease-sqlite-single-statement.md）：`SagaStateDbContext.LeaseActiveSagasAsync` 在 SQLite provider 下改走集合式单语句 UPDATE（资格谓词子查询 + ORDER BY + LIMIT + `version=version+1` 同句换代）+(owner, until) 等值守卫回读——**整批固定 2 条语句与批次大小无关**（原跟踪分页形态：一页全实体物化查询 + N 条逐行 UPDATE，头部活跃租约堆积时叠加 O(跳过页) 翻页往返；含 saga_data 大列的未选中行同样被物化）。**语句计数判别器红证明在案**（旧码批 5 → 5 条 UPDATE 判红、新码 1 条绿）；语义锁定三件（活跃租约跳过/过期接管换代/AWD 纳入）+ 饥饿消除（batchSize=1 头部占满仍取窗口外）+ 跟踪契约（补偿路径 `ISagaStateStore.SaveChangesAsync(state)` 直存端到端）；ITM-632 幽灵租约用例迁 InMemory 锁定回退路径保护。**范围收敛声明**：EF 栈 rc.2 线无 PG/MySQL provider 包（本地/CI 均无真库车道），方言下推留待车道（PG 形态=标识符引用差异、MySQL 需 JOIN 两步，SQL 形态已在案）；其余 provider 保底路径逐字不变。验证：Release 全量构建 0W0E + 16 项目面板 **1581 = 1509 过 + 72 跳 0 失败** + format-verify/encoding-gate 绿。
 
+## 全量重读性能实施轮续三（2026-10-15：R10 Analyzer 零分配化 D-F5）
+
+**R10 分析器符号比对族零分配**（D-F5 移交项清算，IDE 增量分析编译期面）：`StrategicDddAnalyzer` 热路径谓词去分配——**实测红绿双向**（旧形态等价体注入判红 → 新实现绿，B/op）：`MetadataNameEquals` **68.8 → 0.0012**（原每次比对经 GetFullMetadataName 构造全名串；改造中发现 Roslyn `MetadataName` 属性对泛型符号每次访问重建 arity 串——探针实测 40B/次，连结构比对自身最初也被该属性判红，改 `Name`+`Arity` 逐段匹配闭环）；显式接口实现按名查找 **80.0 → 0.0024**（闭包 Any → 手写循环）；`BelongsToBoundedContext` **40 → 0**；`HasVersionSuffix` **32 → 0**（拼接 → 字符级对照，int 全域等价）。每类型分析数十次此类比对（基类链/接口集/attribute 集逐候选），据此去分配面随编译期间类型数线性。语义矩阵由 `AnalyzerAllocationTests` 锁定（嵌套名/顶层碰撞/泛型元数/global 命名空间/前导零版本/负号腿）+ 既有 47 用例零回归；载具为 InternalsVisibleTo 测试程序集直调内部谓词（量具同 R9 口径：预热 + 2 万次操作均值 <1 B/op）。诊断上报路径（`ImmutableDictionary`/`Diagnostic.Create`）按需分配属冷路径（仅违规时），不纳入。验证：Release 全量构建 0W0E + 16 项目面板 **1585 = 1513 过 + 72 跳 0 失败**。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
