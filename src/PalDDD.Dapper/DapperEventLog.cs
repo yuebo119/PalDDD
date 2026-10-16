@@ -85,18 +85,17 @@ public sealed class DapperEventLog : IEventLog
         //（并发冲突等异常路径不计数，与 EFCore/PalORM 姊妹一致）
         using var activity = PalActivitySource.StartEventLogAppend(streamName, events.Count);
 
-        // I（2026-10-10 优化轮，r3 实证后收窄为 PG 门控）：单事件 Any 版本原子追加快路径——
+        // I（2026-10-10 优化轮，r3 实证后收窄为 PG 门控）：单事件原子追加快路径——
         // INSERT..SELECT 子查询在服务端原子计算 MAX(stream_version)+1，读+插单往返（原路径
         // MAX 预查 + INSERT 两次往返），同时消除该子路径的 TOCTOU 窗口。**方言门控依据
         //（2026-10-10 三方言实测）**：PG -15%（968→820μs，E2.6% ✓，网络往返主导收益成立）；
         // MySQL -5.3% 但 E6.8%（噪声带内，证据不足，不启用）；SQLite +44% 反向劣化
         //（本地往返近零，省往返收益被子查询复杂度反超）——故仅 PG 走本路径，MySQL/SQLite
-        // 维持原路径不变。Any 语义 = 接受任意当前版本，无守卫谓词、永不空插；并发竞争由
-        // (stream_name, stream_version) 唯一索引兜底，冲突分类对齐下方既有 catch 的意图
-        //（EventId 重复原样上抛、版本位竞争转并发异常；PG aborted 事务下分类查询自败，
-        // 保守上抛原始冲突异常——外层事务回滚，不产生误判）。k>1 / 非 Any 版本走原路径不变。
-        if (events.Count == 1 && expectedVersion.Kind == ExpectedStreamVersionKind.Any
-            && _dbType == DapperDbType.PostgreSql)
+        // 维持原路径不变。
+        // B4（EPSL 地毯审计 2026-10-16）：快路径从 Any 单形态扩展为四版本语义全覆盖——
+        // Exact/NoStream/StreamExists 加守卫谓词（服务端原子判定，失匹零行插入），语义与
+        // 预查 + Matches 失败逐字一致（重查实际版本转并发异常），省预查往返。k>1 走批路径。
+        if (events.Count == 1 && _dbType == DapperDbType.PostgreSql)
         {
             var evt = events[0]!;
             var nowFast = _timeProvider.GetUtcNow();
@@ -117,13 +116,20 @@ public sealed class DapperEventLog : IEventLog
             dpFast.Add("CausationId", evt.Audit.CausationId?.ToString());
             dpFast.Add("TraceParent", evt.Audit.TraceParent);
             dpFast.Add("TraceState", evt.Audit.TraceState);
-            var sqlFast = EventLogSql.AppendSingleAnyPG;
+            var sqlFast = expectedVersion.Kind switch
+            {
+                ExpectedStreamVersionKind.NoStream => EventLogSql.AppendSingleNoStreamPG,
+                ExpectedStreamVersionKind.StreamExists => EventLogSql.AppendSingleStreamExistsPG,
+                ExpectedStreamVersionKind.Exact => EventLogSql.AppendSingleExactPG,
+                _ => EventLogSql.AppendSingleAnyPG,
+            };
+            if (expectedVersion.Kind == ExpectedStreamVersionKind.Exact)
+                dpFast.Add("ExpectedVersion", expectedVersion.Version);
+
+            List<AppendSingleRow> rows;
             try
             {
-                var row = await _connection.QuerySingleAsync<AppendSingleRow>(sqlFast, dpFast, Tx).ConfigureAwait(false);
-                PalMetrics.EventLogAppended.Add(1);
-                return new AppendEventsResult(
-                    streamName, row.StreamVersion, row.StreamVersion, row.GlobalPosition, row.GlobalPosition);
+                rows = (await _connection.QueryAsync<AppendSingleRow>(sqlFast, dpFast, Tx).ConfigureAwait(false)).ToList();
             }
             catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
             {
@@ -150,6 +156,29 @@ public sealed class DapperEventLog : IEventLog
                 }
                 throw;
             }
+
+            // B4：守卫形态（非 Any）失匹 = 零行插入（无异常）——重查实际版本转统一并发
+            // 异常（与预查路径 Matches 失败同款分类）；aborted 事务下重查自败，actual=-1
+            // 保守上抛（外层事务回滚，不产生误判）。Any 无守卫谓词恒 1 行，本分支不可达。
+            if (rows.Count == 0)
+            {
+                long? guardActual = null;
+                try
+                {
+                    guardActual = await _connection.QueryFirstOrDefaultAsync<long?>(
+                        EventLogSql.MaxVersion, new { name = streamName }, Tx).ConfigureAwait(false);
+                }
+                catch (System.Data.Common.DbException)
+                {
+                    // 重查自败——保守上抛并发异常（actual=-1）
+                }
+                throw new EventStreamConcurrencyException(streamName, expectedVersion, guardActual ?? -1);
+            }
+
+            var row = rows[0];
+            PalMetrics.EventLogAppended.Add(1);
+            return new AppendEventsResult(
+                streamName, row.StreamVersion, row.StreamVersion, row.GlobalPosition, row.GlobalPosition);
         }
 
         // 📐 事务契约（P2 定案声明）：批量追加的原子性由调用方事务保证——传入
@@ -185,11 +214,21 @@ public sealed class DapperEventLog : IEventLog
         //（3.35+），Microsoft.Data.Sqlite 支持（仓内 InsertSqlite 单行 RETURNING 与 PalORM
         // SQLite 租约 UPDATE..RETURNING 均在用）；其引用的「三方言实测定案」是
         // INSERT..SELECT 子查询形态（Any 单语句快路径，SQLite +44% 劣化不启用），与多行
-        // VALUES 形态不同，不构成对本形态的否决。MySQL 维持逐条（无 RETURNING + 自增
-        // 连续性在 innodb_autoinc_lock_mode=2 下不保证，位置回查需 2 次额外往返，仅 k≥4
-        // 净胜——登记延后）。
+        // VALUES 形态不同，不构成对本形态的否决。
+        // B2（EPSL 地毯审计 2026-10-16）：门控扩展 MySQL——原「登记延后」的两条理由逐一
+        // 实证后均不成立：① 无 RETURNING 属实但可用「多行 VALUES INSERT + 版本范围回查
+        // MIN/MAX」两往返达成（无自增连续性假设，见 EventLogSql.PositionRangeMySql）；
+        // ②「自增连续性在 innodb_autoinc_lock_mode=2 下不保证」对已知行数的多行 VALUES
+        // 不成立——wslc mysql84 8.4.11 mode 2 实测：5 行多行 INSERT 的
+        // LAST_INSERT_ID()=首行值且 min/max=1/5 连续无间隙（mode 2 的间隙仅作用于
+        // 行数不确定的 bulk insert）。且本实现不依赖连续性（范围回查按版本区间）。
+        // 收益：k 次 INSERT..SELECT LAST_INSERT_ID 往返 → 2 往返（INSERT + 范围回查），
+        // k≥3 净胜（k=5 典型形态 5→2）。MySQL 行上限 4000（13 参/行 = 52000 < PG/MySQL
+        // 65535 占位符上限；SQL 文本 ~1MB < max_allowed_packet 默认 64MB）。
         if (events.Count > 1 && events.Count <= BatchRowLimit(_dbType))
         {
+            if (_dbType == DapperDbType.MySql)
+                return await AppendEventBatchMySqlAsync(streamName, expectedVersion, currentVersion, version, now, events).ConfigureAwait(false);
             return await AppendEventBatchAsync(streamName, expectedVersion, currentVersion, version, now, events).ConfigureAwait(false);
         }
 
@@ -278,17 +317,24 @@ public sealed class DapperEventLog : IEventLog
     /// <summary>PG 多行批插入行数上限——13 个每行参数 × 行数 + 共享参数须低于 PG 65535 占位符上限（4000 行 = 52002 参数）。</summary>
     private const int PostgreSqlBatchRowLimit = 4000;
 
+    /// <summary>B2（EPSL 地毯审计 2026-10-16）：MySQL 多行批插入行数上限——与 PG 同口径
+    /// （13 参/行 = 52000 < MySQL 65535 占位符上限；SQL 文本 ~1MB < max_allowed_packet
+    /// 默认 64MB）。MySQL 无 RETURNING，位置经版本范围回查（PositionRangeMySql）。</summary>
+    private const int MySqlBatchRowLimit = 4000;
+
     /// <summary>A12（S1 轮，2026-10-15）：SQLite 批量化行上限——多行 VALUES + RETURNING
     /// 为 SQL 标准形态（3.35+，Microsoft.Data.Sqlite 支持；仓内 InsertSqlite 单行
     /// RETURNING 与 PalORM SQLite 租约 UPDATE..RETURNING 均在用）。行数按 SQLite 变量数
     /// 999 防御：每行 13 参 + 2 共享参（StreamName/RecordedAt），64 行 = 834 &lt; 999。</summary>
     private const int SqliteBatchRowLimit = 64;
 
-    /// <summary>A12（S1 轮）：批量化行上限按方言取——PG 4000（驱动/服务端批能力），
-    /// SQLite 64（变量数 999 防御），MySQL 等 0（不批量化，走逐条路径）。</summary>
+    /// <summary>A12（S1 轮，2026-10-15）：批量化行上限按方言取——PG 4000（驱动/服务端批能力），
+    /// SQLite 64（变量数 999 防御），MySQL 4000（B2：13 参/行 = 52000 < 65535 占位符上限，
+    /// SQL 文本 ~1MB < max_allowed_packet 默认 64MB），其他 0（不批量化，走逐条路径）。</summary>
     private static int BatchRowLimit(DapperDbType dbType) => dbType switch
     {
         DapperDbType.PostgreSql => PostgreSqlBatchRowLimit,
+        DapperDbType.MySql => MySqlBatchRowLimit,
         DapperDbType.Sqlite => SqliteBatchRowLimit,
         _ => 0,
     };
@@ -308,9 +354,105 @@ public sealed class DapperEventLog : IEventLog
         IReadOnlyList<EventData> events)
     {
         // F7 同款声明：events 含 null 元素时此处 NRE（evt.EventId 解引用），失败点与逐条路径相同
+        var (sql, dp) = BuildBatchInsert(streamName, firstVersion, ToTimeParam(now), events, returningGlobalPosition: true);
+
+        List<long> positions;
+        try
+        {
+            positions = (await _connection.QueryAsync<long>(sql, dp, Tx).ConfigureAwait(false)).ToList();
+        }
+        catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            // 单语句原子（整批不入库）：重查 MaxVersion 分类——高于预检查快照 = 外部并发
+            // 写入者；等于快照 = 批内/存量 EventId 重复（原样上抛）。PG aborted 事务
+            //（25P02）下分类查询自败——保守上抛原始冲突异常（与逐条路径同款）。
+            long? actualVersion = null;
+            var requerySucceeded = false;
+            try
+            {
+                actualVersion = await _connection.QueryFirstOrDefaultAsync<long?>(
+                    EventLogSql.MaxVersion, new { name = streamName }, Tx).ConfigureAwait(false);
+                requerySucceeded = true;
+            }
+            catch (System.Data.Common.DbException)
+            {
+            }
+            if (requerySucceeded && (actualVersion ?? -1) > (currentVersion ?? -1))
+                throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);
+            throw;
+        }
+
+        PalMetrics.EventLogAppended.Add(events.Count);
+        return new AppendEventsResult(
+            streamName, firstVersion, firstVersion + events.Count - 1, positions.Min(), positions.Max());
+    }
+
+    /// <summary>
+    /// B2（EPSL 地毯审计 2026-10-16）：MySQL k&gt;1 多行 VALUES 批量追加——MySQL 无
+    /// RETURNING，INSERT 后按本批版本区间回查 MIN/MAX 全局位置（PositionRangeMySql，
+    /// (stream_name, stream_version) 唯一索引served，无自增连续性假设）。k 次
+    /// INSERT..SELECT LAST_INSERT_ID 往返 → 2 往返，k≥3 净胜。冲突分类与 PG 批路径
+    /// 同构（单语句原子 + MaxVersion 重查）。
+    /// </summary>
+    private async Task<AppendEventsResult> AppendEventBatchMySqlAsync(
+        string streamName,
+        ExpectedStreamVersion expectedVersion,
+        long? currentVersion,
+        long firstVersion,
+        DateTimeOffset now,
+        IReadOnlyList<EventData> events)
+    {
+        var (sql, dp) = BuildBatchInsert(streamName, firstVersion, ToTimeParam(now), events, returningGlobalPosition: false);
+
+        try
+        {
+            await _connection.ExecuteAsync(sql, dp, Tx).ConfigureAwait(false);
+        }
+        catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            // 与 PG 批路径同款分类：高于预检查快照 = 外部并发写入者；等于快照 = 批内/存量
+            // EventId 重复（原样上抛）。MySQL aborted 事务下重查自败——保守上抛原始异常。
+            long? actualVersion = null;
+            var requerySucceeded = false;
+            try
+            {
+                actualVersion = await _connection.QueryFirstOrDefaultAsync<long?>(
+                    EventLogSql.MaxVersion, new { name = streamName }, Tx).ConfigureAwait(false);
+                requerySucceeded = true;
+            }
+            catch (System.Data.Common.DbException)
+            {
+            }
+            if (requerySucceeded && (actualVersion ?? -1) > (currentVersion ?? -1))
+                throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);
+            throw;
+        }
+
+        // 版本区间回查首末全局位置（区间由唯一索引 + 冲突分类保证只含本批行）
+        var range = await _connection.QuerySingleAsync<PositionRange>(
+            EventLogSql.PositionRangeMySql,
+            new { name = streamName, from = firstVersion, to = firstVersion + events.Count - 1 },
+            Tx).ConfigureAwait(false);
+
+        PalMetrics.EventLogAppended.Add(events.Count);
+        return new AppendEventsResult(
+            streamName, firstVersion, firstVersion + events.Count - 1, range.Min, range.Max);
+    }
+
+    /// <summary>B2：MySQL 批量化位置范围回查结果（列别名 Min/Max 按名映射）。</summary>
+    private readonly record struct PositionRange(long Min, long Max);
+
+    /// <summary>
+    /// B2：多行 VALUES INSERT 构造（PG RETURNING 与 MySQL 范围回查两形态共用单一来源）——
+    /// 每行 13 参数 + StreamName/RecordedAt 两共享参数；逐条路径同款零拷贝口径
+    /// （PayloadArray/MetadataArray 只读直传，DbType.Binary 显式标注）。
+    /// </summary>
+    private static (string Sql, DynamicParameters Parameters) BuildBatchInsert(
+        string streamName, long firstVersion, object recordedAt, IReadOnlyList<EventData> events, bool returningGlobalPosition)
+    {
         var dp = new DynamicParameters();
         dp.Add("StreamName", streamName);
-        dp.Add("RecordedAt", ToTimeParam(now));
+        dp.Add("RecordedAt", recordedAt);
 
         var sb = new StringBuilder(320 + events.Count * 236)
             .Append("INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES ");
@@ -341,37 +483,9 @@ public sealed class DapperEventLog : IEventLog
             dp.Add(p + "tp", evt.Audit.TraceParent);
             dp.Add(p + "ts", evt.Audit.TraceState);
         }
-        sb.Append(" RETURNING global_position");
-
-        List<long> positions;
-        try
-        {
-            positions = (await _connection.QueryAsync<long>(sb.ToString(), dp, Tx).ConfigureAwait(false)).ToList();
-        }
-        catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
-        {
-            // 单语句原子（整批不入库）：重查 MaxVersion 分类——高于预检查快照 = 外部并发
-            // 写入者；等于快照 = 批内/存量 EventId 重复（原样上抛）。PG aborted 事务
-            //（25P02）下分类查询自败——保守上抛原始冲突异常（与逐条路径同款）。
-            long? actualVersion = null;
-            var requerySucceeded = false;
-            try
-            {
-                actualVersion = await _connection.QueryFirstOrDefaultAsync<long?>(
-                    EventLogSql.MaxVersion, new { name = streamName }, Tx).ConfigureAwait(false);
-                requerySucceeded = true;
-            }
-            catch (System.Data.Common.DbException)
-            {
-            }
-            if (requerySucceeded && (actualVersion ?? -1) > (currentVersion ?? -1))
-                throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);
-            throw;
-        }
-
-        PalMetrics.EventLogAppended.Add(events.Count);
-        return new AppendEventsResult(
-            streamName, firstVersion, firstVersion + events.Count - 1, positions.Min(), positions.Max());
+        if (returningGlobalPosition)
+            sb.Append(" RETURNING global_position");
+        return (sb.ToString(), dp);
     }
 
     public async IAsyncEnumerable<RecordedEvent> ReadStreamAsync(
