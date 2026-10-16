@@ -1,7 +1,10 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using PalDDD.Dapper;
 using PalDDD.Projections;
+using System.Data.Common;
+using System.Globalization;
 
 namespace PalDDD.Integration.Tests;
 
@@ -306,6 +309,100 @@ public sealed class ProjectionResumeSqliteTests
         var checkpoint = await store.TryStartAsync("p", "s", position, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(30), ct)
             ?? throw new InvalidOperationException($"seed TryStart null for {position}");
         await store.MarkFailedAsync(checkpoint, "seed failure", DateTimeOffset.UtcNow, ct);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ⚡ B7(a)（EPSL 地毯审计 2026-10-16 B 批 #7）：新位路径直插优先
+    // 旧形态 3 语句（跟踪 SELECT + INSERT + 调用方终态 UPDATE）；新形态 2（INSERT + UPDATE）。
+    // SQLite 真库 + DbCommandInterceptor 命令计数（EnsureCreated 的 DDL 经 Reset 隔离）。
+    // 红证明：还原预 SELECT 形态后 SELECT=1 判红（镜像 Inbox A9 测试先例）。
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public async Task TryStartAsync_NewPosition_OnRelationalProvider_InsertsWithoutPreselect(CancellationToken cancellationToken)
+    {
+        using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        var counter = new ProjectionStatementCounter();
+        var options = new DbContextOptionsBuilder<TestResumeCheckpointDbContext>()
+            .UseSqlite(connection)
+            .AddInterceptors(counter)
+            .Options;
+        await using (var init = new TestResumeCheckpointDbContext(options))
+            await init.Database.EnsureCreatedAsync(cancellationToken);
+        counter.Reset();
+
+        await using var db = new TestResumeCheckpointDbContext(options);
+        var store = (IProjectionCheckpointStore)db;
+        var checkpoint = await store.TryStartAsync(
+            "p", "s", "0",
+            DateTimeOffset.Parse("2026-05-31T00:00:00Z", CultureInfo.InvariantCulture),
+            TimeSpan.FromMinutes(5),
+            cancellationToken);
+
+        // 行为断言直取属性（checkpoint 为 null 时 NRE 即红，不用 IsNotNull 弱断言——
+        // AssertionStrengthGateTests 棘轮口径；租约已创建由后续语句计数与位置语义锁定）
+        await Assert.That(checkpoint!.Position).IsEqualTo("0");
+        // 新位路径：0 SELECT + 1 INSERT（旧形态：SELECT miss 1 + INSERT 1）
+        await Assert.That(counter.SelectCount).IsEqualTo(0);
+        await Assert.That(counter.InsertCount).IsEqualTo(1);
+    }
+
+    /// <summary>命令文本计数器（B7(a)）：SELECT/INSERT 语句数——Executing 拦截点登记
+    /// （镜像 InboxEfCoreTests.InboxStatementCounter 形态，Volatile 字段防并行套件污染）。</summary>
+    private sealed class ProjectionStatementCounter : DbCommandInterceptor
+    {
+        private int _select;
+        private int _insert;
+
+        public int SelectCount => Volatile.Read(ref _select);
+
+        public int InsertCount => Volatile.Read(ref _insert);
+
+        public void Reset()
+        {
+            Volatile.Write(ref _select, 0);
+            Volatile.Write(ref _insert, 0);
+        }
+
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result)
+        {
+            Record(command);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            Record(command);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        public override InterceptionResult<int> NonQueryExecuting(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result)
+        {
+            Record(command);
+            return base.NonQueryExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            Record(command);
+            return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        private void Record(DbCommand command)
+        {
+            var text = command.CommandText;
+            if (text.Contains("SELECT", StringComparison.OrdinalIgnoreCase))
+                Interlocked.Increment(ref _select);
+            else if (text.Contains("INSERT", StringComparison.OrdinalIgnoreCase))
+                Interlocked.Increment(ref _insert);
+        }
     }
 
     private sealed class TestResumeCheckpointDbContext(DbContextOptions<TestResumeCheckpointDbContext> options)

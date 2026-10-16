@@ -81,6 +81,23 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         if (processingTimeout < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
 
+        // B7(a)（EPSL 地毯审计 2026-10-16 B 批 #7，镜像 InboxDbContext A9 直插优先）：
+        // 新位路径 3 语句（跟踪 SELECT + INSERT + 调用方终态 UPDATE）降为 2（INSERT +
+        // UPDATE）。仅关系型 provider 生效——(ProjectionName, SourceName, Position) 唯一
+        // 约束的强制是关系型保证；InMemory 等无唯一约束 provider 保持预 SELECT 路径
+        // （否则重复位静默建第二行，幂等失效）。唯一冲突（TryCreate 返回 null）才走下方
+        // 既有跟踪 SELECT 分类路径（Completed/活跃 Processing → null；僵尸/失败 → 回收）——
+        // 回查即原预 SELECT 的职责，仅在冲突路径执行。权衡同 A9：重复位路径由 1 往返
+        // （预查命中）变为 INSERT 失败 + 回查（2 起），回放负载以新位为主（ADR-028 增量
+        // 续读）净胜；纯重放既有行场景持平偏负。
+        if (Database.IsRelational())
+        {
+            var created = await TryCreateCheckpointAsync(
+                projectionName, sourceName, position, startedAt, processingTimeout, ct).ConfigureAwait(false);
+            if (created is not null)
+                return created;
+        }
+
         // A5（S1 轮）：跟踪查询走按模型缓存的编译委托（僵尸回收分支的 MarkProcessing
         // 突变依赖 ChangeTracker 持久化，保持跟踪形态；编译只固化查询形状，跟踪语义不变）
         var checkpoint = await GetCheckpointTrackedByModel.GetOrAdd(Model, static _ =>
