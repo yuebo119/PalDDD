@@ -29,8 +29,12 @@ public interface IMessageSerializer
     /// 精确尺寸数组分配 + 整载荷拷贝（每消息一笔，量级 = payload 尺寸）。
     /// <para>
     /// DIM 默认实现回退内存形态（一次拷贝进 destination）——自定义序列化器零迁移成本；
-    /// <c>JsonMessageSerializer</c>（池化 Utf8JsonWriter 直写）与
-    /// <c>MemoryPackMessageSerializer</c>（原生 writer 重载）覆写为真零拷贝。
+    /// <c>JsonMessageSerializer</c>（池化 Utf8JsonWriter 直写）覆写为真零拷贝。
+    /// <c>MemoryPackMessageSerializer</c> 当前<b>不覆写</b>（走 DIM 默认回退）：MemoryPack
+    /// 1.21.4 的 IBufferWriter 重载仅有泛型形态，无 (writer, Type, object) 非 AOT 路径
+    /// 对应重载，T=object 动态序列化语义未验证——原生直写待验证后跟进（ADR-029 延后段）。
+    /// 勘误（EPSL 地毯审计 2026-10-16 A 批 #26）：原注释称其「（原生 writer 重载）覆写为
+    /// 真零拷贝」与实现的明确不覆写声明直接矛盾，自定义序列化器作者据此做迁移决策会被误导。
     /// 消费端：<c>RabbitMqBroker</c> 以 TLS 池缓冲 + <c>WrittenMemory</c> 直传发布路径
     /// （Kafka 受 Confluent API 的 byte[] 契约约束不适用，见其发布处注释）。
     /// </para>

@@ -167,11 +167,12 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 // 生成物恒为 partial record struct，普通 struct / 非 partial 声明无法合并
                 // v28 P3：GetSyntax 补传 ct（对齐同文件族 EnumGenerator partial 收集路径与
                 // MessageRegistryGenerator.ApplicationSyntaxReference 形态）——增量管线取消信号
-                // 可传播到语法物化，无参重载在取消后仍拉取语法节点
+                // 可传播到语法物化，无参重载在取消后仍拉取语法节点。
+                // EPSL 地毯审计 2026-10-16 A 批 #17：改调 NamedTypeSymbolExtensions.IsPartial
+                // 零分配参照（EnumGenerator.cs 定义，同程序集）——原内联 Any 的 lambda 捕获
+                // ct，每次 transform 分配一个 display class + delegate（~48-64B）。
                 var isPartialRecordStruct = structSymbol.IsRecord
-                    && structSymbol.DeclaringSyntaxReferences.Any(r =>
-                        r.GetSyntax(ct) is TypeDeclarationSyntax d
-                        && d.Modifiers.Any(static m => m.IsKind(SyntaxKind.PartialKeyword)));
+                    && structSymbol.IsPartial(ct);
                 if (!isPartialRecordStruct)
                 {
                     return new IdGenInfo(

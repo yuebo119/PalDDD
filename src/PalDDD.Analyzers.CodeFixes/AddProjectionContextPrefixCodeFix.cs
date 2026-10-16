@@ -133,7 +133,9 @@ public sealed class AddProjectionContextPrefixCodeFix : CodeFixProvider
     {
         var editor = await DocumentEditor.CreateAsync(document, ct).ConfigureAwait(false);
         var oldValue = literal.Token.ValueText;
-        if (oldValue.StartsWith(prefix + ".", StringComparison.Ordinal)) return document;
+        // EPSL 地毯审计 2026-10-16 A 批 #18：零分配前缀判定（原 StartsWith(prefix + ".")
+        // 每次拼接中间串），语义等价——长度门控 + StartsWith(prefix) + 分隔符位。
+        if (CodeFixHelpers.StartsWithPrefix(oldValue, prefix)) return document;
 
         editor.ReplaceNode(literal, SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression,
             SyntaxFactory.Literal(prefix + "." + oldValue)).WithTriviaFrom(literal)); // v22 D2

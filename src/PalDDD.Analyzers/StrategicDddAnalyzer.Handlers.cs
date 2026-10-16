@@ -68,8 +68,14 @@ public sealed partial class StrategicDddAnalyzer
             // sealed 轴天然满足，而 [BoundedContext] 是 AttributeTargets.Class（ITM-123 同型）
             // 挂不上 struct，BC 轴对 struct 不可消解，恒报 Error 无消解路径；shape 检查仅对
             // class 生效。投影名检查（PDDD007）对 struct 保留（ProjectionName 属性可实现）。
+            // EPSL 地毯审计 2026-10-16 A 批 #16：PDDD004 的 BoundedContext 链检查改用
+            // 形参 chainBoundedContext——调用方（StrategicDddAnalyzer.cs:219）已对同一类型
+            // 算过 TryGetAttributeAlongBaseChain(type, BoundedContextAttributeName) 并传入
+            // （PDDD003 支路上方已在用），原形态又内联重算一遍基类链遍历（纯 CPU 零分配，
+            // 每个实现 IProjectionHandler<T> 的类型每轮分析多付一次）。HasAttributeAlongBaseChain
+            // 正是该调用的 is not null 包装，语义逐字等价。
             if (type.TypeKind == TypeKind.Class
-                && ((!type.IsSealed && !type.IsAbstract) || !HasAttributeAlongBaseChain(type, BoundedContextAttributeName)))
+                && ((!type.IsSealed && !type.IsAbstract) || chainBoundedContext is null))
             {
                 context.ReportDiagnostic(Diagnostic.Create(
                     InvalidProjectionHandlerShape,
