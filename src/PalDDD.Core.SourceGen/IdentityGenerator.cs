@@ -152,7 +152,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                         && attrData.ConstructorArguments[0].Value is ITypeSymbol nonNamedType
                             ? nonNamedType.ToDisplayString()
                             : "";
-                    return new IdGenInfo(
+                    return IdGenInfo.Create(
                         Namespace: null,
                         TypeName: structSymbol.Name,
                         ContainingDeclarations: [],
@@ -175,7 +175,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                     && structSymbol.IsPartial(ct);
                 if (!isPartialRecordStruct)
                 {
-                    return new IdGenInfo(
+                    return IdGenInfo.Create(
                         Namespace: null,
                         TypeName: structSymbol.Name,
                         ContainingDeclarations: [],
@@ -190,7 +190,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 // （见 GenericDeclarationNotSupported 注释）——编译期报 PALID003，不生成坏代码
                 if (structSymbol.Arity > 0 || IsWithinGenericContainingType(structSymbol))
                 {
-                    return new IdGenInfo(
+                    return IdGenInfo.Create(
                         Namespace: null,
                         TypeName: structSymbol.Name,
                         ContainingDeclarations: [],
@@ -215,7 +215,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 // 实际阻断层（Mid）的修饰符，不再失实描述目标自身
                 if (GeneratorAccessibility.GetBlockingAccessibility(structSymbol) is { } blockingAccessibility)
                 {
-                    return new IdGenInfo(
+                    return IdGenInfo.Create(
                         Namespace: null,
                         TypeName: structSymbol.Name,
                         ContainingDeclarations: [],
@@ -238,7 +238,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 // 新增拦截 ProtectedOrInternal 与 Internal
                 if (structSymbol.DeclaredAccessibility is not Accessibility.Public)
                 {
-                    return new IdGenInfo(
+                    return IdGenInfo.Create(
                         Namespace: null,
                         TypeName: structSymbol.Name,
                         ContainingDeclarations: [],
@@ -264,7 +264,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                     // 命名类型恒真——ContainingType 成员不取 NotApplicable）
                     if (!t.IsPartial(ct))
                     {
-                        return new IdGenInfo(
+                        return IdGenInfo.Create(
                             Namespace: null,
                             TypeName: structSymbol.Name,
                             ContainingDeclarations: [],
@@ -322,7 +322,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 };
                 if (normalizedSourceType is null)
                 {
-                    return new IdGenInfo(
+                    return IdGenInfo.Create(
                         Namespace: namespaceName,
                         TypeName: structSymbol.Name,
                         ContainingDeclarations: [.. containingDeclarations],
@@ -333,7 +333,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                         Location: context.TargetNode.GetLocation());
                 }
 
-                return new IdGenInfo(
+                return IdGenInfo.Create(
                     namespaceName,
                     structSymbol.Name,
                     [.. containingDeclarations],
@@ -448,6 +448,8 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         // ImmutableDictionary 值相等，稳定时 Combine 对不重跑。值 = 该 hint 首个出现的
         // 定位标识（Location.Identity）——重复 hint 时仅首个生成、其余报诊断（P2 修复的
         // 「恰好一份生成物」契约，SourceGeneratorDirectTests 断言在案）。
+        // B10（2026-10-16）：hint/identity 改取 transform 预计算值（info.Hint/info.Identity），
+        // 本节点不再做字符串拼接——任一候选变化时对全部 N 候选的 O(N) 键构造 churn 消除。
         var duplicateHints = candidates.Collect()
             .Select(static (ImmutableArray<IdGenInfo> infos, CancellationToken ct) =>
             {
@@ -457,15 +459,13 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 {
                     if (info.DiagnosticId is not null)
                         continue;
-                    var hint = IdentityHint(info);
-                    var identity = LocationIdentity(info.Location);
-                    if (!firstIdentityByHint.TryGetValue(hint, out var existing))
+                    if (!firstIdentityByHint.TryGetValue(info.Hint, out var existing))
                     {
-                        firstIdentityByHint[hint] = identity;
+                        firstIdentityByHint[info.Hint] = info.Identity;
                         continue;
                     }
-                    if (!dups.ContainsKey(hint))
-                        dups.Add(hint, existing);
+                    if (!dups.ContainsKey(info.Hint))
+                        dups.Add(info.Hint, existing);
                 }
                 return dups.ToImmutable();
             });
@@ -481,13 +481,12 @@ public sealed class IdentityGenerator : IIncrementalGenerator
             if (info.DiagnosticId is not null)
                 return;
 
-            var hint = IdentityHint(info);
-            if (pair.Right.TryGetValue(hint, out var firstIdentity))
+            if (pair.Right.TryGetValue(info.Hint, out var firstIdentity))
             {
                 // A15：重复 [GenerateId] 声明——非首现报 PALID004（首现的定位标识匹配，
                 // 照常生成；其余定位标识不同，报诊断后跳过——AddSource 不会因同 hint
                 // 第二次调用抛 ArgumentException）
-                if (firstIdentity != LocationIdentity(info.Location))
+                if (firstIdentity != info.Identity)
                 {
                     spc.ReportDiagnostic(Diagnostic.Create(
                         DuplicatePartialDeclaration,
@@ -497,7 +496,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                 }
             }
 
-            spc.AddSource(hint, GenerateIdentityCode(info));
+            spc.AddSource(info.Hint, GenerateIdentityCode(info));
         });
     }
 
@@ -963,6 +962,39 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
                 hash = hash * 31 + (BlockingAccessibilityText?.GetHashCode() ?? 0);
                 return hash;
             }
+        }
+
+        // EPSL 地毯审计 2026-10-16 B 批 #10：预计算 hint/identity——transform 输出即
+        // 算定（每个候选一次），duplicateHints Select 与 Combine 输出节点直取。原形态
+        // Select 在任一候选变化时对全部 N 候选重算 IdentityHint + LocationIdentity（每次
+        // 都是字符串拼接），Combine 输出行再各算一遍——A15 只迁出了模板渲染，键构造留在
+        // 两节点（O(N) churn 的半场）。不参与相等/哈希：两者既是既有字段的确定函数
+        // （Identity 是 Location 的函数，而 Location 按设计不参与相等——参与会造成编辑
+        // 漂移缓存 miss），参与亦冗余。
+        public string Hint { get; init; } = string.Empty;
+
+        public string Identity { get; init; } = string.Empty;
+
+        /// <summary>B10 工厂：主构造 + 预计算 Hint/Identity（单一算定入口）。</summary>
+        public static IdGenInfo Create(
+            string? Namespace,
+            string TypeName,
+            string[] ContainingDeclarations,
+            string[] ContainingNames,
+            string SourceType,
+            bool IsNumeric,
+            string? DiagnosticId = null,
+            string? BlockingAccessibilityText = null,
+            Location? Location = null)
+        {
+            var info = new IdGenInfo(
+                Namespace, TypeName, ContainingDeclarations, ContainingNames,
+                SourceType, IsNumeric, DiagnosticId, BlockingAccessibilityText, Location);
+            return info with
+            {
+                Hint = IdentityHint(info),
+                Identity = LocationIdentity(info.Location),
+            };
         }
     }
 }

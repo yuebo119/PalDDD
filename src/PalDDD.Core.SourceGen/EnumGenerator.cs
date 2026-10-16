@@ -155,7 +155,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // 一样报 PALENUM003（引导改用 class）
                 if (classSymbol.IsRecord && classSymbol.TypeKind == TypeKind.Struct)
                 {
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -173,7 +173,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // 统一承载（RegisterSourceOutput 按 DiagnosticId 分派），payload 不再携带
                 if (classSymbol.IsRecord && classSymbol.TypeKind == TypeKind.Class)
                 {
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -193,7 +193,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // 分派侧两参格式统一
                 if (classSymbol.TypeKind is TypeKind.Struct or TypeKind.Interface)
                 {
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -221,7 +221,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 var isPartial = classSymbol.IsPartial(ct);
                 if (!isPartial)
                 {
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -237,7 +237,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // （见 GenericDeclarationNotSupported 注释）——编译期报 PALENUM004
                 if (classSymbol.Arity > 0 || IsWithinGenericContainingType(classSymbol))
                 {
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -257,7 +257,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // 同样阻断生成物可见性，仅查自身声明会漏
                 if (GeneratorAccessibility.GetBlockingAccessibility(classSymbol) is { } blockingAccessibility)
                 {
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -280,7 +280,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                     || !IsPalSmartEnumBase(namedBase.OriginalDefinition))
                 {
                     // P2 修复：隔层继承不再静默跳过——报 PALENUM002（与 PALENUM001 对称）
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -310,7 +310,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                     // 该分支是不可构造路径的死代码，已回退（D 片 v60 P3-1 场景为推断幻觉）
                     if (!t.IsPartial(ct))
                     {
-                        return new EnumGenInfo(
+                        return EnumGenInfo.Create(
                             Namespace: GetNamespaceName(classSymbol),
                             TypeName: classSymbol.Name,
                             ContainingDeclarations: [],
@@ -380,7 +380,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                     // 有 [GenerateEnum] 但无静态字段 — 返回空字段信息以触发警告
                     // P3 修复（二十一轮）：携带定位——原 Location.None 使 PALENUM001 无处
                     // 指示（IDE 无 squiggle、SARIF 无精确位置）；不参与相等（位置随编辑漂移）
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -391,7 +391,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         Location: context.TargetNode.GetLocation());
                 }
 
-                return new EnumGenInfo(
+                return EnumGenInfo.Create(
                     GetNamespaceName(classSymbol),
                     classSymbol.Name,
                     [.. containingDeclarations],
@@ -468,6 +468,8 @@ public sealed class EnumGenerator : IIncrementalGenerator
         // 候选重跑（每候选一次模板渲染 + AddSource）；Combine 只对「该候选变化或重复
         // 集合变化」触发，未变候选零重渲染。重复 hint 语义保持 P2 修复契约：仅首个出现
         // 生成、其余报 PALENUM005（「恰好一份生成物」，SourceGeneratorDirectTests 断言在案）。
+        // B10（2026-10-16）：hint/identity 改取 transform 预计算值（info.Hint/info.Identity），
+        // 本节点不再做字符串拼接——任一候选变化时对全部 N 候选的 O(N) 键构造 churn 消除。
         var duplicateHints = candidates.Collect()
             .Select(static (ImmutableArray<EnumGenInfo> infos, CancellationToken ct) =>
             {
@@ -477,15 +479,13 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 {
                     if (info.DiagnosticId is not null || !info.HasFields)
                         continue;
-                    var hint = EnumHint(info);
-                    var identity = LocationIdentity(info.Location);
-                    if (!firstIdentityByHint.TryGetValue(hint, out var existing))
+                    if (!firstIdentityByHint.TryGetValue(info.Hint, out var existing))
                     {
-                        firstIdentityByHint[hint] = identity;
+                        firstIdentityByHint[info.Hint] = info.Identity;
                         continue;
                     }
-                    if (!dups.ContainsKey(hint))
-                        dups.Add(hint, existing);
+                    if (!dups.ContainsKey(info.Hint))
+                        dups.Add(info.Hint, existing);
                 }
                 return dups.ToImmutable();
             });
@@ -496,11 +496,10 @@ public sealed class EnumGenerator : IIncrementalGenerator
             if (info.DiagnosticId is not null || !info.HasFields)
                 return;
 
-            var hint = EnumHint(info);
-            if (pair.Right.TryGetValue(hint, out var firstIdentity))
+            if (pair.Right.TryGetValue(info.Hint, out var firstIdentity))
             {
                 // A15：重复 [GenerateEnum] 声明——非首现报 PALENUM005（首现照常生成）
-                if (firstIdentity != LocationIdentity(info.Location))
+                if (firstIdentity != info.Identity)
                 {
                     spc.ReportDiagnostic(Diagnostic.Create(
                         DuplicatePartialDeclaration,
@@ -510,7 +509,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 }
             }
 
-            spc.AddSource(hint, GenerateEnumCode(info));
+            spc.AddSource(info.Hint, GenerateEnumCode(info));
         });
     }
 
@@ -667,6 +666,39 @@ partial class {{info.TypeName}}
                 hash = hash * 31 + (DiagnosticId?.GetHashCode() ?? 0);
                 return hash;
             }
+        }
+
+        // EPSL 地毯审计 2026-10-16 B 批 #10：预计算 hint/identity——transform 输出即
+        // 算定（每个候选一次），duplicateHints Select 与 Combine 输出节点直取。原形态
+        // Select 在任一候选变化时对全部 N 候选重算 EnumHint + LocationIdentity（每次都是
+        // 字符串拼接），Combine 输出行再各算一遍——A15 只迁出了模板渲染，键构造留在两节点
+        // （O(N) churn 的半场）。不参与相等/哈希：两者既是既有字段的确定函数（Identity 更是
+        // Location 的函数，而 Location 按设计不参与相等——参与会造成编辑漂移缓存 miss），
+        // 参与亦冗余。
+        public string Hint { get; init; } = string.Empty;
+
+        public string Identity { get; init; } = string.Empty;
+
+        /// <summary>B10 工厂：主构造 + 预计算 Hint/Identity（单一算定入口）。</summary>
+        public static EnumGenInfo Create(
+            string? Namespace,
+            string TypeName,
+            string[] ContainingDeclarations,
+            string[] ContainingNames,
+            string ValueType,
+            ImmutableArray<string> Fields,
+            bool HasFields = true,
+            string? DiagnosticId = null,
+            Location? Location = null)
+        {
+            var info = new EnumGenInfo(
+                Namespace, TypeName, ContainingDeclarations, ContainingNames,
+                ValueType, Fields, HasFields, DiagnosticId, Location);
+            return info with
+            {
+                Hint = EnumHint(info),
+                Identity = LocationIdentity(info.Location),
+            };
         }
     }
 }
