@@ -61,13 +61,17 @@ public sealed class MessageConsumeContext(
         if (headers is null && correlationId is null)
             return null;
 
-        // v16/v17 文档化：headers 的 key 由 broker 库保证非 null（null key 时下方索引器抛 ANE——框架边界外输入，不防御）
+        // EPSL 地毯审计 2026-10-16 A 批 #14：无头 + 兜底 correlation 形态免字典构造。
+        // 本仓 RabbitMQ 写侧把 correlation 写入 BasicProperties.CorrelationId 而非 header
+        //（见 RabbitMqBroker.CreateHeaders），该主流形态此前每条消费消息白付一个空字典
+        //（~80B）+ 四次 TryGetValue；A-1（2026-10-11）补的是「无头且无兜底」格，本格是
+        // 其姊妹漏格。空头视图用缓存单例（Headers 契约要求非 null）。
+        if (headers is null)
+            return new MessageConsumeContext(correlationId, null, null, null, EmptyHeaders);
+
         var decoded = new Dictionary<string, string?>(StringComparer.Ordinal);
-        if (headers is not null)
-        {
-            foreach (var (key, value) in headers)
-                decoded[key] = DecodeHeaderValue(value);
-        }
+        foreach (var (key, value) in headers)
+            decoded[key] = DecodeHeaderValue(value);
 
         if (decoded.Count == 0 && correlationId is null)
             return null;
@@ -97,6 +101,11 @@ public sealed class MessageConsumeContext(
             traceState,
             decoded);
     }
+
+    /// <summary>无头形态的空头视图单例——Headers 契约要求非 null，免每条相关消息一个空字典
+    ///（EPSL 地毯审计 2026-10-16 A 批 #14）。只读包装，调用方无法经 IReadOnlyDictionary 变异。</summary>
+    private static readonly IReadOnlyDictionary<string, string?> EmptyHeaders =
+        new System.Collections.ObjectModel.ReadOnlyDictionary<string, string?>(new Dictionary<string, string?>());
 
     /// <summary>已知追踪头键名 — 与 KafkaBroker/RabbitMqBroker 写侧 CreateHeaders 的键完全一致。</summary>
     [SuppressMessage("Design", "CA1034", Justification = "常量分组嵌套是 CA1034 公认例外：键名与上下文类型强内聚，提升为顶层反而弱化归属并扩大 API 面。")]

@@ -80,6 +80,26 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         _consumerConfig = consumerConfig;
     }
 
+    // EPSL 地毯审计 2026-10-16 A 批 #1：测试 seam——发布路径单测需要可注入的 producer
+    //（公开构造的 ProducerBuilder.Build() 产真实客户端，ProduceAsync 会走网络超时）。
+    // 仅 Messaging.Integration.Tests 经 IVT 可达（broker 单测归属集成侧工程，架构分层
+    // 边界测试约束；B-5 头构造测试同款先例）。
+    internal KafkaBroker(
+        IProducer<string, byte[]> producer,
+        ConsumerConfig consumerConfig,
+        IPalLogger<KafkaBroker> logger,
+        IMessageSerializer serializer,
+        IMessageCatalog messageCatalog)
+        : base(serializer, messageCatalog)
+    {
+        ArgumentNullException.ThrowIfNull(producer);
+        ArgumentNullException.ThrowIfNull(consumerConfig);
+        ArgumentNullException.ThrowIfNull(logger);
+        _producer = producer;
+        _consumerConfig = consumerConfig;
+        _logger = logger;
+    }
+
     // 审计对齐（2026-10-08）：Kafka 后台事件观测——producer/consumer 共用。
     // librdkafka 的后台错误多为其自愈机制的事件流（临时失联/再平衡中途态），非致命走 Warning；
     // IsFatal 才升 Error（IPalLogger.Error 契约必须携带异常，包装为 KafkaException）。
@@ -118,7 +138,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
 
         var key = messageId.ToString();
         // A13（S1 轮）：IBufferWriter 直写 + 单次 ToArray（Confluent byte[] 契约必需）——
-        // 消除内存重载返回前的第一次 WrittenSpan.ToArray 分配+整载荷拷贝
+        // 消除内存重载返回前的第一次 WrittenSpan.ToArray 分配+整载荷拷贝。
+        // EPSL 地毯审计 2026-10-16 A 批 #1：发布处第二次 ToArray 消除后，单次拷贝落地
+        // （旧码双拷净效果为零，分配断言实测 2264B/迭代判红→修复后绿）。
         var bodyWriter = _tlsBodyWriter;
         if (bodyWriter is null || bodyWriter.Capacity > MaxResidentBodyBytes)
         {
@@ -136,17 +158,16 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         {
             Key = key,
             // Serialize 契约返回 ReadOnlyMemory<byte>，Message.Value 需 byte[]。
-            // 勘正（2026-09-20）：本处 ToArray 是序列化器 ToArray（JsonMessageSerializer
-            // WrittenSpan.ToArray）之后的**第二次**托管拷贝，非"无双重拷贝"（ReadOnlyMemory<T>
-            // .ToArray() 恒拷贝，已实测三种内存形态 ReferenceEquals 均为 false）。
-            // A13（S1 轮，2026-10-15）勘正：序列器侧第一次拷贝已消除（上方改直写 TLS
-            // 缓冲），本处 ToArray 现为唯一一次托管拷贝——Confluent ISerializer<T>
-            // 契约为 byte[]，改用 IProducer<string, ReadOnlyMemory<byte>> 只会把该拷贝
-            // 移入序列化器，净收益为零；librdkafka 内部仍需一次拷贝。
-            // 不可消除：Confluent.Kafka 2.16.0 的 ISerializer<T>.Serialize 返回 byte[]
-            // （反射实证，2026-10-08 升位复核），改用 IProducer<string, ReadOnlyMemory<byte>> + 自定义序列化器
-            // 只会把该拷贝移入序列化器，净收益为零；librdkafka 内部仍需一次拷贝。
-            Value = value.ToArray(),
+            // EPSL 地毯审计 2026-10-16 A 批 #1：Value 直传上方 ToArray 产出的数组。
+            // 旧码此处又有一次 value.ToArray()（byte[] 隐式转 ReadOnlyMemory 后恒拷贝），
+            // 与上方 TLS 直写后的 ToArray 相抵，A13 对该路径净效果为零（每消息两次全载荷
+            // 分配+拷贝，分配断言实测 2264B/迭代）；旧注释「唯一一次托管拷贝」与同方法
+            // 两个 ToArray 的事实不符，一并勘误。
+            // 现存一次拷贝不可消除：Confluent.Kafka 2.16.0 的 ISerializer<T>.Serialize
+            // 返回 byte[]（反射实证，2026-10-08 升位复核），改用 IProducer<string,
+            // ReadOnlyMemory<byte>> + 自定义序列化器只会把该拷贝移入序列化器，净收益为零；
+            // librdkafka 内部仍需一次拷贝。
+            Value = value,
             Headers = CreateHeaders(context)
         }, ct).ConfigureAwait(false);
 
