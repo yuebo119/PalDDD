@@ -217,12 +217,16 @@ public sealed partial class StrategicDddAnalyzer : DiagnosticAnalyzer
         // 链上最近声明同时供 PDDD008/013/014 的 contextName 提取（PDDD002 仍只验直接声明，
         // 派生类不重复报命名错误）
         var chainBoundedContext = TryGetAttributeAlongBaseChain(type, BoundedContextAttributeName);
-        var generateMessage = IsDomainEventType(type)
+        // A15（S1 轮）：isDomainEventType 单轮单次——generateMessage 的三元条件与
+        // AnalyzeMessageContractRules 的 PDDD005 判定共用（原两处各算一次：基类链 +
+        // AllInterfaces 全名比对，每类型每轮固定开销减半）
+        var isDomainEventType = IsDomainEventType(type);
+        var generateMessage = isDomainEventType
             ? TryGetAttribute(type, GenerateMessageAttributeName)
             : null;
 
         AnalyzeBoundedContextRules(context, type, boundedContext, chainBoundedContext);
-        AnalyzeMessageContractRules(context, type, chainBoundedContext, generateMessage);
+        AnalyzeMessageContractRules(context, type, chainBoundedContext, generateMessage, isDomainEventType);
         AnalyzeHandlerRules(context, type, chainBoundedContext);
     }
 }
