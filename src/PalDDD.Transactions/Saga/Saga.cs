@@ -796,7 +796,6 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // 管线（throw 位于重试循环之前，v40 注释曾误称"补偿链消费"，A 片复核证伪）。
         // 前序已执行步骤的 ExecutedStepKeys 消费由 SagaTimeoutProcessor 超时兜底或
         // 调用方 catch 后自行处理；嵌套子 Saga 场景经反射包装为步骤失败可获父级重试
-        List<Exception> routeFailures = [];
         string targetKey;
         try
         {
@@ -804,7 +803,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            routeFailures.Add(ex);
+            // EPSL 地毯审计 2026-10-16 A 批 #12：失败列表惰性建——成功路径（常态）原每次
+            // 分发无条件分配空 List（~32B/步），Dynamic 车道是 R3 四车道共享骨架惰性化
+            //（同文件 failures 先例）的漏格姊妹；失败列表只在 catch 内构建。
+            List<Exception> routeFailures = [ex];
             throw new AggregateException(
                 $"DynamicStep '{step.Name}' 路由函数执行失败", routeFailures);
         }
