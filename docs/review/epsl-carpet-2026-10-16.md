@@ -119,9 +119,33 @@
 
 **收尾纪律记录**：A 批两处新测试初版用了 `IsNotNull` 弱断言，被 `AssertionStrengthGateTests` 棘轮当场拦下（基线 200 上限）——按「新增测试必须行为断言」纪律改为直取属性（null 时 NRE 即红），未抬基线。修复轮另实证：`SagaTimeoutDetector` 无超时路径的分配面比审计发现更大（三笔而非一笔：空 List + `[]` 集合表达式每次求值新建空数组 + 接口枚举器），三笔同路径同族一并收单。
 
-## 六、尾注
+## 六、B 批 15 项处置（用户令「按报告最优方案优化实现」，2026-10-16 当晚）
 
-- 移交项：A 批 10 项（#1 #12 #13 #14 #15 #16 #17 #18 #19 #26）**已闭环**（第五节修复列表）；B 批 15 项（#2-#11 #20-#23 #25）按排序表逐项走深挖协议，其中 #2/#11 待用户裁决注释级登记重开、#7 维持 B7 移交格局（(a) 方案可先行）、#23 待淘汰策略裁决；不做批 1 项（#24，数据在表 2）。
+解读记录：#2/#11 的「用户裁决注释级登记重开」视本轮实施指令为裁决（已在两份报告两次呈报）；wslc 四容器（pg186/mysql84/rabbit436/kafka431）本轮拉起，报告里「需 wslc 实测」的项得以真库实证。
+
+| # | 项 | 处置 | 证据 |
+|---|----|------|------|
+| ⑨ | CQRS validators 接口枚举 | ✅ 已实施 | JIT 探针：非空数组形态 interface=32B/iter vs array=0B/iter（空数组两端皆 0）；构造期物化 + 对照组增量分配测试（旧码 32B/迭代红→绿）；提交随 B8 |
+| ⑧ | DecompressBufferPool 驻留上限 | ✅ 已实施 | 256KB 阈值与 R9 四池对齐（S5 分片建议值）；两契约测试（超阈值弃槽重建 + 阈值内复用）；stash 旧码红 |
+| ⑩ | SourceGen O(N) churn | ✅ 已实施 | hint/identity 上移 transform 预计算（工厂 + 10 处构造点改道），Select/Combine 直取；Core.Tests 323/323（生成物契约锁定） |
+| ③ | Saga 租约 RETURNING 化 | ✅ 已实施 | Dapper+PalORM 双栈 PG/SQLite 单语句；CreatedAt 客户端排序保契约；MySQL 两步不变；wslc pg186 真库实证（RETURNING 行集=锁定批、同 tick 二次租约不混入）；快照 +2 行 |
+| ② | DapperEventLog MySQL k>1 批化 | ✅ 已实施（用户裁决重开） | wslc mysql84 实证：mode 2 已知行数多行 VALUES 连续块（5 行 min/max=1/5 无间隙、LAST_INSERT_ID=首行值）；多行 INSERT + 版本范围回查 2 往返；批插构造提共享 helper |
+| ⑦ | ProjectionProcessor 每事件 3 语句 | ✅ 已实施（(a) 方案） | 关系型直插优先（镜像 Inbox A9），新位 3→2 语句；SQLite 语句计数测试旧码红→绿 |
+| ㉓ | InMemorySagaStateStore 终态滞留 | ✅ 已实施（活跃索引方案） | 扫描 O(活跃)，GetById 仍返回终态（行为契约不变——审计记录的用户决策点以无行为变更方式解决）；Add/SaveChanges 受理点自纠；227+23 全绿 |
+| ㉑ | Idempotency reclaim 回读 | ✅ 已实施 | Dapper PG/SQLite 改 UPDATE...RETURNING revision 单语句（MySQL 维持两步）；400+108 全绿 |
+| ⑤ | Idempotency 冲突路径全行读 | ✅ 已实施 | Dapper+PalORM 双栈轻量读（status/locked_until/expires_at/revision），过期/CAS 语义逐字保持；踩坑：行类 private→internal（Dapper IL 对 private 嵌套类型属性赋值走错路径致列错位）已修 |
+| ⑪ | PalORM EventLog MySQL 阈值 | ✅ 已实施（用户裁决重开） | 单语句 MIN/MAX 区间回查使 k≥3 净胜（A11 原登记按「回查需 2 次额外往返」计 k≥4，阈值修正）；批插构造与冲突分类提共享 helper；MySQL 行上限 4000 |
+| ④ | DapperEventLog PG Exact 三版本 | ✅ 已实施 | 三版本守卫谓词（INSERT..SELECT 失匹零行转并发异常）；wslc pg186 store 级四形态验证，**并抓修 Exact 守卫差一（current=n 写成 next=n）**；CI 方言探针补断言 |
+| ⑥ | Saga 批量释放 IN 列表无界 | ❌ **证伪不实施** | 裸 ADO 探针：捆绑 SQLite 3.53.4 变量上限 32766（32000 OK / 33000 FAIL），配置可达的 10k 上限在三方言全正常——审计引用的 999 是 SQLite 3.32 前（2019）旧知识；分块反而使大批付 25 次往返（净回归） |
+| ⑳ | DapperBulkCopy SQLite 多行 VALUES | ❌ **证伪不实施** | 本地 SQLite 1000 行实测：逐条复用命令 4ms vs 多行 VALUES 14ms（**慢 3.5×**）——大语句构造+解析成本超过省下的命令执行；审计「999 次可省命令执行」前提不成立 |
+| ㉒ | IdempotencyProcessor 前置读 | ⏸ 移交维持 | 无零契约变更修法：前置读服务缓存命中快路径（重复位 1 语句），删除它使新位 -1 语句但重复位 +2 语句，净收益取决于部署命中率分布（无数据）；契约变更（TryStart 冲突返回既有记录）涉四栈公共行为，待用户裁决 |
+| ⑦(b) | Projection 窗口化检查点 | ⏸ 移交维持 | B7 原案：崩溃重放窗口 1→N 语义需裁决（IProjectionHandler remarks 幂等契约已留前提），特性级变更不属局部修复 |
+
+提交：`2e16620`(⑧⑨) · `cafc7bc`(⑩) · `0b93d7f`(③) · `aba828f`(②) · `c278fcf`(⑦a) · `88e8954`(㉓) · `8b1a232`(㉑⑤) · `f520a37`(⑤可见性修复) · `a79b355`(④) · `4ad356b`(⑪)。全量验证：Release 0W0E + check-all 0/0/0 + 16 工程 1564 通过 0 失败（76 容器探针按 T-17 跳过）。
+
+## 七、尾注
+
+- 移交项：A 批 10 项与 B 批 10 项已闭环（第六节处置表）；B 批证伪 2 项（#6 #20，实测数据在案）、移交维持 3 项（#22 待部署命中率数据或契约变更裁决、#7(b) 窗口化待崩溃窗口语义裁决）；不做批 1 项（#24，数据在表 2）。
 - 归集：本表 2/表 3 应整体迁入 `.ai/perf-ledger.md` 表 4 候选排序表（本轮已同步更新）与表 2 明确不做表（#24 新增一行）。
 - 数据源：七分片 agent 报告（会话内全文在案）；头条 9 条复核 sed/Read 输出在案；`--smoke`、`check-all.cs`、测试循环输出在案（tmp 日志）。
 - 相关：`epsl-carpet-2026-10-11.md`（上轮）、`perf-budgets.md`（预算契约）、`.ai/perf-ledger.md`（性能台账）、`docs/performance.md`（实测账本）。
