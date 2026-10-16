@@ -940,8 +940,12 @@ internal sealed class {{converterName}}TypeConverter : TypeConverter
             other is not null
             && Namespace == other.Namespace
             && TypeName == other.TypeName
-            && ContainingDeclarations.SequenceEqual(other.ContainingDeclarations)
-            && ContainingNames.SequenceEqual(other.ContainingNames)
+            // EPSL 地毯审计 2026-10-16 B 批 #25：string[] 相等改手写逐元素循环——原
+            // LINQ SequenceEqual 对非空数组每次 Equals 分配 2 个 SZGenericArrayEnumerator
+            // （两数组共 4 个，每次候选变更一次；空数组走 ICollection 快路径不分配故只咬
+            // 嵌套类型）。与 EnumGenInfo.Equals 同款同因。
+            && ContainingDeclarations.StringArrayEqual(other.ContainingDeclarations)
+            && ContainingNames.StringArrayEqual(other.ContainingNames)
             && SourceType == other.SourceType
             && IsNumeric == other.IsNumeric
             && DiagnosticId == other.DiagnosticId

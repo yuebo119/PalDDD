@@ -634,8 +634,12 @@ partial class {{info.TypeName}}
             other is not null
             && Namespace == other.Namespace
             && TypeName == other.TypeName
-            && ContainingDeclarations.SequenceEqual(other.ContainingDeclarations)
-            && ContainingNames.SequenceEqual(other.ContainingNames)
+            // EPSL 地毯审计 2026-10-16 B 批 #25：string[] 相等改手写逐元素循环——原
+            // LINQ SequenceEqual 对非空数组每次 Equals 分配 2 个 SZGenericArrayEnumerator
+            // （两数组共 4 个，每次候选变更一次；空数组走 ICollection 快路径不分配故只咬
+            // 嵌套类型）。与同方法 FieldsEqual（ImmutableArray 手写循环）同构。
+            && ContainingDeclarations.StringArrayEqual(other.ContainingDeclarations)
+            && ContainingNames.StringArrayEqual(other.ContainingNames)
             && ValueType == other.ValueType
             && FieldsEqual(Fields, other.Fields)
             && HasFields == other.HasFields
@@ -703,6 +707,20 @@ partial class {{info.TypeName}}
     }
 }
 
+/// <summary>string[] 逐元素相等（B25，EnumGenInfo/IdGenInfo.Equals 共用）——LINQ
+/// SequenceEqual 对非空数组每次分配 2 个枚举器；手写循环零分配，语义逐字等价
+/// （长度不等即不等，逐元素 string 相等）。</summary>
+internal static class StringArrayExtensions
+{
+    public static bool StringArrayEqual(this string[] left, string[] right)
+    {
+        if (ReferenceEquals(left, right)) return true;
+        if (left.Length != right.Length) return false;
+        for (var i = 0; i < left.Length; i++)
+            if (!string.Equals(left[i], right[i], StringComparison.Ordinal)) return false;
+        return true;
+    }
+}
 
 /// <summary>INamedTypeSymbol 扩展（v52 P2：包含类型 partial 性检查共享）。</summary>
 internal static class NamedTypeSymbolExtensions
