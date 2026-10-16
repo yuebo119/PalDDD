@@ -274,6 +274,7 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | MediatR 横向对比（12.5.0 同进程四点：零行为/单行为 × 双框架） | — | ✅ | `--compare`（2026-10-09 新维度轮；引用须带完整口径——MediatR 是纯分发器无基础设施层） | ✅ |
 | CAP 横向对比（DotNetCore.CAP 10.0.2，RabbitMQ 传输 + MySQL cap.published，同语义路径对位；2026-10-11 升级换锚，结论与 8.4.1 时代同带跨主版本稳定） | — | ✅ | `--compare` + `PALDDD_BENCH_CAP_MYSQL`/`PALDDD_BENCH_CAP_RABBIT`（一次性容器，2026-10-09 新维度轮） | ✅ |
 | 投递吞吐端到端（SQLite 真库标记 + 假 broker RTT 矩阵 0/1/20ms + T1.2 排空节奏对照；排空 1000 条积压墙钟口径） | — | ✅ | `--delivery`（2026-10-11 优化实施轮 T0.2；专用采样档 5 迭代/3 预热/1 launch——多秒级 op 撞 InProcess 单基准 5 分钟上限，medium 不可用，同 coverage×strict 车道级形态；T2.1/T3.1 的 A/B 基线） | ✅（数字见 performance.md 优化实施轮段） |
+| 投递吞吐端到端·远程库（PG/MySQL 网络真库 + 假 broker RTT 0/1ms × BatchMark 1/16，InFlight 固定 1；排空 1000 条积压墙钟口径） | — | ✅ | `--delivery-pg` / `--delivery-mysql`（2026-10-16 B1 复活前提实测新增；同 --delivery 采样档，wslc 外部实例路径 `PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` + palddd_bench 库名守卫，MySQL 种子走 LOAD DATA LOCAL 须连接串显式 `AllowLoadLocalInfile=True` + 服务端 `local_infile=1`——库级安全门，调用方显式决策） | ✅（数字见 performance.md 远程投递 A/B 段） |
 | 绝对 QPS（1/4/8 线程 × dispatch/chain 聚合吞吐，非 BDN 专门 harness） | ✅（--smoke 级趋势） | —（harness 形态） | `--qps`（2026-10-09 新维度轮；多线程聚合不可由单线程 ns/op 外推） | ✅ |
 | EventLog 写入 | ✅ | ✅ | `--infra` | ✅ |
 | SagaState 持久化 | ✅ | ✅ | `--infra` | ✅ |

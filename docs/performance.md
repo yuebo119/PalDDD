@@ -610,7 +610,22 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **R4/P0-2 收益量化（ADR-027 移交项：--delivery 车道 threshold 参数化 A/B）**：`OutboxDeliveryDrainBenchmarks` 新增 `BatchMark` 参数（1 = 逐条默认基线 / 16 = 满阈值分组单语句），矩阵 RTT 0/1/20 × InFlight 1/16 × BatchMark 1/16，口径 = SQLite 真库 + 假 broker 排空 1000 条墙钟（medium 档 5 迭代/3 预热）。**实测结论：本地端到端零显著差**——RTT=0 四格 162.3~172.2 ms/op 全在噪声带内（BatchMark16/1 比值 0.97 / 1.04 / 1.00 / 0.99，StdDev 量级 ~5%）；RTT=1 四格由发布延迟主导（Windows `Task.Delay` 15.6ms 粒度，串行档 ~17s/op，标记段占比可忽略）。RTT=20 四格未跑完：该格本机 ~33s/op × 8 次撞 BDN InProcess 单基准 5 分钟硬上限（既有车道限制，非本轮引入；按已测标记段成本推算其占比 ~0.04%，零差为确定性结论）。
 
-**解释性量具（--persist-mark，新增 `OutboxMarkPathBenchmarks`，20 轮 × 100 条/op 放大到 ms 级）**：标记段本身收益真实——逐条 `MarkProcessedAsync` vs 满 100 单语句组（SQLite 真库，medium 档）：**26.46ms → 14.49ms（Ratio 0.55，StdDev 1.10/0.26ms），即 13.2μs/条 → 7.25μs/条（1.83×）**；分配 7.81MB → 3.37MB/op（3.9KB → 1.7KB/条，Dapper 逐条 DynamicParameters 形态）。但标记段仅占本地排空 ~8%（13.2μs / ~165μs 每 msg），批量节省 5.98μs/条 ≈ 端到端 3.6%（低于噪声带）——端到端零差由此解释，非无收益。**收益形态在远程库**：PG/MySQL 每标记 = 网络 RTT（本地基线锚：PG 单插入 630μs / MySQL 1730μs 量级），1000 条标记往返从 1000 次收为 62 次分组语句；真库车道需 Docker（本机无）未跑——登记 Not-Tested，量级按锚点推算：串行确认档显著、流水线档部分隐藏于发布 RTT 之后。
+**解释性量具（--persist-mark，新增 `OutboxMarkPathBenchmarks`，20 轮 × 100 条/op 放大到 ms 级）**：标记段本身收益真实——逐条 `MarkProcessedAsync` vs 满 100 单语句组（SQLite 真库，medium 档）：**26.46ms → 14.49ms（Ratio 0.55，StdDev 1.10/0.26ms），即 13.2μs/条 → 7.25μs/条（1.83×）**；分配 7.81MB → 3.37MB/op（3.9KB → 1.7KB/条，Dapper 逐条 DynamicParameters 形态）。但标记段仅占本地排空 ~8%（13.2μs / ~165μs 每 msg），批量节省 5.98μs/条 ≈ 端到端 3.6%（低于噪声带）——端到端零差由此解释，非无收益。**收益形态在远程库**：PG/MySQL 每标记 = 网络 RTT（本地基线锚：PG 单插入 630μs / MySQL 1730μs 量级），1000 条标记往返从 1000 次收为 62 次分组语句。**该 Not-Tested 登记已于 2026-10-16 清算**（--delivery-pg / --delivery-mysql 实跑，见下段）：串行确认档端到端 6.2~6.4×、标记段占排空 84%；「流水线档部分隐藏于发布 RTT 之后」未在远程格单独测（远程车道 InFlight 固定 1，T3.1 交互已有 SQLite 车道 12.9~13.0× 数据）。
+
+**远程库投递 A/B（--delivery-pg / --delivery-mysql，2026-10-16，B1 复活前提实测，新增车道）**：口径同 --delivery（排空 1000 条积压墙钟 + 发布计数守卫 + 假 broker RTT），store 走 wslc 外部实例（`PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` + palddd_bench 库名守卫；MySQL 种子走 LOAD DATA LOCAL 协议，连接串显式 `AllowLoadLocalInfile=True` + 服务端 `local_infile=1`——库级安全门由调用方显式决策）。矩阵 RttMs {0,1} × BatchMark {1,16}，InFlight 固定 1（B1 决策面向默认配置；InFlight=16 与批量标记的交互已由 SQLite 车道 T3.1 实测）。专用采样档 5 迭代/3 预热/1 launch（远程 op 秒级，medium 15×2 撞 InProcess 单基准 5 分钟硬上限）。
+
+| 方言 | RttMs | 逐条(BatchMark=1) | 批量(BatchMark=16) | 标记段 | 占排空 | 加速比 |
+|---|---:|---|---|---|---:|---:|
+| PG | 0 | 742.1 ms（E 78.32 / SD 12.12） | 116.4 ms（E 65.40 / SD 16.99） | 625.7 ms | **84.3%** | **6.37×** |
+| PG | 1 | 9,666.2 ms（E 1,299.10 / SD 337.37） | 9,438.9 ms（E 1,463.80 / SD 226.52） | 227.3 ms | 2.35% | 1.02× |
+| MySQL | 0 | 2,221.7 ms（E 395.22 / SD 102.64） | 359.0 ms（E 73.63 / SD 19.12） | 1,862.7 ms | **83.8%** | **6.19×** |
+| MySQL | 1 | 12,328.8 ms（E 16,355.96 / SD 2,531.10） | 13,479.4 ms（E 11,537.17 / SD 2,996.17） | −1,150.6 ms | 噪声带内 | 0.91× |
+
+派生读数：单标记往返成本 **PG 0.67ms / MySQL 2.00ms**（625.7ms 与 1,862.7ms 除以约 930 条避免的逐条语句；与账本单语句锚 PG 630μs / MySQL 1730μs 同带——批量标记省下的正是这部分网络往返）；分配 PG 3.77→2.01MB/op（−47%）、MySQL 5.13→2.22MB/op（−57%，逐条 DynamicParameters 形态收敛）。
+
+**RttMs=1 格读法（两处必须同时声明）**：①本机 `Task.Delay(1)` 有效值约 9~10ms/条（Windows 定时器粒度，非 1ms——PG 该格每消息总延迟 9.67ms 减去标记段 0.63ms 与基数后约 8.9ms 即发布延迟），标记段被发布延迟稀释；②该格 A/B 差值落在 Error 带内（PG 227ms vs ±1.3~1.5s；MySQL 差值符号为负且 Error 带 ±11.5~16.4s 完全淹没）——**两方言 RttMs=1 格均不具统计显著性，结论是「无可测差异」而非「差异小」**。
+
+**B1 复活前提第一项判定**（决策文档开放决策点 1「远端 DB 标记往返实测占发布延迟 >5%」）：DB 主导形态（broker 确认延迟低于阈值）下前提成立且远超阈值，占比 84.3%（PG）/ 83.8%（MySQL），端到端 6.2~6.4×；阈值解析式 share(r) = M / (base + 1000r + M) > 5% 给出 **PG r < ~11.8ms/条、MySQL r < ~35.0ms/条**（[推断]：以实测 M 与 base 代入，非独立实测点）。broker 确认延迟超过阈值后标记段退化为二阶成本（本机最小非零 broker 延迟格实测无可测差异，与该解析一致）。前提另两项（消费侧 Inbox 幂等可审计 + 时间界冲刷而非纯计数界）未满足，且「重复窗口放大最高 99×」的反驳与延迟形态无关，**B1 维持不做**；新数据的价值是把收益从量级估算升级为分形态实测，并给出部署判据：broker 确认延迟与 DB 往返同量级或更低时（本地/同机房 broker、跨机房 DB），`BatchMarkThreshold` 16~64 的 opt-in 收益显著。
 
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 

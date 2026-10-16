@@ -240,6 +240,18 @@ if (args.Contains("--persist-pg", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--persist-mysql", StringComparer.OrdinalIgnoreCase))
     return await RunRemoteDialectAsync(isPostgreSql: false, ModeConfig(args));
 
+// B1 复活前提实测（2026-10-16）：--delivery-pg / --delivery-mysql——远程库投递排空
+// BatchMarkThreshold A/B（「远端 DB 标记往返占发布延迟 >5%」前提的实测量具）。与
+// --delivery 同采样档（5 迭代/3 预热/1 launch：远程 op 秒级，medium 15×2 撞
+// InProcess 单基准 5 分钟硬上限），artifacts 独立目录归档；远程会话创建与
+// --persist-pg 同路（PALDDD_BENCH_PG_CONN / PALDDD_BENCH_MYSQL_CONN 外部实例或
+// 一次性容器，palddd_bench 库名前缀守卫）。
+if (args.Contains("--delivery-pg", StringComparer.OrdinalIgnoreCase))
+    return await RunRemoteDeliveryAsync(isPostgreSql: true);
+
+if (args.Contains("--delivery-mysql", StringComparer.OrdinalIgnoreCase))
+    return await RunRemoteDeliveryAsync(isPostgreSql: false);
+
 // 2026-10-08 缺口清单第③④⑤⑥⑧项：--coverage——Projection 吞吐 / 消息演化管线 /
 // Specification 内存路径 / Hosting 每请求开销 / 端到端单命令链路（全部零外部依赖，
 // 端到端与 Hosting 为框架开销层口径：InMemory store / DefaultHttpContext，无网络与 DB）。
@@ -265,10 +277,7 @@ static async Task<int> RunRemoteDialectAsync(bool isPostgreSql, IConfig config)
     catch (Exception ex)
 #pragma warning restore CA1031
     {
-        Console.Error.WriteLine(
-            $"⛔ {(isPostgreSql ? "PostgreSQL" : "MySQL")} 容器不可达（需 Docker/WSL 环境，参考 CI dialect-probe）：{ex.Message}\n" +
-            $"   替代路径：环境变量 {(isPostgreSql ? "PALDDD_BENCH_PG_CONN" : "PALDDD_BENCH_MYSQL_CONN")} 指向外部实例连接串" +
-            $"（库名须 palddd_bench 前缀；wslc 容器环境用此路径，容器生命周期外部管理）");
+        ReportRemoteUnreachable(isPostgreSql, ex);
         return 2;
     }
 
@@ -294,6 +303,46 @@ static async Task<int> RunRemoteDialectAsync(bool isPostgreSql, IConfig config)
     }
     return 0;
 }
+
+/// <summary>远程库投递排空 A/B（B1 复活前提实测）——会话创建同 RunRemoteDialectAsync，
+/// 采样档同 --delivery（5/3/1），只跑 OutboxDeliveryRemoteDrainBenchmarks 一类。</summary>
+static async Task<int> RunRemoteDeliveryAsync(bool isPostgreSql)
+{
+    RemoteDialectBenchSession session;
+    try
+    {
+        session = await RemoteDialectBenchSession.CreateAsync(isPostgreSql);
+    }
+#pragma warning disable CA1031 // 同 RunRemoteDialectAsync：容器不可达是环境态
+    catch (Exception ex)
+#pragma warning restore CA1031
+    {
+        ReportRemoteUnreachable(isPostgreSql, ex);
+        return 2;
+    }
+
+    await using (session)
+    {
+        RemoteDialectBenchState.Connection = session.Connection;
+        RemoteDialectBenchState.ConnectionString = session.ConnectionString;
+        RemoteDialectBenchState.DbType = session.DbType;
+        var deliveryRemote = ManualConfig.Create(DefaultConfig.Instance)
+            .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance)
+                .WithIterationCount(5).WithWarmupCount(3).WithLaunchCount(1))
+            .AddDiagnoser(MemoryDiagnoser.Default)
+            .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-delivery-remote"));
+        BenchmarkRunner.Run<OutboxDeliveryRemoteDrainBenchmarks>(deliveryRemote);
+        RemoteDialectBenchState.Connection = null;
+        RemoteDialectBenchState.ConnectionString = null;
+    }
+    return 0;
+}
+
+static void ReportRemoteUnreachable(bool isPostgreSql, Exception ex)
+    => Console.Error.WriteLine(
+        $"⛔ {(isPostgreSql ? "PostgreSQL" : "MySQL")} 容器不可达（需 Docker/WSL 环境，参考 CI dialect-probe）：{ex.Message}\n" +
+        $"   替代路径：环境变量 {(isPostgreSql ? "PALDDD_BENCH_PG_CONN" : "PALDDD_BENCH_MYSQL_CONN")} 指向外部实例连接串" +
+        $"（库名须 palddd_bench 前缀；wslc 容器环境用此路径，容器生命周期外部管理）");
 
 BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 
