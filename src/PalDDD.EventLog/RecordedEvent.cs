@@ -39,8 +39,13 @@ public sealed class RecordedEvent
         EventName = data.EventName;
         SchemaVersion = data.SchemaVersion;
         ContentType = data.ContentType;
-        _payload = data.Payload.ToArray();
-        _metadata = data.Metadata.ToArray();
+        // EPSL 地毯审计 2026-10-16 A 批 #15：payload/metadata 别名 EventData 的构造期
+        // 副本（PayloadArray/MetadataArray，v65 P3 别名共享声明在案）——原形态此处又
+        // ToArray 一次，InMemory 追加路径每事件双拷（EventData ctor 防御拷 + 本处再拷）。
+        // EventData 构造后不可变（公开面 ReadOnlyMemory），同程序集引用共享安全，与
+        // StoredEvent（EFCore 栈）零拷贝别名先例同构。公开 API 契约不变。
+        _payload = data.PayloadArray;
+        _metadata = data.MetadataArray;
         Audit = data.Audit;
     }
 
