@@ -14,7 +14,7 @@
 |------|-----|
 | 落盘日期 | 2026-10-16 |
 | 评审状态 | **已裁决**（2026-10-16）：三项经两轮论证（首轮方案论证 + 二轮重辩含红队），用户拍板「都不做」；无代码变更，本文件即裁决记录 |
-| 评审记录 | 重辩关键修正：①B1 的重复窗口不止崩溃路径——LeaseDuration 默认 2 分钟，一批 100 条发布耗时超租约即触发过期重投，放大倍数最高 99（慢 broker 场景重复最痛时放大最狠）；纯计数翻倍把窗口上界交给批次时长，不可控。②B2 首轮「乱序风险与 W=1 等价」的论断被自我推翻：Outbox 失败重试乱序确与 W 无关，但 W>1 新增 librdkafka 内部重试在 idempotence 关闭时的乱序面，W=1 下不存在；且 at-least-once 容忍重复不容忍乱序，B2 与 B1 不同性。③B1 收益只覆盖 Dapper/EF/InMemory 三栈（PalORM 未实现 IBatchMarkOutboxStore，ADR-027 延后段） |
+| 评审记录 | 重辩关键修正：①B1 的重复窗口不止崩溃路径——LeaseDuration 默认 2 分钟，一批 100 条发布耗时超租约即触发过期重投，放大倍数最高 99（慢 broker 场景重复最痛时放大最狠）；纯计数翻倍把窗口上界交给批次时长，不可控。②B2 首轮「乱序风险与 W=1 等价」的论断被自我推翻：Outbox 失败重试乱序确与 W 无关，但 W>1 新增 librdkafka 内部重试在 idempotence 关闭时的乱序面，W=1 下不存在；且 at-least-once 容忍重复不容忍乱序，B2 与 B1 不同性。③B1 收益面：裁决时点 PalORM 未实现 IBatchMarkOutboxStore（只覆盖 Dapper/EF/InMemory 三栈，ADR-027 延后段）；**2026-10-16 晚 PalORM 栈已补齐**（until 编码三方言探针实证后实施），收益面扩为四栈——不改变 B1 裁决（重复窗口性质与默认翻面的举证责任不变），仅覆盖面重估的前提已满足 |
 | 裁决记录 | B1（BatchMarkThreshold 默认 1→BatchSize）= 不做；B2（MaxInFlightPublishes 默认 1→16）= 不做；B3（EventLogPositionReserver 构造必传化）= 不做。维持现有默认（逐条标记/串行确认/可选 reserver），选项能力对需要的用户保持可用（opt-in 路径与文档已在） |
 
 ## 证据锚点表
@@ -23,7 +23,7 @@
 |----------|--------|:--:|
 | B1 目标默认值现状：`BatchMarkThreshold = 1`（逐条标记），XML doc 已声明崩溃/租约过期重复窗口与 Inbox 幂等前提 | TransactionOptions.cs:139 | ☒ |
 | B1 放大路径的事实基础：`LeaseDuration` 默认 2 分钟——批处理时长超租约即过期重投，已发布未标记消息被另一 worker 重发 | TransactionOptions.cs:30 | ☒ |
-| B1 收益覆盖面限制：PalORM 栈未实现 `IBatchMarkOutboxStore`（自动回落逐条），默认翻转只惠及 Dapper/EF/InMemory 三栈 | TransactionOptions.cs:132 | ☒ |
+| B1 收益覆盖面限制：PalORM 栈未实现 `IBatchMarkOutboxStore`（自动回落逐条），默认翻转只惠及 Dapper/EF/InMemory 三栈 | TransactionOptions.cs:132 | ☒（裁决时点事实；**2026-10-16 晚已补齐**，覆盖面扩为四栈，XML doc 同提交勘正） |
 | B2 目标默认值现状：`MaxInFlightPublishes = 1`（串行逐条确认），XML doc 已声明 Rabbit 帧序天然/Kafka 重试乱序须 enable.idempotence | TransactionOptions.cs:120 | ☒ |
 | B2 收益量级引用源：RTT 主导场景收益为窗口量级（T3.1 量具实测 RTT20ms 档 25.65s→1.97s），doc 引 performance.md 投递吞吐段 | TransactionOptions.cs:110 | ☒ |
 | B3 目标现状：`positionReserver ?? new EventLogPositionReserver()`——漏传时每 Scoped 上下文各持一个预留器，Hi/Lo chunk 缓存不跨请求共享（每次 append 多 2 次分配器往返 + 位置按 chunkSize 稀疏化） | EventLogDbContext.cs:28 | ☒ |
@@ -35,7 +35,7 @@
 
 | # | 决策点 | 状态 | 复活触发条件 |
 |---|--------|------|------|
-| 1 | B1 批量标记默认化（含时间界冲刷变体） | **已裁决：不做**（2026-10-16） | 同时满足：远端 DB 标记往返实测占发布延迟 >5% + 消费侧 Inbox 幂等可审计 + 采用时间界冲刷（窗口 ≤ 数秒，恒小于租约）而非纯计数界。或 PalORM 栈补齐 IBatchMarkOutboxStore 后重估覆盖面 |
+| 1 | B1 批量标记默认化（含时间界冲刷变体） | **已裁决：不做**（2026-10-16） | 同时满足：远端 DB 标记往返实测占发布延迟 >5% + 消费侧 Inbox 幂等可审计 + 采用时间界冲刷（窗口 ≤ 数秒，恒小于租约）而非纯计数界。或 PalORM 栈补齐 IBatchMarkOutboxStore 后重估覆盖面（**PalORM 已于 2026-10-16 晚补齐，覆盖面已扩为四栈；B1 重开仍须满足前三项**） |
 | 2 | B2 流水线默认化 | **已裁决：不做**（2026-10-16） | 机队标准化为 RabbitMQ（帧序天然保序），或 Kafka idempotence 成为可启动期校验的强制前提；当前维持默认 1 + 文档/模板推荐值推送 |
 | 3 | B3 reserver 构造必传化 | **已裁决：不做（本轮）** | v5.0 大版本窗口开放时与其它破坏性变更打包，配迁移指南；此前以模板/示例默认接线补偿可发现性 |
 

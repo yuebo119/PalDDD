@@ -150,9 +150,10 @@ public interface IImmediateWriteOutboxStore
 /// </para>
 /// <para>
 /// 处理器经 <see cref="OutboxOptions.BatchMarkThreshold"/>（默认 1 = 逐条路径逐字不变）
-/// opt-in 启用；实现栈：Dapper / EF Core（OutboxDbContext 族）/ InMemory。
-/// <b>PalORM 栈暂不实现</b>：批量 WHERE 的 <c>until</c> 参数编码须与上游租约绑定逐字节
-/// 一致（方言陷阱面），留待真库探针验证后跟进（ADR-027）。
+/// opt-in 启用；实现栈：Dapper / EF Core（OutboxDbContext 族）/ InMemory / PalORM。
+/// PalORM 栈于 2026-10-16 清算 ADR-027 延后段（until 编码三方言探针实证后实施）：
+/// 批量 WHERE 的 <c>until</c> 取租约回读值且以 DateTimeOffset 形态插值，与租约写入
+/// 绑定逐字节一致（同值以 DateTime 形态传递三方言实测全拒——编码形态敏感，勿简化）。
 /// </para>
 /// </summary>
 public interface IBatchMarkOutboxStore

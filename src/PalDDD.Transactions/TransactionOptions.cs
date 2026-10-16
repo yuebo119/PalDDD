@@ -130,8 +130,8 @@ public sealed class OutboxOptions
     /// ⚠️ 语义边界：①标记时点从「发布后立即」延迟到「累积满阈值/批末」（崩溃窗口内
     /// 已发布未标记的消息经租约过期重投——at-least-once 契约内，重复窗口随本值增大，
     /// 消费方应具备 Inbox 幂等，与 <see cref="MaxInFlightPublishes"/> 同族声明）；②需
-    /// store 实现 <c>IBatchMarkOutboxStore</c>（Dapper/EF Core/InMemory 实现；PalORM 栈
-    /// 暂未实现自动回落逐条）；③失败路径（死信/重试释放）仍逐条即时标记不变；
+    /// store 实现 <c>IBatchMarkOutboxStore</c>（Dapper/EF Core/InMemory/PalORM 四栈实现，
+    /// PalORM 2026-10-16 补齐——until 编码三方言探针实证，见 ADR-027）；③失败路径（死信/重试释放）仍逐条即时标记不变；
     /// ④分区内标记批序 = 租约序（保序声明同 T3.1）。启动期经 <c>ValidateOnStart</c>
     /// 校验 ≥ 1。单语句组内行数上限 400（SQLite 参数上限 999 防御，实现内分块）。
     /// </para>
