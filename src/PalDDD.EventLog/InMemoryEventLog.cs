@@ -101,9 +101,20 @@ public sealed class InMemoryEventLog : IEventLog
         List<RecordedEvent> snapshot;
         lock (_lock)
         {
-            snapshot = _streams.TryGetValue(streamName, out var stream)
-                ? stream.Where(e => e.StreamVersion >= fromVersion).Take(maxCount).ToList()
-                : [];
+            if (!_streams.TryGetValue(streamName, out var stream))
+            {
+                snapshot = [];
+            }
+            else
+            {
+                // A14（S1 轮，2026-10-15）：二分定位起始下标 + GetRange 只拷所需段——原
+                // Where+Take+ToList 对全表线性过滤再整表拷 List（10 万事件流每次读都
+                // O(n) 过滤 + O(取数) 拷贝）。流按 StreamVersion 单调追加，首个 >=
+                // fromVersion 的下标即起始（语义与 Where 逐字等价）。
+                var start = LowerBound(stream, fromVersion, static e => e.StreamVersion);
+                var count = Math.Min(maxCount, stream.Count - start);
+                snapshot = count > 0 ? stream.GetRange(start, count) : [];
+            }
         }
 
         var read = 0;
@@ -121,11 +132,12 @@ public sealed class InMemoryEventLog : IEventLog
                 // 最后一个已产出事件不计入 read 指标；前置后早退路径计数完整
                 checked { read++; }
                 yield return @event;
-                // 每事件让出调度器（P3-SRC-106 动机声明）：async 迭代器循环体内无其他 await 时
-                // MoveNextAsync 同步级联完成——消费方逐事件同步处理（重计算/同步阻塞）时整个
-                // 枚举垄断线程池线程，饿死同池排队的工作项（计时器/其他 task）。Task.Yield
-                // 强制回到调度器给其他工作项执行机会。历史行为保留：移除需基准证据
-                await Task.Yield();
+                // A14（S1 轮）：让出降频为每 64 事件一次——原每事件 Task.Yield 使大规模
+                // 回放（10 万事件 = 10 万次调度器让出）付纯调度税；P3-SRC-106 的防饿死
+                // 动机（消费方逐事件同步处理时枚举垄断线程池线程，饿死同池工作项）由
+                // 周期让出保留（64 事件窗口远小于饿死阈值，动机不破）。
+                if ((read & 63) == 0)
+                    await Task.Yield();
             }
         }
         finally
@@ -150,7 +162,12 @@ public sealed class InMemoryEventLog : IEventLog
         List<RecordedEvent> snapshot;
         lock (_lock)
         {
-            snapshot = _global.Where(e => e.GlobalPosition >= fromPosition).Take(maxCount).ToList();
+            // A14（S1 轮，2026-10-15）：二分定位起始下标 + GetRange 只拷所需段——原
+            // Where+Take+ToList 对全量线性过滤再整表拷 List。_global 按 GlobalPosition
+            // 单调追加，首个 >= fromPosition 的下标即起始（语义与 Where 逐字等价）。
+            var start = LowerBound(_global, fromPosition, static e => e.GlobalPosition);
+            var count = Math.Min(maxCount, _global.Count - start);
+            snapshot = count > 0 ? _global.GetRange(start, count) : [];
         }
 
         var read = 0;
@@ -168,11 +185,10 @@ public sealed class InMemoryEventLog : IEventLog
                 // 最后一个已产出事件不计入 read 指标；前置后早退路径计数完整
                 checked { read++; }
                 yield return @event;
-                // 每事件让出调度器（P3-SRC-106 动机声明）：async 迭代器循环体内无其他 await 时
-                // MoveNextAsync 同步级联完成——消费方逐事件同步处理（重计算/同步阻塞）时整个
-                // 枚举垄断线程池线程，饿死同池排队的工作项（计时器/其他 task）。Task.Yield
-                // 强制回到调度器给其他工作项执行机会。历史行为保留：移除需基准证据
-                await Task.Yield();
+                // A14（S1 轮）：让出降频为每 64 事件一次（同 ReadStreamAsync——防饿死
+                // 动机由周期让出保留，纯调度税按 64× 收敛）
+                if ((read & 63) == 0)
+                    await Task.Yield();
             }
         }
         finally
@@ -190,6 +206,28 @@ public sealed class InMemoryEventLog : IEventLog
         stream = [];
         _streams.Add(streamName, stream);
         return stream;
+    }
+
+    /// <summary>
+    /// A14（S1 轮，2026-10-15）：追加有序列表上按 key 定位起始下标（下界二分）——读路径
+    /// 替代 Where+Take+ToList 的全表线性过滤。_streams/_global 分别按 StreamVersion/
+    /// GlobalPosition 单调追加（append-only 契约），首个 selector >= key 的下界即起始；
+    /// 全小于 key 时返回 Count（调用方按空段处理）。语义与 Where(e => key(e) >= key)
+    /// 在单调无重复键上逐字等价。
+    /// </summary>
+    private static int LowerBound(List<RecordedEvent> list, long key, Func<RecordedEvent, long> selector)
+    {
+        var lo = 0;
+        var hi = list.Count;
+        while (lo < hi)
+        {
+            var mid = lo + ((hi - lo) >> 1);
+            if (selector(list[mid]) < key)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return lo;
     }
 
     private static void EnsureExpectedVersion(

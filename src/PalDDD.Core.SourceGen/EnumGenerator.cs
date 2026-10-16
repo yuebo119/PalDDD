@@ -411,9 +411,12 @@ public sealed class EnumGenerator : IIncrementalGenerator
         // 步骤 2：有字段时生成，无字段时报告警告
         // P2 修复（二十一轮）：双 partial 声明崩溃——Collect 后单次回调内去重（方案分支
         // 说明见 IdentityGenerator 同名修复：闭包 HashSet 跨增量 pass 残留会误报）
+        // A15（S1 轮，2026-10-15）：本回调收敛为纯诊断分派（代码生成与 AddSource 移入
+        // 下方 per-candidate Combine 节点）；去重状态改由 duplicateHints 节点每次重算
+        // （值与候选集对应，无跨 pass 状态——闭包 HashSet 的污染问题在此形态下不成立）。
+        // 镜像 IdentityGenerator 同轮改造（两生成器同构）。
         context.RegisterSourceOutput(candidates.Collect(), static (spc, infos) =>
         {
-            var seenHints = new HashSet<string>();
             foreach (var info in infos)
             {
                 if (info.DiagnosticId is not null)
@@ -451,32 +454,89 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         info.TypeName));
                     continue;
                 }
-                // P3 修复（八轮评审）：hint 名的嵌套类型链改用 ContainingNames（纯类型名）——
-                // 原 ContainingDeclarations.Split(' ').Last() 对泛型嵌套类型产出含 "<T>"
-                // 的非法字符（如 "Outer<int>"），与 IdentityGenerator 风格对齐；
-                // 全局命名空间（Namespace == null）用 "_" 仅作 hint 名保底
-                // 三十八轮 P3 修复：hint 拼接对齐 IdentityGenerator ITM-098 的 "+" 方案——
-                // 命名空间内的 "." 保留原样，嵌套层级用 "+" 显式编码（"+" 非 C# 标识符字符，
-                // 不可能出现在类型名中），彻底消除 A_B.C 与 A.B_C 病态命名的同 hint 碰撞
-                // （原 "_" 连接方案 AddSource 重复 hint 抛 ArgumentException）。hint 仅作
-                // 生成物文件名与去重键，变更不影响编译。
-                var hint = info.ContainingDeclarations.Length > 0
-                    ? $"{(info.Namespace is null ? "" : info.Namespace + "+")}{string.Join("+", info.ContainingNames)}.{info.TypeName}.g.cs"
-                    : $"{(info.Namespace is null ? "" : info.Namespace + ".")}{info.TypeName}.g.cs";
-                if (!seenHints.Add(hint))
+                // A15（S1 轮）：代码生成与 AddSource 移出本回调（下方 Combine 节点）——
+                // 本回调只做诊断分派；PALENUM005 重复声明诊断随 AddSource 侧同行报告
+                // （Error 级，测试以 Any 断言）
+            }
+        });
+
+        // A15（S1 轮，2026-10-15）：重复 hint 首现映射节点 + per-candidate AddSource 节点
+        // （镜像 IdentityGenerator 同轮改造）——原 Collect 回调在任一候选变化时对全部
+        // 候选重跑（每候选一次模板渲染 + AddSource）；Combine 只对「该候选变化或重复
+        // 集合变化」触发，未变候选零重渲染。重复 hint 语义保持 P2 修复契约：仅首个出现
+        // 生成、其余报 PALENUM005（「恰好一份生成物」，SourceGeneratorDirectTests 断言在案）。
+        var duplicateHints = candidates.Collect()
+            .Select(static (ImmutableArray<EnumGenInfo> infos, CancellationToken ct) =>
+            {
+                var firstIdentityByHint = new Dictionary<string, string>(StringComparer.Ordinal);
+                var dups = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+                foreach (var info in infos)
                 {
-                    // P2 修复（二十一轮）：重复 [GenerateEnum] 声明——仅首个声明生成代码，
-                    // 其余报 PALENUM005 而非让 AddSource 抛 ArgumentException 崩溃
+                    if (info.DiagnosticId is not null || !info.HasFields)
+                        continue;
+                    var hint = EnumHint(info);
+                    var identity = LocationIdentity(info.Location);
+                    if (!firstIdentityByHint.TryGetValue(hint, out var existing))
+                    {
+                        firstIdentityByHint[hint] = identity;
+                        continue;
+                    }
+                    if (!dups.ContainsKey(hint))
+                        dups.Add(hint, existing);
+                }
+                return dups.ToImmutable();
+            });
+
+        context.RegisterSourceOutput(candidates.Combine(duplicateHints), static (spc, pair) =>
+        {
+            var info = pair.Left;
+            if (info.DiagnosticId is not null || !info.HasFields)
+                return;
+
+            var hint = EnumHint(info);
+            if (pair.Right.TryGetValue(hint, out var firstIdentity))
+            {
+                // A15：重复 [GenerateEnum] 声明——非首现报 PALENUM005（首现照常生成）
+                if (firstIdentity != LocationIdentity(info.Location))
+                {
                     spc.ReportDiagnostic(Diagnostic.Create(
                         DuplicatePartialDeclaration,
                         info.Location ?? Location.None,
                         info.TypeName));
-                    continue;
+                    return;
                 }
-                spc.AddSource(hint, GenerateEnumCode(info));
             }
+
+            spc.AddSource(hint, GenerateEnumCode(info));
         });
     }
+
+    /// <summary>
+    /// A15（S1 轮，2026-10-15）：候选的生成物 hint 名——原内联于输出回调，duplicateHints
+    /// 节点与 AddSource 节点共用单一来源（去重键两处漂移会破坏去重语义）。<br/>
+    /// P3 修复（八轮评审）：hint 名的嵌套类型链改用 ContainingNames（纯类型名）——
+    /// 原 ContainingDeclarations.Split(' ').Last() 对泛型嵌套类型产出含 "&lt;T&gt;"
+    /// 的非法字符（如 "Outer&lt;int&gt;"），与 IdentityGenerator 风格对齐；
+    /// 全局命名空间（Namespace == null）用 "_" 仅作 hint 名保底。
+    /// 三十八轮 P3 修复：hint 拼接对齐 IdentityGenerator ITM-098 的 "+" 方案——
+    /// 命名空间内的 "." 保留原样，嵌套层级用 "+" 显式编码（"+" 非 C# 标识符字符，
+    /// 不可能出现在类型名中），彻底消除 A_B.C 与 A.B_C 病态命名的同 hint 碰撞
+    /// （原 "_" 连接方案 AddSource 重复 hint 抛 ArgumentException）。hint 仅作
+    /// 生成物文件名与去重键，变更不影响编译。
+    /// </summary>
+    private static string EnumHint(EnumGenInfo info)
+        => info.ContainingDeclarations.Length > 0
+            ? $"{(info.Namespace is null ? "" : info.Namespace + "+")}{string.Join("+", info.ContainingNames)}.{info.TypeName}.g.cs"
+            : $"{(info.Namespace is null ? "" : info.Namespace + ".")}{info.TypeName}.g.cs";
+
+    /// <summary>
+    /// A15（S1 轮）：定位标识——(语法树路径, 起始偏移) 组合，用于重复 hint 的首现判定
+    /// （镜像 IdentityGenerator.LocationIdentity；netstandard2.0 兼容形态）。
+    /// </summary>
+    private static string LocationIdentity(Location? location)
+        => location is null
+            ? string.Empty
+            : (location.SourceTree?.FilePath ?? string.Empty) + "#" + location.SourceSpan.Start.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     // P3 修复（八轮评审）：全局命名空间不再 fallback "_"——旧值产出 "namespace _;"
     // 使生成物落入 _ 命名空间与用户类型不合并；返回 null 由 emit 侧条件包裹

@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using System.Collections.Immutable;
 
 namespace PalDDD.Core.SourceGen;
 
@@ -358,9 +359,11 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         // 回调在后续增量 pass 会对"值变化而 hint 不变"的条目重入（如 SourceType 从
         // Guid 改 int），跨 pass 残留的 HashSet 会误报 PALID004 并漏生成代码；改用
         // Collect() 后在单次回调内局部去重——去重状态只存在于一次调用内，无跨 pass 污染。
+        // A15（S1 轮，2026-10-15）：本回调收敛为纯诊断分派（代码生成与 AddSource 移入
+        // 下方 per-candidate Combine 节点）；去重状态改由 duplicateHints 节点每次重算
+        // （值与候选集对应，无跨 pass 状态——闭包 HashSet 的污染问题在此形态下不成立）。
         context.RegisterSourceOutput(candidates.Collect(), static (spc, infos) =>
         {
-            var seenHints = new HashSet<string>();
             foreach (var info in infos)
             {
                 if (info.DiagnosticId is not null)
@@ -433,33 +436,97 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                     continue;
                 }
 
-                var src = GenerateIdentityCode(info);
-                // P3 修复（八轮评审）：全局命名空间（Namespace == null）用 "_" 仅作 hint 名保底，
-                // 生成代码本身不再含 namespace 声明
-                // ITM-098 修复（验证轮返工）：hint 拼接用 "+" 显式编码嵌套层级——命名空间内的
-                // "." 保留原样（"A.B+C" 与 "A+B.C" 不再碰撞），"+" 非 C# 标识符字符，
-                // 命名空间/类型名不可能包含，彻底消除同 hint 碰撞（PALID004 误报/AddSource 冲突）。
-                // hint 仅作生成物文件名与去重键，变更不影响编译（测试均按 ".g.cs" 后缀匹配，
-                // 见 SourceGeneratorDirectTests.GetGeneratedSource）；转换器类名仍用 "_" 拼接
-                // （C# 标识符不允许 "+"，下划线边界撞名的 CS0101 属已声明限制）。
-                var hint = info.ContainingNames.Length > 0
-                    ? $"{(info.Namespace is null ? "" : info.Namespace + "+")}{string.Join("+", info.ContainingNames)}.{info.TypeName}.g.cs"
-                    : $"{(info.Namespace is null ? "" : info.Namespace + ".")}{info.TypeName}.g.cs";
-                if (!seenHints.Add(hint))
+                // A15（S1 轮）：代码生成与 AddSource 移出本回调（下方 Combine 节点）——
+                // 本回调只做诊断分派；PALID004 重复声明诊断随 AddSource 侧同行报告
+                // （Error 级，测试以 Any 断言，见 SourceGeneratorDirectTests:342）
+            }
+        });
+
+        // A15（S1 轮，2026-10-15）：重复 hint 首现映射节点——Collect 后单遍计算（只做
+        // hint 字符串拼接，无模板渲染）。值与当前候选集对应、每次重算（无跨 pass 状态）；
+        // ImmutableDictionary 值相等，稳定时 Combine 对不重跑。值 = 该 hint 首个出现的
+        // 定位标识（Location.Identity）——重复 hint 时仅首个生成、其余报诊断（P2 修复的
+        // 「恰好一份生成物」契约，SourceGeneratorDirectTests 断言在案）。
+        var duplicateHints = candidates.Collect()
+            .Select(static (ImmutableArray<IdGenInfo> infos, CancellationToken ct) =>
+            {
+                var firstIdentityByHint = new Dictionary<string, string>(StringComparer.Ordinal);
+                var dups = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+                foreach (var info in infos)
                 {
-                    // P2 修复（二十一轮）：重复 [GenerateId] 声明——仅首个声明生成代码，
-                    // 其余报 PALID004 而非让 AddSource 抛 ArgumentException 崩溃
+                    if (info.DiagnosticId is not null)
+                        continue;
+                    var hint = IdentityHint(info);
+                    var identity = LocationIdentity(info.Location);
+                    if (!firstIdentityByHint.TryGetValue(hint, out var existing))
+                    {
+                        firstIdentityByHint[hint] = identity;
+                        continue;
+                    }
+                    if (!dups.ContainsKey(hint))
+                        dups.Add(hint, existing);
+                }
+                return dups.ToImmutable();
+            });
+
+        // A15（S1 轮）：AddSource 移入 per-candidate Combine 节点——原 Collect 回调在任一
+        // 候选变化时对全部候选重跑（每候选一次约 2.5KB 模板渲染 + AddSource，N 个带特性
+        // 类型的解决方案每次编辑付 O(N) 渲染）；Combine 只对「该候选变化或重复集合变化」
+        // 触发，未变候选零重渲染。重复 hint 语义保持 P2 修复契约：仅首个出现生成、其余
+        // 报 PALID004（「恰好一份生成物」，SourceGeneratorDirectTests 断言在案）。
+        context.RegisterSourceOutput(candidates.Combine(duplicateHints), static (spc, pair) =>
+        {
+            var info = pair.Left;
+            if (info.DiagnosticId is not null)
+                return;
+
+            var hint = IdentityHint(info);
+            if (pair.Right.TryGetValue(hint, out var firstIdentity))
+            {
+                // A15：重复 [GenerateId] 声明——非首现报 PALID004（首现的定位标识匹配，
+                // 照常生成；其余定位标识不同，报诊断后跳过——AddSource 不会因同 hint
+                // 第二次调用抛 ArgumentException）
+                if (firstIdentity != LocationIdentity(info.Location))
+                {
                     spc.ReportDiagnostic(Diagnostic.Create(
                         DuplicatePartialDeclaration,
                         info.Location ?? Location.None,
                         info.TypeName));
-                    continue;
+                    return;
                 }
-
-                spc.AddSource(hint, src);
             }
+
+            spc.AddSource(hint, GenerateIdentityCode(info));
         });
     }
+
+    /// <summary>
+    /// A15（S1 轮，2026-10-15）：候选的生成物 hint 名——原内联于输出回调，duplicateHints
+    /// 节点与 AddSource 节点共用单一来源（去重键两处漂移会破坏去重语义）。<br/>
+    /// P3 修复（八轮评审）：全局命名空间（Namespace == null）用 "_" 仅作 hint 名保底，
+    /// 生成代码本身不再含 namespace 声明。
+    /// ITM-098 修复（验证轮返工）：hint 拼接用 "+" 显式编码嵌套层级——命名空间内的
+    /// "." 保留原样（"A.B+C" 与 "A+B.C" 不再碰撞），"+" 非 C# 标识符字符，
+    /// 命名空间/类型名不可能包含，彻底消除同 hint 碰撞（PALID004 误报/AddSource 冲突）。
+    /// hint 仅作生成物文件名与去重键，变更不影响编译（测试均按 ".g.cs" 后缀匹配，
+    /// 见 SourceGeneratorDirectTests.GetGeneratedSource）；转换器类名仍用 "_" 拼接
+    /// （C# 标识符不允许 "+"，下划线边界撞名的 CS0101 属已声明限制）。
+    /// </summary>
+    private static string IdentityHint(IdGenInfo info)
+        => info.ContainingNames.Length > 0
+            ? $"{(info.Namespace is null ? "" : info.Namespace + "+")}{string.Join("+", info.ContainingNames)}.{info.TypeName}.g.cs"
+            : $"{(info.Namespace is null ? "" : info.Namespace + ".")}{info.TypeName}.g.cs";
+
+    /// <summary>
+    /// A15（S1 轮）：定位标识——(语法树路径, 起始偏移) 组合。用于重复 hint 的首现判定：
+    /// 同一编译内不同声明的 span 起点不同（span 不重叠），同一声明跨 run 稳定（Select
+    /// 节点随候选集重算，只需单轮内自洽）。netstandard2.0 无 Dictionary.TryAdd、
+    /// Location 无 Identity 属性，按兼容形态构造。
+    /// </summary>
+    private static string LocationIdentity(Location? location)
+        => location is null
+            ? string.Empty
+            : (location.SourceTree?.FilePath ?? string.Empty) + "#" + location.SourceSpan.Start.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     // v25 P3 生成器族：Guid/Ulid 白名单的符号语义判定——Name + 命名空间链逐级比对，
     // 不经 ToDisplayString()（其输出可能带 extern alias 前缀）；同时限定外层命名空间

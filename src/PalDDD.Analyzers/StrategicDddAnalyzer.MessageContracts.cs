@@ -14,14 +14,17 @@ public sealed partial class StrategicDddAnalyzer
         SymbolAnalysisContext context,
         INamedTypeSymbol type,
         AttributeData? chainBoundedContext,
-        AttributeData? generateMessage)
+        AttributeData? generateMessage,
+        bool isDomainEventType)
     {
         // ITM-123 修复：PDDD005 仅对 class 生效——[GenerateMessage] 为 AttributeTargets.Class，
         // struct 事件不可消解（与 PDDD001 的 struct 排除对称）
         // C-17（EPSL 地毯审计 2026-10-11）：IsDomainEventType 单轮单次求值——原两段条件各自
         // 调用（基类链 + AllInterfaces 全名比对 ×2），IDE 增量分析每次编辑重跑双倍；两处
         // 条件集合相同，求值序无副作用，合并零行为差。
-        var isDomainEventType = IsDomainEventType(type);
+        // A15（S1 轮，2026-10-15）：跨方法双求值收口——调用方 AnalyzeNamedType 已算过
+        // （generateMessage 的三元条件），原形参收窄后再算一次（基类链 + AllInterfaces 逐
+        // 候选比对，每类型每轮分析的固定开销）；改由调用方传入，本方法内不再求值。
         if (type.TypeKind == TypeKind.Class
             && isDomainEventType
             && generateMessage is null)
