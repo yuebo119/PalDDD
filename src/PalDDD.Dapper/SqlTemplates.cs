@@ -350,6 +350,27 @@ public static class SqlTemplates
         "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)";
 
     /// <summary>
+    /// PG 专用 Saga 租约获取（RETURNING 单语句形态，EPSL 地毯审计 2026-10-16 B 批 #3）——
+    /// <see cref="SagaLeaseActivePG"/> + <c>RETURNING *</c>：UPDATE 与回读收为一次往返，
+    /// 且按行锁语义返回刚锁定行（子查询 FOR UPDATE SKIP LOCKED 保证 RETURNING 行集恰好等于
+    /// 本 worker 租到的批次），两步回读的 (leased_by, leased_until) 同 tick 混批窗口
+    /// （三十八轮 P3 声明，ITM-109 同族）在此形态下不存在。回读的 status IN (0,5) 守卫
+    /// （ITM-134）由子查询谓词隐含满足，语义不减。镜像 <see cref="OutboxLeaseUpdatePG"/> 先例。
+    /// </summary>
+    public const string SagaLeaseActivePGReturning =
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
+
+    /// <summary>
+    /// SQLite 专用 Saga 租约获取（RETURNING 单语句形态，B 批 #3）——<see cref="SagaLeaseActive"/>
+    /// + <c>RETURNING *</c>：Microsoft.Data.Sqlite 支持同一引擎能力（3.35+，仓内
+    /// OutboxLeaseUpdateSqliteReturning 与 InsertSqlite 单行 RETURNING 均在用）。SQLite 单写者
+    /// （库级串行）无并发抢占，混批窗口本就不可达；本形态收益是省一次回读往返并与 PG 路径
+    /// 形态对齐（SQLite 是双栈里的漏格）。
+    /// </summary>
+    public const string SagaLeaseActiveSqliteReturning =
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) RETURNING *";
+
+    /// <summary>
     /// MySQL 专用 Saga 租约获取 — JOIN 形态。<br/>
     /// 三十四轮（中断态超时兜底）：扫描集扩 AwaitingHumanDecision（status IN (0,5)）。<br/>
     /// P1 修复（十一轮·实测发现）：同 OutboxLeaseUpdateMySql——MySQL 禁止 IN 子查询内 LIMIT，
