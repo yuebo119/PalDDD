@@ -38,12 +38,17 @@ namespace PalDDD.CQRS;
 internal sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
 {
-    private readonly IEnumerable<Core.IPalValidator<TRequest>> _validators;
+    // EPSL 地毯审计 2026-10-16 B 批 #9：数组型字段——构造期一次物化（MS DI 多服务解析
+    // 常态返回 T[]，引用恒等转型零分配零拷贝；非数组形态回落单次 ToArray）。原接口型
+    // 字段 foreach 每请求经接口取枚举器（非空 validator 集实测 ~32B/请求；零 validator
+    // 常见场景 JIT 对空数组形态已消除故本就免费——探针实证）。与 Dispatcher.cs
+    // MaterializeBehaviors（R1/A-F1）同款先例。
+    private readonly Core.IPalValidator<TRequest>[] _validators;
 
     public ValidationBehavior(IEnumerable<Core.IPalValidator<TRequest>> validators)
     {
         ArgumentNullException.ThrowIfNull(validators); // v26 P3（ITM-284 对齐）：全仓构造守卫
-        _validators = validators;
+        _validators = validators as Core.IPalValidator<TRequest>[] ?? validators.ToArray();
     }
 
     public async ValueTask<TResponse> HandleAsync(TRequest request, CancellationToken ct, Func<ValueTask<TResponse>> next)
