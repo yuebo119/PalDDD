@@ -131,6 +131,59 @@ internal sealed class BrotliCompressor : ICompressor
 }
 
 /// <summary>
+/// B5（S1 轮，2026-10-15）：GZip/Deflate Stream 路径的 TLS MemoryStream 池。BCL 无
+/// gzip/deflate 的 span 编码器（Brotli 才有 BrotliEncoder），Stream 形态不可避免，但
+/// Stream 对象可复用：原每次 new MemoryStream 从 0 倍增到输出尺寸（累计约 2× 输出的
+/// 重分配拷贝，随机载荷实测腿见 GZipStreamAllocationProbeTests），复用后稳态零倍增。
+/// 驻留按历史峰值、超 <see cref="MaxResidentStreamBytes"/> 弃槽重建（对齐 R9 的 TLS
+/// 池化族与 JsonMessageSerializer 的 MaxResidentBufferBytes 取舍）。<br/>
+/// 调用契约：同步方法内 Rent→使用→（不显式归还，槽即持有），同线程同步段内完成、
+/// 无跨调用交错（压缩/解压均为同步方法）；压缩流须以 leaveOpen:true 构造，否则
+/// Dispose 会连带销毁池化流。三个槽位（压缩输出/解压输入/解压输出）相互独立。
+/// </summary>
+internal static class TlsStreamPool
+{
+    private const int MaxResidentStreamBytes = 256 * 1024;
+
+    [ThreadStatic]
+    private static MemoryStream? _compressOutput;
+
+    [ThreadStatic]
+    private static MemoryStream? _decompressInput;
+
+    [ThreadStatic]
+    private static MemoryStream? _decompressOutput;
+
+    /// <summary>压缩输出槽（容量按需增长；Rent 后长度 0、位置 0）。</summary>
+    public static MemoryStream RentCompressOutput() => Rent(ref _compressOutput, 0);
+
+    /// <summary>解压输入槽（容量保证 ≥ minCapacity——v53 的预设容量语义由单次扩容保留，
+    /// 不从 0 倍增）。</summary>
+    public static MemoryStream RentDecompressInput(int minCapacity) => Rent(ref _decompressInput, minCapacity);
+
+    /// <summary>解压输出槽（容量按需增长）。</summary>
+    public static MemoryStream RentDecompressOutput() => Rent(ref _decompressOutput, 0);
+
+    private static MemoryStream Rent(ref MemoryStream? slot, int minCapacity)
+    {
+        var stream = slot;
+        if (stream is null || stream.Capacity > MaxResidentStreamBytes)
+        {
+            stream = new MemoryStream(minCapacity);
+            slot = stream;
+            return stream;
+        }
+
+        // Capacity setter 单次扩容到目标尺寸（无倍增链）——v53 预设容量语义
+        if (minCapacity > stream.Capacity)
+            stream.Capacity = minCapacity;
+        stream.SetLength(0);
+        stream.Position = 0;
+        return stream;
+    }
+}
+
+/// <summary>
 /// GZip 压缩器 — 基于 System.IO.Compression.GZipStream。
 /// </summary>
 internal sealed class GZipCompressor : ICompressor
@@ -141,10 +194,13 @@ internal sealed class GZipCompressor : ICompressor
     {
         if (data.IsEmpty) return Array.Empty<byte>();
 
-        using var output = new MemoryStream();
+        // B5（S1 轮）：TLS 输出流复用 + leaveOpen（池化流不随压缩流销毁）——原每次
+        // new MemoryStream 倍增到输出尺寸；稳态零倍增，ToArray 仍为一次不可避免的
+        // 精确尺寸分配（API 返回 byte[]/ReadOnlyMemory 契约）
+        var output = TlsStreamPool.RentCompressOutput();
         var sysLevel = MapLevel(level);
 
-        using (var gzip = new GZipStream(output, sysLevel))
+        using (var gzip = new GZipStream(output, sysLevel, leaveOpen: true))
         {
             gzip.Write(data);
         }
@@ -160,14 +216,14 @@ internal sealed class GZipCompressor : ICompressor
             throw new InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
 
-        // 三十八轮 P3 修复：Write 进 MemoryStream 免去 ToArray 整体拷贝（ReadOnlyMemory→byte[]）
-        // v53 P3：按输入长度预设容量——默认从 0 倍增扩容累计多拷约一倍载荷（热路径）
-        var input = new MemoryStream(compressed.Length);
+        // B5（S1 轮）：输入/输出双槽 TLS 复用 + leaveOpen。三十八轮 P3 的 Write 进
+        // MemoryStream（免 ToArray 整体拷贝）与 v53 的预设容量（免倍增）语义保留——
+        // 预设容量由 RentDecompressInput 的 Capacity setter 单次扩容兑现。
+        var input = TlsStreamPool.RentDecompressInput(compressed.Length);
         input.Write(compressed);
         input.Position = 0;
-        using (input)
-        using (var output = new MemoryStream())
-        using (var gzip = new GZipStream(input, CompressionMode.Decompress))
+        var output = TlsStreamPool.RentDecompressOutput();
+        using (var gzip = new GZipStream(input, CompressionMode.Decompress, leaveOpen: true))
         {
             DecompressionGuard.CopyWithLimit(gzip, output); // P2 修复：输出上限防膨胀炸弹
             return output.ToArray();
@@ -194,10 +250,11 @@ internal sealed class DeflateCompressor : ICompressor
     {
         if (data.IsEmpty) return Array.Empty<byte>();
 
-        using var output = new MemoryStream();
+        // B5（S1 轮）：TLS 输出流复用 + leaveOpen（同 GZipCompressor 改造）
+        var output = TlsStreamPool.RentCompressOutput();
         var sysLevel = MapLevel(level);
 
-        using (var deflate = new DeflateStream(output, sysLevel))
+        using (var deflate = new DeflateStream(output, sysLevel, leaveOpen: true))
         {
             deflate.Write(data);
         }
@@ -213,13 +270,13 @@ internal sealed class DeflateCompressor : ICompressor
             throw new InvalidDataException(
                 $"压缩输入 {compressed.Length:N0} 字节超过安全上限 {DecompressionGuard.MaxCompressedInputBytes:N0} 字节（疑似解压炸弹）。");
 
-        // 三十八轮 P3 修复：Write 进 MemoryStream 免去 ToArray 整体拷贝（同 GZip 路径）
-        var input = new MemoryStream(compressed.Length);
+        // B5（S1 轮）：输入/输出双槽 TLS 复用 + leaveOpen（同 GZipCompressor 改造；
+        // 三十八轮 P3 Write 免拷贝与 v53 预设容量语义由 RentDecompressInput 保留）
+        var input = TlsStreamPool.RentDecompressInput(compressed.Length);
         input.Write(compressed);
         input.Position = 0;
-        using (input)
-        using (var output = new MemoryStream())
-        using (var deflate = new DeflateStream(input, CompressionMode.Decompress))
+        var output = TlsStreamPool.RentDecompressOutput();
+        using (var deflate = new DeflateStream(input, CompressionMode.Decompress, leaveOpen: true))
         {
             DecompressionGuard.CopyWithLimit(deflate, output); // P2 修复：输出上限防膨胀炸弹
             return output.ToArray();
