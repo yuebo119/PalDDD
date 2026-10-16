@@ -129,7 +129,10 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
                 IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now);
         }
 
-        var existing = await GetAsync(operationName, key, now, ct).ConfigureAwait(false);
+        // B5（EPSL 地毯审计 2026-10-16）：冲突路径轻量读——原 GetAsync 读全行（含
+        // response_payload 大列），冲突分类只用 status/locked_until/expires_at/revision
+        // 四列；Completed 情形的 payload 本就丢弃（调用方二次 GetAsync 获取），构成双传。
+        var existing = await GetForConflictClassificationAsync(operationName, key, now, ct).ConfigureAwait(false);
 
         // ITM-064：INSERT 冲突已证明记录存在；GetAsync 返回 null 只可能是记录已过期
         // （GetAsync 对 ExpiresAt <= now 返回 null）。过期记录必须重新获取租约
@@ -170,15 +173,15 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         // 契约对齐：EFCore（IdempotencyDbContext.TryStartAsync）与 InMemory（InMemoryIdempotencyStore）
         // 对非过期终态记录均返回 null，读取已完成响应走 GetAsync（含 response_payload）；
         // 原实现返回 existing 会让调用方把终态记录误当"本次已开始处理"
-        if (existing.Status == IdempotencyRecordStatus.Completed)
+        if (existing.Value.Status == IdempotencyRecordStatus.Completed)
             return null;
 
-        if (existing.Status == IdempotencyRecordStatus.Processing && existing.LockedUntil > now)
+        if (existing.Value.Status == IdempotencyRecordStatus.Processing && existing.Value.LockedUntil > now)
             return null;
 
         // v54 P2：CAS 基准 updated_at → revision（existing.Revision 经 internal ctor 物化，
         // 是 DB 真值；回放走 RestoreTerminalState 不污染）。换代后内存可算新值（existing+1），无需回读
-        var expectedRevision = existing.Revision;
+        var expectedRevision = existing.Value.Revision;
         affected = await Session.ExecuteAsync(
             $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL, revision = revision + 1 WHERE operation_name = {operationName} AND idempotency_key = {key} AND revision = {expectedRevision} AND status <> {(int)IdempotencyRecordStatus.Completed}",
             ct).ConfigureAwait(false);
@@ -187,6 +190,37 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
         return new IdempotencyRecord(operationName, key,
             IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, expectedRevision + 1);
     }
+
+    /// <summary>
+    /// B5（EPSL 地毯审计 2026-10-16）：TryStart 冲突路径的轻量读——原 GetAsync 读全行
+    /// （含 response_payload 大列），冲突分类只用 status/locked_until/expires_at/revision
+    /// 四列；Completed 情形的 payload 本就丢弃（调用方二次 GetAsync 获取），构成双传。
+    /// 过期语义与 GetAsync 逐字一致（ExpiresAt &lt;= now 返回 null）；时间戳 Kind 归一
+    /// （GetUtcOrMin）与 DBNull 容错口径同 GetAsync 物化路径。
+    /// </summary>
+    private async ValueTask<IdempotencyConflictInfo?> GetForConflictClassificationAsync(
+        string operationName, string key, DateTimeOffset now, CancellationToken ct)
+    {
+        await using var cmd = CreateRawCommand();
+        cmd.CommandText = "SELECT status, locked_until, expires_at, revision FROM idempotency_records WHERE operation_name = @p0 AND idempotency_key = @p1";
+        AddParam(cmd, "@p0", operationName);
+        AddParam(cmd, "@p1", key);
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        if (!await reader.ReadAsync(ct).ConfigureAwait(false)) return null;
+
+        var expiresAt = GetUtcOrMin(reader, 2);
+        if (expiresAt <= now) return null;
+
+        return new IdempotencyConflictInfo(
+            (IdempotencyRecordStatus)reader.GetInt32(0),
+            GetUtcOrMin(reader, 1),
+            expiresAt,
+            reader.IsDBNull(3) ? 0 : reader.GetInt64(3));
+    }
+
+    /// <summary>B5：冲突分类所需的最小信息（替代轻量读处的完整 IdempotencyRecord）。</summary>
+    private readonly record struct IdempotencyConflictInfo(
+        IdempotencyRecordStatus Status, DateTimeOffset LockedUntil, DateTimeOffset ExpiresAt, long Revision);
 
     /// <inheritdoc />
     public async ValueTask MarkCompletedAsync(
