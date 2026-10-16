@@ -390,4 +390,39 @@ public sealed class InMemoryStoreTests
     }
 
     public sealed class SampleSaga : SagaState;
+
+    // ═══════════════════════════════════════════════════════════════
+    // ⚡ EPSL 地毯审计 2026-10-16 B 批 #23：InMemorySagaStateStore 活跃索引
+    // 终态 Saga 经 SaveChangesAsync 落库后：GetActive/Lease 扫描不再含它（索引自纠），
+    // 但 GetByIdAsync 仍返回（恢复链路/断言依赖的行为契约不变——审计记录的用户决策点：
+    // 保留终态条目不清除）。旧形态（全量扫）下两条断言同样通过——本测试锁的是索引实现
+    // 不破坏该契约（红证明形态：索引维护缺失时终态仍被 GetActive 扫到则判红）。
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public async Task InMemorySagaStateStore_TerminalSaga_ExcludedFromActiveScan_StillGetById(CancellationToken cancellationToken)
+    {
+        var store = new InMemorySagaStateStore<SampleSaga>();
+        var state = new SampleSaga { CurrentState = "Initial" };
+        store.Add(state);
+
+        // 活跃态：扫描可见
+        var beforeLease = await store.GetActiveSagasAsync(10, cancellationToken);
+        await Assert.That(beforeLease).Count().IsEqualTo(1);
+
+        // 终态落库（SaveChangesAsync 是状态转移的受理时点）
+        state.Status = SagaStatus.Completed;
+        var saved = await store.SaveChangesAsync(state, cancellationToken);
+        await Assert.That(saved).IsEqualTo(1);
+
+        // 终态出扫描（GetActive 与 Lease 均不含——索引自纠）
+        var afterActive = await store.GetActiveSagasAsync(10, cancellationToken);
+        await Assert.That(afterActive).IsEmpty();
+        var afterLease = await store.LeaseActiveSagasAsync("worker-1", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        await Assert.That(afterLease).IsEmpty();
+
+        // GetByIdAsync 仍返回终态条目（行为契约不变）
+        var reloaded = await store.GetByIdAsync(state.SagaId, cancellationToken);
+        await Assert.That(reloaded!.Status).IsEqualTo(SagaStatus.Completed);
+    }
 }
