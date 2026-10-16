@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using ByteAether.Ulid;
 using PalDDD.Core; // v30 P3：Outbox 截断点接入 FailureReason.Truncate 共享收口（对齐姊妹 PalOrmInboxStore）
 using PalORM;
@@ -27,7 +28,7 @@ namespace PalDDD.PalORM.Stores;
 /// 防御方向分叉（PalORM 更严）。仅手工构造 OutboxMessage 直调可达（正常 Lease 恒
 /// 同写 owner+until），按更严方向保留。</para>
 /// </summary>
-public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutboxStore
+public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutboxStore, IBatchMarkOutboxStore
     where TProvider : IDbProvider
 {
     /// <summary>共享的 Scoped 数据库会话（事务自动传播源）。</summary>
@@ -384,6 +385,92 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
             $"UPDATE outbox_messages SET status = {(int)OutboxStatus.Pending}, processed_at = NULL, error = {audit}, next_attempt_at = {nextAttemptAt}, locked_by = NULL, locked_until = NULL WHERE id = {messageId.ToString()} AND status = {(int)OutboxStatus.Dead}",
             ct).ConfigureAwait(false);
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// ADR-027 延后段清算（2026-10-16，三方言 until 编码探针后实施）：批量 WHERE 的
+    /// <c>locked_until = {until}</c> 取<b>租约回读值</b>（messages[0].LockedUntil，非重算）且以
+    /// DateTimeOffset 形态插值，与租约写入绑定逐字节一致。探针实测（SQLite 本地 + PG/MySQL
+    /// wslc 外部实例，各正腿命中全批 + until±1s/换 owner/retry+1/已终态四负腿全拒）：库内
+    /// 形态分别为 SQLite TEXT "…+00:00"（100ns 全精度）/ PG timestamptz（μs，第 7 位被截）/
+    /// MySQL DATETIME(6)（μs 无 offset 裸 UTC）——三者回读值重编码均精确命中。<b>勿"简化"为
+    /// UtcDateTime</b>：同值以 DateTime 形态传递三方言实测全部拒命（编码形态敏感）。
+    /// </remarks>
+    public async ValueTask<int> MarkProcessedBatchAsync(IReadOnlyList<OutboxMessage> messages, DateTimeOffset processedAt, CancellationToken ct = default)
+    {
+        // 守卫与同租约校验：与 DapperOutboxStore / OutboxDbContext 两实现逐字同构（ADR-027 契约）
+        ArgumentNullException.ThrowIfNull(messages);
+        if (messages.Count == 0) return 0;
+
+        var owner = messages[0].LockedBy;
+        var until = messages[0].LockedUntil;
+        if (owner is null || until is null)
+            throw new InvalidOperationException(
+                "MarkProcessedBatchAsync requires leased messages (LockedBy/LockedUntil non-null) — batch inputs must come from a single LeasePendingMessagesAsync result.");
+        foreach (var message in messages)
+        {
+            ArgumentNullException.ThrowIfNull(message);
+            if (message.LockedBy != owner || message.LockedUntil != until)
+                throw new InvalidOperationException(
+                    "MarkProcessedBatchAsync requires a single-lease batch — all messages must share the same LockedBy/LockedUntil (mixed-lease batches are not supported).");
+        }
+
+        var statusProcessed = (int)OutboxStatus.Processed;
+        var statusPending = (int)OutboxStatus.Pending;
+        var total = 0;
+        // 按 RetryCount 分组（快照等值可下推单组 WHERE retry_count=孔）+ 组内 400 行分块
+        foreach (var group in messages.GroupBy(static m => m.RetryCount))
+        {
+            var ids = group.Select(static m => m.Id.ToString()).ToArray();
+            for (var start = 0; start < ids.Length; start += OutboxBatchMarkChunkRows)
+            {
+                var count = Math.Min(OutboxBatchMarkChunkRows, ids.Length - start);
+                // FormattableStringFactory.Create + {N} 索引孔：PalORM 每个插值孔只绑一个
+                // DbParameter（BindFormattableParameters），动态 IN 列表按此构造——PalOrmEventLog
+                // A11 多行 VALUES 同款先例。SET/WHERE 只插值"值"（参数位合法）；SQL 片段
+                // （IN / 括号 / AND）以字面量进 format 文本（PD18 教训：字符串变量会被整体
+                // 参数化成 @pN 语法错误）。
+                var sql = new System.Text.StringBuilder(220 + count * 30)
+                    .Append("UPDATE outbox_messages SET status = {0}, processed_at = {1}, error = NULL, next_attempt_at = NULL, locked_by = NULL, locked_until = NULL WHERE id IN (");
+                var args = new List<object?>(count + 6) { statusProcessed, processedAt };
+                for (var i = 0; i < count; i++)
+                {
+                    if (i > 0) sql.Append(',');
+                    sql.Append('{').Append(args.Count).Append('}');
+                    args.Add(ids[start + i]);
+                }
+                sql.Append(") AND retry_count = {").Append(args.Count).Append('}');
+                args.Add(group.Key);
+                sql.Append(" AND status = {").Append(args.Count).Append('}');
+                args.Add(statusPending);
+                sql.Append(" AND locked_by = {").Append(args.Count).Append('}');
+                args.Add(owner);
+                sql.Append(" AND locked_until = {").Append(args.Count).Append('}');
+                args.Add(until.Value);
+                total += await Session.ExecuteAsync(
+                    FormattableStringFactory.Create(sql.ToString(), args.ToArray()), ct).ConfigureAwait(false);
+            }
+        }
+
+        // 全命中才回写（部分拒绝时无法逐行定位被拒者，保守零回写——接口契约与 Dapper/EFCore/
+        // InMemory 三实现同款）
+        if (total == messages.Count)
+        {
+            foreach (var message in messages)
+            {
+                message.Status = OutboxStatus.Processed;
+                message.ProcessedAt = processedAt;
+                message.Error = null;
+                message.NextAttemptAt = null;
+                message.LockedBy = null;
+                message.LockedUntil = null;
+            }
+        }
+        return total;
+    }
+
+    /// <summary>批量标记单语句组内行数上限——SQLite 参数上限 999（每行 1 参数 + 共享 6 参数）的防御分块。</summary>
+    private const int OutboxBatchMarkChunkRows = 400;
 
     /// <inheritdoc />
     public ValueTask<int> SaveChangesAsync(CancellationToken ct)

@@ -232,6 +232,21 @@ public class PalOrmOutboxStoreTests
             .Throws<ArgumentException>();
     }
 
+    // ── ADR-027 延后段清算（2026-10-16）：PalORM 栈 IBatchMarkOutboxStore 能力面 ──
+
+    [Test]
+    public async Task Outbox_BatchMark_CapabilityAndOptInGate()
+    {
+        // 能力面：PalORM 栈实现 IBatchMarkOutboxStore（until 编码三方言探针实证后实施）——
+        // 处理器分派条件「BatchMarkThreshold > 1 && store is IBatchMarkOutboxStore」对本栈
+        // 生效（此前不实现即静默回落逐条）。接口被摘除时本断言红（防回归）。
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteOutboxStore(session);
+        await Assert.That(store is IBatchMarkOutboxStore).IsTrue();
+        // opt-in 面：默认阈值 1 = 逐条路径逐字不变（ADR-027 决策 5，默认不翻）
+        await Assert.That(new OutboxOptions().BatchMarkThreshold).IsEqualTo(1);
+    }
+
     private static OutboxMessage CreateOutboxMessage(string type) => new()
     {
         Id = Ulid.New(),

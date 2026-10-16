@@ -181,4 +181,134 @@ public class PalOrmOutboxMultiDialectTests
         ContentType = "application/json",
         SchemaVersion = 1,
     };
+
+    // ─── IBatchMarkOutboxStore 批量标记（ADR-027 延后段 2026-10-16 清算）───
+    // until 编码三方言探针实证（SQLite 本地 + PG/MySQL wslc 外部实例：正腿命中全批、
+    // until±1s/换 owner/retry+1/已终态四负腿全拒）后实施。本组为 CI dialect-probe
+    // 车道锁：正腿（回读 until 批量命中）+ 负腿（until 前移后旧快照全拒=谓词选择性）。
+    // SQLite 本地执行；PG/MySQL 经 Testcontainers（本地无 Docker 时按设计跳过）。
+
+    [Test]
+    public async Task Outbox_Sqlite_BatchMark_LeasedBatch_AllMarked()
+    {
+        await using var session = await MultiDialectFixture.CreateSqliteAsync();
+        var store = new SqliteOutboxStore(session.Session);
+        for (int i = 0; i < 3; i++) await store.AddMessageAsync(CreateMessage($"sqlite.batchmark.{i}"));
+
+        var leased = await store.LeasePendingMessagesAsync(10, "w1", TimeSpan.FromMinutes(5), 10, default);
+        await Assert.That(leased).Count().IsEqualTo(3);
+
+        var affected = await store.MarkProcessedBatchAsync(leased, DateTimeOffset.UtcNow, default);
+        await Assert.That(affected).IsEqualTo(3);
+
+        foreach (var m in leased) await Assert.That(m.Status).IsEqualTo(OutboxStatus.Processed);
+        var second = await store.LeasePendingMessagesAsync(10, "w2", TimeSpan.FromMinutes(5), 10, default);
+        await Assert.That(second).IsEmpty(); // 终态行不可再租
+    }
+
+    [Test]
+    public async Task Outbox_Sqlite_BatchMark_StaleToken_AllRejected()
+    {
+        await using var session = await MultiDialectFixture.CreateSqliteAsync();
+        var store = new SqliteOutboxStore(session.Session);
+        for (int i = 0; i < 3; i++) await store.AddMessageAsync(CreateMessage($"sqlite.batchmark.stale.{i}"));
+
+        var leased = await store.LeasePendingMessagesAsync(10, "w1", TimeSpan.FromMinutes(5), 10, default);
+        await Assert.That(leased).Count().IsEqualTo(3);
+
+        // 同 owner 重租（仅 until 前移 = 新 token；DB 推进，内存持旧快照）——v74 P1 until 腿的批量版
+        var newUntil = DateTimeOffset.UtcNow.AddMinutes(10);
+        foreach (var m in leased)
+            await session.Session.ExecuteAsync(
+                $"UPDATE outbox_messages SET locked_until = {newUntil} WHERE id = {m.Id.ToString()}", default);
+
+        var affected = await store.MarkProcessedBatchAsync(leased, DateTimeOffset.UtcNow, default);
+        await Assert.That(affected).IsEqualTo(0); // 旧 until 快照全拒（谓词有选择性，非恒真）
+
+        var pending = await store.GetPendingMessagesAsync(10, 5, default);
+        await Assert.That(pending).IsEmpty(); // 行仍被新 token 租约持有
+        foreach (var m in leased) await Assert.That(m.Status).IsEqualTo(OutboxStatus.Pending); // 零回写
+    }
+
+    [Test]
+    public async Task Outbox_PostgreSql_BatchMark_LeasedBatch_AllMarked()
+    {
+        await using var session = await MultiDialectFixture.CreatePostgreSqlAsync();
+        var store = new PostgreSqlOutboxStore(session.Session);
+        for (int i = 0; i < 3; i++) await store.AddMessageAsync(CreateMessage($"pg.batchmark.{i}"));
+
+        var leased = await store.LeasePendingMessagesAsync(10, "w1", TimeSpan.FromMinutes(5), 10, default);
+        await Assert.That(leased).Count().IsEqualTo(3);
+
+        var affected = await store.MarkProcessedBatchAsync(leased, DateTimeOffset.UtcNow, default);
+        await Assert.That(affected).IsEqualTo(3);
+
+        foreach (var m in leased) await Assert.That(m.Status).IsEqualTo(OutboxStatus.Processed);
+        var second = await store.LeasePendingMessagesAsync(10, "w2", TimeSpan.FromMinutes(5), 10, default);
+        await Assert.That(second).IsEmpty();
+    }
+
+    [Test]
+    public async Task Outbox_PostgreSql_BatchMark_StaleToken_AllRejected()
+    {
+        await using var session = await MultiDialectFixture.CreatePostgreSqlAsync();
+        var store = new PostgreSqlOutboxStore(session.Session);
+        for (int i = 0; i < 3; i++) await store.AddMessageAsync(CreateMessage($"pg.batchmark.stale.{i}"));
+
+        var leased = await store.LeasePendingMessagesAsync(10, "w1", TimeSpan.FromMinutes(5), 10, default);
+        await Assert.That(leased).Count().IsEqualTo(3);
+
+        var newUntil = DateTimeOffset.UtcNow.AddMinutes(10);
+        foreach (var m in leased)
+            await session.Session.ExecuteAsync(
+                $"UPDATE outbox_messages SET locked_until = {newUntil} WHERE id = {m.Id.ToString()}", default);
+
+        var affected = await store.MarkProcessedBatchAsync(leased, DateTimeOffset.UtcNow, default);
+        await Assert.That(affected).IsEqualTo(0);
+
+        var pending = await store.GetPendingMessagesAsync(10, 5, default);
+        await Assert.That(pending).IsEmpty();
+        foreach (var m in leased) await Assert.That(m.Status).IsEqualTo(OutboxStatus.Pending);
+    }
+
+    [Test]
+    public async Task Outbox_MySql_BatchMark_LeasedBatch_AllMarked()
+    {
+        await using var session = await MultiDialectFixture.CreateMySqlAsync();
+        var store = new MySqlOutboxStore(session.Session);
+        for (int i = 0; i < 3; i++) await store.AddMessageAsync(CreateMessage($"mysql.batchmark.{i}"));
+
+        var leased = await store.LeasePendingMessagesAsync(10, "w1", TimeSpan.FromMinutes(5), 10, default);
+        await Assert.That(leased).Count().IsEqualTo(3);
+
+        var affected = await store.MarkProcessedBatchAsync(leased, DateTimeOffset.UtcNow, default);
+        await Assert.That(affected).IsEqualTo(3);
+
+        foreach (var m in leased) await Assert.That(m.Status).IsEqualTo(OutboxStatus.Processed);
+        var second = await store.LeasePendingMessagesAsync(10, "w2", TimeSpan.FromMinutes(5), 10, default);
+        await Assert.That(second).IsEmpty();
+    }
+
+    [Test]
+    public async Task Outbox_MySql_BatchMark_StaleToken_AllRejected()
+    {
+        await using var session = await MultiDialectFixture.CreateMySqlAsync();
+        var store = new MySqlOutboxStore(session.Session);
+        for (int i = 0; i < 3; i++) await store.AddMessageAsync(CreateMessage($"mysql.batchmark.stale.{i}"));
+
+        var leased = await store.LeasePendingMessagesAsync(10, "w1", TimeSpan.FromMinutes(5), 10, default);
+        await Assert.That(leased).Count().IsEqualTo(3);
+
+        var newUntil = DateTimeOffset.UtcNow.AddMinutes(10);
+        foreach (var m in leased)
+            await session.Session.ExecuteAsync(
+                $"UPDATE outbox_messages SET locked_until = {newUntil} WHERE id = {m.Id.ToString()}", default);
+
+        var affected = await store.MarkProcessedBatchAsync(leased, DateTimeOffset.UtcNow, default);
+        await Assert.That(affected).IsEqualTo(0);
+
+        var pending = await store.GetPendingMessagesAsync(10, 5, default);
+        await Assert.That(pending).IsEmpty();
+        foreach (var m in leased) await Assert.That(m.Status).IsEqualTo(OutboxStatus.Pending);
+    }
 }
