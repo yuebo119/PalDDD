@@ -254,8 +254,9 @@ public sealed partial class DialectProbeTests
             new(Ulid.New(), "probe.event.v1", 1, "application/json", new ReadOnlyMemory<byte>([2]), new ReadOnlyMemory<byte>([2]), audit),
         };
         var batchResult = await log.AppendAsync("probe-stream", ExpectedStreamVersion.NoStream, events, default);
-        // B-4（EPSL 地毯审计 2026-10-11）：k>1 批量追加版本跨度断言（PG 走多行
-        // VALUES+RETURNING 批路径、MySQL/SQLite 走逐条路径——断言路径无关）
+        // B-4（EPSL 地毯审计 2026-10-11）：k>1 批量追加版本跨度断言（PG/MySQL 走多行
+        // VALUES 批路径——B2 起 MySQL 亦批化，位置经版本范围回查；SQLite 走多行
+        // VALUES+RETURNING 批路径——断言路径无关）
         await Assert.That(batchResult.LastStreamVersion - batchResult.FirstStreamVersion).IsEqualTo(events.Count - 1);
         await Assert.That(batchResult.LastGlobalPosition >= batchResult.FirstGlobalPosition).IsTrue();
 
@@ -293,6 +294,23 @@ public sealed partial class DialectProbeTests
             new ReadOnlyMemory<byte>([4]), new ReadOnlyMemory<byte>([4]), audit);
         var anyR2 = await log.AppendAsync("probe-stream", ExpectedStreamVersion.Any, [any2], default);
         await Assert.That(anyR2.FirstStreamVersion).IsEqualTo(3);
+
+        // B4（EPSL 地毯审计 2026-10-16）：单事件 Exact/NoStream/StreamExists 守卫语义
+        // （PG 走 INSERT..SELECT 守卫谓词快路径，MySQL/SQLite 走预查路径——断言路径无关）：
+        // NoStream 空流落 v0；失匹 Exact(5) 转并发异常；StreamExists 续落 v1。
+        var b4Stream = "probe-b4-single";
+        var b4First = new EventData(Ulid.New(), "probe.event.v1", 1, "application/json",
+            new ReadOnlyMemory<byte>([7]), new ReadOnlyMemory<byte>([7]), audit);
+        var b4R1 = await log.AppendAsync(b4Stream, ExpectedStreamVersion.NoStream, [b4First], default);
+        await Assert.That(b4R1.FirstStreamVersion).IsEqualTo(0);
+        var b4Stale = new EventData(Ulid.New(), "probe.event.v1", 1, "application/json",
+            new ReadOnlyMemory<byte>([8]), new ReadOnlyMemory<byte>([8]), audit);
+        await Assert.ThrowsAsync<EventStreamConcurrencyException>(async () =>
+            await log.AppendAsync(b4Stream, ExpectedStreamVersion.Exact(5), [b4Stale], default));
+        var b4Second = new EventData(Ulid.New(), "probe.event.v1", 1, "application/json",
+            new ReadOnlyMemory<byte>([9]), new ReadOnlyMemory<byte>([9]), audit);
+        var b4R2 = await log.AppendAsync(b4Stream, ExpectedStreamVersion.StreamExists, [b4Second], default);
+        await Assert.That(b4R2.FirstStreamVersion).IsEqualTo(1);
     }
 
     /// <summary>原探针 SagaSmoke——3 项断言。</summary>
