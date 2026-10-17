@@ -1,6 +1,6 @@
 # ADR 030：流式读形态（IStreamQuery / IStreamQueryHandler + SSE 端点原语）
 
-> 状态：**已定稿待实施（2026-10-17 agent 流式场景论证轮收敛）**
+> 状态：**已采纳（2026-10-18 完整实施轮，D1-D8 全部落地；实现清单与验证计划逐项闭环，Phase 2 触发式项未启动）**
 > 日期：2026-10-17
 > 关联：ADR-021（无共享处理器管道基类）、EventBus 移除判决（docs/architecture.md:219、docs/pitfalls.md D6、提交 7a332d8）、docs/features.md:109（Inbox 幂等语义）、ITM-220（重复 handler 注册快速失败先例）
 
