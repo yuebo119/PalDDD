@@ -35,7 +35,7 @@
 | 4 | `Dapper/DapperEventLog.cs:98-99` 门控 + `:160-164` 慢路径 | PG 单事件快路径只覆盖 Any 版本；Exact 才是事件溯源聚合保存 dominant 形态，仍付 MAX 预查 + INSERT 两往返（守卫谓词可原样下推同一 INSERT..SELECT..RETURNING） | 中 | B（PG 车道 A/B，Any 快路径 -15% 先例锚） |
 | 5 | `Dapper/DapperIdempotencyStore.cs:132` × `PalORM/Stores/PalOrmIdempotencyStore.cs:132` | 冲突路径全行读含 response_payload 大列；Completed 情形读一次丢弃、调用方再读一次（双传），另三种情形纯浪费传输 | 中 | B（payload 尺寸敏感需实测；双栈同批处置防跨栈比值漂移） |
 | 6 | `Transactions.EFCore/SagaStateDbContext.cs:383-389` | B1 批量释放的 IN 列表无界：TimeoutScanBatchSize 启动校验上界 10_000，单语句可携 1 万参数；SQLite 变量上限 999 下抛错并被 `SagaTimeoutProcessor.cs:288` catch 吞成日志，租约退化为 LeaseDuration 过期释放 | 中 | B（SQLite 变量上限实测；OutboxDbContext:218-220 的 400 行分块先例现成） |
-| 7 | `Projections/ProjectionProcessor.cs:73-109` | 回放每事件 3 条语句（B7 移交项现状复核，状态「⏸ 移交」非否决）；两级方案：(a) TryStart 跳过前置 SELECT 直插，冲突才分类，新位常见路径 3→2 条零语义变化 | 中 | B（(a) 可升级 A 批；(b) 窗口化维持移交，崩溃窗口 1→N 需裁决） |
+| 7 | `Projections/ProjectionProcessor.cs:73-109` | 回放每事件 3 条语句（B7 移交项现状复核，状态「⏸ 移交」非否决）；两级方案：(a) TryStart 跳过前置 SELECT 直插，冲突才分类，新位常见路径 3→2 条零语义变化 | 中 | B（(a) 已落地 `a8b4a55`；(b) 窗口化 2026-10-17 裁决现在不做，见 `decision-2026-10-17-idempotency-preread-projection-windowing-adjudication.md` 决策点 2） |
 | 8 | `Compression/DecompressBufferPool.cs:20-28` | 缺驻留上限弃槽：R9 给四个同族 TLS 池加了 256KB 阈值弃槽，解压池只改了首轮 GetSpan 提示，Rent 无容量检查，超大载荷后按历史峰值驻留线程槽 | 中 | B（阈值按解压输出典型尺寸标定，可探针） |
 | 9 | `CQRS/PipelineBehaviors.cs:41` + `:74` | ValidationBehavior._validators 静态类型是接口，MS DI 注入运行时形态为数组，foreach 走接口 GetEnumerator 每请求一笔 SZGenericArrayEnumerator（~32B，含零 validator 常见场景）；Dispatcher.cs:212-216 MaterializeBehaviors 先例现成 | 中 | B（先探针确认 net11 JIT 未对接口型数组 foreach 去虚拟化，增量 0 则候选死亡） |
 | 10 | `Core.SourceGen/EnumGenerator.cs:468-511` + `IdentityGenerator.cs:450-500` | duplicateHints/Combine 的 O(N) 字符串 churn：任一候选值变化触发全量 N 个 IdentityHint + LocationIdentity 重算（A15 只把模板渲染迁出 Collect 回调，键构造留两节点） | 中 | B（SourceGen driver + GC 分配计数探针） |
@@ -102,7 +102,7 @@
 
 ## 四、口径注记
 
-① **A 批十项已闭环**（用户令「按报告修复」，2026-10-16 当晚四提交 `2e16620`/`62b417e`/`1822c84`/`38d5a21`，修复列表见第五节）；B 批 15 项维持移交待实测/裁决。审计轮出口形态 = A 批闭环 + B/C 批明确移交。
+① **A 批十项已闭环**（用户令「按报告修复」，2026-10-16 当晚四提交 `2e16620`/`62b417e`/`1822c84`/`38d5a21`，修复列表见第五节）；B 批 15 项于 2026-10-16 晚至 10-17 处置完毕（12 落地 / 2 证伪 / 2 裁决不做，第六节）。审计轮出口形态 = A 批闭环 + B 批全处置。
 ② 深读基于工作树 80bff32（当日 19:21 提交）；smoke 与契约测试为本轮 Release 实测，非沿用上轮结论。
 ③ 76 个跳过测试 = PG/MySQL 方言探针（Testcontainers 路径，本机无 Docker，T-17 统一跳过策略），非缺陷。
 ④ 分片 agent 论断按继承论断处理：头条 9 条已独立复核属实；其余条目行号锚点由分片报告提供，实施前按 A 批纪律逐条复验。
@@ -138,14 +138,14 @@
 | ④ | DapperEventLog PG Exact 三版本 | ✅ 已实施 | 三版本守卫谓词（INSERT..SELECT 失匹零行转并发异常）；wslc pg186 store 级四形态验证，**并抓修 Exact 守卫差一（current=n 写成 next=n）**；CI 方言探针补断言 |
 | ⑥ | Saga 批量释放 IN 列表无界 | ❌ **证伪不实施** | 裸 ADO 探针：捆绑 SQLite 3.53.4 变量上限 32766（32000 OK / 33000 FAIL），配置可达的 10k 上限在三方言全正常——审计引用的 999 是 SQLite 3.32 前（2019）旧知识；分块反而使大批付 25 次往返（净回归） |
 | ⑳ | DapperBulkCopy SQLite 多行 VALUES | ❌ **证伪不实施** | 本地 SQLite 1000 行实测：逐条复用命令 4ms vs 多行 VALUES 14ms（**慢 3.5×**）——大语句构造+解析成本超过省下的命令执行；审计「999 次可省命令执行」前提不成立 |
-| ㉒ | IdempotencyProcessor 前置读 | ⏸ 移交维持 | 无零契约变更修法：前置读服务缓存命中快路径（重复位 1 语句），删除它使新位 -1 语句但重复位 +2 语句，净收益取决于部署命中率分布（无数据）；契约变更（TryStart 冲突返回既有记录）涉四栈公共行为，待用户裁决 |
-| ⑦(b) | Projection 窗口化检查点 | ⏸ 移交维持 | B7 原案：崩溃重放窗口 1→N 语义需裁决（IProjectionHandler remarks 幂等契约已留前提），特性级变更不属局部修复 |
+| ㉒ | IdempotencyProcessor 前置读 | ⛔ 已裁决不做（2026-10-17） | 删除在重复主场景净亏（平衡点重复率 1/3，含异常成本本地 1/5）；契约变更与 B5 互斥；opt-in 开关无数据支撑。裁决文档：`decision-2026-10-17-idempotency-preread-projection-windowing-adjudication.md` 决策点 1 |
+| ⑦(b) | Projection 窗口化检查点 | ⛔ 已裁决现在不做（2026-10-17） | 崩溃重放面 1→N 与 B1 先例同口径；收益场景窄（远程重放 21 分钟→1.3 秒，本地噪声级）且无消费方。裁决文档：同文档决策点 2 |
 
 提交：`5d719b9`(⑧⑨) · `cafc7bc`(⑩) · `6a8c0f4`(③，快照+CHANGELOG 同集) · `9832f3e`(②④) · `a8b4a55`(⑦a) · `037d44b`(㉓) · `7c450e3`(㉑⑤Dapper 侧) · `100e537`(⑤PalORM 侧) · `bb9d41d`(⑪) · `2e44117`(⑩㉕，⑩ 主体在 cafc7bc) · `3da5c39`(文档回填)。全量验证：Release 0W0E + check-all 0/0/0 + 16 工程 1564 通过 0 失败（76 容器探针按 T-17 跳过）。注：B 轮原 12 提交因 G23「快照↔CHANGELOG 逐提交同集」在 0b93d7f 判红，已 soft-reset 重放为上述 9 提交（最终树经 git diff 树哈希比对逐字节一致）；A 轮 4 提交（`2e16620`/`62b417e`/`1822c84`/`38d5a21`）不受影响仍在历史中。
 
 ## 七、尾注
 
-- 移交项：A 批 10 项与 B 批 10 项已闭环（第六节处置表）；B 批证伪 2 项（#6 #20，实测数据在案）、移交维持 3 项（#22 待部署命中率数据或契约变更裁决、#7(b) 窗口化待崩溃窗口语义裁决）；不做批 1 项（#24，数据在表 2）。
+- 移交项：A 批 10 项与 B 批 12 项已闭环（第六节处置表）；B 批证伪 2 项（#6 #20，实测数据在案）、裁决不做 2 项（#22 #7(b)，触发条件见 `decision-2026-10-17-idempotency-preread-projection-windowing-adjudication.md`）；不做批 1 项（#24，数据在表 2）。
 - 归集：本表 2/表 3 应整体迁入 `.ai/perf-ledger.md` 表 4 候选排序表（本轮已同步更新）与表 2 明确不做表（#24 新增一行）。
 - 数据源：七分片 agent 报告（会话内全文在案）；头条 9 条复核 sed/Read 输出在案；`--smoke`、`check-all.cs`、测试循环输出在案（tmp 日志）。
 - 相关：`epsl-carpet-2026-10-11.md`（上轮）、`perf-budgets.md`（预算契约）、`.ai/perf-ledger.md`（性能台账）、`docs/performance.md`（实测账本）。
