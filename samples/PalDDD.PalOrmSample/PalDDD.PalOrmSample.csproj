@@ -35,6 +35,11 @@
     <!-- ITM-161：全局 IL3058 已移除；本示例 build 阶段 IsAotCompatible=true 触发引用兼容检查，
          被引用的 Microsoft.Data.Sqlite/Transactions/SQLitePCLRaw 非全 AOT，保留项目级抑制（AOT 验证走 publish） -->
     <NoWarn>$(NoWarn);CA1303;IL3058</NoWarn>
+    <!-- 2026-10-17 rc.2 SDK 实证：PublishAot + RID 发布路径下 DocumentationFile 落到非 RID
+         目录（net11.0/ 而非 net11.0/<rid>/），publish 复制步骤 MSB3030「找不到文件」红
+         （普通 build -r 落点正常、publish 路径异常；增量旧产物会掩盖假绿）。sample 为非发布
+         诊断件（IsPackable=false），XML 文档无消费方，关掉生成双修 CI 与本地 publish。 -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>
