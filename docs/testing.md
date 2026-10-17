@@ -108,7 +108,7 @@
 
 ```json
 {
-  "sdk": { "version": "11.0.100-rc.1.26425.128", "rollForward": "latestMajor", "allowPrerelease": true },
+  "sdk": { "version": "11.0.100-rc.2.26504.105", "rollForward": "latestMajor", "allowPrerelease": true },
   "test": { "runner": "Microsoft.Testing.Platform" }
 }
 ```

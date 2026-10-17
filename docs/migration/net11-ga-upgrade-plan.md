@@ -5,16 +5,16 @@
 
 ## 一、为什么需要预案（风险陈述）
 
-全家桶锁定 `11.0.0-rc.1.26425.128`（`Directory.Packages.props:5-15`，9+ 包），`Directory.Build.props:42` 的 NU5104 抑制自认「GA 后统一升级并移除此抑制」。rc→GA 是日历确定的硬迁移窗口；仓内已有三例 rc 特有行为证明 preview 间行为会变（见 §三），每例都是 GA 日的潜在回归点。无预案 = 35 包被动全量回归；有预案 = 清单驱动主动迁移。
+全家桶锁定 `11.0.0-rc.2.26504.105`（`Directory.Packages.props`，18+ 包钉扎；2026-10-15 由 rc.1 扶正，包线与 SDK 同批），`Directory.Build.props` 的 NU5104 抑制自认「GA 后统一升级并移除此抑制」。rc→GA 是日历确定的硬迁移窗口；仓内已有三例 rc 特有行为证明 preview 间行为会变（见 §三），每例都是 GA 日的潜在回归点。无预案 = 35 包被动全量回归；有预案 = 清单驱动主动迁移。
 
 ## 二、升级清单（CPM 单点改）
 
-| 组 | 包 | rc.1 版本 | GA 动作 |
+| 组 | 包 | 当前 rc 版本 | GA 动作 |
 |---|---|---|---|
-| 运行时扩展 | Microsoft.Extensions.{DependencyInjection,Logging,Hosting.Abstractions}(.Abstractions) | 11.0.0-rc.1.* | 升稳定版 |
-| EF Core | Microsoft.EntityFrameworkCore{,.Relational,.Sqlite,.InMemory} | 11.0.0-rc.1.* | 升稳定版（重点回归组） |
-| 数据驱动 | Microsoft.Data.Sqlite | 11.0.0-rc.1.* | 升稳定版（时间列 TEXT 格式复核） |
-| SDK | global.json 锁 11.0.100-rc.1 | — | 升 GA SDK |
+| 运行时扩展 | Microsoft.Extensions.{DependencyInjection,Logging,Hosting.Abstractions}(.Abstractions) | 11.0.0-rc.2.* | 升稳定版 |
+| EF Core | Microsoft.EntityFrameworkCore{,.Relational,.Sqlite,.InMemory} | 11.0.0-rc.2.* | 升稳定版（重点回归组） |
+| 数据驱动 | Microsoft.Data.Sqlite | 11.0.0-rc.2.* | 升稳定版（时间列 TEXT 格式复核） |
+| SDK | global.json 锁 11.0.100-rc.2 | — | 升 GA SDK |
 | 抑制清理 | Directory.Build.props NU5104 | — | **移除**（其存在前提消失） |
 
 非 rc 依赖不动：Dapper 2.1.86 / PalORM 5.5.1 / MemoryPack 1.21.4 / ZLogger 2.5.10 / Confluent.Kafka 等。
