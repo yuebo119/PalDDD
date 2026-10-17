@@ -284,7 +284,7 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | 持久化三栈批量（Dapper/PalOrm/EfCore 真库） | — | ✅ | `--persist` / `--persist-medium`（Lease 锚） | ✅ |
 | Saga 编排车道（Normal 基线 / FanOut） | — | ✅ | `--saga` | ✅ |
 
-> **「BDN 正式」的口径（2026-10-08 起生效）**：指 InProcess 显式 job 模式产出的正式报告（上表入口列）。默认 Switcher 入口（`dotnet run --project bench/...` 不带参数）在 BDN 上游补 net11 moniker 前于本工具链不可用（DotNetSdkValidator 崩溃，根因与绕行详见 `Program.cs` 头注）；GA 后可试恢复默认入口并按需恢复类级 job 注解。
+> **「BDN 正式」的口径（2026-10-08 起生效）**：指 InProcess 显式 job 模式产出的正式报告（上表入口列）。默认 Switcher 入口（`dotnet run --project bench/...` 不带参数）在 BDN 0.15.8 时代因 net11-rc moniker 不被 DotNetSdkValidator 识别于本工具链不可用（根因与绕行详见 `Program.cs` 头注）；**2026-10-17 升位 BDN 0.16.0-preview.2 后默认入口已恢复**（`--list` 实测 exit 0 全量列出），显式 InProcess 路径保留为正式报告口径（MediumRun/InProcess 作业形态是刻意配置）。
 
 ### 3.3 数据规模矩阵
 
@@ -339,7 +339,7 @@ dotnet run --project bench/PalDDD.Benchmarks -- --smoke
 
 100 万次迭代手动计时（Stopwatch + `GC.GetAllocatedBytesForCurrentThread`），不依赖 BenchmarkDotNet 引擎。**2026-10-08 起带分配预算断言**：Success/FromValue ≤1 B/op、Failed ≤50 B/op、RaiseEvent ≤140 B/op（rc.1 实测校准；预算语义对齐 AllocationContractTests——上界含余量只拦大幅回归），超限退出码 1，可直接用作人工 TOOL 门禁（conventions §10.6 口径，未接 CI）。
 
-> **重要**：BenchmarkDotNet 0.15.8 不识别 net11-rc runtime moniker，默认 Switcher 入口在本工具链崩溃（根因详见 `Program.cs` 头注）。正式报告经 InProcess 显式模式产出（`--framework`/`--app`/`--infra`/`--concurrency`/`--persist*`/`--saga`/`--compression`，见 §4.1）；`--smoke` 定位是**秒级成本的趋势检查 + 分配预算判定**，计时为单轮无统计效力，不替代正式报告。待 .NET 11 GA 且 BDN 发适配版后试恢复默认入口。
+> **重要**：BDN 0.15.8 曾不识别 net11-rc runtime moniker 导致默认 Switcher 入口在本工具链崩溃（根因详见 `Program.cs` 头注）；2026-10-17 升位 **BDN 0.16.0-preview.2** 后该问题已修复（`--list` 实测 exit 0），正式报告仍以 InProcess 显式模式为口径（`--framework`/`--app`/`--infra`/`--concurrency`/`--persist*`/`--saga`/`--compression`，见 §4.1）；`--smoke` 定位是**秒级成本的趋势检查 + 分配预算判定**，计时为单轮无统计效力，不替代正式报告。
 
 ---
 

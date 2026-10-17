@@ -139,6 +139,12 @@ GapEntry[] gapLedger =
     new("librdkafka.redist",
         "nuspec 无 <license> 元素，仅有 <licenseUrl> 指向 github 上的 LICENSES.txt（多许可合集）——离线取不回正文",
         "框架维护者", new DateOnly(2026, 12, 31), "Confluent.Kafka 传递依赖（含原生二进制再分发）；逐项核对合集后改判"),
+    new("deniszykov.WebSocketListener",
+        "nuspec 无 <license> 元素，licenseUrl 为 https://opensource.org/licenses/MIT——非 licenses.nuget.org 形态，离线推不出 SPDX 标识；2026-10-17 在线取证正文为 MIT License 规范文本",
+        "框架维护者", new DateOnly(2026, 12, 31), "BDN 0.16.0-preview.2 传递依赖（浏览器结果宿主）；等上游改发 SPDX expression 后销号，或改判白名单"),
+    new("System.Security.Cryptography.ProtectedData",
+        "nuspec 无 <license> 元素，licenseUrl 指向 corefx blob/master LICENSE.TXT——URL 形态非 licenses.nuget.org 且随上游仓库漂移，离线取不回；2026-10-17 在线取证正文为 MIT License",
+        "框架维护者", new DateOnly(2026, 12, 31), "BDN 0.16.0-preview.2 传递依赖；等上游改发 SPDX expression 后销号（corefx 已归档，master 稳定），或改判白名单"),
 ];
 
 var policy = new Policy(

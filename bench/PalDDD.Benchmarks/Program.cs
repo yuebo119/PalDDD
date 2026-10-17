@@ -41,11 +41,13 @@ if (args.Contains("--compare", StringComparer.OrdinalIgnoreCase))
     return 0;
 }
 
-// net11-rc runtime moniker 不被 BDN 0.15.8 的 DotNetSdkValidator 识别(GetRuntimeVersion
-// throw NotRecognizedException;验证内嵌在 CsProjCoreToolchain.Validate,且 Switcher 在
-// filter 前对全程序集 case 验证——任何 [ShortRunJob] 类都会触发崩溃)。
-// 解法:--persist 显式跑三栈持久化基准类(逐类 BenchmarkRunner.Run<T> + [InProcess] attribute,
-// InProcessValidator 不查 SDK moniker);其余类走 Switcher(等 BDN 上游补 net11 moniker 恢复)。
+// 历史注记（2026-09-19 五十四轮）：net11-rc runtime moniker 不被 BDN 0.15.8 的
+// DotNetSdkValidator 识别（GetRuntimeVersion throw NotRecognizedException；验证内嵌在
+// CsProjCoreToolchain.Validate，且 Switcher 在 filter 前对全程序集 case 验证——任何
+// [ShortRunJob] 类都会触发崩溃），故 --persist 走显式 InProcess config 路径绕过。
+// 2026-10-17 升位 BDN 0.16.0-preview.2 后默认 Switcher 入口已恢复（--list 实测 exit 0
+// 全量列出，moniker 识别修复）；显式 InProcess 路径保留（MediumRun/InProcess 作业形态
+// 是刻意配置，与入口可达性无关）。
 if (args.Contains("--verify-persist", StringComparer.OrdinalIgnoreCase))
 {
     return await PersistenceVerifyRunner.RunAsync();
@@ -57,7 +59,7 @@ if (args.Contains("--persist", StringComparer.OrdinalIgnoreCase))
     // 原依赖类 [InProcess] attribute（已随本修复移除），避免 attribute 与 ManualConfig
     // 叠加产生双 job（BDN 0.15.8 实测：config 合并对 jobs 是 union 不去重）
     var inProcessOnly = ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.InProcess.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddJob(Job.InProcess.WithToolchain(InProcessEmitToolchain.Default))
         .AddDiagnoser(MemoryDiagnoser.Default);
     BenchmarkRunner.Run<DapperPersistenceBenchmarks>(inProcessOnly);
     BenchmarkRunner.Run<PalOrmPersistenceBenchmarks>(inProcessOnly);
@@ -76,7 +78,7 @@ if (args.Contains("--persist-medium", StringComparer.OrdinalIgnoreCase))
     // github.md（裁决数字无处查）。归档纪律：medium 数字入 docs/performance.md
     // 时带日期，artifacts-medium 目录留存原始报告。
     var leaseOnly = ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default))
         .AddDiagnoser(MemoryDiagnoser.Default)
         .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-medium"))
         .AddFilter(new NameFilter(name =>
@@ -94,7 +96,7 @@ if (args.Contains("--persist-medium", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--persist-mark", StringComparer.OrdinalIgnoreCase))
 {
     var markOnly = ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default))
         .AddDiagnoser(MemoryDiagnoser.Default)
         .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-mark"))
         .AddFilter(new NameFilter(name =>
@@ -117,7 +119,7 @@ if (args.Contains("--saga", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--compression", StringComparer.OrdinalIgnoreCase))
 {
     var inProcessOnly = ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.InProcess.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddJob(Job.InProcess.WithToolchain(InProcessEmitToolchain.Default))
         .AddDiagnoser(MemoryDiagnoser.Default);
     BenchmarkRunner.Run<CompressionBenchmarks>(inProcessOnly);
     return 0;
@@ -137,7 +139,7 @@ if (args.Contains("--compression", StringComparer.OrdinalIgnoreCase))
 // 无其他模式参数时默认跑两类既有严格档（OutboxThroughput + SmartEnum）。
 static IConfig StrictInProcessConfig()
     => ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance)
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default)
             .WithIterationCount(40).WithWarmupCount(20).WithLaunchCount(3))
         .AddDiagnoser(MemoryDiagnoser.Default)
         .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-strict"));
@@ -162,7 +164,7 @@ if (IsStrictOnlyRun(args))
 
 static IConfig MediumInProcessConfig()
     => ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default))
         .AddDiagnoser(MemoryDiagnoser.Default)
         .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-medium"));
 
@@ -209,7 +211,7 @@ if (args.Contains("--app", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--delivery", StringComparer.OrdinalIgnoreCase))
 {
     var delivery = ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance)
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default)
             .WithIterationCount(5).WithWarmupCount(3).WithLaunchCount(1))
         .AddDiagnoser(MemoryDiagnoser.Default)
         .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-delivery"));
@@ -327,7 +329,7 @@ static async Task<int> RunRemoteDeliveryAsync(bool isPostgreSql)
         RemoteDialectBenchState.ConnectionString = session.ConnectionString;
         RemoteDialectBenchState.DbType = session.DbType;
         var deliveryRemote = ManualConfig.Create(DefaultConfig.Instance)
-            .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance)
+            .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default)
                 .WithIterationCount(5).WithWarmupCount(3).WithLaunchCount(1))
             .AddDiagnoser(MemoryDiagnoser.Default)
             .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-delivery-remote"));
