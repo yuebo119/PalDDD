@@ -225,6 +225,13 @@ public sealed class DefaultSagaManager : ISagaManager
     [RequiresDynamicCode("Uses MakeGenericType to construct ValueTask<TState> when reflection return type is not pre-constructed; not compatible with native AOT.")]
     [UnconditionalSuppressMessage("Aot", "IL2075:RequiresDynamicallyAccessedMembers",
         Justification = "整个方法已声明 RequiresDynamicCode 边界——GetProperty 位于该边界内，消费方已获得编译期 AOT 警告。")]
+    // IL2070 同族补齐（2026-10-17 CI aot-verify 实证）：rc.2 SDK 修剪分析对
+    // t.GetMethod("AsTask")/t.GetProperty("Result")（this=缓存键 Type）报 IL2070
+    // （'this' 实参不满足 DynamicallyAccessedMemberTypes），与 IL2075 同属
+    // RequiresDynamicCode 边界内的反射家族——查找目标为框架稳定成员
+    // （ValueTask<T>.AsTask / Task<T>.Result），随 IL2075 同边界压制。
+    [UnconditionalSuppressMessage("Aot", "IL2070:RequiresDynamicallyAccessedMembers",
+        Justification = "方法已声明 RequiresDynamicCode 边界；GetMethod/GetProperty 的 this（缓存键 Type）位于该边界内，查找目标为框架稳定成员，消费方已获编译期 AOT 警告。")]
     private static async ValueTask<SagaState> UnboxAndAwaitValueTaskAsync(
         object boxedValueTask, Type? methodReturnType, Type stateType)
     {

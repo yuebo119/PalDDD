@@ -58,6 +58,7 @@
 
 ### Fixed 修复
 
+- **S 轮 A8 反射缓存 IL2070 压制 ID 错配（2026-10-17，CI run 39000562109 aot-verify 实证）**：`DefaultSagaManager.UnboxAndAwaitValueTaskAsync` 的 A8 缓存化把 `t.GetMethod("AsTask")`/`t.GetProperty("Result")`（this=缓存键 Type）纳入 `[UnconditionalSuppressMessage]`，但原压制对象是 IL2075，rc.2 SDK 修剪分析实际诊断族是 **IL2070**（'this' 实参不满足 DynamicallyAccessedMemberTypes），PublishAot 下 2 处 error 致 aot-verify 红（本地普通构建不跑修剪分析故 0W0E 未暴露，46 提交积压 CI 首跑抓出）。修复：同 `[RequiresDynamicCode]` 边界补 IL2070 压制（查找目标为框架稳定成员 ValueTask<T>.AsTask / Task<T>.Result）。验证：本地 win-x64 双样本 PublishAot 0 错误 + 二进制实跑断言全过；rc.1→rc.2 SDK 分析器诊断族差异一并入账。
 - **S1 Outbox `MaxDegreeOfParallelism>1` 空租约 Chunk(0) 潜伏缺陷（2026-10-15 性能实施轮）**：空租约（队列排空后每 tick 常态）下 `Math.Ceiling(0/dop)=0` 使 `Enumerable.Chunk` 首行抛 `ArgumentOutOfRangeException`，被 `PeriodicBackgroundProcessor` 兜底 catch 吞掉只记 `OnTickFailed`，排空后持续噪音且每轮失败信号污染。修复 chunkSize 下限 1，空批经 Chunk 产生零分区、`ForEachAsync` 空转。锁定测试 `OutboxParallelPartitionTests` 两件（空租约完成 + 非空批分区正确性，DI 组装提供 per-worker scope 的 `IServiceScopeFactory` 与生产接线同构；变异探针双向：还原旧形态空租约用例判红、修复后 2/2 绿）。
 
 ### Dependencies 依赖
