@@ -15,7 +15,12 @@
        （包线钉扎全量随 rc.2；SDK 维持 rc.1——API 已 go-live 冻结，rc.2 包对 rc.1 运行时逐位兼容由面板实证，
        SDK/GA 统一升位随 2026-11 GA 轮评估）；MediatR 14.2.0/Verify.TUnit 33.3.3 维持禁令，CAP 10.1.0-preview/
        BDN 0.16.0-preview.2 仅预发布不升；
-       2026-10-15 核新（性能实施轮 R1~R10 后窗口）：NativeCompressions → 1.2.0（唯一可升项，往返测试实证） -->
+       2026-10-15 核新（性能实施轮 R1~R10 后窗口）：NativeCompressions → 1.2.0（唯一可升项，往返测试实证）；
+       2026-10-17 预发布入线（用户裁决「库/包/组件升级可用预览版」）：CAP ×3 10.0.2 → 10.1.0-preview-308323494
+       （bench 对比车道专用，nuspec 许可随 gate 复验）、BDN 0.15.8 → 0.16.0-preview.2（.NET 11 适配版——
+       默认 Switcher 入口恢复实测，InProcessEmitToolchain.Instance 已更名 Default，8 处适配）；
+       传递钉扎补齐 Microsoft.Data.Sqlite.Core / Microsoft.Extensions.DependencyModel 随 11 线 rc.2；
+       MediatR 14.2.0/Verify.TUnit 33.3.4 为稳定版商业许可，license-policy 禁令不受预发布政策影响继续维持 -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
@@ -70,17 +75,23 @@
          （全仓无 PackageReference 消费，见 ITM-711），升位只影响声明版本 -->
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.1.1" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="11.0.0-rc.2.26504.105" />
+    <!-- Microsoft.Data.Sqlite.Core 传递钉扎补齐（2026-10-17 核新实证）：EF Core Sqlite
+         provider 依赖 Core 包而非 meta 包，未声明时解析停在 rc.1——meta 钉扎不覆盖该 ID，
+         与 18 处微软 11 线钉扎的「全量随 rc.2」意图矛盾，补钉扎 -->
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="11.0.0-rc.2.26504.105" />
     <!-- SQLite 引擎（传递依赖显式固定，确保构建可重现） -->
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
     <PackageVersion Include="SQLitePCLRaw.core" Version="3.0.5" />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
     <!-- 2026-10-09 横向对比轮：bench 对比车道消费——MediatR 锚定 12.x 最后开源线
          （13.0.0 起 Lucky Penny 商业许可，对齐 license-policy「禁商业许可」裁决；
-         12.5.0 nuspec 为 Apache-2.0 白名单内）；CAP 全家 MIT -->
+         12.5.0 nuspec 为 Apache-2.0 白名单内）；CAP 全家 MIT。
+         2026-10-17 用户裁决「预发布版可入包线」：CAP ×3 10.0.2 → 10.1.0-preview-308323494
+         （bench 对比车道专用，nuspec 许可随 gate 复验） -->
     <PackageVersion Include="MediatR" Version="12.5.0" />
-    <PackageVersion Include="DotNetCore.CAP" Version="10.0.2" />
-    <PackageVersion Include="DotNetCore.CAP.RabbitMQ" Version="10.0.2" />
-    <PackageVersion Include="DotNetCore.CAP.MySql" Version="10.0.2" />
+    <PackageVersion Include="DotNetCore.CAP" Version="10.1.0-preview-308323494" />
+    <PackageVersion Include="DotNetCore.CAP.RabbitMQ" Version="10.1.0-preview-308323494" />
+    <PackageVersion Include="DotNetCore.CAP.MySql" Version="10.1.0-preview-308323494" />
     <PackageVersion Include="MySqlConnector" Version="2.6.2" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="11.0.0-rc.2.26504.105" />
     <!-- 消息代理适配器（可选） -->
@@ -88,7 +99,11 @@
     <PackageVersion Include="Confluent.Kafka" Version="2.16.0" />
     <!-- 测试基础设施 — TUnit（源生成器测试框架 · MTP） -->
     <PackageVersion Include="TUnit" Version="1.75.0" />
-    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+    <!-- BDN 0.16.0-preview.2（2026-10-17 用户裁决预发布可入包线升位）：0.15.8 起本仓
+         因 net11-rc moniker 不识别走 InProcess 显式模式（Program.cs 头注+testing.md §4.1
+         实录），0.16 线为 BDN 对 .NET 11 的适配版——默认入口是否恢复实测后定，未恢复则
+         InProcess 路径维持（头注同步勘正） -->
+    <PackageVersion Include="BenchmarkDotNet" Version="0.16.0-preview.2" />
     <!-- 属性测试 — FsCheck + TUnit 集成 -->
     <PackageVersion Include="FsCheck" Version="3.4.0" />
     <PackageVersion Include="TUnit.FsCheck" Version="1.75.0" />
@@ -118,6 +133,9 @@
     <PackageVersion Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" />
     <PackageVersion Include="System.Threading.Tasks.Extensions" Version="4.6.3" />
     <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="11.0.0-rc.2.26504.105" />
+    <!-- Microsoft.Extensions.DependencyModel 传递钉扎补齐（2026-10-17 核新实证）：TUnit/MTP
+         链传递依赖，未声明时解析停在 10.0.10 稳定线——与微软 11 线 rc.2 钉扎集不同批，补钉扎 -->
+    <PackageVersion Include="Microsoft.Extensions.DependencyModel" Version="11.0.0-rc.2.26504.105" />
     <!-- Platforms 包 8.0 后停更（2026-09-10 restore 实测 NU1102 证实：最新即 8.0.0-preview.7.23375.6，勿再升） -->
     <PackageVersion Include="Microsoft.NETCore.Platforms" Version="8.0.0-preview.7.23375.6" />
     <!-- 传递依赖版本固定 — 覆盖过时的传递依赖 -->
