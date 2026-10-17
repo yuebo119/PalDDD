@@ -31,6 +31,9 @@ interface PalDDD.CQRS.IQueryHandler<TQuery, TResult>
   method System.Threading.Tasks.ValueTask<TResult> HandleAsync(TQuery query, System.Threading.CancellationToken ct)
 interface PalDDD.CQRS.IQuery<TResponse>
 interface PalDDD.CQRS.IRequest<TResponse>
+interface PalDDD.CQRS.IStreamQueryHandler<TQuery, TItem>
+  method System.Collections.Generic.IAsyncEnumerable<TItem> HandleAsync(TQuery query, System.Threading.CancellationToken ct)
+interface PalDDD.CQRS.IStreamQuery<TItem>
 class PalDDD.CQRS.PalValidationException
   ctor()
   ctor(System.Collections.Immutable.ImmutableArray<PalDDD.Core.PalValidationError> errors)
@@ -602,6 +605,7 @@ static class PalDDD.DependencyInjection.ServiceRegistration
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalPipelineBehaviors(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalPipelineBehaviors(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalQueryHandler(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalStreamQueryHandler(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
 
 # PalDDD.EventLog
 struct PalDDD.EventLog.AppendEventsResult
@@ -726,6 +730,8 @@ static class PalDDD.Hosting.AspNetCore.EndpointExtensions
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapCommand(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TCommand> commandJsonTypeInfo)
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapCommand(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TCommand> commandJsonTypeInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse> responseJsonTypeInfo)
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapQuery(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Func<Microsoft.AspNetCore.Http.HttpContext, TQuery> bindQuery, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResult> responseJsonTypeInfo)
+  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapStreamQuery(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Func<Microsoft.AspNetCore.Http.HttpContext, TQuery> bindQuery, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TItem> itemJsonTypeInfo, System.Func<TItem, System.String> formatFrame)
+  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapStreamQuery(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TQuery> queryJsonTypeInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TItem> itemJsonTypeInfo, System.Func<TItem, System.String> formatFrame)
 class PalDDD.Hosting.AspNetCore.ExceptionMiddleware
   ctor(Microsoft.AspNetCore.Http.RequestDelegate next, PalDDD.Core.Logging.IPalLogger<PalDDD.Hosting.AspNetCore.ExceptionMiddleware> logger)
   method System.Threading.Tasks.Task InvokeAsync(Microsoft.AspNetCore.Http.HttpContext context)

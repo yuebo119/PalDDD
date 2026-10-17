@@ -53,7 +53,7 @@ internal sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavio
 
     public async ValueTask<TResponse> HandleAsync(TRequest request, CancellationToken ct, Func<ValueTask<TResponse>> next)
     {
-        var errors = Validate(request);
+        var errors = PalValidatorRunner.Validate(_validators, request);
         if (errors is { Count: > 0 })
             throw new PalValidationException([.. errors]);
 
@@ -66,17 +66,35 @@ internal sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavio
     // 拆箱-再装箱往返）。与泛型路径共用 Validate 核心，改动须双侧同步。
     ValueTask<object?> IPipelineBehavior.HandleAsync(IBaseRequest request, CancellationToken ct, Func<ValueTask<object?>> next)
     {
-        var errors = Validate((TRequest)request);
+        var errors = PalValidatorRunner.Validate(_validators, (TRequest)request);
         if (errors is { Count: > 0 })
             throw new PalValidationException([.. errors]);
         return next();
     }
+}
 
-    /// <summary>验证核心（泛型/非泛型两路径共用单一来源）。</summary>
-    private List<Core.PalValidationError>? Validate(TRequest request)
+/// <summary>
+/// 验证执行核心（ADR-030 D3 抽取）——<see cref="ValidationBehavior{TRequest, TResponse}"/>
+/// 泛型/非泛型两条路径与流式端点（MapStreamQuery）验证前置三处共用的单一出处。
+/// </summary>
+/// <remarks>
+/// 抽取动因：流式端点在 SSE 头写出前必须跑同一套验证（失败 400 且可回退状态码），
+/// 若在端点侧复写验证逻辑，「IsValid=false 且 Errors 为空时构造占位条目」语义
+/// （v25/v48 两轮勘正定案）会出现第二份定义并漂移。本类为 internal static——
+/// 经仓内 IVT 链（PalDDD.CQRS → PalDDD.Hosting.AspNetCore）对端点原语可见，
+/// 不进公共 API 快照。
+/// </remarks>
+internal static class PalValidatorRunner
+{
+    /// <summary>
+    /// 对 request 跑全部 validators；返回错误列表（无验证失败返回 null——调用方按
+    /// <c>errors is { Count: &gt; 0 }</c> 判定，无失败时零堆分配）。
+    /// </summary>
+    public static List<Core.PalValidationError>? Validate<TRequest>(
+        Core.IPalValidator<TRequest>[] validators, TRequest request)
     {
         List<Core.PalValidationError>? errors = null;
-        foreach (var validator in _validators)
+        foreach (var validator in validators)
         {
             var result = validator.Validate(request);
             if (!result.IsValid)

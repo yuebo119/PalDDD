@@ -15,11 +15,19 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Serialization\PalDDD.Serialization.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.CQRS\PalDDD.CQRS.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.DependencyInjection\PalDDD.DependencyInjection.csproj" />
+    <!-- ADR-030 §7 流式端点样本：MapStreamQuery 端点原语喂 aot-verify CI
+         （Hosting.AspNetCore 自身 IsAotCompatible=false 系 Transactions 传递覆盖，
+         其端点代码为源生成 JSON + 显式 metadata 的 AOT 友好设计） -->
+    <ProjectReference Include="..\..\src\PalDDD.Hosting.AspNetCore\PalDDD.Hosting.AspNetCore.csproj" />
   </ItemGroup>
 
 </Project>
