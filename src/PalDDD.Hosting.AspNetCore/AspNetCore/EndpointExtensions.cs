@@ -2,6 +2,12 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Net.Http.Headers;
+using System.Diagnostics.CodeAnalysis;
+using System.IO.Pipelines;
+using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 
 namespace PalDDD.Hosting.AspNetCore;
@@ -11,7 +17,7 @@ namespace PalDDD.Hosting.AspNetCore;
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>
-/// Minimal API 命令/查询端点映射扩展。调用方必须传入源生成 JSON metadata 以保持 AOT 安全。
+/// Minimal API 命令/查询/流式查询端点映射扩展。调用方必须传入源生成 JSON metadata 以保持 AOT 安全。
 /// <para>
 /// ⚠️ <b>滥用控制声明（三十八轮 P2）</b>：本类映射的端点默认不含速率限制与请求体大小约束——
 /// 生产部署须在宿主层配置（ASP.NET Core 内置 RateLimiter 中间件 + RequestSizeLimit），
@@ -179,11 +185,193 @@ public static class EndpointExtensions
         });
     }
 
+    /// <summary>映射流式查询到 HTTP GET 端点（SSE，ADR-030 D8 GET 形态——浏览器原生 EventSource 兼容）。</summary>
+    /// <remarks>
+    /// 端点即作用域边界（D2）：handler 从 <see cref="HttpContext.RequestServices"/> 解析，
+    /// 枚举在本端点方法执行期内完成，请求作用域天然覆盖全枚举期。<br/>
+    /// 流程：bindQuery → <see cref="CQRS.PalValidatorRunner"/> 验证（失败 400 且在 SSE 头写出前，
+    /// 状态码可回退）→ 写 SSE 头 → await foreach 枚举写帧。<br/>
+    /// ⚠️ 浏览器原生 EventSource 仅支持 GET；POST 形态（承载 prompt 类请求体）须用 fetch 加
+    /// ReadableStream 手工解析，见 usage.md 流式读一节。
+    /// </remarks>
+    public static IEndpointConventionBuilder MapStreamQuery<TQuery, TItem>(
+        this IEndpointRouteBuilder endpoints,
+        string pattern,
+        Func<HttpContext, TQuery> bindQuery,
+        JsonTypeInfo<TItem> itemJsonTypeInfo,
+        Func<TItem, string>? formatFrame = null)
+        where TQuery : CQRS.IStreamQuery<TItem>
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        ArgumentNullException.ThrowIfNull(bindQuery);
+        ArgumentNullException.ThrowIfNull(itemJsonTypeInfo);
+
+        return endpoints.MapGet(pattern, async context =>
+        {
+            TQuery query;
+            try
+            {
+                query = bindQuery(context);
+            }
+            catch (CQRS.PalValidationException ex)
+            {
+                // 同 MapQuery v25 P3 行为族 B8：绑定异常 400 而非逃逸 500
+                await WriteValidationProblemAsync(context, ex).ConfigureAwait(false);
+                return;
+            }
+            if (query is null)
+            {
+                // 同 MapQuery v65 P3 对称守卫：绑定返回 null（缺必需查询参数）→ 400
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await context.Response.WriteAsJsonAsync(
+                    ValidationProblemResponseFactory.CreateInvalidBody(
+                        "Query binding returned null. Ensure all required query parameters are provided."),
+                    PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                    contentType: null).ConfigureAwait(false);
+                return;
+            }
+            await StreamQueryCoreAsync(context, query, itemJsonTypeInfo, formatFrame).ConfigureAwait(false);
+        });
+    }
+
+    /// <summary>映射流式查询到 HTTP POST 端点（SSE，ADR-030 D8 POST 形态——JSON body 承载 prompt 类请求体）。</summary>
+    /// <remarks>
+    /// 与 GET 形态同构：反序列化段复用 <see cref="ReadJsonBodyOrWriteErrorAsync{T}"/>（415/畸形
+    /// JSON/空 body 错误形态不变），其后验证、SSE 头、枚举写帧全链路与 GET 形态逐字一致。<br/>
+    /// ⚠️ 浏览器侧 EventSource 不发 POST——消费方须用 fetch 加 ReadableStream 手工解析帧。
+    /// </remarks>
+    public static IEndpointConventionBuilder MapStreamQuery<TQuery, TItem>(
+        this IEndpointRouteBuilder endpoints,
+        string pattern,
+        JsonTypeInfo<TQuery> queryJsonTypeInfo,
+        JsonTypeInfo<TItem> itemJsonTypeInfo,
+        Func<TItem, string>? formatFrame = null)
+        where TQuery : CQRS.IStreamQuery<TItem>
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        ArgumentNullException.ThrowIfNull(queryJsonTypeInfo);
+        ArgumentNullException.ThrowIfNull(itemJsonTypeInfo);
+
+        return endpoints.MapPost(pattern, async context =>
+        {
+            var (ok, query) = await ReadJsonBodyOrWriteErrorAsync(context, queryJsonTypeInfo).ConfigureAwait(false);
+            if (!ok) return;
+            await StreamQueryCoreAsync(context, query!, itemJsonTypeInfo, formatFrame).ConfigureAwait(false);
+        });
+    }
+
+    /// <summary>
+    /// 流式端点共享核心（ADR-030 端点流程）：验证前置 → handler 解析 → SSE 头 → 枚举写帧。
+    /// </summary>
+    /// <remarks>
+    /// 顺序说明（两处对 ADR 流程的显式偏离，均为错误语义改进、happy path 零差异）：
+    /// ①handler 解析前置于 SSE 头写出之前——handler 未注册时经全局 ExceptionMiddleware
+    /// 返回干净 500；若按「头先行」顺序，异常将落在头已写出之后（Kestrel 只能中断连接）；
+    /// ②<see cref="CQRS.PalValidationException"/> 在此构造而非在验证段抛出——400 响应体与
+    /// MapCommand/MapQuery 同形态（WriteValidationProblemAsync 单一出处）。
+    /// </remarks>
+    [SuppressMessage("Design", "CA1031",
+        Justification = "中途异常无法回退 HTTP 状态码（SSE 头已写出），须捕获后补 event: error 帧并记录日志；取消异常单独静默收尾。")]
+    private static async Task StreamQueryCoreAsync<TQuery, TItem>(
+        HttpContext context,
+        TQuery query,
+        JsonTypeInfo<TItem> itemJsonTypeInfo,
+        Func<TItem, string>? formatFrame)
+        where TQuery : CQRS.IStreamQuery<TItem>
+    {
+        // D3 验证前置：SSE 头写出前跑验证——失败走既有 WriteValidationProblemAsync
+        // （400 ProblemDetails，与 MapCommand/MapQuery 同形态；头未写出故状态码可回退）
+        var validators = context.RequestServices.GetServices<Core.IPalValidator<TQuery>>();
+        var errors = CQRS.PalValidatorRunner.Validate(
+            validators as Core.IPalValidator<TQuery>[] ?? validators.ToArray(), query);
+        if (errors is { Count: > 0 })
+        {
+            await WriteValidationProblemAsync(
+                context, new CQRS.PalValidationException([.. errors])).ConfigureAwait(false);
+            return;
+        }
+
+        // D6 生命周期日志（机械部分）：流开始/结束/item 数/错误——响应内容审计由 handler
+        // 在流结束后追加 EventLog（框架不自动捕获载荷：隐私、体积、领域语义三样均属应用层）。
+        // 与 LoggingBehavior 语义对齐：IsEnabled 门控（关闭时零插值分配）+ TimeProvider 可注入；
+        // 未注册 IPalLogger（未调 AddPalLogging）时 GetService 返回 null，整体跳过。
+        var logger = context.RequestServices.GetService<Core.Logging.IPalLogger<StreamQueryEndpoint<TQuery, TItem>>>();
+        var timeProvider = context.RequestServices.GetService<TimeProvider>() ?? TimeProvider.System;
+        var startTimestamp = timeProvider.GetTimestamp();
+
+        // handler 解析（请求作用域）——置于 SSE 头写出前，见方法 remarks 偏离说明①
+        var handler = context.RequestServices.GetRequiredService<CQRS.IStreamQueryHandler<TQuery, TItem>>();
+
+        // SSE 响应头（验证已通过、handler 已解析，此后状态码不可回退）
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "text/event-stream; charset=utf-8";
+        context.Response.GetTypedHeaders().CacheControl = new CacheControlHeaderValue { NoCache = true };
+        context.Response.Headers["X-Accel-Buffering"] = "no";
+
+        if (logger is not null && logger.IsEnabled(LogLevel.Debug))
+            logger.Debug($"Stream {typeof(TQuery).Name}: started");
+
+        var ct = context.RequestAborted;
+        var bodyWriter = context.Response.BodyWriter;
+        var itemCount = 0;
+
+        try
+        {
+            // D5 取消贯穿：ct 为 RequestAborted，同时经 WithCancellation 兜底进迭代器
+            //（[EnumeratorCancellation] 语义——忽略形参令牌的实现也会在 MoveNext 处观测取消）
+            await foreach (var item in handler.HandleAsync(query, ct).WithCancellation(ct))
+            {
+                itemCount++;
+                if (formatFrame is null)
+                {
+                    // D4 默认帧：data-only JSON——framing 字节段经 PipeWriter span 直写，
+                    // 无字符串中转（变异红证明锁定该形态，见 StreamFrameWriter）
+                    var json = JsonSerializer.SerializeToUtf8Bytes(item, itemJsonTypeInfo);
+                    StreamFrameWriter.WriteDataFrame(bodyWriter, json);
+                }
+                else
+                {
+                    // D4 定制帧：委托返回完整帧文本（event/id 行），支持分型事件流
+                    StreamFrameWriter.WriteRawFrame(bodyWriter, formatFrame(item));
+                }
+                await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+            }
+
+            if (logger is not null && logger.IsEnabled(LogLevel.Debug))
+                logger.Debug($"Stream {typeof(TQuery).Name}: completed {itemCount} item(s) in {timeProvider.GetElapsedTime(startTimestamp).TotalMilliseconds:F2}ms");
+        }
+        catch (OperationCanceledException)
+        {
+            // D5：客户端断开静默收尾（头已写出，无法回退状态码；消费方按流截断处理）。
+            // 取消不是错误——按 LoggingBehavior 的 OCE 过滤同款语义不记 Error。
+            if (logger is not null && logger.IsEnabled(LogLevel.Debug))
+                logger.Debug($"Stream {typeof(TQuery).Name}: cancelled after {itemCount} item(s)");
+        }
+        catch (Exception ex)
+        {
+            // 中途异常：补 event: error 帧后结束（头已写出无法回退 500；异常详情只进日志，
+            // 帧内文案通用化——对齐 ExceptionMiddleware 的 500 响应不泄露内部细节口径）
+            try
+            {
+                StreamFrameWriter.WriteErrorFrame(bodyWriter);
+                await bodyWriter.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // 客户端已断开时 error 帧无法送达——消费方本就按截断处理，静默
+            }
+            if (logger is not null && logger.IsEnabled(LogLevel.Error))
+                logger.Error(ex, $"Stream {typeof(TQuery).Name}: failed after {itemCount} item(s) in {timeProvider.GetElapsedTime(startTimestamp).TotalMilliseconds:F2}ms");
+        }
+    }
+
     /// <summary>读取 JSON 请求体，错误时写入对应错误响应并返回 (false, null)。
     /// ITM-799（2026-09-19）：415/畸形 JSON/验证异常/空 body 四种错误编排原在
-    /// MapCommand/MapQuery 两处逐字重复（约 40 行）——收口为单一出处，历史注释随迁。</summary>
-    private static async Task<(bool Success, TCommand? Command)> ReadJsonBodyOrWriteErrorAsync<TCommand>(
-        HttpContext context, JsonTypeInfo<TCommand> commandJsonTypeInfo)
+    /// MapCommand/MapQuery 两处逐字重复（约 40 行）——收口为单一出处，历史注释随迁。
+    /// ADR-030 D8：泛化版（类型参数 TCommand → T）——MapStreamQuery POST 形态复用，
+    /// 415/畸形 JSON/空 body 错误形态不变。</summary>
+    private static async Task<(bool Success, T? Body)> ReadJsonBodyOrWriteErrorAsync<T>(
+        HttpContext context, JsonTypeInfo<T> bodyJsonTypeInfo)
     {
         // v40 P3：非 JSON Content-Type 的 POST 原由 ReadFromJsonAsync 抛
         // InvalidOperationException（非 JsonException）逃逸为 500——语义应为
@@ -198,11 +386,11 @@ public static class EndpointExtensions
                 contentType: null).ConfigureAwait(false);
             return (false, default);
         }
-        TCommand? cmd;
+        T? body;
         try
         {
-            cmd = await context.Request.ReadFromJsonAsync(
-                commandJsonTypeInfo,
+            body = await context.Request.ReadFromJsonAsync(
+                bodyJsonTypeInfo,
                 context.RequestAborted).ConfigureAwait(false);
         }
         catch (System.Text.Json.JsonException)
@@ -218,7 +406,7 @@ public static class EndpointExtensions
                 contentType: null).ConfigureAwait(false);
             return (false, default);
         }
-        catch (PalDDD.CQRS.PalValidationException ex)
+        catch (CQRS.PalValidationException ex)
         {
             // P2 修复：验证失败异常映射 400（框架意图与实现一致化）
             // ITM-283（R45）：统一走 Factory 带 ProblemDetails body——原裸 400 与
@@ -226,7 +414,7 @@ public static class EndpointExtensions
             await WriteValidationProblemAsync(context, ex).ConfigureAwait(false);
             return (false, default);
         }
-        if (cmd is null)
+        if (body is null)
         {
             // v9 E1：空 body 裸 400 是第三处形态分叉——统一 ProblemDetails（对齐 ITM-283/v8 畸形 JSON）
             context.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -236,7 +424,7 @@ public static class EndpointExtensions
                 contentType: null).ConfigureAwait(false);
             return (false, default);
         }
-        return (true, cmd);
+        return (true, body);
     }
 
     /// <summary>写入 400 + ValidationProblemResponse 体（ITM-283：反序列化段与派发段统一形态——
@@ -285,3 +473,68 @@ internal static class ValidationProblemResponseFactory
             StatusCodes.Status400BadRequest,
             ex.Errors.Select(e => new ValidationProblemError(e.PropertyName, e.Message)).ToArray());
 }
+
+// ─────────────────────────────────────────────────────────────
+// SSE 帧写出 helper（ADR-030 D4）与流式端点生命周期日志标记类别（D6）
+// ─────────────────────────────────────────────────────────────
+
+/// <summary>
+/// SSE 帧写出（ADR-030 D4）——默认帧为 data-only JSON（<c>data: {json}\n\n</c>），framing
+/// 字节段经 <see cref="PipeWriter"/> span 直写（GetSpan/Advance），无字符串中转；
+/// 定制帧由调用方 formatFrame 委托产出完整帧文本（可含 event/id 行）。
+/// </summary>
+/// <remarks>
+/// 分配形态（精确声明，防过声称）：默认路径 framing 零分配（三笔 ReadOnlySpan 拷贝）；
+/// JSON 载荷字节由 <see cref="JsonSerializer.SerializeToUtf8Bytes{T}(T, JsonTypeInfo{T})"/>
+/// 按项产出（byte[]/item，与 <c>WriteAsJsonAsync</c> 内部形态同族）——「默认路径零分配」
+/// 指 framing/write 段，不含序列化器自身输出。零拷贝下推（Utf8JsonWriter 直写 PipeWriter）
+/// 属 ADR-030 分期 Phase 2「PipeWriter 化（bench 证明默认帧路径成热点）」触发项，本期不做。
+/// <para>变异红证明（在案）：WriteDataFrame 替换为字符串形态（Serialize → 插值帧串 →
+/// GetBytes）后，零分配断言按 ~3× 载荷尺寸判红，恢复 span 形态转绿。</para>
+/// </remarks>
+internal static class StreamFrameWriter
+{
+    private static ReadOnlySpan<byte> DataPrefix => "data: "u8;
+
+    private static ReadOnlySpan<byte> FrameTerminator => "\n\n"u8;
+
+    private static ReadOnlySpan<byte> ErrorFrame =>
+        "event: error\ndata: {\"message\":\"The stream failed unexpectedly.\"}\n\n"u8;
+
+    /// <summary>写默认帧 <c>data: {json}\n\n</c>（framing span 直写零分配）。</summary>
+    public static void WriteDataFrame(PipeWriter writer, ReadOnlySpan<byte> json)
+    {
+        var total = DataPrefix.Length + json.Length + FrameTerminator.Length;
+        var span = writer.GetSpan(total);
+        DataPrefix.CopyTo(span);
+        json.CopyTo(span[DataPrefix.Length..]);
+        FrameTerminator.CopyTo(span[(DataPrefix.Length + json.Length)..]);
+        writer.Advance(total);
+    }
+
+    /// <summary>写定制帧（formatFrame 委托返回的完整帧文本——契约：须自行携带帧终止空行）。</summary>
+    public static void WriteRawFrame(PipeWriter writer, string frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        var byteCount = Encoding.UTF8.GetByteCount(frame);
+        var span = writer.GetSpan(byteCount);
+        Encoding.UTF8.GetBytes(frame.AsSpan(), span);
+        writer.Advance(byteCount);
+    }
+
+    /// <summary>写 <c>event: error</c> 帧（中途异常补偿帧——头已写出无法回退 500，
+    /// 以事件帧加流终止表达；文案通用化，异常详情只进 Error 日志）。</summary>
+    public static void WriteErrorFrame(PipeWriter writer)
+    {
+        var span = writer.GetSpan(ErrorFrame.Length);
+        ErrorFrame.CopyTo(span);
+        writer.Advance(ErrorFrame.Length);
+    }
+}
+
+/// <summary>
+/// D6：流式端点生命周期日志的内部标记类别——作 <see cref="Core.Logging.IPalLogger{T}"/>
+/// 门面的类别实参（类别名即本类型名，含查询/元素类型信息）；永不实例化（CA1812——
+/// 泛型实参形态由 DI 开放泛型注册解析，分析器不可见，Hosting csproj 已在 NoWarn 清单）。
+/// </summary>
+internal sealed class StreamQueryEndpoint<TQuery, TItem>;

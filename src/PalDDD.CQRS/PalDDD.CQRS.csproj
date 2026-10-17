@@ -15,6 +15,6 @@
     <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
   </ItemGroup>
 
-  <ItemGroup><InternalsVisibleTo Include="PalDDD.DependencyInjection"/><InternalsVisibleTo Include="PalDDD.CQRS.Tests"/></ItemGroup>
+  <ItemGroup><InternalsVisibleTo Include="PalDDD.DependencyInjection"/><InternalsVisibleTo Include="PalDDD.Hosting.AspNetCore"/><InternalsVisibleTo Include="PalDDD.CQRS.Tests"/></ItemGroup>
   <ItemGroup><Using Include="PalDDD.Core" Alias="Core"/></ItemGroup>
 </Project>

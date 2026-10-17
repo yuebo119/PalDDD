@@ -576,6 +576,117 @@ app.MapPalHealthChecks("/health");
 
 端点映射器（`MapCommand<TCommand>` / `MapCommand<TCommand, TResponse>` / `MapQuery<TQuery, TResult>`）把 HTTP 端点绑定到 CQRS 分发，完整用法见[教程](tutorial.md)；其请求体的**形态验证**（必填/长度/范围）由宿主侧的平台内置验证负责，与框架的 `IPalValidator<T>` 分工见[验证](#验证)一节。
 
+## 流式读（SSE）
+
+流式响应（LLM token 流、大结果集分段回传）用独立读形态 `IStreamQuery<TItem>`，不经 Dispatcher、不走管道行为，由 `MapStreamQuery` 端点原语驱动。设计动机与生命周期约定见 [ADR-030](decisions/030-streaming-read-shape.md)，规范见 [conventions.md](conventions.md) §1.10。
+
+### 1. 定义查询与 handler
+
+```csharp
+// 查询：标记接口，刻意不实现 IQuery<T>（两条读路径互不路由）
+public sealed record TokenStreamQuery(string Prompt) : IStreamQuery<TokenChunk>;
+
+public sealed record TokenChunk(int Index, string Text);
+
+public sealed class TokenStreamHandler : IStreamQueryHandler<TokenStreamQuery, TokenChunk>
+{
+    // ct 契约（D5）：必须响应取消——客户端断开时 finally 里停计费、释放 provider 连接。
+    // [EnumeratorCancellation] 让 await foreach 消费者传入的令牌优先于实现内部令牌
+    public async IAsyncEnumerable<TokenChunk> HandleAsync(
+        TokenStreamQuery query, [EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var token in llmClient.StreamAsync(query.Prompt, ct))
+            yield return new TokenChunk(token.Index, token.Text);
+    }
+}
+```
+
+### 2. 注册与 JSON metadata
+
+```csharp
+builder.Services.AddPalStreamQueryHandler<TokenStreamQuery, TokenChunk, TokenStreamHandler>();
+
+// 源生成 metadata（AOT 安全——仓库全局禁用反射序列化）
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+[JsonSerializable(typeof(TokenChunk))]
+[JsonSerializable(typeof(TokenStreamQuery))]
+internal sealed partial class StreamJsonContext : JsonSerializerContext;
+```
+
+同一 `(查询, 元素)` 注册两个不同 handler 会在注册期抛 `InvalidOperationException`（静默覆盖是配置错误）。验证沿用 `IPalValidator<TQuery>`：端点在 SSE 头写出前跑验证，失败返回 400 ProblemDetails（与 `MapCommand`/`MapQuery` 同形态，状态码可回退）。
+
+### 3. 映射端点（GET 与 POST 双形态）
+
+```csharp
+using PalDDD.Hosting.AspNetCore;
+
+// GET 形态：浏览器原生 EventSource 兼容
+app.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+    "/tokens",
+    ctx => new TokenStreamQuery(ctx.Request.Query["prompt"].ToString()),
+    StreamJsonContext.Default.TokenChunk);
+
+// POST 形态：JSON body 承载 prompt 类请求体
+app.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+    "/tokens/stream",
+    StreamJsonContext.Default.TokenStreamQuery,
+    StreamJsonContext.Default.TokenChunk);
+```
+
+两个重载的后四个参数都可选传 `formatFrame: item => "..."` 定制帧文本（支持 `event:`/`id:` 行的分型事件流）；不传时默认帧为 data-only JSON（`data: {json}\n\n`）。
+
+### 4. 消费方约束（浏览器）
+
+- **GET 形态**可用原生 `EventSource`：`new EventSource("/tokens?prompt=hi")`，`onmessage` 收到 `JSON.parse(event.data)`。
+- **POST 形态** `EventSource` 不发 POST——须用 fetch 加 ReadableStream 手工解析：
+
+```javascript
+const response = await fetch("/tokens/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt: "hi" })
+});
+const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+let buffer = "";
+while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += value;
+    // 按 "\n\n" 切帧，去掉 "data: " 前缀后 JSON.parse
+}
+```
+
+### 5. 中断与错误语义
+
+- **客户端断开**：端点传 `context.RequestAborted` 给 handler，取消传播进迭代器；流按截断静默收尾（无 error 帧、无 500）。
+- **中途异常**：SSE 头已写出、状态码无法回退，端点补一个 `event: error` 帧（`data: {"message":"The stream failed unexpectedly."}`）后结束流。消费方必须同时处理「截断」（无终止帧的连接中断）与「error 帧」两种形态。
+- **压缩中间件**：响应压缩中间件会缓冲事件流，破坏流式语义——流式端点前的压缩需实测，必要时端点级禁用并记载中间件排序（ADR-030 已知约束）。
+
+### 6. 审计模式（D6）
+
+框架只记机械生命周期（流开始/结束/item 数/错误，走 `IPalLogger<T>`，`AddPalLogging` 后可见）。**响应内容审计由应用层负责**：在 handler 流结束后追加 EventLog——框架不自动捕获载荷（隐私、体积、领域语义三样均属应用层）：
+
+```csharp
+public async IAsyncEnumerable<TokenChunk> HandleAsync(
+    TokenStreamQuery query, [EnumeratorCancellation] CancellationToken ct)
+{
+    var count = 0;
+    try
+    {
+        await foreach (var token in llmClient.StreamAsync(query.Prompt, ct))
+        {
+            count++;
+            yield return new TokenChunk(token.Index, token.Text);
+        }
+    }
+    finally
+    {
+        // 流结束（含取消）后审计：只记计数与结果，不记载荷
+        await eventLog.AppendAsync(new StreamCompleted(query.Prompt, count), ct: default);
+    }
+}
+```
+
 ## Kafka / RabbitMQ
 
 broker adapter 实现 `IMessageBroker`。它们只依赖 `PalDDD.Messaging` 和 `PalDDD.Serialization`，不会引用 `PalDDD.Serialization.Json`，因此可以替换为其他序列化实现。

@@ -105,6 +105,22 @@ EF Core / Kafka / RabbitMQ / MemoryPack 等不支持 AOT 的项目**显式覆盖
 
 所有 NuGet 版本集中在 `Directory.Packages.props`，csproj 中不写版本号。
 
+### 1.10 流式读（IStreamQuery / SSE，ADR-030）
+
+**形态选择（二元性规则）**：单值响应用 `IQuery<T>`（经 Dispatcher），流式响应用 `IStreamQuery<TItem>`（不经 Dispatcher）。两者与 BCL 的 Task/IAsyncEnumerable 同构，一句话规则可治理。`IStreamQuery<TItem>` 刻意**不**继承 `IBaseRequest`——`QueryAsync` 因此无法接受流式查询，「禁止经 dispatcher 路由流式查询」由编译器强制而非用户纪律。
+
+**入口规则（端点即作用域边界）**：流式查询的唯一入口是 `MapStreamQuery` 端点（GET 形态 `bindQuery` 绑定，浏览器原生 EventSource 兼容；POST 形态 JSON body，浏览器侧需 fetch 加 ReadableStream 手工解析）。handler 从 `HttpContext.RequestServices` 解析、枚举在端点方法执行期内完成，请求作用域天然覆盖全枚举期。**禁止把 `IAsyncEnumerable` 传出端点**：Dispatcher 的 per-request scope 随管道完成销毁（`Dispatcher.ExecutePipelineAsync` 的 using scope），枚举期触碰任何 scoped 依赖（仓储、DbContext、流结束追加 EventLog）即 `ObjectDisposedException`（ADR-030 背景，属运行期地雷）。
+
+**注册**：`AddPalStreamQueryHandler<TQuery, TItem, THandler>`（AOT 安全，闭合泛型 DI）。同一 `(TQuery, TItem)` 注册两个不同 `THandler` 注册期快速失败（ITM-220 同族裁决：静默覆盖是配置错误）。不经 Dispatcher ⇒ 不注册 HandlerMarker、不走管道行为；验证由端点在 SSE 头写出前经 `PalValidatorRunner` 跑（与 `ValidationBehavior` 单一出处，含「IsValid=false 且 Errors 为空时构造占位条目」语义），失败 400 ProblemDetails 且状态码可回退。
+
+**帧格式（D4）**：默认帧 data-only JSON（`data: {json}\n\n`，framing 经 `PipeWriter` span 直写零分配；序列化器输出的 JSON 载荷字节按项产出）。分型事件流经可选 `formatFrame` 委托产出完整帧文本（event/id 行）。中途异常补 `event: error` 帧后结束——SSE 头已写出无法回退 500，消费方须同时处理截断。
+
+**ct 纪律（D5）**：handler 契约必须响应 ct（`[EnumeratorCancellation]` 语义：`await foreach` 消费者传入的令牌优先于实现内部令牌，接口层无法携带该特性故以约定成文）；端点传 `HttpContext.RequestAborted`，客户端断开时取消传播进 handler 的 finally（停计费、释放 provider 连接）。取消按流截断静默收尾，不记 Error 级日志。
+
+**审计模式（D6）**：响应内容审计由 handler 在流结束后追加 EventLog——框架不自动捕获载荷（隐私、体积、领域语义三样均属应用层）；框架只记机械生命周期（流开始/结束/item 数/错误，`IPalLogger<T>` 门面 + `IsEnabled` 门控 + `TimeProvider` 可注入，与 LoggingBehavior 语义对齐）。
+
+**已知约束**：响应压缩中间件会缓冲事件流——端点与压缩交互需实测，必要时端点级禁用并记载中间件排序（随 ADR-030 已知约束进 usage.md）。
+
 ---
 
 ## 2. 注释规范
@@ -338,7 +354,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-10-11 复验）：223 源文件·36 项目·0 违规（2026-10-09 为 222 文件，EPSL 修复轮新增 DecompressBufferPool 一文件——池上移 PalDDD.Compression 为跨程序集单一事实源）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-10-18 复验）：224 源文件·36 项目·0 违规（2026-10-11 为 223 文件，ADR-030 流式读新增 StreamQueryHandler 一文件——CQRS 流式接口层次单一事实源）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 
