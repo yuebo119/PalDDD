@@ -194,17 +194,25 @@ public static class EndpointExtensions
     /// ⚠️ 浏览器原生 EventSource 仅支持 GET；POST 形态（承载 prompt 类请求体）须用 fetch 加
     /// ReadableStream 手工解析，见 usage.md 流式读一节。
     /// </remarks>
+    /// <param name="formatFrame">完整帧定制委托（优先级最高）——返回的文本即完整帧（可含 event/id 行）；与 <paramref name="eventSelector"/>/<paramref name="idSelector"/> 同时提供时以本委托为准。</param>
+    /// <param name="eventSelector">事件名选择器——提供时默认帧富化为 <c>event: {name}\n...data: {json}\n\n</c>（分型事件流，如 token/done/error）。</param>
+    /// <param name="idSelector">事件 ID 选择器——提供时默认帧富化 <c>id: {id}\n</c> 行；客户端断线重连时 EventSource 经 <c>Last-Event-ID</c> 请求头回带末个 ID（读取入口见 <see cref="StreamResumeExtensions.GetLastEventId"/>）。</param>
+    /// <param name="keepAliveInterval">心跳间隔——流静默超过该间隔时写注释帧 <c>:keepalive</c>（规范内客户端忽略，代理/LB 空闲计时器重置）；null（默认）关闭。agent 场景的首 token 等待与工具轮间隙属结构性静默，建议 15-30 秒。</param>
     public static IEndpointConventionBuilder MapStreamQuery<TQuery, TItem>(
         this IEndpointRouteBuilder endpoints,
         string pattern,
         Func<HttpContext, TQuery> bindQuery,
         JsonTypeInfo<TItem> itemJsonTypeInfo,
-        Func<TItem, string>? formatFrame = null)
+        Func<TItem, string>? formatFrame = null,
+        Func<TItem, string>? eventSelector = null,
+        Func<TItem, string>? idSelector = null,
+        TimeSpan? keepAliveInterval = null)
         where TQuery : CQRS.IStreamQuery<TItem>
     {
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(bindQuery);
         ArgumentNullException.ThrowIfNull(itemJsonTypeInfo);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(keepAliveInterval ?? TimeSpan.MaxValue, TimeSpan.Zero);
 
         return endpoints.MapGet(pattern, async context =>
         {
@@ -230,7 +238,9 @@ public static class EndpointExtensions
                     contentType: null).ConfigureAwait(false);
                 return;
             }
-            await StreamQueryCoreAsync(context, query, itemJsonTypeInfo, formatFrame).ConfigureAwait(false);
+            await StreamQueryCoreAsync(
+                context, query, itemJsonTypeInfo, formatFrame, eventSelector, idSelector, keepAliveInterval)
+                .ConfigureAwait(false);
         });
     }
 
@@ -240,23 +250,33 @@ public static class EndpointExtensions
     /// JSON/空 body 错误形态不变），其后验证、SSE 头、枚举写帧全链路与 GET 形态逐字一致。<br/>
     /// ⚠️ 浏览器侧 EventSource 不发 POST——消费方须用 fetch 加 ReadableStream 手工解析帧。
     /// </remarks>
+    /// <param name="formatFrame">完整帧定制委托（优先级最高）——与 <paramref name="eventSelector"/>/<paramref name="idSelector"/> 同时提供时以本委托为准。</param>
+    /// <param name="eventSelector">事件名选择器——语义同 GET 重载。</param>
+    /// <param name="idSelector">事件 ID 选择器——语义同 GET 重载（POST 无 EventSource 自动重连，ID 行供消费方自建续传）。</param>
+    /// <param name="keepAliveInterval">心跳间隔——语义同 GET 重载；null（默认）关闭。</param>
     public static IEndpointConventionBuilder MapStreamQuery<TQuery, TItem>(
         this IEndpointRouteBuilder endpoints,
         string pattern,
         JsonTypeInfo<TQuery> queryJsonTypeInfo,
         JsonTypeInfo<TItem> itemJsonTypeInfo,
-        Func<TItem, string>? formatFrame = null)
+        Func<TItem, string>? formatFrame = null,
+        Func<TItem, string>? eventSelector = null,
+        Func<TItem, string>? idSelector = null,
+        TimeSpan? keepAliveInterval = null)
         where TQuery : CQRS.IStreamQuery<TItem>
     {
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(queryJsonTypeInfo);
         ArgumentNullException.ThrowIfNull(itemJsonTypeInfo);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(keepAliveInterval ?? TimeSpan.MaxValue, TimeSpan.Zero);
 
         return endpoints.MapPost(pattern, async context =>
         {
             var (ok, query) = await ReadJsonBodyOrWriteErrorAsync(context, queryJsonTypeInfo).ConfigureAwait(false);
             if (!ok) return;
-            await StreamQueryCoreAsync(context, query!, itemJsonTypeInfo, formatFrame).ConfigureAwait(false);
+            await StreamQueryCoreAsync(
+                context, query!, itemJsonTypeInfo, formatFrame, eventSelector, idSelector, keepAliveInterval)
+                .ConfigureAwait(false);
         });
     }
 
@@ -269,6 +289,12 @@ public static class EndpointExtensions
     /// 返回干净 500；若按「头先行」顺序，异常将落在头已写出之后（Kestrel 只能中断连接）；
     /// ②<see cref="CQRS.PalValidationException"/> 在此构造而非在验证段抛出——400 响应体与
     /// MapCommand/MapQuery 同形态（WriteValidationProblemAsync 单一出处）。
+    /// <para>帧优先级：formatFrame（完整帧覆写）&gt; eventSelector/idSelector（框架富化帧）&gt;
+    /// data-only 默认帧。</para>
+    /// <para>心跳循环（keepAliveInterval 非空时启用手动枚举器竞速）：默认路径（无心跳）
+    /// 保持 Phase 1 的 await foreach 快路径零额外开销；心跳路径每挂起项一次 Task 竞速，
+    /// 同步完成项仍走 IsCompletedSuccessfully 快路径。取消经 Task.Delay 取消态优先于心跳
+    /// 抛出，统一走 OCE 静默收尾。</para>
     /// </remarks>
     [SuppressMessage("Design", "CA1031",
         Justification = "中途异常无法回退 HTTP 状态码（SSE 头已写出），须捕获后补 event: error 帧并记录日志；取消异常单独静默收尾。")]
@@ -276,7 +302,10 @@ public static class EndpointExtensions
         HttpContext context,
         TQuery query,
         JsonTypeInfo<TItem> itemJsonTypeInfo,
-        Func<TItem, string>? formatFrame)
+        Func<TItem, string>? formatFrame,
+        Func<TItem, string>? eventSelector,
+        Func<TItem, string>? idSelector,
+        TimeSpan? keepAliveInterval)
         where TQuery : CQRS.IStreamQuery<TItem>
     {
         // D3 验证前置：SSE 头写出前跑验证——失败走既有 WriteValidationProblemAsync
@@ -315,26 +344,111 @@ public static class EndpointExtensions
         var bodyWriter = context.Response.BodyWriter;
         var itemCount = 0;
 
+        // 帧写出单一出处（默认/富化/定制三分支，心跳与快路径共用）
+        void WriteItemFrame(TItem item)
+        {
+            if (formatFrame is not null)
+            {
+                // D4 定制帧：委托返回完整帧文本（event/id 行），支持分型事件流
+                StreamFrameWriter.WriteRawFrame(bodyWriter, formatFrame(item));
+                return;
+            }
+            if (eventSelector is null && idSelector is null)
+            {
+                // D4 默认帧：data-only JSON——framing 字节段经 PipeWriter span 直写，
+                // 无字符串中转（变异红证明锁定该形态，见 StreamFrameWriter）
+                var json = JsonSerializer.SerializeToUtf8Bytes(item, itemJsonTypeInfo);
+                StreamFrameWriter.WriteDataFrame(bodyWriter, json);
+                return;
+            }
+            // Phase 2 富化帧：event/id 行由选择器产出（字符串 UTF-8 直写 span，零分配）
+            var richJson = JsonSerializer.SerializeToUtf8Bytes(item, itemJsonTypeInfo);
+            StreamFrameWriter.WriteDataFrame(
+                bodyWriter, richJson,
+                eventSelector?.Invoke(item), idSelector?.Invoke(item));
+        }
+
         try
         {
-            // D5 取消贯穿：ct 为 RequestAborted，同时经 WithCancellation 兜底进迭代器
-            //（[EnumeratorCancellation] 语义——忽略形参令牌的实现也会在 MoveNext 处观测取消）
-            await foreach (var item in handler.HandleAsync(query, ct).WithCancellation(ct))
+            if (keepAliveInterval is { } heartbeatInterval)
             {
-                itemCount++;
-                if (formatFrame is null)
+                // Phase 2 心跳路径：手动枚举器 + MoveNext 与心跳延时竞速。
+                // D5 取消贯穿：ct 为 RequestAborted，GetAsyncEnumerator(ct) 与
+                // WithCancellation 同机制（[EnumeratorCancellation] 语义——忽略形参令牌的
+                // 实现也会在 MoveNext 处观测取消）；不用 WithCancellation 包装是为了拿到
+                // 普通 ValueTask<bool>（已配置包装器的 MoveNextAsync 返回不可竞速的
+                // ConfiguredValueTaskAwaitable，AsTask 不可用）
+                var enumerator = handler.HandleAsync(query, ct).GetAsyncEnumerator(ct);
+                try
                 {
-                    // D4 默认帧：data-only JSON——framing 字节段经 PipeWriter span 直写，
-                    // 无字符串中转（变异红证明锁定该形态，见 StreamFrameWriter）
-                    var json = JsonSerializer.SerializeToUtf8Bytes(item, itemJsonTypeInfo);
-                    StreamFrameWriter.WriteDataFrame(bodyWriter, json);
+                    Task<bool>? pendingMoveNext = null;
+                    while (true)
+                    {
+                        Task<bool> moveNext;
+                        if (pendingMoveNext is not null)
+                        {
+                            moveNext = pendingMoveNext;
+                            pendingMoveNext = null;
+                        }
+                        else
+                        {
+                            var valueTask = enumerator.MoveNextAsync();
+                            if (valueTask.IsCompletedSuccessfully)
+                            {
+                                // 同步完成快路径：无 Task 竞速开销（对齐 Phase 1 await foreach 快路径）
+                                if (!valueTask.Result) break;
+                                itemCount++;
+                                WriteItemFrame(enumerator.Current);
+                                await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                                continue;
+                            }
+                            moveNext = valueTask.AsTask();
+                        }
+
+                        var delay = Task.Delay(heartbeatInterval, ct);
+                        if (await Task.WhenAny(moveNext, delay).ConfigureAwait(false) == delay)
+                        {
+                            if (delay.IsCanceled)
+                            {
+                                // 取消优先于心跳：等挂起项落地——正常路径下它随 ct 取消抛
+                                // OCE（迭代器 finally 由状态机执行），统一走下方 catch 的
+                                // 静默收尾；await 而非丢弃挂起任务，避免未观测任务异常
+                                await moveNext.ConfigureAwait(false);
+                                continue;
+                            }
+                            // 心跳到点：写注释帧（规范内客户端忽略），挂起项留待下轮竞速
+                            pendingMoveNext = moveNext;
+                            StreamFrameWriter.WriteHeartbeat(bodyWriter);
+                            await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        if (await moveNext.ConfigureAwait(false))
+                        {
+                            itemCount++;
+                            WriteItemFrame(enumerator.Current);
+                            await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
                 }
-                else
+                finally
                 {
-                    // D4 定制帧：委托返回完整帧文本（event/id 行），支持分型事件流
-                    StreamFrameWriter.WriteRawFrame(bodyWriter, formatFrame(item));
+                    await enumerator.DisposeAsync().ConfigureAwait(false);
                 }
-                await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+            }
+            else
+            {
+                // Phase 1 默认路径：await foreach 快路径（无心跳时零额外开销）
+                await foreach (var item in handler.HandleAsync(query, ct).WithCancellation(ct))
+                {
+                    itemCount++;
+                    WriteItemFrame(item);
+                    await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                }
             }
 
             if (logger is not null && logger.IsEnabled(LogLevel.Debug))
@@ -479,17 +593,21 @@ internal static class ValidationProblemResponseFactory
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>
-/// SSE 帧写出（ADR-030 D4）——默认帧为 data-only JSON（<c>data: {json}\n\n</c>），framing
-/// 字节段经 <see cref="PipeWriter"/> span 直写（GetSpan/Advance），无字符串中转；
-/// 定制帧由调用方 formatFrame 委托产出完整帧文本（可含 event/id 行）。
+/// SSE 帧写出（ADR-030 D4 + Phase 2 收窄实施）——默认帧为 data-only JSON
+/// （<c>data: {json}\n\n</c>），framing 字节段经 <see cref="PipeWriter"/> span 直写
+/// （GetSpan/Advance），无字符串中转；定制帧由调用方 formatFrame 委托产出完整帧文本
+/// （可含 event/id 行）；event/id 选择器产出框架富化帧（<c>event:</c>/<c>id:</c> 行）；
+/// 心跳为注释帧（<c>:keepalive</c>，SSE 规范内客户端忽略）。
 /// </summary>
 /// <remarks>
-/// 分配形态（精确声明，防过声称）：默认路径 framing 零分配（三笔 ReadOnlySpan 拷贝）；
+/// 分配形态（精确声明，防过声称）：默认路径 framing 零分配（ReadOnlySpan 拷贝 +
+/// <see cref="Encoding.GetBytes(ReadOnlySpan{char}, Span{byte})"/> 直写 span，无中间 byte[]）；
 /// JSON 载荷字节由 <see cref="JsonSerializer.SerializeToUtf8Bytes{T}(T, JsonTypeInfo{T})"/>
 /// 按项产出（byte[]/item，与 <c>WriteAsJsonAsync</c> 内部形态同族）——「默认路径零分配」
 /// 指 framing/write 段，不含序列化器自身输出。零拷贝下推（Utf8JsonWriter 直写 PipeWriter）
-/// 属 ADR-030 分期 Phase 2「PipeWriter 化（bench 证明默认帧路径成热点）」触发项，本期不做。
-/// <para>变异红证明（在案）：WriteDataFrame 替换为字符串形态（Serialize → 插值帧串 →
+/// 属 ADR-030 分期 Phase 2「PipeWriter 化」项，经延迟地板论证收窄（bench 触发未满足、
+/// agent 流式场景分配量低于延迟地板数个量级），暂不实施。
+/// <para>变异红证明（在案，Phase 1）：WriteDataFrame 替换为字符串形态（Serialize → 插值帧串 →
 /// GetBytes）后，零分配断言按 ~3× 载荷尺寸判红，恢复 span 形态转绿。</para>
 /// </remarks>
 internal static class StreamFrameWriter
@@ -498,17 +616,50 @@ internal static class StreamFrameWriter
 
     private static ReadOnlySpan<byte> FrameTerminator => "\n\n"u8;
 
+    private static ReadOnlySpan<byte> EventPrefix => "event: "u8;
+
+    private static ReadOnlySpan<byte> IdPrefix => "id: "u8;
+
     private static ReadOnlySpan<byte> ErrorFrame =>
         "event: error\ndata: {\"message\":\"The stream failed unexpectedly.\"}\n\n"u8;
 
-    /// <summary>写默认帧 <c>data: {json}\n\n</c>（framing span 直写零分配）。</summary>
-    public static void WriteDataFrame(PipeWriter writer, ReadOnlySpan<byte> json)
+    /// <summary>心跳注释帧（SSE 注释行——规范内客户端忽略；代理/LB 侧重置空闲计时器）。</summary>
+    private static ReadOnlySpan<byte> HeartbeatFrame => ":keepalive\n\n"u8;
+
+    /// <summary>
+    /// 写默认帧：<c>data: {json}\n\n</c>；传 <paramref name="eventName"/> / <paramref name="id"/>
+    /// 时产出富化帧 <c>event: {name}\nid: {id}\ndata: {json}\n\n</c>（行序固定，缺项行省略）。
+    /// framing span 直写零分配（event/id 字符串经 UTF-8 直写 span，无中间 byte[]）。
+    /// </summary>
+    public static void WriteDataFrame(
+        PipeWriter writer, ReadOnlySpan<byte> json, string? eventName = null, string? id = null)
     {
-        var total = DataPrefix.Length + json.Length + FrameTerminator.Length;
+        var eventBytes = eventName is null ? 0 : Encoding.UTF8.GetByteCount(eventName);
+        var idBytes = id is null ? 0 : Encoding.UTF8.GetByteCount(id);
+        var total = DataPrefix.Length + json.Length + FrameTerminator.Length
+            + (eventName is null ? 0 : EventPrefix.Length + eventBytes + 1)
+            + (id is null ? 0 : IdPrefix.Length + idBytes + 1);
         var span = writer.GetSpan(total);
-        DataPrefix.CopyTo(span);
-        json.CopyTo(span[DataPrefix.Length..]);
-        FrameTerminator.CopyTo(span[(DataPrefix.Length + json.Length)..]);
+        var written = 0;
+        if (eventName is not null)
+        {
+            EventPrefix.CopyTo(span[written..]);
+            written += EventPrefix.Length;
+            written += Encoding.UTF8.GetBytes(eventName.AsSpan(), span[written..]);
+            span[written++] = (byte)'\n';
+        }
+        if (id is not null)
+        {
+            IdPrefix.CopyTo(span[written..]);
+            written += IdPrefix.Length;
+            written += Encoding.UTF8.GetBytes(id.AsSpan(), span[written..]);
+            span[written++] = (byte)'\n';
+        }
+        DataPrefix.CopyTo(span[written..]);
+        written += DataPrefix.Length;
+        json.CopyTo(span[written..]);
+        written += json.Length;
+        FrameTerminator.CopyTo(span[written..]);
         writer.Advance(total);
     }
 
@@ -529,6 +680,14 @@ internal static class StreamFrameWriter
         var span = writer.GetSpan(ErrorFrame.Length);
         ErrorFrame.CopyTo(span);
         writer.Advance(ErrorFrame.Length);
+    }
+
+    /// <summary>写心跳注释帧 <c>:keepalive\n\n</c>（span 直写零分配；不计入 item 数）。</summary>
+    public static void WriteHeartbeat(PipeWriter writer)
+    {
+        var span = writer.GetSpan(HeartbeatFrame.Length);
+        HeartbeatFrame.CopyTo(span);
+        writer.Advance(HeartbeatFrame.Length);
     }
 }
 
