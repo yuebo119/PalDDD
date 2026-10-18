@@ -135,7 +135,8 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
             {
                 // v13 姊妹对称：单条 null 对齐同文件 AddMessage 的 ThrowIfNull——null 延迟到
                 // QueryPending lambda 的 NRE 更难定位
-                ArgumentNullException.ThrowIfNull(msg);
+                if (msg is null)
+                    throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
                 if (!seenIds.Add(msg.Id))
                     throw new ArgumentException(
                         $"Duplicate OutboxMessage id '{msg.Id}' in the messages batch (Id must be unique, mirroring the DB primary-key constraint).",
@@ -202,7 +203,8 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
         {
             foreach (var message in messages)
             {
-                ArgumentNullException.ThrowIfNull(message);
+                if (message is null)
+                    throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
                 if (!IsCurrentLeaseHolder(message))
                     continue;
 

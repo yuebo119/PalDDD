@@ -88,4 +88,36 @@ dotnet_diagnostic.MA0016.severity = none
 dotnet_diagnostic.S2326.severity = none
 dotnet_diagnostic.S3246.severity = none
 
+# MA0015 按路径重新启用（2026-10-18 审计 P1）：公共/领域面的 ArgumentException 参数名
+# 有 API 诊断价值；Dapper/PalORM/Hosting 的 MultiHost/Json/HTTP 配置解析保持全局 none。
+[src/PalDDD.Core/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Compression/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Transactions/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Transactions.EFCore/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Idempotency/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.EventLog/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.EventLog.EFCore/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Messaging/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Serialization/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Serialization.Evolution/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Projections/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Projections.EventLog/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Dapper/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.PalORM/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+
+
 

@@ -37,7 +37,10 @@ public sealed class InMemoryEventLog : IEventLog
             throw new ArgumentException("At least one event is required.", nameof(events));
 
         foreach (var @event in events)
-            ArgumentNullException.ThrowIfNull(@event);
+        {
+            if (@event is null)
+                throw new ArgumentNullException(nameof(events), "The events collection contains a null element.");
+        }
 
         using var activity = PalActivitySource.StartEventLogAppend(streamName, events.Count);
 

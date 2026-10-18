@@ -26,7 +26,8 @@ public sealed class CompressionProvider : ICompressionProvider
         foreach (var compressor in compressors)
         {
             // v53 P3：序列元素 null 防御——裸 NRE 落 lambda 内部无指向性（镜像 MessageCatalogBuilder.Add）
-            ArgumentNullException.ThrowIfNull(compressor);
+            if (compressor is null)
+                throw new ArgumentNullException(nameof(compressors), "The compressors collection contains a null element.");
             if (!map.TryAdd(compressor.Algorithm, compressor))
                 throw new NotSupportedException(
                     $"Multiple compressors registered for algorithm '{compressor.Algorithm}'; " +

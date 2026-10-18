@@ -108,7 +108,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
         {
             // ITM-186 修复：负重试次数会让重试循环零次执行、ProcessEventAsync 静默返回
             // current（步骤未执行也无异常），调用方误以为走完——断言非负。
+#pragma warning disable MA0015 // 属性 setter 的 value 参数；异常指向属性名 MaxRetries 更可读
             ArgumentOutOfRangeException.ThrowIfNegative(value, nameof(MaxRetries));
+#pragma warning restore MA0015
             _maxRetries = value;
         }
     }

@@ -4,6 +4,7 @@
 // 用法：
 //   dotnet run scripts/quality-baseline.cs              # 对比基线（CI）
 //   dotnet run scripts/quality-baseline.cs -- --update  # 重测并写基线
+//   dotnet run scripts/quality-baseline.cs -- --from-log <file>  # 从既有构建日志计数（探针）
 //   dotnet run scripts/quality-baseline.cs -- --selftest
 // 退出码：0=不高于基线；1=高于基线/构建失败/基线缺失（fail-closed）；2=自测失败。
 //
@@ -28,23 +29,39 @@ var root = FindRepoRoot();
 Environment.CurrentDirectory = root;
 var baselinePath = Path.Combine(root, "scripts", "quality-analyzer-baseline.txt");
 
-Console.WriteLine("🔬 构建（EnableQualityAnalyzers=true, TreatWarningsAsErrors=false）…");
-var psi = new ProcessStartInfo("dotnet",
-    "build PalDDD.slnx -c Release -t:Rebuild -p:EnableQualityAnalyzers=true -p:TreatWarningsAsErrors=false --nologo")
+string output;
+var fromLog = ArgValue(args, "--from-log");
+if (fromLog is not null)
 {
-    RedirectStandardOutput = true,
-    RedirectStandardError = true,
-    UseShellExecute = false,
-    WorkingDirectory = root,
-};
-using var p = Process.Start(psi)!;
-var output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
-p.WaitForExit();
-if (p.ExitCode != 0)
+    var logPath = Path.GetFullPath(fromLog);
+    if (!File.Exists(logPath))
+    {
+        Console.WriteLine($"FAIL 构建日志不存在：{logPath}");
+        return 1;
+    }
+    output = File.ReadAllText(logPath);
+    Console.WriteLine($"📄 从日志计数（跳过构建）：{logPath}");
+}
+else
 {
-    Console.WriteLine($"FAIL 分析器构建失败（exit={p.ExitCode}）——基线无法测量");
-    Console.WriteLine(Tail(output, 1200));
-    return 1;
+    Console.WriteLine("🔬 构建（EnableQualityAnalyzers=true, TreatWarningsAsErrors=false）…");
+    var psi = new ProcessStartInfo("dotnet",
+        "build PalDDD.slnx -c Release -t:Rebuild -p:EnableQualityAnalyzers=true -p:TreatWarningsAsErrors=false --nologo")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        WorkingDirectory = root,
+    };
+    using var p = Process.Start(psi)!;
+    output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+    p.WaitForExit();
+    if (p.ExitCode != 0)
+    {
+        Console.WriteLine($"FAIL 分析器构建失败（exit={p.ExitCode}）——基线无法测量");
+        Console.WriteLine(Tail(output, 1200));
+        return 1;
+    }
 }
 
 var lines = output.Split('\n');
@@ -97,9 +114,11 @@ static string FindRepoRoot()
     return "";
 }
 
-// 只数诊断行（`: warning CODE:`），按整行去重——同一警告在汇总段可能重复输出。
+// 只数第三方分析器诊断行（MA/S/RCS），按整行去重——同一警告在汇总段可能重复输出。
+// 不能数所有 `: warning`：并发构建/文件锁会产生 MSB3061 等 MSBuild 警告，CS/CA/IDE
+// 也不是本基线的对象（2026-10-18 审计实证：并发跑测试时 22 条 MSB3061 被误计）。
 static int CountWarnings(IEnumerable<string> lines) =>
-    lines.Where(l => Regex.IsMatch(l, @": warning [A-Za-z]+[0-9]+"))
+    lines.Where(l => Regex.IsMatch(l, @": warning (?:MA|S|RCS)[0-9]+"))
         .Distinct(StringComparer.Ordinal)
         .Count();
 
@@ -117,6 +136,13 @@ static int? ParseBaselineText(string? text)
 }
 
 static bool WithinBaseline(int count, int baseline) => count <= baseline;
+
+// --from-log 参数解析（纯函数，探针与自测共用）
+static string? ArgValue(string[] arguments, string name)
+{
+    var i = Array.IndexOf(arguments, name);
+    return i >= 0 && i + 1 < arguments.Length ? arguments[i + 1] : null;
+}
 
 static IEnumerable<string> TopFamilies(IEnumerable<string> lines, int top)
 {
@@ -155,6 +181,13 @@ static int RunSelftest()
         "Build succeeded.",
     ];
     Case("CountWarnings 去重且只数诊断行 → 2", CountWarnings(sample) == 2);
+    string[] buildNoise =
+    [
+        "a.cs(1,1): warning CS1234: compiler",
+        "a.cs(1,1): warning MSB3061: file lock",
+        "a.cs(1,1): warning MA0001: analyzer",
+    ];
+    Case("CountWarnings 忽略 CS/MSB 构建警告", CountWarnings(buildNoise) == 1);
     Case("CountWarnings 空输入 → 0", CountWarnings([]) == 0);
     Case("WithinBaseline 等于基线放行", WithinBaseline(10, 10));
     Case("WithinBaseline 低于基线放行", WithinBaseline(9, 10));
@@ -162,6 +195,8 @@ static int RunSelftest()
     Case("ParseBaselineText 正常解析", ParseBaselineText("baseline=642\n") == 642);
     Case("ParseBaselineText 缺失 → null", ParseBaselineText(null) is null);
     Case("ParseBaselineText 不可解析 → null", ParseBaselineText("no baseline") is null);
+    Case("ArgValue 解析 --from-log", ArgValue(["--from-log", "x.log"], "--from-log") == "x.log");
+    Case("ArgValue 缺值 → null", ArgValue(["--from-log"], "--from-log") is null);
 
     Console.WriteLine($"═══════ QUALITY-BASELINE SELFTEST：{(failures.Count == 0 ? "全部通过" : $"{failures.Count} 例失败")} ═══════");
     foreach (var f in failures) Console.WriteLine("  FAIL " + f);

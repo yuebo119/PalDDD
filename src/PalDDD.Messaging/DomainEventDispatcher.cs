@@ -71,7 +71,10 @@ internal sealed class IterativeDomainEventDispatcher : IDomainEventDispatcher
         // （processed.Add）处 NRE：前序事件 handler 副作用已发生后才炸，重试会二次
         // 派发已完成事件。入口 fail-fast，与三十八轮 P2 的批量预检同位置原则。
         foreach (var @event in events)
-            ArgumentNullException.ThrowIfNull(@event);
+        {
+            if (@event is null)
+                throw new ArgumentNullException(nameof(events), "The events collection contains a null element.");
+        }
 
         // EPSL 地毯审计 2026-10-11 B-6：移除 new Queue(events) 整份拷贝与单事件路径的
         // HashSet——:35/:102 语义声明 Handler 不产生新入队事件，队列在生命周期内恒为

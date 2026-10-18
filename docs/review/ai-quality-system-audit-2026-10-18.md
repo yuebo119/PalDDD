@@ -71,6 +71,8 @@
 
 ## 5. 验证证据（本轮实测）
 
+> **时点说明**：本节为审计时读数（2026-10-18 白天，quality-baseline 642→280）；最终关闭读数为分析器 0、基线 0、Semgrep 0、Stryker 100%/100%，见 §7。
+
 | 检查 | 结果 |
 |---|---|
 | `verify-ai` | 30/30 通过（V30 首跑 27 处红 → 修正后绿） |
@@ -87,24 +89,28 @@
 
 ## 6. 遗留项关闭（2026-10-18 晚）
 
-1. `.ai` 无 remote：按用户裁决保持本地库，不添加 remote；README 保留 `git bundle` 命令作为唯一异地副本。
-2. Stryker：MTP runner 已验证（Stryker 5.0.0 `--test-runner mtp`），新增 `test/PalDDD.Compression.Tests/stryker-config.json` 与 `test/PalDDD.Transactions.Tests/stryker-config.json`，workflow_dispatch `mutation` job 跑两个窄基线；CompressionProvider 40% → **100%**，Transactions/MySqlLeasePolicy **100%**（229/229 测试）。
-3. Semgrep：6/6 误报逐条加 `nosemgrep` 依据注释，当前 **0 findings**；CI `semgrep` job 接入（p/csharp + p/security-audit，`--error`）。
-4. 分析器：642 → 280（规则子集）→ **0**（逐条修复/精确抑制），基线归零；CI `quality-analyzers` job 以 0 为棘轮。规则级裁决与站点级理由见 `docs/quality-analyzer-triage-2026-10-18.md`。
-5. review：pre-push 由提示升级为**阻断**（metrics 最后一轮 >30 天且 src 有变更），豁免文件 `.ai/review/review-exemption.json`（owner/expires/reason，当前至 2026-11-15）。
+1. `.ai` 无 remote：按用户裁决保持本地库，不添加 remote；新增 `scripts/backup-bundle.cs`（默认 ~/Backups），README 保留 bundle/恢复演练说明。
+2. Stryker：MTP runner 已验证（Stryker 5.0.0 `--test-runner mtp`），两个 `stryker-config.json`（break 95）+ 独立月度/手动 `mutation.yml` + JSON/HTML artifact；CompressionProvider 100%、Transactions/MySqlLeasePolicy 100%（229/229）。
+3. Semgrep：6/6 误报逐条 `nosemgrep` 依据；当前 0 findings；CI `semgrep` job 含 29 规则 canary、SARIF artifact、`uv` 哈希锁。
+4. 分析器：642 → 280（规则子集）→ **0**；MA0015 按路径重启用公共/领域面（18 条修/精确抑制），S2077 站点级抑制；基线 0 棘轮。
+5. review：pre-push 调用 `scripts/review-freshness.cs`（stale 无豁免阻断）；**v92 维护轮 2026-10-18 落账，豁免文件已移除**，metrics 恢复新鲜。
 6. `.ai` 不入主仓 CI 的裁决不变；守卫仍依赖每 clone 手动 `git config core.hooksPath .githooks`（README 已写明）。
+7. 新控制探针：quality-baseline（`--from-log` 正反例）、review-freshness（stale/豁免/fresh 三例）、xml-guard、vuln-scan、test-change-guard；gate-audit **39/39**，20 个门禁有探针。剩余 5 个为 meta/orchestrator/diagnostic（guard、hook-pre-commit、hook-pre-push、ci-failed-tests、gate-audit 自身），其组件或纯函数已覆盖。
+8. `.ai` 传感器台账新增分析器基线/Semgrep/mutation/review 债四行；README v2.5 与评估文档历史态/最终态已标时点；工具版本以 manifest/CI 为单一来源。
 
 ## 7. 关闭验证（2026-10-18 晚）
 
 | 检查 | 结果 |
 |---|---|
-| 分析器构建（`EnableQualityAnalyzers=true`） | **0 警告** |
+| `gate-audit` 全量 | **39/39 探针**；20 门禁有探针；0 UNVERIFIED/UNWIRED/REVIEW |
+| `verify-ai` / `count-audit` | 30/30；16 项推导 · 24 文件 · 80 处声明一致 |
+| 分析器构建（`EnableQualityAnalyzers=true`） | **0 警告**（含 MA0015 路径级重启用） |
 | `scripts/quality-baseline.cs` | 基线 0，棘轮 0 == 0 |
 | 默认 Release 构建 | 0 警告 0 错误 |
-| 16 个测试项目 | 全部通过；Compression 46/46 |
-| Stryker（CompressionProvider / MySqlLeasePolicy） | 变异分数 **100% / 100%**（MTP runner） |
-| Semgrep（p/csharp + p/security-audit） | **0 findings** |
+| 16 个测试项目 | 全部通过；Transactions 229/229、Compression 46/46、DI 177/177 |
+| Stryker（CompressionProvider / MySqlLeasePolicy） | **100% / 100%**（MTP runner，break 95） |
+| Semgrep（p/csharp + p/security-audit） | **0 findings**；29 规则 canary；SARIF artifact |
 | AOT 真发布（win-x64） | AotSample 全检查通过；PalOrmSample PASSED |
+| review v92 | `docs/review/review-2026-10-18-quality-system-v92.md`；metrics 最后一轮 2026-10-18；豁免文件移除 |
 | differential-review 试点 | 1 条独特发现（S2077 纵深缺口）已修复；报告 `docs/review/differential-review-2026-10-18-quality-tooling.md` |
-| pre-push selftest | 全部通过（含 review 豁免正负例） |
-| `.ai` 钩子（secret-scan + verify-ai） | 通过 |
+| pre-push selftest / `.ai` 钩子 | 通过 / 通过 |
