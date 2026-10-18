@@ -123,6 +123,8 @@ EF Core / Kafka / RabbitMQ / MemoryPack 等不支持 AOT 的项目**显式覆盖
 
 **已知约束**：响应压缩中间件会缓冲事件流——端点与压缩交互需实测，必要时端点级禁用并记载中间件排序（随 ADR-030 已知约束进 usage.md）。
 
+**部署层旋钮（框架外，需宿主侧按自身负载 A/B；框架 bench 不含网络，2026-10-18 收敛评估）**：①压缩中间件排除 `text/event-stream`（否则事件流被缓冲，破坏流式语义）；②代理/负载均衡空闲超时与 `keepAliveInterval` 对齐（nginx 默认 60s、部分云 LB 4 分钟上限，心跳取设备空闲超时的约三分之一）；③高并发流走 HTTP/2（EventSource 受 HTTP/1.1 每域 6 连接限制，POST+fetch 形态可享多路复用）；④并发流数上去后评估 Server GC（选型结论见 `deployment-performance.md` §1）。框架侧每请求可控成本已收敛到 8.2% CPU / 0 B 分配（`performance.md` 收敛读数节），优化重心在传输与部署层。
+
 ---
 
 ## 2. 注释规范
