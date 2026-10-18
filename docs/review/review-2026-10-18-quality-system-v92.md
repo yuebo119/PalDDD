@@ -17,7 +17,7 @@
 |---|---|---|
 | F1 | S2077 曾被规则级关闭，Semgrep 未覆盖两处 EF Core `FromSqlRaw`，形成 SQL 注入检测盲区 | 恢复 `S2077=warning`，8 个已验证站点逐处 `#pragma` 说明依据（差分评审独特发现） |
 | F2 | MA0015 全局关闭，公共/领域面参数名检查缺失 | 按路径重新启用；18 条逐条修 `nameof`/异常参数或站点级抑制，分析器回到 0 |
-| F3 | 新控制只有 selftest，无隔离探针 | `quality-baseline --from-log` + `review-freshness` TOOL；新增 8 条探针（quality-baseline 2 / review-freshness 3 / xml-guard / vuln-scan / test-change-guard），gate-audit 39/39，20 门禁有探针 |
+| F3 | 新控制只有 selftest，无隔离探针 | `quality-baseline --from-log` + `review-freshness` TOOL；新增 8 条探针（quality-baseline 2 / review-freshness 3 / xml-guard / vuln-scan / test-change-guard），gate-audit 39/39，20 门禁有探针【时点：v92 落账后双层扩展 + 第三轮 config-policy C 探针，现 41/41】 |
 | F4 | mutation job `break=0`、仅手动、无 artifact | 拆独立 `mutation.yml`（月度+手动）、`break=95`、JSON/HTML artifact；Stryker 进 `dotnet-tools.json` |
 | F5 | Semgrep 规则包 registry 漂移、无 SARIF | CI 加 29 规则 canary（变化即失败要求重审注解）、SARIF artifact、pip 缓存 |
 | F6 | review 债靠豁免延后，闸门未实弹 | 本 v92 维护轮落账；移除 `review-exemption.json`，`review-freshness` 在 metrics 新鲜时放行 |
@@ -36,8 +36,8 @@
 | Stryker | CompressionProvider 100%、Transactions/MySqlLeasePolicy 100%（break 95） |
 | 测试 | 16 面板全过；Transactions 229/229、Compression 46/46、DI 177/177 |
 | AOT | AotSample 全检查通过；PalOrmSample PASSED（win-x64） |
-| review-freshness | stale 无豁免阻断 / 有效豁免放行 / 新鲜放行（探针三条） |
+| review-freshness | 双层：任一维护轮 >30 天阻断 / 全量或里程碑 >90 天阻断 / 有效豁免放行（探针四条 + selftest） |
 
 ## 四、结论
 
-质量报告中的遗留项已全部闭环。本轮的“review 债”由维护轮本身结清：metrics 最后一轮更新为 v92（2026-10-18），不再依赖豁免文件。后续正式语义 review 仍按里程碑触发；若再次超过 30 天且 src 有变更，pre-push 会阻断，直到新轮次或有意续期的豁免。
+质量报告中的遗留项已全部闭环。review 闸门为**双层**：任一轮 30 天 + 全量/里程碑 90 天。本 v92 维护轮只重置“任一轮”时钟（metrics 最后一轮 2026-10-18），**不重置全量时钟**——最近全量仍为 v91（2026-09-19），下一次全量评审 due 2026-12-18。这样维护轮不能洗白全量评审债；到期后 pre-push 会阻断，直到全量轮或有意续期的豁免。后续正式语义 review 仍按里程碑触发。

@@ -1,13 +1,13 @@
 // ============================================================================
-// config-policy.cs——配置文件策略门禁（A：dependabot 配置词表/结构；B：Directory.Build.* 构建期副作用）
+// config-policy.cs——配置文件策略门禁（A：dependabot 配置词表/结构；B：Directory.Build.* 构建期副作用；C：GitHub Actions 引用钉 SHA）
 //
-// 为什么两个检查合体为一个脚本：两者同属「配置文件策略」类——只读仓库根的
-// 配置文件、纯静态判定、零判定交叉（A 的输入是 YAML 行、B 的输入是 MSBuild
-// 元素，互不读取对方文件），合体共享一次接线成本（pre-commit 触发分支、
-// ci.yml 步骤、gate-audit 探针与 gateForms 声明各只需一处），失败输出统一
-// 为同一份违规清单。
+// 为什么三个检查合体为一个脚本：三者同属「配置文件策略」类——只读仓库根的
+// 配置文件、纯静态判定、零判定交叉（A 的输入是 dependabot YAML、B 的输入是
+// MSBuild 元素、C 的输入是 workflow YAML，互不读取对方文件），合体共享一次
+// 接线成本（pre-commit 触发分支、ci.yml 步骤、gate-audit 探针与 gateForms
+// 声明各只需一处），失败输出统一为同一份违规清单。
 //
-// 实践出处（两条本轮真实事故，各锁一道检查）：
+// 实践出处（三条本轮真实事故/风险，各锁一道检查）：
 //   1) .github/dependabot.yml 的 groups.update-types 误用 ignore 规则词表
 //      version-update:semver-*——两处 schema 词表不同是已知陷阱；该错误只在
 //      配置落到默认分支时由 Dependabot 配置检查报出，dev 上长期不报，直至
@@ -17,6 +17,10 @@
 //      为 MSB3073 警告，release 步骤 -warnaserror 再升级为错误——v3.1.0 首发
 //      发布链当场中断（已修：Target 加 '$(GITHUB_ACTIONS)' != 'true' 跳过）。
 //      → 检查 B 守住该形态不再回潮。
+//   3) GitHub Actions 的 uses 若写可变 major 标签（@v4），上游标签可被移动或
+//      被入侵后指向任意提交，CI 会以仓库 token 执行非预期代码（供应链风险）。
+//      → 检查 C：所有 uses 引用钉 40 位 commit SHA，并带 `# vX.Y.Z` 版本注释
+//      （注释供人读；Dependabot 的 github-actions 更新会同步改写 SHA+注释）。
 //
 // ── 检查 A 的边界（必须说清）：这是针对已知陷阱点的**行式校验**，不是完整
 //    YAML 解析器——按缩进维护上下文栈，只认规则清单内的键与单行 flow 序列；
@@ -42,9 +46,15 @@
 //    否则违规并打印位置与缺失项。XML 注释内的 <Exec> 不计（等长遮蔽，行号
 //    不移位）。两个文件缺失同样违规（fail-closed：策略文件删除须与本门禁
 //    同步显式裁决，不允许静默消失）。
+//    检查 C：.github/workflows/*.yml|*.yaml 中每条 `uses:` 引用——
+//    C1 非本地动作（./）与非 docker:// 镜像，ref 必须是 40 位小写十六进制
+//       commit SHA（可变标签/分支/短 SHA 一律违规）；
+//    C2 必须有 `# vX.Y.Z` 形态的版本注释（便于评审与 Dependabot 更新）。
+//    工作流目录不存在或为空时跳过 C（无引用可钉，不阻断）；文件读取失败
+//    fail-closed。
 //
 // 用法（在仓库根执行）：
-//   dotnet run scripts/config-policy.cs               全量校验（A + B）
+//   dotnet run scripts/config-policy.cs               全量校验（A + B + C）
 //   dotnet run scripts/config-policy.cs -- --selftest 自测（判定逻辑单元验证）
 //
 // 退出码：0 = 全通过；1 = 有违规；2 = 自测失败（仓库根定位失败同取 2——
@@ -73,15 +83,16 @@ var staged = GitStagedSet(root);
 var violations = new List<string>();
 violations.AddRange(CheckDependabot(root, staged));
 violations.AddRange(CheckDirectoryBuild(root, staged));
+violations.AddRange(CheckWorkflowPins(root, staged));
 
 if (violations.Count > 0)
 {
-    Console.Error.WriteLine($"FAIL config-policy 违规 {violations.Count} 项（A=dependabot 词表/结构；B=Directory.Build Exec 构建期副作用）：");
+    Console.Error.WriteLine($"FAIL config-policy 违规 {violations.Count} 项（A=dependabot 词表/结构；B=Directory.Build Exec 构建期副作用；C=Actions 引用钉 SHA）：");
     foreach (var v in violations) Console.Error.WriteLine($"  {v}");
     return 1;
 }
 
-Console.WriteLine("PASS config-policy（A dependabot 词表/结构 + B Directory.Build Exec 副作用，8 条规则）");
+Console.WriteLine("PASS config-policy（A dependabot 词表/结构 + B Directory.Build Exec 副作用 + C Actions 引用钉 SHA）");
 return 0;
 
 // ══════════════ 检查 A：dependabot 配置词表/结构 ══════════════
@@ -413,6 +424,71 @@ static List<string> ValidateDirectoryBuildExec(string text, string fileLabel)
             ? "所属 <Target> 的 Condition 无 'GITHUB_ACTIONS' != 'true'（CI 跳过）"
             : "不在任何 <Target> 内（无所属 Condition 可提供 CI 跳过）";
         violations.Add($"{fileLabel}:{line} <Exec> 缺 IgnoreExitCode=\"true\"，且{where}——构建期副作用失败会被 -warnaserror 升级为流水线错误（v3.1.0 发布链事故形态）");
+    }
+    return violations;
+}
+
+// ══════════════ 检查 C：GitHub Actions 引用钉 SHA ══════════════
+
+static List<string> CheckWorkflowPins(string root, IReadOnlySet<string> staged)
+{
+    var dir = Path.Combine(root, ".github", "workflows");
+    if (!Directory.Exists(dir)) return [];   // 无工作流 = 无引用可钉，不阻断
+    var files = Directory.GetFiles(dir, "*.yml", SearchOption.TopDirectoryOnly)
+        .Concat(Directory.GetFiles(dir, "*.yaml", SearchOption.TopDirectoryOnly))
+        .OrderBy(f => f, StringComparer.Ordinal)
+        .ToArray();
+    if (files.Length == 0) return [];
+
+    var violations = new List<string>();
+    foreach (var abs in files)
+    {
+        var rel = Path.GetRelativePath(root, abs).Replace('\\', '/');
+        var content = ReadPolicyFile(root, rel, staged);
+        if (content is null)
+        {
+            violations.Add($"{rel} —— 工作流文件不可读（fail-closed）");
+            continue;
+        }
+        violations.AddRange(ValidateWorkflowPins(content, rel));
+    }
+    return violations;
+}
+
+// 行式校验（纯函数，供 selftest 覆盖）：只认 `uses:` 键；本地动作与 docker
+// 镜像跳过。ref 必须是 40 位小写十六进制 commit SHA（统一小写便于比对），
+// 且行尾必须有 `# vX[.Y[.Z]]` 版本注释。
+static List<string> ValidateWorkflowPins(string text, string fileLabel)
+{
+    var violations = new List<string>();
+    var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+    for (int i = 0; i < lines.Length; i++)
+    {
+        var trimmed = lines[i].Trim();
+        if (trimmed.Length == 0 || trimmed[0] == '#') continue;
+
+        var m = Regex.Match(trimmed, @"^(?:-\s*)?uses:\s*(\S+)(?:\s+#\s*(\S.*))?$");
+        if (!m.Success) continue;
+
+        var spec = m.Groups[1].Value;
+        var comment = m.Groups[2].Value.Trim();
+        if (spec.StartsWith("./", StringComparison.Ordinal)
+            || spec.StartsWith("docker://", StringComparison.Ordinal))
+            continue;
+
+        int at = spec.LastIndexOf('@');
+        if (at <= 0 || at == spec.Length - 1)
+        {
+            violations.Add($"{fileLabel}:{i + 1} C1: uses「{spec}」缺 @<40 位 commit SHA>");
+            continue;
+        }
+
+        var action = spec[..at];
+        var reference = spec[(at + 1)..];
+        if (!Regex.IsMatch(reference, "^[0-9a-f]{40}$", RegexOptions.CultureInvariant))
+            violations.Add($"{fileLabel}:{i + 1} C1: actions「{action}」引用「{reference}」不是 40 位小写 commit SHA（可变标签/分支可被上游移动）");
+        if (!Regex.IsMatch(comment, @"^v[0-9]+(?:\.[0-9]+)*$", RegexOptions.CultureInvariant))
+            violations.Add($"{fileLabel}:{i + 1} C2: actions「{action}」缺版本注释（行尾须为 `# vX.Y.Z`，供评审与 Dependabot 更新）");
     }
     return violations;
 }
@@ -923,6 +999,37 @@ static int SelfTest()
     var m22 = ValidateDirectoryBuildExec(bBadContinueOnError, "Directory.Build.targets");
     Case("B 负例：仅 ContinueOnError（warnaserror 事故形态）必红",
         m22.Count == 1 && m22[0].Contains("warnaserror", StringComparison.Ordinal));
+
+    // ── 检查 C 正例 / 负例 ──
+    var cGood = """
+        jobs:
+          build:
+            steps:
+              - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+              - uses: ./local-action
+              - uses: docker://alpine:3.20
+              - uses: org/repo/.github/workflows/reusable.yml@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        """;
+    Case("C 正例：SHA + 版本注释 / 本地动作 / docker 镜像 / 可复用工作流放行",
+        ValidateWorkflowPins(cGood, "w.yml").Count == 0);
+
+    var cBadTag = "      - uses: actions/checkout@v4 # v4.4.0\n";
+    var c1 = ValidateWorkflowPins(cBadTag, ".github/workflows/ci.yml");
+    Case("C1 负例：可变 major 标签必红（报行号）",
+        c1.Count == 1 && c1[0].Contains("C1", StringComparison.Ordinal) && c1[0].Contains(":1", StringComparison.Ordinal));
+
+    var cBadShortSha = "      - uses: actions/checkout@11d5960 # v4.4.0\n";
+    Case("C1 负例：短 SHA 必红",
+        ValidateWorkflowPins(cBadShortSha, "w.yml").Exists(v => v.Contains("C1", StringComparison.Ordinal)));
+
+    var cBadNoComment = "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n";
+    var c2 = ValidateWorkflowPins(cBadNoComment, "w.yml");
+    Case("C2 负例：缺版本注释必红",
+        c2.Count == 1 && c2[0].Contains("C2", StringComparison.Ordinal));
+
+    var cBadNoRef = "      - uses: actions/checkout\n";
+    Case("C1 负例：缺 @ref 必红",
+        ValidateWorkflowPins(cBadNoRef, "w.yml").Exists(v => v.Contains("C1", StringComparison.Ordinal)));
 
     Console.WriteLine();
     Console.WriteLine($"SELFTEST {passed}/{total} 通过");
