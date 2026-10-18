@@ -323,12 +323,19 @@ var warned = 0; // WARN 级（V29 督办）：计入显示不计入失败——�
     // 两种书写形态（小数 0.70 与百分比 70%）统一归一为小数后比对。
     var docThreshold = Regex.Match(gateText, @"(?:阈值|threshold|取整)\s*[：:]?\s*(0\.\d+)", RegexOptions.IgnoreCase);
     var docPercent = Regex.Match(gateText, @"不低于\s*(\d+)\s*%", RegexOptions.IgnoreCase);
-    // ci-coverage.cs 的默认阈值（COVERAGE_THRESHOLD 环境变量缺省值）
+    // ci-coverage.cs 的默认阈值：2026-10-19 起为双口径
+    // `localProfile ? "0.65" : "0.70"`，V14 比对 CI 默认（文档 §门禁阈值 属于 CI 口径）。
+    var coverageScript = TryReadText("scripts/ci-coverage.cs");
     var gateThreshold = Regex.Match(
-        TryReadText("scripts/ci-coverage.cs"),
-        @"COVERAGE_THRESHOLD[^\n]*?(?:默认|default)\s*(0\.\d+)", RegexOptions.IgnoreCase);
+        coverageScript,
+        @"localProfile\s*\?\s*""0\.\d+""\s*:\s*""(0\.\d+)""",
+        RegexOptions.IgnoreCase);
     if (!gateThreshold.Success)
-        gateThreshold = Regex.Match(TryReadText("scripts/ci-coverage.cs"), @"threshold\s*[=:]\s*(0\.\d+)", RegexOptions.IgnoreCase);
+        gateThreshold = Regex.Match(
+            coverageScript,
+            @"COVERAGE_THRESHOLD[^\n]*?(?:默认|default)\s*(0\.\d+)", RegexOptions.IgnoreCase);
+    if (!gateThreshold.Success)
+        gateThreshold = Regex.Match(coverageScript, @"threshold\s*[=:]\s*(0\.\d+)", RegexOptions.IgnoreCase);
 
     var hasLineRate = Regex.IsMatch(text, "[0-9]+\\.[0-9]+%");
     // 归一化：百分比形态（如 "70"）转小数（0.70），小数形态原样

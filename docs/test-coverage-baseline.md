@@ -3,7 +3,7 @@
 > **基线日期**：2026-07-30
 > **基线 commit**：`db47e22`（feature/palorm-adapter）
 > **测试总数**：850（全绿）——**基线时点值**
-> **当前规模**（2026-09-25，本机全量实测）：16 项目 1502 用例（1434 通过 + 68 跳过——60 项 Docker/Testcontainers 依赖：PalORM 多方言 46 项 + Integration 14 项，由 CI Testcontainers 执行；另 8 项 Messaging.Integration 的 RabbitMQ broker 本机 AMQP 预检不可达。较 1492 的净增 +10 来自两个竞态测试的 `[Repeat(5)]`——TUnit Repeat 语义为"额外再跑 5 次"共 6 实例）；本文余下覆盖率数字均为 2026-07-30 基线，未随测试增长重测（§基线重录记录的单模块重录值除外）
+> **当前规模**（2026-10-19，本机全量实测）：16 项目 1707 用例（1631 通过 + 76 跳过——68 项 Docker/Testcontainers 依赖：PalORM 多方言 54 项 + Integration 14 项，由 CI Testcontainers 执行；另 8 项 Messaging.Integration 的 RabbitMQ broker 本机 AMQP 预检不可达）；本文余下覆盖率数字均为 2026-07-30 基线，未随测试增长重测（§基线重录记录的单模块重录值除外）
 > **覆盖率工具**：dotnet-coverage 18.9.0 + ReportGenerator 5.5.11
 
 ## 总览
@@ -80,10 +80,13 @@
   **⚠️ 复校准触发**：首次 `coverage` job 运行会给出含 Docker 的完整值（预期 ≥ 0.73）。
   届时按实测值重校准阈值并同步本表——不要在未读 CI 数字前继续上调。
 
-  **本机限制（已知，非缺陷）**：无 Docker 的机器上 `dotnet run scripts/ci-coverage.cs`
-  会在 `PalDDD.PalORM.Tests` 处少 46 项多方言覆盖（该项目的多方言测试要求 Testcontainers，
-  未启用时整体跳过、不产出插桩数据）。本地想要完整数字：装 Docker 后重跑即可（Testcontainers 自动启动容器）；
-  或按上表的分步方法只补跑缺失项目再取并集。
+  **本机限制与本地口径（2026-10-19 更新）**：无 Docker 的机器上 `dotnet run scripts/ci-coverage.cs`
+  会跳过 76 项容器依赖测试（PalORM 多方言 54 + Integration 14 + Messaging.Integration 8），
+  全局行覆盖率实测 68.64%，低于 CI 阈值 0.70。脚本现在自动探测 Docker：不可用时走
+  **LOCAL 口径**（全局阈值 0.65，锚定 2026-07-30 本地基线 67.9% 的下界；跳过单模块降幅门禁，
+  因为容器用例跳过使模块覆盖率不可比），可用时走 **CI 口径**（0.70 + 15 项目降幅 ±5pp）。
+  也可用 `--local` / `--ci` 显式指定；`COVERAGE_THRESHOLD` 环境变量仍最高优先。LOCAL PASS
+  只表示本地下界回归守卫通过，不替代 CI 判定。装 Docker 后重跑即可得到完整数字。
   **注意**：设 `PALDDD_TEST_PG` / `PALDDD_TEST_MYSQL` 环境变量**不会**启用外部库路径——
   那两个变量只被 `samples/PalDDD.DapperAotProbe` 这类显式探针读取；测试侧仅支持
   Testcontainers（2026-09-22 T-09 删除外部库隐式回退，见 `appsettings.test.json` 注释）。

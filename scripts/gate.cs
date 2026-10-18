@@ -27,8 +27,11 @@
 //      目录调用均成立。
 //   2) 输出行与 bash 版逐行一致（含 ANSI 颜色码）——CI grep 消费的关键字
 //      PASS/FAIL/WARN/SKIP 不变。
-//   3) G24 归一化检测保真复刻 bash 实际语义（匹配字面 Replace('', '/')，见 G24
-//      段注释），行为等价：diff 新增行含 Path.GetFileName* 即恒 WARN。
+//   3) G24 归一化检测 2026-10-19 修正：原实现保真复刻 bash 的损坏字面量
+//      Replace('', '/')（双引号转义把 \' 解析成单引号），实际恒不命中，导致
+//      任何新增 Path.GetFileName* 都恒 WARN。现改为识别真实归一化写法
+//      （Replace('\\', '/') / Replace("\\", "/") / Path.DirectorySeparatorChar
+//      两条变体），并补 selftest 正反例。仍为 WARN 级启发式，不阻断。
 //   4) 时间戳为本地时间（bash date 同源）；file-based app 零 package 依赖。
 // ============================================================================
 
@@ -197,11 +200,11 @@ else
 // 暂存 → 发布窗口 tag..HEAD → HEAD~1..HEAD；窗口变大只增加召回面，不改变判定形状
 // （hits>0 且归一化字面同在窗口内仍 PASS），且本项为 WARN 级不阻断。
 //
-// ⚠️ 保真复刻说明（MIG-012-A1 迁移时发现的原 bash 缺陷）：
+// ⚠️ 历史缺陷与修正（MIG-012-A1 迁移时发现的原 bash 缺陷）：
 // bash 版模式 "Replace('\\', '/')" 经双引号转义为 Replace('\', '/')，GNU BRE 把
 // \' 解析为字面单引号 → 实际匹配的是空参数形态 Replace('', '/')，与 C# 源码真实
 // 归一化写法 Replace('\\', '/') 错位——实际恒不命中，效果 = 新增 Path.GetFileName*
-// 即恒 WARN。本复刻保持字面匹配（行为等价），是否修复为真实检测交主线程裁决。
+// 即恒 WARN。2026-10-19 已修正为真实写法检测（见文件头第 3 条），此段保留为来源记录。
 if (!hasChangeSet)
 {
     Console.WriteLine($"{Yellow}SKIP{Nc} PDDD-G24: 变更集基线不可解析（无暂存且 HEAD~1 不存在——孤儿分支/初始提交/浅克隆），不判定路径归一化（非 PASS）");
@@ -343,13 +346,17 @@ static (bool Violates, string Offender) G23Judge(string setsText,
 }
 
 // G24 计数：只看新增行（`+` 起首，含 `+++` 头行——与 bash grep "^+" 同口径），
-// 分别计 Path.GetFileName* 命中与字面 Replace('', '/') 归一化命中
-// （后者是保真复刻 bash 的实际语义，见 G24 段 ⚠️ 说明）。
+// 归一化按真实写法识别（2026-10-19 修正，见文件头第 3 条）。
 static (int Hits, int Normalized) G24Counts(string changedDiffOutput)
 {
     var plusLines = ToLines(changedDiffOutput).Where(l => l.StartsWith('+')).ToList();
     var rx = new Regex(@"Path\.GetFileName(WithoutExtension)?");
-    return (plusLines.Count(l => rx.IsMatch(l)), plusLines.Count(l => l.Contains("Replace('', '/')")));
+    var normalized = plusLines.Count(l =>
+        l.Contains(@"Replace('\\', '/')", StringComparison.Ordinal)
+        || l.Contains(@"Replace(""\\"", ""/"")", StringComparison.Ordinal)
+        || l.Contains(@"Replace('\\', Path.DirectorySeparatorChar)", StringComparison.Ordinal)
+        || l.Contains(@"Replace(Path.DirectorySeparatorChar, '/')", StringComparison.Ordinal));
+    return (plusLines.Count(l => rx.IsMatch(l)), normalized);
 }
 
 // ══════════════ 自测 ══════════════
@@ -430,14 +437,23 @@ static int SelfTest()
     // 会让本文件自身成为 G24 的观察对象（虽不影响门禁判定，但保持规则一致）
     var getFileName = "Path.GetFileName(";
     var getFileNameNoExt = "Path.GetFileNameWithoutExtension(";
-    var normalizedLiteral = "Replace('', '/')";
+    var normalizedChar = "Replace('" + "\\\\" + "', '/')";
+    var normalizedString = "Replace(\"" + "\\\\" + "\", \"/\")";
+    var normalizedDirChar = "Replace('" + "\\\\" + "', Path.DirectorySeparatorChar)";
+    var normalizedDirChar2 = "Replace(Path.DirectorySeparatorChar, " + "'/')";
 
     Case("G24 新增调用且无归一化 → (1,0) 应 WARN",
         G24Counts($"+var n = {getFileName}p);\n") == (1, 0));
     Case("G24 识别 WithoutExtension 变体",
         G24Counts($"+var n = {getFileNameNoExt}p);\n") == (1, 0));
-    Case("G24 含归一化字面 → PASS",
-        G24Counts($"+var n = {getFileName}{normalizedLiteral});\n") == (1, 1));
+    Case("G24 含 Replace('\\', '/') 归一化 → PASS",
+        G24Counts($"+var n = {getFileName}p);\n+var q = x.{normalizedChar};\n") == (1, 1));
+    Case("G24 含 Replace(\"\\\", \"/\") 归一化 → PASS",
+        G24Counts($"+var n = {getFileName}p);\n+var q = x.{normalizedString};\n") == (1, 1));
+    Case("G24 含 Path.DirectorySeparatorChar 两种变体 → PASS",
+        G24Counts($"+var n = {getFileName}p);\n+var q = x.{normalizedDirChar};\n+var r = x.{normalizedDirChar2};\n") == (1, 2));
+    Case("G24 旧损坏字面 Replace('', '/') 不再误判为归一化",
+        G24Counts($"+var n = {getFileName}p).Replace('', '/');\n") == (1, 0));
     Case("G24 非新增行不计（`-` 与空格起首）",
         G24Counts($"-var n = {getFileName}p);\n var m = {getFileName}q);\n") == (0, 0));
     Case("G24 `+++` 头行本身不含调用则不命中", G24Counts("+++ b/src/X.cs\n") == (0, 0));

@@ -91,7 +91,7 @@ var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
     ["dapper-param-guard"] = "匿名 Dapper 参数枚举直传（CI #94 根因）",
     ["gate-lite"] = "根目录快速门禁（缺 src/ fail-closed）",
     ["verify-conventions"] = "V5 TODO / V8 模板段 / V9 命令引用 / V10 文档互链 / V11 决策文档 / V12 私网 IP",
-    ["ci-coverage"] = "覆盖率阈值比较方向 / NaN / 合并报告缺失（三者 fail-closed）",
+    ["ci-coverage"] = "覆盖率阈值比较方向 / NaN / 合并报告缺失（三者 fail-closed）；探针显式 --ci 固定 0.70 口径；**不覆盖**：本地 0.65 口径的 Docker 自动探测（由 ci-coverage --selftest 覆盖阈值分档）",
     ["gate"] = "G22 工作树清洁 / G23 快照↔CHANGELOG 同提交耦合（暂存/发布窗口/HEAD~1 三级变更集口径，含快照在更早提交而末提交只补 CHANGELOG 的跨提交洗白形态） / G24 路径分隔符归一化",
     ["tech-debt"] = "Obsolete / TODO-HACK-FIXME / Console 于 src / 空 catch / tab / 超长行 / 测试数 / 版本统一 / slnx 成员",
     ["doc-consistency"] = "D7 .ai/README.md 文件地图（其余 D1-D6/D8-D12 已下沉 C# 测试）",
@@ -333,7 +333,7 @@ var probes = new List<Probe>
         Gate: "ci-coverage",
         ExpectExit: 1,
         MustContainInStdout: "below threshold",
-        ExtraArgs: "--enforce-only",
+        ExtraArgs: "--enforce-only --ci",
         Setup: dir =>
         {
             // 预置合并报告：line-rate=0.10，阈值默认 0.70 → 必须判 FAIL 退出 1。
@@ -349,7 +349,7 @@ var probes = new List<Probe>
         Gate: "ci-coverage",
         ExpectExit: 1,
         MustContainInStdout: "could not parse line-rate",
-        ExtraArgs: "--enforce-only",
+        ExtraArgs: "--enforce-only --ci",
         Setup: dir =>
         {
             // 历史 fail-open 形态：line-rate 为 NaN 时旧 double 比较恒假 → 放行。
@@ -365,7 +365,7 @@ var probes = new List<Probe>
         Gate: "ci-coverage",
         ExpectExit: 1,
         MustContainInStdout: "merged cobertura report not found",
-        ExtraArgs: "--enforce-only",
+        ExtraArgs: "--enforce-only --ci",
         Setup: _ => []),
 
     // ── T-05（2026-09-22）：补 6 个门禁的隔离变异探针 ──
