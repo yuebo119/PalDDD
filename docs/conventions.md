@@ -113,7 +113,9 @@ EF Core / Kafka / RabbitMQ / MemoryPack 等不支持 AOT 的项目**显式覆盖
 
 **注册**：`AddPalStreamQueryHandler<TQuery, TItem, THandler>`（AOT 安全，闭合泛型 DI）。同一 `(TQuery, TItem)` 注册两个不同 `THandler` 注册期快速失败（ITM-220 同族裁决：静默覆盖是配置错误）。不经 Dispatcher ⇒ 不注册 HandlerMarker、不走管道行为；验证由端点在 SSE 头写出前经 `PalValidatorRunner` 跑（与 `ValidationBehavior` 单一出处，含「IsValid=false 且 Errors 为空时构造占位条目」语义），失败 400 ProblemDetails 且状态码可回退。
 
-**帧格式（D4）**：默认帧 data-only JSON（`data: {json}\n\n`，framing 经 `PipeWriter` span 直写零分配；序列化器输出的 JSON 载荷字节按项产出）。分型事件流经可选 `formatFrame` 委托产出完整帧文本（event/id 行）。中途异常补 `event: error` 帧后结束——SSE 头已写出无法回退 500，消费方须同时处理截断。
+**帧格式（D4 + Phase 2 收窄实施）**：默认帧 data-only JSON（`data: {json}\n\n`，framing 经 `PipeWriter` span 直写零分配；序列化器输出的 JSON 载荷字节按项产出）。分型事件流两条路：`formatFrame` 委托产出完整帧文本（优先级最高），或 `eventSelector`/`idSelector` 选择器由框架富化帧（`event: {名}\nid: {id}\ndata: {json}\n\n`，缺项行省略）。中途异常补 `event: error` 帧后结束——SSE 头已写出无法回退 500，消费方须同时处理截断。
+
+**心跳与重连（Phase 2 收窄实施，2026-10-18）**：`keepAliveInterval`（默认 null 关闭）应对 agent 场景结构性静默间隙（首 token 等待、工具轮间隙）导致的中间设备空闲断连，心跳为注释帧 `:keepalive`（规范内客户端忽略，不计入 item 数）；心跳路径取消优先于心跳（挂起项落地后统一走 OCE 静默收尾）。`StreamResumeExtensions.GetLastEventId()` 读 EventSource 重连环的 `Last-Event-ID` 请求头，续传语义留应用层（框架不缓冲已产出项；实时生成走整轮重开，持久流回放的位置游标即天然事件 ID）。PipeWriter 零拷贝化、per-stream Channel 缓冲、dispatcher 流式管道、WebSocket 传输四项经用途评估收窄暂不建（触发条件未满足，记录在 ADR-030 分期节实施附记）。
 
 **ct 纪律（D5）**：handler 契约必须响应 ct（`[EnumeratorCancellation]` 语义：`await foreach` 消费者传入的令牌优先于实现内部令牌，接口层无法携带该特性故以约定成文）；端点传 `HttpContext.RequestAborted`，客户端断开时取消传播进 handler 的 finally（停计费、释放 provider 连接）。取消按流截断静默收尾，不记 Error 级日志。
 
@@ -354,7 +356,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-10-18 复验）：224 源文件·36 项目·0 违规（2026-10-11 为 223 文件，ADR-030 流式读新增 StreamQueryHandler 一文件——CQRS 流式接口层次单一事实源）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-10-18 Phase 2 轮复验）：225 源文件·36 项目·0 违规（2026-10-18 上午为 224 文件，ADR-030 Phase 2 收窄实施新增 StreamResumeExtensions 一文件——Last-Event-ID 重连入口单一事实源）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 

@@ -134,6 +134,14 @@ streamApp.MapStreamQuery<TokenStreamQry, TokenChunk>(
     "/tokens/post",
     StreamJsonContext.Default.TokenStreamQry,
     StreamJsonContext.Default.TokenChunk);
+// Phase 2 富化帧形态：event 名 + id 行 + 心跳（agent 场景分型事件流与静默间隙保活）
+streamApp.MapStreamQuery<TokenStreamQry, TokenChunk>(
+    "/tokens/typed",
+    ctx => new TokenStreamQry(ctx.Request.Query["prompt"].ToString()),
+    StreamJsonContext.Default.TokenChunk,
+    eventSelector: chunk => chunk.Index == 2 ? "done" : "token",
+    idSelector: chunk => chunk.Index.ToString(),
+    keepAliveInterval: TimeSpan.FromMilliseconds(40));
 
 await streamApp.StartAsync();
 var serverAddress = streamApp.Services.GetRequiredService<IServer>()
@@ -174,6 +182,31 @@ Check("stream POST frames", postBody.Contains("{\"index\":0,\"text\":\"Hello\"}"
 // 验证失败：缺 prompt → 400 ProblemDetails（SSE 头未写出、状态码可回退——D3 验证前置）
 using var invalidResponse = await streamHttpClient.GetAsync(new Uri($"{serverAddress}/tokens"));
 Check("stream validation 400", invalidResponse.StatusCode == System.Net.HttpStatusCode.BadRequest);
+
+// Phase 2 富化帧消费：event 名 + id 行 + 心跳（静默间隙内注释帧先于末项到达）
+using var typedResponse = await streamHttpClient.GetAsync(
+    new Uri($"{serverAddress}/tokens/typed?prompt=hello"), HttpCompletionOption.ResponseHeadersRead);
+var typedLines = new List<string>();
+await using (var typedStream = await typedResponse.Content.ReadAsStreamAsync())
+using (var typedReader = new StreamReader(typedStream))
+{
+    while (await typedReader.ReadLineAsync() is { } line)
+        typedLines.Add(line);
+}
+// 心跳条数随时序浮动（120ms 静默窗口 / 40ms 间隔）——断言存在性与位置，条数不锁死
+var heartbeatCount = typedLines.Count(static l => string.Equals(l, ":keepalive", StringComparison.Ordinal));
+var firstHeartbeat = typedLines.FindIndex(static l => string.Equals(l, ":keepalive", StringComparison.Ordinal));
+var doneLine = typedLines.FindIndex(static l => string.Equals(l, "event: done", StringComparison.Ordinal));
+Check("stream typed heartbeat during gap", heartbeatCount >= 1 && firstHeartbeat < doneLine);
+// 剔除注释帧与帧终止空行后，event/id/data 行序精确锁定
+Check("stream typed event frames", typedLines
+    .Where(static l => l.Length > 0 && !string.Equals(l, ":keepalive", StringComparison.Ordinal))
+    .ToArray() is
+[
+    "event: token", "id: 0", "data: {\"index\":0,\"text\":\"Hello\"}",
+    "event: token", "id: 1", "data: {\"index\":1,\"text\":\" stream\"}",
+    "event: done", "id: 2", "data: {\"index\":2,\"text\":\" world\"}"
+]);
 
 await streamApp.StopAsync();
 
@@ -238,7 +271,8 @@ internal sealed class TokenStreamValidator : IPalValidator<TokenStreamQry>
             : PalValidationResult.Success();
 }
 
-/// <summary>模拟 LLM token 流的 handler——ct 响应由 [EnumeratorCancellation] 语义承载（D5）。</summary>
+/// <summary>模拟 LLM token 流的 handler——ct 响应由 [EnumeratorCancellation] 语义承载（D5）。
+/// 末项前 120ms 静默间隙模拟 agent 工具轮/首 token 等待（Phase 2 心跳样本的触发窗口）。</summary>
 internal sealed class TokenStreamHandler : IStreamQueryHandler<TokenStreamQry, TokenChunk>
 {
     public async IAsyncEnumerable<TokenChunk> HandleAsync(
@@ -247,7 +281,7 @@ internal sealed class TokenStreamHandler : IStreamQueryHandler<TokenStreamQry, T
         yield return new TokenChunk(0, "Hello");
         await Task.Yield();
         yield return new TokenChunk(1, " stream");
-        await Task.Yield();
+        await Task.Delay(120, ct).ConfigureAwait(false);
         yield return new TokenChunk(2, " world");
     }
 }

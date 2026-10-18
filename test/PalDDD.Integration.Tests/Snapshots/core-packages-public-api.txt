@@ -730,8 +730,8 @@ static class PalDDD.Hosting.AspNetCore.EndpointExtensions
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapCommand(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TCommand> commandJsonTypeInfo)
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapCommand(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TCommand> commandJsonTypeInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse> responseJsonTypeInfo)
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapQuery(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Func<Microsoft.AspNetCore.Http.HttpContext, TQuery> bindQuery, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResult> responseJsonTypeInfo)
-  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapStreamQuery(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Func<Microsoft.AspNetCore.Http.HttpContext, TQuery> bindQuery, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TItem> itemJsonTypeInfo, System.Func<TItem, System.String> formatFrame)
-  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapStreamQuery(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TQuery> queryJsonTypeInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TItem> itemJsonTypeInfo, System.Func<TItem, System.String> formatFrame)
+  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapStreamQuery(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Func<Microsoft.AspNetCore.Http.HttpContext, TQuery> bindQuery, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TItem> itemJsonTypeInfo, System.Func<TItem, System.String> formatFrame, System.Func<TItem, System.String> eventSelector, System.Func<TItem, System.String> idSelector, System.Nullable<System.TimeSpan> keepAliveInterval)
+  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapStreamQuery(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TQuery> queryJsonTypeInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TItem> itemJsonTypeInfo, System.Func<TItem, System.String> formatFrame, System.Func<TItem, System.String> eventSelector, System.Func<TItem, System.String> idSelector, System.Nullable<System.TimeSpan> keepAliveInterval)
 class PalDDD.Hosting.AspNetCore.ExceptionMiddleware
   ctor(Microsoft.AspNetCore.Http.RequestDelegate next, PalDDD.Core.Logging.IPalLogger<PalDDD.Hosting.AspNetCore.ExceptionMiddleware> logger)
   method System.Threading.Tasks.Task InvokeAsync(Microsoft.AspNetCore.Http.HttpContext context)
@@ -740,6 +740,8 @@ static class PalDDD.Hosting.AspNetCore.ExceptionMiddlewareExtensions
 static class PalDDD.Hosting.AspNetCore.HealthCheckExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalHealthChecks(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.AspNetCore.Routing.IEndpointRouteBuilder MapPalHealthChecks(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.TimeProvider timeProvider)
+static class PalDDD.Hosting.AspNetCore.StreamResumeExtensions
+  method System.String GetLastEventId(Microsoft.AspNetCore.Http.HttpContext context)
 
 # PalDDD.Idempotency
 interface PalDDD.Idempotency.IIdempotencyStore

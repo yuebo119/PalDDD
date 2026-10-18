@@ -103,13 +103,30 @@ public static IEndpointConventionBuilder MapStreamQuery<TQuery, TItem>(
 
 ## 分期
 
-Phase 1 = 上文全部。Phase 2（触发式，见复活触发器）：event/id 帧与 Last-Event-ID 恢复；心跳 keepalive；PipeWriter 化（bench 证明默认路径成热点）；per-stream Channel 缓冲（扇出/迟附出现）；dispatcher 集成加 `IStreamPipelineBehavior`（流级横切需求）；WebSocket 传输（另立议题）。
+Phase 1 = 上文全部。Phase 2（触发式，见复活触发器）：event/id 帧与 Last-Event-ID 恢复；心跳 keepalive；PipeWriter 化（bench 证明默认帧路径成热点）；per-stream Channel 缓冲（扇出/迟附出现）；dispatcher 集成加 `IStreamPipelineBehavior`（流级横切需求）；WebSocket 传输（另立议题）。
+
+### 实施附记（2026-10-18，Phase 2 收窄轮）
+
+按「对 AI agent 流式场景的用途」逐项评估后收窄实施（用户令「把值得做的都做了」，评估过程：六项中两项成立、一项半成立、三项不成立）：
+
+**已实施**：
+
+- **心跳 keepalive**（`keepAliveInterval`，默认 null 关闭）：agent 流的静默间隙属结构性常态（首 token 前可停几十秒、工具轮间隙达分钟级），中间设备空闲断连（nginx 默认 60s、部分云 LB 4min）会在工具轮之间掐断长 run；心跳为注释帧 `:keepalive`（规范内客户端忽略、不计入 item 数）。心跳路径为手动枚举器 + MoveNext 与心跳延时竞速（同步完成项走快路径，默认 await foreach 路径零额外开销）；取消经延时取消态优先于心跳，挂起项落地后统一走 OCE 静默收尾（等待而非丢弃挂起任务，避免未观测任务异常）。
+- **event/id 帧**（`eventSelector`/`idSelector` 选择器）：复活触发器 2 的「收 event 名支持进框架」提前满足（多家 LLM API 原生说分型 SSE，且 Phase 1 的 formatFrame 每消费方一份即 fork 前兆）。框架富化帧 `event: {名}\nid: {id}\ndata: {json}\n\n`（缺项行省略，event/id 字符串 UTF-8 直写 span 零分配）；`formatFrame` 保持最高优先级。
+- **Last-Event-ID 入口**（`StreamResumeExtensions.GetLastEventId()`）：只做请求头读取与 id 行写出，续传语义留应用层。实时生成流的中途缓冲（续传前提）与 per-stream Channel 项耦合，同批收窄。
+
+**收窄暂不实施**（触发条件未满足，复发时按上方原触发器走）：
+
+- **PipeWriter 零拷贝化**：触发器 3 要求 bench 证明热点。agent 流成本地板为 provider 延迟（每 token 几十毫秒），每 token 帧的序列化器输出（几十字节 byte[]）低于延迟地板数个量级，同路径一次 flush 的系统调用都比它贵两个数量级（仓库「<5% 默认不做」纪律）。
+- **per-stream Channel 缓冲**：单客户端单次生成形态为纯开销（Phase 1 被否方案同款论证）；迟附/扇出的真实受益场景需要流注册表、有界缓冲与重连身份的独立设计，另立议题。
+- **dispatcher 集成 + IStreamPipelineBehavior`**：无已出现的流级横切消费方（验证已在头写出前、日志在端点级、计量可走 D6 finally、fallback 属 handler/provider 层）；硬建相当于把 Phase 1 已否掉的 dispatcher 集成变体换名回来，还要面对 scope 生命周期老问题。
+- **WebSocket 传输**：LLM 流单向，双工无增益；中断生成用现有命令端点加取消注册表覆盖；ADR 明示另立议题。
 
 ## 复活触发器（本决策失效条件）
 
 1. 出现必须挂管道行为的流式场景，dispatcher 集成与 `IStreamPipelineBehavior` 同批建，不单加 dispatcher 方法；
-2. 两个以上消费方各自 fork 帧格式，收 event 名支持进框架；
-3. bench 证明默认帧路径成热点，PipeWriter 零拷贝化；
+2. 两个以上消费方各自 fork 帧格式，收 event 名支持进框架（**已于 2026-10-18 提前满足并实施，见分期节实施附记**）；
+3. bench 证明默认帧路径成热点，PipeWriter 零拷贝化（**2026-10-18 评估：agent 流场景分配量低于延迟地板数个量级，收窄暂不建；非 agent 高频流场景仍可按本触发器立项**）；
 4. brokerless 单进程多消费者消息成刚需，另立最小总线决策（与流式正交，勿复用 EventBus 名义）；
 5. 流式审计约定被反复违反，上流完成钩子或 analyzer 规则。
 

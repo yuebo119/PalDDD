@@ -687,6 +687,42 @@ public async IAsyncEnumerable<TokenChunk> HandleAsync(
 }
 ```
 
+### 7. agent 场景：分型事件、心跳与重连
+
+agent 流的三个结构特征各有一个对应原语（ADR-030 Phase 2 收窄实施）。
+
+**分型事件（event 名 + id 行）**：流里混着正文章 token、工具进度、最终 usage 元数据时，用 `eventSelector` 让客户端按事件名分流，免解析 JSON 体；`idSelector` 给每项一个事件 ID（断线重连的续传游标）：
+
+```csharp
+app.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+    "/tokens",
+    ctx => new TokenStreamQuery(ctx.Request.Query["prompt"].ToString()),
+    StreamJsonContext.Default.TokenChunk,
+    eventSelector: chunk => chunk.Kind switch
+    {
+        ChunkKind.Tool => "tool",
+        ChunkKind.Final => "done",
+        _ => "token"
+    },
+    idSelector: chunk => chunk.Index.ToString());
+```
+
+产出帧为 `event: {名}\nid: {id}\ndata: {json}\n\n`（缺项行省略）。浏览器侧按事件名监听：`es.addEventListener("done", e => renderFinal(JSON.parse(e.data)))`。`formatFrame` 委托仍可用作完整帧覆写（优先级高于两个选择器）。
+
+**心跳（keepAliveInterval）**：agent 流的静默间隙属于常态，首 token 前可停几十秒，工具调用轮的间隙达分钟级；nginx 默认 60 秒、部分云 LB 四分钟空闲即断连，长 run 会在工具轮之间被中间设备掐断。传 `keepAliveInterval`（如 `TimeSpan.FromSeconds(15)`）后，流静默超过该间隔即写注释帧 `:keepalive`（SSE 规范内客户端忽略，中间设备的重连判定被重置），不计入 item 数、不影响审计。默认关闭（null）。
+
+**重连续传（Last-Event-ID）**：EventSource 断线重连自动携带 `Last-Event-ID` 请求头（末个收到的 id 行内容）。GET 形态在 `bindQuery` 内经 `GetLastEventId()` 读入查询，handler 按该 ID 定位续读点：
+
+```csharp
+app.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+    "/tokens",
+    ctx => new TokenStreamQuery(ctx.Request.Query["prompt"].ToString(), ctx.GetLastEventId()),
+    StreamJsonContext.Default.TokenChunk,
+    idSelector: chunk => chunk.Index.ToString());
+```
+
+续传语义的边界（防误用）：框架只提供请求头读取与 id 行写出，不缓冲已产出项。实时生成流的中途缓冲属于另一设计（per-stream Channel，ADR-030 分期节收窄暂不建），实时生成的失败恢复走客户端整轮重开；该头的典型受益场景是持久流回放重连，比如回看某次已完成的 agent run（EventLog 有序读的位置游标即天然的事件 ID）。
+
 ## Kafka / RabbitMQ
 
 broker adapter 实现 `IMessageBroker`。它们只依赖 `PalDDD.Messaging` 和 `PalDDD.Serialization`，不会引用 `PalDDD.Serialization.Json`，因此可以替换为其他序列化实现。

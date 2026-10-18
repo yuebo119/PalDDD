@@ -318,6 +318,208 @@ public sealed partial class StreamQueryEndpointTests
             .IsEqualTo("data: {\"Index\":0,\"Text\":\"Hello\"}\n\n");
     }
 
+    // ─── Phase 2：event/id 富化帧（ADR-030 分期节收窄实施） ───
+
+    [Test]
+    public async Task MapStreamQuery_EventSelector_WritesEventFrames()
+    {
+        var provider = BuildProvider(new TokenStreamHandler());
+        var endpoints = new StreamTestEndpointRouteBuilder(provider);
+        endpoints.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+            "/tokens", ctx => new TokenStreamQuery("hi"), StreamTestJsonContext.Default.TokenChunk,
+            eventSelector: item => item.Index == 2 ? "done" : "token");
+
+        var context = CreateContext(provider);
+        await GetRequestDelegate(endpoints)(context);
+
+        await Assert.That(ReadBody(context)).IsEqualTo(
+            "event: token\ndata: {\"Index\":0,\"Text\":\"Hello\"}\n\n" +
+            "event: token\ndata: {\"Index\":1,\"Text\":\" stream\"}\n\n" +
+            "event: done\ndata: {\"Index\":2,\"Text\":\" world\"}\n\n");
+    }
+
+    [Test]
+    public async Task MapStreamQuery_IdSelector_WritesIdFrames()
+    {
+        var provider = BuildProvider(new TokenStreamHandler());
+        var endpoints = new StreamTestEndpointRouteBuilder(provider);
+        endpoints.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+            "/tokens", ctx => new TokenStreamQuery("hi"), StreamTestJsonContext.Default.TokenChunk,
+            idSelector: item => item.Index.ToString());
+
+        var context = CreateContext(provider);
+        await GetRequestDelegate(endpoints)(context);
+
+        await Assert.That(ReadBody(context)).IsEqualTo(
+            "id: 0\ndata: {\"Index\":0,\"Text\":\"Hello\"}\n\n" +
+            "id: 1\ndata: {\"Index\":1,\"Text\":\" stream\"}\n\n" +
+            "id: 2\ndata: {\"Index\":2,\"Text\":\" world\"}\n\n");
+    }
+
+    [Test]
+    public async Task MapStreamQuery_EventAndIdSelectors_WritesEnrichedFramesInOrder()
+    {
+        var provider = BuildProvider(new TokenStreamHandler());
+        var endpoints = new StreamTestEndpointRouteBuilder(provider);
+        endpoints.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+            "/tokens", ctx => new TokenStreamQuery("hi"), StreamTestJsonContext.Default.TokenChunk,
+            eventSelector: item => "chunk", idSelector: item => $"e{item.Index}");
+
+        var context = CreateContext(provider);
+        await GetRequestDelegate(endpoints)(context);
+
+        // 行序契约：event 行 → id 行 → data 行（缺项行省略；顺序写入端固定）
+        await Assert.That(ReadBody(context)).IsEqualTo(
+            "event: chunk\nid: e0\ndata: {\"Index\":0,\"Text\":\"Hello\"}\n\n" +
+            "event: chunk\nid: e1\ndata: {\"Index\":1,\"Text\":\" stream\"}\n\n" +
+            "event: chunk\nid: e2\ndata: {\"Index\":2,\"Text\":\" world\"}\n\n");
+    }
+
+    [Test]
+    public async Task MapStreamQuery_FormatFrame_TakesPrecedenceOverSelectors()
+    {
+        // 帧优先级契约：formatFrame（完整帧覆写）> event/id 选择器（框架富化帧）
+        var provider = BuildProvider(new TokenStreamHandler());
+        var endpoints = new StreamTestEndpointRouteBuilder(provider);
+        endpoints.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+            "/tokens", ctx => new TokenStreamQuery("hi"), StreamTestJsonContext.Default.TokenChunk,
+            formatFrame: item => $"event: custom\ndata: {item.Index}\n\n",
+            eventSelector: item => "ignored",
+            idSelector: item => "ignored");
+
+        var context = CreateContext(provider);
+        await GetRequestDelegate(endpoints)(context);
+
+        await Assert.That(ReadBody(context)).IsEqualTo(
+            "event: custom\ndata: 0\n\n" +
+            "event: custom\ndata: 1\n\n" +
+            "event: custom\ndata: 2\n\n");
+    }
+
+    // ─── Phase 2：心跳 keepalive（agent 场景结构性静默间隙的中间设备保活） ───
+
+    [Test]
+    public async Task MapStreamQuery_KeepAlive_WritesHeartbeatDuringIdleGap()
+    {
+        // handler 首项同步产出、次项延迟 150ms；心跳间隔 30ms → 静默窗口内心跳先于次帧到达
+        var provider = BuildProvider(new SlowSecondItemHandler());
+        var endpoints = new StreamTestEndpointRouteBuilder(provider);
+        endpoints.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+            "/tokens", ctx => new TokenStreamQuery("hi"), StreamTestJsonContext.Default.TokenChunk,
+            keepAliveInterval: TimeSpan.FromMilliseconds(30));
+
+        var context = CreateContext(provider);
+        await GetRequestDelegate(endpoints)(context);
+
+        var body = ReadBody(context);
+        // 心跳帧存在且早于慢帧（注释帧 :keepalive 不被计入 item，慢帧仍完整收尾）
+        await Assert.That(body).Contains(":keepalive");
+        await Assert.That(body.IndexOf(":keepalive", StringComparison.Ordinal))
+            .IsLessThan(body.IndexOf("\"slow\"", StringComparison.Ordinal));
+        await Assert.That(body).EndsWith("data: {\"Index\":1,\"Text\":\"slow\"}\n\n");
+    }
+
+    [Test]
+    public async Task MapStreamQuery_KeepAlive_ClientDisconnect_EndsSilentlyWithoutErrorFrame()
+    {
+        // 取消优先于心跳：静默窗口中取消 → 无心跳补救、无 error 帧、handler finally 执行
+        using var cts = new CancellationTokenSource();
+        var handler = new IndefiniteWaitHandler();
+        var provider = BuildProvider(handler);
+        var endpoints = new StreamTestEndpointRouteBuilder(provider);
+        endpoints.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+            "/tokens", ctx => new TokenStreamQuery("hi"), StreamTestJsonContext.Default.TokenChunk,
+            keepAliveInterval: TimeSpan.FromMilliseconds(30));
+
+        var context = CreateContext(provider);
+        context.RequestAborted = cts.Token;
+        var delegateTask = GetRequestDelegate(endpoints)(context);
+
+        await Task.Delay(100); // 覆盖 2-3 个心跳窗口后取消
+        await cts.CancelAsync();
+        await delegateTask;
+
+        var body = ReadBody(context);
+        await Assert.That(body).Contains("data: {\"Index\":0,\"Text\":\"only\"}");
+        await Assert.That(body).DoesNotContain("event: error");
+        await Assert.That(handler.FinallyRan).IsTrue();
+    }
+
+    [Test]
+    public async Task MapStreamQuery_KeepAliveInterval_ZeroOrNegative_Throws()
+    {
+        // 映射期守卫：零/负间隔会让 Task.Delay 立即完成形成心跳风暴
+        await Assert.That(() =>
+            new StreamTestEndpointRouteBuilder(BuildProvider(new TokenStreamHandler()))
+                .MapStreamQuery<TokenStreamQuery, TokenChunk>(
+                    "/tokens", ctx => new TokenStreamQuery("hi"), StreamTestJsonContext.Default.TokenChunk,
+                    keepAliveInterval: TimeSpan.Zero))
+            .Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() =>
+            new StreamTestEndpointRouteBuilder(BuildProvider(new TokenStreamHandler()))
+                .MapStreamQuery<TokenStreamQuery, TokenChunk>(
+                    "/tokens", ctx => new TokenStreamQuery("hi"), StreamTestJsonContext.Default.TokenChunk,
+                    keepAliveInterval: TimeSpan.FromSeconds(-1)))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
+    // ─── Phase 2：Last-Event-ID 重连入口 ───
+
+    [Test]
+    public async Task GetLastEventId_ReadsHeaderValue()
+    {
+        var context = CreateContext(BuildProvider(new TokenStreamHandler()));
+        context.Request.Headers["Last-Event-ID"] = "evt-42";
+
+        await Assert.That(context.GetLastEventId()).IsEqualTo("evt-42");
+    }
+
+    [Test]
+    public async Task GetLastEventId_MissingOrEmptyHeader_ReturnsNull()
+    {
+        var missing = CreateContext(BuildProvider(new TokenStreamHandler()));
+        await Assert.That(missing.GetLastEventId()).IsNull();
+
+        var empty = CreateContext(BuildProvider(new TokenStreamHandler()));
+        empty.Request.Headers["Last-Event-ID"] = string.Empty;
+        await Assert.That(empty.GetLastEventId()).IsNull();
+
+        await Assert.That(() =>
+            ((HttpContext)null!).GetLastEventId()).Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task WriteDataFrame_EnrichedFrame_FramingZeroAllocationAfterWarmup()
+    {
+        // 富化帧 framing 零分配（event/id 字符串 UTF-8 直写 span，无中间 byte[]）——
+        // 与 data-only 帧同款量具（预分配 PipeWriter 替身隔离 BCL 管道内部分配）。
+        // 探针输入（id 字符串）循环外预构造，测量段只剩 framing 本身
+        var writer = new PreallocatedPipeWriter();
+        var json = JsonSerializer.SerializeToUtf8Bytes(
+            new TokenChunk(0, "allocation-probe-chunk"), StreamTestJsonContext.Default.TokenChunk);
+        var ids = new string[1000];
+        for (var i = 0; i < ids.Length; i++) ids[i] = $"e{i}";
+
+        for (var i = 0; i < ids.Length; i++)
+        {
+            StreamFrameWriter.WriteDataFrame(writer, json, "token", ids[i]);
+            await writer.FlushAsync();
+        }
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < ids.Length; i++)
+        {
+            StreamFrameWriter.WriteDataFrame(writer, json, "token", ids[i]);
+            await writer.FlushAsync();
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        await Assert.That(allocated).IsEqualTo(0);
+    }
+
     // ─── 测试基础设施 ───
 
     private static ServiceProvider BuildProvider(
@@ -456,6 +658,39 @@ internal sealed class ThrowingStreamHandler : IStreamQueryHandler<TokenStreamQue
         yield return new TokenChunk(0, "before-throw");
         await Task.Yield();
         throw new InvalidOperationException("handler exploded");
+    }
+}
+
+/// <summary>首项同步产出、次项延迟 150ms——心跳窗口探针。</summary>
+internal sealed class SlowSecondItemHandler : IStreamQueryHandler<TokenStreamQuery, TokenChunk>
+{
+    public async IAsyncEnumerable<TokenChunk> HandleAsync(
+        TokenStreamQuery query, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        yield return new TokenChunk(0, "fast");
+        await Task.Delay(150, ct).ConfigureAwait(false);
+        yield return new TokenChunk(1, "slow");
+    }
+}
+
+/// <summary>首项后无限等待 ct——取消竞速探针（finally 清理记录）。</summary>
+internal sealed class IndefiniteWaitHandler : IStreamQueryHandler<TokenStreamQuery, TokenChunk>
+{
+    public bool FinallyRan { get; private set; }
+
+    public async IAsyncEnumerable<TokenChunk> HandleAsync(
+        TokenStreamQuery query, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        try
+        {
+            yield return new TokenChunk(0, "only");
+            await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false);
+            yield return new TokenChunk(1, "never");
+        }
+        finally
+        {
+            FinallyRan = true;
+        }
     }
 }
 
