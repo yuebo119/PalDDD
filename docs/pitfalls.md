@@ -88,6 +88,7 @@
 | **A6** | **场景**：`Task.Delay(100)` + `CancellationToken` → 模拟超时 → 实际查询不取消。**问题**：超时不传给 DbCommand → 假超时。**后果**：超时无效 + 资源泄漏 | 全链路 CancellationToken 传递（conventions §1.5） | ✅ |
 | **A7** | **场景**：`ValueTask` 重复 await → "Already consumed"。**问题**：ValueTask 单次消费语义。**后果**：运行时崩溃 | 文档 + XML doc 警告，热点路径 ValueTask 同步完成零分配 | ✅ |
 | **A8** | **场景**：事务回滚 → 裸 `catch (Exception)` 清理 → 清理异常覆盖主异常 → 失败原因丢失。**问题**：主异常保留 vs 清理异常的权衡。**后果**：日志只显示清理异常 | 清理异常挂 `Exception.Data` 而非 throw，保留主异常（conventions §10.3 唯一例外） | ✅ |
+| **A9** | **场景**：心跳循环需把 `MoveNextAsync` 与 `Task.Delay` 竞速（`Task.WhenAny`）→ 对 `WithCancellation(ct)` 返回的已配置枚举器调 `MoveNextAsync().AsTask()` → CS1061（`ConfiguredValueTaskAwaitable<bool>` 无 `AsTask` 定义）。**问题**：`WithCancellation` 包装器的枚举器返回已配置 awaitable（continueOnCapturedContext 已固定），形态异于普通 `ValueTask<bool>`、无法转 Task 竞速。**后果**：编译失败；若退让为无参 `GetAsyncEnumerator()` 则丢失 ct 兜底（忽略形参令牌的实现不再被 MoveNext 观测取消） | 竞速路径用 `stream.GetAsyncEnumerator(ct)`（与 `WithCancellation` 同机制——`[EnumeratorCancellation]` 语义下消费者令牌优先），拿普通 `ValueTask<bool>`；同步完成项走 `IsCompletedSuccessfully` 快路径不竞速。实证：ADR-030 Phase 2 心跳（`StreamQueryCoreAsync`，提交 9bc5d59） | ✅ |
 
 ---
 
@@ -184,25 +185,26 @@
 | **PD7** | TUnit/MTP `-e` 环境变量误判 → global.json runner 配置问题，`-e` 多余 → 诊断三步骤 S3 反向验证 | conventions §14 |
 | **PD8** | DIM 类型级契约误判（S2326 IRequest/ICommand / S3246 IEventHandler\<TEvent\> 逆变）→ SuppressMessage 带 Justification | git 3b26afd / fa1cbf8 |
 | **PD9** | 依赖升位的上游「无破坏性变更」声明不可信——PalORM 5.5.1→5.6.0 上游 CHANGELOG 称 SemVer Minor 无破坏性，实测五个读入口在第 2 位插入 `bool readFromReplica = false`，以位置参数传 `CancellationToken` 的调用编译期 CS1503（本仓 11 处命中，改命名参数 `ct:` 消解）→ **破坏性只有全量编译 + 测试能证**，依赖升位 PR 必须全量 CI 绿再合，不采信上游声明 | 实测 2026-09-25（CHANGELOG [Unreleased] Dependencies） |
+| **PD10** | 多分支 span 手写帧必须逐支核对偏移——`WriteDataFrame` ID 分支 `IdPrefix.CopyTo(span)` 漏 `[written..]`（event 分支在前且 `written=0` 时恰好正确，单选择器路径不经过 ID 分支）→ id 前缀覆写缓冲区头、冲掉 event 行（预期 `event: chunk\nid: e0\n...` 实测 `id: t: chunk\n...`）。教训：`GetSpan/CopyTo/Advance` 手写 framing 的每个分支都要偏移核对，且每个分支组合都要有行序锁定测试——单参数路径会 mask 多参数路径的偏移错误 | ADR-030 Phase 2（提交 9bc5d59；`MapStreamQuery_EventAndIdSelectors_WritesEnrichedFramesInOrder` 红证明在案） |
 
 ---
 
 ## 统计
 
-> 第一至九章共 67 条；第十章 PalORM 适配层另有 16 条（PALORM-SG1-5/RT1-5/MYSQL1-3/CSHARP1-2/SEC1），全文共 83 条（2026-09-04 勘正统计口径，2026-09-25 增补 PD9）。
+> 第一至九章共 69 条；第十章 PalORM 适配层另有 16 条（PALORM-SG1-5/RT1-5/MYSQL1-3/CSHARP1-2/SEC1），全文共 85 条（2026-09-04 勘正统计口径，2026-09-25 增补 PD9，2026-10-18 增补 A9/PD10）。
 
 | 章节 | 条数 | 来源 |
 |------|:----:|------|
 | 事件驱动 & 最终一致性 | 18 | ORM Phase 19/22 + DDD 实战 |
-| Async & Task | 8 | ORM Phase 17（DDD 适用部分） |
+| Async & Task | 9 | ORM Phase 17（DDD 适用部分） |
 | AOT & 反射 | 7 | DDD 项目独有 AOT 分层 |
 | 消息序列化 & 演化 | 5 | DDD 项目独有 |
 | 并发 & 锁 | 5 | ORM Phase 14/19（DDD 适用） |
 | 安全 & 审计 | 4 | ORM Phase 6/21（DDD 适用） |
 | DDD/Clean Architecture | 7 | DDD 项目独有（architecture.md 分层边界与稳定性约束） |
 | 诊断 & 可观测性 | 4 | ORM Phase 16/22（DDD 适用） |
-| DDD 实战新增 | 9 | ITM 历史 + ADR |
-| **合计** | **67** | — |
+| DDD 实战新增 | 10 | ITM 历史 + ADR |
+| **合计** | **69** | — |
 
 ---
 
