@@ -443,7 +443,9 @@ jobs:
         run: dotnet tool restore
 
       - name: Coverage gate
-        run: dotnet run scripts/ci-coverage.cs
+        # --ci 显式固定 0.70 + 模块降幅门禁，不依赖 Docker 自动探测：
+        # 自托管 runner 无 Docker 时不得静默降级到 LOCAL 0.65。
+        run: dotnet run scripts/ci-coverage.cs -- --ci
 
   dialect-probe:
     # unified v2.0 Phase 2a：方言实测防线固化——断言 × PG/MySQL 从"本机可选跑"升 CI 必跑。

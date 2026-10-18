@@ -1070,7 +1070,7 @@ dotnet test <target> 2>&1 | tail -5 > /tmp/baseline.txt; echo "exit=$?" >> /tmp/
 | 依赖方向 | ArchitectureBoundaryTests 项目引用矩阵 | CI |
 | DDD 命名 | StrategicDddAnalyzer PDDD001-015 | 编译期 |
 | 零警告 | TreatWarningsAsErrors | 编译期 |
-| 测试覆盖 | MTP 原生 `--coverage`（Cobertura 合并，阈值 0.70 见 ci-coverage.cs；状态与前置见 docs/test-coverage-baseline.md §门禁阈值） | CI（2026-09-14 接线，阈值 0.70） |
+| 测试覆盖 | MTP 原生 `--coverage`（Cobertura 合并；CI 阈值 0.70 + 单模块降幅 ±5pp；无 Docker 本机自动 LOCAL 口径 0.65、跳过降幅门禁，`--local`/`--ci` 可显式指定，见 ci-coverage.cs；状态与前置见 docs/test-coverage-baseline.md §门禁阈值） | CI（2026-09-14 接线；本地口径 2026-10-19 增） |
 | 断言强度 | `AssertionStrengthGateTests` 棘轮（MIG-003 下沉自 assertion-strength-check.sh） | CI（PR 时） |
 | 公共 API 快照 | PublicApiSnapshotTests | CI |
 | AI 模板约束 | `.pal/prompts/` 结构——**段数并非统一的「六段」**（2026-09-13 实测：9 个模板段数 5/6/7 不等；7 个为「角色/框架约束/必须遵守/禁止/输出格式」，其中 5 个追加「示例」段；`bounded-context` 以「项目引用指南」替代「输出格式」；`task-intake` 为验收断言门专用结构 7 段。README 自述「v54 勘正：各模板段数不一」） | 人工（机械化候选：按模板分组断言必填段存在） |

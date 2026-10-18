@@ -10,8 +10,12 @@
 //       + 降幅判定（构造最小 Cobertura XML / 基线解析，不真跑 dotnet coverage）
 //   dotnet run scripts/ci-coverage.cs -- --update-baseline
 //       用当前 TestResults 产物重写 coverage-baseline.json（校准入口；改基线需评审）
+//   dotnet run scripts/ci-coverage.cs -- --local  强制本地口径（阈值 0.65）
+//   dotnet run scripts/ci-coverage.cs -- --ci     强制 CI 口径（阈值 0.70）
+//       缺省：检测 Docker，可用走 CI 口径，不可用自动走本地口径并显式打印提示。
 //
-// 环境变量：COVERAGE_THRESHOLD——全局行覆盖率阈值（默认 0.70，本地放宽/CI 收紧）
+// 环境变量：COVERAGE_THRESHOLD——全局行覆盖率阈值（显式覆盖优先；缺省按
+//           CI 0.70 / 本地 0.65 分档，见 ReadThreshold）
 // 产物：TestResults/coverage.<项目名>.cobertura.xml + TestResults/coverage-report/
 // 退出码：0=门禁通过；1=阈值未达/合并报告缺失/解析失败（fail-closed）；
 //         子命令（build/test/restore/合并）失败时透传其退出码（set -e 语义）。
@@ -36,6 +40,7 @@
 
 #pragma warning disable CA1303 // CI 门禁协议输出为固定控制台文案（中英文混排），无本地化需求——沿 flaky-parse.cs 先例
 
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -61,16 +66,29 @@ if (args.Contains("--update-baseline"))
     return UpdateBaseline("coverage-baseline.json", "TestResults");
 }
 
-// ─── 参数路由：--enforce-only（仅跑第 5/6 步门禁，跳过 build/test/merge）───
-// 用途：① 隔离式变异探针（gate-audit 的 ci-coverage 探针预置合并报告后直达阈值判定，
-// 否则前四步在空仓必然失败，探针永远到不了被测逻辑——等于没探）；② 本地复跑门禁
-// 判定而不用重跑整个测试套件。合并报告不存在时 fail-closed（与第 5 步同口径）。
-// 阈值可被环境变量覆盖（本地放宽/CI 收紧）——与原脚本 ${COVERAGE_THRESHOLD:-0.70} 一致
-var (thresholdRaw, threshold) = ReadThreshold();
+// ─── 阈值口径：显式 --local/--ci 优先，否则按 Docker 可用性自动选择 ───
+// CI 跑齐 Testcontainers 用例，阈值 0.70；本机无 Docker 时 PalORM/Integration/
+// Messaging 的容器用例整体跳过，Docker 缺失属环境限制而非代码回归，自动降到
+// 0.65（原阈值，锚定 2026-07-30 基线 67.9% 的本地下界）并显式打印 LOCAL 提示。
+// --local/--ci 同时给出属参数冲突（fail-closed，退出 2）。
+var forceLocal = args.Contains("--local", StringComparer.Ordinal);
+var forceCi = args.Contains("--ci", StringComparer.Ordinal);
+if (forceLocal && forceCi)
+{
+    Console.Error.WriteLine("ERROR: --local 与 --ci 不能同时使用");
+    return 2;
+}
+var localProfile = forceLocal || (!forceCi && !DockerAvailable());
+var (thresholdRaw, threshold) = ReadThreshold(localProfile);
 if (threshold is null)
 {
     Console.Error.WriteLine($"ERROR: COVERAGE_THRESHOLD 非数字: {thresholdRaw}");
     return 1;
+}
+if (localProfile)
+{
+    Console.WriteLine($">> LOCAL PROFILE: Docker 不可用或指定 --local，阈值 {thresholdRaw}（CI 口径 0.70）");
+    Console.WriteLine(">> Testcontainers 依赖用例可能跳过；本地数字是下界，仅作回归守卫。");
 }
 
 // ─── 参数路由：--enforce-only（仅跑第 5/6 步门禁，跳过 build/test/merge）───
@@ -175,11 +193,23 @@ if (double.Parse(lineRateRaw, NumberStyles.Float, CultureInfo.InvariantCulture) 
 
 // 6. 单模块覆盖率降幅门禁（账本 §四「单模块降幅 ≤5%」；2026-09-14 增）
 //    同项目跨时间可比（同一测试集插桩同一装配集）；项目间不可比（lines-valid 各异）
-Console.WriteLine(">> Enforcing per-module coverage drop limit (baseline ±5pp)...");
-var dropExit = EnforceModuleDropLimit("coverage-baseline.json", "TestResults");
-if (dropExit != 0) return dropExit;
+//    本地口径跳过：Testcontainers 用例整体跳过会让容器依赖模块的覆盖率不可比
+//    （实测 Messaging.Integration 39.01% → 13.92% 并非代码回归），只有 CI 全量
+//    测试集下该门禁才有意义。
+if (localProfile)
+{
+    Console.WriteLine(">> LOCAL PROFILE: 跳过单模块降幅门禁（Testcontainers 跳过使模块覆盖率不可比）");
+}
+else
+{
+    Console.WriteLine(">> Enforcing per-module coverage drop limit (baseline ±5pp)...");
+    var dropExit = EnforceModuleDropLimit("coverage-baseline.json", "TestResults");
+    if (dropExit != 0) return dropExit;
+}
 
-Console.WriteLine("=== Coverage complete (gate PASSED) ===");
+Console.WriteLine(localProfile
+    ? "=== Coverage complete (LOCAL lower-bound PASSED; CI profile not evaluated) ==="
+    : "=== Coverage complete (gate PASSED) ===");
 Console.WriteLine("Report: TestResults/coverage-report/index.html");
 return 0;
 // ─── 子进程执行：stdout/stderr 捕获返回（并行循环专用）───
@@ -243,18 +273,20 @@ static List<string> FindTestProjects() =>
         .OrderBy(p => p, StringComparer.Ordinal)
         .ToList();
 
-// ─── 阈值读取：环境变量覆盖 + 默认 0.70；非数字返回 null（fail-closed）───
+// ─── 阈值读取：环境变量覆盖 > 口径缺省（CI 0.70 / 本地 0.65）；非数字 fail-closed ───
 // 2026-09-14 由 0.65 上调至 0.70：阈值口径沿用项目原始设计原则「基线 − 3pp 缓冲」，
 // 而原值 0.65 锚定的是 2026-07-30 基线 67.9%（67.9 − 3 ≈ 65）。2026-09-14 实测
 // 16/16 测试项目并集行覆盖率 **72.98%**（13146/18013，Debug 插桩；该值为**下界**——
 // 其中 PalORM.Tests 因本机无 Docker 有 46 项未跑完，CI 上会更高），按同一原则取 0.70。
 // 原 0.65 在新基线下留有约 8pp 余量，等于要一次掉 8 个百分点才触发，已失去早期预警意义。
+// 2026-10-19：无 Docker 的本机无法跑齐 Testcontainers 用例（实测 76 项跳过、68.64%），
+// 0.70 会恒红；0.65 保留为**本地下界回归守卫**，CI 口径仍 0.70（Docker 可用时自动选择）。
 // ⚠️ 复校准触发：首次 CI 运行会给出含 Docker 的 16 项目完整值，届时按其值重校准
 // （预期 ≥ 0.73），并同步 docs/test-coverage-baseline.md §门禁阈值。
-static (string Raw, double? Value) ReadThreshold()
+static (string Raw, double? Value) ReadThreshold(bool localProfile)
 {
     var raw = Environment.GetEnvironmentVariable("COVERAGE_THRESHOLD");
-    if (string.IsNullOrEmpty(raw)) raw = "0.70";
+    if (string.IsNullOrEmpty(raw)) raw = localProfile ? "0.65" : "0.70";
     // 全仓扫描修复（fail-open）：NumberStyles.Float 自 .NET Core 3.0 起接受 "NaN"/"Infinity"，
     // 而 NaN 使 `lineRate < NaN` 恒假 → 阈值门禁静默放行（Infinity 则恒不可通过）。
     // 非有限值/越界一律走 null 路径（调用方 fail-closed），与「非数字 fail-closed」同口径。
@@ -264,6 +296,39 @@ static (string Raw, double? Value) ReadThreshold()
         && value <= 1
         ? (raw, value)
         : (raw, null);
+}
+
+// Docker 可用性探测（3s 超时）：`docker info` 退出 0 才算可用。命令不存在、
+// 守护进程未启动、超时一律 false（走本地口径）。只在完整链路缺省时调用；
+// --ci/--local 与 --enforce-only 探针不受影响。
+static bool DockerAvailable()
+{
+    try
+    {
+        var psi = new ProcessStartInfo("docker", "info")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        using var p = Process.Start(psi);
+        if (p is null) return false;
+        if (!p.WaitForExit(3000))
+        {
+            try { p.Kill(entireProcessTree: true); }
+            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException or AggregateException)
+            {
+                // 进程已退出/无权限/平台不支持——统一按不可用处理
+            }
+            return false;
+        }
+        return p.ExitCode == 0;
+    }
+    catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
+    {
+        return false;
+    }
 }
 
 // ─── line-rate 提取：XDocument 解析根元素属性（任务指定，框架内置）───
@@ -473,26 +538,29 @@ static int SelfTest()
         Case("0.50 < 0.70 判定失败", double.Parse("0.50", NumberStyles.Float, CultureInfo.InvariantCulture) < 0.70);
         Case("0.70 == 0.70 边界通过", !(0.70 < 0.70));
 
-        // 用例 7：阈值环境变量路由
+        // 用例 7：阈值环境变量路由 + 本地/CI 口径
         Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", "0.9");
-        var (raw1, v1) = ReadThreshold();
+        var (raw1, v1) = ReadThreshold(false);
         Case("环境变量覆盖阈值 0.9", raw1 == "0.9" && v1 == 0.9);
         Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", null);
-        var (raw2, v2) = ReadThreshold();
-        Case("缺省阈值 0.70", raw2 == "0.70" && v2 == 0.70);
+        var (raw2, v2) = ReadThreshold(false);
+        Case("缺省 CI 口径阈值 0.70", raw2 == "0.70" && v2 == 0.70);
+        var (rawLocal, vLocal) = ReadThreshold(true);
+        Case("缺省本地口径阈值 0.65", rawLocal == "0.65" && vLocal == 0.65);
         Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", "abc");
-        var (raw3, v3) = ReadThreshold();
+        var (raw3, v3) = ReadThreshold(false);
         Case("非法阈值 fail-closed", raw3 == "abc" && v3 is null);
         // 全仓扫描修复：NaN/Infinity 曾被 TryParse 接受 → `< NaN` 恒假 → 门禁静默放行
         Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", "NaN");
-        var (rawNaN, vNaN) = ReadThreshold();
+        var (rawNaN, vNaN) = ReadThreshold(false);
         Case("NaN 阈值 fail-closed", rawNaN == "NaN" && vNaN is null);
         Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", "Infinity");
-        var (rawInf, vInf) = ReadThreshold();
+        var (rawInf, vInf) = ReadThreshold(false);
         Case("Infinity 阈值 fail-closed", rawInf == "Infinity" && vInf is null);
         Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", "1.5");
-        var (rawBig, vBig) = ReadThreshold();
+        var (rawBig, vBig) = ReadThreshold(false);
         Case("越界阈值 1.5 fail-closed", rawBig == "1.5" && vBig is null);
+        Environment.SetEnvironmentVariable("COVERAGE_THRESHOLD", null);
 
         // 用例：单模块降幅判定（CheckModuleDrop——容差 5pp 绝对）
         Case("降幅 2pp 通过", CheckModuleDrop(0.80, 0.78) == 0);
