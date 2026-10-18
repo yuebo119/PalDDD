@@ -723,6 +723,30 @@ app.MapStreamQuery<TokenStreamQuery, TokenChunk>(
 
 续传语义的边界（防误用）：框架只提供请求头读取与 id 行写出，不缓冲已产出项。实时生成流的中途缓冲属于另一设计（per-stream Channel，ADR-030 分期节收窄暂不建），实时生成的失败恢复走客户端整轮重开；该头的典型受益场景是持久流回放重连，比如回看某次已完成的 agent run（EventLog 有序读的位置游标即天然的事件 ID）。
 
+**回放与断点续看（EventLog 参考实现）**：一轮 agent run 结束后由 handler 追加一条 EventLog 记录（完整记录，不逐 token 写），回放端点用同帧形状重新发布，`Last-Event-ID` 直接当作 EventLog 的 `fromVersion`：
+
+```csharp
+public sealed class AgentReplayHandler(IEventLog eventLog)
+    : IStreamQueryHandler<AgentReplayQuery, AgentChunk>
+{
+    public async IAsyncEnumerable<AgentChunk> HandleAsync(
+        AgentReplayQuery query, [EnumeratorCancellation] CancellationToken ct)
+    {
+        // Last-Event-ID 即 EventLog 流版本：+1 从下一条开始（含断线重连的续看）
+        var fromVersion = long.TryParse(query.LastEventId, out var last) ? last + 1 : 0;
+        await foreach (var recorded in eventLog.ReadStreamAsync(
+            $"agent-run-{query.Run}", fromVersion, cancellationToken: ct))
+        {
+            yield return ToChunk(recorded);   // 应用层把记录映射回帧元素
+        }
+    }
+}
+```
+
+完整可运行样本见 `samples/PalDDD.AgentSample`（流式产出 + 工具幂等 + EventLog 审计 + 断点续看四项接线，13 条断言）。
+
+**遥测（2026-10-18 接入）**：端点在验证通过、进入枚举后开启 `Stream Query` Activity（tag `pal.stream.query`/`pal.stream.item` 为类型名），首个元素写出时记 `first-item` 事件——**TTFT = 该事件时间戳 − span 起点**，无需新增直方图。五个零 tag 计数器：`paldd.stream.started/completed/failed/cancelled/items`（取消独立于失败：客户端断开是正常终止，混入 failed 会污染错误率告警）。订阅方式与其他遥测一致（引用 `PalDDD` ActivitySource/Meter）。
+
 ## Kafka / RabbitMQ
 
 broker adapter 实现 `IMessageBroker`。它们只依赖 `PalDDD.Messaging` 和 `PalDDD.Serialization`，不会引用 `PalDDD.Serialization.Json`，因此可以替换为其他序列化实现。

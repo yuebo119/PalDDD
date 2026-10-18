@@ -345,9 +345,22 @@ public static class EndpointExtensions
         var bodyWriter = context.Response.BodyWriter;
         var itemCount = 0;
 
+        // 遥测（2026-10-18）：span 覆盖全枚举期；TTFT 由首个 first-item 事件时间戳给出。
+        // 计数器零 tag（PalMetrics 纪律）；listener 未订阅时 Start 返回 null，Add 仍执行
+        // （Counter.Add 无 listener 时内部短路，零分配）
+        var activity = Diagnostics.PalActivitySource.StartStreamQuery(typeof(TQuery).Name, typeof(TItem).Name);
+        Diagnostics.PalMetrics.StreamStarted.Add(1);
+        var firstItemRecorded = false;
+
         // 帧写出单一出处（默认/富化/定制三分支，心跳与快路径共用）
         void WriteItemFrame(TItem item)
         {
+            if (!firstItemRecorded)
+            {
+                // TTFT 标记：只在订阅方存在时记事件（AddEvent 会分配事件对象与链表节点）
+                firstItemRecorded = true;
+                activity?.AddEvent(new System.Diagnostics.ActivityEvent("first-item"));
+            }
             if (formatFrame is not null)
             {
                 // D4 定制帧：委托返回完整帧文本（event/id 行），支持分型事件流
@@ -459,6 +472,8 @@ public static class EndpointExtensions
                 }
             }
 
+            Diagnostics.PalMetrics.StreamCompleted.Add(1);
+            Diagnostics.PalMetrics.StreamItems.Add(itemCount);
             if (logger is not null && logger.IsEnabled(LogLevel.Debug))
                 logger.Debug($"Stream {typeof(TQuery).Name}: completed {itemCount} item(s) in {timeProvider.GetElapsedTime(startTimestamp).TotalMilliseconds:F2}ms");
         }
@@ -466,6 +481,9 @@ public static class EndpointExtensions
         {
             // D5：客户端断开静默收尾（头已写出，无法回退状态码；消费方按流截断处理）。
             // 取消不是错误——按 LoggingBehavior 的 OCE 过滤同款语义不记 Error。
+            // 遥测：取消独立计数（混入 failed 会污染错误率告警）；已产出项仍计入吞吐
+            Diagnostics.PalMetrics.StreamCancelled.Add(1);
+            Diagnostics.PalMetrics.StreamItems.Add(itemCount);
             if (logger is not null && logger.IsEnabled(LogLevel.Debug))
                 logger.Debug($"Stream {typeof(TQuery).Name}: cancelled after {itemCount} item(s)");
         }
@@ -473,6 +491,10 @@ public static class EndpointExtensions
         {
             // 中途异常：补 event: error 帧后结束（头已写出无法回退 500；异常详情只进日志，
             // 帧内文案通用化——对齐 ExceptionMiddleware 的 500 响应不泄露内部细节口径）
+            Diagnostics.PalMetrics.StreamFailed.Add(1);
+            Diagnostics.PalMetrics.StreamItems.Add(itemCount);
+            // span 状态置错：异常类型名进状态描述（类型名基数有界，不含消息/业务数据）
+            activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, ex.GetType().Name);
             try
             {
                 StreamFrameWriter.WriteErrorFrame(bodyWriter);
@@ -484,6 +506,10 @@ public static class EndpointExtensions
             }
             if (logger is not null && logger.IsEnabled(LogLevel.Error))
                 logger.Error(ex, $"Stream {typeof(TQuery).Name}: failed after {itemCount} item(s) in {timeProvider.GetElapsedTime(startTimestamp).TotalMilliseconds:F2}ms");
+        }
+        finally
+        {
+            activity?.Dispose();
         }
     }
 

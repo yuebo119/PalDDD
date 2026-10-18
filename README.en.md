@@ -61,7 +61,7 @@ Pal.DDD standardizes the equality semantics of Entity, allocation-free collectio
 
 **Pluggable compression**. `ICompressionProvider` / `ICompressor` abstractions with two implementations: the System built-in compressor and the native LZ4/ZStandard binding (`PalDDD.Compression.Native`, AOT-safe), swappable via DI.
 
-**Built-in observability**. `PalActivitySource` (11 Start methods) + `PalMetrics` (23 telemetry instruments) are pre-embedded on critical paths; your OpenTelemetry configuration only needs to reference the Source to capture everything (command dispatch / Saga transition Activities are reserved, not yet wired).
+**Built-in observability**. `PalActivitySource` (12 Start methods) + `PalMetrics` (28 telemetry instruments) are pre-embedded on critical paths; your OpenTelemetry configuration only needs to reference the Source to capture everything (command dispatch / Saga transition Activities are reserved, not yet wired).
 
 **Three persistence stacks, chosen by scenario**. PalORM (true AOT, source-generated SQL) / Dapper (call-site-level AOT, hand-written SQL) / EF Core (Migration/LINQ/ChangeTracker ecosystem) coexist equally long-term with no retirement plan; five Store capabilities are fully covered across all three stacks, with behavior guarded by cross-stack parity tests ([ADR-020](docs/decisions/020-persistence-stack-retirement-roadmap.md), [ADR-024](docs/decisions/024-mysql-lease-mutex-divergence-accept.md)); ambient transactions and explicit transaction boundaries are supported.
 

@@ -124,6 +124,7 @@ static class PalDDD.Core.Diagnostics.PalActivitySource
   method System.Diagnostics.Activity StartOutboxProcess(System.Int32 batchSize)
   method System.Diagnostics.Activity StartProjectionRebuild(System.String projectionName, System.String sourceName)
   method System.Diagnostics.Activity StartSagaTransition(System.String sagaType, System.String fromState, System.String toState)
+  method System.Diagnostics.Activity StartStreamQuery(System.String queryType, System.String itemType)
 static class PalDDD.Core.Diagnostics.PalMetrics
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> EventHandlersFailed
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> EventHandlersHandled
@@ -148,6 +149,11 @@ static class PalDDD.Core.Diagnostics.PalMetrics
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> SagaCompensationFailed
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> SagaCompleted
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> SagaScanFailed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamCancelled
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamCompleted
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamFailed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamItems
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamStarted
 class PalDDD.Core.DomainCapabilityAttribute
   ctor(System.String name)
   property System.String Name

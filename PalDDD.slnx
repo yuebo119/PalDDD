@@ -101,5 +101,6 @@
       <Project Path="samples/PalDDD.PalOrmSample/PalDDD.PalOrmSample.csproj" />
       <Project Path="samples/PalDDD.ECommerce/PalDDD.ECommerce.csproj" />
       <Project Path="samples/PalDDD.MinimalApi/PalDDD.MinimalApi.csproj" />
+      <Project Path="samples/PalDDD.AgentSample/PalDDD.AgentSample.csproj" />
     </Folder>
 </Solution>
