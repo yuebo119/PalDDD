@@ -88,6 +88,8 @@ test-file.txt
 stryker-config.json
 !test/PalDDD.Compression.Tests/stryker-config.json
 !test/PalDDD.Transactions.Tests/stryker-config.json
+semgrep.sarif
+semgrep.log
 /.codebuddy
 /.codebuddy
 /nupkgs

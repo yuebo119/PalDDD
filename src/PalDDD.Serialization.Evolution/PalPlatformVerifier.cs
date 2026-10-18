@@ -29,7 +29,8 @@ public sealed class PalPlatformVerifier
         List<PalPlatformVerificationError>? errors = null;
         foreach (var requirement in requirements)
         {
-            ArgumentNullException.ThrowIfNull(requirement);
+            if (requirement is null)
+                throw new ArgumentNullException(nameof(requirements), "The requirements collection contains a null element.");
 
             try
             {

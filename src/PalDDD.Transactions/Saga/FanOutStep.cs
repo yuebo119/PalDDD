@@ -143,8 +143,10 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
         // 错误源头（无子任务应返回空集合而非 null）。（无 paramName 重载——CA2208
         // 要求 paramName 匹配本方法形参，selector 非本方法参数）
         var items = _selector(state)
+#pragma warning disable MA0015 // selector 非本方法形参；异常描述 FanOut 配置错误
             ?? throw new ArgumentException(
                 $"FanOut 步骤 '{Name}' 的 selector 对当前 SagaState 返回 null——无子任务请返回空集合。");
+#pragma warning restore MA0015
         if (items.Count == 0)
             return new([], Array.Empty<(TResult?, Exception)>());
 
@@ -152,7 +154,9 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
         // MaxConcurrency <= 0"路径已不可达（MaxConcurrency 为 init-only——init setter 赋值点
         // 即时校验并归一化，十七轮构造参数路径同样前置校验）。本行按纵深防御保留（构造函数
         // 路径与 init setter 均已保证 >0；此校验防未来新增写入点）。
+#pragma warning disable MA0015 // MaxConcurrency 是属性不变量，不是本方法形参
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxConcurrency);
+#pragma warning restore MA0015
         var semaphore = _concurrencyGate; // M2：构造期缓存的实例信号量（原每 per-call 分配）
         var results = new TResult?[items.Count];
         // P2 定案（可空结果过滤）：以完成标记收集而非非空过滤——TResult 为可空引用类型

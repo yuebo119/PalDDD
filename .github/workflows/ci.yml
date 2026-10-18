@@ -350,6 +350,13 @@ jobs:
         with:
           dotnet-version: '11.0.x'
 
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/Directory.Packages.props', '**/Directory.Build.props', 'src/Directory.Build.props') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
       - name: Analyzer baseline ratchet
         run: dotnet run scripts/quality-baseline.cs
 
@@ -366,40 +373,38 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: ci/requirements-semgrep.txt
 
       - name: Install Semgrep
-        run: pip install semgrep==1.181.0
+        run: pip install --require-hashes -r ci/requirements-semgrep.txt
 
-      - name: Semgrep scan (src)
-        run: semgrep scan --config p/csharp --config p/security-audit --error --metrics=off src
+      - name: Semgrep scan + rule canary
+        # 规则包来自 registry（Semgrep Rules License，未 vendoring）；29 条是当前已审基线。
+        # 规则数量变化 → 失败并要求重审 nosemgrep 注解；--sarif 供 artifact/趋势。
+        run: |
+          set +e
+          semgrep scan --config p/csharp --config p/security-audit --error --metrics=off \
+            --verbose --sarif --output semgrep.sarif src > semgrep.log 2>&1
+          status=$?
+          cat semgrep.log
+          count=$(grep -oE 'Ran [0-9]+ rules' semgrep.log | grep -oE '[0-9]+' | head -1)
+          if [ -z "$count" ]; then
+            echo "::error::Semgrep rule count missing from output"
+            exit 1
+          fi
+          if [ "$count" != "29" ]; then
+            echo "::error::Semgrep rule count changed ($count != 29)。请重审 6 处 nosemgrep 注解后有意更新此基线。"
+            exit 1
+          fi
+          exit $status
 
-  mutation:
-    # 2026-10-18：Stryker.NET 5.0.0 的 MTP runner 已验证可跑（--test-runner mtp；
-    # 4.13 起预览、5.0.0 支持 perTest coverage）。两个窄基线均 100%：
-    # Compression/CompressionProvider 与 Transactions/MySqlLeasePolicy；
-    # 只在手动 workflow_dispatch 触发（全仓变异成本高，不进门禁）。
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - name: Upload Semgrep SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          dotnet-version: '11.0.x'
-
-      - name: Install Stryker
-        run: dotnet tool install -g dotnet-stryker --version 5.0.0
-
-      - name: Mutation baseline (Compression)
-        working-directory: test/PalDDD.Compression.Tests
-        run: dotnet stryker --config-file stryker-config.json
-
-      - name: Mutation baseline (Transactions lease policy)
-        working-directory: test/PalDDD.Transactions.Tests
-        run: dotnet stryker --config-file stryker-config.json
+          name: semgrep-sarif
+          path: semgrep.sarif
 
   coverage:
     # 2026-09-14 接线——此前 `scripts/ci-coverage.cs` 是「脚本就绪但未接线」的已知缺口。

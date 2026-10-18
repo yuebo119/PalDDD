@@ -206,7 +206,8 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
                 "MarkProcessedBatchAsync requires leased messages (LockedBy/LockedUntil non-null) — batch inputs must come from a single LeasePendingMessagesAsync result.");
         foreach (var message in messages)
         {
-            ArgumentNullException.ThrowIfNull(message);
+            if (message is null)
+                throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
             if (message.LockedBy != owner || message.LockedUntil != until)
                 throw new InvalidOperationException(
                     "MarkProcessedBatchAsync requires a single-lease batch — all messages must share the same LockedBy/LockedUntil (mixed-lease batches are not supported).");

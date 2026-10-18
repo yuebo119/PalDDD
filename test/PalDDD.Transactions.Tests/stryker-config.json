@@ -2,12 +2,18 @@
   "stryker-config": {
     "test-runner": "mtp",
     "project": "PalDDD.Transactions.csproj",
-    "mutate": ["**/Outbox/MySqlLeasePolicy.cs"],
-    "reporters": ["cleartext", "json"],
+    "mutate": [
+      "**/Outbox/MySqlLeasePolicy.cs"
+    ],
+    "reporters": [
+      "cleartext",
+      "json",
+      "html"
+    ],
     "thresholds": {
-      "high": 80,
-      "low": 60,
-      "break": 0
+      "high": 100,
+      "low": 95,
+      "break": 95
     },
     "concurrency": 2
   }

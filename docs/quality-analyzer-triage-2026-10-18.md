@@ -17,7 +17,7 @@
 
 | 规则 | 条数（子集后） | 裁决 | 理由 |
 |---|---:|---|---|
-| MA0015 参数名 | 73 | 关闭 | 配置解析异常的消息已含具体配置键/值，paramName 不增加定位信息；公共 API 参数名由 S927/S3928 守护 |
+| MA0015 参数名 | 73 | 路径级收敛 | 公共/领域面（Core/Transactions/Idempotency/EventLog/Messaging/Compression/Serialization/Projections/Dapper/PalORM）重新启用并修 18 条；Dapper/PalORM/Hosting 的 MultiHost/Json/HTTP 配置解析保持 `none`（paramName 无定位价值） |
 | S2077 SQL 注入模式 | 8 | 站点级抑制 | 保留规则（不全局关闭，避免 Semgrep 覆盖不到的 `FromSqlRaw` 形态失去纵深）；8 个已验证站点逐处 `#pragma` 并注明白名单/常量/参数化依据；Semgrep 为独立防线 |
 | S1133 弃用代码 | 6 | 关闭 | 弃用窗口由 ADR-026 与 CHANGELOG 管理，分析器无法知道移除日期 |
 | S1199 嵌套块 | 5 | 关闭 | SQL 租约/管线的嵌套块是可读性结构，不是缺陷 |
@@ -30,6 +30,7 @@
 | 类别 | 处理 |
 |---|---|
 | MA0011 格式化提供程序 | 60 处加 `CultureInfo.InvariantCulture`（`ToString`/`TryParse`/`Convert`） |
+| MA0015 参数名（公共面） | 18 处按路径重启用后修复或精确抑制：null 元素改指集合参数、属性不变量按站点说明 |
 | MA0021 字符串比较 | 18 处改 `StringComparer`/`StringComparison` |
 | MA0008 结构布局 | record struct 补 `[StructLayout(LayoutKind.Auto)]`（默认布局，零行为变化） |
 | MA0132 隐式 DateTimeOffset | 3 处改显式 `new DateTimeOffset(..., TimeSpan.Zero)`（修正 Unspecified 本地偏移风险） |

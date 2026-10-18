@@ -3,6 +3,8 @@
 目标仓：`C:\ai\claude\Pal.DDD`（分支 `dev`）
 基线：`dotnet build PalDDD.slnx -c Release` = 0 警告 0 错误，18 秒；CI 已有 `dotnet format style --verify-no-changes`、漏洞扫描、覆盖率门禁、AOT 验证。
 
+> **版本说明（2026-10-18 晚）**：§三/§五/§六/§七 保留评估时点结论；最终处置见 §十一。未标注的“暂不/未接”均为时点状态，不是当前状态。工具版本以 `.config/dotnet-tools.json` 与 `.github/workflows/` 为准；本文引用为评估时点。
+
 ## 一、已做的改动
 
 | 文件 | 改动 |
@@ -89,6 +91,8 @@ Top 规则：
 
 结论：whitespace 门禁暂不加入 CI，先修既存违规；analyzers 门禁要等规则收敛后再加。
 
+> **后续完整修复（2026-10-18 晚）**：实际违规为 **3 文件/14 条**（第三个是 `PalDDD.Analyzers/StrategicDddAnalyzer.SymbolHelpers.cs`）；whitespace 与 analyzers 均已接入 CI，见 §十一。本节“暂不/再考虑”为评估时点结论。
+
 ## 六、Trail of Bits 技能
 
 已安装 5 个并登记 `sources-map`（repo `trailofbits`，mirror）：
@@ -119,9 +123,9 @@ Top 规则：
 
 | 项 | 决策 |
 |---|---|
-| 分析器 | 保留但默认关闭（`EnableQualityAnalyzers=false`），先做规则收敛：关闭 MA0048/MA0051/MA0004/MA0006 等噪声项，保留 S2077、S8949、S8969、S6444、MA0015、MA0011 等高价值项，再逐步提为默认开启（2026-10-18 实施：`.editorconfig` 规则子集 + 逐条裁决 + 基线 642→0，见 §十一 与 docs/quality-analyzer-triage-2026-10-18.md） |
-| Stryker | MTP runner 已验证（Stryker 5.0.0 `--test-runner mtp`）；配置 `test/PalDDD.Compression.Tests/stryker-config.json` 与 `test/PalDDD.Transactions.Tests/stryker-config.json` + workflow_dispatch `mutation` job；CompressionProvider 与 Transactions/MySqlLeasePolicy 均 100% |
-| Semgrep | 6/6 误报已逐条加 `nosemgrep` 依据注释；当前 0 findings；CI `semgrep` job 接入（`--error`） |
+| 分析器 | 保留但默认关闭（`EnableQualityAnalyzers=false`），先做规则收敛：关闭 MA0048/MA0051/MA0004/MA0006 等噪声项，保留 S2077、S8949、S8969、S6444、MA0015、MA0011 等高价值项，再逐步提为默认开启（2026-10-18 实施：`.editorconfig` 规则子集 + 逐条裁决 + 基线 642→0；MA0015 按路径重启用公共/领域面，S2077 站点级抑制，见 §十一 与 docs/quality-analyzer-triage-2026-10-18.md） |
+| Stryker | MTP runner 已验证（Stryker 5.0.0 `--test-runner mtp`）；两个 `stryker-config.json` + 独立月度/手动 `mutation.yml`（break 95，JSON/HTML artifact）；CompressionProvider 与 Transactions/MySqlLeasePolicy 均 100% |
+| Semgrep | 6/6 误报已逐条加 `nosemgrep` 依据注释；当前 0 findings；CI `semgrep` job（29 规则 canary + SARIF artifact + uv 哈希锁） |
 | dotnet format whitespace | 先修既存违规，再考虑加 CI（已修复 3 文件/14 条并接入 CI，见 §十一） |
 | ToB 技能 | 保留，作为审计方法论；2026-10-18 已用 differential-review 对 `b027e0a` 做试点：发现 S2077 全局关闭削弱纵深（Semgrep 未覆盖两处 `FromSqlRaw`），已改为站点级抑制；报告 `docs/review/differential-review-2026-10-18-quality-tooling.md` |
 
@@ -147,13 +151,15 @@ Pal.DDD 的工程基线已经很硬：零警告、SQL 标识符有入口校验�
 
 | 项 | 处置 | 验收 |
 |---|---|---|
-| 分析器规则收敛 | `.editorconfig` 末节新增规则子集：MA0048/MA0051/MA0004/MA0006/MA0002/S3358/S125/S1939/S3236 压为 `none`；MA0015/MA0011/S2077/S8949/S8969 保持 `warning`；随后逐条修复/精确抑制（MA0015/S2077/S1133/S1199/S3267/MA0016/S2326/S3246 按业务判断关闭） | 重新测量 642 → **0** 条（去重后） |
+| 分析器规则收敛 | `.editorconfig` 末节新增规则子集：MA0048/MA0051/MA0004/MA0006/MA0002/S3358/S125/S1939/S3236 压为 `none`；MA0011/S8949/S8969 保持 `warning`；MA0015 按路径重启用公共/领域面，S2077 逐站点抑制；逐条修复/精确抑制后基线 642→**0** | 重新测量 0 条（去重后）；公共面 MA0015 18 条已修/精确抑制 |
 | 基线棘轮 | 新增 `scripts/quality-baseline.cs`（`--update` / `--selftest` / 退出码 0/1/2）；基线 `scripts/quality-analyzer-baseline.txt` | 本地 `--selftest` 全过；`--update` 写入 0；默认构建仍 0W0E |
-| CI 接线 | 新增独立 job `quality-analyzers`（基线 0 棘轮）、`semgrep`（0 findings）、`mutation`（workflow_dispatch，Stryker MTP） | 新警告 > 0 即红；Semgrep finding 即红；默认零警告契约不受影响 |
+| CI 接线 | 新增独立 job `quality-analyzers`（基线 0 棘轮）、`semgrep`（0 findings + 29 规则 canary + SARIF artifact，pip 哈希锁）、独立 `mutation.yml`（月度 + 手动，break 95，artifact） | 新警告 > 0 即红；Semgrep finding/规则漂移即红；变异分数 <95 即红 |
 | whitespace | `dotnet format whitespace` 修复 3 文件/14 条；CI `Format verify (whitespace)` 步骤接入 | `--verify-no-changes` exit 0 |
-| Stryker / Semgrep | Stryker 5.0.0 MTP runner + 两个 `stryker-config.json` + workflow_dispatch job；Semgrep 6/6 FP 加 `nosemgrep` 依据注释并接入 CI | CompressionProvider 与 MySqlLeasePolicy 均 100%；Semgrep 0 findings |
+| Stryker / Semgrep | Stryker 5.0.0 MTP runner + 两个 `stryker-config.json`（break 95）+ 独立月度 `mutation.yml` + JSON/HTML artifact；Semgrep 6/6 FP 加 `nosemgrep` 依据注释、29 规则 canary、SARIF、`uv` 哈希锁 | CompressionProvider 与 MySqlLeasePolicy 均 100%；Semgrep 0 findings |
 | AOT 真发布 | AotSample + PalOrmSample `win-x64` `PublishAot` 本地实跑 | AotSample 全检查通过；PalOrmSample PASSED |
-| review 债阻断 | pre-push 在 metrics >30 天且 src 有变更时阻断；豁免 `.ai/review/review-exemption.json` | selftest 正负例通过；豁免至 2026-11-15 |
+| review 债阻断 | pre-push 调用 `scripts/review-freshness.cs`；v92 维护轮（2026-10-18）结清债务，豁免文件移除；3 条隔离探针 | review-freshness 正反例通过；metrics 最后一轮 v92 |
 | 工作树卫生 | `Directory.Build.props.bak-20261018` / `Directory.Packages.props.bak-20261018` 移至 `%TEMP%/palddd-bak-20261018/` | `git status` 无 `.bak-*` 残留 |
+
+**最终版本单一来源**：Stryker 以 `.config/dotnet-tools.json` 为版本源（CI `dotnet tool restore`），Semgrep 以 `ci/requirements-semgrep.txt` 为版本源；本文中的 5.0.0 / 1.181.0 仅为评估时点记录。
 
 **为什么能到 0**：剩余 280 条并非都需要改代码。逐条裁决分三类：真实缺陷修复（MA0011/MA0021/MA0132/S8949/S8969/MA0054 等）、站点级精确抑制（反射物化/ThreadStatic 池/AOT 非目标路径/刻意 fire-and-forget，每条带理由）、规则级业务判断（配置值异常 paramName、Semgrep 重复的 S2077、与性能纪律冲突的 S3267 等，见 triage 文档）。基线与规则子集均为单一事实源，改规则时同提交重测。

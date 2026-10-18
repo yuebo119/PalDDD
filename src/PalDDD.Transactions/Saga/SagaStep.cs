@@ -69,7 +69,9 @@ public class SagaStep
             // （new SagaStep(...) { Timeout = 负值 }）可绕过守卫，声明的不变量被架空。
             // 校验下沉到访问器后覆盖构造器与初始化器两条赋值路径，公共面不变。
             if (value is { } t && t < TimeSpan.Zero)
+#pragma warning disable MA0015 // 属性 setter 的 value 参数；异常指向属性名 Timeout 更可读
                 throw new ArgumentOutOfRangeException(nameof(Timeout), "Timeout must be non-negative.");
+#pragma warning restore MA0015
             _timeout = value;
         }
     }

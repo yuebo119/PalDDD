@@ -46,8 +46,10 @@ public sealed record IdempotencyPolicy
     public void Validate()
     {
         if (Retention < ProcessingTimeout)
+#pragma warning disable MA0015 // Validate() 无参数，异常描述策略配置值；paramName 无可映射形参
             throw new ArgumentException(
                 $"IdempotencyPolicy Retention ({Retention}) must be >= ProcessingTimeout ({ProcessingTimeout}). " +
                 "Retention < ProcessingTimeout allows duplicate execution while the original lease is still active (ITM-216).");
+#pragma warning restore MA0015
     }
 }

@@ -175,7 +175,8 @@ public sealed class CompressionGuardTests
     public async Task CompressionProvider_NullElement_Throws()
     {
         ICompressor[] compressors = [null!];
-        await Assert.That(() => new CompressionProvider(compressors)).Throws<ArgumentNullException>();
+        var ex = await Assert.That(() => new CompressionProvider(compressors)).Throws<ArgumentNullException>();
+        await Assert.That(ex!.Message).Contains("compressors collection contains a null element");
     }
 
     [Test]
