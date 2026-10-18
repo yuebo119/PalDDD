@@ -79,6 +79,12 @@ jobs:
         # 主干。--verify-no-changes 只校验不改写；须在 Build 之后（需先还原/编译）。
         run: dotnet format style PalDDD.slnx --verify-no-changes
 
+      - name: Format verify (whitespace)
+        # 2026-10-18：评估轮实测 3 文件/14 条既存空格违规（ServiceRegistration.cs /
+        # OutboxSqliteConcurrencyTests.cs / StrategicDddAnalyzer.SymbolHelpers.cs），
+        # 修复后接入，防同类漂移。--verify-no-changes 只校验不改写。
+        run: dotnet format whitespace PalDDD.slnx --verify-no-changes
+
       - name: Test (unit + integration)
         # MTP 手写协议：dotnet test 一次只跑一个测试项目（多项目/--collect 批量触发
         # VSTest 握手 → exit 5，本地已实测复现）；PalDDD.Testing 为支持库非测试项目
@@ -327,6 +333,25 @@ jobs:
 
       - name: Run AOT-published binary (AotSample)
         run: ./samples/PalDDD.AotSample/bin/Release/net11.0/linux-x64/publish/PalDDD.AotSample
+
+  quality-analyzers:
+    # 2026-10-18：第三方分析器（Roslynator/Meziantou/Sonar）opt-in 棘轮。
+    # 默认构建仍关闭（EnableQualityAnalyzers=false，零警告契约不变）；本 job 打开后
+    # 按 scripts/quality-analyzer-baseline.txt 只允许不高于基线，防新债务。
+    # 规则子集见 .editorconfig 末节；评估与决策见 docs/quality-tooling-eval-2026-10-18.md。
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '11.0.x'
+
+      - name: Analyzer baseline ratchet
+        run: dotnet run scripts/quality-baseline.cs
 
   coverage:
     # 2026-09-14 接线——此前 `scripts/ci-coverage.cs` 是「脚本就绪但未接线」的已知缺口。

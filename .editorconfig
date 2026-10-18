@@ -49,3 +49,23 @@ dotnet_diagnostic.IDE0160.severity = none
 # samples/ 排除
 [samples/**/*.cs]
 dotnet_diagnostic.S3903.severity = none
+
+# 第三方分析器规则收敛（2026-10-18）：仅在 -p:EnableQualityAnalyzers=true 时生效。
+# 原则：安全/正确性保留 warning（进基线棘轮），风格噪声压 none（占评估基线的四分之三）。
+# 数据与决策见 docs/quality-tooling-eval-2026-10-18.md；基线 scripts/quality-analyzer-baseline.txt。
+[*.cs]
+dotnet_diagnostic.MA0048.severity = none
+dotnet_diagnostic.MA0051.severity = none
+dotnet_diagnostic.MA0004.severity = none
+dotnet_diagnostic.MA0006.severity = none
+dotnet_diagnostic.MA0002.severity = none
+dotnet_diagnostic.S3358.severity = none
+dotnet_diagnostic.S125.severity = none
+dotnet_diagnostic.S1939.severity = none
+dotnet_diagnostic.S3236.severity = none
+dotnet_diagnostic.MA0015.severity = warning
+dotnet_diagnostic.MA0011.severity = warning
+dotnet_diagnostic.S2077.severity = warning
+dotnet_diagnostic.S8949.severity = warning
+dotnet_diagnostic.S8969.severity = warning
+

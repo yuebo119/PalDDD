@@ -371,7 +371,7 @@ public static class ServiceRegistration
     public static IServiceCollection AddPalStreamQueryHandler<TQuery, TItem,
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors
             | DynamicallyAccessedMemberTypes.Interfaces)]
-        THandler>(this IServiceCollection services)
+    THandler>(this IServiceCollection services)
         where TQuery : CQRS.IStreamQuery<TItem>
         where THandler : class, CQRS.IStreamQueryHandler<TQuery, TItem>
     {

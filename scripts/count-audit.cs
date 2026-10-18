@@ -20,9 +20,10 @@
 //      不维护任何第二台账/清单文件——台账必然与真源漂移，这正是要治的病。
 //   2. fail-closed：任一推导取不到值（0 项、依赖文件缺失、异常）→ 整体 FAIL，
 //      不放行。防「判定恒真」式假绿：推导不出来时直接报错，而不是跳过后报绿。
-//   3. 扫描面 = README.md + README.en.md + docs/**，**排除** docs/review/**
+//   3. 扫描面 = README.md + README.en.md + AGENTS.md + docs/**，**排除** docs/review/**
 //      docs/decisions/** docs/migration/** docs/design/**（带日期的历史记录，
-//      数字属于当时的事实，不随现实改写）。
+//      数字属于当时的事实，不随现实改写）。AGENTS.md 为 2026-10-18 审计补入：
+//      Agent 操作规则文件此前不在任何计数扫描面内，ADR 数曾静默漂移 24→31。
 //   4. 不纳入本门禁（声明在 gateForms 覆盖面里）：
 //      · 测试用例数（1502/1490/1379）——需 dotnet test 实测，非静态可推导；
 //      · 架构测试方法数 37——文本 grep 有注释假命中，已由
@@ -41,7 +42,7 @@
 //   诊断 ID 总数          | src/**.cs 引号内 (PDDD|PALID|PALMSG|PALENUM)NNN 去重 | README*.md、conventions、tutorial
 //   PDDD 分析器诊断数     | 同上前缀 PDDD 去重                             | README*.md、conventions、tutorial、testing、development
 //   源生成器诊断数        | 同上 PALID/PALMSG/PALENUM 前缀去重             | README*.md、conventions
-//   ADR 数                | docs/decisions/*.md 计数                       | README*.md、docs/pitfalls.md
+//   ADR 数                | docs/decisions/*.md 计数                       | README*.md、AGENTS.md、docs/pitfalls.md
 //   踩坑一至九章条目数    | pitfalls.md 表 `| **X1** |` 行计数             | docs/pitfalls.md（统计块与合计行）
 //   踩坑第十章条目数      | pitfalls.md 表 `| PALORM-* |` 行计数           | docs/pitfalls.md
 //   踩坑总条目数          | 上两项之和                                     | README*.md、docs/pitfalls.md
@@ -161,7 +162,7 @@ foreach (var file in surface)
     }
 }
 
-Console.WriteLine($"--- 扫描面 {surface.Count} 文件（README.md / README.en.md / docs/** 排除 review·decisions·migration·design）---");
+Console.WriteLine($"--- 扫描面 {surface.Count} 文件（README.md / README.en.md / AGENTS.md / docs/** 排除 review·decisions·migration·design）---");
 
 foreach (var claim in claims.Where(c => !c.Correct))
 {
@@ -184,7 +185,7 @@ if (!ClaimsUsable(claims.Count))
 Console.WriteLine($"PASS count-audit：{items.Count} 项推导 · {surface.Count} 文件 · {claims.Count} 处声明全一致");
 return 0;
 
-// ══════════════ 自测（纯函数，不触文件系统）══════════════
+// ══════════════ 自测（纯函数 + 扫描面夹具）══════════════
 // 正例：真值一致的声明不报错；负例：注入假声明/漂移真值必须报红。
 static int SelfTest()
 {
@@ -222,7 +223,32 @@ static int SelfTest()
         IsExcludedDoc("docs/review/x.md") && IsExcludedDoc("docs/decisions/y.md")
         && IsExcludedDoc("docs/migration/z.md") && IsExcludedDoc("docs/design/w.md"));
     Case("IsExcludedDoc 放行 README 与 pitfalls 等现行文档",
-        !IsExcludedDoc("README.md") && !IsExcludedDoc("docs/pitfalls.md") && !IsExcludedDoc("docs/sql/x.md"));
+        !IsExcludedDoc("README.md") && !IsExcludedDoc("AGENTS.md") && !IsExcludedDoc("docs/pitfalls.md") && !IsExcludedDoc("docs/sql/x.md"));
+
+    // ── 扫描面夹具（2026-10-18：AGENTS.md 纳入；历史目录仍排除）──
+    var surfaceDir = Path.Combine(Path.GetTempPath(), "count-audit-surface-" + Guid.NewGuid().ToString("N")[..8]);
+    try
+    {
+        Directory.CreateDirectory(Path.Combine(surfaceDir, "docs", "review"));
+        Directory.CreateDirectory(Path.Combine(surfaceDir, "docs", "decisions"));
+        File.WriteAllText(Path.Combine(surfaceDir, "README.md"), "");
+        File.WriteAllText(Path.Combine(surfaceDir, "AGENTS.md"), "24 份 ADR\n");
+        File.WriteAllText(Path.Combine(surfaceDir, "docs", "a.md"), "");
+        File.WriteAllText(Path.Combine(surfaceDir, "docs", "review", "x.md"), "");
+        File.WriteAllText(Path.Combine(surfaceDir, "docs", "decisions", "y.md"), "");
+        var surfaceNames = ScanSurface(surfaceDir).Select(Path.GetFileName).ToArray();
+        Case("扫描面含 AGENTS.md（2026-10-18 增）", surfaceNames.Contains("AGENTS.md"));
+        Case("扫描面排除 docs/review 与 docs/decisions",
+            !surfaceNames.Contains("x.md") && !surfaceNames.Contains("y.md"));
+        Case("扫描面含 README.md 与 docs/a.md",
+            surfaceNames.Contains("README.md") && surfaceNames.Contains("a.md"));
+    }
+    finally
+    {
+        try { if (Directory.Exists(surfaceDir)) Directory.Delete(surfaceDir, recursive: true); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
 
     // ── packable 声明模式 ──
     string[] packableOk = ["标准化为 35 个独立 NuGet 包。"];
@@ -257,6 +283,10 @@ static int SelfTest()
     string[] adrBad = ["已沉淀 22 份 ADR。"];
     var adrBadHits = ScanFile("t.md", adrBad, ItemFor("adr", 24));
     Case("adr 负例（22 vs 24 → 红）", adrBadHits.Count == 1 && !adrBadHits[0].Correct);
+
+    string[] adrDate = ["2026-10-18 ADR-031 增"];
+    Case("adr 负例（日期日数 18 不被误抓为 ADR 数）",
+        ScanFile("t.md", adrDate, ItemFor("adr", 31)).Count == 0);
 
     // ── 诊断模式（负向 lookahead 挡「诊断规则」）──
     string[] diagRule = ["审查器共 15 条诊断规则。"];
@@ -376,6 +406,13 @@ static int SelfTest()
 
     Case("CountAssertPoints → 2", CountAssertPoints("await Assert.That(1); await Assert.That(2);") == 2);
     Case("CountAssertPoints 无匹配 → 0", CountAssertPoints("Assert.Equal(1, 2);") == 0);
+
+    string[] srcFilesOk = ["227 源文件·36 项目·0 违规"];
+    Case("src-files 正例（227 源文件 → 对）",
+        ScanFile("t.md", srcFilesOk, ItemFor("src-files", 227)).Count == 1);
+    string[] e5Line = ["E5 源文件裸 LF"];
+    Case("src-files 负例（E5 的 5 不被误抓）",
+        ScanFile("t.md", e5Line, ItemFor("src-files", 227)).Count == 0);
 
     Console.WriteLine($"SELFTEST 汇总 {passed}/{total} 通过");
     return passed == total ? 0 : 2;
@@ -510,10 +547,10 @@ static (string Label, string How, string Surface, string[] Patterns) MetaFor(str
     "adr" => (
         "ADR 数",
         "docs/decisions/*.md 计数",
-        "README*.md、docs/pitfalls.md",
+        "README*.md、AGENTS.md、docs/pitfalls.md",
         [
-            @"(?<![0-9.])(\d+)\s*份\s*ADRs?\b",
-            @"(?<![0-9.])(\d+)\s*ADRs?\b",
+            @"(?<![0-9.-])(\d+)\s*份\s*ADRs?\b",
+            @"(?<![0-9.-])(\d+)\s*ADRs?\b",
             @"decisions/001-(\d+)",
         ]),
     "pitfalls-19" => (
@@ -550,7 +587,7 @@ static (string Label, string How, string Surface, string[] Patterns) MetaFor(str
         "src 源文件数",
         "src/**/*.cs 计数（排除 obj/bin）",
         "docs/conventions.md",
-        [@"(?<![0-9.])(\d+)\s*源文件"]),
+        [@"(?<![A-Za-z0-9.])(\d+)\s*源文件"]),
     _ => throw new ArgumentException($"未知推导项 {key}"),
 };
 
@@ -789,8 +826,8 @@ static bool IsExcludedDoc(string relPath) =>
 
 static IEnumerable<string> ScanSurface(string root)
 {
-    string[] readmes = ["README.md", "README.en.md"];
-    foreach (var name in readmes)
+    string[] topLevel = ["README.md", "README.en.md", "AGENTS.md"];
+    foreach (var name in topLevel)
     {
         var path = Path.Combine(root, name);
         if (File.Exists(path))

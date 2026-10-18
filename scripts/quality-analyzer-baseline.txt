@@ -1,0 +1,4 @@
+# Pal.DDD 第三方分析器警告基线（scripts/quality-baseline.cs）
+# 更新：dotnet run scripts/quality-baseline.cs -- --update
+baseline=280
+measured=2026-10-18
