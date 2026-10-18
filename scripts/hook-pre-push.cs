@@ -2,7 +2,9 @@
 // hook-pre-push.cs——pre-push 钩子判定层（2026-10-08，C# 化替换 42 行 bash）
 // ① main 分支保护（merge-base --is-ancestor：dev 已合入 main 才允许从 main 推送）
 // ② 同步提示（ITM-808：多会话积压的验证债可见性，信息性不阻断）
-// ③ gate-lite CI 预览（快速门禁降级路径）
+// ③ review 新鲜度提示（2026-10-18 增：metrics 最后一轮 >30 天且 src 有变更时告警，
+//    信息性不阻断——review 系统是事件驱动，无法机械强制轮次，但可以让债务可见）
+// ④ gate-lite CI 预览（快速门禁降级路径）
 // .githooks/pre-push 退化为启动器；本文件持有全部判定。
 //
 // 用法：dotnet run scripts/hook-pre-push.cs（由 .githooks/pre-push 启动器 exec）
@@ -13,6 +15,7 @@
 #pragma warning disable CA1303
 
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 
@@ -53,7 +56,21 @@ if (upstream.Length > 0)
         Console.WriteLine($"⚠️  pre-push：本次推送承载 {ahead} 个积压提交——CI（含 aot-verify 真发布）将首次验证这批代码，失败排查面较大；建议日常小批推送。");
 }
 
-// ── ③ gate-lite CI 预览 ──
+// ── ③ review 新鲜度提示（信息性不阻断）──
+// metrics 停在 v91（2026-09-19）而 10 月有 v4.0.0/ADR-030/031 等 src 变更——
+// 四系统里的 review 实际处于停摆，但没有任何地方会提醒。此段只报事实，不判定。
+var metricsPath = Path.Combine(root, ".ai", "review", "metrics.md");
+if (File.Exists(metricsPath))
+{
+    var lastSrcDate = Git("log", "-1", "--format=%cs", "--", "src");
+    var (reviewWarning, reviewDays) = ReviewFreshness(
+        File.ReadAllLines(metricsPath), lastSrcDate,
+        DateOnly.FromDateTime(DateTime.UtcNow), thresholdDays: 30);
+    if (reviewWarning is not null)
+        Console.WriteLine($"⚠️  pre-push：{reviewWarning}（最后一轮距今 {reviewDays} 天；不阻断，登记豁免或补轮次即可）");
+}
+
+// ── ④ gate-lite CI 预览 ──
 Console.WriteLine("🔍 gate-lite（CI 降级门禁预览）…");
 var psi = new ProcessStartInfo("dotnet", "run scripts/gate-lite.cs")
 {
@@ -127,6 +144,30 @@ static int GitExitCode(params string[] arguments)
 static int ParseCount(string s) =>
     int.TryParse(s.Trim(), System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 0;
 
+// review 新鲜度纯函数（2026-10-18 增）：metrics 最后一轮日期 vs 最近 src 提交日期。
+// 返回 (warning, days)；不满足告警条件时 warning=null。语义：
+//   · 无 metrics / 无 src 提交 → 不告警（无法判断，不给假信号）
+//   · 最后一轮在阈值内 → 不告警
+//   · 超过阈值但最后一轮之后 src 无变更 → 不告警（没有待评审的 src 变化）
+//   · 超过阈值且最后一轮之后 src 有变更 → 告警（review 债可见）
+static (string? Warning, int Days) ReviewFreshness(
+    IEnumerable<string> metricsLines, string lastSrcDate, DateOnly today, int thresholdDays)
+{
+    DateOnly? lastRound = null;
+    foreach (var line in metricsLines)
+    {
+        var m = Regex.Match(line, @"^\|\s*v\d+[^|]*\|\s*(\d{4}-\d{2}-\d{2})\s*\|");
+        if (m.Success && DateOnly.TryParse(m.Groups[1].Value, out var d)
+            && (lastRound is null || d > lastRound.Value))
+            lastRound = d;
+    }
+
+    if (lastRound is null || !DateOnly.TryParse(lastSrcDate, out var srcDate)) return (null, 0);
+    var days = today.DayNumber - lastRound.Value.DayNumber;
+    if (days <= thresholdDays || srcDate <= lastRound.Value) return (null, days);
+    return ($"review 债：metrics 最后一轮 {lastRound:yyyy-MM-dd}（{days} 天前），src 最近提交 {srcDate:yyyy-MM-dd}", days);
+}
+
 // ─── selftest：计数解析纯函数正负例（gate-audit SELFTEST 判定面）───
 static int RunSelftest()
 {
@@ -141,6 +182,18 @@ static int RunSelftest()
     Case(ParseCount(" 12 ") == 12, true, "计数解析含空白");
     Case(ParseCount("") == 0, true, "空串兜底 0（git 失败不阻断提示）");
     Case(ParseCount("abc") == 0, true, "非数字兜底 0");
+
+    // review 新鲜度（2026-10-18 增）
+    var today = new DateOnly(2026, 10, 18);
+    string[] metrics = ["| v91 | 2026-09-19 | 全量 |", "| v90 | 2026-09-19 | 全量 |"];
+    Case(ReviewFreshness(metrics, "2026-10-01", today, 30).Warning is null,
+        true, "review 新鲜度：最后一轮在阈值内不告警");
+    var stale = ReviewFreshness(["| v91 | 2026-09-01 | 全量 |"], "2026-10-01", today, 30);
+    Case(stale.Warning is not null && stale.Days == 47, true, "review 新鲜度：超 30 天且 src 有变更 → 告警");
+    Case(ReviewFreshness(["| v91 | 2026-09-01 | 全量 |"], "2026-08-01", today, 30).Warning is null,
+        true, "review 新鲜度：超期但 src 无新变更 → 不告警");
+    Case(ReviewFreshness([], "2026-10-01", today, 30).Warning is null,
+        true, "review 新鲜度：无 metrics → 不告警（不给假信号）");
 
     Console.WriteLine($"═══════ HOOK-PRE-PUSH SELFTEST：{(failures.Count == 0 ? "全部通过" : $"{failures.Count} 例失败")} ═══════");
     foreach (var f in failures) Console.WriteLine("  FAIL " + f);

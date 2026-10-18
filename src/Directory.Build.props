@@ -1,0 +1,20 @@
+<Project>
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <!-- 2026-10-18 代码质量轮：第三方 Roslyn 分析器（仅 src，测试与 bench 走各自 props）。
+       PalDDD.Analyzers / PalDDD.Analyzers.CodeFixes 本身是分析器工程，不再叠加，
+       避免 CodeAnalysis 版本与自身依赖冲突。
+       默认关闭：本仓 TreatWarningsAsErrors=true，直接常开会让新规则警告变成构建错误。
+       规则子集（.editorconfig 末节）与基线棘轮（scripts/quality-baseline.cs，当前基线见
+       scripts/quality-analyzer-baseline.txt）已落地；默认仍关闭以保住零警告契约，
+       CI 的 quality-analyzers job 只允许不高于基线。 -->
+  <PropertyGroup>
+    <EnableQualityAnalyzers Condition="'$(EnableQualityAnalyzers)' == ''">false</EnableQualityAnalyzers>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(EnableQualityAnalyzers)' == 'true' And !$(MSBuildProjectName.Contains('Analyzers')) And '$(MSBuildProjectName)' != 'PalDDD.Base' And '$(MSBuildProjectName)' != 'PalDDD.Extension'">
+    <PackageReference Include="Roslynator.Analyzers" PrivateAssets="all" />
+    <PackageReference Include="Meziantou.Analyzer" PrivateAssets="all" />
+    <PackageReference Include="SonarAnalyzer.CSharp" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

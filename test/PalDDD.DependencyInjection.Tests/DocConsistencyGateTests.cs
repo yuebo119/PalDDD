@@ -417,8 +417,10 @@ public sealed class DocConsistencyGateTests
     // D12：计数自激振荡锚（PD34——修复轮自己的提交增删计数对象，裸数字注定振荡）
     // ═══════════════════════════════════════════════════════════════
 
-    /// <summary>D12a 声称提取正则：与 python 同口径（(?&lt;![0-9.]) 跳过章节号尾巴如 "3.6 测试方法命名"）。</summary>
-    private static readonly Regex s_claimPattern = new(@"(?<![0-9.])[0-9]+ ?个?(测试)?方法", RegexOptions.Compiled);
+    /// <summary>D12a 声称提取正则：与 python 同口径（(?&lt;![0-9.]) 跳过章节号尾巴如 "3.6 测试方法命名"）。
+    /// 2026-10-18 收紧：排除规则 ID 前缀（"MA0051 方法过长" 的 0051 不是测试方法数声称——
+    /// 质量工具评估文档加入 docs/ 顶层后当场误判，D12a 从红起步证明该形态存在）。</summary>
+    private static readonly Regex s_claimPattern = new(@"(?<![0-9A-Za-z.])[0-9]+ ?个?(测试)?方法", RegexOptions.Compiled);
 
     /// <summary>D12b 违规口径：ConfigureAwait 行含裸数字"N 处 / N+ 处"（每次提交都漂移，锚数字必振荡）。</summary>
     private static readonly Regex s_configureAwaitBareNumber = new(@"[0-9]+\+? ?处", RegexOptions.Compiled);
@@ -473,6 +475,10 @@ public sealed class DocConsistencyGateTests
 
         var sectionTail = s_claimPattern.Matches("### 3.6 测试方法命名");
         await Assert.That(sectionTail.Count).IsEqualTo(0);
+
+        // 2026-10-18：规则 ID 前缀不是方法数声称（MA0051 方法过长 / S125 注释掉的代码）
+        var ruleId = s_claimPattern.Matches("MA0051 方法过长（风格）");
+        await Assert.That(ruleId.Count).IsEqualTo(0);
     }
 
     private sealed record DocClaim(string File, int Line, string Text, int Number);

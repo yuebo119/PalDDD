@@ -35,7 +35,7 @@
 |---|------|---------|---------|
 | 1 | `secret-scan` | 每次 | 受跟踪文件里的高置信硬编码凭据 |
 | 2 | `encoding-gate` | 每次 | E1 CRLF(.sh/.py) · E2 BOM(.cs) · E3 mojibake(.cs) · E4 .verified 非 LF · E5 源文件裸 LF(.md/.cs/.csproj/.targets 等,2026-09-14 增) |
-| 3 | `verify-ai` | 检测到 `.ai/` 目录时每次 | V1–V25 系统一致性（账本/传感器台账/提示词/死引用/命令形态）。2026-09-22 T-35 增：`.ai` 裁决为独立 git 库 ⇒ 永不进 CI，此前无任何自动执行路径 |
+| 3 | `verify-ai` | 检测到 `.ai/` 目录时每次 | V1–V30 系统一致性（账本/传感器台账/提示词/死引用/命令形态 + V30 知识层锚点对账）。2026-09-22 T-35 增：`.ai` 裁决为独立 git 库 ⇒ 永不进 CI，此前无任何自动执行路径 |
 | 4 | `guard.cs` | `.cs` 入暂存集 | 8 道守卫测试 + 守卫命名类（`*GateTests`/`*GuardTests`/`ArchitectureBoundaryTests`）注册完整性核查 |
 | 5 | `test-change-guard` | `test/` 有修改或删除 | 只改测试不改 `src/`（改测试修绿签名）。豁免：`ALLOW_TEST_ONLY_CHANGE=1` |
 | 6 | `xml-guard` | xml 系扩展名入暂存集 | XML 非良构（`.csproj/.props/.slnx/.targets/.xml`） |
@@ -43,7 +43,7 @@
 | 8 | `dapper-param-guard` | `src/PalDDD.Dapper*/` 入暂存集 | 匿名 Dapper 参数枚举直传（Dapper.AOT 拦截器直传驱动，PG 拒绝——CI #94 根因，2026-09-14 增） |
 | 9 | `config-policy` | `.github/dependabot.yml` 或 `Directory.Build.*` 入暂存 | A dependabot `groups`/`ignore` 双词表混用 + `versions`/`labels`/`prefix`/`interval` 缺失或空（报行号）；B 根 `Directory.Build.*` 的 `<Exec>` 无 `IgnoreExitCode` 且所属 Target 无 `GITHUB_ACTIONS` 跳过。两事故实证：词表错值只在默认分支由 Dependabot 报出 + Exec 副作用经 `-warnaserror` 打断 v3.1.0 发布链（2026-09-25 增） |
 | 10 | `license-policy` | `Directory.Packages.props` 或任一 `*.csproj` 入暂存 | 依赖许可：非白名单 SPDX 表达式（deny-by-default）· 包级禁令命中（`Verify`/`Verify.TUnit` ≥ 33，SponsorCheck 商业门——nuspec 仍是 MIT 故只有禁令能拦）· gap 台账到期未处置 · nuspec 缺失/推不出标识的 fail-closed。退出码 0/1/2（2=自测失败）。裁决 2026-09-25「所有引用的库必须是开源的许可，不使用商业许可」（2026-09-25 增） |
-| 11 | `count-audit` | `README*.md` 或 `docs/**` 入暂存 | 文档计数声明与源码推导一致：16 项推导真值（可打包包数/项目数/prompt/遥测计数器/诊断 ID/ADR/踩坑条目/断言点/源文件数等，推导表在脚本内=单一真源，不建第二台账）↔ 扫描面（README*/docs，排除 `review`/`decisions`/`migration`/`design` 历史目录）声明核对——写了必须与推导一致、缺失不算错（PD34），失实报 `文件:行号：声明 X vs 推导 Y`；推导 0 值/异常/依赖文件缺失 fail-closed。退出码 0/1/2（2=自测失败）。2026-09-25 增 |
+| 11 | `count-audit` | `README*.md` 或 `docs/**` 入暂存 | 文档计数声明与源码推导一致：16 项推导真值（可打包包数/项目数/prompt/遥测计数器/诊断 ID/ADR/踩坑条目/断言点/源文件数等，推导表在脚本内=单一真源，不建第二台账）↔ 扫描面（README*/AGENTS.md/docs，排除 `review`/`decisions`/`migration`/`design` 历史目录）声明核对——写了必须与推导一致、缺失不算错（PD34），失实报 `文件:行号：声明 X vs 推导 Y`；推导 0 值/异常/依赖文件缺失 fail-closed。退出码 0/1/2（2=自测失败）。2026-09-25 增 |
 | 12 | `new-skip-guard` | `test/**.cs` 入暂存 | 新增 Skip 标注拦截（以 Skip 修绿的隐性形态，test-change-guard 抓不到——正常 TDD 节奏下新增 Skip 完全绕行）：`[Skip(` / `Skip = "` / `.Skip("` / `Skip.If(` 四形态按**净增口径**判定（增删相抵放行，修改既有 Skip 的 reason 不误伤）；LINQ `.Skip(1)` 零误伤（形态 3 要求引号实参）。豁免：`ALLOW_NEW_SKIP=1` + 提交信息写理由与**到期日**（对齐 T-24 观察态纪律，无到期日的临时 Skip 就是审计实证 Skip 9→16 的积累路径）。CI 无补偿（`git diff --cached` 语义在 CI checkout 不存在，与 test-change-guard 同口径，残余风险=--no-verify）。Pal 会话审计 2026-09-25 立法（2026-09-25 增） |
 
 > **TOOL 类脚本**（不进门禁表，按需人工运行）：`scripts/review-coverage-report.cs` 沉寂面报告——差分评审对长期未变更文件结构性失明（审计实证：28 处门禁存量假绿全部集中在 MIG-012 后未动的文件），发布 tag 前/大迁移收尾后运行，对 Top 沉寂文件定向抽查（见 `docs/release.md` §4.1 步骤 5.6）。
@@ -121,7 +121,7 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 | **性能预算契约（EPSL）** | `perf-budgets.md`（根目录；分配判定层预算，与既有 `--smoke` 断言对齐） |
 | **性能台账（勿重开/明确不做）** | `.ai/perf-ledger.md`（提性能建议前必查，防重复提案） |
 | **性能实测记录** | `docs/performance.md`（22 基准类、真库车道、统计有效性自评） |
-| 已定的架构决策（含被否决方案） | `docs/decisions/`（24 份 ADR，2026-09-19 ADR-024 增） |
+| 已定的架构决策（含被否决方案） | `docs/decisions/`（31 份 ADR，2026-10-18 ADR-031 增） |
 | 历轮评审与清单 | `docs/review/`（含 `NAMING.md` 命名约定与索引） |
 | 迁移与发布 | `docs/migration/`、`docs/release.md` |
 | 已知坑 | `docs/pitfalls.md` |
