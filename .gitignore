@@ -39,6 +39,10 @@ test-results/
 BenchmarkDotNet.Artifacts/
 **/BenchmarkDotNet.Artifacts/
 
+# EPSL 结果归档三层（v1.6）：报告/日志可再生且体量大，不入库；数据真源放 bench/results/
+bench/reports/
+bench/logs/
+
 # Verify 快照比对失败产物（比对未过时生成，审阅后应删除——VerifyChecks 自检要求）
 *.received.*
 *.received/

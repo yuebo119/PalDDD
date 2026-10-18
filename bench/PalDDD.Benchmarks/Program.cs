@@ -368,7 +368,7 @@ internal static class SmokeBenchmarks
     // 分配预算（B/op，2026-10-08 rc.1 校准；基线实测：Success 0.000088 / Failed 40.000 /
     // FromValue 0.00004 / RaiseEvent 128.001）。预算语义对齐 AllocationContractTests：
     // 上界含安全余量，只拦截大幅回归（误引入容器扩容/装箱量级），精确预算由正式基准承载。
-    // 超限退出码 1——使 smoke 具备人工 TOOL 门禁资格（conventions §10.6 口径，未接 CI）。
+    // 超限退出码 1——使 smoke 具备门禁资格（conventions §10.6；2026-10-18 接入 CI perf-smoke）。
     public static int Run()
     {
         Console.WriteLine($"PalDDD benchmark smoke run: {Iterations:N0} iterations");

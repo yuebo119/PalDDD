@@ -1,22 +1,24 @@
 # 性能实测记录
 
-> 日期：2026-10-08  
-> 环境：Windows 10 x64（AMD Ryzen 9 8945HX，32 逻辑核）；.NET SDK 11.0.100-rc.1.26425.128；BenchmarkDotNet 0.15.8（InProcessEmitToolchain）  
+> 日期：2026-10-08（环境行 2026-10-18 校正：SDK rc.2 / BDN 0.16.0-preview.2；下方历史轮次保留当时环境）
+> 环境：Windows 10 x64（AMD Ryzen 9 8945HX，32 逻辑核）；.NET SDK 11.0.100-rc.2.26504.105；BenchmarkDotNet 0.16.0-preview.2（InProcessEmitToolchain）
 > 历史口径：2026-06-28 轮（SDK 11.0.100-preview.5）数字见下文「历史烟测归档」与「已有 BenchmarkDotNet 产物」
 
-## 当前结论
+## 当前结论（2026-10-08 首轮；2026-10-18 口径校正见下）
 
-2026-10-08 性能测试系统优化后，**22 个基准类（Framework 5 + App 2 + Infra 7 + Persistence 3 + SagaLane 1 + Concurrency 2 + Remote 2）全部具备正式报告入口**：`--framework` / `--app` / `--infra` / `--concurrency` / `--persist-pg` / `--persist-mysql` / `--persist` / `--persist-medium` / `--saga` / `--compression` 以模式级 ManualConfig（`Job.MediumRun` + InProcessEmitToolchain + MemoryDiagnoser）绕过 net11-rc moniker 限制（默认 Switcher 入口仍不可用；根因与 jobs-union 双 job 坑详见 `bench/PalDDD.Benchmarks/Program.cs` 头注——类级 `[ShortRunJob]` 已全部移除，同 `--persist` 五十四轮先例）。`--smoke` 新增分配预算断言（Success/FromValue ≤1、Failed ≤50、RaiseEvent ≤140 B/op，超限退出码 1；变异验红实证：预算压至 1 时 RaiseEvent 判 ⛔ 退出码 1；R1 轮 2026-10-14 增 Start* 遥测入口 ≤1 B/op 两条——断言落 bench 进程：测试宿主订阅全局 ActivitySource 使 HasListeners 恒真，旧码 int tag 装箱 24.000/24.002 B/op 判红、守卫前置后 0 过）。
+**2026-10-18 当前口径**：**37 个基准类**（Framework 5 + App 2 + Feature 5 + Infra 7 + Persistence 4 + SagaLane 1 + Concurrency 2 + Remote 5 + Delivery 3 + Comparison 2 + Stream 1），入口以 `bench/PalDDD.Benchmarks/Program.cs` 为单一真源；`--smoke` 6/6 分配预算已接入 CI `perf-smoke`（每次提交）；BDN 0.16.0-preview.2 已恢复默认 Switcher 入口（2026-10-17），显式 InProcess 路径保留；EPSL v1.6 系统对账与修复见 `docs/review/review-2026-10-18-epsl-system.md`。下面 2026-10-08 段保留首轮口径（22 类），不回溯改写。
 
-**同日缺口补齐轮**：新增 `--app` 车道（DispatcherBenchmarks + SerializationBenchmarks——CQRS 分发链与消息序列化此前是消息发布路径的两大缺位面：分发仅有 <500B 分配契约无计时，序列化零数据）；CompressionBenchmarks 补 LZ4/ZStandard 原生绑定四项（同一 Provider 五算法同负载可比，此前 README 宣传的原生绑定零基准）；`--concurrency` 车道（Outbox N worker 租约争用，InMemory 簿记层 + Dapper SQLite 真库层）把「多实例并发发布零丢失零重复」从正确性主张升级为性能数据——**不变量每 wave 成立（800/800 精确租走、零重复守卫全程未触发），性能形态两层分化**：InMemory 8 worker 退化 1.5×（锁竞争正常量级），Dapper SQLite 多连接并发退化 **25×**（158ms vs 串行 6.2ms——busy 等待升级延迟所致，单机 SQLite 单写者的真实最坏形态）。**后续追加**：Inbox 编排层入 `--infra`（首投 163ns/600B、重复拒绝 3-op 236ns，Error <2%）；`--persist-pg` / `--persist-mysql` 网络真库车道**建成并完成首轮真跑**（wslc 外部实例路径：`PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` 环境变量 + 库名 palddd_bench 白名单守卫，Testcontainers 路径保留给 Docker 环境）——多实例租约三形态落地：**PG 真并行（4W 中位 ~2.8×）/ MySQL Dapper 栈 N≥2 InnoDB 死锁（ADR-024 取舍的并发新实证）/ SQLite 25× busy 平台期**，详见 PG/MySQL 真库基线段。「22 类全覆盖」指**运行入口覆盖**，特性面仍非全覆盖——剩余缺口见「未完成项」清单。
+2026-10-08 性能测试系统优化后，**22 个基准类（Framework 5 + App 2 + Infra 7 + Persistence 3 + SagaLane 1 + Concurrency 2 + Remote 2）全部具备正式报告入口**：`--framework` / `--app` / `--infra` / `--concurrency` / `--persist-pg` / `--persist-mysql` / `--persist` / `--persist-medium` / `--saga` / `--compression` 以模式级 ManualConfig（`Job.MediumRun` + InProcessEmitToolchain + MemoryDiagnoser）绕过 net11-rc moniker 限制（当时 BDN 0.15.8 默认 Switcher 入口不可用；2026-10-17 升 0.16.0-preview.2 后已恢复；根因与 jobs-union 双 job 坑详见 `bench/PalDDD.Benchmarks/Program.cs` 头注——类级 `[ShortRunJob]` 已全部移除，同 `--persist` 五十四轮先例）。`--smoke` 新增分配预算断言（Success/FromValue ≤1、Failed ≤50、RaiseEvent ≤140 B/op，超限退出码 1；变异验红实证：预算压至 1 时 RaiseEvent 判 ⛔ 退出码 1；R1 轮 2026-10-14 增 Start* 遥测入口 ≤1 B/op 两条——断言落 bench 进程：测试宿主订阅全局 ActivitySource 使 HasListeners 恒真，旧码 int tag 装箱 24.000/24.002 B/op 判红、守卫前置后 0 过）。
+
+**同日缺口补齐轮**：新增 `--app` 车道（DispatcherBenchmarks + SerializationBenchmarks——CQRS 分发链与消息序列化此前是消息发布路径的两大缺位面：分发仅有 <500B 分配契约无计时，序列化零数据）；CompressionBenchmarks 补 LZ4/ZStandard 原生绑定四项（同一 Provider 五算法同负载可比，此前 README 宣传的原生绑定零基准）；`--concurrency` 车道（Outbox N worker 租约争用，InMemory 簿记层 + Dapper SQLite 真库层）把「多实例并发发布零丢失零重复」从正确性主张升级为性能数据——**不变量每 wave 成立（800/800 精确租走、零重复守卫全程未触发），性能形态两层分化**：InMemory 8 worker 退化 1.5×（锁竞争正常量级），Dapper SQLite 多连接并发退化 **25×**（158ms vs 串行 6.2ms——busy 等待升级延迟所致，单机 SQLite 单写者的真实最坏形态）。**后续追加**：Inbox 编排层入 `--infra`（首投 163ns/600B、重复拒绝 3-op 236ns，Error <2%）；`--persist-pg` / `--persist-mysql` 网络真库车道**建成并完成首轮真跑**（wslc 外部实例路径：`PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` 环境变量 + 库名 palddd_bench 白名单守卫，Testcontainers 路径保留给 Docker 环境）——多实例租约三形态落地：**PG 真并行（4W 中位 ~2.8×）/ MySQL Dapper 栈 N≥2 InnoDB 死锁（ADR-024 取舍的并发新实证）/ SQLite 25× busy 平台期**，详见 PG/MySQL 真库基线段。「22 类全覆盖」（2026-10-08 口径；2026-10-18 为 37 类，见上）指**运行入口覆盖**，特性面仍非全覆盖——剩余缺口见「未完成项」清单。
 
 统计有效性自评（testing.md §五判据套用首轮实测）：绝大多数基准 Error/Mean < 5%（App 车道与框架微基准全部 <1%）；5~15% 可接受带若干项（Outbox.AddSingleMessage 12%、Configuration.Pg 11%、SmartEnum.AllValues 5%、并发 InMemory 4W 13.4% 等，报告标注环境敏感）；**>15% 统计无效 2 项**——SmartEnum.FromValue_Known 24.8% / TryFromValue_Valid 25.9%（ns 级零分配操作的固有抖动，判定以零分配事实为准，引用其计时时需先提升配置）；ValueObject 三项为 ZeroMeasurement（BDN 标注与空方法不可区分，值即 ~0）。Medium 口径跨跑稳定性：`--framework` 二跑关键值跨跑差 AddSingleEvent 0.7% / Create 1.6% / Success 3.5%（对照 ShortRun 历史 53% 跨轮差，medium 裁决实证成立）。
 
 另：SmartEnum 三方法（FromValue/TryFromValue/AllValues）历史产物 NA 的根因已修——基类继承的静态方法调用不触发派生类静态构造器，注册未执行即调用；`[GlobalSetup]` 触碰静态字段强制注册先于全部基准（根因注释见 FrameworkBenchmarks.cs）。
 
-## 当前烟测结果（2026-10-08，3 轮取中位）
+## 烟测结果（2026-10-08，3 轮取中位；2026-10-14 增两条遥测预算后为 6 项）
 
-命令：`dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj -- --smoke`（带分配预算断言，本轮 4/4 预算内、退出码 0）
+命令：`dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj -- --smoke`（带分配预算断言，本轮 4/4 预算内、退出码 0；2026-10-14 起 6/6，2026-10-18 接入 CI `perf-smoke`）
 
 | 测量项 | 迭代次数 | 耗时（3 轮中位） | 当前线程分配 |
 |---|---:|---:|---:|
@@ -732,10 +734,10 @@ P1 后框架可控成本占比与残余分配归属各做一次专门测量，�
 
 ## 未完成项
 
-1. ~~等 BenchmarkDotNet 支持当前 .NET 11 后用默认入口重新生成全部 benchmark 类结果~~（2026-10-08 大部分消解：17 类经 InProcess 显式模式全部可出正式报告；残余 = 默认 Switcher 入口与类级 job 注解的恢复，待 BDN 上游补 net11 moniker 或 .NET 11 GA 后实测，见 `docs/migration/net11-ga-upgrade-plan.md` 步骤 3）。
+1. ~~等 BenchmarkDotNet 支持当前 .NET 11 后用默认入口重新生成全部 benchmark 类结果~~（2026-10-08 大部分消解：17 类经 InProcess 显式模式全部可出正式报告；**2026-10-17 BDN 0.16.0-preview.2 已恢复默认 Switcher 入口**（`--list` 实测 exit 0），显式 InProcess 路径保留为口径配置；类级 job 注解仍按 Medium 显式 config 承载，不再依赖 attribute）。
 2. SmartEnum.FromValue/TryFromValue 两项 Error/Mean >15%（ns 级固有抖动）：如需正式引用其计时，提升配置（严格档 5/10/15）复测；当前以零分配事实为准。
 3. 保留 `--smoke` 作为秒级趋势检查 + 分配预算判定（2026-10-08 起带断言）；计时为单轮无统计效力，不替代正式报告。
-4. **特性面缺口登记（2026-10-09 收尾轮，防「30 类全覆盖」被误读为特性面全覆盖）**：~~①~⑤⑧~~（全部落地）；⑦ 四栈/方言面收尾——Dapper+PalORM 双栈 PG/MySQL 真跑 ✓ + **EventLog/Idempotency 真库层补齐 ✓**（2026-10-09 后段：双栈四格全出数，见 EventLog/Idempotency 口袋注）、EF 栈**租约 SQL 形态**验证 ✓（`MySqlSkipLockedShapeBenchmarks`：零死锁+互斥+1.75× 加速）、PG 方言特性 ✓（Pipeline 单往返/读写分离路由/LISTEN-NOTIFY 往返，COPY 隐含在种子路径）。**死锁已裁决并落地（ADR-025）**：版本探测双模板使 Dapper/PalORM MySQL ≥8.0.18 进入 SKIP LOCKED 形态（复跑双栈死锁归零，见 ADR-025 落地复跑注），ADR-024 对 <8.0.18/MariaDB 回退路径继续有效。**登记残余（四项，均有上游/量纲理由）**：① EF 栈级车道待 Npgsql.EF/Pomelo 出 EF 11 rc 配套版（2026-10-09 实证 NU1107/NU1102，SQL 形态车道先行为其等价物）；② `PostgreSqlOutboxNotifier` 服务化推送延迟（LISTEN-NOTIFY 底层能力已测 461μs；服务化形态属异步服务量纲，归集成测试）；③ **mysql:8.0.17 旧版镜像回归**（ADR-025 后续动作 2：验证回退模板行为与现状逐字一致，需拉取旧版镜像）；④ broker 发布路径（Kafka/RabbitMQ 需 broker 环境，正确性已由 Messaging.Integration 覆盖，性能归有 broker 环境时补）。另：PG Dapper 并发组 Error >15% 点值待严格档复测、8W 回落形态待复测；READ COMMITTED 对照实验留档于 ADR-025 被否决方案。
+4. **特性面缺口登记（2026-10-09 收尾轮，防「30 类全覆盖」被误读为特性面全覆盖；2026-10-18 口径为 37 类）**：~~①~⑤⑧~~（全部落地）；⑦ 四栈/方言面收尾——Dapper+PalORM 双栈 PG/MySQL 真跑 ✓ + **EventLog/Idempotency 真库层补齐 ✓**（2026-10-09 后段：双栈四格全出数，见 EventLog/Idempotency 口袋注）、EF 栈**租约 SQL 形态**验证 ✓（`MySqlSkipLockedShapeBenchmarks`：零死锁+互斥+1.75× 加速）、PG 方言特性 ✓（Pipeline 单往返/读写分离路由/LISTEN-NOTIFY 往返，COPY 隐含在种子路径）。**死锁已裁决并落地（ADR-025）**：版本探测双模板使 Dapper/PalORM MySQL ≥8.0.18 进入 SKIP LOCKED 形态（复跑双栈死锁归零，见 ADR-025 落地复跑注），ADR-024 对 <8.0.18/MariaDB 回退路径继续有效。**登记残余（四项，均有上游/量纲理由）**：① EF 栈级车道待 Npgsql.EF/Pomelo 出 EF 11 rc 配套版（2026-10-09 实证 NU1107/NU1102，SQL 形态车道先行为其等价物）；② `PostgreSqlOutboxNotifier` 服务化推送延迟（LISTEN-NOTIFY 底层能力已测 461μs；服务化形态属异步服务量纲，归集成测试）；③ **mysql:8.0.17 旧版镜像回归**（ADR-025 后续动作 2：验证回退模板行为与现状逐字一致，需拉取旧版镜像）；④ broker 发布路径（Kafka/RabbitMQ 需 broker 环境，正确性已由 Messaging.Integration 覆盖，性能归有 broker 环境时补）。另：PG Dapper 并发组 Error >15% 点值待严格档复测、8W 回落形态待复测；READ COMMITTED 对照实验留档于 ADR-025 被否决方案。
 5. **全量复跑轮新登记（2026-10-10）**：① coverage × strict 车道级不兼容——InProcess 单基准 5 分钟硬上限对 ns 级快类（自动放大至百万 ops/迭代）不适用，处置 = coverage 恒 medium 档（发现②，本轮 medium 实测通过）；~~② PalORM 远程 EventLog/Idempotency 约 2× 偏移待专项 A/B 归因~~（**2026-10-11 T0.1 归因收口：参照系勘正非回归**，见「T0.1 归因结论」段；结构性 2× 差距转正为 T2.2 优化靶点——PalORM 单语句 Any 追加移植）。
 
 ## 发布判断
