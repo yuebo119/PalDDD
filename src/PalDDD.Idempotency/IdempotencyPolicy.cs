@@ -48,7 +48,6 @@ public sealed record IdempotencyPolicy
         if (Retention < ProcessingTimeout)
             throw new ArgumentException(
                 $"IdempotencyPolicy Retention ({Retention}) must be >= ProcessingTimeout ({ProcessingTimeout}). " +
-                "Retention < ProcessingTimeout allows duplicate execution while the original lease is still active (ITM-216).",
-                nameof(Retention));
+                "Retention < ProcessingTimeout allows duplicate execution while the original lease is still active (ITM-216).");
     }
 }

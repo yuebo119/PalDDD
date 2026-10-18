@@ -57,7 +57,7 @@ internal static class DapperAotInitializer
     }
 
     /// <summary>将 Ulid 转为 string，适配 SQLite TEXT 列参数绑定。</summary>
-    public static object ToSqliteParameter(PalUlid value) => value.ToString();
+    public static object ToSqliteParameter(PalUlid value) => value.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>将 Guid 转为 string，适配 SQLite TEXT 列参数绑定。</summary>
     public static object ToSqliteParameter(Guid value) => value.ToString("D", CultureInfo.InvariantCulture);

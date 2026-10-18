@@ -270,10 +270,10 @@ public class PalOrmEventLog<TProvider> : IEventLog
             sql.Append('(');
             object?[] values =
             [
-                e.EventId.ToString(), e.EventName, streamName, currentVersion + 1 + i,
+                e.EventId.ToString(null, System.Globalization.CultureInfo.InvariantCulture), e.EventName, streamName, currentVersion + 1 + i,
                 e.SchemaVersion, e.ContentType, e.PayloadArray, e.MetadataArray,
                 now, e.Audit.ActorId, e.Audit.Reason,
-                e.Audit.CorrelationId?.ToString(), e.Audit.CausationId?.ToString(),
+                e.Audit.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture), e.Audit.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
                 e.Audit.TraceParent, e.Audit.TraceState
             ];
             for (var c = 0; c < values.Length; c++)
@@ -351,8 +351,8 @@ public class PalOrmEventLog<TProvider> : IEventLog
                 RecordedAt = now,
                 ActorId = e.Audit.ActorId,
                 Reason = e.Audit.Reason,
-                CorrelationId = e.Audit.CorrelationId?.ToString(),
-                CausationId = e.Audit.CausationId?.ToString(),
+                CorrelationId = e.Audit.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+                CausationId = e.Audit.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
                 TraceParent = e.Audit.TraceParent,
                 TraceState = e.Audit.TraceState,
             };

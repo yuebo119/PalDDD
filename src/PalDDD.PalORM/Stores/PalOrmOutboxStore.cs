@@ -229,7 +229,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         // ⚠️ SET/WHERE 只插值"值"（参数位合法）；SQL 片段变量会被 PalORM 整体参数化成
         // SET @pN 语法错误（十七轮实证，见 PalOrmSagaStateStore PD18 注释）。
         // v4.0 ③（ADR-026）：同步阻塞桥（GetAwaiter().GetResult()）删除，直连异步原语
-        var id = message.Id.ToString();
+        var id = message.Id.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
         var retry = message.RetryCount;
         var owner = message.LockedBy;
         var until = message.LockedUntil;
@@ -274,7 +274,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         // 三十四轮 ITM-210 token 化：同 MarkProcessed——retry_count 乐观锁 + 租约 token 双守卫
         //（SET/WHERE 只插值"值"；SQL 片段变量会被 PalORM 整体参数化成语法错误，见 MarkProcessed 注释）
         // v4.0 ③（ADR-026）：同步阻塞桥删除，直连异步原语
-        var id = message.Id.ToString();
+        var id = message.Id.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
         var retry = message.RetryCount;
         var owner = message.LockedBy;
         var until = message.LockedUntil;
@@ -321,7 +321,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         var leaseOwner = message.LockedBy;
         var leaseUntil = message.LockedUntil;
         var statusPending = (int)OutboxStatus.Pending;
-        var id = message.Id.ToString();
+        var id = message.Id.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
         // P3 修复（九轮→十轮修正）：SQL 先行且按受影响行数门控内存同步——守卫拦截
         // （租约被抢占，affected=0）时内存对象保持抢占前的真实状态（镜像
         // PalOrmIdempotencyStore 的 affected>0 模式）。
@@ -382,7 +382,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         var audit = $"requeued by {retriedByToken} at {now:O}";
         // 条件 UPDATE：status=Dead(2) 守卫防止重复重投；返回受影响行数用于幂等判断
         return await Session.ExecuteAsync(
-            $"UPDATE outbox_messages SET status = {(int)OutboxStatus.Pending}, processed_at = NULL, error = {audit}, next_attempt_at = {nextAttemptAt}, locked_by = NULL, locked_until = NULL WHERE id = {messageId.ToString()} AND status = {(int)OutboxStatus.Dead}",
+            $"UPDATE outbox_messages SET status = {(int)OutboxStatus.Pending}, processed_at = NULL, error = {audit}, next_attempt_at = {nextAttemptAt}, locked_by = NULL, locked_until = NULL WHERE id = {messageId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)} AND status = {(int)OutboxStatus.Dead}",
             ct).ConfigureAwait(false);
     }
 
@@ -421,7 +421,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         // 按 RetryCount 分组（快照等值可下推单组 WHERE retry_count=孔）+ 组内 400 行分块
         foreach (var group in messages.GroupBy(static m => m.RetryCount))
         {
-            var ids = group.Select(static m => m.Id.ToString()).ToArray();
+            var ids = group.Select(static m => m.Id.ToString(null, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
             for (var start = 0; start < ids.Length; start += OutboxBatchMarkChunkRows)
             {
                 var count = Math.Min(OutboxBatchMarkChunkRows, ids.Length - start);

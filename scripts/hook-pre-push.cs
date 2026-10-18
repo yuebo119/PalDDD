@@ -15,6 +15,7 @@
 #pragma warning disable CA1303
 
 using System.Diagnostics;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
@@ -56,18 +57,33 @@ if (upstream.Length > 0)
         Console.WriteLine($"⚠️  pre-push：本次推送承载 {ahead} 个积压提交——CI（含 aot-verify 真发布）将首次验证这批代码，失败排查面较大；建议日常小批推送。");
 }
 
-// ── ③ review 新鲜度提示（信息性不阻断）──
-// metrics 停在 v91（2026-09-19）而 10 月有 v4.0.0/ADR-030/031 等 src 变更——
-// 四系统里的 review 实际处于停摆，但没有任何地方会提醒。此段只报事实，不判定。
+// ── ③ review 债阻断（2026-10-18 由提示升级为阻断）──
+// metrics 停在 v91（2026-09-19）而 10 月有 v4.0.0/ADR-030/031 等 src 变更——review 系统
+// 实际停摆，但此前只提示。现在：超过阈值且 src 有变更时阻断推送，除非
+// .ai/review/review-exemption.json 有未到期豁免（owner/expires/reason）。豁免到期前
+// 必须补正式 review 轮或续期，避免"提示被忽略"的历史重演。
 var metricsPath = Path.Combine(root, ".ai", "review", "metrics.md");
 if (File.Exists(metricsPath))
 {
+    var today = DateOnly.FromDateTime(DateTime.UtcNow);
     var lastSrcDate = Git("log", "-1", "--format=%cs", "--", "src");
     var (reviewWarning, reviewDays) = ReviewFreshness(
-        File.ReadAllLines(metricsPath), lastSrcDate,
-        DateOnly.FromDateTime(DateTime.UtcNow), thresholdDays: 30);
+        File.ReadAllLines(metricsPath), lastSrcDate, today, thresholdDays: 30);
     if (reviewWarning is not null)
-        Console.WriteLine($"⚠️  pre-push：{reviewWarning}（最后一轮距今 {reviewDays} 天；不阻断，登记豁免或补轮次即可）");
+    {
+        var exemption = ReadReviewExemption(
+            Path.Combine(root, ".ai", "review", "review-exemption.json"));
+        if (exemption is not null && ExemptionAllows(exemption.Expires, today))
+        {
+            Console.WriteLine($"⚠️  pre-push：{reviewWarning}；有效豁免至 {exemption.Expires:yyyy-MM-dd}（{exemption.Owner}：{exemption.Reason}）");
+        }
+        else
+        {
+            Console.WriteLine($"⛔ pre-push：{reviewWarning}——无有效 review 豁免（最后一轮距今 {reviewDays} 天）");
+            Console.WriteLine("   补正式 review 轮，或更新 .ai/review/review-exemption.json（owner/expires/reason）后重试");
+            return 1;
+        }
+    }
 }
 
 // ── ④ gate-lite CI 预览 ──
@@ -168,6 +184,28 @@ static (string? Warning, int Days) ReviewFreshness(
     return ($"review 债：metrics 最后一轮 {lastRound:yyyy-MM-dd}（{days} 天前），src 最近提交 {srcDate:yyyy-MM-dd}", days);
 }
 
+// review 豁免解析（2026-10-18 增）：owner/expires/reason 三字段；解析失败按无豁免处理。
+static ReviewExemption? ReadReviewExemption(string path)
+{
+    try
+    {
+        if (!File.Exists(path)) return null;
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        var root = doc.RootElement;
+        if (!root.TryGetProperty("expires", out var expiresElement)
+            || !DateOnly.TryParse(expiresElement.GetString(), out var expires))
+            return null;
+        var owner = root.TryGetProperty("owner", out var ownerElement) ? ownerElement.GetString() ?? "" : "";
+        var reason = root.TryGetProperty("reason", out var reasonElement) ? reasonElement.GetString() ?? "" : "";
+        return new ReviewExemption(expires, owner, reason);
+    }
+    catch (JsonException) { return null; }
+    catch (IOException) { return null; }
+    catch (UnauthorizedAccessException) { return null; }
+}
+
+static bool ExemptionAllows(DateOnly expires, DateOnly today) => expires >= today;
+
 // ─── selftest：计数解析纯函数正负例（gate-audit SELFTEST 判定面）───
 static int RunSelftest()
 {
@@ -195,7 +233,14 @@ static int RunSelftest()
     Case(ReviewFreshness([], "2026-10-01", today, 30).Warning is null,
         true, "review 新鲜度：无 metrics → 不告警（不给假信号）");
 
+    // review 豁免（2026-10-18 增）
+    Case(ExemptionAllows(new DateOnly(2026, 11, 15), today), true, "review 豁免：未到期放行");
+    Case(ExemptionAllows(new DateOnly(2026, 9, 1), today), false, "review 豁免：已到期阻断");
+
     Console.WriteLine($"═══════ HOOK-PRE-PUSH SELFTEST：{(failures.Count == 0 ? "全部通过" : $"{failures.Count} 例失败")} ═══════");
     foreach (var f in failures) Console.WriteLine("  FAIL " + f);
     return failures.Count == 0 ? 0 : 1;
 }
+
+// 顶层类型声明（top-level program 要求类型声明位于所有语句之后）
+internal sealed record ReviewExemption(DateOnly Expires, string Owner, string Reason);

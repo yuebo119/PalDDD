@@ -136,7 +136,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentOutOfRangeException.ThrowIfEqual(messageId, default);
 
-        var key = messageId.ToString();
+        var key = messageId.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
         // A13（S1 轮）：IBufferWriter 直写 + 单次 ToArray（Confluent byte[] 契约必需）——
         // 消除内存重载返回前的第一次 WrittenSpan.ToArray 分配+整载荷拷贝。
         // EPSL 地毯审计 2026-10-16 A 批 #1：发布处第二次 ToArray 消除后，单次拷贝落地
@@ -145,7 +145,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         if (bodyWriter is null || bodyWriter.Capacity > MaxResidentBodyBytes)
         {
             bodyWriter = new System.Buffers.ArrayBufferWriter<byte>(256);
+#pragma warning disable S2696 // ThreadStatic 发布缓冲刻意跨实例/线程复用（类头重入声明）
             _tlsBodyWriter = bodyWriter;
+#pragma warning restore S2696
         }
         else
         {
@@ -188,8 +190,8 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         Headers? headers = null;
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceParent, context.TraceParent);
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceState, context.TraceState);
-        AddHeader(ref headers, MessageConsumeContext.HeaderNames.CorrelationId, context.CorrelationId?.ToString());
-        AddHeader(ref headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString());
+        AddHeader(ref headers, MessageConsumeContext.HeaderNames.CorrelationId, context.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+        AddHeader(ref headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         return headers;
     }
 
@@ -555,7 +557,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
 
         /// <summary>后台消费 Task — 可用于健康检查和异常观测。
         /// 登记与循环启动之间存在极小窗口，期间为 null（登记先行的顺序权衡）。</summary>
+#pragma warning disable S1144 // 健康检查/异常观测的公开诊断属性（文档承诺）
         public Task? ConsumeTask => Volatile.Read(ref _consumeTask);
+#pragma warning restore S1144
 
         /// <summary>后置注入消费循环 Task（登记先行模式）——登记完成后由 SubscribeAsync 调用一次。</summary>
         public void SetConsumeTask(Task consumeTask)

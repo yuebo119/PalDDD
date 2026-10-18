@@ -27,7 +27,7 @@ public sealed class SqliteUlidTypeHandler : SqlMapper.TypeHandler<PalUlid>
 {
     /// <inheritdoc/>
     public override void SetValue(IDbDataParameter parameter, PalUlid value)
-        => parameter.Value = value.ToString();
+        => parameter.Value = value.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
 
     /// <inheritdoc/>
     public override PalUlid Parse(object value)

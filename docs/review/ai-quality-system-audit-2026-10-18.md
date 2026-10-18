@@ -85,9 +85,24 @@
 | `license-policy` | 162 包通过 |
 | `dotnet build -c Release` | 0 警告 0 错误 |
 
-## 6. 遗留与开放项
+## 6. 遗留项关闭（2026-10-18 晚）
 
-1. `.ai` 无 remote：本轮只补了 bundle 命令与文档；异机备份需要用户提供私有 remote 或固定备份路径。
-2. Stryker 仍被 MTP 阻塞；Semgrep 不接门禁（6/6 误报）；分析器默认关闭，基线 280 条待逐条收敛。
-3. review 系统仍是事件驱动；pre-push 只提示不阻断，正式评审轮需人工触发。
-4. `.ai` 不入主仓 CI 的裁决不变；其守卫依赖每 clone 手动 `git config core.hooksPath .githooks`。
+1. `.ai` 无 remote：按用户裁决保持本地库，不添加 remote；README 保留 `git bundle` 命令作为唯一异地副本。
+2. Stryker：MTP runner 已验证（Stryker 5.0.0 `--test-runner mtp`），新增 `test/PalDDD.Compression.Tests/stryker-config.json` 与 workflow_dispatch `mutation` job；CompressionProvider 变异分数 40% → **100%**（新增 3 个守卫测试杀掉全部存活变异体）。
+3. Semgrep：6/6 误报逐条加 `nosemgrep` 依据注释，当前 **0 findings**；CI `semgrep` job 接入（p/csharp + p/security-audit，`--error`）。
+4. 分析器：642 → 280（规则子集）→ **0**（逐条修复/精确抑制），基线归零；CI `quality-analyzers` job 以 0 为棘轮。规则级裁决与站点级理由见 `docs/quality-analyzer-triage-2026-10-18.md`。
+5. review：pre-push 由提示升级为**阻断**（metrics 最后一轮 >30 天且 src 有变更），豁免文件 `.ai/review/review-exemption.json`（owner/expires/reason，当前至 2026-11-15）。
+6. `.ai` 不入主仓 CI 的裁决不变；守卫仍依赖每 clone 手动 `git config core.hooksPath .githooks`（README 已写明）。
+
+## 7. 关闭验证（2026-10-18 晚）
+
+| 检查 | 结果 |
+|---|---|
+| 分析器构建（`EnableQualityAnalyzers=true`） | **0 警告** |
+| `scripts/quality-baseline.cs` | 基线 0，棘轮 0 == 0 |
+| 默认 Release 构建 | 0 警告 0 错误 |
+| 16 个测试项目 | 全部通过；Compression 46/46 |
+| Stryker（CompressionProvider） | 变异分数 **100%**（MTP runner） |
+| Semgrep（p/csharp + p/security-audit） | **0 findings** |
+| pre-push selftest | 全部通过（含 review 豁免正负例） |
+| `.ai` 钩子（secret-scan + verify-ai） | 通过 |

@@ -199,10 +199,12 @@ public static class ServiceRegistration
     /// <paramref name="minimumLevel"/> 不再生效（首次配置为准）。
     /// </para>
     /// </remarks>
+#pragma warning disable S3427 // 1 参重载为二进制兼容保留（ADR-026），无参调用绑定 1 参重载
     public static IServiceCollection AddPalLogging(
         this IServiceCollection services,
         bool clearProviders = false,
         LogLevel? minimumLevel = null)
+#pragma warning restore S3427
     {
         ArgumentNullException.ThrowIfNull(services); // v17 片E 假修勘正（第 9 处守卫）
         // v35 P3 防重：AddZLoggerConsole 非幂等——同一 IServiceCollection 重复调用会注册
@@ -516,6 +518,8 @@ internal sealed class HandlerRegistrar : IHostedService
 /// ServiceDescriptor 标记（同集合二次调用据此幂等跳过 ZLogger 注册），无运行时行为。
 /// internal + 无依赖，不影响容器解析。
 /// </summary>
+#pragma warning disable S2094 // 哨兵标记类型（ServiceDescriptor 识别用，无运行时行为）
 internal sealed class PalLoggingMarker
 {
 }
+#pragma warning restore S2094

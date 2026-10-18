@@ -215,9 +215,9 @@ public abstract class EventLogDbContext(
             // P1 修复（二十一轮）：Ulid 属性需显式转换——关系型 provider 无 Ulid 原生映射，
             // 缺转换时 ctx.Model 即抛"无法映射类型"（探针实证关系型完全不可用；InMemory-only
             // 测试网掩盖）。对齐 OutboxDbContext.Id / SagaStateDbContext.SagaId 姊妹模式。
-            e.Property(x => x.EventId).HasConversion(v => v.ToString(), v => PalUlid.Parse(v));
-            e.Property(x => x.CorrelationId).HasConversion(v => v.HasValue ? v.Value.ToString() : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
-            e.Property(x => x.CausationId).HasConversion(v => v.HasValue ? v.Value.ToString() : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
+            e.Property(x => x.EventId).HasConversion(v => v.ToString(null, System.Globalization.CultureInfo.InvariantCulture), v => PalUlid.Parse(v));
+            e.Property(x => x.CorrelationId).HasConversion(v => v.HasValue ? v.Value.ToString(null, System.Globalization.CultureInfo.InvariantCulture) : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
+            e.Property(x => x.CausationId).HasConversion(v => v.HasValue ? v.Value.ToString(null, System.Globalization.CultureInfo.InvariantCulture) : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
             e.Property(x => x.StreamName).HasMaxLength(512);
             e.Property(x => x.EventName).HasMaxLength(256);
             e.Property(x => x.ContentType).HasMaxLength(128);

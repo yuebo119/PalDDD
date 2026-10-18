@@ -49,7 +49,7 @@ public sealed class EventLogReplaySource<TMessage> : IEventReplaySource<TMessage
             yield return replayEvent;
     }
 
-    /// <inheritdoc />
+    /// <summary>从指定位置续读事件流（含 fromPosition）。</summary>
     /// <remarks>R6/P0-3（ADR-028）：续读重载——<paramref name="fromPosition"/> 下传
     /// <see cref="IEventLog.ReadStreamAsync"/> 的 fromVersion（含），已完成前缀零读取。</remarks>
     public async IAsyncEnumerable<ReplayEvent<TMessage>> ReadAsync(

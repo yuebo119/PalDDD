@@ -42,7 +42,9 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
             // 注：v8/v23 声明的「接口无 CancellationToken 参数、取消信号不传播」契约限制
             // 已在 v4.0 收口（ADR-026 ④：AddMessagesAsync 签名收 ct）；本 EF 实现的
             // SaveChangesAsync 保持无参调用（ct 不下发 EF 管线，与拦截器批量路径传 default 同款口径）
+#pragma warning disable S8949 // 接口契约收 ct，但本 EF 实现刻意不下发（ADR-026 ④；拦截器批量路径同口径）
             return await SaveChangesAsync().ConfigureAwait(false);
+#pragma warning restore S8949
         }
         catch (DbUpdateException)
         {
@@ -517,9 +519,9 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
             e.HasIndex(x => new { x.Status, x.NextAttemptAt, x.CreatedAt });
             // 租约回读谓词（locked_by + locked_until）覆盖索引——审计 2026-09-17 P-2；对齐 docs/sql/*/000_schema.sql idx_outbox_lease_holder
             e.HasIndex(x => new { x.LockedBy, x.LockedUntil });
-            e.Property(x => x.Id).HasConversion(v => v.ToString(), v => PalUlid.Parse(v));
-            e.Property(x => x.CorrelationId).HasConversion(v => v.HasValue ? v.Value.ToString() : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
-            e.Property(x => x.CausationId).HasConversion(v => v.HasValue ? v.Value.ToString() : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
+            e.Property(x => x.Id).HasConversion(v => v.ToString(null, System.Globalization.CultureInfo.InvariantCulture), v => PalUlid.Parse(v));
+            e.Property(x => x.CorrelationId).HasConversion(v => v.HasValue ? v.Value.ToString(null, System.Globalization.CultureInfo.InvariantCulture) : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
+            e.Property(x => x.CausationId).HasConversion(v => v.HasValue ? v.Value.ToString(null, System.Globalization.CultureInfo.InvariantCulture) : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
             e.Property(x => x.Type).HasMaxLength(512);
             e.Property(x => x.ContentType).HasMaxLength(128);
             e.Property(x => x.TraceParent).HasMaxLength(128);

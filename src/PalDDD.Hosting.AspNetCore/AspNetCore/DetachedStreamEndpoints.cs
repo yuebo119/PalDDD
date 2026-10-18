@@ -205,7 +205,7 @@ public static class DetachedStreamEndpoints
         await context.Response.WriteAsJsonAsync(
             ValidationProblemResponseFactory.Create(ex),
             PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-            contentType: null).ConfigureAwait(false);
+            contentType: null, cancellationToken: context.RequestAborted).ConfigureAwait(false);
     }
 
     private static async Task WriteProblemAsync(HttpContext context, int statusCode, string message)
@@ -226,6 +226,6 @@ public static class DetachedStreamEndpoints
                 statusCode,
                 [new ValidationProblemError("run", message)]),
             PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-            contentType: null).ConfigureAwait(false);
+            contentType: null, cancellationToken: context.RequestAborted).ConfigureAwait(false);
     }
 }

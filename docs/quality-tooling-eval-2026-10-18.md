@@ -56,10 +56,9 @@ Top 规则：
 ## 三、Stryker.NET
 
 - 安装：`dotnet tool install -g dotnet-stryker`，版本 5.0.0。
-- 尝试：`test/PalDDD.Compression.Tests` 对 `PalDDD.Compression` 跑基线。
-- 结果：**无法运行**。测试项目使用 Microsoft.Testing.Platform（MTP），Stryker 5.0.0 明确不支持，报错并引用 [issue #3094](https://github.com/stryker-mutator/stryker-net/issues/3094)。
-- 该 issue 状态 open，最后更新 2026-09-11；NuGet 最新版仍是 5.0.0。
-- 结论：在测试栈保持 TUnit/MTP 的前提下，Stryker 不可用，不建立基线。等 Stryker 支持 MTP 或评估其他变异测试工具。
+- 首次尝试：`test/PalDDD.Compression.Tests` 对 `PalDDD.Compression` 跑基线，未传 `--test-runner mtp`；Stryker 默认走 VSTest，对 MTP 测试项目报错并引用 issue #3094。
+- **更正（2026-10-18 晚）**：Stryker 5.0.0 已支持 MTP runner（4.13 起预览，5.0.0 支持 perTest coverage；`-t|--test-runner mtp`）。加该参数后 Compression 项目跑通，CompressionProvider 初始变异分数 40%；补 3 个守卫测试后达到 **100%**。
+- 结论：MTP 不构成阻塞；配置见 `test/PalDDD.Compression.Tests/stryker-config.json`，手动 CI job 见 `.github/workflows/ci.yml` 的 `mutation`。
 
 ## 四、Semgrep
 
@@ -110,7 +109,7 @@ Top 规则：
 
 | 指标 | 门槛 | 结果 | 判定 |
 |---|---|---|---|
-| 独特发现 | 两周内至少 1 条模型原本发现不了的问题 | Semgrep 0 条真阳性；分析器 642 条警告未逐条验证；Stryker 无法运行 | 未通过 |
+| 独特发现 | 两周内至少 1 条模型原本发现不了的问题 | Semgrep 0 条真阳性；分析器 642 条已逐条裁决（280→0）；Stryker 首次未启用 MTP runner，修正后跑通并达 100%（CompressionProvider） | 未通过（工具层未产生独立缺陷；分析器修复由既有规则驱动） |
 | 上下文成本 | 新增工具 schema 不超过现有工具面的 20% | 本轮未新增 MCP，零 schema 成本 | 通过 |
 | 误报率 | 低于 30% | Semgrep 100% | 未通过 |
 | 维护成本 | 无账号、无容器依赖 | Semgrep 本地、分析器 NuGet、ToB 技能 Markdown | 通过 |
@@ -120,9 +119,9 @@ Top 规则：
 
 | 项 | 决策 |
 |---|---|
-| 分析器 | 保留但默认关闭（`EnableQualityAnalyzers=false`），先做规则收敛：关闭 MA0048/MA0051/MA0004/MA0006 等噪声项，保留 S2077、S8949、S8969、S6444、MA0015、MA0011 等高价值项，再逐步提为默认开启（2026-10-18 实施：`.editorconfig` 规则子集 + 基线 642→280 + CI 棘轮，见 §十一） |
-| Stryker | 阻塞，等 MTP 支持；不纳入本轮回滚，不留门禁 |
-| Semgrep | 不接门禁；保留本地工具用于定期扫描，或收敛规则后重评 |
+| 分析器 | 保留但默认关闭（`EnableQualityAnalyzers=false`），先做规则收敛：关闭 MA0048/MA0051/MA0004/MA0006 等噪声项，保留 S2077、S8949、S8969、S6444、MA0015、MA0011 等高价值项，再逐步提为默认开启（2026-10-18 实施：`.editorconfig` 规则子集 + 逐条裁决 + 基线 642→0，见 §十一 与 docs/quality-analyzer-triage-2026-10-18.md） |
+| Stryker | MTP runner 已验证（Stryker 5.0.0 `--test-runner mtp`）；配置 `test/PalDDD.Compression.Tests/stryker-config.json` + workflow_dispatch `mutation` job；CompressionProvider 变异分数 100% |
+| Semgrep | 6/6 误报已逐条加 `nosemgrep` 依据注释；当前 0 findings；CI `semgrep` job 接入（`--error`） |
 | dotnet format whitespace | 先修既存违规，再考虑加 CI（已修复 3 文件/14 条并接入 CI，见 §十一） |
 | ToB 技能 | 保留，作为审计方法论；下一轮用 differential-review 或 codeql 对一个真实变更做试点，记录独特发现 |
 
@@ -142,17 +141,18 @@ Directory.Packages.props.bak-20261018
 
 ## 十、一句话结论
 
-Pal.DDD 的工程基线已经很硬：零警告、SQL 标识符有入口校验、测试栈是 MTP。这导致本轮三个工具没有一个当场通过准入：Stryker 被 MTP 挡住，Semgrep 全是误报，分析器需要规则收敛。下一步不是继续装工具，而是把分析器规则收敛到可执行的子集，并等 Stryker 支持 MTP。
+Pal.DDD 的工程基线已经很硬：零警告、SQL 标识符有入口校验、测试栈是 MTP。本轮三个工具的首次准入都没有当场通过：Stryker 首次尝试未启用 MTP runner，Semgrep 全是误报，分析器需要规则收敛。修正后 Stryker MTP 跑通并达到 100%，Semgrep 误报逐条注释并接入 CI，分析器收敛到 0 并建立 0 基线棘轮——结论从“继续装工具”转为“把工具纳入可执行的防线圈”。
 
 ## 十一、后续处置（2026-10-18 实施）
 
 | 项 | 处置 | 验收 |
 |---|---|---|
-| 分析器规则收敛 | `.editorconfig` 末节新增规则子集：MA0048/MA0051/MA0004/MA0006/MA0002/S3358/S125/S1939/S3236 压为 `none`；MA0015/MA0011/S2077/S8949/S8969 保持 `warning` | 重新测量 642 → **280** 条（去重后） |
-| 基线棘轮 | 新增 `scripts/quality-baseline.cs`（`--update` / `--selftest` / 退出码 0/1/2）；基线 `scripts/quality-analyzer-baseline.txt` | 本地 `--selftest` 全过；`--update` 写入 280；默认构建仍 0W0E |
-| CI 接线 | 新增独立 job `quality-analyzers`，打开 `EnableQualityAnalyzers=true` 跑棘轮 | 新警告 > 280 即红；默认零警告契约不受影响 |
+| 分析器规则收敛 | `.editorconfig` 末节新增规则子集：MA0048/MA0051/MA0004/MA0006/MA0002/S3358/S125/S1939/S3236 压为 `none`；MA0015/MA0011/S2077/S8949/S8969 保持 `warning`；随后逐条修复/精确抑制（MA0015/S2077/S1133/S1199/S3267/MA0016/S2326/S3246 按业务判断关闭） | 重新测量 642 → **0** 条（去重后） |
+| 基线棘轮 | 新增 `scripts/quality-baseline.cs`（`--update` / `--selftest` / 退出码 0/1/2）；基线 `scripts/quality-analyzer-baseline.txt` | 本地 `--selftest` 全过；`--update` 写入 0；默认构建仍 0W0E |
+| CI 接线 | 新增独立 job `quality-analyzers`（基线 0 棘轮）、`semgrep`（0 findings）、`mutation`（workflow_dispatch，Stryker MTP） | 新警告 > 0 即红；Semgrep finding 即红；默认零警告契约不受影响 |
 | whitespace | `dotnet format whitespace` 修复 3 文件/14 条；CI `Format verify (whitespace)` 步骤接入 | `--verify-no-changes` exit 0 |
-| Stryker / Semgrep | 维持原判：Stryker 等 MTP 支持；Semgrep 不接门禁 | 无新增依赖/门禁 |
+| Stryker / Semgrep | Stryker 5.0.0 MTP runner + `stryker-config.json` + workflow_dispatch job；Semgrep 6/6 FP 加 `nosemgrep` 依据注释并接入 CI | CompressionProvider 变异分数 100%；Semgrep 0 findings |
+| review 债阻断 | pre-push 在 metrics >30 天且 src 有变更时阻断；豁免 `.ai/review/review-exemption.json` | selftest 正负例通过；豁免至 2026-11-15 |
 | 工作树卫生 | `Directory.Build.props.bak-20261018` / `Directory.Packages.props.bak-20261018` 移至 `%TEMP%/palddd-bak-20261018/` | `git status` 无 `.bak-*` 残留 |
 
-**为什么是 280 而不是 0**：剩余 280 条包含 MA0015（参数名）、MA0011（IFormatProvider）、S2077（SQL 注入模式）等高价值项，逐条处置需要业务判断；棘轮的作用是防止新增债务，不是一次性清零。规则子集与基线都是单一事实源（`.editorconfig` + `scripts/quality-analyzer-baseline.txt`），改规则时同提交重测。
+**为什么能到 0**：剩余 280 条并非都需要改代码。逐条裁决分三类：真实缺陷修复（MA0011/MA0021/MA0132/S8949/S8969/MA0054 等）、站点级精确抑制（反射物化/ThreadStatic 池/AOT 非目标路径/刻意 fire-and-forget，每条带理由）、规则级业务判断（配置值异常 paramName、Semgrep 重复的 S2077、与性能纪律冲突的 S3267 等，见 triage 文档）。基线与规则子集均为单一事实源，改规则时同提交重测。

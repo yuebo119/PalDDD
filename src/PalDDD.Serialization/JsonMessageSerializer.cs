@@ -30,6 +30,7 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     private readonly IMessageCatalog _messageCatalog;
     private readonly JsonSerializerOptions? _options;
 
+#pragma warning disable S2696 // ThreadStatic 池刻意跨实例/线程复用（类头重入声明）
     // ThreadLocal Writer 池 — 每线程最多缓存一个 Utf8JsonWriter 和 ArrayBufferWriter
     // 权衡（八轮评审 P3）：过大数据（如 MB 级 payload）后 TLS 持峰值容量不缩——
     // ArrayBufferWriter 内部缓冲按历史峰值保留，线程退出才回收；线程池长驻线程
@@ -160,7 +161,7 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         if (bufferWriter is null || bufferWriter.Capacity > MaxResidentBufferBytes) // R9/P2-1：超阈值弃槽重建
         {
             bufferWriter = new ArrayBufferWriter<byte>(256);
-            _tlsBufferWriter = bufferWriter;
+            _tlsBufferWriter = bufferWriter; // NOSONAR: S2696 ThreadStatic 池刻意跨实例/线程复用（类头重入声明）
         }
         else
         {
@@ -171,7 +172,7 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         if (writer is null)
         {
             writer = new Utf8JsonWriter(bufferWriter);
-            _tlsWriter = writer;
+            _tlsWriter = writer; // NOSONAR: S2696 ThreadStatic 池刻意跨实例/线程复用（类头重入声明）
         }
         else
         {
@@ -208,7 +209,7 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         if (writer is null)
         {
             writer = new Utf8JsonWriter(destination);
-            _tlsWriter = writer;
+            _tlsWriter = writer; // NOSONAR: S2696 ThreadStatic 池刻意跨实例/线程复用（类头重入声明）
         }
         else
         {
@@ -272,7 +273,7 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         if (bufferWriter is null || bufferWriter.Capacity > MaxResidentBufferBytes) // R9/P2-1：超阈值弃槽重建（同非泛型路径）
         {
             bufferWriter = new ArrayBufferWriter<byte>(256);
-            _tlsBufferWriter = bufferWriter;
+            _tlsBufferWriter = bufferWriter; // NOSONAR: S2696 ThreadStatic 池刻意跨实例/线程复用（类头重入声明）
         }
         else
         {
@@ -283,7 +284,7 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         if (writer is null)
         {
             writer = new Utf8JsonWriter(bufferWriter);
-            _tlsWriter = writer;
+            _tlsWriter = writer; // NOSONAR: S2696 ThreadStatic 池刻意跨实例/线程复用（类头重入声明）
         }
         else
         {

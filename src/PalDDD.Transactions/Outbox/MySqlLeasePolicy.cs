@@ -37,7 +37,7 @@ public static class MySqlLeasePolicy
         var parts = serverVersion.Split('.');
         if (parts.Length < 2)
             return false;
-        if (!int.TryParse(parts[0], out var major) || !int.TryParse(parts[1], out var minor))
+        if (!int.TryParse(parts[0], System.Globalization.CultureInfo.InvariantCulture, out var major) || !int.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out var minor))
             return false;
 
         var patch = 0;
@@ -48,7 +48,7 @@ public static class MySqlLeasePolicy
             while (digitEnd < patchText.Length && char.IsDigit(patchText[digitEnd]))
                 digitEnd++;
             // 非数字补丁段（如 "8.4.x"）按 0 计——主/次版本已满足判定语义
-            if (!int.TryParse(patchText[..digitEnd], out patch))
+            if (!int.TryParse(patchText[..digitEnd], System.Globalization.CultureInfo.InvariantCulture, out patch))
                 patch = 0;
         }
 

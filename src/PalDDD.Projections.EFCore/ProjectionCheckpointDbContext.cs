@@ -331,7 +331,7 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
                 .Where(x => x.ProjectionName == projectionName
                     && x.SourceName == sourceName
                     && x.Status != ProjectionCheckpointStatus.Completed)
-                .MinAsync(x => (long?)Convert.ToInt64(x.Position), ct)
+                .MinAsync(x => (long?)Convert.ToInt64(x.Position, System.Globalization.CultureInfo.InvariantCulture), ct)
                 .ConfigureAwait(false);
             if (firstIncomplete is { } incomplete)
                 return incomplete.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -339,7 +339,7 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
             var max = await ProjectionCheckpoints
                 .AsNoTracking()
                 .Where(x => x.ProjectionName == projectionName && x.SourceName == sourceName)
-                .MaxAsync(x => (long?)Convert.ToInt64(x.Position), ct)
+                .MaxAsync(x => (long?)Convert.ToInt64(x.Position, System.Globalization.CultureInfo.InvariantCulture), ct)
                 .ConfigureAwait(false);
             return max is { } value
                 ? (value + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)

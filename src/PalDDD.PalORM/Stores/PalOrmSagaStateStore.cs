@@ -167,7 +167,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
     {
         await using var cmd = CreateRawCommand();  // ITM-243：挂接 IUnitOfWork 环境事务
         cmd.CommandText = "SELECT saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until FROM saga_states WHERE saga_id = @p0";
-        AddParam(cmd, "@p0", sagaId.ToString());
+        AddParam(cmd, "@p0", sagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         if (!await reader.ReadAsync(ct).ConfigureAwait(false)) return null;
         return Materialize(ReadSagaRow(reader));
@@ -220,8 +220,8 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         var expectedVersion = state.Version;
         var affected = await Session.ExecuteAsync(
             RequiresJsonbCast
-                ? (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {truncatedError}, error_at = {state.ErrorAt}, saga_data = CAST({jsonData} AS jsonb), leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}"
-                : (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {truncatedError}, error_at = {state.ErrorAt}, saga_data = {jsonData}, leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString()} AND version = {expectedVersion}",
+                ? (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {truncatedError}, error_at = {state.ErrorAt}, saga_data = CAST({jsonData} AS jsonb), leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)} AND version = {expectedVersion}"
+                : (FormattableString)$"UPDATE saga_states SET current_state = {state.CurrentState}, status = {(int)state.Status}, completed_at = {state.CompletedAt}, version = version + 1, error = {truncatedError}, error_at = {state.ErrorAt}, saga_data = {jsonData}, leased_by = {state.LeasedBy}, leased_until = {state.LeasedUntil} WHERE saga_id = {state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)} AND version = {expectedVersion}",
             ct).ConfigureAwait(false);
         if (affected > 0)
         {
@@ -233,7 +233,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         // B-3：轻量存在性探测（raw command，COUNT 无数据传输；ITM-243 挂接环境事务）
         await using var probe = CreateRawCommand();
         probe.CommandText = "SELECT COUNT(1) FROM saga_states WHERE saga_id = @p0";
-        AddParam(probe, "@p0", state.SagaId.ToString());
+        AddParam(probe, "@p0", state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         var exists = Convert.ToInt64(await probe.ExecuteScalarAsync(ct).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture) > 0;
         if (!exists)
         {
@@ -245,8 +245,8 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
             {
                 inserted = await Session.ExecuteAsync(
                     RequiresJsonbCast
-                        ? (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString()}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {truncatedError}, {state.ErrorAt}, {state.Version}, CAST({jsonData} AS jsonb), {state.LeasedBy}, {state.LeasedUntil})"
-                        : (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString()}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {truncatedError}, {state.ErrorAt}, {state.Version}, {jsonData}, {state.LeasedBy}, {state.LeasedUntil})",
+                        ? (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {truncatedError}, {state.ErrorAt}, {state.Version}, CAST({jsonData} AS jsonb), {state.LeasedBy}, {state.LeasedUntil})"
+                        : (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {truncatedError}, {state.ErrorAt}, {state.Version}, {jsonData}, {state.LeasedBy}, {state.LeasedUntil})",
                     ct).ConfigureAwait(false);
             }
             catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
@@ -280,12 +280,12 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         await using var cmd = CreateRawCommand();
         var sb = new StringBuilder("UPDATE saga_states SET leased_by = NULL, leased_until = NULL, version = version + 1 WHERE leased_by = @p0 AND saga_id IN (@p1");
         AddParam(cmd, "@p0", owner);
-        AddParam(cmd, "@p1", sagas[0].SagaId.ToString());
+        AddParam(cmd, "@p1", sagas[0].SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         for (var i = 1; i < sagas.Count; i++)
         {
             var name = $"@p{i + 1}";
             sb.Append(", ").Append(name);
-            AddParam(cmd, name, sagas[i].SagaId.ToString());
+            AddParam(cmd, name, sagas[i].SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         }
         sb.Append(')');
         cmd.CommandText = sb.ToString();
@@ -327,7 +327,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
     /// 均返回 Kind=Utc（探针实测幂等）。
     /// </summary>
     private static DateTimeOffset GetUtc(DbDataReader reader, int ordinal)
-        => DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc);
+        => new(DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc), TimeSpan.Zero);
 
     /// <summary>
     /// ITM-243：创建 raw command 并挂接 IUnitOfWork 活动事务。GetRawConnection().CreateCommand()
@@ -360,7 +360,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
             // 兜底是合法语义（saga_data 为空 = 无 JSON 数据可恢复，仅元数据兜底，不丢已存
             // 数据），保持不变。姊妹 DapperSagaStateStore.Materialize 已同步收口（v3 轮
             // ITM-659 批，同款 fail-fast——v4 轮审计勘正本注释：原文声称"未同步"已过期）。
-            state = JsonSerializer.Deserialize(row.SagaData!, _jsonTypeInfo!)
+            state = JsonSerializer.Deserialize(row.SagaData, _jsonTypeInfo)
                 ?? throw new InvalidOperationException(
                     $"Saga {row.SagaId} 的 saga_data 列损坏（值为 JSON 字面 'null' 文本），无法恢复业务状态——"
                     + "降级为空状态会在下次保存时静默清空业务字段，请人工修复该行数据（对齐 ITM-228 口径）。");

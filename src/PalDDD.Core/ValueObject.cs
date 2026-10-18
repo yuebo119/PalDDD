@@ -74,6 +74,10 @@ public readonly record struct ValueObject<T> : IValueObject, IUtf8SpanFormattabl
     public static implicit operator T(ValueObject<T> vo) => vo.Value;
     public override string ToString() => Value.ToString()!;
 
+    /// <summary>按指定格式与格式提供程序格式化为字符串。</summary>
+    public string ToString(string? format, IFormatProvider? formatProvider)
+        => Value.ToString(format, formatProvider);
+
     /// <inheritdoc/>
     public bool TryFormat(Span<byte> utf8Destination, out int bytesWritten,
         ReadOnlySpan<char> format, IFormatProvider? provider)
@@ -105,10 +109,6 @@ public readonly record struct ValueObject<T> : IValueObject, IUtf8SpanFormattabl
         }
         return true;
     }
-
-    /// <inheritdoc/>
-    public string ToString(string? format, IFormatProvider? formatProvider)
-        => Value.ToString(format, formatProvider);
 }
 
 // ─────────────────────────────────────────────────────────────

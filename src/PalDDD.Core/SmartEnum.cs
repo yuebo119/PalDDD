@@ -106,7 +106,7 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
             // s_all 保持 null，异常形态与直接访问一致（且缓存写入必然发生在注册之后）
             var snapshot = Dictionary.Values.ToArray();
             Interlocked.CompareExchange(ref s_all, snapshot, null);
-            return Volatile.Read(ref s_all)!;
+            return Volatile.Read(ref s_all);
         }
     }
 

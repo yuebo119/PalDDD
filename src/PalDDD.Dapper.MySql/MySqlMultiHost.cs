@@ -353,7 +353,7 @@ public static class MySqlMultiHost
         // 对唯一冒号条目 fail-fast）后不可达——所有到达此处的条目均无冒号或多冒号（裸 IPv6），
         // 走回退路径。保留防御性回退形态
         if (colon >= 0 && entry.IndexOf(':') == colon
-            && int.TryParse(entry.AsSpan(colon + 1), out var embedded))
+            && int.TryParse(entry.AsSpan(colon + 1), System.Globalization.CultureInfo.InvariantCulture, out var embedded))
         {
             return (entry[..colon], embedded);
         }

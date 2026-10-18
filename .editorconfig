@@ -69,3 +69,24 @@ dotnet_diagnostic.S2077.severity = warning
 dotnet_diagnostic.S8949.severity = warning
 dotnet_diagnostic.S8969.severity = warning
 
+# 规则级业务判断（2026-10-18 质量工具收敛第二轮，详见 docs/quality-analyzer-triage-2026-10-18.md）：
+#   MA0015 配置解析异常不含 paramName——异常消息已带具体配置键/值，paramName 不增加定位信息；
+#          公共 API 的参数名一致性由 S927/S3928 守护，故规则级关闭。
+#   S2077 Sonar 的 SQL 注入模式与 Semgrep csharp-sqli 重复；本仓 SQL 标识符均在入口校验，
+#          由 CI semgrep job 作为单一 SQL 注入防线（含 nosemgrep 依据注释）。
+#   S1133 弃用代码由 ADR-026 契约窗口与 CHANGELOG 管理，分析器无法知道移除日期。
+#   S1199 嵌套块是本仓 SQL 租约/管线的可读性结构，不是缺陷。
+#   S3267 LINQ 简化建议与零分配/可读性纪律冲突（本仓优先显式循环）。
+#   MA0016 领域状态刻意使用具体集合类型（序列化/性能契约）。
+#   S2326/S3246 类型参数是公共 API 契约的一部分，删除或加 out 会破坏兼容性。
+[*.cs]
+dotnet_diagnostic.MA0015.severity = none
+dotnet_diagnostic.S2077.severity = none
+dotnet_diagnostic.S1133.severity = none
+dotnet_diagnostic.S1199.severity = none
+dotnet_diagnostic.S3267.severity = none
+dotnet_diagnostic.MA0016.severity = none
+dotnet_diagnostic.S2326.severity = none
+dotnet_diagnostic.S3246.severity = none
+
+

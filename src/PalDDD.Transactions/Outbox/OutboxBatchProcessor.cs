@@ -459,7 +459,7 @@ public sealed class OutboxBatchProcessor
                 window.Enqueue((msg, PublishCoreAsync()));
 
                 async Task PublishCoreAsync()
-                    => await _broker.PublishAsync(@event!, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
+                    => await _broker.PublishAsync(@event, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
             }
             while (window.Count > 0)
             {

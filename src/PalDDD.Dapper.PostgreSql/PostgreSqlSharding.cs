@@ -92,6 +92,7 @@ public sealed class ConsistentHashSharding : IShardingStrategy
 
     public int ShardCount { get; }
 
+    /// <summary>初始化一致性哈希分片策略。</summary>
     /// <param name="shardCount">物理分片数</param>
     /// <param name="virtualNodes">每分片虚拟节点数（默认 256，越大越均匀）</param>
     public ConsistentHashSharding(int shardCount, int virtualNodes = 256)
@@ -176,6 +177,7 @@ public sealed class ShardedDataSourceManager : IAsyncDisposable
 
     public int ShardCount => _shards.Length;
 
+    /// <summary>初始化分片数据源管理器。</summary>
     /// <param name="connectionStrings">每个分片的连接字符串（索引对应分片 ID，不得为空数组）</param>
     /// <exception cref="ArgumentException">connectionStrings 为 null 或空数组</exception>
     public ShardedDataSourceManager(string[] connectionStrings, string applicationName = "Pal.DDD-Shard")
@@ -311,7 +313,8 @@ public static class ShardedTableName
     private static void ValidateIdentifier(string identifier)
     {
         if (string.IsNullOrWhiteSpace(identifier)
-            || !System.Text.RegularExpressions.Regex.IsMatch(identifier, @"^[A-Za-z_][A-Za-z0-9_.]*$"))
+            || !System.Text.RegularExpressions.Regex.IsMatch(identifier, @"^[A-Za-z_][A-Za-z0-9_.]*$",
+                System.Text.RegularExpressions.RegexOptions.None, TimeSpan.FromSeconds(1)))
             throw new ArgumentException(
                 $"表名 '{identifier}' 含非法字符——仅允许字母数字下划线与点（标识符白名单）。", nameof(identifier));
     }
