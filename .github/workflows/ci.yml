@@ -73,6 +73,12 @@ jobs:
       - name: Build
         run: dotnet build PalDDD.slnx --no-restore -c Release
 
+      - name: 性能烟测（分配预算，EPSL L2 门禁）
+        # 2026-10-18：--smoke 从人工 TOOL 转每提交门禁。6 项分配断言（上限 1/50/1/140/1/1 B/op）
+        # 为确定性指标，跨 OS/runtime 逐字节稳定；--no-build 复用上一步 Release 产物（同 job 新鲜）。
+        # 超预算即退出码 1。预算单一真源：perf-budgets.md §2。
+        run: dotnet run --project bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj -c Release --no-build -- --smoke
+
       - name: Format verify
         # 2026-09-19 增（盲区收口）：IDE0005 等格式违规此前只由手工全量自检脚本拦截
         # （gate-audit 矩阵中该脚本 = TOOL 手工调用），3c887c7 的未用 using 直达

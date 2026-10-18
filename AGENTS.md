@@ -50,7 +50,7 @@
 
 ### CI（`.github/workflows/ci.yml`）
 
-`build-and-test`（vuln-scan → restore → build → **format-verify**（`dotnet format style --verify-no-changes`，8e97e9c 增） → test → secret-scan → dapper-param-guard → doc-consistency → config-policy → license-policy → count-audit → encoding-gate/tech-debt/test-gate 循环 → `gate.cs`（G22/G23/G24）→ `gate-audit --inventory` → gate-lite。**2026-09-22 T-02/T-04**：`.ai` 恒假分支已删，主仓门禁全部无条件执行；`verify-ai`/`template-gate` 因 `.ai` 独立裁决永不进 CI，改由 pre-commit 与 `.ai` 仓钩子承担）· `aot-verify`（PublishAot + 运行二进制）· **`coverage`（覆盖率阈值门禁 0.70，先 `dotnet tool restore` 取 reportgenerator）** · `dialect-probe`（Testcontainers PG/MySQL；job 内含 Path gate 路径过滤步骤，仅 Store/SQL/DDL/映射面变更触发——非独立 job）· `quality-analyzers`（第三方分析器基线 0 棘轮）· `semgrep`（p/csharp + p/security-audit，0 findings + 29 规则 canary + SARIF artifact）· 独立 `mutation.yml`（月度 schedule + 手动，Stryker 5.0.0 MTP runner，break 95，artifact 上传）。
+`build-and-test`（vuln-scan → restore → build → **perf-smoke**（`--smoke` 分配预算，6 项；2026-10-18 从人工 TOOL 转每提交门禁） → **format-verify**（`dotnet format style --verify-no-changes`，8e97e9c 增） → test → secret-scan → dapper-param-guard → doc-consistency → config-policy → license-policy → count-audit → encoding-gate/tech-debt/test-gate 循环 → `gate.cs`（G22/G23/G24）→ `gate-audit --inventory` → gate-lite。**2026-09-22 T-02/T-04**：`.ai` 恒假分支已删，主仓门禁全部无条件执行；`verify-ai`/`template-gate` 因 `.ai` 独立裁决永不进 CI，改由 pre-commit 与 `.ai` 仓钩子承担）· `aot-verify`（PublishAot + 运行二进制）· **`coverage`（覆盖率阈值门禁 0.70，先 `dotnet tool restore` 取 reportgenerator）** · `dialect-probe`（Testcontainers PG/MySQL；job 内含 Path gate 路径过滤步骤，仅 Store/SQL/DDL/映射面变更触发——非独立 job）· `quality-analyzers`（第三方分析器基线 0 棘轮）· `semgrep`（p/csharp + p/security-audit，0 findings + 29 规则 canary + SARIF artifact）· 独立 `mutation.yml`（月度 schedule + 手动，Stryker 5.0.0 MTP runner，break 95，artifact 上传）。
 
 ### 门禁可信度（改动或新增门禁后必跑）
 
@@ -120,18 +120,20 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 | 测试策略与基线 | `docs/testing.md`、`docs/test-coverage-baseline.md` |
 | **性能预算契约（EPSL）** | `perf-budgets.md`（根目录；分配判定层预算，与既有 `--smoke` 断言对齐） |
 | **性能台账（勿重开/明确不做）** | `.ai/perf-ledger.md`（提性能建议前必查，防重复提案） |
-| **性能实测记录** | `docs/performance.md`（22 基准类、真库车道、统计有效性自评） |
+| **性能实测记录** | `docs/performance.md`（37 基准类，2026-10-18 口径；真库车道、统计有效性自评） |
 | 已定的架构决策（含被否决方案） | `docs/decisions/`（31 份 ADR，2026-10-18 ADR-031 增） |
 | 历轮评审与清单 | `docs/review/`（含 `NAMING.md` 命名约定与索引） |
 | 迁移与发布 | `docs/migration/`、`docs/release.md` |
 | 已知坑 | `docs/pitfalls.md` |
 | 门禁可信度 | `dotnet run scripts/gate-audit.cs` 的矩阵输出 |
 
-### 性能工程（EPSL v1.1，2026-10-11 接入）
+### 性能工程（EPSL v1.6，2026-10-11 接入；2026-10-18 对账）
 
 - 性能深挖只按触发条件启动（门禁红 / 量级 10× / 新负载类型 / SLO 烧穿 / 阶段边界 / 项目完成），其余场合禁全量地毯扫描；触发后按四阶段 SOP：门禁先行 → 自动归因 → 分片深读 → 强制收敛（方案 `~/.zcode/references/EXTREME_PERF_SYSTEM.md`；SOP 独立件 `~/.zcode/perf-template/audit/carpet-audit-sop.md`）。
-- AI 性能分析四红线：抽查"核实/无一处"论断；负结论带检索口径；过 ADR 与 perf-ledger 比对；继承论断独立复验。
+- AI 性能分析四红线：抽查"核实/无一处"论断；负结论带检索口径；过 ADR 与 perf-ledger 比对；继承论断独立复验。**两条计量红线**：净效果（端到端旧/新差 + 同族遗留副本检索，防假闭环）；归属（残余成本先排除基准替身/BDN/BCL，再立项）。
+- 决策载体三处：ADR + `.ai/perf-ledger.md` + 代码注释里的「登记延后/暂不优化」；提性能建议前比全部三处，注释命中须呈报用户裁决。
 - 量具分层与项目既有体系同构：分配可作判定、计时只作趋势（两轮跨 SDK 实证，`docs/performance.md`）。
+- 门禁与对账：`--smoke` 已接 CI（`perf-smoke`）；EPSL 全局对账跑 `node ~/.zcode/scripts/eps-perf-check.mjs --project .`（版本 / 模板引用 / 预算基准类数）。
 
 ---
 
