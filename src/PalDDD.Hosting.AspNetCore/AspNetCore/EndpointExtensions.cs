@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Net.Http.Headers;
+using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
 using System.Text;
@@ -355,14 +356,14 @@ public static class EndpointExtensions
             }
             if (eventSelector is null && idSelector is null)
             {
-                // D4 默认帧：data-only JSON——framing 字节段经 PipeWriter span 直写，
-                // 无字符串中转（变异红证明锁定该形态，见 StreamFrameWriter）
-                var json = JsonSerializer.SerializeToUtf8Bytes(item, itemJsonTypeInfo);
+                // D4 默认帧：data-only JSON——P1 池化序列化（稳态每项零堆分配，
+                // StreamFrameSerializer）+ framing span 直写（无字符串中转）
+                var json = StreamFrameSerializer.Serialize(item, itemJsonTypeInfo);
                 StreamFrameWriter.WriteDataFrame(bodyWriter, json);
                 return;
             }
             // Phase 2 富化帧：event/id 行由选择器产出（字符串 UTF-8 直写 span，零分配）
-            var richJson = JsonSerializer.SerializeToUtf8Bytes(item, itemJsonTypeInfo);
+            var richJson = StreamFrameSerializer.Serialize(item, itemJsonTypeInfo);
             StreamFrameWriter.WriteDataFrame(
                 bodyWriter, richJson,
                 eventSelector?.Invoke(item), idSelector?.Invoke(item));
@@ -607,13 +608,12 @@ internal static class ValidationProblemResponseFactory
 /// 心跳为注释帧（<c>:keepalive</c>，SSE 规范内客户端忽略）。
 /// </summary>
 /// <remarks>
-/// 分配形态（精确声明，防过声称）：默认路径 framing 零分配（ReadOnlySpan 拷贝 +
+/// 分配形态（精确声明，防过声称）：framing 段零分配（ReadOnlySpan 拷贝 +
 /// <see cref="Encoding.GetBytes(ReadOnlySpan{char}, Span{byte})"/> 直写 span，无中间 byte[]）；
-/// JSON 载荷字节由 <see cref="JsonSerializer.SerializeToUtf8Bytes{T}(T, JsonTypeInfo{T})"/>
-/// 按项产出（byte[]/item，与 <c>WriteAsJsonAsync</c> 内部形态同族）——「默认路径零分配」
-/// 指 framing/write 段，不含序列化器自身输出。零拷贝下推（Utf8JsonWriter 直写 PipeWriter）
-/// 属 ADR-030 分期 Phase 2「PipeWriter 化」项，经延迟地板论证收窄（bench 触发未满足、
-/// agent 流式场景分配量低于延迟地板数个量级），暂不实施。
+/// JSON 载荷字节由 <see cref="StreamFrameSerializer"/> 池化序列化产出（稳态每项零堆分配，
+/// P1 实施前为 SerializeToUtf8Bytes 的 byte[]/item，实测 56B/项）。零拷贝下推
+/// （Utf8JsonWriter 直写 PipeWriter）属 ADR-030 分期 Phase 2「PipeWriter 化」项，
+/// 经 bench 实测证伪（CPU 持平而分配 2.4×）后收窄，暂不实施。
 /// <para>变异红证明（在案，Phase 1）：WriteDataFrame 替换为字符串形态（Serialize → 插值帧串 →
 /// GetBytes）后，零分配断言按 ~3× 载荷尺寸判红，恢复 span 形态转绿。</para>
 /// </remarks>
@@ -695,6 +695,68 @@ internal static class StreamFrameWriter
         var span = writer.GetSpan(HeartbeatFrame.Length);
         HeartbeatFrame.CopyTo(span);
         writer.Advance(HeartbeatFrame.Length);
+    }
+}
+
+/// <summary>
+/// 帧载荷序列化的 ThreadStatic 池（ADR-030 P1，2026-10-18 性能实施轮）——消除默认帧路径
+/// 每项一笔 <see cref="JsonSerializer.SerializeToUtf8Bytes{T}(T, JsonTypeInfo{T})"/> 的
+/// byte[]（实测 56B/项；探针与 BDN 对照见 docs/performance.md 流式读链路首测节）。
+/// </summary>
+/// <remarks>
+/// 形态复用 <c>PalDDD.Serialization.JsonMessageSerializer</c> 的 R8/ADR-029 池化路径
+/// （ThreadStatic writer + ArrayBufferWriter，Clear/Reset 后 Serialize + Flush），输出落
+/// 池内缓冲、取 <see cref="ArrayBufferWriter{T}.WrittenSpan"/> 交 framing span 直写，
+/// 稳态每项零堆分配（探针实测 0.0 B/项 vs 56.0 B/项，CPU 持平到更快）。
+/// <para>⚠️ 重入限制（同 JsonMessageSerializer v27/v29 声明）：同线程嵌套调用（半帧序列化
+/// 期间再次进入本类）会 Clear 掉外层已写内容。流式端点半帧序列化期间不存在嵌套路径
+/// （自定义 TItem 的 JsonConverter 回调本类属极端形态），此处为防御性文档。</para>
+/// <para>容量驻留：ArrayBufferWriter 按历史峰值保留，超 256KB 弃槽重建（R9 同族纪律，
+/// 与 JsonMessageSerializer.MaxResidentBufferBytes 同阈值）。返回的 span 仅在同线程
+/// 下一次 Serialize 前有效——调用方须同步拷贝（framing 直写即此形态）。</para>
+/// </remarks>
+internal static class StreamFrameSerializer
+{
+    private const int MaxResidentBufferBytes = 256 * 1024;
+
+    [ThreadStatic]
+    private static ArrayBufferWriter<byte>? _tlsBufferWriter;
+
+    [ThreadStatic]
+    private static Utf8JsonWriter? _tlsWriter;
+
+    /// <summary>序列化单项并返回 UTF-8 字节视图（池内缓冲，同线程下次调用前有效）。</summary>
+    public static ReadOnlySpan<byte> Serialize<TItem>(TItem item, JsonTypeInfo<TItem> jsonTypeInfo)
+    {
+        ArgumentNullException.ThrowIfNull(jsonTypeInfo);
+
+        var bufferWriter = _tlsBufferWriter;
+        if (bufferWriter is null || bufferWriter.Capacity > MaxResidentBufferBytes)
+        {
+            // R9/P2-1 同族：超阈值弃槽重建（初始 512B，按需增长）
+            bufferWriter = new ArrayBufferWriter<byte>(512);
+            _tlsBufferWriter = bufferWriter;
+        }
+        else
+        {
+            bufferWriter.Clear();
+        }
+
+        var writer = _tlsWriter;
+        if (writer is null)
+        {
+            writer = new Utf8JsonWriter(bufferWriter);
+            _tlsWriter = writer;
+        }
+        else
+        {
+            writer.Reset(bufferWriter);
+        }
+
+        JsonSerializer.Serialize(writer, item, jsonTypeInfo);
+        writer.Flush();
+
+        return bufferWriter.WrittenSpan;
     }
 }
 

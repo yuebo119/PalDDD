@@ -144,9 +144,11 @@ public class StreamReadBenchmarks
         => JsonSerializer.SerializeToUtf8Bytes(_chunk, StreamBenchJsonContext.Default.StreamBenchChunk);
 
     [Benchmark]
-    public void SerializeAndFrame()
+    public void SerializeAndFrame_Pooled()
+        // P1 后的生产默认路径：池化序列化（稳态每项零堆分配）+ framing span 直写。
+        // 对照锚为 Serialize_PerItem（byte[] 形态，P1 前本 lane 即此形态，85.89ns/56B）
         => StreamFrameWriter.WriteDataFrame(
-            _sink, JsonSerializer.SerializeToUtf8Bytes(_chunk, StreamBenchJsonContext.Default.StreamBenchChunk));
+            _sink, StreamFrameSerializer.Serialize(_chunk, StreamBenchJsonContext.Default.StreamBenchChunk));
 
     [Benchmark]
     public void ZeroCopyFrame()
@@ -170,8 +172,9 @@ public class StreamReadBenchmarks
     [Benchmark]
     public async Task PerFrame_Default_WithFlush()
     {
-        var json = JsonSerializer.SerializeToUtf8Bytes(_chunk, StreamBenchJsonContext.Default.StreamBenchChunk);
-        StreamFrameWriter.WriteDataFrame(_memoryWriter, json);
+        // P1 后的生产每帧路径：池化序列化 + framing + FlushAsync
+        StreamFrameWriter.WriteDataFrame(
+            _memoryWriter, StreamFrameSerializer.Serialize(_chunk, StreamBenchJsonContext.Default.StreamBenchChunk));
         await _memoryWriter.FlushAsync();
     }
 

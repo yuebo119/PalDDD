@@ -520,6 +520,62 @@ public sealed partial class StreamQueryEndpointTests
         await Assert.That(allocated).IsEqualTo(0);
     }
 
+    // ─── P1：帧载荷序列化池化（消除每项 SerializeToUtf8Bytes 的 56B byte[]） ───
+
+    [Test]
+    public async Task StreamFrameSerializer_PerItem_ZeroAllocationAfterWarmup()
+    {
+        // 锁定池化序列化稳态每项零堆分配（探针实测 0.0 B/项 vs SerializeToUtf8Bytes 56.0 B/项，
+        // 见 docs/performance.md 流式读链路首测节）。预热先建池（首调构造 writer/buffer）
+        var item = new TokenChunk(7, "token");
+        const int Iterations = 1000;
+        for (var i = 0; i < Iterations; i++)
+            _ = StreamFrameSerializer.Serialize(item, StreamTestJsonContext.Default.TokenChunk);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < Iterations; i++)
+            _ = StreamFrameSerializer.Serialize(item, StreamTestJsonContext.Default.TokenChunk);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        await Assert.That(allocated).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task StreamFrameSerializer_OutputMatchesSerializeToUtf8Bytes()
+    {
+        // 输出等价锁定：池化路径与 SerializeToUtf8Bytes 逐位一致（防 writer 状态/Reset 缺陷）
+        var items = new[]
+        {
+            new TokenChunk(0, "Hello"),
+            new TokenChunk(1, " stream"),
+            new TokenChunk(2, "world")
+        };
+        foreach (var item in items)
+        {
+            var expected = JsonSerializer.SerializeToUtf8Bytes(item, StreamTestJsonContext.Default.TokenChunk);
+            var actual = StreamFrameSerializer.Serialize(item, StreamTestJsonContext.Default.TokenChunk);
+            await Assert.That(actual.SequenceEqual(expected)).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task StreamFrameSerializer_SpanValidUntilNextCall_ConsecutiveItemsDistinct()
+    {
+        // 池内缓冲生命周期契约：返回 span 仅同线程下次调用前有效；连续两项内容各自正确
+        // （防 Clear/Reset 时序缺陷导致两项串内容）
+        var first = StreamFrameSerializer.Serialize(new TokenChunk(0, "a"), StreamTestJsonContext.Default.TokenChunk);
+        var firstCopy = first.ToArray();
+        var second = StreamFrameSerializer.Serialize(new TokenChunk(1, "b"), StreamTestJsonContext.Default.TokenChunk);
+        var secondCopy = second.ToArray();
+
+        await Assert.That(firstCopy.SequenceEqual(secondCopy)).IsFalse();
+        await Assert.That(Encoding.UTF8.GetString(firstCopy)).Contains("\"a\"");
+        await Assert.That(Encoding.UTF8.GetString(secondCopy)).Contains("\"b\"");
+    }
+
     // ─── 测试基础设施 ───
 
     private static ServiceProvider BuildProvider(
