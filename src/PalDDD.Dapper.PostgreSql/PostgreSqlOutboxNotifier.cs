@@ -143,8 +143,10 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
                 // 注册 LISTEN
                 await using var cmd = conn.CreateCommand();
                 // ITM-636：双引号标识符——避免 PG 未引号标识符小写折叠（见 ValidateChannelName 注释）
+#pragma warning disable S2077 // _channelName 经 ValidateChannelName 白名单 + 双引号包裹
                 // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- _channelName 经 ValidateChannelName 白名单 [A-Za-z0-9_]，非用户输入
-                cmd.CommandText = $"LISTEN \"{_channelName}\""; // NOSONAR: S2077 同上（白名单 + 双引号包裹）
+                cmd.CommandText = $"LISTEN \"{_channelName}\"";
+#pragma warning restore S2077
                 await cmd.ExecuteNonQueryAsync(stoppingToken).ConfigureAwait(false);
 
                 _logger.Information($"PostgreSQL LISTEN started on channel '{_channelName}'");
@@ -268,8 +270,10 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
                         await conn.OpenAsync(ct).ConfigureAwait(false);
                     using var cmd = conn.CreateCommand();
                     // ITM-636：双引号标识符——与 LISTEN 侧大小写口径一致（见 ValidateChannelName 注释）
+#pragma warning disable S2077 // _channelName 经 ValidateChannelName 白名单 + 双引号包裹
                     // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- _channelName 经 ValidateChannelName 白名单 [A-Za-z0-9_]，非用户输入
-                    cmd.CommandText = $"NOTIFY \"{_channelName}\""; // NOSONAR: S2077 同上（白名单 + 双引号包裹）
+                    cmd.CommandText = $"NOTIFY \"{_channelName}\"";
+#pragma warning restore S2077
                     await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
                 }
                 catch (Exception selfWakeEx)

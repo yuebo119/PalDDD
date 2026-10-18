@@ -193,7 +193,9 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
             _ => "INTEGER",
         };
         await using var cmd = CreateRawCommand();
-        cmd.CommandText = $"SELECT MIN(CASE WHEN status <> 1 THEN CAST(position AS {castType}) END), MAX(CAST(position AS {castType})) FROM projection_checkpoints WHERE projection_name = @p0 AND source_name = @p1"; // NOSONAR: S2077 castType 为方言常量（BIGINT/SIGNED/INTEGER）
+#pragma warning disable S2077 // castType 为方言常量（BIGINT/SIGNED/INTEGER），值侧参数化
+        cmd.CommandText = $"SELECT MIN(CASE WHEN status <> 1 THEN CAST(position AS {castType}) END), MAX(CAST(position AS {castType})) FROM projection_checkpoints WHERE projection_name = @p0 AND source_name = @p1";
+#pragma warning restore S2077
         AddParam(cmd, "@p0", projectionName);
         AddParam(cmd, "@p1", sourceName);
         try

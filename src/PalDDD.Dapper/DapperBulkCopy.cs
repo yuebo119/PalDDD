@@ -377,8 +377,10 @@ public static class DapperBulkCopy
 
         await using var cmd = conn.CreateCommand();
         cmd.Transaction = mysqlTx;
+#pragma warning disable S2077 // 标识符白名单 + 值参数化
         // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- sql 由已验证标识符 + 参数占位符构造
         cmd.CommandText = sql;
+#pragma warning restore S2077
         for (var r = 0; r < items.Count; r++)
         {
             var values = extractor(items[r]);
@@ -456,8 +458,10 @@ public static class DapperBulkCopy
         try
         {
             await using var cmd = conn.CreateCommand();
+#pragma warning disable S2077 // 标识符白名单 + 值参数化
             // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- sql 由已验证标识符 + 参数占位符构造
-            cmd.CommandText = sql; // NOSONAR: S2077 sql 由已验证标识符 + 参数占位符构造
+            cmd.CommandText = sql;
+#pragma warning restore S2077
             cmd.Transaction = transaction ?? localTx;
 
             // 🔄 复用参数 — 每次循环只改 Value，不重新 CreateParameter

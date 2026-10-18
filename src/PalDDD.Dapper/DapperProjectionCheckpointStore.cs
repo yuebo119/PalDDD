@@ -238,8 +238,10 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         var sql = $"SELECT MIN(CASE WHEN status <> 1 THEN CAST(position AS {castType}) END) AS FirstIncomplete, MAX(CAST(position AS {castType})) AS MaxPosition FROM projection_checkpoints WHERE projection_name = @projectionName AND source_name = @sourceName";
         try
         {
-            var row = await connection.QueryFirstOrDefaultAsync<ResumeRow>( // NOSONAR: S2077 sql 由方言常量 castType 构造，值侧参数化
+#pragma warning disable S2077 // sql 由方言常量 castType 构造，值侧参数化
+            var row = await connection.QueryFirstOrDefaultAsync<ResumeRow>(
                 sql, new { projectionName, sourceName }, Tx).ConfigureAwait(false);
+#pragma warning restore S2077
             if (row is null)
                 return null; // 理论不可达（聚合恒返一行）——防御性按无行处理
             var resume = row.FirstIncomplete

@@ -375,8 +375,9 @@ jobs:
 
   mutation:
     # 2026-10-18：Stryker.NET 5.0.0 的 MTP runner 已验证可跑（--test-runner mtp；
-    # 4.13 起预览、5.0.0 支持 perTest coverage）。变异测试耗时且当前基线低，
-    # 只在手动 workflow_dispatch 触发；配置见 test/PalDDD.Compression.Tests/stryker-config.json。
+    # 4.13 起预览、5.0.0 支持 perTest coverage）。两个窄基线均 100%：
+    # Compression/CompressionProvider 与 Transactions/MySqlLeasePolicy；
+    # 只在手动 workflow_dispatch 触发（全仓变异成本高，不进门禁）。
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -394,6 +395,10 @@ jobs:
 
       - name: Mutation baseline (Compression)
         working-directory: test/PalDDD.Compression.Tests
+        run: dotnet stryker --config-file stryker-config.json
+
+      - name: Mutation baseline (Transactions lease policy)
+        working-directory: test/PalDDD.Transactions.Tests
         run: dotnet stryker --config-file stryker-config.json
 
   coverage:
