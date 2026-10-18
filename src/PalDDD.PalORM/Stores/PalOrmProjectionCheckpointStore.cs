@@ -193,7 +193,7 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
             _ => "INTEGER",
         };
         await using var cmd = CreateRawCommand();
-        cmd.CommandText = $"SELECT MIN(CASE WHEN status <> 1 THEN CAST(position AS {castType}) END), MAX(CAST(position AS {castType})) FROM projection_checkpoints WHERE projection_name = @p0 AND source_name = @p1";
+        cmd.CommandText = $"SELECT MIN(CASE WHEN status <> 1 THEN CAST(position AS {castType}) END), MAX(CAST(position AS {castType})) FROM projection_checkpoints WHERE projection_name = @p0 AND source_name = @p1"; // NOSONAR: S2077 castType 为方言常量（BIGINT/SIGNED/INTEGER）
         AddParam(cmd, "@p0", projectionName);
         AddParam(cmd, "@p1", sourceName);
         try
@@ -231,7 +231,7 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
     /// 均返回 Kind=Utc（探针实测幂等）。
     /// </summary>
     private static DateTimeOffset GetUtc(DbDataReader reader, int ordinal)
-        => DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc);
+        => new(DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc), TimeSpan.Zero);
 
     /// <summary>
     /// ITM-243：创建 raw command 并挂接 IUnitOfWork 活动事务。GetRawConnection().CreateCommand()

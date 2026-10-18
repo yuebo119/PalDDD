@@ -353,6 +353,49 @@ jobs:
       - name: Analyzer baseline ratchet
         run: dotnet run scripts/quality-baseline.cs
 
+  semgrep:
+    # 2026-10-18：评估轮 6/6 误报已逐条加 nosemgrep 依据注释（标识符白名单/编译期常量/
+    # 入口校验），当前基线 0 findings。规则包固定 p/csharp + p/security-audit；
+    # --error 使任何新 finding 阻断。Semgrep 只扫 src（不扫历史文档/测试样本）。
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Semgrep
+        run: pip install semgrep==1.181.0
+
+      - name: Semgrep scan (src)
+        run: semgrep scan --config p/csharp --config p/security-audit --error --metrics=off src
+
+  mutation:
+    # 2026-10-18：Stryker.NET 5.0.0 的 MTP runner 已验证可跑（--test-runner mtp；
+    # 4.13 起预览、5.0.0 支持 perTest coverage）。变异测试耗时且当前基线低，
+    # 只在手动 workflow_dispatch 触发；配置见 test/PalDDD.Compression.Tests/stryker-config.json。
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '11.0.x'
+
+      - name: Install Stryker
+        run: dotnet tool install -g dotnet-stryker --version 5.0.0
+
+      - name: Mutation baseline (Compression)
+        working-directory: test/PalDDD.Compression.Tests
+        run: dotnet stryker --config-file stryker-config.json
+
   coverage:
     # 2026-09-14 接线——此前 `scripts/ci-coverage.cs` 是「脚本就绪但未接线」的已知缺口。
     # 接线门槛是阈值校准：原 0.65 锚定 2026-07-30 基线 67.9%（67.9 − 3 ≈ 65），与当前

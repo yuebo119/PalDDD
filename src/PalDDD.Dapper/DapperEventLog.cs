@@ -36,6 +36,7 @@ using static PalDDD.Dapper.DapperSqlErrorClassifier;
 
 using PalDDD.Core.Diagnostics;
 using PalDDD.EventLog;
+using System.Runtime.InteropServices;
 namespace PalDDD.Dapper;
 
 /// <summary>Dapper 事件日志 — 实现 IEventLog 接口</summary>
@@ -97,7 +98,7 @@ public sealed class DapperEventLog : IEventLog
         // 预查 + Matches 失败逐字一致（重查实际版本转并发异常），省预查往返。k>1 走批路径。
         if (events.Count == 1 && _dbType == DapperDbType.PostgreSql)
         {
-            var evt = events[0]!;
+            var evt = events[0];
             var nowFast = _timeProvider.GetUtcNow();
             // 参数形态镜像下方慢路径（byte[] 显式 DbType.Binary 的 AOT 实验结论同源），
             // 唯一差异：StreamVersion 不传（服务端原子计算）
@@ -112,8 +113,8 @@ public sealed class DapperEventLog : IEventLog
             dpFast.Add("RecordedAt", ToTimeParam(nowFast));
             dpFast.Add("ActorId", evt.Audit.ActorId);
             dpFast.Add("Reason", evt.Audit.Reason);
-            dpFast.Add("CorrelationId", evt.Audit.CorrelationId?.ToString());
-            dpFast.Add("CausationId", evt.Audit.CausationId?.ToString());
+            dpFast.Add("CorrelationId", evt.Audit.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+            dpFast.Add("CausationId", evt.Audit.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
             dpFast.Add("TraceParent", evt.Audit.TraceParent);
             dpFast.Add("TraceState", evt.Audit.TraceState);
             var sqlFast = expectedVersion.Kind switch
@@ -265,8 +266,8 @@ public sealed class DapperEventLog : IEventLog
                 // 现按 EventData.Audit 全量映射 6 字段（对齐 PalORM/EFCore）
                 dp.Add("ActorId", evt.Audit.ActorId);
                 dp.Add("Reason", evt.Audit.Reason);
-                dp.Add("CorrelationId", evt.Audit.CorrelationId?.ToString());
-                dp.Add("CausationId", evt.Audit.CausationId?.ToString());
+                dp.Add("CorrelationId", evt.Audit.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+                dp.Add("CausationId", evt.Audit.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
                 dp.Add("TraceParent", evt.Audit.TraceParent);
                 dp.Add("TraceState", evt.Audit.TraceState);
                 pos = await _connection.QuerySingleAsync<long>(sql, dp, Tx).ConfigureAwait(false);
@@ -376,6 +377,7 @@ public sealed class DapperEventLog : IEventLog
             }
             catch (System.Data.Common.DbException)
             {
+                // 重查失败：保留原异常路径（诊断查询尽力而为，失败不掩盖主因）
             }
             if (requerySucceeded && (actualVersion ?? -1) > (currentVersion ?? -1))
                 throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);
@@ -422,6 +424,7 @@ public sealed class DapperEventLog : IEventLog
             }
             catch (System.Data.Common.DbException)
             {
+                // 重查失败：保留原异常路径（诊断查询尽力而为，失败不掩盖主因）
             }
             if (requerySucceeded && (actualVersion ?? -1) > (currentVersion ?? -1))
                 throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);
@@ -440,6 +443,7 @@ public sealed class DapperEventLog : IEventLog
     }
 
     /// <summary>B2：MySQL 批量化位置范围回查结果（列别名 Min/Max 按名映射）。</summary>
+    [StructLayout(LayoutKind.Auto)]
     private readonly record struct PositionRange(long Min, long Max);
 
     /// <summary>
@@ -478,8 +482,8 @@ public sealed class DapperEventLog : IEventLog
             dp.Add(p + "md", evt.MetadataArray, DbType.Binary);
             dp.Add(p + "aid", evt.Audit.ActorId);
             dp.Add(p + "rs", evt.Audit.Reason);
-            dp.Add(p + "cid", evt.Audit.CorrelationId?.ToString());
-            dp.Add(p + "cau", evt.Audit.CausationId?.ToString());
+            dp.Add(p + "cid", evt.Audit.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+            dp.Add(p + "cau", evt.Audit.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
             dp.Add(p + "tp", evt.Audit.TraceParent);
             dp.Add(p + "ts", evt.Audit.TraceState);
         }
@@ -642,7 +646,9 @@ public sealed class DapperEventLog : IEventLog
         Justification = "Dapper QuerySingleAsync<T> 运行时反射物化（与同文件 EventRow 同路径），分析器不可见")]
     private sealed class AppendSingleRow
     {
+#pragma warning disable S1144 // Dapper 运行时反射物化使用 init 访问器
         public long GlobalPosition { get; init; }
         public long StreamVersion { get; init; }
+#pragma warning restore S1144
     }
 }

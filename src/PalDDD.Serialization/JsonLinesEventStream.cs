@@ -31,6 +31,10 @@ public sealed class JsonLinesEventWriter
     /// 同线程嵌套序列化共用同一 TLS 池，跨实例不隔离；唯一规避路径是避开 converter 内回调
     /// （嵌套值先物化再进入外层序列化）。多态信封等嵌套场景受此约束。
     /// </remarks>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Major Code Smell",
+        "S2325:Methods and properties that don't access instance data should be static",
+        Justification = "实例 API 保持调用形态；TLS 池是静态实现细节。")]
     public ReadOnlyMemory<byte> SerializeLine<TMessage>(
         TMessage message,
         System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage> typeInfo)
@@ -126,6 +130,10 @@ public sealed class JsonLinesEventReader
     /// 直调——.NET 8+ 对单字节 IndexOf 已有向量化快速路径，原单元素 SearchValues 经
     /// 委托间接层量级持平或略慢（微 CPU 项，SIMD 优势需多字节集合）。</para>
     /// </remarks>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Major Code Smell",
+        "S2325:Methods and properties that don't access instance data should be static",
+        Justification = "实例 API 保持调用形态；TLS 池是静态实现细节。")]
     public IReadOnlyList<TMessage> DeserializeAll<TMessage>(
         ReadOnlyMemory<byte> payload,
         System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage> typeInfo)

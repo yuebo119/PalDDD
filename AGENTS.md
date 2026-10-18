@@ -50,7 +50,7 @@
 
 ### CI（`.github/workflows/ci.yml`）
 
-`build-and-test`（vuln-scan → restore → build → **format-verify**（`dotnet format style --verify-no-changes`，8e97e9c 增） → test → secret-scan → dapper-param-guard → doc-consistency → config-policy → license-policy → count-audit → encoding-gate/tech-debt/test-gate 循环 → `gate.cs`（G22/G23/G24）→ `gate-audit --inventory` → gate-lite。**2026-09-22 T-02/T-04**：`.ai` 恒假分支已删，主仓门禁全部无条件执行；`verify-ai`/`template-gate` 因 `.ai` 独立裁决永不进 CI，改由 pre-commit 与 `.ai` 仓钩子承担）· `aot-verify`（PublishAot + 运行二进制）· **`coverage`（覆盖率阈值门禁 0.70，先 `dotnet tool restore` 取 reportgenerator）** · `dialect-probe`（Testcontainers PG/MySQL；job 内含 Path gate 路径过滤步骤，仅 Store/SQL/DDL/映射面变更触发——非独立 job）。
+`build-and-test`（vuln-scan → restore → build → **format-verify**（`dotnet format style --verify-no-changes`，8e97e9c 增） → test → secret-scan → dapper-param-guard → doc-consistency → config-policy → license-policy → count-audit → encoding-gate/tech-debt/test-gate 循环 → `gate.cs`（G22/G23/G24）→ `gate-audit --inventory` → gate-lite。**2026-09-22 T-02/T-04**：`.ai` 恒假分支已删，主仓门禁全部无条件执行；`verify-ai`/`template-gate` 因 `.ai` 独立裁决永不进 CI，改由 pre-commit 与 `.ai` 仓钩子承担）· `aot-verify`（PublishAot + 运行二进制）· **`coverage`（覆盖率阈值门禁 0.70，先 `dotnet tool restore` 取 reportgenerator）** · `dialect-probe`（Testcontainers PG/MySQL；job 内含 Path gate 路径过滤步骤，仅 Store/SQL/DDL/映射面变更触发——非独立 job）· `quality-analyzers`（第三方分析器基线 0 棘轮）· `semgrep`（p/csharp + p/security-audit，0 findings 门禁）· `mutation`（workflow_dispatch 手动触发，Stryker 5.0.0 MTP runner）。
 
 ### 门禁可信度（改动或新增门禁后必跑）
 

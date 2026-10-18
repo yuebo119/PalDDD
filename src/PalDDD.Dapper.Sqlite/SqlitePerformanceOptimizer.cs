@@ -147,7 +147,8 @@ public static class SqlitePerformanceOptimizer
         if (level is SqliteOptimizeLevel.Production or SqliteOptimizeLevel.Light)
         {
             using var walCmd = connection.CreateCommand();
-            walCmd.CommandText = WalPragma;
+            // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- WalPragma 是 const string，无插值/用户输入
+            walCmd.CommandText = WalPragma; // NOSONAR: S2077 编译期常量
             var walResult = await walCmd.ExecuteScalarAsync().ConfigureAwait(false);
             if (!string.Equals(walResult?.ToString(), "wal", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(
@@ -155,7 +156,8 @@ public static class SqlitePerformanceOptimizer
                     + "目标卷可能不支持 WAL（网络盘/只读卷）；WAL 依赖的并发读写语义不会成立。");
 
             using var cmd = connection.CreateCommand();
-            cmd.CommandText = level == SqliteOptimizeLevel.Production ? ProductionRestPragma : LightRestPragma;
+            // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- ProductionRestPragma/LightRestPragma 均为 const string
+            cmd.CommandText = level == SqliteOptimizeLevel.Production ? ProductionRestPragma : LightRestPragma; // NOSONAR: S2077 编译期常量
             await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
         else

@@ -56,7 +56,7 @@ public sealed class OutboxProcessor : PeriodicBackgroundProcessor
                // 值经 lambda 捕获恒定返回，等价旧形态。
                options is null
                    ? throw new ArgumentNullException(nameof(options))
-                   : () => pollInterval ?? options!.CurrentValue.PollInterval,
+                   : () => pollInterval ?? options.CurrentValue.PollInterval,
                timeProvider)
     {
         _logger = logger;

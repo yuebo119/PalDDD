@@ -589,7 +589,7 @@ public static class PostgreSqlMultiHost
                 if (close == entry.Length - 1)
                     return (entry, fallbackPort);
                 if (entry.AsSpan(close + 1).StartsWith(":")
-                    && int.TryParse(entry.AsSpan(close + 2), out var bracketed))
+                    && int.TryParse(entry.AsSpan(close + 2), System.Globalization.CultureInfo.InvariantCulture, out var bracketed))
                 {
                     return (entry[..(close + 1)], bracketed);
                 }
@@ -597,7 +597,7 @@ public static class PostgreSqlMultiHost
         }
         var colon = entry.LastIndexOf(':');
         if (colon >= 0 && entry.IndexOf(':') == colon
-            && int.TryParse(entry.AsSpan(colon + 1), out var embedded))
+            && int.TryParse(entry.AsSpan(colon + 1), System.Globalization.CultureInfo.InvariantCulture, out var embedded))
         {
             return (entry[..colon], embedded);
         }

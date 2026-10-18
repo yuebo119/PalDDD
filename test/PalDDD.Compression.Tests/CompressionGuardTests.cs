@@ -161,6 +161,33 @@ public sealed class CompressionGuardTests
         catch (NotSupportedException ex) { thrown = ex; }
         // 行为断言（弱断言棘轮）：Message 为 null/空时 Contains 必败——非空证明异常确实抛出
         await Assert.That(thrown?.Message ?? "").Contains("GZip");
+        // 变异补测（2026-10-18）：固定引导句——仅断言算法名无法杀死"删除后半句"的字符串变异体
+        await Assert.That(thrown?.Message ?? "").Contains("ensure only one compressor");
+    }
+
+    [Test]
+    public async Task CompressionProvider_NullCompressors_Throws()
+    {
+        await Assert.That(() => new CompressionProvider(null!)).Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task CompressionProvider_NullElement_Throws()
+    {
+        ICompressor[] compressors = [null!];
+        await Assert.That(() => new CompressionProvider(compressors)).Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task CompressionProvider_UnknownAlgorithm_ThrowsWithAlgorithmName()
+    {
+        var provider = new CompressionProvider([new StubCompressor(CompressionAlgorithm.GZip)]);
+        NotSupportedException? thrown = null;
+        try { _ = provider.GetCompressor(CompressionAlgorithm.Brotli); }
+        catch (NotSupportedException ex) { thrown = ex; }
+        // 变异补测（2026-10-18）：未注册算法的消息同时锁定算法名与引导句
+        await Assert.That(thrown?.Message ?? "").Contains("Brotli");
+        await Assert.That(thrown?.Message ?? "").Contains("Ensure the corresponding");
     }
 
     private sealed class StubCompressor(CompressionAlgorithm algorithm) : ICompressor

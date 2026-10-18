@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using PalORM;
 using PalDDD.Core;
 using PalDDD.Idempotency;
+using System.Runtime.InteropServices;
 
 namespace PalDDD.PalORM.Stores;
 
@@ -72,18 +73,15 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
 
         if (record.ExpiresAt <= now) return null;
 
-        if (!reader.IsDBNull(6))
+        if (!reader.IsDBNull(6) && record.Status == IdempotencyRecordStatus.Completed)
         {
             // 原生二进制列（bytea/BLOB/LONGBLOB）——与 EFCore 栈 ResponsePayload 的 byte[] 转换对齐。
             // ITM-277（R43）往返保真：空 bytea（成功完成 + 空响应体，落库为空字节序列而非 NULL）
             // 同样回放 MarkCompleted——原 `Length > 0` 守卫使空响应读回 ResponsePayload=null，
             // 与"无响应"不可区分，幂等命中方以 null 判"无可复用响应"会重放副作用。
-            if (record.Status == IdempotencyRecordStatus.Completed)
-            {
-                // v54 P2：回放改 RestoreTerminalState——借用 Mark* 会使 Revision 偏移 +1，
-                // 该 record 若被用作 CAS 基准（TryStart 抢占路径）恒失配
-                record.RestoreTerminalState(reader.GetFieldValue<byte[]>(6), null);
-            }
+            // v54 P2：回放改 RestoreTerminalState——借用 Mark* 会使 Revision 偏移 +1，
+            // 该 record 若被用作 CAS 基准（TryStart 抢占路径）恒失配
+            record.RestoreTerminalState(reader.GetFieldValue<byte[]>(6), null);
         }
         if (!reader.IsDBNull(7) && record.Status == IdempotencyRecordStatus.Failed)
         {
@@ -219,6 +217,7 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
     }
 
     /// <summary>B5：冲突分类所需的最小信息（替代轻量读处的完整 IdempotencyRecord）。</summary>
+    [StructLayout(LayoutKind.Auto)]
     private readonly record struct IdempotencyConflictInfo(
         IdempotencyRecordStatus Status, DateTimeOffset LockedUntil, DateTimeOffset ExpiresAt, long Revision);
 
@@ -286,7 +285,7 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
     /// 均返回 Kind=Utc（探针实测幂等）。
     /// </summary>
     private static DateTimeOffset GetUtc(DbDataReader reader, int ordinal)
-        => DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc);
+        => new(DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc), TimeSpan.Zero);
 
     /// <summary>
     /// v43 P2：时间戳列 DBNull 容错读取——DBNull 回退 DateTimeOffset.MinValue（容错口径见

@@ -649,10 +649,12 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // A8（S1 轮，2026-10-15）：非泛型查找静态缓存一次 + MakeGenericMethod 结果按子状态
         // 类型缓存——原每 attempt 一次 GetMethod + MakeGenericMethod + Invoke，查找与构造
         // 部分按类型稳定对应，缓存消重复成本（Invoke 语义不变）。
+#pragma warning disable S3011 // 子 Saga 解析是 AOT 非目标反射路径（RequiresUnreferencedCode/RequiresDynamicCode 已声明）
         var method = typeof(Saga<TState>).GetMethod(
             nameof(ResolveChildSaga),
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,
             null, Type.EmptyTypes, null);
+#pragma warning restore S3011
 
         if (method is not null)
         {
@@ -665,7 +667,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
     // A8（S1 轮）：MakeGenericMethod 结果按子状态类型缓存（Saga<TState> 每闭合泛型一份，
     // ChildSaga 每 attempt 原各一次构造）。
+#pragma warning disable S2743 // 按闭合泛型缓存是刻意语义（每 TState 一份，A8 注释已声明）
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, System.Reflection.MethodInfo> ResolveChildSagaGenericByStateType = new();
+#pragma warning restore S2743
 
     /// <summary>通过反射创建子 Saga 状态实例（仅用于 AOT 非目标场景）。</summary>
     [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode("Child state instantiation relies on Activator.CreateInstance; provide a factory for AOT.")]

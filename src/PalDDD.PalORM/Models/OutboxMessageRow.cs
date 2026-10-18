@@ -148,8 +148,8 @@ public sealed partial class OutboxMessageRow
         LockedBy = m.LockedBy,
         LockedUntil = m.LockedUntil,
         Error = m.Error,
-        CorrelationId = m.CorrelationId?.ToString(),
-        CausationId = m.CausationId?.ToString(),
+        CorrelationId = m.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+        CausationId = m.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
         TraceParent = m.TraceParent,
         TraceState = m.TraceState,
     };

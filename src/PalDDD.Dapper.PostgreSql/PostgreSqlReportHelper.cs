@@ -73,7 +73,7 @@ public static class PostgreSqlReportHelper
         var columns = new string[reader.FieldCount];
         for (int i = 0; i < columns.Length; i++)
             columns[i] = reader.GetName(i);
-        await writer.WriteLineAsync(string.Join(',', columns.Select(EscapeCsvSpan))).ConfigureAwait(false);
+        await writer.WriteLineAsync(string.Join(',', columns.Select(EscapeCsvSpan)).AsMemory(), ct).ConfigureAwait(false);
 
         // 流式写入数据行
         long rowCount = 0;
@@ -92,7 +92,7 @@ public static class PostgreSqlReportHelper
             // byte[] 降级为 "System.Byte[]"、DateTime 丢时区/亚秒精度、float 精度失真
             var line = string.Join(',',
                 values.Select(v => v is null ? "" : EscapeCsvSpan(FormatCsvValue(v).AsSpan())));
-            await writer.WriteLineAsync(line).ConfigureAwait(false);
+            await writer.WriteLineAsync(line.AsMemory(), ct).ConfigureAwait(false);
 
             // v35 P3：FlushAsync 补传 ct（镜像同文件 ExportJsonLinesAsync 收尾 FlushAsync(ct)
             // 形态）——原无参调用使取消信号无法传导到刷盘等待，长导出中段/收尾取消要等
@@ -158,7 +158,7 @@ public static class PostgreSqlReportHelper
                 WriteJsonValue(jsonWriter, val);
             }
             jsonWriter.WriteEndObject();
-            jsonWriter.Flush();
+            await jsonWriter.FlushAsync(ct).ConfigureAwait(false);
             await stream.WriteAsync(s_jsonLinesNewline, ct).ConfigureAwait(false); // v21 B-3 勘误放弃：u8 是 ReadOnlySpan，WriteAsync 收 ReadOnlyMemory 无隐式转换；v27 P3（B 片 N6）经静态缓存字段消除每行分配
             jsonWriter.Reset();
             rowCount++;

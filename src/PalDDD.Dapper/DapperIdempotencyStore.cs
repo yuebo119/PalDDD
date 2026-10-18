@@ -1,6 +1,7 @@
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
 using Dapper;
 using PalDDD.Core;
 using PalDDD.Idempotency;
@@ -27,10 +28,8 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
 {
     private readonly DbConnection _connection;
     private readonly DapperDbType _dbType;
-    private readonly DapperSqlDialect _dialect;
     private readonly DbTransaction? _transaction;
     private DbTransaction? Tx => _transaction ?? DapperAmbientTransaction.TryGet(_connection);
-    private readonly TimeProvider _timeProvider;
 
     public DapperIdempotencyStore(
         DbConnection connection,
@@ -41,9 +40,9 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         ArgumentNullException.ThrowIfNull(connection);
         _connection = connection;
         _dbType = dbType;
-        _dialect = DapperSqlDialect.For(dbType);
         _transaction = transaction;
-        _timeProvider = timeProvider ?? TimeProvider.System;
+        // 保留 timeProvider 构造参数以维持公开签名；当前实现使用调用方传入的 now/数据库时钟。
+        _ = timeProvider;
     }
 
     /// <summary>时间参数方言编码（镜像 DapperOutboxStore.ToTimeParam——PG 原生 DateTimeOffset，
@@ -221,6 +220,7 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
     private async ValueTask<IdempotencyConflictInfo?> GetForConflictClassificationAsync(
         string operationName, string key, DateTimeOffset now, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         const string sql = """
             SELECT operation_name, idempotency_key, status, locked_until, expires_at, revision
             FROM idempotency_records
@@ -258,6 +258,7 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
     }
 
     /// <summary>B5：冲突分类所需的最小信息（替代轻量读处的完整 IdempotencyRecord）。</summary>
+    [StructLayout(LayoutKind.Auto)]
     private readonly record struct IdempotencyConflictInfo(
         IdempotencyRecordStatus Status, DateTimeOffset LockedUntil, DateTimeOffset ExpiresAt, long Revision);
 
@@ -334,7 +335,9 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
 
     /// <summary>ITM-242 口径：UTC 归一化（MySQL DATETIME Kind=Unspecified → offset 0）。</summary>
     private static DateTimeOffset ToUtcOrMin(DateTimeOffset value)
-        => value == default ? value : DateTime.SpecifyKind(value.DateTime, DateTimeKind.Utc);
+        => value == default
+            ? value
+            : new DateTimeOffset(DateTime.SpecifyKind(value.DateTime, DateTimeKind.Utc), TimeSpan.Zero);
 
 
     /// <summary>Dapper 物化 DTO（public setters 供 Dapper 映射——非领域实体）。

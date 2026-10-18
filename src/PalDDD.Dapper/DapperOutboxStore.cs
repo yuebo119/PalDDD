@@ -249,8 +249,8 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         // InMemory（列表直存）三栈保留领域值一致：同消息跨栈落库 created_at 相同，
         // ORDER BY created_at 投递序与 CreatedAt 往返断言跨栈成立。
         AddParam(cmd, "CreatedAt", ToTimeParam(message.CreatedAt));
-        AddParam(cmd, "CorrelationId", message.CorrelationId?.ToString());
-        AddParam(cmd, "CausationId", message.CausationId?.ToString());
+        AddParam(cmd, "CorrelationId", message.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+        AddParam(cmd, "CausationId", message.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         AddParam(cmd, "TraceParent", message.TraceParent);
         AddParam(cmd, "TraceState", message.TraceState);
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -283,7 +283,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         // 约束可接受。本方法现不再取批次时钟，该漂移属处理器时间语义。
         // v8 声明的「接口 AddMessagesAsync 无 CancellationToken 参数、本路径无法响应取消」缺口
         // 已在 v4.0 补齐（ADR-026 ④）：接口收 ct，本方法签名收参并经直接重载传播（M1-3 口径：收缩连接打开阶段）。
-        var conn = await EnsureOpenAsync().ConfigureAwait(false);
+        var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // P2 修复（八轮评审 PD17）：批量路径补 correlation/causation/trace 4 追踪列——
         // 单条路径 AddMessage（七轮）已补，批量漏列导致追踪链在批量写入时丢失；
         // extractor 末 4 项与单条 AddMessage 的参数语义逐一对齐。
@@ -292,7 +292,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
             ["id", "type", "payload", "content_type", "schema_version", "status", "created_at", "correlation_id", "causation_id", "trace_parent", "trace_state"],
             messages,
             m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, StatusPending, m.CreatedAt,
-                m.CorrelationId?.ToString(), m.CausationId?.ToString(), m.TraceParent, m.TraceState],
+                m.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture), m.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture), m.TraceParent, m.TraceState],
             Tx, ct).ConfigureAwait(false); // v4.0 ④（ADR-026）：ct 传播进批量路径
     }
 
@@ -484,16 +484,6 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
 
     public ValueTask<int> SaveChangesAsync(CancellationToken ct) => ValueTask.FromResult(0);
 
-    /// <summary>
-    /// 确保数据库连接已打开（同步版本，用于同步方法路径）。
-    /// 连接生命周期由 DI 容器管理的 Scoped DbConnection 控制，此处不负责关闭。
-    /// </summary>
-    private DbConnection EnsureOpen()
-    {
-        var conn = _connection;
-        if (conn.State != ConnectionState.Open) conn.Open();
-        return conn;
-    }
 
     /// <summary>
     /// 确保数据库连接已打开（异步版本，避免线程池阻塞）。

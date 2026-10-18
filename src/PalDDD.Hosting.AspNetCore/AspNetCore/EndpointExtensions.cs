@@ -142,7 +142,7 @@ public static class EndpointExtensions
             }
             catch (PalDDD.CQRS.PalValidationException ex)
             {
-                await WriteValidationProblemAsync(context, ex).ConfigureAwait(false);
+                await WriteValidationProblemAsync(context, ex, context.RequestAborted).ConfigureAwait(false);
                 return;
             }
             if (query is null)
@@ -157,7 +157,7 @@ public static class EndpointExtensions
                     ValidationProblemResponseFactory.CreateInvalidBody(
                         "Query binding returned null. Ensure all required query parameters are provided."),
                     PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-                    contentType: null).ConfigureAwait(false);
+                    contentType: null, cancellationToken: context.RequestAborted).ConfigureAwait(false);
                 return;
             }
             var dispatcher = context.RequestServices.GetRequiredService<CQRS.Dispatcher>();
@@ -225,7 +225,7 @@ public static class EndpointExtensions
             catch (CQRS.PalValidationException ex)
             {
                 // 同 MapQuery v25 P3 行为族 B8：绑定异常 400 而非逃逸 500
-                await WriteValidationProblemAsync(context, ex).ConfigureAwait(false);
+                await WriteValidationProblemAsync(context, ex, context.RequestAborted).ConfigureAwait(false);
                 return;
             }
             if (query is null)
@@ -236,7 +236,7 @@ public static class EndpointExtensions
                     ValidationProblemResponseFactory.CreateInvalidBody(
                         "Query binding returned null. Ensure all required query parameters are provided."),
                     PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-                    contentType: null).ConfigureAwait(false);
+                    contentType: null, cancellationToken: context.RequestAborted).ConfigureAwait(false);
                 return;
             }
             await StreamQueryCoreAsync(
@@ -317,7 +317,7 @@ public static class EndpointExtensions
         if (errors is { Count: > 0 })
         {
             await WriteValidationProblemAsync(
-                context, new CQRS.PalValidationException([.. errors])).ConfigureAwait(false);
+                context, new CQRS.PalValidationException([.. errors]), context.RequestAborted).ConfigureAwait(false);
             return;
         }
 
@@ -531,7 +531,7 @@ public static class EndpointExtensions
             await context.Response.WriteAsJsonAsync(
                 ValidationProblemResponseFactory.CreateUnsupportedContentType(),
                 PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-                contentType: null).ConfigureAwait(false);
+                contentType: null, cancellationToken: context.RequestAborted).ConfigureAwait(false);
             return (false, default);
         }
         T? body;
@@ -551,7 +551,7 @@ public static class EndpointExtensions
             await context.Response.WriteAsJsonAsync(
                 ValidationProblemResponseFactory.CreateInvalidBody("Request body is not valid JSON."),
                 PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-                contentType: null).ConfigureAwait(false);
+                contentType: null, cancellationToken: context.RequestAborted).ConfigureAwait(false);
             return (false, default);
         }
         catch (CQRS.PalValidationException ex)
@@ -559,7 +559,7 @@ public static class EndpointExtensions
             // P2 修复：验证失败异常映射 400（框架意图与实现一致化）
             // ITM-283（R45）：统一走 Factory 带 ProblemDetails body——原裸 400 与
             // 派发段（ITM-168）形态分叉（自定义 JsonConverter 抛此异常时客户端拿不到错误明细）
-            await WriteValidationProblemAsync(context, ex).ConfigureAwait(false);
+            await WriteValidationProblemAsync(context, ex, context.RequestAborted).ConfigureAwait(false);
             return (false, default);
         }
         if (body is null)
@@ -569,7 +569,7 @@ public static class EndpointExtensions
             await context.Response.WriteAsJsonAsync(
                 ValidationProblemResponseFactory.CreateInvalidBody("Request body is required."),
                 PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
-                contentType: null).ConfigureAwait(false);
+                contentType: null, cancellationToken: context.RequestAborted).ConfigureAwait(false);
             return (false, default);
         }
         return (true, body);
@@ -791,4 +791,6 @@ internal static class StreamFrameSerializer
 /// 门面的类别实参（类别名即本类型名，含查询/元素类型信息）；永不实例化（CA1812——
 /// 泛型实参形态由 DI 开放泛型注册解析，分析器不可见，Hosting csproj 已在 NoWarn 清单）。
 /// </summary>
+#pragma warning disable S2094 // 类别标记类型（IPalLogger 泛型实参，永不实例化）
 internal sealed class StreamQueryEndpoint<TQuery, TItem>;
+#pragma warning restore S2094

@@ -84,11 +84,11 @@ public sealed class PostgreSqlPipeline : IAsyncDisposable
 
         // 排空全部结果集（读循环不可省略——未读完不能 NextResult）
         // ITM-166 修复：补 ConfigureAwait(false)（对齐本方法其余 await）。
-        while (await reader.ReadAsync(ct).ConfigureAwait(false)) { }
+        while (await reader.ReadAsync(ct).ConfigureAwait(false)) { /* 排空结果集 */ }
         while (await reader.NextResultAsync(ct).ConfigureAwait(false))
         {
             // ITM-218 修复（三十二轮）：内层 ReadAsync 补齐——ITM-166 修复不完整（:75 注释已声称对齐）
-            while (await reader.ReadAsync(ct).ConfigureAwait(false)) { }
+            while (await reader.ReadAsync(ct).ConfigureAwait(false)) { /* 排空结果集（必须读完才能 NextResult） */ }
         }
 
         // 三轮评审修正：Npgsql 的 RecordsAffected 是跨全部语句的聚合值——

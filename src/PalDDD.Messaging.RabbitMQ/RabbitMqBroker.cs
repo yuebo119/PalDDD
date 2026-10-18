@@ -40,7 +40,6 @@ namespace PalDDD.Messaging.RabbitMQ;
     Justification = "Broker 消费回调需记录毒消息失败并执行合理 nack，需捕获 Exception 基类。")]
 public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
 {
-    private readonly IConnection _connection;
     private int _disposed;
     private readonly IChannel _channel;
     private readonly IPalLogger<RabbitMqBroker> _logger;
@@ -56,6 +55,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     // _consumers 持有列表）；多线程订阅/释放并发安全用 ConcurrentDictionary
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IAsyncDisposable> _subscriptions = new();
 
+    /// <summary>初始化 RabbitMQ Broker。</summary>
     /// <param name="prefetchCount">每消费者 unacked 消息上限（BasicQos prefetch，默认 10）。</param>
     /// <remarks>
     /// ⚠️ <b>ITM-639 前置条件——<paramref name="channel"/> 必须启用 publisher confirms</b>：
@@ -82,7 +82,6 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(logger);
 
-        _connection = connection;
         _channel = channel;
         _logger = logger;
         _prefetchCount = prefetchCount;
@@ -247,8 +246,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         MessagePublishContext context)
         => new()
         {
-            MessageId = messageId.ToString(),
-            CorrelationId = context.CorrelationId?.ToString(),
+            MessageId = messageId.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+            CorrelationId = context.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
             ContentType = descriptor.ContentType,
             Type = descriptor.Name,
             Persistent = true,
@@ -265,7 +264,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         Dictionary<string, object?>? headers = null;
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceParent, context.TraceParent);
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceState, context.TraceState);
-        AddHeader(ref headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString());
+        AddHeader(ref headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         return headers;
     }
 
@@ -313,7 +312,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             // 初始化失败会累积一个空壳队列。失败吞掉（channel 已关等，对齐安全包装模式）
             try
             {
-                await _channel.QueueDeleteAsync(queueName).ConfigureAwait(false);
+                await _channel.QueueDeleteAsync(queueName, cancellationToken: ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -444,11 +443,11 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             // v25 P2-5：ct 取消 → 异步解绑消费者终止消费；channel 已关等异常由安全包装吞成
             // Warning。句柄释放时 Dispose registration 防泄漏（释放与取消并发时，双
             // BasicCancelAsync 的后者同样被安全包装吞掉）
-            tokenReg = ct.Register(() => { _ = CancelConsumeSafeAsync(consumerTag!, queueName); });
+            tokenReg = ct.Register(() => { _ = CancelConsumeSafeAsync(consumerTag, queueName); });
         }
         catch
         {
-            tokenReg.Dispose();
+            await tokenReg.DisposeAsync().ConfigureAwait(false);
             if (consumerTag is not null)
                 await CancelConsumeSafeAsync(consumerTag, queueName).ConfigureAwait(false);
             linkedCts.Dispose();
@@ -471,10 +470,10 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         // channel 释放终结，仅 tokenReg 沿调用方 ct 生命周期滞留（修复前常态，收敛不改恶）
         var subscription = new AsyncSubscription(async () =>
         {
-            _subscriptions.TryRemove(consumerTag!, out _);
-            tokenReg.Dispose();
-            linkedCts.Cancel();
-            await CancelConsumeSafeAsync(consumerTag!, queueName).ConfigureAwait(false);
+            _subscriptions.TryRemove(consumerTag, out _);
+            await tokenReg.DisposeAsync().ConfigureAwait(false);
+            await linkedCts.CancelAsync().ConfigureAwait(false);
+            await CancelConsumeSafeAsync(consumerTag, queueName).ConfigureAwait(false);
             linkedCts.Dispose();
         });
         _subscriptions[consumerTag] = subscription;

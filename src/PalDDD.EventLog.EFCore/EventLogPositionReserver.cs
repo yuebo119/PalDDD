@@ -204,8 +204,12 @@ public sealed class EventLogPositionReserver
                     if (!probeSucceeded)
                         throw;
                     if (probe is not null && probe.Revision == snapshotRevision)
+                    {
+#pragma warning disable MA0054 // 此处无在捕异常可嵌入（探测失败分支已 throw; 保留原始异常）
                         throw new InvalidOperationException(
                             "The allocator revision was advanced by a concurrent commit (the failed CAS proves it), but the probe still returns the same stale revision — under MySQL REPEATABLE READ the concurrently committed revision is not visible to the current transaction snapshot; retrying inside the same transaction cannot succeed. The caller should retry with a new transaction, which establishes a fresh snapshot and can see the new revision.");
+#pragma warning restore MA0054
+                    }
                     continue;
                 }
                 catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
@@ -241,7 +245,7 @@ public sealed class EventLogPositionReserver
                     // 带语义异常——外层调用方以新事务重试可恢复（新事务建立新快照即可见）。
                     if (!allocatorRowVisible)
                         throw new InvalidOperationException(
-                            "Allocator row exists (the unique-constraint conflict proves it) but is invisible to the current transaction snapshot — under MySQL REPEATABLE READ the concurrently committed allocator row is not visible to this transaction's snapshot; retrying inside the same transaction cannot succeed. The caller should retry with a new transaction, which establishes a fresh snapshot and can see the row.");
+                            "Allocator row exists (the unique-constraint conflict proves it) but is invisible to the current transaction snapshot — under MySQL REPEATABLE READ the concurrently committed allocator row is not visible to this transaction's snapshot; retrying inside the same transaction cannot succeed. The caller should retry with a new transaction, which establishes a fresh snapshot and can see the row.", ex);
                     continue;
                 }
 

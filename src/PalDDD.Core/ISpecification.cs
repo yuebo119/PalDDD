@@ -241,6 +241,7 @@ internal sealed class ExpressionSpecification<T> : ISpecification<T>
     {
         _expression = expression ?? throw new ArgumentNullException(nameof(expression));
     }
+    /// <summary>判断当前表达式规格是否满足指定实体（内存求值，结果缓存）。</summary>
     /// <remarks>
     /// ITM-073：编译延迟到首次内存求值（结果缓存），AOT 场景走 <see cref="ToExpression"/> 零编译；
     /// 编译动作收敛在私有 helper（<see cref="Compile"/>）并诚实标注 RequiresDynamicCode——

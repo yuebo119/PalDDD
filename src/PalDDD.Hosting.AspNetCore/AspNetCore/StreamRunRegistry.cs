@@ -98,7 +98,7 @@ public sealed class StreamRunCapacityExceededException : Exception
 }
 
 /// <summary>run 的非泛型管理面（注册表持有与生命周期清理用）。</summary>
-internal interface IStreamRun
+internal interface IStreamRun : IDisposable
 {
     StreamRunState State { get; }
 
@@ -107,8 +107,6 @@ internal interface IStreamRun
     DateTimeOffset TerminalAt { get; }
 
     void Cancel();
-
-    void Dispose();
 }
 
 /// <summary>run 的缓冲项——event/id 在写入时固化（ADR-031：附着回放不重跑选择器）。</summary>
@@ -194,7 +192,9 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         Func<TItem, string>? eventSelector,
         Func<TItem, string>? idSelector)
         where TQuery : IStreamQuery<TItem>
+#pragma warning disable S8949 // 不向 Task.Run 传 token（取消由 PumpAsync 内部观察，调度前取消也必须进入终态）
         => _ = Task.Run(() => PumpAsync(handler, query, eventSelector, idSelector));
+#pragma warning restore S8949
 
     [SuppressMessage("Design", "CA1031",
         Justification = "run 泵必须捕获所有异常转为 Failed 终态（附着方据此收尾），否则异常在后台线程未观测。")]
@@ -216,7 +216,7 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
                 if (produced >= _options.MaxItems)
                 {
                     // 预算超限：取消（终态 Cancelled，与客户端取消同态——均非框架缺陷）
-                    _cts.Cancel();
+                    await _cts.CancelAsync().ConfigureAwait(false);
                     throw new OperationCanceledException(_cts.Token);
                 }
                 // event/id 写入时固化：附着回放不重跑选择器（可能有副作用）
@@ -338,7 +338,7 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
                 return (item.Index + 1, false);
         }
 
-        if (long.TryParse(lastEventId, out var parsed))
+        if (long.TryParse(lastEventId, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
         {
             var next = parsed + 1;
             if (next < _oldestAvailable)
@@ -366,8 +366,10 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         }
         if (grace is not null)
         {
+#pragma warning disable S8949 // 宽限期由 grace.Token 观察，调度前取消也必须执行清理
             _ = Task.Run(async () =>
             {
+#pragma warning restore S8949
                 try
                 {
                     await Task.Delay(_options.DetachGrace, grace.Token).ConfigureAwait(false);
