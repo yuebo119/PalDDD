@@ -64,9 +64,9 @@ public abstract class SqlServerOutboxDbContext(DbContextOptions options) : Outbo
 
         var leaseSeconds = (int)Math.Ceiling(leaseDuration.TotalSeconds);
         var nowSql = GetNowSql();
-#pragma warning disable EF1002 // FromSqlRaw with trusted provider-specific NOW expression
+#pragma warning disable EF1002, S2077 // FromSqlRaw + S2077：nowSql 为 GetNowSql 常量，其余参数已参数化
         return await OutboxMessages
-            .FromSqlRaw( // NOSONAR: S2077 nowSql 为 GetNowSql 常量，其余参数已参数化
+            .FromSqlRaw(
                 $@";WITH candidates AS (
                       SELECT TOP({{0}}) *
                       FROM OutboxMessages WITH (UPDLOCK, READPAST, ROWLOCK)
@@ -83,6 +83,6 @@ public abstract class SqlServerOutboxDbContext(DbContextOptions options) : Outbo
                 // （镜像 SqliteOutbox CAS 路径）
                 .AsNoTracking()
                 .ToListAsync(ct).ConfigureAwait(false);
-#pragma warning restore EF1002
+#pragma warning restore EF1002, S2077
     }
 }

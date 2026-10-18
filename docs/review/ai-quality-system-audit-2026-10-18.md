@@ -88,7 +88,7 @@
 ## 6. 遗留项关闭（2026-10-18 晚）
 
 1. `.ai` 无 remote：按用户裁决保持本地库，不添加 remote；README 保留 `git bundle` 命令作为唯一异地副本。
-2. Stryker：MTP runner 已验证（Stryker 5.0.0 `--test-runner mtp`），新增 `test/PalDDD.Compression.Tests/stryker-config.json` 与 workflow_dispatch `mutation` job；CompressionProvider 变异分数 40% → **100%**（新增 3 个守卫测试杀掉全部存活变异体）。
+2. Stryker：MTP runner 已验证（Stryker 5.0.0 `--test-runner mtp`），新增 `test/PalDDD.Compression.Tests/stryker-config.json` 与 `test/PalDDD.Transactions.Tests/stryker-config.json`，workflow_dispatch `mutation` job 跑两个窄基线；CompressionProvider 40% → **100%**，Transactions/MySqlLeasePolicy **100%**（229/229 测试）。
 3. Semgrep：6/6 误报逐条加 `nosemgrep` 依据注释，当前 **0 findings**；CI `semgrep` job 接入（p/csharp + p/security-audit，`--error`）。
 4. 分析器：642 → 280（规则子集）→ **0**（逐条修复/精确抑制），基线归零；CI `quality-analyzers` job 以 0 为棘轮。规则级裁决与站点级理由见 `docs/quality-analyzer-triage-2026-10-18.md`。
 5. review：pre-push 由提示升级为**阻断**（metrics 最后一轮 >30 天且 src 有变更），豁免文件 `.ai/review/review-exemption.json`（owner/expires/reason，当前至 2026-11-15）。
@@ -102,7 +102,9 @@
 | `scripts/quality-baseline.cs` | 基线 0，棘轮 0 == 0 |
 | 默认 Release 构建 | 0 警告 0 错误 |
 | 16 个测试项目 | 全部通过；Compression 46/46 |
-| Stryker（CompressionProvider） | 变异分数 **100%**（MTP runner） |
+| Stryker（CompressionProvider / MySqlLeasePolicy） | 变异分数 **100% / 100%**（MTP runner） |
 | Semgrep（p/csharp + p/security-audit） | **0 findings** |
+| AOT 真发布（win-x64） | AotSample 全检查通过；PalOrmSample PASSED |
+| differential-review 试点 | 1 条独特发现（S2077 纵深缺口）已修复；报告 `docs/review/differential-review-2026-10-18-quality-tooling.md` |
 | pre-push selftest | 全部通过（含 review 豁免正负例） |
 | `.ai` 钩子（secret-scan + verify-ai） | 通过 |

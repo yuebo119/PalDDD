@@ -67,9 +67,9 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
             throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for PostgreSQL INTERVAL.");
         var sec = (int)Math.Ceiling(leaseDuration.TotalSeconds);
         var nowSql = GetNowSql();
-#pragma warning disable EF1002 // FromSqlRaw with trusted provider-specific NOW expression
+#pragma warning disable EF1002, S2077 // FromSqlRaw + S2077：nowSql 为 GetNowSql 常量，其余参数已参数化
         return await OutboxMessages
-            .FromSqlRaw( // NOSONAR: S2077 nowSql 为 GetNowSql 常量，其余参数已参数化
+            .FromSqlRaw(
                 $@"UPDATE ""OutboxMessages""
                   SET ""LockedBy"" = {{2}}, ""LockedUntil"" = {nowSql} + ({{3}} * INTERVAL '1 second')
                   WHERE ""Id"" IN (
@@ -88,6 +88,6 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
             // SqliteOutbox CAS 路径的 AsNoTracking 形态（Sqlite 租约实体本就无跟踪且全链路工作）
             .AsNoTracking()
             .ToListAsync(ct).ConfigureAwait(false);
-#pragma warning restore EF1002
+#pragma warning restore EF1002, S2077
     }
 }

@@ -13,12 +13,12 @@
 | 自动修复（`dotnet format analyzers`） | 188 | MA0011/MA0021/MA0008 等机械修复 |
 | 逐条修复与精确抑制 | **0** | 真实缺陷修复 + 站点级 `#pragma`/`SuppressMessage` + 规则级裁决 |
 
-## 二、规则级裁决（`.editorconfig` 关闭）
+## 二、规则级与站点级裁决（业务判断）
 
 | 规则 | 条数（子集后） | 裁决 | 理由 |
 |---|---:|---|---|
 | MA0015 参数名 | 73 | 关闭 | 配置解析异常的消息已含具体配置键/值，paramName 不增加定位信息；公共 API 参数名由 S927/S3928 守护 |
-| S2077 SQL 注入模式 | 8 | 关闭 | 与 Semgrep `csharp-sqli` 重复；本仓 SQL 标识符均在入口白名单校验，CI `semgrep` job 为单一 SQL 注入防线（6 处 FP 已加 nosemgrep 依据注释） |
+| S2077 SQL 注入模式 | 8 | 站点级抑制 | 保留规则（不全局关闭，避免 Semgrep 覆盖不到的 `FromSqlRaw` 形态失去纵深）；8 个已验证站点逐处 `#pragma` 并注明白名单/常量/参数化依据；Semgrep 为独立防线 |
 | S1133 弃用代码 | 6 | 关闭 | 弃用窗口由 ADR-026 与 CHANGELOG 管理，分析器无法知道移除日期 |
 | S1199 嵌套块 | 5 | 关闭 | SQL 租约/管线的嵌套块是可读性结构，不是缺陷 |
 | S3267 LINQ 简化 | 4 | 关闭 | 与零分配/可读性纪律冲突，本仓优先显式循环 |
@@ -47,6 +47,8 @@
 2. 每条抑制必须写一行理由；禁止无理由 `#pragma`。
 3. `#pragma` 只包住最小作用域（单条语句/单个方法），不整文件关闭（JsonMessageSerializer 的 ThreadStatic 池是唯一文件级例外，类头已有重入声明）。
 4. 能用真实测试锁定的，优先补测试而不是抑制：本轮 CompressionProvider 的 6 个变异体由新增守卫测试杀掉，Stryker 分数 40% → **100%**。
+5. 同时使用 Sonar `#pragma` 与 Semgrep `nosemgrep` 时，`nosemgrep` 必须紧邻被检代码行；把 `#pragma` 放在它前面（本轮曾因插在中间导致 Semgrep 4 条回归，重排后清零）。
+
 
 ## 五、验证
 
