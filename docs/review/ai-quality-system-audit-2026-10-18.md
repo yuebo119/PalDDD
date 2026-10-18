@@ -93,16 +93,16 @@
 2. Stryker：MTP runner 已验证（Stryker 5.0.0 `--test-runner mtp`），两个 `stryker-config.json`（break 95）+ 独立月度/手动 `mutation.yml` + JSON/HTML artifact；CompressionProvider 100%、Transactions/MySqlLeasePolicy 100%（229/229）。
 3. Semgrep：6/6 误报逐条 `nosemgrep` 依据；当前 0 findings；CI `semgrep` job 含 29 规则 canary、SARIF artifact、`uv` 哈希锁。
 4. 分析器：642 → 280（规则子集）→ **0**；MA0015 按路径重启用公共/领域面（18 条修/精确抑制），S2077 站点级抑制；基线 0 棘轮。
-5. review：pre-push 调用 `scripts/review-freshness.cs`（stale 无豁免阻断）；**v92 维护轮 2026-10-18 落账，豁免文件已移除**，metrics 恢复新鲜。
+5. review：pre-push 调用 `scripts/review-freshness.cs`（**双层**：任一轮 30 天 + 全量/里程碑 90 天）；v92 维护轮 2026-10-18 落账，只重置任一轮时钟；最近全量仍为 v91（2026-09-19），下一次全量 due 2026-12-18；豁免文件已移除。
 6. `.ai` 不入主仓 CI 的裁决不变；守卫仍依赖每 clone 手动 `git config core.hooksPath .githooks`（README 已写明）。
-7. 新控制探针：quality-baseline（`--from-log` 正反例）、review-freshness（stale/豁免/fresh 三例）、xml-guard、vuln-scan、test-change-guard；gate-audit **39/39**，20 个门禁有探针。剩余 5 个为 meta/orchestrator/diagnostic（guard、hook-pre-commit、hook-pre-push、ci-failed-tests、gate-audit 自身），其组件或纯函数已覆盖。
+7. 新控制探针：quality-baseline（`--from-log` 正反例）、review-freshness（stale/豁免/fresh/全量超期四例）、xml-guard、vuln-scan、test-change-guard、config-policy C（可变标签拒绝）；gate-audit **41/41**，20 个门禁有探针。剩余 5 个为 meta/orchestrator/diagnostic（guard、hook-pre-commit、hook-pre-push、ci-failed-tests、gate-audit 自身），其组件或纯函数已覆盖。
 8. `.ai` 传感器台账新增分析器基线/Semgrep/mutation/review 债四行；README v2.5 与评估文档历史态/最终态已标时点；工具版本以 manifest/CI 为单一来源。
 
 ## 7. 关闭验证（2026-10-18 晚）
 
 | 检查 | 结果 |
 |---|---|
-| `gate-audit` 全量 | **39/39 探针**；20 门禁有探针；0 UNVERIFIED/UNWIRED/REVIEW |
+| `gate-audit` 全量 | **41/41 探针**；20 门禁有探针；0 UNVERIFIED/UNWIRED/REVIEW |
 | `verify-ai` / `count-audit` | 30/30；16 项推导 · 24 文件 · 80 处声明一致 |
 | 分析器构建（`EnableQualityAnalyzers=true`） | **0 警告**（含 MA0015 路径级重启用） |
 | `scripts/quality-baseline.cs` | 基线 0，棘轮 0 == 0 |
@@ -111,6 +111,18 @@
 | Stryker（CompressionProvider / MySqlLeasePolicy） | **100% / 100%**（MTP runner，break 95） |
 | Semgrep（p/csharp + p/security-audit） | **0 findings**；29 规则 canary；SARIF artifact |
 | AOT 真发布（win-x64） | AotSample 全检查通过；PalOrmSample PASSED |
-| review v92 | `docs/review/review-2026-10-18-quality-system-v92.md`；metrics 最后一轮 2026-10-18；豁免文件移除 |
+| review v92 | `docs/review/review-2026-10-18-quality-system-v92.md`；任一轮 2026-10-18；全量仍 v91（2026-09-19，due 2026-12-18）；豁免文件移除 |
 | differential-review 试点 | 1 条独特发现（S2077 纵深缺口）已修复；报告 `docs/review/differential-review-2026-10-18-quality-tooling.md` |
 | pre-push selftest / `.ai` 钩子 | 通过 / 通过 |
+
+## 8. 第三轮审计（2026-10-18 深夜）
+
+第三轮从“维护轮是否能把全量评审债一并洗白”切入，并补查供应链与探针—文档一致性。三项发现全部落地：
+
+| # | 发现 | 处置 | 证据 |
+|---|---|---|---|
+| R3-1 | review 闸门只看 metrics 最后一轮：v92 维护轮把“任一轮”时钟清零的同时，让全量评审债看起来也已结清 | `scripts/review-freshness.cs` 改**双层**：任一轮 30 天 + 全量/里程碑 90 天；维护轮只重置前者；新增第 4 条隔离探针（维护轮新鲜但全量超期必红） | 真实读数：任一轮 2026-10-18（0 天）/ 全量 2026-09-19（29 天），下次全量 due 2026-12-18；selftest 11/11；gate-audit 探针通过 |
+| R3-2 | 4 个工作流 28 处 `uses:` 全用可变 major 标签（`@v4`/`@v3`…），上游标签可被移动或入侵，CI 会以仓库 token 执行非预期代码 | 全部钉 40 位 commit SHA + `# vX.Y.Z` 注释（checkout 4.4.0 / setup-dotnet 4.3.1 / cache 4.3.0 / upload-artifact 4.6.2 / setup-python 5.6.0 / codeql-action 3.39.0 / action-gh-release 2.6.2；SHA 由 `git ls-remote` 实测解析，非记忆值）；`config-policy` 增检查 C（C1 非 SHA / C2 缺版本注释），pre-commit 触发面扩到 `.github/workflows/**`；Dependabot `github-actions` 继续按周更新 | `config-policy` selftest 30/30；4 条隔离探针（A/B 两极 + C 可变标签拒绝 + 干净配置含钉 SHA 放行）；全仓无 `@vN` 可变标签 |
+| R3-3 | 新增探针后文档仍写 gate-audit 39/39、review-freshness 3 条探针，知识层与机械层再次失同步 | 同步 audit §6/§7、eval §十一、v92 报告时点注记、`.ai/gate/sensor-ledger.md`；当前 gate-audit **41/41** | 本轮实跑读数 |
+
+**边界（不在本轮范围）**：mutation 仍只有 CompressionProvider 与 MySqlLeasePolicy 两个窄基线（其余面由测试/覆盖率承担，扩展需逐类评估等价变异体噪声）；coverage 阈值 0.70 未上调（本地与 CI 的插桩口径差已在 `docs/test-coverage-baseline.md` 说明）；review 的语义判断仍由人/agent 触发，机械层只保证“到期必须补轮”。

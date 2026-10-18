@@ -97,14 +97,14 @@ var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
     ["doc-consistency"] = "D7 .ai/README.md 文件地图（其余 D1-D6/D8-D12 已下沉 C# 测试）",
     ["test-gate"] = "T1-T12 测试规范 / T-DEF-1 薄壳缺失 / T-DEF-4 CI job timeout / OSC 同测试翻转",
     ["verify-ai"] = "V1-V30 系统一致性（V1-V25 含命令形态三子类：bash-.cs / 带前缀死引用 / 裸名死引用；V26-V29 版本对账/test spec/pipefail/复发督办；V30 知识层锚点对账：ADR/边界测试规模/快照程序集与路径/根脚本数/V 上限 == 运行时推导，历史时点行豁免。V30 隔离探针注入陈旧 ADR 声明必红）",
-    ["config-policy"] = "A dependabot groups/ignore 双词表混用 / versions·labels·prefix·interval 缺失或空 / 未知上下文且注释不误报；B Directory.Build Exec 缺 IgnoreExitCode 且 Target 无 GITHUB_ACTIONS 跳过（行式校验，非完整 YAML 解析器）",
+    ["config-policy"] = "A dependabot groups/ignore 双词表混用 / versions·labels·prefix·interval 缺失或空 / 未知上下文且注释不误报；B Directory.Build Exec 缺 IgnoreExitCode 且 Target 无 GITHUB_ACTIONS 跳过；C workflows 的 uses 非 40 位 SHA / 缺版本注释（行式校验，非完整 YAML 解析器；本地动作与 docker:// 跳过）",
     // license-policy 的两极由隔离探针钉住（禁令命中必红 / 白名单放行必绿）；其余判定面
     // 只在 selftest 覆盖——隔离目录没有真实 nuspec 缓存，构造不出「非白名单许可」的夹具，
     // 故如实声明为不覆盖，不拿探针数量冒充覆盖面（T-34 的本意）。
     ["license-policy"] = "隔离探针覆盖两极：禁令命中（包+版本下限，与许可字符串正交）必红、白名单放行必绿（负向对照）；**不覆盖**：非白名单表达式 / 文件型许可未登记 gap / gap 到期 三类 FAIL，以及空输入·依赖图失败·nuspec 缺失三条 fail-closed 路径——这些由 --selftest 的 59 断言覆盖",
     ["count-audit"] = "README*/docs 计数声明失实（16 推导项 × 数字+关键词声明形态正则，扫描面排除 review·decisions·migration·design；fail-closed：推导 0 值/异常/缺依赖文件即红、扫描面零声明即红）；**不覆盖**：测试用例数（需 dotnet test 实测）、架构测试方法数 37（D12a 反射锚已守）、pitfalls 分章统计行与 CHANGELOG 历史数字、PAL 子系列区间（由总数项间接覆盖）",
     ["quality-baseline"] = "构建日志警告计数 + 基线比较（--from-log 正反例：超基线必红/等于基线放行）；**不覆盖**：实际 dotnet build 执行与 analyzer 版本差异（由 CI quality-analyzers job 真跑承担）",
-    ["review-freshness"] = "review 债新鲜度与豁免判定（stale + 无豁免阻断 / stale + 有效豁免放行 / fresh 放行；--today/--src-date 夹具）；**不覆盖**：真实 git 提交日期读取（由 pre-push 实跑承担）",
+    ["review-freshness"] = "review 债双层新鲜度与豁免判定（stale + 无豁免阻断 / stale + 有效豁免放行 / fresh 放行 / 维护轮新鲜但全量超 90 天阻断；--today/--src-date 夹具）；**不覆盖**：真实 git 提交日期读取（由 pre-push 实跑承担）",
     ["xml-guard"] = "暂存 XML 良构性（畸形 .csproj 必红；正例由现有 clean 探针覆盖）",
     ["vuln-scan"] = "dotnet list package --vulnerable JSON 的已知漏洞（含 transitive；正例/空输入 selftest 覆盖）",
     ["test-change-guard"] = "暂存集只改 test/** 不改 src/** 的拦截（新增测试放行 / 删除与修改拦截 / ALLOW_TEST_ONLY_CHANGE 豁免；selftest 覆盖 Decide 纯函数）",
@@ -540,13 +540,32 @@ var probes = new List<Probe>
         Setup: dir =>
         {
             var gh = Path.Combine(dir, ".github");
-            Directory.CreateDirectory(gh);
+            Directory.CreateDirectory(Path.Combine(gh, "workflows"));
             File.WriteAllText(Path.Combine(gh, "dependabot.yml"),
                 "version: 2\nupdates:\n  - package-ecosystem: nuget\n    schedule:\n      interval: weekly\n    labels:\n      - dependencies\n    commit-message:\n      prefix: \"依赖\"\n");
+            File.WriteAllText(Path.Combine(gh, "workflows", "ci.yml"),
+                "jobs:\n  build:\n    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n");
             File.WriteAllText(Path.Combine(dir, "Directory.Build.props"), "<Project>\n</Project>\n");
             File.WriteAllText(Path.Combine(dir, "Directory.Build.targets"),
                 "<Project>\n  <Target Name=\"ConfigureGitHooks\" Condition=\"'$(GITHUB_ACTIONS)' != 'true'\">\n    <Exec Command=\"git config --local core.hooksPath .githooks\" />\n  </Target>\n</Project>\n");
-            return [".github/dependabot.yml", "Directory.Build.props", "Directory.Build.targets"];
+            return [".github/dependabot.yml", ".github/workflows/ci.yml", "Directory.Build.props", "Directory.Build.targets"];
+        }),
+    new(
+        Name: "config-policy 拒绝可变标签 uses（Actions 供应链）",
+        Gate: "config-policy",
+        ExpectExit: 1,
+        MustContainInStdout: "C1",
+        Setup: dir =>
+        {
+            var gh = Path.Combine(dir, ".github");
+            Directory.CreateDirectory(Path.Combine(gh, "workflows"));
+            File.WriteAllText(Path.Combine(gh, "dependabot.yml"),
+                "version: 2\nupdates:\n  - package-ecosystem: nuget\n    schedule:\n      interval: weekly\n    labels:\n      - dependencies\n");
+            File.WriteAllText(Path.Combine(gh, "workflows", "bad.yml"),
+                "jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4 # v4.4.0\n");
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.props"), "<Project>\n</Project>\n");
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.targets"), "<Project>\n</Project>\n");
+            return [".github/dependabot.yml", ".github/workflows/bad.yml", "Directory.Build.props", "Directory.Build.targets"];
         }),
     // ── license-policy 隔离探针（2026-09-25 增，裁决「所有引用的库必须是开源的许可」
     // 落成机械门禁的两极）。CWD 系门禁（FindRepoRootOrNull 以 Environment.CurrentDirectory
@@ -672,6 +691,19 @@ var probes = new List<Probe>
             Directory.CreateDirectory(Path.Combine(dir, ".ai", "review"));
             File.WriteAllText(Path.Combine(dir, ".ai", "review", "metrics.md"),
                 "| v92 | 2026-10-18 | 维护轮 |\n");
+            return [];
+        }),
+    new(
+        Name: "review-freshness 维护轮新鲜但全量超 90 天阻断",
+        Gate: "review-freshness",
+        ExpectExit: 1,
+        MustContainInStdout: "最近全量",
+        ExtraArgs: "-- --today 2026-10-18 --src-date 2026-10-01",
+        Setup: dir =>
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ".ai", "review"));
+            File.WriteAllText(Path.Combine(dir, ".ai", "review", "metrics.md"),
+                "| v92 | 2026-10-18 | 质量系统维护轮 |\n| v91 | 2026-05-01 | 全仓运行 |\n");
             return [];
         }),
     // ── xml-guard / vuln-scan 隔离探针（2026-10-18 审计 P1：补齐旧有 PROBED '-'）。
