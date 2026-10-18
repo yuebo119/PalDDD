@@ -17,6 +17,8 @@
     <ProjectReference Include="..\..\src\PalDDD.CQRS\PalDDD.CQRS.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Hosting.AspNetCore\PalDDD.Hosting.AspNetCore.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Messaging\PalDDD.Messaging.csproj" />
+    <!-- 流式遥测断言（RecordingActivityListener/RecordingMeterListener）+ SseFrameReader 助手自测 -->
+    <ProjectReference Include="..\PalDDD.Testing\PalDDD.Testing.csproj" />
   </ItemGroup>
 
   <ItemGroup>

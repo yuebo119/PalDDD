@@ -129,6 +129,19 @@ public static class PalActivitySource
     // ITM-229 后续（v25 P3 指标族）：移除 pal.eventlog.from_global_position——
     // 全局位置每事件唯一递增，高基数
 
+    /// <summary>创建流式查询 Activity（ADR-030 流式读，2026-10-18 遥测接入）</summary>
+    /// <remarks>
+    /// 覆盖端点全枚举期（SSE 头写出后至流终止）。<b>TTFT（首 token 延迟）</b>由本 span 上的
+    /// <c>first-item</c> 事件时间戳与 span 起点之差给出——不引入直方图仪器：零 tag 计数器
+    /// 纪律下直方图无处放维度，而事件时间戳天然落在 trace 侧（与 ITM-229 高基数列裁决一致）。
+    /// <para>tag 取值均为类型名（代码有界基数，同 <c>pal.command</c>/<c>pal.handler</c> 先例），
+    /// 不含请求 ID / prompt 等业务数据。</para>
+    /// </remarks>
+    public static Activity? StartStreamQuery(string queryType, string itemType)
+        => Start("Stream Query",
+            ("pal.stream.query", queryType),
+            ("pal.stream.item", itemType));
+
     // ── 内部辅助 ──
     // 11 个公共 Start* 方法遵循完全相同的模式：Source.StartActivity → SetTag → return。
     // 使用 params ReadOnlySpan<(string,object?)>（C# 13+ / .NET 11）压缩重复代码，
@@ -154,10 +167,11 @@ public static class PalActivitySource
 /// EventsConsumed/OutboxPending/SagaActive/BehaviorDuration）——声明但框架零调用，
 /// 误导用户认为会产出数据。需要这些指标时在调用方自行 Meter.CreateCounter 并 Add。
 /// <para>
-/// 📐 <b>零 tag 设计声明（v25 P3 勘正族 C11 · ITM-229 精神显式化）</b>：全部 23 个活 Counter
+/// 📐 <b>零 tag 设计声明（v25 P3 勘正族 C11 · ITM-229 精神显式化）</b>：全部 28 个活 Counter
 /// （计数沿革：v71 增 SagaScanFailed；v72 勘正同步为当时计数；v3.0.0 增
 /// <c>paldd.outbox.dead</c> 与 <c>paldd.outbox.persist_failed</c> 后此处计数再次未同步，
-/// 2026-09-23 复查修正为 23）有意零 tag——框架层零分配纪律（无 tag 的 <c>Add(T)</c> 是零额外分配路径，带 tag 调用引入
+/// 2026-09-23 复查修正为 23；2026-10-18 ADR-030 遥测接入增五个 <c>paldd.stream.*</c> 计数器
+/// 后为 28）有意零 tag——框架层零分配纪律（无 tag 的 <c>Add(T)</c> 是零额外分配路径，带 tag 调用引入
 /// 键值对构造开销）+ 指标基数安全（事件类型/投影名/流名等维度随业务无界增长，tag 化会造成
 /// 时序库基数爆炸）。调用方需要维度时用自身 <c>Meter.CreateCounter</c> 自建带 tag Counter；
 /// Activity 侧 <c>pal.event</c> / <c>pal.projection.name</c> 等 tag 已提供 trace 维度。
@@ -261,4 +275,29 @@ public static class PalMetrics
     /// 此前 v70 复用 SagaCompensationFailed 与其"补偿动作失败"doc 语义冲突）</summary>
     public static readonly Counter<long> SagaScanFailed = Meter.CreateCounter<long>(
         "paldd.saga.scan_failed", description: "Saga 扫描/租约获取失败总数");
+
+    // ── 流式读（ADR-030，2026-10-18 遥测接入）──
+    // 五个计数器覆盖 agent 流式的四个 SLI（开始/完成/失败/取消）+ 项吞吐。取消独立于
+    // 失败：客户端断开是正常生命周期终止，混入 failed 会污染错误率告警。零 tag 纪律同
+    // 其余计数器（维度走 Activity tag）。
+
+    /// <summary>流式查询开始数</summary>
+    public static readonly Counter<long> StreamStarted = Meter.CreateCounter<long>(
+        "paldd.stream.started", description: "流式查询开始总数（通过验证后的实际枚举）");
+
+    /// <summary>流式查询完成数</summary>
+    public static readonly Counter<long> StreamCompleted = Meter.CreateCounter<long>(
+        "paldd.stream.completed", description: "流式查询正常完成总数（枚举自然结束）");
+
+    /// <summary>流式查询失败数</summary>
+    public static readonly Counter<long> StreamFailed = Meter.CreateCounter<long>(
+        "paldd.stream.failed", description: "流式查询失败总数（中途异常，含已写出部分帧的流）");
+
+    /// <summary>流式查询取消数（客户端断开，静默收尾）</summary>
+    public static readonly Counter<long> StreamCancelled = Meter.CreateCounter<long>(
+        "paldd.stream.cancelled", description: "流式查询取消总数（客户端断开，非错误）");
+
+    /// <summary>流式查询产出项总数</summary>
+    public static readonly Counter<long> StreamItems = Meter.CreateCounter<long>(
+        "paldd.stream.items", description: "流式查询产出项总数（完成与取消路径累计）");
 }

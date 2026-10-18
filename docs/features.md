@@ -32,7 +32,7 @@
 | 工作单元端口 | Begin/Commit/Rollback/SaveChanges，不支持嵌套（ADR-023），模板方法扩展 | `IUnitOfWork`（IUnitOfWork.cs） |
 | 强类型标识 | `IPalIdentity<TKey>` 契约 + Ulid 生成器抽象（RFC 9562 合规实现） | `IPalIdGenerator`（Identity/） |
 | 日志门面 | 五成员接口隔离具体日志后端，空实现 NullPalLogger | `IPalLogger<T>`（Logging/） |
-| 可观测门面 | 23 个指标计数器 + 11 个 Activity 工厂（命令/事件/Saga/Outbox/Inbox/幂等/投影/事件日志读写） | `PalDiagnostics`（PalDiagnostics.cs） |
+| 可观测门面 | 28 个指标计数器 + 12 个 Activity 工厂（命令/事件/Saga/Outbox/Inbox/幂等/投影/事件日志读写/流式查询） | `PalDiagnostics`（PalDiagnostics.cs） |
 | 失败原因归一 | 五处理器共用：截断 2000 字符 + UTF-16 代理对完整性守卫 | `FailureReason`（FailureReason.cs） |
 | 契约标记 | GenerateId / GenerateEnum / GenerateMessage / BoundedContext / ProcessManager 五个 Attribute | Attributes.cs |
 
@@ -184,7 +184,7 @@ Dapper 侧独有的方言增强面（PalORM 方言包暂未携带，待后续迁
 ## 横切能力
 
 - **AOT 分层矩阵**：抽象层（Core/CQRS/Messaging/Serialization/Compression/EventLog/Idempotency/Projections/Transactions 抽象面）零反射；基础设施 4 包（Kafka、RabbitMQ、Compression.Native、Serialization.MemoryPack）加 Transactions 的子 Saga 反射路径显式豁免，豁免均有 csproj/注释理由。详见 [AOT 指南](aot.md)。
-- **可观测统一**：11 个 Activity 工厂 + 23 个指标计数器贯穿全部处理器；五处理器共用的 FailureReason 归一化。
+- **可观测统一**：12 个 Activity 工厂 + 28 个指标计数器贯穿全部处理器；五处理器共用的 FailureReason 归一化。
 - **并发防护三形态**：Outbox 用租约 token + RetryCount 快照；Saga 用 Version 换代乐观锁；Checkpoint/Idempotency 用单调 Revision CAS。
 - **全端口 InMemory 替身**：事件日志、Outbox、Inbox、Saga、检查点、幂等存储均有内存实现（替身与真实实现的语义分叉均以注释定案）。
 
