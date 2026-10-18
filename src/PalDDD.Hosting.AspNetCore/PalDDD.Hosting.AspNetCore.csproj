@@ -25,6 +25,9 @@
     <ProjectReference Include="..\PalDDD.Transactions\PalDDD.Transactions.csproj" />
   </ItemGroup>
 
-  <ItemGroup><InternalsVisibleTo Include="PalDDD.Hosting.AspNetCore.Tests"/></ItemGroup>
+  <!-- Benchmarks IVT：流式读链路基准（StreamReadBenchmarks）需直测 internal StreamFrameWriter
+       的 framing 微 lane（预分配 PipeWriter 替身隔离 BCL 管道内部分配）——与测试项目 IVT 同性质，
+       编译期可见性不进发布包 -->
+  <ItemGroup><InternalsVisibleTo Include="PalDDD.Hosting.AspNetCore.Tests"/><InternalsVisibleTo Include="PalDDD.Benchmarks"/></ItemGroup>
   <ItemGroup><Using Include="PalDDD.Core" Alias="Core"/><Using Include="PalDDD.CQRS" Alias="CQRS"/><Using Include="PalDDD.Core.Diagnostics" Alias="Diagnostics"/><Using Include="PalDDD.Messaging" Alias="Message"/><Using Include="PalDDD.Transactions" Alias="Transactions"/></ItemGroup>
 </Project>

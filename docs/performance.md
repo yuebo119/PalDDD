@@ -627,6 +627,32 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **B1 复活前提第一项判定**（决策文档开放决策点 1「远端 DB 标记往返实测占发布延迟 >5%」）：DB 主导形态（broker 确认延迟低于阈值）下前提成立且远超阈值，占比 84.3%（PG）/ 83.8%（MySQL），端到端 6.2~6.4×；阈值解析式 share(r) = M / (base + 1000r + M) > 5% 给出 **PG r < ~11.8ms/条、MySQL r < ~35.0ms/条**（[推断]：以实测 M 与 base 代入，非独立实测点）。broker 确认延迟超过阈值后标记段退化为二阶成本（本机最小非零 broker 延迟格实测无可测差异，与该解析一致）。前提另两项（消费侧 Inbox 幂等可审计 + 时间界冲刷而非纯计数界）未满足，且「重复窗口放大最高 99×」的反驳与延迟形态无关，**B1 维持不做**；新数据的价值是把收益从量级估算升级为分形态实测，并给出部署判据：broker 确认延迟与 DB 往返同量级或更低时（本地/同机房 broker、跨机房 DB），`BatchMarkThreshold` 16~64 的 opt-in 收益显著。
 
+## 流式读链路首测（2026-10-18，ADR-030 Phase 2 收窄论证的 bench 证据轮，`--stream`）
+
+> 口径（框架开销层，同 Hosting/EndToEnd lane）：DefaultHttpContext 直调 RequestDelegate + 内存 PipeWriter/丢弃流，无网络栈、无真实 DB I/O；medium 档（15 迭代 × 2 launch / 10 预热，InProcessEmit）。引用须带此口径——生产每帧成本由网络写与 provider 延迟主导。新增 `StreamReadBenchmarks`（11 lane：framing 微 lane ×5 + flush 全路径 ×2 + 端点全周期 ×3，16 异步项/请求）。
+
+| 基准 | Mean | Error | StdDev | Allocated |
+|---|---:|---:|---:|---:|
+| Frame_Default（data-only 帧 span 直写，预分配替身） | **5.19 ns** | 0.12 ns | 0.18 ns | **0 B** |
+| Frame_Enriched（+event/id 行 UTF-8 直写） | 28.50 ns | 0.49 ns | 0.72 ns | **0 B** |
+| Frame_FormatFrame（formatFrame 委托字符串帧） | 15.71 ns | 0.31 ns | 0.45 ns | **0 B** |
+| Serialize_PerItem（SerializeToUtf8Bytes，源生成） | 78.43 ns | 2.25 ns | 3.23 ns | 56 B |
+| SerializeAndFrame（序列化 + 默认帧） | 85.89 ns | 2.37 ns | 3.39 ns | 56 B |
+| ZeroCopyFrame（Utf8JsonWriter 直写 PipeWriter 对照形态） | 77.90 ns | 2.72 ns | 3.82 ns | **136 B** |
+| PerFrame_Default_WithFlush（+ FlushAsync，丢弃流背） | 920.80 ns | 61.30 ns | 91.75 ns | 390 B |
+| PerFrame_ZeroCopy_WithFlush（对照形态 + flush） | 967.50 ns | 52.41 ns | 76.83 ns | 470 B |
+| Endpoint_Plain（全周期 16 异步项：绑定+验证+头+枚举写帧） | 15.87 μs | 1.41 μs | 2.12 μs | 6,848 B |
+| Endpoint_Enriched（event+id 选择器） | 17.20 μs | 1.19 μs | 1.74 μs | 6,848 B |
+| Endpoint_Heartbeat（keepAliveInterval 1s，竞速路径） | 22.54 μs | 1.89 μs | 2.82 μs | 10,186 B |
+
+**结论一：ADR-030 复活触发器 3（PipeWriter 零拷贝化）实测不满足，收窄决策获 bench 证据。** 默认帧路径 5.19ns 只占「序列化 + flush」每帧 921ns 的 **0.6%**，占「序列化 + framing」对的 6%；每帧成本 dominator 是 flush 机制（~835ns，91%）与序列化（78ns），framing 可忽略。零拷贝对照形态（Utf8JsonWriter 直写 PipeWriter）**不赢反输**：CPU 持平（77.9 vs 78.4ns，差 0.6% 在 Error 带内）而分配 2.4×（136B vs 56B——writer 内部缓冲 churn 比序列化器的单次 byte[] 更重），带 flush 后慢 5%（+47ns）且 +80B。「默认帧路径成热点」的触发前提被证伪，维持收窄。
+
+**结论二：心跳竞速每异步项 +417ns / +209B，绝对值可忽略、形态需知情。** 端点 lane 对比（同 16 异步项 handler）：22.54 vs 15.87 μs（+42%）、10,186 vs 6,848 B（+49%）——差额 6.67μs / 3,338B 摊到 16 项即每异步项 +417ns / +209B（`AsTask` + `Task.WhenAny` 竞速机械；共享延时修复后 Task.Delay 不再每项新建）。放到生产延迟地板上：LLM 流 10~50ms/token 时占 0.001~0.004%，1000 项/s 的高速流也仅 ~0.04% CPU。同步完成项走 `IsCompletedSuccessfully` 快路径零额外开销（微 lane 的 Frame_Default 0B/5.2ns 即该路径形状）。**opt-in 语义与代价写入 usage.md/参数文档。**
+
+**结论三：富化帧每帧 +23.3ns CPU、零额外分配。** event/id 行的 UTF-8 直写 span 不进堆（Frame_Enriched 0B）；端点请求级 +1.33μs（+8.4%，16 项摊每项 ~83ns）。分型事件流的框架成本确认可忽略。
+
+**测量形态声明**：①端点 lane 双峰分布（StdDev 12~13%，`Task.Yield` 线程池抖动，与既有 EndToEnd/Hosting 异步 lane 同形态）；plain vs heartbeat 差 6.67μs 远大于 Error 带（±1.4~1.9μs），结论有效。②预分配 PipeWriter 替身把 BCL `StreamPipeWriter.FlushAsync` 的每帧 ~131B 内部分配从 framing 断言目标隔离（pitfalls A9 同族实测口径）；flush lane 用丢弃流避免 MemoryStream 无界增长。③BDN LaunchCount=2 的两次启动若绑固定端口必 AddressInUse（Launch 1 套接字释放时序），端点 setup 用 `127.0.0.1:0` 随机端口（AotSample §7 同款）。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |

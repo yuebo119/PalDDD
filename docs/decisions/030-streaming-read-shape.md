@@ -117,7 +117,7 @@ Phase 1 = 上文全部。Phase 2（触发式，见复活触发器）：event/id 
 
 **收窄暂不实施**（触发条件未满足，复发时按上方原触发器走）：
 
-- **PipeWriter 零拷贝化**：触发器 3 要求 bench 证明热点。agent 流成本地板为 provider 延迟（每 token 几十毫秒），每 token 帧的序列化器输出（几十字节 byte[]）低于延迟地板数个量级，同路径一次 flush 的系统调用都比它贵两个数量级（仓库「<5% 默认不做」纪律）。
+- **PipeWriter 零拷贝化**：触发器 3 要求 bench 证明热点。2026-10-18 `--stream` 基准实测（`StreamReadBenchmarks`，docs/performance.md）：默认帧 framing 5.19ns/0B，占每帧「序列化 + flush」921ns 的 0.6%；零拷贝对照形态（Utf8JsonWriter 直写 PipeWriter）CPU 持平而分配 2.4×（136B vs 序列化器 56B——writer 内部缓冲 churn 更重），带 flush 慢 5%。agent 流成本地板为 provider 延迟，结构性论证与实测双向确认收窄。
 - **per-stream Channel 缓冲**：单客户端单次生成形态为纯开销（Phase 1 被否方案同款论证）；迟附/扇出的真实受益场景需要流注册表、有界缓冲与重连身份的独立设计，另立议题。
 - **dispatcher 集成 + IStreamPipelineBehavior`**：无已出现的流级横切消费方（验证已在头写出前、日志在端点级、计量可走 D6 finally、fallback 属 handler/provider 层）；硬建相当于把 Phase 1 已否掉的 dispatcher 集成变体换名回来，还要面对 scope 生命周期老问题。
 - **WebSocket 传输**：LLM 流单向，双工无增益；中断生成用现有命令端点加取消注册表覆盖；ADR 明示另立议题。
@@ -126,7 +126,7 @@ Phase 1 = 上文全部。Phase 2（触发式，见复活触发器）：event/id 
 
 1. 出现必须挂管道行为的流式场景，dispatcher 集成与 `IStreamPipelineBehavior` 同批建，不单加 dispatcher 方法；
 2. 两个以上消费方各自 fork 帧格式，收 event 名支持进框架（**已于 2026-10-18 提前满足并实施，见分期节实施附记**）；
-3. bench 证明默认帧路径成热点，PipeWriter 零拷贝化（**2026-10-18 评估：agent 流场景分配量低于延迟地板数个量级，收窄暂不建；非 agent 高频流场景仍可按本触发器立项**）；
+3. bench 证明默认帧路径成热点，PipeWriter 零拷贝化（**2026-10-18 收窄 + bench 实测证伪触发前提：默认帧路径 5.19ns/0B 占「序列化 + flush」每帧 921ns 的 0.6%；零拷贝对照形态（Utf8JsonWriter 直写 PipeWriter）CPU 持平（77.9 vs 78.4ns，Error 带内）而分配 2.4×（136B vs 56B，writer 内部缓冲 churn 重于序列化器单次 byte[]），带 flush 后慢 5%——「默认帧路径成热点」不成立，证据见 docs/performance.md 流式读链路首测**）；
 4. brokerless 单进程多消费者消息成刚需，另立最小总线决策（与流式正交，勿复用 EventBus 名义）；
 5. 流式审计约定被反复违反，上流完成钩子或 analyzer 规则。
 

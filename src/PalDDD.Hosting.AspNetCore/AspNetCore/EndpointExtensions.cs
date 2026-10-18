@@ -197,7 +197,7 @@ public static class EndpointExtensions
     /// <param name="formatFrame">完整帧定制委托（优先级最高）——返回的文本即完整帧（可含 event/id 行）；与 <paramref name="eventSelector"/>/<paramref name="idSelector"/> 同时提供时以本委托为准。</param>
     /// <param name="eventSelector">事件名选择器——提供时默认帧富化为 <c>event: {name}\n...data: {json}\n\n</c>（分型事件流，如 token/done/error）。</param>
     /// <param name="idSelector">事件 ID 选择器——提供时默认帧富化 <c>id: {id}\n</c> 行；客户端断线重连时 EventSource 经 <c>Last-Event-ID</c> 请求头回带末个 ID（读取入口见 <see cref="StreamResumeExtensions.GetLastEventId"/>）。</param>
-    /// <param name="keepAliveInterval">心跳间隔——流静默超过该间隔时写注释帧 <c>:keepalive</c>（规范内客户端忽略，代理/LB 空闲计时器重置）；null（默认）关闭。agent 场景的首 token 等待与工具轮间隙属结构性静默，建议 15-30 秒。</param>
+    /// <param name="keepAliveInterval">心跳间隔——距上次心跳（流开始算首次）超过该间隔时写注释帧 <c>:keepalive</c>（规范内客户端忽略，代理/LB 空闲计时器重置）；null（默认）关闭。agent 场景的首 token 等待与工具轮间隙属结构性静默，建议 15-30 秒。实现为 MoveNext 与共享延时竞速：同步完成项走快路径零开销，异步项每项一次竞速（实测开销见 docs/performance.md 流式读链路轮）。</param>
     public static IEndpointConventionBuilder MapStreamQuery<TQuery, TItem>(
         this IEndpointRouteBuilder endpoints,
         string pattern,
@@ -382,6 +382,10 @@ public static class EndpointExtensions
                 try
                 {
                     Task<bool>? pendingMoveNext = null;
+                    // 共享延时：每流一个在途 Task.Delay，只在心跳真正写出时重建——
+                    // 项胜出竞速时旧延时留用（间隔自上次心跳起算，保活语义等价），
+                    // 消除每挂起项一个被丢弃延时的计时器堆积；随 ct 取消整体释放
+                    var delay = Task.Delay(heartbeatInterval, ct);
                     while (true)
                     {
                         Task<bool> moveNext;
@@ -405,7 +409,6 @@ public static class EndpointExtensions
                             moveNext = valueTask.AsTask();
                         }
 
-                        var delay = Task.Delay(heartbeatInterval, ct);
                         if (await Task.WhenAny(moveNext, delay).ConfigureAwait(false) == delay)
                         {
                             if (delay.IsCanceled)
@@ -416,10 +419,14 @@ public static class EndpointExtensions
                                 await moveNext.ConfigureAwait(false);
                                 continue;
                             }
-                            // 心跳到点：写注释帧（规范内客户端忽略），挂起项留待下轮竞速
+                            // 心跳到点：写注释帧（规范内客户端忽略），挂起项留待下轮竞速；
+                            // 共享延时重建（间隔自上次心跳起算——保活语义等价且每流一个
+                            // 在途延时，消除「每挂起项一个被丢弃的 Task.Delay」的计时器堆积：
+                            // 项胜出时旧延时留用，只在真正写出心跳时换代）
                             pendingMoveNext = moveNext;
                             StreamFrameWriter.WriteHeartbeat(bodyWriter);
                             await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                            delay = Task.Delay(heartbeatInterval, ct);
                             continue;
                         }
 
