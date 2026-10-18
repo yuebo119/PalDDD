@@ -268,6 +268,17 @@ if (args.Contains("--coverage", StringComparer.OrdinalIgnoreCase))
     return 0;
 }
 
+// 2026-10-18 ADR-030 Phase 2 收窄论证的 bench 证据轮：--stream——流式读链路（SSE 帧路径
+// 三分支 / 富化帧 / 心跳竞速开销 / PipeWriter 零拷贝对照 / 端点全周期）。全零外部依赖，
+// 框架开销层口径（DefaultHttpContext + 内存 PipeWriter，无网络与 DB）。回答三个待测项：
+// 帧路径分配形状、心跳竞速每项开销、零拷贝化每帧收益（ADR 复活触发器 3 的判定输入）。
+if (args.Contains("--stream", StringComparer.OrdinalIgnoreCase))
+{
+    var medium = ModeConfig(args);
+    BenchmarkRunner.Run<StreamReadBenchmarks>(medium);
+    return 0;
+}
+
 static async Task<int> RunRemoteDialectAsync(bool isPostgreSql, IConfig config)
 {
     RemoteDialectBenchSession session;
