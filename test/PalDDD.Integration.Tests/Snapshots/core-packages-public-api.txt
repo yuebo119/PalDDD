@@ -732,6 +732,20 @@ class PalDDD.EventLog.StoredEvent
   method PalDDD.EventLog.RecordedEvent ToRecordedEvent()
 
 # PalDDD.Hosting.AspNetCore
+static class PalDDD.Hosting.AspNetCore.DetachedStreamEndpoints
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddDetachedStreamRuns(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Action<PalDDD.Hosting.AspNetCore.DetachedStreamOptions> configure)
+  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapDetachedStreamQuery(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Func<Microsoft.AspNetCore.Http.HttpContext, TQuery> bindQuery, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TItem> itemJsonTypeInfo, System.Func<TItem, System.String> eventSelector, System.Func<TItem, System.String> idSelector, System.Nullable<System.TimeSpan> keepAliveInterval)
+  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapStreamRunAttach(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TItem> itemJsonTypeInfo, System.Nullable<System.TimeSpan> keepAliveInterval)
+  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapStreamRunCancel(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern)
+class PalDDD.Hosting.AspNetCore.DetachedStreamOptions
+  ctor()
+  property System.TimeSpan DetachGrace
+  property System.Int32 MaxBufferedItems
+  property System.Int32 MaxConcurrentRuns
+  property System.Int32 MaxItems
+  property System.TimeSpan MaxRunDuration
+  property System.Boolean RejectNewAttach
+  property System.TimeSpan RetentionAfterCompletion
 static class PalDDD.Hosting.AspNetCore.EndpointExtensions
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapCommand(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TCommand> commandJsonTypeInfo)
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapCommand(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TCommand> commandJsonTypeInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse> responseJsonTypeInfo)
@@ -748,6 +762,11 @@ static class PalDDD.Hosting.AspNetCore.HealthCheckExtensions
   method Microsoft.AspNetCore.Routing.IEndpointRouteBuilder MapPalHealthChecks(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.TimeProvider timeProvider)
 static class PalDDD.Hosting.AspNetCore.StreamResumeExtensions
   method System.String GetLastEventId(Microsoft.AspNetCore.Http.HttpContext context)
+class PalDDD.Hosting.AspNetCore.StreamRunCapacityExceededException
+  ctor()
+  ctor(System.Int32 limit)
+  ctor(System.String message)
+  ctor(System.String message, System.Exception innerException)
 
 # PalDDD.Idempotency
 interface PalDDD.Idempotency.IIdempotencyStore

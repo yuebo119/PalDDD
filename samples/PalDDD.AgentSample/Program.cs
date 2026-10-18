@@ -51,6 +51,13 @@ builder.Services.AddSingleton<IdempotencyProcessor>();
 builder.Services.AddSingleton<IEventLog, InMemoryEventLog>();
 builder.Services.AddSingleton<ToolExecutor>();
 builder.Services.AddSingleton<AgentRunAuditor>();
+// ADR-031：断线续跑（run 注册表 + 有界缓冲 + 附着/取消端点）
+builder.Services.AddDetachedStreamRuns(options =>
+{
+    options.MaxBufferedItems = 64;
+    options.DetachGrace = TimeSpan.FromSeconds(30);   // 示例放大，生产按产品语义取
+    options.MaxRunDuration = TimeSpan.FromMinutes(2);
+});
 
 var app = builder.Build();
 
@@ -77,6 +84,21 @@ app.MapStreamQuery<AgentReplayQuery, AgentChunk>(
     AgentJsonContext.Default.AgentChunk,
     eventSelector: chunk => chunk.Kind == AgentChunkKind.Done ? "done" : "replay",
     idSelector: chunk => chunk.Index.ToString());
+
+// ⑤ 断线续跑（ADR-031）：启动即附着（X-Run-Id 供重连）+ 重连附着 + 显式取消
+app.MapDetachedStreamQuery<AgentRunQuery, AgentChunk>(
+    "/agent/detached",
+    ctx => new AgentRunQuery(ctx.Request.Query["prompt"].ToString(), ctx.GetLastEventId()),
+    AgentJsonContext.Default.AgentChunk,
+    eventSelector: chunk => chunk.Kind switch
+    {
+        AgentChunkKind.ToolCall => "tool",
+        AgentChunkKind.Token => "token",
+        _ => "done"
+    },
+    idSelector: chunk => chunk.Index.ToString());
+app.MapStreamRunAttach<AgentChunk>("/agent/runs", AgentJsonContext.Default.AgentChunk);
+app.MapStreamRunCancel("/agent/runs");
 
 await app.StartAsync();
 var address = app.Services.GetRequiredService<IServer>()
@@ -130,6 +152,39 @@ using (var replayRequest = new HttpRequestMessage(HttpMethod.Get, new Uri($"{add
     Check("replay ends with done", replayFrames.Last().EventName == "done");
 }
 
+// ── 6. 断线续跑（ADR-031）：启动 → 读到中途断开 → 重连按 Last-Event-ID 续看 ──
+// 断线用「取消请求 CTS」实现：SSE 响应未读完时 Dispose HttpResponseMessage 会同步等
+// 连接关闭，与仍在写的服务端互相等待（样本实测挂死）；取消 CTS 直接 abort 底层连接，
+// 与真实切页/弱网断开同语义。
+string detachedRunId;
+using var firstRequestCts = new CancellationTokenSource();
+var detachedFirst = await http.GetAsync(
+    new Uri($"{address}/agent/detached?prompt=resume"),
+    HttpCompletionOption.ResponseHeadersRead, firstRequestCts.Token);
+detachedRunId = detachedFirst.Headers.GetValues("X-Run-Id").First();
+Check("detached run exposes X-Run-Id", detachedRunId.Length > 0);
+
+var partial = await ReadUntilFirstTokenAsync(detachedFirst);
+Check("detached first frame is tool", partial.EventName == "tool");
+
+await firstRequestCts.CancelAsync();   // 断线：abort 连接，run 继续跑
+await Task.Delay(150);
+// 重连用独立 HttpClient：首连接的 abort 可能使共享连接池对该 host 的连接进入异常态，
+// 复用实例的后续请求在部分平台会挂起（样本实测）。真实客户端重连通常也走新连接。
+using var reattachClient = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+using var attachCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+using (var reattach = await SendWithLastEventIdAsync(
+    reattachClient, $"{address}/agent/runs/{detachedRunId}/stream", "0", attachCts.Token))
+{
+    // 带超时读：SSE 流不收尾时按超时退出并显式失败（不挂死样本）
+    using var replayCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+    var replay = await ReadFramesAsync(reattach, replayCts.Token);
+    // 只对有 id 的数据帧校验续读起点（终态收尾帧 done 无 id）
+    var replayIds = replay.Where(f => f.Id is not null).Select(f => int.Parse(f.Id!)).ToList();
+    Check("reattach continues after last seen id", replayIds.Count > 0 && replayIds.All(id => id > 0));
+    Check("reattach ends with done", replay.Last().EventName == "done");
+}
+
 await app.StopAsync();
 
 Console.WriteLine();
@@ -142,15 +197,56 @@ if (failures == 0)
 Console.WriteLine($"❌ Pal.DDD agent sample — {failures} check(s) FAILED.");
 Environment.Exit(1);
 
+// ── 辅助：读到首个 token 帧即返回（不断流，调用方随后释放响应模拟断线）──
+static async Task<(string? EventName, string? Id, string Data)> ReadUntilFirstTokenAsync(
+    HttpResponseMessage response)
+{
+    string? eventName = null, id = null;
+    var data = new List<string>();
+    var stream = await response.Content.ReadAsStreamAsync();
+    var reader = new StreamReader(stream);
+    while (await reader.ReadLineAsync() is { } line)
+    {
+        if (line.Length == 0)
+        {
+            if (eventName is not null || id is not null || data.Count > 0)
+                return (eventName, id, string.Join('\n', data));
+            continue;
+        }
+        if (line[0] == ':') continue;
+        var colon = line.IndexOf(':', StringComparison.Ordinal);
+        if (colon < 0) continue;
+        var value = line[(colon + 1)..].TrimStart(' ');
+        switch (line[..colon])
+        {
+            case "event": eventName = value; break;
+            case "id": id = value; break;
+            case "data": data.Add(value); break;
+        }
+    }
+    return (eventName, id, string.Join('\n', data));
+}
+
+// ── 辅助：带 Last-Event-ID 的重连请求（复用调用方 HttpClient——临时实例随方法返回
+//    Dispose 会连带关闭响应流，样本此前挂起的根因）──
+static async Task<HttpResponseMessage> SendWithLastEventIdAsync(
+    HttpClient client, string url, string lastEventId, CancellationToken ct = default)
+{
+    using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(url));
+    request.Headers.Add("Last-Event-ID", lastEventId);
+    return await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+}
+
 // ── SSE 帧读取（样本内自足；生产测试可用 PalDDD.Testing.SseFrameReader）──
-static async Task<List<(string? EventName, string? Id, string Data)>> ReadFramesAsync(HttpResponseMessage response)
+static async Task<List<(string? EventName, string? Id, string Data)>> ReadFramesAsync(
+    HttpResponseMessage response, CancellationToken ct = default)
 {
     var frames = new List<(string?, string?, string)>();
     string? eventName = null, id = null;
     var data = new List<string>();
-    await using var stream = await response.Content.ReadAsStreamAsync();
+    await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
     using var reader = new StreamReader(stream);
-    while (await reader.ReadLineAsync() is { } line)
+    while (await reader.ReadLineAsync(ct).ConfigureAwait(false) is { } line)
     {
         if (line.Length == 0)
         {

@@ -747,6 +747,53 @@ public sealed class AgentReplayHandler(IEventLog eventLog)
 
 **遥测（2026-10-18 接入）**：端点在验证通过、进入枚举后开启 `Stream Query` Activity（tag `pal.stream.query`/`pal.stream.item` 为类型名），首个元素写出时记 `first-item` 事件——**TTFT = 该事件时间戳 − span 起点**，无需新增直方图。五个零 tag 计数器：`paldd.stream.started/completed/failed/cancelled/items`（取消独立于失败：客户端断开是正常终止，混入 failed 会污染错误率告警）。订阅方式与其他遥测一致（引用 `PalDDD` ActivitySource/Meter）。
 
+### 8. 断线续跑（ADR-031）
+
+`MapStreamQuery` 的语义是**连接断开即取消整轮**。长 agent run 需要「切页/弱网后回来接着看」时改用断线续跑端点组：run 独立于 HTTP 请求存在，断开只解除附着。
+
+```csharp
+builder.Services.AddDetachedStreamRuns(options =>
+{
+    options.MaxBufferedItems = 1024;                    // 环形缓冲容量（项）
+    options.DetachGrace = TimeSpan.FromMinutes(5);      // 无附着宽限，到期取消（不白烧 token）
+    options.MaxRunDuration = TimeSpan.FromMinutes(10);  // 单 run 最长存活
+});
+
+// 启动并附着：响应头 X-Run-Id 供重连
+app.MapDetachedStreamQuery<TokenStreamQuery, TokenChunk>(
+    "/agent/run",
+    ctx => new TokenStreamQuery(ctx.Request.Query["prompt"].ToString()),
+    StreamJsonContext.Default.TokenChunk,
+    eventSelector: chunk => chunk.Kind,
+    idSelector: chunk => chunk.Index.ToString());
+
+// 重连附着（遵守 Last-Event-ID：先回放缓冲，再转 live）
+app.MapStreamRunAttach<TokenChunk>("/agent/runs", StreamJsonContext.Default.TokenChunk);
+
+// 显式取消（幂等，终态返回 204）
+app.MapStreamRunCancel("/agent/runs");
+```
+
+客户端流程：
+
+```javascript
+// 1. 启动：拿 X-Run-Id
+const first = await fetch("/agent/run?prompt=hi");
+const runId = first.headers.get("X-Run-Id");
+// ... 读取流，中途断线（取消请求即 abort 连接；不要用 response.dispose 等待）
+
+// 2. 重连：EventSource 会自动带 Last-Event-ID；fetch 则手工带
+const reattach = await fetch(`/agent/runs/${runId}/stream`, {
+    headers: { "Last-Event-ID": lastSeenId }
+});
+```
+
+**语义边界**：缓冲按项计数，溢出丢最旧并在重连首帧发 `event: gap`（携带 `oldestIndex`，客户端自行决定重开还是接受缺口）；终态 run 在 `RetentionAfterCompletion` 内可回看，收尾帧为 `event: done|cancelled|error`。注册表是**进程内**状态：重启丢进行中 run；多实例部署需会话亲和。完成态审计与回放仍走 EventLog（见上一节）。
+
+**客户端两个坑**：SSE 流未读完时 `response.Dispose()` 会同步等连接关闭（与仍在写的服务端互相等待），断线请用取消请求；重连用新连接（连接池在 abort 后可能异常）；`done`/`cancelled` 收尾帧不带 `id`，按 id 解析须过滤。
+
+完整可运行示例见 `samples/PalDDD.AgentSample` 第 6 段。
+
 ## Kafka / RabbitMQ
 
 broker adapter 实现 `IMessageBroker`。它们只依赖 `PalDDD.Messaging` 和 `PalDDD.Serialization`，不会引用 `PalDDD.Serialization.Json`，因此可以替换为其他序列化实现。
