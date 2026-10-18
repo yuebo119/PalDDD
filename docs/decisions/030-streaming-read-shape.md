@@ -22,7 +22,7 @@ agent 场景的核心形态是 LLM 推理的增量产出流式回传客户端（
 
 **D3 验证前置与原语抽取**。端点在 SSE 头写出前解析 `IEnumerable<IPalValidator<TQuery>>` 跑验证，失败走既有 `WriteValidationProblemAsync`（400 ProblemDetails，与 MapCommand/MapQuery 同形态）。验证逻辑抽 `internal static PalValidatorRunner`（PalDDD.CQRS 内，经仓内既有 IVT 链对 PalDDD.Hosting.AspNetCore 可见），ValidationBehavior 泛型/非泛型两条路径与本端点三处共用，含「IsValid=false 且 Errors 为空时构造占位条目」语义（v25/v48 两轮勘正定案）单出处。
 
-**D4 SSE 帧最小化加可定制**。默认帧为 data-only JSON（`JsonSerializer.SerializeToUtf8Bytes` 加 framing 字节段经 `Response.BodyWriter` 写，默认路径零分配）；`MapStreamQuery` 提供可选 `Func<TItem, string> formatFrame` 委托，用户可返回完整帧文本（event/id 行）以支持分型事件流。选委托不选接口：零 DI、零新概念、闭合泛型 AOT 安全。
+**D4 SSE 帧最小化加可定制**。默认帧为 data-only JSON（framing 字节段经 `Response.BodyWriter` span 直写；序列化经 ThreadStatic 池化 `Utf8JsonWriter`（P1，2026-10-18，稳态每项零堆分配，实测 56B→0B/项，复用 JsonMessageSerializer 的 R8/ADR-029 形态），默认路径 framing 与序列化双零分配）；`MapStreamQuery` 提供可选 `Func<TItem, string> formatFrame` 委托，用户可返回完整帧文本（event/id 行）以支持分型事件流。选委托不选接口：零 DI、零新概念、闭合泛型 AOT 安全。
 
 **D5 取消贯穿**。handler 契约参数带 `[EnumeratorCancellation]`；端点传 `context.RequestAborted`。客户端断开时取消传播进 handler 的 finally（停计费、释放 provider 连接）。契约要求 stream handler 必须响应 ct。
 
@@ -114,6 +114,8 @@ Phase 1 = 上文全部。Phase 2（触发式，见复活触发器）：event/id 
 - **心跳 keepalive**（`keepAliveInterval`，默认 null 关闭）：agent 流的静默间隙属结构性常态（首 token 前可停几十秒、工具轮间隙达分钟级），中间设备空闲断连（nginx 默认 60s、部分云 LB 4min）会在工具轮之间掐断长 run；心跳为注释帧 `:keepalive`（规范内客户端忽略、不计入 item 数）。心跳路径为手动枚举器 + MoveNext 与心跳延时竞速（同步完成项走快路径，默认 await foreach 路径零额外开销）；取消经延时取消态优先于心跳，挂起项落地后统一走 OCE 静默收尾（等待而非丢弃挂起任务，避免未观测任务异常）。
 - **event/id 帧**（`eventSelector`/`idSelector` 选择器）：复活触发器 2 的「收 event 名支持进框架」提前满足（多家 LLM API 原生说分型 SSE，且 Phase 1 的 formatFrame 每消费方一份即 fork 前兆）。框架富化帧 `event: {名}\nid: {id}\ndata: {json}\n\n`（缺项行省略，event/id 字符串 UTF-8 直写 span 零分配）；`formatFrame` 保持最高优先级。
 - **Last-Event-ID 入口**（`StreamResumeExtensions.GetLastEventId()`）：只做请求头读取与 id 行写出，续传语义留应用层。实时生成流的中途缓冲（续传前提）与 per-stream Channel 项耦合，同批收窄。
+
+**P1 性能轮（2026-10-18 晚，`--stream` 实测驱动的收尾优化）**：bench 数据显示每帧 921ns 中框架可控 CPU 约 9%，每项分配里框架可控的仅剩序列化的 56B byte[]。将默认/富化两分支的序列化换为 `StreamFrameSerializer`（ThreadStatic 池化 `Utf8JsonWriter` + `ArrayBufferWriter`，复用 `JsonMessageSerializer` 的 R8/ADR-029 形态，含重入限制与 256KB 弃槽纪律），实测每项 56B→0B、CPU 持平到更快（探针对照），端点请求分配 −13%。至此默认帧路径 framing 与序列化双零分配，D4 的「默认路径零分配」声明获得完整实证（此前序列化器输出按项产出的注记删除）。锁零分配测试三件（每项 0B、输出与 SerializeToUtf8Bytes 逐位一致、池内 span 生命周期）+ 变异红证明（byte[] 回退判红）。观察态一项：富化帧常量事件名的 UTF-8 重复编码（+23ns/帧，可按引用相等记忆降到 ~5ns，收益 0.18% 量级低于「<5% 默认不做」线）。
 
 **收窄暂不实施**（触发条件未满足，复发时按上方原触发器走）：
 

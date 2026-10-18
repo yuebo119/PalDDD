@@ -653,6 +653,21 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **测量形态声明**：①端点 lane 双峰分布（StdDev 12~13%，`Task.Yield` 线程池抖动，与既有 EndToEnd/Hosting 异步 lane 同形态）；plain vs heartbeat 差 6.67μs 远大于 Error 带（±1.4~1.9μs），结论有效。②预分配 PipeWriter 替身把 BCL `StreamPipeWriter.FlushAsync` 的每帧 ~131B 内部分配从 framing 断言目标隔离（pitfalls A9 同族实测口径）；flush lane 用丢弃流避免 MemoryStream 无界增长。③BDN LaunchCount=2 的两次启动若绑固定端口必 AddressInUse（Launch 1 套接字释放时序），端点 setup 用 `127.0.0.1:0` 随机端口（AotSample §7 同款）。
 
+### P1 落地复测（2026-10-18 晚：帧载荷序列化池化）
+
+`StreamFrameSerializer`（ThreadStatic 池化 `Utf8JsonWriter` + `ArrayBufferWriter`，复用 JsonMessageSerializer R8/ADR-029 形态）替换默认/富化两分支的 `SerializeToUtf8Bytes`。复测口径同首测（同机、同 medium 档、`--stream` 全 lane）：
+
+| 基准 | P1 前 | P1 后 | 分配差 | 备注 |
+|---|---:|---:|---:|---|
+| SerializeAndFrame（→ Pooled） | 85.89 ns / 56 B | **59.68 ns / 0 B** | −56 B | 同 run 对照：快于 Serialize_PerItem 的 byte[] 单独序列化（76.21 ns） |
+| PerFrame_Default_WithFlush | 920.80 ns / 390 B | **845.09 ns / 336 B** | −54 B | flush 仍占 ~93% |
+| Endpoint_Plain（16 异步项） | 15.87 μs / 6,848 B | **12.62 μs / 5,952 B** | −896 B（−13.1%） | 每项 −56 B，与池化预测逐项吻合 |
+| Endpoint_Enriched | 17.20 μs / 6,848 B | **13.66 μs / 5,952 B** | −896 B | 富化分支同享池化 |
+| Endpoint_Heartbeat | 22.54 μs / 10,186 B | **16.32 μs / 9,304 B** | −882 B | 心跳差额 3.70μs/3,352B 为竞速机械（+231ns/+209B 每异步项；较 P1 前 +417ns 降低、分配持平，竞速机械本身不受池化影响） |
+| ZeroCopyFrame（收窄对照） | 77.90 ns / 136 B | 75.58 ns / 136 B | 0 | CPU 与默认路径持平、分配仍 2.4×，PipeWriter 化收窄结论加强 |
+
+**读法**：①分配差为确定性结论（每项 −56B，端到端与预测逐项吻合，零分配锁定测试三件 + 变异红证明在案）；②CPU 收益同 run 内可判定（池化 serialize+frame 59.68ns 快于 byte[] 单独序列化 76.21ns），跨 run 的端点时间差（−20~−28%）方向与同 run 微观 lane 一致，量级供参考；③首测结论二的心跳开销重标为每异步项 +231ns/+209B（P1 后口径，生产占比仍 0.001% 量级）；④默认路径至此 framing 与序列化双零分配，ADR-030 D4 声明获完整实证。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
