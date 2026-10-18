@@ -125,6 +125,20 @@ EF Core / Kafka / RabbitMQ / MemoryPack 等不支持 AOT 的项目**显式覆盖
 
 **部署层旋钮（框架外，需宿主侧按自身负载 A/B；框架 bench 不含网络，2026-10-18 收敛评估）**：①压缩中间件排除 `text/event-stream`（否则事件流被缓冲，破坏流式语义）；②代理/负载均衡空闲超时与 `keepAliveInterval` 对齐（nginx 默认 60s、部分云 LB 4 分钟上限，心跳取设备空闲超时的约三分之一）；③高并发流走 HTTP/2（EventSource 受 HTTP/1.1 每域 6 连接限制，POST+fetch 形态可享多路复用）；④并发流数上去后评估 Server GC（选型结论见 `deployment-performance.md` §1）。框架侧每请求可控成本已收敛到 8.2% CPU / 0 B 分配（`performance.md` 收敛读数节），优化重心在传输与部署层。
 
+### 1.11 断线续跑（Detached Stream Run，ADR-031）
+
+**何时用**：run 时长与用户耐心不匹配的场景（长 agent run、分钟级工具轮）。**不要用**在短请求或不需要重连的场景——它多一个进程内注册表与缓冲，`MapStreamQuery`（ADR-030）更简单。
+
+**形态（单写者 + 单附着 + 有界环形缓冲）**：`AddDetachedStreamRuns` 注册选项与注册表；`MapDetachedStreamQuery` 启动并附着（响应头 `X-Run-Id`）；`MapStreamRunAttach` 重连附着（遵守 `Last-Event-ID`，先回放缓冲再转 live）；`MapStreamRunCancel` 幂等取消。缓冲按项计数（默认 1024），溢出丢最旧并发 `event: gap` 带最旧可用 index。
+
+**生命周期硬边界（三条都要配）**：`MaxRunDuration`（默认 10 分钟）、`MaxItems`（默认 10 万）、`DetachGrace`（默认 5 分钟无附着即取消——「不白烧 token」的落点）。取消用 run 自有 CTS，**不用** `RequestAborted`：连接断开只 detach，handler 的 finally 与审计照常完成。
+
+**作用域所有权（强制）**：run 活过请求作用域，handler 必须从 run 自有 `IServiceScope` 解析（框架已在 `Register` 内完成）；run 终态时释放该 scope。**禁止**把请求作用域的 scoped 实例传进 run。
+
+**与相邻组件的分工（别混）**：run 注册表 = 传输层会话状态，进程内可丢（重启即丢进行中 run）；完成态审计与回放走 `IEventLog`（`samples/PalDDD.AgentSample` 示范 `Last-Event-ID` 即 `fromVersion`）；run 内部业务编排走 Saga；对外发布走 Outbox；工具副作用去重走 `IdempotencyProcessor`。本机制**不是** EventBus（单写者单附着、无订阅模型、无跨请求投递保证）。
+
+**客户端约束**：断线用取消请求（abort 连接）而非 `HttpResponseMessage.Dispose()`——后者在 SSE 流未读完时会同步等连接关闭，与仍在写的服务端互相等待；重连用新连接（连接池在 abort 后可能进入异常态）；终态收尾帧（`done`/`cancelled`）不带 id，按 id 解析时须过滤。
+
 ---
 
 ## 2. 注释规范
@@ -358,7 +372,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-10-18 Phase 2 轮复验）：225 源文件·36 项目·0 违规（2026-10-18 上午为 224 文件，ADR-030 Phase 2 收窄实施新增 StreamResumeExtensions 一文件——Last-Event-ID 重连入口单一事实源）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-10-18 断线续跑轮复验）：227 源文件·36 项目·0 违规（2026-10-18 上午为 225 文件，断线续跑决策新增 StreamRunRegistry 与 DetachedStreamEndpoints 两文件——运行注册表与端点原语各自单一事实源）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 

@@ -186,12 +186,13 @@
 | **PD8** | DIM 类型级契约误判（S2326 IRequest/ICommand / S3246 IEventHandler\<TEvent\> 逆变）→ SuppressMessage 带 Justification | git 3b26afd / fa1cbf8 |
 | **PD9** | 依赖升位的上游「无破坏性变更」声明不可信——PalORM 5.5.1→5.6.0 上游 CHANGELOG 称 SemVer Minor 无破坏性，实测五个读入口在第 2 位插入 `bool readFromReplica = false`，以位置参数传 `CancellationToken` 的调用编译期 CS1503（本仓 11 处命中，改命名参数 `ct:` 消解）→ **破坏性只有全量编译 + 测试能证**，依赖升位 PR 必须全量 CI 绿再合，不采信上游声明 | 实测 2026-09-25（CHANGELOG [Unreleased] Dependencies） |
 | **PD10** | 多分支 span 手写帧必须逐支核对偏移——`WriteDataFrame` ID 分支 `IdPrefix.CopyTo(span)` 漏 `[written..]`（event 分支在前且 `written=0` 时恰好正确，单选择器路径不经过 ID 分支）→ id 前缀覆写缓冲区头、冲掉 event 行（预期 `event: chunk\nid: e0\n...` 实测 `id: t: chunk\n...`）。教训：`GetSpan/CopyTo/Advance` 手写 framing 的每个分支都要偏移核对，且每个分支组合都要有行序锁定测试——单参数路径会 mask 多参数路径的偏移错误 | ADR-030 Phase 2（提交 9bc5d59；`MapStreamQuery_EventAndIdSelectors_WritesEnrichedFramesInOrder` 红证明在案） |
+| **PD11** | SSE 响应未读完时 `HttpResponseMessage.Dispose()` 会**同步等待连接关闭**，与仍在写的服务端互相等待——测试/样本表现为神秘挂起（排查耗时最长的一次，先后误判为并发、端口、Monitor 死锁）。断线须用「取消请求 CTS」abort 底层连接；重连用新的 `HttpClient` 实例（连接池在 abort 后可能进入异常态）；终态收尾帧（`done`/`cancelled`）不带 id，客户端按 id 解析须过滤（样本曾对 `int.Parse(null)` 崩溃，崩溃被超时包装误读为挂起） | ADR-031 实施轮（2026-10-18；`DetachedStreamTests`/`AgentSample` 第 6 段实测三条） |
 
 ---
 
 ## 统计
 
-> 第一至九章共 69 条；第十章 PalORM 适配层另有 16 条（PALORM-SG1-5/RT1-5/MYSQL1-3/CSHARP1-2/SEC1），全文共 85 条（2026-09-04 勘正统计口径，2026-09-25 增补 PD9，2026-10-18 增补 A9/PD10）。
+> 第一至九章共 70 条；第十章 PalORM 适配层另有 16 条（PALORM-SG1-5/RT1-5/MYSQL1-3/CSHARP1-2/SEC1），全文共 86 条（2026-09-04 勘正统计口径，2026-09-25 增补 PD9，2026-10-18 增补 A9/PD10/PD11）。
 
 | 章节 | 条数 | 来源 |
 |------|:----:|------|
@@ -203,8 +204,8 @@
 | 安全 & 审计 | 4 | ORM Phase 6/21（DDD 适用） |
 | DDD/Clean Architecture | 7 | DDD 项目独有（architecture.md 分层边界与稳定性约束） |
 | 诊断 & 可观测性 | 4 | ORM Phase 16/22（DDD 适用） |
-| DDD 实战新增 | 10 | ITM 历史 + ADR |
-| **合计** | **69** | — |
+| DDD 实战新增 | 11 | ITM 历史 + ADR |
+| **合计** | **70** | — |
 
 ---
 

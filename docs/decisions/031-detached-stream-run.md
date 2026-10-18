@@ -1,8 +1,8 @@
 # ADR 031：断线续跑（运行注册表 + 有界回放缓冲 + 附着/取消端点）
 
-> 状态：**提案（2026-10-18，待裁决；实施前不改任何运行语义）**
+> 状态：**已采纳（2026-10-18 完整实施轮，D1-D6 全部落地；D7/D8 边界声明随实现成文）**
 > 日期：2026-10-18
-> 关联：ADR-030（流式读形态——本 ADR 复活其分期节收窄的 per-stream Channel 项，形态收窄为单写者单附着）、EventBus 移除判决（本方案不恢复广播总线，docs/pitfalls.md D6）、ADR-006（EventLog 追加写语义边界）、docs/performance.md「流式读链路首测/收敛读数」、samples/PalDDD.AgentSample（已完成 run 回放参考实现）
+> 关联：ADR-030（流式读形态——本 ADR 复活其分期节收窄的 per-stream Channel 项，形态收窄为单写者单附着）、EventBus 移除判决（本方案不恢复广播总线，docs/pitfalls.md D6）、ADR-006（EventLog 追加写语义边界）、docs/performance.md「流式读链路首测/收敛读数」、samples/PalDDD.AgentSample（断线续跑段已落地）
 
 ## 背景
 
@@ -124,6 +124,23 @@ public static IServiceCollection AddDetachedStreamRuns(
 ## 分期
 
 Phase 1 = D1-D6 全部（注册表 + 三端点 + 选项 + 测试 + 样本 + 文档）。Phase 2（触发式）：多附着/扇出；跨进程与多实例亲和；跨重启续跑（触发即另立持久化分片 ADR，先做写放大评估）。
+
+## 实施附记（2026-10-18，完整实施轮）
+
+**与提案的两处偏离**（实施期修正，均在代码注释成文）：
+
+1. **`AddDetachedStreamRuns` 落在 `PalDDD.Hosting.AspNetCore` 而非 `ServiceRegistration`**（提案实现清单原写 DI 包）：DI 扩展就地在 Hosting 注册（对齐 `AddPalHealthChecks` 先例），避免 Hosting → DependencyInjection 反向依赖。
+2. **run 自有 `IServiceScope`**：run 活过请求作用域，因此 handler 从 run 自有 scope 解析（scoped 依赖如 DbContext 不能在请求结束时被销毁），run 终态 `Finish` 时确定性释放该 scope。这正是 ADR-030 被否的「dispatcher 持有对象变体」缺失的释放责任，本 ADR 由 run 生命周期显式承担。测试 `RunScope_IsDisposedAfterCompletion` 用 scoped 探针锁定。
+
+**实现期实证教训**（三条，均入 pitfalls 本仓实证族）：
+
+- SSE 响应未读完时 `HttpResponseMessage.Dispose()` 会同步等待连接关闭，与仍在写的服务端互相等待（表现为测试/样本挂死）——断线须用「取消请求 CTS」abort 底层连接；
+- `HttpClient` 连接池在 abort 后复用可能进入异常态，重连用独立实例（真实客户端重连通常也走新连接）；
+- 终态收尾帧（`event: done`）不带 id，客户端按 id 解析时必须过滤无 id 帧（样本断言曾对 `int.Parse(null)` 崩溃）。
+
+**测试覆盖**（20 件）：注册表级 11 件（泵启动与缓冲、溢出丢弃与最旧可用前移、cancel 终止与幂等、未知 run、`MaxItems` 预算、并发上限、`DetachGrace` 无附着取消、自定义 id 反查、滚出位置报 gap、`RejectNewAttach`、接管代际递增）+ HTTP 级 9 件（`X-Run-Id` 与帧序、断线后按 `Last-Event-ID` 续读、gap 帧先于数据帧、取消幂等且终态回放 `cancelled`、未知 run 404、终态回放缓冲后 `done`、接管使旧连接收 `detached`、`RejectNewAttach` 返 409、run scope 释放）。
+
+> **`DetachGrace` 的 HTTP 级验证取舍**：其语义由注册表级测试锁定（`DetachGrace_WithoutAttach_CancelsRun`）；HTTP 层「客户端断开 → 服务端观测 `RequestAborted`」依赖 TCP 半关闭时序，测试环境不稳定，不重复断言（避免用不稳定网络信号做语义判定）。
 
 ## 复活触发器（本决策失效条件）
 
