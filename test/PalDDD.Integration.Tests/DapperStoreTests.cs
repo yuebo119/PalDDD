@@ -168,6 +168,7 @@ public sealed class DapperStoreTests
             CREATE TABLE events (
                 global_position INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_id        TEXT NOT NULL,
+                event_id_bin    BLOB,
                 event_name      TEXT NOT NULL,
                 stream_name     TEXT NOT NULL,
                 stream_version  INTEGER NOT NULL,
@@ -1215,6 +1216,40 @@ public sealed class DapperStoreTests
 
         await Assert.That(EventsWritten(result)).IsEqualTo(1);
         await Assert.That(result.FirstStreamVersion).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task EventLog_AppendAsync_DualWritesEventIdBin_AndBinaryReadReturnsSameId(CancellationToken cancellationToken)
+    {
+        var log = new DapperEventLog(_conn, null, _dbType);
+        var eventId = PalUlid.New();
+        var events = new List<EventData>
+        {
+            new(
+                eventId,
+                "test.event.v1",
+                schemaVersion: 1,
+                contentType: "application/json",
+                payload: "{}"u8.ToArray(),
+                metadata: "{}"u8.ToArray(),
+                audit: EventAuditMetadata.Empty)
+        };
+
+        await log.AppendAsync("bin-stream", ExpectedStreamVersion.NoStream, events, cancellationToken);
+
+        var bin = await ReadScalarAsync<byte[]>(
+            "SELECT event_id_bin FROM events WHERE stream_name = @name", ("@name", "bin-stream"));
+        await Assert.That(bin).Count().IsEqualTo(16);
+
+        log.UseBinaryEventId = true;
+        var read = new List<RecordedEvent>();
+        await foreach (var recorded in log.ReadStreamAsync("bin-stream", 0, 10, cancellationToken))
+        {
+            read.Add(recorded);
+            break;
+        }
+        await Assert.That(read).Count().IsEqualTo(1);
+        await Assert.That(read[0].EventId).IsEqualTo(eventId);
     }
 
     /// <summary>

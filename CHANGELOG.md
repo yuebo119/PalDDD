@@ -14,6 +14,8 @@
 
 ### Added
 
+- **M4 EventId 二进制列 expand（2026-10-19 性能迁移）**：`events` 增加 `event_id_bin`（16 字节）可空列与普通索引；EF `StoredEvent`、Dapper `DapperEventLog`、PalORM `EventLogRow` 追加时双写文本 `event_id` 与二进制列。读取默认文本；`UseBinaryEventId=true`（三栈）切二进制，NULL 行回退文本。文本唯一索引保留，冲突分类不变；应用侧分批回填后创建二进制唯一索引。DDL/回填配方/切读/回滚见 `docs/migration/event-id-binary-column.md`。验证：PalORM 114（54 跳过）、Integration 412（14 跳过）全绿，新增双写与二进制读回测试；快照更新。
+
 - **M3 RabbitMQ 通道拓扑（2026-10-19 性能迁移）**：`RabbitMqBroker` 默认每订阅经 `IConnection.CreateChannelAsync` 创建独立 consumer channel，发布 channel 只承担发布与 publisher confirms；`UseSharedConsumerChannel=true` 复现单 channel 旧行为。订阅句柄释放顺序改为 cancel → dispose consumer channel → dispose linked CTS，失败路径同样释放。本地 RabbitMQ（wslc rabbit436）Messaging.Integration 18/18 全绿；回滚与验收见 `docs/migration/rabbitmq-channel-topology.md`。
 
 - **M2 投影批量检查点（2026-10-19 性能迁移）**：`ProjectionProcessor<TMessage>.CheckpointBatchSize`（默认 1）>1 时，`ProjectionRebuilder` 按组调用 `ProcessBatchAsync`，组内只在最后位置做一次 TryStart/MarkCompleted；失败时同时把组首标 Failed，续读从组首重放而不是组末之后，崩溃最多重放 N 条。无 schema 变更，N=1 保持旧路径。语义/用法/验收见 `docs/migration/projection-batch-checkpoints.md`。验证：Integration 412（14 跳过）全绿，新增批量成功与组内失败续读两件测试。

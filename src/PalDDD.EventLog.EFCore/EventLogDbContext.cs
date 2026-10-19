@@ -30,6 +30,12 @@ public abstract class EventLogDbContext(
     /// <summary>持久化事件日志表。</summary>
     public DbSet<StoredEvent> Events => Set<StoredEvent>();
 
+    /// <summary>
+    /// 读取时优先使用 16 字节 event_id_bin（M4）。默认 false 回退文本列；
+    /// 存量行回填完成后再置 true。
+    /// </summary>
+    public bool UseBinaryEventId { get; set; }
+
     /// <summary>持久化全局事件位置分配器状态。</summary>
     public DbSet<EventLogGlobalPositionAllocator> GlobalPositionAllocators => Set<EventLogGlobalPositionAllocator>();
 
@@ -155,7 +161,7 @@ public abstract class EventLogDbContext(
             await foreach (var @event in query)
             {
                 checked { read++; }
-                yield return @event.ToRecordedEvent();
+                yield return @event.ToRecordedEvent(UseBinaryEventId);
             }
         }
         finally
@@ -193,7 +199,7 @@ public abstract class EventLogDbContext(
             await foreach (var @event in query)
             {
                 checked { read++; }
-                yield return @event.ToRecordedEvent();
+                yield return @event.ToRecordedEvent(UseBinaryEventId);
             }
         }
         finally
@@ -219,6 +225,8 @@ public abstract class EventLogDbContext(
             // 缺转换时 ctx.Model 即抛"无法映射类型"（探针实证关系型完全不可用；InMemory-only
             // 测试网掩盖）。对齐 OutboxDbContext.Id / SagaStateDbContext.SagaId 姊妹模式。
             e.Property(x => x.EventId).HasConversion(v => v.ToString(null, System.Globalization.CultureInfo.InvariantCulture), v => PalUlid.Parse(v));
+            // M4：16 字节二进制 EventId 双写列；读取按 UseBinaryEventId 切换。
+            e.Property(x => x.EventIdBin);
             e.Property(x => x.CorrelationId).HasConversion(v => v.HasValue ? v.Value.ToString(null, System.Globalization.CultureInfo.InvariantCulture) : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
             e.Property(x => x.CausationId).HasConversion(v => v.HasValue ? v.Value.ToString(null, System.Globalization.CultureInfo.InvariantCulture) : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
             e.Property(x => x.StreamName).HasMaxLength(512);
@@ -232,6 +240,7 @@ public abstract class EventLogDbContext(
             e.Property(x => x.Metadata).IsRequired();
             e.HasIndex(x => new { x.StreamName, x.StreamVersion }).IsUnique();
             e.HasIndex(x => x.EventId).IsUnique();
+            e.HasIndex(x => x.EventIdBin);
         });
 
         modelBuilder.Entity<EventLogGlobalPositionAllocator>(e =>

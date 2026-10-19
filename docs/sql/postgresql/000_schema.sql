@@ -57,6 +57,7 @@ CREATE INDEX idx_saga_due ON saga_states(status, next_check_at);
 CREATE TABLE events (
     global_position BIGSERIAL PRIMARY KEY,
     event_id        TEXT NOT NULL,
+    event_id_bin    BYTEA,
     event_name      TEXT NOT NULL,
     stream_name     TEXT NOT NULL,
     stream_version  BIGINT NOT NULL,
@@ -74,6 +75,7 @@ CREATE TABLE events (
 );
 CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id);
+CREATE INDEX IF NOT EXISTS idx_events_event_id_bin ON events(event_id_bin);
 CREATE INDEX idx_events_global ON events(global_position);
 
 -- P3 修复（九轮评审）：补齐通用脚本已有而方言脚本缺失的两张表

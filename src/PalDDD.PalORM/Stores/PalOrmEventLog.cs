@@ -50,6 +50,11 @@ public class PalOrmEventLog<TProvider> : IEventLog
 
     private readonly TimeProvider _clock;
 
+    /// <summary>
+    /// 读取时优先使用 event_id_bin（M4）。默认 false 回退文本列；存量行回填后置 true。
+    /// </summary>
+    public bool UseBinaryEventId { get; set; }
+
     /// <summary>构造 EventLog。</summary>
     public PalOrmEventLog(DataSession<TProvider> session, TimeProvider? clock = null)
     {
@@ -115,7 +120,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
             // 版本区间回查 MIN/MAX」三往返达成（MAX 预检 + INSERT + 回查，较逐行 k+1 在
             // k≥3 净胜）；② innodb_autoinc_lock_mode=2 下已知行数多行 VALUES 的自增块
             // 连续（wslc mysql84 8.4.11 实测：5 行 LAST_INSERT_ID=首行值、min/max=1/5
-            // 无间隙），且本实现不依赖连续性（区间回查按版本区间）。行上限 4000（15 参/行
+            // 无间隙），且本实现不依赖连续性（区间回查按版本区间）。行上限 4000（16 参/行
             // = 60000 < MySQL 65535 占位符上限），超出回落逐行（与 Dapper B2 同口径）。
             (firstGlobalPos, lastGlobalPos) = await InsertBatchMySqlAsync(
                 streamName, expectedVersion, currentVersion, events, now, cancellationToken).ConfigureAwait(false);
@@ -236,7 +241,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         return (reader.GetInt64(0), reader.GetInt64(1));
     }
 
-    /// <summary>B11：MySQL 批量化行上限——15 参/行 × 4000 = 60000 &lt; MySQL 65535 占位符上限
+    /// <summary>B11：MySQL 批量化行上限——16 参/行 × 4000 = 64000 &lt; MySQL 65535 占位符上限
     ///（与 Dapper MySqlBatchRowLimit 同口径）；超出回落逐行路径。</summary>
     private const int MySqlBatchRowLimit = 4000;
 
@@ -273,7 +278,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         string streamName, long currentVersion, IReadOnlyList<EventData> events, DateTimeOffset now)
     {
         var sql = new System.Text.StringBuilder(
-            "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES ");
+            "INSERT INTO events (event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES ");
         var args = new List<object?>(events.Count * 15);
         for (var i = 0; i < events.Count; i++)
         {
@@ -282,7 +287,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
             sql.Append('(');
             object?[] values =
             [
-                e.EventId.ToString(null, System.Globalization.CultureInfo.InvariantCulture), e.EventName, streamName, currentVersion + 1 + i,
+                e.EventId.ToString(null, System.Globalization.CultureInfo.InvariantCulture), e.EventId.ToByteArray(), e.EventName, streamName, currentVersion + 1 + i,
                 e.SchemaVersion, e.ContentType, e.PayloadArray, e.MetadataArray,
                 now, e.Audit.ActorId, e.Audit.Reason,
                 e.Audit.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture), e.Audit.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
@@ -349,6 +354,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
             var row = new EventLogRow
             {
                 EventId = e.EventId,
+                EventIdBin = e.EventId.ToByteArray(),
                 EventName = e.EventName,
                 StreamName = streamName,
                 StreamVersion = streamVersion,
@@ -419,7 +425,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         // 参数化在 PG 有边界问题）；等于 int.MaxValue（默认"不设上限"）时不加 LIMIT，由下方
         // 客户端计数兜底。字面量经 FormattableStringFactory.Create 编入 format 文本而非参数。
         var readStreamSql = FormattableStringFactory.Create(
-            "SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE stream_name = {0} AND stream_version >= {1} ORDER BY stream_version"
+            "SELECT global_position, event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE stream_name = {0} AND stream_version >= {1} ORDER BY stream_version"
                 + (maxCount != int.MaxValue ? $" LIMIT {maxCount}" : string.Empty),
             streamName, fromVersion);
         using var activity = PalActivitySource.StartEventLogReadStream(streamName, fromVersion);
@@ -441,7 +447,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
             {
                 if (--maxCount < 0) yield break; // P3 修复：先减后判（maxCount=0 时零产出，对齐 EFCore ThrowIfLessThan(1)）
                 checked { read++; }
-                yield return ToRecorded(row, streamName);
+                yield return ToRecorded(row, streamName, UseBinaryEventId);
             }
         }
         finally
@@ -465,7 +471,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
         // ITM-079 修复：SQL LIMIT 下推（同 ReadStreamAsync——语义与字面量拼接方式一致）
         var readAllSql = FormattableStringFactory.Create(
-            "SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE global_position >= {0} ORDER BY global_position"
+            "SELECT global_position, event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE global_position >= {0} ORDER BY global_position"
                 + (maxCount != int.MaxValue ? $" LIMIT {maxCount}" : string.Empty),
             fromPosition);
         using var activity = PalActivitySource.StartEventLogReadAll(fromPosition);
@@ -479,7 +485,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
             {
                 if (--maxCount < 0) yield break; // P3 修复（八轮评审）：先减后判——对齐 ReadStreamAsync 结构
                 checked { read++; }
-                yield return ToRecorded(row, row.StreamName);
+                yield return ToRecorded(row, row.StreamName, UseBinaryEventId);
             }
         }
         finally
@@ -490,7 +496,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
     }
 
     /// <summary>EventLogRow → RecordedEvent 领域类型（零拷贝路径，payload/metadata 直接引用 byte[]）。</summary>
-    private static RecordedEvent ToRecorded(EventLogRow row, string streamName)
+    private static RecordedEvent ToRecorded(EventLogRow row, string streamName, bool useBinaryEventId)
     {
         // P2 定案：审计 6 字段全量还原（此前 4 个追踪字段回填 null，备份/迁移往返后追踪链断）
         var audit = string.IsNullOrEmpty(row.ActorId) && string.IsNullOrEmpty(row.Reason)
@@ -503,9 +509,12 @@ public class PalOrmEventLog<TProvider> : IEventLog
 
         // P2 修复（零拷贝真化）：Rehydrate 会 ToArray 复制 payload/metadata；
         // InternalsVisibleTo 补 PalORM 后走 RehydrateFromBytes（真零拷贝，与 EFCore/StoredEvent 同路径）
+        var eventId = useBinaryEventId && row.EventIdBin is { Length: 16 }
+            ? Ulid.New(row.EventIdBin)
+            : row.EventId;
         return RecordedEvent.RehydrateFromBytes(
             streamName, row.StreamVersion, row.GlobalPosition, row.RecordedAt,
-            row.EventId, row.EventName, row.SchemaVersion, row.ContentType,
+            eventId, row.EventName, row.SchemaVersion, row.ContentType,
             row.Payload, row.Metadata, audit);
     }
 
