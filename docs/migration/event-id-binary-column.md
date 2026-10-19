@@ -97,3 +97,24 @@ palOrmLog.UseBinaryEventId = true;    // PalORM
 - 二进制列使用 `BYTEA/BINARY(16)/BLOB`；Ulid 的 16 字节为大端时间前缀 + 随机尾，按字节
   比较与文本字典序一致，但任何依赖文本排序的查询仍应继续使用文本列直到单独验证。
 - 回填任务属于应用迁移职责；框架不内置跨库数据搬运，避免引入 provider 依赖。
+
+## 真库演练（2026-10-19）
+
+```bash
+# PALDDD_BENCH_PG_CONN / PALDDD_BENCH_MYSQL_CONN 由环境注入（库名须 palddd_bench 前缀）
+dotnet run -c Release --project bench/PalDDD.Benchmarks -- --m4-probe-pg
+dotnet run -c Release --project bench/PalDDD.Benchmarks -- --m4-probe-mysql
+```
+
+两方言均通过：旧 `events` 表先 `ALTER TABLE ADD event_id_bin` 与普通索引，播种 500 条
+`event_id_bin IS NULL` 的旧行，按 100 行一批回填，抽样 10 条校验二进制重建与文本一致，
+创建 `idx_events_event_id_bin_uq`，再用 `UseBinaryEventId=true` 读回 10 条。结果：
+PG `seeded=500, backfilled=500, sample=10, read=10, elapsed=1095ms`；MySQL
+`seeded=500, backfilled=500, sample=10, read=10, elapsed=2825ms`。
+
+演练中发现并修复一处真实缺陷：PG 的 `ALTER TABLE ADD COLUMN` 把 `event_id_bin` 追加在
+物理列末，与逻辑列序不同；`DapperEventLog` 原先用 `CommandBehavior.SequentialAccess`
+要求按物理列序单调读取，按列名取 ordinal 后跨列回读会抛
+`Invalid attempt to read from column ordinal`。改为 `SingleResult` 后仍逐行流式
+（不物化全部行），允许行内随机列访问。
+

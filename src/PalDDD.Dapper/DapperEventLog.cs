@@ -643,7 +643,11 @@ public sealed class DapperEventLog : IEventLog
         DbDataReader? reader = null;
         try
         {
-            reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, ct).ConfigureAwait(false);
+            // 2026-10-19：不使用 SequentialAccess——M4 的 event_id_bin 由 ALTER TABLE 追加在
+            // 物理列末，与 ReadOrdinals 的逻辑顺序不同；SequentialAccess 要求按物理列序单调
+            // 读取，按名取 ordinal 后跨列回读会在 PG 上抛 "Invalid attempt to read from column"。
+            // SingleResult 仍是逐行流式（不物化全部行），允许行内随机列访问。
+            reader = await cmd.ExecuteReaderAsync(CommandBehavior.SingleResult, ct).ConfigureAwait(false);
             var ordinals = ReadOrdinals.Create(reader);
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
                 yield return ReadRecordedEvent(reader, ordinals, UseBinaryEventId);
@@ -704,6 +708,18 @@ public sealed class DapperEventLog : IEventLog
     /// </summary>
     private static RecordedEvent ReadRecordedEvent(DbDataReader reader, in ReadOrdinals o, bool useBinaryEventId)
     {
+        // SequentialAccess 要求按列序单调读取；必须先 0..16 顺序读完全部列，再构造对象。
+        var globalPosition = reader.GetInt64(o.GlobalPosition);
+        var eventIdText = reader.GetString(o.EventId);
+        var eventIdBin = reader.IsDBNull(o.EventIdBin) ? null : reader.GetFieldValue<byte[]>(o.EventIdBin);
+        var eventName = reader.GetString(o.EventName);
+        var streamName = reader.GetString(o.StreamName);
+        var streamVersion = reader.GetInt64(o.StreamVersion);
+        var schemaVersion = reader.GetInt32(o.SchemaVersion);
+        var contentType = reader.GetString(o.ContentType);
+        var payload = reader.GetFieldValue<byte[]>(o.Payload);
+        var metadata = reader.IsDBNull(o.Metadata) ? [] : reader.GetFieldValue<byte[]>(o.Metadata);
+        var recordedAt = ReadDateTimeOffset(reader, o.RecordedAt);
         var actorId = reader.IsDBNull(o.ActorId) ? null : reader.GetString(o.ActorId);
         var reason = reader.IsDBNull(o.Reason) ? null : reader.GetString(o.Reason);
         PalUlid? correlationId = null;
@@ -720,21 +736,21 @@ public sealed class DapperEventLog : IEventLog
                 ? EventAuditMetadata.Empty
                 : new EventAuditMetadata(actorId, reason, correlationId, causationId, traceParent, traceState);
 
-        var eventId = useBinaryEventId && !reader.IsDBNull(o.EventIdBin)
-            ? PalUlid.New(reader.GetFieldValue<byte[]>(o.EventIdBin))
-            : PalUlid.Parse(reader.GetString(o.EventId));
+        var eventId = useBinaryEventId && eventIdBin is { Length: 16 }
+            ? PalUlid.New(eventIdBin)
+            : PalUlid.Parse(eventIdText);
 
         return RecordedEvent.RehydrateFromBytes(
-            reader.GetString(o.StreamName),
-            reader.GetInt64(o.StreamVersion),
-            reader.GetInt64(o.GlobalPosition),
-            ReadDateTimeOffset(reader, o.RecordedAt),
+            streamName,
+            streamVersion,
+            globalPosition,
+            recordedAt,
             eventId,
-            reader.GetString(o.EventName),
-            reader.GetInt32(o.SchemaVersion),
-            reader.GetString(o.ContentType),
-            reader.GetFieldValue<byte[]>(o.Payload),
-            reader.GetFieldValue<byte[]>(o.Metadata),
+            eventName,
+            schemaVersion,
+            contentType,
+            payload,
+            metadata,
             audit);
     }
 

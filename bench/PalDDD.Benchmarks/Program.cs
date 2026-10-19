@@ -254,6 +254,19 @@ if (args.Contains("--persist-mysql", StringComparer.OrdinalIgnoreCase))
 // InProcess 单基准 5 分钟硬上限），artifacts 独立目录归档；远程会话创建与
 // --persist-pg 同路（PALDDD_BENCH_PG_CONN / PALDDD_BENCH_MYSQL_CONN 外部实例或
 // 一次性容器，palddd_bench 库名前缀守卫）。
+// 迁移演练探针（2026-10-19）：真库上执行 M1/M4 expand + 回填 + 读切换校验。
+if (args.Contains("--m1-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM1Async(postgreSql: true);
+
+if (args.Contains("--m1-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM1Async(postgreSql: false);
+
+if (args.Contains("--m4-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM4Async(postgreSql: true);
+
+if (args.Contains("--m4-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM4Async(postgreSql: false);
+
 // ADR-033 Auto 组合 A/B（2026-10-19）：只跑新车道，避开旧 BatchMark 矩阵的 5 分钟上限。
 // 入口：--delivery-auto-pg / --delivery-auto-mysql（RttMs {0,1,20} × Auto {false,true}）。
 if (args.Contains("--delivery-auto-pg", StringComparer.OrdinalIgnoreCase))
