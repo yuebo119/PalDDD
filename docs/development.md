@@ -82,9 +82,9 @@ dotnet build PalDDD.slnx --no-restore
 PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests/PalDDD.Core.Tests.csproj --no-restore
 ```
 
-### 断言强度检查（替代 Stryker 突变测试）
+### 断言强度检查（与 Stryker 变异测试互补）
 
-仓库不包含 `stryker-config.json`：Stryker.NET 当前不支持 TUnit/MTP，无法在本仓库运行。突变测试职责已由 `AssertionStrengthGateTests`（test/PalDDD.DependencyInjection.Tests）替代（断言强度棘轮，基线上限 200——`08ba7d6`（Dapper 栈补齐 IIdempotencyStore）由 190 上调至 200，真实存量见该测试运行输出的 `isNotNullCount + zeroAssertMethods` 合计，只减不增；MIG-003 由 bash 脚本下沉，旧基线 166 为 python 配对漏检口径）。
+`AssertionStrengthGateTests`（test/PalDDD.DependencyInjection.Tests）提供每次 PR/本地的快速断言强度棘轮（基线上限 200——`08ba7d6`（Dapper 栈补齐 IIdempotencyStore）由 190 上调至 200，真实存量见该测试运行输出的 `isNotNullCount + zeroAssertMethods` 合计，只减不增；MIG-003 由 bash 脚本下沉，旧基线 166 为 python 配对漏检口径）。Stryker 5.0.0 已支持 TUnit/MTP（`--test-runner mtp`），两个 curated 基线位于 `test/PalDDD.Compression.Tests` 与 `test/PalDDD.Transactions.Tests`，由 `.github/workflows/mutation.yml` 每周一 + 手动触发；本棘轮继续作为每次 PR 的快速补充。
 
 - **运行**：
   ```bash

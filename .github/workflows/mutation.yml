@@ -1,14 +1,14 @@
 name: Mutation
 
 # 2026-10-18 审计 P1：变异测试从 ci.yml 的手动 job 拆为独立工作流。
-# - 月度 schedule + workflow_dispatch：全仓变异成本高，不进入每次 push 主路径；
+# - 每周一 schedule + workflow_dispatch：全仓变异成本高，不进入每次 push 主路径；
 # - 两个 curated 基线（CompressionProvider、Transactions/MySqlLeasePolicy）均 100%；
 # - break=95：出现存活体即失败；JSON/HTML 报告上传 artifact 供趋势与复盘。
 on:
   workflow_dispatch:
   schedule:
-    # 每月 1 日 04:00 UTC（Asia/Shanghai 12:00；GitHub cron 用 UTC）
-    - cron: '0 4 1 * *'
+    # 每周一 04:00 UTC（Asia/Shanghai 周一 12:00；GitHub cron 用 UTC）
+    - cron: '0 4 * * 1'
 
 permissions:
   contents: read

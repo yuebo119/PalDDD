@@ -126,7 +126,7 @@ Top 规则：
 | 项 | 决策 |
 |---|---|
 | 分析器 | 保留但默认关闭（`EnableQualityAnalyzers=false`），先做规则收敛：关闭 MA0048/MA0051/MA0004/MA0006 等噪声项，保留 S2077、S8949、S8969、S6444、MA0015、MA0011 等高价值项，再逐步提为默认开启（2026-10-18 实施：`.editorconfig` 规则子集 + 逐条裁决 + 基线 642→0；MA0015 按路径重启用公共/领域面，S2077 站点级抑制，见 §十一 与 docs/quality-analyzer-triage-2026-10-18.md） |
-| Stryker | MTP runner 已验证（Stryker 5.0.0 `--test-runner mtp`）；两个 `stryker-config.json` + 独立月度/手动 `mutation.yml`（break 95，JSON/HTML artifact）；CompressionProvider 与 Transactions/MySqlLeasePolicy 均 100% |
+| Stryker | MTP runner 已验证（Stryker 5.0.0 `--test-runner mtp`）；两个 `stryker-config.json` + 独立每周/手动 `mutation.yml`（2026-10-19 起；评估时为月度；break 95，JSON/HTML artifact）；CompressionProvider 与 Transactions/MySqlLeasePolicy 均 100% |
 | Semgrep | 6/6 误报已逐条加 `nosemgrep` 依据注释；当前 0 findings；CI `semgrep` job（29 规则 canary + SARIF artifact + uv 哈希锁） |
 | dotnet format whitespace | 先修既存违规，再考虑加 CI（已修复 3 文件/14 条并接入 CI，见 §十一） |
 | ToB 技能 | 保留，作为审计方法论；2026-10-18 已用 differential-review 对 `b027e0a` 做试点：发现 S2077 全局关闭削弱纵深（Semgrep 未覆盖两处 `FromSqlRaw`），已改为站点级抑制；报告 `docs/review/differential-review-2026-10-18-quality-tooling.md` |
@@ -155,9 +155,9 @@ Pal.DDD 的工程基线已经很硬：零警告、SQL 标识符有入口校验�
 |---|---|---|
 | 分析器规则收敛 | `.editorconfig` 末节新增规则子集：MA0048/MA0051/MA0004/MA0006/MA0002/S3358/S125/S1939/S3236 压为 `none`；MA0011/S8949/S8969 保持 `warning`；MA0015 按路径重启用公共/领域面，S2077 逐站点抑制；逐条修复/精确抑制后基线 642→**0** | 重新测量 0 条（去重后）；公共面 MA0015 18 条已修/精确抑制 |
 | 基线棘轮 | 新增 `scripts/quality-baseline.cs`（`--update` / `--selftest` / 退出码 0/1/2）；基线 `scripts/quality-analyzer-baseline.txt` | 本地 `--selftest` 全过；`--update` 写入 0；默认构建仍 0W0E |
-| CI 接线 | 新增独立 job `quality-analyzers`（基线 0 棘轮）、`semgrep`（0 findings + 29 规则 canary + SARIF artifact，pip 哈希锁）、独立 `mutation.yml`（月度 + 手动，break 95，artifact） | 新警告 > 0 即红；Semgrep finding/规则漂移即红；变异分数 <95 即红 |
+| CI 接线 | 新增独立 job `quality-analyzers`（基线 0 棘轮）、`semgrep`（0 findings + 29 规则 canary + SARIF artifact，pip 哈希锁）、独立 `mutation.yml`（2026-10-19 起每周 + 手动，break 95，artifact） | 新警告 > 0 即红；Semgrep finding/规则漂移即红；变异分数 <95 即红 |
 | whitespace | `dotnet format whitespace` 修复 3 文件/14 条；CI `Format verify (whitespace)` 步骤接入 | `--verify-no-changes` exit 0 |
-| Stryker / Semgrep | Stryker 5.0.0 MTP runner + 两个 `stryker-config.json`（break 95）+ 独立月度 `mutation.yml` + JSON/HTML artifact；Semgrep 6/6 FP 加 `nosemgrep` 依据注释、29 规则 canary、SARIF、`uv` 哈希锁 | CompressionProvider 与 MySqlLeasePolicy 均 100%；Semgrep 0 findings |
+| Stryker / Semgrep | Stryker 5.0.0 MTP runner + 两个 `stryker-config.json`（break 95）+ 独立每周 `mutation.yml`（2026-10-19 起）+ JSON/HTML artifact；Semgrep 6/6 FP 加 `nosemgrep` 依据注释、29 规则 canary、SARIF、`uv` 哈希锁 | CompressionProvider 与 MySqlLeasePolicy 均 100%；Semgrep 0 findings |
 | AOT 真发布 | AotSample + PalOrmSample `win-x64` `PublishAot` 本地实跑 | AotSample 全检查通过；PalOrmSample PASSED |
 | Actions 供应链 | 4 个工作流 28 处 `uses:` 全部钉 40 位 commit SHA + `# vX.Y.Z` 注释（checkout 4.4.0 / setup-dotnet 4.3.1 / cache 4.3.0 / upload-artifact 4.6.2 / setup-python 5.6.0 / codeql-action 3.39.0 / action-gh-release 2.6.2）；`config-policy` 增检查 C + pre-commit 触发 + 4 条隔离探针；Dependabot `github-actions` 持续更新 | 无 `@vN` 可变标签；config-policy selftest 30/30；SHA 由 `git ls-remote` 实测 |
 | review 债阻断 | pre-push 调用 `scripts/review-freshness.cs`（双层：任一轮 30 天 + 全量/里程碑 90 天）；v92 维护轮只重置任一轮，全量时钟 v91 → due 2026-12-18；豁免文件移除；4 条隔离探针 | review-freshness 正反例通过；metrics 任一轮 v92 / 全量 v91 |

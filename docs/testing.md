@@ -450,7 +450,8 @@ dotnet run --project bench/PalDDD.Benchmarks -- --smoke | tee /tmp/after.txt
 | `ci.yml` dialect-probe | push/PR，路径门控（仅 Store/SQL/DDL/映射面变更；PR 全跑） | DialectProbeTests（Testcontainers PG/MySQL 真库） |
 | `codeql.yml` | push（main/dev）/PR + 每周一 schedule + workflow_dispatch | CodeQL 静态安全分析 |
 | `perf-gate.yml`（待实施） | 每周日 + `[perf]` PR | Smoke 基线 + 回归检测 |
-| `AssertionStrengthGateTests`（test/PalDDD.DependencyInjection.Tests） | 每次 PR/本地（dotnet test） | 断言强度棘轮（替代 Stryker；Stryker 不支持 TUnit/MTP；MIG-003 由脚本下沉） |
+| `mutation.yml` | 每周一 schedule + workflow_dispatch | Stryker 两个 curated 基线（Compression / Transactions lease），break 95，JSON/HTML artifact |
+| `AssertionStrengthGateTests`（test/PalDDD.DependencyInjection.Tests） | 每次 PR/本地（dotnet test） | 断言强度棘轮（与 Stryker 互补；Stryker 5.0.0 MTP runner 见 mutation.yml；MIG-003 由脚本下沉） |
 
 ### Testcontainers CI 要求
 
@@ -510,7 +511,7 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 | `bench/PalDDD.Benchmarks/FrameworkBenchmarks.cs` | 领域核心基准 |
 | `bench/PalDDD.Benchmarks/InfraBenchmarks.cs` | 基础设施基准 |
 | `scripts/verify-conventions.cs` | 规范验证脚本（三模式） |
-| `AssertionStrengthGateTests.cs` | 断言强度检查测试（替代 Stryker；原 bash 脚本 MIG-003 下沉） |
+| `AssertionStrengthGateTests.cs` | 断言强度检查测试（与 Stryker 互补；原 bash 脚本 MIG-003 下沉） |
 
 ---
 
