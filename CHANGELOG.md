@@ -14,6 +14,8 @@
 
 ### Added
 
+- **M3 RabbitMQ 通道拓扑（2026-10-19 性能迁移）**：`RabbitMqBroker` 默认每订阅经 `IConnection.CreateChannelAsync` 创建独立 consumer channel，发布 channel 只承担发布与 publisher confirms；`UseSharedConsumerChannel=true` 复现单 channel 旧行为。订阅句柄释放顺序改为 cancel → dispose consumer channel → dispose linked CTS，失败路径同样释放。本地 RabbitMQ（wslc rabbit436）Messaging.Integration 18/18 全绿；回滚与验收见 `docs/migration/rabbitmq-channel-topology.md`。
+
 - **M2 投影批量检查点（2026-10-19 性能迁移）**：`ProjectionProcessor<TMessage>.CheckpointBatchSize`（默认 1）>1 时，`ProjectionRebuilder` 按组调用 `ProcessBatchAsync`，组内只在最后位置做一次 TryStart/MarkCompleted；失败时同时把组首标 Failed，续读从组首重放而不是组末之后，崩溃最多重放 N 条。无 schema 变更，N=1 保持旧路径。语义/用法/验收见 `docs/migration/projection-batch-checkpoints.md`。验证：Integration 412（14 跳过）全绿，新增批量成功与组内失败续读两件测试。
 
 - **M1 Saga 到期索引 expand（2026-10-19 性能迁移）**：`SagaState` 新增 `NextCheckAt`，由 `Saga<TState>` 在步骤开始/完成时计算（当前状态各 `StepStartedAt + Timeout` 的最小值，终态写 null）；`SagaProcessorOptions.EnableDueTimeFilter`（默认 false）开启后，实现 `IDueTimeSagaStore<TState>` 的 EF/Dapper/PalORM/InMemory 四栈只租约 `NextCheckAt <= now` 的活跃行，旧全量路径保留为回填与回退通道。`saga_states` 增加 `next_check_at` 列与 `(status, next_check_at)` 索引；DDL/回填/回滚见 `docs/migration/saga-next-check-at.md`。验证：Transactions 234、PalORM 114（54 跳过）、Integration 410（14 跳过）全绿；公共 API 快照更新。

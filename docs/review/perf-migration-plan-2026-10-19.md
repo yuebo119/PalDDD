@@ -85,6 +85,13 @@ confirm channel，每订阅独立 consumer channel；共享 `IConnection`。pref
 验收：混合负载下 8 订阅无跨订阅阻塞；慢消费者不影响发布确认；取消后无 channel 泄漏。
 风险：RabbitMQ.Client 7.x 的 channel 线程模型、confirm 窗口、匿名队列生命周期。
 
+实施状态（2026-10-19）：默认每订阅独立 consumer channel（`IConnection.CreateChannelAsync`），
+发布 channel 只承担发布/confirm；`UseSharedConsumerChannel=true` 复现单 channel 旧行为。
+订阅句柄释放时 cancel → dispose consumer channel → dispose linked CTS；失败路径同样释放。
+本地 RabbitMQ（wslc rabbit436，palddd-test）Messaging.Integration 18/18 全绿。
+`docs/migration/rabbitmq-channel-topology.md` 记录回滚与验收；1/4/8 订阅 p50/p99 压测
+仍待专项执行。
+
 ## M4 EventId 二进制列
 
 现状：`event_id` 以 26 字符文本存储并建唯一索引；每行写入 `ToString`、读取 `Parse`，
