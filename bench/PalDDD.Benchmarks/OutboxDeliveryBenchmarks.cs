@@ -280,6 +280,9 @@ public class OutboxDeliveryRemoteDrainBenchmarks : PersistenceBenchBase
             new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
             {
                 BatchSize = BatchSize,
+                // 2026-10-19：本类保留 ADR-027 的 BatchMark 1/16 对照语义，必须显式 Serial；
+                // Auto 成为默认后会把阈值抬到 16，令 BatchMark=1 基线失真。
+                DeliveryMode = OutboxDeliveryMode.Serial,
                 MaxInFlightPublishes = InFlightSerial,
                 BatchMarkThreshold = BatchMark,
             }),
@@ -335,21 +338,137 @@ public class OutboxDeliveryRemoteDrainBenchmarks : PersistenceBenchBase
 }
 
 /// <summary>
+/// ADR-033 Auto 组合 A/B（2026-10-19）：远程 DB + 假 broker 下比较 Serial（窗口 1/逐条标记/
+/// 对象发布）与 Auto（窗口 16/批量标记 16/raw publish）。Auto 使用声明并发与 raw 能力的
+/// 假 broker；Serial 使用不具备这两项能力的假 broker，保证基线不被 raw 路径污染。
+/// </summary>
+[MemoryDiagnoser]
+public class OutboxDeliveryRemoteAutoDrainBenchmarks : PersistenceBenchBase
+{
+    private const int Backlog = 1000;
+
+    [Params(0, 1, 20)]
+    public int RttMs { get; set; }
+
+    /// <summary>false = Serial 基线；true = Auto 组合（窗口 16 + 批量标记 16 + raw）。</summary>
+    [Params(false, true)]
+    public bool Auto { get; set; }
+
+    private DbConnection _conn = null!;
+    private DapperOutboxStore _store = null!;
+    private FakeDelayBroker _broker = null!;
+    private OutboxBatchProcessor _processor = null!;
+    private JsonMessageSerializer _serializer = null!;
+    private MessageDescriptor _descriptor = null!;
+
+    [GlobalSetup]
+    public void GlobalSetup()
+    {
+        if (RemoteDialectBenchState.Connection is null)
+            throw new InvalidOperationException("远程 Auto 投递基准须经 --delivery-pg/--delivery-mysql 入口运行（缺远程会话注入）");
+        _conn = RemoteDialectBenchState.Connection;
+        var builder = new MessageCatalogBuilder();
+        _descriptor = builder.Add<SerializationBenchmarks.BenchOrderPlaced>(
+            BenchJsonContext.Default.BenchOrderPlaced, "bench.order-placed.v1");
+        var catalog = builder.Build();
+        _serializer = new JsonMessageSerializer(catalog);
+        _store = new DapperOutboxStore(_conn, RemoteDialectBenchState.DbType);
+        _broker = new FakeDelayBroker(
+            TimeSpan.FromMilliseconds(RttMs), _serializer, catalog,
+            supportsConcurrentPublish: Auto, supportsRawPublish: Auto);
+        _processor = new OutboxBatchProcessor(
+            _store, _broker, _serializer, catalog,
+            new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
+            {
+                BatchSize = BatchSize,
+                DeliveryMode = Auto ? OutboxDeliveryMode.Auto : OutboxDeliveryMode.Serial,
+                MaxInFlightPublishes = 1,
+                BatchMarkThreshold = 1,
+                BatchMarkFlushInterval = TimeSpan.FromSeconds(1),
+            }),
+            NullPalLogger<OutboxBatchProcessor>.Instance);
+    }
+
+    [IterationSetup]
+    public async Task Setup()
+    {
+        await using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = "TRUNCATE outbox_messages";
+            await cmd.ExecuteNonQueryAsync();
+        }
+        var message = new SerializationBenchmarks.BenchOrderPlaced(PalUlid.New(), "bench", 1);
+        var payload = _serializer.Serialize(message).ToArray();
+        for (int i = 0; i < Backlog; i += 100)
+        {
+            var batch = new OutboxMessage[100];
+            for (int j = 0; j < 100; j++)
+            {
+                batch[j] = new OutboxMessage
+                {
+                    Type = _descriptor.Name,
+                    SchemaVersion = _descriptor.SchemaVersion,
+                    Payload = payload,
+                    ContentType = "application/json",
+                    Status = OutboxStatus.Pending,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                };
+            }
+            await _store.AddMessagesAsync(batch);
+        }
+        _broker.Reset();
+    }
+
+    [Benchmark]
+    public async ValueTask<int> Drain1000_AutoVsSerial()
+    {
+        var published = await DrainAsync(TimeSpan.FromMilliseconds(1)).ConfigureAwait(false);
+        if (published != Backlog)
+            throw new InvalidOperationException($"排空守卫失败：发布 {published} != {Backlog}");
+        return published;
+    }
+
+    private async ValueTask<int> DrainAsync(TimeSpan interBatchDelay)
+    {
+        while (await _processor.ProcessBatchWithBacklogAsync(default).ConfigureAwait(false))
+            await Task.Delay(interBatchDelay).ConfigureAwait(false);
+        return _broker.PublishCount;
+    }
+}
+
+/// <summary>
 /// 假 broker：发布确认延迟可配（RTT&gt;0 时逐条 await——对位 Kafka ProduceAsync await /
 /// Rabbit publisher-confirms await 的串行确认形态，T3.1 流水线化的 A/B 基线即此）。
 /// </summary>
 internal sealed class FakeDelayBroker(
-    TimeSpan publishLatency, IMessageSerializer serializer, IMessageCatalog catalog)
+    TimeSpan publishLatency,
+    IMessageSerializer serializer,
+    IMessageCatalog catalog,
+    bool supportsConcurrentPublish = false,
+    bool supportsRawPublish = false)
     : MessageBrokerBase(serializer, catalog)
 {
     private int _publishCount;
 
     public int PublishCount => Volatile.Read(ref _publishCount);
 
+    public override bool SupportsConcurrentPublish => supportsConcurrentPublish;
+
+    public override bool SupportsRawPublish => supportsRawPublish;
+
     public void Reset() => Volatile.Write(ref _publishCount, 0);
 
     public override async ValueTask PublishAsync(
         object message, MessageDescriptor descriptor, PalUlid messageId,
+        MessagePublishContext context, CancellationToken ct = default)
+    {
+        Interlocked.Increment(ref _publishCount);
+        if (publishLatency > TimeSpan.Zero)
+            await Task.Delay(publishLatency, ct).ConfigureAwait(false);
+    }
+
+    public override async ValueTask PublishRawAsync(
+        ReadOnlyMemory<byte> payload, MessageDescriptor descriptor, PalUlid messageId,
         MessagePublishContext context, CancellationToken ct = default)
     {
         Interlocked.Increment(ref _publishCount);

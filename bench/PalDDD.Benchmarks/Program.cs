@@ -254,6 +254,14 @@ if (args.Contains("--persist-mysql", StringComparer.OrdinalIgnoreCase))
 // InProcess 单基准 5 分钟硬上限），artifacts 独立目录归档；远程会话创建与
 // --persist-pg 同路（PALDDD_BENCH_PG_CONN / PALDDD_BENCH_MYSQL_CONN 外部实例或
 // 一次性容器，palddd_bench 库名前缀守卫）。
+// ADR-033 Auto 组合 A/B（2026-10-19）：只跑新车道，避开旧 BatchMark 矩阵的 5 分钟上限。
+// 入口：--delivery-auto-pg / --delivery-auto-mysql（RttMs {0,1,20} × Auto {false,true}）。
+if (args.Contains("--delivery-auto-pg", StringComparer.OrdinalIgnoreCase))
+    return await RunRemoteDeliveryAsync(isPostgreSql: true, autoOnly: true);
+
+if (args.Contains("--delivery-auto-mysql", StringComparer.OrdinalIgnoreCase))
+    return await RunRemoteDeliveryAsync(isPostgreSql: false, autoOnly: true);
+
 if (args.Contains("--delivery-pg", StringComparer.OrdinalIgnoreCase))
     return await RunRemoteDeliveryAsync(isPostgreSql: true);
 
@@ -325,7 +333,7 @@ static async Task<int> RunRemoteDialectAsync(bool isPostgreSql, IConfig config)
 
 /// <summary>远程库投递排空 A/B（B1 复活前提实测）——会话创建同 RunRemoteDialectAsync，
 /// 采样档同 --delivery（5/3/1），只跑 OutboxDeliveryRemoteDrainBenchmarks 一类。</summary>
-static async Task<int> RunRemoteDeliveryAsync(bool isPostgreSql)
+static async Task<int> RunRemoteDeliveryAsync(bool isPostgreSql, bool autoOnly = false)
 {
     RemoteDialectBenchSession session;
     try
@@ -350,7 +358,16 @@ static async Task<int> RunRemoteDeliveryAsync(bool isPostgreSql)
                 .WithIterationCount(5).WithWarmupCount(3).WithLaunchCount(1))
             .AddDiagnoser(MemoryDiagnoser.Default)
             .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-delivery-remote"));
-        BenchmarkRunner.Run<OutboxDeliveryRemoteDrainBenchmarks>(deliveryRemote);
+        // ADR-033：Serial（窗口 1/逐条标记/对象发布）vs Auto（窗口 16/批量标记 16/raw）组合 A/B。
+        // RttMs=20 的 Serial 基线约 33s/op；3 迭代 + 2 预热 = 5 op ≈ 165s，稳在 InProcess 5 分钟上限内。
+        var deliveryAuto = ManualConfig.Create(DefaultConfig.Instance)
+            .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default)
+                .WithIterationCount(3).WithWarmupCount(2).WithLaunchCount(1))
+            .AddDiagnoser(MemoryDiagnoser.Default)
+            .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-delivery-remote-auto"));
+        if (!autoOnly)
+            BenchmarkRunner.Run<OutboxDeliveryRemoteDrainBenchmarks>(deliveryRemote);
+        BenchmarkRunner.Run<OutboxDeliveryRemoteAutoDrainBenchmarks>(deliveryAuto);
         RemoteDialectBenchState.Connection = null;
         RemoteDialectBenchState.ConnectionString = null;
     }

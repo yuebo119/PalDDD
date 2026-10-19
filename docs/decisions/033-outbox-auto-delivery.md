@@ -62,3 +62,7 @@ Outbox 在 broker 支持、且消息与描述符的 ContentType 都与当前序�
 | 2 | Kafka 管道化发布（Produce + delivery callback） | 未实施 | 真实 broker 下单实例发布吞吐受 RTT 限制，且 Outbox 窗口已开 |
 | 3 | RabbitMQ 每订阅独立 consumer channel | 未实施 | 混合发布/消费压测出现 channel 级串行瓶颈 |
 | 4 | 投影检查点高水位、Saga 到期索引、EventId 二进制列 | 未实施 | 对应路径的回放/扫描/索引成本进入实测热点，按独立 ADR 立项 |
+
+迁移执行清单（expand/contract 阶段、回滚与验收）：`docs/review/perf-migration-plan-2026-10-19.md`。
+2026-10-19 Auto 组合真库 A/B：PG 9.3~14.2×、MySQL 11.0~15.1×（详见 `docs/performance.md`），
+确认组合收益不是 13× 与 6.4× 的乘积；RTT=0 的增益来自批量标记与 raw，RTT>0 由发布窗口主导。
