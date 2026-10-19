@@ -352,14 +352,15 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
             _graceCts?.Cancel();
             _graceCts = null;
             (startIndex, gap) = ResolveStartLocked(lastEventId);
-            // 附着计数：仅在成功返回 true 的路径递增（RejectNewAttach 拒绝不计）
-            PalMetrics.StreamAttached.Add(1);
             // 立即唤醒旧附着的等待者：让它马上看到代际不匹配并发 detached 收尾
             //（不 Pulse 则旧连接要等下一次 Wait 超时——keepAlive 间隔最长 30s 量级，
             // 接管帧迟迟不到，客户端感知为连接僵死）
             Monitor.PulseAll(_gate);
-            return true;
         }
+        // 附着计数在锁外递增：MeterListener 回调属用户代码，不在注册表锁内执行
+        //（RejectNewAttach 拒绝路径已在锁内提前返回，不计）
+        PalMetrics.StreamAttached.Add(1);
+        return true;
     }
 
     /// <summary>
@@ -569,10 +570,10 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
 
     private static void WriteGapFrame(PipeWriter writer, long oldestIndex)
     {
-        // 每次实际写出 gap 帧计一次（初始缺口与附着期间再丢弃两个写入口共用本方法）
-        PalMetrics.StreamGap.Add(1);
         StreamFrameWriter.WriteRawFrame(
             writer, $"event: gap\ndata: {{\"oldestIndex\":{oldestIndex}}}\n\n");
+        // 帧写入管道缓冲后计数（写入抛异常则不计；实际网络可达性不在此口径内）
+        PalMetrics.StreamGap.Add(1);
     }
 
     public void Dispose()

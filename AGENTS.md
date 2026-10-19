@@ -127,7 +127,7 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 | 已知坑 | `docs/pitfalls.md` |
 | 门禁可信度 | `dotnet run scripts/gate-audit.cs` 的矩阵输出 |
 
-### 性能工程（EPSL v1.6，2026-10-11 接入；2026-10-19 全量运行对账）
+### 性能工程（EPSL v1.7，2026-10-11 接入；2026-10-19 全量运行对账）
 
 - 性能深挖只按触发条件启动（门禁红 / 量级 10× / 新负载类型 / SLO 烧穿 / 阶段边界 / 项目完成），其余场合禁全量地毯扫描；触发后按四阶段 SOP：门禁先行 → 自动归因 → 分片深读 → 强制收敛（方案 `~/.zcode/references/EXTREME_PERF_SYSTEM.md`；SOP 独立件 `~/.zcode/perf-template/audit/carpet-audit-sop.md`）。
 - AI 性能分析四红线：抽查"核实/无一处"论断；负结论带检索口径；过 ADR 与 perf-ledger 比对；继承论断独立复验。**两条计量红线**：净效果（端到端旧/新差 + 同族遗留副本检索，防假闭环）；归属（残余成本先排除基准替身/BDN/BCL，再立项）。

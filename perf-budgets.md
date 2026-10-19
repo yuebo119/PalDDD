@@ -50,7 +50,7 @@
 
 新增基准车道、真库口径变化、SLO 重谈时，本文件与 Program.cs 断言阈值同批次更新。**基准类数/车道清单变化时同步 §1 与 `docs/performance.md` 当前结论**，并跑 `node ~/.zcode/scripts/eps-perf-check.mjs --project .`（声明与实际类数一致性）。
 
-## 7. 结果归档三层（EPSL v1.6）
+## 7. 结果归档三层（EPSL v1.7）
 
 | 层 | 位置 | 入库 |
 | --- | --- | --- |

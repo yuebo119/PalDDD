@@ -6,7 +6,7 @@
 
 ## 当前结论（2026-10-08 首轮；2026-10-18 口径校正见下）
 
-**2026-10-18 当前口径**：**37 个基准类**（Framework 5 + App 2 + Feature 5 + Infra 7 + Persistence 4 + SagaLane 1 + Concurrency 2 + Remote 5 + Delivery 3 + Comparison 2 + Stream 1），入口以 `bench/PalDDD.Benchmarks/Program.cs` 为单一真源；`--smoke` 6/6 分配预算已接入 CI `perf-smoke`（每次提交）；BDN 0.16.0-preview.2 已恢复默认 Switcher 入口（2026-10-17），显式 InProcess 路径保留；EPSL v1.6 系统对账与修复见 `docs/review/review-2026-10-18-epsl-system.md`。下面 2026-10-08 段保留首轮口径（22 类），不回溯改写。
+**2026-10-18 当前口径**：**37 个基准类**（Framework 5 + App 2 + Feature 5 + Infra 7 + Persistence 4 + SagaLane 1 + Concurrency 2 + Remote 5 + Delivery 3 + Comparison 2 + Stream 1），入口以 `bench/PalDDD.Benchmarks/Program.cs` 为单一真源；`--smoke` 6/6 分配预算已接入 CI `perf-smoke`（每次提交）；BDN 0.16.0-preview.2 已恢复默认 Switcher 入口（2026-10-17），显式 InProcess 路径保留；EPSL v1.6 系统对账与修复见 `docs/review/review-2026-10-18-epsl-system.md`（当前系统版本 v1.7，2026-10-19 全局升位）。下面 2026-10-08 段保留首轮口径（22 类），不回溯改写。
 
 2026-10-08 性能测试系统优化后，**22 个基准类（Framework 5 + App 2 + Infra 7 + Persistence 3 + SagaLane 1 + Concurrency 2 + Remote 2）全部具备正式报告入口**：`--framework` / `--app` / `--infra` / `--concurrency` / `--persist-pg` / `--persist-mysql` / `--persist` / `--persist-medium` / `--saga` / `--compression` 以模式级 ManualConfig（`Job.MediumRun` + InProcessEmitToolchain + MemoryDiagnoser）绕过 net11-rc moniker 限制（当时 BDN 0.15.8 默认 Switcher 入口不可用；2026-10-17 升 0.16.0-preview.2 后已恢复；根因与 jobs-union 双 job 坑详见 `bench/PalDDD.Benchmarks/Program.cs` 头注——类级 `[ShortRunJob]` 已全部移除，同 `--persist` 五十四轮先例）。`--smoke` 新增分配预算断言（Success/FromValue ≤1、Failed ≤50、RaiseEvent ≤140 B/op，超限退出码 1；变异验红实证：预算压至 1 时 RaiseEvent 判 ⛔ 退出码 1；R1 轮 2026-10-14 增 Start* 遥测入口 ≤1 B/op 两条——断言落 bench 进程：测试宿主订阅全局 ActivitySource 使 HasListeners 恒真，旧码 int tag 装箱 24.000/24.002 B/op 判红、守卫前置后 0 过）。
 
