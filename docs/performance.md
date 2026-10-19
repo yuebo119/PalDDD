@@ -718,6 +718,28 @@ P1 后框架可控成本占比与残余分配归属各做一次专门测量，�
 - FTS 定义约 9.6~10 KB 分配来自映射表、FTS5 虚表与三个触发器的 DDL 文本加外层定义对象；这是 schema 初始化操作，不属于请求热路径。把它做成硬预算会奖励缓存而非正确性，故不设 B/op 门禁。
 - 引用计时数字前按 `perf-budgets.md` §2 的 <5%/>15% 自评规则判断。
 
+## EPSL 全量运行经验与编排器（2026-10-19）
+
+本轮把 EPSL 从“检查件 + 手工逐条命令”推进到可重复编排，并记录一条重要环境边界。
+
+**编排器**：`scripts/eps-run.cs`
+
+```bash
+dotnet run scripts/eps-run.cs -- --quick        # eps-perf-check + --smoke
+dotnet run scripts/eps-run.cs -- --full         # 预检 + 构建 + 17 条本地车道 + 汇总
+dotnet run scripts/eps-run.cs -- --lane infra   # 单车道
+dotnet run scripts/eps-run.cs -- --list
+```
+
+- 全量要求工作树干净（脏则拒绝，`--allow-dirty` 可显式放行），预检打印 HEAD / 分支 / dotnet 版本 / 其他 dotnet 进程数，并在 `bench/logs/.eps-run.lock` 上加独占锁。
+- 每条车道独立进程运行，日志写 `bench/logs/eps-run-<timestamp>/<lane>.log`；`summary.md` 记录结果、耗时、尝试次数；日志保留最近 20 份。
+- 车道失败默认重试 1 次（30 秒间隔）；仍红才判失败。重试是经验性补偿，不隐藏第一次失败，summary 记录 attempts。
+- 默认跳过 PG/MySQL 四条真库车道；`--include-remote` 显式纳入，无 Docker 且无 `PALDDD_BENCH_*_CONN` 时记 SKIP，不算失败。
+
+**并发干扰的实证**：2026-10-19 全量运行期间有另一会话同时构建/测试 Pal.DDD。`--infra` 三次分别死在 SagaState / Compression / Configuration，日志无异常、失败类随机漂移；全部单类独立运行通过，干净环境（无并发构建）复跑 7/7 通过。结论：BDN `InProcessEmitToolchain` 对并发负载敏感，失败先按环境态复测，不得直接改预算或判代码回归。编排器的预检/独占/重试就是这条经验的机械化载体。
+
+**本次复跑读数**：17 条本地车道全部通过（含 `--sqlgen` 11 基准 23 秒）；16 个测试项目 1717 用例 0 失败 76 跳过；分析器开启构建 0 警告 0 错误；`eps-perf-check` 37/37 类且全部接入 `Program.cs`。真库车道未跑（本机无 Docker）。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
