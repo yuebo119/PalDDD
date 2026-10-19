@@ -97,7 +97,7 @@ var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
     ["doc-consistency"] = "D7 .ai/README.md 文件地图（其余 D1-D6/D8-D12 已下沉 C# 测试）",
     ["test-gate"] = "T1-T12 测试规范 / T-DEF-1 薄壳缺失 / T-DEF-4 CI job timeout / OSC 同测试翻转",
     ["verify-ai"] = "V1-V30 系统一致性（V1-V25 含命令形态三子类：bash-.cs / 带前缀死引用 / 裸名死引用；V26-V29 版本对账/test spec/pipefail/复发督办；V30 知识层锚点对账：ADR/边界测试规模/快照程序集与路径/根脚本数/V 上限 == 运行时推导，历史时点行豁免。V30 隔离探针注入陈旧 ADR 声明必红）",
-    ["config-policy"] = "A dependabot groups/ignore 双词表混用 / versions·labels·prefix·interval 缺失或空 / 未知上下文且注释不误报；B Directory.Build Exec 缺 IgnoreExitCode 且 Target 无 GITHUB_ACTIONS 跳过；C workflows 的 uses 非 40 位 SHA / 缺版本注释（行式校验，非完整 YAML 解析器；本地动作与 docker:// 跳过）",
+    ["config-policy"] = "A dependabot groups/ignore 双词表混用 / versions·labels·prefix·interval 缺失或空 / 未知上下文且注释不误报；B Directory.Build Exec 缺 IgnoreExitCode 且 Target 无 GITHUB_ACTIONS 跳过；C workflows 的 uses 非 40 位 SHA / 缺版本注释（行式校验，非完整 YAML 解析器；本地动作与 docker:// 跳过）；D ci/requirements-*.txt 的 Windows 专用依赖（pywin32 等）缺 sys_platform 标记（Linux CI 安装失败）",
     // license-policy 的两极由隔离探针钉住（禁令命中必红 / 白名单放行必绿）；其余判定面
     // 只在 selftest 覆盖——隔离目录没有真实 nuspec 缓存，构造不出「非白名单许可」的夹具，
     // 故如实声明为不覆盖，不拿探针数量冒充覆盖面（T-34 的本意）。
@@ -567,6 +567,26 @@ var probes = new List<Probe>
             File.WriteAllText(Path.Combine(dir, "Directory.Build.props"), "<Project>\n</Project>\n");
             File.WriteAllText(Path.Combine(dir, "Directory.Build.targets"), "<Project>\n</Project>\n");
             return [".github/dependabot.yml", ".github/workflows/bad.yml", "Directory.Build.props", "Directory.Build.targets"];
+        }),
+    new(
+        Name: "config-policy 拒绝无平台标记的 Windows 专用 CI 依赖",
+        Gate: "config-policy",
+        ExpectExit: 1,
+        MustContainInStdout: "ci/requirements-semgrep.txt",
+        Setup: dir =>
+        {
+            // A/B/C 载体保持合法——违规必须来自 D，否则「因 D 而红」的断言语义失真
+            var gh = Path.Combine(dir, ".github");
+            Directory.CreateDirectory(gh);
+            File.WriteAllText(Path.Combine(gh, "dependabot.yml"),
+                "version: 2\nupdates:\n  - package-ecosystem: nuget\n    schedule:\n      interval: weekly\n    labels:\n      - dependencies\n");
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.props"), "<Project>\n</Project>\n");
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.targets"), "<Project>\n</Project>\n");
+            var ci = Path.Combine(dir, "ci");
+            Directory.CreateDirectory(ci);
+            File.WriteAllText(Path.Combine(ci, "requirements-semgrep.txt"),
+                "pywin32==311 \\\n    --hash=sha256:abc\n");
+            return [".github/dependabot.yml", "Directory.Build.props", "Directory.Build.targets", "ci/requirements-semgrep.txt"];
         }),
     // ── license-policy 隔离探针（2026-09-25 增，裁决「所有引用的库必须是开源的许可」
     // 落成机械门禁的两极）。CWD 系门禁（FindRepoRootOrNull 以 Environment.CurrentDirectory

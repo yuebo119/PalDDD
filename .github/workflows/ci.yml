@@ -388,6 +388,10 @@ jobs:
       - name: Semgrep scan + rule canary
         # 规则包来自 registry（Semgrep Rules License，未 vendoring）；29 条是当前已审基线。
         # 规则数量变化 → 失败并要求重审 nosemgrep 注解；--sarif 供 artifact/趋势。
+        # 新增动态 SQL finding 的处理顺序：先改代码（参数化或已转义标识符 + 证据）；
+        # 确属受控拼接时在命中行上方加
+        #   // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- <理由>
+        # 与 src 内既有注解同形。注解数量不写死在文案里，避免每次增删都要改 CI。
         run: |
           set +e
           semgrep scan --config p/csharp --config p/security-audit --error --metrics=off \
@@ -400,7 +404,7 @@ jobs:
             exit 1
           fi
           if [ "$count" != "29" ]; then
-            echo "::error::Semgrep rule count changed ($count != 29)。请重审 7 处 nosemgrep 注解后有意更新此基线。"
+            echo "::error::Semgrep rule count changed ($count != 29)。请重审现有 nosemgrep 注解后有意更新此基线。"
             exit 1
           fi
           exit $status

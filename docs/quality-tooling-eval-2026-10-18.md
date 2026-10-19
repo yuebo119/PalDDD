@@ -81,6 +81,8 @@ Top 规则：
 
 可行收敛路径：对这 6 处加 `// nosemgrep: csharp.lang.security.sqli.csharp-sqli` 并注明校验依据；或只用 `p/secrets` 等规则包，不用 `p/csharp` 的 SQLi 规则。收敛前不接门禁。
 
+> **维护注记（2026-10-19）**：6 处已按上条路径加 `nosemgrep` 依据注释并接入 CI。两项维护约束：① `ci/requirements-semgrep.txt` 由 Windows 上的 uv 生成时必须保留 `pywin32` 的 `sys_platform == "win32"` 标记（`config-policy` 检查 D 守卫），否则 Linux runner 在扫描前安装失败；② 新增 SQLi finding 先改代码，确属受控拼接时在命中行上方加同形 `// nosemgrep: <rule> -- <理由>`，注解数量不写死在 CI 文案里。
+
 ## 五、dotnet format
 
 | 检查 | 结果 |

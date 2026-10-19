@@ -28,6 +28,7 @@
 
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 
 Console.OutputEncoding = Encoding.UTF8;
 
@@ -43,6 +44,18 @@ Environment.CurrentDirectory = root;
 var riskyTestChanges = GitNameOnly("diff --cached --name-only --diff-filter=MDR -- test/")
     .Where(IsUnderTestDir)
     .ToList();
+
+// 删除测试文件时列出旧测试方法名（WARN，不改判定）——v93 实证：ADR-032 重写
+// 测试文件时删掉了 v4 的路径单引号防线测试，行为无覆盖缺口告警，直到真实
+// SQLite 探针报错才暴露。提示与 .ai/review/fix-protocol.md「测试文件重写/删除」
+// 联动，让迁移确认发生在提交时而不是下一轮评审。
+var deletedTestMethods = ExtractDeletedTestMethods();
+if (deletedTestMethods.Count > 0)
+{
+    Console.WriteLine($"⚠ 删除的测试文件含 {deletedTestMethods.Count} 个测试方法——按 .ai/review/fix-protocol.md「测试文件重写/删除」逐项确认迁移或有意淘汰：");
+    foreach (var name in deletedTestMethods.Take(20)) Console.WriteLine($"  - {name}");
+    if (deletedTestMethods.Count > 20) Console.WriteLine($"  …另有 {deletedTestMethods.Count - 20} 个");
+}
 
 if (riskyTestChanges.Count == 0)
 {
@@ -124,6 +137,76 @@ static bool IsUnderTestDir(string path) =>
 static bool IsUnderSrcDir(string path) =>
     path.StartsWith("src/", StringComparison.Ordinal);
 
+// 删除的测试文件 → 旧测试方法名清单（WARN 辅助，不参与判定）。
+static List<string> ExtractDeletedTestMethods()
+{
+    var result = new List<string>();
+    foreach (var path in GitNameOnly("diff --cached --name-only --diff-filter=D -- test/")
+                 .Where(p => p.StartsWith("test/", StringComparison.Ordinal) && p.EndsWith(".cs", StringComparison.Ordinal)))
+    {
+        foreach (var name in ExtractTestNames(GitShowHead(path)))
+            result.Add($"{path}: {name}");
+    }
+    return result;
+}
+
+// 纯函数（供 selftest 覆盖）：按行识别 [Test] 后紧跟的 public Task/void 方法名。
+// 注释行跳过；签名跨行时首个含方法名的行即可命中。
+static List<string> ExtractTestNames(string source)
+{
+    var names = new List<string>();
+    var pendingTest = false;
+    foreach (var raw in source.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+    {
+        var line = raw.Trim();
+        if (line.Length == 0 || line.StartsWith("//", StringComparison.Ordinal)) continue;
+        if (line.StartsWith("[Test]", StringComparison.Ordinal))
+        {
+            pendingTest = true;
+            continue;
+        }
+
+        if (!pendingTest) continue;
+        var m = Regex.Match(line, @"\bpublic\s+(?:async\s+)?(?:Task|void)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(");
+        if (m.Success)
+        {
+            names.Add(m.Groups[1].Value);
+            pendingTest = false;
+        }
+        else if (line.StartsWith("public ", StringComparison.Ordinal))
+        {
+            pendingTest = false;   // 特性与方法之间夹了别的成员，放弃该候选
+        }
+    }
+    return names;
+}
+
+static string GitShowHead(string path)
+{
+    var psi = new ProcessStartInfo("git")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        StandardOutputEncoding = Encoding.UTF8,
+        UseShellExecute = false,
+    };
+    psi.ArgumentList.Add("show");
+    psi.ArgumentList.Add("HEAD:" + path);
+    try
+    {
+        using var p = Process.Start(psi);
+        if (p is null) return "";
+        var output = p.StandardOutput.ReadToEnd();
+        p.StandardError.ReadToEnd();
+        p.WaitForExit();
+        return p.ExitCode == 0 ? output : "";
+    }
+    catch (System.ComponentModel.Win32Exception)
+    {
+        return "";
+    }
+}
+
 static string FindRepoRoot()
 {
     foreach (var start in (string?[])[Environment.CurrentDirectory, AppContext.BaseDirectory])
@@ -175,6 +258,27 @@ static int SelfTest()
         !IsUnderTestDir("docs/test-coverage-baseline.md") && !IsUnderTestDir("scripts/test-gate.cs"));
     Case("路径判定命中 test/ 与 src/",
         IsUnderTestDir("test/PalDDD.Core.Tests/X.cs") && IsUnderSrcDir("src/PalDDD.Core/X.cs"));
+
+    // 删除测试文件的旧方法名提取（WARN 辅助）
+    const string sampleTests = """
+        // [Test] public async Task InComment_IsIgnored()
+        public sealed class SampleTests
+        {
+            [Test]
+            public async Task First_Case()
+            {
+            }
+
+            [Test]
+            [Arguments(1)]
+            public void Second_Case(int value)
+            {
+            }
+        }
+        """;
+    Case("提取 [Test] 方法名（跳过注释形态）",
+        ExtractTestNames(sampleTests).SequenceEqual(["First_Case", "Second_Case"]));
+    Case("无 [Test] 的文件返回空清单", ExtractTestNames("public class X { }").Count == 0);
 
     Console.WriteLine();
     Console.WriteLine($"SELFTEST {passed}/{total} 通过");

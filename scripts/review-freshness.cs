@@ -142,11 +142,7 @@ static (string? Warning, int AnyDays, DateOnly? LastAny, DateOnly? LastFull, int
         if (lastAny is null || d > lastAny.Value) lastAny = d;
 
         var type = m.Groups[2].Value;
-        if ((type.Contains("全量", StringComparison.Ordinal)
-                || type.Contains("全仓", StringComparison.Ordinal)
-                || type.Contains("里程碑", StringComparison.Ordinal)
-                || type.Contains("full", StringComparison.OrdinalIgnoreCase))
-            && (lastFull is null || d > lastFull.Value))
+        if (IsFullRoundType(type) && (lastFull is null || d > lastFull.Value))
             lastFull = d;
     }
 
@@ -164,6 +160,24 @@ static (string? Warning, int AnyDays, DateOnly? LastAny, DateOnly? LastFull, int
     return parts.Count == 0
         ? (null, anyDays, lastAny, lastFull, fullDays)
         : ($"review 债：{string.Join("；", parts)}（src 最近 {srcDate:yyyy-MM-dd}）", anyDays, lastAny, lastFull, fullDays);
+}
+
+// 全量轮识别：type 列出现 全量/全仓/里程碑/full。
+// 否定短语不是全量轮——v93 实证：维护轮类型列写「非全量地毯」时，旧的裸
+// Contains 把最近全量时钟从 30 天误刷成 0 天，静默洗白 90 天评审债。
+// 否定前缀先归一化为「维护轮」再匹配；「全量+清偿」「全仓运行」等肯定形态不变。
+static bool IsFullRoundType(string type)
+{
+    var normalized = type
+        .Replace("非全量", "维护轮", StringComparison.Ordinal)
+        .Replace("非全仓", "维护轮", StringComparison.Ordinal)
+        .Replace("不是全量", "维护轮", StringComparison.Ordinal)
+        .Replace("未做全量", "维护轮", StringComparison.Ordinal)
+        .Replace("不做全量", "维护轮", StringComparison.Ordinal);
+    return normalized.Contains("全量", StringComparison.Ordinal)
+        || normalized.Contains("全仓", StringComparison.Ordinal)
+        || normalized.Contains("里程碑", StringComparison.Ordinal)
+        || normalized.Contains("full", StringComparison.OrdinalIgnoreCase);
 }
 
 static ReviewExemption? ReadReviewExemption(string path)
@@ -216,6 +230,11 @@ static int RunSelftest()
     Case("ReviewFreshness 维护轮新鲜但全量超 90 天告警", ReviewFreshness(fullStale, "2026-10-01", today, 30, 90).Warning is not null);
     string[] anyStale = ["| v92 | 2026-09-01 | 质量系统维护轮 |", "| v91 | 2026-08-01 | 全仓运行 |"];
     Case("ReviewFreshness 全量新鲜但任一轮超 30 天告警", ReviewFreshness(anyStale, "2026-10-01", today, 30, 90).Warning is not null);
+    string[] fullFresh = ["| v92 | 2026-10-15 | 全量+清偿 |"];
+    Case("ReviewFreshness 肯定形态「全量」识别为全量轮", ReviewFreshness(fullFresh, "2026-10-01", today, 30, 90).LastFull == new DateOnly(2026, 10, 15));
+    string[] negatedFull = ["| v92 | 2026-10-18 | 质量系统运行轮（机械门禁实跑，非全量地毯）|"];
+    Case("ReviewFreshness 否定短语「非全量」不算全量轮", ReviewFreshness(negatedFull, "2026-10-01", today, 30, 90).LastFull is null);
+    Case("ReviewFreshness 否定短语「未做全量」不算全量轮", !IsFullRoundType("质量系统运行轮（未做全量，变更面标准档）"));
     Case("ReviewFreshness 无轮次不告警", ReviewFreshness([], "2026-10-01", today, 30, 90).Warning is null);
     Case("ExemptionAllows 未到期放行", ExemptionAllows(new DateOnly(2026, 11, 15), today));
     Case("ExemptionAllows 已到期阻断", !ExemptionAllows(new DateOnly(2026, 9, 1), today));
