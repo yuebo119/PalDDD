@@ -34,7 +34,7 @@ SQLite 的 FTS5 与 JSON1 目前只存在于 `PalDDD.Dapper.Sqlite`，`PalDDD.Pa
 
 **D5 触发器名稳定抗碰撞。** `fts_{清洗名}_{FNV-1a64}_{ai|ad|au}`，原 indexName 的哈希消除清洗碰撞。v4 旧名字通过 `DropLegacyStatements` 迁移。
 
-**D6 JSON1 默认安全形态。** 路径始终用双引号包裹对象键，键内 `"` 与 `\` 按探针规则转义；值默认走 `*Parameter` 方法，`*Literal` 只服务常量。所有标识符、参数名、路径段在构建期校验。
+**D6 JSON1 默认安全形态。** 路径始终用双引号包裹对象键，键内 `"` 与 `\` 按探针规则转义，单引号按 SQL 字面量规则翻倍；值默认走 `*Parameter` 方法，`*Literal` 只服务常量。所有标识符、参数名、路径段在构建期校验。
 
 **D7 PalORM 只做 DDL 生命周期与片段。** `EnsureIndexAsync`、`RebuildIndexAsync`、`OptimizeIndexAsync`、`DropIndexAsync`、`IndexExistsAsync` 通过 `DataSession<SqliteProvider>.GetRawConnection()` 执行。查询侧给出原生 `DbCommand + @q` 与 `FormattableStringFactory.Create` 两条配方，不造 `FormattableString` 查询构建器。原因：PalORM 的 PD18 约束禁止把 SQL 片段作为插值洞，片段组合会变成第二套不完全的 SQL builder。
 

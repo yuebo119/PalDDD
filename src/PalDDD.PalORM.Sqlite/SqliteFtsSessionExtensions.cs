@@ -18,6 +18,8 @@ public static class SqliteFtsSessionExtensions
 {
     /// <summary>
     /// 校验并创建 FTS5 索引（CREATE TABLE/TRIGGER 均为 IF NOT EXISTS，可重复调用）。
+    /// <para>standalone 索引只由后续 DML 触发器维护；源表已有数据时须再调用
+    /// <see cref="RebuildIndexAsync"/> 回填，否则存量行不会被检索到。</para>
     /// </summary>
     public static async Task EnsureIndexAsync(
         this DataSession<SqliteProvider> session,

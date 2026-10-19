@@ -424,7 +424,7 @@ foreach (var statement in definition.Statements)
     await connection.ExecuteAsync(statement);
 ```
 
-`CreateOutboxIndex` / `CreateEventLogIndex` 使用 standalone 索引（映射表 + 触发器），TEXT/ULID 主键与 BLOB payload 都可用；`payload` 默认以 `CAST(... AS TEXT)` 入索引。需要 INTEGER 主键 + TEXT 列的 external-content 索引时用 `CreateExternalContentIndex`，`ValidateAsync` 会在 TEXT 主键上提前抛错。
+`CreateOutboxIndex` / `CreateEventLogIndex` 使用 standalone 索引（映射表 + 触发器），TEXT/ULID 主键与 BLOB payload 都可用；`payload` 默认以 `CAST(... AS TEXT)` 入索引。需要 INTEGER 主键 + TEXT 列的 external-content 索引时用 `CreateExternalContentIndex`，`ValidateAsync` 会在 TEXT 主键上提前抛错。standalone 索引只由后续 DML 触发器维护，源表已有数据时创建后须执行 `definition.RebuildStatements()`（PalORM 为 `RebuildIndexAsync`）回填，否则存量行搜不到。
 
 ### 查询（Dapper）
 
@@ -442,7 +442,7 @@ var sql = $"SELECT * FROM outbox_messages WHERE {SqliteJson.EqualsParameter("pay
 var rows = await connection.QueryAsync<OutboxRow>(sql, new { type = "Order.Created" });
 ```
 
-JSON 路径始终引号化，键可以直接包含 `.`、`[`、`]`、空格；键内双引号与反斜杠由 helper 转义。
+JSON 路径始终引号化，键可以直接包含 `.`、`[`、`]`、空格；键内双引号与反斜杠按 JSON 路径规则转义，单引号按 SQL 字面量规则翻倍。
 
 ### 建索引与查询（PalORM）
 

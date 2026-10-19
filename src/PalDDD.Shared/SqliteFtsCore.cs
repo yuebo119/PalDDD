@@ -219,15 +219,15 @@ internal static class SqliteFtsCore
     {
         ArgumentNullException.ThrowIfNull(definition);
         var source = SqliteSqlCore.QuoteAlias(sourceAlias, nameof(sourceAlias));
-        var map = SqliteSqlCore.QuoteAlias(mapAlias, nameof(mapAlias));
-        if (string.Equals(sourceAlias, mapAlias, StringComparison.Ordinal))
-            throw new ArgumentException("sourceAlias 与 mapAlias 不得相同。", nameof(mapAlias));
-
         var index = SqliteSqlCore.EscapeIdentifier(definition.IndexName);
         var key = SqliteSqlCore.EscapeIdentifier(definition.KeyColumn);
 
         if (definition.Kind == FtsIndexKind.ExternalContent)
             return $"JOIN {index} ON {index}.rowid = {source}.{key}";
+
+        var map = SqliteSqlCore.QuoteAlias(mapAlias, nameof(mapAlias));
+        if (string.Equals(sourceAlias, mapAlias, StringComparison.Ordinal))
+            throw new ArgumentException("sourceAlias 与 mapAlias 不得相同。", nameof(mapAlias));
 
         var mapping = SqliteSqlCore.EscapeIdentifier(definition.MappingTableName!);
         return $"JOIN {mapping} AS {map} ON {map}.\"source_key\" = CAST({source}.{key} AS TEXT) JOIN {index} ON {index}.rowid = {map}.\"fts_rowid\"";

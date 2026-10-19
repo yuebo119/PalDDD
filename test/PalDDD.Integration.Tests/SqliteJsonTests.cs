@@ -9,8 +9,16 @@ public sealed class SqliteJsonTests
     [Test]
     public async Task Path_QuotesSpecialKeys()
     {
-        var path = SqliteJson.Path("a.b", "c[0]", "d e", "f\"g", "h\\i");
-        await Assert.That(path).IsEqualTo("'$.\"a.b\".\"c[0]\".\"d e\".\"f\\\"g\".\"h\\\\i\"'");
+        var path = SqliteJson.Path("a.b", "c[0]", "d e", "f\"g", "h\\i", "j'k");
+        await Assert.That(path).IsEqualTo("'$.\"a.b\".\"c[0]\".\"d e\".\"f\\\"g\".\"h\\\\i\".\"j''k\"'");
+    }
+
+    [Test]
+    public async Task Path_SingleQuote_InjectionAttempt_StaysInsideLiteral()
+    {
+        var path = SqliteJson.Path("x' OR '1'='1");
+
+        await Assert.That(path).IsEqualTo("'$.\"x'' OR ''1''=''1\"'");
     }
 
     [Test]
@@ -18,7 +26,7 @@ public sealed class SqliteJsonTests
     {
         using var connection = OpenMemory();
         Execute(connection, "CREATE TABLE t (payload TEXT)");
-        Execute(connection, """INSERT INTO t (payload) VALUES ('{"a.b":1,"c[0]":2,"d e":3,"f\"g":4,"h\\i":5}')""");
+        Execute(connection, """INSERT INTO t (payload) VALUES ('{"a.b":1,"c[0]":2,"d e":3,"f\"g":4,"h\\i":5,"j''k":6}')""");
 
         using var command = connection.CreateCommand();
         command.CommandText = $"""
@@ -26,7 +34,8 @@ public sealed class SqliteJsonTests
                    {SqliteJson.Extract("payload", "c[0]")},
                    {SqliteJson.Extract("payload", "d e")},
                    {SqliteJson.Extract("payload", "f\"g")},
-                   {SqliteJson.Extract("payload", "h\\i")}
+                   {SqliteJson.Extract("payload", "h\\i")},
+                   {SqliteJson.Extract("payload", "j'k")}
             FROM t
             """;
         using var reader = command.ExecuteReader();
@@ -36,6 +45,7 @@ public sealed class SqliteJsonTests
         await Assert.That(reader.GetInt64(2)).IsEqualTo(3L);
         await Assert.That(reader.GetInt64(3)).IsEqualTo(4L);
         await Assert.That(reader.GetInt64(4)).IsEqualTo(5L);
+        await Assert.That(reader.GetInt64(5)).IsEqualTo(6L);
     }
 
     [Test]

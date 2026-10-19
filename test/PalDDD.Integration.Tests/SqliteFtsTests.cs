@@ -205,6 +205,28 @@ public sealed class SqliteFtsTests
     }
 
     [Test]
+    public async Task JoinClause_ExternalContent_IgnoresMapAlias()
+    {
+        var definition = SqliteFts.CreateExternalContentIndex(
+            "events", "events_fts", "global_position", ["event_name"]);
+
+        // XML doc 声明 external-content 忽略 mapAlias；同值别名不得因此抛错
+        var clause = definition.JoinClause("s", "s");
+
+        await Assert.That(clause).Contains("rowid = \"s\".\"global_position\"");
+        await Assert.That(clause).DoesNotContain("_map");
+    }
+
+    [Test]
+    public async Task JoinClause_Standalone_RejectsDuplicateAliases()
+    {
+        var definition = SqliteFts.CreateOutboxIndex();
+
+        await Assert.That(() => definition.JoinClause("s", "s"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
     public async Task DropLegacyStatements_UsesOldTriggerNames()
     {
         var statements = SqliteFts.DropLegacyStatements("events_fts");
