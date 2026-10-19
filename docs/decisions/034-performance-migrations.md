@@ -45,15 +45,16 @@ EF/Dapper/PalORM 双写；读取默认文本，`UseBinaryEventId=true` 切二进
 | M3 每订阅 channel 与释放顺序 | src/PalDDD.Messaging.RabbitMQ/RabbitMqBroker.cs | ☑ |
 | M4 三栈双写与读开关 | src/PalDDD.EventLog.EFCore/StoredEvent.cs、DapperEventLog.cs、PalOrmEventLog.cs | ☑ |
 | 验证面板 | Transactions 234、PalORM 114（54 跳过）、Integration 413（14 跳过）、Messaging.Integration 18/18、EventLog 44 | ☑ |
+| M1/M4 真库探针 | bench/PalDDD.Benchmarks/MigrationProbes.cs；PG/MySQL M1 due=1/active=2；M4 500/500 回填、sample=10、read=10 | ☑ |
 | 迁移文档 | docs/migration/saga-next-check-at.md、projection-batch-checkpoints.md、rabbitmq-channel-topology.md、event-id-binary-column.md | ☑ |
 
 ## 开放决策点
 
 | # | 决策点 | 状态 | 触发条件 |
 |---|--------|------|----------|
-| 1 | M1 切换 `EnableDueTimeFilter=true` | 未启用（默认 false） | 存量活跃行回填完成、10k 活跃压测尾部超时 ≤ 2 个轮询周期 |
+| 1 | M1 切换 `EnableDueTimeFilter=true` | 演练通过（PG/MySQL）；生产默认仍 false | 存量活跃行回填完成、10k 活跃压测尾部超时 ≤ 2 个轮询周期 |
 | 2 | M1 收缩旧全量扫描分支 | 未实施 | 下一发布窗口 |
 | 3 | M2 组内部分提交/时间界冲刷 | 未实施 | 组内处理时长接近 processingTimeout，或消费方要求更细的续读粒度 |
 | 4 | M3 1/4/8 订阅压测与单 channel 对照 | 未完成 | 有混合发布/消费压测环境 |
-| 5 | M4 应用侧回填与二进制唯一索引 | 未执行（配方在案） | 生产库迁移窗口 |
+| 5 | M4 应用侧回填与二进制唯一索引 | 演练通过（PG/MySQL，500 行）；生产库待执行 | 生产库迁移窗口 |
 | 6 | M4 收缩停写文本列 | 未实施 | 回填完成 + 一个 major 兼容期 |

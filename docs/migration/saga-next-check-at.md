@@ -58,3 +58,18 @@ CREATE INDEX idx_saga_due ON saga_states(status, next_check_at);
 - `NextCheckAt` 为 NULL 表示“当前状态无待检查超时”，到期路径会跳过；回填完成前不要
   直接开启过滤。
 - 步骤重入不刷新 `StepStartedAt`（v17 既有语义），`NextCheckAt` 随之保持首次开始时间。
+
+## 真库演练（2026-10-19）
+
+命令（库名须 `palddd_bench` 前缀）：
+
+```bash
+# PALDDD_BENCH_PG_CONN / PALDDD_BENCH_MYSQL_CONN 由环境注入（库名须 palddd_bench 前缀）
+dotnet run -c Release --project bench/PalDDD.Benchmarks -- --m1-probe-pg
+dotnet run -c Release --project bench/PalDDD.Benchmarks -- --m1-probe-mysql
+```
+
+探针在旧 schema 上执行 `ALTER TABLE ... ADD next_check_at` 与 `idx_saga_due`，播种
+due/future/NULL 三条 Saga，然后调用 `LeaseDueSagasAsync` 与 `LeaseActiveSagasAsync`。
+两方言结果一致：`M1 PASS: due=1, active-non-due=2, index=idx_saga_due`。
+

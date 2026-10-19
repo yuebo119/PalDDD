@@ -39,6 +39,8 @@
 四栈 `IDueTimeSagaStore`（EF/Dapper/PalORM/InMemory）与 `SagaProcessorOptions.EnableDueTimeFilter`
 （默认 false）已提交；DDL 见 `docs/migration/saga-next-check-at.md`。切读为显式开关，
 回填走旧全量路径的惰性写入；收缩（删除旧扫描分支）留到下一个发布窗口。
+真库演练（`--m1-probe-pg` / `--m1-probe-mysql`，2026-10-19）：旧 schema 上 ALTER 加列/索引后，
+两方言均 `due=1, active-non-due=2, index=idx_saga_due`。
 
 ## M2 投影检查点高水位
 
@@ -115,6 +117,9 @@ PG/MySQL/SQLite DDL；EF/Dapper/PalORM 三栈追加时双写，读取默认文�
 切二进制（NULL 行回退文本）。文本唯一索引保留，冲突分类仍走文本索引；二进制唯一索引
 待应用侧分批回填后创建。回填配方/切读/回滚/验收见 `docs/migration/event-id-binary-column.md`。
 收缩（停写文本列、删旧索引）留到下一 major。
+真库演练（`--m4-probe-pg` / `--m4-probe-mysql`，2026-10-19）：两方言 500 行旧数据回填、
+10 条抽样、二进制读回 10 条全过（PG 1095ms、MySQL 2825ms）。演练抓出 PG 上
+`SequentialAccess` 的物理列序缺陷，`DapperEventLog` 已改 `SingleResult`（仍逐行流式）。
 
 ## 非迁移类后续（不占本轮迁移窗口）
 

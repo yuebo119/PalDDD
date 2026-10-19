@@ -14,6 +14,8 @@
 
 ### Added
 
+- **M1/M4 真库演练（2026-10-19）**：新增 `--m1-probe-pg` / `--m1-probe-mysql` / `--m4-probe-pg` / `--m4-probe-mysql` 探针。M1 在旧 schema 上 ALTER 加列/索引后，两方言均验证 `due=1, active-non-due=2`；M4 两方言各播种 500 条旧行，分批回填、抽样 10 条、创建二进制唯一索引并用 `UseBinaryEventId=true` 读回 10 条全过（PG 1095ms、MySQL 2825ms）。命令与结果见 `docs/migration/saga-next-check-at.md` 与 `event-id-binary-column.md`。
+
 - **M4 EventId 二进制列 expand（2026-10-19 性能迁移）**：`events` 增加 `event_id_bin`（16 字节）可空列与普通索引；EF `StoredEvent`、Dapper `DapperEventLog`、PalORM `EventLogRow` 追加时双写文本 `event_id` 与二进制列。读取默认文本；`UseBinaryEventId=true`（三栈）切二进制，NULL 行回退文本。文本唯一索引保留，冲突分类不变；应用侧分批回填后创建二进制唯一索引。DDL/回填配方/切读/回滚见 `docs/migration/event-id-binary-column.md`。验证：PalORM 114（54 跳过）、Integration 412（14 跳过）全绿，新增双写与二进制读回测试；快照更新。
 
 - **M3 RabbitMQ 通道拓扑（2026-10-19 性能迁移）**：`RabbitMqBroker` 默认每订阅经 `IConnection.CreateChannelAsync` 创建独立 consumer channel，发布 channel 只承担发布与 publisher confirms；`UseSharedConsumerChannel=true` 复现单 channel 旧行为。订阅句柄释放顺序改为 cancel → dispose consumer channel → dispose linked CTS，失败路径同样释放。本地 RabbitMQ（wslc rabbit436）Messaging.Integration 18/18 全绿；回滚与验收见 `docs/migration/rabbitmq-channel-topology.md`。
@@ -110,6 +112,10 @@
 - **NativeCompressions 1.1.0 → 1.2.0（2026-10-15 核新，性能实施轮 R1~R10 后窗口，`dotnet list --outdated` 双通道实测）**：1.x 线内次版本，本轮唯一可升项；包内容 diff 逐项一致（8 文件同布局，仅 nupkg 自引用不同，LZ4/ZStd 消费面零变化）；破坏面按 PD9 由编译 + 往返测试实证（`NativeCompressionTests`）。同轮核新维持：MediatR 14.2.0（license 禁商业）、Verify.TUnit 33.3.3（禁令 ≥33）、CAP 10.1.0-preview / BDN 0.16.0-preview.2（仅预发布）不升。
 - **全量升级（2026-10-11 三升，v4.0.0 发布后核新，`dotnet list --outdated` 双通道实测）**：PalORM 五包 6.4.1 → **6.5.0**（次版本线；XML diff 1090 行实证变更面为上游 internal 基础设施族——新增 `DataSessionPool<T>` 会话池化、`EntityInfoCache` 实体元数据缓存、`QueryBuilderShared`/`PooledCts` 等，三契约文本逐字未动复核（PreWarmAsync 灌暖/会话级熔断作用域/readFromReplica 回落主库与 READ-002 教义），适配层对全部变更类型零消费；PD9 纪律：Release 0W0E + 16 项目面板 0 失败 + 6 处适配层注释与 deployment-performance.md 契约引用同提交升号）；ByteAether.Ulid 1.4.1 → **1.4.2**（rc 转稳定，解除「仅预发布不升」钉扎；元包 PalDDD.Base/Extension 字面版本同步——元包走 `ManagePackageVersionsCentrally=false` 需双改）；TUnit / TUnit.FsCheck 1.73.19 → **1.75.0**（MTP 传递维持 2.5.1，conventions §10.6 与 testing.md 版本行同提交更新）；微软 11 线 rc.1 → **11.0.0-rc.2.26504.105**（rc.2 已发，18 处中央钉扎全量 + Extension 元包两处字面版本；flatcontainer 逐包验证九包同批在案；SDK 维持 rc.1——API go-live 冻结故 rc.2 包对 rc.1 运行时逐位兼容由面板实证，SDK/GA 统一升位随 2026-11 GA 轮评估；global.json 头注同步）。
 - **钉扎维持（核新后复核）**：MediatR 维持 **12.5.0**（现最新 14.2.0，13.0.0 起 Lucky Penny 商业许可，license-policy 禁商业裁决；bench 对比锚）；Verify.TUnit 维持 **32.0.1**（现最新 33.3.3，license-policy 包级禁令 ≥33）；CAP 维持 **10.0.2**（10.1.0-preview 仅预发布不升）；BenchmarkDotNet 0.15.8（0.16.0-preview.2 仅预发布不升）。
+
+### Fixed
+
+- **DapperEventLog 真流式读取在 PG 上的列序缺陷（2026-10-19）**：M4 的 `event_id_bin` 由 `ALTER TABLE` 追加在物理列末，与逻辑列序不同；`CommandBehavior.SequentialAccess` 要求按物理列序单调读取，按列名取 ordinal 后跨列回读会抛 `Invalid attempt to read from column ordinal`。改为 `CommandBehavior.SingleResult`，仍逐行流式（不物化全部行），允许行内随机列访问。M4 真库探针在 PG/MySQL 均通过。
 
 ## [4.0.0] — 2026-10-11
 
