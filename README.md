@@ -61,13 +61,13 @@ Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox
 
 **可插拔压缩**。`ICompressionProvider` / `ICompressor` 抽象带两套实现：System 内置压缩与原生 LZ4/ZStandard 绑定（`PalDDD.Compression.Native`，AOT 安全），经 DI 替换。
 
-**内建可观测性**。`PalActivitySource`（12 个 Start 方法）+ `PalMetrics`（28 个遥测 instrument）预埋在关键路径，OpenTelemetry 配置只需引用 Source 即得全量遥测（命令分发/Saga 转换 Activity 为预留，尚未接线）。
+**内建可观测性**。`PalActivitySource`（12 个 Start 方法）+ `PalMetrics`（30 个遥测 instrument）预埋在关键路径，OpenTelemetry 配置只需引用 Source 即得全量遥测（命令分发/Saga 转换 Activity 为预留，尚未接线）。
 
 **三栈持久化，按场景选型**。PalORM（真 AOT，源生成 SQL）/ Dapper（调用点级 AOT，手写 SQL）/ EF Core（Migration/LINQ/ChangeTracker 生态）平等共存、无废弃计划；五组 Store 能力三栈全量覆盖、行为由跨栈对照测试守护（[ADR-020](docs/decisions/020-persistence-stack-retirement-roadmap.md)、[ADR-024](docs/decisions/024-mysql-lease-mutex-divergence-accept.md)）；支持环境事务与显式事务边界。
 
 **数据库方言深度适配**。PostgreSQL 读写分离 + 多主机故障转移、COPY 批量写入、Pipeline 单往返、LISTEN/NOTIFY 推送、一致性哈希分片、JSONB 操作符；MySQL 多主机负载均衡（FailOver/RoundRobin/LeastConnections）与 InnoDB 会话调优；SQLite WAL/FTS5/JSON1（Dapper 与 PalORM 双栈，含 TEXT 主键独立索引与引号 JSON 路径）。连接串错误在注册期 fail-fast（IPv6 四象限、内嵌端口、主机列表校验），不延迟到建连。多租户过滤（`[TenantAware]`）由 PalORM 引擎提供（见[适配层文档](docs/palorm-adapter.md)）。
 
-**全链路 InMemory 测试与托管集成**。六类 Store 均有 InMemory 实现，消息 Broker 缺省 `NullMessageBroker`，单元测试零外部依赖（`PalDDD.Testing` 提供测试基元）；ASP.NET Core 集成提供 `MapCommand`/`MapQuery` Minimal API 端点映射、`UsePalExceptionHandler` 全局异常中间件、`AddPalHealthChecks` 健康检查与 `AddPalLogging` 日志集成。
+**全链路 InMemory 测试与托管集成**。六类 Store 均有 InMemory 实现，消息 Broker 缺省 `NullMessageBroker`，单元测试零外部依赖（`PalDDD.Testing` 提供测试基元）；ASP.NET Core 集成提供 `MapCommand`/`MapQuery` Minimal API 端点映射、SSE 流式读端点 `MapStreamQuery`（GET/POST，含 event/id 分型帧、心跳与 `Last-Event-ID` 入口）与断线续跑端点组（`AddDetachedStreamRuns` + 启动/附着/取消端点）、`UsePalExceptionHandler` 全局异常中间件、`AddPalHealthChecks` 健康检查与 `AddPalLogging` 日志集成。
 
 ## 与现有方案的差异
 

@@ -517,8 +517,10 @@ public static class EndpointExtensions
     /// ITM-799（2026-09-19）：415/畸形 JSON/验证异常/空 body 四种错误编排原在
     /// MapCommand/MapQuery 两处逐字重复（约 40 行）——收口为单一出处，历史注释随迁。
     /// ADR-030 D8：泛化版（类型参数 TCommand → T）——MapStreamQuery POST 形态复用，
-    /// 415/畸形 JSON/空 body 错误形态不变。</summary>
-    private static async Task<(bool Success, T? Body)> ReadJsonBodyOrWriteErrorAsync<T>(
+    /// 415/畸形 JSON/空 body 错误形态不变。
+    /// ADR-031 补强（2026-10-19）：MapDetachedStreamQuery POST 形态复用同一出处，
+    /// internal 仅供同程序集端点映射类调用（非公共 API）。</summary>
+    internal static async Task<(bool Success, T? Body)> ReadJsonBodyOrWriteErrorAsync<T>(
         HttpContext context, JsonTypeInfo<T> bodyJsonTypeInfo)
     {
         // v40 P3：非 JSON Content-Type 的 POST 原由 ReadFromJsonAsync 抛

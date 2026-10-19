@@ -149,9 +149,11 @@ static class PalDDD.Core.Diagnostics.PalMetrics
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> SagaCompensationFailed
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> SagaCompleted
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> SagaScanFailed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamAttached
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamCancelled
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamCompleted
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamFailed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamGap
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamItems
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamStarted
 class PalDDD.Core.DomainCapabilityAttribute
@@ -778,6 +780,7 @@ class PalDDD.EventLog.StoredEvent
 static class PalDDD.Hosting.AspNetCore.DetachedStreamEndpoints
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddDetachedStreamRuns(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Action<PalDDD.Hosting.AspNetCore.DetachedStreamOptions> configure)
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapDetachedStreamQuery(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Func<Microsoft.AspNetCore.Http.HttpContext, TQuery> bindQuery, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TItem> itemJsonTypeInfo, System.Func<TItem, System.String> eventSelector, System.Func<TItem, System.String> idSelector, System.Nullable<System.TimeSpan> keepAliveInterval)
+  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapDetachedStreamQuery(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TQuery> queryJsonTypeInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TItem> itemJsonTypeInfo, System.Func<TItem, System.String> eventSelector, System.Func<TItem, System.String> idSelector, System.Nullable<System.TimeSpan> keepAliveInterval)
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapStreamRunAttach(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TItem> itemJsonTypeInfo, System.Nullable<System.TimeSpan> keepAliveInterval)
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapStreamRunCancel(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern)
 class PalDDD.Hosting.AspNetCore.DetachedStreamOptions

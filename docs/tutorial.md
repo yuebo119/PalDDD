@@ -63,7 +63,7 @@
 │  ✅ 消息兼容 → Schema Evolution 显式升级管道 + 编译期版本校验       │
 │  ✅ AOT 兼容 → 源码生成器 + 泛型 + JsonTypeInfo 零反射             │
 │  ✅ 编译期防错 → Analyzer 15 条诊断规则，写错代码直接编译不过      │
-│  ✅ 可观测 → 28 个预定义指标 + 12 种 Activity，零配置              │
+│  ✅ 可观测 → 30 个预定义指标 + 12 种 Activity，零配置              │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -881,14 +881,14 @@ app.Run();
 
 ### 4.14 可观测性：指标与追踪
 
-**框架解决的问题：** 生产环境出问题了，你先要知道的是：命令执行了多少？失败了几个？发件箱积压了多少？Pal.DDD 内建了 28 个 OpenTelemetry 指标和 12 种 Activity，零配置即可采集。
+**框架解决的问题：** 生产环境出问题了，你先要知道的是：命令执行了多少？失败了几个？发件箱积压了多少？Pal.DDD 内建了 30 个 OpenTelemetry 指标和 12 种 Activity，零配置即可采集。
 
 ```csharp
 // 一行代码接入
 builder.Services.AddOpenTelemetry()
     .WithMetrics(meterProviderBuilder =>
         meterProviderBuilder
-            .AddMeter("PalDDD")                          // 内建 28 个指标
+            .AddMeter("PalDDD")                          // 内建 30 个指标
             .AddPrometheusExporter())
     .WithTracing(tracerProviderBuilder =>
         tracerProviderBuilder
@@ -896,7 +896,7 @@ builder.Services.AddOpenTelemetry()
             .AddConsoleExporter());
 ```
 
-**内建的 28 个指标**（ITM-229 移除 7 个无记录路径死指标后的现行清单；死信指标 3.0.0 起从 `failed` 独立；流式读五项 `paldd.stream.*` 2026-10-18 增）：
+**内建的 30 个指标**（ITM-229 移除 7 个无记录路径死指标后的现行清单；死信指标 3.0.0 起从 `failed` 独立；流式读五项 `paldd.stream.*` 2026-10-18 增，断线续跑附着/缺口两项 2026-10-19 增）：
 
 ```
 paldd.event_handlers.handled     // 事件处理器成功调用数
@@ -927,9 +927,11 @@ paldd.stream.completed           // 流式查询正常完成数
 paldd.stream.failed              // 流式查询失败数（中途异常，错误率口径）
 paldd.stream.cancelled           // 流式查询取消数（客户端断开，非错误）
 paldd.stream.items               // 流式查询产出项总数（完成与取消路径累计）
+paldd.stream.attached            // 断线续跑成功附着数（含首次附着、重连与接管）
+paldd.stream.gap                 // 断线续跑缓冲缺口数（gap 帧写出次数）
 ```
 
-> 流式读的 **TTFT（首 token 延迟）** 不走指标：`Stream Query` Activity 上的 `first-item` 事件时间戳与 span 起点之差即 TTFT（计数器零 tag 纪律下直方图无处放维度，事件时间戳天然落在 trace 侧）。
+> 流式读的 **TTFT（首 token 延迟）** 不走指标：`Stream Query` Activity 上的 `first-item` 事件时间戳与 span 起点之差即 TTFT（计数器零 tag 纪律下直方图无处放维度，事件时间戳天然落在 trace 侧）。普通流式读与断线续跑共用该 Activity 与五个终态计数；`attached`/`gap` 只在断线续跑路径产生。
 
 ### 4.15 AOT 发布与构建检查
 

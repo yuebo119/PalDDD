@@ -40,6 +40,58 @@ public sealed partial class DetachedStreamTests
     }
 
     [Test]
+    public async Task DetachedRun_PostBody_StartsAndExposesRunId()
+    {
+        // POST 启动形态（2026-10-19 补强）：prompt 类请求体走 JSON body，避免 URL 长度上限。
+        await using var host = await DetachedHost.StartAsync(run => run
+            .WithHandler(new SequencedHandler(2))
+            .WithOptions(o => o.DetachGrace = TimeSpan.FromSeconds(30)));
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri($"{host.BaseAddress}/detached/post"))
+        {
+            Content = new StringContent("{\"prompt\":\"p\"}", Encoding.UTF8, "application/json")
+        };
+        using var response = await host.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        var frames = await ReadSseAsync(response);
+
+        await Assert.That(response.StatusCode).IsEqualTo(System.Net.HttpStatusCode.OK);
+        await Assert.That(response.Headers.TryGetValues("X-Run-Id", out var ids)).IsTrue();
+        await Assert.That(ids!.First()).IsNotEmpty();
+        await Assert.That(frames.Count(f => f.EventName == "token")).IsEqualTo(2);
+        await Assert.That(frames.Last().EventName).IsEqualTo("done");
+    }
+
+    [Test]
+    public async Task DetachedRun_Post_NonJsonContentType_Returns415()
+    {
+        await using var host = await DetachedHost.StartAsync(run => run
+            .WithHandler(new SequencedHandler(1)));
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri($"{host.BaseAddress}/detached/post"))
+        {
+            Content = new StringContent("{\"prompt\":\"p\"}", Encoding.UTF8, "text/plain")
+        };
+        using var response = await host.Client.SendAsync(request);
+
+        await Assert.That(response.StatusCode).IsEqualTo(System.Net.HttpStatusCode.UnsupportedMediaType);
+    }
+
+    [Test]
+    public async Task DetachedRun_Post_MalformedJson_Returns400()
+    {
+        await using var host = await DetachedHost.StartAsync(run => run
+            .WithHandler(new SequencedHandler(1)));
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri($"{host.BaseAddress}/detached/post"))
+        {
+            Content = new StringContent("{not-json", Encoding.UTF8, "application/json")
+        };
+        using var response = await host.Client.SendAsync(request);
+
+        await Assert.That(response.StatusCode).IsEqualTo(System.Net.HttpStatusCode.BadRequest);
+    }
+
+    [Test]
     public async Task Reattach_AfterDisconnect_ReplaysFromLastEventId()
     {
         await using var host = await DetachedHost.StartAsync(run => run
@@ -367,6 +419,13 @@ internal sealed class DetachedHost : IAsyncDisposable
             DetachedStreamJsonContext.Default.DetachedChunk,
             eventSelector: chunk => chunk.Kind,
             idSelector: chunk => chunk.Index.ToString());
+        // POST 启动形态（2026-10-19 补强）：JSON body 承载 prompt 类请求体
+        app.MapDetachedStreamQuery<DetachedQuery, DetachedChunk>(
+            "/detached/post",
+            DetachedStreamJsonContext.Default.DetachedQuery,
+            DetachedStreamJsonContext.Default.DetachedChunk,
+            eventSelector: chunk => chunk.Kind,
+            idSelector: chunk => chunk.Index.ToString());
         app.MapStreamRunAttach<DetachedChunk>(
             "/runs", DetachedStreamJsonContext.Default.DetachedChunk);
         app.MapStreamRunCancel("/runs");
@@ -419,6 +478,7 @@ internal sealed class DetachedHostBuilder
 
 // 让 WebApplication 的 JSON 上下文可跨夹具复用（测试项目内单一类型）
 [JsonSerializable(typeof(DetachedChunk))]
+[JsonSerializable(typeof(DetachedQuery))]
 internal sealed partial class DetachedStreamJsonContext : JsonSerializerContext
 {
 }

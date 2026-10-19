@@ -825,9 +825,9 @@ public sealed class AgentReplayHandler(IEventLog eventLog)
 }
 ```
 
-完整可运行样本见 `samples/PalDDD.AgentSample`（流式产出 + 工具幂等 + EventLog 审计 + 断点续看四项接线，13 条断言）。
+完整可运行样本见 `samples/PalDDD.AgentSample`（流式产出 + 工具幂等 + EventLog 审计 + 断点续看四项接线，17 条断言）。
 
-**遥测（2026-10-18 接入）**：端点在验证通过、进入枚举后开启 `Stream Query` Activity（tag `pal.stream.query`/`pal.stream.item` 为类型名），首个元素写出时记 `first-item` 事件——**TTFT = 该事件时间戳 − span 起点**，无需新增直方图。五个零 tag 计数器：`paldd.stream.started/completed/failed/cancelled/items`（取消独立于失败：客户端断开是正常终止，混入 failed 会污染错误率告警）。订阅方式与其他遥测一致（引用 `PalDDD` ActivitySource/Meter）。
+**遥测（2026-10-18 接入，2026-10-19 扩到断线续跑）**：端点在验证通过、进入枚举后开启 `Stream Query` Activity（tag `pal.stream.query`/`pal.stream.item` 为类型名），首个元素写出时记 `first-item` 事件——**TTFT = 该事件时间戳 − span 起点**，无需新增直方图。七个零 tag 计数器：`paldd.stream.started/completed/failed/cancelled/items` 五个终态与吞吐计数（取消独立于失败：客户端断开是正常终止，混入 failed 会污染错误率告警），加断线续跑专用的 `paldd.stream.attached`（成功附着数，含首次、重连与接管）与 `paldd.stream.gap`（gap 帧写出次数）。普通流式读不产生后两项；断线续跑的 run 与普通流式读共用前五项，run 未附着时也计 started（产出由注册表泵驱动，与客户端是否在看无关）。订阅方式与其他遥测一致（引用 `PalDDD` ActivitySource/Meter）。
 
 ### 8. 断线续跑（ADR-031）
 
@@ -849,12 +849,24 @@ app.MapDetachedStreamQuery<TokenStreamQuery, TokenChunk>(
     eventSelector: chunk => chunk.Kind,
     idSelector: chunk => chunk.Index.ToString());
 
+// POST 启动形态：prompt 类请求体超过 URL 长度时用（浏览器侧 fetch + ReadableStream 手工解析）
+app.MapDetachedStreamQuery<TokenStreamQuery, TokenChunk>(
+    "/agent/run/post",
+    StreamJsonContext.Default.TokenStreamQuery,
+    StreamJsonContext.Default.TokenChunk,
+    eventSelector: chunk => chunk.Kind,
+    idSelector: chunk => chunk.Index.ToString());
+
 // 重连附着（遵守 Last-Event-ID：先回放缓冲，再转 live）
 app.MapStreamRunAttach<TokenChunk>("/agent/runs", StreamJsonContext.Default.TokenChunk);
 
 // 显式取消（幂等，终态返回 204）
 app.MapStreamRunCancel("/agent/runs");
 ```
+
+POST 启动的错误形态与 `MapStreamQuery` POST 重载一致：非 JSON Content-Type 415、畸形 JSON 400、空 body 400，均在 SSE 头写出前返回。
+
+**生产部署（授权与限流）**：三个端点返回 `IEndpointConventionBuilder`，可直接链 `RequireAuthorization()` / `RequireRateLimiting()`。框架只按 `runId` 做存在性检查（128 位随机 ID，不可猜测），**不校验 run 所有权**；多租户应用须在端点过滤器或应用层把 run 绑定到当前用户。浏览器跨域读 `X-Run-Id` 需在 CORS 中 `WithExposedHeaders("X-Run-Id")`。
 
 客户端流程：
 

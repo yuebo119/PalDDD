@@ -32,7 +32,7 @@
 | 工作单元端口 | Begin/Commit/Rollback/SaveChanges，不支持嵌套（ADR-023），模板方法扩展 | `IUnitOfWork`（IUnitOfWork.cs） |
 | 强类型标识 | `IPalIdentity<TKey>` 契约 + Ulid 生成器抽象（RFC 9562 合规实现） | `IPalIdGenerator`（Identity/） |
 | 日志门面 | 五成员接口隔离具体日志后端，空实现 NullPalLogger | `IPalLogger<T>`（Logging/） |
-| 可观测门面 | 28 个指标计数器 + 12 个 Activity 工厂（命令/事件/Saga/Outbox/Inbox/幂等/投影/事件日志读写/流式查询） | `PalDiagnostics`（PalDiagnostics.cs） |
+| 可观测门面 | 30 个指标计数器 + 12 个 Activity 工厂（命令/事件/Saga/Outbox/Inbox/幂等/投影/事件日志读写/流式查询） | `PalDiagnostics`（PalDiagnostics.cs） |
 | 失败原因归一 | 五处理器共用：截断 2000 字符 + UTF-16 代理对完整性守卫 | `FailureReason`（FailureReason.cs） |
 | 契约标记 | GenerateId / GenerateEnum / GenerateMessage / BoundedContext / ProcessManager 五个 Attribute | Attributes.cs |
 
@@ -170,6 +170,8 @@ Dapper 侧独有的方言增强面（PalORM 方言包暂未携带，待后续迁
 | Handler 显式注册 | `AddPalCommandHandler` / `AddPalQueryHandler` / `AddPalEventHandler` 三族：自动补漏调、重复注册快速失败、启动期 HostedService 零反射装配后冻结 Dispatcher | 同上 |
 | 管道行为注册 | 开放泛型（非 AOT 值类型守卫）与闭合泛型（AOT 安全）两形态，互斥防重复执行 | `AddPalPipelineBehaviors` 两重载 |
 | ASP.NET Core 端点 | `MapCommand`（POST，调用方传 JsonTypeInfo 保 AOT）、`MapQuery`（GET + 显式绑定委托）、415/400/404/500 全套 ProblemDetails 编排 | EndpointExtensions.cs（Hosting.AspNetCore） |
+| 流式读端点（SSE） | `IStreamQuery`/`IStreamQueryHandler` + `MapStreamQuery` GET/POST：验证前置 400、SSE 帧（data-only / `formatFrame` / event/id 选择器）、心跳、`Last-Event-ID` 读取入口、取消贯穿、遥测（TTFT `first-item` 事件 + 五个计数器） | EndpointExtensions.cs、StreamResumeExtensions.cs（Hosting.AspNetCore） |
+| 断线续跑端点 | `AddDetachedStreamRuns` + `MapDetachedStreamQuery`（GET/POST 双启动形态）+ `MapStreamRunAttach` + `MapStreamRunCancel`：单写者 + 单附着 + 有界环形缓冲、`event: gap`、接管 `event: detached`、run 自有 scope、`paldd.stream.attached/gap` 计数 | DetachedStreamEndpoints.cs、StreamRunRegistry.cs（Hosting.AspNetCore） |
 | 全局异常中间件 | PalValidationException→400、HandlerNotFound→404（类型级信息不泄露内部）、响应已开始分支 rethrow 补日志 | ExceptionMiddleware.cs |
 | 健康检查 | message_broker 注册检查 + outbox 存储探测两个内置检查，自定义响应体（逐组件明细 + 耗时） | HealthCheckExtensions.cs |
 
@@ -184,7 +186,7 @@ Dapper 侧独有的方言增强面（PalORM 方言包暂未携带，待后续迁
 ## 横切能力
 
 - **AOT 分层矩阵**：抽象层（Core/CQRS/Messaging/Serialization/Compression/EventLog/Idempotency/Projections/Transactions 抽象面）零反射；基础设施 4 包（Kafka、RabbitMQ、Compression.Native、Serialization.MemoryPack）加 Transactions 的子 Saga 反射路径显式豁免，豁免均有 csproj/注释理由。详见 [AOT 指南](aot.md)。
-- **可观测统一**：12 个 Activity 工厂 + 28 个指标计数器贯穿全部处理器；五处理器共用的 FailureReason 归一化。
+- **可观测统一**：12 个 Activity 工厂 + 30 个指标计数器贯穿全部处理器；五处理器共用的 FailureReason 归一化。
 - **并发防护三形态**：Outbox 用租约 token + RetryCount 快照；Saga 用 Version 换代乐观锁；Checkpoint/Idempotency 用单调 Revision CAS。
 - **全端口 InMemory 替身**：事件日志、Outbox、Inbox、Saga、检查点、幂等存储均有内存实现（替身与真实实现的语义分叉均以注释定案）。
 

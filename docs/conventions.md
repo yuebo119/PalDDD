@@ -129,7 +129,9 @@ EF Core / Kafka / RabbitMQ / MemoryPack 等不支持 AOT 的项目**显式覆盖
 
 **何时用**：run 时长与用户耐心不匹配的场景（长 agent run、分钟级工具轮）。**不要用**在短请求或不需要重连的场景——它多一个进程内注册表与缓冲，`MapStreamQuery`（ADR-030）更简单。
 
-**形态（单写者 + 单附着 + 有界环形缓冲）**：`AddDetachedStreamRuns` 注册选项与注册表；`MapDetachedStreamQuery` 启动并附着（响应头 `X-Run-Id`）；`MapStreamRunAttach` 重连附着（遵守 `Last-Event-ID`，先回放缓冲再转 live）；`MapStreamRunCancel` 幂等取消。缓冲按项计数（默认 1024），溢出丢最旧并发 `event: gap` 带最旧可用 index。
+**形态（单写者 + 单附着 + 有界环形缓冲）**：`AddDetachedStreamRuns` 注册选项与注册表；`MapDetachedStreamQuery` 启动并附着（GET 与 POST 双形态，响应头 `X-Run-Id`；POST 用于 prompt 类请求体超过 URL 长度的场景）；`MapStreamRunAttach` 重连附着（遵守 `Last-Event-ID`，先回放缓冲再转 live）；`MapStreamRunCancel` 幂等取消。缓冲按项计数（默认 1024），溢出丢最旧并发 `event: gap` 带最旧可用 index。
+
+**遥测（与普通流式读同口径）**：注册表泵开启同一个 `Stream Query` Activity（tag 为查询/元素类型名），首个产出项记 `first-item` 事件（TTFT），终态计入 `paldd.stream.started/completed/failed/cancelled/items`（取消独立于失败）。注册表特有行为另计 `paldd.stream.attached`（成功附着数，含首次/重连/接管）与 `paldd.stream.gap`（gap 帧写出次数）。run 未附着时也计 started（产出由泵驱动，与客户端是否在看无关）。
 
 **生命周期硬边界（三条都要配）**：`MaxRunDuration`（默认 10 分钟）、`MaxItems`（默认 10 万）、`DetachGrace`（默认 5 分钟无附着即取消——「不白烧 token」的落点）。取消用 run 自有 CTS，**不用** `RequestAborted`：连接断开只 detach，handler 的 finally 与审计照常完成。
 
