@@ -34,7 +34,7 @@ using PalDDD.Transactions;
 using static PalDDD.Dapper.DapperSqlErrorClassifier;
 namespace PalDDD.Dapper;
 
-public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>
+public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, IDueTimeSagaStore<TState>
     where TState : SagaState, new()
 {
     private readonly DbConnection _connection;
@@ -88,10 +88,28 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
         return rows.Select(Materialize).ToList();
     }
 
-    public async ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
+    public ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
         string owner,
         TimeSpan leaseDuration,
         int batchSize,
+        CancellationToken ct)
+        => LeaseCoreAsync(owner, leaseDuration, batchSize, dueOnly: false, dueNow: null, ct);
+
+    /// <inheritdoc/>
+    public ValueTask<IReadOnlyList<TState>> LeaseDueSagasAsync(
+        string owner,
+        TimeSpan leaseDuration,
+        int batchSize,
+        DateTimeOffset now,
+        CancellationToken ct)
+        => LeaseCoreAsync(owner, leaseDuration, batchSize, dueOnly: true, dueNow: now, ct);
+
+    private async ValueTask<IReadOnlyList<TState>> LeaseCoreAsync(
+        string owner,
+        TimeSpan leaseDuration,
+        int batchSize,
+        bool dueOnly,
+        DateTimeOffset? dueNow,
         CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
@@ -108,7 +126,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
             throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for the lease LeasedUntil value.");
 
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
-        var now = _timeProvider.GetUtcNow();
+        var now = dueNow ?? _timeProvider.GetUtcNow();
         var until = now.Add(leaseDuration);
         // P1 修复（十一轮·实测发现）：MySQL 不支持 UPDATE ... WHERE id IN (SELECT ... LIMIT)——
         // JOIN 形态替代（对齐 PalORM 版）；SQLite/PG 支持子查询内 LIMIT 保持原状
@@ -124,7 +142,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
         if (_dbType == DapperDbType.PostgreSql)
         {
             var returningRows = await conn.QueryAsync<SagaStateRow>(
-                SqlTemplates.SagaLeaseActivePGReturning,
+                dueOnly ? SqlTemplates.SagaLeaseActiveDuePGReturning : SqlTemplates.SagaLeaseActivePGReturning,
                 new { owner, until = ToTimeParam(until), now = ToTimeParam(now), n = batchSize }, Tx).ConfigureAwait(false);
             // RETURNING 无排序保证——物化后按 CreatedAt 稳定排序，保留原两步回读
             // SagaSelectByLease 的 ORDER BY created_at 契约（B 批 #3）
@@ -133,16 +151,16 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
         if (_dbType == DapperDbType.Sqlite)
         {
             var returningRows = await conn.QueryAsync<SagaStateRow>(
-                SqlTemplates.SagaLeaseActiveSqliteReturning,
+                dueOnly ? SqlTemplates.SagaLeaseActiveDueSqliteReturning : SqlTemplates.SagaLeaseActiveSqliteReturning,
                 new { owner, until = ToTimeParam(until), now = ToTimeParam(now), n = batchSize }, Tx).ConfigureAwait(false);
             return returningRows.Select(Materialize).OrderBy(static s => s.CreatedAt).ToList();
         }
 
         var leaseSql = _dbType switch
         {
-            DapperDbType.PostgreSql => SqlTemplates.SagaLeaseActivePG,
-            DapperDbType.MySql => SqlTemplates.SagaLeaseActiveMySql,
-            _ => SqlTemplates.SagaLeaseActive
+            DapperDbType.PostgreSql => dueOnly ? SqlTemplates.SagaLeaseActiveDuePG : SqlTemplates.SagaLeaseActivePG,
+            DapperDbType.MySql => dueOnly ? SqlTemplates.SagaLeaseActiveDueMySql : SqlTemplates.SagaLeaseActiveMySql,
+            _ => dueOnly ? SqlTemplates.SagaLeaseActiveDue : SqlTemplates.SagaLeaseActive
         };
         await conn.ExecuteAsync(
             leaseSql, new { owner, until = ToTimeParam(until), now = ToTimeParam(now), n = batchSize }, Tx).ConfigureAwait(false);
@@ -210,6 +228,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
                     err = truncatedError,
                     ea = state.ErrorAt.HasValue ? ToTimeParam(state.ErrorAt.Value) : null,
                     data = sagaData,
+                    nextCheckAt = state.NextCheckAt.HasValue ? ToTimeParam(state.NextCheckAt.Value) : null,
                     leasedBy = state.LeasedBy,
                     leasedUntil = state.LeasedUntil.HasValue ? ToTimeParam(state.LeasedUntil.Value) : null,
                     id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
@@ -244,6 +263,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
                         err = truncatedError,
                         ea = state.ErrorAt.HasValue ? ToTimeParam(state.ErrorAt.Value) : null,
                         data = sagaData,
+                        nextCheckAt = state.NextCheckAt.HasValue ? ToTimeParam(state.NextCheckAt.Value) : null,
                         leasedBy = state.LeasedBy,
                         leasedUntil = state.LeasedUntil.HasValue ? ToTimeParam(state.LeasedUntil.Value) : null
                     },
@@ -347,6 +367,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
         state.Version = row.Version;
         state.LeasedBy = row.LeasedBy;
         state.LeasedUntil = row.LeasedUntil;
+        state.NextCheckAt = row.NextCheckAt;
         return state;
     }
 
@@ -370,4 +391,5 @@ internal sealed class SagaStateRow
     public string? SagaData { get; init; }
     public string? LeasedBy { get; init; }
     public DateTimeOffset? LeasedUntil { get; init; }
+    public DateTimeOffset? NextCheckAt { get; init; }
 }

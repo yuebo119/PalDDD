@@ -12,8 +12,7 @@ namespace PalDDD.Transactions;
 /// </remarks>
 /// <typeparam name="TState">Saga 状态类型</typeparam>
 public interface ISagaStateStore<TState> where TState : SagaState
-{
-    /// <summary>
+{    /// <summary>
     /// 获取一批活跃的 Saga 状态（<see cref="SagaStatus.Active"/> 与
     /// <see cref="SagaStatus.AwaitingHumanDecision"/>——三十四轮起中断态纳入扫描，
     /// 用于中断步骤超时兜底补偿；v43 勘正：IsTimedOut 判据含"步骤未成功完成"排除
@@ -45,6 +44,27 @@ public interface ISagaStateStore<TState> where TState : SagaState
     /// （他实例已写同一 Saga），调用方据此判定本实例内存快照作废（P3 修复·十七轮：
     /// 统一 EF/Dapper/内存三实现的返回值语义，避免调用方按 0 行误判或漏判冲突）。</returns>
     ValueTask<int> SaveChangesAsync(TState state, CancellationToken ct);
+}
+
+/// <summary>
+/// 到期时间租约能力（2026-10-19 性能迁移 M1）——只租约 <see cref="SagaState.NextCheckAt"/>
+/// 已到期或为空的活跃 Saga。实现方在 SQL/查询层下推过滤；未实现本接口的自定义 store
+/// 继续走 <see cref="ISagaStateStore{TState}.LeaseActiveSagasAsync"/> 全量路径。
+/// <para>
+/// 空值语义：NULL 表示“当前状态没有待检查的超时步骤”（等待事件），可安全跳过；
+/// 回填完成前，调用方应保持 <c>SagaProcessorOptions.EnableDueTimeFilter=false</c>，
+/// 让旧路径先为存量行补齐 NextCheckAt。
+/// </para>
+/// </summary>
+public interface IDueTimeSagaStore<TState> : ISagaStateStore<TState> where TState : SagaState
+{
+    /// <summary>租约一批 NextCheckAt 已到期的活跃 Saga。</summary>
+    ValueTask<IReadOnlyList<TState>> LeaseDueSagasAsync(
+        string owner,
+        TimeSpan leaseDuration,
+        int batchSize,
+        DateTimeOffset now,
+        CancellationToken ct);
 }
 
 /// <summary>

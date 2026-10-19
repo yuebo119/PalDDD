@@ -87,6 +87,16 @@ public abstract class Saga<TState> where TState : SagaState, new()
     private SagaTimeoutDetector<TState> TimeoutDetector
         => _timeoutDetector ??= new(_stepsInOrder);
 
+    /// <summary>计算状态的下一次超时检查时间（M1 回填/测试入口）。</summary>
+    internal DateTimeOffset? ComputeNextCheckAt(TState state)
+        => TimeoutDetector.ComputeNextCheckAt(state);
+
+    /// <summary>写入状态时同步 NextCheckAt；终态清空。</summary>
+    private void UpdateNextCheckAt(TState state)
+        => state.NextCheckAt = state.Status is SagaStatus.Active or SagaStatus.AwaitingHumanDecision
+            ? TimeoutDetector.ComputeNextCheckAt(state)
+            : null;
+
     // ═══════════════════════════════════════════════════════════════
     // 策略配置
     // ═══════════════════════════════════════════════════════════════
@@ -290,6 +300,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
             startedAt = Clock.GetUtcNow();
             current.StepStartedAt[stepKey] = startedAt;
         }
+        // M1：当前步骤开始后立即刷新到期时间；步骤返回的新状态在 RecordExecutedStep 再算一次。
+        UpdateNextCheckAt(current);
 
         var observer = SagaExecutionObserver.Current;
 
@@ -324,7 +336,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
         }
     }
 
-    private static void RecordExecutedStep(TState current, TState result, string stepKey, DateTimeOffset startedAt)
+    private void RecordExecutedStep(TState current, TState result, string stepKey, DateTimeOffset startedAt)
     {
         // R3（P1-3）：TryAdd 单哈希查找替代 ContainsKey+索引器双查（语义等价：已存在不覆盖）
         result.StepStartedAt.TryAdd(stepKey, startedAt);
@@ -345,6 +357,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
         if (!result.ExecutedStepKeys.Contains(stepKey))
             result.ExecutedStepKeys.Add(stepKey);
+
+        // M1：步骤完成后的状态可能已切换；按新状态/新步骤重算到期时间，终态写 null。
+        UpdateNextCheckAt(result);
     }
 
     // ═══════════════════════════════════════════════════════════════

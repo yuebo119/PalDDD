@@ -350,6 +350,7 @@ class PalDDD.Dapper.DapperSagaStateStore<TState>
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetActiveSagasAsync(System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TState> GetByIdAsync(ByteAether.Ulid.Ulid sagaId, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseActiveSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseDueSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.DateTimeOffset now, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> ReleaseLeasesAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(TState state, System.Threading.CancellationToken ct)
 static class PalDDD.Dapper.DapperServiceCollectionExtensions
@@ -390,17 +391,22 @@ static class PalDDD.Dapper.SqlTemplates
   field const System.String SagaActive = SELECT * FROM saga_states WHERE status IN (0, 5) ORDER BY created_at LIMIT @n
   field const System.String SagaById = SELECT * FROM saga_states WHERE saga_id=@id
   field const System.String SagaExists = SELECT COUNT(1) FROM saga_states WHERE saga_id=@id
-  field const System.String SagaInsert = INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,@data,@leasedBy,@leasedUntil)
-  field const System.String SagaInsertPG = INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,CAST(@data AS jsonb),@leasedBy,@leasedUntil)
+  field const System.String SagaInsert = INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,next_check_at,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,@data,@nextCheckAt,@leasedBy,@leasedUntil)
+  field const System.String SagaInsertPG = INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,next_check_at,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,CAST(@data AS jsonb),@nextCheckAt,@leasedBy,@leasedUntil)
   field const System.String SagaLeaseActive = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n)
+  field const System.String SagaLeaseActiveDue = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n)
+  field const System.String SagaLeaseActiveDueMySql = UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1
+  field const System.String SagaLeaseActiveDuePG = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)
+  field const System.String SagaLeaseActiveDuePGReturning = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *
+  field const System.String SagaLeaseActiveDueSqliteReturning = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n) RETURNING *
   field const System.String SagaLeaseActiveMySql = UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1
   field const System.String SagaLeaseActivePG = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)
   field const System.String SagaLeaseActivePGReturning = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *
   field const System.String SagaLeaseActiveSqliteReturning = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) RETURNING *
   field const System.String SagaReleaseLeases = UPDATE saga_states SET leased_by=NULL, leased_until=NULL, version=version+1 WHERE leased_by=@owner AND saga_id IN @ids
   field const System.String SagaSelectByLease = SELECT * FROM saga_states WHERE leased_by=@owner AND leased_until=@until AND status IN (0, 5)
-  field const System.String SagaUpdate = UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=@data,leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v
-  field const System.String SagaUpdatePG = UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=CAST(@data AS jsonb),leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v
+  field const System.String SagaUpdate = UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=@data,next_check_at=@nextCheckAt,leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v
+  field const System.String SagaUpdatePG = UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=CAST(@data AS jsonb),next_check_at=@nextCheckAt,leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v
 class PalDDD.Dapper.SqliteDateTimeOffsetTypeHandler
   ctor()
   method System.DateTimeOffset Parse(System.Object value)
@@ -1083,6 +1089,7 @@ class PalDDD.PalORM.Stores.PalOrmSagaStateStore<TProvider, TState>
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetActiveSagasAsync(System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TState> GetByIdAsync(ByteAether.Ulid.Ulid sagaId, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseActiveSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseDueSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.DateTimeOffset now, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> ReleaseLeasesAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(TState state, System.Threading.CancellationToken ct)
 
@@ -1524,6 +1531,8 @@ class PalDDD.Transactions.FixedBackoffPolicy
   method System.TimeSpan ComputeDelay(System.Int32 attempt)
 interface PalDDD.Transactions.IBatchMarkOutboxStore
   method System.Threading.Tasks.ValueTask<System.Int32> MarkProcessedBatchAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
+interface PalDDD.Transactions.IDueTimeSagaStore<TState>
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseDueSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.DateTimeOffset now, System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.IImmediateWriteOutboxStore
   method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.IInboxStore
@@ -1581,6 +1590,7 @@ class PalDDD.Transactions.InMemorySagaStateStore<TState>
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetActiveSagasAsync(System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TState> GetByIdAsync(ByteAether.Ulid.Ulid sagaId, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseActiveSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseDueSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.DateTimeOffset now, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> ReleaseLeasesAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(TState state, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.InboxMessage
@@ -1695,6 +1705,7 @@ static class PalDDD.Transactions.SagaExtensions
   method System.Void WhenInterrupt(PalDDD.Transactions.Saga<TState> saga, System.String state, PalDDD.Transactions.InterruptStep step)
 class PalDDD.Transactions.SagaProcessorOptions
   ctor()
+  property System.Boolean EnableDueTimeFilter
   property System.TimeSpan LeaseDuration
   property System.String LeaseOwner
   property System.TimeSpan PollInterval
@@ -1711,6 +1722,7 @@ class PalDDD.Transactions.SagaState
   property System.String InterruptReason
   property System.String LeasedBy
   property System.Nullable<System.DateTimeOffset> LeasedUntil
+  property System.Nullable<System.DateTimeOffset> NextCheckAt
   property ByteAether.Ulid.Ulid SagaId [init]
   property PalDDD.Transactions.SagaStatus Status
   property System.Collections.Generic.Dictionary<System.String, System.DateTimeOffset> StepStartedAt [init]
@@ -1824,6 +1836,7 @@ class PalDDD.Transactions.SagaStateDbContext<TState>
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetActiveSagasAsync(System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TState> GetByIdAsync(ByteAether.Ulid.Ulid sagaId, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseActiveSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> LeaseDueSagasAsync(System.String owner, System.TimeSpan leaseDuration, System.Int32 batchSize, System.DateTimeOffset now, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> ReleaseLeasesAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.Threading.CancellationToken ct)
   method System.Int32 SaveChanges(System.Boolean acceptAllChangesOnSuccess)
   method System.Threading.Tasks.Task<System.Int32> SaveChangesAsync(System.Boolean acceptAllChangesOnSuccess, System.Threading.CancellationToken cancellationToken)

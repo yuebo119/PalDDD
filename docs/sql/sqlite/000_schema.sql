@@ -49,11 +49,13 @@ CREATE TABLE saga_states (
     error_at      TEXT,
     version       INTEGER NOT NULL DEFAULT 0,
     saga_data     TEXT,
+    next_check_at TEXT,
     leased_by     TEXT,
     leased_until  TEXT
 );
 CREATE INDEX idx_saga_status ON saga_states(status, created_at);
 CREATE INDEX idx_saga_lease ON saga_states(status, leased_until, created_at);
+CREATE INDEX idx_saga_due ON saga_states(status, next_check_at);
 
 CREATE TABLE events (
     global_position INTEGER PRIMARY KEY AUTOINCREMENT,

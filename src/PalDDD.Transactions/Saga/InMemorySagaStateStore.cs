@@ -7,7 +7,7 @@ namespace PalDDD.Transactions;
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>内存 Saga 状态存储 — 用于测试和单进程原型。</summary>
-public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>
+public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, IDueTimeSagaStore<TState>
     where TState : SagaState
 {
     private readonly Lock _lock = new();
@@ -77,6 +77,23 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
         TimeSpan leaseDuration,
         int batchSize,
         CancellationToken ct)
+        => LeaseCoreAsync(owner, leaseDuration, batchSize, dueBefore: null, ct);
+
+    /// <inheritdoc/>
+    public ValueTask<IReadOnlyList<TState>> LeaseDueSagasAsync(
+        string owner,
+        TimeSpan leaseDuration,
+        int batchSize,
+        DateTimeOffset now,
+        CancellationToken ct)
+        => LeaseCoreAsync(owner, leaseDuration, batchSize, dueBefore: now, ct);
+
+    private ValueTask<IReadOnlyList<TState>> LeaseCoreAsync(
+        string owner,
+        TimeSpan leaseDuration,
+        int batchSize,
+        DateTimeOffset? dueBefore,
+        CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
@@ -85,8 +102,9 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
 
         // v36 P3：now 在 lock 外取值——与姊妹 InMemoryOutboxStore.LeasePendingMessagesAsync
         //（lock 内取）不一致；fencing 正确性不受影响（仅 leasedUntil 时间戳微早），
-        // 保留现状并声明（对齐 InMemoryOutboxStore.RequeueDeadAsync 的 lock 外声明先例）
-        var now = _timeProvider.GetUtcNow();
+        // 保留现状并声明（对齐 InMemoryOutboxStore.RequeueDeadAsync 的 lock 外声明先例）。
+        // 到期路径用调用方 now 作为租约起点，保证过滤与 LeasedUntil 同源。
+        var now = dueBefore ?? _timeProvider.GetUtcNow();
         var leasedUntil = now.Add(leaseDuration);
         lock (_lock)
         {
@@ -102,6 +120,9 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
                 if (!_states.TryGetValue(id, out var state))
                     continue; // 索引残留防御（正常不可达——移除与落库同帧发生）
                 if (state.LeasedUntil is not null && state.LeasedUntil > now)
+                    continue;
+                // M1：NULL = 无待检查超时（等待事件），到期路径可安全跳过。
+                if (dueBefore is { } due && (state.NextCheckAt is null || state.NextCheckAt > due))
                     continue;
                 active.Add(state);
             }

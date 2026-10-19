@@ -78,6 +78,14 @@ public abstract class SagaState
     /// <summary>进入死信或补偿失败状态的时间。</summary>
     public DateTimeOffset? ErrorAt { get; set; }
 
+    /// <summary>
+    /// 下一次超时检查时间（2026-10-19 性能迁移 M1）。当前状态中带 Timeout 且已开始
+    /// 执行的步骤的最早到期时刻；无待检查步骤时为 null。SagaProcessor 在
+    /// <c>EnableDueTimeFilter=true</c> 时只租约 <c>NextCheckAt &lt;= now</c> 的行，
+    /// 避免每 30 秒全量扫描活跃 Saga。终态写 null。
+    /// </summary>
+    public DateTimeOffset? NextCheckAt { get; set; }
+
     /// <summary>当前租约持有者；非空表示后台扫描器正在处理此 Saga。</summary>
     public string? LeasedBy { get; set; }
 

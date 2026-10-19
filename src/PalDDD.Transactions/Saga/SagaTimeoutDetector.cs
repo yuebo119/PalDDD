@@ -49,42 +49,63 @@ internal sealed class SagaTimeoutDetector<TState>
     {
         ArgumentNullException.ThrowIfNull(state);
 
-        // EPSL 地毯审计 2026-10-16 A 批 #13：常态（无超时）路径零分配化。旧码该路径
-        // 分配三笔（红证明实测 96B/次）：① try 外无条件空 List（~32B，本项主目标）；
-        // ② 下方 `[]` 集合表达式每次求值新建空数组（~32B，同路径同族，换 Array.Empty）；
-        // ③ foreach 经 IReadOnlyList 接口取枚举器（~32B，改下标循环）。三笔全消后
-        // 无超时路径零堆分配；有超时路径行为不变（首个命中才建 List）。
+        // 常态（无超时）路径零分配：下标循环 + 首个命中才建 List + Array.Empty 空视图。
         List<SagaStep>? list = null;
         for (var i = 0; i < _stepsInOrder.Count; i++)
         {
             var (key, step) = _stepsInOrder[i];
-            // v43 P2 修复（判据三条件合取，三个既有测试语义矩阵一次保全）：
-            // ① E1-P2 场景（AWD + 普通步骤已成功 + 残留时间戳超期）→ 排除：StepStartedAt
-            //    只写不清（v17 声明），三十四轮 AWD 纳入扫描后同状态混注册（带 Timeout 普通
-            //    步骤 A 成功执行 + 无 Timeout InterruptStep 中断）时，A 的残留时间戳让
-            //    IsTimedOut 命中"早已成功"的 A，违背中断态"显式无限等待"契约；
-            // ② 三十四轮场景（InterruptStep 自带 Timeout 超期）→ 保留触发："等待人工决策
-            //    超时"是 InterruptStep 的设计能力（人工决策失踪由 Timeout 兜底回滚）；
-            // ③ Active 态普通步骤已成功 + 超期 → 保留触发：saga 卡死兜底
-            //    （RecordsCompensationFailedStatus 语义）。
-            // 排除条件 = AWD 态 ∧ 步骤已成功完成 ∧ 非 InterruptStep
-            var isAwdCompletedNonInterruptStep = state.Status == SagaStatus.AwaitingHumanDecision
-                && state.ExecutedStepKeys.Contains(key)
-                && step.DispatchKind != StepDispatchKind.Interrupt;
-            if (step.Timeout.HasValue
-                && state.CurrentState == SagaKey.ExtractState(key)
-                && state.StepStartedAt.TryGetValue(key, out var startedAt)
-                && (now - startedAt) > step.Timeout.Value
-                && !isAwdCompletedNonInterruptStep)
-            {
+            if (IsTimedOutStep(state, key, step, now))
                 (list ??= []).Add(step);
-            }
         }
 
-        // 无超时返回空视图（Array.Empty 单例，零分配）；有超时返回收集的列表
         timedOutSteps = (IReadOnlyList<SagaStep>?)list ?? Array.Empty<SagaStep>();
         return list is not null;
     }
+
+    /// <summary>
+    /// 计算下一次需要检查的时间（2026-10-19 M1）：当前状态中带 Timeout、已开始执行且
+    /// 未被 AWD 已成功步骤排除的步骤，取 <c>StepStartedAt + Timeout</c> 的最小值。
+    /// 无待检查步骤返回 null（Saga 在等待事件，不需要超时扫描）。
+    /// </summary>
+    public DateTimeOffset? ComputeNextCheckAt(TState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+
+        DateTimeOffset? next = null;
+        for (var i = 0; i < _stepsInOrder.Count; i++)
+        {
+            var (key, step) = _stepsInOrder[i];
+            if (!MatchesStep(state, key, step)
+                || !state.StepStartedAt.TryGetValue(key, out var startedAt))
+                continue;
+
+            var due = startedAt + step.Timeout!.Value;
+            if (next is null || due < next.Value)
+                next = due;
+        }
+        return next;
+    }
+
+    /// <summary>
+    /// v43 P2 判据三条件合取：
+    /// ① AWD 态 + 普通步骤已成功 + 残留时间戳超期 → 排除（中断态显式无限等待契约）；
+    /// ② InterruptStep 自带 Timeout 超期 → 保留（人工决策失踪兜底）；
+    /// ③ Active 态普通步骤已成功 + 超期 → 保留（Saga 卡死兜底）。
+    /// </summary>
+    private static bool MatchesStep(TState state, string key, SagaStep step)
+    {
+        var isAwdCompletedNonInterruptStep = state.Status == SagaStatus.AwaitingHumanDecision
+            && state.ExecutedStepKeys.Contains(key)
+            && step.DispatchKind != StepDispatchKind.Interrupt;
+        return step.Timeout.HasValue
+            && state.CurrentState == SagaKey.ExtractState(key)
+            && !isAwdCompletedNonInterruptStep;
+    }
+
+    private static bool IsTimedOutStep(TState state, string key, SagaStep step, DateTimeOffset now)
+        => MatchesStep(state, key, step)
+           && state.StepStartedAt.TryGetValue(key, out var startedAt)
+           && (now - startedAt) > step.Timeout!.Value;
 }
 
 /// <summary>Saga key 工具——"state|EventType" 格式的解析。Saga 与 SagaTimeoutDetector 共用。</summary>
