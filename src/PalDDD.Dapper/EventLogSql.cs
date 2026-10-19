@@ -20,15 +20,15 @@ internal static class EventLogSql
     /// 💡 单条语句完成插入 + 返回全局位置，零额外往返。
     /// </summary>
     public const string InsertPG =
-        "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES (@EventId, @EventName, @StreamName, @StreamVersion, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState) RETURNING global_position";
+        "INSERT INTO events (event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES (@EventId, @EventIdBin, @EventName, @StreamName, @StreamVersion, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState) RETURNING global_position";
 
     /// <summary>MySQL INSERT ... SELECT LAST_INSERT_ID() 语法</summary>
     public const string InsertMySql =
-        "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES (@EventId, @EventName, @StreamName, @StreamVersion, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState); SELECT LAST_INSERT_ID();";
+        "INSERT INTO events (event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES (@EventId, @EventIdBin, @EventName, @StreamName, @StreamVersion, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState); SELECT LAST_INSERT_ID();";
 
     /// <summary>SQLite INSERT ... SELECT last_insert_rowid() 语法</summary>
     public const string InsertSqlite =
-        "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES (@EventId, @EventName, @StreamName, @StreamVersion, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState); SELECT last_insert_rowid();";
+        "INSERT INTO events (event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES (@EventId, @EventIdBin, @EventName, @StreamName, @StreamVersion, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState); SELECT last_insert_rowid();";
 
     /// <summary>按流名和版本读取事件。<br/>
     /// 💡 LIMIT @max 由调用方传入 maxCount（ITM-063：此前参数被静默忽略）。
@@ -45,8 +45,8 @@ internal static class EventLogSql
     /// SQLite +44% 反向劣化——本地往返近零时子查询复杂度反超省往返收益），未保留。
     /// </summary>
     public const string AppendSingleAnyPG =
-        "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
-        "SELECT @EventId, @EventName, @StreamName, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) + 1, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState " +
+        "INSERT INTO events (event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
+        "SELECT @EventId, @EventIdBin, @EventName, @StreamName, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) + 1, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState " +
         "RETURNING global_position AS \"GlobalPosition\", stream_version AS \"StreamVersion\"";
 
     /// <summary>
@@ -57,22 +57,22 @@ internal static class EventLogSql
     /// 窗口（Any 先例同款收益形态，-15% 锚）。真库探针（wslc pg186）store 级验证四形态在案。
     /// </summary>
     public const string AppendSingleExactPG =
-        "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
-        "SELECT @EventId, @EventName, @StreamName, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) + 1, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState " +
+        "INSERT INTO events (event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
+        "SELECT @EventId, @EventIdBin, @EventName, @StreamName, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) + 1, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState " +
         "WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) = @ExpectedVersion " +
         "RETURNING global_position AS \"GlobalPosition\", stream_version AS \"StreamVersion\"";
 
     /// <summary>B4：PG 单事件 NoStream 原子追加——守卫 = 当前版本为 -1（空流，InsertSqlite 同语义）。</summary>
     public const string AppendSingleNoStreamPG =
-        "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
-        "SELECT @EventId, @EventName, @StreamName, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) + 1, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState " +
+        "INSERT INTO events (event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
+        "SELECT @EventId, @EventIdBin, @EventName, @StreamName, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) + 1, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState " +
         "WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) = -1 " +
         "RETURNING global_position AS \"GlobalPosition\", stream_version AS \"StreamVersion\"";
 
     /// <summary>B4：PG 单事件 StreamExists 原子追加——守卫 = 当前版本 ≥ 0（流已存在）。</summary>
     public const string AppendSingleStreamExistsPG =
-        "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
-        "SELECT @EventId, @EventName, @StreamName, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) + 1, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState " +
+        "INSERT INTO events (event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
+        "SELECT @EventId, @EventIdBin, @EventName, @StreamName, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) + 1, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState " +
         "WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) >= 0 " +
         "RETURNING global_position AS \"GlobalPosition\", stream_version AS \"StreamVersion\"";
 

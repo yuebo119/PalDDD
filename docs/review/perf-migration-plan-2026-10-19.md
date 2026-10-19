@@ -110,6 +110,12 @@ confirm channel，每订阅独立 consumer channel；共享 `IConnection`。pref
 四方言（含 SQL Server 实验性路径）DDL 可回滚。风险：列迁移时间、索引重建锁、旧客户端
 读取兼容、Ulid 字节序与文本序不一致（排序语义必须逐查询确认）。
 
+实施状态（2026-10-19）：expand 已落地。`event_id_bin`（16 字节）列与普通索引已加入
+PG/MySQL/SQLite DDL；EF/Dapper/PalORM 三栈追加时双写，读取默认文本、`UseBinaryEventId=true`
+切二进制（NULL 行回退文本）。文本唯一索引保留，冲突分类仍走文本索引；二进制唯一索引
+待应用侧分批回填后创建。回填配方/切读/回滚/验收见 `docs/migration/event-id-binary-column.md`。
+收缩（停写文本列、删旧索引）留到下一 major。
+
 ## 非迁移类后续（不占本轮迁移窗口）
 
 - 标记 flusher 与发布循环完全解耦：需组合 A/B 证明标记段仍占排空 >5%。

@@ -55,6 +55,11 @@ public sealed class DapperEventLog : IEventLog
     private readonly DapperDbType _dbType;
     private readonly TimeProvider _timeProvider;
 
+    /// <summary>
+    /// 读取时优先使用 event_id_bin（M4）。默认 false 回退文本列；存量行回填后置 true。
+    /// </summary>
+    public bool UseBinaryEventId { get; set; }
+
     /// <param name="dbType">数据库类型（用于选择 INSERT ... RETURNING / LAST_INSERT_ID / last_insert_rowid 语法）。
     /// v33 P3 声明：默认 Sqlite 仅为既有直连调用方兼容；非 SQLite 用户必须显式传 dbType
     ///（PG 报类型错误可见，MySQL 静默时差混存）。</param>
@@ -104,6 +109,7 @@ public sealed class DapperEventLog : IEventLog
             // 唯一差异：StreamVersion 不传（服务端原子计算）
             var dpFast = new DynamicParameters();
             dpFast.Add("EventId", DapperAotInitializer.ToSqliteParameter(evt.EventId));
+            dpFast.Add("EventIdBin", evt.EventId.ToByteArray(), DbType.Binary);
             dpFast.Add("EventName", evt.EventName);
             dpFast.Add("StreamName", streamName);
             dpFast.Add("SchemaVersion", evt.SchemaVersion);
@@ -224,7 +230,7 @@ public sealed class DapperEventLog : IEventLog
         // LAST_INSERT_ID()=首行值且 min/max=1/5 连续无间隙（mode 2 的间隙仅作用于
         // 行数不确定的 bulk insert）。且本实现不依赖连续性（范围回查按版本区间）。
         // 收益：k 次 INSERT..SELECT LAST_INSERT_ID 往返 → 2 往返（INSERT + 范围回查），
-        // k≥3 净胜（k=5 典型形态 5→2）。MySQL 行上限 4000（13 参/行 = 52000 < PG/MySQL
+        // k≥3 净胜（k=5 典型形态 5→2）。MySQL 行上限 4000（14 参/行 = 56000 < PG/MySQL
         // 65535 占位符上限；SQL 文本 ~1MB < max_allowed_packet 默认 64MB）。
         var batchRowLimit = BatchRowLimit(_dbType);
         if (events.Count > 1 && batchRowLimit > 0)
@@ -280,6 +286,7 @@ public sealed class DapperEventLog : IEventLog
                 //    行值，SQLite "row value misused"）；byte[] 用显式 DbType.Binary。
                 var dp = new DynamicParameters();
                 dp.Add("EventId", DapperAotInitializer.ToSqliteParameter(evt.EventId));
+                dp.Add("EventIdBin", evt.EventId.ToByteArray(), DbType.Binary);
                 dp.Add("EventName", evt.EventName);
                 dp.Add("StreamName", streamName);
                 dp.Add("StreamVersion", version++);
@@ -349,7 +356,7 @@ public sealed class DapperEventLog : IEventLog
     private const int PostgreSqlBatchRowLimit = 4000;
 
     /// <summary>B2（EPSL 地毯审计 2026-10-16）：MySQL 多行批插入行数上限——与 PG 同口径
-    /// （13 参/行 = 52000 < MySQL 65535 占位符上限；SQL 文本 ~1MB < max_allowed_packet
+    /// （14 参/行 = 56000 < MySQL 65535 占位符上限；SQL 文本 ~1MB < max_allowed_packet
     /// 默认 64MB）。MySQL 无 RETURNING，位置经版本范围回查（PositionRangeMySql）。</summary>
     private const int MySqlBatchRowLimit = 4000;
 
@@ -360,7 +367,7 @@ public sealed class DapperEventLog : IEventLog
     private const int SqliteBatchRowLimit = 64;
 
     /// <summary>A12（S1 轮，2026-10-15）：批量化行上限按方言取——PG 4000（驱动/服务端批能力），
-    /// SQLite 64（变量数 999 防御），MySQL 4000（B2：13 参/行 = 52000 < 65535 占位符上限，
+    /// SQLite 64（变量数 999 防御），MySQL 4000（B2：14 参/行 = 56000 < 65535 占位符上限，
     /// SQL 文本 ~1MB < max_allowed_packet 默认 64MB），其他 0（不批量化，走逐条路径）。</summary>
     private static int BatchRowLimit(DapperDbType dbType) => dbType switch
     {
@@ -487,7 +494,7 @@ public sealed class DapperEventLog : IEventLog
 
     /// <summary>
     /// B2：多行 VALUES INSERT 构造（PG RETURNING 与 MySQL 范围回查两形态共用单一来源）——
-    /// 每行 13 参数 + StreamName/RecordedAt 两共享参数；逐条路径同款零拷贝口径
+    /// 每行 14 参数 + StreamName/RecordedAt 两共享参数；逐条路径同款零拷贝口径
     /// （PayloadArray/MetadataArray 只读直传，DbType.Binary 显式标注）。
     /// </summary>
     private static (string Sql, DynamicParameters Parameters) BuildBatchInsert(
@@ -498,20 +505,21 @@ public sealed class DapperEventLog : IEventLog
         dp.Add("RecordedAt", recordedAt);
 
         var sb = new StringBuilder(320 + events.Count * 236)
-            .Append("INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES ");
+            .Append("INSERT INTO events (event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES ");
         for (var i = 0; i < events.Count; i++)
         {
             var evt = events[i];
             var p = $"b{i}_";
             if (i > 0)
                 sb.Append(", ");
-            sb.Append("(@").Append(p).Append("eid, @").Append(p).Append("en, @StreamName, @").Append(p)
+            sb.Append("(@").Append(p).Append("eid, @").Append(p).Append("eidbin, @").Append(p).Append("en, @StreamName, @").Append(p)
               .Append("sv, @").Append(p).Append("scv, @").Append(p).Append("ct, @").Append(p)
               .Append("pl, @").Append(p).Append("md, @RecordedAt, @").Append(p).Append("aid, @").Append(p)
               .Append("rs, @").Append(p).Append("cid, @").Append(p).Append("cau, @").Append(p)
               .Append("tp, @").Append(p).Append("ts)");
 
             dp.Add(p + "eid", DapperAotInitializer.ToSqliteParameter(evt.EventId));
+            dp.Add(p + "eidbin", evt.EventId.ToByteArray(), DbType.Binary);
             dp.Add(p + "en", evt.EventName);
             dp.Add(p + "sv", firstVersion + i);
             dp.Add(p + "scv", evt.SchemaVersion);
@@ -638,7 +646,7 @@ public sealed class DapperEventLog : IEventLog
             reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, ct).ConfigureAwait(false);
             var ordinals = ReadOrdinals.Create(reader);
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
-                yield return ReadRecordedEvent(reader, ordinals);
+                yield return ReadRecordedEvent(reader, ordinals, UseBinaryEventId);
         }
         finally
         {
@@ -653,6 +661,7 @@ public sealed class DapperEventLog : IEventLog
     private readonly record struct ReadOrdinals(
         int GlobalPosition,
         int EventId,
+        int EventIdBin,
         int EventName,
         int StreamName,
         int StreamVersion,
@@ -672,6 +681,7 @@ public sealed class DapperEventLog : IEventLog
             => new(
                 reader.GetOrdinal("global_position"),
                 reader.GetOrdinal("event_id"),
+                reader.GetOrdinal("event_id_bin"),
                 reader.GetOrdinal("event_name"),
                 reader.GetOrdinal("stream_name"),
                 reader.GetOrdinal("stream_version"),
@@ -692,7 +702,7 @@ public sealed class DapperEventLog : IEventLog
     /// 单行映射（零拷贝载荷引用直传）。审计字段全空时复用 <see cref="EventAuditMetadata.Empty"/>，
     /// 与 EF/PalORM/JSONL 导入同款。
     /// </summary>
-    private static RecordedEvent ReadRecordedEvent(DbDataReader reader, in ReadOrdinals o)
+    private static RecordedEvent ReadRecordedEvent(DbDataReader reader, in ReadOrdinals o, bool useBinaryEventId)
     {
         var actorId = reader.IsDBNull(o.ActorId) ? null : reader.GetString(o.ActorId);
         var reason = reader.IsDBNull(o.Reason) ? null : reader.GetString(o.Reason);
@@ -710,12 +720,16 @@ public sealed class DapperEventLog : IEventLog
                 ? EventAuditMetadata.Empty
                 : new EventAuditMetadata(actorId, reason, correlationId, causationId, traceParent, traceState);
 
+        var eventId = useBinaryEventId && !reader.IsDBNull(o.EventIdBin)
+            ? PalUlid.New(reader.GetFieldValue<byte[]>(o.EventIdBin))
+            : PalUlid.Parse(reader.GetString(o.EventId));
+
         return RecordedEvent.RehydrateFromBytes(
             reader.GetString(o.StreamName),
             reader.GetInt64(o.StreamVersion),
             reader.GetInt64(o.GlobalPosition),
             ReadDateTimeOffset(reader, o.RecordedAt),
-            PalUlid.Parse(reader.GetString(o.EventId)),
+            eventId,
             reader.GetString(o.EventName),
             reader.GetInt32(o.SchemaVersion),
             reader.GetString(o.ContentType),
@@ -777,6 +791,7 @@ public sealed class DapperEventLog : IEventLog
     {
         public long GlobalPosition { get; set; }
         public PalUlid EventId { get; set; }
+        public byte[]? EventIdBin { get; set; }
         public string EventName { get; set; } = "";
         public string StreamName { get; set; } = "";
         public long StreamVersion { get; set; }

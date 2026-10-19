@@ -57,6 +57,7 @@ CREATE TABLE saga_states (
 CREATE TABLE events (
     global_position BIGINT AUTO_INCREMENT PRIMARY KEY,
     event_id        VARCHAR(255) NOT NULL,
+    event_id_bin    BINARY(16) NULL,
     event_name      VARCHAR(255) NOT NULL,
     stream_name     VARCHAR(512) NOT NULL,  -- 三十七轮 C2：对齐 EFCore MaxLength(512)
     stream_version  BIGINT NOT NULL,
@@ -72,6 +73,7 @@ CREATE TABLE events (
     trace_parent    VARCHAR(255),
     trace_state     VARCHAR(512),  -- 三十七轮 C2：对齐 EFCore MaxLength(512)
     UNIQUE INDEX idx_events_event_id (event_id),
+    INDEX idx_events_event_id_bin (event_id_bin),
     UNIQUE INDEX idx_events_stream (stream_name, stream_version),
     INDEX idx_events_global (global_position)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

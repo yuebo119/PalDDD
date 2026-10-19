@@ -39,6 +39,7 @@ public sealed class StoredEvent
         GlobalPosition = globalPosition;
         RecordedAt = recordedAt;
         EventId = data.EventId;
+        EventIdBin = data.EventId.ToByteArray();
         EventName = data.EventName;
         SchemaVersion = data.SchemaVersion;
         ContentType = data.ContentType;
@@ -76,6 +77,11 @@ public sealed class StoredEvent
     /// <summary>Stable event identifier.</summary>
     public PalUlid EventId { get; private set; }
 
+    /// <summary>
+    /// 16 字节二进制 EventId（M4 双写列）。旧行为 null 的存量行回退到 <see cref="EventId"/> 文本列。
+    /// </summary>
+    public byte[]? EventIdBin { get; private set; }
+
     /// <summary>Stable wire event name.</summary>
     public string EventName { get; private set; }
 
@@ -110,10 +116,14 @@ public sealed class StoredEvent
     public string? TraceState { get; private set; }
 
     /// <summary>Rehydrate the public recorded event model — 零拷贝 byte[] 引用传递（P2）</summary>
-    public RecordedEvent ToRecordedEvent()
+    public RecordedEvent ToRecordedEvent(bool useBinaryEventId = false)
     {
         // 2026-10-19 性能实施轮：审计字段全空时复用单例（对齐 Dapper/PalORM/JSONL 导入同款），
         // 回放 1M 事件少 1M 个 EventAuditMetadata 对象。
+        var eventId = useBinaryEventId && EventIdBin is { Length: 16 }
+            ? PalUlid.New(EventIdBin)
+            : EventId;
+
         var audit = ActorId is null
             && Reason is null
             && CorrelationId is null
@@ -128,7 +138,7 @@ public sealed class StoredEvent
             StreamVersion,
             GlobalPosition,
             RecordedAt,
-            EventId,
+            eventId,
             EventName,
             SchemaVersion,
             ContentType,

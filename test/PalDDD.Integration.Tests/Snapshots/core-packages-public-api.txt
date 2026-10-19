@@ -310,6 +310,7 @@ enum PalDDD.Dapper.DapperDbType
   field System.Int32 value__
 class PalDDD.Dapper.DapperEventLog
   ctor(System.Data.Common.DbConnection connection, System.Data.Common.DbTransaction transaction, PalDDD.Dapper.DapperDbType dbType, System.TimeProvider timeProvider)
+  property System.Boolean UseBinaryEventId
   method System.Threading.Tasks.ValueTask<PalDDD.EventLog.AppendEventsResult> AppendAsync(System.String streamName, PalDDD.EventLog.ExpectedStreamVersion expectedVersion, System.Collections.Generic.IReadOnlyList<PalDDD.EventLog.EventData> events, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadAllAsync(System.Int64 fromPosition, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadStreamAsync(System.String streamName, System.Int64 fromVersion, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
@@ -751,6 +752,7 @@ class PalDDD.EventLog.RecordedEvent
 class PalDDD.EventLog.EventLogDbContext
   property Microsoft.EntityFrameworkCore.DbSet<PalDDD.EventLog.StoredEvent> Events
   property Microsoft.EntityFrameworkCore.DbSet<PalDDD.EventLog.EventLogGlobalPositionAllocator> GlobalPositionAllocators
+  property System.Boolean UseBinaryEventId
   method System.Threading.Tasks.ValueTask<PalDDD.EventLog.AppendEventsResult> AppendAsync(System.String streamName, PalDDD.EventLog.ExpectedStreamVersion expectedVersion, System.Collections.Generic.IReadOnlyList<PalDDD.EventLog.EventData> events, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadAllAsync(System.Int64 fromPosition, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadStreamAsync(System.String streamName, System.Int64 fromVersion, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
@@ -772,6 +774,7 @@ class PalDDD.EventLog.StoredEvent
   property System.String ContentType
   property System.Nullable<ByteAether.Ulid.Ulid> CorrelationId
   property ByteAether.Ulid.Ulid EventId
+  property System.Byte[] EventIdBin
   property System.String EventName
   property System.Int64 GlobalPosition
   property System.Byte[] Metadata
@@ -784,7 +787,7 @@ class PalDDD.EventLog.StoredEvent
   property System.String TraceParent
   property System.String TraceState
   method PalDDD.EventLog.StoredEvent From(System.String streamName, System.Int64 streamVersion, System.Int64 globalPosition, System.DateTimeOffset recordedAt, PalDDD.EventLog.EventData data)
-  method PalDDD.EventLog.RecordedEvent ToRecordedEvent()
+  method PalDDD.EventLog.RecordedEvent ToRecordedEvent(System.Boolean useBinaryEventId)
 
 # PalDDD.Hosting.AspNetCore
 static class PalDDD.Hosting.AspNetCore.DetachedStreamEndpoints
@@ -988,6 +991,7 @@ class PalDDD.PalORM.Models.EventLogRow
   property System.String ContentType
   property System.String CorrelationId
   property ByteAether.Ulid.Ulid EventId
+  property System.Byte[] EventIdBin
   property System.String EventName
   property System.Int64 GlobalPosition
   property System.Byte[] Metadata
@@ -1050,6 +1054,7 @@ class PalDDD.PalORM.PalOrmUnitOfWork<TProvider>
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(System.Threading.CancellationToken ct)
 class PalDDD.PalORM.Stores.PalOrmEventLog<TProvider>
   ctor(PalORM.DataSession<TProvider> session, System.TimeProvider clock)
+  property System.Boolean UseBinaryEventId
   method System.Threading.Tasks.ValueTask<PalDDD.EventLog.AppendEventsResult> AppendAsync(System.String streamName, PalDDD.EventLog.ExpectedStreamVersion expectedVersion, System.Collections.Generic.IReadOnlyList<PalDDD.EventLog.EventData> events, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadAllAsync(System.Int64 fromPosition, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> ReadStreamAsync(System.String streamName, System.Int64 fromVersion, System.Int32 maxCount, System.Threading.CancellationToken cancellationToken)

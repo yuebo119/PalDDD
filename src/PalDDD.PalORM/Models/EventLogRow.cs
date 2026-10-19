@@ -26,6 +26,12 @@ public sealed partial class EventLogRow
     [Converter(typeof(UlidStringConverter))]
     public Ulid EventId { get; set; }
 
+    /// <summary>16 字节二进制 EventId（M4 双写；存量行为 null 时回退文本列）。</summary>
+    [SuppressMessage("Performance", "CA1819:Properties should not return arrays",
+        Justification = "PalORM Row DTO 持久化边界；event_id_bin 是不可变二进制列。")]
+    [Column("event_id_bin")]
+    public byte[]? EventIdBin { get; set; }
+
     /// <summary>事件名（wire 协议标识）。</summary>
     [Column("event_name")]
     public string EventName { get; set; } = "";
