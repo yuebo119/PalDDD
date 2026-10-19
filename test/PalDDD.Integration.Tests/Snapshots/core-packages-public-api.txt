@@ -968,6 +968,7 @@ class PalDDD.Messaging.RabbitMQ.RabbitMqBroker
   ctor(RabbitMQ.Client.IConnection connection, RabbitMQ.Client.IChannel channel, PalDDD.Core.Logging.IPalLogger<PalDDD.Messaging.RabbitMQ.RabbitMqBroker> logger, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog, System.UInt16 prefetchCount)
   property System.Boolean SupportsConcurrentPublish
   property System.Boolean SupportsRawPublish
+  property System.Boolean UseSharedConsumerChannel [init]
   method System.Threading.Tasks.ValueTask<PalDDD.Messaging.RabbitMQ.RabbitMqBroker> CreateAsync(RabbitMQ.Client.IConnection connection, PalDDD.Core.Logging.IPalLogger<PalDDD.Messaging.RabbitMQ.RabbitMqBroker> logger, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog, System.UInt16 prefetchCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask DisposeAsync()
   method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
