@@ -160,6 +160,7 @@ public sealed class DapperStoreTests
                 error_at      TEXT,
                 version       INTEGER NOT NULL DEFAULT 0,
                 saga_data     TEXT,
+                next_check_at TEXT,
                 leased_by     TEXT,
                 leased_until  TEXT
             );

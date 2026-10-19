@@ -401,6 +401,39 @@ public class SagaTimeoutTests
         await Assert.That(steps).Count().IsEqualTo(1);
         await Assert.That(steps[0].Name).IsEqualTo("Slow");
     }
+
+    [Test]
+    public async Task ComputeNextCheckAt_ReturnsEarliestStepDeadline()
+    {
+        var saga = new TestSaga();
+        saga.PublicWhenWithTimeout("Initial", "Slow", TimeSpan.FromSeconds(5));
+        var started = new DateTimeOffset(2026, 10, 19, 0, 0, 0, TimeSpan.Zero);
+        var state = new TestSagaState { CurrentState = "Initial" };
+        state.StepStartedAt["Initial"] = started;
+
+        var next = saga.ComputeNextCheckAt(state);
+
+        await Assert.That(next).IsEqualTo(started.AddSeconds(5));
+    }
+
+    [Test]
+    public async Task LeaseDueSagas_OnlyDueRows_AreLeased()
+    {
+        var store = new InMemorySagaStateStore<TestSagaState>();
+        var now = new DateTimeOffset(2026, 10, 19, 0, 0, 0, TimeSpan.Zero);
+        var due = new TestSagaState { Status = SagaStatus.Active, NextCheckAt = now.AddSeconds(-1), CreatedAt = now };
+        var future = new TestSagaState { Status = SagaStatus.Active, NextCheckAt = now.AddMinutes(1), CreatedAt = now };
+        var idle = new TestSagaState { Status = SagaStatus.Active, NextCheckAt = null, CreatedAt = now };
+        store.Add(due);
+        store.Add(future);
+        store.Add(idle);
+
+        var leased = await store.LeaseDueSagasAsync(
+            "worker", TimeSpan.FromMinutes(1), 10, now, CancellationToken.None);
+
+        await Assert.That(leased).Count().IsEqualTo(1);
+        await Assert.That(leased[0].SagaId).IsEqualTo(due.SagaId);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════

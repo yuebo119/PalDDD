@@ -193,6 +193,14 @@ public sealed class SagaProcessorOptions
     public TimeSpan LeaseDuration { get; set; } = TimeSpan.FromMinutes(2);
 
     /// <summary>
+    /// 启用到期时间过滤（2026-10-19 M1）。默认 false：仍走全量活跃扫描，供存量行通过
+    /// 正常保存路径回填 <see cref="SagaState.NextCheckAt"/>。回填完成并确认所有活跃行
+    /// 的 NextCheckAt 正确后置 true，只租约 <c>NextCheckAt &lt;= now</c> 的行。
+    /// 自定义 store 未实现 <see cref="IDueTimeSagaStore{TState}"/> 时自动回落全量路径。
+    /// </summary>
+    public bool EnableDueTimeFilter { get; set; }
+
+    /// <summary>
     /// 租约持有者标识 — 用于区分多实例部署中的不同节点。默认为 {机器名}:{随机ID}。
     /// <para>
     /// ITM-108 声明：同 <see cref="OutboxOptions.LeaseOwner"/>——默认值每次 new 求值，

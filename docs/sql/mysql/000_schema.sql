@@ -46,10 +46,12 @@ CREATE TABLE saga_states (
     error_at      DATETIME(6),
     version       INT NOT NULL DEFAULT 0,
     saga_data     JSON,
+    next_check_at DATETIME(6),
     leased_by     VARCHAR(255),
     leased_until  DATETIME(6),
     INDEX idx_saga_status (status, created_at),
-    INDEX idx_saga_lease (status, leased_until, created_at)
+    INDEX idx_saga_lease (status, leased_until, created_at),
+    INDEX idx_saga_due (status, next_check_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE events (

@@ -35,6 +35,11 @@
 租约语句数与旧路径对照；回填中断可从断点续跑。风险：回填长事务、索引膨胀、跨节点时钟偏差
 （`NextCheckAt` 用 DB 时间还是应用时间必须单点定义）。
 
+实施状态（2026-10-19）：expand 已落地。`SagaState.NextCheckAt`、`SagaTimeoutDetector.ComputeNextCheckAt`、
+四栈 `IDueTimeSagaStore`（EF/Dapper/PalORM/InMemory）与 `SagaProcessorOptions.EnableDueTimeFilter`
+（默认 false）已提交；DDL 见 `docs/migration/saga-next-check-at.md`。切读为显式开关，
+回填走旧全量路径的惰性写入；收缩（删除旧扫描分支）留到下一个发布窗口。
+
 ## M2 投影检查点高水位
 
 现状：`ProjectionProcessor` 每事件 `TryStart` + `MarkCompleted` 两次 DB 往返，检查点表按事件

@@ -32,7 +32,7 @@ public abstract class SagaStateDbContext<
         | DynamicallyAccessedMemberTypes.PublicProperties
         | DynamicallyAccessedMemberTypes.NonPublicProperties
         | DynamicallyAccessedMemberTypes.Interfaces)]
-TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>
+TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, IDueTimeSagaStore<TState>
     where TState : SagaState
 {
     /// <summary>Saga 状态表</summary>
@@ -62,18 +62,36 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
     }
 
     /// <inheritdoc/>
-    public async ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
+    public ValueTask<IReadOnlyList<TState>> LeaseActiveSagasAsync(
         string owner,
         TimeSpan leaseDuration,
         int batchSize,
+        CancellationToken ct)
+        => LeaseSagasAsync(owner, leaseDuration, batchSize, dueBefore: null, GetUtcNow(), ct);
+
+    /// <inheritdoc/>
+    public ValueTask<IReadOnlyList<TState>> LeaseDueSagasAsync(
+        string owner,
+        TimeSpan leaseDuration,
+        int batchSize,
+        DateTimeOffset now,
+        CancellationToken ct)
+        => LeaseSagasAsync(owner, leaseDuration, batchSize, dueBefore: now, now, ct);
+
+    private async ValueTask<IReadOnlyList<TState>> LeaseSagasAsync(
+        string owner,
+        TimeSpan leaseDuration,
+        int batchSize,
+        DateTimeOffset? dueBefore,
+        DateTimeOffset now,
         CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
         // v25 P3 守卫族：leaseDuration 边界守卫——对照 Outbox 四方言 LeasePendingMessagesAsync
         //（MySql :77-85 / PG :56-62 / Sqlite :82-89，ITM-167/216 对齐系列）同型漏网——
-        // leaseDuration 非正时租约即刻过期/永不过期语义错乱；TotalSeconds 超过 int.MaxValue 时
-        // leasedUntil = now.Add(leaseDuration) 的秒数语义溢出。Options 层已校验正数，
+        // leaseDuration 非正时租约即刻过期/永不过期语义错乱；TotalSeconds 超过 int.MaxValue
+        // 时 leasedUntil = now.Add(leaseDuration) 的秒数语义溢出。Options 层已校验正数，
         // 此处是 Store 直调路径的防御性 fail-fast（与 Options 层校验各自覆盖
         // DI 启动期与运行时直调两类入口）。
         if (leaseDuration <= TimeSpan.Zero)
@@ -81,7 +99,6 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         if (leaseDuration.TotalSeconds > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(leaseDuration), "leaseDuration is too large to represent in whole seconds for the lease LeasedUntil value.");
 
-        var now = GetUtcNow();
         var leasedUntil = now.Add(leaseDuration);
 
         // R7（EPSL 地毯审计 2026-10-11 P0-4，2026-10-15 性能实施轮）：SQLite 单语句租约下推——
@@ -94,7 +111,7 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         // 等价下推待 EF 真库车道（上游 provider 未发布 rc 线版本——既有登记，见
         // docs/review/decision-2026-10-15-saga-lease-sqlite-single-statement.md）。
         if (UsesSingleStatementSqliteLease())
-            return await LeaseViaSingleStatementSqliteAsync(owner, now, leasedUntil, batchSize, ct).ConfigureAwait(false);
+            return await LeaseViaSingleStatementSqliteAsync(owner, now, leasedUntil, batchSize, dueBefore, ct).ConfigureAwait(false);
 
         // v25 P2-1：翻页循环防饥饿（镜像 SqliteOutboxDbContext.QueryEligibleAsync 三十九轮形态）——
         // v23 C1 把 LeasedUntil 过滤移到内存后，头部 batchSize 条全为他实例活跃租约时
@@ -104,17 +121,21 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         var skip = 0;
         while (states.Count < batchSize)
         {
-            var page = await SagaStates
+            var query = SagaStates
             // 三十四轮（中断态超时兜底）：扫描集扩 AwaitingHumanDecision——中断态 Saga
             // 配置了步骤 Timeout 且超期时由 SagaTimeoutProcessor.IsTimedOut 门控补偿；
             // v44 勘正（对齐 InMemorySagaStateStore v43 勘正）：IsTimedOut 判据已含
             // "AWD 态已成功步骤"排除——残留时间戳不再触发中断态兜底补偿
             // v23 C1：EF SQLite 不支持 DateTimeOffset 有序比较/排序（ITM-261 姊妹）——
             // 等值比较（Status）可翻译，LeasedUntil <= now 改物化后内存过滤，OrderBy 改 SagaId
-            .Where(s => s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision)
-            .OrderBy(s => s.SagaId)
-            .Skip(skip).Take(batchSize)
-            .ToListAsync(ct).ConfigureAwait(false);
+            .Where(s => s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision);
+            if (dueBefore is { } due)
+                query = query.Where(s => s.NextCheckAt != null && s.NextCheckAt <= due);
+
+            var page = await query
+                .OrderBy(s => s.SagaId)
+                .Skip(skip).Take(batchSize)
+                .ToListAsync(ct).ConfigureAwait(false);
             if (page.Count == 0) break;
             // v27 P3 修复：翻页循环内对未选中实体 Detach——page 为 tracked 物化（LeasedUntil
             // 过滤在内存做），未被租约选中的实体（Unchanged）滞留 ChangeTracker 逐 tick 累积
@@ -207,12 +228,13 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         DateTimeOffset now,
         DateTimeOffset leasedUntil,
         int batchSize,
+        DateTimeOffset? dueBefore,
         CancellationToken ct)
     {
         // 资格谓词在子查询内评估（与 Dapper/PalORM/Outbox 三栈同契约形态），ORDER BY + LIMIT
         // 作用于过滤后集合——v25 P2-1 的"头部活跃租约占满窗口致饥饿"在谓词下推下结构性不成立
         await Database.ExecuteSqlAsync(
-            BuildSingleStatementLeaseCommand(owner, now, leasedUntil, batchSize), ct).ConfigureAwait(false);
+            BuildSingleStatementLeaseCommand(owner, now, leasedUntil, batchSize, dueBefore), ct).ConfigureAwait(false);
 
         // 等值守卫回读（不重跑资格子查询）：按精确租约标识 (owner, until) 取回本批——同一 owner
         // 同 tick 两次租约混批属姊妹栈既有已知限制（PalORM/EF-MySql 同款声明在案）。
@@ -237,7 +259,8 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         string owner,
         DateTimeOffset now,
         DateTimeOffset leasedUntil,
-        int batchSize)
+        int batchSize,
+        DateTimeOffset? dueBefore)
     {
         var entityType = Model.FindEntityType(typeof(TState))
             ?? throw new InvalidOperationException($"Entity type '{typeof(TState).FullName}' is not mapped in this model.");
@@ -251,11 +274,15 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         var leasedByColumn = QuoteSqliteIdentifier(ColumnName(entityType, nameof(SagaState.LeasedBy)));
         var leasedUntilColumn = QuoteSqliteIdentifier(ColumnName(entityType, nameof(SagaState.LeasedUntil)));
         var versionColumn = QuoteSqliteIdentifier(ColumnName(entityType, nameof(SagaState.Version)));
+        var nextCheckAtColumn = QuoteSqliteIdentifier(ColumnName(entityType, nameof(SagaState.NextCheckAt)));
+
+        // 到期过滤（M1）仅在 LeaseDueSagasAsync 路径追加；空串保持旧 SQL 形状。
+        var dueClause = dueBefore is null
+            ? string.Empty
+            : $"AND ({nextCheckAtColumn} IS NOT NULL AND {nextCheckAtColumn} <= {{6}})";
 
         // {{…}} 是标识符插值（表/列名为受信标识符，已加引号）；{N} 是 FormattableStringFactory
-        // 占位符（值全部参数化）。DateTimeOffset 参数直传原生形态——与 EF 写入格式自洽由
-        // SqliteOutboxDbContext 的 2026-09-19 spike（谓词不恒真 + 等值回读命中）与本案
-        // 回归网双重实证
+        // 占位符（值全部参数化）。DateTimeOffset 参数直传原生形态。
         var format = $$"""
             UPDATE {{table}}
             SET {{leasedByColumn}} = {0}, {{leasedUntilColumn}} = {1}, {{versionColumn}} = {{versionColumn}} + 1
@@ -263,17 +290,15 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
                 SELECT {{sagaIdColumn}} FROM {{table}}
                 WHERE {{statusColumn}} IN ({2}, {3})
                   AND ({{leasedUntilColumn}} IS NULL OR {{leasedUntilColumn}} <= {4})
+                  {{dueClause}}
                 ORDER BY {{sagaIdColumn}}
                 LIMIT {5})
             """;
-        return FormattableStringFactory.Create(
-            format,
-            owner,
-            leasedUntil,
-            (int)SagaStatus.Active,
-            (int)SagaStatus.AwaitingHumanDecision,
-            now,
-            batchSize);
+        return dueBefore is { } due
+            ? FormattableStringFactory.Create(
+                format, owner, leasedUntil, (int)SagaStatus.Active, (int)SagaStatus.AwaitingHumanDecision, now, batchSize, due)
+            : FormattableStringFactory.Create(
+                format, owner, leasedUntil, (int)SagaStatus.Active, (int)SagaStatus.AwaitingHumanDecision, now, batchSize);
     }
 
     /// <summary>列名解析（EF 模型映射）——缺映射即异常而非静默回落属性名（重映射下会生成错误 SQL）。</summary>
@@ -444,6 +469,8 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
             e.Property(x => x.SagaId).HasConversion(v => v.ToString(null, System.Globalization.CultureInfo.InvariantCulture), v => PalUlid.Parse(v));
             e.HasIndex(x => new { x.Status, x.CurrentState });
             e.HasIndex(x => new { x.Status, x.LeasedUntil, x.CreatedAt });
+            // M1：到期扫描索引；NextCheckAt 由 Saga 在状态变更时维护，NULL 表示无待检查超时。
+            e.HasIndex(x => new { x.Status, x.NextCheckAt });
             e.Property(x => x.CurrentState).HasMaxLength(256);
             e.Property(x => x.Version).IsConcurrencyToken();
             e.Property(x => x.Error).HasMaxLength(2048);

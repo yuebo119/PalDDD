@@ -382,6 +382,25 @@ public static class SqlTemplates
         // v53 P2：租约即换代（version=version+1），见 SagaLeaseActive 注释
         "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1";
 
+    // ── M1（2026-10-19）：NextCheckAt 到期租约变体 ──
+    // NULL = 当前状态没有待检查的超时步骤（等待事件），到期路径安全跳过；
+    // 回填完成前保持 EnableDueTimeFilter=false 走旧模板。
+
+    public const string SagaLeaseActiveDue =
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n)";
+
+    public const string SagaLeaseActiveDuePG =
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)";
+
+    public const string SagaLeaseActiveDuePGReturning =
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
+
+    public const string SagaLeaseActiveDueSqliteReturning =
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n) RETURNING *";
+
+    public const string SagaLeaseActiveDueMySql =
+        "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1";
+
     /// <summary>
     /// 按本次租约回读刚获取的 Saga。<br/>
     /// ITM-134 修复：补 <c>AND status IN (0, 5)</c> 守卫——对齐 PalORM 回读语义
@@ -403,13 +422,13 @@ public static class SqlTemplates
     /// @completedAt——两套命名并存各自与调用方匹配（DapperSagaStateStore 两处匿名对象），
     /// 改名必须同轮同步调用方。</remarks>
     public const string SagaUpdate =
-        "UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=@data,leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v";
+        "UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=@data,next_check_at=@nextCheckAt,leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v";
 
     /// <summary>插入新的 Saga 状态。
     /// 💡 三十八轮 P3 声明：不写 version 列——依赖 DB DEFAULT 0 与 state.Version 初始值隐式对齐；
     /// schema 默认值漂移将致首次 UPDATE（version CAS）必冲突。</summary>
     public const string SagaInsert =
-        "INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,@data,@leasedBy,@leasedUntil)";
+        "INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,next_check_at,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,@data,@nextCheckAt,@leasedBy,@leasedUntil)";
 
     /// <summary>
     /// PG 专用 Saga 插入 — saga_data 显式 CAST 为 jsonb。<br/>
@@ -417,11 +436,11 @@ public static class SqlTemplates
     /// text→jsonb 无赋值转换（42804），实测 INSERT 直接报错。
     /// </summary>
     public const string SagaInsertPG =
-        "INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,CAST(@data AS jsonb),@leasedBy,@leasedUntil)";
+        "INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,next_check_at,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,CAST(@data AS jsonb),@nextCheckAt,@leasedBy,@leasedUntil)";
 
     /// <summary>PG 专用 Saga 更新 — saga_data 同 SagaInsertPG 的 jsonb CAST。</summary>
     public const string SagaUpdatePG =
-        "UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=CAST(@data AS jsonb),leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v";
+        "UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=CAST(@data AS jsonb),next_check_at=@nextCheckAt,leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v";
 
     /// <summary>
     /// 批量释放本 owner 的 Saga 租约（EPSL 地毯审计 2026-10-11 B-1）——仅租约列 + 换代，

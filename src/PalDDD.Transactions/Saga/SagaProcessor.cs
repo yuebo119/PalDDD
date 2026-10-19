@@ -119,11 +119,20 @@ TState>
         System.Collections.Generic.IReadOnlyList<TState> activeSagas;
         try
         {
-            activeSagas = await _store.LeaseActiveSagasAsync(
-                options.LeaseOwner,
-                options.LeaseDuration,
-                options.TimeoutScanBatchSize,
-                ct).ConfigureAwait(false);
+            // M1（2026-10-19）：EnableDueTimeFilter=true 且 store 支持时只租到期行；
+            // 否则走旧全量路径，并在下方惰性回填 NextCheckAt。
+            activeSagas = options.EnableDueTimeFilter && _store is IDueTimeSagaStore<TState> dueStore
+                ? await dueStore.LeaseDueSagasAsync(
+                    options.LeaseOwner,
+                    options.LeaseDuration,
+                    options.TimeoutScanBatchSize,
+                    now,
+                    ct).ConfigureAwait(false)
+                : await _store.LeaseActiveSagasAsync(
+                    options.LeaseOwner,
+                    options.LeaseDuration,
+                    options.TimeoutScanBatchSize,
+                    ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -141,6 +150,19 @@ TState>
 
         foreach (var sagaState in activeSagas)
         {
+            // M1 惰性回填：旧路径（或新行首次进入扫描）NextCheckAt 为空时按当前状态计算。
+            // 立即 SaveChanges 一次，确保批量释放路径（只写租约列）也能持久化该值；
+            // 每行只付一次，回填完成后 EnableDueTimeFilter 可切换。
+            if (!options.EnableDueTimeFilter && sagaState.NextCheckAt is null)
+            {
+                var nextCheck = _orchestrator.ComputeNextCheckAt(sagaState);
+                if (nextCheck is not null)
+                {
+                    sagaState.NextCheckAt = nextCheck;
+                    await _store.SaveChangesAsync(sagaState, ct).ConfigureAwait(false);
+                }
+            }
+
             // P3 修复：单条 Saga 处理失败不中断剩余——否则后续 Saga 的租约需等
             // LeaseDuration 自然过期才对其他实例可见（与批处理整体失败同害）
             // P3 修复（十七轮）：try 块体整体补一层缩进（原块体与 try 关键字同列，
@@ -163,6 +185,7 @@ TState>
                         sagaState.Status = SagaStatus.Compensated;
                         sagaState.CompletedAt = now;
                         sagaState.CurrentState = SagaState.CompensatedStateName;
+                        sagaState.NextCheckAt = null; // M1：终态不再参与超时扫描
                         compensationSucceeded = true;
                     }
                     catch (OperationCanceledException)
@@ -202,6 +225,7 @@ TState>
                         sagaState.CurrentState = SagaState.CompensationFailedStateName;
                         sagaState.Status = SagaStatus.CompensationFailed;
                         sagaState.ErrorAt = now;
+                        sagaState.NextCheckAt = null; // M1：终态不再参与超时扫描
                     }
 
                     sagaState.LeasedBy = null;
