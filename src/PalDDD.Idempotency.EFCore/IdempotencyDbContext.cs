@@ -19,6 +19,20 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
     /// <summary>幂等执行记录表</summary>
     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
 
+    // A5（S1 轮，2026-10-15）：固定形状单行查询编译化——EF Core 每次执行都把表达式树
+    // 重新翻译成 SQL（无自动计划缓存；EF.CompileAsyncQuery 的官方存在理由即消除重复
+    // 编译开销）。两个查询是幂等路径每请求的固定形状热点（读路径 AsNoTracking、
+    // TryStart 跟踪查询两形态分别编译，跟踪语义随委托固化）。按 IModel 引用各缓存一份
+    // 委托：编译委托与单一模型绑定（EF 官方约束），同上下文类型跨 provider 模型实例
+    // 不同，按模型分持。
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        Microsoft.EntityFrameworkCore.Metadata.IModel,
+        Func<IdempotencyDbContext, string, string, CancellationToken, Task<IdempotencyRecord?>>> GetRecordNoTrackingByModel = new();
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        Microsoft.EntityFrameworkCore.Metadata.IModel,
+        Func<IdempotencyDbContext, string, string, CancellationToken, Task<IdempotencyRecord?>>> GetRecordTrackedByModel = new();
+
     /// <inheritdoc/>
     /// <remarks>
     /// v25 P3 行为族 B5：改 AsNoTracking（对齐 ProjectionCheckpointDbContext 三十八轮修复）——
@@ -34,10 +48,11 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
     {
         ValidateKeyParts(operationName, key);
 
-        var record = await IdempotencyRecords
-            .AsNoTracking()
-            .SingleOrDefaultAsync(
-                x => x.OperationName == operationName && x.Key == key, ct).ConfigureAwait(false);
+        var record = await GetRecordNoTrackingByModel.GetOrAdd(Model, static _ =>
+            EF.CompileAsyncQuery<IdempotencyDbContext, string, string, IdempotencyRecord?>(
+                (ctx, operationName, key, ct) => ctx.IdempotencyRecords
+                    .AsNoTracking()
+                    .SingleOrDefault(x => x.OperationName == operationName && x.Key == key)))(this, operationName, key, ct).ConfigureAwait(false);
         if (record is null)
             return null;
 
@@ -61,8 +76,12 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         ArgumentNullException.ThrowIfNull(policy);
         ValidateKeyParts(operationName, key);
 
-        var record = await IdempotencyRecords.SingleOrDefaultAsync(
-            x => x.OperationName == operationName && x.Key == key, ct).ConfigureAwait(false);
+        // A5（S1 轮）：跟踪查询走按模型缓存的编译委托（僵尸回收分支的突变依赖
+        // ChangeTracker，保持跟踪形态；编译只固化查询形状，跟踪语义不变）
+        var record = await GetRecordTrackedByModel.GetOrAdd(Model, static _ =>
+            EF.CompileAsyncQuery<IdempotencyDbContext, string, string, IdempotencyRecord?>(
+                (ctx, operationName, key, ct) => ctx.IdempotencyRecords
+                    .SingleOrDefault(x => x.OperationName == operationName && x.Key == key)))(this, operationName, key, ct).ConfigureAwait(false);
 
         if (record is null)
             return await TryCreateRecordAsync(operationName, key, now, policy, ct).ConfigureAwait(false);

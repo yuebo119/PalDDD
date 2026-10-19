@@ -108,7 +108,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
         {
             // ITM-186 修复：负重试次数会让重试循环零次执行、ProcessEventAsync 静默返回
             // current（步骤未执行也无异常），调用方误以为走完——断言非负。
+#pragma warning disable MA0015 // 属性 setter 的 value 参数；异常指向属性名 MaxRetries 更可读
             ArgumentOutOfRangeException.ThrowIfNegative(value, nameof(MaxRetries));
+#pragma warning restore MA0015
             _maxRetries = value;
         }
     }
@@ -324,12 +326,22 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
     private static void RecordExecutedStep(TState current, TState result, string stepKey, DateTimeOffset startedAt)
     {
-        if (!result.StepStartedAt.ContainsKey(stepKey))
-            result.StepStartedAt[stepKey] = startedAt;
+        // R3（P1-3）：TryAdd 单哈希查找替代 ContainsKey+索引器双查（语义等价：已存在不覆盖）
+        result.StepStartedAt.TryAdd(stepKey, startedAt);
 
-        foreach (var key in current.ExecutedStepKeys)
-            if (!result.ExecutedStepKeys.Contains(key))
-                result.ExecutedStepKeys.Add(key);
+        // A6（S1 轮，2026-10-15）：同实例合轨守卫——六调用点中五处传 (current, current)
+        // （FanOut/ChildSaga/Interrupt/Dynamic 立即车道等，步骤原地改状态），旧形态对每个
+        // 已执行 key 做一次线性 Contains（同实例下必然命中、零添加），k 次执行累计 O(k²)
+        // 次字符串比较。同实例时只剩 stepKey 的存在性判定。
+        // 跨实例合并（Normal/Dynamic 车道 result 为新实例）改 HashSet 去重——O(k) 替代
+        // O(k²)，该路径非常态（每 saga 每步一次），一次分配换平方级比较下降。
+        if (!ReferenceEquals(current, result))
+        {
+            var existing = new HashSet<string>(result.ExecutedStepKeys, StringComparer.Ordinal);
+            foreach (var key in current.ExecutedStepKeys)
+                if (existing.Add(key))
+                    result.ExecutedStepKeys.Add(key);
+        }
 
         if (!result.ExecutedStepKeys.Contains(stepKey))
             result.ExecutedStepKeys.Add(stepKey);
@@ -435,7 +447,9 @@ public abstract class Saga<TState> where TState : SagaState, new()
         (string Key, SagaStep Step) compensateTarget,
         CancellationToken ct)
     {
-        List<Exception> failures = [];
+        // R3（P1-3，2026-10-14 性能实施轮）：failures 惰性建——成功路径（常态）原每次调用
+        // 无条件分配空 List（~32B/步），首个失败再建；throw 点此前必有 Add，非空可证。
+        List<Exception>? failures = null;
         for (int attemptNo = 0; attemptNo <= MaxRetries; attemptNo++)
         {
             try
@@ -450,13 +464,13 @@ public abstract class Saga<TState> where TState : SagaState, new()
             {
                 // 失败但还有重试次数 — 等待后继续
                 // 使用 Clock（TimeProvider）控制延迟，测试中可注入 FakeTimeProvider 实现确定性重试时序
-                failures.Add(ex);
+                (failures ??= []).Add(ex);
                 await Task.Delay(ComputeRetryDelaySafely(attemptNo + 1), Clock, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // 所有重试耗尽 — 补偿所有已成功执行的步骤（含当前步骤如果有补偿）
-                failures.Add(ex);
+                (failures ??= []).Add(ex);
 
                 // 三十八轮 P3：观察者异常被吞，原始步骤异常 ex 继续传播
                 await SafeObserveFailedAsync(observer, current.SagaId, stepKey, ex, ct).ConfigureAwait(false);
@@ -490,9 +504,11 @@ public abstract class Saga<TState> where TState : SagaState, new()
         return await RunRetryLaneAsync(current, stepKey, observer,
             attempt: async token =>
             {
-                var sw = System.Diagnostics.Stopwatch.StartNew();
+                // R3（P1-3）：GetTimestamp/GetElapsedTime 静态对替代 Stopwatch.StartNew——
+                // 后者每步骤执行分配一个 Stopwatch 对象（~40B），计时语义逐字等价
+                var startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
                 var result = (TState)await step.ExecuteAsync(current, @event, token).ConfigureAwait(false);
-                sw.Stop();
+                var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp);
 
                 if (!wasCompleted && result.Status == SagaStatus.Completed)
                     PalMetrics.SagaCompleted.Add(1);
@@ -500,7 +516,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 RecordExecutedStep(current, result, stepKey, startedAt);
 
                 // ITM-212：Observer best-effort——Sink 异常不重放业务步骤
-                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, token).ConfigureAwait(false);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, elapsed, token).ConfigureAwait(false);
 
                 return result;
             },
@@ -527,9 +543,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
         return await RunRetryLaneAsync(current, stepKey, observer,
             attempt: async token =>
             {
-                var sw = System.Diagnostics.Stopwatch.StartNew();
+                // R3（P1-3）：GetTimestamp/GetElapsedTime 替代 Stopwatch.StartNew（同 Normal 车道）
+                var startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
                 var result = await fanOutStep.ExecuteFanOutAsync(current, token).ConfigureAwait(false);
-                sw.Stop();
+                var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp);
 
                 if (!result.AllSucceeded)
                 {
@@ -549,7 +566,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 RecordExecutedStep(current, current, stepKey, startedAt);
 
-                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, token).ConfigureAwait(false);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, elapsed, token).ConfigureAwait(false);
 
                 return current;
             },
@@ -599,10 +616,11 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 // Execute child saga via non-generic dispatch (avoids dynamic keyword)
                 var childEvent = new ChildSagaInputEvent(input);
-                var sw = System.Diagnostics.Stopwatch.StartNew();
+                // R3（P1-3）：GetTimestamp/GetElapsedTime 替代 Stopwatch.StartNew（同 Normal 车道）
+                var startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
                 var finalChildState = await manager.ExecuteChildSagaNonGenericAsync(
                     resolved, childState, childEvent, token).ConfigureAwait(false);
-                sw.Stop();
+                var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp);
 
                 // Apply child output back to parent
                 childStep.ApplyOutput(current, finalChildState);
@@ -616,7 +634,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
                 RecordExecutedStep(current, current, stepKey, startedAt);
 
-                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, token).ConfigureAwait(false);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, elapsed, token).ConfigureAwait(false);
 
                 return current;
             },
@@ -630,20 +648,30 @@ public abstract class Saga<TState> where TState : SagaState, new()
     [System.Diagnostics.CodeAnalysis.RequiresDynamicCode("Uses MakeGenericMethod for generic method dispatch; not compatible with native AOT.")]
     private object? ResolveChildSagaByType(Type childStateType)
     {
-        // Try the generic ResolveChildSaga first via reflection
+        // A8（S1 轮，2026-10-15）：非泛型查找静态缓存一次 + MakeGenericMethod 结果按子状态
+        // 类型缓存——原每 attempt 一次 GetMethod + MakeGenericMethod + Invoke，查找与构造
+        // 部分按类型稳定对应，缓存消重复成本（Invoke 语义不变）。
+#pragma warning disable S3011 // 子 Saga 解析是 AOT 非目标反射路径（RequiresUnreferencedCode/RequiresDynamicCode 已声明）
         var method = typeof(Saga<TState>).GetMethod(
             nameof(ResolveChildSaga),
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,
             null, Type.EmptyTypes, null);
+#pragma warning restore S3011
 
         if (method is not null)
         {
-            var generic = method.MakeGenericMethod(childStateType);
+            var generic = ResolveChildSagaGenericByStateType.GetOrAdd(childStateType, static (t, m) => m.MakeGenericMethod(t), method);
             return generic.Invoke(this, null);
         }
 
         return null;
     }
+
+    // A8（S1 轮）：MakeGenericMethod 结果按子状态类型缓存（Saga<TState> 每闭合泛型一份，
+    // ChildSaga 每 attempt 原各一次构造）。
+#pragma warning disable S2743 // 按闭合泛型缓存是刻意语义（每 TState 一份，A8 注释已声明）
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, System.Reflection.MethodInfo> ResolveChildSagaGenericByStateType = new();
+#pragma warning restore S2743
 
     /// <summary>通过反射创建子 Saga 状态实例（仅用于 AOT 非目标场景）。</summary>
     [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode("Child state instantiation relies on Activator.CreateInstance; provide a factory for AOT.")]
@@ -774,7 +802,6 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // 管线（throw 位于重试循环之前，v40 注释曾误称"补偿链消费"，A 片复核证伪）。
         // 前序已执行步骤的 ExecutedStepKeys 消费由 SagaTimeoutProcessor 超时兜底或
         // 调用方 catch 后自行处理；嵌套子 Saga 场景经反射包装为步骤失败可获父级重试
-        List<Exception> routeFailures = [];
         string targetKey;
         try
         {
@@ -782,7 +809,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            routeFailures.Add(ex);
+            // EPSL 地毯审计 2026-10-16 A 批 #12：失败列表惰性建——成功路径（常态）原每次
+            // 分发无条件分配空 List（~32B/步），Dynamic 车道是 R3 四车道共享骨架惰性化
+            //（同文件 failures 先例）的漏格姊妹；失败列表只在 catch 内构建。
+            List<Exception> routeFailures = [ex];
             throw new AggregateException(
                 $"DynamicStep '{step.Name}' 路由函数执行失败", routeFailures);
         }
@@ -838,9 +868,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
         return await RunRetryLaneAsync(current, stepKey, observer,
             attempt: async token =>
             {
-                var sw = System.Diagnostics.Stopwatch.StartNew();
+                // R3（P1-3）：GetTimestamp/GetElapsedTime 替代 Stopwatch.StartNew（同 Normal 车道）
+                var startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
                 var result = (TState)await matchedStep.ExecuteAsync(current, @event, token).ConfigureAwait(false);
-                sw.Stop();
+                var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp);
 
                 if (!wasCompleted && result.Status == SagaStatus.Completed)
                     PalMetrics.SagaCompleted.Add(1);
@@ -853,7 +884,7 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 // ITM-212：Observer best-effort——Sink 异常不重放业务步骤
                 // P3-SRC-214：删除冗余 observer null 包裹——SafeObserveCompletedAsync 内部
                 // 已判 null，对齐 Normal/FanOut/ChildSaga 三路径的直调形态
-                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, sw.Elapsed, token).ConfigureAwait(false);
+                await SafeObserveCompletedAsync(observer, current.SagaId, stepKey, elapsed, token).ConfigureAwait(false);
 
                 return result;
             },

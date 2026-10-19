@@ -48,7 +48,7 @@ public abstract class MessageBrokerBase : IMessageBroker
             ?? throw new InvalidOperationException(
                 $"Message type '{typeof(TMessage).FullName}' is not registered in MessageCatalog.");
 
-        return PublishAsync(message!, descriptor, PalUlid.New(), MessagePublishContext.Empty, ct);
+        return PublishAsync(message, descriptor, PalUlid.New(), MessagePublishContext.Empty, ct);
     }
 
     /// <summary>发布消息（非泛型重载）— 转发到带 context 的重载。</summary>

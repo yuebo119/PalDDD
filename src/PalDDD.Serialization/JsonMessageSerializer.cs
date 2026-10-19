@@ -30,6 +30,7 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     private readonly IMessageCatalog _messageCatalog;
     private readonly JsonSerializerOptions? _options;
 
+#pragma warning disable S2696 // ThreadStatic 池刻意跨实例/线程复用（类头重入声明）
     // ThreadLocal Writer 池 — 每线程最多缓存一个 Utf8JsonWriter 和 ArrayBufferWriter
     // 权衡（八轮评审 P3）：过大数据（如 MB 级 payload）后 TLS 持峰值容量不缩——
     // ArrayBufferWriter 内部缓冲按历史峰值保留，线程退出才回收；线程池长驻线程
@@ -42,6 +43,13 @@ public sealed class JsonMessageSerializer : IMessageSerializer
 
     [ThreadStatic]
     private static ArrayBufferWriter<byte>? _tlsBufferWriter;
+
+    /// <summary>
+    /// TLS 缓冲驻留上限（R9/P2-1，2026-10-14 性能实施轮）——历史峰值超过本值（256KB）的
+    /// 缓冲在下次入口被弃槽重建（256B 起步），把「按历史峰值无限驻留」收敛为有界驻留
+    /// （长驻线程 × 峰值 的稳态 RSS 压到 阈值 × 线程数 内）；小载荷常态不触发（零额外成本）。
+    /// </summary>
+    private const int MaxResidentBufferBytes = 256 * 1024;
 
     /// <summary>
     /// 使用默认构造路径创建序列化器。<br/>
@@ -150,10 +158,10 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         // v27 P3：本路径与 SerializePooled 共用同一 ThreadStatic 池——同样非重入安全
         // （converter 内回调同线程 Serialize 会清空外层缓冲，详见类头重入限制声明）。
         var bufferWriter = _tlsBufferWriter;
-        if (bufferWriter is null)
+        if (bufferWriter is null || bufferWriter.Capacity > MaxResidentBufferBytes) // R9/P2-1：超阈值弃槽重建
         {
             bufferWriter = new ArrayBufferWriter<byte>(256);
-            _tlsBufferWriter = bufferWriter;
+            _tlsBufferWriter = bufferWriter; // NOSONAR: S2696 ThreadStatic 池刻意跨实例/线程复用（类头重入声明）
         }
         else
         {
@@ -164,7 +172,7 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         if (writer is null)
         {
             writer = new Utf8JsonWriter(bufferWriter);
-            _tlsWriter = writer;
+            _tlsWriter = writer; // NOSONAR: S2696 ThreadStatic 池刻意跨实例/线程复用（类头重入声明）
         }
         else
         {
@@ -175,6 +183,41 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         writer.Flush();
 
         return bufferWriter.WrittenSpan.ToArray();
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// R8/P1-1（ADR-029）：直写零拷贝形态——池化 <c>Utf8JsonWriter</c> 经
+    /// <c>Reset(destination)</c> 直接写入调用方缓冲，免除内存重载返回前的
+    /// <c>WrittenSpan.ToArray()</c> 精确分配 + 整载荷拷贝。输出字节与内存重载逐位一致。
+    /// 与 <see cref="Serialize(object, MessageDescriptor)"/> 共用同一 TLS Writer——
+    /// 同款非重入限制（类头声明）；本方法不触碰 TLS BufferWriter（缓冲归调用方）。
+    /// </remarks>
+    public void Serialize(object message, MessageDescriptor descriptor, System.Buffers.IBufferWriter<byte> destination)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentNullException.ThrowIfNull(descriptor);
+        ArgumentNullException.ThrowIfNull(destination);
+
+        // ClrType 一致性守卫（对齐 Serialize(object, descriptor) v39 P3 同款）
+        if (message.GetType() != descriptor.ClrType)
+            throw new ArgumentException(
+                $"The descriptor is registered for CLR type '{descriptor.ClrType.FullName}' but the message runtime type is '{message.GetType().FullName}'. Pass a descriptor registered for the message type.",
+                nameof(message));
+
+        var writer = _tlsWriter;
+        if (writer is null)
+        {
+            writer = new Utf8JsonWriter(destination);
+            _tlsWriter = writer; // NOSONAR: S2696 ThreadStatic 池刻意跨实例/线程复用（类头重入声明）
+        }
+        else
+        {
+            writer.Reset(destination);
+        }
+
+        System.Text.Json.JsonSerializer.Serialize(writer, message, descriptor.JsonTypeInfo);
+        writer.Flush();
     }
 
     /// <inheritdoc />
@@ -227,10 +270,10 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage> typeInfo)
     {
         var bufferWriter = _tlsBufferWriter;
-        if (bufferWriter is null)
+        if (bufferWriter is null || bufferWriter.Capacity > MaxResidentBufferBytes) // R9/P2-1：超阈值弃槽重建（同非泛型路径）
         {
             bufferWriter = new ArrayBufferWriter<byte>(256);
-            _tlsBufferWriter = bufferWriter;
+            _tlsBufferWriter = bufferWriter; // NOSONAR: S2696 ThreadStatic 池刻意跨实例/线程复用（类头重入声明）
         }
         else
         {
@@ -241,7 +284,7 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         if (writer is null)
         {
             writer = new Utf8JsonWriter(bufferWriter);
-            _tlsWriter = writer;
+            _tlsWriter = writer; // NOSONAR: S2696 ThreadStatic 池刻意跨实例/线程复用（类头重入声明）
         }
         else
         {

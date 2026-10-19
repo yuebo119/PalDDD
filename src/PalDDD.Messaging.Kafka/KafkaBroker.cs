@@ -37,6 +37,19 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
     // ITM-217 修复（三十二轮）：DisposeAsync 幂等门（对照 KafkaSubscription._disposed）
     private int _disposed;
 
+    // A13（S1 轮，2026-10-15）：发布路径 TLS body 缓冲——序列化经 IBufferWriter 直写
+    // 重载写入本缓冲，只留 Confluent Message.Value 的 byte[] 契约必需的一次 ToArray。
+    // 原形态走内存重载 Serialize(object, descriptor)，其在返回前做 WrittenSpan.ToArray
+    // （第一次分配+整载荷拷贝），发布处 value.ToArray() 是第二次——直写消除第一次，
+    // 每消息省一次全载荷分配 + memcpy。与 RabbitMqBroker 的池化租借形态不同：本处
+    // ToArray 产出的独立数组在 await 前已定型（无跨 await 共享缓冲引用），TLS 复用安全。
+    // 驻留上限对齐 JsonMessageSerializer 的 MaxResidentBufferBytes 取舍（R9 同族）。
+    [ThreadStatic]
+    private static System.Buffers.ArrayBufferWriter<byte>? _tlsBodyWriter;
+
+    /// <summary>TLS body 缓冲驻留上限——超阈值弃槽重建（256B 起步），驻留收敛为有界。</summary>
+    private const int MaxResidentBodyBytes = 256 * 1024;
+
     public KafkaBroker(
         ProducerConfig producerConfig,
         ConsumerConfig consumerConfig,
@@ -65,6 +78,26 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             .SetLogHandler((_, m) => LogLibrdkafkaLog("producer", m))
             .Build();
         _consumerConfig = consumerConfig;
+    }
+
+    // EPSL 地毯审计 2026-10-16 A 批 #1：测试 seam——发布路径单测需要可注入的 producer
+    //（公开构造的 ProducerBuilder.Build() 产真实客户端，ProduceAsync 会走网络超时）。
+    // 仅 Messaging.Integration.Tests 经 IVT 可达（broker 单测归属集成侧工程，架构分层
+    // 边界测试约束；B-5 头构造测试同款先例）。
+    internal KafkaBroker(
+        IProducer<string, byte[]> producer,
+        ConsumerConfig consumerConfig,
+        IPalLogger<KafkaBroker> logger,
+        IMessageSerializer serializer,
+        IMessageCatalog messageCatalog)
+        : base(serializer, messageCatalog)
+    {
+        ArgumentNullException.ThrowIfNull(producer);
+        ArgumentNullException.ThrowIfNull(consumerConfig);
+        ArgumentNullException.ThrowIfNull(logger);
+        _producer = producer;
+        _consumerConfig = consumerConfig;
+        _logger = logger;
     }
 
     // 审计对齐（2026-10-08）：Kafka 后台事件观测——producer/consumer 共用。
@@ -103,20 +136,40 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentOutOfRangeException.ThrowIfEqual(messageId, default);
 
-        var key = messageId.ToString();
-        var value = Serializer.Serialize(message, descriptor);
+        var key = messageId.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
+        // A13（S1 轮）：IBufferWriter 直写 + 单次 ToArray（Confluent byte[] 契约必需）——
+        // 消除内存重载返回前的第一次 WrittenSpan.ToArray 分配+整载荷拷贝。
+        // EPSL 地毯审计 2026-10-16 A 批 #1：发布处第二次 ToArray 消除后，单次拷贝落地
+        // （旧码双拷净效果为零，分配断言实测 2264B/迭代判红→修复后绿）。
+        var bodyWriter = _tlsBodyWriter;
+        if (bodyWriter is null || bodyWriter.Capacity > MaxResidentBodyBytes)
+        {
+            bodyWriter = new System.Buffers.ArrayBufferWriter<byte>(256);
+#pragma warning disable S2696 // ThreadStatic 发布缓冲刻意跨实例/线程复用（类头重入声明）
+            _tlsBodyWriter = bodyWriter;
+#pragma warning restore S2696
+        }
+        else
+        {
+            bodyWriter.Clear();
+        }
+        Serializer.Serialize(message, descriptor, bodyWriter);
+        var value = bodyWriter.WrittenMemory.ToArray();
 
         await _producer.ProduceAsync(descriptor.Name, new Message<string, byte[]>
         {
             Key = key,
             // Serialize 契约返回 ReadOnlyMemory<byte>，Message.Value 需 byte[]。
-            // 勘正（2026-09-20）：本处 ToArray 是序列化器 ToArray（JsonMessageSerializer
-            // WrittenSpan.ToArray）之后的**第二次**托管拷贝，非"无双重拷贝"（ReadOnlyMemory<T>
-            // .ToArray() 恒拷贝，已实测三种内存形态 ReferenceEquals 均为 false）。
-            // 不可消除：Confluent.Kafka 2.16.0 的 ISerializer<T>.Serialize 返回 byte[]
-            // （反射实证，2026-10-08 升位复核），改用 IProducer<string, ReadOnlyMemory<byte>> + 自定义序列化器
-            // 只会把该拷贝移入序列化器，净收益为零；librdkafka 内部仍需一次拷贝。
-            Value = value.ToArray(),
+            // EPSL 地毯审计 2026-10-16 A 批 #1：Value 直传上方 ToArray 产出的数组。
+            // 旧码此处又有一次 value.ToArray()（byte[] 隐式转 ReadOnlyMemory 后恒拷贝），
+            // 与上方 TLS 直写后的 ToArray 相抵，A13 对该路径净效果为零（每消息两次全载荷
+            // 分配+拷贝，分配断言实测 2264B/迭代）；旧注释「唯一一次托管拷贝」与同方法
+            // 两个 ToArray 的事实不符，一并勘误。
+            // 现存一次拷贝不可消除：Confluent.Kafka 2.16.0 的 ISerializer<T>.Serialize
+            // 返回 byte[]（反射实证，2026-10-08 升位复核），改用 IProducer<string,
+            // ReadOnlyMemory<byte>> + 自定义序列化器只会把该拷贝移入序列化器，净收益为零；
+            // librdkafka 内部仍需一次拷贝。
+            Value = value,
             Headers = CreateHeaders(context)
         }, ct).ConfigureAwait(false);
 
@@ -137,8 +190,8 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         Headers? headers = null;
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceParent, context.TraceParent);
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceState, context.TraceState);
-        AddHeader(ref headers, MessageConsumeContext.HeaderNames.CorrelationId, context.CorrelationId?.ToString());
-        AddHeader(ref headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString());
+        AddHeader(ref headers, MessageConsumeContext.HeaderNames.CorrelationId, context.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+        AddHeader(ref headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         return headers;
     }
 
@@ -504,7 +557,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
 
         /// <summary>后台消费 Task — 可用于健康检查和异常观测。
         /// 登记与循环启动之间存在极小窗口，期间为 null（登记先行的顺序权衡）。</summary>
+#pragma warning disable S1144 // 健康检查/异常观测的公开诊断属性（文档承诺）
         public Task? ConsumeTask => Volatile.Read(ref _consumeTask);
+#pragma warning restore S1144
 
         /// <summary>后置注入消费循环 Task（登记先行模式）——登记完成后由 SubscribeAsync 调用一次。</summary>
         public void SetConsumeTask(Task consumeTask)

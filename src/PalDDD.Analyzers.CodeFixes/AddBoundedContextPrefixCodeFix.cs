@@ -61,7 +61,9 @@ public sealed class AddBoundedContextPrefixCodeFix : CodeFixProvider
         var editor = await DocumentEditor.CreateAsync(document, ct).ConfigureAwait(false);
 
         var oldValue = literal.Token.ValueText;
-        if (oldValue.StartsWith(prefix + ".", StringComparison.Ordinal)) return document;
+        // EPSL 地毯审计 2026-10-16 A 批 #18：零分配前缀判定（原 StartsWith(prefix + ".")
+        // 每次拼接中间串），语义等价——长度门控 + StartsWith(prefix) + 分隔符位。
+        if (CodeFixHelpers.StartsWithPrefix(oldValue, prefix)) return document;
 
         // v66 P3 边界声明（错前缀叠加）：oldValue 首段已是其它 BC 前缀（类型跨上下文迁移
         // 后 Name 未改，如 [BoundedContext("billing")] + Name="orders.submit.v1"）时，本 fix

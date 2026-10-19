@@ -59,7 +59,7 @@ namespace PalDDD.Dapper;
 /// ⚠️ <b>连接生命周期</b>：<paramref name="connection"/> 由 DI 容器管理（通常为 Scoped），
 /// 调用方不应调用 <c>Close()</c>/<c>Dispose()</c>。EnsureOpen/EnsureOpenAsync 仅确保连接状态，不拥有连接所有权。
 /// </remarks>
-public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxStore
+public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxStore, IBatchMarkOutboxStore
 {
     private readonly DbConnection _connection;
     private readonly DapperDbType _dbType;
@@ -75,6 +75,14 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
     // （对齐 OutboxStatus.Pending 枚举值与 Saga/Checkpoint/Idempotency 三表的既定 int 语义，
     // docs/sql DDL 同步）。编译期常量保留原优化意图——避免热路径枚举格式化分配。
     private const int StatusPending = 0;
+
+    // R1（P2-5，2026-10-14 性能实施轮）：MySQL SKIP LOCKED 版本判定按连接实例缓存
+    //（ConditionalWeakTable，镜像 DapperBulkCopy C-15 先例）——UseSkipLocked 每次租约
+    // Split 版本串（string[] 分配 + 解析 CPU），长连接复用免重复解析；CWT 弱键随连接
+    // 回收，连接串/版本串不以字符串形态驻留静态表。重连换版本服务器的边缘场景与 C-15
+    // 同取舍（连接实例不变则判定不刷新，接受）。
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DbConnection, System.Runtime.CompilerServices.StrongBox<bool>>
+        s_mysqlSkipLockedByConnection = new();
 
     /// <param name="transaction">可选共享事务（用于 UnitOfWork 模式）</param>
     public DapperOutboxStore(
@@ -142,7 +150,10 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
 
         // ⚡ 跨数据库 UPDATE + RETURN 语法
         //    PG：UPDATE ... RETURNING * — 单次 SQL 原子租约获取 + 回读
-        //    非 PG：两步——UPDATE 锁定后，按 locked_by/until 回读精确匹配本次租约
+        //    A12（S1 轮，2026-10-15）：SQLite 亦改单语句 UPDATE ... RETURNING *
+        //    （Microsoft.Data.Sqlite 支持，3.35+）——省回读往返，且消除 ITM-109 的
+        //    同 tick 混批窗口（回读按 (locked_by, locked_until) 匹配会带回上一批遗留行）
+        //    非 PG/MySQL：两步——UPDATE 锁定后，按 locked_by/until 回读精确匹配本次租约
         //    🔴 P0 修复 (2026-06-21)：原实现第二步重新执行子查询，由于 locked_until 已被更新，
         //    子查询条件 (locked_until<=now) 会把刚锁定行排除，导致结果集为空。
         //    改用 OutboxSelectByLease 按租约标识回读，消除并发窗口。
@@ -161,7 +172,19 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
                     Tx).ConfigureAwait(false);
             return msgs.AsList();
         }
-        else
+        if (_dbType == DapperDbType.Sqlite)
+        {
+            // A12（S1 轮）：SQLite 单语句租约——UPDATE ... RETURNING * 一次完成锁定与回读。
+            // 相对两步形态：省 OutboxSelectByLease 回读往返；按行锁语义返回刚锁定行，
+            // ITM-109 同 tick 混批窗口（两步回读按租约标识匹配会带回上一批遗留行）在此
+            // 形态下不存在，与 PG 路径同语义。零匹配时返回空集（QueryAsync 空结果）。
+            var msgs = await conn.QueryAsync<OutboxMessage>(
+                    SqlTemplates.OutboxLeaseUpdateSqliteReturning,
+                    new { owner, until = ToTimeParam(until), now = ToTimeParam(now), maxRetryCount, n = batchSize },
+                    Tx).ConfigureAwait(false);
+            return msgs.AsList();
+        }
+
         {
             // P1 修复（十一轮·实测发现）：MySQL 不支持 UPDATE ... WHERE id IN (SELECT ... LIMIT)
             // （真实库实测报 1235）——JOIN 形态替代（对齐 PalORM 版）；SQLite 支持子查询内 LIMIT 保持原状
@@ -172,7 +195,11 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
             string leaseSql;
             if (_dbType == DapperDbType.MySql)
             {
-                leaseSql = MySqlLeasePolicy.UseSkipLocked(_connection.ServerVersion)
+                // R1（P2-5）：判定经 CWT 按连接缓存（原每租约解析 ServerVersion 串）
+                var skipLocked = s_mysqlSkipLockedByConnection.GetValue(
+                    _connection,
+                    static c => new System.Runtime.CompilerServices.StrongBox<bool>(MySqlLeasePolicy.UseSkipLocked(c.ServerVersion))).Value;
+                leaseSql = skipLocked
                     ? SqlTemplates.OutboxLeaseUpdateMySqlSkipLocked
                     : SqlTemplates.OutboxLeaseUpdateMySql;
             }
@@ -222,8 +249,8 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         // InMemory（列表直存）三栈保留领域值一致：同消息跨栈落库 created_at 相同，
         // ORDER BY created_at 投递序与 CreatedAt 往返断言跨栈成立。
         AddParam(cmd, "CreatedAt", ToTimeParam(message.CreatedAt));
-        AddParam(cmd, "CorrelationId", message.CorrelationId?.ToString());
-        AddParam(cmd, "CausationId", message.CausationId?.ToString());
+        AddParam(cmd, "CorrelationId", message.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+        AddParam(cmd, "CausationId", message.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         AddParam(cmd, "TraceParent", message.TraceParent);
         AddParam(cmd, "TraceState", message.TraceState);
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -256,7 +283,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         // 约束可接受。本方法现不再取批次时钟，该漂移属处理器时间语义。
         // v8 声明的「接口 AddMessagesAsync 无 CancellationToken 参数、本路径无法响应取消」缺口
         // 已在 v4.0 补齐（ADR-026 ④）：接口收 ct，本方法签名收参并经直接重载传播（M1-3 口径：收缩连接打开阶段）。
-        var conn = await EnsureOpenAsync().ConfigureAwait(false);
+        var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // P2 修复（八轮评审 PD17）：批量路径补 correlation/causation/trace 4 追踪列——
         // 单条路径 AddMessage（七轮）已补，批量漏列导致追踪链在批量写入时丢失；
         // extractor 末 4 项与单条 AddMessage 的参数语义逐一对齐。
@@ -265,7 +292,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
             ["id", "type", "payload", "content_type", "schema_version", "status", "created_at", "correlation_id", "causation_id", "trace_parent", "trace_state"],
             messages,
             m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, StatusPending, m.CreatedAt,
-                m.CorrelationId?.ToString(), m.CausationId?.ToString(), m.TraceParent, m.TraceState],
+                m.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture), m.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture), m.TraceParent, m.TraceState],
             Tx, ct).ConfigureAwait(false); // v4.0 ④（ADR-026）：ct 传播进批量路径
     }
 
@@ -362,6 +389,78 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         }
     }
 
+    /// <summary>批量标记发布成功（R4/P0-2，ADR-027）——契约见 <c>IBatchMarkOutboxStore</c>；
+    /// 按 RetryCount 分组单语句（fencing 守卫与逐条 <see cref="MarkProcessedAsync"/> 逐字等价），
+    /// 组内 400 行分块（SQLite 参数上限 999 防御）；全命中才回写内存（部分拒绝零回写）。</summary>
+    public async ValueTask<int> MarkProcessedBatchAsync(IReadOnlyList<OutboxMessage> messages, DateTimeOffset processedAt, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        if (messages.Count == 0) return 0;
+
+        // 同租约校验（契约前提防御）：批内 LockedBy/LockedUntil 同值且非空——
+        // 正常管线不可达（批输入恒来自单次 LeasePendingMessagesAsync 结果）
+        var owner = messages[0].LockedBy;
+        var until = messages[0].LockedUntil;
+        if (owner is null || until is null)
+            throw new InvalidOperationException(
+                "MarkProcessedBatchAsync requires leased messages (LockedBy/LockedUntil non-null) — batch inputs must come from a single LeasePendingMessagesAsync result.");
+        foreach (var message in messages)
+        {
+            if (message is null)
+                throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
+            if (message.LockedBy != owner || message.LockedUntil != until)
+                throw new InvalidOperationException(
+                    "MarkProcessedBatchAsync requires a single-lease batch — all messages must share the same LockedBy/LockedUntil (mixed-lease batches are not supported).");
+        }
+
+        var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var total = 0;
+        // 按 RetryCount 分组（快照等值可下推单条 WHERE retry_count=@rc）+ 组内 400 行分块
+        foreach (var group in messages.GroupBy(static m => m.RetryCount))
+        {
+            var ids = group.Select(static m => m.Id).ToArray();
+            for (var start = 0; start < ids.Length; start += OutboxBatchMarkChunkRows)
+            {
+                var count = Math.Min(OutboxBatchMarkChunkRows, ids.Length - start);
+                var dp = new DynamicParameters();
+                dp.Add("at", ToTimeParam(processedAt));
+                dp.Add("rc", group.Key);
+                dp.Add("owner", owner);
+                dp.Add("until", ToTimeParam(until.Value));
+                var sb = new System.Text.StringBuilder(240 + count * 14)
+                    .Append(SqlTemplates.OutboxMarkProcessedBatchUpdate)
+                    .Append('(');
+                for (var i = 0; i < count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    var name = $"id{start + i}";
+                    sb.Append('@').Append(name);
+                    dp.Add(name, DapperAotInitializer.ToSqliteParameter(ids[start + i]));
+                }
+                sb.Append(") AND retry_count=@rc AND status=0 AND locked_by=@owner AND locked_until=@until");
+                total += await c.ExecuteAsync(sb.ToString(), dp, Tx).ConfigureAwait(false);
+            }
+        }
+
+        // 全命中才回写（部分拒绝时无法逐行定位被拒者，保守零回写——对齐接口契约）
+        if (total == messages.Count)
+        {
+            foreach (var message in messages)
+            {
+                message.Status = OutboxStatus.Processed;
+                message.ProcessedAt = processedAt;
+                message.Error = null;
+                message.NextAttemptAt = null;
+                message.LockedBy = null;
+                message.LockedUntil = null;
+            }
+        }
+        return total;
+    }
+
+    /// <summary>批量标记单语句组内行数上限——SQLite 参数上限 999（每行 1 参数 + 共享 4 参数）的防御分块。</summary>
+    private const int OutboxBatchMarkChunkRows = 400;
+
     public async ValueTask<int> RequeueDeadAsync(PalUlid messageId, DateTimeOffset nextAttemptAt, string retriedBy, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(retriedBy);
@@ -386,16 +485,6 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
 
     public ValueTask<int> SaveChangesAsync(CancellationToken ct) => ValueTask.FromResult(0);
 
-    /// <summary>
-    /// 确保数据库连接已打开（同步版本，用于同步方法路径）。
-    /// 连接生命周期由 DI 容器管理的 Scoped DbConnection 控制，此处不负责关闭。
-    /// </summary>
-    private DbConnection EnsureOpen()
-    {
-        var conn = _connection;
-        if (conn.State != ConnectionState.Open) conn.Open();
-        return conn;
-    }
 
     /// <summary>
     /// 确保数据库连接已打开（异步版本，避免线程池阻塞）。

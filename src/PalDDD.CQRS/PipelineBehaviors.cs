@@ -38,18 +38,63 @@ namespace PalDDD.CQRS;
 internal sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
 {
-    private readonly IEnumerable<Core.IPalValidator<TRequest>> _validators;
+    // EPSL 地毯审计 2026-10-16 B 批 #9：数组型字段——构造期一次物化（MS DI 多服务解析
+    // 常态返回 T[]，引用恒等转型零分配零拷贝；非数组形态回落单次 ToArray）。原接口型
+    // 字段 foreach 每请求经接口取枚举器（非空 validator 集实测 ~32B/请求；零 validator
+    // 常见场景 JIT 对空数组形态已消除故本就免费——探针实证）。与 Dispatcher.cs
+    // MaterializeBehaviors（R1/A-F1）同款先例。
+    private readonly Core.IPalValidator<TRequest>[] _validators;
 
     public ValidationBehavior(IEnumerable<Core.IPalValidator<TRequest>> validators)
     {
         ArgumentNullException.ThrowIfNull(validators); // v26 P3（ITM-284 对齐）：全仓构造守卫
-        _validators = validators;
+        _validators = validators as Core.IPalValidator<TRequest>[] ?? validators.ToArray();
     }
 
     public async ValueTask<TResponse> HandleAsync(TRequest request, CancellationToken ct, Func<ValueTask<TResponse>> next)
     {
+        var errors = PalValidatorRunner.Validate(_validators, request);
+        if (errors is { Count: > 0 })
+            throw new PalValidationException([.. errors]);
+
+        return await next().ConfigureAwait(false);
+    }
+
+    // R2（A-F2，2026-10-14 性能实施轮）：显式非泛型实现——内置行为经管道热路径时免 DIM 桥
+    // 的闭包+Func 两笔分配（PipelineBehavior.cs v25 勘正自认形态）。验证同步完成、next
+    // 直转发零额外分配；结果 object? 透传不转型（底部桥的箱对象原样上浮，Unit 链路免
+    // 拆箱-再装箱往返）。与泛型路径共用 Validate 核心，改动须双侧同步。
+    ValueTask<object?> IPipelineBehavior.HandleAsync(IBaseRequest request, CancellationToken ct, Func<ValueTask<object?>> next)
+    {
+        var errors = PalValidatorRunner.Validate(_validators, (TRequest)request);
+        if (errors is { Count: > 0 })
+            throw new PalValidationException([.. errors]);
+        return next();
+    }
+}
+
+/// <summary>
+/// 验证执行核心（ADR-030 D3 抽取）——<see cref="ValidationBehavior{TRequest, TResponse}"/>
+/// 泛型/非泛型两条路径与流式端点（MapStreamQuery）验证前置三处共用的单一出处。
+/// </summary>
+/// <remarks>
+/// 抽取动因：流式端点在 SSE 头写出前必须跑同一套验证（失败 400 且可回退状态码），
+/// 若在端点侧复写验证逻辑，「IsValid=false 且 Errors 为空时构造占位条目」语义
+/// （v25/v48 两轮勘正定案）会出现第二份定义并漂移。本类为 internal static——
+/// 经仓内 IVT 链（PalDDD.CQRS → PalDDD.Hosting.AspNetCore）对端点原语可见，
+/// 不进公共 API 快照。
+/// </remarks>
+internal static class PalValidatorRunner
+{
+    /// <summary>
+    /// 对 request 跑全部 validators；返回错误列表（无验证失败返回 null——调用方按
+    /// <c>errors is { Count: &gt; 0 }</c> 判定，无失败时零堆分配）。
+    /// </summary>
+    public static List<Core.PalValidationError>? Validate<TRequest>(
+        Core.IPalValidator<TRequest>[] validators, TRequest request)
+    {
         List<Core.PalValidationError>? errors = null;
-        foreach (var validator in _validators)
+        foreach (var validator in validators)
         {
             var result = validator.Validate(request);
             if (!result.IsValid)
@@ -71,11 +116,7 @@ internal sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavio
                     errors.AddRange(result.Errors);
             }
         }
-
-        if (errors is { Count: > 0 })
-            throw new PalValidationException([.. errors]);
-
-        return await next().ConfigureAwait(false);
+        return errors;
     }
 }
 
@@ -121,8 +162,49 @@ internal sealed class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<T
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // R1（A-F7）：失败分支补 IsEnabled 门——原 Error 插值
+            //（double 格式化 + 拼接）无条件分配，Error 级关闭/NullLogger 时纯浪费（对齐
+            // 上方两处 Debug 门的既有形态，语义等价：门内关闭时日志本就被丢弃）
+            if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Error))
+            {
+                var elapsed = _timeProvider.GetElapsedTime(start).TotalMilliseconds;
+                _logger.Error(ex, $"Request {typeof(TRequest).Name}: failed after {elapsed:F2}ms");
+            }
+            throw;
+        }
+    }
+
+    // R2（A-F2，2026-10-14 性能实施轮）：显式非泛型实现——免 DIM 桥闭包+Func 两笔分配。
+    // 耗时日志的 try/catch 需跨 await，落实例异步方法（logger/timeProvider 为 this 字段
+    // 直读、TRequest 为泛型常量——零闭包捕获；同步完成路径 async ValueTask 无挂起零分配）。
+    // 与泛型路径行为逐项对齐（dispatching 日志/计时/成功与失败日志门），改动须双侧同步。
+    ValueTask<object?> IPipelineBehavior.HandleAsync(IBaseRequest request, CancellationToken ct, Func<ValueTask<object?>> next)
+    {
+        if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
+            _logger.Debug($"Request {typeof(TRequest).Name}: dispatching");
+        return LogAndDispatchAsync(next);
+    }
+
+    private async ValueTask<object?> LogAndDispatchAsync(Func<ValueTask<object?>> next)
+    {
+        var start = _timeProvider.GetTimestamp();
+        try
+        {
+            var result = await next().ConfigureAwait(false);
             var elapsed = _timeProvider.GetElapsedTime(start).TotalMilliseconds;
-            _logger.Error(ex, $"Request {typeof(TRequest).Name}: failed after {elapsed:F2}ms");
+
+            if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug))
+                _logger.Debug($"Request {typeof(TRequest).Name}: completed in {elapsed:F2}ms");
+
+            return result;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (_logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Error))
+            {
+                var elapsed = _timeProvider.GetElapsedTime(start).TotalMilliseconds;
+                _logger.Error(ex, $"Request {typeof(TRequest).Name}: failed after {elapsed:F2}ms");
+            }
             throw;
         }
     }

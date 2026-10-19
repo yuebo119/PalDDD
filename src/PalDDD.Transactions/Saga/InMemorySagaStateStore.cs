@@ -12,11 +12,31 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
 {
     private readonly Lock _lock = new();
     private readonly Dictionary<PalUlid, TState> _states = [];
+    // EPSL 地毯审计 2026-10-16 B 批 #23：活跃索引导——GetActive/Lease 的扫描源。
+    // 原形态每 tick 全量扫 _states.Values（含终态），扫描成本随历史终态数无界增长
+    // （长跑原型真实劣化）。终态条目仍保留在 _states（GetByIdAsync 公开返回终态是
+    // 恢复链路/断言依赖的行为契约，清除会改可观测行为——审计记录的用户决策点），
+    // 扫描改走索引后 O(活跃)。成员不变量在 Add/SaveChangesAsync 两个受理点按落库
+    // 状态自纠（Active/AwaitingHumanDecision 在索引，其余不在），不依赖调用方守约。
+    private readonly HashSet<PalUlid> _activeIds = [];
     private readonly TimeProvider _timeProvider;
 
     /// <summary>构造内存存储（P3 修复：可选 clock 注入，默认 System——测试可冻结时间）。</summary>
     public InMemorySagaStateStore(TimeProvider? timeProvider = null)
         => _timeProvider = timeProvider ?? TimeProvider.System;
+
+    /// <summary>状态是否参与活跃扫描（与 GetActive/Lease 的谓词一致：Active + AWD）。</summary>
+    private static bool IsScannable(TState state)
+        => state.Status == SagaStatus.Active || state.Status == SagaStatus.AwaitingHumanDecision;
+
+    /// <summary>按落库状态自纠索引成员（lock 内调用）。</summary>
+    private void SyncActiveIndex(TState state)
+    {
+        if (IsScannable(state))
+            _activeIds.Add(state.SagaId);
+        else
+            _activeIds.Remove(state.SagaId);
+    }
 
     /// <inheritdoc/>
     /// <remarks>
@@ -37,11 +57,16 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
         {
             // 三十七轮 A3：对齐 LeaseActiveSagasAsync（:60）与 EFCore 姊妹（SagaStateDbContext）——
             // 观测查询与 Lease 同步纳入 AwaitingHumanDecision（HITL 中断态超时兜底扫描依赖此查询）
-            var active = _states.Values
-                .Where(static s => s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision)
-                .OrderBy(s => s.CreatedAt)
-                .Take(batchSize)
-                .ToList();
+            // B23：扫描走活跃索引（O(活跃)）——语义与原全量扫 + 状态谓词等价
+            var active = new List<TState>(Math.Min(batchSize, _activeIds.Count));
+            foreach (var id in _activeIds)
+            {
+                if (_states.TryGetValue(id, out var state))
+                    active.Add(state);
+            }
+            active.Sort(static (a, b) => a.CreatedAt.CompareTo(b.CreatedAt));
+            if (active.Count > batchSize)
+                active.RemoveRange(batchSize, active.Count - batchSize);
             return ValueTask.FromResult<IReadOnlyList<TState>>(active);
         }
     }
@@ -65,22 +90,24 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
         var leasedUntil = now.Add(leaseDuration);
         lock (_lock)
         {
-            // 三十四轮（中断态超时兜底）：扫描集扩 AwaitingHumanDecision——中断态 Saga
-            // 配置了步骤 Timeout 且超期时由 SagaTimeoutProcessor.IsTimedOut 门控补偿；
-            // v43 勘正：原声明"未配置 Timeout 则 IsTimedOut 恒 false"在残留时间戳下
-            // 不成立（v43 P2 已补已成功完成排除判据）——中断态（未配 Timeout 的
-            // InterruptStep）现在确实不会被已成功步骤的残留时间戳触发兜底补偿。
-            // v44 P3 饿死边界：OrderBy(CreatedAt).Take(batchSize) 固定排序下，无 Timeout
-            // 的滞留 AWD saga 永不离场（非超时分支仅清租约）——积压 ≥ batchSize 时排在
-            // 其后的 saga（含待超时补偿者）每轮取不到名额，超时兜底饿死；生产栈
-            // （EFCore/Dapper/PalORM）NextAttemptAt 过滤不占名额无此问题，本栈定位
-            // 测试/原型，接受该边界不修
-            var active = _states.Values
-                .Where(s => (s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision)
-                    && (s.LeasedUntil is null || s.LeasedUntil <= now))
-                .OrderBy(s => s.CreatedAt)
-                .Take(batchSize)
-                .ToList();
+            // B23：扫描走活跃索引（O(活跃)）——语义与原全量扫 + 状态谓词等价
+            // （索引成员即谓词为真的集合，Add/SaveChanges 受理点自纠维持）。
+            // v44 P3 饿死边界（行为不变，声明保留）：CreatedAt 固定排序 + Take(batchSize) 下，
+            // 无 Timeout 的滞留 AWD saga 永不离场（非超时分支仅清租约）——积压 ≥ batchSize
+            // 时排在其后的 saga 每轮取不到名额；生产栈 NextAttemptAt 过滤不占名额无此问题，
+            // 本栈定位测试/原型，接受该边界不修。
+            var active = new List<TState>(Math.Min(batchSize, _activeIds.Count));
+            foreach (var id in _activeIds)
+            {
+                if (!_states.TryGetValue(id, out var state))
+                    continue; // 索引残留防御（正常不可达——移除与落库同帧发生）
+                if (state.LeasedUntil is not null && state.LeasedUntil > now)
+                    continue;
+                active.Add(state);
+            }
+            active.Sort(static (a, b) => a.CreatedAt.CompareTo(b.CreatedAt));
+            if (active.Count > batchSize)
+                active.RemoveRange(batchSize, active.Count - batchSize); // 等价原 OrderBy().Take(batchSize) 语义
 
             // v25 P3 行为族 B1：successor 替换——对齐 InMemoryOutboxStore 的 ITM-174 模式。
             // 原实现原地直写字典条目（调用方与存储共享同一引用）：worker A 租约到期后
@@ -124,7 +151,11 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
     public void Add(TState state)
     {
         ArgumentNullException.ThrowIfNull(state);
-        lock (_lock) { _states[state.SagaId] = state; }
+        lock (_lock)
+        {
+            _states[state.SagaId] = state;
+            SyncActiveIndex(state); // B23：初始状态入索引（终态添加不参与扫描，与原谓词一致）
+        }
     }
 
     /// <inheritdoc/>
@@ -152,6 +183,7 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
                 return ValueTask.FromResult(0);
             state.Version++;
             _states[state.SagaId] = state;
+            SyncActiveIndex(state); // B23：落库状态转移是索引成员唯一权威时点（如 Completed 出索引）
             return ValueTask.FromResult(1);
         }
     }

@@ -54,22 +54,53 @@ public abstract class InboxDbContext(
         // 口径不变：仅禁负值。
         if (processingTimeout < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
-        var record = await InboxMessages.SingleOrDefaultAsync(
-            x => x.ConsumerName == consumerName && x.MessageId == messageId, ct).ConfigureAwait(false);
-
-        if (record is null)
+        // A9（S1 轮，2026-10-15）：直插优先——删除预 SELECT，新消息路径由 2 往返
+        // （SELECT miss + INSERT）降为 1（INSERT），与 Dapper/PalORM 两栈的 insert-first
+        // 形态对齐（EF 原为三栈唯一预查形态；回查即原预 SELECT 的职责，仅在冲突路径执行）。
+        // 仅关系型 provider 生效：(ConsumerName,MessageId) 唯一约束的强制是关系型保证，
+        // InMemory 等无唯一约束的 provider 保持预 SELECT 路径（否则重复投递静默建第二行，
+        // 幂等失效——InboxEfCoreTests 的活跃租约复投用例实证该边界）。
+        // 权衡声明（按首投/重投比定量）：重复投递路径由 1 往返（预查命中即返回）变为
+        // INSERT 失败 + 回查（2 起）——典型 at-least-once 重投率（<5%）下净胜，重投率
+        // >50% 时净负；另 Id 为自增主键，重复投递的失败 INSERT 在身份列上烧号（间隙无害，
+        // 与 Dapper/PalORM 两栈既有成本一致）。幂等语义不变：唯一约束仍是唯一仲裁者。
+        InboxMessage CreateFresh() => new()
         {
-            record = new InboxMessage
-            {
-                ConsumerName = consumerName,
-                MessageId = messageId,
-                Status = InboxStatus.Processing,
-                Attempts = 1,
-                ReceivedAt = now,
-                ProcessingStartedAt = now
-            };
-            InboxMessages.Add(record);
+            ConsumerName = consumerName,
+            MessageId = messageId,
+            Status = InboxStatus.Processing,
+            Attempts = 1,
+            ReceivedAt = now,
+            ProcessingStartedAt = now
+        };
 
+        // 关系型直插优先（唯一约束即幂等仲裁者，省预查往返）；非关系型（InMemory 测试栈，
+        // 无唯一约束强制）保持预 SELECT 判存在。两者的插入与冲突处理收口下方同一代码，
+        // 差异仅在「是否需要插入」的判定。
+        InboxMessage? record;
+        var needsInsert = true;
+        if (Database.IsRelational())
+        {
+            record = CreateFresh();
+            InboxMessages.Add(record);
+        }
+        else
+        {
+            record = await InboxMessages.AsNoTracking().SingleOrDefaultAsync(
+                x => x.ConsumerName == consumerName && x.MessageId == messageId, ct).ConfigureAwait(false);
+            if (record is null)
+            {
+                record = CreateFresh();
+                InboxMessages.Add(record);
+            }
+            else
+            {
+                needsInsert = false;
+            }
+        }
+
+        if (needsInsert)
+        {
             try
             {
                 await SaveChangesAsync(ct).ConfigureAwait(false);
@@ -98,7 +129,7 @@ public abstract class InboxDbContext(
                 var requerySucceeded = false;
                 try
                 {
-                    record = await InboxMessages.SingleOrDefaultAsync(
+                    record = await InboxMessages.AsNoTracking().SingleOrDefaultAsync(
                         x => x.ConsumerName == consumerName && x.MessageId == messageId, ct).ConfigureAwait(false);
                     requerySucceeded = true;
                 }

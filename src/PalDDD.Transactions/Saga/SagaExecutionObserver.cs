@@ -12,6 +12,7 @@
 //   ｜ 事件类型为 readonly record struct（零分配、值语义）。
 // ─────────────────────────────────────────────────────────────
 
+using System.Runtime.InteropServices;
 using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions;
@@ -139,4 +140,5 @@ public readonly record struct SagaStepFailed(PalUlid SagaId, string StepKey, str
 public readonly record struct SagaCompensationStarted(PalUlid SagaId, string StepKey);
 
 /// <summary>Saga 状态变更事件。</summary>
+[StructLayout(LayoutKind.Auto)]
 public readonly record struct SagaStatusChanged(PalUlid SagaId, SagaStatus OldStatus, SagaStatus NewStatus);

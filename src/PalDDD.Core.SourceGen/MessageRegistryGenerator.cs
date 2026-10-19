@@ -222,19 +222,32 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
 
             // v60 P3：同类型异名双注册拦截——同一类型多 partial 挂不同 Name 时
             // GroupBy(Name) 只拦同名，异名双注册使一类型两个 wire name 无诊断
-            var duplicateTypeNames = new HashSet<string>(
-                validMessages.GroupBy(static m => m.TypeName, StringComparer.Ordinal)
-                    .Where(static g => g.Count() > 1)
-                    .Select(static g => g.Key),
-                StringComparer.Ordinal);
-            foreach (var typeGroup in validMessages.GroupBy(static m => m.TypeName, StringComparer.Ordinal))
+            // A15（S1 轮，2026-10-15）：同键双 GroupBy 收口单遍字典——原
+            // duplicateTypeNames 与同类型异名诊断各做一次 GroupBy(TypeName)（同键相邻
+            // 两趟，各建查找 + 分组列表）；单遍 Dictionary 分组后同轮完成两件，语义
+            // 逐字保持（Ordinal 比较、RemoveAll 时机、v62 措辞分措不变）。Name 维度的
+            // GroupBy 保留（跑在 RemoveAll 后的较小集合上，且 GroupBy 的键序保证优于
+            // 字典枚举——诊断顺序零漂移）。
+            var byTypeName = new Dictionary<string, List<MessageInfo>>(StringComparer.Ordinal);
+            foreach (var m in validMessages)
             {
-                if (typeGroup.Count() < 2) continue;
+                if (!byTypeName.TryGetValue(m.TypeName, out var typeGroup))
+                    byTypeName[m.TypeName] = typeGroup = [];
+                typeGroup.Add(m);
+            }
+
+            var duplicateTypeNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var pair in byTypeName)
+            {
+                var typeName = pair.Key;
+                var typeGroup = pair.Value;
+                if (typeGroup.Count < 2) continue;
+                duplicateTypeNames.Add(typeName);
                 // v62 P3：同名/异名分措辞（原硬编码 "different names" 在同名双挂场景失实）
                 var sameName = typeGroup.Select(static m => m.Name).Distinct(StringComparer.Ordinal).Count() == 1;
                 var suffix = sameName
-                    ? $" (type '{typeGroup.Key}' has duplicate [GenerateMessage] declarations)"
-                    : $" (type '{typeGroup.Key}' has multiple [GenerateMessage] declarations with different names)";
+                    ? $" (type '{typeName}' has duplicate [GenerateMessage] declarations)"
+                    : $" (type '{typeName}' has multiple [GenerateMessage] declarations with different names)";
                 foreach (var dup in typeGroup)
                     spc.ReportDiagnostic(Diagnostic.Create(
                         DuplicateMessageName,

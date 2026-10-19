@@ -100,7 +100,29 @@ public sealed class ProjectionRebuilder<TMessage>
         var completed = false;
         try
         {
-            await foreach (var replayEvent in _replaySource.ReadAsync(_sourceName, ct).ConfigureAwait(false))
+            // R6/P0-3（ADR-028，2026-10-14 性能实施轮）：增量回放高水位续读——store 与
+            // 回放源双双支持续读能力时，取检查点续读位置（最小未完成洞位 / max+1 / null），
+            // 从该位置下推读取：已完成前缀零重读、零逐事件 checkpoint 探查（原形态每次
+            // 增量回放 O(全流长度) 全量物化）。任一侧不支持或续读位置不可解析 → 全量路径
+            //（RebuildAsync 先 Reset 使续读查询返回 null，天然走全量——零特判）。
+            IAsyncEnumerable<ReplayEvent<TMessage>> stream;
+            if (_checkpointStore is IResumableProjectionCheckpointStore resumableStore
+                && _replaySource is IResumableEventReplaySource<TMessage> resumableSource)
+            {
+                var resume = await resumableStore.GetResumePositionAsync(_projectionName, _sourceName, ct)
+                    .ConfigureAwait(false);
+                stream = resume is not null
+                    && long.TryParse(resume, System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture, out var fromPosition)
+                    ? resumableSource.ReadAsync(_sourceName, fromPosition, ct)
+                    : resumableSource.ReadAsync(_sourceName, ct);
+            }
+            else
+            {
+                stream = _replaySource.ReadAsync(_sourceName, ct);
+            }
+
+            await foreach (var replayEvent in stream.ConfigureAwait(false))
             {
                 ct.ThrowIfCancellationRequested();
 

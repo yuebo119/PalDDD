@@ -106,7 +106,7 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
             // s_all 保持 null，异常形态与直接访问一致（且缓存写入必然发生在注册之后）
             var snapshot = Dictionary.Values.ToArray();
             Interlocked.CompareExchange(ref s_all, snapshot, null);
-            return Volatile.Read(ref s_all)!;
+            return Volatile.Read(ref s_all);
         }
     }
 
@@ -154,7 +154,8 @@ public abstract class SmartEnum<TSelf, TValue> : IEquatable<TSelf>
         {
             // v62 P3：序列元素 null 守卫（镜像 CompressionProvider v53——裸 NRE 无指向性；
             // 生成器 emit 路径不产出 null，仅手写注册误用可达）
-            ArgumentNullException.ThrowIfNull(item);
+            if (item is null)
+                throw new ArgumentNullException(nameof(values), "The values collection contains a null element.");
             // ITM-101 修复：重复 Value 抛明确异常——原 `dict[item.Value] = item` 静默
             // 后者覆盖（最后注册者胜），数据错误（两个枚举项同值）被掩盖，FromValue 的
             // 反查结果取决于注册顺序，不可预测。契约文档未声明"后者覆盖"，故显式化；

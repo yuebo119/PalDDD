@@ -71,6 +71,18 @@ public static class SqlTemplates
         "UPDATE outbox_messages SET status=1,processed_at=@at,error=NULL,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND retry_count=@retryCount AND status=0 AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))";
 
     /// <summary>
+    /// 批量标记已处理——UPDATE 子句前缀（R4/P0-2，ADR-027，2026-10-14 性能实施轮）。
+    /// 调用方（DapperOutboxStore.MarkProcessedBatchAsync）按 RetryCount 分组拼接：
+    /// <c>... WHERE id IN (@id0,@id1,…) AND retry_count=@rc AND status=0 AND locked_by=@owner AND locked_until=@until</c>
+    /// ——fencing 守卫与 <see cref="OutboxMarkProcessed"/> 逐条形态
+    /// 逐字等价（(id, retry_count) 快照 + (owner, until) 租约 token + status 终态守卫），
+    /// SET 子句六字段与 <see cref="OutboxMarkProcessed"/> 一致（共享本常量前缀防漂移）。
+    /// 组内行数上限 400（SQLite 参数上限 999 防御，实现内分块）。
+    /// </summary>
+    public const string OutboxMarkProcessedBatchUpdate =
+        "UPDATE outbox_messages SET status=1,processed_at=@at,error=NULL,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id IN ";
+
+    /// <summary>
     /// 标记消息为"死信"。<br/>
     /// 💡 死信意味着消息不可恢复——需要人工介入。<br/>
     /// 三十四轮 ITM-210 token 化：同 <see cref="OutboxMarkProcessed"/> 的租约 token 守卫。<br/>
@@ -173,6 +185,22 @@ public static class SqlTemplates
         + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
         + " AND (locked_until IS NULL OR locked_until<=@now)"
         + " ORDER BY created_at LIMIT @n)";
+
+    /// <summary>
+    /// A12（S1 轮，2026-10-15）：SQLite 单语句原子租约——<see cref="OutboxLeaseUpdateSqlite"/>
+    /// 加 RETURNING *（Microsoft.Data.Sqlite 支持 UPDATE..RETURNING，3.35+；仓内 EventLog
+    /// InsertSqlite 单行 RETURNING 与 PalORM SQLite 租约同形态均在用）。相对两步形态
+    /// （UPDATE + <see cref="OutboxSelectByLease"/> 回读）：省回读往返，且按行锁语义返回
+    /// 刚锁定行——<see cref="OutboxSelectByLease"/> 注释中 ITM-109 的同 tick 混批窗口
+    /// （回读按 (locked_by, locked_until) 匹配会带回上一批遗留行）在此形态下不存在，
+    /// 与 PG 路径同语义。列集与 SELECT * 一致（Dapper 映射 OutboxMessage 同形）。
+    /// </summary>
+    public const string OutboxLeaseUpdateSqliteReturning =
+        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN "
+        + "(SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
+        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
+        + " AND (locked_until IS NULL OR locked_until<=@now)"
+        + " ORDER BY created_at LIMIT @n) RETURNING *";
 
     /// <summary>按 ID 批量查询（用于 PG RETURNING * 替代路径）。
     /// ⚠️ 三十八轮 P3 标注：当前无内部引用（二十五轮常量化残留）；框架库公共 const 面向外部
@@ -320,6 +348,27 @@ public static class SqlTemplates
     public const string SagaLeaseActivePG =
         // v53 P2：租约即换代（version=version+1），见 SagaLeaseActive 注释
         "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)";
+
+    /// <summary>
+    /// PG 专用 Saga 租约获取（RETURNING 单语句形态，EPSL 地毯审计 2026-10-16 B 批 #3）——
+    /// <see cref="SagaLeaseActivePG"/> + <c>RETURNING *</c>：UPDATE 与回读收为一次往返，
+    /// 且按行锁语义返回刚锁定行（子查询 FOR UPDATE SKIP LOCKED 保证 RETURNING 行集恰好等于
+    /// 本 worker 租到的批次），两步回读的 (leased_by, leased_until) 同 tick 混批窗口
+    /// （三十八轮 P3 声明，ITM-109 同族）在此形态下不存在。回读的 status IN (0,5) 守卫
+    /// （ITM-134）由子查询谓词隐含满足，语义不减。镜像 <see cref="OutboxLeaseUpdatePG"/> 先例。
+    /// </summary>
+    public const string SagaLeaseActivePGReturning =
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
+
+    /// <summary>
+    /// SQLite 专用 Saga 租约获取（RETURNING 单语句形态，B 批 #3）——<see cref="SagaLeaseActive"/>
+    /// + <c>RETURNING *</c>：Microsoft.Data.Sqlite 支持同一引擎能力（3.35+，仓内
+    /// OutboxLeaseUpdateSqliteReturning 与 InsertSqlite 单行 RETURNING 均在用）。SQLite 单写者
+    /// （库级串行）无并发抢占，混批窗口本就不可达；本形态收益是省一次回读往返并与 PG 路径
+    /// 形态对齐（SQLite 是双栈里的漏格）。
+    /// </summary>
+    public const string SagaLeaseActiveSqliteReturning =
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) RETURNING *";
 
     /// <summary>
     /// MySQL 专用 Saga 租约获取 — JOIN 形态。<br/>

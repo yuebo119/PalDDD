@@ -3,7 +3,7 @@
 // 由 .ai/scripts/verify-ai-system.sh（447 行）等价迁移为 C#（dotnet file-based app）。
 //
 // 用法：dotnet run scripts/verify-ai.cs
-// 退出码：0=27 项全过；1=任一失败；2=仓库根定位失败。
+// 退出码：0=全部检查通过；1=任一失败；2=仓库根定位失败。
 //
 // 23 项检查与原 bash 逐项对应：
 //   V1 引擎/双 profile/工具提示词齐全          V13 lessons 含 SPD 系列 + 误判防治
@@ -24,6 +24,8 @@
 //   V27 test spec 声明==实测（README 四系统表 T/T-DDD 区间 vs prompt 实测 + lessons I 章铁律计数）
 //   V28 .ai/scripts/*.sh pipefail 强制（防新 .sh 缺 pipefail 被管道吞码）
 //   V29 复发根因未闭环督办（WARN 级——metrics 复发根因表状态非 ✅ 行输出督办清单，不拦截）
+//   V30 知识层锚点对账（ADR/边界测试规模/快照程序集与路径/根脚本数/V 上限 == 运行时实测；
+//       2026-10-18 审计实证：22 行活文档锚点在 V1-V29 全绿下过期 26 天，同族第 2 次复发）
 //
 // 迁移说明：
 //   1) 输出格式与原 bash 逐行一致（双跑归一时间行后 diff 验证）；FAIL 详情中
@@ -38,7 +40,8 @@
 //   5) ITM-664 已清偿（v87）：--selftest 红绿矩阵（V17 单调/乱序/同日 ·
 //      V19 定标/超期/UNKNOWN/非法日期 · V21 老化/豁免 · V22 唯一/跨章重复/ITM 豁免 ·
 //      V2 缺失/空绿 · V26 版本一致/漂移可达 · V27 声明==实测/双漂移检出 ·
-//      V29 全闭环/未闭环检出——ST-V27b 首跑抓出标题行恒漏提取的真 bug，红例即战果）。
+//      V29 全闭环/未闭环检出——ST-V27b 首跑抓出标题行恒漏提取的真 bug，红例即战果 ·
+//      V30 临时仓库夹具红绿矩阵（陈旧锚点必红/历史标记豁免/修正后全绿））。
 //      V28 判定为单行 Contains + 目录枚举，无独立纯函数，自测面由变异验证承担
 //      （注入无 pipefail 的 .sh → 跑 → 必红）。
 //      改 V 项逻辑时须同步改自测。
@@ -70,9 +73,13 @@ if (args.Contains("--selftest", StringComparer.Ordinal))
 var root = FindRepoRoot();
 Environment.CurrentDirectory = root;
 
+// V30 的单一事实源：新增 V 项只改这一处，标题/对账/文档声明同步跟随。
+// （此前标题与多处 prose 各自手写 V1-VN，V26-V29 加入后 5 处文档停在 V24。）
+const int MaxV = 30;
+
 var lines = new List<string>
 {
-    "═══════ .ai 系统一致性校验（Pal.DDD · V1-V29）═══════",
+    $"═══════ .ai 系统一致性校验（Pal.DDD · V1-V{MaxV}）═══════",
     $"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}",
     "",
 };
@@ -316,12 +323,19 @@ var warned = 0; // WARN 级（V29 督办）：计入显示不计入失败——�
     // 两种书写形态（小数 0.70 与百分比 70%）统一归一为小数后比对。
     var docThreshold = Regex.Match(gateText, @"(?:阈值|threshold|取整)\s*[：:]?\s*(0\.\d+)", RegexOptions.IgnoreCase);
     var docPercent = Regex.Match(gateText, @"不低于\s*(\d+)\s*%", RegexOptions.IgnoreCase);
-    // ci-coverage.cs 的默认阈值（COVERAGE_THRESHOLD 环境变量缺省值）
+    // ci-coverage.cs 的默认阈值：2026-10-19 起为双口径
+    // `localProfile ? "0.65" : "0.70"`，V14 比对 CI 默认（文档 §门禁阈值 属于 CI 口径）。
+    var coverageScript = TryReadText("scripts/ci-coverage.cs");
     var gateThreshold = Regex.Match(
-        TryReadText("scripts/ci-coverage.cs"),
-        @"COVERAGE_THRESHOLD[^\n]*?(?:默认|default)\s*(0\.\d+)", RegexOptions.IgnoreCase);
+        coverageScript,
+        @"localProfile\s*\?\s*""0\.\d+""\s*:\s*""(0\.\d+)""",
+        RegexOptions.IgnoreCase);
     if (!gateThreshold.Success)
-        gateThreshold = Regex.Match(TryReadText("scripts/ci-coverage.cs"), @"threshold\s*[=:]\s*(0\.\d+)", RegexOptions.IgnoreCase);
+        gateThreshold = Regex.Match(
+            coverageScript,
+            @"COVERAGE_THRESHOLD[^\n]*?(?:默认|default)\s*(0\.\d+)", RegexOptions.IgnoreCase);
+    if (!gateThreshold.Success)
+        gateThreshold = Regex.Match(coverageScript, @"threshold\s*[=:]\s*(0\.\d+)", RegexOptions.IgnoreCase);
 
     var hasLineRate = Regex.IsMatch(text, "[0-9]+\\.[0-9]+%");
     // 归一化：百分比形态（如 "70"）转小数（0.70），小数形态原样
@@ -670,6 +684,28 @@ var warned = 0; // WARN 级（V29 督办）：计入显示不计入失败——�
     else
     {
         warned++; lines.Add($"WARN V29: 复发根因未闭环 {openItems.Count} 族督办（{string.Join("；", openItems)}）——补机械载体或更新状态附依据");
+    }
+}
+
+// ─── V30 知识层锚点对账（2026-10-18 审计驱动新增）───
+// **为什么有这个门禁**：2026-09-21 审计的 F-09/G-08 已手工校准过同一批数字
+//（边界测试 37、根脚本 32、ADR 24），26 天后又分别漂到 44/40/31，而 V1-V29 全绿。
+// 根因是这些计数只存在于 prose，推导真源在源码/文件系统，二者之间没有对账。
+// 本项把「文档写了就必须等于运行时推导」固化，与 count-audit 的主仓 16 项同构；
+// 区别是扫描面为 .ai 活文档 + AGENTS.md（count-audit 不覆盖 .ai）。
+// 排除：history/、历史账本/快照类文件、行内带时点标记的历史陈述。
+{
+    var v30Bad = CheckAnchorClaims(root, MaxV);
+    if (v30Bad.Count == 0)
+    {
+        passed++; lines.Add("PASS V30: 知识层锚点对账一致（ADR/边界测试/快照程序集与路径/根脚本数/V 上限）");
+    }
+    else
+    {
+        var v30Shown = v30Bad.Count > 40
+            ? string.Join("；", v30Bad.Take(40)) + $"；…等 {v30Bad.Count} 处"
+            : string.Join("；", v30Bad);
+        failed++; lines.Add($"FAIL V30: 知识层锚点漂移 {v30Bad.Count} 处（{v30Shown}）——文档声明必须等于运行时推导");
     }
 }
 
@@ -1320,6 +1356,155 @@ static List<string> CheckRecurrenceOpenItems(string[] metricsLines)
     return open;
 }
 
+// V30 核心：活文档锚点对账。真值全部运行时推导，不建第二台账。
+// 扫描面为 .ai 活文档 + 主仓 AGENTS.md；count-audit 管主仓 README/docs 的 16 项，
+// 两者分工明确，不重复定义同一事实（ADR/断言数在 count-audit 已有，本项只覆盖
+// count-audit 不扫的 .ai 与 AGENTS.md）。
+static List<string> CheckAnchorClaims(string repoRoot, int maxV)
+{
+    var bad = new List<string>();
+    var inv = System.Globalization.CultureInfo.InvariantCulture;
+
+    var adr = Directory.Exists(Path.Combine(repoRoot, "docs", "decisions"))
+        ? Directory.GetFiles(Path.Combine(repoRoot, "docs", "decisions"), "*.md")
+            .Count(f => Regex.IsMatch(Path.GetFileName(f), @"^\d{3}-", RegexOptions.CultureInvariant))
+        : 0;
+    var scripts = Directory.Exists(Path.Combine(repoRoot, "scripts"))
+        ? Directory.GetFiles(Path.Combine(repoRoot, "scripts"), "*.cs").Length
+        : 0;
+
+    var boundaryFiles = Directory.Exists(Path.Combine(repoRoot, "test"))
+        ? Directory.GetFiles(Path.Combine(repoRoot, "test"), "ArchitectureBoundaryTests.cs", SearchOption.AllDirectories)
+        : [];
+    if (boundaryFiles.Length > 1) bad.Add($"ArchitectureBoundaryTests.cs 不唯一（{boundaryFiles.Length} 个）");
+    var boundaryText = boundaryFiles.Length > 0 ? TryReadText(boundaryFiles[0]) : "";
+    var methods = CountTestMethods(boundaryText);
+    var asserts = Regex.Count(boundaryText, @"await\s+Assert\.That");
+
+    var snapshotFiles = Directory.Exists(Path.Combine(repoRoot, "test"))
+        ? Directory.GetFiles(Path.Combine(repoRoot, "test"), "PublicApiSnapshotTests.cs", SearchOption.AllDirectories)
+        : [];
+    if (snapshotFiles.Length > 1) bad.Add($"PublicApiSnapshotTests.cs 不唯一（{snapshotFiles.Length} 个）");
+    var snapshotTest = snapshotFiles.Length > 0 ? snapshotFiles[0] : null;
+    var snapshotRel = snapshotTest is null ? "" : Path.GetRelativePath(repoRoot, snapshotTest).Replace('\\', '/');
+    var snapshotFile = snapshotTest is null
+        ? null
+        : Path.Combine(Path.GetDirectoryName(snapshotTest)!, "Snapshots", "core-packages-public-api.txt");
+    var assemblies = snapshotFile is not null && File.Exists(snapshotFile)
+        ? File.ReadAllLines(snapshotFile).Count(l => l.StartsWith("# ", StringComparison.Ordinal))
+        : 0;
+
+    if (adr == 0 || scripts == 0 || methods == 0 || asserts == 0 || assemblies == 0 || snapshotRel.Length == 0)
+    {
+        bad.Add($"推导失败（ADR={adr} scripts={scripts} methods={methods} asserts={asserts} assemblies={assemblies} snapshot={snapshotRel}）——fail-closed");
+        return bad;
+    }
+
+    string[] files =
+    [
+        ".ai/README.md", ".ai/lessons.md", ".ai/gate/prompt.md", ".ai/gate/sensor-ledger.md",
+        ".ai/review/prompt.md", ".ai/review/engine.md", ".ai/review/review-charter-v2.md",
+        ".ai/test/prompt.md", ".ai/refine/prompt.md", "AGENTS.md",
+    ];
+
+    foreach (var rel in files)
+    {
+        var text = TryReadText(Path.Combine(repoRoot, rel));
+        if (text.Length == 0) continue;
+        var docLines = text.Split('\n');
+        for (var i = 0; i < docLines.Length; i++)
+        {
+            var line = docLines[i].TrimEnd('\r');
+            if (IsHistoricalAnchorLine(line)) continue;
+
+            void Check(string pattern, int truth, string label)
+            {
+                foreach (Match m in Regex.Matches(line, pattern, RegexOptions.CultureInvariant))
+                {
+                    if (!int.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.Integer, inv, out var value)) continue;
+                    if (value != truth) bad.Add($"{rel}:{i + 1} {label} 声明 {value} vs 实测 {truth}");
+                }
+            }
+
+            if (line.Contains("ADR", StringComparison.Ordinal))
+            {
+                Check(@"(?<![\d.])ADR\s*001-(\d{3})", adr, "ADR 区间上限");
+                Check(@"(?<![\d.])(\d+)\s*份\s*ADR", adr, "ADR 数量");
+                Check(@"(?<![\d.])(\d+)\s*个\s*ADR", adr, "ADR 数量");
+                Check(@"现行\s*(\d+)\s*(?:份\s*)?[)）]", adr, "ADR 现行数");
+                Check(@"当前\s*(\d+)\s*个", adr, "ADR 当前数");
+            }
+
+            Check(@"(?<![\d.])(\d+)\s*测试方法", methods, "边界测试方法数");
+            Check(@"(?<![\d.])(\d+)\s*断言点", asserts, "边界断言点数");
+
+            if (line.Contains("PublicApiSnapshot", StringComparison.Ordinal)
+                || line.Contains("公共 API 快照", StringComparison.Ordinal)
+                || line.Contains("公共 API 面", StringComparison.Ordinal))
+            {
+                Check(@"(?<![\d.])(\d+)\s*程序集", assemblies, "快照程序集数");
+                foreach (Match m in Regex.Matches(line, "`([^`]*PublicApiSnapshotTests\\.cs)`"))
+                {
+                    var claimed = m.Groups[1].Value.Replace('\\', '/');
+                    if (claimed.Contains('…', StringComparison.Ordinal)) continue;
+                    if (!string.Equals(claimed, snapshotRel, StringComparison.Ordinal))
+                        bad.Add($"{rel}:{i + 1} 快照测试路径 {claimed} vs 实测 {snapshotRel}");
+                }
+            }
+
+            if (line.Contains("file-based app", StringComparison.Ordinal))
+                Check(@"(?<![\d.])(\d+)\s*个\s*\.cs", scripts, "根脚本数");
+
+            Check(@"(?<![\d.])V1[-–]V(\d+)", maxV, "verify-ai 版本上限");
+            if (line.Contains("AI 系统完整性", StringComparison.Ordinal))
+                Check(@"(?<![\d.])(\d+)\s*项", maxV, "verify-ai 检查项数");
+        }
+    }
+
+    return bad;
+}
+
+// V30 附属：边界测试方法数。只数行首 `[Test]` 特性，跳过注释行与 raw string 块——
+// 2026-10-18 审计实测：朴素 `grep -c "[Test]"` 得 44，其中 4 处是注释、3 处是
+// ArchitectureBoundaryTests 自身的坏样本字符串；真实方法数 37（与文档一致）。
+// 这是「文本 grep 假阳性」的又一实证，方法数必须用行锚 + 字符串状态机。
+static int CountTestMethods(string source)
+{
+    var count = 0;
+    var inRaw = false;
+    foreach (var raw in source.Split('\n'))
+    {
+        var line = raw.TrimEnd('\r');
+        var trimmed = line.TrimStart();
+        var quotePairs = Regex.Count(line, "\"\"\"");
+        if (inRaw)
+        {
+            // raw string 内：行尾出现奇数次 """ 即闭合（闭合行本身不是特性行）
+            if (quotePairs % 2 == 1) inRaw = false;
+            continue;
+        }
+        if (quotePairs > 0)
+        {
+            // raw string 起始行（`const string x = """` 形态）——同行闭合则奇偶抵消
+            if (quotePairs % 2 == 1) inRaw = true;
+            continue;
+        }
+        if (trimmed.StartsWith("//", StringComparison.Ordinal)) continue;
+        if (trimmed.StartsWith("[Test]", StringComparison.Ordinal)) count++;
+    }
+    return count;
+}
+
+// V30 历史豁免：时点快照/历史账本/勘正说明里的数字描述当时事实，不复核。
+// 判据只认显式措辞；普通活文档行不得含这些词，否则会静默逃逸。
+static bool IsHistoricalAnchorLine(string line) =>
+    line.Contains("时点", StringComparison.Ordinal)
+    || line.Contains("历史口径", StringComparison.Ordinal)
+    || line.Contains("当时", StringComparison.Ordinal)
+    || line.Contains("截至", StringComparison.Ordinal)
+    || line.Contains("勘正", StringComparison.Ordinal)
+    || line.Contains("原写", StringComparison.Ordinal);
+
 // ─── ITM-664 自测：红绿矩阵（不触达真实仓库文件——纯合成输入）───
 // 退出码：0=全部通过（绿例过 + 红例必红）；1=任一用例失败（仪器失灵，禁止信任其输出）。
 static int RunSelftest()
@@ -1563,6 +1748,58 @@ static int RunSelftest()
     if (v29Open.Count == 1 && v29Open[0].Contains("修复自激振荡"))
         Console.WriteLine("PASS ST-V29b ⚠️ 未闭环族检出督办（✅ 行不进清单）");
     else failures.Add($"ST-V29b: {string.Join("；", v29Open)}");
+
+    // ── V30 锚点对账（临时仓库夹具：陈旧锚点必红 / 时点标记豁免 / 修正后全绿）──
+    var v30Dir = Path.Combine(Path.GetTempPath(), "verify-ai-v30-" + Guid.NewGuid().ToString("N")[..8]);
+    try
+    {
+        Directory.CreateDirectory(Path.Combine(v30Dir, "docs", "decisions"));
+        Directory.CreateDirectory(Path.Combine(v30Dir, "scripts"));
+        Directory.CreateDirectory(Path.Combine(v30Dir, "test", "X", "Snapshots"));
+        Directory.CreateDirectory(Path.Combine(v30Dir, ".ai"));
+        File.WriteAllText(Path.Combine(v30Dir, "docs", "decisions", "001-a.md"), "# ADR\n");
+        File.WriteAllText(Path.Combine(v30Dir, "scripts", "a.cs"), "// script\n");
+        File.WriteAllText(Path.Combine(v30Dir, "test", "X", "ArchitectureBoundaryTests.cs"),
+            "[Test]\npublic void A() { await Assert.That(1); }\n[Test]\npublic void B() { await Assert.That(2); }\n");
+        File.WriteAllText(Path.Combine(v30Dir, "test", "X", "PublicApiSnapshotTests.cs"), "// snapshot\n");
+        File.WriteAllLines(Path.Combine(v30Dir, "test", "X", "Snapshots", "core-packages-public-api.txt"),
+            ["# PalDDD.Core", "class X"]);
+        File.WriteAllText(Path.Combine(v30Dir, "AGENTS.md"), "ADR 001-001（现行 1）\n");
+        File.WriteAllLines(Path.Combine(v30Dir, ".ai", "README.md"),
+        [
+            "| x | 37 测试方法 / 89 断言点 | ADR 001-002（现行 2） |",
+            "| 快照 | `test/Y/PublicApiSnapshotTests.cs`（12 程序集） |",
+            "| 脚本 | 32 个 .cs file-based app |",
+            "| 门禁 | V1-V29 |",
+        ]);
+        var v30Stale = CheckAnchorClaims(v30Dir, 30);
+        if (v30Stale.Count >= 8)
+            Console.WriteLine("PASS ST-V30a 陈旧锚点全类检出（方法/断言/ADR/程序集/路径/脚本/V）");
+        else failures.Add($"ST-V30a: 期望 ≥8 处，实得 {v30Stale.Count}（{string.Join(" | ", v30Stale)}）");
+
+        File.WriteAllLines(Path.Combine(v30Dir, ".ai", "README.md"),
+        [
+            "| x | 2 测试方法 / 2 断言点 | ADR 001-001（现行 1） |",
+            "| 快照 | `test/X/PublicApiSnapshotTests.cs`（1 程序集） |",
+            "| 脚本 | 1 个 .cs file-based app |",
+            "| 门禁 | V1-V30（30 项 AI 系统完整性） |",
+            "| 历史 | ADR 001-002（时点口径） |",
+        ]);
+        var v30Clean = CheckAnchorClaims(v30Dir, 30);
+        if (v30Clean.Count == 0) Console.WriteLine("PASS ST-V30b 修正后全绿 + 时点标记豁免");
+        else failures.Add($"ST-V30b: {string.Join(" | ", v30Clean)}");
+
+        var methodSample = "[Test]\nvoid A() { }\n// 提及 [Test] 的注释\nvar s = \"\"\"\n[Test]\n\"\"\";\n";
+        if (CountTestMethods(methodSample) == 1)
+            Console.WriteLine("PASS ST-V30c 测试方法数排除注释与 raw string（文本 grep 假阳性防线）");
+        else failures.Add($"ST-V30c: CountTestMethods={CountTestMethods(methodSample)}（期望 1）");
+    }
+    finally
+    {
+        try { if (Directory.Exists(v30Dir)) Directory.Delete(v30Dir, recursive: true); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
 
     // ── 汇总 ──
     Console.WriteLine($"═══════ VERIFY-AI SELFTEST：{(failures.Count == 0 ? "全部通过" : $"{failures.Count} 例失败")} ═══════");

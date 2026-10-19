@@ -115,6 +115,7 @@ jobs:
 
 要点：
 
+- **Actions 引用一律钉 40 位 commit SHA**：实际 workflow 中 `uses:` 形如 `owner/repo@<40 位 SHA> # vX.Y.Z`，可变 major 标签（`@v4`）被 `config-policy` 检查 C 拒绝；Dependabot 的 `github-actions` 生态负责按周更新 SHA 与注释。下方示例为简写，实际以 `.github/workflows/ci.yml` 为准。
 - Testcontainers 自动拉起容器并暴露随机端口，无需预置 service container；仅需 runner 支持 Docker daemon。
 - Windows runner 不支持 Testcontainers，集成测试 CI 必须在 `ubuntu-latest` 上运行。
 - 单元测试（不依赖 Docker）仍可跨平台运行，可拆为独立 job 在 PR 触发；集成测试建议 nightly / 合并到 main 时触发以缩短 PR 周转。

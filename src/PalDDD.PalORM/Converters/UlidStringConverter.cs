@@ -24,7 +24,7 @@ namespace PalDDD.PalORM.Converters;
 public sealed class UlidStringConverter : IValueConverter<Ulid, string>
 {
     /// <inheritdoc />
-    public string ToProvider(Ulid value) => value.ToString();
+    public string ToProvider(Ulid value) => value.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
 
     /// <inheritdoc />
     public Ulid FromProvider(string value)

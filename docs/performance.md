@@ -1,22 +1,24 @@
 # 性能实测记录
 
-> 日期：2026-10-08  
-> 环境：Windows 10 x64（AMD Ryzen 9 8945HX，32 逻辑核）；.NET SDK 11.0.100-rc.1.26425.128；BenchmarkDotNet 0.15.8（InProcessEmitToolchain）  
+> 日期：2026-10-08（环境行 2026-10-18 校正：SDK rc.2 / BDN 0.16.0-preview.2；下方历史轮次保留当时环境）
+> 环境：Windows 10 x64（AMD Ryzen 9 8945HX，32 逻辑核）；.NET SDK 11.0.100-rc.2.26504.105；BenchmarkDotNet 0.16.0-preview.2（InProcessEmitToolchain）
 > 历史口径：2026-06-28 轮（SDK 11.0.100-preview.5）数字见下文「历史烟测归档」与「已有 BenchmarkDotNet 产物」
 
-## 当前结论
+## 当前结论（2026-10-08 首轮；2026-10-18 口径校正见下）
 
-2026-10-08 性能测试系统优化后，**22 个基准类（Framework 5 + App 2 + Infra 7 + Persistence 3 + SagaLane 1 + Concurrency 2 + Remote 2）全部具备正式报告入口**：`--framework` / `--app` / `--infra` / `--concurrency` / `--persist-pg` / `--persist-mysql` / `--persist` / `--persist-medium` / `--saga` / `--compression` 以模式级 ManualConfig（`Job.MediumRun` + InProcessEmitToolchain + MemoryDiagnoser）绕过 net11-rc moniker 限制（默认 Switcher 入口仍不可用；根因与 jobs-union 双 job 坑详见 `bench/PalDDD.Benchmarks/Program.cs` 头注——类级 `[ShortRunJob]` 已全部移除，同 `--persist` 五十四轮先例）。`--smoke` 新增分配预算断言（Success/FromValue ≤1、Failed ≤50、RaiseEvent ≤140 B/op，超限退出码 1；变异验红实证：预算压至 1 时 RaiseEvent 判 ⛔ 退出码 1）。
+**2026-10-18 当前口径**：**37 个基准类**（Framework 5 + App 2 + Feature 5 + Infra 7 + Persistence 4 + SagaLane 1 + Concurrency 2 + Remote 5 + Delivery 3 + Comparison 2 + Stream 1），入口以 `bench/PalDDD.Benchmarks/Program.cs` 为单一真源；`--smoke` 6/6 分配预算已接入 CI `perf-smoke`（每次提交）；BDN 0.16.0-preview.2 已恢复默认 Switcher 入口（2026-10-17），显式 InProcess 路径保留；EPSL v1.6 系统对账与修复见 `docs/review/review-2026-10-18-epsl-system.md`。下面 2026-10-08 段保留首轮口径（22 类），不回溯改写。
 
-**同日缺口补齐轮**：新增 `--app` 车道（DispatcherBenchmarks + SerializationBenchmarks——CQRS 分发链与消息序列化此前是消息发布路径的两大缺位面：分发仅有 <500B 分配契约无计时，序列化零数据）；CompressionBenchmarks 补 LZ4/ZStandard 原生绑定四项（同一 Provider 五算法同负载可比，此前 README 宣传的原生绑定零基准）；`--concurrency` 车道（Outbox N worker 租约争用，InMemory 簿记层 + Dapper SQLite 真库层）把「多实例并发发布零丢失零重复」从正确性主张升级为性能数据——**不变量每 wave 成立（800/800 精确租走、零重复守卫全程未触发），性能形态两层分化**：InMemory 8 worker 退化 1.5×（锁竞争正常量级），Dapper SQLite 多连接并发退化 **25×**（158ms vs 串行 6.2ms——busy 等待升级延迟所致，单机 SQLite 单写者的真实最坏形态）。**后续追加**：Inbox 编排层入 `--infra`（首投 163ns/600B、重复拒绝 3-op 236ns，Error <2%）；`--persist-pg` / `--persist-mysql` 网络真库车道**建成并完成首轮真跑**（wslc 外部实例路径：`PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` 环境变量 + 库名 palddd_bench 白名单守卫，Testcontainers 路径保留给 Docker 环境）——多实例租约三形态落地：**PG 真并行（4W 中位 ~2.8×）/ MySQL Dapper 栈 N≥2 InnoDB 死锁（ADR-024 取舍的并发新实证）/ SQLite 25× busy 平台期**，详见 PG/MySQL 真库基线段。「22 类全覆盖」指**运行入口覆盖**，特性面仍非全覆盖——剩余缺口见「未完成项」清单。
+2026-10-08 性能测试系统优化后，**22 个基准类（Framework 5 + App 2 + Infra 7 + Persistence 3 + SagaLane 1 + Concurrency 2 + Remote 2）全部具备正式报告入口**：`--framework` / `--app` / `--infra` / `--concurrency` / `--persist-pg` / `--persist-mysql` / `--persist` / `--persist-medium` / `--saga` / `--compression` 以模式级 ManualConfig（`Job.MediumRun` + InProcessEmitToolchain + MemoryDiagnoser）绕过 net11-rc moniker 限制（当时 BDN 0.15.8 默认 Switcher 入口不可用；2026-10-17 升 0.16.0-preview.2 后已恢复；根因与 jobs-union 双 job 坑详见 `bench/PalDDD.Benchmarks/Program.cs` 头注——类级 `[ShortRunJob]` 已全部移除，同 `--persist` 五十四轮先例）。`--smoke` 新增分配预算断言（Success/FromValue ≤1、Failed ≤50、RaiseEvent ≤140 B/op，超限退出码 1；变异验红实证：预算压至 1 时 RaiseEvent 判 ⛔ 退出码 1；R1 轮 2026-10-14 增 Start* 遥测入口 ≤1 B/op 两条——断言落 bench 进程：测试宿主订阅全局 ActivitySource 使 HasListeners 恒真，旧码 int tag 装箱 24.000/24.002 B/op 判红、守卫前置后 0 过）。
+
+**同日缺口补齐轮**：新增 `--app` 车道（DispatcherBenchmarks + SerializationBenchmarks——CQRS 分发链与消息序列化此前是消息发布路径的两大缺位面：分发仅有 <500B 分配契约无计时，序列化零数据）；CompressionBenchmarks 补 LZ4/ZStandard 原生绑定四项（同一 Provider 五算法同负载可比，此前 README 宣传的原生绑定零基准）；`--concurrency` 车道（Outbox N worker 租约争用，InMemory 簿记层 + Dapper SQLite 真库层）把「多实例并发发布零丢失零重复」从正确性主张升级为性能数据——**不变量每 wave 成立（800/800 精确租走、零重复守卫全程未触发），性能形态两层分化**：InMemory 8 worker 退化 1.5×（锁竞争正常量级），Dapper SQLite 多连接并发退化 **25×**（158ms vs 串行 6.2ms——busy 等待升级延迟所致，单机 SQLite 单写者的真实最坏形态）。**后续追加**：Inbox 编排层入 `--infra`（首投 163ns/600B、重复拒绝 3-op 236ns，Error <2%）；`--persist-pg` / `--persist-mysql` 网络真库车道**建成并完成首轮真跑**（wslc 外部实例路径：`PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` 环境变量 + 库名 palddd_bench 白名单守卫，Testcontainers 路径保留给 Docker 环境）——多实例租约三形态落地：**PG 真并行（4W 中位 ~2.8×）/ MySQL Dapper 栈 N≥2 InnoDB 死锁（ADR-024 取舍的并发新实证）/ SQLite 25× busy 平台期**，详见 PG/MySQL 真库基线段。「22 类全覆盖」（2026-10-08 口径；2026-10-18 为 37 类，见上）指**运行入口覆盖**，特性面仍非全覆盖——剩余缺口见「未完成项」清单。
 
 统计有效性自评（testing.md §五判据套用首轮实测）：绝大多数基准 Error/Mean < 5%（App 车道与框架微基准全部 <1%）；5~15% 可接受带若干项（Outbox.AddSingleMessage 12%、Configuration.Pg 11%、SmartEnum.AllValues 5%、并发 InMemory 4W 13.4% 等，报告标注环境敏感）；**>15% 统计无效 2 项**——SmartEnum.FromValue_Known 24.8% / TryFromValue_Valid 25.9%（ns 级零分配操作的固有抖动，判定以零分配事实为准，引用其计时时需先提升配置）；ValueObject 三项为 ZeroMeasurement（BDN 标注与空方法不可区分，值即 ~0）。Medium 口径跨跑稳定性：`--framework` 二跑关键值跨跑差 AddSingleEvent 0.7% / Create 1.6% / Success 3.5%（对照 ShortRun 历史 53% 跨轮差，medium 裁决实证成立）。
 
 另：SmartEnum 三方法（FromValue/TryFromValue/AllValues）历史产物 NA 的根因已修——基类继承的静态方法调用不触发派生类静态构造器，注册未执行即调用；`[GlobalSetup]` 触碰静态字段强制注册先于全部基准（根因注释见 FrameworkBenchmarks.cs）。
 
-## 当前烟测结果（2026-10-08，3 轮取中位）
+## 烟测结果（2026-10-08，3 轮取中位；2026-10-14 增两条遥测预算后为 6 项）
 
-命令：`dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj -- --smoke`（带分配预算断言，本轮 4/4 预算内、退出码 0）
+命令：`dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj -- --smoke`（带分配预算断言，本轮 4/4 预算内、退出码 0；2026-10-14 起 6/6，2026-10-18 接入 CI `perf-smoke`）
 
 | 测量项 | 迭代次数 | 耗时（3 轮中位） | 当前线程分配 |
 |---|---:|---:|---:|
@@ -573,6 +575,149 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 **B1/B3（Saga 存储往返结构，机制入账无计时 A/B）**：B1 批量释放把超时扫描非超时分支的 B 次「往返 + 全量快照序列化（Dapper 叠加存在性全行反序列化 / EF 叠加 DetectChanges 扫描）」收为单语句单往返（leased_by 守卫 + 换代；EF 栈 ExecuteUpdate + 全批 Detach——跟踪器幽灵写陷阱的行为锁定测试在案）；B3 把 Save 常见路径 2 往返收 1（UPDATE 先行 + 0 行 COUNT 探测，新行冷路径 2→3）。四栈 SQLite 真库行为测试 + 处理器接线红证明（旧处理器零调用能力接口）在案；EF 栈车道待上游 Provider（既有登记），SQL 计数探针属其解除后的补测项。
 
+## 全量重读性能实施轮（2026-10-14：R1~R5 五批，含三项 P0 结构修复）
+
+> 来源：全量重读性能审计（本人精读五扇区 + 四只读子代理扇区深读，热路径 100% 覆盖）。
+> 产出方案四级分级后按序实施，本段只记实测与机制入账；细节见 CHANGELOG [Unreleased] 与 ADR-027。
+
+**R1 快赢族九项**（9a3b59e）：Start* 遥测入口无 listener 零分配（smoke 新增两断言，**红证明 stash 循环在案：旧码 24.000/24.002 B/op 装箱判红、新码 0.002/0.000 过**）；状态机 next 委托每请求 1 笔（原每行为 1×~64B）；Dispatcher 行为物化数组协变直取（免 Select+ToImmutableArray 链）；LoggingBehavior Error 门；LZ4/ZStd options 三档缓存；单字节 IndexOf；Dapper MySQL 版本判定 CWT 缓存；InMemory Outbox Processed 终态清除（治无界增长）；EF Inbox AsNoTracking/EF Saga 字典哈希去排序/EF MySQL 回读 LIMIT。撤销留档：SQLite WAL 一次化（文件重建边界 + <5% 纪律）。
+
+**R2 CQRS 管道分配族**（98e31e0）：内置行为显式非泛型实现（免 DIM 桥闭包+Func）+ Unit 单例箱（typeof JIT 折叠）。--app 实测（MediumRun，对照基线 2026-10-11 轮 268.9ns/432B）：**单行为 225.5ns/360B（计时 -16%、分配 -16.7%）**；零行为 160B 持平（该基准引用类型响应无装箱路径，符合预期）。
+
+**R3 Saga 步骤分配族**（e23d565）：四车道计时静态化 + failures 惰性建 + TryAdd。--saga 实测：**Normal 368→296 B/op（-19.6%）、FanOut 3,064→2,991 B/op**（Stopwatch ~40B + 空 List ~32B 两笔预测恰好兑现）；计时 192.2ns 跨轮漂移带内。撤销留档：RunRetryLane 闭包重构与 MakeKey 缓存（DB 主导 <5% + 行为最密集文件风险）。
+
+**R4 Outbox 终态批量标记**（ADR-027，P0-2/T2.1 锚立项）：`IBatchMarkOutboxStore` 能力接口 + `BatchMarkThreshold` opt-in（默认 1 逐条逐字不变）。机制：成功路径标记往返 N 次 → 组数次（按 RetryCount 分组单语句，fencing 守卫与逐条逐字等价零窄化）；fencing 部分拒绝行为锁定（Dapper/EF/PalORM SQLite 真库 raw 行断言）；处理器批序=租约序（T3.1 保序族）。量级锚：T0.2 已实测 RTT20ms 逐条确认串行化占 80%——批量启用后标记侧串行相乘收敛（2026-10-15 --delivery 车道 A/B 补测：本地 SQLite 端到端零显著差，标记段 μs 级占排空 ~8% 是成因；收益形态在远程库 RTT——见「R4 补测」段）。**PalORM 栈 2026-10-16 补齐**（ADR-027 延后段清算）：until 编码三方言探针（SQLite 本地 + PG/MySQL wslc 外部实例）实证库内形态 SQLite TEXT 100ns 全精度 / PG timestamptz μs / MySQL DATETIME(6) 无 offset 裸 UTC，回读值重编码均精确命中（正腿全批 + until±1s/换 owner/retry+1/已终态四负腿全拒）；同值以 DateTime 形态传递三方言全拒（编码形态敏感）。实现按已定案分组单语句形态，PalORM 每插值孔绑一 DbParameter 的约束经 `FormattableStringFactory.Create` + `{N}` 索引孔满足（PalOrmEventLog A11 先例）。
+
+**R5 EF EventLog Hi/Lo 修复**（848e839，P0-1）：版本校验+位置预留前移出事务。机制入账：稳态追加 **4 次 DB 往返（原恒 6，-33%）**、1/N 追加付分配器 2 次、GlobalPosition 连续无稀疏（原按 chunk 稀疏 100×）。**红绿双向锁定**（SQLite 真库 ChunkPositionsConsecutiveWithinChunk：stash 旧码 +100 稀疏判红 Expected 1 found 100、新码 +1 连续绿）；ITM-226 场景 (a) 化正确性声明在案（事件事务回滚只留间隙，既定可接受）。
+
+**移交后续轮**（本方案已定设计、未实施）：P0-3 回放高水位（per-position 检查点的连续前缀语义 + 四栈接口，需 ADR）；P0-4 EF Saga 租约方言下推（ExecuteUpdate 四方言）；P1-1 序列化 IBufferWriter 直写（公共 API 扩面 + 三 broker 联动）；P2-1/2/3 池驻留三项；微项打包（ISpanFormattable/Analyzer 零分配/五处 IsUniqueConstraintViolation 收口等）。
+
+## 全量重读性能实施轮续（2026-10-14：R6/R8/R9）
+
+**R6 投影增量回放续读**（8f4ba70，ADR-028，P0-3）：双能力接口（`IResumableProjectionCheckpointStore` + `IResumableEventReplaySource`）把 `ReplayAsync` 从 **O(全流长度) 降为 O(增量)**（已完成前缀零 payload 重读、零逐事件 checkpoint 探查）。语义三态=最小未完成洞位（保「仅处理缺失/失败检查点」契约逐字一致）/全完成 max+1/无行 null；EF 实现实测发现 SQLite provider 不翻译 `Convert.ToInt64(string)`（TRANSLATION-PROBE 判红），落最小投影两列客户端聚合回退。**变异红证明在案**（砍续读分支 RequestedFromPosition/OfferedCount 判红）。九件锁定（Integration 386/386）。
+
+**R8 序列化直写**（9900fae，ADR-029，P1-1）：`IMessageSerializer` 加 `Serialize(object, descriptor, IBufferWriter<byte>)` DIM（自定义实现零迁移）+ Json 覆写真直写（池化 Utf8JsonWriter Reset(destination)，输出逐位一致）+ RabbitMqBroker TLS 直传 WrittenMemory——消除每消息全载荷 ToArray 分配+拷贝。**变异红证明**：覆写体替换回退 → 零分配断言判红（56B/op 载荷拷贝）恢复绿。Kafka 不改（byte[] 契约）；MemoryPack 暂不覆写（1.21.4 无 (writer, Type, object) 重载，本地编译实证）。调用形态约束：DIM 经具体类型不可见（CS1501 实证）。
+
+**R9 池驻留 + 微项**：① TLS 缓冲阈值弃槽四处（JsonMessageSerializer 两路径/JsonLinesEventWriter/RabbitMq Broker body——历史峰值 >256KB 下次入口重建，驻留从「历史峰值」收敛为有界）；② 解压首轮 GetSpan 提示上限 64KB（`DecompressionGuard.InitialBlockHintBytes`，Brotli+LZ4/ZStd/OpenZL 四处——原 max(4096, len*2) 在 8MB 输入下首轮 16MB 过量提交固化进线程槽峰值；改后峰值容量=「≥ 实际输出的最近倍增」）。撤销两项留档：**D-F9 ISpanFormattable 生成 ID 实测证伪撤销**（net11-rc1 三形态对照：插值 111 / ToString 80 / 手动 TryFormat 80 B/op——DefaultInterpolatedStringHandler 对结构体经 ISpanFormattable 的装箱未消除，插值反向劣化 +31B；勘正注释留生成器 ToStringBody 处防重开）；RabbitMQ per-delivery CTS 池化（linked CTS 无法 TryReset 复用，语义保持需自定义 CTS 子类，~72B/消息不值）；五处 IsUniqueConstraintViolation 收口（跨 4 程序集 InternalsVisibleTo 链 + 冲突冷路径，收益不成立）。Analyzer 零分配化（D-F5）移交（IDE/CI 编译期面，独立轮次）。
+
+## 全量重读性能实施轮续二（2026-10-15：R7 Saga 租约 SQLite 单语句下推）
+
+**R7 EF Saga 租约单语句下推**（P0-4 移交项清算；决策论证 docs/review/decision-2026-10-15-saga-lease-sqlite-single-statement.md）：`SagaStateDbContext.LeaseActiveSagasAsync` 在 SQLite provider 下改走集合式单语句 UPDATE（资格谓词子查询 + ORDER BY + LIMIT + `version=version+1` 同句换代）+(owner, until) 等值守卫回读——**整批固定 2 条语句与批次大小无关**（原跟踪分页形态：一页全实体物化查询 + N 条逐行 UPDATE，头部活跃租约堆积时叠加 O(跳过页) 翻页往返；含 saga_data 大列的未选中行同样被物化）。**语句计数判别器红证明在案**（旧码批 5 → 5 条 UPDATE 判红、新码 1 条绿）；语义锁定三件（活跃租约跳过/过期接管换代/AWD 纳入）+ 饥饿消除（batchSize=1 头部占满仍取窗口外）+ 跟踪契约（补偿路径 `ISagaStateStore.SaveChangesAsync(state)` 直存端到端）；ITM-632 幽灵租约用例迁 InMemory 锁定回退路径保护。**范围收敛声明**：EF 栈 rc.2 线无 PG/MySQL provider 包（本地/CI 均无真库车道），方言下推留待车道（PG 形态=标识符引用差异、MySQL 需 JOIN 两步，SQL 形态已在案）；其余 provider 保底路径逐字不变。验证：Release 全量构建 0W0E + 16 项目面板 **1581 = 1509 过 + 72 跳 0 失败** + format-verify/encoding-gate 绿。
+
+## 全量重读性能实施轮续三（2026-10-15：R10 Analyzer 零分配化 D-F5）
+
+**R10 分析器符号比对族零分配**（D-F5 移交项清算，IDE 增量分析编译期面）：`StrategicDddAnalyzer` 热路径谓词去分配——**实测红绿双向**（旧形态等价体注入判红 → 新实现绿，B/op）：`MetadataNameEquals` **68.8 → 0.0012**（原每次比对经 GetFullMetadataName 构造全名串；改造中发现 Roslyn `MetadataName` 属性对泛型符号每次访问重建 arity 串——探针实测 40B/次，连结构比对自身最初也被该属性判红，改 `Name`+`Arity` 逐段匹配闭环）；显式接口实现按名查找 **80.0 → 0.0024**（闭包 Any → 手写循环）；`BelongsToBoundedContext` **40 → 0**；`HasVersionSuffix` **32 → 0**（拼接 → 字符级对照，int 全域等价）。每类型分析数十次此类比对（基类链/接口集/attribute 集逐候选），据此去分配面随编译期间类型数线性。语义矩阵由 `AnalyzerAllocationTests` 锁定（嵌套名/顶层碰撞/泛型元数/global 命名空间/前导零版本/负号腿）+ 既有 47 用例零回归；载具为 InternalsVisibleTo 测试程序集直调内部谓词（量具同 R9 口径：预热 + 2 万次操作均值 <1 B/op）。诊断上报路径（`ImmutableDictionary`/`Diagnostic.Create`）按需分配属冷路径（仅违规时），不纳入。验证：Release 全量构建 0W0E + 16 项目面板 **1585 = 1513 过 + 72 跳 0 失败**。
+
+## R4 批量标记 --delivery 车道 A/B 补测（2026-10-15）
+
+**R4/P0-2 收益量化（ADR-027 移交项：--delivery 车道 threshold 参数化 A/B）**：`OutboxDeliveryDrainBenchmarks` 新增 `BatchMark` 参数（1 = 逐条默认基线 / 16 = 满阈值分组单语句），矩阵 RTT 0/1/20 × InFlight 1/16 × BatchMark 1/16，口径 = SQLite 真库 + 假 broker 排空 1000 条墙钟（medium 档 5 迭代/3 预热）。**实测结论：本地端到端零显著差**——RTT=0 四格 162.3~172.2 ms/op 全在噪声带内（BatchMark16/1 比值 0.97 / 1.04 / 1.00 / 0.99，StdDev 量级 ~5%）；RTT=1 四格由发布延迟主导（Windows `Task.Delay` 15.6ms 粒度，串行档 ~17s/op，标记段占比可忽略）。RTT=20 四格未跑完：该格本机 ~33s/op × 8 次撞 BDN InProcess 单基准 5 分钟硬上限（既有车道限制，非本轮引入；按已测标记段成本推算其占比 ~0.04%，零差为确定性结论）。
+
+**解释性量具（--persist-mark，新增 `OutboxMarkPathBenchmarks`，20 轮 × 100 条/op 放大到 ms 级）**：标记段本身收益真实——逐条 `MarkProcessedAsync` vs 满 100 单语句组（SQLite 真库，medium 档）：**26.46ms → 14.49ms（Ratio 0.55，StdDev 1.10/0.26ms），即 13.2μs/条 → 7.25μs/条（1.83×）**；分配 7.81MB → 3.37MB/op（3.9KB → 1.7KB/条，Dapper 逐条 DynamicParameters 形态）。但标记段仅占本地排空 ~8%（13.2μs / ~165μs 每 msg），批量节省 5.98μs/条 ≈ 端到端 3.6%（低于噪声带）——端到端零差由此解释，非无收益。**收益形态在远程库**：PG/MySQL 每标记 = 网络 RTT（本地基线锚：PG 单插入 630μs / MySQL 1730μs 量级），1000 条标记往返从 1000 次收为 62 次分组语句。**该 Not-Tested 登记已于 2026-10-16 清算**（--delivery-pg / --delivery-mysql 实跑，见下段）：串行确认档端到端 6.2~6.4×、标记段占排空 84%；「流水线档部分隐藏于发布 RTT 之后」未在远程格单独测（远程车道 InFlight 固定 1，T3.1 交互已有 SQLite 车道 12.9~13.0× 数据）。
+
+**远程库投递 A/B（--delivery-pg / --delivery-mysql，2026-10-16，B1 复活前提实测，新增车道）**：口径同 --delivery（排空 1000 条积压墙钟 + 发布计数守卫 + 假 broker RTT），store 走 wslc 外部实例（`PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` + palddd_bench 库名守卫；MySQL 种子走 LOAD DATA LOCAL 协议，连接串显式 `AllowLoadLocalInfile=True` + 服务端 `local_infile=1`——库级安全门由调用方显式决策）。矩阵 RttMs {0,1} × BatchMark {1,16}，InFlight 固定 1（B1 决策面向默认配置；InFlight=16 与批量标记的交互已由 SQLite 车道 T3.1 实测）。专用采样档 5 迭代/3 预热/1 launch（远程 op 秒级，medium 15×2 撞 InProcess 单基准 5 分钟硬上限）。
+
+| 方言 | RttMs | 逐条(BatchMark=1) | 批量(BatchMark=16) | 标记段 | 占排空 | 加速比 |
+|---|---:|---|---|---|---:|---:|
+| PG | 0 | 742.1 ms（E 78.32 / SD 12.12） | 116.4 ms（E 65.40 / SD 16.99） | 625.7 ms | **84.3%** | **6.37×** |
+| PG | 1 | 9,666.2 ms（E 1,299.10 / SD 337.37） | 9,438.9 ms（E 1,463.80 / SD 226.52） | 227.3 ms | 2.35% | 1.02× |
+| MySQL | 0 | 2,221.7 ms（E 395.22 / SD 102.64） | 359.0 ms（E 73.63 / SD 19.12） | 1,862.7 ms | **83.8%** | **6.19×** |
+| MySQL | 1 | 12,328.8 ms（E 16,355.96 / SD 2,531.10） | 13,479.4 ms（E 11,537.17 / SD 2,996.17） | −1,150.6 ms | 噪声带内 | 0.91× |
+
+派生读数：单标记往返成本 **PG 0.67ms / MySQL 2.00ms**（625.7ms 与 1,862.7ms 除以约 930 条避免的逐条语句；与账本单语句锚 PG 630μs / MySQL 1730μs 同带——批量标记省下的正是这部分网络往返）；分配 PG 3.77→2.01MB/op（−47%）、MySQL 5.13→2.22MB/op（−57%，逐条 DynamicParameters 形态收敛）。
+
+**RttMs=1 格读法（两处必须同时声明）**：①本机 `Task.Delay(1)` 有效值约 9~10ms/条（Windows 定时器粒度，非 1ms——PG 该格每消息总延迟 9.67ms 减去标记段 0.63ms 与基数后约 8.9ms 即发布延迟），标记段被发布延迟稀释；②该格 A/B 差值落在 Error 带内（PG 227ms vs ±1.3~1.5s；MySQL 差值符号为负且 Error 带 ±11.5~16.4s 完全淹没）——**两方言 RttMs=1 格均不具统计显著性，结论是「无可测差异」而非「差异小」**。
+
+**B1 复活前提第一项判定**（决策文档开放决策点 1「远端 DB 标记往返实测占发布延迟 >5%」）：DB 主导形态（broker 确认延迟低于阈值）下前提成立且远超阈值，占比 84.3%（PG）/ 83.8%（MySQL），端到端 6.2~6.4×；阈值解析式 share(r) = M / (base + 1000r + M) > 5% 给出 **PG r < ~11.8ms/条、MySQL r < ~35.0ms/条**（[推断]：以实测 M 与 base 代入，非独立实测点）。broker 确认延迟超过阈值后标记段退化为二阶成本（本机最小非零 broker 延迟格实测无可测差异，与该解析一致）。前提另两项（消费侧 Inbox 幂等可审计 + 时间界冲刷而非纯计数界）未满足，且「重复窗口放大最高 99×」的反驳与延迟形态无关，**B1 维持不做**；新数据的价值是把收益从量级估算升级为分形态实测，并给出部署判据：broker 确认延迟与 DB 往返同量级或更低时（本地/同机房 broker、跨机房 DB），`BatchMarkThreshold` 16~64 的 opt-in 收益显著。
+
+## 流式读链路首测（2026-10-18，ADR-030 Phase 2 收窄论证的 bench 证据轮，`--stream`）
+
+> 口径（框架开销层，同 Hosting/EndToEnd lane）：DefaultHttpContext 直调 RequestDelegate + 内存 PipeWriter/丢弃流，无网络栈、无真实 DB I/O；medium 档（15 迭代 × 2 launch / 10 预热，InProcessEmit）。引用须带此口径——生产每帧成本由网络写与 provider 延迟主导。新增 `StreamReadBenchmarks`（11 lane：framing 微 lane ×5 + flush 全路径 ×2 + 端点全周期 ×3，16 异步项/请求）。
+
+| 基准 | Mean | Error | StdDev | Allocated |
+|---|---:|---:|---:|---:|
+| Frame_Default（data-only 帧 span 直写，预分配替身） | **5.19 ns** | 0.12 ns | 0.18 ns | **0 B** |
+| Frame_Enriched（+event/id 行 UTF-8 直写） | 28.50 ns | 0.49 ns | 0.72 ns | **0 B** |
+| Frame_FormatFrame（formatFrame 委托字符串帧） | 15.71 ns | 0.31 ns | 0.45 ns | **0 B** |
+| Serialize_PerItem（SerializeToUtf8Bytes，源生成） | 78.43 ns | 2.25 ns | 3.23 ns | 56 B |
+| SerializeAndFrame（序列化 + 默认帧） | 85.89 ns | 2.37 ns | 3.39 ns | 56 B |
+| ZeroCopyFrame（Utf8JsonWriter 直写 PipeWriter 对照形态） | 77.90 ns | 2.72 ns | 3.82 ns | **136 B** |
+| PerFrame_Default_WithFlush（+ FlushAsync，丢弃流背） | 920.80 ns | 61.30 ns | 91.75 ns | 390 B |
+| PerFrame_ZeroCopy_WithFlush（对照形态 + flush） | 967.50 ns | 52.41 ns | 76.83 ns | 470 B |
+| Endpoint_Plain（全周期 16 异步项：绑定+验证+头+枚举写帧） | 15.87 μs | 1.41 μs | 2.12 μs | 6,848 B |
+| Endpoint_Enriched（event+id 选择器） | 17.20 μs | 1.19 μs | 1.74 μs | 6,848 B |
+| Endpoint_Heartbeat（keepAliveInterval 1s，竞速路径） | 22.54 μs | 1.89 μs | 2.82 μs | 10,186 B |
+
+**结论一：ADR-030 复活触发器 3（PipeWriter 零拷贝化）实测不满足，收窄决策获 bench 证据。** 默认帧路径 5.19ns 只占「序列化 + flush」每帧 921ns 的 **0.6%**，占「序列化 + framing」对的 6%；每帧成本 dominator 是 flush 机制（~835ns，91%）与序列化（78ns），framing 可忽略。零拷贝对照形态（Utf8JsonWriter 直写 PipeWriter）**不赢反输**：CPU 持平（77.9 vs 78.4ns，差 0.6% 在 Error 带内）而分配 2.4×（136B vs 56B——writer 内部缓冲 churn 比序列化器的单次 byte[] 更重），带 flush 后慢 5%（+47ns）且 +80B。「默认帧路径成热点」的触发前提被证伪，维持收窄。
+
+**结论二：心跳竞速每异步项 +417ns / +209B，绝对值可忽略、形态需知情。** 端点 lane 对比（同 16 异步项 handler）：22.54 vs 15.87 μs（+42%）、10,186 vs 6,848 B（+49%）——差额 6.67μs / 3,338B 摊到 16 项即每异步项 +417ns / +209B（`AsTask` + `Task.WhenAny` 竞速机械；共享延时修复后 Task.Delay 不再每项新建）。放到生产延迟地板上：LLM 流 10~50ms/token 时占 0.001~0.004%，1000 项/s 的高速流也仅 ~0.04% CPU。同步完成项走 `IsCompletedSuccessfully` 快路径零额外开销（微 lane 的 Frame_Default 0B/5.2ns 即该路径形状）。**opt-in 语义与代价写入 usage.md/参数文档。**
+
+**结论三：富化帧每帧 +23.3ns CPU、零额外分配。** event/id 行的 UTF-8 直写 span 不进堆（Frame_Enriched 0B）；端点请求级 +1.33μs（+8.4%，16 项摊每项 ~83ns）。分型事件流的框架成本确认可忽略。
+
+**测量形态声明**：①端点 lane 双峰分布（StdDev 12~13%，`Task.Yield` 线程池抖动，与既有 EndToEnd/Hosting 异步 lane 同形态）；plain vs heartbeat 差 6.67μs 远大于 Error 带（±1.4~1.9μs），结论有效。②预分配 PipeWriter 替身把 BCL `StreamPipeWriter.FlushAsync` 的每帧 ~131B 内部分配从 framing 断言目标隔离（pitfalls A9 同族实测口径）；flush lane 用丢弃流避免 MemoryStream 无界增长。③BDN LaunchCount=2 的两次启动若绑固定端口必 AddressInUse（Launch 1 套接字释放时序），端点 setup 用 `127.0.0.1:0` 随机端口（AotSample §7 同款）。
+
+### P1 落地复测（2026-10-18 晚：帧载荷序列化池化）
+
+`StreamFrameSerializer`（ThreadStatic 池化 `Utf8JsonWriter` + `ArrayBufferWriter`，复用 JsonMessageSerializer R8/ADR-029 形态）替换默认/富化两分支的 `SerializeToUtf8Bytes`。复测口径同首测（同机、同 medium 档、`--stream` 全 lane）：
+
+| 基准 | P1 前 | P1 后 | 分配差 | 备注 |
+|---|---:|---:|---:|---|
+| SerializeAndFrame（→ Pooled） | 85.89 ns / 56 B | **59.68 ns / 0 B** | −56 B | 同 run 对照：快于 Serialize_PerItem 的 byte[] 单独序列化（76.21 ns） |
+| PerFrame_Default_WithFlush | 920.80 ns / 390 B | **845.09 ns / 336 B** | −54 B | flush 仍占 ~93% |
+| Endpoint_Plain（16 异步项） | 15.87 μs / 6,848 B | **12.62 μs / 5,952 B** | −896 B（−13.1%） | 每项 −56 B，与池化预测逐项吻合 |
+| Endpoint_Enriched | 17.20 μs / 6,848 B | **13.66 μs / 5,952 B** | −896 B | 富化分支同享池化 |
+| Endpoint_Heartbeat | 22.54 μs / 10,186 B | **16.32 μs / 9,304 B** | −882 B | 心跳差额 3.70μs/3,352B 为竞速机械（+231ns/+209B 每异步项；较 P1 前 +417ns 降低、分配持平，竞速机械本身不受池化影响） |
+| ZeroCopyFrame（收窄对照） | 77.90 ns / 136 B | 75.58 ns / 136 B | 0 | CPU 与默认路径持平、分配仍 2.4×，PipeWriter 化收窄结论加强 |
+
+**读法**：①分配差为确定性结论（每项 −56B，端到端与预测逐项吻合，零分配锁定测试三件 + 变异红证明在案）；②CPU 收益同 run 内可判定（池化 serialize+frame 59.68ns 快于 byte[] 单独序列化 76.21ns），跨 run 的端点时间差（−20~−28%）方向与同 run 微观 lane 一致，量级供参考；③首测结论二的心跳开销重标为每异步项 +231ns/+209B（P1 后口径，生产占比仍 0.001% 量级）；④默认路径至此 framing 与序列化双零分配，ADR-030 D4 声明获完整实证。
+
+### 收敛读数与残余归属（2026-10-18，P1 后评估轮，无代码变更）
+
+P1 后框架可控成本占比与残余分配归属各做一次专门测量，用于判定是否还有值得做的优化项。
+
+**每请求成本分解**（`Endpoint_Plain` 12.62 μs / 5,952 B，16 异步项/请求）：
+
+| 段 | 每帧 | 每请求 | 归属 |
+|---|---:|---:|---|
+| framing | 5.2 ns / 0 B | 0.08 μs | 框架，已最优 |
+| 池化序列化（P1） | 59.7 ns / 0 B | 0.96 μs | 框架，已最优 |
+| flush 与管道机制 | ~780 ns | ~12.5 μs | BCL 管道与真实 I/O（生产态为网络写） |
+| 端点固定段（验证/DI/响应头/日志） | 无 | <1 μs | 框架，无单点热点 |
+
+框架可控合计约 1.04 μs，占端点 **8.2%**；分配 0 B（框架可控段）。
+
+**残余 336 B/帧的归属探针**（TEMP 临时探针，同机，100k 迭代）：同步 sink 替身下三种形态的每 op 分配与耗时——空 `async Task` 0.0 B / 37.7 ns；仅 `FlushAsync` 0.0 B / 53.1 ns；写 30B + `FlushAsync` 0.0 B / 227.2 ns。结论：同步完成路径下「写帧 + flush」本身零分配，bench lane 的 336 B/帧来自基准侧管道替身（`DiscardStream` 背 `StreamPipeWriter`）与 BDN 引擎的异步状态机机械，非框架代码 [推断，依据为该对照的比例关系]。框架侧无可消分配项。
+
+**Kestrel 静默流限速疑点验证**（2026-10-18，外部验证）：曾怀疑 Kestrel 默认 `MinResponseDataRate`（240 B/s，宽限 5s）会掐断长静默 SSE 流并与 15~30s 心跳建议冲突。三路对照实测（12s 静默）：默认限速、2s 心跳、禁用限速三种配置下第二帧均完整到达（`second=YES`，两轮复跑一致）。**疑点不成立**，现行心跳建议无需因 Kestrel 默认值调整；反向场景（12s 静默连接提前结束但首帧完整）未复现，不计入结论。
+
+**判定**：框架侧 CPU 占比 8.2%、可控分配 0 B，剩余 92% 属传输层；P2/P3 候选全部低于「<5% 默认不做」线并已入 `.ai/perf-ledger.md` 表 2。**流式读链路性能轮收敛**，复活条件：框架占比回升到 20% 以上、消费方实测持续超过 5k 项/秒或 10k 并发流、生产实测 flush 占端到端不足 50%、或出现流级横切需求（ADR-030 复活触发器 1）。
+
+## SQLite FTS5/JSON1 双栈 API 基准（2026-10-19，`--sqlgen`）
+
+新增 `--sqlgen` 聚焦车道（`Program.cs`），只跑 `SqlGenBenchmarks`，避免每次复测都启动整个 `--infra`。两轮均为同机 MediumRun + InProcess + MemoryDiagnoser，单轮 11 个基准，约 23 秒。第一轮是首版实现，第二轮是 2026-10-19 优化轮；两轮之差就是本轮优化的 A/B，不是与 v4 旧 API 的对照（旧入口已在破坏式清理中删除）。
+
+| 方法 | 优化前 Mean / Allocated | 优化后 Mean / Allocated | 分配变化 |
+|---|---:|---:|---:|
+| `Sqlite_JsonExtract`（`Extract("payload","Type")`） | 1,888 ns / 344 B | 1,278 ns / 128 B | −63% |
+| `Sqlite_JsonPath`（三段特殊键路径） | 1,052 ns / 248 B | 1,060 ns / 120 B | −52% |
+| `Sqlite_JsonObjectParameters`（两组键值参数） | 1,829 ns / 440 B | 1,312 ns / 176 B | −60% |
+| `Sqlite_FtsMatchParameter`（`MATCH @q` 片段） | 1,244 ns / 208 B | 1,021 ns / 64 B | −69% |
+| `Sqlite_FtsCreateIndex`（Outbox standalone 完整定义 + `ToSql`） | 7,218 ns / 14,568 B | 6,857 ns / 9,960 B | −32% |
+| `Sqlite_FtsCreateEventLogIndex`（EventLog standalone 完整定义 + `ToSql`） | 7,779 ns / 14,104 B | 6,289 ns / 9,632 B | −32% |
+
+优化内容：
+
+- `EscapeIdentifier` / `EscapeLiteral` / JSON 路径 / 函数调用 / 数组 / 对象 / 等值谓词改为先算精确长度、再用单次 `string.Create` 写出，去掉 `Replace` 中间字符串与 `StringBuilder` 缓冲。
+- `NormalizeParameterName` 对已带 `@` 的参数名返回原实例，不再 `name[1..]` 切片。
+- FTS 列名只转义一次，`NEW.` / `OLD.` / 重建 SELECT 列表用预转义数组直接拼接，去掉重复 LINQ `Select` 枚举。
+- `MatchLiteral` / `MatchParameter` 改为单次分配；`SqliteFtsIndexDefinition` 在构造期缓存默认 `JoinClause("s","m")`，重复查询零重复拼接。
+
+口径与归属：
+
+- 分配是判定层，计时只作趋势。优化后部分基准的 Error/Mean 仍偏高（PostgreSql 基线漂移、MediumRun 单轮），时间变化按指示性解读；分配数字每轮确定，是主要证据。
+- `JsonExtract` 剩余的 128 B 含调用方 `params` 数组（约 32 B）与结果字符串；再降需要单段路径重载，属于公开 API 扩张，本轮刻意不做。
+- FTS 定义约 9.6~10 KB 分配来自映射表、FTS5 虚表与三个触发器的 DDL 文本加外层定义对象；这是 schema 初始化操作，不属于请求热路径。把它做成硬预算会奖励缓存而非正确性，故不设 B/op 门禁。
+- 引用计时数字前按 `perf-budgets.md` §2 的 <5%/>15% 自评规则判断。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |
@@ -616,10 +761,10 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 ## 未完成项
 
-1. ~~等 BenchmarkDotNet 支持当前 .NET 11 后用默认入口重新生成全部 benchmark 类结果~~（2026-10-08 大部分消解：17 类经 InProcess 显式模式全部可出正式报告；残余 = 默认 Switcher 入口与类级 job 注解的恢复，待 BDN 上游补 net11 moniker 或 .NET 11 GA 后实测，见 `docs/migration/net11-ga-upgrade-plan.md` 步骤 3）。
+1. ~~等 BenchmarkDotNet 支持当前 .NET 11 后用默认入口重新生成全部 benchmark 类结果~~（2026-10-08 大部分消解：17 类经 InProcess 显式模式全部可出正式报告；**2026-10-17 BDN 0.16.0-preview.2 已恢复默认 Switcher 入口**（`--list` 实测 exit 0），显式 InProcess 路径保留为口径配置；类级 job 注解仍按 Medium 显式 config 承载，不再依赖 attribute）。
 2. SmartEnum.FromValue/TryFromValue 两项 Error/Mean >15%（ns 级固有抖动）：如需正式引用其计时，提升配置（严格档 5/10/15）复测；当前以零分配事实为准。
 3. 保留 `--smoke` 作为秒级趋势检查 + 分配预算判定（2026-10-08 起带断言）；计时为单轮无统计效力，不替代正式报告。
-4. **特性面缺口登记（2026-10-09 收尾轮，防「30 类全覆盖」被误读为特性面全覆盖）**：~~①~⑤⑧~~（全部落地）；⑦ 四栈/方言面收尾——Dapper+PalORM 双栈 PG/MySQL 真跑 ✓ + **EventLog/Idempotency 真库层补齐 ✓**（2026-10-09 后段：双栈四格全出数，见 EventLog/Idempotency 口袋注）、EF 栈**租约 SQL 形态**验证 ✓（`MySqlSkipLockedShapeBenchmarks`：零死锁+互斥+1.75× 加速）、PG 方言特性 ✓（Pipeline 单往返/读写分离路由/LISTEN-NOTIFY 往返，COPY 隐含在种子路径）。**死锁已裁决并落地（ADR-025）**：版本探测双模板使 Dapper/PalORM MySQL ≥8.0.18 进入 SKIP LOCKED 形态（复跑双栈死锁归零，见 ADR-025 落地复跑注），ADR-024 对 <8.0.18/MariaDB 回退路径继续有效。**登记残余（四项，均有上游/量纲理由）**：① EF 栈级车道待 Npgsql.EF/Pomelo 出 EF 11 rc 配套版（2026-10-09 实证 NU1107/NU1102，SQL 形态车道先行为其等价物）；② `PostgreSqlOutboxNotifier` 服务化推送延迟（LISTEN-NOTIFY 底层能力已测 461μs；服务化形态属异步服务量纲，归集成测试）；③ **mysql:8.0.17 旧版镜像回归**（ADR-025 后续动作 2：验证回退模板行为与现状逐字一致，需拉取旧版镜像）；④ broker 发布路径（Kafka/RabbitMQ 需 broker 环境，正确性已由 Messaging.Integration 覆盖，性能归有 broker 环境时补）。另：PG Dapper 并发组 Error >15% 点值待严格档复测、8W 回落形态待复测；READ COMMITTED 对照实验留档于 ADR-025 被否决方案。
+4. **特性面缺口登记（2026-10-09 收尾轮，防「30 类全覆盖」被误读为特性面全覆盖；2026-10-18 口径为 37 类）**：~~①~⑤⑧~~（全部落地）；⑦ 四栈/方言面收尾——Dapper+PalORM 双栈 PG/MySQL 真跑 ✓ + **EventLog/Idempotency 真库层补齐 ✓**（2026-10-09 后段：双栈四格全出数，见 EventLog/Idempotency 口袋注）、EF 栈**租约 SQL 形态**验证 ✓（`MySqlSkipLockedShapeBenchmarks`：零死锁+互斥+1.75× 加速）、PG 方言特性 ✓（Pipeline 单往返/读写分离路由/LISTEN-NOTIFY 往返，COPY 隐含在种子路径）。**死锁已裁决并落地（ADR-025）**：版本探测双模板使 Dapper/PalORM MySQL ≥8.0.18 进入 SKIP LOCKED 形态（复跑双栈死锁归零，见 ADR-025 落地复跑注），ADR-024 对 <8.0.18/MariaDB 回退路径继续有效。**登记残余（四项，均有上游/量纲理由）**：① EF 栈级车道待 Npgsql.EF/Pomelo 出 EF 11 rc 配套版（2026-10-09 实证 NU1107/NU1102，SQL 形态车道先行为其等价物）；② `PostgreSqlOutboxNotifier` 服务化推送延迟（LISTEN-NOTIFY 底层能力已测 461μs；服务化形态属异步服务量纲，归集成测试）；③ **mysql:8.0.17 旧版镜像回归**（ADR-025 后续动作 2：验证回退模板行为与现状逐字一致，需拉取旧版镜像）；④ broker 发布路径（Kafka/RabbitMQ 需 broker 环境，正确性已由 Messaging.Integration 覆盖，性能归有 broker 环境时补）。另：PG Dapper 并发组 Error >15% 点值待严格档复测、8W 回落形态待复测；READ COMMITTED 对照实验留档于 ADR-025 被否决方案。
 5. **全量复跑轮新登记（2026-10-10）**：① coverage × strict 车道级不兼容——InProcess 单基准 5 分钟硬上限对 ns 级快类（自动放大至百万 ops/迭代）不适用，处置 = coverage 恒 medium 档（发现②，本轮 medium 实测通过）；~~② PalORM 远程 EventLog/Idempotency 约 2× 偏移待专项 A/B 归因~~（**2026-10-11 T0.1 归因收口：参照系勘正非回归**，见「T0.1 归因结论」段；结构性 2× 差距转正为 T2.2 优化靶点——PalORM 单语句 Any 追加移植）。
 
 ## 发布判断

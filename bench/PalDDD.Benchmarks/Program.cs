@@ -41,11 +41,13 @@ if (args.Contains("--compare", StringComparer.OrdinalIgnoreCase))
     return 0;
 }
 
-// net11-rc runtime moniker 不被 BDN 0.15.8 的 DotNetSdkValidator 识别(GetRuntimeVersion
-// throw NotRecognizedException;验证内嵌在 CsProjCoreToolchain.Validate,且 Switcher 在
-// filter 前对全程序集 case 验证——任何 [ShortRunJob] 类都会触发崩溃)。
-// 解法:--persist 显式跑三栈持久化基准类(逐类 BenchmarkRunner.Run<T> + [InProcess] attribute,
-// InProcessValidator 不查 SDK moniker);其余类走 Switcher(等 BDN 上游补 net11 moniker 恢复)。
+// 历史注记（2026-09-19 五十四轮）：net11-rc runtime moniker 不被 BDN 0.15.8 的
+// DotNetSdkValidator 识别（GetRuntimeVersion throw NotRecognizedException；验证内嵌在
+// CsProjCoreToolchain.Validate，且 Switcher 在 filter 前对全程序集 case 验证——任何
+// [ShortRunJob] 类都会触发崩溃），故 --persist 走显式 InProcess config 路径绕过。
+// 2026-10-17 升位 BDN 0.16.0-preview.2 后默认 Switcher 入口已恢复（--list 实测 exit 0
+// 全量列出，moniker 识别修复）；显式 InProcess 路径保留（MediumRun/InProcess 作业形态
+// 是刻意配置，与入口可达性无关）。
 if (args.Contains("--verify-persist", StringComparer.OrdinalIgnoreCase))
 {
     return await PersistenceVerifyRunner.RunAsync();
@@ -57,7 +59,7 @@ if (args.Contains("--persist", StringComparer.OrdinalIgnoreCase))
     // 原依赖类 [InProcess] attribute（已随本修复移除），避免 attribute 与 ManualConfig
     // 叠加产生双 job（BDN 0.15.8 实测：config 合并对 jobs 是 union 不去重）
     var inProcessOnly = ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.InProcess.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddJob(Job.InProcess.WithToolchain(InProcessEmitToolchain.Default))
         .AddDiagnoser(MemoryDiagnoser.Default);
     BenchmarkRunner.Run<DapperPersistenceBenchmarks>(inProcessOnly);
     BenchmarkRunner.Run<PalOrmPersistenceBenchmarks>(inProcessOnly);
@@ -76,7 +78,7 @@ if (args.Contains("--persist-medium", StringComparer.OrdinalIgnoreCase))
     // github.md（裁决数字无处查）。归档纪律：medium 数字入 docs/performance.md
     // 时带日期，artifacts-medium 目录留存原始报告。
     var leaseOnly = ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default))
         .AddDiagnoser(MemoryDiagnoser.Default)
         .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-medium"))
         .AddFilter(new NameFilter(name =>
@@ -84,6 +86,23 @@ if (args.Contains("--persist-medium", StringComparer.OrdinalIgnoreCase))
     BenchmarkRunner.Run<DapperPersistenceBenchmarks>(leaseOnly);
     BenchmarkRunner.Run<PalOrmPersistenceBenchmarks>(leaseOnly);
     BenchmarkRunner.Run<EfCorePersistenceBenchmarks>(leaseOnly);
+    return 0;
+}
+
+// R4/P0-2（ADR-027，2026-10-15）：--persist-mark——标记段成本与分组效率（本地 SQLite
+// 口径，解释 --delivery 车道 BatchMarkThreshold A/B 的本地零差：标记往返 μs 级，
+// 收益形态在远程库网络 RTT 上——本机无 Docker，真库车道不可跑）。medium 口径
+// （μs 级 op 需统计有效性），独立 artifacts 目录归档。
+if (args.Contains("--persist-mark", StringComparer.OrdinalIgnoreCase))
+{
+    var markOnly = ManualConfig.Create(DefaultConfig.Instance)
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default))
+        .AddDiagnoser(MemoryDiagnoser.Default)
+        .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-mark"))
+        .AddFilter(new NameFilter(name =>
+            name.Contains("Mark_PerRow100", StringComparison.Ordinal)
+            || name.Contains("Mark_Batch100", StringComparison.Ordinal)));
+    BenchmarkRunner.Run<OutboxMarkPathBenchmarks>(markOnly);
     return 0;
 }
 
@@ -100,7 +119,7 @@ if (args.Contains("--saga", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--compression", StringComparer.OrdinalIgnoreCase))
 {
     var inProcessOnly = ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.InProcess.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddJob(Job.InProcess.WithToolchain(InProcessEmitToolchain.Default))
         .AddDiagnoser(MemoryDiagnoser.Default);
     BenchmarkRunner.Run<CompressionBenchmarks>(inProcessOnly);
     return 0;
@@ -120,7 +139,7 @@ if (args.Contains("--compression", StringComparer.OrdinalIgnoreCase))
 // 无其他模式参数时默认跑两类既有严格档（OutboxThroughput + SmartEnum）。
 static IConfig StrictInProcessConfig()
     => ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance)
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default)
             .WithIterationCount(40).WithWarmupCount(20).WithLaunchCount(3))
         .AddDiagnoser(MemoryDiagnoser.Default)
         .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-strict"));
@@ -145,7 +164,7 @@ if (IsStrictOnlyRun(args))
 
 static IConfig MediumInProcessConfig()
     => ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance))
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default))
         .AddDiagnoser(MemoryDiagnoser.Default)
         .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-medium"));
 
@@ -157,6 +176,12 @@ if (args.Contains("--framework", StringComparer.OrdinalIgnoreCase))
     BenchmarkRunner.Run<SmartEnumBenchmarks>(medium);
     BenchmarkRunner.Run<ValidationBenchmarks>(medium);
     BenchmarkRunner.Run<EntityCreationBenchmarks>(medium);
+    return 0;
+}
+
+if (args.Contains("--sqlgen", StringComparer.OrdinalIgnoreCase))
+{
+    BenchmarkRunner.Run<SqlGenBenchmarks>(ModeConfig(args));
     return 0;
 }
 
@@ -192,7 +217,7 @@ if (args.Contains("--app", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--delivery", StringComparer.OrdinalIgnoreCase))
 {
     var delivery = ManualConfig.Create(DefaultConfig.Instance)
-        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Instance)
+        .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default)
             .WithIterationCount(5).WithWarmupCount(3).WithLaunchCount(1))
         .AddDiagnoser(MemoryDiagnoser.Default)
         .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-delivery"));
@@ -223,6 +248,18 @@ if (args.Contains("--persist-pg", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--persist-mysql", StringComparer.OrdinalIgnoreCase))
     return await RunRemoteDialectAsync(isPostgreSql: false, ModeConfig(args));
 
+// B1 复活前提实测（2026-10-16）：--delivery-pg / --delivery-mysql——远程库投递排空
+// BatchMarkThreshold A/B（「远端 DB 标记往返占发布延迟 >5%」前提的实测量具）。与
+// --delivery 同采样档（5 迭代/3 预热/1 launch：远程 op 秒级，medium 15×2 撞
+// InProcess 单基准 5 分钟硬上限），artifacts 独立目录归档；远程会话创建与
+// --persist-pg 同路（PALDDD_BENCH_PG_CONN / PALDDD_BENCH_MYSQL_CONN 外部实例或
+// 一次性容器，palddd_bench 库名前缀守卫）。
+if (args.Contains("--delivery-pg", StringComparer.OrdinalIgnoreCase))
+    return await RunRemoteDeliveryAsync(isPostgreSql: true);
+
+if (args.Contains("--delivery-mysql", StringComparer.OrdinalIgnoreCase))
+    return await RunRemoteDeliveryAsync(isPostgreSql: false);
+
 // 2026-10-08 缺口清单第③④⑤⑥⑧项：--coverage——Projection 吞吐 / 消息演化管线 /
 // Specification 内存路径 / Hosting 每请求开销 / 端到端单命令链路（全部零外部依赖，
 // 端到端与 Hosting 为框架开销层口径：InMemory store / DefaultHttpContext，无网络与 DB）。
@@ -237,6 +274,17 @@ if (args.Contains("--coverage", StringComparer.OrdinalIgnoreCase))
     return 0;
 }
 
+// 2026-10-18 ADR-030 Phase 2 收窄论证的 bench 证据轮：--stream——流式读链路（SSE 帧路径
+// 三分支 / 富化帧 / 心跳竞速开销 / PipeWriter 零拷贝对照 / 端点全周期）。全零外部依赖，
+// 框架开销层口径（DefaultHttpContext + 内存 PipeWriter，无网络与 DB）。回答三个待测项：
+// 帧路径分配形状、心跳竞速每项开销、零拷贝化每帧收益（ADR 复活触发器 3 的判定输入）。
+if (args.Contains("--stream", StringComparer.OrdinalIgnoreCase))
+{
+    var medium = ModeConfig(args);
+    BenchmarkRunner.Run<StreamReadBenchmarks>(medium);
+    return 0;
+}
+
 static async Task<int> RunRemoteDialectAsync(bool isPostgreSql, IConfig config)
 {
     RemoteDialectBenchSession session;
@@ -248,10 +296,7 @@ static async Task<int> RunRemoteDialectAsync(bool isPostgreSql, IConfig config)
     catch (Exception ex)
 #pragma warning restore CA1031
     {
-        Console.Error.WriteLine(
-            $"⛔ {(isPostgreSql ? "PostgreSQL" : "MySQL")} 容器不可达（需 Docker/WSL 环境，参考 CI dialect-probe）：{ex.Message}\n" +
-            $"   替代路径：环境变量 {(isPostgreSql ? "PALDDD_BENCH_PG_CONN" : "PALDDD_BENCH_MYSQL_CONN")} 指向外部实例连接串" +
-            $"（库名须 palddd_bench 前缀；wslc 容器环境用此路径，容器生命周期外部管理）");
+        ReportRemoteUnreachable(isPostgreSql, ex);
         return 2;
     }
 
@@ -278,6 +323,46 @@ static async Task<int> RunRemoteDialectAsync(bool isPostgreSql, IConfig config)
     return 0;
 }
 
+/// <summary>远程库投递排空 A/B（B1 复活前提实测）——会话创建同 RunRemoteDialectAsync，
+/// 采样档同 --delivery（5/3/1），只跑 OutboxDeliveryRemoteDrainBenchmarks 一类。</summary>
+static async Task<int> RunRemoteDeliveryAsync(bool isPostgreSql)
+{
+    RemoteDialectBenchSession session;
+    try
+    {
+        session = await RemoteDialectBenchSession.CreateAsync(isPostgreSql);
+    }
+#pragma warning disable CA1031 // 同 RunRemoteDialectAsync：容器不可达是环境态
+    catch (Exception ex)
+#pragma warning restore CA1031
+    {
+        ReportRemoteUnreachable(isPostgreSql, ex);
+        return 2;
+    }
+
+    await using (session)
+    {
+        RemoteDialectBenchState.Connection = session.Connection;
+        RemoteDialectBenchState.ConnectionString = session.ConnectionString;
+        RemoteDialectBenchState.DbType = session.DbType;
+        var deliveryRemote = ManualConfig.Create(DefaultConfig.Instance)
+            .AddJob(Job.MediumRun.WithToolchain(InProcessEmitToolchain.Default)
+                .WithIterationCount(5).WithWarmupCount(3).WithLaunchCount(1))
+            .AddDiagnoser(MemoryDiagnoser.Default)
+            .WithArtifactsPath(Path.Combine(AppContext.BaseDirectory, "artifacts-delivery-remote"));
+        BenchmarkRunner.Run<OutboxDeliveryRemoteDrainBenchmarks>(deliveryRemote);
+        RemoteDialectBenchState.Connection = null;
+        RemoteDialectBenchState.ConnectionString = null;
+    }
+    return 0;
+}
+
+static void ReportRemoteUnreachable(bool isPostgreSql, Exception ex)
+    => Console.Error.WriteLine(
+        $"⛔ {(isPostgreSql ? "PostgreSQL" : "MySQL")} 容器不可达（需 Docker/WSL 环境，参考 CI dialect-probe）：{ex.Message}\n" +
+        $"   替代路径：环境变量 {(isPostgreSql ? "PALDDD_BENCH_PG_CONN" : "PALDDD_BENCH_MYSQL_CONN")} 指向外部实例连接串" +
+        $"（库名须 palddd_bench 前缀；wslc 容器环境用此路径，容器生命周期外部管理）");
+
 BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 
 return 0;
@@ -289,7 +374,7 @@ internal static class SmokeBenchmarks
     // 分配预算（B/op，2026-10-08 rc.1 校准；基线实测：Success 0.000088 / Failed 40.000 /
     // FromValue 0.00004 / RaiseEvent 128.001）。预算语义对齐 AllocationContractTests：
     // 上界含安全余量，只拦截大幅回归（误引入容器扩容/装箱量级），精确预算由正式基准承载。
-    // 超限退出码 1——使 smoke 具备人工 TOOL 门禁资格（conventions §10.6 口径，未接 CI）。
+    // 超限退出码 1——使 smoke 具备门禁资格（conventions §10.6；2026-10-18 接入 CI perf-smoke）。
     public static int Run()
     {
         Console.WriteLine($"PalDDD benchmark smoke run: {Iterations:N0} iterations");
@@ -308,13 +393,23 @@ internal static class SmokeBenchmarks
             order.Complete();
         }, failures);
 
+        // R1（P1-4，2026-10-14 性能实施轮）：遥测关闭（bench 进程无 ActivityListener）时
+        // Start* 入口零分配——旧码 int tag 实参装箱 ~24B/op（v8 勘正），守卫前置后 0；
+        // 预算 1（含噪声余量，对齐 Success/FromValue 口径）。锁定测试载体说明：测试宿主
+        //（TUnit/MTP）订阅全局 ActivitySource 使 HasListeners 恒真，零分配断言只能在
+        // 无宿主进程成立（EPSL「测试宿主 ActivityListener」坑），故落本进程而非 xUnit 侧。
+        Measure("PalActivitySource.StartOutboxProcess(no listener)", budgetBytesPerOp: 1.0,
+            static () => PalDDD.Core.Diagnostics.PalActivitySource.StartOutboxProcess(100), failures);
+        Measure("PalActivitySource.StartEventLogAppend(no listener)", budgetBytesPerOp: 1.0,
+            static () => PalDDD.Core.Diagnostics.PalActivitySource.StartEventLogAppend("stream-1", 3), failures);
+
         if (failures.Count > 0)
         {
             Console.Error.WriteLine($"⛔ smoke 分配预算超标 {failures.Count} 项：{string.Join("；", failures)}");
             return 1;
         }
 
-        Console.WriteLine("✅ smoke 分配预算 4/4 通过（预算语义：上界含余量，只拦截大幅回归）");
+        Console.WriteLine("✅ smoke 分配预算 6/6 通过（预算语义：上界含余量，只拦截大幅回归）");
         return 0;
     }
 

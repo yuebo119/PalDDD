@@ -77,7 +77,7 @@ var wiredNames = CollectWiredNames(root);
 // 并在跑探针前断言一致（防两处清单漂移，同 E1/E2 目录清单教训）。
 string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "gate-lite", "verify-conventions", "ci-coverage",
     "gate", "tech-debt", "doc-consistency", "test-gate", "verify-ai", "config-policy", "license-policy", "count-audit",
-    "new-skip-guard"];
+    "quality-baseline", "review-freshness", "xml-guard", "vuln-scan", "test-change-guard", "new-skip-guard"];
 
 // 门禁覆盖形态声明（T-34，2026-09-22）：每个**已探针**门禁必须在此声明它覆盖哪些形态。
 // 为什么是机械要求而非文档建议：V25 的实证——一个已接线、能红、报错精确到行的门禁，
@@ -91,18 +91,23 @@ var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
     ["dapper-param-guard"] = "匿名 Dapper 参数枚举直传（CI #94 根因）",
     ["gate-lite"] = "根目录快速门禁（缺 src/ fail-closed）",
     ["verify-conventions"] = "V5 TODO / V8 模板段 / V9 命令引用 / V10 文档互链 / V11 决策文档 / V12 私网 IP",
-    ["ci-coverage"] = "覆盖率阈值比较方向 / NaN / 合并报告缺失（三者 fail-closed）",
+    ["ci-coverage"] = "覆盖率阈值比较方向 / NaN / 合并报告缺失（三者 fail-closed）；探针显式 --ci 固定 0.70 口径；**不覆盖**：本地 0.65 口径的 Docker 自动探测（由 ci-coverage --selftest 覆盖阈值分档）",
     ["gate"] = "G22 工作树清洁 / G23 快照↔CHANGELOG 同提交耦合（暂存/发布窗口/HEAD~1 三级变更集口径，含快照在更早提交而末提交只补 CHANGELOG 的跨提交洗白形态） / G24 路径分隔符归一化",
     ["tech-debt"] = "Obsolete / TODO-HACK-FIXME / Console 于 src / 空 catch / tab / 超长行 / 测试数 / 版本统一 / slnx 成员",
     ["doc-consistency"] = "D7 .ai/README.md 文件地图（其余 D1-D6/D8-D12 已下沉 C# 测试）",
     ["test-gate"] = "T1-T12 测试规范 / T-DEF-1 薄壳缺失 / T-DEF-4 CI job timeout / OSC 同测试翻转",
-    ["verify-ai"] = "V1-V25 系统一致性（含命令形态三子类：bash-.cs / 带前缀死引用 / 裸名死引用）+ V26-V29（2026-10-08 增：lessons 版本对账 / test spec 声明==实测含 lessons I 章铁律计数 / .sh set 行 pipefail 锚定 / 复发根因未闭环 WARN 督办——V26/V27/V28 已对真实仓库变异验证双向红绿，V29 为 WARN 级无 FAIL 分支、其检出面由 selftest ST-V29b 承担）",
-    ["config-policy"] = "A dependabot groups/ignore 双词表混用 / versions·labels·prefix·interval 缺失或空 / 未知上下文且注释不误报；B Directory.Build Exec 缺 IgnoreExitCode 且 Target 无 GITHUB_ACTIONS 跳过（行式校验，非完整 YAML 解析器）",
+    ["verify-ai"] = "V1-V30 系统一致性（V1-V25 含命令形态三子类：bash-.cs / 带前缀死引用 / 裸名死引用；V26-V29 版本对账/test spec/pipefail/复发督办；V30 知识层锚点对账：ADR/边界测试规模/快照程序集与路径/根脚本数/V 上限 == 运行时推导，历史时点行豁免。V30 隔离探针注入陈旧 ADR 声明必红）",
+    ["config-policy"] = "A dependabot groups/ignore 双词表混用 / versions·labels·prefix·interval 缺失或空 / 未知上下文且注释不误报；B Directory.Build Exec 缺 IgnoreExitCode 且 Target 无 GITHUB_ACTIONS 跳过；C workflows 的 uses 非 40 位 SHA / 缺版本注释（行式校验，非完整 YAML 解析器；本地动作与 docker:// 跳过）",
     // license-policy 的两极由隔离探针钉住（禁令命中必红 / 白名单放行必绿）；其余判定面
     // 只在 selftest 覆盖——隔离目录没有真实 nuspec 缓存，构造不出「非白名单许可」的夹具，
     // 故如实声明为不覆盖，不拿探针数量冒充覆盖面（T-34 的本意）。
     ["license-policy"] = "隔离探针覆盖两极：禁令命中（包+版本下限，与许可字符串正交）必红、白名单放行必绿（负向对照）；**不覆盖**：非白名单表达式 / 文件型许可未登记 gap / gap 到期 三类 FAIL，以及空输入·依赖图失败·nuspec 缺失三条 fail-closed 路径——这些由 --selftest 的 59 断言覆盖",
     ["count-audit"] = "README*/docs 计数声明失实（16 推导项 × 数字+关键词声明形态正则，扫描面排除 review·decisions·migration·design；fail-closed：推导 0 值/异常/缺依赖文件即红、扫描面零声明即红）；**不覆盖**：测试用例数（需 dotnet test 实测）、架构测试方法数 37（D12a 反射锚已守）、pitfalls 分章统计行与 CHANGELOG 历史数字、PAL 子系列区间（由总数项间接覆盖）",
+    ["quality-baseline"] = "构建日志警告计数 + 基线比较（--from-log 正反例：超基线必红/等于基线放行）；**不覆盖**：实际 dotnet build 执行与 analyzer 版本差异（由 CI quality-analyzers job 真跑承担）",
+    ["review-freshness"] = "review 债双层新鲜度与豁免判定（stale + 无豁免阻断 / stale + 有效豁免放行 / fresh 放行 / 维护轮新鲜但全量超 90 天阻断；--today/--src-date 夹具）；**不覆盖**：真实 git 提交日期读取（由 pre-push 实跑承担）",
+    ["xml-guard"] = "暂存 XML 良构性（畸形 .csproj 必红；正例由现有 clean 探针覆盖）",
+    ["vuln-scan"] = "dotnet list package --vulnerable JSON 的已知漏洞（含 transitive；正例/空输入 selftest 覆盖）",
+    ["test-change-guard"] = "暂存集只改 test/** 不改 src/** 的拦截（新增测试放行 / 删除与修改拦截 / ALLOW_TEST_ONLY_CHANGE 豁免；selftest 覆盖 Decide 纯函数）",
     // new-skip-guard 的隔离探针钉住两极（净增拦截 / 干净放行）+ 对称判定的洗白形态
     // （删 1 加 1 改 reason = 净 0 放行）。**不覆盖**：字符串字面量内的 Skip 文本
     // （元测试形态，diff 对称与豁免兜底）；行内 // 剥除的漏报路径（方向安全）——
@@ -328,7 +333,7 @@ var probes = new List<Probe>
         Gate: "ci-coverage",
         ExpectExit: 1,
         MustContainInStdout: "below threshold",
-        ExtraArgs: "--enforce-only",
+        ExtraArgs: "--enforce-only --ci",
         Setup: dir =>
         {
             // 预置合并报告：line-rate=0.10，阈值默认 0.70 → 必须判 FAIL 退出 1。
@@ -344,7 +349,7 @@ var probes = new List<Probe>
         Gate: "ci-coverage",
         ExpectExit: 1,
         MustContainInStdout: "could not parse line-rate",
-        ExtraArgs: "--enforce-only",
+        ExtraArgs: "--enforce-only --ci",
         Setup: dir =>
         {
             // 历史 fail-open 形态：line-rate 为 NaN 时旧 double 比较恒假 → 放行。
@@ -360,7 +365,7 @@ var probes = new List<Probe>
         Gate: "ci-coverage",
         ExpectExit: 1,
         MustContainInStdout: "merged cobertura report not found",
-        ExtraArgs: "--enforce-only",
+        ExtraArgs: "--enforce-only --ci",
         Setup: _ => []),
 
     // ── T-05（2026-09-22）：补 6 个门禁的隔离变异探针 ──
@@ -448,6 +453,31 @@ var probes = new List<Probe>
         MustContainInStdout: "FAIL V1",
         Setup: _ => []),
     new(
+        Name: "verify-ai 拒绝过期的知识层锚点（V30——2026-10-18 增）",
+        Gate: "verify-ai",
+        ExpectExit: 1,
+        MustContainInStdout: "FAIL V30",
+        CopyScriptIntoIsolation: true,
+        Setup: dir =>
+        {
+            // 夹具：2 个 ADR 文件但 README 声明 1 → V30 必须报红。
+            // 其余 V 项在夹具里也会失败（缺 .ai 全套文件），探针只断言 V30 的检出面。
+            Directory.CreateDirectory(Path.Combine(dir, "docs", "decisions"));
+            Directory.CreateDirectory(Path.Combine(dir, "scripts"));
+            Directory.CreateDirectory(Path.Combine(dir, "test", "X", "Snapshots"));
+            Directory.CreateDirectory(Path.Combine(dir, ".ai"));
+            File.WriteAllText(Path.Combine(dir, "docs", "decisions", "001-a.md"), "# a\n");
+            File.WriteAllText(Path.Combine(dir, "docs", "decisions", "002-b.md"), "# b\n");
+            File.WriteAllText(Path.Combine(dir, "scripts", "a.cs"), "// a\n");
+            File.WriteAllText(Path.Combine(dir, "test", "X", "ArchitectureBoundaryTests.cs"),
+                "[Test]\nvoid A() { }\n");
+            File.WriteAllText(Path.Combine(dir, "test", "X", "PublicApiSnapshotTests.cs"), "// s\n");
+            File.WriteAllText(Path.Combine(dir, "test", "X", "Snapshots", "core-packages-public-api.txt"),
+                "# PalDDD.Core\n");
+            File.WriteAllText(Path.Combine(dir, ".ai", "README.md"), "ADR 001-001（现行 1）\n");
+            return [];
+        }),
+    new(
         Name: "verify-conventions 拒绝文档中的死脚本引用（V9——T-30/M11 增）",
         Gate: "verify-conventions",
         ExpectExit: 1,
@@ -510,13 +540,32 @@ var probes = new List<Probe>
         Setup: dir =>
         {
             var gh = Path.Combine(dir, ".github");
-            Directory.CreateDirectory(gh);
+            Directory.CreateDirectory(Path.Combine(gh, "workflows"));
             File.WriteAllText(Path.Combine(gh, "dependabot.yml"),
                 "version: 2\nupdates:\n  - package-ecosystem: nuget\n    schedule:\n      interval: weekly\n    labels:\n      - dependencies\n    commit-message:\n      prefix: \"依赖\"\n");
+            File.WriteAllText(Path.Combine(gh, "workflows", "ci.yml"),
+                "jobs:\n  build:\n    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n");
             File.WriteAllText(Path.Combine(dir, "Directory.Build.props"), "<Project>\n</Project>\n");
             File.WriteAllText(Path.Combine(dir, "Directory.Build.targets"),
                 "<Project>\n  <Target Name=\"ConfigureGitHooks\" Condition=\"'$(GITHUB_ACTIONS)' != 'true'\">\n    <Exec Command=\"git config --local core.hooksPath .githooks\" />\n  </Target>\n</Project>\n");
-            return [".github/dependabot.yml", "Directory.Build.props", "Directory.Build.targets"];
+            return [".github/dependabot.yml", ".github/workflows/ci.yml", "Directory.Build.props", "Directory.Build.targets"];
+        }),
+    new(
+        Name: "config-policy 拒绝可变标签 uses（Actions 供应链）",
+        Gate: "config-policy",
+        ExpectExit: 1,
+        MustContainInStdout: "C1",
+        Setup: dir =>
+        {
+            var gh = Path.Combine(dir, ".github");
+            Directory.CreateDirectory(Path.Combine(gh, "workflows"));
+            File.WriteAllText(Path.Combine(gh, "dependabot.yml"),
+                "version: 2\nupdates:\n  - package-ecosystem: nuget\n    schedule:\n      interval: weekly\n    labels:\n      - dependencies\n");
+            File.WriteAllText(Path.Combine(gh, "workflows", "bad.yml"),
+                "jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4 # v4.4.0\n");
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.props"), "<Project>\n</Project>\n");
+            File.WriteAllText(Path.Combine(dir, "Directory.Build.targets"), "<Project>\n</Project>\n");
+            return [".github/dependabot.yml", ".github/workflows/bad.yml", "Directory.Build.props", "Directory.Build.targets"];
         }),
     // ── license-policy 隔离探针（2026-09-25 增，裁决「所有引用的库必须是开源的许可」
     // 落成机械门禁的两极）。CWD 系门禁（FindRepoRootOrNull 以 Environment.CurrentDirectory
@@ -571,6 +620,134 @@ var probes = new List<Probe>
         ExpectExit: 0,
         MustContainInStdout: "PASS count-audit",
         Setup: dir => SetupCountAuditFixture(dir, injectFalseClaim: false)),
+    // ── quality-baseline 隔离探针（2026-10-18 审计 P1：新控制必须被证明会红）。
+    // CWD 系（FindRepoRoot 向上找 PalDDD.slnx），用 --from-log 跳过真实构建；
+    // 正例钉“超基线必红”，负向对照钉“等于基线放行”——不拿 selftest 冒充端到端。
+    new(
+        Name: "quality-baseline 拒绝超出基线的警告（1 vs 0）",
+        Gate: "quality-baseline",
+        ExpectExit: 1,
+        MustContainInStdout: "FAIL 分析器警告",
+        ExtraArgs: "-- --from-log warnings.log",
+        Setup: dir =>
+        {
+            Directory.CreateDirectory(Path.Combine(dir, "scripts"));
+            File.WriteAllText(Path.Combine(dir, "scripts", "quality-analyzer-baseline.txt"), "baseline=0\n");
+            File.WriteAllText(Path.Combine(dir, "warnings.log"),
+                "src/Probe.cs(1,1): warning MA0001: probe warning\n");
+            return [];
+        }),
+    new(
+        Name: "quality-baseline 放行等于基线的警告（负向对照）",
+        Gate: "quality-baseline",
+        ExpectExit: 0,
+        MustContainInStdout: "PASS 分析器警告",
+        ExtraArgs: "-- --from-log warnings.log",
+        Setup: dir =>
+        {
+            Directory.CreateDirectory(Path.Combine(dir, "scripts"));
+            File.WriteAllText(Path.Combine(dir, "scripts", "quality-analyzer-baseline.txt"), "baseline=0\n");
+            File.WriteAllText(Path.Combine(dir, "warnings.log"), "Build succeeded.\n");
+            return [];
+        }),
+    // ── review-freshness 隔离探针（2026-10-18 审计 P1：review 阻断必须被证明会红）。
+    // 用 --today/--src-date 构造时间夹具，不依赖真实 git 历史。
+    new(
+        Name: "review-freshness 拒绝过期 metrics 且无豁免",
+        Gate: "review-freshness",
+        ExpectExit: 1,
+        MustContainInStdout: "FAIL review 债",
+        ExtraArgs: "-- --today 2026-10-18 --src-date 2026-10-01",
+        Setup: dir =>
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ".ai", "review"));
+            File.WriteAllText(Path.Combine(dir, ".ai", "review", "metrics.md"),
+                "| v91 | 2026-09-01 | 全量 |\n");
+            return [];
+        }),
+    new(
+        Name: "review-freshness 放行过期 metrics + 有效豁免",
+        Gate: "review-freshness",
+        ExpectExit: 0,
+        MustContainInStdout: "有效豁免",
+        ExtraArgs: "-- --today 2026-10-18 --src-date 2026-10-01",
+        Setup: dir =>
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ".ai", "review"));
+            File.WriteAllText(Path.Combine(dir, ".ai", "review", "metrics.md"),
+                "| v91 | 2026-09-01 | 全量 |\n");
+            File.WriteAllText(Path.Combine(dir, ".ai", "review", "review-exemption.json"),
+                "{\"owner\":\"probe\",\"expires\":\"2026-11-15\",\"reason\":\"probe\"}\n");
+            return [];
+        }),
+    new(
+        Name: "review-freshness 放行新鲜 metrics（负向对照）",
+        Gate: "review-freshness",
+        ExpectExit: 0,
+        MustContainInStdout: "PASS review 新鲜度",
+        ExtraArgs: "-- --today 2026-10-18 --src-date 2026-10-01",
+        Setup: dir =>
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ".ai", "review"));
+            File.WriteAllText(Path.Combine(dir, ".ai", "review", "metrics.md"),
+                "| v92 | 2026-10-18 | 维护轮 |\n");
+            return [];
+        }),
+    new(
+        Name: "review-freshness 维护轮新鲜但全量超 90 天阻断",
+        Gate: "review-freshness",
+        ExpectExit: 1,
+        MustContainInStdout: "最近全量",
+        ExtraArgs: "-- --today 2026-10-18 --src-date 2026-10-01",
+        Setup: dir =>
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ".ai", "review"));
+            File.WriteAllText(Path.Combine(dir, ".ai", "review", "metrics.md"),
+                "| v92 | 2026-10-18 | 质量系统维护轮 |\n| v91 | 2026-05-01 | 全仓运行 |\n");
+            return [];
+        }),
+    // ── xml-guard / vuln-scan 隔离探针（2026-10-18 审计 P1：补齐旧有 PROBED '-'）。
+    new(
+        Name: "xml-guard 拒绝畸形 XML（bad.csproj）",
+        Gate: "xml-guard",
+        ExpectExit: 1,
+        MustContainInStdout: "bad.csproj",
+        Setup: dir =>
+        {
+            File.WriteAllText(Path.Combine(dir, "PalDDD.slnx"), "<Solution></Solution>\n");
+            File.WriteAllText(Path.Combine(dir, "bad.csproj"), "<Project><\n");
+            return ["PalDDD.slnx", "bad.csproj"];
+        }),
+    new(
+        Name: "vuln-scan 拒绝含已知漏洞的 JSON",
+        Gate: "vuln-scan",
+        ExpectExit: 1,
+        MustContainInStdout: "Foo@1.0.0",
+        ExtraArgs: "vuln.json",
+        Setup: dir =>
+        {
+            File.WriteAllText(Path.Combine(dir, "vuln.json"),
+                "{\"projects\":[{\"frameworks\":[{\"framework\":\"net11.0\",\"topLevelPackages\":[{\"id\":\"Foo\",\"resolvedVersion\":\"1.0.0\",\"vulnerabilities\":[{\"severity\":2}]}]}]}]}\n");
+            return [];
+        }),
+    new(
+        Name: "test-change-guard 拒绝只改 test/ 的暂存集",
+        Gate: "test-change-guard",
+        ExpectExit: 1,
+        MustContainInStdout: "FAIL 检测到",
+        CommitBeforeRun: true,
+        Setup: dir =>
+        {
+            var d = Path.Combine(dir, "test", "A.Tests");
+            Directory.CreateDirectory(d);
+            File.WriteAllText(Path.Combine(d, "X.cs"), "// original\n");
+            return ["test/A.Tests/X.cs"];
+        },
+        SetupAfterBase: dir =>
+        {
+            File.WriteAllText(Path.Combine(dir, "test", "A.Tests", "X.cs"), "// modified\n");
+            return ["test/A.Tests/X.cs"];
+        }),
     // ── new-skip-guard 隔离探针（2026-09-25 增，Pal 会话审计立法：Skip 修绿的静态拦截）。
     // CWD 系门禁（FindRepoRoot 以 cwd 向上找 PalDDD.slnx）→ 隔离目录直接跑。
     new(
@@ -785,6 +962,11 @@ static (bool Ok, string Detail) RunProbe(string repoRoot, Probe probe)
             foreach (var f in staged) RunGit(tmp, $"add -- {f}");
             if (staged.Length > 0) RunGit(tmp, "commit -q -m fixture-change");
         }
+
+        // SetupAfterBase（2026-10-18 增，服务 git 暂存态门禁）：在基座/夹具提交后
+        // 再修改并暂存文件，构造「已提交文件被暂存修改」形态（test-change-guard 的 M 态）。
+        if (probe.SetupAfterBase is not null)
+            foreach (var f in probe.SetupAfterBase(tmp)) RunGit(tmp, $"add -- {f}");
 
         var (exitCode, stdout) = RunGate(effectiveGatePath, tmp, probe.ExtraArgs);
 
@@ -1073,4 +1255,5 @@ internal sealed record Probe(
     string? ExtraArgs = null,
     bool SkipSlnxStaging = false,
     bool CopyScriptIntoIsolation = false,
-    bool CommitBeforeRun = false);
+    bool CommitBeforeRun = false,
+    Func<string, string[]>? SetupAfterBase = null);

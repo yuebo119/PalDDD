@@ -24,6 +24,10 @@ public sealed class MySqlLeasePolicyTests
         => await Assert.That(MySqlLeasePolicy.UseSkipLocked("9.0.0")).IsTrue();
 
     [Test]
+    public async Task Version_TwoPart_9_0_Enables()
+        => await Assert.That(MySqlLeasePolicy.UseSkipLocked("9.0")).IsTrue();
+
+    [Test]
     public async Task VersionWithSuffix_Enables()
         => await Assert.That(MySqlLeasePolicy.UseSkipLocked("8.0.18-commercial")).IsTrue();
 

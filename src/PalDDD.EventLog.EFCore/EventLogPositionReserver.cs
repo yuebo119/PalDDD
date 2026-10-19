@@ -27,14 +27,17 @@ namespace PalDDD.EventLog;
 /// <para>
 /// 设计动机是消除旧设计中每次 <c>AppendAsync</c> 都需要在 <c>Serializable</c>
 /// 事务内读取和更新单个分配器行所带来的全局序列化瓶颈。
-/// ⚠️ <b>性能契约勘正（v33 P3）</b>：ITM-226 修复后，关系型路径
-/// <see cref="EventLogDbContext.AppendAsync"/> 恒以 BeginTransaction 包裹追加（正确性优先：
-/// 防外层事务回滚后内存游标超前持久化），事务存活期内 <c>CurrentTransaction</c> 恒非空 →
-/// <see cref="AllocateNewChunkAsync"/> 恒走 <c>_initialized = false</c> 分支（不发布内存
-/// 游标）→ <b>每次 AppendAsync 都 SELECT+UPDATE 分配器行</b>。因此"区块大小为 N 时只有
-/// 1/N 的追加触及分配器行、其余零数据库往返"在关系型栈当前<b>不成立</b>——Hi/Lo 批量
-/// 收益仅 EF InMemory 路径（无事务包装）生效。行为正确但类头性能声明与实现不符；
-/// 收益兑现需 v4.0（事务外预分配或 DDL 层序列）。
+/// ⚠️ <b>性能契约勘正（v33 P3；R5 已修复 2026-10-14）</b>：ITM-226 修复后，关系型路径
+/// <see cref="EventLogDbContext.AppendAsync"/> 曾恒以 BeginTransaction 包裹追加，事务存活期内
+/// <c>CurrentTransaction</c> 恒非空 → <see cref="AllocateNewChunkAsync"/> 恒走
+/// <c>_initialized = false</c> 分支（不发布内存游标）→ 每次 AppendAsync 都 SELECT+UPDATE
+/// 分配器行且位置按 chunk 稀疏化（实测 1/101/201）。R5（P0-1）将版本校验与位置预留
+/// <b>前移到事务外</b>：预留经自身 SaveChanges 自持提交、内存游标即时发布（ITM-226 场景
+/// (a) 化——事件事务回滚只留间隙，既定可接受；场景 (b) 的内存超前自此不可达）——
+/// Hi/Lo 批量收益在关系型栈兑现（锁定测试
+/// <c>EventLogEfCoreTests.AppendAsync_OnRelationalProvider_ChunkPositionsConsecutiveWithinChunk</c>：
+/// 位置连续 +1，旧形态 +100 稀疏判红）。hasActiveTransaction 降级分支保留，服务绕过
+/// AppendAsync 直入事务的预留调用（防御性，正常管线不可达）。
 /// </para>
 /// <para>
 /// 区块耗尽时使用乐观并发（通过 <see cref="EventLogGlobalPositionAllocator.Revision"/> 的 CAS）。
@@ -201,8 +204,12 @@ public sealed class EventLogPositionReserver
                     if (!probeSucceeded)
                         throw;
                     if (probe is not null && probe.Revision == snapshotRevision)
+                    {
+#pragma warning disable MA0054 // 此处无在捕异常可嵌入（探测失败分支已 throw; 保留原始异常）
                         throw new InvalidOperationException(
                             "The allocator revision was advanced by a concurrent commit (the failed CAS proves it), but the probe still returns the same stale revision — under MySQL REPEATABLE READ the concurrently committed revision is not visible to the current transaction snapshot; retrying inside the same transaction cannot succeed. The caller should retry with a new transaction, which establishes a fresh snapshot and can see the new revision.");
+#pragma warning restore MA0054
+                    }
                     continue;
                 }
                 catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
@@ -238,7 +245,7 @@ public sealed class EventLogPositionReserver
                     // 带语义异常——外层调用方以新事务重试可恢复（新事务建立新快照即可见）。
                     if (!allocatorRowVisible)
                         throw new InvalidOperationException(
-                            "Allocator row exists (the unique-constraint conflict proves it) but is invisible to the current transaction snapshot — under MySQL REPEATABLE READ the concurrently committed allocator row is not visible to this transaction's snapshot; retrying inside the same transaction cannot succeed. The caller should retry with a new transaction, which establishes a fresh snapshot and can see the row.");
+                            "Allocator row exists (the unique-constraint conflict proves it) but is invisible to the current transaction snapshot — under MySQL REPEATABLE READ the concurrently committed allocator row is not visible to this transaction's snapshot; retrying inside the same transaction cannot succeed. The caller should retry with a new transaction, which establishes a fresh snapshot and can see the row.", ex);
                     continue;
                 }
 

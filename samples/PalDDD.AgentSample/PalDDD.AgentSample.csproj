@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PalDDD.AgentSample</RootNamespace>
+    <!-- SMP-107 同 MinimalApi：Web SDK 样本不参与 Native AOT publish（AOT 验证由
+         AotSample/PalOrmSample 承载）；代码本身 AOT 友好（源生成 JSON + 显式注册） -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <!-- 样例：广撒网抑制可接受（同 MinimalApi 口径） -->
+    <NoWarn>$(NoWarn);CA1515;CA1050;CA1062;CA2007;CA1002;CA1031;CA1812;CA1303;CS9113;CS1591;CA1861;IL2026;IL3050;S3903</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.CQRS\PalDDD.CQRS.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.DependencyInjection\PalDDD.DependencyInjection.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.EventLog\PalDDD.EventLog.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Hosting.AspNetCore\PalDDD.Hosting.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Idempotency\PalDDD.Idempotency.csproj" />
+  </ItemGroup>
+
+</Project>

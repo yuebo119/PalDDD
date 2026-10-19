@@ -12,10 +12,24 @@ namespace PalDDD.Projections;
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:Members annotated with RequiresDynamicCode require dynamic access",
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
-public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : DbContext(options), IProjectionCheckpointStore
+public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : DbContext(options), IProjectionCheckpointStore, IResumableProjectionCheckpointStore
 {
     /// <summary>投影 checkpoint 表</summary>
     public DbSet<ProjectionCheckpoint> ProjectionCheckpoints => Set<ProjectionCheckpoint>();
+
+    // A5（S1 轮，2026-10-15）：固定形状单行查询编译化——EF Core 每次执行都把表达式树
+    // 重新翻译成 SQL（无自动计划缓存；EF.CompileAsyncQuery 的官方存在理由即消除重复
+    // 编译开销）。两个查询是投影路径每消息的固定形状热点（读路径 AsNoTracking、
+    // TryStart 跟踪查询两形态分别编译，跟踪语义随委托固化）。按 IModel 引用各缓存一份
+    // 委托：编译委托与单一模型绑定（EF 官方约束），同上下文类型跨 provider 模型实例
+    // 不同，按模型分持。
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        Microsoft.EntityFrameworkCore.Metadata.IModel,
+        Func<ProjectionCheckpointDbContext, string, string, string, CancellationToken, Task<ProjectionCheckpoint?>>> GetCheckpointNoTrackingByModel = new();
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        Microsoft.EntityFrameworkCore.Metadata.IModel,
+        Func<ProjectionCheckpointDbContext, string, string, string, CancellationToken, Task<ProjectionCheckpoint?>>> GetCheckpointTrackedByModel = new();
 
     /// <inheritdoc/>
     /// <remarks>
@@ -31,13 +45,15 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
     {
         ValidateKeyParts(projectionName, sourceName, position);
 
-        return await ProjectionCheckpoints
-            .AsNoTracking()
-            .SingleOrDefaultAsync(
-                x => x.ProjectionName == projectionName
-                    && x.SourceName == sourceName
-                    && x.Position == position,
-                ct).ConfigureAwait(false);
+        // A5（S1 轮）：读路径走按模型缓存的编译委托（AsNoTracking 形态随委托固化）
+        return await GetCheckpointNoTrackingByModel.GetOrAdd(Model, static _ =>
+            EF.CompileAsyncQuery<ProjectionCheckpointDbContext, string, string, string, ProjectionCheckpoint?>(
+                (ctx, projectionName, sourceName, position, ct) => ctx.ProjectionCheckpoints
+                    .AsNoTracking()
+                    .SingleOrDefault(
+                        x => x.ProjectionName == projectionName
+                            && x.SourceName == sourceName
+                            && x.Position == position)))(this, projectionName, sourceName, position, ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -65,11 +81,32 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         if (processingTimeout < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
 
-        var checkpoint = await ProjectionCheckpoints.SingleOrDefaultAsync(
-            x => x.ProjectionName == projectionName
-                && x.SourceName == sourceName
-                && x.Position == position,
-            ct).ConfigureAwait(false);
+        // B7(a)（EPSL 地毯审计 2026-10-16 B 批 #7，镜像 InboxDbContext A9 直插优先）：
+        // 新位路径 3 语句（跟踪 SELECT + INSERT + 调用方终态 UPDATE）降为 2（INSERT +
+        // UPDATE）。仅关系型 provider 生效——(ProjectionName, SourceName, Position) 唯一
+        // 约束的强制是关系型保证；InMemory 等无唯一约束 provider 保持预 SELECT 路径
+        // （否则重复位静默建第二行，幂等失效）。唯一冲突（TryCreate 返回 null）才走下方
+        // 既有跟踪 SELECT 分类路径（Completed/活跃 Processing → null；僵尸/失败 → 回收）——
+        // 回查即原预 SELECT 的职责，仅在冲突路径执行。权衡同 A9：重复位路径由 1 往返
+        // （预查命中）变为 INSERT 失败 + 回查（2 起），回放负载以新位为主（ADR-028 增量
+        // 续读）净胜；纯重放既有行场景持平偏负。
+        if (Database.IsRelational())
+        {
+            var created = await TryCreateCheckpointAsync(
+                projectionName, sourceName, position, startedAt, processingTimeout, ct).ConfigureAwait(false);
+            if (created is not null)
+                return created;
+        }
+
+        // A5（S1 轮）：跟踪查询走按模型缓存的编译委托（僵尸回收分支的 MarkProcessing
+        // 突变依赖 ChangeTracker 持久化，保持跟踪形态；编译只固化查询形状，跟踪语义不变）
+        var checkpoint = await GetCheckpointTrackedByModel.GetOrAdd(Model, static _ =>
+            EF.CompileAsyncQuery<ProjectionCheckpointDbContext, string, string, string, ProjectionCheckpoint?>(
+                (ctx, projectionName, sourceName, position, ct) => ctx.ProjectionCheckpoints
+                    .SingleOrDefault(
+                        x => x.ProjectionName == projectionName
+                            && x.SourceName == sourceName
+                            && x.Position == position)))(this, projectionName, sourceName, position, ct).ConfigureAwait(false);
 
         if (checkpoint is null)
             return await TryCreateCheckpointAsync(projectionName, sourceName, position, startedAt, processingTimeout, ct).ConfigureAwait(false);
@@ -271,6 +308,80 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
                 Entry(checkpoint).State = EntityState.Detached;
             throw;
         }
+    }
+
+    /// <summary>增量回放续读位置（R6/P0-3，ADR-028）——语义详见
+    /// <see cref="IResumableProjectionCheckpointStore"/>。两档执行：服务端聚合优先
+    /// （<c>Convert.ToInt64(string)</c> 经 EF 翻译为方言 CAST——PG/SqlServer 族支持；
+    /// 实测 SQLite provider 不翻译），翻译失败回退<b>最小投影客户端聚合</b>（仅取
+    /// Position/Status 两列轻量行、AsNoTracking 零跟踪——无 payload 物化，仍免全流重读）。
+    /// 数值 CAST 失败（脏数据）返回 null 回退全量回放。</summary>
+    public async ValueTask<string?> GetResumePositionAsync(
+        string projectionName,
+        string sourceName,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
+
+        try
+        {
+            var firstIncomplete = await ProjectionCheckpoints
+                .AsNoTracking()
+                .Where(x => x.ProjectionName == projectionName
+                    && x.SourceName == sourceName
+                    && x.Status != ProjectionCheckpointStatus.Completed)
+                .MinAsync(x => (long?)Convert.ToInt64(x.Position, System.Globalization.CultureInfo.InvariantCulture), ct)
+                .ConfigureAwait(false);
+            if (firstIncomplete is { } incomplete)
+                return incomplete.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            var max = await ProjectionCheckpoints
+                .AsNoTracking()
+                .Where(x => x.ProjectionName == projectionName && x.SourceName == sourceName)
+                .MaxAsync(x => (long?)Convert.ToInt64(x.Position, System.Globalization.CultureInfo.InvariantCulture), ct)
+                .ConfigureAwait(false);
+            return max is { } value
+                ? (value + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : null;
+        }
+        catch (System.Data.Common.DbException)
+        {
+            // 数值 CAST 失败（如 PG 对非数值 Position 串 22007 族）——续读是优化面，
+            // 回退全量回放（语义兜底恒安全，对齐 Dapper 实现同款口径）
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            // LINQ→SQL 翻译失败（SQLite provider 不映射 Convert.ToInt64(string)，实测）——
+            // 落下方最小投影客户端聚合（非全量回放：检查点行远轻于事件行）
+        }
+
+        // 回退档：最小投影客户端聚合——两列轻量行 + AsNoTracking（零跟踪残留、零 payload）
+        var rows = await ProjectionCheckpoints
+            .AsNoTracking()
+            .Where(x => x.ProjectionName == projectionName && x.SourceName == sourceName)
+            .Select(x => new { x.Position, x.Status })
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        long? minIncomplete = null;
+        long? maxAny = null;
+        foreach (var row in rows)
+        {
+            if (!long.TryParse(row.Position, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var rowPosition))
+                return null; // 非数值 Position——回退全量回放
+            maxAny = maxAny is null || rowPosition > maxAny ? rowPosition : maxAny;
+            if (row.Status != ProjectionCheckpointStatus.Completed
+                && (minIncomplete is null || rowPosition < minIncomplete))
+                minIncomplete = rowPosition;
+        }
+
+        var resume = minIncomplete ?? (maxAny is { } maxRow ? maxRow + 1 : (long?)null);
+        return resume is { } resumeValue
+            ? resumeValue.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : null;
     }
 
     /// <summary>配置投影 checkpoint 实体</summary>

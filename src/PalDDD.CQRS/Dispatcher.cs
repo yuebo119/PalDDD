@@ -10,7 +10,6 @@
 //
 using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Frozen;
-using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 
 namespace PalDDD.CQRS;
@@ -194,14 +193,27 @@ public sealed class Dispatcher
         ArgumentNullException.ThrowIfNull(request);
 
         var allBehaviors = services.GetServices<IPipelineBehavior<TRequest, TResponse>>();
-        var matching = allBehaviors.Select(b => (IPipelineBehavior)b).ToImmutableArray();
-        if (matching.IsEmpty)
+        var matching = MaterializeBehaviors(allBehaviors);
+        if (matching.Length == 0)
             return await handler.HandleAsync(request, ct).ConfigureAwait(false);
 
         var pipeline = new PipelineStateMachine();
         pipeline.Reset(matching, handler, request, ct);
         return await pipeline.ExecuteNextAsync().ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// R1（A-F1，2026-10-14 性能实施轮）：泛型行为枚举到非泛型数组的物化——数组协变直取
+    /// 优先（MS DI 多服务解析常态返回 <c>T[]</c> 实例，含缓存的空数组：转型零分配零拷贝），
+    /// 免除原 <c>Select+ToImmutableArray</c> 的迭代器加 builder 物化链（1+ 行为场景每请求
+    /// ~100-150B）；非数组形态（第三方容器/包装枚举）回落单次 ToArray 物化。
+    /// 引用恒等转型无语义差异（<c>IPipelineBehavior&lt;,&gt;</c> 经 DIM 实现非泛型接口）。
+    /// </summary>
+    private static IPipelineBehavior[] MaterializeBehaviors<TRequest, TResponse>(
+        IEnumerable<IPipelineBehavior<TRequest, TResponse>> allBehaviors)
+        where TRequest : IRequest<TResponse>
+        => allBehaviors as IPipelineBehavior[]
+           ?? allBehaviors.Select(b => (IPipelineBehavior)b).ToArray();
 
     /// <summary>发送命令（无返回值）— 同步完成零分配</summary>
     public ValueTask SendAsync(ICommand cmd, CancellationToken ct = default)
@@ -240,12 +252,9 @@ public sealed class Dispatcher
     /// <summary>执行完整的管道链：行为1 → 行为2 → ... → Handler</summary>
     /// <remarks>
     /// 使用 <see cref="PipelineStateMachine"/> 替代逐行为 async lambda 链：<br/>
-    /// — 每行为一次 Func 委托分配（~64B，实例方法组不缓存——v27 P3 勘正，原"零闭包
-    ///   分配（每行为 ~72B 编译器生成闭包类）"与 IL 不符）<br/>
-    /// — Select 投影迭代器 + 转型 lambda 每请求一次分配（见泛型 ExecutePipelineAsync 的
-    ///   Select→ToImmutableArray 链：GetServices 每请求返回新枚举，无法跨请求缓存；单请求
-    ///   内仅枚举一次、不重复创建。原"零 LINQ 迭代器分配（原 Where() ~40B）"失实——
-    ///   Where 已替换为 Select 转型链，但迭代器分配并未消失）<br/>
+    /// — next 委托构造期缓存一次（每请求 1 笔 ~64B，R1/A-F3——原为每行为一次 Func 分配，v27 勘正形态）<br/>
+    /// — 行为物化走 <see cref="MaterializeBehaviors{TRequest,TResponse}"/> 数组协变直取
+    ///   （R1/A-F1——原 Select+ToImmutableArray 迭代器物化链，1+ 行为场景每请求 ~100-150B）<br/>
     /// — 快路径省 AwaitAndBox 状态机装箱；每次请求创建新状态机实例（~40B），确保线程安全（Dispatcher 为 Singleton）
     /// </remarks>
     private async ValueTask<object?> ExecutePipelineAsync(Type requestType, IBaseRequest request, CancellationToken ct)
@@ -276,21 +285,14 @@ public sealed class Dispatcher
         ArgumentNullException.ThrowIfNull(request);
 
         var allBehaviors = services.GetServices<IPipelineBehavior<TRequest, TResponse>>();
-        // 转换为非泛型 IPipelineBehavior 数组——PipelineStateMachine 通过非泛型接口构建管道链。
-        // v33 P3 勘正：原注释"用集合表达式 + ToImmutableArray 简洁清晰"与实现不符——
-        // 实际是 Select 转型链 + ToImmutableArray（DI 多服务枚举来自 GetServices，
-        // 无法写成集合表达式字面量）。behavior 数量通常 ≤2（Validation+Logging）。
-        // P8 探针（2026-10-10 优化轮）：曾试「IEnumerable<T> 数组直判空零分配进快路径」——
-        // 实测零行为分配 160B 纹丝不动（靶分配本不存在：MS DI 空 IEnumerable 走缓存数组，
-        // Select/ToImmutableArray 的空物化未计入 per-op 列），无收益即回退，留此勘误防重提
-        var matching = allBehaviors.Select(b => (IPipelineBehavior)b).ToImmutableArray();
+        var matching = MaterializeBehaviors(allBehaviors);
 
         var handler = (IHandler)services.GetRequiredService<THandler>();
 
         // C5（2026-10-09 优化轮）：零行为快路径——空管道下状态机首步即直呼 handler，
-        // 此处直接返回等价 ValueTask，省状态机实例与 ExecuteNextAsync 方法组委托两次
-        // 分配（实测零行为 216B/op 中约半数为该两笔）；语义与状态机空路径逐字一致
-        if (matching.IsEmpty)
+        // 此处直接返回等价 ValueTask，省状态机实例与 next 委托两笔分配
+        // （实测零行为 216B/op 中约半数为该两笔）；语义与状态机空路径逐字一致
+        if (matching.Length == 0)
             return await handler.HandleAsync(request, ct).ConfigureAwait(false);
 
         var pipeline = new PipelineStateMachine();

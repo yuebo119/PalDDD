@@ -14,6 +14,9 @@
        DecompressionGuard public 常量先例；池无公共 API 面，IVT 即可，不入公共快照） -->
   <ItemGroup>
     <InternalsVisibleTo Include="PalDDD.Compression.Native" />
+    <!-- EPSL 地毯审计 2026-10-16 B 批 #8：驻留上限弃槽契约的锁定测试（池行为经
+         容量/实例恒等直断言，IVT 先例同 KafkaBroker/CQRS 测试 seam） -->
+    <InternalsVisibleTo Include="PalDDD.Compression.Tests" />
   </ItemGroup>
 
 </Project>

@@ -49,9 +49,47 @@ internal static class EventLogSql
         "SELECT @EventId, @EventName, @StreamName, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) + 1, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState " +
         "RETURNING global_position AS \"GlobalPosition\", stream_version AS \"StreamVersion\"";
 
+    /// <summary>
+    /// B4（EPSL 地毯审计 2026-10-16）：PG 单事件 Exact(n) 原子追加——<see cref="AppendSingleAnyPG"/>
+    /// + 版本守卫谓词（服务端原子判定当前 COALESCE(MAX,-1) = @ExpectedVersion——Exact(n) 语义为
+    /// 「当前流版本为 n」，新事件落 n+1）。守卫失匹零行插入（无异常），调用方重查实际版本转统一
+    /// 并发异常——语义与「MAX 预查 + Matches 失败」逐字一致，但省预查往返并消除该路径 TOCTOU
+    /// 窗口（Any 先例同款收益形态，-15% 锚）。真库探针（wslc pg186）store 级验证四形态在案。
+    /// </summary>
+    public const string AppendSingleExactPG =
+        "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
+        "SELECT @EventId, @EventName, @StreamName, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) + 1, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState " +
+        "WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) = @ExpectedVersion " +
+        "RETURNING global_position AS \"GlobalPosition\", stream_version AS \"StreamVersion\"";
+
+    /// <summary>B4：PG 单事件 NoStream 原子追加——守卫 = 当前版本为 -1（空流，InsertSqlite 同语义）。</summary>
+    public const string AppendSingleNoStreamPG =
+        "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
+        "SELECT @EventId, @EventName, @StreamName, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) + 1, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState " +
+        "WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) = -1 " +
+        "RETURNING global_position AS \"GlobalPosition\", stream_version AS \"StreamVersion\"";
+
+    /// <summary>B4：PG 单事件 StreamExists 原子追加——守卫 = 当前版本 ≥ 0（流已存在）。</summary>
+    public const string AppendSingleStreamExistsPG =
+        "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
+        "SELECT @EventId, @EventName, @StreamName, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) + 1, @SchemaVersion, @ContentType, @Payload, @Metadata, @RecordedAt, @ActorId, @Reason, @CorrelationId, @CausationId, @TraceParent, @TraceState " +
+        "WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) >= 0 " +
+        "RETURNING global_position AS \"GlobalPosition\", stream_version AS \"StreamVersion\"";
+
     /// <summary>EventId 存在性探查（快路径唯一约束冲突的分类依据：存在 = EventId 重复原样上抛，不存在 = 版本位竞争）。</summary>
     public const string EventIdExists =
         "SELECT COUNT(*) FROM events WHERE event_id = @id";
+
+    /// <summary>
+    /// B2（EPSL 地毯审计 2026-10-16）：MySQL 批量化后的全局位置范围回查——MySQL 无
+    /// RETURNING，多行 VALUES INSERT 后按本批版本区间取 MIN/MAX（(stream_name,
+    /// stream_version) 唯一索引served；区间由 (stream_name, stream_version) 唯一索引
+    /// 与冲突分类保证只含本批行——并发写入者落在区间外）。较「LAST_INSERT_ID + 连续
+    /// 算术」无自增连续性假设（wslc mysql84 8.4.11 mode 2 实测已知行数多行 VALUES 确为
+    /// 连续块，但范围回查不依赖该语义）。
+    /// </summary>
+    public const string PositionRangeMySql =
+        "SELECT MIN(global_position) AS Min, MAX(global_position) AS Max FROM events WHERE stream_name = @name AND stream_version BETWEEN @from AND @to";
 
     /// <summary>
     /// 按全局位置读取所有事件。<br/>

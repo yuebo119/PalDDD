@@ -24,7 +24,7 @@ namespace PalDDD.PalORM.Stores;
 /// 未挂 cmd.Transaction 的命令抛 InvalidOperationException（MySqlConnector 严格校验）。
 /// </para>
 /// </summary>
-public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointStore
+public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointStore, IResumableProjectionCheckpointStore
     where TProvider : IDbProvider
 {
     [SuppressMessage("Performance", "CA1051:Do not declare visible instance fields",
@@ -178,6 +178,46 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
             ct).ConfigureAwait(false);
     }
 
+    /// <summary>增量回放续读位置（R6/P0-3，ADR-028）——raw command 单语句聚合（方言 CAST，
+    /// ITM-243 挂接环境事务），语义详见 <see cref="IResumableProjectionCheckpointStore"/>；
+    /// 数值 CAST 失败按优化面回退语义返回 null 走全量回放。</summary>
+    public async ValueTask<string?> GetResumePositionAsync(string projectionName, string sourceName, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
+
+        var castType = TProvider.Dialect switch
+        {
+            global::PalORM.SqlDialect.PostgreSql => "BIGINT",
+            global::PalORM.SqlDialect.MySql => "SIGNED", // MySQL CAST 目标为 SIGNED/UNSIGNED（无裸 INTEGER）
+            _ => "INTEGER",
+        };
+        await using var cmd = CreateRawCommand();
+#pragma warning disable S2077 // castType 为方言常量（BIGINT/SIGNED/INTEGER），值侧参数化
+        cmd.CommandText = $"SELECT MIN(CASE WHEN status <> 1 THEN CAST(position AS {castType}) END), MAX(CAST(position AS {castType})) FROM projection_checkpoints WHERE projection_name = @p0 AND source_name = @p1";
+#pragma warning restore S2077
+        AddParam(cmd, "@p0", projectionName);
+        AddParam(cmd, "@p1", sourceName);
+        try
+        {
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+                return null; // 理论不可达（聚合恒返一行）——防御性按无行处理
+            long? firstIncomplete = reader.IsDBNull(0) ? null : reader.GetInt64(0);
+            long? maxPosition = reader.IsDBNull(1) ? null : reader.GetInt64(1);
+            var resume = firstIncomplete ?? (maxPosition is { } max ? max + 1 : (long?)null);
+            return resume is { } value
+                ? value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : null;
+        }
+        catch (System.Data.Common.DbException)
+        {
+            // PG 对非数值 Position 串 CAST 抛错（22007 族）——数值契约外的脏数据，
+            // 续读是优化面：回退全量回放（对齐 Dapper 实现同款口径）
+            return null;
+        }
+    }
+
     private static void AddParam(DbCommand cmd, string name, object value)
     {
         var p = cmd.CreateParameter();
@@ -193,7 +233,7 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
     /// 均返回 Kind=Utc（探针实测幂等）。
     /// </summary>
     private static DateTimeOffset GetUtc(DbDataReader reader, int ordinal)
-        => DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc);
+        => new(DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc), TimeSpan.Zero);
 
     /// <summary>
     /// ITM-243：创建 raw command 并挂接 IUnitOfWork 活动事务。GetRawConnection().CreateCommand()

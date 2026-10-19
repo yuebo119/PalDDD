@@ -31,6 +31,9 @@ interface PalDDD.CQRS.IQueryHandler<TQuery, TResult>
   method System.Threading.Tasks.ValueTask<TResult> HandleAsync(TQuery query, System.Threading.CancellationToken ct)
 interface PalDDD.CQRS.IQuery<TResponse>
 interface PalDDD.CQRS.IRequest<TResponse>
+interface PalDDD.CQRS.IStreamQueryHandler<TQuery, TItem>
+  method System.Collections.Generic.IAsyncEnumerable<TItem> HandleAsync(TQuery query, System.Threading.CancellationToken ct)
+interface PalDDD.CQRS.IStreamQuery<TItem>
 class PalDDD.CQRS.PalValidationException
   ctor()
   ctor(System.Collections.Immutable.ImmutableArray<PalDDD.Core.PalValidationError> errors)
@@ -64,6 +67,7 @@ class PalDDD.Compression.CompressionProvider
 static class PalDDD.Compression.CompressionServiceCollectionExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalCompression(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
 static class PalDDD.Compression.DecompressionGuard
+  field const System.Int32 InitialBlockHintBytes = 65536
   field const System.Int32 MaxCompressedInputBytes = 8388608
   field const System.Int32 MaxOutputBytes = 67108864
 interface PalDDD.Compression.ICompressionProvider
@@ -120,6 +124,7 @@ static class PalDDD.Core.Diagnostics.PalActivitySource
   method System.Diagnostics.Activity StartOutboxProcess(System.Int32 batchSize)
   method System.Diagnostics.Activity StartProjectionRebuild(System.String projectionName, System.String sourceName)
   method System.Diagnostics.Activity StartSagaTransition(System.String sagaType, System.String fromState, System.String toState)
+  method System.Diagnostics.Activity StartStreamQuery(System.String queryType, System.String itemType)
 static class PalDDD.Core.Diagnostics.PalMetrics
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> EventHandlersFailed
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> EventHandlersHandled
@@ -144,6 +149,11 @@ static class PalDDD.Core.Diagnostics.PalMetrics
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> SagaCompensationFailed
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> SagaCompleted
   field static readonly System.Diagnostics.Metrics.Counter<System.Int64> SagaScanFailed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamCancelled
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamCompleted
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamFailed
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamItems
+  field static readonly System.Diagnostics.Metrics.Counter<System.Int64> StreamStarted
 class PalDDD.Core.DomainCapabilityAttribute
   ctor(System.String name)
   property System.String Name
@@ -317,12 +327,14 @@ class PalDDD.Dapper.DapperOutboxStore
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> LeasePendingMessagesAsync(System.Int32 batchSize, System.String owner, System.TimeSpan leaseDuration, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkDeadAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> MarkProcessedBatchAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask ReleaseForRetryAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> RequeueDeadAsync(ByteAether.Ulid.Ulid messageId, System.DateTimeOffset nextAttemptAt, System.String retriedBy, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(System.Threading.CancellationToken ct)
 class PalDDD.Dapper.DapperProjectionCheckpointStore
   ctor(System.Data.Common.DbConnection connection, PalDDD.Dapper.DapperDbType dbType, System.Data.Common.DbTransaction transaction)
   method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionCheckpoint> GetAsync(System.String projectionName, System.String sourceName, System.String position, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.String> GetResumePositionAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask ResetAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
@@ -360,8 +372,10 @@ static class PalDDD.Dapper.SqlTemplates
   field const System.String OutboxLeaseUpdateMySqlSkipLocked = UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount AND (next_attempt_at IS NULL OR next_attempt_at<=@now) AND (locked_until IS NULL OR locked_until<=@now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until
   field const System.String OutboxLeaseUpdatePG = UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN (SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount AND (next_attempt_at IS NULL OR next_attempt_at<=@now) AND (locked_until IS NULL OR locked_until<=@now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *
   field const System.String OutboxLeaseUpdateSqlite = UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN (SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount AND (next_attempt_at IS NULL OR next_attempt_at<=@now) AND (locked_until IS NULL OR locked_until<=@now) ORDER BY created_at LIMIT @n)
+  field const System.String OutboxLeaseUpdateSqliteReturning = UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN (SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount AND (next_attempt_at IS NULL OR next_attempt_at<=@now) AND (locked_until IS NULL OR locked_until<=@now) ORDER BY created_at LIMIT @n) RETURNING *
   field const System.String OutboxMarkDead = UPDATE outbox_messages SET status=2,error=@reason,processed_at=@at,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND retry_count=@retryCount AND status=0 AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))
   field const System.String OutboxMarkProcessed = UPDATE outbox_messages SET status=1,processed_at=@at,error=NULL,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id=@id AND retry_count=@retryCount AND status=0 AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))
+  field const System.String OutboxMarkProcessedBatchUpdate = UPDATE outbox_messages SET status=1,processed_at=@at,error=NULL,next_attempt_at=NULL,locked_by=NULL,locked_until=NULL WHERE id IN 
   field const System.String OutboxReleaseForRetry = UPDATE outbox_messages SET status=0,processed_at=NULL,error=@reason,next_attempt_at=@next,retry_count=retry_count+1,locked_by=NULL,locked_until=NULL WHERE id=@id AND status=0 AND retry_count=@retryCount AND ((@owner IS NULL AND locked_by IS NULL) OR (locked_by=@owner AND locked_until=@until))
   field const System.String OutboxRequeueDead = UPDATE outbox_messages SET status=0,processed_at=NULL,error=@audit,next_attempt_at=@next,locked_by=NULL,locked_until=NULL WHERE id=@id AND status=2
   field const System.String OutboxSelectById = SELECT * FROM outbox_messages WHERE id IN 
@@ -375,6 +389,8 @@ static class PalDDD.Dapper.SqlTemplates
   field const System.String SagaLeaseActive = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n)
   field const System.String SagaLeaseActiveMySql = UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1
   field const System.String SagaLeaseActivePG = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)
+  field const System.String SagaLeaseActivePGReturning = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *
+  field const System.String SagaLeaseActiveSqliteReturning = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) RETURNING *
   field const System.String SagaReleaseLeases = UPDATE saga_states SET leased_by=NULL, leased_until=NULL, version=version+1 WHERE leased_by=@owner AND saga_id IN @ids
   field const System.String SagaSelectByLease = SELECT * FROM saga_states WHERE leased_by=@owner AND leased_until=@until AND status IN (0, 5)
   field const System.String SagaUpdate = UPDATE saga_states SET current_state=@cs,status=@st,completed_at=@ca,version=version+1,error=@err,error_at=@ea,saga_data=@data,leased_by=@leasedBy,leased_until=@leasedUntil WHERE saga_id=@id AND version=@v
@@ -535,27 +551,70 @@ static class PalDDD.Dapper.PostgreSql.ShardedTableName
 static class PalDDD.Dapper.Sqlite.SqliteFts
   field const System.String EventLogIndex = events_fts
   field const System.String OutboxIndex = outbox_messages_fts
-  method System.String CreateEventLogIndex(System.String sourceTable, System.String indexName)
-  method System.String CreateOutboxIndex(System.String sourceTable, System.String indexName)
-  method System.String Drop(System.String indexName)
+  method PalDDD.Dapper.Sqlite.SqliteFtsIndexDefinition CreateEventLogIndex(System.String sourceTable, System.Boolean includePayload, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method PalDDD.Dapper.Sqlite.SqliteFtsIndexDefinition CreateExternalContentIndex(System.String sourceTable, System.String indexName, System.String rowidColumn, System.Collections.Generic.IReadOnlyList<System.String> columns, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method PalDDD.Dapper.Sqlite.SqliteFtsIndexDefinition CreateOutboxIndex(System.String sourceTable, System.Boolean includePayload, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method PalDDD.Dapper.Sqlite.SqliteFtsIndexDefinition CreateStandaloneIndex(System.String sourceTable, System.String indexName, System.String sourceKeyColumn, System.Collections.Generic.IReadOnlyList<PalDDD.Dapper.Sqlite.SqliteFtsColumn> columns, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method System.Collections.Generic.IReadOnlyList<System.String> DropLegacyStatements(System.String indexName)
+  method System.Collections.Generic.IReadOnlyList<System.String> DropStatements(System.String indexName, System.Boolean standalone)
   method System.String Highlight(System.String index, System.Int32 columnIndex, System.String open, System.String close)
-  method System.String Match(System.String index, System.String query)
-  method System.String Optimize(System.String indexName)
-  method System.String OrderByRank(System.String index)
-  method System.String Rank(System.String index)
-  method System.String Rebuild(System.String indexName)
+  method System.String MatchExpression(System.String index)
+  method System.String MatchLiteral(System.String index, System.String query)
+  method System.String MatchParameter(System.String index, System.String parameterName)
+  method System.String OrderByRank(System.String index, System.Double[] weights)
+  method System.String Rank(System.String index, System.Double[] weights)
+  method System.String Snippet(System.String index, System.Int32 columnIndex, System.String start, System.String end, System.String ellipsis, System.Int32 tokenCount)
+  method System.Collections.Generic.IReadOnlyList<System.String> TriggerNames(System.String indexName)
+  method System.Threading.Tasks.Task ValidateAsync(System.Data.Common.DbConnection connection, PalDDD.Dapper.Sqlite.SqliteFtsIndexDefinition definition, System.Threading.CancellationToken cancellationToken)
+struct PalDDD.Dapper.Sqlite.SqliteFtsColumn
+  ctor(System.String Name, System.Boolean CastToText)
+  property System.Boolean CastToText [init]
+  property System.String Name [init]
+  method System.Void Deconstruct(System.String& Name, System.Boolean& CastToText)
+  method System.Boolean Equals(PalDDD.Dapper.Sqlite.SqliteFtsColumn other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.Dapper.Sqlite.SqliteFtsIndexDefinition
+  property System.Collections.Generic.IReadOnlyList<PalDDD.Dapper.Sqlite.SqliteFtsColumn> Columns
+  property System.String IndexName
+  property System.Boolean IsStandalone
+  property System.String KeyColumn
+  property System.String MappingTableName
+  property System.String SourceTable
+  property System.Collections.Generic.IReadOnlyList<System.String> Statements
+  property System.Collections.Generic.IReadOnlyList<System.String> TriggerNames
+  method System.Collections.Generic.IReadOnlyList<System.String> DropStatements()
+  method System.String JoinClause(System.String sourceAlias, System.String mapAlias)
+  method System.Collections.Generic.IReadOnlyList<System.String> OptimizeStatements()
+  method System.Collections.Generic.IReadOnlyList<System.String> RebuildStatements()
+  method System.String ToSql()
 static class PalDDD.Dapper.Sqlite.SqliteJson
-  method System.String Array(System.String[] values)
-  method System.String ArrayLength(System.String column)
-  method System.String BuildObject(System.String[] keyValuePairs)
-  method System.String Each(System.String column)
-  method System.String Extract(System.String column, System.String key)
-  method System.String ExtractPath(System.String column, System.String[] path)
-  method System.String HasKey(System.String column, System.String key)
+  method System.String ArrayLength(System.String column, System.String[] path)
+  method System.String ArrayLiteral(System.String[] values)
+  method System.String ArrayParameters(System.String[] parameterNames)
+  method System.String Each(System.String column, System.String[] path)
+  method System.String EqualsLiteral(System.String column, System.String value, System.String[] path)
+  method System.String EqualsParameter(System.String column, System.String parameterName, System.String[] path)
+  method System.String Extract(System.String column, System.String[] path)
+  method System.String ExtractJson(System.String column, System.String[] path)
+  method System.String ExtractText(System.String column, System.String[] path)
+  method System.String GroupArray(System.String column)
+  method System.String GroupObject(System.String keyColumn, System.String valueColumn)
+  method System.String HasKey(System.String column, System.String[] path)
+  method System.String InsertParameter(System.String column, System.String parameterName, System.String[] path)
   method System.String IsValid(System.String column)
+  method System.String ObjectLiteral(System.ValueTuple<System.String, System.String>[] pairs)
+  method System.String ObjectParameters(System.ValueTuple<System.String, System.String>[] pairs)
   method System.String OutboxByType(System.String messageType)
-  method System.String Tree(System.String column)
-  method System.String Type(System.String column, System.String key)
+  method System.String PatchParameter(System.String column, System.String parameterName)
+  method System.String Path(System.String[] segments)
+  method System.String QuoteLiteral(System.String value)
+  method System.String Remove(System.String column, System.String[] path)
+  method System.String ReplaceParameter(System.String column, System.String parameterName, System.String[] path)
+  method System.String SetParameter(System.String column, System.String parameterName, System.String[] path)
+  method System.String Tree(System.String column, System.String[] path)
+  method System.String Type(System.String column, System.String[] path)
 enum PalDDD.Dapper.Sqlite.SqliteOptimizeLevel
   field const PalDDD.Dapper.Sqlite.SqliteOptimizeLevel InMemory = 3
   field const PalDDD.Dapper.Sqlite.SqliteOptimizeLevel Light = 1
@@ -595,6 +654,7 @@ static class PalDDD.DependencyInjection.ServiceRegistration
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalPipelineBehaviors(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalPipelineBehaviors(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalQueryHandler(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalStreamQueryHandler(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
 
 # PalDDD.EventLog
 struct PalDDD.EventLog.AppendEventsResult
@@ -715,10 +775,26 @@ class PalDDD.EventLog.StoredEvent
   method PalDDD.EventLog.RecordedEvent ToRecordedEvent()
 
 # PalDDD.Hosting.AspNetCore
+static class PalDDD.Hosting.AspNetCore.DetachedStreamEndpoints
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddDetachedStreamRuns(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Action<PalDDD.Hosting.AspNetCore.DetachedStreamOptions> configure)
+  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapDetachedStreamQuery(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Func<Microsoft.AspNetCore.Http.HttpContext, TQuery> bindQuery, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TItem> itemJsonTypeInfo, System.Func<TItem, System.String> eventSelector, System.Func<TItem, System.String> idSelector, System.Nullable<System.TimeSpan> keepAliveInterval)
+  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapStreamRunAttach(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TItem> itemJsonTypeInfo, System.Nullable<System.TimeSpan> keepAliveInterval)
+  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapStreamRunCancel(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern)
+class PalDDD.Hosting.AspNetCore.DetachedStreamOptions
+  ctor()
+  property System.TimeSpan DetachGrace
+  property System.Int32 MaxBufferedItems
+  property System.Int32 MaxConcurrentRuns
+  property System.Int32 MaxItems
+  property System.TimeSpan MaxRunDuration
+  property System.Boolean RejectNewAttach
+  property System.TimeSpan RetentionAfterCompletion
 static class PalDDD.Hosting.AspNetCore.EndpointExtensions
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapCommand(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TCommand> commandJsonTypeInfo)
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapCommand(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TCommand> commandJsonTypeInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse> responseJsonTypeInfo)
   method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapQuery(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Func<Microsoft.AspNetCore.Http.HttpContext, TQuery> bindQuery, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResult> responseJsonTypeInfo)
+  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapStreamQuery(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Func<Microsoft.AspNetCore.Http.HttpContext, TQuery> bindQuery, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TItem> itemJsonTypeInfo, System.Func<TItem, System.String> formatFrame, System.Func<TItem, System.String> eventSelector, System.Func<TItem, System.String> idSelector, System.Nullable<System.TimeSpan> keepAliveInterval)
+  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapStreamQuery(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TQuery> queryJsonTypeInfo, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TItem> itemJsonTypeInfo, System.Func<TItem, System.String> formatFrame, System.Func<TItem, System.String> eventSelector, System.Func<TItem, System.String> idSelector, System.Nullable<System.TimeSpan> keepAliveInterval)
 class PalDDD.Hosting.AspNetCore.ExceptionMiddleware
   ctor(Microsoft.AspNetCore.Http.RequestDelegate next, PalDDD.Core.Logging.IPalLogger<PalDDD.Hosting.AspNetCore.ExceptionMiddleware> logger)
   method System.Threading.Tasks.Task InvokeAsync(Microsoft.AspNetCore.Http.HttpContext context)
@@ -727,6 +803,13 @@ static class PalDDD.Hosting.AspNetCore.ExceptionMiddlewareExtensions
 static class PalDDD.Hosting.AspNetCore.HealthCheckExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalHealthChecks(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.AspNetCore.Routing.IEndpointRouteBuilder MapPalHealthChecks(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.TimeProvider timeProvider)
+static class PalDDD.Hosting.AspNetCore.StreamResumeExtensions
+  method System.String GetLastEventId(Microsoft.AspNetCore.Http.HttpContext context)
+class PalDDD.Hosting.AspNetCore.StreamRunCapacityExceededException
+  ctor()
+  ctor(System.Int32 limit)
+  ctor(System.String message)
+  ctor(System.String message, System.Exception innerException)
 
 # PalDDD.Idempotency
 interface PalDDD.Idempotency.IIdempotencyStore
@@ -963,12 +1046,14 @@ class PalDDD.PalORM.Stores.PalOrmOutboxStore<TProvider>
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> LeasePendingMessagesAsync(System.Int32 batchSize, System.String owner, System.TimeSpan leaseDuration, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkDeadAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> MarkProcessedBatchAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask ReleaseForRetryAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> RequeueDeadAsync(ByteAether.Ulid.Ulid messageId, System.DateTimeOffset nextAttemptAt, System.String retriedBy, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(System.Threading.CancellationToken ct)
 class PalDDD.PalORM.Stores.PalOrmProjectionCheckpointStore<TProvider>
   ctor(PalORM.DataSession<TProvider> session)
   method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionCheckpoint> GetAsync(System.String projectionName, System.String sourceName, System.String position, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.String> GetResumePositionAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask ResetAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
@@ -1022,10 +1107,85 @@ class PalDDD.PalORM.PostgreSql.PostgreSqlSagaStateStore<TState>
 # PalDDD.PalORM.Sqlite
 class PalDDD.PalORM.Sqlite.SqliteEventLog
   ctor(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, System.TimeProvider clock)
+static class PalDDD.PalORM.Sqlite.SqliteFts
+  field const System.String EventLogIndex = events_fts
+  field const System.String OutboxIndex = outbox_messages_fts
+  method PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition CreateEventLogIndex(System.String sourceTable, System.Boolean includePayload, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition CreateExternalContentIndex(System.String sourceTable, System.String indexName, System.String rowidColumn, System.Collections.Generic.IReadOnlyList<System.String> columns, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition CreateOutboxIndex(System.String sourceTable, System.Boolean includePayload, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition CreateStandaloneIndex(System.String sourceTable, System.String indexName, System.String sourceKeyColumn, System.Collections.Generic.IReadOnlyList<PalDDD.PalORM.Sqlite.SqliteFtsColumn> columns, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method System.Collections.Generic.IReadOnlyList<System.String> DropLegacyStatements(System.String indexName)
+  method System.Collections.Generic.IReadOnlyList<System.String> DropStatements(System.String indexName, System.Boolean standalone)
+  method System.String Highlight(System.String index, System.Int32 columnIndex, System.String open, System.String close)
+  method System.String MatchExpression(System.String index)
+  method System.String MatchLiteral(System.String index, System.String query)
+  method System.String MatchParameter(System.String index, System.String parameterName)
+  method System.String OrderByRank(System.String index, System.Double[] weights)
+  method System.String Rank(System.String index, System.Double[] weights)
+  method System.String Snippet(System.String index, System.Int32 columnIndex, System.String start, System.String end, System.String ellipsis, System.Int32 tokenCount)
+  method System.Collections.Generic.IReadOnlyList<System.String> TriggerNames(System.String indexName)
+  method System.Threading.Tasks.Task ValidateAsync(System.Data.Common.DbConnection connection, PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition definition, System.Threading.CancellationToken cancellationToken)
+struct PalDDD.PalORM.Sqlite.SqliteFtsColumn
+  ctor(System.String Name, System.Boolean CastToText)
+  property System.Boolean CastToText [init]
+  property System.String Name [init]
+  method System.Void Deconstruct(System.String& Name, System.Boolean& CastToText)
+  method System.Boolean Equals(PalDDD.PalORM.Sqlite.SqliteFtsColumn other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition
+  property System.Collections.Generic.IReadOnlyList<PalDDD.PalORM.Sqlite.SqliteFtsColumn> Columns
+  property System.String IndexName
+  property System.Boolean IsStandalone
+  property System.String KeyColumn
+  property System.String MappingTableName
+  property System.String SourceTable
+  property System.Collections.Generic.IReadOnlyList<System.String> Statements
+  property System.Collections.Generic.IReadOnlyList<System.String> TriggerNames
+  method System.Collections.Generic.IReadOnlyList<System.String> DropStatements()
+  method System.String JoinClause(System.String sourceAlias, System.String mapAlias)
+  method System.Collections.Generic.IReadOnlyList<System.String> OptimizeStatements()
+  method System.Collections.Generic.IReadOnlyList<System.String> RebuildStatements()
+  method System.String ToSql()
+static class PalDDD.PalORM.Sqlite.SqliteFtsSessionExtensions
+  method System.Threading.Tasks.Task DropIndexAsync(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition definition, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.Task EnsureEventLogIndexAsync(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, System.String sourceTable, System.Boolean includePayload, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.Task EnsureIndexAsync(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition definition, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.Task EnsureOutboxIndexAsync(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, System.String sourceTable, System.Boolean includePayload, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.Task<System.Boolean> IndexExistsAsync(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, System.String indexName, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.Task OptimizeIndexAsync(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition definition, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.Task RebuildIndexAsync(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition definition, System.Threading.CancellationToken cancellationToken)
 class PalDDD.PalORM.Sqlite.SqliteIdempotencyStore
   ctor(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session)
 class PalDDD.PalORM.Sqlite.SqliteInboxStore
   ctor(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session)
+static class PalDDD.PalORM.Sqlite.SqliteJson
+  method System.String ArrayLength(System.String column, System.String[] path)
+  method System.String ArrayLiteral(System.String[] values)
+  method System.String ArrayParameters(System.String[] parameterNames)
+  method System.String Each(System.String column, System.String[] path)
+  method System.String EqualsLiteral(System.String column, System.String value, System.String[] path)
+  method System.String EqualsParameter(System.String column, System.String parameterName, System.String[] path)
+  method System.String Extract(System.String column, System.String[] path)
+  method System.String ExtractJson(System.String column, System.String[] path)
+  method System.String ExtractText(System.String column, System.String[] path)
+  method System.String GroupArray(System.String column)
+  method System.String GroupObject(System.String keyColumn, System.String valueColumn)
+  method System.String HasKey(System.String column, System.String[] path)
+  method System.String InsertParameter(System.String column, System.String parameterName, System.String[] path)
+  method System.String IsValid(System.String column)
+  method System.String ObjectLiteral(System.ValueTuple<System.String, System.String>[] pairs)
+  method System.String ObjectParameters(System.ValueTuple<System.String, System.String>[] pairs)
+  method System.String OutboxByType(System.String messageType)
+  method System.String PatchParameter(System.String column, System.String parameterName)
+  method System.String Path(System.String[] segments)
+  method System.String QuoteLiteral(System.String value)
+  method System.String Remove(System.String column, System.String[] path)
+  method System.String ReplaceParameter(System.String column, System.String parameterName, System.String[] path)
+  method System.String SetParameter(System.String column, System.String parameterName, System.String[] path)
+  method System.String Tree(System.String column, System.String[] path)
+  method System.String Type(System.String column, System.String[] path)
 class PalDDD.PalORM.Sqlite.SqliteOutboxStore
   ctor(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, System.TimeProvider clock)
 static class PalDDD.PalORM.Sqlite.SqlitePalOrmExtensions
@@ -1050,9 +1210,14 @@ interface PalDDD.Projections.IProjectionCheckpointStore
 interface PalDDD.Projections.IProjectionHandler<TMessage>
   property System.String ProjectionName
   method System.Threading.Tasks.ValueTask ProjectAsync(TMessage message, PalDDD.Projections.ProjectionContext context, System.Threading.CancellationToken ct)
+interface PalDDD.Projections.IResumableEventReplaySource<TMessage>
+  method System.Collections.Generic.IAsyncEnumerable<PalDDD.Projections.ReplayEvent<TMessage>> ReadAsync(System.String sourceName, System.Int64 fromPosition, System.Threading.CancellationToken ct)
+interface PalDDD.Projections.IResumableProjectionCheckpointStore
+  method System.Threading.Tasks.ValueTask<System.String> GetResumePositionAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
 class PalDDD.Projections.InMemoryProjectionCheckpointStore
   ctor()
   method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionCheckpoint> GetAsync(System.String projectionName, System.String sourceName, System.String position, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.String> GetResumePositionAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask ResetAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
@@ -1126,6 +1291,7 @@ struct PalDDD.Projections.ReplayEvent<TMessage>
 class PalDDD.Projections.ProjectionCheckpointDbContext
   property Microsoft.EntityFrameworkCore.DbSet<PalDDD.Projections.ProjectionCheckpoint> ProjectionCheckpoints
   method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionCheckpoint> GetAsync(System.String projectionName, System.String sourceName, System.String position, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.String> GetResumePositionAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask ResetAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
@@ -1136,6 +1302,7 @@ static class PalDDD.Projections.ServiceCollectionExtensions
 # PalDDD.Projections.EventLog
 class PalDDD.Projections.EventLog.EventLogReplaySource<TMessage>
   ctor(PalDDD.EventLog.IEventLog eventLog, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.MessageDescriptor descriptor)
+  method System.Collections.Generic.IAsyncEnumerable<PalDDD.Projections.ReplayEvent<TMessage>> ReadAsync(System.String sourceName, System.Int64 fromPosition, System.Threading.CancellationToken ct)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.Projections.ReplayEvent<TMessage>> ReadAsync(System.String sourceName, System.Threading.CancellationToken ct)
 class PalDDD.Projections.EventLog.EventReplayException
   ctor()
@@ -1181,6 +1348,7 @@ interface PalDDD.Serialization.IMessageSerializer
   method System.Object Deserialize(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor)
   method TMessage Deserialize(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor)
   method System.ReadOnlyMemory<System.Byte> Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor)
+  method System.Void Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, System.Buffers.IBufferWriter<System.Byte> destination)
   method System.ReadOnlyMemory<System.Byte> Serialize(TMessage message, PalDDD.Serialization.MessageDescriptor descriptor)
 class PalDDD.Serialization.Json.JsonLinesEventReader
   ctor()
@@ -1195,6 +1363,7 @@ class PalDDD.Serialization.Json.JsonMessageSerializer
   method System.Object Deserialize(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor)
   method TMessage Deserialize(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor)
   method System.ReadOnlyMemory<System.Byte> Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor)
+  method System.Void Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, System.Buffers.IBufferWriter<System.Byte> destination)
   method System.ReadOnlyMemory<System.Byte> Serialize(TMessage message, PalDDD.Serialization.MessageDescriptor descriptor)
 static class PalDDD.Serialization.Json.ServiceCollectionExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalJsonSerialization(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Action<PalDDD.Serialization.MessageCatalogBuilder> configureCatalog)
@@ -1330,6 +1499,8 @@ class PalDDD.Transactions.FanOutStep<TItem, TResult>
 class PalDDD.Transactions.FixedBackoffPolicy
   ctor(System.TimeSpan delay)
   method System.TimeSpan ComputeDelay(System.Int32 attempt)
+interface PalDDD.Transactions.IBatchMarkOutboxStore
+  method System.Threading.Tasks.ValueTask<System.Int32> MarkProcessedBatchAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.IImmediateWriteOutboxStore
   method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.IInboxStore
@@ -1375,6 +1546,7 @@ class PalDDD.Transactions.InMemoryOutboxStore
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> LeasePendingMessagesAsync(System.Int32 batchSize, System.String owner, System.TimeSpan leaseDuration, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkDeadAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> MarkProcessedBatchAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask ReleaseForRetryAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> RequeueDeadAsync(ByteAether.Ulid.Ulid messageId, System.DateTimeOffset nextAttemptAt, System.String retriedBy, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(System.Threading.CancellationToken ct)
@@ -1444,6 +1616,7 @@ class PalDDD.Transactions.OutboxMessage
   property System.String Type [init]
 class PalDDD.Transactions.OutboxOptions
   ctor()
+  property System.Int32 BatchMarkThreshold
   property System.Int32 BatchSize
   property System.TimeSpan LeaseDuration
   property System.String LeaseOwner
@@ -1608,6 +1781,7 @@ class PalDDD.Transactions.OutboxDbContext
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> LeasePendingMessagesAsync(System.Int32 batchSize, System.String owner, System.TimeSpan leaseDuration, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkDeadAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.OutboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> MarkProcessedBatchAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask ReleaseForRetryAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> RequeueDeadAsync(ByteAether.Ulid.Ulid messageId, System.DateTimeOffset nextAttemptAt, System.String retriedBy, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.PostgreSqlOutboxDbContext

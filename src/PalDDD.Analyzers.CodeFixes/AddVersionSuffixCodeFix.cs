@@ -68,8 +68,16 @@ public sealed class AddVersionSuffixCodeFix : CodeFixProvider
         // 双后缀输入（x.v1.v2）残留 x.v1.v{N}（产物仍含两个后缀段，字面通过结尾校验
         // 但语义错误）；循环至无匹配后再拼唯一新后缀
         var oldValue = literal.Token.ValueText;
-        while (System.Text.RegularExpressions.Regex.IsMatch(oldValue, @"\.v\d+$"))
-            oldValue = System.Text.RegularExpressions.Regex.Replace(oldValue, @"\.v\d+$", "");
+        // EPSL 地毯审计 2026-10-16 A 批 #19：剥离循环单次扫描——原形态每段 IsMatch +
+        // Replace 两次正则全扫（双后缀输入放大为 4 次）；Replace 无匹配时返回与原串相等
+        // 的值（匹配必删至少 ".vN" 三段，结果严格更短，不会误判相等），循环条件改用一次
+        // Replace 的返回值判定，扫描次数减半、语义不变。
+        while (true)
+        {
+            var stripped = System.Text.RegularExpressions.Regex.Replace(oldValue, @"\.v\d+$", "");
+            if (stripped == oldValue) break;
+            oldValue = stripped;
+        }
         var newValue = oldValue + $".v{schemaVersion}";
 
         editor.ReplaceNode(literal, SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression,

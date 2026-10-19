@@ -40,7 +40,6 @@ namespace PalDDD.Messaging.RabbitMQ;
     Justification = "Broker 消费回调需记录毒消息失败并执行合理 nack，需捕获 Exception 基类。")]
 public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
 {
-    private readonly IConnection _connection;
     private int _disposed;
     private readonly IChannel _channel;
     private readonly IPalLogger<RabbitMqBroker> _logger;
@@ -56,6 +55,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     // _consumers 持有列表）；多线程订阅/释放并发安全用 ConcurrentDictionary
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IAsyncDisposable> _subscriptions = new();
 
+    /// <summary>初始化 RabbitMQ Broker。</summary>
     /// <param name="prefetchCount">每消费者 unacked 消息上限（BasicQos prefetch，默认 10）。</param>
     /// <remarks>
     /// ⚠️ <b>ITM-639 前置条件——<paramref name="channel"/> 必须启用 publisher confirms</b>：
@@ -82,7 +82,6 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(logger);
 
-        _connection = connection;
         _channel = channel;
         _logger = logger;
         _prefetchCount = prefetchCount;
@@ -142,6 +141,25 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         }
     }
 
+    // A2（2026-10-15 性能实施轮）：发布路径的 body 缓冲——每发布从 ArrayPool 租借，
+    // 序列化经 IBufferWriter 直写重载写入，BasicPublishAsync(body: WrittenMemory)
+    // 直传，await 完成后归还（using 保证异常路径同样归还）。
+    //
+    // 租借形态取代 R8 的 ThreadStatic 直传，原因是后者存在静默数据损坏风险（官方源码
+    // 实证，RabbitMQ.Client 7.2.2）：BasicPublishCoreAsync（Channel.BasicPublish.cs）
+    // 在 MaybeAcquirePublisherConfirmationLockAsync（outstanding confirms 超过
+    // ThrottlingRateLimiter 上限即挂起，CreateAsync 默认上限 128）与
+    // MaybeEnforceFlowControlAsync（broker connection.blocked 时挂起）两个 await
+    // 之后，才经 SessionBase.TransmitAsync → SerializeToFrames 同步拷贝 body。
+    // 窗口内 body 仍指向调用方缓冲：同线程流水线发布（Outbox MaxInFlightPublishes>1）
+    // 的下一次入口 Clear 会抹掉尚待拷贝的内容，帧照常组装、confirm 照常成功，消息静默
+    // 错内容。原注释「BasicPublishAsync 完成前已消费 body」只覆盖拷贝发生的事实，
+    // 不覆盖拷贝时点晚于两个可挂起点的事实。租借把缓冲生命周期收敛到单次发布调用内，
+    // 共享可变状态消除（rent/return 约 40ns，对比帧损坏可接受）。
+
+    /// <summary>body 缓冲初始租借容量——覆盖常见消息尺寸，减少倍增成长次数。</summary>
+    private const int InitialBodyBufferBytes = 4096;
+
     /// <summary>发布消息到 RabbitMQ Exchange（Fanout 模式）</summary>
     public override async ValueTask PublishAsync(
         object message,
@@ -181,7 +199,10 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             throw;
         }
 
-        var body = Serializer.Serialize(message, descriptor);
+        // A2：IBufferWriter 直写 + WrittenMemory 直传（免精确尺寸 ToArray 拷贝）；
+        // using 保证发布抛出后缓冲归还池（池化 writer 无 Clear 复位需求，天然干净入口）
+        using var bodyWriter = new PooledBodyWriter(InitialBodyBufferBytes);
+        Serializer.Serialize(message, descriptor, bodyWriter);
         // 优化（二十五轮 R-1）：CachedString 重载——缓存 exchange 名的 UTF-8 字节表示
         // （免每发布 string→bytes 编码分配；XML 证实 BasicPublishAsync(CachedString,...) 存在）
         var cachedExchange = _cachedExchanges.GetOrAdd(exchange, static name => new CachedString(name));
@@ -199,7 +220,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                 routingKey: CachedString.Empty,
                 mandatory: true,
                 basicProperties: CreateProperties(descriptor, messageId, context),
-                body: body,
+                body: bodyWriter.WrittenMemory,
                 cancellationToken: ct).ConfigureAwait(false);
         }
         catch (PublishReturnException ex)
@@ -225,8 +246,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         MessagePublishContext context)
         => new()
         {
-            MessageId = messageId.ToString(),
-            CorrelationId = context.CorrelationId?.ToString(),
+            MessageId = messageId.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+            CorrelationId = context.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
             ContentType = descriptor.ContentType,
             Type = descriptor.Name,
             Persistent = true,
@@ -243,7 +264,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         Dictionary<string, object?>? headers = null;
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceParent, context.TraceParent);
         AddHeader(ref headers, MessageConsumeContext.HeaderNames.TraceState, context.TraceState);
-        AddHeader(ref headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString());
+        AddHeader(ref headers, MessageConsumeContext.HeaderNames.CausationId, context.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         return headers;
     }
 
@@ -291,7 +312,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             // 初始化失败会累积一个空壳队列。失败吞掉（channel 已关等，对齐安全包装模式）
             try
             {
-                await _channel.QueueDeleteAsync(queueName).ConfigureAwait(false);
+                await _channel.QueueDeleteAsync(queueName, cancellationToken: ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -422,11 +443,11 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             // v25 P2-5：ct 取消 → 异步解绑消费者终止消费；channel 已关等异常由安全包装吞成
             // Warning。句柄释放时 Dispose registration 防泄漏（释放与取消并发时，双
             // BasicCancelAsync 的后者同样被安全包装吞掉）
-            tokenReg = ct.Register(() => { _ = CancelConsumeSafeAsync(consumerTag!, queueName); });
+            tokenReg = ct.Register(() => { _ = CancelConsumeSafeAsync(consumerTag, queueName); });
         }
         catch
         {
-            tokenReg.Dispose();
+            await tokenReg.DisposeAsync().ConfigureAwait(false);
             if (consumerTag is not null)
                 await CancelConsumeSafeAsync(consumerTag, queueName).ConfigureAwait(false);
             linkedCts.Dispose();
@@ -449,10 +470,10 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         // channel 释放终结，仅 tokenReg 沿调用方 ct 生命周期滞留（修复前常态，收敛不改恶）
         var subscription = new AsyncSubscription(async () =>
         {
-            _subscriptions.TryRemove(consumerTag!, out _);
-            tokenReg.Dispose();
-            linkedCts.Cancel();
-            await CancelConsumeSafeAsync(consumerTag!, queueName).ConfigureAwait(false);
+            _subscriptions.TryRemove(consumerTag, out _);
+            await tokenReg.DisposeAsync().ConfigureAwait(false);
+            await linkedCts.CancelAsync().ConfigureAwait(false);
+            await CancelConsumeSafeAsync(consumerTag, queueName).ConfigureAwait(false);
             linkedCts.Dispose();
         });
         _subscriptions[consumerTag] = subscription;
@@ -521,6 +542,51 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         {
             _logger.Warning($"BasicCancel failed (channel closed?): {queueName}, consumerTag={consumerTag}: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// A2（2026-10-15）：按发布租借的 body 写入器——序列化直写进 ArrayPool 租用的数组，
+    /// 超越容量时按倍增继续租借（旧数组就地归还），Dispose 归还当前数组。<br/>
+    /// 替代 ThreadStatic 直传形态的共享可变状态（损坏机理见 <see cref="InitialBodyBufferBytes"/>
+    /// 处注释）：每次发布独占缓冲至 await 完成，同线程流水线发布互不干扰。
+    /// </summary>
+    internal sealed class PooledBodyWriter : System.Buffers.IBufferWriter<byte>, IDisposable
+    {
+        private byte[] _buffer;
+        private int _written;
+
+        public PooledBodyWriter(int initialCapacity)
+            => _buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(Math.Max(256, initialCapacity));
+
+        /// <summary>已写入内容（不复制，随下次 Advance/Dispose 失效——调用方须在 Dispose 前消费完毕）。</summary>
+        public ReadOnlyMemory<byte> WrittenMemory => _buffer.AsMemory(0, _written);
+
+        public void Advance(int count) => _written += count;
+
+        public Memory<byte> GetMemory(int sizeHint = 0)
+        {
+            EnsureCapacity(sizeHint);
+            return _buffer.AsMemory(_written);
+        }
+
+        public Span<byte> GetSpan(int sizeHint = 0)
+        {
+            EnsureCapacity(sizeHint);
+            return _buffer.AsSpan(_written);
+        }
+
+        private void EnsureCapacity(int sizeHint)
+        {
+            if (sizeHint <= 0) sizeHint = 1;
+            var required = _written + sizeHint;
+            if (required <= _buffer.Length) return;
+            var next = System.Buffers.ArrayPool<byte>.Shared.Rent(Math.Max(required, _buffer.Length * 2));
+            _buffer.AsSpan(0, _written).CopyTo(next);
+            System.Buffers.ArrayPool<byte>.Shared.Return(_buffer);
+            _buffer = next;
+        }
+
+        public void Dispose() => System.Buffers.ArrayPool<byte>.Shared.Return(_buffer);
     }
 
     private sealed class AsyncSubscription(Func<Task> unsubscribe) : IAsyncDisposable

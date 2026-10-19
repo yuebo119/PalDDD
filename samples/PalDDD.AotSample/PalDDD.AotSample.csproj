@@ -10,7 +10,13 @@
     <!-- ITM-161：全局 IL3058 已移除；本示例 AOT 编译但引用非 AOT 的 Transactions（Saga 反射特例），保留项目级抑制 -->
     <NoWarn>$(NoWarn);CA1303;IL3058</NoWarn>
     <NoWarn>$(NoWarn);S3903</NoWarn>
+    <!-- 同 PalOrmSample：rc.2 SDK PublishAot+RID 文档文件路径缺陷 MSB3030 规避（sample 无 XML 消费方） -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\PalDDD.Core\PalDDD.Core.csproj" />
@@ -18,6 +24,10 @@
     <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.CQRS\PalDDD.CQRS.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.DependencyInjection\PalDDD.DependencyInjection.csproj" />
+    <!-- ADR-030 §7 流式端点样本：MapStreamQuery 端点原语喂 aot-verify CI
+         （Hosting.AspNetCore 自身 IsAotCompatible=false 系 Transactions 传递覆盖，
+         其端点代码为源生成 JSON + 显式 metadata 的 AOT 友好设计） -->
+    <ProjectReference Include="..\..\src\PalDDD.Hosting.AspNetCore\PalDDD.Hosting.AspNetCore.csproj" />
   </ItemGroup>
 
 </Project>

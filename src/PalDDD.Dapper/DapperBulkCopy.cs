@@ -181,7 +181,7 @@ public static class DapperBulkCopy
         return val switch
         {
             null => (null, NpgsqlTypes.NpgsqlDbType.Unknown),
-            ByteAether.Ulid.Ulid ulid => (ulid.ToString(), NpgsqlTypes.NpgsqlDbType.Text),
+            ByteAether.Ulid.Ulid ulid => (ulid.ToString(null, System.Globalization.CultureInfo.InvariantCulture), NpgsqlTypes.NpgsqlDbType.Text),
             DateTimeOffset dto => (dto, NpgsqlTypes.NpgsqlDbType.TimestampTz),
             // 三十七轮 P2-3：主流基元类型显式映射（消除 Unknown 覆盖面）
             byte[] bytes => (bytes, NpgsqlTypes.NpgsqlDbType.Bytea),
@@ -372,11 +372,15 @@ public static class DapperBulkCopy
                 placeholders[c] = $"@r{r}c{c}";
             rows[r] = "(" + string.Join(", ", placeholders) + ")";
         }
-        var sql = $"INSERT INTO {table} ({colList}) VALUES {string.Join(", ", rows)}";
+        // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- table/colList 经 ValidateIdentifier/ValidateColumns 入口校验，值侧全参数化
+        var sql = $"INSERT INTO {table} ({colList}) VALUES {string.Join(", ", rows)}"; // NOSONAR: S2077 标识符白名单 + 值参数化
 
         await using var cmd = conn.CreateCommand();
         cmd.Transaction = mysqlTx;
+#pragma warning disable S2077 // 标识符白名单 + 值参数化
+        // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- sql 由已验证标识符 + 参数占位符构造
         cmd.CommandText = sql;
+#pragma warning restore S2077
         for (var r = 0; r < items.Count; r++)
         {
             var values = extractor(items[r]);
@@ -409,7 +413,7 @@ public static class DapperBulkCopy
     private static object? ConvertForMySql(object? val)
         => val switch
         {
-            ByteAether.Ulid.Ulid ulid => ulid.ToString(),
+            ByteAether.Ulid.Ulid ulid => ulid.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
             DateTimeOffset dto => dto.UtcDateTime,
             // ITM-166 修复：decimal 显式转 InvariantCulture 字符串——DataTable 列全 string 时，
             // 直接赋 decimal 由 DataTable 按当前区域设置 ToString（如 de-DE 产出 "1,5"），
@@ -454,7 +458,10 @@ public static class DapperBulkCopy
         try
         {
             await using var cmd = conn.CreateCommand();
+#pragma warning disable S2077 // 标识符白名单 + 值参数化
+            // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- sql 由已验证标识符 + 参数占位符构造
             cmd.CommandText = sql;
+#pragma warning restore S2077
             cmd.Transaction = transaction ?? localTx;
 
             // 🔄 复用参数 — 每次循环只改 Value，不重新 CreateParameter

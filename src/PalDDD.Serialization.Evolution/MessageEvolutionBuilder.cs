@@ -34,7 +34,7 @@ public sealed class MessageEvolutionBuilder
         Add(new MessageUpgradeStep(
             sourceDescriptor,
             targetDescriptor,
-            message => convert((TSource)message)!));
+            message => convert((TSource)message)));
         return this;
     }
 

@@ -411,6 +411,88 @@ services.AddScoped<IEventLog>(sp => sp.GetRequiredService<AppEventLogDbContext>(
 
 完整枚举读取结果后还会记录 `paldd.eventlog.read` metric，应用层可用于观察审计回放、投影修复和跨上下文诊断的事件读取吞吐。
 
+## 使用 SQLite FTS5 与 JSON1
+
+`PalDDD.Dapper.Sqlite` 与 `PalDDD.PalORM.Sqlite` 提供同语义的 FTS5/JSON1 片段与索引定义 API（ADR-032）。两个包共享 `src/PalDDD.Shared` 内部核心，PalORM 包不依赖 Dapper。
+
+### 建索引（Dapper）
+
+```csharp
+var definition = SqliteFts.CreateOutboxIndex("outbox_messages");
+await SqliteFts.ValidateAsync(connection, definition); // 校验源表列与主键形态
+foreach (var statement in definition.Statements)
+    await connection.ExecuteAsync(statement);
+```
+
+`CreateOutboxIndex` / `CreateEventLogIndex` 使用 standalone 索引（映射表 + 触发器），TEXT/ULID 主键与 BLOB payload 都可用；`payload` 默认以 `CAST(... AS TEXT)` 入索引。需要 INTEGER 主键 + TEXT 列的 external-content 索引时用 `CreateExternalContentIndex`，`ValidateAsync` 会在 TEXT 主键上提前抛错。
+
+### 查询（Dapper）
+
+```csharp
+var sql = $"SELECT s.* FROM outbox_messages s {definition.JoinClause()} " +
+          $"WHERE {SqliteFts.MatchParameter(definition.IndexName, "q")} " +
+          SqliteFts.OrderByRank(definition.IndexName);
+var rows = await connection.QueryAsync<OutboxRow>(sql, new { q = "urgent" });
+```
+
+`MatchParameter` 生成 `MATCH @q`，用户输入不要用 `MatchLiteral`。JSON 谓词：
+
+```csharp
+var sql = $"SELECT * FROM outbox_messages WHERE {SqliteJson.EqualsParameter("payload", "type", "Type")}";
+var rows = await connection.QueryAsync<OutboxRow>(sql, new { type = "Order.Created" });
+```
+
+JSON 路径始终引号化，键可以直接包含 `.`、`[`、`]`、空格；键内双引号与反斜杠由 helper 转义。
+
+### 建索引与查询（PalORM）
+
+```csharp
+await using var session = await DataSession<SqliteProvider>.CreateAsync(
+    DbOptions.Development(connectionString));
+
+var definition = SqliteFts.CreateEventLogIndex("events");
+await session.EnsureIndexAsync(definition); // 校验 + 逐条执行 DDL
+
+var format = "SELECT COUNT(*) FROM events s "
+    + definition.JoinClause()
+    + " WHERE "
+    + SqliteFts.MatchExpression(definition.IndexName)
+    + " {0}";
+var sql = FormattableStringFactory.Create(format, "order");
+var count = await session.ScalarAsync<long>(sql);
+```
+
+PalORM 的 `FormattableString` 会把插值洞变成参数。SQL 片段必须用字符串拼接进格式串，不要把片段作为 `{...}` 洞传入（PD18）。JSON 谓词同理：
+
+```csharp
+var predicate = SqliteJson.Extract("payload", "Type") + " = {0}";
+var sql = FormattableStringFactory.Create(
+    "SELECT COUNT(*) FROM outbox_messages WHERE " + predicate,
+    "Order.Created");
+```
+
+也可以走原生命令：
+
+```csharp
+using var command = session.GetRawConnection().CreateCommand();
+command.CommandText = "SELECT COUNT(*) FROM outbox_messages WHERE "
+    + SqliteJson.EqualsParameter("payload", "type", "Type");
+var parameter = command.CreateParameter();
+parameter.ParameterName = "@type";
+parameter.Value = "Order.Created";
+command.Parameters.Add(parameter);
+```
+
+### 生命周期
+
+`SqliteFtsIndexDefinition` 提供 `RebuildStatements()`、`OptimizeStatements()`、`DropStatements()`；PalORM 侧对应 `RebuildIndexAsync`、`OptimizeIndexAsync`、`DropIndexAsync`、`IndexExistsAsync`。v4 旧索引升级先执行 `SqliteFts.DropLegacyStatements(indexName)`，顺序见 [v5 迁移指南](migration/sqlite-fts-json-v5.md)。
+
+### 约束
+
+- FTS5/JSON1 只处理文本 JSON。压缩后的 payload 不是文本，需先解压，或只索引 `event_name`/`type`。
+- external-content 索引要求 INTEGER 主键；TEXT 主键请用 standalone。
+- 独立索引会额外创建 `{indexName}_map` 映射表，`DropStatements()` 会一并删除。
+
 ## 使用 Projection
 
 Projection 用于从 Outbox、broker 或事件流构建 Read Model。`ProjectionProcessor<TMessage>` 通过 checkpoint 保证同一个 projection/source/position 只成功处理一次：
@@ -575,6 +657,224 @@ app.MapPalHealthChecks("/health");
 异常中间件将 `PalValidationException` 映射为 400，将 `HandlerNotFoundException` 映射为 404，未处理异常映射为 500。
 
 端点映射器（`MapCommand<TCommand>` / `MapCommand<TCommand, TResponse>` / `MapQuery<TQuery, TResult>`）把 HTTP 端点绑定到 CQRS 分发，完整用法见[教程](tutorial.md)；其请求体的**形态验证**（必填/长度/范围）由宿主侧的平台内置验证负责，与框架的 `IPalValidator<T>` 分工见[验证](#验证)一节。
+
+## 流式读（SSE）
+
+流式响应（LLM token 流、大结果集分段回传）用独立读形态 `IStreamQuery<TItem>`，不经 Dispatcher、不走管道行为，由 `MapStreamQuery` 端点原语驱动。设计动机与生命周期约定见 [ADR-030](decisions/030-streaming-read-shape.md)，规范见 [conventions.md](conventions.md) §1.10。
+
+### 1. 定义查询与 handler
+
+```csharp
+// 查询：标记接口，刻意不实现 IQuery<T>（两条读路径互不路由）
+public sealed record TokenStreamQuery(string Prompt) : IStreamQuery<TokenChunk>;
+
+public sealed record TokenChunk(int Index, string Text);
+
+public sealed class TokenStreamHandler : IStreamQueryHandler<TokenStreamQuery, TokenChunk>
+{
+    // ct 契约（D5）：必须响应取消——客户端断开时 finally 里停计费、释放 provider 连接。
+    // [EnumeratorCancellation] 让 await foreach 消费者传入的令牌优先于实现内部令牌
+    public async IAsyncEnumerable<TokenChunk> HandleAsync(
+        TokenStreamQuery query, [EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var token in llmClient.StreamAsync(query.Prompt, ct))
+            yield return new TokenChunk(token.Index, token.Text);
+    }
+}
+```
+
+### 2. 注册与 JSON metadata
+
+```csharp
+builder.Services.AddPalStreamQueryHandler<TokenStreamQuery, TokenChunk, TokenStreamHandler>();
+
+// 源生成 metadata（AOT 安全——仓库全局禁用反射序列化）
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+[JsonSerializable(typeof(TokenChunk))]
+[JsonSerializable(typeof(TokenStreamQuery))]
+internal sealed partial class StreamJsonContext : JsonSerializerContext;
+```
+
+同一 `(查询, 元素)` 注册两个不同 handler 会在注册期抛 `InvalidOperationException`（静默覆盖是配置错误）。验证沿用 `IPalValidator<TQuery>`：端点在 SSE 头写出前跑验证，失败返回 400 ProblemDetails（与 `MapCommand`/`MapQuery` 同形态，状态码可回退）。
+
+### 3. 映射端点（GET 与 POST 双形态）
+
+```csharp
+using PalDDD.Hosting.AspNetCore;
+
+// GET 形态：浏览器原生 EventSource 兼容
+app.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+    "/tokens",
+    ctx => new TokenStreamQuery(ctx.Request.Query["prompt"].ToString()),
+    StreamJsonContext.Default.TokenChunk);
+
+// POST 形态：JSON body 承载 prompt 类请求体
+app.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+    "/tokens/stream",
+    StreamJsonContext.Default.TokenStreamQuery,
+    StreamJsonContext.Default.TokenChunk);
+```
+
+两个重载的后四个参数都可选传 `formatFrame: item => "..."` 定制帧文本（支持 `event:`/`id:` 行的分型事件流）；不传时默认帧为 data-only JSON（`data: {json}\n\n`）。
+
+### 4. 消费方约束（浏览器）
+
+- **GET 形态**可用原生 `EventSource`：`new EventSource("/tokens?prompt=hi")`，`onmessage` 收到 `JSON.parse(event.data)`。
+- **POST 形态** `EventSource` 不发 POST——须用 fetch 加 ReadableStream 手工解析：
+
+```javascript
+const response = await fetch("/tokens/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt: "hi" })
+});
+const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+let buffer = "";
+while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += value;
+    // 按 "\n\n" 切帧，去掉 "data: " 前缀后 JSON.parse
+}
+```
+
+### 5. 中断与错误语义
+
+- **客户端断开**：端点传 `context.RequestAborted` 给 handler，取消传播进迭代器；流按截断静默收尾（无 error 帧、无 500）。
+- **中途异常**：SSE 头已写出、状态码无法回退，端点补一个 `event: error` 帧（`data: {"message":"The stream failed unexpectedly."}`）后结束流。消费方必须同时处理「截断」（无终止帧的连接中断）与「error 帧」两种形态。
+- **压缩中间件**：响应压缩中间件会缓冲事件流，破坏流式语义——流式端点前的压缩需实测，必要时端点级禁用并记载中间件排序（ADR-030 已知约束）。
+
+### 6. 审计模式（D6）
+
+框架只记机械生命周期（流开始/结束/item 数/错误，走 `IPalLogger<T>`，`AddPalLogging` 后可见）。**响应内容审计由应用层负责**：在 handler 流结束后追加 EventLog——框架不自动捕获载荷（隐私、体积、领域语义三样均属应用层）：
+
+```csharp
+public async IAsyncEnumerable<TokenChunk> HandleAsync(
+    TokenStreamQuery query, [EnumeratorCancellation] CancellationToken ct)
+{
+    var count = 0;
+    try
+    {
+        await foreach (var token in llmClient.StreamAsync(query.Prompt, ct))
+        {
+            count++;
+            yield return new TokenChunk(token.Index, token.Text);
+        }
+    }
+    finally
+    {
+        // 流结束（含取消）后审计：只记计数与结果，不记载荷
+        await eventLog.AppendAsync(new StreamCompleted(query.Prompt, count), ct: default);
+    }
+}
+```
+
+### 7. agent 场景：分型事件、心跳与重连
+
+agent 流的三个结构特征各有一个对应原语（ADR-030 Phase 2 收窄实施）。
+
+**分型事件（event 名 + id 行）**：流里混着正文章 token、工具进度、最终 usage 元数据时，用 `eventSelector` 让客户端按事件名分流，免解析 JSON 体；`idSelector` 给每项一个事件 ID（断线重连的续传游标）：
+
+```csharp
+app.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+    "/tokens",
+    ctx => new TokenStreamQuery(ctx.Request.Query["prompt"].ToString()),
+    StreamJsonContext.Default.TokenChunk,
+    eventSelector: chunk => chunk.Kind switch
+    {
+        ChunkKind.Tool => "tool",
+        ChunkKind.Final => "done",
+        _ => "token"
+    },
+    idSelector: chunk => chunk.Index.ToString());
+```
+
+产出帧为 `event: {名}\nid: {id}\ndata: {json}\n\n`（缺项行省略）。浏览器侧按事件名监听：`es.addEventListener("done", e => renderFinal(JSON.parse(e.data)))`。`formatFrame` 委托仍可用作完整帧覆写（优先级高于两个选择器）。
+
+**心跳（keepAliveInterval）**：agent 流的静默间隙属于常态，首 token 前可停几十秒，工具调用轮的间隙达分钟级；nginx 默认 60 秒、部分云 LB 四分钟空闲即断连，长 run 会在工具轮之间被中间设备掐断。传 `keepAliveInterval`（如 `TimeSpan.FromSeconds(15)`）后，流静默超过该间隔即写注释帧 `:keepalive`（SSE 规范内客户端忽略，中间设备的重连判定被重置），不计入 item 数、不影响审计。默认关闭（null）。
+
+**重连续传（Last-Event-ID）**：EventSource 断线重连自动携带 `Last-Event-ID` 请求头（末个收到的 id 行内容）。GET 形态在 `bindQuery` 内经 `GetLastEventId()` 读入查询，handler 按该 ID 定位续读点：
+
+```csharp
+app.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+    "/tokens",
+    ctx => new TokenStreamQuery(ctx.Request.Query["prompt"].ToString(), ctx.GetLastEventId()),
+    StreamJsonContext.Default.TokenChunk,
+    idSelector: chunk => chunk.Index.ToString());
+```
+
+续传语义的边界（防误用）：框架只提供请求头读取与 id 行写出，不缓冲已产出项。实时生成流的中途缓冲属于另一设计（per-stream Channel，ADR-030 分期节收窄暂不建），实时生成的失败恢复走客户端整轮重开；该头的典型受益场景是持久流回放重连，比如回看某次已完成的 agent run（EventLog 有序读的位置游标即天然的事件 ID）。
+
+**回放与断点续看（EventLog 参考实现）**：一轮 agent run 结束后由 handler 追加一条 EventLog 记录（完整记录，不逐 token 写），回放端点用同帧形状重新发布，`Last-Event-ID` 直接当作 EventLog 的 `fromVersion`：
+
+```csharp
+public sealed class AgentReplayHandler(IEventLog eventLog)
+    : IStreamQueryHandler<AgentReplayQuery, AgentChunk>
+{
+    public async IAsyncEnumerable<AgentChunk> HandleAsync(
+        AgentReplayQuery query, [EnumeratorCancellation] CancellationToken ct)
+    {
+        // Last-Event-ID 即 EventLog 流版本：+1 从下一条开始（含断线重连的续看）
+        var fromVersion = long.TryParse(query.LastEventId, out var last) ? last + 1 : 0;
+        await foreach (var recorded in eventLog.ReadStreamAsync(
+            $"agent-run-{query.Run}", fromVersion, cancellationToken: ct))
+        {
+            yield return ToChunk(recorded);   // 应用层把记录映射回帧元素
+        }
+    }
+}
+```
+
+完整可运行样本见 `samples/PalDDD.AgentSample`（流式产出 + 工具幂等 + EventLog 审计 + 断点续看四项接线，13 条断言）。
+
+**遥测（2026-10-18 接入）**：端点在验证通过、进入枚举后开启 `Stream Query` Activity（tag `pal.stream.query`/`pal.stream.item` 为类型名），首个元素写出时记 `first-item` 事件——**TTFT = 该事件时间戳 − span 起点**，无需新增直方图。五个零 tag 计数器：`paldd.stream.started/completed/failed/cancelled/items`（取消独立于失败：客户端断开是正常终止，混入 failed 会污染错误率告警）。订阅方式与其他遥测一致（引用 `PalDDD` ActivitySource/Meter）。
+
+### 8. 断线续跑（ADR-031）
+
+`MapStreamQuery` 的语义是**连接断开即取消整轮**。长 agent run 需要「切页/弱网后回来接着看」时改用断线续跑端点组：run 独立于 HTTP 请求存在，断开只解除附着。
+
+```csharp
+builder.Services.AddDetachedStreamRuns(options =>
+{
+    options.MaxBufferedItems = 1024;                    // 环形缓冲容量（项）
+    options.DetachGrace = TimeSpan.FromMinutes(5);      // 无附着宽限，到期取消（不白烧 token）
+    options.MaxRunDuration = TimeSpan.FromMinutes(10);  // 单 run 最长存活
+});
+
+// 启动并附着：响应头 X-Run-Id 供重连
+app.MapDetachedStreamQuery<TokenStreamQuery, TokenChunk>(
+    "/agent/run",
+    ctx => new TokenStreamQuery(ctx.Request.Query["prompt"].ToString()),
+    StreamJsonContext.Default.TokenChunk,
+    eventSelector: chunk => chunk.Kind,
+    idSelector: chunk => chunk.Index.ToString());
+
+// 重连附着（遵守 Last-Event-ID：先回放缓冲，再转 live）
+app.MapStreamRunAttach<TokenChunk>("/agent/runs", StreamJsonContext.Default.TokenChunk);
+
+// 显式取消（幂等，终态返回 204）
+app.MapStreamRunCancel("/agent/runs");
+```
+
+客户端流程：
+
+```javascript
+// 1. 启动：拿 X-Run-Id
+const first = await fetch("/agent/run?prompt=hi");
+const runId = first.headers.get("X-Run-Id");
+// ... 读取流，中途断线（取消请求即 abort 连接；不要用 response.dispose 等待）
+
+// 2. 重连：EventSource 会自动带 Last-Event-ID；fetch 则手工带
+const reattach = await fetch(`/agent/runs/${runId}/stream`, {
+    headers: { "Last-Event-ID": lastSeenId }
+});
+```
+
+**语义边界**：缓冲按项计数，溢出丢最旧并在重连首帧发 `event: gap`（携带 `oldestIndex`，客户端自行决定重开还是接受缺口）；终态 run 在 `RetentionAfterCompletion` 内可回看，收尾帧为 `event: done|cancelled|error`。注册表是**进程内**状态：重启丢进行中 run；多实例部署需会话亲和。完成态审计与回放仍走 EventLog（见上一节）。
+
+**客户端两个坑**：SSE 流未读完时 `response.Dispose()` 会同步等连接关闭（与仍在写的服务端互相等待），断线请用取消请求；重连用新连接（连接池在 abort 后可能异常）；`done`/`cancelled` 收尾帧不带 `id`，按 id 解析须过滤。
+
+完整可运行示例见 `samples/PalDDD.AgentSample` 第 6 段。
 
 ## Kafka / RabbitMQ
 

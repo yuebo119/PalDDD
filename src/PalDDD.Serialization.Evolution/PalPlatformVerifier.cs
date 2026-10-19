@@ -15,6 +15,10 @@ public sealed class PalPlatformVerifier
         "Performance",
         "CA1822:Mark members as static",
         Justification = "验证器有意设为实例化，以便宿主包通过 DI 注册并扩展校验项而不破坏公共 API。")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Major Code Smell",
+        "S2325:Methods and properties that don't access instance data should be static",
+        Justification = "实例 API 保持 DI 注册形态（与 CA1822 同源）。")]
     public void ValidateMessageEvolutionPaths(
         MessageEvolutionPipeline pipeline,
         IEnumerable<MessageEvolutionPathRequirement> requirements)
@@ -25,7 +29,8 @@ public sealed class PalPlatformVerifier
         List<PalPlatformVerificationError>? errors = null;
         foreach (var requirement in requirements)
         {
-            ArgumentNullException.ThrowIfNull(requirement);
+            if (requirement is null)
+                throw new ArgumentNullException(nameof(requirements), "The requirements collection contains a null element.");
 
             try
             {

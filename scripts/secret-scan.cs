@@ -2,8 +2,11 @@
 // secret-scan.cs——受跟踪文件硬编码凭据扫描（MIG-012-A2，2026-09-11）
 // 由 scripts/secret-scan.sh（57 行）等价迁移为 C#（dotnet file-based app）。
 //
-// 用法：dotnet run scripts/secret-scan.cs
+// 用法：dotnet run scripts/secret-scan.cs [--root <仓库根>]
 // 退出码：0=无高置信凭据；1=发现疑似凭据；2=仓库根定位失败。
+//
+// --root（2026-10-18 增）：扫描指定 git 仓而非主仓。用于 `.ai` 独立仓提交守卫——
+// 该仓不被主仓跟踪，默认根解析会把扫描面指回主仓，等于没扫。
 //
 // 设计纪律（宁缺毋滥——低精度门禁比无门禁更坏，会被噪声淹没后失效）：
 //   1. 只报高置信度形态（云密钥前缀格式、连接串密码、私钥块头），
@@ -41,8 +44,14 @@ if (args.Contains("--selftest"))
     return SelfTest();
 }
 
-// ─── 仓库根定位 ───
-var root = FindRepoRoot();
+// ─── 仓库根定位（--root 可覆盖，见头注释）───
+var rootOverride = RootArgument(args);
+var root = rootOverride is not null ? Path.GetFullPath(rootOverride) : FindRepoRoot();
+if (!Directory.Exists(root))
+{
+    Console.Error.WriteLine($"错误：--root 指向的目录不存在：{root}");
+    return 2;
+}
 
 // ─── git ls-files 收集跟踪文件（Process 调用），按扩展名过滤（大小写不敏感）───
 // 全仓扫描修复（fail-open）：git 调用失败原本返回空列表，而调用方把空列表渲染成
@@ -107,6 +116,13 @@ Console.WriteLine($"PASS 受跟踪文件无高置信硬编码凭据（{trackedFi
 return 0;
 
 // ══════════════ static 局部函数 ══════════════
+
+// --root 解析（2026-10-18 增）：缺省返回 null（走 FindRepoRoot）；缺值返回 null。
+static string? RootArgument(string[] arguments)
+{
+    var i = Array.IndexOf(arguments, "--root");
+    return i >= 0 && i + 1 < arguments.Length ? arguments[i + 1] : null;
+}
 
 // 仓库根定位：CWD 向上找 PalDDD.slnx 为主、BaseDirectory 兜底（file-based app
 // 的 BaseDirectory 实测指向 %TEMP%\dotnet\runfile\...，向上不可达仓库根）
@@ -270,6 +286,11 @@ static int SelfTest()
     // 否则调用方把「门禁没跑」渲染成「扫描干净」。用不存在的工作目录触发启动失败。
     Case("GitLsFiles 启动失败返回 null 而非空列表",
         GitLsFiles(Path.Combine(Path.GetTempPath(), "secret-scan-no-such-" + Guid.NewGuid().ToString("N"))) is null);
+
+    // --root 参数（2026-10-18 增）：.ai 独立仓守卫的根覆盖
+    Case("--root 缺省 → null（走 FindRepoRoot）", RootArgument([]) is null);
+    Case("--root 解析值", RootArgument(["--root", ".ai"]) == ".ai");
+    Case("--root 缺值 → null（不越界）", RootArgument(["--root"]) is null);
 
     Console.WriteLine();
     Console.WriteLine($"SELFTEST {passed}/{total} 通过");

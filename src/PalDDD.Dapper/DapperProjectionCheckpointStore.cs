@@ -12,7 +12,7 @@ using PalDDD.Projections;
 namespace PalDDD.Dapper;
 
 /// <summary>Dapper 投影 checkpoint 存储 — 实现 <see cref="IProjectionCheckpointStore"/>。</summary>
-public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
+public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore, IResumableProjectionCheckpointStore
 {
     private readonly DbConnection _connection;
     private readonly DbTransaction? _transaction;
@@ -215,6 +215,56 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
                 Reset,
                 new { projectionName, sourceName },
                 Tx).ConfigureAwait(false);
+    }
+
+    /// <summary>增量回放续读位置（R6/P0-3，ADR-028）——单语句聚合（方言 CAST position 为数值）：
+    /// MIN(非 Completed 位置) / 无洞时 MAX(位置)+1 / 无行 null 三态；数值 CAST 失败（PG 对非数值
+    /// 串抛错）按优化面回退语义返回 null 走全量回放。语义详见接口 remarks。</summary>
+    public async ValueTask<string?> GetResumePositionAsync(
+        string projectionName,
+        string sourceName,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
+
+        var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var castType = _dbType switch
+        {
+            DapperDbType.PostgreSql => "BIGINT",
+            DapperDbType.MySql => "SIGNED", // MySQL CAST 目标类型为 SIGNED/UNSIGNED（无裸 INTEGER）
+            _ => "INTEGER",
+        };
+        var sql = $"SELECT MIN(CASE WHEN status <> 1 THEN CAST(position AS {castType}) END) AS FirstIncomplete, MAX(CAST(position AS {castType})) AS MaxPosition FROM projection_checkpoints WHERE projection_name = @projectionName AND source_name = @sourceName";
+        try
+        {
+#pragma warning disable S2077 // sql 由方言常量 castType 构造，值侧参数化
+            var row = await connection.QueryFirstOrDefaultAsync<ResumeRow>(
+                sql, new { projectionName, sourceName }, Tx).ConfigureAwait(false);
+#pragma warning restore S2077
+            if (row is null)
+                return null; // 理论不可达（聚合恒返一行）——防御性按无行处理
+            var resume = row.FirstIncomplete
+                ?? (row.MaxPosition is { } max ? max + 1 : (long?)null);
+            return resume is { } value
+                ? value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : null;
+        }
+        catch (DbException)
+        {
+            // PG 对非数值 Position 串 CAST 抛错（22007 族）——数值契约外的脏数据，
+            // 续读是优化面：回退全量回放（语义兜底恒安全）
+            return null;
+        }
+    }
+
+    /// <summary>续读聚合行（Dapper 物化 DTO）。</summary>
+    [SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes",
+        Justification = "Dapper 运行时通过 AOT 拦截器/物化管线实例化此 DTO。")]
+    internal sealed class ResumeRow
+    {
+        public long? FirstIncomplete { get; set; }
+        public long? MaxPosition { get; set; }
     }
 
 

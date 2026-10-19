@@ -81,6 +81,48 @@ public sealed class MessageConsumeContextTests
         await Assert.That(context!.CorrelationId).IsEqualTo("from-header");
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // ⚡ EPSL 地毯审计 2026-10-16 A 批 #14：无头 + 兜底 correlation 免字典构造
+    // 旧码该形态（RabbitMQ 主流消费形态：correlation 走 BasicProperties 不走 header）
+    // 每条消息白付一个空 Dictionary（~80B）+ 四次 TryGetValue。A-1（2026-10-11）补的是
+    // 「无头且无兜底」格，本格是其姊妹漏格。行为契约不变（Headers 仍为空视图）。
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public async Task FromHeaders_NullHeadersWithFallback_ReturnsCorrelationOnlyContext()
+    {
+        var context = MessageConsumeContext.FromHeaders(headers: null, correlationId: "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+
+        // 行为断言直取属性（context 为 null 时 NRE 即红，不用 IsNotNull 弱断言——
+        // AssertionStrengthGateTests 棘轮口径）
+        await Assert.That(context!.CorrelationId).IsEqualTo("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        await Assert.That(context.CausationId).IsNull();
+        await Assert.That(context.TraceParent).IsNull();
+        await Assert.That(context.Headers.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task FromHeaders_NullHeadersWithFallback_NoDictionaryAllocation()
+    {
+        // 预热（JIT 成型 + 静态单例初始化）
+        _ = MessageConsumeContext.FromHeaders(null, "corr-warmup");
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        var baseline = GC.GetAllocatedBytesForCurrentThread();
+        const int iterations = 10_000;
+        for (var i = 0; i < iterations; i++)
+            _ = MessageConsumeContext.FromHeaders(null, "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+
+        var alloc = GC.GetAllocatedBytesForCurrentThread() - baseline;
+
+        // 预算构成（新码实测标定，2026-10-16）：单上下文对象 5 个引用字段 ≈ 56B/迭代。
+        // 旧码（+ 空 Dictionary ≈ 80B ≈ 136B/迭代）在本预算下红——锁定的回归敏感点即
+        // 相关消息消费路径空字典构造的重引入。
+        await Assert.That(alloc).IsLessThanOrEqualTo(70L * iterations);
+    }
+
     [Test]
     public async Task FromHeaders_UnknownValueType_DecodesAsNullButKeyRetainedInHeadersView()
     {

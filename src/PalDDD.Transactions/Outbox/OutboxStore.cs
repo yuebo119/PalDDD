@@ -129,3 +129,36 @@ public interface IImmediateWriteOutboxStore
     ///（含 v4.0 ④ 的 <c>CancellationToken</c>），叠加「立即执行、无调用方 SaveChanges 依赖」契约。</summary>
     ValueTask<int> AddMessagesAsync(IReadOnlyList<OutboxMessage> messages, CancellationToken ct = default);
 }
+
+/// <summary>
+/// Outbox 终态批量标记能力（R4/P0-2，ADR-027，2026-10-14 性能实施轮，T2.1 收益锚正式立项）——
+/// 成功路径的 <see cref="IPalOutboxStore.MarkProcessedAsync"/> 批量化：N 条已发布消息的
+/// 单语句（按 RetryCount 分组，组数 = 批内去重重试计数数，常态 1）批量终态写，
+/// 替代逐条 UPDATE 的 N 次 DB 往返。
+/// <para>
+/// <b>调用前提（处理器保证）</b>：批内消息须来自<b>同一次租约</b>（<c>LockedBy</c>/<c>LockedUntil</c>
+/// 同值且非空）；混批抛 <see cref="InvalidOperationException"/>（防御性 fail-fast，正常管线不可达）。
+/// </para>
+/// <para>
+/// <b>fencing 守卫（与逐条路径等价）</b>：每行按 <c>(Id, RetryCount)</c> 快照 + 共享
+/// <c>(LockedBy, LockedUntil, Status=Pending)</c> 守卫——被重租/重置的行不命中（部分拒绝
+/// 不抛错，返回 affected &lt; 批大小）。
+/// </para>
+/// <para>
+/// <b>内存回写</b>：全部命中（affected == 批大小）时对入参全套六字段回写（对齐逐条路径的
+/// ADR-026 ② 契约）；部分拒绝时零回写（无法逐行定位被拒者，保守不写）。
+/// </para>
+/// <para>
+/// 处理器经 <see cref="OutboxOptions.BatchMarkThreshold"/>（默认 1 = 逐条路径逐字不变）
+/// opt-in 启用；实现栈：Dapper / EF Core（OutboxDbContext 族）/ InMemory / PalORM。
+/// PalORM 栈于 2026-10-16 清算 ADR-027 延后段（until 编码三方言探针实证后实施）：
+/// 批量 WHERE 的 <c>until</c> 取租约回读值且以 DateTimeOffset 形态插值，与租约写入
+/// 绑定逐字节一致（同值以 DateTime 形态传递三方言实测全拒——编码形态敏感，勿简化）。
+/// </para>
+/// </summary>
+public interface IBatchMarkOutboxStore
+{
+    /// <summary>批量标记发布成功——契约见接口 remarks；返回受影响行数（部分 fencing 拒绝时
+    /// 小于批大小，不抛错）。</summary>
+    ValueTask<int> MarkProcessedBatchAsync(IReadOnlyList<OutboxMessage> messages, DateTimeOffset processedAt, CancellationToken ct = default);
+}

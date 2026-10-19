@@ -44,6 +44,28 @@ public sealed class EventLogReplaySource<TMessage> : IEventReplaySource<TMessage
         string sourceName,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
+        // R6/P0-3（ADR-028）：全量读取 = 续读 core 的 fromVersion 0 形态（单一实现源）
+        await foreach (var replayEvent in ReadCoreAsync(sourceName, fromVersion: 0, ct).ConfigureAwait(false))
+            yield return replayEvent;
+    }
+
+    /// <summary>从指定位置续读事件流（含 fromPosition）。</summary>
+    /// <remarks>R6/P0-3（ADR-028）：续读重载——<paramref name="fromPosition"/> 下传
+    /// <see cref="IEventLog.ReadStreamAsync"/> 的 fromVersion（含），已完成前缀零读取。</remarks>
+    public async IAsyncEnumerable<ReplayEvent<TMessage>> ReadAsync(
+        string sourceName,
+        long fromPosition,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var replayEvent in ReadCoreAsync(sourceName, fromPosition, ct).ConfigureAwait(false))
+            yield return replayEvent;
+    }
+
+    private async IAsyncEnumerable<ReplayEvent<TMessage>> ReadCoreAsync(
+        string sourceName,
+        long fromVersion,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
         using var activity = PalActivitySource.StartEventReplayRead(sourceName, _descriptor.Name, GetTypeName(typeof(TMessage)));
         var read = 0;
 
@@ -54,7 +76,7 @@ public sealed class EventLogReplaySource<TMessage> : IEventReplaySource<TMessage
         // ReplayFailed）都会执行，且先于上方 using activity 的 Dispose。
         try
         {
-            await foreach (var recorded in _eventLog.ReadStreamAsync(sourceName, cancellationToken: ct).ConfigureAwait(false))
+            await foreach (var recorded in _eventLog.ReadStreamAsync(sourceName, fromVersion, cancellationToken: ct).ConfigureAwait(false))
             {
                 ReplayEvent<TMessage> replayEvent;
                 try

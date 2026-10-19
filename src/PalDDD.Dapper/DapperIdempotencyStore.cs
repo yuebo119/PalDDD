@@ -1,6 +1,7 @@
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
 using Dapper;
 using PalDDD.Core;
 using PalDDD.Idempotency;
@@ -27,10 +28,8 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
 {
     private readonly DbConnection _connection;
     private readonly DapperDbType _dbType;
-    private readonly DapperSqlDialect _dialect;
     private readonly DbTransaction? _transaction;
     private DbTransaction? Tx => _transaction ?? DapperAmbientTransaction.TryGet(_connection);
-    private readonly TimeProvider _timeProvider;
 
     public DapperIdempotencyStore(
         DbConnection connection,
@@ -41,9 +40,9 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         ArgumentNullException.ThrowIfNull(connection);
         _connection = connection;
         _dbType = dbType;
-        _dialect = DapperSqlDialect.For(dbType);
         _transaction = transaction;
-        _timeProvider = timeProvider ?? TimeProvider.System;
+        // 保留 timeProvider 构造参数以维持公开签名；当前实现使用调用方传入的 now/数据库时钟。
+        _ = timeProvider;
     }
 
     /// <summary>时间参数方言编码（镜像 DapperOutboxStore.ToTimeParam——PG 原生 DateTimeOffset，
@@ -128,11 +127,34 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
             return new IdempotencyRecord(operationName, key,
                 IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now);
 
-        // INSERT 冲突 → 记录已存在 → GetAsync 检查是否过期可回收
-        var existing = await GetAsync(operationName, key, now, ct).ConfigureAwait(false);
+        // INSERT 冲突 → 记录已存在 → 冲突分类轻量读（B5）
+        var existing = await GetForConflictClassificationAsync(operationName, key, now, ct).ConfigureAwait(false);
         if (existing is null)
         {
             // 过期回收（三十七轮 P2-5 口径：过期即回收无论终态；v54 P2 revision 换代）
+            // EPSL 地毯审计 2026-10-16 B 批 #21：PG/SQLite 改 UPDATE ... RETURNING revision
+            // 单语句——省「换代后回读 DB 新 revision」的整往返（冷路径，仅过期记录触发，
+            // 机制确定探针成本低；MySQL 无 RETURNING 维持两步）。RETURNING 行数即受影响
+            // 行数（零行 = 未回收，与旧 affected==0 同义），revision 直取无需再查。
+            if (_dbType == DapperDbType.PostgreSql || _dbType == DapperDbType.Sqlite)
+            {
+                const string reclaimReturningSql = """
+                    UPDATE idempotency_records
+                    SET status = @Status, locked_until = @LockedUntil, expires_at = @ExpiresAt, updated_at = @UpdatedAt,
+                        error = NULL, response_payload = NULL, revision = revision + 1
+                    WHERE operation_name = @OperationName AND idempotency_key = @Key AND expires_at <= @Now
+                    RETURNING revision
+                    """;
+                var reclaimedRevisions = await _connection.QueryAsync<long>(reclaimReturningSql,
+                    new { OperationName = operationName, Key = key, Status = statusProcessing, LockedUntil = ToTimeParam(lockedUntil), ExpiresAt = ToTimeParam(expiresAt), UpdatedAt = ToTimeParam(now), Now = ToTimeParam(now) },
+                    Tx).ConfigureAwait(false);
+                var revisionList = reclaimedRevisions.ToList();
+                if (revisionList.Count == 0) return null;
+
+                return new IdempotencyRecord(operationName, key,
+                    IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, revisionList[0]);
+            }
+
             const string reclaimSql = """
                 UPDATE idempotency_records
                 SET status = @Status, locked_until = @LockedUntil, expires_at = @ExpiresAt, updated_at = @UpdatedAt,
@@ -144,7 +166,7 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
                 Tx).ConfigureAwait(false);
             if (affected == 0) return null;
 
-            // 换代后回读 DB 新 revision
+            // 换代后回读 DB 新 revision（MySQL 无 RETURNING，维持两步）
             const string readBackSql = "SELECT revision FROM idempotency_records WHERE operation_name = @OperationName AND idempotency_key = @Key";
             var newRevision = await _connection.QuerySingleOrDefaultAsync<long>(readBackSql,
                 new { OperationName = operationName, Key = key }, Tx).ConfigureAwait(false);
@@ -154,11 +176,11 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         }
 
         // Completed 非过期 → 返回 null（ITM-078：他人已持有终态，读取走 GetAsync 获取 response_payload）
-        if (existing.Status == IdempotencyRecordStatus.Completed)
+        if (existing.Value.Status == IdempotencyRecordStatus.Completed)
             return null;
 
         // Processing 且租约未过期 → 返回 null（他人正在处理）
-        if (existing.Status == IdempotencyRecordStatus.Processing && existing.LockedUntil > now)
+        if (existing.Value.Status == IdempotencyRecordStatus.Processing && existing.Value.LockedUntil > now)
             return null;
 
         // 过期 Processing / Failed → Revision CAS 抢占（v54 P2：revision 令牌防同刻双 worker）
@@ -178,15 +200,67 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
                 LockedUntil = ToTimeParam(lockedUntil),
                 ExpiresAt = ToTimeParam(expiresAt),
                 UpdatedAt = ToTimeParam(now),
-                ExpectedRevision = existing.Revision,
+                ExpectedRevision = existing.Value.Revision,
                 Completed = (int)IdempotencyRecordStatus.Completed
             },
             Tx).ConfigureAwait(false);
         if (affected == 0) return null;
 
         return new IdempotencyRecord(operationName, key,
-            IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, existing.Revision + 1);
+            IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, existing.Value.Revision + 1);
     }
+
+    /// <summary>
+    /// B5（EPSL 地毯审计 2026-10-16）：TryStart 冲突路径的轻量读——原 GetAsync 读全行
+    /// （含 response_payload 大列），而冲突分类只用 status/locked_until/expires_at/revision
+    /// 四列；Completed 情形的 payload 本就丢弃（调用方二次 GetAsync 获取），构成双传。
+    /// 本查询只取四列，过期语义与 GetAsync 逐字一致（ExpiresAt &lt;= now 返回 null）。
+    /// MySQL DATETIME Kind 归一同 GetAsync（ToUtcOrMin）。
+    /// </summary>
+    private async ValueTask<IdempotencyConflictInfo?> GetForConflictClassificationAsync(
+        string operationName, string key, DateTimeOffset now, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        const string sql = """
+            SELECT operation_name, idempotency_key, status, locked_until, expires_at, revision
+            FROM idempotency_records
+            WHERE operation_name = @OperationName AND idempotency_key = @Key
+            """;
+        var row = await _connection.QueryFirstOrDefaultAsync<IdempotencyConflictRow>(
+            sql, new { OperationName = operationName, Key = key }, Tx)
+            .ConfigureAwait(false);
+        if (row is null) return null;
+
+        var expiresAt = ToUtcOrMin(row.ExpiresAt);
+        if (expiresAt <= now) return null;
+
+        return new IdempotencyConflictInfo(
+            (IdempotencyRecordStatus)row.Status,
+            ToUtcOrMin(row.LockedUntil),
+            expiresAt,
+            row.Revision);
+    }
+
+    /// <summary>B5：冲突路径轻量读行（六列，无 payload/error/updated_at；internal 可见性
+    /// 对齐 IdempotencyRow——Dapper 动态方法 IL 发射对 private 嵌套类型的属性 setter
+    /// 可访问性走不同路径）。</summary>
+    /// CA1812 抑制：实例化由 Dapper 内部反射完成，编译器不可见（同 IdempotencyRow 先例）。
+    [SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes",
+        Justification = "Dapper 行映射经反射实例化，编译器静态不可见。")]
+    internal sealed class IdempotencyConflictRow
+    {
+        public string OperationName { get; set; } = "";
+        public string IdempotencyKey { get; set; } = "";
+        public int Status { get; set; }
+        public DateTimeOffset LockedUntil { get; set; }
+        public DateTimeOffset ExpiresAt { get; set; }
+        public long Revision { get; set; }
+    }
+
+    /// <summary>B5：冲突分类所需的最小信息（替代轻量读处的完整 IdempotencyRecord）。</summary>
+    [StructLayout(LayoutKind.Auto)]
+    private readonly record struct IdempotencyConflictInfo(
+        IdempotencyRecordStatus Status, DateTimeOffset LockedUntil, DateTimeOffset ExpiresAt, long Revision);
 
     /// <inheritdoc />
     public async ValueTask MarkCompletedAsync(
@@ -261,7 +335,9 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
 
     /// <summary>ITM-242 口径：UTC 归一化（MySQL DATETIME Kind=Unspecified → offset 0）。</summary>
     private static DateTimeOffset ToUtcOrMin(DateTimeOffset value)
-        => value == default ? value : DateTime.SpecifyKind(value.DateTime, DateTimeKind.Utc);
+        => value == default
+            ? value
+            : new DateTimeOffset(DateTime.SpecifyKind(value.DateTime, DateTimeKind.Utc), TimeSpan.Zero);
 
 
     /// <summary>Dapper 物化 DTO（public setters 供 Dapper 映射——非领域实体）。

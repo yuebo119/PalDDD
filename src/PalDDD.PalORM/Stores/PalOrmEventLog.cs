@@ -91,21 +91,245 @@ public class PalOrmEventLog<TProvider> : IEventLog
         if (!expectedVersion.Matches(currentVersion))
             throw new EventStreamConcurrencyException(streamName, expectedVersion, currentVersion);
 
-        // 步骤 2：循环 INSERT —— 每个事件一条 SQL（与 Dapper 实现一致；非批量）
-        // 注：GlobalPosition 为 DB 自增，InsertAsync 自动回填；firstGlobalPos 记录首条返回的全局位置
-        // PALORM005 循环告警 —— EventLog 语义要求每事件独立 GlobalPosition + StreamVersion 递增，
-        // 无法用 BulkInsert（批量 INSERT 无法保证 GlobalPosition 单调有序 + RETURNING 每行）。
-        // ITM-075 修复：TOCTOU 窗口（步骤 1 预检后并发写入撞 (stream_name, stream_version)
-        // 唯一索引）此前抛裸 provider 异常——Dapper（DapperEventLog）与 EFCore（EventLogDbContext）
-        // 均翻译为 EventStreamConcurrencyException，调用方按该异常重试的契约在本实现失效。
-        // 现补同型翻译：唯一约束冲突 → 重查实际版本再分类（对齐 Dapper 八轮修复逻辑——
-        // 批内 EventId 重复原样上抛，并发写入转统一并发异常）；非唯一约束异常原样上抛。
-        // 事务契约声明（对齐 DapperEventLog "P2 定案"）：批量追加的原子性由调用方事务保证；
-        // 中途失败会留下前半批（部分写入），与 Dapper 版一致。
-#pragma warning disable PALORM005 // 事件溯源语义要求循环 INSERT，非 N+1 反模式
+        // 步骤 2：事件 INSERT
+        // A11（S1 轮，2026-10-15）：多行 VALUES 批量化——原逐事件 Session.InsertAsync 使
+        // k 事件 append 付 k 次往返（加 MAX 预检共 k+1）。PG/SQLite
+        // （TProvider.SupportsReturningClause）改多行 INSERT ... RETURNING 单语句（共 2
+        // 往返）；PALORM005 告警注释声称「批量 INSERT 无法保证 GlobalPosition 单调有序 +
+        // RETURNING 每行」——返回值只需首末位置，取 min/max 即可，行序映射不成立的要求。
+        // MySQL 等无 RETURNING 方言维持逐行 InsertAsync（多行批化的位置回查需 2 次额外
+        // 往返，仅 k≥4 净胜——登记延后；自增值连续性在 innodb_autoinc_lock_mode=2 下不
+        // 保证，first+k-1 推导不成立）。
         var now = _clock.GetUtcNow();
+        long firstGlobalPos;
+        long lastGlobalPos;
+        if (TProvider.SupportsReturningClause)
+        {
+            (firstGlobalPos, lastGlobalPos) = await InsertBatchWithReturningAsync(
+                streamName, expectedVersion, currentVersion, events, now, cancellationToken).ConfigureAwait(false);
+        }
+        else if (events.Count <= MySqlBatchRowLimit)
+        {
+            // B11（EPSL 地毯审计 2026-10-16）：MySQL 多行 VALUES 批量化——A11 登记延后的
+            // 两条理由实证后均不成立（同 Dapper B2）：① 无 RETURNING 可用「多行 INSERT +
+            // 版本区间回查 MIN/MAX」三往返达成（MAX 预检 + INSERT + 回查，较逐行 k+1 在
+            // k≥3 净胜）；② innodb_autoinc_lock_mode=2 下已知行数多行 VALUES 的自增块
+            // 连续（wslc mysql84 8.4.11 实测：5 行 LAST_INSERT_ID=首行值、min/max=1/5
+            // 无间隙），且本实现不依赖连续性（区间回查按版本区间）。行上限 4000（15 参/行
+            // = 60000 < MySQL 65535 占位符上限），超出回落逐行（与 Dapper B2 同口径）。
+            (firstGlobalPos, lastGlobalPos) = await InsertBatchMySqlAsync(
+                streamName, expectedVersion, currentVersion, events, now, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            (firstGlobalPos, lastGlobalPos) = await InsertRowByRowAsync(
+                streamName, expectedVersion, currentVersion, events, now, cancellationToken).ConfigureAwait(false);
+        }
+
+        var firstStreamVersion = currentVersion + 1;
+        var lastStreamVersion = currentVersion + events.Count;
+        // lastGlobalPos 已在循环内每次更新（不再用 firstGlobalPos + count - 1 推导）
+        // v36 P3：写侧 metrics（对齐 EventLogDbContext/InMemoryEventLog 的 EventLogAppended）
+        PalMetrics.EventLogAppended.Add(events.Count);
+        return new AppendEventsResult(streamName, firstStreamVersion, lastStreamVersion, firstGlobalPos, lastGlobalPos);
+    }
+
+    /// <summary>
+    /// A11（S1 轮，2026-10-15）：多行 VALUES INSERT ... RETURNING（PG/SQLite）——k 事件由
+    /// k 次往返降为 1 次（加 MAX 预检共 2）。RETURNING 全部列映射 EventLogRow，取
+    /// GlobalPosition 的 min/max 作首末（返回值只需首末，行序映射非必需——PALORM005 的
+    /// 「无法保证单调有序」顾虑对 min/max 口径不成立）。冲突分类（ITM-075）与逐行形态
+    /// 同款：唯一索引冲突 → 重查 MAX 分类（并发写入转统一并发异常 / 否则原样上抛），
+    /// 批粒度用本批首事件版本作门槛（INSERT 原子失败，无部分写入）。
+    /// </summary>
+    private async ValueTask<(long First, long Last)> InsertBatchWithReturningAsync(
+        string streamName,
+        ExpectedStreamVersion expectedVersion,
+        long currentVersion,
+        IReadOnlyList<EventData> events,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var (sql, args) = BuildBatchInsert(streamName, currentVersion, events, now);
+        sql.Append(" RETURNING global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state");
+
+        List<EventLogRow> inserted;
+        try
+        {
+            inserted = await Session.QueryAsync<EventLogRow>(
+                FormattableStringFactory.Create(sql.ToString(), args.ToArray()), ct: ct).ConfigureAwait(false);
+        }
+        catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
+        {
+            // ITM-075（批粒度）分类收口共享 helper（B11 提取，RETURNING/MySQL 两批路径同源）
+            throw await ClassifyBatchConflictAsync(streamName, expectedVersion, currentVersion, ex, ct).ConfigureAwait(false);
+        }
+
+        if (inserted.Count == 0)
+            throw new InvalidOperationException(
+                $"Batch INSERT ... RETURNING returned no rows for stream '{streamName}' ({events.Count} event(s) submitted).");
+
+        var first = long.MaxValue;
+        var last = long.MinValue;
+        foreach (var row in inserted)
+        {
+            if (row.GlobalPosition < first) first = row.GlobalPosition;
+            if (row.GlobalPosition > last) last = row.GlobalPosition;
+        }
+        return (first, last);
+    }
+
+    /// <summary>
+    /// B11（EPSL 地毯审计 2026-10-16）：MySQL 多行 VALUES 批量追加——MySQL 无 RETURNING，
+    /// INSERT 后按本批版本区间 raw command 回查 MIN/MAX 全局位置（(stream_name,
+    /// stream_version) 唯一索引served；区间由唯一索引 + 冲突分类保证只含本批行）。
+    /// 往返：MAX 预检 + INSERT + 回查 = 3（逐行 k+1），k≥3 净胜——A11 登记按「位置回查
+    /// 需 2 次额外往返」计的 k≥4 阈值因单语句 MIN/MAX 回查修正为 k≥3。冲突分类与
+    /// RETURNING 批路径同款（ITM-075 批粒度）。
+    /// </summary>
+    private async ValueTask<(long First, long Last)> InsertBatchMySqlAsync(
+        string streamName,
+        ExpectedStreamVersion expectedVersion,
+        long currentVersion,
+        IReadOnlyList<EventData> events,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var (sql, args) = BuildBatchInsert(streamName, currentVersion, events, now);
+
+        try
+        {
+            await Session.ExecuteAsync(
+                FormattableStringFactory.Create(sql.ToString(), args.ToArray()), ct: ct).ConfigureAwait(false);
+        }
+        catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
+        {
+            throw await ClassifyBatchConflictAsync(streamName, expectedVersion, currentVersion, ex, ct).ConfigureAwait(false);
+        }
+
+        // 版本区间回查首末全局位置（raw command 单往返——MIN/MAX 同语句取回）
+        await using var cmd = CreateRawCommand();  // ITM-243：挂接 IUnitOfWork 环境事务
+        cmd.CommandText = "SELECT MIN(global_position), MAX(global_position) FROM events WHERE stream_name = @p0 AND stream_version BETWEEN @p1 AND @p2";
+        AddParam(cmd, "@p0", streamName);
+        AddParam(cmd, "@p1", currentVersion + 1);
+        AddParam(cmd, "@p2", currentVersion + events.Count);
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+            throw new InvalidOperationException(
+                $"Batch INSERT position readback returned no rows for stream '{streamName}' ({events.Count} event(s) submitted).");
+        // DBNull 容错：区间无行时 MIN/MAX 为 NULL——与「零行」同罪，抛出不伪装成功
+        if (reader.IsDBNull(0) || reader.IsDBNull(1))
+            throw new InvalidOperationException(
+                $"Batch INSERT position readback returned NULL positions for stream '{streamName}' ({events.Count} event(s) submitted).");
+        return (reader.GetInt64(0), reader.GetInt64(1));
+    }
+
+    /// <summary>B11：MySQL 批量化行上限——15 参/行 × 4000 = 60000 &lt; MySQL 65535 占位符上限
+    ///（与 Dapper MySqlBatchRowLimit 同口径）；超出回落逐行路径。</summary>
+    private const int MySqlBatchRowLimit = 4000;
+
+    /// <summary>
+    /// raw command 工厂（B11 位置回查用）——手动命令不自动 enlist（PalORM 仅 ExecuteAsync
+    /// 路径自动挂 GetActiveTransaction()），MySQL 活动事务下未挂接抛
+    /// InvalidOperationException（MySqlConnector 严格校验，探针实测）。形态对齐
+    /// PalOrmIdempotencyStore/PalOrmSagaStateStore 同款私有工厂（ITM-243）。
+    /// </summary>
+    private DbCommand CreateRawCommand()
+    {
+        var cmd = Session.GetRawConnection().CreateCommand();
+        var tx = PalOrmAmbientTransaction.TryGet(Session);
+        if (tx is not null) cmd.Transaction = tx;
+        return cmd;
+    }
+
+    private static void AddParam(DbCommand cmd, string name, object value)
+    {
+        var p = cmd.CreateParameter();
+        p.ParameterName = name;
+        p.Value = value;
+        cmd.Parameters.Add(p);
+    }
+
+    /// <summary>
+    /// 多行 VALUES INSERT 构造（RETURNING 批与 MySQL 批共用单一来源，B11 提取）——
+    /// 列序与 EventLogRow 映射一致（global_position 自增除外）；Ulid 列按
+    /// UlidStringConverter 的 26 字符字符串存储形态直传字符串。{N} 索引孔经
+    /// FormattableStringFactory.Create 编入（A11 先例：PalORM 每插值孔只绑一个
+    /// DbParameter，SQL 片段禁入插值——PD18）。
+    /// </summary>
+    private static (System.Text.StringBuilder Sql, List<object?> Args) BuildBatchInsert(
+        string streamName, long currentVersion, IReadOnlyList<EventData> events, DateTimeOffset now)
+    {
+        var sql = new System.Text.StringBuilder(
+            "INSERT INTO events (event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) VALUES ");
+        var args = new List<object?>(events.Count * 15);
+        for (var i = 0; i < events.Count; i++)
+        {
+            var e = events[i];
+            if (i > 0) sql.Append(", ");
+            sql.Append('(');
+            object?[] values =
+            [
+                e.EventId.ToString(null, System.Globalization.CultureInfo.InvariantCulture), e.EventName, streamName, currentVersion + 1 + i,
+                e.SchemaVersion, e.ContentType, e.PayloadArray, e.MetadataArray,
+                now, e.Audit.ActorId, e.Audit.Reason,
+                e.Audit.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture), e.Audit.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+                e.Audit.TraceParent, e.Audit.TraceState
+            ];
+            for (var c = 0; c < values.Length; c++)
+            {
+                if (c > 0) sql.Append(", ");
+                sql.Append('{').Append(args.Count).Append('}');
+                args.Add(values[c]);
+            }
+            sql.Append(')');
+        }
+        return (sql, args);
+    }
+
+    /// <summary>
+    /// ITM-075（批粒度）：唯一索引冲突分类——重查实际版本，命中并发写入
+    /// （&gt;= 本批首事件版本 currentVersion+1）转统一并发异常；否则（如批内 EventId
+    /// 重复）原样上抛。RETURNING 批与 MySQL 批共用（B11 提取）。
+    /// </summary>
+    private async Task<Exception> ClassifyBatchConflictAsync(
+        string streamName, ExpectedStreamVersion expectedVersion, long currentVersion, DbException original, CancellationToken ct)
+    {
+        long? actualVersion = null;
+        var requerySucceeded = false;
+        try
+        {
+            actualVersion = await Session.ScalarAsync<long?>(
+                $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
+                ct: ct).ConfigureAwait(false);
+            requerySucceeded = true;
+        }
+        catch (DbException)
+        {
+            // 重查失败（如 PG aborted 事务）——放弃分类，走原始异常上抛
+        }
+        if (requerySucceeded && (actualVersion ?? -1) >= currentVersion + 1)
+            return new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion ?? -1);
+        return original;
+    }
+
+    /// <summary>
+    /// 逐行 INSERT 回退路径（MySQL 等无 RETURNING 方言）——原循环形态原样保留：
+    /// InsertAsync 对自增主键自动回填 GlobalPosition（MySQL 经 LAST_INSERT_ID），
+    /// firstGlobalPos 记录首条返回、lastGlobalPos 每次更新（不用算术推导——并发下
+    /// GlobalPosition 非连续）。冲突分类（ITM-075）与原形态逐字一致。
+    /// </summary>
+    private async ValueTask<(long First, long Last)> InsertRowByRowAsync(
+        string streamName,
+        ExpectedStreamVersion expectedVersion,
+        long currentVersion,
+        IReadOnlyList<EventData> events,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+#pragma warning disable PALORM005 // 无 RETURNING 方言的逐行回退（批量位置回查需 2 次额外往返，仅 k≥4 净胜）
         long firstGlobalPos = 0;
-        long lastGlobalPos = 0;  // P1 修复：循环内每次更新，不用推导
+        long lastGlobalPos = 0;
         for (var i = 0; i < events.Count; i++)
         {
             var e = events[i];
@@ -127,34 +351,26 @@ public class PalOrmEventLog<TProvider> : IEventLog
                 RecordedAt = now,
                 ActorId = e.Audit.ActorId,
                 Reason = e.Audit.Reason,
-                // P2 定案：审计 4 字段补齐持久化（此前仅 EFCore 版持久化，PalORM 版导出时追踪链断）
-                CorrelationId = e.Audit.CorrelationId?.ToString(),
-                CausationId = e.Audit.CausationId?.ToString(),
+                CorrelationId = e.Audit.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+                CausationId = e.Audit.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
                 TraceParent = e.Audit.TraceParent,
                 TraceState = e.Audit.TraceState,
             };
-            // InsertAsync 对自增主键自动回填 GlobalPosition（PG/SQLite 经 RETURNING，MySQL 经 LAST_INSERT_ID）
             EventLogRow inserted;
             try
             {
-                inserted = await Session.InsertAsync(row, cancellationToken).ConfigureAwait(false);
+                inserted = await Session.InsertAsync(row, ct).ConfigureAwait(false);
             }
             catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
             {
-                // ITM-075：预检后并发写入兜底——唯一索引冲突转为统一并发异常（对齐 Dapper/EFCore）。
-                // 分类逻辑镜像 Dapper 八轮修复：批内前序 INSERT 已推进 MaxVersion（同事务可见），
-                // 失败事件的赋值版本（streamVersion）未落库——重查实际版本，命中并发写入则转
-                // EventStreamConcurrencyException，否则（如批内 EventId 重复）原样上抛。
-                // v34 P3 声明：本判定为单一并发判定，不区分 EventId 撞库与流推进两因
-                // （EFCore 姊妹经 eventIdExists 探测区分）——两因同窗叠加时误译为并发异常，
-                // 重试经版本预检自然收敛；权衡声明见类头"ITM-075 分类局限"。
+                // ITM-075：与批量化路径同款的冲突分类（逐行粒度用本事件版本作门槛）
                 long? actualVersion = null;
                 var requerySucceeded = false;
                 try
                 {
                     actualVersion = await Session.ScalarAsync<long?>(
                         $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
-                        ct: cancellationToken).ConfigureAwait(false);
+                        ct: ct).ConfigureAwait(false);
                     requerySucceeded = true;
                 }
                 catch (DbException)
@@ -166,16 +382,10 @@ public class PalOrmEventLog<TProvider> : IEventLog
                 throw;
             }
             if (i == 0) firstGlobalPos = inserted.GlobalPosition;
-            lastGlobalPos = inserted.GlobalPosition;  // P1 修复：不用算术推导（并发下 GlobalPosition 非连续）
+            lastGlobalPos = inserted.GlobalPosition;
         }
 #pragma warning restore PALORM005
-
-        var firstStreamVersion = currentVersion + 1;
-        var lastStreamVersion = currentVersion + events.Count;
-        // lastGlobalPos 已在循环内每次更新（不再用 firstGlobalPos + count - 1 推导）
-        // v36 P3：写侧 metrics（对齐 EventLogDbContext/InMemoryEventLog 的 EventLogAppended）
-        PalMetrics.EventLogAppended.Add(events.Count);
-        return new AppendEventsResult(streamName, firstStreamVersion, lastStreamVersion, firstGlobalPos, lastGlobalPos);
+        return (firstGlobalPos, lastGlobalPos);
     }
 
     /// <inheritdoc />
@@ -212,8 +422,8 @@ public class PalOrmEventLog<TProvider> : IEventLog
             // v66 P3：ConfigureAwait(false) 补齐（对齐文件内其余 await）——库代码避免捕获
             // 调用方 SyncContext；对 IAsyncEnumerable 用 ConfiguredAsyncEnumerable 扩展。
             // 读副本标注（2026-09-25 特性审计裁决）：纯读流无 read-after-write 依赖——
-            // 上游契约（6.4.1 XML 复核，2026-10-11；6.4.0 同日/10-08/09-25 前核）：readFromReplica=true 且未配置 ReadConnectionString 时
-            // 逐位回落主库（未配置=行为不变）；配置后本读流可走副本。6.4.0 ARCH-001 读路由收口（READ-002 opt-in 教义 6.4.1 XML 明示不回归，与 6.4.0 逐字同文）
+            // 上游契约（6.5.0 XML 复核，2026-10-11 三升；6.4.x 系列前核）：readFromReplica=true 且未配置 ReadConnectionString 时
+            // 逐位回落主库（未配置=行为不变）；配置后本读流可走副本。6.4.0 ARCH-001 读路由收口（READ-002 opt-in 教义 6.5.0 XML 明示不回归，与 6.4.x 逐字同文）
             // （2026-10-06）后 opt-in 教义明示不回归（CreateReadRoutedCommandAsync 分支③——本调用无事务无并行作用域）。
             await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(readStreamSql, readFromReplica: true, ct: cancellationToken).ConfigureAwait(false))
             {

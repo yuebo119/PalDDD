@@ -2,7 +2,9 @@
 // hook-pre-push.cs——pre-push 钩子判定层（2026-10-08，C# 化替换 42 行 bash）
 // ① main 分支保护（merge-base --is-ancestor：dev 已合入 main 才允许从 main 推送）
 // ② 同步提示（ITM-808：多会话积压的验证债可见性，信息性不阻断）
-// ③ gate-lite CI 预览（快速门禁降级路径）
+// ③ review 债阻断（2026-10-18 增：metrics 最后一轮 >30 天且 src 有变更且无有效豁免时阻断；
+//    判定逻辑在 scripts/review-freshness.cs，可被 gate-audit 以 --today/--src-date 隔离探针）
+// ④ gate-lite CI 预览（快速门禁降级路径）
 // .githooks/pre-push 退化为启动器；本文件持有全部判定。
 //
 // 用法：dotnet run scripts/hook-pre-push.cs（由 .githooks/pre-push 启动器 exec）
@@ -53,7 +55,29 @@ if (upstream.Length > 0)
         Console.WriteLine($"⚠️  pre-push：本次推送承载 {ahead} 个积压提交——CI（含 aot-verify 真发布）将首次验证这批代码，失败排查面较大；建议日常小批推送。");
 }
 
-// ── ③ gate-lite CI 预览 ──
+// ── ③ review 债阻断（判定逻辑在 scripts/review-freshness.cs，可隔离探针）──
+var reviewTool = Path.Combine(root, "scripts", "review-freshness.cs");
+if (File.Exists(reviewTool))
+{
+    var reviewPsi = new ProcessStartInfo("dotnet", "run \"scripts/review-freshness.cs\"")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        WorkingDirectory = root,
+    };
+    using var reviewProcess = Process.Start(reviewPsi)!;
+    Console.Out.Write(reviewProcess.StandardOutput.ReadToEnd());
+    Console.Error.Write(reviewProcess.StandardError.ReadToEnd());
+    reviewProcess.WaitForExit();
+    if (reviewProcess.ExitCode != 0)
+    {
+        Console.WriteLine("⛔ review 债阻断——见上方 review-freshness 输出");
+        return 1;
+    }
+}
+
+// ── ④ gate-lite CI 预览 ──
 Console.WriteLine("🔍 gate-lite（CI 降级门禁预览）…");
 var psi = new ProcessStartInfo("dotnet", "run scripts/gate-lite.cs")
 {
@@ -127,7 +151,7 @@ static int GitExitCode(params string[] arguments)
 static int ParseCount(string s) =>
     int.TryParse(s.Trim(), System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 0;
 
-// ─── selftest：计数解析纯函数正负例（gate-audit SELFTEST 判定面）───
+// ─── selftest：计数解析纯函数正负例（review 新鲜度/豁免逻辑已迁 review-freshness.cs）───
 static int RunSelftest()
 {
     var failures = new List<string>();

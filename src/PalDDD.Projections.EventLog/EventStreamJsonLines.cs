@@ -151,7 +151,7 @@ public static class EventStreamJsonLines
         using var json = new Utf8JsonWriter(buffer);
 
         json.WriteStartObject();
-        json.WriteString("eventId", evt.EventId.ToString());
+        json.WriteString("eventId", evt.EventId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         json.WriteString("eventName", evt.EventName);
         json.WriteString("streamName", evt.StreamName);
         json.WriteNumber("streamVersion", evt.StreamVersion);
@@ -170,9 +170,9 @@ public static class EventStreamJsonLines
         if (!string.IsNullOrEmpty(evt.Audit.Reason))
             json.WriteString("reason", evt.Audit.Reason);
         if (evt.Audit.CorrelationId is not null)
-            json.WriteString("correlationId", evt.Audit.CorrelationId.Value.ToString());
+            json.WriteString("correlationId", evt.Audit.CorrelationId.Value.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         if (evt.Audit.CausationId is not null)
-            json.WriteString("causationId", evt.Audit.CausationId.Value.ToString());
+            json.WriteString("causationId", evt.Audit.CausationId.Value.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         if (!string.IsNullOrEmpty(evt.Audit.TraceParent))
             json.WriteString("traceParent", evt.Audit.TraceParent);
         if (!string.IsNullOrEmpty(evt.Audit.TraceState))

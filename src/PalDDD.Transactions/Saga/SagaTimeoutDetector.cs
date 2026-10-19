@@ -49,9 +49,15 @@ internal sealed class SagaTimeoutDetector<TState>
     {
         ArgumentNullException.ThrowIfNull(state);
 
-        List<SagaStep> list = [];
-        foreach (var (key, step) in _stepsInOrder)
+        // EPSL 地毯审计 2026-10-16 A 批 #13：常态（无超时）路径零分配化。旧码该路径
+        // 分配三笔（红证明实测 96B/次）：① try 外无条件空 List（~32B，本项主目标）；
+        // ② 下方 `[]` 集合表达式每次求值新建空数组（~32B，同路径同族，换 Array.Empty）；
+        // ③ foreach 经 IReadOnlyList 接口取枚举器（~32B，改下标循环）。三笔全消后
+        // 无超时路径零堆分配；有超时路径行为不变（首个命中才建 List）。
+        List<SagaStep>? list = null;
+        for (var i = 0; i < _stepsInOrder.Count; i++)
         {
+            var (key, step) = _stepsInOrder[i];
             // v43 P2 修复（判据三条件合取，三个既有测试语义矩阵一次保全）：
             // ① E1-P2 场景（AWD + 普通步骤已成功 + 残留时间戳超期）→ 排除：StepStartedAt
             //    只写不清（v17 声明），三十四轮 AWD 纳入扫描后同状态混注册（带 Timeout 普通
@@ -71,13 +77,13 @@ internal sealed class SagaTimeoutDetector<TState>
                 && (now - startedAt) > step.Timeout.Value
                 && !isAwdCompletedNonInterruptStep)
             {
-                list.Add(step);
+                (list ??= []).Add(step);
             }
         }
 
-        var hasTimeout = list.Count > 0;
-        timedOutSteps = hasTimeout ? list : [];
-        return hasTimeout;
+        // 无超时返回空视图（Array.Empty 单例，零分配）；有超时返回收集的列表
+        timedOutSteps = (IReadOnlyList<SagaStep>?)list ?? Array.Empty<SagaStep>();
+        return list is not null;
     }
 }
 

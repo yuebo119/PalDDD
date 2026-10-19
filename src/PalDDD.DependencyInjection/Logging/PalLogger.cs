@@ -15,16 +15,18 @@ internal sealed class PalLogger<T> : IPalLogger<T>
 {
     private readonly ILogger<T> _logger;
 
+#pragma warning disable S6672 // 泛型包装器刻意使用消费者类型 T 的日志类别，而非包装器自身类型
     public PalLogger(ILogger<T> logger)
+#pragma warning restore S6672
     {
         // ITM-284（R45）：对齐全仓构造守卫惯例
         ArgumentNullException.ThrowIfNull(logger);
         _logger = logger;
     }
 
-    public void Debug(string msg) => _logger.LogDebug(msg);
-    public void Information(string msg) => _logger.LogInformation(msg);
-    public void Warning(string msg) => _logger.LogWarning(msg);
-    public void Error(Exception ex, string msg) => _logger.LogError(ex, msg);
+    public void Debug(string message) => _logger.LogDebug(message);
+    public void Information(string message) => _logger.LogInformation(message);
+    public void Warning(string message) => _logger.LogWarning(message);
+    public void Error(Exception ex, string message) => _logger.LogError(ex, message);
     public bool IsEnabled(LogLevel level) => _logger.IsEnabled(level);
 }

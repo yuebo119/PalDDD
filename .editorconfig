@@ -49,3 +49,75 @@ dotnet_diagnostic.IDE0160.severity = none
 # samples/ 排除
 [samples/**/*.cs]
 dotnet_diagnostic.S3903.severity = none
+
+# 第三方分析器规则收敛（2026-10-18）：仅在 -p:EnableQualityAnalyzers=true 时生效。
+# 原则：安全/正确性保留 warning（进基线棘轮），风格噪声压 none（占评估基线的四分之三）。
+# 数据与决策见 docs/quality-tooling-eval-2026-10-18.md；基线 scripts/quality-analyzer-baseline.txt。
+[*.cs]
+dotnet_diagnostic.MA0048.severity = none
+dotnet_diagnostic.MA0051.severity = none
+dotnet_diagnostic.MA0004.severity = none
+dotnet_diagnostic.MA0006.severity = none
+dotnet_diagnostic.MA0002.severity = none
+dotnet_diagnostic.S3358.severity = none
+dotnet_diagnostic.S125.severity = none
+dotnet_diagnostic.S1939.severity = none
+dotnet_diagnostic.S3236.severity = none
+dotnet_diagnostic.MA0015.severity = warning
+dotnet_diagnostic.MA0011.severity = warning
+dotnet_diagnostic.S2077.severity = warning
+dotnet_diagnostic.S8949.severity = warning
+dotnet_diagnostic.S8969.severity = warning
+
+# 规则级业务判断（2026-10-18 质量工具收敛第二轮，详见 docs/quality-analyzer-triage-2026-10-18.md）：
+#   MA0015 配置解析异常不含 paramName——异常消息已带具体配置键/值，paramName 不增加定位信息；
+#          公共 API 的参数名一致性由 S927/S3928 守护，故规则级关闭。
+#   S2077 保持 warning：8 个已验证站点用站点级 #pragma 抑制，不全局关闭——
+#          Semgrep 覆盖不到的 FromSqlRaw 形态仍需 Sonar 纵深。
+#   S1133 弃用代码由 ADR-026 契约窗口与 CHANGELOG 管理，分析器无法知道移除日期。
+#   S1199 嵌套块是本仓 SQL 租约/管线的可读性结构，不是缺陷。
+#   S3267 LINQ 简化建议与零分配/可读性纪律冲突（本仓优先显式循环）。
+#   MA0016 领域状态刻意使用具体集合类型（序列化/性能契约）。
+#   S2326/S3246 类型参数是公共 API 契约的一部分，删除或加 out 会破坏兼容性。
+[*.cs]
+dotnet_diagnostic.MA0015.severity = none
+dotnet_diagnostic.S1133.severity = none
+dotnet_diagnostic.S1199.severity = none
+dotnet_diagnostic.S3267.severity = none
+dotnet_diagnostic.MA0016.severity = none
+dotnet_diagnostic.S2326.severity = none
+dotnet_diagnostic.S3246.severity = none
+
+# MA0015 按路径重新启用（2026-10-18 审计 P1）：公共/领域面的 ArgumentException 参数名
+# 有 API 诊断价值；Dapper/PalORM/Hosting 的 MultiHost/Json/HTTP 配置解析保持全局 none。
+[src/PalDDD.Core/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Compression/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Transactions/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Transactions.EFCore/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Idempotency/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.EventLog/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.EventLog.EFCore/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Messaging/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Serialization/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Serialization.Evolution/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Projections/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Projections.EventLog/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.Dapper/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+[src/PalDDD.PalORM/**.cs]
+dotnet_diagnostic.MA0015.severity = warning
+
+
+

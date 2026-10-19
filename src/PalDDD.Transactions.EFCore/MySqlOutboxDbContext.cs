@@ -135,11 +135,15 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
         // FencedTarget + ExecuteUpdate 直写，无跟踪消费方，见 remarks）；
         // FromSql 全参数化形态（2026-10-08 审计对齐：FromSqlRaw {N} 位置占位符 → FormattableString
         // 插值孔，EF 逐孔生成 DbParameter，注入面收窄；本调用纯应用侧参数，无方言时钟内联需求）
+        // R1（B-F11，2026-10-14 性能实施轮）：回读补 LIMIT {batchSize}——原无界回读依赖
+        // (owner,until) 精确匹配行数恰为批大小；同 tick 同 owner 双租约的混入窗口
+        //（ITM-109 同族已声明）下无界回读会整段取回遗留批，LIMIT 把混入截断在本批尺寸内
         return await OutboxMessages
             .FromSql($"""
                 SELECT * FROM OutboxMessages
                 WHERE LockedBy = {owner} AND LockedUntil = {until}
                 ORDER BY CreatedAt
+                LIMIT {batchSize}
                 """)
             .AsNoTracking()
             .ToListAsync(ct).ConfigureAwait(false);

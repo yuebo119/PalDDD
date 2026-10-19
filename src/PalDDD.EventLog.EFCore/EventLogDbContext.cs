@@ -48,40 +48,79 @@ public abstract class EventLogDbContext(
             throw new ArgumentException("At least one event is required.", nameof(events));
 
         foreach (var @event in events)
-            ArgumentNullException.ThrowIfNull(@event);
+        {
+            if (@event is null)
+                throw new ArgumentNullException(nameof(events), "The events collection contains a null element.");
+        }
 
         using var activity = PalActivitySource.StartEventLogAppend(streamName, events.Count);
 
-        if (Database.IsRelational())
-        {
-            // Hi/Lo 分配消除了全局序列化瓶颈：
-            // 位置预留由 EventLogPositionReserver 处理（进程内 chunk 缓存 + 乐观 CAS），
-            // 因此不再需要 Serializable 隔离级别来保护分配器行。流级别的并发由
-            // (StreamName, StreamVersion) 唯一索引 + 下方 DbUpdateException 捕获来保证。
-            // 使用默认隔离级别（大多数 provider 上为 ReadCommitted）允许
-            // 对不同流的并发追加并行执行。
-            await using var transaction = await Database
-                .BeginTransactionAsync(cancellationToken)
+        // R5（P0-1，2026-10-14 性能实施轮）：版本校验与位置预留前移到事务外（关系型在
+        // BeginTransaction 之前）——修复 v33 P3 勘正的「关系型路径 Hi/Lo 批量收益失效」：
+        // 原形态 Reserve 在事务存活期内执行，AllocateNewChunkAsync 恒走
+        // hasActiveTransaction 降级分支（_initialized=false 不发布内存游标）→ 每次
+        // AppendAsync 都 SELECT+UPDATE 分配器行（恒 6 往返）。前移后预留经自身
+        // SaveChanges 自持提交，内存游标与持久化 allocator 恒一致（ITM-226 场景 (a) 化：
+        // 事件事务回滚只留间隙——类头声明为既定可接受；场景 (b) 的内存超前自此不可达），
+        // Hi/Lo 批量收益兑现：1/N 追加付分配器 2 往返。
+        // S1（A3+A4，2026-10-15 性能实施轮）：R5 此处「其余稳态 4 往返（BeginTx+MAX+
+        // INSERT+Commit）」的形态已再收敛——删显式事务（单次 SaveChanges 自身原子，
+        // EF7+ 默认 AutoTransactionBehavior.WhenNeeded 对单语句不开显式事务，微软官方
+        // 文档实证省 BEGIN/COMMIT 两次往返）+ NoStream 跳 MAX 预查后：NoStream 建流
+        // 稳态 1 往返（INSERT），Exact/Any/StreamExists 稳态 2 往返（MAX+INSERT）。
+        // R5 的前移决策（预留出事务）与 Hi/Lo 收益不变，仍成立。
+        // 版本校验移出事务不改变并发语义：非串行化读下本就是乐观检查，TOCTOU 由
+        // (StreamName, StreamVersion) 唯一索引兜底（与原形态同一守卫，窗口宽度无实质差异）。
+        // 失败路径语义变化声明：版本不匹配抛并发异常前已消耗预留位置（间隙，ReadAll >= 过滤兼容）。
+        // A4（S1 轮）：NoStream 期望下跳过 MAX 预查——空流的约定版本即 -1，插入版本 1
+        // 若撞 (StreamName, StreamVersion) 唯一索引即证明流已存在（流版本自 1 起连续
+        // 分配是不变量：新流的 firstStreamVersion = actualVersion+1 = 1），冲突分类路径
+        // 与预查命中同一语义（重查 MAX 后转 EventStreamConcurrencyException）。Any 仍需
+        // MAX 计算起始版本；Exact 需预查验证（同时防陈旧低期望造成版本间隙）；
+        // StreamExists 需预查判定存在性。
+        // A4（S1 轮）：NoStream 期望下跳过 MAX 预查——空流的约定版本即 -1，插入首条
+        // 版本 0 若撞 (StreamName, StreamVersion) 唯一索引即证明流已存在（流版本自 0
+        // 起连续分配是不变量：新流的 firstStreamVersion = actualVersion+1 = 0，已存在
+        // 流的版本 0 必占），冲突分类路径与预查命中同一语义（重查 MAX 后转
+        // EventStreamConcurrencyException）。仅关系型 provider 生效——唯一索引强制是
+        // 关系型保证，InMemory 等无唯一约束的 provider 保持预查（否则陈旧 NoStream
+        // 期望会静默重复建流）。Any 仍需 MAX 计算起始版本；Exact 需预查验证（同时防
+        // 陈旧低期望造成版本间隙）；StreamExists 需预查判定存在性。
+        var actualVersion = expectedVersion.Kind == ExpectedStreamVersionKind.NoStream && Database.IsRelational()
+            ? -1
+            : await GetActualStreamVersionAsync(streamName, cancellationToken)
                 .ConfigureAwait(false);
-            var result = await AppendCoreAsync(
-                streamName,
-                expectedVersion,
-                events,
-                cancellationToken)
-                .ConfigureAwait(false);
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            PalMetrics.EventLogAppended.Add(events.Count);
-            return result;
-        }
+        if (!expectedVersion.Matches(actualVersion))
+            throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion);
+        var firstGlobalPosition = await ReserveGlobalPositionsAsync(events.Count, cancellationToken)
+            .ConfigureAwait(false);
 
-        var inMemoryResult = await AppendCoreAsync(
+        // A3（S1 轮）：删显式事务——AppendCoreAsync 内仅一次 SaveChanges，单语句自身
+        // 原子；EF Core 7+ 默认 AutoTransactionBehavior.WhenNeeded 对单语句不开显式
+        // 事务（官方文档实证省 BEGIN/COMMIT 两次往返），多事件批次下显式与隐式事务
+        // 同为 BEGIN+COMMIT，删除呈中性。流级并发仍由 (StreamName, StreamVersion)
+        // 唯一索引 + 下方 DbUpdateException 捕获保证（默认 ReadCommitted 允许不同流
+        // 并发追加）。附带收益：失败 INSERT 不再使显式事务进入 aborted 状态，冲突
+        // 分类的重查降级路径（ITM-126 的 PG 25P02 分支）失去触发条件。关系型与非
+        // 关系型分支自此同形，合并为单一路径。
+        // A3（S1 轮）：删显式事务——AppendCoreAsync 内仅一次 SaveChanges，单语句自身
+        // 原子；EF Core 7+ 默认 AutoTransactionBehavior.WhenNeeded 对单语句不开显式
+        // 事务（官方文档实证省 BEGIN/COMMIT 两次往返），多事件批次下显式与隐式事务
+        // 同为 BEGIN+COMMIT，删除呈中性。流级并发仍由 (StreamName, StreamVersion)
+        // 唯一索引 + 下方 DbUpdateException 捕获保证（默认 ReadCommitted 允许不同流
+        // 并发追加）。附带收益：失败 INSERT 不再使显式事务进入 aborted 状态，冲突
+        // 分类的重查降级路径（ITM-126 的 PG 25P02 分支）失去触发条件。关系型与非
+        // 关系型分支自此同形，合并为单一路径。
+        var result = await AppendCoreAsync(
             streamName,
             expectedVersion,
+            actualVersion + 1,
+            firstGlobalPosition,
             events,
             cancellationToken)
             .ConfigureAwait(false);
         PalMetrics.EventLogAppended.Add(events.Count);
-        return inMemoryResult;
+        return result;
     }
 
     /// <inheritdoc />
@@ -179,9 +218,9 @@ public abstract class EventLogDbContext(
             // P1 修复（二十一轮）：Ulid 属性需显式转换——关系型 provider 无 Ulid 原生映射，
             // 缺转换时 ctx.Model 即抛"无法映射类型"（探针实证关系型完全不可用；InMemory-only
             // 测试网掩盖）。对齐 OutboxDbContext.Id / SagaStateDbContext.SagaId 姊妹模式。
-            e.Property(x => x.EventId).HasConversion(v => v.ToString(), v => PalUlid.Parse(v));
-            e.Property(x => x.CorrelationId).HasConversion(v => v.HasValue ? v.Value.ToString() : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
-            e.Property(x => x.CausationId).HasConversion(v => v.HasValue ? v.Value.ToString() : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
+            e.Property(x => x.EventId).HasConversion(v => v.ToString(null, System.Globalization.CultureInfo.InvariantCulture), v => PalUlid.Parse(v));
+            e.Property(x => x.CorrelationId).HasConversion(v => v.HasValue ? v.Value.ToString(null, System.Globalization.CultureInfo.InvariantCulture) : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
+            e.Property(x => x.CausationId).HasConversion(v => v.HasValue ? v.Value.ToString(null, System.Globalization.CultureInfo.InvariantCulture) : default(string?), v => v != null ? PalUlid.Parse(v) : default(PalUlid?));
             e.Property(x => x.StreamName).HasMaxLength(512);
             e.Property(x => x.EventName).HasMaxLength(256);
             e.Property(x => x.ContentType).HasMaxLength(128);
@@ -207,15 +246,14 @@ public abstract class EventLogDbContext(
     private async ValueTask<AppendEventsResult> AppendCoreAsync(
         string streamName,
         ExpectedStreamVersion expectedVersion,
+        long firstStreamVersion,
+        long firstGlobalPosition,
         IReadOnlyList<EventData> events,
         CancellationToken cancellationToken)
     {
-        var actualVersion = await GetActualStreamVersionAsync(streamName, cancellationToken).ConfigureAwait(false);
-        if (!expectedVersion.Matches(actualVersion))
-            throw new EventStreamConcurrencyException(streamName, expectedVersion, actualVersion);
-
-        var firstStreamVersion = actualVersion + 1;
-        var firstGlobalPosition = await ReserveGlobalPositionsAsync(events.Count, cancellationToken).ConfigureAwait(false);
+        // R5（P1-1）：版本校验与位置预留由调用方（AppendAsync）在事务外前置完成——
+        // 本方法只负责事件构建/落库/冲突分类；firstStreamVersion/firstGlobalPosition 为
+        // 前置阶段产物直传
         var now = _timeProvider.GetUtcNow();
 
         for (var i = 0; i < events.Count; i++)
@@ -309,16 +347,30 @@ public abstract class EventLogDbContext(
     // 命中 ITM-229 清理标准（与 InMemoryEventLog 同步清理）；位置信息由
     // AppendEventsResult 返回值承载
 
+    // A5（S1 轮，2026-10-15）：固定形状单行查询编译化——EF Core 每次执行都把表达式树
+    // 重新翻译成 SQL（无自动计划缓存；EF.CompileAsyncQuery 的官方存在理由即消除重复
+    // 编译开销）。本查询是 append 路径每批次一次的固定形状热点。
+    // 按 IModel 引用各缓存一份委托：编译委托与单一模型绑定（EF 官方约束，跨模型执行抛
+    // InvalidOperationException），同上下文类型跨 provider（InMemory 测试/SQLite/PG
+    // 生产）模型实例不同，按模型分持。查找为引用哈希，相对表达式翻译可忽略。
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        Microsoft.EntityFrameworkCore.Metadata.IModel,
+        Func<EventLogDbContext, string, CancellationToken, Task<long?>>> MaxStreamVersionByModel = new();
+
     private async ValueTask<long> GetActualStreamVersionAsync(string streamName, CancellationToken cancellationToken)
     {
         // 合并为单次 MaxAsync：无事件时返回 -1（NoStream 语义），省去 AnyAsync 预检查的一次 DB 往返。
         // MaxAsync 在 SQL 上翻译为 SELECT MAX(StreamVersion) ... WHERE StreamName=@p，
         // 无匹配行时 MAX 返回 NULL → EF Core 映射为 nullable long，空流落到 default(-1) 分支。
+        // A5（S1 轮）：改走按模型缓存的编译查询委托（形状恒定，参数化 streamName）。
         // MIG-008：ConfigureAwait 补齐——原裸 await 被旧 G12 文件级差值计数漏检（该文件
         // 多余 CA 名额抵消），节点级 SourceCodeGuardTests 守卫 4 抓出（偏差账本同步销账）。
-        return await Events
-            .Where(e => e.StreamName == streamName)
-            .MaxAsync(e => (long?)e.StreamVersion, cancellationToken)
+        var compiled = MaxStreamVersionByModel.GetOrAdd(Model, static _ =>
+            EF.CompileAsyncQuery<EventLogDbContext, string, long?>(
+                (ctx, name, ct) => ctx.Events
+                    .Where(e => e.StreamName == name)
+                    .Max(e => (long?)e.StreamVersion)));
+        return await compiled(this, streamName, cancellationToken)
             .ConfigureAwait(false)
             ?? -1;
     }

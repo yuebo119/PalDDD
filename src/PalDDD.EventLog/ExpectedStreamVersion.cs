@@ -1,6 +1,8 @@
 // ─────────────────────────────────────────────────────────────
 // 🔢 ExpectedStreamVersion — 乐观并发控制（4 种合法状态）
 // ─────────────────────────────────────────────────────────────
+using System.Runtime.InteropServices;
+
 namespace PalDDD.EventLog;
 
 // ─────────────────────────────────────────────────────────────
@@ -15,6 +17,7 @@ namespace PalDDD.EventLog;
 //    （语义上与 NoStream 冲突的非法状态）。工厂方法不可删除。
 
 /// <summary>乐观并发检查的期望流版本。</summary>
+[StructLayout(LayoutKind.Auto)]
 public readonly record struct ExpectedStreamVersion
 {
     private ExpectedStreamVersion(ExpectedStreamVersionKind kind, long version)

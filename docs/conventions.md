@@ -105,6 +105,40 @@ EF Core / Kafka / RabbitMQ / MemoryPack 等不支持 AOT 的项目**显式覆盖
 
 所有 NuGet 版本集中在 `Directory.Packages.props`，csproj 中不写版本号。
 
+### 1.10 流式读（IStreamQuery / SSE，ADR-030）
+
+**形态选择（二元性规则）**：单值响应用 `IQuery<T>`（经 Dispatcher），流式响应用 `IStreamQuery<TItem>`（不经 Dispatcher）。两者与 BCL 的 Task/IAsyncEnumerable 同构，一句话规则可治理。`IStreamQuery<TItem>` 刻意**不**继承 `IBaseRequest`——`QueryAsync` 因此无法接受流式查询，「禁止经 dispatcher 路由流式查询」由编译器强制而非用户纪律。
+
+**入口规则（端点即作用域边界）**：流式查询的唯一入口是 `MapStreamQuery` 端点（GET 形态 `bindQuery` 绑定，浏览器原生 EventSource 兼容；POST 形态 JSON body，浏览器侧需 fetch 加 ReadableStream 手工解析）。handler 从 `HttpContext.RequestServices` 解析、枚举在端点方法执行期内完成，请求作用域天然覆盖全枚举期。**禁止把 `IAsyncEnumerable` 传出端点**：Dispatcher 的 per-request scope 随管道完成销毁（`Dispatcher.ExecutePipelineAsync` 的 using scope），枚举期触碰任何 scoped 依赖（仓储、DbContext、流结束追加 EventLog）即 `ObjectDisposedException`（ADR-030 背景，属运行期地雷）。
+
+**注册**：`AddPalStreamQueryHandler<TQuery, TItem, THandler>`（AOT 安全，闭合泛型 DI）。同一 `(TQuery, TItem)` 注册两个不同 `THandler` 注册期快速失败（ITM-220 同族裁决：静默覆盖是配置错误）。不经 Dispatcher ⇒ 不注册 HandlerMarker、不走管道行为；验证由端点在 SSE 头写出前经 `PalValidatorRunner` 跑（与 `ValidationBehavior` 单一出处，含「IsValid=false 且 Errors 为空时构造占位条目」语义），失败 400 ProblemDetails 且状态码可回退。
+
+**帧格式（D4 + Phase 2 收窄实施 + P1 性能轮）**：默认帧 data-only JSON（`data: {json}\n\n`，framing 经 `PipeWriter` span 直写零分配；序列化经 `StreamFrameSerializer` ThreadStatic 池化，稳态每项零堆分配，P1 实测 56B→0B/项，默认路径 framing 与序列化双零分配）。分型事件流两条路：`formatFrame` 委托产出完整帧文本（优先级最高），或 `eventSelector`/`idSelector` 选择器由框架富化帧（`event: {名}\nid: {id}\ndata: {json}\n\n`，缺项行省略，event/id 字符串 UTF-8 直写 span 零分配）。中途异常补 `event: error` 帧后结束——SSE 头已写出无法回退 500，消费方须同时处理截断。
+
+**心跳与重连（Phase 2 收窄实施，2026-10-18）**：`keepAliveInterval`（默认 null 关闭）应对 agent 场景结构性静默间隙（首 token 等待、工具轮间隙）导致的中间设备空闲断连，心跳为注释帧 `:keepalive`（规范内客户端忽略，不计入 item 数）；心跳路径取消优先于心跳（挂起项落地后统一走 OCE 静默收尾）。`StreamResumeExtensions.GetLastEventId()` 读 EventSource 重连环的 `Last-Event-ID` 请求头，续传语义留应用层（框架不缓冲已产出项；实时生成走整轮重开，持久流回放的位置游标即天然事件 ID）。PipeWriter 零拷贝化、per-stream Channel 缓冲、dispatcher 流式管道、WebSocket 传输四项经用途评估收窄暂不建（触发条件未满足，记录在 ADR-030 分期节实施附记）。
+
+**ct 纪律（D5）**：handler 契约必须响应 ct（`[EnumeratorCancellation]` 语义：`await foreach` 消费者传入的令牌优先于实现内部令牌，接口层无法携带该特性故以约定成文）；端点传 `HttpContext.RequestAborted`，客户端断开时取消传播进 handler 的 finally（停计费、释放 provider 连接）。取消按流截断静默收尾，不记 Error 级日志。
+
+**审计模式（D6）**：响应内容审计由 handler 在流结束后追加 EventLog——框架不自动捕获载荷（隐私、体积、领域语义三样均属应用层）；框架只记机械生命周期（流开始/结束/item 数/错误，`IPalLogger<T>` 门面 + `IsEnabled` 门控 + `TimeProvider` 可注入，与 LoggingBehavior 语义对齐）。
+
+**已知约束**：响应压缩中间件会缓冲事件流——端点与压缩交互需实测，必要时端点级禁用并记载中间件排序（随 ADR-030 已知约束进 usage.md）。
+
+**部署层旋钮（框架外，需宿主侧按自身负载 A/B；框架 bench 不含网络，2026-10-18 收敛评估）**：①压缩中间件排除 `text/event-stream`（否则事件流被缓冲，破坏流式语义）；②代理/负载均衡空闲超时与 `keepAliveInterval` 对齐（nginx 默认 60s、部分云 LB 4 分钟上限，心跳取设备空闲超时的约三分之一）；③高并发流走 HTTP/2（EventSource 受 HTTP/1.1 每域 6 连接限制，POST+fetch 形态可享多路复用）；④并发流数上去后评估 Server GC（选型结论见 `deployment-performance.md` §1）。框架侧每请求可控成本已收敛到 8.2% CPU / 0 B 分配（`performance.md` 收敛读数节），优化重心在传输与部署层。
+
+### 1.11 断线续跑（Detached Stream Run，ADR-031）
+
+**何时用**：run 时长与用户耐心不匹配的场景（长 agent run、分钟级工具轮）。**不要用**在短请求或不需要重连的场景——它多一个进程内注册表与缓冲，`MapStreamQuery`（ADR-030）更简单。
+
+**形态（单写者 + 单附着 + 有界环形缓冲）**：`AddDetachedStreamRuns` 注册选项与注册表；`MapDetachedStreamQuery` 启动并附着（响应头 `X-Run-Id`）；`MapStreamRunAttach` 重连附着（遵守 `Last-Event-ID`，先回放缓冲再转 live）；`MapStreamRunCancel` 幂等取消。缓冲按项计数（默认 1024），溢出丢最旧并发 `event: gap` 带最旧可用 index。
+
+**生命周期硬边界（三条都要配）**：`MaxRunDuration`（默认 10 分钟）、`MaxItems`（默认 10 万）、`DetachGrace`（默认 5 分钟无附着即取消——「不白烧 token」的落点）。取消用 run 自有 CTS，**不用** `RequestAborted`：连接断开只 detach，handler 的 finally 与审计照常完成。
+
+**作用域所有权（强制）**：run 活过请求作用域，handler 必须从 run 自有 `IServiceScope` 解析（框架已在 `Register` 内完成）；run 终态时释放该 scope。**禁止**把请求作用域的 scoped 实例传进 run。
+
+**与相邻组件的分工（别混）**：run 注册表 = 传输层会话状态，进程内可丢（重启即丢进行中 run）；完成态审计与回放走 `IEventLog`（`samples/PalDDD.AgentSample` 示范 `Last-Event-ID` 即 `fromVersion`）；run 内部业务编排走 Saga；对外发布走 Outbox；工具副作用去重走 `IdempotencyProcessor`。本机制**不是** EventBus（单写者单附着、无订阅模型、无跨请求投递保证）。
+
+**客户端约束**：断线用取消请求（abort 连接）而非 `HttpResponseMessage.Dispose()`——后者在 SSE 流未读完时会同步等连接关闭，与仍在写的服务端互相等待；重连用新连接（连接池在 abort 后可能进入异常态）；终态收尾帧（`done`/`cancelled`）不带 id，按 id 解析时须过滤。
+
 ---
 
 ## 2. 注释规范
@@ -338,7 +372,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-10-11 复验）：223 源文件·36 项目·0 违规（2026-10-09 为 222 文件，EPSL 修复轮新增 DecompressBufferPool 一文件——池上移 PalDDD.Compression 为跨程序集单一事实源）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-10-19 ADR-032 复验）：237 源文件·36 项目·0 违规（2026-10-19 双栈 FTS5/JSON1 新增 10 个源文件：共享核心 3、Dapper 公开类型 2、PalORM 公开类型与门面 5；此前 227 文件）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 
@@ -526,7 +560,7 @@ public sealed class SagaKeyValidationTests { ... }
 
 ### 5.7 架构边界测试
 
-`ArchitectureBoundaryTests.cs`（37 个测试方法 / 99 断言点）将 ADR 和 Clean Architecture 落地为可执行断言：
+`ArchitectureBoundaryTests.cs`（38 个测试方法 / 103 断言点）将 ADR 和 Clean Architecture 落地为可执行断言：
 
 - 项目引用禁令矩阵（`[Theory]` + InlineData）
 - 源码内容关键字禁令（扫描 `.cs`，过滤注释行）
@@ -826,7 +860,7 @@ dotnet run scripts/verify-conventions.cs
 
 ### 10.6 测试框架规则（TUnit + MTP · 强制）
 
-> **背景**：本框架统一使用 **TUnit 1.73.19**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.5.1**（TUnit 传递解析，2026-10-11 实测；TUnit 1.71.0 时代为 2.4.1、1.73.5 时代为 2.5.0）。不使用 VSTest。
+> **背景**：本框架统一使用 **TUnit 1.75.0**（源生成器测试框架），运行于 **Microsoft.Testing.Platform (MTP) 2.5.1**（TUnit 传递解析，2026-10-11 实测；TUnit 1.73.5 时代为 2.5.0、1.71.0 时代为 2.4.1）。不使用 VSTest。
 
 **硬性规则**（违反导致 `dotnet test` 发现零测试或构建冲突）：
 
@@ -1036,15 +1070,15 @@ dotnet test <target> 2>&1 | tail -5 > /tmp/baseline.txt; echo "exit=$?" >> /tmp/
 | 依赖方向 | ArchitectureBoundaryTests 项目引用矩阵 | CI |
 | DDD 命名 | StrategicDddAnalyzer PDDD001-015 | 编译期 |
 | 零警告 | TreatWarningsAsErrors | 编译期 |
-| 测试覆盖 | MTP 原生 `--coverage`（Cobertura 合并，阈值 0.70 见 ci-coverage.cs；状态与前置见 docs/test-coverage-baseline.md §门禁阈值） | CI（2026-09-14 接线，阈值 0.70） |
+| 测试覆盖 | MTP 原生 `--coverage`（Cobertura 合并；CI 阈值 0.70 + 单模块降幅 ±5pp；无 Docker 本机自动 LOCAL 口径 0.65、跳过降幅门禁，`--local`/`--ci` 可显式指定，见 ci-coverage.cs；状态与前置见 docs/test-coverage-baseline.md §门禁阈值） | CI（2026-09-14 接线；本地口径 2026-10-19 增） |
 | 断言强度 | `AssertionStrengthGateTests` 棘轮（MIG-003 下沉自 assertion-strength-check.sh） | CI（PR 时） |
 | 公共 API 快照 | PublicApiSnapshotTests | CI |
 | AI 模板约束 | `.pal/prompts/` 结构——**段数并非统一的「六段」**（2026-09-13 实测：9 个模板段数 5/6/7 不等；7 个为「角色/框架约束/必须遵守/禁止/输出格式」，其中 5 个追加「示例」段；`bounded-context` 以「项目引用指南」替代「输出格式」；`task-intake` 为验收断言门专用结构 7 段。README 自述「v54 勘正：各模板段数不一」） | 人工（机械化候选：按模板分组断言必填段存在） |
 | AI 编码约束 | Trellis spec 注入 + `scripts/verify-conventions.cs` | 会话 + pre-commit |
-| 配置文件策略 | `scripts/config-policy.cs`（A：dependabot `groups`/`ignore` 双词表与 `versions`/`labels`/`prefix`/`interval` 必填项，行式校验非完整 YAML 解析；B：根 `Directory.Build.*` 每处 `<Exec>` 须 `IgnoreExitCode` 或 Target 带 `GITHUB_ACTIONS` 跳过，防构建期副作用经 `-warnaserror` 打断发布链——2026-09-25 增） | pre-commit（文件入暂存时）+ CI |
+| 配置文件策略 | `scripts/config-policy.cs`（A：dependabot `groups`/`ignore` 双词表与 `versions`/`labels`/`prefix`/`interval` 必填项，行式校验非完整 YAML 解析；B：根 `Directory.Build.*` 每处 `<Exec>` 须 `IgnoreExitCode` 或 Target 带 `GITHUB_ACTIONS` 跳过，防构建期副作用经 `-warnaserror` 打断发布链；C：`.github/workflows/*.yml` 的 `uses:` 须钉 40 位 commit SHA 且带 `# vX.Y.Z` 版本注释，防可变标签供应链风险——2026-09-25 / 2026-10-18 增） | pre-commit（文件入暂存时）+ CI |
 | 依赖许可 | `scripts/license-policy.cs`（deny-by-default 白名单 = OSI/FSF 认可的 SPDX 表达式 + 包级禁令 `Verify`/`Verify.TUnit` ≥ 33 + 有期限的 gap 台账；证据取自本机 NuGet 缓存 nuspec，取不到即 fail-closed——裁决 2026-09-25「所有引用的库必须是开源的许可，不使用商业许可」） | pre-commit（`Directory.Packages.props`/`*.csproj` 入暂存时）+ CI |
-| 文档计数一致性 | `scripts/count-audit.cs`（16 项推导真值——可打包包数/项目数/prompt/遥测计数器/诊断 ID/ADR/踩坑条目/断言点/源文件数等，推导表在脚本内=单一真源不建台账；扫描面 README*/docs 排除 `review`/`decisions`/`migration`/`design` 历史目录，声明写了必须与推导一致、缺失不算错（PD34），失实报 `文件:行号：声明 X vs 推导 Y`；推导 0 值/异常/依赖文件缺失 fail-closed。退出码 0/1/2（2=自测失败）；`--selftest` 41 例正负例，变异翻转声明判定后 26/41 红、恢复 41/41；gate-audit 2 条隔离探针——2026-09-25 增） | pre-commit（`README*.md`/`docs/**` 入暂存时）+ CI |
-| 性能契约 | BenchmarkDotNet `--smoke` 烟测 | 本地/人工（未接 CI） |
+| 文档计数一致性 | `scripts/count-audit.cs`（16 项推导真值——可打包包数/项目数/prompt/遥测计数器/诊断 ID/ADR/踩坑条目/断言点/源文件数等，推导表在脚本内=单一真源不建台账；扫描面 README*/AGENTS.md/docs 排除 `review`/`decisions`/`migration`/`design` 历史目录，声明写了必须与推导一致、缺失不算错（PD34），失实报 `文件:行号：声明 X vs 推导 Y`；推导 0 值/异常/依赖文件缺失 fail-closed。退出码 0/1/2（2=自测失败）；`--selftest` 47 例正负例（2026-10-18 增 AGENTS.md 扫描面与两条正则假阳性负例）；2026-09-25 变异记录（当时 41 例）：翻转声明判定后 26/41 红、恢复 41/41；gate-audit 2 条隔离探针——2026-09-25 增） | pre-commit（`README*.md`/`docs/**` 入暂存时）+ CI |
+| 性能契约 | BenchmarkDotNet `--smoke` 烟测（6 项分配预算，退出码 1 即红；预算单一真源 `perf-budgets.md` §2） | CI `build-and-test` 的 `perf-smoke` 步骤 + 本地（2026-10-18 从人工 TOOL 转每提交门禁） |
 | DI 生命周期 | ArchitectureBoundaryTests 配置守护 | CI |
 | 评审纪律 | `scripts/review-snapshot.cs` + `REVIEW_TEMPLATE.md` R0 可信度标注 | 评审时 |
 | 任务清单验证 | `scripts/verify-action-items.cs` 标识符 + build 命令 + 外部合并 grep | 任务清单生成后 |

@@ -199,10 +199,12 @@ public static class ServiceRegistration
     /// <paramref name="minimumLevel"/> 不再生效（首次配置为准）。
     /// </para>
     /// </remarks>
+#pragma warning disable S3427 // 1 参重载为二进制兼容保留（ADR-026），无参调用绑定 1 参重载
     public static IServiceCollection AddPalLogging(
         this IServiceCollection services,
         bool clearProviders = false,
         LogLevel? minimumLevel = null)
+#pragma warning restore S3427
     {
         ArgumentNullException.ThrowIfNull(services); // v17 片E 假修勘正（第 9 处守卫）
         // v35 P3 防重：AddZLoggerConsole 非幂等——同一 IServiceCollection 重复调用会注册
@@ -353,6 +355,61 @@ public static class ServiceRegistration
         return services;
     }
 
+    /// <summary>显式注册流式查询处理器（AOT 安全，ADR-030 D7）</summary>
+    /// <typeparam name="TQuery">流式查询类型</typeparam>
+    /// <typeparam name="TItem">流元素类型</typeparam>
+    /// <typeparam name="THandler">处理器类型</typeparam>
+    /// <remarks>
+    /// 与 <see cref="AddPalCommandHandler{TCommand,TResponse,THandler}"/> /
+    /// <see cref="AddPalQueryHandler{TQuery,TResponse,THandler}"/> 的差异：流式查询
+    /// <b>不经 Dispatcher</b>（ADR-030 D1 独立读形态）——不注册 HandlerMarker、不注册
+    /// 管道行为；流式端点到请求作用域解析 handler 并在端点执行期内枚举（D2）。
+    /// <para>ITM-220 同族裁决：同一 (TQuery, TItem) 注册两个不同 THandler 属配置错误，
+    /// 注册期快速失败——静默覆盖会让后注册者顶替先注册者且无诊断。检测面为
+    /// <c>IStreamQueryHandler&lt;,&gt;</c> 服务描述符（含手动 AddScoped 注册，
+    /// 比命令/查询的 HandlerMarker 哨兵更宽）。</para>
+    /// <para>自动 <see cref="AddPalDDD"/>（幂等）：漏调时注册期即补齐请求作用域基础设施。</para>
+    /// </remarks>
+    public static IServiceCollection AddPalStreamQueryHandler<TQuery, TItem,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors
+            | DynamicallyAccessedMemberTypes.Interfaces)]
+    THandler>(this IServiceCollection services)
+        where TQuery : CQRS.IStreamQuery<TItem>
+        where THandler : class, CQRS.IStreamQueryHandler<TQuery, TItem>
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        // 评审 P2-1 同族：自动确保核心注册（AddPalDDD 全 TryAdd，幂等零覆盖）
+        services.AddPalDDD();
+
+        // ITM-220 同族：同一 (TQuery, TItem) 的两个不同 THandler 注册期快速失败。
+        // 形态：扫描已注册的 IStreamQueryHandler<,> 闭合服务描述符，比对泛型实参。
+        foreach (var descriptor in services)
+        {
+            if (descriptor.ServiceType is not { IsGenericType: true } serviceType)
+                continue;
+            if (serviceType.GetGenericTypeDefinition() != typeof(CQRS.IStreamQueryHandler<,>))
+                continue;
+            var args = serviceType.GetGenericArguments();
+            if (args[0] != typeof(TQuery) || args[1] != typeof(TItem))
+                continue;
+
+            if (descriptor.ImplementationType != typeof(THandler))
+            {
+                var existingName = descriptor.ImplementationType?.Name
+                    ?? descriptor.ImplementationInstance?.GetType().Name
+                    ?? "(factory registration)";
+                throw new InvalidOperationException(
+                    $"Duplicate stream query handler for {typeof(TQuery).Name}: {existingName} and {typeof(THandler).Name}. A stream query type must have exactly one handler.");
+            }
+            return services; // 同一 Handler 同查询重复注册——幂等跳过
+        }
+
+        services.TryAddScoped<THandler>();
+        services.TryAddScoped<CQRS.IStreamQueryHandler<TQuery, TItem>, THandler>();
+        return services;
+    }
+
     /// <summary>显式注册领域事件处理器（AOT 安全）</summary>
     /// <remarks>事件处理器默认注册为 Scoped，允许处理器安全依赖仓储、DbContext 或 Unit of Work。</remarks>
     /// <typeparam name="TEvent">领域事件类型</typeparam>
@@ -461,6 +518,8 @@ internal sealed class HandlerRegistrar : IHostedService
 /// ServiceDescriptor 标记（同集合二次调用据此幂等跳过 ZLogger 注册），无运行时行为。
 /// internal + 无依赖，不影响容器解析。
 /// </summary>
+#pragma warning disable S2094 // 哨兵标记类型（ServiceDescriptor 识别用，无运行时行为）
 internal sealed class PalLoggingMarker
 {
 }
+#pragma warning restore S2094

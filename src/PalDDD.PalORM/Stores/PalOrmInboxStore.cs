@@ -175,7 +175,7 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         //（其失败点为 ProcessingStartedAt!.Value 附带抛 InvalidOperationException；本栈为设计守卫
         // 抛 ArgumentNullException——异常类型差异属刻意，fail-fast 语义一致）
         if (message.ProcessingStartedAt is null)
-            throw new ArgumentNullException(nameof(message) + "." + nameof(message.ProcessingStartedAt));
+            throw new ArgumentNullException(nameof(message), "message.ProcessingStartedAt must be set before marking the message.");
         // 手写 SQL（不走 UpdateAsync）—— 避免 [ConcurrencyCheck]attempts 干扰并发场景
         // WHERE status=Processing(1) 守卫，防止重复标记（与 Dapper 实现一致）
         // 三十八轮 P2 修复（ITM-210 Inbox 姊妹）：processing_started_at 抢占 token 守卫——
@@ -210,7 +210,7 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         var reason = FailureReason.Normalize(failureReason);
         // ITM-274（R42）：同 MarkProcessedAsync——null ProcessingStartedAt 显式 fail-fast（对齐 Dapper 姊妹）
         if (message.ProcessingStartedAt is null)
-            throw new ArgumentNullException(nameof(message) + "." + nameof(message.ProcessingStartedAt));
+            throw new ArgumentNullException(nameof(message), "message.ProcessingStartedAt must be set before marking the message.");
         // 手写 SQL（不走 UpdateAsync）—— 避免 [ConcurrencyCheck]attempts 在并发场景抛异常
         // WHERE status=Processing(1) 守卫，防止覆盖已 Processed 的记录（与 Dapper 实现一致）
         // 三十八轮 P2 修复（ITM-210 Inbox 姊妹）：processing_started_at 抢占 token 守卫（对齐 Dapper 版同款）

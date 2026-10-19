@@ -75,6 +75,7 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
         base.Dispose();
     }
 
+    /// <summary>初始化 PostgreSQL Outbox 通知器。</summary>
     /// <param name="dataSource">Npgsql 数据源（由 <c>AddPalNpgsqlDataSource</c> 注册，Singletion）</param>
     /// <param name="scopeFactory">用于创建 Scoped OutboxBatchProcessor</param>
     /// <param name="channelName">PostgreSQL 通知通道名（默认 "outbox_channel"）</param>
@@ -142,7 +143,10 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
                 // 注册 LISTEN
                 await using var cmd = conn.CreateCommand();
                 // ITM-636：双引号标识符——避免 PG 未引号标识符小写折叠（见 ValidateChannelName 注释）
+#pragma warning disable S2077 // _channelName 经 ValidateChannelName 白名单 + 双引号包裹
+                // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- _channelName 经 ValidateChannelName 白名单 [A-Za-z0-9_]，非用户输入
                 cmd.CommandText = $"LISTEN \"{_channelName}\"";
+#pragma warning restore S2077
                 await cmd.ExecuteNonQueryAsync(stoppingToken).ConfigureAwait(false);
 
                 _logger.Information($"PostgreSQL LISTEN started on channel '{_channelName}'");
@@ -169,7 +173,9 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
                         // P2 修复：Task.Run 不再传 stoppingToken——传入时若调度前取消，
                         // 任务不执行、已获取的 gate 永不释放。去掉 token 后任务必然运行，
                         // 由 FireBatchProcessAsync 内部协作取消 + finally 兜底释放。
+#pragma warning disable S8949 // 刻意不向 Task.Run 传 token（调度前取消会使 gate 永不释放，见上方注释）
                         _ = Task.Run(() => FireBatchProcessAsync(stoppingToken));
+#pragma warning restore S8949
                     }
                 }
             }
@@ -264,7 +270,10 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
                         await conn.OpenAsync(ct).ConfigureAwait(false);
                     using var cmd = conn.CreateCommand();
                     // ITM-636：双引号标识符——与 LISTEN 侧大小写口径一致（见 ValidateChannelName 注释）
+#pragma warning disable S2077 // _channelName 经 ValidateChannelName 白名单 + 双引号包裹
+                    // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- _channelName 经 ValidateChannelName 白名单 [A-Za-z0-9_]，非用户输入
                     cmd.CommandText = $"NOTIFY \"{_channelName}\"";
+#pragma warning restore S2077
                     await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
                 }
                 catch (Exception selfWakeEx)
@@ -278,7 +287,10 @@ public sealed class PostgreSqlOutboxNotifier : BackgroundService
             // P2 修复：Dispose 已释放 gate 时 in-flight 批处理的 Release 会抛
             // ObjectDisposedException 且无人观察——吞掉（停机路径，gate 已无意义）
             try { _processGate.Release(); }
-            catch (ObjectDisposedException) { }
+            catch (ObjectDisposedException)
+            {
+                // 停机路径：gate 已释放，in-flight 批处理的 Release 无意义
+            }
         }
     }
 }

@@ -102,14 +102,16 @@ if (ALL.Any(p => p.StartsWith("src/PalDDD.Dapper", StringComparison.Ordinal)))
     FAIL += RunGate("scripts/dapper-param-guard.cs", [], "⛔ dapper-param-guard 失败——匿名参数含枚举直传（改 (int) 强转）");
 }
 
-// ─── 8. config-policy（dependabot 词表/结构 + Directory.Build Exec 副作用；
-//         触发用 ALL 含删除：策略文件被删也触发，门禁 fail-closed 报"须显式裁决"）───
+// ─── 8. config-policy（dependabot 词表/结构 + Directory.Build Exec 副作用 +
+//         Actions 引用钉 SHA；触发用 ALL 含删除：策略文件被删也触发，门禁
+//         fail-closed 报"须显式裁决"）───
 if (ALL.Any(p => p.EndsWith(".github/dependabot.yml", StringComparison.Ordinal)
+    || p.Contains(".github/workflows/", StringComparison.Ordinal)
     || p.EndsWith("Directory.Build.props", StringComparison.Ordinal)
     || p.EndsWith("Directory.Build.targets", StringComparison.Ordinal)))
 {
-    Console.WriteLine("⚙️ config-policy（dependabot/Directory.Build 有改动）…");
-    FAIL += RunGate("scripts/config-policy.cs", [], "⛔ config-policy 拦截——dependabot 词表/结构或 Directory.Build Exec 副作用违规");
+    Console.WriteLine("⚙️ config-policy（dependabot/workflows/Directory.Build 有改动）…");
+    FAIL += RunGate("scripts/config-policy.cs", [], "⛔ config-policy 拦截——dependabot 词表/结构、Directory.Build Exec 副作用或 Actions 引用钉 SHA 违规");
 }
 
 // ─── 9. license-policy（依赖许可；包清单入暂存时触发——许可由 nuspec 决定，

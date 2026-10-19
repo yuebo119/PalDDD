@@ -21,7 +21,7 @@ namespace PalDDD.Transactions;
 /// 测试中可传入 <c>FakeTimeProvider</c> 实现确定性租约过期/重试时序，
 /// 与 <c>OutboxBatchProcessor</c>、<c>SagaTimeoutProcessor</c>、<c>OutboxDbContext.GetUtcNow()</c> 的时间抽象设计对齐。
 /// </remarks>
-public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutboxStore
+public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutboxStore, IBatchMarkOutboxStore
 {
     private readonly Lock _lock = new();
     private readonly List<OutboxMessage> _messages = [];
@@ -135,7 +135,8 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
             {
                 // v13 姊妹对称：单条 null 对齐同文件 AddMessage 的 ThrowIfNull——null 延迟到
                 // QueryPending lambda 的 NRE 更难定位
-                ArgumentNullException.ThrowIfNull(msg);
+                if (msg is null)
+                    throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
                 if (!seenIds.Add(msg.Id))
                     throw new ArgumentException(
                         $"Duplicate OutboxMessage id '{msg.Id}' in the messages batch (Id must be unique, mirroring the DB primary-key constraint).",
@@ -169,11 +170,66 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
             message.NextAttemptAt = null;
             message.LockedBy = null;
             message.LockedUntil = null;
+
+            // R1（P2-7，2026-10-14 性能实施轮）：Processed 终态清除——本栈定位测试/单进程，
+            // 原实现 Processed/Dead 永久滞留使 _messages 无界增长且每次租约的 QueryPending
+            // 全表 LINQ 扫描随历史处理量线性劣化。Processed 是只读终态（拾取谓词永不再命中、
+            // RequeueDeadAsync 只作用于 Dead），按引用移除安全；Dead 保留（运维重排入口依赖）。
+            // 显式 ReferenceEquals 对齐 v74 契约（防未来值等值重写使旧引用误删 successor）。
+            for (int i = 0; i < _messages.Count; i++)
+            {
+                if (ReferenceEquals(_messages[i], message))
+                {
+                    _messages.RemoveAt(i);
+                    break;
+                }
+            }
         }
         return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc/>
+    /// <summary>批量标记发布成功（R4/P0-2，ADR-027）——契约见 <see cref="IBatchMarkOutboxStore"/>；
+    /// 本栈按 <see cref="IsCurrentLeaseHolder"/> 逐条守卫（与逐条路径等价 fencing），全命中才
+    /// 计入返回值；死信/重试路径仍走逐条方法。</summary>
+    public ValueTask<int> MarkProcessedBatchAsync(IReadOnlyList<OutboxMessage> messages, DateTimeOffset processedAt, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        ct.ThrowIfCancellationRequested();
+        if (messages.Count == 0) return ValueTask.FromResult(0);
+
+        var affected = 0;
+        lock (_lock)
+        {
+            foreach (var message in messages)
+            {
+                if (message is null)
+                    throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
+                if (!IsCurrentLeaseHolder(message))
+                    continue;
+
+                message.ProcessedAt = processedAt;
+                message.Status = OutboxStatus.Processed;
+                message.Error = null;
+                message.NextAttemptAt = null;
+                message.LockedBy = null;
+                message.LockedUntil = null;
+
+                // R1（P2-7）：Processed 终态按引用移除（同逐条路径 MarkProcessedAsync）
+                for (int i = 0; i < _messages.Count; i++)
+                {
+                    if (ReferenceEquals(_messages[i], message))
+                    {
+                        _messages.RemoveAt(i);
+                        break;
+                    }
+                }
+                affected++;
+            }
+        }
+        return ValueTask.FromResult(affected);
+    }
+
     public ValueTask MarkDeadAsync(OutboxMessage message, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);

@@ -155,7 +155,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // 一样报 PALENUM003（引导改用 class）
                 if (classSymbol.IsRecord && classSymbol.TypeKind == TypeKind.Struct)
                 {
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -173,7 +173,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // 统一承载（RegisterSourceOutput 按 DiagnosticId 分派），payload 不再携带
                 if (classSymbol.IsRecord && classSymbol.TypeKind == TypeKind.Class)
                 {
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -193,7 +193,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // 分派侧两参格式统一
                 if (classSymbol.TypeKind is TypeKind.Struct or TypeKind.Interface)
                 {
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -212,13 +212,16 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // 生成物与用户类型无法合并（CS0260），不生成代码
                 // v28 P3：GetSyntax 补传 ct（对齐同文件下方 partialDecl 收集路径的
                 // reference.GetSyntax(ct) 与 MessageRegistryGenerator 形态）——增量管线
-                // 取消信号可传播到语法物化
-                var isPartial = classSymbol.DeclaringSyntaxReferences.Any(r =>
-                    r.GetSyntax(ct) is TypeDeclarationSyntax d
-                    && d.Modifiers.Any(static m => m.IsKind(SyntaxKind.PartialKeyword)));
+                // 取消信号可传播到语法物化。
+                // EPSL 地毯审计 2026-10-16 A 批 #17：改调 NamedTypeSymbolExtensions.IsPartial
+                // 零分配参照（同文件下方 partialDecl 路径已同款）——原内联 Any 的 lambda
+                // 捕获 ct，每次 transform 分配一个 display class + delegate（~48-64B）；
+                // 扩展方法经参数传 ct，Modifiers 走 Roslyn SyntaxTokenList.Any(SyntaxKind)
+                // 重载无闭包。
+                var isPartial = classSymbol.IsPartial(ct);
                 if (!isPartial)
                 {
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -234,7 +237,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // （见 GenericDeclarationNotSupported 注释）——编译期报 PALENUM004
                 if (classSymbol.Arity > 0 || IsWithinGenericContainingType(classSymbol))
                 {
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -254,7 +257,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                 // 同样阻断生成物可见性，仅查自身声明会漏
                 if (GeneratorAccessibility.GetBlockingAccessibility(classSymbol) is { } blockingAccessibility)
                 {
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -277,7 +280,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                     || !IsPalSmartEnumBase(namedBase.OriginalDefinition))
                 {
                     // P2 修复：隔层继承不再静默跳过——报 PALENUM002（与 PALENUM001 对称）
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -307,7 +310,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                     // 该分支是不可构造路径的死代码，已回退（D 片 v60 P3-1 场景为推断幻觉）
                     if (!t.IsPartial(ct))
                     {
-                        return new EnumGenInfo(
+                        return EnumGenInfo.Create(
                             Namespace: GetNamespaceName(classSymbol),
                             TypeName: classSymbol.Name,
                             ContainingDeclarations: [],
@@ -377,7 +380,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                     // 有 [GenerateEnum] 但无静态字段 — 返回空字段信息以触发警告
                     // P3 修复（二十一轮）：携带定位——原 Location.None 使 PALENUM001 无处
                     // 指示（IDE 无 squiggle、SARIF 无精确位置）；不参与相等（位置随编辑漂移）
-                    return new EnumGenInfo(
+                    return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
                         TypeName: classSymbol.Name,
                         ContainingDeclarations: [],
@@ -388,7 +391,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         Location: context.TargetNode.GetLocation());
                 }
 
-                return new EnumGenInfo(
+                return EnumGenInfo.Create(
                     GetNamespaceName(classSymbol),
                     classSymbol.Name,
                     [.. containingDeclarations],
@@ -411,9 +414,12 @@ public sealed class EnumGenerator : IIncrementalGenerator
         // 步骤 2：有字段时生成，无字段时报告警告
         // P2 修复（二十一轮）：双 partial 声明崩溃——Collect 后单次回调内去重（方案分支
         // 说明见 IdentityGenerator 同名修复：闭包 HashSet 跨增量 pass 残留会误报）
+        // A15（S1 轮，2026-10-15）：本回调收敛为纯诊断分派（代码生成与 AddSource 移入
+        // 下方 per-candidate Combine 节点）；去重状态改由 duplicateHints 节点每次重算
+        // （值与候选集对应，无跨 pass 状态——闭包 HashSet 的污染问题在此形态下不成立）。
+        // 镜像 IdentityGenerator 同轮改造（两生成器同构）。
         context.RegisterSourceOutput(candidates.Collect(), static (spc, infos) =>
         {
-            var seenHints = new HashSet<string>();
             foreach (var info in infos)
             {
                 if (info.DiagnosticId is not null)
@@ -451,32 +457,88 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         info.TypeName));
                     continue;
                 }
-                // P3 修复（八轮评审）：hint 名的嵌套类型链改用 ContainingNames（纯类型名）——
-                // 原 ContainingDeclarations.Split(' ').Last() 对泛型嵌套类型产出含 "<T>"
-                // 的非法字符（如 "Outer<int>"），与 IdentityGenerator 风格对齐；
-                // 全局命名空间（Namespace == null）用 "_" 仅作 hint 名保底
-                // 三十八轮 P3 修复：hint 拼接对齐 IdentityGenerator ITM-098 的 "+" 方案——
-                // 命名空间内的 "." 保留原样，嵌套层级用 "+" 显式编码（"+" 非 C# 标识符字符，
-                // 不可能出现在类型名中），彻底消除 A_B.C 与 A.B_C 病态命名的同 hint 碰撞
-                // （原 "_" 连接方案 AddSource 重复 hint 抛 ArgumentException）。hint 仅作
-                // 生成物文件名与去重键，变更不影响编译。
-                var hint = info.ContainingDeclarations.Length > 0
-                    ? $"{(info.Namespace is null ? "" : info.Namespace + "+")}{string.Join("+", info.ContainingNames)}.{info.TypeName}.g.cs"
-                    : $"{(info.Namespace is null ? "" : info.Namespace + ".")}{info.TypeName}.g.cs";
-                if (!seenHints.Add(hint))
+                // A15（S1 轮）：代码生成与 AddSource 移出本回调（下方 Combine 节点）——
+                // 本回调只做诊断分派；PALENUM005 重复声明诊断随 AddSource 侧同行报告
+                // （Error 级，测试以 Any 断言）
+            }
+        });
+
+        // A15（S1 轮，2026-10-15）：重复 hint 首现映射节点 + per-candidate AddSource 节点
+        // （镜像 IdentityGenerator 同轮改造）——原 Collect 回调在任一候选变化时对全部
+        // 候选重跑（每候选一次模板渲染 + AddSource）；Combine 只对「该候选变化或重复
+        // 集合变化」触发，未变候选零重渲染。重复 hint 语义保持 P2 修复契约：仅首个出现
+        // 生成、其余报 PALENUM005（「恰好一份生成物」，SourceGeneratorDirectTests 断言在案）。
+        // B10（2026-10-16）：hint/identity 改取 transform 预计算值（info.Hint/info.Identity），
+        // 本节点不再做字符串拼接——任一候选变化时对全部 N 候选的 O(N) 键构造 churn 消除。
+        var duplicateHints = candidates.Collect()
+            .Select(static (ImmutableArray<EnumGenInfo> infos, CancellationToken ct) =>
+            {
+                var firstIdentityByHint = new Dictionary<string, string>(StringComparer.Ordinal);
+                var dups = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+                foreach (var info in infos)
                 {
-                    // P2 修复（二十一轮）：重复 [GenerateEnum] 声明——仅首个声明生成代码，
-                    // 其余报 PALENUM005 而非让 AddSource 抛 ArgumentException 崩溃
+                    if (info.DiagnosticId is not null || !info.HasFields)
+                        continue;
+                    if (!firstIdentityByHint.TryGetValue(info.Hint, out var existing))
+                    {
+                        firstIdentityByHint[info.Hint] = info.Identity;
+                        continue;
+                    }
+                    if (!dups.ContainsKey(info.Hint))
+                        dups.Add(info.Hint, existing);
+                }
+                return dups.ToImmutable();
+            });
+
+        context.RegisterSourceOutput(candidates.Combine(duplicateHints), static (spc, pair) =>
+        {
+            var info = pair.Left;
+            if (info.DiagnosticId is not null || !info.HasFields)
+                return;
+
+            if (pair.Right.TryGetValue(info.Hint, out var firstIdentity))
+            {
+                // A15：重复 [GenerateEnum] 声明——非首现报 PALENUM005（首现照常生成）
+                if (firstIdentity != info.Identity)
+                {
                     spc.ReportDiagnostic(Diagnostic.Create(
                         DuplicatePartialDeclaration,
                         info.Location ?? Location.None,
                         info.TypeName));
-                    continue;
+                    return;
                 }
-                spc.AddSource(hint, GenerateEnumCode(info));
             }
+
+            spc.AddSource(info.Hint, GenerateEnumCode(info));
         });
     }
+
+    /// <summary>
+    /// A15（S1 轮，2026-10-15）：候选的生成物 hint 名——原内联于输出回调，duplicateHints
+    /// 节点与 AddSource 节点共用单一来源（去重键两处漂移会破坏去重语义）。<br/>
+    /// P3 修复（八轮评审）：hint 名的嵌套类型链改用 ContainingNames（纯类型名）——
+    /// 原 ContainingDeclarations.Split(' ').Last() 对泛型嵌套类型产出含 "&lt;T&gt;"
+    /// 的非法字符（如 "Outer&lt;int&gt;"），与 IdentityGenerator 风格对齐；
+    /// 全局命名空间（Namespace == null）用 "_" 仅作 hint 名保底。
+    /// 三十八轮 P3 修复：hint 拼接对齐 IdentityGenerator ITM-098 的 "+" 方案——
+    /// 命名空间内的 "." 保留原样，嵌套层级用 "+" 显式编码（"+" 非 C# 标识符字符，
+    /// 不可能出现在类型名中），彻底消除 A_B.C 与 A.B_C 病态命名的同 hint 碰撞
+    /// （原 "_" 连接方案 AddSource 重复 hint 抛 ArgumentException）。hint 仅作
+    /// 生成物文件名与去重键，变更不影响编译。
+    /// </summary>
+    private static string EnumHint(EnumGenInfo info)
+        => info.ContainingDeclarations.Length > 0
+            ? $"{(info.Namespace is null ? "" : info.Namespace + "+")}{string.Join("+", info.ContainingNames)}.{info.TypeName}.g.cs"
+            : $"{(info.Namespace is null ? "" : info.Namespace + ".")}{info.TypeName}.g.cs";
+
+    /// <summary>
+    /// A15（S1 轮）：定位标识——(语法树路径, 起始偏移) 组合，用于重复 hint 的首现判定
+    /// （镜像 IdentityGenerator.LocationIdentity；netstandard2.0 兼容形态）。
+    /// </summary>
+    private static string LocationIdentity(Location? location)
+        => location is null
+            ? string.Empty
+            : (location.SourceTree?.FilePath ?? string.Empty) + "#" + location.SourceSpan.Start.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     // P3 修复（八轮评审）：全局命名空间不再 fallback "_"——旧值产出 "namespace _;"
     // 使生成物落入 _ 命名空间与用户类型不合并；返回 null 由 emit 侧条件包裹
@@ -572,8 +634,12 @@ partial class {{info.TypeName}}
             other is not null
             && Namespace == other.Namespace
             && TypeName == other.TypeName
-            && ContainingDeclarations.SequenceEqual(other.ContainingDeclarations)
-            && ContainingNames.SequenceEqual(other.ContainingNames)
+            // EPSL 地毯审计 2026-10-16 B 批 #25：string[] 相等改手写逐元素循环——原
+            // LINQ SequenceEqual 对非空数组每次 Equals 分配 2 个 SZGenericArrayEnumerator
+            // （两数组共 4 个，每次候选变更一次；空数组走 ICollection 快路径不分配故只咬
+            // 嵌套类型）。与同方法 FieldsEqual（ImmutableArray 手写循环）同构。
+            && ContainingDeclarations.StringArrayEqual(other.ContainingDeclarations)
+            && ContainingNames.StringArrayEqual(other.ContainingNames)
             && ValueType == other.ValueType
             && FieldsEqual(Fields, other.Fields)
             && HasFields == other.HasFields
@@ -605,9 +671,56 @@ partial class {{info.TypeName}}
                 return hash;
             }
         }
+
+        // EPSL 地毯审计 2026-10-16 B 批 #10：预计算 hint/identity——transform 输出即
+        // 算定（每个候选一次），duplicateHints Select 与 Combine 输出节点直取。原形态
+        // Select 在任一候选变化时对全部 N 候选重算 EnumHint + LocationIdentity（每次都是
+        // 字符串拼接），Combine 输出行再各算一遍——A15 只迁出了模板渲染，键构造留在两节点
+        // （O(N) churn 的半场）。不参与相等/哈希：两者既是既有字段的确定函数（Identity 更是
+        // Location 的函数，而 Location 按设计不参与相等——参与会造成编辑漂移缓存 miss），
+        // 参与亦冗余。
+        public string Hint { get; init; } = string.Empty;
+
+        public string Identity { get; init; } = string.Empty;
+
+        /// <summary>B10 工厂：主构造 + 预计算 Hint/Identity（单一算定入口）。</summary>
+        public static EnumGenInfo Create(
+            string? Namespace,
+            string TypeName,
+            string[] ContainingDeclarations,
+            string[] ContainingNames,
+            string ValueType,
+            ImmutableArray<string> Fields,
+            bool HasFields = true,
+            string? DiagnosticId = null,
+            Location? Location = null)
+        {
+            var info = new EnumGenInfo(
+                Namespace, TypeName, ContainingDeclarations, ContainingNames,
+                ValueType, Fields, HasFields, DiagnosticId, Location);
+            return info with
+            {
+                Hint = EnumHint(info),
+                Identity = LocationIdentity(info.Location),
+            };
+        }
     }
 }
 
+/// <summary>string[] 逐元素相等（B25，EnumGenInfo/IdGenInfo.Equals 共用）——LINQ
+/// SequenceEqual 对非空数组每次分配 2 个枚举器；手写循环零分配，语义逐字等价
+/// （长度不等即不等，逐元素 string 相等）。</summary>
+internal static class StringArrayExtensions
+{
+    public static bool StringArrayEqual(this string[] left, string[] right)
+    {
+        if (ReferenceEquals(left, right)) return true;
+        if (left.Length != right.Length) return false;
+        for (var i = 0; i < left.Length; i++)
+            if (!string.Equals(left[i], right[i], StringComparison.Ordinal)) return false;
+        return true;
+    }
+}
 
 /// <summary>INamedTypeSymbol 扩展（v52 P2：包含类型 partial 性检查共享）。</summary>
 internal static class NamedTypeSymbolExtensions

@@ -35,22 +35,22 @@
 |---|------|---------|---------|
 | 1 | `secret-scan` | 每次 | 受跟踪文件里的高置信硬编码凭据 |
 | 2 | `encoding-gate` | 每次 | E1 CRLF(.sh/.py) · E2 BOM(.cs) · E3 mojibake(.cs) · E4 .verified 非 LF · E5 源文件裸 LF(.md/.cs/.csproj/.targets 等,2026-09-14 增) |
-| 3 | `verify-ai` | 检测到 `.ai/` 目录时每次 | V1–V25 系统一致性（账本/传感器台账/提示词/死引用/命令形态）。2026-09-22 T-35 增：`.ai` 裁决为独立 git 库 ⇒ 永不进 CI，此前无任何自动执行路径 |
+| 3 | `verify-ai` | 检测到 `.ai/` 目录时每次 | V1–V30 系统一致性（账本/传感器台账/提示词/死引用/命令形态 + V30 知识层锚点对账）。2026-09-22 T-35 增：`.ai` 裁决为独立 git 库 ⇒ 永不进 CI，此前无任何自动执行路径 |
 | 4 | `guard.cs` | `.cs` 入暂存集 | 8 道守卫测试 + 守卫命名类（`*GateTests`/`*GuardTests`/`ArchitectureBoundaryTests`）注册完整性核查 |
 | 5 | `test-change-guard` | `test/` 有修改或删除 | 只改测试不改 `src/`（改测试修绿签名）。豁免：`ALLOW_TEST_ONLY_CHANGE=1` |
 | 6 | `xml-guard` | xml 系扩展名入暂存集 | XML 非良构（`.csproj/.props/.slnx/.targets/.xml`） |
 | 7 | `verify-conventions --quick` | `.md` 入暂存集 | V5 TODO 扫描 · V8 `.pal/prompts/` 模板必填段 · V9 文档命令引用的脚本须存在 · V11 决策文档三必填段与锚点格式（2026-09-18 增） |
 | 8 | `dapper-param-guard` | `src/PalDDD.Dapper*/` 入暂存集 | 匿名 Dapper 参数枚举直传（Dapper.AOT 拦截器直传驱动，PG 拒绝——CI #94 根因，2026-09-14 增） |
-| 9 | `config-policy` | `.github/dependabot.yml` 或 `Directory.Build.*` 入暂存 | A dependabot `groups`/`ignore` 双词表混用 + `versions`/`labels`/`prefix`/`interval` 缺失或空（报行号）；B 根 `Directory.Build.*` 的 `<Exec>` 无 `IgnoreExitCode` 且所属 Target 无 `GITHUB_ACTIONS` 跳过。两事故实证：词表错值只在默认分支由 Dependabot 报出 + Exec 副作用经 `-warnaserror` 打断 v3.1.0 发布链（2026-09-25 增） |
+| 9 | `config-policy` | `.github/dependabot.yml`、`.github/workflows/**` 或 `Directory.Build.*` 入暂存 | A dependabot `groups`/`ignore` 双词表混用 + `versions`/`labels`/`prefix`/`interval` 缺失或空（报行号）；B 根 `Directory.Build.*` 的 `<Exec>` 无 `IgnoreExitCode` 且所属 Target 无 `GITHUB_ACTIONS` 跳过；C workflows 的 `uses:` 非 40 位 commit SHA 或缺 `# vX.Y.Z` 版本注释（本地动作与 `docker://` 跳过）。三事故实证：词表错值只在默认分支由 Dependabot 报出 + Exec 副作用经 `-warnaserror` 打断 v3.1.0 发布链 + 可变 major 标签可被上游移动（2026-09-25 / 2026-10-18 增） |
 | 10 | `license-policy` | `Directory.Packages.props` 或任一 `*.csproj` 入暂存 | 依赖许可：非白名单 SPDX 表达式（deny-by-default）· 包级禁令命中（`Verify`/`Verify.TUnit` ≥ 33，SponsorCheck 商业门——nuspec 仍是 MIT 故只有禁令能拦）· gap 台账到期未处置 · nuspec 缺失/推不出标识的 fail-closed。退出码 0/1/2（2=自测失败）。裁决 2026-09-25「所有引用的库必须是开源的许可，不使用商业许可」（2026-09-25 增） |
-| 11 | `count-audit` | `README*.md` 或 `docs/**` 入暂存 | 文档计数声明与源码推导一致：16 项推导真值（可打包包数/项目数/prompt/遥测计数器/诊断 ID/ADR/踩坑条目/断言点/源文件数等，推导表在脚本内=单一真源，不建第二台账）↔ 扫描面（README*/docs，排除 `review`/`decisions`/`migration`/`design` 历史目录）声明核对——写了必须与推导一致、缺失不算错（PD34），失实报 `文件:行号：声明 X vs 推导 Y`；推导 0 值/异常/依赖文件缺失 fail-closed。退出码 0/1/2（2=自测失败）。2026-09-25 增 |
+| 11 | `count-audit` | `README*.md` 或 `docs/**` 入暂存 | 文档计数声明与源码推导一致：16 项推导真值（可打包包数/项目数/prompt/遥测计数器/诊断 ID/ADR/踩坑条目/断言点/源文件数等，推导表在脚本内=单一真源，不建第二台账）↔ 扫描面（README*/AGENTS.md/docs，排除 `review`/`decisions`/`migration`/`design` 历史目录）声明核对——写了必须与推导一致、缺失不算错（PD34），失实报 `文件:行号：声明 X vs 推导 Y`；推导 0 值/异常/依赖文件缺失 fail-closed。退出码 0/1/2（2=自测失败）。2026-09-25 增 |
 | 12 | `new-skip-guard` | `test/**.cs` 入暂存 | 新增 Skip 标注拦截（以 Skip 修绿的隐性形态，test-change-guard 抓不到——正常 TDD 节奏下新增 Skip 完全绕行）：`[Skip(` / `Skip = "` / `.Skip("` / `Skip.If(` 四形态按**净增口径**判定（增删相抵放行，修改既有 Skip 的 reason 不误伤）；LINQ `.Skip(1)` 零误伤（形态 3 要求引号实参）。豁免：`ALLOW_NEW_SKIP=1` + 提交信息写理由与**到期日**（对齐 T-24 观察态纪律，无到期日的临时 Skip 就是审计实证 Skip 9→16 的积累路径）。CI 无补偿（`git diff --cached` 语义在 CI checkout 不存在，与 test-change-guard 同口径，残余风险=--no-verify）。Pal 会话审计 2026-09-25 立法（2026-09-25 增） |
 
 > **TOOL 类脚本**（不进门禁表，按需人工运行）：`scripts/review-coverage-report.cs` 沉寂面报告——差分评审对长期未变更文件结构性失明（审计实证：28 处门禁存量假绿全部集中在 MIG-012 后未动的文件），发布 tag 前/大迁移收尾后运行，对 Top 沉寂文件定向抽查（见 `docs/release.md` §4.1 步骤 5.6）。
 
 ### CI（`.github/workflows/ci.yml`）
 
-`build-and-test`（vuln-scan → restore → build → **format-verify**（`dotnet format style --verify-no-changes`，8e97e9c 增） → test → secret-scan → dapper-param-guard → doc-consistency → config-policy → license-policy → count-audit → encoding-gate/tech-debt/test-gate 循环 → `gate.cs`（G22/G23/G24）→ `gate-audit --inventory` → gate-lite。**2026-09-22 T-02/T-04**：`.ai` 恒假分支已删，主仓门禁全部无条件执行；`verify-ai`/`template-gate` 因 `.ai` 独立裁决永不进 CI，改由 pre-commit 与 `.ai` 仓钩子承担）· `aot-verify`（PublishAot + 运行二进制）· **`coverage`（覆盖率阈值门禁 0.70，先 `dotnet tool restore` 取 reportgenerator）** · `dialect-probe`（Testcontainers PG/MySQL；job 内含 Path gate 路径过滤步骤，仅 Store/SQL/DDL/映射面变更触发——非独立 job）。
+`build-and-test`（vuln-scan → restore → build → **perf-smoke**（`--smoke` 分配预算，6 项；2026-10-18 从人工 TOOL 转每提交门禁） → **format-verify**（`dotnet format style --verify-no-changes`，8e97e9c 增） → test → secret-scan → dapper-param-guard → doc-consistency → config-policy → license-policy → count-audit → encoding-gate/tech-debt/test-gate 循环 → `gate.cs`（G22/G23/G24）→ `gate-audit --inventory` → gate-lite。**2026-09-22 T-02/T-04**：`.ai` 恒假分支已删，主仓门禁全部无条件执行；`verify-ai`/`template-gate` 因 `.ai` 独立裁决永不进 CI，改由 pre-commit 与 `.ai` 仓钩子承担）· `aot-verify`（PublishAot + 运行二进制）· **`coverage`（CI 阈值 0.70 + 单模块降幅 ±5pp；无 Docker 本机自动 LOCAL 口径 0.65、跳过降幅门禁，`--local`/`--ci` 可显式指定；先 `dotnet tool restore` 取 reportgenerator）** · `dialect-probe`（Testcontainers PG/MySQL；job 内含 Path gate 路径过滤步骤，仅 Store/SQL/DDL/映射面变更触发——非独立 job）· `quality-analyzers`（第三方分析器基线 0 棘轮）· `semgrep`（p/csharp + p/security-audit，0 findings + 29 规则 canary + SARIF artifact）· 独立 `mutation.yml`（月度 schedule + 手动，Stryker 5.0.0 MTP runner，break 95，artifact 上传）。
 
 ### 门禁可信度（改动或新增门禁后必跑）
 
@@ -120,18 +120,20 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 | 测试策略与基线 | `docs/testing.md`、`docs/test-coverage-baseline.md` |
 | **性能预算契约（EPSL）** | `perf-budgets.md`（根目录；分配判定层预算，与既有 `--smoke` 断言对齐） |
 | **性能台账（勿重开/明确不做）** | `.ai/perf-ledger.md`（提性能建议前必查，防重复提案） |
-| **性能实测记录** | `docs/performance.md`（22 基准类、真库车道、统计有效性自评） |
-| 已定的架构决策（含被否决方案） | `docs/decisions/`（24 份 ADR，2026-09-19 ADR-024 增） |
+| **性能实测记录** | `docs/performance.md`（37 基准类，2026-10-18 口径；真库车道、统计有效性自评） |
+| 已定的架构决策（含被否决方案） | `docs/decisions/`（32 份 ADR，2026-10-19 ADR-032 增） |
 | 历轮评审与清单 | `docs/review/`（含 `NAMING.md` 命名约定与索引） |
 | 迁移与发布 | `docs/migration/`、`docs/release.md` |
 | 已知坑 | `docs/pitfalls.md` |
 | 门禁可信度 | `dotnet run scripts/gate-audit.cs` 的矩阵输出 |
 
-### 性能工程（EPSL v1.1，2026-10-11 接入）
+### 性能工程（EPSL v1.6，2026-10-11 接入；2026-10-18 对账）
 
 - 性能深挖只按触发条件启动（门禁红 / 量级 10× / 新负载类型 / SLO 烧穿 / 阶段边界 / 项目完成），其余场合禁全量地毯扫描；触发后按四阶段 SOP：门禁先行 → 自动归因 → 分片深读 → 强制收敛（方案 `~/.zcode/references/EXTREME_PERF_SYSTEM.md`；SOP 独立件 `~/.zcode/perf-template/audit/carpet-audit-sop.md`）。
-- AI 性能分析四红线：抽查"核实/无一处"论断；负结论带检索口径；过 ADR 与 perf-ledger 比对；继承论断独立复验。
+- AI 性能分析四红线：抽查"核实/无一处"论断；负结论带检索口径；过 ADR 与 perf-ledger 比对；继承论断独立复验。**两条计量红线**：净效果（端到端旧/新差 + 同族遗留副本检索，防假闭环）；归属（残余成本先排除基准替身/BDN/BCL，再立项）。
+- 决策载体三处：ADR + `.ai/perf-ledger.md` + 代码注释里的「登记延后/暂不优化」；提性能建议前比全部三处，注释命中须呈报用户裁决。
 - 量具分层与项目既有体系同构：分配可作判定、计时只作趋势（两轮跨 SDK 实证，`docs/performance.md`）。
+- 门禁与对账：`--smoke` 已接 CI（`perf-smoke`）；EPSL 全局对账跑 `node ~/.zcode/scripts/eps-perf-check.mjs --project .`（版本 / 模板引用 / 预算基准类数）。
 
 ---
 

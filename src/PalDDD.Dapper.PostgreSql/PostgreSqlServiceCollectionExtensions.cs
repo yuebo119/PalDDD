@@ -63,7 +63,7 @@ public static class PostgreSqlServiceCollectionExtensions
         var singleCsBuilder = new NpgsqlConnectionStringBuilder(connectionString);
         PostgreSqlMultiHost.EnsureNoBlankHostEntries(singleCsBuilder.Host, "Host");
         // v55 P2：传真实共享 Port（原硬编码 5432 在 Port≠5432 时误拦合法异端口配置）
-        PostgreSqlMultiHost.EnsureNoDuplicateHost(singleCsBuilder.Host, (int)singleCsBuilder.Port, "Host");
+        PostgreSqlMultiHost.EnsureNoDuplicateHost(singleCsBuilder.Host, singleCsBuilder.Port, "Host");
 
         var builder = new NpgsqlDataSourceBuilder(connectionString);
         builder.ConnectionStringBuilder.ApplicationName = applicationName;
@@ -111,7 +111,7 @@ public static class PostgreSqlServiceCollectionExtensions
         var singleCsBuilder = new NpgsqlConnectionStringBuilder(connectionString);
         PostgreSqlMultiHost.EnsureNoBlankHostEntries(singleCsBuilder.Host, "Host");
         // v55 P2：传真实共享 Port（原硬编码 5432 在 Port≠5432 时误拦合法异端口配置）
-        PostgreSqlMultiHost.EnsureNoDuplicateHost(singleCsBuilder.Host, (int)singleCsBuilder.Port, "Host");
+        PostgreSqlMultiHost.EnsureNoDuplicateHost(singleCsBuilder.Host, singleCsBuilder.Port, "Host");
 
         var builder = new NpgsqlDataSourceBuilder(connectionString);
         builder.ConnectionStringBuilder.ApplicationName = applicationName;

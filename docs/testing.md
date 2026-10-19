@@ -7,7 +7,7 @@
 > **真源**：
 > - [`conventions.md`](conventions.md) §5（测试规范要点）+ §10.6（TUnit+MTP 4 硬规则）+ §12（性能契约）
 > - [`.ai/test/prompt.md`](../.ai/test/prompt.md)（T1-T14 + T-DDD-1..6 铁律）
-> - [`test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs`](../test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs)（37 测试方法机械守护——计数锚定见 doc-consistency D12a）
+> - [`test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs`](../test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs)（38 测试方法机械守护——计数锚定见 doc-consistency D12a）
 
 ---
 
@@ -56,7 +56,7 @@
                   ┌──────────────────┐│ ┌──────────────────────┐
                   │ Architecture     ││ │ Core/CQRS/Transactions│
                   │ BoundaryTests    ││ │  单元功能正确性        │
-                  │ 37 方法 99 断言  ││ │ AggregateRoot/Saga/Outbox│
+                  │ 38 方法 103 断言 ││ │ AggregateRoot/Saga/Outbox│
                   └──────────────────┘│ └──────────────────────┘
                                      ╱
                           ┌────────────────────┐
@@ -77,7 +77,7 @@
 | `PalDDD.Projections.EventLog.Tests` | 单元 | EventLog 投影源 + 断点续传 |
 | `PalDDD.Messaging.Tests` | 单元 | IMessageBroker InMemory 实现 + MessageCatalog |
 | `PalDDD.Serialization.Tests` | 单元 | IMessageSerializer + MessageEvolutionPipeline + SchemaVersion |
-| `PalDDD.DependencyInjection.Tests` | 单元 | **ArchitectureBoundaryTests 37 方法机械守护** + DI 注册规范 |
+| `PalDDD.DependencyInjection.Tests` | 单元 | **ArchitectureBoundaryTests 38 方法机械守护** + DI 注册规范 |
 | `PalDDD.Repository.EFCore.Tests` | 集成 | UnitOfWork + OutboxDomainEventInterceptor Scoped |
 | `PalDDD.Hosting.AspNetCore.Tests` | 集成 | ExceptionMiddleware + AspNetCore 中间件链 |
 | `PalDDD.Integration.Tests` | 集成 | Testcontainers 真库（PG/MySQL/SQLite）+ OutboxDbContext 全链路 + Idempotency |
@@ -96,7 +96,7 @@
 
 | 维度 | DDD 约定 |
 |------|---------|
-| **测试框架** | TUnit 1.73.19 + MTP（Microsoft.Testing.Platform） |
+| **测试框架** | TUnit 1.75.0 + MTP（Microsoft.Testing.Platform） |
 | **断言库** | TUnit.Assertions（Fluent 链式） |
 | **属性测试** | TUnit.FsCheck（属性驱动） |
 | **快照测试** | Verify.TUnit 32.0.1（已用于 Hosting.AspNetCore.Tests 的 ExceptionMiddleware，3 个 `.verified.txt` 基线；公共 API 快照另由自实现 PublicApiSnapshot 承载） |
@@ -108,7 +108,7 @@
 
 ```json
 {
-  "sdk": { "version": "11.0.100-rc.1.26425.128", "rollForward": "latestMajor", "allowPrerelease": true },
+  "sdk": { "version": "11.0.100-rc.2.26504.105", "rollForward": "latestMajor", "allowPrerelease": true },
   "test": { "runner": "Microsoft.Testing.Platform" }
 }
 ```
@@ -274,6 +274,7 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | MediatR 横向对比（12.5.0 同进程四点：零行为/单行为 × 双框架） | — | ✅ | `--compare`（2026-10-09 新维度轮；引用须带完整口径——MediatR 是纯分发器无基础设施层） | ✅ |
 | CAP 横向对比（DotNetCore.CAP 10.0.2，RabbitMQ 传输 + MySQL cap.published，同语义路径对位；2026-10-11 升级换锚，结论与 8.4.1 时代同带跨主版本稳定） | — | ✅ | `--compare` + `PALDDD_BENCH_CAP_MYSQL`/`PALDDD_BENCH_CAP_RABBIT`（一次性容器，2026-10-09 新维度轮） | ✅ |
 | 投递吞吐端到端（SQLite 真库标记 + 假 broker RTT 矩阵 0/1/20ms + T1.2 排空节奏对照；排空 1000 条积压墙钟口径） | — | ✅ | `--delivery`（2026-10-11 优化实施轮 T0.2；专用采样档 5 迭代/3 预热/1 launch——多秒级 op 撞 InProcess 单基准 5 分钟上限，medium 不可用，同 coverage×strict 车道级形态；T2.1/T3.1 的 A/B 基线） | ✅（数字见 performance.md 优化实施轮段） |
+| 投递吞吐端到端·远程库（PG/MySQL 网络真库 + 假 broker RTT 0/1ms × BatchMark 1/16，InFlight 固定 1；排空 1000 条积压墙钟口径） | — | ✅ | `--delivery-pg` / `--delivery-mysql`（2026-10-16 B1 复活前提实测新增；同 --delivery 采样档，wslc 外部实例路径 `PALDDD_BENCH_PG_CONN`/`PALDDD_BENCH_MYSQL_CONN` + palddd_bench 库名守卫，MySQL 种子走 LOAD DATA LOCAL 须连接串显式 `AllowLoadLocalInfile=True` + 服务端 `local_infile=1`——库级安全门，调用方显式决策） | ✅（数字见 performance.md 远程投递 A/B 段） |
 | 绝对 QPS（1/4/8 线程 × dispatch/chain 聚合吞吐，非 BDN 专门 harness） | ✅（--smoke 级趋势） | —（harness 形态） | `--qps`（2026-10-09 新维度轮；多线程聚合不可由单线程 ns/op 外推） | ✅ |
 | EventLog 写入 | ✅ | ✅ | `--infra` | ✅ |
 | SagaState 持久化 | ✅ | ✅ | `--infra` | ✅ |
@@ -283,7 +284,7 @@ finally { DomainEvent.TimeProvider = TimeProvider.System; }
 | 持久化三栈批量（Dapper/PalOrm/EfCore 真库） | — | ✅ | `--persist` / `--persist-medium`（Lease 锚） | ✅ |
 | Saga 编排车道（Normal 基线 / FanOut） | — | ✅ | `--saga` | ✅ |
 
-> **「BDN 正式」的口径（2026-10-08 起生效）**：指 InProcess 显式 job 模式产出的正式报告（上表入口列）。默认 Switcher 入口（`dotnet run --project bench/...` 不带参数）在 BDN 上游补 net11 moniker 前于本工具链不可用（DotNetSdkValidator 崩溃，根因与绕行详见 `Program.cs` 头注）；GA 后可试恢复默认入口并按需恢复类级 job 注解。
+> **「BDN 正式」的口径（2026-10-08 起生效）**：指 InProcess 显式 job 模式产出的正式报告（上表入口列）。默认 Switcher 入口（`dotnet run --project bench/...` 不带参数）在 BDN 0.15.8 时代因 net11-rc moniker 不被 DotNetSdkValidator 识别于本工具链不可用（根因与绕行详见 `Program.cs` 头注）；**2026-10-17 升位 BDN 0.16.0-preview.2 后默认入口已恢复**（`--list` 实测 exit 0 全量列出），显式 InProcess 路径保留为正式报告口径（MediumRun/InProcess 作业形态是刻意配置）。
 
 ### 3.3 数据规模矩阵
 
@@ -338,7 +339,7 @@ dotnet run --project bench/PalDDD.Benchmarks -- --smoke
 
 100 万次迭代手动计时（Stopwatch + `GC.GetAllocatedBytesForCurrentThread`），不依赖 BenchmarkDotNet 引擎。**2026-10-08 起带分配预算断言**：Success/FromValue ≤1 B/op、Failed ≤50 B/op、RaiseEvent ≤140 B/op（rc.1 实测校准；预算语义对齐 AllocationContractTests——上界含余量只拦大幅回归），超限退出码 1，可直接用作人工 TOOL 门禁（conventions §10.6 口径，未接 CI）。
 
-> **重要**：BenchmarkDotNet 0.15.8 不识别 net11-rc runtime moniker，默认 Switcher 入口在本工具链崩溃（根因详见 `Program.cs` 头注）。正式报告经 InProcess 显式模式产出（`--framework`/`--app`/`--infra`/`--concurrency`/`--persist*`/`--saga`/`--compression`，见 §4.1）；`--smoke` 定位是**秒级成本的趋势检查 + 分配预算判定**，计时为单轮无统计效力，不替代正式报告。待 .NET 11 GA 且 BDN 发适配版后试恢复默认入口。
+> **重要**：BDN 0.15.8 曾不识别 net11-rc runtime moniker 导致默认 Switcher 入口在本工具链崩溃（根因详见 `Program.cs` 头注）；2026-10-17 升位 **BDN 0.16.0-preview.2** 后该问题已修复（`--list` 实测 exit 0），正式报告仍以 InProcess 显式模式为口径（`--framework`/`--app`/`--infra`/`--concurrency`/`--persist*`/`--saga`/`--compression`，见 §4.1）；`--smoke` 定位是**秒级成本的趋势检查 + 分配预算判定**，计时为单轮无统计效力，不替代正式报告。
 
 ---
 
@@ -502,7 +503,7 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 | `docs/conventions.md` §12 | 性能契约（零分配快速路径） |
 | `.ai/test/prompt.md` | T1-T14 + T-DDD-1..6 测试铁律 |
 | `test/PalDDD.Testing/TestHelpers.cs` | 共享测试工具（FakeTimeProvider 等） |
-| `test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs` | 37 测试方法机械守护 |
+| `test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs` | 38 测试方法机械守护 |
 | `test/PalDDD.Core.Tests/PublicApiSnapshotTests.cs` | 公共 API 快照 |
 | `test/PalDDD.Core.Tests/Snapshots/*.txt` | 快照基线（评审后提交） |
 | `bench/PalDDD.Benchmarks/Program.cs` | BenchmarkSwitcher + Smoke 模式入口 |
@@ -518,5 +519,5 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 1. **本文件与 conventions §5 同步**：测试约定变更需同时更新两处。
 2. **场景矩阵随项目演化**：新增功能域必须扩矩阵行。
 3. **BenchmarkDotNet 配置变更需评审**：模式级 job/迭代参数的调整（如 MediumRun 降档 ShortRun）必须在 PR 说明依据。
-4. **DDD 与 ORM 的测试体系差异**：TUnit+MTP（非 xUnit）/ 测试桩内嵌（非 IClassFixture）/ 按行为主题切分 / ArchitectureBoundaryTests 37 方法机械守护。
+4. **DDD 与 ORM 的测试体系差异**：TUnit+MTP（非 xUnit）/ 测试桩内嵌（非 IClassFixture）/ 按行为主题切分 / ArchitectureBoundaryTests 38 方法机械守护。
 5. **统计有效性是硬约束**：Error/Mean > 15% 的基准数据不得用于正式报告或决策。

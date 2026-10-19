@@ -2,6 +2,7 @@
 // 📡 IMessageBroker + NullMessageBroker — 消息代理抽象
 // ─────────────────────────────────────────────────────────────
 
+using Microsoft.Extensions.Logging;
 using PalDDD.Core.Logging;
 using PalDDD.Serialization;
 using PalUlid = ByteAether.Ulid.Ulid;
@@ -77,15 +78,20 @@ public sealed class NullMessageBroker : IMessageBroker
     public NullMessageBroker(IPalLogger<NullMessageBroker>? logger = null)
         => _logger = logger;
 
+    // A14（S1 轮，2026-10-15）：Debug 日志补 IsEnabled 门控——IPalLogger.Debug 收预构造
+    // 字符串，插值在调用点已发生；?. 只判 logger 非空不判级别，单节点模式下每次发布/订阅
+    // 白建一个字符串。对齐两个真 broker 的 Z-1 模式（KafkaBroker/RabbitMqBroker 均已门控）。
     ValueTask IMessageBroker.PublishAsync<TMessage>(TMessage message, CancellationToken ct)
     {
-        _logger?.Debug($"NullMessageBroker: publish of '{typeof(TMessage).Name}' discarded (single-node mode)");
+        if (_logger is not null && _logger.IsEnabled(LogLevel.Debug))
+            _logger.Debug($"NullMessageBroker: publish of '{typeof(TMessage).Name}' discarded (single-node mode)");
         return ValueTask.CompletedTask;
     }
 
     ValueTask IMessageBroker.PublishAsync(object message, MessageDescriptor descriptor, PalUlid messageId, CancellationToken ct)
     {
-        _logger?.Debug($"NullMessageBroker: publish of '{descriptor.Name}' discarded (single-node mode)");
+        if (_logger is not null && _logger.IsEnabled(LogLevel.Debug))
+            _logger.Debug($"NullMessageBroker: publish of '{descriptor.Name}' discarded (single-node mode)");
         return ValueTask.CompletedTask;
     }
 
@@ -96,13 +102,15 @@ public sealed class NullMessageBroker : IMessageBroker
         MessagePublishContext context,
         CancellationToken ct)
     {
-        _logger?.Debug($"NullMessageBroker: publish of '{descriptor.Name}' discarded (single-node mode)");
+        if (_logger is not null && _logger.IsEnabled(LogLevel.Debug))
+            _logger.Debug($"NullMessageBroker: publish of '{descriptor.Name}' discarded (single-node mode)");
         return ValueTask.CompletedTask;
     }
 
     ValueTask<IAsyncDisposable> IMessageBroker.SubscribeAsync<TMessage>(Func<TMessage, CancellationToken, ValueTask> handler, CancellationToken ct)
     {
-        _logger?.Debug($"NullMessageBroker: subscribe to '{typeof(TMessage).Name}' ignored (single-node mode)");
+        if (_logger is not null && _logger.IsEnabled(LogLevel.Debug))
+            _logger.Debug($"NullMessageBroker: subscribe to '{typeof(TMessage).Name}' ignored (single-node mode)");
         return new ValueTask<IAsyncDisposable>(NullAsyncDisposable.Instance);
     }
 

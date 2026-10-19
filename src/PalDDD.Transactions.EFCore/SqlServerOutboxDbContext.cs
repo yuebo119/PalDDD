@@ -37,7 +37,7 @@ public abstract class SqlServerOutboxDbContext(DbContextOptions options) : Outbo
         // 优化（二十五轮 API 扫描 EF-3）：AsNoTracking——只读契约（接口 doc 保证不进
         // Mark*+SaveChanges）；违反契约的突变将静默丢失
         return await OutboxMessages
-            .FromSqlRaw(BuildPendingSql(), maxRetryCount)
+            .FromSqlRaw(BuildPendingSql(), maxRetryCount) // NOSONAR: S2077 nowSql 为 GetNowSql 常量，其余参数已参数化
             .OrderBy(m => m.CreatedAt)
             .Take(batchSize)
             .AsNoTracking()
@@ -64,7 +64,7 @@ public abstract class SqlServerOutboxDbContext(DbContextOptions options) : Outbo
 
         var leaseSeconds = (int)Math.Ceiling(leaseDuration.TotalSeconds);
         var nowSql = GetNowSql();
-#pragma warning disable EF1002 // FromSqlRaw with trusted provider-specific NOW expression
+#pragma warning disable EF1002, S2077 // FromSqlRaw + S2077：nowSql 为 GetNowSql 常量，其余参数已参数化
         return await OutboxMessages
             .FromSqlRaw(
                 $@";WITH candidates AS (
@@ -83,6 +83,6 @@ public abstract class SqlServerOutboxDbContext(DbContextOptions options) : Outbo
                 // （镜像 SqliteOutbox CAS 路径）
                 .AsNoTracking()
                 .ToListAsync(ct).ConfigureAwait(false);
-#pragma warning restore EF1002
+#pragma warning restore EF1002, S2077
     }
 }

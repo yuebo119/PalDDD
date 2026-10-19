@@ -115,6 +115,7 @@ public class PalOrmInboxStoreTests
             return store.MarkProcessedAsync(m, DateTimeOffset.UtcNow, default).AsTask();
         }).Throws<ArgumentNullException>();
 
-        await Assert.That(ex!.ParamName).IsEqualTo("message.ProcessingStartedAt");
+        await Assert.That(ex!.ParamName).IsEqualTo("message");
+        await Assert.That(ex.Message).Contains("ProcessingStartedAt");
     }
 }

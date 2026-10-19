@@ -454,8 +454,11 @@ public sealed class OutboxSqliteConcurrencyTests
                 foreach (var id in ids)
                     seed.OutboxMessages.Add(new OutboxMessage
                     {
-                        Id = id, Type = "orders.same-tick", Payload = [1],
-                        CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-5), Status = OutboxStatus.Pending,
+                        Id = id,
+                        Type = "orders.same-tick",
+                        Payload = [1],
+                        CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+                        Status = OutboxStatus.Pending,
                     });
                 await seed.SaveChangesAsync();
             }

@@ -46,7 +46,8 @@ public sealed class MatchEventNameCodeFix : CodeFixProvider
         // 首个 return 字面量）——原 DescendantNodes().FirstOrDefault(StringLiteral) 与 analyzer
         // 定位点分歧：attribute 参数（[Obsolete("...")]）、getter 体内先于 return 的辅助字面量
         //（日志前缀等）会被首选命中，fix 改写无辜字符串而真正的 EventName 字面量未动。
-        // analyzer 侧算法为 private（无 InternalsVisibleTo），此处为等价复刻（语法层）
+        // analyzer 侧算法为 private（无面向 CodeFixes 的 InternalsVisibleTo——R10 后仅对
+        // 测试程序集开放），此处为等价复刻（语法层）
         var literal = TryGetEventNameLiteral(eventNameDecl);
         if (literal is null) return;
 

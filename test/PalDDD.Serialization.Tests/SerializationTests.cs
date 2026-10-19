@@ -736,3 +736,78 @@ public sealed class MessageCatalogOrderedTests
         await Assert.That(catalog.Find(typeof(UnregisteredMessage))).IsNotNull();
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// R8/P1-1（ADR-029，2026-10-14 性能实施轮）直写重载锁定测试
+// ═══════════════════════════════════════════════════════════════
+// Serialize(object, descriptor, IBufferWriter<byte>) 双锁：字节等价（与内存重载逐位一致）
+// 与零分配（池化 writer 直写、免 ToArray——红证明：stash JsonMessageSerializer 覆写后
+// 走 DIM 回退（内存形态 + 拷贝）零分配断言判红，恢复绿）。
+
+public sealed class SerializerDirectWriteTests
+{
+    private const int Iterations = 10_000;
+
+    private static long MeasureAllocation(Action action)
+    {
+        action();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < Iterations; i++) action();
+        return GC.GetAllocatedBytesForCurrentThread() - before;
+    }
+
+    [Test]
+    public async Task DirectWrite_ByteEqualWithMemoryOverload()
+    {
+        var descriptor = MessageDescriptor.Create(
+            TestJsonContext.Default.TestMessage,
+            name: "test-direct-write");
+        var serializer = new JsonMessageSerializer(MessageCatalog.Empty);
+        var message = new TestMessage("order-9", 42);
+
+        var memory = serializer.Serialize(message, descriptor);
+        var writer = new System.Buffers.ArrayBufferWriter<byte>(256);
+        serializer.Serialize(message, descriptor, writer);
+
+        await Assert.That(writer.WrittenSpan.SequenceEqual(memory.Span)).IsTrue();
+    }
+
+    [Test]
+    public async Task DirectWrite_ZeroAllocation_WithReusedBuffer()
+    {
+        var descriptor = MessageDescriptor.Create(
+            TestJsonContext.Default.TestMessage,
+            name: "test-direct-write-alloc");
+        var serializer = new JsonMessageSerializer(MessageCatalog.Empty);
+        var message = new TestMessage("order-alloc", 7);
+        var writer = new System.Buffers.ArrayBufferWriter<byte>(512);
+
+        var alloc = MeasureAllocation(() =>
+        {
+            writer.Clear();
+            serializer.Serialize(message, descriptor, writer);
+            _ = writer.WrittenCount; // 观测点：防 JIT 消除序列化整段
+        });
+
+        // 池化 Utf8JsonWriter 直写 + 无 ToArray——稳态每调用 0 分配
+        //（DIM 回退形态：内存载荷 ToArray + 拷贝 = 载荷尺寸 ×2 每调用）
+        await Assert.That(alloc).IsEqualTo(0L);
+    }
+
+    [Test]
+    public async Task DirectWrite_ClrTypeMismatch_ThrowsArgumentException()
+    {
+        var descriptor = MessageDescriptor.Create(
+            TestJsonContext.Default.TestMessage,
+            name: "test-direct-write-guard");
+        var serializer = new JsonMessageSerializer(MessageCatalog.Empty);
+        var writer = new System.Buffers.ArrayBufferWriter<byte>(64);
+
+        await Assert.That(() =>
+            serializer.Serialize(new UnregisteredMessage("x"), descriptor, writer))
+            .Throws<ArgumentException>();
+    }
+}

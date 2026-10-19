@@ -30,6 +30,17 @@ public interface IHandler
     ValueTask<object?> HandleAsync(IBaseRequest request, CancellationToken ct);
 }
 
+/// <summary>
+/// Unit 单例箱（R2/A-F10，2026-10-14 性能实施轮）——<see cref="Core.Unit"/> 是零字段
+/// readonly record struct（全实例值相等），值类型响应经 DIM 桥转 <c>object?</c> 时每次装箱
+/// 24B/命令；全进程共享一个箱对象语义等价（值相等恒成立），typeof 特判分支经 JIT 值类型
+/// 实例化折叠为常量（非 Unit 实例化中整体消除，零运行时成本）。
+/// </summary>
+internal static class UnitBox
+{
+    public static readonly object Shared = default(Core.Unit);
+}
+
 // ─────────────────────────────────────────────────────────────
 // 命令处理器 DIM 桥接 — 用默认接口方法消除 MakeGenericType 反射
 // ─────────────────────────────────────────────────────────────
@@ -49,15 +60,26 @@ public interface ICommandHandler<TCommand, TResponse> : IHandler
     /// <c>new ValueTask&lt;object?&gt;(task.Result)</c> 在 TResponse 为值类型时有 1 次装箱
     /// 分配，引用类型响应才零分配（对齐 PipelineBehavior.cs v25 勘正措辞）。快路径的实际
     /// 收益是跳过 AwaitAndBox 状态机分配，非零分配；异步路径另按需分配状态机。
+    /// <para>R2（A-F10，2026-10-14）：Unit 响应的单次装箱也消除——typeof 特判经 JIT 值类型
+    /// 实例化折叠（Unit 实例化中 task.Result 不再被访问装箱、非 Unit 实例化中分支整体消除），
+    /// 共享 <see cref="UnitBox.Shared"/>。</para>
     /// </remarks>
     ValueTask<object?> IHandler.HandleAsync(IBaseRequest request, CancellationToken ct)
     {
         var task = HandleAsync((TCommand)request, ct);
         if (task.IsCompletedSuccessfully)
+        {
+            if (typeof(TResponse) == typeof(Core.Unit))
+                return new ValueTask<object?>(UnitBox.Shared);
             return new ValueTask<object?>(task.Result);
+        }
         return AwaitAndBox(task);
 
         static async ValueTask<object?> AwaitAndBox(ValueTask<TResponse> vt)
-            => await vt.ConfigureAwait(false);
+        {
+            var result = await vt.ConfigureAwait(false);
+            // R2（A-F10）：Unit 异步完成路径同享单例箱（非 Unit 实例化分支被 JIT 折叠消除）
+            return typeof(TResponse) == typeof(Core.Unit) ? UnitBox.Shared : result;
+        }
     }
 }

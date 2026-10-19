@@ -115,6 +115,29 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
         // P2/P3 修复（十七轮）：PG 分支改用 SKIP LOCKED 变体——与 DapperOutboxStore 租约 PG 路径
         // 同款（多 worker 并发租约跳过彼此锁定的行，而非阻塞后拿到空批次）；
         // MySQL READ COMMITTED 两步窗口由 SagaUpdate 的 version 乐观锁兜底；SQLite 单写者无影响
+        // EPSL 地毯审计 2026-10-16 B 批 #3：PG/SQLite 改单语句 UPDATE ... RETURNING *
+        // （镜像 DapperOutboxStore 租约 PG/SQLite 路径先例）——省 SagaSelectByLease 回读
+        // 往返，且按行锁语义返回刚锁定行，两步回读按 (leased_by, leased_until) 匹配的同
+        // tick 混批窗口（三十八轮 P3 声明，ITM-109 同族）在此形态下不存在；回读的
+        // status IN (0,5) 守卫（ITM-134）由子查询谓词隐含满足，语义不减。
+        // MySQL 无 RETURNING，维持两步。
+        if (_dbType == DapperDbType.PostgreSql)
+        {
+            var returningRows = await conn.QueryAsync<SagaStateRow>(
+                SqlTemplates.SagaLeaseActivePGReturning,
+                new { owner, until = ToTimeParam(until), now = ToTimeParam(now), n = batchSize }, Tx).ConfigureAwait(false);
+            // RETURNING 无排序保证——物化后按 CreatedAt 稳定排序，保留原两步回读
+            // SagaSelectByLease 的 ORDER BY created_at 契约（B 批 #3）
+            return returningRows.Select(Materialize).OrderBy(static s => s.CreatedAt).ToList();
+        }
+        if (_dbType == DapperDbType.Sqlite)
+        {
+            var returningRows = await conn.QueryAsync<SagaStateRow>(
+                SqlTemplates.SagaLeaseActiveSqliteReturning,
+                new { owner, until = ToTimeParam(until), now = ToTimeParam(now), n = batchSize }, Tx).ConfigureAwait(false);
+            return returningRows.Select(Materialize).OrderBy(static s => s.CreatedAt).ToList();
+        }
+
         var leaseSql = _dbType switch
         {
             DapperDbType.PostgreSql => SqlTemplates.SagaLeaseActivePG,
@@ -127,8 +150,9 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
         // 三十八轮 P3 声明（对齐 OutboxSelectByLease 的 ITM-109 格式）：两步租约回读按
         // (leased_by, leased_until) 匹配——同一 owner 在同一 tick（until 完全相等，如
         // FakeTimeProvider 冻结时间）发起两次租约时第二次回读会混入第一次已锁定的批次。
-        // 生产触发条件近乎为零（DATETIME(6) 微秒精度 + 单 owner 串行租约）；PG 走
-        // FOR UPDATE SKIP LOCKED 单语句天然免疫。残余窗口由 SagaUpdate 的 version 乐观锁兜底。
+        // 生产触发条件近乎为零（DATETIME(6) 微秒精度 + 单 owner 串行租约）。残余窗口由
+        // SagaUpdate 的 version 乐观锁兜底。（PG/SQLite 已走上方 RETURNING 单语句路径，
+        // 本两步形态仅 MySQL。）
         var rows = await conn.QueryAsync<SagaStateRow>(
             SqlTemplates.SagaSelectByLease, new { owner, until = ToTimeParam(until) }, Tx).ConfigureAwait(false);
         return rows.Select(Materialize).ToList();
