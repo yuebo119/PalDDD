@@ -3,10 +3,13 @@ class PalDDD.CQRS.Dispatcher
   ctor(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, System.IServiceProvider rootProvider)
   method System.Threading.Tasks.ValueTask<System.Object> ExecutePipelineAsync(System.IServiceProvider services, PalDDD.CQRS.IBaseRequest request, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TResponse> QueryAsync(PalDDD.CQRS.IQuery<TResponse> q, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<TResponse> QueryAsync(PalDDD.CQRS.IQuery<TResponse> query, System.IServiceProvider requestServices, System.Threading.CancellationToken ct)
   method System.Void Register()
   method System.Void Register(System.Type requestType, System.Type handlerType, System.Type responseType, PalDDD.CQRS.RequestExecutor executor, System.Boolean needsScope)
   method System.Void Register(THandler handlerInstance)
+  method System.Threading.Tasks.ValueTask SendAsync(PalDDD.CQRS.ICommand cmd, System.IServiceProvider requestServices, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask SendAsync(PalDDD.CQRS.ICommand cmd, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<TResponse> SendAsync(PalDDD.CQRS.ICommand<TResponse> cmd, System.IServiceProvider requestServices, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<TResponse> SendAsync(PalDDD.CQRS.ICommand<TResponse> cmd, System.Threading.CancellationToken ct)
 class PalDDD.CQRS.HandlerNotFoundException
   ctor()
@@ -323,6 +326,7 @@ class PalDDD.Dapper.DapperInboxStore
   method System.Threading.Tasks.ValueTask<PalDDD.Transactions.InboxMessage> TryStartProcessingAsync(System.String consumerName, System.String messageId, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 class PalDDD.Dapper.DapperOutboxStore
   ctor(System.Data.Common.DbConnection connection, PalDDD.Dapper.DapperDbType dbType, System.Data.Common.DbTransaction transaction, System.TimeProvider timeProvider)
+  property System.Boolean RequiresSaveAfterMark
   method System.Threading.Tasks.ValueTask AddMessageAsync(PalDDD.Transactions.OutboxMessage message, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> GetPendingMessagesAsync(System.Int32 batchSize, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
@@ -897,15 +901,21 @@ interface PalDDD.Messaging.IEventHandler
 interface PalDDD.Messaging.IEventHandler<TEvent>
   method System.Threading.Tasks.ValueTask HandleAsync(TEvent event, System.Threading.CancellationToken ct)
 interface PalDDD.Messaging.IMessageBroker
+  property System.Boolean SupportsConcurrentPublish
+  property System.Boolean SupportsRawPublish
   method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask PublishAsync(TMessage message, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask PublishRawAsync(System.ReadOnlyMemory<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
 class PalDDD.Messaging.MessageBrokerBase
+  property System.Boolean SupportsConcurrentPublish
+  property System.Boolean SupportsRawPublish
   method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask PublishAsync(TMessage message, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask PublishRawAsync(System.ReadOnlyMemory<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
 class PalDDD.Messaging.MessageConsumeContext
@@ -939,17 +949,23 @@ class PalDDD.Messaging.NullMessageBroker
 # PalDDD.Messaging.Kafka
 class PalDDD.Messaging.Kafka.KafkaBroker
   ctor(Confluent.Kafka.ProducerConfig producerConfig, Confluent.Kafka.ConsumerConfig consumerConfig, PalDDD.Core.Logging.IPalLogger<PalDDD.Messaging.Kafka.KafkaBroker> logger, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog)
+  property System.Boolean SupportsConcurrentPublish
+  property System.Boolean SupportsRawPublish
   method System.Threading.Tasks.ValueTask DisposeAsync()
   method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask PublishRawAsync(System.ReadOnlyMemory<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
 
 # PalDDD.Messaging.RabbitMQ
 class PalDDD.Messaging.RabbitMQ.RabbitMqBroker
   ctor(RabbitMQ.Client.IConnection connection, RabbitMQ.Client.IChannel channel, PalDDD.Core.Logging.IPalLogger<PalDDD.Messaging.RabbitMQ.RabbitMqBroker> logger, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog, System.UInt16 prefetchCount)
+  property System.Boolean SupportsConcurrentPublish
+  property System.Boolean SupportsRawPublish
   method System.Threading.Tasks.ValueTask<PalDDD.Messaging.RabbitMQ.RabbitMqBroker> CreateAsync(RabbitMQ.Client.IConnection connection, PalDDD.Core.Logging.IPalLogger<PalDDD.Messaging.RabbitMQ.RabbitMqBroker> logger, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog, System.UInt16 prefetchCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask DisposeAsync()
   method System.Threading.Tasks.ValueTask PublishAsync(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask PublishRawAsync(System.ReadOnlyMemory<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
 
@@ -1043,6 +1059,7 @@ class PalDDD.PalORM.Stores.PalOrmInboxStore<TProvider>
   method System.Threading.Tasks.ValueTask<PalDDD.Transactions.InboxMessage> TryStartProcessingAsync(System.String consumerName, System.String messageId, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 class PalDDD.PalORM.Stores.PalOrmOutboxStore<TProvider>
   ctor(PalORM.DataSession<TProvider> session, System.TimeProvider clock)
+  property System.Boolean RequiresSaveAfterMark
   method System.Threading.Tasks.ValueTask AddMessageAsync(PalDDD.Transactions.OutboxMessage message, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> GetPendingMessagesAsync(System.Int32 batchSize, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
@@ -1353,6 +1370,7 @@ interface PalDDD.Serialization.IMessageSerializer
   method System.ReadOnlyMemory<System.Byte> Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor)
   method System.Void Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, System.Buffers.IBufferWriter<System.Byte> destination)
   method System.ReadOnlyMemory<System.Byte> Serialize(TMessage message, PalDDD.Serialization.MessageDescriptor descriptor)
+  method System.Byte[] SerializeToArray(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor)
 class PalDDD.Serialization.Json.JsonLinesEventReader
   ctor()
   method System.Collections.Generic.IReadOnlyList<TMessage> DeserializeAll(System.ReadOnlyMemory<System.Byte> payload, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage> typeInfo)
@@ -1368,6 +1386,7 @@ class PalDDD.Serialization.Json.JsonMessageSerializer
   method System.ReadOnlyMemory<System.Byte> Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor)
   method System.Void Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor, System.Buffers.IBufferWriter<System.Byte> destination)
   method System.ReadOnlyMemory<System.Byte> Serialize(TMessage message, PalDDD.Serialization.MessageDescriptor descriptor)
+  method System.Byte[] SerializeToArray(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor)
 static class PalDDD.Serialization.Json.ServiceCollectionExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalJsonSerialization(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Action<PalDDD.Serialization.MessageCatalogBuilder> configureCatalog)
 class PalDDD.Serialization.MessageCatalog
@@ -1459,6 +1478,7 @@ class PalDDD.Serialization.MemoryPack.MemoryPackMessageSerializer
   method TMessage Deserialize(System.ReadOnlySpan<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor)
   method System.ReadOnlyMemory<System.Byte> Serialize(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor)
   method System.ReadOnlyMemory<System.Byte> Serialize(TMessage message, PalDDD.Serialization.MessageDescriptor descriptor)
+  method System.Byte[] SerializeToArray(System.Object message, PalDDD.Serialization.MessageDescriptor descriptor)
 static class PalDDD.Serialization.MemoryPack.ServiceCollectionExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalMemoryPackSerialization(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Action<PalDDD.Serialization.MessageCatalogBuilder> configureCatalog)
 
@@ -1511,6 +1531,7 @@ interface PalDDD.Transactions.IInboxStore
   method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.InboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<PalDDD.Transactions.InboxMessage> TryStartProcessingAsync(System.String consumerName, System.String messageId, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.IPalOutboxStore
+  property System.Boolean RequiresSaveAfterMark
   field const System.Int32 DefaultMaxRetryCount = 10
   method System.Threading.Tasks.ValueTask AddMessageAsync(PalDDD.Transactions.OutboxMessage message, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.Threading.CancellationToken ct)
@@ -1543,6 +1564,7 @@ class PalDDD.Transactions.InMemoryInboxStore
   method System.Threading.Tasks.ValueTask<PalDDD.Transactions.InboxMessage> TryStartProcessingAsync(System.String consumerName, System.String messageId, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.InMemoryOutboxStore
   ctor(System.TimeProvider timeProvider)
+  property System.Boolean RequiresSaveAfterMark
   method System.Threading.Tasks.ValueTask AddMessageAsync(PalDDD.Transactions.OutboxMessage message, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> AddMessagesAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> GetPendingMessagesAsync(System.Int32 batchSize, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
@@ -1598,6 +1620,10 @@ class PalDDD.Transactions.OutboxBatchProcessor
   ctor(PalDDD.Transactions.IPalOutboxStore store, PalDDD.Messaging.IMessageBroker broker, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.OutboxOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.OutboxBatchProcessor> logger, System.TimeProvider timeProvider, Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory)
   method System.Threading.Tasks.ValueTask ProcessBatchAsync(System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Boolean> ProcessBatchWithBacklogAsync(System.Threading.CancellationToken ct)
+enum PalDDD.Transactions.OutboxDeliveryMode
+  field const PalDDD.Transactions.OutboxDeliveryMode Auto = 1
+  field const PalDDD.Transactions.OutboxDeliveryMode Serial = 0
+  field System.Int32 value__
 class PalDDD.Transactions.OutboxMessage
   ctor()
   property System.Nullable<ByteAether.Ulid.Ulid> CausationId [init]
@@ -1619,8 +1645,10 @@ class PalDDD.Transactions.OutboxMessage
   property System.String Type [init]
 class PalDDD.Transactions.OutboxOptions
   ctor()
+  property System.TimeSpan BatchMarkFlushInterval
   property System.Int32 BatchMarkThreshold
   property System.Int32 BatchSize
+  property PalDDD.Transactions.OutboxDeliveryMode DeliveryMode
   property System.TimeSpan LeaseDuration
   property System.String LeaseOwner
   property System.Int32 MaxDegreeOfParallelism
@@ -1780,6 +1808,7 @@ class PalDDD.Transactions.MySqlOutboxDbContext
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> LeasePendingMessagesAsync(System.Int32 batchSize, System.String owner, System.TimeSpan leaseDuration, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.OutboxDbContext
   property Microsoft.EntityFrameworkCore.DbSet<PalDDD.Transactions.OutboxMessage> OutboxMessages
+  property System.Boolean RequiresSaveAfterMark
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> GetPendingMessagesAsync(System.Int32 batchSize, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage>> LeasePendingMessagesAsync(System.Int32 batchSize, System.String owner, System.TimeSpan leaseDuration, System.Int32 maxRetryCount, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkDeadAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset deadAt, System.Threading.CancellationToken ct)

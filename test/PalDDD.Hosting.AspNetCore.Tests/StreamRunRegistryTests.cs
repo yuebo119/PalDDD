@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using PalDDD.CQRS;
 using System.Text.Json.Serialization;
@@ -101,7 +102,7 @@ public sealed partial class StreamRunRegistryTests
         var run = await WaitForRunAsync(registry, runId);
 
         await Assert.That(run.TryBeginAttach(null, out _, out _, out _)).IsTrue();
-        run.ReleaseAttachment();
+        await run.ReleaseAttachmentAsync();
 
         await WaitUntilAsync(() => run.State != StreamRunState.Running, TimeSpan.FromSeconds(5));
         await Assert.That(run.State).IsEqualTo(StreamRunState.Cancelled);
@@ -124,7 +125,7 @@ public sealed partial class StreamRunRegistryTests
         await Assert.That(run.TryBeginAttach("evt-2", out var startIndex, out var gap, out _)).IsTrue();
         await Assert.That(startIndex).IsEqualTo(3); // evt-2 之后从 index 3 起
         await Assert.That(gap).IsFalse();
-        run.ReleaseAttachment();
+        await run.ReleaseAttachmentAsync();
     }
 
     [Test]
@@ -140,7 +141,7 @@ public sealed partial class StreamRunRegistryTests
         await Assert.That(run.TryBeginAttach("0", out var startIndex, out var gap, out _)).IsTrue();
         await Assert.That(gap).IsTrue();
         await Assert.That(startIndex).IsEqualTo(run.OldestAvailable);
-        run.ReleaseAttachment();
+        await run.ReleaseAttachmentAsync();
     }
 
     [Test]
@@ -153,7 +154,7 @@ public sealed partial class StreamRunRegistryTests
 
         await Assert.That(run.TryBeginAttach(null, out _, out _, out _)).IsTrue();
         await Assert.That(run.TryBeginAttach(null, out _, out _, out _)).IsFalse();
-        run.ReleaseAttachment();
+        await run.ReleaseAttachmentAsync();
     }
 
     [Test]
@@ -167,6 +168,43 @@ public sealed partial class StreamRunRegistryTests
         await Assert.That(run.TryBeginAttach(null, out _, out _, out var gen2)).IsTrue();
         await Assert.That(gen2).IsEqualTo(gen1 + 1);
         await Assert.That(run.AttachedCount).IsEqualTo(2); // 两连接并存直到旧者观测到代际变化
+    }
+
+    [Test]
+    public async Task StreamToAsync_CancelledWhileIdle_CompletesWithoutWaitingHeartbeat()
+    {
+        using var registry = CreateRegistry(out var options, detachGraceSeconds: 30);
+        options.DetachGrace = TimeSpan.FromSeconds(30);
+        var runId = registry.Register(new RegQuery("p"), null, null, new BlockingHandler());
+        var run = await WaitForRunAsync(registry, runId);
+        await Assert.That(run.TryBeginAttach(null, out var startIndex, out var gap, out var generation)).IsTrue();
+
+        using var cts = new CancellationTokenSource();
+        var context = new DefaultHttpContext();
+        context.RequestAborted = cts.Token;
+        context.Response.Body = new MemoryStream();
+
+        var streamTask = run.StreamToAsync(
+            context,
+            RegChunkJsonContext.Default.RegChunk,
+            generation,
+            startIndex,
+            gap,
+            keepAliveInterval: TimeSpan.FromSeconds(30));
+
+        await Task.Delay(100);
+        cts.Cancel();
+
+        // 旧实现 Monitor.Wait(30s) 不观察 RequestAborted，这里会超时；
+        // 新实现 WaitAsync(ms, ct) 在取消时立即返回（超时抛 TimeoutException 即判红）。
+        try
+        {
+            await streamTask.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (OperationCanceledException)
+        {
+            // 断线取消是正常收尾路径
+        }
     }
 
     // ─── 夹具 ───
@@ -232,6 +270,9 @@ public sealed partial class StreamRunRegistryTests
 }
 
 internal sealed record RegChunk(int Index);
+
+[JsonSerializable(typeof(RegChunk))]
+internal sealed partial class RegChunkJsonContext : JsonSerializerContext;
 
 internal sealed record RegQuery(string Prompt) : IStreamQuery<RegChunk>;
 

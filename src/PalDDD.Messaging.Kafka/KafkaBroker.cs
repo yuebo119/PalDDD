@@ -29,6 +29,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
     private readonly IProducer<string, byte[]> _producer;
     private readonly ConsumerConfig _consumerConfig;
     private readonly IPalLogger<KafkaBroker> _logger;
+    private readonly bool _concurrentPublishSafe;
     private readonly List<IAsyncDisposable> _consumers = [];
     // P2 修复：_consumers 的并发 Add（多线程 SubscribeAsync）与 DisposeAsync 遍历需互斥
     // 优化（二十四轮 OP-2）：object → System.Threading.Lock——全仓最后一个 object 锁，
@@ -67,6 +68,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         // message.timeout.ms（默认 300s，建议按业务 SLO 显式设置）+ delivery.timeout.ms。
         producerConfig.MessageTimeoutMs ??= 30_000;
         _logger = logger;
+        // Outbox 自动升窗前提：幂等 producer 才保证窗口内重试不乱序。
+        // 显式关闭或未设置时保守返回 false，处理器回落逐条确认。
+        _concurrentPublishSafe = producerConfig.EnableIdempotence == true;
         // 审计对齐（2026-10-08 全量 API 审计 P2）：官方示例标配三 handler——producer 的
         // 后台事件（librdkafka 线程上的错误/日志/统计）此前结构性不可见
         _producer = new ProducerBuilder<string, byte[]>(producerConfig)
@@ -98,6 +102,62 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         _producer = producer;
         _consumerConfig = consumerConfig;
         _logger = logger;
+        _concurrentPublishSafe = false; // 注入 producer 无法探测 EnableIdempotence，保守关闭
+    }
+
+    /// <inheritdoc />
+    public override bool SupportsConcurrentPublish => _concurrentPublishSafe;
+
+    /// <inheritdoc />
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static",
+        Justification = "接口成员必须为实例成员；能力值由 broker 实现类型决定。")]
+    public override bool SupportsRawPublish => true;
+
+    /// <inheritdoc />
+    public override async ValueTask PublishRawAsync(
+        ReadOnlyMemory<byte> payload,
+        MessageDescriptor descriptor,
+        PalUlid messageId,
+        MessagePublishContext context,
+        CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        ArgumentNullException.ThrowIfNull(descriptor);
+        ArgumentOutOfRangeException.ThrowIfEqual(messageId, default);
+
+        var key = messageId.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
+        var value = ExtractPayloadArray(payload);
+        await PublishSerializedAsync(value, key, descriptor, context, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>发布已序列化字节（对象路径与 raw 路径共用）。</summary>
+    private async ValueTask PublishSerializedAsync(
+        byte[] value,
+        string key,
+        MessageDescriptor descriptor,
+        MessagePublishContext context,
+        CancellationToken ct)
+    {
+        await _producer.ProduceAsync(descriptor.Name, new Message<string, byte[]>
+        {
+            Key = key,
+            Value = value,
+            Headers = CreateHeaders(context)
+        }, ct).ConfigureAwait(false);
+
+        if (_logger.IsEnabled(LogLevel.Debug))
+            _logger.Debug($"Published {descriptor.ClrType.Name} to Kafka topic {descriptor.Name}, key={key}");
+    }
+
+    /// <summary>取整段底层数组（OutboxMessage.Payload 已是独立数组时零拷贝）。</summary>
+    private static byte[] ExtractPayloadArray(ReadOnlyMemory<byte> payload)
+    {
+        if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(payload, out var segment)
+            && segment.Array is { } array
+            && segment.Offset == 0
+            && segment.Count == array.Length)
+            return array;
+        return payload.ToArray();
     }
 
     // 审计对齐（2026-10-08）：Kafka 后台事件观测——producer/consumer 共用。
@@ -156,27 +216,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         Serializer.Serialize(message, descriptor, bodyWriter);
         var value = bodyWriter.WrittenMemory.ToArray();
 
-        await _producer.ProduceAsync(descriptor.Name, new Message<string, byte[]>
-        {
-            Key = key,
-            // Serialize 契约返回 ReadOnlyMemory<byte>，Message.Value 需 byte[]。
-            // EPSL 地毯审计 2026-10-16 A 批 #1：Value 直传上方 ToArray 产出的数组。
-            // 旧码此处又有一次 value.ToArray()（byte[] 隐式转 ReadOnlyMemory 后恒拷贝），
-            // 与上方 TLS 直写后的 ToArray 相抵，A13 对该路径净效果为零（每消息两次全载荷
-            // 分配+拷贝，分配断言实测 2264B/迭代）；旧注释「唯一一次托管拷贝」与同方法
-            // 两个 ToArray 的事实不符，一并勘误。
-            // 现存一次拷贝不可消除：Confluent.Kafka 2.16.0 的 ISerializer<T>.Serialize
-            // 返回 byte[]（反射实证，2026-10-08 升位复核），改用 IProducer<string,
-            // ReadOnlyMemory<byte>> + 自定义序列化器只会把该拷贝移入序列化器，净收益为零；
-            // librdkafka 内部仍需一次拷贝。
-            Value = value,
-            Headers = CreateHeaders(context)
-        }, ct).ConfigureAwait(false);
-
-        // 优化（二十五轮 Z-1）：Debug 级门控——AddPalLogging 最低 Information，无门控时
-        // 每消息的字符串插值（类型名+topic+key 的 Ulid.ToString）全部白做
-        if (_logger.IsEnabled(LogLevel.Debug))
-            _logger.Debug($"Published {descriptor.ClrType.Name} to Kafka topic {descriptor.Name}, key={key}");
+        // Confluent.Kafka 2.16.0 的 Message.Value 需 byte[]；这里是对象路径唯一一次
+        // 托管拷贝（raw 路径直接复用 Outbox 的独立数组，无此拷贝）。
+        await PublishSerializedAsync(value, key, descriptor, context, ct).ConfigureAwait(false);
     }
 
     // EPSL 地毯审计 2026-10-11 B-5：默认发布路径（无追踪上下文，PublishAsync 恒传
@@ -321,7 +363,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         }
 
         // 保存 Task 引用，用于等待完成和错误观测
-        var consumeTask = Task.Run(async () =>
+        // 2026-10-19 性能实施轮：Consume 是同步阻塞原生调用，用 LongRunning 专用线程，
+        // 避免每个订阅永久占用一个线程池工作线程（订阅数上升时挤压线程池注入）。
+        var consumeTask = Task.Factory.StartNew(async () =>
         {
             try
             {
@@ -365,14 +409,16 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                             _logger.Information($"Tombstone (null value) message on {topic}, discarding");
                             continue;
                         }
-                        var message = Serializer.Deserialize(result.Message.Value, descriptor);
+                        // 2026-10-19 性能实施轮：走泛型反序列化（编译时 JsonTypeInfo<T>/
+                        // MemoryPack 泛型 Formatter），免运行时 Type 查找与值类型装箱。
+                        TMessage? message = Serializer.Deserialize<TMessage>(result.Message.Value, descriptor);
                         if (message is not null)
                         {
                             // P2 修复（八轮评审）：消费端还原追踪头——写侧 CreateHeaders 的镜像
                             // C-11（EPSL 地毯审计 2026-10-11）：单趟遍历 Confluent Headers 直产
                             // 已解码字典（原 ToHeaderMap 中间字典 + FromHeaders 二次物化消除）
                             var consumeContext = FromKafkaHeaders(result.Message.Headers);
-                            await handler((TMessage)message, consumeContext, tokenSnapshot).ConfigureAwait(false);
+                            await handler(message, consumeContext, tokenSnapshot).ConfigureAwait(false);
                         }
                         else
                         {
@@ -447,7 +493,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                     consumer.Dispose();
                 }
             }
-        }, tokenSnapshot); // v22 E-1：Task.Run 第二实参在启动前求值=ODE 窗口，用快照
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
+        // 传 None 而非 tokenSnapshot：预取消时仍要进入委托执行 finally（consumer.Close/Dispose），
+        // 取消由循环条件与 catch 观察。
 
         // P3 修复（十七轮）：登记先行的回填——循环启动后注入 Task 引用
         // （Set 前若被 Dispose，DisposeAsync 走 null 窗口路径：cts 已取消，

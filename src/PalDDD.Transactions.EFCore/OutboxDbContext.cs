@@ -15,6 +15,9 @@ namespace PalDDD.Transactions;
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
 public abstract class OutboxDbContext(DbContextOptions options) : DbContext(options), IPalOutboxStore, IBatchMarkOutboxStore
 {
+    /// <inheritdoc />
+    public bool RequiresSaveAfterMark => false;
+
     /// <summary>发件箱消息表</summary>
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
 

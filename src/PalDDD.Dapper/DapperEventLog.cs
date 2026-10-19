@@ -226,11 +226,41 @@ public sealed class DapperEventLog : IEventLog
         // 收益：k 次 INSERT..SELECT LAST_INSERT_ID 往返 → 2 往返（INSERT + 范围回查），
         // k≥3 净胜（k=5 典型形态 5→2）。MySQL 行上限 4000（13 参/行 = 52000 < PG/MySQL
         // 65535 占位符上限；SQL 文本 ~1MB < max_allowed_packet 默认 64MB）。
-        if (events.Count > 1 && events.Count <= BatchRowLimit(_dbType))
+        var batchRowLimit = BatchRowLimit(_dbType);
+        if (events.Count > 1 && batchRowLimit > 0)
         {
-            if (_dbType == DapperDbType.MySql)
-                return await AppendEventBatchMySqlAsync(streamName, expectedVersion, currentVersion, version, now, events).ConfigureAwait(false);
-            return await AppendEventBatchAsync(streamName, expectedVersion, currentVersion, version, now, events).ConfigureAwait(false);
+            if (events.Count <= batchRowLimit)
+            {
+                if (_dbType == DapperDbType.MySql)
+                    return await AppendEventBatchMySqlAsync(streamName, expectedVersion, currentVersion, version, now, events).ConfigureAwait(false);
+                return await AppendEventBatchAsync(streamName, expectedVersion, currentVersion, version, now, events).ConfigureAwait(false);
+            }
+
+            // SQLite 维持逐条：仓库已有实测（1000 行逐条 4ms vs 多行 VALUES 14ms，慢 3.5×），
+            // 大语句构造与解析成本超过省下的命令执行；PG/MySQL 超过行上限原会退化逐条，
+            // 这里改为按上限分块，每块一条多行语句，语句数从 O(k) 降到 O(k/limit)。
+            if (_dbType != DapperDbType.Sqlite)
+            {
+                var firstGlobalPosChunked = 0L;
+                var lastGlobalPosChunked = 0L;
+                for (var offset = 0; offset < events.Count; offset += batchRowLimit)
+                {
+                    var count = Math.Min(batchRowLimit, events.Count - offset);
+                    var chunk = SliceEvents(events, offset, count);
+                    var chunkCurrentVersion = currentVersion + offset;
+                    var chunkFirstVersion = version + offset;
+                    var result = _dbType == DapperDbType.MySql
+                        ? await AppendEventBatchMySqlAsync(streamName, expectedVersion, chunkCurrentVersion, chunkFirstVersion, now, chunk).ConfigureAwait(false)
+                        : await AppendEventBatchAsync(streamName, expectedVersion, chunkCurrentVersion, chunkFirstVersion, now, chunk).ConfigureAwait(false);
+                    if (offset == 0)
+                        firstGlobalPosChunked = result.FirstGlobalPosition;
+                    lastGlobalPosChunked = result.LastGlobalPosition;
+                }
+
+                return new AppendEventsResult(
+                    streamName, firstVersion, firstVersion + events.Count - 1,
+                    firstGlobalPosChunked, lastGlobalPosChunked);
+            }
         }
 
         long firstGlobalPos = 0;
@@ -339,6 +369,15 @@ public sealed class DapperEventLog : IEventLog
         DapperDbType.Sqlite => SqliteBatchRowLimit,
         _ => 0,
     };
+
+    /// <summary>按行上限切片（2026-10-19）：避免 Skip/Take 迭代器，单次预分配。</summary>
+    private static List<EventData> SliceEvents(IReadOnlyList<EventData> events, int offset, int count)
+    {
+        var chunk = new List<EventData>(count);
+        for (var i = 0; i < count; i++)
+            chunk.Add(events[offset + i]);
+        return chunk;
+    }
 
     /// <summary>
     /// B-4（EPSL 地毯审计 2026-10-11）：PG k&gt;1 多行 VALUES + RETURNING 批量追加——
@@ -512,19 +551,20 @@ public sealed class DapperEventLog : IEventLog
         // EventLogRead 计数形态）——读取耗时与吞吐此前不可见。
         using var activity = PalActivitySource.StartEventLogReadStream(streamName, fromVersion);
 
-        var rows = await _connection.QueryAsync<EventLogRow>(
-            EventLogSql.ReadStream, new { name = streamName, from = fromVersion, max = maxCount }, Tx).ConfigureAwait(false);
-
         var read = 0;
         // ITM-167 同款：计数与 metrics 置入 finally——迭代器被消费方提前 Dispose（await
         // foreach 中 break/抛异常）时循环后语句不执行，finally 在任何退出路径都记录已产出
         // 计数；计数在 yield 前（对齐 EventLogDbContext/PalOrmEventLog/InMemoryEventLog）。
         try
         {
-            foreach (var row in rows)
+            // 2026-10-19 性能实施轮：改为 DbDataReader 真流式（SequentialAccess）。
+            // 原 QueryAsync<EventLogRow> 会把全部行先物化进 List 再迭代，1M 事件可占数 GB；
+            // 现按行读取并立即映射，峰值内存只与本行载荷相关。
+            await foreach (var evt in ReadEventsCoreAsync(
+                EventLogSql.ReadStream, streamName, fromVersion, maxCount, cancellationToken).ConfigureAwait(false))
             {
                 checked { read++; }
-                yield return row.ToRecordedEvent();
+                yield return evt;
             }
         }
         finally
@@ -547,17 +587,15 @@ public sealed class DapperEventLog : IEventLog
         // PalOrmEventLog:239 的 StartEventLogReadAll + EventLogRead 计数形态）。
         using var activity = PalActivitySource.StartEventLogReadAll(fromPosition);
 
-        var rows = await _connection.QueryAsync<EventLogRow>(
-            EventLogSql.ReadAll, new { from = fromPosition, max = maxCount }, Tx).ConfigureAwait(false);
-
         var read = 0;
         // ITM-167 同款：计数与 metrics 置入 finally + yield 前计数（同 ReadStreamAsync）。
         try
         {
-            foreach (var row in rows)
+            await foreach (var evt in ReadEventsCoreAsync(
+                EventLogSql.ReadAll, streamName: null, fromPosition, maxCount, cancellationToken).ConfigureAwait(false))
             {
                 checked { read++; }
-                yield return row.ToRecordedEvent();
+                yield return evt;
             }
         }
         finally
@@ -565,6 +603,145 @@ public sealed class DapperEventLog : IEventLog
             // v25 P3 指标族（D5）口径：EventLogRead 计数保留，无 SetTag
             PalMetrics.EventLogRead.Add(read);
         }
+    }
+
+    /// <summary>
+    /// 真流式读取（2026-10-19 性能实施轮）：DbDataReader + SequentialAccess 逐行产出，
+    /// 不再经 Dapper QueryAsync 先物化全部行。连接所有权：仅当本方法打开连接时才在
+    /// 枚举结束时关闭；调用方已打开的连接/事务保持原状。
+    /// </summary>
+    private async IAsyncEnumerable<RecordedEvent> ReadEventsCoreAsync(
+        string sql,
+        string? streamName,
+        long from,
+        int max,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var openedHere = false;
+        if (_connection.State != ConnectionState.Open)
+        {
+            await _connection.OpenAsync(ct).ConfigureAwait(false);
+            openedHere = true;
+        }
+
+        await using var cmd = _connection.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.Transaction = Tx;
+        if (streamName is not null)
+            AddReadParameter(cmd, "@name", streamName);
+        AddReadParameter(cmd, "@from", from);
+        AddReadParameter(cmd, "@max", max);
+
+        DbDataReader? reader = null;
+        try
+        {
+            reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess, ct).ConfigureAwait(false);
+            var ordinals = ReadOrdinals.Create(reader);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                yield return ReadRecordedEvent(reader, ordinals);
+        }
+        finally
+        {
+            if (reader is not null)
+                await reader.DisposeAsync().ConfigureAwait(false);
+            if (openedHere)
+                await _connection.CloseAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>按列名取一次 ordinal，逐行按 ordinal 读取（避免每行字符串查找）。</summary>
+    private readonly record struct ReadOrdinals(
+        int GlobalPosition,
+        int EventId,
+        int EventName,
+        int StreamName,
+        int StreamVersion,
+        int SchemaVersion,
+        int ContentType,
+        int Payload,
+        int Metadata,
+        int RecordedAt,
+        int ActorId,
+        int Reason,
+        int CorrelationId,
+        int CausationId,
+        int TraceParent,
+        int TraceState)
+    {
+        public static ReadOrdinals Create(DbDataReader reader)
+            => new(
+                reader.GetOrdinal("global_position"),
+                reader.GetOrdinal("event_id"),
+                reader.GetOrdinal("event_name"),
+                reader.GetOrdinal("stream_name"),
+                reader.GetOrdinal("stream_version"),
+                reader.GetOrdinal("schema_version"),
+                reader.GetOrdinal("content_type"),
+                reader.GetOrdinal("payload"),
+                reader.GetOrdinal("metadata"),
+                reader.GetOrdinal("recorded_at"),
+                reader.GetOrdinal("actor_id"),
+                reader.GetOrdinal("reason"),
+                reader.GetOrdinal("correlation_id"),
+                reader.GetOrdinal("causation_id"),
+                reader.GetOrdinal("trace_parent"),
+                reader.GetOrdinal("trace_state"));
+    }
+
+    /// <summary>
+    /// 单行映射（零拷贝载荷引用直传）。审计字段全空时复用 <see cref="EventAuditMetadata.Empty"/>，
+    /// 与 EF/PalORM/JSONL 导入同款。
+    /// </summary>
+    private static RecordedEvent ReadRecordedEvent(DbDataReader reader, in ReadOrdinals o)
+    {
+        var actorId = reader.IsDBNull(o.ActorId) ? null : reader.GetString(o.ActorId);
+        var reason = reader.IsDBNull(o.Reason) ? null : reader.GetString(o.Reason);
+        PalUlid? correlationId = null;
+        if (!reader.IsDBNull(o.CorrelationId))
+            correlationId = PalUlid.Parse(reader.GetString(o.CorrelationId));
+        PalUlid? causationId = null;
+        if (!reader.IsDBNull(o.CausationId))
+            causationId = PalUlid.Parse(reader.GetString(o.CausationId));
+        var traceParent = reader.IsDBNull(o.TraceParent) ? null : reader.GetString(o.TraceParent);
+        var traceState = reader.IsDBNull(o.TraceState) ? null : reader.GetString(o.TraceState);
+
+        var audit = actorId is null && reason is null && correlationId is null && causationId is null
+            && traceParent is null && traceState is null
+                ? EventAuditMetadata.Empty
+                : new EventAuditMetadata(actorId, reason, correlationId, causationId, traceParent, traceState);
+
+        return RecordedEvent.RehydrateFromBytes(
+            reader.GetString(o.StreamName),
+            reader.GetInt64(o.StreamVersion),
+            reader.GetInt64(o.GlobalPosition),
+            ReadDateTimeOffset(reader, o.RecordedAt),
+            PalUlid.Parse(reader.GetString(o.EventId)),
+            reader.GetString(o.EventName),
+            reader.GetInt32(o.SchemaVersion),
+            reader.GetString(o.ContentType),
+            reader.GetFieldValue<byte[]>(o.Payload),
+            reader.GetFieldValue<byte[]>(o.Metadata),
+            audit);
+    }
+
+    /// <summary>三方言 recorded_at 取值（SQLite TEXT / MySQL DATETIME / PG timestamptz）。</summary>
+    private static DateTimeOffset ReadDateTimeOffset(DbDataReader reader, int ordinal)
+        => reader.GetValue(ordinal) switch
+        {
+            DateTimeOffset dto => dto,
+            DateTime dt => new DateTimeOffset(DateTime.SpecifyKind(dt, DateTimeKind.Utc)),
+            string text => DateTimeOffset.Parse(
+                text, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind),
+            var other => throw new InvalidOperationException(
+                $"Unexpected recorded_at column type '{other.GetType().Name}'.")
+        };
+
+    private static void AddReadParameter(DbCommand cmd, string name, object value)
+    {
+        var p = cmd.CreateParameter();
+        p.ParameterName = name;
+        p.Value = value;
+        cmd.Parameters.Add(p);
     }
 
     /// <summary>

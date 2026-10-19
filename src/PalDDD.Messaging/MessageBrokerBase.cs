@@ -34,6 +34,24 @@ public abstract class MessageBrokerBase : IMessageBroker
         MessageCatalog = messageCatalog;
     }
 
+    /// <inheritdoc />
+    /// <remarks>默认 false；Kafka/RabbitMQ 等实现按能力覆写。</remarks>
+    public virtual bool SupportsConcurrentPublish => false;
+
+    /// <inheritdoc />
+    /// <remarks>默认 false；支持直发持久化字节的实现覆写。</remarks>
+    public virtual bool SupportsRawPublish => false;
+
+    /// <inheritdoc />
+    public virtual ValueTask PublishRawAsync(
+        ReadOnlyMemory<byte> payload,
+        MessageDescriptor descriptor,
+        PalUlid messageId,
+        MessagePublishContext context,
+        CancellationToken ct = default)
+        => throw new NotSupportedException(
+            $"Broker '{GetType().Name}' does not implement raw payload publishing.");
+
     /// <summary>发布消息（泛型）— 查找描述符后转发到传输核心。</summary>
     public ValueTask PublishAsync<TMessage>(TMessage message, CancellationToken ct = default)
     {

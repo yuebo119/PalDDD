@@ -54,7 +54,7 @@ public static class EndpointExtensions
                 // ITM-091 修复：SendAsync 纳入本地 try——PalValidationException 由 Dispatcher 派发时
                 // 抛出（原 catch 仅覆盖 ReadFromJsonAsync），此前验证失败会逃逸为 500；
                 // JsonException catch 语义保持不变（仍只覆盖反序列化）
-                await dispatcher.SendAsync(cmd!, ct).ConfigureAwait(false);
+                await dispatcher.SendAsync(cmd!, context.RequestServices, ct).ConfigureAwait(false);
             }
             catch (PalDDD.CQRS.PalValidationException ex)
             {
@@ -94,7 +94,7 @@ public static class EndpointExtensions
                 // ITM-091 修复：SendAsync 纳入本地 try——PalValidationException 由 Dispatcher 派发时
                 // 抛出（原 catch 仅覆盖 ReadFromJsonAsync），此前验证失败会逃逸为 500；
                 // JsonException catch 语义保持不变（仍只覆盖反序列化）
-                result = await dispatcher.SendAsync(cmd!, ct).ConfigureAwait(false);
+                result = await dispatcher.SendAsync(cmd!, context.RequestServices, ct).ConfigureAwait(false);
             }
             catch (PalDDD.CQRS.PalValidationException ex)
             {
@@ -168,7 +168,7 @@ public static class EndpointExtensions
                 // ITM-168 修复：QueryAsync 纳入本地 try——PalValidationException 由 Dispatcher
                 // 派发时抛出，此前验证失败逃逸为 500（MapCommand 两个方法均已映射 400，
                 // 查询端点缺失同族映射）。
-                result = await dispatcher.QueryAsync(query, ct).ConfigureAwait(false);
+                result = await dispatcher.QueryAsync(query, context.RequestServices, ct).ConfigureAwait(false);
             }
             catch (PalDDD.CQRS.PalValidationException ex)
             {

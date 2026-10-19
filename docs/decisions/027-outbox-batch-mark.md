@@ -2,6 +2,9 @@
 
 > 状态：**已采纳（2026-10-14 全量重读性能实施轮 R4，P0-2 / T2.1 收益锚正式立项）；
 > PalORM 栈延后段已于 2026-10-16 清算（三方言 until 编码探针实证后实施）**
+> 2026-10-19 更新：ADR-033 把 Auto 模式设为默认，并在计数阈值之外增加
+> `BatchMarkFlushInterval` 时间上界；本 ADR 的能力接口与 fencing 语义不变，
+> `DeliveryMode = Serial` 仍可复现此处的 opt-in 行为。
 > 日期：2026-10-14
 > 关联：ADR-026（fencing 统一契约——本决策的守卫等价基线）、ADR-011（RequeueDead 幂等前提，
 > 同族「at-least-once 内的重复窗口」声明）、T0.2 投递量具（逐条确认串行化占投递耗时 80% @RTT20ms

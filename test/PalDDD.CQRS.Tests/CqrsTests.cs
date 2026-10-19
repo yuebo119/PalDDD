@@ -270,6 +270,25 @@ public sealed class DispatcherTests
     }
 
     [Test]
+    public async Task DIHandler_WithRequestServices_ReusesCallerScope()
+    {
+        var services = new ServiceCollection();
+        services.AddScoped<CreateOrderHandler>();
+        var sp = services.BuildServiceProvider();
+        var root = new CountingScopeRoot(sp);
+        var dispatcher = new Dispatcher(root.Proxy, root);
+        dispatcher.Register<CreateOrderCommand, Guid, CreateOrderHandler>();
+
+        using var requestScope = sp.CreateScope();
+        var result = await dispatcher.SendAsync(
+            new CreateOrderCommand("Scoped", 1m), requestScope.ServiceProvider);
+
+        await Assert.That(result).IsNotEqualTo(Guid.Empty);
+        // 端点传入的请求作用域被直接复用：不创建第二层 scope（原路径 +1）。
+        await Assert.That(root.Proxy.ScopeCount).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task InstanceRegistration_RootSingletonBehavior_Applies()
     {
         // 契约锁定：行为以单例注册于根容器时在实例路径生效（根容器解析语义）

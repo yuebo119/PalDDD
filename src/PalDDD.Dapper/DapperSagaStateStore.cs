@@ -224,47 +224,40 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
             return rows;
         }
 
-        var exists = await conn.ExecuteScalarAsync<long>(
-            SqlTemplates.SagaExists, new { id = DapperAotInitializer.ToSqliteParameter(state.SagaId) }, Tx).ConfigureAwait(false) > 0;
-        if (!exists)
+        // 2026-10-19 性能实施轮：UPDATE 0 行后直接尝试 INSERT，唯一冲突即行已存在
+        //（版本冲突或并发创建），返回 0 走乐观冲突契约。原实现先发 COUNT 探测再 INSERT，
+        // 新 Saga 路径固定 3 次往返；去掉探测后成功新建降为 2 次，已有行更新维持 1 次。
+        int inserted;
+        try
         {
+            inserted = await conn.ExecuteAsync(
 
-            int inserted;
-            try
-            {
-                inserted = await conn.ExecuteAsync(
-
-                        // P1 修复（十一轮·实测发现）：PG 的 saga_data JSONB 列需显式 CAST（text→jsonb 无赋值转换）
-                        _dbType == DapperDbType.PostgreSql ? SqlTemplates.SagaInsertPG : SqlTemplates.SagaInsert,
-                        new
-                        {
-                            id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
-                            cs = state.CurrentState,
-                            st = (int)state.Status,
-                            ca = ToTimeParam(state.CreatedAt),
-                            completedAt = state.CompletedAt.HasValue ? ToTimeParam(state.CompletedAt.Value) : null,
-                            err = truncatedError,
-                            ea = state.ErrorAt.HasValue ? ToTimeParam(state.ErrorAt.Value) : null,
-                            data = sagaData,
-                            leasedBy = state.LeasedBy,
-                            leasedUntil = state.LeasedUntil.HasValue ? ToTimeParam(state.LeasedUntil.Value) : null
-                        },
-                        Tx).ConfigureAwait(false);
-            }
-            catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
-            {
-                // P2 修复：并发插入同一新 Saga 的 TOCTOU 兜底——唯一约束冲突转换为
-                // 语义化并发异常（而非原始 provider 异常），调用方重读后走 UPDATE 路径即可
-                throw new InvalidOperationException(
-                    $"Saga {state.SagaId} 被并发实例同时创建（主键冲突）——请重新加载后以 UPDATE 保存。", ex);
-            }
-            if (inserted > 0)
-                state.Error = truncatedError; // v38 P3：INSERT 已落库才回写调用方对象（失败路径经异常上抛不达此处）
-            return inserted;
+                    // P1 修复（十一轮·实测发现）：PG 的 saga_data JSONB 列需显式 CAST（text→jsonb 无赋值转换）
+                    _dbType == DapperDbType.PostgreSql ? SqlTemplates.SagaInsertPG : SqlTemplates.SagaInsert,
+                    new
+                    {
+                        id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
+                        cs = state.CurrentState,
+                        st = (int)state.Status,
+                        ca = ToTimeParam(state.CreatedAt),
+                        completedAt = state.CompletedAt.HasValue ? ToTimeParam(state.CompletedAt.Value) : null,
+                        err = truncatedError,
+                        ea = state.ErrorAt.HasValue ? ToTimeParam(state.ErrorAt.Value) : null,
+                        data = sagaData,
+                        leasedBy = state.LeasedBy,
+                        leasedUntil = state.LeasedUntil.HasValue ? ToTimeParam(state.LeasedUntil.Value) : null
+                    },
+                    Tx).ConfigureAwait(false);
         }
-
-        // 行在但版本不匹配 = 乐观锁冲突（他实例已写同一 Saga）——契约返回 0
-        return 0;
+        catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            // 行已存在（版本冲突或并发创建同一新 Saga）——统一返回 0（乐观冲突契约），
+            // 调用方重新加载后走 UPDATE 路径。
+            return 0;
+        }
+        if (inserted > 0)
+            state.Error = truncatedError; // v38 P3：INSERT 已落库才回写调用方对象（失败路径经异常上抛不达此处）
+        return inserted;
     }
 
     /// <inheritdoc/>

@@ -150,14 +150,26 @@ public class PalOrmEventLog<TProvider> : IEventLog
         DateTimeOffset now,
         CancellationToken ct)
     {
-        var (sql, args) = BuildBatchInsert(streamName, currentVersion, events, now);
-        sql.Append(" RETURNING global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state");
+        var (sqlBuilder, args) = BuildBatchInsert(streamName, currentVersion, events, now);
+        // 2026-10-19 性能实施轮：调用方只取 min/max 全局位置，RETURNING 只回传位置列。
+        // 原实现经 EventLogRow 回传全部 16 列（含 payload/metadata），且 PalORM 的
+        // ColumnOrderValidator 要求全列映射；改走 raw reader 直接读 long，既免回传载荷，
+        // 也免 DTO 物化。{N} 孔转换为 @pN 参数（一孔一参数，与原绑定形态一致）。
+        var sql = sqlBuilder.ToString()
+            .Replace("{", "@p", StringComparison.Ordinal)
+            .Replace("}", string.Empty, StringComparison.Ordinal)
+            + " RETURNING global_position";
 
-        List<EventLogRow> inserted;
+        var positions = new List<long>(events.Count);
         try
         {
-            inserted = await Session.QueryAsync<EventLogRow>(
-                FormattableStringFactory.Create(sql.ToString(), args.ToArray()), ct: ct).ConfigureAwait(false);
+            await using var cmd = CreateRawCommand();
+            cmd.CommandText = sql;
+            for (var i = 0; i < args.Count; i++)
+                AddParam(cmd, "@p" + i.ToString(System.Globalization.CultureInfo.InvariantCulture), args[i] ?? DBNull.Value);
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                positions.Add(reader.GetInt64(0));
         }
         catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
         {
@@ -165,16 +177,16 @@ public class PalOrmEventLog<TProvider> : IEventLog
             throw await ClassifyBatchConflictAsync(streamName, expectedVersion, currentVersion, ex, ct).ConfigureAwait(false);
         }
 
-        if (inserted.Count == 0)
+        if (positions.Count == 0)
             throw new InvalidOperationException(
                 $"Batch INSERT ... RETURNING returned no rows for stream '{streamName}' ({events.Count} event(s) submitted).");
 
         var first = long.MaxValue;
         var last = long.MinValue;
-        foreach (var row in inserted)
+        foreach (var position in positions)
         {
-            if (row.GlobalPosition < first) first = row.GlobalPosition;
-            if (row.GlobalPosition > last) last = row.GlobalPosition;
+            if (position < first) first = position;
+            if (position > last) last = position;
         }
         return (first, last);
     }

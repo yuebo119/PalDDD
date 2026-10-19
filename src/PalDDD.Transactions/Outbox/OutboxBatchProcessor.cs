@@ -77,6 +77,7 @@ public sealed class OutboxBatchProcessor
     private async ValueTask<bool> ProcessBatchCoreAsync(CancellationToken ct)
     {
         var options = _options.CurrentValue;
+        var policy = ResolveDeliveryPolicy(options);
         // now 是批次原子时间戳——本批次内所有 MarkProcessed/MarkDead/ReleaseForRetry 共用同一时刻，
         // 保证批次内时间一致性（而非每条消息各取一次 GetUtcNow，避免批次耗时导致的处理时间漂移）。
         var now = _timeProvider.GetUtcNow();
@@ -131,14 +132,14 @@ public sealed class OutboxBatchProcessor
                 {
                     using var childScope = _scopeFactory.CreateScope();
                     var worker = childScope.ServiceProvider.GetRequiredService<OutboxBatchProcessor>();
-                    var c = await worker.ProcessPartitionAsync(partition, options, now, token).ConfigureAwait(false);
+                    var c = await worker.ProcessPartitionAsync(partition, options, policy, now, token).ConfigureAwait(false);
                     lock (aggregate) { aggregate.Add(c); }
                 }).ConfigureAwait(false);
             totals = aggregate;
         }
         else
         {
-            totals = await ProcessPartitionAsync(messages, options, now, ct).ConfigureAwait(false);
+            totals = await ProcessPartitionAsync(messages, options, policy, now, ct).ConfigureAwait(false);
         }
 
         // ITM-097：指标段——单条 OCE 中止整批时计数仍被记录（finally 语义保留在
@@ -156,27 +157,48 @@ public sealed class OutboxBatchProcessor
 
     /// <summary>分区内逐条处理（C1 抽取：原串行循环体原样迁移，计数经结构体返回）。</summary>
     private async ValueTask<PartitionCounters> ProcessPartitionAsync(
-        IEnumerable<OutboxMessage> messages, OutboxOptions options, DateTimeOffset now, CancellationToken ct)
+        IEnumerable<OutboxMessage> messages, OutboxOptions options, DeliveryPolicy policy, DateTimeOffset now, CancellationToken ct)
     {
         // T3.1（2026-10-11 优化实施轮）：窗口 >1 时分区内改走 FIFO 流水线形态（发布确认
-        // 不再逐条串行相乘）；默认 1 走下方原串行体（逐字不变，零额外开销）
-        if (options.MaxInFlightPublishes > 1)
-            return await ProcessPartitionPipelinedAsync(messages, options, now, ct).ConfigureAwait(false);
+        // 不再逐条串行相乘）；默认 1 走下方原串行体
+        if (policy.PublishWindow > 1)
+            return await ProcessPartitionPipelinedAsync(messages, options, policy, now, ct).ConfigureAwait(false);
 
         var processed = 0;
         var dead = 0;
         var retried = 0;
         var persistFailed = 0;
 
-        // R4/P0-2（ADR-027）：终态标记批量化 opt-in——阈值 >1 且 store 实现 IBatchMarkOutboxStore
-        // 时成功路径累积批量标记（默认 1 走逐条路径逐字不变）；失败路径（死信/重试释放）恒逐条
-        var batchMark = options.BatchMarkThreshold > 1 && _store is IBatchMarkOutboxStore batchStore ? batchStore : null;
-        List<OutboxMessage>? markPending = batchMark is null ? null : new List<OutboxMessage>(Math.Min(options.BatchMarkThreshold, 64));
+        // R4/P0-2（ADR-027）：终态标记批量化；2026-10-19 性能实施轮增加时间上界——
+        // 满阈值或距上次冲刷满 BatchMarkFlushInterval 即冲刷，重复窗口不再由整批时长界定。
+        var batchMark = policy.BatchMarkThreshold > 1 && _store is IBatchMarkOutboxStore batchStore ? batchStore : null;
+        List<OutboxMessage>? markPending = batchMark is null ? null : new List<OutboxMessage>(Math.Min(policy.BatchMarkThreshold, 64));
+        var lastFlushAt = _timeProvider.GetTimestamp();
+
+        async ValueTask FlushMarksAsync(bool force, CancellationToken flushCt)
+        {
+            if (markPending is not { Count: > 0 })
+                return;
+            if (!force
+                && markPending.Count < policy.BatchMarkThreshold
+                && _timeProvider.GetElapsedTime(lastFlushAt) < policy.BatchMarkFlushInterval)
+                return;
+
+            var flushed = markPending.Count;
+            if (await TryFlushBatchMarkAsync(batchMark!, markPending, now, options, flushCt).ConfigureAwait(false))
+                checked { processed += flushed; }
+            else
+                checked { retried += flushed; }
+            lastFlushAt = _timeProvider.GetTimestamp();
+        }
 
         try
         {
             foreach (var msg in messages)
             {
+                // 时间界冲刷：慢 broker 下单条发布可能超过一个冲刷周期，进入下一条前
+                // 先把已完成的标记落库，避免未标记窗口被整批时长放大。
+                await FlushMarksAsync(force: false, ct).ConfigureAwait(false);
                 try
                 {
                     // ITM-217 修复：按存储的 SchemaVersion 解析——Find(name) 返回最新版本，
@@ -192,15 +214,22 @@ public sealed class OutboxBatchProcessor
                         continue;
                     }
 
-                    var @event = _serializer.Deserialize(msg.Payload, descriptor);
-                    if (@event is null)
+                    // 2026-10-19 性能实施轮：broker 支持 raw 且内容类型一致时直接发持久化字节，
+                    // 跳过“反序列化成对象 + broker 再序列化”两次全载荷工作；否则走原对象路径。
+                    var raw = CanPublishRaw(msg, descriptor);
+                    object? @event = null;
+                    if (!raw)
                     {
-                        await _store.MarkDeadAsync(msg, Core.FailureReason.Normalize("Deserialization returned null"), now, ct).ConfigureAwait(false);
-                        checked { dead++; }
-                        PalMetrics.OutboxDead.Add(1);
-                        if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
-                            checked { persistFailed++; }
-                        continue;
+                        @event = _serializer.Deserialize(msg.Payload, descriptor);
+                        if (@event is null)
+                        {
+                            await _store.MarkDeadAsync(msg, Core.FailureReason.Normalize("Deserialization returned null"), now, ct).ConfigureAwait(false);
+                            checked { dead++; }
+                            PalMetrics.OutboxDead.Add(1);
+                            if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
+                                checked { persistFailed++; }
+                            continue;
+                        }
                     }
 
                     var publishContext = new Messaging.MessagePublishContext(
@@ -208,7 +237,10 @@ public sealed class OutboxBatchProcessor
                         msg.CausationId,
                         msg.TraceParent,
                         msg.TraceState);
-                    await _broker.PublishAsync(@event, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
+                    if (raw)
+                        await _broker.PublishRawAsync(msg.Payload, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
+                    else
+                        await _broker.PublishAsync(@event!, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
                     if (batchMark is null)
                     {
                         await _store.MarkProcessedAsync(msg, now, ct).ConfigureAwait(false);
@@ -222,17 +254,11 @@ public sealed class OutboxBatchProcessor
                     }
                     else
                     {
-                        // R4/P0-2：成功路径累积批量标记（标记时点延迟到满阈值/批末——at-least-once
-                        // 契约内的重复窗口声明见 OutboxOptions.BatchMarkThreshold）
+                        // R4/P0-2：成功路径累积批量标记（标记时点延迟到满阈值/时间界/批末——
+                        // at-least-once 契约内的重复窗口由 BatchMarkFlushInterval 界定）
                         markPending!.Add(msg);
-                        if (markPending.Count >= options.BatchMarkThreshold)
-                        {
-                            var flushed = markPending.Count;
-                            if (await TryFlushBatchMarkAsync(batchMark, markPending, now, options, ct).ConfigureAwait(false))
-                                checked { processed += flushed; }
-                            else
-                                checked { retried += flushed; }
-                        }
+                        await FlushMarksAsync(
+                            force: markPending.Count >= policy.BatchMarkThreshold, ct).ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -305,14 +331,7 @@ public sealed class OutboxBatchProcessor
         {
             // R4/P0-2：批末冲刷残留累积（含 OCE 关停路径——已发布消息按逐条路径同语义标记；
             // 终态写不响应本次取消，对齐失败路径的 CancellationToken.None 口径）
-            if (markPending is { Count: > 0 })
-            {
-                var flushed = markPending.Count;
-                if (await TryFlushBatchMarkAsync(batchMark!, markPending, now, options, CancellationToken.None).ConfigureAwait(false))
-                    checked { processed += flushed; }
-                else
-                    checked { retried += flushed; }
-            }
+            await FlushMarksAsync(force: true, CancellationToken.None).ConfigureAwait(false);
         }
 
         return new PartitionCounters(processed, dead, retried, persistFailed);
@@ -327,16 +346,34 @@ public sealed class OutboxBatchProcessor
     /// 退避重试/死信、PersistSingle 计数口径），<b>改动须双侧同步</b>。
     /// </summary>
     private async ValueTask<PartitionCounters> ProcessPartitionPipelinedAsync(
-        IEnumerable<OutboxMessage> messages, OutboxOptions options, DateTimeOffset now, CancellationToken ct)
+        IEnumerable<OutboxMessage> messages, OutboxOptions options, DeliveryPolicy policy, DateTimeOffset now, CancellationToken ct)
     {
         var processed = 0;
         var dead = 0;
         var retried = 0;
         var persistFailed = 0;
 
-        // R4/P0-2（ADR-027）：成功路径批量标记 opt-in（同串行路径；批序 = 出窗序 = 启动序）
-        var batchMark = options.BatchMarkThreshold > 1 && _store is IBatchMarkOutboxStore batchStore ? batchStore : null;
-        List<OutboxMessage>? markPending = batchMark is null ? null : new List<OutboxMessage>(Math.Min(options.BatchMarkThreshold, 64));
+        // R4/P0-2（ADR-027）：成功路径批量标记（同串行路径；批序 = 出窗序 = 启动序）
+        var batchMark = policy.BatchMarkThreshold > 1 && _store is IBatchMarkOutboxStore batchStore ? batchStore : null;
+        List<OutboxMessage>? markPending = batchMark is null ? null : new List<OutboxMessage>(Math.Min(policy.BatchMarkThreshold, 64));
+        var lastFlushAt = _timeProvider.GetTimestamp();
+
+        async ValueTask FlushMarksAsync(bool force, CancellationToken flushCt)
+        {
+            if (markPending is not { Count: > 0 })
+                return;
+            if (!force
+                && markPending.Count < policy.BatchMarkThreshold
+                && _timeProvider.GetElapsedTime(lastFlushAt) < policy.BatchMarkFlushInterval)
+                return;
+
+            var flushed = markPending.Count;
+            if (await TryFlushBatchMarkAsync(batchMark!, markPending, now, options, flushCt).ConfigureAwait(false))
+                checked { processed += flushed; }
+            else
+                checked { retried += flushed; }
+            lastFlushAt = _timeProvider.GetTimestamp();
+        }
 
         async ValueTask HandleDeadAsync(OutboxMessage msg, string reason)
         {
@@ -366,14 +403,8 @@ public sealed class OutboxBatchProcessor
                 {
                     // R4/P0-2：批量标记累积（成功路径；失败路径落下方 catch 逐条处置不变）
                     markPending!.Add(msg);
-                    if (markPending.Count >= options.BatchMarkThreshold)
-                    {
-                        var flushed = markPending.Count;
-                        if (await TryFlushBatchMarkAsync(batchMark, markPending, now, options, ct).ConfigureAwait(false))
-                            checked { processed += flushed; }
-                        else
-                            checked { retried += flushed; }
-                    }
+                    await FlushMarksAsync(
+                        force: markPending.Count >= policy.BatchMarkThreshold, ct).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -431,6 +462,7 @@ public sealed class OutboxBatchProcessor
         {
             foreach (var msg in messages)
             {
+                await FlushMarksAsync(force: false, ct).ConfigureAwait(false);
                 // 预处理（目录/反序列化失败即死信，不入窗）——镜像串行路径前置段
                 var descriptor = _messageCatalog.Find(msg.Type, msg.SchemaVersion);
                 if (descriptor is null)
@@ -438,17 +470,23 @@ public sealed class OutboxBatchProcessor
                     await HandleDeadAsync(msg, $"Type '{msg.Type}' not registered in MessageCatalog").ConfigureAwait(false);
                     continue;
                 }
-                var @event = _serializer.Deserialize(msg.Payload, descriptor);
-                if (@event is null)
+                // 2026-10-19：raw 路径不再反序列化；仅对象路径做 null 死信检查。
+                var raw = CanPublishRaw(msg, descriptor);
+                object? @event = null;
+                if (!raw)
                 {
-                    await HandleDeadAsync(msg, "Deserialization returned null").ConfigureAwait(false);
-                    continue;
+                    @event = _serializer.Deserialize(msg.Payload, descriptor);
+                    if (@event is null)
+                    {
+                        await HandleDeadAsync(msg, "Deserialization returned null").ConfigureAwait(false);
+                        continue;
+                    }
                 }
                 var publishContext = new Messaging.MessagePublishContext(
                     msg.CorrelationId, msg.CausationId, msg.TraceParent, msg.TraceState);
 
                 // 窗口满先收队头（维持上限——队头出窗保标记启动序）
-                while (window.Count >= options.MaxInFlightPublishes)
+                while (window.Count >= policy.PublishWindow)
                 {
                     var oldest = window.Dequeue();
                     await HandleOutcomeAsync(oldest.Message, oldest.Publish).ConfigureAwait(false);
@@ -459,7 +497,12 @@ public sealed class OutboxBatchProcessor
                 window.Enqueue((msg, PublishCoreAsync()));
 
                 async Task PublishCoreAsync()
-                    => await _broker.PublishAsync(@event, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
+                {
+                    if (raw)
+                        await _broker.PublishRawAsync(msg.Payload, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
+                    else
+                        await _broker.PublishAsync(@event!, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
+                }
             }
             while (window.Count > 0)
             {
@@ -469,15 +512,8 @@ public sealed class OutboxBatchProcessor
         }
         finally
         {
-            // R4/P0-2：批末冲刷残留累积（含 OCE 关停路径；终态写不响应取消——对齐串行路径）
-            if (markPending is { Count: > 0 })
-            {
-                var flushed = markPending.Count;
-                if (await TryFlushBatchMarkAsync(batchMark!, markPending, now, options, CancellationToken.None).ConfigureAwait(false))
-                    checked { processed += flushed; }
-                else
-                    checked { retried += flushed; }
-            }
+            // R4/P0-2：批末冲刷残留累积（含 OCE 关停路径——终态写不响应本次取消）
+            await FlushMarksAsync(force: true, CancellationToken.None).ConfigureAwait(false);
         }
 
         return new PartitionCounters(processed, dead, retried, persistFailed);
@@ -555,11 +591,57 @@ public sealed class OutboxBatchProcessor
         }
     }
 
+    /// <summary>
+    /// 是否可直发持久化字节：broker 支持 raw，且消息与描述符的 ContentType 都与当前
+    /// 序列化器一致。SchemaVersion 已由 <see cref="Serialization.IMessageCatalog.Find(string,int)"/>
+    /// 按存储版本解析，payload 与该描述符逐字节对应，无需再反序列化/重序列化。
+    /// </summary>
+    private bool CanPublishRaw(OutboxMessage msg, Serialization.MessageDescriptor descriptor)
+        => _broker.SupportsRawPublish
+           && string.Equals(msg.ContentType, _serializer.ContentType, StringComparison.OrdinalIgnoreCase)
+           && string.Equals(descriptor.ContentType, _serializer.ContentType, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 解析本批次的投递策略（2026-10-19 性能实施轮）。
+    /// <para>
+    /// Auto：broker 声明可并发发布时把窗口提升到至少 16；store 实现批量标记时把阈值
+    /// 提升到至少 16，并由 <see cref="OutboxOptions.BatchMarkFlushInterval"/> 加时间上界。
+    /// 能力不足时保留用户显式值（默认 1），不会替不支持并发的 broker 擅自升窗。
+    /// </para>
+    /// </summary>
+    private DeliveryPolicy ResolveDeliveryPolicy(OutboxOptions options)
+    {
+        if (options.DeliveryMode == OutboxDeliveryMode.Serial)
+            return new DeliveryPolicy(1, options.BatchMarkThreshold, TimeSpan.MaxValue);
+
+        var window = options.MaxInFlightPublishes;
+        if (_broker.SupportsConcurrentPublish)
+            window = Math.Max(window, 16);
+
+        var threshold = options.BatchMarkThreshold;
+        if (_store is IBatchMarkOutboxStore)
+            threshold = Math.Max(threshold, 16);
+
+        return new DeliveryPolicy(
+            window,
+            threshold,
+            threshold > 1 ? options.BatchMarkFlushInterval : TimeSpan.MaxValue);
+    }
+
+    private readonly record struct DeliveryPolicy(
+        int PublishWindow,
+        int BatchMarkThreshold,
+        TimeSpan BatchMarkFlushInterval);
+
     /// <summary>逐条持久化 — 每条消息处理后立即 SaveChanges，避免批次回滚。
     /// R2 修正（2026-09-20）：失败时调用方以 persistFailed 计数（不再混入 processed——
-    /// 指标与 DB 真相一致：processed 仅含落库成功的条目）。</summary>
+    /// 指标与 DB 真相一致：processed 仅含落库成功的条目）。
+    /// 2026-10-19：内置四栈的 Mark* 已即时写库（<see cref="IPalOutboxStore.RequiresSaveAfterMark"/>
+    /// 为 false），跳过纯空转的 SaveChanges；自定义延迟写 store 保持旧行为。</summary>
     private async ValueTask<bool> PersistSingleAsync(PalUlid messageId, CancellationToken ct)
     {
+        if (!_store.RequiresSaveAfterMark)
+            return true;
         try
         {
             await _store.SaveChangesAsync(ct).ConfigureAwait(false);
