@@ -142,6 +142,7 @@ var manualTools = new Dictionary<string, string>(StringComparer.Ordinal)
     // 2026-10-08 C# 化增补：hook-pre-commit/hook-pre-push 由 .githooks 启动器引用（接线扫描
     // 识别为 WIRED，不进本表）；template-gate 无 .githooks/CI 引用点（.ai 侧文档引用不算接线），按设计人工按需。
     ["template-gate"] = "AI 模板编译探针门禁（2026-10-08 自 .ai/scripts/template-gate.sh C# 化迁入；.pal/prompts 模板改动后人工运行——.ai 独立裁决不进 CI）",
+    ["eps-run"] = "EPSL 快速/全量编排器（2026-10-19 增；--full 为独占长跑，--quick 为核心门禁，按设计人工调用）",
 };
 
 // 应接线而未接线的（真缺口）——逐条登记原因与解锁条件
