@@ -693,22 +693,30 @@ P1 后框架可控成本占比与残余分配归属各做一次专门测量，�
 
 ## SQLite FTS5/JSON1 双栈 API 基准（2026-10-19，`--sqlgen`）
 
-新增 `--sqlgen` 聚焦车道（`Program.cs`），只跑 `SqlGenBenchmarks`，避免每次复测都启动整个 `--infra`。本轮同机 MediumRun + InProcess + MemoryDiagnoser，单轮 11 个基准，运行 23 秒。数字是绝对成本，不是与 v4 旧 API 的 A/B：旧入口已在破坏式清理中删除，没有同口径对照，故不声明百分比收益。
+新增 `--sqlgen` 聚焦车道（`Program.cs`），只跑 `SqlGenBenchmarks`，避免每次复测都启动整个 `--infra`。两轮均为同机 MediumRun + InProcess + MemoryDiagnoser，单轮 11 个基准，约 23 秒。第一轮是首版实现，第二轮是 2026-10-19 优化轮；两轮之差就是本轮优化的 A/B，不是与 v4 旧 API 的对照（旧入口已在破坏式清理中删除）。
 
-| 方法 | Mean | Allocated |
-|---|---:|---:|
-| `Sqlite_JsonExtract`（`Extract("payload","Type")`） | 1,888 ns | 344 B |
-| `Sqlite_JsonPath`（三段特殊键路径） | 1,052 ns | 248 B |
-| `Sqlite_JsonObjectParameters`（两组键值参数） | 1,829 ns | 440 B |
-| `Sqlite_FtsMatchParameter`（`MATCH @q` 片段） | 1,244 ns | 208 B |
-| `Sqlite_FtsCreateIndex`（Outbox standalone 完整定义 + `ToSql`） | 7,218 ns | 14,568 B |
-| `Sqlite_FtsCreateEventLogIndex`（EventLog standalone 完整定义 + `ToSql`） | 7,779 ns | 14,104 B |
+| 方法 | 优化前 Mean / Allocated | 优化后 Mean / Allocated | 分配变化 |
+|---|---:|---:|---:|
+| `Sqlite_JsonExtract`（`Extract("payload","Type")`） | 1,888 ns / 344 B | 1,278 ns / 128 B | −63% |
+| `Sqlite_JsonPath`（三段特殊键路径） | 1,052 ns / 248 B | 1,060 ns / 120 B | −52% |
+| `Sqlite_JsonObjectParameters`（两组键值参数） | 1,829 ns / 440 B | 1,312 ns / 176 B | −60% |
+| `Sqlite_FtsMatchParameter`（`MATCH @q` 片段） | 1,244 ns / 208 B | 1,021 ns / 64 B | −69% |
+| `Sqlite_FtsCreateIndex`（Outbox standalone 完整定义 + `ToSql`） | 7,218 ns / 14,568 B | 6,857 ns / 9,960 B | −32% |
+| `Sqlite_FtsCreateEventLogIndex`（EventLog standalone 完整定义 + `ToSql`） | 7,779 ns / 14,104 B | 6,289 ns / 9,632 B | −32% |
+
+优化内容：
+
+- `EscapeIdentifier` / `EscapeLiteral` / JSON 路径 / 函数调用 / 数组 / 对象 / 等值谓词改为先算精确长度、再用单次 `string.Create` 写出，去掉 `Replace` 中间字符串与 `StringBuilder` 缓冲。
+- `NormalizeParameterName` 对已带 `@` 的参数名返回原实例，不再 `name[1..]` 切片。
+- FTS 列名只转义一次，`NEW.` / `OLD.` / 重建 SELECT 列表用预转义数组直接拼接，去掉重复 LINQ `Select` 枚举。
+- `MatchLiteral` / `MatchParameter` 改为单次分配；`SqliteFtsIndexDefinition` 在构造期缓存默认 `JoinClause("s","m")`，重复查询零重复拼接。
 
 口径与归属：
 
-- JSON 片段与 MATCH 片段的分配由结果字符串与一次路径字面量构成，属字符串生成 API 的固有成本；核心已用显式循环与 `StringBuilder` 替代 LINQ 中间枚举，定义对象在构造期预计算 `Statements`/`ToSql`/`JoinClause`，调用期不再重复拼接。
-- FTS 定义约 14 KB 分配来自映射表、FTS5 虚表与三个触发器的 DDL 文本加外层定义对象；这是 schema 初始化操作，不属于请求热路径。把它做成硬预算会奖励缓存而非正确性，故不设 B/op 门禁。
-- 统计有效性：本轮为趋势观察，Error/Mean 见 bench 原始输出（`bench/bin/Release/net11.0/artifacts-medium`）；引用计时数字前按 `perf-budgets.md` §2 的 <5%/>15% 自评规则判断。
+- 分配是判定层，计时只作趋势。优化后部分基准的 Error/Mean 仍偏高（PostgreSql 基线漂移、MediumRun 单轮），时间变化按指示性解读；分配数字每轮确定，是主要证据。
+- `JsonExtract` 剩余的 128 B 含调用方 `params` 数组（约 32 B）与结果字符串；再降需要单段路径重载，属于公开 API 扩张，本轮刻意不做。
+- FTS 定义约 9.6~10 KB 分配来自映射表、FTS5 虚表与三个触发器的 DDL 文本加外层定义对象；这是 schema 初始化操作，不属于请求热路径。把它做成硬预算会奖励缓存而非正确性，故不设 B/op 门禁。
+- 引用计时数字前按 `perf-budgets.md` §2 的 <5%/>15% 自评规则判断。
 
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 

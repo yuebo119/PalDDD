@@ -9,6 +9,7 @@ namespace PalDDD.PalORM.Sqlite;
 public sealed class SqliteFtsIndexDefinition
 {
     private readonly string _sql;
+    private readonly string _defaultJoinClause;
 
     internal SqliteFtsIndexDefinition(FtsDefinitionCore core)
     {
@@ -23,6 +24,7 @@ public sealed class SqliteFtsIndexDefinition
         MappingTableName = core.MappingTableName;
         Statements = core.Statements;
         _sql = SqliteSqlCore.JoinStatements(core.Statements);
+        _defaultJoinClause = SqliteFtsCore.BuildJoinClause(core, "s", "m");
     }
 
     internal FtsDefinitionCore Core { get; }
@@ -65,7 +67,9 @@ public sealed class SqliteFtsIndexDefinition
     /// <param name="sourceAlias">调用方源表别名，默认 <c>s</c>。</param>
     /// <param name="mapAlias">standalone 映射表别名，默认 <c>m</c>；external-content 忽略。</param>
     public string JoinClause(string sourceAlias = "s", string mapAlias = "m")
-        => SqliteFtsCore.BuildJoinClause(Core, sourceAlias, mapAlias);
+        => sourceAlias == "s" && mapAlias == "m"
+            ? _defaultJoinClause
+            : SqliteFtsCore.BuildJoinClause(Core, sourceAlias, mapAlias);
 
     /// <summary>
     /// 重建索引：external-content 使用 FTS5 <c>rebuild</c> 命令；

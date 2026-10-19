@@ -48,23 +48,28 @@ internal static class SqliteFtsCore
         var index = SqliteSqlCore.EscapeIdentifier(indexName);
         var source = SqliteSqlCore.EscapeIdentifier(sourceTable);
         var rowid = SqliteSqlCore.EscapeIdentifier(rowidColumn);
-        var columnList = string.Join(", ", columns.Select(SqliteSqlCore.EscapeIdentifier));
+        var escapedColumns = EscapeIdentifiers(columns);
+        var columnList = JoinIdentifiers(escapedColumns);
         var options = BuildFtsOptions(tokenizer, prefixIndexes);
 
         var createIndex = $"CREATE VIRTUAL TABLE IF NOT EXISTS {index} USING fts5({columnList}, content={SqliteSqlCore.EscapeLiteral(sourceTable)}, content_rowid={SqliteSqlCore.EscapeLiteral(rowidColumn)}{options})";
-        var newValues = string.Join(", ", columns.Select(c => "NEW." + SqliteSqlCore.EscapeIdentifier(c)));
-        var oldValues = string.Join(", ", columns.Select(c => "OLD." + SqliteSqlCore.EscapeIdentifier(c)));
+        var newValues = JoinPrefixedIdentifiers(escapedColumns, "NEW.");
+        var oldValues = JoinPrefixedIdentifiers(escapedColumns, "OLD.");
 
         var createInsert = $"CREATE TRIGGER IF NOT EXISTS {SqliteSqlCore.EscapeIdentifier(triggerNames[0])} AFTER INSERT ON {source} BEGIN INSERT INTO {index}(rowid, {columnList}) VALUES (NEW.{rowid}, {newValues}); END";
         var createDelete = $"CREATE TRIGGER IF NOT EXISTS {SqliteSqlCore.EscapeIdentifier(triggerNames[1])} AFTER DELETE ON {source} BEGIN INSERT INTO {index}({index}, rowid, {columnList}) VALUES ('delete', OLD.{rowid}, {oldValues}); END";
         var createUpdate = $"CREATE TRIGGER IF NOT EXISTS {SqliteSqlCore.EscapeIdentifier(triggerNames[2])} AFTER UPDATE ON {source} BEGIN INSERT INTO {index}({index}, rowid, {columnList}) VALUES ('delete', OLD.{rowid}, {oldValues}); INSERT INTO {index}(rowid, {columnList}) VALUES (NEW.{rowid}, {newValues}); END";
+
+        var coreColumns = new FtsColumnCore[columns.Count];
+        for (var i = 0; i < columns.Count; i++)
+            coreColumns[i] = new FtsColumnCore(columns[i], false);
 
         return new FtsDefinitionCore(
             sourceTable,
             indexName,
             FtsIndexKind.ExternalContent,
             rowidColumn,
-            columns.Select(c => new FtsColumnCore(c, false)).ToArray(),
+            coreColumns,
             triggerNames,
             null,
             [createIndex, createInsert, createDelete, createUpdate]);
@@ -90,7 +95,10 @@ internal static class SqliteFtsCore
         var source = SqliteSqlCore.EscapeIdentifier(sourceTable);
         var key = SqliteSqlCore.EscapeIdentifier(sourceKeyColumn);
         var map = SqliteSqlCore.EscapeIdentifier(mappingTableName);
-        var columnList = string.Join(", ", columns.Select(c => SqliteSqlCore.EscapeIdentifier(c.Name)));
+        var escapedNames = new string[columns.Count];
+        for (var i = 0; i < columns.Count; i++)
+            escapedNames[i] = SqliteSqlCore.EscapeIdentifier(columns[i].Name);
+        var columnList = JoinIdentifiers(escapedNames);
         var options = BuildFtsOptions(tokenizer, prefixIndexes);
 
         var createMap = $"CREATE TABLE IF NOT EXISTS {map} (\"source_key\" TEXT UNIQUE NOT NULL, \"fts_rowid\" INTEGER PRIMARY KEY AUTOINCREMENT)";
@@ -98,7 +106,7 @@ internal static class SqliteFtsCore
 
         var newKey = $"CAST(NEW.{key} AS TEXT)";
         var oldKey = $"CAST(OLD.{key} AS TEXT)";
-        var newValues = string.Join(", ", columns.Select(c => NewValueExpression(c)));
+        var newValues = JoinNewValues(escapedNames, columns);
         var insertMap = $"INSERT INTO {map}(\"source_key\") VALUES ({newKey})";
         var insertIndex = $"INSERT INTO {index}(rowid, {columnList}) VALUES (last_insert_rowid(), {newValues})";
         var deleteIndex = $"DELETE FROM {index} WHERE rowid = (SELECT \"fts_rowid\" FROM {map} WHERE \"source_key\" = {oldKey})";
@@ -185,8 +193,11 @@ internal static class SqliteFtsCore
         var key = SqliteSqlCore.EscapeIdentifier(definition.KeyColumn);
         const string sourceAlias = "\"pal_src\"";
         const string mapAlias = "\"pal_map\"";
-        var columnList = string.Join(", ", definition.Columns.Select(c => SqliteSqlCore.EscapeIdentifier(c.Name)));
-        var selectValues = string.Join(", ", definition.Columns.Select(c => SelectValueExpression(c, sourceAlias)));
+        var escapedNames = new string[definition.Columns.Count];
+        for (var i = 0; i < definition.Columns.Count; i++)
+            escapedNames[i] = SqliteSqlCore.EscapeIdentifier(definition.Columns[i].Name);
+        var columnList = JoinIdentifiers(escapedNames);
+        var selectValues = JoinSelectValues(escapedNames, definition.Columns, sourceAlias);
 
         return
         [
@@ -223,16 +234,44 @@ internal static class SqliteFtsCore
     }
 
     internal static string MatchExpression(string index)
-        => SqliteSqlCore.EscapeIdentifier(index) + " MATCH";
+    {
+        var identifierLength = SqliteSqlCore.EscapedIdentifierLength(index);
+        var length = identifierLength + 6;
+        return string.Create(length, index, static (span, state) =>
+        {
+            var position = SqliteSqlCore.WriteEscapedIdentifier(span, state);
+            " MATCH".AsSpan().CopyTo(span[position..]);
+        });
+    }
 
     internal static string MatchLiteral(string index, string query)
     {
         ArgumentNullException.ThrowIfNull(query);
-        return MatchExpression(index) + " " + SqliteSqlCore.EscapeLiteral(query);
+        var identifierLength = SqliteSqlCore.EscapedIdentifierLength(index);
+        var literalLength = SqliteSqlCore.EscapedLiteralLength(query);
+        var length = identifierLength + 7 + literalLength;
+        return string.Create(length, (index, query), static (span, state) =>
+        {
+            var position = SqliteSqlCore.WriteEscapedIdentifier(span, state.index);
+            " MATCH ".AsSpan().CopyTo(span[position..]);
+            position += 7;
+            SqliteSqlCore.WriteEscapedLiteral(span[position..], state.query);
+        });
     }
 
     internal static string MatchParameter(string index, string parameterName)
-        => MatchExpression(index) + " " + SqliteSqlCore.NormalizeParameterName(parameterName);
+    {
+        var identifierLength = SqliteSqlCore.EscapedIdentifierLength(index);
+        var parameterLength = SqliteSqlCore.NormalizedParameterNameLength(parameterName);
+        var length = identifierLength + 7 + parameterLength;
+        return string.Create(length, (index, parameterName), static (span, state) =>
+        {
+            var position = SqliteSqlCore.WriteEscapedIdentifier(span, state.index);
+            " MATCH ".AsSpan().CopyTo(span[position..]);
+            position += 7;
+            SqliteSqlCore.WriteNormalizedParameterName(span[position..], state.parameterName);
+        });
+    }
 
     internal static string OrderByRank(string index, IReadOnlyList<double>? weights)
         => "ORDER BY " + Bm25(index, weights);
@@ -379,15 +418,155 @@ internal static class SqliteFtsCore
         }
     }
 
-    private static string NewValueExpression(FtsColumnCore column)
-        => column.CastToText
-            ? $"CAST(NEW.{SqliteSqlCore.EscapeIdentifier(column.Name)} AS TEXT)"
-            : "NEW." + SqliteSqlCore.EscapeIdentifier(column.Name);
+    private static string[] EscapeIdentifiers(IReadOnlyList<string> values)
+    {
+        var escaped = new string[values.Count];
+        for (var i = 0; i < values.Count; i++)
+            escaped[i] = SqliteSqlCore.EscapeIdentifier(values[i]);
+        return escaped;
+    }
 
-    private static string SelectValueExpression(FtsColumnCore column, string sourceAlias)
-        => column.CastToText
-            ? $"CAST({sourceAlias}.{SqliteSqlCore.EscapeIdentifier(column.Name)} AS TEXT)"
-            : $"{sourceAlias}.{SqliteSqlCore.EscapeIdentifier(column.Name)}";
+    private static string JoinIdentifiers(string[] escaped)
+    {
+        if (escaped.Length == 0)
+            return string.Empty;
+
+        var length = 0;
+        for (var i = 0; i < escaped.Length; i++)
+            length += escaped[i].Length + (i > 0 ? 2 : 0);
+
+        return string.Create(length, escaped, static (span, state) =>
+        {
+            var position = 0;
+            for (var i = 0; i < state.Length; i++)
+            {
+                if (i > 0)
+                {
+                    span[position++] = ',';
+                    span[position++] = ' ';
+                }
+
+                state[i].AsSpan().CopyTo(span[position..]);
+                position += state[i].Length;
+            }
+        });
+    }
+
+    private static string JoinPrefixedIdentifiers(string[] escaped, string prefix)
+    {
+        if (escaped.Length == 0)
+            return string.Empty;
+
+        var length = 0;
+        for (var i = 0; i < escaped.Length; i++)
+            length += prefix.Length + escaped[i].Length + (i > 0 ? 2 : 0);
+
+        return string.Create(length, (prefix, escaped), static (span, state) =>
+        {
+            var position = 0;
+            for (var i = 0; i < state.escaped.Length; i++)
+            {
+                if (i > 0)
+                {
+                    span[position++] = ',';
+                    span[position++] = ' ';
+                }
+
+                state.prefix.AsSpan().CopyTo(span[position..]);
+                position += state.prefix.Length;
+                state.escaped[i].AsSpan().CopyTo(span[position..]);
+                position += state.escaped[i].Length;
+            }
+        });
+    }
+
+    private static string JoinNewValues(string[] escapedNames, IReadOnlyList<FtsColumnCore> columns)
+    {
+        var length = 0;
+        for (var i = 0; i < columns.Count; i++)
+        {
+            length += escapedNames[i].Length + (columns[i].CastToText ? 18 : 4);
+            if (i > 0)
+                length += 2;
+        }
+
+        return string.Create(length, (escapedNames, columns), static (span, state) =>
+        {
+            var position = 0;
+            for (var i = 0; i < state.columns.Count; i++)
+            {
+                if (i > 0)
+                {
+                    span[position++] = ',';
+                    span[position++] = ' ';
+                }
+
+                if (state.columns[i].CastToText)
+                {
+                    "CAST(NEW.".AsSpan().CopyTo(span[position..]);
+                    position += 9;
+                    state.escapedNames[i].AsSpan().CopyTo(span[position..]);
+                    position += state.escapedNames[i].Length;
+                    " AS TEXT)".AsSpan().CopyTo(span[position..]);
+                    position += 9;
+                }
+                else
+                {
+                    "NEW.".AsSpan().CopyTo(span[position..]);
+                    position += 4;
+                    state.escapedNames[i].AsSpan().CopyTo(span[position..]);
+                    position += state.escapedNames[i].Length;
+                }
+            }
+        });
+    }
+
+    private static string JoinSelectValues(
+        string[] escapedNames,
+        IReadOnlyList<FtsColumnCore> columns,
+        string sourceAlias)
+    {
+        var length = 0;
+        for (var i = 0; i < columns.Count; i++)
+        {
+            length += sourceAlias.Length + 1 + escapedNames[i].Length;
+            if (columns[i].CastToText)
+                length += 14;
+            if (i > 0)
+                length += 2;
+        }
+
+        return string.Create(length, (sourceAlias, escapedNames, columns), static (span, state) =>
+        {
+            var position = 0;
+            for (var i = 0; i < state.columns.Count; i++)
+            {
+                if (i > 0)
+                {
+                    span[position++] = ',';
+                    span[position++] = ' ';
+                }
+
+                if (state.columns[i].CastToText)
+                {
+                    "CAST(".AsSpan().CopyTo(span[position..]);
+                    position += 5;
+                }
+
+                state.sourceAlias.AsSpan().CopyTo(span[position..]);
+                position += state.sourceAlias.Length;
+                span[position++] = '.';
+                state.escapedNames[i].AsSpan().CopyTo(span[position..]);
+                position += state.escapedNames[i].Length;
+
+                if (state.columns[i].CastToText)
+                {
+                    " AS TEXT)".AsSpan().CopyTo(span[position..]);
+                    position += 9;
+                }
+            }
+        });
+    }
 
     private static async Task<Dictionary<string, ColumnInfo>> ReadTableInfoAsync(
         DbConnection connection,
