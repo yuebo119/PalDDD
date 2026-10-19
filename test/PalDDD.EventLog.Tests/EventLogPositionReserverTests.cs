@@ -48,6 +48,28 @@ public sealed class EventLogPositionReserverTests
     }
 
     [Test]
+    public async Task ReserveAsync_ConcurrentChunkBoundary_ReusesAllocatedChunk(CancellationToken cancellationToken)
+    {
+        await using var db = new CountingSaveEventLogDbContext(CreateCountingOptions());
+        var reserver = new EventLogPositionReserver(chunkSize: 32);
+
+        // 填满第一个块 [0..31]
+        var first = await reserver.ReserveAsync(db, count: 32, cancellationToken);
+        await Assert.That(first).IsEqualTo(0);
+        var savesAfterPrefill = db.SaveChangesCount;
+
+        // 32 个并发等待者同时撞块边界：首个分配新块，其余必须在信号量内复查并复用。
+        var results = await Task.WhenAll(Enumerable.Range(0, 16)
+            .Select(_ => reserver.ReserveAsync(db, count: 1, cancellationToken).AsTask()));
+
+        await Assert.That(results.Distinct().Count()).IsEqualTo(16);
+        await Assert.That(results.Min()).IsEqualTo(32);
+        await Assert.That(results.Max()).IsEqualTo(47);
+        // 旧实现每个等待者各取一块（16 次 SaveChanges + 15 个块的浪费）；新实现只分配 1 块。
+        await Assert.That(db.SaveChangesCount - savesAfterPrefill).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task ReserveAsync_ExhaustsChunkAndAllocatesNewOne(CancellationToken cancellationToken)
     {
         await using var db = new TestEventLogDbContext(CreateOptions());

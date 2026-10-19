@@ -126,6 +126,12 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
     private readonly CancellationTokenSource _cts;
     private readonly string _runId;
 
+    // 附着等待信号（2026-10-19 性能实施轮）：替代 Monitor.Wait 的线程阻塞形态。
+    // 容量 1 + Release 前判 CurrentCount，多个 Append 合并为一次唤醒（消费者每次取走
+    // 当前缓冲内的全部可见项，重复信号无意义）。等待超时复用 WaitAsync(ms, ct)，
+    // 与旧 Monitor.Wait(ms) 的返回值语义一一对应：true=被唤醒，false=心跳超时。
+    private readonly SemaphoreSlim _signal = new(0, 1);
+
     private int _start;               // 环形缓冲最旧项的位置
     private int _count;               // 缓冲中项数
     private long _oldestAvailable;    // 缓冲中最旧项的逻辑 index
@@ -135,6 +141,7 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
     private int _attachCount;
     private int _attachGeneration;
     private CancellationTokenSource? _graceCts;
+    private bool _scopeDisposed;
     private bool _disposed;
 
     public StreamRun(
@@ -252,7 +259,7 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         {
             try
             {
-                Finish(state, failure, produced);
+                await FinishAsync(state, failure, produced).ConfigureAwait(false);
                 // 终态计数与普通流式读共用同一组计数器（零 tag 纪律）；取消独立于失败。
                 // 项吞吐按「已产出」计：缓冲溢出丢弃的项也计入产出，与 StreamItems 语义一致。
                 switch (state)
@@ -293,17 +300,29 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
             _buffer[(_start + _count) % _buffer.Length] = item;
             _count++;
             _nextIndex = item.Index + 1;
-            Monitor.PulseAll(_gate);
+            SignalWaitersLocked();
         }
     }
 
-    private void Finish(StreamRunState state, Exception? failure, int produced)
+    /// <summary>唤醒附着等待者；调用方必须持有 <see cref="_gate"/>。</summary>
+    /// <remarks>
+    /// 容量 1 的信号量在已有一枚未消费信号时不再 Release（否则抛 SemaphoreFullException）。
+    /// 消费者每轮取出当前全部可见项，因此合并唤醒不丢项；允许最多出现一次空唤醒
+    /// （信号在无等待者时被留下），下一轮会立即重新进入等待。
+    /// </remarks>
+    private void SignalWaitersLocked()
+    {
+        if (_signal.CurrentCount == 0)
+            _signal.Release();
+    }
+
+    private async ValueTask FinishAsync(StreamRunState state, Exception? failure, int produced)
     {
         lock (_gate)
         {
             _state = state;
             _terminalAt = _timeProvider.GetUtcNow();
-            Monitor.PulseAll(_gate);
+            SignalWaitersLocked();
         }
         _graceCts?.Cancel(); // 终态：宽限计时不再有意义
         if (_logger is not null && _logger.IsEnabled(LogLevel.Debug))
@@ -312,7 +331,42 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
                 ? $"Stream run {_runId}: {state} after {produced} item(s)"
                 : $"Stream run {_runId}: {state} after {produced} item(s): {failure.GetType().Name}");
         }
-        _scope?.Dispose(); // run 自有 scope 随 run 终态释放（见文件头作用域所有权）
+        // 2026-10-19 性能实施轮：scope 释放推迟到「终态且无附着」。
+        // 原实现终态立即 Dispose，附着方可能正持有一批已拷贝出锁的项在锁外序列化，
+        // 其中若引用 scoped 资源会在 scope 释放后失效；同步 Dispose 还会阻塞泵线程。
+        var scope = TryTakeScopeForDisposalLocked();
+        if (scope is not null)
+            await DisposeScopeAsync(scope).ConfigureAwait(false);
+    }
+
+    /// <summary>终态且无附着时取走 scope 并标记已释放；调用方负责在锁外释放。</summary>
+    private IServiceScope? TryTakeScopeForDisposalLocked()
+    {
+        lock (_gate)
+        {
+            if (_scopeDisposed || _scope is null || _state == StreamRunState.Running || _attachCount > 0)
+                return null;
+            _scopeDisposed = true;
+            return _scope;
+        }
+    }
+
+    [SuppressMessage("Design", "CA1031",
+        Justification = "scope 释放失败不得影响 run 终态与附着收尾；异步释放仅记录告警。")]
+    private async ValueTask DisposeScopeAsync(IServiceScope scope)
+    {
+        try
+        {
+            if (scope is IAsyncDisposable asyncScope)
+                await asyncScope.DisposeAsync().ConfigureAwait(false);
+            else
+                scope.Dispose();
+        }
+        catch (Exception ex)
+        {
+            if (_logger is not null && _logger.IsEnabled(LogLevel.Warning))
+                _logger.Warning($"Stream run {_runId}: scope disposal failed: {ex.GetType().Name}");
+        }
     }
 
     /// <summary>取消 run（幂等；终态后为 no-op）。</summary>
@@ -321,11 +375,11 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         try
         {
             _cts.Cancel();
-            // 唤醒可能在 Monitor.Wait 中等待的附着者：取消后无新项 Append，若不 Pulse
+            // 唤醒可能在等待中的附着者：取消后无新项 Append，若不唤醒
             // 附着者要等 waitMilliseconds 超时才能看到终态（KeepAlive 间隔可达 30s，
             // 表现为「取消后连接僵死」——DetachGrace 测试实测挂起的根因之一）
             lock (_gate)
-                Monitor.PulseAll(_gate);
+                SignalWaitersLocked();
         }
         catch (ObjectDisposedException)
         {
@@ -353,9 +407,9 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
             _graceCts = null;
             (startIndex, gap) = ResolveStartLocked(lastEventId);
             // 立即唤醒旧附着的等待者：让它马上看到代际不匹配并发 detached 收尾
-            //（不 Pulse 则旧连接要等下一次 Wait 超时——keepAlive 间隔最长 30s 量级，
+            //（不唤醒则旧连接要等下一次 Wait 超时——keepAlive 间隔最长 30s 量级，
             // 接管帧迟迟不到，客户端感知为连接僵死）
-            Monitor.PulseAll(_gate);
+            SignalWaitersLocked();
         }
         // 附着计数在锁外递增：MeterListener 回调属用户代码，不在注册表锁内执行
         //（RejectNewAttach 拒绝路径已在锁内提前返回，不计）
@@ -394,7 +448,7 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
     }
 
     /// <summary>释放附着；最后一个附着离开且 run 仍运行则启动宽限计时（ADR-031 D3）。</summary>
-    public void ReleaseAttachment()
+    public async ValueTask ReleaseAttachmentAsync()
     {
         CancellationTokenSource? grace = null;
         lock (_gate)
@@ -423,6 +477,11 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
                 Cancel(); // 宽限期满仍无附着：终止 run，不白烧 token
             });
         }
+
+        // 终态后最后一个附着离开才释放 scope（见 FinishAsync 注释）
+        var scope = TryTakeScopeForDisposalLocked();
+        if (scope is not null)
+            await DisposeScopeAsync(scope).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -458,6 +517,7 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
                 var superseded = false;
                 var terminal = false;
                 var heartbeat = false;
+                var wait = false;
 
                 lock (_gate)
                 {
@@ -489,11 +549,21 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
                         }
                         else
                         {
-                            // 无新项：按心跳间隔（无心跳时 500ms）等待 Append/Finish 的 PulseAll
-                            var signaled = Monitor.Wait(_gate, waitMilliseconds);
-                            heartbeat = !signaled && keepAliveInterval is not null;
+                            // 无新项：锁外异步等待 Append/Finish/Cancel 的信号。
+                            // 旧实现 Monitor.Wait 在此阻塞线程池线程，空闲附着数一多即线程饥饿。
+                            wait = true;
                         }
                     }
+                }
+
+                if (wait)
+                {
+                    // true=被 Append/Finish/Cancel/接管唤醒；false=等待期满（有心跳则写心跳）
+                    var signaled = await _signal.WaitAsync(waitMilliseconds, ct).ConfigureAwait(false);
+                    heartbeat = !signaled && keepAliveInterval is not null;
+                    if (!signaled)
+                        ct.ThrowIfCancellationRequested();
+                    continue;
                 }
 
                 if (gap && batch is null && !superseded && !terminal)
@@ -546,7 +616,7 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         }
         finally
         {
-            ReleaseAttachment();
+            await ReleaseAttachmentAsync().ConfigureAwait(false);
         }
     }
 
@@ -576,14 +646,42 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         PalMetrics.StreamGap.Add(1);
     }
 
+    [SuppressMessage("Design", "CA1031",
+        Justification = "run 释放路径必须对任意用户 Dispose 异常免疫，否则 Timer/停机线程被未处理异常终止；异常仅记录。")]
     public void Dispose()
     {
         if (_disposed)
             return;
         _disposed = true;
+        try
+        {
+            _cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // 已释放：终态语义已满足
+        }
+        lock (_gate)
+            SignalWaitersLocked();
         _graceCts?.Dispose();
         _cts.Dispose();
-        _scope?.Dispose();
+        if (!_scopeDisposed)
+        {
+            _scopeDisposed = true;
+            try
+            {
+                _scope?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                if (_logger is not null && _logger.IsEnabled(LogLevel.Warning))
+                    _logger.Warning($"Stream run {_runId}: scope disposal failed during Dispose: {ex.GetType().Name}");
+            }
+        }
+        // 仅在没有附着时释放信号量：Dispose 正常路径由 Sweep 在 attachCount==0 后调用；
+        // 宿主停机与附着并发时留给 GC，避免等待方观察到 ObjectDisposedException。
+        if (AttachedCount == 0)
+            _signal.Dispose();
     }
 }
 
@@ -697,6 +795,8 @@ internal sealed class StreamRunRegistry : IDisposable
         return true;
     }
 
+    [SuppressMessage("Design", "CA1031",
+        Justification = "Timer 回调不得因单个 run 的 Dispose 失败而终止进程；逐 run 记录告警并继续清理。")]
     private void Sweep()
     {
         var now = _timeProvider.GetUtcNow();
@@ -708,18 +808,54 @@ internal sealed class StreamRunRegistry : IDisposable
                 continue;
             if (_runs.TryRemove(runId, out var removed))
             {
-                removed.Dispose();
-                if (_registryLogger is not null && _registryLogger.IsEnabled(LogLevel.Debug))
-                    _registryLogger.Debug($"Detached stream run {runId}: evicted after retention");
+                // Timer 回调抛异常会作为未处理异常终止进程；单个 run 的 Dispose 失败
+                // （用户服务的 Dispose 可抛）必须隔离并继续清理其余 run。
+                try
+                {
+                    removed.Dispose();
+                    if (_registryLogger is not null && _registryLogger.IsEnabled(LogLevel.Debug))
+                        _registryLogger.Debug($"Detached stream run {runId}: evicted after retention");
+                }
+                catch (Exception ex)
+                {
+                    if (_registryLogger is not null)
+                        _registryLogger.Warning($"Detached stream run {runId}: eviction failed: {ex.GetType().Name}");
+                }
             }
         }
     }
 
+    [SuppressMessage("Design", "CA1031",
+        Justification = "注册表停机释放必须对任意 run 的 Cancel/Dispose 异常免疫，逐 run 记录后继续。")]
     public void Dispose()
     {
         _sweeper.Dispose();
+        // 先取消再释放：CancellationTokenSource.Dispose 不会触发取消，泵可能已在释放的
+        // scope 上继续运行；显式 Cancel 让 handler 的 finally 先执行。
         foreach (var run in _runs.Values)
-            run.Dispose();
+        {
+            try
+            {
+                run.Cancel();
+            }
+            catch (Exception ex)
+            {
+                if (_registryLogger is not null && _registryLogger.IsEnabled(LogLevel.Warning))
+                    _registryLogger.Warning($"Detached stream run cancel during dispose failed: {ex.GetType().Name}");
+            }
+        }
+        foreach (var run in _runs.Values)
+        {
+            try
+            {
+                run.Dispose();
+            }
+            catch (Exception ex)
+            {
+                if (_registryLogger is not null && _registryLogger.IsEnabled(LogLevel.Warning))
+                    _registryLogger.Warning($"Detached stream run dispose failed: {ex.GetType().Name}");
+            }
+        }
         _runs.Clear();
     }
 }

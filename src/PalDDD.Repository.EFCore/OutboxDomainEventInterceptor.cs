@@ -75,6 +75,10 @@ public sealed class OutboxDomainEventInterceptor(
     /// 禁止与 <c>AddDbContextPool</c> 组合使用（池化下拦截器实例跨请求共享，见类 remarks ITM-640）。</summary>
     private readonly List<Core.DomainEvent> _pending = [];
 
+    /// <summary>2026-10-19 性能实施轮：本轮收集到领域事件的实体引用——SaveChanges 成功后
+    /// 只清理这些实体，避免第二次全量 ChangeTracker 扫描（成本随被跟踪实体数增长）。</summary>
+    private readonly List<Core.Entity> _eventEntities = [];
+
     /// <summary>ITM-227：本轮由拦截器注入的 OutboxMessage ID——SaveChanges 失败时只 Detach 这些，不影响调用方自己 Add 的消息。</summary>
     private readonly HashSet<ByteAether.Ulid.Ulid> _injectedOutboxIds = [];
 
@@ -90,7 +94,8 @@ public sealed class OutboxDomainEventInterceptor(
         ArgumentNullException.ThrowIfNull(eventData);
 
         _pending.Clear();
-        DomainEventCollector.Collect(eventData.Context, _pending);
+        _eventEntities.Clear();
+        DomainEventCollector.Collect(eventData.Context, _pending, _eventEntities);
         // 轮四（2026-10-10）：异步路径分派——立即写 store（Dapper/PalORM/InMemory，
         // IImmediateWriteOutboxStore）走单次异步批量（多事件合并单往返 + 消除逐条同步写的
         // 往返级线程阻塞）；EF store（延迟写族）走逐条异步路径（v4.0 ③：跟踪添加同步完成）。
@@ -113,7 +118,8 @@ public sealed class OutboxDomainEventInterceptor(
         ArgumentNullException.ThrowIfNull(eventData);
 
         _pending.Clear();
-        DomainEventCollector.Collect(eventData.Context, _pending);
+        _eventEntities.Clear();
+        DomainEventCollector.Collect(eventData.Context, _pending, _eventEntities);
         WriteEventsToOutbox(eventData.Context, _pending);
         return base.SavingChanges(eventData, result);
     }
@@ -126,7 +132,8 @@ public sealed class OutboxDomainEventInterceptor(
     {
         ArgumentNullException.ThrowIfNull(eventData);
 
-        DomainEventCollector.Clear(eventData.Context);
+        DomainEventCollector.Clear(_eventEntities);
+        _eventEntities.Clear();
         _pending.Clear();
         _injectedOutboxIds.Clear();
         return await base.SavedChangesAsync(eventData, result, cancellationToken).ConfigureAwait(false);
@@ -138,7 +145,8 @@ public sealed class OutboxDomainEventInterceptor(
     {
         ArgumentNullException.ThrowIfNull(eventData);
 
-        DomainEventCollector.Clear(eventData.Context);
+        DomainEventCollector.Clear(_eventEntities);
+        _eventEntities.Clear();
         _pending.Clear();
         _injectedOutboxIds.Clear();
         return base.SavedChanges(eventData, result);
@@ -169,6 +177,7 @@ public sealed class OutboxDomainEventInterceptor(
             eventData.Exception?.Data["PalOutboxCleanupFailure"] = cleanupEx.ToString();
         }
         _pending.Clear();
+        _eventEntities.Clear();
         await base.SaveChangesFailedAsync(eventData, cancellationToken).ConfigureAwait(false);
     }
 
@@ -191,6 +200,7 @@ public sealed class OutboxDomainEventInterceptor(
             eventData.Exception?.Data["PalOutboxCleanupFailure"] = cleanupEx.ToString();
         }
         _pending.Clear();
+        _eventEntities.Clear();
         base.SaveChangesFailed(eventData);
     }
 
@@ -218,7 +228,7 @@ public sealed class OutboxDomainEventInterceptor(
     // 外层主 catch (Exception) 本就 rethrow 不触发本规约
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
         Justification = "部分注入清理必须对任意异常免疫，清理失败挂原始异常 Data 供诊断而非替换之。")]
-    private void WriteEventsToOutbox(Microsoft.EntityFrameworkCore.DbContext? context, IReadOnlyList<Core.DomainEvent> events)
+    private void WriteEventsToOutbox(Microsoft.EntityFrameworkCore.DbContext? context, List<Core.DomainEvent> events)
     {
         // v34 P2 修复：注入循环整体纳入自清理域——EF 源码实证 SavingChanges(Async) 的
         // 派发点位于 DbContext.SaveChanges 的 try 块之前，拦截器自身抛异常（catalog
@@ -231,6 +241,22 @@ public sealed class OutboxDomainEventInterceptor(
         // 已注入行滞留至同 scope 重试；详见类 remarks（多拦截器场景 v4.0 收敛）。
         try
         {
+            // 2026-10-19 性能实施轮（ADR-026 同步钩子文档化阻塞桥）：同步 SaveChanges 对
+            // 立即写 store 也走一次批量调用（原逐事件阻塞桥在远程库上 k 个事件 = k 次往返）。
+            // EF store 的 AddMessageAsync 是跟踪添加（同步完成），走下方逐条路径。
+            if (_outboxStore is Transactions.IImmediateWriteOutboxStore immediate)
+            {
+                var messages = new List<Transactions.OutboxMessage>(events.Count);
+                foreach (var evt in events)
+                    messages.Add(BuildOutboxMessage(evt));
+
+                // ADR-026：同步钩子无异步可用，单点阻塞桥（批量形态）
+                immediate.AddMessagesAsync(messages).AsTask().GetAwaiter().GetResult();
+                foreach (var msg in messages)
+                    _injectedOutboxIds.Add(msg.Id);
+                return;
+            }
+
             foreach (var evt in events)
             {
                 var msg = BuildOutboxMessage(evt);
@@ -344,7 +370,7 @@ public sealed class OutboxDomainEventInterceptor(
         var descriptor = _messageCatalog.Find(evt.GetType())
             ?? throw new InvalidOperationException(
                 $"Domain event '{evt.GetType().FullName}' is not registered in MessageCatalog.");
-        var payload = _serializer.Serialize((object)evt, descriptor);
+        var payload = _serializer.SerializeToArray((object)evt, descriptor);
         // P1 修复（七轮评审）：evt 静态类型是 abstract DomainEvent——泛型重载
         // Serialize<DomainEvent>(evt, descriptor) 绑定基类 JsonTypeInfo 与派生 descriptor
         // 不匹配（InvalidCastException）。显式 (object) 强转走非泛型 Serialize(object, descriptor)
@@ -352,7 +378,7 @@ public sealed class OutboxDomainEventInterceptor(
         return new Transactions.OutboxMessage
         {
             Type = descriptor.Name,
-            Payload = payload.ToArray(),
+            Payload = payload, // 2026-10-19：SerializeToArray 已交还独立数组，消除二次 ToArray 复制
             ContentType = _serializer.ContentType,
             SchemaVersion = descriptor.SchemaVersion,
             // ITM-103 修复：CausationId 不再自指——原 `CausationId = evt.EventId` 使 outbox 行
@@ -379,32 +405,36 @@ public sealed class OutboxDomainEventInterceptor(
 /// </summary>
 internal static class DomainEventCollector
 {
-    public static void Collect(Microsoft.EntityFrameworkCore.DbContext? context, List<Core.DomainEvent> events)
+    public static void Collect(
+        Microsoft.EntityFrameworkCore.DbContext? context,
+        List<Core.DomainEvent> events,
+        List<Core.Entity> eventEntities)
     {
         ArgumentNullException.ThrowIfNull(events);
+        ArgumentNullException.ThrowIfNull(eventEntities);
 
         if (context is null)
             return;
 
-        foreach (var entry in context.ChangeTracker.Entries())
+        // 2026-10-19 性能实施轮：按 Core.Entity 类型过滤（原 Entries() 遍历全部被跟踪实体，
+        // 含大量非实体/非领域模型条目）；同时记录命中实体，SavedChanges 只清理这些引用。
+        foreach (var entry in context.ChangeTracker.Entries<Core.Entity>())
         {
-            if (entry.Entity is Core.Entity { HasDomainEvents: true } entity)
+            if (entry.Entity is { HasDomainEvents: true } entity)
             {
+                eventEntities.Add(entity);
                 foreach (var evt in entity.DomainEvents())
                     events.Add(evt);
             }
         }
     }
 
-    public static void Clear(Microsoft.EntityFrameworkCore.DbContext? context)
+    public static void Clear(IReadOnlyList<Core.Entity> eventEntities)
     {
-        if (context is null)
-            return;
+        ArgumentNullException.ThrowIfNull(eventEntities);
 
-        foreach (var entry in context.ChangeTracker.Entries())
-        {
-            if (entry.Entity is Core.Entity { HasDomainEvents: true } entity)
-                entity.ClearDomainEvents();
-        }
+        // 只清理本轮收集到事件的实体（SavingChanges 已记录），无需二次全量扫描。
+        foreach (var entity in eventEntities)
+            entity.ClearDomainEvents();
     }
 }

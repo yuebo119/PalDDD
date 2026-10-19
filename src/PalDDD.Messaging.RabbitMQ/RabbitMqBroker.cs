@@ -85,12 +85,18 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         _channel = channel;
         _logger = logger;
         _prefetchCount = prefetchCount;
+        // 发布 channel 的 publisher confirms 保证同一 channel 内的帧序；并发发布
+        // 由 channel 内部确认跟踪串行化，Outbox 窗口可安全启用。
+        SupportsConcurrentPublish = true;
 
         // L5（perf-opt-sweep，2026-09-20）：发布超时指引——框架不包装 PublishAsync 超时
         //（透传调用方 ct）；半坏 broker 下的等待时长由注入的 IConnection/ChannelOptions
         // 控制（publisher confirmations + continuation timeout，见 CreateChannelOptions
         // 使用方配置）。此处仅声明，不改写使用方的连接配置。
     }
+
+    /// <inheritdoc />
+    public override bool SupportsConcurrentPublish { get; }
 
     // ITM-639：outstanding publisher confirms 上限——对齐 RabbitMQ.Client 文档所述默认
     // 并发阈值 128，防确认跟踪下未确认消息无界堆积（内存膨胀）。
@@ -177,35 +183,12 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         ArgumentOutOfRangeException.ThrowIfEqual(messageId, default);
 
         var exchange = descriptor.Name;
-        // P2 修复（八轮评审）：声明任务化——首个发布者 GetOrAdd 占位声明 Task，并发发布者
-        // await 同一任务，杜绝"声明飞行中他人直接 publish → exchange 不存在 404 → channel 被服务端关闭"。
-        // P3 修复（十七轮）：声明任务不连坐——原 lambda 透传首个发布者的 ct，其取消使缓存的
-        // 声明任务进入 Canceled，并发 await 同一声明的其他发布者（自身 ct 未取消）被 OCE 连坐。
-        // 声明幂等无业务副作用，改用 CancellationToken.None 使声明独立于单个发布者的生命周期；
-        // 发布取消语义由下方 BasicPublishAsync(ct) 独立承担。
-        var declaration = _exchangeDeclarations.GetOrAdd(
-            exchange,
-            static (name, channel) => channel.ExchangeDeclareAsync(
-                name, ExchangeType.Fanout, durable: true, cancellationToken: CancellationToken.None),
-            _channel);
-        try
-        {
-            await declaration.ConfigureAwait(false);
-        }
-        catch
-        {
-            // P2 修复：声明失败回滚占位——仅当字典中仍是本失败任务时移除（不误删他人重试的新任务），下次发布重新声明
-            _exchangeDeclarations.TryRemove(new KeyValuePair<string, Task>(exchange, declaration));
-            throw;
-        }
+        var cachedExchange = await EnsureExchangeAsync(exchange).ConfigureAwait(false);
 
         // A2：IBufferWriter 直写 + WrittenMemory 直传（免精确尺寸 ToArray 拷贝）；
         // using 保证发布抛出后缓冲归还池（池化 writer 无 Clear 复位需求，天然干净入口）
         using var bodyWriter = new PooledBodyWriter(InitialBodyBufferBytes);
         Serializer.Serialize(message, descriptor, bodyWriter);
-        // 优化（二十五轮 R-1）：CachedString 重载——缓存 exchange 名的 UTF-8 字节表示
-        // （免每发布 string→bytes 编码分配；XML 证实 BasicPublishAsync(CachedString,...) 存在）
-        var cachedExchange = _cachedExchanges.GetOrAdd(exchange, static name => new CachedString(name));
         // ITM-213 修复（三十二轮）：mandatory:true——无绑定队列时发布抛 PublishException，
         // 不再静默丢弃（原 mandatory:false 使 Outbox 标记 Processed 但消息实际未路由）。
         // ITM-639：该语义仅在 channel 启用 publisher confirms（含 confirmation tracking）时
@@ -238,6 +221,74 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         // 优化（二十五轮 Z-1）：同 KafkaBroker——Debug 级门控免白做插值
         if (_logger.IsEnabled(LogLevel.Debug))
             _logger.Debug($"Published message {descriptor.ClrType.Name} to exchange {exchange}");
+    }
+
+    /// <inheritdoc />
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static",
+        Justification = "接口成员必须为实例成员；能力值由 broker 实现类型决定。")]
+    public override bool SupportsRawPublish => true;
+
+    /// <inheritdoc />
+    public override async ValueTask PublishRawAsync(
+        ReadOnlyMemory<byte> payload,
+        MessageDescriptor descriptor,
+        PalUlid messageId,
+        MessagePublishContext context,
+        CancellationToken ct = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        ArgumentNullException.ThrowIfNull(descriptor);
+        ArgumentOutOfRangeException.ThrowIfEqual(messageId, default);
+
+        var exchange = descriptor.Name;
+        var cachedExchange = await EnsureExchangeAsync(exchange).ConfigureAwait(false);
+        try
+        {
+            await _channel.BasicPublishAsync(
+                exchange: cachedExchange,
+                routingKey: CachedString.Empty,
+                mandatory: true,
+                basicProperties: CreateProperties(descriptor, messageId, context),
+                body: payload,
+                cancellationToken: ct).ConfigureAwait(false);
+        }
+        catch (PublishReturnException ex)
+        {
+            _logger.Warning(
+                $"Message not routed (NO_ROUTE) to exchange {ex.Exchange}, routingKey={ex.RoutingKey}, " +
+                $"reply={ex.ReplyCode} {ex.ReplyText}: {descriptor.ClrType.Name}");
+            throw;
+        }
+
+        if (_logger.IsEnabled(LogLevel.Debug))
+            _logger.Debug($"Published message {descriptor.ClrType.Name} to exchange {exchange}");
+    }
+
+    /// <summary>
+    /// 声明 exchange 并返回 CachedString（对象发布与 raw 发布共用单一出处）。
+    /// 声明任务化：并发发布者 await 同一任务，杜绝“声明飞行中直接 publish → 404 关 channel”；
+    /// 声明任务不连坐（CancellationToken.None），发布取消由各发布调用独立承担。
+    /// </summary>
+    private async ValueTask<CachedString> EnsureExchangeAsync(string exchange)
+    {
+        var declaration = _exchangeDeclarations.GetOrAdd(
+            exchange,
+            static (name, channel) => channel.ExchangeDeclareAsync(
+                name, ExchangeType.Fanout, durable: true, cancellationToken: CancellationToken.None),
+            _channel);
+        try
+        {
+            await declaration.ConfigureAwait(false);
+        }
+        catch
+        {
+            // 声明失败回滚占位——仅当字典中仍是本失败任务时移除，下次发布重新声明
+            _exchangeDeclarations.TryRemove(new KeyValuePair<string, Task>(exchange, declaration));
+            throw;
+        }
+
+        // CachedString 重载缓存 exchange 名的 UTF-8 字节表示，免每发布 string→bytes 编码分配
+        return _cachedExchanges.GetOrAdd(exchange, static name => new CachedString(name));
     }
 
     private static BasicProperties CreateProperties(
@@ -345,7 +396,8 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         {
             try
             {
-                var message = Serializer.Deserialize(ea.Body.Span, descriptor);
+                // 2026-10-19 性能实施轮：泛型反序列化，免运行时 Type 查找与值类型装箱。
+                TMessage? message = Serializer.Deserialize<TMessage>(ea.Body.Span, descriptor);
                 if (message is not null)
                 {
                     // P2 修复（八轮评审）：消费端还原追踪头——写侧 CreateHeaders 的镜像，
@@ -381,7 +433,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                     }
                     using (deliveryCts)
                     {
-                        await handler((TMessage)message, consumeContext, deliveryCts.Token).ConfigureAwait(false);
+                        await handler(message, consumeContext, deliveryCts.Token).ConfigureAwait(false);
                         // 手动确认 — 仅在处理成功后 ACK
                         // P3 修复：ACK 与 Nack 同样加保护——channel 已关时异常逃逸进消费者回调
                         await TryAckSafeAsync(ea.DeliveryTag, queueName).ConfigureAwait(false);

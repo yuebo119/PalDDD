@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 
 namespace PalDDD.Serialization.Json;
@@ -226,6 +227,22 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         ArgumentNullException.ThrowIfNull(descriptor);
 
         return System.Text.Json.JsonSerializer.Deserialize(payload, descriptor.JsonTypeInfo);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <see cref="Serialize(object, MessageDescriptor)"/> 已由 <c>WrittenSpan.ToArray()</c>
+    /// 产出独立精确数组；本方法命中时直接交还该数组，不再复制。
+    /// </remarks>
+    public byte[] SerializeToArray(object message, MessageDescriptor descriptor)
+    {
+        var payload = Serialize(message, descriptor);
+        if (MemoryMarshal.TryGetArray(payload, out var segment)
+            && segment.Array is { } array
+            && segment.Offset == 0
+            && segment.Count == array.Length)
+            return array;
+        return payload.ToArray();
     }
 
     /// <inheritdoc />

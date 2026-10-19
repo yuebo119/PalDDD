@@ -100,7 +100,7 @@
 |---|---|---|
 | 后台调度 | 周期轮询 + 满批自适应排空（让步 1ms 立即续批），PollInterval 支持热读 | `OutboxProcessor` / `PeriodicBackgroundProcessor` |
 | 原子租约 | LeasePending 原子认领，MaxDegreeOfParallelism 分区并行且每 worker 独立 DI scope | `OutboxBatchProcessor`、`IPalOutboxStore`（OutboxStore.cs） |
-| 发布确认流水线 | MaxInFlightPublishes（默认 1 = 串行行为不变）：FIFO 窗口内发布按序启动、出窗按启动序标记 | ProcessPartitionPipelinedAsync（OutboxBatchProcessor.cs） |
+| 发布确认流水线 | `DeliveryMode.Auto`（默认）：broker 声明 `SupportsConcurrentPublish` 时窗口至少 16；`Serial` 保留逐条确认旧行为 | ProcessPartitionPipelinedAsync（OutboxBatchProcessor.cs） |
 | 重试与死信 | 指数退避（2^n 秒、上限封顶、可选 jitter 防惊群）/固定退避两种策略；重试耗尽转 Dead 状态；`RequeueDeadAsync` 运维重投（保留失败历史） | RetryBackoffPolicy.cs、OutboxMessage.cs |
 | fencing 契约 | (LockedBy, LockedUntil) 租约 token + RetryCount 快照 + Status 守卫三重防护；v4.0 全接口异步化（ADR-026） | `IPalOutboxStore`（OutboxStore.cs） |
 
@@ -120,7 +120,7 @@
 | 状态与并发 | SagaState 版本乐观锁（租约即换代）、CloneForLease successor、执行序字典作为补偿顺序唯一依据 | SagaState.cs |
 | 执行观察者 | 五观察点零分配事件 + AsyncLocal 传播，Sink 异常与业务隔离 | SagaExecutionObserver.cs |
 
-**配置面**：`OutboxOptions`（BatchSize=100、LeaseDuration=2min、PollInterval=500ms、MaxRetryCount=10、MaxInFlightPublishes=1 等）、`InboxOptions`、`SagaProcessorOptions`，全部 ValidateOnStart 校验。DI 入口：`AddPalOutbox` / `AddPalInbox` / `AddPalSaga<TState,TOrchestrator>`（Transactions/ServiceCollectionExtensions.cs）。
+**配置面**：`OutboxOptions`（BatchSize=100、LeaseDuration=2min、PollInterval=500ms、MaxRetryCount=10、DeliveryMode=Auto、BatchMarkFlushInterval=1s 等）、`InboxOptions`、`SagaProcessorOptions`，全部 ValidateOnStart 校验。DI 入口：`AddPalOutbox` / `AddPalInbox` / `AddPalSaga<TState,TOrchestrator>`（Transactions/ServiceCollectionExtensions.cs）。
 
 ## 8. 事件溯源与投影
 

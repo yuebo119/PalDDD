@@ -31,6 +31,9 @@ namespace PalDDD.PalORM.Stores;
 public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutboxStore, IBatchMarkOutboxStore
     where TProvider : IDbProvider
 {
+    /// <inheritdoc />
+    public bool RequiresSaveAfterMark => false;
+
     /// <summary>共享的 Scoped 数据库会话（事务自动传播源）。</summary>
     [SuppressMessage("Performance", "CA1051:Do not declare visible instance fields",
         Justification = "框架库基类 —— 派生类（方言包中间类）需直接访问 Session 以扩展方言特有能力。")]
@@ -178,8 +181,12 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         {
             try
             {
-                var versions = await Session.QueryAsync<VersionProbeRow>($"SELECT VERSION() AS v, VERSION() AS v2", ct: ct).ConfigureAwait(false);
-                _mySqlServerVersion = versions.FirstOrDefault()?.V ?? "";
+                // 2026-10-19 性能实施轮：DbConnection.ServerVersion 来自握手包，已连接时
+                // 零往返；连接未打开则先打开（后续租约查询本来也要打开同一连接）。
+                var connection = Session.GetRawConnection();
+                if (connection.State != System.Data.ConnectionState.Open)
+                    await connection.OpenAsync(ct).ConfigureAwait(false);
+                _mySqlServerVersion = connection.ServerVersion;
             }
 #pragma warning disable CA1031 // 探测失败按空串处理（fail-safe 回退无锁模板），不中断租约路径
             catch (Exception)

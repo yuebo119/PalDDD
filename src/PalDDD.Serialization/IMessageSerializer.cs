@@ -53,6 +53,17 @@ public interface IMessageSerializer
         destination.Write(payload.Span);
     }
 
+    /// <summary>
+    /// 序列化并返回可被调用方长期持有的精确数组（2026-10-19 性能实施轮）。
+    /// <para>
+    /// Outbox 持久化边界需要 <c>byte[]</c>；默认实现回退为一次拷贝，内置 JSON/MemoryPack
+    /// 实现覆写为直接交还自身产出的数组，消除“序列化已分配一次 + 持久化再 ToArray 一次”的
+    /// 第二次整载荷复制。契约：返回的数组所有权转移给调用方，实现不得再复用/归还池。
+    /// </para>
+    /// </summary>
+    byte[] SerializeToArray(object message, MessageDescriptor descriptor)
+        => Serialize(message, descriptor).ToArray();
+
     /// <summary>使用描述符元数据反序列化消息负载。</summary>
     object? Deserialize(ReadOnlySpan<byte> payload, MessageDescriptor descriptor);
 

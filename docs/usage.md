@@ -244,6 +244,8 @@ services.AddPalOutbox();
 
 **并行发布（3.0.0 起）**：`OutboxOptions.MaxDegreeOfParallelism`（默认 1，经 `AddPalOutbox(o => o.MaxDegreeOfParallelism = n)` 配置）>1 时，批内消息按分区交由 per-worker scope（独立 store/DbContext 实例）并行完成「反序列化 → 发布 → 标记」，吞吐随并行度提升；租约/fencing 互斥不受影响。**前提**：① broker 发布须线程安全（Kafka producer 天然支持；RabbitMQ 单 channel 并发发布的 7.x 语义已核实——publisher-confirms 仅护帧发送段、确认等待不串行）；② 消费方幂等（并行加速下乱序提交概率上升）。直构造 `OutboxBatchProcessor` 的调用方不受影响（`IServiceScopeFactory` 为可选尾参；并行度 >1 且缺失时运行期 fail-fast 并给出指引）。
 
+**自动投递策略（2026-10-19，ADR-033）**：`DeliveryMode.Auto` 默认开启。broker 声明 `SupportsConcurrentPublish` 时发布窗口至少 16；store 实现 `IBatchMarkOutboxStore` 时终态标记阈值至少 16，并在 `BatchMarkFlushInterval`（默认 1 秒）到点时冲刷，重复窗口不再由整批时长放大。broker 同时实现 `SupportsRawPublish` 时，Outbox 直接发送持久化字节，跳过反序列化与再序列化。需要逐条确认的旧行为时显式配置 `DeliveryMode = Serial`；`MaxInFlightPublishes`/`BatchMarkThreshold` 仍可覆盖自动值。Kafka 窗口化要求 producer 开启幂等（框架只在探测到 `EnableIdempotence=true` 时自动升窗）。
+
 EF 栈的 `IPalOutboxStore` / `IInboxStore` / `ISagaStateStore<T>` / `IIdempotencyStore` / `IProjectionCheckpointStore` 由各适配器包的 `AddPal*EfCore` 扩展注册（与 Dapper/PalORM 栈的 `AddPal*` 入口对称）。这些扩展**不**注册 `DbContext` 本身（provider 选择权在调用方），需与 `AddDbContext` 配套：
 
 ```csharp

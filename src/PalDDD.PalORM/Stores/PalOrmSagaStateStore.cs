@@ -230,38 +230,27 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
             return affected;
         }
 
-        // B-3：轻量存在性探测（raw command，COUNT 无数据传输；ITM-243 挂接环境事务）
-        await using var probe = CreateRawCommand();
-        probe.CommandText = "SELECT COUNT(1) FROM saga_states WHERE saga_id = @p0";
-        AddParam(probe, "@p0", state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
-        var exists = Convert.ToInt64(await probe.ExecuteScalarAsync(ct).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture) > 0;
-        if (!exists)
+        // 2026-10-19 性能实施轮：UPDATE 0 行后直接尝试 INSERT，唯一冲突即行已存在
+        //（版本冲突或并发创建），返回 0 走乐观冲突契约。原实现先发 COUNT 探测再 INSERT，
+        // 新 Saga 路径固定 3 次往返；去掉探测后成功新建降为 2 次，已有行更新维持 1 次。
+        int inserted;
+        try
         {
-            // P2 修复（八轮）：并发插入同一新 Saga 的 TOCTOU 兜底（与 DapperSagaStateStore 对齐）——
-            // PalORM Session.ExecuteAsync 直透底层 provider 异常（DataSession.Query.cs 无包装），
-            // 唯一约束冲突转换为语义化并发异常，调用方重读后走 UPDATE 路径即可
-            int inserted;
-            try
-            {
-                inserted = await Session.ExecuteAsync(
-                    RequiresJsonbCast
-                        ? (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {truncatedError}, {state.ErrorAt}, {state.Version}, CAST({jsonData} AS jsonb), {state.LeasedBy}, {state.LeasedUntil})"
-                        : (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {truncatedError}, {state.ErrorAt}, {state.Version}, {jsonData}, {state.LeasedBy}, {state.LeasedUntil})",
-                    ct).ConfigureAwait(false);
-            }
-            catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
-            {
-                throw new InvalidOperationException(
-                    $"Saga {state.SagaId} 被并发实例同时创建（主键冲突）——请重新加载后以 UPDATE 保存。", ex);
-            }
-            // v65 P3：INSERT 已落库才回写调用方对象（对齐 DapperSagaStateStore v38 形态）
-            if (inserted > 0)
-                state.Error = truncatedError;
-            return inserted;
+            inserted = await Session.ExecuteAsync(
+                RequiresJsonbCast
+                    ? (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {truncatedError}, {state.ErrorAt}, {state.Version}, CAST({jsonData} AS jsonb), {state.LeasedBy}, {state.LeasedUntil})"
+                    : (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until) VALUES ({state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {truncatedError}, {state.ErrorAt}, {state.Version}, {jsonData}, {state.LeasedBy}, {state.LeasedUntil})",
+                ct).ConfigureAwait(false);
         }
-
-        // 行在但版本不匹配 = 乐观锁冲突（他实例已写同一 Saga）——契约返回 0
-        return 0;
+        catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
+        {
+            // 行已存在（版本冲突或并发创建同一新 Saga）——统一返回 0（乐观冲突契约）。
+            return 0;
+        }
+        // v65 P3：INSERT 已落库才回写调用方对象（对齐 DapperSagaStateStore v38 形态）
+        if (inserted > 0)
+            state.Error = truncatedError;
+        return inserted;
     }
 
     /// <inheritdoc/>

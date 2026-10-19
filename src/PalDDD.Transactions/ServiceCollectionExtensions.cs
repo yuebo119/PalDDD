@@ -38,6 +38,13 @@ public static class ServiceCollectionExtensions
             .Validate(static options => options.MaxInFlightPublishes >= 1, "Outbox MaxInFlightPublishes must be at least 1.")
             // R4/P0-2（ADR-027，2026-10-14）：终态标记批量化阈值守卫——负值/零无意义（1 = 逐条默认）
             .Validate(static options => options.BatchMarkThreshold >= 1, "Outbox BatchMarkThreshold must be at least 1.")
+            // 2026-10-19 性能实施轮：时间界冲刷必须早于租约到期至少 3 倍，避免“标记还没落库，
+            // 租约已过期被另一 worker 重投”的重复窗口失控。
+            .Validate(static options => options.BatchMarkFlushInterval > TimeSpan.Zero,
+                "Outbox BatchMarkFlushInterval must be greater than zero.")
+            .Validate(static options =>
+                    options.BatchMarkFlushInterval <= TimeSpan.FromTicks(options.LeaseDuration.Ticks / 3),
+                "Outbox BatchMarkFlushInterval must be at most one third of LeaseDuration.")
             .ValidateOnStart();
         services.TryAddScoped<OutboxBatchProcessor>();
         services.AddHostedService<OutboxProcessor>();

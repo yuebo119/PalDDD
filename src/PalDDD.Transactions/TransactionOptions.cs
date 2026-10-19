@@ -17,6 +17,16 @@ internal static class LeaseOwnerFactory
     internal static string Create() => $"{Environment.MachineName}:{PalUlid.New()}";
 }
 
+/// <summary>Outbox 投递模式（2026-10-19 性能实施轮）。</summary>
+public enum OutboxDeliveryMode
+{
+    /// <summary>逐条确认 + 逐条终态标记（旧行为，兼容回退）。</summary>
+    Serial,
+
+    /// <summary>按 broker/store 能力自动选择窗口与批量标记；能力不足时回落 Serial。</summary>
+    Auto
+}
+
 /// <summary>发件箱发布器运行时选项。</summary>
 /// <remarks>
 /// ITM-166 声明：<see cref="LeaseDuration"/> 与 <see cref="LeaseOwner"/> 的集中校验在
@@ -29,6 +39,21 @@ public sealed class OutboxOptions
     public int BatchSize { get; set; } = 100;
     public TimeSpan LeaseDuration { get; set; } = TimeSpan.FromMinutes(2);
 
+    /// <summary>
+    /// 投递模式（2026-10-19 性能实施轮）。<see cref="OutboxDeliveryMode.Auto"/> 在 broker
+    /// 声明支持并发发布且 store 实现 <see cref="IBatchMarkOutboxStore"/> 时，自动启用
+    /// 16 路发布窗口与 16 条批量标记，并用 <see cref="BatchMarkFlushInterval"/> 设时间上界；
+    /// <see cref="OutboxDeliveryMode.Serial"/> 保持旧行为（逐条确认/逐条标记）作为兼容回退。
+    /// </summary>
+    public OutboxDeliveryMode DeliveryMode { get; set; } = OutboxDeliveryMode.Auto;
+
+    /// <summary>
+    /// 终态标记时间上界（<see cref="OutboxDeliveryMode.Auto"/> 生效）。标记在“满
+    /// <see cref="BatchMarkThreshold"/> 条”或“距上次冲刷满本间隔”时发生，重复窗口由本值
+    /// 加上在途发布时长界定，而不是由整批时长界定。必须小于 <see cref="LeaseDuration"/>
+    /// 的三分之一（启动期校验）。默认 1 秒。
+    /// </summary>
+    public TimeSpan BatchMarkFlushInterval { get; set; } = TimeSpan.FromSeconds(1);
     /// <summary>
     /// 轮询间隔 — OutboxProcessor 的轮询周期。
     /// <para>

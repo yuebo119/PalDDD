@@ -537,6 +537,8 @@ marker store 单次批量含全部事件、零逐条；同步钩子对 marker st
 
 > **T1.2 端到端定论：积压排空 56×（5,072ms → 90ms，RatioSD 8%）**——旧形态下 5.07s 中 4.5s 是纯批间睡眠，批处理净工作仅 ~80ms（9 批 × ~9ms）；自适应形态吞吐上限被真实工作接管。RTT=20 档的 25.5s 中 20s 是逐条发布确认的串行等待（1000 × 20ms）——**T3.1 流水线化的理论收益上限即此（~4.6×）**；RTT=0 档的 ~90μs/msg 净工作即 **T2.1 批量标记的收益锚**（现标记段为逐条 UPDATE）。首跑实录：medium 采样撞 InProcess 单基准 5 分钟上限（与 coverage×strict 同族的车道级不兼容，多秒级 op 专属），改专用采样档后双类 exit 0 零守卫违规。
 
+> **2026-10-19 更新（ADR-033，自动投递策略）**：`OutboxOptions.DeliveryMode` 默认 `Auto`。broker 声明 `SupportsConcurrentPublish` 时窗口自动提升到至少 16；store 实现 `IBatchMarkOutboxStore` 时标记阈值至少 16，并由 `BatchMarkFlushInterval`（默认 1 秒）加时间上界；内置四栈的即时写库使 `SaveChangesAsync` 空调用被跳过。本节此前的“默认 1”数据仍作为串行基线；Auto 模式的组合收益需要在 `--delivery-pg` / `--delivery-mysql` 上重跑 A/B，未重跑前不把 13× 与 6.4× 直接相乘。`Serial` 可逐字复现旧行为。
+
 **T3.1 发布确认流水线化（`OutboxOptions.MaxInFlightPublishes`，默认 1 = 串行逐字不变；>1 启用 FIFO 窗口，标记顺序保启动序，失败语义逐项镜像串行路径，锁定测试三件三连绿）——量具 A/B 定论（窗口 16）**：
 
 | RTT（假 broker 确认延迟） | 窗口 1（串行基线） | 窗口 16（流水线） | 收益 |

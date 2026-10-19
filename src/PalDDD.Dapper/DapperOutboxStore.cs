@@ -61,6 +61,9 @@ namespace PalDDD.Dapper;
 /// </remarks>
 public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxStore, IBatchMarkOutboxStore
 {
+    /// <inheritdoc />
+    public bool RequiresSaveAfterMark => false;
+
     private readonly DbConnection _connection;
     private readonly DapperDbType _dbType;
     private readonly DapperSqlDialect _dialect;

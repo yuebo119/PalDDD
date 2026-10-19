@@ -23,6 +23,9 @@ namespace PalDDD.Transactions;
 /// </remarks>
 public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutboxStore, IBatchMarkOutboxStore
 {
+    /// <inheritdoc />
+    public bool RequiresSaveAfterMark => false;
+
     private readonly Lock _lock = new();
     private readonly List<OutboxMessage> _messages = [];
     private readonly TimeProvider _timeProvider;

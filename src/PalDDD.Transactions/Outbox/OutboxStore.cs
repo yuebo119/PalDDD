@@ -101,6 +101,16 @@ public interface IPalOutboxStore
     /// - <b>内存实现</b>（<c>InMemoryOutboxStore</c>）：无操作，数据即时生效。
     /// </remarks>
     ValueTask<int> SaveChangesAsync(CancellationToken ct);
+
+    /// <summary>
+    /// 终态写是否还需要调用方补一次 <see cref="SaveChangesAsync"/>（2026-10-19 性能实施轮）。
+    /// <para>
+    /// 内置四栈（Dapper/PalORM/EF Core/InMemory）的 Mark*/Release* 都在调用内立即执行 SQL，
+    /// 处理器原先逐消息补一次空 <c>SaveChangesAsync</c> 属纯开销；四栈覆写为 <c>false</c>。
+    /// 自定义延迟写 store 保持默认 <c>true</c>，行为不变。
+    /// </para>
+    /// </summary>
+    bool RequiresSaveAfterMark => true;
 }
 
 /// <summary>

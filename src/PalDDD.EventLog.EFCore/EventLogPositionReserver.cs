@@ -135,6 +135,19 @@ public sealed class EventLogPositionReserver
         await _dbSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // 2026-10-19 性能实施轮：信号量唤醒后复查块缓存。块边界上多个并发追加者
+            // 同时走慢路径排队；首个分配成功后，其余等待者必须复用新块，否则每个
+            // 等待者各取一整块（32 并发约 64 次串行往返 + 31 个块的浪费）。
+            lock (_lock)
+            {
+                if (_initialized && _lo + count <= _hi)
+                {
+                    var cachedAfterWait = _lo;
+                    _lo += count;
+                    return cachedAfterWait;
+                }
+            }
+
             const int maxRetries = 5;
             for (var attempt = 0; attempt < maxRetries; attempt++)
             {

@@ -22,7 +22,7 @@ namespace PalDDD.Transactions.Tests;
 public sealed class OutboxBatchMarkProcessorTests
 {
     [Test]
-    public async Task BatchMark_DefaultThreshold_PerMessagePathUnchanged()
+    public async Task BatchMark_SerialMode_PerMessagePathUnchanged()
     {
         var (store, _) = await RunBatchAsync(threshold: 1, messageCount: 5);
 
@@ -30,6 +30,35 @@ public sealed class OutboxBatchMarkProcessorTests
         await Assert.That(store.BatchCallSizes.Count).IsEqualTo(0);
         await Assert.That(store.ProcessedOrder.Count).IsEqualTo(5);
         await Assert.That(store.LeaseOrder.SequenceEqual(store.ProcessedOrder)).IsTrue();
+    }
+
+    [Test]
+    public async Task BatchMark_AutoMode_EnablesBatchWhenStoreSupportsIt()
+    {
+        var (store, _) = await RunBatchAsync(
+            threshold: 1, messageCount: 5, deliveryMode: OutboxDeliveryMode.Auto);
+
+        // Auto：store 实现 IBatchMarkOutboxStore → 阈值抬到 16，批末一次冲刷
+        await Assert.That(store.BatchCallSizes.Count).IsEqualTo(1);
+        await Assert.That(store.BatchCallSizes[0]).IsEqualTo(5);
+        await Assert.That(store.PerMessageProcessed.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task BatchMark_TimeBoundFlush_BeforeBatchEnd()
+    {
+        var fakeTime = new FakeTimeProvider(DateTimeOffset.Parse("2026-10-19T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        var (store, _) = await RunBatchAsync(
+            threshold: 100,
+            messageCount: 5,
+            deliveryMode: OutboxDeliveryMode.Auto,
+            timeProvider: fakeTime,
+            onPublish: () => fakeTime.Advance(TimeSpan.FromMilliseconds(600)));
+
+        // 每次发布推进 600ms，1s 时间界在第二条后触发；第二条与批末各一次冲刷。
+        await Assert.That(store.BatchCallSizes.Count).IsGreaterThanOrEqualTo(2);
+        await Assert.That(store.BatchCallSizes.Sum()).IsEqualTo(5);
+        await Assert.That(store.PerMessageProcessed.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -74,32 +103,64 @@ public sealed class OutboxBatchMarkProcessorTests
     [Test]
     public async Task BatchMark_PipelinedPath_BatchMarksInStartOrder()
     {
-        var (store, _) = await RunBatchAsync(threshold: 3, messageCount: 10, window: 4);
+        var (store, _) = await RunBatchAsync(
+            threshold: 3, messageCount: 10, window: 4, deliveryMode: OutboxDeliveryMode.Auto);
 
         await Assert.That(store.BatchCallSizes.Sum()).IsEqualTo(10);
         await Assert.That(store.PerMessageProcessed.Count).IsEqualTo(0);
         await Assert.That(store.LeaseOrder.SequenceEqual(store.ProcessedOrder)).IsTrue();
     }
 
+    [Test]
+    public async Task RawPublish_SkipsDeserializeAndReserialize()
+    {
+        var builder = new MessageCatalogBuilder();
+        builder.Add<BatchMarkMessage>(BatchMarkJsonContext.Default.BatchMarkMessage, "test.batchmark.v1");
+        var catalog = builder.Build();
+        var serializer = new ThrowingDeserializeSerializer();
+        var store = new RecordingBatchStore(5);
+        var broker = new RawBroker(serializer, catalog);
+        var processor = new OutboxBatchProcessor(
+            store, broker, serializer, catalog,
+            new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
+            {
+                BatchSize = 5,
+                DeliveryMode = OutboxDeliveryMode.Serial,
+                MaxRetryCount = 3,
+            }),
+            NullPalLogger<OutboxBatchProcessor>.Instance);
+
+        await processor.ProcessBatchAsync(CancellationToken.None);
+
+        await Assert.That(broker.RawCount).IsEqualTo(5);
+        await Assert.That(store.ProcessedOrder.Count).IsEqualTo(5);
+    }
+
     private static async Task<(RecordingBatchStore Store, NullBroker Broker)> RunBatchAsync(
-        int threshold, int messageCount, int failAtIndex = -1, int window = 1)
+        int threshold, int messageCount, int failAtIndex = -1, int window = 1,
+        OutboxDeliveryMode deliveryMode = OutboxDeliveryMode.Serial,
+        TimeProvider? timeProvider = null,
+        Action? onPublish = null)
     {
         var builder = new MessageCatalogBuilder();
         builder.Add<BatchMarkMessage>(BatchMarkJsonContext.Default.BatchMarkMessage, "test.batchmark.v1");
         var catalog = builder.Build();
         var serializer = new NonNullSerializer();
         var store = new RecordingBatchStore(messageCount);
-        var broker = new NullBroker(failAtIndex, serializer, catalog);
+        var broker = new NullBroker(failAtIndex, serializer, catalog, onPublish);
         var processor = new OutboxBatchProcessor(
             store, broker, serializer, catalog,
             new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
             {
                 BatchSize = messageCount,
                 BatchMarkThreshold = threshold,
+                BatchMarkFlushInterval = TimeSpan.FromSeconds(1),
+                DeliveryMode = deliveryMode,
                 MaxInFlightPublishes = window,
                 MaxRetryCount = 3,
             }),
-            NullPalLogger<OutboxBatchProcessor>.Instance);
+            NullPalLogger<OutboxBatchProcessor>.Instance,
+            timeProvider);
 
         await processor.ProcessBatchAsync(CancellationToken.None);
         return (store, broker);
@@ -107,7 +168,7 @@ public sealed class OutboxBatchMarkProcessorTests
 
     // ─── stubs ─────────────────────────────────────────────────
 
-    private sealed class NullBroker(int failAtIndex, IMessageSerializer serializer, IMessageCatalog catalog)
+    private sealed class NullBroker(int failAtIndex, IMessageSerializer serializer, IMessageCatalog catalog, Action? onPublish = null)
         : MessageBrokerBase(serializer, catalog)
     {
         private int _started;
@@ -118,6 +179,7 @@ public sealed class OutboxBatchMarkProcessorTests
         {
             if (failAtIndex >= 0 && Interlocked.Increment(ref _started) - 1 == failAtIndex)
                 throw new InvalidOperationException("broker publish failure (test)");
+            onPublish?.Invoke();
             return ValueTask.CompletedTask;
         }
 
@@ -142,6 +204,54 @@ public sealed class OutboxBatchMarkProcessorTests
         public object? Deserialize(ReadOnlySpan<byte> payload, MessageDescriptor descriptor) => new object();
 
         public TMessage? Deserialize<TMessage>(ReadOnlySpan<byte> payload, MessageDescriptor descriptor) => default;
+    }
+
+    /// <summary>反序列化恒抛——raw 路径不应触碰它。</summary>
+    private sealed class ThrowingDeserializeSerializer : IMessageSerializer
+    {
+        public string ContentType => ContentTypes.Json;
+
+        public ReadOnlyMemory<byte> Serialize<TMessage>(TMessage message, MessageDescriptor? descriptor = null) => default;
+
+        public ReadOnlyMemory<byte> Serialize(object message, MessageDescriptor descriptor) => default;
+
+        public object? Deserialize(ReadOnlySpan<byte> payload, MessageDescriptor descriptor)
+            => throw new InvalidOperationException("raw publish path must not deserialize");
+
+        public TMessage? Deserialize<TMessage>(ReadOnlySpan<byte> payload, MessageDescriptor descriptor)
+            => throw new InvalidOperationException("raw publish path must not deserialize");
+    }
+
+    /// <summary>支持 raw 发布的 broker：对象发布一律判红，raw 发布计数。</summary>
+    private sealed class RawBroker(IMessageSerializer serializer, IMessageCatalog catalog)
+        : MessageBrokerBase(serializer, catalog)
+    {
+        public int RawCount { get; private set; }
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static",
+            Justification = "接口成员必须为实例成员。")]
+        public override bool SupportsRawPublish => true;
+
+        public override ValueTask PublishRawAsync(
+            ReadOnlyMemory<byte> payload, MessageDescriptor descriptor, PalUlid messageId,
+            MessagePublishContext context, CancellationToken ct = default)
+        {
+            RawCount++;
+            return ValueTask.CompletedTask;
+        }
+
+        public override ValueTask PublishAsync(
+            object message, MessageDescriptor msgDescriptor, PalUlid messageId,
+            MessagePublishContext context, CancellationToken ct = default)
+            => throw new InvalidOperationException("raw-capable broker must receive raw payloads");
+
+        public override ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
+            Func<TMessage, CancellationToken, ValueTask> handler, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public override ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
+            Func<TMessage, MessageConsumeContext?, CancellationToken, ValueTask> handler, CancellationToken ct = default)
+            => throw new NotSupportedException();
     }
 
     /// <summary>租约固定批 + 逐条/批量标记调用形态记录（IPalOutboxStore + IBatchMarkOutboxStore）。</summary>

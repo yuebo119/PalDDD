@@ -111,7 +111,19 @@ public sealed class StoredEvent
 
     /// <summary>Rehydrate the public recorded event model — 零拷贝 byte[] 引用传递（P2）</summary>
     public RecordedEvent ToRecordedEvent()
-        => RecordedEvent.RehydrateFromBytes(
+    {
+        // 2026-10-19 性能实施轮：审计字段全空时复用单例（对齐 Dapper/PalORM/JSONL 导入同款），
+        // 回放 1M 事件少 1M 个 EventAuditMetadata 对象。
+        var audit = ActorId is null
+            && Reason is null
+            && CorrelationId is null
+            && CausationId is null
+            && TraceParent is null
+            && TraceState is null
+                ? EventAuditMetadata.Empty
+                : new EventAuditMetadata(ActorId, Reason, CorrelationId, CausationId, TraceParent, TraceState);
+
+        return RecordedEvent.RehydrateFromBytes(
             StreamName,
             StreamVersion,
             GlobalPosition,
@@ -122,7 +134,8 @@ public sealed class StoredEvent
             ContentType,
             Payload,      // 引用传递，零拷贝
             Metadata,     // 引用传递，零拷贝
-            new EventAuditMetadata(ActorId, Reason, CorrelationId, CausationId, TraceParent, TraceState));
+            audit);
+    }
 }
 
 #pragma warning restore CA1819

@@ -32,6 +32,34 @@ namespace PalDDD.Messaging;
 /// </remarks>
 public interface IMessageBroker
 {
+    /// <summary>
+    /// 是否可安全并发发布（2026-10-19 性能实施轮）。Outbox 的自动升窗只在本属性为
+    /// <c>true</c> 时启用；默认 <c>false</c> 保证自定义 broker 保持逐条确认语义。
+    /// Kafka 实现仅在 producer 开启幂等时返回 true；RabbitMQ 在单发布 channel 的
+    /// publisher confirms 下保序，返回 true。
+    /// </summary>
+    bool SupportsConcurrentPublish => false;
+
+    /// <summary>
+    /// 是否支持原始载荷发布（2026-10-19 性能实施轮）。支持时 Outbox 可直接把持久化的
+    /// 字节交给 broker，跳过“反序列化成对象 + 再序列化”的往返；默认 false 保证自定义
+    /// broker 走既有对象发布语义。
+    /// </summary>
+    bool SupportsRawPublish => false;
+
+    /// <summary>
+    /// 发布已序列化的原始载荷（字节必须与 <paramref name="descriptor"/> 的 ContentType/
+    /// SchemaVersion 一致）。仅当 <see cref="SupportsRawPublish"/> 为 true 时由 Outbox 调用。
+    /// </summary>
+    ValueTask PublishRawAsync(
+        ReadOnlyMemory<byte> payload,
+        MessageDescriptor descriptor,
+        PalUlid messageId,
+        MessagePublishContext context,
+        CancellationToken ct = default)
+        => throw new NotSupportedException(
+            $"Broker '{GetType().Name}' does not implement raw payload publishing.");
+
     /// <summary>发布消息（泛型，编译时已知类型）。⚠️ 不保证顺序——见接口 remarks 顺序性声明。</summary>
     ValueTask PublishAsync<TMessage>(TMessage message, CancellationToken ct = default);
 
