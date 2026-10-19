@@ -1,171 +1,157 @@
-// ─────────────────────────────────────────────────────────────
-// 🔍 SqliteFtsExtensions — FTS5 全文搜索（AOT 安全，零额外依赖）
-// ─────────────────────────────────────────────────────────────
-// AOT 安全性：
-//   ✅ FTS5 已内置在 SQLitePCLRaw.bundle_e_sqlite3 — 零额外包。
-//   ✅ 纯 SQL 字符串拼接 — 零反射，零 IL 生成。
-//
-// FTS5 原理：
-//   创建虚拟表（内容表 + 索引），INSERT 时自动分词建索引。
-//   查询时使用 MATCH 子句，支持布尔/短语/前缀搜索。
-//
-// 使用场景：
-//   1. Outbox 消息内容搜索 — FTS5 索引 payload 中的关键字段
-//   2. Saga 状态搜索 — 按 Saga 数据字段全文检索
-//   3. EventLog 事件搜索 — 按事件名/流名模糊搜索
-//
-// 使用方式：
-//   // 创建 FTS5 索引
-//   conn.Execute(SqliteFts.CreateEventLogIndex(sourceTable: "event_log"));  // 公共入口（Outbox 表 id 为 TEXT/Ulid，见下方 P1 警告——FTS 仅适用 INTEGER 主键表）
-//
-//   // 全文搜索
-//   conn.QueryAsync<OutboxMessage>(
-//     $"SELECT om.* FROM outbox_messages om JOIN {SqliteFts.OutboxIndex} fts ON om.id=fts.rowid " +
-//     $"WHERE {SqliteFts.Match("fts", "order AND created")}");
-// ─────────────────────────────────────────────────────────────
-
-using System.Runtime.CompilerServices;
+using System.Data.Common;
+using PalDDD.Shared;
 
 namespace PalDDD.Dapper.Sqlite;
 
-/// <summary>SQLite FTS5 全文搜索工具</summary>
+/// <summary>
+/// SQLite FTS5 索引定义与查询片段生成。
+/// <para>所有标识符、字面量与路径在构建期转义；值优先走参数化方法，字面量方法只服务常量。</para>
+/// </summary>
 public static class SqliteFts
 {
-    /// <summary>默认 Outbox FTS5 索引名</summary>
-    public const string OutboxIndex = "outbox_messages_fts";
-
-    /// <summary>默认 EventLog FTS5 索引名</summary>
+    /// <summary>默认 EventLog FTS5 索引名。</summary>
     public const string EventLogIndex = "events_fts";
 
-    // ── 建表 ──
+    /// <summary>默认 Outbox FTS5 索引名。</summary>
+    public const string OutboxIndex = "outbox_messages_fts";
 
     /// <summary>
-    /// 创建 Outbox 消息 FTS5 索引（索引 type + payload）。<br/>
-    /// ⚠️ <b>P1 修复（四轮评审探针实证）</b>：FTS5 external content 表要求 rowid 为 INTEGER，
-    /// 但 outbox_messages 的 id 是 TEXT/Ulid——此方法生成的 DDL 执行时触发器插入 rowid 即
-    /// datatype mismatch。<b>仅适用于含 INTEGER 主键的表</b>（如 events 表的 global_position）。
-    /// 对 TEXT 主键表请勿使用；如需全文索引 TEXT 主键表，应改用独立的 FTS 表+显式关联。
+    /// 创建 external-content FTS5 索引定义。
+    /// <para><b>约束</b>：<paramref name="rowidColumn"/> 必须是源表的
+    /// <c>INTEGER PRIMARY KEY</c> 列。TEXT/ULID 主键请改用
+    /// <see cref="CreateStandaloneIndex"/>；否则触发器写入会报 datatype mismatch。
+    /// 可用 <see cref="ValidateAsync"/> 在 DDL 前校验。</para>
     /// </summary>
-    /// <param name="sourceTable">源表名（必须含 INTEGER 主键列 id）</param>
-    /// <param name="indexName">FTS5 索引名</param>
-    public static string CreateOutboxIndex(string sourceTable, string indexName = OutboxIndex)
-        => CreateFtsIndex(sourceTable, indexName, "type", "payload", "id");
-
-    /// <summary>创建事件日志 FTS5 索引（索引 event_name + payload，rowid=global_position INTEGER ✅）</summary>
-    public static string CreateEventLogIndex(string sourceTable, string indexName = EventLogIndex)
-        => CreateFtsIndex(sourceTable, indexName, "event_name", "payload", "global_position");
-
-    /// <summary>
-    /// 通用 FTS5 external content 索引构建（P1 修复：触发器名不再嵌套引号标识符——
-    /// 此前 trg_{"name"}_ai 形式在名字中部含双引号导致 SQLite 语法错误，探针实证）。
-    /// </summary>
-    private static string CreateFtsIndex(string sourceTable, string indexName, string col1, string col2, string rowidColumn)
+    public static SqliteFtsIndexDefinition CreateExternalContentIndex(
+        string sourceTable,
+        string indexName,
+        string rowidColumn,
+        IReadOnlyList<string> columns,
+        string? tokenizer = null,
+        IReadOnlyList<int>? prefixIndexes = null)
     {
-        // v44 P3：入口守卫族（对齐 SqliteJsonExtensions ITM-167 同族——null 列名/表名
-        // 直入 Escape 产生 NRE，失败点远离入口）。Escape 内部对 null 行为未定义，前置校验
-        ArgumentException.ThrowIfNullOrWhiteSpace(sourceTable);
-        ArgumentException.ThrowIfNullOrWhiteSpace(indexName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(col1);
-        ArgumentException.ThrowIfNullOrWhiteSpace(col2);
-        ArgumentException.ThrowIfNullOrWhiteSpace(rowidColumn);
-
-        return $"""
-        CREATE VIRTUAL TABLE IF NOT EXISTS {Escape(indexName)} USING fts5(
-            {col1},
-            {col2},
-            content='{EscapeLiteral(sourceTable)}',
-            content_rowid='{rowidColumn}'
-        );
-
-        CREATE TRIGGER IF NOT EXISTS {SanitizeTriggerName(indexName)}_ai AFTER INSERT ON {Escape(sourceTable)} BEGIN
-            INSERT INTO {Escape(indexName)}(rowid, {col1}, {col2}) VALUES (NEW.{rowidColumn}, NEW.{col1}, NEW.{col2});
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS {SanitizeTriggerName(indexName)}_ad AFTER DELETE ON {Escape(sourceTable)} BEGIN
-            INSERT INTO {Escape(indexName)}({Escape(indexName)}, rowid, {col1}, {col2}) VALUES('delete', OLD.{rowidColumn}, OLD.{col1}, OLD.{col2});
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS {SanitizeTriggerName(indexName)}_au AFTER UPDATE ON {Escape(sourceTable)} BEGIN
-            INSERT INTO {Escape(indexName)}({Escape(indexName)}, rowid, {col1}, {col2}) VALUES('delete', OLD.{rowidColumn}, OLD.{col1}, OLD.{col2});
-            INSERT INTO {Escape(indexName)}(rowid, {col1}, {col2}) VALUES (NEW.{rowidColumn}, NEW.{col1}, NEW.{col2});
-        END;
-        """;
+        var core = SqliteFtsCore.CreateExternalContent(
+            sourceTable, indexName, rowidColumn, columns, tokenizer, prefixIndexes);
+        return new SqliteFtsIndexDefinition(core);
     }
 
-    // ── 查询 ──
+    /// <summary>
+    /// 创建 standalone FTS5 索引定义（普通 FTS5 表 + 映射表 + 三个同步触发器）。
+    /// <para>适用于任意主键类型，包括 TEXT/ULID。键列在触发器中 CAST 成 TEXT 写入映射表。</para>
+    /// </summary>
+    public static SqliteFtsIndexDefinition CreateStandaloneIndex(
+        string sourceTable,
+        string indexName,
+        string sourceKeyColumn,
+        IReadOnlyList<SqliteFtsColumn> columns,
+        string? tokenizer = null,
+        IReadOnlyList<int>? prefixIndexes = null)
+    {
+        ArgumentNullException.ThrowIfNull(columns);
+        var coreColumns = new FtsColumnCore[columns.Count];
+        for (var i = 0; i < columns.Count; i++)
+        {
+            var column = columns[i];
+            ArgumentException.ThrowIfNullOrWhiteSpace(column.Name);
+            coreColumns[i] = new FtsColumnCore(column.Name, column.CastToText);
+        }
 
-    /// <summary>全文搜索 MATCH 子句：fts MATCH 'keywords'</summary>
-    /// <param name="index">FTS5 索引名</param>
-    /// <param name="query">FTS5 查询语法（支持 AND/OR/NOT、短语、前缀*）。⚠️ 仅做单引号翻倍转义，不拦截 FTS5 查询操作符（AND/OR/NOT/NEAR）；若 query 来自用户输入，调用方须自行校验或白名单限制。</param>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static string Match(string index, string query)
-        => $"{Escape(index)} MATCH '{EscapeFts(query)}'";
+        var core = SqliteFtsCore.CreateStandalone(
+            sourceTable, indexName, sourceKeyColumn, coreColumns, tokenizer, prefixIndexes);
+        return new SqliteFtsIndexDefinition(core);
+    }
 
-    /// <summary>获取搜索结果排序子句：ORDER BY rank</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static string OrderByRank(string index = OutboxIndex)
-        => $"ORDER BY bm25({Escape(index)})";
+    /// <summary>
+    /// EventLog 默认索引：standalone，键 <c>global_position</c>，列 <c>event_name</c>
+    /// 与（可选）<c>payload</c>。payload 默认 CAST 成 TEXT，兼容 BLOB 存储。
+    /// </summary>
+    public static SqliteFtsIndexDefinition CreateEventLogIndex(
+        string sourceTable = "events",
+        bool includePayload = true,
+        string? tokenizer = null,
+        IReadOnlyList<int>? prefixIndexes = null)
+    {
+        var columns = new List<SqliteFtsColumn>(2) { new("event_name") };
+        if (includePayload)
+            columns.Add(new SqliteFtsColumn("payload", CastToText: true));
+        return CreateStandaloneIndex(sourceTable, EventLogIndex, "global_position", columns, tokenizer, prefixIndexes);
+    }
 
-    /// <summary>高亮搜索结果片段（返回带标记的匹配文本）</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    /// <summary>
+    /// Outbox 默认索引：standalone，键 <c>id</c>（TEXT/ULID 安全），列 <c>type</c>
+    /// 与（可选）<c>payload</c>。payload 默认 CAST 成 TEXT，兼容 BLOB 存储。
+    /// </summary>
+    public static SqliteFtsIndexDefinition CreateOutboxIndex(
+        string sourceTable = "outbox_messages",
+        bool includePayload = true,
+        string? tokenizer = null,
+        IReadOnlyList<int>? prefixIndexes = null)
+    {
+        var columns = new List<SqliteFtsColumn>(2) { new("type") };
+        if (includePayload)
+            columns.Add(new SqliteFtsColumn("payload", CastToText: true));
+        return CreateStandaloneIndex(sourceTable, OutboxIndex, "id", columns, tokenizer, prefixIndexes);
+    }
+
+    /// <summary>
+    /// 执行 DDL 前校验源表：所有索引列必须存在；external-content 的键列必须是
+    /// <c>INTEGER PRIMARY KEY</c>。连接未打开时会自动打开。
+    /// </summary>
+    public static Task ValidateAsync(
+        DbConnection connection,
+        SqliteFtsIndexDefinition definition,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        return SqliteFtsCore.ValidateAsync(connection, definition.Core, cancellationToken);
+    }
+
+    /// <summary>生成 <c>"索引" MATCH '查询'</c>。查询串只做单引号翻倍，FTS5 操作符不拦截，用户输入请改用 <see cref="MatchParameter"/>。</summary>
+    public static string MatchLiteral(string index, string query)
+        => SqliteFtsCore.MatchLiteral(index, query);
+
+    /// <summary>生成 <c>"索引" MATCH @参数</c>。参数名可写 <c>q</c> 或 <c>@q</c>。</summary>
+    public static string MatchParameter(string index, string parameterName)
+        => SqliteFtsCore.MatchParameter(index, parameterName);
+
+    /// <summary>生成 <c>"索引" MATCH</c>，由调用方拼接参数或 FTS5 表达式。</summary>
+    public static string MatchExpression(string index)
+        => SqliteFtsCore.MatchExpression(index);
+
+    /// <summary>生成 <c>ORDER BY bm25("索引")</c>，可选每列权重。</summary>
+    public static string OrderByRank(string index, params double[] weights)
+        => SqliteFtsCore.OrderByRank(index, weights);
+
+    /// <summary>生成 <c>bm25("索引") AS rank</c>，可选每列权重。</summary>
+    public static string Rank(string index, params double[] weights)
+        => SqliteFtsCore.Rank(index, weights);
+
+    /// <summary>生成 <c>highlight</c> 片段，列索引从 0 开始。</summary>
     public static string Highlight(string index, int columnIndex, string open = "<b>", string close = "</b>")
-        => $"highlight({Escape(index)}, {columnIndex}, '{EscapeFts(open)}', '{EscapeFts(close)}')";
+        => SqliteFtsCore.Highlight(index, columnIndex, open, close);
 
-    /// <summary>获取 BM25 相关性分数</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static string Rank(string index = OutboxIndex)
-        => $"bm25({Escape(index)}) AS rank";
+    /// <summary>生成 <c>snippet</c> 片段，列索引从 0 开始。</summary>
+    public static string Snippet(
+        string index,
+        int columnIndex,
+        string start = "<b>",
+        string end = "</b>",
+        string ellipsis = "...",
+        int tokenCount = 64)
+        => SqliteFtsCore.Snippet(index, columnIndex, start, end, ellipsis, tokenCount);
 
-    // ── 管理 ──
+    /// <summary>返回三个同步触发器的完整名称（插入/删除/更新）。</summary>
+    public static IReadOnlyList<string> TriggerNames(string indexName)
+        => SqliteFtsCore.CreateTriggerNames(indexName);
 
-    /// <summary>重建 FTS5 索引（全量刷新）</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static string Rebuild(string indexName)
-        => $"INSERT INTO {Escape(indexName)}({Escape(indexName)}) VALUES('rebuild')";
+    /// <summary>删除索引：三个触发器、FTS5 虚表；standalone 还删除映射表。</summary>
+    public static IReadOnlyList<string> DropStatements(string indexName, bool standalone = false)
+        => SqliteFtsCore.BuildDropStatements(indexName, standalone);
 
-    /// <summary>优化 FTS5 索引（合并碎片）</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static string Optimize(string indexName)
-        => $"INSERT INTO {Escape(indexName)}({Escape(indexName)}) VALUES('optimize')";
-
-    /// <summary>删除 FTS5 索引（连同源表上的三个同步触发器）。</summary>
-    /// <remarks>
-    /// v45 P2 修复：Drop 只 DROP 虚表不清理触发器——SQLite 触发器宿主是 ON 子句的
-    /// 源表，虚表删除不级联；此后对源表任何 DML 会触发器体内 <c>INSERT INTO 已删除的
-    /// fts 表</c> 报 "no such table"，源表写路径全断。现产出三条 DROP TRIGGER + 虚表
-    /// DROP 的一条批处理（与 <see cref="CreateFtsIndex"/> 的三触发器对称）。
-    /// </remarks>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static string Drop(string indexName)
-    {
-        var sanitized = SanitizeTriggerName(indexName);
-        return $"""
-            DROP TRIGGER IF EXISTS {Escape(sanitized + "_ai")};
-            DROP TRIGGER IF EXISTS {Escape(sanitized + "_ad")};
-            DROP TRIGGER IF EXISTS {Escape(sanitized + "_au")};
-            DROP TABLE IF EXISTS {Escape(indexName)};
-            """;
-    }
-
-    // ── 辅助 ──
-
-    // P2 修复（转义语义拆分）：标识符用双引号包裹（本方法）；单引号字面量内文用
-    // EscapeLiteral（单引号翻倍）。此前 content='...' 在单引号字面量内用双引号转义——上下文错配。
-    private static string Escape(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
-    private static string EscapeLiteral(string s) => s.Replace("'", "''");
-
-    /// <summary>P3 修复：触发器名只允许字母数字下划线（SQLite 标识符约束）——非标识符字符剔除。
-    /// 三十八轮 P3 修复：下划线保留——原实现剔除后 "outbox-messages" 与 "outbox_messages"
-    /// 清洗同名，第二张表的 CREATE TRIGGER IF NOT EXISTS 静默跳过致其 FTS 索引停更。
-    /// ⚠️ v37 P3 残余声明：清洗后仍可能碰撞——仅保留字母数字下划线，"a-b" 与 "a.b" 清洗
-    /// 同名（仅差被剔字符），后者的触发器静默不创建、其 FTS 索引停更。清洗后碰撞检测不可行
-    /// （框架无触发器注册表可查），调用方须保证传入的多个 indexName 清洗后互不相同；
-    /// 默认两常量（OutboxIndex 及配套 Content 表名）无碰撞。</summary>
-    private static string SanitizeTriggerName(string s)
-    {
-        var chars = s.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray();
-        return chars.Length > 0 ? new string(chars) : "fts";
-    }
-
-    private static string EscapeFts(string s) => s.Replace("'", "''");
+    /// <summary>
+    /// 清理 v4 旧触发器名（<c>{清洗名}_ai/ad/au</c>）与旧 FTS5 虚表。
+    /// v4 升级到 v5 时先执行本方法，再创建新索引。
+    /// </summary>
+    public static IReadOnlyList<string> DropLegacyStatements(string indexName)
+        => SqliteFtsCore.BuildDropLegacyStatements(indexName);
 }

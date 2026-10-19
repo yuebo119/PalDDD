@@ -16,11 +16,11 @@ Infrastructure / Adapters
   PalDDD.Dapper                    -- Dapper 统一持久化（Outbox/Inbox/Saga/EventLog/Projection/UnitOfWork + SqlTemplates/DapperBulkCopy）
   PalDDD.Dapper.MySql              -- MySqlDataSource DI + InnoDB 性能优化 + 多主机
   PalDDD.Dapper.PostgreSql         -- NpgsqlDataSource + COPY/JSONB/NOTIFY/Sharding/读写分离
-  PalDDD.Dapper.Sqlite             -- SQLite FTS/JSON 扩展 + WAL 优化
+  PalDDD.Dapper.Sqlite             -- SQLite FTS5/JSON1 扩展（external-content + standalone）+ WAL 优化
   PalDDD.PalORM                    -- PalORM 统一持久化（六 Store + UnitOfWork + AmbientTransaction，真 AOT 源生成——ADR-020 推荐栈，见 palorm-adapter.md）
   PalDDD.PalORM.MySql              -- MySQL 方言 DI 固化（BulkCopy/多值 INSERT + 弹性层）
   PalDDD.PalORM.PostgreSql         -- PostgreSQL 方言 DI 固化（RETURNING/COPY + 弹性层）
-  PalDDD.PalORM.Sqlite             -- SQLite 方言 DI 固化（CI AOT publish 验证载体 PalOrmSample）
+  PalDDD.PalORM.Sqlite             -- SQLite 方言 DI 固化 + FTS5/JSON1 双栈 API（DDL 生命周期；CI AOT publish 验证载体 PalOrmSample）
   -> PalDDD.Messaging
   -> PalDDD.EventLog
   -> PalDDD.Transactions
@@ -150,7 +150,7 @@ flowchart BT
 | `PalDDD.Transactions.EFCore` | EF Core Outbox/Inbox/Saga store base contexts。 |
 | `PalDDD.Dapper.PostgreSql` | PostgreSQL 扩展（COPY/Pipelining/NOTIFY/JSONB/多主机/分片/软删除）。 |
 | `PalDDD.Dapper.MySql` | MySQL 扩展。 |
-| `PalDDD.Dapper.Sqlite` | SQLite 扩展。 |
+| `PalDDD.Dapper.Sqlite` | SQLite FTS5/JSON1 扩展（external-content 与 standalone 双形态、引号 JSON 路径）+ PRAGMA 优化。 |
 | `PalDDD.Hosting.AspNetCore` | Web hosting helpers、异常处理中间件、健康检查。 |
 | `PalDDD.Messaging.Kafka` | Kafka broker adapter。 |
 | `PalDDD.Messaging.RabbitMQ` | RabbitMQ broker adapter。 |
@@ -161,7 +161,7 @@ flowchart BT
 | `PalDDD.PalORM` | PalORM 战略栈：`PalOrmUnitOfWork`、ambient transaction、Outbox/Inbox/Saga/EventLog Store 与 SqlErrorClassifier。 |
 | `PalDDD.PalORM.PostgreSql` | PalORM PostgreSQL 方言扩展。 |
 | `PalDDD.PalORM.MySql` | PalORM MySQL 方言扩展。 |
-| `PalDDD.PalORM.Sqlite` | PalORM SQLite 方言扩展。 |
+| `PalDDD.PalORM.Sqlite` | PalORM SQLite 方言扩展 + FTS5/JSON1 片段与 DataSession 索引生命周期扩展。 |
 | `PalDDD.Base` | 基础元包 —— 最小编程模型：领域基元 + 序列化 + 压缩 + 源生成 + 编译时分析器。 |
 | `PalDDD.Extension` | 扩展元包 —— 全量 DDD 能力：CQRS + 事件日志 + 幂等 + 投影 + 消息 + 事务 + DI 装配。 |
 

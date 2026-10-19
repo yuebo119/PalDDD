@@ -551,27 +551,70 @@ static class PalDDD.Dapper.PostgreSql.ShardedTableName
 static class PalDDD.Dapper.Sqlite.SqliteFts
   field const System.String EventLogIndex = events_fts
   field const System.String OutboxIndex = outbox_messages_fts
-  method System.String CreateEventLogIndex(System.String sourceTable, System.String indexName)
-  method System.String CreateOutboxIndex(System.String sourceTable, System.String indexName)
-  method System.String Drop(System.String indexName)
+  method PalDDD.Dapper.Sqlite.SqliteFtsIndexDefinition CreateEventLogIndex(System.String sourceTable, System.Boolean includePayload, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method PalDDD.Dapper.Sqlite.SqliteFtsIndexDefinition CreateExternalContentIndex(System.String sourceTable, System.String indexName, System.String rowidColumn, System.Collections.Generic.IReadOnlyList<System.String> columns, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method PalDDD.Dapper.Sqlite.SqliteFtsIndexDefinition CreateOutboxIndex(System.String sourceTable, System.Boolean includePayload, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method PalDDD.Dapper.Sqlite.SqliteFtsIndexDefinition CreateStandaloneIndex(System.String sourceTable, System.String indexName, System.String sourceKeyColumn, System.Collections.Generic.IReadOnlyList<PalDDD.Dapper.Sqlite.SqliteFtsColumn> columns, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method System.Collections.Generic.IReadOnlyList<System.String> DropLegacyStatements(System.String indexName)
+  method System.Collections.Generic.IReadOnlyList<System.String> DropStatements(System.String indexName, System.Boolean standalone)
   method System.String Highlight(System.String index, System.Int32 columnIndex, System.String open, System.String close)
-  method System.String Match(System.String index, System.String query)
-  method System.String Optimize(System.String indexName)
-  method System.String OrderByRank(System.String index)
-  method System.String Rank(System.String index)
-  method System.String Rebuild(System.String indexName)
+  method System.String MatchExpression(System.String index)
+  method System.String MatchLiteral(System.String index, System.String query)
+  method System.String MatchParameter(System.String index, System.String parameterName)
+  method System.String OrderByRank(System.String index, System.Double[] weights)
+  method System.String Rank(System.String index, System.Double[] weights)
+  method System.String Snippet(System.String index, System.Int32 columnIndex, System.String start, System.String end, System.String ellipsis, System.Int32 tokenCount)
+  method System.Collections.Generic.IReadOnlyList<System.String> TriggerNames(System.String indexName)
+  method System.Threading.Tasks.Task ValidateAsync(System.Data.Common.DbConnection connection, PalDDD.Dapper.Sqlite.SqliteFtsIndexDefinition definition, System.Threading.CancellationToken cancellationToken)
+struct PalDDD.Dapper.Sqlite.SqliteFtsColumn
+  ctor(System.String Name, System.Boolean CastToText)
+  property System.Boolean CastToText [init]
+  property System.String Name [init]
+  method System.Void Deconstruct(System.String& Name, System.Boolean& CastToText)
+  method System.Boolean Equals(PalDDD.Dapper.Sqlite.SqliteFtsColumn other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.Dapper.Sqlite.SqliteFtsIndexDefinition
+  property System.Collections.Generic.IReadOnlyList<PalDDD.Dapper.Sqlite.SqliteFtsColumn> Columns
+  property System.String IndexName
+  property System.Boolean IsStandalone
+  property System.String KeyColumn
+  property System.String MappingTableName
+  property System.String SourceTable
+  property System.Collections.Generic.IReadOnlyList<System.String> Statements
+  property System.Collections.Generic.IReadOnlyList<System.String> TriggerNames
+  method System.Collections.Generic.IReadOnlyList<System.String> DropStatements()
+  method System.String JoinClause(System.String sourceAlias, System.String mapAlias)
+  method System.Collections.Generic.IReadOnlyList<System.String> OptimizeStatements()
+  method System.Collections.Generic.IReadOnlyList<System.String> RebuildStatements()
+  method System.String ToSql()
 static class PalDDD.Dapper.Sqlite.SqliteJson
-  method System.String Array(System.String[] values)
-  method System.String ArrayLength(System.String column)
-  method System.String BuildObject(System.String[] keyValuePairs)
-  method System.String Each(System.String column)
-  method System.String Extract(System.String column, System.String key)
-  method System.String ExtractPath(System.String column, System.String[] path)
-  method System.String HasKey(System.String column, System.String key)
+  method System.String ArrayLength(System.String column, System.String[] path)
+  method System.String ArrayLiteral(System.String[] values)
+  method System.String ArrayParameters(System.String[] parameterNames)
+  method System.String Each(System.String column, System.String[] path)
+  method System.String EqualsLiteral(System.String column, System.String value, System.String[] path)
+  method System.String EqualsParameter(System.String column, System.String parameterName, System.String[] path)
+  method System.String Extract(System.String column, System.String[] path)
+  method System.String ExtractJson(System.String column, System.String[] path)
+  method System.String ExtractText(System.String column, System.String[] path)
+  method System.String GroupArray(System.String column)
+  method System.String GroupObject(System.String keyColumn, System.String valueColumn)
+  method System.String HasKey(System.String column, System.String[] path)
+  method System.String InsertParameter(System.String column, System.String parameterName, System.String[] path)
   method System.String IsValid(System.String column)
+  method System.String ObjectLiteral(System.ValueTuple<System.String, System.String>[] pairs)
+  method System.String ObjectParameters(System.ValueTuple<System.String, System.String>[] pairs)
   method System.String OutboxByType(System.String messageType)
-  method System.String Tree(System.String column)
-  method System.String Type(System.String column, System.String key)
+  method System.String PatchParameter(System.String column, System.String parameterName)
+  method System.String Path(System.String[] segments)
+  method System.String QuoteLiteral(System.String value)
+  method System.String Remove(System.String column, System.String[] path)
+  method System.String ReplaceParameter(System.String column, System.String parameterName, System.String[] path)
+  method System.String SetParameter(System.String column, System.String parameterName, System.String[] path)
+  method System.String Tree(System.String column, System.String[] path)
+  method System.String Type(System.String column, System.String[] path)
 enum PalDDD.Dapper.Sqlite.SqliteOptimizeLevel
   field const PalDDD.Dapper.Sqlite.SqliteOptimizeLevel InMemory = 3
   field const PalDDD.Dapper.Sqlite.SqliteOptimizeLevel Light = 1
@@ -1064,10 +1107,85 @@ class PalDDD.PalORM.PostgreSql.PostgreSqlSagaStateStore<TState>
 # PalDDD.PalORM.Sqlite
 class PalDDD.PalORM.Sqlite.SqliteEventLog
   ctor(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, System.TimeProvider clock)
+static class PalDDD.PalORM.Sqlite.SqliteFts
+  field const System.String EventLogIndex = events_fts
+  field const System.String OutboxIndex = outbox_messages_fts
+  method PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition CreateEventLogIndex(System.String sourceTable, System.Boolean includePayload, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition CreateExternalContentIndex(System.String sourceTable, System.String indexName, System.String rowidColumn, System.Collections.Generic.IReadOnlyList<System.String> columns, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition CreateOutboxIndex(System.String sourceTable, System.Boolean includePayload, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition CreateStandaloneIndex(System.String sourceTable, System.String indexName, System.String sourceKeyColumn, System.Collections.Generic.IReadOnlyList<PalDDD.PalORM.Sqlite.SqliteFtsColumn> columns, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes)
+  method System.Collections.Generic.IReadOnlyList<System.String> DropLegacyStatements(System.String indexName)
+  method System.Collections.Generic.IReadOnlyList<System.String> DropStatements(System.String indexName, System.Boolean standalone)
+  method System.String Highlight(System.String index, System.Int32 columnIndex, System.String open, System.String close)
+  method System.String MatchExpression(System.String index)
+  method System.String MatchLiteral(System.String index, System.String query)
+  method System.String MatchParameter(System.String index, System.String parameterName)
+  method System.String OrderByRank(System.String index, System.Double[] weights)
+  method System.String Rank(System.String index, System.Double[] weights)
+  method System.String Snippet(System.String index, System.Int32 columnIndex, System.String start, System.String end, System.String ellipsis, System.Int32 tokenCount)
+  method System.Collections.Generic.IReadOnlyList<System.String> TriggerNames(System.String indexName)
+  method System.Threading.Tasks.Task ValidateAsync(System.Data.Common.DbConnection connection, PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition definition, System.Threading.CancellationToken cancellationToken)
+struct PalDDD.PalORM.Sqlite.SqliteFtsColumn
+  ctor(System.String Name, System.Boolean CastToText)
+  property System.Boolean CastToText [init]
+  property System.String Name [init]
+  method System.Void Deconstruct(System.String& Name, System.Boolean& CastToText)
+  method System.Boolean Equals(PalDDD.PalORM.Sqlite.SqliteFtsColumn other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
+class PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition
+  property System.Collections.Generic.IReadOnlyList<PalDDD.PalORM.Sqlite.SqliteFtsColumn> Columns
+  property System.String IndexName
+  property System.Boolean IsStandalone
+  property System.String KeyColumn
+  property System.String MappingTableName
+  property System.String SourceTable
+  property System.Collections.Generic.IReadOnlyList<System.String> Statements
+  property System.Collections.Generic.IReadOnlyList<System.String> TriggerNames
+  method System.Collections.Generic.IReadOnlyList<System.String> DropStatements()
+  method System.String JoinClause(System.String sourceAlias, System.String mapAlias)
+  method System.Collections.Generic.IReadOnlyList<System.String> OptimizeStatements()
+  method System.Collections.Generic.IReadOnlyList<System.String> RebuildStatements()
+  method System.String ToSql()
+static class PalDDD.PalORM.Sqlite.SqliteFtsSessionExtensions
+  method System.Threading.Tasks.Task DropIndexAsync(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition definition, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.Task EnsureEventLogIndexAsync(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, System.String sourceTable, System.Boolean includePayload, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.Task EnsureIndexAsync(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition definition, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.Task EnsureOutboxIndexAsync(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, System.String sourceTable, System.Boolean includePayload, System.String tokenizer, System.Collections.Generic.IReadOnlyList<System.Int32> prefixIndexes, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.Task<System.Boolean> IndexExistsAsync(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, System.String indexName, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.Task OptimizeIndexAsync(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition definition, System.Threading.CancellationToken cancellationToken)
+  method System.Threading.Tasks.Task RebuildIndexAsync(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, PalDDD.PalORM.Sqlite.SqliteFtsIndexDefinition definition, System.Threading.CancellationToken cancellationToken)
 class PalDDD.PalORM.Sqlite.SqliteIdempotencyStore
   ctor(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session)
 class PalDDD.PalORM.Sqlite.SqliteInboxStore
   ctor(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session)
+static class PalDDD.PalORM.Sqlite.SqliteJson
+  method System.String ArrayLength(System.String column, System.String[] path)
+  method System.String ArrayLiteral(System.String[] values)
+  method System.String ArrayParameters(System.String[] parameterNames)
+  method System.String Each(System.String column, System.String[] path)
+  method System.String EqualsLiteral(System.String column, System.String value, System.String[] path)
+  method System.String EqualsParameter(System.String column, System.String parameterName, System.String[] path)
+  method System.String Extract(System.String column, System.String[] path)
+  method System.String ExtractJson(System.String column, System.String[] path)
+  method System.String ExtractText(System.String column, System.String[] path)
+  method System.String GroupArray(System.String column)
+  method System.String GroupObject(System.String keyColumn, System.String valueColumn)
+  method System.String HasKey(System.String column, System.String[] path)
+  method System.String InsertParameter(System.String column, System.String parameterName, System.String[] path)
+  method System.String IsValid(System.String column)
+  method System.String ObjectLiteral(System.ValueTuple<System.String, System.String>[] pairs)
+  method System.String ObjectParameters(System.ValueTuple<System.String, System.String>[] pairs)
+  method System.String OutboxByType(System.String messageType)
+  method System.String PatchParameter(System.String column, System.String parameterName)
+  method System.String Path(System.String[] segments)
+  method System.String QuoteLiteral(System.String value)
+  method System.String Remove(System.String column, System.String[] path)
+  method System.String ReplaceParameter(System.String column, System.String parameterName, System.String[] path)
+  method System.String SetParameter(System.String column, System.String parameterName, System.String[] path)
+  method System.String Tree(System.String column, System.String[] path)
+  method System.String Type(System.String column, System.String[] path)
 class PalDDD.PalORM.Sqlite.SqliteOutboxStore
   ctor(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, System.TimeProvider clock)
 static class PalDDD.PalORM.Sqlite.SqlitePalOrmExtensions

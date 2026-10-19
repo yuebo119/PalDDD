@@ -179,6 +179,12 @@ if (args.Contains("--framework", StringComparer.OrdinalIgnoreCase))
     return 0;
 }
 
+if (args.Contains("--sqlgen", StringComparer.OrdinalIgnoreCase))
+{
+    BenchmarkRunner.Run<SqlGenBenchmarks>(ModeConfig(args));
+    return 0;
+}
+
 if (args.Contains("--infra", StringComparer.OrdinalIgnoreCase))
 {
     var medium = ModeConfig(args);

@@ -811,6 +811,22 @@ public sealed class ArchitectureBoundaryTests
         await Assert.That(violations).IsEmpty();
     }
 
+    /// <summary>
+    /// PalORM SQLite 方言包保持双栈平级：不得引用 Dapper 家族，也不得引入 PG/MySQL 驱动。
+    /// 共享 FTS5/JSON1 实现走源码链接，不靠程序集依赖。
+    /// </summary>
+    [Test]
+    public async Task PalOrmSqlite_DoesNotReferenceDapperOrForeignDrivers()
+    {
+        var csprojPath = Path.Combine(Root, "src", "PalDDD.PalORM.Sqlite", "PalDDD.PalORM.Sqlite.csproj");
+        var (packages, projectNames) = ParseCsprojReferences(csprojPath);
+
+        await Assert.That(projectNames.Any(p => p.StartsWith("PalDDD.Dapper", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(packages.Any(p => MatchesPackage(p, "Dapper"))).IsFalse();
+        await Assert.That(packages.Any(p => MatchesPackage(p, "Npgsql"))).IsFalse();
+        await Assert.That(packages.Any(p => MatchesPackage(p, "MySqlConnector"))).IsFalse();
+    }
+
     /// <summary>Domain 层测试不得直接实例化基础设施 DbContext</summary>
     [Test]
     public async Task DomainTests_DoNotDirectlyInstantiateInfrastructureDbContext()

@@ -691,6 +691,25 @@ P1 后框架可控成本占比与残余分配归属各做一次专门测量，�
 
 **判定**：框架侧 CPU 占比 8.2%、可控分配 0 B，剩余 92% 属传输层；P2/P3 候选全部低于「<5% 默认不做」线并已入 `.ai/perf-ledger.md` 表 2。**流式读链路性能轮收敛**，复活条件：框架占比回升到 20% 以上、消费方实测持续超过 5k 项/秒或 10k 并发流、生产实测 flush 占端到端不足 50%、或出现流级横切需求（ADR-030 复活触发器 1）。
 
+## SQLite FTS5/JSON1 双栈 API 基准（2026-10-19，`--sqlgen`）
+
+新增 `--sqlgen` 聚焦车道（`Program.cs`），只跑 `SqlGenBenchmarks`，避免每次复测都启动整个 `--infra`。本轮同机 MediumRun + InProcess + MemoryDiagnoser，单轮 11 个基准，运行 23 秒。数字是绝对成本，不是与 v4 旧 API 的 A/B：旧入口已在破坏式清理中删除，没有同口径对照，故不声明百分比收益。
+
+| 方法 | Mean | Allocated |
+|---|---:|---:|
+| `Sqlite_JsonExtract`（`Extract("payload","Type")`） | 1,888 ns | 344 B |
+| `Sqlite_JsonPath`（三段特殊键路径） | 1,052 ns | 248 B |
+| `Sqlite_JsonObjectParameters`（两组键值参数） | 1,829 ns | 440 B |
+| `Sqlite_FtsMatchParameter`（`MATCH @q` 片段） | 1,244 ns | 208 B |
+| `Sqlite_FtsCreateIndex`（Outbox standalone 完整定义 + `ToSql`） | 7,218 ns | 14,568 B |
+| `Sqlite_FtsCreateEventLogIndex`（EventLog standalone 完整定义 + `ToSql`） | 7,779 ns | 14,104 B |
+
+口径与归属：
+
+- JSON 片段与 MATCH 片段的分配由结果字符串与一次路径字面量构成，属字符串生成 API 的固有成本；核心已用显式循环与 `StringBuilder` 替代 LINQ 中间枚举，定义对象在构造期预计算 `Statements`/`ToSql`/`JoinClause`，调用期不再重复拼接。
+- FTS 定义约 14 KB 分配来自映射表、FTS5 虚表与三个触发器的 DDL 文本加外层定义对象；这是 schema 初始化操作，不属于请求热路径。把它做成硬预算会奖励缓存而非正确性，故不设 B/op 门禁。
+- 统计有效性：本轮为趋势观察，Error/Mean 见 bench 原始输出（`bench/bin/Release/net11.0/artifacts-medium`）；引用计时数字前按 `perf-budgets.md` §2 的 <5%/>15% 自评规则判断。
+
 ## 历史烟测归档（2026-06-28，SDK preview.5）
 
 | 测量项 | 迭代次数 | 耗时 | 当前线程分配 |

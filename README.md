@@ -65,7 +65,7 @@ Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox
 
 **三栈持久化，按场景选型**。PalORM（真 AOT，源生成 SQL）/ Dapper（调用点级 AOT，手写 SQL）/ EF Core（Migration/LINQ/ChangeTracker 生态）平等共存、无废弃计划；五组 Store 能力三栈全量覆盖、行为由跨栈对照测试守护（[ADR-020](docs/decisions/020-persistence-stack-retirement-roadmap.md)、[ADR-024](docs/decisions/024-mysql-lease-mutex-divergence-accept.md)）；支持环境事务与显式事务边界。
 
-**数据库方言深度适配**。PostgreSQL 读写分离 + 多主机故障转移、COPY 批量写入、Pipeline 单往返、LISTEN/NOTIFY 推送、一致性哈希分片、JSONB 操作符；MySQL 多主机负载均衡（FailOver/RoundRobin/LeastConnections）与 InnoDB 会话调优；SQLite WAL/FTS5/JSON1。连接串错误在注册期 fail-fast（IPv6 四象限、内嵌端口、主机列表校验），不延迟到建连。多租户过滤（`[TenantAware]`）由 PalORM 引擎提供（见[适配层文档](docs/palorm-adapter.md)）。
+**数据库方言深度适配**。PostgreSQL 读写分离 + 多主机故障转移、COPY 批量写入、Pipeline 单往返、LISTEN/NOTIFY 推送、一致性哈希分片、JSONB 操作符；MySQL 多主机负载均衡（FailOver/RoundRobin/LeastConnections）与 InnoDB 会话调优；SQLite WAL/FTS5/JSON1（Dapper 与 PalORM 双栈，含 TEXT 主键独立索引与引号 JSON 路径）。连接串错误在注册期 fail-fast（IPv6 四象限、内嵌端口、主机列表校验），不延迟到建连。多租户过滤（`[TenantAware]`）由 PalORM 引擎提供（见[适配层文档](docs/palorm-adapter.md)）。
 
 **全链路 InMemory 测试与托管集成**。六类 Store 均有 InMemory 实现，消息 Broker 缺省 `NullMessageBroker`，单元测试零外部依赖（`PalDDD.Testing` 提供测试基元）；ASP.NET Core 集成提供 `MapCommand`/`MapQuery` Minimal API 端点映射、`UsePalExceptionHandler` 全局异常中间件、`AddPalHealthChecks` 健康检查与 `AddPalLogging` 日志集成。
 
@@ -438,7 +438,7 @@ dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benc
 |------|---------|
 | PostgreSQL | 多主机故障转移（Failover 主备合并）与读写分离（ReadWriteRouter 双数据源：写主库 + 读副本负载均衡）、COPY 批量写入、Pipeline 单往返批处理、LISTEN/NOTIFY 事件推送、一致性哈希分片、JSONB 操作符、软删除、审计日志 |
 | MySQL | 多主机故障转移（FailOver/RoundRobin/LeastConnections，显式 LoadBalance 冲突 fail-fast）、InnoDB 会话调优（锁超时、隔离级别、SQL 模式）、连接池会话保活取舍（ConnectionReset=false） |
-| SQLite | WAL 模式 + PRAGMA 优化（三级调优）、FTS5 全文搜索、JSON1 函数 |
+| SQLite | WAL 模式 + PRAGMA 优化（Dapper）、FTS5 全文搜索（external-content 与 standalone 双形态，双栈）、JSON1 函数与引号路径（双栈） |
 | 三方言共同 | 连接串配置期 fail-fast：IPv6 四象限校验（方括号/裸形态）、内嵌端口语法拦截、主机列表空条目/重复条目检测——配置错误在注册期暴露，不延迟到建连 |
 
 ## 包清单
@@ -522,7 +522,7 @@ flowchart TB
 | [发布规范](docs/release.md) | 版本管理、包范围、CHANGELOG 规范与生成流程 |
 | [踩坑目录](docs/pitfalls.md) | 86 条 DDD/AOT/并发实战踩坑 |
 | [开发流程](docs/development.md) | 开发环境、Git 钩子、测试运行 |
-| [架构决策](docs/decisions/) | 31 份 ADR |
+| [架构决策](docs/decisions/) | 32 份 ADR |
 | [部署性能旋钮](docs/deployment-performance.md) | GC 选型 / PG·MySQL 服务端旋钮实测与权衡 |
 | [变更日志](CHANGELOG.md) | 版本历史（消费者变更 + 工程过程附录） |
 

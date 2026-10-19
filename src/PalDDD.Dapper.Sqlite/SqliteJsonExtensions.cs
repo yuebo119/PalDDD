@@ -1,201 +1,114 @@
-// ─────────────────────────────────────────────────────────────
-// 📦 SqliteJsonExtensions — SQLite JSON 函数工具（AOT 安全）
-// ─────────────────────────────────────────────────────────────
-// AOT 安全性：
-//   ✅ 纯 SQL 字符串拼接 — 零反射，零 IL 生成。
-//   ✅ SQLite 内置 JSON1 扩展 — 默认启用，零额外配置。
-//
-// SQLite JSON 函数（内置，SQLite 3.9+）：
-//   json_extract(col, '$.key')    — 提取值（等价 PG col->>'key'）
-//   json_type(col)                — 获取 JSON 类型
-//   json_valid(col)               — 验证 JSON 有效性
-//   json_array_length(col)        — 数组长度
-//   json_array('a','b')           — 创建 JSON 数组
-//   json_object('k','v')          — 创建 JSON 对象
-//   json_each(col)                — 展开数组为行（表值函数）
-//   json_tree(col)                — 递归展开为树
-//
-// 与 PostgreSQL JSONB 操作符对应：
-//   PG  @>         → json_extract 组合
-//   PG  ->> 'key'  → json_extract(col, '$.key')
-//   PG  ?           → json_type(col, '$.key') IS NOT NULL
-//
-// 使用方式（Dapper）：
-//   conn.QueryAsync<OutboxMessage>(
-//     $"SELECT * FROM outbox WHERE {SqliteJson.Extract("payload", "Type")} = @type",
-//     new { type = "OrderCreated" });
-// ─────────────────────────────────────────────────────────────
-
-using System.Runtime.CompilerServices;
+using PalDDD.Shared;
 
 namespace PalDDD.Dapper.Sqlite;
 
-/// <summary>SQLite JSON 函数工具 — 生成类型安全的 SQL 片段</summary>
+/// <summary>
+/// SQLite JSON1 函数与路径片段生成。
+/// <para>对象键始终使用引号路径（<c>$."a.b"</c>），支持点号、方括号、空格；
+/// 值优先使用 <c>*Parameter</c> 方法，<c>*Literal</c> 方法只服务常量。</para>
+/// </summary>
 public static class SqliteJson
 {
-    // ── 提取操作（最常用）──
+    /// <summary>
+    /// 生成 SQLite JSON 路径字面量，例如 <c>'$."a.b"."c[0]"'</c>。
+    /// 路径段不得为空；键内反斜杠与双引号按 SQLite 路径规则转义。
+    /// </summary>
+    public static string Path(params string[] segments)
+        => SqliteJsonCore.PathLiteral(segments, nameof(segments));
 
-    /// <summary>提取 JSON 字段值：json_extract(col, '$.key')</summary>
-    /// <param name="key">
-    /// JSON 键名。⚠️ 不得含点号（<c>.</c>）——JSON 路径语法中点号是层级分隔符，
-    /// 键名本身含点（如 <c>"a.b"</c>）会被解释为嵌套路径 <c>$.a.b</c>，静默查错位置。
-    /// 也不得含双引号（<c>"</c>）——本 API 不支持引号包裹键形式，含引号的键会生成非法路径。
-    /// 也不得含方括号（<c>[</c> <c>]</c>）——SQLite JSON1 路径中它们是数组索引语法
-    ///（如 <c>$.notes[1]</c> 被解释为数组访问而非键名 <c>notes[1]</c>），静默查错位置。
-    /// 含此类字符的键请改用原生 SQL 手写引号包裹路径（<c>'$."a.b"'</c> 形式）。
-    /// 三十五轮 D4 / ITM-284（R45）：违禁字符改为构建期 fail-fast（ArgumentException）而非执行期静默错查。
-    /// </param>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static string Extract(string column, string key)
-    {
-        // ITM-167 修复：补 null/空白守卫——缺守卫时 null 列名/键进入转义生成畸形
-        // JSON 路径片段，失败延迟到 SQLite 执行期。
-        ArgumentException.ThrowIfNullOrWhiteSpace(column);
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
-        return $"json_extract({EscapeIdentifier(column)}, '$.{EscapeJsonPathSegment(key)}')";
-    }
+    /// <summary>生成 <c>json_extract(列, 路径)</c>。空路径表示整个文档。</summary>
+    public static string Extract(string column, params string[] path)
+        => SqliteJsonCore.Extract(column, path);
 
-    /// <summary>提取嵌套 JSON 路径：json_extract(col, '$.a.b.c')</summary>
-    /// <param name="path">路径段数组（每段约束同 <see cref="Extract"/> 的 key：不得含点号/双引号/方括号——点号是分隔符、方括号是数组索引语法；三十五轮 D4 / ITM-284 起违禁字符构建期抛出）。</param>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static string ExtractPath(string column, params string[] path)
-    {
-        // ITM-167 修复：补 null/空白守卫（column 与 path 数组及每个元素）。
-        ArgumentException.ThrowIfNullOrWhiteSpace(column);
-        ArgumentNullException.ThrowIfNull(path);
-        foreach (var segment in path)
-            ArgumentException.ThrowIfNullOrWhiteSpace(segment);
+    /// <summary>生成 <c>列 ->> 路径</c>，返回 SQL 文本值。</summary>
+    public static string ExtractText(string column, params string[] path)
+        => SqliteJsonCore.ExtractText(column, path);
 
-        return $"json_extract({EscapeIdentifier(column)}, '$.{string.Join('.', path.Select(EscapeJsonPathSegment))}')";
-    }
+    /// <summary>生成 <c>列 -> 路径</c>，返回 JSON 文本。</summary>
+    public static string ExtractJson(string column, params string[] path)
+        => SqliteJsonCore.ExtractJson(column, path);
 
-    // ── 类型检查 ──
+    /// <summary>生成 <c>json_type</c>。空路径返回整个文档的类型。</summary>
+    public static string Type(string column, params string[] path)
+        => SqliteJsonCore.Type(column, path);
 
-    /// <summary>获取 JSON 字段类型：json_type(col, '$.key') → 'text'/'integer'/...</summary>
-    /// <param name="key">JSON 键名（同 <see cref="Extract"/> 的 key 约束：不得含点号/双引号/方括号）。</param>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static string Type(string column, string key)
-    {
-        // ITM-167 修复：补 null/空白守卫（同 Extract）。
-        ArgumentException.ThrowIfNullOrWhiteSpace(column);
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
-        return $"json_type({EscapeIdentifier(column)}, '$.{EscapeJsonPathSegment(key)}')";
-    }
-
-    /// <summary>验证 JSON 有效性：json_valid(col) → 1/0</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    /// <summary>生成 <c>json_valid(列)</c>。</summary>
     public static string IsValid(string column)
-    {
-        // ITM-167 修复：补 null/空白守卫（同 Extract）。
-        ArgumentException.ThrowIfNullOrWhiteSpace(column);
-        return $"json_valid({EscapeIdentifier(column)})";
-    }
+        => SqliteJsonCore.IsValid(column);
 
-    /// <summary>检查键是否存在：json_type(col, '$.key') IS NOT NULL</summary>
-    /// <param name="key">JSON 键名（同 <see cref="Extract"/> 的 key 约束：不得含点号/双引号/方括号）。</param>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static string HasKey(string column, string key)
-        => $"{Type(column, key)} IS NOT NULL";
+    /// <summary>生成键存在判断：<c>json_type(列, 路径) IS NOT NULL</c>。</summary>
+    public static string HasKey(string column, params string[] path)
+        => SqliteJsonCore.HasKey(column, path);
 
-    // ── 数组操作 ──
+    /// <summary>生成 <c>json_array_length</c>。空路径返回整个数组的长度。</summary>
+    public static string ArrayLength(string column, params string[] path)
+        => SqliteJsonCore.ArrayLength(column, path);
 
-    /// <summary>JSON 数组长度：json_array_length(col)</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static string ArrayLength(string column)
-    {
-        // ITM-167 修复：补 null/空白守卫（同 Extract）。
-        ArgumentException.ThrowIfNullOrWhiteSpace(column);
-        return $"json_array_length({EscapeIdentifier(column)})";
-    }
+    /// <summary>生成字符串字面量数组：<c>json_array('a','b')</c>。空参数生成 <c>json_array()</c>。</summary>
+    public static string ArrayLiteral(params string[] values)
+        => SqliteJsonCore.ArrayLiteral(values);
 
-    /// <summary>创建 JSON 数组：json_array('a','b','c')</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static string Array(params string[] values)
-    {
-        // ITM-167 修复：补 null/空白守卫（values 数组及每个元素）。
-        ArgumentNullException.ThrowIfNull(values);
-        foreach (var v in values)
-            ArgumentException.ThrowIfNullOrWhiteSpace(v);
+    /// <summary>生成参数数组：<c>json_array(@a,@b)</c>。参数名可写 <c>a</c> 或 <c>@a</c>。</summary>
+    public static string ArrayParameters(params string[] parameterNames)
+        => SqliteJsonCore.ArrayParameters(parameterNames);
 
-        return $"json_array({string.Join(',', values.Select(v => $"'{EscapeSqlLiteral(v)}'"))})";
-    }
+    /// <summary>生成字符串字面量对象：<c>json_object('k','v')</c>。</summary>
+    public static string ObjectLiteral(params (string Key, string Value)[] pairs)
+        => SqliteJsonCore.ObjectLiteral(pairs);
 
-    /// <summary>创建 JSON 对象：json_object('k1','v1','k2','v2')</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static string BuildObject(params string[] keyValuePairs)
-    {
-        // ITM-167 修复：补 null/空白守卫（数组及每个键值元素）。
-        ArgumentNullException.ThrowIfNull(keyValuePairs);
-        if (keyValuePairs.Length % 2 != 0)
-            throw new ArgumentException("keyValuePairs must have even count.");
-        foreach (var pair in keyValuePairs)
-            ArgumentException.ThrowIfNullOrWhiteSpace(pair);
+    /// <summary>生成参数值对象：<c>json_object('k',@v)</c>。</summary>
+    public static string ObjectParameters(params (string Key, string ParameterName)[] pairs)
+        => SqliteJsonCore.ObjectParameters(pairs);
 
-        var parts = new string[keyValuePairs.Length];
-        for (int i = 0; i < keyValuePairs.Length; i += 2)
-        {
-            parts[i] = $"'{EscapeSqlLiteral(keyValuePairs[i])}'";
-            parts[i + 1] = $"'{EscapeSqlLiteral(keyValuePairs[i + 1])}'";
-        }
-        return $"json_object({string.Join(',', parts)})";
-    }
+    /// <summary>生成 <c>json_set(列, 路径, @参数)</c>。</summary>
+    public static string SetParameter(string column, string parameterName, params string[] path)
+        => SqliteJsonCore.SetParameter(column, parameterName, path);
 
-    // ── 表值函数（FROM 子句展开数组）──
+    /// <summary>生成 <c>json_insert(列, 路径, @参数)</c>。</summary>
+    public static string InsertParameter(string column, string parameterName, params string[] path)
+        => SqliteJsonCore.InsertParameter(column, parameterName, path);
 
-    /// <summary>展开 JSON 数组为行：json_each(col) → key/value/type/...</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static string Each(string column)
-    {
-        // ITM-167 修复：补 null/空白守卫（同 Extract）。
-        ArgumentException.ThrowIfNullOrWhiteSpace(column);
-        return $"json_each({EscapeIdentifier(column)})";
-    }
+    /// <summary>生成 <c>json_replace(列, 路径, @参数)</c>。</summary>
+    public static string ReplaceParameter(string column, string parameterName, params string[] path)
+        => SqliteJsonCore.ReplaceParameter(column, parameterName, path);
 
-    /// <summary>递归展开 JSON 树：json_tree(col) → key/value/type/path</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static string Tree(string column)
-    {
-        // ITM-167 修复：补 null/空白守卫（同 Extract）。
-        ArgumentException.ThrowIfNullOrWhiteSpace(column);
-        return $"json_tree({EscapeIdentifier(column)})";
-    }
+    /// <summary>生成 <c>json_patch(列, @参数)</c>。</summary>
+    public static string PatchParameter(string column, string parameterName)
+        => SqliteJsonCore.PatchParameter(column, parameterName);
 
-    // ── 常用于 Outbox/Saga 查询的快捷方法 ──
+    /// <summary>生成 <c>json_remove(列, 路径)</c>。</summary>
+    public static string Remove(string column, params string[] path)
+        => SqliteJsonCore.Remove(column, path);
 
-    /// <summary>按 Outbox 消息类型过滤（payload JSON 中 Type 字段）</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    /// <summary>生成 <c>json_quote('值')</c>，把普通字符串编码成 JSON 字符串字面量。</summary>
+    public static string QuoteLiteral(string value)
+        => SqliteJsonCore.QuoteLiteral(value);
+
+    /// <summary>生成 <c>json_group_array("列")</c> 聚合表达式。</summary>
+    public static string GroupArray(string column)
+        => SqliteJsonCore.GroupArray(column);
+
+    /// <summary>生成 <c>json_group_object("键列","值列")</c> 聚合表达式。</summary>
+    public static string GroupObject(string keyColumn, string valueColumn)
+        => SqliteJsonCore.GroupObject(keyColumn, valueColumn);
+
+    /// <summary>生成 <c>json_each</c> 表值函数调用。空路径使用单参数形态。</summary>
+    public static string Each(string column, params string[] path)
+        => SqliteJsonCore.Each(column, path);
+
+    /// <summary>生成 <c>json_tree</c> 表值函数调用。空路径使用单参数形态。</summary>
+    public static string Tree(string column, params string[] path)
+        => SqliteJsonCore.Tree(column, path);
+
+    /// <summary>生成字面量相等谓词：<c>json_extract(列, 路径) = '值'</c>。</summary>
+    public static string EqualsLiteral(string column, string value, params string[] path)
+        => SqliteJsonCore.EqualsLiteral(column, value, path);
+
+    /// <summary>生成参数相等谓词：<c>json_extract(列, 路径) = @参数</c>。</summary>
+    public static string EqualsParameter(string column, string parameterName, params string[] path)
+        => SqliteJsonCore.EqualsParameter(column, parameterName, path);
+
+    /// <summary>Outbox 按消息类型过滤的便捷谓词：<c>json_extract("payload", '$."Type"') = '类型'</c>。值内联，仅服务常量。</summary>
     public static string OutboxByType(string messageType)
-    {
-        // ITM-195 修复（三十轮）：补空白守卫——同文件其余 9 个方法已 ITM-167 对齐，唯此漏。
-        // 缺守卫时 null → EscapeJsonPathSegment 内 NRE 而非入口 ArgumentException。
-        ArgumentException.ThrowIfNullOrWhiteSpace(messageType);
-        return $"{Extract("payload", "Type")} = '{EscapeSqlLiteral(messageType)}'";
-    }
-
-    // ── 内部 ──
-
-    // P2/P3 修复（二十一轮·转义语义拆分，对齐 SqliteFtsExtensions.Escape:130）：
-    // 此前 Escape（单引号翻倍）被同时用于标识符位置与值位置——标识符位置的 column
-    // 应双引号包裹（SQLite 标识符引用语法），单引号翻倍对列名既不引用也挡不住注入。
-    // 现拆为：EscapeIdentifier 管标识符（column 参数），EscapeJsonPathSegment 管
-    // JSON 路径键名（Extract/Type/HasKey/ExtractPath），EscapeSqlLiteral 管
-    // 纯 SQL 字符串字面量值（Array/BuildObject 的 JSON 键值、OutboxByType 比较值）。
-    private static string EscapeIdentifier(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
-
-    // 三十六轮 P1-1 修复：D4 的 '.'/'"' fail-fast 被错误应用到 SQL 值位置——
-    // .NET 消息类型全名（Order.Created）几乎必然含 '.'，修复前合法调用正常工作，
-    // 修复后直接抛 ArgumentException。拆分：守卫只留在 JSON 路径位置（点号是层级
-    // 分隔符、引号需转义），值位置仅做单引号翻倍（注入防线完整）。
-    private static string EscapeJsonPathSegment(string s)
-    {
-        // ITM-284（R45）：补 '[' ']'——SQLite JSON1 路径的数组索引语法（$.notes[1] 被解释为
-        // 数组访问而非键名 "notes[1]"，静默错查——与三十五轮 D4 点号问题同源漏网）
-        if (s.Contains('.') || s.Contains('"') || s.Contains('[') || s.Contains(']'))
-            throw new ArgumentException(
-                $"JSON 路径键含违禁字符（'.' '\"' '[' ']'）：\"{s}\"。请改用原生 SQL 手写引号包裹路径。", nameof(s));
-        return s.Replace("'", "''");
-    }
-
-    private static string EscapeSqlLiteral(string s)
-        => s.Replace("'", "''");
+        => SqliteJsonCore.OutboxByType(messageType);
 }
