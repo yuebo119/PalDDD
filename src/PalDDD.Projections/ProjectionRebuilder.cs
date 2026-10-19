@@ -122,18 +122,59 @@ public sealed class ProjectionRebuilder<TMessage>
                 stream = _replaySource.ReadAsync(_sourceName, ct);
             }
 
-            await foreach (var replayEvent in stream.ConfigureAwait(false))
+            // M2（2026-10-19）：CheckpointBatchSize > 1 时按组处理；组内只在最后位置
+            // 做一次检查点写，崩溃后最多重放一组。返回 0 表示该组已被其他 worker 租用，
+            // 停止本轮并在下次 Replay 重试（不得跳过该组）。
+            var batchSize = _processor.CheckpointBatchSize;
+            if (batchSize <= 1)
             {
-                ct.ThrowIfCancellationRequested();
+                await foreach (var replayEvent in stream.ConfigureAwait(false))
+                {
+                    ct.ThrowIfCancellationRequested();
 
-                var context = new ProjectionContext(
-                    replayEvent.SourceName,
-                    replayEvent.Position,
-                    replayEvent.OccurredAt,
-                    replayEvent.Audit);
+                    var context = new ProjectionContext(
+                        replayEvent.SourceName,
+                        replayEvent.Position,
+                        replayEvent.OccurredAt,
+                        replayEvent.Audit);
 
-                if (await _processor.ProcessAsync(replayEvent.Message, context, ct).ConfigureAwait(false))
-                    checked { processed++; }
+                    if (await _processor.ProcessAsync(replayEvent.Message, context, ct).ConfigureAwait(false))
+                        checked { processed++; }
+                }
+            }
+            else
+            {
+                var batch = new List<(TMessage Message, ProjectionContext Context)>(batchSize);
+                var stopForLease = false;
+                await foreach (var replayEvent in stream.ConfigureAwait(false))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    batch.Add((
+                        replayEvent.Message,
+                        new ProjectionContext(
+                            replayEvent.SourceName,
+                            replayEvent.Position,
+                            replayEvent.OccurredAt,
+                            replayEvent.Audit)));
+
+                    if (batch.Count < batchSize)
+                        continue;
+
+                    var advanced = await _processor.ProcessBatchAsync(batch, ct).ConfigureAwait(false);
+                    if (advanced == 0)
+                    {
+                        stopForLease = true;
+                        break;
+                    }
+                    checked { processed += advanced; }
+                    batch.Clear();
+                }
+
+                if (!stopForLease && batch.Count > 0)
+                {
+                    var advanced = await _processor.ProcessBatchAsync(batch, ct).ConfigureAwait(false);
+                    checked { processed += advanced; }
+                }
             }
 
             completed = true;

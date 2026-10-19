@@ -61,6 +61,13 @@
 SQLite/PG/MySQL 三方言真库。风险：区间租约与现有 fencing 语义、长 handler 的租约续期、
 部分提交的边界。
 
+实施状态（2026-10-19）：采用“组末位置检查点”变体，无 schema 变更。`ProjectionProcessor.CheckpointBatchSize`
+（默认 1）>1 时按组调用 `ProcessBatchAsync`：组内只在最后位置 TryStart/MarkCompleted；
+失败时同时把组首标 Failed，保证续读从组首重放而不是组末之后；崩溃后最多重放 N 条。
+`docs/migration/projection-batch-checkpoints.md` 记录语义与验收。原计划的
+`IBatchedProjectionCheckpointStore`/高水位列未建，因为组末位置已提供等价的续读水位；
+若未来需要“组内部分提交”或按时间冲刷，再按能力接口扩展。
+
 ## M3 RabbitMQ 通道拓扑
 
 现状：一个 `IChannel` 同时承担发布、publisher confirms、全部订阅的 QoS/consume/ack。
