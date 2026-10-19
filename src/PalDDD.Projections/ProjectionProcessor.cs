@@ -29,6 +29,25 @@ public sealed class ProjectionProcessor<TMessage>
     // listener 时静默）；可选参数默认 null 向后兼容，DI 注册处无需改动
     private readonly IPalLogger<ProjectionProcessor<TMessage>>? _logger;
 
+    private int _checkpointBatchSize = 1;
+
+    /// <summary>
+    /// 检查点批量大小（2026-10-19 M2）：1 = 逐事件检查点（旧行为）；N&gt;1 时由
+    /// <see cref="ProjectionRebuilder{TMessage}"/> 按 N 条一组调用
+    /// <see cref="ProcessBatchAsync"/>，组内只在最后位置做一次租约/完成写。
+    /// 崩溃后最多重放 N 条；投影 handler 必须幂等（既有 at-least-once 契约）。
+    /// 组内处理时长必须小于 processingTimeout，否则租约可能过期被并行接管。
+    /// </summary>
+    public int CheckpointBatchSize
+    {
+        get => _checkpointBatchSize;
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
+            _checkpointBatchSize = value;
+        }
+    }
+
     public ProjectionProcessor(
         IProjectionHandler<TMessage> handler,
         IProjectionCheckpointStore checkpointStore,
@@ -126,5 +145,101 @@ public sealed class ProjectionProcessor<TMessage>
                 $"Projection '{_handler.ProjectionName}' handler succeeded but checkpoint completion could not be persisted (pending confirmation); error: {markEx.Message}");
         }
         return true;
+    }
+
+    /// <summary>
+    /// 批量处理一组事件（M2）：只在最后位置做 TryStart/MarkCompleted，组内事件直接调用
+    /// handler。失败时把最后位置标记 Failed；崩溃后从上一个已完成位置重放整组，
+    /// 最多重放 <paramref name="batch"/>.Count 条。返回 0 表示该组已被其他 worker 租用，
+    /// 调用方应停止本轮回放并在下次调用重试（不得跳过该组）。
+    /// </summary>
+    public async ValueTask<int> ProcessBatchAsync(
+        IReadOnlyList<(TMessage Message, ProjectionContext Context)> batch,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        if (batch.Count == 0)
+            return 0;
+        foreach (var (message, _) in batch)
+        {
+            if (message is null)
+                throw new ArgumentNullException(nameof(batch));
+        }
+
+        var last = batch[^1];
+        var checkpoint = await _checkpointStore.TryStartAsync(
+            _handler.ProjectionName,
+            last.Context.SourceName,
+            last.Context.Position,
+            _timeProvider.GetUtcNow(),
+            _processingTimeout,
+            ct).ConfigureAwait(false);
+
+        if (checkpoint is null)
+            return 0; // 已被其他 worker 租用/已完成：停止本轮，下次从既有检查点重试
+
+        try
+        {
+            for (var i = 0; i < batch.Count; i++)
+                await _handler.ProjectAsync(batch[i].Message, batch[i].Context, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
+            try
+            {
+                await _checkpointStore.MarkFailedAsync(
+                    checkpoint, failureReason, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception markEx)
+            {
+                ex.Data["MarkFailedError"] = markEx.Message;
+            }
+
+            // 失败位置在组内时，仅把“最后位置”标 Failed 会让续读从最后位置之后开始，
+            // 跳过组内未处理的中间事件。把组首位置也标 Failed，确保重放从组首开始
+            //（最多重放一组；组首的 TryStart 在正常回放序下不会被其他 worker 持有）。
+            var first = batch[0];
+            if (!string.Equals(first.Context.Position, last.Context.Position, StringComparison.Ordinal))
+            {
+                try
+                {
+                    var firstCheckpoint = await _checkpointStore.TryStartAsync(
+                        _handler.ProjectionName,
+                        first.Context.SourceName,
+                        first.Context.Position,
+                        _timeProvider.GetUtcNow(),
+                        _processingTimeout,
+                        CancellationToken.None).ConfigureAwait(false);
+                    if (firstCheckpoint is not null)
+                    {
+                        await _checkpointStore.MarkFailedAsync(
+                            firstCheckpoint, failureReason, _timeProvider.GetUtcNow(), CancellationToken.None)
+                            .ConfigureAwait(false);
+                    }
+                }
+                catch (Exception markFirstEx)
+                {
+                    ex.Data["MarkFirstError"] = markFirstEx.Message;
+                }
+            }
+            throw;
+        }
+
+        try
+        {
+            await _checkpointStore.MarkCompletedAsync(
+                checkpoint, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception markEx)
+        {
+            // 与逐事件路径同语义：handler 已成功，检查点未确认按 at-least-once 返回成功
+            System.Diagnostics.Activity.Current?.AddEvent(new(
+                "projection.completed-pending-confirmation",
+                tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = markEx.Message }));
+            _logger?.Warning(
+                $"Projection '{_handler.ProjectionName}' batch handler succeeded but checkpoint completion could not be persisted (pending confirmation); error: {markEx.Message}");
+        }
+        return batch.Count;
     }
 }

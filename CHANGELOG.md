@@ -14,6 +14,8 @@
 
 ### Added
 
+- **M2 投影批量检查点（2026-10-19 性能迁移）**：`ProjectionProcessor<TMessage>.CheckpointBatchSize`（默认 1）>1 时，`ProjectionRebuilder` 按组调用 `ProcessBatchAsync`，组内只在最后位置做一次 TryStart/MarkCompleted；失败时同时把组首标 Failed，续读从组首重放而不是组末之后，崩溃最多重放 N 条。无 schema 变更，N=1 保持旧路径。语义/用法/验收见 `docs/migration/projection-batch-checkpoints.md`。验证：Integration 412（14 跳过）全绿，新增批量成功与组内失败续读两件测试。
+
 - **M1 Saga 到期索引 expand（2026-10-19 性能迁移）**：`SagaState` 新增 `NextCheckAt`，由 `Saga<TState>` 在步骤开始/完成时计算（当前状态各 `StepStartedAt + Timeout` 的最小值，终态写 null）；`SagaProcessorOptions.EnableDueTimeFilter`（默认 false）开启后，实现 `IDueTimeSagaStore<TState>` 的 EF/Dapper/PalORM/InMemory 四栈只租约 `NextCheckAt <= now` 的活跃行，旧全量路径保留为回填与回退通道。`saga_states` 增加 `next_check_at` 列与 `(status, next_check_at)` 索引；DDL/回填/回滚见 `docs/migration/saga-next-check-at.md`。验证：Transactions 234、PalORM 114（54 跳过）、Integration 410（14 跳过）全绿；公共 API 快照更新。
 
 - **ADR-033 Auto 组合真库 A/B（2026-10-19）**：`--delivery-auto-pg` / `--delivery-auto-mysql` 新增 Auto（窗口 16 + 批量标记 16 + raw）与 Serial 对照车道。wslc pg186/mysql84 真库、1000 条积压、3 迭代/2 预热：PG RTT 0/1/20 为 2,778→203ms（13.7×）、7,117→766ms（9.3×，中位 13.5×）、24,639→1,733ms（14.2×）；MySQL 为 6,448→588ms（11.0×）、9,551→803ms（11.9×）、28,061→1,858ms（15.1×）。组合收益 9.3~15.1×，不是 13× 与 6.4× 的乘积；分配下降 40%~58%。迁移类开放决策点的 expand/contract 清单见 `docs/review/perf-migration-plan-2026-10-19.md`。

@@ -137,6 +137,50 @@ public sealed class RebuilderResumeTests
         await Assert.That(processed).IsEqualTo(1);
     }
 
+    [Test]
+    public async Task ReplayAsync_BatchedCheckpoints_ProcessesAllAndLeavesHighWater()
+    {
+        var store = new InMemoryProjectionCheckpointStore();
+        var handler = new CountingResumeHandler();
+        var processor = new ProjectionProcessor<ResumeEvent>(handler, store) { CheckpointBatchSize = 4 };
+        List<ReplayEvent<ResumeEvent>> events = [];
+        for (var i = 0; i <= 9; i++)
+            events.Add(new ReplayEvent<ResumeEvent>("orders", i.ToString(), DateTimeOffset.UnixEpoch.AddSeconds(i), new ResumeEvent()));
+        var source = new RecordingResumableSource(events);
+        var rebuilder = new ProjectionRebuilder<ResumeEvent>(
+            handler.ProjectionName, "orders", source, store, processor);
+
+        var processed = await rebuilder.ReplayAsync(CancellationToken.None);
+
+        await Assert.That(processed).IsEqualTo(10);
+        await Assert.That(handler.Count).IsEqualTo(10);
+        // 只写组末位置 3/7/9；max+1 = 10，组内中间位置无检查点行。
+        await Assert.That(await store.GetResumePositionAsync("order-summary", "orders", CancellationToken.None))
+            .IsEqualTo("10");
+    }
+
+    [Test]
+    public async Task ReplayAsync_BatchFailure_ResumesFromGroupStartNotAfterGroup()
+    {
+        var store = new InMemoryProjectionCheckpointStore();
+        var handler = new FailingResumeHandler(failAt: "5");
+        var processor = new ProjectionProcessor<ResumeEvent>(handler, store) { CheckpointBatchSize = 4 };
+        List<ReplayEvent<ResumeEvent>> events = [];
+        for (var i = 0; i <= 9; i++)
+            events.Add(new ReplayEvent<ResumeEvent>("orders", i.ToString(), DateTimeOffset.UnixEpoch.AddSeconds(i), new ResumeEvent()));
+        var source = new RecordingResumableSource(events);
+        var rebuilder = new ProjectionRebuilder<ResumeEvent>(
+            handler.ProjectionName, "orders", source, store, processor);
+
+        await Assert.That(async () => await rebuilder.ReplayAsync(CancellationToken.None))
+            .Throws<InvalidOperationException>();
+
+        // 第一批 0..3 完成；第二批 4..7 在 5 失败。组首 4 必须标 Failed，
+        // 否则续读会从组末 7 之后开始，跳过 4/5/6。
+        await Assert.That(await store.GetResumePositionAsync("order-summary", "orders", CancellationToken.None))
+            .IsEqualTo("4");
+    }
+
     private static async Task SeedAsync(InMemoryProjectionCheckpointStore store, string position, bool completed)
     {
         var checkpoint = await store.TryStartAsync(
@@ -163,6 +207,16 @@ public sealed class RebuilderResumeTests
             Count++;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class FailingResumeHandler(string failAt) : IProjectionHandler<ResumeEvent>
+    {
+        public string ProjectionName => "order-summary";
+
+        public ValueTask ProjectAsync(ResumeEvent message, ProjectionContext context, CancellationToken ct = default)
+            => context.Position == failAt
+                ? throw new InvalidOperationException("simulated projection failure")
+                : ValueTask.CompletedTask;
     }
 
     /// <summary>续读可观测桩——记录请求的 fromPosition 与实际产出事件数（OfferedCount）。</summary>
