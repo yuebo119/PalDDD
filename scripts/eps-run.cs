@@ -14,7 +14,7 @@
 //   dotnet run scripts/eps-run.cs -- --quick
 //       跑 EPSL 检查件（selftest + 项目对账）+ --smoke 分配预算门禁。
 //   dotnet run scripts/eps-run.cs -- --full [--strict] [--allow-dirty] [--include-remote] [--retry N]
-//       独占全量：预检 → 构建 → 16 条本地车道 → 汇总/日志。
+//       独占全量：预检 → 构建 → 17 条本地车道 → 汇总/日志。
 //   dotnet run scripts/eps-run.cs -- --lane <name> [--strict]
 //       只跑一条车道（仍做工作树/构建预检）。
 //   dotnet run scripts/eps-run.cs -- --list
@@ -444,6 +444,8 @@ static (Options? Options, string? Error) ParseArgs(string[] arguments)
 
     var modeCount = (quick ? 1 : 0) + (full ? 1 : 0) + (lane is not null ? 1 : 0);
     if (modeCount != 1) return (null, "必须且只能指定 --quick / --full / --lane <name> 之一");
+    if (lane is not null && LaneByName(lane) is null)
+        return (null, $"未知车道「{lane}」；--list 查看清单");
     if (retry < 0) retry = full ? 1 : 0;
     return (new Options(quick, full, lane, strict, allowDirty, includeRemote, dryRun, skipBuild, retry), null);
 }
@@ -458,7 +460,7 @@ static void PrintLanes()
     }
     Console.WriteLine();
     Console.WriteLine("--quick = eps-perf-check（selftest + 项目对账）+ --smoke");
-    Console.WriteLine("--full  = 以上 + 16 条本地车道；--include-remote 追加 4 条真库车道");
+    Console.WriteLine("--full  = 以上 + 17 条本地车道；--include-remote 追加 4 条真库车道");
 }
 
 static void PrintDryRun(Options options)
@@ -611,7 +613,7 @@ static int SelfTest()
     Case("模式冲突必红", ParseArgs(["--quick", "--full"]).Error is not null);
     Case("未知参数必红", ParseArgs(["--nope"]).Error is not null);
     Case("--retry 越界必红", ParseArgs(["--full", "--retry", "9"]).Error is not null);
-    Case("--lane 未知名称由运行期判红", LaneByName("nope") is null);
+    Case("--lane 未知名称必红（含 --dry-run）", ParseArgs(["--lane", "nope"]).Error is not null && ParseArgs(["--dry-run", "--lane", "nope"]).Error is not null);
     Case("本地全量不含 remote", SelectLanes(includeRemote: false).All(l => !l.Remote) && SelectLanes(false).Length == 17);
     Case("--include-remote 追加 4 条", SelectLanes(includeRemote: true).Length == SelectLanes(false).Length + 4);
     Case("每条车道 flag 唯一", Lanes().Select(l => l.Flag).Distinct(StringComparer.Ordinal).Count() == Lanes().Length);

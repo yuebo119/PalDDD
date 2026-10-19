@@ -182,7 +182,9 @@ internal static class SqliteSqlCore
             length += 3;
             foreach (var c in segment)
             {
-                length += c is '\\' or '"' ? 2 : 1;
+                // 反斜杠与双引号按 SQLite JSON 路径规则加反斜杠；单引号按 SQL
+                // 字面量规则翻倍（路径整体位于单引号字面量内）。
+                length += c is '\\' or '"' or '\'' ? 2 : 1;
             }
         }
 
@@ -203,6 +205,8 @@ internal static class SqliteSqlCore
             {
                 if (c is '\\' or '"')
                     destination[position++] = '\\';
+                if (c == '\'')
+                    destination[position++] = '\'';
                 destination[position++] = c;
             }
 

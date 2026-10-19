@@ -52,6 +52,21 @@ foreach (var statement in definition.Statements)
 顺序不能反：先建新索引再删旧触发器，旧触发器仍会写入旧虚表；旧虚表被删后源表写入会报
 `no such table`。
 
+新建的 standalone 索引只由后续 DML 触发器维护，**不会自动回填存量行**。源表已有数据时，
+创建后必须执行一次重建：
+
+```csharp
+foreach (var statement in definition.RebuildStatements())
+{
+    using var command = connection.CreateCommand();
+    command.CommandText = statement;
+    command.ExecuteNonQuery();
+}
+```
+
+PalORM 侧对应 `await session.RebuildIndexAsync(definition)`。漏掉这一步时，旧事件/旧消息
+仍可写入源表，但全文检索查不到它们（静默缺结果，不是报错）。
+
 ## 4. Dapper 用法
 
 ```csharp
@@ -133,6 +148,7 @@ command.Parameters.Add(parameter);
 
 - 对象键始终用双引号包裹，支持 `.`、`[`、`]`、空格。
 - 键内反斜杠写作 `\\`，双引号写作 `\"`；helper 负责转义，调用方直接传原始键。
+- 键内单引号按 SQL 字面量规则翻倍（`'` → `''`），不会截断生成的路径字面量。
 - 空路径表示根文档：`Extract("payload")` 生成 `json_extract("payload", '$')`。
 - 值优先用 `*Parameter` 方法。`*Literal` 方法只用于常量，且只做单引号翻倍。
 
