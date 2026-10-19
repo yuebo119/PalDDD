@@ -575,6 +575,7 @@ internal static class SqliteFtsCore
     {
         using var command = connection.CreateCommand();
 #pragma warning disable S2077 // 表名经 EscapeIdentifier 双引号转义；PRAGMA 不支持参数绑定
+        // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- 表名经 EscapeIdentifier 双引号转义（内部双引号翻倍），PRAGMA 不支持参数绑定
         command.CommandText = "PRAGMA table_info(" + SqliteSqlCore.EscapeIdentifier(table) + ")";
 #pragma warning restore S2077
         using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);

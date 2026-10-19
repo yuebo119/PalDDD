@@ -400,7 +400,7 @@ jobs:
             exit 1
           fi
           if [ "$count" != "29" ]; then
-            echo "::error::Semgrep rule count changed ($count != 29)。请重审 6 处 nosemgrep 注解后有意更新此基线。"
+            echo "::error::Semgrep rule count changed ($count != 29)。请重审 7 处 nosemgrep 注解后有意更新此基线。"
             exit 1
           fi
           exit $status
