@@ -122,6 +122,13 @@ streamBuilder.WebHost.UseUrls("http://127.0.0.1:0");
 streamBuilder.Services.AddPalLogging();
 streamBuilder.Services.AddPalStreamQueryHandler<TokenStreamQry, TokenChunk, TokenStreamHandler>();
 streamBuilder.Services.AddSingleton<IPalValidator<TokenStreamQry>, TokenStreamValidator>();
+// ADR-031 断线续跑：注册表 + 有界缓冲 + 附着/取消端点（2026-10-19 AOT 烟测补强）
+streamBuilder.Services.AddDetachedStreamRuns(options =>
+{
+    options.MaxBufferedItems = 16;
+    options.DetachGrace = TimeSpan.FromSeconds(5);
+    options.MaxRunDuration = TimeSpan.FromSeconds(30);
+});
 
 var streamApp = streamBuilder.Build();
 // GET 形态：浏览器原生 EventSource 兼容
@@ -142,6 +149,15 @@ streamApp.MapStreamQuery<TokenStreamQry, TokenChunk>(
     eventSelector: chunk => chunk.Index == 2 ? "done" : "token",
     idSelector: chunk => chunk.Index.ToString(),
     keepAliveInterval: TimeSpan.FromMilliseconds(40));
+// ADR-031 断线续跑：POST 启动（JSON body）+ 重连附着 + 幂等取消
+streamApp.MapDetachedStreamQuery<TokenStreamQry, TokenChunk>(
+    "/tokens/detached",
+    StreamJsonContext.Default.TokenStreamQry,
+    StreamJsonContext.Default.TokenChunk,
+    eventSelector: chunk => chunk.Index == 2 ? "done" : "token",
+    idSelector: chunk => chunk.Index.ToString());
+streamApp.MapStreamRunAttach<TokenChunk>("/tokens/runs", StreamJsonContext.Default.TokenChunk);
+streamApp.MapStreamRunCancel("/tokens/runs");
 
 await streamApp.StartAsync();
 var serverAddress = streamApp.Services.GetRequiredService<IServer>()
@@ -207,6 +223,44 @@ Check("stream typed event frames", typedLines
     "event: token", "id: 1", "data: {\"index\":1,\"text\":\" stream\"}",
     "event: done", "id: 2", "data: {\"index\":2,\"text\":\" world\"}"
 ]);
+
+// ── 8. 断线续跑端点（ADR-031，2026-10-19 补强）──
+// 覆盖新 POST 启动重载 → 注册表/环形缓冲 → 终态回放附着 → 幂等取消。
+// 该段与 §7 同在 PublishAot 产物里执行，喂 CI aot-verify 的 AOT 覆盖。
+Console.WriteLine("\n── 8. 断线续跑端点（ADR-031）──");
+
+using (var detachedRequest = new HttpRequestMessage(
+    HttpMethod.Post, new Uri($"{serverAddress}/tokens/detached"))
+{
+    Content = new StringContent("{\"prompt\":\"hello\"}", Encoding.UTF8, "application/json")
+})
+using (var detachedResponse = await streamHttpClient.SendAsync(
+    detachedRequest, HttpCompletionOption.ResponseHeadersRead))
+{
+    Check("detached POST status", detachedResponse.StatusCode == System.Net.HttpStatusCode.OK);
+    Check("detached POST X-Run-Id",
+        detachedResponse.Headers.TryGetValues("X-Run-Id", out var runIds)
+        && runIds!.First().Length == 32);
+    var detachedRunId = detachedResponse.Headers.GetValues("X-Run-Id").First();
+    var detachedBody = await detachedResponse.Content.ReadAsStringAsync();
+    Check("detached POST done frame", detachedBody.Contains("event: done", StringComparison.Ordinal));
+
+    // 终态回放：重连附着先回放环形缓冲，再以同一收尾帧结束
+    using var attachResponse = await streamHttpClient.GetAsync(
+        new Uri($"{serverAddress}/tokens/runs/{detachedRunId}/stream"),
+        HttpCompletionOption.ResponseHeadersRead);
+    var attachBody = await attachResponse.Content.ReadAsStringAsync();
+    Check("detached attach replay",
+        attachResponse.StatusCode == System.Net.HttpStatusCode.OK
+        && attachBody.Contains("event: done", StringComparison.Ordinal));
+
+    // 幂等取消：终态 run 再次取消仍返回 204
+    using var cancelRequest = new HttpRequestMessage(
+        HttpMethod.Post, new Uri($"{serverAddress}/tokens/runs/{detachedRunId}/cancel"));
+    using var cancelResponse = await streamHttpClient.SendAsync(cancelRequest);
+    Check("detached cancel terminal",
+        cancelResponse.StatusCode == System.Net.HttpStatusCode.NoContent);
+}
 
 await streamApp.StopAsync();
 

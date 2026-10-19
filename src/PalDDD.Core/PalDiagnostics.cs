@@ -300,4 +300,24 @@ public static class PalMetrics
     /// <summary>流式查询产出项总数</summary>
     public static readonly Counter<long> StreamItems = Meter.CreateCounter<long>(
         "paldd.stream.items", description: "流式查询产出项总数（完成与取消路径累计）");
+
+    // ── 断线续跑（ADR-031，2026-10-19 遥测补强）──
+    // 复用上方五个流式计数器：run 的 started/completed/failed/cancelled/items 与普通流式读
+    // 同口径（取消独立于失败）。本组两个计数器只反映注册表特有行为，普通流式读不产生计数。
+
+    /// <summary>流式查询附着总数（断线续跑：成功附着计一次，含首次附着、重连与接管）</summary>
+    /// <remarks>
+    /// 与 <see cref="StreamStarted"/> 的差值可区分「run 在跑但无人看」的时段；持续低于
+    /// started 说明客户端在 run 结束后不再回看。
+    /// </remarks>
+    public static readonly Counter<long> StreamAttached = Meter.CreateCounter<long>(
+        "paldd.stream.attached", description: "流式查询附着总数（断线续跑：成功附着计数，含首次与重连）");
+
+    /// <summary>流式查询缓冲缺口总数（断线续跑：gap 帧写出次数）</summary>
+    /// <remarks>
+    /// 附着位置早于环形缓冲最旧可用项时写出 <c>event: gap</c>，客户端据此决定重开整轮或
+    /// 接受缺口。该计数持续增长说明 MaxBufferedItems 相对产出速率偏小，或客户端离线过久。
+    /// </remarks>
+    public static readonly Counter<long> StreamGap = Meter.CreateCounter<long>(
+        "paldd.stream.gap", description: "流式查询缓冲缺口总数（断线续跑：gap 帧写出次数）");
 }

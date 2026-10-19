@@ -15,9 +15,11 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using PalDDD.Core.Diagnostics;
 using PalDDD.Core.Logging;
 using PalDDD.CQRS;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
 using System.Text.Json.Serialization.Metadata;
@@ -208,6 +210,12 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         var state = StreamRunState.Completed;
         Exception? failure = null;
         var produced = 0;
+        // 遥测与普通流式读同口径（2026-10-19）：span 覆盖 run 全枚举期（含 detach 间隙），
+        // TTFT 由首个 first-item 事件时间戳与 span 起点之差给出。run 未附着时也计 started：
+        // 产出由注册表泵驱动，与客户端是否在看无关。
+        var activity = PalActivitySource.StartStreamQuery(typeof(TQuery).Name, typeof(TItem).Name);
+        PalMetrics.StreamStarted.Add(1);
+        var firstItemRecorded = false;
         try
         {
             await foreach (var item in handler.HandleAsync(query, _cts.Token)
@@ -218,6 +226,12 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
                     // 预算超限：取消（终态 Cancelled，与客户端取消同态——均非框架缺陷）
                     await _cts.CancelAsync().ConfigureAwait(false);
                     throw new OperationCanceledException(_cts.Token);
+                }
+                if (!firstItemRecorded)
+                {
+                    // TTFT 标记：只在订阅方存在时记事件（AddEvent 会分配事件对象与链表节点）
+                    firstItemRecorded = true;
+                    activity?.AddEvent(new ActivityEvent("first-item"));
                 }
                 // event/id 写入时固化：附着回放不重跑选择器（可能有副作用）
                 Append(new BufferedStreamItem<TItem>(
@@ -236,7 +250,32 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         }
         finally
         {
-            Finish(state, failure, produced);
+            try
+            {
+                Finish(state, failure, produced);
+                // 终态计数与普通流式读共用同一组计数器（零 tag 纪律）；取消独立于失败。
+                // 项吞吐按「已产出」计：缓冲溢出丢弃的项也计入产出，与 StreamItems 语义一致。
+                switch (state)
+                {
+                    case StreamRunState.Completed:
+                        PalMetrics.StreamCompleted.Add(1);
+                        break;
+                    case StreamRunState.Failed:
+                        PalMetrics.StreamFailed.Add(1);
+                        if (failure is not null)
+                            activity?.SetStatus(ActivityStatusCode.Error, failure.GetType().Name);
+                        break;
+                    case StreamRunState.Cancelled:
+                        PalMetrics.StreamCancelled.Add(1);
+                        break;
+                }
+                PalMetrics.StreamItems.Add(produced);
+            }
+            finally
+            {
+                // 即使 run 收尾（含 scope Dispose）抛异常也不泄漏 Activity
+                activity?.Dispose();
+            }
         }
     }
 
@@ -313,6 +352,8 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
             _graceCts?.Cancel();
             _graceCts = null;
             (startIndex, gap) = ResolveStartLocked(lastEventId);
+            // 附着计数：仅在成功返回 true 的路径递增（RejectNewAttach 拒绝不计）
+            PalMetrics.StreamAttached.Add(1);
             // 立即唤醒旧附着的等待者：让它马上看到代际不匹配并发 detached 收尾
             //（不 Pulse 则旧连接要等下一次 Wait 超时——keepAlive 间隔最长 30s 量级，
             // 接管帧迟迟不到，客户端感知为连接僵死）
@@ -527,8 +568,12 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
     }
 
     private static void WriteGapFrame(PipeWriter writer, long oldestIndex)
-        => StreamFrameWriter.WriteRawFrame(
+    {
+        // 每次实际写出 gap 帧计一次（初始缺口与附着期间再丢弃两个写入口共用本方法）
+        PalMetrics.StreamGap.Add(1);
+        StreamFrameWriter.WriteRawFrame(
             writer, $"event: gap\ndata: {{\"oldestIndex\":{oldestIndex}}}\n\n");
+    }
 
     public void Dispose()
     {
