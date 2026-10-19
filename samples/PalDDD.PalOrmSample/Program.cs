@@ -6,6 +6,7 @@
 // 用 dotnet publish -r win-x64 /p:PublishAot=true 验证上述路径 AOT 兼容。
 // 通过：编译期 0 警告 + 运行时 PASSED 输出。
 
+using System.Runtime.CompilerServices;
 using ByteAether.Ulid;
 using PalDDD.PalORM.Sqlite;
 using PalDDD.Transactions;
@@ -68,6 +69,26 @@ await uow.RollbackAsync();
 var afterRollback = await outbox.GetPendingMessagesAsync(10, 5, default);
 if (afterRollback.Count != 1) throw new InvalidOperationException($"Expected 1 pending after rollback (msg3 should be rolled back), got {afterRollback.Count}");
 Console.WriteLine($"[OK] Transaction rollback: msg3 not visible");
+
+// 步骤 6：FTS5/JSON1（AOT 运行时验证）——索引在消息写入后创建，Rebuild 回灌存量行
+var ftsDefinition = SqliteFts.CreateOutboxIndex("outbox_messages");
+await db.EnsureIndexAsync(ftsDefinition);
+await db.RebuildIndexAsync(ftsDefinition);
+
+var ftsFormat = "SELECT COUNT(*) FROM outbox_messages s "
+    + ftsDefinition.JoinClause()
+    + " WHERE "
+    + SqliteFts.MatchExpression(ftsDefinition.IndexName)
+    + " {0}";
+var ftsCount = await db.ScalarAsync<long>(FormattableStringFactory.Create(ftsFormat, "world"));
+if (ftsCount != 1) throw new InvalidOperationException($"Expected 1 FTS hit, got {ftsCount}");
+Console.WriteLine($"[OK] FTS5.Match: Count={ftsCount}");
+
+var jsonPredicate = SqliteJson.Extract("payload", "hello") + " = {0}";
+var jsonCount = await db.ScalarAsync<long>(FormattableStringFactory.Create(
+    "SELECT COUNT(*) FROM outbox_messages WHERE " + jsonPredicate, "world"));
+if (jsonCount != 1) throw new InvalidOperationException($"Expected 1 JSON hit, got {jsonCount}");
+Console.WriteLine($"[OK] JSON1.Extract: Count={jsonCount}");
 
 Console.WriteLine();
 Console.WriteLine("=== PalDDD PalORM AOT verification PASSED ===");

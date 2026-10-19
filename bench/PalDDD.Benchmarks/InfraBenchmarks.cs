@@ -302,6 +302,14 @@ public class SqlGenBenchmarks
         => SqliteJson.Extract("payload", "Type");
 
     [Benchmark]
+    public string Sqlite_JsonPath()
+        => SqliteJson.Path("a.b", "c[0]", "d e");
+
+    [Benchmark]
+    public string Sqlite_JsonObjectParameters()
+        => SqliteJson.ObjectParameters(("Type", "type"), ("Version", "version"));
+
+    [Benchmark]
     public string PostgreSql_SoftDelete()
         => PostgreSqlSoftDelete.Delete("outbox_messages", "id=1");
 
@@ -311,7 +319,15 @@ public class SqlGenBenchmarks
 
     [Benchmark]
     public string Sqlite_FtsCreateIndex()
-        => SqliteFts.CreateOutboxIndex("outbox_messages");
+        => SqliteFts.CreateOutboxIndex("outbox_messages").ToSql();
+
+    [Benchmark]
+    public string Sqlite_FtsCreateEventLogIndex()
+        => SqliteFts.CreateEventLogIndex("events").ToSql();
+
+    [Benchmark]
+    public string Sqlite_FtsMatchParameter()
+        => SqliteFts.MatchParameter("events_fts", "q");
 
     // 三十七轮 P2-6 修复：构造外置——ConsistentHash 构造含 2048 vnode + Array.Sort，
     // 原基准把构造成本计入 GetShardId 测量（对齐 ITM-152/153 构造外置先例）

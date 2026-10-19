@@ -65,7 +65,7 @@ Pal.DDD standardizes the equality semantics of Entity, allocation-free collectio
 
 **Three persistence stacks, chosen by scenario**. PalORM (true AOT, source-generated SQL) / Dapper (call-site-level AOT, hand-written SQL) / EF Core (Migration/LINQ/ChangeTracker ecosystem) coexist equally long-term with no retirement plan; five Store capabilities are fully covered across all three stacks, with behavior guarded by cross-stack parity tests ([ADR-020](docs/decisions/020-persistence-stack-retirement-roadmap.md), [ADR-024](docs/decisions/024-mysql-lease-mutex-divergence-accept.md)); ambient transactions and explicit transaction boundaries are supported.
 
-**Deep dialect adaptation**. PostgreSQL read/write splitting + multi-host failover, COPY bulk write, Pipeline single round-trip, LISTEN/NOTIFY push, consistent-hashing sharding, JSONB operators; MySQL multi-host load balancing (FailOver/RoundRobin/LeastConnections) and InnoDB session tuning; SQLite WAL/FTS5/JSON1. Connection-string errors fail fast at registration (IPv6 four-quadrant, embedded-port, host-list validation), not deferred to connection time. Multi-tenant filtering (`[TenantAware]`) comes from the PalORM engine (see the [adapter docs](docs/palorm-adapter.md)).
+**Deep dialect adaptation**. PostgreSQL read/write splitting + multi-host failover, COPY bulk write, Pipeline single round-trip, LISTEN/NOTIFY push, consistent-hashing sharding, JSONB operators; MySQL multi-host load balancing (FailOver/RoundRobin/LeastConnections) and InnoDB session tuning; SQLite WAL/FTS5/JSON1 across both Dapper and PalORM stacks, including TEXT-primary-key standalone indexes and quoted JSON paths. Connection-string errors fail fast at registration (IPv6 four-quadrant, embedded-port, host-list validation), not deferred to connection time. Multi-tenant filtering (`[TenantAware]`) comes from the PalORM engine (see the [adapter docs](docs/palorm-adapter.md)).
 
 **Full-pipeline InMemory testing and hosting integration**. All six Store types have InMemory implementations and the default message broker is `NullMessageBroker`, so unit tests need zero external dependencies (`PalDDD.Testing` provides test primitives); the ASP.NET Core integration ships `MapCommand`/`MapQuery` Minimal API endpoint mapping, `UsePalExceptionHandler` global exception middleware, `AddPalHealthChecks` health checks, and `AddPalLogging` logging integration.
 
@@ -444,7 +444,7 @@ For full data, the MediumRun formal baselines, and the historical archive, see [
 |------|---------|
 | PostgreSQL | Multi-host failover (Failover primary/standby merge) and read/write splitting (ReadWriteRouter dual data sources: writes to primary + load-balanced replica reads), COPY bulk write, Pipeline single-round-trip batching, LISTEN/NOTIFY event push, consistent-hashing sharding, JSONB operators, soft delete, audit log |
 | MySQL | Multi-host failover (FailOver/RoundRobin/LeastConnections, explicit LoadBalance conflict fail-fast), InnoDB session tuning (lock timeout, isolation level, SQL mode), connection-pool session survival guidance (ConnectionReset=false) |
-| SQLite | WAL mode + PRAGMA optimization (three-tier tuning), FTS5 full-text search, JSON1 functions |
+| SQLite | WAL mode + PRAGMA optimization (Dapper), FTS5 full-text search (external-content and standalone forms across both stacks), JSON1 functions and quoted paths (both stacks) |
 | All three dialects | Connection-string fail-fast at registration time: IPv6 four-quadrant validation (bracketed/bare forms), embedded-port syntax interception, blank/duplicate host-list entry detection — config errors surface at registration, not at connection time |
 
 ## Package List
@@ -528,7 +528,7 @@ flowchart TB
 | [Release SOP](docs/release.md) | Versioning, package scope, CHANGELOG conventions & workflow |
 | [Pitfalls](docs/pitfalls.md) | 86 real-world DDD/AOT/concurrency pitfalls |
 | [Development](docs/development.md) | Dev environment, Git hooks, test running |
-| [Architecture Decisions](docs/decisions/) | 31 ADRs |
+| [Architecture Decisions](docs/decisions/) | 32 ADRs |
 | [Deployment Performance Knobs](docs/deployment-performance.md) | GC mode / PG·MySQL server knobs with measured trade-offs |
 | [Changelog](CHANGELOG.md) | Version history (consumer-facing changes + engineering appendix) |
 

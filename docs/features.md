@@ -154,11 +154,11 @@
 
 存储层共性能力：原子租约三分支（PG FOR UPDATE SKIP LOCKED RETURNING / MySQL 版本探针 JOIN / SQLite RETURNING）、三重 fencing 标记、原生批量导入（PG Binary COPY / MySQL BulkCopy / SQLite 批 INSERT）、SQL 错误分类器（四方言唯一约束码集）、MySQL ≥8.0.18 SKIP LOCKED 版本探针（`MySqlLeasePolicy`，ADR-025）、Saga jsonb CAST 适配、连接池预热 HostedService。
 
-Dapper 侧独有的方言增强面（PalORM 方言包暂未携带，待后续迁移）：
+Dapper 侧独有的方言增强面（PalORM 方言包暂未携带，待后续迁移）；SQLite FTS5/JSON1 例外，已按 ADR-032 双栈提供：
 
 | 方言 | 能力 | 锚点 |
 |---|---|---|
-| SQLite | 分级 PRAGMA 优化（WAL/Production/InMemory 自动降级）、FTS5 全文检索（外部内容虚表 + 三同步触发器）、JSON1 函数工具、内存库生命周期自动判定 | SqlitePerformanceOptimizer.cs、SqliteFtsExtensions.cs、SqliteJsonExtensions.cs |
+| SQLite | 分级 PRAGMA 优化（WAL/Production/InMemory 自动降级）、内存库生命周期自动判定（Dapper 独有）；FTS5 全文检索（external-content 与 standalone 双形态、三同步触发器、TEXT 主键映射表）、JSON1 函数与引号路径、参数化查询片段（双栈同语义，共享 `src/PalDDD.Shared` 内部核心） | SqlitePerformanceOptimizer.cs、SqliteFtsExtensions.cs、SqliteJsonExtensions.cs、SqliteFtsSessionExtensions.cs（PalORM） |
 | PostgreSQL | 多主机故障转移/读写分离路由（含 IPv6 形态守卫）、LISTEN/NOTIFY 实时 Outbox 通知器（背压合并 + 指数退避重连）、JSONB 操作符族 + GIN 索引、一致性哈希分库分表、软删除、行级审计触发器、管道批量执行、CSV/JSONL 流式报表导出 | PostgreSqlMultiHost.cs、PostgreSqlOutboxNotifier.cs、PostgreSqlJsonbExtensions.cs、PostgreSqlSharding.cs、PostgreSqlSoftDelete.cs、PostgreSqlAuditor.cs、PostgreSqlReportHelper.cs |
 | MySQL | InnoDB 会话优化（锁超时/隔离级别/utf8mb4）、多主机故障转移/负载均衡/最少连接三入口（内嵌端口语法等守卫族） | MySqlPerformanceOptimizer.cs、MySqlMultiHost.cs |
 

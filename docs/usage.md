@@ -411,6 +411,88 @@ services.AddScoped<IEventLog>(sp => sp.GetRequiredService<AppEventLogDbContext>(
 
 完整枚举读取结果后还会记录 `paldd.eventlog.read` metric，应用层可用于观察审计回放、投影修复和跨上下文诊断的事件读取吞吐。
 
+## 使用 SQLite FTS5 与 JSON1
+
+`PalDDD.Dapper.Sqlite` 与 `PalDDD.PalORM.Sqlite` 提供同语义的 FTS5/JSON1 片段与索引定义 API（ADR-032）。两个包共享 `src/PalDDD.Shared` 内部核心，PalORM 包不依赖 Dapper。
+
+### 建索引（Dapper）
+
+```csharp
+var definition = SqliteFts.CreateOutboxIndex("outbox_messages");
+await SqliteFts.ValidateAsync(connection, definition); // 校验源表列与主键形态
+foreach (var statement in definition.Statements)
+    await connection.ExecuteAsync(statement);
+```
+
+`CreateOutboxIndex` / `CreateEventLogIndex` 使用 standalone 索引（映射表 + 触发器），TEXT/ULID 主键与 BLOB payload 都可用；`payload` 默认以 `CAST(... AS TEXT)` 入索引。需要 INTEGER 主键 + TEXT 列的 external-content 索引时用 `CreateExternalContentIndex`，`ValidateAsync` 会在 TEXT 主键上提前抛错。
+
+### 查询（Dapper）
+
+```csharp
+var sql = $"SELECT s.* FROM outbox_messages s {definition.JoinClause()} " +
+          $"WHERE {SqliteFts.MatchParameter(definition.IndexName, "q")} " +
+          SqliteFts.OrderByRank(definition.IndexName);
+var rows = await connection.QueryAsync<OutboxRow>(sql, new { q = "urgent" });
+```
+
+`MatchParameter` 生成 `MATCH @q`，用户输入不要用 `MatchLiteral`。JSON 谓词：
+
+```csharp
+var sql = $"SELECT * FROM outbox_messages WHERE {SqliteJson.EqualsParameter("payload", "type", "Type")}";
+var rows = await connection.QueryAsync<OutboxRow>(sql, new { type = "Order.Created" });
+```
+
+JSON 路径始终引号化，键可以直接包含 `.`、`[`、`]`、空格；键内双引号与反斜杠由 helper 转义。
+
+### 建索引与查询（PalORM）
+
+```csharp
+await using var session = await DataSession<SqliteProvider>.CreateAsync(
+    DbOptions.Development(connectionString));
+
+var definition = SqliteFts.CreateEventLogIndex("events");
+await session.EnsureIndexAsync(definition); // 校验 + 逐条执行 DDL
+
+var format = "SELECT COUNT(*) FROM events s "
+    + definition.JoinClause()
+    + " WHERE "
+    + SqliteFts.MatchExpression(definition.IndexName)
+    + " {0}";
+var sql = FormattableStringFactory.Create(format, "order");
+var count = await session.ScalarAsync<long>(sql);
+```
+
+PalORM 的 `FormattableString` 会把插值洞变成参数。SQL 片段必须用字符串拼接进格式串，不要把片段作为 `{...}` 洞传入（PD18）。JSON 谓词同理：
+
+```csharp
+var predicate = SqliteJson.Extract("payload", "Type") + " = {0}";
+var sql = FormattableStringFactory.Create(
+    "SELECT COUNT(*) FROM outbox_messages WHERE " + predicate,
+    "Order.Created");
+```
+
+也可以走原生命令：
+
+```csharp
+using var command = session.GetRawConnection().CreateCommand();
+command.CommandText = "SELECT COUNT(*) FROM outbox_messages WHERE "
+    + SqliteJson.EqualsParameter("payload", "type", "Type");
+var parameter = command.CreateParameter();
+parameter.ParameterName = "@type";
+parameter.Value = "Order.Created";
+command.Parameters.Add(parameter);
+```
+
+### 生命周期
+
+`SqliteFtsIndexDefinition` 提供 `RebuildStatements()`、`OptimizeStatements()`、`DropStatements()`；PalORM 侧对应 `RebuildIndexAsync`、`OptimizeIndexAsync`、`DropIndexAsync`、`IndexExistsAsync`。v4 旧索引升级先执行 `SqliteFts.DropLegacyStatements(indexName)`，顺序见 [v5 迁移指南](migration/sqlite-fts-json-v5.md)。
+
+### 约束
+
+- FTS5/JSON1 只处理文本 JSON。压缩后的 payload 不是文本，需先解压，或只索引 `event_name`/`type`。
+- external-content 索引要求 INTEGER 主键；TEXT 主键请用 standalone。
+- 独立索引会额外创建 `{indexName}_map` 映射表，`DropStatements()` 会一并删除。
+
 ## 使用 Projection
 
 Projection 用于从 Outbox、broker 或事件流构建 Read Model。`ProjectionProcessor<TMessage>` 通过 checkpoint 保证同一个 projection/source/position 只成功处理一次：

@@ -714,6 +714,8 @@ EventLog 的 GlobalPosition 是全局单调递增的位置号，用于全量回�
 CAS（Revision 令牌）替代 Serializable → 事务降为 ReadCommitted。
 ```
 
+> SQLite 的 EventLog 全文检索与 JSON 查询见 [usage.md 的 SQLite FTS5/JSON1 一节](usage.md#使用-sqlite-fts5-与-json1)。
+
 ### 4.10 Projections：读模型投影
 
 **框架解决的问题：** 订单列表页需要显示「订单金额 + 状态 + 物流信息」，这些数据来自多个服务。每次查询都跨服务 join 太慢。Projections 把事件流转换成专门给查询用的读模型。

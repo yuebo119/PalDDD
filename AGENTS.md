@@ -121,7 +121,7 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 | **性能预算契约（EPSL）** | `perf-budgets.md`（根目录；分配判定层预算，与既有 `--smoke` 断言对齐） |
 | **性能台账（勿重开/明确不做）** | `.ai/perf-ledger.md`（提性能建议前必查，防重复提案） |
 | **性能实测记录** | `docs/performance.md`（37 基准类，2026-10-18 口径；真库车道、统计有效性自评） |
-| 已定的架构决策（含被否决方案） | `docs/decisions/`（31 份 ADR，2026-10-18 ADR-031 增） |
+| 已定的架构决策（含被否决方案） | `docs/decisions/`（32 份 ADR，2026-10-19 ADR-032 增） |
 | 历轮评审与清单 | `docs/review/`（含 `NAMING.md` 命名约定与索引） |
 | 迁移与发布 | `docs/migration/`、`docs/release.md` |
 | 已知坑 | `docs/pitfalls.md` |

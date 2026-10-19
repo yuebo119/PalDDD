@@ -372,7 +372,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-10-18 断线续跑轮复验）：227 源文件·36 项目·0 违规（2026-10-18 上午为 225 文件，断线续跑决策新增 StreamRunRegistry 与 DetachedStreamEndpoints 两文件——运行注册表与端点原语各自单一事实源）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-10-19 ADR-032 复验）：237 源文件·36 项目·0 违规（2026-10-19 双栈 FTS5/JSON1 新增 10 个源文件：共享核心 3、Dapper 公开类型 2、PalORM 公开类型与门面 5；此前 227 文件）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 
@@ -560,7 +560,7 @@ public sealed class SagaKeyValidationTests { ... }
 
 ### 5.7 架构边界测试
 
-`ArchitectureBoundaryTests.cs`（37 个测试方法 / 99 断言点）将 ADR 和 Clean Architecture 落地为可执行断言：
+`ArchitectureBoundaryTests.cs`（38 个测试方法 / 103 断言点）将 ADR 和 Clean Architecture 落地为可执行断言：
 
 - 项目引用禁令矩阵（`[Theory]` + InlineData）
 - 源码内容关键字禁令（扫描 `.cs`，过滤注释行）

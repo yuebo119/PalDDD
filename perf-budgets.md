@@ -42,7 +42,7 @@
 | --- | --- | --- |
 | smoke 分配断言 | `-- --smoke`（退出码 1 即红）；CI `build-and-test` 的 `perf-smoke` 步骤 + 本地跑测 | 每提交 / 每次跑测（2026-10-18 从人工 TOOL 转每提交门禁） |
 | 流式零分配锁定 | `StreamFrameAllocationTests` + `--stream` 微 lane | 每次测试 / 节点审计 |
-| Medium 水位对照 | `--framework` / `--app` / `--infra` 复跑 | 节点审计 |
+| Medium 水位对照 | `--framework` / `--app` / `--infra` / `--sqlgen` 复跑 | 节点审计 |
 | 回归自动归因 | EPSL perf-bisect（**设计稿，未实现**：~/.zcode/perf-template/audit/bisect-design.md）；当前走人工 commit 区间 + 交替复测 | 门禁红且复测确认非环境态 |
 
 ## 6. 修订触发
