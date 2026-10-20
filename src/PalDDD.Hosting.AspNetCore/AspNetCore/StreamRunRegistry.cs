@@ -117,7 +117,7 @@ internal readonly record struct BufferedStreamItem<TItem>(long Index, TItem Item
 /// <summary>单个流式 run：状态机 + 环形缓冲 + 自有 CTS + 完成信号 + 附着管理。</summary>
 internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly BufferedStreamItem<TItem>[] _buffer;
     private readonly DetachedStreamOptions _options;
     private readonly TimeProvider _timeProvider;
@@ -324,7 +324,8 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
             _terminalAt = _timeProvider.GetUtcNow();
             SignalWaitersLocked();
         }
-        _graceCts?.Cancel(); // 终态：宽限计时不再有意义
+        if (_graceCts is not null)
+            await _graceCts.CancelAsync().ConfigureAwait(false); // 终态：宽限计时不再有意义
         if (_logger is not null && _logger.IsEnabled(LogLevel.Debug))
         {
             _logger.Debug(failure is null
@@ -558,12 +559,14 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
 
                 if (wait)
                 {
-                    // true=被 Append/Finish/Cancel/接管唤醒；false=等待期满（有心跳则写心跳）
+                    // true=被 Append/Finish/Cancel/接管唤醒；false=等待期满（有心跳则写心跳）。
+                    // 唤醒即 continue；只有等待期满才落下去走心跳分支——旧实现赋值后无条件
+                    // continue，心跳帧从未写出（S1854 死赋值暴露）。
                     var signaled = await _signal.WaitAsync(waitMilliseconds, ct).ConfigureAwait(false);
-                    heartbeat = !signaled && keepAliveInterval is not null;
-                    if (!signaled)
-                        ct.ThrowIfCancellationRequested();
-                    continue;
+                    if (signaled)
+                        continue;
+                    ct.ThrowIfCancellationRequested();
+                    heartbeat = keepAliveInterval is not null;
                 }
 
                 if (gap && batch is null && !superseded && !terminal)

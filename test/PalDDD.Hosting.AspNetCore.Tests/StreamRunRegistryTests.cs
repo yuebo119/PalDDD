@@ -207,6 +207,45 @@ public sealed partial class StreamRunRegistryTests
         }
     }
 
+    [Test]
+    public async Task StreamToAsync_IdleWithKeepAlive_WritesHeartbeat()
+    {
+        using var registry = CreateRegistry(out var options, detachGraceSeconds: 30);
+        options.DetachGrace = TimeSpan.FromSeconds(30);
+        var runId = registry.Register(new RegQuery("p"), null, null, new BlockingHandler());
+        var run = await WaitForRunAsync(registry, runId);
+        await Assert.That(run.TryBeginAttach(null, out var startIndex, out var gap, out var generation)).IsTrue();
+
+        using var cts = new CancellationTokenSource();
+        var context = new DefaultHttpContext();
+        context.RequestAborted = cts.Token;
+        var body = new MemoryStream();
+        context.Response.Body = body;
+
+        var streamTask = run.StreamToAsync(
+            context,
+            RegChunkJsonContext.Default.RegChunk,
+            generation,
+            startIndex,
+            gap,
+            keepAliveInterval: TimeSpan.FromMilliseconds(30));
+
+        // 覆盖 3-4 个心跳窗口后取消；旧实现赋值后无条件 continue，心跳帧从未写出（S1854）
+        await Task.Delay(120);
+        await cts.CancelAsync();
+        try
+        {
+            await streamTask.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (OperationCanceledException)
+        {
+            // 断线取消是正常收尾路径
+        }
+
+        var text = System.Text.Encoding.UTF8.GetString(body.ToArray());
+        await Assert.That(text).Contains(":keepalive");
+    }
+
     // ─── 夹具 ───
 
     private static StreamRunRegistry CreateRegistry(

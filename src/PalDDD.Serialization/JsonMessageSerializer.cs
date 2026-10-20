@@ -230,22 +230,6 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     }
 
     /// <inheritdoc />
-    /// <remarks>
-    /// <see cref="Serialize(object, MessageDescriptor)"/> 已由 <c>WrittenSpan.ToArray()</c>
-    /// 产出独立精确数组；本方法命中时直接交还该数组，不再复制。
-    /// </remarks>
-    public byte[] SerializeToArray(object message, MessageDescriptor descriptor)
-    {
-        var payload = Serialize(message, descriptor);
-        if (MemoryMarshal.TryGetArray(payload, out var segment)
-            && segment.Array is { } array
-            && segment.Offset == 0
-            && segment.Count == array.Length)
-            return array;
-        return payload.ToArray();
-    }
-
-    /// <inheritdoc />
     public TMessage? Deserialize<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.NonPublicConstructors)] TMessage>(
         ReadOnlySpan<byte> payload, MessageDescriptor descriptor)  // P3（二十三轮）：对齐接口 DAM 标注（IL2095）
     {
@@ -268,6 +252,22 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         // 默认路径：强制转换
         var legacyInfo = (System.Text.Json.Serialization.Metadata.JsonTypeInfo<TMessage>)descriptor.JsonTypeInfo;
         return System.Text.Json.JsonSerializer.Deserialize(payload, legacyInfo);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <see cref="Serialize(object, MessageDescriptor)"/> 已由 <c>WrittenSpan.ToArray()</c>
+    /// 产出独立精确数组；本方法命中时直接交还该数组，不再复制。
+    /// </remarks>
+    public byte[] SerializeToArray(object message, MessageDescriptor descriptor)
+    {
+        var payload = Serialize(message, descriptor);
+        if (MemoryMarshal.TryGetArray(payload, out var segment)
+            && segment.Array is { } array
+            && segment.Offset == 0
+            && segment.Count == array.Length)
+            return array;
+        return payload.ToArray();
     }
 
     // ── 池化序列化路径 ─────────────────────────────────────

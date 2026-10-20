@@ -238,17 +238,6 @@ public sealed class Dispatcher
         return (TResponse)result!;
     }
 
-    /// <summary>执行查询</summary>
-    public async ValueTask<TResponse> QueryAsync<TResponse>(IQuery<TResponse> q, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(q);
-
-        // ITM-223：同 SendAsync——IQuery<OrderDto?> 合法返回 null
-        // ITM-218 修复（三十二轮）：补 ConfigureAwait(false)（见 SendAsync）
-        var result = await ExecutePipelineAsync(q.GetType(), q, requestServices: null, ct).ConfigureAwait(false);
-        return (TResponse)result!;
-    }
-
     /// <summary>
     /// 发送命令（无返回值），复用调用方提供的作用域（2026-10-19 性能实施轮）。
     /// ASP.NET 端点应传 <c>HttpContext.RequestServices</c>，避免每请求再建一层 scope。
@@ -271,6 +260,17 @@ public sealed class Dispatcher
         ArgumentNullException.ThrowIfNull(requestServices);
 
         var result = await ExecutePipelineAsync(cmd.GetType(), cmd, requestServices, ct).ConfigureAwait(false);
+        return (TResponse)result!;
+    }
+
+    /// <summary>执行查询</summary>
+    public async ValueTask<TResponse> QueryAsync<TResponse>(IQuery<TResponse> q, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(q);
+
+        // ITM-223：同 SendAsync——IQuery<OrderDto?> 合法返回 null
+        // ITM-218 修复（三十二轮）：补 ConfigureAwait(false)（见 SendAsync）
+        var result = await ExecutePipelineAsync(q.GetType(), q, requestServices: null, ct).ConfigureAwait(false);
         return (TResponse)result!;
     }
 

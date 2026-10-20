@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 using PalDDD.Core.Diagnostics;
 using PalDDD.Core.Logging;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
 using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions;
@@ -628,6 +629,7 @@ public sealed class OutboxBatchProcessor
             threshold > 1 ? options.BatchMarkFlushInterval : TimeSpan.MaxValue);
     }
 
+    [StructLayout(LayoutKind.Auto)]
     private readonly record struct DeliveryPolicy(
         int PublishWindow,
         int BatchMarkThreshold,
