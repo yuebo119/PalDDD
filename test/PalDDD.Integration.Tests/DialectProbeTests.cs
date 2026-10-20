@@ -311,6 +311,22 @@ public sealed partial class DialectProbeTests
             new ReadOnlyMemory<byte>([9]), new ReadOnlyMemory<byte>([9]), audit);
         var b4R2 = await log.AppendAsync(b4Stream, ExpectedStreamVersion.StreamExists, [b4Second], default);
         await Assert.That(b4R2.FirstStreamVersion).IsEqualTo(1);
+
+        // 2026-10-20：PG 原子批路径行数上限回归——4,500 行超过 4,000 上限，必须回落
+        // 预检 + 分块路径（MySQL 同走分块）；断言版本跨度与读回条数。
+        var capStream = "probe-b4-cap";
+        var capEvents = new List<EventData>(4_500);
+        for (var i = 0; i < 4_500; i++)
+        {
+            capEvents.Add(new EventData(Ulid.New(), "probe.event.v1", 1, "application/json",
+                new ReadOnlyMemory<byte>([1]), new ReadOnlyMemory<byte>([1]), audit));
+        }
+        var capResult = await log.AppendAsync(capStream, ExpectedStreamVersion.NoStream, capEvents, default);
+        await Assert.That(capResult.FirstStreamVersion).IsEqualTo(0);
+        await Assert.That(capResult.LastStreamVersion).IsEqualTo(4_499);
+        var capRead = 0;
+        await foreach (var _ in log.ReadStreamAsync(capStream, 0, int.MaxValue, default)) capRead++;
+        await Assert.That(capRead).IsEqualTo(4_500);
     }
 
     /// <summary>原探针 SagaSmoke——3 项断言。</summary>

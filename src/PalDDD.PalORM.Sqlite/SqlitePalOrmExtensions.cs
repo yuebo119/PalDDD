@@ -7,6 +7,7 @@ using PalDDD.EventLog;
 using PalDDD.Idempotency;
 using PalDDD.Projections;
 using PalDDD.Transactions;
+using PalDDD.PalORM.Stores;
 using PalORM;
 using PalORM.Sqlite;
 
@@ -164,6 +165,8 @@ public static class SqlitePalOrmExtensions
         services.AddScoped<IProjectionCheckpointStore, SqliteProjectionCheckpointStore>();
         services.AddScoped<IIdempotencyStore, SqliteIdempotencyStore>();
         services.AddScoped<IUnitOfWork, SqlitePalOrmUnitOfWork>();
+        services.AddPalRetention();
+        services.TryAddScoped<IRetentionStore, PalOrmRetentionStore<SqliteProvider>>();
 
         // 启动期连接池预热（2026-09-25 特性审计裁决项）：prewarmConnectionCount > 0 时注册
         // hosted 包装（Singleton工厂内从容器取可选日志面，缺省由服务内 NullPalLogger 兜底）。

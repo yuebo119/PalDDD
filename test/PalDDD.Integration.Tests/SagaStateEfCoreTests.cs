@@ -64,6 +64,32 @@ public sealed class SagaStateEfCoreTests
     }
 
     [Test]
+    public async Task LeaseDueSagasAsync_Sqlite_OrdersByNextCheckAt(CancellationToken cancellationToken)
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        await using var db = new TestSagaStateDbContext(CreateSqliteOptions(connection));
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+
+        var oldCreatedLateDue = CreateState("OldCreatedLateDue", FixedNow);
+        oldCreatedLateDue.NextCheckAt = FixedNow.AddMinutes(-1);
+        var newCreatedEarlyDue = CreateState("NewCreatedEarlyDue", FixedNow.AddMinutes(1));
+        newCreatedEarlyDue.NextCheckAt = FixedNow.AddMinutes(-5);
+
+        db.SagaStates.Add(oldCreatedLateDue);
+        await db.SaveChangesAsync(cancellationToken);
+        db.SagaStates.Add(newCreatedEarlyDue);
+        await db.SaveChangesAsync(cancellationToken);
+        db.ChangeTracker.Clear();
+
+        var due = await db.LeaseDueSagasAsync(
+            "due-owner", TimeSpan.FromMinutes(1), batchSize: 1, FixedNow, cancellationToken);
+
+        await Assert.That(due.Count).IsEqualTo(1);
+        await Assert.That(due[0].CurrentState).IsEqualTo("NewCreatedEarlyDue");
+    }
+
+    [Test]
     public async Task GetActiveSagasAsync_RejectsInvalidBatchSize(CancellationToken cancellationToken)
     {
         await using var db = new TestSagaStateDbContext(CreateOptions());

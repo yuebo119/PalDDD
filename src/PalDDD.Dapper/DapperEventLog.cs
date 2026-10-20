@@ -191,10 +191,13 @@ public sealed class DapperEventLog : IEventLog
         // 2026-10-20 性能轮：PG 多条追加原子化。原路径是 MAX 预检 + 多行 INSERT 两次往返；
         // 守卫版本（NoStream/StreamExists/Exact）可把版本判定下推为 INSERT..SELECT 的 WHERE
         // 谓词，服务端原子计算 MAX+序号，单往返完成判定与写入（单事件 PG 快路径的多行推广）。
+        // 行数上限复用 PostgreSqlBatchRowLimit：每行 13 个参数 + 2 个共享参数，PG 占位符上限
+        // 65535，超过约 5041 行会溢出；超限回落下方预检 + 分块路径（单块仍为单语句）。
         // Any 保持原预检路径：无版本守卫时唯一冲突无法区分「并发追加」与「批内 EventId 重复」，
         // 预检快照是现有分类语义的基准。
         var now = _timeProvider.GetUtcNow();
         if (events.Count > 1
+            && events.Count <= PostgreSqlBatchRowLimit
             && _dbType == DapperDbType.PostgreSql
             && expectedVersion.Kind != ExpectedStreamVersionKind.Any)
         {

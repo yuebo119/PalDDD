@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using System.Diagnostics.CodeAnalysis;
 
 namespace PalDDD.Transactions;
@@ -10,6 +11,34 @@ namespace PalDDD.Transactions;
 /// <summary>事务基础设施注册。</summary>
 public static class ServiceCollectionExtensions
 {
+    /// <summary>
+    /// 注册历史表保留清理的处理器与后台服务（2026-10-20 性能轮）。本方法不注册
+    /// <see cref="IRetentionStore"/>，由各存储栈（Dapper/PalORM/EF Core）在各自的 DI
+    /// 入口注册。默认不调用；显式调用后才启动清理。
+    /// </summary>
+    /// <param name="services">DI 服务集合。</param>
+    /// <param name="configure">可选保留策略配置。</param>
+    public static IServiceCollection AddPalRetention(
+        this IServiceCollection services,
+        Action<RetentionOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddOptions<RetentionOptions>()
+            .Configure(configure ?? (static _ => { }))
+            .Validate(static options =>
+                    options.PollInterval > TimeSpan.Zero
+                    && options.OutboxRetention > TimeSpan.Zero
+                    && options.InboxRetention > TimeSpan.Zero
+                    && options.BatchSize > 0
+                    && options.MaxBatchesPerTick > 0,
+                "Retention options require positive intervals, batch size, and max batches per tick.")
+            .ValidateOnStart();
+        services.TryAddScoped<RetentionProcessor>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, RetentionProcessorService>());
+        return services;
+    }
+
     /// <summary>注册发件箱发布器。调用方还需注册 <see cref="Serialization.IMessageSerializer"/>、<see cref="Serialization.IMessageCatalog"/> 和 <see cref="IPalOutboxStore"/>。</summary>
     public static IServiceCollection AddPalOutbox(this IServiceCollection services)
     {

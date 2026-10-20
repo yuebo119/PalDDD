@@ -33,21 +33,35 @@ CREATE INDEX CONCURRENTLY idx_outbox_lease_holder_v2
     ON outbox_messages(locked_by, locked_until) WHERE locked_by IS NOT NULL;
 DROP INDEX CONCURRENTLY IF EXISTS idx_outbox_lease_holder;
 ALTER INDEX idx_outbox_lease_holder_v2 RENAME TO idx_outbox_lease_holder;
+
+-- 保留清理：按 processed_at 分批删除终态行；部分索引只覆盖终态
+CREATE INDEX CONCURRENTLY idx_outbox_processed
+    ON outbox_messages(processed_at) WHERE status <> 0;
+CREATE INDEX CONCURRENTLY idx_inbox_processed
+    ON inbox_messages(processed_at) WHERE status = 2;
+DROP INDEX CONCURRENTLY IF EXISTS idx_outbox_created;
 ```
 
-`idx_outbox_created` 暂时保留给保留清理任务使用；启用 Retention 并按 `processed_at` 清理后，
-可评估删除它。
+清理索引的真库实测（20 万行、10 万已处理、LIMIT 1000）：无索引时 21.5ms，
+部分索引后 0.379ms（57×）。`idx_outbox_created` 已不服务租约或清理，删除后少一个二级索引。
 
 ### MySQL
 
 ```sql
 ALTER TABLE outbox_messages
     ADD INDEX idx_outbox_due (status, created_at),
-    DROP INDEX idx_outbox_status;
+    ADD INDEX idx_outbox_processed (status, processed_at),
+    DROP INDEX idx_outbox_status,
+    DROP INDEX idx_outbox_created;
+
+ALTER TABLE inbox_messages
+    ADD INDEX idx_inbox_processed (status, processed_at);
 ```
 
-MySQL 无部分索引，`(status, created_at)` 用 status 前缀固定扫描范围，按索引序直接取满批次。
-`idx_outbox_created` 同样保留给清理任务。
+MySQL 无部分索引，`(status, created_at)` 与 `(status, processed_at)` 都用 status 前缀固定
+扫描范围，按索引序直接取满批次。清理子查询实测：无索引 318ms，加
+`(status, processed_at)` 后 0.349ms（911×，覆盖索引范围扫描 1000 行后停止）。
+若上一版迁移已删除 `idx_outbox_status`，执行时去掉对应 `DROP INDEX`。
 
 ### SQLite
 
@@ -58,12 +72,19 @@ DROP INDEX IF EXISTS idx_outbox_status;
 DROP INDEX IF EXISTS idx_outbox_lease_holder;
 CREATE INDEX IF NOT EXISTS idx_outbox_lease_holder
     ON outbox_messages(locked_by, locked_until) WHERE locked_by IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_outbox_processed
+    ON outbox_messages(status, processed_at);
+CREATE INDEX IF NOT EXISTS idx_inbox_processed
+    ON inbox_messages(status, processed_at);
+DROP INDEX IF EXISTS idx_outbox_created;
 ```
 
 ### EF Core 用户
 
-`OutboxDbContext.OnModelCreating` 的索引已同步为 `(Status, CreatedAt)`。使用 EF 迁移的项目
-需生成并审查一个新迁移；使用手写 DDL 的项目按上述脚本执行。
+`OutboxDbContext.OnModelCreating` 的索引已同步为 `(Status, CreatedAt)` 与
+`(Status, ProcessedAt)`；`InboxDbContext` 增加 `(Status, ProcessedAt)`。使用 EF 迁移的项目
+需生成并审查一个新迁移；使用手写 DDL 的项目按上述脚本执行。PG/SQLite 的部分索引过滤条件
+以方言 DDL 为准，EF 基础模型保持跨 provider 可翻译的非部分索引。
 
 ## 2. EventLog 冗余索引
 

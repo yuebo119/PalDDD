@@ -23,8 +23,8 @@ CREATE TABLE outbox_messages (
 );
 -- 租约候选扫描按 created_at 排序；部分索引把扫描固定为 O(批次)。
 CREATE INDEX idx_outbox_due ON outbox_messages(created_at) WHERE status = 0;
--- 保留清理（按时间删除已处理行）使用。
-CREATE INDEX idx_outbox_created ON outbox_messages(created_at);
+-- 保留清理按 processed_at 分批删除终态行；(status, processed_at) 让扫描按索引序取满批次。
+CREATE INDEX idx_outbox_processed ON outbox_messages(status, processed_at);
 -- 租约回读谓词（locked_by + locked_until）覆盖索引；仅索引持租行。
 CREATE INDEX idx_outbox_lease_holder ON outbox_messages(locked_by, locked_until) WHERE locked_by IS NOT NULL;
 
@@ -40,6 +40,8 @@ CREATE TABLE inbox_messages (
     last_error            TEXT
 );
 CREATE UNIQUE INDEX idx_inbox_unique ON inbox_messages(consumer_name, message_id);
+-- 保留清理按 processed_at 分批删除已处理行；复合索引让 status 过滤与排序同索引。
+CREATE INDEX idx_inbox_processed ON inbox_messages(status, processed_at);
 
 CREATE TABLE saga_states (
     saga_id       TEXT PRIMARY KEY,

@@ -64,6 +64,49 @@ public sealed class RetentionProcessorTests
         await Assert.That(await CountAsync(conn, "outbox_messages")).IsEqualTo(2);
     }
 
+    [Test]
+    public async Task RetentionQueries_UseProcessedIndexes()
+    {
+        await using var conn = new SqliteConnection("Data Source=:memory:");
+        await conn.OpenAsync();
+        await CreateSchemaAsync(conn);
+
+        var now = DateTimeOffset.UtcNow;
+        for (var i = 0; i < 100; i++)
+        {
+            await InsertOutboxAsync(conn, $"p-{i}", status: 1, now.AddDays(-10 - i));
+            await InsertInboxAsync(conn, status: 2, now.AddDays(-40 - i));
+        }
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "ANALYZE";
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        var outboxPlan = await ExplainAsync(conn,
+            "SELECT id FROM outbox_messages WHERE status = 1 AND processed_at IS NOT NULL AND processed_at < @cutoff ORDER BY processed_at LIMIT 10");
+        var inboxPlan = await ExplainAsync(conn,
+            "SELECT id FROM inbox_messages WHERE status = 2 AND processed_at IS NOT NULL AND processed_at < @cutoff ORDER BY processed_at LIMIT 10");
+
+        await Assert.That(outboxPlan).Contains("idx_outbox_processed");
+        await Assert.That(inboxPlan).Contains("idx_inbox_processed");
+    }
+
+    private static async Task<string> ExplainAsync(SqliteConnection conn, string sql)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "EXPLAIN QUERY PLAN " + sql;
+        var cutoff = cmd.CreateParameter();
+        cutoff.ParameterName = "@cutoff";
+        cutoff.Value = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+        cmd.Parameters.Add(cutoff);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        var details = new List<string>();
+        while (await reader.ReadAsync())
+            details.Add(reader.GetString(3));
+        return string.Join("\n", details);
+    }
+
     private static async Task CreateSchemaAsync(SqliteConnection conn)
     {
         await using var cmd = conn.CreateCommand();
@@ -84,6 +127,8 @@ public sealed class RetentionProcessorTests
                 expires_at TEXT NOT NULL,
                 PRIMARY KEY (operation_name, idempotency_key)
             );
+            CREATE INDEX idx_outbox_processed ON outbox_messages(status, processed_at);
+            CREATE INDEX idx_inbox_processed ON inbox_messages(status, processed_at);
             """;
         await cmd.ExecuteNonQueryAsync();
     }

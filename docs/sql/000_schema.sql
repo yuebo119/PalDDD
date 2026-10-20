@@ -30,7 +30,7 @@ CREATE TABLE outbox_messages (
 
 -- 租约候选扫描按 created_at 排序；有部分索引能力的方言用 WHERE status = 0。
 CREATE INDEX idx_outbox_due ON outbox_messages(created_at);
-CREATE INDEX idx_outbox_created ON outbox_messages(created_at);
+CREATE INDEX idx_outbox_processed ON outbox_messages(status, processed_at);
 CREATE INDEX idx_outbox_lease_holder ON outbox_messages(locked_by, locked_until);
 
 -- ── Inbox 收件箱幂等消费表 ──
@@ -47,6 +47,7 @@ CREATE TABLE inbox_messages (
 );
 
 CREATE UNIQUE INDEX idx_inbox_unique ON inbox_messages(consumer_name, message_id);
+CREATE INDEX idx_inbox_processed ON inbox_messages(status, processed_at);
 
 -- ── Saga 状态持久化表 ──
 CREATE TABLE saga_states (

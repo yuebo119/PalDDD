@@ -444,6 +444,10 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
         var dueClause = dueBefore is null
             ? string.Empty
             : $"AND ({nextCheckAtColumn} IS NOT NULL AND {nextCheckAtColumn} <= {{6}})";
+        // 到期过滤按最早到期取批，避免老创建但晚到期的行占满批次；无到期过滤保持 SagaId 序。
+        var orderBy = dueBefore is null
+            ? sagaIdColumn
+            : $"{nextCheckAtColumn}, {sagaIdColumn}";
 
         // {{…}} 是标识符插值（表/列名为受信标识符，已加引号）；{N} 是 FormattableStringFactory
         // 占位符（值全部参数化）。DateTimeOffset 参数直传原生形态。
@@ -455,7 +459,7 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
                 WHERE {{statusColumn}} IN ({2}, {3})
                   AND ({{leasedUntilColumn}} IS NULL OR {{leasedUntilColumn}} <= {4})
                   {{dueClause}}
-                ORDER BY {{sagaIdColumn}}
+                ORDER BY {{orderBy}}
                 LIMIT {5})
             """;
         return dueBefore is { } due

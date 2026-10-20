@@ -21,8 +21,8 @@ CREATE TABLE outbox_messages (
 -- 租约候选扫描按 created_at 排序。部分索引把扫描固定为 O(批次)，
 -- 不再随待租积压或已处理历史增长（2026-10-20 真库实测：1k 待租/20 万行 0.279ms → 0.061ms）。
 CREATE INDEX idx_outbox_due ON outbox_messages(created_at) WHERE status = 0;
--- 保留清理（按时间删除已处理行）使用；启用 Retention 后可评估删除。
-CREATE INDEX idx_outbox_created ON outbox_messages(created_at);
+-- 保留清理按 processed_at 分批删除；部分索引只覆盖终态行（Processed/Dead）。
+CREATE INDEX idx_outbox_processed ON outbox_messages(processed_at) WHERE status <> 0;
 -- 租约回读谓词（locked_by + locked_until）覆盖索引；仅索引持租行，避免历史 NULL 行膨胀。
 CREATE INDEX idx_outbox_lease_holder ON outbox_messages(locked_by, locked_until) WHERE locked_by IS NOT NULL;
 
@@ -38,6 +38,8 @@ CREATE TABLE inbox_messages (
     last_error            TEXT
 );
 CREATE UNIQUE INDEX idx_inbox_unique ON inbox_messages(consumer_name, message_id);
+-- 保留清理按 processed_at 分批删除已处理行；部分索引只覆盖 Processed。
+CREATE INDEX idx_inbox_processed ON inbox_messages(processed_at) WHERE status = 2;
 
 CREATE TABLE saga_states (
     saga_id       TEXT PRIMARY KEY,  -- Ulid 26 字符（代码传字符串，非 UUID 格式）

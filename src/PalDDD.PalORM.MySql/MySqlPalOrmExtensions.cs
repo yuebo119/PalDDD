@@ -7,6 +7,7 @@ using PalDDD.EventLog;
 using PalDDD.Idempotency;
 using PalDDD.Projections;
 using PalDDD.Transactions;
+using PalDDD.PalORM.Stores;
 using PalORM;
 using PalORM.MySql;
 
@@ -146,6 +147,8 @@ public static class MySqlPalOrmExtensions
         services.AddScoped<IProjectionCheckpointStore, MySqlProjectionCheckpointStore>();
         services.AddScoped<IIdempotencyStore, MySqlIdempotencyStore>();
         services.AddScoped<IUnitOfWork, MySqlPalOrmUnitOfWork>();
+        services.AddPalRetention();
+        services.TryAddScoped<IRetentionStore, PalOrmRetentionStore<MySqlProvider>>();
 
         // 启动期连接池预热（2026-09-25 特性审计裁决项）：prewarmConnectionCount > 0 时注册
         // hosted 包装（Singleton 工厂内从容器取可选日志面，缺省由服务内 NullPalLogger 兜底）。

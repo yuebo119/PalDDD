@@ -182,6 +182,21 @@ static async Task ProbeEventLogAsync(DbConnection conn, DapperDbType dbType, Act
         cancellationToken: CancellationToken.None).ConfigureAwait(false))
         batchRead++;
     check("eventlog batch read 5", batchRead == 5);
+
+    // 2026-10-20：PG 原子批路径上限回归——4,500 行超过 4,000 上限，回落预检 + 分块
+    var capStream = $"probe-cap-{PalUlid.New().ToString()[..8]}";
+    var capBatch = new EventData[4_500];
+    for (var i = 0; i < capBatch.Length; i++)
+        capBatch[i] = NewEvent();
+    var capResult = await log.AppendAsync(capStream, ExpectedStreamVersion.NoStream, capBatch,
+        CancellationToken.None).ConfigureAwait(false);
+    check("eventlog batch cap 4500 versions",
+        capResult.FirstStreamVersion == 0 && capResult.LastStreamVersion == 4_499);
+    var capRead = 0;
+    await foreach (var _ in log.ReadStreamAsync(capStream,
+        cancellationToken: CancellationToken.None).ConfigureAwait(false))
+        capRead++;
+    check("eventlog batch cap read 4500", capRead == 4_500);
 }
 
 // ═══ ④ Idempotency：TryStart → MarkCompleted（byte[] response）→ GetAsync 往返 ═══

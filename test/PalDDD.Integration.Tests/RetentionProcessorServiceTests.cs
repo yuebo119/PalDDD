@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using PalDDD.Dapper;
@@ -26,4 +27,18 @@ public sealed class RetentionProcessorServiceTests
         await Assert.That(hosted.Count).IsEqualTo(1);
         await Assert.That(provider.GetService<RetentionProcessor>()).IsTypeOf<RetentionProcessor>();
     }
+
+    [Test]
+    public async Task AddPalEfCoreRetention_RegistersStoreAndProcessor()
+    {
+        var services = new ServiceCollection();
+        services.AddDbContext<RetentionDbContext>(options => options.UseSqlite("Data Source=:memory:"));
+        services.AddPalEfCoreRetention<RetentionDbContext>(RetentionDialect.Sqlite);
+
+        await using var provider = services.BuildServiceProvider();
+        await Assert.That(provider.GetService<IRetentionStore>()).IsTypeOf<EfCoreRetentionStore>();
+        await Assert.That(provider.GetService<RetentionProcessor>()).IsTypeOf<RetentionProcessor>();
+    }
+
+    private sealed class RetentionDbContext(DbContextOptions<RetentionDbContext> options) : DbContext(options);
 }
