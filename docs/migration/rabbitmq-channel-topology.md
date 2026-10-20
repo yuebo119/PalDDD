@@ -80,6 +80,24 @@ dotnet run -c Release --project bench/PalDDD.Benchmarks -- --m3-probe
 结论落到默认值：保持每订阅独立 consumer channel；`UseSharedConsumerChannel=true`
 仅作兼容/受限拓扑回退，不应作为吞吐优化选项。
 
+## 消费分发并发（2026-10-20）
+
+`RabbitMqBroker.ConsumerDispatchConcurrency`（`ushort?`，默认 null = 连接默认 1）用于让
+**同一订阅**的 handler 并发执行；不影响跨订阅隔离（后者由每订阅 channel 提供）。
+
+```csharp
+var broker = await RabbitMqBroker.CreateAsync(connection, logger, serializer, catalog,
+    prefetchCount: 16);
+broker.ConsumerDispatchConcurrency = 8; // 必须在 SubscribeAsync 之前设置
+```
+
+约束：handler 必须线程安全且幂等；并发大于 1 时同订阅不再保证到达顺序；prefetch 应
+不小于并发度，否则空槽等不到消息。共享单 channel 模式（`UseSharedConsumerChannel=true`）
+下本选项不生效。默认保持 1，兼容依赖串行处理的消费方。
+
+本地验证：新增集成测试 `RabbitMq_ConsumerDispatchConcurrency_AllowsConcurrentHandlers`
+（两个 handler 同时在途后放行）在 wslc rabbit436 通过。
+
 ## 验收
 
 - `PalDDD.Messaging.Integration.Tests` 在本地 RabbitMQ（wslc rabbit436，palddd-test 用户）

@@ -5,9 +5,17 @@
 
 ## 变更
 
-`ProjectionProcessor<TMessage>.CheckpointBatchSize` 默认 1（逐事件检查点，旧行为）。
+`ProjectionProcessor<TMessage>.CheckpointBatchSize` 默认 100（回放按 100 条一组提交）；
+在线逐消息 `ProcessAsync` 不受影响。设为 1 恢复逐事件检查点。
+> 2026-10-20 调整：原默认 1，回放每事件两次检查点写；改为默认 100 以消除回放主瓶颈。
+> 需要旧行为时显式设 1（迁移测试仍以 1 覆盖逐事件语义）。
+
 设置为 N>1 后，`ProjectionRebuilder` 按 N 条一组调用 `ProcessBatchAsync`：组内只对
 **最后位置**做一次 `TryStart`/`MarkCompleted`，组内事件直接调用 handler。
+
+`ProjectionRebuilder.CheckpointFlushInterval` 默认 1 秒：即使未攒满 N 条，距组首满该间隔
+也提交一次，避免慢 handler 让单组拖过 processingTimeout。时间界时钟可经
+`ProjectionRebuilder.TimeProvider` 注入，测试用 FakeTimeProvider 驱动。
 
 无 schema 变更：复用现有 `projection_checkpoints` 表；组内中间位置不写行，续读仍由
 `GetResumePositionAsync` 的 `MAX(Completed position)` 给出下一位置。
@@ -20,19 +28,30 @@
 - 进程崩溃：最后位置处于 Processing；租约到期前其他 worker 无法接管该组，到期后
   从上一个已完成位置重放，最多 N 条。投影 handler 必须幂等（既有 at-least-once 契约）。
 - 组内处理时长必须小于 `processingTimeout`（默认 5 分钟），否则租约可能过期被并行接管。
-  慢 handler 应使用较小的 N 或增大 processingTimeout。
+  默认 1 秒时间界把单组处理时长限制在约 1 秒加最后一项 handler 时长；慢 handler 仍应
+  使用较小的 N 或增大 processingTimeout。
 - 部分写入副作用在失败后会重放整组，按 at-least-once 处理，不做 exactly-once 承诺。
+- 回滚：`CheckpointBatchSize = 1` 恢复逐事件路径；时间界只影响回放，不影响在线处理。
 
 ## 用法
 
 ```csharp
+var processor = new ProjectionProcessor<OrderEvent>(handler, checkpointStore); // 默认 100
+var rebuilder = new ProjectionRebuilder<OrderEvent>(
+    handler.ProjectionName, "orders", replaySource, checkpointStore, processor)
+{
+    CheckpointFlushInterval = TimeSpan.FromSeconds(1), // 默认值，慢回放的提交上界
+};
+await rebuilder.ReplayAsync(ct);
+```
+
+需要逐事件检查点时：
+
+```csharp
 var processor = new ProjectionProcessor<OrderEvent>(handler, checkpointStore)
 {
-    CheckpointBatchSize = 100,
+    CheckpointBatchSize = 1,
 };
-var rebuilder = new ProjectionRebuilder<OrderEvent>(
-    handler.ProjectionName, "orders", replaySource, checkpointStore, processor);
-await rebuilder.ReplayAsync(ct);
 ```
 
 ## 验收

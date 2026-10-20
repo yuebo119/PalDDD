@@ -281,6 +281,10 @@ if (args.Contains("--m4-scale-pg", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--m4-scale-mysql", StringComparer.OrdinalIgnoreCase))
     return await MigrationProbes.RunM4ScaleAsync(postgreSql: false);
 
+// PalORM PG 单事件追加快路径行为探针（2026-10-20 性能轮）。
+if (args.Contains("--palorm-append-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunPalOrmAppendPgAsync();
+
 if (args.Contains("--m4-probe-pg", StringComparer.OrdinalIgnoreCase))
     return await MigrationProbes.RunM4Async(postgreSql: true);
 

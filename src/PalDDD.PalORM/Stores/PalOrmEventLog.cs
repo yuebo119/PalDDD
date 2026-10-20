@@ -88,6 +88,12 @@ public class PalOrmEventLog<TProvider> : IEventLog
         // 写路径非迭代器、异常直接上抛，失败路径不计数与姊妹语义一致，无需 finally）。
         using var activity = PalActivitySource.StartEventLogAppend(streamName, events.Count);
 
+        // 单事件 PG 快路径：INSERT ... SELECT MAX+1 ... RETURNING，一次往返完成
+        // 版本判定与写入（守卫失匹零行，冲突路径再查）。批量与其它方言保持原路径。
+        if (events.Count == 1 && TProvider.Dialect == SqlDialect.PostgreSql)
+            return await AppendSinglePostgreSqlAsync(
+                streamName, expectedVersion, events[0], _clock.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+
         // 步骤 1：乐观并发检查 —— 读当前最大 StreamVersion
         var currentMax = await Session.ScalarAsync<long?>(
             $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
@@ -137,6 +143,87 @@ public class PalOrmEventLog<TProvider> : IEventLog
         // v36 P3：写侧 metrics（对齐 EventLogDbContext/InMemoryEventLog 的 EventLogAppended）
         PalMetrics.EventLogAppended.Add(events.Count);
         return new AppendEventsResult(streamName, firstStreamVersion, lastStreamVersion, firstGlobalPos, lastGlobalPos);
+    }
+
+    /// <summary>
+    /// PG 单事件原子追加：服务端 <c>COALESCE(MAX(stream_version),-1)+1</c> 加版本守卫，
+    /// 单往返返回 global_position 与 stream_version。守卫失匹零行时重查实际版本转统一
+    /// 并发异常；唯一冲突先探 EventId，重复 ID 原样上抛，其余转并发异常。
+    /// </summary>
+    private async ValueTask<AppendEventsResult> AppendSinglePostgreSqlAsync(
+        string streamName,
+        ExpectedStreamVersion expectedVersion,
+        EventData e,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var guard = expectedVersion.Kind switch
+        {
+            ExpectedStreamVersionKind.NoStream =>
+                " WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) = -1",
+            ExpectedStreamVersionKind.StreamExists =>
+                " WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) >= 0",
+            ExpectedStreamVersionKind.Exact =>
+                " WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) = @p15",
+            _ => string.Empty,
+        };
+        var sql =
+            "INSERT INTO events (event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
+            "SELECT @p0, @p1, @p2, @p3, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) + 1, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14" +
+            guard +
+            " RETURNING global_position, stream_version";
+
+        var eventIdText = e.EventId.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
+        await using var cmd = CreateRawCommand();
+        cmd.CommandText = sql;
+        AddParam(cmd, "@p0", eventIdText);
+        AddParam(cmd, "@p1", e.EventId.ToByteArray());
+        AddParam(cmd, "@p2", e.EventName);
+        AddParam(cmd, "@p3", streamName);
+        AddParam(cmd, "@p4", e.SchemaVersion);
+        AddParam(cmd, "@p5", e.ContentType);
+        AddParam(cmd, "@p6", e.PayloadArray);
+        AddParam(cmd, "@p7", e.MetadataArray);
+        AddParam(cmd, "@p8", now);
+        AddParam(cmd, "@p9", e.Audit.ActorId ?? (object)DBNull.Value);
+        AddParam(cmd, "@p10", e.Audit.Reason ?? (object)DBNull.Value);
+        AddParam(cmd, "@p11", e.Audit.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture) ?? (object)DBNull.Value);
+        AddParam(cmd, "@p12", e.Audit.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture) ?? (object)DBNull.Value);
+        AddParam(cmd, "@p13", e.Audit.TraceParent ?? (object)DBNull.Value);
+        AddParam(cmd, "@p14", e.Audit.TraceState ?? (object)DBNull.Value);
+        if (expectedVersion.Kind == ExpectedStreamVersionKind.Exact)
+            AddParam(cmd, "@p15", expectedVersion.Version);
+
+        try
+        {
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            if (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                var globalPosition = reader.GetInt64(0);
+                var streamVersion = reader.GetInt64(1);
+                PalMetrics.EventLogAppended.Add(1);
+                return new AppendEventsResult(
+                    streamName, streamVersion, streamVersion, globalPosition, globalPosition);
+            }
+        }
+        catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
+        {
+            var idExists = await Session.ScalarAsync<int>(
+                $"SELECT COUNT(*) FROM events WHERE event_id = {eventIdText}",
+                ct: ct).ConfigureAwait(false) > 0;
+            if (idExists)
+                throw; // EventId 重复：与两往返路径同语义，原样上抛
+            var actual = await Session.ScalarAsync<long?>(
+                $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
+                ct: ct).ConfigureAwait(false);
+            throw new EventStreamConcurrencyException(streamName, expectedVersion, actual ?? -1);
+        }
+
+        // 守卫失匹（零行插入）：重查实际版本转统一并发异常（对齐预查 Matches 失败）。
+        var after = await Session.ScalarAsync<long?>(
+            $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
+            ct: ct).ConfigureAwait(false);
+        throw new EventStreamConcurrencyException(streamName, expectedVersion, after ?? -1);
     }
 
     /// <summary>

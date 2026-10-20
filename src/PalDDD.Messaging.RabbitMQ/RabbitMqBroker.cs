@@ -107,6 +107,25 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
     /// </summary>
     public bool UseSharedConsumerChannel { get; init; }
 
+    private ushort? _consumerDispatchConcurrency;
+
+    /// <summary>
+    /// 每订阅 consumer channel 的消费分发并发度；null = 继承连接配置（RabbitMQ.Client 默认 1）。
+    /// 大于 1 时同一订阅的 handler 可并发执行，调用方必须保证 handler 线程安全与幂等；
+    /// 建议同时把 prefetch 设为不小于该值。共享单 channel 模式下本选项不生效。
+    /// 必须在 <c>SubscribeAsync</c> 之前设置。
+    /// </summary>
+    public ushort? ConsumerDispatchConcurrency
+    {
+        get => _consumerDispatchConcurrency;
+        set
+        {
+            if (value is 0)
+                throw new ArgumentOutOfRangeException(nameof(value), "ConsumerDispatchConcurrency must be greater than zero.");
+            _consumerDispatchConcurrency = value;
+        }
+    }
+
     // ITM-639：outstanding publisher confirms 上限——对齐 RabbitMQ.Client 文档所述默认
     // 并发阈值 128，防确认跟踪下未确认消息无界堆积（内存膨胀）。
     private const int MaxOutstandingConfirms = 128;
@@ -363,8 +382,14 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         // M3（2026-10-19）：默认每订阅独立 consumer channel；发布 channel 只承担发布/确认。
         // 共享单 channel 旧行为可通过 UseSharedConsumerChannel=true 复现。
         var ownsConsumerChannel = !UseSharedConsumerChannel;
+        var consumerOptions = _consumerDispatchConcurrency is { } concurrency
+            ? new CreateChannelOptions(
+                publisherConfirmationsEnabled: false,
+                publisherConfirmationTrackingEnabled: false,
+                consumerDispatchConcurrency: concurrency)
+            : null;
         var consumerChannel = ownsConsumerChannel
-            ? await _connection.CreateChannelAsync(cancellationToken: ct).ConfigureAwait(false)
+            ? await _connection.CreateChannelAsync(consumerOptions, ct).ConfigureAwait(false)
             : _channel;
 
         await consumerChannel.ExchangeDeclareAsync(exchange, ExchangeType.Fanout, durable: true, cancellationToken: ct).ConfigureAwait(false);

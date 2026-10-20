@@ -7,7 +7,7 @@ namespace PalDDD.Idempotency;
 // 内存幂等存储
 // ─────────────────────────────────────────────────────────────
 
-public sealed class InMemoryIdempotencyStore : IIdempotencyStore
+public sealed class InMemoryIdempotencyStore : IIdempotencyStartOrGetStore
 {
     private readonly Lock _lock = new();
     private readonly Dictionary<Key, IdempotencyRecord> _records = [];
@@ -41,7 +41,19 @@ public sealed class InMemoryIdempotencyStore : IIdempotencyStore
         }
     }
 
-    public ValueTask<IdempotencyRecord?> TryStartAsync(
+    public async ValueTask<IdempotencyRecord?> TryStartAsync(
+        string operationName,
+        string key,
+        DateTimeOffset now,
+        IdempotencyPolicy policy,
+        CancellationToken ct = default)
+    {
+        var result = await StartOrGetAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
+        return result.Outcome == IdempotencyStartOutcome.Started ? result.Record : null;
+    }
+
+    /// <inheritdoc />
+    public ValueTask<IdempotencyStartResult> StartOrGetAsync(
         string operationName,
         string key,
         DateTimeOffset now,
@@ -79,11 +91,13 @@ public sealed class InMemoryIdempotencyStore : IIdempotencyStore
                         now.Add(policy.Retention),
                         now);
                     _records[recordKey] = successor;
-                    return ValueTask.FromResult<IdempotencyRecord?>(successor);
+                    return ValueTask.FromResult(
+                        new IdempotencyStartResult(IdempotencyStartOutcome.Started, successor));
                 }
                 else
                 {
-                    return ValueTask.FromResult<IdempotencyRecord?>(null);
+                    return ValueTask.FromResult(
+                        new IdempotencyStartResult(IdempotencyStartOutcome.Existing, existing));
                 }
             }
 
@@ -95,7 +109,8 @@ public sealed class InMemoryIdempotencyStore : IIdempotencyStore
                 now.Add(policy.Retention),
                 now);
             _records.Add(recordKey, record);
-            return ValueTask.FromResult<IdempotencyRecord?>(record);
+            return ValueTask.FromResult(
+                new IdempotencyStartResult(IdempotencyStartOutcome.Started, record));
         }
     }
 

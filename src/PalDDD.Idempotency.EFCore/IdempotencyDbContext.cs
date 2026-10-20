@@ -14,7 +14,7 @@ namespace PalDDD.Idempotency;
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:Members annotated with RequiresDynamicCode require dynamic access",
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
-public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext(options), IIdempotencyStore
+public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext(options), IIdempotencyStartOrGetStore
 {
     /// <summary>幂等执行记录表</summary>
     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
@@ -73,6 +73,18 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         IdempotencyPolicy policy,
         CancellationToken ct = default)
     {
+        var result = await StartOrGetAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
+        return result.Outcome == IdempotencyStartOutcome.Started ? result.Record : null;
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<IdempotencyStartResult> StartOrGetAsync(
+        string operationName,
+        string key,
+        DateTimeOffset now,
+        IdempotencyPolicy policy,
+        CancellationToken ct = default)
+    {
         ArgumentNullException.ThrowIfNull(policy);
         ValidateKeyParts(operationName, key);
 
@@ -84,20 +96,28 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
                     .SingleOrDefault(x => x.OperationName == operationName && x.Key == key)))(this, operationName, key, ct).ConfigureAwait(false);
 
         if (record is null)
-            return await TryCreateRecordAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
+        {
+            var created = await TryCreateRecordAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
+            return created is null
+                ? new IdempotencyStartResult(IdempotencyStartOutcome.Contended, null)
+                : new IdempotencyStartResult(IdempotencyStartOutcome.Started, created);
+        }
 
         if (record.ExpiresAt <= now
             || record.Status == IdempotencyRecordStatus.Failed
             || (record.Status == IdempotencyRecordStatus.Processing && record.LockedUntil <= now))
         {
-            return await TryReuseRecordAsync(record, now, policy, ct).ConfigureAwait(false);
+            var reused = await TryReuseRecordAsync(record, now, policy, ct).ConfigureAwait(false);
+            return reused is null
+                ? new IdempotencyStartResult(IdempotencyStartOutcome.Contended, null)
+                : new IdempotencyStartResult(IdempotencyStartOutcome.Started, reused);
         }
 
         // v26 P3 修复：读路径无效分支（活跃 Processing/Completed 未过期）Detach——跟踪查询
         // 物化的实体滞留会在长驻 scope 下累积（对照 ProjectionCheckpointDbContext 三十八轮
         // 同分支已修；v25 B5 只修了 GetAsync 的 AsNoTracking 与终态 Detach，此分支漏）
         Entry(record).State = EntityState.Detached;
-        return null;
+        return new IdempotencyStartResult(IdempotencyStartOutcome.Existing, record);
     }
 
     /// <inheritdoc/>

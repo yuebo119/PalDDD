@@ -260,6 +260,18 @@ TState>
                 }
                 else
                 {
+                    // 到期过滤下，已到期但未超时的行（时钟偏差/步骤重入等）必须推进
+                    // NextCheckAt，否则同一批行每 tick 重复被租，饿死后续到期 Saga。
+                    if (options.EnableDueTimeFilter && sagaState.NextCheckAt is not null)
+                    {
+                        var nextCheck = _orchestrator.ComputeNextCheckAt(sagaState);
+                        if (nextCheck != sagaState.NextCheckAt)
+                        {
+                            sagaState.NextCheckAt = nextCheck;
+                            await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
+                        }
+                    }
+
                     // P0-FIX-3: 非超时 Saga 也必须释放租约 —— 否则超时检测平均延迟 = LeaseDuration（2 分钟）
                     // 而非 PollInterval（30 秒），多实例下该 Saga 对其他实例不可见
                     if (_store is ISagaLeaseBatchStore<TState>)

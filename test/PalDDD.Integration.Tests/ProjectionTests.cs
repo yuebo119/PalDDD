@@ -28,7 +28,7 @@ public sealed class ProjectionTests
     {
         var store = new InMemoryProjectionCheckpointStore();
         var handler = new CountingProjectionHandler();
-        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store) { CheckpointBatchSize = 1 };
         var context = new ProjectionContext("orders", "42", DateTimeOffset.UnixEpoch);
 
         var first = await processor.ProcessAsync(new OrderPlaced(Guid.NewGuid()), context, cancellationToken);
@@ -47,7 +47,7 @@ public sealed class ProjectionTests
     {
         var store = new InMemoryProjectionCheckpointStore();
         var handler = new CountingProjectionHandler();
-        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store) { CheckpointBatchSize = 1 };
         var source = new InMemoryReplaySource<OrderPlaced>(
         [
             new ReplayEvent<OrderPlaced>("orders", "1", DateTimeOffset.UnixEpoch.AddSeconds(1), new OrderPlaced(Guid.NewGuid())),
@@ -79,7 +79,7 @@ public sealed class ProjectionTests
         using var listener = new RecordingActivityListener();
         var store = new InMemoryProjectionCheckpointStore();
         var handler = new CountingProjectionHandler();
-        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store) { CheckpointBatchSize = 1 };
         var source = new InMemoryReplaySource<OrderPlaced>(
         [
             new ReplayEvent<OrderPlaced>("orders", "1", DateTimeOffset.UnixEpoch.AddSeconds(1), new OrderPlaced(Guid.NewGuid())),
@@ -110,7 +110,7 @@ public sealed class ProjectionTests
         using var listener = new RecordingMeterListener("paldd.projection.replayed");
         var store = new InMemoryProjectionCheckpointStore();
         var handler = new CountingProjectionHandler();
-        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store) { CheckpointBatchSize = 1 };
         var source = new InMemoryReplaySource<OrderPlaced>(
         [
             new ReplayEvent<OrderPlaced>("orders", "1", DateTimeOffset.UnixEpoch.AddSeconds(1), new OrderPlaced(Guid.NewGuid())),
@@ -135,7 +135,7 @@ public sealed class ProjectionTests
     {
         var store = new InMemoryProjectionCheckpointStore();
         var handler = new CapturingProjectionHandler();
-        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store) { CheckpointBatchSize = 1 };
         var audit = new ReplayAuditMetadata(
             "user-123",
             "rebuild order projection",
@@ -170,7 +170,7 @@ public sealed class ProjectionTests
         using var listener = new RecordingActivityListener();
         var store = new InMemoryProjectionCheckpointStore();
         var handler = new FailingProjectionHandler();
-        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store) { CheckpointBatchSize = 1 };
         var source = new InMemoryReplaySource<OrderPlaced>(
         [
             new ReplayEvent<OrderPlaced>("orders", "1", DateTimeOffset.UnixEpoch.AddSeconds(1), new OrderPlaced(Guid.NewGuid()))
@@ -199,7 +199,7 @@ public sealed class ProjectionTests
         using var listener = new RecordingMeterListener("paldd.projection.failed");
         var store = new InMemoryProjectionCheckpointStore();
         var handler = new FailingProjectionHandler();
-        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store) { CheckpointBatchSize = 1 };
         var source = new InMemoryReplaySource<OrderPlaced>(
         [
             new ReplayEvent<OrderPlaced>("orders", "1", DateTimeOffset.UnixEpoch.AddSeconds(1), new OrderPlaced(Guid.NewGuid()))
@@ -223,7 +223,7 @@ public sealed class ProjectionTests
     {
         var store = new InMemoryProjectionCheckpointStore();
         var handler = new FailingProjectionHandler();
-        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store) { CheckpointBatchSize = 1 };
         var context = new ProjectionContext("orders", "failed", DateTimeOffset.UnixEpoch);
 
         await Assert.That(
@@ -240,7 +240,7 @@ public sealed class ProjectionTests
     {
         var store = new InMemoryProjectionCheckpointStore();
         var handler = new CanceledProjectionHandler();
-        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store) { CheckpointBatchSize = 1 };
         var context = new ProjectionContext("orders", "canceled", DateTimeOffset.UnixEpoch);
 
         await Assert.That(
@@ -257,7 +257,7 @@ public sealed class ProjectionTests
     {
         var store = new InMemoryProjectionCheckpointStore();
         var handler = new FailOnceProjectionHandler();
-        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store) { CheckpointBatchSize = 1 };
         var source = new InMemoryReplaySource<OrderPlaced>(
         [
             new ReplayEvent<OrderPlaced>("orders", "1", DateTimeOffset.UnixEpoch.AddSeconds(1), new OrderPlaced(Guid.NewGuid())),
@@ -287,7 +287,7 @@ public sealed class ProjectionTests
     {
         var store = new InMemoryProjectionCheckpointStore();
         var handler = new CountingProjectionHandler();
-        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store) { CheckpointBatchSize = 1 };
         var source = new InMemoryReplaySource<OrderPlaced>(
         [
             new ReplayEvent<OrderPlaced>("orders", "1", DateTimeOffset.UnixEpoch.AddSeconds(1), new OrderPlaced(Guid.NewGuid())),
@@ -321,7 +321,7 @@ public sealed class ProjectionTests
     {
         var store = new InMemoryProjectionCheckpointStore();
         var handler = new FailOnceProjectionHandler();
-        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store) { CheckpointBatchSize = 1 };
         var source = new InMemoryReplaySource<OrderPlaced>(
         [
             new ReplayEvent<OrderPlaced>("orders", "1", DateTimeOffset.UnixEpoch.AddSeconds(1), new OrderPlaced(Guid.NewGuid())),
@@ -450,7 +450,7 @@ public sealed class ProjectionTests
         // 重试重放路径。移除过滤后按成功（true）返回（completed-pending-confirmation 语义）。
         var store = new ThrowingOnCompleteCheckpointStore();
         var handler = new CountingProjectionHandler();
-        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store) { CheckpointBatchSize = 1 };
         var context = new ProjectionContext("orders", "pos-oce", DateTimeOffset.UnixEpoch);
 
         var result = await processor.ProcessAsync(new OrderPlaced(Guid.NewGuid()), context, cancellationToken);

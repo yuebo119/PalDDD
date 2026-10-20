@@ -2,7 +2,11 @@ using ByteAether.Ulid;
 using MySqlConnector;
 using Npgsql;
 using PalDDD.Dapper;
+using PalDDD.EventLog;
+using PalDDD.PalORM.Stores;
 using PalDDD.Transactions;
+using PalORM;
+using PalORM.PostgreSql;
 using System.Data.Common;
 using System.Globalization;
 
@@ -153,6 +157,101 @@ internal static class MigrationProbes
     /// </summary>
     public static Task<int> RunM4ScaleAsync(bool postgreSql, CancellationToken ct = default)
         => RunM4CoreAsync(postgreSql, count: 100_000, batch: 1_000, measureIndexSizes: true, ct);
+
+    /// <summary>
+    /// PalORM PG 单事件追加快路径行为探针：四种 ExpectedStreamVersion、守卫失匹、
+    /// EventId 重复分类与读回。仅连接 palddd_bench 前缀库。
+    /// </summary>
+    public static async Task<int> RunPalOrmAppendPgAsync(CancellationToken ct = default)
+    {
+        var connectionString = Environment.GetEnvironmentVariable("PALDDD_BENCH_PG_CONN");
+        if (string.IsNullOrWhiteSpace(connectionString))
+            throw new InvalidOperationException("缺少 PALDDD_BENCH_PG_CONN（库名须 palddd_bench 前缀）");
+        var database = (string?)new DbConnectionStringBuilder { ConnectionString = connectionString }["Database"];
+        if (database is null || !database.StartsWith("palddd_bench", StringComparison.Ordinal))
+            throw new InvalidOperationException($"探针拒绝连接非专用库 '{database}'（须 palddd_bench 前缀）");
+
+        await using var session = await DataSession<PostgreSqlProvider>.CreateAsync(
+            DbOptions.Development(connectionString), ct);
+        var log = new PalOrmEventLog<PostgreSqlProvider>(session);
+        const string stream = "probe-palorm-append";
+        await DeleteStreamAsync(session, stream, ct);
+
+        static EventData NewEvent(string name)
+            => new(Ulid.New(), name, 1, "application/json",
+                new byte[] { 0x7B, 0x7D }, ReadOnlyMemory<byte>.Empty, EventAuditMetadata.Empty);
+
+        try
+        {
+            var r1 = await log.AppendAsync(stream, ExpectedStreamVersion.NoStream, [NewEvent("e1")], ct);
+            if (r1.FirstStreamVersion != 0 || r1.LastStreamVersion != 0)
+                throw new InvalidOperationException($"NoStream expected version 0, got {r1.FirstStreamVersion}");
+            var r2 = await log.AppendAsync(stream, ExpectedStreamVersion.Any, [NewEvent("e2")], ct);
+            if (r2.FirstStreamVersion != 1)
+                throw new InvalidOperationException($"Any expected version 1, got {r2.FirstStreamVersion}");
+            var r3 = await log.AppendAsync(stream, ExpectedStreamVersion.Exact(1), [NewEvent("e3")], ct);
+            if (r3.FirstStreamVersion != 2)
+                throw new InvalidOperationException($"Exact expected version 2, got {r3.FirstStreamVersion}");
+            var r4 = await log.AppendAsync(stream, ExpectedStreamVersion.StreamExists, [NewEvent("e4")], ct);
+            if (r4.FirstStreamVersion != 3)
+                throw new InvalidOperationException($"StreamExists expected version 3, got {r4.FirstStreamVersion}");
+
+            var guardRejected = false;
+            try
+            {
+                await log.AppendAsync(stream, ExpectedStreamVersion.NoStream, [NewEvent("e5")], ct);
+            }
+            catch (EventStreamConcurrencyException)
+            {
+                guardRejected = true;
+            }
+            if (!guardRejected)
+                throw new InvalidOperationException("NoStream guard did not reject existing stream");
+
+            var duplicate = NewEvent("dup");
+            await log.AppendAsync(stream, ExpectedStreamVersion.Any, [duplicate], ct);
+            var duplicateRejectedAsConcurrency = false;
+            try
+            {
+                await log.AppendAsync(stream, ExpectedStreamVersion.Any, [duplicate], ct);
+            }
+            catch (EventStreamConcurrencyException)
+            {
+                duplicateRejectedAsConcurrency = true;
+            }
+            catch (DbException)
+            {
+                // 期望形态：EventId 重复原样上抛（不误译并发）。
+            }
+            if (duplicateRejectedAsConcurrency)
+                throw new InvalidOperationException("EventId duplicate was misclassified as concurrency");
+
+            var read = 0;
+            await foreach (var unused in log.ReadStreamAsync(stream, 0, 100, ct))
+                read++;
+            if (read != 5)
+                throw new InvalidOperationException($"read expected 5, got {read}");
+
+            Console.WriteLine($"PALORM PG APPEND PASS: versions=0..3, guard=rejected, duplicate=original, read={read}");
+            return 0;
+        }
+        finally
+        {
+            await DeleteStreamAsync(session, stream, ct);
+        }
+    }
+
+    private static async Task DeleteStreamAsync(
+        DataSession<PostgreSqlProvider> session, string stream, CancellationToken ct)
+    {
+        await using var cmd = session.GetRawConnection().CreateCommand();
+        cmd.CommandText = "DELETE FROM events WHERE stream_name = @p0";
+        var p = cmd.CreateParameter();
+        p.ParameterName = "@p0";
+        p.Value = stream;
+        cmd.Parameters.Add(p);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
 
     private static async Task<int> RunM4CoreAsync(
         bool postgreSql, int count, int batch, bool measureIndexSizes, CancellationToken ct)

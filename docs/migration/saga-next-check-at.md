@@ -58,6 +58,10 @@ CREATE INDEX idx_saga_due ON saga_states(status, next_check_at);
 - `NextCheckAt` 为 NULL 表示“当前状态无待检查超时”，到期路径会跳过；回填完成前不要
   直接开启过滤。
 - 步骤重入不刷新 `StepStartedAt`（v17 既有语义），`NextCheckAt` 随之保持首次开始时间。
+- 2026-10-20：到期租约的排序从 `created_at` 改为 `next_check_at, created_at`
+  （Dapper/PalORM/EF 到期路径同步），最早到期者先被租；到期但未超时的行在处理后
+  重算并推进 `NextCheckAt`，避免同一批行每 tick 重复被租、饿死后续 Saga。
+  `EnableDueTimeFilter` 默认仍为 false，生产开启前仍须完成活跃行回填。
 
 ## 真库演练（2026-10-19）
 

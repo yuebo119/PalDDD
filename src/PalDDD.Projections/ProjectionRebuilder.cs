@@ -20,6 +20,30 @@ public sealed class ProjectionRebuilder<TMessage>
     private readonly IEventReplaySource<TMessage> _replaySource;
     private readonly IProjectionCheckpointStore _checkpointStore;
     private readonly ProjectionProcessor<TMessage> _processor;
+    private TimeSpan _checkpointFlushInterval = TimeSpan.FromSeconds(1);
+    private TimeProvider _timeProvider = TimeProvider.System;
+
+    /// <summary>
+    /// 批量检查点的时间上界：即使未攒满 <see cref="ProjectionProcessor{TMessage}.CheckpointBatchSize"/>，
+    /// 距本组首项满本间隔也提交一次。默认 1 秒，必须大于零且小于投影租约时长。
+    /// </summary>
+    public TimeSpan CheckpointFlushInterval
+    {
+        get => _checkpointFlushInterval;
+        set
+        {
+            if (value <= TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(value), "CheckpointFlushInterval must be greater than zero.");
+            _checkpointFlushInterval = value;
+        }
+    }
+
+    /// <summary>回放计时源；测试可注入 FakeTimeProvider 驱动时间界冲刷。</summary>
+    public TimeProvider TimeProvider
+    {
+        get => _timeProvider;
+        set => _timeProvider = value ?? throw new ArgumentNullException(nameof(value));
+    }
 
     public ProjectionRebuilder(
         string projectionName,
@@ -145,10 +169,13 @@ public sealed class ProjectionRebuilder<TMessage>
             else
             {
                 var batch = new List<(TMessage Message, ProjectionContext Context)>(batchSize);
+                var batchStarted = _timeProvider.GetTimestamp();
                 var stopForLease = false;
                 await foreach (var replayEvent in stream.ConfigureAwait(false))
                 {
                     ct.ThrowIfCancellationRequested();
+                    if (batch.Count == 0)
+                        batchStarted = _timeProvider.GetTimestamp();
                     batch.Add((
                         replayEvent.Message,
                         new ProjectionContext(
@@ -157,7 +184,10 @@ public sealed class ProjectionRebuilder<TMessage>
                             replayEvent.OccurredAt,
                             replayEvent.Audit)));
 
-                    if (batch.Count < batchSize)
+                    // 数量界或时间界任一到达即提交：慢回放不会攒满批而让租约过期，
+                    // 快回放也不会每秒只提交一次。
+                    if (batch.Count < batchSize
+                        && _timeProvider.GetElapsedTime(batchStarted) < _checkpointFlushInterval)
                         continue;
 
                     var advanced = await _processor.ProcessBatchAsync(batch, ct).ConfigureAwait(false);
