@@ -69,6 +69,8 @@ SQLite/PG/MySQL 三方言真库。风险：区间租约与现有 fencing 语义�
 `docs/migration/projection-batch-checkpoints.md` 记录语义与验收。原计划的
 `IBatchedProjectionCheckpointStore`/高水位列未建，因为组末位置已提供等价的续读水位；
 若未来需要“组内部分提交”或按时间冲刷，再按能力接口扩展。
+正式基准（`--m2-probe`，2026-10-19）：100,000 条事件回放，检查点调用
+200,000 → 2,000（100×），进程内耗时 120ms → 31ms；验收线 ≤2k 由探针硬断言。
 
 ## M3 RabbitMQ 通道拓扑
 
@@ -91,8 +93,12 @@ confirm channel，每订阅独立 consumer channel；共享 `IConnection`。pref
 发布 channel 只承担发布/confirm；`UseSharedConsumerChannel=true` 复现单 channel 旧行为。
 订阅句柄释放时 cancel → dispose consumer channel → dispose linked CTS；失败路径同样释放。
 本地 RabbitMQ（wslc rabbit436，palddd-test）Messaging.Integration 18/18 全绿。
-`docs/migration/rabbitmq-channel-topology.md` 记录回滚与验收；1/4/8 订阅 p50/p99 压测
-仍待专项执行。
+`docs/migration/rabbitmq-channel-topology.md` 记录回滚与验收。
+压测（`--m3-probe`，2026-10-19）：1/4/8 订阅两场景。baseline 下 per-sub 相对 shared 的
+p99 为 1.05~1.19×（绝对差 ≤0.16ms）、吞吐 0.86~0.99×；isolation 场景（一个订阅每次
+延迟 2ms）shared 把其余订阅 p99 拖到 30.8s/30.4s，per-sub 为 0.70ms/1.22ms
+（低约 2.5~4.4 万倍）；发布确认两拓扑均不受慢订阅阻塞（publish 0.7~1.6s）。
+默认维持每订阅 channel。
 
 ## M4 EventId 二进制列
 
