@@ -374,7 +374,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-10-20 数据面性能续轮复验）：245 源文件·36 项目·0 违规（2026-10-20 续轮新增 3 个源文件：SqlRetentionStore、PalOrmRetentionStore、EfCoreRetentionStore；数据面轮新增 5 个源文件：Retention 四件 + DapperRetentionStore；2026-10-19 ADR-032 双栈 FTS5/JSON1 新增 10 个源文件：共享核心 3、Dapper 公开类型 2、PalORM 公开类型与门面 5；此前 227 文件）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-10-20 数据面性能续轮复验）：245 源文件·36 项目·0 违规（2026-10-20 续轮新增 3 个源文件：RetentionSql、PalOrmRetentionStore、EfCoreRetentionStore；数据面轮新增 5 个源文件：Retention 四件 + DapperRetentionStore；2026-10-19 ADR-032 双栈 FTS5/JSON1 新增 10 个源文件：共享核心 3、Dapper 公开类型 2、PalORM 公开类型与门面 5；此前 227 文件）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 
