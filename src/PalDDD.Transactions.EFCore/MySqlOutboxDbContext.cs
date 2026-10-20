@@ -42,7 +42,8 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
         // Mark*+SaveChanges）；违反契约的突变将静默丢失
         return await OutboxMessages
             .FromSqlRaw(BuildPendingSql(), maxRetryCount)
-            .OrderBy(m => m.CreatedAt)
+            .OrderBy(m => m.NextAttemptAt)
+            .ThenBy(m => m.CreatedAt)
             .Take(batchSize)
             .AsNoTracking()
             .ToListAsync(ct).ConfigureAwait(false);
@@ -121,12 +122,11 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
             JOIN (
                 SELECT id FROM OutboxMessages
                 WHERE Status = 0 AND RetryCount < {0}
-                  AND (NextAttemptAt IS NULL OR NextAttemptAt <= {1})
-                  AND (LockedUntil IS NULL OR LockedUntil <= {1})
-                ORDER BY CreatedAt
+                  AND NextAttemptAt <= {1}
+                ORDER BY NextAttemptAt, CreatedAt
                 LIMIT {2} FOR UPDATE SKIP LOCKED
             ) AS sub ON t.id = sub.id
-            SET t.LockedBy = {3}, t.LockedUntil = {4}
+            SET t.LockedBy = {3}, t.LockedUntil = {4}, t.NextAttemptAt = {4}
             """,
             new object[] { maxRetryCount, now, batchSize, owner, until }, ct).ConfigureAwait(false);
 #pragma warning restore EF1003
@@ -142,7 +142,7 @@ public abstract class MySqlOutboxDbContext(DbContextOptions options) : OutboxDbC
             .FromSql($"""
                 SELECT * FROM OutboxMessages
                 WHERE LockedBy = {owner} AND LockedUntil = {until}
-                ORDER BY CreatedAt
+                ORDER BY NextAttemptAt, CreatedAt
                 LIMIT {batchSize}
                 """)
             .AsNoTracking()

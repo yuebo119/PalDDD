@@ -13,8 +13,15 @@ namespace PalDDD.Transactions;
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:Members annotated with RequiresDynamicCode require dynamic access",
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
-public abstract class OutboxDbContext(DbContextOptions options) : DbContext(options), IPalOutboxStore, IBatchMarkOutboxStore
+public abstract class OutboxDbContext : DbContext, IPalOutboxStore, IBatchMarkOutboxStore
 {
+    /// <summary>构造上下文并注册新增 Pending 行的可用时刻归一化。</summary>
+    protected OutboxDbContext(DbContextOptions options) : base(options)
+    {
+        // EF Core 的 SavingChanges 同时覆盖同步与异步 SaveChanges 入口。
+        SavingChanges += (_, _) => NormalizePendingNextAttemptAt();
+    }
+
     /// <inheritdoc />
     public bool RequiresSaveAfterMark => false;
 
@@ -25,6 +32,7 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     ValueTask IPalOutboxStore.AddMessageAsync(OutboxMessage message, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(message); // v13 姊妹对称：对齐 AddMessagesAsync/InMemory/PalORM 单条守卫（ITM-163 漏网）
+        message.NextAttemptAt = message.NextAttemptAt ?? GetUtcNow();
         OutboxMessages.Add(message);
         // 跟踪添加无 I/O——同步完成（v4.0 ③ ADR-026 异步化：写入延迟到上下文 SaveChanges
         // 的既有语义不变，仅签名异步化）
@@ -36,6 +44,9 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     {
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
+        var now = GetUtcNow();
+        foreach (var message in messages)
+            message.NextAttemptAt = message.NextAttemptAt ?? now;
         // 优化（二十五轮 API 扫描 EF-10）：AddRangeAsync 仅对依赖异步值生成（HiLo/Sequence）
         // 的主键必要——OutboxMessage 主键 Ulid 预设（HasConversion 字符串存储，无 DB 生成），
         // 同步 AddRange 免逐实体 async 状态机开销。
@@ -92,9 +103,9 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
             .AsNoTracking()
             .Where(m => m.Status == OutboxStatus.Pending
                 && m.RetryCount < maxRetryCount
-                && (m.NextAttemptAt == null || m.NextAttemptAt <= now)
-                && (m.LockedUntil == null || m.LockedUntil <= now))
-            .OrderBy(m => m.CreatedAt)
+                && m.NextAttemptAt <= now)
+            .OrderBy(m => m.NextAttemptAt)
+            .ThenBy(m => m.CreatedAt)
             .Take(batchSize)
             .ToListAsync(ct).ConfigureAwait(false);
     }
@@ -503,9 +514,30 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
     protected virtual string BuildPendingSql() => $$"""
         SELECT * FROM OutboxMessages
         WHERE Status = 0 AND RetryCount < {0}
-          AND (NextAttemptAt IS NULL OR NextAttemptAt <= {{GetNowSql()}})
-          AND (LockedUntil IS NULL OR LockedUntil <= {{GetNowSql()}})
+          AND NextAttemptAt <= {{GetNowSql()}}
         """;
+
+    /// <summary>保存前把新增 Pending 行的 next_attempt_at 归一为可用时刻。</summary>
+    /// <remarks>
+    /// 直接 <c>DbSet.Add</c> 的调用方不经过 <c>IPalOutboxStore.AddMessageAsync</c>，这里兜底：
+    /// 无租约时取 CreatedAt，已有租约时取 max(CreatedAt, LockedUntil)，避免旧式种子/直写行
+    /// 在 <c>NextAttemptAt &lt;= now</c> 谓词下永远不可见或被活跃租约提前放行。
+    /// </remarks>
+    private void NormalizePendingNextAttemptAt()
+    {
+        var now = GetUtcNow();
+        foreach (var entry in ChangeTracker.Entries<OutboxMessage>())
+        {
+            if (entry.State != EntityState.Added || entry.Entity.Status != OutboxStatus.Pending)
+                continue;
+            if (entry.Entity.NextAttemptAt is not null)
+                continue;
+            var lockedUntil = entry.Entity.LockedUntil;
+            entry.Entity.NextAttemptAt = lockedUntil is { } until && until > now
+                ? until
+                : now;
+        }
+    }
 
     /// <summary>配置发件箱消息实体。</summary>
     /// <remarks>
@@ -520,10 +552,11 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         modelBuilder.Entity<OutboxMessage>(e =>
         {
             e.HasKey(x => x.Id);
-            // 租约候选扫描按 CreatedAt 排序：(Status, CreatedAt) 让关系型 provider 直接按索引序
-            // 取满批次，不再对全部待租行排序。PG/SQLite 部署应使用 docs/sql 方言脚本中的
-            // 部分索引（WHERE status = 0），EF 模型保持跨 provider 可翻译的最简索引。
-            e.HasIndex(x => new { x.Status, x.CreatedAt });
+            // 租约候选扫描按 next_attempt_at（可用时刻）过滤并按 (next_attempt_at, created_at)
+            // 排序：(Status, NextAttemptAt, CreatedAt) 让关系型 provider 直接按索引序取满批次。
+            // PG/SQLite 部署应使用 docs/sql 方言脚本中的部分索引（WHERE status = 0），
+            // EF 模型保持跨 provider 可翻译的最简索引。
+            e.HasIndex(x => new { x.Status, x.NextAttemptAt, x.CreatedAt });
             // 保留清理按 processed_at 分批删除终态行；(Status, ProcessedAt) 让关系型 provider
             // 按索引序直接取满批次，避免全表扫描加排序。对齐 docs/sql 方言脚本 idx_outbox_processed。
             e.HasIndex(x => new { x.Status, x.ProcessedAt });

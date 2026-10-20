@@ -250,8 +250,12 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         // ITM-634 修复（跨栈契约一致）：created_at 持久化领域赋值 OutboxMessage.CreatedAt——
         // 与 PalORM（OutboxMessageRow.FromDomain）、EFCore（OutboxMessages.Add(message)）、
         // InMemory（列表直存）三栈保留领域值一致：同消息跨栈落库 created_at 相同，
-        // ORDER BY created_at 投递序与 CreatedAt 往返断言跨栈成立。
+        // ORDER BY next_attempt_at, created_at 投递序与 CreatedAt 往返断言跨栈成立。
         AddParam(cmd, "CreatedAt", ToTimeParam(message.CreatedAt));
+        // 2026-10-21：next_attempt_at 是唯一的可用时刻。新建消息默认在写入时立即可用；
+        // 显式调度（NextAttemptAt 非空）保留调用方值。
+        message.NextAttemptAt = message.NextAttemptAt ?? _timeProvider.GetUtcNow();
+        AddParam(cmd, "NextAttemptAt", ToTimeParam(message.NextAttemptAt.Value));
         AddParam(cmd, "CorrelationId", message.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         AddParam(cmd, "CausationId", message.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
         AddParam(cmd, "TraceParent", message.TraceParent);
@@ -287,14 +291,17 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         // v8 声明的「接口 AddMessagesAsync 无 CancellationToken 参数、本路径无法响应取消」缺口
         // 已在 v4.0 补齐（ADR-026 ④）：接口收 ct，本方法签名收参并经直接重载传播（M1-3 口径：收缩连接打开阶段）。
         var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var now = _timeProvider.GetUtcNow();
+        foreach (var message in messages)
+            message.NextAttemptAt = message.NextAttemptAt ?? now;
         // P2 修复（八轮评审 PD17）：批量路径补 correlation/causation/trace 4 追踪列——
         // 单条路径 AddMessage（七轮）已补，批量漏列导致追踪链在批量写入时丢失；
         // extractor 末 4 项与单条 AddMessage 的参数语义逐一对齐。
         return await DapperBulkCopy.BulkInsertAsync(
             conn, _dbType, "outbox_messages",
-            ["id", "type", "payload", "content_type", "schema_version", "status", "created_at", "correlation_id", "causation_id", "trace_parent", "trace_state"],
+            ["id", "type", "payload", "content_type", "schema_version", "status", "created_at", "next_attempt_at", "correlation_id", "causation_id", "trace_parent", "trace_state"],
             messages,
-            m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, StatusPending, m.CreatedAt,
+            m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, StatusPending, m.CreatedAt, m.NextAttemptAt!.Value,
                 m.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture), m.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture), m.TraceParent, m.TraceState],
             Tx, ct).ConfigureAwait(false); // v4.0 ④（ADR-026）：ct 传播进批量路径
     }

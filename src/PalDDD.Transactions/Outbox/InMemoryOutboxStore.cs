@@ -96,7 +96,7 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
                     Status = OutboxStatus.Pending,
                     LockedBy = owner,
                     LockedUntil = now.Add(leaseDuration),
-                    NextAttemptAt = null,
+                    NextAttemptAt = now.Add(leaseDuration),
                     Error = null,
                     ProcessedAt = null
                 };
@@ -112,6 +112,7 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
     public ValueTask AddMessageAsync(OutboxMessage message, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
+        message.NextAttemptAt = message.NextAttemptAt ?? _timeProvider.GetUtcNow();
         lock (_lock) { _messages.Add(message); }
         return ValueTask.CompletedTask;
     }
@@ -145,8 +146,10 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
                         $"Duplicate OutboxMessage id '{msg.Id}' in the messages batch (Id must be unique, mirroring the DB primary-key constraint).",
                         nameof(messages));
             }
+            var now = _timeProvider.GetUtcNow();
             foreach (var msg in messages)
             {
+                msg.NextAttemptAt = msg.NextAttemptAt ?? now;
                 _messages.Add(msg);
             }
         }
@@ -353,9 +356,10 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
         return _messages
             .Where(m => m.Status == OutboxStatus.Pending
                 && m.RetryCount < maxRetryCount
-                && (m.NextAttemptAt == null || m.NextAttemptAt <= now)
-                && (m.LockedUntil == null || m.LockedUntil <= now))
-            .OrderBy(m => m.CreatedAt)
+                && m.NextAttemptAt.HasValue
+                && m.NextAttemptAt <= now)
+            .OrderBy(m => m.NextAttemptAt)
+            .ThenBy(m => m.CreatedAt)
             .Take(batchSize)
             .ToList();
     }

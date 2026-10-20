@@ -2,6 +2,7 @@ namespace PalDDD.EventLog.Tests;
 
 using Microsoft.EntityFrameworkCore;
 using PalDDD.Testing;
+using System.Data.Common;
 using System.Text;
 using PalUlid = ByteAether.Ulid.Ulid;
 
@@ -357,6 +358,55 @@ public sealed class EventLogEfCoreTests
                 "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
                 "tenant=ordering"));
 
+    [Test]
+    public async Task BinaryEventIdRead_ProjectsOnlyBinaryColumn_AndRoundTripsId()
+    {
+        var connectionString = $"DataSource=file:mem{Guid.NewGuid():N}?mode=memory&cache=shared";
+        var counter = new SelectCommandCounter();
+        var writerOptions = new DbContextOptionsBuilder<TestEventLogDbContext>()
+            .UseSqlite(connectionString).Options;
+        var readerOptions = new DbContextOptionsBuilder<TestEventLogDbContext>()
+            .UseSqlite(connectionString).AddInterceptors(counter).Options;
+        var eventId = PalUlid.New();
+
+        await using (var writer = new TestEventLogDbContext(writerOptions))
+        {
+            await writer.Database.EnsureCreatedAsync();
+            await writer.AppendAsync(
+                "binary-stream",
+                ExpectedStreamVersion.NoStream,
+                [CreateEvent(eventId, "orders.binary.v1", "binary")]);
+        }
+
+        await using var reader = new TestEventLogDbContext(readerOptions) { UseBinaryEventId = true };
+        var events = await ReadAllAsync(reader.ReadStreamAsync("binary-stream"));
+
+        await Assert.That(events).HasSingleItem();
+        await Assert.That(events[0].EventId).IsEqualTo(eventId);
+        await Assert.That(counter.CommandText).Contains("EventIdBin");
+        await Assert.That(counter.CommandText.Contains("\"EventId\"", StringComparison.Ordinal)).IsFalse();
+    }
+
+    [Test]
+    public async Task BinaryEventIdRead_WithMissingBackfill_Throws()
+    {
+        var options = CreateSqliteOptions();
+        await using (var writer = new TestEventLogDbContext(options))
+        {
+            await writer.Database.EnsureCreatedAsync();
+            await writer.AppendAsync(
+                "binary-missing",
+                ExpectedStreamVersion.NoStream,
+                [CreateEvent(PalUlid.New(), "orders.binary.v1", "binary")]);
+            await writer.Database.ExecuteSqlRawAsync("UPDATE \"Events\" SET \"EventIdBin\" = NULL");
+        }
+
+        await using var reader = new TestEventLogDbContext(options) { UseBinaryEventId = true };
+        await Assert.That(async () => await ReadAllAsync(reader.ReadStreamAsync("binary-missing")))
+            .Throws<InvalidOperationException>();
+        await Assert.That(await reader.CountMissingBinaryEventIdsAsync()).IsEqualTo(1);
+    }
+
     private static async Task<List<RecordedEvent>> ReadAllAsync(IAsyncEnumerable<RecordedEvent> events)
     {
         var result = new List<RecordedEvent>();
@@ -370,6 +420,31 @@ public sealed class EventLogEfCoreTests
         DbContextOptions<TestEventLogDbContext> options,
         TimeProvider? timeProvider = null)
         : EventLogDbContext(options, timeProvider);
+
+    /// <summary>记录最近一次 Reader 命令文本，用于锁定二进制投影不拉文本列。</summary>
+    private sealed class SelectCommandCounter : Microsoft.EntityFrameworkCore.Diagnostics.DbCommandInterceptor
+    {
+        public string CommandText { get; private set; } = string.Empty;
+
+        public override Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            Microsoft.EntityFrameworkCore.Diagnostics.CommandEventData eventData,
+            Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<DbDataReader> result)
+        {
+            CommandText = command.CommandText;
+            return result;
+        }
+
+        public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            Microsoft.EntityFrameworkCore.Diagnostics.CommandEventData eventData,
+            Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            CommandText = command.CommandText;
+            return ValueTask.FromResult(result);
+        }
+    }
 
     /// <summary>固定时间 TimeProvider —— 验证 RecordedAt 来自注入的时钟而非系统时间。</summary>
     private sealed class FixedTimeProvider(DateTimeOffset fixedTime) : TimeProvider

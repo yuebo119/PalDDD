@@ -28,8 +28,9 @@ CREATE TABLE outbox_messages (
     trace_state     TEXT    -- 审计：W3C tracestate
 );
 
--- 租约候选扫描按 created_at 排序；有部分索引能力的方言用 WHERE status = 0。
-CREATE INDEX idx_outbox_due ON outbox_messages(created_at);
+-- 租约候选扫描按 next_attempt_at（可用时刻）过滤并按 (next_attempt_at, created_at) 排序；
+-- 有部分索引能力的方言用 WHERE status = 0。
+CREATE INDEX idx_outbox_due ON outbox_messages(next_attempt_at, created_at);
 CREATE INDEX idx_outbox_processed ON outbox_messages(status, processed_at);
 CREATE INDEX idx_outbox_lease_holder ON outbox_messages(locked_by, locked_until);
 

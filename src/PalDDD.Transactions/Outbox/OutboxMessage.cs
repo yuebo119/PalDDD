@@ -47,6 +47,11 @@ public sealed class OutboxMessage
     public DateTimeOffset CreatedAt { get; init; } = TimeProvider.GetUtcNow();
     public OutboxStatus Status { get; set; } = OutboxStatus.Pending;
     public DateTimeOffset? ProcessedAt { get; set; }
+    /// <summary>
+    /// 最早可用时刻。未显式调度时由存储层在写入时赋值；租约期间等于
+    /// <see cref="LockedUntil"/>；重试时写退避时间。Outbox 租约查询只按本列判断到期，
+    /// <see cref="LockedUntil"/> 仅承担 fencing 与持租回读。
+    /// </summary>
     public DateTimeOffset? NextAttemptAt { get; set; }
     public string? LockedBy { get; set; }
     public DateTimeOffset? LockedUntil { get; set; }

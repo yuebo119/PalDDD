@@ -24,7 +24,7 @@ namespace PalDDD.Transactions;
 /// ⚠️ <b>租约/查询谓词的 UTC 前提</b>：时间列 TEXT 文本序比较在偏移一致时等于时间序——
 /// 本栈 lease 链路时间源恒 <c>GetUtcNow()</c>（+00:00）自洽；<c>NextAttemptAt</c>/
 /// <c>LockedUntil</c> 的时间谓词与 <c>GetPendingMessagesAsync</c> 下推 SQL 的
-/// <c>ORDER BY CreatedAt</c>（2026-09-19 增读的列——CreatedAt 由消息构造方写入，
+/// <c>ORDER BY NextAttemptAt, CreatedAt</c>（2026-09-19 增读的列——CreatedAt 由消息构造方写入，
 /// 默认 GetUtcNow，init 属性可显式传非零偏移）共享该前提；外部写入非零偏移会破坏
 /// 文本序（详见 OutboxSqliteConcurrencyTests 的 LockedUntilUtc 前提锁定测试）。
 /// </para>
@@ -55,24 +55,17 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
         // Where(LockedUntil <= now) 抛 InvalidOperationException（不可翻译）、OrderBy(CreatedAt)
         // 抛 NotSupportedException（SQLite 不支持 DateTimeOffset 排序）、等值 == 可译。
         // raw SQL 形态继续正确；可翻译性一旦变化由 OutboxSqliteConcurrencyTests 的 canary 转红。
-        // 排序键 CreatedAt：对齐 Lease 与三栈 GetPending 先例（Dapper/PalORM/EF-MySQL 均
-        // SQL 内 ORDER BY created_at）；原 Id 序（ULID 创建序）与本序在单进程下一致
-        //（表征测试 GetPending_OrdersByIdAscending 双态绿）。非组合式调用——FromSql 后
-        // 不再接 Where/OrderBy（组合会触发 ITM-261 翻译），仅 AsNoTracking + ToListAsync。
+        // 排序键 NextAttemptAt, CreatedAt：租约资格是单列范围比较，索引可直接保序；
+        // 原 OR 谓词使索引第三列不保序，已随 2026-10-21 可用时刻折叠消除。非组合式调用——
+        // FromSql 后不再接 Where/OrderBy（组合会触发 ITM-261 翻译），仅 AsNoTracking + ToListAsync。
         // 优化（二十五轮 API 扫描 EF-5）：AsNoTracking——只读契约（接口 doc 保证不进
         // Mark*+SaveChanges）；违反契约的突变将静默丢失。
-        // 伸缩性边界（反方发现④，决策文档在案）：OR 谓词下 (Status,NextAttemptAt,CreatedAt)
-        // 索引第三列不保序——SQL 内可能单次全扫+临时 B-tree 排序；本形态消除的是 N 页往返
-        // 与逐页重复物化（O(表·页数)→单语句），非"与表大小无关"。
-        // FromSql 全参数化形态（2026-10-08 审计对齐：插值孔逐孔生成 DbParameter，注入面收窄；
-        // 时间参数为应用侧 DateTimeOffset，与写入格式自洽，见上方 ToTimeParam 族注释）
         return await OutboxMessages
             .FromSql($"""
                 SELECT * FROM OutboxMessages
                 WHERE Status = 0 AND RetryCount < {maxRetryCount}
-                  AND (NextAttemptAt IS NULL OR NextAttemptAt <= {now})
-                  AND (LockedUntil IS NULL OR LockedUntil <= {now})
-                ORDER BY CreatedAt
+                  AND NextAttemptAt <= {now}
+                ORDER BY NextAttemptAt, CreatedAt
                 LIMIT {batchSize}
                 """)
             .AsNoTracking()
@@ -115,20 +108,18 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
         // SaveChanges 写入格式自洽（空格分隔 TEXT，谓词不恒真）；② 等值守卫回读
         // 命中；③ EF LINQ 不能翻译 DateTimeOffset 有序比较（ITM-261）不适用于手写
         // SQL——文本序比较在 raw SQL 内合法。
-        // ORDER BY CreatedAt：对齐 Dapper/PalORM/MySQL-EF 三栈先例（SqlTemplates OutboxLeaseUpdateSqlite
-        // 同款）；ITM-261 只限 LINQ 的 ORDER BY 翻译。ULID Id 序与创建序等价（QueryEligibleAsync 注释），
-        // 故与 GetPending 路径（Id 序分页）语义一致。
+        // ORDER BY NextAttemptAt, CreatedAt：与 Dapper/PalORM/MySQL-EF 的可用时刻折叠同形。
+        // ITM-261 只限 LINQ 的 ORDER BY 翻译，raw SQL 内合法。
         // ExecuteSqlAsync（EF 11 统一形态，FormattableString 重载自动参数化——
         // ExecuteSqlInterpolatedAsync 已标 Obsolete）
         await Database.ExecuteSqlAsync($"""
             UPDATE OutboxMessages
-            SET LockedBy = {owner}, LockedUntil = {until}
+            SET LockedBy = {owner}, LockedUntil = {until}, NextAttemptAt = {until}
             WHERE Id IN (
                 SELECT Id FROM OutboxMessages
                 WHERE Status = 0 AND RetryCount < {maxRetryCount}
-                  AND (NextAttemptAt IS NULL OR NextAttemptAt <= {now})
-                  AND (LockedUntil IS NULL OR LockedUntil <= {now})
-                ORDER BY CreatedAt
+                  AND NextAttemptAt <= {now}
+                ORDER BY NextAttemptAt, CreatedAt
                 LIMIT {batchSize})
             """, ct).ConfigureAwait(false);
 

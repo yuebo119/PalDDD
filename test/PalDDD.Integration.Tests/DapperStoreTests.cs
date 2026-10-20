@@ -135,7 +135,7 @@ public sealed class DapperStoreTests
                 trace_parent    TEXT,
                 trace_state     TEXT
             );
-            CREATE INDEX idx_outbox_due ON outbox_messages(created_at) WHERE status = 0;
+            CREATE INDEX idx_outbox_due ON outbox_messages(next_attempt_at, created_at) WHERE status = 0;
             CREATE INDEX idx_outbox_lease_holder ON outbox_messages(locked_by, locked_until);
 
             CREATE TABLE inbox_messages (
@@ -220,6 +220,9 @@ public sealed class DapperStoreTests
         await Assert.That(pending).Count().IsEqualTo(1);
         await Assert.That(pending[0].Type).IsEqualTo("test.event.v1");
         await Assert.That(pending[0].Status).IsEqualTo(OutboxStatus.Pending);
+        // 新建消息的可用时刻在写入时赋值（显式调度时保留调用方值）。
+        await Assert.That(msg.NextAttemptAt!.Value).IsLessThanOrEqualTo(TimeProvider.System.GetUtcNow());
+        await Assert.That(pending[0].NextAttemptAt).IsEqualTo(msg.NextAttemptAt);
     }
 
     [Test]
@@ -372,6 +375,8 @@ public sealed class DapperStoreTests
         await Assert.That(leased).Count().IsEqualTo(1);
         await Assert.That(leased[0].LockedBy).IsEqualTo("test-owner");
         await Assert.That(leased[0].LockedUntil).IsNotNull();
+        // 可用时刻折叠：租约期间 NextAttemptAt 必须等于 LockedUntil，租约过期前不会重新可租。
+        await Assert.That(leased[0].NextAttemptAt).IsEqualTo(leased[0].LockedUntil);
     }
 
     [Test]
@@ -1414,8 +1419,8 @@ public sealed class DapperStoreTests
     {
         var clock = new FixedTimeProvider(DateTimeOffset.Parse("2026-06-27T10:00:00Z", CultureInfo.InvariantCulture));
         var store = new DapperOutboxStore(_conn, _dbType, timeProvider: clock);
-        await store.AddMessageAsync(CreateOutboxMessage("a.v1"));
-        await store.AddMessageAsync(CreateOutboxMessage("b.v1"));
+        await store.AddMessageAsync(CreateOutboxMessage("a.v1", clock.GetUtcNow()));
+        await store.AddMessageAsync(CreateOutboxMessage("b.v1", clock.GetUtcNow()));
 
         var first = await store.LeasePendingMessagesAsync(
             1, "owner-1", TimeSpan.FromMinutes(5), new OutboxOptions().MaxRetryCount, cancellationToken);

@@ -19,8 +19,7 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
     protected override string BuildPendingSql() => $$"""
         SELECT * FROM "OutboxMessages"
         WHERE "Status" = 0 AND "RetryCount" < {0}
-          AND ("NextAttemptAt" IS NULL OR "NextAttemptAt" <= {{GetNowSql()}})
-          AND ("LockedUntil" IS NULL OR "LockedUntil" <= {{GetNowSql()}})
+          AND "NextAttemptAt" <= {{GetNowSql()}}
         """;
 
     /// <inheritdoc/>
@@ -39,7 +38,8 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
         // Mark*+SaveChanges）；违反契约的突变将静默丢失
         return await OutboxMessages
             .FromSqlRaw(BuildPendingSql(), maxRetryCount) // NOSONAR: S2077 nowSql 为 GetNowSql 常量，其余参数已参数化
-            .OrderBy(m => m.CreatedAt)
+            .OrderBy(m => m.NextAttemptAt)
+            .ThenBy(m => m.CreatedAt)
             .Take(batchSize)
             .AsNoTracking()
             .ToListAsync(ct).ConfigureAwait(false);
@@ -71,13 +71,13 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
         return await OutboxMessages
             .FromSqlRaw(
                 $@"UPDATE ""OutboxMessages""
-                  SET ""LockedBy"" = {{2}}, ""LockedUntil"" = {nowSql} + ({{3}} * INTERVAL '1 second')
+                  SET ""LockedBy"" = {{2}}, ""LockedUntil"" = {nowSql} + ({{3}} * INTERVAL '1 second'),
+                      ""NextAttemptAt"" = {nowSql} + ({{3}} * INTERVAL '1 second')
                   WHERE ""Id"" IN (
                       SELECT ""Id"" FROM ""OutboxMessages""
                       WHERE ""Status"" = 0 AND ""RetryCount"" < {{1}}
-                        AND (""NextAttemptAt"" IS NULL OR ""NextAttemptAt"" <= {nowSql})
-                        AND (""LockedUntil"" IS NULL OR ""LockedUntil"" <= {nowSql})
-                      ORDER BY ""CreatedAt""
+                        AND ""NextAttemptAt"" <= {nowSql}
+                      ORDER BY ""NextAttemptAt"", ""CreatedAt""
                       LIMIT {{0}}
                       FOR UPDATE SKIP LOCKED
                   )

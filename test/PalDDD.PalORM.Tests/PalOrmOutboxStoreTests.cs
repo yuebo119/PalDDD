@@ -23,6 +23,8 @@ public class PalOrmOutboxStoreTests
         await Assert.That(pending).Count().IsEqualTo(1);
         await Assert.That(pending[0].Type).IsEqualTo("test.event.v1");
         await Assert.That(pending[0].Status).IsEqualTo(OutboxStatus.Pending);
+        await Assert.That(msg.NextAttemptAt!.Value).IsLessThanOrEqualTo(TimeProvider.System.GetUtcNow());
+        await Assert.That(pending[0].NextAttemptAt).IsEqualTo(msg.NextAttemptAt);
     }
 
     [Test]
@@ -80,6 +82,7 @@ public class PalOrmOutboxStoreTests
 
         await Assert.That(leased).Count().IsEqualTo(1);
         await Assert.That(leased[0].LockedBy).IsEqualTo("worker-1");
+        await Assert.That(leased[0].NextAttemptAt).IsEqualTo(leased[0].LockedUntil);
     }
 
     [Test]

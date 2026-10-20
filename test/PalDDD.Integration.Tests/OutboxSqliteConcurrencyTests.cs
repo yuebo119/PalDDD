@@ -227,6 +227,7 @@ public sealed class OutboxSqliteConcurrencyTests
         var leased = await ((IPalOutboxStore)ctx).LeasePendingMessagesAsync(
             10, "worker-1", TimeSpan.FromMinutes(2), 5, CancellationToken.None);
         await Assert.That(leased).Count().IsEqualTo(1);
+        await Assert.That(leased[0].NextAttemptAt).IsEqualTo(leased[0].LockedUntil);
 
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = "SELECT LockedUntil FROM OutboxMessages WHERE Id = $id";
@@ -458,6 +459,7 @@ public sealed class OutboxSqliteConcurrencyTests
                         Type = "orders.same-tick",
                         Payload = [1],
                         CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+                        NextAttemptAt = frozen.AddMinutes(-1),
                         Status = OutboxStatus.Pending,
                     });
                 await seed.SaveChangesAsync();

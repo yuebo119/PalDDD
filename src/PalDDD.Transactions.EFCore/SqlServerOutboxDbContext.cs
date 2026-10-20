@@ -38,7 +38,8 @@ public abstract class SqlServerOutboxDbContext(DbContextOptions options) : Outbo
         // Mark*+SaveChanges）；违反契约的突变将静默丢失
         return await OutboxMessages
             .FromSqlRaw(BuildPendingSql(), maxRetryCount) // NOSONAR: S2077 nowSql 为 GetNowSql 常量，其余参数已参数化
-            .OrderBy(m => m.CreatedAt)
+            .OrderBy(m => m.NextAttemptAt)
+            .ThenBy(m => m.CreatedAt)
             .Take(batchSize)
             .AsNoTracking()
             .ToListAsync(ct).ConfigureAwait(false);
@@ -71,12 +72,12 @@ public abstract class SqlServerOutboxDbContext(DbContextOptions options) : Outbo
                       SELECT TOP({{0}}) *
                       FROM OutboxMessages WITH (UPDLOCK, READPAST, ROWLOCK)
                       WHERE Status = 0 AND RetryCount < {{1}}
-                        AND (NextAttemptAt IS NULL OR NextAttemptAt <= {nowSql})
-                        AND (LockedUntil IS NULL OR LockedUntil <= {nowSql})
-                      ORDER BY CreatedAt
+                        AND NextAttemptAt <= {nowSql}
+                      ORDER BY NextAttemptAt, CreatedAt
                   )
                   UPDATE candidates
-                  SET LockedBy = {{2}}, LockedUntil = DATEADD(second, {{3}}, {nowSql})
+                  SET LockedBy = {{2}}, LockedUntil = DATEADD(second, {{3}}, {nowSql}),
+                      NextAttemptAt = DATEADD(second, {{3}}, {nowSql})
                   OUTPUT INSERTED.*", batchSize, maxRetryCount, owner, leaseSeconds)
                 // v26 P3：AsNoTracking 物化——同 PG RETURNING 路径：Mark*/ReleaseForRetry 均为
                 // ExecuteUpdate 直写，租约回读实体仅用于内存 fencing 判断，无跟踪消费方

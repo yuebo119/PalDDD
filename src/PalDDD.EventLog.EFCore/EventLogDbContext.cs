@@ -32,8 +32,12 @@ public abstract class EventLogDbContext(
     public DbSet<StoredEvent> Events => Set<StoredEvent>();
 
     /// <summary>
-    /// 读取时优先使用 16 字节 event_id_bin（M4）。默认 false 回退文本列；
-    /// 存量行回填完成后再置 true。
+    /// 读取时使用 16 字节 event_id_bin（M4）。默认 false 回退文本列。
+    /// <para>
+    /// true 为严格二进制投影：只 SELECT <c>EventIdBin</c>，存量为 NULL 的行会抛异常，
+    /// 不再静默回退文本列。置 true 前必须确认
+    /// <see cref="CountMissingBinaryEventIdsAsync"/> 为 0。
+    /// </para>
     /// </summary>
     public bool UseBinaryEventId { get; set; }
 
@@ -130,6 +134,12 @@ public abstract class EventLogDbContext(
         return result;
     }
 
+    /// <summary>
+    /// 统计尚未回填 16 字节二进制 EventId 的行数。开启 <see cref="UseBinaryEventId"/> 前必须为 0。
+    /// </summary>
+    public Task<int> CountMissingBinaryEventIdsAsync(CancellationToken cancellationToken = default)
+        => Events.CountAsync(e => e.EventIdBin == null, cancellationToken);
+
     /// <inheritdoc />
     public async IAsyncEnumerable<RecordedEvent> ReadStreamAsync(
         string streamName,
@@ -150,11 +160,12 @@ public abstract class EventLogDbContext(
         // 计数同样改为 yield 前（对齐 InMemoryEventLog ITM-120）。
         try
         {
-            var query = Events
-                .AsNoTracking()
-                .Where(e => e.StreamName == streamName && e.StreamVersion >= fromVersion)
-                .OrderBy(e => e.StreamVersion)
-                .Take(maxCount)
+            var query = ProjectReadRows(
+                    Events
+                        .AsNoTracking()
+                        .Where(e => e.StreamName == streamName && e.StreamVersion >= fromVersion)
+                        .OrderBy(e => e.StreamVersion)
+                        .Take(maxCount))
                 .AsAsyncEnumerable()
                 .WithCancellation(cancellationToken)
                 .ConfigureAwait(false);
@@ -188,11 +199,12 @@ public abstract class EventLogDbContext(
         // 对齐 InMemoryEventLog 二十一轮 / ITM-120）。
         try
         {
-            var query = Events
-                .AsNoTracking()
-                .Where(e => e.GlobalPosition >= fromPosition)
-                .OrderBy(e => e.GlobalPosition)
-                .Take(maxCount)
+            var query = ProjectReadRows(
+                    Events
+                        .AsNoTracking()
+                        .Where(e => e.GlobalPosition >= fromPosition)
+                        .OrderBy(e => e.GlobalPosition)
+                        .Take(maxCount))
                 .AsAsyncEnumerable()
                 .WithCancellation(cancellationToken)
                 .ConfigureAwait(false);
@@ -209,6 +221,97 @@ public abstract class EventLogDbContext(
             // maxCount 无界，高基数命中 ITM-229 清理标准；计数保留在 EventLogRead 指标
             PalMetrics.EventLogRead.Add(read);
         }
+    }
+
+    /// <summary>按读取模式投影：文本模式只拉 EventId，二进制模式只拉 EventIdBin。</summary>
+    private IQueryable<EventReadRow> ProjectReadRows(IQueryable<StoredEvent> query)
+    {
+        if (UseBinaryEventId)
+        {
+            return query.Select(e => new EventReadRow
+            {
+                StreamName = e.StreamName,
+                StreamVersion = e.StreamVersion,
+                GlobalPosition = e.GlobalPosition,
+                RecordedAt = e.RecordedAt,
+                EventIdBin = e.EventIdBin,
+                EventName = e.EventName,
+                SchemaVersion = e.SchemaVersion,
+                ContentType = e.ContentType,
+                Payload = e.Payload,
+                Metadata = e.Metadata,
+                ActorId = e.ActorId,
+                Reason = e.Reason,
+                CorrelationId = e.CorrelationId,
+                CausationId = e.CausationId,
+                TraceParent = e.TraceParent,
+                TraceState = e.TraceState,
+            });
+        }
+
+        return query.Select(e => new EventReadRow
+        {
+            StreamName = e.StreamName,
+            StreamVersion = e.StreamVersion,
+            GlobalPosition = e.GlobalPosition,
+            RecordedAt = e.RecordedAt,
+            EventId = e.EventId,
+            EventName = e.EventName,
+            SchemaVersion = e.SchemaVersion,
+            ContentType = e.ContentType,
+            Payload = e.Payload,
+            Metadata = e.Metadata,
+            ActorId = e.ActorId,
+            Reason = e.Reason,
+            CorrelationId = e.CorrelationId,
+            CausationId = e.CausationId,
+            TraceParent = e.TraceParent,
+            TraceState = e.TraceState,
+        });
+    }
+
+    /// <summary>只读投影行：二进制模式不加载文本 EventId，文本模式不加载二进制列。</summary>
+    private sealed class EventReadRow
+    {
+        public string StreamName { get; set; } = string.Empty;
+        public long StreamVersion { get; set; }
+        public long GlobalPosition { get; set; }
+        public DateTimeOffset RecordedAt { get; set; }
+        public PalUlid EventId { get; set; }
+        public byte[]? EventIdBin { get; set; }
+        public string EventName { get; set; } = string.Empty;
+        public int SchemaVersion { get; set; }
+        public string ContentType { get; set; } = string.Empty;
+        public byte[] Payload { get; set; } = [];
+        public byte[] Metadata { get; set; } = [];
+        public string? ActorId { get; set; }
+        public string? Reason { get; set; }
+        public PalUlid? CorrelationId { get; set; }
+        public PalUlid? CausationId { get; set; }
+        public string? TraceParent { get; set; }
+        public string? TraceState { get; set; }
+
+        public RecordedEvent ToRecordedEvent(bool useBinaryEventId)
+            => StoredEvent.CreateRecordedEvent(
+                StreamName,
+                StreamVersion,
+                GlobalPosition,
+                RecordedAt,
+                EventId,
+                EventIdBin,
+                useBinaryEventId,
+                requireBinaryEventId: useBinaryEventId,
+                EventName,
+                SchemaVersion,
+                ContentType,
+                Payload,
+                Metadata,
+                ActorId,
+                Reason,
+                CorrelationId,
+                CausationId,
+                TraceParent,
+                TraceState);
     }
 
     /// <summary>配置持久化事件日志实体。</summary>
