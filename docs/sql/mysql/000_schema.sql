@@ -55,7 +55,8 @@ CREATE TABLE saga_states (
     leased_until  DATETIME(6),
     INDEX idx_saga_status (status, created_at),
     INDEX idx_saga_lease (status, leased_until, created_at),
-    INDEX idx_saga_due (status, next_check_at)
+    INDEX idx_saga_due (status, next_check_at),
+    INDEX idx_saga_lease_holder (leased_by, leased_until)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE events (
