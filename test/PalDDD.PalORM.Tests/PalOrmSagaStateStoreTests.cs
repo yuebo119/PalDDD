@@ -122,6 +122,37 @@ public class PalOrmSagaStateStoreTests
     }
 
     [Test]
+    public async Task SaveMany_RunsAcrossChunkBoundary()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteSagaStateStore<StoreTestSagaState>(session, Json);
+        for (var i = 0; i < 100; i++)
+        {
+            await store.SaveChangesAsync(new StoreTestSagaState
+            {
+                CustomerId = $"c{i}",
+                CurrentState = "Active"
+            }, default);
+        }
+
+        var leased = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 200, default);
+        await Assert.That(leased.Count).IsEqualTo(100);
+        foreach (var saga in leased)
+        {
+            saga.Status = SagaStatus.Completed;
+            saga.CurrentState = "Completed";
+        }
+
+        // SQLite 每块 90 行：100 行必然跨两条 UPDATE。
+        var results = await store.SaveManyAsync(leased, default);
+        await Assert.That(results.Count).IsEqualTo(100);
+        await Assert.That(results.All(r => r == 1)).IsTrue();
+        var final = await store.GetByIdAsync(leased[99].SagaId, default);
+        await Assert.That(final!.Status).IsEqualTo(SagaStatus.Completed);
+        await Assert.That(final.CurrentState).IsEqualTo("Completed");
+    }
+
+    [Test]
     public async Task ScanCursor_RotatesReleasedBatchToBack()
     {
         await using var session = await PalOrmStoreFixture.CreateAsync();

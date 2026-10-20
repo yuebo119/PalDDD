@@ -87,6 +87,7 @@ await ProbeOutboxAsync(conn, dbType, Check).ConfigureAwait(false);
 await ProbeEventLogAsync(conn, dbType, Check).ConfigureAwait(false);
 await ProbeIdempotencyAsync(conn, dbType, Check).ConfigureAwait(false);
 await ProbeSagaAsync(conn, dbType, Check).ConfigureAwait(false);
+await ProbeReleaseAsync(conn, dbType, Check).ConfigureAwait(false);
 await ProbeCheckpointAsync(conn, dbType, Check).ConfigureAwait(false);
 await ProbeInboxAsync(conn, dbType, Check).ConfigureAwait(false);
 
@@ -239,6 +240,62 @@ static async Task ProbeSagaAsync(DbConnection conn, DapperDbType dbType, Action<
     check("saga loaded", loaded is not null);
     check("saga state round-trip", loaded?.CurrentState == "ProbeInitial"
         && loaded?.CustomerId == "probe-customer");
+
+    // 收尾为终态，避免污染后续 release 探针的活跃集合。
+    state.Status = SagaStatus.Completed;
+    state.CurrentState = "ProbeCompleted";
+    state.CompletedAt = TimeProvider.System.GetUtcNow();
+    await store.SaveChangesAsync(state, CancellationToken.None).ConfigureAwait(false);
+}
+
+// ═══ ⑤b Saga 批释放：3 参/4 参显式 @idN 列表（PG 42601 回归守卫）═══
+static async Task ProbeReleaseAsync(DbConnection conn, DapperDbType dbType, Action<string, bool> check)
+{
+    var store = new DapperSagaStateStore<ProbeSagaState>(conn,
+        jsonTypeInfo: DapperAotProbeJsonContext.Default.ProbeSagaState,
+        dbType: dbType);
+    var now = TimeProvider.System.GetUtcNow();
+    for (var i = 0; i < 5; i++)
+    {
+        await store.SaveChangesAsync(new ProbeSagaState
+        {
+            SagaId = PalUlid.New(),
+            CurrentState = "ProbeRelease",
+            Status = SagaStatus.Active,
+            CreatedAt = now.AddSeconds(i),
+            CustomerId = $"release-{i}",
+        }, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    var leased = await store.LeaseActiveSagasAsync(
+        "probe-release", TimeSpan.FromMinutes(2), 10, CancellationToken.None).ConfigureAwait(false);
+    check("saga release lease 5", leased.Count == 5);
+
+    var released4 = await store.ReleaseLeasesAsync(
+        "probe-release", leased, now.AddSeconds(-1), CancellationToken.None).ConfigureAwait(false);
+    check("saga release 4-arg", released4 == 5);
+
+    var leasedAgain = await store.LeaseActiveSagasAsync(
+        "probe-release", TimeSpan.FromMinutes(2), 10, CancellationToken.None).ConfigureAwait(false);
+    var released3 = await store.ReleaseLeasesAsync(
+        "probe-release", leasedAgain, CancellationToken.None).ConfigureAwait(false);
+    check("saga release 3-arg", released3 == 5);
+
+    var forSave = await store.LeaseActiveSagasAsync(
+        "probe-save", TimeSpan.FromMinutes(2), 10, CancellationToken.None).ConfigureAwait(false);
+    check("saga savemany lease 5", forSave.Count == 5);
+    foreach (var saga in forSave)
+    {
+        saga.Status = SagaStatus.Completed;
+        saga.CurrentState = "ProbeBatchSaved";
+        saga.CompletedAt = now;
+    }
+    var results = await store.SaveManyAsync(forSave, CancellationToken.None).ConfigureAwait(false);
+    check("saga savemany all rows", results.Count == 5 && results.All(r => r == 1));
+    var saved = await store.GetByIdAsync(forSave[0].SagaId, CancellationToken.None).ConfigureAwait(false);
+    check("saga savemany persisted", saved?.Status == SagaStatus.Completed
+        && saved.CurrentState == "ProbeBatchSaved"
+        && saved.CompletedAt.HasValue);
 }
 
 // ═══ ⑤ ProjectionCheckpoint:枚举参数 int 化回归守卫(CI #94 根因——2026-09-14 增段)═══

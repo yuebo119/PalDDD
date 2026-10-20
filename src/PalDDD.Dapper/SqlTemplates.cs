@@ -445,8 +445,13 @@ public static class SqlTemplates
     /// <summary>
     /// 批量释放本 owner 的 Saga 租约（EPSL 地毯审计 2026-10-11 B-1）——仅租约列 + 换代，
     /// 不写业务字段；<c>leased_by=@owner</c> 守卫防抢占（租约被他实例重租换代或已终态保存时
-    /// 该行正确退化为不匹配）。三方言通用（IN 列表 + 单 UPDATE，无方言分派面）。
+    /// 该行正确退化为不匹配）。
     /// </summary>
+    /// <remarks>
+    /// legacy 常量：<c>IN @ids</c> 只适用于经典 Dapper 数组绑定。Dapper.AOT + Npgsql 会把
+    /// 数组绑成单个参数并生成 <c>IN $n</c>（PG 42601），因此 <c>DapperSagaStateStore</c>
+    /// 自 2026-10-21 起在运行时构造显式 <c>@idN</c> 参数列表。AOT 路径不要直接使用本常量。
+    /// </remarks>
     public const string SagaReleaseLeases =
         "UPDATE saga_states SET leased_by=NULL, leased_until=NULL, version=version+1 WHERE leased_by=@owner AND saga_id IN @ids";
 
@@ -454,6 +459,7 @@ public static class SqlTemplates
     /// 扫描轮转释放（2026-10-21 审计 P0）——清持有者，把 <c>leased_until</c> 写成本次扫描时刻
     /// 作为轮转游标；legacy 租约按 <c>leased_until NULLS FIRST</c> 排序，已扫描行退后。
     /// </summary>
+    /// <remarks>同 <see cref="SagaReleaseLeases"/>：legacy 常量，AOT 路径不使用。</remarks>
     public const string SagaReleaseLeasesCheckedAt =
         "UPDATE saga_states SET leased_by=NULL, leased_until=@checkedAt, version=version+1 WHERE leased_by=@owner AND saga_id IN @ids";
 

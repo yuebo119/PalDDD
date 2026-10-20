@@ -450,6 +450,10 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
     {
         ArgumentNullException.ThrowIfNull(sagas);
         if (sagas.Count == 0) return [];
+        if (_jsonTypeInfo is null)
+            throw new InvalidOperationException(
+                $"PalOrmSagaStateStore<TProvider,TState> requires JsonTypeInfo<TState> to persist saga_data. " +
+                "Register with AddPalSagaStore<TState>(jsonTypeInfo) or pass it to the constructor (ITM-228).");
 
         var ambient = PalOrmAmbientTransaction.TryGet(Session);
         DbTransaction? ownTx = null;
@@ -462,8 +466,35 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         try
         {
             var results = new int[sagas.Count];
+            var pending = new List<(int Index, TState State)>(sagas.Count);
             for (var i = 0; i < sagas.Count; i++)
-                results[i] = await SaveChangesAsync(sagas[i], ct).ConfigureAwait(false);
+            {
+                // 新 Saga（Version=0）走插入路径；已有行按版本批量 UPDATE。
+                if (sagas[i].Version == 0)
+                    results[i] = await SaveChangesAsync(sagas[i], ct).ConfigureAwait(false);
+                else
+                    pending.Add((i, sagas[i]));
+            }
+
+            // PG/MySQL 每块 500 行、SQLite 每块 90 行（11 参数/行，避开 999 上限）。
+            var chunkRows = TProvider.Dialect == global::PalORM.SqlDialect.Sqlite ? 90 : 500;
+            for (var start = 0; start < pending.Count; start += chunkRows)
+            {
+                var count = Math.Min(chunkRows, pending.Count - start);
+                await using var cmd = CreateRawCommand();
+                cmd.CommandText = BuildSaveManyBatch(cmd, pending, start, count);
+                var rows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+
+                // 全命中才回写内存；部分冲突返回 0（已落库的子集不谎报成功，下次重载后重试）。
+                if (rows != count) continue;
+                for (var i = 0; i < count; i++)
+                {
+                    var (index, state) = pending[start + i];
+                    state.Version++;
+                    state.Error = FailureReason.Truncate(state.Error, 2040);
+                    results[index] = 1;
+                }
+            }
 
             if (ownTx is not null)
                 await ownTx.CommitAsync(ct).ConfigureAwait(false);
@@ -478,6 +509,98 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
                 Session.UseTransaction(null);
                 PalOrmAmbientTransaction.Set(Session, null);
             }
+        }
+    }
+
+    /// <summary>
+    /// 构造单语句多行 UPSERT 更新（仅 Version&gt;0 的已有行）：
+    /// PG 用 UPDATE ... FROM (VALUES ...)，SQLite 用 UPDATE ... FROM (SELECT ... UNION ALL ...)，
+    /// MySQL 用 UPDATE ... JOIN (SELECT ... UNION ALL ...)。
+    /// </summary>
+    private string BuildSaveManyBatch(
+        DbCommand cmd,
+        IReadOnlyList<(int Index, TState State)> sagas,
+        int start,
+        int count)
+    {
+        var sb = new StringBuilder(200 + count * 220);
+        var pg = RequiresJsonbCast;
+
+        if (pg)
+        {
+            sb.Append("UPDATE saga_states AS s SET current_state = v.cs, status = v.st, completed_at = v.ca, error = v.err, error_at = v.ea, version = s.version + 1, saga_data = CAST(v.data AS jsonb), next_check_at = v.next, leased_by = v.lb, leased_until = v.lu FROM (VALUES ");
+            AppendSaveManyRows(sb, cmd, sagas, start, count, pg: true);
+            sb.Append(") AS v(id, cs, st, ca, err, ea, version, data, next, lb, lu) WHERE s.saga_id = v.id AND s.version = v.version");
+        }
+        else if (TProvider.Dialect == global::PalORM.SqlDialect.MySql)
+        {
+            sb.Append("UPDATE saga_states s JOIN (");
+            AppendSaveManyRows(sb, cmd, sagas, start, count, pg: false);
+            sb.Append(") v ON s.saga_id = v.id SET s.current_state = v.cs, s.status = v.st, s.completed_at = v.ca, s.error = v.err, s.error_at = v.ea, s.version = s.version + 1, s.saga_data = v.data, s.next_check_at = v.next, s.leased_by = v.lb, s.leased_until = v.lu WHERE s.version = v.version");
+        }
+        else
+        {
+            // SQLite 不接受 FROM (VALUES ...) AS v(col,...) 的列别名列表；用 SELECT/UNION ALL。
+            sb.Append("UPDATE saga_states SET current_state = v.cs, status = v.st, completed_at = v.ca, error = v.err, error_at = v.ea, version = saga_states.version + 1, saga_data = v.data, next_check_at = v.next, leased_by = v.lb, leased_until = v.lu FROM (");
+            AppendSaveManyRows(sb, cmd, sagas, start, count, pg: false);
+            sb.Append(") AS v WHERE saga_states.saga_id = v.id AND saga_states.version = v.version");
+        }
+
+        return sb.ToString();
+    }
+
+    private void AppendSaveManyRows(
+        StringBuilder sb,
+        DbCommand cmd,
+        IReadOnlyList<(int Index, TState State)> sagas,
+        int start,
+        int count,
+        bool pg)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            if (i > 0)
+                sb.Append(pg ? ", " : " UNION ALL ");
+
+            var state = sagas[start + i].State;
+            var id = "@id" + i;
+            var cs = "@cs" + i;
+            var st = "@st" + i;
+            var ca = "@ca" + i;
+            var err = "@err" + i;
+            var ea = "@ea" + i;
+            var v = "@v" + i;
+            var data = "@data" + i;
+            var next = "@next" + i;
+            var lb = "@lb" + i;
+            var lu = "@lu" + i;
+
+            sb.Append(pg ? "(CAST(" : "SELECT ").Append(id);
+            if (pg)
+                sb.Append(" AS text), CAST(").Append(cs).Append(" AS text), CAST(").Append(st)
+                  .Append(" AS integer), CAST(").Append(ca).Append(" AS timestamptz), CAST(")
+                  .Append(err).Append(" AS text), CAST(").Append(ea).Append(" AS timestamptz), CAST(")
+                  .Append(v).Append(" AS integer), CAST(").Append(data).Append(" AS text), CAST(")
+                  .Append(next).Append(" AS timestamptz), CAST(").Append(lb).Append(" AS text), CAST(")
+                  .Append(lu).Append(" AS timestamptz))");
+            else
+                sb.Append(" AS id, ").Append(cs).Append(" AS cs, ").Append(st).Append(" AS st, ")
+                  .Append(ca).Append(" AS ca, ").Append(err).Append(" AS err, ").Append(ea)
+                  .Append(" AS ea, ").Append(v).Append(" AS version, ").Append(data)
+                  .Append(" AS data, ").Append(next).Append(" AS next, ").Append(lb)
+                  .Append(" AS lb, ").Append(lu).Append(" AS lu");
+
+            AddParam(cmd, "@id" + i, state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+            AddParam(cmd, "@cs" + i, state.CurrentState);
+            AddParam(cmd, "@st" + i, (int)state.Status);
+            AddParam(cmd, "@ca" + i, state.CompletedAt.HasValue ? state.CompletedAt.Value : (object)DBNull.Value);
+            AddParam(cmd, "@err" + i, FailureReason.Truncate(state.Error, 2040) is { } errValue ? errValue : DBNull.Value);
+            AddParam(cmd, "@ea" + i, state.ErrorAt.HasValue ? state.ErrorAt.Value : (object)DBNull.Value);
+            AddParam(cmd, "@v" + i, state.Version);
+            AddParam(cmd, "@data" + i, JsonSerializer.Serialize(state, _jsonTypeInfo!));
+            AddParam(cmd, "@next" + i, state.NextCheckAt.HasValue ? state.NextCheckAt.Value : (object)DBNull.Value);
+            AddParam(cmd, "@lb" + i, state.LeasedBy is null ? DBNull.Value : state.LeasedBy);
+            AddParam(cmd, "@lu" + i, state.LeasedUntil.HasValue ? state.LeasedUntil.Value : (object)DBNull.Value);
         }
     }
 

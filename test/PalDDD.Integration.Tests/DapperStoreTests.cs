@@ -873,6 +873,41 @@ public sealed class DapperStoreTests
     }
 
     [Test]
+    public async Task Saga_SaveMany_RunsAcrossChunkBoundary(CancellationToken cancellationToken)
+    {
+        var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);
+        var created = new DateTimeOffset(2026, 10, 21, 12, 0, 0, TimeSpan.Zero);
+        for (var i = 0; i < 100; i++)
+        {
+            await store.SaveChangesAsync(new TestSagaState
+            {
+                SagaId = PalUlid.New(),
+                CurrentState = "Initial",
+                Status = SagaStatus.Active,
+                CreatedAt = created.AddSeconds(i)
+            }, cancellationToken);
+        }
+
+        var leased = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 200, cancellationToken);
+        await Assert.That(leased.Count).IsEqualTo(100);
+        foreach (var saga in leased)
+        {
+            saga.Status = SagaStatus.Completed;
+            saga.CurrentState = "Completed";
+        }
+
+        // SQLite 每块 90 行：100 行必然跨两条 UPDATE，覆盖 UNION ALL 派生表与分块计数。
+        var results = await store.SaveManyAsync(leased, cancellationToken);
+        await Assert.That(results.Count).IsEqualTo(100);
+        await Assert.That(results.All(r => r == 1)).IsTrue();
+
+        var reloaded = await store.GetByIdAsync(leased[99].SagaId, cancellationToken);
+        await Assert.That(reloaded!.Status).IsEqualTo(SagaStatus.Completed);
+        await Assert.That(reloaded.CurrentState).IsEqualTo("Completed");
+        await Assert.That(reloaded.Version).IsEqualTo(leased[99].Version);
+    }
+
+    [Test]
     public async Task Saga_ScanCursor_RotatesReleasedBatchToBack(CancellationToken cancellationToken)
     {
         var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);

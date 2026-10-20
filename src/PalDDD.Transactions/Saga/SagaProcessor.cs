@@ -88,6 +88,7 @@ TState>
     private readonly IPalLogger<SagaTimeoutProcessor<TState>> _logger;
     private readonly IOptionsMonitor<SagaProcessorOptions> _options;
     private readonly TimeProvider _timeProvider;
+    private static int s_cursorWarningLogged;
 
     public SagaTimeoutProcessor(
         ISagaStateStore<TState> store,
@@ -106,6 +107,17 @@ TState>
         _logger = logger;
         _options = options;
         _timeProvider = timeProvider ?? TimeProvider.System;
+
+        // 自定义 store 未实现轮转游标时，释放会清空 leased_until，扫描始终取前 N 条——
+        // 活跃 Saga 超过批大小时第 N+1 条起永远不被扫描。只在进程内首次命中时告警。
+        if (store is not ISagaScanCursorStore<TState>
+            && Interlocked.Exchange(ref s_cursorWarningLogged, 1) == 0)
+        {
+            _logger.Warning(
+                $"Saga store {store.GetType().FullName} does not implement ISagaScanCursorStore<{typeof(TState).Name}>; "
+                + "released leases clear leased_until and the scanner may starve rows beyond LeaseBatchSize. "
+                + "Implement the interface (or use a built-in store) to enable scan rotation.");
+        }
     }
 
     /// <summary>检查所有活跃 Saga 状态是否超时。</summary>
