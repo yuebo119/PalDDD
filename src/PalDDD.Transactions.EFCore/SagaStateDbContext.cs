@@ -830,6 +830,9 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
             e.Property(x => x.SagaId).HasConversion(v => v.ToString(null, System.Globalization.CultureInfo.InvariantCulture), v => PalUlid.Parse(v));
             e.HasIndex(x => new { x.Status, x.CurrentState });
             e.HasIndex(x => new { x.Status, x.LeasedUntil, x.CreatedAt });
+            // 2026-10-21 审计 P1：PG/MySQL/SQLite/SQL Server 的租约回读按
+            // (leased_by, leased_until) 等值匹配；缺此索引时回读退化为全表扫描。
+            e.HasIndex(x => new { x.LeasedBy, x.LeasedUntil });
             // M1：到期扫描索引；NextCheckAt 由 Saga 在状态变更时维护，NULL 表示无待检查超时。
             e.HasIndex(x => new { x.Status, x.NextCheckAt });
             e.Property(x => x.CurrentState).HasMaxLength(256);

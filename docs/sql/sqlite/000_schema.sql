@@ -60,6 +60,7 @@ CREATE TABLE saga_states (
 CREATE INDEX idx_saga_status ON saga_states(status, created_at);
 CREATE INDEX idx_saga_lease ON saga_states(status, leased_until, created_at);
 CREATE INDEX idx_saga_due ON saga_states(status, next_check_at);
+CREATE INDEX idx_saga_lease_holder ON saga_states(leased_by, leased_until) WHERE leased_by IS NOT NULL;
 
 CREATE TABLE events (
     global_position INTEGER PRIMARY KEY AUTOINCREMENT,
