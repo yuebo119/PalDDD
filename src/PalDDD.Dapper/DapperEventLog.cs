@@ -662,6 +662,7 @@ public sealed class DapperEventLog : IEventLog
     }
 
     /// <summary>按列名取一次 ordinal，逐行按 ordinal 读取（避免每行字符串查找）。</summary>
+    [StructLayout(LayoutKind.Auto)]
     private readonly record struct ReadOrdinals(
         int GlobalPosition,
         int EventId,

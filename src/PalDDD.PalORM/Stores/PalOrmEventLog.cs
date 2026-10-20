@@ -175,7 +175,9 @@ public class PalOrmEventLog<TProvider> : IEventLog
 
         var eventIdText = e.EventId.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
         await using var cmd = CreateRawCommand();
+#pragma warning disable S2077 // sql 仅含 @pN 占位符，值全部经 AddParam 参数化绑定
         cmd.CommandText = sql;
+#pragma warning restore S2077
         AddParam(cmd, "@p0", eventIdText);
         AddParam(cmd, "@p1", e.EventId.ToByteArray());
         AddParam(cmd, "@p2", e.EventName);
@@ -256,7 +258,9 @@ public class PalOrmEventLog<TProvider> : IEventLog
         try
         {
             await using var cmd = CreateRawCommand();
+#pragma warning disable S2077 // sql 仅含 @pN 占位符，值全部经 AddParam 参数化绑定
             cmd.CommandText = sql;
+#pragma warning restore S2077
             for (var i = 0; i < args.Count; i++)
                 AddParam(cmd, "@p" + i.ToString(System.Globalization.CultureInfo.InvariantCulture), args[i] ?? DBNull.Value);
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);

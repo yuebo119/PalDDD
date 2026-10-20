@@ -107,22 +107,6 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
     }
 
     /// <inheritdoc />
-    /// <remarks>
-    /// MemoryPackSerializer.Serialize 返回独立 byte[]；命中整段数组时直接交还，
-    /// 避免 Outbox 持久化边界的第二次整载荷复制。
-    /// </remarks>
-    public byte[] SerializeToArray(object message, MessageDescriptor descriptor)
-    {
-        var payload = Serialize(message, descriptor);
-        if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(payload, out var segment)
-            && segment.Array is { } array
-            && segment.Offset == 0
-            && segment.Count == array.Length)
-            return array;
-        return payload.ToArray();
-    }
-
-    /// <inheritdoc />
     // P3 修复（二十一轮）：DAM 标注位置勘正——[return: DynamicallyAccessedMembers] 标注在
     // 返回值上无效（返回的 TMessage? 实例不作为反射目标，trimmer 对返回值不追踪成员保留），
     // 移到类型参数声明：TMessage 流入 MemoryPack 的运行时 Formatter 解析路径，其构造函数
@@ -139,6 +123,22 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
         ValidateDescriptorContentType(descriptor);
 
         return MemoryPackSerializer.Deserialize<TMessage>(payload);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// MemoryPackSerializer.Serialize 返回独立 byte[]；命中整段数组时直接交还，
+    /// 避免 Outbox 持久化边界的第二次整载荷复制。
+    /// </remarks>
+    public byte[] SerializeToArray(object message, MessageDescriptor descriptor)
+    {
+        var payload = Serialize(message, descriptor);
+        if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(payload, out var segment)
+            && segment.Array is { } array
+            && segment.Offset == 0
+            && segment.Count == array.Length)
+            return array;
+        return payload.ToArray();
     }
 
     /// <summary>
