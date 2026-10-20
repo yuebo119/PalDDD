@@ -26,7 +26,7 @@
 | Dapper 幂等连接与载荷 | 显式开连接；精确数组响应载荷直接绑定 | Integration 全绿 |
 | `EventData.FromOwned` | 所有权转移入口，去掉事件溯源写入的一次整载荷复制；原构造仍防御性复制 | EventLog 46/46，新增两件所有权测试 |
 | 流运行计数与派发器 | `StreamRunRegistry` 原子计数；域事件派发器首次派发时构建处理器映射；子 Saga `GetMethod` 静态缓存 | Hosting 90/90、Messaging 33/33、DI 178/178 |
-| 可选保留清理 | `RetentionOptions`、`IRetentionStore`、`RetentionProcessor`、`RetentionProcessorService`、`SqlRetentionStore`、`PalOrmRetentionStore<TProvider>`、`EfCoreRetentionStore`、`AddPalRetention`、`AddPalEfCoreRetention`；Dapper/PalORM/EF 三栈接入；默认不注册 | 新增 SQLite 真库测试、清理索引计划测试与 EF 注册测试；Integration 420 通过 |
+| 可选保留清理 | `RetentionOptions`、`IRetentionStore`、`RetentionProcessor`、`RetentionProcessorService`、`RetentionSql`、`PalOrmRetentionStore<TProvider>`、`EfCoreRetentionStore`、`AddPalRetention`、`AddPalEfCoreRetention`；Dapper/PalORM/EF 三栈接入；默认不注册 | 新增 SQLite 真库测试、清理索引计划测试与 EF 注册测试；Integration 420 通过 |
 
 ## 3 未实施与原因
 
@@ -63,7 +63,7 @@
 | 索引整理 | 删除 `idx_outbox_created`，新增 `idx_inbox_processed`；`EXPLAIN` 无 Seq Scan/Sort |
 | PG 原子批上限 | 限制 4,000 行；4,500 行真库探针 24/24 |
 | EF SQLite 到期排序 | `ORDER BY next_check_at, saga_id`，新增逆序到期测试 |
-| 三栈清理 | `SqlRetentionStore` 共享；PalORM 三方言与 EF `AddPalEfCoreRetention` 接入；EF 注册测试 |
+| 三栈清理 | `RetentionSql` 共享 SQL/时间编码，ADO 执行下沉三个适配包；PalORM 三方言与 EF `AddPalEfCoreRetention` 接入；EF 注册测试 |
 | 导入零拷贝 | `EventStreamJsonLines` 用 `EventData.FromOwned` |
 
 未执行：投影检查点单行高水位化、M4 文本唯一索引收缩、MySQL 二进制主键迁移、EF MySQL Testcontainers 车道、Dapper Inbox 接管路径单语句、PalORM 读路径 raw reader、Outbox 流水线闭包（测量后再定）。
