@@ -10,7 +10,7 @@
 | 项 | 值 |
 |------|-----|
 | 落盘日期 | 2026-10-20 |
-| 评审状态 | 已采纳并实施：PG 真库探针 8/8，SQLite EF 测试 15/15，Integration 417 通过 / 14 跳过 |
+| 评审状态 | 已采纳并实施：PG 真库探针 8/8，MySQL 真库探针 8/8（Microting 11.0.0-preview.1 + EF Core 11 rc2），SQLite EF 测试 15/15，Integration 417 通过 / 14 跳过 |
 | 兼容性 | 源破坏：显式赋值 `Collection<string>` 的消费方需改为 `List<string>`；常规 `Add`/`Contains`/`foreach`/索引器用法不变。二进制破坏：属性类型签名变化。JSON 线格式不变，无数据迁移 |
 | 触发原因 | Npgsql EF 11 preview 6 对 `PrimitiveCollection` 的物化类型是 `List<string>`，原 `Collection<string>` 属性在 EF PG/MySQL 读取路径抛 `InvalidCastException` |
 
@@ -61,6 +61,7 @@ public List<string> ExecutedStepKeys { get; init; } = [];
 |---|---|---|
 | 原类型在 Npgsql EF 11 preview 6 物化失败 | EF PG 租约探针首次运行：`InvalidCastException`，堆栈落在 `LeaseViaPostgreSqlAsync` 的回读物化 | ☑ |
 | 新类型物化成功 | 去掉探针的 `Ignore(ExecutedStepKeys)` 后，PG 18.6 真库 8/8；`ExecutedStepKeys = ["Start","Step1"]` 往返断言通过 | ☑ |
+| 新类型在 MySQL EF 物化成功 | Microting.EntityFrameworkCore.MySql 11.0.0-preview.1 + EF Core 11 rc2 + MySQL 8.4.11 真库 8/8，含 `ExecutedStepKeys` 往返 | ☑ |
 | 租约四形态不受影响 | 首次租约 4 行、第二 owner 0 行、到期过滤 2 行、租约后跟踪保存与完成态持久化 | ☑ |
 | SQLite EF 路径不回归 | `PalDDD.Repository.EFCore.Tests` 15/15；Integration 417 通过 / 14 跳过 | ☑ |
 | 公共 API 快照同步 | `test/PalDDD.Integration.Tests/Snapshots/core-packages-public-api.txt` 属性行变更 | ☑ |
@@ -69,5 +70,5 @@ public List<string> ExecutedStepKeys { get; init; } = [];
 
 | # | 决策点 | 状态 | 触发条件 |
 |---|---|---|---|
-| 1 | EF MySQL 全栈真库验证 | 未执行：本机无与 EF 11 rc2 匹配的 MySQL EF provider；SQL 形态已在 MySQL 8.4.11 直接执行 4/0/2 | 有匹配 provider 的 CI 车道可用时补四形态探针 |
+| 1 | EF MySQL 全栈真库验证 | 已完成：Microting.EntityFrameworkCore.MySql 11.0.0-preview.1 + EF Core 11 rc2 + MySQL 8.4.11，8/8（含 `ExecutedStepKeys` 往返）。provider 为 Pomelo 社区 fork，编译于 EF Core 11 preview 7，rc2 烟测通过 | 接入 CI 需 test-only 依赖与 Testcontainers 车道 |
 | 2 | 为需要 `Collection<T>` 语义的消费方提供适配属性 | 不做 | 出现明确消费方且 `List<string>` 无法满足时，另立增量 API，不回退本决策 |

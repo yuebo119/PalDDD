@@ -54,7 +54,9 @@
     <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.35.0.4138" />
     <!-- 仓储层依赖 (EF Core 11 rc.2 线) — 多数据库 Provider -->
     <!-- 2026-09-13 版本核实:EF Core 11 线最新即 rc.1.26425.128(rc.2 未发,GA 预计 2026-11),
-         本仓已在最新版;死条目清理:SqlServer/Design/Npgsql.EF(11.0.0-preview.6)/Pomelo(11.0.0-preview.5)
+         本仓已在最新版;死条目清理:SqlServer/Design/Npgsql.EF(11.0.0-preview.6)/Pomelo 11.x
+         （NuGet 无此版本；EF 11 预览由社区 fork Microting.EntityFrameworkCore.MySql 11.0.0-preview.1
+          提供，2026-10-20 已在 EF Core rc2 + MySQL 8.4.11 通过 8/8 烟测）
          四包零直接引用 + 全解决方案 include-transitive 传递图零命中,删除(区别于二十五轮误删案:
          该案为活传递钉扎,本案 include-transitive 实锤)；2026-10-11 三升 rc.2 已发（26504.105 批，
          全钉扎同批，flatcontainer 逐包验证后替换） -->
