@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+using System.Diagnostics.CodeAnalysis;
 using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions;
@@ -95,8 +95,16 @@ public abstract class SagaState
     /// <summary>已成功执行的步骤 Key 列表（按执行顺序）— 补偿顺序的唯一依据：
     /// <see cref="CompensationPolicy.Backward"/> 逆序遍历（最后执行的先回滚）、
     /// <see cref="CompensationPolicy.Forward"/> 正序遍历。v39 P3 勘正声明：补偿按执行序
-    /// 而非注册序（注册顺序的 List 供超时检测使用，与本列表无关）</summary>
-    public Collection<string> ExecutedStepKeys { get; init; } = [];
+    /// 而非注册序（注册顺序的 List 供超时检测使用，与本列表无关）。
+    /// <para>
+    /// 2026-10-20（ADR-035）：由 <c>Collection&lt;string&gt;</c> 改为 <c>List&lt;string&gt;</c>。
+    /// Npgsql EF 11 preview 6 对 <c>PrimitiveCollection</c> 的物化返回 <c>List&lt;string&gt;</c>，
+    /// 原类型在 EF PG/MySQL 读取路径抛 <c>InvalidCastException</c>；改为 <c>List&lt;string&gt;</c>
+    /// 后三栈统一，JSON 线格式不变。
+    /// </para></summary>
+    [SuppressMessage("Design", "CA1002:Do not expose generic lists",
+        Justification = "ADR-035：EF Npgsql 11 preview 6 对 PrimitiveCollection 的物化类型是 List<string>；用 Collection<string> 会在 EF PG/MySQL 读取路径抛 InvalidCastException。公共契约改为 List<string>，JSON 线格式不变。")]
+    public List<string> ExecutedStepKeys { get; init; } = [];
 
     /// <summary>中断原因 — HITL 中断时记录等待人工决策的原因</summary>
     public string? InterruptReason { get; set; }

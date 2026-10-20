@@ -1782,7 +1782,7 @@ class PalDDD.Transactions.SagaState
   property System.String CurrentState
   property System.String Error
   property System.Nullable<System.DateTimeOffset> ErrorAt
-  property System.Collections.ObjectModel.Collection<System.String> ExecutedStepKeys [init]
+  property System.Collections.Generic.List<System.String> ExecutedStepKeys [init]
   property System.String InterruptReason
   property System.String LeasedBy
   property System.Nullable<System.DateTimeOffset> LeasedUntil
