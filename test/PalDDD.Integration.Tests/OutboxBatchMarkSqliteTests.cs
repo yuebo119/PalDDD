@@ -83,7 +83,7 @@ public sealed class DapperBatchMarkSqliteTests
             ids.Add(id);
             await using var cmd = _conn.CreateCommand();
             cmd.CommandText =
-                "INSERT INTO outbox_messages (id, type, payload, created_at) VALUES ($id, 'test.event', $payload, $created)";
+                "INSERT INTO outbox_messages (id, type, payload, created_at, next_attempt_at) VALUES ($id, 'test.event', $payload, $created, $created)";
             cmd.Parameters.AddWithValue("$id", id.ToString());
             cmd.Parameters.AddWithValue("$payload", Array.Empty<byte>());
             cmd.Parameters.AddWithValue("$created", DateTimeOffset.UtcNow.AddMinutes(-5).ToString("O"));

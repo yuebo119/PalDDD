@@ -101,6 +101,7 @@ public sealed class InMemoryStoreTests
         await store.AddMessageAsync(msg);
         // ITM-174 修复：先 Lease 拿到 successor 再 ReleaseForRetry（守卫要求租约持有者）
         var leased = await store.LeasePendingMessagesAsync(10, "owner-1", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        await Assert.That(leased[0].NextAttemptAt).IsEqualTo(leased[0].LockedUntil);
         await store.ReleaseForRetryAsync(leased[0], "test failure", DateTimeOffset.UtcNow.AddSeconds(-1));
 
         var pending = await store.GetPendingMessagesAsync(10, 1, cancellationToken);

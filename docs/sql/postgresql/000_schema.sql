@@ -18,9 +18,9 @@ CREATE TABLE outbox_messages (
     trace_parent    TEXT,
     trace_state     TEXT
 );
--- 租约候选扫描按 created_at 排序。部分索引把扫描固定为 O(批次)，
--- 不再随待租积压或已处理历史增长（2026-10-20 真库实测：1k 待租/20 万行 0.279ms → 0.061ms）。
-CREATE INDEX idx_outbox_due ON outbox_messages(created_at) WHERE status = 0;
+-- 租约候选扫描按 next_attempt_at（可用时刻）过滤并按 (next_attempt_at, created_at) 排序；
+-- 部分索引把扫描固定为 O(批次)，不再随待租积压或已处理历史增长。
+CREATE INDEX idx_outbox_due ON outbox_messages(next_attempt_at, created_at) WHERE status = 0;
 -- 保留清理按 processed_at 分批删除；部分索引只覆盖终态行（Processed/Dead）。
 CREATE INDEX idx_outbox_processed ON outbox_messages(processed_at) WHERE status <> 0;
 -- 租约回读谓词（locked_by + locked_until）覆盖索引；仅索引持租行，避免历史 NULL 行膨胀。

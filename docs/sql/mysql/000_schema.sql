@@ -17,9 +17,9 @@ CREATE TABLE outbox_messages (
     causation_id    CHAR(26),  -- 审计：因果 Ulid（26 字符）
     trace_parent    VARCHAR(255),
     trace_state     VARCHAR(512),  -- 三十七轮 C2：对齐 EFCore MaxLength(512)
-    -- 租约候选扫描按 created_at 排序；(status, created_at) 让扫描按索引序直接取满批次。
-    -- 2026-10-20 真库实测：1k 待租/20 万行 12.2ms → 1.59ms。
-    INDEX idx_outbox_due (status, created_at),
+    -- 租约候选扫描按 next_attempt_at（可用时刻）过滤并按 (next_attempt_at, created_at) 排序；
+    -- (status, next_attempt_at, created_at) 让扫描按索引序直接取满批次。
+    INDEX idx_outbox_due (status, next_attempt_at, created_at),
     -- 保留清理按 processed_at 分批删除终态行；(status, processed_at) 让扫描按索引序取满批次。
     INDEX idx_outbox_processed (status, processed_at),
     -- 租约回读谓词（locked_by + locked_until）覆盖索引。

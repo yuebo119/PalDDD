@@ -53,7 +53,7 @@ public static class SqlTemplates
     ///   ｜ 直接传入即可（v25 P3 勘正：原注释 "Guid.NewGuid()" 与实际 Id 类型 PalUlid 不符）。
     /// </summary>
     public const string OutboxInsert =
-        "INSERT INTO outbox_messages (id,type,payload,content_type,schema_version,status,created_at, correlation_id, causation_id, trace_parent, trace_state) VALUES (@Id,@Type,@Payload,@ContentType,@SchemaVersion,0,@CreatedAt, @CorrelationId, @CausationId, @TraceParent, @TraceState)";
+        "INSERT INTO outbox_messages (id,type,payload,content_type,schema_version,status,created_at,next_attempt_at, correlation_id, causation_id, trace_parent, trace_state) VALUES (@Id,@Type,@Payload,@ContentType,@SchemaVersion,0,@CreatedAt,@NextAttemptAt, @CorrelationId, @CausationId, @TraceParent, @TraceState)";
 
     /// <summary>
     /// 标记消息为"已处理"。<br/>
@@ -128,7 +128,7 @@ public static class SqlTemplates
     /// ⚠️ 三十八轮 P3 标注：当前无内部引用（二十五轮常量化残留）；框架库公共 const 面向外部
     /// 消费方保留，删除前须按代码价值判定六项核查（docs 定位/roadmap/git 演进/测试覆盖）。</summary>
     public const string OutboxLeaseUpdate =
-        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN ";
+        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until, next_attempt_at=@until WHERE id IN ";
 
     /// <summary>
     /// MySQL 专用原子租约获取 — JOIN 形态。<br/>
@@ -138,9 +138,8 @@ public static class SqlTemplates
     /// </summary>
     public const string OutboxLeaseUpdateMySql =
         "UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
-        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
-        + " AND (locked_until IS NULL OR locked_until<=@now)"
-        + " ORDER BY created_at LIMIT @n) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until";
+        + " AND next_attempt_at<=@now"
+        + " ORDER BY next_attempt_at, created_at LIMIT @n) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until, t.next_attempt_at=@until";
 
     /// <summary>
     /// MySQL ≥8.0.18 专用原子租约获取 — JOIN 派生表 FOR UPDATE SKIP LOCKED（ADR-025，2026-10-09）。<br/>
@@ -151,9 +150,8 @@ public static class SqlTemplates
     /// </summary>
     public const string OutboxLeaseUpdateMySqlSkipLocked =
         "UPDATE outbox_messages t JOIN (SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
-        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
-        + " AND (locked_until IS NULL OR locked_until<=@now)"
-        + " ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until";
+        + " AND next_attempt_at<=@now"
+        + " ORDER BY next_attempt_at, created_at LIMIT @n FOR UPDATE SKIP LOCKED) AS sub ON t.id = sub.id SET t.locked_by=@owner, t.locked_until=@until, t.next_attempt_at=@until";
 
     /// <summary>
     /// PG 专用原子租约获取 — 单语句 UPDATE ... RETURNING *（子查询 FOR UPDATE SKIP LOCKED）。<br/>
@@ -167,11 +165,10 @@ public static class SqlTemplates
     /// SKIP LOCKED 语义：多 worker 并发租约互相跳过已锁行而非阻塞。
     /// </summary>
     public const string OutboxLeaseUpdatePG =
-        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN "
+        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until, next_attempt_at=@until WHERE id IN "
         + "(SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
-        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
-        + " AND (locked_until IS NULL OR locked_until<=@now)"
-        + " ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
+        + " AND next_attempt_at<=@now"
+        + " ORDER BY next_attempt_at, created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
 
     /// <summary>
     /// SQLite（及非 PG/MySQL 方言）原子租约获取 — IN 子查询形态（SQLite 支持子查询内 LIMIT）。<br/>
@@ -180,11 +177,10 @@ public static class SqlTemplates
     /// 产物与原拼接逐字一致（无 locking clause——SQLite 单写者库级串行，无并发抢占）。
     /// </summary>
     public const string OutboxLeaseUpdateSqlite =
-        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN "
+        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until, next_attempt_at=@until WHERE id IN "
         + "(SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
-        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
-        + " AND (locked_until IS NULL OR locked_until<=@now)"
-        + " ORDER BY created_at LIMIT @n)";
+        + " AND next_attempt_at<=@now"
+        + " ORDER BY next_attempt_at, created_at LIMIT @n)";
 
     /// <summary>
     /// A12（S1 轮，2026-10-15）：SQLite 单语句原子租约——<see cref="OutboxLeaseUpdateSqlite"/>
@@ -196,11 +192,10 @@ public static class SqlTemplates
     /// 与 PG 路径同语义。列集与 SELECT * 一致（Dapper 映射 OutboxMessage 同形）。
     /// </summary>
     public const string OutboxLeaseUpdateSqliteReturning =
-        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until WHERE id IN "
+        "UPDATE outbox_messages SET locked_by=@owner, locked_until=@until, next_attempt_at=@until WHERE id IN "
         + "(SELECT id FROM outbox_messages WHERE status=0 AND retry_count<@maxRetryCount"
-        + " AND (next_attempt_at IS NULL OR next_attempt_at<=@now)"
-        + " AND (locked_until IS NULL OR locked_until<=@now)"
-        + " ORDER BY created_at LIMIT @n) RETURNING *";
+        + " AND next_attempt_at<=@now"
+        + " ORDER BY next_attempt_at, created_at LIMIT @n) RETURNING *";
 
     /// <summary>按 ID 批量查询（用于 PG RETURNING * 替代路径）。
     /// ⚠️ 三十八轮 P3 标注：当前无内部引用（二十五轮常量化残留）；框架库公共 const 面向外部
@@ -209,11 +204,11 @@ public static class SqlTemplates
         "SELECT * FROM outbox_messages WHERE id IN ";
 
     /// <summary>
-    /// 查询待处理消息（Pending + 未达重试上限 + 可重试/无租约/租约过期）。<br/>
+    /// 查询待处理消息（Pending + 未达重试上限 + 可用时刻已到）。<br/>
     /// 💡 供 <c>GetPendingMessagesAsync</c> 使用，与 <c>LeasePendingMessagesAsync</c> 的子查询条件一致。
     /// </summary>
     public const string OutboxSelectPending =
-        "SELECT * FROM outbox_messages WHERE status=@status AND retry_count<@maxRetryCount AND (next_attempt_at IS NULL OR next_attempt_at<=@now) AND (locked_until IS NULL OR locked_until<=@now) ORDER BY created_at LIMIT @n";
+        "SELECT * FROM outbox_messages WHERE status=@status AND retry_count<@maxRetryCount AND next_attempt_at<=@now ORDER BY next_attempt_at, created_at LIMIT @n";
 
     /// <summary>
     /// 按租约标识回读刚锁定的消息。<br/>

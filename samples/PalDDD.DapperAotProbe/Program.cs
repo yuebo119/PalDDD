@@ -120,10 +120,13 @@ static async Task ProbeOutboxAsync(DbConnection conn, DapperDbType dbType, Actio
     };
     await store.AddMessageAsync(msg);
     check("outbox add (byte[] blob)", true);
+    check("outbox next_attempt set on add", msg.NextAttemptAt is not null);
 
     var leased = await store.LeasePendingMessagesAsync(10, "probe-owner",
         TimeSpan.FromMinutes(2), new OutboxOptions().MaxRetryCount, CancellationToken.None).ConfigureAwait(false);
     check("outbox lease acquired 1", leased.Count == 1);
+    check("outbox availability folded into lease",
+        leased.Count == 1 && leased[0].NextAttemptAt == leased[0].LockedUntil);
     check("outbox payload round-trip", leased.Count == 1 && leased[0].Payload.SequenceEqual(payload));
 
     await store.MarkProcessedAsync(leased[0], TimeProvider.System.GetUtcNow());
