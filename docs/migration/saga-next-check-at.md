@@ -73,3 +73,24 @@ dotnet run -c Release --project bench/PalDDD.Benchmarks -- --m1-probe-mysql
 due/future/NULL 三条 Saga，然后调用 `LeaseDueSagasAsync` 与 `LeaseActiveSagasAsync`。
 两方言结果一致：`M1 PASS: due=1, active-non-due=2, index=idx_saga_due`。
 
+## 10k 规模演练（2026-10-20）
+
+```bash
+# PALDDD_BENCH_PG_CONN / PALDDD_BENCH_MYSQL_CONN 由环境注入（库名须 palddd_bench 前缀）
+dotnet run -c Release --project bench/PalDDD.Benchmarks -- --m1-load-pg
+dotnet run -c Release --project bench/PalDDD.Benchmarks -- --m1-load-mysql
+```
+
+口径：10,000 条 Active Saga，`NextCheckAt` 在 100s 内均匀分布；轮询 2s、批量 256
+（相对默认 30s 轮询做时间轴压缩，容量比相同：每 tick 约 200 条到期，批量上限 256）；
+5s 播种宽限不计入延迟。`maxPerTick` 断言不超过 256；每行租约延迟
+（租到时刻减 `NextCheckAt`）断言不超过 2 个轮询周期（4s）。
+
+| 方言 | leased | ticks | maxPerTick | p50 | p99 | max | 阈值 |
+|---|---|---|---|---|---|---|---|
+| PostgreSQL | 10,000 | 53 | 202 | 1011ms | 1996ms | 2101ms | 4000ms |
+| MySQL | 10,000 | 52 | 202 | 1023ms | 2003ms | 2034ms | 4000ms |
+
+两方言均通过：尾部最大约 2.1s，约 1.05 个轮询周期。该结果覆盖到期索引与租约循环，
+不覆盖生产库的回填完整性；生产开启 `EnableDueTimeFilter=true` 前仍须完成活跃行回填。
+

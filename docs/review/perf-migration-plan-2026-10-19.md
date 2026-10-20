@@ -41,6 +41,9 @@
 回填走旧全量路径的惰性写入；收缩（删除旧扫描分支）留到下一个发布窗口。
 真库演练（`--m1-probe-pg` / `--m1-probe-mysql`，2026-10-19）：旧 schema 上 ALTER 加列/索引后，
 两方言均 `due=1, active-non-due=2, index=idx_saga_due`。
+10k 规模演练（`--m1-load-pg` / `--m1-load-mysql`，2026-10-20）：10,000 条 Active Saga、
+`NextCheckAt` 在 100s 内均匀到期、2s 轮询/256 批量。两方言均通过：PG p99 1996ms/max 2101ms，
+MySQL p99 2003ms/max 2034ms，阈值 2 个轮询周期 4000ms；maxPerTick 202 ≤ 256。
 
 ## M2 投影检查点高水位
 
@@ -114,7 +117,8 @@ p99 为 1.05~1.19×（绝对差 ≤0.16ms）、吞吐 0.86~0.99×；isolation �
 3. 读路径切二进制；唯一冲突分类仍以二进制索引为准。
 4. 收缩：旧文本列改可空、停止写；下一个 major 删除。
 
-验收：1M 行索引大小下降约 2/3；回放每事件少一次 Parse/ToString；唯一约束冲突仍能定位；
+验收：索引体积下降（实测 10 万行 PG 59.2%、MySQL 22.1%；原「约 2/3」按方言修正）；
+回放每事件少一次 Parse/ToString；唯一约束冲突仍能定位；
 四方言（含 SQL Server 实验性路径）DDL 可回滚。风险：列迁移时间、索引重建锁、旧客户端
 读取兼容、Ulid 字节序与文本序不一致（排序语义必须逐查询确认）。
 
@@ -126,6 +130,10 @@ PG/MySQL/SQLite DDL；EF/Dapper/PalORM 三栈追加时双写，读取默认文�
 真库演练（`--m4-probe-pg` / `--m4-probe-mysql`，2026-10-19）：两方言 500 行旧数据回填、
 10 条抽样、二进制读回 10 条全过（PG 1095ms、MySQL 2825ms）。演练抓出 PG 上
 `SequentialAccess` 的物理列序缺陷，`DapperEventLog` 已改 `SingleResult`（仍逐行流式）。
+10 万行规模演练（`--m4-scale-pg` / `--m4-scale-mysql`，2026-10-20）：两方言回填
+100,000/100,000 行；PG 回填 41,031ms、索引 42ms、体积下降 59.2%；MySQL 回填 31,956ms、
+索引 398ms、体积下降 22.1%。回填吞吐约 2.4k~3.1k 行/s。原「1M 行下降约 2/3」不成立于
+MySQL，已按方言修正。
 
 ## 非迁移类后续（不占本轮迁移窗口）
 
