@@ -90,6 +90,47 @@ public sealed class SagaStateEfCoreTests
     }
 
     [Test]
+    public async Task BatchAdvanceNextCheckAndSaveMany_Sqlite_CommitOnceAndPersist(CancellationToken cancellationToken)
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        await using var db = new TestSagaStateDbContext(CreateSqliteOptions(connection));
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+
+        db.SagaStates.Add(CreateState("First", FixedNow));
+        db.SagaStates.Add(CreateState("Second", FixedNow.AddMinutes(1)));
+        await db.SaveChangesAsync(cancellationToken);
+        db.ChangeTracker.Clear();
+
+        var leased = await db.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        var leasedList = leased.ToList();
+        await Assert.That(leasedList.Count).IsEqualTo(2);
+        var nextCheck = FixedNow.AddMinutes(5);
+        foreach (var state in leasedList)
+            state.NextCheckAt = nextCheck;
+
+        var advanced = await db.AdvanceNextCheckAtAsync("owner-A", leasedList, cancellationToken);
+        await Assert.That(advanced).IsEqualTo(2);
+
+        await db.Entry(leasedList[0]).ReloadAsync(cancellationToken);
+        await Assert.That(leasedList[0].NextCheckAt).IsEqualTo(nextCheck);
+
+        foreach (var state in leasedList)
+        {
+            state.Status = SagaStatus.Completed;
+            state.CurrentState = "Completed";
+        }
+        var results = await db.SaveManyAsync(leasedList, cancellationToken);
+        await Assert.That(results.Count).IsEqualTo(2);
+        await Assert.That(results[0]).IsEqualTo(1);
+        await Assert.That(results[1]).IsEqualTo(1);
+
+        db.ChangeTracker.Clear();
+        var final = await db.GetByIdAsync(leasedList[0].SagaId, cancellationToken);
+        await Assert.That(final!.Status).IsEqualTo(SagaStatus.Completed);
+    }
+
+    [Test]
     public async Task GetActiveSagasAsync_RejectsInvalidBatchSize(CancellationToken cancellationToken)
     {
         await using var db = new TestSagaStateDbContext(CreateOptions());

@@ -825,6 +825,54 @@ public sealed class DapperStoreTests
     }
 
     [Test]
+    public async Task Saga_BatchAdvanceAndSaveMany_Sqlite(CancellationToken cancellationToken)
+    {
+        var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);
+        var first = new TestSagaState
+        {
+            SagaId = PalUlid.New(),
+            CurrentState = "Initial",
+            Status = SagaStatus.Active,
+            CreatedAt = TimeProvider.System.GetUtcNow()
+        };
+        var second = new TestSagaState
+        {
+            SagaId = PalUlid.New(),
+            CurrentState = "Initial",
+            Status = SagaStatus.Active,
+            CreatedAt = TimeProvider.System.GetUtcNow()
+        };
+        await store.SaveChangesAsync(first, cancellationToken);
+        await store.SaveChangesAsync(second, cancellationToken);
+
+        var leased = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        await Assert.That(leased.Count).IsEqualTo(2);
+        var nextCheck = DateTimeOffset.UtcNow.AddMinutes(3);
+        foreach (var saga in leased)
+            saga.NextCheckAt = nextCheck;
+
+        var advanced = await store.AdvanceNextCheckAtAsync("owner-A", leased, cancellationToken);
+        await Assert.That(advanced).IsEqualTo(2);
+        var reloaded = await store.GetByIdAsync(leased[0].SagaId, cancellationToken);
+        await Assert.That(reloaded!.NextCheckAt).IsEqualTo(nextCheck);
+
+        var foreign = await store.AdvanceNextCheckAtAsync("owner-B", leased, cancellationToken);
+        await Assert.That(foreign).IsEqualTo(0);
+
+        foreach (var saga in leased)
+        {
+            saga.Status = SagaStatus.Completed;
+            saga.CurrentState = "Completed";
+        }
+        var results = await store.SaveManyAsync(leased, cancellationToken);
+        await Assert.That(results.Count).IsEqualTo(2);
+        await Assert.That(results[0]).IsEqualTo(1);
+        await Assert.That(results[1]).IsEqualTo(1);
+        var final = await store.GetByIdAsync(leased[0].SagaId, cancellationToken);
+        await Assert.That(final!.Status).IsEqualTo(SagaStatus.Completed);
+    }
+
+    [Test]
     public async Task Saga_SaveChangesAsync_Upsert(CancellationToken cancellationToken)
     {
         var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);

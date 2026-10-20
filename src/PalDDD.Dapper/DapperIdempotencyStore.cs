@@ -24,7 +24,7 @@ namespace PalDDD.Dapper;
 //   本类所有 Command 均通过 Tx 属性自动挂接——与 DapperOutboxStore/DapperInboxStore 一致。
 
 /// <summary>Idempotency Store 的 Dapper 实现 —— 5 方法全量覆盖（ITM-667 缺口清偿）。</summary>
-public sealed class DapperIdempotencyStore : IIdempotencyStore
+public sealed class DapperIdempotencyStore : IIdempotencyStore, IIdempotencyStartOrGetStore
 {
     private readonly DbConnection _connection;
     private readonly DapperDbType _dbType;
@@ -210,6 +210,26 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
 
         return new IdempotencyRecord(operationName, key,
             IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, existing.Value.Revision + 1);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// 2026-10-20 性能轮：处理器走单调用后，新 key/过期回收路径省掉处理器侧的前置
+    /// <see cref="GetAsync"/>（新 key 2→1 往返）；已存在且活跃/已完成时 Insert 冲突后回读
+    /// 完整记录返回 Existing。与 EF 栈同为 Insert 优先，重复请求多一次冲突探测，
+    /// 换取新 key 主路径的一次往返。
+    /// </remarks>
+    public async ValueTask<IdempotencyStartResult> StartOrGetAsync(
+        string operationName, string key, DateTimeOffset now, IdempotencyPolicy policy, CancellationToken ct = default)
+    {
+        var started = await TryStartAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
+        if (started is not null)
+            return new IdempotencyStartResult(IdempotencyStartOutcome.Started, started);
+
+        var existing = await GetAsync(operationName, key, now, ct).ConfigureAwait(false);
+        return existing is null
+            ? new IdempotencyStartResult(IdempotencyStartOutcome.Contended, null)
+            : new IdempotencyStartResult(IdempotencyStartOutcome.Existing, existing);
     }
 
     /// <summary>

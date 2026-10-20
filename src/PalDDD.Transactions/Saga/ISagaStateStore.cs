@@ -88,3 +88,28 @@ public interface ISagaLeaseBatchStore<TState> : ISagaStateStore<TState> where TS
     /// <returns>实际释放行数（<c>0 ≤ n ≤ sagas.Count</c>；<c>sagas.Count - n</c> = 被抢占/已换代的冲突数）。</returns>
     ValueTask<int> ReleaseLeasesAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct);
 }
+
+/// <summary>
+/// Saga 后台批量写入能力（2026-10-20 性能轮）。<see cref="SagaTimeoutProcessor{TState}"/> 的
+/// 到期推进/回填/补偿终态此前逐 Saga <c>SaveChangesAsync</c>：每行一次提交，EF 栈每次
+/// <c>SaveChanges</c> 还要遍历整个 ChangeTracker（与批内行数叠加成 O(n²)），PalORM/Dapper
+/// 每行一次完整快照序列化。实现本接口后由处理器收集整批、一次提交；未实现的自定义 store
+/// 保持逐行路径不变。
+/// <para>
+/// 失败隔离契约：<see cref="SaveManyAsync"/> 返回与入参同序的逐行结果（1=写入生效，
+/// 0=行不存在或乐观锁冲突）。批量提交整体失败时实现方可返回全 0（本 tick 不写，租约由
+/// LeaseDuration 兜底），不得把部分成功伪装成全成功。
+/// </para>
+/// </summary>
+public interface ISagaBatchStateStore<TState> : ISagaStateStore<TState> where TState : SagaState
+{
+    /// <summary>
+    /// 批量推进 NextCheckAt（只写 next_check_at + version，不重写业务快照）。
+    /// <paramref name="owner"/> 非空时以 <c>leased_by = owner</c> 守卫本实例仍持有租约；
+    /// 逐行版本不匹配计为 0。
+    /// </summary>
+    ValueTask<int> AdvanceNextCheckAtAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct);
+
+    /// <summary>批量保存完整状态（回填/补偿终态）。返回与 <paramref name="sagas"/> 同序的逐行结果。</summary>
+    ValueTask<IReadOnlyList<int>> SaveManyAsync(IReadOnlyList<TState> sagas, CancellationToken ct);
+}

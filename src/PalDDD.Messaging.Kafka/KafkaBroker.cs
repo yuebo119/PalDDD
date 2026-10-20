@@ -4,6 +4,7 @@ using PalDDD.Core.Logging;
 using PalDDD.Serialization;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
+using System.Threading.Channels;
 using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Messaging.Kafka;
@@ -362,19 +363,30 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                 ex);
         }
 
-        // 保存 Task 引用，用于等待完成和错误观测
-        // 2026-10-19 性能实施轮：Consume 是同步阻塞原生调用，用 LongRunning 专用线程，
-        // 避免每个订阅永久占用一个线程池工作线程（订阅数上升时挤压线程池注入）。
-        var consumeTask = Task.Factory.StartNew(async () =>
+        // 2026-10-20 性能轮：Consume 是同步阻塞原生调用。原 LongRunning 只覆盖委托的
+        // 首个同步段——第一次 await 之后的续体回到 ThreadPool，阻塞 Consume 实际占用
+        // 池线程。改为「专用线程只 Consume + 有界 Channel + 异步 worker 处理」：
+        // 线程不进入 ThreadPool，Channel 容量 1 提供逐条背压，handler 仍在异步上下文执行。
+        var channel = Channel.CreateUnbounded<ConsumeResult<string, byte[]>>(
+            new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = true
+            });
+        // 专用线程上的同步背压：Wait(token) 阻塞本线程而不占用线程池；worker 读到消息即释放
+        // 一个槽位，形态等价原容量 1 Channel（最多 1 条处理中 + 1 条排队）。
+        var slots = new SemaphoreSlim(1, 1);
+        var producerCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var consumerThread = new Thread(() =>
         {
             try
             {
                 while (!tokenSnapshot.IsCancellationRequested)
                 {
-                    ConsumeResult<string, byte[]> result;
+                    ConsumeResult<string, byte[]> consumed;
                     try
                     {
-                        result = consumer.Consume(tokenSnapshot);
+                        consumed = consumer.Consume(tokenSnapshot);
                     }
                     catch (OperationCanceledException) when (tokenSnapshot.IsCancellationRequested)
                     {
@@ -382,17 +394,56 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                     }
                     catch (ConsumeException ex)
                     {
-                        // 消费错误：记录后继续下一条（ITM-008）。
-                        // ⚠️ 投递语义声明（三轮评审纠偏）：EnableAutoCommit 默认 true——失败消息
-                        // 的 offset 照常自动提交，本路径为 at-most-once（消息丢失），不是重投。
-                        // 与 RabbitMQ 的 nack 路径语义不同（那条是 requeue:false 显式弃置）。
-                        // 若为分区末尾/短暂网络抖动，Consume 会自动重试或等待新消息。
+                        // 消费错误：记录后继续下一条（ITM-008）。EnableAutoCommit 默认 true——
+                        // 失败消息 offset 照常提交，本路径为 at-most-once（与既有语义一致）。
                         _logger.Error(ex, $"Kafka consume error on {topic} @ {_consumerConfig.GroupId}, continuing consumption");
-                        // 退避防止边缘场景（如 topic 不存在）的 CPU 空转。
-                        // Consume 本身通常阻塞等待，但某些持续错误会立即返回。
-                        await Task.Delay(TimeSpan.FromSeconds(1), tokenSnapshot).ConfigureAwait(false);
+                        // 退避防止持续错误 CPU 空转；专用线程阻塞 1s 不影响线程池。
+                        Thread.Sleep(TimeSpan.FromSeconds(1));
                         continue;
                     }
+
+                    try
+                    {
+                        slots.Wait(tokenSnapshot);
+                    }
+                    catch (OperationCanceledException) when (tokenSnapshot.IsCancellationRequested)
+                    {
+                        break;
+                    }
+
+                    if (!channel.Writer.TryWrite(consumed))
+                    {
+                        slots.Release();
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.Error(ex, $"Kafka consume thread terminated unexpectedly: {topic} @ {_consumerConfig.GroupId}");
+            }
+            finally
+            {
+                channel.Writer.TryComplete();
+                producerCompleted.TrySetResult();
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "pal-kafka-consume"
+        };
+        consumerThread.Start();
+
+        // 保存 Task 引用，用于等待完成和错误观测
+        var consumeTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (!tokenSnapshot.IsCancellationRequested)
+                {
+                    ConsumeResult<string, byte[]> result;
+                    result = await channel.Reader.ReadAsync(tokenSnapshot).ConfigureAwait(false);
+                    slots.Release(); // 已取走一条：允许专用线程再入队一条（最多 1 处理中 + 1 排队）
 
                     try
                     {
@@ -455,6 +506,14 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             {
                 // 正常取消
             }
+            catch (ChannelClosedException) when (tokenSnapshot.IsCancellationRequested)
+            {
+                // 生产者先于取消完成通道：正常关停，不记错误
+            }
+            catch (ChannelClosedException ex)
+            {
+                _logger.Warning($"Kafka consume channel closed unexpectedly: {topic} @ {_consumerConfig.GroupId}: {ex.Message}");
+            }
             // v36 勘正：外层非关停 OCE 兜底——v34 假修勘正后，handler 的非关停 OCE 已在
             // while 体内 catch+继续（真 continue）；到达本外层 catch 的是 while 条件求值等
             // 循环骨架位置的非关停 OCE——此处终止是真实语义（骨架异常无法安全 continue），
@@ -470,6 +529,18 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             }
             finally
             {
+                // worker 因非取消异常退出时终止生产者；以及等待专用线程退出后再 Close/Dispose，
+                // 避免 Consume 与 Close/Dispose 并发打在同一个 consumer 上。
+                try
+                {
+                    cts.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // 订阅已释放其 CTS：取消已生效，无需重复。
+                }
+                await producerCompleted.Task.ConfigureAwait(false);
+
                 // ITM-217 修复（三十二轮）：Close() 抛非 OCE 异常时不得跳过 Dispose——
                 // 原 finally 裸调两行，Close 失败即泄漏 consumer（连接/组状态）。
                 try
@@ -493,9 +564,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                     consumer.Dispose();
                 }
             }
-        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
-        // 传 None 而非 tokenSnapshot：预取消时仍要进入委托执行 finally（consumer.Close/Dispose），
-        // 取消由循环条件与 catch 观察。
+        });
 
         // P3 修复（十七轮）：登记先行的回填——循环启动后注入 Task 引用
         // （Set 前若被 Dispose，DisposeAsync 走 null 窗口路径：cts 已取消，

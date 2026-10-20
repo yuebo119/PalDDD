@@ -84,6 +84,43 @@ public class PalOrmSagaStateStoreTests
         await Assert.That(after2!.LeasedBy).IsNull();
     }
 
+    [Test]
+    public async Task BatchAdvanceNextCheckAndSaveMany_CommitInOneTransaction()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteSagaStateStore<StoreTestSagaState>(session, Json);
+        var first = new StoreTestSagaState { CustomerId = "c1", CurrentState = "Active" };
+        var second = new StoreTestSagaState { CustomerId = "c2", CurrentState = "Active" };
+        await store.SaveChangesAsync(first, default);
+        await store.SaveChangesAsync(second, default);
+
+        var leased = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 10, default);
+        await Assert.That(leased.Count).IsEqualTo(2);
+        var nextCheck = DateTimeOffset.UtcNow.AddMinutes(3);
+        foreach (var saga in leased)
+            saga.NextCheckAt = nextCheck;
+
+        var advanced = await store.AdvanceNextCheckAtAsync("owner-A", leased, default);
+        await Assert.That(advanced).IsEqualTo(2);
+        var reloaded = await store.GetByIdAsync(leased[0].SagaId, default);
+        await Assert.That(reloaded!.NextCheckAt).IsEqualTo(nextCheck);
+
+        var foreign = await store.AdvanceNextCheckAtAsync("owner-B", leased, default);
+        await Assert.That(foreign).IsEqualTo(0);
+
+        foreach (var saga in leased)
+        {
+            saga.Status = SagaStatus.Completed;
+            saga.CurrentState = "Completed";
+        }
+        var results = await store.SaveManyAsync(leased, default);
+        await Assert.That(results.Count).IsEqualTo(2);
+        await Assert.That(results[0]).IsEqualTo(1);
+        await Assert.That(results[1]).IsEqualTo(1);
+        var final = await store.GetByIdAsync(leased[0].SagaId, default);
+        await Assert.That(final!.Status).IsEqualTo(SagaStatus.Completed);
+    }
+
     /// <summary>跨栈快照行为对照 · PalORM 侧（2026-09-19 系统优化增，镜像 Dapper 侧
     /// Saga_SaveChangesAsync_WithoutJsonTypeInfo_FailsFastWithGuidance）——两栈同红同绿
     /// 即「未注册 JsonTypeInfo → fail-fast 带指引」契约的行为对照测试化（第八流视角：

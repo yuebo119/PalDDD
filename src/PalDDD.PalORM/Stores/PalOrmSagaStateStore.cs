@@ -36,7 +36,7 @@ namespace PalDDD.PalORM.Stores;
 /// 未挂 cmd.Transaction 的命令抛 InvalidOperationException（MySqlConnector 严格校验）。
 /// </para>
 /// </summary>
-public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, IDueTimeSagaStore<TState>
+public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, IDueTimeSagaStore<TState>, ISagaBatchStateStore<TState>
     where TProvider : IDbProvider
     where TState : SagaState, new()
 {
@@ -293,6 +293,96 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         sb.Append(')');
         cmd.CommandText = sb.ToString();
         return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// 到期推进只写 next_check_at + version：无 ambient 事务时由本方法开一个事务，
+    /// 整批提交一次；ambient 事务存在时并入调用方边界（ITM-243 raw command 挂接）。
+    /// </remarks>
+    public async ValueTask<int> AdvanceNextCheckAtAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return 0;
+
+        var ambient = PalOrmAmbientTransaction.TryGet(Session);
+        DbTransaction? ownTx = null;
+        if (ambient is null)
+        {
+            ownTx = await Session.BeginTransactionAsync(ct: ct).ConfigureAwait(false);
+            PalOrmAmbientTransaction.Set(Session, ownTx);
+        }
+
+        try
+        {
+            var affected = 0;
+            foreach (var saga in sagas)
+            {
+                await using var cmd = CreateRawCommand();
+                cmd.CommandText = "UPDATE saga_states SET next_check_at = @p0, version = version + 1 WHERE saga_id = @p1 AND version = @p2 AND leased_by = @p3";
+                AddParam(cmd, "@p0", saga.NextCheckAt.HasValue ? saga.NextCheckAt.Value : (object)DBNull.Value);
+                AddParam(cmd, "@p1", saga.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+                AddParam(cmd, "@p2", saga.Version);
+                AddParam(cmd, "@p3", owner);
+                var rows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                if (rows > 0)
+                {
+                    saga.Version++;
+                    affected += rows;
+                }
+            }
+
+            if (ownTx is not null)
+                await ownTx.CommitAsync(ct).ConfigureAwait(false);
+            return affected;
+        }
+        finally
+        {
+            if (ownTx is not null)
+            {
+                try { await ownTx.DisposeAsync().ConfigureAwait(false); }
+                catch (Exception ex) when (ex is InvalidOperationException or DbException) { /* 事务已失效/已释放 */ }
+                Session.UseTransaction(null);
+                PalOrmAmbientTransaction.Set(Session, null);
+            }
+        }
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<IReadOnlyList<int>> SaveManyAsync(IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return [];
+
+        var ambient = PalOrmAmbientTransaction.TryGet(Session);
+        DbTransaction? ownTx = null;
+        if (ambient is null)
+        {
+            ownTx = await Session.BeginTransactionAsync(ct: ct).ConfigureAwait(false);
+            PalOrmAmbientTransaction.Set(Session, ownTx);
+        }
+
+        try
+        {
+            var results = new int[sagas.Count];
+            for (var i = 0; i < sagas.Count; i++)
+                results[i] = await SaveChangesAsync(sagas[i], ct).ConfigureAwait(false);
+
+            if (ownTx is not null)
+                await ownTx.CommitAsync(ct).ConfigureAwait(false);
+            return results;
+        }
+        finally
+        {
+            if (ownTx is not null)
+            {
+                try { await ownTx.DisposeAsync().ConfigureAwait(false); }
+                catch (Exception ex) when (ex is InvalidOperationException or DbException) { /* 事务已失效/已释放 */ }
+                Session.UseTransaction(null);
+                PalOrmAmbientTransaction.Set(Session, null);
+            }
+        }
     }
 
     /// <summary>从 DbDataReader 读取多行 Saga。</summary>
