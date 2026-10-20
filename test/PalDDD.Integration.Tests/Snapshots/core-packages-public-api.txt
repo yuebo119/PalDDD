@@ -1116,6 +1116,11 @@ class PalDDD.PalORM.Stores.PalOrmProjectionCheckpointStore<TProvider>
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask ResetAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionCheckpoint> TryStartAsync(System.String projectionName, System.String sourceName, System.String position, System.DateTimeOffset startedAt, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
+class PalDDD.PalORM.Stores.PalOrmRetentionStore<TProvider>
+  ctor(PalORM.DataSession<TProvider> session)
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredIdempotencyAsync(System.DateTimeOffset now, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredInboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredOutboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Boolean includeDead, System.Threading.CancellationToken ct)
 class PalDDD.PalORM.Stores.PalOrmSagaStateStore<TProvider, TState>
   ctor(PalORM.DataSession<TProvider> session, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState> jsonTypeInfo, System.TimeProvider clock)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetActiveSagasAsync(System.Int32 batchSize, System.Threading.CancellationToken ct)
@@ -1716,6 +1721,11 @@ enum PalDDD.Transactions.OutboxStatus
   field System.Int32 value__
 class PalDDD.Transactions.PeriodicBackgroundProcessor
   method System.Void Dispose()
+enum PalDDD.Transactions.RetentionDialect
+  field const PalDDD.Transactions.RetentionDialect MySql = 1
+  field const PalDDD.Transactions.RetentionDialect PostgreSql = 0
+  field const PalDDD.Transactions.RetentionDialect Sqlite = 2
+  field System.Int32 value__
 class PalDDD.Transactions.RetentionOptions
   ctor()
   property System.Int32 BatchSize
@@ -1740,6 +1750,11 @@ struct PalDDD.Transactions.RetentionResult
   method System.Boolean Equals(System.Object obj)
   method System.Int32 GetHashCode()
   method System.String ToString()
+static class PalDDD.Transactions.RetentionSql
+  method System.String IdempotencyDelete(PalDDD.Transactions.RetentionDialect dialect)
+  method System.String InboxDelete(PalDDD.Transactions.RetentionDialect dialect)
+  method System.String OutboxDelete(PalDDD.Transactions.RetentionDialect dialect, System.Boolean includeDead)
+  method System.Object ToTimeParam(PalDDD.Transactions.RetentionDialect dialect, System.DateTimeOffset value)
 struct PalDDD.Transactions.SagaCompensationStarted
   ctor(ByteAether.Ulid.Ulid SagaId, System.String StepKey)
   property ByteAether.Ulid.Ulid SagaId [init]
@@ -1867,6 +1882,7 @@ class PalDDD.Transactions.Saga<TState>
 static class PalDDD.Transactions.ServiceCollectionExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalInbox(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOutbox(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalRetention(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Action<PalDDD.Transactions.RetentionOptions> configure)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalSaga(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
 enum PalDDD.Transactions.StepDispatchKind
   field const PalDDD.Transactions.StepDispatchKind ChildSaga = 2
@@ -1877,6 +1893,11 @@ enum PalDDD.Transactions.StepDispatchKind
   field System.Int32 value__
 
 # PalDDD.Transactions.EFCore
+class PalDDD.Transactions.EfCoreRetentionStore
+  ctor(System.Data.Common.DbConnection connection, PalDDD.Transactions.RetentionDialect dialect)
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredIdempotencyAsync(System.DateTimeOffset now, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredInboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredOutboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Boolean includeDead, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.InboxDbContext
   property Microsoft.EntityFrameworkCore.DbSet<PalDDD.Transactions.InboxMessage> InboxMessages
 class PalDDD.Transactions.MySqlOutboxDbContext
@@ -1905,6 +1926,7 @@ class PalDDD.Transactions.SagaStateDbContext<TState>
   method System.Int32 SaveChanges(System.Boolean acceptAllChangesOnSuccess)
   method System.Threading.Tasks.Task<System.Int32> SaveChangesAsync(System.Boolean acceptAllChangesOnSuccess, System.Threading.CancellationToken cancellationToken)
 static class PalDDD.Transactions.ServiceCollectionExtensions
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalEfCoreRetention(Microsoft.Extensions.DependencyInjection.IServiceCollection services, PalDDD.Transactions.RetentionDialect dialect, System.Action<PalDDD.Transactions.RetentionOptions> configure)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalInboxEfCore(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOutboxEfCore(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalSagaStateEfCore(Microsoft.Extensions.DependencyInjection.IServiceCollection services)

@@ -29,7 +29,6 @@
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Hosting;
 using PalDDD.Transactions;
 using PalDDD.Idempotency;
 using PalDDD.EventLog;
@@ -185,21 +184,9 @@ public static class DapperServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.AddOptions<RetentionOptions>()
-            .Configure(configure ?? (static _ => { }))
-            .Validate(static options =>
-                    options.PollInterval > TimeSpan.Zero
-                    && options.OutboxRetention > TimeSpan.Zero
-                    && options.InboxRetention > TimeSpan.Zero
-                    && options.BatchSize > 0
-                    && options.MaxBatchesPerTick > 0,
-                "Retention options require positive intervals, batch size, and max batches per tick.")
-            .ValidateOnStart();
-
+        services.AddPalRetention(configure);
         services.TryAddScoped<IRetentionStore>(sp =>
             new DapperRetentionStore(sp.GetRequiredService<DbConnection>(), type));
-        services.TryAddScoped<RetentionProcessor>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, RetentionProcessorService>());
         return services;
     }
 }

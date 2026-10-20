@@ -20,8 +20,8 @@ CREATE TABLE outbox_messages (
     -- 租约候选扫描按 created_at 排序；(status, created_at) 让扫描按索引序直接取满批次。
     -- 2026-10-20 真库实测：1k 待租/20 万行 12.2ms → 1.59ms。
     INDEX idx_outbox_due (status, created_at),
-    -- 保留清理（按时间删除已处理行）使用；启用 Retention 后可评估删除。
-    INDEX idx_outbox_created (created_at),
+    -- 保留清理按 processed_at 分批删除终态行；(status, processed_at) 让扫描按索引序取满批次。
+    INDEX idx_outbox_processed (status, processed_at),
     -- 租约回读谓词（locked_by + locked_until）覆盖索引。
     INDEX idx_outbox_lease_holder (locked_by, locked_until)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -36,7 +36,8 @@ CREATE TABLE inbox_messages (
     processed_at          DATETIME(6),
     attempts              INT NOT NULL DEFAULT 1,
     last_error            TEXT,
-    UNIQUE INDEX idx_inbox_unique (consumer_name, message_id)
+    UNIQUE INDEX idx_inbox_unique (consumer_name, message_id),
+    INDEX idx_inbox_processed (status, processed_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE saga_states (

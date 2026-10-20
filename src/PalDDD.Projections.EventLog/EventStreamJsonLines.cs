@@ -194,7 +194,7 @@ public static class EventStreamJsonLines
 
         var metadata = root.TryGetProperty("metadata", out var m)
             ? m.GetBytesFromBase64()
-            : ReadOnlyMemory<byte>.Empty;
+            : [];
 
         // P1 修复：读回审计与追踪元数据
         var actorId = root.TryGetProperty("actorId", out var a) ? a.GetString() : null;
@@ -214,7 +214,7 @@ public static class EventStreamJsonLines
             ? EventAuditMetadata.Empty
             : new EventAuditMetadata(actorId, reason, correlationId, causationId, traceParent, traceState);
 
-        return new EventData(
+        return EventData.FromOwned(
             PalUlid.Parse(root.GetProperty("eventId").GetString()!),
             root.GetProperty("eventName").GetString()!,
             root.GetProperty("schemaVersion").GetInt32(),

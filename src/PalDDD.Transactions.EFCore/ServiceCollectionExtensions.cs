@@ -11,6 +11,7 @@
 // 📐 DDD 位置：基础设施层 — DI 注册是组合根的一部分，不涉及领域逻辑。
 // ─────────────────────────────────────────────────────────────
 
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -81,6 +82,31 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.TryAddScoped<IInboxStore>(static sp => sp.GetRequiredService<TContext>());
+        return services;
+    }
+
+    /// <summary>
+    /// 注册历史表保留清理（2026-10-20 性能轮，可选）。本方法要求
+    /// <typeparamref name="TContext"/> 已通过 <c>AddDbContext</c> 注册；清理 store 复用该
+    /// 上下文的作用域连接，不额外创建连接或释放调用方连接。
+    /// </summary>
+    /// <param name="services">DI 服务集合。</param>
+    /// <param name="dialect">数据库方言。</param>
+    /// <param name="configure">可选保留策略配置。</param>
+    /// <typeparam name="TContext">已注册的 DbContext 类型（其数据库须含 outbox/inbox/idempotency 表）。</typeparam>
+    public static IServiceCollection AddPalEfCoreRetention<TContext>(
+        this IServiceCollection services,
+        RetentionDialect dialect,
+        Action<RetentionOptions>? configure = null)
+        where TContext : DbContext
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddPalRetention(configure);
+        services.TryAddScoped<IRetentionStore>(sp =>
+            new EfCoreRetentionStore(
+                sp.GetRequiredService<TContext>().Database.GetDbConnection(),
+                dialect));
         return services;
     }
 }

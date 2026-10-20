@@ -252,6 +252,8 @@ public abstract class InboxDbContext(
             e.HasIndex(x => x.ProcessedAt);
             e.HasIndex(x => x.Status);
             e.HasIndex(x => new { x.Status, x.ProcessingStartedAt });
+            // 保留清理按 processed_at 分批删除 Processed 行；复合索引避免全表扫描加排序。
+            e.HasIndex(x => new { x.Status, x.ProcessedAt });
         });
     }
 
