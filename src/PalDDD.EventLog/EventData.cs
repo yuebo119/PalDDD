@@ -15,7 +15,7 @@ public sealed class EventData
     private readonly byte[] _payload;
     private readonly byte[] _metadata;
 
-    /// <summary>创建事件数据。</summary>
+    /// <summary>创建事件数据（防御性复制 payload 与 metadata）。</summary>
     public EventData(
         PalUlid eventId,
         string eventName,
@@ -24,20 +24,53 @@ public sealed class EventData
         ReadOnlyMemory<byte> payload,
         ReadOnlyMemory<byte> metadata,
         EventAuditMetadata audit)
+        : this(eventId, eventName, schemaVersion, contentType, payload.ToArray(), metadata.ToArray(), audit)
+    {
+    }
+
+    private EventData(
+        PalUlid eventId,
+        string eventName,
+        int schemaVersion,
+        string contentType,
+        byte[] payload,
+        byte[] metadata,
+        EventAuditMetadata audit)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(eventName);
         ArgumentOutOfRangeException.ThrowIfLessThan(schemaVersion, 1);
         ArgumentException.ThrowIfNullOrWhiteSpace(contentType);
+        ArgumentNullException.ThrowIfNull(payload);
+        ArgumentNullException.ThrowIfNull(metadata);
         ArgumentNullException.ThrowIfNull(audit);
 
         EventId = eventId;
         EventName = eventName;
         SchemaVersion = schemaVersion;
         ContentType = contentType;
-        _payload = payload.ToArray();
-        _metadata = metadata.ToArray();
+        _payload = payload;
+        _metadata = metadata;
         Audit = audit;
     }
+
+    /// <summary>
+    /// 以所有权转移方式创建事件数据（2026-10-20 性能轮）：直接引用传入数组，不再复制。
+    /// <para>
+    /// 契约：调用方交出数组所有权后不得再修改或复用该数组。序列化器产出的精确数组
+    /// （<c>IMessageSerializer.SerializeToArray</c>）可直接传入，省去一次整载荷复制；
+    /// 来自池化缓冲的视图不得走本入口。需要保留原数组所有权时请使用
+    /// <see cref="EventData(PalUlid, string, int, string, ReadOnlyMemory{byte}, ReadOnlyMemory{byte}, EventAuditMetadata)"/>。
+    /// </para>
+    /// </summary>
+    public static EventData FromOwned(
+        PalUlid eventId,
+        string eventName,
+        int schemaVersion,
+        string contentType,
+        byte[] payload,
+        byte[] metadata,
+        EventAuditMetadata audit)
+        => new(eventId, eventName, schemaVersion, contentType, payload, metadata, audit);
 
     /// <summary>稳定的事件标识符。</summary>
     public PalUlid EventId { get; }

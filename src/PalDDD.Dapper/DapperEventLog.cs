@@ -188,6 +188,19 @@ public sealed class DapperEventLog : IEventLog
                 streamName, row.StreamVersion, row.StreamVersion, row.GlobalPosition, row.GlobalPosition);
         }
 
+        // 2026-10-20 性能轮：PG 多条追加原子化。原路径是 MAX 预检 + 多行 INSERT 两次往返；
+        // 守卫版本（NoStream/StreamExists/Exact）可把版本判定下推为 INSERT..SELECT 的 WHERE
+        // 谓词，服务端原子计算 MAX+序号，单往返完成判定与写入（单事件 PG 快路径的多行推广）。
+        // Any 保持原预检路径：无版本守卫时唯一冲突无法区分「并发追加」与「批内 EventId 重复」，
+        // 预检快照是现有分类语义的基准。
+        var now = _timeProvider.GetUtcNow();
+        if (events.Count > 1
+            && _dbType == DapperDbType.PostgreSql
+            && expectedVersion.Kind != ExpectedStreamVersionKind.Any)
+        {
+            return await AppendEventBatchPostgreSqlAtomicAsync(streamName, expectedVersion, now, events).ConfigureAwait(false);
+        }
+
         // 📐 事务契约（P2 定案声明）：批量追加的原子性由调用方事务保证——传入
         // Tx 则整批可回滚；未传时中途失败会留下前半批（部分写入）。
         // EFCore 版在内部事务中自动回滚，Dapper 版依赖外部 UoW（两版契约差异是
@@ -201,7 +214,6 @@ public sealed class DapperEventLog : IEventLog
 
         // 2. 批量插入事件 — 根据数据库类型选择返回 ID 语法
         var version = (currentVersion ?? -1) + 1;
-        var now = _timeProvider.GetUtcNow();
         var firstVersion = version;
 
         var sql = _dbType switch
@@ -384,6 +396,127 @@ public sealed class DapperEventLog : IEventLog
         for (var i = 0; i < count; i++)
             chunk.Add(events[offset + i]);
         return chunk;
+    }
+
+    /// <summary>
+    /// 2026-10-20 性能轮：PG 多条守卫追加单语句化。<c>INSERT ... SELECT ... FROM (VALUES ...)
+    /// WHERE 版本守卫 RETURNING</c> 在服务端原子计算 <c>MAX(stream_version)+ordinal</c>，省去
+    /// 预检往返。守卫失败（零行）与唯一冲突分别转并发异常；唯一冲突在快照未变时按 EventId
+    /// 重复原样上抛（与既有批路径分类口径一致）。
+    /// </summary>
+    private async ValueTask<AppendEventsResult> AppendEventBatchPostgreSqlAtomicAsync(
+        string streamName,
+        ExpectedStreamVersion expectedVersion,
+        DateTimeOffset now,
+        IReadOnlyList<EventData> events)
+    {
+        var dp = new DynamicParameters();
+        dp.Add("StreamName", streamName);
+        dp.Add("RecordedAt", ToTimeParam(now));
+
+        var sb = new StringBuilder(420 + events.Count * 260)
+            .Append("INSERT INTO events (event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) ")
+            .Append("SELECT v.eid, v.eidbin, v.en, @StreamName, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) + v.ord, v.scv, v.ct, v.pl, v.md, @RecordedAt, v.aid, v.rs, v.cid, v.cau, v.tp, v.ts FROM (VALUES ");
+
+        for (var i = 0; i < events.Count; i++)
+        {
+            var evt = events[i];
+            var p = $"b{i}_";
+            if (i > 0)
+                sb.Append(", ");
+            sb.Append('(').Append(i + 1)
+              .Append(", @").Append(p).Append("eid, @").Append(p).Append("eidbin, @").Append(p).Append("en, @")
+              .Append(p).Append("scv, @").Append(p).Append("ct, @").Append(p).Append("pl, @").Append(p)
+              .Append("md, @").Append(p).Append("aid, @").Append(p).Append("rs, @").Append(p)
+              .Append("cid, @").Append(p).Append("cau, @").Append(p).Append("tp, @").Append(p).Append("ts)");
+
+            dp.Add(p + "eid", DapperAotInitializer.ToSqliteParameter(evt.EventId));
+            dp.Add(p + "eidbin", evt.EventId.ToByteArray(), DbType.Binary);
+            dp.Add(p + "en", evt.EventName);
+            dp.Add(p + "scv", evt.SchemaVersion);
+            dp.Add(p + "ct", evt.ContentType);
+            dp.Add(p + "pl", evt.PayloadArray, DbType.Binary);
+            dp.Add(p + "md", evt.MetadataArray, DbType.Binary);
+            dp.Add(p + "aid", evt.Audit.ActorId);
+            dp.Add(p + "rs", evt.Audit.Reason);
+            dp.Add(p + "cid", evt.Audit.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+            dp.Add(p + "cau", evt.Audit.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+            dp.Add(p + "tp", evt.Audit.TraceParent);
+            dp.Add(p + "ts", evt.Audit.TraceState);
+        }
+
+        sb.Append(") AS v(ord, eid, eidbin, en, scv, ct, pl, md, aid, rs, cid, cau, tp, ts) ");
+        sb.Append(expectedVersion.Kind switch
+        {
+            ExpectedStreamVersionKind.NoStream =>
+                "WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) = -1",
+            ExpectedStreamVersionKind.StreamExists =>
+                "WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) >= 0",
+            _ => "WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @StreamName), -1) = @ExpectedVersion",
+        });
+        if (expectedVersion.Kind == ExpectedStreamVersionKind.Exact)
+            dp.Add("ExpectedVersion", expectedVersion.Version);
+        sb.Append(" RETURNING global_position, stream_version");
+
+        List<AppendSingleRow> rows;
+        try
+        {
+            rows = (await _connection.QueryAsync<AppendSingleRow>(sb.ToString(), dp, Tx).ConfigureAwait(false)).ToList();
+        }
+        catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            throw await ClassifyAtomicBatchConflictAsync(streamName, expectedVersion, ex).ConfigureAwait(false);
+        }
+
+        if (rows.Count != events.Count)
+        {
+            var actual = await _connection.QueryFirstOrDefaultAsync<long?>(
+                EventLogSql.MaxVersion, new { name = streamName }, Tx).ConfigureAwait(false);
+            throw new EventStreamConcurrencyException(streamName, expectedVersion, actual ?? -1);
+        }
+
+        PalMetrics.EventLogAppended.Add(events.Count);
+        return new AppendEventsResult(
+            streamName,
+            rows.Min(static r => r.StreamVersion),
+            rows.Max(static r => r.StreamVersion),
+            rows.Min(static r => r.GlobalPosition),
+            rows.Max(static r => r.GlobalPosition));
+    }
+
+    /// <summary>原子批追加的唯一冲突分类：快照未变即 EventId 重复（原样上抛），否则转并发异常。</summary>
+    private async ValueTask<Exception> ClassifyAtomicBatchConflictAsync(
+        string streamName,
+        ExpectedStreamVersion expectedVersion,
+        System.Data.Common.DbException original)
+    {
+        long? actual = null;
+        var requerySucceeded = false;
+        try
+        {
+            actual = await _connection.QueryFirstOrDefaultAsync<long?>(
+                EventLogSql.MaxVersion, new { name = streamName }, Tx).ConfigureAwait(false);
+            requerySucceeded = true;
+        }
+        catch (System.Data.Common.DbException)
+        {
+            // 重查自败（如 PG aborted 事务）——保守上抛原始冲突异常
+        }
+
+        if (requerySucceeded)
+        {
+            var mismatch = expectedVersion.Kind switch
+            {
+                ExpectedStreamVersionKind.NoStream => (actual ?? -1) >= 0,
+                ExpectedStreamVersionKind.StreamExists => (actual ?? -1) < 0,
+                ExpectedStreamVersionKind.Exact => (actual ?? -1) != expectedVersion.Version,
+                _ => true,
+            };
+            if (mismatch)
+                return new EventStreamConcurrencyException(streamName, expectedVersion, actual ?? -1);
+        }
+
+        return original;
     }
 
     /// <summary>

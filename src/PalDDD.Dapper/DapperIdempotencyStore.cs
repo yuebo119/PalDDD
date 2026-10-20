@@ -63,6 +63,7 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
 
+        await EnsureOpenAsync(ct).ConfigureAwait(false);
         const string sql = """
             SELECT operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error, revision
             FROM idempotency_records
@@ -102,6 +103,7 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
 
+        await EnsureOpenAsync(ct).ConfigureAwait(false);
         var lockedUntil = now + policy.ProcessingTimeout;
         var expiresAt = now + policy.Retention;
         var statusProcessing = (int)IdempotencyRecordStatus.Processing;
@@ -267,7 +269,14 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
         IdempotencyRecord record, ReadOnlyMemory<byte> responsePayload, DateTimeOffset completedAt, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(record);
-        var payloadBytes = responsePayload.ToArray();
+        await EnsureOpenAsync(ct).ConfigureAwait(false);
+        // 2026-10-20：精确数组直接交还，避免持久化边界的第二次整载荷复制。
+        var payloadBytes = System.Runtime.InteropServices.MemoryMarshal.TryGetArray(responsePayload, out var segment)
+            && segment.Array is { } array
+            && segment.Offset == 0
+            && segment.Count == array.Length
+            ? array
+            : responsePayload.ToArray();
         var statusCompleted = (int)IdempotencyRecordStatus.Completed;
         var statusProcessing = (int)IdempotencyRecordStatus.Processing;
 
@@ -301,6 +310,7 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
     {
         ArgumentNullException.ThrowIfNull(record);
         ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+        await EnsureOpenAsync(ct).ConfigureAwait(false);
         var reason = FailureReason.Normalize(failureReason);
         var statusFailed = (int)IdempotencyRecordStatus.Failed;
         var statusCompleted = (int)IdempotencyRecordStatus.Completed;
@@ -332,6 +342,13 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore
     // DapperSqlErrorClassifier（鸭子形态，码集并集含本版 1022/19/2067——分类行为兼容：
     // 首个命中分支的短路语义不变，新增的 1586/SqlServer 分支只在原返回 false 的
     // 异常上可能多判 true，方向为更多冲突被识别）
+
+    /// <summary>确保连接已打开（与 DapperInbox/Saga/Outbox 同款惰性打开语义）。</summary>
+    private async ValueTask EnsureOpenAsync(CancellationToken ct)
+    {
+        if (_connection.State != System.Data.ConnectionState.Open)
+            await _connection.OpenAsync(ct).ConfigureAwait(false);
+    }
 
     /// <summary>ITM-242 口径：UTC 归一化（MySQL DATETIME Kind=Unspecified → offset 0）。</summary>
     private static DateTimeOffset ToUtcOrMin(DateTimeOffset value)

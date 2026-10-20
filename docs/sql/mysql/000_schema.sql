@@ -17,9 +17,12 @@ CREATE TABLE outbox_messages (
     causation_id    CHAR(26),  -- 审计：因果 Ulid（26 字符）
     trace_parent    VARCHAR(255),
     trace_state     VARCHAR(512),  -- 三十七轮 C2：对齐 EFCore MaxLength(512)
-    INDEX idx_outbox_status (status, next_attempt_at, locked_until),
+    -- 租约候选扫描按 created_at 排序；(status, created_at) 让扫描按索引序直接取满批次。
+    -- 2026-10-20 真库实测：1k 待租/20 万行 12.2ms → 1.59ms。
+    INDEX idx_outbox_due (status, created_at),
+    -- 保留清理（按时间删除已处理行）使用；启用 Retention 后可评估删除。
     INDEX idx_outbox_created (created_at),
-    -- 租约回读谓词（locked_by + locked_until）覆盖索引——审计 2026-09-17 P-2
+    -- 租约回读谓词（locked_by + locked_until）覆盖索引。
     INDEX idx_outbox_lease_holder (locked_by, locked_until)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -74,8 +77,8 @@ CREATE TABLE events (
     trace_state     VARCHAR(512),  -- 三十七轮 C2：对齐 EFCore MaxLength(512)
     UNIQUE INDEX idx_events_event_id (event_id),
     INDEX idx_events_event_id_bin (event_id_bin),
-    UNIQUE INDEX idx_events_stream (stream_name, stream_version),
-    INDEX idx_events_global (global_position)
+    UNIQUE INDEX idx_events_stream (stream_name, stream_version)
+    -- global_position 是主键，独立索引纯冗余（2026-10-20 移除）。
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- P3 修复（九轮评审）：补齐通用脚本已有而方言脚本缺失的两张表

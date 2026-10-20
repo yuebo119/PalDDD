@@ -666,13 +666,8 @@ public abstract class Saga<TState> where TState : SagaState, new()
         // A8（S1 轮，2026-10-15）：非泛型查找静态缓存一次 + MakeGenericMethod 结果按子状态
         // 类型缓存——原每 attempt 一次 GetMethod + MakeGenericMethod + Invoke，查找与构造
         // 部分按类型稳定对应，缓存消重复成本（Invoke 语义不变）。
-#pragma warning disable S3011 // 子 Saga 解析是 AOT 非目标反射路径（RequiresUnreferencedCode/RequiresDynamicCode 已声明）
-        var method = typeof(Saga<TState>).GetMethod(
-            nameof(ResolveChildSaga),
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,
-            null, Type.EmptyTypes, null);
-#pragma warning restore S3011
-
+        // 2026-10-20：GetMethod 移入静态字段（原每 attempt 仍重做一次查找）。
+        var method = s_resolveChildSagaMethod;
         if (method is not null)
         {
             var generic = ResolveChildSagaGenericByStateType.GetOrAdd(childStateType, static (t, m) => m.MakeGenericMethod(t), method);
@@ -681,6 +676,14 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
         return null;
     }
+
+#pragma warning disable S3011 // 子 Saga 解析是 AOT 非目标反射路径（RequiresUnreferencedCode/RequiresDynamicCode 已声明）
+    private static readonly System.Reflection.MethodInfo? s_resolveChildSagaMethod =
+        typeof(Saga<TState>).GetMethod(
+            nameof(ResolveChildSaga),
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,
+            null, Type.EmptyTypes, null);
+#pragma warning restore S3011
 
     // A8（S1 轮）：MakeGenericMethod 结果按子状态类型缓存（Saga<TState> 每闭合泛型一份，
     // ChildSaga 每 attempt 原各一次构造）。
