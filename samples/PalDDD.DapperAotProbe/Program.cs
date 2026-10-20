@@ -7,6 +7,7 @@
 //   dotnet run --project samples/PalDDD.DapperAotProbe -c Release          # SQLite（:memory:）
 //   dotnet run --project ... -c Release -- --provider Pg                   # 外部 PG
 //   dotnet run --project ... -c Release -- --provider MySql                # 外部 MySQL
+//   dotnet run --project ... -c Release -- --provider Pg --outbox-migration # 10 万行 Outbox 回填/索引 A-B
 //   dotnet publish -r win-x64 /p:PublishAot=true 后从仓库根实跑二进制        # NativeAOT 实测
 // 外部库凭据解析顺序：PALDDD_TEST_PG / PALDDD_TEST_MYSQL 环境变量 →
 //   appsettings.test.local.json → appsettings.test.json（密码不打印——P0 #1）。
@@ -37,6 +38,7 @@ for (int i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--provider") provider = args[i + 1];
 }
+var migrationProbe = args.Contains("--outbox-migration", StringComparer.Ordinal);
 Console.WriteLine($"═══ Dapper AOT 探针 · provider={provider} ═══");
 
 var checks = new List<(string Name, bool Pass)>();
@@ -82,14 +84,21 @@ if (external)
 await conn.ExecuteAsync(ddl).ConfigureAwait(false);
 Console.WriteLine("schema created");
 
-// ═══ 六组件全链路 ═══
-await ProbeOutboxAsync(conn, dbType, Check).ConfigureAwait(false);
-await ProbeEventLogAsync(conn, dbType, Check).ConfigureAwait(false);
-await ProbeIdempotencyAsync(conn, dbType, Check).ConfigureAwait(false);
-await ProbeSagaAsync(conn, dbType, Check).ConfigureAwait(false);
-await ProbeReleaseAsync(conn, dbType, Check).ConfigureAwait(false);
-await ProbeCheckpointAsync(conn, dbType, Check).ConfigureAwait(false);
-await ProbeInboxAsync(conn, dbType, Check).ConfigureAwait(false);
+// ═══ 六组件全链路 / Outbox 迁移量测 ═══
+if (migrationProbe)
+{
+    await OutboxMigrationProbe.RunAsync(conn, dbType, Check).ConfigureAwait(false);
+}
+else
+{
+    await ProbeOutboxAsync(conn, dbType, Check).ConfigureAwait(false);
+    await ProbeEventLogAsync(conn, dbType, Check).ConfigureAwait(false);
+    await ProbeIdempotencyAsync(conn, dbType, Check).ConfigureAwait(false);
+    await ProbeSagaAsync(conn, dbType, Check).ConfigureAwait(false);
+    await ProbeReleaseAsync(conn, dbType, Check).ConfigureAwait(false);
+    await ProbeCheckpointAsync(conn, dbType, Check).ConfigureAwait(false);
+    await ProbeInboxAsync(conn, dbType, Check).ConfigureAwait(false);
+}
 
 // ═══ 外部库清理 ═══
 if (external)

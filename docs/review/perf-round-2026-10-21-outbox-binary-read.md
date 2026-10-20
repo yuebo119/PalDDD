@@ -48,6 +48,11 @@
 - Dapper AOT 探针：PG/MySQL 各 32/32，新增“新建写可用时刻”“租约折叠”断言；
   NativeAOT SQLite 32/32。
 - 全量测试 1777 个，1700 通过、77 跳过、0 失败。
+- **100k 迁移复盘探针**（`--outbox-migration`，wslc PG/MySQL）：播种 90k 未来重试行在
+  `created_at` 头部、9k 无 `next` 到期行、1k 旧活跃租约；旧索引 + 旧谓词 → 回填 →
+  零违例校验 → 新索引 + 新谓词。PG 6.95ms → 0.34ms（20.15×），MySQL 196.91ms → 0.61ms
+  （324.82×）；EXPLAIN 均命中 `idx_outbox_due` 且无全表扫描。数值为 5 次中位数，
+  旧侧同时使用旧索引，属“迁移前/迁移后”组合口径，不是单谓词微基准。
 
 ## 3. EF EventLog 严格二进制投影
 
@@ -75,7 +80,6 @@
 
 | 项 | 原因 |
 |---|---|
-| PG/MySQL 真库 `EXPLAIN` 与 100k 积压 A/B | 需要独立基准车道与积压数据；迁移文档已给出 EXPLAIN 验收命令，CI 真库车道后续补 |
 | `event_id_bin` 改 `NOT NULL` 与 EF `IsRequired` | 属 M4 contract 阶段，须在全量回填、所有写入方升级后执行；当前严格读 + 预检已阻止静默错误 |
 | 文本 `event_id` 列删除 | 保留一个 major 作为旧版本兼容与诊断面 |
 
