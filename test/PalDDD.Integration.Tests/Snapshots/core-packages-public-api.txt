@@ -1128,7 +1128,7 @@ class PalDDD.PalORM.MySql.MySqlInboxStore
 class PalDDD.PalORM.MySql.MySqlOutboxStore
   ctor(PalORM.DataSession<PalORM.MySql.MySqlProvider> session, System.TimeProvider clock)
 static class PalDDD.PalORM.MySql.MySqlPalOrmExtensions
-  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOrmMySql(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.String connectionString, PalORM.DbOptions options, System.TimeProvider clock, System.Action<PalORM.DataSession<PalORM.MySql.MySqlProvider>> configureResilience, System.Int32 prewarmConnectionCount)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOrmMySql(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.String connectionString, PalORM.DbOptions options, System.TimeProvider clock, System.Action<PalORM.DataSession<PalORM.MySql.MySqlProvider>> configureResilience, System.Int32 prewarmConnectionCount, System.Boolean useSessionPool)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOrmMySqlSagaSnapshot(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState> jsonTypeInfo)
 class PalDDD.PalORM.MySql.MySqlPalOrmUnitOfWork
   ctor(PalORM.DataSession<PalORM.MySql.MySqlProvider> session)
@@ -1147,7 +1147,7 @@ class PalDDD.PalORM.PostgreSql.PostgreSqlInboxStore
 class PalDDD.PalORM.PostgreSql.PostgreSqlOutboxStore
   ctor(PalORM.DataSession<PalORM.PostgreSql.PostgreSqlProvider> session, System.TimeProvider clock)
 static class PalDDD.PalORM.PostgreSql.PostgreSqlPalOrmExtensions
-  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOrmPostgreSql(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.String connectionString, PalORM.DbOptions options, System.TimeProvider clock, System.Action<PalORM.DataSession<PalORM.PostgreSql.PostgreSqlProvider>> configureResilience, System.Int32 prewarmConnectionCount)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOrmPostgreSql(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.String connectionString, PalORM.DbOptions options, System.TimeProvider clock, System.Action<PalORM.DataSession<PalORM.PostgreSql.PostgreSqlProvider>> configureResilience, System.Int32 prewarmConnectionCount, System.Boolean useSessionPool)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOrmPostgreSqlSagaSnapshot(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState> jsonTypeInfo)
 class PalDDD.PalORM.PostgreSql.PostgreSqlPalOrmUnitOfWork
   ctor(PalORM.DataSession<PalORM.PostgreSql.PostgreSqlProvider> session)
@@ -1241,7 +1241,7 @@ static class PalDDD.PalORM.Sqlite.SqliteJson
 class PalDDD.PalORM.Sqlite.SqliteOutboxStore
   ctor(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session, System.TimeProvider clock)
 static class PalDDD.PalORM.Sqlite.SqlitePalOrmExtensions
-  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOrmSqlite(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.String connectionString, PalORM.DbOptions options, System.TimeProvider clock, System.Action<PalORM.DataSession<PalORM.Sqlite.SqliteProvider>> configureResilience, System.Int32 prewarmConnectionCount)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOrmSqlite(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.String connectionString, PalORM.DbOptions options, System.TimeProvider clock, System.Action<PalORM.DataSession<PalORM.Sqlite.SqliteProvider>> configureResilience, System.Int32 prewarmConnectionCount, System.Boolean useSessionPool)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOrmSqliteSagaSnapshot(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState> jsonTypeInfo)
 class PalDDD.PalORM.Sqlite.SqlitePalOrmUnitOfWork
   ctor(PalORM.DataSession<PalORM.Sqlite.SqliteProvider> session)

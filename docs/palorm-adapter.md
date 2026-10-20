@@ -101,9 +101,23 @@ services.AddPalOrmSqlite(connectionString);
 
 | 方言包 | DI 入口 | 方言特性 |
 |---|---|---|
-| `PalDDD.PalORM.Sqlite` | `AddPalOrmSqlite(services, cs, options?, clock?)` | 嵌入式基准路径，AOT 验证载体 |
-| `PalDDD.PalORM.PostgreSql` | `AddPalOrmPostgreSql(services, cs, options?, clock?)` | 支持 RETURNING —— Outbox LeasePending / Inbox TryStart 单语句原子路径（无两步回读）；BulkInsert 走 Npgsql Binary COPY |
-| `PalDDD.PalORM.MySql` | `AddPalOrmMySql(services, cs, options?, clock?)` | 不支持 RETURNING（两步 UPDATE+SELECT）；BulkInsert 检测 `local_infile` 系统变量自动选 BulkCopy 或多值 INSERT |
+| `PalDDD.PalORM.Sqlite` | `AddPalOrmSqlite(services, cs, options?, clock?)` | 嵌入式基准路径，AOT 验证载体；BulkInsert 默认 1000 行/批多值 INSERT |
+| `PalDDD.PalORM.PostgreSql` | `AddPalOrmPostgreSql(services, cs, options?, clock?)` | 支持 RETURNING —— Outbox LeasePending / Inbox TryStart 单语句原子路径（无两步回读）；BulkInsert 走 Npgsql Binary COPY（6.6.0 单参重载整段单次 COPY） |
+| `PalDDD.PalORM.MySql` | `AddPalOrmMySql(services, cs, options?, clock?)` | 不支持 RETURNING（两步 UPDATE+SELECT）；BulkInsert 检测 `local_infile` 系统变量自动选 BulkCopy 或多值 INSERT（默认 1000 行/批） |
+
+#### 4.1.1 会话池（PalORM 6.6.0 `IDataSessionFactory`，可选）
+
+`AddPalOrm{Sqlite,PostgreSql,MySql}` 尾参 `useSessionPool: true` 时注册单例
+`IDataSessionFactory<TProvider>`（默认实现 `DataSessionFactory<TProvider>`），Scoped
+`DataSession<TProvider>` 改由 `RentAsync` 租出、作用域释放时归还。归还复位瞬态配置
+（`WithTenant` / `IgnoreFilters` / `WithRetry` / `WithCircuitBreaker` / `AddInterceptor` 的租期内覆写），
+复用槽、读连接与构造税跨租期保留；空闲上限 16，超出部分归还时真实释放，不放大物理连接占用。
+默认 `false` 保持每作用域 `CreateAsync` 新建。
+
+- 适用形态：Web/API「一请求一会话」，即本适配器的默认 Scoped 生命周期。
+- SQLite `Data Source=:memory:`：池化连接跨请求存活，内存库不再每请求独立；依赖独立内存库的测试/场景保持 `false`。
+- 归还门禁：有未收口事务、在飞操作或未释放的并行读作用域时 `DisposeAsync` 抛出（上游契约），事务必须经 `IUnitOfWork` 收口。
+- 池化工厂只实现 `IAsyncDisposable`，根容器应使用 `DisposeAsync` 释放（与 `DataSession` 同款约束）。
 
 ### 4.2 Saga 快照持久化注册（saga_data 列）— 必读
 
@@ -241,4 +255,5 @@ ALTER TABLE outbox_messages ALTER COLUMN payload TYPE BYTEA USING decode(payload
 - `SqlitePalOrmExtensions.AddPalOrmSqlite(services, connectionString, options?, clock?)`
 - `PostgreSqlPalOrmExtensions.AddPalOrmPostgreSql(services, connectionString, options?, clock?)`
 - `MySqlPalOrmExtensions.AddPalOrmMySql(services, connectionString, options?, clock?)`
+- 三方言 `AddPalOrm*` 尾参：`configureResilience`（弹性层）、`prewarmConnectionCount`（启动预热）、`useSessionPool`（6.6.0 会话池，见 4.1.1）
 - 各方言包的 Saga 快照注册：`AddPalOrmSqliteSagaSnapshot<TState>` / `AddPalOrmPostgreSqlSagaSnapshot<TState>` / `AddPalOrmMySqlSagaSnapshot<TState>`（不调用则 saga_data 不持久化，见 4.2）

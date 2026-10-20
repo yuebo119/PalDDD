@@ -218,9 +218,11 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
         var rows = messages.Select(OutboxMessageRow.FromDomain).ToList();
-        // BulkInsertAsync 自动选方言最优路径（PG COPY / MySQL BulkCopy / SQLite 多值 INSERT）
+        // 6.6.0 单参重载：PG 取整段行数走单次 COPY（2 万行不再付 20 次 BeginBinaryImport/
+        // Complete），MySQL/SQLite 内部沿用 1000 批宽；需要限制单次 COPY/事务持锁行数时用
+        // 带 batchSize 的重载（本 store 的批量入口由调用方控制单次列表大小）。
         // v4.0 ④（ADR-026）：ct 传播进批量路径
-        return (int)await Session.BulkInsertAsync(rows, batchSize: 1000, ct: ct).ConfigureAwait(false);
+        return (int)await Session.BulkInsertAsync(rows, ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc />

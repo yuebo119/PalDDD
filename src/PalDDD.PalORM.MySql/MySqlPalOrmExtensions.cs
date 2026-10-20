@@ -25,10 +25,12 @@ public static class MySqlPalOrmExtensions
     /// <summary>
     /// 注册 PalORM MySQL 适配包。
     /// <para>
-    /// <b>DI 工厂 sync-over-async（ITM-166 声明）</b>：<see cref="DataSession{TProvider}"/>.<c>CreateAsync</c>
-    /// 是异步方法，DI 工厂是同步的——用 <c>GetAwaiter().GetResult()</c> 同步阻塞。仅在 Scoped
-    /// 解析时执行（请求起始），非热路径；与 SQLite/PG 版 PalOrmExtensions 同款声明，如未来
-    /// 死锁可改为 <c>Task.Run().Result</c> 或建议 PalORM 提供 IDataSessionFactory。
+    /// <b>DI 工厂 sync-over-async（ITM-166 声明）</b>：默认路径
+    /// <see cref="DataSession{TProvider}"/>.<c>CreateAsync</c> 是异步方法，DI 工厂是同步的——
+    /// 用 <c>GetAwaiter().GetResult()</c> 同步阻塞。仅在 Scoped 解析时执行（请求起始），非热路径；
+    /// 与 SQLite/PG 版 PalOrmExtensions 同款声明。启用 <paramref name="useSessionPool"/> 后改经
+    /// <c>IDataSessionFactory&lt;TProvider&gt;.RentAsync</c> 租出：池内有空闲会话时同步完成，
+    /// 空池冷启动仍付一次建连成本（PalORM 6.6.0 新 API）。
     /// </para>
     /// </summary>
     /// <param name="services">DI 容器。</param>
@@ -41,12 +43,12 @@ public static class MySqlPalOrmExtensions
     /// </param>
     /// <param name="clock">可选时间提供者。</param>
     /// <param name="configureResilience">
-    /// 可选弹性配置回调（PalORM 5.4 弹性层）——CreateAsync 后对会话调用，如
+    /// 可选弹性配置回调（PalORM 5.4 弹性层）——CreateAsync/RentAsync 后对会话调用，如
     /// <c>s => s.WithRetry(3, i => TimeSpan.FromMilliseconds(50 * i))</c> 与
     /// <c>s => s.WithCircuitBreaker(5, TimeSpan.FromSeconds(30))</c>。作用域为连接建立 +
     /// 只读查询内置管线（SELECT/Get/聚合）；写入路径与事务内查询维持直连（非幂等写不重试）。
     /// null（默认）= 弹性直通，热路径零额外开销。
-    /// <para>v53 P3 次序语义：DI 工厂中 CreateAsync 先于回调执行，本会话的<b>首个连接建立</b>
+    /// <para>v53 P3 次序语义：DI 工厂中创建/租出先于回调执行，本会话的<b>首个连接建立</b>
     /// 永远发生在弹性配置之前（连接重试是 CreateAsync 自有循环）——回调配置的连接重试
     /// 仅对后续重连生效，首个连接使用 DbOptions 默认弹性。</para>
     /// <para>⚠️ 熔断作用域声明（2026-09-25 特性审计，上游 6.6.0 XML 契约，2026-10-20 升位复核）：本仓 DataSession
@@ -63,13 +65,21 @@ public static class MySqlPalOrmExtensions
     /// 失败降级启动（记 Warning，不炸 host）。生产场景与 <c>options.MinPoolSize</c> 配合
     /// （只预热不设下限会被空闲修剪清空，上游 XML 明示）。
     /// </param>
+    /// <param name="useSessionPool">
+    /// 是否用 PalORM 6.6.0 的 <c>IDataSessionFactory&lt;TProvider&gt;</c> 会话池承载 Scoped
+    /// DataSession（默认 false，保持每作用域 <c>CreateAsync</c> 新建）。true 时注册单例
+    /// <c>DataSessionFactory&lt;TProvider&gt;</c>，Scoped 解析经 <c>RentAsync</c> 租出、作用域
+    /// 释放时归还；归还复位瞬态配置（WithTenant/WithRetry 等），复用槽/读连接跨租期保留。
+    /// 池化工厂仅实现 IAsyncDisposable，宿主应使用 DisposeAsync 释放根容器。
+    /// </param>
     public static IServiceCollection AddPalOrmMySql(
         this IServiceCollection services,
         string connectionString,
         DbOptions? options = null,
         TimeProvider? clock = null,
         Action<DataSession<MySqlProvider>>? configureResilience = null,
-        int prewarmConnectionCount = 0)
+        int prewarmConnectionCount = 0,
+        bool useSessionPool = false)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
@@ -79,10 +89,9 @@ public static class MySqlPalOrmExtensions
         // 会话的底层池上，预热才有效）
         var resolvedOptions = options ?? DbOptions.Development(connectionString);
 
-        services.AddScoped(sp =>
+        // 会话创建后统一应用弹性回调；回调异常时释放已打开的会话（v53 P2 / v54 P3）。
+        DataSession<MySqlProvider> ApplyResilience(DataSession<MySqlProvider> session)
         {
-            var session = DataSession<MySqlProvider>.CreateAsync(resolvedOptions, default).GetAwaiter().GetResult();
-            // v53 P2：回调异常时释放已打开的会话（三 Provider 同款，见 Sqlite 版注释）
             try
             {
                 configureResilience?.Invoke(session);
@@ -90,12 +99,24 @@ public static class MySqlPalOrmExtensions
             }
             catch
             {
-                // v54 P3：dispose 失败不得掩盖原始异常（回调异常才是根因）——
-                // DisposeQuietly 吞掉 dispose 次要异常保根因上抛
                 DisposeQuietly(session);
                 throw;
             }
-        });
+        }
+
+        if (useSessionPool)
+        {
+            services.TryAddSingleton<IDataSessionFactory<MySqlProvider>>(
+                _ => new DataSessionFactory<MySqlProvider>(resolvedOptions));
+            services.AddScoped(sp => ApplyResilience(
+                sp.GetRequiredService<IDataSessionFactory<MySqlProvider>>()
+                    .RentAsync(default).AsTask().GetAwaiter().GetResult()));
+        }
+        else
+        {
+            services.AddScoped(sp => ApplyResilience(
+                DataSession<MySqlProvider>.CreateAsync(resolvedOptions, default).GetAwaiter().GetResult()));
+        }
 
         // P2 修复（八轮评审）：改 TryAddSingleton 对齐 Sqlite 版（SqlitePalOrmExtensions）——
         // AddSingleton(clock ?? System) 会覆盖用户先注册的 TimeProvider（如测试注入
