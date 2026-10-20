@@ -47,15 +47,16 @@ EF/Dapper/PalORM 双写；读取默认文本，`UseBinaryEventId=true` 切二进
 | 验证面板 | Transactions 234、PalORM 114（54 跳过）、Integration 413（14 跳过）、Messaging.Integration 18/18、EventLog 44 | ☑ |
 | M1/M4 真库探针 | bench/PalDDD.Benchmarks/MigrationProbes.cs；PG/MySQL M1 due=1/active=2；M4 500/500 回填、sample=10、read=10 | ☑ |
 | M2/M3 量具 | bench/PalDDD.Benchmarks/ProjectionProbe.cs、RabbitChannelProbe.cs；M2 100k 检查点调用 200,000→2,000；M3 isolation 快订阅 p99 30.8s→0.70ms | ☑ |
+| M1/M4 规模演练 | 2026-10-20：M1 10k 活跃 Saga（PG/MySQL）p99 2.0s、max 2.1s，阈值 4s；M4 100k 行回填 PG 41.0s / MySQL 32.0s，索引体积下降 PG 59.2% / MySQL 22.1% | ☑ |
 | 迁移文档 | docs/migration/saga-next-check-at.md、projection-batch-checkpoints.md、rabbitmq-channel-topology.md、event-id-binary-column.md | ☑ |
 
 ## 开放决策点
 
 | # | 决策点 | 状态 | 触发条件 |
 |---|--------|------|----------|
-| 1 | M1 切换 `EnableDueTimeFilter=true` | 演练通过（PG/MySQL）；生产默认仍 false | 存量活跃行回填完成、10k 活跃压测尾部超时 ≤ 2 个轮询周期 |
+| 1 | M1 切换 `EnableDueTimeFilter=true` | 演练通过（PG/MySQL，含 10k 活跃尾部 ≤2 轮询周期）；生产默认仍 false | 存量活跃行回填完成、10k 活跃压测尾部超时 ≤ 2 个轮询周期 |
 | 2 | M1 收缩旧全量扫描分支 | 未实施 | 下一发布窗口 |
 | 3 | M2 组内部分提交/时间界冲刷 | 未实施 | 组内处理时长接近 processingTimeout，或消费方要求更细的续读粒度 |
 | 4 | M3 1/4/8 订阅压测与单 channel 对照 | 完成（2026-10-19 本机真 broker 两场景） | 拓扑/客户端版本变更，或生产消费者延迟分布显著变化时复测 |
-| 5 | M4 应用侧回填与二进制唯一索引 | 演练通过（PG/MySQL，500 行）；生产库待执行 | 生产库迁移窗口 |
+| 5 | M4 应用侧回填与二进制唯一索引 | 演练通过（PG/MySQL，100k 行；体积下降 PG 59.2% / MySQL 22.1%）；生产库待执行 | 生产库迁移窗口 |
 | 6 | M4 收缩停写文本列 | 未实施 | 回填完成 + 一个 major 兼容期 |

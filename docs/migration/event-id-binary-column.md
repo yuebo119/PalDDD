@@ -118,3 +118,27 @@ PG `seeded=500, backfilled=500, sample=10, read=10, elapsed=1095ms`；MySQL
 `Invalid attempt to read from column ordinal`。改为 `SingleResult` 后仍逐行流式
 （不物化全部行），允许行内随机列访问。
 
+## 10 万行规模演练（2026-10-20）
+
+```bash
+# PALDDD_BENCH_PG_CONN / PALDDD_BENCH_MYSQL_CONN 由环境注入（库名须 palddd_bench 前缀）
+dotnet run -c Release --project bench/PalDDD.Benchmarks -- --m4-scale-pg
+dotnet run -c Release --project bench/PalDDD.Benchmarks -- --m4-scale-mysql
+```
+
+口径：10 万条旧行（`event_id_bin IS NULL`），1,000 行一批、应用侧
+`Ulid.Parse(...).ToByteArray()` 回填，每批一个事务；回填后删除并重建二进制唯一索引，
+测量索引体积。体积来自 PG `pg_relation_size` / MySQL `mysql.innodb_index_stats`
+（`stat_name='size'` × 页大小），包含库内既有行。
+
+| 方言 | seeded | backfilled | insert | backfill | index | text idx | bin idx | 体积下降 |
+|---|---|---|---|---|---|---|---|---|
+| PostgreSQL | 100,000 | 100,000 | 23,570ms | 41,031ms | 42ms | 10,010,624B | 4,087,808B | 59.2% |
+| MySQL | 100,000 | 100,000 | 29,258ms | 31,956ms | 398ms | 4,734,976B | 3,686,400B | 22.1% |
+
+原计划验收写「1M 行索引大小下降约 2/3」，实测 10 万行 PG 为 59.2%、MySQL 为 22.1%，
+2/3 不成立。MySQL 的 InnoDB 二级索引每项都带主键与页开销，26 字符文本与 16 字节二进制
+的差距被摊薄；收益按方言登记，不再统一宣称 2/3。回填吞吐约 2.4k~3.1k 行/s（单连接、
+逐行 UPDATE、1,000 行/事务），可用于估算生产窗口。insert 耗时是逐行播种成本，
+不代表生产写入性能。
+

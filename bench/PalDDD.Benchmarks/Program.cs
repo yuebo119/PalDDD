@@ -268,6 +268,19 @@ if (args.Contains("--m1-probe-pg", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--m1-probe-mysql", StringComparer.OrdinalIgnoreCase))
     return await MigrationProbes.RunM1Async(postgreSql: false);
 
+// 生产窗口规模演练（2026-10-20）：M1 10k 活跃 Saga 尾部延迟；M4 10 万行回填与索引体积。
+if (args.Contains("--m1-load-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM1LoadAsync(postgreSql: true);
+
+if (args.Contains("--m1-load-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM1LoadAsync(postgreSql: false);
+
+if (args.Contains("--m4-scale-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM4ScaleAsync(postgreSql: true);
+
+if (args.Contains("--m4-scale-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunM4ScaleAsync(postgreSql: false);
+
 if (args.Contains("--m4-probe-pg", StringComparer.OrdinalIgnoreCase))
     return await MigrationProbes.RunM4Async(postgreSql: true);
 
