@@ -152,6 +152,25 @@ public class PalOrmOutboxStoreTests
     }
 
     [Test]
+    public async Task Outbox_AddMessagesAsync_LargeBatch_DefaultBatchWidth()
+    {
+        // 6.6.0 单参重载：SQLite/MySQL 内部 1000 批宽分块，PG 整段单 COPY。
+        // 1001 行跨过 SQLite 首块边界，锁定「不因批宽切换丢行」。
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteOutboxStore(session);
+
+        var messages = Enumerable.Range(0, 1001)
+            .Select(i => CreateOutboxMessage($"bulk.large.{i}"))
+            .ToList();
+
+        var count = await store.AddMessagesAsync(messages);
+        await Assert.That(count).IsEqualTo(1001);
+
+        var pending = await store.GetPendingMessagesAsync(2000, 10, default);
+        await Assert.That(pending).Count().IsEqualTo(1001);
+    }
+
+    [Test]
     public async Task Outbox_AddMessagesAsync_EmptyList()
     {
         await using var session = await PalOrmStoreFixture.CreateAsync();
