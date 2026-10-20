@@ -708,10 +708,22 @@ public sealed class DapperEventLog : IEventLog
     /// </summary>
     private static RecordedEvent ReadRecordedEvent(DbDataReader reader, in ReadOrdinals o, bool useBinaryEventId)
     {
-        // SequentialAccess 要求按列序单调读取；必须先 0..16 顺序读完全部列，再构造对象。
+        // SingleResult 允许行内随机列访问；按 ID 模式只取实际使用的列：
+        // 二进制模式回填行跳过 26 字符文本分配，文本模式跳过 16B 二进制读取。
+        // 二进制列 NULL（未回填/旧行）时才回退读文本列。
         var globalPosition = reader.GetInt64(o.GlobalPosition);
-        var eventIdText = reader.GetString(o.EventId);
-        var eventIdBin = reader.IsDBNull(o.EventIdBin) ? null : reader.GetFieldValue<byte[]>(o.EventIdBin);
+        byte[]? eventIdBin = null;
+        string? eventIdText = null;
+        if (useBinaryEventId)
+        {
+            eventIdBin = reader.IsDBNull(o.EventIdBin) ? null : reader.GetFieldValue<byte[]>(o.EventIdBin);
+            if (eventIdBin is not { Length: 16 })
+                eventIdText = reader.GetString(o.EventId);
+        }
+        else
+        {
+            eventIdText = reader.GetString(o.EventId);
+        }
         var eventName = reader.GetString(o.EventName);
         var streamName = reader.GetString(o.StreamName);
         var streamVersion = reader.GetInt64(o.StreamVersion);
@@ -736,9 +748,9 @@ public sealed class DapperEventLog : IEventLog
                 ? EventAuditMetadata.Empty
                 : new EventAuditMetadata(actorId, reason, correlationId, causationId, traceParent, traceState);
 
-        var eventId = useBinaryEventId && eventIdBin is { Length: 16 }
+        var eventId = eventIdBin is { Length: 16 }
             ? PalUlid.New(eventIdBin)
-            : PalUlid.Parse(eventIdText);
+            : PalUlid.Parse(eventIdText!);
 
         return RecordedEvent.RehydrateFromBytes(
             streamName,

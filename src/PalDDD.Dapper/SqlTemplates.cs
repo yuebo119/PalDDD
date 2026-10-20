@@ -393,13 +393,13 @@ public static class SqlTemplates
         "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)";
 
     public const string SagaLeaseActiveDuePGReturning =
-        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY next_check_at, created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
 
     public const string SagaLeaseActiveDueSqliteReturning =
-        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n) RETURNING *";
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY next_check_at, created_at LIMIT @n) RETURNING *";
 
     public const string SagaLeaseActiveDueMySql =
-        "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1";
+        "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY next_check_at, created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1";
 
     /// <summary>
     /// 按本次租约回读刚获取的 Saga。<br/>

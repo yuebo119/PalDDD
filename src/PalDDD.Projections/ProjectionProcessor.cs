@@ -29,14 +29,15 @@ public sealed class ProjectionProcessor<TMessage>
     // listener 时静默）；可选参数默认 null 向后兼容，DI 注册处无需改动
     private readonly IPalLogger<ProjectionProcessor<TMessage>>? _logger;
 
-    private int _checkpointBatchSize = 1;
+    private int _checkpointBatchSize = 100;
 
     /// <summary>
-    /// 检查点批量大小（2026-10-19 M2）：1 = 逐事件检查点（旧行为）；N&gt;1 时由
-    /// <see cref="ProjectionRebuilder{TMessage}"/> 按 N 条一组调用
-    /// <see cref="ProcessBatchAsync"/>，组内只在最后位置做一次租约/完成写。
+    /// 检查点批量大小：100 = 回放默认按 100 条一组提交（在线逐消息路径不受影响）；
+    /// 设为 1 恢复逐事件检查点。N&gt;1 时由 <see cref="ProjectionRebuilder{TMessage}"/>
+    /// 按 N 条一组调用 <see cref="ProcessBatchAsync"/>，组内只在最后位置做一次租约/完成写。
     /// 崩溃后最多重放 N 条；投影 handler 必须幂等（既有 at-least-once 契约）。
-    /// 组内处理时长必须小于 processingTimeout，否则租约可能过期被并行接管。
+    /// 组内处理时长必须小于 processingTimeout；回放侧另有时间界冲刷，避免慢 handler
+    /// 让单组超过租约。
     /// </summary>
     public int CheckpointBatchSize
     {

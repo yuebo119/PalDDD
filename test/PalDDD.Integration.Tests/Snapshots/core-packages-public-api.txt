@@ -396,10 +396,10 @@ static class PalDDD.Dapper.SqlTemplates
   field const System.String SagaInsertPG = INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,next_check_at,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,CAST(@data AS jsonb),@nextCheckAt,@leasedBy,@leasedUntil)
   field const System.String SagaLeaseActive = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n)
   field const System.String SagaLeaseActiveDue = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n)
-  field const System.String SagaLeaseActiveDueMySql = UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1
+  field const System.String SagaLeaseActiveDueMySql = UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY next_check_at, created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1
   field const System.String SagaLeaseActiveDuePG = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)
-  field const System.String SagaLeaseActiveDuePGReturning = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *
-  field const System.String SagaLeaseActiveDueSqliteReturning = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY created_at LIMIT @n) RETURNING *
+  field const System.String SagaLeaseActiveDuePGReturning = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY next_check_at, created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *
+  field const System.String SagaLeaseActiveDueSqliteReturning = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND next_check_at IS NOT NULL AND next_check_at <= @now ORDER BY next_check_at, created_at LIMIT @n) RETURNING *
   field const System.String SagaLeaseActiveMySql = UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1
   field const System.String SagaLeaseActivePG = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)
   field const System.String SagaLeaseActivePGReturning = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *
@@ -828,6 +828,8 @@ class PalDDD.Hosting.AspNetCore.StreamRunCapacityExceededException
   ctor(System.String message, System.Exception innerException)
 
 # PalDDD.Idempotency
+interface PalDDD.Idempotency.IIdempotencyStartOrGetStore
+  method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyStartResult> StartOrGetAsync(System.String operationName, System.String key, System.DateTimeOffset now, PalDDD.Idempotency.IdempotencyPolicy policy, System.Threading.CancellationToken ct)
 interface PalDDD.Idempotency.IIdempotencyStore
   method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyRecord> GetAsync(System.String operationName, System.String key, System.DateTimeOffset now, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Idempotency.IdempotencyRecord record, System.ReadOnlyMemory<System.Byte> responsePayload, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)
@@ -881,11 +883,26 @@ enum PalDDD.Idempotency.IdempotencyRecordStatus
   field const PalDDD.Idempotency.IdempotencyRecordStatus Failed = 2
   field const PalDDD.Idempotency.IdempotencyRecordStatus Processing = 0
   field System.Int32 value__
+enum PalDDD.Idempotency.IdempotencyStartOutcome
+  field const PalDDD.Idempotency.IdempotencyStartOutcome Contended = 2
+  field const PalDDD.Idempotency.IdempotencyStartOutcome Existing = 1
+  field const PalDDD.Idempotency.IdempotencyStartOutcome Started = 0
+  field System.Int32 value__
+struct PalDDD.Idempotency.IdempotencyStartResult
+  ctor(PalDDD.Idempotency.IdempotencyStartOutcome Outcome, PalDDD.Idempotency.IdempotencyRecord Record)
+  property PalDDD.Idempotency.IdempotencyStartOutcome Outcome [init]
+  property PalDDD.Idempotency.IdempotencyRecord Record [init]
+  method System.Void Deconstruct(PalDDD.Idempotency.IdempotencyStartOutcome& Outcome, PalDDD.Idempotency.IdempotencyRecord& Record)
+  method System.Boolean Equals(PalDDD.Idempotency.IdempotencyStartResult other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
 class PalDDD.Idempotency.InMemoryIdempotencyStore
   ctor()
   method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyRecord> GetAsync(System.String operationName, System.String key, System.DateTimeOffset now, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Idempotency.IdempotencyRecord record, System.ReadOnlyMemory<System.Byte> responsePayload, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Idempotency.IdempotencyRecord record, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyStartResult> StartOrGetAsync(System.String operationName, System.String key, System.DateTimeOffset now, PalDDD.Idempotency.IdempotencyPolicy policy, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyRecord> TryStartAsync(System.String operationName, System.String key, System.DateTimeOffset now, PalDDD.Idempotency.IdempotencyPolicy policy, System.Threading.CancellationToken ct)
 
 # PalDDD.Idempotency.EFCore
@@ -894,6 +911,7 @@ class PalDDD.Idempotency.IdempotencyDbContext
   method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyRecord> GetAsync(System.String operationName, System.String key, System.DateTimeOffset now, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Idempotency.IdempotencyRecord record, System.ReadOnlyMemory<System.Byte> responsePayload, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Idempotency.IdempotencyRecord record, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyStartResult> StartOrGetAsync(System.String operationName, System.String key, System.DateTimeOffset now, PalDDD.Idempotency.IdempotencyPolicy policy, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyRecord> TryStartAsync(System.String operationName, System.String key, System.DateTimeOffset now, PalDDD.Idempotency.IdempotencyPolicy policy, System.Threading.CancellationToken ct)
 static class PalDDD.Idempotency.ServiceCollectionExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalIdempotencyEfCore(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
@@ -969,6 +987,7 @@ class PalDDD.Messaging.Kafka.KafkaBroker
 # PalDDD.Messaging.RabbitMQ
 class PalDDD.Messaging.RabbitMQ.RabbitMqBroker
   ctor(RabbitMQ.Client.IConnection connection, RabbitMQ.Client.IChannel channel, PalDDD.Core.Logging.IPalLogger<PalDDD.Messaging.RabbitMQ.RabbitMqBroker> logger, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog, System.UInt16 prefetchCount)
+  property System.Nullable<System.UInt16> ConsumerDispatchConcurrency
   property System.Boolean SupportsConcurrentPublish
   property System.Boolean SupportsRawPublish
   property System.Boolean UseSharedConsumerChannel [init]
@@ -1293,6 +1312,8 @@ class PalDDD.Projections.ProjectionProcessor<TMessage>
   method System.Threading.Tasks.ValueTask<System.Int32> ProcessBatchAsync(System.Collections.Generic.IReadOnlyList<System.ValueTuple<TMessage, PalDDD.Projections.ProjectionContext>> batch, System.Threading.CancellationToken ct)
 class PalDDD.Projections.ProjectionRebuilder<TMessage>
   ctor(System.String projectionName, System.String sourceName, PalDDD.Projections.IEventReplaySource<TMessage> replaySource, PalDDD.Projections.IProjectionCheckpointStore checkpointStore, PalDDD.Projections.ProjectionProcessor<TMessage> processor)
+  property System.TimeSpan CheckpointFlushInterval
+  property System.TimeProvider TimeProvider
   method System.Threading.Tasks.ValueTask<System.Int32> RebuildAsync(System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> ReplayAsync(System.Threading.CancellationToken ct)
 struct PalDDD.Projections.ReplayAuditMetadata

@@ -11,6 +11,23 @@ using System.Text;
 public sealed class IdempotencyTests
 {
     [Test]
+    public async Task InMemory_StartOrGet_CompletedRecord_ReturnsExistingWithoutRestart()
+    {
+        var store = new InMemoryIdempotencyStore();
+        var now = DateTimeOffset.UtcNow;
+        var started = await store.StartOrGetAsync("op", "k", now, IdempotencyPolicy.Default);
+        await Assert.That(started.Outcome).IsEqualTo(IdempotencyStartOutcome.Started);
+        var record = started.Record ?? throw new InvalidOperationException("started record missing");
+        await store.MarkCompletedAsync(record, new byte[] { 1, 2, 3 }, now);
+        await Assert.That(record.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
+
+        var existing = await store.StartOrGetAsync("op", "k", now, IdempotencyPolicy.Default);
+
+        await Assert.That(existing.Outcome).IsEqualTo(IdempotencyStartOutcome.Existing);
+        await Assert.That(existing.Record!.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
+    }
+
+    [Test]
     public async Task ExecuteAsync_EmitsIdempotencyActivityWhenExecuted(CancellationToken cancellationToken)
     {
         using var listener = new RecordingActivityListener();

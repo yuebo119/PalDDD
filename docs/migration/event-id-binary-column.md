@@ -83,6 +83,11 @@ palOrmLog.UseBinaryEventId = true;    // PalORM
 读取路径在 `event_id_bin` 为 NULL（未回填/旧行）时仍回退文本列，因此切换不必等待
 全量回填完成，但未回填行不会获得索引变窄的收益。
 
+2026-10-20：Dapper 流式读取按 `UseBinaryEventId` 只解码实际需要的 ID 列——
+二进制模式回填行跳过 26 字符文本分配，文本模式跳过 16 字节二进制读取；二进制列为
+NULL 时才回退读文本。EF/PalORM 读取仍是实体/行全列物化，列裁剪待各自 provider
+真库车道。
+
 ## 验收
 
 - 新追加行 `event_id_bin` 非 NULL 且长度 16；文本列同时写入（双写）。

@@ -130,10 +130,18 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
             // 等值比较（Status）可翻译，LeasedUntil <= now 改物化后内存过滤，OrderBy 改 SagaId
             .Where(s => s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision);
             if (dueBefore is { } due)
-                query = query.Where(s => s.NextCheckAt != null && s.NextCheckAt <= due);
+            {
+                query = query
+                    .Where(s => s.NextCheckAt != null && s.NextCheckAt <= due)
+                    .OrderBy(s => s.NextCheckAt)
+                    .ThenBy(s => s.SagaId);
+            }
+            else
+            {
+                query = query.OrderBy(s => s.SagaId);
+            }
 
             var page = await query
-                .OrderBy(s => s.SagaId)
                 .Skip(skip).Take(batchSize)
                 .ToListAsync(ct).ConfigureAwait(false);
             if (page.Count == 0) break;

@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using PalDDD.Dapper;
 using PalDDD.Projections;
+using PalDDD.Testing;
 using System.Data.Common;
 using System.Globalization;
 
@@ -96,7 +97,7 @@ public sealed class RebuilderResumeTests
     {
         var store = new InMemoryProjectionCheckpointStore();
         var handler = new CountingResumeHandler();
-        var processor = new ProjectionProcessor<ResumeEvent>(handler, store);
+        var processor = new ProjectionProcessor<ResumeEvent>(handler, store) { CheckpointBatchSize = 1 };
         // 检查点前置状态：0..4 完成、5 失败、6 完成；事件流 0..8
         for (var i = 0; i <= 4; i++)
             await SeedAsync(store, i.ToString(), completed: true);
@@ -160,6 +161,35 @@ public sealed class RebuilderResumeTests
     }
 
     [Test]
+    public async Task ReplayAsync_TimeBoundFlush_CommitsPartialBatch()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
+        var store = new InMemoryProjectionCheckpointStore();
+        var handler = new CountingResumeHandler();
+        // 默认批量 100：本测试靠 1 秒时间界提前提交，证明慢回放不会攒满批。
+        var processor = new ProjectionProcessor<ResumeEvent>(handler, store);
+        List<ReplayEvent<ResumeEvent>> events = [];
+        for (var i = 0; i <= 9; i++)
+            events.Add(new ReplayEvent<ResumeEvent>("orders", i.ToString(), DateTimeOffset.UnixEpoch.AddSeconds(i), new ResumeEvent()));
+        var source = new TimeAdvancingSource(events, time, TimeSpan.FromSeconds(1));
+        var rebuilder = new ProjectionRebuilder<ResumeEvent>(
+            handler.ProjectionName, "orders", source, store, processor)
+        {
+            TimeProvider = time,
+            CheckpointFlushInterval = TimeSpan.FromSeconds(1),
+        };
+
+        var processed = await rebuilder.ReplayAsync(CancellationToken.None);
+
+        await Assert.That(processor.CheckpointBatchSize).IsEqualTo(100);
+        await Assert.That(processed).IsEqualTo(10);
+        await Assert.That(handler.Count).IsEqualTo(10);
+        // 两项各推进 1s：第二项到达时距组首满 1s，触发时间界提交位置 1。
+        var partial = await store.GetAsync("order-summary", "orders", "1", CancellationToken.None);
+        await Assert.That(partial!.Status).IsEqualTo(ProjectionCheckpointStatus.Completed);
+    }
+
+    [Test]
     public async Task ReplayAsync_BatchFailure_ResumesFromGroupStartNotAfterGroup()
     {
         var store = new InMemoryProjectionCheckpointStore();
@@ -217,6 +247,28 @@ public sealed class RebuilderResumeTests
             => context.Position == failAt
                 ? throw new InvalidOperationException("simulated projection failure")
                 : ValueTask.CompletedTask;
+    }
+
+    /// <summary>每次产出前推进 FakeTimeProvider，驱动回放的时间界冲刷。</summary>
+    private sealed class TimeAdvancingSource(
+        IReadOnlyList<ReplayEvent<ResumeEvent>> events,
+        FakeTimeProvider time,
+        TimeSpan step) : IEventReplaySource<ResumeEvent>
+    {
+        public async IAsyncEnumerable<ReplayEvent<ResumeEvent>> ReadAsync(
+            string sourceName,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            foreach (var @event in events)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (@event.SourceName != sourceName)
+                    continue;
+                time.Advance(step);
+                yield return @event;
+                await Task.Yield();
+            }
+        }
     }
 
     /// <summary>续读可观测桩——记录请求的 fromPosition 与实际产出事件数（OfferedCount）。</summary>
