@@ -7,7 +7,7 @@
 
 | 维度 | 现状 | 说明 |
 | --- | --- | --- |
-| 基准覆盖 | **37 类**（2026-10-18 口径：Framework 5 + App 2 + Feature 5 + Infra 7 + Persistence 4 + SagaLane 1 + Concurrency 2 + Remote 5 + Delivery 3 + Comparison 2 + Stream 1） | 单一真源 = `bench/PalDDD.Benchmarks/*.cs` 的 `*Benchmarks` 类；入口路由见 `Program.cs`。特性面缺口见 performance.md「未完成项」 |
+| 基准覆盖 | **38 类**（2026-10-21 口径：Framework 5 + App 2 + Feature 5 + Infra 7 + Persistence 4 + SagaLane 1 + Concurrency 2 + Remote 5 + Delivery 4 + Comparison 2 + Stream 1） | 单一真源 = `bench/PalDDD.Benchmarks/*.cs` 的 `*Benchmarks` 类；入口路由见 `Program.cs`。特性面缺口见 performance.md「未完成项」 |
 | 真库车道 | PG / MySQL（wslc 外部实例）/ SQLite（单写者） | 并发形态分化已知：PG 真并行 ~2.8× / MySQL N≥2 死锁（ADR-024 实证）/ SQLite busy 25× |
 
 ## 2. SLO 预算（分配为判定层，计时只作趋势层——两轮跨 SDK 实证）
