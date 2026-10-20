@@ -20,7 +20,7 @@
 | Outbox 租约索引对齐谓词 | `docs/sql/{postgresql,sqlite}/000_schema.sql` 部分索引 `(created_at) WHERE status=0`；MySQL `(status, created_at)`；EF 模型 `(Status, CreatedAt)` | 真库 `EXPLAIN (ANALYZE, BUFFERS)` 前后对照；迁移脚本含 `CONCURRENTLY` 与回滚 |
 | EventLog 冗余索引移除 | 四个 DDL 删除 `idx_events_global`（`global_position` 主键已覆盖） | DDL 审阅；ReadAll 仍走主键 |
 | M4 收缩配方 | `docs/sql/migration-2026-10-20-performance-indexes.md` 增加回填校验、二进制唯一索引、文本唯一索引删除与回滚 | 文档步骤；未自动执行 |
-| EF Saga 租约下推 | `SagaStateDbContext` PG 子查询 `FOR UPDATE SKIP LOCKED` + 等值回读，MySQL JOIN 派生表按版本启用 SKIP LOCKED，SQLite 原路径保持 | EF 测试 15/15；PG 真库（Npgsql EF 11 preview 6）四形态 7/7；MySQL SQL 形态直接执行 4/0/2 通过（EF MySQL provider 本机缺失） |
+| EF Saga 租约下推 | `SagaStateDbContext` PG 子查询 `FOR UPDATE SKIP LOCKED` + 等值回读，MySQL JOIN 派生表按版本启用 SKIP LOCKED，SQLite 原路径保持 | EF 测试 15/15；PG 真库（Npgsql EF 11 preview 6）8/8（含 `ExecutedStepKeys` 往返）；MySQL SQL 形态直接执行 4/0/2 通过（EF MySQL provider 本机缺失） |
 | Dapper EventLog PG 多条原子追加 | `DapperEventLog.AppendEventBatchPostgreSqlAtomicAsync`：`INSERT ... SELECT ... FROM (VALUES ...) WHERE 版本守卫 RETURNING`，Any 保持预检路径 | PG 真库探针新增 4 断言，22/22 通过 |
 | EF 幂等 INSERT 优先 | 关系型 provider 先 INSERT，冲突再回读；InMemory 保持 SELECT 优先 | Integration 417 通过 / 14 跳过 |
 | Dapper 幂等连接与载荷 | 显式开连接；精确数组响应载荷直接绑定 | Integration 全绿 |
@@ -43,8 +43,8 @@
 
 ## 4 残余风险
 
-- EF 栈 PG 新租约 SQL 已用 Npgsql EF 11 preview 6 在 PG 18.6 真库跑通四形态：首次租约 4 行、二次租约 0 行、到期过滤 2 行、租约后跟踪保存与完成态持久化。MySQL 全栈真库未执行（本机无匹配 EF MySQL provider），但 UPDATE/回读的等价 SQL 在 MySQL 8.4.11 直接执行，三形态 4/0/2 通过。
-- **Npgsql EF provider 兼容问题（新发现）**：`SagaState.ExecutedStepKeys` 声明为 `Collection<string>` 并配置为 `PrimitiveCollection`，Npgsql EF 11 preview 6 物化时返回 `List<string>`，EF 抛 `InvalidCastException`。探针忽略该列后租约四形态全过，说明问题独立于本轮租约 SQL；影响任何 EF PG/MySQL 读取 `SagaState` 的路径。修复需把属性改为 `List<string>` 或提供等价的模型级转换，属公共 API/模型契约变更，留待 v5.0 窗口并补 PG/MySQL 回归。
+- EF 栈 PG 新租约 SQL 已用 Npgsql EF 11 preview 6 在 PG 18.6 真库跑通四形态 8/8（含 `ExecutedStepKeys = ["Start","Step1"]` 往返）：首次租约 4 行、二次租约 0 行、到期过滤 2 行、租约后跟踪保存与完成态持久化。MySQL 全栈真库未执行（本机无匹配 EF MySQL provider），但 UPDATE/回读的等价 SQL 在 MySQL 8.4.11 直接执行，三形态 4/0/2 通过。
+- **Npgsql EF provider 兼容问题（已修复，ADR-035）**：`SagaState.ExecutedStepKeys` 由 `Collection<string>` 改为 `List<string>`，与 provider 物化类型对齐；去掉探针的忽略列后 PG 真库 8/8，SQLite EF 15/15。EF MySQL 全栈仍待匹配 provider 后补验。
 - 保留清理默认不注册。启用前需按业务幂等窗口设定 `InboxRetention`，并确认 Dead Outbox 是否交由 `DeleteDeadOutboxMessages` 处理。
 - M4 文本唯一索引尚未删除。必须先确认 `event_id_bin` 回填完整并把读路径切到二进制，否则重复事件 ID 检测失效。
 
@@ -53,4 +53,4 @@
 - 构建：全量 0 警告 0 错误；`dotnet format style --verify-no-changes` 通过。
 - 测试：Integration 417 通过 / 14 跳过、EventLog 46、Transactions 234、DI 178、Messaging 33、Hosting 90、EF 15、Core 323、PalORM 117（54 跳过）、Serialization 54、CQRS 45、Analyzers 51、Compression 46、Projections.EventLog 9、Core.Abstractions 8、Messaging.Integration 10（9 跳过）。
 - 门禁：`encoding-gate` 0 失败；`count-audit` 16 项 81 处声明一致；`verify-conventions --quick` 通过；`doc-consistency` 通过；`gate-audit --inventory` 43 脚本、25 接线、0 UNVERIFIED/UNWIRED/REVIEW；pre-commit 全绿。
-- 真库：PG Dapper 探针 22/22（含新增多条守卫追加四断言）；EF PG 租约四形态 7/7（Npgsql EF 11 preview 6）；MySQL 租约 SQL 三形态 4/0/2；Outbox 索引 1k 待租与 10 万待租的前后对照见 §1。
+- 真库：PG Dapper 探针 22/22（含新增多条守卫追加四断言）；EF PG 租约四形态 8/8（Npgsql EF 11 preview 6，含 `ExecutedStepKeys` 往返）；MySQL 租约 SQL 三形态 4/0/2；Outbox 索引 1k 待租与 10 万待租的前后对照见 §1。

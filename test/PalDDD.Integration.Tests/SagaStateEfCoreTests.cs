@@ -3,7 +3,6 @@ namespace PalDDD.Integration.Tests;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using PalDDD.Transactions;
-using System.Collections.ObjectModel;
 using System.Globalization;
 using PalUlid = ByteAether.Ulid.Ulid;
 
@@ -374,7 +373,7 @@ public sealed class SagaStateEfCoreTests
         DateTimeOffset createdAt,
         SagaStatus status = SagaStatus.Active,
         Dictionary<string, DateTimeOffset>? stepStartedAt = null,
-        Collection<string>? executedStepKeys = null)
+        List<string>? executedStepKeys = null)
         => new()
         {
             CurrentState = currentState,

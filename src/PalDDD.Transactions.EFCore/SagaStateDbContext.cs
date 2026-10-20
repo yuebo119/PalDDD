@@ -648,7 +648,8 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
                         ?? new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal))
                 .Metadata.SetValueComparer(StepStartedAtComparer);
 
-            // Collection<string> → PrimitiveCollection（EF Core 11 原生 JSON 列支持）
+            // List<string> → PrimitiveCollection（EF Core 11 原生 JSON 列支持；ADR-035：
+            // Npgsql EF 物化返回 List<string>，属性类型同步为 List<string>）
             // 替代了手写 HasConversion + ValueComparer，由 EF Core 自动管理变更追踪
             e.PrimitiveCollection(x => x.ExecutedStepKeys).ElementType().HasMaxLength(256);
         });
