@@ -606,8 +606,8 @@ public sealed class OutboxBatchProcessor
     /// 解析本批次的投递策略（2026-10-19 性能实施轮）。
     /// <para>
     /// Auto：broker 声明可并发发布时把窗口提升到至少 16；store 实现批量标记时把阈值
-    /// 提升到至少 16，并由 <see cref="OutboxOptions.BatchMarkFlushInterval"/> 加时间上界。
-    /// 能力不足时保留用户显式值（默认 1），不会替不支持并发的 broker 擅自升窗。
+    /// 提升到与 BatchSize 对齐（上限 400），并由 <see cref="OutboxOptions.BatchMarkFlushInterval"/>
+    /// 加时间上界。能力不足时保留用户显式值（默认 1），不会替不支持并发的 broker 擅自升窗。
     /// </para>
     /// </summary>
     private DeliveryPolicy ResolveDeliveryPolicy(OutboxOptions options)
@@ -621,7 +621,9 @@ public sealed class OutboxBatchProcessor
 
         var threshold = options.BatchMarkThreshold;
         if (_store is IBatchMarkOutboxStore)
-            threshold = Math.Max(threshold, 16);
+            // 标记阈值与 BatchSize 对齐（上限 400 = 现有分块宽），把 100 条批的 7 次 UPDATE
+            // 收敛为 1 次；时间上界仍由 BatchMarkFlushInterval 兜住。
+            threshold = Math.Max(threshold, Math.Min(options.BatchSize, 400));
 
         return new DeliveryPolicy(
             window,

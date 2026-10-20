@@ -89,7 +89,8 @@ public abstract class SagaState
     /// <summary>当前租约持有者；非空表示后台扫描器正在处理此 Saga。</summary>
     public string? LeasedBy { get; set; }
 
-    /// <summary>租约过期时间；过期后其他后台扫描器可重新获取。</summary>
+    /// <summary>租约过期时间；过期后其他后台扫描器可重新获取。释放时写回本次扫描时刻，
+    /// 作为全量扫描的轮转游标（NULL 表示尚未扫描，优先处理）。</summary>
     public DateTimeOffset? LeasedUntil { get; set; }
 
     /// <summary>已成功执行的步骤 Key 列表（按执行顺序）— 补偿顺序的唯一依据：

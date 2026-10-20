@@ -7,7 +7,7 @@ namespace PalDDD.Transactions;
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>内存 Saga 状态存储 — 用于测试和单进程原型。</summary>
-public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, IDueTimeSagaStore<TState>, ISagaBatchStateStore<TState>
+public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, ISagaScanCursorStore<TState>, IDueTimeSagaStore<TState>, ISagaBatchStateStore<TState>
     where TState : SagaState
 {
     private readonly Lock _lock = new();
@@ -126,7 +126,15 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
                     continue;
                 active.Add(state);
             }
-            active.Sort(static (a, b) => a.CreatedAt.CompareTo(b.CreatedAt));
+            active.Sort(static (a, b) =>
+            {
+                // 扫描轮转：未扫描（leased_until NULL）优先，已扫描按时间戳轮转。
+                var aNull = a.LeasedUntil is null;
+                var bNull = b.LeasedUntil is null;
+                if (aNull != bNull) return aNull ? -1 : 1;
+                var byLease = Nullable.Compare(a.LeasedUntil, b.LeasedUntil);
+                return byLease != 0 ? byLease : a.CreatedAt.CompareTo(b.CreatedAt);
+            });
             if (active.Count > batchSize)
                 active.RemoveRange(batchSize, active.Count - batchSize); // 等价原 OrderBy().Take(batchSize) 语义
 
@@ -233,6 +241,36 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
                 {
                     current.LeasedBy = null;
                     current.LeasedUntil = null;
+                    current.Version++;
+                    released++;
+                }
+            }
+        }
+        return ValueTask.FromResult(released);
+    }
+
+    /// <inheritdoc/>
+    public ValueTask<int> ReleaseLeasesAsync(
+        string owner,
+        IReadOnlyList<TState> sagas,
+        DateTimeOffset checkedAt,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        ct.ThrowIfCancellationRequested();
+
+        var released = 0;
+        lock (_lock)
+        {
+            foreach (var saga in sagas)
+            {
+                if (_states.TryGetValue(saga.SagaId, out var current)
+                    && current.Version == saga.Version
+                    && string.Equals(current.LeasedBy, owner, StringComparison.Ordinal))
+                {
+                    current.LeasedBy = null;
+                    current.LeasedUntil = checkedAt;
                     current.Version++;
                     released++;
                 }

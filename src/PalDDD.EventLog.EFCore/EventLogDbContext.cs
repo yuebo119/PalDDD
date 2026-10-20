@@ -2,6 +2,7 @@
 // 📜 EventLogDbContext — EF Core 事件日志（Hi/Lo 位置分配 + 乐观并发）
 // ─────────────────────────────────────────────────────────────
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using PalDDD.Core.Diagnostics;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
@@ -264,24 +265,24 @@ public abstract class EventLogDbContext(
         // 本方法只负责事件构建/落库/冲突分类；firstStreamVersion/firstGlobalPosition 为
         // 前置阶段产物直传
         var now = _timeProvider.GetUtcNow();
-
+        var added = new List<EntityEntry<StoredEvent>>(events.Count);
         for (var i = 0; i < events.Count; i++)
         {
-            Events.Add(StoredEvent.From(
+            added.Add(Events.Add(StoredEvent.From(
                 streamName,
                 firstStreamVersion + i,
                 firstGlobalPosition + i,
                 now,
-                events[i]));
+                events[i])));
         }
 
         try
         {
             await SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            // v62 P3 + v64 P2 勘正：成功路径 Detach（v62 版因 Added 过滤实为 no-op，
-            // v64 改无条件后真正对齐 Checkpoint/Idempotency 成功路径家族——长寿命 context
-            // 持续追加时 Unchanged 条目线性累积；append-only 契约无后续读写依赖）
-            DetachAddedEvents();
+            // 2026-10-21：按本批 EntityEntry 精确 Detach。原 ChangeTracker.Entries<StoredEvent>()
+            // 会触发 DetectChanges + 全跟踪扫描，每次 append 多付一次全量扫描；allocator 由
+            // EventLogPositionReserver 保存成功后自清。
+            DetachAddedEvents(added);
         }
         catch (DbUpdateException ex)
         {
@@ -294,12 +295,11 @@ public abstract class EventLogDbContext(
                 // 三十八轮 P2 修复：上抛前清理本批 Added 实体——长生命周期 DbContext 中
                 // 残留批次携带旧 GlobalPosition，污染后续追加（ITM-226 场景级联：重取块
                 // 落入已用区间 → PK 冲突 → 再被误分类）
-                // v34 P3：清理范围扩至 allocator 跟踪实体（见 DetachAddedEvents v34 P3 注释）
-                DetachAddedEvents();
+                DetachAddedEvents(added);
                 throw;
             }
 
-            DetachAddedEvents();
+            DetachAddedEvents(added);
             // ITM-126 修复：PG 显式事务内 SaveChanges 抛 23505 后事务进入 aborted 状态，
             // 同事务重查会抛 25P02 并替换原始 DbUpdateException——重查失败时放弃分类，
             // 走外层 throw 原样上抛原始冲突异常（对齐 DapperEventLog/PalOrmEventLog 姊妹实现）
@@ -408,23 +408,10 @@ public abstract class EventLogDbContext(
     /// 取消后同 scope 复用 context（违背正常生命周期：取消即应弃置 scope）。v4.0 统一收敛。
     /// </para>
     /// </remarks>
-    private void DetachAddedEvents()
+    private static void DetachAddedEvents(IReadOnlyList<EntityEntry<StoredEvent>> added)
     {
-        // v64 P2：改无条件 Detach——v62 在成功路径复用本方法时是 no-op（SaveChanges 成功
-        // 后本批 StoredEvent 已 Added→Unchanged，Added 过滤匹配零条，Unchanged 线性累积原样
-        // 存在）。本 context 对 StoredEvent 的读路径全 AsNoTracking/投影，跟踪条目只可能来自
-        // append 路径，无条件安全（失败路径条目保持 Added，同样被覆盖）
-        foreach (var entry in ChangeTracker.Entries<StoredEvent>())
-        {
+        foreach (var entry in added)
             entry.State = EntityState.Detached;
-        }
-
-        // v34 P3：allocator 无状态过滤——Unchanged（SaveChanges 成功后）与 Modified 均为
-        // 待清幽灵态；Added 仅存在于 Reserver 内部 SaveChanges 之前，其异常分支已自行 Detach
-        foreach (var entry in ChangeTracker.Entries<EventLogGlobalPositionAllocator>())
-        {
-            entry.State = EntityState.Detached;
-        }
     }
 
     /// <summary>

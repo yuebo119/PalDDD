@@ -121,6 +121,34 @@ public class PalOrmSagaStateStoreTests
         await Assert.That(final!.Status).IsEqualTo(SagaStatus.Completed);
     }
 
+    [Test]
+    public async Task ScanCursor_RotatesReleasedBatchToBack()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteSagaStateStore<StoreTestSagaState>(session, Json);
+        var created = new DateTimeOffset(2026, 10, 21, 12, 0, 0, TimeSpan.Zero);
+        for (var i = 0; i < 3; i++)
+        {
+            await store.SaveChangesAsync(new StoreTestSagaState
+            {
+                CustomerId = $"c{i}",
+                CurrentState = "Active",
+                CreatedAt = created.AddSeconds(i)
+            }, default);
+        }
+
+        var first = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 1, default);
+        await Assert.That(first.Count).IsEqualTo(1);
+
+        var released = await store.ReleaseLeasesAsync(
+            "owner-A", first, DateTimeOffset.UtcNow.AddSeconds(-1), default);
+        await Assert.That(released).IsEqualTo(1);
+
+        var second = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 1, default);
+        await Assert.That(second.Count).IsEqualTo(1);
+        await Assert.That(second[0].SagaId).IsNotEqualTo(first[0].SagaId);
+    }
+
     /// <summary>跨栈快照行为对照 · PalORM 侧（2026-09-19 系统优化增，镜像 Dapper 侧
     /// Saga_SaveChangesAsync_WithoutJsonTypeInfo_FailsFastWithGuidance）——两栈同红同绿
     /// 即「未注册 JsonTypeInfo → fail-fast 带指引」契约的行为对照测试化（第八流视角：

@@ -43,13 +43,23 @@ public static class RetentionSql
         };
 
     /// <summary>按方言编码时间参数（与各存储栈既有格式一致）。</summary>
-    public static object ToTimeParam(RetentionDialect dialect, DateTimeOffset value)
+    /// <param name="dialect">数据库方言。</param>
+    /// <param name="value">截止时间。</param>
+    /// <param name="sqliteProviderNative">
+    /// SQLite 专用：true 时返回原生 <see cref="DateTimeOffset"/>，由 Microsoft.Data.Sqlite 编码为
+    /// 空格分隔格式（EF Core / PalORM 写入格式）；false 时返回 "O" 字符串（Dapper 写入格式）。
+    /// PG/MySQL 忽略本参数。
+    /// </param>
+    public static object ToTimeParam(
+        RetentionDialect dialect,
+        DateTimeOffset value,
+        bool sqliteProviderNative = false)
         => dialect switch
         {
             RetentionDialect.PostgreSql => value,
             RetentionDialect.MySql => value.UtcDateTime.ToString(
                 "yyyy-MM-dd HH:mm:ss.ffffff", CultureInfo.InvariantCulture),
-            _ => value.ToString("O", CultureInfo.InvariantCulture),
+            _ => sqliteProviderNative ? value : value.ToString("O", CultureInfo.InvariantCulture),
         };
 
     private const string OutboxDeleteProcessedSubquery =

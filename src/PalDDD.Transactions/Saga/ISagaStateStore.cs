@@ -90,6 +90,27 @@ public interface ISagaLeaseBatchStore<TState> : ISagaStateStore<TState> where TS
 }
 
 /// <summary>
+/// Saga 扫描轮转能力（2026-10-21 审计 P0）。legacy 全量扫描按 <c>created_at</c> 取前 N 条，
+/// 释放后 <c>leased_until</c> 清 NULL 会让同一批永远排在最前：活跃 Saga 超过
+/// <c>TimeoutScanBatchSize</c> 时后续行永不被扫描，超时补偿无法触发。
+/// <para>
+/// 实现方在释放时把 <c>leased_until</c> 写成本次扫描时间（过去时刻），租约查询按
+/// <c>leased_until NULLS FIRST, created_at</c> 排序：从未扫描的行（NULL）优先，已扫描行按
+/// 扫描时间轮转，形成无状态游标。三参数 <see cref="ISagaLeaseBatchStore{TState}.ReleaseLeasesAsync"/>
+/// 保持清 NULL 的旧语义，供自定义 store 兼容；内置四栈实现本接口，处理器优先使用。
+/// </para>
+/// </summary>
+public interface ISagaScanCursorStore<TState> : ISagaLeaseBatchStore<TState> where TState : SagaState
+{
+    /// <summary>批量释放租约，并把 <paramref name="checkedAt"/> 写入 <c>leased_until</c> 作为轮转游标。</summary>
+    ValueTask<int> ReleaseLeasesAsync(
+        string owner,
+        IReadOnlyList<TState> sagas,
+        DateTimeOffset checkedAt,
+        CancellationToken ct);
+}
+
+/// <summary>
 /// Saga 后台批量写入能力（2026-10-20 性能轮）。<see cref="SagaTimeoutProcessor{TState}"/> 的
 /// 到期推进/回填/补偿终态此前逐 Saga <c>SaveChangesAsync</c>：每行一次提交，EF 栈每次
 /// <c>SaveChanges</c> 还要遍历整个 ChangeTracker（与批内行数叠加成 O(n²)），PalORM/Dapper

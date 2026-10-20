@@ -873,6 +873,34 @@ public sealed class DapperStoreTests
     }
 
     [Test]
+    public async Task Saga_ScanCursor_RotatesReleasedBatchToBack(CancellationToken cancellationToken)
+    {
+        var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);
+        var created = new DateTimeOffset(2026, 10, 21, 12, 0, 0, TimeSpan.Zero);
+        for (var i = 0; i < 3; i++)
+        {
+            await store.SaveChangesAsync(new TestSagaState
+            {
+                SagaId = PalUlid.New(),
+                CurrentState = "Initial",
+                Status = SagaStatus.Active,
+                CreatedAt = created.AddSeconds(i)
+            }, cancellationToken);
+        }
+
+        var first = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 1, cancellationToken);
+        await Assert.That(first.Count).IsEqualTo(1);
+
+        var released = await store.ReleaseLeasesAsync(
+            "owner-A", first, DateTimeOffset.UtcNow.AddSeconds(-1), cancellationToken);
+        await Assert.That(released).IsEqualTo(1);
+
+        var second = await store.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 1, cancellationToken);
+        await Assert.That(second.Count).IsEqualTo(1);
+        await Assert.That(second[0].SagaId).IsNotEqualTo(first[0].SagaId);
+    }
+
+    [Test]
     public async Task Saga_SaveChangesAsync_Upsert(CancellationToken cancellationToken)
     {
         var store = new DapperSagaStateStore<TestSagaState>(_conn, jsonTypeInfo: DapperStoreJsonContext.Default.TestSagaState);

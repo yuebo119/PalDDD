@@ -115,7 +115,7 @@
 | 步骤 DSL | When 泛型/非泛型/通配三种注册，精确 + 通配双级路由 | `Saga<TState>`（Saga.cs） |
 | 五种步骤车道 | Normal / FanOut（并发门 + 整批重放）/ ChildSaga（子 Saga 分发）/ Interrupt（人工介入）/ Dynamic（运行时路由） | SagaStep.cs、FanOutStep.cs、ChildSagaStep.cs、InterruptStep.cs、DynamicStep.cs |
 | 重试补偿骨架 | 每车道共享：MaxRetries 默认 3，耗尽后逆序补偿全部已执行步骤（失败步骤优先），补偿失败并入 AggregateException | RunRetryLaneAsync（Saga.cs）、SagaCompensation.cs |
-| 超时治理 | 按 StepStartedAt 起算的检测器 + 后台扫描处理器（租约式扫描、超时自动补偿、批量租约释放走 `ISagaLeaseBatchStore`） | SagaTimeoutDetector.cs、SagaProcessor.cs |
+| 超时治理 | 按 StepStartedAt 起算的检测器 + 后台扫描处理器（租约式扫描、超时自动补偿、批量租约释放走 `ISagaLeaseBatchStore`；内置四栈实现 `ISagaScanCursorStore`，释放写回 leased_until 作轮转游标，避免固定前 N 条饿死） | SagaTimeoutDetector.cs、SagaProcessor.cs |
 | 中断与恢复 | `DefaultSagaManager` 中断登记 + ResumeAsync 以决策为事件重入，幽灵条目 TOCTOU 防护 | DefaultSagaManager.cs |
 | 状态与并发 | SagaState 版本乐观锁（租约即换代）、CloneForLease successor、执行序字典作为补偿顺序唯一依据 | SagaState.cs |
 | 执行观察者 | 五观察点零分配事件 + AsyncLocal 传播，Sink 异常与业务隔离 | SagaExecutionObserver.cs |

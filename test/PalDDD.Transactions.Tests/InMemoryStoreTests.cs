@@ -427,6 +427,31 @@ public sealed class InMemoryStoreTests
     }
 
     [Test]
+    public async Task InMemorySagaStateStore_ScanCursor_RotatesReleasedBatchToBack(CancellationToken cancellationToken)
+    {
+        var store = new InMemorySagaStateStore<LifecycleSagaState>();
+        var created = new DateTimeOffset(2026, 10, 21, 12, 0, 0, TimeSpan.Zero);
+        var first = new LifecycleSagaState { CurrentState = "Active", Status = SagaStatus.Active, CreatedAt = created };
+        var second = new LifecycleSagaState { CurrentState = "Active", Status = SagaStatus.Active, CreatedAt = created.AddSeconds(1) };
+        var third = new LifecycleSagaState { CurrentState = "Active", Status = SagaStatus.Active, CreatedAt = created.AddSeconds(2) };
+        store.Add(first);
+        store.Add(second);
+        store.Add(third);
+
+        var leased = await store.LeaseActiveSagasAsync("owner-a", TimeSpan.FromMinutes(2), 1, cancellationToken);
+        await Assert.That(leased.Count).IsEqualTo(1);
+        var firstLeasedId = leased[0].SagaId;
+
+        var released = await store.ReleaseLeasesAsync(
+            "owner-a", leased, DateTimeOffset.UtcNow.AddSeconds(-1), cancellationToken);
+        await Assert.That(released).IsEqualTo(1);
+
+        var next = await store.LeaseActiveSagasAsync("owner-a", TimeSpan.FromMinutes(2), 1, cancellationToken);
+        await Assert.That(next.Count).IsEqualTo(1);
+        await Assert.That(next[0].SagaId).IsNotEqualTo(firstLeasedId);
+    }
+
+    [Test]
     public async Task InMemorySagaStateStore_AdvanceNextCheckAt_BatchUpdatesAndGuardsOwner(CancellationToken cancellationToken)
     {
         var store = new InMemorySagaStateStore<LifecycleSagaState>();

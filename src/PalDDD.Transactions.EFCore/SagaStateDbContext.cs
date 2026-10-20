@@ -32,7 +32,7 @@ public abstract class SagaStateDbContext<
         | DynamicallyAccessedMemberTypes.PublicProperties
         | DynamicallyAccessedMemberTypes.NonPublicProperties
         | DynamicallyAccessedMemberTypes.Interfaces)]
-TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, IDueTimeSagaStore<TState>, ISagaBatchStateStore<TState>
+TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, ISagaScanCursorStore<TState>, IDueTimeSagaStore<TState>, ISagaBatchStateStore<TState>
     where TState : SagaState
 {
     /// <summary>Saga 状态表</summary>
@@ -345,7 +345,9 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         var dueClause = dueBefore is null
             ? string.Empty
             : $"AND ({ids.NextCheckAt} IS NOT NULL AND {ids.NextCheckAt} <= {{4}})";
-        var orderBy = dueBefore is null ? ids.SagaId : $"{ids.NextCheckAt}, {ids.SagaId}";
+        var orderBy = dueBefore is null
+            ? $"CASE WHEN {ids.LeasedUntil} IS NULL THEN 0 ELSE 1 END, {ids.LeasedUntil}, {ids.SagaId}"
+            : $"{ids.NextCheckAt}, {ids.SagaId}";
         var ownerIndex = dueBefore is null ? 4 : 5;
         var untilIndex = dueBefore is null ? 5 : 6;
 
@@ -380,7 +382,9 @@ INNER JOIN candidates AS c ON t.{ids.SagaId} = c.{ids.SagaId}";
         var dueClause = dueBefore is null
             ? string.Empty
             : $"AND ({ids.NextCheckAt} IS NOT NULL AND {ids.NextCheckAt} <= {{6}})";
-        var orderBy = dueBefore is null ? ids.SagaId : $"{ids.NextCheckAt}, {ids.SagaId}";
+        var orderBy = dueBefore is null
+            ? $"{ids.LeasedUntil} NULLS FIRST, {ids.SagaId}"
+            : $"{ids.NextCheckAt}, {ids.SagaId}";
 
         var sql = $@"UPDATE {ids.Table}
 SET {ids.LeasedBy} = {{0}}, {ids.LeasedUntil} = {{1}}, {ids.Version} = {ids.Version} + 1
@@ -411,7 +415,9 @@ WHERE {ids.SagaId} IN (
         var dueClause = dueBefore is null
             ? string.Empty
             : $"AND ({ids.NextCheckAt} IS NOT NULL AND {ids.NextCheckAt} <= {{6}})";
-        var orderBy = dueBefore is null ? ids.SagaId : $"{ids.NextCheckAt}, {ids.SagaId}";
+        var orderBy = dueBefore is null
+            ? $"({ids.LeasedUntil} IS NULL) DESC, {ids.LeasedUntil}, {ids.SagaId}"
+            : $"{ids.NextCheckAt}, {ids.SagaId}";
         var lockClause = skipLocked ? " FOR UPDATE SKIP LOCKED" : string.Empty;
 
         var sql = $@"UPDATE {ids.Table} t
@@ -518,7 +524,7 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
             : $"AND ({nextCheckAtColumn} IS NOT NULL AND {nextCheckAtColumn} <= {{6}})";
         // 到期过滤按最早到期取批，避免老创建但晚到期的行占满批次；无到期过滤保持 SagaId 序。
         var orderBy = dueBefore is null
-            ? sagaIdColumn
+            ? $"({leasedUntilColumn} IS NULL) DESC, {leasedUntilColumn}, {sagaIdColumn}"
             : $"{nextCheckAtColumn}, {sagaIdColumn}";
 
         // {{…}} 是标识符插值（表/列名为受信标识符，已加引号）；{N} 是 FormattableStringFactory
@@ -638,16 +644,36 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
     /// <see cref="DbUpdateConcurrencyException"/>；② 滞留变异会被后续保存幽灵提交。
     /// 故成功后全批 Detach（含 0 行路径——DB 已换代，跟踪快照同样作废）。
     /// </remarks>
-    public async ValueTask<int> ReleaseLeasesAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct)
+    public ValueTask<int> ReleaseLeasesAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct)
+        => ReleaseLeasesCoreAsync(owner, sagas, checkedAt: null, ct);
+
+    /// <inheritdoc/>
+    /// <remarks>扫描轮转：leased_until 写成本次扫描时刻，legacy 租约按 NULLS FIRST 排序。</remarks>
+    public ValueTask<int> ReleaseLeasesAsync(
+        string owner,
+        IReadOnlyList<TState> sagas,
+        DateTimeOffset checkedAt,
+        CancellationToken ct)
+        => ReleaseLeasesCoreAsync(owner, sagas, checkedAt, ct);
+
+    private async ValueTask<int> ReleaseLeasesCoreAsync(
+        string owner,
+        IReadOnlyList<TState> sagas,
+        DateTimeOffset? checkedAt,
+        CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         ArgumentNullException.ThrowIfNull(sagas);
         if (sagas.Count == 0) return 0;
 
         var ids = sagas.Select(static s => s.SagaId).ToList();
-        var affected = await SagaStates
-            .Where(s => s.LeasedBy == owner && ids.Contains(s.SagaId))
-            .ExecuteUpdateAsync(setters => setters
+        var query = SagaStates.Where(s => s.LeasedBy == owner && ids.Contains(s.SagaId));
+        var affected = checkedAt is { } at
+            ? await query.ExecuteUpdateAsync(setters => setters
+                .SetProperty(s => s.LeasedBy, (string?)null)
+                .SetProperty(s => s.LeasedUntil, at)
+                .SetProperty(s => s.Version, s => s.Version + 1), ct).ConfigureAwait(false)
+            : await query.ExecuteUpdateAsync(setters => setters
                 .SetProperty(s => s.LeasedBy, (string?)null)
                 .SetProperty(s => s.LeasedUntil, (DateTimeOffset?)null)
                 .SetProperty(s => s.Version, s => s.Version + 1), ct).ConfigureAwait(false);

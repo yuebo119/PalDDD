@@ -147,7 +147,7 @@ public static class MySqlPalOrmExtensions
         services.AddScoped<IProjectionCheckpointStore, MySqlProjectionCheckpointStore>();
         services.AddScoped<IIdempotencyStore, MySqlIdempotencyStore>();
         services.AddScoped<IUnitOfWork, MySqlPalOrmUnitOfWork>();
-        services.AddPalRetention();
+        // 2026-10-21 审计 P0：保留清理是显式 opt-in（见 RetentionOptions/AddPalRetention 文档）。
         services.TryAddScoped<IRetentionStore, PalOrmRetentionStore<MySqlProvider>>();
 
         // 启动期连接池预热（2026-09-25 特性审计裁决项）：prewarmConnectionCount > 0 时注册
