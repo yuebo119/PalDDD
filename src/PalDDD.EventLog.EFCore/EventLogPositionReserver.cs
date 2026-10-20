@@ -168,6 +168,9 @@ public sealed class EventLogPositionReserver
                 try
                 {
                     await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    // 2026-10-21：成功保存后立即精确 Detach allocator，避免 EventLogDbContext
+                    // 每次 append 的清理阶段再扫描一次 ChangeTracker.Entries<Allocator>()。
+                    context.Entry(allocator).State = EntityState.Detached;
                 }
                 catch (DbUpdateException ex) when (ex is not DbUpdateConcurrencyException
                     && !IsUniqueConstraintViolation(ex))

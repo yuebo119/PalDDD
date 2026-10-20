@@ -42,7 +42,8 @@ public sealed class OutboxOptions
     /// <summary>
     /// 投递模式（2026-10-19 性能实施轮）。<see cref="OutboxDeliveryMode.Auto"/> 在 broker
     /// 声明支持并发发布且 store 实现 <see cref="IBatchMarkOutboxStore"/> 时，自动启用
-    /// 16 路发布窗口与 16 条批量标记，并用 <see cref="BatchMarkFlushInterval"/> 设时间上界；
+    /// 至少 16 路发布窗口，并把标记阈值提升到与 BatchSize 对齐（上限 400 行），
+    /// 用 <see cref="BatchMarkFlushInterval"/> 设时间上界；
     /// <see cref="OutboxDeliveryMode.Serial"/> 保持旧行为（逐条确认/逐条标记）作为兼容回退。
     /// </summary>
     public OutboxDeliveryMode DeliveryMode { get; set; } = OutboxDeliveryMode.Auto;

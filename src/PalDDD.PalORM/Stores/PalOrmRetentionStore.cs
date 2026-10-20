@@ -53,7 +53,7 @@ public sealed class PalOrmRetentionStore<TProvider> : IRetentionStore
         await using var command = _connection.CreateCommand();
         command.CommandText = sql;
         command.Transaction = PalOrmAmbientTransaction.TryGet(_session);
-        AddParam(command, "@cutoff", RetentionSql.ToTimeParam(_dialect, cutoff));
+        AddParam(command, "@cutoff", RetentionSql.ToTimeParam(_dialect, cutoff, sqliteProviderNative: true));
         AddParam(command, "@n", batchSize);
         return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }

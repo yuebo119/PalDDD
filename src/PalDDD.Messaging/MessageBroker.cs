@@ -106,6 +106,20 @@ public sealed class NullMessageBroker : IMessageBroker
     public NullMessageBroker(IPalLogger<NullMessageBroker>? logger = null)
         => _logger = logger;
 
+    // 单节点模式所有发布都是丢弃：声明 raw 能力让 Outbox 跳过“反序列化 + 再序列化”，
+    // 声明并发能力让窗口/批量标记正常启用；实现均为 no-op，无顺序/确认语义。
+    bool IMessageBroker.SupportsRawPublish => true;
+
+    bool IMessageBroker.SupportsConcurrentPublish => true;
+
+    ValueTask IMessageBroker.PublishRawAsync(
+        ReadOnlyMemory<byte> payload,
+        MessageDescriptor descriptor,
+        PalUlid messageId,
+        MessagePublishContext context,
+        CancellationToken ct)
+        => ValueTask.CompletedTask;
+
     // A14（S1 轮，2026-10-15）：Debug 日志补 IsEnabled 门控——IPalLogger.Debug 收预构造
     // 字符串，插值在调用点已发生；?. 只判 logger 非空不判级别，单节点模式下每次发布/订阅
     // 白建一个字符串。对齐两个真 broker 的 Z-1 模式（KafkaBroker/RabbitMqBroker 均已门控）。

@@ -148,7 +148,8 @@ public static class PostgreSqlPalOrmExtensions
         services.AddScoped<IProjectionCheckpointStore, PostgreSqlProjectionCheckpointStore>();
         services.AddScoped<IIdempotencyStore, PostgreSqlIdempotencyStore>();
         services.AddScoped<IUnitOfWork, PostgreSqlPalOrmUnitOfWork>();
-        services.AddPalRetention();
+        // 2026-10-21 审计 P0：保留清理是显式 opt-in（RetentionOptions/AddPalRetention 文档契约）。
+        // 仅注册存储能力，不启动后台删除；需要清理的宿主在 AddPalOrm* 之后显式 AddPalRetention()。
         services.TryAddScoped<IRetentionStore, PalOrmRetentionStore<PostgreSqlProvider>>();
 
         // 启动期连接池预热（2026-09-25 特性审计裁决项）：prewarmConnectionCount > 0 时注册

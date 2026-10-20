@@ -336,7 +336,7 @@ public static class SqlTemplates
         // v53 P2：租约即换代（version=version+1）——对齐 EFCore BumpVersion/InMemory v25 B1
         //（重租即换代）。旧持有者租约被抢后其内存 version 必然落后，SaveChanges 的
         // version 乐观锁真实拦截（修复前租约不动 version，旧持有者保存可穿透覆盖新租约）
-        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n)";
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY (leased_until IS NULL) DESC, leased_until, created_at LIMIT @n)";
 
     /// <summary>
     /// PG 专用 Saga 租约获取 — 子查询行锁 <c>FOR UPDATE SKIP LOCKED</c>。<br/>
@@ -347,7 +347,7 @@ public static class SqlTemplates
     /// </summary>
     public const string SagaLeaseActivePG =
         // v53 P2：租约即换代（version=version+1），见 SagaLeaseActive 注释
-        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED)";
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY leased_until NULLS FIRST, created_at LIMIT @n FOR UPDATE SKIP LOCKED)";
 
     /// <summary>
     /// PG 专用 Saga 租约获取（RETURNING 单语句形态，EPSL 地毯审计 2026-10-16 B 批 #3）——
@@ -358,7 +358,7 @@ public static class SqlTemplates
     /// （ITM-134）由子查询谓词隐含满足，语义不减。镜像 <see cref="OutboxLeaseUpdatePG"/> 先例。
     /// </summary>
     public const string SagaLeaseActivePGReturning =
-        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY leased_until NULLS FIRST, created_at LIMIT @n FOR UPDATE SKIP LOCKED) RETURNING *";
 
     /// <summary>
     /// SQLite 专用 Saga 租约获取（RETURNING 单语句形态，B 批 #3）——<see cref="SagaLeaseActive"/>
@@ -368,7 +368,7 @@ public static class SqlTemplates
     /// 形态对齐（SQLite 是双栈里的漏格）。
     /// </summary>
     public const string SagaLeaseActiveSqliteReturning =
-        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) RETURNING *";
+        "UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY (leased_until IS NULL) DESC, leased_until, created_at LIMIT @n) RETURNING *";
 
     /// <summary>
     /// MySQL 专用 Saga 租约获取 — JOIN 形态。<br/>
@@ -380,7 +380,7 @@ public static class SqlTemplates
     /// </summary>
     public const string SagaLeaseActiveMySql =
         // v53 P2：租约即换代（version=version+1），见 SagaLeaseActive 注释
-        "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1";
+        "UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY (leased_until IS NULL) DESC, leased_until, created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1";
 
     // ── M1（2026-10-19）：NextCheckAt 到期租约变体 ──
     // NULL = 当前状态没有待检查的超时步骤（等待事件），到期路径安全跳过；
@@ -449,6 +449,13 @@ public static class SqlTemplates
     /// </summary>
     public const string SagaReleaseLeases =
         "UPDATE saga_states SET leased_by=NULL, leased_until=NULL, version=version+1 WHERE leased_by=@owner AND saga_id IN @ids";
+
+    /// <summary>
+    /// 扫描轮转释放（2026-10-21 审计 P0）——清持有者，把 <c>leased_until</c> 写成本次扫描时刻
+    /// 作为轮转游标；legacy 租约按 <c>leased_until NULLS FIRST</c> 排序，已扫描行退后。
+    /// </summary>
+    public const string SagaReleaseLeasesCheckedAt =
+        "UPDATE saga_states SET leased_by=NULL, leased_until=@checkedAt, version=version+1 WHERE leased_by=@owner AND saga_id IN @ids";
 
     /// <summary>
     /// 批量推进 NextCheckAt（2026-10-20 性能轮）——只写到期列 + 换代，不重写业务快照；

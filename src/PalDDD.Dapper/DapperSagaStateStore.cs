@@ -25,6 +25,7 @@ using Dapper;
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using PalDDD.Core;
@@ -34,7 +35,7 @@ using PalDDD.Transactions;
 using static PalDDD.Dapper.DapperSqlErrorClassifier;
 namespace PalDDD.Dapper;
 
-public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, IDueTimeSagaStore<TState>, ISagaBatchStateStore<TState>
+public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, ISagaScanCursorStore<TState>, IDueTimeSagaStore<TState>, ISagaBatchStateStore<TState>
     where TState : SagaState, new()
 {
     private readonly DbConnection _connection;
@@ -307,6 +308,29 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
     }
 
     /// <inheritdoc/>
+    /// <remarks>扫描轮转：释放时把 leased_until 写成本次扫描时刻（过去），legacy 租约按
+    /// leased_until NULLS FIRST 排序，已扫描行退到未扫描行之后，避免固定前 N 条饿死。</remarks>
+    public async ValueTask<int> ReleaseLeasesAsync(
+        string owner,
+        IReadOnlyList<TState> sagas,
+        DateTimeOffset checkedAt,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return 0;
+
+        var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var ids = new string[sagas.Count];
+        for (var i = 0; i < sagas.Count; i++)
+            ids[i] = (string)DapperAotInitializer.ToSqliteParameter(sagas[i].SagaId);
+        return await conn.ExecuteAsync(
+            SqlTemplates.SagaReleaseLeasesCheckedAt,
+            new { owner, ids, checkedAt = ToTimeParam(checkedAt) },
+            Tx).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
     /// <remarks>
     /// 到期推进只写 next_check_at + version，避免逐 Saga 全快照序列化与 EF ChangeTracker
     /// 扫描；无 ambient 事务时整批一个事务提交（有则并入调用方事务）。
@@ -328,28 +352,29 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
 
         try
         {
+            // SQLite 单语句参数上限 999：每行 3 参数，按 300 行分块；PG/MySQL 同块宽。
+            const int chunkRows = 300;
             var affected = 0;
-            foreach (var saga in sagas)
+            var fullyApplied = true;
+            for (var start = 0; start < sagas.Count; start += chunkRows)
             {
-                var rows = await conn.ExecuteAsync(
-                    SqlTemplates.SagaAdvanceNextCheckAt,
-                    new
-                    {
-                        nextCheckAt = saga.NextCheckAt.HasValue ? ToTimeParam(saga.NextCheckAt.Value) : null,
-                        id = DapperAotInitializer.ToSqliteParameter(saga.SagaId),
-                        v = saga.Version,
-                        owner
-                    },
-                    tx).ConfigureAwait(false);
-                if (rows > 0)
-                {
-                    saga.Version++;
-                    affected += rows;
-                }
+                var count = Math.Min(chunkRows, sagas.Count - start);
+                var (sql, parameters) = BuildAdvanceNextCheckBatch(owner, sagas, start, count);
+                var rows = await conn.ExecuteAsync(sql, parameters, tx).ConfigureAwait(false);
+                affected += rows;
+                if (rows != count)
+                    fullyApplied = false;
             }
 
             if (ownTx is not null)
                 await ownTx.CommitAsync(ct).ConfigureAwait(false);
+
+            // 全命中才回写内存版本（部分冲突时调用方应重新加载；处理器随后只做租约释放）。
+            if (fullyApplied)
+            {
+                foreach (var saga in sagas)
+                    saga.Version++;
+            }
             return affected;
         }
         finally
@@ -358,6 +383,72 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
             if (ownTx is not null)
                 await ownTx.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// 构造单语句多行 NextCheckAt 推进（每块最多 300 行）。
+    /// PG: UPDATE ... FROM (VALUES ...)；SQLite: UPDATE ... FROM (VALUES ...)；
+    /// MySQL: UPDATE ... JOIN (SELECT ... UNION ALL ...)。
+    /// </summary>
+    private (string Sql, DynamicParameters Parameters) BuildAdvanceNextCheckBatch(
+        string owner,
+        IReadOnlyList<TState> sagas,
+        int start,
+        int count)
+    {
+        var dp = new DynamicParameters();
+        dp.Add("owner", owner);
+        var sb = new StringBuilder(64 + count * 56);
+
+        if (_dbType == DapperDbType.MySql)
+        {
+            sb.Append("UPDATE saga_states s JOIN (");
+            for (var i = 0; i < count; i++)
+            {
+                if (i > 0) sb.Append(" UNION ALL ");
+                sb.Append("SELECT @id").Append(i)
+                  .Append(" AS saga_id, @next").Append(i)
+                  .Append(" AS next_check_at, @v").Append(i)
+                  .Append(" AS version");
+                AddAdvanceParams(dp, sagas[start + i], i);
+            }
+            sb.Append(") v ON s.saga_id = v.saga_id SET s.next_check_at = v.next_check_at, s.version = s.version + 1 WHERE s.version = v.version AND s.leased_by = @owner");
+        }
+        else if (_dbType == DapperDbType.PostgreSql)
+        {
+            sb.Append("UPDATE saga_states AS s SET next_check_at = v.next_check_at, version = s.version + 1 FROM (VALUES ");
+            for (var i = 0; i < count; i++)
+            {
+                if (i > 0) sb.Append(", ");
+                sb.Append("(@id").Append(i).Append("::text, CAST(@next").Append(i)
+                  .Append(" AS timestamptz), CAST(@v").Append(i).Append(" AS integer))");
+                AddAdvanceParams(dp, sagas[start + i], i);
+            }
+            sb.Append(") AS v(saga_id, next_check_at, version) WHERE s.saga_id = v.saga_id AND s.version = v.version AND s.leased_by = @owner");
+        }
+        else
+        {
+            // SQLite UPDATE ... FROM：用 SELECT/UNION ALL 派生表（SQLite 不接受
+            // FROM (VALUES ...) AS v(col1,col2) 的列别名列表）。
+            sb.Append("UPDATE saga_states SET next_check_at = v.next_check_at, version = saga_states.version + 1 FROM (");
+            for (var i = 0; i < count; i++)
+            {
+                if (i > 0) sb.Append(" UNION ALL ");
+                sb.Append("SELECT @id").Append(i).Append(" AS saga_id, @next").Append(i)
+                  .Append(" AS next_check_at, @v").Append(i).Append(" AS version");
+                AddAdvanceParams(dp, sagas[start + i], i);
+            }
+            sb.Append(") AS v WHERE saga_states.saga_id = v.saga_id AND saga_states.version = v.version AND saga_states.leased_by = @owner");
+        }
+
+        return (sb.ToString(), dp);
+    }
+
+    private void AddAdvanceParams(DynamicParameters dp, TState saga, int index)
+    {
+        dp.Add($"id{index}", (string)DapperAotInitializer.ToSqliteParameter(saga.SagaId));
+        dp.Add($"next{index}", saga.NextCheckAt.HasValue ? ToTimeParam(saga.NextCheckAt.Value) : null);
+        dp.Add($"v{index}", saga.Version);
     }
 
     /// <inheritdoc/>

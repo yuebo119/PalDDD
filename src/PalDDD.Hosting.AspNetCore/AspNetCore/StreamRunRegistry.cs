@@ -511,9 +511,11 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
     {
         var ct = context.RequestAborted;
         var bodyWriter = context.Response.BodyWriter;
+        // 无心跳配置时无限等待 Append/Finish/Cancel 信号：原 500ms 超时让每个空闲附着
+        // 每秒醒两次（1000 个 run 约 2000 次唤醒/秒），且每次带超时 WaitAsync 都建计时器。
         var waitMilliseconds = keepAliveInterval is { } ka
             ? (int)Math.Clamp(ka.TotalMilliseconds, 1, int.MaxValue)
-            : 500;
+            : -1;
 
         try
         {
@@ -574,7 +576,16 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
                     // true=被 Append/Finish/Cancel/接管唤醒；false=等待期满（有心跳则写心跳）。
                     // 唤醒即 continue；只有等待期满才落下去走心跳分支——旧实现赋值后无条件
                     // continue，心跳帧从未写出（S1854 死赋值暴露）。
-                    var signaled = await _signal.WaitAsync(waitMilliseconds, ct).ConfigureAwait(false);
+                    bool signaled;
+                    if (waitMilliseconds < 0)
+                    {
+                        await _signal.WaitAsync(ct).ConfigureAwait(false);
+                        signaled = true; // 只在被唤醒时返回；取消由外层处理
+                    }
+                    else
+                    {
+                        signaled = await _signal.WaitAsync(waitMilliseconds, ct).ConfigureAwait(false);
+                    }
                     if (signaled)
                         continue;
                     ct.ThrowIfCancellationRequested();

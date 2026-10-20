@@ -131,6 +131,32 @@ public sealed class SagaStateEfCoreTests
     }
 
     [Test]
+    public async Task SagaScanCursor_Sqlite_RotatesReleasedBatchToBack(CancellationToken cancellationToken)
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync(cancellationToken);
+        await using var db = new TestSagaStateDbContext(CreateSqliteOptions(connection));
+        await db.Database.EnsureCreatedAsync(cancellationToken);
+
+        db.SagaStates.Add(CreateState("First", FixedNow));
+        db.SagaStates.Add(CreateState("Second", FixedNow.AddSeconds(1)));
+        db.SagaStates.Add(CreateState("Third", FixedNow.AddSeconds(2)));
+        await db.SaveChangesAsync(cancellationToken);
+        db.ChangeTracker.Clear();
+
+        var first = await db.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 1, cancellationToken);
+        await Assert.That(first.Count).IsEqualTo(1);
+
+        var released = await db.ReleaseLeasesAsync(
+            "owner-A", first, FixedNow.AddSeconds(-1), cancellationToken);
+        await Assert.That(released).IsEqualTo(1);
+
+        var second = await db.LeaseActiveSagasAsync("owner-A", TimeSpan.FromMinutes(2), 1, cancellationToken);
+        await Assert.That(second.Count).IsEqualTo(1);
+        await Assert.That(second[0].SagaId).IsNotEqualTo(first[0].SagaId);
+    }
+
+    [Test]
     public async Task GetActiveSagasAsync_RejectsInvalidBatchSize(CancellationToken cancellationToken)
     {
         await using var db = new TestSagaStateDbContext(CreateOptions());

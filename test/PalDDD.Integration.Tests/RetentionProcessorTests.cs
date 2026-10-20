@@ -92,6 +92,47 @@ public sealed class RetentionProcessorTests
         await Assert.That(inboxPlan).Contains("idx_inbox_processed");
     }
 
+    [Test]
+    public async Task EfCoreRetention_Sqlite_DoesNotDeleteSameDayProviderFormattedRow()
+    {
+        await using var conn = new SqliteConnection("Data Source=:memory:");
+        await conn.OpenAsync();
+        await CreateSchemaAsync(conn);
+
+        // EF/PalORM 经 Microsoft.Data.Sqlite 写入原生 DateTimeOffset，落库为空格分隔；
+        // Dapper 写 "O"（T 分隔）。RetentionSql 的 SQLite 分支必须按栈选择编码。
+        var cutoff = new DateTimeOffset(2026, 10, 13, 0, 0, 0, TimeSpan.Zero);
+        await InsertOutboxNativeAsync(conn, "same-day", status: 1, cutoff.AddHours(23));
+        await InsertOutboxNativeAsync(conn, "older", status: 1, cutoff.AddDays(-1));
+
+        var store = new EfCoreRetentionStore(conn, RetentionDialect.Sqlite);
+        var deleted = await store.DeleteExpiredOutboxAsync(cutoff, batchSize: 10, includeDead: false);
+
+        await Assert.That(deleted).IsEqualTo(1);
+        await Assert.That(await CountAsync(conn, "outbox_messages")).IsEqualTo(1);
+        await Assert.That(await CountAsync(conn, "outbox_messages WHERE id = 'same-day'")).IsEqualTo(1);
+    }
+
+    private static async Task InsertOutboxNativeAsync(
+        SqliteConnection conn, string id, int status, DateTimeOffset at)
+    {
+        await using var command = conn.CreateCommand();
+        command.CommandText = "INSERT INTO outbox_messages (id, status, processed_at) VALUES ($id, $status, $at)";
+        var idParam = command.CreateParameter();
+        idParam.ParameterName = "$id";
+        idParam.Value = id;
+        var statusParam = command.CreateParameter();
+        statusParam.ParameterName = "$status";
+        statusParam.Value = status;
+        var atParam = command.CreateParameter();
+        atParam.ParameterName = "$at";
+        atParam.Value = at;
+        command.Parameters.Add(idParam);
+        command.Parameters.Add(statusParam);
+        command.Parameters.Add(atParam);
+        await command.ExecuteNonQueryAsync();
+    }
+
     private static async Task<string> ExplainAsync(SqliteConnection conn, string sql)
     {
         await using var cmd = conn.CreateCommand();

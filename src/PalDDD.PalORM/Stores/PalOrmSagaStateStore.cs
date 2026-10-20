@@ -36,7 +36,7 @@ namespace PalDDD.PalORM.Stores;
 /// 未挂 cmd.Transaction 的命令抛 InvalidOperationException（MySqlConnector 严格校验）。
 /// </para>
 /// </summary>
-public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, IDueTimeSagaStore<TState>, ISagaBatchStateStore<TState>
+public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, ISagaScanCursorStore<TState>, IDueTimeSagaStore<TState>, ISagaBatchStateStore<TState>
     where TProvider : IDbProvider
     where TState : SagaState, new()
 {
@@ -127,7 +127,11 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         if (TProvider.SupportsReturningClause)
         {
             var dueClause = dueOnly ? " AND next_check_at IS NOT NULL AND next_check_at <= @p4" : string.Empty;
-            var orderClause = dueOnly ? " ORDER BY next_check_at, created_at" : " ORDER BY created_at";
+            var orderClause = dueOnly
+                ? " ORDER BY next_check_at, created_at"
+                : TProvider.Dialect == global::PalORM.SqlDialect.PostgreSql
+                    ? " ORDER BY leased_until NULLS FIRST, created_at"
+                    : " ORDER BY (leased_until IS NULL) DESC, leased_until, created_at";
             await using var leaseCmd = CreateRawCommand();  // ITM-243：挂接 IUnitOfWork 环境事务
             leaseCmd.CommandText = TProvider.Dialect == global::PalORM.SqlDialect.PostgreSql
                 ? "UPDATE saga_states SET leased_by = @p0, leased_until = @p1, version = version + 1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (@p2, @p3) AND (leased_until IS NULL OR leased_until <= @p4)" + dueClause + orderClause + " LIMIT @p5 FOR UPDATE SKIP LOCKED) RETURNING saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until, next_check_at"
@@ -146,7 +150,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
             // MySQL 特化路径：JOIN 子查询。M1 到期过滤复用 now 参数。
             FormattableString mysqlSql = dueOnly
                 ? (FormattableString)$"UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) AND next_check_at IS NOT NULL AND next_check_at <= {now} ORDER BY next_check_at, created_at LIMIT {batchSize}) AS sub ON t.saga_id = sub.saga_id SET t.leased_by = {owner}, t.leased_until = {until}, t.version = t.version + 1"
-                : (FormattableString)$"UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY created_at LIMIT {batchSize}) AS sub ON t.saga_id = sub.saga_id SET t.leased_by = {owner}, t.leased_until = {until}, t.version = t.version + 1";
+                : (FormattableString)$"UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY (leased_until IS NULL) DESC, leased_until, created_at LIMIT {batchSize}) AS sub ON t.saga_id = sub.saga_id SET t.leased_by = {owner}, t.leased_until = {until}, t.version = t.version + 1";
             await Session.ExecuteAsync(
                 // v53 P2：租约即换代（version+1），见 PG 分支注释
                 mysqlSql,
@@ -296,6 +300,35 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
     }
 
     /// <inheritdoc/>
+    /// <remarks>扫描轮转：leased_until 写成本次扫描时刻，legacy 租约按 leased_until NULLS FIRST
+    /// 排序，已扫描行退到未扫描行之后。</remarks>
+    public async ValueTask<int> ReleaseLeasesAsync(
+        string owner,
+        IReadOnlyList<TState> sagas,
+        DateTimeOffset checkedAt,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return 0;
+
+        await using var cmd = CreateRawCommand();
+        var sb = new StringBuilder("UPDATE saga_states SET leased_by = NULL, leased_until = @p1, version = version + 1 WHERE leased_by = @p0 AND saga_id IN (@p2");
+        AddParam(cmd, "@p0", owner);
+        AddParam(cmd, "@p1", checkedAt);
+        AddParam(cmd, "@p2", sagas[0].SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+        for (var i = 1; i < sagas.Count; i++)
+        {
+            var name = $"@p{i + 2}";
+            sb.Append(", ").Append(name);
+            AddParam(cmd, name, sagas[i].SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+        }
+        sb.Append(')');
+        cmd.CommandText = sb.ToString();
+        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
     /// <remarks>
     /// 到期推进只写 next_check_at + version：无 ambient 事务时由本方法开一个事务，
     /// 整批提交一次；ambient 事务存在时并入调用方边界（ITM-243 raw command 挂接）。
@@ -316,25 +349,28 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
 
         try
         {
+            // SQLite 单语句参数上限 999：每行 3 参数，按 300 行分块。
+            const int chunkRows = 300;
             var affected = 0;
-            foreach (var saga in sagas)
+            var fullyApplied = true;
+            for (var start = 0; start < sagas.Count; start += chunkRows)
             {
+                var count = Math.Min(chunkRows, sagas.Count - start);
                 await using var cmd = CreateRawCommand();
-                cmd.CommandText = "UPDATE saga_states SET next_check_at = @p0, version = version + 1 WHERE saga_id = @p1 AND version = @p2 AND leased_by = @p3";
-                AddParam(cmd, "@p0", saga.NextCheckAt.HasValue ? saga.NextCheckAt.Value : (object)DBNull.Value);
-                AddParam(cmd, "@p1", saga.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
-                AddParam(cmd, "@p2", saga.Version);
-                AddParam(cmd, "@p3", owner);
+                cmd.CommandText = BuildAdvanceNextCheckBatch(cmd, owner, sagas, start, count);
                 var rows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-                if (rows > 0)
-                {
-                    saga.Version++;
-                    affected += rows;
-                }
+                affected += rows;
+                if (rows != count)
+                    fullyApplied = false;
             }
 
             if (ownTx is not null)
                 await ownTx.CommitAsync(ct).ConfigureAwait(false);
+            if (fullyApplied)
+            {
+                foreach (var saga in sagas)
+                    saga.Version++;
+            }
             return affected;
         }
         finally
@@ -347,6 +383,66 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
                 PalOrmAmbientTransaction.Set(Session, null);
             }
         }
+    }
+
+    /// <summary>单语句多行 NextCheckAt 推进（每块最多 300 行）。</summary>
+    private static string BuildAdvanceNextCheckBatch(
+        DbCommand cmd,
+        string owner,
+        IReadOnlyList<TState> sagas,
+        int start,
+        int count)
+    {
+        var sb = new StringBuilder(64 + count * 64);
+        AddParam(cmd, "@p0", owner);
+
+        if (TProvider.Dialect == global::PalORM.SqlDialect.MySql)
+        {
+            sb.Append("UPDATE saga_states s JOIN (");
+            for (var i = 0; i < count; i++)
+            {
+                if (i > 0) sb.Append(" UNION ALL ");
+                sb.Append("SELECT @id").Append(i).Append(" AS saga_id, @next").Append(i)
+                  .Append(" AS next_check_at, @v").Append(i).Append(" AS version");
+                AddAdvanceParams(cmd, sagas[start + i], i);
+            }
+            sb.Append(") v ON s.saga_id = v.saga_id SET s.next_check_at = v.next_check_at, s.version = s.version + 1 WHERE s.version = v.version AND s.leased_by = @p0");
+        }
+        else if (TProvider.Dialect == global::PalORM.SqlDialect.PostgreSql)
+        {
+            sb.Append("UPDATE saga_states AS s SET next_check_at = v.next_check_at, version = s.version + 1 FROM (VALUES ");
+            for (var i = 0; i < count; i++)
+            {
+                if (i > 0) sb.Append(", ");
+                sb.Append("(CAST(@id").Append(i).Append(" AS text), CAST(@next").Append(i)
+                  .Append(" AS timestamptz), CAST(@v").Append(i).Append(" AS integer))");
+                AddAdvanceParams(cmd, sagas[start + i], i);
+            }
+            sb.Append(") AS v(saga_id, next_check_at, version) WHERE s.saga_id = v.saga_id AND s.version = v.version AND s.leased_by = @p0");
+        }
+        else
+        {
+            // SQLite UPDATE ... FROM：用 SELECT/UNION ALL 派生表（SQLite 不接受
+            // FROM (VALUES ...) AS v(col1,col2) 的列别名列表）。
+            sb.Append("UPDATE saga_states SET next_check_at = v.next_check_at, version = saga_states.version + 1 FROM (");
+            for (var i = 0; i < count; i++)
+            {
+                if (i > 0) sb.Append(" UNION ALL ");
+                sb.Append("SELECT @id").Append(i).Append(" AS saga_id, @next").Append(i)
+                  .Append(" AS next_check_at, @v").Append(i).Append(" AS version");
+                AddAdvanceParams(cmd, sagas[start + i], i);
+            }
+            sb.Append(") AS v WHERE saga_states.saga_id = v.saga_id AND saga_states.version = v.version AND saga_states.leased_by = @p0");
+        }
+
+        return sb.ToString();
+    }
+
+    private static void AddAdvanceParams(DbCommand cmd, TState saga, int index)
+    {
+        AddParam(cmd, $"@id{index}", saga.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture));
+        AddParam(cmd, $"@next{index}", saga.NextCheckAt.HasValue ? saga.NextCheckAt.Value : (object)DBNull.Value);
+        AddParam(cmd, $"@v{index}", saga.Version);
     }
 
     /// <inheritdoc/>

@@ -199,7 +199,9 @@ TState>
                         // 然后重新抛出让上层感知关停信号。租约释放用独立 CT（不响应本次取消）。
                         // SaveChanges 失败不掩盖原始 OCE —— 关停时 DB 连接可能已断。
                         sagaState.LeasedBy = null;
-                        sagaState.LeasedUntil = null;
+                        // 扫描轮转：写回本 tick 时刻而不是 NULL，legacy 扫描按 leased_until
+                        // NULLS FIRST 排序时该行退到未扫描行之后，避免同一批每 tick 重租。
+                        sagaState.LeasedUntil = now;
                         try
                         {
                             var releaseSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
@@ -274,7 +276,7 @@ TState>
                     else
                     {
                         sagaState.LeasedBy = null;
-                        sagaState.LeasedUntil = null;
+                        sagaState.LeasedUntil = now;
                         // P2 修复（取消路径对称）：同上——终态写入不响应取消
                         var releaseSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
                         if (releaseSaved == 0)
@@ -311,7 +313,9 @@ TState>
             try
             {
                 var batchStore = (ISagaLeaseBatchStore<TState>)_store;
-                var released = await batchStore.ReleaseLeasesAsync(options.LeaseOwner, pendingRelease, CancellationToken.None).ConfigureAwait(false);
+                var released = _store is ISagaScanCursorStore<TState> cursorStore
+                    ? await cursorStore.ReleaseLeasesAsync(options.LeaseOwner, pendingRelease, now, CancellationToken.None).ConfigureAwait(false)
+                    : await batchStore.ReleaseLeasesAsync(options.LeaseOwner, pendingRelease, CancellationToken.None).ConfigureAwait(false);
                 if (released < pendingRelease.Count)
                 {
                     // 冲突信号粒度由逐 saga 收粗为批计数（B-1 已裁决取舍，见 ISagaLeaseBatchStore remarks）
