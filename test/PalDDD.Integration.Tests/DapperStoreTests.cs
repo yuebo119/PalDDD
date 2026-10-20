@@ -1369,6 +1369,31 @@ public sealed class DapperStoreTests
         await Assert.That(read[0].EventId).IsEqualTo(eventId);
     }
 
+    [Test]
+    public async Task EventLog_BinaryRead_MissingBackfill_Throws(CancellationToken cancellationToken)
+    {
+        var log = new DapperEventLog(_conn, null, _dbType);
+        await log.AppendAsync(
+            "bin-missing",
+            ExpectedStreamVersion.NoStream,
+            [new EventData(PalUlid.New(), "test.event.v1", 1, "application/json",
+                "{}"u8.ToArray(), "{}"u8.ToArray(), EventAuditMetadata.Empty)],
+            cancellationToken);
+        await _conn.ExecuteAsync("UPDATE events SET event_id_bin = NULL WHERE stream_name = 'bin-missing'");
+
+        log.UseBinaryEventId = true;
+        await Assert.That(async () => await ReadAllEventsAsync(log.ReadStreamAsync("bin-missing", 0, 10, cancellationToken)))
+            .Throws<InvalidOperationException>();
+    }
+
+    private static async Task<List<RecordedEvent>> ReadAllEventsAsync(IAsyncEnumerable<RecordedEvent> events)
+    {
+        var result = new List<RecordedEvent>();
+        await foreach (var e in events)
+            result.Add(e);
+        return result;
+    }
+
     /// <summary>
     /// A12（S1 轮，2026-10-15）：SQLite k&gt;1 多行 VALUES + RETURNING 批量化——单语句完成
     /// k 事件追加（原 k 次 INSERT..RETURNING 各一往返）。锁定行为：版本连续、位置首末

@@ -403,7 +403,7 @@ services.AddScoped<IEventLog>(sp => sp.GetRequiredService<AppEventLogDbContext>(
 
 `AddPalEventLogEfCore<TContext>()` 把 `EventLogPositionReserver` 注册为 **Singleton**（`TryAdd` 语义，不覆盖调用方自己的注册）。EF Core 经 `ActivatorUtilities` 从 DI 解析派生上下文的构造参数，因此注册后所有请求上下文共享同一 chunk 缓存——这正是 Hi/Lo 分配器的设计前提。区块大小可调：`AddPalEventLogEfCore<AppEventLogDbContext>(chunkSize: 500)`。
 
-适配器会配置 `GlobalPosition` 主键、`(StreamName, StreamVersion)` 唯一索引和 `EventId` 唯一索引，并持久化 payload、metadata、审计字段和 trace context。`GlobalPosition` 由 `EventLogPositionReserver` 的 Hi/Lo 段分配器管理，而非数据库自增 identity。分配器缓存 chunk（默认 100 个位置）在进程内，仅当 chunk 耗尽时通过乐观 CAS（Revision 并发令牌）更新持久化 allocator 行；关系型 provider 下 append 使用默认隔离级别（ReadCommitted），stream 级别并发由唯一索引保障。
+适配器会配置 `GlobalPosition` 主键、`(StreamName, StreamVersion)` 唯一索引和 `EventId` 唯一索引，并持久化 payload、metadata、审计字段和 trace context。`GlobalPosition` 由 `EventLogPositionReserver` 的 Hi/Lo 段分配器管理，而非数据库自增 identity。分配器缓存 chunk（默认 1000 个位置）在进程内，仅当 chunk 耗尽时通过乐观 CAS（Revision 并发令牌）更新持久化 allocator 行；关系型 provider 下 append 使用默认隔离级别（ReadCommitted），stream 级别并发由唯一索引保障。
 
 `AppendAsync` 还会发出 `EventLog Append` span。它使用同一个 `PalActivitySource.Name`，仅包含 `pal.eventlog.event_count` 标签——流名、stream version 与 global position 等高基数信息（含聚合 ID）已按 ITM-229 标准从 tag 移除，位置信息由 `AppendEventsResult` 返回值承载。
 

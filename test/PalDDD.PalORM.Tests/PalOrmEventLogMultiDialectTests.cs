@@ -1,5 +1,7 @@
+using System.Runtime.CompilerServices;
 using PalDDD.PalORM.Stores;
 using PalORM;
+using PalORM.Sqlite;
 using PalDDD.EventLog;
 
 namespace PalDDD.PalORM.Tests;
@@ -79,6 +81,46 @@ public class PalOrmEventLogMultiDialectTests
             await Assert.That(read[0].EventName).IsEqualTo("event.a");
             await Assert.That(read[2].EventName).IsEqualTo("event.c");
         }
+    }
+
+    [Test]
+    public async Task EventLog_Sqlite_AppendLargeBatch_ChunksAboveParameterLimit()
+    {
+        await using var ts = await MultiDialectFixture.CreateSqliteAsync();
+        var log = new PalOrmEventLog<SqliteProvider>(ts.Session);
+        var events = Enumerable.Range(0, 2500)
+            .Select(i => MultiDialectTestData.CreateEventData($"large.event.{i}"))
+            .ToArray();
+
+        var result = await log.AppendAsync("large-stream", ExpectedStreamVersion.NoStream, events, default);
+
+        await Assert.That(result.FirstStreamVersion).IsEqualTo(0L);
+        await Assert.That(result.LastStreamVersion).IsEqualTo(2499L);
+        var read = new List<RecordedEvent>();
+        await foreach (var e in log.ReadStreamAsync("large-stream", 0, int.MaxValue, default))
+            read.Add(e);
+        await Assert.That(read.Count).IsEqualTo(2500);
+        await Assert.That(read[^1].EventName).IsEqualTo("large.event.2499");
+    }
+
+    [Test]
+    public async Task EventLog_Sqlite_BinaryMode_ReadsBinAndRejectsMissingBackfill()
+    {
+        await using var ts = await MultiDialectFixture.CreateSqliteAsync();
+        var log = new PalOrmEventLog<SqliteProvider>(ts.Session);
+        var eventData = MultiDialectTestData.CreateEventData("binary.event.v1");
+        await log.AppendAsync("binary-stream", ExpectedStreamVersion.NoStream, [eventData], default);
+
+        log.UseBinaryEventId = true;
+        var read = new List<RecordedEvent>();
+        await foreach (var e in log.ReadStreamAsync("binary-stream", 0, 10, default))
+            read.Add(e);
+        await Assert.That(read).HasSingleItem();
+        await Assert.That(read[0].EventId).IsEqualTo(eventData.EventId);
+
+        await ts.Session.ExecuteAsync(FormattableStringFactory.Create("UPDATE events SET event_id_bin = NULL"), ct: default);
+        await Assert.That(async () => await ReadAllAsync(log.ReadAllAsync(0, 10, default)))
+            .Throws<InvalidOperationException>();
     }
 
     [Test]
@@ -184,5 +226,13 @@ public class PalOrmEventLogMultiDialectTests
             await Assert.ThrowsAsync(async () =>
                 await log.AppendAsync("dup-stream", ExpectedStreamVersion.Any, [duplicate], default));
         }
+    }
+
+    private static async Task<List<RecordedEvent>> ReadAllAsync(IAsyncEnumerable<RecordedEvent> events)
+    {
+        var result = new List<RecordedEvent>();
+        await foreach (var e in events)
+            result.Add(e);
+        return result;
     }
 }

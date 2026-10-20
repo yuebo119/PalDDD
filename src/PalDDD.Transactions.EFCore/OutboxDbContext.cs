@@ -18,8 +18,13 @@ public abstract class OutboxDbContext : DbContext, IPalOutboxStore, IBatchMarkOu
     /// <summary>构造上下文并注册新增 Pending 行的可用时刻归一化。</summary>
     protected OutboxDbContext(DbContextOptions options) : base(options)
     {
-        // EF Core 的 SavingChanges 同时覆盖同步与异步 SaveChanges 入口。
-        SavingChanges += (_, _) => NormalizePendingNextAttemptAt();
+        // 只处理新跟踪的 OutboxMessage：SavingChanges 里 Entries<T>() 会触发一次全量
+        // DetectChanges，且 SaveChanges 自身还会再扫一次；Tracked 是逐实体事件，O(1)。
+        ChangeTracker.Tracked += (_, e) =>
+        {
+            if (e.Entry.State == EntityState.Added && e.Entry.Entity is OutboxMessage message)
+                NormalizePendingNextAttemptAt(message, GetUtcNow());
+        };
     }
 
     /// <inheritdoc />
@@ -523,20 +528,12 @@ public abstract class OutboxDbContext : DbContext, IPalOutboxStore, IBatchMarkOu
     /// 无租约时取 CreatedAt，已有租约时取 max(CreatedAt, LockedUntil)，避免旧式种子/直写行
     /// 在 <c>NextAttemptAt &lt;= now</c> 谓词下永远不可见或被活跃租约提前放行。
     /// </remarks>
-    private void NormalizePendingNextAttemptAt()
+    private static void NormalizePendingNextAttemptAt(OutboxMessage message, DateTimeOffset now)
     {
-        var now = GetUtcNow();
-        foreach (var entry in ChangeTracker.Entries<OutboxMessage>())
-        {
-            if (entry.State != EntityState.Added || entry.Entity.Status != OutboxStatus.Pending)
-                continue;
-            if (entry.Entity.NextAttemptAt is not null)
-                continue;
-            var lockedUntil = entry.Entity.LockedUntil;
-            entry.Entity.NextAttemptAt = lockedUntil is { } until && until > now
-                ? until
-                : now;
-        }
+        if (message.Status != OutboxStatus.Pending || message.NextAttemptAt is not null)
+            return;
+        var lockedUntil = message.LockedUntil;
+        message.NextAttemptAt = lockedUntil is { } until && until > now ? until : now;
     }
 
     /// <summary>配置发件箱消息实体。</summary>

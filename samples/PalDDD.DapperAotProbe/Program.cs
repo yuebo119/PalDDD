@@ -142,6 +142,19 @@ static async Task ProbeOutboxAsync(DbConnection conn, DapperDbType dbType, Actio
     var pending = await store.GetPendingMessagesAsync(10,
         new OutboxOptions().MaxRetryCount, CancellationToken.None).ConfigureAwait(false);
     check("outbox processed terminal", pending.Count == 0);
+
+    var batch = Enumerable.Range(0, 20)
+        .Select(i => new OutboxMessage
+        {
+            Type = $"probe.batch.{i}",
+            Payload = [1],
+            ContentType = "application/json",
+            SchemaVersion = 1,
+            Status = OutboxStatus.Pending,
+            CreatedAt = TimeProvider.System.GetUtcNow(),
+        }).ToList();
+    var batchAdded = await store.AddMessagesAsync(batch, CancellationToken.None).ConfigureAwait(false);
+    check("outbox batch 20 (mysql fallback for >16 without local_infile)", batchAdded == 20);
 }
 
 // ═══ ③ EventLog：AppendAsync（byte[] Payload/Metadata）→ ReadStreamAsync 往返 ═══

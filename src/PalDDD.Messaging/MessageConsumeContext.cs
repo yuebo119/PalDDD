@@ -16,27 +16,61 @@ namespace PalDDD.Messaging;
 /// <see cref="IMessageBroker.SubscribeAsync{TMessage}(Func{TMessage, MessageConsumeContext?, CancellationToken, ValueTask}, CancellationToken)"/>
 /// 的消费上下文重载在消费端还原为该类型，用于延续跨上下文 trace 与因果链。
 /// </summary>
-public sealed class MessageConsumeContext(
-    string? correlationId,
-    string? causationId,
-    string? traceParent,
-    string? traceState,
-    IReadOnlyDictionary<string, string?> headers)
+public sealed class MessageConsumeContext
 {
+    private readonly IReadOnlyDictionary<string, string?>? _headers;
+    private readonly Lazy<IReadOnlyDictionary<string, string?>>? _lazyHeaders;
+
+    /// <summary>构造消费上下文（已解码头）。</summary>
+    public MessageConsumeContext(
+        string? correlationId,
+        string? causationId,
+        string? traceParent,
+        string? traceState,
+        IReadOnlyDictionary<string, string?> headers)
+    {
+        ArgumentNullException.ThrowIfNull(headers);
+        CorrelationId = correlationId;
+        CausationId = causationId;
+        TraceParent = traceParent;
+        TraceState = traceState;
+        _headers = headers;
+        _lazyHeaders = null;
+    }
+
+    /// <summary>构造消费上下文（头按需解码；已知追踪字段已提前提取）。</summary>
+    internal MessageConsumeContext(
+        string? correlationId,
+        string? causationId,
+        string? traceParent,
+        string? traceState,
+        Func<IReadOnlyDictionary<string, string?>> headersFactory)
+    {
+        ArgumentNullException.ThrowIfNull(headersFactory);
+        CorrelationId = correlationId;
+        CausationId = causationId;
+        TraceParent = traceParent;
+        TraceState = traceState;
+        _headers = null;
+        _lazyHeaders = new Lazy<IReadOnlyDictionary<string, string?>>(
+            headersFactory,
+            System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+    }
+
     /// <summary>关联 ID（header <c>x-correlation-id</c>；RabbitMQ 路径兜底读 BasicProperties.CorrelationId）；消息未携带时为 null。</summary>
-    public string? CorrelationId { get; } = correlationId;
+    public string? CorrelationId { get; }
 
     /// <summary>因果上游消息 ID（header <c>x-causation-id</c>）；消息未携带时为 null。</summary>
-    public string? CausationId { get; } = causationId;
+    public string? CausationId { get; }
 
     /// <summary>W3C 追踪父标识（header <c>traceparent</c>）；消息未携带时为 null。</summary>
-    public string? TraceParent { get; } = traceParent;
+    public string? TraceParent { get; }
 
     /// <summary>W3C 追踪状态（header <c>tracestate</c>）；消息未携带时为 null。</summary>
-    public string? TraceState { get; } = traceState;
+    public string? TraceState { get; }
 
     /// <summary>全部消息头的字符串只读视图（字节头按 UTF-8 解码，未知值类型解码为 null）；无头时为空字典。</summary>
-    public IReadOnlyDictionary<string, string?> Headers { get; } = headers ?? throw new ArgumentNullException(nameof(headers));
+    public IReadOnlyDictionary<string, string?> Headers => _headers ?? _lazyHeaders!.Value;
 
     /// <summary>
     /// 从 Broker 原始消息头构造消费上下文。<br/>
@@ -54,52 +88,67 @@ public sealed class MessageConsumeContext(
         IEnumerable<KeyValuePair<string, object?>>? headers,
         string? correlationId = null)
     {
-        // EPSL 地毯审计 2026-10-11 A-1：空入参快路径——headers 为 null 且无兜底 correlation
-        // 直接返回 null。这是本框架默认消费形态（无追踪消息：KafkaBroker.FromKafkaHeaders
-        // 无表/空表直返 null），原形态字典构造先于空判短路，每条消费消息白付一次分配。语义
-        // 与原「decoded.Count == 0 且无兜底」短路一致，非 null 路径零改动。
         if (headers is null && correlationId is null)
             return null;
-
-        // EPSL 地毯审计 2026-10-16 A 批 #14：无头 + 兜底 correlation 形态免字典构造。
-        // 本仓 RabbitMQ 写侧把 correlation 写入 BasicProperties.CorrelationId 而非 header
-        //（见 RabbitMqBroker.CreateHeaders），该主流形态此前每条消费消息白付一个空字典
-        //（~80B）+ 四次 TryGetValue；A-1（2026-10-11）补的是「无头且无兜底」格，本格是
-        // 其姊妹漏格。空头视图用缓存单例（Headers 契约要求非 null）。
         if (headers is null)
             return new MessageConsumeContext(correlationId, null, null, null, EmptyHeaders);
 
-        var decoded = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var (key, value) in headers)
-            decoded[key] = DecodeHeaderValue(value);
+        if (headers is ICollection<KeyValuePair<string, object?>> { Count: 0 })
+            return correlationId is null
+                ? null
+                : new MessageConsumeContext(correlationId, null, null, null, EmptyHeaders);
 
-        if (decoded.Count == 0 && correlationId is null)
-            return null;
-
-        return FromDecodedHeaders(decoded, correlationId);
+        // 闭包只在非空头路径创建；null/空头快路径不承担 display class 分配。
+        return FromHeadersCore(headers, correlationId);
     }
 
-    /// <summary>
-    /// C-11（EPSL 地毯审计 2026-10-11）：已解码头的上下文构造——KafkaBroker 消费路径单趟
-    /// 遍历 Confluent Headers 直产已解码字典（免 ToHeaderMap 中间字典的双重物化），与
-    /// <see cref="FromHeaders"/> 共享尾部映射（键提取 + correlation 兜底）单一来源。
-    /// </summary>
-    internal static MessageConsumeContext? FromDecodedHeaders(Dictionary<string, string?> decoded, string? correlationId)
+    private static MessageConsumeContext FromHeadersCore(
+        IEnumerable<KeyValuePair<string, object?>> headers,
+        string? correlationId)
     {
-        if (decoded.Count == 0 && correlationId is null)
-            return null;
-
-        decoded.TryGetValue(HeaderNames.CorrelationId, out var headerCorrelation);
-        decoded.TryGetValue(HeaderNames.CausationId, out var causationId);
-        decoded.TryGetValue(HeaderNames.TraceParent, out var traceParent);
-        decoded.TryGetValue(HeaderNames.TraceState, out var traceState);
+        // 只解码四个已知追踪键；其余头在 Headers 被读取时才物化。
+        string? headerCorrelation = null;
+        string? causationId = null;
+        string? traceParent = null;
+        string? traceState = null;
+        foreach (var (key, value) in headers)
+        {
+            switch (key)
+            {
+                case HeaderNames.CorrelationId:
+                    headerCorrelation = DecodeHeaderValue(value);
+                    break;
+                case HeaderNames.CausationId:
+                    causationId = DecodeHeaderValue(value);
+                    break;
+                case HeaderNames.TraceParent:
+                    traceParent = DecodeHeaderValue(value);
+                    break;
+                case HeaderNames.TraceState:
+                    traceState = DecodeHeaderValue(value);
+                    break;
+                default:
+                    break;
+            }
+        }
 
         return new MessageConsumeContext(
             headerCorrelation ?? correlationId,
             causationId,
             traceParent,
             traceState,
-            decoded);
+            () => DecodeHeaders(headers));
+    }
+
+    private static Dictionary<string, string?> DecodeHeaders(
+        IEnumerable<KeyValuePair<string, object?>> headers)
+    {
+        var decoded = headers is ICollection<KeyValuePair<string, object?>> collection
+            ? new Dictionary<string, string?>(collection.Count, StringComparer.Ordinal)
+            : new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var (key, value) in headers)
+            decoded[key] = DecodeHeaderValue(value);
+        return decoded;
     }
 
     /// <summary>无头形态的空头视图单例——Headers 契约要求非 null，免每条相关消息一个空字典

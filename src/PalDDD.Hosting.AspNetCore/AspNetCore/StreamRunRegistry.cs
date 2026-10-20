@@ -516,6 +516,8 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         var waitMilliseconds = keepAliveInterval is { } ka
             ? (int)Math.Clamp(ka.TotalMilliseconds, 1, int.MaxValue)
             : -1;
+        // 单次附着内复用批次缓冲：live 场景每项唤醒不再新建 List；回放大批次时复用同一数组。
+        var batch = new List<BufferedStreamItem<TItem>>(Math.Min(_buffer.Length, 256));
 
         try
         {
@@ -528,7 +530,7 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
 
             while (true)
             {
-                List<BufferedStreamItem<TItem>>? batch = null;
+                batch.Clear();
                 var superseded = false;
                 var terminal = false;
                 var heartbeat = false;
@@ -553,7 +555,8 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
                         {
                             var offset = (int)(startIndex - _oldestAvailable);
                             var take = (int)Math.Min(end - startIndex, _count);
-                            batch = new List<BufferedStreamItem<TItem>>(take);
+                            if (batch.Capacity < take)
+                                batch.Capacity = take;
                             for (var i = 0; i < take; i++)
                                 batch.Add(_buffer[(_start + offset + i) % _buffer.Length]);
                             startIndex += take;
@@ -592,7 +595,7 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
                     heartbeat = keepAliveInterval is not null;
                 }
 
-                if (gap && batch is null && !superseded && !terminal)
+                if (gap && batch.Count == 0 && !superseded && !terminal)
                 {
                     // 上一轮检测到丢弃：本轮开头补 gap 帧
                     WriteGapFrame(bodyWriter, startIndex);
@@ -618,8 +621,9 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
                     continue;
                 }
 
-                if (batch is not null)
+                if (batch.Count > 0)
                 {
+                    var written = 0;
                     foreach (var item in batch)
                     {
                         StreamFrameWriter.WriteDataFrame(
@@ -627,6 +631,13 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
                             StreamFrameSerializer.Serialize(item.Item, jsonTypeInfo),
                             item.EventName,
                             item.Id);
+                        // 回放大批次分段 flush：live 的 take=1 仍由批末 flush；重连回放
+                        // 不必把 1024 帧全部堆进管道后才让客户端看到首帧。
+                        if (batch.Count > 1
+                            && (++written % 64 == 0 || bodyWriter.UnflushedBytes >= 16 * 1024))
+                        {
+                            await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                        }
                     }
                     await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
                     continue;

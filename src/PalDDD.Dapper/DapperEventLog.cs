@@ -705,7 +705,8 @@ public sealed class DapperEventLog : IEventLog
             // 原 QueryAsync<EventLogRow> 会把全部行先物化进 List 再迭代，1M 事件可占数 GB；
             // 现按行读取并立即映射，峰值内存只与本行载荷相关。
             await foreach (var evt in ReadEventsCoreAsync(
-                EventLogSql.ReadStream, streamName, fromVersion, maxCount, cancellationToken).ConfigureAwait(false))
+                UseBinaryEventId ? EventLogSql.ReadStreamBinary : EventLogSql.ReadStream,
+                streamName, fromVersion, maxCount, binaryProjection: UseBinaryEventId, cancellationToken).ConfigureAwait(false))
             {
                 checked { read++; }
                 yield return evt;
@@ -736,7 +737,8 @@ public sealed class DapperEventLog : IEventLog
         try
         {
             await foreach (var evt in ReadEventsCoreAsync(
-                EventLogSql.ReadAll, streamName: null, fromPosition, maxCount, cancellationToken).ConfigureAwait(false))
+                UseBinaryEventId ? EventLogSql.ReadAllBinary : EventLogSql.ReadAll,
+                streamName: null, fromPosition, maxCount, binaryProjection: UseBinaryEventId, cancellationToken).ConfigureAwait(false))
             {
                 checked { read++; }
                 yield return evt;
@@ -759,6 +761,7 @@ public sealed class DapperEventLog : IEventLog
         string? streamName,
         long from,
         int max,
+        bool binaryProjection,
         [EnumeratorCancellation] CancellationToken ct)
     {
         var openedHere = false;
@@ -784,7 +787,7 @@ public sealed class DapperEventLog : IEventLog
             // 读取，按名取 ordinal 后跨列回读会在 PG 上抛 "Invalid attempt to read from column"。
             // SingleResult 仍是逐行流式（不物化全部行），允许行内随机列访问。
             reader = await cmd.ExecuteReaderAsync(CommandBehavior.SingleResult, ct).ConfigureAwait(false);
-            var ordinals = ReadOrdinals.Create(reader);
+            var ordinals = ReadOrdinals.Create(reader, binaryProjection);
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
                 yield return ReadRecordedEvent(reader, ordinals, UseBinaryEventId);
         }
@@ -818,11 +821,11 @@ public sealed class DapperEventLog : IEventLog
         int TraceParent,
         int TraceState)
     {
-        public static ReadOrdinals Create(DbDataReader reader)
+        public static ReadOrdinals Create(DbDataReader reader, bool binaryProjection)
             => new(
                 reader.GetOrdinal("global_position"),
-                reader.GetOrdinal("event_id"),
-                reader.GetOrdinal("event_id_bin"),
+                binaryProjection ? -1 : reader.GetOrdinal("event_id"),
+                binaryProjection ? reader.GetOrdinal("event_id_bin") : -1,
                 reader.GetOrdinal("event_name"),
                 reader.GetOrdinal("stream_name"),
                 reader.GetOrdinal("stream_version"),
@@ -855,7 +858,13 @@ public sealed class DapperEventLog : IEventLog
         {
             eventIdBin = reader.IsDBNull(o.EventIdBin) ? null : reader.GetFieldValue<byte[]>(o.EventIdBin);
             if (eventIdBin is not { Length: 16 })
+            {
+                // 二进制投影不加载文本列：未回填行直接失败，避免静默返回空 ID。
+                if (o.EventId < 0)
+                    throw new InvalidOperationException(
+                        $"Event at global position {globalPosition} has no 16-byte event_id_bin; run the M4 backfill before enabling binary reads.");
                 eventIdText = reader.GetString(o.EventId);
+            }
         }
         else
         {

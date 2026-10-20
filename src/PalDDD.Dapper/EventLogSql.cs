@@ -34,7 +34,11 @@ internal static class EventLogSql
     /// 💡 LIMIT @max 由调用方传入 maxCount（ITM-063：此前参数被静默忽略）。
     /// </summary>
     public const string ReadStream =
-        "SELECT * FROM events WHERE stream_name = @name AND stream_version >= @from ORDER BY stream_version LIMIT @max";
+        "SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE stream_name = @name AND stream_version >= @from ORDER BY stream_version LIMIT @max";
+
+    /// <summary>二进制模式按流读取：不传输文本 event_id，只取 event_id_bin。</summary>
+    public const string ReadStreamBinary =
+        "SELECT global_position, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE stream_name = @name AND stream_version >= @from ORDER BY stream_version LIMIT @max";
 
     /// <summary>
     /// I（2026-10-10 优化轮，仅 PG 启用）：单事件 Any 版本原子追加——INSERT..SELECT 子查询
@@ -96,5 +100,9 @@ internal static class EventLogSql
     /// 💡 LIMIT @max 由调用方传入 maxCount（ITM-063：此前参数被静默忽略）。
     /// </summary>
     public const string ReadAll =
-        "SELECT * FROM events WHERE global_position >= @from ORDER BY global_position LIMIT @max";
+        "SELECT global_position, event_id, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE global_position >= @from ORDER BY global_position LIMIT @max";
+
+    /// <summary>二进制模式按全局位置读取：不传输文本 event_id，只取 event_id_bin。</summary>
+    public const string ReadAllBinary =
+        "SELECT global_position, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE global_position >= @from ORDER BY global_position LIMIT @max";
 }

@@ -128,7 +128,7 @@
 |---|---|---|
 | 事件日志端口 | 按流追加 + 4 态期望版本（NoStream/Any/StreamExists/Exact）乐观并发；流读与全局读均为游标语义 | `IEventLog`、`ExpectedStreamVersion`（EventLog/） |
 | 审计元数据 | ActorId/Reason/Correlation/Causation/TraceParent/TraceState，可从 Activity.Current 自动捕获 | EventAuditMetadata.cs |
-| EFCore 事件日志 | Hi/Lo 全局位置分配器（chunk 100 + DB 行 CAS 重试）、唯一索引冲突分类为并发异常、零拷贝重水化 | EventLogDbContext.cs、EventLogPositionReserver.cs |
+| EFCore 事件日志 | Hi/Lo 全局位置分配器（chunk 1000 + DB 行 CAS 重试）、唯一索引冲突分类为并发异常、零拷贝重水化 | EventLogDbContext.cs、EventLogPositionReserver.cs |
 | 投影处理器 | 检查点租约式逐事件投影，at-least-once 契约（投影必须幂等） | `ProjectionProcessor<T>`（Projections/） |
 | 投影重建 | RebuildAsync 全量重建（先清检查点）/ ReplayAsync 增量补齐，名称一致性守卫 | `ProjectionRebuilder<T>`（ProjectionRebuilder.cs） |
 | 事件日志驱动回放源 | 按消息契约三重精确匹配反序列化；每流单事件类型约束已声明 | EventLogReplaySource.cs（Projections.EventLog） |

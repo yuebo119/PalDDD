@@ -167,18 +167,28 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
     private void LogKafkaError(string role, Error error)
     {
         if (error.IsFatal)
-            _logger.Error(new KafkaException(error), $"Kafka {role} 致命错误 [{error.Code}] {error.Reason}");
-        else
+        {
+            if (_logger.IsEnabled(LogLevel.Error))
+                _logger.Error(new KafkaException(error), $"Kafka {role} 致命错误 [{error.Code}] {error.Reason}");
+        }
+        else if (_logger.IsEnabled(LogLevel.Warning))
+        {
             _logger.Warning($"Kafka {role} 后台错误 [{error.Code}] {error.Reason}（librdkafka 自愈机制处理，不中断客户端）");
+        }
     }
 
     private void LogLibrdkafkaLog(string role, LogMessage message)
     {
         // SyslogLevel ≤ Warning（syslog 严重级 4）为告警级；Notice/Info/Debug 走 Debug 不刷屏
         if (message.Level <= SyslogLevel.Warning)
-            _logger.Warning($"Kafka {role} librdkafka [{message.Level}] {message.Message}（{message.Name}）");
-        else
+        {
+            if (_logger.IsEnabled(LogLevel.Warning))
+                _logger.Warning($"Kafka {role} librdkafka [{message.Level}] {message.Message}（{message.Name}）");
+        }
+        else if (_logger.IsEnabled(LogLevel.Debug))
+        {
             _logger.Debug($"Kafka {role} librdkafka {message.Message}（{message.Name}）");
+        }
     }
 
     /// <summary>发布消息到 Kafka Topic</summary>
@@ -584,13 +594,50 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         if (headers is null || headers.Count == 0)
             return null;
 
-        Dictionary<string, string?> decoded = new(StringComparer.Ordinal);
+        string? correlationId = null;
+        string? causationId = null;
+        string? traceParent = null;
+        string? traceState = null;
         foreach (var header in headers)
         {
-            var bytes = header.GetValueBytes(); // IHeader API：Key + GetValueBytes()（无 Value 属性）
-            decoded[header.Key] = bytes.Length == 0 ? null : Encoding.UTF8.GetString(bytes);
+            var value = DecodeKafkaHeader(header);
+            switch (header.Key)
+            {
+                case MessageConsumeContext.HeaderNames.CorrelationId:
+                    correlationId = value;
+                    break;
+                case MessageConsumeContext.HeaderNames.CausationId:
+                    causationId = value;
+                    break;
+                case MessageConsumeContext.HeaderNames.TraceParent:
+                    traceParent = value;
+                    break;
+                case MessageConsumeContext.HeaderNames.TraceState:
+                    traceState = value;
+                    break;
+                default:
+                    break;
+            }
         }
-        return MessageConsumeContext.FromDecodedHeaders(decoded, null);
+
+        // Headers 只在消费 handler 真正读取时才物化全量字典；已知追踪字段已提前解码。
+        return new MessageConsumeContext(
+            correlationId, causationId, traceParent, traceState,
+            () => DecodeKafkaHeaders(headers));
+    }
+
+    private static Dictionary<string, string?> DecodeKafkaHeaders(Headers headers)
+    {
+        var decoded = new Dictionary<string, string?>(headers.Count, StringComparer.Ordinal);
+        foreach (var header in headers)
+            decoded[header.Key] = DecodeKafkaHeader(header);
+        return decoded;
+    }
+
+    private static string? DecodeKafkaHeader(IHeader header)
+    {
+        var bytes = header.GetValueBytes();
+        return bytes.Length == 0 ? null : Encoding.UTF8.GetString(bytes);
     }
 
     /// <summary>释放 Broker：先释放全部订阅，再 Flush 排空在途消息，最后释放 producer。</summary>
