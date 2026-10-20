@@ -27,7 +27,18 @@
        7.0.0-preview.2.22152.2 系 2022 年废弃预览线不升、Microsoft.NETCore.Platforms 8.0 后停更、
        BDN/CAP 现处于各自最新预发布；SDK 11.0.100-rc.2.26504.105 与 dotnet tools 均为最新；
        GitHub Actions 同步升位（checkout v7.0.1 / setup-dotnet v6.0.0 / cache v6.1.0 /
-       upload-artifact v7.0.2 / setup-python v7.0.0 / codeql-action v4.39.0 / gh-release v3.0.3） -->
+       upload-artifact v7.0.2 / setup-python v7.0.0 / codeql-action v4.39.0 / gh-release v3.0.3）；
+       2026-10-20 全量核新（用户令「所有库和包、组件升级到最新版」，NuGet 双通道实测）：
+       PalORM ×5 → 6.6.0（6.x 线内；上游 CHANGELOG 明示无公共 API 破坏性变更，行为变化集中在
+       批量更新单语句路由与 PG COPY 批宽）、Meziantou.Analyzer 3.0.312 → 3.0.315（本次唯一两项
+       可升）；其余现有中央钉扎已在最新（含预发布口径）。传递钉扎补齐 .NET 11 波次 System.*
+       十一项（System.Composition ×6 / System.IO.Pipelines / System.Threading.Channels /
+       System.IO.Hashing / System.Memory.Data / System.Security.Cryptography.ProtectedData）
+       随 11.0.0-rc.2.26504.105——解析面原停在 4.5.0~10.0.3，与「微软 11 线全量同批」意图矛盾；
+       Verify/BDN/FsCheck/Azure-SDK 链内部件（Argon / DiffEngine / EmptyFiles / SimpleInfoName /
+       FSharp.Core / ApplicationInsights / DiaSymReader / Azure.Core / Microsoft.Diagnostics.* 等）
+       按 2026-10-17 仓规不钉扎，归顶层包所有；MediatR 14.2.0 / Verify.TUnit 33.3.4 商业许可
+       禁令继续维持；SDK 11.0.100-rc.2.26504.105、dotnet tools 与 GitHub Actions 七项实测均最新 -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
@@ -39,7 +50,7 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.9.0" />
     <!-- 第三方代码质量分析器（2026-10-18 接入，PrivateAssets=all，不进包依赖） -->
     <PackageVersion Include="Roslynator.Analyzers" Version="5.0.1" />
-    <PackageVersion Include="Meziantou.Analyzer" Version="3.0.312" />
+    <PackageVersion Include="Meziantou.Analyzer" Version="3.0.315" />
     <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.35.0.4138" />
     <!-- 仓储层依赖 (EF Core 11 rc.2 线) — 多数据库 Provider -->
     <!-- 2026-09-13 版本核实:EF Core 11 线最新即 rc.1.26425.128(rc.2 未发,GA 预计 2026-11),
@@ -70,14 +81,14 @@
          2026-09-13 用户裁决"铺垫不动"，启用路径见 DapperAotInitializer.cs 头注） -->
     <PackageVersion Include="Dapper.AOT" Version="1.1.0" />
     <!-- PalORM 适配器 — 面向 Native AOT 的 .NET 11 微 ORM（源生成 + 编译期 SQL，真 AOT 安全）
-         6.5.0（2026-10-11 三升，次版本线 6.4.1 → 6.5.0）：NuGet 无
-         releaseNotes 渠道（registration API 仅固定描述），按 PD9 破坏性只有编译+测试能证——
-         升位实证见 CHANGELOG [Unreleased] Dependencies 段与适配层注释 -->
-    <PackageVersion Include="PalORM.Core" Version="6.5.0" />
-    <PackageVersion Include="PalORM.SourceGen" Version="6.5.0" />
-    <PackageVersion Include="PalORM.Sqlite" Version="6.5.0" />
-    <PackageVersion Include="PalORM.PostgreSql" Version="6.5.0" />
-    <PackageVersion Include="PalORM.MySql" Version="6.5.0" />
+         6.6.0（2026-10-20 升位，次版本线 6.5.0 → 6.6.0）：上游 CHANGELOG 明示无公共 API
+         破坏性变更，行为变化为版本化 BulkUpdateAsync 单语句路由、PG BulkInsertAsync 默认整段
+         COPY、MySQL ToPageAsync 事务内 DbBatch；本仓适配面由编译+三方言测试面板实证 -->
+    <PackageVersion Include="PalORM.Core" Version="6.6.0" />
+    <PackageVersion Include="PalORM.SourceGen" Version="6.6.0" />
+    <PackageVersion Include="PalORM.Sqlite" Version="6.6.0" />
+    <PackageVersion Include="PalORM.PostgreSql" Version="6.6.0" />
+    <PackageVersion Include="PalORM.MySql" Version="6.6.0" />
     <!-- MemoryPack 二进制序列化（AOT 兼容） -->
     <PackageVersion Include="MemoryPack" Version="1.21.4" />
     <!-- Dapper.FluentMap 已移除 — 改用 Dapper.DefaultTypeMap.MatchNamesWithUnderscores -->
@@ -151,6 +162,20 @@
     <PackageVersion Include="Microsoft.NETCore.Platforms" Version="8.0.0-preview.7.23375.6" />
     <!-- 传递依赖版本固定 — 覆盖过时的传递依赖 -->
     <PackageVersion Include="System.Reflection.Metadata" Version="11.0.0-rc.2.26504.105" />
+    <!-- .NET 11 波次 System.* 传递钉扎补齐（2026-10-20 核新实证）：下列十一项由 Roslyn Workspaces /
+         ZLogger / MTP / BDN-Azure 链引入，未声明时解析停在 4.5.0~10.0.3，与「微软 11 线全量同批」
+         意图矛盾；各包均含 netstandard2.0 资产，分析器工程与 net11.0 项目共用 -->
+    <PackageVersion Include="System.Composition" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="System.Composition.AttributedModel" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="System.Composition.Convention" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="System.Composition.Hosting" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="System.Composition.Runtime" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="System.Composition.TypedParts" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="System.IO.Pipelines" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="System.Threading.Channels" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="System.IO.Hashing" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="System.Memory.Data" Version="11.0.0-rc.2.26504.105" />
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="11.0.0-rc.2.26504.105" />
     <!-- 原生压缩绑定 — LZ4 / ZStandard (Cysharp)。NativeCompressions.OpenZL 已移除（八轮评审：零使用的死依赖）；
          1.2.0（2026-10-15 升位）：1.x 线内次版本，破坏面由编译+往返测试实证（NativeCompressionTests） -->
     <PackageVersion Include="NativeCompressions" Version="1.2.0" />
