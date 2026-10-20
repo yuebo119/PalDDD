@@ -520,7 +520,10 @@ public abstract class OutboxDbContext(DbContextOptions options) : DbContext(opti
         modelBuilder.Entity<OutboxMessage>(e =>
         {
             e.HasKey(x => x.Id);
-            e.HasIndex(x => new { x.Status, x.NextAttemptAt, x.CreatedAt });
+            // 租约候选扫描按 CreatedAt 排序：(Status, CreatedAt) 让关系型 provider 直接按索引序
+            // 取满批次，不再对全部待租行排序。PG/SQLite 部署应使用 docs/sql 方言脚本中的
+            // 部分索引（WHERE status = 0），EF 模型保持跨 provider 可翻译的最简索引。
+            e.HasIndex(x => new { x.Status, x.CreatedAt });
             // 租约回读谓词（locked_by + locked_until）覆盖索引——审计 2026-09-17 P-2；对齐 docs/sql/*/000_schema.sql idx_outbox_lease_holder
             e.HasIndex(x => new { x.LockedBy, x.LockedUntil });
             e.Property(x => x.Id).HasConversion(v => v.ToString(null, System.Globalization.CultureInfo.InvariantCulture), v => PalUlid.Parse(v));

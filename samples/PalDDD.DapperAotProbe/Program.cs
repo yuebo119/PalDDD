@@ -150,6 +150,38 @@ static async Task ProbeEventLogAsync(DbConnection conn, DapperDbType dbType, Act
     check("eventlog append+read", read is not null);
     check("eventlog payload round-trip", read is not null && read.Payload.Span.SequenceEqual(payload));
     check("eventlog metadata round-trip", read is not null && read.Metadata.Span.SequenceEqual(metadata));
+
+    // 2026-10-20：多条守卫追加路径（PG INSERT..SELECT 原子版本判定；其它方言走既有批路径）
+    var batchStream = $"probe-batch-{PalUlid.New().ToString()[..8]}";
+    EventData NewEvent() => new(PalUlid.New(), "probe.event.v1", 1, "application/json",
+        payload, metadata, EventAuditMetadata.Empty);
+    var firstBatch = await log.AppendAsync(batchStream, ExpectedStreamVersion.NoStream,
+        [NewEvent(), NewEvent(), NewEvent()], CancellationToken.None).ConfigureAwait(false);
+    check("eventlog batch no-stream versions",
+        firstBatch.FirstStreamVersion == 0 && firstBatch.LastStreamVersion == 2);
+
+    var exactBatch = await log.AppendAsync(batchStream, ExpectedStreamVersion.Exact(2),
+        [NewEvent(), NewEvent()], CancellationToken.None).ConfigureAwait(false);
+    check("eventlog batch exact versions",
+        exactBatch.FirstStreamVersion == 3 && exactBatch.LastStreamVersion == 4);
+
+    var staleRejected = false;
+    try
+    {
+        await log.AppendAsync(batchStream, ExpectedStreamVersion.Exact(1),
+            [NewEvent(), NewEvent()], CancellationToken.None).ConfigureAwait(false);
+    }
+    catch (EventStreamConcurrencyException)
+    {
+        staleRejected = true;
+    }
+    check("eventlog batch stale exact rejected", staleRejected);
+
+    var batchRead = 0;
+    await foreach (var _ in log.ReadStreamAsync(batchStream,
+        cancellationToken: CancellationToken.None).ConfigureAwait(false))
+        batchRead++;
+    check("eventlog batch read 5", batchRead == 5);
 }
 
 // ═══ ④ Idempotency：TryStart → MarkCompleted（byte[] response）→ GetAsync 往返 ═══

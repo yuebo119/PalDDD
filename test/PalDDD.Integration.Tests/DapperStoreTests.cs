@@ -135,7 +135,8 @@ public sealed class DapperStoreTests
                 trace_parent    TEXT,
                 trace_state     TEXT
             );
-            CREATE INDEX idx_outbox_status ON outbox_messages(status, next_attempt_at, locked_until);
+            CREATE INDEX idx_outbox_due ON outbox_messages(created_at) WHERE status = 0;
+            CREATE INDEX idx_outbox_lease_holder ON outbox_messages(locked_by, locked_until);
 
             CREATE TABLE inbox_messages (
                 id                    INTEGER PRIMARY KEY AUTOINCREMENT,

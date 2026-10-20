@@ -88,6 +88,18 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
         ArgumentNullException.ThrowIfNull(policy);
         ValidateKeyParts(operationName, key);
 
+        // 2026-10-20 性能轮：关系型 provider INSERT 优先。新 key（幂等主场景）从
+        // 「SELECT 未命中 + INSERT」两次往返降为一次；冲突时才回读现有记录走复用/Existing
+        // 分支。唯一冲突分类由 TryCreateRecordAsync 的 IsUniqueConstraintViolation 过滤，
+        // 连接故障照常上抛。InMemory provider 的重复键以 ArgumentException 形态暴露（无
+        // DbUpdateException 分类面），保持原 SELECT 优先路径不变。
+        if (Database.IsRelational())
+        {
+            var created = await TryCreateRecordAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
+            if (created is not null)
+                return new IdempotencyStartResult(IdempotencyStartOutcome.Started, created);
+        }
+
         // A5（S1 轮）：跟踪查询走按模型缓存的编译委托（僵尸回收分支的突变依赖
         // ChangeTracker，保持跟踪形态；编译只固化查询形状，跟踪语义不变）
         var record = await GetRecordTrackedByModel.GetOrAdd(Model, static _ =>
@@ -97,6 +109,9 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
 
         if (record is null)
         {
+            if (Database.IsRelational())
+                return new IdempotencyStartResult(IdempotencyStartOutcome.Contended, null);
+
             var created = await TryCreateRecordAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
             return created is null
                 ? new IdempotencyStartResult(IdempotencyStartOutcome.Contended, null)

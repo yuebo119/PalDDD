@@ -28,6 +28,8 @@
 // ─────────────────────────────────────────────────────────────
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using PalDDD.Transactions;
 using PalDDD.Idempotency;
 using PalDDD.EventLog;
@@ -165,6 +167,39 @@ public static class DapperServiceCollectionExtensions
                 timeProvider: sp.GetService<TimeProvider>(),
                 dbType: sp.GetRequiredService<DapperDbType>()));
 
+        return services;
+    }
+
+    /// <summary>
+    /// 注册历史表保留清理（2026-10-20 性能轮，可选）。默认不注册、不运行；显式调用后
+    /// 后台服务按 <see cref="RetentionOptions.PollInterval"/> 分批删除已处理 Outbox/Inbox
+    /// 行与已过期幂等记录。建议与 <see cref="AddPalDapperTransactions"/> 同 scope 使用。
+    /// </summary>
+    /// <param name="services">DI 服务集合。</param>
+    /// <param name="type">数据库方言（与 Store 注册一致）。</param>
+    /// <param name="configure">可选保留策略配置。</param>
+    public static IServiceCollection AddPalDapperRetention(
+        this IServiceCollection services,
+        DapperDbType type,
+        Action<RetentionOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddOptions<RetentionOptions>()
+            .Configure(configure ?? (static _ => { }))
+            .Validate(static options =>
+                    options.PollInterval > TimeSpan.Zero
+                    && options.OutboxRetention > TimeSpan.Zero
+                    && options.InboxRetention > TimeSpan.Zero
+                    && options.BatchSize > 0
+                    && options.MaxBatchesPerTick > 0,
+                "Retention options require positive intervals, batch size, and max batches per tick.")
+            .ValidateOnStart();
+
+        services.TryAddScoped<IRetentionStore>(sp =>
+            new DapperRetentionStore(sp.GetRequiredService<DbConnection>(), type));
+        services.TryAddScoped<RetentionProcessor>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, RetentionProcessorService>());
         return services;
     }
 }

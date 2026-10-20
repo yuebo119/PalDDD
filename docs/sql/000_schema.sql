@@ -28,8 +28,10 @@ CREATE TABLE outbox_messages (
     trace_state     TEXT    -- 审计：W3C tracestate
 );
 
-CREATE INDEX idx_outbox_status ON outbox_messages(status, next_attempt_at, locked_until);
+-- 租约候选扫描按 created_at 排序；有部分索引能力的方言用 WHERE status = 0。
+CREATE INDEX idx_outbox_due ON outbox_messages(created_at);
 CREATE INDEX idx_outbox_created ON outbox_messages(created_at);
+CREATE INDEX idx_outbox_lease_holder ON outbox_messages(locked_by, locked_until);
 
 -- ── Inbox 收件箱幂等消费表 ──
 CREATE TABLE inbox_messages (
@@ -85,8 +87,8 @@ CREATE TABLE events (
 );
 
 CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id);
-CREATE INDEX idx_events_global ON events(global_position);
+CREATE UNIQUE INDEX idx_events_event_id ON events(event_id);
+-- global_position 是主键，独立索引纯冗余（2026-10-20 移除）。
 
 -- ── Idempotency 幂等记录表（P3-010 补充）──
 -- P2 修复（十轮）：列名 key → idempotency_key、唯一索引 → 复合主键——对齐

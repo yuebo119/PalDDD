@@ -346,6 +346,11 @@ class PalDDD.Dapper.DapperProjectionCheckpointStore
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask ResetAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionCheckpoint> TryStartAsync(System.String projectionName, System.String sourceName, System.String position, System.DateTimeOffset startedAt, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
+class PalDDD.Dapper.DapperRetentionStore
+  ctor(System.Data.Common.DbConnection connection, PalDDD.Dapper.DapperDbType dbType)
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredIdempotencyAsync(System.DateTimeOffset now, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredInboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredOutboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Boolean includeDead, System.Threading.CancellationToken ct)
 class PalDDD.Dapper.DapperSagaStateStore<TState>
   ctor(System.Data.Common.DbConnection connection, System.Data.Common.DbTransaction transaction, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState> jsonTypeInfo, System.TimeProvider timeProvider, PalDDD.Dapper.DapperDbType dbType)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<TState>> GetActiveSagasAsync(System.Int32 batchSize, System.Threading.CancellationToken ct)
@@ -355,6 +360,7 @@ class PalDDD.Dapper.DapperSagaStateStore<TState>
   method System.Threading.Tasks.ValueTask<System.Int32> ReleaseLeasesAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(TState state, System.Threading.CancellationToken ct)
 static class PalDDD.Dapper.DapperServiceCollectionExtensions
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalDapperRetention(Microsoft.Extensions.DependencyInjection.IServiceCollection services, PalDDD.Dapper.DapperDbType type, System.Action<PalDDD.Transactions.RetentionOptions> configure)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalDapperSagaSnapshot(Microsoft.Extensions.DependencyInjection.IServiceCollection services, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TState> jsonTypeInfo)
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalDapperTransactions(Microsoft.Extensions.DependencyInjection.IServiceCollection services, PalDDD.Dapper.DapperDbType type, System.String connectionString)
 class PalDDD.Dapper.DapperUnitOfWork
@@ -706,6 +712,7 @@ class PalDDD.EventLog.EventData
   property System.ReadOnlyMemory<System.Byte> Metadata
   property System.ReadOnlyMemory<System.Byte> Payload
   property System.Int32 SchemaVersion
+  method PalDDD.EventLog.EventData FromOwned(ByteAether.Ulid.Ulid eventId, System.String eventName, System.Int32 schemaVersion, System.String contentType, System.Byte[] payload, System.Byte[] metadata, PalDDD.EventLog.EventAuditMetadata audit)
 class PalDDD.EventLog.EventStreamConcurrencyException
   ctor()
   ctor(System.String message)
@@ -1580,6 +1587,10 @@ interface PalDDD.Transactions.IPalOutboxStore
   method System.Threading.Tasks.ValueTask ReleaseForRetryAsync(PalDDD.Transactions.OutboxMessage message, System.String failureReason, System.DateTimeOffset nextAttemptAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> RequeueDeadAsync(ByteAether.Ulid.Ulid messageId, System.DateTimeOffset nextAttemptAt, System.String retriedBy, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(System.Threading.CancellationToken ct)
+interface PalDDD.Transactions.IRetentionStore
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredIdempotencyAsync(System.DateTimeOffset now, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredInboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredOutboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Boolean includeDead, System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.IRetryBackoffPolicy
   method System.TimeSpan ComputeDelay(System.Int32 attempt)
 interface PalDDD.Transactions.ISagaEventSink
@@ -1705,6 +1716,30 @@ enum PalDDD.Transactions.OutboxStatus
   field System.Int32 value__
 class PalDDD.Transactions.PeriodicBackgroundProcessor
   method System.Void Dispose()
+class PalDDD.Transactions.RetentionOptions
+  ctor()
+  property System.Int32 BatchSize
+  property System.Boolean DeleteDeadOutboxMessages
+  property System.TimeSpan InboxRetention
+  property System.Int32 MaxBatchesPerTick
+  property System.TimeSpan OutboxRetention
+  property System.TimeSpan PollInterval
+class PalDDD.Transactions.RetentionProcessor
+  ctor(PalDDD.Transactions.IRetentionStore store, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.RetentionOptions> options, System.TimeProvider timeProvider)
+  method System.Threading.Tasks.ValueTask<PalDDD.Transactions.RetentionResult> RunOnceAsync(System.Threading.CancellationToken ct)
+class PalDDD.Transactions.RetentionProcessorService
+  ctor(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.RetentionOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.RetentionProcessorService> logger, System.TimeProvider timeProvider)
+struct PalDDD.Transactions.RetentionResult
+  ctor(System.Int32 OutboxDeleted, System.Int32 InboxDeleted, System.Int32 IdempotencyDeleted)
+  property System.Int32 IdempotencyDeleted [init]
+  property System.Int32 InboxDeleted [init]
+  property System.Int32 OutboxDeleted [init]
+  property System.Int32 TotalDeleted
+  method System.Void Deconstruct(System.Int32& OutboxDeleted, System.Int32& InboxDeleted, System.Int32& IdempotencyDeleted)
+  method System.Boolean Equals(PalDDD.Transactions.RetentionResult other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
 struct PalDDD.Transactions.SagaCompensationStarted
   ctor(ByteAether.Ulid.Ulid SagaId, System.String StepKey)
   property ByteAether.Ulid.Ulid SagaId [init]

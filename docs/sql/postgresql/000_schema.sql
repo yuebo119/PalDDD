@@ -18,10 +18,13 @@ CREATE TABLE outbox_messages (
     trace_parent    TEXT,
     trace_state     TEXT
 );
-CREATE INDEX idx_outbox_status ON outbox_messages(status, next_attempt_at, locked_until) WHERE status = 0;
+-- 租约候选扫描按 created_at 排序。部分索引把扫描固定为 O(批次)，
+-- 不再随待租积压或已处理历史增长（2026-10-20 真库实测：1k 待租/20 万行 0.279ms → 0.061ms）。
+CREATE INDEX idx_outbox_due ON outbox_messages(created_at) WHERE status = 0;
+-- 保留清理（按时间删除已处理行）使用；启用 Retention 后可评估删除。
 CREATE INDEX idx_outbox_created ON outbox_messages(created_at);
--- 租约回读谓词（locked_by + locked_until）覆盖索引——审计 2026-09-17 P-2
-CREATE INDEX idx_outbox_lease_holder ON outbox_messages(locked_by, locked_until);
+-- 租约回读谓词（locked_by + locked_until）覆盖索引；仅索引持租行，避免历史 NULL 行膨胀。
+CREATE INDEX idx_outbox_lease_holder ON outbox_messages(locked_by, locked_until) WHERE locked_by IS NOT NULL;
 
 CREATE TABLE inbox_messages (
     id                    BIGSERIAL PRIMARY KEY,
@@ -76,7 +79,7 @@ CREATE TABLE events (
 CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id);
 CREATE INDEX IF NOT EXISTS idx_events_event_id_bin ON events(event_id_bin);
-CREATE INDEX idx_events_global ON events(global_position);
+-- global_position 是主键，PK 索引已覆盖 ReadAll 的范围扫描与排序；独立索引纯冗余（2026-10-20 移除）。
 
 -- P3 修复（九轮评审）：补齐通用脚本已有而方言脚本缺失的两张表
 -- ── Idempotency 幂等记录表 ──

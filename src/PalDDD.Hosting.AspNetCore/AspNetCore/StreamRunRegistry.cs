@@ -123,8 +123,10 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
     private readonly TimeProvider _timeProvider;
     private readonly IServiceScope? _scope;
     private readonly IPalLogger<StreamRun<TItem>>? _logger;
+    private readonly Action? _onTerminal;
     private readonly CancellationTokenSource _cts;
     private readonly string _runId;
+    private int _terminalNotified;
 
     // 附着等待信号（2026-10-19 性能实施轮）：替代 Monitor.Wait 的线程阻塞形态。
     // 容量 1 + Release 前判 CurrentCount，多个 Append 合并为一次唤醒（消费者每次取走
@@ -149,17 +151,26 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         DetachedStreamOptions options,
         TimeProvider timeProvider,
         IServiceScope? scope,
-        IPalLogger<StreamRun<TItem>>? logger)
+        IPalLogger<StreamRun<TItem>>? logger,
+        Action? onTerminal = null)
     {
         _runId = runId;
         _options = options;
         _timeProvider = timeProvider;
         _scope = scope;
         _logger = logger;
+        _onTerminal = onTerminal;
         _buffer = new BufferedStreamItem<TItem>[options.MaxBufferedItems];
         _cts = new CancellationTokenSource();
         // 预算边界：最长存活时长到时取消（pump 观测到 OCE 后进入 Cancelled 终态）
         _cts.CancelAfter(options.MaxRunDuration);
+    }
+
+    /// <summary>终态/释放时归还注册表名额（至多一次；Dispose 与 Finish 双路径安全）。</summary>
+    private void NotifyTerminal()
+    {
+        if (Interlocked.Exchange(ref _terminalNotified, 1) == 0)
+            _onTerminal?.Invoke();
     }
 
     public StreamRunState State
@@ -324,6 +335,7 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
             _terminalAt = _timeProvider.GetUtcNow();
             SignalWaitersLocked();
         }
+        NotifyTerminal();
         if (_graceCts is not null)
             await _graceCts.CancelAsync().ConfigureAwait(false); // 终态：宽限计时不再有意义
         if (_logger is not null && _logger.IsEnabled(LogLevel.Debug))
@@ -685,6 +697,7 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         // 宿主停机与附着并发时留给 GC，避免等待方观察到 ObjectDisposedException。
         if (AttachedCount == 0)
             _signal.Dispose();
+        NotifyTerminal();
     }
 }
 
@@ -700,6 +713,7 @@ internal sealed class StreamRunRegistry : IDisposable
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IPalLogger<StreamRunRegistry>? _registryLogger;
     private readonly Timer _sweeper;
+    private int _runningCount; // 运行中 run 的原子计数——容量判定 O(1)，不再每次枚举全部 run
 
     public StreamRunRegistry(
         DetachedStreamOptions options,
@@ -731,26 +745,40 @@ internal sealed class StreamRunRegistry : IDisposable
         IStreamQueryHandler<TQuery, TItem>? handlerOverride = null)
         where TQuery : IStreamQuery<TItem>
     {
-        var running = _runs.Values.Count(static r => r.State == StreamRunState.Running);
+        var running = Volatile.Read(ref _runningCount);
         if (running >= _options.MaxConcurrentRuns)
             throw new StreamRunCapacityExceededException(_options.MaxConcurrentRuns);
 
         var runId = Guid.NewGuid().ToString("N");
-        var scope = _scopeFactory.CreateScope();
-        var logger = scope.ServiceProvider.GetService<IPalLogger<StreamRun<TItem>>>();
-        var run = new StreamRun<TItem>(runId, _options, _timeProvider, scope, logger);
-        _runs[runId] = run;
+        // 先占名额再建 run：run 可能在 Start 后立即完成并回调 OnRunTerminal，后置递增会短暂
+        // 负计数。构造/解析失败路径在 catch 中归还名额。
+        Interlocked.Increment(ref _runningCount);
+        IServiceScope? scope = null;
+        StreamRun<TItem>? run = null;
         try
         {
+            scope = _scopeFactory.CreateScope();
+            var logger = scope.ServiceProvider.GetService<IPalLogger<StreamRun<TItem>>>();
+            run = new StreamRun<TItem>(runId, _options, _timeProvider, scope, logger, OnRunTerminal);
+            _runs[runId] = run;
+
             var handler = handlerOverride
                 ?? scope.ServiceProvider.GetRequiredService<IStreamQueryHandler<TQuery, TItem>>();
             run.Start(handler, query, eventSelector, idSelector);
         }
         catch
         {
-            // 解析失败：回收 run（Dispose 释放 scope），不留下永不完成的注册项
-            _runs.TryRemove(runId, out _);
-            run.Dispose();
+            // 解析失败：回收 run（Dispose 释放 scope 并经终态回调归还名额）
+            if (run is not null)
+            {
+                _runs.TryRemove(runId, out _);
+                run.Dispose();
+            }
+            else
+            {
+                scope?.Dispose();
+                Interlocked.Decrement(ref _runningCount);
+            }
             throw;
         }
 
@@ -758,6 +786,9 @@ internal sealed class StreamRunRegistry : IDisposable
             _registryLogger.Debug($"Detached stream run {runId}: started ({_runs.Count} tracked)");
         return runId;
     }
+
+    /// <summary>run 进入终态或释放时归还运行名额（幂等由 StreamRun 的终态通知门保证）。</summary>
+    private void OnRunTerminal() => Interlocked.Decrement(ref _runningCount);
 
     public bool TryGet<TItem>(string runId, [NotNullWhen(true)] out StreamRun<TItem>? run)
     {
