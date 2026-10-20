@@ -32,7 +32,8 @@ CREATE TABLE outbox_messages (
 -- 有部分索引能力的方言用 WHERE status = 0。
 CREATE INDEX idx_outbox_due ON outbox_messages(next_attempt_at, created_at);
 CREATE INDEX idx_outbox_processed ON outbox_messages(status, processed_at);
-CREATE INDEX idx_outbox_lease_holder ON outbox_messages(locked_by, locked_until);
+-- 2026-10-21：不建 locked_by/locked_until 索引。SQLite/PG 租约走 UPDATE ... RETURNING，
+-- 没有按租约列回读的查询；MySQL 方言脚本保留该索引（其两步回读需要）。
 
 -- ── Inbox 收件箱幂等消费表 ──
 CREATE TABLE inbox_messages (

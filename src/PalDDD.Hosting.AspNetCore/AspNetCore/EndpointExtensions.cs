@@ -417,9 +417,14 @@ public static class EndpointExtensions
                                 if (!valueTask.Result) break;
                                 itemCount++;
                                 WriteItemFrame(enumerator.Current);
-                                await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                                // 写合并：首帧立即提交（TTFT 与断连可见性），其后连续同步产出的帧
+                                // 累计到阈值才 flush；下一项若挂起，会在进入竞速前先 flush。
+                                if (itemCount == 1 || bodyWriter.UnflushedBytes >= StreamFrameWriter.FlushThresholdBytes)
+                                    await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
                                 continue;
                             }
+                            // 即将挂起等待下一项：先把已写帧刷出，保证心跳路径的逐项延迟语义。
+                            await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
                             moveNext = valueTask.AsTask();
                         }
 
@@ -448,13 +453,17 @@ public static class EndpointExtensions
                         {
                             itemCount++;
                             WriteItemFrame(enumerator.Current);
-                            await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                            if (itemCount == 1 || bodyWriter.UnflushedBytes >= StreamFrameWriter.FlushThresholdBytes)
+                                await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
                         }
                         else
                         {
                             break;
                         }
                     }
+
+                    // 收尾：最后一批未达阈值的帧在此刷出（空流也提交一次，保持原每流至少一次 flush）。
+                    await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -463,12 +472,38 @@ public static class EndpointExtensions
             }
             else
             {
-                // Phase 1 默认路径：await foreach 快路径（无心跳时零额外开销）
-                await foreach (var item in handler.HandleAsync(query, ct).WithCancellation(ct))
+                // Phase 1 默认路径：手动枚举 + 写合并。连续同步产出的帧累计到阈值才 flush；
+                // MoveNext 挂起前与流结束时各 flush 一次，低速率与首帧延迟保持逐项语义。
+                var enumerator = handler.HandleAsync(query, ct).GetAsyncEnumerator(ct);
+                try
                 {
-                    itemCount++;
-                    WriteItemFrame(item);
+                    while (true)
+                    {
+                        var moveNext = enumerator.MoveNextAsync();
+                        if (moveNext.IsCompletedSuccessfully)
+                        {
+                            if (!moveNext.Result)
+                                break;
+                        }
+                        else
+                        {
+                            // 即将等待下一项：先把已写帧刷出，客户端立刻可见。
+                            await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                            if (!await moveNext.ConfigureAwait(false))
+                                break;
+                        }
+
+                        itemCount++;
+                        WriteItemFrame(enumerator.Current);
+                        if (itemCount == 1 || bodyWriter.UnflushedBytes >= StreamFrameWriter.FlushThresholdBytes)
+                            await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                    }
+
                     await bodyWriter.FlushAsync(ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    await enumerator.DisposeAsync().ConfigureAwait(false);
                 }
             }
 
@@ -647,6 +682,13 @@ internal static class ValidationProblemResponseFactory
 /// </remarks>
 internal static class StreamFrameWriter
 {
+    /// <summary>
+    /// 写合并阈值（字节）。连续同步产出的帧累计到此值才提交一次管道；MoveNext 挂起前
+    /// 与流结束时仍各 flush 一次，因此低速率流的逐项可见性不受影响。取值覆盖常见
+    /// 小帧（几十到几百字节）的十余项批量，同时避免单帧高峰值驻留。
+    /// </summary>
+    internal const int FlushThresholdBytes = 4096;
+
     private static ReadOnlySpan<byte> DataPrefix => "data: "u8;
 
     private static ReadOnlySpan<byte> FrameTerminator => "\n\n"u8;

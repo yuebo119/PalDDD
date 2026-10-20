@@ -80,7 +80,8 @@ public sealed class SagaAllocationTests
         var step = new SagaStep("work",
             execute: (s, _, _) => ValueTask.FromResult(s),
             compensate: (_, _) => ValueTask.CompletedTask);
-        var detector = new SagaTimeoutDetector<SagaAllocState>(new[] { ("Initial", step) });
+        var detector = new SagaTimeoutDetector<SagaAllocState>(
+            new[] { new SagaStepRegistration("Initial", EventName: null, "Initial", step) });
         var state = new SagaAllocState();
         var now = DateTimeOffset.UtcNow;
 

@@ -18,8 +18,11 @@ namespace PalDDD.Messaging;
 /// </summary>
 public sealed class MessageConsumeContext
 {
-    private readonly IReadOnlyDictionary<string, string?>? _headers;
-    private readonly Lazy<IReadOnlyDictionary<string, string?>>? _lazyHeaders;
+    /// <summary>已解码头字典，或按需解码的委托——单字段承载以保持实例尺寸不增。</summary>
+    private readonly object _headersSource;
+
+    /// <summary>按需解码的缓存结果（仅委托形态使用）。</summary>
+    private IReadOnlyDictionary<string, string?>? _materializedHeaders;
 
     /// <summary>构造消费上下文（已解码头）。</summary>
     public MessageConsumeContext(
@@ -34,8 +37,7 @@ public sealed class MessageConsumeContext
         CausationId = causationId;
         TraceParent = traceParent;
         TraceState = traceState;
-        _headers = headers;
-        _lazyHeaders = null;
+        _headersSource = headers;
     }
 
     /// <summary>构造消费上下文（头按需解码；已知追踪字段已提前提取）。</summary>
@@ -51,10 +53,7 @@ public sealed class MessageConsumeContext
         CausationId = causationId;
         TraceParent = traceParent;
         TraceState = traceState;
-        _headers = null;
-        _lazyHeaders = new Lazy<IReadOnlyDictionary<string, string?>>(
-            headersFactory,
-            System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+        _headersSource = headersFactory;
     }
 
     /// <summary>关联 ID（header <c>x-correlation-id</c>；RabbitMQ 路径兜底读 BasicProperties.CorrelationId）；消息未携带时为 null。</summary>
@@ -70,7 +69,26 @@ public sealed class MessageConsumeContext
     public string? TraceState { get; }
 
     /// <summary>全部消息头的字符串只读视图（字节头按 UTF-8 解码，未知值类型解码为 null）；无头时为空字典。</summary>
-    public IReadOnlyDictionary<string, string?> Headers => _headers ?? _lazyHeaders!.Value;
+    /// <remarks>
+    /// 2026-10-21：惰性物化不再经 <see cref="Lazy{T}"/> 对象，直接缓存解码结果——每条带
+    /// 追踪头的消息少一次 Lazy 分配。并发首次读取可能重复解码一次，结果不可变且等价。
+    /// </remarks>
+    public IReadOnlyDictionary<string, string?> Headers
+    {
+        get
+        {
+            if (_headersSource is IReadOnlyDictionary<string, string?> existing)
+                return existing;
+
+            var materialized = _materializedHeaders;
+            if (materialized is not null)
+                return materialized;
+
+            materialized = ((Func<IReadOnlyDictionary<string, string?>>)_headersSource)();
+            _materializedHeaders = materialized;
+            return materialized;
+        }
+    }
 
     /// <summary>
     /// 从 Broker 原始消息头构造消费上下文。<br/>

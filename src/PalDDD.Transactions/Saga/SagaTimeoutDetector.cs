@@ -21,9 +21,9 @@ namespace PalDDD.Transactions;
 internal sealed class SagaTimeoutDetector<TState>
     where TState : SagaState
 {
-    private readonly IReadOnlyList<(string Key, SagaStep Step)> _stepsInOrder;
+    private readonly IReadOnlyList<SagaStepRegistration> _stepsInOrder;
 
-    public SagaTimeoutDetector(IReadOnlyList<(string Key, SagaStep Step)> stepsInOrder)
+    public SagaTimeoutDetector(IReadOnlyList<SagaStepRegistration> stepsInOrder)
     {
         // P3 守卫族对齐（SRC-108）：null stepsInOrder 原延迟到 IsTimedOut 的 foreach 才 NRE，
         // 失败点远离构造入口（对齐 PalOrmUnitOfWork ITM-281 三栈守卫同款口径）
@@ -53,9 +53,9 @@ internal sealed class SagaTimeoutDetector<TState>
         List<SagaStep>? list = null;
         for (var i = 0; i < _stepsInOrder.Count; i++)
         {
-            var (key, step) = _stepsInOrder[i];
-            if (IsTimedOutStep(state, key, step, now))
-                (list ??= []).Add(step);
+            var registration = _stepsInOrder[i];
+            if (IsTimedOutStep(state, registration, now))
+                (list ??= []).Add(registration.Step);
         }
 
         timedOutSteps = (IReadOnlyList<SagaStep>?)list ?? Array.Empty<SagaStep>();
@@ -74,12 +74,12 @@ internal sealed class SagaTimeoutDetector<TState>
         DateTimeOffset? next = null;
         for (var i = 0; i < _stepsInOrder.Count; i++)
         {
-            var (key, step) = _stepsInOrder[i];
-            if (!MatchesStep(state, key, step)
-                || !state.StepStartedAt.TryGetValue(key, out var startedAt))
+            var registration = _stepsInOrder[i];
+            if (!MatchesStep(state, registration)
+                || !state.StepStartedAt.TryGetValue(registration.Key, out var startedAt))
                 continue;
 
-            var due = startedAt + step.Timeout!.Value;
+            var due = startedAt + registration.Step.Timeout!.Value;
             if (next is null || due < next.Value)
                 next = due;
         }
@@ -91,22 +91,33 @@ internal sealed class SagaTimeoutDetector<TState>
     /// ① AWD 态 + 普通步骤已成功 + 残留时间戳超期 → 排除（中断态显式无限等待契约）；
     /// ② InterruptStep 自带 Timeout 超期 → 保留（人工决策失踪兜底）；
     /// ③ Active 态普通步骤已成功 + 超期 → 保留（Saga 卡死兜底）。
+    /// 2026-10-21：状态名在注册期固化，扫描不再从 key 切分（原 ExtractState 每步一次分配）。
     /// </summary>
-    private static bool MatchesStep(TState state, string key, SagaStep step)
+    private static bool MatchesStep(TState state, in SagaStepRegistration registration)
     {
         var isAwdCompletedNonInterruptStep = state.Status == SagaStatus.AwaitingHumanDecision
-            && state.ExecutedStepKeys.Contains(key)
-            && step.DispatchKind != StepDispatchKind.Interrupt;
-        return step.Timeout.HasValue
-            && state.CurrentState == SagaKey.ExtractState(key)
+            && state.ExecutedStepKeys.Contains(registration.Key)
+            && registration.Step.DispatchKind != StepDispatchKind.Interrupt;
+        return registration.Step.Timeout.HasValue
+            && state.CurrentState == registration.State
             && !isAwdCompletedNonInterruptStep;
     }
 
-    private static bool IsTimedOutStep(TState state, string key, SagaStep step, DateTimeOffset now)
-        => MatchesStep(state, key, step)
-           && state.StepStartedAt.TryGetValue(key, out var startedAt)
-           && (now - startedAt) > step.Timeout!.Value;
+    private static bool IsTimedOutStep(TState state, in SagaStepRegistration registration, DateTimeOffset now)
+        => MatchesStep(state, registration)
+           && state.StepStartedAt.TryGetValue(registration.Key, out var startedAt)
+           && (now - startedAt) > registration.Step.Timeout!.Value;
 }
+
+/// <summary>
+/// 步骤注册项——注册期同时固化状态名、事件名与持久化 key。运行时查找与超时扫描只读
+/// 这三个值，不再按事件重建 "State|EventName" 字符串，也不从 key 切分状态名。
+/// </summary>
+internal readonly record struct SagaStepRegistration(
+    string State,
+    string? EventName,
+    string Key,
+    SagaStep Step);
 
 /// <summary>Saga key 工具——"state|EventType" 格式的解析。Saga 与 SagaTimeoutDetector 共用。</summary>
 /// <remarks>
