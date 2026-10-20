@@ -116,8 +116,17 @@ public class PalOrmEventLog<TProvider> : IEventLog
         long lastGlobalPos;
         if (TProvider.SupportsReturningClause)
         {
-            (firstGlobalPos, lastGlobalPos) = await InsertBatchWithReturningAsync(
-                streamName, expectedVersion, currentVersion, events, now, cancellationToken).ConfigureAwait(false);
+            var rowLimit = TProvider.Dialect == SqlDialect.Sqlite ? 2047 : 4095;
+            if (events.Count <= rowLimit)
+            {
+                (firstGlobalPos, lastGlobalPos) = await InsertBatchWithReturningAsync(
+                    streamName, expectedVersion, currentVersion, events, now, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                (firstGlobalPos, lastGlobalPos) = await InsertBatchWithReturningChunkedAsync(
+                    streamName, expectedVersion, currentVersion, events, now, cancellationToken).ConfigureAwait(false);
+            }
         }
         else if (events.Count <= MySqlBatchRowLimit)
         {
@@ -226,6 +235,64 @@ public class PalOrmEventLog<TProvider> : IEventLog
             $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
             ct: ct).ConfigureAwait(false);
         throw new EventStreamConcurrencyException(streamName, expectedVersion, after ?? -1);
+    }
+
+    /// <summary>
+    /// 大批量 RETURNING 追加：按方言参数上限分块，并在无 ambient 事务时用本地事务保证
+    /// 多块全成或全败。PG 每行 16 参，4095 行 65520 参；SQLite 2047 行 32752 参。
+    /// ambient 事务存在时不自行提交，失败由调用方回滚。
+    /// </summary>
+    private async ValueTask<(long First, long Last)> InsertBatchWithReturningChunkedAsync(
+        string streamName,
+        ExpectedStreamVersion expectedVersion,
+        long currentVersion,
+        IReadOnlyList<EventData> events,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var chunkRows = TProvider.Dialect == SqlDialect.Sqlite ? 2047 : 4095;
+        var ambient = PalOrmAmbientTransaction.TryGet(Session);
+        DbTransaction? ownTx = null;
+        if (ambient is null)
+        {
+            ownTx = await Session.BeginTransactionAsync(ct: ct).ConfigureAwait(false);
+            PalOrmAmbientTransaction.Set(Session, ownTx);
+        }
+
+        try
+        {
+            var first = long.MaxValue;
+            var last = long.MinValue;
+            for (var offset = 0; offset < events.Count; offset += chunkRows)
+            {
+                var count = Math.Min(chunkRows, events.Count - offset);
+                var chunk = new EventData[count];
+                for (var i = 0; i < count; i++)
+                    chunk[i] = events[offset + i];
+
+                var chunkExpected = offset == 0
+                    ? expectedVersion
+                    : ExpectedStreamVersion.Exact(currentVersion + offset);
+                var (chunkFirst, chunkLast) = await InsertBatchWithReturningAsync(
+                    streamName, chunkExpected, currentVersion + offset, chunk, now, ct).ConfigureAwait(false);
+                if (chunkFirst < first) first = chunkFirst;
+                if (chunkLast > last) last = chunkLast;
+            }
+
+            if (ownTx is not null)
+                await ownTx.CommitAsync(ct).ConfigureAwait(false);
+            return (first, last);
+        }
+        finally
+        {
+            if (ownTx is not null)
+            {
+                try { await ownTx.DisposeAsync().ConfigureAwait(false); }
+                catch (Exception ex) when (ex is InvalidOperationException or DbException) { /* 事务已失效/已释放 */ }
+                Session.UseTransaction(null);
+                PalOrmAmbientTransaction.Set(Session, null);
+            }
+        }
     }
 
     /// <summary>
@@ -527,6 +594,22 @@ public class PalOrmEventLog<TProvider> : IEventLog
         // 计数在 yield 前（对齐 InMemoryEventLog ITM-120）。
         try
         {
+            if (UseBinaryEventId)
+            {
+                var binarySql = FormattableStringFactory.Create(
+                    "SELECT global_position, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE stream_name = {0} AND stream_version >= {1} ORDER BY stream_version"
+                        + (maxCount != int.MaxValue ? $" LIMIT {maxCount}" : string.Empty),
+                    streamName, fromVersion);
+                await foreach (var row in Session.QueryAsyncEnumerable<EventLogBinaryRow>(
+                    binarySql, readFromReplica: true, ct: cancellationToken).ConfigureAwait(false))
+                {
+                    if (--maxCount < 0) yield break;
+                    checked { read++; }
+                    yield return ToRecorded(row);
+                }
+                yield break;
+            }
+
             // 使用流式 QueryAsyncEnumerable —— 恒定内存读取（重要：超长事件流场景）
             // v66 P3：ConfigureAwait(false) 补齐（对齐文件内其余 await）——库代码避免捕获
             // 调用方 SyncContext；对 IAsyncEnumerable 用 ConfiguredAsyncEnumerable 扩展。
@@ -571,6 +654,22 @@ public class PalOrmEventLog<TProvider> : IEventLog
         // 对齐 EventLogDbContext/InMemoryEventLog）。
         try
         {
+            if (UseBinaryEventId)
+            {
+                var binarySql = FormattableStringFactory.Create(
+                    "SELECT global_position, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state FROM events WHERE global_position >= {0} ORDER BY global_position"
+                        + (maxCount != int.MaxValue ? $" LIMIT {maxCount}" : string.Empty),
+                    fromPosition);
+                await foreach (var row in Session.QueryAsyncEnumerable<EventLogBinaryRow>(
+                    binarySql, readFromReplica: true, ct: cancellationToken).ConfigureAwait(false))
+                {
+                    if (--maxCount < 0) yield break;
+                    checked { read++; }
+                    yield return ToRecorded(row);
+                }
+                yield break;
+            }
+
             // 读副本标注（同 ReadStreamAsync——纯读流无 read-after-write 依赖，未配置读串时回落主库）
             await foreach (var row in Session.QueryAsyncEnumerable<EventLogRow>(readAllSql, readFromReplica: true, ct: cancellationToken).ConfigureAwait(false))
             {
@@ -606,6 +705,27 @@ public class PalOrmEventLog<TProvider> : IEventLog
         return RecordedEvent.RehydrateFromBytes(
             streamName, row.StreamVersion, row.GlobalPosition, row.RecordedAt,
             eventId, row.EventName, row.SchemaVersion, row.ContentType,
+            row.Payload, row.Metadata, audit);
+    }
+
+    /// <summary>二进制投影行 → RecordedEvent；NULL/非 16 字节直接失败，不静默回退。</summary>
+    private static RecordedEvent ToRecorded(EventLogBinaryRow row)
+    {
+        var audit = string.IsNullOrEmpty(row.ActorId) && string.IsNullOrEmpty(row.Reason)
+            && string.IsNullOrEmpty(row.CorrelationId) && string.IsNullOrEmpty(row.CausationId)
+            && string.IsNullOrEmpty(row.TraceParent) && string.IsNullOrEmpty(row.TraceState)
+            ? EventAuditMetadata.Empty
+            : new EventAuditMetadata(row.ActorId, row.Reason,
+                ParseUlid(row.CorrelationId), ParseUlid(row.CausationId),
+                row.TraceParent, row.TraceState);
+
+        if (row.EventIdBin is not { Length: 16 })
+            throw new InvalidOperationException(
+                $"Event at global position {row.GlobalPosition} has no 16-byte event_id_bin; run the M4 backfill before enabling binary reads.");
+
+        return RecordedEvent.RehydrateFromBytes(
+            row.StreamName, row.StreamVersion, row.GlobalPosition, row.RecordedAt,
+            Ulid.New(row.EventIdBin), row.EventName, row.SchemaVersion, row.ContentType,
             row.Payload, row.Metadata, audit);
     }
 

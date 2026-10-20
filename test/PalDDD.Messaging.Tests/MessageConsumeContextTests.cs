@@ -218,6 +218,6 @@ public sealed class MessageConsumeContextTests
         var alloc = MeasureAllocation(static () => _ = MessageConsumeContext.FromHeaders(headers: null));
 
         // 允许微量 GC 噪声（< 100B 总计）；旧码的空 Dictionary ~80B × 10k 迭代在此预算下红
-        await Assert.That(alloc <= 100).IsTrue();
+        await Assert.That(alloc).IsLessThanOrEqualTo(100);
     }
 }

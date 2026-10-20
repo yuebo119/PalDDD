@@ -211,8 +211,9 @@ public static class DapperBulkCopy
     /// <summary>
     /// MySQL BulkCopy 批量导入。<br/>
     /// 💡 MySqlBulkCopy 使用 MySQL 原生的 LOAD DATA INFILE 协议，比逐行 INSERT 快约 10 倍。<br/>
-    /// ⚡ 大批量（&gt; <see cref="MySqlMultiRowInsertRowThreshold"/> 行）需要连接字符串包含
-    /// <c>AllowLoadLocalInfile=True</c>；小批量自动路由多行 VALUES（C2'，2026-10-09），无此要求。<br/>
+    /// ⚡ 大批量（&gt; <see cref="MySqlMultiRowInsertRowThreshold"/> 行）优先 LOAD DATA；
+    /// 连接未声明 <c>AllowLoadLocalInfile=True</c> 时自动回退参数化多行 VALUES（按参数预算分块、
+    /// 本地事务），不再因 17 行以上直接失败。小批量始终走多行 VALUES（C2'，2026-10-09）。<br/>
     /// 🛡️ 检查 <see cref="MySqlBulkCopyResult.Warnings"/> 防止静默数据截断。<br/>
     /// ⚠️ v35 P3：列类型按首个非空值采样（ITM-214 跨行首个非空值口径）——跨行同列异型
     ///（如首行 int、后续 long）时 DataTable 列定型为首个非空值的类型，不兼容值延迟到
@@ -229,8 +230,8 @@ public static class DapperBulkCopy
 
         // C2'（2026-10-09 优化轮）：小批量路由到参数化多行 VALUES——单往返且无
         // AllowLoadLocalInfile 部署要求（LOAD DATA 的安全门由调用方显式决策，小批量
-        // 不应被迫继承该要求）；阈值覆盖领域保存多事件典型形态（k=1~5）。大批量仍走
-        // MySqlBulkCopy（LOAD DATA 在数百行以上量级占优）
+        // 不应被迫继承该要求）；阈值覆盖领域保存多事件典型形态（k=1~5）。大批量在
+        // 允许 local_infile 时走 MySqlBulkCopy，否则回退多行 VALUES（见下方分支）。
         if (items.Count <= MySqlMultiRowInsertRowThreshold)
             return await MySqlMultiRowValuesAsync(conn, table, cols, items, extractor, transaction, ct).ConfigureAwait(false);
 
@@ -246,10 +247,47 @@ public static class DapperBulkCopy
             myConn,
             static c => new System.Runtime.CompilerServices.StrongBox<bool>(new MySqlConnectionStringBuilder(c.ConnectionString).AllowLoadLocalInfile)).Value;
         if (!allowLoadLocalInfile)
-            throw new InvalidOperationException(
-                "MySQL 批量导入要求连接字符串包含 'AllowLoadLocalInfile=True'（MySqlBulkCopy 走 LOAD DATA LOCAL INFILE 协议）。" +
-                "请在构造 MySqlConnection/MySqlDataSource 的连接串中显式添加该选项，并确认 MySQL 服务端 local_infile=1。" +
-                "本库不自动开启该选项——它扩大服务端可访问的文件面，须由调用方显式决策。");
+        {
+            // 无 local_infile 时不再直接拒绝：按参数预算回退参数化多行 VALUES。
+            // 17 行等常见批量不再被迫扩大服务端文件访问面；超过单语句参数预算时
+            // 在本地事务内分块，保持全成全败。
+            var maxRows = Math.Max(1, 60_000 / Math.Max(1, cols.Length));
+            if (items.Count <= maxRows)
+                return await MySqlMultiRowValuesAsync(conn, table, cols, items, extractor, transaction, ct).ConfigureAwait(false);
+
+            DbTransaction? localTx = null;
+            var effectiveTx = transaction;
+            if (effectiveTx is null)
+            {
+                localTx = await myConn.BeginTransactionAsync(ct).ConfigureAwait(false);
+                effectiveTx = localTx;
+            }
+
+            try
+            {
+                var total = 0;
+                for (var start = 0; start < items.Count; start += maxRows)
+                {
+                    var count = Math.Min(maxRows, items.Count - start);
+                    var chunk = new T[count];
+                    for (var i = 0; i < count; i++)
+                        chunk[i] = items[start + i];
+                    total += await MySqlMultiRowValuesAsync(
+                        conn, table, cols, chunk, extractor, effectiveTx, ct).ConfigureAwait(false);
+                }
+                if (localTx is not null)
+                    await localTx.CommitAsync(ct).ConfigureAwait(false);
+                return total;
+            }
+            finally
+            {
+                if (localTx is not null)
+                {
+                    try { await localTx.DisposeAsync().ConfigureAwait(false); }
+                    catch (Exception ex) when (ex is InvalidOperationException or DbException) { /* 事务已失效/已释放 */ }
+                }
+            }
+        }
 
         // 构建 DataTable — MySqlBulkCopy 的唯一数据源格式
         // 注意：DataTable 在现代 .NET（net6.0+）中已 AOT 兼容

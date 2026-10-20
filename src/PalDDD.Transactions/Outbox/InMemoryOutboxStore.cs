@@ -207,12 +207,20 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
         var affected = 0;
         lock (_lock)
         {
+            // 先建一次引用集合：原实现对每条消息 Contains + RemoveAt 各 O(n)，
+            // 400 条批 × 1 万列表会放大到百万级比较/搬移。这里 O(n+m) 完成。
+            var current = new HashSet<OutboxMessage>(_messages, ReferenceEqualityComparer.Instance);
+            var marked = new HashSet<OutboxMessage>(ReferenceEqualityComparer.Instance);
             foreach (var message in messages)
             {
                 if (message is null)
                     throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
-                if (!IsCurrentLeaseHolder(message))
+                if (message.Status != OutboxStatus.Pending
+                    || !current.Contains(message)
+                    || !marked.Add(message))
+                {
                     continue;
+                }
 
                 message.ProcessedAt = processedAt;
                 message.Status = OutboxStatus.Processed;
@@ -220,18 +228,11 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
                 message.NextAttemptAt = null;
                 message.LockedBy = null;
                 message.LockedUntil = null;
-
-                // R1（P2-7）：Processed 终态按引用移除（同逐条路径 MarkProcessedAsync）
-                for (int i = 0; i < _messages.Count; i++)
-                {
-                    if (ReferenceEquals(_messages[i], message))
-                    {
-                        _messages.RemoveAt(i);
-                        break;
-                    }
-                }
                 affected++;
             }
+
+            if (marked.Count > 0)
+                _messages.RemoveAll(marked.Contains);
         }
         return ValueTask.FromResult(affected);
     }

@@ -115,6 +115,12 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
             // 时排在其后的 saga 每轮取不到名额；生产栈 NextAttemptAt 过滤不占名额无此问题，
             // 本栈定位测试/原型，接受该边界不修。
             var active = new List<TState>(Math.Min(batchSize, _activeIds.Count));
+            // 只保留排序键最小的 batchSize 条：原实现对全部活跃项 Sort 后截断，
+            // 10k 活跃时每 tick 付 O(A log A)。PriorityQueue 以反向比较器保留前 N 小，
+            // 成本约 O(A log N)，最后反转为期望升序。
+            var leaseOrder = Comparer<(int Rank, DateTimeOffset Until, DateTimeOffset Created)>.Create(
+                static (a, b) => b.CompareTo(a));
+            var top = new PriorityQueue<TState, (int Rank, DateTimeOffset Until, DateTimeOffset Created)>(leaseOrder);
             foreach (var id in _activeIds)
             {
                 if (!_states.TryGetValue(id, out var state))
@@ -124,19 +130,16 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
                 // M1：NULL = 无待检查超时（等待事件），到期路径可安全跳过。
                 if (dueBefore is { } due && (state.NextCheckAt is null || state.NextCheckAt > due))
                     continue;
-                active.Add(state);
+                var key = state.LeasedUntil is { } until
+                    ? (1, until, state.CreatedAt)
+                    : (0, default, state.CreatedAt);
+                top.Enqueue(state, key);
+                if (top.Count > batchSize)
+                    top.Dequeue();
             }
-            active.Sort(static (a, b) =>
-            {
-                // 扫描轮转：未扫描（leased_until NULL）优先，已扫描按时间戳轮转。
-                var aNull = a.LeasedUntil is null;
-                var bNull = b.LeasedUntil is null;
-                if (aNull != bNull) return aNull ? -1 : 1;
-                var byLease = Nullable.Compare(a.LeasedUntil, b.LeasedUntil);
-                return byLease != 0 ? byLease : a.CreatedAt.CompareTo(b.CreatedAt);
-            });
-            if (active.Count > batchSize)
-                active.RemoveRange(batchSize, active.Count - batchSize); // 等价原 OrderBy().Take(batchSize) 语义
+            while (top.TryDequeue(out var state, out _))
+                active.Add(state);
+            active.Reverse(); // 反向比较器出队为降序，恢复为 NULL/最早优先。
 
             // v25 P3 行为族 B1：successor 替换——对齐 InMemoryOutboxStore 的 ITM-174 模式。
             // 原实现原地直写字典条目（调用方与存储共享同一引用）：worker A 租约到期后

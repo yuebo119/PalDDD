@@ -710,7 +710,7 @@ public async ValueTask<OrderId> HandleAsync(CreateOrderCommand command, Cancella
 ```
 EventLog 的 GlobalPosition 是全局单调递增的位置号，用于全量回放时定位。
 过去用 Serializable 事务保护分配 → 全局串行化瓶颈。
-现在用 Hi/Lo 段分配器 → 进程内缓存 100 个位置，仅 1/100 触发 DB。
+现在用 Hi/Lo 段分配器 → 进程内缓存 1000 个位置，仅 1/1000 触发 DB。
 CAS（Revision 令牌）替代 Serializable → 事务降为 ReadCommitted。
 ```
 

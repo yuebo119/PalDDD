@@ -82,8 +82,10 @@ public sealed class EventLogPositionReserver
     private readonly SemaphoreSlim _dbSemaphore = new(1, 1);
 
     /// <summary>使用指定的区块大小创建预留器。</summary>
-    /// <param name="chunkSize">每次持久化分配的位置数量。值越大数据库往返越少，但崩溃时潜在间隙也越多。</param>
-    public EventLogPositionReserver(int chunkSize = 100)
+    /// <param name="chunkSize">每次持久化分配的位置数量。默认 1000：块耗尽时所有追加者会在
+    /// 信号量上排队等一次 SELECT+SaveChanges；100 的默认值让该停摆每 100 次追加出现一次。
+    /// 值越大数据库往返越少，但崩溃时潜在间隙也越多（ReadAll &gt;= 语义兼容）。</param>
+    public EventLogPositionReserver(int chunkSize = 1000)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(chunkSize, 1);
         _chunkSize = chunkSize;

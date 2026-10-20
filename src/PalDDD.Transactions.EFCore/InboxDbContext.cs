@@ -249,10 +249,9 @@ public abstract class InboxDbContext(
             e.Property(x => x.ConsumerName).HasMaxLength(256);
             e.Property(x => x.LastError).HasMaxLength(2048);
             e.Property(x => x.ProcessingStartedAt).IsConcurrencyToken();
-            e.HasIndex(x => x.ProcessedAt);
-            e.HasIndex(x => x.Status);
             e.HasIndex(x => new { x.Status, x.ProcessingStartedAt });
             // 保留清理按 processed_at 分批删除 Processed 行；复合索引避免全表扫描加排序。
+            // 不再单独建 (Status)/(ProcessedAt)：前者是复合索引前缀，后者无状态过滤的读者。
             e.HasIndex(x => new { x.Status, x.ProcessedAt });
         });
     }
