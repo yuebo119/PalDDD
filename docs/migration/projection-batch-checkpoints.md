@@ -41,3 +41,27 @@ await rebuilder.ReplayAsync(ct);
 - 组内失败在位置 p：`GetResumePositionAsync` 返回组首，而不是组末之后。
 - 崩溃恢复：从上一个已完成位置重放，重放条数 ≤ N。
 - N=1 时行为与旧路径逐字一致（回归测试全绿）。
+
+## 正式基准（2026-10-19）
+
+量具：`--m2-probe`（`bench/PalDDD.Benchmarks/ProjectionProbe.cs`）。100,000 条事件经
+`GeneratorSource` 回放，`CountingStore` 包在 `InMemoryProjectionCheckpointStore` 外，
+统计 `TryStartAsync` 与 `MarkCompletedAsync` 的调用次数（每次调用对应真实 store 的
+至少一次数据库往返）；计时为进程内回放墙钟，不含数据库 I/O。
+
+| CheckpointBatchSize | TryStart + MarkCompleted | 每事件调用数 | 回放耗时 |
+|---|---|---|---|
+| 1（旧行为） | 200,000 | 2.00 | 120ms |
+| 100 | 2,000 | 0.02 | 31ms |
+
+减少 100×，达到「100k 事件回放命令数不超过 2k」的验收线；探针把该阈值写成硬断言
+（batch=100 时两类调用各不得超过 1,000，超出即非零退出）。复现：
+
+```bash
+dotnet run -c Release --project bench/PalDDD.Benchmarks -- --m2-probe
+# M2 PASS: events=100000, batch=1 calls=200000 (120ms), batch=100 calls=2000 (31ms), reduction=100x
+```
+
+口径说明：数字是检查点调用次数，不是数据库延迟。真实 Dapper/EF/PalORM store 的每次
+检查点调用至少含一次数据库往返（部分实现可能更多），故调用数下降是往返数下降的下界
+证据，不是逐次往返的精确换算。耗时只用于确认量级，不构成真库性能承诺。

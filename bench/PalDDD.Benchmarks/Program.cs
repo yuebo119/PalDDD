@@ -255,6 +255,13 @@ if (args.Contains("--persist-mysql", StringComparer.OrdinalIgnoreCase))
 // --persist-pg 同路（PALDDD_BENCH_PG_CONN / PALDDD_BENCH_MYSQL_CONN 外部实例或
 // 一次性容器，palddd_bench 库名前缀守卫）。
 // 迁移演练探针（2026-10-19）：真库上执行 M1/M4 expand + 回填 + 读切换校验。
+// M2/M3 量具（2026-10-19）：M2 内存 100k 回放检查点调用计数；M3 真 broker 订阅拓扑压测。
+if (args.Contains("--m2-probe", StringComparer.OrdinalIgnoreCase))
+    return await ProjectionProbe.RunM2Async();
+
+if (args.Contains("--m3-probe", StringComparer.OrdinalIgnoreCase))
+    return await RabbitChannelProbe.RunM3Async();
+
 if (args.Contains("--m1-probe-pg", StringComparer.OrdinalIgnoreCase))
     return await MigrationProbes.RunM1Async(postgreSql: true);
 
