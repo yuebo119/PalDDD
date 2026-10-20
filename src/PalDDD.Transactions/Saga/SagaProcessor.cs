@@ -147,11 +147,16 @@ TState>
         // 存在性全行预查，EF 栈叠加全跟踪实体 DetectChanges）；存储未实现
         // ISagaLeaseBatchStore 时保持逐条路径逐字不变（自定义存储向后兼容）。
         List<TState>? pendingRelease = null;
+        // 2026-10-20 性能轮：回填/到期推进/补偿终态收集到环后批量提交，替代逐 Saga
+        // SaveChangesAsync（EF 栈逐行保存还会重复扫描整个 ChangeTracker）。
+        List<TState>? pendingBackfill = null;
+        List<TState>? pendingNextCheck = null;
+        List<(TState State, bool CompensationSucceeded)>? pendingTerminal = null;
 
         foreach (var sagaState in activeSagas)
         {
             // M1 惰性回填：旧路径（或新行首次进入扫描）NextCheckAt 为空时按当前状态计算。
-            // 立即 SaveChanges 一次，确保批量释放路径（只写租约列）也能持久化该值；
+            // 收集到环后由批量保存冲刷，确保批量释放路径（只写租约列）也能持久化该值；
             // 每行只付一次，回填完成后 EnableDueTimeFilter 可切换。
             if (!options.EnableDueTimeFilter && sagaState.NextCheckAt is null)
             {
@@ -159,7 +164,7 @@ TState>
                 if (nextCheck is not null)
                 {
                     sagaState.NextCheckAt = nextCheck;
-                    await _store.SaveChangesAsync(sagaState, ct).ConfigureAwait(false);
+                    (pendingBackfill ??= []).Add(sagaState);
                 }
             }
 
@@ -240,23 +245,9 @@ TState>
                     {
                         defaultManager.InvalidateInterrupted(sagaState.SagaId);
                     }
-                    // P2 修复（取消路径对称）：租约释放是终态写入，不响应取消（与上方 OCE 路径
-                    // 的 CancellationToken.None 对齐）——此前正常路径用 ct，OCE 传播时租约滞留
-                    var compensatedSaved = await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
-                    if (compensatedSaved == 0)
-                    {
-                        // 评审 P1-4 增强（八轮 P3 基础上）：0 行 = 乐观锁冲突（他实例已写同一
-                        // Saga）——补偿副作用已在本实例执行，他实例可能再次补偿同一 Saga
-                        // （双重副作用风险）。框架无法回滚外部副作用，只能依赖补偿动作幂等
-                        // （契约见 SagaStep.CompensateAsync remarks）——本日志是重入发生时
-                        // 的常规信号（0 行路径）；SaveChangesAsync 抛异常路径落入下方通用 catch——
-                        // 同为重入风险但措辞通用，排障两处都看（v8 声明）。
-                        _logger.Warning($"Saga {sagaState.SagaId} compensated state save affected 0 rows (optimistic concurrency conflict); another instance may have compensated it too — double compensation detected, ensure SagaStep.CompensateAsync actions are idempotent");
-                    }
-                    else if (compensationSucceeded)
-                    {
-                        PalMetrics.SagaCompensated.Add(1);
-                    }
+                    // P2 修复（取消路径对称）：租约释放是终态写入，不响应取消——收集到环后
+                    // 由批量冲刷以 CancellationToken.None 保存（与上方 OCE 路径语义对齐）
+                    (pendingTerminal ??= []).Add((sagaState, compensationSucceeded));
                 }
                 else
                 {
@@ -268,7 +259,7 @@ TState>
                         if (nextCheck != sagaState.NextCheckAt)
                         {
                             sagaState.NextCheckAt = nextCheck;
-                            await _store.SaveChangesAsync(sagaState, CancellationToken.None).ConfigureAwait(false);
+                            (pendingNextCheck ??= []).Add(sagaState);
                         }
                     }
 
@@ -306,9 +297,15 @@ TState>
             }
         }
 
-        // B-1 收口：单语句批量释放。终态写入不响应取消（对齐逐条路径的 CancellationToken.None）；
-        // 失败隔离镜像逐条路径的 per-saga catch——失败仅记日志不上抛（tick 韧性保持），未释放
-        // 租约靠 LeaseDuration 到期释放（与逐条路径单条失败的语义一致）。
+        // 2026-10-20 性能轮收口：回填/补偿终态/到期推进各一次批量提交（无批量能力的
+        // 自定义存储回落逐条，语义与旧路径一致）；随后才做租约批量释放。
+        if (pendingBackfill is not null)
+            await FlushBackfillAsync(pendingBackfill, ct).ConfigureAwait(false);
+        if (pendingTerminal is not null)
+            await FlushTerminalAsync(pendingTerminal).ConfigureAwait(false);
+        if (pendingNextCheck is not null)
+            await FlushNextCheckAsync(pendingNextCheck, options.LeaseOwner).ConfigureAwait(false);
+
         if (pendingRelease is not null)
         {
             try
@@ -324,6 +321,129 @@ TState>
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.Error(ex, $"Saga lease batch release failed ({pendingRelease.Count} sagas); leases will expire by LeaseDuration");
+            }
+        }
+    }
+
+    /// <summary>回填 NextCheckAt 的批量落库；非批量存储回落逐条路径（与旧行为一致）。</summary>
+    private async ValueTask FlushBackfillAsync(List<TState> states, CancellationToken ct)
+    {
+        if (_store is ISagaBatchStateStore<TState> batchStore)
+        {
+            try
+            {
+                var results = await batchStore.SaveManyAsync(states, ct).ConfigureAwait(false);
+                for (var i = 0; i < results.Count; i++)
+                {
+                    if (results[i] == 0)
+                        _logger.Warning($"Saga {states[i].SagaId} NextCheckAt backfill save affected 0 rows (optimistic concurrency conflict); will retry on next scan");
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.Error(ex, $"Saga NextCheckAt backfill batch save failed ({states.Count} sagas); will retry on next scan");
+            }
+            return;
+        }
+
+        foreach (var state in states)
+        {
+            try
+            {
+                var saved = await _store.SaveChangesAsync(state, ct).ConfigureAwait(false);
+                if (saved == 0)
+                    _logger.Warning($"Saga {state.SagaId} NextCheckAt backfill save affected 0 rows (optimistic concurrency conflict); will retry on next scan");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.Error(ex, $"Saga {state.SagaId} NextCheckAt backfill save failed; will retry on next scan");
+            }
+        }
+    }
+
+    /// <summary>补偿终态的批量落库；逐行结果决定告警与补偿指标。</summary>
+    private async ValueTask FlushTerminalAsync(List<(TState State, bool CompensationSucceeded)> pending)
+    {
+        var states = new TState[pending.Count];
+        for (var i = 0; i < pending.Count; i++)
+            states[i] = pending[i].State;
+
+        if (_store is ISagaBatchStateStore<TState> batchStore)
+        {
+            try
+            {
+                var results = await batchStore.SaveManyAsync(states, CancellationToken.None).ConfigureAwait(false);
+                for (var i = 0; i < results.Count; i++)
+                    LogTerminalResult(pending[i].State, pending[i].CompensationSucceeded, results[i]);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.Error(ex, $"Saga compensated terminal batch save failed ({states.Length} sagas); leases will expire by LeaseDuration");
+            }
+            return;
+        }
+
+        foreach (var (state, compensationSucceeded) in pending)
+        {
+            try
+            {
+                var saved = await _store.SaveChangesAsync(state, CancellationToken.None).ConfigureAwait(false);
+                LogTerminalResult(state, compensationSucceeded, saved);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.Error(ex, $"Saga {state.SagaId} compensated terminal save failed; lease will expire by LeaseDuration");
+            }
+        }
+    }
+
+    private void LogTerminalResult(TState sagaState, bool compensationSucceeded, int saved)
+    {
+        if (saved == 0)
+        {
+            // 评审 P1-4 增强（八轮 P3 基础上）：0 行 = 乐观锁冲突（他实例已写同一
+            // Saga）——补偿副作用已在本实例执行，他实例可能再次补偿同一 Saga
+            // （双重副作用风险）。框架无法回滚外部副作用，只能依赖补偿动作幂等
+            // （契约见 SagaStep.CompensateAsync remarks）——本日志是重入发生时
+            // 的常规信号（0 行路径）；SaveChangesAsync 抛异常路径落入批量 catch——
+            // 同为重入风险但措辞通用，排障两处都看（v8 声明）。
+            _logger.Warning($"Saga {sagaState.SagaId} compensated state save affected 0 rows (optimistic concurrency conflict); another instance may have compensated it too — double compensation detected, ensure SagaStep.CompensateAsync actions are idempotent");
+        }
+        else if (compensationSucceeded)
+        {
+            PalMetrics.SagaCompensated.Add(1);
+        }
+    }
+
+    /// <summary>到期推进 NextCheckAt 的批量落库；无批量能力的存储回落逐条保存。</summary>
+    private async ValueTask FlushNextCheckAsync(List<TState> states, string owner)
+    {
+        if (_store is ISagaBatchStateStore<TState> batchStore)
+        {
+            try
+            {
+                var affected = await batchStore.AdvanceNextCheckAtAsync(owner, states, CancellationToken.None).ConfigureAwait(false);
+                if (affected < states.Count)
+                    _logger.Warning($"Saga NextCheckAt batch advance affected {affected}/{states.Count} rows (optimistic concurrency conflicts); unadvanced rows will be re-leased next tick");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.Error(ex, $"Saga NextCheckAt batch advance failed ({states.Count} sagas); rows will be re-leased next tick");
+            }
+            return;
+        }
+
+        foreach (var state in states)
+        {
+            try
+            {
+                var saved = await _store.SaveChangesAsync(state, CancellationToken.None).ConfigureAwait(false);
+                if (saved == 0)
+                    _logger.Warning($"Saga {state.SagaId} NextCheckAt advance affected 0 rows (optimistic concurrency conflict); will be re-leased next tick");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.Error(ex, $"Saga {state.SagaId} NextCheckAt advance failed; will be re-leased next tick");
             }
         }
     }

@@ -7,7 +7,7 @@ namespace PalDDD.Transactions;
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>内存 Saga 状态存储 — 用于测试和单进程原型。</summary>
-public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, IDueTimeSagaStore<TState>
+public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, IDueTimeSagaStore<TState>, ISagaBatchStateStore<TState>
     where TState : SagaState
 {
     private readonly Lock _lock = new();
@@ -239,5 +239,66 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
             }
         }
         return ValueTask.FromResult(released);
+    }
+
+    /// <inheritdoc/>
+    public ValueTask<int> AdvanceNextCheckAtAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        ct.ThrowIfCancellationRequested();
+
+        var affected = 0;
+        lock (_lock)
+        {
+            foreach (var saga in sagas)
+            {
+                if (_states.TryGetValue(saga.SagaId, out var current)
+                    && current.Version == saga.Version
+                    && string.Equals(current.LeasedBy, owner, StringComparison.Ordinal))
+                {
+                    current.NextCheckAt = saga.NextCheckAt;
+                    current.Version++;
+                    if (!ReferenceEquals(current, saga))
+                        saga.Version++;
+                    affected++;
+                }
+            }
+        }
+        return ValueTask.FromResult(affected);
+    }
+
+    /// <inheritdoc/>
+    public ValueTask<IReadOnlyList<int>> SaveManyAsync(IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(sagas);
+        ct.ThrowIfCancellationRequested();
+        if (sagas.Count == 0)
+            return ValueTask.FromResult<IReadOnlyList<int>>([]);
+
+        var results = new int[sagas.Count];
+        lock (_lock)
+        {
+            for (var i = 0; i < sagas.Count; i++)
+            {
+                var state = sagas[i];
+                if (state is null)
+                {
+                    results[i] = 0;
+                    continue;
+                }
+                if (!_states.TryGetValue(state.SagaId, out var current)
+                    || current.Version != state.Version)
+                {
+                    results[i] = 0;
+                    continue;
+                }
+                state.Version++;
+                _states[state.SagaId] = state;
+                SyncActiveIndex(state);
+                results[i] = 1;
+            }
+        }
+        return ValueTask.FromResult<IReadOnlyList<int>>(results);
     }
 }

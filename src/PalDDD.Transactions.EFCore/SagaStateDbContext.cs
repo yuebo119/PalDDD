@@ -32,7 +32,7 @@ public abstract class SagaStateDbContext<
         | DynamicallyAccessedMemberTypes.PublicProperties
         | DynamicallyAccessedMemberTypes.NonPublicProperties
         | DynamicallyAccessedMemberTypes.Interfaces)]
-TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, IDueTimeSagaStore<TState>
+TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, IDueTimeSagaStore<TState>, ISagaBatchStateStore<TState>
     where TState : SagaState
 {
     /// <summary>Saga 状态表</summary>
@@ -114,6 +114,8 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
             return await LeaseViaPostgreSqlAsync(owner, leasedUntil, batchSize, dueBefore, now, ct).ConfigureAwait(false);
         if (IsMySqlProvider())
             return await LeaseViaMySqlAsync(owner, leasedUntil, batchSize, dueBefore, now, ct).ConfigureAwait(false);
+        if (IsSqlServerProvider())
+            return await LeaseViaSqlServerAsync(owner, leasedUntil, batchSize, dueBefore, now, ct).ConfigureAwait(false);
 
         // v25 P2-1：翻页循环防饥饿（镜像 SqliteOutboxDbContext.QueryEligibleAsync 三十九轮形态）——
         // v23 C1 把 LeasedUntil 过滤移到内存后，头部 batchSize 条全为他实例活跃租约时
@@ -237,6 +239,11 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         => Database.IsRelational()
             && Database.ProviderName?.Contains("MySql", StringComparison.OrdinalIgnoreCase) == true;
 
+    /// <summary>SQL Server provider 判定（Microsoft.EntityFrameworkCore.SqlServer）。</summary>
+    private bool IsSqlServerProvider()
+        => Database.IsRelational()
+            && Database.ProviderName?.Contains("SqlServer", StringComparison.OrdinalIgnoreCase) == true;
+
     /// <summary>
     /// PG 单语句租约（2026-10-20 性能轮）：<c>UPDATE ... WHERE saga_id IN (SELECT ... LIMIT ...
     /// FOR UPDATE SKIP LOCKED)</c> + 按精确租约标识回读，两步与批次大小无关。语义与 SQLite
@@ -298,6 +305,67 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         if (connection.State != System.Data.ConnectionState.Open)
             await Database.OpenConnectionAsync(ct).ConfigureAwait(false);
         return MySqlLeasePolicy.UseSkipLocked(connection.ServerVersion);
+    }
+
+    /// <summary>
+    /// SQL Server 单语句租约（2026-10-20 性能轮）：<c>WITH candidates AS (SELECT TOP (@n)
+    /// ... WITH (UPDLOCK, READPAST, ROWLOCK)) UPDATE ... INNER JOIN candidates</c> + 按精确
+    /// 租约标识回读。原跟踪分页回落路径的 <c>Skip/Take</c> 深偏移与全页物化在 SQL Server
+    /// 大表上随历史行数退化。T-SQL 与 SqlServerOutboxDbContext 的租约形态同族。
+    /// </summary>
+    private async ValueTask<IReadOnlyList<TState>> LeaseViaSqlServerAsync(
+        string owner,
+        DateTimeOffset untilValue,
+        int batchSize,
+        DateTimeOffset? dueBefore,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var (sql, args) = BuildSqlServerLeaseSql(owner, untilValue, batchSize, dueBefore, now);
+        await Database.ExecuteSqlRawAsync(sql, args, ct).ConfigureAwait(false);
+
+        return await SagaStates
+            .Where(s => s.LeasedBy == owner
+                && s.LeasedUntil == untilValue
+                && (s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision))
+            .OrderBy(s => s.SagaId)
+            .Take(batchSize)
+            .ToListAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>SQL Server 租约 SQL 构造：候选集 TOP + UPDLOCK/READPAST，列名取自 EF 模型映射。</summary>
+    private (string Sql, object[] Args) BuildSqlServerLeaseSql(
+        string owner,
+        DateTimeOffset untilValue,
+        int batchSize,
+        DateTimeOffset? dueBefore,
+        DateTimeOffset now)
+    {
+        var ids = ResolveLeaseIdentifiers(mySql: false, sqlServer: true);
+        var dueClause = dueBefore is null
+            ? string.Empty
+            : $"AND ({ids.NextCheckAt} IS NOT NULL AND {ids.NextCheckAt} <= {{4}})";
+        var orderBy = dueBefore is null ? ids.SagaId : $"{ids.NextCheckAt}, {ids.SagaId}";
+        var ownerIndex = dueBefore is null ? 4 : 5;
+        var untilIndex = dueBefore is null ? 5 : 6;
+
+        var sql = $@";WITH candidates AS (
+    SELECT TOP ({{0}}) {ids.SagaId}
+    FROM {ids.Table} WITH (UPDLOCK, READPAST, ROWLOCK)
+    WHERE {ids.Status} IN ({{1}}, {{2}})
+      AND ({ids.LeasedUntil} IS NULL OR {ids.LeasedUntil} <= {{3}})
+      {dueClause}
+    ORDER BY {orderBy}
+)
+UPDATE t
+SET t.{ids.LeasedBy} = {{{ownerIndex}}}, t.{ids.LeasedUntil} = {{{untilIndex}}}, t.{ids.Version} = t.{ids.Version} + 1
+FROM {ids.Table} AS t
+INNER JOIN candidates AS c ON t.{ids.SagaId} = c.{ids.SagaId}";
+
+        var args = dueBefore is null
+            ? new object[] { batchSize, (int)SagaStatus.Active, (int)SagaStatus.AwaitingHumanDecision, now, owner, untilValue }
+            : new object[] { batchSize, (int)SagaStatus.Active, (int)SagaStatus.AwaitingHumanDecision, now, dueBefore.Value, owner, untilValue };
+        return (sql, args);
     }
 
     /// <summary>PG 租约 SQL 构造：标识符取自 EF 模型映射，值全部走 ExecuteSqlRaw 参数占位符。</summary>
@@ -364,13 +432,13 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
 
     /// <summary>租约 SQL 标识符解析（EF 模型映射；MySQL 用反引号，PG/SQLite 用双引号）。</summary>
     private (string Table, string SagaId, string Status, string LeasedBy, string LeasedUntil, string Version, string NextCheckAt)
-        ResolveLeaseIdentifiers(bool mySql)
+        ResolveLeaseIdentifiers(bool mySql, bool sqlServer = false)
     {
         var entityType = Model.FindEntityType(typeof(TState))
             ?? throw new InvalidOperationException($"Entity type '{typeof(TState).FullName}' is not mapped in this model.");
         var quote = mySql
             ? (Func<string, string>)QuoteMySqlIdentifier
-            : QuoteSqliteIdentifier;
+            : sqlServer ? QuoteSqlServerIdentifier : QuoteSqliteIdentifier;
 
         var table = quote(entityType.GetTableName()
             ?? throw new InvalidOperationException($"Entity type '{typeof(TState).FullName}' has no table mapping."));
@@ -390,6 +458,10 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
     /// <summary>MySQL 标识符加引号（反引号 + 反引号转义）。</summary>
     private static string QuoteMySqlIdentifier(string identifier)
         => "`" + identifier.Replace("`", "``", StringComparison.Ordinal) + "`";
+
+    /// <summary>SQL Server 标识符加引号（方括号 + 右方括号转义）。</summary>
+    private static string QuoteSqlServerIdentifier(string identifier)
+        => "[" + identifier.Replace("]", "]]", StringComparison.Ordinal) + "]";
 
     /// <summary>
     /// SQLite 单语句租约（R7）：集合式 UPDATE + 等值守卫回读。语义与跟踪分页路径逐项对齐——
@@ -474,8 +546,7 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
         => entityType.FindProperty(propertyName)?.GetColumnName()
             ?? throw new InvalidOperationException($"Property '{propertyName}' has no column mapping in the model.");
 
-    /// <summary>SQL 标识符加引号（双引号 + 双引号转义——SQLite/PG 标准形态；MySQL 反引号与
-    /// SQL Server 方括号待对应车道开线日加入）。</summary>
+    /// <summary>SQL 标识符加引号（双引号 + 双引号转义——SQLite/PG 标准形态；MySQL 反引号、SQL Server 方括号为独立形态）。</summary>
     private static string QuoteSqliteIdentifier(string identifier)
         => "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 
@@ -588,6 +659,102 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
                 entry.State = EntityState.Detached;
         }
         return affected;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// 2026-10-20 性能轮：整批一次 <see cref="DbContext.SaveChangesAsync(CancellationToken)"/>，
+    /// <see cref="BumpVersionOnModifiedSagaStates"/> 只扫描一次 ChangeTracker（原逐 Saga 保存
+    /// 在 256 批下叠加成 O(n²) 扫描）。只写入调用方已变异的 NextCheckAt；Version 并发令牌由
+    /// 提交前递增承担。失败整体按 0 返回，租约由 LeaseDuration 兜底。
+    /// </remarks>
+    public async ValueTask<int> AdvanceNextCheckAtAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return 0;
+
+        var eligible = 0;
+        foreach (var saga in sagas)
+        {
+            if (saga is null) continue;
+            var entry = Entry(saga);
+            if (entry.State == EntityState.Detached)
+                continue;
+            if (!string.Equals(saga.LeasedBy, owner, StringComparison.Ordinal))
+            {
+                entry.State = EntityState.Detached;
+                continue;
+            }
+            eligible++;
+        }
+        if (eligible == 0) return 0;
+
+        try
+        {
+            await SaveChangesAsync(ct).ConfigureAwait(false);
+            return eligible;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            DetachAll(sagas);
+            return 0;
+        }
+        catch
+        {
+            DetachAll(sagas);
+            throw;
+        }
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<IReadOnlyList<int>> SaveManyAsync(IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return [];
+
+        var results = new int[sagas.Count];
+        for (var i = 0; i < sagas.Count; i++)
+        {
+            var saga = sagas[i];
+            if (saga is null) continue;
+            var entry = Entry(saga);
+            if (entry.State == EntityState.Detached) continue;
+            saga.Error = Core.FailureReason.Truncate(saga.Error, 2040);
+            results[i] = 1;
+        }
+
+        var eligible = 0;
+        foreach (var result in results)
+            eligible += result;
+        if (eligible == 0) return results;
+
+        try
+        {
+            await SaveChangesAsync(ct).ConfigureAwait(false);
+            return results;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            DetachAll(sagas);
+            return new int[sagas.Count];
+        }
+        catch
+        {
+            DetachAll(sagas);
+            throw;
+        }
+    }
+
+    private void DetachAll(IReadOnlyList<TState> sagas)
+    {
+        foreach (var saga in sagas)
+        {
+            if (saga is null) continue;
+            var entry = Entry(saga);
+            if (entry.State != EntityState.Detached)
+                entry.State = EntityState.Detached;
+        }
     }
 
     /// <summary>

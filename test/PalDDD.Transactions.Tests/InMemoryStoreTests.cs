@@ -425,4 +425,53 @@ public sealed class InMemoryStoreTests
         var reloaded = await store.GetByIdAsync(state.SagaId, cancellationToken);
         await Assert.That(reloaded!.Status).IsEqualTo(SagaStatus.Completed);
     }
+
+    [Test]
+    public async Task InMemorySagaStateStore_AdvanceNextCheckAt_BatchUpdatesAndGuardsOwner(CancellationToken cancellationToken)
+    {
+        var store = new InMemorySagaStateStore<LifecycleSagaState>();
+        var first = new LifecycleSagaState { CurrentState = "Active", Status = SagaStatus.Active };
+        var second = new LifecycleSagaState { CurrentState = "Active", Status = SagaStatus.Active };
+        store.Add(first);
+        store.Add(second);
+
+        var leased = await store.LeaseActiveSagasAsync("owner-a", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        await Assert.That(leased).Count().IsEqualTo(2);
+        var nextCheck = DateTimeOffset.UtcNow.AddMinutes(5);
+        foreach (var saga in leased)
+            saga.NextCheckAt = nextCheck;
+
+        var advanced = await store.AdvanceNextCheckAtAsync("owner-a", leased, cancellationToken);
+        await Assert.That(advanced).IsEqualTo(2);
+
+        var reloaded = await store.GetByIdAsync(first.SagaId, cancellationToken);
+        await Assert.That(reloaded!.NextCheckAt).IsEqualTo(nextCheck);
+
+        var foreign = await store.AdvanceNextCheckAtAsync("owner-b", leased, cancellationToken);
+        await Assert.That(foreign).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task InMemorySagaStateStore_SaveManyAsync_PersistsTerminalStatesInOneCall(CancellationToken cancellationToken)
+    {
+        var store = new InMemorySagaStateStore<LifecycleSagaState>();
+        var first = new LifecycleSagaState { CurrentState = "Active", Status = SagaStatus.Active };
+        var second = new LifecycleSagaState { CurrentState = "Active", Status = SagaStatus.Active };
+        store.Add(first);
+        store.Add(second);
+
+        var leased = await store.LeaseActiveSagasAsync("owner-a", TimeSpan.FromMinutes(2), 10, cancellationToken);
+        foreach (var saga in leased)
+        {
+            saga.Status = SagaStatus.Completed;
+            saga.CurrentState = "Completed";
+        }
+
+        var results = await store.SaveManyAsync(leased, cancellationToken);
+        await Assert.That(results).Count().IsEqualTo(2);
+        await Assert.That(results[0]).IsEqualTo(1);
+        await Assert.That(results[1]).IsEqualTo(1);
+        var active = await store.GetActiveSagasAsync(10, cancellationToken);
+        await Assert.That(active).IsEmpty();
+    }
 }

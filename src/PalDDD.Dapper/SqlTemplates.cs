@@ -451,6 +451,13 @@ public static class SqlTemplates
         "UPDATE saga_states SET leased_by=NULL, leased_until=NULL, version=version+1 WHERE leased_by=@owner AND saga_id IN @ids";
 
     /// <summary>
+    /// 批量推进 NextCheckAt（2026-10-20 性能轮）——只写到期列 + 换代，不重写业务快照；
+    /// <c>leased_by=@owner</c> 与 <c>version=@v</c> 双守卫防抢占/僵尸写。
+    /// </summary>
+    public const string SagaAdvanceNextCheckAt =
+        "UPDATE saga_states SET next_check_at=@nextCheckAt, version=version+1 WHERE saga_id=@id AND version=@v AND leased_by=@owner";
+
+    /// <summary>
     /// Saga 存在性探测（EPSL 地毯审计 2026-10-11 B-3）——SaveChangesAsync 的 UPDATE 先行
     /// 形态下区分「版本冲突」（行在 → 返回 0）与「新行」（INSERT 路径）；COUNT 无数据传输。
     /// </summary>

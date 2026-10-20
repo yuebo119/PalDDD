@@ -34,7 +34,7 @@ using PalDDD.Transactions;
 using static PalDDD.Dapper.DapperSqlErrorClassifier;
 namespace PalDDD.Dapper;
 
-public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, IDueTimeSagaStore<TState>
+public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISagaLeaseBatchStore<TState>, IDueTimeSagaStore<TState>, ISagaBatchStateStore<TState>
     where TState : SagaState, new()
 {
     private readonly DbConnection _connection;
@@ -190,7 +190,14 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
     }
 
     /// <summary>UPSERT 持久化 — 存在则更新，不存在则插入</summary>
-    public async ValueTask<int> SaveChangesAsync(TState state, CancellationToken ct)
+    public ValueTask<int> SaveChangesAsync(TState state, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        return SaveCoreAsync(state, Tx, ct);
+    }
+
+    /// <summary>UPSERT 核心 — 允许批量路径传入本地事务（无 ambient 事务时 SaveMany 自建）。</summary>
+    private async ValueTask<int> SaveCoreAsync(TState state, DbTransaction? tx, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(state);
         // v28 P3：存储层截断兜底（镜像同文件族 DapperOutboxStore.MarkDead/ReleaseForRetry
@@ -234,7 +241,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
                     id = DapperAotInitializer.ToSqliteParameter(state.SagaId),
                     v = state.Version
                 },
-                Tx).ConfigureAwait(false);
+                tx).ConfigureAwait(false);
 
         if (rows > 0)
         {
@@ -267,7 +274,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
                         leasedBy = state.LeasedBy,
                         leasedUntil = state.LeasedUntil.HasValue ? ToTimeParam(state.LeasedUntil.Value) : null
                     },
-                    Tx).ConfigureAwait(false);
+                    tx).ConfigureAwait(false);
         }
         catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
         {
@@ -297,6 +304,92 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
         for (var i = 0; i < sagas.Count; i++)
             ids[i] = (string)DapperAotInitializer.ToSqliteParameter(sagas[i].SagaId);
         return await conn.ExecuteAsync(SqlTemplates.SagaReleaseLeases, new { owner, ids }, Tx).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// 到期推进只写 next_check_at + version，避免逐 Saga 全快照序列化与 EF ChangeTracker
+    /// 扫描；无 ambient 事务时整批一个事务提交（有则并入调用方事务）。
+    /// </remarks>
+    public async ValueTask<int> AdvanceNextCheckAtAsync(string owner, IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return 0;
+
+        var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        DbTransaction? ownTx = null;
+        var tx = Tx;
+        if (tx is null)
+        {
+            ownTx = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+            tx = ownTx;
+        }
+
+        try
+        {
+            var affected = 0;
+            foreach (var saga in sagas)
+            {
+                var rows = await conn.ExecuteAsync(
+                    SqlTemplates.SagaAdvanceNextCheckAt,
+                    new
+                    {
+                        nextCheckAt = saga.NextCheckAt.HasValue ? ToTimeParam(saga.NextCheckAt.Value) : null,
+                        id = DapperAotInitializer.ToSqliteParameter(saga.SagaId),
+                        v = saga.Version,
+                        owner
+                    },
+                    tx).ConfigureAwait(false);
+                if (rows > 0)
+                {
+                    saga.Version++;
+                    affected += rows;
+                }
+            }
+
+            if (ownTx is not null)
+                await ownTx.CommitAsync(ct).ConfigureAwait(false);
+            return affected;
+        }
+        finally
+        {
+            // 未提交即异常时 Dispose 自动回滚；ambient 事务不在此处置。
+            if (ownTx is not null)
+                await ownTx.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<IReadOnlyList<int>> SaveManyAsync(IReadOnlyList<TState> sagas, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(sagas);
+        if (sagas.Count == 0) return [];
+
+        var conn = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        DbTransaction? ownTx = null;
+        var tx = Tx;
+        if (tx is null)
+        {
+            ownTx = await conn.BeginTransactionAsync(ct).ConfigureAwait(false);
+            tx = ownTx;
+        }
+
+        try
+        {
+            var results = new int[sagas.Count];
+            for (var i = 0; i < sagas.Count; i++)
+                results[i] = await SaveCoreAsync(sagas[i], tx, ct).ConfigureAwait(false);
+
+            if (ownTx is not null)
+                await ownTx.CommitAsync(ct).ConfigureAwait(false);
+            return results;
+        }
+        finally
+        {
+            if (ownTx is not null)
+                await ownTx.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     // ITM-796（2026-09-19）：IsUniqueConstraintViolation 私有副本收口至

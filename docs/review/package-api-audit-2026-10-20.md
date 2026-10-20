@@ -37,7 +37,7 @@
 | 包 | 版本 | 当前使用 | 最新 API/特性状态 |
 |---|---|---|---|
 | RabbitMQ.Client | 7.2.2 | RabbitMqBroker | 已用异步 `IChannel`/`CreateChannelAsync`/`BasicPublishAsync`/`BasicConsumeAsync`；`CreateChannelOptions` 开启 publisher confirms + tracking + `ThrottlingRateLimiter`；body 走 `ArrayPool` + `IBufferWriter` |
-| Confluent.Kafka | 2.16.0 | KafkaBroker | 已用 `IProducer`/`IConsumer`、`ProduceAsync`、`Consume(ct)`、LongRunning 消费专用线程；无未用的高价值新 API |
+| Confluent.Kafka | 2.16.0 | KafkaBroker | 已用 `IProducer`/`IConsumer`、`ProduceAsync`、`Consume(ct)` 专用线程 + Channel 交给异步 worker；无未用的高价值新 API |
 | DotNetCore.CAP ×3 | 10.1.0-preview-308323494 | 仅 bench 对比车道 | 版本即最新预发布；不进生产包 |
 
 ### 序列化、压缩与日志

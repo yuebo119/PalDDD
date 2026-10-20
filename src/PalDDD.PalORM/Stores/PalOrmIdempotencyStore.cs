@@ -27,7 +27,7 @@ namespace PalDDD.PalORM.Stores;
 /// 绕过 IUnitOfWork 时仍不挂接（待 PalORM 提供公开活动事务访问器后迁移）。
 /// </para>
 /// </summary>
-public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
+public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore, IIdempotencyStartOrGetStore
     where TProvider : IDbProvider
 {
     [SuppressMessage("Performance", "CA1051:Do not declare visible instance fields",
@@ -187,6 +187,24 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore
 
         return new IdempotencyRecord(operationName, key,
             IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, expectedRevision + 1);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// 2026-10-20 性能轮：Insert 优先的单调用形态（与 Dapper/EF 栈一致）——新 key 与
+    /// 过期/失败回收路径省掉处理器侧前置 Get；已存在活跃/完成记录回读完整记录返回 Existing。
+    /// </remarks>
+    public async ValueTask<IdempotencyStartResult> StartOrGetAsync(
+        string operationName, string key, DateTimeOffset now, IdempotencyPolicy policy, CancellationToken ct = default)
+    {
+        var started = await TryStartAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
+        if (started is not null)
+            return new IdempotencyStartResult(IdempotencyStartOutcome.Started, started);
+
+        var existing = await GetAsync(operationName, key, now, ct).ConfigureAwait(false);
+        return existing is null
+            ? new IdempotencyStartResult(IdempotencyStartOutcome.Contended, null)
+            : new IdempotencyStartResult(IdempotencyStartOutcome.Existing, existing);
     }
 
     /// <summary>
