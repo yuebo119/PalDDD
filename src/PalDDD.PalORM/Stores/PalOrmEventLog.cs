@@ -154,6 +154,25 @@ public class PalOrmEventLog<TProvider> : IEventLog
         return new AppendEventsResult(streamName, firstStreamVersion, lastStreamVersion, firstGlobalPos, lastGlobalPos);
     }
 
+    // PG 单事件追加 SQL：四种守卫各有完整编译期常量。2026-10-21：原实现每次追加把
+    // 约 700 字符的前缀、守卫与 RETURNING 在运行时拼成一个新字符串（约 1.4KB 分配），
+    // 常量拼接由编译器折叠，运行期零分配。
+    private const string AppendSinglePostgreSqlPrefix =
+        "INSERT INTO events (event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
+        "SELECT @p0, @p1, @p2, @p3, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) + 1, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14";
+
+    private const string AppendSinglePostgreSqlReturning =
+        " RETURNING global_position, stream_version";
+
+    private const string AppendSinglePostgreSqlNoStreamGuard =
+        " WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) = -1";
+
+    private const string AppendSinglePostgreSqlStreamExistsGuard =
+        " WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) >= 0";
+
+    private const string AppendSinglePostgreSqlExactGuard =
+        " WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) = @p15";
+
     /// <summary>
     /// PG 单事件原子追加：服务端 <c>COALESCE(MAX(stream_version),-1)+1</c> 加版本守卫，
     /// 单往返返回 global_position 与 stream_version。守卫失匹零行时重查实际版本转统一
@@ -166,21 +185,16 @@ public class PalOrmEventLog<TProvider> : IEventLog
         DateTimeOffset now,
         CancellationToken ct)
     {
-        var guard = expectedVersion.Kind switch
+        var sql = expectedVersion.Kind switch
         {
             ExpectedStreamVersionKind.NoStream =>
-                " WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) = -1",
+                AppendSinglePostgreSqlPrefix + AppendSinglePostgreSqlNoStreamGuard + AppendSinglePostgreSqlReturning,
             ExpectedStreamVersionKind.StreamExists =>
-                " WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) >= 0",
+                AppendSinglePostgreSqlPrefix + AppendSinglePostgreSqlStreamExistsGuard + AppendSinglePostgreSqlReturning,
             ExpectedStreamVersionKind.Exact =>
-                " WHERE COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) = @p15",
-            _ => string.Empty,
+                AppendSinglePostgreSqlPrefix + AppendSinglePostgreSqlExactGuard + AppendSinglePostgreSqlReturning,
+            _ => AppendSinglePostgreSqlPrefix + AppendSinglePostgreSqlReturning,
         };
-        var sql =
-            "INSERT INTO events (event_id, event_id_bin, event_name, stream_name, stream_version, schema_version, content_type, payload, metadata, recorded_at, actor_id, reason, correlation_id, causation_id, trace_parent, trace_state) " +
-            "SELECT @p0, @p1, @p2, @p3, COALESCE((SELECT MAX(stream_version) FROM events WHERE stream_name = @p3), -1) + 1, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14" +
-            guard +
-            " RETURNING global_position, stream_version";
 
         var eventIdText = e.EventId.ToString(null, System.Globalization.CultureInfo.InvariantCulture);
         await using var cmd = CreateRawCommand();

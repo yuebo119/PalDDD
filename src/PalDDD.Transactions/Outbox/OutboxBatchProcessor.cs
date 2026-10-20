@@ -494,16 +494,16 @@ public sealed class OutboxBatchProcessor
                 }
 
                 // 发布任务热启动（异常流入 Task，出窗侧统一处理——发布与标记同 try 的语义
-                // 由 HandleOutcomeAsync 承载）；任务体仅转发 broker 调用
-                window.Enqueue((msg, PublishCoreAsync()));
-
-                async Task PublishCoreAsync()
-                {
-                    if (raw)
-                        await _broker.PublishRawAsync(msg.Payload, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
-                    else
-                        await _broker.PublishAsync(@event!, descriptor, msg.Id, publishContext, ct).ConfigureAwait(false);
-                }
+                // 由 HandleOutcomeAsync 承载）。2026-10-21：直接消费 broker 的 ValueTask，
+                // 同步成功复用 Task.CompletedTask，未完成才转换一次；原实现包一层本地
+                // async Task 方法，每消息多一个异步状态机与包装 Task。
+                var publishValueTask = raw
+                    ? _broker.PublishRawAsync(msg.Payload, descriptor, msg.Id, publishContext, ct)
+                    : _broker.PublishAsync(@event!, descriptor, msg.Id, publishContext, ct);
+                var publishTask = publishValueTask.IsCompletedSuccessfully
+                    ? Task.CompletedTask
+                    : publishValueTask.AsTask();
+                window.Enqueue((msg, publishTask));
             }
             while (window.Count > 0)
             {

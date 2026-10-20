@@ -23,8 +23,9 @@ CREATE TABLE outbox_messages (
 CREATE INDEX idx_outbox_due ON outbox_messages(next_attempt_at, created_at) WHERE status = 0;
 -- 保留清理按 processed_at 分批删除；部分索引只覆盖终态行（Processed/Dead）。
 CREATE INDEX idx_outbox_processed ON outbox_messages(processed_at) WHERE status <> 0;
--- 租约回读谓词（locked_by + locked_until）覆盖索引；仅索引持租行，避免历史 NULL 行膨胀。
-CREATE INDEX idx_outbox_lease_holder ON outbox_messages(locked_by, locked_until) WHERE locked_by IS NOT NULL;
+-- 2026-10-21：不建 locked_by/locked_until 索引。PG 租约路径为 UPDATE ... RETURNING，
+-- 终态写按主键 id 过滤，没有按租约列回读的查询；该索引只增加每次租约与标记的写成本。
+-- MySQL 保留同名索引（其两步回读按 locked_by/locked_until 匹配）。
 
 CREATE TABLE inbox_messages (
     id                    BIGSERIAL PRIMARY KEY,
@@ -58,8 +59,8 @@ CREATE TABLE saga_states (
 CREATE INDEX idx_saga_status ON saga_states(status, created_at);
 CREATE INDEX idx_saga_lease ON saga_states(status, leased_until, created_at);
 CREATE INDEX idx_saga_due ON saga_states(status, next_check_at);
--- 租约回读（leased_by + leased_until 等值）覆盖索引；仅索引持租行。
-CREATE INDEX idx_saga_lease_holder ON saga_states(leased_by, leased_until) WHERE leased_by IS NOT NULL;
+-- 2026-10-21：同 outbox，不建 leased_by/leased_until 索引。PG 租约与回读均为单语句
+-- RETURNING，扫描释放按 saga_id 主键；MySQL 的两步回读仍需要该索引，保留在 MySQL 脚本。
 
 CREATE TABLE events (
     global_position BIGSERIAL PRIMARY KEY,
@@ -82,7 +83,8 @@ CREATE TABLE events (
 );
 CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id);
-CREATE INDEX IF NOT EXISTS idx_events_event_id_bin ON events(event_id_bin);
+-- 2026-10-21：不建 event_id_bin 索引。该列只被 SELECT 回传，没有任何查询用它过滤；
+-- 每次事件追加却要维护一份 B-tree。文本 event_id 的唯一索引保留（唯一性守卫）。
 -- global_position 是主键，PK 索引已覆盖 ReadAll 的范围扫描与排序；独立索引纯冗余（2026-10-20 移除）。
 
 -- P3 修复（九轮评审）：补齐通用脚本已有而方言脚本缺失的两张表

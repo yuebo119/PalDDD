@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 
 namespace PalDDD.Repository.EFCore;
 
@@ -23,7 +24,7 @@ namespace PalDDD.Repository.EFCore;
 // ⚠️ 中途抛语义（V25 探针 a 实测，2026-09-09）：outbox 写入中途抛（如 store 侧失败）时，
 //   异常从 SavingChanges(Async) 阶段原样透传——EF 的 SaveChangesFailed 回调「不触发」
 //   （该回调只覆盖 provider 层失败/DbUpdateException 形态，控制组实证）；聚合实体以
-//   Added 态滞留 ChangeTracker、领域事件未清除、_pending 残留。调用方 catch 后应弃用
+//   Added 态滞留 ChangeTracker、领域事件未清除、本上下文暂存状态残留。调用方 catch 后应弃用
 //   当前 scope（新 scope 重试），依赖滞留实体二次 SaveChanges 会重复收集事件。
 //
 // 💡 保留理由：DDD + EF Core + Outbox 关键桥梁 · 事务内领域事件持久化。
@@ -31,20 +32,15 @@ namespace PalDDD.Repository.EFCore;
 
 /// <summary>EF Core 拦截器 — 在 SaveChanges 事务内将领域事件写入发件箱。</summary>
 /// <remarks>
-/// 📐 <b>生命周期约束 — 必须注册为 Scoped</b>：<br/>
-/// 本类持有实例字段 <c>_pending</c>（当前 SaveChanges 操作收集的领域事件列表）。
-/// EF Core 的 <c>DbContext</c> 本身是 Scoped，interceptor 与之同生命周期。
-/// 如果注册为 Singleton，<c>_pending</c> 会被多个并发请求交叉写入，导致数据污染。<br/>
-/// 当前注册方式见 <see cref="ServiceCollectionExtensions.AddPalOutboxUnitOfWork{TContext}"/>，
-/// 使用 <c>TryAddScoped</c> 保证正确生命周期。
+/// 📐 <b>生命周期（2026-10-21 修订）</b>：本类不再持有跨请求可变字段。每轮 SaveChanges 的
+/// 领域事件、命中实体与注入 ID 存放在按 <c>DbContext</c> 实例键控的
+/// <c>ConditionalWeakTable</c> 状态中，SavingChanges 开始时清空、成功/失败收尾时重置。
+/// 因此拦截器注册为 Scoped 或 Singleton 均安全，<b>可与 <c>AddDbContextPool</c> 组合使用</b>；
+/// 池化复用的 DbContext 实例各自持有独立状态，不会交叉写入。
+/// 当前注册方式见 <see cref="ServiceCollectionExtensions.AddPalOutboxUnitOfWork{TContext}"/>。
 /// <para>
-/// ⛔ <b>禁止与 <c>AddDbContextPool</c> 组合使用（ITM-640）</b>：本类的 <c>_pending</c> 与
-/// <c>_injectedOutboxIds</c> 均为<b>实例级可变状态</b>，其正确性完全依赖"一个 scoped 实例
-/// 仅供单请求独占"这一前提。EF Core 的 <c>AddDbContextPool</c> 在首个 scoped 实例被
-/// <c>DbContextOptions</c> 烘焙后跨请求复用该 options——拦截器实例随 options 被池化共享，
-/// 后续并发请求拿到同一实例，<c>_pending</c>/<c>_injectedOutboxIds</c> 交叉读写，
-/// outbox 行污染或事件丢失。<b>如需连接池化，请改用 <c>AddDbContextPool</c> 之外的
-/// 显式连接池（如 Npgsql 数据源级池），不要池化 DbContext 本身。</b>
+/// 📐 <b>状态键控说明</b>：弱表以 DbContext 实例为键，状态随上下文回收；池化上下文重新
+/// 租出时由 <c>BeginSave</c> 的 Reset 清空，不残留上一租约的事件。
 /// </para>
 /// <para>
 /// ⚠️ <b>已知窗口（三十八轮 P2 修复：声明不修）</b>：事件与业务数据的原子性只在单次
@@ -71,19 +67,46 @@ public sealed class OutboxDomainEventInterceptor(
     private readonly Serialization.IMessageSerializer _serializer = serializer ?? throw new ArgumentNullException(nameof(serializer));
     private readonly Serialization.IMessageCatalog _messageCatalog = messageCatalog ?? throw new ArgumentNullException(nameof(messageCatalog));
 
-    /// <summary>当前 SaveChanges 操作收集的领域事件列表 — 非线程安全，依赖 Scoped 生命周期保证单请求独占。
-    /// 禁止与 <c>AddDbContextPool</c> 组合使用（池化下拦截器实例跨请求共享，见类 remarks ITM-640）。</summary>
-    private readonly List<Core.DomainEvent> _pending = [];
+    /// <summary>
+    /// 每个 DbContext 实例独占的 SaveChanges 暂存状态（领域事件、命中实体、本拦截器注入的
+    /// OutboxMessage ID）。2026-10-21：由拦截器实例字段移入按上下文键控的弱表，
+    /// 拦截器因此可以随 <c>AddDbContextPool</c> 共享复用，不再有跨请求交叉写入。
+    /// </summary>
+    private sealed class PendingState
+    {
+        public List<Core.DomainEvent> Events { get; } = [];
 
-    /// <summary>2026-10-19 性能实施轮：本轮收集到领域事件的实体引用——SaveChanges 成功后
-    /// 只清理这些实体，避免第二次全量 ChangeTracker 扫描（成本随被跟踪实体数增长）。</summary>
-    private readonly List<Core.Entity> _eventEntities = [];
+        /// <summary>本轮收集到领域事件的实体引用——成功后只清理这些，避免二次全量扫描。</summary>
+        public List<Core.Entity> Entities { get; } = [];
 
-    /// <summary>ITM-227：本轮由拦截器注入的 OutboxMessage ID——SaveChanges 失败时只 Detach 这些，不影响调用方自己 Add 的消息。</summary>
-    private readonly HashSet<ByteAether.Ulid.Ulid> _injectedOutboxIds = [];
+        /// <summary>ITM-227：本轮由拦截器注入的 OutboxMessage ID，失败时只 Detach 这些。</summary>
+        public HashSet<ByteAether.Ulid.Ulid> InjectedOutboxIds { get; } = [];
 
-    /// <summary>当前 SaveChanges 操作期间收集的领域事件列表。</summary>
-    public IReadOnlyList<Core.DomainEvent> PendingEvents => _pending;
+        public void Reset()
+        {
+            Events.Clear();
+            Entities.Clear();
+            InjectedOutboxIds.Clear();
+        }
+    }
+
+    private static readonly ConditionalWeakTable<Microsoft.EntityFrameworkCore.DbContext, PendingState> s_states = new();
+
+    /// <summary>最近一次 SavingChanges 的上下文——仅供 <see cref="PendingEvents"/> 诊断读取。
+    /// 并发共享拦截器时可能指向另一请求的上下文，诊断属性不做正确性保证。</summary>
+    private Microsoft.EntityFrameworkCore.DbContext? _lastContext;
+
+    /// <summary>当前 SaveChanges 操作期间收集的领域事件列表（诊断用，best-effort）。</summary>
+    public IReadOnlyList<Core.DomainEvent> PendingEvents
+        => _lastContext is { } context
+           && s_states.TryGetValue(context, out var state)
+            ? state.Events
+            : Array.Empty<Core.DomainEvent>();
+
+    private static PendingState StateFor(Microsoft.EntityFrameworkCore.DbContext? context)
+        => context is null
+            ? new PendingState()
+            : s_states.GetValue(context, static _ => new PendingState());
 
     /// <inheritdoc />
     public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
@@ -93,18 +116,17 @@ public sealed class OutboxDomainEventInterceptor(
     {
         ArgumentNullException.ThrowIfNull(eventData);
 
-        _pending.Clear();
-        _eventEntities.Clear();
-        DomainEventCollector.Collect(eventData.Context, _pending, _eventEntities);
+        var state = BeginSave(eventData.Context);
+        DomainEventCollector.Collect(eventData.Context, state.Events, state.Entities);
         // 轮四（2026-10-10）：异步路径分派——立即写 store（Dapper/PalORM/InMemory，
         // IImmediateWriteOutboxStore）走单次异步批量（多事件合并单往返 + 消除逐条同步写的
         // 往返级线程阻塞）；EF store（延迟写族）走逐条异步路径（v4.0 ③：跟踪添加同步完成）。
         // 同步钩子 SavingChanges 无异步可用，两类 store 均走 WriteEventsToOutbox 的
         // 单点阻塞桥（v4.0 ③ 文档化形态）
-        if (_pending.Count > 0 && _outboxStore is Transactions.IImmediateWriteOutboxStore immediate)
-            await WriteEventsToOutboxImmediateAsync(eventData.Context, _pending, immediate, cancellationToken).ConfigureAwait(false);
-        else if (_pending.Count > 0)
-            await WriteEventsToOutboxAsync(eventData.Context, _pending).ConfigureAwait(false);
+        if (state.Events.Count > 0 && _outboxStore is Transactions.IImmediateWriteOutboxStore immediate)
+            await WriteEventsToOutboxImmediateAsync(eventData.Context, state, immediate, cancellationToken).ConfigureAwait(false);
+        else if (state.Events.Count > 0)
+            await WriteEventsToOutboxAsync(eventData.Context, state).ConfigureAwait(false);
         return await base.SavingChangesAsync(eventData, result, cancellationToken).ConfigureAwait(false);
     }
 
@@ -117,10 +139,9 @@ public sealed class OutboxDomainEventInterceptor(
     {
         ArgumentNullException.ThrowIfNull(eventData);
 
-        _pending.Clear();
-        _eventEntities.Clear();
-        DomainEventCollector.Collect(eventData.Context, _pending, _eventEntities);
-        WriteEventsToOutbox(eventData.Context, _pending);
+        var state = BeginSave(eventData.Context);
+        DomainEventCollector.Collect(eventData.Context, state.Events, state.Entities);
+        WriteEventsToOutbox(eventData.Context, state);
         return base.SavingChanges(eventData, result);
     }
 
@@ -132,10 +153,7 @@ public sealed class OutboxDomainEventInterceptor(
     {
         ArgumentNullException.ThrowIfNull(eventData);
 
-        DomainEventCollector.Clear(_eventEntities);
-        _eventEntities.Clear();
-        _pending.Clear();
-        _injectedOutboxIds.Clear();
+        CompleteSave(eventData.Context);
         return await base.SavedChangesAsync(eventData, result, cancellationToken).ConfigureAwait(false);
     }
 
@@ -145,11 +163,25 @@ public sealed class OutboxDomainEventInterceptor(
     {
         ArgumentNullException.ThrowIfNull(eventData);
 
-        DomainEventCollector.Clear(_eventEntities);
-        _eventEntities.Clear();
-        _pending.Clear();
-        _injectedOutboxIds.Clear();
+        CompleteSave(eventData.Context);
         return base.SavedChanges(eventData, result);
+    }
+
+    /// <summary>开始一次 SaveChanges：取得该上下文的暂存状态并清空上一轮残留。</summary>
+    private PendingState BeginSave(Microsoft.EntityFrameworkCore.DbContext? context)
+    {
+        var state = StateFor(context);
+        state.Reset();
+        _lastContext = context;
+        return state;
+    }
+
+    /// <summary>成功收尾：只清理本轮收集到事件的实体，再清空暂存状态。</summary>
+    private static void CompleteSave(Microsoft.EntityFrameworkCore.DbContext? context)
+    {
+        var state = StateFor(context);
+        DomainEventCollector.Clear(state.Entities);
+        state.Reset();
     }
 
     /// <inheritdoc />
@@ -168,16 +200,16 @@ public sealed class OutboxDomainEventInterceptor(
         // v35 P3：清理包 try-catch——EF 在 SaveChanges 的 catch 内派发本失败事件，清理
         // 自身抛出会成为冒出异常替换真实 DbUpdateException；清理异常挂 Exception.Data
         // 供诊断，不替换原始异常。
+        var state = StateFor(eventData.Context);
         try
         {
-            RemoveInjectedOutboxMessages(eventData.Context);
+            RemoveInjectedOutboxMessages(eventData.Context, state.InjectedOutboxIds);
         }
         catch (Exception cleanupEx)
         {
             eventData.Exception?.Data["PalOutboxCleanupFailure"] = cleanupEx.ToString();
         }
-        _pending.Clear();
-        _eventEntities.Clear();
+        state.Reset();
         await base.SaveChangesFailedAsync(eventData, cancellationToken).ConfigureAwait(false);
     }
 
@@ -191,44 +223,46 @@ public sealed class OutboxDomainEventInterceptor(
         ArgumentNullException.ThrowIfNull(eventData);
 
         // v35 P3：同 SaveChangesFailedAsync——清理异常不替换真实 SaveChanges 失败异常
+        var state = StateFor(eventData.Context);
         try
         {
-            RemoveInjectedOutboxMessages(eventData.Context);
+            RemoveInjectedOutboxMessages(eventData.Context, state.InjectedOutboxIds);
         }
         catch (Exception cleanupEx)
         {
             eventData.Exception?.Data["PalOutboxCleanupFailure"] = cleanupEx.ToString();
         }
-        _pending.Clear();
-        _eventEntities.Clear();
+        state.Reset();
         base.SaveChangesFailed(eventData);
     }
 
     /// <summary>
-    /// ITM-227 修复：只 Detach 本拦截器本轮注入的 OutboxMessage（按 _injectedOutboxIds 精确匹配），
+    /// ITM-227 修复：只 Detach 本拦截器本轮注入的 OutboxMessage（按注入 ID 精确匹配），
     /// 不影响调用方自行 Add 的消息。避免失败重试时调用方消息被误删。
     /// </summary>
-    private void RemoveInjectedOutboxMessages(Microsoft.EntityFrameworkCore.DbContext? context)
+    private static void RemoveInjectedOutboxMessages(
+        Microsoft.EntityFrameworkCore.DbContext? context,
+        HashSet<ByteAether.Ulid.Ulid> injectedOutboxIds)
     {
-        if (context is null || _injectedOutboxIds.Count == 0)
+        if (context is null || injectedOutboxIds.Count == 0)
             return;
 
         foreach (var entry in context.ChangeTracker.Entries<Transactions.OutboxMessage>().ToList())
         {
             if (entry.State == Microsoft.EntityFrameworkCore.EntityState.Added
-                && _injectedOutboxIds.Contains(entry.Entity.Id))
+                && injectedOutboxIds.Contains(entry.Entity.Id))
             {
                 entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
             }
         }
-        _injectedOutboxIds.Clear();
+        injectedOutboxIds.Clear();
     }
 
     // v35 P3：CA1031 抑制仅针对内层清理 catch（吞掉挂 Data、原异常经 throw; 重抛）——
     // 外层主 catch (Exception) 本就 rethrow 不触发本规约
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031",
         Justification = "部分注入清理必须对任意异常免疫，清理失败挂原始异常 Data 供诊断而非替换之。")]
-    private void WriteEventsToOutbox(Microsoft.EntityFrameworkCore.DbContext? context, List<Core.DomainEvent> events)
+    private void WriteEventsToOutbox(Microsoft.EntityFrameworkCore.DbContext? context, PendingState state)
     {
         // v34 P2 修复：注入循环整体纳入自清理域——EF 源码实证 SavingChanges(Async) 的
         // 派发点位于 DbContext.SaveChanges 的 try 块之前，拦截器自身抛异常（catalog
@@ -246,18 +280,18 @@ public sealed class OutboxDomainEventInterceptor(
             // EF store 的 AddMessageAsync 是跟踪添加（同步完成），走下方逐条路径。
             if (_outboxStore is Transactions.IImmediateWriteOutboxStore immediate)
             {
-                var messages = new List<Transactions.OutboxMessage>(events.Count);
-                foreach (var evt in events)
+                var messages = new List<Transactions.OutboxMessage>(state.Events.Count);
+                foreach (var evt in state.Events)
                     messages.Add(BuildOutboxMessage(evt));
 
                 // ADR-026：同步钩子无异步可用，单点阻塞桥（批量形态）
                 immediate.AddMessagesAsync(messages).AsTask().GetAwaiter().GetResult();
                 foreach (var msg in messages)
-                    _injectedOutboxIds.Add(msg.Id);
+                    state.InjectedOutboxIds.Add(msg.Id);
                 return;
             }
 
-            foreach (var evt in events)
+            foreach (var evt in state.Events)
             {
                 var msg = BuildOutboxMessage(evt);
                 // v4.0 ③（ADR-026）：接口异步化后的同步钩子单点阻塞桥——无同步上下文宿主
@@ -265,7 +299,7 @@ public sealed class OutboxDomainEventInterceptor(
                 //（迁移指引见 CHANGELOG）。EF store 的 AddMessageAsync 为跟踪添加（同步完成），
                 // 桥实际零阻塞；立即写 store（Dapper/PalORM）真异步——桥为文档化阻塞点
                 _outboxStore.AddMessageAsync(msg).AsTask().GetAwaiter().GetResult();
-                _injectedOutboxIds.Add(msg.Id);
+                state.InjectedOutboxIds.Add(msg.Id);
             }
         }
         catch (Exception original)
@@ -277,7 +311,7 @@ public sealed class OutboxDomainEventInterceptor(
             // 失败被吞），清理异常挂 original.Data 供诊断；throw; 重抛原始异常（堆栈保留）。
             try
             {
-                RemoveInjectedOutboxMessages(context);
+                RemoveInjectedOutboxMessages(context, state.InjectedOutboxIds);
             }
             catch (Exception cleanupEx)
             {
@@ -300,18 +334,18 @@ public sealed class OutboxDomainEventInterceptor(
         Justification = "部分注入清理必须对任意异常免疫（同 WriteEventsToOutbox v35 P3 形态）。")]
     private async Task WriteEventsToOutboxImmediateAsync(
         Microsoft.EntityFrameworkCore.DbContext? context,
-        List<Core.DomainEvent> events,
+        PendingState state,
         Transactions.IImmediateWriteOutboxStore immediateStore,
         CancellationToken cancellationToken)
     {
         try
         {
-            var messages = new List<Transactions.OutboxMessage>(events.Count);
-            foreach (var evt in events)
+            var messages = new List<Transactions.OutboxMessage>(state.Events.Count);
+            foreach (var evt in state.Events)
             {
                 var msg = BuildOutboxMessage(evt);
                 messages.Add(msg);
-                _injectedOutboxIds.Add(msg.Id);
+                state.InjectedOutboxIds.Add(msg.Id);
             }
             // v4.0 ④（ADR-026）：接口已带 CancellationToken——异步钩子传播真实 token
             _ = await immediateStore.AddMessagesAsync(messages, cancellationToken).ConfigureAwait(false);
@@ -320,7 +354,7 @@ public sealed class OutboxDomainEventInterceptor(
         {
             try
             {
-                RemoveInjectedOutboxMessages(context);
+                RemoveInjectedOutboxMessages(context, state.InjectedOutboxIds);
             }
             catch (Exception cleanupEx)
             {
@@ -339,22 +373,22 @@ public sealed class OutboxDomainEventInterceptor(
         Justification = "部分注入清理必须对任意异常免疫（同 WriteEventsToOutbox v35 P3 形态）。")]
     private async Task WriteEventsToOutboxAsync(
         Microsoft.EntityFrameworkCore.DbContext? context,
-        IReadOnlyList<Core.DomainEvent> events)
+        PendingState state)
     {
         try
         {
-            foreach (var evt in events)
+            foreach (var evt in state.Events)
             {
                 var msg = BuildOutboxMessage(evt);
                 await _outboxStore.AddMessageAsync(msg).ConfigureAwait(false);
-                _injectedOutboxIds.Add(msg.Id);
+                state.InjectedOutboxIds.Add(msg.Id);
             }
         }
         catch (Exception original)
         {
             try
             {
-                RemoveInjectedOutboxMessages(context);
+                RemoveInjectedOutboxMessages(context, state.InjectedOutboxIds);
             }
             catch (Exception cleanupEx)
             {

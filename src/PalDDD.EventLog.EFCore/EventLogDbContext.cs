@@ -344,7 +344,8 @@ public abstract class EventLogDbContext(
             e.Property(x => x.Metadata).IsRequired();
             e.HasIndex(x => new { x.StreamName, x.StreamVersion }).IsUnique();
             e.HasIndex(x => x.EventId).IsUnique();
-            e.HasIndex(x => x.EventIdBin);
+            // 2026-10-21：不为 EventIdBin 建索引。该列只被读取回传，没有查询用它过滤；
+            // 每次追加都维护一份 B-tree 是纯写放大。存量库按 migration 文档删除。
         });
 
         modelBuilder.Entity<EventLogGlobalPositionAllocator>(e =>

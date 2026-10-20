@@ -25,8 +25,8 @@ CREATE TABLE outbox_messages (
 CREATE INDEX idx_outbox_due ON outbox_messages(next_attempt_at, created_at) WHERE status = 0;
 -- 保留清理按 processed_at 分批删除终态行；(status, processed_at) 让扫描按索引序取满批次。
 CREATE INDEX idx_outbox_processed ON outbox_messages(status, processed_at);
--- 租约回读谓词（locked_by + locked_until）覆盖索引；仅索引持租行。
-CREATE INDEX idx_outbox_lease_holder ON outbox_messages(locked_by, locked_until) WHERE locked_by IS NOT NULL;
+-- 2026-10-21：不建 locked_by/locked_until 索引。SQLite 租约路径为 UPDATE ... RETURNING，
+-- 终态写按主键 id 过滤；该索引只增加每次租约与标记的写成本（MySQL 脚本仍保留）。
 
 CREATE TABLE inbox_messages (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,7 +60,7 @@ CREATE TABLE saga_states (
 CREATE INDEX idx_saga_status ON saga_states(status, created_at);
 CREATE INDEX idx_saga_lease ON saga_states(status, leased_until, created_at);
 CREATE INDEX idx_saga_due ON saga_states(status, next_check_at);
-CREATE INDEX idx_saga_lease_holder ON saga_states(leased_by, leased_until) WHERE leased_by IS NOT NULL;
+-- 2026-10-21：同 outbox，SQLite 不建 leased_by/leased_until 索引（RETURNING 路径无需回读）。
 
 CREATE TABLE events (
     global_position INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,7 +83,8 @@ CREATE TABLE events (
 );
 CREATE UNIQUE INDEX idx_events_stream ON events(stream_name, stream_version);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id ON events(event_id);
-CREATE INDEX IF NOT EXISTS idx_events_event_id_bin ON events(event_id_bin);
+-- 2026-10-21：不建 event_id_bin 索引。该列只被 SELECT 回传，没有查询用它过滤；
+-- 每次事件追加却要维护一份 B-tree。文本 event_id 的唯一索引保留（唯一性守卫）。
 -- global_position 是主键（rowid），独立索引纯冗余（2026-10-20 移除）。
 
 -- P3 修复（九轮评审）：补齐通用脚本已有而方言脚本缺失的两张表

@@ -222,6 +222,13 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore, IIdempotencyStar
     public async ValueTask<IdempotencyStartResult> StartOrGetAsync(
         string operationName, string key, DateTimeOffset now, IdempotencyPolicy policy, CancellationToken ct = default)
     {
+        // 2026-10-21：PG/SQLite 走单语句 UPSERT。新建、过期回收、失败重试三种“可启动”
+        // 情形由一条 INSERT ... ON CONFLICT DO UPDATE ... RETURNING 判定并落库；只有
+        // “已被完成或正被占用”时才追加一次读取。原路径为 INSERT 冲突 + 分类读 + 回收
+        // UPDATE（+ MySQL 回读），冲突侧 3 到 5 次往返。
+        if (_dbType is DapperDbType.PostgreSql or DapperDbType.Sqlite)
+            return await StartOrGetAtomicAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
+
         var started = await TryStartAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
         if (started is not null)
             return new IdempotencyStartResult(IdempotencyStartOutcome.Started, started);
@@ -231,6 +238,79 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore, IIdempotencyStar
             ? new IdempotencyStartResult(IdempotencyStartOutcome.Contended, null)
             : new IdempotencyStartResult(IdempotencyStartOutcome.Existing, existing);
     }
+
+    /// <summary>
+    /// PG/SQLite 单语句启动或读取：UPSERT 的 WHERE 精确复刻“过期 / Failed / 租约过期”
+    /// 三种可回收条件；返回行即本次取得执行权，零行即既有记录仍有效，再读一次返回。
+    /// </summary>
+    private async ValueTask<IdempotencyStartResult> StartOrGetAtomicAsync(
+        string operationName, string key, DateTimeOffset now, IdempotencyPolicy policy, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ct.ThrowIfCancellationRequested();
+
+        await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var lockedUntil = now + policy.ProcessingTimeout;
+        var expiresAt = now + policy.Retention;
+        var statusProcessing = (int)IdempotencyRecordStatus.Processing;
+        var statusFailed = (int)IdempotencyRecordStatus.Failed;
+
+        var revision = await _connection.QueryFirstOrDefaultAsync<long?>(
+            AtomicStartOrGet,
+            new
+            {
+                OperationName = operationName,
+                Key = key,
+                Status = statusProcessing,
+                Failed = statusFailed,
+                LockedUntil = ToTimeParam(lockedUntil),
+                ExpiresAt = ToTimeParam(expiresAt),
+                UpdatedAt = ToTimeParam(now),
+                Now = ToTimeParam(now)
+            },
+            Tx).ConfigureAwait(false);
+
+        if (revision is { } startedRevision)
+        {
+            // revision=0 为新建，>0 为回收换代；两者都返回 Processing 记录供调用方继续执行。
+            return new IdempotencyStartResult(
+                IdempotencyStartOutcome.Started,
+                new IdempotencyRecord(
+                    operationName, key, IdempotencyRecordStatus.Processing,
+                    lockedUntil, expiresAt, now, startedRevision));
+        }
+
+        // 零行：既有记录为 Completed 或租约未过期的 Processing。读取一次返回其快照。
+        var existing = await GetAsync(operationName, key, now, ct).ConfigureAwait(false);
+        return existing is null
+            ? new IdempotencyStartResult(IdempotencyStartOutcome.Contended, null)
+            : new IdempotencyStartResult(IdempotencyStartOutcome.Existing, existing);
+    }
+
+    /// <summary>
+    /// PG/SQLite 原子启动 SQL。状态值：0=Processing、1=Completed、2=Failed。
+    /// 可回收条件与 <see cref="TryStartAsync"/> 的逐语句分支逐条等价：过期（任意状态）、
+    /// Failed、租约过期的 Processing；Completed 未过期不回收。
+    /// </summary>
+    private const string AtomicStartOrGet = """
+        INSERT INTO idempotency_records
+            (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error)
+        VALUES (@OperationName, @Key, @Status, @LockedUntil, @ExpiresAt, @UpdatedAt, NULL, NULL)
+        ON CONFLICT (operation_name, idempotency_key) DO UPDATE
+        SET status = @Status,
+            locked_until = @LockedUntil,
+            expires_at = @ExpiresAt,
+            updated_at = @UpdatedAt,
+            error = NULL,
+            response_payload = NULL,
+            revision = idempotency_records.revision + 1
+        WHERE idempotency_records.expires_at <= @Now
+           OR idempotency_records.status = @Failed
+           OR (idempotency_records.status = @Status AND idempotency_records.locked_until <= @Now)
+        RETURNING revision
+        """;
 
     /// <summary>
     /// B5（EPSL 地毯审计 2026-10-16）：TryStart 冲突路径的轻量读——原 GetAsync 读全行
