@@ -119,7 +119,23 @@ CREATE INDEX idx_outbox_due ON outbox_messages(created_at) WHERE status = 0; -- 
 
 MySQL 恢复 `(status, created_at)` 索引。
 
-## 5. 验收
+## 5. 实测（2026-10-21，wslc PG 18.6 / MySQL 8.4.11）
+
+`dotnet run --project samples/PalDDD.DapperAotProbe -c Release -- --provider <Pg|MySql> --outbox-migration`
+
+探针播种 100,000 行混合积压：90,000 未来重试行（位于 `created_at` 头部）、9,000 无
+`next_attempt_at` 的到期行、1,000 旧活跃租约（`locked_until` 未来、`next_attempt_at` NULL）。
+流程为旧索引 + 旧谓词量测 → 回填 → 零违例校验 → 新索引 + 新谓词量测，5 次中位数。
+
+| 方言 | 旧谓词 + 旧索引 | 新谓词 + 新索引 | 比值 | 回填违例 | EXPLAIN |
+|---|---:|---:|---:|---:|---|
+| PostgreSQL | 6.95ms | 0.34ms | 20.15× | 0 | 命中 `idx_outbox_due`，无全表扫描 |
+| MySQL | 196.91ms | 0.61ms | 324.82× | 0 | 命中 `idx_outbox_due`，无全表扫描 |
+
+口径说明：两组同时切换谓词与索引，是“迁移前/迁移后”组合收益，不是单谓词微基准。
+探针只用于迁移验收，不进入生产路径。
+
+## 6. 验收
 
 - 四栈：新建消息 `NextAttemptAt == CreatedAt`；租约后 `NextAttemptAt == LockedUntil`；
   租约有效期内二次租约为空；到期后可再租。
