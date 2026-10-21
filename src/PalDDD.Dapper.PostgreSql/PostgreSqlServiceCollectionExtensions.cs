@@ -156,6 +156,11 @@ public static class PostgreSqlServiceCollectionExtensions
     /// <remarks>
     /// ⚡ 要求已在 DI 中注册 <c>NpgsqlDataSource</c>（通过 <c>AddPalNpgsqlDataSource</c>）。
     /// 此方法使用 DataSource 而非新连接字符串，确保复用连接池配置和类型映射器。
+    /// ⚡ NOTIFY 到达后解析的是 <see cref="OutboxBatchProcessor"/>（Scoped），由
+    /// <c>AddPalOutbox()</c> 注册；未调用时首个通知会在作用域解析阶段抛缺服务异常。
+    /// 2026-10-21 R8：本入口自带 <c>IPalLogger&lt;T&gt;</c> 门面（与 R7 的
+    /// <c>AddPalOutbox</c>/<c>AddPalInbox</c>/<c>AddPalSaga</c> 同一注册点），
+    /// 单独注册时宿主启动解析 IHostedService 不再抛缺日志门面。
     /// </remarks>
     /// <param name="channelName">通知通道名（默认 "outbox_channel"）</param>
     public static IServiceCollection AddPalPostgreSqlOutboxNotifier(
@@ -163,6 +168,7 @@ public static class PostgreSqlServiceCollectionExtensions
         string channelName = "outbox_channel")
     {
         ArgumentNullException.ThrowIfNull(services);
+        services.EnsurePalLoggerFacade();
 
         // ITM-637 姊妹：AddSingleton<IHostedService>(factory) 重复调用会追加多个描述符（多次
         // 调用启动多个 LISTEN 监听 + 每个 NOTIFY 触发多轮批处理）。改 TryAddEnumerable 按

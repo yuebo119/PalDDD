@@ -110,10 +110,13 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
         {
             // B23：扫描走活跃索引（O(活跃)）——语义与原全量扫 + 状态谓词等价
             // （索引成员即谓词为真的集合，Add/SaveChanges 受理点自纠维持）。
-            // v44 P3 饿死边界（行为不变，声明保留）：CreatedAt 固定排序 + Take(batchSize) 下，
-            // 无 Timeout 的滞留 AWD saga 永不离场（非超时分支仅清租约）——积压 ≥ batchSize
-            // 时排在其后的 saga 每轮取不到名额；生产栈 NextAttemptAt 过滤不占名额无此问题，
-            // 本栈定位测试/原型，接受该边界不修。
+            // v44 饿死边界（2026-10-21 R8 勘正）：原注释称 CreatedAt 固定排序下滞留
+            // AWD saga 永不离场；现在租约按 (leased_until NULL 优先, leased_until,
+            // created_at) 排序，并且 SagaTimeoutProcessor 对实现 ISagaScanCursorStore
+            // 的存储把 released.leased_until 写回本次扫描时刻（见 ReleaseLeasesAsync
+            // 四参重载），已扫描行退到未扫描行之后，无 Timeout 的滞留 saga 也会在
+            // 后续轮次获得名额。未实现轮转接口的自定义 store 仍可能饿死（处理器构造期
+            // 告警），本栈已实现，不再受该边界影响。
             var active = new List<TState>(Math.Min(batchSize, _activeIds.Count));
             // 只保留排序键最小的 batchSize 条：原实现对全部活跃项 Sort 后截断，
             // 10k 活跃时每 tick 付 O(A log A)。PriorityQueue 以反向比较器保留前 N 小，
