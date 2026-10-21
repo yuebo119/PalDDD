@@ -39,6 +39,7 @@
 2. **库级不干净**:Dapper.dll 自带 46 条方法级 trim/AOT 警告(IL2104/IL3053,`--singlewarn` 展开实证),全部落在经典反射路径,包级以 NoWarn 抑制——这是上游程序集属性,不是本仓调用点问题。
 3. **ct 收缩**:Dapper 经典直接重载无 ct 参数(CommandDefinition 被 DAP057 拒绝),SQL 执行层不可中断;上游 `Command<T>` 管道已支持 ct 只差调用点入口,未来上游补齐后可恢复。
 4. 消费者**无法**运行时/项目级切换"经典 vs AOT"——拦截在包编译期定死;也不需要切换(语义一致)。
+5. **自定义参数类型不被拦截(2026-10-21 实测)**——`QueryAsync<T>(sql, someDto, ...)` 的参数类型若不是匿名类型或 `DynamicParameters`,Dapper.AOT 1.1.0 不生成拦截器,调用静默回落到经典反射绑定(NativeAOT 下运行时炸)。以 `EmitCompilerGeneratedFiles=true` 核对生成文件确认:`private` 嵌套 DTO 与 `internal` 嵌套 DTO 结果相同(零拦截器、零诊断)。结论:参数只能用匿名类型或 `DynamicParameters`,不要引入参数 DTO 以"省分配"。
 
 ## EF Core 栈:实验性基础设施(本仓未启用)
 
