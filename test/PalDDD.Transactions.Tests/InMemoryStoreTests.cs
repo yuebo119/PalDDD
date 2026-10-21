@@ -45,6 +45,66 @@ public sealed class InMemoryStoreTests
     }
 
     [Test]
+    public async Task InMemoryInboxStore_BatchClaimMarkAndSkip(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var now = DateTimeOffset.UtcNow;
+        string[] ids = ["batch-1", "batch-2", "batch-3"];
+
+        var claimed = await store.TryStartProcessingManyAsync(
+            "consumer", ids, now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(claimed).Count().IsEqualTo(3);
+        await Assert.That(string.Join(",", claimed.Select(static m => m.MessageId).OrderBy(static x => x, StringComparer.Ordinal)))
+            .IsEqualTo("batch-1,batch-2,batch-3");
+
+        var duplicate = await store.TryStartProcessingManyAsync(
+            "consumer", ids, now.AddSeconds(1), TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(duplicate).IsEmpty();
+
+        var marked = await store.MarkProcessedManyAsync(
+            "consumer", claimed, now.AddSeconds(2), cancellationToken);
+        await Assert.That(marked).IsEqualTo(3);
+
+        var after = await store.TryStartProcessingManyAsync(
+            "consumer", ids, now.AddSeconds(3), TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(after).IsEmpty();
+    }
+
+    [Test]
+    public async Task InMemoryInboxStore_BatchReclaimsFailedAndExpiredLease(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var now = DateTimeOffset.UtcNow;
+
+        var failed = await store.TryStartProcessingAsync(
+            "consumer", "batch-failed", now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(failed!.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(failed.Attempts).IsEqualTo(1);
+        await store.MarkFailedAsync(failed, "boom", cancellationToken);
+
+        var active = await store.TryStartProcessingAsync(
+            "consumer", "batch-active", now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(active!.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(active.Attempts).IsEqualTo(1);
+
+        // 租约在 10 分钟前开始、超时 5 分钟 → 已过期。
+        var expired = await store.TryStartProcessingAsync(
+            "consumer", "batch-expired", now.AddMinutes(-10), TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(expired!.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(expired.Attempts).IsEqualTo(1);
+
+        var claimed = await store.TryStartProcessingManyAsync(
+            "consumer", ["batch-failed", "batch-active", "batch-expired"],
+            now, TimeSpan.FromMinutes(5), cancellationToken);
+
+        await Assert.That(claimed).Count().IsEqualTo(2);
+        await Assert.That(string.Join(",", claimed.Select(static m => m.MessageId).OrderBy(static x => x, StringComparer.Ordinal)))
+            .IsEqualTo("batch-expired,batch-failed");
+        await Assert.That(claimed[0].Attempts).IsEqualTo(2);
+        await Assert.That(claimed[1].Attempts).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task InMemoryOutboxStore_LeaseAndProcess(CancellationToken cancellationToken)
     {
         var store = new InMemoryOutboxStore();

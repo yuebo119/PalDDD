@@ -241,6 +241,119 @@ internal static class MigrationProbes
         }
     }
 
+    /// <summary>
+    /// Outbox PG 强类型 COPY 探针（2026-10-21）：1000 行写入后按计数、载荷、追踪列与
+    /// 可用时刻回读，验证专用写入与通用路径的列语义一致。仅连接 palddd_bench 前缀库。
+    /// </summary>
+    public static async Task<int> RunOutboxBulkProbeAsync(bool postgreSql, CancellationToken ct = default)
+    {
+        await using var session = await RemoteDialectBenchSession.CreateAsync(isPostgreSql: postgreSql, ct);
+        var conn = session.Connection;
+        await ExecAsync(conn, "DELETE FROM outbox_messages", ct);
+
+        const int count = 1000;
+        var baseline = DateTimeOffset.UtcNow;
+        var messages = new List<OutboxMessage>(count);
+        for (var i = 0; i < count; i++)
+        {
+            messages.Add(new OutboxMessage
+            {
+                Type = "probe.outbox.v1",
+                Payload = System.Text.Encoding.UTF8.GetBytes($"{{\"i\":{i}}}"),
+                ContentType = "application/json",
+                SchemaVersion = 1,
+                CreatedAt = baseline.AddMilliseconds(i),
+                CorrelationId = Ulid.New(),
+                CausationId = Ulid.New(),
+                TraceParent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                TraceState = "tenant=probe"
+            });
+        }
+
+        var dialect = postgreSql ? DapperDbType.PostgreSql : DapperDbType.MySql;
+        var store = new DapperOutboxStore(conn, dialect);
+        var inserted = await store.AddMessagesAsync(messages, ct);
+        if (inserted != count)
+            throw new InvalidOperationException($"inserted expected {count}, got {inserted}");
+
+        var stored = Convert.ToInt64(await ScalarAsync(conn,
+            "SELECT COUNT(*) FROM outbox_messages WHERE status = 0", ct), CultureInfo.InvariantCulture);
+        if (stored != count)
+            throw new InvalidOperationException($"stored expected {count}, got {stored}");
+
+        var sample = messages[count - 1];
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT payload, correlation_id, causation_id, trace_parent, trace_state, next_attempt_at FROM outbox_messages WHERE id = @id";
+        var idParam = cmd.CreateParameter();
+        idParam.ParameterName = "@id";
+        idParam.Value = sample.Id.ToString(null, CultureInfo.InvariantCulture);
+        cmd.Parameters.Add(idParam);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            throw new InvalidOperationException("sample row not found");
+
+        if (!reader.GetFieldValue<byte[]>(0).AsSpan().SequenceEqual(sample.Payload))
+            throw new InvalidOperationException("payload mismatch");
+        if (reader.GetString(1) != sample.CorrelationId!.Value.ToString(null, CultureInfo.InvariantCulture))
+            throw new InvalidOperationException("correlation mismatch");
+        if (reader.GetString(2) != sample.CausationId!.Value.ToString(null, CultureInfo.InvariantCulture))
+            throw new InvalidOperationException("causation mismatch");
+        if (reader.GetString(3) != sample.TraceParent)
+            throw new InvalidOperationException("traceparent mismatch");
+        if (reader.GetString(4) != sample.TraceState)
+            throw new InvalidOperationException("tracestate mismatch");
+
+        // PG timestamptz 精度为微秒；源值 100ns 分辨率，允许 <10 ticks 的截断差。
+        var nextAttempt = reader.GetDateTime(5);
+        var expectedNext = sample.NextAttemptAt!.Value.UtcDateTime;
+        if (Math.Abs(nextAttempt.Ticks - expectedNext.Ticks) >= 10)
+            throw new InvalidOperationException(
+                $"next_attempt_at mismatch: stored={nextAttempt:O}, expected={expectedNext:O}");
+
+        Console.WriteLine(
+            $"OUTBOX BULK PASS ({(postgreSql ? "PG" : "MySQL")}): inserted={inserted}, stored={stored}, sample=ok");
+        return 0;
+    }
+
+    /// <summary>
+    /// Inbox 批量认领探针（2026-10-21）：100 条一次认领、重复认领为空、批量完成标记、
+    /// 再次认领为空。PG/SQLite 走 INSERT/UPDATE RETURNING，MySQL 走读-插-更-回读。
+    /// </summary>
+    public static async Task<int> RunInboxBatchProbeAsync(bool postgreSql, CancellationToken ct = default)
+    {
+        await using var session = await RemoteDialectBenchSession.CreateAsync(isPostgreSql: postgreSql, ct);
+        var conn = session.Connection;
+        await ExecAsync(conn, "DELETE FROM inbox_messages", ct);
+
+        var dialect = postgreSql ? DapperDbType.PostgreSql : DapperDbType.MySql;
+        var store = new DapperInboxStore(conn, dialect);
+        var now = DateTimeOffset.UtcNow;
+        var ids = Enumerable.Range(0, 100).Select(static i => "batch-" + i).ToList();
+
+        var claimed = await store.TryStartProcessingManyAsync(
+            "probe", ids, now, TimeSpan.FromMinutes(5), ct);
+        if (claimed.Count != ids.Count)
+            throw new InvalidOperationException($"claimed expected {ids.Count}, got {claimed.Count}");
+
+        var duplicate = await store.TryStartProcessingManyAsync(
+            "probe", ids, now.AddSeconds(1), TimeSpan.FromMinutes(5), ct);
+        if (duplicate.Count != 0)
+            throw new InvalidOperationException($"duplicate claim expected 0, got {duplicate.Count}");
+
+        var marked = await store.MarkProcessedManyAsync("probe", claimed, now.AddSeconds(2), ct);
+        if (marked != ids.Count)
+            throw new InvalidOperationException($"marked expected {ids.Count}, got {marked}");
+
+        var after = await store.TryStartProcessingManyAsync(
+            "probe", ids, now.AddSeconds(3), TimeSpan.FromMinutes(5), ct);
+        if (after.Count != 0)
+            throw new InvalidOperationException($"post-mark claim expected 0, got {after.Count}");
+
+        Console.WriteLine(
+            $"INBOX BATCH PASS ({(postgreSql ? "PG" : "MySQL")}): claimed={claimed.Count}, marked={marked}, duplicate=0");
+        return 0;
+    }
+
     private static async Task DeleteStreamAsync(
         DataSession<PostgreSqlProvider> session, string stream, CancellationToken ct)
     {

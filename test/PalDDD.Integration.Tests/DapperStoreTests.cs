@@ -719,6 +719,102 @@ public sealed class DapperStoreTests
     }
 
     [Test]
+    public async Task Inbox_Batch_ClaimMarkAndSkip(CancellationToken cancellationToken)
+    {
+        var store = new DapperInboxStore(_conn, _dbType);
+        var now = TimeProvider.System.GetUtcNow();
+        string[] ids = ["batch-1", "batch-2", "batch-3"];
+
+        var claimed = await store.TryStartProcessingManyAsync(
+            "test-consumer", ids, now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(claimed).Count().IsEqualTo(3);
+        await Assert.That(string.Join(",", claimed.Select(m => m.MessageId).OrderBy(static x => x, StringComparer.Ordinal)))
+            .IsEqualTo("batch-1,batch-2,batch-3");
+
+        var duplicate = await store.TryStartProcessingManyAsync(
+            "test-consumer", ids, now.AddSeconds(1), TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(duplicate).IsEmpty();
+
+        var marked = await store.MarkProcessedManyAsync(
+            "test-consumer", claimed, now.AddSeconds(2), cancellationToken);
+        await Assert.That(marked).IsEqualTo(3);
+
+        var after = await store.TryStartProcessingManyAsync(
+            "test-consumer", ids, now.AddSeconds(3), TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(after).IsEmpty();
+    }
+
+    [Test]
+    public async Task Inbox_Batch_ReclaimsFailedAndExpiredLease(CancellationToken cancellationToken)
+    {
+        var store = new DapperInboxStore(_conn, _dbType);
+        var now = TimeProvider.System.GetUtcNow();
+
+        var failed = await store.TryStartProcessingAsync(
+            "test-consumer", "batch-failed", now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(failed!.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(failed.Attempts).IsEqualTo(1);
+        await store.MarkFailedAsync(failed, "boom", cancellationToken);
+
+        var active = await store.TryStartProcessingAsync(
+            "test-consumer", "batch-active", now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(active!.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(active.Attempts).IsEqualTo(1);
+
+        var expired = await store.TryStartProcessingAsync(
+            "test-consumer", "batch-expired", now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(expired!.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(expired.Attempts).IsEqualTo(1);
+        await _conn.ExecuteAsync(
+            "UPDATE inbox_messages SET processing_started_at=@old WHERE consumer_name=@c AND message_id=@m",
+            new
+            {
+                old = now.AddMinutes(-10).ToString("O", CultureInfo.InvariantCulture),
+                c = "test-consumer",
+                m = "batch-expired"
+            });
+
+        var claimed = await store.TryStartProcessingManyAsync(
+            "test-consumer", ["batch-failed", "batch-active", "batch-expired"],
+            now, TimeSpan.FromMinutes(5), cancellationToken);
+
+        await Assert.That(claimed).Count().IsEqualTo(2);
+        await Assert.That(string.Join(",", claimed.Select(m => m.MessageId).OrderBy(static x => x, StringComparer.Ordinal)))
+            .IsEqualTo("batch-expired,batch-failed");
+        await Assert.That(claimed[0].Attempts).IsEqualTo(2);
+        await Assert.That(claimed[1].Attempts).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Inbox_Batch_MarkProcessed_StaleLeaseTokenIgnored(CancellationToken cancellationToken)
+    {
+        var store = new DapperInboxStore(_conn, _dbType);
+        var now = TimeProvider.System.GetUtcNow();
+        var claimed = await store.TryStartProcessingManyAsync(
+            "test-consumer", ["batch-stale"], now, TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(claimed).Count().IsEqualTo(1);
+
+        // 模拟超时后被另一 worker 接管：processing_started_at 改写为新令牌。
+        await _conn.ExecuteAsync(
+            "UPDATE inbox_messages SET processing_started_at=@updated WHERE consumer_name=@c AND message_id=@m",
+            new
+            {
+                updated = now.AddSeconds(1).ToString("O", CultureInfo.InvariantCulture),
+                c = "test-consumer",
+                m = "batch-stale"
+            });
+
+        var marked = await store.MarkProcessedManyAsync(
+            "test-consumer", claimed, now.AddSeconds(2), cancellationToken);
+        await Assert.That(marked).IsEqualTo(0);
+
+        var status = await ReadScalarAsync<long>(
+            "SELECT status FROM inbox_messages WHERE consumer_name=$c AND message_id=$m",
+            ("$c", "test-consumer"), ("$m", "batch-stale"));
+        await Assert.That(status).IsEqualTo((long)InboxStatus.Processing);
+    }
+
+    [Test]
     public async Task Inbox_DifferentConsumers_Independent(CancellationToken cancellationToken)
     {
         var store = new DapperInboxStore(_conn, _dbType);

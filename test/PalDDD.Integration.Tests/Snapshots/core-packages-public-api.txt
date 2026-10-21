@@ -325,7 +325,9 @@ class PalDDD.Dapper.DapperInboxStore
   ctor(System.Data.Common.DbConnection connection, PalDDD.Dapper.DapperDbType dbType, System.Data.Common.DbTransaction transaction)
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Transactions.InboxMessage message, System.String failureReason, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.InboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> MarkProcessedManyAsync(System.String consumerName, System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.InboxMessage> messages, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<PalDDD.Transactions.InboxMessage> TryStartProcessingAsync(System.String consumerName, System.String messageId, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.InboxMessage>> TryStartProcessingManyAsync(System.String consumerName, System.Collections.Generic.IReadOnlyList<System.String> messageIds, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 class PalDDD.Dapper.DapperOutboxStore
   ctor(System.Data.Common.DbConnection connection, PalDDD.Dapper.DapperDbType dbType, System.Data.Common.DbTransaction transaction, System.TimeProvider timeProvider)
   property System.Boolean RequiresSaveAfterMark
@@ -1581,6 +1583,9 @@ class PalDDD.Transactions.FanOutStep<TItem, TResult>
 class PalDDD.Transactions.FixedBackoffPolicy
   ctor(System.TimeSpan delay)
   method System.TimeSpan ComputeDelay(System.Int32 attempt)
+interface PalDDD.Transactions.IBatchInboxStore
+  method System.Threading.Tasks.ValueTask<System.Int32> MarkProcessedManyAsync(System.String consumerName, System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.InboxMessage> messages, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.InboxMessage>> TryStartProcessingManyAsync(System.String consumerName, System.Collections.Generic.IReadOnlyList<System.String> messageIds, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.IBatchMarkOutboxStore
   method System.Threading.Tasks.ValueTask<System.Int32> MarkProcessedBatchAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> messages, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
 interface PalDDD.Transactions.IDueTimeSagaStore<TState>
@@ -1631,7 +1636,9 @@ class PalDDD.Transactions.InMemoryInboxStore
   ctor()
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Transactions.InboxMessage message, System.String failureReason, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkProcessedAsync(PalDDD.Transactions.InboxMessage message, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> MarkProcessedManyAsync(System.String consumerName, System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.InboxMessage> messages, System.DateTimeOffset processedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<PalDDD.Transactions.InboxMessage> TryStartProcessingAsync(System.String consumerName, System.String messageId, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.InboxMessage>> TryStartProcessingManyAsync(System.String consumerName, System.Collections.Generic.IReadOnlyList<System.String> messageIds, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.InMemoryOutboxStore
   ctor(System.TimeProvider timeProvider)
   property System.Boolean RequiresSaveAfterMark
@@ -1676,6 +1683,8 @@ class PalDDD.Transactions.InboxProcessor
   ctor(PalDDD.Transactions.IInboxStore store, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.InboxOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.InboxProcessor> logger, System.TimeProvider timeProvider)
   method System.Threading.Tasks.ValueTask<System.Boolean> TryProcessAsync(System.String consumerName, System.String messageId, System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, TMessage message, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Boolean> TryProcessAsync(System.String messageId, System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, TMessage message, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> TryProcessBatchAsync(System.Collections.Generic.IReadOnlyList<System.ValueTuple<System.String, TMessage>> batch, System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Int32> TryProcessBatchAsync(System.String consumerName, System.Collections.Generic.IReadOnlyList<System.ValueTuple<System.String, TMessage>> batch, System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
 enum PalDDD.Transactions.InboxStatus
   field const PalDDD.Transactions.InboxStatus Failed = 3
   field const PalDDD.Transactions.InboxStatus Pending = 0

@@ -32,3 +32,38 @@ public interface IInboxStore
     /// <summary>标记消息处理失败。</summary>
     ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct);
 }
+
+/// <summary>
+/// Inbox 批量能力（可选实现）。2026-10-21：消费侧每次认领一批消息时，把 N 次
+/// 认领与 N 次完成标记各收敛为一条语句（按方言分块），把每消息 2 次往返降到
+/// 每批 2 到 4 次。未实现本接口的存储由 <see cref="InboxProcessor"/> 自动回落
+/// 逐条路径，语义不变。
+/// </summary>
+/// <remarks>
+/// 返回的 <see cref="InboxMessage"/> 在部分实现（MySQL 多行插入）中 <c>Id</c> 可能为 0；
+/// 批量完成标记按 <c>(ConsumerName, MessageId, ProcessingStartedAt)</c> 定位，不依赖 Id。
+/// 同一批认领的消息共享同一个 <see cref="InboxMessage.ProcessingStartedAt"/>。
+/// </remarks>
+public interface IBatchInboxStore
+{
+    /// <summary>
+    /// 批量获取处理权。返回本次成功认领的子集；已处理或仍在租约内的消息不出现在结果中。
+    /// 输入消息 ID 会去重；调用方应保证同一批消息来自同一消费者。
+    /// </summary>
+    ValueTask<IReadOnlyList<InboxMessage>> TryStartProcessingManyAsync(
+        string consumerName,
+        IReadOnlyList<string> messageIds,
+        DateTimeOffset now,
+        TimeSpan processingTimeout,
+        CancellationToken ct);
+
+    /// <summary>
+    /// 批量标记处理成功。返回实际命中的行数；按每条的 ProcessingStartedAt 令牌分组，
+    /// 被抢占的旧持有者写入零命中。
+    /// </summary>
+    ValueTask<int> MarkProcessedManyAsync(
+        string consumerName,
+        IReadOnlyList<InboxMessage> messages,
+        DateTimeOffset processedAt,
+        CancellationToken ct);
+}

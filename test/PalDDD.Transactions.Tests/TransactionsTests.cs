@@ -840,6 +840,9 @@ public sealed class MessageCatalogTests
     }
 }
 
+// 活动监听是进程级共享面：批量路径与逐条路径共用 "Inbox Process" 操作名，
+// 并行执行会让一个测试的 listener 捕获另一个测试的活动（状态描述串味）。
+[TUnit.Core.NotInParallel]
 public sealed class InboxProcessorTests
 {
     [Test]
@@ -872,6 +875,81 @@ public sealed class InboxProcessorTests
         await Assert.That(activity.GetTagItem("pal.inbox.consumer")).IsEqualTo("orders");
         // ITM-229: pal.inbox.message_id removed (high cardinality) — consumer tag already asserted above
         await Assert.That(activity.GetTagItem("pal.inbox.result")).IsEqualTo("processed");
+    }
+
+    [Test]
+    public async Task TryProcessBatchAsync_ClaimsProcessesAndMarksInBatch(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions
+            {
+                DefaultConsumerName = "orders",
+                ProcessingTimeout = TimeSpan.FromMinutes(5)
+            }),
+            NullPalLogger<InboxProcessor>.Instance,
+            TimeProvider.System);
+
+        var handled = new List<string>();
+        List<(string, string)> batch = [("m1", "one"), ("m2", "two"), ("m1", "duplicate")];
+
+        var processed = await processor.TryProcessBatchAsync(
+            "orders",
+            batch,
+            (message, _) =>
+            {
+                handled.Add(message);
+                return ValueTask.CompletedTask;
+            },
+            cancellationToken);
+
+        await Assert.That(processed).IsEqualTo(2);
+        await Assert.That(string.Join(",", handled.OrderBy(static x => x, StringComparer.Ordinal)))
+            .IsEqualTo("one,two");
+
+        var again = await store.TryStartProcessingManyAsync(
+            "orders", ["m1", "m2"], TimeProvider.System.GetUtcNow(),
+            TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(again).IsEmpty();
+    }
+
+    [Test]
+    public async Task TryProcessBatchAsync_HandlerFailureMarksFailedAndContinues(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions
+            {
+                DefaultConsumerName = "orders",
+                ProcessingTimeout = TimeSpan.FromMinutes(5)
+            }),
+            NullPalLogger<InboxProcessor>.Instance,
+            TimeProvider.System);
+
+        var attempted = new List<string>();
+        List<(string, string)> batch = [("f1", "fail"), ("f2", "ok")];
+
+        await Assert.That(async () => await processor.TryProcessBatchAsync(
+            "orders",
+            batch,
+            (message, _) =>
+            {
+                attempted.Add(message);
+                if (string.Equals(message, "fail", StringComparison.Ordinal))
+                    throw new InvalidOperationException("boom");
+                return ValueTask.CompletedTask;
+            },
+            cancellationToken)).Throws<AggregateException>();
+
+        await Assert.That(string.Join(",", attempted)).IsEqualTo("fail,ok");
+
+        var again = await store.TryStartProcessingManyAsync(
+            "orders", ["f1", "f2"], TimeProvider.System.GetUtcNow(),
+            TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(again).Count().IsEqualTo(1);
+        await Assert.That(again[0].MessageId).IsEqualTo("f1");
     }
 
     [Test]
