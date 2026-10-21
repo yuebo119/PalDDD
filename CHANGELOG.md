@@ -14,6 +14,12 @@
 
 ### Added
 
+- **2026-10-21 契约盘点第五轮（R5：四组件 SQLite 四栈矩阵 + EF 租约陈旧跟踪修复）**：
+  ①**四组件四栈矩阵**：Idempotency、Projections、Saga、EventLog 各新增 InMemory / Dapper SQLite / PalORM SQLite / EF SQLite 矩阵，同一组状态断言：幂等活跃租约拒绝与过期回收、投影检查点完成/失败/Reset、事件日志版本冲突与 Any 追加、Saga 创建/读回/租约/终态保存。
+  ②**EF Saga 契约违背修复**：矩阵发现同一 DbContext 先 `GetByIdAsync` 再租约时，EF identity resolution 返回陈旧跟踪实例（`LeasedBy` 为空、`Version` 未换代），后续 `SaveChanges` 会因版本失配误判冲突；三个方言租约回读后仅对陈旧实体 `Reload`（`RefreshStaleLeaseStatesAsync`）。
+  ③**矩阵覆盖**：清单的 24 个 verified-local 格子现在都具备同组件四栈统一断言（Inbox、Idempotency、Projections、Saga、EventLog 五个组件）。
+  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；16 个测试项目 **1843 用例 / 1763 通过 / 80 跳过 / 0 失败**（+4 矩阵用例）。
+
 - **2026-10-21 契约盘点第四轮修复（R4：文档计数纠偏 + 幂等方言补测 + 缺口集合冻结）**：
   ①**文档计数纠偏**：三处测试指引移除硬编码用例数（写入后当天套件从 1827 增至 1837，历史数字造成基线漂移），改为「以当次输出为准」。
   ②**Dapper 幂等 PG/MySQL 方言用例**（`DialectProbeTests`）：TryStart→并发拒绝→MarkCompleted→重放拒绝→GetAsync 终态，每方言 5 条状态断言；清单这两格由 accepted-gap 升为 verified-ci-only。
