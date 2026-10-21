@@ -14,8 +14,14 @@
 
 ### Added
 
+- **2026-10-21 契约盘点第四轮修复（R4：文档计数纠偏 + 幂等方言补测 + 缺口集合冻结）**：
+  ①**文档计数纠偏**：三处测试指引移除硬编码用例数（写入后当天套件从 1827 增至 1837，历史数字造成基线漂移），改为「以当次输出为准」。
+  ②**Dapper 幂等 PG/MySQL 方言用例**（`DialectProbeTests`）：TryStart→并发拒绝→MarkCompleted→重放拒绝→GetAsync 终态，每方言 5 条状态断言；清单这两格由 accepted-gap 升为 verified-ci-only。
+  ③**缺口集合冻结**：清单 AcceptedGap 从「总数 15」升级为精确集合（13 格），总数不变但缺口换位同样红。
+  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；16 个测试项目 1839 用例，1759 通过、80 跳过、0 失败（新增 2 个方言用例，本地无 Docker 时跳过；CI 有 Docker 时转为通过）。
+
 - **2026-10-21 契约盘点后续项实施（R3：格子清单、Inbox 矩阵、行为断言门禁、EF 方言守卫、本地真库提示）**：
-  ①**契约格子清单**（`ContractCellManifestTests`）：61 格（组件 × 栈 × 方言）逐格登记实现类型、代表测试文件与三态状态（verified-local / verified-ci-only / accepted-gap），校验实现类型存在且实现对应抽象、新增未登记根实现即红、Local/CiOnly 格必须有含 `[Test]` 与 `Assert.That` 的测试文件；AcceptedGap 15 格（EF Outbox 3 + EF 其余组件 PG/MySQL 10 + Dapper 幂等 PG/MySQL 2）全部带原因并冻结。
+  ①**契约格子清单**（`ContractCellManifestTests`）：61 格（组件 × 栈 × 方言）逐格登记实现类型、代表测试文件与三态状态（verified-local / verified-ci-only / accepted-gap），校验实现类型存在且实现对应抽象、新增未登记根实现即红、Local/CiOnly 格必须有含 `[Test]` 与 `Assert.That` 的测试文件；AcceptedGap 15 格（EF Outbox 3 + EF 其余组件 PG/MySQL 10 + Dapper 幂等 PG/MySQL 2）全部带原因并冻结（R4 补 Dapper 幂等 PG/MySQL 两格后为 13）。
   ②**Inbox 四栈 SQLite 矩阵**（`InboxCrossStackMatrixTests`）：InMemory / Dapper / PalORM / EF 跑同一组断言（首次认领、重复返回 null、完成后 null、失败后可重入且 Attempts=2），共 16 条状态断言。
   ③**行为断言门禁**（`AssertionStrengthGateTests`）：新增 `*StoreTests.cs` 规则，每个 [Test] 至少一条状态/返回值/异常断言，附负向自证；按规则补齐 4 个既有弱断言测试（Idempotency 回收、EventLog 接口赋值、PalORM 幂等回收、PalORM Inbox 独立消费者）。
   ④**EF 方言守卫**（`EfCoreDialectGuard`）：Sqlite/PG/MySQL 三个 Outbox 上下文租约入口校验 `Database.ProviderName`，provider 与方言错配抛可行动异常；新增 `EfDialectMismatchTests`（错配 + 正向两条）。

@@ -848,7 +848,7 @@ var body = Expression.AndAlso(
 # 1. 构建（零错误零警告）
 dotnet build PalDDD.slnx
 
-# 2. 测试（零失败）——slnx 批量可直接运行（2026-10-21 实测 1827 例 / exit 0）
+# 2. 测试（零失败）——slnx 批量可直接运行（2026-10-21 实测 exit 0；用例数以当次输出为准）
 dotnet test PalDDD.slnx --no-build
 # 需要单项目定位或 MTP treenode-filter 时，再逐项目循环：
 # for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore; done

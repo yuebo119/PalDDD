@@ -5,6 +5,7 @@ using MySqlConnector;
 using Npgsql;
 using PalDDD.Dapper;
 using PalDDD.EventLog;
+using PalDDD.Idempotency;
 using PalDDD.Testing;
 using PalDDD.Transactions;
 using Testcontainers.MySql;
@@ -100,6 +101,15 @@ public sealed partial class DialectProbeTests
         await CheckpointSmokeAsync(probe.Connection, DapperDbType.PostgreSql);
     }
 
+    /// <summary>Idempotency 族：TryStart→并发拒绝→完成→重放拒绝→GetAsync 终态。</summary>
+    [Test]
+    public async Task Idempotency_PostgreSql_TryStart_Complete_Replay()
+    {
+        EnsureTestcontainersEnabled(isPostgreSql: true);
+        await using var probe = await DialectProbeSession.CreatePostgreSqlAsync();
+        await IdempotencySmokeAsync(probe.Connection, DapperDbType.PostgreSql);
+    }
+
     /// <summary>AmbientTx 族（探针断言 #21）：DI 形态 Store 挂接 UoW 事务，回滚后无泄漏。</summary>
     [Test]
     public async Task AmbientTx_PostgreSql_Rollback_NoLeak()
@@ -154,6 +164,15 @@ public sealed partial class DialectProbeTests
         EnsureTestcontainersEnabled(isPostgreSql: false);
         await using var probe = await DialectProbeSession.CreateMySqlAsync();
         await CheckpointSmokeAsync(probe.Connection, DapperDbType.MySql);
+    }
+
+    /// <summary>Idempotency 族：TryStart→并发拒绝→完成→重放拒绝→GetAsync 终态。</summary>
+    [Test]
+    public async Task Idempotency_MySql_TryStart_Complete_Replay()
+    {
+        EnsureTestcontainersEnabled(isPostgreSql: false);
+        await using var probe = await DialectProbeSession.CreateMySqlAsync();
+        await IdempotencySmokeAsync(probe.Connection, DapperDbType.MySql);
     }
 
     /// <summary>AmbientTx 族（探针断言 #21）：DI 形态 Store 挂接 UoW 事务，回滚后无泄漏。</summary>
@@ -403,6 +422,30 @@ public sealed partial class DialectProbeTests
 
         // #20「Checkpoint MarkFailed 不抛」
         await store.MarkFailedAsync(nextPos!, "probe-failure", clock.AddSeconds(3), default);
+    }
+
+    /// <summary>Idempotency 族：活跃租约拒绝、完成后重放拒绝、终态可读（PG/MySQL 共用）。</summary>
+    private static async Task IdempotencySmokeAsync(DbConnection conn, DapperDbType dbType)
+    {
+        var store = new DapperIdempotencyStore(conn, dbType);
+        var now = DateTimeOffset.UtcNow;
+        var policy = IdempotencyPolicy.Default;
+
+        var started = await store.TryStartAsync("probe-op", "probe-key", now, policy, default);
+        await Assert.That(started).IsTypeOf<IdempotencyRecord>();
+        await Assert.That(started!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+
+        var concurrent = await store.TryStartAsync("probe-op", "probe-key", now.AddSeconds(1), policy, default);
+        await Assert.That(concurrent).IsNull();
+
+        await store.MarkCompletedAsync(started, "done"u8.ToArray(), now.AddSeconds(2), default);
+
+        var replay = await store.TryStartAsync("probe-op", "probe-key", now.AddSeconds(3), policy, default);
+        await Assert.That(replay).IsNull();
+
+        var loaded = await store.GetAsync("probe-op", "probe-key", now.AddSeconds(4), default);
+        await Assert.That(loaded).IsTypeOf<IdempotencyRecord>();
+        await Assert.That(loaded!.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
     }
 
     /// <summary>原探针 AmbientTxDapperSmoke——1 项断言（二轮评审 T5 断链探针）。</summary>

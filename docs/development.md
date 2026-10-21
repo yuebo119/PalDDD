@@ -81,7 +81,7 @@ dotnet list PalDDD.slnx package --outdated
 任何生产代码改动至少运行：
 
 ```bash
-# slnx 批量测试可直接运行（2026-10-21 实测 1827 例 / exit 0）：
+# slnx 批量测试可直接运行（2026-10-21 实测 exit 0；用例数以当次输出为准）：
 dotnet test PalDDD.slnx --no-restore
 dotnet build PalDDD.slnx --no-restore
 ```
