@@ -195,6 +195,11 @@
 
 ### Fixed 修复
 
+- **Dapper 批量 EventLog 与 Inbox 唯一冲突的 NativeAOT 回归（2026-10-21 R8，wslc 真库 + NativeAOT 探针实证）**：
+  ①**批量 EventLog 行类型不可见**：PG `AppendSingleRow` 与 MySQL `PositionRange` 原为 private 嵌套类型，Dapper.AOT 生成代码无法引用，批量追加调用点静默回落经典 Reflection.Emit（NativeAOT 下 `PlatformNotSupportedException`，PG/MySQL 各 exit 127；SQLite 不受影响）。改 internal 后拦截器恢复接管。
+  ②**唯一冲突分类器反射失效**：`DapperSqlErrorClassifier` 用 `GetType().GetProperty("Number"/"SqlState")` 鸭子类型判定，NativeAOT 裁剪后属性元数据不可见，MySQL 重复 Inbox 插入的 1062 被误判为非冲突并逃逸。Npgsql/MySqlConnector/Microsoft.Data.Sqlite 已是本包 `PrivateAssets=all` 实现依赖，改为强类型判定（SqlServer 分支保留鸭子类型，本包不引用 SqlClient）。
+  验证：win-x64 NativeAOT 探针 SQLite / PG 18.6 / MySQL 8.4.11 各 33/33（JIT 各 33/33 同轮对照）；全量 1851 用例 / 1771 通过 / 80 跳过 / 0 失败；新增 CI `dapper-aot-probe` job（service containers + PublishAot + 三方言实跑）；公共 API 无变化（嵌套类型为 internal）。
+
 - **PG LISTEN/NOTIFY 通知器缺日志门面 + Inbox span 文档契约失实（2026-10-21 契约盘点 R8，审计探针实证）**：
   ①**组件级注册漏网**：`AddPalPostgreSqlOutboxNotifier()` 的 hosted 工厂用 `GetRequiredService<IPalLogger<PostgreSqlOutboxNotifier>>()`，而门面只在 `AddPalOutbox` / `AddPalCoreStack` 注册；仅按该入口装配时宿主解析 `IHostedService` 抛 `No service for type IPalLogger<...>`（R7 家族漏网）。修法：入口调用同一 `PalLoggerRegistration.EnsurePalLoggerFacade()`（Core 授 IVT 给 `PalDDD.Dapper.PostgreSql`），并勘正 XML remarks 的依赖描述（实际解析 `OutboxBatchProcessor`，前置为 `AddPalOutbox`，原写 `OutboxProcessor`）。
   ②**Inbox span 契约纠偏**：usage.md 原称 `Inbox Process` span「仅包含 consumer/result 两标签、结果值三选一」；实际批量路径带 `pal.inbox.skipped`（跳过量），且 handler 成功而 `MarkProcessed` 失败时为 `processed-pending-confirmation`（ITM-180 既定设计）。文档补齐两处，行为不变。

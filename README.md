@@ -391,7 +391,7 @@ dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benc
 | PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` 全局继承 |
 | PalDDD.CQRS · EventLog · Messaging · Projections · DI | ✅ | 同上 |
 | **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **真 AOT** | 源生成 RowFactory/CommandFactory，`PublishAot=true` 验证通过（[PalOrmSample](samples/PalDDD.PalOrmSample/)） |
-| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ 实测 | `[module:DapperAot]` 已启用——34 调用点全量拦截器接管，三方言 NativeAOT 二进制实测 13/13；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持 |
+| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ 实测 | `[module:DapperAot]` 已启用——34 调用点全量拦截器接管，三方言 NativeAOT 二进制实测 33/33（2026-10-21 补批量 EventLog 路径）；边界：绕过封装直用 Dapper 原生 API 不受 AOT 支持 |
 | PalDDD.Transactions | ❌ | Saga 反射特例（`IsAotCompatible=false`，见 csproj） |
 | **PalDDD.\*.EFCore（5 项目）** | ❌ | EF Core 客户端限制 + Saga 反射特例传导——设计取舍非废弃，EF 生态用户正常使用（运行时 JIT 编译） |
 | ~~PalDDD.EntityFrameworkCore~~（旧包） | ❌ | ~~已废弃，源码未入库（OBS-068）——注意区别于上行的五个现行 `*.EFCore` 项目~~ |

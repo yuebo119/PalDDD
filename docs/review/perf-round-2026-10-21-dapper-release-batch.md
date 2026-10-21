@@ -57,6 +57,10 @@
   既有 EventLog `QueryAsync` 处触发 Dapper 经典路径 `Reflection.Emit` 的
   `PlatformNotSupportedException`，发生在 Saga 段之前，与本轮改动无关；PG AOT 覆盖仍由
   非 AOT 真库探针承担。
+  > **2026-10-21 R8 后续**：已修复。PG `AppendSingleRow` 与 MySQL `PositionRange` 由
+  > private 嵌套类型改为 internal（Dapper.AOT 生成代码可见），`DapperSqlErrorClassifier`
+  > 由鸭子类型反射改为 PG/MySQL/SQLite 强类型判定。win-x64 NativeAOT 探针三方言各
+  > 33/33（wslc PG 18.6 / MySQL 8.4.11 真库），并新增 CI `dapper-aot-probe` 守卫。
 - 公共 API 快照无变化（本轮只改实现与测试）。
 
 ## 4. 明确未做

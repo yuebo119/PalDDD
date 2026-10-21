@@ -397,7 +397,7 @@ For full data, the MediumRun formal baselines, and the historical archive, see [
 | PalDDD.Core · Serialization · Compression | ✅ | `IsAotCompatible=true` globally inherited |
 | PalDDD.CQRS · EventLog · Messaging · Projections · DI | ✅ | Same as above |
 | **PalDDD.PalORM + Sqlite / PostgreSql / MySql** | ✅ **True AOT** | Source-generated RowFactory/CommandFactory, `PublishAot=true` verification passed ([PalOrmSample](samples/PalDDD.PalOrmSample/)) |
-| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ Measured | `[module:DapperAot]` enabled — 34 call-site interceptors, three-dialect NativeAOT measured 13/13; boundary: bypassing wrappers to raw Dapper API is not AOT-safe |
+| PalDDD.Dapper + PostgreSql / MySql / Sqlite | ✅ Measured | `[module:DapperAot]` enabled — 34 call-site interceptors, three-dialect NativeAOT measured 33/33 (batch EventLog path added 2026-10-21); boundary: bypassing wrappers to raw Dapper API is not AOT-safe |
 | PalDDD.Transactions | ❌ | Saga reflection exception (`IsAotCompatible=false`, see csproj) |
 | **PalDDD.*.EFCore (5 projects)** | ❌ | EF Core client limitations + the Saga reflection exception — a design trade-off, not deprecation; normal use for the EF ecosystem (runtime JIT) |
 | ~~PalDDD.EntityFrameworkCore~~ (old package) | ❌ | ~~Deprecated, source not committed (OBS-068) — distinct from the five current `*.EFCore` projects above~~ |
