@@ -39,7 +39,7 @@ namespace PalDDD.Repository.EFCore;
 /// 上下文（该属性不做正确性保证）。
 /// 因此拦截器注册为 Scoped 或 Singleton 均安全，<b>可与 <c>AddDbContextPool</c> 组合使用</b>；
 /// 池化复用的 DbContext 实例各自持有独立状态，不会交叉写入。
-/// 当前注册方式见 <see cref="ServiceCollectionExtensions.AddPalOutboxUnitOfWork{TContext}"/>。
+/// 当前注册方式见 <see cref="ServiceCollectionExtensions.AddPalOutboxUnitOfWorkForContext{TContext}"/>。
 /// <para>
 /// 📐 <b>状态键控说明</b>：弱表以 DbContext 实例为键，状态随上下文回收；池化上下文重新
 /// 租出时由 <c>BeginSave</c> 的 Reset 清空，不残留上一租约的事件。
@@ -56,7 +56,7 @@ namespace PalDDD.Repository.EFCore;
 /// SavingChanges(Async) 阶段抛异常时 SaveChangesFailed(Async) 不可达（EF 派发点位于
 /// SaveChanges 的 try 块之前，见 <see cref="WriteEventsToOutbox"/> 注释）——本拦截器已
 /// 注入的 outbox 行将滞留 ChangeTracker 至同 scope 重试（双行风险）。单拦截器（本框架
-/// 推荐配置，AddPalOutboxUnitOfWork 默认）下链上唯一异常源是本拦截器自身，已由 v34
+/// 推荐配置，AddPalOutboxUnitOfWorkForContext 默认）下链上唯一异常源是本拦截器自身，已由 v34
 /// 注入循环自清理域覆盖；多拦截器场景的清理挂钩方案 v4.0 收敛。
 /// </para>
 /// </remarks>
@@ -130,9 +130,17 @@ public sealed class OutboxDomainEventInterceptor : SaveChangesInterceptor
     /// 并发共享拦截器时可能指向另一请求的上下文，诊断属性不做正确性保证。</summary>
     private Microsoft.EntityFrameworkCore.DbContext? _lastContext;
 
-    /// <summary>当前 SaveChanges 操作期间收集的领域事件列表（诊断用，best-effort）。
-    /// 2026-10-21 评审 F22：生产代码零调用，降 internal 并授权测试程序集，收窄公共 API 面。</summary>
-    internal IReadOnlyList<Core.DomainEvent> PendingEvents
+    /// <summary>当前 SaveChanges 操作期间收集的领域事件列表（诊断用，best-effort）。</summary>
+    /// <remarks>
+    /// 2026-10-21 双评审修复轮：生产代码零调用，计划在 v5.0.0 移除。为保持一个 Minor
+    /// 窗口的二进制兼容，本属性先标 <see cref="ObsoleteAttribute"/>；内部测试改用
+    /// <see cref="PendingEventsCore"/>。
+    /// </remarks>
+    [Obsolete("PendingEvents is diagnostic-only and will be removed in v5.0.0. Use PendingEventsCore internally or query the outbox store.")]
+    public IReadOnlyList<Core.DomainEvent> PendingEvents => PendingEventsCore;
+
+    /// <summary>内部诊断读取（公开属性待移除，测试经 InternalsVisibleTo 访问）。</summary>
+    internal IReadOnlyList<Core.DomainEvent> PendingEventsCore
         => _lastContext is { } context
            && s_states.TryGetValue(context, out var state)
             ? state.Events

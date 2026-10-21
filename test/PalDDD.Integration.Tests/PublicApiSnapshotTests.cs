@@ -49,6 +49,7 @@ public sealed class PublicApiSnapshotTests
         typeof(global::PalDDD.Repository.EFCore.UnitOfWork<>).Assembly,             // PalDDD.Repository.EFCore
         typeof(global::PalDDD.Transactions.MySqlOutboxDbContext).Assembly,          // PalDDD.Transactions.EFCore（复用父命名空间）
         typeof(global::PalDDD.Hosting.AspNetCore.ExceptionMiddleware).Assembly,    // PalDDD.Hosting.AspNetCore
+        typeof(global::PalDDD.Hosting.AspNetCore.OutboxHealth.OutboxHealthServiceCollectionExtensions).Assembly, // PalDDD.Hosting.AspNetCore.OutboxHealth
         typeof(global::PalDDD.Dapper.DapperOutboxStore).Assembly,                   // PalDDD.Dapper
         typeof(global::PalDDD.Dapper.MySql.MySqlMultiHost).Assembly,                // PalDDD.Dapper.MySql
         typeof(global::PalDDD.Dapper.PostgreSql.PostgreSqlAuditor).Assembly,        // PalDDD.Dapper.PostgreSql

@@ -64,6 +64,7 @@
     <Folder Name="/src/Hosting/">
       <Project Path="src/PalDDD.DependencyInjection/PalDDD.DependencyInjection.csproj" />
       <Project Path="src/PalDDD.Hosting.AspNetCore/PalDDD.Hosting.AspNetCore.csproj" />
+      <Project Path="src/PalDDD.Hosting.AspNetCore.OutboxHealth/PalDDD.Hosting.AspNetCore.OutboxHealth.csproj" />
     </Folder>
 
     <Folder Name="/src/Metapackages/">

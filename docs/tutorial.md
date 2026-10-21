@@ -479,14 +479,14 @@ builder.Services.AddDbContext<AppDbContext>((sp, o) => o
     .UsePalOutboxInterceptor(sp));
 
 // 3. 注册工作单元 + 拦截器；泛型约束要求 AppDbContext 实现 IPalOutboxStore
-builder.Services.AddPalOutboxUnitOfWork<AppDbContext>();
+builder.Services.AddPalOutboxUnitOfWorkForContext<AppDbContext>();
 // 4. 注册 Outbox 后台处理器（轮询 OutboxMessages 表 → 发布到 Broker）
 builder.Services.AddPalOutbox();
 ```
 
 > ⚠️ 不要为 outbox 单独建一个 `AppOutboxDbContext` 再注册成 `IPalOutboxStore`：拦截器的
 > `AddMessageAsync` 只是把消息跟踪到那个独立上下文，业务上下文的 `SaveChanges` 不会保存
-> 它，领域事件会静默丢失。`AddPalOutboxUnitOfWork` 在解析工作单元时会校验「同一实例 +
+> 它，领域事件会静默丢失。`AddPalOutboxUnitOfWorkForContext` 在解析工作单元时会校验「同一实例 +
 > 拦截器已挂接」，错误装配直接抛异常。
 
 **发生了什么？** 当 `SaveChangesAsync` 被调用时：
@@ -860,7 +860,7 @@ builder.Services.AddPalCoreStack();
 builder.Services.AddPalJsonSerialization(catalog => { ... });
 builder.Services.AddPalCommandHandler<...>();
 // AppDbContext 须按 §4.6 配置：继承 PostgreSqlOutboxDbContext + UsePalOutboxInterceptor(sp)
-builder.Services.AddPalOutboxUnitOfWork<AppDbContext>();
+builder.Services.AddPalOutboxUnitOfWorkForContext<AppDbContext>();
 builder.Services.AddPalOutbox();
 builder.Services.AddPalHealthChecks();      // 注册 Broker + Outbox 健康检查（Build 前调用）
 
@@ -1000,7 +1000,7 @@ builder.Services.AddDbContext<AppDbContext>((sp, o) => o
     .UsePalOutboxInterceptor(sp));
 
 // ── Outbox（可靠事件发布）──
-builder.Services.AddPalOutboxUnitOfWork<AppDbContext>();
+builder.Services.AddPalOutboxUnitOfWorkForContext<AppDbContext>();
 builder.Services.AddPalOutbox();
 
 builder.Services.AddPalHealthChecks();

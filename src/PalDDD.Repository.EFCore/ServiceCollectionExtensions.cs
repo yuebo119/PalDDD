@@ -16,10 +16,22 @@ namespace PalDDD.Repository.EFCore;
 /// <summary>EF Core 工作单元与领域事件拦截器的注册入口。</summary>
 public static class ServiceCollectionExtensions
 {
-    /// <summary>注册 EF Core 工作单元与 Outbox 领域事件拦截器。</summary>
+    /// <summary>
+    /// 兼容入口：注册 EF Core 工作单元与 Outbox 领域事件拦截器。
+    /// </summary>
     /// <remarks>
-    /// <c>DispatchingDomainEventInterceptor</c> 已在 v0.2.0 移除——其 AT-MOST-ONCE 语义导致
-    /// broker 不可达时事件永久丢失。此方法只注册 Outbox 路径，是唯一推荐的事件持久化方式。
+    /// 2026-10-21 双评审修复轮：同上下文形态的编译期约束由
+    /// <see cref="AddPalOutboxUnitOfWorkForContext{TContext}"/> 提供。本重载保留一个
+    /// Minor 窗口，在解析 <see cref="IUnitOfWork"/> 时校验 <typeparamref name="TContext"/>
+    /// 实现 <see cref="Transactions.IPalOutboxStore"/>，错误装配立即抛错。
+    /// </remarks>
+    [Obsolete("Use AddPalOutboxUnitOfWorkForContext<TContext>() with TContext : IPalOutboxStore. This overload validates at resolution time instead.")]
+    public static IServiceCollection AddPalOutboxUnitOfWork<TContext>(this IServiceCollection services)
+        where TContext : DbContext
+        => AddPalOutboxUnitOfWorkCore<TContext>(services);
+
+    /// <summary>注册 EF Core 工作单元与 Outbox 领域事件拦截器（编译期要求同上下文）。</summary>
+    /// <remarks>
     /// <para>
     /// ⚠️ <b>原子性前置条件（编译期 + 解析期双重约束）</b>：领域事件与业务数据的原子性依赖
     /// <see cref="Transactions.IPalOutboxStore"/> 的 EF Core 实现与业务 <c>DbContext</c>
@@ -48,8 +60,12 @@ public static class ServiceCollectionExtensions
     /// 与当前实现相反，已撤销。）
     /// </para>
     /// </remarks>
-    public static IServiceCollection AddPalOutboxUnitOfWork<TContext>(this IServiceCollection services)
+    public static IServiceCollection AddPalOutboxUnitOfWorkForContext<TContext>(this IServiceCollection services)
         where TContext : DbContext, IPalOutboxStore
+        => AddPalOutboxUnitOfWorkCore<TContext>(services);
+
+    private static IServiceCollection AddPalOutboxUnitOfWorkCore<TContext>(IServiceCollection services)
+        where TContext : DbContext
     {
         ArgumentNullException.ThrowIfNull(services);
 
@@ -89,14 +105,24 @@ public static class ServiceCollectionExtensions
 
     /// <summary>
     /// 解析期装配校验（F2，2026-10-21）：
-    /// ① <see cref="IPalOutboxStore"/> 必须解析到同一个业务上下文实例；
-    /// ② <see cref="OutboxDomainEventInterceptor"/> 必须已挂到该上下文的 options。
-    /// 两项任一不满足即抛错——否则 SaveChanges 静默不写 outbox。
+    /// ① 上下文本身必须实现 <see cref="IPalOutboxStore"/>；
+    /// ② <see cref="IPalOutboxStore"/> 必须解析到同一个业务上下文实例；
+    /// ③ <see cref="OutboxDomainEventInterceptor"/> 必须已挂到该上下文的 options。
+    /// 任一不满足即抛错——否则 SaveChanges 静默不写 outbox。
     /// </summary>
     [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Trimming", "IL2026",
         Justification = "EF Core adapter package is not AOT-compatible (IsAotCompatible=false); options introspection is runtime-only.")]
     private static void ValidateOutboxWiring(DbContext context, IServiceProvider serviceProvider)
     {
+        if (context is not IPalOutboxStore)
+        {
+            throw new InvalidOperationException(
+                $"Pal Outbox wiring is invalid: '{context.GetType().FullName}' does not implement "
+                + $"{nameof(IPalOutboxStore)}. Use AddPalOutboxUnitOfWorkForContext<TContext>() with a context "
+                + "that inherits an EF Outbox base (e.g. PostgreSqlOutboxDbContext). The legacy overload only "
+                + "defers this error to resolution time for source compatibility.");
+        }
+
         var store = serviceProvider.GetService<IPalOutboxStore>();
         if (store is not null && !ReferenceEquals(store, context))
         {

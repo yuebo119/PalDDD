@@ -49,7 +49,7 @@ services.AddPalJsonSerialization(catalog =>
 services.AddPalDapperTransactions(DapperDbType.PostgreSql, connectionString);
 // 或 EF Core：OrderDbContext 继承方言 Outbox 基类并挂拦截器
 //   services.AddDbContext<OrderDbContext>((sp, o) => o.UseNpgsql(cs).UsePalOutboxInterceptor(sp));
-//   services.AddPalOutboxUnitOfWork<OrderDbContext>();
+//   services.AddPalOutboxUnitOfWorkForContext<OrderDbContext>();
 
 // Outbox + Inbox + Saga
 services.AddPalOutbox();

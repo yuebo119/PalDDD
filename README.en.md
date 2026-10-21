@@ -12,7 +12,7 @@
 
 ---
 
-Pal.DDD standardizes the equality semantics of Entity, allocation-free collection of domain events, lease-lock concurrency and dead-letter recovery of the Outbox, and compensation orchestration with timeout detection for Sagas — into 35 independent NuGet packages (plus 5 third-party PalORM engine packages; see the [Package List](#package-list)). It does not provide `IRepository<T>`, does not define `IIntegrationEvent`, and does not perform assembly scanning: business code stays pure C#, and the framework only delivers infrastructure.
+Pal.DDD standardizes the equality semantics of Entity, allocation-free collection of domain events, lease-lock concurrency and dead-letter recovery of the Outbox, and compensation orchestration with timeout detection for Sagas — into 36 independent NuGet packages (plus 5 third-party PalORM engine packages; see the [Package List](#package-list)). It does not provide `IRepository<T>`, does not define `IIntegrationEvent`, and does not perform assembly scanning: business code stays pure C#, and the framework only delivers infrastructure.
 
 | NuGet packages | Compile-time diagnostics | Persistence stacks | Measured tests |
 |:---:|:---:|:---:|:---:|
@@ -467,7 +467,7 @@ PalDDD ships 35 packages of its own plus 5 third-party PalORM engine packages (`
 ## Project Structure
 
 ```
-src/                         36 source projects · Clean Architecture (folders match PalDDD.slnx)
+src/                         37 source projects · Clean Architecture (folders match PalDDD.slnx)
 ├── Domain/                  Core · SourceGen · Analyzers · Analyzers.CodeFixes
 ├── App-Abstractions/        Serialization · Messaging · Compression · Compression.Native
 ├── App-Core/                CQRS · EventLog · Idempotency · Projections · Transactions

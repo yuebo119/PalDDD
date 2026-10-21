@@ -31,7 +31,7 @@ public sealed class OutboxWiringEndToEndTests
         services.AddDbContext<TestOutboxDbContext>((sp, options) => options
             .UseSqlite(connection)
             .UsePalOutboxInterceptor(sp));
-        services.AddPalOutboxUnitOfWork<TestOutboxDbContext>();
+        services.AddPalOutboxUnitOfWorkForContext<TestOutboxDbContext>();
         services.AddScoped<IPalOutboxStore>(sp => sp.GetRequiredService<TestOutboxDbContext>());
 
         await using var provider = services.BuildServiceProvider();
@@ -67,7 +67,7 @@ public sealed class OutboxWiringEndToEndTests
         services.AddSingleton<IMessageSerializer>(new OutboxDomainEventInterceptorTests.PassthroughSerializer());
         // 故意不调用 UsePalOutboxInterceptor
         services.AddDbContext<TestOutboxDbContext>(options => options.UseSqlite(connection));
-        services.AddPalOutboxUnitOfWork<TestOutboxDbContext>();
+        services.AddPalOutboxUnitOfWorkForContext<TestOutboxDbContext>();
         services.AddScoped<IPalOutboxStore>(sp => sp.GetRequiredService<TestOutboxDbContext>());
 
         await using var provider = services.BuildServiceProvider();
@@ -90,8 +90,33 @@ public sealed class OutboxWiringEndToEndTests
         services.AddDbContext<TestOutboxDbContext>((sp, options) => options
             .UseSqlite(connection)
             .UsePalOutboxInterceptor(sp));
-        services.AddPalOutboxUnitOfWork<TestOutboxDbContext>();
+        services.AddPalOutboxUnitOfWorkForContext<TestOutboxDbContext>();
         // 错误装配：IPalOutboxStore 指向另一个实例（教程旧形态）
+        services.AddScoped<IPalOutboxStore>(_ => new OutboxDomainEventInterceptorTests.RecordingOutboxStore());
+
+        await using var provider = services.BuildServiceProvider();
+        await using var scope = provider.CreateAsyncScope();
+
+        await Assert.That(() => { scope.ServiceProvider.GetRequiredService<IUnitOfWork>(); })
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task LegacyOverload_NonStoreContext_FailsFastAtUnitOfWorkResolution(CancellationToken ct)
+    {
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(ct);
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IMessageCatalog>(new OutboxDomainEventInterceptorTests.SingleDescriptorCatalog(TestDescriptor));
+        services.AddSingleton<IMessageSerializer>(new OutboxDomainEventInterceptorTests.PassthroughSerializer());
+        services.AddDbContext<TestDbContext>((sp, options) => options
+            .UseSqlite(connection)
+            .UsePalOutboxInterceptor(sp));
+#pragma warning disable CS0618 // 兼容入口的过渡行为锁定：约束在解析期校验
+        services.AddPalOutboxUnitOfWork<TestDbContext>();
+#pragma warning restore CS0618
         services.AddScoped<IPalOutboxStore>(_ => new OutboxDomainEventInterceptorTests.RecordingOutboxStore());
 
         await using var provider = services.BuildServiceProvider();

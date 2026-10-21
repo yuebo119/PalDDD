@@ -211,10 +211,14 @@ interface PalDDD.Core.Identity.IPalIdGenerator
   method ByteAether.Ulid.Ulid NewId()
   method ByteAether.Ulid.Ulid NewId(System.DateTimeOffset timestamp)
 interface PalDDD.Core.Logging.IPalLogger<T>
+  method System.Void Debug(Microsoft.Extensions.Logging.EventId eventId, System.String message, System.Object[] args)
   method System.Void Debug(System.String message)
+  method System.Void Error(System.Exception ex, Microsoft.Extensions.Logging.EventId eventId, System.String message, System.Object[] args)
   method System.Void Error(System.Exception ex, System.String message)
+  method System.Void Information(Microsoft.Extensions.Logging.EventId eventId, System.String message, System.Object[] args)
   method System.Void Information(System.String message)
   method System.Boolean IsEnabled(Microsoft.Extensions.Logging.LogLevel level)
+  method System.Void Warning(Microsoft.Extensions.Logging.EventId eventId, System.String message, System.Object[] args)
   method System.Void Warning(System.String message)
 class PalDDD.Core.Logging.NullPalLogger<T>
   field static readonly PalDDD.Core.Logging.NullPalLogger<T> Instance
@@ -223,6 +227,24 @@ class PalDDD.Core.Logging.NullPalLogger<T>
   method System.Void Information(System.String message)
   method System.Boolean IsEnabled(Microsoft.Extensions.Logging.LogLevel level)
   method System.Void Warning(System.String message)
+static class PalDDD.Core.Logging.PalLogEventIds
+  field const System.Int32 InboxBatchProcessed = 1005
+  field const System.Int32 InboxMessageFailed = 1003
+  field const System.Int32 InboxMessageProcessed = 1002
+  field const System.Int32 InboxMessageProcessedMarkFailed = 1004
+  field const System.Int32 InboxMessageSkipped = 1001
+  field const System.Int32 OutboxBatchMarkFailed = 1105
+  field const System.Int32 OutboxMarkDeadFailed = 1102
+  field const System.Int32 OutboxMessageFailed = 1104
+  field const System.Int32 OutboxReleaseForRetryFailed = 1103
+  field const System.Int32 OutboxRetryBackoffFailed = 1101
+  field const System.Int32 OutboxStatePersistFailed = 1106
+  field const System.Int32 SagaCompensationFailed = 1202
+  field const System.Int32 SagaLeaseBatchPartial = 1203
+  field const System.Int32 SagaLeaseBatchReleaseFailed = 1206
+  field const System.Int32 SagaLeaseReleaseFailed = 1204
+  field const System.Int32 SagaTimedOut = 1201
+  field const System.Int32 SagaTimeoutCheckFailed = 1205
 struct PalDDD.Core.PalValidationError
   ctor(System.String PropertyName, System.String Message)
   property System.String Message [init]
@@ -843,6 +865,13 @@ class PalDDD.Hosting.AspNetCore.StreamRunCapacityExceededException
   ctor(System.String message)
   ctor(System.String message, System.Exception innerException)
 
+# PalDDD.Hosting.AspNetCore.OutboxHealth
+static class PalDDD.Hosting.AspNetCore.OutboxHealth.OutboxHealthServiceCollectionExtensions
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOutboxHealthCheck(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+class PalDDD.Hosting.AspNetCore.OutboxHealth.PalOutboxHealthCheck
+  ctor(PalDDD.Transactions.IPalOutboxStore store)
+  method System.Threading.Tasks.Task<Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult> CheckHealthAsync(Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckContext context, System.Threading.CancellationToken cancellationToken)
+
 # PalDDD.Idempotency
 interface PalDDD.Idempotency.IIdempotencyStartOrGetStore
   method System.Threading.Tasks.ValueTask<PalDDD.Idempotency.IdempotencyStartResult> StartOrGetAsync(System.String operationName, System.String key, System.DateTimeOffset now, PalDDD.Idempotency.IdempotencyPolicy policy, System.Threading.CancellationToken ct)
@@ -1086,6 +1115,10 @@ class PalDDD.PalORM.Models.OutboxMessageRow
   property System.String Type
   method PalDDD.PalORM.Models.OutboxMessageRow FromDomain(PalDDD.Transactions.OutboxMessage m)
   method PalDDD.Transactions.OutboxMessage ToDomain()
+class PalDDD.PalORM.Models.VersionProbeRow
+  ctor()
+  property System.String V
+  property System.String V2
 class PalDDD.PalORM.PalOrmPreWarmHostedService<TProvider>
   ctor(PalORM.DbOptions options, System.Int32 connectionCount, PalDDD.Core.Logging.IPalLogger<PalDDD.PalORM.PalOrmPreWarmHostedService<TProvider>> logger)
   method System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken cancellationToken)
@@ -1410,6 +1443,7 @@ static class PalDDD.Projections.EventLog.EventStreamJsonLines
 # PalDDD.Repository.EFCore
 class PalDDD.Repository.EFCore.OutboxDomainEventInterceptor
   ctor(PalDDD.Transactions.IPalOutboxStore outboxStore, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog)
+  property System.Collections.Generic.IReadOnlyList<PalDDD.Core.DomainEvent> PendingEvents
   method System.Void SaveChangesFailed(Microsoft.EntityFrameworkCore.Diagnostics.DbContextErrorEventData eventData)
   method System.Threading.Tasks.Task SaveChangesFailedAsync(Microsoft.EntityFrameworkCore.Diagnostics.DbContextErrorEventData eventData, System.Threading.CancellationToken cancellationToken)
   method System.Int32 SavedChanges(Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesCompletedEventData eventData, System.Int32 result)
@@ -1418,6 +1452,7 @@ class PalDDD.Repository.EFCore.OutboxDomainEventInterceptor
   method System.Threading.Tasks.ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<System.Int32>> SavingChangesAsync(Microsoft.EntityFrameworkCore.Diagnostics.DbContextEventData eventData, Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<System.Int32> result, System.Threading.CancellationToken cancellationToken)
 static class PalDDD.Repository.EFCore.ServiceCollectionExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOutboxUnitOfWork(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
+  method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalOutboxUnitOfWorkForContext(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.EntityFrameworkCore.DbContextOptionsBuilder UsePalOutboxInterceptor(Microsoft.EntityFrameworkCore.DbContextOptionsBuilder optionsBuilder, System.IServiceProvider serviceProvider)
 class PalDDD.Repository.EFCore.UnitOfWork<TContext>
   ctor(TContext context)

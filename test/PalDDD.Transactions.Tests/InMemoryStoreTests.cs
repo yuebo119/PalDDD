@@ -40,8 +40,10 @@ public sealed class InMemoryStoreTests
         var now = DateTimeOffset.UtcNow;
         var a = await store.TryStartProcessingAsync("consumer-a", "msg-001", now, TimeSpan.FromMinutes(5), cancellationToken);
         var b = await store.TryStartProcessingAsync("consumer-b", "msg-001", now, TimeSpan.FromMinutes(5), cancellationToken);
-        await Assert.That(a).IsNotNull();
-        await Assert.That(b).IsNotNull();
+        await Assert.That(a.MessageId).IsEqualTo("msg-001");
+        await Assert.That(a.ConsumerName).IsEqualTo("consumer-a");
+        await Assert.That(b.MessageId).IsEqualTo("msg-001");
+        await Assert.That(b.ConsumerName).IsEqualTo("consumer-b");
     }
 
     [Test]

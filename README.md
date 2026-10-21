@@ -12,7 +12,7 @@
 
 ---
 
-Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox 的租约锁并发与死信恢复、Saga 的补偿编排与超时检测，标准化为 35 个独立 NuGet 包（另依赖 PalORM 引擎 5 个第三方包，见[包清单](#包清单)）。不做 `IRepository<T>`、不定义 `IIntegrationEvent`、不实施装配扫描：业务代码保持纯 C#，框架只提供基础设施。
+Pal.DDD 将 Entity 的 equality 语义、领域事件的零分配收集、Outbox 的租约锁并发与死信恢复、Saga 的补偿编排与超时检测，标准化为 36 个独立 NuGet 包（另依赖 PalORM 引擎 5 个第三方包，见[包清单](#包清单)）。不做 `IRepository<T>`、不定义 `IIntegrationEvent`、不实施装配扫描：业务代码保持纯 C#，框架只提供基础设施。
 
 | NuGet 包 | 编译期诊断 | 持久化栈 | 实测用例 |
 |:---:|:---:|:---:|:---:|
@@ -443,7 +443,7 @@ dotnet run --configuration Release --project bench/PalDDD.Benchmarks/PalDDD.Benc
 
 ## 包清单
 
-PalDDD 自有 35 个包 + PalORM 引擎 5 个第三方包（`PalORM.Core` · `PalORM.SourceGen` · `PalORM.PostgreSql` · `PalORM.MySql` · `PalORM.Sqlite`，独立版本线）。逐包发布清单与版本见[发布包范围](docs/release.md)；当前版本以 [NuGet](https://www.nuget.org/packages/PalDDD.Base) 徽章与 [CHANGELOG](CHANGELOG.md) 为准。
+PalDDD 自有 36 个包 + PalORM 引擎 5 个第三方包（`PalORM.Core` · `PalORM.SourceGen` · `PalORM.PostgreSql` · `PalORM.MySql` · `PalORM.Sqlite`，独立版本线）。逐包发布清单与版本见[发布包范围](docs/release.md)；当前版本以 [NuGet](https://www.nuget.org/packages/PalDDD.Base) 徽章与 [CHANGELOG](CHANGELOG.md) 为准。
 
 | 层 | 包 |
 |----|----|
@@ -461,7 +461,7 @@ PalDDD 自有 35 个包 + PalORM 引擎 5 个第三方包（`PalORM.Core` · `Pa
 ## 项目结构
 
 ```
-src/                         36 源项目 · Clean Architecture（Folder 与 PalDDD.slnx 一致）
+src/                         37 源项目 · Clean Architecture（Folder 与 PalDDD.slnx 一致）
 ├── Domain/                  Core · SourceGen · Analyzers · Analyzers.CodeFixes
 ├── App-Abstractions/        Serialization · Messaging · Compression · Compression.Native
 ├── App-Core/                CQRS · EventLog · Idempotency · Projections · Transactions

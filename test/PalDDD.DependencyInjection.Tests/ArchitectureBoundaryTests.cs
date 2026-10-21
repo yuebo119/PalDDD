@@ -96,7 +96,7 @@ public sealed class ArchitectureBoundaryTests
             "PalDDD.Dapper", "PalDDD.Dapper.PostgreSql", "PalDDD.Dapper.MySql", "PalDDD.Dapper.Sqlite",
             "PalDDD.PalORM", "PalDDD.PalORM.PostgreSql", "PalDDD.PalORM.MySql", "PalDDD.PalORM.Sqlite",
             "PalDDD.Messaging.Kafka", "PalDDD.Messaging.RabbitMQ",
-            "PalDDD.Hosting.AspNetCore", "PalDDD.Compression.Native",
+            "PalDDD.Hosting.AspNetCore", "PalDDD.Hosting.AspNetCore.OutboxHealth", "PalDDD.Compression.Native",
             "PalDDD.Serialization.MemoryPack", "PalDDD.Serialization.Evolution",
             "PalDDD.Extension", "PalDDD.Base", "PalDDD.Prompts"
         };

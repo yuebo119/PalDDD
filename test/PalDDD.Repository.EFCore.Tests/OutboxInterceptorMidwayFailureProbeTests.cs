@@ -97,7 +97,7 @@ public sealed class OutboxInterceptorMidwayFailureProbeTests
         await Assert.That(entity.HasDomainEvents).IsTrue();
 
         // 附加事实：拦截器 _pending 未清空（SaveChangesFailed 不可达 → 其 _pending.Clear() 未执行）
-        await Assert.That(setup.Interceptor.PendingEvents).Count().IsEqualTo(2);
+        await Assert.That(setup.Interceptor.PendingEventsCore).Count().IsEqualTo(2);
     }
 
     // ── 探针装置 ──
