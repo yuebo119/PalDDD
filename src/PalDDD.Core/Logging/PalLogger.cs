@@ -1,12 +1,17 @@
 // ─────────────────────────────────────────────────────────────
 // 📝 PalLogger — IPalLogger 门面的 Microsoft.Extensions.Logging 适配
 // ─────────────────────────────────────────────────────────────
+// 2026-10-21 契约盘点 R7：由 PalDDD.DependencyInjection 迁入 Core，使 Transactions 的
+// 组件级注册（AddPalOutbox/AddPalInbox/AddPalSaga）也能登记门面——该门面原先只在
+// AddPalCoreStack/AddPalPipelineBehaviors 中注册，单独使用组件注册时宿主启动即抛
+// "Unable to resolve service for type IPalLogger<T>"。Core 已依赖 Logging.Abstractions
+// （.NET 11 共享框架内置），故迁移不新增包依赖。
 
 using Microsoft.Extensions.Logging;
 using PalDDD.Core.Logging;
 using System.Diagnostics.CodeAnalysis;
 
-namespace PalDDD.DependencyInjection.Logging;
+namespace PalDDD.Core.Logging;
 
 [SuppressMessage("Design", "CA1848", Justification = "IPalLogger 门面不适用 LoggerMessage 源生成，消息由调用方传入。")]
 [SuppressMessage("Usage", "CA2254", Justification = "IPalLogger 门面接收纯字符串消息，模板由调用方构造。")]

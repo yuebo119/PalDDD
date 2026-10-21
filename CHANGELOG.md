@@ -14,6 +14,12 @@
 
 ### Added
 
+- **2026-10-21 契约盘点第七轮修复（R7：组件级注册自带日志门面）**：
+  ①**根因**：`OutboxProcessor` / `InboxProcessor` / `SagaProcessor<TState>` 构造函数强制依赖 `IPalLogger<T>`，而该门面的实现 `PalLogger<T>` 是 `PalDDD.DependencyInjection` 的 internal 类型、只在 `AddPalCoreStack()` / `AddPalPipelineBehaviors()` 中注册。按 usage.md 各章节单独使用 `AddPalOutbox()` / `AddPalInbox()` / `AddPalSaga<,>()`（不引入核心栈）时，宿主启动解析 `IHostedService` 即抛 `Unable to resolve service for type IPalLogger<T>`。
+  ②**修法**：门面映射下移到 `PalDDD.Core` 的 `PalLoggerRegistration.EnsurePalLoggerFacade()`（单一定义点，TryAdd 幂等），`PalLogger<T>` 随迁至 Core（仍 internal，经 IVT 授 DependencyInjection / Transactions / 两个测试项目）；`AddPalOutbox` / `AddPalInbox` / `AddPalSaga<,>` 各调用一次，DI 包的 `EnsureLoggerFacade` 与 `AddPalLogging` 改用同一方法。宿主的 `ILogger<T>` 仍由标准宿主提供。
+  ③**公共 API 无变化**；Core 的包依赖未变（`Microsoft.Extensions.Logging.Abstractions` 在 .NET 11 共享框架内）。
+  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；新增 3 个 DI 用例（三个入口各自单独解析 hosted/processor），每个用例各做一次变异探针（移除对应入口的门面调用 → 该用例红，其余绿）；消费方最小复现（`AddLogging` + `AddPalOutbox` + 解析 `IHostedService`）由 exit 127 转为 exit 0。
+
 - **2026-10-21 契约盘点第六轮修复（R6：批量 Inbox 1006 告警 + 批量回落可观测 + Auto 口径统一）**：
   ①**批量路径补齐 1006 告警**：`InboxProcessor.TryProcessBatchAsync` 此前不调用 `WarnIfLeaseExceeded`，而 usage.md 推荐的批量消费正是高吞吐路径，handler 超过 `ProcessingTimeout` 时没有任何信号；现按批聚合发出一条 `InboxHandlerLeaseExceeded`（含超限条数与最大耗时，计时起点与逐条路径一致取整批认领时刻），取消路径在抛出前冲刷，逐条路径行为不变。
   ②**批量回落可观测**：store 未实现 `IBatchInboxStore`（当前为 PalORM / EF）时，每个 processor 实例首次批量调用记录一次 Information（store 类型 + 消费者名），不再完全静默；usage.md 标注当前实现方与「每消息 2 次往返」的代价。

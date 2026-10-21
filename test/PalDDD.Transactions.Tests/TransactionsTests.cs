@@ -756,6 +756,59 @@ public sealed class OutboxBatchProcessorTests
         await Assert.That(logger.Messages.Count(static m => m.Contains("IBatchInboxStore", StringComparison.Ordinal))).IsEqualTo(1);
     }
 
+    /// <summary>
+    /// 契约盘点 R7：组件级注册自带 IPalLogger&lt;T&gt; 门面。单独 AddPalOutbox（不调
+    /// AddPalCoreStack/AddPalPipelineBehaviors）时，宿主解析 IHostedService 不得抛
+    /// 「Unable to resolve service for type IPalLogger&lt;OutboxProcessor&gt;」。
+    /// AddLogging 是宿主职责（提供 ILogger&lt;T&gt;）。
+    /// </summary>
+    [Test]
+    public async Task AddPalOutbox_Standalone_ResolvesHostedProcessor()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPalOutbox();
+        await using var provider = services.BuildServiceProvider();
+
+        var hosted = provider.GetServices<Microsoft.Extensions.Hosting.IHostedService>().ToList();
+
+        await Assert.That(hosted.Any(static h => h.GetType().Name == "OutboxProcessor")).IsTrue();
+        await Assert.That(provider.GetService<IPalLogger<OutboxProcessor>>()).IsNotNull();
+    }
+
+    /// <summary>
+    /// 契约盘点 R7：AddPalInbox 单独使用时 InboxProcessor 可解析（此前缺 IPalLogger&lt;InboxProcessor&gt;）。
+    /// </summary>
+    [Test]
+    public async Task AddPalInbox_Standalone_ResolvesProcessor()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IInboxStore, InMemoryInboxStore>();
+        services.AddPalInbox();
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        await Assert.That(scope.ServiceProvider.GetService<InboxProcessor>()).IsNotNull();
+    }
+
+    /// <summary>
+    /// 契约盘点 R7：AddPalSaga 单独使用时 SagaProcessor&lt;TState&gt; 可解析（此前缺
+    /// IPalLogger&lt;SagaProcessor&lt;TState&gt;&gt;）。
+    /// </summary>
+    [Test]
+    public async Task AddPalSaga_Standalone_ResolvesHostedProcessor()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPalSaga<OrderSagaState, OrderFulfillmentSaga>();
+        await using var provider = services.BuildServiceProvider();
+
+        var hosted = provider.GetServices<Microsoft.Extensions.Hosting.IHostedService>().ToList();
+
+        await Assert.That(hosted.Any(static h => h.GetType().Name.StartsWith("SagaProcessor", StringComparison.Ordinal))).IsTrue();
+    }
+
     /// <summary>只声明 IInboxStore 的转发包装——模拟 PalORM/EF 的批量能力缺口。</summary>
     private sealed class NonBatchInboxStore(IInboxStore inner) : IInboxStore
     {
