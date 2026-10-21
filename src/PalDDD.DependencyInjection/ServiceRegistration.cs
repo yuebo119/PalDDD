@@ -56,7 +56,15 @@ public static class ServiceRegistration
 
     /// <summary>注册推荐的核心栈：<see cref="AddPalDDD"/> + <see cref="AddPalPipelineBehaviors"/> + <see cref="AddPalIdentity"/>。</summary>
     /// <remarks>
-    /// 只包含 AOT 安全的核心、CQRS、内存消息能力；序列化、持久化、Broker、ASP.NET Core 适配器仍由对应包显式注册。
+    /// 只包含核心、CQRS、内存消息能力；序列化、持久化、Broker、ASP.NET Core 适配器仍由对应包显式注册。
+    /// <para>
+    /// ⚠️ <b>Native AOT 限制</b>：本方法内部调用开放泛型 <see cref="AddPalPipelineBehaviors(IServiceCollection)"/>，
+    /// 在 Native AOT（<c>RuntimeFeature.IsDynamicCodeSupported == false</c>）下注册期即抛
+    /// <see cref="NotSupportedException"/>。AOT 应用请改用 <see cref="AddPalDDD"/> +
+    /// <see cref="AddPalCommandHandler{TCommand,TResponse,THandler}"/> /
+    /// <see cref="AddPalQueryHandler{TQuery,TResponse,THandler}"/>（内部闭合注册管道行为），
+    /// 或显式调用闭合版 <see cref="AddPalPipelineBehaviors{TRequest,TResponse}"/>。
+    /// </para>
     /// <para>
     /// 管道行为（验证/日志）需要 <see cref="IPalLogger{T}"/>——<see cref="AddPalPipelineBehaviors"/>
     /// 自带该门面的最小注册（依赖宿主 <c>ILogger&lt;T&gt;</c>，无 Provider 时为零输出）。

@@ -88,10 +88,10 @@ dotnet build PalDDD.slnx --no-restore
 
 > MTP 原生模式已通过 `global.json` 的 `test.runner=Microsoft.Testing.Platform` 启用，`dotnet test` 无需额外参数即可发现并运行测试。
 
-公共 API 快照由 `PalDDD.Core.Tests` 覆盖。新增或调整核心包 public API 后，先确认变更合理，再更新快照：
+公共 API 快照由 `PalDDD.Integration.Tests` 的 `PublicApiSnapshotTests` 覆盖（2026-09-25 从 Core.Tests 迁入）。新增或调整核心包 public API 后，先确认变更合理，再更新快照：
 
 ```bash
-PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests/PalDDD.Core.Tests.csproj --no-restore
+PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Integration.Tests/PalDDD.Integration.Tests.csproj -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
 ```
 
 ### 断言强度检查（与 Stryker 变异测试互补）

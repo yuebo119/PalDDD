@@ -69,7 +69,7 @@
 
 | 项目 | 类型 | 职责 |
 |------|------|------|
-| `PalDDD.Core.Tests` | 单元 | AggregateRoot/Entity/ValueObject/SmartEnum/Specification/DomainEvent/PublicApiSnapshot/AotContract/AllocationContract（性能契约由 ArchitectureBoundaryTests 的 PerformanceContract 存在性断言守护） |
+| `PalDDD.Core.Tests` | 单元 | AggregateRoot/Entity/ValueObject/SmartEnum/Specification/DomainEvent/AotContract/AllocationContract（性能契约由 ArchitectureBoundaryTests 的 PerformanceContract 存在性断言守护；PublicApiSnapshot 已迁 Integration.Tests） |
 | `PalDDD.Core.Abstractions.Tests` | 单元 | 核心抽象（IUnitOfWork/IMessageBroker 等）契约 |
 | `PalDDD.CQRS.Tests` | 单元 | Dispatcher/PipelineStateMachine/CommandHandler/QueryHandler |
 | `PalDDD.Transactions.Tests` | 单元 + 集成 | Saga/Outbox/Inbox + 租约锁 + 补偿链 + 死信重投递 |
@@ -80,7 +80,7 @@
 | `PalDDD.DependencyInjection.Tests` | 单元 | **ArchitectureBoundaryTests 38 方法机械守护** + DI 注册规范 |
 | `PalDDD.Repository.EFCore.Tests` | 集成 | UnitOfWork + OutboxDomainEventInterceptor Scoped |
 | `PalDDD.Hosting.AspNetCore.Tests` | 集成 | ExceptionMiddleware + AspNetCore 中间件链 |
-| `PalDDD.Integration.Tests` | 集成 | Testcontainers 真库（PG/MySQL/SQLite）+ OutboxDbContext 全链路 + Idempotency |
+| `PalDDD.Integration.Tests` | 集成 | Testcontainers 真库（PG/MySQL/SQLite）+ OutboxDbContext 全链路 + Idempotency + PublicApiSnapshot（公共 API 快照） |
 | `PalDDD.Messaging.Integration.Tests` | 集成 | Testcontainers 真库（RabbitMQ/Kafka）+ Broker 抽象对称 |
 | `PalDDD.PalORM.Tests` | 集成 | PalORM 6 Store + 跨方言（SQLite/PG/MySQL）+ 并发竞争 |
 | `PalDDD.Compression.Tests` | 单元 + 集成 | 系统压缩器往返（Brotli/GZip/Deflate）+ Native（LZ4/ZStandard） |
@@ -367,11 +367,12 @@ Error / Mean > 15%  → 统计无效，必须：
 # 1. 清 obj/bin
 rm -rf src/*/obj src/*/bin test/*/obj test/*/bin
 
-# 2. 全量构建 + 重生成公共 API 快照
-PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet build PalDDD.slnx --no-incremental
+# 2. 重生成公共 API 快照（快照由 Integration.Tests 的 PublicApiSnapshotTests 承载；
+#    dotnet build 不会执行测试，PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS 只在测试体内读取）
+PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Integration.Tests -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
 
 # 3. 评审 git diff 的快照变更，确认 emit 差异符合预期
-git diff test/PalDDD.Core.Tests/Snapshots/
+git diff test/PalDDD.Integration.Tests/Snapshots/
 
 # 4. 如 diff 不符合预期，回滚 Generator 改动，重新分析
 ```
@@ -485,8 +486,8 @@ dotnet run scripts/verify-conventions.cs -- --quick
 dotnet run scripts/gate.cs -- --allow-dirty
 
 # 6. 源生成器变更额外验证（如改了 SourceGen）
-PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet build PalDDD.slnx
-git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
+PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Integration.Tests -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
+git diff test/PalDDD.Integration.Tests/Snapshots/   # 评审快照
 
 # 7. 公共 API 变更三方一致（如改了签名）
 # - 同步更新 docs/conventions.md / docs/architecture.md
@@ -507,8 +508,8 @@ git diff test/PalDDD.Core.Tests/Snapshots/   # 评审快照
 | `.ai/test/prompt.md` | T1-T14 + T-DDD-1..6 测试铁律 |
 | `test/PalDDD.Testing/TestHelpers.cs` | 共享测试工具（FakeTimeProvider 等） |
 | `test/PalDDD.DependencyInjection.Tests/ArchitectureBoundaryTests.cs` | 38 测试方法机械守护 |
-| `test/PalDDD.Core.Tests/PublicApiSnapshotTests.cs` | 公共 API 快照 |
-| `test/PalDDD.Core.Tests/Snapshots/*.txt` | 快照基线（评审后提交） |
+| `test/PalDDD.Integration.Tests/PublicApiSnapshotTests.cs` | 公共 API 快照 |
+| `test/PalDDD.Integration.Tests/Snapshots/*.txt` | 快照基线（评审后提交） |
 | `bench/PalDDD.Benchmarks/Program.cs` | BenchmarkSwitcher + Smoke 模式入口 |
 | `bench/PalDDD.Benchmarks/FrameworkBenchmarks.cs` | 领域核心基准 |
 | `bench/PalDDD.Benchmarks/InfraBenchmarks.cs` | 基础设施基准 |

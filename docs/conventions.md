@@ -854,7 +854,7 @@ dotnet test PalDDD.slnx --no-build
 # for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore; done
 
 # 3. 公共 API 变更时更新快照（filter 需在 -- 之后传递给 MTP）
-PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
+PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Integration.Tests -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"
 
 # 3.5 快照变更必须同提交带 CHANGELOG.md——G23（BINC-1 三真源：快照+CHANGELOG+二进制兼容评估）
 # 判定口径（2026-09-25 修订为发布语义）：G23 的变更集按发布范围取——暂存集（pre-commit）

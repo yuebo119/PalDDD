@@ -71,8 +71,10 @@ jobs:
       # secret-scan/format-verify/coverage/encoding-gate/doc-consistency/tech-debt/
       # test-gate（这些只在 ci.yml 的 build-and-test 里）。本地 `git tag` + push 可打出
       # 从未经 CI 的 commit 的 tag，带缺陷的包会以"已发布"状态流出。
-      # 双管齐下：① ci.yml 已增加 tag 触发（跑全量门禁矩阵）；② 本步在 pack 前查
-      # 该 commit 的 CI 结论，tag 路径下必须是 success 才继续。
+      # R11 F13：原实现只查 build-and-test 一个 job——coverage/aot-verify/semgrep/
+      # quality-analyzers/dialect-probe/dapper-aot-probe 红或被跳过仍会发布。现按
+      # ci.yml 的 job 全集逐个要求最近一次 completed 结论为 success。
+      # 新增 CI job 时必须同步本清单（test-gate 的 T-DEF-4 仍守护超时项）。
       # workflow_dispatch 手动发布跳过该检查（显式人工意图，可能是重跑/补发）。
       - name: Verify CI passed for this commit (tag releases only)
         if: github.event_name == 'push'
@@ -81,23 +83,26 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          echo "Checking CI conclusion for $SHA ..."
+          echo "Checking CI conclusions for $SHA ..."
           # 只取【已完成】里的最新一次（v3.1.0 首发实测的竞态）：tag 推送会再触发一次
           # 同 SHA 的 ci.yml，其 build-and-test 若仍在跑，conclusion 为 null；原 `head -1`
           # 取到它，就把「分支推送上已经全绿」误判为非 success，发布被无谓拒绝。
-          CONCLUSION=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
-            --jq '[.check_runs[] | select(.name == "build-and-test" and .status == "completed")]
-                  | sort_by(.completed_at) | if length == 0 then "" else last.conclusion end')
-          if [ -z "$CONCLUSION" ]; then
-            echo "ERROR: no completed build-and-test check run found for $SHA — 本 commit 的 CI 未运行或尚未跑完，拒绝发布。"
-            echo "请先推送该 commit 到 main/dev 或对 tag 触发 CI，确认全量门禁通过后再发布。"
+          RUNS=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs")
+          FAILED=""
+          for JOB in build-and-test aot-verify dapper-aot-probe quality-analyzers semgrep coverage dialect-probe; do
+            CONCLUSION=$(printf '%s' "$RUNS" | jq -r --arg name "$JOB" \
+              '[.check_runs[] | select(.name == $name and .status == "completed")]
+               | sort_by(.completed_at) | if length == 0 then "" else last.conclusion end')
+            if [ "$CONCLUSION" != "success" ]; then
+              FAILED="$FAILED $JOB(${CONCLUSION:-missing})"
+            fi
+          done
+          if [ -n "$FAILED" ]; then
+            echo "ERROR: CI not green for $SHA:$FAILED — 拒绝发布。"
+            echo "请先确认该 commit 的 ci.yml 全部 job 通过（缺失表示尚未跑完或未触发）。"
             exit 1
           fi
-          if [ "$CONCLUSION" != "success" ]; then
-            echo "ERROR: CI conclusion for $SHA is '$CONCLUSION' (not success) — 拒绝发布。"
-            exit 1
-          fi
-          echo "CI passed for $SHA (build-and-test: success)"
+          echo "CI passed for $SHA (all ci.yml jobs: success)"
 
       - name: Restore
         run: dotnet restore PalDDD.slnx
@@ -145,7 +150,10 @@ jobs:
       - name: Verify package count
         run: |
           COUNT=$(ls release-packages/*.nupkg | wc -l)
-          EXPECTED=35
+          # R11 F14 纠正：37 个 src 项目中 PalDDD.Prompts 显式 IsPackable=false，
+          # 实际产出 36 个 nupkg（count-audit 的 packable 推导同为 36）。原值 35
+          # 会让每次发布在此步必然失败。
+          EXPECTED=36
           if [ "$COUNT" -ne "$EXPECTED" ]; then
             echo "ERROR: Package count mismatch — expected $EXPECTED, got $COUNT"
             ls release-packages/
