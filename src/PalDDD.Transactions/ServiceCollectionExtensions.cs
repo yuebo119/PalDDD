@@ -4,6 +4,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using PalDDD.Core.Logging;
 using System.Diagnostics.CodeAnalysis;
 
 namespace PalDDD.Transactions;
@@ -40,9 +41,15 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>注册发件箱发布器。调用方还需注册 <see cref="Serialization.IMessageSerializer"/>、<see cref="Serialization.IMessageCatalog"/> 和 <see cref="IPalOutboxStore"/>。</summary>
+    /// <remarks>
+    /// 2026-10-21 R7：本方法登记 <see cref="IPalLogger{T}"/> 门面（依赖宿主的
+    /// <c>ILogger&lt;T&gt;</c>），因此不与 <c>AddPalCoreStack()</c>/<c>AddPalPipelineBehaviors()</c>
+    /// 同用时也不会在宿主启动阶段抛「Unable to resolve service for type IPalLogger&lt;OutboxProcessor&gt;」。
+    /// </remarks>
     public static IServiceCollection AddPalOutbox(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+        services.EnsurePalLoggerFacade();
 
         services.AddOptions<OutboxOptions>()
             .Validate(static options => options.BatchSize > 0, "Outbox batch size must be greater than zero.")
@@ -81,9 +88,14 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>注册收件箱幂等性处理器。</summary>
+    /// <remarks>
+    /// 2026-10-21 R7：本方法登记 <see cref="IPalLogger{T}"/> 门面（依赖宿主的
+    /// <c>ILogger&lt;T&gt;</c>），组件级注册可独立于 <c>AddPalCoreStack()</c> 使用。
+    /// </remarks>
     public static IServiceCollection AddPalInbox(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+        services.EnsurePalLoggerFacade();
 
         services.AddOptions<InboxOptions>()
             .Validate(static options => !string.IsNullOrWhiteSpace(options.DefaultConsumerName), "Inbox default consumer name is required.")
@@ -110,6 +122,9 @@ public static class ServiceCollectionExtensions
         where TOrchestrator : Saga<TState>
     {
         ArgumentNullException.ThrowIfNull(services);
+        // 2026-10-21 R7：SagaProcessor 构造要求 IPalLogger<SagaProcessor<TState>>——
+        // 组件级注册同样自带门面，避免宿主启动阶段解析失败。
+        services.EnsurePalLoggerFacade();
 
         services.AddOptions<SagaProcessorOptions>()
             .Validate(static options => options.PollInterval > TimeSpan.Zero, "Saga poll interval must be greater than zero.")

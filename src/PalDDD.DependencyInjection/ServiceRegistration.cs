@@ -6,7 +6,6 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using PalDDD.Core.Logging;
-using PalDDD.DependencyInjection.Logging;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
@@ -146,7 +145,9 @@ public static class ServiceRegistration
     private static void EnsureLoggerFacade(IServiceCollection services)
     {
         services.AddLogging();
-        services.TryAddSingleton(typeof(IPalLogger<>), typeof(PalLogger<>));
+        // 2026-10-21 R7：门面映射统一由 Core 的 PalLoggerRegistration 提供（单一定义点）——
+        // Transactions 的组件级入口调用同一方法，避免「单独注册组件时无法解析 IPalLogger<T>」。
+        services.EnsurePalLoggerFacade();
     }
 
     /// <summary>是否已注册开放泛型管道行为（<c>IPipelineBehavior&lt;,&gt;</c> 开放定义）</summary>
@@ -240,7 +241,7 @@ public static class ServiceRegistration
         // 硬校验，开放泛型 + 值类型实参组合无 native code 可用）。T 惯例为引用类型
         // （logger 类别，如 IPalLogger<LoggingBehavior<,>>），值类型类别无业务意义，
         // 故不设 AOT 门禁仅此声明。
-        services.TryAddSingleton(typeof(IPalLogger<>), typeof(PalLogger<>));
+        services.EnsurePalLoggerFacade();
         return services;
     }
 

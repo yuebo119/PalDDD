@@ -15,7 +15,7 @@ services.AddPalCoreStack();
 
 `AddPalCoreStack()` 是推荐的核心入口，等价于 `AddPalDDD()` + `AddPalPipelineBehaviors()` + `AddPalIdentity()`。它不会自动引用序列化、持久化、Broker 或 ASP.NET Core 适配器，避免基础设施依赖越过 Clean Architecture 边界。原 `AddPalFullStack()` 已在 v5.0 契约窗口移除——它从未注册基础设施，名字容易被误读为“一键到位”，统一入口只有 `AddPalCoreStack()`。
 
-管道行为（验证/日志）依赖 `IPalLogger<T>`：`AddPalCoreStack()` 与 `AddPalPipelineBehaviors()` 会自带该门面的最小注册（依赖宿主的 `ILogger<T>`，无 Provider 时零输出），因此「核心栈 + handler」即可完成首次 `SendAsync`。`AddPalLogging()` 是可选的输出配置，只负责追加 ZLogger 控制台 Provider 与日志级别策略。
+管道行为（验证/日志）依赖 `IPalLogger<T>`：`AddPalCoreStack()` 与 `AddPalPipelineBehaviors()` 会自带该门面的最小注册（依赖宿主的 `ILogger<T>`，无 Provider 时零输出），因此「核心栈 + handler」即可完成首次 `SendAsync`。组件级注册 `AddPalOutbox()` / `AddPalInbox()` / `AddPalSaga<,>()` 同样各自登记该门面（2026-10-21 R7），因此不依赖 `AddPalCoreStack()` 先行，单独使用不会在宿主启动时抛「Unable to resolve service for type IPalLogger<T>」；宿主的 `ILogger<T>` 仍由标准宿主（Generic Host / WebApplicationBuilder）提供。`AddPalLogging()` 是可选的输出配置，只负责追加 ZLogger 控制台 Provider 与日志级别策略。
 
 领域事件 dispatcher 通过 `HashSet<Guid>` 去重循环事件，并通过 `while` 循环替代递归防止深层事件链导致栈溢出。
 

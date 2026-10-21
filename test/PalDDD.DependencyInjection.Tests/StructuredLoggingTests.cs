@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Logging;
 using PalDDD.Core.Logging;
-using PalDDD.DependencyInjection.Logging;
 
 namespace PalDDD.DependencyInjection.Tests;
 
