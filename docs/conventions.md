@@ -338,7 +338,7 @@ Pal.DDD/
 ├── Directory.Packages.props   # 中央包管理（CPM）
 ├── global.json                # SDK 版本锁定
 ├── PalDDD.slnx                # 解决方案（按层分 Folder）
-├── src/                       # 36 个源项目，Clean Architecture 分层
+├── src/                       # 37 个源项目，Clean Architecture 分层
 │   ├── PalDDD.Core/           # 领域层
 │   ├── PalDDD.Serialization/  # 应用抽象层
 │   ├── PalDDD.CQRS/           # 应用核心层
@@ -380,7 +380,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-10-21 双评审修复轮复验）：250 源文件·36 项目·0 违规（本轮净 +2：新增 `DomainEventOutboxBridge`、`GeneratorSymbols`、`PostgreSqlDataSourceRegistration` 三个源文件，删除 0 引用的 `VersionProbeRow`；2026-10-21 批量消费轮新增 `MessageBatchPump`、`InboxBatchConsumer` 两个源文件；同轮此前新增 `EventLogBinaryRow` 一个源文件；2026-10-20 数据面续轮新增 3 个源文件：RetentionSql、PalOrmRetentionStore、EfCoreRetentionStore；数据面轮新增 5 个源文件：Retention 四件 + DapperRetentionStore；2026-10-19 ADR-032 双栈 FTS5/JSON1 新增 10 个源文件：共享核心 3、Dapper 公开类型 2、PalORM 公开类型与门面 5；此前 227 文件）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-10-21 基础库优化轮复验）：253 源文件·37 项目·0 违规（本轮净 +3：新增可选的 `PalDDD.Hosting.AspNetCore.OutboxHealth` 两文件；`VersionProbeRow` 以 `[Obsolete]` 回归一个 Minor 兼容窗口；`GeneratorSymbols` 为此前 `GeneratorSharedHelpers` 的合规改名，不增计数；2026-10-21 双评审修复轮新增 `DomainEventOutboxBridge`、`PostgreSqlDataSourceRegistration` 并删除 0 引用的 `VersionProbeRow`；2026-10-21 批量消费轮新增 `MessageBatchPump`、`InboxBatchConsumer` 两个源文件；同轮此前新增 `EventLogBinaryRow` 一个源文件；2026-10-20 数据面续轮新增 3 个源文件：RetentionSql、PalOrmRetentionStore、EfCoreRetentionStore；数据面轮新增 5 个源文件：Retention 四件 + DapperRetentionStore；2026-10-19 ADR-032 双栈 FTS5/JSON1 新增 10 个源文件：共享核心 3、Dapper 公开类型 2、PalORM 公开类型与门面 5；此前 227 文件）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 
@@ -408,7 +408,7 @@ csproj 只写 `<Project Sdk>` + `<PackageReference Include="..." />`（无 Versi
 
 | 规则 | 详情 |
 |------|------|
-| **默认扁平** | 所有 `.cs` 文件在项目根目录。30/36 项目遵循（6 个项目有已注册子目录）。 |
+| **默认扁平** | 所有 `.cs` 文件在项目根目录。31/37 项目遵循（6 个项目有已注册子目录）。 |
 | **例外 1** | `AspNetCore/`（PalDDD.Hosting.AspNetCore）— 中间件/端点映射（`RequestDelegate`/`IApplicationBuilder` 类型域与纯 DI 注册分离） |
 | **例外 2** | `.pal/prompts/`（PalDDD.Prompts）— AI 提示模板（9 个 `.prompt.md` 文件），非源码文件 |
 | **例外 3** | `Identity/`·`Logging/`（PalDDD.Core）— ID 生成与日志抽象子域 |
@@ -417,7 +417,7 @@ csproj 只写 `<Project Sdk>` + `<PackageReference Include="..." />`（无 Versi
 | **例外 6** | `Saga/`·`Outbox/`·`Inbox/`（PalDDD.Transactions，2026-08-26 组织重组零破坏拆分，命名空间不变）— 18+5+3 文件 |
 | **禁止** | `Properties/`·`Services/`·`Helpers/`·`Utils/` 等子目录。新增子目录须在本表注册 |
 
-**合规状态**：36 项目 11 个例外目录（均为已注册）。0 违规。
+**合规状态**：37 项目 11 个例外目录（均为已注册）。0 违规。
 
 ### 4.8 项目结构自检清单
 

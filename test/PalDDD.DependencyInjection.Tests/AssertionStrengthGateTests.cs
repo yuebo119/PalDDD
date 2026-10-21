@@ -55,7 +55,7 @@ public sealed class AssertionStrengthGateTests
                      $"{isNotNullCount + zeroAssertMethods.Count}（基线上限 {MaxWeak}）";
         var overBaseline = isNotNullCount + zeroAssertMethods.Count > MaxWeak;
 
-        await Assert.That(overBaseline).IsFalse();
+        await Assert.That(overBaseline).IsFalse().Because(detail);
         await Assert.That(isNotNullCount).IsGreaterThanOrEqualTo(0);
         await Assert.That(zeroAssertMethods.Count).IsGreaterThanOrEqualTo(0);
         Console.WriteLine(detail);

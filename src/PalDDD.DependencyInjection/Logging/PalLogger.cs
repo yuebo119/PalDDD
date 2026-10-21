@@ -29,4 +29,17 @@ internal sealed class PalLogger<T> : IPalLogger<T>
     public void Warning(string message) => _logger.LogWarning(message);
     public void Error(Exception ex, string message) => _logger.LogError(ex, message);
     public bool IsEnabled(LogLevel level) => _logger.IsEnabled(level);
+
+    // 结构化重载：直接把模板与参数交给 MEL，保留字段而非拼成字符串。
+    public void Debug(EventId eventId, string message, params object?[] args)
+        => _logger.LogDebug(eventId, message, args);
+
+    public void Information(EventId eventId, string message, params object?[] args)
+        => _logger.LogInformation(eventId, message, args);
+
+    public void Warning(EventId eventId, string message, params object?[] args)
+        => _logger.LogWarning(eventId, message, args);
+
+    public void Error(Exception ex, EventId eventId, string message, params object?[] args)
+        => _logger.LogError(eventId, ex, message, args);
 }

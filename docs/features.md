@@ -181,7 +181,8 @@ Dapper 侧独有的方言增强面（PalORM 方言包暂未携带，待后续迁
 | 流式读端点（SSE） | `IStreamQuery`/`IStreamQueryHandler` + `MapStreamQuery` GET/POST：验证前置 400、SSE 帧（data-only / `formatFrame` / event/id 选择器）、心跳、`Last-Event-ID` 读取入口、取消贯穿、遥测（TTFT `first-item` 事件 + 五个计数器） | EndpointExtensions.cs、StreamResumeExtensions.cs（Hosting.AspNetCore） |
 | 断线续跑端点 | `AddDetachedStreamRuns` + `MapDetachedStreamQuery`（GET/POST 双启动形态）+ `MapStreamRunAttach` + `MapStreamRunCancel`：单写者 + 单附着 + 有界环形缓冲、`event: gap`、接管 `event: detached`、run 自有 scope、`paldd.stream.attached/gap` 计数 | DetachedStreamEndpoints.cs、StreamRunRegistry.cs（Hosting.AspNetCore） |
 | 全局异常中间件 | PalValidationException→400、HandlerNotFound→404（类型级信息不泄露内部）、响应已开始分支 rethrow 补日志 | ExceptionMiddleware.cs |
-| 健康检查 | message_broker 注册检查 + outbox 存储探测两个内置检查，自定义响应体（逐组件明细 + 耗时） | HealthCheckExtensions.cs |
+| 健康检查 | message_broker 注册检查 + outbox 存储探测两个内置检查，自定义响应体（逐组件明细 + 耗时）；仅需 outbox 检查时可改用可选包 `AddPalOutboxHealthCheck()`（PalDDD.Hosting.AspNetCore.OutboxHealth，避免通过 Hosting 传递引用 Transactions；与 `AddPalHealthChecks()` 二选一） | HealthCheckExtensions.cs、OutboxHealthServiceCollectionExtensions.cs |
+| 结构化日志 | `IPalLogger<T>` 的 `Debug/Information/Warning/Error` 带 `EventId` 与模板参数重载：适配器把 `{MessageId}` 等槽位原样交给 MEL/ZLogger，可按字段检索；旧实现者走默认实现，模板格式化后转调原方法（二进制兼容） | IPalLogger.cs、PalLogger.cs |
 
 ## 12. 元包与 AI 资产
 

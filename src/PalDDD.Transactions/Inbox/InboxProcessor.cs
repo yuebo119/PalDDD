@@ -96,7 +96,8 @@ public sealed class InboxProcessor
             // EPSL 地毯审计 2026-10-11 A-2：插值字符串在调用前求值，Information 关闭时守卫
             // 免每消息的字符串分配（IsEnabled 的文档化用途，见 IPalLogger）
             if (_logger.IsEnabled(LogLevel.Information))
-                _logger.Information($"Inbox: message {messageId} is already processed or processing, skipping");
+                _logger.Information(PalLogEventIds.InboxMessageSkipped,
+                    "Inbox: message {MessageId} is already processed or processing, skipping", messageId);
             return false;
         }
 
@@ -126,7 +127,9 @@ public sealed class InboxProcessor
                 // 属存储异常形态（而非请求级取消传播），原过滤让 OCE 逃逸给调用方，而
                 // handler 实际已成功——调用方按取消处理触发重试重放路径；捕获后统一按
                 // processed-pending-confirmation 处理（与下方 MarkFailedAsync 的不过滤口径对称）。
-                _logger.Error(markEx, $"Inbox: message {messageId} handler SUCCEEDED but MarkProcessed failed; state pending confirmation (at-least-once)");
+                _logger.Error(markEx, PalLogEventIds.InboxMessageProcessedMarkFailed,
+                    "Inbox: message {MessageId} handler SUCCEEDED but MarkProcessed failed; state pending confirmation (at-least-once)",
+                    messageId);
                 activity?.SetTag("pal.inbox.result", "processed-pending-confirmation");
                 // ITM-197 修复（三十轮）：该路径补指标——修复前监控盲区（handler 成功但状态
                 // 待确认在 InboxProcessed/InboxFailed 均不可见）。
@@ -137,7 +140,8 @@ public sealed class InboxProcessor
             PalMetrics.InboxProcessed.Add(1);
             // A-2 同款守卫（成功路径与跳过路径同为每消息热路径）
             if (_logger.IsEnabled(LogLevel.Information))
-                _logger.Information($"Inbox: message {messageId} processed successfully");
+                _logger.Information(PalLogEventIds.InboxMessageProcessed,
+                    "Inbox: message {MessageId} processed successfully", messageId);
             return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -160,7 +164,8 @@ public sealed class InboxProcessor
             activity?.SetTag("pal.inbox.result", "failed");
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             PalMetrics.InboxFailed.Add(1);
-            _logger.Error(ex, $"Inbox: message {messageId} handler failed");
+            _logger.Error(ex, PalLogEventIds.InboxMessageFailed,
+                "Inbox: message {MessageId} handler failed", messageId);
             throw;
         }
     }
@@ -301,7 +306,9 @@ public sealed class InboxProcessor
 
         activity?.SetTag("pal.inbox.result", "processed");
         if (_logger.IsEnabled(LogLevel.Information))
-            _logger.Information($"Inbox: batch of {claimed.Count} message(s) processed for consumer {consumerName}");
+            _logger.Information(PalLogEventIds.InboxBatchProcessed,
+                "Inbox: batch of {MessageCount} message(s) processed for consumer {ConsumerName}",
+                claimed.Count, consumerName);
         return succeeded.Count;
     }
 

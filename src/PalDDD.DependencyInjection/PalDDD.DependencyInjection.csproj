@@ -19,5 +19,10 @@
     <PackageReference Include="ZLogger" />
     </ItemGroup>
 
+  <ItemGroup>
+    <!-- T5：结构化日志适配器的字段转发测试需要访问 internal PalLogger<T>。 -->
+    <InternalsVisibleTo Include="PalDDD.DependencyInjection.Tests" />
+  </ItemGroup>
+
   <ItemGroup><Using Include="PalDDD.CQRS" Alias="CQRS"/><Using Include="PalDDD.Core" Alias="Core"/><Using Include="PalDDD.Messaging" Alias="Message"/></ItemGroup>
 </Project>

@@ -193,7 +193,9 @@ TState>
                 {
                     foreach (var step in timedOutSteps)
                     {
-                        _logger.Warning($"Saga {sagaState.SagaId} timed out at state {sagaState.CurrentState}, step {step.Name}. Compensating...");
+                        _logger.Warning(PalLogEventIds.SagaTimedOut,
+                            "Saga {SagaId} timed out at state {State}, step {Step}. Compensating...",
+                            sagaState.SagaId, sagaState.CurrentState, step.Name);
                     }
 
                     try
@@ -227,13 +229,16 @@ TState>
                         }
                         catch (Exception releaseEx) when (releaseEx is not OperationCanceledException)
                         {
-                            _logger.Error(releaseEx, $"Saga {sagaState.SagaId} lease release failed during cancellation; lease will expire by LeaseDuration");
+                            _logger.Error(releaseEx, PalLogEventIds.SagaLeaseReleaseFailed,
+                                "Saga {SagaId} lease release failed during cancellation; lease will expire by LeaseDuration",
+                                sagaState.SagaId);
                         }
                         throw;
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        _logger.Error(ex, $"Saga {sagaState.SagaId} compensation failed");
+                        _logger.Error(ex, PalLogEventIds.SagaCompensationFailed,
+                            "Saga {SagaId} compensation failed", sagaState.SagaId);
                         // ITM-200 修复（三十一轮）：截断后再入库——Error 列 HasMaxLength(2048)
                         // （SagaStateDbContext），补偿异常（AggregateException/FanOut 聚合消息）超长
                         // 会让 SaveChangesAsync 抛 DbUpdateException → 被外层 catch 吞 → Saga
@@ -334,12 +339,16 @@ TState>
                 if (released < pendingRelease.Count)
                 {
                     // 冲突信号粒度由逐 saga 收粗为批计数（B-1 已裁决取舍，见 ISagaLeaseBatchStore remarks）
-                    _logger.Warning($"Saga lease batch release affected {released}/{pendingRelease.Count} rows (optimistic concurrency conflicts); unreleased leases will expire by LeaseDuration");
+                    _logger.Warning(PalLogEventIds.SagaLeaseBatchPartial,
+                        "Saga lease batch release affected {Released}/{PendingCount} rows (optimistic concurrency conflicts); unreleased leases will expire by LeaseDuration",
+                        released, pendingRelease.Count);
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.Error(ex, $"Saga lease batch release failed ({pendingRelease.Count} sagas); leases will expire by LeaseDuration");
+                _logger.Error(ex, PalLogEventIds.SagaLeaseBatchReleaseFailed,
+                    "Saga lease batch release failed ({PendingCount} sagas); leases will expire by LeaseDuration",
+                    pendingRelease.Count);
             }
         }
     }

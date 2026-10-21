@@ -36,6 +36,7 @@
     <ProjectReference Include="..\..\src\PalDDD.Compression.Native\PalDDD.Compression.Native.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Serialization.MemoryPack\PalDDD.Serialization.MemoryPack.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Hosting.AspNetCore\PalDDD.Hosting.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\src\PalDDD.Hosting.AspNetCore.OutboxHealth\PalDDD.Hosting.AspNetCore.OutboxHealth.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.PalORM\PalDDD.PalORM.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.PalORM.MySql\PalDDD.PalORM.MySql.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.PalORM.PostgreSql\PalDDD.PalORM.PostgreSql.csproj" />

@@ -36,7 +36,7 @@
 | R-F10 | Dapper/EF 批标记 null 元素校验前移；`SagaKey.Make` 补 null；PalORM `GetAsync` 补空白守卫 | 编译期 + 现有入口测试 |
 | R-F12 | EF SQLite 租约等值回读补 `Take(batchSize)` | 与 PG/MySQL 回读同构 |
 | R-F2 | `EventStreamJsonLines` 导入/导出共用 `MaxLineBytes` 字节上限；旧名保留 `[Obsolete]` 别名 | `Projections.EventLog.Tests` 既有往返用例 |
-| A-F1/A-F2 | EF Outbox：`AddPalOutboxUnitOfWork<TContext>` 约束收紧为 `DbContext, IPalOutboxStore`；解析期校验同实例 + 拦截器已挂接；教程改为同上下文 `UsePalOutboxInterceptor` | 新增 `OutboxWiringEndToEndTests`（真实 `SqliteOutboxDbContext` + 真实 outbox 表 + 两条错误装配） |
+| A-F1/A-F2 | EF Outbox：新增 `AddPalOutboxUnitOfWorkForContext<TContext>`（编译期要求 `DbContext, IPalOutboxStore`）；旧 `AddPalOutboxUnitOfWork<TContext>` 保留一个 Minor 窗口并标 `[Obsolete]`，解析期校验同实例 + 拦截器已挂接；教程改为同上下文 `UsePalOutboxInterceptor` | 新增 `OutboxWiringEndToEndTests`（真实 `SqliteOutboxDbContext` + 真实 outbox 表 + 缺拦截器/独立 store/旧入口非 store 上下文三条错误装配） |
 
 ### W2 契约、资源与 API
 
@@ -48,8 +48,8 @@
 | R-F16/R-F23 | FTS DDL 单事务 + 单条多语句命令；复用 PalORM 环境事务 |
 | R-F17 | `SmartEnum.All` 与 `AllShards` 返回 `Array.AsReadOnly` 包装 |
 | R-F24 | `DapperConfiguration.Create` / `DapperSqlDialect.For` / `DapperRetentionStore.Map` 统一 `Enum.IsDefined`；断线续跑 400 响应收敛到 `CreateInvalidBody` |
-| R-F22 | `PendingEvents` 降 `internal` + `InternalsVisibleTo`（公共 API 面收窄） |
-| R-F1 附属 | 删除 `VersionProbeRow`（0 引用）与 Dapper `EventLogRow`/`ToRecordedEvent`（0 引用） |
+| R-F22 | `PendingEvents` 保留公共面并标 `[Obsolete]`（v5.0 移除），内部测试改用 `PendingEventsCore` |
+| R-F1 附属 | `VersionProbeRow` 以 `[Obsolete]` 回归一个 Minor 兼容窗口；删除 Dapper `EventLogRow`/`ToRecordedEvent`（0 引用、非公共类型） |
 | R-F15 局部 | `IsWithinGenericContainingType` 三副本收敛为 `GeneratorSharedHelpers`；`CompressionLevel` 映射收敛为 `CompressionLevelMap`；`RetentionSql` 去掉静默兜底；生成器重复 hint 字典加内容比较器 |
 | R-F（PalORM） | PG 单事件唯一冲突重查失败时保留原始冲突异常（不再被 25P02 替换） |
 
@@ -69,6 +69,20 @@
 | A-F16 | 保留 `AddPalFullStack` 现名，`docs/usage.md`/`docs/features.md` 已声明其等价核心栈、更名留 v5.0 |
 
 ---
+
+### W5 基础库优化轮（T0-T9）
+
+| 项 | 交付 |
+|---|---|
+| T0 | 选择兼容路径：下一版本可按 Minor 发布；破坏性移除留到 v5.0.0 |
+| T6/T7 | 新入口 + 旧入口 `[Obsolete]` + 解析期校验；`PendingEvents`/`VersionProbeRow` 弃用过渡 |
+| T5 | `IPalLogger<T>` 结构化重载（DIM 向后兼容）+ 适配器字段转发 + Outbox/Inbox/Saga 热点迁移 + 事件 ID 常量 |
+| T3 | DapperDbType / RetentionDialect / CompressionLevel 穷尽性测试 |
+| T4 | 轮次注释棘轮（基线 729，新增即红） |
+| T9 | `DomainEventOutboxBridge` 真实 Dapper SQLite 事务测试（提交可见 / 回滚零行） |
+| T1 | 跨栈契约矩阵首批：批标记部分接受在 InMemory/Dapper/EF/PalORM 四栈同组断言；其余四组由成对测试锁定 |
+| T2 | `EfCoreRetentionStore` 在 wslc PG 18.6 / MySQL 8.4 真库的端到端删除测试（环境变量 opt-in） |
+| T8 | 可选包 `PalDDD.Hosting.AspNetCore.OutboxHealth`，旧 Hosting 入口保持不变 |
 
 ## 三、明确不做 / 延后（含复活条件）
 
@@ -90,20 +104,23 @@
 ## 四、验证（本轮实测）
 
 - 编译：`dotnet build --nologo`，0 警告 0 错误（TreatWarningsAsErrors 开启）。
-- 测试：16 个测试项目共 1806 个用例，**1728 通过、78 跳过、0 失败**。
+- 测试：16 个测试项目共 1822 个用例，**1744 通过、78 跳过、0 失败**。
   跳过集中在 PalORM（54，Testcontainers）与 Integration/Messaging.Integration 的方言探针（14/10）。
-- 公共 API 快照：`+8/−5`（新增 `DomainEventOutboxBridge`、`MaxLineBytes`、`EfCoreRetentionStore`
-  两个构造器；删除 `VersionProbeRow` 与 `PendingEvents`；`AddPalOutboxUnitOfWork` 约束收紧
-  不在快照文本中，但属源破坏，见风险 1）。
+- 公共 API 快照：相对首轮提交 `+35/−0`（结构化日志重载、`PalLogEventIds`、可选健康检查包、
+  兼容入口 `AddPalOutboxUnitOfWorkForContext`；`PendingEvents`/`VersionProbeRow` 以 `[Obsolete]`
+  回归）。相对上一发布 v4.0.0 的累计差异包含此前 Unreleased 轮次，不能作为本轮增量引用。
 - 门禁：`encoding-gate`、`count-audit`、`doc-consistency`、`verify-conventions --quick`、
   `license-policy`、`xml-guard` 全部通过。
-- 真库项：F5 的物理名解析由 EF 模型驱动，SQLite 真库用例覆盖表名与列名；PG/MySQL 的
-  运行期行为沿用既有 dialect-probe 车道（本机无 Docker，按仓库口径跳过并在测试计数中披露）。
+- 真库项：F5 的物理名解析由 EF 模型驱动，SQLite 真库用例覆盖表名与列名；
+  `EfCoreRetentionRealProviderTests` 在 wslc PG 18.6 / MySQL 8.4 上通过（环境变量 opt-in，
+  未设置时打印说明并返回）。T1 矩阵当前覆盖批标记部分接受（四栈）与幂等空载荷（Dapper/PalORM
+  交叉读写）；其余三组由对应的成对测试锁定。
 
 ## 五、未决风险
 
-1. `AddPalOutboxUnitOfWork` 的约束收紧是**源破坏**：未实现 `IPalOutboxStore` 的既有调用方
-   需要在升级时改为「业务上下文继承方言 Outbox 基类」。这是有意为之（错误装配此前静默丢事件）。
+1. `AddPalOutboxUnitOfWork` 保留为 `[Obsolete]` 兼容入口，下一版本可按 Minor 发布；调用方
+   应迁移到 `AddPalOutboxUnitOfWorkForContext<TContext>`（编译期要求业务上下文实现
+   `IPalOutboxStore`）。旧入口的运行时校验仍会拦截错误装配。
 2. 投影批量检查点每组多一次 TryStart + MarkCompleted（100 条一组时检查点调用约 2 倍，
    仍比逐事件低一个数量级以上）；`--m2-probe` 阈值已按新形态调整。
 3. `EfCoreRetentionStore` 的表名与列名改为按 EF 模型解析（默认 PascalCase）。直接用

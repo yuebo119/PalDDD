@@ -284,7 +284,9 @@ public sealed class OutboxBatchProcessor
                     catch (Exception delayEx)
                     {
                         delay = TimeSpan.FromSeconds(1);
-                        _logger.Warning($"Outbox: retry backoff computation failed for message {msg.Id}, falling back to 1s delay: {delayEx.Message}");
+                        _logger.Warning(PalLogEventIds.OutboxRetryBackoffFailed,
+                            "Outbox: retry backoff computation failed for message {MessageId}, falling back to 1s delay: {Error}",
+                            msg.Id, delayEx.Message);
                     }
                     var nextAttemptAt = now + delay;
                     // P1 修复（二十一轮）：入库前截断（日志行保留完整消息）——机理见类头常量注释
@@ -303,7 +305,8 @@ public sealed class OutboxBatchProcessor
                         catch (Exception markEx)
                         {
                             ex.Data["MarkError"] = markEx.Message;
-                            _logger.Warning($"Outbox: MarkDead for {msg.Id} failed: {markEx.Message}");
+                            _logger.Warning(PalLogEventIds.OutboxMarkDeadFailed,
+                                "Outbox: MarkDead for {MessageId} failed: {Error}", msg.Id, markEx.Message);
                         }
                         checked { dead++; }
                         PalMetrics.OutboxDead.Add(1); // R1：死信独立计数
@@ -317,13 +320,16 @@ public sealed class OutboxBatchProcessor
                         catch (Exception markEx)
                         {
                             ex.Data["MarkError"] = markEx.Message;
-                            _logger.Warning($"Outbox: ReleaseForRetry for {msg.Id} failed: {markEx.Message}");
+                            _logger.Warning(PalLogEventIds.OutboxReleaseForRetryFailed,
+                                "Outbox: ReleaseForRetry for {MessageId} failed: {Error}", msg.Id, markEx.Message);
                         }
                         checked { retried++; }
                     }
                     // v35 P3（EA2）：日志用进入失败路径时的快照 +1（本次为第 N 次失败）——
                     // 原读 msg.RetryCount + 1 在 InMemory 栈 ReleaseForRetry 就地递增后偏大 1
-                    _logger.Warning($"Outbox: message {msg.Id} processing failed at retry {retryAtFailure + 1}: {ex.Message}");
+                    _logger.Warning(PalLogEventIds.OutboxMessageFailed,
+                        "Outbox: message {MessageId} processing failed at retry {RetryCount}: {Error}",
+                        msg.Id, retryAtFailure + 1, ex.Message);
                     if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
                         checked { persistFailed++; } // R2：Mark 已尝试未落库，独立可见
                 }
@@ -573,7 +579,9 @@ public sealed class OutboxBatchProcessor
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.Warning($"Outbox: batch mark failed for {pending.Count} published message(s), releasing each for retry: {ex.Message}");
+            _logger.Warning(PalLogEventIds.OutboxBatchMarkFailed,
+                "Outbox: batch mark failed for {MessageCount} published message(s), releasing each for retry: {Error}",
+                pending.Count, ex.Message);
             foreach (var msg in pending)
             {
                 TimeSpan delay;
@@ -690,7 +698,9 @@ public sealed class OutboxBatchProcessor
         {
             // 单条持久化失败 — 下轮轮询会重试
             // 最坏情况：消息被多处理一次（幂等消费需在 Handler 中保证）
-            _logger.Warning($"Outbox: state persistence for {messageId} failed: {ex.Message}. Next poll will retry using last persisted state.");
+            _logger.Warning(PalLogEventIds.OutboxStatePersistFailed,
+                "Outbox: state persistence for {MessageId} failed: {Error}. Next poll will retry using last persisted state.",
+                messageId, ex.Message);
             return false;
         }
     }

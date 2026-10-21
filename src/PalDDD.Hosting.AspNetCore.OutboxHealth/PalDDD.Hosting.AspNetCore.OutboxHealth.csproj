@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>PalDDD.Hosting.AspNetCore.OutboxHealth</RootNamespace>
+    <Description>Pal.DDD 可选 Outbox 健康检查包：不需要健康检查的 Hosting 消费方不必再传递引用 Transactions。</Description>
+    <!-- 与 Hosting 同口径：引用链上的 Transactions 为 IsAotCompatible=false，本项目传递该状态。 -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <VerifyReferenceAotCompatibility>false</VerifyReferenceAotCompatibility>
+    <NoWarn>$(NoWarn);CA1812</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PalDDD.Transactions\PalDDD.Transactions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup><Using Include="PalDDD.Transactions" Alias="Transactions"/></ItemGroup>
+</Project>
