@@ -272,7 +272,9 @@ public sealed class InboxProcessor
         using var activity = PalActivitySource.StartInboxProcess(consumerName, "batch");
         var claimed = await batchStore.TryStartProcessingManyAsync(
             consumerName, ids, now, options.ProcessingTimeout, ct).ConfigureAwait(false);
-        var skipped = batch.Count - claimed.Count;
+        // R9：按去重后的 ID 数计算。batch.Count 含批内重复 MessageId，那些条目在认领前已去重，
+        // 计为 skipped 会让 InboxSkipped 指标与 span 标签虚高（实际没有消息被跳过）。
+        var skipped = ids.Count - claimed.Count;
         if (skipped > 0)
         {
             PalMetrics.InboxSkipped.Add(skipped);
@@ -287,6 +289,9 @@ public sealed class InboxProcessor
 
         var succeeded = new List<InboxMessage>(claimed.Count);
         List<Exception>? failures = null;
+        // R9：完成标记是否全部落库。false 时本批处于 processed-pending-confirmation，
+        // 不得输出 1005 "processed"（否则与 1004 自相矛盾）。
+        var marksConfirmed = true;
         // 2026-10-21 契约盘点 R6：批量路径补齐 1006 告警——此前 WarnIfLeaseExceeded 只在
         // 逐条路径调用，批量消费（usage.md 推荐的吞吐路径）在 handler 超过 ProcessingTimeout
         // 时没有任何信号。按批聚合为一条（超限条数 + 最大耗时），避免每批 N 条日志放大；
@@ -359,31 +364,47 @@ public sealed class InboxProcessor
             {
                 var marked = await batchStore.MarkProcessedManyAsync(
                     consumerName, succeeded, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
-                if (marked < succeeded.Count && _logger.IsEnabled(LogLevel.Warning))
+                if (marked < succeeded.Count)
                 {
-                    _logger.Warning(
-                        $"Inbox: batch completion marked {marked}/{succeeded.Count} message(s); unmarked rows stay Processing until lease expiry (at-least-once).");
+                    // R9：部分未命中（租约被抢/令牌不匹配）与整批失败同属"handler 成功但完成标记
+                    // 未全部落库"，与逐条路径 1004 同口径。原实现是无 EventId 的 Warning，
+                    // 按 EventId 过滤的告警规则命中不到。
+                    marksConfirmed = false;
+                    _logger.Warning(PalLogEventIds.InboxMessageProcessedMarkFailed,
+                        "Inbox: batch completion marked {MarkedCount}/{SucceededCount} message(s) for consumer {ConsumerName}; unmarked rows stay Processing until lease expiry (at-least-once).",
+                        marked, succeeded.Count, consumerName);
                 }
             }
             catch (Exception markEx)
             {
                 // handler 已成功：按 at-least-once 返回成功，状态待确认（与逐条路径同语义）。
-                _logger.Error(markEx, "Inbox: batch handler succeeded but MarkProcessedMany failed; state pending confirmation (at-least-once)");
+                marksConfirmed = false;
+                _logger.Error(markEx, PalLogEventIds.InboxMessageProcessedMarkFailed,
+                    "Inbox: batch handler succeeded but MarkProcessedMany failed for {MessageCount} message(s) for consumer {ConsumerName}; state pending confirmation (at-least-once).",
+                    succeeded.Count, consumerName);
             }
         }
 
         if (failures is not null)
         {
+            var aggregate = new AggregateException($"{failures.Count} inbox handler(s) failed.", failures);
+            // R9：批量路径此前不发 1003，只有单条路径发；无 EventId 的 broker 侧字符串无法被
+            // 告警规则命中。按批聚合一条（逐条 MarkFailed 已各自落库），与 1006 的批量口径一致。
+            _logger.Error(aggregate, PalLogEventIds.InboxMessageFailed,
+                "Inbox: {FailedCount} handler(s) failed for consumer {ConsumerName} in one batch; failed records were marked Failed.",
+                failures.Count, consumerName);
             activity?.SetTag("pal.inbox.result", "failed");
             activity?.SetStatus(ActivityStatusCode.Error, $"{failures.Count} handler(s) failed");
-            throw new AggregateException($"{failures.Count} inbox handler(s) failed.", failures);
+            throw aggregate;
         }
 
-        activity?.SetTag("pal.inbox.result", "processed");
-        if (_logger.IsEnabled(LogLevel.Information))
+        activity?.SetTag("pal.inbox.result", marksConfirmed ? "processed" : "processed-pending-confirmation");
+        if (marksConfirmed && _logger.IsEnabled(LogLevel.Information))
+        {
             _logger.Information(PalLogEventIds.InboxBatchProcessed,
                 "Inbox: batch of {MessageCount} message(s) processed for consumer {ConsumerName}",
                 claimed.Count, consumerName);
+        }
         return succeeded.Count;
     }
 
