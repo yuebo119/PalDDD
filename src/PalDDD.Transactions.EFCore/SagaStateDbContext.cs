@@ -114,8 +114,6 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
             return await LeaseViaPostgreSqlAsync(owner, leasedUntil, batchSize, dueBefore, now, ct).ConfigureAwait(false);
         if (IsMySqlProvider())
             return await LeaseViaMySqlAsync(owner, leasedUntil, batchSize, dueBefore, now, ct).ConfigureAwait(false);
-        if (IsSqlServerProvider())
-            return await LeaseViaSqlServerAsync(owner, leasedUntil, batchSize, dueBefore, now, ct).ConfigureAwait(false);
 
         // v25 P2-1：翻页循环防饥饿（镜像 SqliteOutboxDbContext.QueryEligibleAsync 三十九轮形态）——
         // v23 C1 把 LeasedUntil 过滤移到内存后，头部 batchSize 条全为他实例活跃租约时
@@ -240,11 +238,6 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         => Database.IsRelational()
             && Database.ProviderName?.Contains("MySql", StringComparison.OrdinalIgnoreCase) == true;
 
-    /// <summary>SQL Server provider 判定（Microsoft.EntityFrameworkCore.SqlServer）。</summary>
-    private bool IsSqlServerProvider()
-        => Database.IsRelational()
-            && Database.ProviderName?.Contains("SqlServer", StringComparison.OrdinalIgnoreCase) == true;
-
     /// <summary>
     /// PG 单语句租约（2026-10-20 性能轮）：<c>UPDATE ... WHERE saga_id IN (SELECT ... LIMIT ...
     /// FOR UPDATE SKIP LOCKED)</c> + 按精确租约标识回读，两步与批次大小无关。语义与 SQLite
@@ -306,69 +299,6 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         if (connection.State != System.Data.ConnectionState.Open)
             await Database.OpenConnectionAsync(ct).ConfigureAwait(false);
         return MySqlLeasePolicy.UseSkipLocked(connection.ServerVersion);
-    }
-
-    /// <summary>
-    /// SQL Server 单语句租约（2026-10-20 性能轮）：<c>WITH candidates AS (SELECT TOP (@n)
-    /// ... WITH (UPDLOCK, READPAST, ROWLOCK)) UPDATE ... INNER JOIN candidates</c> + 按精确
-    /// 租约标识回读。原跟踪分页回落路径的 <c>Skip/Take</c> 深偏移与全页物化在 SQL Server
-    /// 大表上随历史行数退化。T-SQL 与 SqlServerOutboxDbContext 的租约形态同族。
-    /// </summary>
-    private async ValueTask<IReadOnlyList<TState>> LeaseViaSqlServerAsync(
-        string owner,
-        DateTimeOffset untilValue,
-        int batchSize,
-        DateTimeOffset? dueBefore,
-        DateTimeOffset now,
-        CancellationToken ct)
-    {
-        var (sql, args) = BuildSqlServerLeaseSql(owner, untilValue, batchSize, dueBefore, now);
-        await Database.ExecuteSqlRawAsync(sql, args, ct).ConfigureAwait(false);
-
-        return await SagaStates
-            .Where(s => s.LeasedBy == owner
-                && s.LeasedUntil == untilValue
-                && (s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision))
-            .OrderBy(s => s.SagaId)
-            .Take(batchSize)
-            .ToListAsync(ct).ConfigureAwait(false);
-    }
-
-    /// <summary>SQL Server 租约 SQL 构造：候选集 TOP + UPDLOCK/READPAST，列名取自 EF 模型映射。</summary>
-    private (string Sql, object[] Args) BuildSqlServerLeaseSql(
-        string owner,
-        DateTimeOffset untilValue,
-        int batchSize,
-        DateTimeOffset? dueBefore,
-        DateTimeOffset now)
-    {
-        var ids = ResolveLeaseIdentifiers(mySql: false, sqlServer: true);
-        var dueClause = dueBefore is null
-            ? string.Empty
-            : $"AND ({ids.NextCheckAt} IS NULL OR {ids.NextCheckAt} <= {{4}})";
-        var orderBy = dueBefore is null
-            ? $"CASE WHEN {ids.LeasedUntil} IS NULL THEN 0 ELSE 1 END, {ids.LeasedUntil}, {ids.SagaId}"
-            : $"{ids.NextCheckAt}, {ids.SagaId}";
-        var ownerIndex = dueBefore is null ? 4 : 5;
-        var untilIndex = dueBefore is null ? 5 : 6;
-
-        var sql = $@";WITH candidates AS (
-    SELECT TOP ({{0}}) {ids.SagaId}
-    FROM {ids.Table} WITH (UPDLOCK, READPAST, ROWLOCK)
-    WHERE {ids.Status} IN ({{1}}, {{2}})
-      AND ({ids.LeasedUntil} IS NULL OR {ids.LeasedUntil} <= {{3}})
-      {dueClause}
-    ORDER BY {orderBy}
-)
-UPDATE t
-SET t.{ids.LeasedBy} = {{{ownerIndex}}}, t.{ids.LeasedUntil} = {{{untilIndex}}}, t.{ids.Version} = t.{ids.Version} + 1
-FROM {ids.Table} AS t
-INNER JOIN candidates AS c ON t.{ids.SagaId} = c.{ids.SagaId}";
-
-        var args = dueBefore is null
-            ? new object[] { batchSize, (int)SagaStatus.Active, (int)SagaStatus.AwaitingHumanDecision, now, owner, untilValue }
-            : new object[] { batchSize, (int)SagaStatus.Active, (int)SagaStatus.AwaitingHumanDecision, now, dueBefore.Value, owner, untilValue };
-        return (sql, args);
     }
 
     /// <summary>PG 租约 SQL 构造：标识符取自 EF 模型映射，值全部走 ExecuteSqlRaw 参数占位符。</summary>
@@ -439,13 +369,11 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
 
     /// <summary>租约 SQL 标识符解析（EF 模型映射；MySQL 用反引号，PG/SQLite 用双引号）。</summary>
     private (string Table, string SagaId, string Status, string LeasedBy, string LeasedUntil, string Version, string NextCheckAt)
-        ResolveLeaseIdentifiers(bool mySql, bool sqlServer = false)
+        ResolveLeaseIdentifiers(bool mySql)
     {
         var entityType = Model.FindEntityType(typeof(TState))
             ?? throw new InvalidOperationException($"Entity type '{typeof(TState).FullName}' is not mapped in this model.");
-        var quote = mySql
-            ? (Func<string, string>)QuoteMySqlIdentifier
-            : sqlServer ? QuoteSqlServerIdentifier : QuoteSqliteIdentifier;
+        var quote = mySql ? (Func<string, string>)QuoteMySqlIdentifier : QuoteSqliteIdentifier;
 
         var table = quote(entityType.GetTableName()
             ?? throw new InvalidOperationException($"Entity type '{typeof(TState).FullName}' has no table mapping."));
@@ -465,10 +393,6 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
     /// <summary>MySQL 标识符加引号（反引号 + 反引号转义）。</summary>
     private static string QuoteMySqlIdentifier(string identifier)
         => "`" + identifier.Replace("`", "``", StringComparison.Ordinal) + "`";
-
-    /// <summary>SQL Server 标识符加引号（方括号 + 右方括号转义）。</summary>
-    private static string QuoteSqlServerIdentifier(string identifier)
-        => "[" + identifier.Replace("]", "]]", StringComparison.Ordinal) + "]";
 
     /// <summary>
     /// SQLite 单语句租约（R7）：集合式 UPDATE + 等值守卫回读。语义与跟踪分页路径逐项对齐——

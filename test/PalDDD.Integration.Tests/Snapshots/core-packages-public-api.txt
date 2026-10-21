@@ -229,6 +229,7 @@ class PalDDD.Core.Logging.NullPalLogger<T>
   method System.Void Warning(System.String message)
 static class PalDDD.Core.Logging.PalLogEventIds
   field const System.Int32 InboxBatchProcessed = 1005
+  field const System.Int32 InboxHandlerLeaseExceeded = 1006
   field const System.Int32 InboxMessageFailed = 1003
   field const System.Int32 InboxMessageProcessed = 1002
   field const System.Int32 InboxMessageProcessedMarkFailed = 1004
@@ -1751,9 +1752,6 @@ class PalDDD.Transactions.InterruptStep
   property System.Type DecisionType
   property PalDDD.Transactions.StepDispatchKind DispatchKind
   property System.String InterruptReason
-static class PalDDD.Transactions.MySqlLeasePolicy
-  field const System.String MinimumSkipLockedVersion = 8.0.18
-  method System.Boolean UseSkipLocked(System.String serverVersion)
 class PalDDD.Transactions.OutboxBatchProcessor
   ctor(PalDDD.Transactions.IPalOutboxStore store, PalDDD.Messaging.IMessageBroker broker, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.OutboxOptions> options, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.OutboxBatchProcessor> logger, System.TimeProvider timeProvider, Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory)
   method System.Threading.Tasks.ValueTask ProcessBatchAsync(System.Threading.CancellationToken ct)
@@ -1833,11 +1831,6 @@ struct PalDDD.Transactions.RetentionResult
   method System.Boolean Equals(System.Object obj)
   method System.Int32 GetHashCode()
   method System.String ToString()
-static class PalDDD.Transactions.RetentionSql
-  method System.String IdempotencyDelete(PalDDD.Transactions.RetentionDialect dialect)
-  method System.String InboxDelete(PalDDD.Transactions.RetentionDialect dialect)
-  method System.String OutboxDelete(PalDDD.Transactions.RetentionDialect dialect, System.Boolean includeDead)
-  method System.Object ToTimeParam(PalDDD.Transactions.RetentionDialect dialect, System.DateTimeOffset value, System.Boolean sqliteProviderNative)
 struct PalDDD.Transactions.SagaCompensationStarted
   ctor(ByteAether.Ulid.Ulid SagaId, System.String StepKey)
   property ByteAether.Ulid.Ulid SagaId [init]

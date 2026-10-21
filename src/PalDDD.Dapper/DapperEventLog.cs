@@ -68,6 +68,7 @@ public sealed class DapperEventLog : IEventLog
         TimeProvider? timeProvider = null)
     {
         _connection = connection ?? throw new ArgumentNullException(nameof(connection));
+        DapperConnectionGuard.Validate(connection, dbType);
         _transaction = transaction;
         _dbType = dbType;
         _timeProvider = timeProvider ?? TimeProvider.System;

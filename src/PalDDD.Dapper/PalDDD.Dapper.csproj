@@ -25,6 +25,11 @@
   <ItemGroup>
     <PackageReference Include="Dapper" />
     <PackageReference Include="Dapper.AOT" />
+    <!-- 契约盘点 2026-10-21 核实：三驱动引用是 DapperBulkCopy 的实现需要（PG COPY 的
+         NpgsqlBinaryImporter / MySQL BulkCopy / SQLite 逐条路径均为 provider 原生 API，
+         改成 DbConnection 通用面会丢失批量写能力）。因此 PG-only 消费方当前会连带引入
+         MySQL/SQLite 驱动——拆包需把 DapperBulkCopy 下沉到三个方言包并引入策略抽象，
+         属 v5.0 包图调整项，登记于 CHANGELOG [Unreleased] Known。 -->
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="Npgsql" />
     <PackageReference Include="MySqlConnector" />

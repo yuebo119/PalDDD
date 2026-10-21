@@ -208,6 +208,17 @@ public sealed class SourceCodeGuardTests
                         "Expression .Compile() 调用缺 AOT 豁免标注（NativeAOT 不支持表达式树编译）");
             }
 
+            // Expression.Invoke：EF Core 的 LINQ 提供器无法翻译为 SQL（conventions §10.2），
+            // 组合规约（ISpecification.And/Or/Not）必须走 ParameterReplacer 参数替换。
+            foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (invocation.Expression is not MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Invoke" } access)
+                    continue;
+                if (!access.Expression.ToString().EndsWith("Expression", StringComparison.Ordinal)) continue;
+                yield return Make(file, invocation, "G8",
+                    "Expression.Invoke 无法被 EF Core 翻译为 SQL（conventions §10.2 禁止）——改用 ParameterReplacer 参数替换");
+            }
+
             // dynamic 类型引用：语法树天然排除注释/字符串中的 "dynamic" 字样；
             // 成员访问位置（x.dynamic / x?.dynamic()）的 dynamic 是标识符非类型，排除。
             foreach (var identifier in root.DescendantNodes().OfType<IdentifierNameSyntax>()
@@ -653,6 +664,34 @@ public sealed class SourceCodeGuardTests
                 int N(DynamicHolder h) => h.dynamic;
             }
             class DynamicHolder { public int dynamic => 0; }
+            """, 0),
+        Case("C8 Expression.Invoke 必须红（EF Core 不可翻译，conventions §10.2）",
+            """
+            using System;
+            using System.Linq.Expressions;
+            class C
+            {
+                Expression<Func<int, bool>> And(Expression<Func<int, bool>> l, Expression<Func<int, bool>> r)
+                {
+                    var p = Expression.Parameter(typeof(int));
+                    return Expression.Lambda<Func<int, bool>>(
+                        Expression.AndAlso(Expression.Invoke(l, p), Expression.Invoke(r, p)), p);
+                }
+            }
+            """, 2),
+        Case("C9 Expression.Lambda/AndAlso 组合（参数替换）不计",
+            """
+            using System;
+            using System.Linq.Expressions;
+            class C
+            {
+                Expression<Func<int, bool>> And(Expression<Func<int, bool>> l, Expression<Func<int, bool>> r)
+                {
+                    var p = Expression.Parameter(typeof(int));
+                    return Expression.Lambda<Func<int, bool>>(
+                        Expression.AndAlso(l.Body, r.Body), p);
+                }
+            }
             """, 0),
     ];
 

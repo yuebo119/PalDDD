@@ -55,6 +55,7 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
     public DapperInboxStore(DbConnection connection, DapperDbType dbType, DbTransaction? transaction = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
+        DapperConnectionGuard.Validate(connection, dbType);
         _connection = connection;
         _dialect = DapperSqlDialect.For(dbType);
         _dbType = dbType;
@@ -181,6 +182,7 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
             SqlTemplates.InboxMarkFailed,
                 new { err = failureReason, id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value) }, Tx).ConfigureAwait(false);
     }
+
 
     /// <inheritdoc/>
     public async ValueTask<IReadOnlyList<InboxMessage>> TryStartProcessingManyAsync(

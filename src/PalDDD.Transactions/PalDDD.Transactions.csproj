@@ -19,6 +19,12 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="PalDDD.Transactions.Tests" />
+    <InternalsVisibleTo Include="PalDDD.Integration.Tests" />
+    <!-- 契约盘点 2026-10-21：RetentionSql / MySqlLeasePolicy 由 public 下沉为 internal，
+         仅三栈适配器消费（方言 SQL 与 MySQL 版本策略不进抽象层承诺面）。 -->
+    <InternalsVisibleTo Include="PalDDD.Dapper" />
+    <InternalsVisibleTo Include="PalDDD.PalORM" />
+    <InternalsVisibleTo Include="PalDDD.Transactions.EFCore" />
   </ItemGroup>
 
   <ItemGroup><Using Include="PalDDD.Core" Alias="Core"/><Using Include="PalDDD.Messaging" Alias="Messaging"/><Using Include="PalDDD.Serialization" Alias="Serialization"/></ItemGroup>

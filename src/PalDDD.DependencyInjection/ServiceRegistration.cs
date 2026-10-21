@@ -49,7 +49,14 @@ public static class ServiceRegistration
     }
 
     /// <summary>注册推荐的核心栈：<see cref="AddPalDDD"/> + <see cref="AddPalPipelineBehaviors"/> + <see cref="AddPalIdentity"/>。</summary>
-    /// <remarks>只包含 AOT 安全的核心、CQRS、内存消息能力；序列化、持久化、Broker、ASP.NET Core 适配器仍由对应包显式注册。</remarks>
+    /// <remarks>
+    /// 只包含 AOT 安全的核心、CQRS、内存消息能力；序列化、持久化、Broker、ASP.NET Core 适配器仍由对应包显式注册。
+    /// <para>
+    /// 管道行为（验证/日志）需要 <see cref="IPalLogger{T}"/>——<see cref="AddPalPipelineBehaviors"/>
+    /// 自带该门面的最小注册（依赖宿主 <c>ILogger&lt;T&gt;</c>，无 Provider 时为零输出）。
+    /// <see cref="AddPalLogging(IServiceCollection)"/> 仍可选，只负责追加 ZLogger 控制台 Provider 与日志级别策略。
+    /// </para>
+    /// </remarks>
     public static IServiceCollection AddPalCoreStack(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -96,6 +103,12 @@ public static class ServiceRegistration
     public static IServiceCollection AddPalPipelineBehaviors(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+        // 注册自身依赖的日志门面——LoggingBehavior 的构造函数要求 IPalLogger<T>。
+        // 修复（2026-10-21 契约盘点）：原先只有 AddPalLogging 注册该门面，文档推荐的
+        // AddPalCoreStack + AddPalCommandHandler 路径在首次 dispatch 抛
+        // "Unable to resolve service for type IPalLogger<...>"。门面只依赖 MEL 的
+        // ILogger<T>（AddLogging 提供，无 Provider 时静默），ZLogger 输出仍由 AddPalLogging 决定。
+        EnsureLoggerFacade(services);
         // 互斥（替代十七轮哨兵 PalPipelineBehaviorsMarker，见 P0 决策）：检查服务集合实际状态而非
         // 代理标记——开放注册已存在（防双调）或闭合注册已存在（AddPalCommandHandler/AddPalQueryHandler
         // 已自动闭合注册）时跳过，避免 GetServices<IPipelineBehavior<T,R>>() 叠加出 4 个 behavior
@@ -133,6 +146,7 @@ public static class ServiceRegistration
         where TRequest : CQRS.IRequest<TResponse>
     {
         ArgumentNullException.ThrowIfNull(services);
+        EnsureLoggerFacade(services);
         // 互斥：开放泛型注册已存在时跳过闭合注册（先到先得）——
         // 避免 GetServices<IPipelineBehavior<T,R>>() 叠加出 4 个 behavior（验证/日志重复执行）。
         if (HasOpenGenericPipelineBehaviors(services)) return services;
@@ -141,6 +155,17 @@ public static class ServiceRegistration
         services.TryAddEnumerable(ServiceDescriptor.Scoped<CQRS.IPipelineBehavior<TRequest, TResponse>, CQRS.ValidationBehavior<TRequest, TResponse>>());
         services.TryAddEnumerable(ServiceDescriptor.Scoped<CQRS.IPipelineBehavior<TRequest, TResponse>, CQRS.LoggingBehavior<TRequest, TResponse>>());
         return services;
+    }
+
+    /// <summary>
+    /// 管道行为的最小日志依赖：<c>AddLogging</c>（提供 <c>ILogger&lt;T&gt;</c>，无 Provider 时零输出）
+    /// + <see cref="IPalLogger{T}"/> 门面。与 <see cref="AddPalLogging(IServiceCollection)"/> 的 Provider 配置正交；
+    /// TryAdd 语义保证后者先注册时不覆盖。
+    /// </summary>
+    private static void EnsureLoggerFacade(IServiceCollection services)
+    {
+        services.AddLogging();
+        services.TryAddSingleton(typeof(IPalLogger<>), typeof(PalLogger<>));
     }
 
     /// <summary>是否已注册开放泛型管道行为（<c>IPipelineBehavior&lt;,&gt;</c> 开放定义）</summary>

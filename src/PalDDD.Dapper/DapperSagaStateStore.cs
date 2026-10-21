@@ -73,6 +73,7 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
         DapperDbType dbType = DapperDbType.Sqlite)
     {
         _connection = connection ?? throw new ArgumentNullException(nameof(connection));
+        DapperConnectionGuard.Validate(connection, dbType);
         _transaction = transaction;
         _jsonTypeInfo = jsonTypeInfo;
         // P3 修复（时钟双轨清零）：可选注入，默认 System——与 PalOrmSagaStateStore 对齐

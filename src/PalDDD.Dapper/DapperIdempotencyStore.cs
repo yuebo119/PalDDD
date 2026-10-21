@@ -38,6 +38,7 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore, IIdempotencyStar
         TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
+        DapperConnectionGuard.Validate(connection, dbType);
         _connection = connection;
         _dbType = dbType;
         _transaction = transaction;

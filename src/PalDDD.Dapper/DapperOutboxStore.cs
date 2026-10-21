@@ -95,6 +95,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
+        DapperConnectionGuard.Validate(connection, dbType);
         _connection = connection;
         _dbType = dbType;
         _dialect = DapperSqlDialect.For(dbType);
