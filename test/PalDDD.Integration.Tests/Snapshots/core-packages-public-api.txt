@@ -1292,6 +1292,8 @@ class PalDDD.PalORM.Sqlite.SqliteSagaStateStore<TState>
 # PalDDD.Projections
 interface PalDDD.Projections.IEventReplaySource<TMessage>
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.Projections.ReplayEvent<TMessage>> ReadAsync(System.String sourceName, System.Threading.CancellationToken ct)
+interface PalDDD.Projections.IProjectionBatchHandler<TMessage>
+  method System.Threading.Tasks.ValueTask ProjectBatchAsync(System.Collections.Generic.IReadOnlyList<System.ValueTuple<TMessage, PalDDD.Projections.ProjectionContext>> batch, System.Threading.CancellationToken ct)
 interface PalDDD.Projections.IProjectionCheckpointStore
   method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionCheckpoint> GetAsync(System.String projectionName, System.String sourceName, System.String position, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)

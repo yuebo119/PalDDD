@@ -149,9 +149,11 @@ public sealed class ProjectionProcessor<TMessage>
     }
 
     /// <summary>
-    /// 批量处理一组事件（M2）：只在最后位置做 TryStart/MarkCompleted，组内事件直接调用
-    /// handler。失败时把最后位置标记 Failed；崩溃后从上一个已完成位置重放整组，
-    /// 最多重放 <paramref name="batch"/>.Count 条。返回 0 表示该组已被其他 worker 租用，
+    /// 批量处理一组事件（M2）：只在最后位置做 TryStart/MarkCompleted，组内事件交给
+    /// handler。handler 实现 <see cref="IProjectionBatchHandler{TMessage}"/> 时整组一次
+    /// 调用 <c>ProjectBatchAsync</c>（可批量写），否则逐条 <c>ProjectAsync</c>。失败时把
+    /// 最后位置标记 Failed；崩溃后从上一个已完成位置重放整组，最多重放
+    /// <paramref name="batch"/>.Count 条。返回 0 表示该组已被其他 worker 租用，
     /// 调用方应停止本轮回放并在下次调用重试（不得跳过该组）。
     /// </summary>
     public async ValueTask<int> ProcessBatchAsync(
@@ -181,8 +183,15 @@ public sealed class ProjectionProcessor<TMessage>
 
         try
         {
-            for (var i = 0; i < batch.Count; i++)
-                await _handler.ProjectAsync(batch[i].Message, batch[i].Context, ct).ConfigureAwait(false);
+            if (_handler is IProjectionBatchHandler<TMessage> batchHandler)
+            {
+                await batchHandler.ProjectBatchAsync(batch, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                for (var i = 0; i < batch.Count; i++)
+                    await _handler.ProjectAsync(batch[i].Message, batch[i].Context, ct).ConfigureAwait(false);
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

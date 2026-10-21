@@ -139,6 +139,28 @@ public sealed class RebuilderResumeTests
     }
 
     [Test]
+    public async Task ReplayAsync_BatchHandler_ReceivesWholeGroupsOnce()
+    {
+        var store = new InMemoryProjectionCheckpointStore();
+        var handler = new BatchCountingResumeHandler();
+        var processor = new ProjectionProcessor<ResumeEvent>(handler, store) { CheckpointBatchSize = 4 };
+        List<ReplayEvent<ResumeEvent>> events = [];
+        for (var i = 0; i <= 9; i++)
+            events.Add(new ReplayEvent<ResumeEvent>("orders", i.ToString(), DateTimeOffset.UnixEpoch.AddSeconds(i), new ResumeEvent()));
+        var source = new RecordingResumableSource(events);
+        var rebuilder = new ProjectionRebuilder<ResumeEvent>(
+            handler.ProjectionName, "orders", source, store, processor);
+
+        var processed = await rebuilder.ReplayAsync(CancellationToken.None);
+
+        await Assert.That(processed).IsEqualTo(10);
+        // 实现批量能力后逐条入口不再被调用：三组 4/4/2 各一次。
+        await Assert.That(handler.ProjectAsyncCalls).IsEqualTo(0);
+        await Assert.That(string.Join(",", handler.BatchSizes)).IsEqualTo("4,4,2");
+        await Assert.That(handler.ItemCount).IsEqualTo(10);
+    }
+
+    [Test]
     public async Task ReplayAsync_BatchedCheckpoints_ProcessesAllAndLeavesHighWater()
     {
         var store = new InMemoryProjectionCheckpointStore();
@@ -235,6 +257,31 @@ public sealed class RebuilderResumeTests
         public ValueTask ProjectAsync(ResumeEvent message, ProjectionContext context, CancellationToken ct = default)
         {
             Count++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    /// <summary>批量能力探针：记录每批大小与总项数，逐条入口只计不应被调用。</summary>
+    private sealed class BatchCountingResumeHandler : IProjectionBatchHandler<ResumeEvent>
+    {
+        public List<int> BatchSizes { get; } = [];
+        public int ItemCount { get; private set; }
+        public int ProjectAsyncCalls { get; private set; }
+
+        public string ProjectionName => "order-summary";
+
+        public ValueTask ProjectAsync(ResumeEvent message, ProjectionContext context, CancellationToken ct = default)
+        {
+            ProjectAsyncCalls++;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask ProjectBatchAsync(
+            IReadOnlyList<(ResumeEvent Message, ProjectionContext Context)> batch,
+            CancellationToken ct = default)
+        {
+            BatchSizes.Add(batch.Count);
+            ItemCount += batch.Count;
             return ValueTask.CompletedTask;
         }
     }
