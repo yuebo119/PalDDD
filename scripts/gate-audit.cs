@@ -1223,10 +1223,12 @@ static int SelfTest()
     Case("HasSelfVerification 识别 --selftest 存在", HasSelfVerification("if (args.Contains(\"--selftest\")) return SelfTest();"));
     Case("HasSelfVerification 对无自证脚本返回 false", !HasSelfVerification("Console.WriteLine(\"hi\"); return 0;"));
 
-    // 接线判定口径：名字出现即接线（含变量插值形态）
+    // 接线判定口径：名字出现即接线（含变量插值形态）——R11 F17：两条自测必须调用
+    // 生产判定函数本身（原实现只对 corpus 调 string.Contains，把判定改成 return false
+    // 自测仍绿，形态②回归无保护）。
     var wiredCorpus = "for g in encoding-gate doc-consistency; do dotnet run scripts/$g.cs; done";
-    Case("接线判定命中变量插值形态", wiredCorpus.Contains("encoding-gate", StringComparison.Ordinal));
-    Case("接线判定不误报未出现名", !wiredCorpus.Contains("sibling-map", StringComparison.Ordinal));
+    Case("接线判定命中变量插值形态", AppearsAsExecutableInvocation(wiredCorpus, "encoding-gate"));
+    Case("接线判定不误报未出现名", !AppearsAsExecutableInvocation(wiredCorpus, "sibling-map"));
 
     // T-36（2026-09-22）：子串假阳性——`encoding-gate.cs` 不得把 `gate` 判为已接线。正负例各一。
     Case("接线判定：encoding-gate.cs 不把 gate 判为接线（子串假阳性）",

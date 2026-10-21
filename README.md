@@ -186,6 +186,8 @@ public sealed class CreateOrderHandler(IUnitOfWork uow) : ICommandHandler<Create
 
 ```csharp
 // 1. 注册核心栈（Dispatcher + Pipeline + Ulid 身份；不含序列化/持久化/Broker——由对应包显式注册，见 AddPalCoreStack remarks）
+//    Native AOT 应用不要用本行：它注册开放泛型管道行为，AOT 下注册期抛 NotSupportedException；
+//    改用 AddPalDDD() + AddPalCommandHandler<...>() / AddPalQueryHandler<...>()（见 docs/aot.md）。
 services.AddPalCoreStack();
 
 // 2. 注册命令处理器（编译时类型常量，无装配扫描）

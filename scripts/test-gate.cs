@@ -86,24 +86,48 @@ else
 // steps:/services: 的元审计脚本#4 勘误口径）
 Console.WriteLine();
 Console.WriteLine("─── T-DEF-4: CI job timeout-minutes ───");
-var runsOnRx = new Regex(@"^\s+runs-on:");
+// R11 F11：原实现按行 Contains("timeout-minutes") 计数（注释/步骤级超时都计入），
+// 删除某 job 的超时后加一行注释即可洗白。改为按 jobs 块解析：job 键（2 空格）分段，
+// 只认 job 直属（4 空格）的 timeout-minutes，注释行天然不匹配。
+var jobRx = new Regex(@"^  ([A-Za-z0-9_.-]+):\s*$");
+var jobTimeoutRx = new Regex(@"^ {4}timeout-minutes:\s*\d+");
 var ciFile = Path.Combine(ROOT, ".github", "workflows", "ci.yml");
 var totalJobs = 0;
 var timeouts = 0;
+var currentJobHasTimeout = false;
+var inJobs = false;
 if (File.Exists(ciFile))
 {
     foreach (var line in File.ReadLines(ciFile))
     {
-        if (runsOnRx.IsMatch(line)) totalJobs++;
-        if (line.Contains("timeout-minutes")) timeouts++;
+        if (!inJobs)
+        {
+            if (line.TrimEnd().Equals("jobs:", StringComparison.Ordinal))
+                inJobs = true;
+            continue;
+        }
+
+        if (jobRx.IsMatch(line))
+        {
+            if (totalJobs > 0 && currentJobHasTimeout)
+                timeouts++;
+            totalJobs++;
+            currentJobHasTimeout = false;
+            continue;
+        }
+
+        if (jobTimeoutRx.IsMatch(line))
+            currentJobHasTimeout = true;
     }
+    if (totalJobs > 0 && currentJobHasTimeout)
+        timeouts++;
 }
 if (totalJobs == 0)
 {
     // 全仓扫描修复（空输入假绿）：ci.yml 缺失/改名时 totalJobs=0、timeouts=0，
     // `0 < 0` 为假 → 判 PASS「所有 CI job 均有 timeout-minutes（0 个）」——检查实际没跑。
     // 零 job 亦同（runs-on 正则漂移会让匹配数归零），两类都 fail-closed。
-    Console.WriteLine("FAIL  T-DEF-4  未能从 ci.yml 解析出任何 job（文件缺失或 runs-on 正则漂移）——判定无意义（fail-closed）");
+    Console.WriteLine("FAIL  T-DEF-4  未能从 ci.yml 解析出任何 job（文件缺失或 jobs/job 键正则漂移）——判定无意义（fail-closed）");
     failCount++;
 }
 else if (timeouts < totalJobs)
