@@ -62,6 +62,32 @@ public sealed partial class StreamRunRegistryTests
     }
 
     [Test]
+    public async Task Register_ConcurrentAtCapacity_NeverExceedsMax()
+    {
+        // R11 F19 回归锁：容量判定必须是原子占位。多轮并发注册，任何一轮都不得
+        // 出现两个成功者。
+        for (var round = 0; round < 10; round++)
+        {
+            using var registry = CreateRegistry(out _, maxConcurrentRuns: 1);
+            var successes = 0;
+            var tasks = Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+            {
+                try
+                {
+                    registry.Register(new RegQuery("p"), null, null, new BlockingHandler());
+                    Interlocked.Increment(ref successes);
+                }
+                catch (StreamRunCapacityExceededException)
+                {
+                }
+            })).ToArray();
+
+            await Task.WhenAll(tasks);
+            await Assert.That(successes).IsEqualTo(1);
+        }
+    }
+
+    [Test]
     public async Task Cancel_UnknownRun_ReturnsFalse()
     {
         using var registry = CreateRegistry(out _);

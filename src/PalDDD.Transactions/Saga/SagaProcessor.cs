@@ -321,7 +321,11 @@ TState>
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // 租约靠 LeaseDuration 兜底过期；记录后继续处理下一条
-                _logger.Error(ex, $"Saga {sagaState.SagaId} timeout check failed; lease will expire by LeaseDuration");
+                // R11 F24：使用已定义的 SagaTimeoutCheckFailed（1205）——原字符串重载
+                // 让按 EventId 过滤的告警对单条检查失败零命中。
+                _logger.Error(ex, PalLogEventIds.SagaTimeoutCheckFailed,
+                    "Saga {SagaId} timeout check failed; lease will expire by LeaseDuration",
+                    sagaState.SagaId);
             }
         }
 

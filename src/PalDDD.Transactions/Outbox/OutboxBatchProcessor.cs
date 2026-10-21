@@ -31,6 +31,9 @@ public sealed class OutboxBatchProcessor
     private readonly TimeProvider _timeProvider;
     private readonly IOptionsMonitor<OutboxOptions> _options;
     private readonly Microsoft.Extensions.DependencyInjection.IServiceScopeFactory? _scopeFactory;
+    // R11 F25：Auto 能力回落一次性提示（进程内一次；scoped processor 每 tick 新建，
+    // 实例字段会放大成每 tick 一条）。
+    private static int s_deliveryFallbackLogged;
     // 租约持有者标识 — 从 OutboxOptions.LeaseOwner 读取，支持多实例部署时自定义
 
     public OutboxBatchProcessor(
@@ -686,6 +689,16 @@ public sealed class OutboxBatchProcessor
             // 标记阈值与 BatchSize 对齐（上限 400 = 现有分块宽），把 100 条批的 7 次 UPDATE
             // 收敛为 1 次；时间上界仍由 BatchMarkFlushInterval 兜住。
             threshold = Math.Max(threshold, Math.Min(options.BatchSize, 400));
+
+        // R11 F25：Auto 的能力回落必须可见——原实现静默保留窗口 1/逐条标记，运维会
+        // 以为已启用批处理。进程内只提示一次（scoped processor 每 tick 都会走到这里）。
+        if (options.DeliveryMode == OutboxDeliveryMode.Auto
+            && (!_broker.SupportsConcurrentPublish || _store is not IBatchMarkOutboxStore)
+            && Interlocked.Exchange(ref s_deliveryFallbackLogged, 1) == 0)
+        {
+            _logger.Warning(
+                $"Outbox: DeliveryMode=Auto capability fallback — broker.SupportsConcurrentPublish={_broker.SupportsConcurrentPublish}, store.IsBatchMark={_store is IBatchMarkOutboxStore}; publish window and/or batch mark stay at the configured/serial values.");
+        }
 
         return new DeliveryPolicy(
             window,

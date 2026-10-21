@@ -2306,7 +2306,7 @@ public sealed class SagaStepTests
             };
             return step.PerItemTimeout;
         }).Throws<ArgumentOutOfRangeException>();
-        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.Message).Contains("PerItemTimeout");
     }
 
     [Test]
