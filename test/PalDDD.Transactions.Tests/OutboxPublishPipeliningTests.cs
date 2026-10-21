@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
 using PalDDD.Core.Logging;
 using PalDDD.Messaging;
 using PalDDD.Serialization;
@@ -66,6 +67,61 @@ public sealed class OutboxPublishPipeliningTests
         await Assert.That(store.ReleaseForRetryOrder.Count).IsEqualTo(1);
         await Assert.That(store.ReleaseForRetryOrder[0]).IsEqualTo(store.LeaseOrder[3]);
         await Assert.That(store.ProcessedOrder.Contains(store.LeaseOrder[3])).IsFalse();
+    }
+
+    [Test]
+    public async Task Pipelined_PublishFailure_EmitsStableEventId()
+    {
+        // R11 F8 回归锁：流水线失败路径原用字符串重载，按 EventId 过滤的告警在默认
+        // Auto + 并发 broker 形态下完全不命中。
+        var builder = new MessageCatalogBuilder();
+        builder.Add<PipelinedMessage>(PipeliningJsonContext.Default.PipelinedMessage, "test.pipelined.v1");
+        var catalog = builder.Build();
+        var serializer = new NonNullSerializer();
+        var store = new RecordingOutboxStore(2);
+        var broker = new PipeliningDelayBroker(TimeSpan.Zero, failAtIndex: 0, serializer, catalog, gateFirstPublish: false);
+        var logger = new EventIdCaptureLogger();
+        var processor = new OutboxBatchProcessor(
+            store, broker, serializer, catalog,
+            new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
+            {
+                BatchSize = 2,
+                MaxInFlightPublishes = 2,
+                MaxRetryCount = 3,
+            }),
+            logger);
+
+        await processor.ProcessBatchAsync(CancellationToken.None);
+
+        await Assert.That(logger.EventIds).Contains(PalLogEventIds.OutboxMessageFailed);
+        await Assert.That(store.ProcessedOrder.Count).IsEqualTo(1);
+        await Assert.That(store.ReleaseForRetryOrder.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Pipelined_MarkDeadFailure_DoesNotAbortBatch()
+    {
+        // R11 F10 回归锁：死信标记自身失败（DB 瞬时故障）不得逃出流水线循环——
+        // 原实现让同批其余消息既不处理也不释放。
+        var catalog = new MessageCatalogBuilder().Build(); // 空目录 → 每条走死信
+        var serializer = new NonNullSerializer();
+        var store = new RecordingOutboxStore(3, messageType: "missing.v1", failMarkDeadAtIndex: 0);
+        var broker = new PipeliningDelayBroker(TimeSpan.Zero, failAtIndex: -1, serializer, catalog, gateFirstPublish: false);
+        var logger = new EventIdCaptureLogger();
+        var processor = new OutboxBatchProcessor(
+            store, broker, serializer, catalog,
+            new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
+            {
+                BatchSize = 3,
+                MaxInFlightPublishes = 2,
+                MaxRetryCount = 3,
+            }),
+            logger);
+
+        await processor.ProcessBatchAsync(CancellationToken.None);
+
+        await Assert.That(store.DeadOrder.Count).IsEqualTo(3);
+        await Assert.That(logger.EventIds).Contains(PalLogEventIds.OutboxMarkDeadFailed);
     }
 
     private static async Task<(RecordingOutboxStore Store, PipeliningDelayBroker Broker)> RunBatchAsync(
@@ -179,12 +235,32 @@ public sealed class OutboxPublishPipeliningTests
         public TMessage? Deserialize<TMessage>(ReadOnlySpan<byte> payload, MessageDescriptor descriptor) => default;
     }
 
+    /// <summary>R11 F8：捕获结构化 EventId 重载（字符串重载不计）的日志桩。</summary>
+    private sealed class EventIdCaptureLogger : IPalLogger<OutboxBatchProcessor>
+    {
+        public List<int> EventIds { get; } = [];
+
+        public void Debug(string message) { }
+        public void Information(string message) { }
+        public void Warning(string message) { }
+        public void Error(Exception ex, string message) { }
+        public bool IsEnabled(LogLevel level) => true;
+
+        public void Warning(EventId eventId, string message, params object?[] args) => EventIds.Add(eventId.Id);
+        public void Error(Exception ex, EventId eventId, string message, params object?[] args) => EventIds.Add(eventId.Id);
+    }
+
     /// <summary>租约固定批 + 终态标记顺序记录（ProcessedOrder / ReleaseForRetryOrder）。</summary>
-    private sealed class RecordingOutboxStore(int messageCount) : IPalOutboxStore
+    private sealed class RecordingOutboxStore(
+        int messageCount,
+        string messageType = "test.pipelined.v1",
+        int failMarkDeadAtIndex = -1) : IPalOutboxStore
     {
         public readonly List<PalUlid> LeaseOrder = [];
         public readonly List<PalUlid> ProcessedOrder = [];
         public readonly List<PalUlid> ReleaseForRetryOrder = [];
+        public readonly List<PalUlid> DeadOrder = [];
+        private int _markDeadStarted;
 
         /// <summary>完成计数的线程安全读取（标记在发布续体线程上执行）。</summary>
         public int ProcessedCount
@@ -205,7 +281,7 @@ public sealed class OutboxPublishPipeliningTests
             {
                 messages[i] = new OutboxMessage
                 {
-                    Type = "test.pipelined.v1",
+                    Type = messageType,
                     SchemaVersion = 1,
                     Payload = "{}"u8.ToArray(),
                     ContentType = "application/json",
@@ -228,7 +304,13 @@ public sealed class OutboxPublishPipeliningTests
         }
 
         public ValueTask MarkDeadAsync(OutboxMessage message, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default)
-            => ValueTask.CompletedTask;
+        {
+            lock (DeadOrder) DeadOrder.Add(message.Id);
+            var index = Interlocked.Increment(ref _markDeadStarted) - 1;
+            if (index == failMarkDeadAtIndex)
+                throw new InvalidOperationException("mark dead failure (test)");
+            return ValueTask.CompletedTask;
+        }
 
         public ValueTask ReleaseForRetryAsync(OutboxMessage message, string failureReason, DateTimeOffset nextAttemptAt, CancellationToken ct = default)
         {
