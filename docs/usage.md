@@ -246,7 +246,7 @@ services.AddPalOutbox();
 
 **并行发布（3.0.0 起）**：`OutboxOptions.MaxDegreeOfParallelism`（默认 1，经 `AddPalOutbox(o => o.MaxDegreeOfParallelism = n)` 配置）>1 时，批内消息按分区交由 per-worker scope（独立 store/DbContext 实例）并行完成「反序列化 → 发布 → 标记」，吞吐随并行度提升；租约/fencing 互斥不受影响。**前提**：① broker 发布须线程安全（Kafka producer 天然支持；RabbitMQ 单 channel 并发发布的 7.x 语义已核实——publisher-confirms 仅护帧发送段、确认等待不串行）；② 消费方幂等（并行加速下乱序提交概率上升）。直构造 `OutboxBatchProcessor` 的调用方不受影响（`IServiceScopeFactory` 为可选尾参；并行度 >1 且缺失时运行期 fail-fast 并给出指引）。
 
-**自动投递策略（2026-10-19，ADR-033）**：`DeliveryMode.Auto` 默认开启。broker 声明 `SupportsConcurrentPublish` 时发布窗口至少 16；store 实现 `IBatchMarkOutboxStore` 时终态标记阈值至少 16，并在 `BatchMarkFlushInterval`（默认 1 秒）到点时冲刷，重复窗口不再由整批时长放大。broker 同时实现 `SupportsRawPublish` 时，Outbox 直接发送持久化字节，跳过反序列化与再序列化。需要逐条确认的旧行为时显式配置 `DeliveryMode = Serial`；`MaxInFlightPublishes`/`BatchMarkThreshold` 仍可覆盖自动值。Kafka 窗口化要求幂等 producer：调用方未显式配置 `EnableIdempotence`/`Acks`/`MaxInFlight`/`MessageSendMaxRetries` 时框架默认开启幂等（acks=all），因此 Kafka 默认具备升窗条件；显式设置任一项则保持调用方取舍，此时仅在 `EnableIdempotence=true` 时升窗。
+**自动投递策略（2026-10-19，ADR-033）**：`DeliveryMode.Auto` 默认开启。broker 声明 `SupportsConcurrentPublish` 时发布窗口至少 16（`MaxInFlightPublishes` 显式更大的值参与取大）；store 实现 `IBatchMarkOutboxStore` 时终态标记阈值提升到 `min(BatchSize, 400)`（`BatchSize` 默认 100，即有效值 100；上限 400 是现有分块宽），并在 `BatchMarkFlushInterval`（默认 1 秒）到点时冲刷，重复窗口不再由整批时长放大。两个选项自身的默认值都是 1，`Serial` 模式下才逐字生效；Auto 会按能力提升，不是「默认逐条确认」。broker 同时实现 `SupportsRawPublish` 时，Outbox 直接发送持久化字节，跳过反序列化与再序列化。需要逐条确认的旧行为时显式配置 `DeliveryMode = Serial`。Kafka 窗口化要求幂等 producer：调用方未显式配置 `EnableIdempotence`/`Acks`/`MaxInFlight`/`MessageSendMaxRetries` 时框架默认开启幂等（acks=all），因此 Kafka 默认具备升窗条件；显式设置任一项则保持调用方取舍，此时仅在 `EnableIdempotence=true` 时升窗。
 
 EF 栈的 `IPalOutboxStore` / `IInboxStore` / `ISagaStateStore<T>` / `IIdempotencyStore` / `IProjectionCheckpointStore` 由各适配器包的 `AddPal*EfCore` 扩展注册（与 Dapper/PalORM 栈的 `AddPal*` 入口对称）。这些扩展**不**注册 `DbContext` 本身（provider 选择权在调用方），需与 `AddDbContext` 配套：
 
@@ -326,7 +326,7 @@ var processed = await inbox.TryProcessAsync(
 
 `false` 表示该消息已处理或仍在其他消费者处理中。
 
-**处理租约契约**：`InboxOptions.ProcessingTimeout`（默认 5 分钟）必须大于最慢 handler 的执行时长。单次处理超过该值后，同一 `(ConsumerName, MessageId)` 可被第二个消费者重新认领并并发执行，副作用的重复发生不会自动去重。`InboxProcessor` 在 handler 时长达到该值时记录 `InboxHandlerLeaseExceeded`（EventId 1006）告警；长耗时 handler 请显式调大该选项。
+**处理租约契约**：`InboxOptions.ProcessingTimeout`（默认 5 分钟）必须大于最慢 handler 的执行时长。单次处理超过该值后，同一 `(ConsumerName, MessageId)` 可被第二个消费者重新认领并并发执行，副作用的重复发生不会自动去重。`InboxProcessor` 在 handler 时长达到该值时记录 `InboxHandlerLeaseExceeded`（EventId 1006）告警：逐条路径每条一条，批量路径按批聚合一条（含超限条数与最大耗时，计时起点为整批认领时刻）；长耗时 handler 请显式调大该选项。
 
 `InboxProcessor` 会发出 `Inbox Process` span。它使用同一个 `PalActivitySource.Name`，仅包含 `pal.inbox.consumer` 和 `pal.inbox.result` 标签——`pal.inbox.message_id` 已按 ITM-229 标准从 tag 移除（高基数：每消息唯一，且可能含业务 ID）；结果值为 `processed`、`skipped` 或 `failed`。
 
@@ -350,7 +350,7 @@ await using var subscription = await consumer.StartAsync(
     maxDelay: TimeSpan.FromMilliseconds(50));
 ```
 
-消息 ID 默认取 `MessageConsumeContext.MessageId`（Kafka 消息 Key / RabbitMQ `BasicProperties.MessageId`，发布侧由框架写入）；broker 不提供消息 ID 时传入 `messageIdSelector`，两者都无则启动后首批快速失败。store 实现 `IBatchInboxStore` 时每批一次认领与一次完成往返（Dapper PG/SQLite 各 1 次、MySQL 4 次），否则自动回落逐条 `TryProcessAsync`。broker 仍是 at-most-once：批内失败的条目被标记 Failed，不会由 broker 重投。
+消息 ID 默认取 `MessageConsumeContext.MessageId`（Kafka 消息 Key / RabbitMQ `BasicProperties.MessageId`，发布侧由框架写入）；broker 不提供消息 ID 时传入 `messageIdSelector`，两者都无则启动后首批快速失败。store 实现 `IBatchInboxStore` 时每批一次认领与一次完成往返（Dapper PG/SQLite 各 1 次、MySQL 4 次），否则自动回落逐条 `TryProcessAsync`。**当前实现 `IBatchInboxStore` 的是 Dapper 与 InMemory；PalORM 与 EF 的 Inbox store 回落逐条**（每消息 2 次往返），`InboxProcessor` 会在该 processor 实例首次批量调用时记录一次 Information 说明回落（含 store 类型与消费者名），此后不再重复。broker 仍是 at-most-once：批内失败的条目被标记 Failed，不会由 broker 重投。
 
 生产环境可引用 `PalDDD.Transactions.EFCore` 程序集，`using PalDDD.Transactions;` 后派生 `InboxDbContext`，并通过 DI 将该上下文作为 `IInboxStore` 使用。适配器会配置 `(ConsumerName, MessageId)` 唯一索引、processed 时间索引和 lease 状态索引；已处理消息返回 `null`，未超时 `Processing` 消息返回 `null`，失败或超时消息会重新进入 `Processing` 以支持 broker 重投递。
 

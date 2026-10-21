@@ -32,6 +32,10 @@ public sealed class InboxProcessor
     private readonly TimeProvider _timeProvider;
     private readonly IOptionsMonitor<InboxOptions> _options;
 
+    // 2026-10-21 契约盘点 R6：IBatchInboxStore 缺失时的回落只提示一次（每 processor 实例），
+    // 避免每批 50ms 一条的日志放大；置位在读 IsEnabled 之后，级别临时关闭时不吞掉后续开启。
+    private int _batchFallbackLogged;
+
     public InboxProcessor(
         IInboxStore store,
         IOptionsMonitor<InboxOptions> options,
@@ -189,6 +193,23 @@ public sealed class InboxProcessor
     }
 
     /// <summary>
+    /// 批量优化不可用的一次性提示（2026-10-21 契约盘点 R6）：store 未实现
+    /// <see cref="IBatchInboxStore"/> 时每消息仍是 2 次往返，此前文档说明回落但运行期
+    /// 无任何信号，PalORM/EF 消费者按吞吐选型时无从发现。每 processor 实例只记一次，
+    /// 避免每批一条的日志放大。
+    /// </summary>
+    private void LogBatchFallbackOnce(string consumerName)
+    {
+        if (!_logger.IsEnabled(LogLevel.Information))
+            return;
+        if (Interlocked.Exchange(ref _batchFallbackLogged, 1) != 0)
+            return;
+
+        _logger.Information(
+            $"Inbox: store {_store.GetType().Name} does not implement IBatchInboxStore; batch consumption for consumer {consumerName} falls back to per-item TryProcessAsync (two round trips per message).");
+    }
+
+    /// <summary>
     /// 批量处理消息（2026-10-21）：一次认领、逐条执行、一次批量完成标记。存储未实现
     /// <see cref="IBatchInboxStore"/> 时回落逐条路径。单个 handler 失败不中断其余；
     /// 成功项批量标记，失败项逐条标记后聚合抛出。返回成功处理的消息数。
@@ -211,6 +232,7 @@ public sealed class InboxProcessor
             // 由 TryProcessAsync 标 Failed 后继续处理其余，最后聚合抛出。原实现让首个 handler
             // 异常中止整批，第 2..N 条既不认领也不标记；投递侧是 at-most-once（Kafka 自动提交 /
             // RabbitMQ requeue:false），这些消息不会重投。
+            LogBatchFallbackOnce(consumerName);
             var processedFallback = 0;
             List<Exception>? fallbackFailures = null;
             foreach (var (messageId, message) in batch)
@@ -265,6 +287,33 @@ public sealed class InboxProcessor
 
         var succeeded = new List<InboxMessage>(claimed.Count);
         List<Exception>? failures = null;
+        // 2026-10-21 契约盘点 R6：批量路径补齐 1006 告警——此前 WarnIfLeaseExceeded 只在
+        // 逐条路径调用，批量消费（usage.md 推荐的吞吐路径）在 handler 超过 ProcessingTimeout
+        // 时没有任何信号。按批聚合为一条（超限条数 + 最大耗时），避免每批 N 条日志放大；
+        // 计时起点与逐条路径一致取认领时刻 now（processing_started_at 同源），批内后段消息
+        // 等待前序 handler 的时长同样计入其租约老化，属真实风险而非噪声。
+        var leaseExceeded = 0;
+        long maxLeaseElapsedMs = 0;
+        void ObserveLease()
+        {
+            var elapsed = _timeProvider.GetUtcNow() - now;
+            if (elapsed < options.ProcessingTimeout)
+                return;
+            leaseExceeded++;
+            var elapsedMs = (long)elapsed.TotalMilliseconds;
+            if (elapsedMs > maxLeaseElapsedMs)
+                maxLeaseElapsedMs = elapsedMs;
+        }
+
+        void FlushLeaseWarning()
+        {
+            if (leaseExceeded == 0)
+                return;
+            _logger.Warning(PalLogEventIds.InboxHandlerLeaseExceeded,
+                "Inbox: {Count} handler(s) for consumer {ConsumerName} in one batch reached ProcessingTimeout {TimeoutMs}ms (max {MaxElapsedMs}ms); the records may have been re-claimed and executed concurrently. Configure InboxOptions.ProcessingTimeout above the longest handler duration.",
+                leaseExceeded, consumerName, (long)options.ProcessingTimeout.TotalMilliseconds, maxLeaseElapsedMs);
+        }
+
         foreach (var record in claimed)
         {
             try
@@ -272,14 +321,19 @@ public sealed class InboxProcessor
                 await handler(byId[record.MessageId], ct).ConfigureAwait(false);
                 succeeded.Add(record);
                 PalMetrics.InboxProcessed.Add(1);
+                ObserveLease();
             }
             catch (OperationCanceledException)
             {
                 // 取消：不标 Failed，已认领记录滞留 Processing 至租约到期（与逐条路径同语义）。
+                // 超限告警在抛出前冲刷——取消不能成为静默窗口。
+                ObserveLease();
+                FlushLeaseWarning();
                 throw;
             }
             catch (Exception ex)
             {
+                ObserveLease();
                 (failures ??= []).Add(ex);
                 PalMetrics.InboxFailed.Add(1);
                 try
@@ -295,6 +349,9 @@ public sealed class InboxProcessor
                 }
             }
         }
+
+        // 批末冲刷：成功/失败/混合批次都可见（取消路径已在 catch 内提前冲刷）。
+        FlushLeaseWarning();
 
         if (succeeded.Count > 0)
         {

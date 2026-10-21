@@ -131,9 +131,11 @@ public sealed class OutboxOptions
 
     /// <summary>
     /// 发布确认流水线窗口（T3.1，2026-10-11 优化实施轮）——分区内同时处于 in-flight 的
-    /// 发布确认数上限。<b>默认 1 = 串行逐条确认（既有行为逐字不变）</b>；<c>&gt;1</c> 启用
-    /// 流水线：broker 确认往返不再逐条串行相乘（收益量级见 performance.md 投递吞吐段：
-    /// RTT 主导场景为窗口量级）。
+    /// 发布确认数上限。<b>选项默认 1</b>（<see cref="OutboxDeliveryMode.Serial"/> 下即
+    /// 串行逐条确认）；<see cref="OutboxDeliveryMode.Auto"/>（默认）且 broker 声明
+    /// <c>SupportsConcurrentPublish</c> 时由投递策略提升到至少 16（显式大于 16 的值参与取大）。
+    /// <c>&gt;1</c> 启用流水线：broker 确认往返不再逐条串行相乘（收益量级见
+    /// performance.md 投递吞吐段：RTT 主导场景为窗口量级）。
     /// <para>
     /// ⚠️ 语义边界：①发布按分区序启动，<b>出窗处理按完成序</b>（2026-10-21 起）——
     /// 单条慢投递只占自己的窗口槽，不阻塞已完成消息的标记与新发布启动；标记顺序不再
@@ -151,8 +153,11 @@ public sealed class OutboxOptions
     /// <summary>
     /// 终态标记批量化阈值（R4/P0-2，ADR-027，2026-10-14 性能实施轮）——成功路径的
     /// MarkProcessed 累积到本值后经 <c>IBatchMarkOutboxStore.MarkProcessedBatchAsync</c>
-    /// 单语句批量写（按 RetryCount 分组，组数 = 批内去重重试计数数）。<b>默认 1 = 逐条
-    /// 标记（既有行为逐字不变）</b>；<c>&gt;1</c> 启用批量：标记往返从每消息 1 次降为
+    /// 单语句批量写（按 RetryCount 分组，组数 = 批内去重重试计数数）。<b>选项默认 1</b>
+    /// （<see cref="OutboxDeliveryMode.Serial"/> 下即逐条标记）；<see cref="OutboxDeliveryMode.Auto"/>
+    /// （默认）且 store 实现 <c>IBatchMarkOutboxStore</c> 时由投递策略提升到
+    /// <c>min(BatchSize, 400)</c>（<see cref="BatchSize"/> 默认 100，即有效值 100），
+    /// 显式设置更大的值参与取大。<c>&gt;1</c> 启用批量：标记往返从每消息 1 次降为
     /// 每批（组）1 次——远程 DB 上与 T3.1 流水线化同为主吞吐杠杆（T0.2 量具实测逐条
     /// 确认串行化占投递耗时 80% @RTT20ms）。
     /// <para>
@@ -162,8 +167,10 @@ public sealed class OutboxOptions
     /// store 实现 <c>IBatchMarkOutboxStore</c>（Dapper/EF Core/InMemory/PalORM 四栈实现，
     /// PalORM 2026-10-16 补齐——until 编码三方言探针实证，见 ADR-027）；③失败路径（死信/重试释放）仍逐条即时标记不变；
     /// ④分区内标记批序 = 出窗完成序（2026-10-21 起；窗口 16 时首条慢发布的消息标记
-    /// 落在其余 15 条之后，原「租约序」声明失实）。启动期经 <c>ValidateOnStart</c>
-    /// 校验 ≥ 1。单语句组内行数上限 400（SQLite 参数上限 999 防御，实现内分块）。
+    /// 落在其余 15 条之后，原「租约序」声明失实）；⑤Auto 提升后的重复窗口上界由
+    /// <see cref="BatchMarkFlushInterval"/> 加在途发布时长界定，不随本值线性放大。
+    /// 启动期经 <c>ValidateOnStart</c> 校验 ≥ 1。单语句组内行数上限 400
+    /// （SQLite 参数上限 999 防御，实现内分块）。
     /// </para>
     /// </summary>
     public int BatchMarkThreshold { get; set; } = 1;
