@@ -388,7 +388,17 @@ public sealed class OutboxBatchProcessor
 
         async ValueTask HandleDeadAsync(OutboxMessage msg, string reason)
         {
-            await _store.MarkDeadAsync(msg, Core.FailureReason.Normalize(reason), now, ct).ConfigureAwait(false);
+            // R11 F10：死信标记自身失败不得中止整批（镜像串行路径 :301-312）——原裸调
+            // 让 DB 瞬时故障逃出流水线循环，同批其余消息既不发布也不释放。
+            try
+            {
+                await _store.MarkDeadAsync(msg, Core.FailureReason.Normalize(reason), now, ct).ConfigureAwait(false);
+            }
+            catch (Exception markEx) when (markEx is not OperationCanceledException)
+            {
+                _logger.Warning(PalLogEventIds.OutboxMarkDeadFailed,
+                    "Outbox: MarkDead for {MessageId} failed: {Error}", msg.Id, markEx.Message);
+            }
             checked { dead++; }
             PalMetrics.OutboxDead.Add(1);
             if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
@@ -431,7 +441,9 @@ public sealed class OutboxBatchProcessor
                 catch (Exception delayEx)
                 {
                     delay = TimeSpan.FromSeconds(1);
-                    _logger.Warning($"Outbox: retry backoff computation failed for message {msg.Id}, falling back to 1s delay: {delayEx.Message}");
+                    _logger.Warning(PalLogEventIds.OutboxRetryBackoffFailed,
+                        "Outbox: retry backoff computation failed for message {MessageId}, falling back to 1s delay: {Error}",
+                        msg.Id, delayEx.Message);
                 }
                 var nextAttemptAt = now + delay;
                 var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
@@ -444,7 +456,8 @@ public sealed class OutboxBatchProcessor
                     catch (Exception markEx)
                     {
                         ex.Data["MarkError"] = markEx.Message;
-                        _logger.Warning($"Outbox: MarkDead for {msg.Id} failed: {markEx.Message}");
+                        _logger.Warning(PalLogEventIds.OutboxMarkDeadFailed,
+                            "Outbox: MarkDead for {MessageId} failed: {Error}", msg.Id, markEx.Message);
                     }
                     checked { dead++; }
                     PalMetrics.OutboxDead.Add(1);
@@ -458,11 +471,14 @@ public sealed class OutboxBatchProcessor
                     catch (Exception markEx)
                     {
                         ex.Data["MarkError"] = markEx.Message;
-                        _logger.Warning($"Outbox: ReleaseForRetry for {msg.Id} failed: {markEx.Message}");
+                        _logger.Warning(PalLogEventIds.OutboxReleaseForRetryFailed,
+                            "Outbox: ReleaseForRetry for {MessageId} failed: {Error}", msg.Id, markEx.Message);
                     }
                     checked { retried++; }
                 }
-                _logger.Warning($"Outbox: message {msg.Id} processing failed at retry {retryAtFailure + 1}: {ex.Message}");
+                _logger.Warning(PalLogEventIds.OutboxMessageFailed,
+                    "Outbox: message {MessageId} processing failed at retry {RetryCount}: {Error}",
+                    msg.Id, retryAtFailure + 1, ex.Message);
                 if (!await PersistSingleAsync(msg.Id, ct).ConfigureAwait(false))
                     checked { persistFailed++; }
             }
@@ -592,7 +608,9 @@ public sealed class OutboxBatchProcessor
                 catch (Exception delayEx)
                 {
                     delay = TimeSpan.FromSeconds(1);
-                    _logger.Warning($"Outbox: retry backoff computation failed for message {msg.Id}, falling back to 1s delay: {delayEx.Message}");
+                    _logger.Warning(PalLogEventIds.OutboxRetryBackoffFailed,
+                        "Outbox: retry backoff computation failed for message {MessageId}, falling back to 1s delay: {Error}",
+                        msg.Id, delayEx.Message);
                 }
                 var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
                 try
@@ -602,7 +620,8 @@ public sealed class OutboxBatchProcessor
                 catch (Exception markEx)
                 {
                     ex.Data["MarkError"] = markEx.Message;
-                    _logger.Warning($"Outbox: ReleaseForRetry for {msg.Id} failed: {markEx.Message}");
+                    _logger.Warning(PalLogEventIds.OutboxReleaseForRetryFailed,
+                        "Outbox: ReleaseForRetry for {MessageId} failed: {Error}", msg.Id, markEx.Message);
                 }
             }
             pending.Clear();
