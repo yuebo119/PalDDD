@@ -10,22 +10,35 @@ namespace PalDDD.Transactions.Tests;
 // ═══════════════════════════════════════════════════════════════
 // 🚇 T3.1 发布确认流水线窗口锁定测试（2026-10-11 优化实施轮）
 // ═══════════════════════════════════════════════════════════════
-// 三件锁定（窗口 >1 才激活；默认 1 的串行行为由既有 OutboxProcessorTests 覆盖）：
-// 1. 满批窗口处理：全部消息 processed 且标记顺序 == 租约顺序（FIFO 出窗保序）
+// 四件锁定（窗口 >1 才激活；默认 1 的串行行为由既有 OutboxProcessorTests 覆盖）：
+// 1. 满批窗口处理：全部消息 processed（完成序不保证与启动序一致）
 // 2. 窗口上限实测：in-flight 并发峰值 ≤ 窗口且 > 1（流水线激活的直接证明）
 // 3. 窗口下单条发布失败：失败消息走 ReleaseForRetry、其余照常 processed（失败语义镜像串行）
+// 4. 完成序（2026-10-21）：队头慢投递不阻塞后续已完成消息的标记（FIFO 形态会阻塞）
 // ═══════════════════════════════════════════════════════════════
 
 public sealed class OutboxPublishPipeliningTests
 {
     [Test]
-    public async Task Pipelined_FullBatch_AllProcessedInStartOrder()
+    public async Task Pipelined_FullBatch_AllProcessed()
     {
         var (store, broker) = await RunBatchAsync(window: 4, messageCount: 8);
 
         await Assert.That(store.ProcessedOrder.Count).IsEqualTo(8);
-        await Assert.That(store.LeaseOrder.SequenceEqual(store.ProcessedOrder)).IsTrue();
+        await Assert.That(store.ProcessedOrder.ToHashSet().SetEquals(store.LeaseOrder)).IsTrue();
         await Assert.That(store.ReleaseForRetryOrder.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Pipelined_HeadOfLineSlowPublish_DoesNotBlockLaterMarks()
+    {
+        // 首条 150ms、其余 10ms：完成序下后 7 条先标记，慢消息最后完成。
+        var (store, _) = await RunBatchAsync(
+            window: 4, messageCount: 8, slowFirstLatency: TimeSpan.FromMilliseconds(150));
+
+        await Assert.That(store.ProcessedOrder.Count).IsEqualTo(8);
+        await Assert.That(store.ProcessedOrder[^1]).IsEqualTo(store.LeaseOrder[0]);
+        await Assert.That(store.ProcessedOrder.SequenceEqual(store.LeaseOrder)).IsFalse();
     }
 
     [Test]
@@ -49,14 +62,15 @@ public sealed class OutboxPublishPipeliningTests
     }
 
     private static async Task<(RecordingOutboxStore Store, PipeliningDelayBroker Broker)> RunBatchAsync(
-        int window, int messageCount, int failAtIndex = -1)
+        int window, int messageCount, int failAtIndex = -1, TimeSpan? slowFirstLatency = null)
     {
         var builder = new MessageCatalogBuilder();
         builder.Add<PipelinedMessage>(PipeliningJsonContext.Default.PipelinedMessage, "test.pipelined.v1");
         var catalog = builder.Build();
         var serializer = new NonNullSerializer();
         var store = new RecordingOutboxStore(messageCount);
-        var broker = new PipeliningDelayBroker(TimeSpan.FromMilliseconds(30), failAtIndex, serializer, catalog);
+        var broker = new PipeliningDelayBroker(
+            TimeSpan.FromMilliseconds(30), failAtIndex, serializer, catalog, slowFirstLatency);
         var processor = new OutboxBatchProcessor(
             store, broker, serializer, catalog,
             new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
@@ -74,9 +88,11 @@ public sealed class OutboxPublishPipeliningTests
     // ─── stubs ─────────────────────────────────────────────────
     // PipelinedMessage/PipeliningJsonContext 在文件末命名空间层级声明（SYSLIB1032 嵌套链规避）
 
-    /// <summary>固定延迟发布 + 并发峰值追踪；failAtIndex 的发布按启动序计数命中即抛。</summary>
+    /// <summary>固定延迟发布 + 并发峰值追踪；failAtIndex 的发布按启动序计数命中即抛；
+    /// slowFirstLatency 只作用于启动序第一条（队头慢投递场景）。</summary>
     private sealed class PipeliningDelayBroker(
-        TimeSpan latency, int failAtIndex, IMessageSerializer serializer, IMessageCatalog catalog)
+        TimeSpan latency, int failAtIndex, IMessageSerializer serializer, IMessageCatalog catalog,
+        TimeSpan? slowFirstLatency)
         : MessageBrokerBase(serializer, catalog)
     {
         private int _inFlight;
@@ -92,12 +108,14 @@ public sealed class OutboxPublishPipeliningTests
             // 峰值更新（非原子读改写——观测桩，低估方向安全：只可能少计不多计）
             if (entered > Volatile.Read(ref MaxObservedInFlight))
                 Volatile.Write(ref MaxObservedInFlight, entered);
+            var index = Interlocked.Increment(ref _started) - 1;
             try
             {
-                if (failAtIndex >= 0 && Interlocked.Increment(ref _started) - 1 == failAtIndex)
+                if (failAtIndex >= 0 && index == failAtIndex)
                     throw new InvalidOperationException("broker publish failure (test)");
-                if (latency > TimeSpan.Zero)
-                    await Task.Delay(latency, ct).ConfigureAwait(false);
+                var delay = index == 0 && slowFirstLatency is { } slow ? slow : latency;
+                if (delay > TimeSpan.Zero)
+                    await Task.Delay(delay, ct).ConfigureAwait(false);
             }
             finally
             {

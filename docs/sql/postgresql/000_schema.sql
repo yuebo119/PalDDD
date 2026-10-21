@@ -116,3 +116,11 @@ CREATE TABLE projection_checkpoints (
     PRIMARY KEY (projection_name, source_name, position)
 );
 CREATE INDEX idx_checkpoint_status ON projection_checkpoints(projection_name, source_name, status);
+
+-- ── 序列缓存（2026-10-21）──
+-- BIGSERIAL 背后的序列默认 CACHE 1：每次 nextval 推进序列页并落 WAL，高写入下成为
+-- 单点争用。这两列只作代理键/全局排序（EventLog 位置预留器本就按块跳号），允许进程
+-- 崩溃后最多 100 的跳号，故把持久化开销按 100 次摊薄。已有库执行同一 ALTER 即可，
+-- 见 docs/sql/migration-2026-10-21-pg-sequence-cache.md。
+ALTER SEQUENCE inbox_messages_id_seq CACHE 100;
+ALTER SEQUENCE events_global_position_seq CACHE 100;

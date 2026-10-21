@@ -68,9 +68,11 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         // ct），半坏 broker 下 ProduceAsync 的等待时长由本 config 的 librdkafka 属性控制：
         // message.timeout.ms（默认 300s，建议按业务 SLO 显式设置）+ delivery.timeout.ms。
         producerConfig.MessageTimeoutMs ??= 30_000;
+        ApplyIdempotenceDefault(producerConfig);
         _logger = logger;
         // Outbox 自动升窗前提：幂等 producer 才保证窗口内重试不乱序。
-        // 显式关闭或未设置时保守返回 false，处理器回落逐条确认。
+        // 显式关闭幂等（或显式自定义 acks/retries/in-flight 而未开幂等）时返回 false，
+        // 处理器回落逐条确认。
         _concurrentPublishSafe = producerConfig.EnableIdempotence == true;
         // 审计对齐（2026-10-08 全量 API 审计 P2）：官方示例标配三 handler——producer 的
         // 后台事件（librdkafka 线程上的错误/日志/统计）此前结构性不可见
@@ -104,6 +106,24 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         _consumerConfig = consumerConfig;
         _logger = logger;
         _concurrentPublishSafe = false; // 注入 producer 无法探测 EnableIdempotence，保守关闭
+    }
+
+    /// <summary>
+    /// 幂等生产端默认打开（2026-10-21）：仅在调用方未触碰幂等相关四项
+    /// （EnableIdempotence/Acks/MaxInFlight/MessageSendMaxRetries）时生效——显式设置
+    /// 任一项说明有明确取舍（吞吐/延迟/兼容旧 broker），框架不擅自改写。开启后
+    /// librdkafka 按 acks=all、retries=INT_MAX、max.in.flight≤5 运行，重试不产生重复
+    /// 也不乱序；这也是 Outbox 自动并发窗口（SupportsConcurrentPublish）的前提。
+    /// </summary>
+    internal static void ApplyIdempotenceDefault(ProducerConfig config)
+    {
+        if (config.EnableIdempotence is null
+            && config.Acks is null
+            && config.MaxInFlight is null
+            && config.MessageSendMaxRetries is null)
+        {
+            config.EnableIdempotence = true;
+        }
     }
 
     /// <inheritdoc />
