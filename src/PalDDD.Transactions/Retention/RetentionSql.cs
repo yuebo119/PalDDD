@@ -6,7 +6,16 @@ using System.Globalization;
 
 namespace PalDDD.Transactions;
 
-/// <summary>保留清理的 SQL 方言。</summary>
+/// <summary>
+/// 保留清理的 SQL 方言选择器。
+/// <para>
+/// 契约说明（2026-10-21 契约盘点）：本枚举保留 public 是**有意的公开选择器**——
+/// <c>EfCoreRetentionStore</c> 的公共构造以它为参数，Dapper/PalORM 适配器各自映射内部的
+/// <c>DapperDbType</c>/<c>SqlDialect</c>。它与 <c>DapperDbType</c> 同族：表达方言选择，
+/// 不携带 provider 类型（DbContext / DbConnection / Npgsql* 等）。方言 SQL 文本已下沉
+/// internal（<c>RetentionSql</c> 不再出现在公共面）。
+/// </para>
+/// </summary>
 public enum RetentionDialect
 {
     PostgreSql,

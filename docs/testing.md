@@ -470,8 +470,10 @@ git status --short
 # 2. 全量构建（0 警告 0 错误）
 dotnet build PalDDD.slnx --no-incremental
 
-# 3. 单元测试全绿——MTP 禁用 slnx 批量（握手 → exit 5），逐测试项目循环
-for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore --no-build; done
+# 3. 单元测试全绿——slnx 批量可直接运行（2026-10-21 实测 1827 例 / exit 0）
+dotnet test PalDDD.slnx --no-build
+# 需要单项目定位 / treenode-filter / 逐项目失败归因时，再逐项目循环：
+# for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore --no-build; done
 
 # 4. 规范验证（grep 静态检查）
 dotnet run scripts/verify-conventions.cs -- --quick

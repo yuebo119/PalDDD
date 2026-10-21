@@ -25,14 +25,15 @@
   <ItemGroup>
     <PackageReference Include="Dapper" />
     <PackageReference Include="Dapper.AOT" />
-    <!-- 契约盘点 2026-10-21 核实：三驱动引用是 DapperBulkCopy 的实现需要（PG COPY 的
-         NpgsqlBinaryImporter / MySQL BulkCopy / SQLite 逐条路径均为 provider 原生 API，
-         改成 DbConnection 通用面会丢失批量写能力）。因此 PG-only 消费方当前会连带引入
-         MySQL/SQLite 驱动——拆包需把 DapperBulkCopy 下沉到三个方言包并引入策略抽象，
-         属 v5.0 包图调整项，登记于 CHANGELOG [Unreleased] Known。 -->
-    <PackageReference Include="Microsoft.Data.Sqlite" />
-    <PackageReference Include="Npgsql" />
-    <PackageReference Include="MySqlConnector" />
+    <!-- 契约盘点 2026-10-21：三驱动引用是 DapperBulkCopy 的实现需要（PG COPY 的
+         NpgsqlBinaryImporter / MySQL BulkCopy / SQLite 逐条路径均为 provider 原生 API），
+         但这些是**实现私有依赖**：PrivateAssets="all" 使其不进 nuspec、不流向消费方。
+         基础包仍可编译；消费方只获得自己显式引用的驱动或方言包（PalDDD.Dapper.PostgreSql
+         等）带来的单一驱动。PG-only 消费方不再被迫携带 MySQL/SQLite 驱动；
+         代价是直接用基础包且依赖传递驱动的调用方需显式声明所用驱动（v5.0 依赖图说明）。 -->
+    <PackageReference Include="Microsoft.Data.Sqlite" PrivateAssets="all" />
+    <PackageReference Include="Npgsql" PrivateAssets="all" />
+    <PackageReference Include="MySqlConnector" PrivateAssets="all" />
     <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
     <ProjectReference Include="..\PalDDD.Transactions\PalDDD.Transactions.csproj" />
     <ProjectReference Include="..\PalDDD.EventLog\PalDDD.EventLog.csproj" />
