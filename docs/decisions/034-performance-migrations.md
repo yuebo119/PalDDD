@@ -54,9 +54,19 @@ EF/Dapper/PalORM 双写；读取默认文本，`UseBinaryEventId=true` 切二进
 
 | # | 决策点 | 状态 | 触发条件 |
 |---|--------|------|----------|
-| 1 | M1 切换 `EnableDueTimeFilter=true` | 演练通过（PG/MySQL，含 10k 活跃尾部 ≤2 轮询周期）；生产默认仍 false | 存量活跃行回填完成、10k 活跃压测尾部超时 ≤ 2 个轮询周期 |
+| 1 | M1 切换 `EnableDueTimeFilter=true` | 已实施（2026-10-21 默认 true，见实施附记） | 存量活跃行回填完成、10k 活跃压测尾部超时 ≤ 2 个轮询周期 |
 | 2 | M1 收缩旧全量扫描分支 | 未实施 | 下一发布窗口 |
 | 3 | M2 组内部分提交/时间界冲刷 | 未实施 | 组内处理时长接近 processingTimeout，或消费方要求更细的续读粒度 |
 | 4 | M3 1/4/8 订阅压测与单 channel 对照 | 完成（2026-10-19 本机真 broker 两场景） | 拓扑/客户端版本变更，或生产消费者延迟分布显著变化时复测 |
 | 5 | M4 应用侧回填与二进制唯一索引 | 演练通过（PG/MySQL，100k 行；体积下降 PG 59.2% / MySQL 22.1%）；生产库待执行 | 生产库迁移窗口 |
 | 6 | M4 收缩停写文本列 | 未实施 | 回填完成 + 一个 major 兼容期 |
+
+## 实施附记（2026-10-21）
+
+开放决策点 1 落地：`EnableDueTimeFilter` 默认改为 `true`。前置条件由「先完成活跃行回填」
+改为「存量行按到期处理 + 运行时懒回填」——活动 Saga 的 `NextCheckAt` 无待检查超时时写
+哨兵 `SagaState.NoPendingTimeout`（9999-12-31 UTC，MySQL `DATETIME(6)` 可存；
+`DateTimeOffset.MaxValue` 的小数秒与偏移会越界），四栈到期谓词改为
+`next_check_at IS NULL OR next_check_at <= now`（NULL = 迁移前存量行），首次扫描后
+`SagaProcessor` 回填真实时刻或哨兵。旧全量扫描分支（决策点 2）保留为
+`EnableDueTimeFilter=false` 回退通道，收缩仍留到下一发布窗口。

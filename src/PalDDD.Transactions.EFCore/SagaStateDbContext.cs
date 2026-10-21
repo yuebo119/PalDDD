@@ -136,7 +136,8 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
             if (dueBefore is { } due)
             {
                 query = query
-                    .Where(s => s.NextCheckAt != null && s.NextCheckAt <= due)
+                    // NULL = 迁移前存量行（尚无 NextCheckAt）——按到期处理，首次扫描后回填。
+                    .Where(s => s.NextCheckAt == null || s.NextCheckAt <= due)
                     .OrderBy(s => s.NextCheckAt)
                     .ThenBy(s => s.SagaId);
             }
@@ -344,7 +345,7 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         var ids = ResolveLeaseIdentifiers(mySql: false, sqlServer: true);
         var dueClause = dueBefore is null
             ? string.Empty
-            : $"AND ({ids.NextCheckAt} IS NOT NULL AND {ids.NextCheckAt} <= {{4}})";
+            : $"AND ({ids.NextCheckAt} IS NULL OR {ids.NextCheckAt} <= {{4}})";
         var orderBy = dueBefore is null
             ? $"CASE WHEN {ids.LeasedUntil} IS NULL THEN 0 ELSE 1 END, {ids.LeasedUntil}, {ids.SagaId}"
             : $"{ids.NextCheckAt}, {ids.SagaId}";
@@ -381,7 +382,7 @@ INNER JOIN candidates AS c ON t.{ids.SagaId} = c.{ids.SagaId}";
         var ids = ResolveLeaseIdentifiers(mySql: false);
         var dueClause = dueBefore is null
             ? string.Empty
-            : $"AND ({ids.NextCheckAt} IS NOT NULL AND {ids.NextCheckAt} <= {{6}})";
+            : $"AND ({ids.NextCheckAt} IS NULL OR {ids.NextCheckAt} <= {{6}})";
         var orderBy = dueBefore is null
             ? $"{ids.LeasedUntil} NULLS FIRST, {ids.SagaId}"
             : $"{ids.NextCheckAt}, {ids.SagaId}";
@@ -414,7 +415,7 @@ WHERE {ids.SagaId} IN (
         var ids = ResolveLeaseIdentifiers(mySql: true);
         var dueClause = dueBefore is null
             ? string.Empty
-            : $"AND ({ids.NextCheckAt} IS NOT NULL AND {ids.NextCheckAt} <= {{6}})";
+            : $"AND ({ids.NextCheckAt} IS NULL OR {ids.NextCheckAt} <= {{6}})";
         var orderBy = dueBefore is null
             ? $"({ids.LeasedUntil} IS NULL) DESC, {ids.LeasedUntil}, {ids.SagaId}"
             : $"{ids.NextCheckAt}, {ids.SagaId}";

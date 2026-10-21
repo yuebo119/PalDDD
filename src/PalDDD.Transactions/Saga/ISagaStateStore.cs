@@ -51,9 +51,10 @@ public interface ISagaStateStore<TState> where TState : SagaState
 /// 已到期或为空的活跃 Saga。实现方在 SQL/查询层下推过滤；未实现本接口的自定义 store
 /// 继续走 <see cref="ISagaStateStore{TState}.LeaseActiveSagasAsync"/> 全量路径。
 /// <para>
-/// 空值语义：NULL 表示“当前状态没有待检查的超时步骤”（等待事件），可安全跳过；
-/// 回填完成前，调用方应保持 <c>SagaProcessorOptions.EnableDueTimeFilter=false</c>，
-/// 让旧路径先为存量行补齐 NextCheckAt。
+/// 空值语义（2026-10-21）：活动 Saga 的 NextCheckAt 恒有值——无待检查步骤时为哨兵
+/// <see cref="SagaState.NoPendingTimeout"/>；NULL 只来自迁移前存量行，实现方必须把 NULL
+/// 视为到期（<c>NextCheckAt IS NULL OR NextCheckAt &lt;= now</c>），否则存量行永不扫描。
+/// 首次扫描后 <c>SagaProcessor</c> 回填真实时刻或哨兵，无需独立回填即可用默认配置运行。
 /// </para>
 /// </summary>
 public interface IDueTimeSagaStore<TState> : ISagaStateStore<TState> where TState : SagaState
