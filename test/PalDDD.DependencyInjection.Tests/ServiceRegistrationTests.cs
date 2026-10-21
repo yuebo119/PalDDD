@@ -84,6 +84,28 @@ public sealed class ServiceRegistrationTests
             && sd.ImplementationType?.Name == "HandlerRegistrar")).IsTrue();
     }
 
+    /// <summary>
+    /// 契约盘点 2026-10-21 回归：文档推荐路径 <c>AddPalCoreStack()</c> + <c>AddPalCommandHandler</c>
+    /// 必须在首个 dispatch 成功——管道行为依赖的 <c>IPalLogger&lt;T&gt;</c> 由管道注册自带，
+    /// 不再要求调用方额外调用 AddPalLogging（原实现在首个 SendAsync 抛解析异常）。
+    /// </summary>
+    [Test]
+    public async Task AddPalCoreStack_CommandDispatch_ResolvesLoggerFacade()
+    {
+        var services = new ServiceCollection();
+        services.AddPalCoreStack();
+        services.AddPalCommandHandler<TestCommand, string, TestCommandHandler>();
+
+        await using var provider = services.BuildServiceProvider();
+        foreach (var hostedService in provider.GetServices<Microsoft.Extensions.Hosting.IHostedService>())
+            await hostedService.StartAsync(CancellationToken.None);
+
+        var dispatcher = provider.GetRequiredService<Dispatcher>();
+        var result = await dispatcher.SendAsync(new TestCommand());
+
+        await Assert.That(result).IsEqualTo("ok");
+    }
+
     /// <summary>评审 P2-2 回归：AddPalLogging 默认不清除用户已配置的日志 Provider
     /// （追加语义）；clearProviders: true 时恢复独占式接管。</summary>
     [Test]
@@ -108,7 +130,7 @@ public sealed class ServiceRegistrationTests
             .Any(p => ReferenceEquals(p, userProvider))).IsTrue();
 
         var loggerFactory = provider.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>();
-        await Assert.That(loggerFactory).IsNotNull();
+        await Assert.That(loggerFactory).IsTypeOf<Microsoft.Extensions.Logging.LoggerFactory>();
         // 行为冒烟：追加语义下 IPalLogger 适配可用
         _ = provider.GetRequiredService<PalDDD.Core.Logging.IPalLogger<object>>();
     }

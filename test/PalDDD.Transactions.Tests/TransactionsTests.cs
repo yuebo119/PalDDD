@@ -667,6 +667,36 @@ public sealed class OutboxBatchProcessorTests
             => throw new InvalidOperationException("Subscribe is not used in this test.");
     }
 
+    /// <summary>
+    /// 契约盘点 2026-10-21：handler 时长达到 ProcessingTimeout 时必须发出
+    /// InboxHandlerLeaseExceeded 告警（默认 5 分钟下的并发重复执行风险不再静默）。
+    /// ProcessingTimeout=Zero 让判定确定性成立（任意时长都达到阈值）。
+    /// </summary>
+    [Test]
+    public async Task InboxProcessor_HandlerExceedingProcessingTimeout_EmitsLeaseWarning(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var options = new InboxOptions { ProcessingTimeout = TimeSpan.Zero };
+        var logger = new CapturingLogger<InboxProcessor>();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(options),
+            logger,
+            TimeProvider.System);
+
+        var handled = 0;
+        var processed = await processor.TryProcessAsync(
+            "consumer",
+            "lease-warning-1",
+            (string _, CancellationToken _) => { handled++; return ValueTask.CompletedTask; },
+            "payload",
+            cancellationToken);
+
+        await Assert.That(processed).IsTrue();
+        await Assert.That(handled).IsEqualTo(1);
+        await Assert.That(logger.WarningCount).IsEqualTo(1);
+    }
+
     private sealed class CapturingLogger<T> : IPalLogger<T>
     {
         public int WarningCount { get; private set; }

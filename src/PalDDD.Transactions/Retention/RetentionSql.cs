@@ -18,13 +18,17 @@ public enum RetentionDialect
 /// 保留清理的 SQL 与时间参数编码（2026-10-20 性能轮）。本类只含字符串与值转换，
 /// ADO 执行由 Dapper/PalORM/EF Core 三个基础设施适配包各自完成，避免领域/应用层
 /// 泄漏 <c>DbCommand</c>。
+/// <para>
+/// 2026-10-21 契约盘点：由 public 下沉为 internal（IVT 授三栈适配器）——方言 SQL
+/// 文本属于基础设施细节，不应出现在抽象程序集的承诺面。
+/// </para>
 /// </summary>
 /// <remarks>
 /// 本类的表名/列名是 Dapper/PalORM 的 snake_case 物理名。EF Core 默认映射是 PascalCase
 /// （表 = DbSet 名、列 = 属性名），由 <c>EfCoreRetentionStore</c> 从 EF 模型解析后自行构造
 /// SQL（2026-10-21 评审 F5：复用本类的 SQL 会在 PG/MySQL 上报 relation/column 不存在）。
 /// </remarks>
-public static class RetentionSql
+internal static class RetentionSql
 {
     /// <summary>Outbox 终态行删除 SQL（按批次限制）。</summary>
     public static string OutboxDelete(RetentionDialect dialect, bool includeDead)

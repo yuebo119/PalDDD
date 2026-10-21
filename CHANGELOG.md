@@ -14,6 +14,18 @@
 
 ### Added
 
+- **2026-10-21 契约盘点修复轮（8 项发现闭环；公共 API 快照 +1/−8）**：
+  ①**首用路径**——`AddPalPipelineBehaviors()`（开放与闭合两版）自带 `IPalLogger<T>` 最小注册（`AddLogging` + `TryAddSingleton`），修复文档推荐的 `AddPalCoreStack()` + handler 在首次 `SendAsync` 抛「Unable to resolve service for type IPalLogger<LoggingBehavior<...>>」；`AddPalLogging()` 仍只负责 ZLogger Provider 与级别策略。
+  ②**构建基线**——修复 `Transactions.Tests/InMemoryStoreTests.cs` 两处 CS8602（补空值断言），干净重建 `dotnet build` 恢复 0 错误；同时修复被增量构建掩盖的 `Integration.Tests` DAP005（测试项目显式 `NoWarn`，测试不参与 AOT）。
+  ③**抽象层收口（Changed [Breaking]）**——`PalDDD.Transactions` 的 `MySqlLeasePolicy` 与 `RetentionSql` 由 public 下沉为 internal（IVT 授 Dapper/PalORM/Transactions.EFCore/Integration.Tests），抽象程序集不再公开 MySQL 版本策略与方言 SQL 文本；`RetentionDialect` 保留 public（`EfCoreRetentionStore` 公共构造参数）。
+  ④**Saga 方言面**——删除 `SagaStateDbContext` 内未文档化、零测试的 SQL Server 单语句租约分支（文档承诺 PG/MySQL/SQLite 三方言），SQL Server provider 回落通用分页路径。
+  ⑤**配置错误可行动**——新增 `DapperConnectionGuard`：全部 Dapper store 构造期校验连接串非空与 `DapperDbType` ↔ 连接类型一致（SQLite 连接 + PostgreSql 方言原先在首次查询报 `near "FOR": syntax error`、缺连接串报 `no such table`，现均为指出配置项的 `ArgumentException`）。
+  ⑥**Inbox 租约风险可见**——`InboxOptions.ProcessingTimeout` 的「必须大于最慢 handler」契约写入 XML 文档与 usage.md；`InboxProcessor` 在 handler 时长达到该值时记录 `InboxHandlerLeaseExceeded`（EventId 1006，公共 API +1）告警，把默认 5 分钟下的并发重复执行风险从静默变为可观测（审计 2026-09-20 登记的机械化缺口）。
+  ⑦**Expression.Invoke 门禁**——`SourceCodeGuardTests` 守卫 2 增加 `Expression.Invoke` 检测与正反样本矩阵（conventions §10.2 的 EF Core 可翻译性禁令此前零测试）。
+  ⑧**测试**——新增首次 dispatch、Inbox 超时告警、Dapper 构造守卫 3 件、Expression.Invoke 矩阵 2 样本。
+  **Known（未闭环，登记 5.0 包图项）**：`PalDDD.Dapper` 仍无条件引用 Npgsql/MySqlConnector/Microsoft.Data.Sqlite——`DapperBulkCopy` 直接使用三家 provider 原生批量 API，拆包需把实现下沉到方言包并引入策略抽象，属 v5.0 包图调整（代码内已加说明注释）。
+  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；16 个测试项目 1827 个用例，1749 通过、78 跳过、0 失败；`encoding-gate` 0 失败。
+
 - **2026-10-21 基础库优化续轮（兼容过渡 + T1-T9；公共 API 快照 +35/−0）**：①**兼容过渡**——首轮的源破坏改为可 Minor 发布的形态：新增 `AddPalOutboxUnitOfWorkForContext<TContext>`（编译期要求业务上下文实现 `IPalOutboxStore`），旧 `AddPalOutboxUnitOfWork<TContext>` 保留并标 `[Obsolete]`，解析期校验同实例与拦截器；`PendingEvents` 与 `VersionProbeRow` 回归公共面并标 `[Obsolete]`，留到 v5.0.0 移除。②**结构化日志**——`IPalLogger<T>` 新增带 `EventId` 与模板参数的四个重载（DIM 默认实现保证旧实现者二进制兼容），适配器把字段原样交给 MEL/ZLogger；Outbox/Inbox/Saga 热点迁移，新增稳定 `PalLogEventIds`。③**聚焦跨栈契约矩阵**——批标记部分接受在 InMemory/Dapper/EF/PalORM 四栈同组断言；幂等 0 字节载荷在 Dapper/PalORM 共享 SQLite 文件上交叉读写。④**真库端到端**——`EfCoreRetentionStore` 在 wslc PG 18.6 / MySQL 8.4 的临时表上验证 PascalCase 标识符删除（`PALDDD_TEST_PG`/`PALDDD_TEST_MYSQL` opt-in）。⑤**穷尽性门禁**——DapperDbType、RetentionDialect、CompressionLevel 全枚举映射测试。⑥**注释棘轮**——`vN PM` 注释以 729 为基线，新增即红（`CommentRatchetTests`）。⑦**可选健康检查包**——新增 `PalDDD.Hosting.AspNetCore.OutboxHealth` 与 `AddPalOutboxHealthCheck()`，旧 Hosting 入口保持不变。⑧**桥事务测试**——`DomainEventOutboxBridge` 在真实 Dapper SQLite 上验证提交可见、回滚零行。验证：`dotnet build --nologo` 0 警告 0 错误；16 个测试项目 1822 个用例，1744 通过、78 跳过、0 失败；PG/MySQL 真库测试在 wslc 容器上通过；`encoding-gate`/`count-audit`/`doc-consistency`/`verify-conventions --quick`/`license-policy`/`xml-guard` 全部通过。未做：W3 移除弃用面与 Hosting 依赖（下一 Major）、W4 触发式项（方言策略表、AsyncLocal 统一、域事件链表基准、全仓轮次替换）。
 
 - **2026-10-21 双评审合并修复轮（架构评审 + 98 条源码发现；首轮）**：合并 `docs/review/review-2026-10-21-architecture.md` 与只读源码评审，按「正确性 → 契约 → 注释 → 架构建议」实施。

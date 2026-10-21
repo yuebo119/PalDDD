@@ -33,6 +33,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
         DbTransaction? transaction = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
+        DapperConnectionGuard.Validate(connection, dbType);
         _connection = connection;
         _transaction = transaction;
         _insertSql = dbType == DapperDbType.MySql ? InsertMySql : InsertDefault;

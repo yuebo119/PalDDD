@@ -15,6 +15,8 @@ services.AddPalCoreStack();
 
 `AddPalCoreStack()` 是推荐的核心入口，等价于 `AddPalDDD()` + `AddPalPipelineBehaviors()` + `AddPalIdentity()`。`AddPalFullStack()` 当前也等价于核心栈：它不会自动引用序列化、持久化、Broker 或 ASP.NET Core 适配器，避免基础设施依赖越过 Clean Architecture 边界。
 
+管道行为（验证/日志）依赖 `IPalLogger<T>`：`AddPalCoreStack()` 与 `AddPalPipelineBehaviors()` 会自带该门面的最小注册（依赖宿主的 `ILogger<T>`，无 Provider 时零输出），因此「核心栈 + handler」即可完成首次 `SendAsync`。`AddPalLogging()` 是可选的输出配置，只负责追加 ZLogger 控制台 Provider 与日志级别策略。
+
 领域事件 dispatcher 通过 `HashSet<Guid>` 去重循环事件，并通过 `while` 循环替代递归防止深层事件链导致栈溢出。
 
 领域事件 dispatcher 在调用 handler 时会创建 `Event Dispatch` activity，并带有 `pal.event` tag；handler 调用结果会记录 `paldd.event_handlers.handled` / `paldd.event_handlers.failed`。应用层可通过 OpenTelemetry `AddSource(PalActivitySource.Name)` 将事件处理 trace 与命令、Outbox/Inbox、投影或 saga 链路关联。
@@ -261,6 +263,8 @@ services.AddDbContext<AppOutboxDbContext>(o => o.UseNpgsql(connectionString));
 
 Store 映射的生命周期为 **Scoped**，与 `AddDbContext` 默认一致（`DbContext` 非线程安全，不得 Singleton）。
 
+Dapper 栈的 store 构造函数（`new DapperOutboxStore(...)` 等）在构造期校验两项配置：连接串非空、`DapperDbType` 与连接类型一致（`SqliteConnection`/`NpgsqlConnection`/`MySqlConnection`）。不一致会立即抛 `ArgumentException` 并给出期望形态——避免等到首次查询才以 provider 语法错误或 `no such table` 的形式暴露。连接串必须在构造 store 前设置。
+
 ### 死信语义与运维（F4 补，2026-09-19）
 
 消息投递失败（broker 不可达、反序列化失败、类型未注册）时按指数退避重试；**重试耗尽（默认 `MaxRetryCount = 10`，经 `AddPalOutbox` 的 options 可配）后消息进入 `Dead` 状态并停止投递**——这是静默停止，不会抛异常到宿主。运维要点：
@@ -321,6 +325,8 @@ var processed = await inbox.TryProcessAsync(
 ```
 
 `false` 表示该消息已处理或仍在其他消费者处理中。
+
+**处理租约契约**：`InboxOptions.ProcessingTimeout`（默认 5 分钟）必须大于最慢 handler 的执行时长。单次处理超过该值后，同一 `(ConsumerName, MessageId)` 可被第二个消费者重新认领并并发执行，副作用的重复发生不会自动去重。`InboxProcessor` 在 handler 时长达到该值时记录 `InboxHandlerLeaseExceeded`（EventId 1006）告警；长耗时 handler 请显式调大该选项。
 
 `InboxProcessor` 会发出 `Inbox Process` span。它使用同一个 `PalActivitySource.Name`，仅包含 `pal.inbox.consumer` 和 `pal.inbox.result` 标签——`pal.inbox.message_id` 已按 ITM-229 标准从 tag 移除（高基数：每消息唯一，且可能含业务 ID）；结果值为 `processed`、`skipped` 或 `failed`。
 

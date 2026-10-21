@@ -21,6 +21,7 @@ public sealed class DapperRetentionStore : IRetentionStore
     public DapperRetentionStore(DbConnection connection, DapperDbType dbType)
     {
         ArgumentNullException.ThrowIfNull(connection);
+        DapperConnectionGuard.Validate(connection, dbType);
         _connection = connection;
         _dialect = Map(dbType);
     }

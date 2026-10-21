@@ -173,6 +173,16 @@ public sealed class OutboxOptions
 public sealed class InboxOptions
 {
     public string DefaultConsumerName { get; set; } = "default";
+
+    /// <summary>
+    /// 处理租约时长（默认 5 分钟）。
+    /// <para>
+    /// <b>配置契约</b>：必须大于最慢 handler 的执行时长。单次处理超过本值后，同一
+    /// (ConsumerName, MessageId) 可被第二个消费者重新认领并并发执行——副作用的重复发生
+    /// 不会自动去重。InboxProcessor 在 handler 时长达到本值时记录
+    /// <c>InboxHandlerLeaseExceeded</c>（1006）告警；调整本值以覆盖最长 handler。
+    /// </para>
+    /// </summary>
     public TimeSpan ProcessingTimeout { get; set; } = TimeSpan.FromMinutes(5);
 }
 

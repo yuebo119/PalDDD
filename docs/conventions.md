@@ -380,7 +380,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-10-21 基础库优化轮复验）：253 源文件·37 项目·0 违规（本轮净 +3：新增可选的 `PalDDD.Hosting.AspNetCore.OutboxHealth` 两文件；`VersionProbeRow` 以 `[Obsolete]` 回归一个 Minor 兼容窗口；`GeneratorSymbols` 为此前 `GeneratorSharedHelpers` 的合规改名，不增计数；2026-10-21 双评审修复轮新增 `DomainEventOutboxBridge`、`PostgreSqlDataSourceRegistration` 并删除 0 引用的 `VersionProbeRow`；2026-10-21 批量消费轮新增 `MessageBatchPump`、`InboxBatchConsumer` 两个源文件；同轮此前新增 `EventLogBinaryRow` 一个源文件；2026-10-20 数据面续轮新增 3 个源文件：RetentionSql、PalOrmRetentionStore、EfCoreRetentionStore；数据面轮新增 5 个源文件：Retention 四件 + DapperRetentionStore；2026-10-19 ADR-032 双栈 FTS5/JSON1 新增 10 个源文件：共享核心 3、Dapper 公开类型 2、PalORM 公开类型与门面 5；此前 227 文件）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-10-21 契约盘点修复轮复验）：254 源文件·37 项目·0 违规（本轮净 +3：新增可选的 `PalDDD.Hosting.AspNetCore.OutboxHealth` 两文件；`VersionProbeRow` 以 `[Obsolete]` 回归一个 Minor 兼容窗口；`GeneratorSymbols` 为此前 `GeneratorSharedHelpers` 的合规改名，不增计数；2026-10-21 双评审修复轮新增 `DomainEventOutboxBridge`、`PostgreSqlDataSourceRegistration` 并删除 0 引用的 `VersionProbeRow`；2026-10-21 批量消费轮新增 `MessageBatchPump`、`InboxBatchConsumer` 两个源文件；同轮此前新增 `EventLogBinaryRow` 一个源文件；2026-10-20 数据面续轮新增 3 个源文件：RetentionSql、PalOrmRetentionStore、EfCoreRetentionStore；数据面轮新增 5 个源文件：Retention 四件 + DapperRetentionStore；2026-10-19 ADR-032 双栈 FTS5/JSON1 新增 10 个源文件：共享核心 3、Dapper 公开类型 2、PalORM 公开类型与门面 5；2026-10-21 契约盘点修复轮新增 `DapperConnectionGuard` 一个源文件（253→254）；此前 227 文件）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 

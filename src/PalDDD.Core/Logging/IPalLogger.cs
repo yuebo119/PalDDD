@@ -93,6 +93,7 @@ public static class PalLogEventIds
     public const int InboxMessageFailed = 1003;
     public const int InboxMessageProcessedMarkFailed = 1004;
     public const int InboxBatchProcessed = 1005;
+    public const int InboxHandlerLeaseExceeded = 1006;
 
     public const int OutboxRetryBackoffFailed = 1101;
     public const int OutboxMarkDeadFailed = 1102;

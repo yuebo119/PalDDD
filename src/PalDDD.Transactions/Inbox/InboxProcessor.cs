@@ -104,6 +104,7 @@ public sealed class InboxProcessor
         try
         {
             await handler(message, ct).ConfigureAwait(false);
+            WarnIfLeaseExceeded(consumerName, messageId, options.ProcessingTimeout, now);
             // P2 修复（八轮评审）：副作用（handler）已发生后，完成标记不应随请求级 ct 取消——
             // 取消会导致 Processing 记录滞留，租约/超时到期后同一消息被双重执行
             // （对齐下方 MarkFailedAsync 的 CancellationToken.None）
@@ -146,6 +147,7 @@ public sealed class InboxProcessor
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            WarnIfLeaseExceeded(consumerName, messageId, options.ProcessingTimeout, now);
             // P3 修复（十七轮）：ex.Message 截断到 2000 再入库——长异常消息（含大 payload
             // 的序列化错误等）超出 LastError 列上限会让终态保存本身失败，掩盖原始 handler 失败
             var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
@@ -168,6 +170,22 @@ public sealed class InboxProcessor
                 "Inbox: message {MessageId} handler failed", messageId);
             throw;
         }
+    }
+
+    /// <summary>
+    /// 租约超限告警（2026-10-21 契约盘点）：handler 时长达到 <see cref="InboxOptions.ProcessingTimeout"/>
+    /// 时，记录可能已被第二个消费者重新认领并并发执行。不改变行为，只把默认配置下的静默风险
+    /// 变成可观测事件（审计 2026-09-20 登记的「配置契约无机械化校验或启动告警」缺口）。
+    /// </summary>
+    private void WarnIfLeaseExceeded(string consumerName, string messageId, TimeSpan processingTimeout, DateTimeOffset claimedAt)
+    {
+        var elapsed = _timeProvider.GetUtcNow() - claimedAt;
+        if (elapsed < processingTimeout)
+            return;
+
+        _logger.Warning(PalLogEventIds.InboxHandlerLeaseExceeded,
+            "Inbox: handler for message {MessageId} (consumer {ConsumerName}) ran {ElapsedMs}ms, reaching ProcessingTimeout {TimeoutMs}ms; the record may have been re-claimed and executed concurrently. Configure InboxOptions.ProcessingTimeout above the longest handler duration.",
+            messageId, consumerName, (long)elapsed.TotalMilliseconds, (long)processingTimeout.TotalMilliseconds);
     }
 
     /// <summary>
