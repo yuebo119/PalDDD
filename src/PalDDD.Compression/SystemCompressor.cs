@@ -121,13 +121,7 @@ internal sealed class BrotliCompressor : ICompressor
         return buffer.WrittenSpan.ToArray();
     }
 
-    private static int MapLevelToQuality(CompressionLevel level) => level switch
-    {
-        CompressionLevel.Fastest => 1,
-        CompressionLevel.Balanced => 4,
-        CompressionLevel.SmallestSize => 11,
-        _ => 4,
-    };
+    private static int MapLevelToQuality(CompressionLevel level) => CompressionLevelMap.ToBrotliQuality(level);
 }
 
 /// <summary>
@@ -230,13 +224,7 @@ internal sealed class GZipCompressor : ICompressor
         }
     }
 
-    private static System.IO.Compression.CompressionLevel MapLevel(CompressionLevel level) => level switch
-    {
-        CompressionLevel.Fastest => System.IO.Compression.CompressionLevel.Fastest,
-        CompressionLevel.Balanced => System.IO.Compression.CompressionLevel.Optimal,
-        CompressionLevel.SmallestSize => System.IO.Compression.CompressionLevel.SmallestSize,
-        _ => System.IO.Compression.CompressionLevel.Optimal,
-    };
+    private static System.IO.Compression.CompressionLevel MapLevel(CompressionLevel level) => CompressionLevelMap.ToFramework(level);
 }
 
 /// <summary>
@@ -283,11 +271,28 @@ internal sealed class DeflateCompressor : ICompressor
         }
     }
 
-    private static System.IO.Compression.CompressionLevel MapLevel(CompressionLevel level) => level switch
+    private static System.IO.Compression.CompressionLevel MapLevel(CompressionLevel level) => CompressionLevelMap.ToFramework(level);
+}
+
+/// <summary>
+/// 压缩级别映射单一来源（2026-10-21 评审 F15）：Brotli 质量与 System.IO.Compression 级别
+/// 同表维护；未知枚举值 fail-fast，不再静默映射为默认级别。
+/// </summary>
+internal static class CompressionLevelMap
+{
+    internal static int ToBrotliQuality(CompressionLevel level) => level switch
+    {
+        CompressionLevel.Fastest => 1,
+        CompressionLevel.Balanced => 4,
+        CompressionLevel.SmallestSize => 11,
+        _ => throw new ArgumentOutOfRangeException(nameof(level), level, "Unknown compression level."),
+    };
+
+    internal static System.IO.Compression.CompressionLevel ToFramework(CompressionLevel level) => level switch
     {
         CompressionLevel.Fastest => System.IO.Compression.CompressionLevel.Fastest,
         CompressionLevel.Balanced => System.IO.Compression.CompressionLevel.Optimal,
         CompressionLevel.SmallestSize => System.IO.Compression.CompressionLevel.SmallestSize,
-        _ => System.IO.Compression.CompressionLevel.Optimal,
+        _ => throw new ArgumentOutOfRangeException(nameof(level), level, "Unknown compression level."),
     };
 }

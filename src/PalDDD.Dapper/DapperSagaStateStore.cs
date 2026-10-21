@@ -14,7 +14,8 @@
 //   ｜ 如果版本号不匹配（被其他实例修改），更新影响 0 行。
 //
 // 💡 UPSERT 语义：
-//   ｜ SaveChangesAsync 内部先查询后决定：存在→UPDATE（版本号自增），不存在→INSERT
+//   ｜ SaveChangesAsync 先 UPDATE（已有行 1 次往返）；影响 0 行再 INSERT（新行 2 次往返）；
+//   ｜ 唯一冲突返回 0（并发下的可重试信号）。不是「先查询后决定」。
 // ─────────────────────────────────────────────────────────────
 //   ✅ Dapper.AOT 已启用（experiment/dapper-aot-full）——QueryAsync<TState>/ExecuteAsync
 //     调用点经拦截器生成代码接管（三十七轮勘正的经典反射口径已随启用退役）。
@@ -672,8 +673,10 @@ public sealed class DapperSagaStateStore<TState> : ISagaStateStore<TState>, ISag
         // v3 轮姊妹收口（对齐 PalOrmSagaStateStore ITM-228/P3c 同款 fail-fast）：saga_data 为
         // 字面 "null" JSON 文本时 Deserialize 返回 null——原 `?? new TState` 兜底会静默丢全部
         // 业务字段、后续 SaveChangesAsync 以空状态覆写扩散损坏。改抛语义化异常；else 分支
-        // （saga_data 列为 NULL 的元数据行）是合法语义，保留兜底。
-        var state = row.SagaData is not null && _jsonTypeInfo is not null
+        // （saga_data 列为 NULL 或空串的元数据行）是合法语义，保留兜底。
+        // 2026-10-21 评审 F4：空串与 PalORM 的 !string.IsNullOrEmpty 对齐——原 `is not null`
+        // 会把空串送进 JsonSerializer.Deserialize("") 抛 JsonException，同一行跨栈读取结果分叉。
+        var state = !string.IsNullOrEmpty(row.SagaData) && _jsonTypeInfo is not null
             ? JsonSerializer.Deserialize(row.SagaData, _jsonTypeInfo)
               ?? throw new InvalidOperationException(
                   $"Saga {row.SagaId} 的 saga_data 为损坏的 'null' 文本——拒绝静默降级空状态（对齐 PalOrmSagaStateStore fail-fast 契约）。")

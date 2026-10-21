@@ -404,9 +404,8 @@ public static class DapperBulkCopy
 
         // 映射读取器列 → 数据库列（按索引匹配）
         // P3-SRC-209 修复（R44 ITM-280 勘正动机）：列映射改按索引直配——原 Array.IndexOf 逐列
-        // 扫描 O(n²)；索引直配 O(n) 且语义显式。原注释"重复列名静默错列"场景实际不可达：
-        // DataTable.Columns.Add 对重复列名先抛 DuplicateNameException，到不了 ColumnMappings。
-        // DataTable 列与 cols 同序构建（上方循环），索引天然一一对应。
+        // 扫描 O(n²)；索引直配 O(n) 且语义显式。2026-10-21 勘正：DataTable 已被 BulkValueReader
+        // 替换，重复列名不再由 DataTable.Columns.Add 拦截——现由 ValidateColumns 显式拒绝。
         for (int i = 0; i < cols.Length; i++)
             bulkCopy.ColumnMappings.Add(new MySqlBulkCopyColumnMapping(i, cols[i]));
 
@@ -600,8 +599,16 @@ public static class DapperBulkCopy
     private static void ValidateColumns(string[] columns)
     {
         ArgumentOutOfRangeException.ThrowIfZero(columns.Length, nameof(columns));
+        // 2026-10-21 评审（F15 姊妹）：原 DataTable 在 Columns.Add 处替我们拦重复列名，
+        // 换成 BulkValueReader 后该保护消失——["id","id"] 会延迟到服务端才失败。
+        var seen = new HashSet<string>(columns.Length, StringComparer.OrdinalIgnoreCase);
         foreach (var column in columns)
+        {
             ValidateIdentifier(column, nameof(columns), allowDot: false);
+            if (!seen.Add(column))
+                throw new ArgumentException(
+                    $"columns 含重复列名 '{column}'：批量插入的列映射必须一一对应。", nameof(columns));
+        }
     }
 
     private static void ValidateIdentifier(string identifier, string paramName, bool allowDot)

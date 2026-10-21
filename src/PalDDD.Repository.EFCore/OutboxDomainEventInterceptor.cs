@@ -1,5 +1,5 @@
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using System.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using System.Runtime.CompilerServices;
 
 namespace PalDDD.Repository.EFCore;
@@ -32,9 +32,11 @@ namespace PalDDD.Repository.EFCore;
 
 /// <summary>EF Core 拦截器 — 在 SaveChanges 事务内将领域事件写入发件箱。</summary>
 /// <remarks>
-/// 📐 <b>生命周期（2026-10-21 修订）</b>：本类不再持有跨请求可变字段。每轮 SaveChanges 的
-/// 领域事件、命中实体与注入 ID 存放在按 <c>DbContext</c> 实例键控的
-/// <c>ConditionalWeakTable</c> 状态中，SavingChanges 开始时清空、成功/失败收尾时重置。
+/// 📐 <b>生命周期（2026-10-21 修订）</b>：本类除诊断指针 <c>_lastContext</c> 外不持有跨请求
+/// 可变字段。每轮 SaveChanges 的领域事件、命中实体与注入 ID 存放在按 <c>DbContext</c> 实例
+/// 键控的 <c>ConditionalWeakTable</c> 状态中，SavingChanges 开始时清空、成功/失败收尾时重置。
+/// <c>_lastContext</c> 只服务 <c>PendingEvents</c> 诊断，Singleton 共享时可能指向另一请求的
+/// 上下文（该属性不做正确性保证）。
 /// 因此拦截器注册为 Scoped 或 Singleton 均安全，<b>可与 <c>AddDbContextPool</c> 组合使用</b>；
 /// 池化复用的 DbContext 实例各自持有独立状态，不会交叉写入。
 /// 当前注册方式见 <see cref="ServiceCollectionExtensions.AddPalOutboxUnitOfWork{TContext}"/>。
@@ -58,14 +60,46 @@ namespace PalDDD.Repository.EFCore;
 /// 注入循环自清理域覆盖；多拦截器场景的清理挂钩方案 v4.0 收敛。
 /// </para>
 /// </remarks>
-public sealed class OutboxDomainEventInterceptor(
-    Transactions.IPalOutboxStore outboxStore,
-    Serialization.IMessageSerializer serializer,
-    Serialization.IMessageCatalog messageCatalog) : SaveChangesInterceptor
+public sealed class OutboxDomainEventInterceptor : SaveChangesInterceptor
 {
-    private readonly Transactions.IPalOutboxStore _outboxStore = outboxStore ?? throw new ArgumentNullException(nameof(outboxStore));
-    private readonly Serialization.IMessageSerializer _serializer = serializer ?? throw new ArgumentNullException(nameof(serializer));
-    private readonly Serialization.IMessageCatalog _messageCatalog = messageCatalog ?? throw new ArgumentNullException(nameof(messageCatalog));
+    private readonly Transactions.IPalOutboxStore? _outboxStore;
+    private readonly IServiceProvider? _services;
+    // F4（2026-10-21）：消息构造与 Dapper/PalORM 共用的栈无关桥（单一形态来源）。
+    private readonly Transactions.DomainEventOutboxBridge _bridge;
+
+    /// <summary>以显式 store 构造（手动装配/测试）。</summary>
+    public OutboxDomainEventInterceptor(
+        Transactions.IPalOutboxStore outboxStore,
+        Serialization.IMessageSerializer serializer,
+        Serialization.IMessageCatalog messageCatalog)
+    {
+        _outboxStore = outboxStore ?? throw new ArgumentNullException(nameof(outboxStore));
+        _bridge = new Transactions.DomainEventOutboxBridge(
+            messageCatalog ?? throw new ArgumentNullException(nameof(messageCatalog)),
+            serializer ?? throw new ArgumentNullException(nameof(serializer)));
+    }
+
+    /// <summary>
+    /// DI 构造：store 延迟到首次 SavingChanges 时解析（2026-10-21 F2 修正）。
+    /// 「业务上下文即 IPalOutboxStore」时，构造期解析 store 会回到同一 DbContext 的
+    /// options 构造 → 拦截器 → store 的循环依赖。延迟解析让 options 构建不触碰 store。
+    /// </summary>
+    internal OutboxDomainEventInterceptor(
+        IServiceProvider services,
+        Serialization.IMessageSerializer serializer,
+        Serialization.IMessageCatalog messageCatalog)
+    {
+        _services = services ?? throw new ArgumentNullException(nameof(services));
+        _bridge = new Transactions.DomainEventOutboxBridge(
+            messageCatalog ?? throw new ArgumentNullException(nameof(messageCatalog)),
+            serializer ?? throw new ArgumentNullException(nameof(serializer)));
+    }
+
+    /// <summary>目标 outbox store——显式注入优先，否则按作用域延迟解析。</summary>
+    private Transactions.IPalOutboxStore OutboxStore
+        => _outboxStore
+           ?? _services?.GetRequiredService<Transactions.IPalOutboxStore>()
+           ?? throw new InvalidOperationException("Outbox store is not configured for OutboxDomainEventInterceptor.");
 
     /// <summary>
     /// 每个 DbContext 实例独占的 SaveChanges 暂存状态（领域事件、命中实体、本拦截器注入的
@@ -96,8 +130,9 @@ public sealed class OutboxDomainEventInterceptor(
     /// 并发共享拦截器时可能指向另一请求的上下文，诊断属性不做正确性保证。</summary>
     private Microsoft.EntityFrameworkCore.DbContext? _lastContext;
 
-    /// <summary>当前 SaveChanges 操作期间收集的领域事件列表（诊断用，best-effort）。</summary>
-    public IReadOnlyList<Core.DomainEvent> PendingEvents
+    /// <summary>当前 SaveChanges 操作期间收集的领域事件列表（诊断用，best-effort）。
+    /// 2026-10-21 评审 F22：生产代码零调用，降 internal 并授权测试程序集，收窄公共 API 面。</summary>
+    internal IReadOnlyList<Core.DomainEvent> PendingEvents
         => _lastContext is { } context
            && s_states.TryGetValue(context, out var state)
             ? state.Events
@@ -123,7 +158,7 @@ public sealed class OutboxDomainEventInterceptor(
         // 往返级线程阻塞）；EF store（延迟写族）走逐条异步路径（v4.0 ③：跟踪添加同步完成）。
         // 同步钩子 SavingChanges 无异步可用，两类 store 均走 WriteEventsToOutbox 的
         // 单点阻塞桥（v4.0 ③ 文档化形态）
-        if (state.Events.Count > 0 && _outboxStore is Transactions.IImmediateWriteOutboxStore immediate)
+        if (state.Events.Count > 0 && OutboxStore is Transactions.IImmediateWriteOutboxStore immediate)
             await WriteEventsToOutboxImmediateAsync(eventData.Context, state, immediate, cancellationToken).ConfigureAwait(false);
         else if (state.Events.Count > 0)
             await WriteEventsToOutboxAsync(eventData.Context, state).ConfigureAwait(false);
@@ -278,7 +313,7 @@ public sealed class OutboxDomainEventInterceptor(
             // 2026-10-19 性能实施轮（ADR-026 同步钩子文档化阻塞桥）：同步 SaveChanges 对
             // 立即写 store 也走一次批量调用（原逐事件阻塞桥在远程库上 k 个事件 = k 次往返）。
             // EF store 的 AddMessageAsync 是跟踪添加（同步完成），走下方逐条路径。
-            if (_outboxStore is Transactions.IImmediateWriteOutboxStore immediate)
+            if (OutboxStore is Transactions.IImmediateWriteOutboxStore immediate)
             {
                 var messages = new List<Transactions.OutboxMessage>(state.Events.Count);
                 foreach (var evt in state.Events)
@@ -298,7 +333,7 @@ public sealed class OutboxDomainEventInterceptor(
                 //（ASP.NET Core/控制台）安全；classic sync-context 宿主请改用 SaveChangesAsync
                 //（迁移指引见 CHANGELOG）。EF store 的 AddMessageAsync 为跟踪添加（同步完成），
                 // 桥实际零阻塞；立即写 store（Dapper/PalORM）真异步——桥为文档化阻塞点
-                _outboxStore.AddMessageAsync(msg).AsTask().GetAwaiter().GetResult();
+                OutboxStore.AddMessageAsync(msg).AsTask().GetAwaiter().GetResult();
                 state.InjectedOutboxIds.Add(msg.Id);
             }
         }
@@ -380,7 +415,7 @@ public sealed class OutboxDomainEventInterceptor(
             foreach (var evt in state.Events)
             {
                 var msg = BuildOutboxMessage(evt);
-                await _outboxStore.AddMessageAsync(msg).ConfigureAwait(false);
+                await OutboxStore.AddMessageAsync(msg).ConfigureAwait(false);
                 state.InjectedOutboxIds.Add(msg.Id);
             }
         }
@@ -398,39 +433,11 @@ public sealed class OutboxDomainEventInterceptor(
         }
     }
 
-    /// <summary>领域事件 → OutboxMessage 构造（轮四提取：同步逐条路径与异步批量路径共用，消息形态单一来源）。</summary>
+    /// <summary>领域事件 → OutboxMessage 构造（同步逐条路径与异步批量路径共用）。
+    /// 2026-10-21 F4：实现移至栈无关的 <see cref="Transactions.DomainEventOutboxBridge"/>，
+    /// Dapper/PalORM 用户可复用同一构造（不再各自复制 catalog/序列化/追踪字段逻辑）。</summary>
     private Transactions.OutboxMessage BuildOutboxMessage(Core.DomainEvent evt)
-    {
-        var descriptor = _messageCatalog.Find(evt.GetType())
-            ?? throw new InvalidOperationException(
-                $"Domain event '{evt.GetType().FullName}' is not registered in MessageCatalog.");
-        var payload = _serializer.SerializeToArray((object)evt, descriptor);
-        // P1 修复（七轮评审）：evt 静态类型是 abstract DomainEvent——泛型重载
-        // Serialize<DomainEvent>(evt, descriptor) 绑定基类 JsonTypeInfo 与派生 descriptor
-        // 不匹配（InvalidCastException）。显式 (object) 强转走非泛型 Serialize(object, descriptor)
-        // 用派生 JsonTypeInfo，与读侧（KafkaBroker/RabbitMqBroker 用 object 声明）对称。
-        return new Transactions.OutboxMessage
-        {
-            Type = descriptor.Name,
-            Payload = payload, // 2026-10-19：SerializeToArray 已交还独立数组，消除二次 ToArray 复制
-            ContentType = _serializer.ContentType,
-            SchemaVersion = descriptor.SchemaVersion,
-            // ITM-103 修复：CausationId 不再自指——原 `CausationId = evt.EventId` 使 outbox 行
-            // 的因果链自环（"事件由自身引起"），下游消费方按 causation 追踪时断链。
-            // 本层无父事件追踪（DomainEvent 不含触发者 ID），诚实值为 null；
-            // 有父链语义的调用方应在构造 OutboxMessage 时显式赋值。
-            // v36 P3（镜像 v35 EA4 在 EventAuditMetadata.TraceParent 的格式前提声明）：
-            // TraceParent 取自 Activity.Current?.Id，其格式跟随 Activity.IdFormat——
-            // 假定 W3C（.NET 5+ 默认 DefaultIdFormat 为 W3C）。宿主若全局改用 Hierarchical
-            //（Activity.DefaultIdFormat = ActivityIdFormat.Hierarchical），写入值为
-            // hierarchical 格式（|... 形态）而非 W3C traceparent（00-... 四段），下游
-            // 按 W3C 解析将失真；跨格式环境需在宿主统一 IdFormat 或消费侧按前缀判别。
-            CausationId = null,
-            TraceParent = Activity.Current?.Id,
-            TraceState = Activity.Current?.TraceStateString,
-            Status = Transactions.OutboxStatus.Pending
-        };
-    }
+        => _bridge.BuildMessage(evt);
 }
 
 /// <summary>

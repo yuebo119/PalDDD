@@ -63,10 +63,16 @@ public sealed class DapperRetentionStore : IRetentionStore
     }
 
     private static RetentionDialect Map(DapperDbType dbType)
-        => dbType switch
+    {
+        // 2026-10-21 评审 F24：未知值 fail-fast，不再静默映射 SQLite。
+        if (!Enum.IsDefined(dbType))
+            throw new ArgumentOutOfRangeException(nameof(dbType), dbType, "Unknown Dapper database type.");
+        return dbType switch
         {
             DapperDbType.PostgreSql => RetentionDialect.PostgreSql,
             DapperDbType.MySql => RetentionDialect.MySql,
-            _ => RetentionDialect.Sqlite,
+            DapperDbType.Sqlite => RetentionDialect.Sqlite,
+            _ => throw new ArgumentOutOfRangeException(nameof(dbType), dbType, "Unknown Dapper database type."),
         };
+    }
 }

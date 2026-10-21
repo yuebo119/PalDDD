@@ -11,7 +11,8 @@ namespace PalDDD.Core;
 //
 // 💡 为什么 AggregateRoot 这么简单？
 //   ｜ Entity<TId> 基类已经提供事件存储和身份管理。
-//   ｜ Source Generator 通过继承层次检测聚合根并生成元数据。
+//   ｜ Analyzer 通过继承层次检测聚合根（不生成元数据——2026-10-21 勘正：
+//   ｜ 原文称 Source Generator，但 SourceGen 项目零处引用 AggregateRoot）。
 //   ｜ 聚合内部的业务规则和不变性由子类自己维护。
 //   ｜ 这种"薄基类"设计符合组合优于继承的原则。
 // ─────────────────────────────────────────────────────────────
@@ -23,7 +24,7 @@ namespace PalDDD.Core;
 /// 1. 拥有全局唯一标识<br/>
 /// 2. 是聚合的唯一入口 —— 外部只能通过聚合根访问内部实体<br/>
 /// 3. 负责维护聚合内所有的业务不变性（invariants）<br/>
-/// 4. Source Generator 通过此类型层次检测聚合
+/// 4. Analyzer 通过此类型层次检测聚合（仅诊断，不生成元数据）
 /// </para>
 /// <para>✅ AOT 安全：泛型参数在编译期完全实例化，无运行时反射。</para>
 /// </summary>

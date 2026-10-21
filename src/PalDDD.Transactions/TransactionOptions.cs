@@ -65,7 +65,9 @@ public sealed class OutboxOptions
     /// <c>LeaseOwner</c>/<c>MaxRetryCount</c> 一直为每 tick 热读取。
     /// </para>
     /// <para>
-    /// ⚠️ <b>自适应排空（同轮）</b>：上一轮租到满批时下一轮<b>不等本间隔</b>、仅让步 1ms 即续批
+    /// ⚠️ <b>自适应排空（同轮）</b>：上一轮租到满批时下一轮<b>不等本间隔</b>、仅
+    /// <c>Task.Yield()</c> 让出执行权即续批（2026-10-21 勘正：原写「让步 1ms」，实际
+    /// 的 <c>Task.Delay(1)</c> 实测约 11.46ms，已改为 Yield）
     ///（积压排空吞吐从 batchSize/(tick+interval) 提升到 batchSize/tick）；未满批才按本间隔轮询。
     /// 本值因此是「空/浅队列的检测节奏」而非「最大吞吐节奏」——调大它不再压低积压排空速度。
     /// </para>
@@ -159,7 +161,8 @@ public sealed class OutboxOptions
     /// 消费方应具备 Inbox 幂等，与 <see cref="MaxInFlightPublishes"/> 同族声明）；②需
     /// store 实现 <c>IBatchMarkOutboxStore</c>（Dapper/EF Core/InMemory/PalORM 四栈实现，
     /// PalORM 2026-10-16 补齐——until 编码三方言探针实证，见 ADR-027）；③失败路径（死信/重试释放）仍逐条即时标记不变；
-    /// ④分区内标记批序 = 租约序（保序声明同 T3.1）。启动期经 <c>ValidateOnStart</c>
+    /// ④分区内标记批序 = 出窗完成序（2026-10-21 起；窗口 16 时首条慢发布的消息标记
+    /// 落在其余 15 条之后，原「租约序」声明失实）。启动期经 <c>ValidateOnStart</c>
     /// 校验 ≥ 1。单语句组内行数上限 400（SQLite 参数上限 999 防御，实现内分块）。
     /// </para>
     /// </summary>

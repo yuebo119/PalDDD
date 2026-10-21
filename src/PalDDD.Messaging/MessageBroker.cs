@@ -178,7 +178,13 @@ public sealed class NullMessageBroker : IMessageBroker
         int maxBatchSize,
         TimeSpan? maxDelay,
         CancellationToken ct)
-        => new(NullAsyncDisposable.Instance);
+    {
+        // 2026-10-21 评审：批量订阅与单条订阅同样补 Debug 门控日志——原实现静默返回，
+        // 误注册 NullMessageBroker 的批量链路无日志可查。
+        if (_logger is not null && _logger.IsEnabled(LogLevel.Debug))
+            _logger.Debug($"NullMessageBroker: batch subscribe to '{typeof(TMessage).Name}' ignored (single-node mode)");
+        return new(NullAsyncDisposable.Instance);
+    }
 
     private sealed class NullAsyncDisposable : IAsyncDisposable
     {

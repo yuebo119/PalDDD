@@ -19,9 +19,10 @@ public abstract class IdempotencyDbContext(DbContextOptions options) : DbContext
     /// <summary>幂等执行记录表</summary>
     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
 
-    // A5（S1 轮，2026-10-15）：固定形状单行查询编译化——EF Core 每次执行都把表达式树
-    // 重新翻译成 SQL（无自动计划缓存；EF.CompileAsyncQuery 的官方存在理由即消除重复
-    // 编译开销）。两个查询是幂等路径每请求的固定形状热点（读路径 AsNoTracking、
+    // A5（S1 轮，2026-10-15）：固定形状单行查询编译化——EF Core 自 2.0 起会缓存同一
+    // 形状查询的编译结果（2026-10-21 勘正：原文「无自动计划缓存」失实）；CompileAsyncQuery
+    // 省的是每次执行 1 次查询缓存键计算与查找。两个查询是幂等路径每请求的固定形状热点
+    //（读路径 AsNoTracking、
     // TryStart 跟踪查询两形态分别编译，跟踪语义随委托固化）。按 IModel 引用各缓存一份
     // 委托：编译委托与单一模型绑定（EF 官方约束），同上下文类型跨 provider 模型实例
     // 不同，按模型分持。

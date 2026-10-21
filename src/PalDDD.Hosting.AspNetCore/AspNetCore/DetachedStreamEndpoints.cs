@@ -132,9 +132,15 @@ public static class DetachedStreamEndpoints
     {
         if (query is null)
         {
-            await WriteProblemAsync(context, StatusCodes.Status400BadRequest,
-                "Query binding returned null. Ensure all required query parameters are provided.")
-                .ConfigureAwait(false);
+            // F24（2026-10-21）：与 MapQuery/MapStreamQuery 的 400 契约收敛——
+            // 原走 WriteProblemAsync（about:blank / Invalid Request / property=run），
+            // 客户端按 type/property 分支时出现两套形态。
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsJsonAsync(
+                ValidationProblemResponseFactory.CreateInvalidBody(
+                    "Query binding returned null. Ensure all required query parameters are provided."),
+                PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                contentType: null, cancellationToken: context.RequestAborted).ConfigureAwait(false);
             return;
         }
 

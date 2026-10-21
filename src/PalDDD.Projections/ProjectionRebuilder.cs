@@ -146,9 +146,9 @@ public sealed class ProjectionRebuilder<TMessage>
                 stream = _replaySource.ReadAsync(_sourceName, ct);
             }
 
-            // M2（2026-10-19）：CheckpointBatchSize > 1 时按组处理；组内只在最后位置
-            // 做一次检查点写，崩溃后最多重放一组。返回 0 表示该组已被其他 worker 租用，
-            // 停止本轮并在下次 Replay 重试（不得跳过该组）。
+            // M2（2026-10-19）：CheckpointBatchSize > 1 时按组处理；组首在处理器执行前
+            // 取租约作为续读锚点（F7，2026-10-21），组末记录完成，崩溃后最多重放一组。
+            // 返回 0 表示该组已被其他 worker 租用，停止本轮并在下次 Replay 重试（不得跳过该组）。
             var batchSize = _processor.CheckpointBatchSize;
             if (batchSize <= 1)
             {

@@ -3,7 +3,8 @@
 // ─────────────────────────────────────────────────────────────
 //
 // 💡 switch 表达式分发：3 个枚举值，JIT 生成跳表，与 FrozenDictionary 同为 O(1)。
-//   添加新数据库只需加一个 case 分支。
+//   ⚠️ 新增方言需同步 4 处：本文件 Create、DapperSqlDialect.For、DapperRetentionStore.Map、
+//   SqlTemplates 的方言 SQL 常量（2026-10-21 评审 F15 勘正：原文“只加一个 case”失实）。
 //
 // ✅ AOT 安全：零反射、零 MakeGenericType。
 //
@@ -40,6 +41,9 @@ public static class DapperConfiguration
         // MySqlConnection 构造时各自抛 provider 专属异常（或延迟到 Open），失败点与异常类型
         // 三方不一致；入口统一 ArgumentException 对齐框架其余工厂。
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        // 2026-10-21 评审 F24：与 DapperSqlDialect.For / DapperRetentionStore.Map 统一前置校验。
+        if (!Enum.IsDefined(type))
+            throw new ArgumentOutOfRangeException(nameof(type), type, "Unknown Dapper database type.");
 
         return type switch
         {

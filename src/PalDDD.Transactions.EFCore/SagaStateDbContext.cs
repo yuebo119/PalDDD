@@ -494,6 +494,9 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
                 && s.LeasedUntil == leasedUntil
                 && (s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision))
             .OrderBy(s => s.SagaId)
+            // 2026-10-21 评审 F12：与 PG/MySQL/SQL Server 回读及 Dapper 的 LIMIT @n 对齐——
+            // 冻结时钟下同 owner 同 until 连续两次租约时，原实现回读 2×batchSize 行。
+            .Take(batchSize)
             .ToListAsync(ct).ConfigureAwait(false);
     }
 
@@ -520,9 +523,12 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
         var nextCheckAtColumn = QuoteSqliteIdentifier(ColumnName(entityType, nameof(SagaState.NextCheckAt)));
 
         // 到期过滤（M1）仅在 LeaseDueSagasAsync 路径追加；空串保持旧 SQL 形状。
+        // 2026-10-21 评审 F6：NextCheckAt=NULL 视为到期（与 Dapper/PalORM/PG/MySQL/SQL Server
+        // 及 InMemory fallback 的 `IS NULL OR <= now` 对齐）——ADR-034 M1 惰性回填前，
+        // NULL 行在 SQLite 上原被永久排除，Saga 静默停滞。
         var dueClause = dueBefore is null
             ? string.Empty
-            : $"AND ({nextCheckAtColumn} IS NOT NULL AND {nextCheckAtColumn} <= {{6}})";
+            : $"AND ({nextCheckAtColumn} IS NULL OR {nextCheckAtColumn} <= {{6}})";
         // 到期过滤按最早到期取批，避免老创建但晚到期的行占满批次；无到期过滤保持 SagaId 序。
         var orderBy = dueBefore is null
             ? $"({leasedUntilColumn} IS NULL) DESC, {leasedUntilColumn}, {sagaIdColumn}"
@@ -563,7 +569,8 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
 
     /// <inheritdoc/>
     /// <remarks>
-    /// EF Core 版：DbContext 变更跟踪自动检测修改，state 参数可选。
+    /// EF Core 版：<paramref name="state"/> 必须非空（ITM-163 守卫）；
+    /// 变更由 ChangeTracker 自动检测（无需显式 Update 调用）。
     /// ITM-072：对齐 <see cref="ISagaStateStore{TState}.SaveChangesAsync"/> 契约——
     /// 原实现直接透传 <c>await SaveChangesAsync(ct)</c> 返回"实际写入实体数"：
     /// 无变更保存返回 0（被调用方误判为乐观锁冲突）、多实体保存返回 N&gt;1（契约只定义 0/1）。

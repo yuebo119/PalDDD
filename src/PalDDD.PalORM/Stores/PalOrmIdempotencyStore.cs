@@ -45,6 +45,11 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore, IIdempotency
     public async ValueTask<IdempotencyRecord?> GetAsync(
         string operationName, string key, DateTimeOffset now, CancellationToken ct = default)
     {
+        // 2026-10-21 评审 F10：与 DapperIdempotencyStore / IdempotencyDbContext.ValidateKeyParts
+        // 对齐——原实现让 null 静默进 DbParameter，失败点远离入口。
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
         // 复合主键表未注册实体 —— 用 GetRawConnection + 手动 reader（QueryFirstAsync 对未注册类型返回空对象）
         // ITM-243：经 CreateRawCommand 挂接 IUnitOfWork 环境事务
         await using var cmd = CreateRawCommand();

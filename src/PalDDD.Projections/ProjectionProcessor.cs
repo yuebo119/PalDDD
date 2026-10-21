@@ -149,13 +149,22 @@ public sealed class ProjectionProcessor<TMessage>
     }
 
     /// <summary>
-    /// 批量处理一组事件（M2）：只在最后位置做 TryStart/MarkCompleted，组内事件交给
-    /// handler。handler 实现 <see cref="IProjectionBatchHandler{TMessage}"/> 时整组一次
-    /// 调用 <c>ProjectBatchAsync</c>（可批量写），否则逐条 <c>ProjectAsync</c>。失败时把
-    /// 最后位置标记 Failed；崩溃后从上一个已完成位置重放整组，最多重放
-    /// <paramref name="batch"/>.Count 条。返回 0 表示该组已被其他 worker 租用，
-    /// 调用方应停止本轮回放并在下次调用重试（不得跳过该组）。
+    /// 批量处理一组事件（M2）：组首位置在处理器执行<b>之前</b>取得租约并作为续读锚点，
+    /// 组末位置记录组完成；组内事件交给 handler。handler 实现
+    /// <see cref="IProjectionBatchHandler{TMessage}"/> 时整组一次调用 <c>ProjectBatchAsync</c>
+    ///（可批量写），否则逐条 <c>ProjectAsync</c>。
     /// </summary>
+    /// <remarks>
+    /// 2026-10-21 评审 F7：原实现在组末 TryStart 之后、处理失败时才补写组首 Failed——
+    /// 组首写入失败时只剩组末 Failed，续读从组末之后开始，组内前 N-1 条永久跳过。
+    /// 现改为「先锚点、后处理」：组首行（Processing/Failed）在任何事件处理前就存在，
+    /// 因此处理器崩溃或组首标记失败时续读位置最小也为组首；代价是每组多一次
+    /// TryStart + MarkCompleted（默认 100 条一组，约 2% 检查点调用增量）。
+    /// <para>
+    /// 返回 0 表示该组已被其他 worker 租用，调用方应停止本轮回放并在下次调用重试
+    ///（不得跳过该组）。崩溃后最多重放一整组（<paramref name="batch"/>.Count 条）。
+    /// </para>
+    /// </remarks>
     public async ValueTask<int> ProcessBatchAsync(
         IReadOnlyList<(TMessage Message, ProjectionContext Context)> batch,
         CancellationToken ct = default)
@@ -169,17 +178,68 @@ public sealed class ProjectionProcessor<TMessage>
                 throw new ArgumentNullException(nameof(batch));
         }
 
+        var first = batch[0];
         var last = batch[^1];
-        var checkpoint = await _checkpointStore.TryStartAsync(
-            _handler.ProjectionName,
-            last.Context.SourceName,
-            last.Context.Position,
-            _timeProvider.GetUtcNow(),
-            _processingTimeout,
-            ct).ConfigureAwait(false);
+        var isSinglePosition = string.Equals(first.Context.Position, last.Context.Position, StringComparison.Ordinal);
+
+        // F7 修复：组首锚点在组末租约与 handler 执行之前取得。顺序不可交换——
+        // 先取组末会创建「推进续读位置」的行；若随后组首获取失败，组内前面的事件从未处理，
+        // 续读却会从组末继续（原缺陷的窄窗口）。组首先取失败时没有任何行被创建，
+        // 续读位置保持在上一个已完成组，安全。
+        ProjectionCheckpoint? anchor = null;
+        if (!isSinglePosition)
+        {
+            anchor = await _checkpointStore.TryStartAsync(
+                _handler.ProjectionName,
+                first.Context.SourceName,
+                first.Context.Position,
+                _timeProvider.GetUtcNow(),
+                _processingTimeout,
+                ct).ConfigureAwait(false);
+
+            if (anchor is null)
+                return 0; // 组首已被其他 worker 持有/完成：本组不处理，下一轮重试
+        }
+
+        ProjectionCheckpoint? checkpoint;
+        try
+        {
+            checkpoint = await _checkpointStore.TryStartAsync(
+                _handler.ProjectionName,
+                last.Context.SourceName,
+                last.Context.Position,
+                _timeProvider.GetUtcNow(),
+                _processingTimeout,
+                ct).ConfigureAwait(false);
+        }
+        catch (Exception leaseEx) when (leaseEx is not OperationCanceledException)
+        {
+            // 尚未处理任何事件：锚点标 Failed 把续读固定在组首（不标则滞留 Processing，
+            // 租约到期后同样从组首重试），再抛原始异常。
+            if (anchor is not null)
+            {
+                await TryMarkFailedAsync(
+                    anchor,
+                    PalDDD.Core.FailureReason.Normalize(leaseEx.Message),
+                    "MarkFirstError",
+                    leaseEx).ConfigureAwait(false);
+            }
+            throw;
+        }
 
         if (checkpoint is null)
-            return 0; // 已被其他 worker 租用/已完成：停止本轮，下次从既有检查点重试
+        {
+            // 组末已被其他 worker 持有/完成：本组不处理；锚点标 Failed 让下一轮从组首重试。
+            if (anchor is not null)
+            {
+                await TryMarkFailedAsync(
+                    anchor,
+                    "Projection batch end position is held by another worker; batch was not processed.",
+                    "MarkFirstError",
+                    primary: null).ConfigureAwait(false);
+            }
+            return 0;
+        }
 
         try
         {
@@ -196,44 +256,30 @@ public sealed class ProjectionProcessor<TMessage>
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
+            // 组首锚点先标 Failed（它是续读位置的唯一保证），组末 Failed 仅作诊断。
+            if (anchor is not null)
+                await TryMarkFailedAsync(anchor, failureReason, "MarkFirstError", ex).ConfigureAwait(false);
+            await TryMarkFailedAsync(checkpoint, failureReason, "MarkFailedError", ex).ConfigureAwait(false);
+            throw;
+        }
+
+        // 成功：组首与组末都标 Completed。组首完成写失败时保持 Processing → 续读回到组首
+        // （重放整组，at-least-once）；组末完成写失败时最多重放最后一条。
+        if (anchor is not null)
+        {
             try
             {
-                await _checkpointStore.MarkFailedAsync(
-                    checkpoint, failureReason, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+                await _checkpointStore.MarkCompletedAsync(
+                    anchor, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception markEx)
             {
-                ex.Data["MarkFailedError"] = markEx.Message;
+                System.Diagnostics.Activity.Current?.AddEvent(new(
+                    "projection.anchor-completion-pending-confirmation",
+                    tags: new System.Diagnostics.ActivityTagsCollection { ["error"] = markEx.Message }));
+                _logger?.Warning(
+                    $"Projection '{_handler.ProjectionName}' group anchor completion could not be persisted; the group may be replayed (at-least-once); error: {markEx.Message}");
             }
-
-            // 失败位置在组内时，仅把“最后位置”标 Failed 会让续读从最后位置之后开始，
-            // 跳过组内未处理的中间事件。把组首位置也标 Failed，确保重放从组首开始
-            //（最多重放一组；组首的 TryStart 在正常回放序下不会被其他 worker 持有）。
-            var first = batch[0];
-            if (!string.Equals(first.Context.Position, last.Context.Position, StringComparison.Ordinal))
-            {
-                try
-                {
-                    var firstCheckpoint = await _checkpointStore.TryStartAsync(
-                        _handler.ProjectionName,
-                        first.Context.SourceName,
-                        first.Context.Position,
-                        _timeProvider.GetUtcNow(),
-                        _processingTimeout,
-                        CancellationToken.None).ConfigureAwait(false);
-                    if (firstCheckpoint is not null)
-                    {
-                        await _checkpointStore.MarkFailedAsync(
-                            firstCheckpoint, failureReason, _timeProvider.GetUtcNow(), CancellationToken.None)
-                            .ConfigureAwait(false);
-                    }
-                }
-                catch (Exception markFirstEx)
-                {
-                    ex.Data["MarkFirstError"] = markFirstEx.Message;
-                }
-            }
-            throw;
         }
 
         try
@@ -251,5 +297,27 @@ public sealed class ProjectionProcessor<TMessage>
                 $"Projection '{_handler.ProjectionName}' batch handler succeeded but checkpoint completion could not be persisted (pending confirmation); error: {markEx.Message}");
         }
         return batch.Count;
+    }
+
+    /// <summary>失败标记 best-effort：标记失败不得替换主异常，挂 Data 或日志供诊断。</summary>
+    private async ValueTask TryMarkFailedAsync(
+        ProjectionCheckpoint checkpoint,
+        string failureReason,
+        string dataKey,
+        Exception? primary)
+    {
+        try
+        {
+            await _checkpointStore.MarkFailedAsync(
+                checkpoint, failureReason, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception markEx)
+        {
+            if (primary is not null)
+                primary.Data[dataKey] = markEx.Message;
+            else
+                _logger?.Warning(
+                    $"Projection '{_handler.ProjectionName}' checkpoint failure mark could not be persisted; error: {markEx.Message}");
+        }
     }
 }

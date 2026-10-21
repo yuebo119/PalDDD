@@ -119,14 +119,15 @@ internal readonly record struct SagaStepRegistration(
     string Key,
     SagaStep Step);
 
-/// <summary>Saga key 工具——"state|EventType" 格式的解析。Saga 与 SagaTimeoutDetector 共用。</summary>
+/// <summary>Saga key 工具——"state|EventType" 格式的构造与解析。Saga 注册期构造 key 使用
+/// <see cref="Make"/>；<see cref="ExtractState"/> 仅测试/兼容保留。</summary>
 /// <remarks>
 /// 💡 <b>key 格式（P3 声明·十七轮）</b>：事件精确匹配 key 为 <c>"State|EventName"</c>（如
 /// <c>"Approved|OrderCreated"</c>）；通配步骤 key 仅为 <c>"State"</c>（无事件段）。
 /// <para>
 /// ⚠️ <b>运行时校验：</b><see cref="Make"/> 在 state 包含 <c>|</c> 时抛出 <see cref="ArgumentException"/>，
-/// 因为含 <c>|</c> 的状态名会破坏 <see cref="ExtractState"/> 的状态名还原逻辑。
-/// 实际场景中状态名通常为 PascalCase 或 kebab-case，不会出现此字符。
+/// 因为 <c>|</c> 是 key 线格式的分隔符（超时扫描已改为注册期保存 State，不再从 key 切分；
+/// 该校验保留为线格式契约）。<see cref="ExtractState"/> 无生产调用点。
 /// <see cref="SagaState.CurrentState"/> 的 setter 同样执行此校验。
 /// </para>
 /// <para>
@@ -145,9 +146,11 @@ internal static class SagaKey
     /// </summary>
     /// <param name="state">Saga 状态名（不含 <c>|</c> 字符）</param>
     /// <param name="eventType">触发事件类型；null 表示通配步骤</param>
+    /// <exception cref="ArgumentNullException"><paramref name="state"/> 为 null 时抛出。</exception>
     /// <exception cref="ArgumentException"><paramref name="state"/> 包含 <c>|</c> 字符时抛出</exception>
     public static string Make(string state, Type? eventType)
     {
+        ArgumentNullException.ThrowIfNull(state);
         if (state.Contains('|'))
             throw new ArgumentException(
                 $"Saga 状态名不能包含 '|' 字符（当前值：\"{state}\"），因为 '|' 用作 key 分隔符。请使用 PascalCase 或 kebab-case。",

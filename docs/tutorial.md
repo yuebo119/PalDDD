@@ -463,20 +463,31 @@ await _eventBus.PublishAsync(new OrderCreated(...), ct);  // 这里崩溃 → �
 **Outbox 模式：**
 
 ```csharp
-// 1. 注册 Outbox 拦截器（在 SaveChanges 事务内写领域事件到 Outbox）
-builder.Services.AddPalOutboxUnitOfWork<AppDbContext>();
-// 2. 注册 Outbox 后台处理器（轮询 OutboxMessages 表 → 发布到 Broker）
-builder.Services.AddPalOutbox();
-// 3. 注册 Outbox Store（EF Core 方式：继承已验证方言基类，此处 PostgreSQL）
+// 1. 业务上下文直接继承已验证方言基类（此处 PostgreSQL）：它同时是 DbContext 与
+//    IPalOutboxStore，拦截器跟踪的 outbox 实体由同一个 SaveChanges 持久化。
 //    方言基类已实现抽象的 LeasePendingMessagesAsync（原子租约）；直接继承 OutboxDbContext
 //    则必须自行实现该抽象成员。
-//    定义 AppOutboxDbContext：
-//    public sealed class AppOutboxDbContext(DbContextOptions<AppOutboxDbContext> options)
-//        : PostgreSqlOutboxDbContext(options);
-builder.Services.AddDbContext<AppOutboxDbContext>(o =>
-    o.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
-builder.Services.AddScoped<IPalOutboxStore>(sp => sp.GetRequiredService<AppOutboxDbContext>());
+public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
+    : PostgreSqlOutboxDbContext(options)
+{
+    public DbSet<Order> Orders => Set<Order>();
+}
+
+// 2. 注册 DbContext，并把拦截器挂到它的 options（同一次配置调用）
+builder.Services.AddDbContext<AppDbContext>((sp, o) => o
+    .UseNpgsql(builder.Configuration.GetConnectionString("Default"))
+    .UsePalOutboxInterceptor(sp));
+
+// 3. 注册工作单元 + 拦截器；泛型约束要求 AppDbContext 实现 IPalOutboxStore
+builder.Services.AddPalOutboxUnitOfWork<AppDbContext>();
+// 4. 注册 Outbox 后台处理器（轮询 OutboxMessages 表 → 发布到 Broker）
+builder.Services.AddPalOutbox();
 ```
+
+> ⚠️ 不要为 outbox 单独建一个 `AppOutboxDbContext` 再注册成 `IPalOutboxStore`：拦截器的
+> `AddMessageAsync` 只是把消息跟踪到那个独立上下文，业务上下文的 `SaveChanges` 不会保存
+> 它，领域事件会静默丢失。`AddPalOutboxUnitOfWork` 在解析工作单元时会校验「同一实例 +
+> 拦截器已挂接」，错误装配直接抛异常。
 
 **发生了什么？** 当 `SaveChangesAsync` 被调用时：
 
@@ -848,6 +859,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddPalCoreStack();
 builder.Services.AddPalJsonSerialization(catalog => { ... });
 builder.Services.AddPalCommandHandler<...>();
+// AppDbContext 须按 §4.6 配置：继承 PostgreSqlOutboxDbContext + UsePalOutboxInterceptor(sp)
 builder.Services.AddPalOutboxUnitOfWork<AppDbContext>();
 builder.Services.AddPalOutbox();
 builder.Services.AddPalHealthChecks();      // 注册 Broker + Outbox 健康检查（Build 前调用）
@@ -982,15 +994,14 @@ builder.Services.AddPalCommandHandler<CreateOrderCommand, OrderId, CreateOrderHa
 builder.Services.AddPalQueryHandler<GetOrderQuery, OrderDto, GetOrderHandler>();
 builder.Services.AddPalEventHandler<OrderPaid, OrderPaidHandler>();
 
+// ── EF Core（业务上下文 = Outbox 上下文；拦截器挂到同一 options）──
+builder.Services.AddDbContext<AppDbContext>((sp, o) => o
+    .UseNpgsql(builder.Configuration.GetConnectionString("Default"))
+    .UsePalOutboxInterceptor(sp));
+
 // ── Outbox（可靠事件发布）──
 builder.Services.AddPalOutboxUnitOfWork<AppDbContext>();
 builder.Services.AddPalOutbox();
-
-// ── EF Core ──
-builder.Services.AddDbContext<AppDbContext>(o =>
-    o.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
-builder.Services.AddDbContext<AppOutboxDbContext>(o =>
-    o.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
 
 builder.Services.AddPalHealthChecks();
 

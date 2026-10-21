@@ -1,11 +1,9 @@
 // ─────────────────────────────────────────────────────────────
-// 📜 DapperEventLog — Dapper 事件日志（乐观并发 + 缓冲读取（LIMIT 分页可控，非真流式——三十七轮口径勘正））
+// 📜 DapperEventLog — Dapper 事件日志（乐观并发 + DbDataReader 真流式读取）
 // ─────────────────────────────────────────────────────────────
 // AOT 安全性：
-//   ⚠️ 读取路径使用 Dapper 运行时反射物化（QueryAsync<EventLogRow>），
-//      非 Dapper.AOT SG 拦截器。EventLogRow DTO 通过 public 无参构造 + setters
-//      供 Dapper 反射赋值，再映射到 RecordedEvent。此项目 IsAotCompatible=true
-//      但实际读取路径依赖 Dapper 运行时 IL 生成，AOT 发布时需验证可用性。
+//   ✅ 读取路径是 DbDataReader 逐行 yield（SequentialAccess），峰值内存只与本行载荷相关；
+//      原 QueryAsync<EventLogRow> 的反射物化路径已删除（EventLogRow/ToRecordedEvent 0 引用）。
 //   ✅ 手写 SQL — 所有 SQL 在编译时确定，零动态构建。
 //
 // 💡 什么是事件日志（EventLog）？
@@ -688,8 +686,8 @@ public sealed class DapperEventLog : IEventLog
         // maxCount<0 时 SQLite `LIMIT -1` = 无限制（危险——负数意图不明时全量拉取，绕过调用方上限）
         ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
 
-        // 💡 RecordedEvent 的构造函数是 internal 且属性只读，Dapper 运行时无法直接物化。
-        // 通过 EventLogRow DTO（public 无参构造 + public setters）读取，再映射到 RecordedEvent。
+        // RecordedEvent 构造函数 internal 且属性只读；读路径经 DbDataReader 逐行取值后
+        // 调用 RehydrateFromBytes（无 DTO、无反射物化）。
         // v38 P3：读侧观测补齐（v37 补了写侧，读侧 PD24 残留——镜像 EventLogDbContext:97/138
         // 与 PalOrmEventLog:199/239 的 StartEventLogReadStream/StartEventLogReadAll +
         // EventLogRead 计数形态）——读取耗时与吞吐此前不可见。
@@ -701,9 +699,8 @@ public sealed class DapperEventLog : IEventLog
         // 计数；计数在 yield 前（对齐 EventLogDbContext/PalOrmEventLog/InMemoryEventLog）。
         try
         {
-            // 2026-10-19 性能实施轮：改为 DbDataReader 真流式（SequentialAccess）。
-            // 原 QueryAsync<EventLogRow> 会把全部行先物化进 List 再迭代，1M 事件可占数 GB；
-            // 现按行读取并立即映射，峰值内存只与本行载荷相关。
+            // 2026-10-19 性能实施轮：DbDataReader 真流式（SequentialAccess）——按行读取并
+            // 立即映射，峰值内存只与本行载荷相关（不是 LIMIT 分页、不是整表缓冲）。
             await foreach (var evt in ReadEventsCoreAsync(
                 UseBinaryEventId ? EventLogSql.ReadStreamBinary : EventLogSql.ReadStream,
                 streamName, fromVersion, maxCount, binaryProjection: UseBinaryEventId, cancellationToken).ConfigureAwait(false))
@@ -954,54 +951,6 @@ public sealed class DapperEventLog : IEventLog
     // ITM-796（2026-09-19）：IsUniqueConstraintViolation 私有副本（DbException 签名）
     // 收口至 DapperSqlErrorClassifier（码集并集）——IL2075 抑制随类迁移；
     // 调用点经 using static 解析至类成员
-
-    /// <summary>
-    /// Dapper 读取 DTO — 桥接 PascalCase 列名到 RecordedEvent 的 internal 构造路径。<br/>
-    /// 保持 RecordedEvent 的领域封装不变（internal 构造 + 只读属性）。
-    /// </summary>
-    [SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes",
-        Justification = "Dapper 运行时通过反射实例化此 DTO 用于 QueryAsync<EventLogRow> 物化。")]
-    internal sealed class EventLogRow
-    {
-        public long GlobalPosition { get; set; }
-        public PalUlid EventId { get; set; }
-        public byte[]? EventIdBin { get; set; }
-        public string EventName { get; set; } = "";
-        public string StreamName { get; set; } = "";
-        public long StreamVersion { get; set; }
-        public int SchemaVersion { get; set; }
-        public string ContentType { get; set; } = "";
-        public byte[] Payload { get; set; } = [];
-        public byte[] Metadata { get; set; } = [];
-        public DateTimeOffset RecordedAt { get; set; }
-        public string? ActorId { get; set; }
-        public string? Reason { get; set; }
-        // 修复覆盖残留（对齐 PalORM/EFCore 审计 6 字段）：此前 Dapper 路径只持久化 2 字段，
-        // 追踪链（correlation/causation/trace）在 Dapper 存储上断，导出/备份往返丢字段
-        public string? CorrelationId { get; set; }
-        public string? CausationId { get; set; }
-        public string? TraceParent { get; set; }
-        public string? TraceState { get; set; }
-
-        public RecordedEvent ToRecordedEvent()
-            => RecordedEvent.RehydrateFromBytes(
-                StreamName, StreamVersion, GlobalPosition, RecordedAt,
-                EventId, EventName, SchemaVersion, ContentType,
-                Payload, Metadata,
-                string.IsNullOrEmpty(ActorId) && string.IsNullOrEmpty(Reason)
-                    && string.IsNullOrEmpty(CorrelationId) && string.IsNullOrEmpty(CausationId)
-                    && string.IsNullOrEmpty(TraceParent) && string.IsNullOrEmpty(TraceState)
-                    ? EventAuditMetadata.Empty
-                    : new EventAuditMetadata(ActorId, Reason,
-                        ParseUlid(CorrelationId), ParseUlid(CausationId),
-                        TraceParent, TraceState));
-
-        /// <summary>安全解析 Ulid 字符串 —— 脏数据返回 null（与 PalORM 版 P0-6 同风格）。</summary>
-        private static PalUlid? ParseUlid(string? value)
-            => value is not null && PalUlid.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var ulid)
-                ? ulid
-                : (PalUlid?)null;
-    }
 
     /// <summary>
     /// I（2026-10-10 优化轮）：单事件 Any 快路径的回读行——三方言模板以显式 PascalCase

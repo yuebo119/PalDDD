@@ -357,7 +357,8 @@ public sealed class OutboxBatchProcessor
         var retried = 0;
         var persistFailed = 0;
 
-        // R4/P0-2（ADR-027）：成功路径批量标记（同串行路径；批序 = 出窗序 = 启动序）
+        // R4/P0-2（ADR-027）：成功路径批量标记（同串行路径；批序 = 出窗完成序，
+        // 2026-10-21 起——窗口 16 时完成序 ≠ 启动序，慢发布消息的标记后移最多 15 位）
         var batchMark = policy.BatchMarkThreshold > 1 && _store is IBatchMarkOutboxStore batchStore ? batchStore : null;
         List<OutboxMessage>? markPending = batchMark is null ? null : new List<OutboxMessage>(Math.Min(policy.BatchMarkThreshold, 64));
         var lastFlushAt = _timeProvider.GetTimestamp();

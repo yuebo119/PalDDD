@@ -103,6 +103,9 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
 
         // 核心原子租约 SQL —— 必须 QueryAsync/ExecuteAsync（QueryBuilder UPDATE 拒绝子查询+LIMIT+RETURNING 整行）
         // 方言分支：PG/SQLite 走 RETURNING 单语句；MySQL 走 UPDATE + SELECT 两步。
+        // 2026-10-21 评审 F15（C3）：新增第 4 方言需同步 8 个 SQL Store 文件（SqlErrorClassifier/
+        // Retention/EventLog/Idempotency/Inbox/Outbox/Projection/Saga）；本轮按 ADR-020 只做声明，
+        // 不做策略表迁移。
         if (TProvider.SupportsReturningClause)
         {
             // ITM-210 修复（三十二轮）：PG 子查询补 FOR UPDATE SKIP LOCKED——对齐
@@ -168,10 +171,10 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
     }
 
     /// <summary>
-    /// MySQL 版本探测（ADR-025）：首次 MySQL 租约时 SELECT VERSION() 一次并缓存于本实例——
-    /// DataSession 不暴露连接 ServerVersion 属性，QueryAsync 标量探针是可用通道；store 每
-    /// DI scope 一个实例，探测成本 = 每 scope 一次额外往返（与 GetPending 轮询同量级）。
-    /// 探测失败（映射不支持/连接异常）按空串处理 → fail-safe 回退无锁模板。
+    /// MySQL 版本探测（ADR-025）：首次 MySQL 租约读 <c>DbConnection.ServerVersion</c>
+    ///（握手包已带，零额外往返）并缓存于本实例。探测失败（连接异常）按空串处理 →
+    /// fail-safe 回退无锁模板。2026-10-21 评审勘正：原实现为 SELECT VERSION() 往返探针，
+    /// 已随 2026-10-19 性能轮改为 ServerVersion；配套的 <c>VersionProbeRow</c> 已删除。
     /// </summary>
     private string? _mySqlServerVersion;
 

@@ -19,28 +19,42 @@ public enum RetentionDialect
 /// ADO 执行由 Dapper/PalORM/EF Core 三个基础设施适配包各自完成，避免领域/应用层
 /// 泄漏 <c>DbCommand</c>。
 /// </summary>
+/// <remarks>
+/// 本类的表名/列名是 Dapper/PalORM 的 snake_case 物理名。EF Core 默认映射是 PascalCase
+/// （表 = DbSet 名、列 = 属性名），由 <c>EfCoreRetentionStore</c> 从 EF 模型解析后自行构造
+/// SQL（2026-10-21 评审 F5：复用本类的 SQL 会在 PG/MySQL 上报 relation/column 不存在）。
+/// </remarks>
 public static class RetentionSql
 {
     /// <summary>Outbox 终态行删除 SQL（按批次限制）。</summary>
     public static string OutboxDelete(RetentionDialect dialect, bool includeDead)
     {
-        if (dialect == RetentionDialect.MySql)
-            return includeDead ? OutboxDeleteAllMySql : OutboxDeleteProcessedMySql;
-        return includeDead ? OutboxDeleteAllSubquery : OutboxDeleteProcessedSubquery;
+        ValidateDialect(dialect);
+        return dialect == RetentionDialect.MySql
+            ? (includeDead ? OutboxDeleteAllMySql : OutboxDeleteProcessedMySql)
+            : (includeDead ? OutboxDeleteAllSubquery : OutboxDeleteProcessedSubquery);
     }
 
     /// <summary>Inbox 已处理行删除 SQL。</summary>
     public static string InboxDelete(RetentionDialect dialect)
-        => dialect == RetentionDialect.MySql ? InboxDeleteMySql : InboxDeleteSubquery;
+    {
+        ValidateDialect(dialect);
+        return dialect == RetentionDialect.MySql ? InboxDeleteMySql : InboxDeleteSubquery;
+    }
 
     /// <summary>幂等过期记录删除 SQL。</summary>
     public static string IdempotencyDelete(RetentionDialect dialect)
-        => dialect switch
+    {
+        ValidateDialect(dialect);
+        return dialect switch
         {
             RetentionDialect.MySql => IdempotencyDeleteMySql,
             RetentionDialect.PostgreSql => IdempotencyDeletePostgreSql,
-            _ => IdempotencyDeleteSqlite,
+            RetentionDialect.Sqlite => IdempotencyDeleteSqlite,
+            // 穷尽 switch：新增方言必须在此登记（原 `_ =>` 兜底会把新方言静默映射到 SQLite SQL）。
+            _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, "Unknown retention dialect."),
         };
+    }
 
     /// <summary>按方言编码时间参数（与各存储栈既有格式一致）。</summary>
     /// <param name="dialect">数据库方言。</param>
@@ -59,8 +73,15 @@ public static class RetentionSql
             RetentionDialect.PostgreSql => value,
             RetentionDialect.MySql => value.UtcDateTime.ToString(
                 "yyyy-MM-dd HH:mm:ss.ffffff", CultureInfo.InvariantCulture),
-            _ => sqliteProviderNative ? value : value.ToString("O", CultureInfo.InvariantCulture),
+            RetentionDialect.Sqlite => sqliteProviderNative ? value : value.ToString("O", CultureInfo.InvariantCulture),
+            _ => throw new ArgumentOutOfRangeException(nameof(dialect), dialect, "Unknown retention dialect."),
         };
+
+    private static void ValidateDialect(RetentionDialect dialect)
+    {
+        if (!Enum.IsDefined(dialect))
+            throw new ArgumentOutOfRangeException(nameof(dialect), dialect, "Unknown retention dialect.");
+    }
 
     private const string OutboxDeleteProcessedSubquery =
         "DELETE FROM outbox_messages WHERE id IN (SELECT id FROM outbox_messages WHERE status = 1 AND processed_at IS NOT NULL AND processed_at < @cutoff ORDER BY processed_at LIMIT @n)";

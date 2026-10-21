@@ -188,7 +188,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
 
                 // P3 修复（十七轮）：泛型声明（自身带类型参数或嵌套于泛型包含类型）暂不支持
                 // （见 GenericDeclarationNotSupported 注释）——编译期报 PALID003，不生成坏代码
-                if (structSymbol.Arity > 0 || IsWithinGenericContainingType(structSymbol))
+                if (structSymbol.Arity > 0 || GeneratorSymbols.IsWithinGenericContainingType(structSymbol))
                 {
                     return IdGenInfo.Create(
                         Namespace: null,
@@ -444,8 +444,10 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         });
 
         // A15（S1 轮，2026-10-15）：重复 hint 首现映射节点——Collect 后单遍计算（只做
-        // hint 字符串拼接，无模板渲染）。值与当前候选集对应、每次重算（无跨 pass 状态）；
-        // ImmutableDictionary 值相等，稳定时 Combine 对不重跑。值 = 该 hint 首个出现的
+        // hint 字符串拼接，无模板渲染）。值与当前候选集对应、每次重算（无跨 pass 状态）。
+        // 2026-10-21 勘正：ImmutableDictionary 只实现引用相等，原注释「值相等、稳定时
+        // Combine 不重跑」失实；现显式 WithComparer（内容相等）让稳定时命中缓存。
+        // 值 = 该 hint 首个出现的
         // 定位标识（Location.Identity）——重复 hint 时仅首个生成、其余报诊断（P2 修复的
         // 「恰好一份生成物」契约，SourceGeneratorDirectTests 断言在案）。
         // B10（2026-10-16）：hint/identity 改取 transform 预计算值（info.Hint/info.Identity），
@@ -468,7 +470,8 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                         dups.Add(info.Hint, existing);
                 }
                 return dups.ToImmutable();
-            });
+            })
+            .WithComparer(ImmutableStringDictionaryComparer.Instance);
 
         // A15（S1 轮）：AddSource 移入 per-candidate Combine 节点——原 Collect 回调在任一
         // 候选变化时对全部候选重跑（每候选一次约 2.5KB 模板渲染 + AddSource，N 个带特性
@@ -553,19 +556,6 @@ public sealed class IdentityGenerator : IIncrementalGenerator
         => node is StructDeclarationSyntax
            || (node is RecordDeclarationSyntax r
                && r.ClassOrStructKeyword.IsKind(SyntaxKind.StructKeyword));
-
-    // P3 修复（十七轮）：沿 ContainingType 链检测泛型包含类型——
-    // 生成物的 namespace 级 converter 无法以裸名引用泛型外层内的嵌套 ID
-    private static bool IsWithinGenericContainingType(INamedTypeSymbol symbol)
-    {
-        for (var t = symbol.ContainingType; t is not null; t = t.ContainingType)
-        {
-            if (t.Arity > 0)
-                return true;
-        }
-
-        return false;
-    }
 
     private static string GenerateIdentityCode(IdGenInfo info)
     {

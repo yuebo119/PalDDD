@@ -52,8 +52,9 @@ public sealed class InboxBatchConsumer<TMessage>
     }
 
     /// <summary>
-    /// 启动批量消费。返回的句柄释放后停止订阅与组批泵；批内消息最多重放一批
-    /// （at-least-once，需业务 handler 幂等）。
+    /// 启动批量消费。返回的句柄释放后停止订阅与组批泵。
+    /// <b>投递语义是 at-most-once</b>（Kafka 自动提交 / RabbitMQ <c>requeue:false</c>：
+    /// 失败消息不会重投），重试责任在业务 handler；不要按 at-least-once 设计幂等性。
     /// </summary>
     /// <param name="handler">业务 handler；每批由 <see cref="InboxProcessor"/> 逐条调用。</param>
     /// <param name="messageIdSelector">消息 ID 选择器；null 时取 <see cref="MessageConsumeContext.MessageId"/>。</param>

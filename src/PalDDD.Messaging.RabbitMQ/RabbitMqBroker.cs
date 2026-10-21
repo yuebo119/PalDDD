@@ -396,8 +396,18 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             ? await _connection.CreateChannelAsync(consumerOptions, ct).ConfigureAwait(false)
             : _channel;
 
-        await consumerChannel.ExchangeDeclareAsync(exchange, ExchangeType.Fanout, durable: true, cancellationToken: ct).ConfigureAwait(false);
-        await consumerChannel.QueueDeclareAsync(queueName, durable: false, exclusive: true, autoDelete: true, cancellationToken: ct).ConfigureAwait(false);
+        try
+        {
+            await consumerChannel.ExchangeDeclareAsync(exchange, ExchangeType.Fanout, durable: true, cancellationToken: ct).ConfigureAwait(false);
+            await consumerChannel.QueueDeclareAsync(queueName, durable: false, exclusive: true, autoDelete: true, cancellationToken: ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // F14（2026-10-21）：原实现在此无 catch——ct 在 channel 创建后取消、或声明失败时，
+            // 每订阅独立 channel 模式会残留 1 个 channel 到连接关闭。
+            await DisposeConsumerChannelSafeAsync(consumerChannel, ownsConsumerChannel, queueName).ConfigureAwait(false);
+            throw;
+        }
 
         // v33 P3：队列删除清理的共享收口——v31 初始化失败 catch 与本轮扩围后的新 catch
         // 共用（避免两处 catch 各自内联同一段尽力删除逻辑）
@@ -544,7 +554,13 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             // CA2025：ct 回调为同步签名，无法 await；取消任务与 consumer channel 释放
             // 由订阅句柄的有序清理（Cancel → Dispose channel）兜底。
 #pragma warning disable CA2025
-            tokenReg = ct.Register(() => { _ = CancelConsumeSafeAsync(consumerChannel, consumerTag, queueName); });
+            // F21（2026-10-21）：丢弃的 Task 改为内部 catch-all 观察——原 CancelConsumeSafeAsync
+            // 的过滤排除 OCE，逃逸路径无日志且成为未观察任务。
+            tokenReg = ct.Register(static state =>
+            {
+                var (broker, channel, tag, queue) = ((RabbitMqBroker, IChannel, string, string))state!;
+                _ = broker.CancelConsumeObservedAsync(channel, tag, queue);
+            }, (this, consumerChannel, consumerTag, queueName));
 #pragma warning restore CA2025
         }
         catch
@@ -552,12 +568,12 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             await tokenReg.DisposeAsync().ConfigureAwait(false);
             if (consumerTag is not null)
                 await CancelConsumeSafeAsync(consumerChannel, consumerTag, queueName).ConfigureAwait(false);
-            await DisposeConsumerChannelSafeAsync(consumerChannel, ownsConsumerChannel, queueName).ConfigureAwait(false);
-            linkedCts.Dispose();
-            // v33 P3：队列删除逻辑上移至 CleanupDeclaredQueueAsync 共享收口（QueueBind/
-            // linkedCts 失败的扩围 catch 同用；v31 原内联 try-catch 注释见局部函数内）
+            // F14（2026-10-21）：顺序修正——队列删除必须先于 channel 释放。原实现先
+            // DisposeConsumerChannelSafeAsync 再 QueueDeleteAsync，删除打在已释放 channel 上
+            // 必失败并被吞，exclusive 空队列残留到连接关闭。
             await CleanupDeclaredQueueAsync().ConfigureAwait(false);
             await DisposeConsumerChannelSafeAsync(consumerChannel, ownsConsumerChannel, queueName).ConfigureAwait(false);
+            linkedCts.Dispose();
             throw;
         }
 
@@ -646,6 +662,22 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.Warning($"BasicCancel failed (channel closed?): {queueName}, consumerTag={consumerTag}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// F21（2026-10-21）：取消回调的观察包装——取消回调不能 async，原 `_ = CancelConsumeSafeAsync`
+    /// 丢弃的 Task 在 OCE 路径无日志且可能成为未观察异常。本方法捕获全部异常并记录。
+    /// </summary>
+    private async Task CancelConsumeObservedAsync(IChannel channel, string consumerTag, string queueName)
+    {
+        try
+        {
+            await CancelConsumeSafeAsync(channel, consumerTag, queueName).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, $"CancelConsume callback failed: {queueName}, consumerTag={consumerTag}");
         }
     }
 

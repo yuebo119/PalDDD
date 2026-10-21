@@ -40,8 +40,10 @@ internal static class ProjectionProbe
         var batched = results[1];
         if (perEvent.TryStart != count || perEvent.Completed != count)
             throw new InvalidOperationException($"M2 batch=1 checkpoint calls unexpected: {perEvent}");
-        if (batched.TryStart > 1_000 || batched.Completed > 1_000)
-            throw new InvalidOperationException($"M2 batch=100 checkpoint calls exceed 2k: {batched}");
+        // 2026-10-21 评审 F7：组首锚点在处理前取得（每组 +1 TryStart、+1 MarkCompleted），
+        // 100k 事件 / 100 条一组 = 1000 组 → 上限从 1000 放宽到 2500（仍比逐事件 200k 低 80×）。
+        if (batched.TryStart > 1_250 || batched.Completed > 1_250)
+            throw new InvalidOperationException($"M2 batch=100 checkpoint calls exceed 2.5k: {batched}");
 
         Console.WriteLine(
             $"M2 PASS: events={count}, batch=1 calls={perEvent.TryStart + perEvent.Completed} ({perEvent.ElapsedMs}ms), " +

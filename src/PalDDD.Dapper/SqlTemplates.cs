@@ -7,10 +7,11 @@
 //   ｜ 各自内嵌了 SQL 语句。当需要切换数据库（PG→MySQL）或调整 SQL 时，
 //   ｜ 需要修改分散在 4 个文件中的 SQL 字符串，容易遗漏和不一致。
 //   ｜
-//   ｜ SqlTemplates 将所有 SQL 集中到一个文件：
-//   ｜   - 切换数据库 → 只需修改此文件
-//   ｜   - 审查 SQL   → 只需看一个文件
-//   ｜   - 保持业务逻辑代码不变
+//   ｜ SqlTemplates 集中 Outbox/Inbox/SagaState/EventLog 的 SQL：
+//   ｜   - 这四族切方言只需修改此文件
+//   ｜   - 幂等（DapperIdempotencyStore，10 条）与投影检查点
+//   ｜     （DapperProjectionCheckpointStore，9 条）因单消费者内联，未迁入本文件
+//   ｜     （2026-10-21 勘正原文「所有 SQL」失实；按 ADR-020 不做迁移）
 //   ｜
 //   ｜ 使用场景：
 //   ｜   DapperOutboxStore 引用 SqlTemplates.OutboxInsert

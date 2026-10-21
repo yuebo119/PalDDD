@@ -49,7 +49,8 @@ public sealed class ChildSagaStep<TChildState, TInput, TOutput> : SagaStep, IInt
     /// <param name="key">步骤 key</param>
     /// <param name="inputSelector">从父 Saga 状态提取子 Saga 输入</param>
     /// <param name="outputSelector">从子 Saga 状态提取输出写回父状态</param>
-    /// <param name="outputApplier">可选的输出应用器——将输出写回父状态。若为 null，输出仅被提取但不自动应用。</param>
+    /// <param name="outputApplier">可选的输出应用器——将输出写回父状态。若为 null，
+    /// <paramref name="outputSelector"/> 不会被求值：输出既不提取也不应用。</param>
     /// <param name="compensate">补偿动作（可选）</param>
     public ChildSagaStep(
         string key,

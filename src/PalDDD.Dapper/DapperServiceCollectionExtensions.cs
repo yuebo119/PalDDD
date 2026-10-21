@@ -132,8 +132,9 @@ public static class DapperServiceCollectionExtensions
     /// <summary>
     /// P2/P3 修复（十七轮）：为 Saga 快照持久化（saga_data 列）提供便捷注册。<br/>
     /// <see cref="AddPalDapperTransactions"/> 的开放泛型注册 <c>DapperSagaStateStore&lt;&gt;</c>
-    /// 无 <c>JsonTypeInfo</c> 传入通道——jsonTypeInfo 恒 null，用户自定义 TState 的业务字段
-    /// 不持久化（saga_data 列写 NULL，重启即丢，仅恢复 SagaId/状态等元数据列）。<br/>
+    /// 无 <c>JsonTypeInfo</c> 传入通道——未调用本方法时 <c>SerializeState</c> 在保存首个
+    /// Saga 状态时 <b>fail-fast 抛 <see cref="InvalidOperationException"/></b>
+    ///（decision-2026-09-19；原文「写 NULL、重启即丢」与实际实现对错）。<br/>
     /// 此方法以<b>具体泛型</b>注册覆盖开放泛型（MS DI 具体泛型优先于开放泛型解析），
     /// 闭包构造传入 <paramref name="jsonTypeInfo"/>（STJ source-generated）。
     /// <para>

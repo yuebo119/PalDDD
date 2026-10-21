@@ -3,11 +3,12 @@
 // ─────────────────────────────────────────────────────────────
 // AOT 安全性：
 //   ✅ 纯 SQL 字符串拼接 — 零反射。
-//   ✅ deleted_at 列 + 部分索引，查询自动排除已删除行。
+//   ⚠️ 框架不自动注入过滤（2026-10-21 勘正：原文「查询自动排除」失实）——调用方必须
+//      在 SELECT 中显式拼接 ActiveFilter()（见该类方法），否则会读到已软删行。
 //
 // 模式说明：
 //   DELETE → UPDATE xxx SET deleted_at = NOW()
-//   SELECT → WHERE deleted_at IS NULL（自动注入）
+//   SELECT → WHERE deleted_at IS NULL（调用方显式拼接）
 //   RESTORE → UPDATE xxx SET deleted_at = NULL
 //
 // 架构设计（DDD/Clean Architecture 友好）：

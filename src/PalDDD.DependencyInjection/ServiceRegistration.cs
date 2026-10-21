@@ -473,7 +473,8 @@ internal sealed class HandlerCollector
 
     public HandlerCollector(IEnumerable<HandlerMarker> markers)
     {
-        // v27 P3（v26 M2 批次漏网）：全仓构造守卫——同文件姊妹 HandlerRegistrar:391 已有，本构造补齐
+        // v27 P3（v26 M2 批次漏网）：全仓构造守卫——同文件姊妹 HandlerRegistrar 构造函数已有，本构造补齐
+        //（2026-10-21：移除行号引用，原 :391 已漂移 105 行）
         ArgumentNullException.ThrowIfNull(markers);
         Markers = markers.ToImmutableArray();
     }

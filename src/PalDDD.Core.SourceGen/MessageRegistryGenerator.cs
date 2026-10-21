@@ -97,7 +97,7 @@ public sealed class MessageRegistryGenerator : IIncrementalGenerator
                 // v25 P3 生成器族：泛型声明（自身带类型参数或嵌套于泛型包含类型）拦截——
                 // 提前返回携带 DiagnosticId，RegisterSourceOutput 报 PALMSG006 并剔除出
                 // 生成物（镜像 EnumGenerator PALENUM004 的 transform 形态）
-                if (type.Arity > 0 || IsWithinGenericContainingType(type))
+                if (type.Arity > 0 || GeneratorSymbols.IsWithinGenericContainingType(type))
                 {
                     return new MessageInfo(
                         type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
@@ -333,18 +333,6 @@ public static class PalMessageCatalog
     private static bool HasVersionSuffix(string name, int schemaVersion)
         => name.EndsWith(".v" + schemaVersion, StringComparison.Ordinal);
 
-    // v25 P3 生成器族：沿 ContainingType 链检测泛型包含类型——嵌套于泛型外层内的消息
-    // 无法在生成物中以裸名 typeof 引用（镜像 EnumGenerator/IdentityGenerator 同名方法）
-    private static bool IsWithinGenericContainingType(INamedTypeSymbol symbol)
-    {
-        for (var t = symbol.ContainingType; t is not null; t = t.ContainingType)
-        {
-            if (t.Arity > 0)
-                return true;
-        }
-
-        return false;
-    }
 
     private sealed record MessageInfo(
         string TypeName,

@@ -24,7 +24,9 @@ namespace PalDDD.Serialization.MemoryPack;
 /// 零反射"与非泛型路径的反射事实及包级设置矛盾，已收窄。
 /// 📐 与 JsonMessageSerializer 互斥注册（均为 IMessageSerializer Singleton）。
 /// 💡 泛型路径使用 <c>MemoryPackSerializer.Serialize&lt;T&gt;()</c>，编译时类型安全。
-/// 💡 非泛型路径使用 <c>MemoryPackSerializer.Serialize(value.GetType())</c> + descriptor 回退。
+/// 💡 非泛型路径使用 <c>MemoryPackSerializer.Serialize(message.GetType(), message)</c>——
+/// 按运行时类型直接序列化；未标 <c>[MemoryPackable]</c> 的派生类型会失败，无 descriptor
+/// 类型回退（2026-10-21 勘正：原文「+ descriptor 回退」不存在）。
 /// <para>
 /// 📐 <b>契约（八轮评审 P2 修复）</b>：传入非 null <see cref="MessageDescriptor"/> 时，
 /// 其 <c>ContentType</c> 必须为 <see cref="ContentTypes.MemoryPack"/>，否则抛

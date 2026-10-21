@@ -19,11 +19,12 @@
 //   - 纯基础设施层路由决策，领域层无感知。
 //   - 通过 IServiceProvider 注入，Dapper Store 取对应数据源。
 //
-// 使用方式：
-//   services.AddPalNpgsqlDataSourceWithReadWriteSplit(
-//       primary, [replica1, replica2]);
+// 使用方式（2026-10-21 勘正：AddPalNpgsqlDataSourceWithReadWriteSplit 只注册数据源，
+// 不注册 router——原示例按它取 router 会在首次解析时抛 InvalidOperationException）：
+//   services.AddPalReadWriteRouter(primary, [replica1, replica2]);
 //
 //   // 显式路由
+//   var router    = sp.GetRequiredService<PostgreSqlReadWriteRouter>();
 //   var readConn  = router.GetReader().CreateConnection();
 //   var writeConn = router.GetWriter().CreateConnection();
 // ─────────────────────────────────────────────────────────────

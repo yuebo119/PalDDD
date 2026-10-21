@@ -94,6 +94,12 @@ public static class ServiceCollectionExtensions
     /// <param name="dialect">数据库方言。</param>
     /// <param name="configure">可选保留策略配置。</param>
     /// <typeparam name="TContext">已注册的 DbContext 类型（其数据库须含 outbox/inbox/idempotency 表）。</typeparam>
+    /// <remarks>
+    /// 表名从 <typeparamref name="TContext"/> 的 EF 模型解析（<c>OutboxMessage</c> /
+    /// <c>InboxMessage</c> 实体）；模型未映射对应实体时回退 EF 默认名
+    ///（<c>OutboxMessages</c> / <c>InboxMessages</c> / <c>IdempotencyRecords</c>）。
+    /// 自定义映射（<c>ToTable</c>）请直接构造 <see cref="EfCoreRetentionStore"/> 三表重载。
+    /// </remarks>
     public static IServiceCollection AddPalEfCoreRetention<TContext>(
         this IServiceCollection services,
         RetentionDialect dialect,
@@ -104,9 +110,7 @@ public static class ServiceCollectionExtensions
 
         services.AddPalRetention(configure);
         services.TryAddScoped<IRetentionStore>(sp =>
-            new EfCoreRetentionStore(
-                sp.GetRequiredService<TContext>().Database.GetDbConnection(),
-                dialect));
+            new EfCoreRetentionStore(sp.GetRequiredService<TContext>(), dialect));
         return services;
     }
 }

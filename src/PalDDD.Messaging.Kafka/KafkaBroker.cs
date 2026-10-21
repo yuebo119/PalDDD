@@ -18,7 +18,8 @@ namespace PalDDD.Messaging.Kafka;
 /// 使用 Confluent.Kafka 2.x。<br/>
 /// 消息按类型名路由到同名 Topic。<br/>
 /// 使用显式消息 ID 作为消息 Key 保证可追踪性。<br/>
-/// 消费循环在后台线程运行（Confluent.Kafka 的 Consume 为同步阻塞 API，必须用 Task.Run）。<br/>
+/// 消费循环由专用 <see cref="Thread"/> 承载（Confluent.Kafka 的 Consume 为同步阻塞 API；
+/// Task.Run 的 LongRunning 只覆盖首个同步段，续体会回到 ThreadPool——2026-10-21 勘正）。<br/>
 /// 后台事件可观测（2026-10-08 审计对齐）：producer/consumer 均接线 ErrorHandler/StatisticsHandler/
 /// LogHandler——librdkafka 后台线程的错误/日志/统计此前结构性不可见；致命错误走 Error（携带
 /// KafkaException），自愈类错误走 Warning，统计 JSON 需 config 显式设 StatisticsIntervalMs 才回调（Debug 门控）。
@@ -418,7 +419,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
 
         // 2026-10-20 性能轮：Consume 是同步阻塞原生调用。原 LongRunning 只覆盖委托的
         // 首个同步段——第一次 await 之后的续体回到 ThreadPool，阻塞 Consume 实际占用
-        // 池线程。改为「专用线程只 Consume + 有界 Channel + 异步 worker 处理」：
+        // 池线程。改为「专用线程只 Consume + 无界 Channel（由 slots 提供背压）+ 异步 worker 处理」：
         // 线程不进入 ThreadPool，slots 提供背压，handler 仍在异步上下文执行。
         // 2026-10-21：worker 支持 maxConcurrent 个在途 handler（默认 1 = 原逐条保序形态）。
         var maxConcurrent = _consumerDispatchConcurrency;
@@ -793,7 +794,8 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             _removeAction = removeAction;
         }
 
-        /// <summary>后台消费 Task — 可用于健康检查和异常观测。
+        /// <summary>后台消费 Task — 仅供本类 Dispose 路径观察异常与完成。
+        /// 类型私有，外部健康检查无法取得（2026-10-21 勘正：原注释承诺的健康检查不可达）。
         /// 登记与循环启动之间存在极小窗口，期间为 null（登记先行的顺序权衡）。</summary>
 #pragma warning disable S1144 // 健康检查/异常观测的公开诊断属性（文档承诺）
         public Task? ConsumeTask => Volatile.Read(ref _consumeTask);

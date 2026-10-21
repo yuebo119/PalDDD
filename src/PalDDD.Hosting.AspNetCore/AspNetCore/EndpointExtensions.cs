@@ -550,7 +550,8 @@ public static class EndpointExtensions
 
     /// <summary>读取 JSON 请求体，错误时写入对应错误响应并返回 (false, null)。
     /// ITM-799（2026-09-19）：415/畸形 JSON/验证异常/空 body 四种错误编排原在
-    /// MapCommand/MapQuery 两处逐字重复（约 40 行）——收口为单一出处，历史注释随迁。
+    /// MapCommand 两个重载中逐字重复（约 40 行）——收口为单一出处，历史注释随迁。
+    ///（2026-10-21 勘正：原文写 MapCommand/MapQuery，但 MapQuery 是 GET、无反序列化段。）
     /// ADR-030 D8：泛化版（类型参数 TCommand → T）——MapStreamQuery POST 形态复用，
     /// 415/畸形 JSON/空 body 错误形态不变。
     /// ADR-031 补强（2026-10-19）：MapDetachedStreamQuery POST 形态复用同一出处，
@@ -614,8 +615,8 @@ public static class EndpointExtensions
 
     /// <summary>写入 400 + ValidationProblemResponse 体（ITM-283：反序列化段与派发段统一形态——
     /// 消除裸 400 无 body 与派发段 ITM-168 形态的分叉）。v33 P3：派发段三处逐字重复的
-    /// catch 收口到本方法（可选 ct 透传——派发段原样携带 RequestAborted，写响应可随
-    /// 客户端断连取消；反序列化/绑定段不传 ct，与原 default(CancellationToken) 等价）。</summary>
+    /// catch 收口到本方法（可选 ct 透传——派发段与反序列化/绑定段均原样携带
+    /// RequestAborted，写响应可随客户端断连取消）。</summary>
     private static async Task WriteValidationProblemAsync(
         HttpContext context,
         CQRS.PalValidationException ex,
