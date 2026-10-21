@@ -12,7 +12,7 @@
 |---|---|---|---|
 | **AOT 等级** | ✅ **库级真 AOT** | ✅ **调用点级 AOT**(封装 API 面实测) | ❌ **实验性基础设施** |
 | 机制 | PalORM.SourceGen 编译期生成 Row DTO 物化 + 编译期 SQL,零运行时反射 | Dapper.AOT 1.1.0 拦截器:34 个调用点编译期重定向到生成代码 | precompiled queries + compiled model:发布期静态扫描 LINQ 生成拦截器(**微软自述高度实验**) |
-| 生产就绪 | ✅ CI 每次 NativeAOT publish + 运行断言 | ✅ SQLite / PG 18.4 / MySQL 8.4.11 真库 NativeAOT 二进制实跑 13/13 ×3 | ❌ 官方警告"not yet suited for production";发布仍报大量 trim 警告 |
+| 生产就绪 | ✅ CI 每次 NativeAOT publish + 运行断言 | ✅ SQLite / PG 18.6 / MySQL 8.4.11 真库 NativeAOT 二进制实跑 33/33 ×3（2026-10-21 补批量 EventLog 与 Inbox 唯一冲突路径） | ❌ 官方警告"not yet suited for production";发布仍报大量 trim 警告 |
 | 反射残留 | 零 | 库内经典路径保留但调用点不可达(46 条上游警告与生成代码正交,见下文边界) | 表达式树编译被拦截器消除,但零警告目标未达成(#33478) |
 | 行为差异 | 无 | SQL 执行层 ct 不可中断(连接超时兜底);接口签名与连接层 ct 保留 | —(本仓未启用 AOT) |
 | 本仓声明 | `IsAotCompatible=true` | `IsAotCompatible=true` + `[module:DapperAot]` 已启用 | `IsAotCompatible=false`(诚实) |
@@ -32,6 +32,7 @@
 - snake_case 列名由生成器 `NormalizedEquals` 规范化匹配,不依赖全局 `MatchNamesWithUnderscores`。
 - byte[] blob 参数经 `DynamicParameters` + `DbType.Binary`(绕开上游 List expansion 对 byte[] 的误展开,见实验报告坑 3)。
 - JIT 项目**零配置零感知**:拦截器生成的就是普通 C# 代码,JIT 下行为一致且更快(省首调 jitter 与策略缓存);"不需要 AOT 的项目"无需任何选择。
+- **2026-10-21 批量路径 AOT 勘正**:PG `AppendSingleRow` 与 MySQL `PositionRange` 原为 private 嵌套类型,Dapper.AOT 生成代码不可见,批量 EventLog 调用点静默回落 Reflection.Emit(NativeAOT 下 `PlatformNotSupportedException`);改 internal 后拦截器生效。`DapperSqlErrorClassifier` 同步把 PG/MySQL/SQLite 的鸭子类型反射改为强类型判定(三驱动已是本包 PrivateAssets 实现依赖),避免裁剪后属性不可见把唯一冲突误判为非冲突。三方言 NativeAOT 探针 33/33。
 
 **边界(消费者必读)**:
 

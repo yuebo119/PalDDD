@@ -624,8 +624,13 @@ public sealed class DapperEventLog : IEventLog
     }
 
     /// <summary>B2：MySQL 批量化位置范围回查结果（列别名 Min/Max 按名映射）。</summary>
+    /// <remarks>
+    /// 2026-10-21 AOT 勘正：原 private 嵌套导致 Dapper.AOT 生成代码无法引用该类型，
+    /// 调用点静默回落经典 Reflection.Emit 路径（NativeAOT 下 PlatformNotSupportedException）。
+    /// 改 internal 后生成器可见，与同程序集生成代码同一可访问面。
+    /// </remarks>
     [StructLayout(LayoutKind.Auto)]
-    private readonly record struct PositionRange(long Min, long Max);
+    internal readonly record struct PositionRange(long Min, long Max);
 
     /// <summary>
     /// B2：多行 VALUES INSERT 构造（PG RETURNING 与 MySQL 范围回查两形态共用单一来源）——
@@ -959,8 +964,8 @@ public sealed class DapperEventLog : IEventLog
     /// MatchNamesWithUnderscores 全局开关。
     /// </summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1812",
-        Justification = "Dapper QuerySingleAsync<T> 运行时反射物化（与同文件 EventRow 同路径），分析器不可见")]
-    private sealed class AppendSingleRow
+        Justification = "由 Dapper.AOT 生成代码物化（2026-10-21 起调用点走拦截器，不再是运行时反射）。")]
+    internal sealed class AppendSingleRow
     {
 #pragma warning disable S1144 // Dapper 运行时反射物化使用 init 访问器
         public long GlobalPosition { get; init; }

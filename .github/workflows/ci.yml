@@ -340,6 +340,72 @@ jobs:
       - name: Run AOT-published binary (AotSample)
         run: ./samples/PalDDD.AotSample/bin/Release/net11.0/linux-x64/publish/PalDDD.AotSample
 
+  dapper-aot-probe:
+    # 2026-10-21 R8：Dapper 栈批量路径的 AOT 守卫。此前 aot-verify 只发布两个样本，
+    # Dapper 探针不在 CI——private 嵌套行类型导致拦截器静默回落（PG AppendSingleRow /
+    # MySQL PositionRange）与错误分类器反射在裁剪后失效两处回归只能靠本地手测。
+    # 本 job 在真实 PG/MySQL service container 上发布并实跑 NativeAOT 探针（SQLite + 两方言）。
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: palddd_probe
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      mysql:
+        image: mysql:8.4.11
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: palddd_probe
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '11.0.x'
+
+      - name: Cache NuGet
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/Directory.Packages.props', '**/Directory.Build.props') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: PublishAot (Dapper probe)
+        run: dotnet publish samples/PalDDD.DapperAotProbe/PalDDD.DapperAotProbe.csproj -c Release -r linux-x64 -p:PublishAot=true --verbosity normal
+
+      - name: Run AOT probe (SQLite)
+        run: ./samples/PalDDD.DapperAotProbe/bin/Release/net11.0/linux-x64/publish/PalDDD.DapperAotProbe
+
+      - name: Run AOT probe (PostgreSQL)
+        env:
+          PALDDD_TEST_PG: Host=127.0.0.1;Port=5432;Database=palddd_probe;Username=postgres;Password=postgres
+        run: ./samples/PalDDD.DapperAotProbe/bin/Release/net11.0/linux-x64/publish/PalDDD.DapperAotProbe --provider Pg
+
+      - name: Run AOT probe (MySQL)
+        env:
+          PALDDD_TEST_MYSQL: Server=127.0.0.1;Port=3306;Database=palddd_probe;User ID=root;Password=root
+        run: ./samples/PalDDD.DapperAotProbe/bin/Release/net11.0/linux-x64/publish/PalDDD.DapperAotProbe --provider MySql
+
   quality-analyzers:
     # 2026-10-18：第三方分析器（Roslynator/Meziantou/Sonar）opt-in 棘轮。
     # 默认构建仍关闭（EnableQualityAnalyzers=false，零警告契约不变）；本 job 打开后

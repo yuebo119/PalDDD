@@ -176,7 +176,7 @@ PalORM 是推荐的持久化路径——完整链路 Native AOT 支持，取代 
 
 ## Dapper 适配层 — 调用点级 AOT（2026-09-13 实测通过）
 
-Dapper.AOT 1.1.0 全量启用（`[module:DapperAot]` + 34 调用点 `CommandDefinition`→直接重载 + 声明式 TypeHandler 接管运行时注册）。SQLite / PostgreSQL 18.4 / MySQL 8.4.11 真库 NativeAOT 二进制实测各 13/13（四组件全 CRUD + blob 往返）。
+Dapper.AOT 1.1.0 全量启用（`[module:DapperAot]` + 34 调用点 `CommandDefinition`→直接重载 + 声明式 TypeHandler 接管运行时注册）。SQLite / PostgreSQL 18.6 / MySQL 8.4.11 真库 NativeAOT 二进制实测各 33/33（Outbox/EventLog/Idempotency/Saga/Checkpoint/Inbox 六组件，含 PG/MySQL 批量 EventLog 路径；2026-10-21 修复批量行类型可访问性与唯一冲突分类器反射后复测）。
 
 **能力边界**：封装 API 面（六接口 × 34 调用点）AOT 实测通过；Dapper.dll 库级非 AOT 干净（上游 46 条警告，全部落在经典反射路径，与拦截器生成代码正交）——绕过封装直用 Dapper 原生 API（`CommandDefinition`/`dynamic`/运行时 `AddTypeHandler`）在 AOT 下不受支持。行为变化：SQL 执行层 ct 不可中断（直接重载无 ct 参数，连接超时兜底）。
 
