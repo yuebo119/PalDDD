@@ -109,6 +109,25 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
     /// <inheritdoc />
     public override bool SupportsConcurrentPublish => _concurrentPublishSafe;
 
+    private ushort _consumerDispatchConcurrency = 1;
+
+    /// <summary>
+    /// 每订阅的并发 handler 数（默认 1 = 保序逐条）。大于 1 时同一订阅的 handler 可并发
+    /// 执行，消息处理顺序不再保证；调用方必须保证 handler 线程安全且幂等。Kafka 自动提交
+    /// 与失败消息按 at-most-once 弃置的既有语义不变。必须在 SubscribeAsync 之前设置。
+    /// </summary>
+    public ushort ConsumerDispatchConcurrency
+    {
+        get => _consumerDispatchConcurrency;
+        set
+        {
+            if (value == 0)
+                throw new ArgumentOutOfRangeException(
+                    nameof(value), "ConsumerDispatchConcurrency must be greater than zero.");
+            _consumerDispatchConcurrency = value;
+        }
+    }
+
     /// <inheritdoc />
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static",
         Justification = "接口成员必须为实例成员；能力值由 broker 实现类型决定。")]
@@ -376,7 +395,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         // 2026-10-20 性能轮：Consume 是同步阻塞原生调用。原 LongRunning 只覆盖委托的
         // 首个同步段——第一次 await 之后的续体回到 ThreadPool，阻塞 Consume 实际占用
         // 池线程。改为「专用线程只 Consume + 有界 Channel + 异步 worker 处理」：
-        // 线程不进入 ThreadPool，Channel 容量 1 提供逐条背压，handler 仍在异步上下文执行。
+        // 线程不进入 ThreadPool，slots 提供背压，handler 仍在异步上下文执行。
+        // 2026-10-21：worker 支持 maxConcurrent 个在途 handler（默认 1 = 原逐条保序形态）。
+        var maxConcurrent = _consumerDispatchConcurrency;
         var channel = Channel.CreateUnbounded<ConsumeResult<string, byte[]>>(
             new UnboundedChannelOptions
             {
@@ -384,8 +405,8 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                 SingleWriter = true
             });
         // 专用线程上的同步背压：Wait(token) 阻塞本线程而不占用线程池；worker 读到消息即释放
-        // 一个槽位，形态等价原容量 1 Channel（最多 1 条处理中 + 1 条排队）。
-        var slots = new SemaphoreSlim(1, 1);
+        // 一个槽位。槽位数 = 并发 handler 上限（默认 1 = 最多 1 处理中 + 1 排队）。
+        var slots = new SemaphoreSlim(maxConcurrent, maxConcurrent);
         var producerCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var consumerThread = new Thread(() =>
         {
@@ -447,68 +468,28 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         // 保存 Task 引用，用于等待完成和错误观测
         var consumeTask = Task.Run(async () =>
         {
+            var inFlight = new List<Task>(maxConcurrent);
             try
             {
                 while (!tokenSnapshot.IsCancellationRequested)
                 {
-                    ConsumeResult<string, byte[]> result;
-                    result = await channel.Reader.ReadAsync(tokenSnapshot).ConfigureAwait(false);
-                    slots.Release(); // 已取走一条：允许专用线程再入队一条（最多 1 处理中 + 1 排队）
+                    var result = await channel.Reader.ReadAsync(tokenSnapshot).ConfigureAwait(false);
+                    slots.Release();
 
-                    try
+                    var handlerTask = HandleMessageAsync(result);
+                    if (maxConcurrent == 1)
                     {
-                        // ITM-628 修复：分区 EOF 空消息守卫（EnablePartitionEof=true 时
-                        // Consume 返回 ConsumeResult.Message == null，仅 IsPartitionEOF 置位）——
-                        // 原代码直接解引用 result.Message.Value 抛 NRE，落 catch(Exception)
-                        // 记假错误日志。EOF 非消息，跳过继续等待（continue 锚定本 while 体）
-                        if (result.Message is null)
-                            continue;
-                        // 三十八轮 P3 修复：tombstone（null value）消息走专门分支——
-                        // 原路径 null 经隐式转换成空 span 触发反序列化异常，日志噪声且语义混淆
-                        if (result.Message.Value is null)
-                        {
-                            _logger.Information($"Tombstone (null value) message on {topic}, discarding");
-                            continue;
-                        }
-                        // 2026-10-19 性能实施轮：走泛型反序列化（编译时 JsonTypeInfo<T>/
-                        // MemoryPack 泛型 Formatter），免运行时 Type 查找与值类型装箱。
-                        TMessage? message = Serializer.Deserialize<TMessage>(result.Message.Value, descriptor);
-                        if (message is not null)
-                        {
-                            // P2 修复（八轮评审）：消费端还原追踪头——写侧 CreateHeaders 的镜像
-                            // C-11（EPSL 地毯审计 2026-10-11）：单趟遍历 Confluent Headers 直产
-                            // 已解码字典（原 ToHeaderMap 中间字典 + FromHeaders 二次物化消除）
-                            var consumeContext = FromKafkaHeaders(result.Message.Headers);
-                            await handler(message, consumeContext, tokenSnapshot).ConfigureAwait(false);
-                        }
-                        else
-                        {
-                            // 反序列化返回 null — 消息无法处理，不重试
-                            _logger.Warning($"Deserializing {typeof(TMessage).Name} returned null, discarding message: {topic}");
-                        }
+                        // 默认形态：逐条 await（与 2026-10-20 版本逐位一致，零额外调度）。
+                        await handlerTask.ConfigureAwait(false);
+                        continue;
                     }
-                    // v37 P3：关停谓词拆双分支（镜像 RabbitMqBroker v31/v33 关停/非关停双 catch
-                    // 形态）——关停 OCE（tokenSnapshot 已取消）走 Warning + break 中断 while
-                    //（对齐外层关停分支语义），不再把关停误标为 Error；非关停 OCE（应用自身
-                    // 取消）保留 v36 语义 Error 后继续消费。tokenSnapshot 为启动时快照，
-                    // IsCancellationRequested 在 Dispose 后读取安全（不抛 ODE）
-                    catch (OperationCanceledException) when (tokenSnapshot.IsCancellationRequested)
+
+                    inFlight.Add(handlerTask);
+                    if (inFlight.Count >= maxConcurrent)
                     {
-                        _logger.Warning($"Handling {typeof(TMessage).Name} message was canceled during shutdown: {topic}");
-                        break; // 关停：中断 while（与外层关停分支同语义，直落 finally Close+Dispose）
-                    }
-                    catch (OperationCanceledException ex)
-                    {
-                        // v36 P1 真修（v34 假修勘正）：非关停 OCE = 应用自身取消 = 单消息事件
-                        //（对齐 RabbitBroker v33 判定）——本 catch 必须位于 while 体内：v34 的
-                        // 对齐只改了外层 catch 的日志文本，catch 锚定在 while 之外物理上不可
-                        // 能继续循环（捕获后直落 finally Close+Dispose → 订阅静默死亡），
-                        // "continuing consumption" 文案与实际终止行为相反。移入后消费继续
-                        _logger.Error(ex, $"Handler for {typeof(TMessage).Name} threw a non-shutdown OperationCanceledException, discarding: {topic}");
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        _logger.Error(ex, $"Failed to handle {typeof(TMessage).Name} message: {topic}");
+                        var completed = await Task.WhenAny(inFlight).ConfigureAwait(false);
+                        inFlight.Remove(completed);
+                        await completed.ConfigureAwait(false);
                     }
                 }
             }
@@ -524,10 +505,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             {
                 _logger.Warning($"Kafka consume channel closed unexpectedly: {topic} @ {_consumerConfig.GroupId}: {ex.Message}");
             }
-            // v36 勘正：外层非关停 OCE 兜底——v34 假修勘正后，handler 的非关停 OCE 已在
-            // while 体内 catch+继续（真 continue）；到达本外层 catch 的是 while 条件求值等
-            // 循环骨架位置的非关停 OCE——此处终止是真实语义（骨架异常无法安全 continue），
-            // 文案如实描述终止
+            // v36 勘正：外层非关停 OCE 兜底——handler 的非关停 OCE 已在 HandleMessageAsync
+            // 内 catch 后返回；到达本外层 catch 的是 while 条件求值等循环骨架位置的非关停
+            // OCE——此处终止是真实语义（骨架异常无法安全 continue），文案如实描述终止。
             catch (OperationCanceledException ex)
             {
                 _logger.Error(ex, $"Kafka consume loop terminated by non-shutdown cancellation at loop skeleton: {topic} @ {_consumerConfig.GroupId}");
@@ -551,6 +531,13 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                 }
                 await producerCompleted.Task.ConfigureAwait(false);
 
+                if (inFlight.Count > 0)
+                {
+                    // 已启动的 handler 必须收尾后再释放 consumer；handler 感知 tokenSnapshot
+                    // 取消后退出（不响应取消的 handler 由宿主 ShutdownTimeout 兜底）。
+                    await Task.WhenAll(inFlight).ConfigureAwait(false);
+                }
+
                 // ITM-217 修复（三十二轮）：Close() 抛非 OCE 异常时不得跳过 Dispose——
                 // 原 finally 裸调两行，Close 失败即泄漏 consumer（连接/组状态）。
                 try
@@ -572,6 +559,59 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                 {
                     // Confluent.Kafka Dispose 幂等——与 KafkaSubscription 兜底 Dispose 双重释放安全
                     consumer.Dispose();
+                }
+            }
+
+            async Task HandleMessageAsync(ConsumeResult<string, byte[]> result)
+            {
+                try
+                {
+                    // ITM-628 修复：分区 EOF 空消息守卫（EnablePartitionEof=true 时
+                    // Consume 返回 ConsumeResult.Message == null，仅 IsPartitionEOF 置位）——
+                    // 原代码直接解引用 result.Message.Value 抛 NRE，落 catch(Exception)
+                    // 记假错误日志。EOF 非消息，跳过继续等待。
+                    if (result.Message is null)
+                        return;
+                    // 三十八轮 P3 修复：tombstone（null value）消息走专门分支——
+                    // 原路径 null 经隐式转换成空 span 触发反序列化异常，日志噪声且语义混淆
+                    if (result.Message.Value is null)
+                    {
+                        _logger.Information($"Tombstone (null value) message on {topic}, discarding");
+                        return;
+                    }
+                    // 2026-10-19 性能实施轮：走泛型反序列化（编译时 JsonTypeInfo<T>/
+                    // MemoryPack 泛型 Formatter），免运行时 Type 查找与值类型装箱。
+                    TMessage? message = Serializer.Deserialize<TMessage>(result.Message.Value, descriptor);
+                    if (message is not null)
+                    {
+                        // P2 修复（八轮评审）：消费端还原追踪头——写侧 CreateHeaders 的镜像
+                        // C-11（EPSL 地毯审计 2026-10-11）：单趟遍历 Confluent Headers 直产
+                        // 已解码字典（原 ToHeaderMap 中间字典 + FromHeaders 二次物化消除）
+                        var consumeContext = FromKafkaHeaders(result.Message.Headers);
+                        await handler(message, consumeContext, tokenSnapshot).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        // 反序列化返回 null — 消息无法处理，不重试
+                        _logger.Warning($"Deserializing {typeof(TMessage).Name} returned null, discarding message: {topic}");
+                    }
+                }
+                // v37 P3：关停谓词拆双分支（镜像 RabbitMqBroker v31/v33 关停/非关停双 catch
+                // 形态）——关停 OCE（tokenSnapshot 已取消）走 Warning 后返回（外层 while 的
+                // 取消条件随即退出），不再把关停误标为 Error；非关停 OCE（应用自身取消）
+                // 保留 v36 语义 Error 后继续消费。tokenSnapshot 为启动时快照，
+                // IsCancellationRequested 在 Dispose 后读取安全（不抛 ODE）
+                catch (OperationCanceledException) when (tokenSnapshot.IsCancellationRequested)
+                {
+                    _logger.Warning($"Handling {typeof(TMessage).Name} message was canceled during shutdown: {topic}");
+                }
+                catch (OperationCanceledException ex)
+                {
+                    _logger.Error(ex, $"Handler for {typeof(TMessage).Name} threw a non-shutdown OperationCanceledException, discarding: {topic}");
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.Error(ex, $"Failed to handle {typeof(TMessage).Name} message: {topic}");
                 }
             }
         });

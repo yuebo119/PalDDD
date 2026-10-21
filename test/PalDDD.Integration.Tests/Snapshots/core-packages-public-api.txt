@@ -992,6 +992,7 @@ class PalDDD.Messaging.NullMessageBroker
 # PalDDD.Messaging.Kafka
 class PalDDD.Messaging.Kafka.KafkaBroker
   ctor(Confluent.Kafka.ProducerConfig producerConfig, Confluent.Kafka.ConsumerConfig consumerConfig, PalDDD.Core.Logging.IPalLogger<PalDDD.Messaging.Kafka.KafkaBroker> logger, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog)
+  property System.UInt16 ConsumerDispatchConcurrency
   property System.Boolean SupportsConcurrentPublish
   property System.Boolean SupportsRawPublish
   method System.Threading.Tasks.ValueTask DisposeAsync()
