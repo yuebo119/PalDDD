@@ -310,6 +310,12 @@ TState>
             }
             catch (OperationCanceledException)
             {
+                // R11 F7：取消不得丢掉已收集的终态/租约——原实现直接 throw，循环后的
+                // flush 不可达，已补偿 saga 停留 Active 且持租，LeaseDuration 后被重租
+                // 并再次补偿。与正常收口共用同一冲刷定义（全部 CancellationToken.None）。
+                await FlushTerminalAndReleaseAsync(
+                    pendingTerminal, pendingNextCheck, pendingRelease, now, options.LeaseOwner)
+                    .ConfigureAwait(false);
                 throw; // 关停信号仍向上传播
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -323,33 +329,51 @@ TState>
         // 自定义存储回落逐条，语义与旧路径一致）；随后才做租约批量释放。
         if (pendingBackfill is not null)
             await FlushBackfillAsync(pendingBackfill, ct).ConfigureAwait(false);
+        await FlushTerminalAndReleaseAsync(
+            pendingTerminal, pendingNextCheck, pendingRelease, now, options.LeaseOwner)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// R11 F7：终态/到期推进/租约释放的统一收口（取消路径与正常路径共用）。
+    /// 三者都以 <see cref="CancellationToken.None"/> 落库——它们是终态写入，不响应取消。
+    /// </summary>
+    private async ValueTask FlushTerminalAndReleaseAsync(
+        List<(TState State, bool CompensationSucceeded)>? pendingTerminal,
+        List<TState>? pendingNextCheck,
+        List<TState>? pendingRelease,
+        DateTimeOffset now,
+        string owner)
+    {
         if (pendingTerminal is not null)
             await FlushTerminalAsync(pendingTerminal).ConfigureAwait(false);
         if (pendingNextCheck is not null)
-            await FlushNextCheckAsync(pendingNextCheck, options.LeaseOwner).ConfigureAwait(false);
-
+            await FlushNextCheckAsync(pendingNextCheck, owner).ConfigureAwait(false);
         if (pendingRelease is not null)
+            await FlushReleaseAsync(pendingRelease, now, owner).ConfigureAwait(false);
+    }
+
+    private async ValueTask FlushReleaseAsync(List<TState> pendingRelease, DateTimeOffset now, string owner)
+    {
+        try
         {
-            try
+            var batchStore = (ISagaLeaseBatchStore<TState>)_store;
+            var released = _store is ISagaScanCursorStore<TState> cursorStore
+                ? await cursorStore.ReleaseLeasesAsync(owner, pendingRelease, now, CancellationToken.None).ConfigureAwait(false)
+                : await batchStore.ReleaseLeasesAsync(owner, pendingRelease, CancellationToken.None).ConfigureAwait(false);
+            if (released < pendingRelease.Count)
             {
-                var batchStore = (ISagaLeaseBatchStore<TState>)_store;
-                var released = _store is ISagaScanCursorStore<TState> cursorStore
-                    ? await cursorStore.ReleaseLeasesAsync(options.LeaseOwner, pendingRelease, now, CancellationToken.None).ConfigureAwait(false)
-                    : await batchStore.ReleaseLeasesAsync(options.LeaseOwner, pendingRelease, CancellationToken.None).ConfigureAwait(false);
-                if (released < pendingRelease.Count)
-                {
-                    // 冲突信号粒度由逐 saga 收粗为批计数（B-1 已裁决取舍，见 ISagaLeaseBatchStore remarks）
-                    _logger.Warning(PalLogEventIds.SagaLeaseBatchPartial,
-                        "Saga lease batch release affected {Released}/{PendingCount} rows (optimistic concurrency conflicts); unreleased leases will expire by LeaseDuration",
-                        released, pendingRelease.Count);
-                }
+                // 冲突信号粒度由逐 saga 收粗为批计数（B-1 已裁决取舍，见 ISagaLeaseBatchStore remarks）
+                _logger.Warning(PalLogEventIds.SagaLeaseBatchPartial,
+                    "Saga lease batch release affected {Released}/{PendingCount} rows (optimistic concurrency conflicts); unreleased leases will expire by LeaseDuration",
+                    released, pendingRelease.Count);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger.Error(ex, PalLogEventIds.SagaLeaseBatchReleaseFailed,
-                    "Saga lease batch release failed ({PendingCount} sagas); leases will expire by LeaseDuration",
-                    pendingRelease.Count);
-            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.Error(ex, PalLogEventIds.SagaLeaseBatchReleaseFailed,
+                "Saga lease batch release failed ({PendingCount} sagas); leases will expire by LeaseDuration",
+                pendingRelease.Count);
         }
     }
 
