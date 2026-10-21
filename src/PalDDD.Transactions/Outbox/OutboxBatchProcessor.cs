@@ -8,6 +8,7 @@ using PalDDD.Core.Diagnostics;
 using PalDDD.Core.Logging;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
+using System.Threading.Channels;
 using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Transactions;
@@ -340,11 +341,13 @@ public sealed class OutboxBatchProcessor
 
     /// <summary>
     /// T3.1（2026-10-11 优化实施轮）：发布确认流水线化——窗口 &gt;1 时的分区内处理形态。
-    /// FIFO 窗口保序：发布按分区内顺序启动（RabbitMQ 单 channel 帧序由 _confirmSemaphore
-    /// 天然保序；Kafka producer 队列保序，重试乱序须 enable.idempotence，见
-    /// <see cref="OutboxOptions.MaxInFlightPublishes"/> 声明），出窗完成处理也按启动序——
-    /// 标记顺序与串行路径一致。每消息语义与串行路径逐项对齐（发布/标记同 try、失败走
-    /// 退避重试/死信、PersistSingle 计数口径），<b>改动须双侧同步</b>。
+    /// 发布按分区内顺序启动（RabbitMQ 单 channel 帧序由 _confirmSemaphore 天然保序；
+    /// Kafka producer 队列保序，重试乱序须 enable.idempotence，见
+    /// <see cref="OutboxOptions.MaxInFlightPublishes"/> 声明）；<b>出窗完成处理按完成序</b>
+    /// （2026-10-21）——单条慢投递只占自己的窗口槽，不阻塞已完成消息的标记与新发布启动；
+    /// 标记顺序因此不再与串行路径一致（fencing 逐消息独立，消费方须 Inbox 幂等）。
+    /// 每消息语义与串行路径逐项对齐（发布/标记同 try、失败走退避重试/死信、PersistSingle
+    /// 计数口径），<b>改动须双侧同步</b>。
     /// </summary>
     private async ValueTask<PartitionCounters> ProcessPartitionPipelinedAsync(
         IEnumerable<OutboxMessage> messages, OutboxOptions options, DeliveryPolicy policy, DateTimeOffset now, CancellationToken ct)
@@ -458,7 +461,25 @@ public sealed class OutboxBatchProcessor
             }
         }
 
-        var window = new Queue<(OutboxMessage Message, Task Publish)>();
+        // 完成序窗口（2026-10-21）：发布按分区序启动，出窗处理按完成序——单条慢投递只
+        // 占用它自己的窗口槽，不阻塞已完成消息的标记与新发布启动。每条完成的发布经
+        // 无界通道交给唯一读者顺序处理（计数器与批量标记因此无并发写）；同步完成的
+        // 发布直接入队，不为已完成的 Task 付一次续体分配。
+        var window = new List<(OutboxMessage Message, Task Publish)>(policy.PublishWindow);
+        var completions = Channel.CreateUnbounded<(OutboxMessage Message, Task Publish)>(
+            new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = false
+            });
+
+        async ValueTask ProcessNextCompletionAsync()
+        {
+            var entry = await completions.Reader.ReadAsync(ct).ConfigureAwait(false);
+            window.Remove(entry);
+            await HandleOutcomeAsync(entry.Message, entry.Publish).ConfigureAwait(false);
+        }
+
         try
         {
             foreach (var msg in messages)
@@ -486,12 +507,9 @@ public sealed class OutboxBatchProcessor
                 var publishContext = new Messaging.MessagePublishContext(
                     msg.CorrelationId, msg.CausationId, msg.TraceParent, msg.TraceState);
 
-                // 窗口满先收队头（维持上限——队头出窗保标记启动序）
+                // 窗口满先收一条已完成（完成序；窗口上限不变）
                 while (window.Count >= policy.PublishWindow)
-                {
-                    var oldest = window.Dequeue();
-                    await HandleOutcomeAsync(oldest.Message, oldest.Publish).ConfigureAwait(false);
-                }
+                    await ProcessNextCompletionAsync().ConfigureAwait(false);
 
                 // 发布任务热启动（异常流入 Task，出窗侧统一处理——发布与标记同 try 的语义
                 // 由 HandleOutcomeAsync 承载）。2026-10-21：直接消费 broker 的 ValueTask，
@@ -503,16 +521,32 @@ public sealed class OutboxBatchProcessor
                 var publishTask = publishValueTask.IsCompletedSuccessfully
                     ? Task.CompletedTask
                     : publishValueTask.AsTask();
-                window.Enqueue((msg, publishTask));
+                var entry = (msg, publishTask);
+                window.Add(entry);
+                if (publishTask.IsCompleted)
+                {
+                    completions.Writer.TryWrite(entry);
+                }
+                else
+                {
+                    _ = publishTask.ContinueWith(
+                        static (_, state) =>
+                        {
+                            var (writer, item) = ((ChannelWriter<(OutboxMessage Message, Task Publish)>, (OutboxMessage Message, Task Publish)))state!;
+                            writer.TryWrite(item);
+                        },
+                        (completions.Writer, entry),
+                        CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+                }
             }
             while (window.Count > 0)
-            {
-                var entry = window.Dequeue();
-                await HandleOutcomeAsync(entry.Message, entry.Publish).ConfigureAwait(false);
-            }
+                await ProcessNextCompletionAsync().ConfigureAwait(false);
         }
         finally
         {
+            completions.Writer.TryComplete();
             // R4/P0-2：批末冲刷残留累积（含 OCE 关停路径——终态写不响应本次取消）
             await FlushMarksAsync(force: true, CancellationToken.None).ConfigureAwait(false);
         }
