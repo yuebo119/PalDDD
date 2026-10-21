@@ -2139,10 +2139,40 @@ public sealed class SagaTimeoutProcessorTests
         await Assert.That(state.Status).IsEqualTo(SagaStatus.AwaitingHumanDecision);
     }
 
+    [Test]
+    public async Task CheckTimeoutsAsync_CancellationDuringBatch_FlushesEarlierCompensatedTerminal()
+    {
+        // R11 F7 回归锁：批内第二个 saga 补偿抛 OCE 时，第一个已补偿 saga 的终态必须
+        // 在抛出前落库；原实现直接 throw，循环后的 flush 不可达。
+        var first = new OrderSagaState { CurrentState = "Waiting" };
+        first.StepStartedAt["Waiting|OrderPlacedSagaEvent"] = DateTimeOffset.UnixEpoch;
+        first.ExecutedStepKeys.Add("Waiting|OrderPlacedSagaEvent");
+        var second = new OrderSagaState { CurrentState = "Waiting", Error = "cancel" };
+        second.StepStartedAt["Waiting|OrderPlacedSagaEvent"] = DateTimeOffset.UnixEpoch;
+        second.ExecutedStepKeys.Add("Waiting|OrderPlacedSagaEvent");
+        var store = new RecordingSagaStateStore([first, second]);
+        var processor = new SagaTimeoutProcessor<OrderSagaState>(
+            store,
+            new CancelOnSecondCompensationSaga(),
+            NullPalLogger<SagaTimeoutProcessor<OrderSagaState>>.Instance,
+            new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions()),
+            TimeProvider.System);
+
+        await Assert.That(async () => await processor.CheckTimeoutsAsync(CancellationToken.None))
+            .Throws<OperationCanceledException>();
+
+        await Assert.That(store.SavedTerminals.Any(s => s.SagaId == first.SagaId && s.Status == SagaStatus.Compensated)).IsTrue();
+        // 第二个 saga 的 OCE 路径只落租约释放（Active），不得被误标补偿终态。
+        await Assert.That(store.SavedTerminals.Any(s => s.SagaId == second.SagaId && s.Status == SagaStatus.Compensated)).IsFalse();
+    }
+
     private sealed class RecordingSagaStateStore(IReadOnlyList<OrderSagaState>? states = null)
         : ISagaStateStore<OrderSagaState>
     {
         public int BatchSize { get; private set; }
+
+        /// <summary>R11 F7：落库时刻的终态快照（对象后续会被复用，不能只存引用）。</summary>
+        public List<(PalUlid SagaId, SagaStatus Status)> SavedTerminals { get; } = [];
 
         public ValueTask<IReadOnlyList<OrderSagaState>> GetActiveSagasAsync(int batchSize, CancellationToken ct)
         {
@@ -2164,9 +2194,32 @@ public sealed class SagaTimeoutProcessorTests
             => ValueTask.FromResult<OrderSagaState?>(null);
 
         public ValueTask<int> SaveChangesAsync(OrderSagaState state, CancellationToken ct)
+        {
+            lock (SavedTerminals)
+                SavedTerminals.Add((state.SagaId, state.Status));
             // P3 对齐八轮：SaveChangesAsync 返回受影响行数——录制替身模拟"保存成功"返回 1；
             // 返回 0 会被 SagaProcessor 解释为乐观锁冲突，只记 Warning 并跳过指标
-            => ValueTask.FromResult(1);
+            return ValueTask.FromResult(1);
+        }
+    }
+
+    /// <summary>R11 F7：第二个 saga（Error=="cancel"）补偿时抛 OCE，第一个正常补偿。</summary>
+    private sealed class CancelOnSecondCompensationSaga : Saga<OrderSagaState>
+    {
+        public CancelOnSecondCompensationSaga()
+        {
+            When("Waiting", typeof(OrderPlacedSagaEvent), new SagaStep(
+                "WaitForPayment",
+                (state, evt, ct) => ValueTask.FromResult(state),
+                (state, ct) =>
+                {
+                    if (state.Error == "cancel")
+                        throw new OperationCanceledException("shutdown during compensation");
+                    state.CurrentState = "Compensated_First";
+                    return ValueTask.CompletedTask;
+                },
+                TimeSpan.FromSeconds(1)));
+        }
     }
 
     private sealed class TimedOutSaga : Saga<OrderSagaState>
