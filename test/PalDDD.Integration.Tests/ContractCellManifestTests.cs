@@ -66,8 +66,8 @@ public sealed class ContractCellManifestTests
         // ── Idempotency（10 格）──
         new("Idempotency", "InMemory", "-", "PalDDD.Idempotency.InMemoryIdempotencyStore", IntegrationTests + "IdempotencyTests.cs", CellStatus.Local),
         new("Idempotency", "Dapper", "SQLite", "PalDDD.Dapper.DapperIdempotencyStore", IntegrationTests + "DapperIdempotencyStoreTests.cs", CellStatus.Local),
-        new("Idempotency", "Dapper", "PostgreSQL", "PalDDD.Dapper.DapperIdempotencyStore", IntegrationTests + "CrossStackIdempotencyMatrixTests.cs", CellStatus.AcceptedGap, "PG/MySQL 幂等路径无 Testcontainers 用例"),
-        new("Idempotency", "Dapper", "MySQL", "PalDDD.Dapper.DapperIdempotencyStore", IntegrationTests + "CrossStackIdempotencyMatrixTests.cs", CellStatus.AcceptedGap, "PG/MySQL 幂等路径无 Testcontainers 用例"),
+        new("Idempotency", "Dapper", "PostgreSQL", "PalDDD.Dapper.DapperIdempotencyStore", IntegrationTests + "DialectProbeTests.cs", CellStatus.CiOnly),
+        new("Idempotency", "Dapper", "MySQL", "PalDDD.Dapper.DapperIdempotencyStore", IntegrationTests + "DialectProbeTests.cs", CellStatus.CiOnly),
         new("Idempotency", "PalORM", "SQLite", "PalDDD.PalORM.Stores.PalOrmIdempotencyStore`1", PalOrmTests + "PalOrmIdempotencyStoreTests.cs", CellStatus.Local),
         new("Idempotency", "PalORM", "PostgreSQL", "PalDDD.PalORM.Stores.PalOrmIdempotencyStore`1", PalOrmTests + "PalOrmIdempotencyMultiDialectTests.cs", CellStatus.CiOnly),
         new("Idempotency", "PalORM", "MySQL", "PalDDD.PalORM.Stores.PalOrmIdempotencyStore`1", PalOrmTests + "PalOrmIdempotencyMultiDialectTests.cs", CellStatus.CiOnly),
@@ -110,6 +110,28 @@ public sealed class ContractCellManifestTests
         new("EventLog", "EFCore", "SQLite", "PalDDD.EventLog.EventLogDbContext", EventLogTests + "EventLogEfCoreTests.cs", CellStatus.Local),
         new("EventLog", "EFCore", "PostgreSQL", "PalDDD.EventLog.EventLogDbContext", EventLogTests + "EventLogEfCoreTests.cs", CellStatus.AcceptedGap, "EF 上下文仅 SQLite 关系型用例"),
         new("EventLog", "EFCore", "MySQL", "PalDDD.EventLog.EventLogDbContext", EventLogTests + "EventLogEfCoreTests.cs", CellStatus.AcceptedGap, "EF 上下文仅 SQLite 关系型用例"),
+    ];
+
+    /// <summary>
+    /// AcceptedGap 精确集合（R4 冻结）：只允许这 13 格。新增或替换任何一格都会红，
+    /// 防止“总数不变、缺口换位”洗白。剩余缺口的共同原因是 EF PG/MySQL provider 包
+    /// 不在测试面（EF Outbox 另有 TechDebtGuard 的 3 项账本）。
+    /// </summary>
+    private static readonly string[] ExpectedAcceptedGaps =
+    [
+        "EventLog/EFCore/MySQL",
+        "EventLog/EFCore/PostgreSQL",
+        "Idempotency/EFCore/MySQL",
+        "Idempotency/EFCore/PostgreSQL",
+        "Inbox/EFCore/MySQL",
+        "Inbox/EFCore/PostgreSQL",
+        "Outbox/EFCore/MySQL",
+        "Outbox/EFCore/PostgreSQL",
+        "Outbox/EFCore/SQLServer",
+        "Projections/EFCore/MySQL",
+        "Projections/EFCore/PostgreSQL",
+        "Saga/EFCore/MySQL",
+        "Saga/EFCore/PostgreSQL",
     ];
 
     private static readonly string Root = FindRepoRoot();
@@ -226,7 +248,18 @@ public sealed class ContractCellManifestTests
         Console.WriteLine($"契约格子：总计 {Cells.Length}｜verified-local {local}｜verified-ci-only {ciOnly}｜accepted-gap {gaps}");
 
         await Assert.That(local + ciOnly + gaps).IsEqualTo(Cells.Length);
-        await Assert.That(gaps).IsEqualTo(15);
+        await Assert.That(gaps).IsEqualTo(13);
+
+        // 精确集合冻结：总数相同但缺口换位同样红（R4）。
+        var actualGaps = Cells
+            .Where(c => c.Status == CellStatus.AcceptedGap)
+            .Select(c => $"{c.Component}/{c.Stack}/{c.Dialect}")
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToArray();
+        var expectedGaps = ExpectedAcceptedGaps
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToArray();
+        await Assert.That(string.Join(";", actualGaps)).IsEqualTo(string.Join(";", expectedGaps));
     }
 
     private static bool ImplementsComponent(Type type, string component)
