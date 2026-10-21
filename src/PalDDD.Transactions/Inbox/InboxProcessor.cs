@@ -319,47 +319,11 @@ public sealed class InboxProcessor
                 leaseExceeded, consumerName, (long)options.ProcessingTimeout.TotalMilliseconds, maxLeaseElapsedMs);
         }
 
-        foreach (var record in claimed)
+        async ValueTask MarkSucceededAsync()
         {
-            try
-            {
-                await handler(byId[record.MessageId], ct).ConfigureAwait(false);
-                succeeded.Add(record);
-                PalMetrics.InboxProcessed.Add(1);
-                ObserveLease();
-            }
-            catch (OperationCanceledException)
-            {
-                // 取消：不标 Failed，已认领记录滞留 Processing 至租约到期（与逐条路径同语义）。
-                // 超限告警在抛出前冲刷——取消不能成为静默窗口。
-                ObserveLease();
-                FlushLeaseWarning();
-                throw;
-            }
-            catch (Exception ex)
-            {
-                ObserveLease();
-                (failures ??= []).Add(ex);
-                PalMetrics.InboxFailed.Add(1);
-                try
-                {
-                    await _store.MarkFailedAsync(
-                        record,
-                        PalDDD.Core.FailureReason.Normalize(ex.Message),
-                        CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception markEx)
-                {
-                    ex.Data["MarkFailedError"] = markEx.Message;
-                }
-            }
-        }
+            if (succeeded.Count == 0)
+                return;
 
-        // 批末冲刷：成功/失败/混合批次都可见（取消路径已在 catch 内提前冲刷）。
-        FlushLeaseWarning();
-
-        if (succeeded.Count > 0)
-        {
             try
             {
                 var marked = await batchStore.MarkProcessedManyAsync(
@@ -386,6 +350,51 @@ public sealed class InboxProcessor
                     succeeded.Count, consumerName);
             }
         }
+
+        foreach (var record in claimed)
+        {
+            try
+            {
+                await handler(byId[record.MessageId], ct).ConfigureAwait(false);
+                succeeded.Add(record);
+                PalMetrics.InboxProcessed.Add(1);
+                ObserveLease();
+            }
+            catch (OperationCanceledException)
+            {
+                // 取消：不标 Failed，未完成记录滞留 Processing 至租约到期（与逐条路径同语义）。
+                // R11 F6：已成功项必须与逐条路径一样即时落库——原实现直接 throw，跳过了
+                // 循环后的批量标记，成功项也要等租约到期重投并再次执行副作用。
+                // 超限告警在抛出前冲刷——取消不能成为静默窗口。
+                ObserveLease();
+                await MarkSucceededAsync().ConfigureAwait(false);
+                FlushLeaseWarning();
+                throw;
+            }
+            catch (Exception ex)
+            {
+                ObserveLease();
+                (failures ??= []).Add(ex);
+                PalMetrics.InboxFailed.Add(1);
+                try
+                {
+                    await _store.MarkFailedAsync(
+                        record,
+                        PalDDD.Core.FailureReason.Normalize(ex.Message),
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception markEx)
+                {
+                    ex.Data["MarkFailedError"] = markEx.Message;
+                }
+            }
+        }
+
+        // 批末冲刷：成功/失败/混合批次都可见（取消路径已在 catch 内提前冲刷）。
+        FlushLeaseWarning();
+
+        // R11 F6：成功项批量标记抽成局部函数——正常路径与取消路径共用同一定义。
+        await MarkSucceededAsync().ConfigureAwait(false);
 
         if (failures is not null)
         {
