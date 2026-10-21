@@ -324,37 +324,46 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         ArgumentException.ThrowIfNullOrWhiteSpace(projectionName);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
 
-        try
+        // R11 F4：MySQL 的 CAST 对 "99abc" 截断为 99（不抛错），服务端聚合会把脏位置
+        // 当数值并返回 max+1，续读跳过中间事件。MySQL 直接走下方客户端聚合（逐行解析，
+        // 遇非数值返回 null）；SQLite 本就因 LINQ 翻译失败落到该档；PG 服务端 CAST 抛
+        // 22P02 由 catch 返回 null。检查点行远轻于事件行，MySQL 的 O(检查点) 物化可接受。
+        var providerName = Database.ProviderName;
+        if (providerName is null
+            || !providerName.Contains("MySql", StringComparison.OrdinalIgnoreCase))
         {
-            var firstIncomplete = await ProjectionCheckpoints
-                .AsNoTracking()
-                .Where(x => x.ProjectionName == projectionName
-                    && x.SourceName == sourceName
-                    && x.Status != ProjectionCheckpointStatus.Completed)
-                .MinAsync(x => (long?)Convert.ToInt64(x.Position, System.Globalization.CultureInfo.InvariantCulture), ct)
-                .ConfigureAwait(false);
-            if (firstIncomplete is { } incomplete)
-                return incomplete.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            try
+            {
+                var firstIncomplete = await ProjectionCheckpoints
+                    .AsNoTracking()
+                    .Where(x => x.ProjectionName == projectionName
+                        && x.SourceName == sourceName
+                        && x.Status != ProjectionCheckpointStatus.Completed)
+                    .MinAsync(x => (long?)Convert.ToInt64(x.Position, System.Globalization.CultureInfo.InvariantCulture), ct)
+                    .ConfigureAwait(false);
+                if (firstIncomplete is { } incomplete)
+                    return incomplete.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-            var max = await ProjectionCheckpoints
-                .AsNoTracking()
-                .Where(x => x.ProjectionName == projectionName && x.SourceName == sourceName)
-                .MaxAsync(x => (long?)Convert.ToInt64(x.Position, System.Globalization.CultureInfo.InvariantCulture), ct)
-                .ConfigureAwait(false);
-            return max is { } value
-                ? (value + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
-                : null;
-        }
-        catch (System.Data.Common.DbException)
-        {
-            // 数值 CAST 失败（如 PG 对非数值 Position 串 22007 族）——续读是优化面，
-            // 回退全量回放（语义兜底恒安全，对齐 Dapper 实现同款口径）
-            return null;
-        }
-        catch (InvalidOperationException)
-        {
-            // LINQ→SQL 翻译失败（SQLite provider 不映射 Convert.ToInt64(string)，实测）——
-            // 落下方最小投影客户端聚合（非全量回放：检查点行远轻于事件行）
+                var max = await ProjectionCheckpoints
+                    .AsNoTracking()
+                    .Where(x => x.ProjectionName == projectionName && x.SourceName == sourceName)
+                    .MaxAsync(x => (long?)Convert.ToInt64(x.Position, System.Globalization.CultureInfo.InvariantCulture), ct)
+                    .ConfigureAwait(false);
+                return max is { } value
+                    ? (value + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    : null;
+            }
+            catch (System.Data.Common.DbException)
+            {
+                // 数值 CAST 失败（如 PG 对非数值 Position 串 22007 族）——续读是优化面，
+                // 回退全量回放（语义兜底恒安全，对齐 Dapper 实现同款口径）
+                return null;
+            }
+            catch (InvalidOperationException)
+            {
+                // LINQ→SQL 翻译失败（SQLite provider 不映射 Convert.ToInt64(string)，实测）——
+                // 落下方最小投影客户端聚合（非全量回放：检查点行远轻于事件行）
+            }
         }
 
         // 回退档：最小投影客户端聚合——两列轻量行 + AsNoTracking（零跟踪残留、零 payload）

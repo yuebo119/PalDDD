@@ -423,6 +423,37 @@ public sealed class ProjectionResumeSqliteTests
     }
 
     [Test]
+    public async Task Dapper_NonNumericPosition_ReturnsNullFallback(CancellationToken cancellationToken)
+    {
+        // R11 F4 回归锁：SQLite CAST('99abc' AS INTEGER)=99，原实现返回 "100" 并跳过
+        // 6..99；接口契约要求非数值 Position 回退全量（null）。
+        var store = new DapperProjectionCheckpointStore(_conn, DapperDbType.Sqlite);
+        await CompleteAsync(store, "5", cancellationToken);
+        await CompleteAsync(store, "99abc", cancellationToken);
+
+        await Assert.That(await store.GetResumePositionAsync("p", "s", cancellationToken)).IsNull();
+    }
+
+    [Test]
+    public async Task EfCore_NonNumericPosition_ReturnsNullFallback(CancellationToken cancellationToken)
+    {
+        // R11 F4：EF SQLite 走客户端聚合兜底——非数值 Position 必须返回 null。
+        await using var conn = new SqliteConnection("DataSource=:memory:");
+        await conn.OpenAsync(cancellationToken);
+        var options = new DbContextOptionsBuilder<TestResumeCheckpointDbContext>()
+            .UseSqlite(conn)
+            .Options;
+        await using (var boot = new TestResumeCheckpointDbContext(options))
+            await boot.Database.EnsureCreatedAsync(cancellationToken);
+        await using var db = new TestResumeCheckpointDbContext(options);
+
+        await CompleteAsync(db, "5", cancellationToken);
+        await CompleteAsync(db, "99abc", cancellationToken);
+
+        await Assert.That(await db.GetResumePositionAsync("p", "s", cancellationToken)).IsNull();
+    }
+
+    [Test]
     public async Task EfCore_HoleAndAllCompleted_AndEmpty_ThreeStates(CancellationToken cancellationToken)
     {
         // 独立 :memory: 连接——EF 模型默认表名 ProjectionCheckpoints 与 Dapper DDL 的

@@ -193,4 +193,25 @@ public class PalOrmProjectionCheckpointStoreTests
         await Assert.That(cp!.Status).IsEqualTo(ProjectionCheckpointStatus.Completed);
         await Assert.That(cp.LeaseUntil).IsEqualTo(default(DateTimeOffset));
     }
+
+    [Test]
+    public async Task ProjectionCheckpoint_GetResumePosition_NonNumericPosition_ReturnsNullFallback()
+    {
+        // R11 F4 回归锁：SQLite CAST('99abc' AS INTEGER)=99，原实现返回 "100" 并跳过
+        // 中间事件；接口契约要求非数值 Position 回退全量（null）。
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteProjectionCheckpointStore(session);
+        var now = DateTimeOffset.UtcNow;
+
+        foreach (var position in new[] { "5", "99abc" })
+        {
+            var checkpoint = await store.TryStartAsync(
+                "proj-1", "source-1", position, now, TimeSpan.FromMinutes(5), default);
+            await store.MarkCompletedAsync(checkpoint!, now, default);
+        }
+
+        var resume = await store.GetResumePositionAsync("proj-1", "source-1", default);
+
+        await Assert.That(resume).IsNull();
+    }
 }

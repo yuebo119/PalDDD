@@ -302,15 +302,25 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
             DapperDbType.MySql => "SIGNED", // MySQL CAST 目标类型为 SIGNED/UNSIGNED（无裸 INTEGER）
             _ => "INTEGER",
         };
-        var sql = $"SELECT MIN(CASE WHEN status <> 1 THEN CAST(position AS {castType}) END) AS FirstIncomplete, MAX(CAST(position AS {castType})) AS MaxPosition FROM projection_checkpoints WHERE projection_name = @projectionName AND source_name = @sourceName";
+        // R11 F4：SQLite/MySQL 的 CAST 对 "99abc" 是截断（99）而非报错，单纯聚合会把
+        // 脏位置当数值并返回 max+1，续读跳过 6..99。增加 round-trip 守卫：CAST 结果
+        // 再转文本必须与原文逐字相同；任一不匹配即按接口契约回退全量（返回 null）。
+        // PG 的 CAST 本身抛 22P02，由下方 catch 兜底，守卫用常量 0。
+        var textType = _dbType == DapperDbType.MySql ? "CHAR" : "TEXT";
+        var invalidPositionsExpr = _dbType == DapperDbType.PostgreSql
+            ? "CAST(0 AS BIGINT)"
+            : $"COALESCE(SUM(CASE WHEN CAST(CAST(position AS {castType}) AS {textType}) <> position THEN 1 ELSE 0 END), 0)";
+        var sql = $"SELECT MIN(CASE WHEN status <> 1 THEN CAST(position AS {castType}) END) AS FirstIncomplete, MAX(CAST(position AS {castType})) AS MaxPosition, {invalidPositionsExpr} AS InvalidPositions FROM projection_checkpoints WHERE projection_name = @projectionName AND source_name = @sourceName";
         try
         {
-#pragma warning disable S2077 // sql 由方言常量 castType 构造，值侧参数化
+#pragma warning disable S2077 // sql 由方言常量 castType/textType 构造，值侧参数化
             var row = await connection.QueryFirstOrDefaultAsync<ResumeRow>(
                 sql, new { projectionName, sourceName }, Tx).ConfigureAwait(false);
 #pragma warning restore S2077
             if (row is null)
                 return null; // 理论不可达（聚合恒返一行）——防御性按无行处理
+            if (row.InvalidPositions > 0)
+                return null; // 非数值/非规范 Position——数值契约外，回退全量
             var resume = row.FirstIncomplete
                 ?? (row.MaxPosition is { } max ? max + 1 : (long?)null);
             return resume is { } value
@@ -332,6 +342,7 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
     {
         public long? FirstIncomplete { get; set; }
         public long? MaxPosition { get; set; }
+        public long InvalidPositions { get; set; }
     }
 
 

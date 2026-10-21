@@ -192,9 +192,16 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
             global::PalORM.SqlDialect.MySql => "SIGNED", // MySQL CAST 目标为 SIGNED/UNSIGNED（无裸 INTEGER）
             _ => "INTEGER",
         };
+        // R11 F4：与 Dapper 实现同款 round-trip 守卫——SQLite/MySQL 的 CAST 对 "99abc"
+        // 截断为 99，必须把 CAST 结果再转文本与原文比对；任一不匹配回退全量。PG 的
+        // CAST 本身抛错，由下方 catch 兜底。
+        var textType = TProvider.Dialect == global::PalORM.SqlDialect.MySql ? "CHAR" : "TEXT";
+        var invalidPositionsExpr = TProvider.Dialect == global::PalORM.SqlDialect.PostgreSql
+            ? "CAST(0 AS BIGINT)"
+            : $"COALESCE(SUM(CASE WHEN CAST(CAST(position AS {castType}) AS {textType}) <> position THEN 1 ELSE 0 END), 0)";
         await using var cmd = CreateRawCommand();
-#pragma warning disable S2077 // castType 为方言常量（BIGINT/SIGNED/INTEGER），值侧参数化
-        cmd.CommandText = $"SELECT MIN(CASE WHEN status <> 1 THEN CAST(position AS {castType}) END), MAX(CAST(position AS {castType})) FROM projection_checkpoints WHERE projection_name = @p0 AND source_name = @p1";
+#pragma warning disable S2077 // castType/textType 为方言常量（BIGINT/SIGNED/INTEGER/CHAR/TEXT），值侧参数化
+        cmd.CommandText = $"SELECT MIN(CASE WHEN status <> 1 THEN CAST(position AS {castType}) END), MAX(CAST(position AS {castType})), {invalidPositionsExpr} FROM projection_checkpoints WHERE projection_name = @p0 AND source_name = @p1";
 #pragma warning restore S2077
         AddParam(cmd, "@p0", projectionName);
         AddParam(cmd, "@p1", sourceName);
@@ -203,6 +210,8 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             if (!await reader.ReadAsync(ct).ConfigureAwait(false))
                 return null; // 理论不可达（聚合恒返一行）——防御性按无行处理
+            if (reader.GetInt64(2) > 0)
+                return null; // 非数值/非规范 Position——数值契约外，回退全量
             long? firstIncomplete = reader.IsDBNull(0) ? null : reader.GetInt64(0);
             long? maxPosition = reader.IsDBNull(1) ? null : reader.GetInt64(1);
             var resume = firstIncomplete ?? (maxPosition is { } max ? max + 1 : (long?)null);
