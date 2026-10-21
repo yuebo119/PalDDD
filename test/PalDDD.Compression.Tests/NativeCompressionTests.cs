@@ -28,6 +28,25 @@ public sealed class NativeCompressionTests
     }
 
     [Test]
+    public async Task Native_UnknownCompressionLevel_ThrowsArgumentOutOfRange()
+    {
+        // R11 F22 回归锁：未知枚举值必须 fail-fast（对齐 SystemCompressor），
+        // 原实现静默回落 Balanced。
+        var provider = CreateNativeProvider();
+        foreach (var algorithm in new[]
+                 {
+                     CompressionAlgorithm.LZ4,
+                     CompressionAlgorithm.ZStandard,
+                     CompressionAlgorithm.OpenZL,
+                 })
+        {
+            var compressor = provider.GetCompressor(algorithm);
+            await Assert.That(() => compressor.Compress(DeterministicData(64), (CompressionLevel)99))
+                .Throws<ArgumentOutOfRangeException>();
+        }
+    }
+
+    [Test]
     public async Task Native_LZ4_RoundTrip_PreservesOriginalData()
     {
         var compressor = CreateNativeProvider().GetCompressor(CompressionAlgorithm.LZ4);
