@@ -157,6 +157,27 @@ public sealed class PostgreSqlOutboxNotifierTests
     }
 
     [Test]
+    public async Task AddPalPostgreSqlOutboxNotifier_ComponentRegistration_ResolvesHostedService()
+    {
+        // 2026-10-21 R8 锁定：组件级注册自带 IPalLogger 门面（R7 家族）。
+        // 不调用 AddPalOutbox/AddPalCoreStack，只按 notifier 自身入口装配；
+        // 缺门面时解析 IHostedService 抛 "No service for type IPalLogger<...>"。
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPalNpgsqlDataSource(
+            "Host=notifier-test.invalid;Database=notifier_test;Timeout=1;Pooling=false",
+            "NotifierProbe");
+        services.AddPalPostgreSqlOutboxNotifier("probe_channel");
+
+        await using var provider = services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = false });
+
+        var hosted = provider.GetServices<IHostedService>().ToArray();
+        // 行为断言：解析成功且实例是 notifier（不是仅断言集合非空）。
+        await Assert.That(hosted.OfType<PostgreSqlOutboxNotifier>().Count()).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task Dispose_IsIdempotent_DoesNotThrow()
     {
         var (logger, scopeFactory) = CreateDeps();

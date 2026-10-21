@@ -61,11 +61,13 @@ namespace PalDDD.Dapper.PostgreSql;
 /// </summary>
 /// <remarks>
 /// 注册方式（在 Program.cs 中）：
+///   services.AddPalOutbox();                    // 注册 OutboxBatchProcessor（本服务的作用域依赖）
 ///   services.AddPalNpgsqlDataSource(connStr);
 ///   services.AddPalPostgreSqlOutboxNotifier();
 ///
-/// ⚠️ 必须已在 DI 中注册 <see cref="OutboxProcessor"/>（默认轮询器）。
-///   此 Notifier 将替换其轮询延迟效果——收到 NOTIFY 后立即触发批处理。
+/// ⚠️ 必须已通过 <c>AddPalOutbox()</c> 注册 <see cref="OutboxBatchProcessor"/>
+///   （Scoped；默认轮询器随该入口一并注册）。此 Notifier 收到 NOTIFY 后立即触发
+///   批处理以降低轮询延迟，默认轮询器仍可作为兜底保留。
 /// </remarks>
 public sealed class PostgreSqlOutboxNotifier : BackgroundService
 {

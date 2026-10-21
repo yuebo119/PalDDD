@@ -1094,6 +1094,76 @@ public sealed class InboxProcessorTests
     }
 
     [Test]
+    public async Task TryProcessBatchAsync_EmitsSkippedTagForAlreadyProcessedMessage(CancellationToken cancellationToken)
+    {
+        // 2026-10-21 R8 锁定：批量路径的 Inbox Process span 在批内存在跳过条目时
+        // 带 pal.inbox.skipped（跳过量），与 usage.md 的 span 契约对齐。
+        using var listener = new RecordingActivityListener();
+        var store = new InMemoryInboxStore();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions
+            {
+                DefaultConsumerName = "orders",
+                ProcessingTimeout = TimeSpan.FromMinutes(5)
+            }),
+            NullPalLogger<InboxProcessor>.Instance,
+            TimeProvider.System);
+
+        await processor.TryProcessAsync(
+            "orders",
+            "id-a",
+            static (_, _) => ValueTask.CompletedTask,
+            "payload",
+            cancellationToken);
+
+        List<(string, string)> batch = [("id-a", "already"), ("id-b", "fresh")];
+        var processed = await processor.TryProcessBatchAsync(
+            "orders",
+            batch,
+            static (_, _) => ValueTask.CompletedTask,
+            cancellationToken);
+
+        await Assert.That(processed).IsEqualTo(1);
+        var activity = listener.StoppedActivities.First(a =>
+            a.OperationName == "Inbox Process" && a.GetTagItem("pal.inbox.skipped") is not null);
+        await Assert.That(activity.GetTagItem("pal.inbox.skipped")).IsEqualTo(1);
+        await Assert.That(activity.GetTagItem("pal.inbox.result")).IsEqualTo("processed");
+    }
+
+    [Test]
+    public async Task TryProcessAsync_MarkProcessedFailure_EmitsPendingConfirmationValue(CancellationToken cancellationToken)
+    {
+        // 2026-10-21 R8 锁定：handler 已成功但完成标记失败时，结果值固定为
+        // processed-pending-confirmation（ITM-180：不得降级为可重试失败，否则重试
+        // 会重放副作用），usage.md 的 span 契约必须包含该值。
+        using var listener = new RecordingActivityListener();
+        var store = new MarkProcessedFailingInboxStore();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions
+            {
+                DefaultConsumerName = "orders",
+                ProcessingTimeout = TimeSpan.FromMinutes(5)
+            }),
+            NullPalLogger<InboxProcessor>.Instance,
+            TimeProvider.System);
+
+        var processed = await processor.TryProcessAsync(
+            "orders",
+            "message-1",
+            static (_, _) => ValueTask.CompletedTask,
+            "payload",
+            cancellationToken);
+
+        await Assert.That(processed).IsTrue();
+        var activity = listener.StoppedActivities.First(a =>
+            a.OperationName == "Inbox Process" &&
+            string.Equals(a.GetTagItem("pal.inbox.result") as string, "processed-pending-confirmation", StringComparison.Ordinal));
+        await Assert.That(activity.GetTagItem("pal.inbox.consumer")).IsEqualTo("orders");
+    }
+
+    [Test]
     public async Task TryProcessBatchAsync_HandlerFailureMarksFailedAndContinues(CancellationToken cancellationToken)
     {
         var store = new InMemoryInboxStore();
@@ -1526,6 +1596,32 @@ public sealed class InboxProcessorTests
 
         public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
             => throw new InvalidOperationException("The handler should not fail in this test.");
+    }
+
+    /// <summary>handler 成功但 MarkProcessed 失败的存储——驱动 pending-confirmation 路径。</summary>
+    private sealed class MarkProcessedFailingInboxStore : IInboxStore
+    {
+        public ValueTask<InboxMessage?> TryStartProcessingAsync(
+            string consumerName,
+            string messageId,
+            DateTimeOffset now,
+            TimeSpan processingTimeout,
+            CancellationToken ct)
+            => ValueTask.FromResult<InboxMessage?>(new InboxMessage
+            {
+                ConsumerName = consumerName,
+                MessageId = messageId,
+                Status = InboxStatus.Processing,
+                ReceivedAt = now,
+                ProcessingStartedAt = now,
+                Attempts = 1
+            });
+
+        public ValueTask MarkProcessedAsync(InboxMessage message, DateTimeOffset processedAt, CancellationToken ct)
+            => throw new InvalidOperationException("MarkProcessed failed after a successful handler.");
+
+        public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
+            => throw new InvalidOperationException("The handler succeeded; MarkFailed must not be called.");
     }
 
     private sealed class FailingAwareInboxStore : IInboxStore

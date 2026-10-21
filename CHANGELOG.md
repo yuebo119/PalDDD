@@ -195,6 +195,12 @@
 
 ### Fixed 修复
 
+- **PG LISTEN/NOTIFY 通知器缺日志门面 + Inbox span 文档契约失实（2026-10-21 契约盘点 R8，审计探针实证）**：
+  ①**组件级注册漏网**：`AddPalPostgreSqlOutboxNotifier()` 的 hosted 工厂用 `GetRequiredService<IPalLogger<PostgreSqlOutboxNotifier>>()`，而门面只在 `AddPalOutbox` / `AddPalCoreStack` 注册；仅按该入口装配时宿主解析 `IHostedService` 抛 `No service for type IPalLogger<...>`（R7 家族漏网）。修法：入口调用同一 `PalLoggerRegistration.EnsurePalLoggerFacade()`（Core 授 IVT 给 `PalDDD.Dapper.PostgreSql`），并勘正 XML remarks 的依赖描述（实际解析 `OutboxBatchProcessor`，前置为 `AddPalOutbox`，原写 `OutboxProcessor`）。
+  ②**Inbox span 契约纠偏**：usage.md 原称 `Inbox Process` span「仅包含 consumer/result 两标签、结果值三选一」；实际批量路径带 `pal.inbox.skipped`（跳过量），且 handler 成功而 `MarkProcessed` 失败时为 `processed-pending-confirmation`（ITM-180 既定设计）。文档补齐两处，行为不变。
+  ③**注释勘正**：`InMemorySagaStateStore` 的 v44「固定排序会饿死」声明已与轮转游标实现矛盾，改为说明 `leased_until` 轮转；未实现 `ISagaScanCursorStore` 的自定义 store 仍有饿死风险（处理器构造期告警）。
+  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；全量 1851 用例 / 1771 通过 / 80 跳过 / 0 失败；新增 3 个锁定测试（notifier 组件级解析、批量 skipped 标签、pending-confirmation 值），每个各做一次变异探针（移除门面调用 / 删除 skipped 标签 / 改 result 值 → 对应用例红，其余绿）。公共 API 无变化。
+
 - **分离流心跳在等待期满分支被 continue 跳过（2026-10-20，S1854 死赋值暴露）**：`StreamRun.StreamToAsync` 原实现给 `heartbeat` 赋值后无条件 `continue`，写 `:keepalive` 的 `if (heartbeat)` 分支永远不可达——`MapDetachedStreamQuery` 的 `keepAliveInterval` 自 ADR-031 起实际未生效。修正为「唤醒直接 continue，等待期满才落下去写心跳并 flush」；新增 `StreamToAsync_IdleWithKeepAlive_WritesHeartbeat` 锁定（旧码红/新码绿）。
 - **存量第三方分析器告警归零（2026-10-20）**：`StreamRunRegistry._gate` 的 `object` 锁改 `System.Threading.Lock`（MA0158）；`StreamRun.FinishAsync` 的 `Cancel()` 改 `await CancelAsync()`（S6966）；`DapperEventLog.ReadOrdinals` 与 `OutboxBatchProcessor.DeliveryPolicy` 补 `[StructLayout(LayoutKind.Auto)]`（MA0008）；`Dispatcher` 的 `SendAsync`/`QueryAsync`、两个序列化器的 `Deserialize` 重载归位（S4136）；`PalOrmEventLog` 两处参数化动态 SQL 以 `#pragma warning disable S2077` 定点抑制并注依据。`quality-analyzers` 从 11 条回到基线 0；全量 1749 用例 0 失败。
 - **SQLite JSON1 路径段单引号未按 SQL 字面量翻倍（2026-10-19 质量系统评审，ADR-032 重构回归）**：v4 的 `EscapeJsonPathSegment` 对路径键做 `' → ''`；v5 改为引号路径后 `WritePathLiteral` 只处理 `\` 与 `"`，含单引号的键（如 `O'Brien`）会生成 `'$."a'b"'` 这类未终止字面量——执行期语法错误，且路径段若来自外部输入构成 SQL 注入面（实证 `Path("x' OR '1'='1")` 产出可解析的布尔表达式而非单一字符串）。修复：`PathLiteralLength` 与 `WritePathLiteral` 增加单引号翻倍；锁定测试 `Path_QuotesSpecialKeys`（含 `j'k`）、`Path_SingleQuote_InjectionAttempt_StaysInsideLiteral`、`Extract_SpecialKeys_ExecutesOnRealSqlite`（真实 SQLite 取值）。v4 的同名防线由 `SqliteDialectTests.Extract_KeyWithSingleQuote_IsEscaped` 覆盖，ADR-032 删除该文件时未迁移此用例，本轮补回。
