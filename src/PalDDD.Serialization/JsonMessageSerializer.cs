@@ -113,6 +113,10 @@ public sealed class JsonMessageSerializer : IMessageSerializer
             ?? throw new InvalidOperationException(
                 $"Message type '{typeof(TMessage).FullName}' is not registered in MessageCatalog.");
 
+        // R11 F5：ContentType 断链入口校验（对齐 MemoryPack 姊妹）——descriptor 声明
+        // MemoryPack 却走 JSON 序列化会让下游按错误格式解析；原实现只在 ClrType 腿设防。
+        ValidateDescriptorContentType(descriptor);
+
         // v29 P3 修复：显式 descriptor 补 ClrType 守卫——descriptor 注册类型与 TMessage 不符时
         // 原直接强转 (JsonTypeInfo<TMessage>) 抛无指向性的 InvalidCastException（堆栈落在
         // 强转行）；改抛指向性 ArgumentException（消息注明期望/实际类型），对齐非泛型版
@@ -141,6 +145,9 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentNullException.ThrowIfNull(descriptor);
+
+        // R11 F5：ContentType 断链入口校验（对齐 MemoryPack 姊妹）。
+        ValidateDescriptorContentType(descriptor);
 
         // v39 P3：补 ClrType 一致性守卫（镜像 v29 泛型版 Serialize/Deserialize 同款守卫
         // 形态）——运行时类型与 descriptor 注册类型不符时，原直接以 descriptor.JsonTypeInfo
@@ -200,6 +207,9 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentNullException.ThrowIfNull(destination);
 
+        // R11 F5：ContentType 断链入口校验（对齐 MemoryPack 姊妹）。
+        ValidateDescriptorContentType(descriptor);
+
         // ClrType 一致性守卫（对齐 Serialize(object, descriptor) v39 P3 同款）
         if (message.GetType() != descriptor.ClrType)
             throw new ArgumentException(
@@ -226,6 +236,9 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     {
         ArgumentNullException.ThrowIfNull(descriptor);
 
+        // R11 F5：ContentType 断链入口校验（对齐 MemoryPack 姊妹）。
+        ValidateDescriptorContentType(descriptor);
+
         return System.Text.Json.JsonSerializer.Deserialize(payload, descriptor.JsonTypeInfo);
     }
 
@@ -234,6 +247,9 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         ReadOnlySpan<byte> payload, MessageDescriptor descriptor)  // P3（二十三轮）：对齐接口 DAM 标注（IL2095）
     {
         ArgumentNullException.ThrowIfNull(descriptor);
+
+        // R11 F5：ContentType 断链入口校验（对齐 MemoryPack 姊妹）。
+        ValidateDescriptorContentType(descriptor);
 
         // v29 P3 修复：显式 descriptor 补 ClrType 守卫（对齐泛型 Serialize 同款）——
         // 类型不符时原在下方强转抛裸 InvalidCastException，改抛指向性 ArgumentException
@@ -271,6 +287,17 @@ public sealed class JsonMessageSerializer : IMessageSerializer
     }
 
     // ── 池化序列化路径 ─────────────────────────────────────
+
+    /// <summary>R11 F5：descriptor 的 ContentType 必须与本序列化器一致。</summary>
+    private static void ValidateDescriptorContentType(MessageDescriptor descriptor)
+    {
+        if (descriptor.ContentType != ContentTypes.Json)
+            throw new InvalidOperationException(
+                $"MessageDescriptor '{descriptor.Name}' was registered with ContentType " +
+                $"'{descriptor.ContentType}', but JsonMessageSerializer requires " +
+                $"'{ContentTypes.Json}'. Pass contentType: ContentTypes.Json when creating " +
+                "the MessageDescriptor.");
+    }
 
     /// <summary>
     /// 使用 <c>Utf8JsonWriter.Reset(IBufferWriter&lt;byte&gt;)</c> 复用 Writer 的池化序列化路径。<br/>

@@ -54,7 +54,12 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
 
         // P3 修复（八轮评审）：泛型路径 descriptor 可选——非 null 时校验 ContentType 断链
         if (descriptor is not null)
+        {
             ValidateDescriptorContentType(descriptor);
+            // R11 F5：泛型路径补 ClrType 守卫（对齐 JSON 姊妹）——原实现只校验
+            // ContentType，错误 descriptor 会静默序列化错误对象类型。
+            ValidateDescriptorClrType<TMessage>(descriptor);
+        }
 
         return MemoryPackSerializer.Serialize(message);
     }
@@ -123,6 +128,8 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
         // P3 修复（八轮评审）：ContentType 断链入口校验——descriptor 未参与反序列化本体，
         // 但传入错误 descriptor 应尽早暴露（v39 P3 起 null 已由上方守卫排除）
         ValidateDescriptorContentType(descriptor);
+        // R11 F5：泛型反序列化同样校验 CLR 类型（对齐 JSON 姊妹）。
+        ValidateDescriptorClrType<TMessage>(descriptor);
 
         return MemoryPackSerializer.Deserialize<TMessage>(payload);
     }
@@ -141,6 +148,17 @@ public sealed class MemoryPackMessageSerializer : IMessageSerializer
             && segment.Count == array.Length)
             return array;
         return payload.ToArray();
+    }
+
+    /// <summary>R11 F5：泛型路径的 descriptor.ClrType 必须与 TMessage 一致。</summary>
+    private static void ValidateDescriptorClrType<TMessage>(MessageDescriptor descriptor)
+    {
+        if (descriptor.ClrType != typeof(TMessage))
+            throw new ArgumentException(
+                $"The descriptor is registered for CLR type '{descriptor.ClrType.FullName}' " +
+                $"but the generic message type is '{typeof(TMessage).FullName}'. Pass a " +
+                "descriptor registered for the generic type.",
+                nameof(descriptor));
     }
 
     /// <summary>

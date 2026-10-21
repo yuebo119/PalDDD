@@ -112,6 +112,26 @@ public sealed class MemoryPackSerializerTests
         await Assert.That(v2Result!.Version).IsEqualTo(2);
     }
 
+    [Test]
+    public async Task GenericPaths_DescriptorForDifferentClrType_ThrowArgumentException()
+    {
+        // R11 F5 回归锁：MemoryPack 泛型路径原只校验 ContentType，错误 CLR 类型的
+        // descriptor 会静默序列化/反序列化错误对象；对齐 JSON 姊妹的 ClrType 守卫。
+        var serializer = CreateSerializer();
+        var descriptorForOtherType = new MessageDescriptor(
+            "test.wrong-clr.v1",
+            typeof(MemoryPackValueMessage),
+            TestJsonContext.Default.MemoryPackValueMessage,
+            1,
+            contentType: ContentTypes.MemoryPack);
+        var message = new MemoryPackTestMessage("hello", 1, 1m);
+
+        await Assert.That(() => serializer.Serialize(message, descriptorForOtherType)).Throws<ArgumentException>();
+        var payload = serializer.Serialize(message);
+        await Assert.That(() => serializer.Deserialize<MemoryPackTestMessage>(payload.Span, descriptorForOtherType))
+            .Throws<ArgumentException>();
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // 边界情况
     // ═══════════════════════════════════════════════════════════════

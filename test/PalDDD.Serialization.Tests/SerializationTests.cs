@@ -120,6 +120,24 @@ public sealed class MessageCatalogTests
 public sealed class JsonMessageSerializerTests
 {
     [Test]
+    public async Task ContentType_MemoryPackDescriptor_AllEntryPoints_Throw()
+    {
+        // R11 F5 回归锁：JSON 序列化器原只校验 ClrType，接受 MemoryPack ContentType
+        // 并写出 JSON 字节，下游按 ContentType 解析必然失败。
+        var descriptor = MessageDescriptor.Create(
+            TestJsonContext.Default.TestMessage,
+            name: "test-message-memorypack-type",
+            contentType: ContentTypes.MemoryPack);
+        var serializer = new JsonMessageSerializer(MessageCatalog.Empty);
+        var message = new TestMessage("order-1", 3);
+
+        await Assert.That(() => serializer.Serialize(message, descriptor)).Throws<InvalidOperationException>();
+        await Assert.That(() => serializer.Serialize<TestMessage>(message, descriptor)).Throws<InvalidOperationException>();
+        await Assert.That(() => serializer.Deserialize(ReadOnlySpan<byte>.Empty, descriptor)).Throws<InvalidOperationException>();
+        await Assert.That(() => serializer.Deserialize<TestMessage>(ReadOnlySpan<byte>.Empty, descriptor)).Throws<InvalidOperationException>();
+    }
+
+    [Test]
     public async Task RoundTrip_UsesSourceGeneratedJsonTypeInfo()
     {
         var descriptor = MessageDescriptor.Create(
