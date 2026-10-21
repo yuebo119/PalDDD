@@ -351,6 +351,88 @@ public sealed class ProjectionTests
         await Assert.That(replayed).IsEqualTo(2);
     }
 
+    [Test]
+    public async Task ReplayAsync_DefaultBatch_NonResumableSource_SkipsCompletedPrefix(CancellationToken cancellationToken)
+    {
+        // R11 F1 回归锁：默认 CheckpointBatchSize=100 + 非续读回放源时，已完成前缀
+        // 被组首 TryStart 判为「租用冲突」，整轮返回 0（handler 零调用）。修复后应按
+        // 续读位置跳过前缀并处理缺失位置。
+        var store = new InMemoryProjectionCheckpointStore();
+        var handler = new CountingProjectionHandler();
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store); // 默认批大小
+        var source = new InMemoryReplaySource<OrderPlaced>(CreateReplayEvents(10));
+        var rebuilder = new ProjectionRebuilder<OrderPlaced>(handler.ProjectionName, "orders", source, store, processor);
+
+        for (var i = 0; i < 5; i++)
+            await MarkCompletedAsync(store, i);
+
+        var replayed = await rebuilder.ReplayAsync(cancellationToken);
+
+        await Assert.That(replayed).IsEqualTo(5);
+        await Assert.That(handler.Count).IsEqualTo(5);
+        await Assert.That((await store.GetAsync("order-summary", "orders", "5", cancellationToken))!.Status)
+            .IsEqualTo(ProjectionCheckpointStatus.Completed);
+    }
+
+    [Test]
+    public async Task ReplayAsync_DefaultBatch_LeadingFailedHoleWithCompletedSuffix_ReplaysHole(CancellationToken cancellationToken)
+    {
+        // R11 F1 回归锁（D4 形态）：组首 Failed 洞 + 其余 Completed。组末 TryStart 返回
+        // null 时原实现把组首标 Failed 后返回 0，洞永远无法重放。修复后应裁掉已完成尾部
+        // 并单独处理洞位。
+        var store = new InMemoryProjectionCheckpointStore();
+        var handler = new CountingProjectionHandler();
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var source = new InMemoryReplaySource<OrderPlaced>(CreateReplayEvents(10));
+        var rebuilder = new ProjectionRebuilder<OrderPlaced>(handler.ProjectionName, "orders", source, store, processor);
+
+        var hole = await store.TryStartAsync("order-summary", "orders", "0", DateTimeOffset.UnixEpoch, TimeSpan.FromMinutes(5));
+        await store.MarkFailedAsync(hole!, "boom", DateTimeOffset.UnixEpoch);
+        for (var i = 1; i < 10; i++)
+            await MarkCompletedAsync(store, i);
+
+        var replayed = await rebuilder.ReplayAsync(cancellationToken);
+
+        await Assert.That(replayed).IsEqualTo(1);
+        await Assert.That(handler.Count).IsEqualTo(1);
+        await Assert.That((await store.GetAsync("order-summary", "orders", "0", cancellationToken))!.Status)
+            .IsEqualTo(ProjectionCheckpointStatus.Completed);
+    }
+
+    [Test]
+    public async Task ReplayAsync_DefaultBatch_AllCompleted_ReturnsZeroWithoutHandlerCalls(CancellationToken cancellationToken)
+    {
+        // R11 F1 负向对照：全部已完成时必须返回 0 且不得调用 handler（跳过 ≠ 重放）。
+        var store = new InMemoryProjectionCheckpointStore();
+        var handler = new CountingProjectionHandler();
+        var processor = new ProjectionProcessor<OrderPlaced>(handler, store);
+        var source = new InMemoryReplaySource<OrderPlaced>(CreateReplayEvents(10));
+        var rebuilder = new ProjectionRebuilder<OrderPlaced>(handler.ProjectionName, "orders", source, store, processor);
+
+        for (var i = 0; i < 10; i++)
+            await MarkCompletedAsync(store, i);
+
+        var replayed = await rebuilder.ReplayAsync(cancellationToken);
+
+        await Assert.That(replayed).IsEqualTo(0);
+        await Assert.That(handler.Count).IsEqualTo(0);
+    }
+
+    private static List<ReplayEvent<OrderPlaced>> CreateReplayEvents(int count) =>
+        [.. Enumerable.Range(0, count).Select(i =>
+            new ReplayEvent<OrderPlaced>("orders", i.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                DateTimeOffset.UnixEpoch.AddSeconds(i), new OrderPlaced(Guid.NewGuid())))];
+
+    private static async Task MarkCompletedAsync(InMemoryProjectionCheckpointStore store, int position)
+    {
+        var checkpoint = await store.TryStartAsync(
+            "order-summary", "orders",
+            position.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            DateTimeOffset.UnixEpoch,
+            TimeSpan.FromMinutes(5));
+        await store.MarkCompletedAsync(checkpoint!, DateTimeOffset.UnixEpoch.AddSeconds(1));
+    }
+
     private sealed record OrderPlaced(Guid OrderId);
 
     private sealed class CountingProjectionHandler : IProjectionHandler<OrderPlaced>
