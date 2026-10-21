@@ -237,6 +237,10 @@
 
 - **DapperEventLog 真流式读取在 PG 上的列序缺陷（2026-10-19）**：M4 的 `event_id_bin` 由 `ALTER TABLE` 追加在物理列末，与逻辑列序不同；`CommandBehavior.SequentialAccess` 要求按物理列序单调读取，按列名取 ordinal 后跨列回读会抛 `Invalid attempt to read from column ordinal`。改为 `CommandBehavior.SingleResult`，仍逐行流式（不物化全部行），允许行内随机列访问。M4 真库探针在 PG/MySQL 均通过。
 
+### Tests 测试
+
+- **2026-10-22 R10 审计 D1：批量 Inbox pending span 回归锁**：`InboxProcessor_BatchMarkFailed_...` 与 `...PartiallyMissed...` 增加 `RecordingActivityListener` 断言（`pal.inbox.result = processed-pending-confirmation`、`pal.inbox.consumer`）；隔离变异把该值固定为 `processed` 时两条测试转红（修复前 259 条 Transactions 测试仍全绿）。同步 `docs/usage.md` 明确 1004 的级别口径：部分未命中 Warning（无异常可携带）、整批异常 Error，告警按 EventId 过滤。
+
 ## [4.0.0] — 2026-10-11
 
 > **范围**：`v3.3.0`（2026-10-08，`c1c4886`）→ `v4.0.0`（本提交），39 个提交（`git log v3.3.0..HEAD`——v3.3.0 tag 打在 main 合并提交上，dev 侧等价窗口即此）。

@@ -328,7 +328,7 @@ var processed = await inbox.TryProcessAsync(
 
 **处理租约契约**：`InboxOptions.ProcessingTimeout`（默认 5 分钟）必须大于最慢 handler 的执行时长。单次处理超过该值后，同一 `(ConsumerName, MessageId)` 可被第二个消费者重新认领并并发执行，副作用的重复发生不会自动去重。`InboxProcessor` 在 handler 时长达到该值时记录 `InboxHandlerLeaseExceeded`（EventId 1006）告警：逐条路径每条一条，批量路径按批聚合一条（含超限条数与最大耗时，计时起点为整批认领时刻）；长耗时 handler 请显式调大该选项。
 
-批量路径的其余告警与逐条路径同口径：handler 失败按批聚合记 `InboxMessageFailed`（1003）；完成标记整批抛错或部分未命中记 `InboxMessageProcessedMarkFailed`（1004），此时 span 结果为 `processed-pending-confirmation`，且不发 `InboxBatchProcessed`（1005，仅在全部成功项都标记落库时输出）。`pal.inbox.skipped` 统计去重后未被认领的消息数（已处理或仍在租约内），批内重复 MessageId 不计入。
+批量路径的其余告警与逐条路径同口径：handler 失败按批聚合记 `InboxMessageFailed`（1003）；完成标记整批抛错或部分未命中记 `InboxMessageProcessedMarkFailed`（1004），此时 span 结果为 `processed-pending-confirmation`，且不发 `InboxBatchProcessed`（1005，仅在全部成功项都标记落库时输出）。其中部分未命中为 Warning（无异常可携带），整批抛错为 Error（携带异常）；两类均用 1004，告警规则应按 EventId 过滤而非按级别过滤。`pal.inbox.skipped` 统计去重后未被认领的消息数（已处理或仍在租约内），批内重复 MessageId 不计入。
 
 `InboxProcessor` 会发出 `Inbox Process` span。它使用同一个 `PalActivitySource.Name`，标签为 `pal.inbox.consumer` 与 `pal.inbox.result`，批量路径在批内存在跳过条目时额外带 `pal.inbox.skipped`（跳过条数）；`pal.inbox.message_id` 已按 ITM-229 标准从 tag 移除（高基数：每消息唯一，且可能含业务 ID）。结果值为 `processed`、`skipped`、`failed`，以及 handler 成功但完成标记失败时的 `processed-pending-confirmation`（ITM-180：不得降级为可重试失败，否则重试会重放副作用；由下一轮循环与监控补正）。
 

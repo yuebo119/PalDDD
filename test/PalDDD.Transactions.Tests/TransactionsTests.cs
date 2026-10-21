@@ -757,13 +757,15 @@ public sealed class OutboxBatchProcessorTests
     }
 
     /// <summary>
-    /// R9 审计 D1：批量路径的标记失败必须与逐条路径同口径——发 1004，且不得把该批报告为
-    /// InboxBatchProcessed（1005）。修复前：Error 无 EventId + 1005 仍发出。
+    /// R9 审计 D1：批量路径的标记失败必须与逐条路径同口径——发 1004、span 结果为
+    /// processed-pending-confirmation，且不得把该批报告为 InboxBatchProcessed（1005）。
+    /// 修复前：Error 无 EventId + 1005 仍发出。
     /// </summary>
     [Test]
     public async Task InboxProcessor_BatchMarkFailed_EmitsMarkFailedEventWithoutBatchProcessed(CancellationToken cancellationToken)
     {
         var logger = new EventIdCapturingLogger<InboxProcessor>();
+        using var listener = new RecordingActivityListener();
         var processor = new InboxProcessor(
             new BatchMarkInboxStore(static () => throw new InvalidOperationException("simulated batch mark failure")),
             new FixedOptionsMonitor<InboxOptions>(new InboxOptions()),
@@ -779,16 +781,22 @@ public sealed class OutboxBatchProcessorTests
         await Assert.That(processed).IsEqualTo(2);
         await Assert.That(logger.Count(PalLogEventIds.InboxMessageProcessedMarkFailed)).IsEqualTo(1);
         await Assert.That(logger.Count(PalLogEventIds.InboxBatchProcessed)).IsEqualTo(0);
+        var activity = listener.StoppedActivities.First(a =>
+            a.OperationName == "Inbox Process" &&
+            string.Equals(a.GetTagItem("pal.inbox.result") as string, "processed-pending-confirmation", StringComparison.Ordinal));
+        await Assert.That(activity.GetTagItem("pal.inbox.consumer")).IsEqualTo("consumer");
     }
 
     /// <summary>
-    /// R9 审计 D1 的第二分支：部分未命中（租约被抢/令牌不匹配）同样记 1004，
-    /// 且不得报告 1005。修复前该分支是无 EventId 的 Warning + 1005。
+    /// R9 审计 D1 的第二分支：部分未命中（租约被抢/令牌不匹配）同样记 1004、
+    /// span 结果为 processed-pending-confirmation，且不得报告 1005。修复前该分支是
+    /// 无 EventId 的 Warning + 1005。
     /// </summary>
     [Test]
     public async Task InboxProcessor_BatchMarkPartiallyMissed_EmitsMarkFailedEventWithoutBatchProcessed(CancellationToken cancellationToken)
     {
         var logger = new EventIdCapturingLogger<InboxProcessor>();
+        using var listener = new RecordingActivityListener();
         var processor = new InboxProcessor(
             new BatchMarkInboxStore(static () => 1),
             new FixedOptionsMonitor<InboxOptions>(new InboxOptions()),
@@ -804,6 +812,10 @@ public sealed class OutboxBatchProcessorTests
         await Assert.That(processed).IsEqualTo(2);
         await Assert.That(logger.Count(PalLogEventIds.InboxMessageProcessedMarkFailed)).IsEqualTo(1);
         await Assert.That(logger.Count(PalLogEventIds.InboxBatchProcessed)).IsEqualTo(0);
+        var activity = listener.StoppedActivities.First(a =>
+            a.OperationName == "Inbox Process" &&
+            string.Equals(a.GetTagItem("pal.inbox.result") as string, "processed-pending-confirmation", StringComparison.Ordinal));
+        await Assert.That(activity.GetTagItem("pal.inbox.consumer")).IsEqualTo("consumer");
     }
 
     /// <summary>
