@@ -1349,6 +1349,54 @@ public sealed class InboxProcessorTests
     }
 
     [Test]
+    public async Task TryProcessBatchAsync_CancellationMarksAlreadySucceededMessages(CancellationToken cancellationToken)
+    {
+        // R11 F6 回归锁：批内后段 handler 抛 OCE 时，前段成功项必须在抛出前批量落库；
+        // 原实现直接 throw，成功项滞留 Processing 至租约到期并再次执行副作用。
+        var store = new InMemoryInboxStore();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions
+            {
+                DefaultConsumerName = "orders",
+                ProcessingTimeout = TimeSpan.FromMinutes(5)
+            }),
+            NullPalLogger<InboxProcessor>.Instance,
+            TimeProvider.System);
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        List<(string, string)> batch = [("ok", "ok"), ("cancel", "cancel")];
+        var calls = new List<string>();
+
+        await Assert.That(async () => await processor.TryProcessBatchAsync(
+            "orders",
+            batch,
+            (message, ct) =>
+            {
+                calls.Add(message);
+                if (string.Equals(message, "cancel", StringComparison.Ordinal))
+                {
+                    cts.Cancel();
+                    ct.ThrowIfCancellationRequested();
+                }
+                return ValueTask.CompletedTask;
+            },
+            cts.Token)).Throws<OperationCanceledException>();
+
+        await Assert.That(string.Join(",", calls)).IsEqualTo("ok,cancel");
+
+        // 成功项已标 Processed：再次处理必须幂等返回 false 且不再调用 handler。
+        var replayed = false;
+        var again = await processor.TryProcessAsync(
+            "orders", "ok",
+            (_, _) => { replayed = true; return ValueTask.CompletedTask; },
+            "ok",
+            CancellationToken.None);
+        await Assert.That(again).IsFalse();
+        await Assert.That(replayed).IsFalse();
+    }
+
+    [Test]
     public async Task InboxBatchConsumer_ProcessesBrokerBatchAndSkipsReplays(CancellationToken cancellationToken)
     {
         var store = new InMemoryInboxStore();
