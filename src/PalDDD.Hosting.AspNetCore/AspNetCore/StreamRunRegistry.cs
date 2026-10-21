@@ -781,14 +781,21 @@ internal sealed class StreamRunRegistry : IDisposable
         IStreamQueryHandler<TQuery, TItem>? handlerOverride = null)
         where TQuery : IStreamQuery<TItem>
     {
-        var running = Volatile.Read(ref _runningCount);
-        if (running >= _options.MaxConcurrentRuns)
-            throw new StreamRunCapacityExceededException(_options.MaxConcurrentRuns);
+        // R11 F19：名额判定改为 CAS 循环——原 Volatile.Read 检查后再 Increment 是
+        // check-then-act，N 个并发 Register 可同时通过检查、超出 MaxConcurrentRuns
+        // 最多 N-1（峰值并发时内存保护失效）。
+        while (true)
+        {
+            var running = Volatile.Read(ref _runningCount);
+            if (running >= _options.MaxConcurrentRuns)
+                throw new StreamRunCapacityExceededException(_options.MaxConcurrentRuns);
+            if (Interlocked.CompareExchange(ref _runningCount, running + 1, running) == running)
+                break;
+        }
 
         var runId = Guid.NewGuid().ToString("N");
         // 先占名额再建 run：run 可能在 Start 后立即完成并回调 OnRunTerminal，后置递增会短暂
         // 负计数。构造/解析失败路径在 catch 中归还名额。
-        Interlocked.Increment(ref _runningCount);
         IServiceScope? scope = null;
         StreamRun<TItem>? run = null;
         try

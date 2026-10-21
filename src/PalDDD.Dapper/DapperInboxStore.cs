@@ -157,9 +157,18 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
         // 零内存变异（对齐 Outbox ITM-210 语义）。ProcessingStartedAt 为 null 属调用方误用——
         // 实际失败点在 C# 层：下方 message.ProcessingStartedAt!.Value 先抛 InvalidOperationException
         //（R41 ITM-271 勘正原"SQL 等值比较 NULL 永假"的失实描述——SQL 层不可达）；行为仍 fail-closed。
-        await c.ExecuteAsync(
+        var affected = await c.ExecuteAsync(
             SqlTemplates.InboxMarkProcessed,
                 new { at = ToTimeParam(processedAt), id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value) }, Tx).ConfigureAwait(false);
+        // R11 F16：成功命中时同步调用方持有的实例（对齐 PalORM/EF）——原实现丢弃
+        // affected 且不回写，复用同一对象的调用方看到陈旧 Processing/ProcessedAt。
+        // 0 行（token 不匹配）零变异，保持被抢占者的本地快照不变。
+        if (affected > 0)
+        {
+            message.Status = InboxStatus.Processed;
+            message.ProcessedAt = processedAt;
+            message.LastError = null;
+        }
     }
 
     public async ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
@@ -178,9 +187,15 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
         failureReason = FailureReason.Normalize(failureReason);
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
         // 三十八轮 P2 修复：同 MarkProcessedAsync——processing_started_at 抢占 token 守卫
-        await c.ExecuteAsync(
+        var affected = await c.ExecuteAsync(
             SqlTemplates.InboxMarkFailed,
                 new { err = failureReason, id = message.Id, startedAt = ToTimeParam(message.ProcessingStartedAt!.Value) }, Tx).ConfigureAwait(false);
+        // R11 F16：同 MarkProcessed——命中时同步入参对象（0 行不清洗被抢占者快照）。
+        if (affected > 0)
+        {
+            message.Status = InboxStatus.Failed;
+            message.LastError = failureReason;
+        }
     }
 
 

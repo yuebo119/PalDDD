@@ -419,6 +419,14 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
 
+        // R11 F15：null 元素校验必须先于 messages[0] 解引用——原顺序对 [null] 抛 NRE，
+        // 而 Dapper/EF 抛 ArgumentNullException（同一契约异常类型分叉）。
+        foreach (var message in messages)
+        {
+            if (message is null)
+                throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
+        }
+
         var owner = messages[0].LockedBy;
         var until = messages[0].LockedUntil;
         if (owner is null || until is null)
@@ -426,8 +434,6 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
                 "MarkProcessedBatchAsync requires leased messages (LockedBy/LockedUntil non-null) — batch inputs must come from a single LeasePendingMessagesAsync result.");
         foreach (var message in messages)
         {
-            if (message is null)
-                throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
             if (message.LockedBy != owner || message.LockedUntil != until)
                 throw new InvalidOperationException(
                     "MarkProcessedBatchAsync requires a single-lease batch — all messages must share the same LockedBy/LockedUntil (mixed-lease batches are not supported).");

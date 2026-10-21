@@ -213,7 +213,12 @@ public static class EndpointExtensions
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(bindQuery);
         ArgumentNullException.ThrowIfNull(itemJsonTypeInfo);
+        // R11 F21：Task.Delay 上限为 uint.MaxValue-1 ms（约 49.7 天），超过时心跳延时
+        // 在首个请求抛 ArgumentOutOfRangeException 并被改写成 200 + event: error；
+        // 与 DetachedStreamOptions.Validate 同口径，在映射期 fail-fast。
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(keepAliveInterval ?? TimeSpan.MaxValue, TimeSpan.Zero);
+        if (keepAliveInterval is { } keepAlive)
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(keepAlive, TimeSpan.FromMilliseconds(uint.MaxValue - 1));
 
         return endpoints.MapGet(pattern, async context =>
         {
@@ -270,6 +275,9 @@ public static class EndpointExtensions
         ArgumentNullException.ThrowIfNull(queryJsonTypeInfo);
         ArgumentNullException.ThrowIfNull(itemJsonTypeInfo);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(keepAliveInterval ?? TimeSpan.MaxValue, TimeSpan.Zero);
+        // R11 F21：与 GET 重载同款 Task.Delay 上限守卫。
+        if (keepAliveInterval is { } keepAlive)
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(keepAlive, TimeSpan.FromMilliseconds(uint.MaxValue - 1));
 
         return endpoints.MapPost(pattern, async context =>
         {

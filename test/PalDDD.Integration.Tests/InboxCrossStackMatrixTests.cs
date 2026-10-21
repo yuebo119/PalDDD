@@ -15,6 +15,8 @@ namespace PalDDD.Integration.Tests;
 /// 锁定的条款：首次认领返回 Processing、重复认领返回 null、完成后返回 null、
 /// 失败后可立即重入且 Attempts 递增。改坏任一栈的认领/失败语义即红。
 /// </summary>
+// R11 F26：与 dapper-global 组串行（Dapper 全局类型映射为进程级状态）。
+[TUnit.Core.NotInParallel("dapper-global")]
 public sealed class InboxCrossStackMatrixTests
 {
     // PalORM 栈与 Dapper 栈的 SQLite schema 刻意分离（TST-205 平行副本声明），

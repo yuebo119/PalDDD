@@ -247,7 +247,10 @@ public sealed class NullMessageBrokerTests
     public async Task PublishAsync_Generic_NoOp()
     {
         IMessageBroker broker = new NullMessageBroker();
-        await broker.PublishAsync(new OrderPlaced(Guid.NewGuid(), 500m));
+        var publish = broker.PublishAsync(new OrderPlaced(Guid.NewGuid(), 500m));
+        // R11 F26：单节点 no-op 必须同步完成（无 I/O）——只 await 不构成断言。
+        await Assert.That(publish.IsCompletedSuccessfully).IsTrue();
+        await publish;
     }
 
     [Test]
@@ -255,10 +258,12 @@ public sealed class NullMessageBrokerTests
     {
         IMessageBroker broker = new NullMessageBroker();
         var evt = new OrderPlaced(Guid.NewGuid(), 600m);
-        await broker.PublishAsync(
+        var publish = broker.PublishAsync(
             evt,
             MessageDescriptor.Create(MessagingJsonContext.Default.OrderPlaced),
             PalUlid.New());
+        await Assert.That(publish.IsCompletedSuccessfully).IsTrue();
+        await publish;
     }
 
     [Test]

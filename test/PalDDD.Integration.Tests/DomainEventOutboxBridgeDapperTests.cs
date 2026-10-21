@@ -11,6 +11,8 @@ namespace PalDDD.Integration.Tests;
 /// T9（基础库优化清单）：栈无关域事件桥在真实 Dapper SQLite 上的接法。
 /// 核心断言是事务语义：同一 UoW 内写入随提交可见，回滚后 outbox 行不存在。
 /// </summary>
+// R11 F26：与 dapper-global 组串行（Dapper 全局类型映射为进程级状态）。
+[TUnit.Core.NotInParallel("dapper-global")]
 public sealed class DomainEventOutboxBridgeDapperTests
 {
     private const string OutboxDdl =

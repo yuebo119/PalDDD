@@ -672,6 +672,11 @@ public sealed class DapperStoreTests
 
         await store.MarkProcessedAsync(result, now, cancellationToken);
 
+        // R11 F16：成功命中必须同步入参对象（对齐 PalORM/EF）。
+        await Assert.That(result.Status).IsEqualTo(InboxStatus.Processed);
+        await Assert.That(result.ProcessedAt).IsEqualTo(now);
+        await Assert.That(result.LastError).IsNull();
+
         var after = await store.TryStartProcessingAsync(
             "test-consumer", "msg-001", now, TimeSpan.FromMinutes(5),
             cancellationToken);
@@ -690,6 +695,10 @@ public sealed class DapperStoreTests
         await Assert.That(result).IsNotNull();
 
         await store.MarkFailedAsync(result, "simulated crash", cancellationToken);
+
+        // R11 F16：失败标记同样同步入参对象。
+        await Assert.That(result.Status).IsEqualTo(InboxStatus.Failed);
+        await Assert.That(result.LastError).Contains("simulated crash");
 
         var retry = await store.TryStartProcessingAsync(
             "test-consumer", "msg-001", now.AddSeconds(1), TimeSpan.FromMinutes(5),

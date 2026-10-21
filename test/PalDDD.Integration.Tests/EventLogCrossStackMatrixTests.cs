@@ -16,6 +16,9 @@ namespace PalDDD.Integration.Tests;
 /// 锁定条款：NoStream 追加从版本 0 开始、流内与全局顺序一致、Exact 版本冲突抛
 /// EventStreamConcurrencyException、Any 可在已有流继续追加。
 /// </summary>
+// R11 F26：Dapper 全局类型映射（MatchNamesWithUnderscores / ResetTypeHandlers）是
+// 进程级状态，必须与 dapper-global 组串行，避免与 DapperStoreTests 的 ClassCleanup 竞态。
+[TUnit.Core.NotInParallel("dapper-global")]
 public sealed class EventLogCrossStackMatrixTests
 {
     private static readonly string[] EventLogDdl =

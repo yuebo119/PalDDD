@@ -47,6 +47,20 @@ public sealed partial class StreamQueryEndpointTests
             "data: {\"Index\":2,\"Text\":\" world\"}\n\n");
     }
 
+    [Test]
+    public async Task MapStreamQuery_KeepAliveBeyondTaskDelayLimit_ThrowsAtMapTime()
+    {
+        // R11 F21 回归锁：超过 Task.Delay 上限的心跳间隔必须在映射期拒绝，而不是
+        // 每个请求 200 + event: error。
+        var provider = BuildProvider(new TokenStreamHandler());
+        var endpoints = new StreamTestEndpointRouteBuilder(provider);
+
+        await Assert.That(() => endpoints.MapStreamQuery<TokenStreamQuery, TokenChunk>(
+                "/tokens", ctx => new TokenStreamQuery("hi"), StreamTestJsonContext.Default.TokenChunk,
+                keepAliveInterval: TimeSpan.FromDays(60)))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
     // ─── happy path（POST）：JSON body 反序列化 + 帧序列 ───
 
     [Test]
