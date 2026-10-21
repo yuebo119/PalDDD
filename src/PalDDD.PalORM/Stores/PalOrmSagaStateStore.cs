@@ -126,7 +126,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         // ORDER BY created_at 契约（LINQ OrderBy 稳定排序）。
         if (TProvider.SupportsReturningClause)
         {
-            var dueClause = dueOnly ? " AND next_check_at IS NOT NULL AND next_check_at <= @p4" : string.Empty;
+            var dueClause = dueOnly ? " AND (next_check_at IS NULL OR next_check_at <= @p4)" : string.Empty;
             var orderClause = dueOnly
                 ? " ORDER BY next_check_at, created_at"
                 : TProvider.Dialect == global::PalORM.SqlDialect.PostgreSql
@@ -149,7 +149,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         {
             // MySQL 特化路径：JOIN 子查询。M1 到期过滤复用 now 参数。
             FormattableString mysqlSql = dueOnly
-                ? (FormattableString)$"UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) AND next_check_at IS NOT NULL AND next_check_at <= {now} ORDER BY next_check_at, created_at LIMIT {batchSize}) AS sub ON t.saga_id = sub.saga_id SET t.leased_by = {owner}, t.leased_until = {until}, t.version = t.version + 1"
+                ? (FormattableString)$"UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) AND (next_check_at IS NULL OR next_check_at <= {now}) ORDER BY next_check_at, created_at LIMIT {batchSize}) AS sub ON t.saga_id = sub.saga_id SET t.leased_by = {owner}, t.leased_until = {until}, t.version = t.version + 1"
                 : (FormattableString)$"UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN ({(int)SagaStatus.Active}, {(int)SagaStatus.AwaitingHumanDecision}) AND (leased_until IS NULL OR leased_until <= {now}) ORDER BY (leased_until IS NULL) DESC, leased_until, created_at LIMIT {batchSize}) AS sub ON t.saga_id = sub.saga_id SET t.leased_by = {owner}, t.leased_until = {until}, t.version = t.version + 1";
             await Session.ExecuteAsync(
                 // v53 P2：租约即换代（version+1），见 PG 分支注释

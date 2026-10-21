@@ -75,6 +75,10 @@ public sealed class DynamicStepTimeoutProbeTests
     {
         foreach (var key in state.StepStartedAt.Keys.ToList())
             state.StepStartedAt[key] = DateTimeOffset.UtcNow.AddMinutes(-5);
+        // 到期过滤默认开启（2026-10-21）：真实环境下 NextCheckAt 由同一批
+        // StepStartedAt 算出；只回拨时间戳会让 NextCheckAt 仍是未来值、扫描器
+        // 不会租到该行。同步回拨到期时刻，保持探针装置与生产形态一致。
+        state.NextCheckAt = DateTimeOffset.UtcNow.AddMinutes(-5);
     }
 
     // 补偿成功路径会递增进程级 Counter paldd.saga.compensated——对齐项目约定

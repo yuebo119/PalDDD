@@ -32,13 +32,20 @@ public sealed class OutboxPublishPipeliningTests
     [Test]
     public async Task Pipelined_HeadOfLineSlowPublish_DoesNotBlockLaterMarks()
     {
-        // 首条 150ms、其余 10ms：完成序下后 7 条先标记，慢消息最后完成。
-        var (store, _) = await RunBatchAsync(
-            window: 4, messageCount: 8, slowFirstLatency: TimeSpan.FromMilliseconds(150));
+        // 首条发布挂起在手动闸门上（不依赖计时精度）：完成序下后 7 条先标记，
+        // 慢消息在闸门放开后才标记——FIFO 形态下队头必然第一个被标记。
+        var run = StartBatch(window: 4, messageCount: 8, gateFirstPublish: true);
 
-        await Assert.That(store.ProcessedOrder.Count).IsEqualTo(8);
-        await Assert.That(store.ProcessedOrder[^1]).IsEqualTo(store.LeaseOrder[0]);
-        await Assert.That(store.ProcessedOrder.SequenceEqual(store.LeaseOrder)).IsFalse();
+        await WaitUntilAsync(() => run.Store.ProcessedCount == 7).ConfigureAwait(false);
+
+        await Assert.That(run.Store.ProcessedOrder[^1]).IsNotEqualTo(run.Store.LeaseOrder[0]);
+
+        run.Broker.ReleaseFirstPublish();
+        await run.Processing.ConfigureAwait(false);
+
+        await Assert.That(run.Store.ProcessedCount).IsEqualTo(8);
+        await Assert.That(run.Store.ProcessedOrder[^1]).IsEqualTo(run.Store.LeaseOrder[0]);
+        await Assert.That(run.Store.ProcessedOrder.SequenceEqual(run.Store.LeaseOrder)).IsFalse();
     }
 
     [Test]
@@ -62,7 +69,15 @@ public sealed class OutboxPublishPipeliningTests
     }
 
     private static async Task<(RecordingOutboxStore Store, PipeliningDelayBroker Broker)> RunBatchAsync(
-        int window, int messageCount, int failAtIndex = -1, TimeSpan? slowFirstLatency = null)
+        int window, int messageCount, int failAtIndex = -1)
+    {
+        var run = StartBatch(window, messageCount, failAtIndex, gateFirstPublish: false);
+        await run.Processing.ConfigureAwait(false);
+        return (run.Store, run.Broker);
+    }
+
+    private static BatchRun StartBatch(
+        int window, int messageCount, int failAtIndex = -1, bool gateFirstPublish = false)
     {
         var builder = new MessageCatalogBuilder();
         builder.Add<PipelinedMessage>(PipeliningJsonContext.Default.PipelinedMessage, "test.pipelined.v1");
@@ -70,7 +85,7 @@ public sealed class OutboxPublishPipeliningTests
         var serializer = new NonNullSerializer();
         var store = new RecordingOutboxStore(messageCount);
         var broker = new PipeliningDelayBroker(
-            TimeSpan.FromMilliseconds(30), failAtIndex, serializer, catalog, slowFirstLatency);
+            TimeSpan.FromMilliseconds(30), failAtIndex, serializer, catalog, gateFirstPublish);
         var processor = new OutboxBatchProcessor(
             store, broker, serializer, catalog,
             new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
@@ -81,24 +96,41 @@ public sealed class OutboxPublishPipeliningTests
             }),
             NullPalLogger<OutboxBatchProcessor>.Instance);
 
-        await processor.ProcessBatchAsync(CancellationToken.None);
-        return (store, broker);
+        return new BatchRun(store, broker, processor.ProcessBatchAsync(CancellationToken.None).AsTask());
     }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException("condition not met within 5s");
+            await Task.Delay(1).ConfigureAwait(false);
+        }
+    }
+
+    private readonly record struct BatchRun(
+        RecordingOutboxStore Store, PipeliningDelayBroker Broker, Task Processing);
 
     // ─── stubs ─────────────────────────────────────────────────
     // PipelinedMessage/PipeliningJsonContext 在文件末命名空间层级声明（SYSLIB1032 嵌套链规避）
 
     /// <summary>固定延迟发布 + 并发峰值追踪；failAtIndex 的发布按启动序计数命中即抛；
-    /// slowFirstLatency 只作用于启动序第一条（队头慢投递场景）。</summary>
+    /// gateFirstPublish 让启动序第一条挂起，直到测试显式放行（队头慢投递场景）。</summary>
     private sealed class PipeliningDelayBroker(
         TimeSpan latency, int failAtIndex, IMessageSerializer serializer, IMessageCatalog catalog,
-        TimeSpan? slowFirstLatency)
+        bool gateFirstPublish)
         : MessageBrokerBase(serializer, catalog)
     {
+        private readonly TaskCompletionSource? _firstPublishGate =
+            gateFirstPublish ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) : null;
         private int _inFlight;
         private int _started;
 
         public int MaxObservedInFlight;
+
+        public void ReleaseFirstPublish() => _firstPublishGate?.TrySetResult();
 
         public override async ValueTask PublishAsync(
             object message, MessageDescriptor msgDescriptor, PalUlid messageId,
@@ -113,9 +145,10 @@ public sealed class OutboxPublishPipeliningTests
             {
                 if (failAtIndex >= 0 && index == failAtIndex)
                     throw new InvalidOperationException("broker publish failure (test)");
-                var delay = index == 0 && slowFirstLatency is { } slow ? slow : latency;
-                if (delay > TimeSpan.Zero)
-                    await Task.Delay(delay, ct).ConfigureAwait(false);
+                if (index == 0 && _firstPublishGate is not null)
+                    await _firstPublishGate.Task.ConfigureAwait(false);
+                else if (latency > TimeSpan.Zero)
+                    await Task.Delay(latency, ct).ConfigureAwait(false);
             }
             finally
             {
@@ -152,6 +185,15 @@ public sealed class OutboxPublishPipeliningTests
         public readonly List<PalUlid> LeaseOrder = [];
         public readonly List<PalUlid> ProcessedOrder = [];
         public readonly List<PalUlid> ReleaseForRetryOrder = [];
+
+        /// <summary>完成计数的线程安全读取（标记在发布续体线程上执行）。</summary>
+        public int ProcessedCount
+        {
+            get
+            {
+                lock (ProcessedOrder) return ProcessedOrder.Count;
+            }
+        }
 
         public ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);

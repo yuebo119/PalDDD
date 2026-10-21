@@ -283,10 +283,12 @@ public sealed class SagaProcessorTests
         var interrupted = await saga.ProcessEventAsync(state, new TimeoutKickoff(), ct);
         await Assert.That(interrupted.Status).IsEqualTo(SagaStatus.AwaitingHumanDecision);
 
-        // store 落盘 + 中断步骤时间戳拨到过去（触发 IsTimedOut）
+        // store 落盘 + 中断步骤时间戳拨到过去（触发 IsTimedOut）；到期过滤默认开启，
+        // NextCheckAt 同步拨到过去——真实环境两者由同一批时间戳算出。
         store.Add(state);
         foreach (var key in state.StepStartedAt.Keys.ToList())
             state.StepStartedAt[key] = DateTimeOffset.UtcNow.AddMinutes(-5);
+        state.NextCheckAt = DateTimeOffset.UtcNow.AddMinutes(-5);
 
         var processor = new SagaTimeoutProcessor<LifecycleSagaState>(
             store, saga,

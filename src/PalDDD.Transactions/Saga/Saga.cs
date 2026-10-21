@@ -99,10 +99,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
     internal DateTimeOffset? ComputeNextCheckAt(TState state)
         => TimeoutDetector.ComputeNextCheckAt(state);
 
-    /// <summary>写入状态时同步 NextCheckAt；终态清空。</summary>
+    /// <summary>写入状态时同步 NextCheckAt；活动态无待检查超时时写哨兵，终态清空。</summary>
     private void UpdateNextCheckAt(TState state)
         => state.NextCheckAt = state.Status is SagaStatus.Active or SagaStatus.AwaitingHumanDecision
-            ? TimeoutDetector.ComputeNextCheckAt(state)
+            ? TimeoutDetector.ComputeNextCheckAt(state) ?? SagaState.NoPendingTimeout
             : null;
 
     // ═══════════════════════════════════════════════════════════════

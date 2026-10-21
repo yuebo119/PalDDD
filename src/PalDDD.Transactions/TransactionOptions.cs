@@ -195,12 +195,15 @@ public sealed class SagaProcessorOptions
     public TimeSpan LeaseDuration { get; set; } = TimeSpan.FromMinutes(2);
 
     /// <summary>
-    /// 启用到期时间过滤（2026-10-19 M1）。默认 false：仍走全量活跃扫描，供存量行通过
-    /// 正常保存路径回填 <see cref="SagaState.NextCheckAt"/>。回填完成并确认所有活跃行
-    /// 的 NextCheckAt 正确后置 true，只租约 <c>NextCheckAt &lt;= now</c> 的行。
+    /// 启用到期时间过滤（2026-10-19 M1；<b>2026-10-21 起默认 true</b>）：只租约
+    /// <c>NextCheckAt &lt;= now</c> 或 <c>NextCheckAt IS NULL</c> 的活跃 Saga。
+    /// 活动 Saga 的 NextCheckAt 恒有值——有带 Timeout 的已开始步骤时为真实到期时刻，
+    /// 否则为哨兵 <see cref="SagaState.NoPendingTimeout"/>；NULL 只来自迁移前存量行，
+    /// 到期谓词把它视为到期，首次扫描后由 <c>SagaProcessor</c> 回填（无待检查超时写哨兵），
+    /// 因此无需先跑独立回填即可开启。置 false 恢复全量活跃扫描。
     /// 自定义 store 未实现 <see cref="IDueTimeSagaStore{TState}"/> 时自动回落全量路径。
     /// </summary>
-    public bool EnableDueTimeFilter { get; set; }
+    public bool EnableDueTimeFilter { get; set; } = true;
 
     /// <summary>
     /// 租约持有者标识 — 用于区分多实例部署中的不同节点。默认为 {机器名}:{随机ID}。

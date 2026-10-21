@@ -127,8 +127,9 @@ public sealed class InMemorySagaStateStore<TState> : ISagaStateStore<TState>, IS
                     continue; // 索引残留防御（正常不可达——移除与落库同帧发生）
                 if (state.LeasedUntil is not null && state.LeasedUntil > now)
                     continue;
-                // M1：NULL = 无待检查超时（等待事件），到期路径可安全跳过。
-                if (dueBefore is { } due && (state.NextCheckAt is null || state.NextCheckAt > due))
+                // M1：NULL = 迁移前存量行——按到期处理（与 SQL 侧 NULL 谓词一致），
+                // 首次扫描后由 SagaProcessor 回填哨兵/真实到期时刻。
+                if (dueBefore is { } due && state.NextCheckAt is { } next && next > due)
                     continue;
                 var key = state.LeasedUntil is { } until
                     ? (1, until, state.CreatedAt)

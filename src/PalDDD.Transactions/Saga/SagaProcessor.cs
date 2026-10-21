@@ -167,17 +167,17 @@ TState>
 
         foreach (var sagaState in activeSagas)
         {
-            // M1 惰性回填：旧路径（或新行首次进入扫描）NextCheckAt 为空时按当前状态计算。
-            // 收集到环后由批量保存冲刷，确保批量释放路径（只写租约列）也能持久化该值；
-            // 每行只付一次，回填完成后 EnableDueTimeFilter 可切换。
-            if (!options.EnableDueTimeFilter && sagaState.NextCheckAt is null)
+            // M1 惰性回填（2026-10-21）：只有到期过滤真正生效时才需要——迁移前存量行
+            // NextCheckAt 为 NULL，到期谓词把 NULL 视为到期（否则存量行永不扫描）。
+            // 首次扫描按当前状态计算，无待检查超时写哨兵；收集到环后由批量保存冲刷。
+            // 全量扫描（过滤关闭或 store 无到期能力）不需要该值，保持旧路径零额外写。
+            if (options.EnableDueTimeFilter
+                && _store is IDueTimeSagaStore<TState>
+                && sagaState.NextCheckAt is null)
             {
-                var nextCheck = _orchestrator.ComputeNextCheckAt(sagaState);
-                if (nextCheck is not null)
-                {
-                    sagaState.NextCheckAt = nextCheck;
-                    (pendingBackfill ??= []).Add(sagaState);
-                }
+                sagaState.NextCheckAt =
+                    _orchestrator.ComputeNextCheckAt(sagaState) ?? SagaState.NoPendingTimeout;
+                (pendingBackfill ??= []).Add(sagaState);
             }
 
             // P3 修复：单条 Saga 处理失败不中断剩余——否则后续 Saga 的租约需等
@@ -269,7 +269,10 @@ TState>
                     // NextCheckAt，否则同一批行每 tick 重复被租，饿死后续到期 Saga。
                     if (options.EnableDueTimeFilter && sagaState.NextCheckAt is not null)
                     {
-                        var nextCheck = _orchestrator.ComputeNextCheckAt(sagaState);
+                        // 与 Saga.UpdateNextCheckAt 同口径：无待检查超时写哨兵而非 null，
+                        // 避免下一 tick 又以「NULL = 存量行」被租一次。
+                        var nextCheck =
+                            _orchestrator.ComputeNextCheckAt(sagaState) ?? SagaState.NoPendingTimeout;
                         if (nextCheck != sagaState.NextCheckAt)
                         {
                             sagaState.NextCheckAt = nextCheck;

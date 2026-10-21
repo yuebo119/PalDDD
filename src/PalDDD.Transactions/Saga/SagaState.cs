@@ -79,10 +79,20 @@ public abstract class SagaState
     public DateTimeOffset? ErrorAt { get; set; }
 
     /// <summary>
+    /// 「当前状态没有待检查的超时步骤」的哨兵值（2026-10-21）：活动 Saga 的
+    /// <see cref="NextCheckAt"/> 恒有值——有带 Timeout 的已开始步骤时为真实到期时刻，
+    /// 否则写本哨兵（9999-12-31 UTC，MySQL DATETIME(6) 可存），到期扫描自然跳过。
+    /// 不用 <see cref="DateTimeOffset.MaxValue"/>：其 7 位小数秒 + 时区偏移超出
+    /// MySQL DATETIME(6) 范围，写入即错。终态 Saga 仍写 null。
+    /// </summary>
+    public static readonly DateTimeOffset NoPendingTimeout = new(9999, 12, 31, 0, 0, 0, TimeSpan.Zero);
+
+    /// <summary>
     /// 下一次超时检查时间（2026-10-19 性能迁移 M1）。当前状态中带 Timeout 且已开始
-    /// 执行的步骤的最早到期时刻；无待检查步骤时为 null。SagaProcessor 在
-    /// <c>EnableDueTimeFilter=true</c> 时只租约 <c>NextCheckAt &lt;= now</c> 的行，
-    /// 避免每 30 秒全量扫描活跃 Saga。终态写 null。
+    /// 执行的步骤的最早到期时刻；无待检查步骤时为 <see cref="NoPendingTimeout"/>。
+    /// SagaProcessor 在 <c>EnableDueTimeFilter=true</c>（默认）时只租约
+    /// <c>NextCheckAt &lt;= now</c> 或 <c>NextCheckAt IS NULL</c> 的行（NULL = 迁移前
+    /// 存量行，首次扫描后回填），避免每轮全量扫描活跃 Saga。终态写 null。
     /// </summary>
     public DateTimeOffset? NextCheckAt { get; set; }
 
