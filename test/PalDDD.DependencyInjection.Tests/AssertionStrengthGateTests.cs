@@ -148,6 +148,58 @@ public sealed class AssertionStrengthGateTests
         await Assert.That(methods[0]).Contains("Fake_ZeroAssert_Method");
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // 行为断言规则（2026-10-21 契约盘点 R2 后续项 P2）
+    // ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// `*StoreTests.cs` 的每个测试方法至少一条状态/返回值断言（R2 后续项）：
+    /// 纯 IsNotNull 只能证明对象存在，store 的终态字段写错仍然绿。
+    /// </summary>
+    [Test]
+    public async Task StoreTests_HaveBehavioralAssertions()
+    {
+        var (violations, scanned) = ScanStoreTestsForBehavioralAssertions(EnumerateStoreTestFiles());
+        Console.WriteLine($"StoreTests 行为断言扫描：{scanned} 个方法，违规 {violations.Count}");
+        foreach (var v in violations.Take(20))
+            Console.WriteLine($"  弱断言: {v}");
+        await Assert.That(violations).IsEmpty().Because(string.Join("; ", violations));
+    }
+
+    [Test]
+    public async Task StoreTestsBehavioralScanner_DetectsWeakSample()
+    {
+        const string weak = """
+            public sealed class Sample
+            {
+                [Test]
+                public async Task Store_OnlyWeak()
+                {
+                    var store = new X();
+                    await Assert.That(store).IsNotNull();
+                }
+            }
+            """;
+        const string strong = """
+            public sealed class Sample
+            {
+                [Test]
+                public async Task Store_Strong()
+                {
+                    var value = await GetAsync();
+                    await Assert.That(value).IsEqualTo(1);
+                }
+            }
+            """;
+
+        var (violations, scanned) = ScanStoreTestsForBehavioralAssertions(
+            [("StoreTests.cs", weak), ("StoreTests.cs", strong)]);
+
+        await Assert.That(scanned).IsEqualTo(2);
+        await Assert.That(violations.Count).IsEqualTo(1);
+        await Assert.That(violations[0]).Contains("Store_OnlyWeak");
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // 扫描实现
     // ═══════════════════════════════════════════════════════════════
@@ -185,6 +237,40 @@ public sealed class AssertionStrengthGateTests
         }
 
         return (isNotNullCount, zeroAssert);
+    }
+
+    /// <summary>行为断言形态：状态/返回值/集合断言（排除弱断言 IsNotNull）。</summary>
+    private static readonly Regex s_behavioralAssertion = new(
+        @"\.(IsEqualTo|IsNotEqualTo|IsTypeOf|IsNotTypeOf|IsNull|IsNotNullOrEmpty|IsSameReferenceAs|IsNotSameReferenceAs|IsEmpty|IsNotEmpty|IsTrue|IsFalse|IsGreaterThan|IsGreaterThanOrEqualTo|IsLessThan|IsLessThanOrEqualTo|IsBetween|IsAssignableTo|IsInstanceOf|IsEquivalentTo|Contains|DoesNotContain|StartsWith|EndsWith|Matches|HasCount)\s*[<(]",
+        RegexOptions.Compiled);
+
+    /// <summary>异常断言形态（Throws/ThrowsAsync，含泛型尖括号）。</summary>
+    private static readonly Regex s_throwsAssertion = new(@"\bThrows(Async)?\s*[<(]", RegexOptions.Compiled);
+
+    private static IEnumerable<(string Path, string Text)> EnumerateStoreTestFiles()
+    {
+        var rootTestDir = Path.Combine(Root, "test");
+        return Directory.EnumerateFiles(rootTestDir, "*StoreTests.cs", SearchOption.AllDirectories)
+            .Where(BuildArtifactFilter.IsNotBuildArtifact)
+            .Select(f => (Path: f, Text: File.ReadAllText(f)));
+    }
+
+    internal static (List<string> Violations, int Scanned) ScanStoreTestsForBehavioralAssertions(
+        IEnumerable<(string Path, string Text)> files)
+    {
+        var violations = new List<string>();
+        var scanned = 0;
+        foreach (var (path, text) in files)
+        {
+            var sanitized = SanitizeRawStringsAndLineComments(text);
+            foreach (var (methodName, block) in ExtractTestMethodBlocks(sanitized))
+            {
+                scanned++;
+                if (!s_behavioralAssertion.IsMatch(block) && !s_throwsAssertion.IsMatch(block))
+                    violations.Add($"{Path.GetFileName(path.Replace('\\', '/'))}:{methodName}");
+            }
+        }
+        return (violations, scanned);
     }
 
     /// <summary>块内断言判定（与原 python 同口径）：Assert* 调用、Throws/ThrowsAsync 调用形态、

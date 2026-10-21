@@ -1818,7 +1818,7 @@ public sealed class DapperStoreTests
     {
         // 接口赋值——若 DapperEventLog 丢失 : IEventLog 声明，本行编译失败（CS0029；v10 勘正——泛型约束码 CS0311 不适用）
         PalDDD.EventLog.IEventLog log = new DapperEventLog(_conn, dbType: _dbType);
-        await Assert.That(log).IsNotNull();
+        await Assert.That(log).IsTypeOf<DapperEventLog>();
     }
 }
 
