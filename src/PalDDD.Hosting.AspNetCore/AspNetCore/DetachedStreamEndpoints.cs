@@ -20,6 +20,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Net.Http.Headers;
 using PalDDD.CQRS;
+using PalDDD.Core.Logging;
 using System.Text.Json.Serialization.Metadata;
 
 namespace PalDDD.Hosting.AspNetCore;
@@ -33,6 +34,9 @@ public static class DetachedStreamEndpoints
         Action<DetachedStreamOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(services);
+
+        // R11 F2：Hosting 注册入口自带日志门面（与 AddPalHealthChecks 同族）。
+        services.EnsurePalLoggerFacade();
 
         var options = new DetachedStreamOptions();
         configure?.Invoke(options);

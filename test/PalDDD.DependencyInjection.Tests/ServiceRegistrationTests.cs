@@ -9,6 +9,21 @@ namespace PalDDD.DependencyInjection.Tests;
 public sealed class ServiceRegistrationTests
 {
     [Test]
+    public async Task AddPalDDD_SelfProvidesLoggerFacade()
+    {
+        // R11 F2 回归锁：AddPalDDD 是 usage 独立片段与 MapCommand 路径的基础注册，
+        // 应自带 IPalLogger 门面，使 ExceptionMiddleware 等组件级消费者可解析。
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPalDDD();
+        using var provider = services.BuildServiceProvider();
+
+        var loggers = provider.GetServices<PalDDD.Core.Logging.IPalLogger<object>>().ToArray();
+
+        await Assert.That(loggers.Length).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task AddPalDDD_DoesNotRegisterConcreteSerializerAdapter()
     {
         var services = new ServiceCollection();

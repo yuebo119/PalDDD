@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using PalDDD.Core.Logging;
 using System.Diagnostics.CodeAnalysis;
 
 namespace PalDDD.Hosting.AspNetCore;
@@ -30,6 +31,10 @@ public static class HealthCheckExtensions
     public static IServiceCollection AddPalHealthChecks(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+
+        // R11 F2：Hosting 入口自带日志门面——usage.md 的独立片段只调本方法与
+        // UsePalExceptionHandler，而 ExceptionMiddleware 强制依赖 IPalLogger<T>。
+        services.EnsurePalLoggerFacade();
 
         services.AddHealthChecks()
             .AddCheck<PalMessageBrokerHealthCheck>("message_broker", tags: ["pal", "messaging"])

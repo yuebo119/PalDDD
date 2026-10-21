@@ -51,6 +51,38 @@ public sealed class HealthCheckExtensionsTests
     }
 
     [Test]
+    public async Task AddPalHealthChecks_SelfProvidesLoggerFacadeForExceptionMiddleware()
+    {
+        // R11 F2 回归锁：usage.md 的独立 ASP.NET 片段只调 AddPalHealthChecks +
+        // UsePalExceptionHandler；Hosting 入口必须自带 IPalLogger 门面，否则首个请求
+        // 构造 ExceptionMiddleware 时抛 InvalidOperationException。
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPalHealthChecks();
+        using var sp = services.BuildServiceProvider();
+
+        var middleware = Microsoft.Extensions.DependencyInjection.ActivatorUtilities
+            .CreateInstance<ExceptionMiddleware>(sp, (RequestDelegate)(_ => Task.CompletedTask));
+
+        await Assert.That(middleware.GetType()).IsEqualTo(typeof(ExceptionMiddleware));
+    }
+
+    [Test]
+    public async Task AddDetachedStreamRuns_SelfProvidesLoggerFacadeForExceptionMiddleware()
+    {
+        // R11 F2 同族：Hosting 的另一个公开注册入口也必须装门面（消费方常只注册流式能力）。
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDetachedStreamRuns();
+        using var sp = services.BuildServiceProvider();
+
+        var middleware = Microsoft.Extensions.DependencyInjection.ActivatorUtilities
+            .CreateInstance<ExceptionMiddleware>(sp, (RequestDelegate)(_ => Task.CompletedTask));
+
+        await Assert.That(middleware.GetType()).IsEqualTo(typeof(ExceptionMiddleware));
+    }
+
+    [Test]
     public async Task MessageBrokerHealthCheck_WithBroker_ReturnsHealthyRegistrationCheck(CancellationToken cancellationToken)
     {
         var services = new ServiceCollection();
