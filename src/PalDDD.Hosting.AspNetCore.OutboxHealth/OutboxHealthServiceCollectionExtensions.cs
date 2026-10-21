@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using PalDDD.Core.Logging;
 using PalDDD.Transactions;
 
 namespace PalDDD.Hosting.AspNetCore.OutboxHealth;
@@ -16,8 +18,35 @@ public static class OutboxHealthServiceCollectionExtensions
     public static IServiceCollection AddPalOutboxHealthCheck(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+        // R11 F2/F3：可选包也是 Hosting 注册入口——自带日志门面与健康检查去重，
+        // 与 AddPalHealthChecks 并用时不再因重名 outbox 让 /health 抛异常。
+        // 去重逻辑与 Hosting 的 EnsureUniqueHealthCheckNames 同构（本包刻意不引用
+        // Hosting，避免为 12 行逻辑传递整个适配层）。
+        services.EnsurePalLoggerFacade();
+        if (!services.Any(static descriptor => descriptor.ServiceType == typeof(PalOutboxHealthDeduplicationMarker)))
+        {
+            services.AddSingleton<PalOutboxHealthDeduplicationMarker>();
+            services.AddOptions<HealthCheckServiceOptions>().PostConfigure(options =>
+            {
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                List<HealthCheckRegistration>? duplicates = null;
+                foreach (var registration in options.Registrations)
+                {
+                    if (!seen.Add(registration.Name))
+                        (duplicates ??= []).Add(registration);
+                }
+
+                if (duplicates is null)
+                    return;
+                foreach (var duplicate in duplicates)
+                    options.Registrations.Remove(duplicate);
+            });
+        }
         services.AddHealthChecks()
             .AddCheck<PalOutboxHealthCheck>("outbox", tags: ["pal", "persistence"]);
         return services;
     }
 }
+
+/// <summary>R11 F3：本包健康检查去重 PostConfigure 的幂等标记。</summary>
+internal sealed class PalOutboxHealthDeduplicationMarker;

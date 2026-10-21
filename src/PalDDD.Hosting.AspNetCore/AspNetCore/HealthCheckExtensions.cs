@@ -35,6 +35,10 @@ public static class HealthCheckExtensions
         // R11 F2：Hosting 入口自带日志门面——usage.md 的独立片段只调本方法与
         // UsePalExceptionHandler，而 ExceptionMiddleware 强制依赖 IPalLogger<T>。
         services.EnsurePalLoggerFacade();
+        // R11 F3：重名注册在 .NET 11 的 HealthCheckService 是 ArgumentException（不是
+        // 文档暗示的「两个同名检查」）。PostConfigure 在全部 AddCheck 之后按名称去重，
+        // 保留最后一次注册，使重复 AddPalHealthChecks / 与可选 OutboxHealth 并用幂等。
+        services.EnsureUniqueHealthCheckNames();
 
         services.AddHealthChecks()
             .AddCheck<PalMessageBrokerHealthCheck>("message_broker", tags: ["pal", "messaging"])
@@ -61,8 +65,36 @@ public static class HealthCheckExtensions
         return endpoints;
     }
 
-    internal static async Task WriteHealthResponseAsync(HttpContext context, HealthReport report, TimeProvider clock)
+    /// <summary>
+    /// R11 F3：按名称去重健康检查注册（保留最后一次）。.NET 11 的
+    /// <see cref="HealthCheckService"/> 对重名注册直接抛 <see cref="ArgumentException"/>，
+    /// 而重复调用公开 Add* 是常见装配形态（多模块各注册一次）。
+    /// </summary>
+    internal static IServiceCollection EnsureUniqueHealthCheckNames(this IServiceCollection services)
     {
+        if (services.Any(static descriptor => descriptor.ServiceType == typeof(PalHealthCheckDeduplicationMarker)))
+            return services;
+
+        services.AddSingleton<PalHealthCheckDeduplicationMarker>();
+        services.AddOptions<HealthCheckServiceOptions>().PostConfigure(options =>
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            List<HealthCheckRegistration>? duplicates = null;
+            foreach (var registration in options.Registrations)
+            {
+                if (!seen.Add(registration.Name))
+                    (duplicates ??= []).Add(registration);
+            }
+
+            if (duplicates is null)
+                return;
+            foreach (var duplicate in duplicates)
+                options.Registrations.Remove(duplicate);
+        });
+        return services;
+    }
+
+    internal static async Task WriteHealthResponseAsync(HttpContext context, HealthReport report, TimeProvider clock)    {
         // ITM-800（2026-09-19）：删除手动 ContentType 赋值——WriteAsJsonAsync(contentType:null)
         // 用框架默认 "application/json; charset=utf-8" 覆盖此设置（死代码）；行为由
         // WriteHealthResponse_FinalContentTypeIsFrameworkDefault_NotManualSet 测试锁定
@@ -90,6 +122,9 @@ public static class HealthCheckExtensions
 // ═══════════════════════════════════════════════════════════════
 // 内置健康检查实现
 // ═══════════════════════════════════════════════════════════════
+
+/// <summary>R11 F3：健康检查去重 PostConfigure 的幂等标记（单一注册）。</summary>
+internal sealed class PalHealthCheckDeduplicationMarker;
 
 /// <summary>检查消息代理是否已注册 — 不探测外部 Broker 网络连通性。</summary>
 internal sealed class PalMessageBrokerHealthCheck(Message.IMessageBroker? broker = null) : IHealthCheck

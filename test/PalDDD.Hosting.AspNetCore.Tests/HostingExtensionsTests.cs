@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using PalDDD.Hosting.AspNetCore.OutboxHealth;
 using PalDDD.Messaging;
 using System.Globalization;
 using System.Text;
@@ -80,6 +81,44 @@ public sealed class HealthCheckExtensionsTests
             .CreateInstance<ExceptionMiddleware>(sp, (RequestDelegate)(_ => Task.CompletedTask));
 
         await Assert.That(middleware.GetType()).IsEqualTo(typeof(ExceptionMiddleware));
+    }
+
+    [Test]
+    public async Task AddPalHealthChecks_CalledTwice_DeduplicatesRegistrations()
+    {
+        // R11 F3 回归锁：重复注册曾让 HealthCheckService 抛「Duplicate health checks」。
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPalHealthChecks();
+        services.AddPalHealthChecks();
+        using var sp = services.BuildServiceProvider();
+
+        var names = sp.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<HealthCheckServiceOptions>>()
+            .CurrentValue.Registrations.Select(r => r.Name).ToArray();
+        var report = await sp.GetRequiredService<HealthCheckService>().CheckHealthAsync();
+
+        await Assert.That(names.Length).IsEqualTo(2);
+        await Assert.That(names.Distinct(StringComparer.Ordinal).Count()).IsEqualTo(2);
+        await Assert.That(report.Entries.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task AddPalHealthChecks_WithOptionalOutboxPackage_DeduplicatesOutbox()
+    {
+        // R11 F3 回归锁：文档称两个入口「二选一」，实际并用曾让 /health 抛异常。
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPalHealthChecks();
+        services.AddPalOutboxHealthCheck();
+        using var sp = services.BuildServiceProvider();
+
+        var names = sp.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<HealthCheckServiceOptions>>()
+            .CurrentValue.Registrations.Select(r => r.Name).ToArray();
+        var report = await sp.GetRequiredService<HealthCheckService>().CheckHealthAsync();
+
+        await Assert.That(names.Length).IsEqualTo(2);
+        await Assert.That(names.Count(n => n == "outbox")).IsEqualTo(1);
+        await Assert.That(report.Entries.Count).IsEqualTo(2);
     }
 
     [Test]
