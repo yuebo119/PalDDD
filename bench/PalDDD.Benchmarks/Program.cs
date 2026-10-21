@@ -285,6 +285,21 @@ if (args.Contains("--m4-scale-mysql", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--palorm-append-pg", StringComparer.OrdinalIgnoreCase))
     return await MigrationProbes.RunPalOrmAppendPgAsync();
 
+// Outbox 批量写入探针（2026-10-21）：PG 强类型 COPY / MySQL IDataReader BulkCopy，
+// 1000 行写入 + 抽样回读。
+if (args.Contains("--outbox-bulk-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunOutboxBulkProbeAsync(postgreSql: true);
+
+if (args.Contains("--outbox-bulk-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunOutboxBulkProbeAsync(postgreSql: false);
+
+// Inbox 批量认领探针（2026-10-21）：100 条一次认领/完成/重复拒绝。
+if (args.Contains("--inbox-batch-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunInboxBatchProbeAsync(postgreSql: true);
+
+if (args.Contains("--inbox-batch-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunInboxBatchProbeAsync(postgreSql: false);
+
 if (args.Contains("--m4-probe-pg", StringComparer.OrdinalIgnoreCase))
     return await MigrationProbes.RunM4Async(postgreSql: true);
 

@@ -164,4 +164,132 @@ public sealed class InboxProcessor
             throw;
         }
     }
+
+    /// <summary>
+    /// 批量处理消息（2026-10-21）：一次认领、逐条执行、一次批量完成标记。存储未实现
+    /// <see cref="IBatchInboxStore"/> 时回落逐条路径。单个 handler 失败不中断其余；
+    /// 成功项批量标记，失败项逐条标记后聚合抛出。返回成功处理的消息数。
+    /// </summary>
+    public async ValueTask<int> TryProcessBatchAsync<TMessage>(
+        string consumerName,
+        IReadOnlyList<(string MessageId, TMessage Message)> batch,
+        Func<TMessage, CancellationToken, ValueTask> handler,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(consumerName);
+        ArgumentNullException.ThrowIfNull(batch);
+        ArgumentNullException.ThrowIfNull(handler);
+        if (batch.Count == 0)
+            return 0;
+
+        if (_store is not IBatchInboxStore batchStore)
+        {
+            var processedFallback = 0;
+            foreach (var (messageId, message) in batch)
+            {
+                if (await TryProcessAsync(consumerName, messageId, handler, message, ct).ConfigureAwait(false))
+                    processedFallback++;
+            }
+            return processedFallback;
+        }
+
+        var options = _options.CurrentValue;
+        var now = _timeProvider.GetUtcNow();
+        var byId = new Dictionary<string, TMessage>(batch.Count, StringComparer.Ordinal);
+        var ids = new List<string>(batch.Count);
+        foreach (var (messageId, message) in batch)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+            ArgumentNullException.ThrowIfNull(message, nameof(batch));
+            if (byId.TryAdd(messageId, message))
+                ids.Add(messageId);
+        }
+
+        using var activity = PalActivitySource.StartInboxProcess(consumerName, "batch");
+        var claimed = await batchStore.TryStartProcessingManyAsync(
+            consumerName, ids, now, options.ProcessingTimeout, ct).ConfigureAwait(false);
+        var skipped = batch.Count - claimed.Count;
+        if (skipped > 0)
+        {
+            PalMetrics.InboxSkipped.Add(skipped);
+            activity?.SetTag("pal.inbox.skipped", skipped);
+        }
+
+        if (claimed.Count == 0)
+        {
+            activity?.SetTag("pal.inbox.result", "skipped");
+            return 0;
+        }
+
+        var succeeded = new List<InboxMessage>(claimed.Count);
+        List<Exception>? failures = null;
+        foreach (var record in claimed)
+        {
+            try
+            {
+                await handler(byId[record.MessageId], ct).ConfigureAwait(false);
+                succeeded.Add(record);
+                PalMetrics.InboxProcessed.Add(1);
+            }
+            catch (OperationCanceledException)
+            {
+                // 取消：不标 Failed，已认领记录滞留 Processing 至租约到期（与逐条路径同语义）。
+                throw;
+            }
+            catch (Exception ex)
+            {
+                (failures ??= []).Add(ex);
+                PalMetrics.InboxFailed.Add(1);
+                try
+                {
+                    await _store.MarkFailedAsync(
+                        record,
+                        PalDDD.Core.FailureReason.Normalize(ex.Message),
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception markEx)
+                {
+                    ex.Data["MarkFailedError"] = markEx.Message;
+                }
+            }
+        }
+
+        if (succeeded.Count > 0)
+        {
+            try
+            {
+                var marked = await batchStore.MarkProcessedManyAsync(
+                    consumerName, succeeded, _timeProvider.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+                if (marked < succeeded.Count && _logger.IsEnabled(LogLevel.Warning))
+                {
+                    _logger.Warning(
+                        $"Inbox: batch completion marked {marked}/{succeeded.Count} message(s); unmarked rows stay Processing until lease expiry (at-least-once).");
+                }
+            }
+            catch (Exception markEx)
+            {
+                // handler 已成功：按 at-least-once 返回成功，状态待确认（与逐条路径同语义）。
+                _logger.Error(markEx, "Inbox: batch handler succeeded but MarkProcessedMany failed; state pending confirmation (at-least-once)");
+            }
+        }
+
+        if (failures is not null)
+        {
+            activity?.SetTag("pal.inbox.result", "failed");
+            activity?.SetStatus(ActivityStatusCode.Error, $"{failures.Count} handler(s) failed");
+            throw new AggregateException($"{failures.Count} inbox handler(s) failed.", failures);
+        }
+
+        activity?.SetTag("pal.inbox.result", "processed");
+        if (_logger.IsEnabled(LogLevel.Information))
+            _logger.Information($"Inbox: batch of {claimed.Count} message(s) processed for consumer {consumerName}");
+        return succeeded.Count;
+    }
+
+    /// <summary>批量处理消息（使用默认消费者名）。</summary>
+    public ValueTask<int> TryProcessBatchAsync<TMessage>(
+        IReadOnlyList<(string MessageId, TMessage Message)> batch,
+        Func<TMessage, CancellationToken, ValueTask> handler,
+        CancellationToken ct = default)
+        => TryProcessBatchAsync(_options.CurrentValue.DefaultConsumerName, batch, handler, ct);
 }

@@ -16,7 +16,7 @@ namespace PalDDD.Transactions;
 // ─────────────────────────────────────────────────────────────
 
 /// <summary>内存收件箱存储 — 用于测试和单进程原型。</summary>
-public sealed class InMemoryInboxStore : IInboxStore
+public sealed class InMemoryInboxStore : IInboxStore, IBatchInboxStore
 {
     private readonly Lock _lock = new();
     private readonly Dictionary<(string ConsumerName, string MessageId), InboxMessage> _records = [];
@@ -41,55 +41,134 @@ public sealed class InMemoryInboxStore : IInboxStore
 
         lock (_lock)
         {
-            var key = (consumerName, messageId);
-            if (_records.TryGetValue(key, out var existing))
-            {
-                if (existing.Status == InboxStatus.Processed)
-                    return ValueTask.FromResult<InboxMessage?>(null);
-
-                if (existing.Status == InboxStatus.Processing
-                    && existing.ProcessingStartedAt.HasValue
-                    && (now - existing.ProcessingStartedAt.Value) < processingTimeout)
-                    return ValueTask.FromResult<InboxMessage?>(null);
-                // ITM-283（R45）边界声明：processingTimeout=0 且 elapsed 恰为 0（同刻重入）时本栈允许
-                // 重入（0<0 false），Dapper 栈拒绝（startedAt<cutoff=now 为 false→UPDATE 0 行→null）。
-                // 极端测试语义（真实场景 timeout>0）；对齐需改 SQL 守卫或本式加 <=，破坏面大于收益——声明保留。
-
-                // 失败或超时 — 重新进入 Processing
-                // ITM-105 修复：对齐 InMemoryIdempotencyStore/InMemoryProjectionCheckpointStore
-                // 的 successor 隔离模式——原实现直接复用字典内 existing 实例并返回，被抢占的
-                // 旧持有者仍持同一引用，其 MarkProcessedAsync/MarkFailedAsync 会改到字典当前
-                // 条目（抢占失效，旧持有者能覆盖新持有者的状态）。改为：构造后继实例（拷贝
-                // Id/ConsumerName/MessageId/ReceivedAt，重置状态与错误、递增尝试次数）替换
-                // 字典条目——旧引用自此不是字典持有者，其标记被 IsCurrentLeaseHolder 守卫忽略。
-                var successor = new InboxMessage
-                {
-                    Id = existing.Id,
-                    ConsumerName = existing.ConsumerName,
-                    MessageId = existing.MessageId,
-                    Status = InboxStatus.Processing,
-                    ReceivedAt = existing.ReceivedAt,
-                    ProcessingStartedAt = now,
-                    Attempts = existing.Attempts + 1,
-                    LastError = null,
-                    ProcessedAt = null
-                };
-                _records[key] = successor;
-                return ValueTask.FromResult<InboxMessage?>(successor);
-            }
-
-            var record = new InboxMessage
-            {
-                ConsumerName = consumerName,
-                MessageId = messageId,
-                Status = InboxStatus.Processing,
-                ReceivedAt = now,
-                ProcessingStartedAt = now,
-                Attempts = 1
-            };
-            _records[key] = record;
-            return ValueTask.FromResult<InboxMessage?>(record);
+            return ValueTask.FromResult(TryStartCore(consumerName, messageId, now, processingTimeout));
         }
+    }
+
+    /// <inheritdoc/>
+    public ValueTask<IReadOnlyList<InboxMessage>> TryStartProcessingManyAsync(
+        string consumerName,
+        IReadOnlyList<string> messageIds,
+        DateTimeOffset now,
+        TimeSpan processingTimeout,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(consumerName);
+        ArgumentNullException.ThrowIfNull(messageIds);
+        ct.ThrowIfCancellationRequested();
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
+        if (messageIds.Count == 0)
+            return ValueTask.FromResult<IReadOnlyList<InboxMessage>>([]);
+
+        var claimed = new List<InboxMessage>(messageIds.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        lock (_lock)
+        {
+            foreach (var messageId in messageIds)
+            {
+                if (string.IsNullOrWhiteSpace(messageId))
+                    throw new ArgumentException(
+                        "The messageIds collection contains a null or blank element.", nameof(messageIds));
+                if (!seen.Add(messageId))
+                    continue;
+
+                var message = TryStartCore(consumerName, messageId, now, processingTimeout);
+                if (message is not null)
+                    claimed.Add(message);
+            }
+        }
+
+        return ValueTask.FromResult<IReadOnlyList<InboxMessage>>(claimed);
+    }
+
+    /// <inheritdoc/>
+    public ValueTask<int> MarkProcessedManyAsync(
+        string consumerName,
+        IReadOnlyList<InboxMessage> messages,
+        DateTimeOffset processedAt,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(consumerName);
+        ArgumentNullException.ThrowIfNull(messages);
+        ct.ThrowIfCancellationRequested();
+        if (messages.Count == 0)
+            return ValueTask.FromResult(0);
+
+        var affected = 0;
+        lock (_lock)
+        {
+            foreach (var message in messages)
+            {
+                if (message is null)
+                    throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
+                if (!string.Equals(message.ConsumerName, consumerName, StringComparison.Ordinal))
+                    continue;
+                if (!IsCurrentLeaseHolder(message))
+                    continue;
+
+                message.Status = InboxStatus.Processed;
+                message.ProcessedAt = processedAt;
+                message.LastError = null;
+                affected++;
+            }
+        }
+
+        return ValueTask.FromResult(affected);
+    }
+
+    /// <summary>认领单条（调用方持锁且已完成参数守卫）。</summary>
+    private InboxMessage? TryStartCore(
+        string consumerName, string messageId, DateTimeOffset now, TimeSpan processingTimeout)
+    {
+        var key = (consumerName, messageId);
+        if (_records.TryGetValue(key, out var existing))
+        {
+            if (existing.Status == InboxStatus.Processed)
+                return null;
+
+            if (existing.Status == InboxStatus.Processing
+                && existing.ProcessingStartedAt.HasValue
+                && (now - existing.ProcessingStartedAt.Value) < processingTimeout)
+                return null;
+            // ITM-283（R45）边界声明：processingTimeout=0 且 elapsed 恰为 0（同刻重入）时本栈允许
+            // 重入（0<0 false），Dapper 栈拒绝（startedAt<cutoff=now 为 false→UPDATE 0 行→null）。
+            // 极端测试语义（真实场景 timeout>0）；对齐需改 SQL 守卫或本式加 <=，破坏面大于收益——声明保留。
+
+            // 失败或超时 — 重新进入 Processing
+            // ITM-105 修复：对齐 InMemoryIdempotencyStore/InMemoryProjectionCheckpointStore
+            // 的 successor 隔离模式——原实现直接复用字典内 existing 实例并返回，被抢占的
+            // 旧持有者仍持同一引用，其 MarkProcessedAsync/MarkFailedAsync 会改到字典当前
+            // 条目（抢占失效，旧持有者能覆盖新持有者的状态）。改为：构造后继实例（拷贝
+            // Id/ConsumerName/MessageId/ReceivedAt，重置状态与错误、递增尝试次数）替换
+            // 字典条目——旧引用自此不是字典持有者，其标记被 IsCurrentLeaseHolder 守卫忽略。
+            var successor = new InboxMessage
+            {
+                Id = existing.Id,
+                ConsumerName = existing.ConsumerName,
+                MessageId = existing.MessageId,
+                Status = InboxStatus.Processing,
+                ReceivedAt = existing.ReceivedAt,
+                ProcessingStartedAt = now,
+                Attempts = existing.Attempts + 1,
+                LastError = null,
+                ProcessedAt = null
+            };
+            _records[key] = successor;
+            return successor;
+        }
+
+        var record = new InboxMessage
+        {
+            ConsumerName = consumerName,
+            MessageId = messageId,
+            Status = InboxStatus.Processing,
+            ReceivedAt = now,
+            ProcessingStartedAt = now,
+            Attempts = 1
+        };
+        _records[key] = record;
+        return record;
     }
 
     /// <inheritdoc/>

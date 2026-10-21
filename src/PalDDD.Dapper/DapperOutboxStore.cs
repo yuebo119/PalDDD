@@ -294,6 +294,11 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         var now = _timeProvider.GetUtcNow();
         foreach (var message in messages)
             message.NextAttemptAt = message.NextAttemptAt ?? now;
+        // 2026-10-21：PG 走强类型 COPY——通用泛型路径每行构造 object?[] 并逐值装箱 +
+        // 类型分派；outbox 列集固定，专用写入每行零数组分配、零装箱。其余方言保持通用路径。
+        if (_dbType == DapperDbType.PostgreSql)
+            return await DapperBulkCopy.BulkInsertOutboxAsync(conn, messages, Tx, ct).ConfigureAwait(false);
+
         // P2 修复（八轮评审 PD17）：批量路径补 correlation/causation/trace 4 追踪列——
         // 单条路径 AddMessage（七轮）已补，批量漏列导致追踪链在批量写入时丢失；
         // extractor 末 4 项与单条 AddMessage 的参数语义逐一对齐。
