@@ -24,6 +24,13 @@ public static class ServiceRegistration
     public static IServiceCollection AddPalDDD(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+        // R11 F2：组件级入口自带日志门面（R7 家族）。Hosting 的 ExceptionMiddleware
+        // 强制依赖 IPalLogger<T>，而 AddPalDDD 是 MapCommand/异常中间件最基础的注册；
+        // 原实现只在 AddPalLogging/AddPalCoreStack/PipelineBehaviors 安装门面，导致
+        // 「AddPalDDD + UsePalExceptionHandler」的最小应用首个请求失败。
+        // 必须走 DI 包内 EnsureLoggerFacade（含 AddLogging）——只装门面会让 NullMessageBroker
+        // 的可选 logger 构造从参数空构造切换到 PalLogger<T>，裸 ServiceCollection 解析失败。
+        EnsureLoggerFacade(services);
         services.TryAddSingleton<CQRS.Dispatcher>();
         services.TryAddScoped<Message.IDomainEventDispatcher, Message.IterativeDomainEventDispatcher>();
         services.TryAddSingleton<Message.IMessageBroker, Message.NullMessageBroker>();
