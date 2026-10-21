@@ -107,7 +107,8 @@ public sealed class DapperIdempotencyStoreTests : IDisposable
         await _store.MarkCompletedAsync(record!, "done"u8.ToArray(), Now.AddSeconds(1));
         var afterExpiry = Now.AddMinutes(11);
         var reclaimed = await _store.TryStartAsync("TestOp", "key-1", afterExpiry, Policy);
-        await Assert.That(reclaimed).IsNotNull();
+        await Assert.That(reclaimed).IsTypeOf<IdempotencyRecord>();
+        await Assert.That(reclaimed!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
     }
 
     [Test]

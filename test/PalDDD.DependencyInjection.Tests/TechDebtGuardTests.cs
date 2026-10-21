@@ -663,6 +663,16 @@ public sealed class TechDebtGuardTests
         "SqlServerOutboxDbContext",
     ];
 
+    /// <summary>
+    /// 关系型覆盖账本的显式豁免标记：`RELATIONAL-COVERAGE-NONE:` 后必须跟非空原因。
+    /// 只允许“引用上下文但不覆盖其关系型行为”的文件使用（如 provider 错配异常断言）。
+    /// </summary>
+    internal static bool ShouldSkipRelationalFile(string content)
+        => s_relationalCoverageOptOut.IsMatch(content);
+
+    private static readonly Regex s_relationalCoverageOptOut =
+        new(@"RELATIONAL-COVERAGE-NONE:\s*\S", RegexOptions.Compiled);
+
     /// <summary>关系型测试文件标记：任一提供程序/建库调用（bash 同口径，无词边界）。</summary>
     private static readonly Regex s_relationalProviderHint =
         new("UseSqlite|UseNpgsql|EnsureCreated|SqliteConnection", RegexOptions.Compiled);
@@ -718,6 +728,15 @@ public sealed class TechDebtGuardTests
         await Assert.That(names.Count).IsEqualTo(3);
     }
 
+    /// <summary>豁免标记负向自证：带原因才跳过；空原因与普通文件不跳过。</summary>
+    [Test]
+    public async Task RelationalCoverageOptOut_RequiresReason()
+    {
+        await Assert.That(ShouldSkipRelationalFile("// RELATIONAL-COVERAGE-NONE: provider 错配断言")).IsTrue();
+        await Assert.That(ShouldSkipRelationalFile("// RELATIONAL-COVERAGE-NONE:")).IsFalse();
+        await Assert.That(ShouldSkipRelationalFile("// 普通注释")).IsFalse();
+    }
+
     /// <summary>
     /// #20 全量判定（含 #20a 扫描面存在性）：逐 DbContext 在 test/ 关系型测试文件中整词匹配；
     /// 实测 gap 集合必须与白名单双向相等——bash 是 allow 级（缺口列出供人工核实、不阻断），
@@ -754,6 +773,10 @@ public sealed class TechDebtGuardTests
             if (relative == GuardTestSelfPath)
                 continue;
             var content = File.ReadAllText(file);
+            // 显式豁免：仅验证配置错误、不提供关系型行为覆盖的文件可带
+            // `RELATIONAL-COVERAGE-NONE: <原因>` 退出账本；原因必填（防空标记洗白真实缺口）。
+            if (ShouldSkipRelationalFile(content))
+                continue;
             if (s_relationalProviderHint.IsMatch(content))
                 relationalFiles.Add((relative, content));
         }

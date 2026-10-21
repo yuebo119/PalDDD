@@ -42,6 +42,18 @@ git config --local --get core.hooksPath   # 期望输出：.githooks
 
 > ⚠️ **Docker 前提**：`test/PalDDD.PalORM.Tests` 与 `test/PalDDD.Integration.Tests` 的方言族测试经 Testcontainers 拉取 PG/MySQL 镜像；未运行 Docker 时这些测试**跳过而非失败**（3.1.0 起由硬失败改为跳过，给出可读原因；安全前提是外部数据库隐式回退路径已删除）。首次 clone 请先启动 Docker，或先只跑不依赖容器的项目（`PalDDD.Core.Tests`/`PalDDD.Transactions.Tests`/`PalDDD.Serialization.Tests` 等）。
 
+### 本地真库（wslc，无 Docker 时的替代）
+
+本机没有 Docker 时可用 wslc 容器跑方言探针。连接地址必须写 `127.0.0.1`（写 `localhost` 会进入 Testcontainers 分支）：
+
+```bash
+PALDDD_TEST_PG="Host=127.0.0.1;Port=5432;Database=palddd_probe;Username=postgres;Password=postgres" \
+PALDDD_TEST_MYSQL="Server=127.0.0.1;Port=3306;Database=palddd_probe;User ID=root;Password=root" \
+dotnet test test/PalDDD.Integration.Tests -- --treenode-filter "/*/*/DialectProbeTests/*"
+```
+
+容器 Exited 后用 `~/.zcode/scripts/wslc-start-containers.cmd` 拉起。改动 `src/**/Stores/`、`SqlTemplates.cs`、`*.sql` 后建议至少跑一次 PG/MySQL 探针（pre-push 会打印提示，不阻断）。
+
 ```bash
 dotnet restore PalDDD.slnx
 dotnet build PalDDD.slnx --no-restore

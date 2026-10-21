@@ -53,6 +53,7 @@ public abstract class PostgreSqlOutboxDbContext(DbContextOptions options) : Outb
         int maxRetryCount,
         CancellationToken ct)
     {
+        EfCoreDialectGuard.EnsureProvider(Database, "Npgsql", "PostgreSql", nameof(PostgreSqlOutboxDbContext));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize); // v22 C-3：v20 C-1 GetPending 补齐后 Lease 路径漏网
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxRetryCount); // ITM-659：maxRetryCount 非正守卫（同上 GetPending）
         // ITM-081 修复：补 owner 空白校验（对齐 SqlServerOutboxDbContext.LeasePendingMessagesAsync

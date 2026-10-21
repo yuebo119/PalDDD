@@ -80,6 +80,7 @@ public abstract class SqliteOutboxDbContext(DbContextOptions options) : OutboxDb
         int maxRetryCount,
         CancellationToken ct)
     {
+        EfCoreDialectGuard.EnsureProvider(Database, "Sqlite", "Sqlite", nameof(SqliteOutboxDbContext));
         // ITM-216 修复（三十二轮）：owner 空白守卫——对照 PG（ITM-081）/SqlServer/MySql 同款，
         // 缺守卫时空/空白 owner 写入 LockedBy 列破坏跨方言契约一致
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);

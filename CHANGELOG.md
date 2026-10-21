@@ -14,6 +14,14 @@
 
 ### Added
 
+- **2026-10-21 契约盘点后续项实施（R3：格子清单、Inbox 矩阵、行为断言门禁、EF 方言守卫、本地真库提示）**：
+  ①**契约格子清单**（`ContractCellManifestTests`）：61 格（组件 × 栈 × 方言）逐格登记实现类型、代表测试文件与三态状态（verified-local / verified-ci-only / accepted-gap），校验实现类型存在且实现对应抽象、新增未登记根实现即红、Local/CiOnly 格必须有含 `[Test]` 与 `Assert.That` 的测试文件；AcceptedGap 15 格（EF Outbox 3 + EF 其余组件 PG/MySQL 10 + Dapper 幂等 PG/MySQL 2）全部带原因并冻结。
+  ②**Inbox 四栈 SQLite 矩阵**（`InboxCrossStackMatrixTests`）：InMemory / Dapper / PalORM / EF 跑同一组断言（首次认领、重复返回 null、完成后 null、失败后可重入且 Attempts=2），共 16 条状态断言。
+  ③**行为断言门禁**（`AssertionStrengthGateTests`）：新增 `*StoreTests.cs` 规则，每个 [Test] 至少一条状态/返回值/异常断言，附负向自证；按规则补齐 4 个既有弱断言测试（Idempotency 回收、EventLog 接口赋值、PalORM 幂等回收、PalORM Inbox 独立消费者）。
+  ④**EF 方言守卫**（`EfCoreDialectGuard`）：Sqlite/PG/MySQL 三个 Outbox 上下文租约入口校验 `Database.ProviderName`，provider 与方言错配抛可行动异常；新增 `EfDialectMismatchTests`（错配 + 正向两条）。
+  ⑤**本地真库与提示**：`docs/development.md` 增「本地真库（wslc）」配方；pre-push 钩子在 store/方言 SQL 改动且未配置 `PALDDD_TEST_PG/MYSQL` 时打印提示（不阻断）。
+  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；16 个测试项目 **1837 用例 / 1759 通过 / 78 跳过 / 0 失败**（+9：清单 3、Inbox 矩阵 1、EF 守卫 2、行为断言规则 2、豁免标记自证 1；另补齐 4 个既有弱断言）。
+
 - **2026-10-21 契约盘点复验轮 R2（2 项缺陷 + 3 项债务收口；公共 API 快照 −1）**：
   ①**测试命令文档纠偏**——`dotnet test PalDDD.slnx` 实测 1828 例 / exit 0；修正 `conventions.md` §10.5、`development.md`、`testing.md` 的「MTP 禁用 slnx 批量（exit 5）」声明；CI 保持逐项目循环（并行、逐项目失败注解、覆盖率需要）。
   ②**runtime assembly scanning 守卫**——`SourceCodeGuardTests` 新增守卫 7：扫描 `GetAssemblies()` / `Assembly.Load*` / `AssemblyLoadContext.LoadFromAssembly*`，附 5 个正反样本矩阵（此前 architecture.md 稳定性约束零覆盖）。

@@ -51,7 +51,8 @@ public class PalOrmIdempotencyStoreTests
 
         var later = now + TimeSpan.FromSeconds(6);
         var reclaimed = await store.TryStartAsync("op-1", "key-1", later, IdempotencyPolicy.Default, default);
-        await Assert.That(reclaimed).IsNotNull();
+        await Assert.That(reclaimed).IsTypeOf<IdempotencyRecord>();
+        await Assert.That(reclaimed!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
     }
 
     /// <summary>v8 评审 P2-2 回归：过期 Completed 记录必须可回收重建——原 `AND status&lt;&gt;Completed`

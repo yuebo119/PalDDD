@@ -95,8 +95,10 @@ public class PalOrmInboxStoreTests
         var c1 = await store.TryStartProcessingAsync("consumer-A", "msg-1", now, TimeSpan.FromMinutes(5), default);
         var c2 = await store.TryStartProcessingAsync("consumer-B", "msg-1", now, TimeSpan.FromMinutes(5), default);
 
-        await Assert.That(c1).IsNotNull();
-        await Assert.That(c2).IsNotNull();  // 不同 consumer 独立处理
+        await Assert.That(c1).IsTypeOf<InboxMessage>();
+        await Assert.That(c2).IsTypeOf<InboxMessage>();
+        await Assert.That(c1!.ConsumerName).IsEqualTo("consumer-A");
+        await Assert.That(c2!.ConsumerName).IsEqualTo("consumer-B");  // 不同 consumer 独立处理
     }
 
     /// <summary>ITM-274（R42）：null ProcessingStartedAt 的手工构造 message 直调 Mark* 属调用方

@@ -15,7 +15,11 @@
 
 ## 二、未完成与不确定项逐条论证
 
-### 2.1 B2 对表只覆盖 16/61 格
+**实施状态（2026-10-21 R3）**：2.1 部分落地（61 格清单 + Inbox 四栈矩阵；其余 4 组件矩阵待扩）；
+2.2 已落地；2.3 已落地（三态汇总 + 配方 + pre-push 提示）；2.4 已验证（ASPNETCORE_URLS 复验通过）；
+2.5 已由仓库测试覆盖（EF），PalORM 侧改为结构性论证。
+
+### 2.1 B2 对表只覆盖 61 格中的少数（R3：清单与 Inbox 矩阵已落地）
 
 **事实**：本轮只对 Outbox 的终态守卫/重试自增与 Inbox 的认领/失败态做了 4 栈 × 4 组不变量比对，其余 45 格未对表。
 
@@ -37,7 +41,7 @@
 
 **验收**：清单测试枚举 61 格且 0 未登记；SQLite 矩阵覆盖 ≥20 格；对任一实现删除一条守卫 SQL，对应矩阵用例转红。
 
-### 2.2 B3 的「只跑通」判定依赖断言存在性
+### 2.2 B3 的「只跑通」判定依赖断言存在性（R3：规则已落地）
 
 **事实**：本轮用“测试文件引用 + Assert.That 计数”分层，未逐个读断言内容。
 
@@ -54,7 +58,7 @@
 
 **验收**：注入一个只含 `IsNotNull` 的 store 测试样例，新规则判红；清单中 call-only 格子数为 0 或显式豁免。
 
-### 2.3 PG/MySQL 方言格在本地跳过
+### 2.3 PG/MySQL 方言格在本地跳过（R3：三态汇总 + 配方 + pre-push 提示已落地）
 
 **事实**：本地无 Docker 时 78 个用例跳过（PalORM 54、Integration 14、Messaging.Integration 10）；
 CI 有 `dialect-probe` job 覆盖 PG/MySQL 的 Store/SQL/DDL 面。
@@ -70,7 +74,7 @@ CI 有 `dialect-probe` job 覆盖 PG/MySQL 的 Store/SQL/DDL 面。
 
 **验收**：清单三态可打印；方言 SQL 改动的 PR 在 CI 的 dialect-probe 必跑。
 
-### 2.4 E1 的配置删除用例依赖本机端口
+### 2.4 E1 的配置删除用例依赖本机端口（R3：已验证）
 
 **事实**：E1-V1 删除 `UseUrls` 后通过（本机 5000 空闲）；上一轮同一用例因 5000 被占用而失败。
 
@@ -81,29 +85,28 @@ CI 有 `dialect-probe` job 覆盖 PG/MySQL 的 Store/SQL/DDL 面。
 
 **验收**：同一命令在两种端口占用状态下结果一致。
 
-### 2.5 E4 的方言配错只覆盖 Dapper/SQLite 形态
+### 2.5 E4 的方言配错只覆盖 Dapper/SQLite 形态（R3：EF 已覆盖；PalORM 结构性无此问题）
 
 **事实**：E4 用 SQLite 连接 + PostgreSql 方言验证 Dapper 守卫；EF/PalORM 栈未做同类消费侧实验。
 
 **风险场景**：EF 的 provider 名判定与 PalORM 的 SqlDialect 映射若有错，错误仍可能落在首次查询。
 
-**优化方案**：
-1. **P2 EF 探针**：消费方项目引用 `Microsoft.EntityFrameworkCore.Sqlite`（仓库已有测试依赖），用 SQLite provider +
-   PG 方言构造 `SqliteOutboxDbContext` 的派生上下文，记录异常消息。
-2. **P2 PalORM 探针**：引用 `PalDDD.PalORM.Sqlite`，用 SQLite DataSession + PostgreSql 方言调用租约，记录异常消息。
-3. 两者只在 `/tmp` 消费侧实验运行，不新增仓库测试依赖。
+**R3 实施**：EF 侧已在仓库内落地——三个方言 Outbox 上下文的租约入口增加 `EfCoreDialectGuard`，
+provider 不匹配抛可行动 `InvalidOperationException`；`EfDialectMismatchTests` 用 SQLite provider +
+PostgreSql 上下文验证消息含 PostgreSql/Sqlite，并有 SQLite 上下文正向用例。PalORM 侧不需要探针：
+其方言由 `DataSession<TProvider>` 的 provider 类型决定，不存在“连接与方言参数分离”的错配面。
 
-**验收**：两条探针输出都能指出“方言/连接不匹配”，而不是 provider 语法错误。
+**验收**：EF 两条用例通过；PalORM 以类型系统保证方言一致（结构性论证）。
 
 ## 三、优先级与工作量
 
 | 项 | 优先级 | 工作量 | 验收命令 |
 |---|---|---|---|
-| 2.1 格子清单 + SQLite 全栈矩阵 | P1 | 1.5 人日 | `dotnet test test/PalDDD.Integration.Tests -- --treenode-filter "/*/*/ContractCellManifestTests/*"` |
+| 2.1 格子清单（已完成）+ SQLite 全栈矩阵（Inbox 已完成，其余 4 组件待扩） | P1 | 清单 0.5 + 每组件 0.3 人日 | `dotnet test test/PalDDD.Integration.Tests -- --treenode-filter "/*/*/ContractCellManifestTests/*"`；`InboxCrossStackMatrixTests` |
 | 2.2 断言强度扩展 | P1 | 0.5 人日 | `dotnet test test/PalDDD.DependencyInjection.Tests -- --treenode-filter "/*/*/AssertionStrengthGateTests/*"` |
-| 2.3 本地真库配方与三态标注 | P1/P2 | 0.5 人日 | 清单测试打印三态汇总 |
-| 2.4 冒烟端口固定 | P2 | 0.1 人日 | 同一命令在端口占用下仍通过 |
-| 2.5 EF/PalORM 错误探针 | P2 | 0.5 人日 | 两条探针输出含“不匹配” |
+| 2.3 本地真库配方与三态标注（已完成） | P1/P2 | 0.5 人日 | 清单测试打印三态汇总；development.md wslc 节 |
+| 2.4 冒烟端口固定（已完成，ASPNETCORE_URLS 复验通过） | P2 | 0.1 人日 | 同一命令在端口占用下仍通过 |
+| 2.5 EF 错误探针（已完成）／PalORM 结构性论证（无需探针） | P2 | 0.5 人日 | `EfDialectMismatchTests` 两条通过 |
 
 ## 四、明确不做与理由
 
