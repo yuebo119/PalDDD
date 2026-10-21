@@ -310,8 +310,28 @@ internal static class MigrationProbes
             throw new InvalidOperationException(
                 $"next_attempt_at mismatch: stored={nextAttempt:O}, expected={expectedNext:O}");
 
+        // 抽样读完成后释放 reader，同一连接上才能执行 A/B 的后续命令。
+        await reader.DisposeAsync();
+
+        // A/B：1000 条单条写入 vs 批量写入（清表后各跑一次，同一连接、同一进程）。
+        await ExecAsync(conn, "DELETE FROM outbox_messages", ct);
+        var singleWatch = System.Diagnostics.Stopwatch.StartNew();
+        foreach (var message in messages)
+            await store.AddMessageAsync(message, ct);
+        singleWatch.Stop();
+
+        await ExecAsync(conn, "DELETE FROM outbox_messages", ct);
+        var bulkWatch = System.Diagnostics.Stopwatch.StartNew();
+        var bulkInserted = await store.AddMessagesAsync(messages, ct);
+        bulkWatch.Stop();
+        if (bulkInserted != count)
+            throw new InvalidOperationException($"bulk A/B inserted expected {count}, got {bulkInserted}");
+
+        var singleMs = singleWatch.Elapsed.TotalMilliseconds;
+        var bulkMs = bulkWatch.Elapsed.TotalMilliseconds;
         Console.WriteLine(
-            $"OUTBOX BULK PASS ({(postgreSql ? "PG" : "MySQL")}): inserted={inserted}, stored={stored}, sample=ok");
+            $"OUTBOX BULK PASS ({(postgreSql ? "PG" : "MySQL")}): inserted={inserted}, stored={stored}, sample=ok, " +
+            $"single={singleMs:F1}ms, bulk={bulkMs:F2}ms, ratio={singleMs / Math.Max(bulkMs, 0.001):F1}x");
         return 0;
     }
 
@@ -349,8 +369,37 @@ internal static class MigrationProbes
         if (after.Count != 0)
             throw new InvalidOperationException($"post-mark claim expected 0, got {after.Count}");
 
+        // A/B：100 条逐条认领+完成（200 次往返）vs 一次批量认领+批量完成（PG/SQLite
+        // 3 次、MySQL 5 次往返）。
+        await ExecAsync(conn, "DELETE FROM inbox_messages", ct);
+        var singleIds = Enumerable.Range(0, 100).Select(static i => "single-" + i).ToList();
+        var singleWatch = System.Diagnostics.Stopwatch.StartNew();
+        foreach (var messageId in singleIds)
+        {
+            var record = await store.TryStartProcessingAsync(
+                "probe", messageId, now, TimeSpan.FromMinutes(5), ct);
+            if (record is null)
+                throw new InvalidOperationException($"single claim returned null for {messageId}");
+            await store.MarkProcessedAsync(record, now, ct);
+        }
+        singleWatch.Stop();
+
+        await ExecAsync(conn, "DELETE FROM inbox_messages", ct);
+        var batchIds = Enumerable.Range(0, 100).Select(static i => "batch-ab-" + i).ToList();
+        var batchWatch = System.Diagnostics.Stopwatch.StartNew();
+        var batchClaimed = await store.TryStartProcessingManyAsync(
+            "probe", batchIds, now, TimeSpan.FromMinutes(5), ct);
+        var batchMarked = await store.MarkProcessedManyAsync("probe", batchClaimed, now, ct);
+        batchWatch.Stop();
+        if (batchClaimed.Count != 100 || batchMarked != 100)
+            throw new InvalidOperationException(
+                $"batch A/B expected 100/100, got {batchClaimed.Count}/{batchMarked}");
+
+        var singleMs = singleWatch.Elapsed.TotalMilliseconds;
+        var batchMs = batchWatch.Elapsed.TotalMilliseconds;
         Console.WriteLine(
-            $"INBOX BATCH PASS ({(postgreSql ? "PG" : "MySQL")}): claimed={claimed.Count}, marked={marked}, duplicate=0");
+            $"INBOX BATCH PASS ({(postgreSql ? "PG" : "MySQL")}): claimed={claimed.Count}, marked={marked}, duplicate=0, " +
+            $"single={singleMs:F1}ms, batch={batchMs:F2}ms, ratio={singleMs / Math.Max(batchMs, 0.001):F1}x");
         return 0;
     }
 
