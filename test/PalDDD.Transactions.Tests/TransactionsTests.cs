@@ -697,6 +697,100 @@ public sealed class OutboxBatchProcessorTests
         await Assert.That(logger.WarningCount).IsEqualTo(1);
     }
 
+    /// <summary>
+    /// 契约盘点 R6：批量路径同样必须发出 InboxHandlerLeaseExceeded（1006）。
+    /// ProcessingTimeout=Zero 让判定确定性成立；一批两条只聚合一条告警（避免日志放大）。
+    /// </summary>
+    [Test]
+    public async Task InboxProcessor_BatchHandlerExceedingProcessingTimeout_EmitsLeaseWarning(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var options = new InboxOptions { ProcessingTimeout = TimeSpan.Zero };
+        var logger = new EventIdCapturingLogger<InboxProcessor>();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(options),
+            logger,
+            TimeProvider.System);
+
+        var processed = await processor.TryProcessBatchAsync(
+            "consumer",
+            [("batch-lease-1", "a"), ("batch-lease-2", "b")],
+            static (string _, CancellationToken _) => ValueTask.CompletedTask,
+            cancellationToken);
+
+        await Assert.That(processed).IsEqualTo(2);
+        await Assert.That(logger.Count(PalLogEventIds.InboxHandlerLeaseExceeded)).IsEqualTo(1);
+    }
+
+    /// <summary>
+    /// 契约盘点 R6：store 未实现 IBatchInboxStore 时，回落逐条必须在首次批量调用给出一次
+    /// Information 提示（此前完全静默，PalORM/EF 消费者无从发现批量优化未生效）；回落语义
+    /// 本身保持逐条计数。
+    /// </summary>
+    [Test]
+    public async Task InboxProcessor_BatchStoreWithoutCapability_LogsFallbackOnce(CancellationToken cancellationToken)
+    {
+        var store = new NonBatchInboxStore(new InMemoryInboxStore());
+        var options = new InboxOptions { ProcessingTimeout = TimeSpan.FromMinutes(5) };
+        var logger = new EventIdCapturingLogger<InboxProcessor>();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(options),
+            logger,
+            TimeProvider.System);
+
+        var first = await processor.TryProcessBatchAsync(
+            "consumer",
+            [("fallback-1", "a"), ("fallback-2", "b")],
+            static (string _, CancellationToken _) => ValueTask.CompletedTask,
+            cancellationToken);
+        var second = await processor.TryProcessBatchAsync(
+            "consumer",
+            [("fallback-3", "c")],
+            static (string _, CancellationToken _) => ValueTask.CompletedTask,
+            cancellationToken);
+
+        await Assert.That(first).IsEqualTo(2);
+        await Assert.That(second).IsEqualTo(1);
+        await Assert.That(logger.Messages.Count(static m => m.Contains("IBatchInboxStore", StringComparison.Ordinal))).IsEqualTo(1);
+    }
+
+    /// <summary>只声明 IInboxStore 的转发包装——模拟 PalORM/EF 的批量能力缺口。</summary>
+    private sealed class NonBatchInboxStore(IInboxStore inner) : IInboxStore
+    {
+        public ValueTask<InboxMessage?> TryStartProcessingAsync(
+            string consumerName, string messageId, DateTimeOffset now, TimeSpan processingTimeout, CancellationToken ct)
+            => inner.TryStartProcessingAsync(consumerName, messageId, now, processingTimeout, ct);
+
+        public ValueTask MarkProcessedAsync(InboxMessage message, DateTimeOffset processedAt, CancellationToken ct)
+            => inner.MarkProcessedAsync(message, processedAt, ct);
+
+        public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
+            => inner.MarkFailedAsync(message, failureReason, ct);
+    }
+
+    /// <summary>记录 EventId 的日志间谍（结构化重载按 id 记录，普通重载记 0）。</summary>
+    private sealed class EventIdCapturingLogger<T> : IPalLogger<T>
+    {
+        public List<(int EventId, string Message)> Entries { get; } = [];
+
+        public IEnumerable<string> Messages => Entries.Select(static e => e.Message);
+
+        public int Count(int eventId) => Entries.Count(e => e.EventId == eventId);
+
+        public void Debug(string message) => Entries.Add((0, message));
+        public void Information(string message) => Entries.Add((0, message));
+        public void Warning(string message) => Entries.Add((0, message));
+        public void Error(Exception ex, string message) => Entries.Add((0, message));
+        public bool IsEnabled(LogLevel level) => true;
+
+        public void Debug(EventId eventId, string message, params object?[] args) => Entries.Add((eventId.Id, message));
+        public void Information(EventId eventId, string message, params object?[] args) => Entries.Add((eventId.Id, message));
+        public void Warning(EventId eventId, string message, params object?[] args) => Entries.Add((eventId.Id, message));
+        public void Error(Exception ex, EventId eventId, string message, params object?[] args) => Entries.Add((eventId.Id, message));
+    }
+
     private sealed class CapturingLogger<T> : IPalLogger<T>
     {
         public int WarningCount { get; private set; }

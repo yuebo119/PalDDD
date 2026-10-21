@@ -14,6 +14,13 @@
 
 ### Added
 
+- **2026-10-21 契约盘点第六轮修复（R6：批量 Inbox 1006 告警 + 批量回落可观测 + Auto 口径统一）**：
+  ①**批量路径补齐 1006 告警**：`InboxProcessor.TryProcessBatchAsync` 此前不调用 `WarnIfLeaseExceeded`，而 usage.md 推荐的批量消费正是高吞吐路径，handler 超过 `ProcessingTimeout` 时没有任何信号；现按批聚合发出一条 `InboxHandlerLeaseExceeded`（含超限条数与最大耗时，计时起点与逐条路径一致取整批认领时刻），取消路径在抛出前冲刷，逐条路径行为不变。
+  ②**批量回落可观测**：store 未实现 `IBatchInboxStore`（当前为 PalORM / EF）时，每个 processor 实例首次批量调用记录一次 Information（store 类型 + 消费者名），不再完全静默；usage.md 标注当前实现方与「每消息 2 次往返」的代价。
+  ③**Auto 口径统一**：`DeliveryMode.Auto` 下 `BatchMarkThreshold` 有效值为 `min(BatchSize, 400)`（默认 100），`MaxInFlightPublishes` 至少 16；usage.md 与 `TransactionOptions` XML 的「默认 1 = 既有行为逐字不变」改为「选项默认 1，Auto 按能力提升」，并补「重复窗口上界由冲刷间隔加在途时长界定」。
+  ④**注释纠偏**：EF `OutboxDbContext.MarkProcessedAsync` 回退路径原称「由调用方经 SaveChangesAsync 持久化」，与本类 `RequiresSaveAfterMark = false` 矛盾；改为说明 InMemory 的可见性来自存储按引用共享，并写明新增不支持 ExecuteUpdate 的关系型 provider 前必须先改开关或自行落库。
+  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；新增 2 个测试（批量 1006 告警、回落单次提示）；公共 API 无变化（仅私有成员与文档）。
+
 - **2026-10-21 契约盘点第五轮（R5：四组件 SQLite 四栈矩阵 + EF 租约陈旧跟踪修复）**：
   ①**四组件四栈矩阵**：Idempotency、Projections、Saga、EventLog 各新增 InMemory / Dapper SQLite / PalORM SQLite / EF SQLite 矩阵，同一组状态断言：幂等活跃租约拒绝与过期回收、投影检查点完成/失败/Reset、事件日志版本冲突与 Any 追加、Saga 创建/读回/租约/终态保存。
   ②**EF Saga 契约违背修复**：矩阵发现同一 DbContext 先 `GetByIdAsync` 再租约时，EF identity resolution 返回陈旧跟踪实例（`LeasedBy` 为空、`Version` 未换代），后续 `SaveChanges` 会因版本失配误判冲突；三个方言租约回读后仅对陈旧实体 `Reload`（`RefreshStaleLeaseStatesAsync`）。

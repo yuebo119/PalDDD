@@ -127,14 +127,16 @@ public abstract class OutboxDbContext : DbContext, IPalOutboxStore, IBatchMarkOu
     /// <remarks>
     /// ITM-210 修复（三十二轮守卫 → 三十四轮 token 化）：关系型 provider 用 ExecuteUpdate 带租约守卫；
     /// v30 P3 勘正（原"内存突变 + SaveChanges"失实）：非 SQL 可翻译 provider（InMemory 测试）的
-    /// 回退路径<b>仅变异 tracked 实体，不做任何 SaveChanges</b>——持久化由调用方经
-    /// <see cref="IPalOutboxStore.SaveChangesAsync"/> 完成（OutboxBatchProcessor 在每条 Mark 后
-    /// 调用 PersistSingleAsync 触发，非本方法职责）。<br/>
+    /// 回退路径<b>仅变异 tracked 实体，不做任何 SaveChanges</b>。<b>2026-10-21 勘正</b>：本类
+    /// 声明 <c>RequiresSaveAfterMark = false</c>，因此 OutboxBatchProcessor 在 Mark 后<b>不会</b>
+    /// 调用 SaveChanges；InMemory 回退的可见性来自其存储按引用共享（同一 tracked 实例即存储行），
+    /// 并非 SaveChanges 落库。新增不支持 ExecuteUpdate 的关系型 provider 前必须先改此开关或
+    /// 在回退路径内自行落库，否则终态写会静默丢失。<br/>
     /// <b>租约 token（三十四轮）</b>：持租调用方（<c>message.LockedBy</c> 非空）的终态写要求行内
     /// <c>(LockedBy, LockedUntil)</c> 与租约时捕获的标识对<b>完全匹配</b>——租约过期被重租（同 owner
     /// 复用或他 owner 接手）后，旧 worker 的终态写影响 0 行（<c>LockedUntil</c> 随每次租约单调变化，
     /// 充当 fencing token，免 DDL 加列）；无租约直呼（LockedBy 为 null，运维/测试路径）当行当前
-    /// 未被租（<c>LockedBy IS NULL</c）、仍为 Pending（v43 P2 补终态守卫）且 <c>RetryCount</c>
+    /// 未被租（<c>LockedBy IS NULL</c>）、仍为 Pending（v43 P2 补终态守卫）且 <c>RetryCount</c>
     /// 与入参快照一致时放行（v30 P3 补快照
     /// 守卫；v33 P3 起持租分支同要求 RetryCount 快照一致，见 <see cref="FencedTarget"/>）。
     /// </remarks>

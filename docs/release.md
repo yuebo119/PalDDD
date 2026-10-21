@@ -228,6 +228,8 @@ feature/xxx ──PR──▶ dev ──PR──▶ main
 - ❌ **禁止"每次 dev 更新就同步到 main"**——main 应保持稳定，只在准备发版时合并
 - ✅ dev 可以自由积累多个 feature，等到准备发布版本时再一次性合并到 main
 
+**tag 可达性与基线选择（2026-10-21 契约盘点 R6）**：发布 tag 打在 main，dev 未做反向同步时**不包含**该 tag 提交。此时在 dev 执行 `git describe --tags --abbrev=0 --match 'v*'` 会解析到更早的可达 tag（实测 v4.0.0 已发布时 dev 解析为 v3.1.0），G23 的「最近 tag 到 HEAD」发布窗口随之放大到包含已发布历史的 N 个提交。核对公共 API/CHANGELOG 窗口时按以下顺序取基线：① 显式指定目标版本 tag（推荐，`git diff v4.0.0..HEAD -- 快照文件`）；② 反向同步 main → dev 后用 `git describe`；③ 两者都不可用时才接受 G23 的回落口径，并在当轮报告中写明所选基线。禁止把「dev 上 describe 的结果」直接当作「上一发布版本」。
+
 ### 3.3 PR 类型与 `--delete-branch` 使用
 
 | PR 类型 | base | `--delete-branch` | 说明 |
