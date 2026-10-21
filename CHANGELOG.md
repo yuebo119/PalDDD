@@ -195,6 +195,13 @@
 
 ### Fixed 修复
 
+- **批量 Inbox 告警口径与单条路径对齐（2026-10-22 契约审计 R9，运行探针实证）**：
+  ①**批量标记失败失去 1004 且误报 1005**：`TryProcessBatchAsync` 在 `MarkProcessedManyAsync` 抛错时只记无 EventId 的 Error，部分未命中时只记无 EventId 的 Warning，随后仍输出 `InboxBatchProcessed`（1005）与 `pal.inbox.result=processed`；按 1004 配置的告警规则命中不到，1005 又把未落库的批计为已处理。改为与逐条路径同口径：两种情形都记 `InboxMessageProcessedMarkFailed`（1004），span 结果改 `processed-pending-confirmation`，1005 仅在全部成功项都标记落库时输出。
+  ②**批量 handler 失败缺 1003**：批量路径逐条 `MarkFailed` 后直接聚合抛出，不发 `InboxMessageFailed`（1003），而 broker 侧只有无 EventId 的字符串。改为按批聚合一条 1003（含失败条数与消费者名），与 1006 的批量口径一致。
+  ③**skipped 计数含批内重复 ID**：`skipped` 原为 `batch.Count - claimed.Count`，把认领前已去重的重复 MessageId 计为跳过，使 `paldd.inbox.skipped` 与 span 标签虚高。改为按去重后的 `ids.Count` 计算。
+  ④**公共 API 无变化**；usage.md 补批量告警口径与 skipped 语义。
+  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；全量 1855 用例 / 1775 通过 / 80 跳过 / 0 失败；新增 4 个锁定测试（批量标记失败发 1004 且不发 1005、部分未命中同口径、批量 handler 失败发 1003、重复 ID 不计 skipped），修复前四条均红、修复后全绿。
+
 - **Dapper 批量 EventLog 与 Inbox 唯一冲突的 NativeAOT 回归（2026-10-21 R8，wslc 真库 + NativeAOT 探针实证）**：
   ①**批量 EventLog 行类型不可见**：PG `AppendSingleRow` 与 MySQL `PositionRange` 原为 private 嵌套类型，Dapper.AOT 生成代码无法引用，批量追加调用点静默回落经典 Reflection.Emit（NativeAOT 下 `PlatformNotSupportedException`，PG/MySQL 各 exit 127；SQLite 不受影响）。改 internal 后拦截器恢复接管。
   ②**唯一冲突分类器反射失效**：`DapperSqlErrorClassifier` 用 `GetType().GetProperty("Number"/"SqlState")` 鸭子类型判定，NativeAOT 裁剪后属性元数据不可见，MySQL 重复 Inbox 插入的 1062 被误判为非冲突并逃逸。Npgsql/MySqlConnector/Microsoft.Data.Sqlite 已是本包 `PrivateAssets=all` 实现依赖，改为强类型判定（SqlServer 分支保留鸭子类型，本包不引用 SqlClient）。

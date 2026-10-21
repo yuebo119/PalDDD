@@ -757,6 +757,108 @@ public sealed class OutboxBatchProcessorTests
     }
 
     /// <summary>
+    /// R9 审计 D1：批量路径的标记失败必须与逐条路径同口径——发 1004，且不得把该批报告为
+    /// InboxBatchProcessed（1005）。修复前：Error 无 EventId + 1005 仍发出。
+    /// </summary>
+    [Test]
+    public async Task InboxProcessor_BatchMarkFailed_EmitsMarkFailedEventWithoutBatchProcessed(CancellationToken cancellationToken)
+    {
+        var logger = new EventIdCapturingLogger<InboxProcessor>();
+        var processor = new InboxProcessor(
+            new BatchMarkInboxStore(static () => throw new InvalidOperationException("simulated batch mark failure")),
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions()),
+            logger,
+            TimeProvider.System);
+
+        var processed = await processor.TryProcessBatchAsync(
+            "consumer",
+            [("mark-fail-1", "a"), ("mark-fail-2", "b")],
+            static (string _, CancellationToken _) => ValueTask.CompletedTask,
+            cancellationToken);
+
+        await Assert.That(processed).IsEqualTo(2);
+        await Assert.That(logger.Count(PalLogEventIds.InboxMessageProcessedMarkFailed)).IsEqualTo(1);
+        await Assert.That(logger.Count(PalLogEventIds.InboxBatchProcessed)).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// R9 审计 D1 的第二分支：部分未命中（租约被抢/令牌不匹配）同样记 1004，
+    /// 且不得报告 1005。修复前该分支是无 EventId 的 Warning + 1005。
+    /// </summary>
+    [Test]
+    public async Task InboxProcessor_BatchMarkPartiallyMissed_EmitsMarkFailedEventWithoutBatchProcessed(CancellationToken cancellationToken)
+    {
+        var logger = new EventIdCapturingLogger<InboxProcessor>();
+        var processor = new InboxProcessor(
+            new BatchMarkInboxStore(static () => 1),
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions()),
+            logger,
+            TimeProvider.System);
+
+        var processed = await processor.TryProcessBatchAsync(
+            "consumer",
+            [("partial-1", "a"), ("partial-2", "b")],
+            static (string _, CancellationToken _) => ValueTask.CompletedTask,
+            cancellationToken);
+
+        await Assert.That(processed).IsEqualTo(2);
+        await Assert.That(logger.Count(PalLogEventIds.InboxMessageProcessedMarkFailed)).IsEqualTo(1);
+        await Assert.That(logger.Count(PalLogEventIds.InboxBatchProcessed)).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// R9 审计 D2：批量 handler 失败必须发 1003（单条路径一直有）；按批聚合成一条，
+    /// 与 1006 的批量口径一致，避免每批 N 条日志放大。
+    /// </summary>
+    [Test]
+    public async Task InboxProcessor_BatchHandlerFailure_EmitsInboxMessageFailed(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var logger = new EventIdCapturingLogger<InboxProcessor>();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions()),
+            logger,
+            TimeProvider.System);
+
+        await Assert.ThrowsAsync<AggregateException>(async () =>
+            await processor.TryProcessBatchAsync(
+                "consumer",
+                [("handler-fail-1", "a"), ("handler-fail-2", "b")],
+                static (string _, CancellationToken _) => throw new InvalidOperationException("boom"),
+                cancellationToken));
+
+        await Assert.That(logger.Count(PalLogEventIds.InboxMessageFailed)).IsEqualTo(1);
+    }
+
+    /// <summary>
+    /// R9 审计附录：skipped 必须按去重后的消息 ID 计算。同一批内重复 MessageId 在
+    /// TryStartProcessingManyAsync 前已由 processor 去重，不能计为"被跳过"。
+    /// </summary>
+    [Test]
+    [NotInParallel]
+    public async Task InboxProcessor_BatchDuplicateMessageIds_DoesNotCountDuplicatesAsSkipped(CancellationToken cancellationToken)
+    {
+        using var skipped = new RecordingMeterListener("paldd.inbox.skipped");
+        var store = new InMemoryInboxStore();
+        var logger = new EventIdCapturingLogger<InboxProcessor>();
+        var processor = new InboxProcessor(
+            store,
+            new FixedOptionsMonitor<InboxOptions>(new InboxOptions()),
+            logger,
+            TimeProvider.System);
+
+        var processed = await processor.TryProcessBatchAsync(
+            "consumer",
+            [("dup-1", "a"), ("dup-1", "a")],
+            static (string _, CancellationToken _) => ValueTask.CompletedTask,
+            cancellationToken);
+
+        await Assert.That(processed).IsEqualTo(1);
+        await Assert.That(skipped.Measurements.IsEmpty).IsTrue();
+    }
+
+    /// <summary>
     /// 契约盘点 R7：组件级注册自带 IPalLogger&lt;T&gt; 门面。单独 AddPalOutbox（不调
     /// AddPalCoreStack/AddPalPipelineBehaviors）时，宿主解析 IHostedService 不得抛
     /// 「Unable to resolve service for type IPalLogger&lt;OutboxProcessor&gt;」。
@@ -821,6 +923,39 @@ public sealed class OutboxBatchProcessorTests
 
         public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
             => inner.MarkFailedAsync(message, failureReason, ct);
+    }
+
+    /// <summary>批量能力齐备、完成标记结果可控——锁定批量标记失败/部分命中的可观测口径（R9 D1）。</summary>
+    private sealed class BatchMarkInboxStore(Func<int> markProcessedMany) : IInboxStore, IBatchInboxStore
+    {
+        public ValueTask<InboxMessage?> TryStartProcessingAsync(
+            string consumerName, string messageId, DateTimeOffset now, TimeSpan processingTimeout, CancellationToken ct)
+            => ValueTask.FromResult<InboxMessage?>(NewMessage(consumerName, messageId, now));
+
+        public ValueTask MarkProcessedAsync(InboxMessage message, DateTimeOffset processedAt, CancellationToken ct)
+            => ValueTask.CompletedTask;
+
+        public ValueTask MarkFailedAsync(InboxMessage message, string failureReason, CancellationToken ct)
+            => ValueTask.CompletedTask;
+
+        public ValueTask<IReadOnlyList<InboxMessage>> TryStartProcessingManyAsync(
+            string consumerName, IReadOnlyList<string> messageIds, DateTimeOffset now,
+            TimeSpan processingTimeout, CancellationToken ct)
+            => ValueTask.FromResult<IReadOnlyList<InboxMessage>>(
+                messageIds.Select(messageId => NewMessage(consumerName, messageId, now)).ToList());
+
+        public ValueTask<int> MarkProcessedManyAsync(
+            string consumerName, IReadOnlyList<InboxMessage> messages, DateTimeOffset processedAt, CancellationToken ct)
+            => ValueTask.FromResult(markProcessedMany());
+
+        private static InboxMessage NewMessage(string consumerName, string messageId, DateTimeOffset now) => new()
+        {
+            MessageId = messageId,
+            ConsumerName = consumerName,
+            Status = InboxStatus.Processing,
+            ReceivedAt = now,
+            ProcessingStartedAt = now,
+        };
     }
 
     /// <summary>记录 EventId 的日志间谍（结构化重载按 id 记录，普通重载记 0）。</summary>
