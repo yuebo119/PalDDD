@@ -235,7 +235,7 @@ public sealed class EnumGenerator : IIncrementalGenerator
 
                 // P3 修复（十七轮）：泛型声明（自身带类型参数或嵌套于泛型包含类型）暂不支持
                 // （见 GenericDeclarationNotSupported 注释）——编译期报 PALENUM004
-                if (classSymbol.Arity > 0 || IsWithinGenericContainingType(classSymbol))
+                if (classSymbol.Arity > 0 || GeneratorSymbols.IsWithinGenericContainingType(classSymbol))
                 {
                     return EnumGenInfo.Create(
                         Namespace: GetNamespaceName(classSymbol),
@@ -466,8 +466,10 @@ public sealed class EnumGenerator : IIncrementalGenerator
         // A15（S1 轮，2026-10-15）：重复 hint 首现映射节点 + per-candidate AddSource 节点
         // （镜像 IdentityGenerator 同轮改造）——原 Collect 回调在任一候选变化时对全部
         // 候选重跑（每候选一次模板渲染 + AddSource）；Combine 只对「该候选变化或重复
-        // 集合变化」触发，未变候选零重渲染。重复 hint 语义保持 P2 修复契约：仅首个出现
-        // 生成、其余报 PALENUM005（「恰好一份生成物」，SourceGeneratorDirectTests 断言在案）。
+        // 集合变化」触发，未变候选零重渲染。2026-10-21 勘正：ImmutableDictionary 只实现
+        // 引用相等，原「未变候选零重渲染」依赖的缓存命中需显式内容比较器（见下方 WithComparer）。
+        // 重复 hint 语义保持 P2 修复契约：仅首个出现生成、其余报 PALENUM005
+        //（「恰好一份生成物」，SourceGeneratorDirectTests 断言在案）。
         // B10（2026-10-16）：hint/identity 改取 transform 预计算值（info.Hint/info.Identity），
         // 本节点不再做字符串拼接——任一候选变化时对全部 N 候选的 O(N) 键构造 churn 消除。
         var duplicateHints = candidates.Collect()
@@ -488,7 +490,8 @@ public sealed class EnumGenerator : IIncrementalGenerator
                         dups.Add(info.Hint, existing);
                 }
                 return dups.ToImmutable();
-            });
+            })
+            .WithComparer(ImmutableStringDictionaryComparer.Instance);
 
         context.RegisterSourceOutput(candidates.Combine(duplicateHints), static (spc, pair) =>
         {
@@ -559,18 +562,6 @@ public sealed class EnumGenerator : IIncrementalGenerator
                ContainingNamespace: { Name: "PalDDD", ContainingNamespace.IsGlobalNamespace: true }
            };
 
-    // P3 修复（十七轮）：沿 ContainingType 链检测泛型包含类型——
-    // [ModuleInitializer] 不允许位于泛型类型成员，生成物必然编译失败
-    private static bool IsWithinGenericContainingType(INamedTypeSymbol symbol)
-    {
-        for (var t = symbol.ContainingType; t is not null; t = t.ContainingType)
-        {
-            if (t.Arity > 0)
-                return true;
-        }
-
-        return false;
-    }
 
     // v35 P3（DA1）：AccessibilityToModifierText 私有副本已提取至 GeneratorAccessibility
     // 共享（PALENUM007/PALID006/PALMSG007 三生成器统一消费），本文件改调共享实现。

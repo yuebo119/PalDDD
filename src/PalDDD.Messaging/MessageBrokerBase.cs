@@ -87,7 +87,8 @@ public abstract class MessageBrokerBase : IMessageBroker
 
     /// <summary>
     /// 批量订阅（2026-10-21）：默认组批泵，复用逐条订阅，按数量或时间界组批。
-    /// handler 异常经 <see cref="OnBatchHandlerFailed"/> 记录后继续下一批。
+    /// handler 异常交由 <see cref="OnBatchHandlerFailed"/> 处理（默认实现无操作，不记录日志），
+    /// 然后继续下一批。
     /// </summary>
     public virtual ValueTask<IAsyncDisposable> SubscribeBatchAsync<TMessage>(
         Func<IReadOnlyList<ConsumedMessage<TMessage>>, CancellationToken, ValueTask> handler,

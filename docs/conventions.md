@@ -65,6 +65,12 @@ EF Core / Kafka / RabbitMQ / MemoryPack 等不支持 AOT 的项目**显式覆盖
 - `Assembly.GetTypes()` — 用源码生成器 `[ModuleInitializer]` 替代
 - `Type.GetType(string)` — 用 `typeof(T)` 编译时常量替代
 
+> **口径（2026-10-21 修订）**：以上是默认红线，不是绝对零反射。两处反射路径为
+> **显式豁免**并有注释/测试锁定：① `Saga` 的子 Saga 分发（`MakeGenericMethod`/
+> `MakeGenericType`，Native AOT 场景不使用子 Saga）；② `ISpecification.Compile()`
+> 的表达式树编译（内存求值；AOT 场景改用 `ToExpression()`）。「零反射」的准确表述是
+> 「默认零反射，反射路径必须标注」。
+
 ### 1.5 异步模式
 
 - **`ValueTask` / `ValueTask<T>` 优先**于 `Task`，热路径零分配
@@ -374,7 +380,7 @@ Pal.DDD/
 | **扩展方法类** | `*Extensions` 后缀用于任何扩展方法类（不限 IServiceCollection） |
 | **禁止** | 空文件、仅含单个 `using` 的文件、`Helpers`/`Utils`/`Common`/`Manager` 等模糊词 |
 
-**合规状态**（2026-10-21 批量消费轮复验）：248 源文件·36 项目·0 违规（2026-10-21 新增 `MessageBatchPump`、`InboxBatchConsumer` 两个源文件；同轮此前新增 `EventLogBinaryRow` 一个源文件；2026-10-20 数据面续轮新增 3 个源文件：RetentionSql、PalOrmRetentionStore、EfCoreRetentionStore；数据面轮新增 5 个源文件：Retention 四件 + DapperRetentionStore；2026-10-19 ADR-032 双栈 FTS5/JSON1 新增 10 个源文件：共享核心 3、Dapper 公开类型 2、PalORM 公开类型与门面 5；此前 227 文件）。子目录例外见 §4.7（11 个已注册）。
+**合规状态**（2026-10-21 双评审修复轮复验）：250 源文件·36 项目·0 违规（本轮净 +2：新增 `DomainEventOutboxBridge`、`GeneratorSymbols`、`PostgreSqlDataSourceRegistration` 三个源文件，删除 0 引用的 `VersionProbeRow`；2026-10-21 批量消费轮新增 `MessageBatchPump`、`InboxBatchConsumer` 两个源文件；同轮此前新增 `EventLogBinaryRow` 一个源文件；2026-10-20 数据面续轮新增 3 个源文件：RetentionSql、PalOrmRetentionStore、EfCoreRetentionStore；数据面轮新增 5 个源文件：Retention 四件 + DapperRetentionStore；2026-10-19 ADR-032 双栈 FTS5/JSON1 新增 10 个源文件：共享核心 3、Dapper 公开类型 2、PalORM 公开类型与门面 5；此前 227 文件）。子目录例外见 §4.7（11 个已注册）。
 
 ### 4.4 csproj 极简
 

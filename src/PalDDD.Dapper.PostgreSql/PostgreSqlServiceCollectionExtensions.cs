@@ -78,15 +78,9 @@ public static class PostgreSqlServiceCollectionExtensions
         if (builder.ConnectionStringBuilder.MaxAutoPrepare == 0)
             builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
         var dataSource = builder.Build();
-        services.AddSingleton(dataSource);
-        // P2/P3 修复（十七轮）：补 DbDataSource 抽象注册（镜像 MySql 版 AddPalMySqlDataSource）——
-        // NpgsqlDataSource 本身是 DbDataSource 子类，但只注册具体类型时
-        // GetRequiredService<DbDataSource> 解析失败；WithStores 的连接工厂依赖此抽象注册。
-        // ITM-167 声明（双注册 Dispose 幂等）：同一 dataSource 实例被注册为
-        // NpgsqlDataSource 与 DbDataSource 两个服务类型，容器关闭时会对同一实例 Dispose
-        // 两次。NpgsqlDataSource.Dispose/DisposeAsync 幂等（镜像 MySqlMultiHost ITM-113
-        // 同款声明），重复释放安全；此双注册允许 Store 直接注入 DbDataSource 基类型。
-        services.AddSingleton<System.Data.Common.DbDataSource>(dataSource);
+        // F13（2026-10-21）：工厂注册让容器接管释放；DbDataSource 委托到同一注册。
+        // 原注释「容器关闭时 Dispose 两次」与实测相反——实例注册从不释放（ITM-637）。
+        PostgreSqlDataSourceRegistration.Register(services, dataSource);
 
         return services;
     }
@@ -123,11 +117,7 @@ public static class PostgreSqlServiceCollectionExtensions
             builder.ConnectionStringBuilder.MaxAutoPrepare = 20;
         configure(builder);
         var dataSource = builder.Build();
-        services.AddSingleton(dataSource);
-        // P2/P3 修复（十七轮）：补 DbDataSource 抽象注册（同上重载，供 WithStores 连接工厂解析）
-        // ITM-167 声明（双注册 Dispose 幂等）：同基础重载——同一实例双服务类型注册，
-        // 容器关闭时 Dispose 两次；NpgsqlDataSource.Dispose 幂等，重复释放安全。
-        services.AddSingleton<System.Data.Common.DbDataSource>(dataSource);
+        PostgreSqlDataSourceRegistration.Register(services, dataSource);
 
         return services;
     }

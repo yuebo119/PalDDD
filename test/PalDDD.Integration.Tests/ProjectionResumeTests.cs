@@ -177,7 +177,8 @@ public sealed class RebuilderResumeTests
 
         await Assert.That(processed).IsEqualTo(10);
         await Assert.That(handler.Count).IsEqualTo(10);
-        // 只写组末位置 3/7/9；max+1 = 10，组内中间位置无检查点行。
+        // 每组写组首锚点（0/4/8）与组末位置（3/7/9），全部 Completed；max+1 = 10，
+        // 组内中间位置无检查点行。
         await Assert.That(await store.GetResumePositionAsync("order-summary", "orders", CancellationToken.None))
             .IsEqualTo("10");
     }

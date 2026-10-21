@@ -152,7 +152,15 @@
 | Dapper | `[module:DapperAOT]` 调用点拦截器 + DapperDbType 枚举运行时分发 | Sqlite / PostgreSql / MySql 三增强包 |
 | EF Core | 抽象基类 + 方言虚方法覆写 | Transactions.EFCore（Outbox 四方言变体）/ EventLog.EFCore / Idempotency.EFCore / Projections.EFCore / Repository.EFCore |
 
+域事件 → Outbox 的桥：EF Core 由 `OutboxDomainEventInterceptor` 自动完成；Dapper/PalORM 用
+`DomainEventOutboxBridge.PersistAsync(aggregates, outboxStore, ct)`（同一工作单元事务内调用），
+不再需要自行复制 catalog 查找/序列化/清理逻辑（2026-10-21 增）。
+
 存储层共性能力：原子租约三分支（PG FOR UPDATE SKIP LOCKED RETURNING / MySQL 版本探针 JOIN / SQLite RETURNING）、三重 fencing 标记、原生批量导入（PG Binary COPY / MySQL BulkCopy / SQLite 批 INSERT）、SQL 错误分类器（四方言唯一约束码集）、MySQL ≥8.0.18 SKIP LOCKED 版本探针（`MySqlLeasePolicy`，ADR-025）、Saga jsonb CAST 适配、连接池预热 HostedService。
+
+> ⚠️ **方言不对称声明（2026-10-21）**：`PalDDD.Dapper.PostgreSql` 承载九个 PG 单方言特性
+>（MultiHost/复制/Notify/JSONB/分库分表等），不代表三方言能力对称；其他方言缺这些能力是
+> 既定支持面，不是缺陷。三栈「平等」指同一组抽象接口与租约/fencing 契约，不指方言特性数量。
 
 Dapper 侧独有的方言增强面（PalORM 方言包暂未携带，待后续迁移）；SQLite FTS5/JSON1 例外，已按 ADR-032 双栈提供：
 

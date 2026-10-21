@@ -2,7 +2,7 @@
 
 [English](README.en.md) | **中文**
 
-**面向 .NET 11 的 DDD/CQRS/Event Sourcing 基础设施框架：零运行时反射、Native AOT 链路完整、无过度抽象。**
+**面向 .NET 11 的 DDD/CQRS/Event Sourcing 基础设施框架：默认零反射（反射路径显式标注）、Native AOT 链路完整、无过度抽象。仅支持 .NET 11（单目标，见 [ADR-005](docs/decisions/005-net11-single-target.md)）。**
 
 [![NuGet](https://img.shields.io/badge/nuget-v4.0.0-blue)](https://www.nuget.org/packages/PalDDD.Base)
 [![.NET](https://img.shields.io/badge/.NET-11.0-purple)](https://dotnet.microsoft.com/)

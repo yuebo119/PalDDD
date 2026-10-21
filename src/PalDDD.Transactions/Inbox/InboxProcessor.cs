@@ -184,12 +184,31 @@ public sealed class InboxProcessor
 
         if (_store is not IBatchInboxStore batchStore)
         {
+            // 2026-10-21 评审 F8：回落路径必须与批量路径同语义——逐条 try/catch，单条失败
+            // 由 TryProcessAsync 标 Failed 后继续处理其余，最后聚合抛出。原实现让首个 handler
+            // 异常中止整批，第 2..N 条既不认领也不标记；投递侧是 at-most-once（Kafka 自动提交 /
+            // RabbitMQ requeue:false），这些消息不会重投。
             var processedFallback = 0;
+            List<Exception>? fallbackFailures = null;
             foreach (var (messageId, message) in batch)
             {
-                if (await TryProcessAsync(consumerName, messageId, handler, message, ct).ConfigureAwait(false))
-                    processedFallback++;
+                try
+                {
+                    if (await TryProcessAsync(consumerName, messageId, handler, message, ct).ConfigureAwait(false))
+                        processedFallback++;
+                }
+                catch (OperationCanceledException)
+                {
+                    // 取消：已认领记录滞留 Processing 至租约到期（与批量路径同语义）。
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    (fallbackFailures ??= []).Add(ex);
+                }
             }
+            if (fallbackFailures is not null)
+                throw new AggregateException($"{fallbackFailures.Count} inbox handler(s) failed.", fallbackFailures);
             return processedFallback;
         }
 

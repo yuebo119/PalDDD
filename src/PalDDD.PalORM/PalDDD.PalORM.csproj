@@ -37,6 +37,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- F16（2026-10-21）：SQLite 方言包执行 FTS DDL 时需要读取 IUnitOfWork 环境事务，
+         以便把多条语句包进同一事务（不新建连接、不与外层事务冲突）。 -->
+    <InternalsVisibleTo Include="PalDDD.PalORM.Sqlite" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- PalDDD 抽象层 — 6 Store 接口所在项目（v60 勘正） -->
     <ProjectReference Include="..\PalDDD.Core\PalDDD.Core.csproj" />
     <ProjectReference Include="..\PalDDD.Transactions\PalDDD.Transactions.csproj" />

@@ -4,8 +4,8 @@ namespace PalDDD.Serialization.Json;
 // ─────────────────────────────────────────────────────────────
 // JSON Lines 逐行事件读写器（.NET 11 Preview 5）
 // ─────────────────────────────────────────────────────────────
-// 运行时集成路径：OutboxBatchProcessor 批量序列化时可使用
-// JsonLinesEventWriter 替代逐条 Serialize，消除整批内存峰值。
+// 可选替代路径：可用于批量序列化场景，但当前 OutboxBatchProcessor 未接入
+//（生产调用点 0；2026-10-21 勘正原「运行时集成路径」措辞）。
 // v40 P3 勘正：原示例 new JsonLinesEventWriter(buffer).Write(msg, payload) 与实际
 // API 不符（无 buffer 构造参数、无 Write 方法）——真实调用形态为无参构造 +
 // SerializeLine<TMessage>(message, typeInfo)：

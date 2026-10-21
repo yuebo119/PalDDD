@@ -196,7 +196,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
 
     /// <summary>
     /// Saga 管理器——提供中断恢复和子 Saga 执行能力。<br/>
-    /// 可由 DI 注入或手动设置。若为 null，ChildSagaStep 和恢复流程将不可用。<br/>
+    /// 可由 DI 注入或手动设置。若为 null，<c>ChildSagaStep</c> 仍会由临时
+    /// <see cref="DefaultSagaManager"/> 执行；但子 Saga 内含 <see cref="InterruptStep"/> 时，
+    /// 决策条目注册到该临时实例并在返回时丢弃（决策不可达，Saga 滞留
+    /// <see cref="SagaStatus.AwaitingHumanDecision"/>）。恢复流程需要非 null 的 manager。<br/>
     /// ⚠️ <b>中断后果（P3 声明·十七轮；三十四轮兜底落地）</b>：<see cref="InterruptStep"/> 执行时若本属性为 null
     /// （或非 <see cref="DefaultSagaManager"/> 类型），中断条目无处注册——该 Saga 状态已被置为
     /// <see cref="SagaStatus.AwaitingHumanDecision"/> 且无人能消费后续人工决策，将<b>滞留</b>在中断态。

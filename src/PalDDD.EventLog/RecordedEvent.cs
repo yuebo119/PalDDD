@@ -98,7 +98,8 @@ public sealed class RecordedEvent
         ReadOnlyMemory<byte> metadata,
         EventAuditMetadata audit)
     {
-        // 通过 EventData 中转（保守路径，对外 API 保持稳定）
+        // 2026-10-21 勘正：直接调用 RehydrateFromBytes（不存在的「EventData 中转」已删）。
+        // 注意本路径不做 schemaVersion>=1 校验（EventData 构造路径会校验）。
         return RehydrateFromBytes(
             streamName, streamVersion, globalPosition, recordedAt,
             eventId, eventName, schemaVersion, contentType,

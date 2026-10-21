@@ -22,7 +22,8 @@ public interface IDomainEventDispatcher
 /// <summary>迭代式领域事件派发器配置</summary>
 public sealed class DomainEventDispatcherOptions
 {
-    /// <summary>最大迭代次数 — 防止无限事件循环（默认 1000）</summary>
+    /// <summary>单次派发的初始事件数上限 — 超出即拒绝派发（默认 1000）。
+    /// 注意：只比较初始批大小，不是循环迭代上限（2026-10-21 勘正）。</summary>
     public int MaxIterations { get; set; } = 1000;
 }
 

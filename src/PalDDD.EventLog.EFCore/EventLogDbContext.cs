@@ -83,12 +83,6 @@ public abstract class EventLogDbContext(
         // 版本校验移出事务不改变并发语义：非串行化读下本就是乐观检查，TOCTOU 由
         // (StreamName, StreamVersion) 唯一索引兜底（与原形态同一守卫，窗口宽度无实质差异）。
         // 失败路径语义变化声明：版本不匹配抛并发异常前已消耗预留位置（间隙，ReadAll >= 过滤兼容）。
-        // A4（S1 轮）：NoStream 期望下跳过 MAX 预查——空流的约定版本即 -1，插入版本 1
-        // 若撞 (StreamName, StreamVersion) 唯一索引即证明流已存在（流版本自 1 起连续
-        // 分配是不变量：新流的 firstStreamVersion = actualVersion+1 = 1），冲突分类路径
-        // 与预查命中同一语义（重查 MAX 后转 EventStreamConcurrencyException）。Any 仍需
-        // MAX 计算起始版本；Exact 需预查验证（同时防陈旧低期望造成版本间隙）；
-        // StreamExists 需预查判定存在性。
         // A4（S1 轮）：NoStream 期望下跳过 MAX 预查——空流的约定版本即 -1，插入首条
         // 版本 0 若撞 (StreamName, StreamVersion) 唯一索引即证明流已存在（流版本自 0
         // 起连续分配是不变量：新流的 firstStreamVersion = actualVersion+1 = 0，已存在
@@ -106,14 +100,6 @@ public abstract class EventLogDbContext(
         var firstGlobalPosition = await ReserveGlobalPositionsAsync(events.Count, cancellationToken)
             .ConfigureAwait(false);
 
-        // A3（S1 轮）：删显式事务——AppendCoreAsync 内仅一次 SaveChanges，单语句自身
-        // 原子；EF Core 7+ 默认 AutoTransactionBehavior.WhenNeeded 对单语句不开显式
-        // 事务（官方文档实证省 BEGIN/COMMIT 两次往返），多事件批次下显式与隐式事务
-        // 同为 BEGIN+COMMIT，删除呈中性。流级并发仍由 (StreamName, StreamVersion)
-        // 唯一索引 + 下方 DbUpdateException 捕获保证（默认 ReadCommitted 允许不同流
-        // 并发追加）。附带收益：失败 INSERT 不再使显式事务进入 aborted 状态，冲突
-        // 分类的重查降级路径（ITM-126 的 PG 25P02 分支）失去触发条件。关系型与非
-        // 关系型分支自此同形，合并为单一路径。
         // A3（S1 轮）：删显式事务——AppendCoreAsync 内仅一次 SaveChanges，单语句自身
         // 原子；EF Core 7+ 默认 AutoTransactionBehavior.WhenNeeded 对单语句不开显式
         // 事务（官方文档实证省 BEGIN/COMMIT 两次往返），多事件批次下显式与隐式事务

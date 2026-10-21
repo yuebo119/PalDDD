@@ -23,8 +23,8 @@ namespace PalDDD.PalORM;
 /// </para>
 /// <para>
 /// 生命周期：<see cref="PalOrmUnitOfWork{TProvider}"/>.BeginTransactionAsync 成功后 Set；
-/// Commit/Rollback/Dispose 的 finally 清理段 Set(null)；三 Store（Saga/Checkpoint/Idempotency）
-/// 的 raw command 构造处 TryGet 挂接。
+/// Commit/Rollback/Dispose 的 finally 清理段 Set(null)；五 Store（Saga/Checkpoint/Idempotency/
+/// EventLog/Retention）的 raw command 构造处 TryGet 挂接。
 /// </para>
 /// <para>
 /// ⚠️ 理论边界（P3-SRC-211 声明）：同 Session 双 UoW 并发 Begin 时，CWT 键级条目只存

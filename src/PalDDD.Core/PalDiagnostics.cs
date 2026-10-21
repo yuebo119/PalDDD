@@ -143,7 +143,7 @@ public static class PalActivitySource
             ("pal.stream.item", itemType));
 
     // ── 内部辅助 ──
-    // 11 个公共 Start* 方法遵循完全相同的模式：Source.StartActivity → SetTag → return。
+    // 12 个公共 Start* 方法遵循完全相同的模式：Source.StartActivity → SetTag → return。
     // 使用 params ReadOnlySpan<(string,object?)>（C# 13+ / .NET 11）压缩重复代码，
     // 编译器对少量参数生成栈分配 span，消除原 params 数组的堆分配。注（v8 勘正）：int/long
     // tag 经元组构造仍存在装箱（listener 关闭也发生）——本优化消除的是数组分配而非全部 GC。
@@ -167,11 +167,12 @@ public static class PalActivitySource
 /// EventsConsumed/OutboxPending/SagaActive/BehaviorDuration）——声明但框架零调用，
 /// 误导用户认为会产出数据。需要这些指标时在调用方自行 Meter.CreateCounter 并 Add。
 /// <para>
-/// 📐 <b>零 tag 设计声明（v25 P3 勘正族 C11 · ITM-229 精神显式化）</b>：全部 28 个活 Counter
+/// 📐 <b>零 tag 设计声明（v25 P3 勘正族 C11 · ITM-229 精神显式化）</b>：全部 30 个活 Counter
 /// （计数沿革：v71 增 SagaScanFailed；v72 勘正同步为当时计数；v3.0.0 增
 /// <c>paldd.outbox.dead</c> 与 <c>paldd.outbox.persist_failed</c> 后此处计数再次未同步，
 /// 2026-09-23 复查修正为 23；2026-10-18 ADR-030 遥测接入增五个 <c>paldd.stream.*</c> 计数器
-/// 后为 28）有意零 tag——框架层零分配纪律（无 tag 的 <c>Add(T)</c> 是零额外分配路径，带 tag 调用引入
+/// 后为 28；2026-10-21 评审补计 ADR-031 的 <c>paldd.stream.attached</c> /
+/// <c>paldd.stream.gap</c> 后为 30）有意零 tag——框架层零分配纪律（无 tag 的 <c>Add(T)</c> 是零额外分配路径，带 tag 调用引入
 /// 键值对构造开销）+ 指标基数安全（事件类型/投影名/流名等维度随业务无界增长，tag 化会造成
 /// 时序库基数爆炸）。调用方需要维度时用自身 <c>Meter.CreateCounter</c> 自建带 tag Counter；
 /// Activity 侧 <c>pal.event</c> / <c>pal.projection.name</c> 等 tag 已提供 trace 维度。

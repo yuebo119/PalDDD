@@ -120,7 +120,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         // 两步回读按 (leased_by, leased_until) 匹配的同 tick 混批窗口（八轮 P3 声明）
         // 在此形态下不存在（对照 PalOrmOutboxStore.LeasePendingMessagesAsync:95-104 真
         // RETURNING 先例）。实现走 raw command：RETURNING 列序与 ReadSagaRow 序号访问
-        // （0-10）逐列对齐；@p 参数复用回读同款 AddParam 绑定（until/now 经 AddParam 的
+        // （0-11，含 next_check_at）逐列对齐；@p 参数复用回读同款 AddParam 绑定（until/now 经 AddParam 的
         // DateTimeOffset 编码三方言正确——ADR-027 until 编码纪律，禁简化为 UtcDateTime）。
         // RETURNING 无排序保证，物化后按 CreatedAt 客户端排序，保留原回读
         // ORDER BY created_at 契约（LINQ OrderBy 稳定排序）。

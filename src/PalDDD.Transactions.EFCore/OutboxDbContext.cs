@@ -217,6 +217,14 @@ public abstract class OutboxDbContext : DbContext, IPalOutboxStore, IBatchMarkOu
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
 
+        // 2026-10-21 评审 F10：null 元素校验前移——首元素为 null 时原实现先解引用抛
+        // NullReferenceException，第 228 行的元素守卫对索引 0 不可达。
+        foreach (var message in messages)
+        {
+            if (message is null)
+                throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
+        }
+
         // 同租约校验（契约前提防御）：批内 LockedBy/LockedUntil 同值且非空
         var owner = messages[0].LockedBy;
         var until = messages[0].LockedUntil;
@@ -225,8 +233,6 @@ public abstract class OutboxDbContext : DbContext, IPalOutboxStore, IBatchMarkOu
                 "MarkProcessedBatchAsync requires leased messages (LockedBy/LockedUntil non-null) — batch inputs must come from a single LeasePendingMessagesAsync result.");
         foreach (var message in messages)
         {
-            if (message is null)
-                throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
             if (message.LockedBy != owner || message.LockedUntil != until)
                 throw new InvalidOperationException(
                     "MarkProcessedBatchAsync requires a single-lease batch — all messages must share the same LockedBy/LockedUntil (mixed-lease batches are not supported).");
@@ -499,8 +505,10 @@ public abstract class OutboxDbContext : DbContext, IPalOutboxStore, IBatchMarkOu
     ///（<c>MySqlOutboxDbContext</c> override 为 <c>UTC_TIMESTAMP()</c>）；(b) 默认
     /// <see cref="BuildPendingSql"/> 模板的列名无引号，在 PG（未加引号的标识符折叠为小写）下与
     /// 引号建表的混合大小写列不匹配（<c>PostgreSqlOutboxDbContext</c> override 为双引号列名 +
-    /// <c>NOW()</c>）。新方言派生类必须同时 override 本方法与 <see cref="BuildPendingSql"/>
-    ///（参考 <c>MySqlOutboxDbContext</c> / <c>PostgreSqlOutboxDbContext</c> / <c>SqliteOutboxDbContext</c>）。
+    /// <c>NOW()</c>）。新方言派生类必须 override 本方法；<see cref="BuildPendingSql"/> 仅在
+    /// 沿用基类 GetPending 默认实现时才需 override（2026-10-21 勘正：参考实现中只有
+    /// <c>PostgreSqlOutboxDbContext</c> override 了 BuildPendingSql；MySql 沿用基类模板、
+    /// Sqlite 自写 GetPending SQL）。
     /// </remarks>
     protected virtual string GetNowSql() => "CURRENT_TIMESTAMP";
 

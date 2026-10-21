@@ -13,8 +13,8 @@
 //   // 内存数据库（测试）
 //   services.AddPalSqliteInMemory();
 //
-//   // 配合 Dapper Store
-//   services.AddPalSqlite("Data Source=pal.db");
+//   // 配合 Dapper Store：二选一——两者都注册 DbConnection，同时调用会让后注册的
+//   // Dapper 工厂胜出，AddPalSqlite 的 WAL/PRAGMA 不作用于 Store 连接。
 //   services.AddPalDapperTransactions(DapperDbType.Sqlite, "Data Source=pal.db");
 //
 // 架构设计（DDD/Clean Architecture 友好）：

@@ -1,5 +1,6 @@
 using Dapper;
 using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using PalDDD.Dapper;
 using PalDDD.Transactions;
@@ -97,20 +98,78 @@ public sealed class RetentionProcessorTests
     {
         await using var conn = new SqliteConnection("Data Source=:memory:");
         await conn.OpenAsync();
-        await CreateSchemaAsync(conn);
+        var options = new DbContextOptionsBuilder<RetentionOutboxContext>().UseSqlite(conn).Options;
+        await using var context = new RetentionOutboxContext(options);
+        await context.Database.EnsureCreatedAsync();
 
         // EF/PalORM 经 Microsoft.Data.Sqlite 写入原生 DateTimeOffset，落库为空格分隔；
-        // Dapper 写 "O"（T 分隔）。RetentionSql 的 SQLite 分支必须按栈选择编码。
+        // Dapper 写 "O"（T 分隔）。SQLite 分支必须按栈选择编码。
         var cutoff = new DateTimeOffset(2026, 10, 13, 0, 0, 0, TimeSpan.Zero);
-        await InsertOutboxNativeAsync(conn, "same-day", status: 1, cutoff.AddHours(23));
-        await InsertOutboxNativeAsync(conn, "older", status: 1, cutoff.AddDays(-1));
+        await InsertEfOutboxNativeAsync(conn, "same-day", status: 1, cutoff.AddHours(23));
+        await InsertEfOutboxNativeAsync(conn, "older", status: 1, cutoff.AddDays(-1));
+
+        var store = new EfCoreRetentionStore(context, RetentionDialect.Sqlite);
+        var deleted = await store.DeleteExpiredOutboxAsync(cutoff, batchSize: 10, includeDead: false);
+
+        await Assert.That(deleted).IsEqualTo(1);
+        await Assert.That(await CountAsync(conn, "\"OutboxMessages\"")).IsEqualTo(1);
+        await Assert.That(await CountAsync(conn, "\"OutboxMessages\" WHERE \"Id\" = 'same-day'")).IsEqualTo(1);
+    }
+
+    private static async Task InsertEfOutboxNativeAsync(
+        SqliteConnection conn, string id, int status, DateTimeOffset at)
+    {
+        await using var command = conn.CreateCommand();
+        command.CommandText =
+            "INSERT INTO \"OutboxMessages\" (\"Id\", \"Type\", \"Payload\", \"ContentType\", \"SchemaVersion\", \"Status\", \"RetryCount\", \"CreatedAt\", \"ProcessedAt\") "
+            + "VALUES ($id, 'test.event.v1', X'01', 'application/json', 1, $status, 0, $created, $at)";
+        var idParam = command.CreateParameter();
+        idParam.ParameterName = "$id";
+        idParam.Value = id;
+        var statusParam = command.CreateParameter();
+        statusParam.ParameterName = "$status";
+        statusParam.Value = status;
+        var atParam = command.CreateParameter();
+        atParam.ParameterName = "$at";
+        atParam.Value = at;
+        var createdParam = command.CreateParameter();
+        createdParam.ParameterName = "$created";
+        createdParam.Value = at.AddDays(-1);
+        command.Parameters.Add(idParam);
+        command.Parameters.Add(statusParam);
+        command.Parameters.Add(atParam);
+        command.Parameters.Add(createdParam);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    [Test]
+    public async Task EfCoreRetention_DefaultTableNames_MatchEfCreatedSchema()
+    {
+        // F5：EF Core 默认映射是 DbSet 名（OutboxMessages），清理 SQL 必须用同一物理名；
+        // 原实现硬编码 outbox_messages，PG/MySQL 在 Linux 下首次清理即报 relation 不存在。
+        await using var conn = new SqliteConnection("Data Source=:memory:");
+        await conn.OpenAsync();
+        var options = new DbContextOptionsBuilder<RetentionOutboxContext>().UseSqlite(conn).Options;
+        var cutoff = new DateTimeOffset(2026, 10, 13, 0, 0, 0, TimeSpan.Zero);
+        await using (var context = new RetentionOutboxContext(options))
+        {
+            await context.Database.EnsureCreatedAsync();
+            context.OutboxMessages.Add(new OutboxMessage
+            {
+                Type = "test.event.v1",
+                Payload = [1, 2, 3],
+                Status = OutboxStatus.Processed,
+                ProcessedAt = cutoff.AddDays(-1),
+                CreatedAt = cutoff.AddDays(-10),
+            });
+            await context.SaveChangesAsync();
+        }
 
         var store = new EfCoreRetentionStore(conn, RetentionDialect.Sqlite);
         var deleted = await store.DeleteExpiredOutboxAsync(cutoff, batchSize: 10, includeDead: false);
 
         await Assert.That(deleted).IsEqualTo(1);
-        await Assert.That(await CountAsync(conn, "outbox_messages")).IsEqualTo(1);
-        await Assert.That(await CountAsync(conn, "outbox_messages WHERE id = 'same-day'")).IsEqualTo(1);
+        await Assert.That(await CountAsync(conn, "\"OutboxMessages\"")).IsEqualTo(0);
     }
 
     private static async Task InsertOutboxNativeAsync(
@@ -191,6 +250,9 @@ public sealed class RetentionProcessorTests
 
     private static async Task<long> CountAsync(SqliteConnection conn, string table)
         => await conn.ExecuteScalarAsync<long>($"SELECT COUNT(*) FROM {table}");
+
+    private sealed class RetentionOutboxContext(DbContextOptions<RetentionOutboxContext> options)
+        : SqliteOutboxDbContext(options);
 
     private sealed class StaticOptionsMonitor<T>(T value) : IOptionsMonitor<T>
     {

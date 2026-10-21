@@ -1086,10 +1086,6 @@ class PalDDD.PalORM.Models.OutboxMessageRow
   property System.String Type
   method PalDDD.PalORM.Models.OutboxMessageRow FromDomain(PalDDD.Transactions.OutboxMessage m)
   method PalDDD.Transactions.OutboxMessage ToDomain()
-class PalDDD.PalORM.Models.VersionProbeRow
-  ctor()
-  property System.String V
-  property System.String V2
 class PalDDD.PalORM.PalOrmPreWarmHostedService<TProvider>
   ctor(PalORM.DbOptions options, System.Int32 connectionCount, PalDDD.Core.Logging.IPalLogger<PalDDD.PalORM.PalOrmPreWarmHostedService<TProvider>> logger)
   method System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken cancellationToken)
@@ -1406,6 +1402,7 @@ class PalDDD.Projections.EventLog.EventReplayException
   ctor(System.String message)
   ctor(System.String message, System.Exception innerException)
 static class PalDDD.Projections.EventLog.EventStreamJsonLines
+  field const System.Int32 MaxLineBytes = 16777216
   field const System.Int32 MaxLineChars = 16777216
   method System.Threading.Tasks.ValueTask ExportAsync(System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.RecordedEvent> events, System.IO.Stream output, System.Threading.CancellationToken ct)
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.EventLog.EventData> ImportAsync(System.IO.Stream input, System.Threading.CancellationToken ct)
@@ -1413,7 +1410,6 @@ static class PalDDD.Projections.EventLog.EventStreamJsonLines
 # PalDDD.Repository.EFCore
 class PalDDD.Repository.EFCore.OutboxDomainEventInterceptor
   ctor(PalDDD.Transactions.IPalOutboxStore outboxStore, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog)
-  property System.Collections.Generic.IReadOnlyList<PalDDD.Core.DomainEvent> PendingEvents
   method System.Void SaveChangesFailed(Microsoft.EntityFrameworkCore.Diagnostics.DbContextErrorEventData eventData)
   method System.Threading.Tasks.Task SaveChangesFailedAsync(Microsoft.EntityFrameworkCore.Diagnostics.DbContextErrorEventData eventData, System.Threading.CancellationToken cancellationToken)
   method System.Int32 SavedChanges(Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesCompletedEventData eventData, System.Int32 result)
@@ -1575,6 +1571,11 @@ class PalDDD.Transactions.DefaultSagaManager
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.SagaState>> GetInterruptedSagasAsync(System.Threading.CancellationToken ct)
   method System.Void InvalidateInterrupted(ByteAether.Ulid.Ulid sagaId)
   method System.Threading.Tasks.ValueTask ResumeAsync(ByteAether.Ulid.Ulid sagaId, TDecision decision, System.Threading.CancellationToken ct)
+class PalDDD.Transactions.DomainEventOutboxBridge
+  ctor(PalDDD.Serialization.IMessageCatalog catalog, PalDDD.Serialization.IMessageSerializer serializer)
+  method PalDDD.Transactions.OutboxMessage BuildMessage(PalDDD.Core.DomainEvent domainEvent)
+  method System.Collections.Generic.IReadOnlyList<PalDDD.Transactions.OutboxMessage> BuildMessages(System.Collections.Generic.IEnumerable<PalDDD.Core.Entity> aggregates)
+  method System.Threading.Tasks.ValueTask<System.Int32> PersistAsync(System.Collections.Generic.IReadOnlyList<PalDDD.Core.Entity> aggregates, PalDDD.Transactions.IPalOutboxStore outboxStore, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.DynamicStep
   ctor(System.String key, System.Func<PalDDD.Transactions.SagaState, System.String> router, System.Func<PalDDD.Transactions.SagaState, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> compensate)
   property PalDDD.Transactions.StepDispatchKind DispatchKind
@@ -1942,7 +1943,9 @@ enum PalDDD.Transactions.StepDispatchKind
 
 # PalDDD.Transactions.EFCore
 class PalDDD.Transactions.EfCoreRetentionStore
+  ctor(Microsoft.EntityFrameworkCore.DbContext context, PalDDD.Transactions.RetentionDialect dialect)
   ctor(System.Data.Common.DbConnection connection, PalDDD.Transactions.RetentionDialect dialect)
+  ctor(System.Data.Common.DbConnection connection, PalDDD.Transactions.RetentionDialect dialect, System.String outboxTable, System.String inboxTable, System.String idempotencyTable)
   method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredIdempotencyAsync(System.DateTimeOffset now, System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredInboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> DeleteExpiredOutboxAsync(System.DateTimeOffset cutoff, System.Int32 batchSize, System.Boolean includeDead, System.Threading.CancellationToken ct)

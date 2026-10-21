@@ -86,8 +86,10 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore, IIdempotencyStar
 
         if (record.ExpiresAt <= now) return null;
 
-        // 终态回放（RestoreTerminalState 不递增 Revision——回放是"恢复原状"非状态转移）
-        if (row.ResponsePayload is { Length: > 0 } && record.Status == IdempotencyRecordStatus.Completed)
+        // 终态回放（RestoreTerminalState 不递增 Revision——回放是"恢复原状"非状态转移）。
+        // 2026-10-21 评审 F3：与 PalORM 的 ITM-277 口径对齐——区分 NULL（无载荷）与 0 字节
+        //（成功完成 + 空响应体），后者同样回放 byte[0]，不得判为"无结果"。
+        if (row.ResponsePayload is not null && record.Status == IdempotencyRecordStatus.Completed)
             record.RestoreTerminalState(row.ResponsePayload, null);
         if (row.Error is not null && record.Status == IdempotencyRecordStatus.Failed)
             record.RestoreTerminalState(null, row.Error);
@@ -395,7 +397,10 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore, IIdempotencyStar
         dp.Add("OperationName", record.OperationName);
         dp.Add("Key", record.Key);
         dp.Add("Status", statusCompleted);
-        dp.Add("UpdatedAt", completedAt);
+        // 2026-10-21 评审 F3：三方言时间编码收口——原强类型 DateTimeOffset 经生成拦截器
+        // 绑成 DateTimeOffset（SQLite 为 "O" 文本），与 TryStart/Checkpoint 的 ToTimeParam
+        // 形态不一致；统一走 ToTimeParam。
+        dp.Add("UpdatedAt", ToTimeParam(completedAt));
         dp.Add("Payload", payloadBytes, DbType.Binary);
         dp.Add("ExpectedRevision", record.Revision);
         dp.Add("Processing", statusProcessing);
@@ -428,7 +433,8 @@ public sealed class DapperIdempotencyStore : IIdempotencyStore, IIdempotencyStar
                 OperationName = record.OperationName,
                 Key = record.Key,
                 Status = statusFailed,
-                UpdatedAt = failedAt,
+                // 2026-10-21 评审 F3：与 TryStart/MarkCompleted/Checkpoint 统一时间绑定形态。
+                UpdatedAt = ToTimeParam(failedAt),
                 Error = reason,
                 ExpectedRevision = record.Revision,
                 Completed = statusCompleted

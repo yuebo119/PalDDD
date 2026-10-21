@@ -63,6 +63,11 @@ public sealed class DetachedStreamOptions
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(DetachGrace, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(MaxRunDuration, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThan(RetentionAfterCompletion, TimeSpan.Zero);
+        // F21（2026-10-21）：Task.Delay 上限为 uint.MaxValue-1 毫秒（约 49.7 天）——超过时
+        // 宽限计时任务抛 ArgumentOutOfRangeException，原实现落入丢弃 Task 且无人观察。
+        var maxDelay = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(DetachGrace, maxDelay);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaxRunDuration, maxDelay);
     }
 }
 
@@ -486,6 +491,15 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
                 catch (OperationCanceledException)
                 {
                     return; // 新附着到达（grace 被取消）或 run 已终态
+                }
+#pragma warning disable CA1031 // 观察包装：任意异常都必须记录后继续取消 run，不得形成未观察任务
+                catch (Exception ex)
+#pragma warning restore CA1031
+                {
+                    // F21：观察任务内的任何异常（DetachGrace 上界已校验；此处兜底 provider/
+                    // 运行时异常），避免未观察任务 + 宽限计时静默失效。
+                    if (_logger is not null)
+                        _logger.Error(ex, $"Stream run {_runId}: detach grace timer failed; cancelling run.");
                 }
                 Cancel(); // 宽限期满仍无附着：终止 run，不白烧 token
             });

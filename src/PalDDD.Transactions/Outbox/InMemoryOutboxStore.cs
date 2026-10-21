@@ -204,6 +204,26 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
         ct.ThrowIfCancellationRequested();
         if (messages.Count == 0) return ValueTask.FromResult(0);
 
+        // 2026-10-21 评审 F9/F11：契约前提校验前移到任何变更之前——null 元素、未租约批、
+        // 混合租约批在该处抛异常时 store 与入参均保持原状（对齐 EF/Dapper/PalORM 三真实栈）。
+        foreach (var message in messages)
+        {
+            if (message is null)
+                throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
+        }
+
+        var owner = messages[0].LockedBy;
+        var until = messages[0].LockedUntil;
+        if (owner is null || until is null)
+            throw new InvalidOperationException(
+                "MarkProcessedBatchAsync requires leased messages (LockedBy/LockedUntil non-null) — batch inputs must come from a single LeasePendingMessagesAsync result.");
+        foreach (var message in messages)
+        {
+            if (message.LockedBy != owner || message.LockedUntil != until)
+                throw new InvalidOperationException(
+                    "MarkProcessedBatchAsync requires a single-lease batch — all messages must share the same LockedBy/LockedUntil (mixed-lease batches are not supported).");
+        }
+
         var affected = 0;
         lock (_lock)
         {
@@ -213,22 +233,28 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
             var marked = new HashSet<OutboxMessage>(ReferenceEqualityComparer.Instance);
             foreach (var message in messages)
             {
-                if (message is null)
-                    throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
                 if (message.Status != OutboxStatus.Pending
                     || !current.Contains(message)
                     || !marked.Add(message))
                 {
                     continue;
                 }
-
-                message.ProcessedAt = processedAt;
-                message.Status = OutboxStatus.Processed;
-                message.Error = null;
-                message.NextAttemptAt = null;
-                message.LockedBy = null;
-                message.LockedUntil = null;
                 affected++;
+            }
+
+            // 全命中才回写入参六字段；部分拒绝时只移除 store 内条目、不改入参对象
+            //（对齐三真实栈的“部分接受零回写”契约）。
+            if (affected == messages.Count)
+            {
+                foreach (var message in messages)
+                {
+                    message.ProcessedAt = processedAt;
+                    message.Status = OutboxStatus.Processed;
+                    message.Error = null;
+                    message.NextAttemptAt = null;
+                    message.LockedBy = null;
+                    message.LockedUntil = null;
+                }
             }
 
             if (marked.Count > 0)

@@ -48,18 +48,25 @@ public static class EventStreamJsonLines
         ArgumentNullException.ThrowIfNull(output);
 
         // ITM-218 修复（三十二轮）：导出迭代补 ConfigureAwait(false)——库代码续体不应回捕调用方上下文
-        // 2026-10-20 性能轮：单个池化 Utf8JsonWriter + 单块 ArrayBufferWriter 复用，按 64KB
-        // 批量写流；原实现每事件新建 ArrayBufferWriter + Utf8JsonWriter + ToArray，三次分配/次。
+        // 2026-10-20 性能轮：单实例 Utf8JsonWriter + 单块 ArrayBufferWriter 复用（不是池化——
+        // 每次 ExportAsync 固定分配 64KB，属单次导出内的复用），按 64KB 批量写流；
+        // 原实现每事件新建 ArrayBufferWriter + Utf8JsonWriter + ToArray，三次分配/次。
         var buffer = new ArrayBufferWriter<byte>(64 * 1024);
         using var json = new Utf8JsonWriter(buffer, new JsonWriterOptions { SkipValidation = true });
         await foreach (var evt in events.WithCancellation(ct).ConfigureAwait(false))
         {
             // 每个根对象前复位 writer 状态（Flush 后 writer 仍保留上一对象的位置/深度状态，
             // 直接在原状态上写第二个根对象会产出非法行）；Reset 不清理 buffer，跨事件累积。
+            var lineStart = buffer.WrittenCount;
             json.Reset(buffer);
             WriteEvent(json, evt);
             json.Flush();
             buffer.Write("\n"u8);
+            // 2026-10-21 评审 F2：导出侧与导入侧应用同一字节上限。原实现只限导入，
+            // 13MB payload 以 base64 膨胀为约 17.3MB 单行——导出成功、导入失败。
+            if (buffer.WrittenCount - lineStart - 1 > MaxLineBytes)
+                throw new EventReplayException(
+                    $"Event export failed: a single JSON line exceeds the {MaxLineBytes}-byte limit (base64 payloads expand by 4/3). Export aborted before writing the oversized line.");
             if (buffer.WrittenCount >= 64 * 1024)
             {
                 await output.WriteAsync(buffer.WrittenMemory, ct).ConfigureAwait(false);
@@ -83,8 +90,13 @@ public static class EventStreamJsonLines
         return ImportAsyncCore(input, ct);
     }
 
-    /// <summary>单行最大字符数——ITM-218 修复：无上限 ReadLineAsync 可被超长无换行输入耗尽内存。</summary>
-    public const int MaxLineChars = 16 * 1024 * 1024; // 16M 字符/行（UTF-16 约 32MB 内存；v72 勘正单位口径）
+    /// <summary>单行最大字节数（导入与导出共用）——ITM-218 修复超长无换行输入的内存耗尽；
+    /// 2026-10-21 评审 F2 明确单位为 UTF-8 字节并补导出侧上限。</summary>
+    public const int MaxLineBytes = 16 * 1024 * 1024;
+
+    /// <summary>旧名称（语义失实：实现一直按字节计）。保留为字节上限的别名，供已编译消费方过渡。</summary>
+    [Obsolete("Renamed to MaxLineBytes — the value is a UTF-8 byte limit, not a character count.")]
+    public const int MaxLineChars = MaxLineBytes;
 
     private static async IAsyncEnumerable<EventData> ImportAsyncCore(
         Stream input,
@@ -135,9 +147,9 @@ public static class EventStreamJsonLines
             var chunkLength = chunkEnd - bufferPosition;
             if (chunkLength > 0)
             {
-                if (lineLength + chunkLength > MaxLineChars)
+                if (lineLength + chunkLength > MaxLineBytes)
                     throw new EventReplayException(
-                        $"Event import failed at line {lineNumber + 1}: line exceeds {MaxLineChars} byte limit.");
+                        $"Event import failed at line {lineNumber + 1}: line exceeds {MaxLineBytes} byte limit.");
                 EnsureLineCapacity(ref line, lineLength + chunkLength);
                 Buffer.BlockCopy(readBuffer, bufferPosition, line, lineLength, chunkLength);
                 lineLength += chunkLength;
@@ -178,7 +190,7 @@ public static class EventStreamJsonLines
     {
         if (line.Length >= required)
             return;
-        var next = Math.Min(MaxLineChars, Math.Max(required, line.Length * 2));
+        var next = Math.Min(MaxLineBytes, Math.Max(required, line.Length * 2));
         Array.Resize(ref line, next);
     }
 

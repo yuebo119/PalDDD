@@ -11,7 +11,12 @@ namespace PalDDD.Projections.EventLog;
 
 /// <summary>从事件日志流回放事件以生成投影重建事件。</summary>
 /// <typeparam name="TMessage">回放源生成的消息类型。</typeparam>
-public sealed class EventLogReplaySource<TMessage> : IEventReplaySource<TMessage>
+/// <remarks>
+/// 实现 <see cref="IResumableEventReplaySource{TMessage}"/>：Rebuilder 的
+/// <c>is IResumableEventReplaySource&lt;TMessage&gt;</c> 检测依赖本声明；缺失时 ADR-028
+/// 的增量回放静默退化为全量（2026-10-21 评审 F1，已修正）。
+/// </remarks>
+public sealed class EventLogReplaySource<TMessage> : IResumableEventReplaySource<TMessage>
 {
     private readonly IEventLog _eventLog;
     private readonly IMessageSerializer _serializer;

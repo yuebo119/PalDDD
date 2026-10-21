@@ -135,8 +135,9 @@ public class PalOrmEventLog<TProvider> : IEventLog
             // 版本区间回查 MIN/MAX」三往返达成（MAX 预检 + INSERT + 回查，较逐行 k+1 在
             // k≥3 净胜）；② innodb_autoinc_lock_mode=2 下已知行数多行 VALUES 的自增块
             // 连续（wslc mysql84 8.4.11 实测：5 行 LAST_INSERT_ID=首行值、min/max=1/5
-            // 无间隙），且本实现不依赖连续性（区间回查按版本区间）。行上限 4000（16 参/行
-            // = 60000 < MySQL 65535 占位符上限），超出回落逐行（与 Dapper B2 同口径）。
+            // 无间隙），且本实现不依赖连续性（区间回查按版本区间）。行上限 4000
+            //（16 参/行 × 4000 = 64000 < MySQL 65535 占位符上限；2026-10-21 勘正原 60000），
+            // 超出回落逐行（与 Dapper B2 同口径）。
             (firstGlobalPos, lastGlobalPos) = await InsertBatchMySqlAsync(
                 streamName, expectedVersion, currentVersion, events, now, cancellationToken).ConfigureAwait(false);
         }
@@ -233,15 +234,27 @@ public class PalOrmEventLog<TProvider> : IEventLog
         }
         catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
         {
-            var idExists = await Session.ScalarAsync<int>(
-                $"SELECT COUNT(*) FROM events WHERE event_id = {eventIdText}",
-                ct: ct).ConfigureAwait(false) > 0;
-            if (idExists)
-                throw; // EventId 重复：与两往返路径同语义，原样上抛
-            var actual = await Session.ScalarAsync<long?>(
-                $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
-                ct: ct).ConfigureAwait(false);
-            throw new EventStreamConcurrencyException(streamName, expectedVersion, actual ?? -1);
+            // 2026-10-21 评审（PalOrmEventLog:179）：重查失败不得吞掉原始唯一冲突——
+            // PG 在 IUnitOfWork 环境事务内撞唯一约束后事务已 aborted，重查抛 25P02；
+            // 原实现让 25P02 替换真实冲突（EventStreamConcurrencyException 与原异常均丢失）。
+            try
+            {
+                var idExists = await Session.ScalarAsync<int>(
+                    $"SELECT COUNT(*) FROM events WHERE event_id = {eventIdText}",
+                    ct: ct).ConfigureAwait(false) > 0;
+                if (idExists)
+                    throw; // EventId 重复：与两往返路径同语义，原样上抛
+                var actual = await Session.ScalarAsync<long?>(
+                    $"SELECT MAX(stream_version) FROM events WHERE stream_name = {streamName}",
+                    ct: ct).ConfigureAwait(false);
+                throw new EventStreamConcurrencyException(streamName, expectedVersion, actual ?? -1);
+            }
+            catch (DbException recheckEx) when (!ReferenceEquals(recheckEx, ex))
+            {
+                ex.Data["UniqueConflictRecheckError"] = recheckEx.Message;
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex).Throw();
+                throw; // 不可达：EDI.Throw 已抛出原始异常
+            }
         }
 
         // 守卫失匹（零行插入）：重查实际版本转统一并发异常（对齐预查 Matches 失败）。
@@ -311,8 +324,9 @@ public class PalOrmEventLog<TProvider> : IEventLog
 
     /// <summary>
     /// A11（S1 轮，2026-10-15）：多行 VALUES INSERT ... RETURNING（PG/SQLite）——k 事件由
-    /// k 次往返降为 1 次（加 MAX 预检共 2）。RETURNING 全部列映射 EventLogRow，取
-    /// GlobalPosition 的 min/max 作首末（返回值只需首末，行序映射非必需——PALORM005 的
+    /// k 次往返降为 1 次（加 MAX 预检共 2）。RETURNING <b>仅回传 global_position</b>
+    ///（2026-10-21 勘正：原文「全部列映射 EventLogRow」失实，16 列物化已于 2026-10-19 移除），
+    /// 取 min/max 作首末（返回值只需首末——PALORM005 的
     /// 「无法保证单调有序」顾虑对 min/max 口径不成立）。冲突分类（ITM-075）与逐行形态
     /// 同款：唯一索引冲突 → 重查 MAX 分类（并发写入转统一并发异常 / 否则原样上抛），
     /// 批粒度用本批首事件版本作门槛（INSERT 原子失败，无部分写入）。

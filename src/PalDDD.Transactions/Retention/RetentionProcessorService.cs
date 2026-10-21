@@ -11,7 +11,8 @@ namespace PalDDD.Transactions;
 
 /// <summary>
 /// 历史表保留清理后台服务（2026-10-20 性能轮）。仅在显式调用
-/// <c>AddPalDapperRetention</c> 时注册；未注册时框架不启动任何删除任务。
+/// <c>AddPalRetention</c>（由 <c>AddPalDapperRetention</c> / <c>AddPalEfCoreRetention</c>
+/// 转入）时注册；未注册时框架不启动任何删除任务。默认轮询间隔 5 分钟。
 /// </summary>
 public sealed class RetentionProcessorService : PeriodicBackgroundProcessor
 {

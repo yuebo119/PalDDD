@@ -153,7 +153,7 @@ public static class MySqlServiceCollectionExtensions
 
     // ── Legacy（旧 API 兼容）──
 
-    /// <summary>注册 MySQL 连接（Singleton）并应用性能优化</summary>
+    /// <summary>注册 MySQL 连接（Scoped，每 scope 一条）并应用性能优化</summary>
     /// <remarks>⚠️ <b>ITM-276（R43）：applyOptimization 参数在本 Legacy 路径实际不生效</b>——
     /// 优化 SET SESSION 打在临时连接上，Dispose 归池后被 ResetConnections=true（MySqlConnector 默认）
     /// 清除，后续 Scoped 工厂从池取的连接不继承任何会话优化。有效的优化路径是
@@ -197,7 +197,7 @@ public static class MySqlServiceCollectionExtensions
     }
 
     /// <summary>注册 MySQL 连接 + Dapper Store（一键注册）</summary>
-    [System.Obsolete("请使用 AddPalMySqlDataSourceWithStores 以获得自动连接池管理、健康检查和 OpenTelemetry 追踪。八轮评审已补齐 ISagaStateStore 注册，与新路径的 Store 三件套（Outbox/Inbox/Saga）差异已消除，仅剩连接管理模式不同。")]
+    [System.Obsolete("请使用 AddPalMySqlDataSourceWithStores 以获得自动连接池管理、健康检查和 OpenTelemetry 追踪。本 Legacy 入口只注册 Outbox/Inbox/Saga 三个 Store；新路径注册 6 个（另含 IIdempotencyStore/IEventLog/IProjectionCheckpointStore）。依赖后三者时请迁移。")]
     public static IServiceCollection AddPalMySqlWithStores(
         this IServiceCollection services,
         string connectionString)

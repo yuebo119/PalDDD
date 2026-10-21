@@ -156,7 +156,8 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         //    A12（S1 轮，2026-10-15）：SQLite 亦改单语句 UPDATE ... RETURNING *
         //    （Microsoft.Data.Sqlite 支持，3.35+）——省回读往返，且消除 ITM-109 的
         //    同 tick 混批窗口（回读按 (locked_by, locked_until) 匹配会带回上一批遗留行）
-        //    非 PG/MySQL：两步——UPDATE 锁定后，按 locked_by/until 回读精确匹配本次租约
+        //    MySQL：两步——UPDATE 锁定后，按 locked_by/until 回读精确匹配本次租约
+        //    （PG 与 SQLite 均为单语句 RETURNING；2026-10-21 勘正原文「非 PG/MySQL」失实）
         //    🔴 P0 修复 (2026-06-21)：原实现第二步重新执行子查询，由于 locked_until 已被更新，
         //    子查询条件 (locked_until<=now) 会把刚锁定行排除，导致结果集为空。
         //    改用 OutboxSelectByLease 按租约标识回读，消除并发窗口。
@@ -412,6 +413,14 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return 0;
 
+        // 2026-10-21 评审 F10：null 元素校验必须先于 messages[0] 解引用——原顺序对
+        // new OutboxMessage?[]{null} 抛 NullReferenceException，而非方法声明的 ArgumentNullException。
+        foreach (var message in messages)
+        {
+            if (message is null)
+                throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
+        }
+
         // 同租约校验（契约前提防御）：批内 LockedBy/LockedUntil 同值且非空——
         // 正常管线不可达（批输入恒来自单次 LeasePendingMessagesAsync 结果）
         var owner = messages[0].LockedBy;
@@ -421,8 +430,6 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
                 "MarkProcessedBatchAsync requires leased messages (LockedBy/LockedUntil non-null) — batch inputs must come from a single LeasePendingMessagesAsync result.");
         foreach (var message in messages)
         {
-            if (message is null)
-                throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
             if (message.LockedBy != owner || message.LockedUntil != until)
                 throw new InvalidOperationException(
                     "MarkProcessedBatchAsync requires a single-lease batch — all messages must share the same LockedBy/LockedUntil (mixed-lease batches are not supported).");

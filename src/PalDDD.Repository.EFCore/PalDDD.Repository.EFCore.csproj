@@ -19,5 +19,10 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore" />
     </ItemGroup>
 
+  <ItemGroup>
+    <!-- F22（2026-10-21）：PendingEvents 仅供测试探针；降 internal + 授权测试程序集。 -->
+    <InternalsVisibleTo Include="PalDDD.Repository.EFCore.Tests" />
+  </ItemGroup>
+
   <ItemGroup><Using Include="PalDDD.Core" Alias="Core"/><Using Include="PalDDD.Serialization" Alias="Serialization"/></ItemGroup>
 </Project>

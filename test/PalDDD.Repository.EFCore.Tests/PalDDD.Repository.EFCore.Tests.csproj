@@ -13,6 +13,8 @@
     <ProjectReference Include="..\..\src\PalDDD.Messaging\PalDDD.Messaging.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Repository.EFCore\PalDDD.Repository.EFCore.csproj" />
     <ProjectReference Include="..\..\src\PalDDD.Transactions\PalDDD.Transactions.csproj" />
+    <!-- F1/F2 端到端装配测试：真实 SqliteOutboxDbContext（同上下文 + 同事务）。 -->
+    <ProjectReference Include="..\..\src\PalDDD.Transactions.EFCore\PalDDD.Transactions.EFCore.csproj" />
   </ItemGroup>
 
   <ItemGroup>
