@@ -848,8 +848,10 @@ var body = Expression.AndAlso(
 # 1. 构建（零错误零警告）
 dotnet build PalDDD.slnx
 
-# 2. 测试（零失败）——MTP 禁用 slnx 批量（握手 → exit 5），逐测试项目循环
-for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore; done
+# 2. 测试（零失败）——slnx 批量可直接运行（2026-10-21 实测 1827 例 / exit 0）
+dotnet test PalDDD.slnx --no-build
+# 需要单项目定位或 MTP treenode-filter 时，再逐项目循环：
+# for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore; done
 
 # 3. 公共 API 变更时更新快照（filter 需在 -- 之后传递给 MTP）
 PALDDD_UPDATE_PUBLIC_API_SNAPSHOTS=1 dotnet test test/PalDDD.Core.Tests -- --treenode-filter "/*/*/PublicApiSnapshotTests/*"

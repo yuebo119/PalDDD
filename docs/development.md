@@ -69,8 +69,8 @@ dotnet list PalDDD.slnx package --outdated
 任何生产代码改动至少运行：
 
 ```bash
-# MTP 禁用 slnx 批量（握手 → exit 5），逐测试项目循环：
-for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do dotnet test "$p" --no-restore; done
+# slnx 批量测试可直接运行（2026-10-21 实测 1827 例 / exit 0）：
+dotnet test PalDDD.slnx --no-restore
 dotnet build PalDDD.slnx --no-restore
 ```
 
@@ -107,7 +107,8 @@ jobs:
         with:
           dotnet-version: '11.0.x'
       - run: dotnet restore PalDDD.slnx
-      # MTP 手写协议：逐测试项目 dotnet test（一次只跑一个项目）；
+      # CI 需要并行、逐项目失败注解与覆盖率，故保持逐项目 dotnet test；
+      # 本地提交前可直接 dotnet test PalDDD.slnx（2026-10-21 实测 exit 0）。
       # 无 Docker 时方言族测试自动跳过，不会误连外部库
       - run: |
           for p in $(find test -name '*.Tests.csproj' | sort); do dotnet test "$p" --no-restore; done

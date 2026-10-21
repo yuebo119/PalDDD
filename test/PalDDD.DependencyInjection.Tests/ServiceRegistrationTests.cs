@@ -136,19 +136,6 @@ public sealed class ServiceRegistrationTests
     }
 
     [Test]
-    public async Task AddPalFullStack_EqualsCoreStackWithoutInfrastructureAdapters()
-    {
-        var services = new ServiceCollection();
-
-        services.AddPalFullStack();
-
-        using var provider = services.BuildServiceProvider();
-        _ = provider.GetRequiredService<Dispatcher>(); // GetRequiredService 失败即抛（恒真断言已删）
-        await Assert.That(provider.GetRequiredService<IMessageBroker>()).IsTypeOf<NullMessageBroker>();
-        await Assert.That(provider.GetService<IMessageSerializer>()).IsNull();
-    }
-
-    [Test]
     public async Task AddPalEventHandler_RegistersHandlerAsScoped()
     {
         var services = new ServiceCollection();

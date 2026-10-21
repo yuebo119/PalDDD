@@ -54,7 +54,7 @@ public static class DapperBulkCopy
     // C-15（EPSL 地毯审计 2026-10-11）：AllowLoadLocalInfile 判定按连接实例缓存
     //（ConditionalWeakTable——连接串含凭据不以字符串驻留静态表；长连接复用免每次
     // 全量解析连接串只为读一个布尔）。见 MySqlBulkAsync 入口检测的使用点。
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<MySqlConnection, System.Runtime.CompilerServices.StrongBox<bool>>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<DbConnection, System.Runtime.CompilerServices.StrongBox<bool>>
         s_allowLoadLocalInfileByConnection = new();
 
     /// <summary>

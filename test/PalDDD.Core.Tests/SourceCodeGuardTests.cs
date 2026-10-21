@@ -16,6 +16,7 @@ namespace PalDDD.Core.Tests;
 //                                  G9  → 守卫 3（async void——补显式 void 返回类型的 lambda 形态后完全覆盖）
 //                                  G10 → 守卫 6（TransactionScope 标识符禁令）
 //                                  G17 → 守卫 6（UtcNow 直调 + TimeProvider.System 内联禁令，附注零残留后升格 FAIL）
+//   architecture.md 稳定性约束            → 守卫 7（runtime assembly scanning：GetAssemblies / Assembly.Load*）
 //   scripts/verify-conventions.sh  V1（反射族）/ V2（async void）/ V3（.Result）/ V4（.Wait）
 //                                  → 已下沉至本文件同名守卫，脚本仅保留 V5（TODO grep）/ V6（build）/ V7（test）
 //
@@ -506,6 +507,41 @@ public sealed class SourceCodeGuardTests
                     return true;
             }
             return false;
+        }
+
+        // ── 守卫 7：运行时程序集扫描（architecture.md 稳定性约束） ──
+
+        /// <summary>
+        /// 扫描运行时程序集加载/枚举调用：<c>GetAssemblies()</c> 与 <c>Assembly.Load*</c> /
+        /// <c>AssemblyLoadContext.LoadFromAssembly*</c>。architecture.md「稳定性约束」声明
+        /// 不做 runtime assembly scanning——此前只有 <c>Assembly.GetTypes()</c> 在守卫 1 内，
+        /// 枚举/加载入口无机械防线。
+        /// </summary>
+        internal static IEnumerable<Violation> FindAssemblyScanningViolations(SourceFileOrPath file)
+        {
+            var root = file.Tree.GetRoot();
+            foreach (var invocation in root.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                if (invocation.Expression is not MemberAccessExpressionSyntax access) continue;
+                var name = access.Name.Identifier.ValueText;
+                var receiver = access.Expression.ToString();
+
+                if (name == "GetAssemblies")
+                {
+                    yield return Make(file, invocation, "G18",
+                        "运行时程序集扫描（GetAssemblies）被 architecture.md 稳定性约束禁止");
+                    continue;
+                }
+
+                var isAssemblyLoad = (name is "Load" or "LoadFrom" or "LoadFile"
+                        && receiver.EndsWith("Assembly", StringComparison.Ordinal))
+                    || name is "LoadFromAssemblyName" or "LoadFromAssemblyPath";
+                if (isAssemblyLoad)
+                {
+                    yield return Make(file, invocation, "G18",
+                        "运行时加载程序集（Assembly.Load*）被 architecture.md 稳定性约束禁止");
+                }
+            }
         }
     }
 
@@ -1184,6 +1220,68 @@ public sealed class SourceCodeGuardTests
         foreach (var testCase in TransactionScopeAndClockCases)
         {
             var actual = GuardAnalyzer.FindTransactionScopeAndClockViolations(
+                GuardAnalyzer.SourceFileOrPath.Synthetic(testCase.FilePath, CSharpSyntaxTree.ParseText(testCase.Source))).Count();
+            if (actual != testCase.Expected)
+                failures.Add($"样本[{testCase.Name}] 期望 {testCase.Expected} 处违规，实际 {actual} 处");
+        }
+        await Assert.That(failures).IsEmpty();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 守卫 7：runtime assembly scanning
+    // ─────────────────────────────────────────────────────────────
+
+    private static readonly GuardCase[] AssemblyScanningCases =
+    [
+        Case("S1 GetAssemblies 必须红",
+            """
+            using System;
+            class C { object M() => AppDomain.CurrentDomain.GetAssemblies(); }
+            """, 1),
+        Case("S2 Assembly.Load 必须红",
+            """
+            using System.Reflection;
+            class C { Assembly M() => Assembly.Load("Some.Assembly"); }
+            """, 1),
+        Case("S3 AssemblyLoadContext.LoadFromAssemblyName 必须红",
+            """
+            using System.Runtime.Loader;
+            class C { Assembly M() => AssemblyLoadContext.Default.LoadFromAssemblyName(new AssemblyName("X")); }
+            """, 1),
+        Case("S4 非程序集接收者的 Load() 不计",
+            """
+            class Holder { public int Load() => 0; }
+            class C { int M(Holder h) => h.Load(); }
+            """, 0),
+        Case("S5 注释与字符串中的 GetAssemblies 不计",
+            """
+            class C
+            {
+                string M() => "GetAssemblies / Assembly.Load are forbidden";
+                // GetAssemblies 注释不计
+            }
+            """, 0),
+    ];
+
+    /// <summary>全仓扫描：src 下不得出现 runtime assembly scanning（GetAssemblies / Assembly.Load*）。</summary>
+    [Test]
+    public async Task Guard7_AssemblyScanning_AbsentInSources()
+    {
+        var violations = Sources.Value
+            .Select(GuardAnalyzer.SourceFileOrPath.From)
+            .SelectMany(GuardAnalyzer.FindAssemblyScanningViolations)
+            .Select(v => $"{v.File}:{v.Line} [{v.Rule}] {v.Detail}")
+            .ToList();
+        await Assert.That(violations).IsEmpty();
+    }
+
+    [Test]
+    public async Task Guard7_Matrix_MatchesExpectedCounts()
+    {
+        var failures = new List<string>();
+        foreach (var testCase in AssemblyScanningCases)
+        {
+            var actual = GuardAnalyzer.FindAssemblyScanningViolations(
                 GuardAnalyzer.SourceFileOrPath.Synthetic(testCase.FilePath, CSharpSyntaxTree.ParseText(testCase.Source))).Count();
             if (actual != testCase.Expected)
                 failures.Add($"样本[{testCase.Name}] 期望 {testCase.Expected} 处违规，实际 {actual} 处");

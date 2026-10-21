@@ -1,7 +1,4 @@
 using System.Data.Common;
-using Microsoft.Data.Sqlite;
-using MySqlConnector;
-using Npgsql;
 
 namespace PalDDD.Dapper;
 
@@ -26,11 +23,16 @@ internal static class DapperConnectionGuard
     {
         ArgumentNullException.ThrowIfNull(connection);
 
-        var detected = connection switch
+        // 刻意按类型全名判定而非 `connection is NpgsqlConnection` 模式匹配：后者会让
+        // JIT 在构造期强制加载三家 provider 程序集，纯 SQLite 消费方也会因缺少
+        // Npgsql/MySqlConnector 而抛 FileNotFoundException（2026-10-21 实测）。
+        // 三个包在 PalDDD.Dapper 中为 PrivateAssets="all" 的实现私有依赖，这里不能再
+        // 引入编译期类型引用。
+        var detected = connection.GetType().FullName switch
         {
-            SqliteConnection => (DapperDbType?)DapperDbType.Sqlite,
-            NpgsqlConnection => DapperDbType.PostgreSql,
-            MySqlConnection => DapperDbType.MySql,
+            "Microsoft.Data.Sqlite.SqliteConnection" => (DapperDbType?)DapperDbType.Sqlite,
+            "Npgsql.NpgsqlConnection" => DapperDbType.PostgreSql,
+            "MySqlConnector.MySqlConnection" => DapperDbType.MySql,
             _ => null,
         };
 
