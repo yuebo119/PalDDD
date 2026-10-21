@@ -57,12 +57,14 @@ internal sealed class LZ4Compressor : ICompressor
         var destination = ArrayPool<byte>.Shared.Rent(maxSize);
         try
         {
-            // R1（C-F6）：options 三档静态缓存（原 with 每调用分配）
+            // R11 F22：未知枚举值 fail-fast（对齐 SystemCompressor 三实现）——
+            // 原 default 静默回落 Balanced，同一接口对非法输入的错误语义分叉。
             var options = level switch
             {
                 CompressionLevel.Fastest => NativeCompressionOptionsCache.Lz4Fastest,
                 CompressionLevel.SmallestSize => NativeCompressionOptionsCache.Lz4SmallestSize,
-                _ => NativeCompressionOptionsCache.Lz4Balanced,
+                CompressionLevel.Balanced => NativeCompressionOptionsCache.Lz4Balanced,
+                _ => throw new ArgumentOutOfRangeException(nameof(level), level, "Unknown CompressionLevel."),
             };
 
             var written = LZ4.Compress(data, destination, options);
@@ -136,12 +138,13 @@ internal sealed class ZStandardCompressor : ICompressor
         var destination = ArrayPool<byte>.Shared.Rent(maxSize);
         try
         {
-            // R1（C-F6）：options 三档静态缓存（原 with 每调用分配）
+            // R1（C-F6）：options 三档静态缓存（原 with 每调用分配）；R11 F22 未知值抛错。
             var options = level switch
             {
                 CompressionLevel.Fastest => NativeCompressionOptionsCache.ZstdFastest,
                 CompressionLevel.SmallestSize => NativeCompressionOptionsCache.ZstdSmallestSize,
-                _ => NativeCompressionOptionsCache.ZstdBalanced,
+                CompressionLevel.Balanced => NativeCompressionOptionsCache.ZstdBalanced,
+                _ => throw new ArgumentOutOfRangeException(nameof(level), level, "Unknown CompressionLevel."),
             };
 
             var written = Zstandard.Compress(data, destination, options);
@@ -226,12 +229,13 @@ internal sealed class OpenZLCompressor : ICompressor
         var destination = ArrayPool<byte>.Shared.Rent(maxSize);
         try
         {
-            // R1（C-F6）：options 三档静态缓存（原 with 每调用分配；OpenZL 底层同 Zstandard）
+            // R1（C-F6）：options 三档静态缓存（原 with 每调用分配；OpenZL 底层同 Zstandard）；R11 F22 未知值抛错。
             var options = level switch
             {
                 CompressionLevel.Fastest => NativeCompressionOptionsCache.ZstdFastest,
                 CompressionLevel.SmallestSize => NativeCompressionOptionsCache.ZstdSmallestSize,
-                _ => NativeCompressionOptionsCache.ZstdBalanced,
+                CompressionLevel.Balanced => NativeCompressionOptionsCache.ZstdBalanced,
+                _ => throw new ArgumentOutOfRangeException(nameof(level), level, "Unknown CompressionLevel."),
             };
 
             var written = Zstandard.Compress(data, destination, options);
