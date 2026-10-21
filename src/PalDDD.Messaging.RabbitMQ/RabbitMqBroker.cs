@@ -256,6 +256,10 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
         Justification = "接口成员必须为实例成员；能力值由 broker 实现类型决定。")]
     public override bool SupportsRawPublish => true;
 
+    /// <summary>批量 handler 异常记录后继续消费后续批次（消息已按 at-most-once 弃置）。</summary>
+    protected override void OnBatchHandlerFailed(Exception ex)
+        => _logger.Error(ex, "RabbitMQ batch handler failed; subsequent batches continue");
+
     /// <inheritdoc />
     public override async ValueTask PublishRawAsync(
         ReadOnlyMemory<byte> payload,
@@ -445,7 +449,7 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
                     // P2 修复（八轮评审）：消费端还原追踪头——写侧 CreateHeaders 的镜像，
                     // correlation 兜底读 BasicProperties.CorrelationId（写侧未写 x-correlation-id 头）
                     var consumeContext = MessageConsumeContext.FromHeaders(
-                        ea.BasicProperties.Headers, ea.BasicProperties.CorrelationId);
+                        ea.BasicProperties.Headers, ea.BasicProperties.CorrelationId, ea.BasicProperties.MessageId);
                     // v25 P2-5：per-delivery token 与订阅生命周期 token 组合（每消息一个小 CTS
                     // 分配，消费路径本有反序列化分配；订阅取消/释放时 handler 感知取消→走
                     // OCE 分支 nack 弃置，与关停语义一致）

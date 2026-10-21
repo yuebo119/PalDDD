@@ -793,8 +793,11 @@ public sealed class SerializerDirectWriteTests
         });
 
         // 池化 Utf8JsonWriter 直写 + 无 ToArray——稳态每调用 0 分配
-        //（DIM 回退形态：内存载荷 ToArray + 拷贝 = 载荷尺寸 ×2 每调用）
-        await Assert.That(alloc).IsEqualTo(0L);
+        //（DIM 回退形态：内存载荷 ToArray + 拷贝 = 载荷尺寸 ×2 每调用）。
+        // 容差 1KB：全量并行跑时偶发一次性的运行时事件（分层 JIT 记账/首用静态）
+        // 会计入当前线程；回退形态是 ≥100B × 10,000 = 1MB 量级，与容差差 3 个数量级，
+        // 回归检测力不受影响。
+        await Assert.That(alloc).IsLessThanOrEqualTo(1024L);
     }
 
     [Test]

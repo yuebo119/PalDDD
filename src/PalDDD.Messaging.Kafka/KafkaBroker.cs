@@ -133,6 +133,10 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
         Justification = "接口成员必须为实例成员；能力值由 broker 实现类型决定。")]
     public override bool SupportsRawPublish => true;
 
+    /// <summary>批量 handler 异常记录后继续消费后续批次（消息已按 at-most-once 弃置）。</summary>
+    protected override void OnBatchHandlerFailed(Exception ex)
+        => _logger.Error(ex, "Kafka batch handler failed; subsequent batches continue");
+
     /// <inheritdoc />
     public override async ValueTask PublishRawAsync(
         ReadOnlyMemory<byte> payload,
@@ -587,7 +591,7 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
                         // P2 修复（八轮评审）：消费端还原追踪头——写侧 CreateHeaders 的镜像
                         // C-11（EPSL 地毯审计 2026-10-11）：单趟遍历 Confluent Headers 直产
                         // 已解码字典（原 ToHeaderMap 中间字典 + FromHeaders 二次物化消除）
-                        var consumeContext = FromKafkaHeaders(result.Message.Headers);
+                        var consumeContext = FromKafkaHeaders(result.Message.Headers, result.Message.Key);
                         await handler(message, consumeContext, tokenSnapshot).ConfigureAwait(false);
                     }
                     else
@@ -624,15 +628,20 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
     }
 
     /// <summary>
-    /// Confluent.Kafka Headers → 消费上下文（C-11 单趟形态）——IHeader 枚举直产已解码字典，
-    /// 键名/解码语义与 <see cref="MessageConsumeContext.FromHeaders"/> 一致：空字节值解码为
-    /// null、重复键后者覆盖、未知键保留在 Headers 视图；无头返回 null（消费回调收到 null
-    /// context 表示消息未携带追踪元数据）。Kafka 无 BasicProperties correlation 兜底（恒 null）。
+    /// Confluent.Kafka Headers 与消息 Key → 消费上下文（C-11 单趟形态）——IHeader 枚举直产
+    /// 已解码字典，键名/解码语义与 <see cref="MessageConsumeContext.FromHeaders"/> 一致：空字节
+    /// 值解码为 null、重复键后者覆盖、未知键保留在 Headers 视图；无头且无 Key 时返回 null。
+    /// 消息 Key 由发布侧写入 messageId，作为 <see cref="MessageConsumeContext.MessageId"/> 供
+    /// Inbox 幂等使用。Kafka 无 BasicProperties correlation 兜底（恒 null）。
     /// </summary>
-    private static MessageConsumeContext? FromKafkaHeaders(Headers? headers)
+    private static MessageConsumeContext? FromKafkaHeaders(Headers? headers, string? messageId)
     {
         if (headers is null || headers.Count == 0)
-            return null;
+        {
+            return messageId is null
+                ? null
+                : new MessageConsumeContext(messageId, null, null, null, null, EmptyHeaders);
+        }
 
         string? correlationId = null;
         string? causationId = null;
@@ -662,9 +671,14 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
 
         // Headers 只在消费 handler 真正读取时才物化全量字典；已知追踪字段已提前解码。
         return new MessageConsumeContext(
-            correlationId, causationId, traceParent, traceState,
+            messageId, correlationId, causationId, traceParent, traceState,
             () => DecodeKafkaHeaders(headers));
     }
+
+    /// <summary>无头消息（仅带 Key）的消费上下文空头视图——只读包装，免每条消息一个空字典。</summary>
+    private static readonly IReadOnlyDictionary<string, string?> EmptyHeaders =
+        new System.Collections.ObjectModel.ReadOnlyDictionary<string, string?>(
+            new Dictionary<string, string?>());
 
     private static Dictionary<string, string?> DecodeKafkaHeaders(Headers headers)
     {

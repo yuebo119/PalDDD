@@ -85,6 +85,22 @@ public abstract class MessageBrokerBase : IMessageBroker
         MessagePublishContext context,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// 批量订阅（2026-10-21）：默认组批泵，复用逐条订阅，按数量或时间界组批。
+    /// handler 异常经 <see cref="OnBatchHandlerFailed"/> 记录后继续下一批。
+    /// </summary>
+    public virtual ValueTask<IAsyncDisposable> SubscribeBatchAsync<TMessage>(
+        Func<IReadOnlyList<ConsumedMessage<TMessage>>, CancellationToken, ValueTask> handler,
+        int maxBatchSize = 64,
+        TimeSpan? maxDelay = null,
+        CancellationToken ct = default)
+        => MessageBatchPump.StartAsync(this, handler, maxBatchSize, maxDelay, OnBatchHandlerFailed, ct);
+
+    /// <summary>批量 handler 抛异常时的回调（默认无操作；broker 实现覆写记录日志）。</summary>
+    protected virtual void OnBatchHandlerFailed(Exception ex)
+    {
+    }
+
     /// <summary>异步订阅消息 — 子类实现传输核心。</summary>
     public abstract ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
         Func<TMessage, CancellationToken, ValueTask> handler, CancellationToken ct = default);

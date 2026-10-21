@@ -1,4 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using PalDDD.Core.Logging;
 using PalDDD.Messaging;
 using PalDDD.Serialization;
@@ -953,6 +955,76 @@ public sealed class InboxProcessorTests
     }
 
     [Test]
+    public async Task InboxBatchConsumer_ProcessesBrokerBatchAndSkipsReplays(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var options = new InboxOptions
+        {
+            DefaultConsumerName = "orders",
+            ProcessingTimeout = TimeSpan.FromMinutes(5)
+        };
+        var services = new ServiceCollection();
+        services.AddSingleton<IInboxStore>(store);
+        services.AddSingleton<IOptionsMonitor<InboxOptions>>(new FixedOptionsMonitor<InboxOptions>(options));
+        services.AddSingleton<IPalLogger<InboxProcessor>>(NullPalLogger<InboxProcessor>.Instance);
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<InboxProcessor>();
+        using var provider = services.BuildServiceProvider();
+
+        var broker = new BatchingProbeBroker();
+        var consumer = new InboxBatchConsumer<string>(
+            broker,
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            new FixedOptionsMonitor<InboxOptions>(options));
+
+        var handled = new List<string>();
+        var handledGate = new object();
+        var firstThree = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fourth = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var subscription = await consumer.StartAsync(
+            (message, _) =>
+            {
+                lock (handledGate)
+                {
+                    handled.Add(message);
+                    if (handled.Count == 3)
+                        firstThree.TrySetResult();
+                    if (string.Equals(message, "four", StringComparison.Ordinal))
+                        fourth.TrySetResult();
+                }
+                return ValueTask.CompletedTask;
+            },
+            maxBatchSize: 8,
+            maxDelay: TimeSpan.FromMilliseconds(20),
+            ct: cancellationToken);
+
+        await broker.PushAsync("one", "id-1", cancellationToken);
+        await broker.PushAsync("two", "id-2", cancellationToken);
+        await broker.PushAsync("three", "id-3", cancellationToken);
+        await firstThree.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+
+        // 重投前三条 + 一条新消息：同一批内前三条被 Inbox 认领拒绝，只有新消息进入 handler。
+        await broker.PushAsync("one", "id-1", cancellationToken);
+        await broker.PushAsync("two", "id-2", cancellationToken);
+        await broker.PushAsync("three", "id-3", cancellationToken);
+        await broker.PushAsync("four", "id-4", cancellationToken);
+        await fourth.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+
+        string joined;
+        lock (handledGate)
+        {
+            joined = string.Join(",", handled.OrderBy(static x => x, StringComparer.Ordinal));
+        }
+        await Assert.That(joined).IsEqualTo("four,one,three,two");
+
+        var replay = await store.TryStartProcessingManyAsync(
+            "orders", ["id-1", "id-2", "id-3", "id-4"], TimeProvider.System.GetUtcNow(),
+            TimeSpan.FromMinutes(5), cancellationToken);
+        await Assert.That(replay).IsEmpty();
+    }
+
+    [Test]
     public async Task TryProcessAsync_EmitsInboxProcessActivityWhenSkipped(CancellationToken cancellationToken)
     {
         using var listener = new RecordingActivityListener();
@@ -1323,6 +1395,53 @@ public sealed class InboxProcessorTests
         public void Warning(string message) { }
         public void Error(Exception ex, string message) { }
         public bool IsEnabled(LogLevel level) => level != LogLevel.Information || informationEnabled;
+    }
+
+    /// <summary>可推送带消息 ID 的订阅探针——驱动 InboxBatchConsumer 的真实组批泵路径。</summary>
+    private sealed class BatchingProbeBroker : IMessageBroker
+    {
+        private Func<string, MessageConsumeContext?, CancellationToken, ValueTask>? _handler;
+
+        public ValueTask<IAsyncDisposable> SubscribeAsync<T>(
+            Func<T, MessageConsumeContext?, CancellationToken, ValueTask> handler,
+            CancellationToken ct = default)
+        {
+            if (typeof(T) != typeof(string))
+                throw new InvalidOperationException($"BatchingProbeBroker cannot subscribe {typeof(T).Name}.");
+            _handler = (Func<string, MessageConsumeContext?, CancellationToken, ValueTask>)(object)handler;
+            return new ValueTask<IAsyncDisposable>(NoopSubscription.Instance);
+        }
+
+        public ValueTask<IAsyncDisposable> SubscribeAsync<T>(
+            Func<T, CancellationToken, ValueTask> handler,
+            CancellationToken ct = default)
+            => SubscribeAsync<T>((message, _, token) => handler(message, token), ct);
+
+        public async ValueTask PushAsync(string message, string messageId, CancellationToken ct)
+        {
+            var handler = _handler ?? throw new InvalidOperationException("No subscription registered.");
+            await handler(
+                message,
+                MessageConsumeContext.FromHeaders(null, null, messageId),
+                ct).ConfigureAwait(false);
+        }
+
+        public ValueTask PublishAsync<T>(T message, CancellationToken ct = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask PublishAsync(
+            object message,
+            MessageDescriptor descriptor,
+            PalUlid messageId,
+            CancellationToken ct = default)
+            => ValueTask.CompletedTask;
+    }
+
+    private sealed class NoopSubscription : IAsyncDisposable
+    {
+        public static readonly NoopSubscription Instance = new();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
 

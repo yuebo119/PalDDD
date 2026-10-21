@@ -326,6 +326,26 @@ var processed = await inbox.TryProcessAsync(
 
 同一幂等消费边界还会记录 `paldd.inbox.processed`、`paldd.inbox.skipped` 和 `paldd.inbox.failed` metrics，应用层可通过 OpenTelemetry `AddMeter(PalActivitySource.Name)` 采集。
 
+批量消费（2026-10-21）：
+
+```csharp
+services.AddPalInbox();
+services.AddScoped<InboxProcessor>();   // InboxBatchConsumer 每批创建一个 scope
+
+var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+var options = provider.GetRequiredService<IOptionsMonitor<InboxOptions>>();
+var consumer = new InboxBatchConsumer<OrderSubmitted>(broker, scopeFactory, options);
+await using var subscription = await consumer.StartAsync(
+    handler: static async (OrderSubmitted message, CancellationToken ct) =>
+    {
+        await ValueTask.CompletedTask;
+    },
+    maxBatchSize: 64,
+    maxDelay: TimeSpan.FromMilliseconds(50));
+```
+
+消息 ID 默认取 `MessageConsumeContext.MessageId`（Kafka 消息 Key / RabbitMQ `BasicProperties.MessageId`，发布侧由框架写入）；broker 不提供消息 ID 时传入 `messageIdSelector`，两者都无则启动后首批快速失败。store 实现 `IBatchInboxStore` 时每批一次认领与一次完成往返（Dapper PG/SQLite 各 1 次、MySQL 4 次），否则自动回落逐条 `TryProcessAsync`。broker 仍是 at-most-once：批内失败的条目被标记 Failed，不会由 broker 重投。
+
 生产环境可引用 `PalDDD.Transactions.EFCore` 程序集，`using PalDDD.Transactions;` 后派生 `InboxDbContext`，并通过 DI 将该上下文作为 `IInboxStore` 使用。适配器会配置 `(ConsumerName, MessageId)` 唯一索引、processed 时间索引和 lease 状态索引；已处理消息返回 `null`，未超时 `Processing` 消息返回 `null`，失败或超时消息会重新进入 `Processing` 以支持 broker 重投递。
 
 ## 使用 Saga EF Core Store

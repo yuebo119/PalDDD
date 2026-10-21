@@ -9,6 +9,9 @@ using PalUlid = ByteAether.Ulid.Ulid;
 
 namespace PalDDD.Messaging;
 
+/// <summary>批量订阅的单条消息（消息体 + 消费上下文）。</summary>
+public readonly record struct ConsumedMessage<TMessage>(TMessage Message, MessageConsumeContext? Context);
+
 // ─────────────────────────────────────────────────────────────
 // 跨进程消息代理抽象
 // ─────────────────────────────────────────────────────────────
@@ -92,6 +95,20 @@ public interface IMessageBroker
     ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
         Func<TMessage, MessageConsumeContext?, CancellationToken, ValueTask> handler, CancellationToken ct = default)
         => SubscribeAsync<TMessage>((message, _, token) => handler(message, null, token), ct);
+
+    /// <summary>
+    /// 批量订阅（2026-10-21）：复用逐条订阅，按 <paramref name="maxBatchSize"/> 或
+    /// <paramref name="maxDelay"/> 先到者组批后交给批量 handler。批内消息按到达顺序；
+    /// 每批 flush 后列表被清空复用，handler 不得保留列表引用。单个批 handler 抛异常时
+    /// 由实现的错误回调记录并继续下一批（<see cref="MessageBrokerBase"/> 经
+    /// OnBatchHandlerFailed 记录；默认 DIM 实现静默继续）。
+    /// </summary>
+    ValueTask<IAsyncDisposable> SubscribeBatchAsync<TMessage>(
+        Func<IReadOnlyList<ConsumedMessage<TMessage>>, CancellationToken, ValueTask> handler,
+        int maxBatchSize = 64,
+        TimeSpan? maxDelay = null,
+        CancellationToken ct = default)
+        => MessageBatchPump.StartAsync(this, handler, maxBatchSize, maxDelay, static _ => { }, ct);
 }
 
 /// <summary>
@@ -155,6 +172,13 @@ public sealed class NullMessageBroker : IMessageBroker
             _logger.Debug($"NullMessageBroker: subscribe to '{typeof(TMessage).Name}' ignored (single-node mode)");
         return new ValueTask<IAsyncDisposable>(NullAsyncDisposable.Instance);
     }
+
+    ValueTask<IAsyncDisposable> IMessageBroker.SubscribeBatchAsync<TMessage>(
+        Func<IReadOnlyList<ConsumedMessage<TMessage>>, CancellationToken, ValueTask> handler,
+        int maxBatchSize,
+        TimeSpan? maxDelay,
+        CancellationToken ct)
+        => new(NullAsyncDisposable.Instance);
 
     private sealed class NullAsyncDisposable : IAsyncDisposable
     {

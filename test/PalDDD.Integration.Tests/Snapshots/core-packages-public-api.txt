@@ -933,6 +933,15 @@ static class PalDDD.Idempotency.ServiceCollectionExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalIdempotencyEfCore(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
 
 # PalDDD.Messaging
+struct PalDDD.Messaging.ConsumedMessage<TMessage>
+  ctor(TMessage Message, PalDDD.Messaging.MessageConsumeContext Context)
+  property PalDDD.Messaging.MessageConsumeContext Context [init]
+  property TMessage Message [init]
+  method System.Void Deconstruct(TMessage& Message, PalDDD.Messaging.MessageConsumeContext& Context)
+  method System.Boolean Equals(PalDDD.Messaging.ConsumedMessage<TMessage> other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
 class PalDDD.Messaging.DomainEventDispatcherOptions
   ctor()
   property System.Int32 MaxIterations
@@ -952,6 +961,7 @@ interface PalDDD.Messaging.IMessageBroker
   method System.Threading.Tasks.ValueTask PublishRawAsync(System.ReadOnlyMemory<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeBatchAsync(System.Func<System.Collections.Generic.IReadOnlyList<PalDDD.Messaging.ConsumedMessage<TMessage>>, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Int32 maxBatchSize, System.Nullable<System.TimeSpan> maxDelay, System.Threading.CancellationToken ct)
 class PalDDD.Messaging.MessageBrokerBase
   property System.Boolean SupportsConcurrentPublish
   property System.Boolean SupportsRawPublish
@@ -961,14 +971,17 @@ class PalDDD.Messaging.MessageBrokerBase
   method System.Threading.Tasks.ValueTask PublishRawAsync(System.ReadOnlyMemory<System.Byte> payload, PalDDD.Serialization.MessageDescriptor descriptor, ByteAether.Ulid.Ulid messageId, PalDDD.Messaging.MessagePublishContext context, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeBatchAsync(System.Func<System.Collections.Generic.IReadOnlyList<PalDDD.Messaging.ConsumedMessage<TMessage>>, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Int32 maxBatchSize, System.Nullable<System.TimeSpan> maxDelay, System.Threading.CancellationToken ct)
 class PalDDD.Messaging.MessageConsumeContext
   ctor(System.String correlationId, System.String causationId, System.String traceParent, System.String traceState, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> headers)
+  ctor(System.String messageId, System.String correlationId, System.String causationId, System.String traceParent, System.String traceState, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> headers)
   property System.String CausationId
   property System.String CorrelationId
   property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Headers
+  property System.String MessageId
   property System.String TraceParent
   property System.String TraceState
-  method PalDDD.Messaging.MessageConsumeContext FromHeaders(System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<System.String, System.Object>> headers, System.String correlationId)
+  method PalDDD.Messaging.MessageConsumeContext FromHeaders(System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<System.String, System.Object>> headers, System.String correlationId, System.String messageId)
 static class PalDDD.Messaging.MessageConsumeContext+HeaderNames
   field const System.String CausationId = x-causation-id
   field const System.String CorrelationId = x-correlation-id
@@ -1665,6 +1678,9 @@ class PalDDD.Transactions.InMemorySagaStateStore<TState>
   method System.Threading.Tasks.ValueTask<System.Int32> ReleaseLeasesAsync(System.String owner, System.Collections.Generic.IReadOnlyList<TState> sagas, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> SaveChangesAsync(TState state, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<System.Int32>> SaveManyAsync(System.Collections.Generic.IReadOnlyList<TState> sagas, System.Threading.CancellationToken ct)
+class PalDDD.Transactions.InboxBatchConsumer<TMessage>
+  ctor(PalDDD.Messaging.IMessageBroker broker, Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopeFactory, Microsoft.Extensions.Options.IOptionsMonitor<PalDDD.Transactions.InboxOptions> options, System.String consumerName, PalDDD.Core.Logging.IPalLogger<PalDDD.Transactions.InboxBatchConsumer<TMessage>> logger)
+  method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> StartAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Func<PalDDD.Messaging.ConsumedMessage<TMessage>, System.String> messageIdSelector, System.Int32 maxBatchSize, System.Nullable<System.TimeSpan> maxDelay, System.Threading.CancellationToken ct)
 class PalDDD.Transactions.InboxMessage
   ctor()
   property System.Int32 Attempts
