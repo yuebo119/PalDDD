@@ -19,6 +19,8 @@
 2.2 已落地；2.3 已落地（三态汇总 + 配方 + pre-push 提示）；2.4 已验证（ASPNETCORE_URLS 复验通过）；
 2.5 已由仓库测试覆盖（EF），PalORM 侧改为结构性论证。
 R4 追加：Dapper 幂等 PG/MySQL 方言用例补齐，AcceptedGap 15→13；缺口集合改为精确冻结（换位即红）。
+R5 追加：Idempotency / Projections / Saga / EventLog 的 SQLite 四栈矩阵补齐；矩阵发现并修复 EF Saga
+租约回读的陈旧跟踪实例问题（同一上下文先 GetById 再租约时 LeasedBy/Version 不换代）。
 
 ### 2.1 B2 对表只覆盖 61 格中的少数（R3：清单与 Inbox 矩阵已落地）
 
@@ -103,7 +105,7 @@ PostgreSql 上下文验证消息含 PostgreSql/Sqlite，并有 SQLite 上下文�
 
 | 项 | 优先级 | 工作量 | 验收命令 |
 |---|---|---|---|
-| 2.1 格子清单（已完成）+ SQLite 全栈矩阵（Inbox 已完成，其余 4 组件待扩） | P1 | 清单 0.5 + 每组件 0.3 人日 | `dotnet test test/PalDDD.Integration.Tests -- --treenode-filter "/*/*/ContractCellManifestTests/*"`；`InboxCrossStackMatrixTests` |
+| 2.1 格子清单（已完成）+ SQLite 全栈矩阵（Inbox + Idempotency + Projections + Saga + EventLog 已完成） | P1 | 清单 0.5 + 每组件 0.3 人日 | `dotnet test test/PalDDD.Integration.Tests -- --treenode-filter "/*/*/*CrossStackMatrixTests/*"` |
 | 2.2 断言强度扩展 | P1 | 0.5 人日 | `dotnet test test/PalDDD.DependencyInjection.Tests -- --treenode-filter "/*/*/AssertionStrengthGateTests/*"` |
 | 2.3 本地真库配方与三态标注（已完成） | P1/P2 | 0.5 人日 | 清单测试打印三态汇总；development.md wslc 节 |
 | 2.4 冒烟端口固定（已完成，ASPNETCORE_URLS 复验通过） | P2 | 0.1 人日 | 同一命令在端口占用下仍通过 |

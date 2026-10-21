@@ -256,14 +256,17 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         await Database.ExecuteSqlRawAsync(sql, args, ct).ConfigureAwait(false);
 
         // 保持跟踪：SagaTimeoutProcessor 的补偿路径经 ISagaStateStore.SaveChangesAsync(state)
-        // 依赖 ChangeTracker；SQL 已换代，物化值即 DB 真值（Unchanged）。
-        return await SagaStates
+        // 依赖 ChangeTracker；同一上下文若已跟踪同一 Saga（如先 GetById），回读会命中
+        // identity resolution 的陈旧实例，故回读后做租约字段修正。
+        var leased = await SagaStates
             .Where(s => s.LeasedBy == owner
                 && s.LeasedUntil == untilValue
                 && (s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision))
             .OrderBy(s => s.SagaId)
             .Take(batchSize)
             .ToListAsync(ct).ConfigureAwait(false);
+        await RefreshStaleLeaseStatesAsync(leased, owner, untilValue, ct).ConfigureAwait(false);
+        return leased;
     }
 
     /// <summary>
@@ -283,13 +286,37 @@ TState>(DbContextOptions options) : DbContext(options), ISagaStateStore<TState>,
         var (sql, args) = BuildMySqlLeaseSql(owner, untilValue, batchSize, dueBefore, now, skipLocked);
         await Database.ExecuteSqlRawAsync(sql, args, ct).ConfigureAwait(false);
 
-        return await SagaStates
+        var leased = await SagaStates
             .Where(s => s.LeasedBy == owner
                 && s.LeasedUntil == untilValue
                 && (s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision))
             .OrderBy(s => s.SagaId)
             .Take(batchSize)
             .ToListAsync(ct).ConfigureAwait(false);
+        await RefreshStaleLeaseStatesAsync(leased, owner, untilValue, ct).ConfigureAwait(false);
+        return leased;
+    }
+
+    /// <summary>
+    /// 租约回读修正（2026-10-21 契约盘点 R5）：同一 DbContext 在租约前已跟踪同一 Saga 时
+    /// （如先 GetById），EF 的 identity resolution 会让回读返回陈旧实例（LeasedBy/LeasedUntil/
+    /// Version 未换代），后续 SaveChanges 因 Version 失配被误判为冲突。仅对与本次租约标识
+    /// 不一致的实体 Reload；Reload 会丢弃该实体的未提交改动——租约是 fencing 操作，
+    /// 调用方不应在租约时持有未提交改动。
+    /// </summary>
+    private async ValueTask RefreshStaleLeaseStatesAsync(
+        IReadOnlyList<TState> states,
+        string owner,
+        DateTimeOffset leasedUntil,
+        CancellationToken ct)
+    {
+        foreach (var state in states)
+        {
+            if (string.Equals(state.LeasedBy, owner, StringComparison.Ordinal)
+                && state.LeasedUntil == leasedUntil)
+                continue;
+            await Entry(state).ReloadAsync(ct).ConfigureAwait(false);
+        }
     }
 
     /// <summary>MySQL SKIP LOCKED 判定：连接已打开时 ServerVersion 来自握手包，零往返。</summary>
@@ -412,8 +439,9 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
             BuildSingleStatementLeaseCommand(owner, now, leasedUntil, batchSize, dueBefore), ct).ConfigureAwait(false);
 
         // 等值守卫回读（不重跑资格子查询）：按精确租约标识 (owner, until) 取回本批。
-        // 保持跟踪：SagaTimeoutProcessor 的补偿路径经 SaveChangesAsync(state) 依赖 ChangeTracker。
-        return await SagaStates
+        // 保持跟踪：SagaTimeoutProcessor 的补偿路径经 SaveChangesAsync(state) 依赖 ChangeTracker；
+        // 已跟踪的陈旧实例回读后由 RefreshStaleLeaseStatesAsync 修正。
+        var leased = await SagaStates
             .Where(s => s.LeasedBy == owner
                 && s.LeasedUntil == leasedUntil
                 && (s.Status == SagaStatus.Active || s.Status == SagaStatus.AwaitingHumanDecision))
@@ -422,6 +450,8 @@ SET t.{ids.LeasedBy} = {{0}}, t.{ids.LeasedUntil} = {{1}}, t.{ids.Version} = t.{
             // 冻结时钟下同 owner 同 until 连续两次租约时，原实现回读 2×batchSize 行。
             .Take(batchSize)
             .ToListAsync(ct).ConfigureAwait(false);
+        await RefreshStaleLeaseStatesAsync(leased, owner, leasedUntil, ct).ConfigureAwait(false);
+        return leased;
     }
 
     /// <summary>构造单语句租约命令（R7，SQLite 形态）</summary>
