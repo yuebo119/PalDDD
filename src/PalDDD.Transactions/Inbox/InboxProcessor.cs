@@ -369,6 +369,8 @@ public sealed class InboxProcessor
                     // R9：部分未命中（租约被抢/令牌不匹配）与整批失败同属"handler 成功但完成标记
                     // 未全部落库"，与逐条路径 1004 同口径。原实现是无 EventId 的 Warning，
                     // 按 EventId 过滤的告警规则命中不到。
+                    // 级别为 Warning：部分未命中没有可携带的异常，整批异常路径用 Error；
+                    // 告警规则应按 EventId=1004 过滤，不要按 Level≥Error 过滤。
                     marksConfirmed = false;
                     _logger.Warning(PalLogEventIds.InboxMessageProcessedMarkFailed,
                         "Inbox: batch completion marked {MarkedCount}/{SucceededCount} message(s) for consumer {ConsumerName}; unmarked rows stay Processing until lease expiry (at-least-once).",
