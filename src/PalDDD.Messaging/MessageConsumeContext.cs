@@ -24,8 +24,20 @@ public sealed class MessageConsumeContext
     /// <summary>按需解码的缓存结果（仅委托形态使用）。</summary>
     private IReadOnlyDictionary<string, string?>? _materializedHeaders;
 
-    /// <summary>构造消费上下文（已解码头）。</summary>
+    /// <summary>构造消费上下文（已解码头，不含 broker 消息 ID）。</summary>
     public MessageConsumeContext(
+        string? correlationId,
+        string? causationId,
+        string? traceParent,
+        string? traceState,
+        IReadOnlyDictionary<string, string?> headers)
+        : this(null, correlationId, causationId, traceParent, traceState, headers)
+    {
+    }
+
+    /// <summary>构造消费上下文（已解码头，含 broker 消息 ID）。</summary>
+    public MessageConsumeContext(
+        string? messageId,
         string? correlationId,
         string? causationId,
         string? traceParent,
@@ -33,6 +45,7 @@ public sealed class MessageConsumeContext
         IReadOnlyDictionary<string, string?> headers)
     {
         ArgumentNullException.ThrowIfNull(headers);
+        MessageId = messageId;
         CorrelationId = correlationId;
         CausationId = causationId;
         TraceParent = traceParent;
@@ -42,6 +55,7 @@ public sealed class MessageConsumeContext
 
     /// <summary>构造消费上下文（头按需解码；已知追踪字段已提前提取）。</summary>
     internal MessageConsumeContext(
+        string? messageId,
         string? correlationId,
         string? causationId,
         string? traceParent,
@@ -49,12 +63,19 @@ public sealed class MessageConsumeContext
         Func<IReadOnlyDictionary<string, string?>> headersFactory)
     {
         ArgumentNullException.ThrowIfNull(headersFactory);
+        MessageId = messageId;
         CorrelationId = correlationId;
         CausationId = causationId;
         TraceParent = traceParent;
         TraceState = traceState;
         _headersSource = headersFactory;
     }
+
+    /// <summary>
+    /// broker 消息 ID（Kafka 消息 Key / RabbitMQ BasicProperties.MessageId）；消息未携带时为 null。
+    /// Inbox 幂等应以本值为键，而不是业务事件 ID。
+    /// </summary>
+    public string? MessageId { get; }
 
     /// <summary>关联 ID（header <c>x-correlation-id</c>；RabbitMQ 路径兜底读 BasicProperties.CorrelationId）；消息未携带时为 null。</summary>
     public string? CorrelationId { get; }
@@ -96,33 +117,37 @@ public sealed class MessageConsumeContext
     /// 与字符串两种表示，其他类型解码为 null（不猜测编码）。<br/>
     /// <paramref name="correlationId"/> 为兜底值（RabbitMQ 写侧把 correlation 写入 BasicProperties
     /// 而非 header），header 中的 <c>x-correlation-id</c> 优先。<br/>
-    /// 无任何头且无兜底 correlation 时返回 null——消费回调收到 null context 表示消息未携带追踪元数据。
+    /// 无任何头、无兜底 correlation 且无 messageId 时返回 null——消费回调收到 null context
+    /// 表示消息未携带追踪元数据与消息 ID。
     /// </summary>
     /// <param name="headers">Broker 原始消息头（值为字节数组或字符串）；可为 null。接受 KVP 序列以同时兼容 Kafka 的 Dictionary 与 RabbitMQ 的 IDictionary（接口间无 IDictionary→IReadOnlyDictionary 转换）。</param>
     /// <param name="correlationId">header 缺失 x-correlation-id 时的兜底关联 ID。</param>
+    /// <param name="messageId">broker 消息 ID（Kafka Key / RabbitMQ MessageId）；仅用于 Inbox 幂等键与诊断，不写入 Headers 视图。</param>
     /// <remarks>v9 E5 澄清：头部含<b>未知类型</b>值（非 byte[]/string）时返回非 null 但对应字段为
     /// null 的部分上下文（非全 null——已知类型字段照常填充）；完全无追踪头才返回 null。</remarks>
     public static MessageConsumeContext? FromHeaders(
         IEnumerable<KeyValuePair<string, object?>>? headers,
-        string? correlationId = null)
+        string? correlationId = null,
+        string? messageId = null)
     {
-        if (headers is null && correlationId is null)
+        if (headers is null && correlationId is null && messageId is null)
             return null;
         if (headers is null)
-            return new MessageConsumeContext(correlationId, null, null, null, EmptyHeaders);
+            return new MessageConsumeContext(messageId, correlationId, null, null, null, EmptyHeaders);
 
         if (headers is ICollection<KeyValuePair<string, object?>> { Count: 0 })
-            return correlationId is null
+            return correlationId is null && messageId is null
                 ? null
-                : new MessageConsumeContext(correlationId, null, null, null, EmptyHeaders);
+                : new MessageConsumeContext(messageId, correlationId, null, null, null, EmptyHeaders);
 
         // 闭包只在非空头路径创建；null/空头快路径不承担 display class 分配。
-        return FromHeadersCore(headers, correlationId);
+        return FromHeadersCore(headers, correlationId, messageId);
     }
 
     private static MessageConsumeContext FromHeadersCore(
         IEnumerable<KeyValuePair<string, object?>> headers,
-        string? correlationId)
+        string? correlationId,
+        string? messageId)
     {
         // 只解码四个已知追踪键；其余头在 Headers 被读取时才物化。
         string? headerCorrelation = null;
@@ -151,6 +176,7 @@ public sealed class MessageConsumeContext
         }
 
         return new MessageConsumeContext(
+            messageId,
             headerCorrelation ?? correlationId,
             causationId,
             traceParent,

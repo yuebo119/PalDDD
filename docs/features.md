@@ -64,7 +64,7 @@
 
 | 特性 | 说明 | 锚点 |
 |---|---|---|
-| 消息代理契约 | `IMessageBroker` 泛型/非泛型发布 + 订阅；接口 remarks 显式声明投递语义（当前两实现均为 at-most-once、不保证顺序、多订阅者语义分叉），消费幂等由 Inbox 保证 | MessageBroker.cs |
+| 消息代理契约 | `IMessageBroker` 泛型/非泛型发布 + 逐条订阅 + 批量订阅（数量/时间界组批，`ConsumedMessage<T>` 携带含 `MessageId` 的消费上下文）；接口 remarks 显式声明投递语义（当前两实现均为 at-most-once、不保证顺序、多订阅者语义分叉），消费幂等由 Inbox 保证 | MessageBroker.cs、MessageBatchPump.cs |
 | 追踪信封闭环 | 发布侧 W3C TraceParent/CorrelationId/CausationId，消费侧 FromHeaders 还原，头键名常量锁定读写一致 | MessagePublishContext.cs、MessageConsumeContext.cs |
 | 空实现 | 单节点模式零发送 | `NullMessageBroker` |
 | Kafka 适配器 | 按消息类型名路由同名 Topic、后台线程阻塞消费循环、订阅句柄幂等释放 + Flush 排空、librdkafka 错误/统计/日志接线 | `KafkaBroker`（KafkaBroker.cs） |
@@ -106,7 +106,7 @@
 
 ### Inbox 收件箱
 
-`(ConsumerName, MessageId)` 粒度幂等消费：TryStart 抢占、僵尸 Processing 超时可夺、handler 失败可重试。锚点：`InboxProcessor`（InboxProcessor.cs）、`InboxMessage`（InboxMessage.cs）。
+`(ConsumerName, MessageId)` 粒度幂等消费：TryStart 抢占、僵尸 Processing 超时可夺、handler 失败可重试。批量路径（`IBatchInboxStore` + `InboxProcessor.TryProcessBatchAsync`）每批一次认领/完成往返，`InboxBatchConsumer<T>` 把 broker 批量订阅、每批 DI scope 与幂等处理器串成开箱即用消费者。锚点：`InboxProcessor`（InboxProcessor.cs）、`InboxBatchConsumer`（InboxBatchConsumer.cs）、`InboxMessage`（InboxMessage.cs）。
 
 ### Saga 编排
 
