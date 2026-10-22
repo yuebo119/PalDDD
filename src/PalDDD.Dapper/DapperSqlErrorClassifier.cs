@@ -26,18 +26,24 @@ internal static class DapperSqlErrorClassifier
     {
         for (var inner = exception; inner is not null; inner = inner.InnerException)
         {
-            // 2026-10-21 AOT 勘正：Npgsql/MySqlConnector 是本包的实现私有依赖
-            // （PrivateAssets=all），强类型判定不改变消费方依赖图；原鸭子类型
-            // （GetProperty）在 NativeAOT 裁剪后返回 null，唯一冲突被误判为非冲突，
-            // Inbox 幂等重复插入因此逃逸为 MySqlException。
-            if (inner is Npgsql.PostgresException pg && pg.SqlState == "23505")
+            // R13 F12（P1）：三驱动是 PrivateAssets=all 的实现私有依赖，消费方只引用自己的
+            // provider。直接写 `inner is MySqlConnector.MySqlException` 会在缺失程序集时于
+            // **异常过滤器内**抛 FileNotFoundException——C# 过滤器吞掉该异常并判定 false，
+            // 原 provider 异常原样逃逸（PG-only 消费方的唯一冲突分类整体失效）。先按类型
+            // 全名短路，只有名字命中才触发类型加载/转换（此时程序集必然已加载）。
+            var typeName = inner.GetType().FullName;
+
+            if (string.Equals(typeName, "Npgsql.PostgresException", StringComparison.Ordinal)
+                && inner is Npgsql.PostgresException pg && pg.SqlState == "23505")
                 return true;
 
-            if (inner is MySqlConnector.MySqlException mySql
+            if (string.Equals(typeName, "MySqlConnector.MySqlException", StringComparison.Ordinal)
+                && inner is MySqlConnector.MySqlException mySql
                 && mySql.Number is 1062 or 1586 or 1022)
                 return true;
 
-            if (inner is Microsoft.Data.Sqlite.SqliteException)
+            if (string.Equals(typeName, "Microsoft.Data.Sqlite.SqliteException", StringComparison.Ordinal)
+                && inner is Microsoft.Data.Sqlite.SqliteException)
             {
                 // R54-P2-1 勘正（2026-09-19 第五十四轮片1，四码探针实证）：SqliteErrorCode
                 // 基码对全部 SQLITE_CONSTRAINT 家族恒 19（NOT NULL=19/1299、UNIQUE=19/2067、

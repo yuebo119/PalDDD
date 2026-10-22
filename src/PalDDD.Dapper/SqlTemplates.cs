@@ -430,10 +430,15 @@ public static class SqlTemplates
     /// <summary>
     /// PG 专用 Saga 插入 — saga_data 显式 CAST 为 jsonb。<br/>
     /// P1 修复（十一轮·实测发现）：Npgsql 将 string 参数按 text OID 发送，PG 的
-    /// text→jsonb 无赋值转换（42804），实测 INSERT 直接报错。
+    /// text→jsonb 无赋值转换（42804），实测 INSERT 直接报错。<br/>
+    /// R13 F11（P1）：UPSERT 的 UPDATE 0 行 → INSERT 撞主键属常规乐观冲突路径。PG 在
+    /// 23505 后把整个事务标记 aborted，即使调用方 catch 也无法继续（下一条语句/commit
+    /// 抛 25P02）。用 ON CONFLICT DO NOTHING 把冲突变成 0 行写入，事务保持健康；
+    /// RETURNING saga_id 让 ExecuteNonQuery 的受影响行数保持 0/1 契约（守卫族要求
+    /// 冲突安全变体带行数信号，见 TechDebtGuard DialectSqlGuardFamilies）。
     /// </summary>
     public const string SagaInsertPG =
-        "INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,next_check_at,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,CAST(@data AS jsonb),@nextCheckAt,@leasedBy,@leasedUntil)";
+        "INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,next_check_at,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,CAST(@data AS jsonb),@nextCheckAt,@leasedBy,@leasedUntil) ON CONFLICT (saga_id) DO NOTHING RETURNING saga_id";
 
     /// <summary>PG 专用 Saga 更新 — saga_data 同 SagaInsertPG 的 jsonb CAST。</summary>
     public const string SagaUpdatePG =

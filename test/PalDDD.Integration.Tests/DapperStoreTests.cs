@@ -1829,6 +1829,15 @@ public sealed class DapperStoreTests
         PalDDD.EventLog.IEventLog log = new DapperEventLog(_conn, dbType: _dbType);
         await Assert.That(log).IsTypeOf<DapperEventLog>();
     }
+
+    [Test]
+    public async Task SagaInsertPG_UsesOnConflictDoNothing_ForOptimisticConflictContract()
+    {
+        // R13 F11：PG 的 23505 会把事务标记 aborted，catch 后无法继续（25P02）。
+        // UPSERT 冲突路径必须用 ON CONFLICT DO NOTHING 把冲突转成 0 行写入。
+        await Assert.That(PalDDD.Dapper.SqlTemplates.SagaInsertPG)
+            .Contains("ON CONFLICT (saga_id) DO NOTHING");
+    }
 }
 
 [JsonSerializable(typeof(DapperStoreTests.TestSagaState))]
