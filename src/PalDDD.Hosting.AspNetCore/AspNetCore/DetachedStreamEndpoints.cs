@@ -35,6 +35,12 @@ public static class DetachedStreamEndpoints
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // R13 F9：幂等语义是「重复调用的配置以首次为准」——首次配置已存在时，第二次的
+        // configure/Validate 必须整体跳过（原实现在 TryAddSingleton 之前无条件执行，
+        // 被丢弃的非法配置仍抛异常，启动失败且不说明原因）。
+        if (services.Any(static descriptor => descriptor.ServiceType == typeof(DetachedStreamOptions)))
+            return services;
+
         // R11 F2：Hosting 注册入口自带日志门面（与 AddPalHealthChecks 同族）。
         services.EnsurePalLoggerFacade();
 
