@@ -47,6 +47,7 @@
 | 消息契约验证空 catalog | catalog 为空即无 requirement，机制正例/正控均成立 | rejected（非契约违背） |
 | MySQL EventLog `DateTimeKind=Local` 偏移（R11 C-20） | 框架写入始终是 UTC 墙钟；`DapperEventLog.ReadDateTimeOffset` 对 DateTime 统一 `SpecifyKind(Utc)`，与存储值一致；Local 仅影响返回 Kind 标注 | rejected（wslc MySQL 真库探针：drift < 1 分钟；`DapperEventLogMySqlTimeTests` 保留为回归锁） |
 | 包数 36 | `docs/release.md:282`：“应等于 36”；`count-audit` packable 推导 36；全量 pack 实测 36 | 口径钉住：`release.yml` `EXPECTED=36`，新增/移除可打包项目必须同步 |
+| MemoryPack 非泛型写用运行时类型（S1S2-10） | `MemoryPackMessageSerializer.cs:69-74`：“本重载以 MemoryPackSerializer.Serialize(runtimeType, message) … 泛型路径编译时类型安全”；类备注明示非泛型路径依赖运行时 Type 查找 Formatter | rejected：按 descriptor.ClrType 序列化需要运行时反射/动态派发，违反 AOT 红线（P0 #3）；泛型路径已有 ClrType 守卫（R11 F5）。列为文档化取舍，不重开 |
 
 ## 三、R12 内存与生命周期优化（2026-10-22）
 
@@ -99,8 +100,10 @@ R12 验证：全量 16 项目 **1907 用例，1827 通过 / 80 跳过 / 0 失败
 | OPT-320 | CONTRACT | `DapperInboxStore.cs:408-435`；`InboxStore.cs:60-70` | 批量标记按 ConsumerName 静默过滤异消费者元素：被过滤消息停留 Processing 至租约到期后重处理，返回值只少不报 | fixed（`93e7f9e`） | E1 测试：修前不抛（静默跳过），修后 ArgumentException 点名消息与消费者 | R13 F19（P2，候选 S4S5-09） | `DapperStoreTests.Inbox_BatchMark_MixedConsumerNames_ThrowsInsteadOfSilentSkip` | R13 | 消息模型改为允许跨消费者批（需新键语义） |
 | OPT-321 | CONTRACT | `NullPalLogger.cs:17-25` | 未覆写接口的 EventId 结构化重载：默认实现做命名槽位→string.Format 格式化，参数少于槽位时抛 FormatException（空日志器成故障源），参数匹配时白付正则替换与分配 | fixed（`ac2020f`） | E1 测试：修前 FormatException / ToString 被调用，修后通过 | R13 F20（P2，候选 S1S2-01） | `NullPalLoggerStructuredTests.StructuredOverloads_PlaceholderArityMismatch_DoNotThrow`、`..._DoNotFormatArguments` | R13 | 日志门面移除 EventId 重载或改为非 DIM |
 | OPT-322 | GATE | `MessageEvolutionPipeline.cs:126-139` | ValidatePath 缺 Upgrade 的 source/target ClrType 哨兵：同名同版本异 ClrType 的 descriptor 通过启动验证，首次消费才炸 | fixed（`5c9140b`） | E1 测试：修前两测试均不抛，修后 MessageEvolutionException | R13 F21（P2，候选 S1S2-13） | `ValidatePath_SourceDescriptorClrTypeMismatch_ThrowsStructuredException`、`..._TargetDescriptorClrTypeMismatch...` | R13 | descriptor 等价性改为包含 ClrType |
+| OPT-323 | CONTRACT | `ValueObject.cs:64` | 未声明 IFormattable：ToString(format, provider) 已存在但复合格式（插值/string.Format）回退无参 ToString，格式串被静默忽略 | fixed（`597e7d9`） | E1 测试：修前 `{vo:X4}` 得 "255"，修后 "00FF" | R13 F22（P2，候选 S1S2-02） | `ValueObjectTests.ValueObject_ImplementsIFormattable_FormatStringIsHonored` | R13 | 记录类型改为 class 或新增格式化契约 |
+| OPT-324 | CONTRACT | `JsonLinesEventStream.cs:153-190` | 逐行 Deserialize 的 JsonException 行号恒为 1（相对单行），多行 .jsonl 无法定位坏行 | fixed（`e8ba071`） | E1 测试：修前消息无 "line 2"，修后带文档级行号且保留原 Path/位置 | R13 F23（P2，候选 S1S2-08） | `JsonLinesEventTests.JsonLines_InvalidSecondLine_ErrorNamesDocumentLine` | R13 | JsonSerializer 提供文档级定位原语 |
 
-R13 验证：全量 16 项目 **1930 用例，1850 通过 / 80 跳过 / 0 失败**（+23 测试）；
+R13 验证：全量 16 项目 **1932 用例，1852 通过 / 80 跳过 / 0 失败**（+25 测试）；
 `gate-audit` 42/42；`count-audit` 16 项/80 处；`doc-consistency`/`secret-scan`/`verify-conventions`/`encoding-gate` 全绿；
 `AotSample` 与 `DapperAotProbe`（PG/MySQL，JIT + `PublishAot`）通过。未推送、未打 tag。
 
