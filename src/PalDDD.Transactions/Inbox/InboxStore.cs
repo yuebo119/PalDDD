@@ -60,6 +60,9 @@ public interface IBatchInboxStore
     /// <summary>
     /// 批量标记处理成功。返回实际命中的行数；按每条的 ProcessingStartedAt 令牌分组，
     /// 被抢占的旧持有者写入零命中。
+    /// <para>R13 F19：<paramref name="messages"/> 必须全部属于 <paramref name="consumerName"/>
+    /// （同批同消费者）；实现应以 <see cref="ArgumentException"/> 拒绝异消费者元素——
+    /// 静默过滤会让被过滤消息滞留 Processing 至租约到期后被重复执行，且返回值只少不报。</para>
     /// </summary>
     ValueTask<int> MarkProcessedManyAsync(
         string consumerName,

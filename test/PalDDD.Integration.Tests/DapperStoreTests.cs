@@ -754,6 +754,32 @@ public sealed class DapperStoreTests
     }
 
     [Test]
+    public async Task Inbox_BatchMark_MixedConsumerNames_ThrowsInsteadOfSilentSkip(CancellationToken cancellationToken)
+    {
+        // R13 F19：批量标记按 ConsumerName 静默过滤异消费者元素——被过滤的消息停留
+        // Processing 至租约到期后被重处理（副作用重复），返回值只少不报。
+        // 契约要求同批同消费者，异消费者元素应在入口 fail-fast。
+        var store = new DapperInboxStore(_conn, _dbType);
+        var now = DateTimeOffset.UtcNow;
+        var claimed = await store.TryStartProcessingManyAsync(
+            "test-consumer", ["mix-1", "mix-2"], now, TimeSpan.FromMinutes(5), cancellationToken);
+        var mixed = new List<InboxMessage>
+        {
+            claimed[0],
+            new()
+            {
+                MessageId = claimed[1].MessageId,
+                ConsumerName = "other-consumer",
+                ProcessingStartedAt = claimed[1].ProcessingStartedAt,
+            },
+        };
+
+        await Assert.That(async () => await store.MarkProcessedManyAsync(
+                "test-consumer", mixed, now.AddSeconds(1), cancellationToken))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
     public async Task Inbox_Batch_ReclaimsFailedAndExpiredLease(CancellationToken cancellationToken)
     {
         var store = new DapperInboxStore(_conn, _dbType);
