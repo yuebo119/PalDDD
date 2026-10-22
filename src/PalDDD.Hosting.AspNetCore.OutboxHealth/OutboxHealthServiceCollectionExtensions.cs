@@ -28,12 +28,18 @@ public static class OutboxHealthServiceCollectionExtensions
             services.AddSingleton<PalOutboxHealthDeduplicationMarker>();
             services.AddOptions<HealthCheckServiceOptions>().PostConfigure(options =>
             {
-                var seen = new HashSet<string>(StringComparer.Ordinal);
+                // R13 F7：与 Hosting 的 EnsureUniqueHealthCheckNames 同步改为保留最后一次
+                // （原实现保留首个，与注释相反；两种注册顺序各错一半）。
+                var snapshot = options.Registrations.ToList();
+                var lastIndexByName = new Dictionary<string, int>(StringComparer.Ordinal);
+                for (var i = 0; i < snapshot.Count; i++)
+                    lastIndexByName[snapshot[i].Name] = i;
+
                 List<HealthCheckRegistration>? duplicates = null;
-                foreach (var registration in options.Registrations)
+                for (var i = 0; i < snapshot.Count; i++)
                 {
-                    if (!seen.Add(registration.Name))
-                        (duplicates ??= []).Add(registration);
+                    if (lastIndexByName[snapshot[i].Name] != i)
+                        (duplicates ??= []).Add(snapshot[i]);
                 }
 
                 if (duplicates is null)

@@ -122,6 +122,25 @@ public sealed class HealthCheckExtensionsTests
     }
 
     [Test]
+    public async Task AddPalHealthChecks_DuplicateName_KeepsLastRegistration()
+    {
+        // R13 F7：注释承诺「保留最后一次」，实现曾保留首个——重名时幸存者的 Tags
+        // 决定 tag 过滤端点（Predicate = r.Tags.Contains("pal"/"persistence")）是否包含该项。
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddHealthChecks().AddCheck("outbox", () => HealthCheckResult.Healthy(), tags: ["user"]);
+        services.AddPalHealthChecks();
+        using var sp = services.BuildServiceProvider();
+
+        var registrations = sp.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<HealthCheckServiceOptions>>()
+            .CurrentValue.Registrations;
+        var survivor = registrations.Single(r => r.Name == "outbox");
+
+        await Assert.That(survivor.Tags.Contains("persistence")).IsTrue();
+        await Assert.That(survivor.Tags.Contains("user")).IsFalse();
+    }
+
+    [Test]
     public async Task MessageBrokerHealthCheck_WithBroker_ReturnsHealthyRegistrationCheck(CancellationToken cancellationToken)
     {
         var services = new ServiceCollection();
