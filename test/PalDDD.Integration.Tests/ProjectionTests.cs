@@ -418,6 +418,26 @@ public sealed class ProjectionTests
         await Assert.That(handler.Count).IsEqualTo(0);
     }
 
+    [Test]
+    public async Task ReplayAsync_CheckpointFlushIntervalAtOrAboveLease_ThrowsAtReplay(CancellationToken cancellationToken)
+    {
+        // R12 C-31 回归锁：批模式时间界 >= 租约时长会让组首租约在提交前过期，
+        // 另一 worker 可重租同组并发投影；必须在回放入口拒绝。
+        var store = new InMemoryProjectionCheckpointStore();
+        var handler = new CountingProjectionHandler();
+        var processor = new ProjectionProcessor<OrderPlaced>(
+            handler, store, processingTimeout: TimeSpan.FromSeconds(10));
+        var source = new InMemoryReplaySource<OrderPlaced>(CreateReplayEvents(3));
+        var rebuilder = new ProjectionRebuilder<OrderPlaced>(
+            handler.ProjectionName, "orders", source, store, processor)
+        {
+            CheckpointFlushInterval = TimeSpan.FromSeconds(10),
+        };
+
+        await Assert.That(async () => await rebuilder.ReplayAsync(cancellationToken))
+            .Throws<InvalidOperationException>();
+    }
+
     private static List<ReplayEvent<OrderPlaced>> CreateReplayEvents(int count) =>
         [.. Enumerable.Range(0, count).Select(i =>
             new ReplayEvent<OrderPlaced>("orders", i.ToString(System.Globalization.CultureInfo.InvariantCulture),

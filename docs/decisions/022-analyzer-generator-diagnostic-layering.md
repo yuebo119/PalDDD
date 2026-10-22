@@ -13,8 +13,10 @@
 | 分析器 | 生成器 | 检查的值 |
 |--------|--------|---------|
 | PDDD009 | PALMSG004 | 消息名的稳定格式 |
-| PDDD010 | PALMSG005 | 消息名的版本后缀匹配 |
+| PDDD010 | PALMSG005 | 领域事件强制版本后缀；生成消息仅在带后缀时要求与 SchemaVersion 一致（2026-10-22 R12 C-15 修订） |
 | PDDD011 | PALMSG002 | `SchemaVersion >= 1` |
+
+> 2026-10-22 修订（R12 C-15）：PALMSG005 从「必须带 `.v{SchemaVersion}` 后缀」放宽为「带后缀时必须匹配」，并允许同一 wire name 对应多个 SchemaVersion（唯一性键改为 `(Name, SchemaVersion)`）。原因是演化管线要求相邻版本共享同一 wire name，旧规则使 `[GenerateMessage]` 无法表达该形态。PDDD010 对领域事件仍强制 `.vN`，分工不变。
 
 初判为"演化中意外形成的重复报告"，但实测证伪了该判断（见下）。
 

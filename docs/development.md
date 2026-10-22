@@ -210,7 +210,7 @@ Dapper.AOT 拦截器把参数值**直传驱动**，与经典路径的容忍行�
 4. 在 `AddPalJsonSerialization` 中调用 `catalog.Add(...)`。
 5. 添加序列化 round-trip 测试。
 
-`Name` 只允许小写字母、数字、`.` 和 `-`。不要使用 CLR 类型名、空白、下划线、大写或路径分隔符作为 wire name；source generator 会用 `PALMSG004` 快速失败。`Name` 还必须以 `.v{SchemaVersion}` 结尾，例如 `orders.order-submitted.v2` 必须声明 `SchemaVersion = 2`，否则报告 `PALMSG005`。
+`Name` 只允许小写字母、数字、`.` 和 `-`。不要使用 CLR 类型名、空白、下划线、大写或路径分隔符作为 wire name；source generator 会用 `PALMSG004` 快速失败。版本后缀可选：省略表示跨版本稳定的 wire name（`MessageEvolutionBuilder` 要求相邻版本共享同一 wire name）；若写成 `.v{n}`，例如 `orders.order-submitted.v2`，则必须声明 `SchemaVersion = 2`，否则报告 `PALMSG005`。领域事件的 `IDomainEvent.EventName` 仍由 `PDDD010` 强制 `.v{n}`。
 
 **源生成器诊断 ID 汇总**（PDDD001-015 属 Roslyn 分析器，此处登记三大 source generator 的诊断系列）：
 
