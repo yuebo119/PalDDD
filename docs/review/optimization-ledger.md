@@ -60,8 +60,10 @@
 | OPT-207 | HTTP | `ExceptionMiddleware.cs:93-110` | 宿主请求体超限抛 `BadHttpRequestException`(413) 被通用 catch 改写成 500，客户端错误计为服务端错误 | fixed | 中间件直调：next 抛 413，响应保留 413 + `Content Too Large` | R12 C-12 | `ExceptionMiddlewareTests.InvokeAsync_BadHttpRequestException413_PreservesStatusCode` | R12 | 端点层自行把 413 映射为业务错误体 |
 | OPT-208 | CORRECTNESS | `DetachedStreamEndpoints.cs:162-190`；`StreamRunRegistry.cs:214-235,790-830` | 启动端点先 `Register`（立即启动泵）再附着；快速同步生产者可在附着前填满环形缓冲，首个响应以 gap 开局并丢失前缀 | fixed | 新增 `RegisterDeferred` + `StartFromServices`；启动编排改为 登记→附着→启动→写头→推流；注册表测试：附着起点固定 0，10 项/缓冲 2 时 `OldestAvailable=8` | R12 C-11 | `StreamRunRegistryTests.RegisterDeferred_AttachBeforeStart_PreservesPrefix`；`DetachedStreamTests` 12/12 回归 | R12 | 改为生产侧 backpressure 或预启动缓冲，不再需要延迟启动 |
 | OPT-209 | CONTRACT | `Dispatcher.cs:116-126` | 低层 `Register(needsScope:false)` 在未提供根容器的手构 Dispatcher 上通过校验，首个请求 `_rootProvider!` 抛 NRE | fixed | 注册期直调：缺少根容器抛 `InvalidOperationException`，消息含两种修复路径 | R12 C-16 | `CqrsTests.Register_LowLevelNoScope_WithoutRootProvider_ThrowsAtRegistration` | R12 | 派发期改为显式返回配置错误而非异常 |
+| OPT-210 | CODEGEN | `MessageRegistryGenerator.cs:203,265-283` | 生成器强制 `.vN` 后缀且按 Name-only 去重，`[GenerateMessage]` 无法表达演化管线要求的「相邻版本同 wire name」 | fixed | 唯一性键改 `(Name, SchemaVersion)`；后缀改为“出现即匹配”（PALMSG005），领域事件仍由 PDDD010 强制后缀；文档/ADR-022 同步 | R12 C-15 | `MessageRegistryGeneratorTests.GenerateMessage_StableWireNameAcrossVersions_IsNotDuplicate`、`...WithMismatchedNameVersion...` | R12 | 演化管线改名为“每版独立 wire name”并自带映射 |
+| OPT-211 | CONTRACT | `ProjectionRebuilder.cs:126-137` | 批模式 `CheckpointFlushInterval` 无上界；间隔 ≥ processingTimeout 时组首租约在提交前过期，另一 worker 可重租同组并发投影 | fixed | 回放入口校验 `interval < ProcessingTimeout`（processor 新增 internal 属性）；等值即拒 | R12 C-31 | `ProjectionTests.ReplayAsync_CheckpointFlushIntervalAtOrAboveLease_ThrowsAtReplay` | R12 | 检查点存储增加显式续租原语，允许长组 |
 
-R12 验证：全量 16 项目 **1891 用例，1811 通过 / 80 跳过 / 0 失败**；`gate-audit` 42/42；`AotSample` 重新发布运行通过。
+R12 验证：全量 16 项目 **1893 用例，1813 通过 / 80 跳过 / 0 失败**；`gate-audit` 42/42；`AotSample` 重新发布运行通过。
 
 ## 四、R11 验证汇总
 

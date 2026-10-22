@@ -179,6 +179,16 @@ public sealed class ProjectionRebuilder<TMessage>
         var completed = false;
         try
         {
+            // R12 C-31：批模式的组内时间界必须落在租约内。间隔 >= processingTimeout 时
+            // 组首租约会在提交前过期，另一 worker 可重租同组并并发投影（重复副作用）。
+            if (_processor.CheckpointBatchSize > 1
+                && _checkpointFlushInterval >= _processor.ProcessingTimeout)
+            {
+                throw new InvalidOperationException(
+                    $"CheckpointFlushInterval ({_checkpointFlushInterval}) must be less than the projection "
+                    + $"processing timeout ({_processor.ProcessingTimeout}); otherwise the group lease can expire "
+                    + "before the batch checkpoint is committed.");
+            }
             // R6/P0-3（ADR-028，2026-10-14 性能实施轮）：增量回放高水位续读——store 与
             // 回放源双双支持续读能力时，取检查点续读位置（最小未完成洞位 / max+1 / null），
             // 从该位置下推读取：已完成前缀零重读、零逐事件 checkpoint 探查（原形态每次

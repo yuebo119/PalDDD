@@ -97,7 +97,7 @@ public sealed partial class OrderStatus : SmartEnum<OrderStatus, int>
 
 ### 消息
 
-`[GenerateMessage]` 用于标记可生成消息目录辅助代码的类型。消息必须声明稳定 wire name；`SchemaVersion` 必须大于等于 1，且同一编译单元中的 wire name 不能重复。稳定 wire name 只允许小写字母、数字、`.` 和 `-`，并且必须以 `.v{SchemaVersion}` 结尾。违反这些规则时，源码生成器会报告 `PALMSG001`-`PALMSG005` 编译期错误；消息类型若声明在泛型类型内（含自身带类型参数）报告 `PALMSG006`；可访问性低于 internal 报告 `PALMSG007`。
+`[GenerateMessage]` 用于标记可生成消息目录辅助代码的类型。消息必须声明稳定 wire name；`SchemaVersion` 必须大于等于 1，且同一编译单元中的 `(wire name, SchemaVersion)` 不能重复。稳定 wire name 只允许小写字母、数字、`.` 和 `-`；版本后缀可选——省略时表示跨版本稳定的 wire name（演化管线要求相邻版本同名），若写成 `.v{n}` 则必须与 `SchemaVersion` 一致（`PALMSG005`）；领域事件的 `IDomainEvent.EventName` 仍由 `PDDD010` 强制 `.v{n}` 后缀。违反这些规则时，源码生成器会报告 `PALMSG001`-`PALMSG005` 编译期错误；消息类型若声明在泛型类型内（含自身带类型参数）报告 `PALMSG006`；可访问性低于 internal 报告 `PALMSG007`。
 
 领域事件类型必须是 `sealed`，否则 analyzer 会报告 `PDDD012`；领域事件也必须声明 `[GenerateMessage]`，否则 analyzer 会报告 `PDDD005`。这些规则保证 Outbox、broker、EventLog replay 和 schema evolution 不依赖可继承事件层级、CLR 类型名或运行时反射推断消息契约。
 领域事件的 message name 必须是稳定小写 wire name，否则 analyzer 会报告 `PDDD009`。

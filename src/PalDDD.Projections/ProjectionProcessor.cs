@@ -49,6 +49,9 @@ public sealed class ProjectionProcessor<TMessage>
         }
     }
 
+    /// <summary>投影租约时长（R12 C-31：供 Rebuilder 校验冲刷间隔上界）。</summary>
+    internal TimeSpan ProcessingTimeout => _processingTimeout;
+
     public ProjectionProcessor(
         IProjectionHandler<TMessage> handler,
         IProjectionCheckpointStore checkpointStore,

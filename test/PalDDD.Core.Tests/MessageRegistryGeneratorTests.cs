@@ -94,6 +94,26 @@ public sealed class MessageRegistryGeneratorTests
     }
 
     [Test]
+    public async Task GenerateMessage_StableWireNameAcrossVersions_IsNotDuplicate()
+    {
+        // R12 C-15 回归锁：演化管线的相邻版本共享同一 wire name；生成器唯一性键必须是
+        // (Name, SchemaVersion)，不能把 v1/v2 同名误判为 PALMSG003，也不能强制 .vN 后缀。
+        var diagnostics = RunGenerator(
+            """
+            using PalDDD.Core;
+
+            [GenerateMessage(Name = "orders.order-submitted", SchemaVersion = 1)]
+            public sealed record OrderSubmittedV1;
+
+            [GenerateMessage(Name = "orders.order-submitted", SchemaVersion = 2)]
+            public sealed record OrderSubmittedV2;
+            """);
+
+        await Assert.That(diagnostics.Any(d => d.Id == "PALMSG003")).IsFalse();
+        await Assert.That(diagnostics.Any(d => d.Id == "PALMSG005")).IsFalse();
+    }
+
+    [Test]
     public async Task Diagnostics_PointToUserSourceLocation_NotLocationNone()
     {
         // 诊断应定位到用户代码（GenerateMessage 标记的类型），而非 Location.None。
