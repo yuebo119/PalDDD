@@ -363,7 +363,18 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
                   .Append(" processing_started_at=IF(").Append(RetryableLeaseCondition).Append(",@now,processing_started_at),")
                   .Append(" last_error=IF(").Append(RetryableLeaseCondition).Append(",NULL,last_error),")
                   .Append(" status=IF(").Append(RetryableLeaseCondition).Append(",1,status)");
-            await connection.ExecuteAsync(upsert.ToString(), parameters, Tx).ConfigureAwait(false);
+            try
+            {
+                await connection.ExecuteAsync(upsert.ToString(), parameters, Tx).ConfigureAwait(false);
+            }
+            catch (DbException ex) when (ex.Message.Contains("claim_token", StringComparison.OrdinalIgnoreCase))
+            {
+                // 升级未执行 ALTER 的库会报「Unknown column 'claim_token'」——provider 文案已点名，
+                // 这里补上迁移入口，避免升级者在 SQL 层反复试错（R13 F24 可行动异常同款）。
+                throw new InvalidOperationException(
+                    "MySQL 批量认领需要 inbox_messages.claim_token 列（2026-10-22 新增）。"
+                    + "请先执行 docs/migration/inbox-claim-token.md 中的 ALTER TABLE，再重试。", ex);
+            }
 
             // ② 按令牌回读本块命中的行：令牌唯一，归属不依赖时间戳。
             var rereadParams = new DynamicParameters();
