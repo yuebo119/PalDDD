@@ -408,6 +408,20 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
         if (messages.Count == 0)
             return 0;
 
+        // R13 F19：同批必须属于同一消费者（接口契约）——原实现按 consumerName 静默过滤，
+        // 异消费者元素停留 Processing 至租约到期后被当僵尸重处理（副作用重复），
+        // 返回值只少不报、调用方无法定位被跳过者。契约违规应在入口 fail-fast。
+        foreach (var message in messages)
+        {
+            if (!string.Equals(message.ConsumerName, consumerName, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    $"MarkProcessedManyAsync requires a single-consumer batch: message '{message.MessageId}' "
+                    + $"belongs to consumer '{message.ConsumerName}', not '{consumerName}'.",
+                    nameof(messages));
+            }
+        }
+
         var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
         var affected = 0;
         foreach (var group in messages.GroupBy(static m => m.ProcessingStartedAt))
@@ -416,7 +430,6 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
                 ?? throw new InvalidOperationException(
                     "MarkProcessedManyAsync requires messages with ProcessingStartedAt (claimed lease token).");
             var ids = group
-                .Where(m => string.Equals(m.ConsumerName, consumerName, StringComparison.Ordinal))
                 .Select(static m => m.MessageId)
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
