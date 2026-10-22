@@ -35,13 +35,18 @@
   ⑦**MySQL 批量认领恢复块级吞吐**：改为「一次 SELECT + 多行 INSERT + 回读本次插入行 +
   既有可重入行逐条 CAS」——认领身份锚在唯一约束与 CAS affected 上（同刻不再重复认领），
   新增消息由每消息 2 次往返回到 3 次/批。
+  ⑧**非续读 checkpoint store + 批模式回放改 fail-fast**：批模式只在组首/组末写锚点，
+  没有续读位置时全量重放会逐轮重复执行已完成组的内层事件（R11 的逐位置裁剪保留，
+  用于前缀跳过与洞重放）；入口显式拒绝该组合，要求实现 `IResumableProjectionCheckpointStore`
+  或显式回落 `CheckpointBatchSize = 1`。
   公共 API 快照 +15 行（两处接口/类型新增），无删除、无签名破坏。
   锁定测试：`InMemoryInboxStore_BatchMark_MixedConsumerNames_ThrowsInsteadOfSilentSkip`、
   `BatchMark_DelayedWriteStore_FallsBackToPerMessagePersist`、
   `MessageBrokerHealthCheck_BrokerReportsUnhealthyConsuming_ReturnsUnhealthy`、
-  `ReplayDetailedAsync_GroupHeldByAnotherWorker_ReportsStoppedForLease`；
+  `ReplayDetailedAsync_GroupHeldByAnotherWorker_ReportsStoppedForLease`、
+  `ReplayDetailedAsync_NonResumableStore_WithBatchSize_ThrowsActionable`；
   MySQL 批量形态由 E10 真库探针复验（`FIRST=1 SECOND=0 LATER=0`）。
-  验证：全量 1942 用例 / 1860 通过 / 82 跳过 / 0 失败；AOT 双样本发布运行通过。
+  验证：全量 1943 用例 / 1861 通过 / 82 跳过 / 0 失败；AOT 双样本发布运行通过。
 
 - **2026-10-22 R14 全代码审计：四条 P1 修复（Dapper 冲突分类 ×2、MySQL 批量认领、ChildSaga HITL）**：
   ①**Dapper 唯一冲突分类器在单驱动消费方整体失效**——三驱动是 `PrivateAssets=all` 的实现私有依赖，
