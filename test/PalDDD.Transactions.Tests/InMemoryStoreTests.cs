@@ -75,6 +75,30 @@ public sealed class InMemoryStoreTests
     }
 
     [Test]
+    public async Task InMemoryInboxStore_BatchMark_MixedConsumerNames_ThrowsInsteadOfSilentSkip(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryInboxStore();
+        var now = DateTimeOffset.UtcNow;
+        var claimed = await store.TryStartProcessingManyAsync(
+            "consumer", ["mix-1", "mix-2"], now, TimeSpan.FromMinutes(5), cancellationToken);
+        var mixed = new List<InboxMessage>
+        {
+            claimed[0],
+            new()
+            {
+                MessageId = claimed[1].MessageId,
+                ConsumerName = "other-consumer",
+                ProcessingStartedAt = claimed[1].ProcessingStartedAt,
+            },
+        };
+
+        // R14：对齐 Dapper R13 F19 —— 异消费者元素入口 fail-fast，不静默跳过。
+        await Assert.That(async () => await store.MarkProcessedManyAsync(
+                "consumer", mixed, now.AddSeconds(1), cancellationToken))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
     public async Task InMemoryInboxStore_BatchReclaimsFailedAndExpiredLease(CancellationToken cancellationToken)
     {
         var store = new InMemoryInboxStore();

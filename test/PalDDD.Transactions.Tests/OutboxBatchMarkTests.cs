@@ -45,6 +45,19 @@ public sealed class OutboxBatchMarkProcessorTests
     }
 
     [Test]
+    public async Task BatchMark_DelayedWriteStore_FallsBackToPerMessagePersist()
+    {
+        // R14：store 实现 IBatchMarkOutboxStore 但 RequiresSaveAfterMark=true（延迟写）——
+        // 批量路径全程不调 PersistSingle，终态永不落库，故必须回落逐条标记 + 逐条持久化。
+        var (store, _) = await RunBatchAsync(
+            threshold: 1, messageCount: 5, deliveryMode: OutboxDeliveryMode.Auto,
+            requiresSaveAfterMark: true);
+
+        await Assert.That(store.BatchCallSizes.Count).IsEqualTo(0);
+        await Assert.That(store.PerMessageProcessed.Count).IsEqualTo(5);
+    }
+
+    [Test]
     public async Task BatchMark_TimeBoundFlush_BeforeBatchEnd()
     {
         var fakeTime = new FakeTimeProvider(DateTimeOffset.Parse("2026-10-19T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
@@ -194,13 +207,14 @@ public sealed class OutboxBatchMarkProcessorTests
         int threshold, int messageCount, int failAtIndex = -1, int window = 1,
         OutboxDeliveryMode deliveryMode = OutboxDeliveryMode.Serial,
         TimeProvider? timeProvider = null,
-        Action? onPublish = null)
+        Action? onPublish = null,
+        bool requiresSaveAfterMark = false)
     {
         var builder = new MessageCatalogBuilder();
         builder.Add<BatchMarkMessage>(BatchMarkJsonContext.Default.BatchMarkMessage, "test.batchmark.v1");
         var catalog = builder.Build();
         var serializer = new NonNullSerializer();
-        var store = new RecordingBatchStore(messageCount);
+        var store = new RecordingBatchStore(messageCount, requiresSaveAfterMark: requiresSaveAfterMark);
         var broker = new NullBroker(failAtIndex, serializer, catalog, onPublish);
         var processor = new OutboxBatchProcessor(
             store, broker, serializer, catalog,
@@ -309,13 +323,19 @@ public sealed class OutboxBatchMarkProcessorTests
     }
 
     /// <summary>租约固定批 + 逐条/批量标记调用形态记录（IPalOutboxStore + IBatchMarkOutboxStore）。</summary>
-    private sealed class RecordingBatchStore(int messageCount, bool partialBatchReject = false) : IPalOutboxStore, IBatchMarkOutboxStore
+    private sealed class RecordingBatchStore(
+        int messageCount, bool partialBatchReject = false, bool requiresSaveAfterMark = false)
+        : IPalOutboxStore, IBatchMarkOutboxStore
     {
         public readonly List<PalUlid> LeaseOrder = [];
         public readonly List<PalUlid> ProcessedOrder = [];
         public readonly List<PalUlid> ReleaseForRetryOrder = [];
         public readonly List<PalUlid> PerMessageProcessed = [];
         public readonly List<int> BatchCallSizes = [];
+
+        // R14：批量标记能力的前提是「立即写库」——本替身默认即时记录（等价内置四栈语义）；
+        // requiresSaveAfterMark=true 模拟自定义延迟写 store（不得进批量路径）。
+        public bool RequiresSaveAfterMark => requiresSaveAfterMark;
 
         public ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(int batchSize, int maxRetryCount, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<OutboxMessage>>([]);

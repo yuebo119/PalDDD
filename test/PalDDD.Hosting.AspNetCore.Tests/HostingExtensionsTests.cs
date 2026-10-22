@@ -178,6 +178,47 @@ public sealed class HealthCheckExtensionsTests
     }
 
     [Test]
+    public async Task MessageBrokerHealthCheck_BrokerReportsUnhealthyConsuming_ReturnsUnhealthy(CancellationToken cancellationToken)
+    {
+        // R14：实现 IMessageBrokerHealth 的 broker（Kafka）自述消费链路状态——
+        // 消费线程不可恢复终止时健康端点必须转 Unhealthy，而不是「已注册」恒绿。
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IMessageBroker>(new UnhealthyBroker());
+        services.AddPalHealthChecks();
+
+        using var sp = services.BuildServiceProvider();
+        var report = await sp.GetRequiredService<HealthCheckService>().CheckHealthAsync(
+            r => r.Name == "message_broker",
+            cancellationToken);
+
+        await Assert.That(report.Status).IsEqualTo(HealthStatus.Unhealthy);
+        await Assert.That(report.Entries.First().Value.Description).Contains("消费链路已停止");
+    }
+
+    private sealed class UnhealthyBroker : IMessageBroker, IMessageBrokerHealth
+    {
+        public bool IsConsumingHealthy => false;
+
+        public string? LastFaultReason => "consume thread crashed";
+
+        public ValueTask PublishAsync<TMessage>(TMessage message, CancellationToken ct = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask PublishAsync(
+            object message,
+            PalDDD.Serialization.MessageDescriptor descriptor,
+            ByteAether.Ulid.Ulid messageId,
+            CancellationToken ct = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask<IAsyncDisposable> SubscribeAsync<TMessage>(
+            Func<TMessage, CancellationToken, ValueTask> handler,
+            CancellationToken ct = default)
+            => throw new NotSupportedException();
+    }
+
+    [Test]
     public async Task MessageBrokerHealthCheck_WithoutBroker_ReturnsDegradedRegistrationCheck(CancellationToken cancellationToken)
     {
         var services = new ServiceCollection();

@@ -14,6 +14,35 @@
 
 ### Added
 
+- **2026-10-22 R14 审计优化续：可观测与契约收口（7 项）**：
+  ①**新增可选能力接口 `IMessageBrokerHealth`（公共 API）**：`IsConsumingHealthy` +
+  `LastFaultReason`。Kafka 消费线程不可恢复终止时置故障态，`AddPalHealthChecks` 的
+  `message_broker` 检查转 Unhealthy（原实现只断言「已注册」，消费停摆时 `/health` 恒绿）；
+  未实现该接口的 broker（含默认 `NullMessageBroker`）保持「注册即健康」语义（避免默认应用
+  readiness 变红）。
+  ②**新增 `ProjectionRebuilder.ReplayDetailedAsync` 与 `ProjectionReplayResult`（公共 API）**：
+  原 `ReplayAsync` 只返回处理条数，调用方无法区分「已追平」与「组首/组末被其他 worker 持有
+  而提前停止」；新方法额外返回 `StoppedForLease`，旧方法行为逐字不变。
+  ③**Outbox 批量标记能力联判 `RequiresSaveAfterMark`**：批量路径全程不调
+  `PersistSingle/SaveChanges`，自定义延迟写 store 即使实现 `IBatchMarkOutboxStore` 也会终态
+  不落库；现要求「实现批量接口且立即写」才升阈值，否则回落逐条标记 + 逐条持久化。
+  ④**`InMemoryInboxStore.MarkProcessedManyAsync` 异消费者批改抛 `ArgumentException`**：
+  对齐 Dapper 栈 R13 F19 契约（原静默 `continue` 只返回偏小 affected，测试栈与生产栈分叉）。
+  ⑤**断线续跑附着侧补 `event: error` 收尾**：`StreamToAsync` 的序列化/写帧异常不再逃逸成
+  「连接被截断且无终止原因」，与 `StreamQueryCoreAsync` 的既有收尾契约一致。
+  ⑥**EventLog EF 编译查询缓存改 `ConditionalWeakTable`**：原静态 `ConcurrentDictionary`
+  以 `IModel` 强引用为键，多租户/多 `DbContextOptions` 场景下历史模型永不回收。
+  ⑦**MySQL 批量认领恢复块级吞吐**：改为「一次 SELECT + 多行 INSERT + 回读本次插入行 +
+  既有可重入行逐条 CAS」——认领身份锚在唯一约束与 CAS affected 上（同刻不再重复认领），
+  新增消息由每消息 2 次往返回到 3 次/批。
+  公共 API 快照 +15 行（两处接口/类型新增），无删除、无签名破坏。
+  锁定测试：`InMemoryInboxStore_BatchMark_MixedConsumerNames_ThrowsInsteadOfSilentSkip`、
+  `BatchMark_DelayedWriteStore_FallsBackToPerMessagePersist`、
+  `MessageBrokerHealthCheck_BrokerReportsUnhealthyConsuming_ReturnsUnhealthy`、
+  `ReplayDetailedAsync_GroupHeldByAnotherWorker_ReportsStoppedForLease`；
+  MySQL 批量形态由 E10 真库探针复验（`FIRST=1 SECOND=0 LATER=0`）。
+  验证：全量 1942 用例 / 1860 通过 / 82 跳过 / 0 失败；AOT 双样本发布运行通过。
+
 - **2026-10-22 R14 全代码审计：四条 P1 修复（Dapper 冲突分类 ×2、MySQL 批量认领、ChildSaga HITL）**：
   ①**Dapper 唯一冲突分类器在单驱动消费方整体失效**——三驱动是 `PrivateAssets=all` 的实现私有依赖，
   `DapperSqlErrorClassifier` 主方法体的强类型 `is` 判据在方法 JIT 时解析全部 provider 程序集；

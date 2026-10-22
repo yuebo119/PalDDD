@@ -708,6 +708,22 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
                 }
             }
         }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // R14：与 StreamQueryCoreAsync 的收尾契约一致——序列化（自定义 JsonConverter/
+            // 循环引用）或写帧 IO 异常不得逃逸成「连接被截断且无终止原因」。头已写出，
+            // 只能补 event: error 帧；客户端已断开时帧写失败静默（本就按截断处理）。
+            try
+            {
+                StreamFrameWriter.WriteErrorFrame(bodyWriter);
+                await bodyWriter.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // 客户端已断开：error 帧无法送达。
+            }
+            _logger?.Error(ex, $"Stream run {_runId}: attach stream failed");
+        }
         finally
         {
             await ReleaseAttachmentAsync().ConfigureAwait(false);

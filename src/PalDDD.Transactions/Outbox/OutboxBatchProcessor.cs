@@ -176,7 +176,11 @@ public sealed class OutboxBatchProcessor
 
         // R4/P0-2（ADR-027）：终态标记批量化；2026-10-19 性能实施轮增加时间上界——
         // 满阈值或距上次冲刷满 BatchMarkFlushInterval 即冲刷，重复窗口不再由整批时长界定。
-        var batchMark = policy.BatchMarkThreshold > 1 && _store is IBatchMarkOutboxStore batchStore ? batchStore : null;
+        var batchMark = policy.BatchMarkThreshold > 1
+            && _store is IBatchMarkOutboxStore batchStore
+            && !_store.RequiresSaveAfterMark
+                ? batchStore
+                : null;
         List<OutboxMessage>? markPending = batchMark is null ? null : new List<OutboxMessage>(Math.Min(policy.BatchMarkThreshold, 64));
         var lastFlushAt = _timeProvider.GetTimestamp();
 
@@ -368,7 +372,11 @@ public sealed class OutboxBatchProcessor
 
         // R4/P0-2（ADR-027）：成功路径批量标记（同串行路径；批序 = 出窗完成序，
         // 2026-10-21 起——窗口 16 时完成序 ≠ 启动序，慢发布消息的标记后移最多 15 位）
-        var batchMark = policy.BatchMarkThreshold > 1 && _store is IBatchMarkOutboxStore batchStore ? batchStore : null;
+        var batchMark = policy.BatchMarkThreshold > 1
+            && _store is IBatchMarkOutboxStore batchStore
+            && !_store.RequiresSaveAfterMark
+                ? batchStore
+                : null;
         List<OutboxMessage>? markPending = batchMark is null ? null : new List<OutboxMessage>(Math.Min(policy.BatchMarkThreshold, 64));
         var lastFlushAt = _timeProvider.GetTimestamp();
 
@@ -693,7 +701,10 @@ public sealed class OutboxBatchProcessor
             window = Math.Max(window, 16);
 
         var threshold = options.BatchMarkThreshold;
-        if (_store is IBatchMarkOutboxStore)
+        // R14：批量标记能力的前提是「立即写库」——自定义 store 若 RequiresSaveAfterMark=true，
+        // 批量路径全程不调 PersistSingle/SaveChanges，终态永不落库（租约到期重复发布且无告警）。
+        var canBatchMark = _store is IBatchMarkOutboxStore && !_store.RequiresSaveAfterMark;
+        if (canBatchMark)
             // 标记阈值与 BatchSize 对齐（上限 400 = 现有分块宽），把 100 条批的 7 次 UPDATE
             // 收敛为 1 次；时间上界仍由 BatchMarkFlushInterval 兜住。
             threshold = Math.Max(threshold, Math.Min(options.BatchSize, 400));
@@ -701,11 +712,11 @@ public sealed class OutboxBatchProcessor
         // R11 F25：Auto 的能力回落必须可见——原实现静默保留窗口 1/逐条标记，运维会
         // 以为已启用批处理。进程内只提示一次（scoped processor 每 tick 都会走到这里）。
         if (options.DeliveryMode == OutboxDeliveryMode.Auto
-            && (!_broker.SupportsConcurrentPublish || _store is not IBatchMarkOutboxStore)
+            && (!_broker.SupportsConcurrentPublish || !canBatchMark)
             && Interlocked.Exchange(ref s_deliveryFallbackLogged, 1) == 0)
         {
             _logger.Warning(
-                $"Outbox: DeliveryMode=Auto capability fallback — broker.SupportsConcurrentPublish={_broker.SupportsConcurrentPublish}, store.IsBatchMark={_store is IBatchMarkOutboxStore}; publish window and/or batch mark stay at the configured/serial values.");
+                $"Outbox: DeliveryMode=Auto capability fallback — broker.SupportsConcurrentPublish={_broker.SupportsConcurrentPublish}, store.IsBatchMark={_store is IBatchMarkOutboxStore}, store.RequiresSaveAfterMark={_store.RequiresSaveAfterMark}; publish window and/or batch mark stay at the configured/serial values.");
         }
 
         return new DeliveryPolicy(

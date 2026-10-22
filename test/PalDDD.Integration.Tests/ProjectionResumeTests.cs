@@ -139,6 +139,31 @@ public sealed class RebuilderResumeTests
     }
 
     [Test]
+    public async Task ReplayDetailedAsync_GroupHeldByAnotherWorker_ReportsStoppedForLease()
+    {
+        var store = new InMemoryProjectionCheckpointStore();
+        var handler = new CountingResumeHandler();
+        var processor = new ProjectionProcessor<ResumeEvent>(handler, store) { CheckpointBatchSize = 2 };
+        // 组首位置被另一个 worker 持有（Processing 未完成）：本轮回放必须提前停止，
+        // 且通过 ReplayDetailedAsync.StoppedForLease 让调用方区分「追平」与「租约冲突」。
+        var held = await store.TryStartAsync(
+            handler.ProjectionName, "orders", "0", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5), CancellationToken.None);
+        await Assert.That(held).IsNotNull();
+
+        List<ReplayEvent<ResumeEvent>> events = [];
+        for (var i = 0; i <= 3; i++)
+            events.Add(new ReplayEvent<ResumeEvent>("orders", i.ToString(), DateTimeOffset.UnixEpoch.AddSeconds(i), new ResumeEvent()));
+        var source = new RecordingResumableSource(events);
+        var rebuilder = new ProjectionRebuilder<ResumeEvent>(
+            handler.ProjectionName, "orders", source, store, processor);
+
+        var result = await rebuilder.ReplayDetailedAsync(CancellationToken.None);
+
+        await Assert.That(result.Processed).IsEqualTo(0);
+        await Assert.That(result.StoppedForLease).IsTrue();
+    }
+
+    [Test]
     public async Task ReplayAsync_BatchHandler_ReceivesWholeGroupsOnce()
     {
         var store = new InMemoryProjectionCheckpointStore();

@@ -452,9 +452,18 @@ public abstract class EventLogDbContext(
     // 按 IModel 引用各缓存一份委托：编译委托与单一模型绑定（EF 官方约束，跨模型执行抛
     // InvalidOperationException），同上下文类型跨 provider（InMemory 测试/SQLite/PG
     // 生产）模型实例不同，按模型分持。查找为引用哈希，相对表达式翻译可忽略。
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+    // R14：ConcurrentDictionary 强引用键改为 ConditionalWeakTable——多租户/多
+    // DbContextOptions 场景下每个 options 生成独立 IModel，静态字典会让历史模型及其
+    // 全部元数据永不回收；弱引用表随 service provider 一同释放。
+    private static readonly ConditionalWeakTable<
         Microsoft.EntityFrameworkCore.Metadata.IModel,
-        Func<EventLogDbContext, string, CancellationToken, Task<long?>>> MaxStreamVersionByModel = new();
+        CompiledMaxQuery> MaxStreamVersionByModel = new();
+
+    /// <summary>编译查询委托的容器（ConditionalWeakTable 的值必须是引用类型）。</summary>
+    private sealed class CompiledMaxQuery
+    {
+        public required Func<EventLogDbContext, string, CancellationToken, Task<long?>> Query { get; init; }
+    }
 
     private async ValueTask<long> GetActualStreamVersionAsync(string streamName, CancellationToken cancellationToken)
     {
@@ -464,11 +473,14 @@ public abstract class EventLogDbContext(
         // A5（S1 轮）：改走按模型缓存的编译查询委托（形状恒定，参数化 streamName）。
         // MIG-008：ConfigureAwait 补齐——原裸 await 被旧 G12 文件级差值计数漏检（该文件
         // 多余 CA 名额抵消），节点级 SourceCodeGuardTests 守卫 4 抓出（偏差账本同步销账）。
-        var compiled = MaxStreamVersionByModel.GetOrAdd(Model, static _ =>
-            EF.CompileAsyncQuery<EventLogDbContext, string, long?>(
-                (ctx, name, ct) => ctx.Events
-                    .Where(e => e.StreamName == name)
-                    .Max(e => (long?)e.StreamVersion)));
+        var compiled = MaxStreamVersionByModel.GetValue(Model, static _ =>
+            new CompiledMaxQuery
+            {
+                Query = EF.CompileAsyncQuery<EventLogDbContext, string, long?>(
+                    (ctx, name, ct) => ctx.Events
+                        .Where(e => e.StreamName == name)
+                        .Max(e => (long?)e.StreamVersion)),
+            }).Query;
         return await compiled(this, streamName, cancellationToken)
             .ConfigureAwait(false)
             ?? -1;

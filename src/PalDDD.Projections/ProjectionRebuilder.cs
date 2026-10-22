@@ -81,7 +81,8 @@ public sealed class ProjectionRebuilder<TMessage>
         {
             await _checkpointStore.ResetAsync(_projectionName, _sourceName, ct).ConfigureAwait(false);
 
-            return await ReplayCoreAsync(activity, ct).ConfigureAwait(false);
+            var (rebuilt, _) = await ReplayCoreAsync(activity, ct).ConfigureAwait(false);
+            return rebuilt;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -101,12 +102,25 @@ public sealed class ProjectionRebuilder<TMessage>
     /// 如需从零开始完整重建，请使用 <see cref="RebuildAsync"/>（会先重置检查点）。
     /// </remarks>
     public async ValueTask<int> ReplayAsync(CancellationToken ct = default)
+        => (await ReplayDetailedAsync(ct).ConfigureAwait(false)).Processed;
+
+    /// <summary>
+    /// 增量回放并返回是否因租约冲突提前停止。
+    /// </summary>
+    /// <remarks>
+    /// R14：原 <see cref="ReplayAsync"/> 只返回处理条数，调用方无法区分「已追平」与
+    /// 「组首/组末被其他 worker 持有而提前结束」——后者需要立即重试，前者代表完成。
+    /// 本方法在相同语义上额外返回 <see cref="ProjectionReplayResult.StoppedForLease"/>；
+    /// 旧方法行为逐字不变。
+    /// </remarks>
+    public async ValueTask<ProjectionReplayResult> ReplayDetailedAsync(CancellationToken ct = default)
     {
         using var activity = PalActivitySource.StartProjectionRebuild(_projectionName, _sourceName);
 
         try
         {
-            return await ReplayCoreAsync(activity, ct).ConfigureAwait(false);
+            var (processed, stoppedForLease) = await ReplayCoreAsync(activity, ct).ConfigureAwait(false);
+            return new ProjectionReplayResult(processed, stoppedForLease);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -171,11 +185,12 @@ public sealed class ProjectionRebuilder<TMessage>
         }
     }
 
-    private async ValueTask<int> ReplayCoreAsync(
+    private async ValueTask<(int Processed, bool StoppedForLease)> ReplayCoreAsync(
         System.Diagnostics.Activity? activity,
         CancellationToken ct)
     {
         var processed = 0;
+        var stoppedForLease = false;
         var completed = false;
         try
         {
@@ -249,7 +264,6 @@ public sealed class ProjectionRebuilder<TMessage>
             {
                 var batch = new List<(TMessage Message, ProjectionContext Context)>(batchSize);
                 var batchStarted = _timeProvider.GetTimestamp();
-                var stopForLease = false;
                 await foreach (var replayEvent in stream.ConfigureAwait(false))
                 {
                     ct.ThrowIfCancellationRequested();
@@ -278,14 +292,14 @@ public sealed class ProjectionRebuilder<TMessage>
                     }
                     if (advanced == 0)
                     {
-                        stopForLease = true;
+                        stoppedForLease = true;
                         break;
                     }
                     checked { processed += advanced; }
                     batch.Clear();
                 }
 
-                if (!stopForLease && batch.Count > 0)
+                if (!stoppedForLease && batch.Count > 0)
                 {
                     var advanced = await ProcessBatchWithEdgeTrimAsync(batch, ct).ConfigureAwait(false);
                     if (advanced > 0)
@@ -307,6 +321,6 @@ public sealed class ProjectionRebuilder<TMessage>
         }
         activity?.SetTag("pal.projection.replayed", processed);
         PalMetrics.ProjectionReplayed.Add(processed);
-        return processed;
+        return (processed, stoppedForLease);
     }
 }

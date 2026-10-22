@@ -26,13 +26,15 @@ namespace PalDDD.Messaging.Kafka;
 /// </remarks>
 [SuppressMessage("Design", "CA1031:Do not catch general exception types",
     Justification = "Broker 消费循环需记录毒消息失败并继续或优雅关停，需捕获 Exception 基类。")]
-public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
+public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageBrokerHealth
 {
     private readonly IProducer<string, byte[]> _producer;
     private readonly ConsumerConfig _consumerConfig;
     private readonly IPalLogger<KafkaBroker> _logger;
     private readonly bool _concurrentPublishSafe;
     private readonly List<IAsyncDisposable> _consumers = [];
+    // R14：消费线程不可恢复终止的原因（健康检查读取；正常取消/停机不置位）。
+    private volatile string? _consumeFaultReason;
     // P2 修复：_consumers 的并发 Add（多线程 SubscribeAsync）与 DisposeAsync 遍历需互斥
     // 优化（二十四轮 OP-2）：object → System.Threading.Lock——全仓最后一个 object 锁，
     // Lock 有 JIT 专用锁内联优化（与其余 8 处模式统一）
@@ -52,6 +54,12 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
 
     /// <summary>TLS body 缓冲驻留上限——超阈值弃槽重建（256B 起步），驻留收敛为有界。</summary>
     private const int MaxResidentBodyBytes = 256 * 1024;
+
+    /// <inheritdoc />
+    public bool IsConsumingHealthy => _consumeFaultReason is null;
+
+    /// <inheritdoc />
+    public string? LastFaultReason => _consumeFaultReason;
 
     public KafkaBroker(
         ProducerConfig producerConfig,
@@ -476,6 +484,9 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                // R14：消费线程不可恢复终止——置健康故障态（健康检查据此转 Unhealthy），
+                // 原实现只记一次 Error，订阅句柄仍有效、/health 恒绿。
+                _consumeFaultReason = $"{ex.GetType().Name}: {ex.Message}";
                 _logger.Error(ex, $"Kafka consume thread terminated unexpectedly: {topic} @ {_consumerConfig.GroupId}");
             }
             finally

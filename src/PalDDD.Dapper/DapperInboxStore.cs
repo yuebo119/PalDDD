@@ -279,11 +279,12 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
     }
 
     /// <summary>
-    /// MySQL 批量认领：逐条走 <see cref="TryStartProcessingAsync"/> 的原子 CAS 路径。
+    /// MySQL 批量认领：一次 SELECT 判定新增/既有 → 多行 INSERT 新增行（唯一约束保证
+    /// 每个缺失行的归属）→ 回读本次插入行 → 既有行中可重入者逐条 CAS。
     /// R14 F4 勘正：原块级实现以 <c>processing_started_at=@now</c> 作为认领身份，同一 now 的
-    /// 第二个调用在租约未过期（UPDATE 不命中）后仍能回读到第一个调用刚写入的行，同一消息
-    /// 被两个调用方同时认领并并发执行 handler。逐条路径以唯一约束冲突→状态判定为原子序列，
-    /// 代价为每消息 2 次往返（原块级 4 次/批）；恢复块级优化需引入本调用唯一令牌（schema 变更）。
+    /// 第二个调用在租约未过期（UPDATE 不命中）后仍能回读到第一个调用刚写入的行。现形态把
+    /// 身份锚在「唯一约束插入成功」与「逐条 CAS 的 affected」上：新增消息保持 3 次往返/批，
+    /// 既有可重入行按每消息 2 次往返处理；并发插入窗口整块回落逐条（每条原子）。
     /// </summary>
     private async Task ClaimManyMySqlAsync(
         DbConnection connection,
@@ -294,14 +295,107 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
         List<InboxMessage> claimed,
         CancellationToken ct)
     {
-        _ = connection;
-        foreach (var messageId in messageIds)
+        const int chunkRows = 400;
+        var cutoff = now - processingTimeout;
+        var nowParam = ToTimeParam(now);
+
+        for (var start = 0; start < messageIds.Count; start += chunkRows)
         {
-            var message = await TryStartProcessingAsync(
-                consumerName, messageId, now, processingTimeout, ct).ConfigureAwait(false);
-            if (message is not null)
-                claimed.Add(message);
+            var count = Math.Min(chunkRows, messageIds.Count - start);
+            var chunkIds = messageIds.GetRange(start, count);
+
+            // 1) 读既有行
+            var selectParams = new DynamicParameters();
+            selectParams.Add("c", consumerName);
+            var selectSql = new StringBuilder(120 + (count * 12))
+                .Append("SELECT ").Append(InboxColumns)
+                .Append(" FROM inbox_messages WHERE consumer_name=@c AND message_id IN (");
+            AppendInList(selectSql, selectParams, chunkIds);
+            var existing = await connection.QueryAsync<InboxMessage>(
+                selectSql.ToString(), selectParams, Tx).ConfigureAwait(false);
+
+            var existingIds = new HashSet<string>(
+                existing.Select(static m => m.MessageId), StringComparer.Ordinal);
+            var missing = new List<string>(count);
+            foreach (var id in chunkIds)
+                if (!existingIds.Contains(id))
+                    missing.Add(id);
+
+            // 2) 批量插入新增行；并发插入冲突时整块回落逐条 CAS
+            if (missing.Count > 0)
+            {
+                var insertParams = new DynamicParameters();
+                insertParams.Add("c", consumerName);
+                insertParams.Add("now", nowParam);
+                var insertSql = new StringBuilder(180 + (missing.Count * 24))
+                    .Append("INSERT INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES ");
+                for (var i = 0; i < missing.Count; i++)
+                {
+                    if (i > 0)
+                        insertSql.Append(',');
+                    insertSql.Append("(@c,@m").Append(i).Append(",1,@now,@now,1)");
+                    insertParams.Add("m" + i, missing[i]);
+                }
+
+                try
+                {
+                    await connection.ExecuteAsync(insertSql.ToString(), insertParams, Tx).ConfigureAwait(false);
+                }
+                catch (DbException ex) when (IsUniqueConstraintViolation(ex))
+                {
+                    // 极窄并发插入窗口：整块回落逐条（每条 INSERT/回查原子）
+                    foreach (var id in chunkIds)
+                    {
+                        var message = await TryStartProcessingAsync(
+                            consumerName, id, now, processingTimeout, ct).ConfigureAwait(false);
+                        if (message is not null)
+                            claimed.Add(message);
+                    }
+                    continue;
+                }
+
+                // 3) 回读本次插入行：missing 的归属由唯一约束保证，不再依赖时间戳令牌
+                var rereadParams = new DynamicParameters();
+                rereadParams.Add("c", consumerName);
+                var rereadSql = new StringBuilder(140 + (missing.Count * 12))
+                    .Append("SELECT ").Append(InboxColumns)
+                    .Append(" FROM inbox_messages WHERE consumer_name=@c AND status=1 AND message_id IN (");
+                AppendInList(rereadSql, rereadParams, missing);
+                claimed.AddRange(await connection.QueryAsync<InboxMessage>(
+                    rereadSql.ToString(), rereadParams, Tx).ConfigureAwait(false));
+            }
+
+            // 4) 既有行中可重入者逐条 CAS（活跃租约与 Processed 跳过）
+            foreach (var message in existing)
+            {
+                if (message.Status == InboxStatus.Processed)
+                    continue;
+                if (message.Status == InboxStatus.Processing
+                    && message.ProcessingStartedAt is { } started
+                    && started > cutoff)
+                    continue;
+
+                var reclaimed = await TryStartProcessingAsync(
+                    consumerName, message.MessageId, now, processingTimeout, ct).ConfigureAwait(false);
+                if (reclaimed is not null)
+                    claimed.Add(reclaimed);
+            }
         }
+    }
+
+    /// <summary>拼 <c>@m0,@m1,...</c> 参数列表并追加右括号（调用方负责写左括号）。</summary>
+    private static void AppendInList(
+        StringBuilder sql, DynamicParameters parameters, List<string> ids)
+    {
+        for (var i = 0; i < ids.Count; i++)
+        {
+            if (i > 0)
+                sql.Append(',');
+            var name = "m" + i;
+            sql.Append('@').Append(name);
+            parameters.Add(name, ids[i]);
+        }
+        sql.Append(')');
     }
 
     /// <inheritdoc/>
