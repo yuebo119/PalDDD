@@ -221,8 +221,29 @@ internal static class SqliteJsonCore
     internal static string EqualsParameter(string column, string parameterName, IReadOnlyList<string>? path)
         => BuildEquals(column, path, null, parameterName);
 
+    /// <summary>
+    /// Outbox 按消息类型过滤：<c>"type" = '类型'</c>。
+    /// R13 F6：框架 outbox 表的类型在独立 <c>type</c> 列，payload 是消息体（不含 Type
+    /// 字段）——原谓词 json_extract(payload,'$.Type') 对框架表恒 0 行，按类型统计/重投
+    /// 会静默得出"无积压"的错误结论。payload 内嵌 Type 的自定义表请直接用
+    /// <see cref="EqualsLiteral"/>。
+    /// </summary>
     internal static string OutboxByType(string messageType)
-        => EqualsLiteral("payload", messageType, ["Type"]);
+    {
+        ArgumentNullException.ThrowIfNull(messageType);
+        const string Column = "type";
+        var length = SqliteSqlCore.EscapedIdentifierLength(Column)
+                     + 3
+                     + SqliteSqlCore.EscapedLiteralLength(messageType);
+        return string.Create(length, messageType, static (span, state) =>
+        {
+            var position = SqliteSqlCore.WriteEscapedIdentifier(span, Column);
+            span[position++] = ' ';
+            span[position++] = '=';
+            span[position++] = ' ';
+            SqliteSqlCore.WriteEscapedLiteral(span[position..], state);
+        });
+    }
 
     private static bool HasPath(IReadOnlyList<string>? path, bool includeEmptyPath)
         => path is not null && (includeEmptyPath || path.Count > 0);
