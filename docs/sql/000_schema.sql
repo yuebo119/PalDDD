@@ -45,7 +45,8 @@ CREATE TABLE inbox_messages (
     processing_started_at TIMESTAMP,
     processed_at          TIMESTAMP,
     attempts              INTEGER NOT NULL DEFAULT 1,
-    last_error            TEXT
+    last_error            TEXT,
+    claim_token           CHAR(26)  -- MySQL 批量认领令牌（方言专属：MySQL 无 UPDATE...RETURNING，按本列回读本次认领的行；其它方言不写此列）
 );
 
 CREATE UNIQUE INDEX idx_inbox_unique ON inbox_messages(consumer_name, message_id);

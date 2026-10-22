@@ -811,6 +811,7 @@ dotnet run scripts/eps-run.cs -- --list
 | 入站单条（PG，重复消息） | 2 次往返 | 1 次 |
 | 入站单条（PG，可重试失败） | 3 次往返 | 1 次 |
 | 入站批量（PG，400 条） | 2 次往返/批 | 2 次往返/批（不变） |
+| 入站批量（MySQL，400 条，含重投） | 3 次/批；可重入失败行每行 2–3 次（约 800 次） | **2 次/批**（令牌列 + 单语句 UPSERT） |
 | 投影回放（批 100 / 批 1000，10ms RTT） | 约 600μs/事件 | 检查点调用 4,000 → 400 次/100k 事件（实测），按 RTT 折算约 60μs/事件 |
 | EventLog 单条追加（PG） | 1 次往返 | 1 次往返（不变） |
 
@@ -825,6 +826,12 @@ dotnet run scripts/eps-run.cs -- --list
    `GetAsync` 探测；组首裁剪改「先量前缀再一次 RemoveRange」（避免批宽放大后的 O(n²) 搬移）。
 4. **消费上下文去闭包**：`FromHeaders`/RabbitMQ 路径直接持有头序列本体，`Headers` 惰性解码；
    实例尺寸不变（`FromHeaders_NullHeadersWithFallback_NoDictionaryAllocation` 预算保持）。
+5. **MySQL 批量认领 2N 次往返 → 2 次**：新增可空列 `claim_token`（ULID），批量认领改为
+   「单语句 UPSERT + 按令牌回读」，400 行块固定 2 次往返；原形态在可重入失败行上每行 2 到 3 次
+   （400 行重投约 800 次）。令牌是本路径唯一可靠的归属身份（MySQL 无 `UPDATE ... RETURNING`，
+   时间戳身份在同一 now 的并发认领下会误认，R14 F4 实证）。DDL 与行为见
+   `docs/migration/inbox-claim-token.md`；真库（MySQL 8.4.11）SQL 级探针验证了同刻不重复认领、
+   租约过期可接管、Processed 永不认领；C# 端到端由 CI `dialect-probe` 覆盖。
 
 ### 实测：出站唤醒信号（2026-10-22，`--wakeup-probe`）
 
@@ -880,8 +887,6 @@ dotnet run -c Release --project bench/PalDDD.Benchmarks -- --wakeup-probe
 
 ### 未落地（带理由）
 
-- **MySQL 批量重认领 2N → 2 次往返**：同刻身份需要可空认领令牌列（DDL）才能不重蹈
-  「时间戳做身份」的覆辙，属 schema 变更，本轮不做。
 - **EventLog 单条追加参数对象池化**（约 2–4KB/次推导）：需先补该路径的 `[MemoryDiagnoser]`
   基线证明其占端到端 1% 以上，按「先量具后改动」推迟。
 - **RabbitMQ 每投递 linked CTS**（约 200–300B/条推导）：与取消/关停语义耦合，收益风险比不成立。
