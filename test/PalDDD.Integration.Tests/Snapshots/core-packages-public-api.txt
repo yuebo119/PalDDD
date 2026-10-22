@@ -370,6 +370,7 @@ class PalDDD.Dapper.DapperProjectionCheckpointStore
   method System.Threading.Tasks.ValueTask<System.String> GetResumePositionAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Boolean> RenewLeaseAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask ResetAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionCheckpoint> TryStartAsync(System.String projectionName, System.String sourceName, System.String position, System.DateTimeOffset startedAt, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 class PalDDD.Dapper.DapperRetentionStore
@@ -1167,6 +1168,7 @@ class PalDDD.PalORM.Stores.PalOrmProjectionCheckpointStore<TProvider>
   method System.Threading.Tasks.ValueTask<System.String> GetResumePositionAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Boolean> RenewLeaseAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask ResetAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionCheckpoint> TryStartAsync(System.String projectionName, System.String sourceName, System.String position, System.DateTimeOffset startedAt, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 class PalDDD.PalORM.Stores.PalOrmRetentionStore<TProvider>
@@ -1332,6 +1334,8 @@ interface PalDDD.Projections.IProjectionCheckpointStore
 interface PalDDD.Projections.IProjectionHandler<TMessage>
   property System.String ProjectionName
   method System.Threading.Tasks.ValueTask ProjectAsync(TMessage message, PalDDD.Projections.ProjectionContext context, System.Threading.CancellationToken ct)
+interface PalDDD.Projections.IProjectionLeaseRenewalStore
+  method System.Threading.Tasks.ValueTask<System.Boolean> RenewLeaseAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 interface PalDDD.Projections.IResumableEventReplaySource<TMessage>
   method System.Collections.Generic.IAsyncEnumerable<PalDDD.Projections.ReplayEvent<TMessage>> ReadAsync(System.String sourceName, System.Int64 fromPosition, System.Threading.CancellationToken ct)
 interface PalDDD.Projections.IResumableProjectionCheckpointStore
@@ -1342,6 +1346,7 @@ class PalDDD.Projections.InMemoryProjectionCheckpointStore
   method System.Threading.Tasks.ValueTask<System.String> GetResumePositionAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Boolean> RenewLeaseAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask ResetAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionCheckpoint> TryStartAsync(System.String projectionName, System.String sourceName, System.String position, System.DateTimeOffset startedAt, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 class PalDDD.Projections.ProjectionCheckpoint
@@ -1420,6 +1425,7 @@ class PalDDD.Projections.ProjectionCheckpointDbContext
   method System.Threading.Tasks.ValueTask<System.String> GetResumePositionAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkCompletedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset completedAt, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask MarkFailedAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.String failureReason, System.DateTimeOffset failedAt, System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<System.Boolean> RenewLeaseAsync(PalDDD.Projections.ProjectionCheckpoint checkpoint, System.DateTimeOffset now, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask ResetAsync(System.String projectionName, System.String sourceName, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionCheckpoint> TryStartAsync(System.String projectionName, System.String sourceName, System.String position, System.DateTimeOffset startedAt, System.TimeSpan processingTimeout, System.Threading.CancellationToken ct)
 static class PalDDD.Projections.ServiceCollectionExtensions

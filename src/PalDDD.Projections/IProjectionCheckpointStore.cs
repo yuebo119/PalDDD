@@ -69,3 +69,24 @@ public interface IResumableProjectionCheckpointStore : IProjectionCheckpointStor
         string sourceName,
         CancellationToken ct = default);
 }
+
+/// <summary>
+/// R12 C-02：检查点租约续期能力（可选实现）。处理器在 handler 执行期间按
+/// <c>processingTimeout / 3</c> 心跳续租，避免单个慢 handler 超过租约后被另一
+/// worker 重租同一位置并发投影（重复副作用）。未实现本接口的自定义存储保持
+/// 现有语义（无续租，依赖 handler 在 processingTimeout 内完成）。
+/// </summary>
+public interface IProjectionLeaseRenewalStore
+{
+    /// <summary>
+    /// 续租一个仍由本 worker 持有的 Processing 检查点。<br/>
+    /// 返回 true = 续租成功；false = 租约已丢失（被抢占/已完成），调用方应停止续租。
+    /// 实现必须以 <c>Revision</c>（或等价所有权令牌）为守卫，且只更新租约/更新时间，
+    /// 不推进 Revision（否则调用方持有的 checkpoint 令牌会失效）。
+    /// </summary>
+    ValueTask<bool> RenewLeaseAsync(
+        ProjectionCheckpoint checkpoint,
+        DateTimeOffset now,
+        TimeSpan processingTimeout,
+        CancellationToken ct = default);
+}

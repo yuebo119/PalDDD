@@ -12,7 +12,7 @@ using PalDDD.Projections;
 namespace PalDDD.Dapper;
 
 /// <summary>Dapper 投影 checkpoint 存储 — 实现 <see cref="IProjectionCheckpointStore"/>。</summary>
-public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore, IResumableProjectionCheckpointStore
+public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore, IResumableProjectionCheckpointStore, IProjectionLeaseRenewalStore
 {
     private readonly DbConnection _connection;
     private readonly DbTransaction? _transaction;
@@ -333,6 +333,44 @@ public sealed class DapperProjectionCheckpointStore : IProjectionCheckpointStore
             // 续读是优化面：回退全量回放（语义兜底恒安全）
             return null;
         }
+    }
+
+    /// <summary>R12 C-02：心跳续租——revision + Processing 守卫，只更新租约/更新时间。</summary>
+    public async ValueTask<bool> RenewLeaseAsync(
+        ProjectionCheckpoint checkpoint,
+        DateTimeOffset now,
+        TimeSpan processingTimeout,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.ProjectionName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.SourceName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.Position);
+
+        var connection = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        var affected = await connection.ExecuteAsync(
+            """
+            UPDATE projection_checkpoints
+            SET lease_until = @leaseUntil, updated_at = @now
+            WHERE projection_name = @projectionName AND source_name = @sourceName AND position = @position
+              AND revision = @revision AND status = @processing
+            """,
+            new
+            {
+                leaseUntil = ToTimeParam(now + processingTimeout),
+                now = ToTimeParam(now),
+                projectionName = checkpoint.ProjectionName,
+                sourceName = checkpoint.SourceName,
+                position = checkpoint.Position,
+                revision = checkpoint.Revision,
+                processing = (int)ProjectionCheckpointStatus.Processing,
+            },
+            Tx).ConfigureAwait(false);
+        if (affected == 0)
+            return false;
+        return true;
     }
 
     /// <summary>续读聚合行（Dapper 物化 DTO）。</summary>

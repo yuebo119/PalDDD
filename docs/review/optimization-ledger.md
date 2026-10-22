@@ -65,9 +65,10 @@
 | OPT-211 | CONTRACT | `ProjectionRebuilder.cs:126-137` | 批模式 `CheckpointFlushInterval` 无上界；间隔 ≥ processingTimeout 时组首租约在提交前过期，另一 worker 可重租同组并发投影 | fixed | 回放入口校验 `interval < ProcessingTimeout`（processor 新增 internal 属性）；等值即拒 | R12 C-31 | `ProjectionTests.ReplayAsync_CheckpointFlushIntervalAtOrAboveLease_ThrowsAtReplay` | R12 | 检查点存储增加显式续租原语，允许长组 |
 | OPT-212 | CORRECTNESS | `ProjectionCheckpointDbContext.cs:356-365` | 续读查询把任意 `DbException` 当作“脏 Position”回退全量，连接中断/超时被误分类并触发全量回放 | fixed | SQLSTATE 分类：仅 22P02/22007 回退，其余上抛；分类谓词单测 5 分支 | R12 C-03 | `ProjectionResumeFailureClassificationTests.IsPositionCastFailure_OnlyPgCastSqlStates` | R12 | 新 provider 的 CAST 错误码需加入集合 |
 | OPT-213 | CORRECTNESS | `DapperBulkCopy.cs:394-470` | MySQL LOAD DATA 自动提交后才检查 Warnings/RowsInserted；抛错时行已落库，调用方重试造成重复 | fixed | wslc MySQL 真库：17 行含超长值，修复前抛错后 count=17，修复后 count=0（红→绿反向验证） | R12 C-21 | `DapperBulkCopyTests.BulkInsertAsync_MySql_LoadDataWarning_RollsBackWithoutExternalTransaction` | R12 | MySQL 改 autocommit 语义或 LOAD DATA 支持事务外回滚 |
-| OPT-214 | AOT | `SqlErrorClassifier.cs:41-65` | NativeAOT 下反射 `GetProperty` 失效，且 `MySqlException.ErrorCode` 退化为 E_FAIL，唯一冲突分类失败、原始异常逃逸 | fixed | wslc MySQL + `PublishAot` 探针：修复前 FAIL（MySqlException 逃逸），修复后 PASS；分类器单测覆盖 JIT 快路径、AOT 兜底、FK 误报负例、PG/SQLite/InnerException | R12 H3 | provider 本地化错误文案或 SqlState 变更 |
+| OPT-214 | AOT | `SqlErrorClassifier.cs:41-65` | NativeAOT 下反射 `GetProperty` 失效，且 `MySqlException.ErrorCode` 退化为 E_FAIL，唯一冲突分类失败、原始异常逃逸 | fixed | wslc MySQL + `PublishAot` 探针：修复前 FAIL（MySqlException 逃逸），修复后 PASS；分类器单测覆盖 JIT 快路径、AOT 兜底、FK 误报负例、PG/SQLite/InnerException | R12 H3 | `SqlErrorClassifierTests.*` | R12 | provider 本地化错误文案或 SqlState 变更 |
+| OPT-215 | CORRECTNESS | `ProjectionProcessor.cs:96-160,245-300`；`IProjectionCheckpointStore.cs:70-95` | handler 执行超过 `processingTimeout` 后租约到期，另一 worker 可重租同一位置并发投影（重复副作用） | fixed | 慢 handler 心跳测试：1.2s > 1s 租约后 TryStart 仍 null；四栈续租测试各一条 | R12 C-02 | `ProjectionTests.ProcessAsync_SlowHandler_HeartbeatKeepsLease`；Dapper/EF SQLite/PalORM SQLite/EF InMemory `*_RenewLease_ExtendsAndBlocksTakeover` | R12 | 自定义 store 未实现 `IProjectionLeaseRenewalStore`，仍需 handler 在租约内完成 |
 
-R12 验证：全量 16 项目 **1902 用例，1822 通过 / 80 跳过 / 0 失败**；`gate-audit` 42/42；`AotSample` 重新发布运行通过。
+R12 验证：全量 16 项目 **1907 用例，1827 通过 / 80 跳过 / 0 失败**；`gate-audit` 42/42；`AotSample` 重新发布运行通过。
 
 ## 四、R11 验证汇总
 
