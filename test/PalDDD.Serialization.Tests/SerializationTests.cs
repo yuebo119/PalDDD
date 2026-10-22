@@ -608,10 +608,26 @@ public sealed class JsonLinesEventTests
             await Assert.That(deserialized[i]).IsEqualTo(messages[i]);
     }
 
+    [Test]
+    public async Task JsonLines_InvalidSecondLine_ErrorNamesDocumentLine()
+    {
+        // R13 F23：JsonException 的行号相对每次单行 Deserialize（恒为 1），多行 .jsonl
+        // 无法定位坏行；包装后消息带文档级行号，原路径/位置保留。
+        var reader = new JsonLinesEventReader();
+        var writer = new JsonLinesEventWriter();
+        var firstLine = writer.SerializeLine(new TestMessage("ok", 1), TestJsonContext.Default.TestMessage).ToArray();
+        var payload = firstLine.Concat(System.Text.Encoding.UTF8.GetBytes("{oops}\n")).ToArray();
+
+        var exception = await Assert.That(() => reader.DeserializeAll<TestMessage>(
+                payload.AsMemory(), TestJsonContext.Default.TestMessage))
+            .Throws<System.Text.Json.JsonException>();
+
+        await Assert.That(exception!.Message).Contains("line 2");
+    }
+
     // B2-T2: 逐行读取无整批缓存 — 10000 条事件每事件分配低于阈值（无与批处理模式的峰值对比）
     [Test]
-    public async Task JsonLines_PerEventAlloc_BelowThreshold()
-    {
+    public async Task JsonLines_PerEventAlloc_BelowThreshold()    {
         var options = TestJsonContext.Default.Options;
         var writer = new JsonLinesEventWriter();
         var messages = Enumerable.Range(0, 10_000)
