@@ -222,8 +222,10 @@ public sealed class SqliteJsonTests
     public async Task EqualsParameterAndOutboxByType_ExecuteOnRealSqlite()
     {
         using var connection = OpenMemory();
-        Execute(connection, "CREATE TABLE outbox_messages (payload TEXT)");
-        Execute(connection, """INSERT INTO outbox_messages (payload) VALUES ('{"Type":"Order.Created","n":7}'), ('{"Type":"Other"}')""");
+        // R13 F6：框架 outbox 表的类型在独立 type 列（payload 是消息体）。
+        // OutboxByType 必须按 type 列过滤；payload 内嵌 Type 的场景用 EqualsParameter。
+        Execute(connection, "CREATE TABLE outbox_messages (type TEXT NOT NULL, payload TEXT)");
+        Execute(connection, """INSERT INTO outbox_messages (type, payload) VALUES ('Order.Created','{"Type":"Order.Created","n":7}'), ('Other','{"Type":"Other"}')""");
 
         using (var command = connection.CreateCommand())
         {
