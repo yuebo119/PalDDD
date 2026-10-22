@@ -36,6 +36,10 @@ CREATE TABLE inbox_messages (
     processed_at          DATETIME(6),
     attempts              INT NOT NULL DEFAULT 1,
     last_error            TEXT,
+    -- 2026-10-22：批量认领令牌（MySQL 专属列）。MySQL 无 UPDATE ... RETURNING，
+    -- 批量认领用一条 UPSERT + 按本列回读来定位「本次认领到哪些行」。NULL = 未被批量认领过；
+    -- 终态/被抢占后保留旧值无害（令牌全局唯一，回读按 (consumer_name, claim_token, message_id IN ...)）。
+    claim_token           CHAR(26),
     UNIQUE INDEX idx_inbox_unique (consumer_name, message_id),
     INDEX idx_inbox_processed (status, processed_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
