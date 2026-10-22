@@ -120,6 +120,14 @@ public sealed class Dispatcher
         ArgumentNullException.ThrowIfNull(responseType);
         ArgumentNullException.ThrowIfNull(executor);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _frozen) is not null, this);
+        // R12 C-16：needsScope:false 的 executor 在派发时直接使用 _rootProvider!。
+        // 低层 Register 是公开 API，手构 Dispatcher(scopeFactory)（未提供根容器）后
+        // 传入 needsScope:false 会让首个请求抛 NRE；注册期 fail-fast 并给出可操作提示。
+        if (!needsScope && _rootProvider is null)
+            throw new InvalidOperationException(
+                "Register(needsScope: false) requires the Dispatcher to be constructed with a root provider "
+                + "(Dispatcher(IServiceScopeFactory, IServiceProvider?)). Pass the root provider, or register "
+                + "the handler through the DI overload Register<TRequest, TResponse, THandler>().");
         // ITM-182 修复（二十九轮）：Freeze 在发布 _frozen 后置 _entries = null!——并发
         // Register 通过上方守卫后的狭窄窗口内 _entries 已失效，直接写入抛 NRE。
         // 补 null 检查以抛与守卫一致的可定位异常（违反"启动期单线程"文档契约时，
