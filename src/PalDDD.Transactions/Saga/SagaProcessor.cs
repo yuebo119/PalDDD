@@ -376,8 +376,10 @@ TState>
                     released, pendingRelease.Count);
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
+            // R14：取消不再过滤——store 以 CancellationToken.None 调用（终态写不随取消），
+            // 此时抛出的 OCE 是 DB 超时映射（R13 F3 口径），过滤会让整批释放静默跳过。
             _logger.Error(ex, PalLogEventIds.SagaLeaseBatchReleaseFailed,
                 "Saga lease batch release failed ({PendingCount} sagas); leases will expire by LeaseDuration",
                 pendingRelease.Count);
@@ -442,8 +444,9 @@ TState>
                 for (var i = 0; i < results.Count; i++)
                     LogTerminalResult(pending[i].State, pending[i].CompensationSucceeded, results[i]);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex)
             {
+                // R14：同 FlushBackfillAsync——None 调用下的 OCE 属 DB 超时映射，须记录而非静默跳过。
                 _logger.Error(ex, $"Saga compensated terminal batch save failed ({states.Length} sagas); leases will expire by LeaseDuration");
             }
             return;
@@ -492,8 +495,9 @@ TState>
                 if (affected < states.Count)
                     _logger.Warning($"Saga NextCheckAt batch advance affected {affected}/{states.Count} rows (optimistic concurrency conflicts); unadvanced rows will be re-leased next tick");
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex)
             {
+                // R14：同 FlushBackfillAsync——None 调用下的 OCE 属 DB 超时映射，须记录而非静默跳过。
                 _logger.Error(ex, $"Saga NextCheckAt batch advance failed ({states.Count} sagas); rows will be re-leased next tick");
             }
             return;

@@ -24,9 +24,18 @@ internal static class MessageBatchPump
         ArgumentNullException.ThrowIfNull(handler);
         ArgumentNullException.ThrowIfNull(onHandlerError);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxBatchSize, 1);
+        // R14：通道容量按 maxBatchSize*4 计算——超 int 上限会在 BoundedChannelOptions 抛
+        // 无指向性 AOOR；与 Outbox BatchSize 同口径给单批上界。
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maxBatchSize, 10_000, nameof(maxBatchSize));
         var delay = maxDelay ?? TimeSpan.FromMilliseconds(50);
         if (delay <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(maxDelay), "maxDelay must be greater than zero.");
+        // R14：Task.Delay 上限约 49.7 天（uint.MaxValue-1 毫秒）。超限的 AOOR 原本发生在
+        // PumpAsync 的 try 之外：订阅已建立、泵直接 fault，broker 继续投递到满通道后
+        // 消费静默停摆（无日志、无健康信号）。
+        if (delay > TimeSpan.FromMilliseconds(uint.MaxValue - 1))
+            throw new ArgumentOutOfRangeException(nameof(maxDelay),
+                "maxDelay must not exceed the Task.Delay limit (uint.MaxValue-1 milliseconds, about 49.7 days).");
 
         var channel = Channel.CreateBounded<ConsumedMessage<TMessage>>(
             new BoundedChannelOptions(Math.Max(maxBatchSize * 4, 16))

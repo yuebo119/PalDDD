@@ -467,7 +467,7 @@ public sealed class DapperEventLog : IEventLog
         }
         catch (System.Data.Common.DbException ex) when (IsUniqueConstraintViolation(ex))
         {
-            throw await ClassifyAtomicBatchConflictAsync(streamName, expectedVersion, ex).ConfigureAwait(false);
+            throw await ClassifyAtomicBatchConflictAsync(streamName, expectedVersion, events, ex).ConfigureAwait(false);
         }
 
         if (rows.Count != events.Count)
@@ -490,14 +490,17 @@ public sealed class DapperEventLog : IEventLog
     private async ValueTask<Exception> ClassifyAtomicBatchConflictAsync(
         string streamName,
         ExpectedStreamVersion expectedVersion,
+        IReadOnlyList<EventData> events,
         System.Data.Common.DbException original)
     {
         long? actual = null;
+        bool? eventIdExists = null;
         var requerySucceeded = false;
         try
         {
             actual = await _connection.QueryFirstOrDefaultAsync<long?>(
                 EventLogSql.MaxVersion, new { name = streamName }, Tx).ConfigureAwait(false);
+            eventIdExists = await AnyEventIdExistsAsync(events).ConfigureAwait(false);
             requerySucceeded = true;
         }
         catch (System.Data.Common.DbException)
@@ -507,10 +510,17 @@ public sealed class DapperEventLog : IEventLog
 
         if (requerySucceeded)
         {
+            // EventId 已落库 = 调用方重放同一事件（或批内重复），不是版本并发冲突，原样上抛。
+            if (eventIdExists == true)
+                return original;
+
             var mismatch = expectedVersion.Kind switch
             {
                 ExpectedStreamVersionKind.NoStream => (actual ?? -1) >= 0,
-                ExpectedStreamVersionKind.StreamExists => (actual ?? -1) < 0,
+                // R14 F2：StreamExists 不约束具体版本，冲突且 EventId 不重复即「并发写入先到」。
+                // 原 `(actual ?? -1) < 0` 在流已存在时恒 false，使该分支的并发冲突永不转
+                // EventStreamConcurrencyException（调用方按文档捕获该类型重试时拿不到）。
+                ExpectedStreamVersionKind.StreamExists => eventIdExists == false,
                 ExpectedStreamVersionKind.Exact => (actual ?? -1) != expectedVersion.Version,
                 _ => true,
             };
@@ -519,6 +529,34 @@ public sealed class DapperEventLog : IEventLog
         }
 
         return original;
+    }
+
+    /// <summary>批内是否存在任一已落库的 EventId（区分「重放同一事件」与「并发版本冲突」）。
+    /// 每块 400 行，避免 PG 占位符上限；查询本身失败由调用方保守回退原始异常。</summary>
+    private async ValueTask<bool> AnyEventIdExistsAsync(IReadOnlyList<EventData> events)
+    {
+        const int chunkRows = 400;
+        for (var start = 0; start < events.Count; start += chunkRows)
+        {
+            var count = Math.Min(chunkRows, events.Count - start);
+            var parameters = new DynamicParameters();
+            var sql = new StringBuilder(64 + (count * 16))
+                .Append("SELECT COUNT(*) FROM events WHERE event_id IN (");
+            for (var i = 0; i < count; i++)
+            {
+                if (i > 0)
+                    sql.Append(',');
+                var name = "e" + i;
+                sql.Append('@').Append(name);
+                parameters.Add(name, DapperAotInitializer.ToSqliteParameter(events[start + i].EventId));
+            }
+            sql.Append(')');
+            var existing = await _connection.QuerySingleAsync<int>(
+                sql.ToString(), parameters, Tx).ConfigureAwait(false);
+            if (existing > 0)
+                return true;
+        }
+        return false;
     }
 
     /// <summary>

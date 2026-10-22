@@ -279,10 +279,11 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
     }
 
     /// <summary>
-    /// MySQL 批量认领（无 RETURNING）：读既有行 → 多行 INSERT 缺失行 → UPDATE 可重入行 →
-    /// 按本次 processing_started_at 令牌回读。并发插入撞唯一键时整块回落逐条路径。
-    /// 2026-10-21 量测：单语句 ON DUPLICATE KEY UPDATE + 四次 IF 条件在本机 MySQL 8.4
-    /// 100 行批上反而比本形态慢约 5ms（服务端条件求值超过省下的两次本地往返），故保留。
+    /// MySQL 批量认领：逐条走 <see cref="TryStartProcessingAsync"/> 的原子 CAS 路径。
+    /// R14 F4 勘正：原块级实现以 <c>processing_started_at=@now</c> 作为认领身份，同一 now 的
+    /// 第二个调用在租约未过期（UPDATE 不命中）后仍能回读到第一个调用刚写入的行，同一消息
+    /// 被两个调用方同时认领并并发执行 handler。逐条路径以唯一约束冲突→状态判定为原子序列，
+    /// 代价为每消息 2 次往返（原块级 4 次/批）；恢复块级优化需引入本调用唯一令牌（schema 变更）。
     /// </summary>
     private async Task ClaimManyMySqlAsync(
         DbConnection connection,
@@ -293,105 +294,13 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
         List<InboxMessage> claimed,
         CancellationToken ct)
     {
-        const int chunkRows = 400;
-        var cutoff = now - processingTimeout;
-        var nowParam = ToTimeParam(now);
-        var cutoffParam = ToTimeParam(cutoff);
-
-        for (var start = 0; start < messageIds.Count; start += chunkRows)
+        _ = connection;
+        foreach (var messageId in messageIds)
         {
-            var count = Math.Min(chunkRows, messageIds.Count - start);
-
-            var selectParams = new DynamicParameters();
-            selectParams.Add("c", consumerName);
-            var selectSql = new StringBuilder(120 + count * 12)
-                .Append("SELECT ").Append(InboxColumns)
-                .Append(" FROM inbox_messages WHERE consumer_name=@c AND message_id IN (");
-            for (var i = 0; i < count; i++)
-            {
-                if (i > 0) selectSql.Append(',');
-                var name = "m" + (start + i);
-                selectSql.Append('@').Append(name);
-                selectParams.Add(name, messageIds[start + i]);
-            }
-            selectSql.Append(')');
-            var existing = await connection.QueryAsync<InboxMessage>(
-                selectSql.ToString(), selectParams, Tx).ConfigureAwait(false);
-            var existingIds = new HashSet<string>(
-                existing.Select(static m => m.MessageId), StringComparer.Ordinal);
-
-            var missing = new List<string>(count);
-            for (var i = 0; i < count; i++)
-            {
-                if (!existingIds.Contains(messageIds[start + i]))
-                    missing.Add(messageIds[start + i]);
-            }
-
-            if (missing.Count > 0)
-            {
-                var insertParams = new DynamicParameters();
-                insertParams.Add("c", consumerName);
-                insertParams.Add("now", nowParam);
-                var insertSql = new StringBuilder(180 + missing.Count * 24)
-                    .Append("INSERT INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES ");
-                for (var i = 0; i < missing.Count; i++)
-                {
-                    if (i > 0) insertSql.Append(',');
-                    var name = "m" + i;
-                    insertSql.Append("(@c,@").Append(name).Append(",1,@now,@now,1)");
-                    insertParams.Add(name, missing[i]);
-                }
-
-                try
-                {
-                    await connection.ExecuteAsync(insertSql.ToString(), insertParams, Tx).ConfigureAwait(false);
-                }
-                catch (DbException ex) when (IsUniqueConstraintViolation(ex))
-                {
-                    // 极窄并发插入窗口：整块回落逐条路径（慢路径只在此窗口发生一次）。
-                    foreach (var messageId in CollectChunkIds(messageIds, start, count))
-                    {
-                        var message = await TryStartProcessingAsync(
-                            consumerName, messageId, now, processingTimeout, ct).ConfigureAwait(false);
-                        if (message is not null)
-                            claimed.Add(message);
-                    }
-                    continue;
-                }
-            }
-
-            var reclaimParams = new DynamicParameters();
-            reclaimParams.Add("c", consumerName);
-            reclaimParams.Add("now", nowParam);
-            reclaimParams.Add("cutoff", cutoffParam);
-            var reclaimSql = new StringBuilder(160 + count * 12)
-                .Append("UPDATE inbox_messages SET status=1,attempts=attempts+1,processing_started_at=@now,last_error=NULL WHERE consumer_name=@c AND message_id IN (");
-            for (var i = 0; i < count; i++)
-            {
-                if (i > 0) reclaimSql.Append(',');
-                var name = "m" + (start + i);
-                reclaimSql.Append('@').Append(name);
-                reclaimParams.Add(name, messageIds[start + i]);
-            }
-            reclaimSql.Append(") AND (").Append(RetryableLeaseCondition).Append(')');
-            await connection.ExecuteAsync(reclaimSql.ToString(), reclaimParams, Tx).ConfigureAwait(false);
-
-            var finalParams = new DynamicParameters();
-            finalParams.Add("c", consumerName);
-            finalParams.Add("now", nowParam);
-            var finalSql = new StringBuilder(140 + count * 12)
-                .Append("SELECT ").Append(InboxColumns)
-                .Append(" FROM inbox_messages WHERE consumer_name=@c AND status=1 AND processing_started_at=@now AND message_id IN (");
-            for (var i = 0; i < count; i++)
-            {
-                if (i > 0) finalSql.Append(',');
-                var name = "m" + (start + i);
-                finalSql.Append('@').Append(name);
-                finalParams.Add(name, messageIds[start + i]);
-            }
-            finalSql.Append(')');
-            claimed.AddRange(await connection.QueryAsync<InboxMessage>(
-                finalSql.ToString(), finalParams, Tx).ConfigureAwait(false));
+            var message = await TryStartProcessingAsync(
+                consumerName, messageId, now, processingTimeout, ct).ConfigureAwait(false);
+            if (message is not null)
+                claimed.Add(message);
         }
     }
 
@@ -445,7 +354,7 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
                 parameters.Add("c", consumerName);
                 parameters.Add("startedAt", ToTimeParam(startedAt));
                 var sql = new StringBuilder(160 + count * 12)
-                    .Append("UPDATE inbox_messages SET status=2,processed_at=@at WHERE consumer_name=@c AND status=1 AND processing_started_at=@startedAt AND message_id IN (");
+                    .Append("UPDATE inbox_messages SET status=2,processed_at=@at,last_error=NULL WHERE consumer_name=@c AND status=1 AND processing_started_at=@startedAt AND message_id IN (");
                 for (var i = 0; i < count; i++)
                 {
                     if (i > 0) sql.Append(',');

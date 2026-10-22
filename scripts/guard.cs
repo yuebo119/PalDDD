@@ -57,6 +57,8 @@ var guards = new (string Project, string Filter, string Name)[]
      "/*/*/DiagnosticCoverageGateTests/*", "DiagnosticCoverage（38 条诊断断言级覆盖）"),
     ("test/PalDDD.Compression.Tests/PalDDD.Compression.Tests.csproj",
      "/*/*/CompressionGuardTests/*", "CompressionGuard（解压炸弹防护：输入上限/损坏输入/输出上限）"),
+    ("test/PalDDD.Core.Tests/PalDDD.Core.Tests.csproj",
+     "/*/*/DapperClassifierGuardTests/*", "DapperClassifierGuard（provider 判定 NoInlining 隔离/单驱动 JIT 安全）"),
 };
 
 // 有意不纳入本命令的守卫命名类（须逐条写明理由——豁免是显式的，不是静默跳过）

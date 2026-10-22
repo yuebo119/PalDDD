@@ -418,7 +418,13 @@ public sealed class RabbitMqBroker : MessageBrokerBase, IAsyncDisposable
             // 初始化失败会累积一个空壳队列。失败吞掉（channel 已关等，对齐安全包装模式）
             try
             {
-                await consumerChannel.QueueDeleteAsync(queueName, cancellationToken: ct).ConfigureAwait(false);
+                // R14：清理不随订阅取消——ct 已取消时 QueueDelete 抛 OCE 会逃出下方过滤，
+                // 跳过调用方的 channel 释放与 linkedCts.Dispose。
+                await consumerChannel.QueueDeleteAsync(queueName, cancellationToken: CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // 清理链路不响应取消；OCE 已由 None 消除，此处仅防御驱动层意外取消。
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

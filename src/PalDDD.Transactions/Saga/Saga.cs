@@ -378,6 +378,10 @@ public abstract class Saga<TState> where TState : SagaState, new()
             foreach (var key in current.ExecutedStepKeys)
                 if (existing.Add(key))
                     result.ExecutedStepKeys.Add(key);
+            // R14：同步合并前序步骤开始时间——原实现只 TryAdd 当前步骤，跨实例路径下前序
+            // 时间戳全部丢失 → ComputeNextCheckAt 返回 null → NextCheckAt 写哨兵，超时兜底静默关闭。
+            foreach (var pair in current.StepStartedAt)
+                result.StepStartedAt.TryAdd(pair.Key, pair.Value);
         }
 
         if (!result.ExecutedStepKeys.Contains(stepKey))
@@ -661,6 +665,21 @@ public abstract class Saga<TState> where TState : SagaState, new()
                 var finalChildState = await manager.ExecuteChildSagaNonGenericAsync(
                     resolved, childState, childEvent, token).ConfigureAwait(false);
                 var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp);
+
+                // R14 F3：子 Saga 停在 AwaitingHumanDecision（含 InterruptStep 的子流程）时
+                // 既未完成也未失败；原实现直接 ApplyOutput + RecordExecutedStep，把父步骤记为
+                // 成功并继续后续步骤——静默越过未获人工批准的审批子流程。子 Saga 的中断条目
+                // 挂在 manager 内且子状态不持久化，父继续后无法再恢复它，故必须失败可见。
+                // 只拦 AWD：正常成功的子 Saga 保持 Active（终态由用户回调决定），不能按
+                // Completed 判定，否则误伤现有 ChildSaga 成功路径。
+                if (finalChildState.Status == SagaStatus.AwaitingHumanDecision)
+                {
+                    throw new InvalidOperationException(
+                        $"Child saga step '{stepKey}' cannot proceed: child saga '{resolved.GetType().Name}' "
+                        + $"is AwaitingHumanDecision (parent saga '{current.SagaId}'). Human-in-the-loop "
+                        + "InterruptStep is not supported inside a ChildSagaStep; model the approval at the "
+                        + "parent saga level or run the child saga as an independent top-level saga.");
+                }
 
                 // Apply child output back to parent
                 childStep.ApplyOutput(current, finalChildState);
