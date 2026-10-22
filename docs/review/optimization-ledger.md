@@ -70,6 +70,31 @@
 
 R12 验证：全量 16 项目 **1907 用例，1827 通过 / 80 跳过 / 0 失败**；`gate-audit` 42/42；`AotSample` 重新发布运行通过。
 
+## 四、R13 缺陷挖掘与修复（2026-10-22，SCAN 基线 `259c173`，修复 `a404267..c385cad`）
+
+> SCAN 报告：`%TEMP%/palddd-opt/round-13/report.md`（60 条候选 + 11 条已证实）。
+> FIX 轮按家族分批，11 提交；每条的锁定测试与红→绿证据见表内「证据/锁定测试」列。
+
+| ID | 轴 | 位置 | 发现 | 状态 | 证据 | 决策来源 | 锁定测试 | 轮次 | 复活条件 |
+|---|---|---|---|---|---|---|---|---|---|
+| OPT-301 | CORRECTNESS | `SagaProcessor.cs:334-338` | 批量回填 OCE 逃逸跳过终态冲刷：Compensated 不落库、租约不释放，下一 tick 重租再补偿 | fixed（`a404267`） | E1 探针 `saga-proj`：`terminal_saved=0 status=Compensated`；修后回填用 None 且失败一律吞掉 | R13 F3（P1） | `SagaTimeoutProcessorTests.CheckTimeoutsAsync_BackfillSaveThrowsOce_StillFlushesCompensatedTerminal` | R13 | 回填改为独立后台任务，需重新评估冲刷序 |
+| OPT-302 | CORRECTNESS | `DapperSagaStateStore.cs:282-287`；`PalOrmSagaStateStore.cs:263-267` | PG 事务内唯一冲突被当普通冲突 catch，事务已 aborted（25P02），SaveMany 整批失败 | fixed（`c0df3b5`） | wslc pg186 真库：修前 `PostgresException/23505` 逃逸；修后 `saved=0 next_statement_ok=1 commit=OK` | R13 F11（P1） | `DapperStoreTests.SagaInsertPG_UsesOnConflictDoNothing_ForOptimisticConflictContract` | R13 | PG 改延迟约束或新增其他唯一键 |
+| OPT-303 | CORRECTNESS | `DapperSqlErrorClassifier.cs:25-52` | 三驱动 PrivateAssets=all，缺失程序集时强类型测试在异常过滤器内抛 FileNotFoundException（过滤器吞掉→原异常逃逸），PG-only 消费方唯一冲突分类整体失效 | fixed（`c0df3b5`） | 同上真库探针（修前 23505 逃逸的根因）；改为类型全名短路后分类恢复 | R13 F12（P1，修复中发现） | 真库探针 + 既有 `SqlClassifier` 测试族 | R13 | provider 改变异常类型全名 |
+| OPT-304 | CORRECTNESS | `FanOutStep.cs:120-131` | 对象初始化器设 MaxConcurrency 后信号量仍是 ProcessorCount，限流静默失效 | fixed（`150ae69`） | E1 探针：`init_max=1 gate=32`；修后首次执行惰性建门 | R13 F1（P2） | `FanOutStepTimeoutTests.Initializer_MaxConcurrency_IsHonored` | R13 | 步骤改为可复用多实例共享门 |
+| OPT-305 | CONTRACT | `SagaTimeoutDetector.cs:70-87`；`SagaProcessor.cs:174-181` | Timeout=TimeSpan.MaxValue 通过校验但在步骤执行前溢出抛 AOOR；回填点在 try 外可中断整轮扫描 | fixed（`a404267`） | E1 探针 `p3-02`；修后按永不到期跳过并写 NoPendingTimeout | R13 F2（P2） | `SagaTimeoutProcessorTests.ProcessEventAsync_TimeoutMaxValue_DoesNotOverflowAndWritesSentinel` | R13 | 文档明确禁止 MaxValue 时可降为 P3 |
+| OPT-306 | CONTRACT | `FailureReason.cs:25-30`；`InboxProcessor.cs:157-169` | Normalize 保留 U+0000，PG 22021 拒绝 → MarkFailed 失败被吞 → 行停 Processing 被重复执行 | fixed（`da85ea2`） | E1 `p1-01` + 真库 `db-proj D1`（22021） | R13 F4（P2） | `FailureReasonTests.Normalize_NulCharacter_IsStripped`、`Truncate_NulCharacter_IsStripped`、`Truncate_AllNulCharacters_BecomesEmpty` | R13 | provider 允许 NUL 或改用 bytea |
+| OPT-307 | TIME | `SqliteTypeHandlers.cs:95-100`；`SqliteRowFactory.cs:98-103` | DateTimeKind.Local 分支给库内 UTC 墙钟套本地偏移（−8h），MySQL fence 谓词失配 | fixed（`b6dc6d1`） | E1 `p4-02`：`+08:00` / `utc=前一日18:00Z`；修后零偏移 | R13 F5（P2） | `DapperStoreTests.DateTimeOffsetHandler_LocalKind_PreservesUtcWallClock` | R13 | 支持“真本地时间”语义的 provider 配置 |
+| OPT-308 | CONTRACT | `SqliteJsonCore.cs:224-225`；`PostgreSqlJsonbExtensions.cs:205` | OutboxByType 过滤 payload.Type，框架表类型在 type 列 → 恒 0 行 | fixed（`5e60b3f`） | E1 `p4-01`：`column_count=1 helper_count=0` | R13 F6（P2） | `SqliteJsonTests.EqualsParameterAndOutboxByType_ExecuteOnRealSqlite`（改用框架表形） | R13 | 框架表改为 payload 内嵌类型 |
+| OPT-309 | CONTRACT | `HealthCheckExtensions.cs:73-95`；`OutboxHealthServiceCollectionExtensions.cs:29-50` | 去重实现保留首个、注释写保留最后；幸存者 Tags 影响 tag 过滤 | fixed（`5925a4f`） | E1 `di-proj P2-02`：`survivor_tags=user`；修后 last-wins | R13 F7（P2） | `HealthCheckExtensionsTests.AddPalHealthChecks_DuplicateName_KeepsLastRegistration` | R13 | 健康检查框架改 last-wins 原生语义 |
+| OPT-310 | OBSERVABILITY | `ServiceRegistration.cs:91-108` | 管道行为互斥跳过时其他请求类型静默失去 Validation/Logging | fixed（文档 `13aedd8`，不推翻先到先得） | E1 `di-proj P2-01`：`other=0` | R13 F8（P2） | `ServiceRegistrationTests.AddPalCoreStack_AfterClosedRegistration_OtherRequestTypesLoseBehaviors` | R13 | 注册期获得 logger 或引入启动校验托管服务 |
+| OPT-311 | CONTRACT | `DetachedStreamEndpoints.cs:31-47` | 重复注册的配置被丢弃但仍先校验并抛 AOOR | fixed（`a7d084e`） | E1 `di-proj P2-03` | R13 F9（P3） | `HealthCheckExtensionsTests.AddDetachedStreamRuns_SecondCallWithInvalidConfig_IsIgnored` | R13 | 选项改为可变热更新 |
+| OPT-312 | SECURITY | `HealthCheckExtensions.cs:50-92` | MapPalHealthChecks 返回 IEndpointRouteBuilder，类备注要求的 RequireAuthorization 无法链 | fixed（`ec178ea`，新增 `MapPalHealthChecksWithConventions`） | 反射返回类型 + 备注原文；加可选参数实测 CS0121 二义且改变 CLR 签名 | R13 F10（P2） | `EndpointExtensionsTests.MapPalHealthChecks_ConfigureCallback_AppliesConvention` | R13 | 主版本允许破坏时再改原方法返回类型 |
+| OPT-313 | DOCS | `docs/design/optimization-prompt.md:143,707` | `dotnet run scripts/vuln-scan.cs` 缺 vuln.json 参数，按提示词执行为 RC=2 | fixed（`c385cad`） | E1：RC=2（用法: ... <vuln.json 路径>） | R13 ARCH-01（P3） | 无（文档命令） | R13 | vuln-scan 改为可读 stdin |
+
+R13 验证：全量 16 项目 **1919 用例，1839 通过 / 80 跳过 / 0 失败**（+12 测试）；
+`gate-audit` 42/42；`count-audit` 16 项/80 处；`doc-consistency`/`secret-scan`/`verify-conventions`/`encoding-gate` 全绿；
+`AotSample` 与 `DapperAotProbe`（PG/MySQL，JIT + `PublishAot`）通过。未推送、未打 tag。
+
 ## 四、R11 验证汇总
 
 - 代码基线：`cda53b9`；修复范围：`6d9fc6a..0f2ce38`（12 提交，dev，未推送）。
