@@ -14,6 +14,12 @@
 
 ### Added
 
+- **2026-10-22 R13 F22/F23：ValueObject 实现 IFormattable、JSON Lines 错误带文档级行号**：
+  ①**问题**：`ValueObject<T>` 的 `ToString(string?, IFormatProvider?)` 已存在但类型未声明 `IFormattable`——复合格式（插值 `$"{vo:X4}"` / `string.Format`）回退无参 `ToString`，格式串被静默忽略。`JsonLinesEventReader.DeserializeAll` 逐行反序列化，`JsonException.LineNumber` 恒为单行内位置（1），多行 `.jsonl` 无法定位坏行。
+  ②**修法**：`ValueObject<T>` 声明 `IFormattable`（方法已在）；JSON Lines 捕获 `JsonException` 后以同类型重抛，消息前缀 `JSON Lines parse failed at line N`，保留原 `Path`/`LineNumber`/`BytePositionInLine`。
+  ③**公共 API 无签名变化**（新增接口实现；快照未变）。
+  验证：新增 2 个锁定测试（修前 `{vo:X4}` 得 "255"、错误消息无 "line 2"）；全量 1932 用例 0 失败。
+
 - **2026-10-22 R13 F20/F21：基础库两处契约修复（NullPalLogger 结构化重载 + 演化启动校验哨兵）**：
   ①**问题**：`NullPalLogger<T>` 未覆写 `IPalLogger<T>` 的 EventId 结构化重载，接口默认实现走命名槽位→`string.Format`：参数少于槽位时抛 `FormatException`（本应最安全的空日志器转身成故障源），参数匹配时也白付正则替换与分配。`MessageEvolutionPipeline.ValidatePath` 缺 `Upgrade` 的 source/target ClrType 哨兵：同名同版本异 ClrType 的 descriptor 通过启动校验，首次消费才在 `Convert` 强转处炸（结构兼容时甚至静默错误转换）。
   ②**修法**：NullPalLogger 显式覆写四个结构化重载为空实现（不格式化、不分配、不抛）；ValidatePath 补 source 首步与 target 末步两处 ClrType 哨兵，与运行期同口径。
