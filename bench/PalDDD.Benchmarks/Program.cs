@@ -259,6 +259,11 @@ if (args.Contains("--persist-mysql", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--m2-probe", StringComparer.OrdinalIgnoreCase))
     return await ProjectionProbe.RunM2Async();
 
+// 出站唤醒信号量具（2026-10-22 性能轮）：写入到标记发布的延迟（InMemory 全链路，
+// 5 分钟轮询使信号成为唯一唤醒源）+ 突发写入的 tick 合并校验。
+if (args.Contains("--wakeup-probe", StringComparer.OrdinalIgnoreCase))
+    return await OutboxWakeUpProbe.RunAsync();
+
 if (args.Contains("--m3-probe", StringComparer.OrdinalIgnoreCase))
     return await RabbitChannelProbe.RunM3Async();
 

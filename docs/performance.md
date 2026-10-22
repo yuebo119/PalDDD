@@ -799,15 +799,15 @@ dotnet run scripts/eps-run.cs -- --list
 
 ## 2026-10-22 性能轮：往返账本驱动的四项优化
 
-**口径声明**：本节的往返数与延迟区间来自代码推导（逐条链路数出实际语句数 × RTT），
-不是新测的墙钟数字；分配类结论引用既有实测（`perf-budgets.md` 与各轮 BDN 报告）。
+**口径声明**：往返数与回放吞吐来自代码推导（逐条链路数出实际语句数 × RTT）；出站唤醒延迟为实测
+（`--wakeup-probe`，见下文）；分配类结论引用既有实测（`perf-budgets.md` 与各轮 BDN 报告）。
 按 EPSL 纪律，未实测的派生量标「推导」，不构成性能承诺。
 
-### 往返账本（推导）
+### 往返账本（推导，除唤醒延迟为实测）
 
 | 链路 | 优化前 | 优化后 |
 | --- | --- | --- |
-| 出站投递（PG，批 100） | 2 次往返/批 + 0–500ms 唤醒延迟 | 2 次往返/批 + 约 1–3ms（信号唤醒） |
+| 出站投递（PG，批 100） | 2 次往返/批 + 0–500ms 唤醒延迟 | 2 次往返/批 + 唤醒/调度 p50 0.013ms（实测，另加租约与发布网络） |
 | 入站单条（PG，重复消息） | 2 次往返 | 1 次 |
 | 入站单条（PG，可重试失败） | 3 次往返 | 1 次 |
 | 入站批量（PG，400 条） | 2 次往返/批 | 2 次往返/批（不变） |
@@ -825,6 +825,38 @@ dotnet run scripts/eps-run.cs -- --list
    `GetAsync` 探测；组首裁剪改「先量前缀再一次 RemoveRange」（避免批宽放大后的 O(n²) 搬移）。
 4. **消费上下文去闭包**：`FromHeaders`/RabbitMQ 路径直接持有头序列本体，`Headers` 惰性解码；
    实例尺寸不变（`FromHeaders_NullHeadersWithFallback_NoDictionaryAllocation` 预算保持）。
+
+### 实测：出站唤醒信号（2026-10-22，`--wakeup-probe`）
+
+量具：`bench/PalDDD.Benchmarks/OutboxWakeUpProbe.cs`。InMemory store + `NullMessageBroker` +
+真实 `OutboxProcessor`/`OutboxBatchProcessor` 全链路，`PollInterval` 设 5 分钟使信号成为唯一
+唤醒源；500 次「写入 → 被标记已发布」采样，另测 100 条突发写入的 tick 合并。
+
+| 指标 | 实测（同机，两次运行区间） |
+|---|---|
+| 最小 / p50 / p95 / p99 / 均值 | 0.004–0.006 / **0.006–0.013** / 0.012–0.036 / 0.035–0.067 / 0.053–0.084 ms |
+| 100 条突发写入的 tick 数 | **2–3**（逐条重构形态为 100） |
+
+口径说明：本数字是框架内的唤醒与调度下限，不含数据库租约/标记往返与 broker 网络（那两项属
+部署量纲，见 `--delivery-pg`/`--delivery-mysql` 车道）。μs 级指标受进程调度抖动影响，
+按量级引用而不是按小数点后三位引用。旧形态（纯 `Task.Delay(500ms)` 轮询）的期望等待是 250ms、
+最坏 500ms，属结构性事实而非估计。突发测试同时证明信号没有把批处理打散：写入合并后一批仍由
+少量 tick 排空，吞吐不会因唤醒而退化。
+
+复现：
+
+```bash
+dotnet run -c Release --project bench/PalDDD.Benchmarks -- --wakeup-probe
+# WAKEUP sample=500 min=0.006ms p50=0.013ms p95=0.036ms p99=0.067ms mean=0.084ms
+# WAKEUP burst=100 ticks=2
+# WAKEUP PASS
+```
+
+**信号覆盖边界**（不要假定更强）：Dapper/PalORM/InMemory 三栈的 `AddMessageAsync`/
+`AddMessagesAsync` 写入成功后通知；EF 栈由 `OutboxDomainEventInterceptor` 在
+`SavedChanges(Async)` 通知（覆盖领域事件路径）。以下路径仍走轮询：EF 上下文上直接
+`OutboxMessages.Add` 且未挂拦截器、运维 `RequeueDeadAsync`（各栈均不通知，重投后最多等一个
+`PollInterval`）、以及其它进程的写入。信号是加速通道，不是投递保证。
 
 ### 未落地（带理由）
 
