@@ -19,8 +19,8 @@ namespace PalDDD.PalORM.PostgreSql;
 /// <summary>PostgreSQL 方言 Outbox Store。</summary>
 public sealed class PostgreSqlOutboxStore : PalOrmOutboxStore<PostgreSqlProvider>
 {
-    public PostgreSqlOutboxStore(DataSession<PostgreSqlProvider> session, TimeProvider? clock = null)
-        : base(session, clock) { }
+    public PostgreSqlOutboxStore(DataSession<PostgreSqlProvider> session, TimeProvider? clock = null, IOutboxWakeUpSignal? wakeUpSignal = null)
+        : base(session, clock, wakeUpSignal) { }
 }
 
 /// <summary>PostgreSQL 方言 Inbox Store。</summary>

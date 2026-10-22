@@ -77,6 +77,26 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
         if (processingTimeout < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
         var c = await EnsureOpenAsync(ct).ConfigureAwait(false);
+        // 2026-10-22 性能轮：PG/SQLite 单语句认领——新建、失败重试、租约过期接管三种
+        // 「取得执行权」情形由一条 UPSERT 判定并落库，零行即「已处理或租约未过期」。
+        // 原路径为 INSERT →（冲突）回读 → CAS 更新：重复消息 2 次往返、可重试失败 3 次，
+        // 现分别收敛为 1 次；同时消掉回读与 CAS 之间的 TOCTOU 窗口。条件与批量路径
+        // （TryStartProcessingManyAsync 的 RetryableLeaseCondition）逐条等价，跨路径语义一致。
+        if (_dbType is DapperDbType.PostgreSql or DapperDbType.Sqlite)
+        {
+            var claimed = await c.QueryFirstOrDefaultAsync<InboxMessage>(
+                UpsertClaim,
+                new
+                {
+                    c = consumerName,
+                    m = messageId,
+                    now = ToTimeParam(now),
+                    cutoff = ToTimeParam(now - processingTimeout)
+                },
+                Tx).ConfigureAwait(false);
+            return claimed;
+        }
+
         // ct 传递口径（M1-3 勘正 2026-09-19）：原「改 CommandDefinition 传递 ct」为十七轮方案，
         // 已被 2026-09-13 裁决推翻（拦截器下 DAP057 + NativeAOT 异常，34 调用点改直接重载——
         // 现行口径见 DapperAotInitializer.cs:15-22，勿按旧注释「恢复」）。
@@ -472,6 +492,28 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
 
     private const string InboxColumns =
         "id,message_id,consumer_name,status,received_at,processed_at,processing_started_at,attempts,last_error";
+
+    /// <summary>
+    /// 单条认领 UPSERT（2026-10-22 性能轮，PG/SQLite）——新建插入、可重入行（Pending、
+    /// Failed、租约过期 Processing）经 DO UPDATE 取得执行权，其余（Processed、活跃
+    /// Processing）零行返回。条件与批量路径的 <see cref="RetryableLeaseCondition"/> 等价；
+    /// RETURNING 列显式 PascalCase 别名，不依赖 MatchNamesWithUnderscores 全局开关。
+    /// </summary>
+    private const string UpsertClaim = """
+        INSERT INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts)
+        VALUES (@c,@m,1,@now,@now,1)
+        ON CONFLICT (consumer_name,message_id) DO UPDATE
+        SET status=1, attempts=inbox_messages.attempts+1, processing_started_at=@now, last_error=NULL
+        WHERE inbox_messages.status=0
+           OR inbox_messages.status=3
+           OR (inbox_messages.status=1
+               AND inbox_messages.processing_started_at IS NOT NULL
+               AND inbox_messages.processing_started_at<@cutoff)
+        RETURNING id AS Id, message_id AS MessageId, consumer_name AS ConsumerName,
+                  status AS Status, received_at AS ReceivedAt, processed_at AS ProcessedAt,
+                  processing_started_at AS ProcessingStartedAt, attempts AS Attempts,
+                  last_error AS LastError
+        """;
 
     /// <summary>可重入条件（Pending、Failed、租约过期 Processing）；Processed/活跃 Processing 不命中。</summary>
     private const string RetryableLeaseCondition =

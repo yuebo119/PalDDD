@@ -702,6 +702,8 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
         }
 
         // Headers 只在消费 handler 真正读取时才物化全量字典；已知追踪字段已提前解码。
+        // 注：Kafka 的头是 Confluent 的 Headers（非键值序列），走委托形态，每消息一笔闭包；
+        // 通用键值序列路径（RabbitMQ 与 FromHeaders）已在 2026-10-22 性能轮去掉该分配。
         return new MessageConsumeContext(
             messageId, correlationId, causationId, traceParent, traceState,
             () => DecodeKafkaHeaders(headers));

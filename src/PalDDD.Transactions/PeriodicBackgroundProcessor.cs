@@ -103,7 +103,7 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
                         var interval = CurrentPollInterval;
                         if (interval > s_maxTimerDelay)
                             interval = s_maxTimerDelay;
-                        await Task.Delay(interval, _timeProvider, stoppingToken).ConfigureAwait(false);
+                        await WaitForIntervalAsync(interval, stoppingToken).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                     {
@@ -146,6 +146,18 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
 
     /// <summary>每轮执行的逻辑（在 scope 内调用，异常被基类隔离）。</summary>
     protected abstract ValueTask ExecuteTickAsync(CancellationToken ct);
+
+    /// <summary>
+    /// 空闲等待一个轮询间隔（2026-10-22 性能轮，基类唯一的「等下一轮」出口）。
+    /// <para>
+    /// 默认实现 <c>Task.Delay(interval, TimeProvider, ct)</c>，与旧形态逐位一致（含
+    /// <see cref="TimeProvider"/> 注入下的确定性测试语义）。派生类可覆写以接入事件驱动唤醒，
+    /// 契约：正常到时返回；<paramref name="ct"/> 取消时抛 <see cref="OperationCanceledException"/>
+    /// （基类按关停处理，不记失败）。
+    /// </para>
+    /// </summary>
+    protected virtual ValueTask WaitForIntervalAsync(TimeSpan interval, CancellationToken ct)
+        => new(Task.Delay(interval, _timeProvider, ct));
 
     /// <summary>每轮异常回调（子类记录日志）。基类保证循环不中断。</summary>
     protected abstract void OnTickFailed(Exception ex);

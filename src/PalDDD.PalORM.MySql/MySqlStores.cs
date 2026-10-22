@@ -17,8 +17,8 @@ namespace PalDDD.PalORM.MySql;
 /// <summary>MySQL 方言 Outbox Store。</summary>
 public sealed class MySqlOutboxStore : PalOrmOutboxStore<MySqlProvider>
 {
-    public MySqlOutboxStore(DataSession<MySqlProvider> session, TimeProvider? clock = null)
-        : base(session, clock) { }
+    public MySqlOutboxStore(DataSession<MySqlProvider> session, TimeProvider? clock = null, IOutboxWakeUpSignal? wakeUpSignal = null)
+        : base(session, clock, wakeUpSignal) { }
 }
 
 /// <summary>MySQL 方言 Inbox Store。</summary>

@@ -797,6 +797,45 @@ dotnet run scripts/eps-run.cs -- --list
 | `ValidationBenchmarks` | `BenchmarkDotNet.Artifacts/results/PalDDD.Benchmarks.ValidationBenchmarks-report-github.md` | `Success`：0 ns / 0 B；`Failed_SingleError`：9.8009 ns / 32 B |
 | `SmartEnumBenchmarks` | `BenchmarkDotNet.Artifacts/results/PalDDD.Benchmarks.SmartEnumBenchmarks-report-github.md` | 当前历史产物为 NA，不可作为性能结论（根因 2026-10-08 已修——继承静态方法不触发派生 cctor，见上文；现行数字见 MediumRun InProcess 基线表） |
 
+## 2026-10-22 性能轮：往返账本驱动的四项优化
+
+**口径声明**：本节的往返数与延迟区间来自代码推导（逐条链路数出实际语句数 × RTT），
+不是新测的墙钟数字；分配类结论引用既有实测（`perf-budgets.md` 与各轮 BDN 报告）。
+按 EPSL 纪律，未实测的派生量标「推导」，不构成性能承诺。
+
+### 往返账本（推导）
+
+| 链路 | 优化前 | 优化后 |
+| --- | --- | --- |
+| 出站投递（PG，批 100） | 2 次往返/批 + 0–500ms 唤醒延迟 | 2 次往返/批 + 约 1–3ms（信号唤醒） |
+| 入站单条（PG，重复消息） | 2 次往返 | 1 次 |
+| 入站单条（PG，可重试失败） | 3 次往返 | 1 次 |
+| 入站批量（PG，400 条） | 2 次往返/批 | 2 次往返/批（不变） |
+| 投影回放（批 100 / 批 1000，10ms RTT） | 约 600μs/事件 | 约 60μs/事件 |
+| EventLog 单条追加（PG） | 1 次往返 | 1 次往返（不变） |
+
+### 落地项
+
+1. **Outbox 唤醒信号**（公共接口 `IOutboxWakeUpSignal`）：四栈 Store 写入成功后通知，
+   `OutboxProcessor` 的空闲等待改为「信号或轮询间隔先到者」，被唤醒但租到 0 条时 20ms
+   自愈重试；未注册信号时退化为原 `Task.Delay` 形态。
+2. **Dapper Inbox 单条认领单语句化**（PG/SQLite）：与批量路径共用 UPSERT + RETURNING，
+   重复与可重试失败由 2/3 次往返收敛为 1 次，并消掉回读与 CAS 之间的 TOCTOU 窗口。
+3. **回放批宽与续读裁剪**：`CheckpointBatchSize` 默认 100 → 1000；续读命中时跳过组首
+   `GetAsync` 探测；组首裁剪改「先量前缀再一次 RemoveRange」（避免批宽放大后的 O(n²) 搬移）。
+4. **消费上下文去闭包**：`FromHeaders`/RabbitMQ 路径直接持有头序列本体，`Headers` 惰性解码；
+   实例尺寸不变（`FromHeaders_NullHeadersWithFallback_NoDictionaryAllocation` 预算保持）。
+
+### 未落地（带理由）
+
+- **MySQL 批量重认领 2N → 2 次往返**：同刻身份需要可空认领令牌列（DDL）才能不重蹈
+  「时间戳做身份」的覆辙，属 schema 变更，本轮不做。
+- **EventLog 单条追加参数对象池化**（约 2–4KB/次推导）：需先补该路径的 `[MemoryDiagnoser]`
+  基线证明其占端到端 1% 以上，按「先量具后改动」推迟。
+- **RabbitMQ 每投递 linked CTS**（约 200–300B/条推导）：与取消/关停语义耦合，收益风险比不成立。
+- **Saga 快照增量编码**：仅步骤数 >32 的长流程有感，属设计变更，未入场。
+- **回放心跳惰性化**：每批约 3 笔分配加一次计时器注册，占批成本不足 0.1%，不做。
+
 ## 未完成项
 
 1. ~~等 BenchmarkDotNet 支持当前 .NET 11 后用默认入口重新生成全部 benchmark 类结果~~（2026-10-08 大部分消解：17 类经 InProcess 显式模式全部可出正式报告；**2026-10-17 BDN 0.16.0-preview.2 已恢复默认 Switcher 入口**（`--list` 实测 exit 0），显式 InProcess 路径保留为口径配置；类级 job 注解仍按 Medium 显式 config 承载，不再依赖 attribute）。

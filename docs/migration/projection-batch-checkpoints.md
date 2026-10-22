@@ -5,10 +5,14 @@
 
 ## 变更
 
-`ProjectionProcessor<TMessage>.CheckpointBatchSize` 默认 100（回放按 100 条一组提交）；
+`ProjectionProcessor<TMessage>.CheckpointBatchSize` 默认 **1000**（回放按 1000 条一组提交）；
 在线逐消息 `ProcessAsync` 不受影响。设为 1 恢复逐事件检查点。
 > 2026-10-20 调整：原默认 1，回放每事件两次检查点写；改为默认 100 以消除回放主瓶颈。
 > 需要旧行为时显式设 1（迁移测试仍以 1 覆盖逐事件语义）。
+> 2026-10-22 调整：默认 100 → 1000。回放吞吐上限 = 批宽 ÷（每批 4 次检查点往返 × RTT）：
+> 批宽 100 时 10ms RTT 下每事件约 600μs 纯往返开销，批宽 1000 摊到约 60μs。崩溃重放窗口
+> 同步变为 1000 条（handler 幂等是既有契约）；组内时长由租约心跳（1/3 租约周期续期）兜住，
+> 不随批宽放大。下文 2026-10-19 的 100k 事件基准仍按批宽 100 计量（历史口径，未重测）。
 
 设置为 N>1 后，`ProjectionRebuilder` 按 N 条一组调用 `ProcessBatchAsync`：组内只对
 **最后位置**做一次 `TryStart`/`MarkCompleted`，组内事件直接调用 handler。
@@ -36,7 +40,7 @@
 ## 用法
 
 ```csharp
-var processor = new ProjectionProcessor<OrderEvent>(handler, checkpointStore); // 默认 100
+var processor = new ProjectionProcessor<OrderEvent>(handler, checkpointStore); // 默认 1000
 var rebuilder = new ProjectionRebuilder<OrderEvent>(
     handler.ProjectionName, "orders", replaySource, checkpointStore, processor)
 {

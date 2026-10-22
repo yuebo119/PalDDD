@@ -241,6 +241,14 @@ using PalDDD.Transactions;
 services.AddPalOutbox();
 ```
 
+**投递延迟（2026-10-22）**：`AddPalOutbox` 同时注册进程内唤醒信号 `IOutboxWakeUpSignal`。内置四栈
+Store（Dapper/PalORM/EF/InMemory）在消息行写入成功后通知 `OutboxProcessor` 立即续批，
+`PollInterval`（默认 500ms）降为兜底与跨实例写入的发现节奏——端到端排队延迟从半个轮询周期
+降到一次租约往返加一次发布。信号是加速通道而非投递保证（跨进程写入不触发本地信号，信号
+丢失/重复/合并均不影响正确性）；被唤醒但当轮租到 0 条时（写入方事务尚未提交）处理循环用
+20ms 短间隔自愈重试一次。替换实现另行注册 `IOutboxWakeUpSignal` 即可（`TryAddSingleton`
+先注册者胜出）；不注册则退回纯轮询，行为仍正确。
+
 调用方还必须注册：
 
 - `IMessageSerializer`

@@ -243,6 +243,13 @@
 
 ### Changed 变更
 
+- **2026-10-22 性能轮：出站唤醒信号 + 入站单语句认领 + 回放批宽与续读裁剪 + 消费上下文去闭包（零破坏性行为变更）**：本轮按「往返次数与唤醒延迟是剩余瓶颈」的结论落地四项。
+  ①**新增公共接口 `IOutboxWakeUpSignal`（+ `AddPalOutbox` 默认注册 `OutboxWakeUpSignal` 单例）**：写入方在 Outbox 语句执行后 `Notify()`，`OutboxProcessor` 的空闲等待从「纯 `Task.Delay(PollInterval)`」改为「信号或间隔先到者」，并在被唤醒但租到 0 条时用 20ms 短间隔自愈重试一次（覆盖写入方事务未提交的时序）。默认 `PollInterval=500ms` 下，端到端排队延迟从 p50≈250ms / p99≈500ms 降到一次租约往返加一次发布（同机约 1–3ms）。跨进程写入不触发本地信号，轮询仍是兜底；信号丢失/重复/合并均不影响正确性。DI 侧由 `AddPalOutbox` 注册，宿主可 `TryAddSingleton` 替换实现；`InMemoryOutboxStore`/`DapperOutboxStore`/`PalOrmOutboxStore<TProvider>` 及三个 PalORM 方言 Store/`OutboxProcessor` 的可选尾参注入该信号（源码兼容，二进制需重编译），EF 栈由 `OutboxDomainEventInterceptor` 在 `SavedChanges(Async)` 通知。未注册信号时行为与旧版逐字一致。
+  ②**Dapper Inbox 单条认领合并为一条 UPSERT（PG/SQLite）**：原路径 INSERT →（冲突）回读 → CAS 更新（重复消息 2 次往返、可重试失败 3 次），现与批量路径共用「INSERT ... ON CONFLICT DO UPDATE ... WHERE 可重入条件 RETURNING 列」单语句，三种情形均 1 次往返；顺带消除回读与 CAS 之间的 TOCTOU 窗口。MySQL 路径不变。
+  ③**投影回放：`CheckpointBatchSize` 默认 100 → 1000，续读命中时跳过组首边界探测**：回放吞吐上限 = 批宽 ÷（每批 4 次检查点往返 × RTT），批宽 100 时 10ms RTT 下每事件约 600μs 往返开销；批宽 1000 摊到约 60μs。崩溃重放窗口同步从 100 条变为 1000 条（handler 幂等为既有契约，租约心跳按 1/3 周期续期不受批宽影响）。续读位置存在时组首必然是未完成位置，省去每批一次 `GetAsync`；组首裁剪改「先量前缀再一次 RemoveRange」（批宽放大后避免 O(n²) 搬移）。
+  ④**`MessageConsumeContext` 通用路径去闭包**：`FromHeaders`/RabbitMQ 消费路径改为直接持有头键值序列本体，`Headers` 首次读取时解码，去掉每消息一个闭包加委托（实例尺寸不变，`FromHeaders_NullHeadersWithFallback_NoDictionaryAllocation` 的分配预算逐字保持）；Confluent `Headers` 非键值序列，Kafka 路径维持委托形态。
+  验证：全量构建 0 警告 0 错误；16 个测试工程 1954 个测试 1872 通过 0 失败（本机跳过 82 个容器/方言探针）；新增锁定测试 11 条（信号语义 8、循环唤醒与自愈 2、单条认领可重入 1）；公共 API 快照按新接口与可选尾参更新。预算门禁（`--smoke`）阈值未变。
+
 - **[Breaking] `SagaState.ExecutedStepKeys` 由 `Collection<string>` 改为 `List<string>`（ADR-035，2026-10-20，随 v5.0.0 发布）**：Npgsql EF 11 preview 6 对 EF `PrimitiveCollection` 的物化类型是 `List<string>`，原 `Collection<string>` 属性在 EF PG/MySQL 读取 `SagaState` 时抛 `InvalidCastException`（PG 18.6 真库探针首次运行实证）。改为 `List<string>` 后属性类型与 provider 物化类型一致，JSON 线格式与 EF 列结构不变，无数据迁移；常规 `Add`/`Contains`/`foreach`/索引器用法不变，显式赋值 `Collection<string>` 的消费方需改为 `List<string>`。`CA1002` 在属性级精确抑制。验证：PG 18.6 + Npgsql EF 11 preview 6 租约四形态 8/8（含 `ExecutedStepKeys = ["Start","Step1"]` 往返）、MySQL 8.4.11 + Microting 11.0.0-preview.1 全栈 8/8（含该列往返）、SQLite EF 15/15、Integration 417 通过 / 14 跳过；公共 API 快照属性行同步。迁移与备选方案见 ADR-035。
 
 - **变异测试调度由月度改为每周（2026-10-19）**：`.github/workflows/mutation.yml` 的 cron 从每月 1 日 04:00 UTC 改为每周一 04:00 UTC（Asia/Shanghai 周一 12:00）；两个 curated 基线（CompressionProvider、Transactions/MySqlLeasePolicy）、break=95、JSON/HTML artifact 与手动触发不变。动机：月度间隔过长，变异回归最坏可潜伏约一个月。

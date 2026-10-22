@@ -142,16 +142,27 @@ public sealed class ProjectionRebuilder<TMessage>
     /// </summary>
     private async ValueTask<int> ProcessBatchWithEdgeTrimAsync(
         List<(TMessage Message, ProjectionContext Context)> batch,
+        bool skipHeadTrim,
         CancellationToken ct)
     {
-        while (batch.Count > 0)
+        // 2026-10-22 性能轮：续读位置存在时组首必然是「最小未完成位置」，头部裁剪的
+        // 一次 GetAsync 探测纯属浪费（每批一次往返）。尾部裁剪保留——「洞后已完成」
+        // 形态仍需逐位置判定。
+        if (!skipHeadTrim)
         {
-            var first = batch[0].Context;
-            var checkpoint = await _checkpointStore.GetAsync(
-                _projectionName, first.SourceName, first.Position, ct).ConfigureAwait(false);
-            if (checkpoint?.Status != ProjectionCheckpointStatus.Completed)
-                break;
-            batch.RemoveAt(0);
+            // 先量出已完成前缀长度再一次 RemoveRange（批宽 1000 时逐条 RemoveAt(0) 是 O(n²) 搬移）。
+            var head = 0;
+            while (head < batch.Count)
+            {
+                var first = batch[head].Context;
+                var checkpoint = await _checkpointStore.GetAsync(
+                    _projectionName, first.SourceName, first.Position, ct).ConfigureAwait(false);
+                if (checkpoint?.Status != ProjectionCheckpointStatus.Completed)
+                    break;
+                head++;
+            }
+            if (head > 0)
+                batch.RemoveRange(0, head);
         }
 
         while (batch.Count > 0)
@@ -296,7 +307,7 @@ public sealed class ProjectionRebuilder<TMessage>
                         && _timeProvider.GetElapsedTime(batchStarted) < _checkpointFlushInterval)
                         continue;
 
-                    var advanced = await ProcessBatchWithEdgeTrimAsync(batch, ct).ConfigureAwait(false);
+                    var advanced = await ProcessBatchWithEdgeTrimAsync(batch, skipHeadTrim: resumeFrom is not null, ct).ConfigureAwait(false);
                     if (advanced < 0)
                     {
                         // 整组均已完成（边界裁剪后为空）：跳过该组，继续下一组。
@@ -314,7 +325,7 @@ public sealed class ProjectionRebuilder<TMessage>
 
                 if (!stoppedForLease && batch.Count > 0)
                 {
-                    var advanced = await ProcessBatchWithEdgeTrimAsync(batch, ct).ConfigureAwait(false);
+                    var advanced = await ProcessBatchWithEdgeTrimAsync(batch, skipHeadTrim: resumeFrom is not null, ct).ConfigureAwait(false);
                     if (advanced > 0)
                         checked { processed += advanced; }
                 }

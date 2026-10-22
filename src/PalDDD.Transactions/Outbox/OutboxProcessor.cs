@@ -25,15 +25,27 @@ namespace PalDDD.Transactions;
     Justification = "BackgroundService 需隔离轮询循环失败并继续处理后续批次，需捕获 Exception 基类。")]
 public sealed class OutboxProcessor : PeriodicBackgroundProcessor
 {
+    /// <summary>被唤醒但租到 0 条时的自愈重试间隔（2026-10-22 性能轮）。</summary>
+    /// <remarks>
+    /// 写入方可能把 Outbox 写入包在自己的事务里，信号先于提交到达。这一轮租不到消息时，
+    /// 用 20ms 的短间隔再试一次即可覆盖正常提交延迟；仍为空则回归 <see cref="OutboxOptions.PollInterval"/>。
+    /// 取值只需大于「提交与信号之间的典型间隔」，小于它就没有收益。
+    /// </remarks>
+    private const int SignalCommitRetryMilliseconds = 20;
+
     private readonly IPalLogger<OutboxProcessor> _logger;
+    private readonly IOutboxWakeUpSignal? _wakeUpSignal;
     private bool _lastTickFullBatch; // T1.2：上一轮满批信号（ExecuteTickAsync 内赋值，基类循环经 TickHasPendingWork 读取）
+    private bool _wokeBySignal;      // 上一轮空闲等待是否由信号唤醒
+    private bool _retrySoon;         // 被唤醒但没租到消息：下一轮用短间隔
 
     public OutboxProcessor(
         IServiceScopeFactory scopeFactory,
         IOptionsMonitor<OutboxOptions> options,
         IPalLogger<OutboxProcessor> logger,
         TimeSpan? pollInterval = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IOutboxWakeUpSignal? wakeUpSignal = null)
         // P3 修复（十七轮）：options 空守卫前移到 base 实参——原实参 pollInterval 为 null 时
         // 先在 options.CurrentValue 解引用 NRE，构造体内的 ThrowIfNull 永不可达
         // v29 P3：?? 短路勘正——pollInterval 非 null 时 (options ?? throw) 不求值，base 构造
@@ -60,11 +72,37 @@ public sealed class OutboxProcessor : PeriodicBackgroundProcessor
                timeProvider)
     {
         _logger = logger;
+        _wakeUpSignal = wakeUpSignal;
     }
 
     // T1.2：满批信号上浮——基类循环据此进入自适应排空（满批立即续批）。
     // 方法首行置 false：异常路径不带出上一轮的陈旧 true。
     protected override bool TickHasPendingWork => Volatile.Read(ref _lastTickFullBatch);
+
+    /// <summary>
+    /// 空闲等待（2026-10-22 性能轮）：注册了 <see cref="IOutboxWakeUpSignal"/> 时改为
+    /// 「等信号或到轮询间隔，先到者生效」；未注册时保持基类的纯 <c>Task.Delay</c> 形态。
+    /// </summary>
+    protected override async ValueTask WaitForIntervalAsync(TimeSpan interval, CancellationToken ct)
+    {
+        if (_wakeUpSignal is null)
+        {
+            await base.WaitForIntervalAsync(interval, ct).ConfigureAwait(false);
+            return;
+        }
+
+        // 自愈：上一轮被信号唤醒但租到 0 条（写入方事务尚未提交）时，本轮用短间隔再试，
+        // 避免消息白等一个完整的 PollInterval。仅缩短、不放大用户配置的间隔。
+        if (_retrySoon)
+        {
+            _retrySoon = false;
+            var retry = TimeSpan.FromMilliseconds(SignalCommitRetryMilliseconds);
+            if (retry < interval)
+                interval = retry;
+        }
+
+        _wokeBySignal = await _wakeUpSignal.WaitAsync(interval, ct).ConfigureAwait(false);
+    }
 
     protected override async ValueTask ExecuteTickAsync(CancellationToken ct)
     {
@@ -72,6 +110,9 @@ public sealed class OutboxProcessor : PeriodicBackgroundProcessor
         using var scope = ScopeFactory.CreateScope();
         var processor = scope.ServiceProvider.GetRequiredService<OutboxBatchProcessor>();
         Volatile.Write(ref _lastTickFullBatch, await processor.ProcessBatchWithBacklogAsync(ct).ConfigureAwait(false));
+        // 被信号唤醒但一条都没租到 = 写入方事务可能尚未提交，下一轮短间隔重试一次。
+        _retrySoon = _wokeBySignal && processor.LastLeasedCount == 0;
+        _wokeBySignal = false;
     }
 
     protected override void OnTickFailed(Exception ex)

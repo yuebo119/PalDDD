@@ -215,7 +215,9 @@ public static class MySqlServiceCollectionExtensions
         services.AddScoped<IPalOutboxStore>(sp =>
         {
             var conn = sp.GetRequiredService<MySqlConnection>();
-            return new DapperOutboxStore(conn, DapperDbType.MySql);
+            // 2026-10-22 性能轮：唤醒信号随 AddPalOutbox 注册；未注册时 GetService 返回 null，
+            // 保持纯轮询（与 AddPalDapperTransactions 的容器激活形态语义一致）。
+            return new DapperOutboxStore(conn, DapperDbType.MySql, wakeUpSignal: sp.GetService<IOutboxWakeUpSignal>());
         });
 
         services.AddScoped<IInboxStore>(sp =>

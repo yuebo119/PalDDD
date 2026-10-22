@@ -29,15 +29,22 @@ public sealed class ProjectionProcessor<TMessage>
     // listener 时静默）；可选参数默认 null 向后兼容，DI 注册处无需改动
     private readonly IPalLogger<ProjectionProcessor<TMessage>>? _logger;
 
-    private int _checkpointBatchSize = 100;
+    private int _checkpointBatchSize = 1000;
 
     /// <summary>
-    /// 检查点批量大小：100 = 回放默认按 100 条一组提交（在线逐消息路径不受影响）；
-    /// 设为 1 恢复逐事件检查点。N&gt;1 时由 <see cref="ProjectionRebuilder{TMessage}"/>
-    /// 按 N 条一组调用 <see cref="ProcessBatchAsync"/>，组内只在最后位置做一次租约/完成写。
-    /// 崩溃后最多重放 N 条；投影 handler 必须幂等（既有 at-least-once 契约）。
-    /// 组内处理时长必须小于 processingTimeout；回放侧另有时间界冲刷，避免慢 handler
-    /// 让单组超过租约。
+    /// 检查点批量大小：默认 1000（2026-10-22 性能轮由 100 提升）表示回放按 1000 条一组提交
+    /// （在线逐消息路径不受影响）；设为 1 恢复逐事件检查点。N&gt;1 时由
+    /// <see cref="ProjectionRebuilder{TMessage}"/> 按 N 条一组调用 <see cref="ProcessBatchAsync"/>，
+    /// 组内只在组首/组末做一次租约/完成写。
+    /// <para>
+    /// <b>为什么提默认值</b>：回放吞吐上限 = 批宽 ÷（每批往返数 × RTT）。每批固定 4 次
+    /// 检查点往返，批宽 100 时 10ms RTT 下每事件要付约 600μs 的往返延迟，把 handler 成本
+    /// 完全淹没；批宽 1000 后同一 RTT 下摊到约 60μs，回放吞吐提升一个数量级。
+    /// </para>
+    /// <para>
+    /// 崩溃后最多重放 N 条（因此 N 也是 at-least-once 的重复窗口；投影 handler 必须幂等，
+    /// 既有契约不变）。组内处理时长由租约心跳（1/3 租约周期续期）兜底，不受批宽影响。
+    /// </para>
     /// </summary>
     public int CheckpointBatchSize
     {
