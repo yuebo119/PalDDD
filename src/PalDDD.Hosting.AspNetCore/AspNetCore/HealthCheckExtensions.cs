@@ -78,12 +78,19 @@ public static class HealthCheckExtensions
         services.AddSingleton<PalHealthCheckDeduplicationMarker>();
         services.AddOptions<HealthCheckServiceOptions>().PostConfigure(options =>
         {
-            var seen = new HashSet<string>(StringComparer.Ordinal);
+            // R13 F7：保留**最后一次**注册（后注册者覆盖先注册者，与注释/DI 惯例一致）。
+            // 原实现保留首个：两种注册顺序各错一半——用户先注册 "outbox" 时框架检查被
+            // 顶替；框架先注册时用户的后注册被丢弃。幸存者 Tags 决定 tag 过滤端点是否包含该项。
+            var snapshot = options.Registrations.ToList();
+            var lastIndexByName = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (var i = 0; i < snapshot.Count; i++)
+                lastIndexByName[snapshot[i].Name] = i;
+
             List<HealthCheckRegistration>? duplicates = null;
-            foreach (var registration in options.Registrations)
+            for (var i = 0; i < snapshot.Count; i++)
             {
-                if (!seen.Add(registration.Name))
-                    (duplicates ??= []).Add(registration);
+                if (lastIndexByName[snapshot[i].Name] != i)
+                    (duplicates ??= []).Add(snapshot[i]);
             }
 
             if (duplicates is null)
