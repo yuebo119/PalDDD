@@ -153,8 +153,10 @@ public sealed class JsonLinesEventReader
         List<TMessage> result = [];
 
         var start = 0;
+        var lineNumber = 0;
         while (start < span.Length)
         {
+            lineNumber++;
             var remaining = span.Slice(start);
             var idx = remaining.IndexOf((byte)'\n'); // R1（C-F10）：单字节直检（原 s_newline SearchValues 已删）
             var lineLen = idx < 0 ? remaining.Length : idx;
@@ -169,7 +171,23 @@ public sealed class JsonLinesEventReader
                     line = line.Slice(0, lineLen - 1);
                 if (line.Length > 0)
                 {
-                    var msg = System.Text.Json.JsonSerializer.Deserialize(line, typeInfo);
+                    TMessage? msg;
+                    try
+                    {
+                        msg = System.Text.Json.JsonSerializer.Deserialize(line, typeInfo);
+                    }
+                    catch (System.Text.Json.JsonException ex)
+                    {
+                        // R13 F23：JsonException 的行号/位置相对每次单行 Deserialize（恒为
+                        // 第 1 行），多行 .jsonl 无法定位坏行。包装时带文档级行号，原 Path/
+                        // LineNumber/BytePositionInLine 保留。
+                        throw new System.Text.Json.JsonException(
+                            $"JSON Lines parse failed at line {lineNumber}: {ex.Message}",
+                            ex.Path,
+                            ex.LineNumber,
+                            ex.BytePositionInLine);
+                    }
+
                     if (msg is not null)
                         result.Add(msg);
                 }
