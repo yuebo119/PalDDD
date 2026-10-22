@@ -659,6 +659,18 @@ internal static class ValidationProblemResponseFactory
             StatusCodes.Status415UnsupportedMediaType,
             [new ValidationProblemError("contentType", "Request Content-Type is not application/json.")]);
 
+    /// <summary>R12 C-12：请求体超限/坏请求的 ProblemDetails（保留宿主状态码，不再改写成 500）。</summary>
+    internal static ValidationProblemResponse CreateBadRequest(int statusCode, string message)
+    {
+        var (type, title) = statusCode switch
+        {
+            StatusCodes.Status413PayloadTooLarge =>
+                ("https://www.rfc-editor.org/rfc/rfc9110#section-15.5.14", "Content Too Large"),
+            _ => ("https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1", "Bad Request"),
+        };
+        return new(type, title, statusCode, [new ValidationProblemError("requestBody", message)]);
+    }
+
     /// <summary>按 PalValidationException 构造规范 ValidationProblemResponse（RFC 9110 §15.5.1）。</summary>
     internal static ValidationProblemResponse Create(CQRS.PalValidationException ex)
         => new(

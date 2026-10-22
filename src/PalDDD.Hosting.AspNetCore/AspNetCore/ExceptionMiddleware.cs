@@ -85,6 +85,24 @@ public sealed class ExceptionMiddleware
                 contentType: null,
                 cancellationToken: context.RequestAborted).ConfigureAwait(false);
         }
+        catch (BadHttpRequestException ex)
+        {
+            // R12 C-12：请求体超限（Kestrel/宿主 RequestSizeLimit 抛 413）等坏请求
+            // 原被通用 catch 改写成 500，客户端错误被计为服务端错误。保留宿主状态码。
+            if (context.Response.HasStarted)
+            {
+                _logger.Warning($"Bad request exception after response started: {ex.Message}");
+                throw;
+            }
+
+            context.Response.StatusCode = ex.StatusCode;
+            var response = ValidationProblemResponseFactory.CreateBadRequest(ex.StatusCode, ex.Message);
+            await context.Response.WriteAsJsonAsync(
+                response,
+                PalAspNetCoreJsonContext.Default.ValidationProblemResponse,
+                contentType: null,
+                cancellationToken: context.RequestAborted).ConfigureAwait(false);
+        }
         catch (OperationCanceledException)
         {
             // 请求取消不映射为 500，正常传播以触发 ASP.NET Core 的标准取消处理。

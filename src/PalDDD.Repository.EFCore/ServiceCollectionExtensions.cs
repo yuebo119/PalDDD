@@ -123,8 +123,15 @@ public static class ServiceCollectionExtensions
                 + "defers this error to resolution time for source compatibility.");
         }
 
-        var store = serviceProvider.GetService<IPalOutboxStore>();
-        if (store is not null && !ReferenceEquals(store, context))
+        // R12 C-23：store 缺失也必须在解析期失败——原实现 store is null 时直接跳过，
+        // 承诺的 fail-fast 后移到首个带领域事件的 SaveChanges（错误点落进业务写路径）。
+        var store = serviceProvider.GetService<IPalOutboxStore>()
+            ?? throw new InvalidOperationException(
+                "Pal Outbox wiring is invalid: no IPalOutboxStore is registered. Register the business "
+                + "context itself as IPalOutboxStore (e.g. services.AddScoped<IPalOutboxStore>(sp => "
+                + "sp.GetRequiredService<AppDbContext>())) so the interceptor and the unit of work share "
+                + "the same context instance; otherwise domain events are silently dropped.");
+        if (!ReferenceEquals(store, context))
         {
             throw new InvalidOperationException(
                 $"Pal Outbox wiring is invalid: IPalOutboxStore resolves to '{store.GetType().FullName}', "
