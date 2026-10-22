@@ -360,6 +360,25 @@ public sealed partial class DetachedStreamTests
         }
         return frames;
     }
+
+    [Test]
+    public async Task MapDetachedStreamQuery_InvalidKeepAlive_ThrowsAtMapTime()
+    {
+        // R13 F18：断线续跑三端点原先只拒绝 <=0，缺失 Task.Delay 上限与亚毫秒下界——
+        // 60 天被静默钳到约 24.8 天（配置错误无声通过），0.5ms 则退化为紧循环。
+        var web = WebApplication.CreateSlimBuilder();
+        web.Services.AddDetachedStreamRuns();
+        await using var app = web.Build();
+
+        await Assert.That(() => app.MapDetachedStreamQuery<DetachedQuery, DetachedChunk>(
+                "/d-beyond", ctx => new DetachedQuery("p"), DetachedStreamJsonContext.Default.DetachedChunk,
+                keepAliveInterval: TimeSpan.FromDays(60)))
+            .Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => app.MapDetachedStreamQuery<DetachedQuery, DetachedChunk>(
+                "/d-subms", ctx => new DetachedQuery("p"), DetachedStreamJsonContext.Default.DetachedChunk,
+                keepAliveInterval: TimeSpan.FromTicks(5000)))
+            .Throws<ArgumentOutOfRangeException>();
+    }
 }
 
 // ─── 测试宿主（真 Kestrel，独立端口） ───

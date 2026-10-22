@@ -72,7 +72,7 @@ public static class DetachedStreamEndpoints
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(bindQuery);
         ArgumentNullException.ThrowIfNull(itemJsonTypeInfo);
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(keepAliveInterval ?? TimeSpan.MaxValue, TimeSpan.Zero);
+        EndpointExtensions.ValidateKeepAliveInterval(keepAliveInterval);
 
         return endpoints.MapGet(pattern, async context =>
         {
@@ -113,7 +113,7 @@ public static class DetachedStreamEndpoints
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(queryJsonTypeInfo);
         ArgumentNullException.ThrowIfNull(itemJsonTypeInfo);
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(keepAliveInterval ?? TimeSpan.MaxValue, TimeSpan.Zero);
+        EndpointExtensions.ValidateKeepAliveInterval(keepAliveInterval);
 
         return endpoints.MapPost(pattern, async context =>
         {
@@ -224,7 +224,7 @@ public static class DetachedStreamEndpoints
     {
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(itemJsonTypeInfo);
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(keepAliveInterval ?? TimeSpan.MaxValue, TimeSpan.Zero);
+        EndpointExtensions.ValidateKeepAliveInterval(keepAliveInterval);
 
         return endpoints.MapGet($"{pattern}/{{runId}}/stream", async context =>
         {

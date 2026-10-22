@@ -213,12 +213,7 @@ public static class EndpointExtensions
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(bindQuery);
         ArgumentNullException.ThrowIfNull(itemJsonTypeInfo);
-        // R11 F21：Task.Delay 上限为 uint.MaxValue-1 ms（约 49.7 天），超过时心跳延时
-        // 在首个请求抛 ArgumentOutOfRangeException 并被改写成 200 + event: error；
-        // 与 DetachedStreamOptions.Validate 同口径，在映射期 fail-fast。
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(keepAliveInterval ?? TimeSpan.MaxValue, TimeSpan.Zero);
-        if (keepAliveInterval is { } keepAlive)
-            ArgumentOutOfRangeException.ThrowIfGreaterThan(keepAlive, TimeSpan.FromMilliseconds(uint.MaxValue - 1));
+        ValidateKeepAliveInterval(keepAliveInterval);
 
         return endpoints.MapGet(pattern, async context =>
         {
@@ -274,10 +269,7 @@ public static class EndpointExtensions
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(queryJsonTypeInfo);
         ArgumentNullException.ThrowIfNull(itemJsonTypeInfo);
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(keepAliveInterval ?? TimeSpan.MaxValue, TimeSpan.Zero);
-        // R11 F21：与 GET 重载同款 Task.Delay 上限守卫。
-        if (keepAliveInterval is { } keepAlive)
-            ArgumentOutOfRangeException.ThrowIfGreaterThan(keepAlive, TimeSpan.FromMilliseconds(uint.MaxValue - 1));
+        ValidateKeepAliveInterval(keepAliveInterval);
 
         return endpoints.MapPost(pattern, async context =>
         {
@@ -287,6 +279,21 @@ public static class EndpointExtensions
                 context, query!, itemJsonTypeInfo, formatFrame, eventSelector, idSelector, keepAliveInterval)
                 .ConfigureAwait(false);
         });
+    }
+
+    /// <summary>
+    /// R13 F18：流式端点心跳间隔的统一映射期校验（GET/POST 与断线续跑三端点共用）。
+    /// 下界 1ms：Task.Delay 对 (0,1ms) 截断为 0 并返回已完成 Task，心跳竞速会退化为
+    /// 紧循环（CPU/带宽放大，且与断线续跑的 Math.Clamp 下界分叉）；
+    /// 上界 uint.MaxValue-1 ms（约 49.7 天）：Task.Delay 上限，超过时首个请求抛 AOOR
+    /// 并被改写成 200 + event: error（R11 F21）。
+    /// </summary>
+    internal static void ValidateKeepAliveInterval(TimeSpan? keepAliveInterval)
+    {
+        if (keepAliveInterval is not { } interval)
+            return;
+        ArgumentOutOfRangeException.ThrowIfLessThan(interval, TimeSpan.FromMilliseconds(1));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(interval, TimeSpan.FromMilliseconds(uint.MaxValue - 1));
     }
 
     /// <summary>
