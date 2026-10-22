@@ -173,9 +173,13 @@ public abstract class OutboxDbContext : DbContext, IPalOutboxStore, IBatchMarkOu
             }
             return;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException) when (!Database.IsRelational())
         {
-            // ExecuteUpdate 不支持的 provider（EF InMemory 等）——回退到条件加载路径
+            // R13 F25：ExecuteUpdate 只在关系型 provider 可用。原实现捕获任意
+            // InvalidOperationException——关系型 provider 上的翻译失败/并发上下文冲突/
+            // 值转换异常被误当能力回落，只变异跟踪实体且 RequiresSaveAfterMark=false
+            // 不再 SaveChanges，终态写静默丢失（行仍 Pending+租约，到期重租重发）。
+            // 非关系型（EF InMemory 等）才走条件加载回落。
         }
 
         // 兜底路径：仅 provider 不支持 ExecuteUpdate 时到达（ITM-283 收窄）
@@ -327,9 +331,10 @@ public abstract class OutboxDbContext : DbContext, IPalOutboxStore, IBatchMarkOu
             }
             return;
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException) when (!Database.IsRelational())
         {
-            // 同 MarkProcessed——非关系型 provider 回退
+            // R13 F25：同 MarkProcessed——只有非关系型 provider（EF InMemory 等）
+            // 才按能力回落；关系型 provider 的 IOE（翻译/上下文/转换异常）必须上抛。
         }
 
         // 兜底路径：同 MarkProcessed（清理原 `!translated || true` 恒真条件）
