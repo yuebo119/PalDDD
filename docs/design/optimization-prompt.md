@@ -1,8 +1,10 @@
-# Pal.DDD 全量缺陷挖掘提示词（v2，2026-10-22）
+# Pal.DDD 全量缺陷挖掘提示词（v3，2026-10-22，R11/R12 实践校准）
 
 > 复制全文给 AI。先填 §0 参数。SCAN 轮不改代码。
 > 核心原则：候选可以大胆，结论必须克制。先求覆盖，再求证实。
 > 目标不是写一份好看的报告，而是在预算内产出尽可能多的可证伪候选，并把其中能证实的变成带证据的缺陷。
+>
+> **v3 依据 R11/R12 实跑**（SCAN 165 分钟：62 候选/24 运行时检查/2 P1+11 P2+13 P3；FIX 26 条：12 提交 + 10 条 R12 优化）。主要变化：并行只读分片、位置必须带符号与原文、真库/AOT 探针配方、红→绿反向验证、逐项目测试 RC 聚合、台账前置与闭环清单、FIX 预算按家族排期。
 
 ## 0. 启动参数
 
@@ -10,8 +12,11 @@
 MODE      = SCAN | FIX | LOOP | REGRESS
 ROUND     = <整数，从 1 开始>
 FOCUS     = ALL | SECURITY | CORRECTNESS | PERF | MEMORY | LATENCY | ARCH | ROBUSTNESS
-BUDGET    = <分钟，默认 180>
-FIX_LIMIT = <默认 5>
+BUDGET    = <分钟，默认 180；只覆盖本轮 SCAN，不覆盖 FIX>
+FIX_LIMIT = <默认 5；FIX_SCOPE=FAMILY 时的上限>
+FIX_SCOPE = FAMILY | ALL     # FAMILY=按家族修（默认）；ALL=用户明确要求“全部修复”时按家族分批，不受 5 条上限约束
+REAL_DB   = AUTO | WSL | NONE # AUTO=有 wslc 容器则用；WSL=强制真库；NONE=仅本地
+SCAN_AGENTS = 0 | 4          # 并行只读分片扫描子代理数，默认 4
 AUDIT_DIR = /tmp/palddd-opt/round-<ROUND>
 ```
 
@@ -51,13 +56,16 @@ FOCUS 决定深挖顺序，不减少覆盖。非 FOCUS 轴至少做一轮轻量�
 1. 先跑基线门禁，再读源码。
 2. 覆盖矩阵逐格填写，空白格要写原因。
 3. 每个分片至少达到 §6 的候选配额，每个候选有位置、触发、预期、探针。
-4. 至少 20 个运行时探针，或按预算比例。
+4. 运行时探针按“独立可执行实验”计数，不按断言条数计数；每条探针的命令必须能直接从报告复跑。
 5. 每条 P0/P1 有可重跑命令、退出码、首行输出、反事实四格。
 6. 每条性能、内存、时延候选有单位成本、保留保证、测量路径、门槛、复活条件。
-7. 被否决项引用原文，重复项为零。
+7. 被否决项引用原文，重复项为零；refuted 项必须保留反证与探针。
 8. 披露 Skip 数、排除面板、未跑项目、blocked 探针。
+9. 门禁、发布、计数类数字（包数、用例数、阈值）必须用命令实测；文档只是声明，不得直接转抄。
+10. 公共 API 变更必须在同一提交附带公共 API 快照与 `CHANGELOG.md`。
+11. FIX 轮结束必须交闭环清单：每条发现对应提交哈希 + 锁定测试；没有清单不得宣布“全部完成”。
 
-不合格：只报 5 条就收工；只查一个栈；只读代码不跑探针；把候选池藏起来；用 P3 凑数；用「建议进一步分析」收尾。
+不合格：只报 5 条就收工；只查一个栈；只读代码不跑探针；把候选池藏起来；用 P3 凑数；把断言条数当探针数；用「建议进一步分析」收尾。
 
 ## 2. 铁律
 
@@ -83,13 +91,22 @@ cd <repo>
 git rev-parse --short HEAD
 git status --porcelain
 git describe --tags --abbrev=0 --match 'v*' || true
+# v3：dev 上的「最近 tag」可能不可达 HEAD（本仓 v4.0.0 在 main、dev 不含它）。
+# 基线 tag 必须显式验证可达性，不可达时以 HEAD 为基线并写理由。
+git merge-base --is-ancestor <tag> HEAD && echo "tag reachable" || echo "tag NOT reachable"
 
 dotnet build PalDDD.slnx -c Release -v q
+dotnet format style --verify-no-changes
 
+LOG="$AUDIT_DIR/tests.log"; FAIL=0
 for p in $(find test -name '*.Tests.csproj' ! -path '*/obj/*' ! -path '*/bin/*' | sort); do
-  echo "== $p =="
-  dotnet test "$p" --no-build -c Release --verbosity minimal || echo "FAILED $p"
+  echo "== $p ==" | tee -a "$LOG"
+  dotnet test "$p" --no-build -c Release --verbosity minimal 2>&1 | tee -a "$LOG"
+  rc=${PIPESTATUS[0]}
+  echo "RC=$rc" | tee -a "$LOG"
+  [ "$rc" -eq 0 ] || FAIL=1
 done
+[ "$FAIL" -eq 0 ] || echo "BASELINE RED: 至少一个测试项目非零退出"
 
 dotnet run scripts/gate-audit.cs -- --inventory
 dotnet run scripts/count-audit.cs
@@ -97,7 +114,10 @@ dotnet run scripts/doc-consistency.cs
 dotnet run scripts/secret-scan.cs
 dotnet run scripts/vuln-scan.cs
 dotnet run scripts/verify-conventions.cs -- --quick
+dotnet run scripts/encoding-gate.cs
 ```
+
+> v3：测试循环的**整体退出码取最后一条命令**，前面项目的失败会被后面项目的成功掩盖。必须逐项目记录 `RC` 并在末尾聚合；报告写每项目总数/通过/失败/跳过，不写单一总数。
 
 按 FOCUS 追加：
 
@@ -105,12 +125,18 @@ dotnet run scripts/verify-conventions.cs -- --quick
 dotnet run -c Release --project bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj -- --smoke
 dotnet run scripts/ci-coverage.cs -- --local
 dotnet publish samples/PalDDD.AotSample/PalDDD.AotSample.csproj -c Release -r win-x64 -p:PublishAot=true
-PALDDD_TEST_PG="Host=127.0.0.1;Port=5432;Database=palddd_probe;Username=postgres;Password=postgres" \
-PALDDD_TEST_MYSQL="Server=127.0.0.1;Port=3306;Database=palddd_probe;User ID=root;Password=root" \
-dotnet test test/PalDDD.Integration.Tests -- --treenode-filter "/*/*/DialectProbeTests/*"
+./samples/PalDDD.AotSample/bin/Release/net11.0/win-x64/publish/PalDDD.AotSample.exe
+
+# 真库（REAL_DB=WSL/AUTO）：测试套件对外部库按 T-09 设计跳过，必须用显式 opt-in 探针。
+# 容器：wslc（不是 Docker），地址用 127.0.0.1；凭据取容器 env，不要写进仓库。
+PALDDD_TEST_PG="Host=127.0.0.1;Port=5432;Database=palddd_probe;Username=postgres;Password=placeholder" \
+PALDDD_TEST_MYSQL="Server=127.0.0.1;Port=3306;Database=palddd_probe;User ID=root;Password=placeholder" \
+dotnet run --project samples/PalDDD.DapperAotProbe -c Release -- --provider Pg
+# MySQL 同形改 --provider MySql；EF Retention 真库用例走 EfCoreRetentionRealProviderTests（读同一组 env）。
+# 自定义真库/AOT 探针配方见 §8.2；不要用 DialectProbeTests 冒充外部库证据（它按设计 Skip）。
 ```
 
-写 `facts.md`：HEAD、工作树、基线 tag 及理由、构建警告与错误、测试总数/通过/失败/跳过、未跑面板、每个门禁退出码与首行、`gate-audit` 五态计数、环境（Docker、wslc、AOT 工具链）。基线红则停，先报告红基线，不带红基线继续审计。
+写 `facts.md`：HEAD、工作树、基线 tag 及可达性理由、构建警告与错误、**每项目**测试总数/通过/失败/跳过与非零 RC、未跑面板、每个门禁退出码与首行、`gate-audit` 五态计数、环境（wslc 容器状态、AOT 工具链、format 结果）。基线红则停，先报告红基线，不带红基线继续审计。
 
 ### 第 1 步：攻击面清单（15 分钟）
 
@@ -274,7 +300,27 @@ J. 文档承诺
 | S12 构建与门禁 | `scripts/`、`bench/`、`.githooks/`、`.github/`、`samples/` |
 | ARCH 仓库级 | 全部 |
 
+并行与分工（`SCAN_AGENTS=4` 时）：
+
+- 子代理只做**只读分片扫描**：读代码、生成候选与证据草案；禁止跑构建、测试、基准（昂贵资源由主代理独占，避免并发互踩 bin/obj）。
+- 每个子代理只加载自己的分片、§5 的 14 条透镜、§12.3 的对应种子；不加载全文，不互相传结论。
+- 每个子代理写**独立输出文件** `$AUDIT_DIR/shard-<id>.tsv`，禁止共用 `output.txt`（重发会覆盖上一条，R6 实证丢片）。表头与字段顺序统一，派发前先跑 1 个分片小样确认可并入。
+- 归并用脚本拼接 + 按「路径 + 符号 + 原文」去重，不靠记忆；覆盖矩阵由主代理填，子代理只交候选行。
+- 子代理交回的每条位置必须带**符号名与原文片段**（见 §5 开头），主代理据此回仓库复验后再计入配额。
+- 按项目分片结构性抓不到跨项目问题（依赖方向、门面缺失、三栈分叉、注册顺序）。ARCH 必须由主代理独立跑一遍仓库级检查，不能由分片子代理的并集代替。
+- 主代理负责：意图复述、事实基线、探针、证据分级、家族扩散、报告与台账。子代理交回即算草稿，未经主代理复验不得进已证实清单。
+
 ## 5. 十四个发现透镜
+
+位置写法（v3 强制）：
+
+```text
+<相对路径>:<起始行>-<结束行> | <符号名（类型.方法）> | <原文片段，归一化空白后唯一>
+```
+
+- 行号是**辅助**，符号与原文才是主锚：FIX 轮每插入一行，前面所有行号漂移；R11/R12 的账本（`s_knownDropTableHits` 等）与探针断言都因插行失配过。
+- 原文片段取 1 到 3 行，归一化连续空白后必须在该文件中恰好出现一次。做不到唯一就截更长片段或加相邻行，不要靠行号硬指。
+- 报告里出现的位置若无法通过符号定位，视为 E4 候选，不得进已证实清单。
 
 ### L1 契约
 
@@ -354,6 +400,8 @@ J. 文档承诺
 - 每个租约或队列组件至少 1 条并发调度探针。
 - 每个状态机至少 1 条故障注入探针。
 
+预算分配按历史产出密度，不按透镜数量平均：状态机、部分失败、跨栈/跨方言、门禁假绿通常产出高；L1 契约面最广但单条价值低，不要让它吃掉一半预算（历史轮次里契约与文档漂移曾占已证实清单六成以上）。配额是覆盖目标，不是平均指标。
+
 ## 7. 候选与证据格式
 
 候选台账：
@@ -378,6 +426,8 @@ FID | 轴 | 级别 | 声明 | 触发 | 命令 | 退出码 | 首行输出 | 位�
 | E4 | 仅阅读 | 只能进候选池 |
 | E5 | 猜测 | 只能进候选池，不得进已证实清单 |
 
+`refuted` 项可以保留为回归锁测试，防止未来回归；状态记 `rejected`，不计入已证实缺陷、不占候选配额，报告里与 confirmed 分列。
+
 严重度先定两个轴：可达面（全部消费者、单栈、单方言、仅自定义实现、仅 AOT）与可检测性（响亮、可观测、静默）。
 
 | 级别 | 判据 |
@@ -399,6 +449,21 @@ P0/P1 必须写反事实四格：
 - 什么证据会推翻它。
 - 现有防线为什么没挡住。
 - 修复后用什么测试锁定。
+
+最小证明方式（按缺陷类型选，不按习惯选）：
+
+| 缺陷类型 | 最小证明 | 反例（不足以证明） |
+|---|---|---|
+| 静默空转（回放 0、跳过、无副作用） | 数 handler 实际调用次数 + 存储侧行数/检查点前后值 | 日志里没有错误 |
+| 跨栈/跨方言分叉 | 同输入三栈跑同一场景，对照异常类型、行数、时间字段 | 只读三份实现对看 |
+| 告警/计数口径不一致 | 捕获 `IPalLogger` 结构化重载的 `EventId`，单条与批量各跑一遍 | 只看文本日志是否出现关键词 |
+| 取消/超时未冲刷终态 | 在途触发 `CancellationToken`，随后查存储状态与租约 | 取消后进程退出即算 |
+| 门禁假绿 | 注入坏输入，断言非零退出；再翻转判定确认能红 | 门禁跑过且 exit 0 |
+| AOT 运行期失败 | `PublishAot` 后**运行**，捕异常类型与错误码 | `IsAotCompatible=true` 或 0 裁剪警告 |
+| 内存/容量无界 | 压 N 次后读私有计数或 `GC.GetTotalMemory`，给出斜率 | 代码里看不到上限 |
+| 租约/fencing 失效 | 旧 token 续写成功与否 + 新持有者读取结果 | 单进程顺序执行 |
+| 默认值/文档漂移 | 反射读属性默认 + 实际解析值 + 文档值三方对照 | 只读文档或只读代码 |
+| 生成器输出错误 | 编译含边界标识符的样本，断言诊断 ID 与生成文本 | 只看生成器源码 |
 
 ## 8. 探针
 
@@ -438,19 +503,59 @@ sealed class ManualTimeProvider : TimeProvider
 
 不得混用后声称「变异过」。
 
+### 8.1 快速探针
+
+- 单文件探针用 file-based app：`dotnet run <探针文件>.cs`，顶部 `#:package <包名>@<版本>`；版本从 `Directory.Packages.props` 抄，不凭记忆写，也不要用 `*`。
+- 探针一律放 `$AUDIT_DIR/probes/<主题>/`，不放仓库；每个目录留一行可复跑命令。
+- 需要 `internal` 类型时，优先改用公开面或 `InternalsVisibleTo` 已覆盖的测试项目；SCAN 轮新增 IVT 属生产代码变更，禁止。
+- 捕获结构化日志必须覆写 `IPalLogger` 的四个 `EventId` 重载。只实现文本重载时，接口默认实现会把结构化调用转发成文本，`EventId` 恒为 0——R9 曾因此把「缺 EventId」误判为「有」。
+- 时间探针用手动 `TimeProvider` 推进，不用 `Task.Delay` 等墙钟。
+- 探针目录不主动删（SWG-5B 拦 `rm -rf` 临时目录，且删除属破坏性操作）；结论落报告后目录可留。
+
+### 8.2 真库与 AOT 配方（R11/R12 实跑）
+
+真库（`REAL_DB=WSL|AUTO`）。本机无 Docker，容器走 wslc；容器四件套由 `~/.zcode/scripts/wslc-start-containers.cmd` 拉起，起不来先查容器状态，不要改测试。
+
+```bash
+# PG / MySQL 探针库（一次建好；DDL 只动 palddd_probe）
+wslc exec pg186 sh -c 'psql -U postgres -c "CREATE DATABASE palddd_probe"'
+wslc exec mysql84 sh -c 'mysql -uroot -p"<password>" -e "CREATE DATABASE palddd_probe"'
+# 密码从本机 wslc 配方取，不写进仓库、报告或提交信息。
+
+# 现成探针：Dapper 六组件 × 三方言
+PALDDD_TEST_PG="Host=127.0.0.1;Port=5432;Database=palddd_probe;Username=postgres;Password=placeholder" \
+PALDDD_TEST_MYSQL="Server=127.0.0.1;Port=3306;Database=palddd_probe;User ID=root;Password=placeholder" \
+dotnet run --project samples/PalDDD.DapperAotProbe -c Release -- --provider Pg
+```
+
+- 地址必须 `127.0.0.1`；`localhost` 会掉进 Testcontainers 分支。
+- 测试套件的 DialectProbe 对**外部**库按 T-09 设计跳过，不能用它的「全绿」当外部库证据。外部库只能用显式 opt-in 探针；`EfCoreRetentionRealProviderTests` 是唯一 sanctioned 的直读 env 例外。
+- 建库、建表、清表都在 `palddd_probe` 内；禁止对任何 `postgres`/`mysql` 系统库或非探针库写。
+
+AOT（必须发布后运行）：
+
+```bash
+# 现成样本
+dotnet publish samples/PalDDD.AotSample/PalDDD.AotSample.csproj -c Release -r win-x64 -p:PublishAot=true
+./samples/PalDDD.AotSample/bin/Release/net11.0/win-x64/publish/PalDDD.AotSample.exe
+```
+
+自建 AOT 探针：临时目录建 csproj，`ManagePackageVersionsCentrally=false`，`PublishAot=true`，`ProjectReference` 指向被测项目；发布产物**直接运行**，断言退出码与关键输出。R12 的实证：`MySqlException.ErrorCode` 在 NativeAOT 下退化为 `-2147467259`，JIT 期正常，只有发布后运行才暴露——AOT 结论只看发布产物。
+
 ## 9. 报告
 
 章节：
 
-1. **运行事实**：HEAD、工作树、基线 tag、构建、测试（总数/通过/失败/跳过/未跑面板）、门禁矩阵、模式、变异模式、探针完成数、耗时、静态阅读时长。
-2. **结论摘要**：不超过 15 行。Top 5 发现、一句话边界声明、与上一轮的新增与关闭。
+1. **运行事实**：HEAD、工作树、基线 tag 及可达性、构建、`dotnet format`、**每项目一行的测试表**（总数/通过/失败/跳过/RC）、未跑面板、门禁矩阵、真实数据库与 AOT 状态、模式、变异模式、探针完成数、耗时、静态阅读时长。
+2. **结论摘要**：不超过 15 行。Top 5 发现、一句话边界声明、本轮新增与上轮关闭、re-affirmed 条数。
 3. **已证实缺陷**：不设条数上限，按严重度排序。每条含 §7 字段。
 4. **未证实候选**：完整候选台账，按分片与透镜排序。每条写清下一步探针。禁止隐藏。
 5. **覆盖与配额**：分片乘透镜矩阵、实际候选数、探针数、未达标项与原因。
-6. **探针台账**：confirmed、refuted、blocked、next，附原始输出与家族边界。
+6. **探针台账**：confirmed、refuted、blocked、next，附原始输出与家族边界；refuted 项保留反证命令。
 7. **架构与契约债务**：跨栈矩阵、方言矩阵、公共 API、AOT、反射例外、默认值对账。
 8. **性能、内存与时延候选**：七字段表，标「本会话量测」或「未量测」。
 9. **未完成与不确定**：discarded、blocked、re-affirmed（引原文）、需裁决、下一轮三个假设、什么会改变本轮结论。
+10. **FIX 闭环清单**（FIX/LOOP 轮必填）：每条发现一行，`ID | 提交哈希 | 锁定测试 | 门禁结果 | 未做项与理由`。缺此清单不得宣布完成。
 
 另外落 `findings.tsv`、`candidates.tsv`、`next-round.md`。
 
@@ -461,23 +566,30 @@ sealed class ManualTimeProvider : TimeProvider
 选择规则：
 
 - 按 `严重度 × 可达面 × 可检测性 / 修复成本` 排序。
-- 每轮最多 `FIX_LIMIT` 条，默认 5 条。
-- 优先修一个家族，不修五个实例。
-- P0/P1 先于性能候选。性能候选先量测后动手。
+- `FIX_SCOPE=FAMILY`：每轮最多 `FIX_LIMIT` 条，默认 5 条；优先修一个家族，不修五个实例。
+- `FIX_SCOPE=ALL`：用户明确要求全部修复时，按家族分批，每批一个提交，批内不受 5 条上限；每批结束跑该家族相关测试，全部批次结束后跑全量。禁止把所有家族混进一个提交。
+- P0/P1 先于性能候选。性能候选先量测后动手；没有本会话量具的性能改动一律不做。
 - 需要产品决策的写「需裁决」，不擅自改语义。
 
 每条修复：
 
-1. 写锁定测试，确认修复前是红的，且红的原因正确。
+1. 写锁定测试，确认修复前是红的，且红的原因正确。反向验证的落地做法：`git stash push -- <实现文件>` 只暂存修复、保留新测试 → 跑目标测试确认红且消息匹配预期（R12 C-21 实测 `Expected 0 but found 17`）→ `git stash pop` 恢复 → 再跑转绿。不要在测试里放宽断言来制造红。
 2. 只改必要实现，保持现有风格。
 3. 跑锁定测试转绿。
-4. 反向验证：移除修复因子，确认重新变红，再恢复。
-5. 跑目标项目测试，再跑全量测试循环。
-6. 跑构建、`gate-audit`、`count-audit`、`doc-consistency`、`encoding-gate`、`guard`。
+4. 若第 1 步是「先写实现后补测试」而无法做红验证，在补测试后单独回退修复因子（`git stash push -- <实现文件>`）跑一次，确认红后 `git stash pop`。两步合计至少有一次带输出的红→绿证据，缺失则该修复不算验证。
+5. 跑目标项目测试，再跑全量测试循环（逐项目聚合 RC，见 §3 第 0 步）。
+6. 跑构建、`gate-audit`、`count-audit`、`doc-consistency`、`encoding-gate`、`guard`、`format`。
 7. 公共 API、行为、配置、命令变更，同一提交更新文档、快照、`CHANGELOG.md`。
 8. 本地提交，格式 `类型：描述`。类型用 `修复`、`测试`、`文档`、`构建`、`决策`、`卫生`。
 9. 更新台账。性能否决另写 `.ai/perf-ledger.md`，该目录是独立 git 库，单独提交。
 10. 不推送、不打 tag、不发布。
+
+提交前必查（R11/R12 各踩过一次）：
+
+- **行号账本漂移**：测试文件里常有按行号冻结的账本（如 `s_knownDropTableHits`）。插入或删除行后先 grep 该账本，跑对应守卫测试；失败就更新账本，不能改断言绕开。
+- **守卫正则形态**：`TechDebtGuardTests` 的乐观锁守卫正则要求 `if (affected >`。写成 `return affected > 0` 语义正确但不匹配，会被判「未守卫」。要么按正则形态写（`if (affected == 0) return false;`），要么显式修改守卫规则并在提交信息说明，不能假装通过。
+- **计数类数字实测**：包数、项目数、诊断 ID 数、ADR 数一律用命令实测（包数用 `dotnet pack` 全量产出计数，注意 `IsPackable=false` 的项目），不得转抄文档或历史报告。R11 曾把 36 误判成 35，根因就是没打包。
+- **三方一致**：改公共计数或命令后，`grep` 旧值全仓零残留，再提交。
 
 约束：
 
@@ -490,6 +602,7 @@ sealed class ManualTimeProvider : TimeProvider
 - 新文件默认 LF，仓库要求 CRLF，写完做字节级校验。
 - Git Bash 用 `-p:`，不用 `/p:`。
 - 门禁可能用陈旧的 Release 二进制，先 `dotnet build -c Release`。
+- 取消/超时类修复必须验证「冲刷」真的写入存储：只把异常改对、状态仍丢在内存，等于没修（R11 F6/F7 的 Inbox、Saga 取消路径）。
 
 ## 11. 台账与停止
 
@@ -521,6 +634,8 @@ ID | 轴 | 位置 | 发现 | 状态 | 证据 | 决策来源 | 锁定测试 | 轮
 5. 停止条件与用户指令冲突时，显式呈报。
 
 ## 12. 本仓适配
+
+本仓是框架库，不是业务应用：设计意图大量落在 `docs/decisions/`、`.ai/perf-ledger.md` 与代码内「P定案/勘正/取舍」注释里，单看实现容易把有意取舍报成缺陷；AOT、零反射、三方一致这类跨切面不变量在单个文件里看不全。开工先读 ADR 索引与两份台账，再用 §12.3 的家族做交叉验证，命中声明注释时先引用再判断。
 
 ### 12.1 命令
 
@@ -561,6 +676,25 @@ ID | 轴 | 位置 | 发现 | 状态 | 证据 | 决策来源 | 锁定测试 | 轮
 | 测试宿主订阅 ActivitySource | 零分配断言放基准进程 |
 | pre-commit 用陈旧 Release 二进制 | 先 `dotnet build -c Release` |
 | wslc 地址写 localhost | 用 `127.0.0.1` |
+| 测试套件对**外部**库按 T-09 跳过 | 外部库只用显式 opt-in 探针，不用 DialectProbe 假绿 |
+| 逐项目测试循环取最后一条的 exit code | 每次 `dotnet test` 后记 `RC=${PIPESTATUS[0]}` 并聚合 |
+| `tee` 掩码中间命令退出码 | 取 `${PIPESTATUS[0]}`，日志要能看出每步 RC |
+| 按行号冻结的账本（`s_knownDropTableHits` 等） | 插删行后 grep 账本并跑对应守卫，失败就更新账本 |
+| 守卫正则要求 `if (affected >` | 写成守卫认的形态，或显式改守卫并说明 |
+| 自测只调 `string.Contains` 不调生产判定 | 自测必须调生产谓词（R11 `AttentionException` 假绿） |
+| `SUM(...)` 空表返回 NULL | 用 `COALESCE(SUM(...), 0)`，否则解包抛空引用 |
+| EF InMemory 不支持 `ExecuteUpdateAsync` | 走跟踪实体 + `SaveChanges`，或换 SQLite 内存库 |
+| EF 同上下文复用跟踪实例读到旧值 | 断言前 `ChangeTracker.Clear()` 或换 scope |
+| `dotnet test <项目>` 偶发挂起 | 直接跑测试项目的 exe，或逐项目最小化握手 |
+| Dapper.AOT 不拦截自定义参数 DTO | 用匿名参数或显式定义 AOT 上下文方法；以生成的拦截器文件为准 |
+| `IN @数组` 在 Dapper.AOT + Npgsql 报 42601 | 展开为 `@id0,@id1,...` |
+| PalORM `Session.ExecuteAsync` 只收 `FormattableString` | 拼接 SQL 时用单个内插字符串，不要 `$"..." + $"..."` |
+| 用 `git stash` 做红验证时连测试一起暂存 | 只 `git stash push -- <实现文件>`，保留新测试 |
+| 在共享 checkout 上并行写 | 先查 `git status` 外部写入；写型任务串行或分 worktree |
+| 探针只 `new` 处理器，不解析宿主 | 缺门面类缺陷在宿主启动才炸；构建真实 `IHost` 并解析全部 hosted/scoped |
+| 健康检查 Dispose 连接就此断言 Unhealthy | 直接调 `HealthCheckService.CheckHealthAsync` 读状态 |
+| 健康检查捕获 scoped store 就报 captive dependency | 健康检查本身是 scoped 合法消费者，先确认生命周期再判 |
+| 改 `.ai` 台账后主仓 `git status` 看不到 | `.ai` 是独立 git 库，改动在 `.ai` 内单独提交 |
 
 ### 12.3 高价值猎场
 
@@ -592,6 +726,16 @@ ID | 轴 | 位置 | 发现 | 状态 | 证据 | 决策来源 | 锁定测试 | 轮
 | 22 | 顺序 | 批内重排、检查点提交、并发写 | 后写覆盖先写、检查点先于数据 |
 | 23 | 错误分类 | 瞬时、永久、毒消息、死锁、超时、取消 | 永久错误重试、瞬时错误丢弃、取消被吞 |
 | 24 | 公共 API | DIM、Obsolete、可空、快照、CHANGELOG | 破坏实现者、快照未更新、迁移说明缺失 |
+| 25 | 批量检查点与组边界 | 组首/组末锚点、批内第 k 条失败、续读位置 | 检查点先于数据、回放漏项、重复处理 |
+| 26 | 取消与超时冲刷 | 在途取消、`processingTimeout`、停止时 Dispose | 终态未写、租约未释放、幽灵 pending |
+| 27 | 序列化元数据 | descriptor 的 `ContentType`/CLR 类型与注册项不符 | 运行期类型错、AOT 失败 |
+| 28 | 健康检查注册 | 同名注册、重复 `Add*`、只引部分包 | 启动抛重复名、检查被吞 |
+| 29 | 死信与毒消息 | 反序列化失败、handler 永久失败、死信写失败 | 死循环、消息丢失、原异常被吞 |
+| 30 | 源生成器边界 | 关键字标识符、`.vN` 版本后缀、重复名称 | 生成代码编译失败、wire name 漂移、诊断误报 |
+| 31 | 生成器诊断 | 诊断 ID、触发条件、抑制方式 | 误报/漏报、错误不可行动 |
+| 32 | 流登记生命周期 | 容量 CAS、终态回收、先附着后启动 | 超限拒绝、启动丢帧、泄漏 |
+| 33 | 发布与 CI 清单 | `release.yml` 期望包数、job 校验范围、Action SHA | 发布失败、漏 job 校验、供应链 |
+| 34 | AOT 异常分类 | 反射取属性、provider 错误码退化 | 分类失败、原始异常逃逸 |
 
 ### 12.4 历史高发家族
 
@@ -608,6 +752,16 @@ ID | 轴 | 位置 | 发现 | 状态 | 证据 | 决策来源 | 锁定测试 | 轮
 - 池化归还与双归还。
 - 同步阻塞与线程池饥饿。
 - 门禁假绿，空输入、只调用不断言、tail 吞退出码。
+- 批量检查点锚点与续读位置，组首/组末错位会让回放静默漏批或重复。
+- 取消与超时路径的终态冲刷，Inbox 与 Saga 都出现过「取消即丢状态」。
+- 健康检查重复注册，重复 `Add*` 后启动抛同名冲突。
+- 序列化 descriptor 元数据未校验，注册项与实际类型不符直到运行期才炸。
+- 源生成器边界：关键字标识符未转义、`.vN` 后缀诊断误报、wire name 跨版本漂移。
+- Outbox 死信写入失败未兜底、告警 EventId 用了文本重载。
+- AOT 下的异常分类：反射取属性失效、provider `ErrorCode` 退化，只有发布后运行能看见。
+- 发布工作流期望包数与实际 `pack` 产出不符、CI job 校验只覆盖部分 job。
+- 流登记容量与启动顺序：先启动后附着会丢首帧，终态 run 无上界会泄漏。
+- EF InMemory 写路径的跟踪与 Detach，非关系型分支误用关系型 `ExecuteUpdate`。
 
 ## 13. 反模式
 
@@ -629,6 +783,13 @@ ID | 轴 | 位置 | 发现 | 状态 | 证据 | 决策来源 | 锁定测试 | 轮
 16. 一次改多个变量，顺手重构。
 17. 在 Git Bash 用 `/p:`，用 tail 吞退出码，用陈旧二进制。
 18. 没发布没运行就声称 AOT 兼容，没披露跳过就声称全绿。
+19. 把循环最后一条命令的退出码当整体结果（逐项目 RC 必须聚合）。
+20. 把文档、历史报告或上一轮结论里的数字当实测（包数、用例数、诊断数必须命令重算）。
+21. 自测只调标准库函数，不调生产判定函数，得到恒绿。
+22. 用行号当唯一位置锚，或把子代理草稿直接当已证实结论。
+23. 只跑 JIT、只看 `IsAotCompatible=true` 或只看零裁剪警告就宣称 AOT 兼容。
+24. 修取消/超时只改异常类型，不验证终态真的写入存储、租约真的释放。
+25. 多个家族混进一个提交，或用 `git add -A` 把共享 checkout 里的无关改动一起提交。
 
 ## 14. 预算不足时
 
@@ -639,3 +800,5 @@ ID | 轴 | 位置 | 发现 | 状态 | 证据 | 决策来源 | 锁定测试 | 轮
 3. 三条主流程的单位成本走查：命令分发、Outbox 发布、Inbox 消费。
 
 只报 confirmed，候选全部写入台账，写清下一轮探针。不要为了报告好看把候选写成缺陷。
+
+预算口径：`BUDGET` 只覆盖 SCAN；FIX 家族的耗时单独计。SCAN 到点收敛不等于 FIX 可以跳过验证——FIX 每批至少跑锁定测试与目标项目测试，全量测试放在全部批次之后一次跑。预算与用户「全部修完」的指令冲突时，显式呈报取舍，不静默缩水。
