@@ -141,6 +141,22 @@ public sealed class HealthCheckExtensionsTests
     }
 
     [Test]
+    public async Task AddDetachedStreamRuns_SecondCallWithInvalidConfig_IsIgnored()
+    {
+        // R13 F9：文档承诺「幂等：重复调用的配置以首次为准」，但第二次的 configure
+        // 与 Validate 在 TryAddSingleton 之前无条件执行——被丢弃的配置仍抛异常。
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDetachedStreamRuns();
+
+        services.AddDetachedStreamRuns(o => o.MaxItems = 0);
+
+        using var sp = services.BuildServiceProvider();
+        var options = sp.GetRequiredService<DetachedStreamOptions>();
+        await Assert.That(options.MaxItems).IsGreaterThanOrEqualTo(1);
+    }
+
+    [Test]
     public async Task MessageBrokerHealthCheck_WithBroker_ReturnsHealthyRegistrationCheck(CancellationToken cancellationToken)
     {
         var services = new ServiceCollection();
