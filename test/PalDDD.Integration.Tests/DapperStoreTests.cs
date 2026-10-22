@@ -1838,6 +1838,21 @@ public sealed class DapperStoreTests
         await Assert.That(PalDDD.Dapper.SqlTemplates.SagaInsertPG)
             .Contains("ON CONFLICT (saga_id) DO NOTHING");
     }
+
+    [Test]
+    public async Task DateTimeOffsetHandler_LocalKind_PreservesUtcWallClock()
+    {
+        // R13 F5：MySQL 连接串 DateTimeKind=Local 时 provider 返回 Kind=Local 的 UTC 墙钟；
+        // 旧实现 new DateTimeOffset(dt) 给墙钟套本地偏移（-8h），store 再用 .UtcDateTime
+        // 编码 fence 参数 → locked_until/processing_started_at 谓词恒不命中。
+        // 库内始终是 UTC 墙钟（写入用 .UtcDateTime），读回必须给它零偏移。
+        var localWall = new DateTime(2026, 10, 22, 2, 0, 0, DateTimeKind.Local);
+
+        var parsed = new PalDDD.Dapper.SqliteDateTimeOffsetTypeHandler().Parse(localWall);
+
+        await Assert.That(parsed.Offset).IsEqualTo(TimeSpan.Zero);
+        await Assert.That(parsed.UtcDateTime).IsEqualTo(new DateTime(2026, 10, 22, 2, 0, 0, DateTimeKind.Utc));
+    }
 }
 
 [JsonSerializable(typeof(DapperStoreTests.TestSagaState))]

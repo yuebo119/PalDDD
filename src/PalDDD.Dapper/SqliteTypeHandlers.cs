@@ -91,11 +91,15 @@ public sealed class SqliteDateTimeOffsetTypeHandler : SqlMapper.TypeHandler<Date
             // PG/MySQL 读路径全部 InvalidCastException。
             // v65 P3：按 Kind 分派（姊妹 SqliteRowFactory.ParseDateTimeOffset 同款）——
             // 原 `new DateTimeOffset(dt, TimeSpan.Zero)` 对 Kind=Local 抛 ArgumentException；
-            // Utc→零偏移、Local→保留本地偏移、Unspecified→视为 UTC（对齐库内 UTC 存储约定）。
+            // Utc/Unspecified→零偏移（对齐库内 UTC 存储约定）。
+            // R13 F5：Local **不是**真本地时间——MySqlConnector 的 DateTimeKind=Local 只是
+            // 给库内 UTC 墙钟贴上本地标签（框架写入始终用 .UtcDateTime）。旧实现
+            // new DateTimeOffset(dt) 会平移瞬时（-8h），store 再用 .UtcDateTime 重编码
+            // fence 参数 → locked_until/processing_started_at 谓词恒不命中。统一按 UTC
+            // 墙钟解释（与 EventLog 的 SpecifyKind(Utc) 修复同口径，R11 C-20）。
             DateTime dt => dt.Kind switch
             {
-                DateTimeKind.Utc => new DateTimeOffset(dt, TimeSpan.Zero),
-                DateTimeKind.Local => new DateTimeOffset(dt),
+                DateTimeKind.Local => new DateTimeOffset(DateTime.SpecifyKind(dt, DateTimeKind.Utc)),
                 _ => new DateTimeOffset(dt, TimeSpan.Zero)
             },
             _ => throw new InvalidCastException($"Cannot convert {value.GetType()} to DateTimeOffset")
