@@ -132,6 +132,47 @@ public class FanOutStepTimeoutTests
         await Assert.ThrowsAsync<OperationCanceledException>(async () =>
             await step.ExecuteFanOutAsync(sagaState, cts.Token));
     }
+
+    [Test]
+    public async Task Initializer_MaxConcurrency_IsHonored()
+    {
+        // R13 F1 回归锁：构造参数 maxConcurrency=0 先建了 ProcessorCount 大小的信号量，
+        // 对象初始化器再设 MaxConcurrency=1 只改字段——限流静默失效（旧实现峰值=核数）。
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = 0;
+
+        var step = new FanOutStep<int, int>(
+            key: "fanout-init-limit",
+            selector: _ => new List<int> { 1, 2, 3, 4 },
+            executor: async (item, ct) =>
+            {
+                var count = Interlocked.Increment(ref started);
+                if (count == 1) firstStarted.TrySetResult();
+                if (count >= 2) secondStarted.TrySetResult();
+                await release.Task.WaitAsync(ct);
+                return item;
+            },
+            compensate: null,
+            timeout: null)
+        {
+            MaxConcurrency = 1
+        };
+
+        var run = step.ExecuteFanOutAsync(new TestFanOutSagaState(), CancellationToken.None).AsTask();
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        using (var timeoutCts = new CancellationTokenSource())
+        {
+            await Task.WhenAny(secondStarted.Task, Task.Delay(TimeSpan.FromSeconds(1), timeoutCts.Token));
+            await timeoutCts.CancelAsync();
+        }
+        var observed = Volatile.Read(ref started);
+        release.TrySetResult();
+        await run;
+
+        await Assert.That(observed).IsEqualTo(1);
+    }
 }
 
 internal sealed class TestFanOutSagaState : SagaState

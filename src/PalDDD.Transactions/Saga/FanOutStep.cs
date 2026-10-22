@@ -55,7 +55,9 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
 {
     private readonly Func<SagaState, IReadOnlyList<TItem>> _selector;
     private readonly Func<TItem, CancellationToken, ValueTask<TResult>> _executor;
-    private readonly SemaphoreSlim _concurrencyGate; // M2：构造期缓存（见 ctor 注释）
+    // R13 F1：惰性建门——对象初始化器在构造体之后执行，构造期按 MaxConcurrency 建门
+    // 会读到构造参数（缺省 = ProcessorCount），init 赋值（如 MaxConcurrency = 1）不生效。
+    private SemaphoreSlim? _concurrencyGate;
 
     /// <inheritdoc/>
     public override StepDispatchKind DispatchKind => StepDispatchKind.FanOut;
@@ -125,12 +127,21 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
         ArgumentOutOfRangeException.ThrowIfNegative(maxConcurrency);
         MaxConcurrency = maxConcurrency > 0 ? maxConcurrency : Environment.ProcessorCount;
         // M2（perf-opt-sweep，2026-09-20）：信号量缓存的实例字段——原每 per-call 分配
-        //（高频 Saga 场景 ns 级分配税）；MaxConcurrency init 后不可变，构造期建一次。
+        //（高频 Saga 场景 ns 级分配税）。R13 F1：改为首次执行时惰性建（对象初始化器的
+        // init 赋值在构造体之后，构造期建门会让 MaxConcurrency 配置静默失效）。
         // 不实现 IDisposable：本类无生命周期端点，SemaphoreSlim 在未物化 WaitHandle
         // 时无 OS 句柄可泄（全仓无 AvailableWaitHandle 访问）。
-        _concurrencyGate = new SemaphoreSlim(MaxConcurrency);
-        // 不实现 IDisposable：本类无生命周期端点，SemaphoreSlim 在未物化 WaitHandle
-        // 时无 OS 句柄可泄（全仓无 AvailableWaitHandle 访问）。
+    }
+
+    /// <summary>首次执行时按最终 MaxConcurrency 建门；并发首跳用 CAS 保证只采用一个实例。</summary>
+    private SemaphoreSlim GetConcurrencyGate()
+    {
+        var gate = Volatile.Read(ref _concurrencyGate);
+        if (gate is not null)
+            return gate;
+
+        var created = new SemaphoreSlim(MaxConcurrency);
+        return Interlocked.CompareExchange(ref _concurrencyGate, created, null) ?? created;
     }
 
     /// <summary>执行 Fan-out：并行分发所有子任务，收集完成项与失败项。</summary>
@@ -157,7 +168,7 @@ public sealed class FanOutStep<TItem, TResult> : SagaStep, IInternalFanOutStep
 #pragma warning disable MA0015 // MaxConcurrency 是属性不变量，不是本方法形参
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxConcurrency);
 #pragma warning restore MA0015
-        var semaphore = _concurrencyGate; // M2：构造期缓存的实例信号量（原每 per-call 分配）
+        var semaphore = GetConcurrencyGate(); // M2：实例信号量（首次执行按最终 MaxConcurrency 建）
         var results = new TResult?[items.Count];
         // P2 定案（可空结果过滤）：以完成标记收集而非非空过滤——TResult 为可空引用类型
         // 且子任务合法返回 null 时，旧实现把成功结果误判丢弃（Completed 少计）。
