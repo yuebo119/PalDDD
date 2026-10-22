@@ -102,8 +102,10 @@ R12 验证：全量 16 项目 **1907 用例，1827 通过 / 80 跳过 / 0 失败
 | OPT-322 | GATE | `MessageEvolutionPipeline.cs:126-139` | ValidatePath 缺 Upgrade 的 source/target ClrType 哨兵：同名同版本异 ClrType 的 descriptor 通过启动验证，首次消费才炸 | fixed（`5c9140b`） | E1 测试：修前两测试均不抛，修后 MessageEvolutionException | R13 F21（P2，候选 S1S2-13） | `ValidatePath_SourceDescriptorClrTypeMismatch_ThrowsStructuredException`、`..._TargetDescriptorClrTypeMismatch...` | R13 | descriptor 等价性改为包含 ClrType |
 | OPT-323 | CONTRACT | `ValueObject.cs:64` | 未声明 IFormattable：ToString(format, provider) 已存在但复合格式（插值/string.Format）回退无参 ToString，格式串被静默忽略 | fixed（`597e7d9`） | E1 测试：修前 `{vo:X4}` 得 "255"，修后 "00FF" | R13 F22（P2，候选 S1S2-02） | `ValueObjectTests.ValueObject_ImplementsIFormattable_FormatStringIsHonored` | R13 | 记录类型改为 class 或新增格式化契约 |
 | OPT-324 | CONTRACT | `JsonLinesEventStream.cs:153-190` | 逐行 Deserialize 的 JsonException 行号恒为 1（相对单行），多行 .jsonl 无法定位坏行 | fixed（`e8ba071`） | E1 测试：修前消息无 "line 2"，修后带文档级行号且保留原 Path/位置 | R13 F23（P2，候选 S1S2-08） | `JsonLinesEventTests.JsonLines_InvalidSecondLine_ErrorNamesDocumentLine` | R13 | JsonSerializer 提供文档级定位原语 |
+| OPT-325 | CONTRACT | `ServiceCollectionExtensions.cs`（Serialization.Evolution） | 契约验证缺 catalog 时 DI 解析阶段抛通用 "Unable to resolve"，不点名注册入口 | fixed（`bcf907f`） | E1 测试：修前 GetServices 即抛 Unable to resolve，修后 StartAsync 抛含 AddPalJsonSerialization 的可行动异常 | R13 F24（P2，候选 S1S2-12） | `PalPlatformVerificationHostedServiceTests.StartAsync_WhenCatalogNotRegistered_ThrowsActionableMessage` | R13 | catalog 改为宿主强制依赖（编译期） |
+| OPT-326 | CORRECTNESS | `OutboxDbContext.cs:176-184,334-341` | ExecuteUpdate 兜底捕获任意 IOE：关系型 provider 的翻译/上下文/转换异常被当能力回落，终态写静默丢失 | fixed（`6f520c5`） | E3 静态 + 回归 Outbox Integration 69/69（含 InMemory 回落 8/8）；行为级红测未构造（Not-Tested） | R13 F25（P2，候选 S6S7-13） | 现有 `OutboxEfCoreTests`（InMemory 回落） | R13 | 出现注入非能力类 IOE 的稳定手段 |
 
-R13 验证：全量 16 项目 **1932 用例，1852 通过 / 80 跳过 / 0 失败**（+25 测试）；
+R13 验证：全量 16 项目 **1933 用例，1853 通过 / 80 跳过 / 0 失败**（+26 测试）；
 `gate-audit` 42/42；`count-audit` 16 项/80 处；`doc-consistency`/`secret-scan`/`verify-conventions`/`encoding-gate` 全绿；
 `AotSample` 与 `DapperAotProbe`（PG/MySQL，JIT + `PublishAot`）通过。未推送、未打 tag。
 
