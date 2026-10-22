@@ -56,6 +56,31 @@ public sealed class OutboxWiringEndToEndTests
     }
 
     [Test]
+    public async Task MissingOutboxStore_FailsFastAtUnitOfWorkResolution(CancellationToken ct)
+    {
+        // R12 C-23 回归锁：IPalOutboxStore 未注册时必须在解析期抛错；原实现跳过
+        // null store，错误延迟到首个带领域事件的 SaveChanges。
+        await using var connection = new SqliteConnection("DataSource=:memory:");
+        await connection.OpenAsync(ct);
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IMessageCatalog>(new OutboxDomainEventInterceptorTests.SingleDescriptorCatalog(TestDescriptor));
+        services.AddSingleton<IMessageSerializer>(new OutboxDomainEventInterceptorTests.PassthroughSerializer());
+        services.AddDbContext<TestOutboxDbContext>((sp, options) => options
+            .UseSqlite(connection)
+            .UsePalOutboxInterceptor(sp));
+        services.AddPalOutboxUnitOfWorkForContext<TestOutboxDbContext>();
+        // 故意不注册 IPalOutboxStore
+
+        await using var provider = services.BuildServiceProvider();
+        await using var scope = provider.CreateAsyncScope();
+
+        await Assert.That(() => { scope.ServiceProvider.GetRequiredService<IUnitOfWork>(); })
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
     public async Task MissingInterceptor_FailsFastAtUnitOfWorkResolution(CancellationToken ct)
     {
         await using var connection = new SqliteConnection("DataSource=:memory:");
