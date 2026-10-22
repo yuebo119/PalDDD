@@ -12,6 +12,9 @@
     <ProjectReference Include="..\PalDDD.Projections\PalDDD.Projections.csproj" />
   </ItemGroup>
 
+  <!-- R12 C-03：集成测试直测 IsPositionCastFailure 的 SQLSTATE 分类。 -->
+  <ItemGroup><InternalsVisibleTo Include="PalDDD.Integration.Tests"/></ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
