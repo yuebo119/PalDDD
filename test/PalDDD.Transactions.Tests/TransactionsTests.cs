@@ -2712,3 +2712,40 @@ public sealed class InboxMessageTests
         await Assert.That(msg.ProcessedAt!.Value.Year).IsEqualTo(2026);
     }
 }
+
+/// <summary>R13 F17：轮询基类的间隔上限（Task.Delay 约 49.7 天）。</summary>
+public sealed class PeriodicBackgroundProcessorTests
+{
+    [Test]
+    public async Task PollIntervalBeyondTimerLimit_DoesNotFaultTheService()
+    {
+        // Task.Delay(TimeSpan) 的计时器上限约 uint.MaxValue-1 毫秒（49.7 天）；
+        // PollInterval=60 天时旧实现抛 AOOR，位于仅 catch OCE 的 try 外，ExecuteTask
+        // fault——.NET 6+ BackgroundService 默认 StopHost 会停掉整个宿主。
+        var services = new ServiceCollection();
+        services.AddLogging();
+        await using var provider = services.BuildServiceProvider();
+        var processor = new ProbeProcessor(
+            provider.GetRequiredService<IServiceScopeFactory>(), TimeSpan.FromDays(60));
+
+        await processor.StartAsync(CancellationToken.None);
+        using var timeoutCts = new CancellationTokenSource();
+        var completed = await Task.WhenAny(
+            processor.ExecuteTask!, Task.Delay(TimeSpan.FromMilliseconds(300), timeoutCts.Token));
+        await timeoutCts.CancelAsync();
+
+        await Assert.That(ReferenceEquals(completed, processor.ExecuteTask)).IsFalse();
+        await Assert.That(processor.ExecuteTask!.IsFaulted).IsFalse();
+
+        await processor.StopAsync(CancellationToken.None);
+        processor.Dispose();
+    }
+
+    private sealed class ProbeProcessor(IServiceScopeFactory scopeFactory, TimeSpan interval)
+        : PeriodicBackgroundProcessor(scopeFactory, interval)
+    {
+        protected override ValueTask ExecuteTickAsync(CancellationToken ct) => ValueTask.CompletedTask;
+
+        protected override void OnTickFailed(Exception ex) => throw new InvalidOperationException("tick failed", ex);
+    }
+}
