@@ -28,7 +28,9 @@ namespace PalDDD.Hosting.AspNetCore;
 
 /// <summary>断线续跑选项（ADR-031）。</summary>
 /// <remarks>
-/// 内存上界 ≈ <see cref="MaxConcurrentRuns"/> × <see cref="MaxBufferedItems"/> × 平均项大小；
+/// 内存上界 ≈ 2 × <see cref="MaxConcurrentRuns"/> × <see cref="MaxBufferedItems"/> × 平均项大小
+/// （运行中与保留终态各至多 <see cref="MaxConcurrentRuns"/>；总跟踪数达到 2×上限时
+/// 最旧的终态 run 被提前逐出，<see cref="RetentionAfterCompletion"/> 退化为尽力而为）。
 /// token 项约百字节量级时，1000 run × 1024 项 ≈ 100MB 量级，部署按实际项大小调参。
 /// </remarks>
 public sealed class DetachedStreamOptions
@@ -339,15 +341,23 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
 
     private async ValueTask FinishAsync(StreamRunState state, Exception? failure, int produced)
     {
+        CancellationTokenSource? grace;
         lock (_gate)
         {
             _state = state;
             _terminalAt = _timeProvider.GetUtcNow();
+            // R12 PF-2：替换/终态时取走并释放宽限 CTS——原实现只 Cancel 不 Dispose，
+            // 每次断线重连都会让被替换的 linked CTS 以父 token 注册形式滞留到 run 释放。
+            grace = _graceCts;
+            _graceCts = null;
             SignalWaitersLocked();
         }
         NotifyTerminal();
-        if (_graceCts is not null)
-            await _graceCts.CancelAsync().ConfigureAwait(false); // 终态：宽限计时不再有意义
+        if (grace is not null)
+        {
+            await grace.CancelAsync().ConfigureAwait(false); // 终态：宽限计时不再有意义
+            grace.Dispose();
+        }
         if (_logger is not null && _logger.IsEnabled(LogLevel.Debug))
         {
             _logger.Debug(failure is null
@@ -414,6 +424,7 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
     public bool TryBeginAttach(
         string? lastEventId, out long startIndex, out bool gap, out int generation)
     {
+        CancellationTokenSource? replacedGrace;
         lock (_gate)
         {
             if (_options.RejectNewAttach && _attachCount > 0)
@@ -426,13 +437,20 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
             // 接管语义（ADR-031 D6）：递增代际，旧附着在下次唤醒时看到代际不匹配即收尾
             generation = ++_attachGeneration;
             _attachCount++;
-            _graceCts?.Cancel();
+            // R12 PF-2：取走宽限 CTS 并在锁外取消 + 释放（Cancel 同步执行注册回调，
+            // 不在注册表锁内跑用户continuation），避免每次重连泄漏一个 linked CTS。
+            replacedGrace = _graceCts;
             _graceCts = null;
             (startIndex, gap) = ResolveStartLocked(lastEventId);
             // 立即唤醒旧附着的等待者：让它马上看到代际不匹配并发 detached 收尾
             //（不唤醒则旧连接要等下一次 Wait 超时——keepAlive 间隔最长 30s 量级，
             // 接管帧迟迟不到，客户端感知为连接僵死）
             SignalWaitersLocked();
+        }
+        if (replacedGrace is not null)
+        {
+            replacedGrace.Cancel();
+            replacedGrace.Dispose();
         }
         // 附着计数在锁外递增：MeterListener 回调属用户代码，不在注册表锁内执行
         //（RejectNewAttach 拒绝路径已在锁内提前返回，不计）
@@ -723,7 +741,15 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         }
         lock (_gate)
             SignalWaitersLocked();
-        _graceCts?.Dispose();
+        // R12 PF-2：与 Finish/TryBeginAttach 同一所有权协议——锁内取走并置 null，
+        // 谁取到谁负责 Dispose，避免并发路径重复释放或使用已释放的 CTS。
+        CancellationTokenSource? grace;
+        lock (_gate)
+        {
+            grace = _graceCts;
+            _graceCts = null;
+        }
+        grace?.Dispose();
         _cts.Dispose();
         if (!_scopeDisposed)
         {
@@ -802,6 +828,11 @@ internal sealed class StreamRunRegistry : IDisposable
                 break;
         }
 
+        // R12 PF-1：终态 run 保留期不受并发上限约束，完成速率高时内存随“速率 × 保留期”
+        // 增长。每次注册前把总跟踪数压到 2×MaxConcurrentRuns（运行中 + 保留终态），
+        // 超出的最旧终态 run 提前逐出（其缓冲释放，回看退化为 404）。
+        TrimRetainedTerminalRuns();
+
         var runId = Guid.NewGuid().ToString("N");
         // 先占名额再建 run：run 可能在 Start 后立即完成并回调 OnRunTerminal，后置递增会短暂
         // 负计数。构造/解析失败路径在 catch 中归还名额。
@@ -841,6 +872,50 @@ internal sealed class StreamRunRegistry : IDisposable
 
     /// <summary>run 进入终态或释放时归还运行名额（幂等由 StreamRun 的终态通知门保证）。</summary>
     private void OnRunTerminal() => Interlocked.Decrement(ref _runningCount);
+
+    /// <summary>
+    /// R12 PF-1：总跟踪数超过 2×<see cref="DetachedStreamOptions.MaxConcurrentRuns"/> 时，
+    /// 逐出最旧的终态且无附着的 run。保留期内的回看是尽力而为——容量优先于保留时长。
+    /// </summary>
+    [SuppressMessage("Design", "CA1031",
+        Justification = "容量清理不得因单个 run 的用户 Dispose 异常中断注册路径；逐 run 记录后继续。")]
+    private void TrimRetainedTerminalRuns()
+    {
+        var hardLimit = (long)_options.MaxConcurrentRuns * 2;
+        while (_runs.Count >= hardLimit)
+        {
+            string? oldestId = null;
+            var oldestAt = DateTimeOffset.MaxValue;
+            foreach (var (runId, run) in _runs)
+            {
+                if (run.State == StreamRunState.Running || run.AttachedCount > 0)
+                    continue;
+                var terminalAt = run.TerminalAt;
+                if (terminalAt < oldestAt)
+                {
+                    oldestAt = terminalAt;
+                    oldestId = runId;
+                }
+            }
+
+            if (oldestId is null)
+                return; // 全部在运行/附着中，无可逐出对象
+
+            if (!_runs.TryRemove(oldestId, out var removed))
+                continue;
+            try
+            {
+                removed.Dispose();
+                if (_registryLogger is not null && _registryLogger.IsEnabled(LogLevel.Debug))
+                    _registryLogger.Debug($"Detached stream run {oldestId}: evicted to enforce capacity bound");
+            }
+            catch (Exception ex)
+            {
+                if (_registryLogger is not null)
+                    _registryLogger.Warning($"Detached stream run {oldestId}: capacity eviction failed: {ex.GetType().Name}");
+            }
+        }
+    }
 
     public bool TryGet<TItem>(string runId, [NotNullWhen(true)] out StreamRun<TItem>? run)
     {
@@ -909,6 +984,9 @@ internal sealed class StreamRunRegistry : IDisposable
                 }
             }
         }
+
+        // R12 PF-1：无新注册时也由清理器兜住总量（完成突发最多滞留一个扫描周期）。
+        TrimRetainedTerminalRuns();
     }
 
     [SuppressMessage("Design", "CA1031",

@@ -40,4 +40,16 @@ internal static class DecompressBufferPool
         }
         return writer;
     }
+
+    /// <summary>
+    /// R12 C-17：操作结束后释放本线程槽。仅当历史峰值超过驻留上限时弃槽——
+    /// 原实现等到“下一次 Rent”才弃槽，长驻线程在解压炸弹异常后可能长期持有 64MB。
+    /// 小缓冲保留复用收益，下一次 Rent 的 Clear 语义不变。
+    /// </summary>
+    public static void Release(ArrayBufferWriter<byte> writer)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        if (ReferenceEquals(_writer, writer) && writer.Capacity > MaxResidentBytes)
+            _writer = null;
+    }
 }

@@ -23,7 +23,7 @@ ADR-030 收窄 per-stream Channel 缓冲的理由是「扇出/迟附三形态未
 
 **D3 run 生命周期四态与三条硬边界**：`Running → (Completed | Failed | Cancelled)`，终态不可迁移。硬边界：`MaxRunDuration`（默认 10 分钟）、`MaxItems`（默认 100,000）、`DetachGrace`（默认 5 分钟无附着即取消）。宽限期是「不白烧 token」语义的落点——用户关页永不回来时，run 在宽限期后自行终止。
 
-**D4 附着语义**。`GET {pattern}/{runId}/stream`，遵守 `Last-Event-ID`：先回放缓冲中位置之后的项，再转 live。三态答复：未知或已过期 run → 404；位置早于缓冲起点 → 200 + 首帧 `event: gap`；run 已终态且在 `RetentionAfterCompletion` 窗口内 → 回放剩余缓冲后以 `event: done` 收尾。
+**D4 附着语义**。`GET {pattern}/{runId}/stream`，遵守 `Last-Event-ID`：先回放缓冲中位置之后的项，再转 live。三态答复：未知或已过期 run → 404；位置早于缓冲起点 → 200 + 首帧 `event: gap`；run 已终态且在 `RetentionAfterCompletion` 窗口内 → 回放剩余缓冲后以 `event: done` 收尾（窗口为尽力而为：总跟踪数达到 2×`MaxConcurrentRuns` 时最旧终态 run 提前逐出）。
 
 **D5 取消端点**。`POST {pattern}/{runId}/cancel`，幂等（终态 run 返回 204 不报错）。取消令牌是 run 自己的 `CancellationTokenSource`（不是 `RequestAborted`），handler 的 finally 照常执行，D6 审计与 EventLog 追加不受影响。
 
@@ -170,6 +170,6 @@ Phase 1 = D1-D6 全部（注册表 + 三端点 + 选项 + 测试 + 样本 + 文�
 ## 已知约束（随实现进 usage.md）
 
 - 进程内状态：重启丢进行中 run；多实例部署需会话亲和（粘性路由）或把 run 固定到单实例。
-- 内存上界 ≈ `MaxConcurrentRuns × MaxBufferedItems × 平均项大小`：token 项约百字节量级时，1000 run × 1024 项 ≈ 100MB 上界，部署须按实际项大小调参。
+- 内存上界 ≈ `2 × MaxConcurrentRuns × MaxBufferedItems × 平均项大小`：运行中与保留终态各至多 `MaxConcurrentRuns`；总跟踪数达到 2×上限时最旧的终态 run 被提前逐出（`RetentionAfterCompletion` 为尽力而为）。token 项约百字节量级时，1000 run × 1024 项 ≈ 200MB 上界，部署须按实际项大小调参。
 - 附着回放不重跑 event/id 选择器（写入时固化）；断线续跑端点**不暴露** `formatFrame` 参数——需要自定义整帧的消费方使用 `MapStreamQuery`（ADR-030），或等待 Phase 2 为注册表扩展帧形态。
 - 本 ADR 未实施前现状不变：断线即取消，客户端整轮重开。

@@ -88,6 +88,25 @@ public sealed partial class StreamRunRegistryTests
     }
 
     [Test]
+    public async Task TerminalRuns_RetentionIsBoundedByMaxConcurrentRuns()
+    {
+        // R12 PF-1 回归锁：终态 run 不受 MaxConcurrentRuns 约束时，内存随“完成速率 ×
+        // 保留时长”增长，文档上界失效。20 个短 run 串行完成后，总跟踪数不得超过 2×上限
+        //（运行中 + 保留终态各至多 MaxConcurrentRuns）。
+        using var registry = CreateRegistry(out var options, maxBufferedItems: 4, maxConcurrentRuns: 2);
+        options.RetentionAfterCompletion = TimeSpan.FromMinutes(10);
+
+        for (var i = 0; i < 20; i++)
+        {
+            var runId = registry.Register(new RegQuery("p"), null, null, new FixedHandler(1));
+            var run = await WaitForRunAsync(registry, runId);
+            await WaitUntilAsync(() => run.State != StreamRunState.Running, TimeSpan.FromSeconds(5));
+        }
+
+        await Assert.That(registry.TrackedCount).IsLessThanOrEqualTo(4);
+    }
+
+    [Test]
     public async Task Cancel_UnknownRun_ReturnsFalse()
     {
         using var registry = CreateRegistry(out _);

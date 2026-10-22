@@ -912,7 +912,7 @@ const reattach = await fetch(`/agent/runs/${runId}/stream`, {
 });
 ```
 
-**语义边界**：缓冲按项计数，溢出丢最旧并在重连首帧发 `event: gap`（携带 `oldestIndex`，客户端自行决定重开还是接受缺口）；终态 run 在 `RetentionAfterCompletion` 内可回看，收尾帧为 `event: done|cancelled|error`。注册表是**进程内**状态：重启丢进行中 run；多实例部署需会话亲和。完成态审计与回放仍走 EventLog（见上一节）。
+**语义边界**：缓冲按项计数，溢出丢最旧并在重连首帧发 `event: gap`（携带 `oldestIndex`，客户端自行决定重开还是接受缺口）；终态 run 在 `RetentionAfterCompletion` 内可回看，收尾帧为 `event: done|cancelled|error`。保留是**尽力而为**：总跟踪数达到 `2 × MaxConcurrentRuns` 时最旧的终态 run 提前逐出（回看得 404），内存上界由此收敛为运行中与保留终态各至多 `MaxConcurrentRuns`。注册表是**进程内**状态：重启丢进行中 run；多实例部署需会话亲和。完成态审计与回放仍走 EventLog（见上一节）。
 
 **客户端两个坑**：SSE 流未读完时 `response.Dispose()` 会同步等连接关闭（与仍在写的服务端互相等待），断线请用取消请求；重连用新连接（连接池在 abort 后可能异常）；`done`/`cancelled` 收尾帧不带 `id`，按 id 解析须过滤。
 
