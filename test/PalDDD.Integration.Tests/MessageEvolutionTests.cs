@@ -240,6 +240,67 @@ public sealed partial class MessageEvolutionTests
         await Assert.That(exception!.Message).Contains("Source descriptor ClrType mismatch");
     }
 
+    [Test]
+    public async Task ValidatePath_SourceDescriptorClrTypeMismatch_ThrowsStructuredException()
+    {
+        // R13 F21：ValidatePath 只走步骤链，未做 Upgrade 的 source ClrType 哨兵——
+        // 启动验证（PalPlatformVerifier）对同名同版本异 ClrType 的 descriptor 通过，
+        // 首次消费才在 Convert 强转处炸。启动期校验必须与运行期同口径。
+        var altV1Descriptor = MessageDescriptor.Create(
+            EvolutionTestJsonContext.Default.OrderSubmittedV1Alt,
+            "order-submitted",
+            schemaVersion: 1);
+        var v1Descriptor = MessageDescriptor.Create(
+            EvolutionTestJsonContext.Default.OrderSubmittedV1,
+            "order-submitted",
+            schemaVersion: 1);
+        var v2Descriptor = MessageDescriptor.Create(
+            EvolutionTestJsonContext.Default.OrderSubmittedV2,
+            "order-submitted",
+            schemaVersion: 2);
+        var pipeline = new MessageEvolutionBuilder()
+            .Add<OrderSubmittedV1, OrderSubmittedV2>(
+                v1Descriptor,
+                v2Descriptor,
+                old => new OrderSubmittedV2(old.OrderId, 0m))
+            .Build();
+
+        var exception = await Assert.That(() =>
+            pipeline.ValidatePath(altV1Descriptor, v2Descriptor)).Throws<MessageEvolutionException>();
+
+        await Assert.That(exception!.Message).Contains("Source descriptor ClrType mismatch");
+    }
+
+    [Test]
+    public async Task ValidatePath_TargetDescriptorClrTypeMismatch_ThrowsStructuredException()
+    {
+        // R13 F21：target 端同理——ValidatePath 应在启动期拒绝与末步产出 ClrType 不同的
+        // target descriptor，而不是让 Upgrade 在下游 cast 才炸。
+        var v1Descriptor = MessageDescriptor.Create(
+            EvolutionTestJsonContext.Default.OrderSubmittedV1,
+            "order-submitted",
+            schemaVersion: 1);
+        var v2Descriptor = MessageDescriptor.Create(
+            EvolutionTestJsonContext.Default.OrderSubmittedV2,
+            "order-submitted",
+            schemaVersion: 2);
+        var altV2Descriptor = MessageDescriptor.Create(
+            EvolutionTestJsonContext.Default.OrderSubmittedV2Alt,
+            "order-submitted",
+            schemaVersion: 2);
+        var pipeline = new MessageEvolutionBuilder()
+            .Add<OrderSubmittedV1, OrderSubmittedV2>(
+                v1Descriptor,
+                v2Descriptor,
+                old => new OrderSubmittedV2(old.OrderId, 0m))
+            .Build();
+
+        var exception = await Assert.That(() =>
+            pipeline.ValidatePath(v1Descriptor, altV2Descriptor)).Throws<MessageEvolutionException>();
+
+        await Assert.That(exception!.Message).Contains("Target descriptor ClrType mismatch");
+    }
+
     private sealed record OrderSubmittedV1(Guid OrderId);
 
     private sealed record OrderSubmittedV1Alt(Guid OrderId);

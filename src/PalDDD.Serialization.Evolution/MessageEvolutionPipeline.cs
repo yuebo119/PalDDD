@@ -131,9 +131,27 @@ public sealed class MessageEvolutionPipeline
         ValidateDescriptors(sourceDescriptor, targetDescriptor);
 
         var currentDescriptor = sourceDescriptor;
+        var isFirstStep = true;
         while (currentDescriptor.SchemaVersion < targetDescriptor.SchemaVersion)
         {
-            currentDescriptor = GetNextStep(currentDescriptor, targetDescriptor).TargetDescriptor;
+            var step = GetNextStep(currentDescriptor, targetDescriptor);
+            // R13 F21：启动期校验必须与 Upgrade 的运行期哨兵同口径——descriptor 等价性按
+            // (Name,Version) 判定，同名同版本异 ClrType 的 descriptor 会通过路径校验，
+            // 到首次消费才在 Convert 强转处炸（或静默错误转换）。
+            if (isFirstStep && step.SourceDescriptor.ClrType != sourceDescriptor.ClrType)
+            {
+                throw new MessageEvolutionException(
+                    $"Source descriptor ClrType mismatch: expected {step.SourceDescriptor.ClrType}, got {sourceDescriptor.ClrType}.");
+            }
+
+            isFirstStep = false;
+            currentDescriptor = step.TargetDescriptor;
+        }
+
+        if (targetDescriptor.ClrType != currentDescriptor.ClrType)
+        {
+            throw new MessageEvolutionException(
+                $"Target descriptor ClrType mismatch: expected {currentDescriptor.ClrType}, got {targetDescriptor.ClrType}.");
         }
     }
 
