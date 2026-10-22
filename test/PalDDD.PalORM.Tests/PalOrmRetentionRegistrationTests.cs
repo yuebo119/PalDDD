@@ -13,6 +13,19 @@ namespace PalDDD.PalORM.Tests;
 public sealed class PalOrmRetentionRegistrationTests
 {
     [Test]
+    public async Task PalOrmRetentionStore_InvalidBatchSize_ThrowsAtEntry()
+    {
+        // R11 F18 回归锁：SQLite LIMIT -1 = 无上限，batchSize<1 必须入口拒绝。
+        await using var session = await MultiDialectFixture.CreateSqliteAsync();
+        var store = new PalOrmRetentionStore<SqliteProvider>(session.Session);
+
+        await Assert.That(async () => await store.DeleteExpiredOutboxAsync(DateTimeOffset.UtcNow, -1, false))
+            .Throws<ArgumentOutOfRangeException>();
+        await Assert.That(async () => await store.DeleteExpiredInboxAsync(DateTimeOffset.UtcNow, 0))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
     public async Task AddPalOrmSqlite_DoesNotStartRetentionByDefault()
     {
         var services = new ServiceCollection();

@@ -131,6 +131,9 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
     private readonly Action? _onTerminal;
     private readonly CancellationTokenSource _cts;
     private readonly string _runId;
+    // R11 F20：是否使用自定义 idSelector。数字回退把 Last-Event-ID 当“位置索引”，
+    // 只对默认位置型 Id 成立；自定义数字 id 与缓冲位置无对应关系，必须走 gap。
+    private readonly bool _hasCustomIdSelector;
     private int _terminalNotified;
 
     // 附着等待信号（2026-10-19 性能实施轮）：替代 Monitor.Wait 的线程阻塞形态。
@@ -157,6 +160,7 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         TimeProvider timeProvider,
         IServiceScope? scope,
         IPalLogger<StreamRun<TItem>>? logger,
+        bool hasCustomIdSelector,
         Action? onTerminal = null)
     {
         _runId = runId;
@@ -164,6 +168,7 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         _timeProvider = timeProvider;
         _scope = scope;
         _logger = logger;
+        _hasCustomIdSelector = hasCustomIdSelector;
         _onTerminal = onTerminal;
         _buffer = new BufferedStreamItem<TItem>[options.MaxBufferedItems];
         _cts = new CancellationTokenSource();
@@ -452,7 +457,11 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
                 return (item.Index + 1, false);
         }
 
-        if (long.TryParse(lastEventId, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+        // R11 F20：数字解析只在默认位置型 Id（未提供 idSelector）时成立。自定义数字
+        // id（数据库序列/时间戳）与缓冲位置无对应关系，按位置解释会静默跳过大段数据
+        // 且不报 gap；此时直接落到下方“从最旧可用位置起”的分支。
+        if (!_hasCustomIdSelector
+            && long.TryParse(lastEventId, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
         {
             var next = parsed + 1;
             if (next < _oldestAvailable)
@@ -802,7 +811,7 @@ internal sealed class StreamRunRegistry : IDisposable
         {
             scope = _scopeFactory.CreateScope();
             var logger = scope.ServiceProvider.GetService<IPalLogger<StreamRun<TItem>>>();
-            run = new StreamRun<TItem>(runId, _options, _timeProvider, scope, logger, OnRunTerminal);
+            run = new StreamRun<TItem>(runId, _options, _timeProvider, scope, logger, idSelector is not null, OnRunTerminal);
             _runs[runId] = run;
 
             var handler = handlerOverride

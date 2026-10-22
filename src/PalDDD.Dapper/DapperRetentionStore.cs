@@ -44,6 +44,11 @@ public sealed class DapperRetentionStore : IRetentionStore
     private async ValueTask<int> ExecuteAsync(
         string sql, DateTimeOffset cutoff, int batchSize, CancellationToken ct)
     {
+        // R11 F18：batchSize 是单语句删除上限，必须 >=1。SQLite 的 LIMIT -1 表示
+        // 无上限（一次删光积压，正是分批要避免的长事务/WAL 膨胀），MySQL/PG 的
+        // LIMIT 0 又会静默返回 0 与「无更多数据」不可区分。入口 fail-fast。
+        ArgumentOutOfRangeException.ThrowIfLessThan(batchSize, 1);
+
         if (_connection.State != ConnectionState.Open)
             await _connection.OpenAsync(ct).ConfigureAwait(false);
 

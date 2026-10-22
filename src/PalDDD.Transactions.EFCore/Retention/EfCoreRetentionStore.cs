@@ -146,6 +146,9 @@ public sealed class EfCoreRetentionStore : IRetentionStore
     private async ValueTask<int> ExecuteAsync(
         string sql, DateTimeOffset cutoff, int batchSize, CancellationToken ct)
     {
+        // R11 F18：同 Dapper/PalORM——SQLite LIMIT -1 无上限，入参必须 >=1。
+        ArgumentOutOfRangeException.ThrowIfLessThan(batchSize, 1);
+
         if (_connection.State != ConnectionState.Open)
             await _connection.OpenAsync(ct).ConfigureAwait(false);
 

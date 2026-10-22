@@ -12,6 +12,24 @@ namespace PalDDD.Integration.Tests;
 public sealed class RetentionProcessorTests
 {
     [Test]
+    public async Task StoreDirectCall_InvalidBatchSize_ThrowsAtEntry()
+    {
+        // R11 F18 回归锁：SQLite LIMIT -1 = 无上限，直调 Store 时 batchSize<1 必须在
+        // 入口拒绝，不能让一次调用删光积压；EF 同款入口守卫一并锁定。
+        await using var conn = new SqliteConnection("Data Source=:memory:");
+        await conn.OpenAsync();
+        var dapper = new DapperRetentionStore(conn, DapperDbType.Sqlite);
+        var ef = new EfCoreRetentionStore(conn, RetentionDialect.Sqlite);
+
+        await Assert.That(async () => await dapper.DeleteExpiredOutboxAsync(DateTimeOffset.UtcNow, -1, false))
+            .Throws<ArgumentOutOfRangeException>();
+        await Assert.That(async () => await dapper.DeleteExpiredInboxAsync(DateTimeOffset.UtcNow, 0))
+            .Throws<ArgumentOutOfRangeException>();
+        await Assert.That(async () => await ef.DeleteExpiredIdempotencyAsync(DateTimeOffset.UtcNow, -5))
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
     public async Task RunOnce_DeletesOnlyExpiredTerminalRows()
     {
         await using var conn = new SqliteConnection("Data Source=:memory:");
