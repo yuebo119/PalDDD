@@ -240,7 +240,8 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var messageId in messageIds)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+            // MA0015：异常 paramName 指向集合参数（元素来自 messageIds），而非循环变量。
+            ArgumentException.ThrowIfNullOrWhiteSpace(messageId, nameof(messageIds));
             if (seen.Add(messageId))
                 unique.Add(messageId);
         }
@@ -467,13 +468,6 @@ public sealed class DapperInboxStore : IInboxStore, IBatchInboxStore
             }
         }
         return affected;
-    }
-
-    private static IEnumerable<string> CollectChunkIds(
-        List<string> ids, int start, int count)
-    {
-        for (var i = 0; i < count; i++)
-            yield return ids[start + i];
     }
 
     private const string InboxColumns =

@@ -541,7 +541,8 @@ public sealed class ProjectionTests
 
     private sealed record OrderPlaced(Guid OrderId);
 
-    private sealed class CountingProjectionHandler : IProjectionHandler<OrderPlaced>    {
+    private sealed class CountingProjectionHandler : IProjectionHandler<OrderPlaced>
+    {
         public int Count { get; private set; }
 
         public string ProjectionName => "order-summary";

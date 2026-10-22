@@ -16,6 +16,10 @@ namespace PalDDD.Transactions;
 public abstract class OutboxDbContext : DbContext, IPalOutboxStore, IBatchMarkOutboxStore
 {
     /// <summary>构造上下文并注册新增 Pending 行的可用时刻归一化。</summary>
+    /// <remarks>MA0056：EF 文档化的上下文初始化形态——ChangeTracker 是基类 virtual 属性，
+    /// 但派生方言上下文均只传 options、不重写它，构造期读取不存在虚分派风险。</remarks>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Meziantou", "MA0056:Do not call overridable members in constructor",
+        Justification = "ChangeTracker 是 EF 文档化的上下文初始化入口；派生方言上下文不重写该属性，无虚分派风险。")]
     protected OutboxDbContext(DbContextOptions options) : base(options)
     {
         // 只处理新跟踪的 OutboxMessage：SavingChanges 里 Entries<T>() 会触发一次全量

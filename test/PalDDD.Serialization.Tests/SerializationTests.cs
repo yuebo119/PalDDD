@@ -627,7 +627,8 @@ public sealed class JsonLinesEventTests
 
     // B2-T2: 逐行读取无整批缓存 — 10000 条事件每事件分配低于阈值（无与批处理模式的峰值对比）
     [Test]
-    public async Task JsonLines_PerEventAlloc_BelowThreshold()    {
+    public async Task JsonLines_PerEventAlloc_BelowThreshold()
+    {
         var options = TestJsonContext.Default.Options;
         var writer = new JsonLinesEventWriter();
         var messages = Enumerable.Range(0, 10_000)

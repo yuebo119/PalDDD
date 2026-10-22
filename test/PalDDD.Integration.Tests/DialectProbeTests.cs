@@ -516,6 +516,14 @@ internal sealed class DialectProbeSession : IAsyncDisposable
     /// <summary>指向 probe 库的已打开连接（探针断言共用）。</summary>
     public DbConnection Connection { get; }
 
+    /// <summary>
+    /// 指向 probe 库的原始连接串（含凭据）。竞争连接必须用它构造：
+    /// <c>Connection.ConnectionString</c> 在连接打开后不含密码（Npgsql 默认
+    /// <c>Persist Security Info=false</c>），据此新建连接会以 SASL 认证失败
+    /// （2026-10-22 CI 首跑实证）。
+    /// </summary>
+    public string ConnectionString => _probeConnectionString;
+
     private readonly IAsyncDisposable _container;
     private readonly string _adminConnectionString;
     private readonly string _probeDatabase;

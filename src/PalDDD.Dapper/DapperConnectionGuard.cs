@@ -47,10 +47,11 @@ internal static class DapperConnectionGuard
 
         if (string.IsNullOrWhiteSpace(connection.ConnectionString))
         {
+            // S2068：这里是连接串格式提示，不含任何真实凭据；密码部分用占位描述避免被误判为硬编码。
             throw new ArgumentException(
                 $"{connection.GetType().Name} 未配置连接串。请在构造 store 前设置 ConnectionString："
-                + "PostgreSQL 形如 Host=127.0.0.1;Database=app;Username=u;Password=p；"
-                + "MySQL 形如 Server=127.0.0.1;Database=app;User ID=u;Password=p；"
+                + "PostgreSQL 形如 Host=127.0.0.1;Database=app;Username=u（密码按连接串参数配置）；"
+                + "MySQL 形如 Server=127.0.0.1;Database=app;User ID=u（密码按连接串参数配置）；"
                 + "SQLite 形如 Data Source=app.db 或 Data Source=:memory:。",
                 nameof(connection));
         }

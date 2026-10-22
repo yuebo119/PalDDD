@@ -60,7 +60,7 @@ public static class EventStreamJsonLines
             var lineStart = buffer.WrittenCount;
             json.Reset(buffer);
             WriteEvent(json, evt);
-            json.Flush();
+            await json.FlushAsync(ct).ConfigureAwait(false);
             buffer.Write("\n"u8);
             // 2026-10-21 评审 F2：导出侧与导入侧应用同一字节上限。原实现只限导入，
             // 13MB payload 以 base64 膨胀为约 17.3MB 单行——导出成功、导入失败。

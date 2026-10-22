@@ -354,6 +354,7 @@ public class PalOrmEventLog<TProvider> : IEventLog
         {
             await using var cmd = CreateRawCommand();
 #pragma warning disable S2077 // sql 仅含 @pN 占位符，值全部经 AddParam 参数化绑定
+            // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- sql 由 BuildBatchInsert 构造：表/列名为字面量，值全部 @pN 参数化
             cmd.CommandText = sql;
 #pragma warning restore S2077
             for (var i = 0; i < args.Count; i++)

@@ -88,7 +88,9 @@ TState>
     private readonly IPalLogger<SagaTimeoutProcessor<TState>> _logger;
     private readonly IOptionsMonitor<SagaProcessorOptions> _options;
     private readonly TimeProvider _timeProvider;
+#pragma warning disable S2743 // 按闭合泛型各持一份是刻意语义：一次性告警需按 TState 收口（对齐 Saga<TState> 静态缓存先例）
     private static int s_cursorWarningLogged;
+#pragma warning restore S2743
 
     public SagaTimeoutProcessor(
         ISagaStateStore<TState> store,

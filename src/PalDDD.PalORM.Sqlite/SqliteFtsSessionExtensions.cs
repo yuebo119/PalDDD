@@ -164,6 +164,7 @@ public static class SqliteFtsSessionExtensions
         {
             await using var command = connection.CreateCommand();
             command.Transaction = transaction;
+            // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- statements 由 SqliteFtsCore 生成（标识符经转义，来源为已校验的索引定义），无用户输入拼接
             command.CommandText = string.Join(";\n", statements);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             if (ownsTransaction)

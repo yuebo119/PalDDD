@@ -179,7 +179,7 @@ internal static class MessageBatchPump
 
             // 先停止逐条订阅（不再有新消息），再取消泵并完成通道，最后等待泵收尾。
             await inner.DisposeAsync().ConfigureAwait(false);
-            pumpCts.Cancel();
+            await pumpCts.CancelAsync().ConfigureAwait(false);
             completeWriter();
             try
             {

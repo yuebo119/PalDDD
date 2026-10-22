@@ -133,6 +133,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
                     ? " ORDER BY leased_until NULLS FIRST, created_at"
                     : " ORDER BY (leased_until IS NULL) DESC, leased_until, created_at";
             await using var leaseCmd = CreateRawCommand();  // ITM-243：挂接 IUnitOfWork 环境事务
+            // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- SQL 由方言分支字面量与常量子句（dueClause/orderClause）拼接，值全部 @pN 参数
             leaseCmd.CommandText = TProvider.Dialect == global::PalORM.SqlDialect.PostgreSql
                 ? "UPDATE saga_states SET leased_by = @p0, leased_until = @p1, version = version + 1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (@p2, @p3) AND (leased_until IS NULL OR leased_until <= @p4)" + dueClause + orderClause + " LIMIT @p5 FOR UPDATE SKIP LOCKED) RETURNING saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until, next_check_at"
                 : "UPDATE saga_states SET leased_by = @p0, leased_until = @p1, version = version + 1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (@p2, @p3) AND (leased_until IS NULL OR leased_until <= @p4)" + dueClause + orderClause + " LIMIT @p5) RETURNING saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, leased_by, leased_until, next_check_at";
@@ -359,6 +360,7 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
             {
                 var count = Math.Min(chunkRows, sagas.Count - start);
                 await using var cmd = CreateRawCommand();
+                // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- SQL 由 BuildAdvanceNextCheckBatch 构造：表/列名为字面量，值全部 @pN 参数化
                 cmd.CommandText = BuildAdvanceNextCheckBatch(cmd, owner, sagas, start, count);
                 var rows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
                 affected += rows;

@@ -263,7 +263,9 @@ public sealed class InboxProcessor
         var ids = new List<string>(batch.Count);
         foreach (var (messageId, message) in batch)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+            // MA0015：元素来自 batch，异常 paramName 显式指向集合参数（deconstruction 变量
+            // 不是方法参数，由 CallerArgumentExpression 推出会得到不存在的参数名）。
+            ArgumentException.ThrowIfNullOrWhiteSpace(messageId, nameof(batch));
             ArgumentNullException.ThrowIfNull(message, nameof(batch));
             if (byId.TryAdd(messageId, message))
                 ids.Add(messageId);

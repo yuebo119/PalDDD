@@ -502,7 +502,11 @@ public sealed class KafkaBroker : MessageBrokerBase, IAsyncDisposable, IMessageB
         consumerThread.Start();
 
         // 保存 Task 引用，用于等待完成和错误观测
+        // S8949：worker 刻意不接收 Task.Run 的取消令牌——取消由循环内的 tokenSnapshot 观察，
+        // 调度前取消也必须进入 finally（Close/Dispose consumer），传入令牌会让任务根本不运行。
+#pragma warning disable S8949 // 见上：取消在循环内观察，调度前取消仍须执行收尾
         var consumeTask = Task.Run(async () =>
+#pragma warning restore S8949
         {
             var inFlight = new List<Task>(maxConcurrent);
             try

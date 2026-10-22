@@ -55,4 +55,6 @@ public static class OutboxHealthServiceCollectionExtensions
 }
 
 /// <summary>R11 F3：本包健康检查去重 PostConfigure 的幂等标记。</summary>
+#pragma warning disable S2094 // 标记类型：只作 PostConfigure 幂等键，永不实例化（DI 类型身份即用途）
 internal sealed class PalOutboxHealthDeduplicationMarker;
+#pragma warning restore S2094

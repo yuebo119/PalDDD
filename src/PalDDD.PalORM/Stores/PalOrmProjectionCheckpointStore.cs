@@ -245,9 +245,10 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
         ArgumentNullException.ThrowIfNull(checkpoint);
         if (processingTimeout < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
-        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.ProjectionName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.SourceName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.Position);
+        // MA0015：异常 paramName 指向入参 checkpoint（字段来自它），不指向字段本身。
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.ProjectionName, nameof(checkpoint));
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.SourceName, nameof(checkpoint));
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.Position, nameof(checkpoint));
 
         var leaseUntil = now + processingTimeout;
         var affected = await Session.ExecuteAsync(

@@ -401,7 +401,7 @@ public static class DapperBulkCopy
         MySqlTransaction mysqlTx;
         if (transaction is null)
         {
-            mysqlTx = (MySqlTransaction)await myConn.BeginTransactionAsync(ct).ConfigureAwait(false);
+            mysqlTx = await myConn.BeginTransactionAsync(ct).ConfigureAwait(false);
         }
         else
         {
@@ -793,6 +793,7 @@ public static class DapperBulkCopy
 
         public override void Close()
         {
+            // 读取器不持有外部资源：行数据来自已物化的数组，关闭只是满足 DbDataReader 契约。
         }
     }
 

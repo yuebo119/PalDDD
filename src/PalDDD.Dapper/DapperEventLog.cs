@@ -813,6 +813,7 @@ public sealed class DapperEventLog : IEventLog
         }
 
         await using var cmd = _connection.CreateCommand();
+        // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- sql 来自调用方传入的编译期常量（EventLogSql.ReadStream/ReadAll 族），无插值；值全部经 AddReadParameter 参数化
         cmd.CommandText = sql;
         cmd.Transaction = Tx;
         if (streamName is not null)

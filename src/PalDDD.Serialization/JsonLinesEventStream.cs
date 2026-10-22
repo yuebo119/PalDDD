@@ -180,12 +180,13 @@ public sealed class JsonLinesEventReader
                     {
                         // R13 F23：JsonException 的行号/位置相对每次单行 Deserialize（恒为
                         // 第 1 行），多行 .jsonl 无法定位坏行。包装时带文档级行号，原 Path/
-                        // LineNumber/BytePositionInLine 保留。
+                        // LineNumber/BytePositionInLine 保留；MA0054：原始异常挂 InnerException。
                         throw new System.Text.Json.JsonException(
                             $"JSON Lines parse failed at line {lineNumber}: {ex.Message}",
                             ex.Path,
                             ex.LineNumber,
-                            ex.BytePositionInLine);
+                            ex.BytePositionInLine,
+                            ex);
                     }
 
                     if (msg is not null)
