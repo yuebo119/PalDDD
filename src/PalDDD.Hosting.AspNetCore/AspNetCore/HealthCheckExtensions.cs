@@ -122,7 +122,8 @@ public static class HealthCheckExtensions
         return services;
     }
 
-    internal static async Task WriteHealthResponseAsync(HttpContext context, HealthReport report, TimeProvider clock)    {
+    internal static async Task WriteHealthResponseAsync(HttpContext context, HealthReport report, TimeProvider clock)
+    {
         // ITM-800（2026-09-19）：删除手动 ContentType 赋值——WriteAsJsonAsync(contentType:null)
         // 用框架默认 "application/json; charset=utf-8" 覆盖此设置（死代码）；行为由
         // WriteHealthResponse_FinalContentTypeIsFrameworkDefault_NotManualSet 测试锁定
@@ -152,7 +153,9 @@ public static class HealthCheckExtensions
 // ═══════════════════════════════════════════════════════════════
 
 /// <summary>R11 F3：健康检查去重 PostConfigure 的幂等标记（单一注册）。</summary>
+#pragma warning disable S2094 // 标记类型：只作 PostConfigure 幂等键，永不实例化（DI 类型身份即用途）
 internal sealed class PalHealthCheckDeduplicationMarker;
+#pragma warning restore S2094
 
 /// <summary>检查消息代理是否已注册 — 不探测外部 Broker 网络连通性。</summary>
 internal sealed class PalMessageBrokerHealthCheck(Message.IMessageBroker? broker = null) : IHealthCheck

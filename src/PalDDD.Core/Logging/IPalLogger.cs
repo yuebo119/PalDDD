@@ -25,37 +25,37 @@ public interface IPalLogger<T>
     /// <summary>调试日志</summary>
     void Debug(string message);
 
+    /// <summary>结构化调试日志（默认实现格式化后转调 <see cref="Debug(string)"/>）。</summary>
+    void Debug(EventId eventId, string message, params object?[] args)
+        => Debug(PalLogMessage.Format(message, args));
+
     /// <summary>信息日志</summary>
     void Information(string message);
 
+    /// <summary>结构化信息日志（默认实现格式化后转调 <see cref="Information(string)"/>）。</summary>
+    void Information(EventId eventId, string message, params object?[] args)
+        => Information(PalLogMessage.Format(message, args));
+
     /// <summary>警告日志</summary>
     void Warning(string message);
+
+    /// <summary>结构化警告日志（默认实现格式化后转调 <see cref="Warning(string)"/>）。</summary>
+    void Warning(EventId eventId, string message, params object?[] args)
+        => Warning(PalLogMessage.Format(message, args));
 
     /// <summary>错误日志 · 必须携带异常</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1716:Identifiers should not match keywords",
         Justification = "Error 是日志领域的标准命名，与 ILogger 的 LogError 扩展方法一致。")]
     void Error(Exception ex, string message);
 
-    /// <summary>是否启用指定级别——用于避免昂贵的参数计算</summary>
-    bool IsEnabled(LogLevel level);
-
-    /// <summary>结构化调试日志（默认实现格式化后转调 <see cref="Debug(string)"/>）。</summary>
-    void Debug(EventId eventId, string message, params object?[] args)
-        => Debug(PalLogMessage.Format(message, args));
-
-    /// <summary>结构化信息日志（默认实现格式化后转调 <see cref="Information(string)"/>）。</summary>
-    void Information(EventId eventId, string message, params object?[] args)
-        => Information(PalLogMessage.Format(message, args));
-
-    /// <summary>结构化警告日志（默认实现格式化后转调 <see cref="Warning(string)"/>）。</summary>
-    void Warning(EventId eventId, string message, params object?[] args)
-        => Warning(PalLogMessage.Format(message, args));
-
     /// <summary>结构化错误日志（默认实现格式化后转调 <see cref="Error(Exception, string)"/>）。</summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1716:Identifiers should not match keywords",
         Justification = "Error 是日志领域的标准命名，与 ILogger 的 LogError 扩展方法一致。")]
     void Error(Exception ex, EventId eventId, string message, params object?[] args)
         => Error(ex, PalLogMessage.Format(message, args));
+
+    /// <summary>是否启用指定级别——用于避免昂贵的参数计算</summary>
+    bool IsEnabled(LogLevel level);
 }
 
 /// <summary>日志模板格式化（门面默认实现用；适配器覆写后直接把模板与参数交给 MEL）。</summary>
@@ -65,7 +65,9 @@ internal static partial class PalLogMessage
     // 未实现结构化重载的旧日志器走本方法：先把命名槽位按出现顺序改成数字槽位，
     // 保留 :format 段，再交给 string.Format。{{ 转义不匹配。
     // 源生成正则：Core 声明 IsAotCompatible=true，RegexOptions.Compiled 会触发动态代码。
-    [GeneratedRegex(@"\{(?!\{)(?<name>[A-Za-z_][A-Za-z0-9_]*)(?<format>:[^}]*)?\}", RegexOptions.CultureInvariant)]
+    // MA0009：显式给匹配超时——本模式无嵌套量词、不存在灾难性回溯，超时值仅为满足分析器
+    // 契约（一旦触发说明模式被改坏，异常会从 Format 冒出而不是静默拖死调用线程）。
+    [GeneratedRegex(@"\{(?!\{)(?<name>[A-Za-z_][A-Za-z0-9_]*)(?<format>:[^}]*)?\}", RegexOptions.CultureInvariant, matchTimeoutMilliseconds: 1_000)]
     private static partial Regex NamedPlaceholder();
 
     internal static string Format(string message, object?[] args)

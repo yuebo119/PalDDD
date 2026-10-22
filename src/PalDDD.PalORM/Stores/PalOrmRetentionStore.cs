@@ -54,6 +54,7 @@ public sealed class PalOrmRetentionStore<TProvider> : IRetentionStore
             await _connection.OpenAsync(ct).ConfigureAwait(false);
 
         await using var command = _connection.CreateCommand();
+        // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- sql 由 RetentionSql 生成（表/列名为框架常量），值全部参数化（@cutoff/@n）
         command.CommandText = sql;
         command.Transaction = PalOrmAmbientTransaction.TryGet(_session);
         AddParam(command, "@cutoff", RetentionSql.ToTimeParam(_dialect, cutoff, sqliteProviderNative: true));

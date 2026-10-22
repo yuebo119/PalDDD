@@ -26,7 +26,9 @@ public sealed class DapperConflictRegressionTests
             Skip.Test("PG 方言测试仅走 Testcontainers（对齐 MultiDialectFixture 禁外部库裁决）；当前配置指向外部连接串，跳过。");
 
         await using var probe = await DialectProbeSession.CreatePostgreSqlAsync();
-        await using var competingConnection = new NpgsqlConnection(probe.Connection.ConnectionString);
+        // 竞争连接用会话保存的原始连接串：Connection.ConnectionString 打开后不含密码
+        // （Npgsql Persist Security Info=false），据此新建会 SASL 认证失败（2026-10-22 CI 实证）。
+        await using var competingConnection = new NpgsqlConnection(probe.ConnectionString);
         await competingConnection.OpenAsync();
 
         var stream = $"r14/{Guid.NewGuid():N}";

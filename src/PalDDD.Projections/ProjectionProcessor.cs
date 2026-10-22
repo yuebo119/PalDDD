@@ -410,7 +410,7 @@ public sealed class ProjectionProcessor<TMessage>
         if (heartbeat is null)
             return;
 
-        heartbeat.Cts.Cancel();
+        await heartbeat.Cts.CancelAsync().ConfigureAwait(false);
         try
         {
             await heartbeat.Task.ConfigureAwait(false);
