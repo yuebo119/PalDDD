@@ -23,6 +23,31 @@ namespace PalDDD.Compression.Tests;
 /// </summary>
 public sealed class CompressionGuardTests
 {
+    [Test]
+    public async Task DecompressBufferPools_Release_DropsOversizedSlotsImmediately()
+    {
+        // R12 C-17 回归锁：解压炸弹路径留下的 64MB 级缓冲必须在操作结束时弃槽，
+        // 而不是等同一线程下一次 Rent（长驻线程可能永久持有）。
+        var writer = DecompressBufferPool.Rent();
+        var span = writer.GetSpan(300 * 1024);
+        span[..(300 * 1024)].Clear();
+        writer.Advance(300 * 1024);
+        var grownCapacity = writer.Capacity;
+
+        DecompressBufferPool.Release(writer);
+        var nextWriter = DecompressBufferPool.Rent();
+
+        await Assert.That(grownCapacity).IsGreaterThan(256 * 1024);
+        await Assert.That(nextWriter.Capacity).IsLessThan(300 * 1024);
+
+        var stream = TlsStreamPool.RentDecompressOutput();
+        stream.Capacity = 300 * 1024;
+        TlsStreamPool.ReleaseDecompressOutput(stream);
+        var nextStream = TlsStreamPool.RentDecompressOutput();
+
+        await Assert.That(nextStream.Capacity).IsLessThan(300 * 1024);
+    }
+
     private static ICompressor GetCompressor(CompressionAlgorithm algorithm, bool native)
     {
         var services = new ServiceCollection();

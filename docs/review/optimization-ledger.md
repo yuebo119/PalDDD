@@ -47,7 +47,17 @@
 | 消息契约验证空 catalog | catalog 为空即无 requirement，机制正例/正控均成立 | rejected（非契约违背） |
 | 包数 36 | `docs/release.md:282`：“应等于 36”；`count-audit` packable 推导 36；全量 pack 实测 36 | 口径钉住：`release.yml` `EXPECTED=36`，新增/移除可打包项目必须同步 |
 
-## 三、R11 验证汇总
+## 三、R12 内存与生命周期优化（2026-10-22）
+
+| ID | 轴 | 位置 | 发现 | 状态 | 证据 | 决策来源 | 锁定测试 | 轮次 | 复活条件 |
+|---|---|---|---|---|---|---|---|---|---|
+| OPT-201 | MEMORY | `StreamRunRegistry.cs:31,875` | 终态 run 只受 10 分钟保留期约束、不计入 `MaxConcurrentRuns`，内存随“完成速率 × 保留期”增长，文档上界失效 | fixed | 测试前 20 个短 run 后 `TrackedCount=20`（上限 2×2=4）判红；修复后 ≤4 | R12 PF-1 | `StreamRunRegistryTests.TerminalRuns_RetentionIsBoundedByMaxConcurrentRuns` | R12 | 保留期语义改为持久回看（应改用 EventLog，不占注册表） |
+| OPT-202 | MEMORY | `StreamRunRegistry.cs:429,488,744` | 每次断线重连创建 linked 宽限 CTS，被替换/终态时只 Cancel 不 Dispose，以父 token 注册形式滞留到 run 释放 | fixed | 代码路径对照；所有权协议改为锁内取走、取到者 Dispose | R12 PF-2 | 无单测（`TryBeginAttach`/`ReleaseAttachmentAsync`/`FinishAsync`/`Dispose` 四路所有权人工核验） | R12 | 宽限计时改为单例 Timer 或 `CancellationTokenSource` 复用机制 |
+| OPT-203 | MEMORY | `DecompressBufferPool.cs:28-43`；`SystemCompressor.cs:96-121,216-272` | 解压炸弹/超限异常后，64MB 级 Brotli 缓冲与 GZip/Deflate MemoryStream 驻留 TLS，直到同一线程下一次 Rent | fixed | 池行为单测：300KB 槽 Release 后下一次 Rent 容量回落 | R12 C-17 | `CompressionGuardTests.DecompressBufferPools_Release_DropsOversizedSlotsImmediately` | R12 | 池改为 ArrayPool/可注入上限，或线程池线程不再长驻 |
+
+R12 验证：全量 16 项目 **1884 用例，1804 通过 / 80 跳过 / 0 失败**；`gate-audit` 42/42；`AotSample` 重新发布运行通过。
+
+## 四、R11 验证汇总
 
 - 代码基线：`cda53b9`；修复范围：`6d9fc6a..0f2ce38`（12 提交，dev，未推送）。
 - 全量测试：16 个项目 **1882 用例，1802 通过 / 80 跳过 / 0 失败**（跳过均为 PG/MySQL Testcontainers 与真 broker）。
