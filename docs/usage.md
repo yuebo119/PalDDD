@@ -85,11 +85,19 @@ services.AddPalCommandHandler<CreateOrderCommand, OrderId, CreateOrderHandler>()
 分发：
 
 ```csharp
-var dispatcher = provider.GetRequiredService<Dispatcher>();
+// HandlerRegistrar 是 IHostedService：必须先启动宿主，Handler 才会注册进 Dispatcher。
+var builder = Host.CreateApplicationBuilder();
+builder.Services.AddPalCoreStack();
+builder.Services.AddPalCommandHandler<CreateOrderCommand, OrderId, CreateOrderHandler>();
+
+using var host = builder.Build();
+await host.StartAsync();
+var dispatcher = host.Services.GetRequiredService<Dispatcher>();
 var orderId = await dispatcher.SendAsync(new CreateOrderCommand("Contoso", 100m));
+await host.StopAsync();
 ```
 
-> **前提**：Handler 由 `HandlerRegistrar`（`IHostedService`）在**宿主启动时**自动注册并 `Freeze()`。因此需运行在 `IHost` 宿主（`WebApplicationBuilder` / `HostBuilder`）下；纯 `BuildServiceProvider()` 场景（单测/控制台工具）`IHostedService` 不执行，需手动 `AddPalCommandHandler` 后显式触发注册或直接构造 Dispatcher。
+> **前提**：Handler 由 `HandlerRegistrar`（`IHostedService`）在**宿主启动时**自动注册并 `Freeze()`。纯 `BuildServiceProvider()` 后直接 `SendAsync` 会抛 `HandlerNotFoundException`（`IHostedService` 未执行）；单测/控制台工具请复用宿主形态（如上例），或直接构造 `Dispatcher` 并显式调用 `Register`。
 
 ## 定义查询和 handler
 
@@ -352,7 +360,7 @@ await using var subscription = await consumer.StartAsync(
     maxDelay: TimeSpan.FromMilliseconds(50));
 ```
 
-消息 ID 默认取 `MessageConsumeContext.MessageId`（Kafka 消息 Key / RabbitMQ `BasicProperties.MessageId`，发布侧由框架写入）；broker 不提供消息 ID 时传入 `messageIdSelector`，两者都无则启动后首批快速失败。store 实现 `IBatchInboxStore` 时每批一次认领与一次完成往返（Dapper PG/SQLite 各 1 次、MySQL 4 次），否则自动回落逐条 `TryProcessAsync`。**当前实现 `IBatchInboxStore` 的是 Dapper 与 InMemory；PalORM 与 EF 的 Inbox store 回落逐条**（每消息 2 次往返），`InboxProcessor` 会在该 processor 实例首次批量调用时记录一次 Information 说明回落（含 store 类型与消费者名），此后不再重复。broker 仍是 at-most-once：批内失败的条目被标记 Failed，不会由 broker 重投。
+消息 ID 默认取 `MessageConsumeContext.MessageId`（Kafka 消息 Key / RabbitMQ `BasicProperties.MessageId`，发布侧由框架写入）；broker 不提供消息 ID 时传入 `messageIdSelector`，两者都无则启动后首批快速失败。store 实现 `IBatchInboxStore` 时批量路径按实现方策略执行：Dapper PG/SQLite 每批一次认领 + 一次完成往返，Dapper MySQL 为逐条 CAS（每消息 2 次往返，2026-10-22 R14 起：原块级时间戳令牌在同刻碰撞下会重复认领）；否则自动回落逐条 `TryProcessAsync`。**当前实现 `IBatchInboxStore` 的是 Dapper 与 InMemory；PalORM 与 EF 的 Inbox store 回落逐条**（每消息 2 次往返），`InboxProcessor` 会在该 processor 实例首次批量调用时记录一次 Information 说明回落（含 store 类型与消费者名），此后不再重复。broker 仍是 at-most-once：批内失败的条目被标记 Failed，不会由 broker 重投。
 
 生产环境可引用 `PalDDD.Transactions.EFCore` 程序集，`using PalDDD.Transactions;` 后派生 `InboxDbContext`，并通过 DI 将该上下文作为 `IInboxStore` 使用。适配器会配置 `(ConsumerName, MessageId)` 唯一索引、processed 时间索引和 lease 状态索引；已处理消息返回 `null`，未超时 `Processing` 消息返回 `null`，失败或超时消息会重新进入 `Processing` 以支持 broker 重投递。
 

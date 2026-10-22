@@ -260,7 +260,7 @@ public static class SqlTemplates
     /// token 不匹配零命中，不再覆盖 B 正在处理的行（对齐 Outbox 租约 token 化）。
     /// </summary>
     public const string InboxMarkProcessed =
-        "UPDATE inbox_messages SET status=2,processed_at=@at WHERE id=@id AND status=1 AND processing_started_at=@startedAt";
+        "UPDATE inbox_messages SET status=2,processed_at=@at,last_error=NULL WHERE id=@id AND status=1 AND processing_started_at=@startedAt";
 
     /// <summary>
     /// 标记消息处理失败。<br/>

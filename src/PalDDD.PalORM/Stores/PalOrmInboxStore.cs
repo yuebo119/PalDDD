@@ -181,7 +181,7 @@ public class PalOrmInboxStore<TProvider> : IInboxStore
         // 三十八轮 P2 修复（ITM-210 Inbox 姊妹）：processing_started_at 抢占 token 守卫——
         // 被抢占的旧 worker token 不匹配零命中，不覆盖新 worker 的行（对齐 Dapper 版同款）
         var affected = await Session.ExecuteAsync(
-            $"UPDATE inbox_messages SET status = {(int)InboxStatus.Processed}, processed_at = {processedAt} WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing} AND processing_started_at = {message.ProcessingStartedAt}",
+            $"UPDATE inbox_messages SET status = {(int)InboxStatus.Processed}, processed_at = {processedAt}, last_error = NULL WHERE id = {message.Id} AND status = {(int)InboxStatus.Processing} AND processing_started_at = {message.ProcessingStartedAt}",
             ct).ConfigureAwait(false);
         // ITM-168 修复：本地对象仅在 DB 行确实受影响（affected > 0）时变更——原实现先改
         // 本地再执行 SQL 且不看 affected：记录已被并发者标记终态时 DB 未变，本地对象却

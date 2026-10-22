@@ -78,7 +78,8 @@ CREATE TABLE events (
     trace_parent    VARCHAR(255),
     trace_state     VARCHAR(512),  -- 三十七轮 C2：对齐 EFCore MaxLength(512)
     UNIQUE INDEX idx_events_event_id (event_id),
-    INDEX idx_events_event_id_bin (event_id_bin),
+    -- 2026-10-21（R14 复核补齐 MySQL 侧）：不建 event_id_bin 索引。该列只被 SELECT 回传，
+    -- 没有任何查询用它过滤；每次事件追加却要维护一份 B-tree（PG/SQLite 同口径）。
     UNIQUE INDEX idx_events_stream (stream_name, stream_version)
     -- global_position 是主键，独立索引纯冗余（2026-10-20 移除）。
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

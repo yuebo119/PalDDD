@@ -14,6 +14,40 @@
 
 ### Added
 
+- **2026-10-22 R14 全代码审计：四条 P1 修复（Dapper 冲突分类 ×2、MySQL 批量认领、ChildSaga HITL）**：
+  ①**Dapper 唯一冲突分类器在单驱动消费方整体失效**——三驱动是 `PrivateAssets=all` 的实现私有依赖，
+  `DapperSqlErrorClassifier` 主方法体的强类型 `is` 判据在方法 JIT 时解析全部 provider 程序集；
+  PG-only / MySQL-only / SQLite-only 消费方首个唯一冲突即抛 `FileNotFoundException`（异常过滤器吞掉后
+  分类恒 false，原始 provider 异常逃逸，影响 EventLog 5 处、Inbox 2 处、Idempotency、Projection、
+  Saga 共 9 个调用点）。修法：三个 provider 判定拆为 `[MethodImpl(MethodImplOptions.NoInlining)]`
+  独立方法，主方法只按类型全名分发（NativeAOT 仍要求三驱动参与链接，AOT 形态不变）。
+  ②**PG 批量 `StreamExists` 并发冲突永不转领域异常**——`ClassifyAtomicBatchConflictAsync` 的
+  `(actual ?? -1) < 0` 在流已存在时恒 false，调用方按文档捕获 `EventStreamConcurrencyException`
+  重试时拿不到。修法：补批内 EventId 探测（400/块），EventId 已落库（重放同一事件）原样上抛，
+  否则 `StreamExists` 冲突一律转并发异常；单条/批量路径同口径。
+  ③**子 Saga 停在 `AwaitingHumanDecision` 时父步骤记为成功**——`ChildSagaStep` 直接 `ApplyOutput` +
+  `RecordExecutedStep`，父 Saga 静默越过未获人工批准的审批子流程并继续后续步骤。修法：AWD 子状态
+  fail-fast（可行动异常，点名步骤/子 Saga/父 Saga 与替代建模方式；正常成功路径保持 Active，
+  不按 Completed 判定以免误伤）。
+  ④**MySQL 批量 Inbox 认领同刻重复**——块级实现以 `processing_started_at=@now` 作认领身份，同一 `now`
+  的第二个调用在 UPDATE 不命中后仍回读到第一个调用刚写入的行，同一消息被两个调用方并发执行 handler。
+  修法：MySQL 批量改为逐条 CAS（每消息 2 次往返，原块级 4 次/批；恢复块级需引入本调用唯一令牌，
+  属 schema 变更）。
+  ⑤**附带修复**：Inbox `MarkProcessed` 三栈 SQL 补 `last_error=NULL`（审计列跨栈一致）；
+  `Saga.RecordExecutedStep` 跨实例路径补并 `StepStartedAt`（原丢失前序时间戳使超时兜底静默关闭）；
+  Saga 三处批量冲刷的 OCE 过滤按 R13 F3 口径去掉（None 调用下的 OCE 属 DB 超时映射，须记录）；
+  RabbitMQ 队列清理改用 `CancellationToken.None`（取消不得跳过 channel 释放）；
+  `MessageBatchPump` 补 `maxDelay`（≤ uint.MaxValue-1 ms）与 `maxBatchSize`（≤10000）入口上界；
+  `docs/usage.md` 分发示例补宿主启动步骤（原示例照抄抛 `HandlerNotFoundException`）；
+  `docs/sql/mysql/000_schema.sql` 删除冗余 `event_id_bin` 索引（对齐 PG/SQLite 与 2026-10-21 决策）。
+  **公共 API**：快照 1 行变更（`SqlTemplates.InboxMarkProcessed` 常量值补 `last_error=NULL`），
+  无签名破坏、无类型增删。
+  锁定测试：`DapperClassifierGuardTests`（源码守卫 + 变异探针：把类型判断写回主方法 → 红）、
+  `ChildSagaHumanDecisionTests`、`DapperConflictRegressionTests`（PG/MySQL Testcontainers，
+  Docker 不可达时 Skip）。
+  验证：全量 1938 用例 / 1856 通过 / 82 跳过 / 0 失败；E7（ChildSaga AWD）、E9（PG 批量 StreamExists）、
+  E10（MySQL 同刻认领）端到端探针复跑符合预期。
+
 - **2026-10-22 R13 F22/F23：ValueObject 实现 IFormattable、JSON Lines 错误带文档级行号**：
   ①**问题**：`ValueObject<T>` 的 `ToString(string?, IFormatProvider?)` 已存在但类型未声明 `IFormattable`——复合格式（插值 `$"{vo:X4}"` / `string.Format`）回退无参 `ToString`，格式串被静默忽略。`JsonLinesEventReader.DeserializeAll` 逐行反序列化，`JsonException.LineNumber` 恒为单行内位置（1），多行 `.jsonl` 无法定位坏行。
   ②**修法**：`ValueObject<T>` 声明 `IFormattable`（方法已在）；JSON Lines 捕获 `JsonException` 后以同类型重抛，消息前缀 `JSON Lines parse failed at line N`，保留原 `Path`/`LineNumber`/`BytePositionInLine`。

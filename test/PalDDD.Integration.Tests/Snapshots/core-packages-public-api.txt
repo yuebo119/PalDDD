@@ -410,7 +410,7 @@ static class PalDDD.Dapper.SqlTemplates
   field const System.String InboxInsertPG = INSERT INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,1,@now,@now,1) ON CONFLICT (consumer_name,message_id) DO NOTHING RETURNING id
   field const System.String InboxInsertSqlite = INSERT OR IGNORE INTO inbox_messages (consumer_name,message_id,status,received_at,processing_started_at,attempts) VALUES (@c,@m,1,@now,@now,1); SELECT last_insert_rowid() WHERE changes() > 0;
   field const System.String InboxMarkFailed = UPDATE inbox_messages SET status=3,last_error=@err WHERE id=@id AND status=1 AND processing_started_at=@startedAt
-  field const System.String InboxMarkProcessed = UPDATE inbox_messages SET status=2,processed_at=@at WHERE id=@id AND status=1 AND processing_started_at=@startedAt
+  field const System.String InboxMarkProcessed = UPDATE inbox_messages SET status=2,processed_at=@at,last_error=NULL WHERE id=@id AND status=1 AND processing_started_at=@startedAt
   field const System.String InboxSelect = SELECT * FROM inbox_messages WHERE consumer_name=@c AND message_id=@m
   field const System.String InboxStartProcessing = UPDATE inbox_messages SET status=1,attempts=attempts+1,processing_started_at=@now,last_error=NULL WHERE id=@id AND (status=0 OR (status=1 AND processing_started_at<@cutoff) OR status=3)
   field const System.String Outbox = outbox_messages

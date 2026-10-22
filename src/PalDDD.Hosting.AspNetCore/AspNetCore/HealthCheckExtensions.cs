@@ -160,6 +160,9 @@ internal sealed class PalMessageBrokerHealthCheck(Message.IMessageBroker? broker
     public Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context, CancellationToken cancellationToken = default)
     {
+        // NullMessageBroker 是 AddPalDDD 的默认注册（单节点形态）：健康检查的既有契约是
+        // 「注册即健康」，报 Degraded 会让默认应用 readiness 变红（滚动更新阻塞）——
+        // 语义变更风险高于收益，维持原判定；真实 broker 是否配置由部署侧自行保证。
         var result = broker is null
             ? HealthCheckResult.Degraded("消息代理未注册")
             : HealthCheckResult.Healthy("消息代理已注册");
