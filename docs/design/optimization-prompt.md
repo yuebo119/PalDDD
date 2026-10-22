@@ -140,7 +140,8 @@ dotnet run scripts/gate-audit.cs -- --inventory
 dotnet run scripts/count-audit.cs
 dotnet run scripts/doc-consistency.cs
 dotnet run scripts/secret-scan.cs
-dotnet run scripts/vuln-scan.cs
+dotnet list package --vulnerable --include-transitive --format json > /tmp/vuln.json
+dotnet run scripts/vuln-scan.cs /tmp/vuln.json
 dotnet run scripts/verify-conventions.cs -- --quick
 dotnet run scripts/encoding-gate.cs
 ```
@@ -704,7 +705,7 @@ ID | 轴 | 位置 | 发现 | 状态 | 证据 | 决策来源 | 锁定测试 | 轮
 | 文档 | `dotnet run scripts/doc-consistency.cs` |
 | 规范 | `dotnet run scripts/verify-conventions.cs -- --quick` |
 | 凭据 | `dotnet run scripts/secret-scan.cs` |
-| 漏洞 | `dotnet run scripts/vuln-scan.cs` |
+| 漏洞 | `dotnet list package --vulnerable --include-transitive --format json > /tmp/vuln.json && dotnet run scripts/vuln-scan.cs /tmp/vuln.json` |
 | 覆盖率 | `dotnet run scripts/ci-coverage.cs -- --local` |
 | 性能烟测 | `dotnet run -c Release --project bench/PalDDD.Benchmarks/PalDDD.Benchmarks.csproj -- --smoke` |
 | 性能编排 | `dotnet run scripts/eps-run.cs -- --quick` |
