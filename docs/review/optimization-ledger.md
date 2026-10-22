@@ -45,6 +45,7 @@
 | PalORM 唯一冲突分类的反射降级 | `SqlErrorClassifier.cs` IL2075 抑制理由：“裁剪后 GetProperty 返回 null → 判定 false → 原始 provider 异常原样上抛（安全降级，不崩溃）” | accepted-risk（AOT 语义已声明）；H3 探针保留为下一轮候选 |
 | `Entity.RaiseEvent` 同实例重入 | 注释把同实例重复发布定义为调用方误用并声明防御性截断 | rejected（调用方误用，非框架缺陷） |
 | 消息契约验证空 catalog | catalog 为空即无 requirement，机制正例/正控均成立 | rejected（非契约违背） |
+| MySQL EventLog `DateTimeKind=Local` 偏移（R11 C-20） | 框架写入始终是 UTC 墙钟；`DapperEventLog.ReadDateTimeOffset` 对 DateTime 统一 `SpecifyKind(Utc)`，与存储值一致；Local 仅影响返回 Kind 标注 | rejected（wslc MySQL 真库探针：drift < 1 分钟；`DapperEventLogMySqlTimeTests` 保留为回归锁） |
 | 包数 36 | `docs/release.md:282`：“应等于 36”；`count-audit` packable 推导 36；全量 pack 实测 36 | 口径钉住：`release.yml` `EXPECTED=36`，新增/移除可打包项目必须同步 |
 
 ## 三、R12 内存与生命周期优化（2026-10-22）
@@ -63,8 +64,10 @@
 | OPT-210 | CODEGEN | `MessageRegistryGenerator.cs:203,265-283` | 生成器强制 `.vN` 后缀且按 Name-only 去重，`[GenerateMessage]` 无法表达演化管线要求的「相邻版本同 wire name」 | fixed | 唯一性键改 `(Name, SchemaVersion)`；后缀改为“出现即匹配”（PALMSG005），领域事件仍由 PDDD010 强制后缀；文档/ADR-022 同步 | R12 C-15 | `MessageRegistryGeneratorTests.GenerateMessage_StableWireNameAcrossVersions_IsNotDuplicate`、`...WithMismatchedNameVersion...` | R12 | 演化管线改名为“每版独立 wire name”并自带映射 |
 | OPT-211 | CONTRACT | `ProjectionRebuilder.cs:126-137` | 批模式 `CheckpointFlushInterval` 无上界；间隔 ≥ processingTimeout 时组首租约在提交前过期，另一 worker 可重租同组并发投影 | fixed | 回放入口校验 `interval < ProcessingTimeout`（processor 新增 internal 属性）；等值即拒 | R12 C-31 | `ProjectionTests.ReplayAsync_CheckpointFlushIntervalAtOrAboveLease_ThrowsAtReplay` | R12 | 检查点存储增加显式续租原语，允许长组 |
 | OPT-212 | CORRECTNESS | `ProjectionCheckpointDbContext.cs:356-365` | 续读查询把任意 `DbException` 当作“脏 Position”回退全量，连接中断/超时被误分类并触发全量回放 | fixed | SQLSTATE 分类：仅 22P02/22007 回退，其余上抛；分类谓词单测 5 分支 | R12 C-03 | `ProjectionResumeFailureClassificationTests.IsPositionCastFailure_OnlyPgCastSqlStates` | R12 | 新 provider 的 CAST 错误码需加入集合 |
+| OPT-213 | CORRECTNESS | `DapperBulkCopy.cs:394-470` | MySQL LOAD DATA 自动提交后才检查 Warnings/RowsInserted；抛错时行已落库，调用方重试造成重复 | fixed | wslc MySQL 真库：17 行含超长值，修复前抛错后 count=17，修复后 count=0（红→绿反向验证） | R12 C-21 | `DapperBulkCopyTests.BulkInsertAsync_MySql_LoadDataWarning_RollsBackWithoutExternalTransaction` | R12 | MySQL 改 autocommit 语义或 LOAD DATA 支持事务外回滚 |
+| OPT-214 | AOT | `SqlErrorClassifier.cs:41-65` | NativeAOT 下反射 `GetProperty` 失效，且 `MySqlException.ErrorCode` 退化为 E_FAIL，唯一冲突分类失败、原始异常逃逸 | fixed | wslc MySQL + `PublishAot` 探针：修复前 FAIL（MySqlException 逃逸），修复后 PASS；分类器单测覆盖 JIT 快路径、AOT 兜底、FK 误报负例、PG/SQLite/InnerException | R12 H3 | provider 本地化错误文案或 SqlState 变更 |
 
-R12 验证：全量 16 项目 **1894 用例，1814 通过 / 80 跳过 / 0 失败**；`gate-audit` 42/42；`AotSample` 重新发布运行通过。
+R12 验证：全量 16 项目 **1902 用例，1822 通过 / 80 跳过 / 0 失败**；`gate-audit` 42/42；`AotSample` 重新发布运行通过。
 
 ## 四、R11 验证汇总
 

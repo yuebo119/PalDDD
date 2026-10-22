@@ -45,6 +45,8 @@
     <!-- F16（2026-10-21）：SQLite 方言包执行 FTS DDL 时需要读取 IUnitOfWork 环境事务，
          以便把多条语句包进同一事务（不新建连接、不与外层事务冲突）。 -->
     <InternalsVisibleTo Include="PalDDD.PalORM.Sqlite" />
+    <!-- R12 H3：分类器 AOT 兜底分支（SqlState+文案）单测直测 internal 判定。 -->
+    <InternalsVisibleTo Include="PalDDD.PalORM.Tests" />
   </ItemGroup>
 
   <ItemGroup>
