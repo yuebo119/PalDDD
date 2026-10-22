@@ -256,13 +256,15 @@ public class PalOrmSagaStateStore<TProvider, TState> : ISagaStateStore<TState>, 
         {
             inserted = await Session.ExecuteAsync(
                 RequiresJsonbCast
-                    ? (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, next_check_at, leased_by, leased_until) VALUES ({state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {truncatedError}, {state.ErrorAt}, {state.Version}, CAST({jsonData} AS jsonb), {state.NextCheckAt}, {state.LeasedBy}, {state.LeasedUntil})"
+                    ? (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, next_check_at, leased_by, leased_until) VALUES ({state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {truncatedError}, {state.ErrorAt}, {state.Version}, CAST({jsonData} AS jsonb), {state.NextCheckAt}, {state.LeasedBy}, {state.LeasedUntil}) ON CONFLICT (saga_id) DO NOTHING"
                     : (FormattableString)$"INSERT INTO saga_states (saga_id, current_state, status, created_at, completed_at, error, error_at, version, saga_data, next_check_at, leased_by, leased_until) VALUES ({state.SagaId.ToString(null, System.Globalization.CultureInfo.InvariantCulture)}, {state.CurrentState}, {(int)state.Status}, {state.CreatedAt}, {state.CompletedAt}, {truncatedError}, {state.ErrorAt}, {state.Version}, {jsonData}, {state.NextCheckAt}, {state.LeasedBy}, {state.LeasedUntil})",
                 ct).ConfigureAwait(false);
         }
         catch (DbException ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
         {
             // 行已存在（版本冲突或并发创建同一新 Saga）——统一返回 0（乐观冲突契约）。
+            // R13 F11：PG 分支已在 INSERT 上加 ON CONFLICT DO NOTHING（PG 的 23505 会把
+            // 整个事务标记 aborted，catch 后无法继续）；本 catch 保留给 SQLite/MySQL。
             return 0;
         }
         // v65 P3：INSERT 已落库才回写调用方对象（对齐 DapperSagaStateStore v38 形态）
