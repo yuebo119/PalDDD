@@ -58,6 +58,9 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
     /// <summary>本轮轮询等待的当前间隔（热读形态生效点）。</summary>
     private TimeSpan CurrentPollInterval => _pollIntervalProvider?.Invoke() ?? _pollInterval;
 
+    /// <summary>R13 F17：Task.Delay 的计时器上限（uint.MaxValue-1 毫秒 ≈ 49.7 天，实测 50 天即抛）。</summary>
+    private static readonly TimeSpan s_maxTimerDelay = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
     protected IServiceScopeFactory ScopeFactory => _scopeFactory;
 
     /// <summary>
@@ -93,7 +96,14 @@ public abstract partial class PeriodicBackgroundProcessor : BackgroundService
                 {
                     try
                     {
-                        await Task.Delay(CurrentPollInterval, _timeProvider, stoppingToken).ConfigureAwait(false);
+                        // R13 F17：超过计时器上限的间隔钳到上限（"几乎不轮询"语义保留）。
+                        // 原实现直传：Task.Delay 抛 AOOR，位于仅 catch OCE 的 try 之外，
+                        // ExecuteTask fault —— .NET 6+ BackgroundService 默认 StopHost
+                        // 会因此停掉整个宿主（而非仅该后台服务）。
+                        var interval = CurrentPollInterval;
+                        if (interval > s_maxTimerDelay)
+                            interval = s_maxTimerDelay;
+                        await Task.Delay(interval, _timeProvider, stoppingToken).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                     {
