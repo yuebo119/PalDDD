@@ -121,3 +121,42 @@ public sealed class FailureReasonTests
         await Assert.That(FailureReason.Truncate("\0\0", 2040)).IsEqualTo(string.Empty);
     }
 }
+
+/// <summary>R13 F20：NullPalLogger 的结构化重载必须是真正的空操作。</summary>
+public sealed class NullPalLoggerStructuredTests
+{
+    [Test]
+    public async Task StructuredOverloads_PlaceholderArityMismatch_DoNotThrow()
+    {
+        // 接口默认实现会走 PalLogMessage.Format（命名槽位→string.Format）：
+        // 参数少于槽位时抛 FormatException。NullPalLogger 必须覆写为 no-op。
+        PalDDD.Core.Logging.IPalLogger<object> logger = PalDDD.Core.Logging.NullPalLogger<object>.Instance;
+
+        logger.Warning(new Microsoft.Extensions.Logging.EventId(1), "retry {A} {B}", 3);
+        logger.Error(new InvalidOperationException("x"), new Microsoft.Extensions.Logging.EventId(2), "failed {A}", 1, 2);
+
+        await Assert.That(logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Warning)).IsFalse();
+    }
+
+    [Test]
+    public async Task StructuredOverloads_DoNotFormatArguments()
+    {
+        // 参数对象的 ToString 一旦被调用即说明默认格式化仍在执行（NullPalLogger 的契约是零工作）
+        var probe = new ToStringProbe();
+        PalDDD.Core.Logging.IPalLogger<object> logger = PalDDD.Core.Logging.NullPalLogger<object>.Instance;
+        logger.Information(new Microsoft.Extensions.Logging.EventId(3), "value {Value}", probe);
+
+        await Assert.That(probe.Called).IsFalse();
+    }
+
+    private sealed class ToStringProbe
+    {
+        public bool Called { get; private set; }
+
+        public override string ToString()
+        {
+            Called = true;
+            return "x";
+        }
+    }
+}
