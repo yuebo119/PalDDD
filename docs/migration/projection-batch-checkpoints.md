@@ -77,6 +77,11 @@ var processor = new ProjectionProcessor<OrderEvent>(handler, checkpointStore)
 | 1（旧行为） | 200,000 | 2.00 | 120ms |
 | 100 | 2,000 | 0.02 | 31ms |
 
+> 2026-10-22 勘正：上表是 2026-10-19 的时点数据（F7 之前，每组只写组末）。F7 把组首锚点
+> 前移到 handler 之前后，每组变为 2 次 TryStart + 2 次 MarkCompleted，batch=100 的结构真值
+> 是 4,000 次；默认批宽改 1000 后为 400 次。现行读数见 `docs/performance.md`
+> 「实测：回放批宽」，`--m2-probe` 已扩为 1/100/1000 三档并加了结构性断言。
+
 减少 100×，达到「100k 事件回放命令数不超过 2k」的验收线；探针把该阈值写成硬断言
 （batch=100 时两类调用各不得超过 1,000，超出即非零退出）。复现：
 

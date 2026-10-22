@@ -16,7 +16,8 @@ internal static class ProjectionProbe
         const int count = 100_000;
         var results = new List<(int Batch, int TryStart, int Completed, long ElapsedMs)>();
 
-        foreach (var batchSize in new[] { 1, 100 })
+        // 2026-10-22 性能轮：默认批宽改为 1000，量具同步加一档（1 / 100 / 1000）。
+        foreach (var batchSize in new[] { 1, 100, 1000 })
         {
             var store = new CountingStore(new InMemoryProjectionCheckpointStore());
             var processor = new ProjectionProcessor<SerializationBenchmarks.BenchOrderPlaced>(
@@ -38,21 +39,35 @@ internal static class ProjectionProbe
 
         var perEvent = results[0];
         var batched = results[1];
+        var wide = results[2];
         if (perEvent.TryStart != count || perEvent.Completed != count)
             throw new InvalidOperationException($"M2 batch=1 checkpoint calls unexpected: {perEvent}");
-        // 2026-10-21 评审 F7：组首锚点在处理前取得（每组 +1 TryStart、+1 MarkCompleted），
-        // 100k 事件 / 100 条一组 = 1000 组 → 上限从 1000 放宽到 2500（仍比逐事件 200k 低 80×）。
-        if (batched.TryStart > 1_250 || batched.Completed > 1_250)
-            throw new InvalidOperationException($"M2 batch=100 checkpoint calls exceed 2.5k: {batched}");
+        // 2026-10-22 口径修正：F7（2026-10-21）把组首锚点前移到 handler 执行之前，每组变成
+        // 2 次 TryStart + 2 次 MarkCompleted；100k/100 = 1000 组 → 每类 2000 次。原阈值
+        // 「每类 ≤1250」是 F7 前的口径，本量具因此自 F7 起一直失败（TOOL 车道无人跑），
+        // 现按结构真值收紧到 2100（余量 100，供未来组边界形态微调）。
+        if (batched.TryStart > 2_100 || batched.Completed > 2_100)
+            throw new InvalidOperationException($"M2 batch=100 checkpoint calls exceed 2.1k: {batched}");
+        // 2026-10-22：默认批宽 1000 → 100 组 → 每类至多 200 次（组首+组末各一次）。
+        if (wide.TryStart > 250 || wide.Completed > 250)
+            throw new InvalidOperationException($"M2 batch=1000 checkpoint calls exceed 250: {wide}");
 
         Console.WriteLine(
             $"M2 PASS: events={count}, batch=1 calls={perEvent.TryStart + perEvent.Completed} ({perEvent.ElapsedMs}ms), " +
             $"batch=100 calls={batched.TryStart + batched.Completed} ({batched.ElapsedMs}ms), " +
-            $"reduction={(perEvent.TryStart + perEvent.Completed) / (double)(batched.TryStart + batched.Completed):F0}x");
+            $"batch=1000 calls={wide.TryStart + wide.Completed} ({wide.ElapsedMs}ms), " +
+            $"reduction=(1 vs 100)={(perEvent.TryStart + perEvent.Completed) / (double)(batched.TryStart + batched.Completed):F0}x, " +
+            $"(100 vs 1000)={(batched.TryStart + batched.Completed) / (double)(wide.TryStart + wide.Completed):F0}x");
         return 0;
     }
 
-    private sealed class CountingStore(IProjectionCheckpointStore inner) : IProjectionCheckpointStore
+    /// <summary>
+    /// 计数装饰器。2026-10-22：改为实现 <see cref="IResumableProjectionCheckpointStore"/>——
+    /// R14 的「批模式要求续读能力」fail-fast 落地后，只实现基础接口的装饰器会让 batch&gt;1
+    /// 的整条量具车道抛 InvalidOperationException（探针此前无人跑，回归静默存在于 779bd02..）。
+    /// </summary>
+    private sealed class CountingStore(IProjectionCheckpointStore inner)
+        : IResumableProjectionCheckpointStore
     {
         public int TryStartCalls;
         public int CompletedCalls;
@@ -83,6 +98,10 @@ internal static class ProjectionProbe
 
         public ValueTask ResetAsync(string projectionName, string sourceName, CancellationToken ct = default)
             => inner.ResetAsync(projectionName, sourceName, ct);
+
+        public ValueTask<string?> GetResumePositionAsync(
+            string projectionName, string sourceName, CancellationToken ct = default)
+            => ((IResumableProjectionCheckpointStore)inner).GetResumePositionAsync(projectionName, sourceName, ct);
     }
 
     private sealed class NoOpHandler : IProjectionHandler<SerializationBenchmarks.BenchOrderPlaced>
