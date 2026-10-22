@@ -100,7 +100,7 @@ R12 验证：全量 16 项目 **1907 用例，1827 通过 / 80 跳过 / 0 失败
 | OPT-321 | CONTRACT | `NullPalLogger.cs:17-25` | 未覆写接口的 EventId 结构化重载：默认实现做命名槽位→string.Format 格式化，参数少于槽位时抛 FormatException（空日志器成故障源），参数匹配时白付正则替换与分配 | fixed（`ac2020f`） | E1 测试：修前 FormatException / ToString 被调用，修后通过 | R13 F20（P2，候选 S1S2-01） | `NullPalLoggerStructuredTests.StructuredOverloads_PlaceholderArityMismatch_DoNotThrow`、`..._DoNotFormatArguments` | R13 | 日志门面移除 EventId 重载或改为非 DIM |
 | OPT-322 | GATE | `MessageEvolutionPipeline.cs:126-139` | ValidatePath 缺 Upgrade 的 source/target ClrType 哨兵：同名同版本异 ClrType 的 descriptor 通过启动验证，首次消费才炸 | fixed（`5c9140b`） | E1 测试：修前两测试均不抛，修后 MessageEvolutionException | R13 F21（P2，候选 S1S2-13） | `ValidatePath_SourceDescriptorClrTypeMismatch_ThrowsStructuredException`、`..._TargetDescriptorClrTypeMismatch...` | R13 | descriptor 等价性改为包含 ClrType |
 
-R13 验证：全量 16 项目 **1926 用例，1846 通过 / 80 跳过 / 0 失败**（+19 测试）；
+R13 验证：全量 16 项目 **1930 用例，1850 通过 / 80 跳过 / 0 失败**（+23 测试）；
 `gate-audit` 42/42；`count-audit` 16 项/80 处；`doc-consistency`/`secret-scan`/`verify-conventions`/`encoding-gate` 全绿；
 `AotSample` 与 `DapperAotProbe`（PG/MySQL，JIT + `PublishAot`）通过。未推送、未打 tag。
 
