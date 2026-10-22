@@ -201,8 +201,8 @@ public static class MySqlMultiHost
         // ——容器关闭时 Dispose 两次。MySqlDataSource.Dispose 幂等（对齐 PG 版
         // PostgreSqlReadWriteRouter 探针声明：NpgsqlDataSource 二次/三次释放不抛），
         // 重复释放安全；此模式允许 Store 直接注入 DbDataSource 基类型。
-        services.AddSingleton(dataSource);
-        services.AddSingleton<System.Data.Common.DbDataSource>(dataSource);
+        services.AddSingleton(_ => dataSource);
+        services.AddSingleton<System.Data.Common.DbDataSource>(sp => sp.GetRequiredService<MySqlDataSource>());
 
         return services;
     }
@@ -270,8 +270,8 @@ public static class MySqlMultiHost
         // ITM-113 修复（声明）：同 AddPalMySqlDataSourceWithFailover——双重注册
         // （MySqlDataSource + DbDataSource）经容器 Dispose 两次，MySqlDataSource.Dispose
         // 幂等，重复释放安全（对齐 PG 版 PostgreSqlReadWriteRouter 探针声明）。
-        services.AddSingleton(dataSource);
-        services.AddSingleton<System.Data.Common.DbDataSource>(dataSource);
+        services.AddSingleton(_ => dataSource);
+        services.AddSingleton<System.Data.Common.DbDataSource>(sp => sp.GetRequiredService<MySqlDataSource>());
 
         return services;
     }
@@ -324,8 +324,8 @@ public static class MySqlMultiHost
         // ITM-113 修复（声明）：同 AddPalMySqlDataSourceWithFailover——双重注册
         // （MySqlDataSource + DbDataSource）经容器 Dispose 两次，MySqlDataSource.Dispose
         // 幂等，重复释放安全（对齐 PG 版 PostgreSqlReadWriteRouter 探针声明）。
-        services.AddSingleton(dataSource);
-        services.AddSingleton<System.Data.Common.DbDataSource>(dataSource);
+        services.AddSingleton(_ => dataSource);
+        services.AddSingleton<System.Data.Common.DbDataSource>(sp => sp.GetRequiredService<MySqlDataSource>());
 
         return services;
     }
