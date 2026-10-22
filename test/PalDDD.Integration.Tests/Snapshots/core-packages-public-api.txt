@@ -997,6 +997,9 @@ interface PalDDD.Messaging.IMessageBroker
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, PalDDD.Messaging.MessageConsumeContext, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeAsync(System.Func<TMessage, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.IAsyncDisposable> SubscribeBatchAsync(System.Func<System.Collections.Generic.IReadOnlyList<PalDDD.Messaging.ConsumedMessage<TMessage>>, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler, System.Int32 maxBatchSize, System.Nullable<System.TimeSpan> maxDelay, System.Threading.CancellationToken ct)
+interface PalDDD.Messaging.IMessageBrokerHealth
+  property System.Boolean IsConsumingHealthy
+  property System.String LastFaultReason
 class PalDDD.Messaging.MessageBrokerBase
   property System.Boolean SupportsConcurrentPublish
   property System.Boolean SupportsRawPublish
@@ -1041,6 +1044,8 @@ class PalDDD.Messaging.NullMessageBroker
 class PalDDD.Messaging.Kafka.KafkaBroker
   ctor(Confluent.Kafka.ProducerConfig producerConfig, Confluent.Kafka.ConsumerConfig consumerConfig, PalDDD.Core.Logging.IPalLogger<PalDDD.Messaging.Kafka.KafkaBroker> logger, PalDDD.Serialization.IMessageSerializer serializer, PalDDD.Serialization.IMessageCatalog messageCatalog)
   property System.UInt16 ConsumerDispatchConcurrency
+  property System.Boolean IsConsumingHealthy
+  property System.String LastFaultReason
   property System.Boolean SupportsConcurrentPublish
   property System.Boolean SupportsRawPublish
   method System.Threading.Tasks.ValueTask DisposeAsync()
@@ -1396,6 +1401,16 @@ class PalDDD.Projections.ProjectionRebuilder<TMessage>
   property System.TimeProvider TimeProvider
   method System.Threading.Tasks.ValueTask<System.Int32> RebuildAsync(System.Threading.CancellationToken ct)
   method System.Threading.Tasks.ValueTask<System.Int32> ReplayAsync(System.Threading.CancellationToken ct)
+  method System.Threading.Tasks.ValueTask<PalDDD.Projections.ProjectionReplayResult> ReplayDetailedAsync(System.Threading.CancellationToken ct)
+struct PalDDD.Projections.ProjectionReplayResult
+  ctor(System.Int32 Processed, System.Boolean StoppedForLease)
+  property System.Int32 Processed [init]
+  property System.Boolean StoppedForLease [init]
+  method System.Void Deconstruct(System.Int32& Processed, System.Boolean& StoppedForLease)
+  method System.Boolean Equals(PalDDD.Projections.ProjectionReplayResult other)
+  method System.Boolean Equals(System.Object obj)
+  method System.Int32 GetHashCode()
+  method System.String ToString()
 struct PalDDD.Projections.ReplayAuditMetadata
   ctor(System.String ActorId, System.String Reason, System.Nullable<ByteAether.Ulid.Ulid> CorrelationId, System.Nullable<ByteAether.Ulid.Ulid> CausationId, System.String TraceParent, System.String TraceState)
   property System.String ActorId [init]

@@ -103,7 +103,15 @@ public sealed class InMemoryInboxStore : IInboxStore, IBatchInboxStore
                 if (message is null)
                     throw new ArgumentNullException(nameof(messages), "The messages collection contains a null element.");
                 if (!string.Equals(message.ConsumerName, consumerName, StringComparison.Ordinal))
-                    continue;
+                {
+                    // R14：对齐 Dapper 栈的 R13 F19 契约（IBatchInboxStore 注释明确要求拒绝）——
+                    // 原实现静默 continue 只返回偏小的 affected，调用方无法定位被跳过者，
+                    // 且测试栈与生产栈行为分叉。
+                    throw new ArgumentException(
+                        $"MarkProcessedManyAsync requires a single-consumer batch: message '{message.MessageId}' "
+                        + $"belongs to consumer '{message.ConsumerName}', not '{consumerName}'.",
+                        nameof(messages));
+                }
                 if (!IsCurrentLeaseHolder(message))
                     continue;
 
