@@ -470,6 +470,60 @@ public sealed class ProjectionTests
             .Throws<InvalidOperationException>();
     }
 
+    [Test]
+    public async Task ProcessAsync_LeaseHeartbeatFaults_HandlerSuccessIsNotMasked()
+    {
+        // R13 F13 回归锁：续租心跳抛非 OCE（连接闪断/超时）时，StopLeaseHeartbeatAsync
+        // 只 catch OCE，异常从 await heartbeat.Task 逃逸并覆盖 handler 的成功结果——
+        // 检查点不标 Completed、调用方重放整组（重复副作用）。心跳失败只应记 Warning。
+        var inner = new InMemoryProjectionCheckpointStore();
+        var store = new FailingRenewalStore(inner);
+        var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new BlockingProjectionHandler(started, release);
+        var processor = new ProjectionProcessor<OrderPlaced>(
+            handler, store, processingTimeout: TimeSpan.FromMilliseconds(300));
+        var context = new ProjectionContext("orders", "renew-1", DateTimeOffset.UtcNow);
+
+        var processing = processor.ProcessAsync(
+            new OrderPlaced(Guid.NewGuid()), context, CancellationToken.None).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(TimeSpan.FromMilliseconds(500)); // 心跳至少触发一次并 fault
+        release.SetResult(true);
+
+        await Assert.That(await processing).IsTrue();
+        var checkpoint = await inner.GetAsync(handler.ProjectionName, "orders", "renew-1");
+        await Assert.That(checkpoint!.Status).IsEqualTo(ProjectionCheckpointStatus.Completed);
+    }
+
+    private sealed class FailingRenewalStore(InMemoryProjectionCheckpointStore inner)
+        : IProjectionCheckpointStore, IProjectionLeaseRenewalStore
+    {
+        public ValueTask<ProjectionCheckpoint?> GetAsync(
+            string projectionName, string sourceName, string position, CancellationToken ct = default)
+            => inner.GetAsync(projectionName, sourceName, position, ct);
+
+        public ValueTask<ProjectionCheckpoint?> TryStartAsync(
+            string projectionName, string sourceName, string position,
+            DateTimeOffset startedAt, TimeSpan processingTimeout, CancellationToken ct = default)
+            => inner.TryStartAsync(projectionName, sourceName, position, startedAt, processingTimeout, ct);
+
+        public ValueTask MarkCompletedAsync(
+            ProjectionCheckpoint checkpoint, DateTimeOffset completedAt, CancellationToken ct = default)
+            => inner.MarkCompletedAsync(checkpoint, completedAt, ct);
+
+        public ValueTask MarkFailedAsync(
+            ProjectionCheckpoint checkpoint, string failureReason, DateTimeOffset failedAt, CancellationToken ct = default)
+            => inner.MarkFailedAsync(checkpoint, failureReason, failedAt, ct);
+
+        public ValueTask ResetAsync(string projectionName, string sourceName, CancellationToken ct = default)
+            => inner.ResetAsync(projectionName, sourceName, ct);
+
+        public ValueTask<bool> RenewLeaseAsync(
+            ProjectionCheckpoint checkpoint, DateTimeOffset now, TimeSpan processingTimeout, CancellationToken ct = default)
+            => throw new IOException("simulated renewal connection loss");
+    }
+
     private static List<ReplayEvent<OrderPlaced>> CreateReplayEvents(int count) =>
         [.. Enumerable.Range(0, count).Select(i =>
             new ReplayEvent<OrderPlaced>("orders", i.ToString(System.Globalization.CultureInfo.InvariantCulture),

@@ -398,7 +398,7 @@ public sealed class ProjectionProcessor<TMessage>
         }
     }
 
-    private static async Task StopLeaseHeartbeatAsync(LeaseHeartbeat? heartbeat)
+    private async Task StopLeaseHeartbeatAsync(LeaseHeartbeat? heartbeat)
     {
         if (heartbeat is null)
             return;
@@ -412,7 +412,18 @@ public sealed class ProjectionProcessor<TMessage>
         {
             // 正常停止
         }
-        heartbeat.Cts.Dispose();
+        catch (Exception ex)
+        {
+            // R13 F13：心跳故障（连接闪断/超时）不得覆盖 handler 的结果——handler 已成功
+            // 时旧实现会把整组判失败、检查点不标 Completed，调用方重放整组（重复副作用）。
+            // 续租失败只降低租约保障，租约仍由 LeaseDuration 兜底过期。
+            _logger?.Warning(
+                $"Projection '{_handler.ProjectionName}' lease heartbeat failed; handler result is authoritative: {ex.Message}");
+        }
+        finally
+        {
+            heartbeat.Cts.Dispose();
+        }
     }
 
     private sealed record LeaseHeartbeat(CancellationTokenSource Cts, Task Task);
