@@ -204,6 +204,19 @@ public sealed class ProjectionRebuilder<TMessage>
                     + $"processing timeout ({_processor.ProcessingTimeout}); otherwise the group lease can expire "
                     + "before the batch checkpoint is committed.");
             }
+            // R14：批模式只在组首/组末写锚点——没有续读位置时，全量重放会逐轮重复执行
+            // 已完成组的内层事件（at-least-once 允许崩溃后一次重放，但「每轮蚕食」不是
+            // 一次性代价；非幂等 handler 会累积错账）。非续读 store + 批模式在入口显式
+            // 拒绝，要求实现 IResumableProjectionCheckpointStore 或显式回落逐条。
+            if (_processor.CheckpointBatchSize > 1
+                && _checkpointStore is not IResumableProjectionCheckpointStore)
+            {
+                throw new InvalidOperationException(
+                    "CheckpointBatchSize > 1 requires a checkpoint store implementing "
+                    + "IResumableProjectionCheckpointStore: batch mode only persists group-edge anchors, so a "
+                    + "full replay without a resume position re-executes completed group interiors on every pass. "
+                    + "Implement IResumableProjectionCheckpointStore or set CheckpointBatchSize = 1.");
+            }
             // R6/P0-3（ADR-028，2026-10-14 性能实施轮）：增量回放高水位续读——store 与
             // 回放源双双支持续读能力时，取检查点续读位置（最小未完成洞位 / max+1 / null），
             // 从该位置下推读取：已完成前缀零重读、零逐事件 checkpoint 探查（原形态每次

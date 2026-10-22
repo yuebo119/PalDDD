@@ -164,6 +164,59 @@ public sealed class RebuilderResumeTests
     }
 
     [Test]
+    public async Task ReplayDetailedAsync_NonResumableStore_WithBatchSize_ThrowsActionable()
+    {
+        // R14：批模式只在组首/组末写锚点；非续读 store 走全量读取时，已完成组的内层事件
+        // 会在每轮重复执行（R11 的逐位置裁剪保留，用于前缀跳过与洞重放）。入口显式拒绝
+        // 该组合，而非静默持续重复。
+        var store = new NonResumableCheckpointStore(new InMemoryProjectionCheckpointStore());
+        var handler = new CountingResumeHandler();
+        var processor = new ProjectionProcessor<ResumeEvent>(handler, store) { CheckpointBatchSize = 100 };
+        List<ReplayEvent<ResumeEvent>> events = [new("orders", "0", DateTimeOffset.UnixEpoch, new ResumeEvent())];
+        var source = new RecordingResumableSource(events);
+        var rebuilder = new ProjectionRebuilder<ResumeEvent>(
+            handler.ProjectionName, "orders", source, store, processor);
+
+        InvalidOperationException? captured = null;
+        try
+        {
+            await rebuilder.ReplayDetailedAsync(CancellationToken.None);
+        }
+        catch (InvalidOperationException ex)
+        {
+            captured = ex;
+        }
+
+        await Assert.That(captured).IsTypeOf<InvalidOperationException>();
+        await Assert.That(
+            captured!.Message.Contains("IResumableProjectionCheckpointStore", StringComparison.Ordinal)).IsTrue();
+    }
+
+    /// <summary>只实现基础检查点接口（不含续读/续租能力）——模拟自定义 store 的全量回放路径。</summary>
+    private sealed class NonResumableCheckpointStore(IProjectionCheckpointStore inner) : IProjectionCheckpointStore
+    {
+        public ValueTask<ProjectionCheckpoint?> GetAsync(
+            string projectionName, string sourceName, string position, CancellationToken ct)
+            => inner.GetAsync(projectionName, sourceName, position, ct);
+
+        public ValueTask<ProjectionCheckpoint?> TryStartAsync(
+            string projectionName, string sourceName, string position,
+            DateTimeOffset now, TimeSpan processingTimeout, CancellationToken ct)
+            => inner.TryStartAsync(projectionName, sourceName, position, now, processingTimeout, ct);
+
+        public ValueTask MarkCompletedAsync(
+            ProjectionCheckpoint checkpoint, DateTimeOffset completedAt, CancellationToken ct)
+            => inner.MarkCompletedAsync(checkpoint, completedAt, ct);
+
+        public ValueTask MarkFailedAsync(
+            ProjectionCheckpoint checkpoint, string reason, DateTimeOffset failedAt, CancellationToken ct)
+            => inner.MarkFailedAsync(checkpoint, reason, failedAt, ct);
+
+        public ValueTask ResetAsync(string projectionName, string sourceName, CancellationToken ct)
+            => inner.ResetAsync(projectionName, sourceName, ct);
+    }
+
+    [Test]
     public async Task ReplayAsync_BatchHandler_ReceivesWholeGroupsOnce()
     {
         var store = new InMemoryProjectionCheckpointStore();
