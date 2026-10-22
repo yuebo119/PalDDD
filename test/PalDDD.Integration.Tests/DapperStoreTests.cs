@@ -1831,6 +1831,32 @@ public sealed class DapperStoreTests
     }
 
     [Test]
+    public async Task ResumePositionCastFailure_OnlyPgCastSqlStatesAreTreatedAsDirtyData()
+    {
+        // R13 F14：续读聚合原 catch 全部 DbException——连接中断/超时被误判为
+        // 「无可续读位置」并触发全量回放。只有 PG 的 22P02/22007 属脏 Position。
+        var method = typeof(DapperProjectionCheckpointStore)
+            .GetMethod("IsPositionCastFailure", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+
+        await Assert.That((bool)method.Invoke(null, [new FakeDbException("22P02")])!).IsTrue();
+        await Assert.That((bool)method.Invoke(null, [new FakeDbException("22007")])!).IsTrue();
+        await Assert.That((bool)method.Invoke(null, [new FakeDbException("08006")])!).IsFalse();
+    }
+
+    private sealed class FakeDbException : System.Data.Common.DbException
+    {
+        private readonly string _sqlState;
+
+        public FakeDbException() : base("fake") => _sqlState = "";
+
+        public FakeDbException(string sqlState) : base("fake") => _sqlState = sqlState;
+
+        public FakeDbException(string message, Exception innerException) : base(message, innerException) => _sqlState = "";
+
+        public override string? SqlState => _sqlState;
+    }
+
+    [Test]
     public async Task SagaInsertPG_UsesOnConflictDoNothing_ForOptimisticConflictContract()
     {
         // R13 F11：PG 的 23505 会把事务标记 aborted，catch 后无法继续（25P02）。

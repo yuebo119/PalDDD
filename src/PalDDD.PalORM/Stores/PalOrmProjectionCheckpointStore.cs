@@ -219,12 +219,20 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
                 ? value.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 : null;
         }
-        catch (System.Data.Common.DbException)
+        catch (System.Data.Common.DbException ex) when (IsPositionCastFailure(ex))
         {
-            // PG 对非数值 Position 串 CAST 抛错（22007 族）——数值契约外的脏数据，
-            // 续读是优化面：回退全量回放（对齐 Dapper 实现同款口径）
+            // R11 F4 + R13 F14：只有 PG 的「非数值 Position → CAST」失败（22P02/22007）
+            // 才按脏数据回退全量；连接中断/超时等其他 DbException 必须上抛
+            //（与 EF 栈已收窄的口径对齐）。
             return null;
         }
+    }
+
+    /// <summary>R13 F14：Position CAST 失败判定（与 EF/Dapper 同口径）。</summary>
+    internal static bool IsPositionCastFailure(System.Data.Common.DbException exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        return exception.SqlState is "22P02" or "22007";
     }
 
     /// <summary>R12 C-02：心跳续租——revision + Processing 守卫，只更新租约/更新时间。</summary>
