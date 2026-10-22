@@ -3,6 +3,8 @@ namespace PalDDD.Integration.Tests;
 using Microsoft.Data.Sqlite;
 using PalDDD.Dapper;
 
+#pragma warning disable CA1303 // 真库测试的控制台跳过说明，不是本地化 UI 文案
+
 public sealed class DapperBulkCopyTests
 {
     [Test]
@@ -119,6 +121,65 @@ public sealed class DapperBulkCopyTests
         await Assert.That(rows[1].Amount).IsEqualTo(10L);
         await Assert.That(rows[2].Name).IsNull();
         await Assert.That(rows[2].Amount).IsEqualTo(30L);
+    }
+
+    [Test]
+    public async Task BulkInsertAsync_MySql_LoadDataWarning_RollsBackWithoutExternalTransaction(
+        CancellationToken cancellationToken)
+    {
+        // R12 C-21 回归锁：LOAD DATA 自动提交后才检查 Warnings，原实现抛错时行已落库，
+        // 调用方重试会造成重复。无外部事务时自建事务并在检查失败时回滚。
+        var connectionString = Environment.GetEnvironmentVariable("PALDDD_TEST_MYSQL");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            Console.WriteLine("[skip] PALDDD_TEST_MYSQL 未设置；MySQL BulkCopy 原子性未执行。");
+            return;
+        }
+
+        var builder = new MySqlConnector.MySqlConnectionStringBuilder(connectionString)
+        {
+            AllowLoadLocalInfile = true,
+        };
+        await using var conn = new MySqlConnector.MySqlConnection(builder.ConnectionString);
+        await conn.OpenAsync(cancellationToken);
+        await using (var setup = conn.CreateCommand())
+        {
+            // 非严格模式让超长值产生 warning 而非直接报错（LOAD DATA 路径仍完成写入）。
+            setup.CommandText =
+                "SET SESSION sql_mode=''; DROP TABLE IF EXISTS bulk_atomic_probe; "
+                + "CREATE TABLE bulk_atomic_probe (id INT PRIMARY KEY, name VARCHAR(8));";
+            await setup.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        try
+        {
+            var items = Enumerable.Range(0, 17)
+                .Select(i => (Id: i, Name: i == 5 ? new string('x', 20) : "ok"))
+                .ToArray();
+
+            await Assert.That(async () => await DapperBulkCopy.BulkInsertAsync(
+                    conn,
+                    DapperDbType.MySql,
+                    "bulk_atomic_probe",
+                    ["id", "name"],
+                    items,
+                    static item => [item.Id, item.Name],
+                    transaction: null,
+                    cancellationToken))
+                .Throws<InvalidOperationException>();
+
+            await using var count = conn.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM bulk_atomic_probe";
+            var rows = Convert.ToInt32(await count.ExecuteScalarAsync(cancellationToken),
+                System.Globalization.CultureInfo.InvariantCulture);
+            await Assert.That(rows).IsEqualTo(0);
+        }
+        finally
+        {
+            await using var drop = conn.CreateCommand();
+            drop.CommandText = "DROP TABLE IF EXISTS bulk_atomic_probe";
+            await drop.ExecuteNonQueryAsync(CancellationToken.None);
+        }
     }
 
     private static SqliteTransaction OpenSqliteWithTransaction()

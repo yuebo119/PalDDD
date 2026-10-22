@@ -76,7 +76,9 @@ public static class DapperBulkCopy
     /// <param name="transaction">可选外部事务（UnitOfWork 模式）。三十八轮 P2 修复：三方言行为统一声明——
     /// PG COPY 自动加入连接上的活动局部事务（本参数仅作契约显式化）；MySQL 显式挂接传入事务
     /// （原实现未挂接，连接有活动事务时 WriteToServerAsync 直接抛 InvalidOperationException）；
-    /// SQLite 传入时命令挂接该事务且不 Commit/Dispose（所有权归调用方），未传时自建本地事务。</param>
+    /// SQLite 传入时命令挂接该事务且不 Commit/Dispose（所有权归调用方）。
+    /// R12 C-21：MySQL/SQLite 未传时自建本地事务；MySQL 的 Warnings/RowsInserted 检查失败会回滚，
+    /// 避免 LOAD DATA 自动提交后抛错导致重试重复写入。传入事务时所有权归调用方（不提交/回滚）。</param>
     /// <returns>成功插入的行数</returns>
     /// <exception cref="NotSupportedException">不支持的数据库类型</exception>
     public static async ValueTask<int> BulkInsertAsync<T>(
@@ -285,6 +287,8 @@ public static class DapperBulkCopy
     /// WriteToServerAsync 阶段晦涩失败。真实调用方（Store/源码生成器）的
     /// extractor 同列同型；外部自定义 extractor 需自保每列类型一致。
     /// </summary>
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types",
+        Justification = "事务回滚是尽力而为的清理动作：连接已断时回滚可抛任意 provider 异常，必须吞掉以保留原始写入/校验异常。")]
     private static async Task<int> MySqlBulkAsync<T>(
         DbConnection conn, string table, string[] cols,
         IReadOnlyList<T> items, Func<T, object?[]> extractor, DbTransaction? transaction, CancellationToken ct)
@@ -388,46 +392,82 @@ public static class DapperBulkCopy
 
         using var reader = new BulkValueReader(cachedValues, cols, finalColumnTypes, ConvertForMySql);
 
-        // MySqlBulkCopy 不实现 IDisposable（MySqlConnector 2.6.x）——无 using，见上方 ITM-083 注释
         // 三十八轮 P2 修复：显式挂接传入事务——MySqlConnector 要求连接有活动事务时
         // 命令必须挂接同一事务，原实现未挂接导致 UnitOfWork 内调用直接抛 InvalidOperationException
-        var mysqlTx = transaction as MySqlTransaction
-            ?? (transaction is null
-                ? null
-                : throw new ArgumentException(
+        // R12 C-21：无外部事务时自建本地事务。原实现裸调 WriteToServerAsync，LOAD DATA
+        // 自动提交后才检查 Warnings/RowsInserted 并抛错，调用方重试会重复已写入行。
+        // 自建事务在检查失败时回滚；调用方传入事务时所有权不变（由其决定提交/回滚）。
+        var ownsTransaction = transaction is null;
+        MySqlTransaction mysqlTx;
+        if (transaction is null)
+        {
+            mysqlTx = (MySqlTransaction)await myConn.BeginTransactionAsync(ct).ConfigureAwait(false);
+        }
+        else
+        {
+            mysqlTx = transaction as MySqlTransaction
+                ?? throw new ArgumentException(
                     $"MySQL 批量导入要求事务为 MySqlTransaction，实际为 {transaction.GetType().Name}。",
-                    nameof(transaction)));
-        var bulkCopy = new MySqlBulkCopy(myConn, mysqlTx)
-        {
-            DestinationTableName = table
-        };
-
-        // 映射读取器列 → 数据库列（按索引匹配）
-        // P3-SRC-209 修复（R44 ITM-280 勘正动机）：列映射改按索引直配——原 Array.IndexOf 逐列
-        // 扫描 O(n²)；索引直配 O(n) 且语义显式。2026-10-21 勘正：DataTable 已被 BulkValueReader
-        // 替换，重复列名不再由 DataTable.Columns.Add 拦截——现由 ValidateColumns 显式拒绝。
-        for (int i = 0; i < cols.Length; i++)
-            bulkCopy.ColumnMappings.Add(new MySqlBulkCopyColumnMapping(i, cols[i]));
-
-        // WriteToServerAsync — 真正执行批量导入
-        var result = await bulkCopy.WriteToServerAsync(reader, ct).ConfigureAwait(false);
-
-        // 🛡️ 检查 Warnings — MySQL BulkCopy 可能因类型不兼容而静默截断数据
-        // 例如：字符串超过列长度被截断、数值溢出被强制转换
-        if (result.Warnings.Count > 0)
-        {
-            var warnings = string.Join("; ", result.Warnings.Select(w => $"{w.Message} (level={w.Level})"));
-            throw new InvalidOperationException(
-                $"MySqlBulkCopy 完成但有 {result.Warnings.Count} 条警告（可能有数据截断）: {warnings}");
+                    nameof(transaction));
         }
 
-        // ITM-197 修复（三十轮）：RowsInserted 与 items 数不符（部分写入/被忽略行）显式暴露——
-        // 仅靠 Warnings 间接覆盖不足（无 warning 的部分写入不报，调用方误以为全量成功）。
-        if (result.RowsInserted != items.Count)
-            throw new InvalidOperationException(
-                $"MySqlBulkCopy 仅插入 {result.RowsInserted}/{items.Count} 行（非全量，可能含被忽略/重复键行）。");
+        try
+        {
+            // MySqlBulkCopy 不实现 IDisposable（MySqlConnector 2.6.x）——无 using，见上方 ITM-083 注释
+            var bulkCopy = new MySqlBulkCopy(myConn, mysqlTx)
+            {
+                DestinationTableName = table
+            };
 
-        return result.RowsInserted;
+            // 映射读取器列 → 数据库列（按索引匹配）
+            // P3-SRC-209 修复（R44 ITM-280 勘正动机）：列映射改按索引直配——原 Array.IndexOf 逐列
+            // 扫描 O(n²)；索引直配 O(n) 且语义显式。2026-10-21 勘正：DataTable 已被 BulkValueReader
+            // 替换，重复列名不再由 DataTable.Columns.Add 拦截——现由 ValidateColumns 显式拒绝。
+            for (int i = 0; i < cols.Length; i++)
+                bulkCopy.ColumnMappings.Add(new MySqlBulkCopyColumnMapping(i, cols[i]));
+
+            // WriteToServerAsync — 真正执行批量导入
+            var result = await bulkCopy.WriteToServerAsync(reader, ct).ConfigureAwait(false);
+
+            // 🛡️ 检查 Warnings — MySQL BulkCopy 可能因类型不兼容而静默截断数据
+            // 例如：字符串超过列长度被截断、数值溢出被强制转换
+            if (result.Warnings.Count > 0)
+            {
+                var warnings = string.Join("; ", result.Warnings.Select(w => $"{w.Message} (level={w.Level})"));
+                throw new InvalidOperationException(
+                    $"MySqlBulkCopy 完成但有 {result.Warnings.Count} 条警告（可能有数据截断）: {warnings}");
+            }
+
+            // ITM-197 修复（三十轮）：RowsInserted 与 items 数不符（部分写入/被忽略行）显式暴露——
+            // 仅靠 Warnings 间接覆盖不足（无 warning 的部分写入不报，调用方误以为全量成功）。
+            if (result.RowsInserted != items.Count)
+                throw new InvalidOperationException(
+                    $"MySqlBulkCopy 仅插入 {result.RowsInserted}/{items.Count} 行（非全量，可能含被忽略/重复键行）。");
+
+            if (ownsTransaction)
+                await mysqlTx.CommitAsync(ct).ConfigureAwait(false);
+            return result.RowsInserted;
+        }
+        catch
+        {
+            if (ownsTransaction)
+            {
+                try
+                {
+                    await mysqlTx.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // 回滚失败（连接已断）不得掩盖原始异常
+                }
+            }
+            throw;
+        }
+        finally
+        {
+            if (ownsTransaction)
+                await mysqlTx.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     /// <summary>

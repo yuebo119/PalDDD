@@ -1,12 +1,15 @@
 using System.Data.Common;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using MySqlConnector;
 using PalDDD.Dapper;
 using PalDDD.EventLog;
 using PalDDD.PalORM.Sqlite;
 using PalORM;
 using PalORM.Sqlite;
 using PalUlid = ByteAether.Ulid.Ulid;
+
+#pragma warning disable CA1303 // 真库探针的控制台跳过说明，不是本地化 UI 文案
 
 namespace PalDDD.Integration.Tests;
 
@@ -130,4 +133,81 @@ public sealed class EventLogCrossStackMatrixTests
     }
 
     private sealed class ProbeEventLogContext(DbContextOptions options) : EventLogDbContext(options);
+}
+
+/// <summary>R12 C-20：MySQL 连接串 DateTimeKind=Local 时，EventLog 读回必须仍还原 UTC 瞬时。</summary>
+[TUnit.Core.NotInParallel("dapper-global")]
+public sealed class DapperEventLogMySqlTimeTests
+{
+    [Test]
+    public async Task ReadBack_WithLocalDateTimeKind_PreservesUtcInstant(CancellationToken cancellationToken)
+    {
+        var connectionString = Environment.GetEnvironmentVariable("PALDDD_TEST_MYSQL");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            Console.WriteLine("[skip] PALDDD_TEST_MYSQL 未设置；EventLog MySQL 时间 Kind 未执行。");
+            return;
+        }
+
+        var builder = new MySqlConnectionStringBuilder(connectionString)
+        {
+            DateTimeKind = MySqlDateTimeKind.Local,
+        };
+        await using var connection = new MySqlConnection(builder.ConnectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using (var ddl = connection.CreateCommand())
+        {
+            ddl.CommandText = """
+                DROP TABLE IF EXISTS events;
+                CREATE TABLE events (
+                    global_position BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    event_id        VARCHAR(255) NOT NULL,
+                    event_id_bin    BINARY(16) NULL,
+                    event_name      VARCHAR(255) NOT NULL,
+                    stream_name     VARCHAR(512) NOT NULL,
+                    stream_version  BIGINT NOT NULL,
+                    schema_version  INT NOT NULL DEFAULT 1,
+                    content_type    VARCHAR(255) NOT NULL DEFAULT 'application/json',
+                    payload         LONGBLOB NOT NULL,
+                    metadata        LONGBLOB,
+                    recorded_at     DATETIME(6) NOT NULL,
+                    actor_id        VARCHAR(255),
+                    reason          VARCHAR(2048),
+                    correlation_id  CHAR(26),
+                    causation_id    CHAR(26),
+                    trace_parent    VARCHAR(255),
+                    trace_state     VARCHAR(512),
+                    UNIQUE INDEX idx_events_event_id (event_id),
+                    UNIQUE INDEX idx_events_stream (stream_name, stream_version)
+                );
+                """;
+            await ddl.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        try
+        {
+            var log = new DapperEventLog(connection, dbType: DapperDbType.MySql);
+            var streamName = "probe-time-" + Guid.NewGuid().ToString("N")[..8];
+            var before = DateTimeOffset.UtcNow;
+            var evt = new EventData(
+                PalUlid.New(), "probe.event.v1", 1, "application/json",
+                "{}"u8.ToArray(), ReadOnlyMemory<byte>.Empty, EventAuditMetadata.Empty);
+
+            await log.AppendAsync(streamName, ExpectedStreamVersion.NoStream, [evt], cancellationToken);
+
+            RecordedEvent? read = null;
+            await foreach (var recorded in log.ReadStreamAsync(streamName, cancellationToken: cancellationToken))
+                read = recorded;
+
+            var drift = (read!.RecordedAt - before).Duration();
+            await Assert.That(drift).IsLessThan(TimeSpan.FromMinutes(1));
+            await Assert.That(read.RecordedAt.Offset).IsEqualTo(TimeSpan.Zero);
+        }
+        finally
+        {
+            await using var drop = connection.CreateCommand();
+            drop.CommandText = "DROP TABLE IF EXISTS events";
+            await drop.ExecuteNonQueryAsync(CancellationToken.None);
+        }
+    }
 }
