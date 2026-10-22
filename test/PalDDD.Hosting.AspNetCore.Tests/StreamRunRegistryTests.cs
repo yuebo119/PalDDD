@@ -88,6 +88,44 @@ public sealed partial class StreamRunRegistryTests
     }
 
     [Test]
+    public async Task RegisterDeferred_AttachBeforeStart_PreservesPrefix()
+    {
+        // R12 C-11 回归锁：启动端点必须先登记并附着、再启动泵。快速同步生产者在附着前
+        // 填满缓冲会让首个响应以 gap 开局并丢失前缀；延迟启动后附着起点固定为 0。
+        var options = new DetachedStreamOptions
+        {
+            MaxBufferedItems = 2,
+            MaxItems = 100_000,
+            MaxConcurrentRuns = 10,
+            DetachGrace = TimeSpan.FromSeconds(30),
+            MaxRunDuration = TimeSpan.FromMinutes(1),
+        };
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IStreamQueryHandler<RegQuery, RegChunk>>(new FixedHandler(10));
+        using var provider = services.BuildServiceProvider();
+        using var registry = new StreamRunRegistry(
+            options, provider.GetRequiredService<IServiceScopeFactory>());
+
+        var runId = registry.RegisterDeferred<RegQuery, RegChunk>(
+            new RegQuery("p"), null, null, out var registeredRun);
+        var run = registeredRun!;
+        await Assert.That(runId).IsNotEmpty();
+        await Assert.That(run.BufferedCount).IsEqualTo(0);
+        await Assert.That(run.State).IsEqualTo(StreamRunState.Running);
+
+        await Assert.That(run.TryBeginAttach(null, out var startIndex, out var gap, out _)).IsTrue();
+        await Assert.That(startIndex).IsEqualTo(0);
+        await Assert.That(gap).IsFalse();
+
+        run.StartFromServices(new RegQuery("p"), null, null);
+        await WaitUntilAsync(() => run.State != StreamRunState.Running, TimeSpan.FromSeconds(5));
+
+        await Assert.That(run.OldestAvailable).IsEqualTo(8);
+        await run.ReleaseAttachmentAsync();
+    }
+
+    [Test]
     public async Task TerminalRuns_RetentionIsBoundedByMaxConcurrentRuns()
     {
         // R12 PF-1 回归锁：终态 run 不受 MaxConcurrentRuns 约束时，内存随“完成速率 ×

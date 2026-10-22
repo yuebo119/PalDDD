@@ -228,6 +228,22 @@ internal sealed class StreamRun<TItem> : IStreamRun, IDisposable
         => _ = Task.Run(() => PumpAsync(handler, query, eventSelector, idSelector));
 #pragma warning restore S8949
 
+    /// <summary>
+    /// R12 C-11：从 run 自有 scope 解析 handler 并启动泵。供“先附着、后启动”的启动端点使用，
+    /// 避免快速同步生产者在附着完成前填满缓冲，使首个响应以 gap 开局。
+    /// </summary>
+    internal void StartFromServices<TQuery>(
+        TQuery query,
+        Func<TItem, string>? eventSelector,
+        Func<TItem, string>? idSelector)
+        where TQuery : IStreamQuery<TItem>
+    {
+        var services = _scope?.ServiceProvider
+            ?? throw new InvalidOperationException("Detached stream run has no service scope.");
+        var handler = services.GetRequiredService<IStreamQueryHandler<TQuery, TItem>>();
+        Start(handler, query, eventSelector, idSelector);
+    }
+
     [SuppressMessage("Design", "CA1031",
         Justification = "run 泵必须捕获所有异常转为 Failed 终态（附着方据此收尾），否则异常在后台线程未观测。")]
     private async Task PumpAsync<TQuery>(
@@ -815,7 +831,31 @@ internal sealed class StreamRunRegistry : IDisposable
         Func<TItem, string>? idSelector,
         IStreamQueryHandler<TQuery, TItem>? handlerOverride = null)
         where TQuery : IStreamQuery<TItem>
+        => RegisterCore(query, eventSelector, idSelector, handlerOverride, startImmediately: true, out _);
+
+    /// <summary>
+    /// R12 C-11：只创建并登记 run，不启动产出泵。调用方完成附着后再调用
+    /// <see cref="StreamRun{TItem}.StartFromServices{TQuery}"/>，保证首个响应不会
+    /// 因“泵先跑、附着后到”而丢掉前缀。
+    /// </summary>
+    internal string RegisterDeferred<TQuery, TItem>(
+        TQuery query,
+        Func<TItem, string>? eventSelector,
+        Func<TItem, string>? idSelector,
+        out StreamRun<TItem>? run)
+        where TQuery : IStreamQuery<TItem>
+        => RegisterCore(query, eventSelector, idSelector, handlerOverride: null, startImmediately: false, out run);
+
+    private string RegisterCore<TQuery, TItem>(
+        TQuery query,
+        Func<TItem, string>? eventSelector,
+        Func<TItem, string>? idSelector,
+        IStreamQueryHandler<TQuery, TItem>? handlerOverride,
+        bool startImmediately,
+        out StreamRun<TItem>? createdRun)
+        where TQuery : IStreamQuery<TItem>
     {
+        createdRun = null;
         // R11 F19：名额判定改为 CAS 循环——原 Volatile.Read 检查后再 Increment 是
         // check-then-act，N 个并发 Register 可同时通过检查、超出 MaxConcurrentRuns
         // 最多 N-1（峰值并发时内存保护失效）。
@@ -844,10 +884,14 @@ internal sealed class StreamRunRegistry : IDisposable
             var logger = scope.ServiceProvider.GetService<IPalLogger<StreamRun<TItem>>>();
             run = new StreamRun<TItem>(runId, _options, _timeProvider, scope, logger, idSelector is not null, OnRunTerminal);
             _runs[runId] = run;
+            createdRun = run;
 
-            var handler = handlerOverride
-                ?? scope.ServiceProvider.GetRequiredService<IStreamQueryHandler<TQuery, TItem>>();
-            run.Start(handler, query, eventSelector, idSelector);
+            if (startImmediately)
+            {
+                var handler = handlerOverride
+                    ?? scope.ServiceProvider.GetRequiredService<IStreamQueryHandler<TQuery, TItem>>();
+                run.Start(handler, query, eventSelector, idSelector);
+            }
         }
         catch
         {
@@ -953,6 +997,27 @@ internal sealed class StreamRunRegistry : IDisposable
         if (!_runs.TryGetValue(runId, out var run))
             return false;
         run.Cancel(); // 终态 run 的 Cancel 为 no-op（幂等语义由 204 答复承载）
+        return true;
+    }
+
+    /// <summary>
+    /// R12 C-11：移除并释放一个尚未启动/启动失败的 run（启动端点 409 或 handler 解析失败）。
+    /// 返回 false 表示已被其他路径移除。
+    /// </summary>
+    [SuppressMessage("Design", "CA1031",
+        Justification = "启动失败清理不得因用户 scope 的 Dispose 异常掩盖原始错误；记录后继续。")]
+    internal bool TryRemoveAndDispose(string runId)
+    {
+        if (!_runs.TryRemove(runId, out var run))
+            return false;
+        try
+        {
+            run.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _registryLogger?.Warning($"Detached stream run {runId}: dispose after failed start failed: {ex.GetType().Name}");
+        }
         return true;
     }
 

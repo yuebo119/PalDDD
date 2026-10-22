@@ -161,9 +161,13 @@ public static class DetachedStreamEndpoints
 
         var registry = context.RequestServices.GetRequiredService<StreamRunRegistry>();
         string runId;
+        StreamRun<TItem> run;
         try
         {
-            runId = registry.Register(query, eventSelector, idSelector);
+            // R12 C-11：先登记、附着，再启动泵。原 Register 立即启动，快速同步生产者
+            // 可在附着完成前填满环形缓冲，使首个响应以 gap 开局并永久丢失前缀。
+            runId = registry.RegisterDeferred(query, eventSelector, idSelector, out var registeredRun);
+            run = registeredRun!;
         }
         catch (StreamRunCapacityExceededException)
         {
@@ -172,18 +176,23 @@ public static class DetachedStreamEndpoints
             return;
         }
 
-        if (!registry.TryGet<TItem>(runId, out var run))
-        {
-            await WriteProblemAsync(context, StatusCodes.Status500InternalServerError,
-                "Detached stream run registration failed.").ConfigureAwait(false);
-            return;
-        }
-
         if (!run.TryBeginAttach(context.GetLastEventId(), out var startIndex, out var gap, out var generation))
         {
+            registry.TryRemoveAndDispose(runId);
             await WriteProblemAsync(context, StatusCodes.Status409Conflict,
                 "Another client is already attached to this stream run.").ConfigureAwait(false);
             return;
+        }
+
+        try
+        {
+            // handler 解析仍在写 SSE 头之前——失败可按普通 500 处理，而不是半开的流。
+            run.StartFromServices(query, eventSelector, idSelector);
+        }
+        catch
+        {
+            registry.TryRemoveAndDispose(runId);
+            throw;
         }
 
         context.Response.Headers["X-Run-Id"] = runId;
