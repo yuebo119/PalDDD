@@ -90,8 +90,12 @@ R12 验证：全量 16 项目 **1907 用例，1827 通过 / 80 跳过 / 0 失败
 | OPT-311 | CONTRACT | `DetachedStreamEndpoints.cs:31-47` | 重复注册的配置被丢弃但仍先校验并抛 AOOR | fixed（`a7d084e`） | E1 `di-proj P2-03` | R13 F9（P3） | `HealthCheckExtensionsTests.AddDetachedStreamRuns_SecondCallWithInvalidConfig_IsIgnored` | R13 | 选项改为可变热更新 |
 | OPT-312 | SECURITY | `HealthCheckExtensions.cs:50-92` | MapPalHealthChecks 返回 IEndpointRouteBuilder，类备注要求的 RequireAuthorization 无法链 | fixed（`ec178ea`，新增 `MapPalHealthChecksWithConventions`） | 反射返回类型 + 备注原文；加可选参数实测 CS0121 二义且改变 CLR 签名 | R13 F10（P2） | `EndpointExtensionsTests.MapPalHealthChecks_ConfigureCallback_AppliesConvention` | R13 | 主版本允许破坏时再改原方法返回类型 |
 | OPT-313 | DOCS | `docs/design/optimization-prompt.md:143,707` | `dotnet run scripts/vuln-scan.cs` 缺 vuln.json 参数，按提示词执行为 RC=2 | fixed（`c385cad`） | E1：RC=2（用法: ... <vuln.json 路径>） | R13 ARCH-01（P3） | 无（文档命令） | R13 | vuln-scan 改为可读 stdin |
+| OPT-314 | CORRECTNESS | `ProjectionProcessor.cs:401-424` | 续租心跳抛非 OCE 时从 `await heartbeat.Task` 逃逸，覆盖 handler 成功结果：检查点不标 Completed、整组重放（重复副作用） | fixed（`9a223c9`） | E1 测试：修前 IOException 逃逸，修后返回 true + Completed | R13 F13（P2，SCAN 候选 S6S7-02） | `ProjectionTests.ProcessAsync_LeaseHeartbeatFaults_HandlerSuccessIsNotMasked` | R13 | 心跳改为独立后台任务并自带指标 |
+| OPT-315 | CORRECTNESS | `DapperProjectionCheckpointStore.cs:330-344`；`PalOrmProjectionCheckpointStore.cs:222-236` | 续读聚合 catch 全部 DbException，连接中断/超时被误判为「无检查点」并触发全量回放（EF 已按 22P02/22007 收窄） | fixed（`1128339`） | E3 静态对照 + 谓词单测（22P02/22007 true、08006 false） | R13 F14（P2，候选 S4S5-02） | `DapperStoreTests.ResumePositionCastFailure_OnlyPgCastSqlStatesAreTreatedAsDirtyData` | R13 | 新增 provider 的 CAST 错误码需加入集合 |
+| OPT-316 | LEAK | `MySqlServiceCollectionExtensions.cs:122-126`；`MySqlMultiHost.cs`（三处） | MySqlDataSource 实例注册（AddSingleton(instance)）不被 MS.DI 释放，宿主关闭后连接池留到进程退出 | fixed（`dde3ebf`） | E1 测试：修前 Dispose 后 CreateConnection 不抛，修后 ObjectDisposedException | R13 F15（P2，候选 S4S5-06） | `DapperDiRegistrationTests.AddPalMySqlDataSource_ContainerDispose_ReleasesDataSource` | R13 | 连接池改为进程级长期驻留的显式语义 |
+| OPT-317 | OBSERVABILITY | `OutboxBatchProcessor.cs:583-608` | 批量标记 affected < 批大小时丢弃返回值：未命中行仍 Pending 并持过期租约，重租重发而监控全绿 | fixed（`05afb29`） | E1 测试：修前无任何告警行，修后 EventId 告警含 Affected/PendingCount | R13 F16（P2，候选 S6S7-01） | `OutboxBatchMarkTests.BatchMark_PartialFencingRejection_EmitsWarning` | R13 | store 契约改为返回逐行结果以精确定位未命中行 |
 
-R13 验证：全量 16 项目 **1919 用例，1839 通过 / 80 跳过 / 0 失败**（+12 测试）；
+R13 验证：全量 16 项目 **1923 用例，1843 通过 / 80 跳过 / 0 失败**（+16 测试）；
 `gate-audit` 42/42；`count-audit` 16 项/80 处；`doc-consistency`/`secret-scan`/`verify-conventions`/`encoding-gate` 全绿；
 `AotSample` 与 `DapperAotProbe`（PG/MySQL，JIT + `PublishAot`）通过。未推送、未打 tag。
 
