@@ -475,6 +475,13 @@ public sealed partial class StreamQueryEndpointTests
                     "/tokens", ctx => new TokenStreamQuery("hi"), StreamTestJsonContext.Default.TokenChunk,
                     keepAliveInterval: TimeSpan.FromSeconds(-1)))
             .Throws<ArgumentOutOfRangeException>();
+        // R13 F18：亚毫秒间隔会被 Task.Delay 截断为 0，心跳竞速退化为紧循环
+        await Assert.That(() =>
+            new StreamTestEndpointRouteBuilder(BuildProvider(new TokenStreamHandler()))
+                .MapStreamQuery<TokenStreamQuery, TokenChunk>(
+                    "/tokens", ctx => new TokenStreamQuery("hi"), StreamTestJsonContext.Default.TokenChunk,
+                    keepAliveInterval: TimeSpan.FromTicks(5000)))
+            .Throws<ArgumentOutOfRangeException>();
     }
 
     // ─── Phase 2：Last-Event-ID 重连入口 ───
