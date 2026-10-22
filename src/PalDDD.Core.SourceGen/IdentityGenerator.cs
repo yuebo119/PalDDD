@@ -286,7 +286,7 @@ public sealed class IdentityGenerator : IIncrementalGenerator
                     var arity = t.Arity > 0
                         ? $"<{string.Join(", ", t.TypeParameters.Select(p => p.Name))}>"
                         : "";
-                    containingDeclarations.Insert(0, $"{kind} {t.Name}{arity}");
+                    containingDeclarations.Insert(0, $"{kind} {EscapeIdentifier(t.Name)}{arity}");
                     containingNames.Insert(0, t.Name);
                 }
 
@@ -557,20 +557,31 @@ public sealed class IdentityGenerator : IIncrementalGenerator
            || (node is RecordDeclarationSyntax r
                && r.ClassOrStructKeyword.IsKind(SyntaxKind.StructKeyword));
 
+    /// <summary>R11 F23：按 C# 关键字/上下文关键字规则为标识符补 @ 转义。</summary>
+    private static string EscapeIdentifier(string name)
+        => SyntaxFacts.GetKeywordKind(name) != SyntaxKind.None
+           || SyntaxFacts.GetContextualKeywordKind(name) != SyntaxKind.None
+            ? "@" + name
+            : name;
+
     private static string GenerateIdentityCode(IdGenInfo info)
     {
-        var name = info.TypeName;
+        // R11 F23：ISymbol.Name 去掉了 @ 转义前缀（"@class" → "class"）。生成模板直接
+        // 拼接会产出 `partial record struct class` 的语法错误；所有标识符位置统一转义，
+        // converter 类名用原始名拼接后缀（"classJsonConverter" 合法）。
+        var name = EscapeIdentifier(info.TypeName);
+        var rawName = info.TypeName;
         var srcType = info.SourceType;
 
         // P2 修复：嵌套类型——转换器类保持命名空间级，引用需带类型链限定名；
         // struct 本体按 ContainingType 链包 partial 声明（零嵌套时 open/close 为空，输出与旧版一致）
         var fullName = info.ContainingNames.Length > 0
-            ? string.Join(".", info.ContainingNames) + "." + name
+            ? string.Join(".", info.ContainingNames.Select(EscapeIdentifier)) + "." + name
             : name;
         // P1 修复（五轮评审）：C# 类声明名不允许含点——转换器类名用下划线连接
         var converterName = info.ContainingNames.Length > 0
-            ? string.Join("_", info.ContainingNames) + "_" + name
-            : name;
+            ? string.Join("_", info.ContainingNames) + "_" + rawName
+            : rawName;
         var open = info.ContainingDeclarations.Length > 0
             ? "\n" + string.Join("\n", info.ContainingDeclarations.Select(d => $"{d}\n{{")) + "\n"
             : "";

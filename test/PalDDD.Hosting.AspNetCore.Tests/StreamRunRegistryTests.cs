@@ -155,6 +155,27 @@ public sealed partial class StreamRunRegistryTests
     }
 
     [Test]
+    public async Task Attach_CustomNumericIds_DoNotFallBackToPositionParsing()
+    {
+        // R11 F20 回归锁：自定义数字 id（1000..1009）滚出缓冲后，Last-Event-ID=1000
+        // 不得被当成位置索引返回 1001（静默跳数据、无 gap），应从最旧可用位置重放并报 gap。
+        using var registry = CreateRegistry(out var options, maxBufferedItems: 3);
+        options.DetachGrace = TimeSpan.FromSeconds(30);
+        var runId = registry.Register(
+            new RegQuery("p"),
+            eventSelector: null,
+            idSelector: static chunk => (1000 + chunk.Index).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            handlerOverride: new FixedHandler(10));
+        var run = await WaitForRunAsync(registry, runId);
+        await WaitUntilAsync(() => run.State != StreamRunState.Running, TimeSpan.FromSeconds(5));
+
+        await Assert.That(run.TryBeginAttach("1000", out var startIndex, out var gap, out _)).IsTrue();
+        await Assert.That(gap).IsTrue();
+        await Assert.That(startIndex).IsEqualTo(run.OldestAvailable);
+        await run.ReleaseAttachmentAsync();
+    }
+
+    [Test]
     public async Task Attach_EvictedPosition_ReportsGap()
     {
         using var registry = CreateRegistry(out var options, maxBufferedItems: 2);

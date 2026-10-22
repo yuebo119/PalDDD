@@ -919,6 +919,80 @@ public sealed class SourceGeneratorDirectTests
         await Assert.That(result.Diagnostics.Any(d => d.Id == "PALID003")).IsTrue();
     }
 
+    [Test]
+    public async Task IdentityGenerator_KeywordTypeName_EmitsEscapedIdentifierAndCompiles()
+    {
+        // R11 F23 回归锁：ISymbol.Name 去掉 @ 前缀，模板原样拼接会生成
+        // `partial record struct class`（语法错误）。修复后声明/引用统一 @ 转义。
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+            using System;
+
+            namespace TestDomain;
+
+            [GenerateId(typeof(Guid))]
+            public readonly partial record struct @class;
+            """);
+
+        await Assert.That(result.Diagnostics).IsEmpty();
+        var source = GetGeneratedSource(result, "class.g.cs");
+        await Assert.That(source).Contains("partial record struct @class");
+        await Assert.That(result.Compilation.GetDiagnostics().Any(d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
+    }
+
+    [Test]
+    public async Task IdentityGenerator_KeywordContainingType_EmitsEscapedContainingDeclaration()
+    {
+        // R11 F23 同族：嵌套链中的关键字包含类型也必须转义。
+        var result = RunIdentityGenerator(
+            """
+            using PalDDD.Core;
+            using System;
+
+            namespace TestDomain;
+
+            public partial class @class
+            {
+                [GenerateId(typeof(Guid))]
+                public readonly partial record struct OrderId;
+            }
+            """);
+
+        await Assert.That(result.Diagnostics).IsEmpty();
+        var source = GetGeneratedSource(result, "OrderId.g.cs");
+        await Assert.That(source).Contains("partial class @class");
+        await Assert.That(result.Compilation.GetDiagnostics().Any(d => d.Severity == DiagnosticSeverity.Error)).IsFalse();
+    }
+
+    [Test]
+    public async Task EnumGenerator_KeywordTypeName_EmitsEscapedIdentifierAndCompiles()
+    {
+        // R11 F23：智能枚举的关键字类型名同样必须转义。
+        var result = RunEnumGenerator(
+            """
+            using PalDDD.Core;
+
+            namespace TestDomain;
+
+            [GenerateEnum]
+            public partial class @class : SmartEnum<@class, string>
+            {
+                private @class(string value, string name) : base(value, name) { }
+
+                public static readonly @class Pending = new("pending", "Pending");
+            }
+            """);
+
+        await Assert.That(result.Diagnostics).IsEmpty();
+        var source = GetGeneratedSource(result, "class.g.cs");
+        var errors = string.Join("\n", result.Compilation.GetDiagnostics()
+            .Where(d => d.Severity == DiagnosticSeverity.Error)
+            .Select(d => d.ToString()));
+        await Assert.That(source).Contains("partial class @class");
+        await Assert.That(errors).IsEmpty();
+    }
+
     // ── 辅助方法（参照 MessageRegistryGeneratorTests 的模式）──
 
     private static (Compilation Compilation, ImmutableArray<Diagnostic> Diagnostics) RunEnumGenerator(string source)
