@@ -364,6 +364,30 @@ public sealed class RebuilderResumeTests
     }
 }
 
+/// <summary>R12 C-03：EF 检查点续读的异常分类——只有 CAST 失败才回退全量。</summary>
+public sealed class ProjectionResumeFailureClassificationTests
+{
+    [Test]
+    public async Task IsPositionCastFailure_OnlyPgCastSqlStates()
+    {
+        await Assert.That(ProjectionCheckpointDbContext.IsPositionCastFailure(new FakeDbException("22P02"))).IsTrue();
+        await Assert.That(ProjectionCheckpointDbContext.IsPositionCastFailure(new FakeDbException("22007"))).IsTrue();
+        // 连接中断/超时/死锁等基础设施故障必须上抛，不得被当成脏数据回退全量。
+        await Assert.That(ProjectionCheckpointDbContext.IsPositionCastFailure(new FakeDbException("08006"))).IsFalse();
+        await Assert.That(ProjectionCheckpointDbContext.IsPositionCastFailure(new FakeDbException("40001"))).IsFalse();
+        await Assert.That(ProjectionCheckpointDbContext.IsPositionCastFailure(new FakeDbException(null))).IsFalse();
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1032:Implement standard exception constructors",
+        Justification = "测试桩：只承载 SqlState，不参与序列化/包装。")]
+    private sealed class FakeDbException(string? sqlState) : DbException("fake provider failure")
+    {
+        public override string? SqlState => sqlState;
+        public override int ErrorCode => 0;
+    }
+}
+
 /// <summary>续读查询的 Dapper/EF SQLite 真库验证（R6/P0-3，方言 CAST 聚合 SQL 正确性）。</summary>
 [TUnit.Core.NotInParallel("dapper-global")]
 public sealed class ProjectionResumeSqliteTests

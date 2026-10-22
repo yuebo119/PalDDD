@@ -353,10 +353,11 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
                     ? (value + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
                     : null;
             }
-            catch (System.Data.Common.DbException)
+            catch (System.Data.Common.DbException ex) when (IsPositionCastFailure(ex))
             {
-                // 数值 CAST 失败（如 PG 对非数值 Position 串 22007 族）——续读是优化面，
-                // 回退全量回放（语义兜底恒安全，对齐 Dapper 实现同款口径）
+                // R12 C-03：只有 PG 的“非数值 Position → CAST”失败（22P02/22007）才按
+                // 脏数据回退全量；连接中断/超时等其他 DbException 必须上抛——原实现
+                // 一律返回 null，基础设施故障被误分类成“无可续读位置”并触发全量回放。
                 return null;
             }
             catch (InvalidOperationException)
@@ -522,6 +523,13 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
     {
         if (Entry(checkpoint).State == EntityState.Detached)
             ProjectionCheckpoints.Attach(checkpoint);
+    }
+
+    /// <summary>R12 C-03：PostgreSQL 文本→数值 CAST 失败的 SQLSTATE（非数值 Position）。</summary>
+    internal static bool IsPositionCastFailure(System.Data.Common.DbException exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        return exception.SqlState is "22P02" or "22007";
     }
 
     private static void ValidateKeyParts(string projectionName, string sourceName, string position)

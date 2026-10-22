@@ -62,8 +62,9 @@
 | OPT-209 | CONTRACT | `Dispatcher.cs:116-126` | 低层 `Register(needsScope:false)` 在未提供根容器的手构 Dispatcher 上通过校验，首个请求 `_rootProvider!` 抛 NRE | fixed | 注册期直调：缺少根容器抛 `InvalidOperationException`，消息含两种修复路径 | R12 C-16 | `CqrsTests.Register_LowLevelNoScope_WithoutRootProvider_ThrowsAtRegistration` | R12 | 派发期改为显式返回配置错误而非异常 |
 | OPT-210 | CODEGEN | `MessageRegistryGenerator.cs:203,265-283` | 生成器强制 `.vN` 后缀且按 Name-only 去重，`[GenerateMessage]` 无法表达演化管线要求的「相邻版本同 wire name」 | fixed | 唯一性键改 `(Name, SchemaVersion)`；后缀改为“出现即匹配”（PALMSG005），领域事件仍由 PDDD010 强制后缀；文档/ADR-022 同步 | R12 C-15 | `MessageRegistryGeneratorTests.GenerateMessage_StableWireNameAcrossVersions_IsNotDuplicate`、`...WithMismatchedNameVersion...` | R12 | 演化管线改名为“每版独立 wire name”并自带映射 |
 | OPT-211 | CONTRACT | `ProjectionRebuilder.cs:126-137` | 批模式 `CheckpointFlushInterval` 无上界；间隔 ≥ processingTimeout 时组首租约在提交前过期，另一 worker 可重租同组并发投影 | fixed | 回放入口校验 `interval < ProcessingTimeout`（processor 新增 internal 属性）；等值即拒 | R12 C-31 | `ProjectionTests.ReplayAsync_CheckpointFlushIntervalAtOrAboveLease_ThrowsAtReplay` | R12 | 检查点存储增加显式续租原语，允许长组 |
+| OPT-212 | CORRECTNESS | `ProjectionCheckpointDbContext.cs:356-365` | 续读查询把任意 `DbException` 当作“脏 Position”回退全量，连接中断/超时被误分类并触发全量回放 | fixed | SQLSTATE 分类：仅 22P02/22007 回退，其余上抛；分类谓词单测 5 分支 | R12 C-03 | `ProjectionResumeFailureClassificationTests.IsPositionCastFailure_OnlyPgCastSqlStates` | R12 | 新 provider 的 CAST 错误码需加入集合 |
 
-R12 验证：全量 16 项目 **1893 用例，1813 通过 / 80 跳过 / 0 失败**；`gate-audit` 42/42；`AotSample` 重新发布运行通过。
+R12 验证：全量 16 项目 **1894 用例，1814 通过 / 80 跳过 / 0 失败**；`gate-audit` 42/42；`AotSample` 重新发布运行通过。
 
 ## 四、R11 验证汇总
 
