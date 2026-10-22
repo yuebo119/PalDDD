@@ -58,8 +58,9 @@
 | OPT-205 | LEAK | `InboxDbContext.cs:104-157,280-315` | 认领 `SaveChanges` 抛非 `DbUpdateException`（OCE 最常见）时 Added 实体滞留 ChangeTracker；终态 `ExecuteUpdate` 失败也留下跟踪实体，后续保存可能插入幽灵行/写回陈旧终态 | fixed | InMemory + 注入 OCE 的 SaveChanges：异常后 ChangeTracker 0 行 | R12 C-05 | `InboxEfCoreTests.InMemory_TryStartCancelledMidSave_LeavesNoTrackedGhostRow` | R12 | EF 提供事务性认领原语，跟踪器清理策略改由框架统一承担 |
 | OPT-206 | CONTRACT | `ServiceCollectionExtensions.cs:126-134` | `IPalOutboxStore` 未注册时装配校验直接跳过，承诺的解析期 fail-fast 后移到首个带领域事件的 SaveChanges | fixed | 解析 `IUnitOfWork` 即抛 `InvalidOperationException` | R12 C-23 | `OutboxWiringEndToEndTests.MissingOutboxStore_FailsFastAtUnitOfWorkResolution` | R12 | UoW 支持无 Outbox 的合法用法（应拆独立入口） |
 | OPT-207 | HTTP | `ExceptionMiddleware.cs:93-110` | 宿主请求体超限抛 `BadHttpRequestException`(413) 被通用 catch 改写成 500，客户端错误计为服务端错误 | fixed | 中间件直调：next 抛 413，响应保留 413 + `Content Too Large` | R12 C-12 | `ExceptionMiddlewareTests.InvokeAsync_BadHttpRequestException413_PreservesStatusCode` | R12 | 端点层自行把 413 映射为业务错误体 |
+| OPT-208 | CORRECTNESS | `DetachedStreamEndpoints.cs:162-190`；`StreamRunRegistry.cs:214-235,790-830` | 启动端点先 `Register`（立即启动泵）再附着；快速同步生产者可在附着前填满环形缓冲，首个响应以 gap 开局并丢失前缀 | fixed | 新增 `RegisterDeferred` + `StartFromServices`；启动编排改为 登记→附着→启动→写头→推流；注册表测试：附着起点固定 0，10 项/缓冲 2 时 `OldestAvailable=8` | R12 C-11 | `StreamRunRegistryTests.RegisterDeferred_AttachBeforeStart_PreservesPrefix`；`DetachedStreamTests` 12/12 回归 | R12 | 改为生产侧 backpressure 或预启动缓冲，不再需要延迟启动 |
 
-R12 验证：全量 16 项目 **1889 用例，1809 通过 / 80 跳过 / 0 失败**；`gate-audit` 42/42；`AotSample` 重新发布运行通过。
+R12 验证：全量 16 项目 **1890 用例，1810 通过 / 80 跳过 / 0 失败**；`gate-audit` 42/42；`AotSample` 重新发布运行通过。
 
 ## 四、R11 验证汇总
 
