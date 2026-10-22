@@ -390,6 +390,25 @@ public sealed class ServiceRegistrationTests
         await Assert.That(behaviors.Length).IsEqualTo(2);
     }
 
+    [Test]
+    public async Task AddPalCoreStack_AfterClosedRegistration_OtherRequestTypesLoseBehaviors()
+    {
+        // R13 F8 范围锁：先注册任一闭合 behavior 后，AddPalCoreStack 的开放泛型注册整体
+        // 跳过——其他请求类型不会获得 Validation/Logging。remarks 已声明「先到先得」，
+        // 本测试锁定其实际范围（任意闭合注册 -> 全部其他类型），防止未来无意扩大/缩小。
+        var services = new ServiceCollection();
+        services.AddPalLogging();
+        services.AddPalCommandHandler<TestCommand, string, TestCommandHandler>();
+        services.AddPalCoreStack();
+        using var provider = services.BuildServiceProvider();
+
+        var closed = provider.GetServices<IPipelineBehavior<TestCommand, string>>().ToArray();
+        var other = provider.GetServices<IPipelineBehavior<TestQuery, int>>().ToArray();
+
+        await Assert.That(closed.Length).IsEqualTo(2);
+        await Assert.That(other.Length).IsEqualTo(0);
+    }
+
     private sealed class TestDomainEventHandler : IEventHandler<TestDomainEvent>
     {
         public ValueTask HandleAsync(TestDomainEvent @event, CancellationToken ct) => ValueTask.CompletedTask;

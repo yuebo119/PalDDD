@@ -94,6 +94,13 @@ public static class ServiceRegistration
     /// v25 P3 勘正族 C10：闭合注册的匹配范围是<b>任意</b> <c>IPipelineBehavior&lt;,&gt;</c> 闭合注册——
     /// 含用户自定义 behavior，不仅限内置 Validation/Logging；用户先注册任意闭合 behavior 即抑制
     /// 内置 Validation/Logging 开放注册（先到先得）。匹配行为保持不变，仅显式声明。</para>
+    /// <para><b>⚠️ 跳过的范围（R13 F8）</b>：开放泛型注册是<b>全局</b>的——被跳过时，<b>所有</b>
+    /// 其他请求类型也不会获得 Validation/Logging（Dispatcher 按请求类型各自解析 behavior），
+    /// 输入验证因此静默失效。混合注册（先 <c>AddPalCommandHandler</c> / 任意闭合 behavior，
+    /// 后 <c>AddPalCoreStack</c>）时，请为每个请求类型显式调用
+    /// <c>AddPalCommandHandler</c>/<c>AddPalQueryHandler</c> 或闭合版
+    /// <c>AddPalPipelineBehaviors&lt;TRequest,TResponse&gt;()</c>。注册期没有可用的 logger，
+    /// 该跳过不会产生日志/指标。</para>
     /// </remarks>
     public static IServiceCollection AddPalPipelineBehaviors(this IServiceCollection services)
     {
