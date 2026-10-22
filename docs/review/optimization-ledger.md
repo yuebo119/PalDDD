@@ -54,8 +54,10 @@
 | OPT-201 | MEMORY | `StreamRunRegistry.cs:31,875` | 终态 run 只受 10 分钟保留期约束、不计入 `MaxConcurrentRuns`，内存随“完成速率 × 保留期”增长，文档上界失效 | fixed | 测试前 20 个短 run 后 `TrackedCount=20`（上限 2×2=4）判红；修复后 ≤4 | R12 PF-1 | `StreamRunRegistryTests.TerminalRuns_RetentionIsBoundedByMaxConcurrentRuns` | R12 | 保留期语义改为持久回看（应改用 EventLog，不占注册表） |
 | OPT-202 | MEMORY | `StreamRunRegistry.cs:429,488,744` | 每次断线重连创建 linked 宽限 CTS，被替换/终态时只 Cancel 不 Dispose，以父 token 注册形式滞留到 run 释放 | fixed | 代码路径对照；所有权协议改为锁内取走、取到者 Dispose | R12 PF-2 | 无单测（`TryBeginAttach`/`ReleaseAttachmentAsync`/`FinishAsync`/`Dispose` 四路所有权人工核验） | R12 | 宽限计时改为单例 Timer 或 `CancellationTokenSource` 复用机制 |
 | OPT-203 | MEMORY | `DecompressBufferPool.cs:28-43`；`SystemCompressor.cs:96-121,216-272` | 解压炸弹/超限异常后，64MB 级 Brotli 缓冲与 GZip/Deflate MemoryStream 驻留 TLS，直到同一线程下一次 Rent | fixed | 池行为单测：300KB 槽 Release 后下一次 Rent 容量回落 | R12 C-17 | `CompressionGuardTests.DecompressBufferPools_Release_DropsOversizedSlotsImmediately` | R12 | 池改为 ArrayPool/可注入上限，或线程池线程不再长驻 |
+| OPT-204 | CORRECTNESS | `InboxDbContext.cs:82-196` | EF InMemory provider 不支持 `ExecuteUpdateAsync`：已有行的抢占与终态保存抛 `InvalidOperationException`，行永远停留 Processing | fixed | InMemory 回归：认领后 MarkProcessed 落库；过期租约抢占 Attempts=2 | R12 H2 | `InboxEfCoreTests.InMemory_TryStartThenMarkProcessed_PersistsTerminalState`、`InMemory_ExpiredLeaseTakeover_IncrementsAttempts` | R12 | EF InMemory 支持 ExecuteUpdate，或 InMemory 不再作为受支持测试栈 |
+| OPT-205 | LEAK | `InboxDbContext.cs:104-157,280-315` | 认领 `SaveChanges` 抛非 `DbUpdateException`（OCE 最常见）时 Added 实体滞留 ChangeTracker；终态 `ExecuteUpdate` 失败也留下跟踪实体，后续保存可能插入幽灵行/写回陈旧终态 | fixed | InMemory + 注入 OCE 的 SaveChanges：异常后 ChangeTracker 0 行 | R12 C-05 | `InboxEfCoreTests.InMemory_TryStartCancelledMidSave_LeavesNoTrackedGhostRow` | R12 | EF 提供事务性认领原语，跟踪器清理策略改由框架统一承担 |
 
-R12 验证：全量 16 项目 **1884 用例，1804 通过 / 80 跳过 / 0 失败**；`gate-audit` 42/42；`AotSample` 重新发布运行通过。
+R12 验证：全量 16 项目 **1887 用例，1807 通过 / 80 跳过 / 0 失败**；`gate-audit` 42/42；`AotSample` 重新发布运行通过。
 
 ## 四、R11 验证汇总
 
