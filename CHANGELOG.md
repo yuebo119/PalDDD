@@ -14,6 +14,12 @@
 
 ### Added
 
+- **2026-10-22 R12 C-02：投影检查点租约续期（新增公共 API `IProjectionLeaseRenewalStore`）**：
+  ①**问题**：`ProjectionProcessor` 只在 handler 执行前取一次检查点租约；单个 handler 超过 `processingTimeout` 后租约到期，另一 worker 可重租同一位置并发投影（重复副作用）。
+  ②**修法**：新增公共接口 `IProjectionLeaseRenewalStore.RenewLeaseAsync(checkpoint, now, processingTimeout, ct)`；InMemory / Dapper / PalORM / EF 四栈实现均以 `Revision` + Processing 状态为守卫，只更新租约/更新时间，不推进 Revision。处理器在 handler 执行期间按 `processingTimeout / 3` 心跳续租；handler 完成、失败或取消时停止。自定义 store 未实现该接口时保持原语义（无续租）。
+  ③**公共 API +6/−0**：接口与其方法 + 四个 Store 各一个 `RenewLeaseAsync` 方法；公共 API 快照同步更新，无签名破坏。
+  验证：`dotnet build PalDDD.slnx` 0 警告 0 错误；新增 5 个测试（慢 handler 心跳保租；Dapper/EF SQLite/PalORM SQLite/EF InMemory 四栈续租后拒绝接管）；全量 1907 用例，0 失败。
+
 - **2026-10-21 契约盘点第七轮修复（R7：组件级注册自带日志门面）**：
   ①**根因**：`OutboxProcessor` / `InboxProcessor` / `SagaProcessor<TState>` 构造函数强制依赖 `IPalLogger<T>`，而该门面的实现 `PalLogger<T>` 是 `PalDDD.DependencyInjection` 的 internal 类型、只在 `AddPalCoreStack()` / `AddPalPipelineBehaviors()` 中注册。按 usage.md 各章节单独使用 `AddPalOutbox()` / `AddPalInbox()` / `AddPalSaga<,>()`（不引入核心栈）时，宿主启动解析 `IHostedService` 即抛 `Unable to resolve service for type IPalLogger<T>`。
   ②**修法**：门面映射下移到 `PalDDD.Core` 的 `PalLoggerRegistration.EnsurePalLoggerFacade()`（单一定义点，TryAdd 幂等），`PalLogger<T>` 随迁至 Core（仍 internal，经 IVT 授 DependencyInjection / Transactions / 两个测试项目）；`AddPalOutbox` / `AddPalInbox` / `AddPalSaga<,>` 各调用一次，DI 包的 `EnsureLoggerFacade` 与 `AddPalLogging` 改用同一方法。宿主的 `ILogger<T>` 仍由标准宿主提供。

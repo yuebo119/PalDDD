@@ -195,6 +195,25 @@ public class PalOrmProjectionCheckpointStoreTests
     }
 
     [Test]
+    public async Task ProjectionCheckpoint_RenewLease_ExtendsAndBlocksTakeover()
+    {
+        // R12 C-02：revision + Processing 守卫的续租；续租后 1.5s 不能被重租。
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteProjectionCheckpointStore(session);
+        var t0 = DateTimeOffset.UtcNow;
+
+        var checkpoint = await store.TryStartAsync(
+            "proj-1", "source-1", "pos-1", t0, TimeSpan.FromSeconds(1), default);
+        var renewed = await store.RenewLeaseAsync(
+            checkpoint!, t0.AddMilliseconds(800), TimeSpan.FromSeconds(3), default);
+        var takeover = await store.TryStartAsync(
+            "proj-1", "source-1", "pos-1", t0.AddMilliseconds(1500), TimeSpan.FromSeconds(1), default);
+
+        await Assert.That(renewed).IsTrue();
+        await Assert.That(takeover).IsNull();
+    }
+
+    [Test]
     public async Task ProjectionCheckpoint_GetResumePosition_NonNumericPosition_ReturnsNullFallback()
     {
         // R11 F4 回归锁：SQLite CAST('99abc' AS INTEGER)=99，原实现返回 "100" 并跳过

@@ -364,6 +364,33 @@ public sealed class RebuilderResumeTests
     }
 }
 
+/// <summary>R12 C-02：EF InMemory 分支的续租（Entry.CurrentValue + SaveChanges）。</summary>
+public sealed class ProjectionLeaseRenewalEfInMemoryTests
+{
+    [Test]
+    public async Task EfCore_InMemory_RenewLease_ExtendsAndBlocksTakeover(CancellationToken cancellationToken)
+    {
+        var options = new DbContextOptionsBuilder<InMemoryCheckpointDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture))
+            .Options;
+        await using var db = new InMemoryCheckpointDbContext(options);
+        var t0 = DateTimeOffset.UtcNow;
+
+        var checkpoint = await db.TryStartAsync(
+            "p", "s", "0", t0, TimeSpan.FromSeconds(1), cancellationToken);
+        var renewed = await db.RenewLeaseAsync(
+            checkpoint!, t0.AddMilliseconds(800), TimeSpan.FromSeconds(3), cancellationToken);
+        var takeover = await db.TryStartAsync(
+            "p", "s", "0", t0.AddMilliseconds(1500), TimeSpan.FromSeconds(1), cancellationToken);
+
+        await Assert.That(renewed).IsTrue();
+        await Assert.That(takeover).IsNull();
+    }
+
+    private sealed class InMemoryCheckpointDbContext(DbContextOptions<InMemoryCheckpointDbContext> options)
+        : ProjectionCheckpointDbContext(options);
+}
+
 /// <summary>R12 C-03：EF 检查点续读的异常分类——只有 CAST 失败才回退全量。</summary>
 public sealed class ProjectionResumeFailureClassificationTests
 {
@@ -504,6 +531,48 @@ public sealed class ProjectionResumeSqliteTests
         var retry = await db.TryStartAsync("p", "s", "3", DateTimeOffset.UtcNow.AddMinutes(1), TimeSpan.FromSeconds(30), cancellationToken);
         await db.MarkCompletedAsync(retry!, DateTimeOffset.UtcNow, cancellationToken);
         await Assert.That(await db.GetResumePositionAsync("p", "s", cancellationToken)).IsEqualTo("4");
+    }
+
+    [Test]
+    public async Task Dapper_RenewLease_ExtendsAndBlocksTakeover(CancellationToken cancellationToken)
+    {
+        var store = new DapperProjectionCheckpointStore(_conn, DapperDbType.Sqlite);
+        var t0 = DateTimeOffset.UtcNow;
+        var checkpoint = await store.TryStartAsync(
+            "p", "s", "0", t0, TimeSpan.FromSeconds(1), cancellationToken);
+
+        var renewed = await store.RenewLeaseAsync(
+            checkpoint!, t0.AddMilliseconds(800), TimeSpan.FromSeconds(3), cancellationToken);
+        var takeover = await store.TryStartAsync(
+            "p", "s", "0", t0.AddMilliseconds(1500), TimeSpan.FromSeconds(1), cancellationToken);
+
+        await Assert.That(renewed).IsTrue();
+        await Assert.That(takeover).IsNull();
+    }
+
+    [Test]
+    public async Task EfCore_RenewLease_ExtendsAndBlocksTakeover(CancellationToken cancellationToken)
+    {
+        await using var conn = new SqliteConnection("DataSource=:memory:");
+        await conn.OpenAsync(cancellationToken);
+        var options = new DbContextOptionsBuilder<TestResumeCheckpointDbContext>()
+            .UseSqlite(conn)
+            .Options;
+        await using (var boot = new TestResumeCheckpointDbContext(options))
+            await boot.Database.EnsureCreatedAsync(cancellationToken);
+        await using var db = new TestResumeCheckpointDbContext(options);
+
+        var t0 = DateTimeOffset.UtcNow;
+        var checkpoint = await db.TryStartAsync(
+            "p", "s", "0", t0, TimeSpan.FromSeconds(1), cancellationToken);
+
+        var renewed = await db.RenewLeaseAsync(
+            checkpoint!, t0.AddMilliseconds(800), TimeSpan.FromSeconds(3), cancellationToken);
+        var takeover = await db.TryStartAsync(
+            "p", "s", "0", t0.AddMilliseconds(1500), TimeSpan.FromSeconds(1), cancellationToken);
+
+        await Assert.That(renewed).IsTrue();
+        await Assert.That(takeover).IsNull();
     }
 
     private static async Task CompleteAsync(IProjectionCheckpointStore store, string position, CancellationToken ct)

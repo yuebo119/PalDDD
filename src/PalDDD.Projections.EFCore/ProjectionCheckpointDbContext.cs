@@ -12,7 +12,7 @@ namespace PalDDD.Projections;
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
 [UnconditionalSuppressMessage("AOT", "IL3050:Members annotated with RequiresDynamicCode require dynamic access",
     Justification = "EF Core DbContext base types are isolated in the optional EFCore adapter package.")]
-public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : DbContext(options), IProjectionCheckpointStore, IResumableProjectionCheckpointStore
+public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : DbContext(options), IProjectionCheckpointStore, IResumableProjectionCheckpointStore, IProjectionLeaseRenewalStore
 {
     /// <summary>投影 checkpoint 表</summary>
     public DbSet<ProjectionCheckpoint> ProjectionCheckpoints => Set<ProjectionCheckpoint>();
@@ -517,6 +517,67 @@ public abstract class ProjectionCheckpointDbContext(DbContextOptions options) : 
         }
 
         return false;
+    }
+
+    /// <summary>R12 C-02：心跳续租——Revision 并发令牌 + Processing 守卫，只更新租约/更新时间。</summary>
+    public async ValueTask<bool> RenewLeaseAsync(
+        ProjectionCheckpoint checkpoint,
+        DateTimeOffset now,
+        TimeSpan processingTimeout,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
+
+        var leaseUntil = now + processingTimeout;
+        if (!Database.IsRelational())
+        {
+            // InMemory provider 不支持 ExecuteUpdate：跟踪实体 + 属性入口赋值（private setter 不可直写）。
+            var current = await ProjectionCheckpoints.SingleOrDefaultAsync(
+                x => x.ProjectionName == checkpoint.ProjectionName
+                    && x.SourceName == checkpoint.SourceName
+                    && x.Position == checkpoint.Position,
+                ct).ConfigureAwait(false);
+            if (current is null
+                || current.Status != ProjectionCheckpointStatus.Processing
+                || current.Revision != checkpoint.Revision)
+            {
+                if (current is not null)
+                    Entry(current).State = EntityState.Detached;
+                return false;
+            }
+
+            Entry(current).Property(x => x.LeaseUntil).CurrentValue = leaseUntil;
+            Entry(current).Property(x => x.UpdatedAt).CurrentValue = now;
+            try
+            {
+                await SaveChangesAsync(ct).ConfigureAwait(false);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                return false;
+            }
+            finally
+            {
+                Entry(current).State = EntityState.Detached;
+            }
+            return true;
+        }
+
+        var affected = await ProjectionCheckpoints
+            .Where(x => x.ProjectionName == checkpoint.ProjectionName
+                && x.SourceName == checkpoint.SourceName
+                && x.Position == checkpoint.Position
+                && x.Revision == checkpoint.Revision
+                && x.Status == ProjectionCheckpointStatus.Processing)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.LeaseUntil, leaseUntil)
+                .SetProperty(x => x.UpdatedAt, now),
+                ct).ConfigureAwait(false);
+        if (affected == 0)
+            return false;
+        return true;
     }
 
     private void AttachIfDetached(ProjectionCheckpoint checkpoint)

@@ -419,6 +419,38 @@ public sealed class ProjectionTests
     }
 
     [Test]
+    public async Task ProcessAsync_SlowHandler_HeartbeatKeepsLease(CancellationToken cancellationToken)
+    {
+        // R12 C-02 回归锁：handler 执行超过 processingTimeout 时，心跳续租必须阻止另一
+        // worker 重租同一位置（修复前 1.2s 后租约已过期，TryStart 会返回新 checkpoint）。
+        var store = new InMemoryProjectionCheckpointStore();
+        var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new BlockingProjectionHandler(started, release);
+        var processor = new ProjectionProcessor<OrderPlaced>(
+            handler, store, processingTimeout: TimeSpan.FromSeconds(1));
+        var context = new ProjectionContext("orders", "slow-1", DateTimeOffset.UtcNow);
+
+        var processing = processor.ProcessAsync(
+            new OrderPlaced(Guid.NewGuid()), context, cancellationToken).AsTask();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        await Task.Delay(TimeSpan.FromMilliseconds(1200), cancellationToken);
+
+        var takeover = await store.TryStartAsync(
+            handler.ProjectionName,
+            "orders",
+            "slow-1",
+            DateTimeOffset.UtcNow,
+            TimeSpan.FromSeconds(1),
+            cancellationToken);
+
+        await Assert.That(takeover).IsNull();
+
+        release.SetResult(true);
+        await Assert.That(await processing).IsTrue();
+    }
+
+    [Test]
     public async Task ReplayAsync_CheckpointFlushIntervalAtOrAboveLease_ThrowsAtReplay(CancellationToken cancellationToken)
     {
         // R12 C-31 回归锁：批模式时间界 >= 租约时长会让组首租约在提交前过期，
@@ -455,8 +487,7 @@ public sealed class ProjectionTests
 
     private sealed record OrderPlaced(Guid OrderId);
 
-    private sealed class CountingProjectionHandler : IProjectionHandler<OrderPlaced>
-    {
+    private sealed class CountingProjectionHandler : IProjectionHandler<OrderPlaced>    {
         public int Count { get; private set; }
 
         public string ProjectionName => "order-summary";
@@ -465,6 +496,19 @@ public sealed class ProjectionTests
         {
             Count++;
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class BlockingProjectionHandler(
+        TaskCompletionSource<bool> started,
+        TaskCompletionSource<bool> release) : IProjectionHandler<OrderPlaced>
+    {
+        public string ProjectionName => "order-summary";
+
+        public async ValueTask ProjectAsync(OrderPlaced message, ProjectionContext context, CancellationToken ct = default)
+        {
+            started.TrySetResult(true);
+            await release.Task.WaitAsync(ct).ConfigureAwait(false);
         }
     }
 

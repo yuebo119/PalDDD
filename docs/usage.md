@@ -556,6 +556,8 @@ var processed = await processor.ProcessAsync(
 
 生产环境应提供数据库实现的 `IProjectionCheckpointStore`，用唯一约束保护 `(ProjectionName, SourceName, Position)`。
 
+处理器在 handler 执行期间按 `processingTimeout / 3` 心跳续租（store 实现 `IProjectionLeaseRenewalStore` 时；内建 InMemory/Dapper/PalORM/EF 四栈均已实现），慢 handler 不会因超过 `processingTimeout` 被另一 worker 重租并发投影。自定义 store 未实现该能力时保持原语义：handler 必须在 `processingTimeout` 内完成，否则租约到期后可能被重租。
+
 从 EventLog stream 重建 projection 时，使用 adapter 包把已记录事件转换为 replay source：
 
 ```csharp

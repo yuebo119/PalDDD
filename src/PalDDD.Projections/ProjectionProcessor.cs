@@ -104,12 +104,21 @@ public sealed class ProjectionProcessor<TMessage>
         if (checkpoint is null)
             return false;
 
+        // R12 C-02：handler 执行期间心跳续租，避免慢 handler 超过 processingTimeout 后
+        // 被另一 worker 重租并并发投影。
+        var heartbeat = StartLeaseHeartbeat(checkpoint);
         try
         {
             await _handler.ProjectAsync(message, context, ct).ConfigureAwait(false);
         }
+        catch (OperationCanceledException)
+        {
+            await StopLeaseHeartbeatAsync(heartbeat).ConfigureAwait(false);
+            throw;
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            await StopLeaseHeartbeatAsync(heartbeat).ConfigureAwait(false);
             // ITM-092 修复：MarkFailedAsync 本身失败不得掩盖主异常——内层捕获挂 Data 后仍以主异常优先。
             try
             {
@@ -123,6 +132,8 @@ public sealed class ProjectionProcessor<TMessage>
             }
             throw;
         }
+
+        await StopLeaseHeartbeatAsync(heartbeat).ConfigureAwait(false);
 
         // ITM-211 修复：handler 已成功——MarkCompletedAsync 失败不得进入 MarkFailedAsync
         // （那会把"已成功投影"降级为"可重试失败"→同一位置重放副作用）。
@@ -244,6 +255,8 @@ public sealed class ProjectionProcessor<TMessage>
             return 0;
         }
 
+        // R12 C-02：整组 handler 执行期间续租组首/组末租约；慢 handler 不再被重租并发投影。
+        var heartbeat = StartLeaseHeartbeat(anchor, checkpoint);
         try
         {
             if (_handler is IProjectionBatchHandler<TMessage> batchHandler)
@@ -256,8 +269,14 @@ public sealed class ProjectionProcessor<TMessage>
                     await _handler.ProjectAsync(batch[i].Message, batch[i].Context, ct).ConfigureAwait(false);
             }
         }
+        catch (OperationCanceledException)
+        {
+            await StopLeaseHeartbeatAsync(heartbeat).ConfigureAwait(false);
+            throw;
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            await StopLeaseHeartbeatAsync(heartbeat).ConfigureAwait(false);
             var failureReason = PalDDD.Core.FailureReason.Normalize(ex.Message);
             // 组首锚点先标 Failed（它是续读位置的唯一保证），组末 Failed 仅作诊断。
             if (anchor is not null)
@@ -265,6 +284,8 @@ public sealed class ProjectionProcessor<TMessage>
             await TryMarkFailedAsync(checkpoint, failureReason, "MarkFailedError", ex).ConfigureAwait(false);
             throw;
         }
+
+        await StopLeaseHeartbeatAsync(heartbeat).ConfigureAwait(false);
 
         // 成功：组首与组末都标 Completed。组首完成写失败时保持 Processing → 续读回到组首
         // （重放整组，at-least-once）；组末完成写失败时最多重放最后一条。
@@ -323,4 +344,76 @@ public sealed class ProjectionProcessor<TMessage>
                     $"Projection '{_handler.ProjectionName}' checkpoint failure mark could not be persisted; error: {markEx.Message}");
         }
     }
+
+    /// <summary>R12 C-02：handler 期间的租约心跳（store 未实现续期能力时返回 null）。</summary>
+    private LeaseHeartbeat? StartLeaseHeartbeat(params ProjectionCheckpoint?[] checkpoints)
+    {
+        if (_checkpointStore is not IProjectionLeaseRenewalStore renewal)
+            return null;
+
+        var distinct = checkpoints
+            .OfType<ProjectionCheckpoint>()
+            .DistinctBy(static checkpoint => (checkpoint.ProjectionName, checkpoint.SourceName, checkpoint.Position))
+            .ToArray();
+        if (distinct.Length == 0)
+            return null;
+
+        var cts = new CancellationTokenSource();
+        var task = RunLeaseHeartbeatAsync(renewal, distinct, cts.Token);
+        return new LeaseHeartbeat(cts, task);
+    }
+
+    private async Task RunLeaseHeartbeatAsync(
+        IProjectionLeaseRenewalStore store,
+        ProjectionCheckpoint[] checkpoints,
+        CancellationToken ct)
+    {
+        // 租约的 1/3 作为心跳周期：任一时刻至少还有 2/3 租约余量，容忍一次调度抖动。
+        var intervalTicks = Math.Max(_processingTimeout.Ticks / 3, TimeSpan.TicksPerMillisecond * 50);
+        using var timer = new PeriodicTimer(TimeSpan.FromTicks(intervalTicks), _timeProvider);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+            {
+                foreach (var checkpoint in checkpoints)
+                {
+                    var renewed = await store.RenewLeaseAsync(
+                        checkpoint,
+                        _timeProvider.GetUtcNow(),
+                        _processingTimeout,
+                        CancellationToken.None).ConfigureAwait(false);
+                    if (!renewed)
+                    {
+                        _logger?.Warning(
+                            $"Projection '{_handler.ProjectionName}' lease renewal failed for position {checkpoint.Position}; "
+                            + "another worker may take over and project concurrently.");
+                        return;
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 正常停止（handler 完成/取消）
+        }
+    }
+
+    private static async Task StopLeaseHeartbeatAsync(LeaseHeartbeat? heartbeat)
+    {
+        if (heartbeat is null)
+            return;
+
+        heartbeat.Cts.Cancel();
+        try
+        {
+            await heartbeat.Task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // 正常停止
+        }
+        heartbeat.Cts.Dispose();
+    }
+
+    private sealed record LeaseHeartbeat(CancellationTokenSource Cts, Task Task);
 }

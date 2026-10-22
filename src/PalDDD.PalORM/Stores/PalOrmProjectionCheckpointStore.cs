@@ -24,7 +24,7 @@ namespace PalDDD.PalORM.Stores;
 /// 未挂 cmd.Transaction 的命令抛 InvalidOperationException（MySqlConnector 严格校验）。
 /// </para>
 /// </summary>
-public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointStore, IResumableProjectionCheckpointStore
+public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointStore, IResumableProjectionCheckpointStore, IProjectionLeaseRenewalStore
     where TProvider : IDbProvider
 {
     [SuppressMessage("Performance", "CA1051:Do not declare visible instance fields",
@@ -225,6 +225,29 @@ public class PalOrmProjectionCheckpointStore<TProvider> : IProjectionCheckpointS
             // 续读是优化面：回退全量回放（对齐 Dapper 实现同款口径）
             return null;
         }
+    }
+
+    /// <summary>R12 C-02：心跳续租——revision + Processing 守卫，只更新租约/更新时间。</summary>
+    public async ValueTask<bool> RenewLeaseAsync(
+        ProjectionCheckpoint checkpoint,
+        DateTimeOffset now,
+        TimeSpan processingTimeout,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.ProjectionName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.SourceName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.Position);
+
+        var leaseUntil = now + processingTimeout;
+        var affected = await Session.ExecuteAsync(
+            $"UPDATE projection_checkpoints SET updated_at = {now}, lease_until = {leaseUntil} WHERE projection_name = {checkpoint.ProjectionName} AND source_name = {checkpoint.SourceName} AND position = {checkpoint.Position} AND revision = {checkpoint.Revision} AND status = {(int)ProjectionCheckpointStatus.Processing}",
+            ct).ConfigureAwait(false);
+        if (affected == 0)
+            return false;
+        return true;
     }
 
     private static void AddParam(DbCommand cmd, string name, object value)

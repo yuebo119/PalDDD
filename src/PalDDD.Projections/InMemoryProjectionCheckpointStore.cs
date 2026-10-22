@@ -7,7 +7,7 @@ namespace PalDDD.Projections;
 // 内存检查点存储
 // ─────────────────────────────────────────────────────────────
 
-public sealed class InMemoryProjectionCheckpointStore : IProjectionCheckpointStore, IResumableProjectionCheckpointStore
+public sealed class InMemoryProjectionCheckpointStore : IProjectionCheckpointStore, IResumableProjectionCheckpointStore, IProjectionLeaseRenewalStore
 {
     private readonly Lock _lock = new();
     private readonly Dictionary<Key, ProjectionCheckpoint> _checkpoints = [];
@@ -93,6 +93,27 @@ public sealed class InMemoryProjectionCheckpointStore : IProjectionCheckpointSto
             checkpoint.MarkProcessing(startedAt, processingTimeout); // 设置 LeaseUntil + Revision
             _checkpoints.Add(key, checkpoint);
             return ValueTask.FromResult<ProjectionCheckpoint?>(checkpoint);
+        }
+    }
+
+    /// <summary>R12 C-02：心跳续租（引用一致 + Processing 守卫；不推进 Revision）。</summary>
+    public ValueTask<bool> RenewLeaseAsync(
+        ProjectionCheckpoint checkpoint,
+        DateTimeOffset now,
+        TimeSpan processingTimeout,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (processingTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(processingTimeout), "processingTimeout must not be negative.");
+        ct.ThrowIfCancellationRequested();
+
+        lock (_lock)
+        {
+            if (!IsCurrentLeaseHolder(checkpoint))
+                return ValueTask.FromResult(false);
+            checkpoint.RenewLease(now, processingTimeout);
+            return ValueTask.FromResult(true);
         }
     }
 
