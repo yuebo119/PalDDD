@@ -684,6 +684,9 @@ builder.Services.AddPalHealthChecks();
 var app = builder.Build();
 app.UsePalExceptionHandler();
 app.MapPalHealthChecks("/health");
+// 生产部署：/health 暴露组件拓扑与依赖状态，按授权/限流约定保护——
+// 用返回 IEndpointConventionBuilder 的变体（R13 F10）：
+// app.MapPalHealthChecksWithConventions("/health").RequireAuthorization();
 ```
 
 异常中间件将 `PalValidationException` 映射为 400，将 `HandlerNotFoundException` 映射为 404，未处理异常映射为 500。
