@@ -79,7 +79,15 @@ internal sealed class SagaTimeoutDetector<TState>
                 || !state.StepStartedAt.TryGetValue(registration.Key, out var startedAt))
                 continue;
 
-            var due = startedAt + registration.Step.Timeout!.Value;
+            var timeout = registration.Step.Timeout!.Value;
+            // R13 F2：Timeout 只校验非负，TimeSpan.MaxValue（"永不过期"的自然写法）会让
+            // startedAt + timeout 溢出并抛 AOOR，步骤在开始执行前即失败。到期时刻不可
+            // 表示 = 实际永不到期——跳过该步骤（其余步骤仍取最小值）；全部跳过时返回
+            // null，调用方写 NoPendingTimeout 哨兵（MySQL DATETIME(6) 可存）。
+            if (timeout >= DateTimeOffset.MaxValue - startedAt)
+                continue;
+
+            var due = startedAt + timeout;
             if (next is null || due < next.Value)
                 next = due;
         }

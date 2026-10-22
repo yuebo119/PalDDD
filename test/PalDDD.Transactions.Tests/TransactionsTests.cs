@@ -2166,6 +2166,101 @@ public sealed class SagaTimeoutProcessorTests
         await Assert.That(store.SavedTerminals.Any(s => s.SagaId == second.SagaId && s.Status == SagaStatus.Compensated)).IsFalse();
     }
 
+    [Test]
+    public async Task ProcessEventAsync_TimeoutMaxValue_DoesNotOverflowAndWritesSentinel()
+    {
+        // R13 F2 回归锁：Timeout=TimeSpan.MaxValue（"永不过期"写法）通过注册期校验，
+        // 但 startedAt + Timeout 溢出会抛 AOOR，步骤永不执行；修复后按"永不到期"处理，
+        // NextCheckAt 写哨兵（MySQL DATETIME(6) 可存）。
+        var state = new OrderSagaState { CurrentState = "Waiting" };
+
+        var result = await new MaxValueTimeoutSaga().ProcessEventAsync(state, new OrderPlacedSagaEvent());
+
+        await Assert.That(result.ExecutedStepKeys).Contains("Waiting|OrderPlacedSagaEvent");
+        await Assert.That(result.NextCheckAt).IsEqualTo(SagaState.NoPendingTimeout);
+    }
+
+    private sealed class MaxValueTimeoutSaga : Saga<OrderSagaState>
+    {
+        public MaxValueTimeoutSaga()
+        {
+            When("Waiting", typeof(OrderPlacedSagaEvent), new SagaStep(
+                "WaitForPayment",
+                (state, evt, ct) => ValueTask.FromResult(state),
+                null,
+                TimeSpan.MaxValue));
+        }
+    }
+
+    [Test]
+    public async Task CheckTimeoutsAsync_BackfillSaveThrowsOce_StillFlushesCompensatedTerminal()
+    {
+        // R13 F3 回归锁：回填 SaveManyAsync 抛 OCE（DB 超时映射）时，已补偿 saga 的终态
+        // 与租约释放必须仍然落库；原实现让 OCE 从 FlushBackfillAsync 逃逸，跳过后置冲刷。
+        var state = new OrderSagaState { CurrentState = "Waiting" };
+        state.StepStartedAt["Waiting|OrderPlacedSagaEvent"] = DateTimeOffset.UnixEpoch;
+        state.ExecutedStepKeys.Add("Waiting|OrderPlacedSagaEvent");
+        var store = new BackfillOceSagaStateStore([state]);
+        var processor = new SagaTimeoutProcessor<OrderSagaState>(
+            store,
+            new TimedOutSaga(),
+            NullPalLogger<SagaTimeoutProcessor<OrderSagaState>>.Instance,
+            new FixedOptionsMonitor<SagaProcessorOptions>(new SagaProcessorOptions()),
+            TimeProvider.System);
+
+        await processor.CheckTimeoutsAsync(CancellationToken.None);
+
+        await Assert.That(store.SavedTerminals.Any(s => s.SagaId == state.SagaId && s.Status == SagaStatus.Compensated)).IsTrue();
+    }
+
+    /// <summary>R13 F3：带到期过滤与批量能力的存储；SaveManyAsync 首次（回填）抛 OCE。</summary>
+    private sealed class BackfillOceSagaStateStore(IReadOnlyList<OrderSagaState> states)
+        : ISagaBatchStateStore<OrderSagaState>, IDueTimeSagaStore<OrderSagaState>, ISagaLeaseBatchStore<OrderSagaState>
+    {
+        private bool _thrown;
+
+        public List<(PalUlid SagaId, SagaStatus Status)> SavedTerminals { get; } = [];
+
+        public ValueTask<IReadOnlyList<OrderSagaState>> GetActiveSagasAsync(int batchSize, CancellationToken ct)
+            => ValueTask.FromResult(states);
+
+        public ValueTask<IReadOnlyList<OrderSagaState>> LeaseActiveSagasAsync(
+            string owner, TimeSpan leaseDuration, int batchSize, CancellationToken ct)
+            => ValueTask.FromResult(states);
+
+        public ValueTask<IReadOnlyList<OrderSagaState>> LeaseDueSagasAsync(
+            string owner, TimeSpan leaseDuration, int batchSize, DateTimeOffset now, CancellationToken ct)
+            => ValueTask.FromResult(states);
+
+        public ValueTask<OrderSagaState?> GetByIdAsync(PalUlid sagaId, CancellationToken ct)
+            => ValueTask.FromResult<OrderSagaState?>(null);
+
+        public ValueTask<int> SaveChangesAsync(OrderSagaState state, CancellationToken ct)
+        {
+            SavedTerminals.Add((state.SagaId, state.Status));
+            return ValueTask.FromResult(1);
+        }
+
+        public ValueTask<int> AdvanceNextCheckAtAsync(string owner, IReadOnlyList<OrderSagaState> sagas, CancellationToken ct)
+            => ValueTask.FromResult(sagas.Count);
+
+        public ValueTask<IReadOnlyList<int>> SaveManyAsync(IReadOnlyList<OrderSagaState> sagas, CancellationToken ct)
+        {
+            if (!_thrown)
+            {
+                _thrown = true;
+                throw new OperationCanceledException("simulated DB timeout mapped to OCE");
+            }
+
+            foreach (var saga in sagas)
+                SavedTerminals.Add((saga.SagaId, saga.Status));
+            return ValueTask.FromResult<IReadOnlyList<int>>(sagas.Select(static _ => 1).ToArray());
+        }
+
+        public ValueTask<int> ReleaseLeasesAsync(string owner, IReadOnlyList<OrderSagaState> sagas, CancellationToken ct)
+            => ValueTask.FromResult(sagas.Count);
+    }
+
     private sealed class RecordingSagaStateStore(IReadOnlyList<OrderSagaState>? states = null)
         : ISagaStateStore<OrderSagaState>
     {

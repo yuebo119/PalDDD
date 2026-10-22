@@ -331,8 +331,11 @@ TState>
 
         // 2026-10-20 性能轮收口：回填/补偿终态/到期推进各一次批量提交（无批量能力的
         // 自定义存储回落逐条，语义与旧路径一致）；随后才做租约批量释放。
+        // R13 F3：回填与后置冲刷同用 CancellationToken.None——它是"终态写入前的收尾"，
+        // 若用调用方 ct，OCE 会从 FlushBackfillAsync 逃逸并跳过补偿终态/租约释放
+        // （下一 tick 重租同一 Saga 再次补偿）。
         if (pendingBackfill is not null)
-            await FlushBackfillAsync(pendingBackfill, ct).ConfigureAwait(false);
+            await FlushBackfillAsync(pendingBackfill, CancellationToken.None).ConfigureAwait(false);
         await FlushTerminalAndReleaseAsync(
             pendingTerminal, pendingNextCheck, pendingRelease, now, options.LeaseOwner)
             .ConfigureAwait(false);
@@ -382,6 +385,11 @@ TState>
     }
 
     /// <summary>回填 NextCheckAt 的批量落库；非批量存储回落逐条路径（与旧行为一致）。</summary>
+    /// <remarks>
+    /// R13 F3：回填失败（含 store 自身抛出的 OCE，如 DB 超时映射）一律吞掉并记日志——
+    /// 它是收尾步骤，失败只能让本 tick 的 NextCheckAt 留空（下一 tick 重算），绝不能让
+    /// 异常跳过后续的补偿终态与租约释放冲刷。调用方传入 CancellationToken.None。
+    /// </remarks>
     private async ValueTask FlushBackfillAsync(List<TState> states, CancellationToken ct)
     {
         if (_store is ISagaBatchStateStore<TState> batchStore)
@@ -395,8 +403,10 @@ TState>
                         _logger.Warning($"Saga {states[i].SagaId} NextCheckAt backfill save affected 0 rows (optimistic concurrency conflict); will retry on next scan");
                 }
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex)
             {
+                // R13 F3：不过滤 OCE——store 以 CancellationToken.None 调用时抛 OCE 属
+                // "DB 超时映射"，与其它失败同义；逃逸会跳过后置终态冲刷。
                 _logger.Error(ex, $"Saga NextCheckAt backfill batch save failed ({states.Count} sagas); will retry on next scan");
             }
             return;
@@ -410,7 +420,7 @@ TState>
                 if (saved == 0)
                     _logger.Warning($"Saga {state.SagaId} NextCheckAt backfill save affected 0 rows (optimistic concurrency conflict); will retry on next scan");
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex)
             {
                 _logger.Error(ex, $"Saga {state.SagaId} NextCheckAt backfill save failed; will retry on next scan");
             }
