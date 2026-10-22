@@ -29,12 +29,15 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
     private readonly Lock _lock = new();
     private readonly List<OutboxMessage> _messages = [];
     private readonly TimeProvider _timeProvider;
+    private readonly IOutboxWakeUpSignal? _wakeUpSignal;
 
     /// <summary>创建内存发件箱存储。</summary>
     /// <param name="timeProvider">时间提供者（默认 <see cref="TimeProvider.System"/>），测试中可注入 <c>FakeTimeProvider</c></param>
-    public InMemoryOutboxStore(TimeProvider? timeProvider = null)
+    /// <param name="wakeUpSignal">可选唤醒信号（2026-10-22 性能轮）——写入成功后通知 <see cref="OutboxProcessor"/> 立即续批；null 时保持纯轮询</param>
+    public InMemoryOutboxStore(TimeProvider? timeProvider = null, IOutboxWakeUpSignal? wakeUpSignal = null)
     {
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _wakeUpSignal = wakeUpSignal;
     }
 
     /// <inheritdoc/>
@@ -114,6 +117,7 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
         ArgumentNullException.ThrowIfNull(message);
         message.NextAttemptAt = message.NextAttemptAt ?? _timeProvider.GetUtcNow();
         lock (_lock) { _messages.Add(message); }
+        _wakeUpSignal?.Notify();
         return ValueTask.CompletedTask;
     }
 
@@ -153,6 +157,7 @@ public sealed class InMemoryOutboxStore : IPalOutboxStore, IImmediateWriteOutbox
                 _messages.Add(msg);
             }
         }
+        _wakeUpSignal?.Notify();
         return ValueTask.FromResult(messages.Count);
     }
 

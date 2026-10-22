@@ -255,6 +255,77 @@ public sealed class OutboxProcessorTests
         await Assert.That(Volatile.Read(ref store.LeaseCallCount) >= baseline + 1).IsTrue();
     }
 
+    // ─── 2026-10-22 性能轮：唤醒信号驱动 ─────────────────────────
+    // 锁定测试两件：信号唤醒不等轮询间隔 / 被唤醒但租到 0 条时短间隔自愈。
+    // 两件都用真实时间（信号路径不经过注入的 TimeProvider，与生产一致）：
+    // 轮询间隔设 5 分钟，远大于测试时长，只有信号能触发 tick。
+
+    [Test]
+    public async Task ExecuteAsync_WakeUpSignal_TriggersTickBeforePollInterval(CancellationToken cancellationToken)
+    {
+        var store = new CountingOutboxStore();
+        var scopeFactory = new StubScopeFactory(BuildBatchProcessor(store));
+        var options = new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
+        {
+            PollInterval = TimeSpan.FromMinutes(5),
+            BatchSize = 10,
+            MaxRetryCount = 3
+        });
+        var signal = new OutboxWakeUpSignal();
+        var processor = new OutboxProcessor(
+            scopeFactory, options, NullPalLogger<OutboxProcessor>.Instance,
+            timeProvider: TimeProvider.System, wakeUpSignal: signal);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await processor.StartAsync(cts.Token);
+        // 循环是「先等」形态：StartAsync 返回时已停在等待点，5 分钟间隔不可能已到。
+        await Task.Delay(50);
+        await Assert.That(Volatile.Read(ref store.LeaseCallCount)).IsEqualTo(0);
+
+        signal.Notify();
+        await WaitUntilAsync(() => Volatile.Read(ref store.LeaseCallCount) >= 1, TimeSpan.FromSeconds(5));
+        await processor.StopAsync(cancellationToken);
+
+        await Assert.That(Volatile.Read(ref store.LeaseCallCount)).IsGreaterThanOrEqualTo(1);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_SignalButEmptyLease_RetriesBeforePollInterval(CancellationToken cancellationToken)
+    {
+        // 写入方事务未提交时信号先到：第一轮租到 0 条，自愈路径应在 20ms 后重试一次，
+        // 而不是白等一个完整的 PollInterval。
+        var store = new CountingOutboxStore();
+        var scopeFactory = new StubScopeFactory(BuildBatchProcessor(store));
+        var options = new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
+        {
+            PollInterval = TimeSpan.FromMinutes(5),
+            BatchSize = 10,
+            MaxRetryCount = 3
+        });
+        var signal = new OutboxWakeUpSignal();
+        var processor = new OutboxProcessor(
+            scopeFactory, options, NullPalLogger<OutboxProcessor>.Instance,
+            timeProvider: TimeProvider.System, wakeUpSignal: signal);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await processor.StartAsync(cts.Token);
+        await Task.Delay(50);
+
+        signal.Notify();
+        await WaitUntilAsync(() => Volatile.Read(ref store.LeaseCallCount) >= 2, TimeSpan.FromSeconds(5));
+        await processor.StopAsync(cancellationToken);
+
+        await Assert.That(Volatile.Read(ref store.LeaseCallCount)).IsGreaterThanOrEqualTo(2);
+    }
+
+    /// <summary>真实时间等待（信号路径不受 FakeTimeProvider 驱动，见上方说明）。</summary>
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        while (!condition() && Environment.TickCount64 < deadline)
+            await Task.Delay(5);
+    }
+
     /// <summary>
     /// 确定性 tick：反复 AdvanceNowAndTriggerTimers + 短 yield，直到租约次数达标。
     /// 真实等待仅用于调度让步，不承担轮询间隔语义（间隔由假时钟驱动）。

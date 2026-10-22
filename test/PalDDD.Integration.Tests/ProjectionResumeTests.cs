@@ -267,7 +267,8 @@ public sealed class RebuilderResumeTests
         var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch);
         var store = new InMemoryProjectionCheckpointStore();
         var handler = new CountingResumeHandler();
-        // 默认批量 100：本测试靠 1 秒时间界提前提交，证明慢回放不会攒满批。
+        // 默认批量 1000（2026-10-22 性能轮由 100 提升）：本测试靠 1 秒时间界提前提交，
+        // 证明慢回放不会攒满批——10 条远小于批宽，时间界不生效就会整批一次提交。
         var processor = new ProjectionProcessor<ResumeEvent>(handler, store);
         List<ReplayEvent<ResumeEvent>> events = [];
         for (var i = 0; i <= 9; i++)
@@ -282,7 +283,7 @@ public sealed class RebuilderResumeTests
 
         var processed = await rebuilder.ReplayAsync(CancellationToken.None);
 
-        await Assert.That(processor.CheckpointBatchSize).IsEqualTo(100);
+        await Assert.That(processor.CheckpointBatchSize).IsEqualTo(1000);
         await Assert.That(processed).IsEqualTo(10);
         await Assert.That(handler.Count).IsEqualTo(10);
         // 两项各推进 1s：第二项到达时距组首满 1s，触发时间界提交位置 1。

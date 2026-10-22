@@ -660,6 +660,40 @@ public sealed class DapperStoreTests
     }
 
     [Test]
+    public async Task Inbox_TryStartProcessing_ReclaimsFailedAndExpiredLease(CancellationToken cancellationToken)
+    {
+        // 2026-10-22 性能轮：单条认领合并为一条 UPSERT 后，可重入情形（Failed、租约过期
+        // Processing）必须与旧的三段式路径语义一致：Attempts 递增、状态回 Processing、
+        // last_error 清空。
+        var store = new DapperInboxStore(_conn, _dbType);
+        var now = TimeProvider.System.GetUtcNow();
+
+        var failed = await store.TryStartProcessingAsync(
+                "test-consumer", "msg-failed", now, TimeSpan.FromMinutes(5), cancellationToken)
+            ?? throw new InvalidOperationException("首次认领必须成功");
+        await store.MarkFailedAsync(failed, "boom", cancellationToken);
+
+        var reclaimed = await store.TryStartProcessingAsync(
+                "test-consumer", "msg-failed", now.AddSeconds(1), TimeSpan.FromMinutes(5), cancellationToken)
+            ?? throw new InvalidOperationException("Failed 行必须可重入");
+        await Assert.That(reclaimed.Attempts).IsEqualTo(2);
+        await Assert.That(reclaimed.Status).IsEqualTo(InboxStatus.Processing);
+        await Assert.That(reclaimed.LastError).IsNull();
+
+        // 租约过期（6 分钟 > 5 分钟超时）后另一 worker 可接管。
+        var active = await store.TryStartProcessingAsync(
+                "test-consumer", "msg-expired", now, TimeSpan.FromMinutes(5), cancellationToken)
+            ?? throw new InvalidOperationException("首次认领必须成功");
+        await Assert.That(active.Attempts).IsEqualTo(1);
+
+        var takeover = await store.TryStartProcessingAsync(
+                "test-consumer", "msg-expired", now.AddMinutes(6), TimeSpan.FromMinutes(5), cancellationToken)
+            ?? throw new InvalidOperationException("租约过期行必须可接管");
+        await Assert.That(takeover.Attempts).IsEqualTo(2);
+        await Assert.That(takeover.Status).IsEqualTo(InboxStatus.Processing);
+    }
+
+    [Test]
     public async Task Inbox_MarkProcessedAsync(CancellationToken cancellationToken)
     {
         var store = new DapperInboxStore(_conn, _dbType);

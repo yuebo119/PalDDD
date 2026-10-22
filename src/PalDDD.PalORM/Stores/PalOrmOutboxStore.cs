@@ -44,12 +44,16 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         Justification = "框架库基类 —— 派生类需访问 Clock 以统一时间源。")]
     protected readonly TimeProvider Clock;
 
+    /// <summary>可选唤醒信号（2026-10-22 性能轮）——写入成功后通知处理循环立即续批。</summary>
+    private readonly IOutboxWakeUpSignal? _wakeUpSignal;
+
     /// <summary>构造 Outbox Store。</summary>
-    public PalOrmOutboxStore(DataSession<TProvider> session, TimeProvider? clock = null)
+    public PalOrmOutboxStore(DataSession<TProvider> session, TimeProvider? clock = null, IOutboxWakeUpSignal? wakeUpSignal = null)
     {
         ArgumentNullException.ThrowIfNull(session); // v22 C-1
         Session = session;
         Clock = clock ?? TimeProvider.System;
+        _wakeUpSignal = wakeUpSignal;
     }
 
     /// <inheritdoc />
@@ -214,6 +218,7 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         //（GetAwaiter().GetResult()）——接口异步化后桥接删除，直连异步原语
         var row = OutboxMessageRow.FromDomain(message);
         await Session.InsertAsync(row, ct).ConfigureAwait(false);
+        _wakeUpSignal?.Notify();
     }
 
     /// <inheritdoc />
@@ -230,7 +235,9 @@ public class PalOrmOutboxStore<TProvider> : IPalOutboxStore, IImmediateWriteOutb
         // Complete），MySQL/SQLite 内部沿用 1000 批宽；需要限制单次 COPY/事务持锁行数时用
         // 带 batchSize 的重载（本 store 的批量入口由调用方控制单次列表大小）。
         // v4.0 ④（ADR-026）：ct 传播进批量路径
-        return (int)await Session.BulkInsertAsync(rows, ct).ConfigureAwait(false);
+        var inserted = (int)await Session.BulkInsertAsync(rows, ct).ConfigureAwait(false);
+        _wakeUpSignal?.Notify();
+        return inserted;
     }
 
     /// <inheritdoc />

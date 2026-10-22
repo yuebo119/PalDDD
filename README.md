@@ -196,7 +196,7 @@ services.AddPalCommandHandler<CreateOrder, OrderId, CreateOrderHandler>();
 // 3. 选持久化适配器（推荐 PalORM，真 AOT）
 services.AddPalOrmSqlite(connectionString);    // 或 PostgreSql / MySql
 
-// 4. 注册 Outbox（事务内原子写入消息行 + 后台轮询发布）
+// 4. 注册 Outbox（事务内原子写入消息行 + 写入唤醒发布，轮询兜底）
 services.AddPalOutbox();
 
 // 5. 分发命令（⚠️ Handler 注册由 Host 驱动——HandlerRegistrar 在 Host 启动时扫描注册；
@@ -214,7 +214,7 @@ var orderId = await dispatcher.SendAsync(new CreateOrder("Alice", 99.9m));
 ### Outbox：租约锁并发，多实例无重复投递
 
 ```csharp
-// 注册：Outbox + 后台处理器自动轮询
+// 注册：Outbox + 后台处理器（写入后信号唤醒，PollInterval 兜底）
 services.AddPalOrmPostgreSql(connectionString);
 services.AddPalOutbox();   // ⚠️ 只注册处理器/Options——Store/序列化器/Catalog/Broker 四件套由调用方注册（见 usage.md「使用 Outbox」）
 

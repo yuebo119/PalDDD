@@ -16,8 +16,8 @@ namespace PalDDD.PalORM.Sqlite;
 /// <summary>SQLite 方言 Outbox Store。</summary>
 public sealed class SqliteOutboxStore : PalOrmOutboxStore<SqliteProvider>
 {
-    public SqliteOutboxStore(DataSession<SqliteProvider> session, TimeProvider? clock = null)
-        : base(session, clock) { }
+    public SqliteOutboxStore(DataSession<SqliteProvider> session, TimeProvider? clock = null, IOutboxWakeUpSignal? wakeUpSignal = null)
+        : base(session, clock, wakeUpSignal) { }
 }
 
 /// <summary>SQLite 方言 Inbox Store。</summary>

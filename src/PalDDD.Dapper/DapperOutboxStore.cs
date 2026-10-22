@@ -73,6 +73,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
     private DbTransaction? Tx => _transaction ?? DapperAmbientTransaction.TryGet(_connection);
 
     private readonly TimeProvider _timeProvider;
+    private readonly IOutboxWakeUpSignal? _wakeUpSignal;
 
     // 三十八轮统一（状态列 int 化）：status 列持久化契约从字符串 'Pending' 改为 INT 0
     // （对齐 OutboxStatus.Pending 枚举值与 Saga/Checkpoint/Idempotency 三表的既定 int 语义，
@@ -88,11 +89,15 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         s_mysqlSkipLockedByConnection = new();
 
     /// <param name="transaction">可选共享事务（用于 UnitOfWork 模式）</param>
+    /// <param name="wakeUpSignal">可选唤醒信号（2026-10-22 性能轮）——写入成功后通知
+    /// <c>OutboxProcessor</c> 立即续批，免等 <c>PollInterval</c>；null 时保持纯轮询（DI 由
+    /// <c>AddPalOutbox</c> 注册的单例自动注入）</param>
     public DapperOutboxStore(
         DbConnection connection,
         DapperDbType dbType,
         DbTransaction? transaction = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IOutboxWakeUpSignal? wakeUpSignal = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         DapperConnectionGuard.Validate(connection, dbType);
@@ -101,6 +106,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         _dialect = DapperSqlDialect.For(dbType);
         _transaction = transaction;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _wakeUpSignal = wakeUpSignal;
     }
 
     public async ValueTask<IReadOnlyList<OutboxMessage>> GetPendingMessagesAsync(
@@ -263,6 +269,7 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         AddParam(cmd, "TraceParent", message.TraceParent);
         AddParam(cmd, "TraceState", message.TraceState);
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        _wakeUpSignal?.Notify();
     }
 
     /// <summary>D（2026-10-10 优化轮）：原生 ADO 参数装配——null 统一 DBNull，其余按值类型由
@@ -299,18 +306,24 @@ public sealed class DapperOutboxStore : IPalOutboxStore, IImmediateWriteOutboxSt
         // 2026-10-21：PG 走强类型 COPY——通用泛型路径每行构造 object?[] 并逐值装箱 +
         // 类型分派；outbox 列集固定，专用写入每行零数组分配、零装箱。其余方言保持通用路径。
         if (_dbType == DapperDbType.PostgreSql)
-            return await DapperBulkCopy.BulkInsertOutboxAsync(conn, messages, Tx, ct).ConfigureAwait(false);
+        {
+            var pgInserted = await DapperBulkCopy.BulkInsertOutboxAsync(conn, messages, Tx, ct).ConfigureAwait(false);
+            _wakeUpSignal?.Notify();
+            return pgInserted;
+        }
 
         // P2 修复（八轮评审 PD17）：批量路径补 correlation/causation/trace 4 追踪列——
         // 单条路径 AddMessage（七轮）已补，批量漏列导致追踪链在批量写入时丢失；
         // extractor 末 4 项与单条 AddMessage 的参数语义逐一对齐。
-        return await DapperBulkCopy.BulkInsertAsync(
+        var inserted = await DapperBulkCopy.BulkInsertAsync(
             conn, _dbType, "outbox_messages",
             ["id", "type", "payload", "content_type", "schema_version", "status", "created_at", "next_attempt_at", "correlation_id", "causation_id", "trace_parent", "trace_state"],
             messages,
             m => [m.Id, m.Type, m.Payload, m.ContentType, m.SchemaVersion, StatusPending, m.CreatedAt, m.NextAttemptAt!.Value,
                 m.CorrelationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture), m.CausationId?.ToString(null, System.Globalization.CultureInfo.InvariantCulture), m.TraceParent, m.TraceState],
             Tx, ct).ConfigureAwait(false); // v4.0 ④（ADR-026）：ct 传播进批量路径
+        _wakeUpSignal?.Notify();
+        return inserted;
     }
 
     public async ValueTask MarkProcessedAsync(OutboxMessage message, DateTimeOffset processedAt, CancellationToken ct = default)

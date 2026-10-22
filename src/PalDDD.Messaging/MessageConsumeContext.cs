@@ -18,10 +18,14 @@ namespace PalDDD.Messaging;
 /// </summary>
 public sealed class MessageConsumeContext
 {
-    /// <summary>已解码头字典，或按需解码的委托——单字段承载以保持实例尺寸不增。</summary>
+    /// <summary>
+    /// 已解码头字典、待解码的键值序列，或按需解码的委托——单字段承载以保持实例尺寸不增
+    /// （2026-10-22 性能轮：通用路径改存键值序列本体，去掉每消息闭包；尺寸不变是
+    /// <c>FromHeaders_NullHeadersWithFallback_NoDictionaryAllocation</c> 的预算约束）。
+    /// </summary>
     private readonly object _headersSource;
 
-    /// <summary>按需解码的缓存结果（仅委托形态使用）。</summary>
+    /// <summary>按需解码的缓存结果（仅惰性形态使用）。</summary>
     private IReadOnlyDictionary<string, string?>? _materializedHeaders;
 
     /// <summary>构造消费上下文（已解码头，不含 broker 消息 ID）。</summary>
@@ -54,6 +58,7 @@ public sealed class MessageConsumeContext
     }
 
     /// <summary>构造消费上下文（头按需解码；已知追踪字段已提前提取）。</summary>
+    /// <remarks>委托形态仅用于头源是外部客户端类型（如 Confluent <c>Headers</c>）的适配器。</remarks>
     internal MessageConsumeContext(
         string? messageId,
         string? correlationId,
@@ -69,6 +74,31 @@ public sealed class MessageConsumeContext
         TraceParent = traceParent;
         TraceState = traceState;
         _headersSource = headersFactory;
+    }
+
+    /// <summary>
+    /// 构造消费上下文（头为键值序列，按需解码）。
+    /// <para>
+    /// 2026-10-22 性能轮：直接持有序列本体，<see cref="Headers"/> 首次读取时才解码。
+    /// 原形态每消息创建一个捕获序列的闭包加委托（带追踪头的消息两笔分配），通用消费路径
+    /// （RabbitMQ 与 <see cref="FromHeaders"/>）与尺寸预算测试因此各得其所。
+    /// </para>
+    /// </summary>
+    internal MessageConsumeContext(
+        string? messageId,
+        string? correlationId,
+        string? causationId,
+        string? traceParent,
+        string? traceState,
+        IEnumerable<KeyValuePair<string, object?>> headers)
+    {
+        ArgumentNullException.ThrowIfNull(headers);
+        MessageId = messageId;
+        CorrelationId = correlationId;
+        CausationId = causationId;
+        TraceParent = traceParent;
+        TraceState = traceState;
+        _headersSource = headers;
     }
 
     /// <summary>
@@ -105,7 +135,9 @@ public sealed class MessageConsumeContext
             if (materialized is not null)
                 return materialized;
 
-            materialized = ((Func<IReadOnlyDictionary<string, string?>>)_headersSource)();
+            materialized = _headersSource is IEnumerable<KeyValuePair<string, object?>> raw
+                ? DecodeHeaders(raw)
+                : ((Func<IReadOnlyDictionary<string, string?>>)_headersSource)();
             _materializedHeaders = materialized;
             return materialized;
         }
@@ -181,7 +213,7 @@ public sealed class MessageConsumeContext
             causationId,
             traceParent,
             traceState,
-            () => DecodeHeaders(headers));
+            headers);
     }
 
     private static Dictionary<string, string?> DecodeHeaders(

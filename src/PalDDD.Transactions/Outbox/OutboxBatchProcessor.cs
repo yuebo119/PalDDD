@@ -66,6 +66,13 @@ public sealed class OutboxBatchProcessor
         _scopeFactory = scopeFactory;
     }
 
+    /// <summary>
+    /// 最近一次 <see cref="ProcessBatchAsync"/>/<see cref="ProcessBatchWithBacklogAsync"/> 实际租到的
+    /// 消息数（2026-10-22 性能轮）。<see cref="OutboxProcessor"/> 用它区分「信号唤醒但无消息」
+    /// （写入方事务未提交，需要短间隔自愈重试）与「正常空批」。
+    /// </summary>
+    internal int LastLeasedCount { get; private set; }
+
     /// <summary>处理一个已租约的批次。</summary>
     public async ValueTask ProcessBatchAsync(CancellationToken ct)
         => await ProcessBatchCoreAsync(ct).ConfigureAwait(false);
@@ -109,6 +116,7 @@ public sealed class OutboxBatchProcessor
             throw;
         }
 
+        LastLeasedCount = messages.Count;
         using var activity = PalActivitySource.StartOutboxProcess(messages.Count);
 
         // C1（perf-opt-sweep）：并行度 >1 时按分区交由 per-worker scope 并行处理（每

@@ -82,6 +82,9 @@ public static class ServiceCollectionExtensions
                     options.BatchMarkFlushInterval <= TimeSpan.FromTicks(options.LeaseDuration.Ticks / 3),
                 "Outbox BatchMarkFlushInterval must be at most one third of LeaseDuration.")
             .ValidateOnStart();
+        // 2026-10-22 性能轮：进程内唤醒信号（写入方落库后通知处理循环立即续批）。
+        // TryAddSingleton：允许宿主替换为自己的实现（如跨进程信号桥）。
+        services.TryAddSingleton<IOutboxWakeUpSignal, OutboxWakeUpSignal>();
         services.TryAddScoped<OutboxBatchProcessor>();
         services.AddHostedService<OutboxProcessor>();
         return services;

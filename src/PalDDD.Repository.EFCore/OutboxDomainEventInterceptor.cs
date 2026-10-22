@@ -139,6 +139,34 @@ public sealed class OutboxDomainEventInterceptor : SaveChangesInterceptor
     [Obsolete("PendingEvents is diagnostic-only and will be removed in v5.0.0. Use PendingEventsCore internally or query the outbox store.")]
     public IReadOnlyList<Core.DomainEvent> PendingEvents => PendingEventsCore;
 
+    /// <summary>
+    /// 出站唤醒信号（2026-10-22 性能轮）——DI 构造时从应用容器延迟解析一次；手动构造
+    /// （显式 store 形态）时为 null。EF 栈的写入发生在 SaveChanges 内，因此通知点选在
+    /// 「SaveChanges 成功」之后（<see cref="SavedChanges"/>/<see cref="SavedChangesAsync"/>），
+    /// 覆盖跟踪添加与立即写两条路径。
+    /// </summary>
+    private Transactions.IOutboxWakeUpSignal? _wakeUpSignal;
+    private bool _wakeUpSignalResolved;
+
+    /// <summary>SaveChanges 成功且本轮写入了 Outbox 行时通知处理循环。</summary>
+    private void NotifyOutboxWakeUp(Microsoft.EntityFrameworkCore.DbContext? context)
+    {
+        if (_services is null || context is null)
+            return;
+        // 延迟解析一次（Signal 是单例；并发首用重复解析无害，赋值原子）。
+        if (!_wakeUpSignalResolved)
+        {
+            _wakeUpSignal = _services.GetService<Transactions.IOutboxWakeUpSignal>();
+            _wakeUpSignalResolved = true;
+        }
+        if (_wakeUpSignal is null)
+            return;
+        // 只在本轮确实注入过 outbox 行时通知：普通 SaveChanges 不产生唤醒噪声。
+        if (!s_states.TryGetValue(context, out var state) || state.InjectedOutboxIds.Count == 0)
+            return;
+        _wakeUpSignal.Notify();
+    }
+
     /// <summary>内部诊断读取（公开属性待移除，测试经 InternalsVisibleTo 访问）。</summary>
     internal IReadOnlyList<Core.DomainEvent> PendingEventsCore
         => _lastContext is { } context
@@ -196,6 +224,8 @@ public sealed class OutboxDomainEventInterceptor : SaveChangesInterceptor
     {
         ArgumentNullException.ThrowIfNull(eventData);
 
+        // 2026-10-22 性能轮：先通知（CompleteSave 会清空本轮暂存状态），再清理。
+        NotifyOutboxWakeUp(eventData.Context);
         CompleteSave(eventData.Context);
         return await base.SavedChangesAsync(eventData, result, cancellationToken).ConfigureAwait(false);
     }
@@ -206,6 +236,7 @@ public sealed class OutboxDomainEventInterceptor : SaveChangesInterceptor
     {
         ArgumentNullException.ThrowIfNull(eventData);
 
+        NotifyOutboxWakeUp(eventData.Context);
         CompleteSave(eventData.Context);
         return base.SavedChanges(eventData, result);
     }

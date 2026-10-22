@@ -353,6 +353,7 @@ EF Core 的 Native AOT / precompiled query 支持仍有明显限制，且 provid
 ### Outbox 发布流程
 
 Outbox 确保"事件持久化 → 消息发布"的 at-least-once 语义。消息保存与业务数据在同一事务中，异步发布。
+写入方落库后经进程内唤醒信号（`IOutboxWakeUpSignal`）通知发布器立即续批，`PollInterval` 仅作兜底与跨实例写入的发现节奏。
 
 ```mermaid
 sequenceDiagram
@@ -365,7 +366,7 @@ sequenceDiagram
     DB-->>App: COMMIT ✓
     App-->>App: 返回响应（不等发布完成）
 
-    loop 定期轮询
+    loop 写入唤醒或轮询兜底
         OP->>DB: ② SELECT Pending (next_attempt_at ≤ now)
         DB-->>OP: 待发布消息列表
         OP->>DB: ③ UPDATE locked_by/locked_until (原子租约)
@@ -390,7 +391,7 @@ sequenceDiagram
     participant Handler as IEventHandler
 
     Broker->>IP: ① 消息到达
-    IP->>DB: ② INSERT OR IGNORE (consumer,message_id) — 原子幂等
+    IP->>DB: ② UPSERT 认领 (consumer,message_id) — 原子幂等（单语句）
     alt 首次处理 (INSERT 成功)
         IP->>Handler: ③ HandleAsync(message)
         alt 处理成功
