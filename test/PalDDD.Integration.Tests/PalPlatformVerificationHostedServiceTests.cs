@@ -40,6 +40,24 @@ public sealed partial class PalPlatformVerificationHostedServiceTests
     }
 
     [Test]
+    public async Task StartAsync_WhenCatalogNotRegistered_ThrowsActionableMessage()
+    {
+        // R13 F24：catalog 缺失时原实现在解析 hosted service 阶段抛 DI 通用
+        // "Unable to resolve service for type IMessageCatalog"，不点名注册入口；
+        // 修复后 hosted service 可构造，StartAsync 抛可行动异常。
+        var services = new ServiceCollection();
+        services.AddPalMessageContractVerification();
+        await using var provider = services.BuildServiceProvider();
+
+        var hosted = provider.GetServices<IHostedService>().Single();
+        var exception = await Assert.That(async () => await hosted.StartAsync(CancellationToken.None))
+            .Throws<InvalidOperationException>();
+
+        await Assert.That(exception!.Message).Contains("IMessageCatalog");
+        await Assert.That(exception!.Message).Contains("AddPalJsonSerialization");
+    }
+
+    [Test]
     public async Task StartAsync_WhenMessageContractManifestIsInvalid_FailsStartupWithAggregatedErrors(CancellationToken cancellationToken)
     {
         var services = new ServiceCollection();
