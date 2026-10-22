@@ -119,9 +119,11 @@ public static class MySqlServiceCollectionExtensions
             ApplySessionOptimization(dataSource);
         }
 
-        // 注册为 Singleton — MySqlDataSource 内部管理连接池
-        services.AddSingleton(dataSource);
-        services.AddSingleton<System.Data.Common.DbDataSource>(dataSource);
+        // 注册为 Singleton — MySqlDataSource 内部管理连接池。
+        // R13 F15：必须走工厂注册——MS.DI 只释放「容器自己创建」的实例，
+        // AddSingleton(instance) 在宿主关闭时 Dispose 次数为 0，连接池留到进程退出。
+        services.AddSingleton(_ => dataSource);
+        services.AddSingleton<System.Data.Common.DbDataSource>(sp => sp.GetRequiredService<MySqlDataSource>());
 
         return services;
     }
