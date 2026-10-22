@@ -96,8 +96,9 @@ R12 验证：全量 16 项目 **1907 用例，1827 通过 / 80 跳过 / 0 失败
 | OPT-317 | OBSERVABILITY | `OutboxBatchProcessor.cs:583-608` | 批量标记 affected < 批大小时丢弃返回值：未命中行仍 Pending 并持过期租约，重租重发而监控全绿 | fixed（`05afb29`） | E1 测试：修前无任何告警行，修后 EventId 告警含 Affected/PendingCount | R13 F16（P2，候选 S6S7-01） | `OutboxBatchMarkTests.BatchMark_PartialFencingRejection_EmitsWarning` | R13 | store 契约改为返回逐行结果以精确定位未命中行 |
 | OPT-318 | ROBUSTNESS | `PeriodicBackgroundProcessor.cs:94-107` | PollInterval > Task.Delay 计时器上限（约 49.7 天）时抛 AOOR，位于仅 catch OCE 的 try 外 → ExecuteTask fault → .NET 6+ StopHost 停掉整个宿主 | fixed（`39710b6`） | E1 测试：PollInterval=60 天，修前 ExecuteTask fault，修后 300ms 内仍运行 | R13 F17（P2，候选 S6S7-11） | `PeriodicBackgroundProcessorTests.PollIntervalBeyondTimerLimit_DoesNotFaultTheService` | R13 | Task.Delay 放宽上限或选项增加启动期校验 |
 | OPT-319 | CORRECTNESS | `EndpointExtensions.cs:216-226,272-280`；`DetachedStreamEndpoints.cs:75,116,227` | 流端点 keepAlive 校验两处残缺：MapStreamQuery 缺 1ms 下界（0.5ms → Task.Delay 0 → 心跳紧循环）；断线续跑三端点缺口径上界（60 天被静默钳到 24.8 天） | fixed（`884503d`） | E1 测试：修前两处均不抛，修后 ArgumentOutOfRangeException | R13 F18（P2/P3，候选 S3S10-02/10） | `StreamQueryEndpointTests.MapStreamQuery_KeepAliveInterval_ZeroOrNegative_Throws`；`DetachedStreamTests.MapDetachedStreamQuery_InvalidKeepAlive_ThrowsAtMapTime` | R13 | Task.Delay 下界语义变化或断线续跑移除 Clamp |
+| OPT-320 | CONTRACT | `DapperInboxStore.cs:408-435`；`InboxStore.cs:60-70` | 批量标记按 ConsumerName 静默过滤异消费者元素：被过滤消息停留 Processing 至租约到期后重处理，返回值只少不报 | fixed（`93e7f9e`） | E1 测试：修前不抛（静默跳过），修后 ArgumentException 点名消息与消费者 | R13 F19（P2，候选 S4S5-09） | `DapperStoreTests.Inbox_BatchMark_MixedConsumerNames_ThrowsInsteadOfSilentSkip` | R13 | 消息模型改为允许跨消费者批（需新键语义） |
 
-R13 验证：全量 16 项目 **1925 用例，1845 通过 / 80 跳过 / 0 失败**（+18 测试）；
+R13 验证：全量 16 项目 **1926 用例，1846 通过 / 80 跳过 / 0 失败**（+19 测试）；
 `gate-audit` 42/42；`count-audit` 16 项/80 处；`doc-consistency`/`secret-scan`/`verify-conventions`/`encoding-gate` 全绿；
 `AotSample` 与 `DapperAotProbe`（PG/MySQL，JIT + `PublishAot`）通过。未推送、未打 tag。
 
