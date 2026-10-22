@@ -114,6 +114,21 @@
 | 重录日期 | 对象 | 旧值 → 新值 | 来源 | 理由 |
 |:--:|------|:--:|------|------|
 | 2026-09-25 | `PalDDD.Integration.Tests` | 0.5284 → **0.3815** | CI run `36128788289` coverage job（2026-09-25，379 项 0 失败 0 跳过） | 快照宿主迁入改变插桩装配集，旧基线与当前不可比（下详） |
+| 2026-10-22 | **全表 15 个模块** | 见 `coverage-baseline.json`（例：Hosting 0.5161 → 0.3101、Transactions 0.4871 → 0.6561） | CI run `39791401010` coverage job（2026-10-22，16 项目 1954 用例全绿；全局 line-rate 0.7569 > 阈值 0.70） | 基线停在 2026-09-25，其后 126 个提交改变各项目插桩装配集（流式读/断线续跑/健康自检/回放/保留清理新增文件与测试重分布），15 模块双向大幅摆动 ⇒ 口径不可比（下详） |
+
+### 2026-10-22 全表重录：126 个提交改变插桩装配集
+
+- **重录理由**：「同一测试集插桩同一装配集」在 2026-09-25 之后不再成立。此次 CI 首跑（积压
+  126 个提交，上次成功 CI 为 2026-10-19）显示 15 个模块同时出现**双向**大幅摆动：
+  `Transactions` +16.90pp、`DependencyInjection` +9.48pp、`Integration` +8.71pp、
+  `Compression` +5.60pp、`Projections.EventLog` +3.71pp 上升，而 `Hosting` −20.60pp、
+  `Analyzers` −12.95pp、`Core` −7.63pp、`EventLog` −6.95pp、`Messaging.Integration` −6.01pp、
+  `CQRS` −5.65pp、`Serialization` −5.10pp 下降。存量代码不会同时大幅升降，这组形态是插桩
+  分母与测试归属变化的签名（例如 ADR-030/031 新增 `EndpointExtensions`/`StreamRunRegistry`/
+  `DetachedStreamEndpoints` 约 2.3k 行进入 Hosting 分母，测试未同比增加；R13 起若干测试在
+  Integration/Core 之间迁移）。全局 line-rate 0.7569 仍在 0.70 阈值之上。
+- **处置**：按上表整表重录（棘轮从本次实测值继续），并保留本条记录以便追溯；下次出现单模块
+  降幅 >5pp 时按同样口径先判「可比性」再决定补测还是重录。
 
 ### 2026-09-25 `PalDDD.Integration.Tests`：快照宿主迁入致插桩装配集变化
 
