@@ -61,7 +61,7 @@ public interface IValueObject
 /// </code>
 /// </para>
 /// </remarks>
-public readonly record struct ValueObject<T> : IValueObject, IUtf8SpanFormattable
+public readonly record struct ValueObject<T> : IValueObject, IFormattable, IUtf8SpanFormattable
     where T : struct, INumber<T>, IMinMaxValue<T>
 {
     /// <summary>值对象中包装的原始数值</summary>
