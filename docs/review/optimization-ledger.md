@@ -94,8 +94,9 @@ R12 验证：全量 16 项目 **1907 用例，1827 通过 / 80 跳过 / 0 失败
 | OPT-315 | CORRECTNESS | `DapperProjectionCheckpointStore.cs:330-344`；`PalOrmProjectionCheckpointStore.cs:222-236` | 续读聚合 catch 全部 DbException，连接中断/超时被误判为「无检查点」并触发全量回放（EF 已按 22P02/22007 收窄） | fixed（`1128339`） | E3 静态对照 + 谓词单测（22P02/22007 true、08006 false） | R13 F14（P2，候选 S4S5-02） | `DapperStoreTests.ResumePositionCastFailure_OnlyPgCastSqlStatesAreTreatedAsDirtyData` | R13 | 新增 provider 的 CAST 错误码需加入集合 |
 | OPT-316 | LEAK | `MySqlServiceCollectionExtensions.cs:122-126`；`MySqlMultiHost.cs`（三处） | MySqlDataSource 实例注册（AddSingleton(instance)）不被 MS.DI 释放，宿主关闭后连接池留到进程退出 | fixed（`dde3ebf`） | E1 测试：修前 Dispose 后 CreateConnection 不抛，修后 ObjectDisposedException | R13 F15（P2，候选 S4S5-06） | `DapperDiRegistrationTests.AddPalMySqlDataSource_ContainerDispose_ReleasesDataSource` | R13 | 连接池改为进程级长期驻留的显式语义 |
 | OPT-317 | OBSERVABILITY | `OutboxBatchProcessor.cs:583-608` | 批量标记 affected < 批大小时丢弃返回值：未命中行仍 Pending 并持过期租约，重租重发而监控全绿 | fixed（`05afb29`） | E1 测试：修前无任何告警行，修后 EventId 告警含 Affected/PendingCount | R13 F16（P2，候选 S6S7-01） | `OutboxBatchMarkTests.BatchMark_PartialFencingRejection_EmitsWarning` | R13 | store 契约改为返回逐行结果以精确定位未命中行 |
+| OPT-318 | ROBUSTNESS | `PeriodicBackgroundProcessor.cs:94-107` | PollInterval > Task.Delay 计时器上限（约 49.7 天）时抛 AOOR，位于仅 catch OCE 的 try 外 → ExecuteTask fault → .NET 6+ StopHost 停掉整个宿主 | fixed（`39710b6`） | E1 测试：PollInterval=60 天，修前 ExecuteTask fault，修后 300ms 内仍运行 | R13 F17（P2，候选 S6S7-11） | `PeriodicBackgroundProcessorTests.PollIntervalBeyondTimerLimit_DoesNotFaultTheService` | R13 | Task.Delay 放宽上限或选项增加启动期校验 |
 
-R13 验证：全量 16 项目 **1923 用例，1843 通过 / 80 跳过 / 0 失败**（+16 测试）；
+R13 验证：全量 16 项目 **1924 用例，1844 通过 / 80 跳过 / 0 失败**（+17 测试）；
 `gate-audit` 42/42；`count-audit` 16 项/80 处；`doc-consistency`/`secret-scan`/`verify-conventions`/`encoding-gate` 全绿；
 `AotSample` 与 `DapperAotProbe`（PG/MySQL，JIT + `PublishAot`）通过。未推送、未打 tag。
 
