@@ -69,8 +69,8 @@ public sealed class TestGateGuardTests
     /// </summary>
     private static readonly string[] s_knownDropTableHits =
     [
-        "test/PalDDD.Integration.Tests/DapperBulkCopyTests.cs:9",
-        "test/PalDDD.Integration.Tests/DapperBulkCopyTests.cs:47",
+        "test/PalDDD.Integration.Tests/DapperBulkCopyTests.cs:11",
+        "test/PalDDD.Integration.Tests/DapperBulkCopyTests.cs:49",
         "test/PalDDD.Integration.Tests/PostgreSqlShardingTests.cs:42",
         "test/PalDDD.Integration.Tests/PostgreSqlSoftDeleteTests.cs:36",
         "test/PalDDD.Integration.Tests/PostgreSqlSoftDeleteTests.cs:41",
