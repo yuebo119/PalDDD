@@ -546,8 +546,83 @@ public sealed class InboxEfCoreTests
             .UseSqlite(connection)
             .Options;
 
+    [Test]
+    public async Task InMemory_TryStartThenMarkProcessed_PersistsTerminalState(CancellationToken cancellationToken)
+    {
+        // R12 H2 回归锁：EF InMemory provider 不支持 ExecuteUpdate，原 MarkProcessed
+        // 直接抛 InvalidOperationException，行永远停留 Processing。非关系型分支改
+        // 跟踪实体 SaveChanges。
+        var options = new DbContextOptionsBuilder<TestInboxDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture))
+            .Options;
+        await using var db = new TestInboxDbContext(options);
+        var store = (IInboxStore)db;
+        var now = DateTimeOffset.Parse("2026-05-31T00:00:00Z", CultureInfo.InvariantCulture);
+
+        var record = await store.TryStartProcessingAsync(
+            "orders", "message-inmemory-1", now, TimeSpan.FromMinutes(5), cancellationToken);
+        await store.MarkProcessedAsync(record!, now.AddSeconds(1), cancellationToken);
+
+        db.ChangeTracker.Clear();
+        var loaded = await db.InboxMessages.SingleAsync(
+            x => x.ConsumerName == "orders" && x.MessageId == "message-inmemory-1", cancellationToken);
+        await Assert.That(loaded.Status).IsEqualTo(InboxStatus.Processed);
+        await Assert.That(loaded.ProcessedAt).IsEqualTo(now.AddSeconds(1));
+    }
+
+    [Test]
+    public async Task InMemory_ExpiredLeaseTakeover_IncrementsAttempts(CancellationToken cancellationToken)
+    {
+        // R12 H2：已有行（预 SELECT 路径）也必须走非关系型抢占分支，而不是 ExecuteUpdate。
+        var options = new DbContextOptionsBuilder<TestInboxDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture))
+            .Options;
+        await using var db = new TestInboxDbContext(options);
+        var store = (IInboxStore)db;
+        var now = DateTimeOffset.Parse("2026-05-31T00:00:00Z", CultureInfo.InvariantCulture);
+
+        var first = await store.TryStartProcessingAsync(
+            "orders", "message-inmemory-2", now, TimeSpan.FromSeconds(1), cancellationToken);
+        // 同一上下文会复用跟踪实例；清空以让第二次抢占基于独立的旧令牌快照。
+        db.ChangeTracker.Clear();
+        var second = await store.TryStartProcessingAsync(
+            "orders", "message-inmemory-2", now.AddSeconds(2), TimeSpan.FromSeconds(1), cancellationToken);
+
+        await Assert.That(first!.Attempts).IsEqualTo(1);
+        await Assert.That(second!.Attempts).IsEqualTo(2);
+        await Assert.That(second.Status).IsEqualTo(InboxStatus.Processing);
+    }
+
+    [Test]
+    public async Task InMemory_TryStartCancelledMidSave_LeavesNoTrackedGhostRow(CancellationToken cancellationToken)
+    {
+        // R12 C-05 回归锁：认领 SaveChanges 抛非 DbUpdateException（OCE 最常见）时，
+        // Added 实体必须 Detach——原实现只处理 DbUpdateException，幽灵行会在同 scope
+        // 下一次 SaveChanges 时被插入。
+        var options = new DbContextOptionsBuilder<OceOnSaveInboxDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture))
+            .Options;
+        await using var db = new OceOnSaveInboxDbContext(options);
+        var store = (IInboxStore)db;
+
+        await Assert.That(async () => await store.TryStartProcessingAsync(
+                "orders", "message-ghost", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5), cancellationToken))
+            .Throws<OperationCanceledException>();
+
+        await Assert.That(db.ChangeTracker.Entries<InboxMessage>().Count()).IsEqualTo(0);
+    }
+
     private sealed class TestInboxDbContext(DbContextOptions<TestInboxDbContext> options)
         : InboxDbContext(options);
+
+    /// <summary>R12 C-05：认领保存抛 OCE 的注入上下文。</summary>
+    private sealed class OceOnSaveInboxDbContext(DbContextOptions<OceOnSaveInboxDbContext> options)
+        : InboxDbContext(options)
+    {
+        public override Task<int> SaveChangesAsync(
+            bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+            => throw new OperationCanceledException("simulated cancellation during claim save");
+    }
 
     /// <summary>回查失败注入状态——SaveChangesAsync 冲突抛出后置位，使后续 Reader 命令（回查）失败。</summary>
     private sealed class RequeryFailureState
