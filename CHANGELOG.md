@@ -14,6 +14,12 @@
 
 ### Added
 
+- **2026-10-22 R13 F20/F21：基础库两处契约修复（NullPalLogger 结构化重载 + 演化启动校验哨兵）**：
+  ①**问题**：`NullPalLogger<T>` 未覆写 `IPalLogger<T>` 的 EventId 结构化重载，接口默认实现走命名槽位→`string.Format`：参数少于槽位时抛 `FormatException`（本应最安全的空日志器转身成故障源），参数匹配时也白付正则替换与分配。`MessageEvolutionPipeline.ValidatePath` 缺 `Upgrade` 的 source/target ClrType 哨兵：同名同版本异 ClrType 的 descriptor 通过启动校验，首次消费才在 `Convert` 强转处炸（结构兼容时甚至静默错误转换）。
+  ②**修法**：NullPalLogger 显式覆写四个结构化重载为空实现（不格式化、不分配、不抛）；ValidatePath 补 source 首步与 target 末步两处 ClrType 哨兵，与运行期同口径。
+  ③**公共 API +4 方法**（NullPalLogger 的四个重载）；公共 API 快照同步，无签名破坏。
+  验证：新增 4 个锁定测试（修前 FormatException / ToString 被调用 / 两处均不抛）；全量 1930 用例 0 失败。
+
 - **2026-10-22 R13 F10：/health 授权/限流约定入口（新增公共 API `MapPalHealthChecksWithConventions`）**：
   ①**问题**：`MapPalHealthChecks` 返回 `IEndpointRouteBuilder`（历史契约），而类备注要求生产部署对 /health 链 `RequireAuthorization()` / `RequireRateLimiting()`——返回值无法链任何端点约定（CS1061），按备注配置只能绕过扩展自行 `MapHealthChecks`，丢失 PalDDD 的响应体格式。
   ②**修法**：新增 `MapPalHealthChecksWithConventions(...)`，返回 `IEndpointConventionBuilder`：`app.MapPalHealthChecksWithConventions().RequireAuthorization();`。原方法签名与行为逐字不变（未加可选参数：那会改变 CLR 签名并使 3/4 参重载调用二义）。
