@@ -584,15 +584,23 @@ public sealed class OutboxBatchProcessor
     /// R4/P0-2（ADR-027）：批量标记冲刷——成功返回 true（调用方 processed += 批大小）；
     /// 失败（DB 故障等）镜像逐条路径 MarkProcessed 抛出的处置（逐条退避释放重投）后返回
     /// false（调用方 retried += 批大小）。部分 fencing 拒绝（affected &lt; 批大小，无异常）
-    /// 不视为失败——processed 计数沿用逐条路径的漂移口径（R2 独立可见）。调用返回时
-    /// <paramref name="pending"/> 已清空。
+    /// 不视为失败——processed 计数沿用逐条路径的漂移口径（R2 独立可见）；R13 F16 起
+    /// 补一条带 EventId 的 Warning（此前零信号）。调用返回时 <paramref name="pending"/> 已清空。
     /// </summary>
     private async ValueTask<bool> TryFlushBatchMarkAsync(
         IBatchMarkOutboxStore batchStore, List<OutboxMessage> pending, DateTimeOffset now, OutboxOptions options, CancellationToken ct)
     {
         try
         {
-            await batchStore.MarkProcessedBatchAsync(pending, now, ct).ConfigureAwait(false);
+            var affected = await batchStore.MarkProcessedBatchAsync(pending, now, ct).ConfigureAwait(false);
+            if (affected < pending.Count)
+            {
+                // R13 F16：未命中行仍 Pending 且持过期租约，到期会被重租重发（重复投递）——
+                // 按 EventId 告警可见（对齐 Inbox 批量标记 1004 的口径）。
+                _logger.Warning(PalLogEventIds.OutboxBatchMarkFailed,
+                    "Outbox: batch mark partially rejected ({Affected}/{PendingCount}) — unpublished leases will be re-dispatched after expiry",
+                    affected, pending.Count);
+            }
             pending.Clear();
             return true;
         }

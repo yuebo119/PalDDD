@@ -136,6 +136,60 @@ public sealed class OutboxBatchMarkProcessorTests
         await Assert.That(store.ProcessedOrder.Count).IsEqualTo(5);
     }
 
+    [Test]
+    public async Task BatchMark_PartialFencingRejection_EmitsWarning()
+    {
+        // R13 F16：store 按契约返回 affected < 批大小（部分 fencing 拒绝）时，处理器
+        // 丢弃返回值——未命中行仍 Pending 并持过期租约，到期重租重发（重复投递），
+        // 全程零日志零指标。修复后至少一条带 EventId 的 Warning。
+        var builder = new MessageCatalogBuilder();
+        builder.Add<BatchMarkMessage>(BatchMarkJsonContext.Default.BatchMarkMessage, "test.batchmark.v1");
+        var catalog = builder.Build();
+        var serializer = new NonNullSerializer();
+        var store = new RecordingBatchStore(4, partialBatchReject: true);
+        var logger = new CaptureLogger();
+        var processor = new OutboxBatchProcessor(
+            store, new NullBroker(-1, serializer, catalog), serializer, catalog,
+            new FixedOptionsMonitor<OutboxOptions>(new OutboxOptions
+            {
+                BatchSize = 4,
+                BatchMarkThreshold = 2,
+                BatchMarkFlushInterval = TimeSpan.FromSeconds(1),
+                DeliveryMode = OutboxDeliveryMode.Serial,
+                MaxRetryCount = 3,
+            }),
+            logger);
+
+        await processor.ProcessBatchAsync(CancellationToken.None);
+
+        await Assert.That(logger.Rows.Any(r =>
+            r.EventId == PalLogEventIds.OutboxBatchMarkFailed
+            && r.Message.Contains("partially", StringComparison.Ordinal))).IsTrue();
+    }
+
+    private sealed class CaptureLogger : IPalLogger<OutboxBatchProcessor>
+    {
+        public List<(int EventId, string Message)> Rows { get; } = [];
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel level) => true;
+
+        public void Debug(string m) => Rows.Add((0, m));
+
+        public void Information(string m) => Rows.Add((0, m));
+
+        public void Warning(string m) => Rows.Add((0, m));
+
+        public void Error(Exception e, string m) => Rows.Add((0, m));
+
+        public void Debug(Microsoft.Extensions.Logging.EventId id, string m, params object?[] a) => Rows.Add((id.Id, m));
+
+        public void Information(Microsoft.Extensions.Logging.EventId id, string m, params object?[] a) => Rows.Add((id.Id, m));
+
+        public void Warning(Microsoft.Extensions.Logging.EventId id, string m, params object?[] a) => Rows.Add((id.Id, m));
+
+        public void Error(Exception e, Microsoft.Extensions.Logging.EventId id, string m, params object?[] a) => Rows.Add((id.Id, m));
+    }
+
     private static async Task<(RecordingBatchStore Store, NullBroker Broker)> RunBatchAsync(
         int threshold, int messageCount, int failAtIndex = -1, int window = 1,
         OutboxDeliveryMode deliveryMode = OutboxDeliveryMode.Serial,
@@ -255,7 +309,7 @@ public sealed class OutboxBatchMarkProcessorTests
     }
 
     /// <summary>租约固定批 + 逐条/批量标记调用形态记录（IPalOutboxStore + IBatchMarkOutboxStore）。</summary>
-    private sealed class RecordingBatchStore(int messageCount) : IPalOutboxStore, IBatchMarkOutboxStore
+    private sealed class RecordingBatchStore(int messageCount, bool partialBatchReject = false) : IPalOutboxStore, IBatchMarkOutboxStore
     {
         public readonly List<PalUlid> LeaseOrder = [];
         public readonly List<PalUlid> ProcessedOrder = [];
@@ -294,9 +348,11 @@ public sealed class OutboxBatchMarkProcessorTests
         public ValueTask<int> MarkProcessedBatchAsync(IReadOnlyList<OutboxMessage> messages, DateTimeOffset processedAt, CancellationToken ct = default)
         {
             BatchCallSizes.Add(messages.Count);
-            foreach (var msg in messages)
-                ProcessedOrder.Add(msg.Id);
-            return ValueTask.FromResult(messages.Count);
+            // R13 F16：模拟 fencing 部分拒绝——部分行租约已过期/被重租，affected < 批大小
+            var affected = partialBatchReject ? messages.Count - 1 : messages.Count;
+            for (var i = 0; i < affected; i++)
+                ProcessedOrder.Add(messages[i].Id);
+            return ValueTask.FromResult(affected);
         }
 
         public ValueTask MarkDeadAsync(OutboxMessage message, string failureReason, DateTimeOffset deadAt, CancellationToken ct = default) => ValueTask.CompletedTask;
