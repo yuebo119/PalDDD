@@ -58,8 +58,14 @@ public static class FailureReason
         // 调用方难以定位误传负值的源头）。守卫前置于 null 检查：参数校验优先于
         // "null 原样返回"短路（null + 负值组合以契约违规报错，不静默放行）
         ArgumentOutOfRangeException.ThrowIfNegative(maxLength);
+        if (value is null) return value;
+        // R13 F4：U+0000 不是合法 text/utf8 内容（PG 抛 22021），而本条链路的职责
+        // 正是"让 error/last_error 写入永不失败"——不剥离会让 MarkFailed/MarkDead
+        // 本身失败、终态不落库，行滞留 Processing 后被重复执行。归一化前先清洗。
+        if (value.Contains('\0'))
+            value = value.Replace("\0", string.Empty, StringComparison.Ordinal);
         // 关系模式（> maxLength）右侧要求编译期常量，参数版须显式比较
-        if (value is null || value.Length <= maxLength) return value;
+        if (value.Length <= maxLength) return value;
         var truncated = value[..maxLength];
         // v8 评审：char 截断可能在代理对中间切断（超长含 emoji 的消息）——末位高代理回退一位，
         // 防孤立高代理入库（UTF-16 代理对完整性）
