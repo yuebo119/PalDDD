@@ -222,10 +222,14 @@ interface PalDDD.Core.Logging.IPalLogger<T>
   method System.Void Warning(System.String message)
 class PalDDD.Core.Logging.NullPalLogger<T>
   field static readonly PalDDD.Core.Logging.NullPalLogger<T> Instance
+  method System.Void Debug(Microsoft.Extensions.Logging.EventId eventId, System.String message, System.Object[] args)
   method System.Void Debug(System.String message)
+  method System.Void Error(System.Exception ex, Microsoft.Extensions.Logging.EventId eventId, System.String message, System.Object[] args)
   method System.Void Error(System.Exception ex, System.String message)
+  method System.Void Information(Microsoft.Extensions.Logging.EventId eventId, System.String message, System.Object[] args)
   method System.Void Information(System.String message)
   method System.Boolean IsEnabled(Microsoft.Extensions.Logging.LogLevel level)
+  method System.Void Warning(Microsoft.Extensions.Logging.EventId eventId, System.String message, System.Object[] args)
   method System.Void Warning(System.String message)
 static class PalDDD.Core.Logging.PalLogEventIds
   field const System.Int32 InboxBatchProcessed = 1005
