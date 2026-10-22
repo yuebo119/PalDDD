@@ -430,7 +430,7 @@ static class PalDDD.Dapper.SqlTemplates
   field const System.String SagaById = SELECT * FROM saga_states WHERE saga_id=@id
   field const System.String SagaExists = SELECT COUNT(1) FROM saga_states WHERE saga_id=@id
   field const System.String SagaInsert = INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,next_check_at,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,@data,@nextCheckAt,@leasedBy,@leasedUntil)
-  field const System.String SagaInsertPG = INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,next_check_at,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,CAST(@data AS jsonb),@nextCheckAt,@leasedBy,@leasedUntil)
+  field const System.String SagaInsertPG = INSERT INTO saga_states(saga_id,current_state,status,created_at,completed_at,error,error_at,saga_data,next_check_at,leased_by,leased_until) VALUES(@id,@cs,@st,@ca,@completedAt,@err,@ea,CAST(@data AS jsonb),@nextCheckAt,@leasedBy,@leasedUntil) ON CONFLICT (saga_id) DO NOTHING RETURNING saga_id
   field const System.String SagaLeaseActive = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) ORDER BY (leased_until IS NULL) DESC, leased_until, created_at LIMIT @n)
   field const System.String SagaLeaseActiveDue = UPDATE saga_states SET leased_by=@owner, leased_until=@until, version=version+1 WHERE saga_id IN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND (next_check_at IS NULL OR next_check_at <= @now) ORDER BY created_at LIMIT @n)
   field const System.String SagaLeaseActiveDueMySql = UPDATE saga_states t JOIN (SELECT saga_id FROM saga_states WHERE status IN (0, 5) AND (leased_until IS NULL OR leased_until <= @now) AND (next_check_at IS NULL OR next_check_at <= @now) ORDER BY next_check_at, created_at LIMIT @n) AS sub ON t.saga_id = sub.saga_id SET t.leased_by=@owner, t.leased_until=@until, t.version=t.version+1
@@ -858,6 +858,7 @@ static class PalDDD.Hosting.AspNetCore.ExceptionMiddlewareExtensions
 static class PalDDD.Hosting.AspNetCore.HealthCheckExtensions
   method Microsoft.Extensions.DependencyInjection.IServiceCollection AddPalHealthChecks(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
   method Microsoft.AspNetCore.Routing.IEndpointRouteBuilder MapPalHealthChecks(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.TimeProvider timeProvider)
+  method Microsoft.AspNetCore.Builder.IEndpointConventionBuilder MapPalHealthChecksWithConventions(Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, System.String pattern, System.TimeProvider timeProvider)
 static class PalDDD.Hosting.AspNetCore.StreamResumeExtensions
   method System.String GetLastEventId(Microsoft.AspNetCore.Http.HttpContext context)
 class PalDDD.Hosting.AspNetCore.StreamRunCapacityExceededException

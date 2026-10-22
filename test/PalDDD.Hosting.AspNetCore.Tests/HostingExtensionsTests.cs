@@ -298,6 +298,26 @@ public sealed partial class EndpointExtensionsTests
         await Assert.That(body).Contains("Unsupported Media Type");
     }
 
+    [Test]
+    public async Task MapPalHealthChecks_ConfigureCallback_AppliesConvention()
+    {
+        // R13 F10：类备注要求生产部署对 /health 链 RequireAuthorization，但方法返回
+        // IEndpointRouteBuilder 无法链接约定——新增可选 configure 回调暴露真正的
+        // IEndpointConventionBuilder（非破坏：既有调用不受影响）。
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPalHealthChecks();
+        using var sp = services.BuildServiceProvider();
+        var endpoints = new TestEndpointRouteBuilder(sp);
+
+        endpoints.MapPalHealthChecksWithConventions().WithMetadata(new HealthMarkerMetadata());
+
+        var endpoint = endpoints.DataSources.SelectMany(ds => ds.Endpoints).OfType<RouteEndpoint>().Single();
+        await Assert.That(endpoint.Metadata.GetMetadata<HealthMarkerMetadata>()).IsNotNull();
+    }
+
+    private sealed class HealthMarkerMetadata;
+
     /// <summary>提取路由构建结果中唯一端点的请求委托（MapPost 注册的 lambda）；
     /// 编译期标注可空（未构建路由表），运行时由 MapPost 保证非空</summary>
     private static RequestDelegate GetRequestDelegate(IEndpointRouteBuilder endpoints)
@@ -329,9 +349,9 @@ public sealed partial class EndpointExtensionsTests
     }
 
     /// <summary>IEndpointRouteBuilder 最小实现——收集 DataSources 供提取注册的端点</summary>
-    private sealed class TestEndpointRouteBuilder : IEndpointRouteBuilder
+    private sealed class TestEndpointRouteBuilder(IServiceProvider? serviceProvider = null) : IEndpointRouteBuilder
     {
-        public IServiceProvider ServiceProvider { get; } = new ServiceCollection().BuildServiceProvider();
+        public IServiceProvider ServiceProvider { get; } = serviceProvider ?? new ServiceCollection().BuildServiceProvider();
 
         public ICollection<EndpointDataSource> DataSources { get; } = new List<EndpointDataSource>();
 

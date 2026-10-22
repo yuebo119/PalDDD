@@ -14,6 +14,12 @@
 
 ### Added
 
+- **2026-10-22 R13 F10：/health 授权/限流约定入口（新增公共 API `MapPalHealthChecksWithConventions`）**：
+  ①**问题**：`MapPalHealthChecks` 返回 `IEndpointRouteBuilder`（历史契约），而类备注要求生产部署对 /health 链 `RequireAuthorization()` / `RequireRateLimiting()`——返回值无法链任何端点约定（CS1061），按备注配置只能绕过扩展自行 `MapHealthChecks`，丢失 PalDDD 的响应体格式。
+  ②**修法**：新增 `MapPalHealthChecksWithConventions(...)`，返回 `IEndpointConventionBuilder`：`app.MapPalHealthChecksWithConventions().RequireAuthorization();`。原方法签名与行为逐字不变（未加可选参数：那会改变 CLR 签名并使 3/4 参重载调用二义）。
+  ③**公共 API +1 方法**（快照同步）；无签名破坏、无行为变更。
+  验证：新增 `MapPalHealthChecks_ConfigureCallback_AppliesConvention`（约定元数据落入端点）；Hosting 测试 13/13；公共 API 快照更新。
+
 - **2026-10-22 R12 C-02：投影检查点租约续期（新增公共 API `IProjectionLeaseRenewalStore`）**：
   ①**问题**：`ProjectionProcessor` 只在 handler 执行前取一次检查点租约；单个 handler 超过 `processingTimeout` 后租约到期，另一 worker 可重租同一位置并发投影（重复副作用）。
   ②**修法**：新增公共接口 `IProjectionLeaseRenewalStore.RenewLeaseAsync(checkpoint, now, processingTimeout, ct)`；InMemory / Dapper / PalORM / EF 四栈实现均以 `Revision` + Processing 状态为守卫，只更新租约/更新时间，不推进 Revision。处理器在 handler 执行期间按 `processingTimeout / 3` 心跳续租；handler 完成、失败或取消时停止。自定义 store 未实现该接口时保持原语义（无续租）。

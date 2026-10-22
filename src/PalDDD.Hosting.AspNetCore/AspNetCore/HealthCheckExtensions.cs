@@ -51,18 +51,39 @@ public static class HealthCheckExtensions
     /// <param name="endpoints">端点路由构建器</param>
     /// <param name="pattern">健康检查路径，默认 /health</param>
     /// <param name="timeProvider">可选时间源，用于生成响应时间戳</param>
+    /// <remarks>需要链 <c>RequireAuthorization()</c>/<c>RequireRateLimiting()</c> 时改用
+    /// <see cref="MapPalHealthChecksWithConventions"/>（R13 F10：本方法返回
+    /// <see cref="IEndpointRouteBuilder"/>，无法链端点约定）。</remarks>
     public static IEndpointRouteBuilder MapPalHealthChecks(
+        this IEndpointRouteBuilder endpoints, string pattern = "/health", TimeProvider? timeProvider = null)
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        MapPalHealthChecksWithConventions(endpoints, pattern, timeProvider);
+        return endpoints;
+    }
+
+    /// <summary>
+    /// 映射 PalDDD 健康检查端点并返回端点约定构建器（R13 F10）。
+    /// </summary>
+    /// <remarks>
+    /// /health 输出组件健康状态与依赖拓扑，生产部署通常需要授权或限流：
+    /// <c>app.MapPalHealthChecksWithConventions().RequireAuthorization();</c><br/>
+    /// 单独新增方法而非给 <see cref="MapPalHealthChecks"/> 加可选参数：后者改变 CLR 签名
+    /// （既有二进制 MissingMethodException），且与 3 参重载产生调用二义性。
+    /// </remarks>
+    /// <param name="endpoints">端点路由构建器</param>
+    /// <param name="pattern">健康检查路径，默认 /health</param>
+    /// <param name="timeProvider">可选时间源，用于生成响应时间戳</param>
+    public static IEndpointConventionBuilder MapPalHealthChecksWithConventions(
         this IEndpointRouteBuilder endpoints, string pattern = "/health", TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(endpoints);
         var clock = timeProvider ?? TimeProvider.System;
 
-        endpoints.MapHealthChecks(pattern, new HealthCheckOptions
+        return endpoints.MapHealthChecks(pattern, new HealthCheckOptions
         {
             ResponseWriter = (context, report) => WriteHealthResponseAsync(context, report, clock)
         });
-
-        return endpoints;
     }
 
     /// <summary>
