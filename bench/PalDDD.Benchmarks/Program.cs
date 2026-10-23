@@ -293,8 +293,8 @@ static async Task<int> RunLaneAsync(
         "verify-persist" => await PersistenceVerifyRunner.RunAsync().ConfigureAwait(false),
         "qps" => QpsHarness.Run(),
         "compare" => RunCompare(args),
-        "persist-pg" => await RunRemoteDialectAsync(isPostgreSql: true, LaneConfig(lane, strict)).ConfigureAwait(false),
-        "persist-mysql" => await RunRemoteDialectAsync(isPostgreSql: false, LaneConfig(lane, strict)).ConfigureAwait(false),
+        "persist-pg" => await RunRemoteDialectAsync(isPostgreSql: true, lane, strict).ConfigureAwait(false),
+        "persist-mysql" => await RunRemoteDialectAsync(isPostgreSql: false, lane, strict).ConfigureAwait(false),
         "delivery-pg" => await RunRemoteDeliveryAsync(isPostgreSql: true).ConfigureAwait(false),
         "delivery-mysql" => await RunRemoteDeliveryAsync(isPostgreSql: false).ConfigureAwait(false),
         "remote-smoke-pg" => await RunRemoteSmokeAsync(isPostgreSql: true, lane, runners).ConfigureAwait(false),
@@ -328,9 +328,6 @@ static int RunClasses(
     }
     return 0;
 }
-
-static IConfig LaneConfig(LaneDef lane, bool strict)
-    => ModeConfig(strict && lane.Name != "coverage" ? "strict" : lane.Mode);
 
 /// <summary>
 /// 采样档到 BDN ManualConfig 的单点映射。alloc 的计时不作引用；auto/fixed/fixed-short/
@@ -404,7 +401,7 @@ static void PrintRegistryLanes(BenchRegistry registry)
 
 // ══════════════ 远程车道 ══════════════
 
-static async Task<int> RunRemoteDialectAsync(bool isPostgreSql, IConfig config)
+static async Task<int> RunRemoteDialectAsync(bool isPostgreSql, LaneDef lane, bool strict)
 {
     RemoteDialectBenchSession session;
     try
@@ -420,21 +417,24 @@ static async Task<int> RunRemoteDialectAsync(bool isPostgreSql, IConfig config)
         return 2;
     }
 
+    IConfig For(string className) => ModeConfig(
+        strict ? "strict" : lane.Overrides.GetValueOrDefault(className) ?? lane.Mode);
+
     await using (session)
     {
         RemoteDialectBenchState.Connection = session.Connection;
         RemoteDialectBenchState.ConnectionString = session.ConnectionString;
         RemoteDialectBenchState.DbType = session.DbType;
-        BenchmarkRunner.Run<DapperRemoteOutboxThroughputBenchmarks>(config);
-        BenchmarkRunner.Run<DapperRemoteOutboxConcurrencyBenchmarks>(config);
-        BenchmarkRunner.Run<PalOrmRemoteOutboxBenchmarks>(config);
+        BenchmarkRunner.Run<DapperRemoteOutboxThroughputBenchmarks>(For("DapperRemoteOutboxThroughputBenchmarks"));
+        BenchmarkRunner.Run<DapperRemoteOutboxConcurrencyBenchmarks>(For("DapperRemoteOutboxConcurrencyBenchmarks"));
+        BenchmarkRunner.Run<PalOrmRemoteOutboxBenchmarks>(For("PalOrmRemoteOutboxBenchmarks"));
         // 方言专属车道：PG 跑方言特性（Pipeline/Router/LISTEN-NOTIFY）；MySQL 跑 EF 栈
         // 租约 SQL 形态（SKIP LOCKED 派生表互斥验证——EF 栈级车道待上游 Provider 出
         // EF 11 rc 配套版，2026-10-09 实证见类头注）
         if (isPostgreSql)
-            BenchmarkRunner.Run<PgDialectFeaturesBenchmarks>(config);
+            BenchmarkRunner.Run<PgDialectFeaturesBenchmarks>(For("PgDialectFeaturesBenchmarks"));
         else
-            BenchmarkRunner.Run<MySqlSkipLockedShapeBenchmarks>(config);
+            BenchmarkRunner.Run<MySqlSkipLockedShapeBenchmarks>(For("MySqlSkipLockedShapeBenchmarks"));
         RemoteDialectBenchState.Connection = null;
         RemoteDialectBenchState.ConnectionString = null;
     }

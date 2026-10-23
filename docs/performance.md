@@ -911,7 +911,7 @@ dotnet run -c Release --project bench/PalDDD.Benchmarks -- --wakeup-probe
 ## 2026-10-23 性能系统优化（车道注册表 / profile / 采样档）
 
 > 归因、候选、被否方案与裁决点见 `docs/review/perf-system-optimization-2026-10-23.md`。单一真源：`bench/bench-registry.json`；覆盖门禁：`scripts/perf-registry-check.cs`。
-> 环境：Windows 10 x64，Ryzen 9 8945HX（32 逻辑核），.NET SDK 11.0.100-rc.2.26504.105，BDN 0.16.0-preview.2；HEAD `c3ac700`，工作树干净，真库走 wslc pgbench/mysql84。
+> 环境：Windows 10 x64，Ryzen 9 8945HX（32 逻辑核），.NET SDK 11.0.100-rc.2.26504.105，BDN 0.16.0-preview.2；full 测量 HEAD `c3ac700`（工作树干净），standard 测量 HEAD `79b0a9a`；随后 `f340d1f` 的依赖升级（PalORM 6.7.0 / TUnit 1.76.0 / FsCheck 3.6.0）未重跑全量，引用本段数字须带 HEAD 标签。真库走 wslc pgbench/mysql84。
 
 **口径**：`alloc` 只做分配判定，计时不引用；`auto`/`fixed`/`fixed-short`/`medium-lite`/`tiny` 是趋势档；参考数字只来自 `medium`（原 MediumRun）与 `strict`。跨档不比较绝对值。
 
@@ -967,6 +967,11 @@ dotnet run -c Release --project bench/PalDDD.Benchmarks -- --wakeup-probe
 
 - 投递夹具复位（首轮 seed、后续 UPDATE 复位）：实测 896 秒 vs 基线 906 秒（-1%），分段后 setup 残差 86→119 秒，无收益；已撤销，保留原 delete+seed 夹具。远程夹具复位未测。
 - 投递整类 3/2 采样：541 秒但 RTT=0 格 Error 100%–343%，统计无效；保持 5/3/1。
+- `persist` 固定档：29 秒（medium 52 秒），但 Dapper AddSingle 39.3%、EF AddSingle 29.3%、Dapper 幂等 25.8%、PalORM AddSingle 15.9%，4 项越过 15% 线；保留 `medium`。
+- `stream` fixed-short：93 秒（fixed 139 秒），但 PerFrame_ZeroCopy_WithFlush 24.9%；该方法是已定案的零拷贝对照，不新增无效计时项；保留 `fixed`。
+- `coverage` fixed-short：116 秒，反而比 auto 的 93 秒慢；保留 auto。
+- 并发 `tiny`：112 秒（fixed-short 126 秒），但 7 项 Error >15%，最高 96.8%；保留 fixed-short。
+- MySQL persist 定向 tiny（最慢两类）：1,430 秒 vs 1,406 秒，网络方差盖过采样节省，无收益；撤销覆盖，保留 medium-lite。
 - 并行：默认不采用（InProcess 对并发负载敏感，历史随机 exit 1）；本轮未试。
 - 增量跳过：v1 不实现；full 已 ≤30 分钟。
 

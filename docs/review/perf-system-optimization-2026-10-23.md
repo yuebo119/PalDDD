@@ -478,7 +478,7 @@ Stage C 验收：
 
 ## 12. Stage C 实测（2026-10-23，HEAD `c3ac700`）
 
-实现提交：主仓 `c3ac700`（注册表、路由、远程预检、注册表门禁、文档），`.ai` 仓 `be844f5`（根脚本计数 43→44 的锚点同步）。Stage A 的投影数字保留在 §7，本节给出实际结果与偏差。
+实现提交：主仓 `c3ac700`（注册表、路由、远程预检、注册表门禁、文档），`.ai` 仓 `be844f5`（根脚本计数 43→44 的锚点同步）。Stage A 的投影数字保留在 §7，本节给出实际结果与偏差。测量基线：full 在 `c3ac700`，standard 在 `79b0a9a`；随后外部提交 `f340d1f` 升级 PalORM 6.7.0 / TUnit 1.76.0 / FsCheck 3.6.0，未重跑全量，引用本节数字须带 HEAD 标签。
 
 ### 12.1 本地 full
 
@@ -508,7 +508,7 @@ clean HEAD `c3ac700`，`dotnet run scripts/eps-run.cs -- --full --skip-build`，
 偏差与解释：
 
 - `app` 56 秒（投影 25）、`framework` 71（60）、`coverage` 75（72）、`concurrency` 126（121）、`stream` 139（127）、`delivery` 964（906）、`compare` 18（10）。这些是趋势档的实际采样成本，合计仍低于 45 分钟目标；标准档 592 秒也低于 600 秒预算。
-- `persist` 30→52 不是回归：旧 `--persist` 用裸 InProcess job，新车道用 `medium` 恢复参考趋势口径。该车道 52 秒是 full 的可接受成本，若要更快可切 `fixed`（未在本轮量测）。
+- `persist` 30→52 不是回归：旧 `--persist` 用裸 InProcess job，新车道用 `medium` 恢复参考趋势口径。该车道 52 秒是 full 的可接受成本；`fixed` 已实测 29 秒，但 4 个方法 Error 16%–39%（见 §12.4），保留 `medium`。
 - `delivery` +53 秒来自 RTT=1 格的 Windows 定时器粒度（同轮内比值仍有效），采样保持 5/3/1 未变；夹具复位 A/B 为 896 秒 vs 906 秒，无收益，已撤销。
 - `compression` 在 full 实测用 auto（42 秒），但 `Brotli_Compress_16KB` 的 Error/Mean 为 137%，统计无效（分配 304 B 稳定）。C2 把该车道切到 fixed：137 秒，Brotli 13.5%、其余 <10.5%，分配逐字节不变。最终配置的 full 组合为 `1,699 - 42 + 137 = 1,794` 秒（29.9 分钟），仍低于 30 分钟冲刺线与 45 分钟目标。
 
@@ -539,6 +539,11 @@ clean HEAD `c3ac700`，`dotnet run scripts/eps-run.cs -- --full --skip-build`，
 
 - 投递夹具复位：896 秒 vs 906 秒（-1%），分段后 setup 残差 86→119 秒，无收益；已撤销，保留原 delete+seed 夹具。远程夹具复位未测。
 - 投递整类 3/2 采样：541 秒但 RTT=0 格 Error 100%–343%，统计无效；保持 5/3/1。
+- `persist` 固定档：29 秒（medium 52 秒），但 Dapper AddSingle 39.3%、EF AddSingle 29.3%、Dapper 幂等 25.8%、PalORM AddSingle 15.9%，4 个方法越过 15% 线；保留 `medium`。
+- `stream` fixed-short：93 秒（fixed 139 秒），但 PerFrame_ZeroCopy_WithFlush 24.9%（其余 <15%）；该方法是已定案的零拷贝对照，不新增无效计时项；保留 `fixed`。
+- `coverage` fixed-short：116 秒，反而比 auto 的 93 秒慢（固定档 500ms 迭代对 ns 级方法更贵）；保留 auto。
+- 并发 `tiny`：112 秒（fixed-short 126 秒），但 7 个方法 Error >15%，最高 96.8%；保留 fixed-short。
+- MySQL persist 定向 tiny（最慢两类）：1,430 秒 vs 1,406 秒，网络/服务端方差盖过采样节省，无收益；撤销覆盖，保留 medium-lite。
 - 并行：默认不采用。InProcess 对并发负载敏感，历史随机 exit 1；本轮未试。
 - 增量跳过：v1 不实现；full 已 ≤30 分钟。
 
@@ -566,7 +571,7 @@ clean HEAD `c3ac700`，`dotnet run scripts/eps-run.cs -- --full --skip-build`，
 - `--full --include-remote` 健康：1,699 + 3,205 = 4,904 秒（81.7 分钟）；最终 fixed compression 组合 1,794 + 3,205 = 4,999 秒（83.3 分钟），均 ≤90 分钟。
 - 远程环境错误：1–3 秒退出 2，≤5 分钟。
 - `--quick`：约 2 秒；smoke：约 1 秒。
-- 残余风险：远程 MySQL 的 persist 1,406 秒是当前最大单车道，若环境抖动可能接近 90 分钟上限；standard 的 592 秒距 600 秒只有 8 秒余量，新增车道前先看预算门禁；`alloc` 档计时不可引用；`persist` 的 52 秒是 MediumRun 参考口径成本。
+- 残余风险：远程 MySQL 的 persist 1,406 秒是当前最大单车道，若环境抖动可能接近 90 分钟上限；`standard` 的 592 秒距 600 秒只有 8 秒余量（persist/stream/coverage/concurrency 四种降采样均已试过，均因 Error 或更慢被否，见 §12.4；新增车道前先看预算门禁）；`alloc` 档计时不可引用；`persist` 的 52 秒是 MediumRun 参考口径成本（fixed 已试，29 秒但 4 个方法 Error 16%–39%，保留 medium）。
 
 ## 13. 读这份报告要带的口径
 
