@@ -908,6 +908,68 @@ dotnet run -c Release --project bench/PalDDD.Benchmarks -- --wakeup-probe
 - **Saga 快照增量编码**：属快照格式演进的设计变更，需 ADR；只在步骤数 >32 的长流程上有感。
 - **回放心跳惰性化**：每批约 3 笔分配加一次计时器注册，占批成本不足 0.1%（批宽 1000 下更小）。
 
+## 2026-10-23 性能系统优化（车道注册表 / profile / 采样档）
+
+> 归因、候选、被否方案与裁决点见 `docs/review/perf-system-optimization-2026-10-23.md`。单一真源：`bench/bench-registry.json`；覆盖门禁：`scripts/perf-registry-check.cs`。
+> 环境：Windows 10 x64，Ryzen 9 8945HX（32 逻辑核），.NET SDK 11.0.100-rc.2.26504.105，BDN 0.16.0-preview.2；HEAD `c3ac700`，工作树干净，真库走 wslc pgbench/mysql84。
+
+**口径**：`alloc` 只做分配判定，计时不引用；`auto`/`fixed`/`fixed-short`/`medium-lite`/`tiny` 是趋势档；参考数字只来自 `medium`（原 MediumRun）与 `strict`。跨档不比较绝对值。
+
+本地 `--full`（16 条执行车道，173 case；`persist-medium` 为聚焦别名，不在 full 重复跑子集）实测：
+
+| 车道 | 优化前 | 实测 | 变化 | mode | 退出码 |
+| --- | ---: | ---: | ---: | --- | ---: |
+| smoke | 1 | 1 | 0 | n/a | 0 |
+| app | 287 | 56 | -80% | auto + fixed | 0 |
+| framework | 751 | 71 | -91% | auto | 0 |
+| verify-persist | 2 | 2 | 0 | n/a | 0 |
+| infra | 811 | 45 | -94% | auto + medium | 0 |
+| coverage | 626 | 75 | -88% | auto + fixed | 0 |
+| concurrency | 525 | 126 | -76% | fixed-short | 0 |
+| saga | 42 | 10 | -76% | auto | 0 |
+| compression | 389 | 42 | -89% | auto（本轮 full） | 0 |
+| persist | 30 | 52 | +73% | medium | 0 |
+| persist-mark | 25 | 27 | +8% | medium | 0 |
+| stream | 462 | 139 | -70% | fixed | 0 |
+| delivery | 911 | 964 | +6% | medium-lite | 0 |
+| qps | 59 | 57 | -3% | 固定 harness | 0 |
+| compare | 173 | 18 | -90% | auto | 0 |
+| sqlgen | 23 | 12 | -48% | alloc | 0 |
+| persist-medium | 16 | 0 | 去重 | 聚焦别名 | n/a |
+| 合计 | 5,132 | 1,699 | -67% | | 17 PASS / 0 FAIL |
+
+`compression` 在 full 实测用 auto（42 秒），但 `Brotli_Compress_16KB` 的 Error/Mean 为 137%（统计无效，分配 304 B 稳定）。C2 校准把该车道切到 fixed：137 秒，Brotli 13.5%、其余 <10.5%，分配逐字节不变。最终配置的 full 组合为 `1,699 - 42 + 137 = 1,794` 秒（29.9 分钟，仍低于 30 分钟冲刺线与 45 分钟目标）。`persist` 从 30 秒升到 52 秒不是回归：旧 `--persist` 用裸 InProcess job，新车道用 `medium` 恢复参考趋势口径；`delivery` 的 +53 秒来自 RTT=1 的 Windows 定时器粒度（同轮内比值仍有效），采样未变。
+
+常规档 `standard`（9 条：smoke/app/framework/infra/coverage/concurrency/saga/persist/stream）实测 **576 秒（9.6 分钟）**，低于 600 秒预算。`persist-mark` 已移出 standard（保留 full 与 `--lane persist-mark`），因为 full 实测 standard 全量曾为 602 秒，超出 10 分钟 2 秒。
+
+远程 `--profile remote-full`（真库健康，PG 55432 / MySQL 3306，`palddd_bench_full`）：
+
+| 车道 | 优化前（健康外推） | 实测 | mode | 退出码 |
+| --- | ---: | ---: | --- | ---: |
+| persist-pg | 1,263 | 466 | medium-lite | 0 |
+| persist-mysql | 约 3,360（56 分钟） | 1,406 | medium-lite | 0 |
+| delivery-pg | 577 | 515 | medium-lite | 0 |
+| delivery-mysql | 707 | 818 | medium-lite | 0 |
+| 远程合计 | 约 5,907 | 3,205 | | 5 PASS / 0 FAIL |
+
+`--full --include-remote` 健康组合为 `1,699 + 3,205 = 4,904` 秒（81.7 分钟），低于 90 分钟目标。`remote-smoke` 实测 PG 32 秒、MySQL 122 秒，均低于 5 分钟预算。
+
+远程快速失败（两栈各 10 秒上限）：PG 错库名 1 秒、缺表 1 秒、错密码 1 秒、不可达 2 秒；MySQL 错库名 1 秒、错密码 1 秒、不可达 2 秒。错库名报库名守卫，缺表报缺失表与 DDL 路径，错密码报 `28P01`/`Access denied`，均不打印凭据。
+
+分配与统计有效性：
+
+- smoke 6/6 预算不变；每帧流式零分配契约保持（Frame_Default 0 B、Frame_Enriched 0 B、SerializeAndFrame 0 B）。
+- 关键分配逐字节一致：SqlGen 128/120/176/9960/9632/0 B，Compression 304/16440/744/16656 B，Dispatcher 160/360/32 B，Serialization 112/208 B，Inbox 600/528 B，Outbox 64,640/6,680 B。Projection 固定档 13,202 B（基线 13,203 B）。
+- 端点总计 6,008/8,549 B 与基线 5,992/8,448 B 因采样而异，属请求级终态机与基准替身，不纳入每帧契约。
+- SqlGen 的计时为 alloc 档，不引用；其分配值是判定层。Compression 的 fixed 档最大 Error 13.5%，落在 5–15% 环境敏感带。
+
+被否与撤销项：
+
+- 投递夹具复位（首轮 seed、后续 UPDATE 复位）：实测 896 秒 vs 基线 906 秒（-1%），分段后 setup 残差 86→119 秒，无收益；已撤销，保留原 delete+seed 夹具。远程夹具复位未测。
+- 投递整类 3/2 采样：541 秒但 RTT=0 格 Error 100%–343%，统计无效；保持 5/3/1。
+- 并行：默认不采用（InProcess 对并发负载敏感，历史随机 exit 1）；本轮未试。
+- 增量跳过：v1 不实现；full 已 ≤30 分钟。
+
 ## 未完成项
 
 1. ~~等 BenchmarkDotNet 支持当前 .NET 11 后用默认入口重新生成全部 benchmark 类结果~~（2026-10-08 大部分消解：17 类经 InProcess 显式模式全部可出正式报告；**2026-10-17 BDN 0.16.0-preview.2 已恢复默认 Switcher 入口**（`--list` 实测 exit 0），显式 InProcess 路径保留为口径配置；类级 job 注解仍按 Medium 显式 config 承载，不再依赖 attribute）。

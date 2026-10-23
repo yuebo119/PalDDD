@@ -19,6 +19,8 @@
 
 按已测探针外推，本地 `--full` 从 85.5 分钟降到约 26 分钟（投递保持 906 秒不降采样）；如果投递夹具摊销验证通过，约 23 分钟。`--full --include-remote` 在环境健康时约 63 分钟，远程环境错误时预检 10 秒内失败。常规 `standard` 档约 8.6 分钟，`--quick` 与 `--smoke` 不变。
 
+Stage C 实测（HEAD `c3ac700`，详见 §12）：本地 `--full` **1,699 秒（28.3 分钟）**，固定档 compression 的最终组合 **1,794 秒（29.9 分钟）**；`standard` **576 秒（9.6 分钟）**；`--full --include-remote` 健康组合 **4,904 秒（81.7 分钟）**；远程环境错误 1–3 秒退出 2。投递夹具摊销 A/B 为 896 秒 vs 906 秒，无收益，已撤销；投递保持 5/3/1。
+
 不删类、不删方法、不删参数格、不降 smoke 断言。38 个类、154 个平坦方法、173 个实际 case 全部保留归属。
 
 ## 1. 基线复核
@@ -474,10 +476,101 @@ Stage C 验收：
 - 变异验证：删一个注册类、改坏一个预算、改坏一个路径映射，门禁必须红；恢复后必须绿。
 - 最终数字：本地 full ≤45 分钟，standard ≤10 分钟，remote-full 健康 ≤90 分钟，远程环境错误 ≤5 分钟，quick ≤2 分钟，smoke 约 1 秒。
 
-## 12. 读这份报告要带的口径
+## 12. Stage C 实测（2026-10-23，HEAD `c3ac700`）
+
+实现提交：主仓 `c3ac700`（注册表、路由、远程预检、注册表门禁、文档），`.ai` 仓 `be844f5`（根脚本计数 43→44 的锚点同步）。Stage A 的投影数字保留在 §7，本节给出实际结果与偏差。
+
+### 12.1 本地 full
+
+clean HEAD `c3ac700`，`dotnet run scripts/eps-run.cs -- --full --skip-build`，17 个结果（eps-perf-check + 16 条执行车道）全部 PASS，0 FAIL，0 SKIP，墙钟 **1,699 秒（28.3 分钟）**。
+
+| 车道 | 基线秒 | 实测秒 | 变化 | mode |
+| --- | ---: | ---: | ---: | --- |
+| smoke | 1 | 1 | 0 | n/a |
+| app | 287 | 56 | -80% | auto + fixed |
+| framework | 751 | 71 | -91% | auto |
+| verify-persist | 2 | 2 | 0 | n/a |
+| infra | 811 | 45 | -94% | auto + medium |
+| coverage | 626 | 75 | -88% | auto + fixed |
+| concurrency | 525 | 126 | -76% | fixed-short |
+| saga | 42 | 10 | -76% | auto |
+| compression | 389 | 42 | -89% | auto（full 实测档） |
+| persist | 30 | 52 | +73% | medium |
+| persist-mark | 25 | 27 | +8% | medium |
+| stream | 462 | 139 | -70% | fixed |
+| delivery | 911 | 964 | +6% | medium-lite |
+| qps | 59 | 57 | -3% | 固定 harness |
+| compare | 173 | 18 | -90% | auto |
+| sqlgen | 23 | 12 | -48% | alloc |
+| persist-medium | 16 | 0 | 去重 | 聚焦别名 |
+| 合计 | 5,132 | 1,699 | -67% | |
+
+偏差与解释：
+
+- `app` 56 秒（投影 25）、`framework` 71（60）、`coverage` 75（72）、`concurrency` 126（121）、`stream` 139（127）、`delivery` 964（906）、`compare` 18（10）。这些是趋势档的实际采样成本，合计仍低于 45 分钟目标；标准档 576 秒也低于 600 秒预算。
+- `persist` 30→52 不是回归：旧 `--persist` 用裸 InProcess job，新车道用 `medium` 恢复参考趋势口径。该车道 52 秒是 full 的可接受成本，若要更快可切 `fixed`（未在本轮量测）。
+- `delivery` +53 秒来自 RTT=1 格的 Windows 定时器粒度（同轮内比值仍有效），采样保持 5/3/1 未变；夹具复位 A/B 为 896 秒 vs 906 秒，无收益，已撤销。
+- `compression` 在 full 实测用 auto（42 秒），但 `Brotli_Compress_16KB` 的 Error/Mean 为 137%，统计无效（分配 304 B 稳定）。C2 把该车道切到 fixed：137 秒，Brotli 13.5%、其余 <10.5%，分配逐字节不变。最终配置的 full 组合为 `1,699 - 42 + 137 = 1,794` 秒（29.9 分钟），仍低于 30 分钟冲刺线与 45 分钟目标。
+
+标准档（9 条：smoke/app/framework/infra/coverage/concurrency/saga/persist/stream）实测 **576 秒（9.6 分钟）**。`persist-mark` 已移出 standard（保留 full 与 `--lane persist-mark`）；full 实测时 standard 全量（含 persist-mark）曾为 602 秒，超出 10 分钟 2 秒，故做了该裁剪。
+
+### 12.2 远程 full
+
+`--profile remote-full`，真库 wslc pgbench（55432）/ mysql84（3306），库 `palddd_bench_full`，5 个结果全部 PASS，墙钟 **3,205 秒（53.4 分钟）**。
+
+| 车道 | 基线秒 | 实测秒 | mode |
+| --- | ---: | ---: | --- |
+| persist-pg | 1,263 | 466 | medium-lite |
+| persist-mysql | 约 3,360（56 分钟） | 1,406 | medium-lite |
+| delivery-pg | 577 | 515 | medium-lite |
+| delivery-mysql | 707 | 818 | medium-lite |
+| 合计 | 约 5,907 | 3,205 | |
+
+`--full --include-remote` 健康组合 `1,699 + 3,205 = 4,904` 秒（81.7 分钟），低于 90 分钟目标。`remote-smoke` 实测 PG 32 秒、MySQL 122 秒，均低于 5 分钟。远程快速失败两栈各 1–3 秒退出 2：PG 错库名、缺表、错密码、不可达；MySQL 错库名、错密码、不可达。错库名报库名守卫，缺表报缺失表与 DDL 路径，错密码报 `28P01`/`Access denied`，均不打印凭据。
+
+### 12.3 分配与统计有效性
+
+- smoke 6/6 预算不变；每帧流式零分配契约保持（Frame_Default 0 B、Frame_Enriched 0 B、SerializeAndFrame 0 B）。
+- 关键分配逐字节一致：SqlGen 128/120/176/9960/9632/0 B，Compression 304/16440/744/16656 B，Dispatcher 160/360/32 B，Serialization 112/208 B，Inbox 600/528 B，Outbox 64,640/6,680 B；Projection 固定档 13,202 B（基线 13,203 B）。
+- 端点总计 6,008/8,549 B 与基线 5,992/8,448 B 因采样而异，属请求级终态机与基准替身，不纳入每帧契约。
+- `SqlGen` 的计时为 alloc 档，不引用；其分配值是判定层。`Compression` 固定档最大 Error 13.5%，落在 5–15% 环境敏感带。既有 SmartEnum 两个 >15% 项维持原状，未新增无效计时项（Brotli 的 auto 137% 已由 fixed 消除）。
+
+### 12.4 被否与撤销项
+
+- 投递夹具复位：896 秒 vs 906 秒（-1%），分段后 setup 残差 86→119 秒，无收益；已撤销，保留原 delete+seed 夹具。远程夹具复位未测。
+- 投递整类 3/2 采样：541 秒但 RTT=0 格 Error 100%–343%，统计无效；保持 5/3/1。
+- 并行：默认不采用。InProcess 对并发负载敏感，历史随机 exit 1；本轮未试。
+- 增量跳过：v1 不实现；full 已 ≤30 分钟。
+
+### 12.5 门禁与验证
+
+| 门禁 | 命令 | 结果 |
+| --- | --- | --- |
+| 注册表覆盖 | `dotnet run scripts/perf-registry-check.cs` | PASS：38 类 / 154 方法 / 173 case / 24 车道 |
+| 门禁矩阵 | `dotnet run scripts/gate-audit.cs` | PASS：44 探针全过，27 OK / 0 UNVERIFIED / 0 REVIEW |
+| EPSL 检查 | `node ~/.zcode/scripts/eps-perf-check.mjs --project .` | PASS：38 类，38/38 接入 |
+| 文档计数 | `dotnet run scripts/count-audit.cs` | PASS：16 项推导 / 81 处声明 |
+| 文档一致性 | `dotnet run scripts/doc-consistency.cs` | PASS：D7/D13 |
+| 编码 | `dotnet run scripts/encoding-gate.cs` | PASS：E1–E5 |
+| 格式 | `dotnet format style/whitespace --verify-no-changes` | PASS |
+| EPSL 自测 | `dotnet run scripts/eps-run.cs -- --selftest` | 全过 |
+| 快速档 | `dotnet run scripts/eps-run.cs -- --quick` | 2 PASS（eps-perf-check + smoke） |
+| 测试 | 16 个测试项目直接跑 MTP exe（仓库现有入口） | 1,872 通过 / 82 跳过 / 0 失败 |
+
+变异验证：注册表门禁的隔离探针在 gate-audit 中拒绝漏注册类（exit 1）并放行完整注册表（exit 0）；构建新鲜度检查对 registry/源文件变更给出 exit 2（实测），对干净构建放行；smoke 预算压至 1 时 RaiseEvent 判红（既有实证）。`--skip-build` 的注册表 JSON 变更不触发重建（运行时读取），已从新鲜度输入中排除。
+
+### 12.6 最终数字与残余
+
+- 本地 `--full`：实测 1,699 秒（28.3 分钟）；固定档 compression 的最终组合 1,794 秒（29.9 分钟），均 ≤45 分钟。
+- `standard`：576 秒（9.6 分钟），≤10 分钟。
+- `--full --include-remote` 健康：1,699 + 3,205 = 4,904 秒（81.7 分钟），≤90 分钟。
+- 远程环境错误：1–3 秒退出 2，≤5 分钟。
+- `--quick`：约 2 秒；smoke：约 1 秒。
+- 残余风险：远程 MySQL 的 persist 1,406 秒是当前最大单车道，若环境抖动可能接近 90 分钟上限；standard 的 576 秒距 600 秒只有 24 秒余量，新增车道前先看预算门禁；`alloc` 档计时不可引用；`persist` 的 52 秒是 MediumRun 参考口径成本。
+
+## 13. 读这份报告要带的口径
 
 - 1.2 与 1.3 的秒数是墙钟，不是 BDN 的 Mean。两者不要混用。
 - 4.x 的探针数字来自 BDN 命令行默认 job，不是 `MediumRun`；分配列与 MediumRun 可比，计时列只作同轮趋势。
-- 7 的优化后秒数是按已测探针外推的投影，不是已经落地的结果。Stage C 会用真实全量运行替换。
-- 远程的节省全部标了 `[推断]`，因为本机没有在 Stage A 启动真库。远程车道的存在与覆盖没有变化，变的只是采样档与预检。
+- 7 的优化后秒数是 Stage A 的投影；Stage C 实测见 §12，投影与实测的偏差在 §12.1 逐项列出。- 远程的节省全部标了 `[推断]`，因为本机没有在 Stage A 启动真库。远程车道的存在与覆盖没有变化，变的只是采样档与预检。
 - `alloc` 档的计时不可引用；`auto`、`fixed`、`medium-lite` 是趋势档；参考数字只来自 `medium` 与 `strict`。

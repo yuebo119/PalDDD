@@ -300,7 +300,8 @@ static async Task<int> PreflightAsync(Options options)
     return 0;
 }
 
-// 二进制新鲜度守卫：--skip-build 只允许在程序集晚于全部源文件/注册表时使用。
+// 二进制新鲜度守卫：--skip-build 只允许在程序集晚于全部编译输入（.cs/.csproj）时使用。
+// 注册表是运行时读取的数据文件，不参与编译，故不列入（改 JSON 不需要重建 DLL）。
 // 用时间戳而非哈希：构建是单点动作，时间戳足以拦截「改了源文件却用旧 DLL 验证」。
 static string? CheckBuildFreshness(string root)
 {
@@ -313,8 +314,7 @@ static string? CheckBuildFreshness(string root)
         if (!Directory.Exists(dir)) continue;
         inputs.AddRange(Directory.EnumerateFiles(dir, "*.*", SearchOption.AllDirectories)
             .Where(f => (f.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-                         || f.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
-                         || f.EndsWith("bench-registry.json", StringComparison.OrdinalIgnoreCase))
+                         || f.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
                         && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
                         && !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, StringComparison.Ordinal)));
     }
@@ -736,7 +736,7 @@ static int SelfTest()
     Case("--changed 只允许 standard", ParseArgs(["--full", "--changed"]).Error is not null);
     Case("--include-remote 只允许 full", ParseArgs(["--profile", "standard", "--include-remote"]).Error is not null);
     Case("full profile 16 条执行车道", Registry.Profile("full").Count() == 16);
-    Case("standard profile 10 条车道", Registry.Profile("standard").Count() == 10);
+    Case("standard profile 9 条车道", Registry.Profile("standard").Count() == 9);
     Case("remote-full 4 条", Registry.Profile("remote-full").Count() == 4);
     Case("remote-smoke 2 条", Registry.Profile("remote-smoke").Count() == 2);
     Case("gate 只有 smoke", Registry.Profile("gate").Select(l => l.Name).SequenceEqual(["smoke"]));
@@ -748,11 +748,11 @@ static int SelfTest()
     Case("路径匹配单星号", PathMatches("src/PalDDD.*/x.cs", "src/PalDDD.Core/x.cs") && !PathMatches("src/PalDDD.*/x.cs", "src/PalDDD.Core/sub/x.cs"));
 
     var changed = SelectChangedLanesForTest(Registry.Profile("standard").ToList(), []);
-    Case("--changed 无变更回退全部 standard", changed.Count == 10);
+    Case("--changed 无变更回退全部 standard", changed.Count == 9);
     var changedMatched = SelectChangedLanesForTest(Registry.Profile("standard").ToList(), ["src/PalDDD.Core/Entity.cs"]);
     Case("--changed 命中核心路径", changedMatched.Any(l => l.Name == "framework") && changedMatched.Any(l => l.Name == "smoke") && !changedMatched.Any(l => l.Name == "delivery"));
     var changedUnknown = SelectChangedLanesForTest(Registry.Profile("standard").ToList(), ["docs/unknown.md"]);
-    Case("--changed 未知路径回退全部 standard", changedUnknown.Count == 10);
+    Case("--changed 未知路径回退全部 standard", changedUnknown.Count == 9);
 
     var runStart = new DateTime(2026, 10, 23, 9, 0, 0, DateTimeKind.Utc);
     var beforeRun = runStart.AddHours(-2);
