@@ -146,6 +146,19 @@ if (args.Contains("--m1-probe-pg", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--m1-probe-mysql", StringComparer.OrdinalIgnoreCase))
     return await MigrationProbes.RunM1Async(postgreSql: false);
 
+// 产品性能轮（2026-10-24）：#45 批量 NextCheckAt 真库语句数/EXPLAIN；#46 10k 活跃轮转覆盖。
+if (args.Contains("--saga-advance-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunSagaAdvanceProbeAsync(postgreSql: true);
+
+if (args.Contains("--saga-advance-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunSagaAdvanceProbeAsync(postgreSql: false);
+
+if (args.Contains("--saga-rotate-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunSagaRotateProbeAsync(postgreSql: true);
+
+if (args.Contains("--saga-rotate-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunSagaRotateProbeAsync(postgreSql: false);
+
 // 生产窗口规模演练（2026-10-20）：M1 10k 活跃 Saga 尾部延迟；M4 10 万行回填与索引体积。
 if (args.Contains("--m1-load-pg", StringComparer.OrdinalIgnoreCase))
     return await MigrationProbes.RunM1LoadAsync(postgreSql: true);

@@ -976,6 +976,28 @@ dotnet run -c Release --project bench/PalDDD.Benchmarks -- --wakeup-probe
 - 并行：默认不采用（InProcess 对并发负载敏感，历史随机 exit 1）；本轮未试。
 - 增量跳过：v1 不实现；full 已 ≤30 分钟。
 
+## 2026-10-24 产品性能探针（#45/#46）
+
+> 真库 wslc pgbench（55432）/ mysql84（3306），库 `palddd_bench_full`；入口 `--saga-advance-probe-pg|mysql`、`--saga-rotate-probe-pg|mysql`。只改 bench，不改 `src/`。
+
+### #45 Saga 批量 NextCheckAt
+
+| 方言 | 行数 | 语句数 | 耗时 | 执行计划 |
+| --- | ---: | ---: | ---: | --- |
+| PG | 256 | 1（源码 300 行/块） | 45.3 ms | Update -> Hash Join -> Seq Scan(leased_by) + Values Scan(256)；256 行夹具，`xactDelta=0` 是统计可见性延迟 |
+| MySQL | 256 | 1 | 84.9 ms | Update -> Filter -> Single-row index lookup using PRIMARY(saga_id) loops=256；`Com_update` 未即时增量 |
+
+结论：256 行一次 `AdvanceNextCheckAtAsync` 只发 1 条多行 UPDATE；MySQL 走主键索引。PG 的 256 行夹具走 Hash Join/Seq Scan 是小表计划，不代表 10k 生产表；如需大表计划应另建 10k 夹具。无产品改动。
+
+### #46 Saga 轮转 10k 活跃
+
+| 方言 | active | batch | ticks | seen | max/tick | p50 | p99 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| PG | 10,000 | 256 | 40 | 10,000 | 256 | 13.2 ms | 54.7 ms |
+| MySQL | 10,000 | 256 | 40 | 10,000 | 256 | 18.4 ms | 42.1 ms |
+
+结论：每 tick 租约后以 `checkedAt` 释放写游标，10k 活跃在 40 tick 内全部至少被租一次，无饥饿；旧形态释放清 NULL 会让前 256 行永远重租。无产品改动。
+
 ## 未完成项
 
 1. ~~等 BenchmarkDotNet 支持当前 .NET 11 后用默认入口重新生成全部 benchmark 类结果~~（2026-10-08 大部分消解：17 类经 InProcess 显式模式全部可出正式报告；**2026-10-17 BDN 0.16.0-preview.2 已恢复默认 Switcher 入口**（`--list` 实测 exit 0），显式 InProcess 路径保留为口径配置；类级 job 注解仍按 Medium 显式 config 承载，不再依赖 attribute）。

@@ -1,4 +1,5 @@
 using ByteAether.Ulid;
+using Dapper;
 using MySqlConnector;
 using Npgsql;
 using PalDDD.Dapper;
@@ -8,7 +9,9 @@ using PalDDD.Transactions;
 using PalORM;
 using PalORM.PostgreSql;
 using System.Data.Common;
+using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 
 namespace PalDDD.Benchmarks;
 
@@ -147,6 +150,184 @@ internal static class MigrationProbes
             $"M1 LOAD PASS ({dialect}): active={count}, leased={leased}, ticks={ticks}, " +
             $"maxPerTick={maxPerTick}, p50={p50:F0}ms, p99={p99:F0}ms, max={max:F0}ms, threshold={threshold:F0}ms");
         return 0;
+    }
+
+    /// <summary>
+    /// #45（2026-10-24 产品性能轮）：Saga 批量推进 NextCheckAt 的真库语句数/计划。
+    /// 256 行一次 Advance；MySQL 用 Com_update 增量计数，PG 用 xact_commit 增量加源码
+    /// 语句数（每 300 行一语句）；两边跑 EXPLAIN ANALYZE 并回滚，验证走主键索引。
+    /// </summary>
+    public static async Task<int> RunSagaAdvanceProbeAsync(bool postgreSql, CancellationToken ct = default)
+    {
+        const int count = 256;
+        await using var conn = await OpenAsync(postgreSql, ct);
+        var dialect = postgreSql ? DapperDbType.PostgreSql : DapperDbType.MySql;
+        await EnsureColumnAsync(conn, postgreSql, "saga_states", "next_check_at",
+            postgreSql ? "TIMESTAMPTZ" : "DATETIME(6) NULL", ct);
+        await ExecAsync(conn, "DELETE FROM saga_states", ct);
+
+        var now = DateTimeOffset.UtcNow;
+        var next = now.AddMinutes(1);
+        var until = now.AddMinutes(5);
+        var sagas = new List<ProbeSagaState>(count);
+        await using (var tx = await conn.BeginTransactionAsync(ct))
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText =
+                "INSERT INTO saga_states (saga_id, current_state, status, created_at, version, next_check_at, leased_by, leased_until) " +
+                "VALUES (@id, 'Initial', 0, @created, 0, @next, @owner, @until)";
+            var pId = cmd.CreateParameter(); pId.ParameterName = "@id"; cmd.Parameters.Add(pId);
+            var pCreated = cmd.CreateParameter(); pCreated.ParameterName = "@created"; cmd.Parameters.Add(pCreated);
+            var pNext = cmd.CreateParameter(); pNext.ParameterName = "@next"; cmd.Parameters.Add(pNext);
+            var pOwner = cmd.CreateParameter(); pOwner.ParameterName = "@owner"; cmd.Parameters.Add(pOwner);
+            var pUntil = cmd.CreateParameter(); pUntil.ParameterName = "@until"; cmd.Parameters.Add(pUntil);
+            pId.Value = string.Empty;
+            pCreated.Value = postgreSql ? now : now.UtcDateTime;
+            pNext.Value = postgreSql ? now : now.UtcDateTime;
+            pOwner.Value = "probe";
+            pUntil.Value = postgreSql ? until : until.UtcDateTime;
+            await cmd.PrepareAsync(ct);
+            for (var i = 0; i < count; i++)
+            {
+                var id = Ulid.New();
+                pId.Value = id.ToString(null, CultureInfo.InvariantCulture);
+                pCreated.Value = postgreSql ? now.AddMilliseconds(i) : now.AddMilliseconds(i).UtcDateTime;
+                await cmd.ExecuteNonQueryAsync(ct);
+                sagas.Add(new ProbeSagaState
+                {
+                    SagaId = id,
+                    Version = 0,
+                    NextCheckAt = next,
+                    LeasedBy = "probe",
+                    LeasedUntil = until,
+                });
+            }
+            await tx.CommitAsync(ct);
+        }
+
+        var store = new DapperSagaStateStore<ProbeSagaState>(conn, null, null, null, dialect);
+        var before = await ReadSagaUpdateCounterAsync(conn, postgreSql, ct);
+        var sw = Stopwatch.StartNew();
+        var affected = await store.AdvanceNextCheckAtAsync("probe", sagas, ct);
+        sw.Stop();
+        var after = await ReadSagaUpdateCounterAsync(conn, postgreSql, ct);
+        if (affected != count)
+            throw new InvalidOperationException($"Saga advance affected {affected}/{count}");
+        // 全局计数只作参考：PG pg_stat_database 有提交后可见性延迟，MySQL Com_update
+        // 对这条 Dapper 命令未即时增量（可能是 prepared 执行路径）。语句数以源码块宽
+        // 为准（256 行 ≤ 300 → 1 条 UPDATE），EXPLAIN 计划作第二证据。
+
+        var build = typeof(DapperSagaStateStore<ProbeSagaState>).GetMethod(
+            "BuildAdvanceNextCheckBatch", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingMethodException("BuildAdvanceNextCheckBatch not found");
+        var (sql, parameters) = ((string Sql, DynamicParameters Parameters))build.Invoke(
+            store, ["probe", sagas, 0, count])!;
+        var prefix = postgreSql ? "EXPLAIN (ANALYZE, BUFFERS) " : "EXPLAIN ANALYZE ";
+        List<string> plan;
+        await using (var planTx = await conn.BeginTransactionAsync(ct))
+        {
+            plan = (await conn.QueryAsync<string>(prefix + sql, parameters, planTx).ConfigureAwait(false)).ToList();
+            await planTx.RollbackAsync(ct);
+        }
+
+        var counterName = postgreSql ? "xactDelta" : "updateStatements";
+        var sourceStatements = (count + 299) / 300;
+        Console.WriteLine(
+            $"SAGA ADVANCE PASS ({dialect}): rows={count}, affected={affected}, " +
+            $"{counterName}={after - before}, sourceStatements={sourceStatements}, " +
+            $"elapsed={sw.Elapsed.TotalMilliseconds:F1}ms");
+        foreach (var line in plan.Take(12)) Console.WriteLine("  " + line);
+        return 0;
+    }
+
+    /// <summary>
+    /// #46（2026-10-24 产品性能轮）：legacy 活跃扫描在 10k 活跃、256 批量下的轮转覆盖。
+    /// 每 tick 租约后以 checkedAt 释放写游标；断言所有 10k 行在 ≤40 tick 内至少被租一次
+    ///（旧形态释放清 NULL 会让前 256 行永远重租，seen 停在 256）。
+    /// </summary>
+    public static async Task<int> RunSagaRotateProbeAsync(bool postgreSql, CancellationToken ct = default)
+    {
+        const int count = 10_000;
+        const int batch = 256;
+        await using var conn = await OpenAsync(postgreSql, ct);
+        var dialect = postgreSql ? DapperDbType.PostgreSql : DapperDbType.MySql;
+        await EnsureColumnAsync(conn, postgreSql, "saga_states", "next_check_at",
+            postgreSql ? "TIMESTAMPTZ" : "DATETIME(6) NULL", ct);
+        await ExecAsync(conn, "DELETE FROM saga_states", ct);
+
+        var t0 = DateTimeOffset.UtcNow.AddSeconds(1);
+        await using (var tx = await conn.BeginTransactionAsync(ct))
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText =
+                "INSERT INTO saga_states (saga_id, current_state, status, created_at, version, next_check_at) " +
+                "VALUES (@id, 'Initial', 0, @created, 0, NULL)";
+            var pId = cmd.CreateParameter(); pId.ParameterName = "@id"; cmd.Parameters.Add(pId);
+            var pCreated = cmd.CreateParameter(); pCreated.ParameterName = "@created"; cmd.Parameters.Add(pCreated);
+            pId.Value = string.Empty;
+            pCreated.Value = postgreSql ? t0 : t0.UtcDateTime;
+            await cmd.PrepareAsync(ct);
+            for (var i = 0; i < count; i++)
+            {
+                pId.Value = Ulid.New().ToString(null, CultureInfo.InvariantCulture);
+                pCreated.Value = postgreSql ? t0.AddMilliseconds(i) : t0.AddMilliseconds(i).UtcDateTime;
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+            await tx.CommitAsync(ct);
+        }
+
+        var store = new DapperSagaStateStore<ProbeSagaState>(conn, null, null, null, dialect);
+        var cursor = (ISagaScanCursorStore<ProbeSagaState>)store;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var tickMs = new List<double>(64);
+        var maxPerTick = 0;
+        var ticks = 0;
+        while (seen.Count < count && ticks < 60)
+        {
+            var owner = $"rotate-{ticks}";
+            var sw = Stopwatch.StartNew();
+            var rows = await store.LeaseActiveSagasAsync(owner, TimeSpan.FromMinutes(5), batch, ct);
+            sw.Stop();
+            tickMs.Add(sw.Elapsed.TotalMilliseconds);
+            ticks++;
+            if (rows.Count > batch)
+                throw new InvalidOperationException($"rotation leased {rows.Count} > batch {batch}");
+            maxPerTick = Math.Max(maxPerTick, rows.Count);
+            foreach (var row in rows)
+                seen.Add(row.SagaId.ToString(null, CultureInfo.InvariantCulture));
+            if (rows.Count > 0)
+                await cursor.ReleaseLeasesAsync(owner, rows, DateTimeOffset.UtcNow, ct);
+        }
+
+        if (seen.Count != count)
+            throw new InvalidOperationException($"rotation leased {seen.Count}/{count} in {ticks} ticks");
+
+        tickMs.Sort();
+        var p50 = tickMs[(int)(tickMs.Count * 0.50)];
+        var p99 = tickMs[(int)Math.Ceiling((tickMs.Count - 1) * 0.99)];
+        Console.WriteLine(
+            $"SAGA ROTATE PASS ({dialect}): active={count}, seen={seen.Count}, ticks={ticks}, " +
+            $"maxPerTick={maxPerTick}, p50={p50:F1}ms, p99={p99:F1}ms");
+        return 0;
+    }
+
+    private static async Task<long> ReadSagaUpdateCounterAsync(
+        DbConnection conn, bool postgreSql, CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        if (postgreSql)
+        {
+            cmd.CommandText = "SELECT xact_commit FROM pg_stat_database WHERE datname = current_database()";
+            return Convert.ToInt64(await cmd.ExecuteScalarAsync(ct), CultureInfo.InvariantCulture);
+        }
+
+        cmd.CommandText = "SHOW GLOBAL STATUS LIKE 'Com_update'";
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct)
+            ? Convert.ToInt64(reader.GetValue(1), CultureInfo.InvariantCulture)
+            : -1;
     }
 
     public static Task<int> RunM4Async(bool postgreSql, CancellationToken ct = default)
