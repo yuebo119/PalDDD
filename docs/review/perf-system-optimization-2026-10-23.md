@@ -575,16 +575,17 @@ clean HEAD `c3ac700`，`dotnet run scripts/eps-run.cs -- --full --skip-build`，
 - `--quick`：约 2 秒；smoke：约 1 秒。
 - 残余风险：远程 MySQL 的 persist 1,406 秒是当前最大单车道，若环境抖动可能接近 90 分钟上限；`standard` 的 592 秒距 600 秒只有 8 秒余量（persist/stream/coverage/concurrency 四种降采样均已试过，均因 Error 或更慢被否，见 §12.4；新增车道前先看预算门禁）；`alloc` 档计时不可引用；`persist` 的 52 秒是 MediumRun 参考口径成本（fixed 已试，29 秒但 4 个方法 Error 16%–39%，保留 medium）。
 
-### 12.7 产品性能探针（2026-10-24，#45/#46）
+### 12.7 产品性能探针（2026-10-24，#45/#46/#41）
 
-两项 bench-only 真库测量，结论是当前产品实现无需改动：
+三项 bench-only 真库测量：#45/#46 证明当前实现无需改动；#41 量化后裁决不做结构迁移。
 
 | 项 | 结果 |
 | --- | --- |
 | #45 Saga 批量 NextCheckAt | 256 行 1 条 UPDATE；MySQL 计划 `Single-row index lookup using PRIMARY` loops=256；PG 256 行夹具 `Hash Join + Seq Scan(leased_by)`；耗时 PG 45.3ms / MySQL 84.9ms |
 | #46 Saga 轮转 10k 活跃 | 40 tick 全覆盖 10,000 行，max/tick=256；PG p50 13.2ms / p99 54.7ms；MySQL 18.4ms / 42.1ms；无饥饿 |
+| #41 Saga 租约 payload | 10k 行 / 256 批 / 4,342B `saga_data`：PG 每 tick +3.1ms（传输 0.7 + 解析 2.4，约 12µs/行）；MySQL 解析 +2.7~6.2ms（p50 噪声带）；10k 一轮 +0.12~0.25s。相对租约+处理器成本低一个量级，不做拆列/侧表迁移；触发条件（平均 payload >1KB 且扫描占 CPU >5%）写入 `docs/performance.md` 与台账 |
 
-探针入口：`--saga-advance-probe-pg|mysql`、`--saga-rotate-probe-pg|mysql`（`MigrationProbes.cs`，只改 bench）。#41/#42/#43/#44 仍是产品代码候选，需要 ADR 与消费方证据，不在本轮测量范围。
+探针入口：`--saga-advance-probe-pg|mysql`、`--saga-rotate-probe-pg|mysql`、`--saga-payload-probe-pg|mysql`（`MigrationProbes.cs`，只改 bench）。#42 已评估：dispatcher 已在首次派发时惰性建索引；按事件类型只解析对应 handler 需运行时闭合泛型（反射，违反零反射）或源生成路由/消费方注册形状变更，AOT 约束下暂不做（触发条件见台账）。#44 Kafka 默认串行发布是行为/兼容性变更，需 ADR 与用户裁决。
 
 ### 12.8 产品性能 #43（2026-10-24，幂等 StartOrGet）
 
