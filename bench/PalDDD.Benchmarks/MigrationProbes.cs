@@ -4,6 +4,7 @@ using MySqlConnector;
 using Npgsql;
 using PalDDD.Dapper;
 using PalDDD.EventLog;
+using PalDDD.Idempotency;
 using PalDDD.PalORM.Stores;
 using PalDDD.Transactions;
 using PalORM;
@@ -328,6 +329,84 @@ internal static class MigrationProbes
         return await reader.ReadAsync(ct)
             ? Convert.ToInt64(reader.GetValue(1), CultureInfo.InvariantCulture)
             : -1;
+    }
+
+    /// <summary>
+    /// #43（2026-10-24 产品性能轮）：幂等 StartOrGet 冲突路径基线/复测。
+    /// Completed 与 Processing 各 100 次，验证结果仍为 Existing；用于对比
+    /// 「INSERT + 四列分类读 + 整行读」与「INSERT + 整行读」的墙钟差。
+    /// </summary>
+    public static async Task<int> RunIdempotencyStartOrGetProbeAsync(bool postgreSql, CancellationToken ct = default)
+    {
+        const int iterations = 100;
+        await using var conn = await OpenAsync(postgreSql, ct);
+        var dialect = postgreSql ? DapperDbType.PostgreSql : DapperDbType.MySql;
+        await ExecAsync(conn, "DELETE FROM idempotency_records", ct);
+
+        var now = DateTimeOffset.UtcNow;
+        var lockedUntil = now.AddMinutes(5);
+        var expiresAt = now.AddHours(1);
+        await SeedIdempotencyRecordAsync(conn, postgreSql, "probe-completed", "k1",
+            (int)IdempotencyRecordStatus.Completed, lockedUntil, expiresAt, now, "done"u8.ToArray(), 1, ct);
+        await SeedIdempotencyRecordAsync(conn, postgreSql, "probe-processing", "k2",
+            (int)IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, null, 1, ct);
+
+        var store = new DapperIdempotencyStore(conn, dialect);
+        var startOrGet = (IIdempotencyStartOrGetStore)store;
+        var policy = new IdempotencyPolicy
+        {
+            ProcessingTimeout = TimeSpan.FromMinutes(5),
+            Retention = TimeSpan.FromHours(1),
+        };
+
+        var (completedMean, completedP50) = await MeasureStartOrGetAsync(startOrGet, "probe-completed", "k1", now, policy, iterations, ct);
+        var (processingMean, processingP50) = await MeasureStartOrGetAsync(startOrGet, "probe-processing", "k2", now, policy, iterations, ct);
+        Console.WriteLine(
+            $"IDEM STARTORQ PASS ({dialect}): iterations={iterations}, " +
+            $"completed mean={completedMean:F3}ms p50={completedP50:F3}ms, " +
+            $"processing mean={processingMean:F3}ms p50={processingP50:F3}ms");
+        return 0;
+    }
+
+    private static async Task SeedIdempotencyRecordAsync(
+        DbConnection conn, bool postgreSql, string operation, string key, int status,
+        DateTimeOffset lockedUntil, DateTimeOffset expiresAt, DateTimeOffset updatedAt,
+        byte[]? payload, long revision, CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            "INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error, revision) " +
+            "VALUES (@op, @key, @status, @lock, @exp, @upd, @payload, NULL, @rev)";
+        Add(cmd, "@op", operation);
+        Add(cmd, "@key", key);
+        Add(cmd, "@status", status);
+        Add(cmd, "@lock", postgreSql ? lockedUntil : lockedUntil.UtcDateTime);
+        Add(cmd, "@exp", postgreSql ? expiresAt : expiresAt.UtcDateTime);
+        Add(cmd, "@upd", postgreSql ? updatedAt : updatedAt.UtcDateTime);
+        Add(cmd, "@payload", payload is null ? DBNull.Value : payload);
+        Add(cmd, "@rev", revision);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private static async Task<(double Mean, double P50)> MeasureStartOrGetAsync(
+        IIdempotencyStartOrGetStore store, string operation, string key, DateTimeOffset now,
+        IdempotencyPolicy policy, int iterations, CancellationToken ct)
+    {
+        for (var i = 0; i < 10; i++)
+            _ = await store.StartOrGetAsync(operation, key, now, policy, ct).ConfigureAwait(false);
+
+        var samples = new List<double>(iterations);
+        for (var i = 0; i < iterations; i++)
+        {
+            var sw = Stopwatch.StartNew();
+            var result = await store.StartOrGetAsync(operation, key, now, policy, ct).ConfigureAwait(false);
+            sw.Stop();
+            if (result.Outcome != IdempotencyStartOutcome.Existing)
+                throw new InvalidOperationException($"StartOrGet expected Existing, got {result.Outcome}");
+            samples.Add(sw.Elapsed.TotalMilliseconds);
+        }
+        samples.Sort();
+        return (samples.Average(), samples[samples.Count / 2]);
     }
 
     public static Task<int> RunM4Async(bool postgreSql, CancellationToken ct = default)

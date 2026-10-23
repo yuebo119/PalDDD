@@ -99,7 +99,20 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore, IIdempotency
     public async ValueTask<IdempotencyRecord?> TryStartAsync(
         string operationName, string key, DateTimeOffset now, IdempotencyPolicy policy, CancellationToken ct = default)
     {
-        // ITM-163 修复：补 policy null + op/key 空白守卫（对齐 IdempotencyDbContext/InMemoryIdempotencyStore）
+        var (started, _) = await TryStartCoreAsync(
+            operationName, key, now, policy, fullConflictRead: false, ct).ConfigureAwait(false);
+        return started;
+    }
+
+    /// <summary>
+    /// TryStart 与 StartOrGet 的共同核心。fullConflictRead=false 保持 TryStart 的 B5 轻量分类读
+    /// （不拉 response_payload）；true 时冲突路径直接整行读一次，供 StartOrGet 返回 Existing，
+    /// 省掉「四列分类读 + 二次整行读」。CAS/回收语义与旧实现逐字一致。
+    /// </summary>
+    private async ValueTask<(IdempotencyRecord? Started, IdempotencyRecord? Existing)> TryStartCoreAsync(
+        string operationName, string key, DateTimeOffset now, IdempotencyPolicy policy,
+        bool fullConflictRead, CancellationToken ct)
+    {
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
@@ -107,92 +120,104 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore, IIdempotency
         var expiresAt = now + policy.Retention;
         var statusProcessing = (int)IdempotencyRecordStatus.Processing;
 
-        // ITM-228 修复（三十二轮）：MySQL INSERT IGNORE 会把截断、非法日期等非重复键
-        // 错误也降为 warning 并写入调整值——幂等键被静默破坏。改为普通 INSERT + 捕获唯一冲突。
-        int affected;
-        if (TProvider.SupportsReturningClause)
-        {
-            affected = await Session.ExecuteAsync($"INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL) ON CONFLICT DO NOTHING", ct).ConfigureAwait(false);
-        }
-        else
-        {
-            try
-            {
-                affected = await Session.ExecuteAsync($"INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL)", ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
-            {
-                affected = 0; // 唯一约束冲突——记录已存在，非错误
-            }
-        }
-
+        var affected = await TryInsertStartAsync(
+            operationName, key, now, lockedUntil, expiresAt, statusProcessing, ct).ConfigureAwait(false);
         if (affected > 0)
         {
-            return new IdempotencyRecord(operationName, key,
-                IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now);
+            return (new IdempotencyRecord(operationName, key,
+                IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now), null);
         }
 
-        // B5（EPSL 地毯审计 2026-10-16）：冲突路径轻量读——原 GetAsync 读全行（含
-        // response_payload 大列），冲突分类只用 status/locked_until/expires_at/revision
-        // 四列；Completed 情形的 payload 本就丢弃（调用方二次 GetAsync 获取），构成双传。
-        var existing = await GetForConflictClassificationAsync(operationName, key, now, ct).ConfigureAwait(false);
+        var conflict = fullConflictRead
+            ? await GetFullConflictViewAsync(operationName, key, now, ct).ConfigureAwait(false)
+            : await GetClassificationConflictViewAsync(operationName, key, now, ct).ConfigureAwait(false);
 
-        // ITM-064：INSERT 冲突已证明记录存在；GetAsync 返回 null 只可能是记录已过期
-        // （GetAsync 对 ExpiresAt <= now 返回 null）。过期记录必须重新获取租约
-        // （对齐 EFCore 版 TryReuseRecordAsync 复用语义），否则该 key 在应用侧物理清理前永久被拒。
-        if (existing is null)
+        if (conflict is null)
         {
-            // 三十七轮 P2-5 → v8 评审 P2-2 修正：过期回收不再排除 Completed——原
-            // `AND status <> Completed` 守卫使"过期 Completed"记录 affected=0 → return null
-            // → 该幂等 key 永久拒绝，而 EFCore（ExpiresAt<=now 即回收）与 InMemory（过期
-            // Remove 重建）同场景均可重新执行，三栈分叉。expires_at <= now 已含过期语义；
-            // 该守卫真正要防的"未过期 Completed 被回收"由 expires_at 条件天然排除。
-            // 三栈契约自此统一：过期即回收（无论终态），Retention 语义 = 可重新执行窗口。
-            // v54 P2：补 revision = revision + 1（换代）——Mark* 的 CAS 基准从 updated_at 换 revision
-            //（时间戳受 DB 列精度截断，同刻双 worker 回收可双双命中绕过幂等）
+            // 过期回收（三十七轮 P2-5 / v8 P2-2：过期即回收无论终态；v54 P2 revision 换代）。
             affected = await Session.ExecuteAsync(
                 $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL, revision = revision + 1 WHERE operation_name = {operationName} AND idempotency_key = {key} AND expires_at <= {now}",
                 ct).ConfigureAwait(false);
-            if (affected == 0) return null;
+            if (affected == 0) return (null, null);
 
-            // 换代后回读 DB 新 revision（existing is null 分支无内存基准可算；低频路径可接受一次回读）
             await using var readBack = CreateRawCommand();
             readBack.CommandText = "SELECT revision FROM idempotency_records WHERE operation_name = @p0 AND idempotency_key = @p1";
             AddParam(readBack, "@p0", operationName);
             AddParam(readBack, "@p1", key);
             await using var rr = await readBack.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            // v55 P2：DBNull 容错（对齐 GetAsync 物化路径自设口径）——损坏行 revision=NULL 时
-            // UPDATE 的 +1 经 NULL 传播仍 NULL，回读不容错会 InvalidCastException 使该幂等键
-            // 持续炸出；回退 0 使后续 Mark* CAS 恒 0 行静默不落库（无害降级）
             var newRevision = await rr.ReadAsync(ct).ConfigureAwait(false)
                 ? (rr.IsDBNull(0) ? 0 : rr.GetInt64(0))
                 : 0;
 
-            return new IdempotencyRecord(operationName, key,
-                IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, newRevision);
+            return (new IdempotencyRecord(operationName, key,
+                IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, newRevision), null);
         }
 
-        // ITM-078 修复：Completed 非过期记录返回 null（语义=他人已持有终态，本调用未获得租约）——
-        // 契约对齐：EFCore（IdempotencyDbContext.TryStartAsync）与 InMemory（InMemoryIdempotencyStore）
-        // 对非过期终态记录均返回 null，读取已完成响应走 GetAsync（含 response_payload）；
-        // 原实现返回 existing 会让调用方把终态记录误当"本次已开始处理"
-        if (existing.Value.Status == IdempotencyRecordStatus.Completed)
-            return null;
+        // ITM-078：Completed 非过期返回 null；StartOrGet 用整行记录返回 Existing。
+        if (conflict.Value.Status == IdempotencyRecordStatus.Completed)
+            return (null, conflict.Value.Record);
 
-        if (existing.Value.Status == IdempotencyRecordStatus.Processing && existing.Value.LockedUntil > now)
-            return null;
+        if (conflict.Value.Status == IdempotencyRecordStatus.Processing && conflict.Value.LockedUntil > now)
+            return (null, conflict.Value.Record);
 
-        // v54 P2：CAS 基准 updated_at → revision（existing.Revision 经 internal ctor 物化，
-        // 是 DB 真值；回放走 RestoreTerminalState 不污染）。换代后内存可算新值（existing+1），无需回读
-        var expectedRevision = existing.Value.Revision;
+        var expectedRevision = conflict.Value.Revision;
         affected = await Session.ExecuteAsync(
             $"UPDATE idempotency_records SET status = {statusProcessing}, locked_until = {lockedUntil}, expires_at = {expiresAt}, updated_at = {now}, error = NULL, response_payload = NULL, revision = revision + 1 WHERE operation_name = {operationName} AND idempotency_key = {key} AND revision = {expectedRevision} AND status <> {(int)IdempotencyRecordStatus.Completed}",
             ct).ConfigureAwait(false);
-        if (affected == 0) return null;
+        if (affected == 0)
+        {
+            if (!fullConflictRead) return (null, null);
+            var current = await GetAsync(operationName, key, now, ct).ConfigureAwait(false);
+            return (null, current);
+        }
 
-        return new IdempotencyRecord(operationName, key,
-            IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, expectedRevision + 1);
+        return (new IdempotencyRecord(operationName, key,
+            IdempotencyRecordStatus.Processing, lockedUntil, expiresAt, now, expectedRevision + 1), null);
     }
+
+    private async ValueTask<int> TryInsertStartAsync(
+        string operationName, string key, DateTimeOffset now,
+        DateTimeOffset lockedUntil, DateTimeOffset expiresAt, int statusProcessing, CancellationToken ct)
+    {
+        // ITM-228 修复（三十二轮）：MySQL INSERT IGNORE 会把截断、非法日期等非重复键
+        // 错误也降为 warning 并写入调整值——幂等键被静默破坏。改为普通 INSERT + 捕获唯一冲突。
+        if (TProvider.SupportsReturningClause)
+        {
+            return await Session.ExecuteAsync($"INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL) ON CONFLICT DO NOTHING", ct).ConfigureAwait(false);
+        }
+
+        try
+        {
+            return await Session.ExecuteAsync($"INSERT INTO idempotency_records (operation_name, idempotency_key, status, locked_until, expires_at, updated_at, response_payload, error) VALUES ({operationName}, {key}, {statusProcessing}, {lockedUntil}, {expiresAt}, {now}, NULL, NULL)", ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (SqlErrorClassifier.IsUniqueKeyViolation(ex))
+        {
+            return 0; // 唯一约束冲突——记录已存在，非错误
+        }
+    }
+
+    private async ValueTask<ConflictView?> GetClassificationConflictViewAsync(
+        string operationName, string key, DateTimeOffset now, CancellationToken ct)
+    {
+        var info = await GetForConflictClassificationAsync(operationName, key, now, ct).ConfigureAwait(false);
+        return info is null
+            ? null
+            : new ConflictView(info.Value.Status, info.Value.LockedUntil, info.Value.ExpiresAt, info.Value.Revision, null);
+    }
+
+    private async ValueTask<ConflictView?> GetFullConflictViewAsync(
+        string operationName, string key, DateTimeOffset now, CancellationToken ct)
+    {
+        var record = await GetAsync(operationName, key, now, ct).ConfigureAwait(false);
+        return record is null
+            ? null
+            : new ConflictView(record.Status, record.LockedUntil, record.ExpiresAt, record.Revision, record);
+    }
+
+    /// <summary>冲突视图：轻量分类读（Record=null）或整行读（Record=完整记录）的统一形态。</summary>
+    private readonly record struct ConflictView(
+        IdempotencyRecordStatus Status, DateTimeOffset LockedUntil, DateTimeOffset ExpiresAt,
+        long Revision, IdempotencyRecord? Record);
 
     /// <inheritdoc />
     /// <remarks>
@@ -202,11 +227,12 @@ public class PalOrmIdempotencyStore<TProvider> : IIdempotencyStore, IIdempotency
     public async ValueTask<IdempotencyStartResult> StartOrGetAsync(
         string operationName, string key, DateTimeOffset now, IdempotencyPolicy policy, CancellationToken ct = default)
     {
-        var started = await TryStartAsync(operationName, key, now, policy, ct).ConfigureAwait(false);
+        // 2026-10-24（#43）：冲突路径改为 INSERT + 整行读一次；旧路径是
+        // INSERT + 四列分类读 + 二次整行读（冲突侧 3 条语句），现在 2 条。
+        var (started, existing) = await TryStartCoreAsync(
+            operationName, key, now, policy, fullConflictRead: true, ct).ConfigureAwait(false);
         if (started is not null)
             return new IdempotencyStartResult(IdempotencyStartOutcome.Started, started);
-
-        var existing = await GetAsync(operationName, key, now, ct).ConfigureAwait(false);
         return existing is null
             ? new IdempotencyStartResult(IdempotencyStartOutcome.Contended, null)
             : new IdempotencyStartResult(IdempotencyStartOutcome.Existing, existing);

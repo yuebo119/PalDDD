@@ -243,6 +243,8 @@
 
 ### Changed 变更
 
+- **2026-10-24 产品性能：幂等 StartOrGet 冲突路径 3→2 语句（零行为变更）**：Dapper 栈（非 PG/SQLite 方言）与 PalORM 栈的 `StartOrGetAsync` 在 INSERT 冲突后原先走「四列分类读 + 二次整行读」，现在只做一次整行读并按 Completed/Processing/Failed/过期分支返回；`TryStartAsync` 的 B5 四列轻量读保持给直调方。MySQL 真库探针（100 次均值）：Completed 1.529→0.796ms、Processing 1.504→0.796ms（−48%/−47%）；PG 的 Dapper 原子 UPSERT 路径未改。PalORM 同语义，SQLite 测试 138 通过 / 54 跳过 / 0 失败；Integration 485 通过 / 18 跳过 / 0 失败。无公共 API 变化。
+
 - **2026-10-22 性能轮：出站唤醒信号 + 入站单语句认领 + 回放批宽与续读裁剪 + 消费上下文去闭包（零破坏性行为变更）**：本轮按「往返次数与唤醒延迟是剩余瓶颈」的结论落地四项。
   ①**新增公共接口 `IOutboxWakeUpSignal`（+ `AddPalOutbox` 默认注册 `OutboxWakeUpSignal` 单例）**：写入方在 Outbox 语句执行后 `Notify()`，`OutboxProcessor` 的空闲等待从「纯 `Task.Delay(PollInterval)`」改为「信号或间隔先到者」，并在被唤醒但租到 0 条时用 20ms 短间隔自愈重试一次（覆盖写入方事务未提交的时序）。默认 `PollInterval=500ms` 下，旧形态的期望等待是 250ms、最坏 500ms；新形态实测「写入 → 被标记已发布」在内存全链路 p50 0.006–0.013ms / p99 0.035–0.067ms（`--wakeup-probe`，500 次采样、两次运行区间；不含租约与发布网络），100 条突发写入合并为 2–3 个 tick，批处理不被打散。信号覆盖 Dapper/PalORM/InMemory 的 Add* 与 EF 拦截器的领域事件路径；EF 直连 Add 与各栈 `RequeueDeadAsync` 仍走轮询（见 `docs/performance.md` 的覆盖边界）。跨进程写入不触发本地信号，轮询仍是兜底；信号丢失/重复/合并均不影响正确性。DI 侧由 `AddPalOutbox` 注册，宿主可 `TryAddSingleton` 替换实现；`InMemoryOutboxStore`/`DapperOutboxStore`/`PalOrmOutboxStore<TProvider>` 及三个 PalORM 方言 Store/`OutboxProcessor` 的可选尾参注入该信号（源码兼容，二进制需重编译）。未注册信号时行为与旧版逐字一致。
   ②**Dapper Inbox 单条认领合并为一条 UPSERT（PG/SQLite）**：原路径 INSERT →（冲突）回读 → CAS 更新（重复消息 2 次往返、可重试失败 3 次），现与批量路径共用「INSERT ... ON CONFLICT DO UPDATE ... WHERE 可重入条件 RETURNING 列」单语句，三种情形均 1 次往返；顺带消除回读与 CAS 之间的 TOCTOU 窗口。MySQL 路径不变。

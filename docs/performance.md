@@ -998,6 +998,18 @@ dotnet run -c Release --project bench/PalDDD.Benchmarks -- --wakeup-probe
 
 结论：每 tick 租约后以 `checkedAt` 释放写游标，10k 活跃在 40 tick 内全部至少被租一次，无饥饿；旧形态释放清 NULL 会让前 256 行永远重租。无产品改动。
 
+### #43 幂等 StartOrGet 冲突路径（2026-10-24）
+
+`DapperIdempotencyStore`（非 PG/SQLite 方言）与 `PalOrmIdempotencyStore` 的 `StartOrGetAsync` 在 INSERT 冲突后原先走「四列分类读 + 二次整行读」共 3 条语句，现在只做一次整行读并按 Completed/Processing/Failed/过期分支返回，共 2 条；`TryStartAsync` 的 B5 四列轻量读保持不变（直调方仍不拉 `response_payload`）。
+
+| 方言/路径 | Completed 均值 | Processing 均值 | 语句数 |
+| --- | ---: | ---: | ---: |
+| MySQL Dapper（改动前） | 1.529 ms | 1.504 ms | 3 |
+| MySQL Dapper（改动后） | **0.796 ms** | **0.796 ms** | **2** |
+| PG Dapper（原子 UPSERT，未改） | 2.174→3.075 ms（环境波动） | 2.666→3.608 ms（环境波动） | 1–2 |
+
+口径：`--idempotency-startorq-probe-pg|mysql`，各 100 次，预置一条 Completed 与一条 Processing 记录，结果必须为 Existing；PG 路径代码未动，前后差异属环境波动。PalORM 同形态改动由 SQLite 测试覆盖（138 通过 / 54 跳过 / 0 失败），远程 PalORM 未单独复测。
+
 ## 未完成项
 
 1. ~~等 BenchmarkDotNet 支持当前 .NET 11 后用默认入口重新生成全部 benchmark 类结果~~（2026-10-08 大部分消解：17 类经 InProcess 显式模式全部可出正式报告；**2026-10-17 BDN 0.16.0-preview.2 已恢复默认 Switcher 入口**（`--list` 实测 exit 0），显式 InProcess 路径保留为口径配置；类级 job 注解仍按 Medium 显式 config 承载，不再依赖 attribute）。

@@ -446,6 +446,14 @@ public sealed partial class DialectProbeTests
         var loaded = await store.GetAsync("probe-op", "probe-key", now.AddSeconds(4), default);
         await Assert.That(loaded).IsTypeOf<IdempotencyRecord>();
         await Assert.That(loaded!.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
+
+        // #43（2026-10-24）：StartOrGet 冲突路径必须返回带 payload 的 Existing；
+        // PG 走单语句 UPSERT，MySQL 走 INSERT + 整行读一次，两栈语义一致。
+        var startOrGet = store;
+        var existing = await startOrGet.StartOrGetAsync("probe-op", "probe-key", now.AddSeconds(5), policy, default);
+        await Assert.That(existing.Outcome).IsEqualTo(IdempotencyStartOutcome.Existing);
+        await Assert.That(existing.Record!.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
+        await Assert.That(existing.Record.ResponsePayload?.ToArray()).IsEquivalentTo("done"u8.ToArray());
     }
 
     /// <summary>原探针 AmbientTxDapperSmoke——1 项断言（二轮评审 T5 断链探针）。</summary>

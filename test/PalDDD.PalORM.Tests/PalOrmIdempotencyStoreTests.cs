@@ -87,6 +87,61 @@ public class PalOrmIdempotencyStoreTests
     }
 
     [Test]
+    public async Task StartOrGetAsync_NewThenProcessing_ReturnsStartedThenExisting()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteIdempotencyStore(session);
+        var now = DateTimeOffset.UtcNow;
+
+        var first = await store.StartOrGetAsync("op-1", "key-1", now, IdempotencyPolicy.Default, default);
+        await Assert.That(first.Outcome).IsEqualTo(IdempotencyStartOutcome.Started);
+        await Assert.That(first.Record!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+
+        var second = await store.StartOrGetAsync("op-1", "key-1", now.AddSeconds(1), IdempotencyPolicy.Default, default);
+        await Assert.That(second.Outcome).IsEqualTo(IdempotencyStartOutcome.Existing);
+        await Assert.That(second.Record!.Key).IsEqualTo("key-1");
+        await Assert.That(second.Record.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+    }
+
+    [Test]
+    public async Task StartOrGetAsync_Completed_ReturnsExistingWithPayload()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteIdempotencyStore(session);
+        var now = DateTimeOffset.UtcNow;
+        var payload = System.Text.Encoding.UTF8.GetBytes("{\"done\":1}");
+
+        var first = await store.StartOrGetAsync("op-1", "key-1", now, IdempotencyPolicy.Default, default);
+        await Assert.That(first.Outcome).IsEqualTo(IdempotencyStartOutcome.Started);
+        await store.MarkCompletedAsync(first.Record!, payload, now.AddSeconds(1), default);
+
+        var existing = await store.StartOrGetAsync("op-1", "key-1", now.AddSeconds(2), IdempotencyPolicy.Default, default);
+        await Assert.That(existing.Outcome).IsEqualTo(IdempotencyStartOutcome.Existing);
+        await Assert.That(existing.Record!.Status).IsEqualTo(IdempotencyRecordStatus.Completed);
+        await Assert.That(existing.Record.ResponsePayload?.ToArray()).IsEquivalentTo(payload);
+    }
+
+    [Test]
+    public async Task StartOrGetAsync_Expired_ReclaimsAndStarts()
+    {
+        await using var session = await PalOrmStoreFixture.CreateAsync();
+        var store = new SqliteIdempotencyStore(session);
+        var now = DateTimeOffset.UtcNow;
+        var shortPolicy = new IdempotencyPolicy
+        {
+            ProcessingTimeout = TimeSpan.FromSeconds(5),
+            Retention = TimeSpan.FromSeconds(10),
+        };
+
+        var first = await store.StartOrGetAsync("op-1", "key-1", now, shortPolicy, default);
+        await Assert.That(first.Outcome).IsEqualTo(IdempotencyStartOutcome.Started);
+
+        var reclaimed = await store.StartOrGetAsync("op-1", "key-1", now.AddSeconds(30), IdempotencyPolicy.Default, default);
+        await Assert.That(reclaimed.Outcome).IsEqualTo(IdempotencyStartOutcome.Started);
+        await Assert.That(reclaimed.Record!.Status).IsEqualTo(IdempotencyRecordStatus.Processing);
+    }
+
+    [Test]
     public async Task TryStartAsync_ConcurrentSameTickReclaim_SingleWinnerPerRevision()
     {
         // v55（C-P3-2）：v53→v54 换代核心动机的回归网——同刻双 worker 并发回收同一过期租约，

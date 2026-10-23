@@ -159,6 +159,13 @@ if (args.Contains("--saga-rotate-probe-pg", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--saga-rotate-probe-mysql", StringComparer.OrdinalIgnoreCase))
     return await MigrationProbes.RunSagaRotateProbeAsync(postgreSql: false);
 
+// 产品性能轮 #43：幂等 StartOrGet 冲突路径基线/复测。
+if (args.Contains("--idempotency-startorq-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunIdempotencyStartOrGetProbeAsync(postgreSql: true);
+
+if (args.Contains("--idempotency-startorq-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunIdempotencyStartOrGetProbeAsync(postgreSql: false);
+
 // 生产窗口规模演练（2026-10-20）：M1 10k 活跃 Saga 尾部延迟；M4 10 万行回填与索引体积。
 if (args.Contains("--m1-load-pg", StringComparer.OrdinalIgnoreCase))
     return await MigrationProbes.RunM1LoadAsync(postgreSql: true);

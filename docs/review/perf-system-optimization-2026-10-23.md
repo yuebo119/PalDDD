@@ -586,6 +586,20 @@ clean HEAD `c3ac700`，`dotnet run scripts/eps-run.cs -- --full --skip-build`，
 
 探针入口：`--saga-advance-probe-pg|mysql`、`--saga-rotate-probe-pg|mysql`（`MigrationProbes.cs`，只改 bench）。#41/#42/#43/#44 仍是产品代码候选，需要 ADR 与消费方证据，不在本轮测量范围。
 
+### 12.8 产品性能 #43（2026-10-24，幂等 StartOrGet）
+
+Dapper（非 PG/SQLite 方言）与 PalORM 的 `StartOrGetAsync` 冲突路径从「INSERT + 四列分类读 + 二次整行读」3 条语句收敛为「INSERT + 整行读」2 条；`TryStartAsync` 的 B5 四列轻量读保持不变。
+
+| 项 | 结果 |
+| --- | --- |
+| MySQL Dapper Completed | 1.529→0.796 ms（100 次均值） |
+| MySQL Dapper Processing | 1.504→0.796 ms |
+| PG Dapper 原子 UPSERT | 代码未改；前后差异属环境波动 |
+| 测试 | Integration 485 通过 / 18 跳过 / 0 失败；PalORM 138 通过 / 54 跳过 / 0 失败 |
+| 公共 API | 无变化 |
+
+探针：`--idempotency-startorq-probe-pg|mysql`。
+
 ## 13. 读这份报告要带的口径
 
 - 1.2 与 1.3 的秒数是墙钟，不是 BDN 的 Mean。两者不要混用。
