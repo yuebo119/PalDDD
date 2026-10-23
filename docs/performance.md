@@ -952,7 +952,7 @@ dotnet run -c Release --project bench/PalDDD.Benchmarks -- --wakeup-probe
 | delivery-mysql | 707 | 818 | medium-lite | 0 |
 | 远程合计 | 约 5,907 | 3,205 | | 5 PASS / 0 FAIL |
 
-`--full --include-remote` 健康组合为 `1,699 + 3,205 = 4,904` 秒（81.7 分钟），低于 90 分钟目标。`remote-smoke` 实测 PG 32 秒、MySQL 122 秒，均低于 5 分钟预算。
+`--full --include-remote` 健康组合为 `1,699 + 3,205 = 4,904` 秒（81.7 分钟）；按最终 fixed compression 组合为 `1,794 + 3,205 = 4,999` 秒（83.3 分钟），均低于 90 分钟目标。`remote-smoke` 实测 PG 32 秒、MySQL 122 秒，均低于 5 分钟预算。
 
 远程快速失败（两栈各 10 秒上限）：PG 错库名 1 秒、缺表 1 秒、错密码 1 秒、不可达 2 秒；MySQL 错库名 1 秒、错密码 1 秒、不可达 2 秒。错库名报库名守卫，缺表报缺失表与 DDL 路径，错密码报 `28P01`/`Access denied`，均不打印凭据。
 
