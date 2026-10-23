@@ -124,10 +124,20 @@ internal sealed class RemoteDialectBenchSession : IAsyncDisposable
         await conn.OpenAsync(ct);
         try
         {
-            // DDL 非幂等（PG/MySQL 均无 IF NOT EXISTS）：表已存在即跳过建表——专用 bench 库
-            // 上语义为「已建过」；schema 漂移由后续 store 操作 fail-fast 暴露
-            if (!await OutboxTableExistsAsync(conn, isPostgreSql))
-                await ApplyDdlAsync(conn, isPostgreSql ? "docs/sql/postgresql/000_schema.sql" : "docs/sql/mysql/000_schema.sql", ct);
+            // 10 秒预检（2026-10-23）：连接/认证由调用方 CTS 限时；表结构分两种：
+            // - outbox 不存在：视为空 bench 库，应用 DDL 引导；
+            // - outbox 存在但 events/idempotency_records 缺失：DDL 非幂等，不能重放，
+            //   直接给出缺失表与 DDL 路径（实测形态：只建了半张表时 store 操作才报错，
+            //   90 分钟超时前无法定位）。
+            var ddlPath = isPostgreSql ? "docs/sql/postgresql/000_schema.sql" : "docs/sql/mysql/000_schema.sql";
+            if (!await TableExistsAsync(conn, "outbox_messages", isPostgreSql, ct))
+                await ApplyDdlAsync(conn, ddlPath, ct);
+            foreach (var table in new[] { "outbox_messages", "events", "idempotency_records" })
+            {
+                if (!await TableExistsAsync(conn, table, isPostgreSql, ct))
+                    throw new InvalidOperationException(
+                        $"远程 bench 库缺少表 {table}；DDL 非幂等，不会自动重放。请重建 palddd_bench_* 库并应用 {ddlPath}");
+            }
             return new RemoteDialectBenchSession(
                 NoopDisposable.Instance, conn, connectionString,
                 isPostgreSql ? DapperDbType.PostgreSql : DapperDbType.MySql);
@@ -149,13 +159,17 @@ internal sealed class RemoteDialectBenchSession : IAsyncDisposable
                 $"外部实例库名守卫失败：{database} 不以 palddd_bench 开头——基准 wave 会清空表，拒连非专用库");
     }
 
-    private static async Task<bool> OutboxTableExistsAsync(DbConnection conn, bool isPostgreSql)
+    private static async Task<bool> TableExistsAsync(DbConnection conn, string table, bool isPostgreSql, CancellationToken ct)
     {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = isPostgreSql
-            ? "SELECT 1 FROM information_schema.tables WHERE table_name = 'outbox_messages'"
-            : "SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'outbox_messages'";
-        return await cmd.ExecuteScalarAsync(default) is not null;
+            ? "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = @table"
+            : "SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = @table";
+        var parameter = cmd.CreateParameter();
+        parameter.ParameterName = "@table";
+        parameter.Value = table;
+        cmd.Parameters.Add(parameter);
+        return await cmd.ExecuteScalarAsync(ct) is not null;
     }
 
     private sealed class NoopDisposable : IAsyncDisposable

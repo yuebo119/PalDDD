@@ -23,6 +23,34 @@
 | 框架热路径水位 | AddSingleEvent 116.8ns/72B、Create 3.70ns/56B 等（2026-10-08 Medium 首轮） | MediumRun + InProcess + MemoryDiagnoser；跨轮差 <5% 实证 | `--framework` 复跑对照 |
 | 统计有效性 | Error/Mean <5% 判定可用；>15% 统计无效（现有 2 项 SmartEnum ns 级，判定以零分配事实为准） | performance.md §自评 | 引用计时前先查自评表 |
 
+## 2.1 profile 与采样档（2026-10-23）
+
+车道、profile、超时与每类采样档的单一真源是 `bench/bench-registry.json`。`Program.cs` 用它选择 BDN job，`scripts/eps-run.cs` 用它编排 profile，`scripts/perf-registry-check.cs` 对账类/方法/case/profile/预算。
+
+| profile | 内容 | 预算 |
+| --- | --- | ---: |
+| gate | smoke 6 项 + 注册表检查 | ≤10 秒 |
+| standard | app/framework/infra/coverage/concurrency/saga/persist/persist-mark/stream + smoke | ≤10 分钟 |
+| full | 16 条执行车道全部本地 case；persist-medium 保留为聚焦别名，不在 full 重复跑子集 | ≤45 分钟 |
+| remote-smoke | 每方言 2 个代表 case | ≤5 分钟 |
+| remote-full | 4 条真库车道 | ≤90 分钟（含本地） |
+| strict | 40 迭代 / 20 预热 / 3 launch 参考档 | 按类 |
+
+| mode | 参数 | 用途 | 计时地位 |
+| --- | --- | --- | --- |
+| alloc | 2 预热 / 3 迭代 / 1 launch / InvocationCount 1 | 分配判定 | 不作计时引用 |
+| fixed | 3 / 9 / 1，BDN 自放大调用数 | 趋势 | 趋势级，需 Error 门禁 |
+| fixed-short | 2 / 5 / 1，自放大 | 并发趋势 | 趋势级，需比值门禁 |
+| auto | 3 / 200 ms / 3 到 5 / 1 | 趋势 | 趋势级，需 Error 门禁 |
+| medium-lite | 3 / 5 / 1 | 投递与远程趋势 | 趋势级 |
+| tiny | 2 / 3 / 1 | 远程 Auto 慢格 | 趋势级 |
+| medium | 10 / 15 / 2 | 参考趋势（原 MediumRun） | 参考 |
+| strict | 20 / 40 / 3 | 参考数字 | 参考 |
+
+边界：`alloc` 只做分配判定，计时不进入任何账本；这不是把 `[ShortRunJob]` 重新引入计时基线。趋势档引用前按 §2 的 Error 自评规则判断；参考数字只来自 `medium` 与 `strict`，跨档不比较绝对值。
+
+
+
 ## 3. 复杂度契约
 
 库形态：热路径 = 领域事件管线（Add/Iterate，已零分配化）与分发链。既有锁定测试承载；新增公共 API 随行为测试补契约断言。
@@ -41,7 +69,7 @@
 | 预算项 | 执行载体 | 触发 |
 | --- | --- | --- |
 | smoke 分配断言 | `-- --smoke`（退出码 1 即红）；CI `build-and-test` 的 `perf-smoke` 步骤 + 本地跑测 | 每提交 / 每次跑测（2026-10-18 从人工 TOOL 转每提交门禁） |
-| EPSL 快速/全量编排 | `scripts/eps-run.cs -- --quick`（检查件 + smoke）/ `-- --full`（预检 + 17 条本地车道 + 汇总）；全量要求独占，失败默认重试 1 次 | 节点审计 / 全量复跑 |
+| EPSL 快速/全量编排 | `scripts/eps-run.cs -- --quick`（检查件 + smoke）/ `-- --full`（预检 + 16 条执行车道 + 汇总；persist-medium 为聚焦别名）/ `-- --profile standard`（≤10 分钟）/ `-- --profile remote-smoke|remote-full`；全量要求独占，失败默认重试 1 次；`--skip-build` 带二进制新鲜度检查 | 节点审计 / 常规夜间 / 全量复跑 |
 | 流式零分配锁定 | `StreamFrameAllocationTests` + `--stream` 微 lane | 每次测试 / 节点审计 |
 | Medium 水位对照 | `--framework` / `--app` / `--infra` / `--sqlgen` 复跑 | 节点审计 |
 | 回归自动归因 | EPSL perf-bisect（**设计稿，未实现**：~/.zcode/perf-template/audit/bisect-design.md）；当前走人工 commit 区间 + 交替复测 | 门禁红且复测确认非环境态 |
@@ -57,6 +85,8 @@
 | 结论报告 | `bench/reports/`（当前由 BDN artifacts 与 performance.md 轮次段承载） | 否 |
 | 过程日志 | `bench/logs/`（保留最近 20 份） | 否 |
 | 数据真源 | `bench/results/`（入库；归档约定见 `bench/results/README.md`）；BDN report-github.md 在 bin 下，不入库、可复跑再生 | 是（仅 `bench/results/`） |
+
+每次 `eps-run` 还写 `bench/logs/eps-run-<stamp>-summary.json`（profile、lane、mode、退出码、耗时、尝试次数），供跨轮比较；它不替代 `bench/results/` 的入库数据。
 
 ## 8. 收敛判定与复活条件
 

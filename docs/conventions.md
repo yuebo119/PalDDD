@@ -969,6 +969,22 @@ grep -rn 'Microsoft\.NET\.Test\.Sdk' --include='*.csproj' --include='*.props' . 
 - **禁止用 `$"..."` 插值拼接 SQL**（SQL 注入风险 + 运行时分配）
 - 数据库方言切换通过 `DapperSqlDialect` record struct，不通过字符串拼接
 
+### 12.5 采样档与 profile（2026-10-23）
+
+车道、profile、超时与每类采样档的单一真源是 `bench/bench-registry.json`。禁止在 `Program.cs` 与 `scripts/eps-run.cs` 里恢复第二份硬编码车道表。
+
+| 档 | 语义 | 引用边界 |
+| --- | --- | --- |
+| alloc | 2 预热 / 3 迭代 / 1 launch / InvocationCount 1 | 只做分配判定；计时不进入账本 |
+| fixed / fixed-short / auto / medium-lite / tiny | 趋势档 | 引用前过 Error/Mean 自评；不跨档比较绝对值 |
+| medium | 原 MediumRun（10/15/2） | 参考趋势 |
+| strict | 40/20/3 | 参考数字 |
+
+- `alloc` 不是 `[ShortRunJob]` 回归：它不承担计时基线；参考数字仍走 `medium`/`strict`。
+- 新增或修改基准类必须同步注册表的 `classes/mode/overrides`，并跑 `dotnet run scripts/perf-registry-check.cs`；漏注册、重复跑类、profile 预算超限、过滤器方法不存在均退出 1。
+- profile 预算：gate ≤10 秒、standard ≤600 秒、full ≤2700 秒、remote-smoke ≤300 秒、remote-full ≤5400 秒。改预算须同步 `perf-budgets.md` §2.1。
+- `--skip-build` 先过 `eps-run` 的二进制新鲜度检查（程序集须晚于 `bench/`、`src/` 与注册表的最新输入）。
+
 ---
 
 ## 13. 评审纪律（基于专业审计的最优实践）

@@ -120,7 +120,7 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 | 测试策略与基线 | `docs/testing.md`、`docs/test-coverage-baseline.md` |
 | **性能预算契约（EPSL）** | `perf-budgets.md`（根目录；分配判定层预算，与既有 `--smoke` 断言对齐） |
 | **性能台账（勿重开/明确不做）** | `.ai/perf-ledger.md`（提性能建议前必查，防重复提案） |
-| **性能实测记录** | `docs/performance.md`（37 基准类，2026-10-18 口径；真库车道、统计有效性自评） |
+| **性能实测记录** | `docs/performance.md`（38 基准类，2026-10-21 口径；真库车道、统计有效性自评） |
 | 已定的架构决策（含被否决方案） | `docs/decisions/`（35 份 ADR，2026-10-20 ADR-035 增） |
 | 历轮评审与清单 | `docs/review/`（含 `NAMING.md` 命名约定与索引） |
 | 迁移与发布 | `docs/migration/`、`docs/release.md` |
@@ -133,8 +133,10 @@ dotnet run scripts/gate-audit.cs -- --inventory   # 仅矩阵（快）
 - AI 性能分析四红线：抽查"核实/无一处"论断；负结论带检索口径；过 ADR 与 perf-ledger 比对；继承论断独立复验。**两条计量红线**：净效果（端到端旧/新差 + 同族遗留副本检索，防假闭环）；归属（残余成本先排除基准替身/BDN/BCL，再立项）。
 - 决策载体三处：ADR + `.ai/perf-ledger.md` + 代码注释里的「登记延后/暂不优化」；提性能建议前比全部三处，注释命中须呈报用户裁决。
 - 量具分层与项目既有体系同构：分配可作判定、计时只作趋势（两轮跨 SDK 实证，`docs/performance.md`）。
-- 门禁与对账：`--smoke` 已接 CI（`perf-smoke`）；EPSL 全局对账跑 `node ~/.zcode/scripts/eps-perf-check.mjs --project .`（版本 / 模板引用 / 预算基准类数 / 基准类是否接入 Program.cs）。
-- 全量编排：`dotnet run scripts/eps-run.cs -- --quick|--full`（`--full` 要求工作树干净且独占，失败默认重试一次，日志与 summary 落 `bench/logs/eps-run-*`；并发 build/test/bench 下 BDN InProcess 会随机 exit 1，先复测再判回归）。
+- 门禁与对账：`--smoke` 已接 CI（`perf-smoke`）；EPSL 全局对账跑 `node ~/.zcode/scripts/eps-perf-check.mjs --project .`（版本 / 模板引用 / 预算基准类数 / 基准类是否接入 Program.cs）；车道注册表覆盖跑 `dotnet run scripts/perf-registry-check.cs`（类/方法/case/profile/预算，漏注册与重复跑类即红）。
+- 车道注册表：`bench/bench-registry.json` 是车道、profile、超时、每类采样档的单一真源；`Program.cs` 选 BDN job，`eps-run.cs` 编排 profile，禁止恢复第二份硬编码车道表。采样档语义见 `docs/conventions.md` §12.5。
+- profile 预算：`--profile standard` ≤10 分钟（常规夜间）、`--full` ≤45 分钟（16 条执行车道，persist-medium 为聚焦别名）、`--profile remote-smoke` ≤5 分钟、`--profile remote-full` ≤90 分钟（含本地）；`--quick` ≤2 分钟、smoke 约 1 秒。
+- 全量编排：`dotnet run scripts/eps-run.cs -- --quick|--full|--profile standard|--lane <name>`（`--full` 要求工作树干净且独占，失败默认重试一次，日志与 summary.md/summary.json 落 `bench/logs/eps-run-*`；`--skip-build` 带二进制新鲜度检查；并发 build/test/bench 下 BDN InProcess 会随机 exit 1，先复测再判回归）。
 
 ---
 

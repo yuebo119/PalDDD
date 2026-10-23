@@ -77,7 +77,7 @@ var wiredNames = CollectWiredNames(root);
 // 并在跑探针前断言一致（防两处清单漂移，同 E1/E2 目录清单教训）。
 string[] probedGates = ["secret-scan", "encoding-gate", "dapper-param-guard", "gate-lite", "verify-conventions", "ci-coverage",
     "gate", "tech-debt", "doc-consistency", "test-gate", "verify-ai", "config-policy", "license-policy", "count-audit",
-    "quality-baseline", "review-freshness", "xml-guard", "vuln-scan", "test-change-guard", "new-skip-guard"];
+    "quality-baseline", "review-freshness", "xml-guard", "vuln-scan", "test-change-guard", "new-skip-guard", "perf-registry-check"];
 
 // 门禁覆盖形态声明（T-34，2026-09-22）：每个**已探针**门禁必须在此声明它覆盖哪些形态。
 // 为什么是机械要求而非文档建议：V25 的实证——一个已接线、能红、报错精确到行的门禁，
@@ -113,6 +113,7 @@ var gateForms = new Dictionary<string, string>(StringComparer.Ordinal)
     // （元测试形态，diff 对称与豁免兜底）；行内 // 剥除的漏报路径（方向安全）——
     // 由 --selftest 的 13 断言覆盖。
     ["new-skip-guard"] = "test/**.cs 新增 Skip 标注四形态（[Skip( / Skip = \" / .Skip(\" / Skip.If(）净增拦截；干净文件放行；删 1 加 1 的 reason 修改放行（对称判定，防搬掩护洗白）；LINQ .Skip(1) 不误伤；**不覆盖**：字符串字面量内 Skip 文本（豁免兜底）",
+    ["perf-registry-check"] = "bench/bench-registry.json ↔ --list flat 的类/方法/case/profile/预算/重复跑类/过滤器方法对账（--from-flat 隔离探针）；**不覆盖**：真实 bench 工程构建与 Program.cs 接线（由 eps-perf-check 与 CI 构建承担）",
 };
 
 // ─── 未接线脚本的分类（2026-09-13 增）───
@@ -818,7 +819,55 @@ var probes = new List<Probe>
             File.WriteAllText(p, "[Skip(\"new reason\")]\npublic class RenamedSkip { }\n");
             return ["test/Fake.Tests/RenamedSkip.cs"];
         }),
+    // ── perf-registry-check 隔离探针（2026-10-23）：注册表覆盖门禁的两极。
+    // --from-flat + --skip-cases 让探针不依赖真实 bench 工程与 Params 源文件；
+    // 正向钉「完整注册表放行」，负向钉「漏注册类必红」。
+    new(
+        Name: "perf-registry-check 放行完整注册表（负向对照）",
+        Gate: "perf-registry-check",
+        ExpectExit: 0,
+        MustContainInStdout: "PASS perf-registry-check",
+        ExtraArgs: "-- --from-flat bench/flat.txt --skip-cases",
+        Setup: dir => SetupPerfRegistryFixture(dir, removeCoreLane: false)),
+    new(
+        Name: "perf-registry-check 拒绝漏注册类",
+        Gate: "perf-registry-check",
+        ExpectExit: 1,
+        MustContainInStdout: "不在任何车道",
+        ExtraArgs: "-- --from-flat bench/flat.txt --skip-cases",
+        Setup: dir => SetupPerfRegistryFixture(dir, removeCoreLane: true)),
 };
+
+// perf-registry-check 探针夹具：最小注册表 + 平坦清单。负向夹具删掉核心车道并把
+// strict 车道的 classes 清空，使类 A 不在任何车道（full 也随之漏跑 A）。
+static string[] SetupPerfRegistryFixture(string dir, bool removeCoreLane)
+{
+    Directory.CreateDirectory(Path.Combine(dir, "bench"));
+    var coreLane = removeCoreLane
+        ? ""
+        : """
+            {"name":"a","flag":"a","profiles":["standard","full"],"mode":"alloc","timeoutMinutes":10,"expectedSeconds":10,"classes":["A"]},
+          """;
+    var strictClasses = removeCoreLane ? "[]" : """["A"]""";
+    File.WriteAllText(Path.Combine(dir, "bench", "bench-registry.json"),
+        $$$"""
+        {
+          "version": 1,
+          "targetsSeconds": {"gate":10,"standard":100,"full":200,"remoteSmoke":100,"remoteFull":200,"strict":100},
+          "modes": {"alloc":{"warmup":2,"iterations":3,"launch":1,"timing":"none"}},
+          "lanes": [
+            {"name":"smoke","flag":"smoke","profiles":["gate","standard","full"],"mode":"n/a","timeoutMinutes":5,"expectedSeconds":1,"classes":[]},
+            {{{coreLane}}}
+            {"name":"r","flag":"r","profiles":["remote-full"],"mode":"alloc","timeoutMinutes":10,"expectedSeconds":10,"remote":true,"classes":["R"]},
+            {"name":"rs","flag":"rs","profiles":["remote-smoke"],"mode":"alloc","timeoutMinutes":10,"expectedSeconds":10,"remote":true,"filter":["M2"],"classes":["R"]},
+            {"name":"s","flag":"s","profiles":["strict"],"mode":"alloc","timeoutMinutes":10,"expectedSeconds":10,"classes":{{{strictClasses}}}}
+          ]
+        }
+        """);
+    File.WriteAllText(Path.Combine(dir, "bench", "flat.txt"),
+        "PalDDD.Benchmarks.A.M1\nPalDDD.Benchmarks.R.M2\n");
+    return ["bench/bench-registry.json", "bench/flat.txt"];
+}
 
 // count-audit 探针夹具：最小可推导仓库（16 项推导全部 >0 才会走到声明扫描）。
 // 关键构造：① App.csproj 无 IsPackable=false → 可打包包数 = 1，README 里 999

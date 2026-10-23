@@ -369,7 +369,7 @@ var current = pipeline.Upgrade(payload.Span, oldDescriptor, currentDescriptor, s
 
 ## 性能
 
-> ⚠️ 以下为 `--smoke` 烟测数据（Stopwatch + GC 分配；2026-10-08，Windows 10 x64，.NET SDK 11.0.100-rc.1，BenchmarkDotNet 0.15.8）。耗时为 3 轮中位（同日极差 ±5%，跨 SDK 轮差可达 ±20%——计时只作趋势）；分配逐轮逐字节稳定，`--smoke` 对分配做预算断言（超限退出码非 0）。正式报告经 InProcess 模式产出（`--framework` / `--infra` / `--persist*` 等，15 个基准类全覆盖）。
+> ⚠️ 以下为 `--smoke` 烟测数据（Stopwatch + GC 分配；2026-10-08，Windows 10 x64，.NET SDK 11.0.100-rc.1，BenchmarkDotNet 0.15.8）。耗时为 3 轮中位（同日极差 ±5%，跨 SDK 轮差可达 ±20%——计时只作趋势）；分配逐轮逐字节稳定，`--smoke` 对分配做预算断言（超限退出码非 0）。正式报告经 InProcess 模式产出（`--framework` / `--infra` / `--persist*` 等，38 个基准类全覆盖）。2026-10-23 起车道与采样档由 `bench/bench-registry.json` 驱动：`dotnet run scripts/eps-run.cs -- --profile standard`（≤10 分钟）或 `--full`（≤45 分钟）；`--smoke` 仍是每提交门禁。
 
 | 操作 | 次数 | 耗时（3 轮中位） | 分配 |
 |------|:--:|------|:--:|
