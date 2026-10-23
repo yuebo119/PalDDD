@@ -585,7 +585,7 @@ clean HEAD `c3ac700`，`dotnet run scripts/eps-run.cs -- --full --skip-build`，
 | #46 Saga 轮转 10k 活跃 | 40 tick 全覆盖 10,000 行，max/tick=256；PG p50 13.2ms / p99 54.7ms；MySQL 18.4ms / 42.1ms；无饥饿 |
 | #41 Saga 租约 payload | 10k 行 / 256 批 / 4,342B `saga_data`：PG 每 tick +3.1ms（传输 0.7 + 解析 2.4，约 12µs/行）；MySQL 解析 +2.7~6.2ms（p50 噪声带）；10k 一轮 +0.12~0.25s。相对租约+处理器成本低一个量级，不做拆列/侧表迁移；触发条件（平均 payload >1KB 且扫描占 CPU >5%）写入 `docs/performance.md` 与台账 |
 
-探针入口：`--saga-advance-probe-pg|mysql`、`--saga-rotate-probe-pg|mysql`、`--saga-payload-probe-pg|mysql`（`MigrationProbes.cs`，只改 bench）。#42 已评估：dispatcher 已在首次派发时惰性建索引；按事件类型只解析对应 handler 需运行时闭合泛型（反射，违反零反射）或源生成路由/消费方注册形状变更，AOT 约束下暂不做（触发条件见台账）。#44 Kafka 默认串行发布是行为/兼容性变更，需 ADR 与用户裁决。
+探针入口：`--saga-advance-probe-pg|mysql`、`--saga-rotate-probe-pg|mysql`、`--saga-payload-probe-pg|mysql`（`MigrationProbes.cs`，只改 bench）。#42 已评估：dispatcher 已在首次派发时惰性建索引；按事件类型只解析对应 handler 需运行时闭合泛型（反射，违反零反射）或源生成路由/消费方注册形状变更，AOT 约束下暂不做（触发条件见台账）。#44 并非未决项：`cb05048`（2026-10-21）已在四项配置全未显式设置时默认开启 Kafka 幂等 producer（acks=all、重试不乱序），`SupportsConcurrentPublish` 随之默认为 true，Outbox Auto 窗口 ≥16；显式设置任一项保持调用方取舍，回落串行是设计取舍。2026-10-24 复跑锁定测试：`KafkaProducerConfigTests` 4/4、`OutboxPublishPipeliningTests` 6/6。
 
 ### 12.8 产品性能 #43（2026-10-24，幂等 StartOrGet）
 
