@@ -38,7 +38,17 @@
        Verify/BDN/FsCheck/Azure-SDK 链内部件（Argon / DiffEngine / EmptyFiles / SimpleInfoName /
        FSharp.Core / ApplicationInsights / DiaSymReader / Azure.Core / Microsoft.Diagnostics.* 等）
        按 2026-10-17 仓规不钉扎，归顶层包所有；MediatR 14.2.0 / Verify.TUnit 33.3.4 商业许可
-       禁令继续维持；SDK 11.0.100-rc.2.26504.105、dotnet tools 与 GitHub Actions 七项实测均最新 -->
+       禁令继续维持；SDK 11.0.100-rc.2.26504.105、dotnet tools 与 GitHub Actions 七项实测均最新；
+       2026-10-23 全量核新（用户令「更新所有的包和库到最新版本，并适配」，NuGet 双通道实测）：
+       PalORM ×5 → 6.7.0（上游发布说明明示无公共 API 签名移除或变更；行为变化为 TenantAware
+       实体更新不再写租户列、查询缓存租户命名空间改长度前缀、QueryPipeline 入队拒绝 Select 投影、
+       超时上界 49.7 天、MySQL BulkCopy 部分行写入后失败不再回退多值 INSERT；本仓适配面由编译
+       与 PalORM 测试面板实证）、TUnit/TUnit.FsCheck → 1.76.0、FsCheck → 3.6.0、
+       Meziantou.Analyzer → 3.0.316；其余 66 处维持现状，其中 62 处已在最新（含预发布口径），
+       4 处由既有裁决排除（MediatR 14.2.0 / Verify.TUnit 33.3.4 商业许可禁令、
+       Unsafe 7.0.0-preview.2 为 2022 年废弃预览线、Platforms 8.0 后停更）；
+       微软 11 线 rc.2.26504.105 仍为当前最新（GA 未发）；GitHub Actions 升两项
+       setup-python v7.0.0 → v7.1.0、codeql-action v4.39.0 → v4.39.1，其余五项已最新 -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
@@ -50,7 +60,7 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.9.0" />
     <!-- 第三方代码质量分析器（2026-10-18 接入，PrivateAssets=all，不进包依赖） -->
     <PackageVersion Include="Roslynator.Analyzers" Version="5.0.1" />
-    <PackageVersion Include="Meziantou.Analyzer" Version="3.0.315" />
+    <PackageVersion Include="Meziantou.Analyzer" Version="3.0.316" />
     <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.35.0.4138" />
     <!-- 仓储层依赖 (EF Core 11 rc.2 线) — 多数据库 Provider -->
     <!-- 2026-09-13 版本核实:EF Core 11 线最新即 rc.1.26425.128(rc.2 未发,GA 预计 2026-11),
@@ -83,14 +93,15 @@
          2026-09-13 用户裁决"铺垫不动"，启用路径见 DapperAotInitializer.cs 头注） -->
     <PackageVersion Include="Dapper.AOT" Version="1.1.0" />
     <!-- PalORM 适配器 — 面向 Native AOT 的 .NET 11 微 ORM（源生成 + 编译期 SQL，真 AOT 安全）
-         6.6.0（2026-10-20 升位，次版本线 6.5.0 → 6.6.0）：上游 CHANGELOG 明示无公共 API
-         破坏性变更，行为变化为版本化 BulkUpdateAsync 单语句路由、PG BulkInsertAsync 默认整段
-         COPY、MySQL ToPageAsync 事务内 DbBatch；本仓适配面由编译+三方言测试面板实证 -->
-    <PackageVersion Include="PalORM.Core" Version="6.6.0" />
-    <PackageVersion Include="PalORM.SourceGen" Version="6.6.0" />
-    <PackageVersion Include="PalORM.Sqlite" Version="6.6.0" />
-    <PackageVersion Include="PalORM.PostgreSql" Version="6.6.0" />
-    <PackageVersion Include="PalORM.MySql" Version="6.6.0" />
+         6.7.0（2026-10-23 升位，次版本线 6.6.0 → 6.7.0）：上游发布说明明示无公共 API 签名
+         移除或变更，行为变化集中在 TenantAware 更新不写租户列、查询缓存命名空间、
+         QueryPipeline 入队校验、超时上界与 MySQL BulkCopy 失败语义；本仓未使用
+         QueryPipeline/TenantAware/结构体投影，适配面由编译 + PalORM 测试面板实证 -->
+    <PackageVersion Include="PalORM.Core" Version="6.7.0" />
+    <PackageVersion Include="PalORM.SourceGen" Version="6.7.0" />
+    <PackageVersion Include="PalORM.Sqlite" Version="6.7.0" />
+    <PackageVersion Include="PalORM.PostgreSql" Version="6.7.0" />
+    <PackageVersion Include="PalORM.MySql" Version="6.7.0" />
     <!-- MemoryPack 二进制序列化（AOT 兼容） -->
     <PackageVersion Include="MemoryPack" Version="1.21.4" />
     <!-- Dapper.FluentMap 已移除 — 改用 Dapper.DefaultTypeMap.MatchNamesWithUnderscores -->
@@ -122,15 +133,16 @@
     <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
     <PackageVersion Include="Confluent.Kafka" Version="2.16.0" />
     <!-- 测试基础设施 — TUnit（源生成器测试框架 · MTP） -->
-    <PackageVersion Include="TUnit" Version="1.75.0" />
+    <PackageVersion Include="TUnit" Version="1.76.0" />
     <!-- BDN 0.16.0-preview.2（2026-10-17 用户裁决预发布可入包线升位）：0.15.8 起本仓
          因 net11-rc moniker 不识别走 InProcess 显式模式（Program.cs 头注+testing.md §4.1
          实录），0.16 线为 BDN 对 .NET 11 的适配版——默认入口是否恢复实测后定，未恢复则
          InProcess 路径维持（头注同步勘正） -->
     <PackageVersion Include="BenchmarkDotNet" Version="0.16.0-preview.2" />
-    <!-- 属性测试 — FsCheck + TUnit 集成（3.5.0：2026-10-19 全量核新唯一第三方次版本升位） -->
-    <PackageVersion Include="FsCheck" Version="3.5.0" />
-    <PackageVersion Include="TUnit.FsCheck" Version="1.75.0" />
+    <!-- 属性测试 — FsCheck + TUnit 集成（3.6.0：2026-10-23 升位，新增 Index/Range、Memory 系、
+         ValueTask 与 Half/Int128/DateOnly 等生成器；测试项目目标 net11.0，不涉及上游 TFM 缩减面） -->
+    <PackageVersion Include="FsCheck" Version="3.6.0" />
+    <PackageVersion Include="TUnit.FsCheck" Version="1.76.0" />
     <!-- 快照测试 — Verify + TUnit 集成 -->
     <PackageVersion Include="Verify.TUnit" Version="32.0.1" />
     <!-- 集成测试 — Testcontainers -->
