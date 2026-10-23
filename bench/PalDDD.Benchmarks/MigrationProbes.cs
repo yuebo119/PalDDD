@@ -13,6 +13,9 @@ using System.Data.Common;
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace PalDDD.Benchmarks;
 
@@ -22,6 +25,8 @@ namespace PalDDD.Benchmarks;
 ///   LeaseDueSagasAsync 只租到期行，旧 LeaseActiveSagasAsync 仍可取其余活跃行。
 /// --m4-probe-pg / --m4-probe-mysql：在真库上执行 EventId 二进制列 expand，播种旧行、
 ///   分批回填、创建唯一索引，并用 UseBinaryEventId 读回校验。
+/// --saga-payload-probe-pg / --saga-payload-probe-mysql：10k 活跃行、4KB 与空 saga_data
+///   两档，分离租约的传输与反序列化成本（#41 量化，仅测量不改产品）。
 /// 仅允许连接库名以 palddd_bench 开头的专用库（会清空探针数据）。
 /// </summary>
 internal static class MigrationProbes
@@ -407,6 +412,159 @@ internal static class MigrationProbes
         }
         samples.Sort();
         return (samples.Average(), samples[samples.Count / 2]);
+    }
+
+    /// <summary>
+    /// #41（2026-10-24 产品性能轮）：Saga 租约 payload 成本量化。10k 活跃行、4KB 与空 JSON
+    /// 两档，各自跑「不反序列化（只传输列）— 反序列化」两遍，隔离网络/物化与 JSON 解析两段。
+    /// 仅量化，不改产品代码；结果用于裁决是否值得把超时元数据拆列/侧表。
+    /// </summary>
+    public static async Task<int> RunSagaPayloadProbeAsync(bool postgreSql, CancellationToken ct = default)
+    {
+        const int count = 10_000;
+        const int batch = 256;
+        const int payloadChars = 4_000;
+        await using var conn = await OpenAsync(postgreSql, ct);
+        var dialect = postgreSql ? DapperDbType.PostgreSql : DapperDbType.MySql;
+        await EnsureColumnAsync(conn, postgreSql, "saga_states", "next_check_at",
+            postgreSql ? "TIMESTAMPTZ" : "DATETIME(6) NULL", ct);
+        await ExecAsync(conn, "DELETE FROM saga_states", ct);
+
+        var payload = new string('x', payloadChars);
+        await SeedPayloadSagasAsync(conn, postgreSql, count, payload, ct);
+        var storedBytes = Convert.ToInt64(await ScalarAsync(conn,
+            postgreSql
+                ? "SELECT LENGTH(saga_data::text) FROM saga_states LIMIT 1"
+                : "SELECT LENGTH(saga_data) FROM saga_states LIMIT 1",
+            ct), CultureInfo.InvariantCulture);
+        if (storedBytes <= payloadChars)
+            throw new InvalidOperationException($"payload seed too small: {storedBytes} bytes");
+
+        var largeTransfer = await MeasurePayloadPassAsync(
+            conn, dialect, jsonTypeInfo: null, "large-transfer", count, batch, ct);
+        var largeParse = await MeasurePayloadPassAsync(
+            conn, dialect, SagaPayloadJsonContext.Default.SagaPayloadProbeState, "large-parse", count, batch, ct);
+
+        await RewritePayloadAsync(conn, postgreSql, string.Empty, ct);
+        var smallTransfer = await MeasurePayloadPassAsync(
+            conn, dialect, jsonTypeInfo: null, "small-transfer", count, batch, ct);
+        var smallParse = await MeasurePayloadPassAsync(
+            conn, dialect, SagaPayloadJsonContext.Default.SagaPayloadProbeState, "small-parse", count, batch, ct);
+
+        Console.WriteLine(
+            $"SAGA PAYLOAD PASS ({dialect}): rows={count}, batch={batch}, payloadChars={payloadChars}, storedBytes={storedBytes}\n" +
+            $"  large transfer-only : p50={largeTransfer.P50:F1}ms p99={largeTransfer.P99:F1}ms ticks={largeTransfer.Ticks}\n" +
+            $"  large transfer+parse: p50={largeParse.P50:F1}ms p99={largeParse.P99:F1}ms ticks={largeParse.Ticks}\n" +
+            $"  small transfer-only : p50={smallTransfer.P50:F1}ms p99={smallTransfer.P99:F1}ms ticks={smallTransfer.Ticks}\n" +
+            $"  small transfer+parse: p50={smallParse.P50:F1}ms p99={smallParse.P99:F1}ms ticks={smallParse.Ticks}\n" +
+            $"  payload transfer ≈ {largeTransfer.P50 - smallTransfer.P50:F1}ms/tick, parse ≈ {largeParse.P50 - largeTransfer.P50:F1}ms/tick");
+        return 0;
+    }
+
+    private static async Task SeedPayloadSagasAsync(
+        DbConnection conn, bool postgreSql, int count, string payload, CancellationToken ct)
+    {
+        var t0 = DateTimeOffset.UtcNow.AddSeconds(1);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = postgreSql
+            ? "INSERT INTO saga_states (saga_id, current_state, status, created_at, version, next_check_at, saga_data) VALUES (@id, 'Initial', 0, @created, 0, NULL, CAST(@data AS jsonb))"
+            : "INSERT INTO saga_states (saga_id, current_state, status, created_at, version, next_check_at, saga_data) VALUES (@id, 'Initial', 0, @created, 0, NULL, @data)";
+        var pId = cmd.CreateParameter(); pId.ParameterName = "@id"; cmd.Parameters.Add(pId);
+        var pCreated = cmd.CreateParameter(); pCreated.ParameterName = "@created"; cmd.Parameters.Add(pCreated);
+        var pData = cmd.CreateParameter(); pData.ParameterName = "@data"; pData.Value = string.Empty; cmd.Parameters.Add(pData);
+        pId.Value = string.Empty;
+        pCreated.Value = postgreSql ? t0 : t0.UtcDateTime;
+        await cmd.PrepareAsync(ct);
+        for (var i = 0; i < count; i++)
+        {
+            var id = Ulid.New();
+            var created = t0.AddMilliseconds(i);
+            pId.Value = id.ToString(null, CultureInfo.InvariantCulture);
+            pCreated.Value = postgreSql ? created : created.UtcDateTime;
+            // SagaId 必须与行主键一致：typed 物化取 JSON 里的 SagaId，租约释放按它匹配。
+            pData.Value = SerializePayloadState(id, created, payload);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+        await tx.CommitAsync(ct);
+    }
+
+    /// <summary>把小 payload 按行重写（保留与行主键一致的 SagaId），保证 typed 释放可匹配。</summary>
+    private static async Task RewritePayloadAsync(
+        DbConnection conn, bool postgreSql, string payload, CancellationToken ct)
+    {
+        var rows = new List<(string Id, DateTimeOffset Created)>(10_000);
+        await using (var read = conn.CreateCommand())
+        {
+            read.CommandText = "SELECT saga_id, created_at FROM saga_states";
+            await using var reader = await read.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var created = reader.GetDateTime(1);
+                rows.Add((reader.GetString(0), new DateTimeOffset(DateTime.SpecifyKind(created, DateTimeKind.Utc))));
+            }
+        }
+
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = postgreSql
+            ? "UPDATE saga_states SET saga_data = CAST(@data AS jsonb) WHERE saga_id = @id"
+            : "UPDATE saga_states SET saga_data = @data WHERE saga_id = @id";
+        var pId = cmd.CreateParameter(); pId.ParameterName = "@id"; pId.Value = string.Empty; cmd.Parameters.Add(pId);
+        var pData = cmd.CreateParameter(); pData.ParameterName = "@data"; pData.Value = string.Empty; cmd.Parameters.Add(pData);
+        await cmd.PrepareAsync(ct);
+        foreach (var (id, created) in rows)
+        {
+            pId.Value = id;
+            pData.Value = SerializePayloadState(Ulid.Parse(id, CultureInfo.InvariantCulture), created, payload);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+        await tx.CommitAsync(ct);
+    }
+
+    private static string SerializePayloadState(Ulid id, DateTimeOffset created, string payload)
+        => JsonSerializer.Serialize(
+            new SagaPayloadProbeState { SagaId = id, CreatedAt = created, Payload = payload },
+            SagaPayloadJsonContext.Default.SagaPayloadProbeState);
+
+    private static async Task<(double P50, double P99, int Ticks)> MeasurePayloadPassAsync(
+        DbConnection conn, DapperDbType dialect, JsonTypeInfo<SagaPayloadProbeState>? jsonTypeInfo,
+        string label, int count, int batch, CancellationToken ct)
+    {
+        // 每档跑两遍取第二遍：第一遍吸收缓存/执行计划编译，避免冷热差被误读为 payload 成本。
+        for (var pass = 0; pass < 2; pass++)
+        {
+            var store = new DapperSagaStateStore<SagaPayloadProbeState>(conn, null, jsonTypeInfo, null, dialect);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var tickMs = new List<double>(64);
+            var ticks = 0;
+            while (seen.Count < count && ticks < 60)
+            {
+                var owner = $"{label}-{pass}-{ticks}";
+                var sw = Stopwatch.StartNew();
+                var rows = await store.LeaseActiveSagasAsync(owner, TimeSpan.FromMinutes(5), batch, ct);
+                sw.Stop();
+                tickMs.Add(sw.Elapsed.TotalMilliseconds);
+                ticks++;
+                if (rows.Count == 0 || rows.Count > batch)
+                    throw new InvalidOperationException($"{label} pass {pass} tick {ticks} leased {rows.Count} rows");
+                foreach (var row in rows)
+                    seen.Add(row.SagaId.ToString(null, CultureInfo.InvariantCulture));
+                await store.ReleaseLeasesAsync(owner, rows, DateTimeOffset.UtcNow, ct);
+            }
+            if (seen.Count != count)
+                throw new InvalidOperationException($"{label} pass {pass} leased {seen.Count}/{count}");
+
+            if (pass == 1)
+            {
+                tickMs.Sort();
+                return (tickMs[tickMs.Count / 2],
+                    tickMs[(int)Math.Ceiling((tickMs.Count - 1) * 0.99)], ticks);
+            }
+        }
+        throw new InvalidOperationException("unreachable");
     }
 
     public static Task<int> RunM4Async(bool postgreSql, CancellationToken ct = default)
@@ -980,3 +1138,12 @@ internal static class MigrationProbes
     {
     }
 }
+
+/// <summary>#41 探针状态：Payload 用于放大 saga_data 体积，不影响标量列。</summary>
+internal sealed class SagaPayloadProbeState : SagaState
+{
+    public string? Payload { get; set; }
+}
+
+[JsonSerializable(typeof(SagaPayloadProbeState))]
+internal sealed partial class SagaPayloadJsonContext : JsonSerializerContext;

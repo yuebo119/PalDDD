@@ -166,6 +166,13 @@ if (args.Contains("--idempotency-startorq-probe-pg", StringComparer.OrdinalIgnor
 if (args.Contains("--idempotency-startorq-probe-mysql", StringComparer.OrdinalIgnoreCase))
     return await MigrationProbes.RunIdempotencyStartOrGetProbeAsync(postgreSql: false);
 
+// 产品性能轮 #41：Saga 租约 payload（saga_data）传输/反序列化成本量化。
+if (args.Contains("--saga-payload-probe-pg", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunSagaPayloadProbeAsync(postgreSql: true);
+
+if (args.Contains("--saga-payload-probe-mysql", StringComparer.OrdinalIgnoreCase))
+    return await MigrationProbes.RunSagaPayloadProbeAsync(postgreSql: false);
+
 // 生产窗口规模演练（2026-10-20）：M1 10k 活跃 Saga 尾部延迟；M4 10 万行回填与索引体积。
 if (args.Contains("--m1-load-pg", StringComparer.OrdinalIgnoreCase))
     return await MigrationProbes.RunM1LoadAsync(postgreSql: true);

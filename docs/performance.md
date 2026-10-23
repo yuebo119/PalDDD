@@ -1010,6 +1010,21 @@ dotnet run -c Release --project bench/PalDDD.Benchmarks -- --wakeup-probe
 
 口径：`--idempotency-startorq-probe-pg|mysql`，各 100 次，预置一条 Completed 与一条 Processing 记录，结果必须为 Existing；PG 路径代码未动，前后差异属环境波动。PalORM 同形态改动由 SQLite 测试覆盖（138 通过 / 54 跳过 / 0 失败），远程 PalORM 未单独复测。
 
+### #41 Saga 租约 payload 成本（2026-10-24，bench-only）
+
+10,000 活跃行、256/批、每行 `saga_data` 4,342 B（基准档）与空 payload 对照，各档跑两遍取第二遍；「只传输」= 不传 `JsonTypeInfo`（`Materialize` 走零反序列化兜底），「传输+解析」= 传源生成 `JsonTypeInfo`。每档一轮 40 tick 覆盖全部 10k。
+
+| 方言 | 4KB 只传输 p50 | 4KB 传输+解析 p50 | 空只传输 p50 | 空传输+解析 p50 | 4KB 增量（传输/解析） |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| PG | 16.2 ms | 18.7 ms | 15.5 ms | 17.3 ms | +0.7 / +2.4 ms per 256 行 |
+| MySQL（第 2 轮） | 30.0 ms | 32.8 ms | 24.8 ms | 19.9 ms | +2.8 ms 解析；传输增量被 p50 噪声盖住 |
+
+MySQL 第 1 轮大档解析增量 +6.2 ms、小档 p50 反低于传输档，两轮区间约 +2.7~6.2 ms/tick（p99 单轮 383 ms，受 InnoDB 检查点/网络抖动影响）。按行折算：4KB payload 约 12 µs/行（PG）、11~24 µs/行（MySQL）；10k 全量一轮增加约 0.12~0.25 s。
+
+裁决：#41 不做结构迁移（拆列/侧表）。理由：payload 成本相对「租约 + 处理器执行」低一个量级，迁移要动三栈 schema/备份/跨栈读取契约；当前无消费方平均 payload 分布与 saga 扫描 CPU 占比证据。触发条件：消费方平均 `saga_data` >1 KB 且 saga 扫描占处理器 CPU >5%，用 `--saga-payload-probe-pg|mysql` 复测后再立项。
+
+> 探针注意：typed 物化的 `SagaId` 取自 `saga_data` JSON，不是行主键；种子 JSON 必须写入与行相同的 `SagaId`，否则 `ReleaseLeasesAsync` 的 `WHERE saga_id IN (...)` 匹配 0 行，第二轮租不到新行（首跑实测踩到）。
+
 ## 未完成项
 
 1. ~~等 BenchmarkDotNet 支持当前 .NET 11 后用默认入口重新生成全部 benchmark 类结果~~（2026-10-08 大部分消解：17 类经 InProcess 显式模式全部可出正式报告；**2026-10-17 BDN 0.16.0-preview.2 已恢复默认 Switcher 入口**（`--list` 实测 exit 0），显式 InProcess 路径保留为口径配置；类级 job 注解仍按 Medium 显式 config 承载，不再依赖 attribute）。
