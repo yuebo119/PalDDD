@@ -40,6 +40,9 @@ if (args.Contains("--list", StringComparer.Ordinal))
     return 0;
 }
 
+// 本次运行起点：日志清理据此区分「本次创建的目录」与历史目录。
+RunScope.StartedAtUtc = DateTime.UtcNow;
+
 var (options, parseError) = ParseArgs(args);
 if (options is null)
 {
@@ -155,7 +158,7 @@ static async Task<LaneResult> RunLaneAsync(Lane lane, Options options, int attem
     {
         actualAttempts = attempt;
         Console.WriteLine($">> lane {lane.Name}（attempt {attempt}/{attempts}）…");
-        var (exitCode, output) = await RunCapturedAsync(psi, TimeSpan.FromMinutes(45), logPath);
+        var (exitCode, output) = await RunCapturedAsync(psi, LaneTimeout(lane), logPath);
         lastOutput = output;
         if (exitCode == 0)
         {
@@ -255,6 +258,11 @@ static async Task<int> PreflightAsync(Options options)
     return 0;
 }
 
+// 远程真库车道单次可超过本地量级：2026-10-23 persist-mysql 实测约 56 分钟，
+// 45 分钟上限连续两轮被截断（exit=-1），只能手工单跑补齐。本地保持 45 分钟。
+static TimeSpan LaneTimeout(Lane lane)
+    => lane.Remote ? TimeSpan.FromMinutes(90) : TimeSpan.FromMinutes(45);
+
 // ══════════════ 汇总/日志 ══════════════
 
 static int Finish(IReadOnlyList<LaneResult> results, Options options)
@@ -296,10 +304,11 @@ static void PruneOldLogs(string logRoot)
 {
     try
     {
-        var stale = Directory.GetDirectories(logRoot, "eps-run-*")
-            .OrderByDescending(Directory.GetLastWriteTimeUtc)
-            .Skip(20)
-            .ToArray();
+        var stale = SelectStaleLogDirs(
+            Directory.GetDirectories(logRoot, "eps-run-*"),
+            Directory.GetLastWriteTimeUtc,
+            RunScope.StartedAtUtc,
+            keep: 20);
         foreach (var dir in stale) Directory.Delete(dir, recursive: true);
     }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -307,6 +316,20 @@ static void PruneOldLogs(string logRoot)
         Console.WriteLine($"WARN 旧日志清理失败（不影响本次结果）：{ex.Message}");
     }
 }
+
+// 选出可删除的日志目录：本次运行创建的目录一律保留，历史目录按最后写入时间保留最新 keep 份。
+// 2026-10-23 实证：一次 --full 创建 20+ 个车道目录，旧的「全局保留 20 份」会在运行结束时
+// 删掉本次最早的 smoke/app 明细，事后回溯只能重跑。
+static string[] SelectStaleLogDirs(
+    IReadOnlyList<string> dirs,
+    Func<string, DateTime> lastWriteUtc,
+    DateTime runStartedAtUtc,
+    int keep)
+    => dirs
+        .Where(dir => lastWriteUtc(dir) < runStartedAtUtc)
+        .OrderByDescending(lastWriteUtc)
+        .Skip(keep)
+        .ToArray();
 
 // ══════════════ 车道清单/参数 ══════════════
 
@@ -617,6 +640,27 @@ static int SelfTest()
     Case("本地全量不含 remote", SelectLanes(includeRemote: false).All(l => !l.Remote) && SelectLanes(false).Length == 17);
     Case("--include-remote 追加 4 条", SelectLanes(includeRemote: true).Length == SelectLanes(false).Length + 4);
     Case("每条车道 flag 唯一", Lanes().Select(l => l.Flag).Distinct(StringComparer.Ordinal).Count() == Lanes().Length);
+    Case(
+        "远程车道超时 90 分钟 / 本地 45 分钟",
+        LaneTimeout(LaneByName("persist-mysql")!) == TimeSpan.FromMinutes(90)
+        && LaneTimeout(LaneByName("persist")!) == TimeSpan.FromMinutes(45));
+
+    var runStart = new DateTime(2026, 10, 23, 9, 0, 0, DateTimeKind.Utc);
+    var beforeRun = runStart.AddHours(-2);
+    var mtimes = new Dictionary<string, DateTime>(StringComparer.Ordinal)
+    {
+        ["old1"] = beforeRun,
+        ["old2"] = beforeRun.AddMinutes(1),
+        ["old3"] = beforeRun.AddMinutes(2),
+        ["cur1"] = runStart.AddMinutes(5),
+        ["cur2"] = runStart.AddMinutes(6),
+    };
+    DateTime Mtime(string dir) => mtimes[dir];
+    string[] allDirs = ["old1", "old2", "old3", "cur1", "cur2"];
+    var stale = SelectStaleLogDirs(allDirs, Mtime, runStart, keep: 1);
+    Case("日志清理保留本次运行目录", !stale.Contains("cur1") && !stale.Contains("cur2"));
+    Case("日志清理按时间保留历史最新 keep 份", stale.Length == 2 && stale.Contains("old1") && stale.Contains("old2") && !stale.Contains("old3"));
+    Case("历史目录不足 keep 不删", SelectStaleLogDirs(["old1"], Mtime, runStart, keep: 5).Length == 0);
 
     Console.WriteLine($"═══════ EPS-RUN SELFTEST：{(failures.Count == 0 ? "全部通过" : $"{failures.Count} 例失败")} ═══════");
     foreach (var failure in failures) Console.WriteLine("  FAIL " + failure);
@@ -629,3 +673,9 @@ internal sealed record Options(
     bool Quick, bool Full, string? Lane, bool Strict, bool AllowDirty,
     bool IncludeRemote, bool DryRun, bool SkipBuild, int Retry);
 internal sealed record LaneResult(string Name, string Status, TimeSpan Duration, int Attempts, string LogPath, string Detail);
+
+/// <summary>本次进程的运行起点（日志清理据此区分本次目录与历史目录）。</summary>
+internal static class RunScope
+{
+    public static DateTime StartedAtUtc { get; set; }
+}

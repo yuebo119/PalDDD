@@ -100,6 +100,8 @@ Inbox 口径注：三方法为 1-op / 3-op / 2-op 捆绑（重复拒绝必然含
 | Hosting.ExceptionMiddleware_Passthrough | 441.4 ns | 9.72 ns | 1.41 KB |
 | Hosting.MapCommand_Endpoint_Invoke（JSON 反序列化+分发+响应序列化） | 2,543.3 ns | 11.56 ns | 3.51 KB |
 
+> **MapCommand 基准修复（2026-10-23）**：该基准的请求作用域漏注册 `HostingCommandHandler`。端点把 `ctx.RequestServices` 交给 `Dispatcher.SendAsync` 复用作用域后，`ExecutePipelineAsync` 用该 provider 解析处理器，导致全程抛 `InvalidOperationException`（BDN 记 NA），2026-10-08 的 2,543.3 ns 基线自此不可复现。补注册后复测 **2,431.3 ns / 3.33 KB**（Error 2.1%，对 Terminal_Only 比率 5.72）。
+>
 > 五车道注（2026-10-08）：① Specification 内存路径**零分配 ~1.7ns**——Expression.Compile 在规约构造期一次完成，IsSatisfiedBy 走缓存委托调用；README「AOT 已知限制③」的内存路径由此量化为非热区。② 演化链式（V1→V3 两跳）仅比单跳 +3%/+64B——成本在反/序列化对而非转换器跳数，多级演化的边际开销可忽略。③ 端到端 InMemory 链 470ns/968B 给出「框架开销层」单命令全链路基线（分发+序列化+Outbox 落入；不含 DB I/O——真库形态见各持久化车道）。④ 异常中间件直通 +29ns（+7%）/请求；MapCommand 端点全周期 2.5μs/3.5KB（含 JSON 双向，Error 0.5%）。⑤ 演化契约实录：升级步必须同 wire name + 递增 schemaVersion（管线校验「stable wire name」——首跑用 .v1/.v2 命名被拒，属 API 契约的基准侧实录）。
 
 ## 横向对比与绝对 QPS（2026-10-09 新维度轮：`--compare` / `--qps`）

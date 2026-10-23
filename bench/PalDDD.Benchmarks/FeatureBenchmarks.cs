@@ -269,6 +269,10 @@ public class HostingBenchmarks
 
         var endpointServices = new ServiceCollection();
         endpointServices.AddSingleton(dispatcher);
+        // MapCommand 端点把 ctx.RequestServices 交给 Dispatcher.SendAsync 复用请求作用域，
+        // 而 ExecutePipelineAsync 用传入 provider 解析 THandler——请求作用域必须能解析处理器。
+        // 2026-10-23 全量实测：缺此注册使该基准全程 NA（No service for type HostingCommandHandler）。
+        endpointServices.AddSingleton<HostingCommandHandler>();
         // ExceptionMiddleware 构造依赖 IPalLogger<T>（UseMiddleware 按请求激活经 RequestServices
         // 解析）。NullPalLogger<T> 是私有构造器单例——开放泛型注册无法实例化，注册封闭类型实例
         endpointServices.AddSingleton<PalDDD.Core.Logging.IPalLogger<PalDDD.Hosting.AspNetCore.ExceptionMiddleware>>(
