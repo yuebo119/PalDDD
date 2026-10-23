@@ -561,6 +561,7 @@ clean HEAD `c3ac700`，`dotnet run scripts/eps-run.cs -- --full --skip-build`，
 | EPSL 自测 | `dotnet run scripts/eps-run.cs -- --selftest` | 全过 |
 | 快速档 | `dotnet run scripts/eps-run.cs -- --quick` | 2 PASS（eps-perf-check + smoke） |
 | 测试 | 16 个测试项目直接跑 MTP exe（仓库现有入口） | 1,872 通过 / 82 跳过 / 0 失败 |
+| 实测预算告警 | `eps-run --selftest` 的 BudgetWarning 两例 | PASS：预算内不告警 / 超限告警 |
 
 变异验证：注册表门禁的隔离探针在 gate-audit 中拒绝漏注册类（exit 1）并放行完整注册表（exit 0）；构建新鲜度检查对 registry/源文件变更给出 exit 2（实测），对干净构建放行；smoke 预算压至 1 时 RaiseEvent 判红（既有实证）。`--skip-build` 的注册表 JSON 变更不触发重建（运行时读取），已从新鲜度输入中排除。
 

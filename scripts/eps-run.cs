@@ -329,6 +329,35 @@ static string? CheckBuildFreshness(string root)
 
 // ══════════════ 汇总/日志 ══════════════
 
+// 实测预算告警：静态预算门禁用 expectedSeconds；这里用本轮墙钟，超过 profile 目标时
+// 打印 WARN 并写入 summary，不改变退出码。standard 的 8 秒余量因此可观测，新增车道
+// 若把实测推过 600 秒，日志会直接出现，不等下一次预算审计。
+static string? BudgetWarning(
+    Options options,
+    IReadOnlyList<LaneResult> results,
+    IReadOnlyDictionary<string, int> targets)
+{
+    if (options.Quick || options.Lane is not null) return null;
+    var profile = options.Profile ?? "full";
+    var key = options.IncludeRemote
+        ? "remoteFull"
+        : profile switch
+        {
+            "standard" => "standard",
+            "full" => "full",
+            "remote-smoke" => "remoteSmoke",
+            "remote-full" => "remoteFull",
+            "gate" => "gate",
+            "strict" => "strict",
+            _ => null,
+        };
+    if (key is null || !targets.TryGetValue(key, out var target)) return null;
+    var measured = results.Where(r => r.Name != "eps-perf-check").Sum(r => r.Duration.TotalSeconds);
+    return measured > target
+        ? $"profile {profile} 实测 {measured:F0}s > 预算 {target}s"
+        : null;
+}
+
 static int Finish(IReadOnlyList<LaneResult> results, Options options)
 {
     var logRoot = Path.Combine("bench", "logs");
@@ -339,6 +368,7 @@ static int Finish(IReadOnlyList<LaneResult> results, Options options)
     var head = Git("rev-parse", "--short", "HEAD");
     var failed = results.Count(r => r.Status == "FAIL");
     var skipped = results.Count(r => r.Status == "SKIP");
+    var budgetWarning = BudgetWarning(options, results, Registry.TargetsSeconds);
 
     var sb = new StringBuilder();
     sb.AppendLine("# EPSL run summary");
@@ -348,6 +378,7 @@ static int Finish(IReadOnlyList<LaneResult> results, Options options)
     sb.AppendLine($"- profile：{(options.Quick ? "quick" : options.Lane is not null ? "lane" : options.Profile)}");
     sb.AppendLine($"- dotnet：{DotnetVersion()}");
     sb.AppendLine($"- 结果：{results.Count(r => r.Status == "PASS")} PASS / {failed} FAIL / {skipped} SKIP");
+    if (budgetWarning is not null) sb.AppendLine($"- 预算：WARN {budgetWarning}");
     sb.AppendLine();
     sb.AppendLine("| 车道 | 结果 | 耗时 | 尝试 | mode | 日志/备注 |");
     sb.AppendLine("| --- | --- | ---: | ---: | --- | --- |");
@@ -365,6 +396,7 @@ static int Finish(IReadOnlyList<LaneResult> results, Options options)
         head,
         dotnet = DotnetVersion(),
         profile = options.Quick ? "quick" : options.Lane is not null ? "lane" : options.Profile,
+        budgetWarning,
         results = results.Select(r => new
         {
             lane = r.Name,
@@ -384,6 +416,8 @@ static int Finish(IReadOnlyList<LaneResult> results, Options options)
         Console.WriteLine($"  {r.Status,-4} {r.Name,-16} {r.Duration.TotalSeconds,5:F0}s  {r.Detail}");
     Console.WriteLine($"summary: {summaryPath}");
     Console.WriteLine($"summary.json: {jsonPath}");
+    if (budgetWarning is not null)
+        Console.WriteLine($"WARN {budgetWarning}（不阻断；预算门禁见 scripts/perf-registry-check.cs）");
     PruneOldLogs(logRoot);
     return failed == 0 ? 0 : 1;
 }
@@ -747,6 +781,23 @@ static int SelfTest()
     Case("路径匹配不误伤", !PathMatches("src/PalDDD.Core/**", "src/PalDDD.Dapper/Store.cs"));
     Case("路径匹配单星号", PathMatches("src/PalDDD.*/x.cs", "src/PalDDD.Core/x.cs") && !PathMatches("src/PalDDD.*/x.cs", "src/PalDDD.Core/sub/x.cs"));
 
+    var budgetTargets = new Dictionary<string, int>(StringComparer.Ordinal) { ["standard"] = 600 };
+    var budgetIn = new List<LaneResult>
+    {
+        new("eps-perf-check", "PASS", TimeSpan.Zero, 1, "", ""),
+        new("a", "PASS", TimeSpan.FromSeconds(500), 1, "", ""),
+    };
+    var budgetOver = new List<LaneResult>(budgetIn)
+    {
+        new("b", "PASS", TimeSpan.FromSeconds(150), 1, "", ""),
+    };
+    var standardOptions = new Options(
+        Quick: false, Profile: "standard", Lane: null, Strict: false, AllowDirty: false,
+        IncludeRemote: false, DryRun: false, SkipBuild: false, NoChecker: false,
+        Changed: false, ChangedBase: "", Retry: 0);
+    Case("预算内不告警", BudgetWarning(standardOptions, budgetIn, budgetTargets) is null);
+    Case("预算超限告警", BudgetWarning(standardOptions, budgetOver, budgetTargets)?.Contains("> 预算 600s", StringComparison.Ordinal) == true);
+
     var changed = SelectChangedLanesForTest(Registry.Profile("standard").ToList(), []);
     Case("--changed 无变更回退全部 standard", changed.Count == 9);
     var changedMatched = SelectChangedLanesForTest(Registry.Profile("standard").ToList(), ["src/PalDDD.Core/Entity.cs"]);
@@ -816,6 +867,8 @@ internal static class SummaryJson
 internal sealed class RegistryFile
 {
     public List<Lane> Lanes { get; init; } = [];
+
+    public Dictionary<string, int> TargetsSeconds { get; init; } = new(StringComparer.Ordinal);
 }
 
 internal static class Registry
@@ -830,6 +883,8 @@ internal static class Registry
     };
 
     public static List<Lane> Lanes => s_current.Value.Lanes;
+
+    public static Dictionary<string, int> TargetsSeconds => s_current.Value.TargetsSeconds;
 
     public static Lane Lane(string name)
         => Lanes.FirstOrDefault(l => string.Equals(l.Name, name, StringComparison.Ordinal))

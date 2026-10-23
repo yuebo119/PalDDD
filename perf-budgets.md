@@ -69,7 +69,7 @@
 | 预算项 | 执行载体 | 触发 |
 | --- | --- | --- |
 | smoke 分配断言 | `-- --smoke`（退出码 1 即红）；CI `build-and-test` 的 `perf-smoke` 步骤 + 本地跑测 | 每提交 / 每次跑测（2026-10-18 从人工 TOOL 转每提交门禁） |
-| EPSL 快速/全量编排 | `scripts/eps-run.cs -- --quick`（检查件 + smoke）/ `-- --full`（预检 + 16 条执行车道 + 汇总；persist-medium 为聚焦别名）/ `-- --profile standard`（≤10 分钟）/ `-- --profile remote-smoke|remote-full`；全量要求独占，失败默认重试 1 次；`--skip-build` 带二进制新鲜度检查 | 节点审计 / 常规夜间 / 全量复跑 |
+| EPSL 快速/全量编排 | `scripts/eps-run.cs -- --quick`（检查件 + smoke）/ `-- --full`（预检 + 16 条执行车道 + 汇总；persist-medium 为聚焦别名）/ `-- --profile standard`（≤10 分钟）/ `-- --profile remote-smoke|remote-full`；全量要求独占，失败默认重试 1 次；`--skip-build` 带二进制新鲜度检查；profile 实测超过 targetsSeconds 时打印 WARN 并写入 summary（不阻断，静态门禁仍由 perf-registry-check 执行） | 节点审计 / 常规夜间 / 全量复跑 |
 | 流式零分配锁定 | `StreamFrameAllocationTests` + `--stream` 微 lane | 每次测试 / 节点审计 |
 | Medium 水位对照 | `--framework` / `--app` / `--infra` / `--sqlgen` 复跑 | 节点审计 |
 | 回归自动归因 | EPSL perf-bisect（**设计稿，未实现**：~/.zcode/perf-template/audit/bisect-design.md）；当前走人工 commit 区间 + 交替复测 | 门禁红且复测确认非环境态 |
