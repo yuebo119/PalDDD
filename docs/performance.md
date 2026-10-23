@@ -967,6 +967,7 @@ dotnet run -c Release --project bench/PalDDD.Benchmarks -- --wakeup-probe
 
 - 投递夹具复位（首轮 seed、后续 UPDATE 复位）：实测 896 秒 vs 基线 906 秒（-1%），分段后 setup 残差 86→119 秒，无收益；已撤销，保留原 delete+seed 夹具。远程夹具复位未测。
 - 投递整类 3/2 采样：541 秒但 RTT=0 格 Error 100%–343%，统计无效；保持 5/3/1。
+- 投递快慢格拆分（快 5/3、慢 3/2，同 class 两次参数过滤）：928 秒 vs 964 秒（-3.7%），慢格 RTT=1 的 Error 20%–34%、快格部分 22%–110%；多秒 op 的 Jitting/预热与 Windows 定时器粒度主导，采样节省未兑现；撤销，保留单次 medium-lite。
 - `persist` 固定档：29 秒（medium 52 秒），但 Dapper AddSingle 39.3%、EF AddSingle 29.3%、Dapper 幂等 25.8%、PalORM AddSingle 15.9%，4 项越过 15% 线；保留 `medium`。
 - `stream` fixed-short：93 秒（fixed 139 秒），但 PerFrame_ZeroCopy_WithFlush 24.9%；该方法是已定案的零拷贝对照，不新增无效计时项；保留 `fixed`。
 - `coverage` fixed-short：116 秒，反而比 auto 的 93 秒慢；保留 auto。
