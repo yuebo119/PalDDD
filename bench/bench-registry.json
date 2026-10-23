@@ -75,7 +75,7 @@
       "mode": "n/a",
       "timeoutMinutes": 5,
       "remote": false,
-      "expectedSeconds": 1,
+      "expectedSeconds": 3,
       "classes": [],
       "paths": []
     },
@@ -93,7 +93,7 @@
       },
       "timeoutMinutes": 45,
       "remote": false,
-      "expectedSeconds": 56,
+      "expectedSeconds": 57,
       "classes": [
         "DispatcherBenchmarks",
         "SerializationBenchmarks"
@@ -190,7 +190,7 @@
       },
       "timeoutMinutes": 45,
       "remote": false,
-      "expectedSeconds": 75,
+      "expectedSeconds": 93,
       "classes": [
         "ProjectionBenchmarks",
         "MessageEvolutionBenchmarks",
@@ -238,7 +238,7 @@
       "mode": "auto",
       "timeoutMinutes": 45,
       "remote": false,
-      "expectedSeconds": 10,
+      "expectedSeconds": 11,
       "classes": [
         "SagaLaneBenchmarks"
       ],

@@ -30,7 +30,7 @@
 | profile | 内容 | 预算 |
 | --- | --- | ---: |
 | gate | smoke 6 项 + 注册表检查 | ≤10 秒 |
-| standard | app/framework/infra/coverage/concurrency/saga/persist/stream + smoke（9 条；persist-mark 留在 full 与聚焦车道） | ≤10 分钟（2026-10-23 实测 576 秒） |
+| standard | app/framework/infra/coverage/concurrency/saga/persist/stream + smoke（9 条；persist-mark 留在 full 与聚焦车道） | ≤10 分钟（2026-10-23 实测 592 秒） |
 | full | 16 条执行车道全部本地 case；persist-medium 保留为聚焦别名，不在 full 重复跑子集 | ≤45 分钟 |
 | remote-smoke | 每方言 2 个代表 case | ≤5 分钟 |
 | remote-full | 4 条真库车道 | ≤90 分钟（含本地） |

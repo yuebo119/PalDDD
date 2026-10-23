@@ -940,7 +940,7 @@ dotnet run -c Release --project bench/PalDDD.Benchmarks -- --wakeup-probe
 
 `compression` 在 full 实测用 auto（42 秒），但 `Brotli_Compress_16KB` 的 Error/Mean 为 137%（统计无效，分配 304 B 稳定）。C2 校准把该车道切到 fixed：137 秒，Brotli 13.5%、其余 <10.5%，分配逐字节不变。最终配置的 full 组合为 `1,699 - 42 + 137 = 1,794` 秒（29.9 分钟，仍低于 30 分钟冲刺线与 45 分钟目标）。`persist` 从 30 秒升到 52 秒不是回归：旧 `--persist` 用裸 InProcess job，新车道用 `medium` 恢复参考趋势口径；`delivery` 的 +53 秒来自 RTT=1 的 Windows 定时器粒度（同轮内比值仍有效），采样未变。
 
-常规档 `standard`（9 条：smoke/app/framework/infra/coverage/concurrency/saga/persist/stream）实测 **576 秒（9.6 分钟）**，低于 600 秒预算。`persist-mark` 已移出 standard（保留 full 与 `--lane persist-mark`），因为 full 实测 standard 全量曾为 602 秒，超出 10 分钟 2 秒。
+常规档 `standard`（9 条：smoke/app/framework/infra/coverage/concurrency/saga/persist/stream）实测 **592 秒（9.9 分钟）**，低于 600 秒预算。`persist-mark` 已移出 standard（保留 full 与 `--lane persist-mark`），因为 full 实测 standard 全量曾为 602 秒，超出 10 分钟 2 秒。
 
 远程 `--profile remote-full`（真库健康，PG 55432 / MySQL 3306，`palddd_bench_full`）：
 

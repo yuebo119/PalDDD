@@ -19,7 +19,7 @@
 
 按已测探针外推，本地 `--full` 从 85.5 分钟降到约 26 分钟（投递保持 906 秒不降采样）；如果投递夹具摊销验证通过，约 23 分钟。`--full --include-remote` 在环境健康时约 63 分钟，远程环境错误时预检 10 秒内失败。常规 `standard` 档约 8.6 分钟，`--quick` 与 `--smoke` 不变。
 
-Stage C 实测（HEAD `c3ac700`，详见 §12）：本地 `--full` **1,699 秒（28.3 分钟）**，固定档 compression 的最终组合 **1,794 秒（29.9 分钟）**；`standard` **576 秒（9.6 分钟）**；`--full --include-remote` 健康组合 **4,904 秒（81.7 分钟）**，按最终 fixed compression 组合为 **4,999 秒（83.3 分钟）**；远程环境错误 1–3 秒退出 2。投递夹具摊销 A/B 为 896 秒 vs 906 秒，无收益，已撤销；投递保持 5/3/1。
+Stage C 实测（HEAD `c3ac700`，详见 §12）：本地 `--full` **1,699 秒（28.3 分钟）**，固定档 compression 的最终组合 **1,794 秒（29.9 分钟）**；`standard` **592 秒（9.9 分钟）**；`--full --include-remote` 健康组合 **4,904 秒（81.7 分钟）**，按最终 fixed compression 组合为 **4,999 秒（83.3 分钟）**；远程环境错误 1–3 秒退出 2。投递夹具摊销 A/B 为 896 秒 vs 906 秒，无收益，已撤销；投递保持 5/3/1。
 
 不删类、不删方法、不删参数格、不降 smoke 断言。38 个类、154 个平坦方法、173 个实际 case 全部保留归属。
 
@@ -507,12 +507,12 @@ clean HEAD `c3ac700`，`dotnet run scripts/eps-run.cs -- --full --skip-build`，
 
 偏差与解释：
 
-- `app` 56 秒（投影 25）、`framework` 71（60）、`coverage` 75（72）、`concurrency` 126（121）、`stream` 139（127）、`delivery` 964（906）、`compare` 18（10）。这些是趋势档的实际采样成本，合计仍低于 45 分钟目标；标准档 576 秒也低于 600 秒预算。
+- `app` 56 秒（投影 25）、`framework` 71（60）、`coverage` 75（72）、`concurrency` 126（121）、`stream` 139（127）、`delivery` 964（906）、`compare` 18（10）。这些是趋势档的实际采样成本，合计仍低于 45 分钟目标；标准档 592 秒也低于 600 秒预算。
 - `persist` 30→52 不是回归：旧 `--persist` 用裸 InProcess job，新车道用 `medium` 恢复参考趋势口径。该车道 52 秒是 full 的可接受成本，若要更快可切 `fixed`（未在本轮量测）。
 - `delivery` +53 秒来自 RTT=1 格的 Windows 定时器粒度（同轮内比值仍有效），采样保持 5/3/1 未变；夹具复位 A/B 为 896 秒 vs 906 秒，无收益，已撤销。
 - `compression` 在 full 实测用 auto（42 秒），但 `Brotli_Compress_16KB` 的 Error/Mean 为 137%，统计无效（分配 304 B 稳定）。C2 把该车道切到 fixed：137 秒，Brotli 13.5%、其余 <10.5%，分配逐字节不变。最终配置的 full 组合为 `1,699 - 42 + 137 = 1,794` 秒（29.9 分钟），仍低于 30 分钟冲刺线与 45 分钟目标。
 
-标准档（9 条：smoke/app/framework/infra/coverage/concurrency/saga/persist/stream）实测 **576 秒（9.6 分钟）**。`persist-mark` 已移出 standard（保留 full 与 `--lane persist-mark`）；full 实测时 standard 全量（含 persist-mark）曾为 602 秒，超出 10 分钟 2 秒，故做了该裁剪。
+标准档（9 条：smoke/app/framework/infra/coverage/concurrency/saga/persist/stream）实测 **592 秒（9.9 分钟）**。`persist-mark` 已移出 standard（保留 full 与 `--lane persist-mark`）；full 实测时 standard 全量（含 persist-mark）曾为 602 秒，超出 10 分钟 2 秒，故做了该裁剪。
 
 ### 12.2 远程 full
 
@@ -562,11 +562,11 @@ clean HEAD `c3ac700`，`dotnet run scripts/eps-run.cs -- --full --skip-build`，
 ### 12.6 最终数字与残余
 
 - 本地 `--full`：实测 1,699 秒（28.3 分钟）；固定档 compression 的最终组合 1,794 秒（29.9 分钟），均 ≤45 分钟。
-- `standard`：576 秒（9.6 分钟），≤10 分钟。
+- `standard`：592 秒（9.9 分钟），≤10 分钟。
 - `--full --include-remote` 健康：1,699 + 3,205 = 4,904 秒（81.7 分钟）；最终 fixed compression 组合 1,794 + 3,205 = 4,999 秒（83.3 分钟），均 ≤90 分钟。
 - 远程环境错误：1–3 秒退出 2，≤5 分钟。
 - `--quick`：约 2 秒；smoke：约 1 秒。
-- 残余风险：远程 MySQL 的 persist 1,406 秒是当前最大单车道，若环境抖动可能接近 90 分钟上限；standard 的 576 秒距 600 秒只有 24 秒余量，新增车道前先看预算门禁；`alloc` 档计时不可引用；`persist` 的 52 秒是 MediumRun 参考口径成本。
+- 残余风险：远程 MySQL 的 persist 1,406 秒是当前最大单车道，若环境抖动可能接近 90 分钟上限；standard 的 592 秒距 600 秒只有 8 秒余量，新增车道前先看预算门禁；`alloc` 档计时不可引用；`persist` 的 52 秒是 MediumRun 参考口径成本。
 
 ## 13. 读这份报告要带的口径
 
